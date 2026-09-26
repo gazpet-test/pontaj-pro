@@ -47,11 +47,17 @@ const nevalidat = nv => (Number(nv) > 0 ? ' (nevalidat)' : '')
 //  - câmpurile noi absente (view-ul în versiunea veche) => control parțial, WARN (nu „ok”).
 // Lista rândurilor: 📋 Cantități → „N nevalidate” (filtrul).
 export function controlCantitati(x) {
+  const totaluri = (Array.isArray(x.totaluri_control) ? x.totaluri_control : []).filter(t => t.stare !== 'ok')
+  const unitati = Number(x.unitati_de_verificat) || 0
+  const r9b = totaluri.map(t => `${t.text} Declarat: ${t.declarat ?? 'necunoscut'} ${t.um || ''}; detalii: ${t.suma_detalii ?? 'necunoscute'} ${t.um || ''}.`).join(' ')
+  if (!x.cantitati_nevalidate_indisponibil && (unitati || totaluri.length)) return { k: 'cantitati', stare: unitati ? 'block' : 'warn', incomplet: true, totaluri_control: totaluri,
+    detalii: [unitati ? `${unitati} poziții: unitate de verificat — baza este incompletă.` : '', r9b].filter(Boolean).join(' ') }
+
   // runda 9 (verificatorii rundei 8, M1 / S3b; principiul „textul nu spune total pentru o sumă incompletă”): F3 e PARȚIALĂ când are poziții de
   // rețea validate fără cifră, cu unitatea scrisă altfel decât exact „m” sau de LUNGIME în altă unitate / fără unitate (ml, km, sute m) — atunci
   // cifra F3 din v_ofertare_pt_stare e doar SUBTOTALUL pozițiilor în m și se spune așa (și e BLOCK, mai jos)
   const auLF3 = num(x.retea_alte_unitati_lungimi_f3)
-  const f3Partiala = num(x.lista_f3_validate_fara_cant) > 0 || num(x.um_de_normalizat_f3) > 0 || auLF3 > 0
+  const f3Partiala = num(x.lista_f3_validate_fara_cant) > 0 || (x.totaluri_control === undefined && num(x.um_de_normalizat_f3) > 0) || auLF3 > 0
   const r = controlCantitatiF3({ ...x, _etF3: f3Partiala ? 'subtotal F3 (doar pozițiile în m — NU e total)' : 'F3' })
   const inv = num(x.invalidate_in_afara_retea), invM = num(x.invalidate_in_afara_retea_m)
   const ft = num(x.fara_tip_nevalidate), ftM = num(x.fara_tip_nevalidate_m), ftFc = num(x.fara_tip_nevalidate_fara_cant)
@@ -73,7 +79,7 @@ export function controlCantitati(x) {
   // normalizare, dar v_ofertare_pt_stare.qm (neatins) nu le adună => BLOCK dacă sunt în F3, altfel WARN.
   const ti = num(x.total_invalidate), tiM = num(x.total_invalidate_m)
   const us = num(x.unitate_schimbata_in_afara_retea), usM = num(x.unitate_schimbata_in_afara_retea_m)
-  const un = num(x.um_de_normalizat), unM = num(x.um_de_normalizat_m), unF3 = num(x.um_de_normalizat_f3), unFc = num(x.um_de_normalizat_fara_cant)
+  const un = x.totaluri_control === undefined ? num(x.um_de_normalizat) : 0, unM = num(x.um_de_normalizat_m), unF3 = x.totaluri_control === undefined ? num(x.um_de_normalizat_f3) : 0, unFc = num(x.um_de_normalizat_fara_cant)
   const txtTi = ti > 0 ? ` · ${ti === 1 ? '1 rând TOTAL INVALIDAT' : `${ti} rânduri TOTAL INVALIDATE`} (${cantAfara(x.total_invalidate_pe_um, tiM)}, referință, nu se adună) — totalul declarat nu mai e aprobat; reverifică-l în 📋 Cantități` : ''
   const txtUs = us > 0 ? ` · ${us === 1 ? '1 rând nevalidat a ieșit' : `${us} rânduri nevalidate au ieșit`} din setul de rețea prin schimbarea unității (${cantAfara(x.unitate_schimbata_in_afara_retea_pe_um, usM)}; „unitate schimbată”) — ` +
     `nu mai intră în F3 și nici în fronturi; reverifică în 📋 Cantități` : ''

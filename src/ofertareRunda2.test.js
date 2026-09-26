@@ -21,7 +21,7 @@ const R = (id, den, m, status = 'validat', extra = {}) => ({ id, obiect: null, c
 // lic. 3 reală (SELECT 26.09.2026): rândurile 2 și 3, validate
 const VALIDATE = [R(2, 'Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi', 1100), R(3, 'Țeavă PE100 SDR11 Dn160 — Coconi', 5250)]
 const VIEW0 = { licitatie_id: 3, lista_f3_nevalidate: 0, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0,
-  um_de_normalizat: 0, transfer_conflicte_docs: 0, transfer_conflicte_n: 0, transfer_in_curs: 0, transfer_restante: {},
+  um_de_normalizat: 0, transfer_conflicte_docs: 0, transfer_conflicte_n: 0, totaluri_control: [], unitati_de_verificat: 0, transfer_in_curs: 0, transfer_restante: {},
   lista_f3_fara_cant: 0, retea_fara_cant: 0, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, retea_alte_unitati_f3: 0,
   retea_alte_unitati_pe_um: {}, sterse_dupa_validare: 0, sterse_dupa_validare_retea: 0, sterse_dupa_validare_pe_um: {}, sterse_dupa_validare_ultima: null, sterse_dupa_validare_lista: [] }
 const H2 = (view, extra = {}) => controlCantitati({ lista_f3_m: 6350, grafic_fronturi_m: 6350, ...campuriCantitatiNevalidate({ data: { ...VIEW0, ...view }, error: null }), ...extra })
@@ -70,7 +70,7 @@ describe('rețeaua în ALTE unități — numită, în afara comparației, făr�
   it('lic. 5 reală: F3 în „sute m” și „mc” => WARN cu unitățile separate (fără „X m” însumați); o singură unitate', () => {
     const h = H2({ retea_alte_unitati: 23, retea_alte_unitati_f3: 23, retea_alte_unitati_pe_um: { 'sute m': { suma: 48.59, randuri: 12, fara_cantitate: 0 }, mc: { suma: 1166.3, randuri: 11, fara_cantitate: 0 } } })
     expect(h.stare).toBe('warn')
-    expect(h.detalii).toMatch(/23 rânduri de rețea sunt în ALTE unități decât „m” \(lungimi 48,59 sute m; volume 1\.166,3 mc; din care 23 în F3\) — în afara comparației F3 ↔ grafic, FĂRĂ conversie/)
+    expect(h.detalii).toMatch(/23 rânduri de rețea sunt în ALTE unități decât „m” \(volume 1\.166,3 mc; alte unități 48,59 sute m; din care 23 în F3\) — în afara comparației F3 ↔ grafic, FĂRĂ conversie/)
     expect(h.detalii).not.toMatch(/1\.214|1214/)   // 48,59 + 1.166,3 nu se adună
     expect(H2({ retea_alte_unitati: 1, retea_alte_unitati_f3: 0, retea_alte_unitati_pe_um: { '': { suma: null, randuri: 1, fara_cantitate: 1 } } }).detalii)
       .toMatch(/1 rând de rețea e în ALTE unități decât „m” \(1 poziție fără cantitate determinată\)/)

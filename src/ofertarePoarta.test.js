@@ -20,7 +20,7 @@ const VERDE = {
   fara_tip_nevalidate: 0, fara_tip_nevalidate_m: null, invalidate_in_afara_retea: 0, invalidate_in_afara_retea_m: null,
   total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0,
   // R5 sarcina 2 (a): planșele cu conflicte de transfer deschise
-  transfer_conflicte_docs: 0, transfer_conflicte_n: 0, transfer_in_curs: 0,
+  transfer_conflicte_docs: 0, transfer_conflicte_n: 0, totaluri_control: [], unitati_de_verificat: 0, transfer_in_curs: 0,
   // reparația rundei 2: validate fără cantitate, rețea în alte unități, rânduri aprobate șterse
   lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',

@@ -206,6 +206,11 @@ export function controlSursaAprobareFinala(st) {
   const base = { k: 'sursa_cantitati', titlu: 'Sursa cantităților — restanțele transferului din planșe (aprobarea finală)' }
   if (st?.cantitati_nevalidate_indisponibil) return { ...base, stare: 'block',
     detalii: `nu putem verifica sursa cantităților (${st.cantitati_nevalidate_indisponibil}) — draftul poate continua, aprobarea finală rămâne blocată` }
+  if (!Array.isArray(st?.totaluri_control) || !Number.isInteger(st?.unitati_de_verificat)) return { ...base, stare: 'block',
+    detalii: 'nu putem verifica TOTAL și unitățile (control R9b indisponibil) — aprobarea finală rămâne blocată' }
+  const totaluri = st.totaluri_control.filter(t => t.stare !== 'ok')
+  if (st.unitati_de_verificat > 0 || totaluri.length) return { ...base, stare: 'block',
+    detalii: [st.unitati_de_verificat > 0 ? 'Unitate de verificat — baza este incompletă.' : '', ...totaluri.map(t => t.text)].filter(Boolean).join(' ') }
   const tcd = st?.transfer_conflicte_docs, tic = st?.transfer_in_curs
   if (!Number.isInteger(tcd) || !Number.isInteger(tic)) return { ...base, stare: 'block',
     detalii: 'nu putem verifica restanțele transferului din planșe (v_ofertare_cantitati_nevalidate fără câmpurile transfer_*) — aprobarea finală rămâne blocată' }

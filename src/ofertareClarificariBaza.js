@@ -1,29 +1,22 @@
-// ════════════════════════════════════════════════════════════════
-// ofertareClarificariBaza.js — R5 RUNDA 9 (verificatorii rundei 8, M2 + ADDENDUM 3 Copilot): baza cifrelor din ciornele automate de clarificare.
-//
-// Principiul: o ciornă aprobată / editată de om NU se rescrie. Serverul păstrează AMPRENTA bazei de la generare (ofertare_clarificari.baza_generare)
-// și o compară cu baza de ACUM (v_ofertare_clarificari_baza). Oriunde e afișată ciorna (❓ Clarificări, fișa licitației) și la EXPORT (adresa PDF),
-// o bază schimbată spune „cifrele din ciornă s-au schimbat de la generare — de reverificat înainte de trimitere”, iar aprobarea / trimiterea cer
-// reconfirmarea omului (verificată și în BACKEND: trg_ofertare_clarificari_baza refuză → de_trimis / → trimisa). View-ul necitit / eroare =
-// „nu putem verifica” => ciorna automată NU intră în adresă (fail-closed), nu „ok”.
-// Conflictele deschise NU blochează o clarificare (ADDENDUM 3, 2 — o întrebare despre ele se poate trimite): blochează doar o bază SCHIMBATĂ.
-// Funcții PURE (fără React / Supabase) — src/ofertareRunda9.test.js.
-// ════════════════════════════════════════════════════════════════
+// R9b: starea review-ului textului exact pe baza curentă. Cifra scrisă de om nu este
+// validată automat. Exportul efectiv folosește RPC-ul ofertare_clarificari_export;
+// funcțiile pure de aici păstrează afișarea și filtrarea fail-closed.
 export const eCiornaAutomata = q => /^auto_planse_/.test(String(q?.cheie || ''))
-export const MESAJ_SCHIMBATA = 'cifrele din ciornă s-au schimbat de la generare — de reverificat înainte de trimitere'
+export const MESAJ_SCHIMBATA = 'baza s-a schimbat — de reverificat'
 
 // q = rândul clarificării; bazaPeId = Map(id → rândul din v_ofertare_clarificari_baza); eroare = mesajul citirii view-ului (sau null)
 // => { nivel: 'ok' | 'schimbata' | 'indisponibila' | 'luat_act' | 'nu_putem_verifica' | 'na', blocheaza, text, rand }
 export function stareBazaCiorna(q, bazaPeId, eroare) {
   if (!eCiornaAutomata(q) || q?.status === 'retrasa') return { nivel: 'na', blocheaza: false, text: '' }
+  if (q?._mod) return { nivel: 'necesita_review', blocheaza: true, text: 'Salvează textul înainte de reconfirmare.' }
   if (eroare || !(bazaPeId instanceof Map)) return { nivel: 'nu_putem_verifica', blocheaza: true,
-    text: `nu putem verifica baza cifrelor ciornei (${eroare || 'starea nu s-a citit'}) — nu înseamnă că e în regulă; ciorna nu intră în adresă până se poate verifica` }
+    text: `nu putem verifica baza ciornei (${eroare || 'starea nu s-a citit'}) — nu înseamnă că e în regulă; ciorna nu intră în adresă până se poate verifica` }
   const r = bazaPeId.get(q.id)
-  if (!r) return { nivel: 'nu_putem_verifica', blocheaza: true, text: 'nu putem verifica baza cifrelor ciornei (lipsește din control) — ciorna nu intră în adresă' }
+  if (!r) return { nivel: 'nu_putem_verifica', blocheaza: true, text: 'nu putem verifica baza ciornei (lipsește din control) — ciorna nu intră în adresă' }
   const marcaj = r.marcaj_planse === true
   if (r.stare === 'ok') return { nivel: 'ok', blocheaza: marcaj, text: marcaj ? 'planșele s-au schimbat după ce ciorna a fost editată / aprobată — de revizuit' : '', rand: r }
-  if (r.stare === 'luat_act') return { nivel: 'luat_act', blocheaza: false, text: r.text || 'baza s-a schimbat după transmitere — luat act', rand: r }
-  if (r.stare === 'schimbata' || r.stare === 'indisponibila') return { nivel: r.stare, blocheaza: true, text: r.text || MESAJ_SCHIMBATA, rand: r }
+  if (r.stare === 'luat_act') return { nivel: 'luat_act', blocheaza: true, text: r.text || 'baza s-a schimbat după transmitere — luat act', rand: r }
+  if (r.stare === 'schimbata' || r.stare === 'indisponibila' || r.stare === 'necesita_review') return { nivel: r.stare, blocheaza: true, text: r.text || MESAJ_SCHIMBATA, rand: r }
   return { nivel: 'nu_putem_verifica', blocheaza: true, text: `stare necunoscută a bazei („${r.stare}”) — nu putem verifica`, rand: r }
 }
 

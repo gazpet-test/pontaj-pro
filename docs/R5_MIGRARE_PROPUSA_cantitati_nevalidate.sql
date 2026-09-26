@@ -1,3 +1,6 @@
+-- RUNDA 9b (înlocuiește regulile istorice v6/runda 9 descrise mai jos): text automat fără cifre,
+-- mapare explicită a unităților, TOTAL separat, review pe hash text + date, notificare la citire.
+-- NEAPLICATĂ. Migrarea 1/1b rămâne neschimbată.
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 -- R5 (Copilot 25.09.2026) — MIGRARE PROPUSĂ, NEAPLICATĂ. Nu e în supabase/migrations/ tocmai ca să nu fie luată drept aplicată.
 -- „Existența rândului cu status='extras' nu demonstrează singură că a intrat în oferta aprobată."
@@ -651,6 +654,57 @@ CREATE TRIGGER trg_ofertare_cantitati_doar_om_valideaza BEFORE INSERT OR UPDATE 
 --    (H2, poarta graficului) le arată „de reverificat” până la o versiune nouă a graficului generată după ștergere;
 --  - licitațiile apar dacă au rânduri (de rețea / invalidate / în alte unități), conflicte de transfer deschise / în curs SAU ștergeri de
 --    rânduri aprobate (lista `lic`).
+-- R9b: singura clasificare SQL; paritate cu src/ofertareUnitati.js.
+CREATE OR REPLACE FUNCTION public.ofertare_clasa_unitate(p_um text)
+RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT CASE
+    WHEN u IN ('m','m.','metri','metru','ml','ml.','m.l.','m.l','metri liniari','metru liniar') THEN jsonb_build_object('tip','lungime','factor',1)
+    WHEN u = 'km' THEN jsonb_build_object('tip','lungime','factor',1000)
+    WHEN u = 'hm' THEN jsonb_build_object('tip','lungime','factor',100)
+    WHEN u IN ('mc','m cub','m3','m³','mp','m2','m²','ha','l','litri','buc','bucata','bucati','bucăți','buc.','bc','kg','t','to','h','ore','set','cpl') THEN jsonb_build_object('tip','alta')
+    ELSE jsonb_build_object('tip','de_verificat') END
+  FROM (SELECT public.ofertare_norm_text(p_um) u) n
+$function$;
+REVOKE ALL ON FUNCTION public.ofertare_clasa_unitate(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.ofertare_clasa_unitate(text) TO authenticated, service_role;
+
+-- TOTAL separat de detalii. Perimetrul nu se reconstruiește din text liber.
+CREATE OR REPLACE FUNCTION public.ofertare_totaluri_control(p_licitatie_id bigint, p_baza text DEFAULT 'cantitate')
+RETURNS jsonb LANGUAGE sql STABLE SET search_path TO 'public', 'pg_temp'
+AS $function$
+WITH r AS (
+ SELECT q.id, q.status, q.obiect, q.sursa,
+   public.ofertare_norm_text(q.obiect) o, public.ofertare_norm_text(q.sursa) s,
+   public.ofertare_norm_text(q.categorie) k, public.ofertare_norm_text(q.tip_sursa) ts,
+   public.ofertare_norm_text(q.um) um, public.ofertare_clasa_unitate(q.um) u,
+   CASE p_baza WHEN 'cantitate' THEN q.cantitate WHEN 'cantitate_plansa' THEN q.cantitate_plansa END v,
+   (coalesce(q.obiect,'') || ' ' || coalesce(q.denumire,'') || ' ' || coalesce(q.sursa,'')) ~* 'total' tot
+ FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id
+), t AS (
+ SELECT r.*, a.n, a.nt, a.complet, a.suma,
+   r.v * coalesce((r.u->>'factor')::numeric,1) declarat
+ FROM r CROSS JOIN LATERAL (
+   SELECT count(*) FILTER (WHERE NOT d.tot) n, count(*) FILTER (WHERE d.tot) nt,
+     bool_and(d.status IS NOT DISTINCT FROM 'validat' AND d.v IS NOT NULL AND d.u->>'tip' = r.u->>'tip'
+       AND (r.u->>'tip' = 'lungime' OR (r.u->>'tip' = 'alta' AND d.um = r.um))) FILTER (WHERE NOT d.tot) complet,
+     sum(d.v * coalesce((d.u->>'factor')::numeric,1)) FILTER (WHERE NOT d.tot AND d.status = 'validat'
+       AND d.u->>'tip' = r.u->>'tip' AND (r.u->>'tip' = 'lungime' OR (r.u->>'tip' = 'alta' AND d.um = r.um))) suma
+   FROM r d WHERE (d.o,d.s,d.k,d.ts) IS NOT DISTINCT FROM (r.o,r.s,r.k,r.ts)
+ ) a WHERE r.tot
+), e AS (
+ SELECT t.*, CASE WHEN coalesce(o,'') = '' OR coalesce(s,'') = '' OR coalesce(ts,'') = ''
+   OR n = 0 OR nt <> 1 OR NOT coalesce(complet,false) OR status IS DISTINCT FROM 'validat' OR v IS NULL OR u->>'tip' = 'de_verificat'
+   THEN 'necomparabil' WHEN round(declarat,6) IS DISTINCT FROM round(suma,6) THEN 'diferit' ELSE 'ok' END stare FROM t
+)
+SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'baza',p_baza,'obiect',obiect,'sursa',sursa,
+ 'declarat',declarat,'suma_detalii',suma,'um',CASE WHEN u->>'tip' = 'lungime' THEN 'm' ELSE um END,
+ 'stare',stare,'text',CASE stare WHEN 'necomparabil' THEN 'Totalul declarat nu poate fi verificat din detaliile disponibile.'
+ WHEN 'diferit' THEN 'Totalul declarat diferă de suma detaliilor validate.' ELSE '' END) ORDER BY id),'[]'::jsonb) FROM e
+$function$;
+REVOKE ALL ON FUNCTION public.ofertare_totaluri_control(bigint,text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.ofertare_totaluri_control(bigint,text) TO authenticated, service_role;
+
 CREATE VIEW public.v_ofertare_cantitati_nevalidate WITH (security_invoker = on) AS
 WITH ist AS (
   SELECT DISTINCT ON (h.cantitate_id) h.cantitate_id, h.motiv
@@ -663,18 +717,18 @@ WITH ist AS (
    WHERE h.motiv IN ('validat', 'unitate_schimbata')
    ORDER BY h.cantitate_id, h.id DESC
 ), b0 AS (
-  SELECT q.licitatie_id, q.tip_sursa, q.status, q.cantitate, q.um, coalesce(public.ofertare_norm_text(q.um), '') AS um_norm,
+  SELECT q.licitatie_id, q.tip_sursa, q.status, q.cantitate * coalesce((public.ofertare_clasa_unitate(q.um)->>'factor')::numeric,1) AS cantitate, q.cantitate AS cantitate_originala, q.um, coalesce(public.ofertare_norm_text(q.um), '') AS um_norm,
          -- filtrul qm din v_ofertare_pt_stare, cu unitatea NORMALIZATĂ (runda 6); coalesce: categorie NULL = în afara rețelei
-         coalesce(public.ofertare_norm_text(q.um) = 'm'::text AND q.categorie ~* 'conduct|re[țt]ea'::text
+         coalesce(public.ofertare_clasa_unitate(q.um)->>'tip' = 'lungime' AND q.categorie ~* 'conduct|re[țt]ea'::text
            AND ((((COALESCE(q.obiect, ''::text) || ' '::text) || COALESCE(q.denumire, ''::text)) || ' '::text) || COALESCE(q.sursa, ''::text)) !~* 'total'::text, false) AS in_retea,
          coalesce(q.categorie ~* 'conduct|re[țt]ea'::text, false) AS cat_retea,
          -- runda 9 (M1 / M3): clasa „lungimi” (m, ml, km, sute m + sinonimele exacte: m. / metri / metru, m.l. / ml.) SAU fără unitate — aceeași
          -- definiție ca umAfisata + clasaUnitate din src/ofertareCantitatiAprobare.js (lungimi / fara_unitate); testul de paritate JS ↔ view o păzește
-         coalesce(public.ofertare_norm_text(q.um), '') IN ('', 'm', 'm.', 'metri', 'metru', 'ml', 'ml.', 'm.l.', 'km', 'sute m') AS um_lungime,
+         public.ofertare_clasa_unitate(q.um)->>'tip' = 'de_verificat' AS um_lungime,
          ((((COALESCE(q.obiect, ''::text) || ' '::text) || COALESCE(q.denumire, ''::text)) || ' '::text) || COALESCE(q.sursa, ''::text)) ~* 'total'::text AS e_total,
-         q.status <> 'validat' AND ((coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' AND strpos(q.diferenta_nota, 'validarea se reface.') > 0)
+         q.status IS DISTINCT FROM 'validat' AND ((coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' AND strpos(q.diferenta_nota, 'validarea se reface.') > 0)
            OR coalesce(i.motiv IN ('invalidat', 'redeschis'), false)) AS invalidat,
-         q.status <> 'validat' AND ((strpos(coalesce(q.diferenta_nota, ''), 'Unitatea s-a schimbat') = 1 AND strpos(q.diferenta_nota, 'de reverificat.') > 0)
+         q.status IS DISTINCT FROM 'validat' AND ((strpos(coalesce(q.diferenta_nota, ''), 'Unitatea s-a schimbat') = 1 AND strpos(q.diferenta_nota, 'de reverificat.') > 0)
            OR coalesce(u.motiv = 'unitate_schimbata', false)) AS unitate
     FROM public.ofertare_cantitati q
     LEFT JOIN ist i ON i.cantitate_id = q.id
@@ -687,19 +741,19 @@ WITH ist AS (
     FROM b0
 ), b AS (
   -- reparația rundei 2: rețea în ALTE unități (categoria de rețea, fără „total”, unitatea normalizată ≠ m), dacă nu e deja în alt grup
-  SELECT b1.*, (cat_retea AND NOT e_total AND um_norm <> 'm' AND grup_afara IS NULL) AS alte_um
+  SELECT b1.*, (cat_retea AND NOT e_total AND NOT in_retea AND grup_afara IS NULL) AS alte_um
     FROM b1
 ), agg AS (
   SELECT b.licitatie_id,
-       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status <> 'validat')                  AS lista_f3_nevalidate,
-       round(sum(cantitate) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status <> 'validat'), 6)   AS lista_f3_nevalidate_m,
-       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_c6' AND status <> 'validat')                  AS lista_c6_nevalidate,
-       count(*) FILTER (WHERE in_retea AND tip_sursa = 'memoriu'  AND status <> 'validat')                  AS memoriu_nevalidate,
-       count(*) FILTER (WHERE in_retea AND tip_sursa = 'plansa'   AND status <> 'validat')                  AS plansa_nevalidate,
-       count(*) FILTER (WHERE in_retea AND tip_sursa IS NULL      AND status <> 'validat')                  AS fara_tip_nevalidate,
-       round(sum(cantitate) FILTER (WHERE in_retea AND tip_sursa IS NULL AND status <> 'validat'), 6)        AS fara_tip_nevalidate_m,
-       count(*) FILTER (WHERE in_retea AND status <> 'validat')                                              AS retea_nevalidate,
-       round(sum(cantitate) FILTER (WHERE in_retea AND status <> 'validat'), 6)                                AS retea_nevalidate_m,
+       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status IS DISTINCT FROM 'validat')                  AS lista_f3_nevalidate,
+       round(sum(cantitate) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status IS DISTINCT FROM 'validat'), 6)   AS lista_f3_nevalidate_m,
+       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_c6' AND status IS DISTINCT FROM 'validat')                  AS lista_c6_nevalidate,
+       count(*) FILTER (WHERE in_retea AND tip_sursa = 'memoriu'  AND status IS DISTINCT FROM 'validat')                  AS memoriu_nevalidate,
+       count(*) FILTER (WHERE in_retea AND tip_sursa = 'plansa'   AND status IS DISTINCT FROM 'validat')                  AS plansa_nevalidate,
+       count(*) FILTER (WHERE in_retea AND tip_sursa IS NULL      AND status IS DISTINCT FROM 'validat')                  AS fara_tip_nevalidate,
+       round(sum(cantitate) FILTER (WHERE in_retea AND tip_sursa IS NULL AND status IS DISTINCT FROM 'validat'), 6)        AS fara_tip_nevalidate_m,
+       count(*) FILTER (WHERE in_retea AND status IS DISTINCT FROM 'validat')                                              AS retea_nevalidate,
+       round(sum(cantitate) FILTER (WHERE in_retea AND status IS DISTINCT FROM 'validat'), 6)                                AS retea_nevalidate_m,
        count(*) FILTER (WHERE in_retea)                                                                      AS retea_randuri,
        count(*) FILTER (WHERE grup_afara = 'inv')                                                            AS invalidate_in_afara_retea,
        round(sum(cantitate) FILTER (WHERE grup_afara = 'inv' AND um_norm = 'm'), 6)                            AS invalidate_in_afara_retea_m,
@@ -710,8 +764,8 @@ WITH ist AS (
        count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm')                                          AS um_de_normalizat,
        round(sum(cantitate) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm'), 6)                            AS um_de_normalizat_m,
        count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm' AND tip_sursa = 'lista_f3')              AS um_de_normalizat_f3,
-       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status <> 'validat' AND cantitate IS NULL) AS lista_f3_nevalidate_fara_cant,
-       count(*) FILTER (WHERE in_retea AND tip_sursa IS NULL AND status <> 'validat' AND cantitate IS NULL)      AS fara_tip_nevalidate_fara_cant,
+       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status IS DISTINCT FROM 'validat' AND cantitate IS NULL) AS lista_f3_nevalidate_fara_cant,
+       count(*) FILTER (WHERE in_retea AND tip_sursa IS NULL AND status IS DISTINCT FROM 'validat' AND cantitate IS NULL)      AS fara_tip_nevalidate_fara_cant,
        count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm' AND cantitate IS NULL)                        AS um_de_normalizat_fara_cant,
        -- reparația rundei 2: fără cantitate pe ORICE status + cele VALIDATE fără cantitate
        count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND cantitate IS NULL)                         AS lista_f3_fara_cant,
@@ -725,12 +779,12 @@ WITH ist AS (
        -- citează suma F3; restul (mc, mp, buc, ore) = poziții de deviz în alte unități, NUMITE (nu sunt lungimi de conductă)
        count(*) FILTER (WHERE alte_um AND um_lungime)                                                             AS retea_alte_unitati_lungimi,
        count(*) FILTER (WHERE alte_um AND um_lungime AND tip_sursa = 'lista_f3')                                  AS retea_alte_unitati_lungimi_f3,
-       count(*) FILTER (WHERE alte_um AND um_lungime AND status <> 'validat')                                     AS retea_alte_unitati_lungimi_nevalidate
+       count(*) FILTER (WHERE alte_um AND um_lungime AND status IS DISTINCT FROM 'validat')                                     AS retea_alte_unitati_lungimi_nevalidate
   FROM b
  GROUP BY b.licitatie_id
-HAVING count(*) FILTER (WHERE in_retea OR invalidat OR unitate_iesit OR alte_um) > 0
+HAVING count(*) FILTER (WHERE in_retea OR invalidat OR unitate_iesit OR alte_um OR e_total OR um_lungime) > 0
 ), pu AS (
-  SELECT b.licitatie_id, coalesce(b.grup_afara, 'au') AS grup, b.um_norm, sum(b.cantitate) AS suma, count(*) AS randuri, count(*) FILTER (WHERE b.cantitate IS NULL) AS fara_cant
+  SELECT b.licitatie_id, coalesce(b.grup_afara, 'au') AS grup, b.um_norm, sum(b.cantitate_originala) AS suma, count(*) AS randuri, count(*) FILTER (WHERE b.cantitate IS NULL) AS fara_cant
     FROM b WHERE b.grup_afara IS NOT NULL OR b.alte_um GROUP BY 1, 2, 3
 ), pj AS (
   SELECT pu.licitatie_id,
@@ -829,7 +883,13 @@ SELECT l.licitatie_id                                           AS licitatie_id,
        -- runda 9
        coalesce(a.retea_alte_unitati_lungimi, 0)                AS retea_alte_unitati_lungimi,
        coalesce(a.retea_alte_unitati_lungimi_f3, 0)             AS retea_alte_unitati_lungimi_f3,
-       coalesce(a.retea_alte_unitati_lungimi_nevalidate, 0)     AS retea_alte_unitati_lungimi_nevalidate
+       coalesce(a.retea_alte_unitati_lungimi_nevalidate, 0)     AS retea_alte_unitati_lungimi_nevalidate,
+       public.ofertare_totaluri_control(l.licitatie_id) AS totaluri_control,
+       (SELECT count(*) FROM b WHERE b.licitatie_id=l.licitatie_id AND b.um_lungime) AS unitati_de_verificat,
+       (SELECT sum(cantitate) FROM b WHERE b.licitatie_id=l.licitatie_id AND in_retea AND status='validat' AND tip_sursa='lista_f3') AS lista_f3_validate_m,
+       (SELECT sum(cantitate) FROM b WHERE b.licitatie_id=l.licitatie_id AND in_retea AND status='validat' AND tip_sursa='lista_c6') AS lista_c6_validate_m,
+       (SELECT sum(cantitate) FROM b WHERE b.licitatie_id=l.licitatie_id AND in_retea AND status='validat' AND tip_sursa='memoriu') AS memoriu_validate_m,
+       (SELECT sum(cantitate) FROM b WHERE b.licitatie_id=l.licitatie_id AND in_retea AND status='validat' AND tip_sursa='plansa') AS plansa_validate_m
   FROM lic l
   LEFT JOIN agg a ON a.licitatie_id = l.licitatie_id
   LEFT JOIN tc t ON t.licitatie_id = l.licitatie_id
@@ -862,15 +922,23 @@ CREATE OR REPLACE FUNCTION public.ofertare_r5_blocaj_sursa(p_licitatie_id bigint
  STABLE
  SET search_path TO 'public', 'pg_temp'
 AS $function$
-DECLARE v_tcd int; v_tcn int; v_tic int; v_tcl text; v_err text;
+DECLARE v_tot jsonb; v_um int; v_tcd int; v_tcn int; v_tic int; v_tcl text; v_err text;
 BEGIN
   BEGIN
+    v_tot := public.ofertare_totaluri_control(p_licitatie_id);
+    IF jsonb_typeof(v_tot) IS DISTINCT FROM 'array' THEN RAISE EXCEPTION 'control TOTAL indisponibil'; END IF;
+    SELECT count(*) INTO v_um FROM public.ofertare_cantitati q WHERE q.licitatie_id=p_licitatie_id
+      AND public.ofertare_clasa_unitate(q.um)->>'tip'='de_verificat';
     SELECT coalesce(c.transfer_conflicte_docs, 0), coalesce(c.transfer_conflicte_n, 0), coalesce(c.transfer_in_curs, 0), c.transfer_conflicte_lista
       INTO v_tcd, v_tcn, v_tic, v_tcl FROM public.v_ofertare_cantitati_nevalidate c WHERE c.licitatie_id = p_licitatie_id;
   EXCEPTION WHEN others THEN v_err := SQLERRM;
   END;
   IF v_err IS NOT NULL THEN
     RETURN format(': nu putem verifica sursa cantităților (conflictele transferului din planșe: %s) — nu înseamnă zero restanțe', v_err);
+  END IF;
+  IF v_um > 0 THEN RETURN ' — unitate de verificat: baza cantităților este incompletă'; END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_tot) t WHERE t->>'stare' <> 'ok') THEN
+    RETURN ' — ' || (SELECT string_agg(DISTINCT t->>'text',' ') FROM jsonb_array_elements(v_tot) t WHERE t->>'stare'<>'ok');
   END IF;
   IF coalesce(v_tcd, 0) > 0 THEN
     RETURN format(' — sursa cantităților e incompletă: %s la transferul din %s (%s): rezolvă-le (recitire care le acoperă) sau confirmă-le în Documente (rezolvare / excepție justificată, cu drept de decizie)',
@@ -964,8 +1032,7 @@ BEGIN
   -- responsabil_id — deci dreptul se poate AUTO-ACORDA în doi pași (responsabil_id = el însuși, apoi derogare + depusa), fără urmă pentru
   -- schimbarea responsabilului. Slăbiciune PRE-EXISTENTĂ (aceeași la poarta pe cheltuială); închiderea ei e o schimbare de DREPTURI =>
   -- decizia lui Razvan (propunere: trigger BEFORE UPDATE OF responsabil_id — doar owner / admin Ofertare / responsabilul curent — + urmă).
-  IF NEW.status = 'depusa' AND OLD.status IS DISTINCT FROM 'depusa'
-     AND NOT (COALESCE(NEW.derogare_depunere, false) AND (auth.uid() IS NULL OR COALESCE(public.fn_ofertare_source_pack_poate_decide(NEW.id), false))) THEN
+  IF NEW.status = 'depusa' AND OLD.status IS DISTINCT FROM 'depusa' THEN
     v_r5 := public.ofertare_r5_blocaj_sursa(NEW.id);
     IF v_r5 IS NOT NULL THEN
       RAISE EXCEPTION 'BLOCAT LA DEPUNERE%. Oferta nu se depune cu sursa cantităților nerezolvată; derogare_depunere=true doar cu decizia lui Razvan (pentru partea asta contează doar dacă depunerea o face ownerul / responsabilul / un admin Ofertare).', v_r5 USING ERRCODE = 'P0001';
@@ -975,410 +1042,220 @@ BEGIN
 END $function$;
 
 -- 1d) ────────────────────────────────────────────────────────────────────────────────────────────────────
--- RUNDA 9 (verificatorii rundei 8, M1 / M2 + ADDENDUM 3 Copilot) — BAZA cifrelor din ciornele automate de clarificare (v6), o singură definiție.
--- Principiul: textul automat NU spune niciodată „total” pentru o sumă incompletă; o ciornă aprobată / editată de om NU se rescrie — i se
--- păstrează AMPRENTA bazei de la generare, iar oriunde e afișată / exportată / trimisă, o bază schimbată cere reconfirmarea omului.
---   ofertare_f3_baza(licitație)              — rândurile F3 (lista de cantități) ale licitației, clasificate EXACT ca în v_ofertare_cantitati_nevalidate
---                                              (qm / alte unități / invalidate ieșite / TOTAL), suma DOAR din rândurile validate în m, pozițiile de
---                                              verificat pe categorii (fără sume peste unități), amprenta bazei (identitatea rândurilor, valori
---                                              canonice la 6 zecimale, unități, statut, obiect / denumire / sursă / categorie normalizate — NU ordinea,
---                                              NU timestamp-urile) și modul: 'cifra' (suma e completă: se poate cita), 'corespondenta' (există F3, dar
---                                              suma NU e completă: fără cifră), 'neidentificat' (niciun rând F3);
---   ofertare_clarificare_mod_text(text)      — ce afirmă TEXTUL unei ciorne despre F3 (evaluare deterministă, fără AI; și pentru ciornele vechi,
---                                              fără amprentă): cifră / corespondență / „nu le-am identificat” / nimic recunoscut;
---   ofertare_clarificare_baza_stare(…)       — ok / schimbata / indisponibila / luat_act, cu diferențele față de baza anterioară;
---   ofertare_clarificare_reconfirma(…)       — reconfirmarea omului, legată de amprenta CURENTĂ (alt token => refuz): cifra veche din text e
---                                              corectată (revizie) sau păstrată EXPLICIT ca valoare istorică; transmisă => doar „am luat act”;
---   trg_ofertare_clarificari_baza            — backend: aprobarea (→ de_trimis) și transmiterea (→ trimisa) unei ciorne automate cu baza
---                                              schimbată / nereconfirmată sunt REFUZATE; câmpurile serverului (baza_generare, tokenii gen_ / ev_ /
---                                              revizie_planse_auto) nu se scriu direct de utilizator (saveQ cu o `sursa` veche nu mai șterge marcajul);
---   trg_zzz_ofertare_cantitati_clar_baza     — o schimbare a rândurilor F3 care face baza unei ciorne neactuală => O notificare internă (o dată pe
---                                              „devenit neactual”, nu la fiecare rând); textul și statusul NU se ating; nimic nu se trimite;
---   v_ofertare_clarificari_baza              — starea fiecărei ciorne automate, citită de Clarificări (afișare + export) și de fișa licitației.
--- Coloană NOUĂ: ofertare_clarificari.baza_generare jsonb (nullable, fără default => nicio rescriere de date la aplicare; codul publicat nu o citește
--- și nu o scrie: select('*') o ignoră, update-urile lui nu o ating). Conflictele deschise NU blochează aprobarea / trimiterea unei clarificări
--- (ADDENDUM 3, 2): se blochează doar folosirea unei baze SCHIMBATE și nerevizuite.
+-- Runda 9b: revizia datelor și hash-ul textului; fără parser numeric pe proză.
 ALTER TABLE public.ofertare_clarificari ADD COLUMN IF NOT EXISTS baza_generare jsonb;
-COMMENT ON COLUMN public.ofertare_clarificari.baza_generare IS 'R5 runda 9 (26.09.2026): amprenta bazei cifrelor ciornei automate de clarificare la generare / ultima reconfirmare umană (ofertare_f3_baza + modul afirmației din text), cu reconfirmarea (autor, decizie, notă, diferențe) și „luat act” după transmitere. Scris DOAR de funcțiile serverului (v6, ofertare_clarificare_reconfirma, trigger-ul notificării) — trg_ofertare_clarificari_baza îl păstrează la scrierile directe ale utilizatorilor.';
+COMMENT ON COLUMN public.ofertare_clarificari.baza_generare IS 'R9b: baza generării, textul aprobat și istoricul deciziilor umane; păstrate la rollback.';
 
 CREATE OR REPLACE FUNCTION public.ofertare_f3_baza(p_licitatie_id bigint)
- RETURNS jsonb
- LANGUAGE plpgsql
- STABLE
- SET search_path TO 'public', 'pg_temp'
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path TO 'public', 'pg_temp'
 AS $function$
-DECLARE
-  v_n_f3 int; v_n_per int; v_n_ok int; v_suma numeric; v_nev int; v_nev_fc int; v_fc int; v_und int; v_inv int; v_aul int; v_au int; v_tot int;
-  v_ster int; v_tc int; v_nv int; v_mod text; v_suma_txt text; v_amp text; v_randuri jsonb; v_ob jsonb; v_pe_aul jsonb; v_pe_au jsonb;
-  v_ref timestamptz; v_parti text[]; v_text text;
-  -- ro-RO, max. 2 zecimale (ca ofertare_fmt_ro), pentru textele interne
-  fmt CONSTANT text := 'FM999,999,999,990.99';
+DECLARE v_randuri jsonb; v_conflicte jsonb; v_doc jsonb; v_totaluri jsonb; v_suma numeric; v_n int; v_nev int; v_um int; v_alte jsonb;
 BEGIN
-  -- ștergerile de rânduri F3 APROBATE (istoric 'sters') după ultima versiune a graficului — același criteriu ca avertismentul H2 („de reverificat”)
-  SELECT max(g.generat_la) INTO v_ref FROM public.grafic_versiuni g WHERE g.licitatie_id = p_licitatie_id;
-  SELECT count(*) INTO v_ster FROM public.ofertare_cantitati_istoric h
-   WHERE h.licitatie_id = p_licitatie_id AND h.motiv = 'sters' AND h.valori_vechi ->> 'tip_sursa' = 'lista_f3'
-     AND coalesce((h.valori_vechi ->> 'categorie') ~* 'conduct|re[țt]ea', false)
-     AND (coalesce(h.valori_vechi ->> 'obiect', '') || ' ' || coalesce(h.valori_vechi ->> 'denumire', '') || ' ' || coalesce(h.valori_vechi ->> 'sursa', '')) !~* 'total'
-     AND (v_ref IS NULL OR h.created_at > v_ref);
-  SELECT count(*) INTO v_tc FROM public.v_ofertare_transfer_conflicte t WHERE t.licitatie_id = p_licitatie_id AND t.deschis;
-  WITH r AS (
-    SELECT q.id, q.cantitate, q.status, q.um, coalesce(public.ofertare_norm_text(q.um), '') AS um_norm, q.obiect, q.denumire, q.sursa, q.categorie,
-           coalesce(public.ofertare_norm_text(q.um) = 'm' AND q.categorie ~* 'conduct|re[țt]ea'
-             AND (coalesce(q.obiect, '') || ' ' || coalesce(q.denumire, '') || ' ' || coalesce(q.sursa, '')) !~* 'total', false) AS in_retea,
-           coalesce(q.categorie ~* 'conduct|re[țt]ea', false) AS cat_retea,
-           (coalesce(q.obiect, '') || ' ' || coalesce(q.denumire, '') || ' ' || coalesce(q.sursa, '')) ~* 'total' AS e_total,
-           coalesce(public.ofertare_norm_text(q.um), '') IN ('', 'm', 'm.', 'metri', 'metru', 'ml', 'ml.', 'm.l.', 'km', 'sute m') AS um_lungime,
-           -- invalidat (istoric / prefixul regulii) SAU unitate schimbată pe un rând neaprobat — ca `invalidat` / `unitate` din view
-           q.status <> 'validat' AND (
-             (coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' AND strpos(q.diferenta_nota, 'validarea se reface.') > 0)
-             OR coalesce((SELECT h.motiv FROM public.ofertare_cantitati_istoric h WHERE h.cantitate_id = q.id AND h.motiv <> 'unitate_schimbata' ORDER BY h.id DESC LIMIT 1)
-                         IN ('invalidat', 'redeschis'), false)
-             OR (strpos(coalesce(q.diferenta_nota, ''), 'Unitatea s-a schimbat') = 1 AND strpos(q.diferenta_nota, 'de reverificat.') > 0)
-             OR coalesce((SELECT h.motiv FROM public.ofertare_cantitati_istoric h WHERE h.cantitate_id = q.id AND h.motiv IN ('validat', 'unitate_schimbata') ORDER BY h.id DESC LIMIT 1)
-                         = 'unitate_schimbata', false)) AS iesit
-      FROM public.ofertare_cantitati q
-     WHERE q.licitatie_id = p_licitatie_id AND q.tip_sursa = 'lista_f3'
-  ), c AS (
-    -- clasificarea = b0 / b1 / b din v_ofertare_cantitati_nevalidate (in_retea = qm cu unitatea normalizată; alte_um; grup_afara) — dacă schimbi
-    -- view-ul, schimbă și aici (testul de paritate R9-M3 le compară pe același set de rânduri)
-    SELECT r.*, CASE
-        WHEN in_retea AND status <> 'validat' THEN 'nevalidat'
-        WHEN in_retea AND cantitate IS NULL THEN 'fara_cantitate'
-        WHEN in_retea AND um IS DISTINCT FROM 'm' THEN 'um_de_normalizat'
-        WHEN in_retea THEN 'ok'
-        WHEN NOT e_total AND iesit THEN 'invalidat_iesit'
-        WHEN cat_retea AND NOT e_total AND um_lungime THEN 'alta_unitate_lungime'
-        WHEN cat_retea AND NOT e_total THEN 'alta_unitate'
-        WHEN cat_retea THEN 'total'
-        ELSE 'in_afara' END AS cls,
-      -- forma canonică a rândului: valoarea la 6 zecimale (100 = 100,000), unitatea / textele normalizate (spații, majuscule) — fără ordine, fără timp
-      coalesce(round(cantitate, 6)::text, '-') || '|' || um_norm || '|' || status || '|' || public.ofertare_norm_text(obiect) || '|' ||
-        public.ofertare_norm_text(denumire) || '|' || public.ofertare_norm_text(sursa) || '|' || public.ofertare_norm_text(categorie) AS canon
-      FROM r
-  )
-  SELECT (SELECT count(*) FROM c), (SELECT count(*) FROM c WHERE cls <> 'in_afara'), (SELECT count(*) FROM c WHERE cls = 'ok'),
-         (SELECT sum(cantitate) FROM c WHERE cls = 'ok'),
-         (SELECT count(*) FROM c WHERE cls = 'nevalidat'), (SELECT count(*) FROM c WHERE cls = 'nevalidat' AND cantitate IS NULL),
-         (SELECT count(*) FROM c WHERE cls = 'fara_cantitate'), (SELECT count(*) FROM c WHERE cls = 'um_de_normalizat'),
-         (SELECT count(*) FROM c WHERE cls = 'invalidat_iesit'), (SELECT count(*) FROM c WHERE cls = 'alta_unitate_lungime'),
-         (SELECT count(*) FROM c WHERE cls = 'alta_unitate'), (SELECT count(*) FROM c WHERE cls = 'total'),
-         -- amprenta: identitatea rândului (id) + forma canonică + clasa; ordinea = id (NU ordinea afișării)
-         (SELECT md5(coalesce(string_agg(id || '|' || canon || '|' || cls, E'\n' ORDER BY id), '')) FROM c WHERE cls <> 'in_afara'),
-         (SELECT coalesce(jsonb_agg(jsonb_build_object('id', id, 'c', round(cantitate, 6), 'um', um_norm, 's', status, 'o', left(obiect, 60), 'd', left(denumire, 90),
-                  'k', cls, 'h', left(md5(canon || '|' || cls), 10)) ORDER BY id), '[]'::jsonb) FROM c WHERE cls <> 'in_afara'),
-         (SELECT coalesce(jsonb_agg(DISTINCT left(coalesce(nullif(btrim(obiect), ''), '(fără obiect)'), 60)), '[]'::jsonb) FROM c WHERE cls <> 'in_afara'),
-         (SELECT coalesce(jsonb_object_agg(x.u, jsonb_build_object('suma', x.s, 'randuri', x.n, 'fara_cantitate', x.fc)), '{}'::jsonb)
-            FROM (SELECT um_norm u, sum(cantitate) s, count(*) n, count(*) FILTER (WHERE cantitate IS NULL) fc FROM c WHERE cls = 'alta_unitate_lungime' GROUP BY 1) x),
-         (SELECT coalesce(jsonb_object_agg(x.u, jsonb_build_object('suma', x.s, 'randuri', x.n, 'fara_cantitate', x.fc)), '{}'::jsonb)
-            FROM (SELECT um_norm u, sum(cantitate) s, count(*) n, count(*) FILTER (WHERE cantitate IS NULL) fc FROM c WHERE cls = 'alta_unitate' GROUP BY 1) x)
-    INTO v_n_f3, v_n_per, v_n_ok, v_suma, v_nev, v_nev_fc, v_fc, v_und, v_inv, v_aul, v_au, v_tot, v_amp, v_randuri, v_ob, v_pe_aul, v_pe_au;
-  -- de verificat = pozițiile care fac suma în m INCOMPLETĂ (nu se adună, nu se convertesc): nevalidate, validate fără cantitate, unitate scrisă
-  -- altfel decât exact „m” (pot fi articole de deviz), invalidate ieșite din rețea, rețea de LUNGIME în altă unitate / fără unitate, aprobate șterse
-  v_nv := v_nev + v_fc + v_und + v_inv + v_aul + v_ster;
-  v_mod := CASE WHEN v_n_f3 = 0 THEN 'neidentificat'
-                WHEN v_nv = 0 AND v_n_ok > 0 AND coalesce(v_suma, 0) > 0 AND v_tc = 0 THEN 'cifra'
-                ELSE 'corespondenta' END;
-  -- formatul ro-RO neambiguu al v6 (independent de lc_numeric): 6519.8 → „6.519,8”; 6520 → „6.520”
-  v_suma_txt := CASE WHEN v_suma IS NULL THEN NULL
-    WHEN round(v_suma, 1) = trunc(v_suma) THEN translate(to_char(trunc(v_suma), 'FM999,999,999,990'), ',', '.')
-    ELSE translate(to_char(round(v_suma, 1), 'FM999,999,999,990.0'), ',.', '.,') END;
-  v_parti := ARRAY[]::text[];
-  IF v_nev > 0 THEN v_parti := v_parti || (v_nev || CASE WHEN v_nev = 1 THEN ' nevalidată' ELSE ' nevalidate' END
-    || CASE WHEN v_nev_fc > 0 THEN ' (din care ' || v_nev_fc || ' fără cantitate determinată)' ELSE '' END); END IF;
-  IF v_fc > 0 THEN v_parti := v_parti || (v_fc || CASE WHEN v_fc = 1 THEN ' validată' ELSE ' validate' END || ' FĂRĂ cantitate determinată'); END IF;
-  IF v_und > 0 THEN v_parti := v_parti || (v_und || ' cu unitatea scrisă altfel decât exact „m” (pot fi articole de deviz)'); END IF;
-  IF v_inv > 0 THEN v_parti := v_parti || (v_inv || CASE WHEN v_inv = 1 THEN ' invalidată, ieșită' ELSE ' invalidate, ieșite' END || ' din rețea'); END IF;
-  IF v_aul > 0 THEN v_parti := v_parti || (v_aul || ' de lungime în altă unitate / fără unitate (' ||
-    (SELECT string_agg(CASE WHEN k = '' THEN 'fără unitate' ELSE k END || ': ' ||
-       CASE WHEN (e ->> 'suma') IS NULL THEN 'cantitate necunoscută' ELSE btrim(replace(replace(replace(to_char((e ->> 'suma')::numeric, fmt), ',', '#'), '.', ','), '#', '.'), ',') END
-       || CASE WHEN (e ->> 'fara_cantitate')::int > 0 AND (e ->> 'suma') IS NOT NULL THEN ' + ' || (e ->> 'fara_cantitate') || ' fără cantitate' ELSE '' END, '; ' ORDER BY k)
-       FROM jsonb_each(v_pe_aul) x(k, e)) || '; fără conversie)'); END IF;
-  IF v_ster > 0 THEN v_parti := v_parti || (v_ster || CASE WHEN v_ster = 1 THEN ' aprobată ȘTEARSĂ' ELSE ' aprobate ȘTERSE' END || ' după ultima versiune a graficului'); END IF;
-  v_text := CASE v_mod
-    WHEN 'neidentificat' THEN 'Niciun rând din lista de cantități F3 în platformă.'
-    WHEN 'cifra' THEN 'Suma pozițiilor de conductă din lista de cantități F3 (toate cele ' || v_n_ok || ' poziții de rețea în m, validate de om): ' || v_suma_txt || ' m.'
-    ELSE CASE WHEN v_n_ok > 0 AND v_suma IS NOT NULL
-           THEN 'Subtotal din rândurile validate, exprimate în m, pentru lista de cantități F3 (' || v_n_ok || CASE WHEN v_n_ok = 1 THEN ' poziție' ELSE ' poziții' END
-                || ' de rețea): ' || v_suma_txt || ' m — NU e total'
-           ELSE 'Nicio poziție F3 de rețea validată în m — fără cifră' END
-         || CASE WHEN v_nv > 0 THEN '; există ' || v_nv || CASE WHEN v_nv = 1 THEN ' poziție suplimentară' ELSE ' poziții suplimentare' END || ' de verificat: ' || array_to_string(v_parti, ', ') ELSE '' END
-         || CASE WHEN v_tc > 0 THEN '; ' || v_tc || CASE WHEN v_tc = 1 THEN ' planșă are' ELSE ' planșe au' END
-                 || ' conflicte de transfer deschise (lungimile lor sunt observații pe planșă, nu metri lipsă)' ELSE '' END || '.' END
-    || CASE WHEN v_au > 0 THEN ' În afara sumei: ' || v_au || CASE WHEN v_au = 1 THEN ' poziție' ELSE ' poziții' END || ' de rețea în alte unități (' ||
-         (SELECT string_agg(CASE WHEN k = '' THEN 'fără unitate' ELSE k END, ', ' ORDER BY k) FROM jsonb_object_keys(v_pe_au) k) || ') — nu sunt lungimi de conductă.' ELSE '' END
-    || CASE WHEN v_tot > 0 THEN ' Rândurile TOTAL (' || v_tot || ') nu se adună cu pozițiile de detaliu.' ELSE '' END;
-  RETURN jsonb_build_object('v', 1, 'evaluare', 'r9.1', 'mod', v_mod,
-    -- amprenta bazei CURENTE: rândurile perimetrului F3 + modul (care include conflictele deschise și ștergerile nerevizuite)
-    'amprenta', md5(v_mod || '|' || v_amp || '|' || v_ster || '|' || (v_tc > 0)::text),
-    'suma', CASE WHEN v_suma IS NULL THEN NULL ELSE round(v_suma, 6) END, 'suma_txt', v_suma_txt, 'n_f3', v_n_f3, 'n_perimetru', v_n_per, 'n_ok', v_n_ok,
-    'n_de_verificat', v_nv,
-    'de_verificat', jsonb_build_object('nevalidate', v_nev, 'nevalidate_fara_cantitate', v_nev_fc, 'validate_fara_cantitate', v_fc, 'um_de_normalizat', v_und,
-      'invalidate_iesite', v_inv, 'alte_unitati_lungimi', v_aul, 'alte_unitati_lungimi_pe_um', v_pe_aul, 'sterse', v_ster),
-    'alte_unitati', jsonb_build_object('n', v_au, 'pe_um', v_pe_au), 'randuri_total', v_tot, 'conflicte_transfer', v_tc,
-    'obiecte', v_ob, 'randuri', v_randuri, 'text', v_text);
+  -- Perimetru: lista financiară și rețeaua licitației. În hash intră toate atributele relevante,
+  -- inclusiv validarea, baza planșei și sursa, fără timestamp-uri sau ordinea afișării.
+  SELECT coalesce(jsonb_agg(x ORDER BY (x->>'id')::bigint),'[]'::jsonb) INTO v_randuri FROM (
+    SELECT jsonb_build_object('id',q.id,'c',round(q.cantitate,6),'cp',round(q.cantitate_plansa,6),
+      'um',public.ofertare_norm_text(q.um),'s',q.status,'o',public.ofertare_norm_text(q.obiect),
+      'd',public.ofertare_norm_text(q.denumire),'categorie',public.ofertare_norm_text(q.categorie),
+      'sursa',public.ofertare_norm_text(q.sursa),'tip_sursa',q.tip_sursa,'specificatii',public.ofertare_norm_text(q.specificatii),
+      'cod_articol',public.ofertare_norm_text(q.cod_articol),'unitate',public.ofertare_clasa_unitate(q.um),
+      'total',(coalesce(q.obiect,'') || ' ' || coalesce(q.denumire,'') || ' ' || coalesce(q.sursa,'')) ~* 'total') x
+    FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id
+      AND (q.tip_sursa = 'lista_f3' OR q.categorie ~* 'conduct|re[țt]ea'
+        OR (coalesce(q.obiect,'') || ' ' || coalesce(q.denumire,'') || ' ' || coalesce(q.sursa,'')) ~* 'total'
+        OR EXISTS (SELECT 1 FROM public.ofertare_cantitati t WHERE t.licitatie_id=q.licitatie_id
+          AND (coalesce(t.obiect,'') || ' ' || coalesce(t.denumire,'') || ' ' || coalesce(t.sursa,'')) ~* 'total'
+          AND (public.ofertare_norm_text(t.obiect),public.ofertare_norm_text(t.sursa),public.ofertare_norm_text(t.categorie),public.ofertare_norm_text(t.tip_sursa))
+            IS NOT DISTINCT FROM (public.ofertare_norm_text(q.obiect),public.ofertare_norm_text(q.sursa),public.ofertare_norm_text(q.categorie),public.ofertare_norm_text(q.tip_sursa))))
+  ) r;
+  SELECT coalesce(jsonb_agg(x || jsonb_build_object('h',md5(x::text)) ORDER BY (x->>'id')::bigint),'[]'::jsonb)
+    INTO v_randuri FROM jsonb_array_elements(v_randuri) x;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id',t.document_id,'token',t.token,'stare',t.stare,
+      'conflicte',t.conflicte,'restante',t.restante,'in_curs',t.in_curs) ORDER BY t.document_id),'[]'::jsonb)
+    INTO v_conflicte FROM public.v_ofertare_transfer_conflicte t WHERE t.licitatie_id = p_licitatie_id AND (t.deschis OR t.in_curs);
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id',d.id,'nume',d.nume_original,'plansa',d.analiza->'plansa',
+      'eroare',d.eroare) ORDER BY d.id),'[]'::jsonb) INTO v_doc
+    FROM public.ofertare_documente_atribuire d WHERE d.licitatie_id = p_licitatie_id AND (d.analiza ? 'plansa' OR d.tip = 'lista_cantitati');
+  v_totaluri := public.ofertare_totaluri_control(p_licitatie_id);
+  SELECT count(*) FILTER (WHERE x->>'tip_sursa' = 'lista_f3'),
+    count(*) FILTER (WHERE NOT (x->>'total')::boolean AND (x->>'s' IS DISTINCT FROM 'validat' OR x->>'c' IS NULL)),
+    count(*) FILTER (WHERE x->'unitate'->>'tip' = 'de_verificat'),
+    sum((x->>'c')::numeric * (x->'unitate'->>'factor')::numeric)
+      FILTER (WHERE x->>'tip_sursa' = 'lista_f3' AND x->>'categorie' ~* 'conduct|re[țt]ea' AND x->>'s' = 'validat' AND NOT (x->>'total')::boolean AND x->'unitate'->>'tip' = 'lungime')
+    INTO v_n,v_nev,v_um,v_suma FROM jsonb_array_elements(v_randuri) x;
+  SELECT coalesce(jsonb_object_agg(u,jsonb_build_object('suma',s,'randuri',n)),'{}'::jsonb) INTO v_alte FROM (
+    SELECT x->>'um' u,sum((x->>'c')::numeric) s,count(*) n FROM jsonb_array_elements(v_randuri) x
+    WHERE x->'unitate'->>'tip' = 'alta' AND NOT (x->>'total')::boolean GROUP BY 1
+  ) a;
+  RETURN jsonb_build_object('v',2,'evaluare','r9b','mod','corespondenta',
+    'amprenta',md5(jsonb_build_array(v_randuri,v_conflicte,v_doc)::text),'randuri',v_randuri,
+    'n_f3',v_n,'n_de_verificat',v_nev+v_um,'de_verificat',jsonb_build_object('nevalidate',v_nev,'unitate_de_verificat',v_um),
+    'suma',v_suma,'alte_unitati',v_alte,'totaluri',v_totaluri,'conflicte_transfer',jsonb_array_length(v_conflicte),
+    'text',format('Review intern: %s poziții de verificat; %s cu unitate de verificat. Suma lungimilor F3 validate: %s m (detalii, fără TOTAL). Alte unități: %s. Conflicte deschise: %s.',
+      v_nev,v_um,coalesce(v_suma::text,'nedeterminată'),v_alte::text,jsonb_array_length(v_conflicte)));
 END $function$;
 REVOKE ALL ON FUNCTION public.ofertare_f3_baza(bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.ofertare_f3_baza(bigint) TO authenticated, service_role;
-COMMENT ON FUNCTION public.ofertare_f3_baza(bigint) IS 'R5 runda 9 (26.09.2026): baza F3 a licitației — rândurile listei de cantități F3 clasificate ca în v_ofertare_cantitati_nevalidate, suma DOAR din rândurile validate în m, pozițiile de verificat pe categorii (fără sume peste unități, fără TOTAL adunat), amprenta (identitate, valori canonice, unități, statut, obiect / denumire / sursă / categorie normalizate; fără ordine, fără timestamp-uri) și modul (cifra = sumă completă / corespondenta = fără cifră / neidentificat). O singură definiție pentru v6, starea ciornelor și reconfirmare. SECURITY INVOKER.';
 
--- ce afirmă TEXTUL ciornei despre F3 — deterministă (regex pe frazele generate de v5 / v6 și pe formularea #63), fără AI; „valoare istorică” = marcată explicit
-CREATE OR REPLACE FUNCTION public.ofertare_clarificare_mod_text(p_text text)
- RETURNS text
- LANGUAGE sql
- IMMUTABLE
- SET search_path TO 'public', 'pg_temp'
+-- Fără interpretarea cifrelor din proză. Tokenul de review leagă datele ȘI textul citit de om.
+CREATE OR REPLACE FUNCTION public.ofertare_clarificare_baza_stare(p_licitatie_id bigint,p_intrebare text,p_sursa text,p_baza jsonb)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path TO 'public', 'pg_temp'
 AS $function$
-  SELECT CASE
-    WHEN regexp_replace(coalesce(p_text, ''), '(din F3|exprimate în m): [0-9][0-9.,]* m — valoare istorică', '', 'g') ~ '(din F3|exprimate în m): [0-9][0-9.,]* m' THEN 'cifra'
-    WHEN coalesce(p_text, '') ~* 'nu (le-)?am identificat (în documentația publicată|liste de cantit)' THEN 'neidentificat'
-    WHEN coalesce(p_text, '') ~ 'Corespondența fiecărui tronson cu poziția din lista de cantități \(F3\)' THEN 'corespondenta'
-    ELSE 'fara_afirmatii' END
-$function$;
-REVOKE ALL ON FUNCTION public.ofertare_clarificare_mod_text(text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.ofertare_clarificare_mod_text(text) TO authenticated, service_role;
-
--- starea unei ciorne automate față de baza ei (p_baza = baza_generare; fără 'mod' = ciornă veche => evaluarea deterministă a textului)
-CREATE OR REPLACE FUNCTION public.ofertare_clarificare_baza_stare(p_licitatie_id bigint, p_intrebare text, p_sursa text, p_baza jsonb)
- RETURNS jsonb
- LANGUAGE plpgsql
- STABLE
- SET search_path TO 'public', 'pg_temp'
-AS $function$
-DECLARE
-  v_cur jsonb; v_mod text; v_leg boolean; v_st text; v_dif jsonb; v_txt text; v_old jsonb; v_ack text; v_rez_c text; v_fig text;
+DECLARE v_cur jsonb; v_st text; v_token text; v_hash text := md5(coalesce(p_intrebare,'')); v_old jsonb; v_dif jsonb;
 BEGIN
   v_cur := public.ofertare_f3_baza(p_licitatie_id);
-  -- coalesce: baza_generare NULL (ciornă veche) dă NULL în AND — fără el, v_leg ieșea NULL și ciorna „indisponibilă” (prins de R9-0 / #63)
-  v_leg := NOT coalesce(jsonb_typeof(p_baza) = 'object' AND p_baza ? 'mod', false);
-  v_mod := CASE WHEN v_leg THEN public.ofertare_clarificare_mod_text(p_intrebare) ELSE p_baza ->> 'mod' END;
-  v_ack := CASE WHEN jsonb_typeof(p_baza -> 'luat_act') = 'object' THEN p_baza -> 'luat_act' ->> 'amprenta' END;
-  v_st := CASE
-    WHEN v_mod = 'fara_afirmatii' THEN 'ok'
-    WHEN v_mod = 'cifra' AND (v_leg OR nullif(p_baza ->> 'amprenta', '') IS NULL) THEN 'indisponibila'
-    WHEN v_mod = 'cifra' THEN CASE WHEN v_cur ->> 'amprenta' = p_baza ->> 'amprenta' THEN 'ok' ELSE 'schimbata' END
-    WHEN v_mod = 'corespondenta' THEN CASE WHEN v_cur ->> 'mod' <> 'neidentificat' THEN 'ok' ELSE 'schimbata' END
-    WHEN v_mod = 'neidentificat' THEN CASE WHEN v_cur ->> 'mod' = 'neidentificat' THEN 'ok' ELSE 'schimbata' END
-    ELSE 'indisponibila' END;
-  -- după transmitere: omul a luat act de EXACT baza de acum (o schimbare ulterioară redeschide)
-  IF v_st <> 'ok' AND v_ack IS NOT NULL AND v_ack = v_cur ->> 'amprenta' THEN v_st := 'luat_act'; END IF;
-  v_old := CASE WHEN jsonb_typeof(p_baza -> 'randuri') = 'array' THEN p_baza -> 'randuri' ELSE '[]'::jsonb END;
-  IF v_st IN ('schimbata', 'luat_act') AND NOT v_leg THEN
-    SELECT jsonb_build_object(
-      'adaugate', coalesce((SELECT jsonb_agg(n ORDER BY (n ->> 'id')::bigint) FROM (SELECT n FROM jsonb_array_elements(v_cur -> 'randuri') n
-                    WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_old) o WHERE o ->> 'id' = n ->> 'id') LIMIT 20) a), '[]'::jsonb),
-      'scoase', coalesce((SELECT jsonb_agg(o ORDER BY (o ->> 'id')::bigint) FROM (SELECT o FROM jsonb_array_elements(v_old) o
-                    WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_cur -> 'randuri') n WHERE n ->> 'id' = o ->> 'id') LIMIT 20) a), '[]'::jsonb),
-      'modificate', coalesce((SELECT jsonb_agg(jsonb_build_object('id', (o ->> 'id')::bigint, 'inainte', o, 'acum', n) ORDER BY (o ->> 'id')::bigint)
-                    FROM (SELECT o, n FROM jsonb_array_elements(v_old) o JOIN jsonb_array_elements(v_cur -> 'randuri') n ON n ->> 'id' = o ->> 'id'
-                          WHERE (o ->> 'h') IS DISTINCT FROM (n ->> 'h') LIMIT 20) m), '[]'::jsonb),
-      'n_adaugate', (SELECT count(*) FROM jsonb_array_elements(v_cur -> 'randuri') n WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_old) o WHERE o ->> 'id' = n ->> 'id')),
-      'n_scoase', (SELECT count(*) FROM jsonb_array_elements(v_old) o WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_cur -> 'randuri') n WHERE n ->> 'id' = o ->> 'id')),
-      'n_modificate', (SELECT count(*) FROM jsonb_array_elements(v_old) o JOIN jsonb_array_elements(v_cur -> 'randuri') n ON n ->> 'id' = o ->> 'id' WHERE (o ->> 'h') IS DISTINCT FROM (n ->> 'h')))
-      INTO v_dif;
-  END IF;
-  v_fig := CASE WHEN NOT v_leg AND p_baza ->> 'mod' = 'cifra' THEN p_baza ->> 'suma_txt'
-                ELSE substring(coalesce(p_intrebare, '') from '(?:din F3|exprimate în m): ([0-9][0-9.,]*) m(?! — valoare istorică)') END;
-  v_rez_c := CASE v_mod WHEN 'cifra' THEN 'ciorna citează ' || coalesce(v_fig || ' m', 'o cifră') || ' din F3'
-                        WHEN 'corespondenta' THEN 'ciorna cere corespondența cu F3, fără cifră'
-                        WHEN 'neidentificat' THEN 'ciorna afirmă că nu există liste de cantități'
-                        ELSE 'ciorna nu conține afirmații recunoscute despre cantitățile din platformă' END;
-  v_txt := CASE v_st
-    WHEN 'ok' THEN NULL
-    WHEN 'indisponibila' THEN 'verificare indisponibilă: ' || v_rez_c || ', fără amprenta bazei de la generare (ciornă veche) — reconfirmă pe datele de acum înainte de aprobare / trimitere'
-    WHEN 'luat_act' THEN 'baza s-a schimbat după transmitere — luat act (' || coalesce(p_baza -> 'luat_act' ->> 'nota', '') || '); textul transmis rămâne neschimbat'
-    ELSE 'cifrele din ciornă s-au schimbat de la generare — de reverificat înainte de trimitere (' || v_rez_c || '; acum: ' || (v_cur ->> 'text') || ')' END;
-  RETURN jsonb_build_object('stare', v_st, 'evaluare', 'r9.1', 'legacy', v_leg, 'mod_ciorna', v_mod, 'cifra_ciorna', v_fig,
-    'amprenta_ciorna', CASE WHEN v_leg THEN NULL ELSE p_baza ->> 'amprenta' END, 'amprenta_curenta', v_cur ->> 'amprenta',
-    'ciorna', CASE WHEN v_leg THEN NULL ELSE p_baza - 'randuri' END, 'curent', v_cur - 'randuri', 'diferente', v_dif, 'text', v_txt,
-    'marcaj_planse', 'revizie_planse_auto' = ANY (string_to_array(coalesce(p_sursa, ''), ',')));
+  IF nullif(v_cur->>'amprenta','') IS NULL THEN RAISE EXCEPTION 'bază indisponibilă'; END IF;
+  v_token := md5((v_cur->>'amprenta') || '|' || v_hash);
+  v_st := CASE WHEN p_baza->>'evaluare' IS DISTINCT FROM 'r9b' THEN 'indisponibila'
+    WHEN p_baza->>'amprenta' IS DISTINCT FROM v_cur->>'amprenta' THEN 'schimbata'
+    WHEN p_baza->'reconfirmare'->>'token' IS DISTINCT FROM v_token THEN 'necesita_review'
+    ELSE 'ok' END;
+  -- Luarea la cunoștință este informativă, NICIODATĂ aprobare pentru export sau de_trimis.
+  IF v_st <> 'ok' AND p_baza->'luat_act'->>'token' = v_token THEN v_st := 'luat_act'; END IF;
+  v_old := CASE WHEN jsonb_typeof(p_baza->'randuri') = 'array' THEN p_baza->'randuri' ELSE '[]'::jsonb END;
+  SELECT jsonb_build_object(
+    'adaugate',coalesce((SELECT jsonb_agg(n) FROM jsonb_array_elements(v_cur->'randuri') n WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(v_old) o WHERE o->>'id'=n->>'id')),'[]'::jsonb),
+    'scoase',coalesce((SELECT jsonb_agg(o) FROM jsonb_array_elements(v_old) o WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(v_cur->'randuri') n WHERE o->>'id'=n->>'id')),'[]'::jsonb),
+    'modificate',coalesce((SELECT jsonb_agg(jsonb_build_object('id',o->'id','inainte',o,'acum',n)) FROM jsonb_array_elements(v_old) o JOIN jsonb_array_elements(v_cur->'randuri') n ON o->>'id'=n->>'id' WHERE o->>'h' IS DISTINCT FROM n->>'h'),'[]'::jsonb)) INTO v_dif;
+  RETURN jsonb_build_object('stare',v_st,'evaluare','r9b','amprenta_curenta',v_token,'amprenta_baza',v_cur->>'amprenta',
+    'text_hash',v_hash,'curent',v_cur-'randuri','diferente',v_dif,'mod_ciorna','corespondenta',
+    'marcaj_planse','revizie_planse_auto'=ANY(string_to_array(coalesce(p_sursa,''),',')),
+    'text',CASE v_st WHEN 'ok' THEN 'Text aprobat de om pe baza curentă. Cantitățile din text nu sunt validate automat.'
+      WHEN 'schimbata' THEN 'baza s-a schimbat — de reverificat'
+      WHEN 'luat_act' THEN 'baza s-a schimbat după transmitere — luat act; textul transmis rămâne neschimbat'
+      WHEN 'indisponibila' THEN 'necesită review — baza ciornei vechi nu este demonstrabilă'
+      ELSE 'necesită review — aprobă textul exact pe baza curentă' END);
+EXCEPTION WHEN others THEN
+  RETURN jsonb_build_object('stare','indisponibila','text','nu putem verifica baza: ' || SQLERRM);
 END $function$;
-REVOKE ALL ON FUNCTION public.ofertare_clarificare_baza_stare(bigint, text, text, jsonb) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.ofertare_clarificare_baza_stare(bigint, text, text, jsonb) TO authenticated, service_role;
-COMMENT ON FUNCTION public.ofertare_clarificare_baza_stare(bigint, text, text, jsonb) IS 'R5 runda 9 (26.09.2026): starea unei ciorne automate de clarificare față de baza cifrelor ei — ok / schimbata / indisponibila (ciornă veche care citează o cifră fără amprentă) / luat_act (după transmitere) — cu diferențele pe rânduri (adăugate / scoase / modificate) și textul pentru om. Evaluare deterministă a textului (ofertare_clarificare_mod_text) pentru ciornele fără amprentă. SECURITY INVOKER.';
+REVOKE ALL ON FUNCTION public.ofertare_clarificare_baza_stare(bigint,text,text,jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.ofertare_clarificare_baza_stare(bigint,text,text,jsonb) TO authenticated, service_role;
 
--- reconfirmarea OMULUI (nu închide un avertisment: leagă decizia de amprenta CURENTĂ și cere tratarea cifrei vechi)
-CREATE OR REPLACE FUNCTION public.ofertare_clarificare_reconfirma(p_id bigint, p_amprenta text, p_decizie text, p_nota text)
- RETURNS jsonb
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public', 'pg_temp'
+CREATE OR REPLACE FUNCTION public.ofertare_clarificare_reconfirma(p_id bigint,p_amprenta text,p_decizie text,p_nota text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
 AS $function$
-DECLARE
-  c record; v_st jsonb; v_cur jsonb; v_fig text; v_txt text; v_mod text; v_fig_noua text; v_rez jsonb; v_data text; v_sursa text;
+DECLARE c record; v_st jsonb; v_cur jsonb; v_decizie jsonb; v_sursa text;
 BEGIN
-  IF auth.uid() IS NULL THEN RETURN jsonb_build_object('error', 'fără sesiune'); END IF;
-  IF NOT coalesce(public.fn_are_acces_ofertare(), false) THEN RETURN jsonb_build_object('error', 'fără acces la Ofertare'); END IF;
-  IF coalesce(p_decizie, '') NOT IN ('revizuit', 'istoric', 'regenereaza', 'luat_act') THEN
-    RETURN jsonb_build_object('error', 'alege: „am revizuit textul”, „păstrez cifra ca valoare istorică”, „regenerează” (doar ciorna platformei) sau, după transmitere, „am luat act”');
+  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces la Ofertare'); END IF;
+  IF coalesce(p_decizie,'') NOT IN ('revizuit','luat_act') THEN RETURN jsonb_build_object('error','alege revizuit sau, după transmitere, luat_act'); END IF;
+  IF length(btrim(coalesce(p_nota,''))) < CASE WHEN p_decizie='luat_act' THEN 10 ELSE 5 END THEN RETURN jsonb_build_object('error','nota de review este prea scurtă'); END IF;
+  SELECT * INTO c FROM public.ofertare_clarificari WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND OR coalesce(c.cheie,'') NOT LIKE 'auto_planse_%' THEN RETURN jsonb_build_object('error','nu e ciornă automată'); END IF;
+  v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id,c.intrebare,c.sursa,c.baza_generare);
+  IF p_amprenta IS NULL OR v_st->>'amprenta_curenta' IS DISTINCT FROM p_amprenta THEN RETURN jsonb_build_object('error','textul sau baza s-au schimbat — reîncarcă și verifică'); END IF;
+  v_decizie := jsonb_build_object('token',p_amprenta,'text_hash',md5(coalesce(c.intrebare,'')),
+    'amprenta',v_st->>'amprenta_baza','text_aprobat',c.intrebare,'de',auth.uid(),'la',now(),'decizie',p_decizie,'nota',btrim(p_nota));
+  IF c.status IN ('trimisa','raspunsa') THEN
+    IF p_decizie <> 'luat_act' THEN RETURN jsonb_build_object('error','document transmis imuabil — doar luat_act'); END IF;
+    UPDATE public.ofertare_clarificari SET baza_generare=coalesce(baza_generare,'{}'::jsonb)||jsonb_build_object('luat_act',v_decizie,
+      'istoric_decizii',coalesce(baza_generare->'istoric_decizii','[]'::jsonb)||jsonb_build_array(v_decizie)) WHERE id=p_id;
+  ELSE
+    IF c.status NOT IN ('propunere','de_trimis') OR p_decizie <> 'revizuit' THEN RETURN jsonb_build_object('error','decizie incompatibilă cu starea ciornei'); END IF;
+    v_cur := public.ofertare_f3_baza(c.licitatie_id);
+    IF md5((v_cur->>'amprenta') || '|' || md5(coalesce(c.intrebare,''))) IS DISTINCT FROM p_amprenta THEN RETURN jsonb_build_object('error','baza s-a schimbat în timpul verificării'); END IF;
+    SELECT string_agg(t,',' ORDER BY o) INTO v_sursa FROM unnest(string_to_array(coalesce(c.sursa,''),',')) WITH ORDINALITY x(t,o) WHERE t <> 'revizie_planse_auto';
+    UPDATE public.ofertare_clarificari SET sursa=v_sursa, updated_at=now(),
+      baza_generare=v_cur||jsonb_build_object('text_hash',md5(coalesce(c.intrebare,'')),'reconfirmare',v_decizie,
+        'istoric_decizii',coalesce(c.baza_generare->'istoric_decizii','[]'::jsonb)||
+          CASE WHEN c.baza_generare->'reconfirmare' IS NOT NULL AND NOT (c.baza_generare ? 'istoric_decizii') THEN jsonb_build_array(c.baza_generare->'reconfirmare') ELSE '[]'::jsonb END || jsonb_build_array(v_decizie))
+      WHERE id=p_id;
   END IF;
-  IF p_decizie <> 'regenereaza' AND length(btrim(coalesce(p_nota, ''))) < (CASE WHEN p_decizie = 'luat_act' THEN 10 ELSE 5 END) THEN
-    RETURN jsonb_build_object('error', CASE WHEN p_decizie = 'luat_act' THEN 'scrie ce faci (min. 10 caractere): completare de trimis / de ce nu e nevoie'
-      ELSE 'scrie ce ai verificat (min. 5 caractere)' END);
-  END IF;
-  SELECT * INTO c FROM public.ofertare_clarificari WHERE id = p_id FOR UPDATE;
-  IF NOT FOUND OR coalesce(c.cheie, '') NOT LIKE 'auto_planse_%' THEN RETURN jsonb_build_object('error', 'nu e o ciornă automată de clarificare (planșe)'); END IF;
-  v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id, c.intrebare, c.sursa, c.baza_generare);
-  -- legată de baza pe care a VĂZUT-O omul: dacă datele s-au schimbat din nou între timp, nimic nu se scrie
-  IF (v_st ->> 'amprenta_curenta') IS DISTINCT FROM p_amprenta THEN
-    RETURN jsonb_build_object('error', 'cifrele s-au schimbat din nou între timp — reîncarcă și verifică diferențele de acum', 'amprenta_curenta', v_st ->> 'amprenta_curenta');
-  END IF;
-  IF c.status IN ('trimisa', 'raspunsa') THEN
-    -- ADDENDUM 3 (2): textul și dovada transmiterii rămân intacte — doar „am luat act” (+ eventual o completare nouă, scrisă de om)
-    IF p_decizie <> 'luat_act' THEN RETURN jsonb_build_object('error', 'clarificarea e deja transmisă: textul nu se mai schimbă — doar „am luat act” (și, dacă e cazul, o completare nouă)'); END IF;
-    UPDATE public.ofertare_clarificari SET baza_generare = (coalesce(baza_generare, '{}'::jsonb) - 'notificat_neactual')
-      || jsonb_build_object('luat_act', jsonb_build_object('amprenta', p_amprenta, 'de', auth.uid(), 'la', now(), 'nota', btrim(p_nota), 'baza', v_st -> 'curent' ->> 'text'))
-     WHERE id = p_id;
-    RETURN jsonb_build_object('ok', true, 'id', p_id, 'decizie', p_decizie);
-  END IF;
-  IF c.status NOT IN ('propunere', 'de_trimis') THEN RETURN jsonb_build_object('error', 'ciorna nu mai e activă (' || c.status || ')'); END IF;
-  IF p_decizie = 'luat_act' THEN RETURN jsonb_build_object('error', '„am luat act” e doar pentru clarificările transmise'); END IF;
-  IF p_decizie = 'regenereaza' THEN
-    -- doar ciorna PLATFORMEI (încă 'propunere', textul = exact ultimul text generat) — o ciornă editată / aprobată de om nu se rescrie
-    IF c.status <> 'propunere' OR NOT EXISTS (SELECT 1 FROM unnest(string_to_array(coalesce(c.sursa, ''), ',')) WITH ORDINALITY x(t, o)
-                                               WHERE x.o > 1 AND x.t ~ '^gen_[0-9a-f]{12}$' AND substr(x.t, 5) = left(md5(coalesce(c.intrebare, '')), 12)) THEN
-      RETURN jsonb_build_object('error', 'ciorna e editată sau aprobată de om — platforma n-o rescrie; revizuiește textul și reconfirmă');
-    END IF;
-    v_rez := public.ofertare_clarificare_planse_auto(c.licitatie_id);
-    RETURN jsonb_build_object('ok', true, 'id', p_id, 'decizie', p_decizie, 'rezultat', v_rez);
-  END IF;
-  v_cur := public.ofertare_f3_baza(c.licitatie_id);
-  v_txt := c.intrebare;
-  v_fig := v_st ->> 'cifra_ciorna';
-  -- ADDENDUM 3 (2): cifra VECHE rămasă în text (≠ suma curentă completă) — fie corectată prin revizie, fie păstrată EXPLICIT ca valoare istorică
-  IF v_st ->> 'mod_ciorna' = 'cifra' AND v_fig IS NOT NULL
-     AND coalesce(v_txt, '') ~ ('(din F3|exprimate în m): ' || regexp_replace(v_fig, '([.])', '\\\1', 'g') || ' m(?! — valoare istorică)')
-     AND NOT (v_cur ->> 'mod' = 'cifra' AND v_cur ->> 'suma_txt' = v_fig) THEN
-    IF p_decizie = 'revizuit' THEN
-      RETURN jsonb_build_object('error', 'textul încă citează ' || v_fig || ' m (cifra de la generare), care nu mai e suma curentă — corectează textul sau alege „păstrez ca valoare istorică”');
-    END IF;
-    v_data := to_char(coalesce(CASE WHEN public.ofertare_ts_valid(c.baza_generare ->> 'la') THEN (c.baza_generare ->> 'la')::timestamptz END, c.updated_at, now()), 'DD.MM.YYYY');
-    v_txt := regexp_replace(v_txt, '((din F3|exprimate în m): ' || regexp_replace(v_fig, '([.])', '\\\1', 'g') || ' m)(?! — valoare istorică)',
-      '\1 — valoare istorică: suma rândurilor validate din lista de cantități F3 la ' || v_data, 'g');
-  ELSIF p_decizie = 'istoric' THEN
-    RETURN jsonb_build_object('error', 'nu e nicio cifră veche de marcat în text — alege „am revizuit textul”');
-  END IF;
-  -- ce afirmă textul (după decizie) trebuie să fie ADEVĂRAT pe datele de acum
-  v_mod := public.ofertare_clarificare_mod_text(v_txt);
-  v_fig_noua := substring(coalesce(v_txt, '') from '(?:din F3|exprimate în m): ([0-9][0-9.,]*) m(?! — valoare istorică)');
-  IF v_mod = 'cifra' AND NOT (v_cur ->> 'mod' = 'cifra' AND v_cur ->> 'suma_txt' = v_fig_noua) THEN
-    RETURN jsonb_build_object('error', 'textul citează ' || coalesce(v_fig_noua, '?') || ' m din F3, dar acum: ' || (v_cur ->> 'text') || ' — corectează textul');
-  END IF;
-  IF v_mod = 'neidentificat' AND v_cur ->> 'mod' <> 'neidentificat' THEN
-    RETURN jsonb_build_object('error', 'textul afirmă că nu există liste de cantități, dar acum lista F3 are ' || (v_cur ->> 'n_f3') || ' rânduri — corectează textul');
-  END IF;
-  IF v_mod = 'corespondenta' AND v_cur ->> 'mod' = 'neidentificat' THEN
-    RETURN jsonb_build_object('error', 'textul cere corespondența cu lista F3, dar acum nu există niciun rând F3 — corectează textul');
-  END IF;
-  SELECT string_agg(x.t, ',' ORDER BY x.o) INTO v_sursa FROM unnest(string_to_array(coalesce(c.sursa, ''), ',')) WITH ORDINALITY x(t, o)
-   WHERE x.o = 1 OR x.t <> 'revizie_planse_auto';
-  UPDATE public.ofertare_clarificari SET intrebare = v_txt, sursa = v_sursa, updated_at = now(),
-    baza_generare = v_cur || jsonb_build_object('mod', v_mod, 'la', now(), 'sursa_generare', 'reconfirmare',
-      'reconfirmare', jsonb_build_object('de', auth.uid(), 'la', now(), 'decizie', p_decizie, 'nota', btrim(p_nota),
-        'mod_anterior', v_st ->> 'mod_ciorna', 'amprenta_anterioara', v_st ->> 'amprenta_ciorna', 'cifra_anterioara', v_fig,
-        'baza_anterioara', v_st -> 'ciorna' ->> 'text', 'diferente', v_st -> 'diferente', 'marcaj_planse_scos', coalesce((v_st ->> 'marcaj_planse')::boolean, false)))
-   WHERE id = p_id;
-  RETURN jsonb_build_object('ok', true, 'id', p_id, 'decizie', p_decizie, 'mod', v_mod, 'text_schimbat', v_txt IS DISTINCT FROM c.intrebare);
+  RETURN jsonb_build_object('ok',true,'id',p_id,'decizie',p_decizie);
 END $function$;
-REVOKE ALL ON FUNCTION public.ofertare_clarificare_reconfirma(bigint, text, text, text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.ofertare_clarificare_reconfirma(bigint, text, text, text) TO authenticated, service_role;
-COMMENT ON FUNCTION public.ofertare_clarificare_reconfirma(bigint, text, text, text) IS 'R5 runda 9 (26.09.2026): reconfirmarea umană a unei ciorne automate de clarificare pe baza CURENTĂ (p_amprenta = amprenta văzută; alta => refuz): revizuit (cifra veche nu mai e în text) / istoric (cifra veche marcată explicit „valoare istorică … la <data generării>”) / regenereaza (doar ciorna platformei) / luat_act (după transmitere — textul nu se atinge). Textul reconfirmat trebuie să fie adevărat pe datele de acum. Autor = auth.uid() cu acces Ofertare. Nu trimite nimic.';
+REVOKE ALL ON FUNCTION public.ofertare_clarificare_reconfirma(bigint,text,text,text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.ofertare_clarificare_reconfirma(bigint,text,text,text) TO authenticated, service_role;
 
--- backend: câmpurile serverului + poarta aprobării / transmiterii (SECURITY INVOKER intenționat: vede rolul apelantului)
 CREATE OR REPLACE FUNCTION public.fn_trg_ofertare_clarificari_baza()
- RETURNS trigger
- LANGUAGE plpgsql
- SET search_path TO 'public', 'pg_temp'
+RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp'
 AS $function$
-DECLARE v_st jsonb; v text; v_marcaj boolean;
+DECLARE v_st jsonb; v_auto boolean;
 BEGIN
-  IF current_user IN ('authenticated', 'anon') THEN
-    -- baza_generare și tokenii rezervați ai serverului din `sursa` (gen_ / ev_ / revizie_planse_auto) NU se scriu direct: la o scriere a
-    -- utilizatorului se păstrează valorile din BD (saveQ cu o copie locală veche a `sursa` nu mai scoate marcajul „necesită revizie” — minorul
-    -- saveQ al verificatorului UI); scoaterea marcajului = ofertare_clarificare_reconfirma
-    IF TG_OP = 'INSERT' THEN
-      NEW.baza_generare := NULL;
-      SELECT string_agg(x.t, ',' ORDER BY x.o) INTO v FROM unnest(string_to_array(NEW.sursa, ',')) WITH ORDINALITY x(t, o)
-       WHERE x.o = 1 OR NOT (x.t ~ '^(gen|ev)_[0-9a-f]{12}$' OR x.t = 'revizie_planse_auto');
-      NEW.sursa := v;
-    ELSE
-      NEW.baza_generare := OLD.baza_generare;
-      IF NEW.sursa IS DISTINCT FROM OLD.sursa THEN
-        SELECT string_agg(z.t, ',' ORDER BY z.o) INTO v FROM (
-          SELECT x.t, x.o FROM unnest(string_to_array(coalesce(NEW.sursa, ''), ',')) WITH ORDINALITY x(t, o)
-           WHERE x.o = 1 OR NOT (x.t ~ '^(gen|ev)_[0-9a-f]{12}$' OR x.t = 'revizie_planse_auto')
-          UNION ALL
-          SELECT y.t, 1000000 + y.o FROM unnest(string_to_array(coalesce(OLD.sursa, ''), ',')) WITH ORDINALITY y(t, o)
-           WHERE y.o > 1 AND (y.t ~ '^(gen|ev)_[0-9a-f]{12}$' OR y.t = 'revizie_planse_auto')) z;
-        NEW.sursa := nullif(v, '');
-      END IF;
-    END IF;
+  IF TG_OP='DELETE' THEN
+    IF coalesce(OLD.cheie,'') LIKE 'auto_planse_%' THEN RAISE EXCEPTION 'Proveniența și deciziile se păstrează; retrage ciorna în loc de ștergere'; END IF;
+    RETURN OLD;
   END IF;
-  -- ADDENDUM 3 (2) + principiul rundei 9: aprobarea (→ de_trimis) și transmiterea (→ trimisa) unei ciorne automate — verificate în BACKEND pe baza
-  -- de ACUM: o bază schimbată / nereconfirmată (sau marcajul „planșele s-au schimbat”) => refuz. Conflictele deschise NU blochează (o
-  -- clarificare despre ele se poate trimite); nici rândurile nevalidate: se blochează doar o bază SCHIMBATĂ față de ce a aprobat omul.
-  IF coalesce(NEW.cheie, '') LIKE 'auto_planse_%' AND NEW.status IN ('de_trimis', 'trimisa')
-     AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status) THEN
-    v_marcaj := 'revizie_planse_auto' = ANY (string_to_array(coalesce(NEW.sursa, ''), ','));
-    v_st := public.ofertare_clarificare_baza_stare(NEW.licitatie_id, NEW.intrebare, NEW.sursa, NEW.baza_generare);
-    IF v_marcaj OR v_st ->> 'stare' IN ('schimbata', 'indisponibila') THEN
-      RAISE EXCEPTION 'Clarificarea #% nu poate trece în „%”: %. Reconfirm-o în ❓ Clarificări (vezi diferențele) — nimic nu s-a trimis.',
-        coalesce(NEW.nr::text, NEW.id::text), NEW.status,
-        CASE WHEN v_st ->> 'stare' IN ('schimbata', 'indisponibila') THEN v_st ->> 'text' ELSE 'planșele s-au schimbat după ce ciorna a fost editată / aprobată (marcaj „necesită revizie”)' END
-        USING ERRCODE = 'P0001';
+  v_auto := coalesce(NEW.cheie,'') LIKE 'auto_planse_%' OR (TG_OP='UPDATE' AND coalesce(OLD.cheie,'') LIKE 'auto_planse_%');
+  IF NOT v_auto THEN RETURN NEW; END IF;
+  IF TG_OP='UPDATE' THEN
+    IF (NEW.cheie,NEW.licitatie_id,NEW.origine) IS DISTINCT FROM (OLD.cheie,OLD.licitatie_id,OLD.origine) THEN
+      RAISE EXCEPTION 'Proveniența clarificării automate este imuabilă';
+    END IF;
+    IF OLD.status IN ('trimisa','raspunsa') AND ((NEW.intrebare,NEW.fisier_path) IS DISTINCT FROM (OLD.intrebare,OLD.fisier_path)
+      OR NEW.status IS NULL OR NEW.status NOT IN ('trimisa','raspunsa')) THEN RAISE EXCEPTION 'Documentul transmis este imuabil'; END IF;
+  END IF;
+  IF current_user IN ('authenticated','anon','service_role') THEN
+    IF TG_OP='INSERT' THEN RAISE EXCEPTION 'Ciorna automată se creează doar prin generatorul controlat'; END IF;
+    IF NEW.baza_generare IS DISTINCT FROM OLD.baza_generare THEN RAISE EXCEPTION 'Baza și aprobarea se scriu doar prin reconfirmare'; END IF;
+    NEW.sursa := OLD.sursa;
+  END IF;
+  IF TG_OP='UPDATE' AND NEW.intrebare IS DISTINCT FROM OLD.intrebare AND current_user IN ('authenticated','anon','service_role') THEN
+    -- Textul se salvează, aprobarea nu se transferă. Istoricul deciziilor se păstrează.
+    NEW.baza_generare := (coalesce(NEW.baza_generare,'{}'::jsonb)-'reconfirmare') ||
+      CASE WHEN OLD.baza_generare ? 'reconfirmare' AND NOT (OLD.baza_generare ? 'istoric_decizii')
+        THEN jsonb_build_object('istoric_decizii',jsonb_build_array(OLD.baza_generare->'reconfirmare')) ELSE '{}'::jsonb END ||
+      jsonb_build_object('text_editat_de',auth.uid(),'text_editat_la',now());
+    IF NEW.status='de_trimis' THEN NEW.status := 'propunere'; END IF;
+  END IF;
+  IF NEW.status IN ('de_trimis','trimisa') AND (TG_OP='INSERT' OR OLD.status IS DISTINCT FROM NEW.status) THEN
+    v_st := public.ofertare_clarificare_baza_stare(NEW.licitatie_id,NEW.intrebare,NEW.sursa,NEW.baza_generare);
+    IF v_st->>'stare' IS DISTINCT FROM 'ok' OR coalesce((v_st->>'marcaj_planse')::boolean,true) THEN
+      RAISE EXCEPTION 'Clarificare blocată: %. Reconfirmă textul pe baza curentă.',v_st->>'text';
     END IF;
   END IF;
   RETURN NEW;
 END $function$;
 REVOKE ALL ON FUNCTION public.fn_trg_ofertare_clarificari_baza() FROM PUBLIC, anon, authenticated;
 DROP TRIGGER IF EXISTS trg_ofertare_clarificari_baza ON public.ofertare_clarificari;
-CREATE TRIGGER trg_ofertare_clarificari_baza BEFORE INSERT OR UPDATE ON public.ofertare_clarificari
-  FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_clarificari_baza();
+CREATE TRIGGER trg_ofertare_clarificari_baza BEFORE INSERT OR UPDATE OR DELETE ON public.ofertare_clarificari
+FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_clarificari_baza();
 
--- notificarea: rândurile F3 schimbate => ciornele automate a căror bază a devenit neactuală primesc O notificare (marcaj notificat_neactual în
--- baza_generare; revenirea la bază îl șterge, ca o nouă abatere să notifice din nou). Textul / statusul NU se ating. SECURITY DEFINER: scrie
--- notifications + baza_generare indiferent cine a modificat rândul (om / server); nu citește conținut extern, nu trimite nimic în afară.
-CREATE OR REPLACE FUNCTION public.fn_trg_ofertare_cantitati_clar_baza()
- RETURNS trigger
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public', 'pg_temp'
-AS $function$
-DECLARE v_lic bigint; c record; v_st jsonb; v_resp uuid; v_notif boolean;
-BEGIN
-  IF NOT ((TG_OP <> 'DELETE' AND NEW.tip_sursa IS NOT DISTINCT FROM 'lista_f3') OR (TG_OP <> 'INSERT' AND OLD.tip_sursa IS NOT DISTINCT FROM 'lista_f3')) THEN
-    RETURN NULL;
-  END IF;
-  FOR v_lic IN SELECT DISTINCT x FROM unnest(ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN NEW.licitatie_id END, CASE WHEN TG_OP <> 'INSERT' THEN OLD.licitatie_id END]) x WHERE x IS NOT NULL LOOP
-    FOR c IN SELECT k.id, k.nr, k.licitatie_id, k.intrebare, k.sursa, k.baza_generare, k.status FROM public.ofertare_clarificari k
-              WHERE k.licitatie_id = v_lic AND coalesce(k.cheie, '') LIKE 'auto_planse_%' AND k.status IN ('propunere', 'de_trimis', 'trimisa', 'raspunsa')
-              ORDER BY k.id FOR UPDATE LOOP
-      v_notif := coalesce(c.baza_generare ? 'notificat_neactual', false);
-      v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id, c.intrebare, c.sursa, c.baza_generare);
-      IF v_st ->> 'stare' = 'schimbata' AND NOT v_notif THEN
-        UPDATE public.ofertare_clarificari SET baza_generare = coalesce(baza_generare, '{}'::jsonb)
-          || jsonb_build_object('notificat_neactual', jsonb_build_object('la', now(), 'amprenta', v_st ->> 'amprenta_curenta')) WHERE id = c.id;
-        SELECT responsabil_id INTO v_resp FROM public.ofertare_licitatii WHERE id = v_lic;
-        IF v_resp IS NOT NULL THEN
-          INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
-          VALUES (v_resp, 'info', 'Ofertare', '💭 Clarificare: cifrele s-au schimbat',
-            'Licitația #' || v_lic || ', clarificarea ' || coalesce(c.nr::text, '#' || c.id) || ' (' || c.status || '): ' ||
-            CASE WHEN c.status IN ('trimisa', 'raspunsa')
-              THEN 'baza cifrelor s-a schimbat DUPĂ transmitere. Textul transmis NU s-a schimbat; evaluează dacă e nevoie de o completare.'
-              ELSE 'cifrele din ciornă s-au schimbat de la generare — de reverificat înainte de trimitere. Textul și statusul NU s-au schimbat; aprobarea / trimiterea cer reconfirmarea ta.' END
-            || ' NU s-a trimis nimic.', '/ofertare');
-        END IF;
-      ELSIF v_st ->> 'stare' IN ('ok', 'luat_act') AND v_notif THEN
-        UPDATE public.ofertare_clarificari SET baza_generare = baza_generare - 'notificat_neactual' WHERE id = c.id;
-      END IF;
-    END LOOP;
-  END LOOP;
-  RETURN NULL;
-END $function$;
-REVOKE ALL ON FUNCTION public.fn_trg_ofertare_cantitati_clar_baza() FROM PUBLIC, anon, authenticated;
+-- Nicio scanare/notificare în tranzacția scrierii F3. Istoricul și invalidarea din 1/1b rămân intacte.
 DROP TRIGGER IF EXISTS trg_zzz_ofertare_cantitati_clar_baza ON public.ofertare_cantitati;
-CREATE TRIGGER trg_zzz_ofertare_cantitati_clar_baza AFTER INSERT OR UPDATE OR DELETE ON public.ofertare_cantitati
-  FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_cantitati_clar_baza();
+DROP FUNCTION IF EXISTS public.fn_trg_ofertare_cantitati_clar_baza();
+DROP FUNCTION IF EXISTS public.ofertare_clarificare_mod_text(text);
+
+-- Control la citire, separat de salvare. Marcajul și notificarea se scriu atomic; eșecul permite retry.
+CREATE OR REPLACE FUNCTION public.ofertare_clarificari_notifica(p_licitatie_id bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public','pg_temp'
+AS $function$
+DECLARE c record; v_st jsonb; v_resp uuid; v_n int := 0;
+BEGIN
+  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces'); END IF;
+  SELECT responsabil_id INTO v_resp FROM public.ofertare_licitatii WHERE id=p_licitatie_id;
+  FOR c IN SELECT * FROM public.ofertare_clarificari WHERE licitatie_id=p_licitatie_id AND cheie LIKE 'auto_planse_%' AND status <> 'retrasa' ORDER BY id FOR UPDATE LOOP
+    v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id,c.intrebare,c.sursa,c.baza_generare);
+    IF v_st->>'stare' IN ('schimbata','indisponibila') AND v_st->>'amprenta_curenta' IS NOT NULL AND v_resp IS NOT NULL AND c.baza_generare->>'notificat_neactual' IS DISTINCT FROM v_st->>'amprenta_curenta' THEN
+      INSERT INTO public.notifications(profile_id,type,modul,title,message,link_to) VALUES
+        (v_resp,'info','Ofertare','Clarificare de reverificat','Licitația #'||p_licitatie_id||': baza s-a schimbat — de reverificat. Textul rămâne păstrat. Nimic trimis automat.','/ofertare');
+      UPDATE public.ofertare_clarificari SET baza_generare=coalesce(baza_generare,'{}'::jsonb)||jsonb_build_object('notificat_neactual',v_st->>'amprenta_curenta') WHERE id=c.id;
+      v_n:=v_n+1;
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('ok',true,'notificari',v_n);
+EXCEPTION WHEN others THEN RETURN jsonb_build_object('error',SQLERRM);
+END $function$;
+REVOKE ALL ON FUNCTION public.ofertare_clarificari_notifica(bigint) FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.ofertare_clarificari_notifica(bigint) TO authenticated,service_role;
+
+-- Exportul primește textul și verificarea din ACELAȘI snapshot backend, fără două citiri care pot diverge.
+CREATE OR REPLACE FUNCTION public.ofertare_clarificari_export(p_licitatie_id bigint)
+RETURNS jsonb LANGUAGE plpgsql SET search_path TO 'public','pg_temp'
+AS $function$
+DECLARE c record; v_st jsonb; v_out jsonb := '[]'::jsonb;
+BEGIN
+  IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RAISE EXCEPTION 'fără acces'; END IF;
+  FOR c IN SELECT * FROM public.ofertare_clarificari WHERE licitatie_id=p_licitatie_id AND status='de_trimis' ORDER BY nr FOR SHARE LOOP
+    IF coalesce(c.sursa,'') ~ '(^|,)revizie_' THEN RAISE EXCEPTION 'Clarificarea #% necesită revizie',c.nr; END IF;
+    IF coalesce(c.cheie,'') LIKE 'auto_planse_%' THEN
+      v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id,c.intrebare,c.sursa,c.baza_generare);
+      IF v_st->>'stare' IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'Export blocat: %',v_st->>'text'; END IF;
+    END IF;
+    v_out := v_out || jsonb_build_array(to_jsonb(c));
+  END LOOP;
+  RETURN v_out;
+END $function$;
+REVOKE ALL ON FUNCTION public.ofertare_clarificari_export(bigint) FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.ofertare_clarificari_export(bigint) TO authenticated,service_role;
 
 DROP VIEW IF EXISTS public.v_ofertare_clarificari_baza;
 CREATE VIEW public.v_ofertare_clarificari_baza WITH (security_invoker = on) AS
@@ -1389,12 +1266,10 @@ SELECT c.id, c.licitatie_id, c.nr, c.status, s.x ->> 'stare' AS stare, s.x ->> '
  WHERE coalesce(c.cheie, '') LIKE 'auto_planse_%' AND c.status <> 'retrasa';
 REVOKE ALL ON public.v_ofertare_clarificari_baza FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.v_ofertare_clarificari_baza TO authenticated, service_role;
-COMMENT ON VIEW public.v_ofertare_clarificari_baza IS 'R5 runda 9 (26.09.2026): pentru fiecare ciornă automată de clarificare (planșe), starea bazei cifrelor ei față de acum (ok / schimbata / indisponibila / luat_act), diferențele și textul pentru om. Citit de ❓ Clarificări (afișare, reconfirmare, export — verificat în backend chiar înainte de generarea adresei) și de fișa licitației. security_invoker.';
+COMMENT ON VIEW public.v_ofertare_clarificari_baza IS 'R9b: starea review-ului textului exact pe baza curentă, cu diferențe și valori pentru panoul intern. Necesita_review și luat_act nu sunt aprobări de export. security_invoker.';
 
 -- 2) ─────────────────────────────────────────────────────────────────────────────────────────────────────
--- v6 (R5): față de live se schimbă DOAR: v_f3_n/v_f3_nev/v_f3_txt declarate; SELECT-ul F3 (filtrul qm, sumă doar din
--- 'validat' + numărători, runda 5: + rândurile F3 invalidate ieșite din qm); formatul ro-RO al totalului; ramura nouă
--- „2. Corespondența … (F3) în care este cuprins;" fără total; 'f3_nevalidate' în rezultat. Restul = live.
+-- v6 / R9b: text extern calitativ cu identificarea documentelor. Datele cantitative rămân numai în review.
 CREATE OR REPLACE FUNCTION public.ofertare_clarificare_planse_auto(p_licitatie_id bigint)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -1402,19 +1277,17 @@ CREATE OR REPLACE FUNCTION public.ofertare_clarificare_planse_auto(p_licitatie_i
  SET search_path TO 'public', 'pg_temp'
 AS $function$
 DECLARE
-  v_ids bigint[]; v_nume text[]; v_motive text[]; v_acoperite bigint[]; v_draft record; v_lot int; v_f3 numeric;
+  v_ids bigint[]; v_nume text[]; v_motive text[]; v_acoperite bigint[]; v_draft record; v_lot int;
   v_text text; v_lista text; v_det text; v_id bigint; v_nou boolean := false; v_resp uuid; v_nr int; v_noi int;
   v_antet constant text := 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe';
   v_standard boolean; v_tok text; v_det_fd text; v_ilizibile int; v_fara_date int;
-  v_f3_n int; v_f3_nev int; v_f3_txt text; v_f3_um int; v_f3_fc int;
   v_protejat boolean; v_flag int := 0; v_tc int;
-  v_msg_rev constant text := ': ciorna de clarificare pentru planșe, editată / aprobată de om, nu mai corespunde planșelor de acum. Textul și statusul ei NU s-au schimbat; e exclusă din adresa generată până o revizuiești (marcaj „necesită revizie”). NU s-a trimis nimic.';
   -- reparația rundei 1 (verificatorii, MAJOR v6 „ciorna umană suprascrisă”; ADDENDUM 2 Copilot, c): amprenta textului GENERAT (gen_…) și
   -- a EVENIMENTULUI notificat (ev_…), ca tokeni în sursa (lângă revizie_*; ignorați de v_acoperite / v_noi, care iau doar cifre)
   v_gen text; v_ev text; v_tok_gen text; v_tok_ev text; v_ids_sursa text; v_sursa_noua text;
   v_ev_fara constant text := left(md5('fara_planse_de_clarificat'), 12);
   -- runda 9: baza F3 (ofertare_f3_baza — o singură definiție) și amprenta ei, salvată în baza_generare a ciornei mașinii
-  v_baza jsonb; v_baza_gen jsonb;
+  v_baza jsonb; v_baza_gen jsonb; v_financiar text;
 BEGIN
   -- sarcina 2 (a): conflictele DESCHISE ale transferului planșă → cantități pe licitație (doar raportate în rezultat; textul nu le citează)
   SELECT count(*) INTO v_tc FROM public.v_ofertare_transfer_conflicte WHERE licitatie_id = p_licitatie_id AND deschis;
@@ -1446,6 +1319,7 @@ BEGIN
     -- Notificarea: o singură dată pe EVENIMENT (ev_<…>): apeluri repetate, sau după „✓ revizuită” pe aceeași stare, nu mai notifică.
     UPDATE ofertare_clarificari c SET status = 'retrasa', updated_at = now()
      WHERE c.licitatie_id = p_licitatie_id AND c.origine = 'automat' AND c.cheie LIKE 'auto_planse_%' AND c.status = 'propunere'
+       AND c.baza_generare->>'evaluare'='r9b' AND NOT (c.baza_generare ? 'reconfirmare' OR c.baza_generare ? 'text_editat_de')
        AND EXISTS (SELECT 1 FROM unnest(string_to_array(coalesce(c.sursa, ''), ',')) WITH ORDINALITY AS x(t, o)
                     WHERE x.o > 1 AND x.t ~ '^gen_[0-9a-f]{12}$' AND substr(x.t, 5) = left(md5(coalesce(c.intrebare, '')), 12));
     WITH m AS (
@@ -1459,13 +1333,7 @@ BEGIN
          AND NOT (('ev_' || v_ev_fara) = ANY (string_to_array(coalesce(c.sursa, ''), ',')))
       RETURNING c.id)
     SELECT count(*) INTO v_flag FROM m;
-    IF v_flag > 0 THEN
-      SELECT responsabil_id INTO v_resp FROM ofertare_licitatii WHERE id = p_licitatie_id;
-      IF v_resp IS NOT NULL THEN
-        INSERT INTO notifications (profile_id, type, modul, title, message, link_to)
-        VALUES (v_resp, 'info', 'Ofertare', '💭 Clarificare (planșe) de revizuit', 'Licitația #' || p_licitatie_id || v_msg_rev, '/ofertare');
-      END IF;
-    END IF;
+    -- R9b: notificarea schimbării este centralizată în RPC-ul de citire; fără dublură aici.
     RETURN jsonb_build_object('actiune','nimic', 'de_revizuit', v_flag, 'transfer_conflicte_deschise', v_tc);
   END IF;
 
@@ -1477,42 +1345,10 @@ BEGIN
   FROM unnest(v_ids, v_nume, v_motive) AS t(i, n, m) WHERE NOT (i = ANY(v_acoperite));
   IF v_ids IS NULL THEN RETURN jsonb_build_object('actiune','deja_trimise', 'transfer_conflicte_deschise', v_tc); END IF;
 
-  -- v6 (R5, Copilot 25.09.2026): cifra F3 citată AUTORITĂȚII vine DOAR din rânduri validate de om (status='validat').
-  -- Cât există rânduri F3 de rețea nevalidate (transcriere AI neverificată), textul cere corespondența FĂRĂ total.
-  -- Runda 4: setul = EXACT filtrul qm / lista_f3_m din v_ofertare_pt_stare (și din v_ofertare_cantitati_nevalidate, H2):
-  -- um='m', categorie conductă/rețea, fără „total” în obiect/denumire/sursa. Filtrul vechi (um m/ml/M, denumire
-  -- conduct/țeav/tub) lua și articole de deviz (lic. 5: +15 rânduri „M”, 1.227,89 m) și rândurile TOTAL (dublare).
-  -- Runda 5 (verificator, minor „um”): un rând F3 INVALIDAT care a ieșit din setul qm (ex. unitatea „m” → „M” / „ml”) nu mai e
-  -- omis tacit din total: se numără ca nevalidat (=> fără total) și ca rând F3 (=> textul cere corespondența, nu „nu le-am
-  -- identificat”). „Invalidat” = ca în v_ofertare_cantitati_nevalidate (istoric: ultimul eveniment invalidat / redeschis; sau
-  -- prefixul notei).
-  -- Runda 6 (decis în audit, reversibil): unitatea NORMALIZATĂ în qm (ca view-ul și JS); „de reverificat” = invalidat (istoricul
-  -- aprobării, fără 'unitate_schimbata'; sau prefixul regulii, cu terminatorul) SAU unitatea schimbată pe un rând neaprobat
-  -- ('unitate_schimbata' după ultima validare; sau prefixul „Unitatea s-a schimbat … de reverificat.”) — un rând F3 care a ieșit din qm
-  -- prin m → ml nu mai e omis tacit din total. Și: un rând F3 din qm cu unitatea scrisă altfel decât exact „m” („M”, „m ”; lic. 5
-  -- reală: 15 articole de deviz „M” în categoria „Conducte și montaj”, 1.227,89 m) e în setul normalizat, dar poate fi un articol de
-  -- deviz => totalul NU se citează autorității cât există astfel de rânduri (v_f3_um > 0: fără total, ca la nevalidate) — nici
-  -- umflare tăcută, nici omisiune tăcută; H2 le semnalează (um_de_normalizat_f3).
-  -- Reparația rundei 2 (verificatorul BD, MAJOR „v6 citează autorității un subtotal incomplet ca total”): un rând F3 de rețea VALIDAT fără
-  -- cantitate nu intra nici în sumă, nici în numărătoarea nevalidatelor => „lungimea totală … din F3: 500 m” cu un tronson fără cifră.
-  -- Acum v_f3_fc = rândurile F3 din qm FĂRĂ cantitate (orice status) => fără total (ca la nevalidate / unitate de normalizat).
-  -- RUNDA 9 (verificatorii rundei 8, M1 + M9a / M9b / M9c; principiul: textul automat NU spune „total” pentru o sumă incompletă): cifra
-  -- vine din ofertare_f3_baza — aceeași clasificare ca v_ofertare_cantitati_nevalidate. Se citează DOAR în modul 'cifra': toate pozițiile F3
-  -- de rețea sunt validate, în „m” exact, cu cantitate; niciuna de LUNGIME în altă unitate (ml, km, sute m) sau fără unitate, niciuna
-  -- invalidată ieșită din rețea, nicio poziție aprobată ștearsă nerevizuită, niciun conflict de transfer deschis. Altfel textul cere
-  -- corespondența FĂRĂ cifră (rezultatul funcției spune de ce: `f3_baza.text` — „Subtotal din rândurile validate, exprimate în m, pentru …;
-  -- există N poziții suplimentare de verificat”). Înainte (runda 8): suma din rândurile exact „m”, cu ml / km / fără unitate scoase TACIT
-  -- („…din F3: 1.000 m” cu 500 ml validați — regresie față de v5, care număra ml). Formularea păstrează identitatea sursei și nu spune
-  -- „total”: „suma pozițiilor de conductă din lista de cantități F3, exprimate în m”. „Nu le-am identificat” = DOAR fără niciun rând F3
-  -- (înainte și cu F3 doar în „ml” — M9c, afirmație falsă).
+  SELECT string_agg('documentul #' || d.id || ' „' || d.nume_original || '”', '; ' ORDER BY d.id) INTO v_financiar
+    FROM public.ofertare_documente_atribuire d WHERE d.licitatie_id=p_licitatie_id AND d.tip='lista_cantitati';
   v_baza := public.ofertare_f3_baza(p_licitatie_id);
-  v_f3_n := (v_baza ->> 'n_f3')::int;
-  v_f3 := CASE WHEN v_baza ->> 'mod' = 'cifra' THEN round((v_baza ->> 'suma')::numeric, 1) END;
-  v_f3_txt := CASE WHEN v_baza ->> 'mod' = 'cifra' THEN v_baza ->> 'suma_txt' END;
-  v_f3_nev := (v_baza -> 'de_verificat' ->> 'nevalidate')::int + (v_baza -> 'de_verificat' ->> 'invalidate_iesite')::int;
-  v_f3_um := (v_baza -> 'de_verificat' ->> 'um_de_normalizat')::int;
-  v_f3_fc := (v_baza -> 'de_verificat' ->> 'validate_fara_cantitate')::int + (v_baza -> 'de_verificat' ->> 'nevalidate_fara_cantitate')::int;
-  v_baza_gen := v_baza || jsonb_build_object('la', now(), 'sursa_generare', 'v6');
+  v_baza_gen := v_baza || jsonb_build_object('la', now(), 'sursa_generare', 'v6-r9b');
 
   v_lista := array_to_string(v_nume, ', ');
   SELECT string_agg('   – ' || n, E'\n'), count(*) INTO v_det, v_ilizibile FROM unnest(v_nume, v_motive) t(n, m) WHERE m = 'ilizibil';
@@ -1526,21 +1362,16 @@ BEGIN
     ELSE '' END ||
     'Pentru fundamentarea corectă a ofertei, vă rugăm să ne comunicați, pentru planșele de mai sus:' || E'\n' ||
     '1. Lista tronsoanelor: denumire/capete tronson, lungime (m), diametru nominal, material și SDR, mod de pozare, subtraversări/traversări;' || E'\n' ||
-    CASE WHEN v_baza ->> 'mod' = 'cifra' AND v_f3_txt IS NOT NULL
-      THEN '2. Corespondența fiecărui tronson cu poziția din lista de cantități (F3) în care este cuprins (suma pozițiilor de conductă din lista de cantități F3, exprimate în m: ' ||
-           v_f3_txt || ' m);'
-      WHEN v_f3_n > 0
-      THEN '2. Corespondența fiecărui tronson cu poziția din lista de cantități (F3) în care este cuprins;'
-      ELSE '2. Dacă documentația de atribuire cuprinde liste de cantități de lucrări pentru rețea (nu le-am identificat în documentația publicată) și, în caz afirmativ, publicarea acestora;'
-    END ||
+    '2. Vă rugăm să precizați corespondența dintre pozițiile din ' || coalesce(v_financiar,'documentul financiar aplicabil (vă rugăm să îl identificați)') || ' și tronsoanele din planșele identificate mai sus, pentru obiectele / loturile / etapele aferente, precum și modul de tratare a neclarităților descrise. Vă rugăm să indicați paginile, pozițiile și reperele corespunzătoare;' ||
     CASE WHEN v_ilizibile > 0 THEN E'\n' || '3. Ca alternativă, pentru planșele care nu au putut fi citite, varianta în format editabil (DWG/DXF) sau PDF cu text selectabil.' ELSE '' END ||
     E'\n\n' ||
     'Precizăm că informațiile solicitate sunt necesare exclusiv pentru elaborarea ofertei și nu modifică cerințele documentației de atribuire.';
 
   -- reparația rundei 1: amprenta textului generat acum și a evenimentului (textul generat + mulțimea planșelor)
+  v_baza_gen := v_baza_gen || jsonb_build_object('text_hash',md5(v_text));
   v_gen := left(md5(v_text), 12);
   -- runda 9: evenimentul v6 = DOAR planșele (ids + motive). Schimbările cifrelor F3 au mecanismul lor (baza_generare + v_ofertare_clarificari_baza
-  -- + trg_zzz_ofertare_cantitati_clar_baza — o notificare pe „bază devenită neactuală”), ca aceeași schimbare să nu fie notificată de două ori
+  -- + ofertare_clarificari_notifica la citire — o notificare pe revizie), ca aceeași schimbare să nu fie notificată de două ori
   v_ev := left(md5(array_to_string(v_ids, ',') || '|' || array_to_string(v_motive, ',')), 12);
   -- Reparația rundei 2 (verificatorul UI, PLAUSIBIL „lost update”): ciorna se citește FOR UPDATE — o salvare umană concurentă (editare /
   -- „✅ de trimis”) așteaptă sau e văzută; în plus, UPDATE-ul ciornei mașinii (mai jos) are gardă pe status și pe text.
@@ -1561,11 +1392,11 @@ BEGIN
     -- textului scris ultima dată de funcție (gen_ din sursa). Înainte: „începe cu antetul standard” — o ciornă „propunere” cu CORPUL editat
     -- de om sub antet (textarea din Clarificări, salvată la ieșirea din câmp, fără marcaj) era rescrisă tăcut la orice apel (și retrasă când
     -- planșele deveneau citibile). Ciornele fără amprentă (create de v5): standard doar dacă textul e IDENTIC cu cel generat acum.
-    v_standard := CASE WHEN v_tok_gen IS NOT NULL THEN left(md5(coalesce(v_draft.intrebare, '')), 12) = v_tok_gen
-                       ELSE coalesce(v_draft.intrebare, '') = v_text END;
+    v_standard := CASE WHEN v_draft.baza_generare->>'evaluare' = 'r9b' AND v_tok_gen IS NOT NULL THEN left(md5(coalesce(v_draft.intrebare, '')), 12) = v_tok_gen
+                       ELSE false END;
     -- v6 sarcina 2 (e): PROTEJATĂ = editată de om SAU aprobată de om ('de_trimis'). v5 rescria textul standard al unei ciorne APROBATE
     -- (de_trimis) când se schimba totalul F3 / motivele, fără să-i schimbe statusul — omul aprobase alt text decât cel „de trimis”.
-    v_protejat := NOT v_standard OR v_draft.status = 'de_trimis';
+    v_protejat := NOT v_standard OR v_draft.status = 'de_trimis' OR v_draft.baza_generare ? 'reconfirmare' OR v_draft.baza_generare ? 'text_editat_de';
     -- v4: marcajele rezervate de revizie (,revizie_*) din sursa se PĂSTREAZĂ la rescriere
     SELECT coalesce(string_agg(',' || t, '' ORDER BY o), '') INTO v_tok
       FROM unnest(string_to_array(v_draft.sursa, ',')) WITH ORDINALITY AS x(t, o) WHERE o > 1 AND t ~ '^revizie_[a-z0-9_]+$';
@@ -1579,23 +1410,15 @@ BEGIN
     IF v_protejat AND v_noi = 0 AND v_ids_sursa IS NOT DISTINCT FROM array_to_string(v_ids, ',') AND (v_tok_ev IS NULL OR v_tok_ev = v_ev) THEN
       RETURN jsonb_build_object('actiune','neschimbat','id',v_draft.id,'planse',cardinality(v_ids),'editat_de_om', NOT v_standard, 'transfer_conflicte_deschise', v_tc);
     END IF;
-    -- ciorna MAȘINII cu exact același text și aceleași planșe: se actualizează DOAR amprenta bazei (ex. aceeași sumă, altă distribuție — textul
-    -- generat e tot adevărat), fără notificare
+    -- R9b: aceeași ciornă își păstrează baza de la generare; datele schimbate cer review, chiar fără cifre în text.
     IF NOT v_protejat AND v_noi = 0 AND v_ids_sursa IS NOT DISTINCT FROM array_to_string(v_ids, ',') AND v_draft.intrebare = v_text
        AND v_tok_gen IS NOT DISTINCT FROM v_gen THEN
-      UPDATE ofertare_clarificari SET baza_generare = v_baza_gen
-       WHERE id = v_draft.id AND status = 'propunere' AND (baza_generare ->> 'amprenta') IS DISTINCT FROM (v_baza ->> 'amprenta');
-      RETURN jsonb_build_object('actiune','neschimbat','id',v_draft.id,'planse',cardinality(v_ids),'editat_de_om', false, 'baza_actualizata', FOUND,
+      RETURN jsonb_build_object('actiune','neschimbat','id',v_draft.id,'planse',cardinality(v_ids),'editat_de_om', false, 'baza_actualizata', false,
         'transfer_conflicte_deschise', v_tc, 'f3_baza', v_baza - 'randuri');
     END IF;
     IF v_protejat THEN
-      -- v6 sarcina 2 (e): textul și statusul ciornei omului NU se ating. Lista planșelor din sursă se actualizează (ca în v5); amprenta gen_
-      -- (dacă era) rămâne cum e — dovada că textul NU mai e al mașinii; marcajul ',revizie_planse_auto' + o notificare internă, O SINGURĂ DATĂ
-      -- PE EVENIMENT (ev_: textul generat + planșele): apeluri repetate, sau după „✓ revizuită” pe aceeași stare, nu mai marchează și nu
-      -- mai notifică (ADDENDUM 2 Copilot, c); un eveniment nou (altă mulțime de planșe / alt text generat) — da, o dată. Nimic nu se trimite.
-      -- Reparația rundei 2 (verificatorul UI, V-E2 — informativ): o planșă care OSCILEAZĂ între stări (ok ↔ ilizibil, câte o recitire pornită de
-      -- om) dă câte o notificare la FIECARE schimbare de stare, și când revine pe o stare deja văzută — DELIBERAT: textul omului a fost revizuit
-      -- față de starea precedentă, iar planșele de acum diferă de ea. Documentat, nu reparat (o listă de amprente ar tăcea tocmai la revenire).
+      -- R9b: păstrăm textul și statusul; marcăm o singură dată evenimentul planșelor.
+      -- Notificarea de schimbare se emite numai prin ofertare_clarificari_notifica, la citire.
       v_flag := CASE WHEN v_tok_ev IS NOT DISTINCT FROM v_ev THEN 0 ELSE 1 END;
       SELECT 'planse_auto:' || array_to_string(v_ids, ',') || coalesce(string_agg(',' || x.t, '' ORDER BY x.o), '') INTO v_sursa_noua
         FROM unnest(string_to_array(coalesce(v_draft.sursa, ''), ',')) WITH ORDINALITY AS x(t, o)
@@ -1603,13 +1426,7 @@ BEGIN
       v_sursa_noua := v_sursa_noua || ',ev_' || v_ev || CASE WHEN v_flag = 1 THEN ',revizie_planse_auto' ELSE '' END;
       UPDATE ofertare_clarificari SET sursa = v_sursa_noua, updated_at = now()
         WHERE id = v_draft.id AND sursa IS DISTINCT FROM v_sursa_noua;
-      IF v_flag = 1 THEN
-        SELECT responsabil_id INTO v_resp FROM ofertare_licitatii WHERE id = p_licitatie_id;
-        IF v_resp IS NOT NULL THEN
-          INSERT INTO notifications (profile_id, type, modul, title, message, link_to)
-          VALUES (v_resp, 'info', 'Ofertare', '💭 Clarificare (planșe) de revizuit', 'Licitația #' || p_licitatie_id || v_msg_rev, '/ofertare');
-        END IF;
-      END IF;
+    -- R9b: notificarea schimbării este centralizată în RPC-ul de citire; fără dublură aici.
       RETURN jsonb_build_object('actiune','protejat_de_revizuit','id',v_draft.id,'planse',cardinality(v_ids),'editat_de_om', NOT v_standard,
         'status', v_draft.status, 'marcat_acum', v_flag = 1, 'transfer_conflicte_deschise', v_tc);
     END IF;
@@ -1645,7 +1462,7 @@ BEGIN
     END IF;
   END IF;
   RETURN jsonb_build_object('actiune', CASE WHEN v_draft.id IS NOT NULL THEN 'actualizat' ELSE 'creat' END, 'id', v_id,
-    'planse', cardinality(v_ids), 'motive', to_jsonb(v_motive), 'ilizibile', v_ilizibile, 'fara_date', v_fara_date, 'f3_m', v_f3, 'f3_nevalidate', v_f3_nev, 'f3_um_de_normalizat', v_f3_um, 'f3_fara_cantitate', v_f3_fc, 'transfer_conflicte_deschise', v_tc,
+    'planse', cardinality(v_ids), 'motive', to_jsonb(v_motive), 'ilizibile', v_ilizibile, 'fara_date', v_fara_date, 'transfer_conflicte_deschise', v_tc,
     -- runda 9: baza cifrei (modul, suma, pozițiile de verificat pe categorii, textul intern „Subtotal … / Suma pozițiilor …”), fără rânduri
     'f3_baza', v_baza - 'randuri');
 END $function$;

@@ -57,7 +57,7 @@ describe('controlCantitatiGrafic — randul „cant" din poarta graficului', () 
   it('toate validate => ok; totalul declarat nevalidat e etichetat', () => {
     const rows = [...valideaza(LIC95), { id: 9, obiect: 'Total rețea', um: 'm', categorie: 'Conducte', denumire: 'Total', cantitate: 48195, status: 'extras' }]
     const c = controlCantitatiGrafic(rows, '')
-    expect(c.stare).toBe('ok'); expect(c.detalii).toMatch(/în m, toate validate cu cantitate, total declarat 48\.195 m \(nevalidat\)/)   // runda 9: perimetrul spus explicit
+    expect(c.stare).toBe('warn'); expect(c.detalii).toMatch(/Totalul declarat nu poate fi verificat.*total declarat 48\.195 m \(nevalidat\)/)   // runda 9: perimetrul spus explicit
   })
   it('fara randuri de retea => block (neschimbat)', () =>
     expect(controlCantitatiGrafic([], '').stare).toBe('block'))
@@ -77,7 +77,7 @@ describe('fronturiDinCantitati — „Propune din cantitati" doar din randuri va
   it('maparea numelui/lungimii/Dn e cea veche; runda 4: + proveniența (rândul-sursă, baza, cifra la propunere)', () => {
     const rows = [{ id: 1, um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn110 — Făgului', cantitate: 512.4, cantitate_plansa: 530, status: 'validat' }]
     expect(fronturiDinCantitati(rows, '').fronturi).toEqual([{ nume: 'Făgului', lungime_m: 512, dn: '110', echipe: 1, cantitate_id: 1, baza: 'cantitate', lungime_sursa: 512.4,
-      denumire_sursa: 'Țeavă PE100 SDR11 Dn110 — Făgului', obiect_sursa: null }])   // runda 9 (S4a): + atributele rândului-sursă
+      um_sursa: 'm', denumire_sursa: 'Țeavă PE100 SDR11 Dn110 — Făgului', obiect_sursa: null }])   // runda 9 (S4a): + atributele rândului-sursă
     expect(fronturiDinCantitati(rows, 'plansa').fronturi[0]).toMatchObject({ lungime_m: 530, baza: 'cantitate_plansa', lungime_sursa: 530 })
   })
 })
@@ -104,14 +104,14 @@ const P = (fronturi, baza = '') => ({ cantitati_asumate: baza, fronturi })
 describe('controlFronturiGrafic — referința doar din total VALIDAT (ADV6)', () => {
   const rete = [r(1, 110, 1000, { status: 'validat' })]
   const fr = fronturiDinCantitati(rete, '').fronturi
-  it('total declarat NEVALIDAT (50.000 m) nu mai e referința: ref = rețeaua validată (1.000) => ok, nu „2% din rețea"', () => {
+  it('R9b: TOTAL nevalidat cere review, fără alegerea automată a referinței', () => {
     const c = controlFronturiGrafic(P(fr), [...rete, { id: 2, obiect: 'Total rețea', um: 'm', categorie: 'Conducte', denumire: 'Total', cantitate: 50000, status: 'extras' }])
-    expect(c.ref).toBe(1000); expect(c.totalAprobat).toBe(false); expect(c.stare).toBe('ok')
-    expect(c.detalii).toMatch(/100% din rețeaua validată; totalul declarat e nevalidat, nu e referință/)
+    expect(c.ref).toBeNull(); expect(c.totalAprobat).toBe(false); expect(c.stare).toBe('warn')
+    expect(c.detalii).toMatch(/Totalul declarat nu poate fi verificat/)
   })
-  it('total declarat VALIDAT e referința (deviere > 10% => warn)', () => {
+  it('R9b: TOTAL validat fără perimetru comparabil nu este ales ca referință', () => {
     const c = controlFronturiGrafic(P(fr), [...rete, { id: 2, obiect: 'Total rețea', um: 'm', categorie: 'Conducte', denumire: 'Total', cantitate: 5000, status: 'validat' }])
-    expect(c.ref).toBe(5000); expect(c.stare).toBe('warn'); expect(c.detalii).toMatch(/20% din totalul declarat \(validat\)/)
+    expect(c.ref).toBeNull(); expect(c.stare).toBe('warn'); expect(c.detalii).toMatch(/Totalul declarat nu poate fi verificat/)
   })
   it('rânduri de rețea nevalidate nu intră în referință', () => {
     const c = controlFronturiGrafic(P(fr), [...rete, r(3, 90, 4000)])
@@ -173,12 +173,12 @@ describe('condiția 2 — poarta graficului: semnal de lipsă, rezultat marcat i
   // rândul 2 invalidat de regula aprobării (unitatea m → ml) — cu filtrul vechi ar fi dispărut din rețea și din lipsă
   const inval = (rows, id, patch) => rows.map(x => x.id === id ? { ...x, ...aplicaRegulaAprobare(x, patch).patch } : x)
   const LIC3_ML = inval(LIC3, 2, { um: 'ml' })
-  it('rândul invalidat pe unitate (m → ml) iese din randuriFront, dar e în lipsă („invalidat, ieșit din rețea”) și ține poarta închisă', () => {
+  it('R9b: rândul invalidat m → ml rămâne în rețea, dar nevalidat, și ține poarta închisă', () => {
     expect(esteInvalidat(LIC3_ML[1])).toBe(true)
-    expect(randuriFront(LIC3_ML).map(x => x.id)).toEqual([1, 3])
+    expect(randuriFront(LIC3_ML).map(x => x.id)).toEqual([1, 2, 3])
     const c = controlCantitatiGrafic(LIC3_ML, 'memoriu')
     expect(c.stare).toBe('block')
-    expect(c.detalii).toMatch(/^lipsește 1 rând necesar nevalidat \(1\.100 ml\): #2 „Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi” \(diferenta, invalidat, ieșit din rețea, 1\.100 ml\)/)
+    expect(c.detalii).toMatch(/lipsește 1 rând necesar nevalidat \(1\.100 ml\): #2 „Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi” \(diferenta, 1\.100 ml\)/)
   })
   it('control: fără invalidare (doar ↩ pe un rând din afara rețelei) nu apare nimic în plus', () => {
     const r = randuriLipsa([...LIC3, { id: 5, status: 'extras', um: 'buc', categorie: null, denumire: 'SRM', cantitate: 1 }], 'memoriu')
@@ -228,14 +228,14 @@ describe('runda 5, MAJOR 1: rândul invalidat ieșit din rețea NU dispare după
   it('repro (codul vechi — nota rescrisă FĂRĂ prefix, fără istoric): până în runda 8 „cant” trecea pe ok, lipsa = []; runda 9 (M3): rândul „ml” din categoria de rețea e LIPSĂ „în altă unitate” și fără istoric', () => {
     const rows = recitit(ML, (_x, p) => p)
     const c = controlCantitatiGrafic(rows, 'memoriu')
-    expect([c.stare, c.lipsa.map(x => [x.id, x.motiv, x.um])]).toEqual(['block', [[2, 'nevalidat, în altă unitate decât m', 'ml']]])
+    expect([c.stare, c.lipsa.map(x => [x.id, x.motiv, x.um])]).toEqual(['block', [[2, 'nevalidat', 'ml']]])
   })
   it('sursa 1 — istoricul (ultimul eveniment „invalidat”): chiar cu nota rescrisă, rândul rămâne în lipsă, poarta block', () => {
     const rows = marcheazaInvalidate(recitit(ML, (_x, p) => p), [{ id: 7, cantitate_id: 2, motiv: 'invalidat' }])
     expect(esteInvalidat(rows[1])).toBe(true)
     const c = controlCantitatiGrafic(rows, 'memoriu')
     expect(c.stare).toBe('block')
-    expect(c.lista.map(x => [x.id, x.motiv])).toEqual([[2, 'invalidat, ieșit din rețea']])
+    expect(c.lista.map(x => [x.id, x.motiv])).toEqual([[2, 'nevalidat']])
     // după o validare nouă (eveniment „validat” după invalidare) nu mai e invalidat
     expect(marcheazaInvalidate(recitit(ML, (_x, p) => p), [{ id: 7, cantitate_id: 2, motiv: 'invalidat' }, { id: 8, cantitate_id: 2, motiv: 'validat' }])[1].invalidat_istoric).toBeUndefined()
   })
@@ -278,13 +278,12 @@ describe('runda 5, minorul 5: poarta propunerii reverifică versiunea ÎNGHEȚAT
 })
 
 // ── runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil) ──
-import { marcheazaInvalidate } from './ofertareCantitatiAprobare.js'
 import { aplicaRegulaUnitate } from './ofertareCantitatiInvalidare.js'
 describe('runda 6: unitatea normalizată în rețea, TOTAL invalidat listat, „unitate schimbată” — nimic tacit', () => {
   const V = valideaza(LIC95)
-  it('„M” / „m ” / „m”+NBSP sunt metri (în rețea, ca în view); „ml” nu', () => {
+  it('R9b: „M” / „m ” / NBSP / „ml” sunt lungimi mapate explicit', () => {
     const rows = [r(1, 110, 500, { um: 'M' }), r(2, 90, 300, { um: 'm ' }), r(3, 63, 200, { um: 'm ' }), r(4, 40, 100, { um: 'ml' })]
-    expect(randuriFront(rows).map(x => x.id)).toEqual([1, 2, 3])
+    expect(randuriFront(rows).map(x => x.id)).toEqual([1, 2, 3, 4])
     // sumele pe unitate nu se despart pe scriere
     const L = randuriLipsa(rows, '')
     // runda 9 (M3): rândul „ml” (nevalidat) nu mai dispare — e LIPSĂ „în altă unitate”, cu suma lui SEPARATĂ (fără conversie)
@@ -297,13 +296,13 @@ describe('runda 6: unitatea normalizată în rețea, TOTAL invalidat listat, „
     // (a) cu istoricul (migrarea aplicată): eveniment 'unitate_schimbata', nota rescrisă oricum
     const dupa = marcheazaInvalidate([...V, { ...r6, um: 'ml', diferenta_nota: 'altceva' }], [{ id: 1, cantitate_id: 6, motiv: 'unitate_schimbata' }])
     const L = randuriLipsa(dupa, '')
-    expect(L.lipsa.map(x => [x.id, x.motiv, x.um, x.cantitate])).toEqual([[6, 'unitate schimbată, ieșit din rețea', 'ml', 700]])
+    expect(L.lipsa.map(x => [x.id, x.motiv, x.um, x.cantitate])).toEqual([[6, 'nevalidat', 'ml', 700]])
     expect(controlCantitatiGrafic(dupa, '').stare).toBe('block')
     // (b) fără istoric: prefixul pus de editor (aplicaRegulaUnitate)
     const ed = { ...r6, ...aplicaRegulaUnitate(r6, { um: 'ml' }).patch }
-    expect(randuriLipsa([...V, ed], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'unitate schimbată, ieșit din rețea']])
+    expect(randuriLipsa([...V, ed], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat']])
     // runda 9 (M3): și fără istoric și fără prefix rândul NU mai iese tacit — e în categoria de rețea, în altă unitate de lungime
-    expect(randuriLipsa([...V, { ...r6, um: 'ml' }], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat, în altă unitate decât m']])
+    expect(randuriLipsa([...V, { ...r6, um: 'ml' }], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat']])
     // revalidat => nu mai lipsește
     expect(randuriLipsa([...V, { ...ed, status: 'validat' }], '').lipsa).toEqual([])
   })

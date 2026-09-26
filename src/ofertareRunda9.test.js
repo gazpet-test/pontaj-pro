@@ -23,42 +23,42 @@ describe('M3 — o singură definiție a categoriilor de rețea (oglinda view-ul
   ]
   it('categoriiRetea = coloanele view-ului (numărate de mână pe setul comun cu PGlite)', () => {
     const c = categoriiRetea(rows)
-    expect(c).toMatchObject({ retea_randuri: 6, retea_nevalidate: 4, lista_f3_nevalidate: 2, fara_tip_nevalidate: 1, retea_validate_fara_cant: 1, retea_fara_cant: 2,
-      um_de_normalizat: 1, um_de_normalizat_f3: 1, retea_alte_unitati: 6, retea_alte_unitati_f3: 3, retea_alte_unitati_lungimi: 4, retea_alte_unitati_lungimi_f3: 2,
-      retea_alte_unitati_lungimi_nevalidate: 3, invalidate_in_afara_retea: 1, unitate_schimbata_in_afara_retea: 1, total_invalidate: 0 })
-    expect(c.retea_nevalidate_m).toBeCloseTo(990.5, 6)   // 250,5 + 40 („M”) + 700; rândul fără cantitate nu intră ca 0 în sumă
-    expect(Object.keys(c.retea_alte_unitati_pe_um).sort()).toEqual(['', 'buc', 'km', 'mc', 'ml', 'sute m'])
+    expect(c).toMatchObject({ retea_randuri: 10, retea_nevalidate: 7, lista_f3_nevalidate: 3, fara_tip_nevalidate: 1, retea_validate_fara_cant: 1, retea_fara_cant: 2,
+      um_de_normalizat: 5, um_de_normalizat_f3: 3, retea_alte_unitati: 4, retea_alte_unitati_f3: 2, retea_alte_unitati_lungimi: 2, retea_alte_unitati_lungimi_f3: 1,
+      retea_alte_unitati_lungimi_nevalidate: 2, invalidate_in_afara_retea: 0, unitate_schimbata_in_afara_retea: 0, total_invalidate: 0 })
+    expect(c.retea_nevalidate_m).toBeCloseTo(2180.5, 6)   // 250,5 + 40 („M”) + 700; rândul fără cantitate nu intră ca 0 în sumă
+    expect(Object.keys(c.retea_alte_unitati_pe_um).sort()).toEqual(['', 'buc', 'mc', 'sute m'])
   })
   it('clasa „lungimi” = m / ml / km / sute m + sinonimele exacte, sau FĂRĂ unitate; mc / buc / mp / ore nu', () => {
     for (const u of ['ml', 'M.L.', 'km', 'SUTE M', 'metri', null, '', ' m. ']) expect(umClasaLungime(u)).toBe(true)
     for (const u of ['mc', 'buc', 'mp', 'ore', 'kg']) expect(umClasaLungime(u)).toBe(false)
     expect(clasificaRandVedere(R(1, 'x', 'M', 1)).inRetea).toBe(true)
-    expect(clasificaRandVedere(R(1, 'x', 'ml', 1)).alteUm).toBe(true)
+    expect(clasificaRandVedere(R(1, 'x', 'ml', 1)).inRetea).toBe(true)
     expect(clasificaRandVedere(R(1, 'TOTAL', 'ml', 1)).alteUm).toBe(false)
   })
   it('poarta graficului vede EXACT categoriile view-ului: lipsă / de verificat / numite', () => {
     const L = randuriLipsa(rows, '')
     const mot = Object.fromEntries(L.lipsa.map(x => [x.id, x.motiv]))
-    expect(mot[7]).toBe('nevalidat, în altă unitate decât m'); expect(mot[8]).toBe('nevalidat, în altă unitate decât m'); expect(mot[9]).toBe('nevalidat, în altă unitate decât m')
+    expect(mot[7]).toBe('nevalidat'); expect(mot[8]).toBe('unitate de verificat'); expect(mot[9]).toBe('unitate de verificat')
     expect(mot[3]).toBe('validat, fără cantitate determinată'); expect(mot[4]).toBe('nevalidat, fără cantitate determinată')
-    expect(mot[16]).toBe('invalidat, ieșit din rețea'); expect(mot[17]).toBe('unitate schimbată, ieșit din rețea')
-    expect(L.deVerificat.map(x => x.id)).toEqual([6])
+    expect(mot[16]).toBe('nevalidat'); expect(mot[17]).toBe('nevalidat')
+    expect(L.deVerificat.map(x => x.id)).toEqual([])
     expect(L.informativ.map(x => x.id).sort()).toEqual([10, 11])
     expect(mot[13]).toBeUndefined(); expect(mot[12]).toBeUndefined(); expect(mot[14]).toBeUndefined()
     const c = categoriiRetea(rows)
-    expect(L.lipsa.filter(x => x.motiv === 'nevalidat, în altă unitate decât m').length).toBe(c.retea_alte_unitati_lungimi_nevalidate)
+    expect(L.lipsa.filter(x => x.motiv === 'unitate de verificat').length).toBe(c.retea_alte_unitati_lungimi_nevalidate)
     expect(L.lipsa.filter(x => x.motiv === 'validat, fără cantitate determinată').length).toBe(c.retea_validate_fara_cant)
   })
 })
 
 describe('M3 / ADDENDUM 3 (B) — nicio sumă parțială prezentată drept total în poarta graficului', () => {
   const baza = [R(1, 'Țeavă Dn110 — A', 'm', 1000, 'validat')]
-  it('1.000 m + 500 ml VALIDATE: „cant” WARN „SUBTOTAL, nu total”, „front” INCOMPLET „din subtotalul rândurilor validate în m (NU e total)”', () => {
+  it('R9b: 1.000 m + 500 ml validate: conversie explicită, 1.500 m în fronturi', () => {
     const rows = [...baza, R(2, 'Țeavă Dn90 — B', 'ml', 500, 'validat')]
     const c = controlCantitatiGrafic(rows, '', { conflicte: [], eroare_conflicte: null, eroare_istoric: null })
-    expect(c.stare).toBe('warn'); expect(c.detalii).toMatch(/SUBTOTAL, nu total: 1 poziție de rețea validate în altă unitate de lungime/)
+    expect(c.stare).toBe('ok'); expect(c.retea).toHaveLength(2)
     const f = controlFronturiGrafic({ cantitati_asumate: '', fronturi: fronturiDinCantitati(rows, '').fronturi }, rows, { conflicte: [], eroare_conflicte: null, eroare_istoric: null })
-    expect(f.stare).toBe('warn'); expect(f.detalii).toMatch(/^INCOMPLET, de reverificat — /); expect(f.detalii).toMatch(/\(100% din subtotalul rândurilor validate în m \(NU e total\)\)$/)
+    expect(f.stare).toBe('ok'); expect(f.incomplet).toBe(false); expect(f.ref).toBe(1500)
   })
   it('rânduri NEVALIDATE în km / fără unitate => „cant” BLOCK (S3d); rând VALIDAT fără cantitate => BLOCK (S3g); complet => ok cu perimetrul spus', () => {
     expect(controlCantitatiGrafic([...baza, R(2, 'Țeavă Dn63', 'km', 0.8)], '').stare).toBe('block')
@@ -70,7 +70,7 @@ describe('M3 / ADDENDUM 3 (B) — nicio sumă parțială prezentată drept total
   })
   it('S3f: TOTAL validat FĂRĂ cantitate => „total declarat cu cantitate necunoscută”, nu „0 m”', () => {
     const c = controlCantitatiGrafic([...baza, { id: 9, obiect: 'TOTAL', categorie: 'Conducte și montaj', denumire: 'TOTAL rețea', um: 'm', cantitate: null, status: 'validat' }], '')
-    expect(c.detalii).toMatch(/total declarat cu cantitate necunoscută/); expect(c.detalii).not.toMatch(/0 m/)
+    expect(c.detalii).toMatch(/total declarat cu cantitate necunoscută/); expect(c.detalii).not.toMatch(/total declarat 0 m/)
   })
   it('S4a: Dn schimbat (aceeași lungime) și REVALIDAT => frontul înghețat cere repropunere (fronturi noi: denumire_sursa; vechi: Dn-ul citit)', () => {
     const r0 = [R(2, 'Țeavă PE100 SDR11 Dn180 — Coconi', 'm', 1100, 'validat')]
@@ -111,7 +111,7 @@ describe('M2 / ADDENDUM 3 — baza ciornei: afișare, export verificat în backe
     expect(stareBazaCiorna(q(1, 'de_trimis'), m, null)).toMatchObject({ nivel: 'ok', blocheaza: false })
     expect(stareBazaCiorna(q(2, 'de_trimis'), m, null)).toMatchObject({ nivel: 'schimbata', blocheaza: true })
     expect(stareBazaCiorna(q(3, 'propunere'), m, null)).toMatchObject({ nivel: 'indisponibila', blocheaza: true })
-    expect(stareBazaCiorna(q(4, 'trimisa'), m, null)).toMatchObject({ nivel: 'luat_act', blocheaza: false })
+    expect(stareBazaCiorna(q(4, 'trimisa'), m, null)).toMatchObject({ nivel: 'luat_act', blocheaza: true })
     expect(stareBazaCiorna(q(5, 'de_trimis'), m, null)).toMatchObject({ nivel: 'ok', blocheaza: true })
     expect(stareBazaCiorna(q(1, 'de_trimis'), null, 'relation does not exist')).toMatchObject({ nivel: 'nu_putem_verifica', blocheaza: true })
     expect(stareBazaCiorna(q(9, 'de_trimis'), m, null)).toMatchObject({ nivel: 'nu_putem_verifica', blocheaza: true })

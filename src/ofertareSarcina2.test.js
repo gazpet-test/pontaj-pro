@@ -49,7 +49,7 @@ describe('sarcina 2 (a): conflict FĂRĂ rând, cu toate rândurile validate —
   it('H2: F3 validată = fronturi, 0 rânduri nevalidate, dar o planșă cu conflicte deschise => WARN „INCOMPLET” (nu ok); evalueazaPoarta: rezervă, nu verde', () => {
     const st = { lista_f3_m: 700, grafic_fronturi_m: 700, ...campuriCantitatiNevalidate({ data: { licitatie_id: 3, lista_f3_nevalidate: 0, fara_tip_nevalidate: 0,
       invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0,
-      transfer_conflicte_docs: 1, transfer_conflicte_n: 2, transfer_conflicte_lista: '8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf (2)', transfer_in_curs: 0, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0 }, error: null }) }
+      transfer_conflicte_docs: 1, transfer_conflicte_n: 2, transfer_conflicte_lista: '8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf (2)', totaluri_control: [], unitati_de_verificat: 0, transfer_in_curs: 0, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0 }, error: null }) }
     const h = controlCantitati(st)
     expect(h.stare).toBe('warn')
     expect(h.detalii).toBe('700 m în F3 și în grafic · INCOMPLET, de reverificat — sursă incompletă: 2 restanțe deschise la transferul din 1 planșă ' +
@@ -100,7 +100,7 @@ describe('sarcina 2 (d): unitățile — fără „X m” peste unități diferi
     const c = [R(2, 'Țeavă PE100 SDR11 Dn180 — extravilan', 1100, 'extras'), R(3, 'Țeavă PE100 SDR11 Dn160 — Coconi', null, 'extras'),
       inv(4, 'Țeavă PE100 SDR11 Dn110 — Făgului', 300, 'ml'), inv(5, 'Robinet Dn110', 3, 'buc')]
     const L = randuriLipsa(c, '')
-    expect([L.lipsa.map(x => x.id), L.peUm, L.faraCantitate]).toEqual([[2, 3, 4, 5], { m: 1100, ml: 300, buc: 3 }, 1])
+    expect([L.lipsa.map(x => x.id), L.peUm, L.faraCantitate]).toEqual([[2, 4, 3, 5], { m: 1100, ml: 300, buc: 3 }, 1])
     expect(textLipsa(L)).toMatch(/^lipsesc 4 rânduri necesare nevalidate \(lungimi 1\.100 m \+ 300 ml; bucăți 3 buc; 1 poziție fără cantitate determinată\): #2 /)
     expect(textLipsa(L)).toMatch(/#3 „Țeavă PE100 SDR11 Dn160 — Coconi” \(extras, fără cantitate determinată\)/)
     expect(controlCantitatiGrafic(c, '').detalii).not.toMatch(/1\.403 m|1\.400 m/)
@@ -131,7 +131,7 @@ const VERDE = { capitole: 5, fara_capitol: 0, de_raspuns: 10, cu_capitol: 10, ce
   afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0, capitole_nescrise_de_om: 0, observatii_deschise: 0, documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0, lista_f3_m: 700, grafic_fronturi_m: 700 }
 const VIEW_OK = { licitatie_id: 3, lista_f3_nevalidate: 0, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0,
-  um_de_normalizat: 0, transfer_conflicte_docs: 0, transfer_conflicte_n: 0, transfer_in_curs: 0, transfer_restante: {}, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0 }
+  um_de_normalizat: 0, transfer_conflicte_docs: 0, transfer_conflicte_n: 0, totaluri_control: [], unitati_de_verificat: 0, transfer_in_curs: 0, transfer_restante: {}, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0 }
 
 describe('reparația rundei 1 — ADDENDUM 2 Copilot, testul final 1: toate cantitățile validate + conflict relevant DESCHIS => aprobarea finală BLOCATĂ, chiar dacă H2 e WARN', () => {
   it('H2 = WARN (lucru intermediar), rândul „sursa_cantitati” = BLOCK => poarta (semnarea „gata de depus” + aprobarea pachetului) blocată', () => {
@@ -150,7 +150,7 @@ describe('reparația rundei 1 — ADDENDUM 2 Copilot, testul final 1: toate cant
   })
   it('transfer în curs (impact nestabilit) => BLOCK; câmpurile transfer_* absente (view vechi) => BLOCK „nu putem verifica”', () => {
     expect(controlSursaAprobareFinala({ transfer_conflicte_docs: 0, transfer_in_curs: 1 }).stare).toBe('block')
-    expect(controlSursaAprobareFinala({ lista_f3_nevalidate: 0 })).toMatchObject({ stare: 'block', detalii: expect.stringMatching(/^nu putem verifica restanțele/) })
+    expect(controlSursaAprobareFinala({ lista_f3_nevalidate: 0 })).toMatchObject({ stare: 'block', detalii: expect.stringMatching(/^nu putem verifica/) })
   })
 })
 
