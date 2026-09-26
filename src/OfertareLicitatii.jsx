@@ -20,7 +20,7 @@ import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem } from './OfertareClarificari.jsx'
 import GarantieSection, { useSemnalGarantie } from './OfertareGarantie.jsx'
-import { termenMutat, NIVEL_REVERIFICARE } from './ofertareGarantieValabilitate.js'
+import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.js'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
 import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
@@ -3351,8 +3351,11 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   }, [l.id])
   // R7 propagare: semnalul garanției pe termenul CURENT (aceeași evaluare ca în tab-ul 🛡) — KPI-ul nu mai e verde
   // doar pentru că status = 'original' când termenul s-a mutat sau polița nu acoperă cerința recalculată
+  // indicatorGarantie: KPI + eticheta tab-ului din aceeași funcție (testată); polița încă neoriginală rămâne „în curs” roșu,
+  // semnalul se adaugă lângă (nu o acoperă cu o etichetă mai slabă)
   const semnalG = useSemnalGarantie(l)
-  const revG = semnalG?.reverificare?.da ? semnalG.reverificare : null
+  const indG = indicatorGarantie({ status: l.garantie_status, fisa: l.garantie_participare, semnal: semnalG })
+  const tonG = { rosu: G.red, portocaliu: G.orange, verde: G.green, neutru: G.text }[indG.ton]
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
   const sx = l._st || {}
@@ -3388,7 +3391,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     ['formulare', '🗂 Formulare de depus'],
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
-    ['garantie', `🛡 Garanție${revG ? ` · ⚠ ${NIVEL_REVERIFICARE[revG.nivel]}` : l.garantie_status === 'original' ? (semnalG === undefined ? ' · …' : ' · ✓') : l.garantie_status ? ' · în curs' : ''}`],
+    ['garantie', `🛡 Garanție${indG.tab}`],
     ['detalii', '📝 Detalii & decizie'],
     ['verificari', `🔍 Verificări${sx.verdict ? ` · ${sx.verdict.toUpperCase()}` : ''}`],
   ]
@@ -3425,10 +3428,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           {sx.reverif > 0 && <KPI l="Dovezi de reverificat (cerința s-a schimbat)" v={sx.reverif} color={G.orange} />}
           {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
           <div onClick={() => setTab('garantie')} style={{ cursor:'pointer', display:'contents' }} title="Deschide fluxul garanției (cerere poliță → plată → original)">
-            {/* R7: verde doar dacă polița e în original ȘI nu e nimic de reverificat pe termenul curent (se încarcă ⇒ neutru, nu verde) */}
-            <KPI l="Garanție participare" v={l.garantie_participare || '—'}
-              unit={revG ? `⚠ ${NIVEL_REVERIFICARE[revG.nivel]}` : l.garantie_status === 'original' ? (semnalG === undefined ? '…' : '✓ original') : l.garantie_status ? 'în curs' : ''}
-              color={revG ? (revG.nivel === 'nu_acopera' ? G.red : G.orange) : l.garantie_status === 'original' ? (semnalG === undefined ? G.text : G.green) : l.garantie_participare ? G.red : G.text} />
+            {/* R7: verde doar dacă polița e în original ȘI nu e nimic de reverificat pe termenul curent (se încarcă ⇒ neutru, nu verde);
+                garanția în curs rămâne roșie, cu semnalul adăugat („în curs · ⚠ de reverificat”) */}
+            <KPI l="Garanție participare" v={l.garantie_participare || '—'} unit={indG.unit} color={tonG} />
           </div>
         </div>
 
