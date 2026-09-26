@@ -120,7 +120,8 @@ export function textPlansa(nume: string, c: any): string {
     for (const k of (s.conflicte || [])) L.push(`- CONFLICT ${k.nr ? `Nr ${k.nr}` : k.identitate}: ${k.variante.map((v: any) => `${v.lungime_m} m${v.diametru_mm ? ` Dn${v.diametru_mm}` : ''} (${v.zone.join(', ')})`).join(' vs ')}`);
   }
   for (const x of (s.nr_lipsa || [])) L.push(`⚠ ${textNrLipsa(x).replace(/^secvență Nr incompletă/, 'SECVENȚĂ Nr INCOMPLETĂ')} — totalul sigur e incomplet`);
-  for (const x of (s.comasari_neconfirmate || [])) L.push(`⚠ COMASARE NECONFIRMATĂ: Nr ${x.nr} din ${x.a} și ${x.b} (benzi diferite) numărate o dată — posibil două tabele identice`);
+  for (const x of (s.comasari_neconfirmate || [])) L.push(`⚠ COMASARE NECONFIRMATĂ: ${x.nr ? `Nr ${x.nr}` : randuri(x.randuri)} din ${x.a} și ${x.b} ` +
+    `(${x.axa === 'orizontal' ? 'felii alăturate, tabel întreg în ambele' : 'benzi diferite'}) numărate o dată — posibil două tabele identice`);
   const sub = (c.felii || []).flatMap((r: any) => r.subtraversari || []);
   if (sub.length) { L.push('', 'SUBTRAVERSĂRI:'); for (const x of sub) L.push(`- ${[x.obstacol, x.lungime_m && `${x.lungime_m} m`, x.tub_protectie, x.pozitie].filter(Boolean).join(', ')}`); }
   const br = (c.felii || []).flatMap((r: any) => r.bransamente || []);
@@ -275,6 +276,7 @@ function numar(v: unknown): number | null {
 // - B4: rândurile comasate între două felii din benzi diferite trebuie să încapă în fâșia de suprapunere (zone_geom, rând
 //   ≥ H_MIN_RAND_MM); peste capacitate => „de verificat” (MOTIV_PESTE_CAPACITATE). Sub capacitate, două tabele identice nu se pot
 //   deosebi de suprapunere (fără coordonate pe rând): când fragmentul din cel puțin o felie e comasat ÎN ÎNTREGIME => avertisment.
+//   Analog pe orizontală: o pereche de felii alăturate cu ACELEAȘI antete (ambele văd tabelul întreg) => avertisment (130 îl primește).
 export const TOL_GEOM_PX = 2;
 // B4: înălțimea minimă a unui rând de tabel, în mm pe planșă. Justificare (date reale, 470, 200 dpi): 52 de rânduri într-o bandă
 // de 1.600 px și 6–7 rânduri în fâșia de 192 px dintre benzi => rândul are 24–27,4 px ≈ 3,0–3,5 mm; textul de 1,5 mm (pragul de
@@ -499,6 +501,10 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
   const vecinNeimp = new Set<number>();                     // fragmente vecine cu câmpuri comune, neîmperecheate sigur
   const valori = new Map<string, [number, number | null, number | null]>(obs.map((o) => [`${o.fr!.i}:${o.rand}`, [o.L, o.dn, o.q]]));
   const perechi: { a: string; b: string; delta: number; prin: string; diferente_text: number; randuri: [number, number]; neimperecheate: [number, number] }[] = [];
+  // runda 7 (B4, pe orizontală): perechi de fragmente CU LUNGIMI cu ACELEAȘI antete — ambele felii văd tabelul întreg. Suprapunerea
+  // reală a unui tabel întins pe două coloane de felii NU arată așa (fiecare felie are doar o parte din coloane, ca la 470); arată
+  // așa un tabel citit întreg din ambele felii (130) SAU două tabele identice alăturate, comasate rând cu rând => semnal, nu tăcere.
+  const perechiIntegrale: { A: Fragment; B: Fragment }[] = [];
   // Runda 4 (verificator, BLOCANT): fragmentele împerecheate sigur formează același TABEL (grup). Dacă un fragment din grup are
   // coloană Nr, identitatea prin POZIȚIE e interzisă în tot grupul: rândul din felia cu lungimi care cade în afara
   // suprapunerii cu felia cu Nr (ex. rândul de margine transcris în plus în z1_7) NU mai primește „poz …” — altfel se numără
@@ -529,6 +535,7 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
       // număr diferit de rânduri (inclusiv la δ=0) => rândurile rămase în afara suprapunerii sunt SEMNALATE (nu dispar)
       perechi.push({ a: A.et, b: B.et, delta: p.delta, prin: pv ? 'valori L/Dn/Q' : 'câmp comun + ordine', diferente_text: dif,
         randuri: [A.randuri.length, B.randuri.length], neimperecheate: [A.randuri.length - n, B.randuri.length - n] });
+      if (A.sig === B.sig && cuLungimi(A) && cuLungimi(B)) perechiIntegrale.push({ A, B });
     } else {
       vecinNeimp.add(A.i); vecinNeimp.add(B.i);
       if (B.colNr) vecinNrNesigur.add(A.i);
@@ -702,7 +709,7 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
     }
   }
   const pesteCapacitate = new Map<string, string>();
-  const comasariIntegrale: { a: string; b: string; nr: string; randuri: number; fasie_px: number | null; integral_in: string[]; _ids: Set<string> }[] = [];
+  const comasariIntegrale: { a: string; b: string; axa: 'vertical' | 'orizontal'; nr: string | null; randuri: number; fasie_px: number | null; integral_in: string[]; _ids: Set<string> }[] = [];
   const nrListaStr = (s: Set<string>) => { const ns = [...s].filter((x) => /^\d+$/.test(x)).map(Number); return ns.length === s.size ? intervaleNr(ns) : [...s].sort().join(', '); };
   for (const e of [...perBanda.values()].sort((x, y) => `${x.A.et}|${x.B.et}`.localeCompare(`${y.A.et}|${y.B.et}`))) {
     const { A, B } = e;
@@ -724,7 +731,7 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
     const frA = [...e.randuri.keys()].map((i) => frag[i]).filter((F) => F.felie === A.felie), frB = [...e.randuri.keys()].map((i) => frag[i]).filter((F) => F.felie === B.felie);
     const inA = frA.every(integral), inB = frB.every(integral);
     if (inA || inB)
-      comasariIntegrale.push({ a: A.et, b: B.et, nr: nrListaStr(e.nr), randuri: e.ids.size, fasie_px: hOv === null ? null : Math.max(0, hOv),
+      comasariIntegrale.push({ a: A.et, b: B.et, axa: 'vertical', nr: nrListaStr(e.nr), randuri: e.ids.size, fasie_px: hOv === null ? null : Math.max(0, hOv),
         integral_in: [...(inA ? [A.et] : []), ...(inB ? [B.et] : [])], _ids: e.ids });
   }
   // runda 4 (MAJOR (3)): lecturile aceleiași identități din componente diferite care diferă pe o coloană de TEXT comună
@@ -792,6 +799,13 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
   // B4: avertismentul „comasare integrală” rămâne doar pentru identitățile care chiar au ieșit sigure (comasate)
   const idSigure = new Set(sigure.map((t) => t._identitate));
   const comasari = comasariIntegrale.filter((c) => [...c._ids].every((id) => idSigure.has(id))).map(({ _ids, ...c }) => c);
+  for (const { A, B } of perechiIntegrale) {
+    const rs = sigure.filter((t) => t._surse.some((x: any) => x.zona === A.et) && t._surse.some((x: any) => x.zona === B.et));
+    if (!rs.length) continue;
+    const nrs = rs.map((t) => t._nr).filter(Boolean);
+    const lx = A.g && B.g ? Math.min(A.g.x1, B.g.x1) - Math.max(A.g.x0, B.g.x0) : null;
+    comasari.push({ a: A.et, b: B.et, axa: 'orizontal', nr: nrs.length ? nrListaStr(new Set(nrs)) : null, randuri: rs.length, fasie_px: lx === null ? null : Math.max(0, lx), integral_in: [A.et, B.et] });
+  }
   // runda 4: rânduri numerotate dintr-un fragment cu Nr (fără lungimi) împerecheat sigur cu felia cu lungimi, al căror Nr nu
   // primește NICIO lungime în nicio felie (ex. felia cu L a pierdut rândul de margine, iar banda vecină nu-l vede) =>
   // semnalate (fără metri: lungimea nu s-a citit), ca lipsa să nu fie tăcută.
@@ -1305,9 +1319,13 @@ export function raportIdentitate(idr: ReturnType<typeof identificaRanduri>) {
   // runda 7 (B3): golurile din secvența Nr — rânduri fără nicio lectură; totalul sigur e incomplet (fără metri inventați)
   for (const x of idr.nrLipsa) avertismente.push(`${textNrLipsa(x)} — totalul sigur (${idr.total_sigur_m} m) NU le conține, e INCOMPLET; de verificat pe planșă`);
   // runda 7 (B4): comasări între benzi pe care geometria nu le poate confirma (fragmentele comasate în întregime)
-  for (const c of idr.comasariIntegrale.slice(0, 6)) avertismente.push(`${randuri(c.randuri)} (Nr ${c.nr}) din ${c.a} și ${c.b} (benzi diferite) s-au comasat ca același rând ` +
-    `(suprapunerea benzilor${c.fasie_px !== null ? `, fâșia comună ${c.fasie_px} px` : ''}), iar tot ce vede din tabel ${c.integral_in.join(' și ')} e în comasare — fie tabelul ` +
-    'începe / se termină în fâșia comună, fie sunt două tabele identice (antete, Nr, L/Dn/Q, text) numărate o singură dată; de verificat pe planșă');
+  for (const c of idr.comasariIntegrale.slice(0, 6)) avertismente.push(c.axa === 'vertical'
+    ? `${randuri(c.randuri)} (Nr ${c.nr}) din ${c.a} și ${c.b} (benzi diferite) s-au comasat ca același rând ` +
+      `(suprapunerea benzilor${c.fasie_px !== null ? `, fâșia comună ${c.fasie_px} px` : ''}), iar tot ce vede din tabel ${c.integral_in.join(' și ')} e în comasare — fie tabelul ` +
+      'începe / se termină în fâșia comună, fie sunt două tabele identice (antete, Nr, L/Dn/Q, text) numărate o singură dată; de verificat pe planșă'
+    : `${randuri(c.randuri)}${c.nr ? ` (Nr ${c.nr})` : ''} din ${c.a} și ${c.b} (felii alăturate, aceeași bandă) s-au comasat rând cu rând, iar ambele felii văd tabelul ÎNTREG ` +
+      `(aceleași antete${c.fasie_px !== null ? `; fâșia comună are ${c.fasie_px} px lățime` : ''}) — fie e același tabel citit întreg din ambele felii, fie sunt două tabele ` +
+      'identice alăturate numărate o singură dată; de verificat pe planșă');
   const sumar = {
     // identitatea rândurilor de tabel (Copilot runda 3): totalul sigur = rânduri cu identitate sigură, fără conflict (înainte
     // de filtrul de Dn nestandard); „de verificat” = fără identitate + conflicte; niciunul din ele nu intră în cantități

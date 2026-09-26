@@ -708,7 +708,7 @@ Deno.test('runda 7 B4: comasarea între benzi peste capacitatea fâșiei de supr
   // sub capacitate (10 rânduri): nu se poate deosebi de suprapunere => rămân comasate, DAR raportul spune (avertisment + sumar + text)
   const s = identificaRanduri([tabNr('z1_2', 10), tabNr('z2_2', 10)], { doc: 1, plansa: cuDpi(geomTaiere(4000, 3000)) })
   assertEquals([s.sigure.length, s.total_sigur_m, s.total_de_verificat_m], [10, 1045, 0])
-  assertEquals(s.comasariIntegrale, [{ a: 'z1_2', b: 'z2_2', nr: '1–10', randuri: 10, fasie_px: 200, integral_in: ['z1_2', 'z2_2'] }])
+  assertEquals(s.comasariIntegrale, [{ a: 'z1_2', b: 'z2_2', axa: 'vertical', nr: '1–10', randuri: 10, fasie_px: 200, integral_in: ['z1_2', 'z2_2'] }])
   const rs = raportIdentitate(s)
   assertEquals(rs.sumar.comasari_neconfirmate, s.comasariIntegrale)
   assert(rs.avertismente.some((a) => a.startsWith('10 rânduri (Nr 1–10) din z1_2 și z2_2 (benzi diferite) s-au comasat ca același rând (suprapunerea benzilor, fâșia comună 200 px), ' +
@@ -721,6 +721,11 @@ Deno.test('runda 7 B4: comasarea între benzi peste capacitatea fâșiei de supr
   const lung = identificaRanduri([tabNr('z1_2', 12), felieTab('z2_2', Array.from({ length: 8 }, (_, i) => ({ 'Nr crt': String(i + 7), 'Strada': `S${i + 6}`, 'Dn (mm)': '63', 'Lungime (m)': String(106 + i) })),
     Array.from({ length: 8 }, (_, i) => ({ de_la: `S${i + 6}`, lungime_m: 106 + i, diametru_mm: 63, sursa: 'tabel' })), ['Nr crt', 'Strada', 'Dn (mm)', 'Lungime (m)'])], { doc: 1, plansa: cuDpi(geomTaiere(4000, 3000)) })
   assertEquals([lung.sigure.length, lung.faraIdentitate.length, lung.comasariIntegrale.length], [14, 0, 0])
+  // pe orizontală: două tabele identice ALĂTURATE (z1_2 / z1_3, aceleași antete: fiecare felie vede tabelul întreg) se împerechează
+  // rând cu rând (câmp comun + ordine) => o dată, dar raportul spune (130 primește același semnal: tabelul citit întreg în z1_4 și z1_5)
+  const oz = identificaRanduri([tabNr('z1_2', 3), tabNr('z1_3', 3)], { doc: 1, plansa: cuDpi(geomTaiere(5000, 1400)) })
+  assertEquals([oz.sigure.length, oz.comasariIntegrale], [3, [{ a: 'z1_2', b: 'z1_3', axa: 'orizontal', nr: '1–3', randuri: 3, fasie_px: 192, integral_in: ['z1_2', 'z1_3'] }]])
+  assert(raportIdentitate(oz).avertismente.some((a) => a.startsWith('3 rânduri (Nr 1–3) din z1_2 și z1_3 (felii alăturate, aceeași bandă) s-au comasat rând cu rând, iar ambele felii văd tabelul ÎNTREG')))
   // 470 real (200 dpi, fâșii de 192 px, 6 / 6 / 7 rânduri comasate ≤ 14): neschimbat, niciun semnal
   const f470 = identificaRanduri(feliiDin470(), { doc: 470, plansa: PLANSA470_REAL })
   assertEquals([f470.sigure.length, f470.total_sigur_m, f470.total_de_verificat_m, f470.comasariIntegrale.length], [133, 48905, 0, 0])
