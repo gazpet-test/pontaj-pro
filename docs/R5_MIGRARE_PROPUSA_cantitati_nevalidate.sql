@@ -53,6 +53,10 @@
 --                     AND q.um='m' AND q.categorie ~* 'conduct|re[țt]ea'
 --                     AND (coalesce(q.obiect,'')||' '||coalesce(q.denumire,'')||' '||coalesce(q.sursa,'')) !~* 'total');
 --     (#63 de la lic. 95 NU intră: text editat de om, iar lic. 95 n-are F3.)
+--   (P1c) condiția 2 (26.09.2026) — corpul view-ului extins, rulat ca SELECT pe producție: lic. 3 → 3 de rețea nevalidate (23.630 m),
+--     0 invalidate ieșite; lic. 5 → F3 47 / 6.520 m, rețea 94 / 94 (28.862 m); lic. 95 → 6 fără tip (48.195 m); lic. 102 → 2 fără tip
+--     (167.200 m); invalidate_in_afara_retea = 0 peste tot (regula de invalidare nu rulează încă în BD — vezi
+--     docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql). PGlite capăt-la-capăt cu trigger-ul: scratchpad pglite/test_view_conditia2.mjs 7/7.
 -- SANITY (după): SELECT * FROM v_ofertare_cantitati_nevalidate WHERE licitatie_id IN (3,5,95,102) ORDER BY 1;
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 

@@ -2,13 +2,15 @@
 
 Cerința (Copilot, R5): „Verifică punctual consumatorii: calcul financiar, F3/centralizator, grafic, generator PT și poartă finală. Existența rândului cu status='extras' nu demonstrează singură că a intrat în oferta aprobată. Dacă este consumat ca valoare aprobată, oprește acea utilizare și marchează rezultatele derivate pentru reverificare."
 
-- Ramura: `claude/cantitati-nevalidate-consumatori`, **reașezată (rebase, 26.09) peste `claude/r4-rezervare-zone` @ 8db5587** (reparațiile R4 + deduplicarea pe identitatea rândului), apoi **a doua oară peste `claude/r4-rezervare-zone` @ ab5c449** (R4 runda 6: vecinătatea feliilor pe geometria reală, coliziunea grupurilor sigure pe aceeași poziție; §2.3). Nepushată, fără PR. Nimic deployat.
-  - `0686331` (fost 233753a, inițial 990a6b1) = commit-ul R5 inițial, cu conflictul din `treciInCantitati` rezolvat păstrând ambele semantici (§2.2);
-  - `67e423c` (fost 48f52d6; conflictul cu R4 runda 6 rezolvat aici, §2.3), `ec6cb3d`, `b36535d` + commit-ul de documentație `a75b62c` = **runda 4** (problemele verificatorului rundei 3, §2.1);
-  - commit-ul de după rebase-ul 2: testele interacțiunii R4 × R5 + actualizarea acestui document (§2.3, §5.1).
+- Ramura: `claude/cantitati-nevalidate-consumatori`, **reașezată (rebase, 26.09) peste `claude/r4-rezervare-zone` @ 8db5587** (reparațiile R4 + deduplicarea pe identitatea rândului), apoi **a doua oară peste … @ ab5c449** (R4 runda 6; §2.3), apoi **a treia oară peste … @ 7a7bf86** (capul final R4, rundele 7–9; §2.4). Nepushată, fără PR. Nimic deployat, nimic aplicat în BD.
+  - `e5273f5` (fost 0686331 / 233753a / 990a6b1) = commit-ul R5 inițial, cu conflictul din `treciInCantitati` rezolvat păstrând ambele semantici (§2.2, §2.4);
+  - `5a47658` (fost 67e423c / 48f52d6; conflictele cu R4 runda 6 și rundele 7–9 rezolvate aici, §2.3, §2.4), `31ed808`, `5303ee4` + commit-ul de documentație `f2e3082` = **runda 4** (problemele verificatorului rundei 3, §2.1);
+  - `f78afa8` = testele interacțiunii R4 × R5 după rebase-ul 2 (§2.3, §5.1); `828aa4e` = adaptarea testului R4 „runda 9 TOTAL-a” după rebase-ul 3 (§2.4);
+  - `c68c8e7` = **condiția 1 a lui Copilot** (invalidarea pe orice atribut relevant + istoric, §8), `5ab80c1` = **condiția 2** (niciun rând nu dispare tacit din consumatori, §9), plus commit-ul acestui document.
 - BD: doar SELECT (25.09.2026 după transferul planșei 470 din 16:51:08 UTC; recontrolat 26.09.2026). Migrările și SQL-ul pentru lic. 95 și lic. 3 sunt **propuse, neexecutate**.
 - Regula folosită peste tot: **aprobat = `status='validat'`** (bifa ✓ din 📋 Cantități). `extras`, `diferenta` și `revizuit_clarificare` (0 rânduri în BD, nescris de niciun cod) sunt date de lucru. Regula stă într-un singur loc: `src/ofertareCantitatiAprobare.js`.
 - **Runda 4: regula acoperă și `cantitate_plansa`.** Un scriitor automat (transferul din planșă, citirea CAD) care pune pe un rând o cifră diferită cu ≥ 1 m de cea pe care rândul o avea scoate rândul din `validat` (`diferenta`): validarea se reface pe cifra nouă.
+- **Verdictul Copilot 26.09 („aprobat = validat” e direcția corectă, cu 2 condiții) — tratat aici:** (1) invalidarea nu privește doar cifra — unitatea, Dn, materialul, SDR-ul, tronsonul / etapa și sursa aplicabilă contează și ele; valoarea și aprobarea veche rămân în istoric (§8: regula comună JS + trigger propus în BD cu tabel de istoric, neaplicat); (2) rândul invalidat / nevalidat nu dispare tacit prin filtrul `status='validat'`: fiecare consumator numără și listează ce lipsește, își marchează rezultatul „INCOMPLET, de reverificat” și, unde e poartă, blochează (§9).
 
 ## 0. Pe scurt
 
@@ -63,7 +65,7 @@ Surse: grep pe `src/`, `api/`, `supabase/functions/`, `worker/`, `supabase/migra
 | `src/OfertareCantitati.jsx` | Contor „N nevalidate” (galben) cu explicație; tooltip pe ✓ | build |
 | `src/graficPoartaCalcul.js` (nou, runda 4) + `src/GraficPoarta.jsx` | Checklist-ul porții = funcție pură `calculeazaPoartaGrafic`, mutată din componentă; la generare se recalculează ÎNTREAGĂ pe cantitățile recitite și asta se îngheață. Rândul „front” vine din `controlFronturiGrafic` (§2.1). ＋ creează front `manual`; butonul „✋ Le asum ca manuale” (cu confirmare) marchează explicit fronturile vechi fără legătură | `graficPoartaCalcul.test.js` 4 teste; `ofertareCantitatiAprobare.test.js` +10 (25) |
 | `supabase/functions/ofertare-clarificari-propune/core.ts` | `status` în select; `randCantitatePentruAI`: `cantitate` + `sursa_cantitate` (tip_sursa sau „planșă (citire automată…)”) + `status_validat` (runda 4; era `validat_de_om`); cheia `lista` dispare; regula e în prompt: `status_validat: true` = „marcat validat în platformă”, fără autor/dată, nu cifră de citat autorității. Runda 4: adnotări de tip pentru cele 4 erori TS preexistente (fără schimbare de comportament) — `deno check` / `deno test` trec acum fără `--no-check` | `core_test.ts`: 4 teste (unul capăt-la-capăt cu fetch simulat și `dry_run`). Contra-probă pe core.ts de la HEAD: testul capăt-la-capăt **pică** |
-| `supabase/functions/ofertare-plansa-citeste/handler.ts` | `randDinPlansa` (runda 4: `tip_sursa` declarat decide; doar fără tip contează sursa „… citit automat din scanare”). Un astfel de rând nu mai e „dinMemoriu”. Recitirea identică dă nota „valoare din planșă, nu confirmare din memoriu”. Recitirea diferită dă „rândul are X m din citirea anterioară … verifică” și status `diferenta`. **Runda 4**: `cifraSchimbata` — și rândul `validat` (și TOTAL) trece pe `diferenta` când cifra din planșă se schimbă cu ≥ 1 m; „recitire” doar pe aceeași planșă (`dinAceeasiPlansa`), altfel ambiguu și neatins; ordine deterministă a grupurilor. Coliziunea a două grupuri (Dn, material) pe aceeași poziție urmează, după rebase-ul 2, regula R4 runda 6 (§2.3): o notă pe poziție, `cantitate_plansa` neatinsă. `treciInCantitati` e exportat pentru test. | `cantitati_nevalidate_test.ts`: 16 teste (5 + 11 în runda 4) + 3 după rebase-ul 2 (§2.3). Contra-probă pe HEAD 8a6fbbb (runda 3): **2/5 pică comportamental**, al treilea doar pentru că exportul lipsea (corectat; „3/5” din runda 3 era greșit). Contra-probă runda 4 pe 233753a: 8/8 teste noi de comportament pică. Suita planșei: 116/116 |
+| `supabase/functions/ofertare-plansa-citeste/handler.ts` | `randDinPlansa` (runda 4: `tip_sursa` declarat decide; doar fără tip contează sursa „… citit automat din scanare”). Un astfel de rând nu mai e „dinMemoriu”. Recitirea identică dă nota „valoare din planșă, nu confirmare din memoriu”. Recitirea diferită dă „rândul are X m din citirea anterioară … verifică” și status `diferenta`. **Runda 4**: `cifraSchimbata` — și rândul `validat` (și TOTAL) trece pe `diferenta` când cifra din planșă se schimbă cu ≥ 1 m; „recitire” doar pe aceeași planșă (`dinAceeasiPlansa`), altfel ambiguu și neatins; ordine deterministă a grupurilor. Coliziunea a două grupuri (Dn, material) pe aceeași poziție urmează, după rebase-ul 2, regula R4 runda 6 (§2.3): o notă pe poziție, `cantitate_plansa` neatinsă. `treciInCantitati` e exportat pentru test. | `cantitati_nevalidate_test.ts`: 16 teste (5 + 11 în runda 4) + 3 după rebase-ul 2 (§2.3). Contra-probă pe HEAD 8a6fbbb (runda 3): **2/5 pică comportamental**, al treilea doar pentru că exportul lipsea (corectat; „3/5” din runda 3 era greșit). Contra-probă runda 4 pe 233753a: 8/8 teste noi de comportament pică. Suita planșei: **164/164** (26.09, după rebase-ul 3 și condițiile Copilot; istoric: 116/116 în runda 4, 128/128 după rebase-ul 2). **Condiția 1 / decizia varianta B / R5 pas B**: §8 |
 | `api/_cadCantitate.js` (nou) + `api/cad-parse.js` | Rândul CAD nou intră `extras`. **Runda 4**: măsurătoarea nouă diferită cu ≥ 1 m de `cantitate_plansa` (sau de `cantitate`) → `diferenta`, și pe rândul validat (a cărui `cantitate` a omului rămâne neatinsă); aceeași cifră (< 1 m) nu atinge statusul. `cad-parse.js` citește și `cantitate_plansa`. | `api/_cadCantitate.test.js`: 6 teste (4 noi în runda 4 pe rândul 9 real al lic. 3), fără nicio ramură care să scrie `validat`. Contra-probă pe 233753a: 4/4 noi pică (fișierul cu „_” nu devine funcție Vercel) |
 
 ### 2.1 Runda 4 — problemele verificatorului rundei 3
@@ -80,7 +82,7 @@ Cazul real, lic. 3 (SELECT 26.09.2026; în toată BD există doar 4 rânduri `va
 
 **Minore:**
 - `randDinPlansa` = `r?.tip_sursa ? r.tip_sursa === 'plansa' : /citit automat din scanare/i.test(r?.sursa)` (ADV4: un rând reclasificat F3 nu mai e „citire anterioară”; nota spune „F3 2.300 m vs planșa 1 2.275 m”, nu „Memoriu …”).
-- „Recitire” doar când sursa rândului începe cu eticheta **aceleiași** planșe (`dinAceeasiPlansa`: „Planșa 1 — …” sau „Planșa „PL1.pdf” — …”; „Planșa 1” ≠ „Planșa 12”). Rândul altei planșe (ADV3) nu se suprascrie și nici nu se golește pe ramura „doar de verificat”: apare în `ambigue` cu motivul. **Limită**: sursa nu poartă id-ul documentului, deci două documente diferite cu același nr. de planșă nu se pot deosebi. **Vizibilitate**: `ambigue` apare doar în răspunsul transferului / `analiza.citire_ai.sumar.cantitati` (preexistent, UI-ul nu le afișează).
+- „Recitire” doar când sursa rândului începe cu eticheta **aceleiași** planșe (`dinAceeasiPlansa`: „Planșa 1 — …” sau „Planșa „PL1.pdf” — …”; „Planșa 1” ≠ „Planșa 12”). Rândul altei planșe (ADV3) nu se suprascrie și nici nu se golește pe ramura „doar de verificat”: apare în `ambigue` cu motivul. **Limită**: sursa nu poartă id-ul documentului, deci două documente diferite cu același nr. de planșă nu se pot deosebi. **Vizibilitate**: `ambigue` apărea doar în răspunsul transferului / `analiza.citire_ai.sumar.cantitati` — **din 26.09 și în UI** (insigna „⚠ transfer” pe document, §9).
 - Două grupuri (Dn, material) care ajung la aceeași poziție (Dn63 PE + Dn63 OL, o singură poziție „Dn63”): defect preexistent (ADV5, reprodus și pe 8a6fbbb). În runda 4 R5 le trata ca ambigue, **fără niciun update**; **după rebase-ul 2 rămâne regula R4 runda 6** (§2.3): o singură notă pe poziție, cu toate grupurile, `cantitate_plansa` neatinsă. Din R5 rămâne ordinea deterministă (Dn desc, apoi material); testul cu ordinea inversată e păstrat.
 - **GraficPoarta** (`controlFronturiGrafic`, `ofertareCantitatiAprobare.js` l.100; `calculeazaPoartaGrafic`, `graficPoartaCalcul.js`):
   - referința „front” = totalul declarat **doar dacă e validat**; altfel suma rândurilor de rețea validate (ADV6: un total `extras` de 50.000 m nu mai e referință);
@@ -104,7 +106,14 @@ Conflictul a fost tot în `treciInCantitati` (`handler.ts`), la commit-ul rundei
 - **din R5 rămân**: ordinea deterministă a grupurilor (Dn desc, apoi material) — acum și lista de operații trimisă RPC-ului e identică în orice ordine a tronsoanelor, nu doar starea finală; `candidatiDn` (același filtru pe material în ambele ramuri); `randDinPlansa` / „recitire” doar pe aceeași planșă; `cifraSchimbata` (validarea se reface doar când cifra din planșă se schimbă — la coliziune cifra nu se schimbă, deci „validat rămâne validat”, ca în R4);
 - **interacțiunea nouă**: poziția cu cifra **altei planșe** nu primește nici nota coliziunii (regula R5: planșa de acum nu scrie pe rândul altei planșe); apare o intrare în `ambigue` cu `grupuri` și ambele motive. Mulțimea `neatinse` din R5 a dispărut: după regula R4 ea ar fi conținut doar pozițiile altei planșe, pe care le prinde direct `cifraAlteiPlanse`. Restul „doar de verificat” care cade pe poziția unei coliziuni din aceeași planșă se adaugă la nota coliziunii (comportamentul R4), nu mai e „neatins”.
 
-**Testul ADV5 a fost adaptat** (singurul test modificat): aserțiunea „1755 nu primește nimic” contrazicea direct testul R4 „runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 OL 90 … => ambiguu” pe același scenariu, deci nu se putea repara din cod fără să pice unul din ele. Intenția ADV5 e păstrată: nicio cifră scrisă sau adunată, ambele grupuri numite, aceleași operații și același raport în orice ordine. Teste noi (în `cantitati_nevalidate_test.ts`, secțiunea „Rebase R5 peste R4 runda 6”): coliziune pe poziția altei planșe (0 operații, o intrare cu `grupuri`); rest „doar de verificat” pe poziția unei coliziuni (notă adăugată, `actiune: 'nota'`); coliziune pe rând validat (fără status în patch). Contra-probe (copii în scratchpad): fără poarta „altă planșă” în ramura coliziunii (doar R4) pică primul; cu coliziunea „neatinsă” pentru rest (doar R5) pică al doilea.
+**Testul ADV5 a fost adaptat** (singurul test modificat la rebase-ul 2): aserțiunea „1755 nu primește nimic” contrazicea direct testul R4 „runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 OL 90 … => ambiguu” pe același scenariu, deci nu se putea repara din cod fără să pice unul din ele. Intenția ADV5 e păstrată: nicio cifră scrisă sau adunată, ambele grupuri numite, aceleași operații și același raport în orice ordine. Teste noi (în `cantitati_nevalidate_test.ts`, secțiunea „Rebase R5 peste R4 runda 6”): coliziune pe poziția altei planșe (0 operații, o intrare cu `grupuri`); rest „doar de verificat” pe poziția unei coliziuni (notă adăugată, `actiune: 'nota'`); coliziune pe rând validat (fără status în patch — **înlocuit pe 26.09 de varianta B, §8.5**: rândul iese din „validat”). Contra-probe (copii în scratchpad): fără poarta „altă planșă” în ramura coliziunii (doar R4) pică primul; cu coliziunea „neatinsă” pentru rest (doar R5) pică al doilea.
+
+### 2.4 Rebase-ul 3 peste `claude/r4-rezervare-zone` @ 7a7bf86 (R4 rundele 7–9)
+
+Conflictele au fost tot în `treciInCantitati`, la commit-urile R5 inițial și runda 4. Rezolvare, păstrând ambele semantici:
+- **din R4 7–9**: `unde()` (unde a ajuns fiecare grup sigur — pentru notele MY-T4 și „total cu Dn”), `rest.incomplet` (B3 / NFL / DN0) în condiția „extras” ⇒ „diferenta”, `preferaFaraTotal` (pus acum în `candidatiDn`, deci și ramura „doar de verificat” o folosește), rândul TOTAL care nu mai e candidat pe Dn;
+- **din R5**: `randDinPlansa` / `cifraAlteiPlanse` / `cifraSchimbata`, ordinea deterministă a grupurilor; poziția cu cifra altei planșe apare și în `unde` („cu cifra altei planșe (nescris)”).
+Singurul test adaptat: R4 „runda 9 TOTAL-a” cerea ca poziția VALIDATĂ cu cifra din planșă 480 m să rămână „validat” după o recitire de 500 m — sub regula R5 (`cifraSchimbata`) iese din „validat”, cu aprobarea veche numită; intenția R4 (poziția primește cifra, subtotalul doar notă, un singur update pe id) e verificată în continuare. Suita după rebase: deno 181/181 (cu type-check), înainte de lucrul pe condiții.
 
 ## 3. Lic. 95: derivatele și marcarea lor
 
@@ -150,7 +159,7 @@ Testat local pe PGlite (Postgres 18.3 în proces, de unică folosință): runda 
 
 ## 4. Migrarea propusă: `docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql` (+ `_ROLLBACK.sql`)
 
-1. **`v_ofertare_cantitati_nevalidate`** (`security_invoker = on`; REVOKE anon/PUBLIC; GRANT SELECT authenticated/service_role). Numără, pe licitație, rândurile de rețea nevalidate pe `tip_sursa`, cu **exact** filtrul `qm` din `v_ofertare_pt_stare`. Preview pe producție (corpul view-ului rulat ca SELECT, 25.09):
+1. **`v_ofertare_cantitati_nevalidate`** (26.09: **extins la condiția 2** — metri pe surse, rândurile fără tip, rândurile invalidate ieșite din rețea; §9) (`security_invoker = on`; REVOKE anon/PUBLIC; GRANT SELECT authenticated/service_role). Numără, pe licitație, rândurile de rețea nevalidate pe `tip_sursa`, cu **exact** filtrul `qm` din `v_ofertare_pt_stare`. Preview pe producție (corpul view-ului rulat ca SELECT, 25.09):
 
    | lic. | F3 nevalidate (m) | C6 | memoriu | planșă | fără tip | rețea nevalidate / total |
    |---|---|---|---|---|---|---|
@@ -209,9 +218,27 @@ Runda 3 (25.09.2026, pe 990a6b1, înainte de rebase): vitest 401/401; build OK; 
 | `deno check` pe `ofertare-plansa-citeste/index.ts`, `ofertare-clarificari-propune/index.ts`, `worker/ofertare/clarificari.ts` | curat |
 | `md5sum deno.lock` înainte / după | `875e293d073b359f7433064914937c86` neschimbat |
 
+### 5.2 După rebase-ul 3 (peste 7a7bf86) și condițiile Copilot (26.09.2026, cap `5ab80c1` + documentul)
+
+| Comandă | Rezultat |
+|---|---|
+| `deno test --node-modules-dir=none --no-lock -A supabase/functions/` | **186/186**, cu type-check |
+| — din care `ofertare-plansa-citeste/` | **164/164** (`cantitati_nevalidate_test.ts` 23/23: +2 varianta B, +3 R5 pas B) |
+| — din care `ofertare-clarificari-propune/core_test.ts` | **5/5** (+1: trunchierea la 40 spusă modelului) |
+| `concurenta_test.ts`, de 10 ori | 10/10 verde (73/73 la fiecare rulare) |
+| `npx vitest run` | 20 fișiere, **458/458** (+27 `ofertareCantitatiInvalidare.test.js`, +3 `ofertareTransferRaport.test.js`, +5 grafic / +1 câmpuri în `ofertareCantitatiAprobare.test.js`, +1 `graficPoartaCalcul.test.js`, +5 H2 în `ofertareControale.test.js`) |
+| `npm install && npx vite build` | up to date; build OK (avertismentul obișnuit de mărime a chunk-urilor); `package-lock.json` neschimbat |
+| `node scripts/test-cas-felii.mjs` | **34/34** |
+| `deno check` pe `ofertare-plansa-citeste/index.ts`, `ofertare-clarificari-propune/index.ts`, `worker/ofertare/clarificari.ts` | curat |
+| PGlite 0.5.8 (PG 18.3): `pglite/test_aprobare_istoric.mjs` (migrarea condiției 1, rândurile reale lic. 3 + lic. 95) | **48/48**; control negativ (trigger-ul dezactivat după aplicare): 17 pică |
+| PGlite: `pglite/test_view_conditia2.mjs` (view-ul extins + trigger-ul, capăt-la-capăt cu H2) | **7/7** |
+| PGlite: `test_r5_runda4.mjs` / `test_r5.mjs` (v6 + view, după extinderea view-ului) | 11/11; `test_r5.mjs` 10/12 — cele 2 eșecuri intenționate din runda 4 (§4) |
+| mutații (fiecare pe codul final, revenit după): H2 fără post-procesare; rândurile invalidate ieșite nescăzute din lipsă; „front” verde pe referință incompletă; denumirea ignorată la invalidare; `doar_de_verificat` ignorat în raport; varianta B scoasă; R5 pas B scos; marcajul pas B nepăstrat; golirea pe pas B | **9/9 prinse** (1–5 teste pică la fiecare) |
+| `md5sum deno.lock` înainte / după | `875e293d073b359f7433064914937c86` neschimbat |
+
 ## 6. Rămâne / de decis (Razvan)
 
-1. **GO pentru migrarea propusă** (view + v6 din runda 4), înaintea merge-ului ramurii. Altfel H2 = „nu putem verifica” pe licitațiile cu F3.
+1. **GO pentru migrările propuse**, înaintea merge-ului ramurii: (a) `docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql` (view extins la condiția 2 + v6) — altfel H2 = „nu putem verifica” pe licitațiile cu F3; (b) **`docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql`** (condiția 1: istoric + trigger; rollback `_ROLLBACK.sql`, păstrează istoricul). Ordinea între ele nu contează; (b) fără (a) funcționează, (a) fără (b) lasă regula doar în aplicație. După aplicare: `get_advisors` + actualizarea `registru_automatizari` (trigger nou: nu citește conținut extern, scrie doar în istoric și statusul / nota rândului atins).
 2. **Push, PR, merge** pentru `claude/cantitati-nevalidate-consumatori` (conține acum și `claude/r4-rezervare-zone` — se merge-uiește după / împreună cu ea), plus **deploy** pentru `ofertare-clarificari-propune` și `ofertare-plansa-citeste`. Workerul NAS ia `core.ts` la pull. `api/cad-parse.js` pleacă la Vercel cu merge-ul.
 3. **Lic. 3, rândurile 2, 3, 4** (validate înainte de transferul planșei 1.1): GO pentru `docs/R5_LIC3_VALIDARI_INAINTE_DE_TRANSFER_PROPUS.sql` (preview 3 rânduri → `diferenta` + notă, rollback exact) sau le revalidează direct un om, văzând ambele cifre (Dn180: 1.100 vs 2.210).
 4. **Lic. 3, rândul 9** (CAD, 35.620,59 m, `validat` automat pe 28.08): îl trecem pe `extras` (preview → GO → UPDATE cu RETURNING) sau îl lăsăm validat? N-am scris SQL de aplicare.
@@ -219,6 +246,8 @@ Runda 3 (25.09.2026, pe 990a6b1, înainte de rebase): vitest 401/401; build OK; 
 6. **Validarea cantităților de lic. 95** (Oana Nica / responsabilul), după R5 v2 și #63. Până atunci graficul și fronturile rămân blocate, iar asta e comportamentul dorit. Dn200 1751 (17.785, dintre care 13.765 din afara UAT) nu trebuie validat în forma de azi.
 7. **SQL-ul pentru lic. 95** (`docs/R5_REVERIFICARE_LIC95_PROPUS.sql`) se rulează doar dacă apar derivate înainte de merge. Azi preview-ul dă 0 derivate (plus #4632, care nu e derivat).
 8. **Lic. 5**: 47 de rânduri F3 de rețea de validat, dacă licitația mai e în lucru (termen 18.09 trecut, status `in_lucru`).
+9. **Decizii luate pe principiul Copilot, fără să aștepte (de confirmat sau răsturnat):** (a) coliziunea a două grupuri sigure pe un rând VALIDAT ⇒ varianta B (§8.5); (b) schimbările sub prag (cifre < 1 m pe lungimi, majuscule / spații în text) nu invalidează, dar se scriu în istoric; (c) regula de invalidare în editorul 📋 Cantități cere confirmare; refuzul anulează editarea; (d) H2 dă WARN (nu block) pe rândurile de rețea fără tip de sursă — lic. 95 (6 / 48.195 m) și lic. 102 (2 / 167.200 m) — și BLOCK pe rândurile invalidate ieșite din rețea.
+10. **Rămâne netratat explicit** (limitări, §7): ramurile „doar de verificat” / MY-T4 / „total cu Dn” pe un rând VALIDAT scriu doar notă (cifra nu se schimbă, validarea rămâne) — altă formă de „citire care nu confirmă”; de decis dacă trec și ele pe varianta B. Istoricul nu are încă ecran (se citește din BD).
 
 ## 7. Constatări secundare (nereparate aici)
 
@@ -229,5 +258,83 @@ Runda 3 (25.09.2026, pe 990a6b1, înainte de rebase): vitest 401/401; build OK; 
   - setul F3 ia și articole de deviz (lic. 5: +15 rânduri „M”, 1.227,89 m) și ar dubla un rând TOTAL; live 62 rânduri / 7.747,68 m față de 47 / 6.519,79 m pe `qm`;
   - formatul numărului iese „7.747.7 m” (`lc_numeric` = en_US.UTF-8; `replace(',', '.')`).
 - **Fișierul `supabase/migrations/20260926b_…_v5.sql` din repo ≠ funcția live.** Repo are `v_nou := v_noi > 0`, live are `… AND v_standard`. Migrarea propusă pornește de la live.
-- **Transferul: sursa rândului nu poartă id-ul documentului** — două planșe din documente diferite cu același nr. („Planșa 1”) se tratează ca aceeași planșă la recitire. Iar pozițiile ambigue din „altă planșă” apar doar în rezumatul JSON al transferului, nu în UI (preexistent). Coliziunea grupurilor sigure pe aceeași poziție se vede acum și pe poziție (nota R4 runda 6), cu excepția poziției altei planșe, care rămâne neatinsă.
+- **Transferul: sursa rândului nu poartă id-ul documentului** — două planșe din documente diferite cu același nr. („Planșa 1”) se tratează ca aceeași planșă la recitire. Pozițiile ambigue din „altă planșă” (și `doar_de_verificat`) apăreau doar în rezumatul JSON al transferului — **reparat pe 26.09** (insigna „⚠ transfer”, §9). Coliziunea grupurilor sigure pe aceeași poziție se vede acum și pe poziție (nota R4 runda 6), cu excepția poziției altei planșe, care rămâne neatinsă.
+- **Nota transferului scrie numele fișierului cu minuscule** („planșa „pl1.1.pdf””, `eticheta.toLowerCase()`, preexistent R4 / R5, asertat în testele R4). Cosmetic; de reparat odată cu testele R4.
+- **„validat” tot n-are autor / oră în tabelă** (neschimbat). Istoricul propus (§8) are `autor` = `auth.uid()` al scrierii care a **ieșit** din validare, nu al celei care a validat.
 - **Lic. 3**: `grafic_parametri` are 6 fronturi / 29.985 m, pe baza „planșe” (04.09), iar 3 din 5 rânduri de memoriu sunt nevalidate. Pe codul nou, „Propune din cantități” și generarea cer validarea întâi, iar fronturile vechi blochează poarta până la re-propunere / asumare ca manuale.
+
+## 8. Condiția 1 (Copilot 26.09): invalidarea aprobării nu privește doar cifra
+
+> „Schimbarea relevantă a unității, diametrului, materialului, SDR-ului, tronsonului/etapei sau sursei aplicabile poate face aprobarea anterioară nevalabilă chiar dacă lungimea e identică. Păstrează valoarea și aprobarea veche în istoric.”
+
+### 8.1 Inventar pe BD (doar SELECT, 26.09.2026)
+
+- `information_schema.columns` pe `ofertare_cantitati`: `id, licitatie_id, obiect, categorie, denumire, um, cantitate, specificatii, sursa, cantitate_plansa, diferenta_nota, status, extras_de_ai, created_at, updated_at, tip_sursa, cod_articol, ordine`. **Dn, material și SDR n-au coloane proprii** — stau în `denumire` („Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi”) și `specificatii` („PE100 SDR11”). Corespondența atributelor Copilot: unitate = `um`; Dn / material / SDR = `denumire` + `specificatii`; tronson / etapă = `obiect` (+ textul din `denumire`); sursa aplicabilă = `tip_sursa` + `sursa` (+ `cod_articol` = poziția din listă); cifra = `cantitate` și `cantitate_plansa`; în plus `categorie` (decide dacă rândul e „de rețea” în grafic / H2) și `licitatie_id`.
+- Statusuri: CHECK `extras | validat | diferenta | revizuit_clarificare`; în BD `extras` 1.080, `validat` 4 (2, 3, 4, 9 — toate lic. 3), `diferenta` 2. `diferenta` e deja statusul „de reverificat” (bifa ✓ îl duce în `validat`).
+- **Nu există tabel de istoric / audit** pentru cantități (există doar `_backup_cantitati_*` manuale și `ofertare_acoperire_istoric` pentru alt obiect). RLS pe tabelă: politica `cant_all` (authenticated, `auth.uid() IS NOT NULL`). Trigger existent: `trg_categorie_cantitate` (BEFORE INSERT OR UPDATE OF denumire: recalculează `categorie` pe rândurile `extras_de_ai`).
+
+### 8.2 Inventarul căilor care scriu aceste coloane
+
+| Cale | Ce scrie | Pe rând validat | Acum (cod) |
+|---|---|---|---|
+| 📋 Cantități `saveC` (`src/OfertareCantitati.jsx`) | obiect, categorie, denumire, um, cantitate, specificatii, sursa, nota (fără status) | scria tăcut peste aprobare | `aplicaRegulaAprobare` + confirmare explicită („Aprobarea veche nu mai e valabilă… Continui?”; refuz = editarea anulată); gardă pe `updated_at` (rândul schimbat între timp nu se suprascrie) |
+| 📋 Cantități `valideazaC` (✓ / ↩) | doar `status` (+ `updated_at`) | — | **validarea explicită**: neatinsă de regulă; acum cu gardă pe `updated_at` (nu se validează o cifră nevăzută) și refuzată cât rândul are editări nesalvate |
+| 📋 Cantități `addC` / `delC` | INSERT `extras` / DELETE | DELETE pierdea aprobarea | în BD: istoric „sters” (trigger-ul propus) |
+| Transferul din planșă (`treciInCantitati` → RPC `ofertare_transfer_plansa_cantitati`) | `cantitate_plansa`, `diferenta_nota`, `status`; INSERT rânduri noi | cifra: `cifraSchimbata` (runda 4); coliziunea: validat rămânea validat | `cifraSchimbata` prin regula comună; **coliziunea ⇒ varianta B (§8.5)**; plasa finală: orice patch pe un rând validat trece prin `aplicaRegulaAprobare` înainte de RPC |
+| Citirea CAD (`api/cad-parse.js` → `_cadCantitate.js`) | `cantitate_plansa` (+ `cantitate`, `um` pe nevalidat), nota, status | runda 4: `cifraSchimbata` | `cifraSchimbata` prin regula comună (`_cantitatiInvalidare.js`); select-ul citește și `um` |
+| `ofertare-cantitati-extrage` (edge) | doar INSERT `extras` | — | — |
+| RPC-uri / funcții (`pg_proc.prosrc` cu tabela) | `ofertare_transfer_plansa_cantitati` (UPDATE / INSERT, de mai sus); `ofertare_clarificare_planse_auto` (doar citește) | — | RPC neschimbat (patch-ul poartă statusul) |
+| Trigger `trg_categorie_cantitate` | `categorie` la UPDATE OF denumire | recalcul tăcut | trigger-ul propus rulează DUPĂ el (nume „zz”) și vede categoria nouă |
+| SQL-uri propuse în `docs/` (R5 v2 A / B / RA / RB, lic. 3, lic. 95) | manual, cu GO | lic. 3: validat → diferenta | cu trigger-ul activ: istoric „redeschis”; rollback-ul lic. 3 rămâne exact (PGlite) |
+
+Nicio cale nu salvează atribute + `status='validat'` în **același** UPDATE pe un rând deja validat (✓ e doar status), deci nu e nevoie de un „marcaj de validare”: validarea explicită ulterioară = UPDATE doar de status, trece mereu.
+
+### 8.3 Regula (o singură sursă: `src/ofertareCantitatiInvalidare.js`)
+
+Copii identice, verificate octet cu octet de test: `api/_cantitatiInvalidare.js` (CAD, Vercel) și `supabase/functions/ofertare-plansa-citeste/invalidare.js` (deploy-ul pe folder nu garantează `../_shared`).
+- câmpurile aprobării: `licitatie_id, um, cantitate, cantitate_plansa, denumire, specificatii, obiect, categorie, tip_sursa, sursa, cod_articol`;
+- cifre: |Δ| ≥ 1 pe unitățile de lungime (m / ml / fără unitate), orice Δ pe celelalte (buc); apariția / dispariția cifrei contează; **cifra din planșă se compară efectiv** (`cantitate_plansa`, altfel `cantitate`) — exact `cifraSchimbata` din runda 4, deci prima cifră din planșă egală cu memoriul nu e o schimbare;
+- texte: orice schimbare după normalizare (spații comasate, majuscule); ce e doar de formă = „sub prag”;
+- rând validat + schimbare relevantă ⇒ `status='diferenta'`, nota începe cu **„Rândul era VALIDAT — aprobarea veche (cantitate 1.100 m, cifra din planșă 2.210 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat Dn 180 → 160; denumirea („…” → „…”). Valoarea și aprobarea veche rămân în istoric; validarea se reface.”** + nota veche (prefixul nu se adună la cicluri repetate); Dn / material / SDR se citesc din text doar ca să **numească** schimbarea;
+- un patch care își pune singur alt status (transferul, CAD) rămâne cum e.
+
+### 8.4 Migrarea propusă (NEAPLICATĂ): `docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql` + `_ROLLBACK.sql`
+
+- **`ofertare_cantitati_istoric`**: `cantitate_id` (fără FK — supraviețuiește ștergerii), `motiv` (`invalidat | redeschis | modificat_sub_prag | sters`), `status_vechi / status_cerut / status_nou`, `campuri` (relevante) + `campuri_sub_prag`, `valori_vechi` (rândul întreg), `valori_noi` (doar câmpurile schimbate), `aprobare_veche` (status, ultima scriere, cifre, um, nota), `nota`, `autor` (`auth.uid()`), `rol`. RLS; SELECT pentru authenticated cu `auth.uid() IS NOT NULL`; nicio politică de scriere (scrie doar trigger-ul); GRANT authenticated (SELECT) / service_role; REVOKE anon.
+- **`fn_trg_ofertare_cantitati_aprobare`** (SECURITY DEFINER, `search_path = public, pg_temp`, REVOKE EXECUTE PUBLIC / anon / authenticated) pe **`trg_zz_…` BEFORE UPDATE** și **`trg_zz_…_del` AFTER DELETE**: aceeași regulă ca în JS — **nota SQL = nota JS octet cu octet** pe toate cele 16 scenarii (PGlite); `ofertare_cantitati_atribute(text)` și `ofertare_fmt_ro(numeric)` ajutătoare, verificate față de JS pe 20 de texte (15 reale) și 9 numere.
+- **La aplicare nu se schimbă niciun rând** (PGlite: toate coloanele, toate rândurile lic. 3 + lic. 95, identice). Cele 4 rânduri validate de azi (2, 3, 4, 9) rămân validate până la prima scriere relevantă.
+- Scenarii PGlite (48/48): invalidare pe fiecare atribut (um, Dn, material, SDR, obiect, categorie, tip_sursa, sursa, cod_articol, licitatie_id, cantitate, cifra din planșă, golire; TOTAL; m → buc; CAD 35.700 fără status); validare explicită ulterioară; al doilea ciclu fără prefix dublu; ↩ = „redeschis”; sub prag = validarea rămâne + istoric; editorul care retrimite aceleași valori = nimic; transferul cu status în patch = doar istoric; coliziunea B = „redeschis”; SQL-ul lic. 3 + rollback-ul lui exact; DELETE = „sters”; RLS (authenticated citește, nu scrie; anon nimic; autorul = `auth.uid()`); rollback R1 (trigger-e + funcții scoase, istoric păstrat, `trg_categorie_cantitate` neatins); R2 refuzat pe istoric nevid; reaplicare idempotentă.
+- Preview (SELECT, 26.09): rândurile validate = 2, 3, 4, 9 (lic. 3).
+
+### 8.5 Decizia pe coliziune (luată pe principiul Copilot, fără să aștepte): varianta B
+
+Două grupuri sigure (Dn, material) pe o singură poziție **validată**: planșa nu confirmă cifra aprobată (identitate ambiguă = conflict vizibil). Până acum (R4 runda 6 + rebase-ul 2) rândul rămânea „validat” cu o notă — graficul și H2 foloseau în continuare cifra ca aprobată (verificatorul a reprodus-o pe lic. 3, rândul 2). Acum: `cantitate_plansa` rămâne neatinsă (nimic nu se adună / suprascrie), dar statusul trece pe `diferenta`, cu prefixul **„Rândul era VALIDAT cu cifra din planșă X m; planșa … dă N grupuri sigure pe aceeași poziție, fără să confirme cifra — validarea se reface.”** + nota R4 a coliziunii. Teste adaptate: R4 „runda 6 MAJOR transfer: … pe un rând validat: iese din „validat” (R5 varianta B)” și R5 „R5 varianta B: coliziune pe un rând VALIDAT …” (fost „rebase R4×R5: coliziune pe un rând VALIDAT … validarea rămâne”); control nou: coliziunea pe un rând `diferenta` nu dublează prefixul. Poziția cu cifra **altei** planșe rămâne neatinsă (nu e citirea ei), raportată ca ambiguă — acum și în UI (§9).
+
+### 8.6 R5 pas B — eticheta (fost „handler.ts l.931–938 la 7fccfbe”)
+
+Rândul cu marcajul **„ | R5 v2 pas B: …”** (SQL-ul pasului B pe 1756: cifra corectată și verificată de om pe imaginea planșei) era tratat la recitire ca orice rând din planșă: „rândul are 13.740 m **din citirea anterioară**”, `cantitate_plansa` suprascrisă cu cifra automată, nota rescrisă (marcajul dispărea ⇒ gărzile RB / RB-manual refuzau). Acum (`corectieR5B`, `origineCifra`):
+- eticheta: „cifra corectată și verificată de om pe imaginea planșei (pasul B din R5 v2)” — **fără literalul marcajului** (gărzile SQL caută `LIKE '%R5 v2 pas B%'` / `strpos(…, ' | R5 v2 pas B')`; o etichetă cu literalul ar fi rămas în notă după RB și ar fi blocat reaplicarea pasului B);
+- recitirea nu suprascrie și nu golește cifra corectată; o recitire care diferă ⇒ `diferenta` (pe un rând validat: cu aprobarea veche numită); una care confirmă ⇒ „recitirea o confirmă”, statusul neatins;
+- marcajul (și tot ce urmează după el) se păstrează la sfârșitul notei, oricare ramură a rescris nota (plasa finală din `treciInCantitati`).
+
+## 9. Condiția 2 (Copilot 26.09): rândul invalidat / nevalidat nu dispare tacit
+
+> „Rândul invalidat nu trebuie să dispară tacit din ofertă prin filtrul status='validat': consumatorul semnalează că lipsește o cantitate necesară și cere reverificarea rezultatelor dependente. Altfel înlocuim o valoare greșită cu un subtotal incomplet, aparent verde.”
+
+Inventar: grep pe `src/`, `api/`, `supabase/functions/`, `worker/` după `ofertare_cantitati`, `esteAprobata`, `status='validat'` / `'validat'`, plus catalogul BD (§1). Singurul loc din cod care filtrează rândurile de cantități pe `validat` e `src/ofertareCantitatiAprobare.js` (grafic); în BD, v6 (`ofertare_clarificare_planse_auto`, propusă).
+
+| Consumator | Folosește doar validate? | Semnal de lipsă (i) | Rezultat marcat incomplet (ii) | Poartă (iii) | Test |
+|---|---|---|---|---|---|
+| Poarta graficului, rândul „cant” | da (fronturi) | „lipsesc N rânduri necesare nevalidate (X m / cantitate pe unitate): #id „denumire” (status, cifră) …” + **lista completă** sub rând (și înghețată în `grafic_versiuni.poarta`); include rândurile INVALIDATE ieșite din rețea (ex. m → ml) | — | **BLOCK** (generarea e dezactivată; recalcul la îngheț) | `ofertareCantitatiAprobare.test.js` „condiția 2”, `graficPoartaCalcul.test.js` |
+| Poarta graficului, rândul „front” | da (referința = rețeaua validată) | aceeași listă, scurtă | „INCOMPLET, de reverificat — …” + eticheta galbenă; niciodată `ok` cât lipsesc rânduri (warn / block) | prin „cant” | idem |
+| „Propune din cantități” | da | toast cu lista rândurilor lipsă | „fronturi … INCOMPLETE” | — | `fronturiDinCantitati` în test |
+| H2 (poarta propunerii / semnare, `controlCantitati`) | nu filtrează sumele (F3 = toate rândurile); F3 nevalidată = block (R5) | rândurile **invalidate ieșite din rețea** (`invalidate_in_afara_retea(_m)`) și cele **fără tip de sursă** (`fara_tip_nevalidate(_m)`), cu metri; lista: 📋 Cantități → „N nevalidate” | fără tip ⇒ `ok` devine **WARN „INCOMPLET, de reverificat”**; view vechi ⇒ „control parțial” (warn) | invalidate ieșite ⇒ **BLOCK** | `ofertareControale.test.js` „H2 R5 condiția 2”, PGlite `test_view_conditia2.mjs` |
+| Cardul din fișă (`OfertareLicitatii` l.≈3353) | citește doar `v_ofertare_pt_stare` | — | H2 = „nu putem verifica” = block (neschimbat, §1) | block | — |
+| `ofertare_clarificare_planse_auto` v6 (propusă) | totalul F3 doar din validate | cât există F3 nevalidată, textul **nu dă total** (cere corespondența) — nu apare un subtotal parțial | — | — | PGlite `test_r5_runda4.mjs` |
+| Generatorul de clarificări (`core.ts`) | nu (toate rândurile cu notă, cu `status_validat`) | limita de 40 **nu mai taie tacit**: „40 din N — LISTA E TRUNCHIATĂ …” în prompt | — | — | `core_test.ts` (+1) |
+| Transferul planșă → cantități | nu e consumator de „validat” | `ambigue` / `doar_de_verificat` erau doar în JSON ⇒ acum **insignă „⚠ transfer: N nescrise, M de verificat”** pe document (lista în tooltip) + text în mesajul de după citire (`src/ofertareTransferRaport.js`) — task-ul semnalat de verificator | — | — | `ofertareTransferRaport.test.js` |
+| 📋 Cantități | arată tot | contor „N nevalidate” devine **filtru** (click) — lista la care trimit poarta graficului și H2 | — | — | build |
+| Generatorul PT, pachetul, verificarea finală | indirect (grafic / semnătura porții) | prin poarta graficului / H2 | — | prin ele | — |
+| Calcul financiar / devize / F3 export / RFQ | nu citesc tabela (§1, rândurile 14–15) | — | — | — | — |
+
+Preview-ul view-ului extins (corpul rulat ca SELECT pe producție, 26.09): lic. 3 — 3 rânduri de rețea nevalidate (23.630 m; memoriu), 0 invalidate ieșite; lic. 5 — 47 F3 nevalidate (6.520 m), 94 / 94 de rețea nevalidate (28.862 m); lic. 95 — **6 fără tip, 48.195 m**; lic. 102 — **2 fără tip, 167.200 m**; nicăieri rânduri invalidate ieșite (regula nu rulează încă în BD).
