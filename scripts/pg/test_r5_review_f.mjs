@@ -114,8 +114,8 @@ for (const c of cazuriUnitatiF2) teste.push([`U runda 2 — ${c.nume}`, async ({
   const id = await cantitate(observer, lic, c.vechi)
   const vechi = await observer.value(`(SELECT to_jsonb(q) FROM ofertare_cantitati q WHERE id=${id})`)
   const referinta = c.referinta ? { ...vechi, ...c.referinta } : null
-  if (referinta) await observer.command(`INSERT INTO ofertare_cantitati_istoric(cantitate_id,licitatie_id,motiv,status_vechi,status_nou,valori_noi)
-    VALUES (${id},${lic},'validat','extras','validat',${sqlText(JSON.stringify(referinta))}::jsonb);`)
+  if (referinta) await observer.command(`INSERT INTO ofertare_cantitati_istoric(cantitate_id,licitatie_id,motiv,status_vechi,status_nou,valori_vechi,aprobare_veche,valori_noi)
+    VALUES (${id},${lic},'validat','extras','validat',${sqlText(JSON.stringify(vechi))}::jsonb,'{"status":"extras"}'::jsonb,${sqlText(JSON.stringify(referinta))}::jsonb);`)
   const js = aplicaRegulaAprobare(vechi, c.patch, referinta)
   assert.equal(js.invalidat, c.invalidat)
   const set = Object.entries(c.patch).map(([k,v]) => `${k}=${v == null ? 'NULL' : sqlText(v)}`).join(',')
