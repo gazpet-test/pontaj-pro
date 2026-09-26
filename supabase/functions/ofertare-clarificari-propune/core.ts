@@ -5,6 +5,7 @@
 // cantități, documentația și răspunsurile deja primite (de la această autoritate sau la alte licitații).
 // Scrie DOAR propuneri (status de_trimis, origine platforma) — omul le citește, le ajustează, le trimite.
 // Rulează identic în edge function (index.ts) și pe workerul NAS (worker/ofertare/clarificari.ts).
+import { CATEGORII_RESTANTE, infoRestanta, NOTA_LUNGIMI, restantePeTip } from './restante.js'
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
 const MODEL_IMPLICIT = 'claude-sonnet-5'
@@ -85,14 +86,26 @@ export const randuriOmise = (total: number | null | undefined, trimise: number) 
 // R5 sarcina 2 (a) (Copilot, închiderea R4/R5): conflictele transferului planșă → cantități care NU au produs niciun rând (grupuri ambigue,
 // Dn-uri doar „de verificat”, Nr lipsă, fără Dn…) nu apar în „DIFERENȚE CANTITĂȚI” (acolo sunt doar rândurile). Le trimitem separat,
 // din v_ofertare_transfer_conflicte (doar cele DESCHISE); citirea eșuată e spusă modelului — nu „nicio problemă”.
+// Reparația rundei 1 (ADDENDUM 2 Copilot, b): restanțele sunt DISTINCTE, fiecare cu cauza și acțiunea ei (./restante.js, copie identică a
+// src/ofertareTransferRestante.js), iar NICIUNA nu e, singură, o întrebare pentru autoritate: erorile interne de procesare (transfer
+// amânat / căzut / întrerupt, evaluare parțială, date corupte, conflict neacoperit de recitire) și deciziile noastre (poziții ambigue,
+// mai multe TOTAL) NU generează clarificări către AC; cele „de verificat pe planșă” (Dn nestandard, adnotări fără corespondent, Nr
+// lipsă…) pot duce la o clarificare DOAR dacă, după verificarea umană, documentația însăși rămâne lacunară / contradictorie — nu din
+// lista asta. Lungimile din conflicte sunt observații pe planșă (pot fi suprapuse), nu metri lipsă. (Înainte: „pot justifica o clarificare
+// de tip C” pentru toată lista.)
 export function sectiuneConflictePlanse(r: { data: any[] | null; error: any } | null): string {
-  if (!r || r.error) return `CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE: NU AU PUTUT FI CITITE (${String(r?.error?.message || r?.error || 'nicio citire').slice(0, 120)}) — nu presupune că nu există și nu spune că planșele sunt complete.`
+  if (!r || r.error) return `STAREA TRANSFERULUI DIN PLANȘE (verificare INTERNĂ): NU A PUTUT FI CITITĂ (${String(r?.error?.message || r?.error || 'nicio citire').slice(0, 120)}) — nu presupune că nu există restanțe și nu spune că planșele sunt complete; nu formula clarificări din asta.`
   const desc = (r.data || []).filter((c: any) => c?.deschis === true)
-  if (!desc.length) return 'CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE: niciunul deschis.'
-  const n = desc.reduce((q: number, c: any) => q + (Number(c.n) || 0), 0)
-  return `CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE (${n} pe ${desc.length} planșe; NESCRISE în cantități — sursa e incompletă, nu o cantitate confirmată; pot justifica o clarificare de tip C):\n` +
-    JSON.stringify(desc.slice(0, 10).map((c: any) => ({ planșa: String(c.nume_original || '').split('/').pop(), stare: c.stare, n: c.n,
-      conflicte: (Array.isArray(c.conflicte) ? c.conflicte : []).slice(0, 12).map((x: any) => String(x?.text || '').slice(0, 240)) })))
+  if (!desc.length) return 'STAREA TRANSFERULUI DIN PLANȘE (verificare INTERNĂ): nicio restanță deschisă.'
+  const peTip: Record<string, number> = restantePeTip(desc)
+  const cat = (c: string) => Object.entries(peTip).filter(([t]) => infoRestanta(t).categorie === c)
+    .map(([t, n]) => { const i = infoRestanta(t); return { restanta: i.eticheta, n, cauza: i.cauza, actiune: i.actiune } })
+  const total = Object.values(peTip).reduce((q: number, n: number) => q + Number(n), 0)
+  return `STAREA TRANSFERULUI DIN PLANȘE — RESTANȚE INTERNE ALE OFERTANTULUI (${total} pe ${desc.length} planșe; NESCRISE în cantități). ` +
+    `NU formula clarificări către autoritate din ele — ${CATEGORII_RESTANTE.procesare_interna}: ${JSON.stringify(cat('procesare_interna'))}; ` +
+    `${CATEGORII_RESTANTE.decizie_interna}: ${JSON.stringify(cat('decizie_interna'))}; ` +
+    `${CATEGORII_RESTANTE.verificare_plansa} (o clarificare DOAR dacă, după verificarea umană, documentația însăși rămâne lacunară sau contradictorie — nu pe baza acestei liste; ${NOTA_LUNGIMI}): ${JSON.stringify(cat('verificare_plansa'))}. ` +
+    `Planșele: ${JSON.stringify(desc.slice(0, 10).map((c: any) => String(c.nume_original || '').split('/').pop()))}`
 }
 export async function propuneClarificari(supabase: any, body: any): Promise<any> {
   const fail = (msg: string) => ({ error: msg })
@@ -112,7 +125,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
       supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie').eq('licitatie_id', licId).order('nr'),
       // sarcina 2 (a): planșele cu conflicte de transfer (eroarea se păstrează, nu se înghite)
-      Promise.resolve(supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, conflicte').eq('licitatie_id', licId))
+      Promise.resolve(supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, restante').eq('licitatie_id', licId))
         .then((r: any) => r, (e: any) => ({ data: null, error: e })),
     ])
     if (!cerinte?.length) return { ok: true, propuse: 0, scrise: 0, skip: 'registrul de cerințe e gol — extrage întâi cerințele' }

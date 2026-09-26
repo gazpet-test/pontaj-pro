@@ -20,7 +20,7 @@ import { poateCheltui } from './poarta.ts';
 // R5 (Copilot 26.09.2026, condiția 1): CÂND o aprobare nu mai e valabilă — copie identică a src/ofertareCantitatiInvalidare.js
 import { aceeasiValoare, aplicaRegulaAprobare, citestePaginat, DE_REVERIFICAT_CITIRE, descrieDiferenta, fmtRo, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
 // R5 sarcina 2 (Copilot, închiderea R4/R5, condiția 2a): conflictele transferului persistate pe document (analiza.transfer_cantitati)
-import { inregistrareTransfer, type ConflictTransfer } from './transfer_conflicte.ts';
+import { inregistrareLegacy, inregistrareTransfer, type Acoperire, type ConflictTransfer } from './transfer_conflicte.ts';
 import { cheieVersiune, cheiResetare, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
@@ -1117,48 +1117,91 @@ const ACTIUNI_DV: Record<string, string> = {
 };
 const numOrNull = (v: unknown) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 const dnMatTxt = (x: any) => `${x?.dn ? `Dn${x.dn}` : 'fără Dn'}${x?.material ? ` ${x.material}` : ''}`;
+// Reparația rundei 1 (ADDENDUM 2 Copilot + verificatorii): fiecare conflict poartă ANCORELE lui (zonele / Dn-urile / pozițiile din
+// cantități pe care trebuie să le acopere o recitire ca să-l poată închide — transfer_conflicte.ts `acoperit`); identitatea incertă
+// (comasări neconfirmate — „două tabele identice numărate o dată?” — și perechi de felii cu rânduri nelegate) e CONFLICT, nu doar
+// avertisment (Copilot 2a: „identitate incertă”); TOTAL multiplu = NICIO valoare nouă scrisă (vezi treciInCantitati).
+const zoneDin = (xs: any[], ...campuri: string[]) => [...new Set((xs || []).flatMap((x: any) => campuri.flatMap((k) => {
+  const v = x?.[k]; return Array.isArray(v) ? v : v == null ? [] : [v];
+})).filter((z: any) => z != null && z !== '').map(String))].sort();
+const dnDin = (xs: any[]) => [...new Set((xs || []).map((x: any) => Number(x)).filter((n) => Number.isFinite(n) && n > 0))].sort((a, b) => a - b);
 export function conflicteTransfer(c: any, s: any): ConflictTransfer[] {
   const x = c && typeof c === 'object' ? c : {};
   const su = s && typeof s === 'object' ? s : {};
   const out: ConflictTransfer[] = [];
   if (x.eroare) out.push({ tip: 'transfer_eroare', text: `transferul în cantități a căzut: ${String(x.eroare).slice(0, 200)} — nimic nu e confirmat din citirea asta; se reia la următoarea citire` });
-  if (x.amanat) out.push({ tip: 'transfer_amanat', text: String(x.amanat).slice(0, 300) });
+  if (x.amanat) out.push({ tip: 'transfer_amanat', text: String(x.amanat).slice(0, 300),
+    ancore: { zone: zoneDin([{ z: su.zone_lipsa }, { z: su.zone_cazute }], 'z') } });
   for (const a of Array.isArray(x.ambigue) ? x.ambigue : []) {
     const gr = Array.isArray(a.grupuri) && a.grupuri.length ? a.grupuri.map((g: any) => `${dnMatTxt(g)} ${fmtM(Number(g.metri) || 0)} m`).join(' + ')
       : `${dnMatTxt(a)}${numOrNull(a.metri) ? ` ${fmtM(Number(a.metri))} m` : ''}`;
     const poz = (a.pozitii || []).slice(0, 6).map((p: any) => `#${p.id}`).join(', ');
     out.push({ tip: 'ambiguu', dn: numOrNull(a.dn), material: a.material ?? null, metri: numOrNull(a.metri), ...(numOrNull(a.metri) ? {} : { fara_cantitate: true }),
       pozitii: (a.pozitii || []).slice(0, 6).map((p: any) => ({ id: p.id, denumire: String(p.denumire || '').slice(0, 80) })),
+      ancore: { dn: dnDin([a.dn, ...(Array.isArray(a.grupuri) ? a.grupuri.map((g: any) => g?.dn) : [])]), pozitii: true },
       text: `${gr} NESCRIS${poz ? ` (pozițiile ${poz})` : ''}: ${a.motiv || 'ambiguu între mai multe poziții — decide omul'}${a.de_verificat ? `; de verificat: ${a.de_verificat}` : ''}` });
   }
   for (const d of (Array.isArray(x.doar_de_verificat) ? x.doar_de_verificat : []).filter((d: any) => d?.actiune !== 'ambiguu'))
     out.push({ tip: 'de_verificat', dn: numOrNull(d.dn), material: d.material ?? null, actiune: d.actiune, pozitie_id: d.pozitie_id ?? null, metri: null, fara_cantitate: true,
+      ancore: { dn: dnDin([d.dn]), pozitii: true },
       text: `${dnMatTxt(d)}: doar rânduri de verificat, nicio cifră sigură — ${ACTIUNI_DV[d.actiune] || d.actiune}${d.pozitie_id ? ` (#${d.pozitie_id})` : ''}` });
   const tm = Array.isArray(x.totaluri_multiple) ? x.totaluri_multiple : [];
+  // ADDENDUM 2 Copilot (e): TOTAL multiplu — NICIUN rând TOTAL nu primește totalul planșei (nici primul): valorile și aprobările lor rămân
   if (tm.length > 1) out.push({ tip: 'total_ambiguu', pozitii: tm.slice(0, 6).map((p: any) => ({ id: p.id, denumire: String(p.denumire || '').slice(0, 80) })),
-    text: `${tm.length} rânduri TOTAL în cantități (${tm.slice(0, 6).map((p: any) => `#${p.id}`).join(', ')}): totalul planșei a mers doar pe #${tm[0].id}; celelalte au rămas neatinse — care e totalul rețelei decide omul` });
+    ancore: { pozitii: true }, fara_cantitate: true,
+    text: `${tm.length} rânduri TOTAL în cantități (${tm.slice(0, 6).map((p: any) => `#${p.id}`).join(', ')}): totalul planșei` +
+      `${numOrNull(x.total_m) ? ` (${fmtM(Number(x.total_m))} m)` : ''} NU s-a scris pe niciunul — valorile și aprobările lor rămân neatinse; ` +
+      'care e totalul rețelei decide Răzvan (A/B/C), apoi recitire sau confirmare' });
   const rfi = Number(su.randuri_fara_identitate_n) || 0, nc = Array.isArray(su.conflicte) ? su.conflicte.length : 0;
   if (rfi || nc) out.push({ tip: 'identitate', metri: numOrNull(su.total_de_verificat_m),
+    ancore: { zone: zoneDin([...(Array.isArray(su.randuri_fara_identitate) ? su.randuri_fara_identitate : []), ...(Array.isArray(su.conflicte) ? su.conflicte : [])], 'zona') },
     text: `${randuri(rfi)} de tabel fără identitate sigură și ${nc} conflict${nc === 1 ? '' : 'e'} de citire (același rând citit diferit): ${fmtM(Number(su.total_de_verificat_m) || 0)} m de verificat — NU intră în cantități` });
+  // reparația rundei 1 (verificatorul BD, minor „identitate incertă”): comasările neconfirmate și perechile neîmperecheate = CONFLICT
+  const com = Array.isArray(su.comasari_neconfirmate) ? su.comasari_neconfirmate : [];
+  if (com.length) out.push({ tip: 'identitate_incerta', fara_cantitate: true, ancore: { zone: zoneDin(com, 'a', 'b') },
+    text: `${com.length === 1 ? '1 comasare neconfirmată' : `${com.length} comasări neconfirmate`} între felii (${com.slice(0, 4).map((k: any) => `${k.a}+${k.b}${k.nr ? ` Nr ${k.nr}` : ''}`).join('; ')}) — ` +
+      'același tabel citit din două felii SAU două tabele identice numărate o singură dată; de verificat pe planșă' });
+  const pn = Array.isArray(su.perechi_neimperecheate) ? su.perechi_neimperecheate : [];
+  if (pn.length) out.push({ tip: 'identitate_incerta', fara_cantitate: true, ancore: { zone: zoneDin(pn, 'a', 'b') },
+    text: `${pn.length === 1 ? '1 pereche' : `${pn.length} perechi`} de felii vecine cu rânduri nelegate între ele (${pn.slice(0, 4).map((k: any) => `${k.a}+${k.b}`).join('; ')}) — ` +
+      'rânduri citite de două ori sau omise la margine; de verificat pe planșă' });
   const nl = Array.isArray(su.nr_lipsa) ? su.nr_lipsa : [];
-  for (const y of nl.slice(0, 6)) out.push({ tip: 'nr_lipsa', fara_cantitate: true, text: textNrLipsa(y) });
-  if (nl.length > 6) out.push({ tip: 'nr_lipsa', fara_cantitate: true, text: `încă ${nl.length - 6} tabele cu secvența Nr incompletă (metri necunoscuți)` });
-  if (Number(su.nr_fara_lungime_n) > 0) out.push({ tip: 'nr_fara_lungime', fara_cantitate: true, text: textNrFaraLungime(Array.isArray(su.nr_fara_lungime) ? su.nr_fara_lungime : [], Number(su.nr_fara_lungime_n)) });
-  if (Number(su.tronsoane_fara_dn_n) > 0) out.push({ tip: 'fara_dn', metri: numOrNull(su.tronsoane_fara_dn_m), text: textFaraDn(Number(su.tronsoane_fara_dn_n), Number(su.tronsoane_fara_dn_m) || 0) });
+  for (const y of nl.slice(0, 6)) out.push({ tip: 'nr_lipsa', fara_cantitate: true, ancore: { zone: zoneDin([y], 'zone') }, text: textNrLipsa(y) });
+  if (nl.length > 6) out.push({ tip: 'nr_lipsa', fara_cantitate: true, ancore: { zone: zoneDin(nl.slice(6), 'zone') }, text: `încă ${nl.length - 6} tabele cu secvența Nr incompletă (metri necunoscuți)` });
+  if (Number(su.nr_fara_lungime_n) > 0) out.push({ tip: 'nr_fara_lungime', fara_cantitate: true,
+    ancore: { zone: zoneDin(Array.isArray(su.nr_fara_lungime) ? su.nr_fara_lungime : [], 'zona') },
+    text: textNrFaraLungime(Array.isArray(su.nr_fara_lungime) ? su.nr_fara_lungime : [], Number(su.nr_fara_lungime_n)) });
+  if (Number(su.tronsoane_fara_dn_n) > 0) out.push({ tip: 'fara_dn', metri: numOrNull(su.tronsoane_fara_dn_m),
+    ancore: { zone: zoneDin(Array.isArray(su.tronsoane_fara_dn) ? su.tronsoane_fara_dn : [], 'zona') },
+    text: textFaraDn(Number(su.tronsoane_fara_dn_n), Number(su.tronsoane_fara_dn_m) || 0) });
+  // ADDENDUM 2 Copilot (b, d): Dn nestandard = în afara CATALOGULUI nostru (nu „diametru imposibil”); lungimile din conflicte sunt
+  // OBSERVAȚII pe planșă (pot fi suprapuse), nu metri lipsă
   if (Array.isArray(su.diametre_nestandard) && su.diametre_nestandard.length) out.push({ tip: 'dn_nestandard', metri: numOrNull(su.nestandard_m),
+    ancore: { dn: dnDin(su.diametre_nestandard) },
     text: `Dn nestandard ${su.diametre_nestandard.map((d: any) => `Dn${d}`).join(', ')}: ${fmtM(Number(su.nestandard_m) || 0)} m — NU intră în cantități (de verificat Dn-ul pe planșă)` });
   const ada = Array.isArray(su.adnotari_diametru_absent) ? su.adnotari_diametru_absent : [];
   if (ada.length) {
     const m = ada.reduce((q: number, t: any) => q + (Number(t?.lungime_m) || 0), 0);
-    out.push({ tip: 'adnotari_dn_absent', metri: +m.toFixed(1),
+    out.push({ tip: 'adnotari_dn_absent', metri: +m.toFixed(1), ancore: { dn: dnDin(ada.map((t: any) => t?.diametru_mm)), zone: zoneDin(ada, 'zona') },
       text: `${ada.length === 1 ? '1 adnotare' : `${ada.length} adnotări`} pe Dn absent din tabel (${fmtM(m)} m; ${[...new Set(ada.map((t: any) => `Dn${t?.diametru_mm ?? '?'}`))].join(', ')}) — observații, NU intră în cantități` });
   }
   return out;
 }
-// înregistrarea de scris pe document: conflictele de mai sus + starea (neefectuat = transferul n-a scris nimic, deci nimic confirmat)
-export const inregistrareDinTransfer = (prev: any, c: any, s: any, o: { id: string; rulare?: string | null; citire?: string | null; plansa?: string | null; la?: string }) =>
+// înregistrarea de scris pe document: conflictele de mai sus + starea (neefectuat = transferul n-a scris nimic, deci nimic confirmat) +
+// acoperirea (reparația rundei 1: conflictele precedente neacoperite de transferul ăsta rămân deschise, purtate)
+export const inregistrareDinTransfer = (prev: any, c: any, s: any, o: { id: string; rulare?: string | null; citire?: string | null; plansa?: string | null; la?: string; acoperire?: Acoperire | null }) =>
   inregistrareTransfer(prev, { conflicte: conflicteTransfer(c, s), neefectuat: !!(c?.eroare || c?.amanat), id: o.id, la: o.la || new Date().toISOString(),
-    cod: COD_VERSIUNE, rulare: o.rulare ?? null, citire: o.citire ?? null, plansa: o.plansa ?? null });
+    cod: COD_VERSIUNE, rulare: o.rulare ?? null, citire: o.citire ?? null, plansa: o.plansa ?? null, acoperire: o.acoperire ?? null });
+// acoperirea unei citiri (reparația rundei 1): completă = gata, fără zone căzute / lipsă; zonele citite fără eroare; Dn-urile observate
+// (tronsoanele brute — sigure, nestandard, fără identitate — și adnotările); cantitățile evaluate = transferul a citit rândurile
+export function acoperireCitire(o: { gata: boolean; toate: any[]; zoneLipsa: string[]; transfer: any }): Acoperire {
+  const toate = Array.isArray(o.toate) ? o.toate : [];
+  const erori = toate.filter((r: any) => r?.eroare).length;
+  const zone = [...new Set(toate.filter((r: any) => !r?.eroare).map((r: any) => String(r?.eticheta || '').replace('.jpg', '')).filter(Boolean))].sort();
+  const dn = dnDin(toate.flatMap((r: any) => [...(r?.tronsoane || []), ...(r?.adnotari || [])].map((t: any) => t?.diametru_mm)));
+  const t = o.transfer && typeof o.transfer === 'object' ? o.transfer : {};
+  return { complet: !!o.gata && !erori && !(o.zoneLipsa || []).length && !t.eroare && !t.amanat, zone, dn, cantitati_evaluate: t.evaluat === true };
+}
 // R5 (Copilot 25.09.2026): un rând scris de un transfer ANTERIOR din planșă (sursa „… citit automat din scanare")
 // sau declarat tip_sursa='plansa' NU e memoriu. Până acum `cantitate` lui era citită drept „dinMemoriu": la o recitire
 // a planșei 470 (lic. 95) rândurile 1752–1756 ar fi primit „Planșa 1 confirmă: … m" — planșa confirmată de ea însăși,
@@ -1349,12 +1392,16 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
     return interval || dn.length !== 1;
   };
   const conducte = (existente || []).filter(eConducta);
-  // dintre mai multe rânduri TOTAL, primul (ca înainte); NICIUNUL nu e candidat pe Dn (un interval „De 63–110” s-ar potrivi cu Dn63)
-  const randTotal = conducte.find(esteTotal);
+  // NICIUN rând TOTAL nu e candidat pe Dn (un interval „De 63–110” s-ar potrivi cu Dn63)
   const retea = conducte.filter((r: any) => !esteTotal(r));
-  // R5 sarcina 2 (Copilot, „TOTAL ambiguu”): mai multe rânduri TOTAL => doar primul primește totalul; celelalte rămâneau TĂCUT pe cifra
-  // veche. Comportamentul de scriere nu se schimbă (decizia lic. 5, A/B/C, e la Razvan) — dar conflictul e raportat și persistat.
+  // R5 sarcina 2 (Copilot, „TOTAL ambiguu”): mai multe rânduri TOTAL — conflictul e raportat și persistat.
+  // Reparația rundei 1 (ADDENDUM 2 Copilot, pct. e): „TOTAL multiplu acceptat DOAR dacă se PĂSTREAZĂ valoarea existentă, fără alegerea
+  // automată a unui nou TOTAL”. Până acum totalul planșei mergea pe PRIMUL rând TOTAL (cantitate_plansa, notă, status — adică un TOTAL
+  // ales automat dintre cele ambigue). Acum, cu mai multe rânduri TOTAL, NICIUNUL nu e atins: valorile și aprobările (istoricul) rămân,
+  // conflictul 'total_ambiguu' (deschis: poarta graficului BLOCK, aprobarea finală blocată) marchează reverificarea; decizia A/B/C e a lui
+  // Răzvan (lic. 5 are 3 rânduri TOTAL).
   const totaluriToate = conducte.filter(esteTotal);
+  const randTotal = totaluriToate.length === 1 ? totaluriToate[0] : null;
   const extraTotal = totaluriToate.length > 1 ? { totaluri_multiple: totaluriToate.map((r: any) => ({ id: r.id, denumire: r.denumire })) } : {};
   // runda 9 (TOTAL-a): mai mulți candidați pe Dn, dintre care unii cu „total” în denumire ⇒ se păstrează cei fără „total”; un subtotal
   // „Total conducte De 110” e candidat doar când e singurul de pe Dn (altfel primește nota din bucla „total cu Dn”, mai jos).
@@ -1717,7 +1764,8 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
   // Plasa finală (R5 pas B, prefixul rândurilor invalidate, regula aprobării față de valoarea aprobată) — vezi `plasaAprobare`.
   plasaAprobare(ops, existente || [], refs);
 
-  const extra = { ...(doarVerif.length ? { doar_de_verificat: doarVerif } : {}), ...extraTotal };
+  // reparația rundei 1: `evaluat` = rândurile din cantități au fost citite și comparate (acoperirea „pozițiilor” unui conflict anterior)
+  const extra = { ...(doarVerif.length ? { doar_de_verificat: doarVerif } : {}), ...extraTotal, evaluat: true };
   if (!peDiametru.size && !ops.length) return { adaugate: 0, actualizate: 0, ambigue, total_m: 0, pe_diametre: {}, ...extra };
   const { data: rez, error } = await supa.rpc('ofertare_transfer_plansa_cantitati',
     { p_doc_id: doc.id, p_rulare: rulare, p_randuri: ops });
@@ -2065,8 +2113,21 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const mod = body?.mod === 'continua' || body?.mod === 'reia_erori' ? body.mod : null;
   const acelasiTaiat = !!ca0 && (ca0.taiat_la || null) === (plansa.taiat_la || null);
   if (mod && !acelasiTaiat) return json({ error: 'Citirea salvată e pe altă tăiere a planșei — pornește „citește” din nou.' }, 409);
+  // R5, reparația rundei 1 (verificatorul BD, MAJOR „jurnalele legacy”, pct. b; Copilot pct. 4: „întâi codul nou pe observațiile salvate”):
+  // mod 'reevalueaza' = REEVALUAREA citirii SALVATE cu codul de acum, FĂRĂ niciun apel AI (cost 0): zonele citite deja (citire_ai.felii)
+  // trec din nou prin agregare → identitate → transfer → înregistrarea conflictelor. Pentru jurnalele scrise de codul vechi (v25), care
+  // după migrarea 2 apar 'legacy_partial' (deschise). Cere citirea salvată COMPLETĂ pe tăierea de acum (toate zonele, fără erori, fără zone
+  // lipsă) — altfel 409, nimic citit, nimic scris. Scrie în cantități ca orice transfer (aceeași poartă de decizie ca citirea:
+  // owner / responsabil — poateCheltui mai sus). Proveniența rămâne a citirii vechi (versiune, zone) + `reevaluat` (codul de acum).
+  const reev = body?.mod === 'reevalueaza';
+  const salvate = new Map<string, any>((reev ? (ca0?.felii || []) : []).map((r: any) => [String(r?.eticheta || '').replace('.jpg', ''), r]));
+  if (reev) {
+    if (!ca0?.gata || !acelasiTaiat) return json({ error: 'Reevaluarea cere citirea salvată COMPLETĂ pe tăierea de acum — pornește „citește” (citire nouă).', cost_usd: 0 }, 409);
+    const faraCitire = [...zoneLipsa, ...felii.map((f: any) => String(f.name || '').replace('.jpg', '')).filter((z: string) => !salvate.has(z) || salvate.get(z)?.eroare)];
+    if (faraCitire.length) return json({ error: `Reevaluarea cere toate zonele citite: ${faraCitire.length} fără citire salvată (${faraCitire.slice(0, 6).join(', ')}) — „🔁 reia zonele căzute” sau „citește”.`, cost_usd: 0 }, 409);
+  }
   // R4/C4: o citire nu se continuă cu altă versiune de cod/prompt/model (implicit mixare_permisa=false)
-  const resetare = !mod && deLa === 0; // „citește" de la zero: citirea veche se înlocuiește (nu se amestecă)
+  const resetare = (!mod && deLa === 0) || reev; // „citește" de la zero: citirea veche se înlocuiește (nu se amestecă); reevaluarea: din zonele salvate
   if (!resetare) {
     const incomp = versiuneIncompatibila(ca0, versiuneCur, mixarePermisa);
     if (incomp) return json({ error: incomp, versiune_salvata: ca0?.versiune || null, versiune_curenta: versiuneCur }, 409);
@@ -2109,7 +2170,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     const reset = cheiResetare(altii);
     if (!resetare && reset.length)
       return { cand, lot: [], blocat: ordonate(reset), nota: 'o citire „de la zero” e în curs în alt tab (ar înlocui citirea)', exist, altii };
-    return { cand, lot: cand.filter((z) => !altii.has(z)).slice(0, FELII_PE_RULARE), exist, altii, resetare };
+    return { cand, lot: cand.filter((z) => !altii.has(z)).slice(0, reev ? cand.length : FELII_PE_RULARE), exist, altii, resetare };
   };
   const rz = await rezervaChei(supa, docId, doc, rulareNoua, taiatCur, planifica);
   if (!rz.ok) return rz.inLucru
@@ -2134,6 +2195,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     for (let i = 0; i < lot.length; i += paralel) {
       const grup = lot.slice(i, i + paralel);
       const parti = await Promise.all(grup.map(async (f: any) => {
+        // reevaluarea: rezultatul SALVAT al zonei (nicio descărcare, niciun apel AI)
+        if (reev) { const { _tin: _a, _tout: _b, ...s } = structuredClone(salvate.get(numeZona(f))); return { ...s, _tin: 0, _tout: 0, _ms: 0, _reincercari: 0, _coduri: [] }; }
         const { data: bin, error } = await supa.storage.from('ofertare').download(`${plansa.cale_felii}/${f.name}`);
         if (error || !bin) return { eticheta: numeZona(f), eroare: error?.message || 'descarcare esuata' };
         return await citesteFelie(API_KEY, new Uint8Array(await bin.arrayBuffer()), f.name.replace('.jpg', ''), anteteCunoscute);
@@ -2147,7 +2210,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 
   const tin = rezultate.reduce((s, r) => s + (r._tin || 0), 0);
   const tout = rezultate.reduce((s, r) => s + (r._tout || 0), 0);
-  await supa.from('ai_usage_log').insert({
+  if (!reev) await supa.from('ai_usage_log').insert({
     function_name: 'ofertare-plansa-citeste', model: MODEL,
     tokens_in: tin, tokens_out: tout,
     cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4),
@@ -2165,7 +2228,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   };
   // proveniența pe zonă (versiunea) și pe tronson: zona + regiunea în coordonate PDF (R4/T11)
   for (const r of rezultate) {
-    r._versiune = cheieVers;
+    r._versiune = reev ? (r._versiune || 'necunoscuta') : cheieVers;   // reevaluarea: proveniența rămâne a citirii vechi
     const reg = regiuneZona(plansa, r.eticheta);
     for (const t of (r.tronsoane || [])) { t._zona = r.eticheta; if (reg) t._regiune = reg; }
   }
@@ -2289,9 +2352,14 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // R5 sarcina 2: transferul AMÂNAT (zone lipsă / căzute) nu scrie nimic în cantități => înregistrare DESCHISĂ („neefectuat”) pe document,
   // în aceeași scriere CAS cu citirea (reconstruită la fiecare reîncercare, peste înregistrarea din documentul proaspăt `d`)
   let inregAmanat: any = null;
+  // Reparația rundei 1 (verificatorul BD, MAJOR „jurnalele legacy”): jurnalul codului VECHI (edge v25), nelegat de nicio înregistrare, e
+  // convertit ÎNAINTE ca citirea asta să-l suprascrie — înregistrare „legacy” cu aceleași reguli ca derivarea SQL (inclusiv
+  // 'legacy_partial', deschis). Altfel conflictele lui (doc 470: Dn60, adnotările) dispăreau tăcut la prima citire nouă, oricât de parțială.
+  const tcLegacy = inregistrareLegacy(d.analiza, conflicteTransfer);
+  const prevInreg = d.analiza?.transfer_cantitati ?? tcLegacy;
   const amana = (c: Record<string, unknown>) => {
-    inregAmanat = inregistrareDinTransfer(d.analiza?.transfer_cantitati, c, sumar, { id: crypto.randomUUID(), rulare: rulareNoua, citire: rulare,
-      plansa: nrPlansa ? `Planșa ${nrPlansa}` : `Planșa „${doc.nume_original}”` });
+    inregAmanat = inregistrareDinTransfer(prevInreg, c, sumar, { id: crypto.randomUUID(), rulare: rulareNoua, citire: rulare,
+      plansa: nrPlansa ? `Planșa ${nrPlansa}` : `Planșa „${doc.nume_original}”`, acoperire: acoperireCitire({ gata, toate, zoneLipsa, transfer: c }) });
     return { ...c, inregistrare_id: inregAmanat.id };
   };
   const cantBaza = caB?.rulare === rulare ? caB?.sumar?.cantitati : null;
@@ -2317,7 +2385,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // „neprocesat" fără text — Rezumatul îl număra la „rămase de citit" și UI-ul oferea recitire plătită.
   // La final: procesat + text_extras (randare text a citirii, pt cerințe/clarificări/căutare);
   // dacă TOATE feliile au căzut: eroare. Pe runde intermediare statusul nu se atinge.
-  const metrici = [...(baza.length ? (caB?.metrici || []) : []), { ...metricaRunda, mod: mod || 'complet', ...(incercare ? { cas_reincercari: incercare } : {}) }];
+  const metrici = [...(baza.length ? (caB?.metrici || []) : reev ? (ca0?.metrici || []) : []), { ...metricaRunda, mod: reev ? 'reevalueaza' : (mod || 'complet'), ...(incercare ? { cas_reincercari: incercare } : {}) }];
   if (gata) sumar.metrici = {
     runde: metrici.length, paralel: [...new Set(metrici.map((m: any) => m.paralel))],
     durata_s: Math.round(metrici.reduce((q: number, m: any) => q + m.durata_ms, 0) / 1000),
@@ -2327,14 +2395,20 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   };
   const versiuniZone = [...new Set(toate.map((r: any) => r._versiune || 'necunoscuta'))];
   if (versiuniZone.length > 1) sumar.versiuni_mixte = versiuniZone; // doar cu mixare_permisa=true
-  const versiune = { ...versiuneCur, pagina: 1, dpi: plansaD.dpi || null };
-  const citireAi: any = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: MODEL, versiune, taiat_la: plansaD.taiat_la || null,
+  // reevaluarea: proveniența zonelor rămâne a citirii vechi (versiunea ei) — o reluare ulterioară pe runde refuză amestecul (R4/C4);
+  // `reevaluat` = codul de acum care a refăcut agregarea + transferul; notele lipite (plătite) și cifrele lor din sumar se păstrează
+  if (reev) for (const k of ['lungime_declarata_m', 'necorelare_unitate', 'note_lipite', 'perechi_lipite', 'provenienta'])
+    if (ca0?.sumar && k in ca0.sumar && !(k in sumar)) sumar[k] = ca0.sumar[k];
+  const versiune = reev && ca0?.versiune ? ca0.versiune : { ...versiuneCur, pagina: 1, dpi: plansaD.dpi || null };
+  const citireAi: any = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: reev ? (ca0?.model || MODEL) : MODEL, versiune, taiat_la: plansaD.taiat_la || null,
+    ...(reev ? { reevaluat: { la: new Date().toISOString(), cod: COD_VERSIUNE, versiune_cod: versiuneCur, fara_ai: true } } : {}),
+    ...(reev && ca0?.note_lipite ? { note_lipite: ca0.note_lipite, note_lipite_perechi: ca0.note_lipite_perechi } : {}),
     gata, actualizat: new Date().toISOString(), rev: revNou(), rulare,
     ...(caB?.transfer ? { transfer: caB.transfer } : {}), // lease-ul de transfer al altei rulări nu se șterge
     ...(caB?.rulare === rulare && caB?.note_lipite ? { note_lipite: caB.note_lipite, note_lipite_perechi: caB.note_lipite_perechi } : {}) };
   // rezervările: ale rulării curente se eliberează odată cu scrierea rezultatului; ale altora (active) rămân
   const rzCurat = d.analiza?.rezervari_zone ? { rezervari_zone: rezervariNoi(d.analiza.rezervari_zone, taiatCur, Date.now(), { scoateRulare: rulareNoua }) } : {};
-  const tcAmanat = inregAmanat ? { transfer_cantitati: inregAmanat } : {};
+  const tcAmanat = inregAmanat ? { transfer_cantitati: inregAmanat } : tcLegacy ? { transfer_cantitati: tcLegacy } : {};
   const upd: Record<string, unknown> = { analiza: { ...d.analiza, citire_ai: citireAi, ...rzCurat, ...tcAmanat }, analiza_la: new Date().toISOString() };
   // 25.09.2026 (audit țintit): PL1–PL4 Vâlcelele au fost „citite" pe sigla semnăturii (900x450) și au ieșit
   // procesat fără eroare — butoanele le socoteau citite. O sursă sub 2000px pe latura mare nu e o planșă:
@@ -2421,7 +2495,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       await scrieCAS(supa, docId, lease.doc ? { ...lease.doc, analiza: lease.rezultat.upd.analiza } : w.doc, (d: any) => {
         const caX = d.analiza?.citire_ai;
         if (caX?.transfer?.rulare !== rulareNoua || caX?.transfer?.de_la !== deLaLease) return { stop: { status: 409, error: 'lease pierdut' } };
-        const inreg = inregistrareDinTransfer(d.analiza?.transfer_cantitati, cantitati, sumar, { id: idInreg, rulare: rulareNoua, citire: ctx.rulare, plansa: plansaEt });
+        // reparația rundei 1: precedenta (inclusiv „legacy” convertită) + ACOPERIREA citirii — conflictele ei neacoperite rămân deschise
+        const inreg = inregistrareDinTransfer(d.analiza?.transfer_cantitati ?? inregistrareLegacy(d.analiza, conflicteTransfer), cantitati, sumar,
+          { id: idInreg, rulare: rulareNoua, citire: ctx.rulare, plansa: plansaEt, acoperire: acoperireCitire({ gata: true, toate: ctx.toate, zoneLipsa: [], transfer: cantitati }) });
         return { upd: { analiza: { ...d.analiza, transfer_cantitati: inreg, citire_ai: { ...caX, rev: revNou(), sumar: { ...caX.sumar, cantitati },
           transfer: { ...caX.transfer, stare: eroare ? 'eroare' : 'facut', la: new Date().toISOString() } } } } };
       });
@@ -2445,7 +2521,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   }
 
   return json({
-    document: doc.nume_original, citite_acum: lot.length, din: felii.length, sumar, cantitati,
+    document: doc.nume_original, citite_acum: reev ? 0 : lot.length, din: felii.length, sumar, cantitati, ...(reev ? { reevaluare: true, apeluri_ai: 0 } : {}),
     cost_usd: +(tin * PRET_IN + tout * PRET_OUT).toFixed(4),
     clarificare, continua: maiSunt && lot.length > 0, de_la_urmator: gata ? null : deLaUrmator,
     ...(rezervateAlt.size ? { in_lucru_alt_tab: [...rezervateAlt.keys()].filter((k) => !k.startsWith('lipire:')) } : {}),

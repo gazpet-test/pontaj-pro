@@ -45,7 +45,10 @@ describe('schimbariRelevante — fiecare atribut al aprobării, pe rândul 2 VAL
       const { patch: p, invalidat } = aplicaRegulaAprobare(R2, patch)
       expect(invalidat).toBe(true)
       expect(p.status).toBe('diferenta')
-      expect(p.diferenta_nota.startsWith(`${PREFIX_INVALIDARE} (cantitate 1.100 m, cifra din planșă 2.210 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat `)).toBe(true)
+      // reparația rundei 1: dacă SINGURA schimbare e cifra din planșă (observația), nota spune „e de reverificat … nu infirmă aprobarea”
+      const obs = campuri.length === 1 && campuri[0] === 'cantitate_plansa'
+      expect(p.diferenta_nota.startsWith(`${PREFIX_INVALIDARE} (cantitate 1.100 m, cifra din planșă 2.210 m, ultima scriere 2026-09-15 15:19) ${obs ? 'e de reverificat' : 'nu mai e valabilă'}: s-a schimbat `)).toBe(true)
+      if (obs) expect(p.diferenta_nota).toContain(' — o citire nouă a planșei nu infirmă aprobarea. Valoarea și aprobarea veche rămân în rând și în istoric; validarea se reface. ')
       expect(p.diferenta_nota.endsWith(R2.diferenta_nota)).toBe(true) // nota veche rămâne, după prefix
     })
   }
@@ -76,13 +79,13 @@ describe('ce NU invalidează', () => {
     expect(s.subPrag.map(x => x.camp)).toEqual(['denumire'])   // „2210.000” nici nu e o scriere distinctă
     const r = aplicaRegulaAprobare(R2, { cantitate_plansa: 2210.4 })
     expect([r.invalidat, r.patch.status]).toEqual([true, 'diferenta'])
-    expect(r.patch.diferenta_nota).toContain('s-a schimbat cifra din planșă (2.210 m → 2.210,4 m; diferență mică: +0,4 m, +0,02 %)')
+    expect(r.patch.diferenta_nota).toContain('s-a schimbat cifra din planșă (2.210 m → 2.210,4 m; diferență mică: +0,4 m, +0,01 %)')
   })
   it('prima cifră din planșă EGALĂ cu cantitatea (1.100 → planșa 1.100) nu e o schimbare (ca cifraSchimbata); 1.100,3 da (runda 1b: fără prag)', () => {
     const s = schimbariRelevante({ ...R2, cantitate_plansa: null }, { cantitate_plansa: 1100 })
     expect([s.relevante, s.subPrag.map(x => x.camp)]).toEqual([[], ['cantitate_plansa']])
     const x = schimbariRelevante({ ...R2, cantitate_plansa: null }, { cantitate_plansa: 1100.3 }).relevante
-    expect(x.map(y => [y.camp, y.severitate])).toEqual([['cantitate_plansa', 'diferență mică: +0,3 m, +0,03 %, efectiv 1.100 m → 1.100,3 m']])
+    expect(x.map(y => [y.camp, y.severitate])).toEqual([['cantitate_plansa', 'diferență mică: +0,3 m, +0,02 %, efectiv 1.100 m → 1.100,3 m']])
     expect(schimbariRelevante({ ...R2, cantitate_plansa: null }, { cantitate_plansa: 1101 }).relevante.map(x => x.camp)).toEqual(['cantitate_plansa'])
   })
   it('rând nevalidat: nimic de invalidat', () => {
@@ -162,7 +165,7 @@ describe('runda 5, MAJOR 2 → runda 1b: față de valoarea APROBATĂ, fără pr
     const s = simulare(R3)
     const r1 = s.scrie({ cantitate: 5250.99 })
     expect([r1.invalidat, s.rand().status]).toEqual([true, 'diferenta'])
-    expect(s.rand().diferenta_nota).toContain(`${PREFIX_INVALIDARE} (cantitate 5.250 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat cantitatea (5.250 m → 5.250,99 m; diferență mică: +0,99 m, +0,02 %)`)
+    expect(s.rand().diferenta_nota).toContain(`${PREFIX_INVALIDARE} (cantitate 5.250 m, ultima scriere 2026-09-15 15:19) nu mai e valabilă: s-a schimbat cantitatea (5.250 m → 5.250,99 m; diferență mică: +0,99 m, +0,01 %)`)
   })
   it('cifra din planșă: 1.000 → 1.000,9 => invalidat din primul pas (înainte: abia 1.001,5)', () => {
     const s = simulare({ ...R3, cantitate: 1000, cantitate_plansa: 1000 })
@@ -376,7 +379,7 @@ describe('runda 1b — valoarea canonică, severitatea, formatul', () => {
     expect(descrieDiferenta(5000, 5004)).toBe('diferență mare: +4 m, +0,08 %')      // lungime: sub 1 % dar ≥ 1 m => mare
     expect(descrieDiferenta(5000, 5004, { lungime: false, unitate: 'buc' })).toBe('diferență mică: +4 buc, +0,08 %')   // buc: doar relativ
     expect(descrieDiferenta(10, 11, { lungime: false, unitate: 'buc' })).toBe('diferență mare: +1 buc, +10 %')
-    expect(descrieDiferenta(13740, 13140)).toBe('diferență mare: -600 m, -4,37 %')
+    expect(descrieDiferenta(13740, 13140)).toBe('diferență mare: -600 m, -4,36 %')   // reparația rundei 1: procentul trunchiat (4,366… %)
     expect(descrieDiferenta(1.084, 1.085, { lungime: false, unitate: 'mc' })).toBe('diferență mică: +0,001 mc, +0,09 %')
     expect(descrieDiferenta(35620.59, 35620.6)).toBe('diferență mică: +0,01 m, sub 0,01 %')
     expect(descrieDiferenta(0, 2, { lungime: false, unitate: 'buc' })).toBe('diferență mare: +2 buc')   // față de 0: fără procent

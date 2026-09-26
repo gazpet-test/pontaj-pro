@@ -14,7 +14,8 @@
 //
 // Funcții PURE (fără React, fără Supabase): se testează cu vitest (ofertareCantitatiAprobare.test.js).
 // ════════════════════════════════════════════════════════════════
-import { aceeasiValoare, invalidateDinIstoric, normUm, prefixInvalidare, prefixUnitate, unitateSchimbataDinIstoric } from './ofertareCantitatiInvalidare.js'
+import { aceeasiValoare, fmtExact, invalidateDinIstoric, normUm, prefixInvalidare, prefixUnitate, unitateSchimbataDinIstoric } from './ofertareCantitatiInvalidare.js'
+import { NOTA_LUNGIMI, restantePeTip, textRestante } from './ofertareTransferRestante.js'
 
 export const STATUS_APROBAT = 'validat'
 export const esteAprobata = c => c?.status === STATUS_APROBAT
@@ -118,7 +119,9 @@ export const umAfisata = um => { const u = normUm(um); return u ? (SIN_UM[u] || 
 const CLASE_UM = [['lungimi', /^(m|ml|km|sute m)$/], ['suprafete', /^(mp|ha|sute mp)$/], ['volume', /^(mc|l|litri|sute mc)$/], ['bucati', /^buc$/]]
 export const clasaUnitate = um => { const u = umAfisata(um); if (!u) return 'fara_unitate'; for (const [c, rx] of CLASE_UM) if (rx.test(u)) return c; return 'alte' }
 const ETICHETA_CLASA = { lungimi: 'lungimi', suprafete: 'suprafețe', volume: 'volume', bucati: 'bucăți', alte: 'alte unități', fara_unitate: 'fără unitate' }
-const fmtQ = v => (+Number(v).toFixed(2)).toLocaleString('ro-RO')
+// reparația rundei 1 (verificatorul UI, minor „0,004 mc apare «0 mc»”): cantitățile din mesajele de lipsă — EXACT (max. 6 zecimale),
+// nu rotunjite la 2 (o cantitate nenulă nu mai poate apărea ca 0)
+const fmtQ = v => fmtExact(v)
 // grupe = { peUm: { um: suma }, faraCantitate: n } — din rânduri ([{um, cantitate}]) sau din view (*_pe_um: {um: {suma, randuri, fara_cantitate}})
 export function grupeDinRanduri(items) {
   const peUm = {}; let faraCantitate = 0
@@ -167,12 +170,16 @@ export function textLipsa({ lipsa }, max = 5) {
 // `sursa` = { conflicte: rândurile view-ului pe licitație, eroare_conflicte, eroare_istoric } — sau null = NECITITĂ. Orice citire eșuată
 // (eroare, view inexistent — de ex. codul nou publicat înainte de migrarea 2) = „nu putem verifica” => BLOCK, NU zero restanțe.
 const numeDoc = c => { const t = String(c?.nume_original || `document #${c?.document_id ?? '?'}`).split('/').pop(); return t.length > 50 ? t.slice(0, 49) + '…' : t }
+// Reparația rundei 1 (ADDENDUM 2 Copilot, b + d): restanțele DISTINCTE, fiecare cu acțiunea ei (src/ofertareTransferRestante.js) — Dn
+// nestandard ≠ diametru imposibil, adnotare fără corespondent ≠ tronson suplimentar, transfer amânat ≠ contradicție a autorității —, iar
+// lungimile din conflicte NU sunt prezentate ca „metri lipsă” (sunt observații pe planșă, pot fi suprapuse).
 export function textConflicteTransfer(desc) {
   const n = desc.reduce((q, c) => q + (Number(c.n) || 0), 0)
-  const lista = desc.slice(0, 4).map(c => `„${numeDoc(c)}” (${Number(c.n) || 0}${c.stare === 'neefectuat' ? ', transfer nefăcut' : ''})`).join('; ') +
+  const lista = desc.slice(0, 4).map(c => `„${numeDoc(c)}” (${Number(c.n) || 0}${c.stare === 'neefectuat' ? ', transfer nefăcut' : c.stare === 'legacy_partial' ? ', evaluat de codul vechi' : ''})`).join('; ') +
     (desc.length > 4 ? `; … încă ${desc.length - 4}` : '')
-  return `sursă incompletă: ${n === 1 ? '1 conflict nerezolvat' : `${n} conflicte nerezolvate`} la transferul din ${desc.length === 1 ? '1 planșă' : `${desc.length} planșe`} (${lista}) — ` +
-    'nescrise în cantități, deci neaprobate de nimeni; recitește planșa sau confirmă explicit (✋ „confirmă conflictele”) în Documente'
+  const rest = textRestante(restantePeTip(desc))
+  return `sursă incompletă: ${n === 1 ? '1 restanță deschisă' : `${n} restanțe deschise`} la transferul din ${desc.length === 1 ? '1 planșă' : `${desc.length} planșe`} (${lista})` +
+    (rest ? ` — ${rest}` : '') + ` — nescrise în cantități, deci neaprobate de nimeni (${NOTA_LUNGIMI}); recitește planșa sau confirmă explicit (✋ rezolvare / excepție justificată) în Documente`
 }
 export function stareSursa(sursa) {
   if (!sursa) return { verificata: false, blocheaza: true, conflicte: [], text: 'nu putem verifica sursa cantităților (conflictele transferului din planșe și istoricul aprobărilor nu s-au citit)' }
@@ -363,5 +370,7 @@ export function campuriCantitatiNevalidate(r) {
     transfer_conflicte_n: nou('transfer_conflicte_n', n),
     transfer_conflicte_lista: nou('transfer_conflicte_lista', v => v ?? null),
     transfer_in_curs: nou('transfer_in_curs', n),
+    // reparația rundei 1: restanțele distincte pe licitație {tip: n}
+    transfer_restante: nou('transfer_restante', v => (v && typeof v === 'object' ? v : {})),
   }
 }

@@ -86,7 +86,7 @@ Deno.test('MAJOR 2 → runda 1b (capăt la capăt): cifra din planșă 1.000 apr
     const g = supaFals([acum], mod)
     await treciInCantitati(g.supa, DOC, tr(180, 1001.5), '1.1', 'R5')
     assertEquals(g.apeluri[0].p_randuri[0].patch.status, 'diferenta', mod)
-    assert(g.apeluri[0].p_randuri[0].patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 1.000,9 m; planșa 1.1 dă acum 1.001,5 m (diferență mică: +0,6 m, +0,06 %)'), mod)
+    assert(g.apeluri[0].p_randuri[0].patch.diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 1.000,9 m; planșa 1.1 dă acum 1.001,5 m (diferență mică: +0,6 m, +0,05 %)'), mod)
   }
 })
 

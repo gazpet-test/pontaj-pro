@@ -9,10 +9,37 @@
 --   codul vechi o ignoră și o păstrează (toate scrierile fac { ...analiza, ... }); o eventuală reaplicare o citește din nou.
 --   Ciornele marcate ',revizie_planse_auto' de v6 își păstrează marcajul (se scoate din Clarificări, „✓ revizuită”, sau cu SQL, cu GO).
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
+-- Reparația rundei 1 (26.09.2026): și trigger-ul care păstrează cheile serverului (fn_trg_ofertare_doc_chei_server), funcția ajutătoare
+-- ofertare_transfer_stare / ofertare_ts_valid, confirmarea cu 4 parametri, iar trigger-ul aprobării pachetului revine EXACT la corpul live
+-- (md5(prosrc) a45ccdb853da8d7a6cabead04d9a95af; ACL postgres + service_role, fără comentariu — verificat pe PGlite).
+DROP TRIGGER IF EXISTS trg_ofertare_doc_chei_server ON public.ofertare_documente_atribuire;
+DROP FUNCTION IF EXISTS public.fn_trg_ofertare_doc_chei_server();
+CREATE OR REPLACE FUNCTION public.fn_ofertare_pt_pachet_poarta_documentatie()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_blocaj text; v_gasit boolean;
+BEGIN
+  IF (NEW.stare = 'aprobat' AND (TG_OP = 'INSERT' OR OLD.stare IS DISTINCT FROM 'aprobat'))
+     OR (NEW.stare = 'depus' AND (TG_OP = 'INSERT' OR OLD.stare NOT IN ('aprobat', 'depus'))) THEN
+    SELECT true, blocaj INTO v_gasit, v_blocaj FROM public.v_ofertare_seap_completitudine WHERE licitatie_id = NEW.licitatie_id;
+    IF v_gasit IS NULL THEN
+      RAISE EXCEPTION 'Aprobare blocată: nu putem verifica completitudinea documentației (licitația % nu apare în control)', NEW.licitatie_id USING ERRCODE = 'P0001';
+    END IF;
+    IF v_blocaj IS NOT NULL THEN
+      RAISE EXCEPTION 'Aprobare blocată — documentația nu e completă: %', v_blocaj USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $function$;
 DROP VIEW IF EXISTS public.v_ofertare_cantitati_nevalidate;
 DROP VIEW IF EXISTS public.v_ofertare_transfer_conflicte;
+DROP FUNCTION IF EXISTS public.ofertare_transfer_conflicte_confirma(bigint, text, text, text);
 DROP FUNCTION IF EXISTS public.ofertare_transfer_conflicte_confirma(bigint, text, text);
 DROP FUNCTION IF EXISTS public.ofertare_transfer_stare(jsonb);
+DROP FUNCTION IF EXISTS public.ofertare_ts_valid(text);
 
 CREATE OR REPLACE FUNCTION public.ofertare_clarificare_planse_auto(p_licitatie_id bigint)
  RETURNS jsonb

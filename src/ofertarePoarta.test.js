@@ -123,9 +123,9 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 22 de randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 23 de randuri ale portii sunt prezente, in ordinea afisata (R5 reparația rundei 1: + „sursa_cantitati” — aprobarea finală)', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','neconfirmate','documentatie','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
+      ['cuprins','fara','neverificate','neconfirmate','documentatie','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','sursa_cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
   })
 })
 

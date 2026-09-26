@@ -4,7 +4,7 @@
 // Fixture-le „reale” = citire_ai.sumar al documentelor 470 / 471 / 130 / 1035 (SELECT 26.09.2026, doar câmpurile folosite).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import { conflicteTransfer, inregistrareDinTransfer } from './handler.ts'
-import { deschis, inregistrareTransfer, MAX_ISTORIC } from './transfer_conflicte.ts'
+import { acoperit, confirmareValida, deschis, inregistrareLegacy, inregistrareTransfer, MAX_ISTORIC, restantePeTip, stareLegacy } from './transfer_conflicte.ts'
 
 // doc 470 (lic. 95), sumar din producție (26.09.2026): Dn60 nestandard 110 m + 3 adnotări pe Dn absent (1.770 m)
 const SUMAR_470 = { erori: 0, validat: false, cantitati: { ambigue: [], total_m: 48195, adaugate: 6, actualizate: 0, pe_diametre: { Dn40: 13140, Dn63: 9670, Dn90: 4545, Dn110: 780, Dn125: 2275, Dn200: 17785 } },
@@ -37,11 +37,14 @@ Deno.test('sarcina 2: conflicteTransfer — ambigue, „doar de verificat” (f�
     nr_fara_lungime: [{ nr: '50', zona: 'z2_6', dn: 40 }], nr_fara_lungime_n: 1, tronsoane_fara_dn_n: 1, tronsoane_fara_dn_m: 300 }
   const x = conflicteTransfer(c, s)
   assertEquals(x.map((y) => y.tip), ['ambiguu', 'ambiguu', 'de_verificat', 'de_verificat', 'total_ambiguu', 'identitate', 'nr_lipsa', 'nr_lipsa', 'nr_lipsa', 'nr_lipsa', 'nr_lipsa', 'nr_lipsa', 'nr_lipsa', 'nr_fara_lungime', 'fara_dn'])
+  // reparația rundei 1: ancorele (ce trebuie să acopere o recitire ca să închidă conflictul)
+  assertEquals([x[0].ancore, x[2].ancore, x[4].ancore, x[13].ancore], [{ dn: [110], pozitii: true }, { dn: [90], pozitii: true }, { pozitii: true }, { zone: ['z2_6'] }])
   assertEquals(x[0].text, 'Dn110 PE 500 m NESCRIS (pozițiile #31, #32): ambiguu între mai multe poziții — decide omul; de verificat: 1 rând Dn110 PE fără identitate sigură (90 m)')
   assertEquals(x[1].text, 'Dn110 PE 500 m + Dn110 OL 90 m NESCRIS (pozițiile #5): mai multe grupuri sigure (Dn, material) pe aceeași poziție — cantitate_plansa neatinsă')
   // Dn-urile doar „de verificat” n-au metri: marcate fara_cantitate, nu „0 m”
   assertEquals([x[2].fara_cantitate, x[2].metri, x[2].text], [true, null, 'Dn90 PE: doar rânduri de verificat, nicio cifră sigură — nicio poziție în cantități'])
-  assertEquals(x[4].text, '2 rânduri TOTAL în cantități (#7, #8): totalul planșei a mers doar pe #7; celelalte au rămas neatinse — care e totalul rețelei decide omul')
+  // ADDENDUM 2 Copilot (e): nicio valoare nouă aleasă automat pe vreun TOTAL
+  assertEquals(x[4].text, '2 rânduri TOTAL în cantități (#7, #8): totalul planșei NU s-a scris pe niciunul — valorile și aprobările lor rămân neatinse; care e totalul rețelei decide Răzvan (A/B/C), apoi recitire sau confirmare')
   assertEquals(x[12].text, 'încă 2 tabele cu secvența Nr incompletă (metri necunoscuți)')
   assert(x.filter((y) => y.tip === 'nr_lipsa' || y.tip === 'nr_fara_lungime').every((y) => y.fara_cantitate === true && y.metri == null))
   assertEquals(conflicteTransfer({ eroare: 'transfer: răspuns neașteptat' }, {}).map((y) => y.tip), ['transfer_eroare'])
@@ -49,37 +52,125 @@ Deno.test('sarcina 2: conflicteTransfer — ambigue, „doar de verificat” (f�
   assertEquals(conflicteTransfer(null, null), [])
 })
 
-const rec = (prev: any, c: any, s: any, id: string) => inregistrareDinTransfer(prev, c, s, { id, rulare: 'R-' + id, citire: 'C', plansa: 'Planșa 1', la: '2026-09-26T10:00:00.000Z' })
-Deno.test('sarcina 2: închiderea — recitire FĂRĂ conflicte închide explicit (urma rămâne în `anterior` + `istoric`); confirmarea veche nu acoperă o recitire nouă CU conflicte', () => {
-  const a = rec(null, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 110, material: 'PE', metri: 500, pozitii: [{ id: 31 }, { id: 32 }] }] }, {}, 'A')
+// acoperirea unei recitiri complete a zonei z1_1 cu Dn-urile date (cantitățile evaluate)
+const acop = (dn: number[], o: any = {}) => ({ complet: true, zone: ['z1_1'], dn, cantitati_evaluate: true, ...o })
+const rec = (prev: any, c: any, s: any, id: string, acoperire: any = null) => inregistrareDinTransfer(prev, c, s, { id, rulare: 'R-' + id, citire: 'C', plansa: 'Planșa 1', la: '2026-09-26T10:00:00.000Z', acoperire })
+const U = '00000000-0000-4000-8000-000000000121'
+const conf = (r: any, o: any = {}) => ({ ...r, confirmat_de: U, confirmat_la: '2026-09-26T11:00:00Z', confirmare_nota: 'verificat pe planșă, pozițiile sunt pe loturi diferite', confirmare_tip: 'rezolvat', confirmat_token: r.id, ...o })
+Deno.test('sarcina 2 + reparația rundei 1: închiderea — recitirea FĂRĂ conflicte închide DOAR ce a ACOPERIT (urma în `anterior` + `istoric`); confirmarea veche nu acoperă o recitire nouă CU conflicte', () => {
+  const a = rec(null, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 110, material: 'PE', metri: 500, pozitii: [{ id: 31 }, { id: 32 }] }] }, {}, 'A', acop([110]))
   assertEquals([a.stare, a.n, deschis(a), a.confirmat_la], ['conflicte', 1, true, null])
-  // recitire curată => închis prin recitire, conflictele vechi recuperabile
-  const b = rec(a, { adaugate: 0, actualizate: 1, ambigue: [] }, {}, 'B')
-  assertEquals([b.stare, b.n, deschis(b), b.inchis_prin, b.inchide], ['fara_conflicte', 0, false, 'recitire_fara_conflicte', 'A'])
+  // recitire curată care a VĂZUT Dn110 și a evaluat pozițiile => închis prin recitire, conflictele vechi recuperabile
+  const b = rec(a, { adaugate: 0, actualizate: 1, ambigue: [], evaluat: true }, {}, 'B', acop([110, 160]))
+  assertEquals([b.stare, b.n, deschis(b), b.inchis_prin, b.inchide, b.inchise_la_recitire], ['fara_conflicte', 0, false, 'recitire_fara_conflicte', 'A', 1])
   assertEquals(b.anterior.conflicte, a.conflicte)
   assertEquals(b.istoric.map((h: any) => [h.id, h.stare, h.n]), [['A', 'conflicte', 1]])
-  // confirmare umană (scrisă în BD de ofertare_transfer_conflicte_confirma) => închis; o recitire nouă CU conflicte e o înregistrare nouă, deschisă
-  const aConf = { ...a, confirmat_de: 'u1', confirmat_la: '2026-09-26T11:00:00Z', confirmare_nota: 'verificat pe planșă, pozițiile sunt pe loturi diferite' }
+  // confirmare umană VALIDĂ (scrisă în BD de ofertare_transfer_conflicte_confirma) => închis; o recitire nouă CU conflicte e o înregistrare nouă, deschisă
+  const aConf = conf(a)
   assertFalse(deschis(aConf))
-  const c = rec(aConf, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 110, material: 'PE', metri: 500 }] }, {}, 'C')
+  const c = rec(aConf, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 110, material: 'PE', metri: 500 }] }, {}, 'C', acop([110]))
   assertEquals([c.stare, deschis(c), c.confirmat_la], ['conflicte', true, null])
-  assertEquals([c.istoric[0].confirmat_de, c.istoric[0].confirmare_nota], ['u1', aConf.confirmare_nota])
-  // recitire curată după o confirmare: nu „închide” nimic (nu era deschis), dar confirmarea rămâne în istoric
-  const d = rec(aConf, { adaugate: 0, actualizate: 0, ambigue: [] }, {}, 'D')
+  assertEquals([c.istoric[0].confirmat_de, c.istoric[0].confirmare_nota, c.istoric[0].confirmare_tip], [U, aConf.confirmare_nota, 'rezolvat'])
+  // recitire curată după o confirmare: nu „închide” nimic (nu era deschis) și nu poartă nimic, dar confirmarea rămâne în istoric
+  const d = rec(aConf, { adaugate: 0, actualizate: 0, ambigue: [] }, {}, 'D', null)
   assertEquals([d.stare, 'inchis_prin' in d, d.istoric[0].confirmat_la], ['fara_conflicte', false, '2026-09-26T11:00:00Z'])
 })
 
-Deno.test('sarcina 2: transferul căzut / amânat NU șterge conflictele anterioare — e el însuși deschis („neefectuat”), cele vechi în `anterior`', () => {
-  const a = rec(null, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 63, material: null, metri: 200 }] }, {}, 'A')
-  const e = rec(a, { eroare: 'transfer: două scrieri pe rândul TOTAL (id 4)' }, {}, 'E')
-  assertEquals([e.stare, deschis(e), e.conflicte[0].tip], ['neefectuat', true, 'transfer_eroare'])
+Deno.test('ADDENDUM 2 Copilot, testul 3: recitirea PARȚIALĂ / GOLITĂ de rândul problematic NU rezolvă conflictul (purtat „nerezolvat_la_recitire”)', () => {
+  const a = rec(null, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 110, material: 'PE', metri: 500, pozitii: [{ id: 31 }, { id: 32 }] }] },
+    { diametre_nestandard: [60], nestandard_m: 110, adnotari_diametru_absent: [{ diametru_mm: 48, lungime_m: 480, zona: 'z3_1' }] }, 'A', acop([110, 60, 48]))
+  assertEquals(a.conflicte.map((c: any) => c.tip), ['ambiguu', 'dn_nestandard', 'adnotari_dn_absent'])
+  const curat = { adaugate: 0, actualizate: 1, ambigue: [], evaluat: true }
+  // (1) recitirea „fără conflicte” care NU mai vede Dn110 / Dn60 / Dn48 (golită de rândurile problematice) => toate purtate, DESCHIS
+  const b = rec(a, curat, {}, 'B', acop([160], { zone: ['z1_1', 'z3_1'] }))
+  assertEquals([b.stare, deschis(b), b.n, b.conflicte.map((c: any) => c.tip_initial)], ['conflicte', true, 3, ['ambiguu', 'dn_nestandard', 'adnotari_dn_absent']])
+  assert(b.conflicte.every((c: any) => c.tip === 'nerezolvat_la_recitire' && c.din === 'A'))
+  // (2) recitirea INCOMPLETĂ (zone căzute) — nimic acoperit, chiar dacă vede Dn-urile
+  const c = rec(a, curat, {}, 'C', acop([110, 60, 48], { complet: false }))
+  assertEquals([c.stare, c.n], ['conflicte', 3])
+  // (3) recitirea care vede Dn110 și Dn60, dar NU zona z3_1 a adnotărilor => doar adnotările rămân purtate
+  const d = rec(a, curat, {}, 'D', acop([110, 60, 48]))
+  assertEquals([d.stare, d.conflicte.map((x: any) => x.tip_initial), d.inchise_la_recitire], ['conflicte', ['adnotari_dn_absent'], 2])
+  // (4) rezultat GOL (nicio zonă citită / nicio observație) nu închide nici un conflict fără ancore (transfer căzut)
+  const e = rec(null, { eroare: 'x' }, {}, 'E', null)
+  assertEquals(rec(e, curat, {}, 'F', acop([], { zone: [] })).stare, 'conflicte')
+  assertEquals(rec(e, curat, {}, 'F2', acop([])).stare, 'conflicte', 'zone citite complet, dar niciun Dn observat (planșă goală / ilizibilă)')
+  assertEquals(rec(e, curat, {}, 'G', acop([160])).stare, 'fara_conflicte')
+  // (5) purtarea nu cuibărește: o a doua recitire neacoperitoare păstrează textul și originea
+  const f = rec(b, curat, {}, 'H', acop([160]))
+  assertEquals(f.conflicte.map((x: any) => [x.tip, x.din]), b.conflicte.map((x: any) => [x.tip, x.din]))
+  // (6) acoperirea completă a tuturor ancorelor + niciun conflict nou => închis
+  const g = rec(b, curat, {}, 'I', acop([110, 60, 48], { zone: ['z1_1', 'z3_1'] }))
+  assertEquals([g.stare, g.inchis_prin, g.inchise_la_recitire], ['fara_conflicte', 'recitire_fara_conflicte', 3])
+  assert(acoperit({ tip: 'x', text: '' }, acop([1])) && !acoperit({ tip: 'x', text: '' }, null))
+})
+
+Deno.test('reparația rundei 1: confirmarea contează DOAR validă — autor uuid, moment ISO, tip rezolvat / excepție, notă minimă, legată de înregistrarea exactă', () => {
+  const a = rec(null, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 110, material: 'PE', metri: 500 }] }, {}, 'A')
+  assert(confirmareValida(conf(a)) && !deschis(conf(a)))
+  assert(confirmareValida(conf(a, { confirmare_tip: 'exceptie', confirmare_nota: 'nu afectează oferta: pozițiile sunt în F3' })))
+  for (const [ce, o] of [['confirmat_la „nu-e-data”', { confirmat_la: 'nu-e-data' }], ['luna 13', { confirmat_la: '2026-13-45T00:00:00Z' }],
+    ['confirmat_de ne-uuid', { confirmat_de: 'owner' }], ['notă scurtă', { confirmare_nota: 'ok' }], ['fără tip', { confirmare_tip: null }],
+    ['tip necunoscut', { confirmare_tip: 'vazut' }], ['excepție cu notă sub 20', { confirmare_tip: 'exceptie', confirmare_nota: 'nu contează' }],
+    ['alt token (conflictul altei rulări)', { confirmat_token: 'B' }], ['fără token', { confirmat_token: null }]] as [string, any][]) {
+    assertFalse(confirmareValida(conf(a, o)), ce)
+    assert(deschis(conf(a, o)), ce)
+  }
+  // o stare necunoscută (sau lipsă) e DESCHISĂ — fail-closed
+  assert(deschis({ id: 'X', stare: 'ciudat' }) && deschis({ id: 'X' }) && !deschis({ id: 'X', stare: 'fara_conflicte' }))
+})
+
+Deno.test('reparația rundei 1 (MAJOR jurnale legacy): jurnalul codului VECHI fără marcajele R5 NU e „fără conflicte” — legacy_partial DESCHIS; conflictele lui convertite, nu pierdute', () => {
+  // doc 130 (lic. 3) și 471 (lic. 95): jurnale reale ale edge v25 — 0 conflicte numărate, dar nici identitate / Nr / TOTAL multiplu evaluate
+  for (const [nume, S] of [['130', SUMAR_130], ['471', SUMAR_471]] as [string, any][]) {
+    const st = stareLegacy(S.cantitati, S, conflicteTransfer(S.cantitati, S))
+    assertEquals([st.stare, st.conflicte.map((c) => c.tip)], ['legacy_partial', ['evaluare_partiala']], nume)
+  }
+  // doc 470: conflictele numărate + evaluarea parțială
+  const s470 = stareLegacy(SUMAR_470.cantitati, SUMAR_470, conflicteTransfer(SUMAR_470.cantitati, SUMAR_470))
+  assertEquals([s470.stare, restantePeTip(s470.conflicte)], ['conflicte', { dn_nestandard: 1, adnotari_dn_absent: 1, evaluare_partiala: 1 }])
+  // cu marcajele R5 (codul nou) și fără conflicte => fără conflicte
+  const nou = { ...SUMAR_130, identitate_randuri: { lecturi_tabel: 3 }, randuri_fara_identitate_n: 0 }
+  assertEquals(stareLegacy(nou.cantitati, nou, []).stare, 'fara_conflicte')
+  assertEquals(stareLegacy({ in_ce: 1 }, {}, []).stare, 'necunoscut')
+  // conversia: doar jurnal vechi nelegat; nu peste o înregistrare, nu în curs, nu legat
+  const l130 = inregistrareLegacy({ citire_ai: { sumar: SUMAR_130, transfer: { la: '2026-09-15T15:19:53Z' } } }, conflicteTransfer)!
+  assertEquals([l130.stare, l130.n, deschis(l130), l130.sursa, l130.la], ['legacy_partial', 1, true, 'legacy', '2026-09-15T15:19:53Z'])
+  assertEquals(inregistrareLegacy({ transfer_cantitati: { id: 'x' }, citire_ai: { sumar: SUMAR_130 } }, conflicteTransfer), null)
+  assertEquals(inregistrareLegacy({ citire_ai: { sumar: { cantitati: { in_curs: true } } } }, conflicteTransfer), null)
+  assertEquals(inregistrareLegacy({ citire_ai: { sumar: { cantitati: { adaugate: 0, inregistrare_id: 'r' } } } }, conflicteTransfer), null)
+  // conflictele legacy 470 au ancore => o recitire nouă parțială nu le șterge
+  const l470 = inregistrareLegacy({ citire_ai: { sumar: SUMAR_470 } }, conflicteTransfer)!
+  const dupa = rec(l470, { adaugate: 0, actualizate: 0, ambigue: [], evaluat: true }, {}, 'N', acop([40, 63], { zone: ['z1_1'] }))
+  assertEquals([dupa.stare, dupa.conflicte.map((c: any) => c.tip_initial)], ['conflicte', ['dn_nestandard', 'adnotari_dn_absent']])
+  // evaluarea parțială (fără ancore) se închide de o recitire completă NEGOALĂ a codului nou
+  assertEquals(rec(l130, { adaugate: 0, actualizate: 0, ambigue: [], evaluat: true }, {}, 'M', acop([160, 180, 250])).stare, 'fara_conflicte')
+  // … dar NU de o recitire GOALĂ (docs 471–475 reale: planșe fără nicio observație, ilizibile) — rămâne pentru omul care decide (✋)
+  const l471 = inregistrareLegacy({ citire_ai: { sumar: SUMAR_471 } }, conflicteTransfer)!
+  const gol = rec(l471, { adaugate: 0, actualizate: 0, ambigue: [], pe_diametre: {} }, {}, 'G', acop([]))
+  assertEquals([gol.stare, gol.conflicte.map((c: any) => c.tip_initial)], ['conflicte', ['evaluare_partiala']])
+})
+
+Deno.test('reparația rundei 1 (minor „identitate incertă”): comasările neconfirmate și perechile neîmperecheate sunt CONFLICTE (nu doar avertismente)', () => {
+  const x = conflicteTransfer({ adaugate: 0, actualizate: 0, ambigue: [] }, {
+    comasari_neconfirmate: [{ a: 'z1_4', b: 'z1_5', nr: '1–18', randuri: 18, axa: 'orizontal' }],
+    perechi_neimperecheate: [{ a: 'z2_6', b: 'z2_7', neimperecheate: [1, 0] }] })
+  assertEquals(x.map((c) => [c.tip, c.ancore]), [['identitate_incerta', { zone: ['z1_4', 'z1_5'] }], ['identitate_incerta', { zone: ['z2_6', 'z2_7'] }]])
+  assert(x[0].text.includes('două tabele identice numărate o singură dată'), x[0].text)
+})
+
+Deno.test('sarcina 2: transferul căzut / amânat NU șterge conflictele anterioare — e el însuși deschis („neefectuat”) și le POARTĂ (reparația rundei 1), cele vechi și în `anterior`', () => {
+  const a = rec(null, { adaugate: 0, actualizate: 0, ambigue: [{ dn: 63, material: null, metri: 200 }] }, {}, 'A', acop([63]))
+  const e = rec(a, { eroare: 'transfer: două scrieri pe rândul TOTAL (id 4)' }, {}, 'E', acop([63], { complet: false }))
+  assertEquals([e.stare, deschis(e), e.conflicte.map((c: any) => c.tip)], ['neefectuat', true, ['transfer_eroare', 'nerezolvat_la_recitire']])
   assertEquals(e.anterior.conflicte[0].tip, 'ambiguu')
-  const am = rec(e, { amanat: '2 felii n-au putut fi citite' }, { nr_lipsa: [{ pagina: 1, interval: [1, 9], lipsesc: '4', n: 1 }] }, 'M')
-  assertEquals([am.stare, am.n, am.conflicte.map((x: any) => x.tip)], ['neefectuat', 2, ['transfer_amanat', 'nr_lipsa']])
+  const am = rec(e, { amanat: '2 felii n-au putut fi citite' }, { nr_lipsa: [{ pagina: 1, interval: [1, 9], lipsesc: '4', n: 1, zone: ['z1_1'] }], zone_cazute: ['z2_1'] }, 'M', null)
+  assertEquals([am.stare, am.n, am.conflicte.map((x: any) => x.tip)], ['neefectuat', 4, ['transfer_amanat', 'nr_lipsa', 'nerezolvat_la_recitire', 'nerezolvat_la_recitire']])
+  assertEquals(am.conflicte[0].ancore, { zone: ['z2_1'] })
   // lanțul nu crește: `anterior` fără propriul `anterior`; istoricul plafonat
   assertFalse('anterior' in am.anterior)
   let r: any = null
-  for (let i = 0; i < 15; i++) r = rec(r, { adaugate: 0, actualizate: 0, ambigue: [] }, {}, `X${i}`)
+  for (let i = 0; i < 15; i++) r = rec(r, { adaugate: 0, actualizate: 0, ambigue: [] }, {}, `X${i}`, acop([1]))
   assertEquals(r.istoric.length, MAX_ISTORIC)
   assertEquals(r.istoric[0].id, 'X13')
 })

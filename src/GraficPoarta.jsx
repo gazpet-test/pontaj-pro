@@ -229,7 +229,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   // (cod publicat înainte de migrare) => eroare_conflicte => „nu putem verifica sursa” (BLOCK), nu zero conflicte.
   const conflictePlanse = async () => {
     try {
-      const { data, error } = await supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, in_curs, token')
+      const { data, error } = await supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, in_curs, token, restante')
         .eq('licitatie_id', licitatieId)
       return error ? { data: [], error: error.message || String(error) } : { data: data || [], error: null }
     } catch (e) { return { data: [], error: e?.message || String(e) } }

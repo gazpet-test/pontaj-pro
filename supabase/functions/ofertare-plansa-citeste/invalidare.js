@@ -103,20 +103,30 @@ export const fmtRo = v => {
   const m = s < 0 ? -s : s, fr = String(m % BI(100)).padStart(2, '0').replace(/0+$/, '')
   return (s < 0 ? '-' : '') + grupeaza(String(m / BI(100))) + (fr ? ',' + fr : '')
 }
-// milionimi ≥ 0 → text ro-RO cu toate zecimalele semnificative (max. 6): 800000 → „0,8”; 1000 → „0,001”; 600000000 → „600”
-const fmtMilionimi = q => { const fr = String(q % BI(1000000)).padStart(6, '0').replace(/0+$/, ''); return grupeaza(String(q / BI(1000000))) + (fr ? ',' + fr : '') }
-// SEVERITATEA unei diferențe (doar pentru notă; nu decide nimic): „diferență mică: +0,8 m, +0,8 %” / „diferență mare: -600 m,
+// milionimi (cu semn) → text ro-RO cu toate zecimalele semnificative (max. 6): 800000 → „0,8”; 1000 → „0,001”; 600000000 → „600”
+const fmtMilionimi = q => {
+  const neg = q < BI(0), m = neg ? -q : q
+  const fr = String(m % BI(1000000)).padStart(6, '0').replace(/0+$/, '')
+  return (neg ? '-' : '') + grupeaza(String(m / BI(1000000))) + (fr ? ',' + fr : '')
+}
+// Reparația rundei 1 (verificatorul BD, minor „cifrele din notă”): cifrele din NOTA REGULII se scriu EXACT — valoarea canonică, cu toate
+// zecimalele semnificative (max. 6) —, nu pe 2 zecimale: „100 m → 100,000001 m”, „1,084 mc → 1,085 mc” (înainte „100 m → 100 m”,
+// „1,08 mc → 1,09 mc”, deci două cifre DIFERITE apăreau egale sau rotunjite). SQL: aceeași expresie în trigger (to_char pe round(x, 6)).
+export const fmtExact = v => { const q = valoareCanonica(v); return q === null ? '—' : fmtMilionimi(q) }
+// SEVERITATEA unei diferențe (doar pentru notă; nu decide nimic): „diferență mică: +0,8 m, +0,03 %” / „diferență mare: -600 m,
 // -4,37 %”. Mică = sub 1 % relativ ȘI, pe unitățile de lungime, sub 1 m absolut (pe buc / mp / mc / kg … doar pragul relativ).
-// |Δ| exact (valorile canonice, până la 6 zecimale — „+0,001 mc”, nu „+0 mc”); procentul rotunjit la 2 zecimale („sub 0,01 %” dacă
-// iese 0); față de 0 nu există procent (=> mare). Identic, octet cu octet, cu textul trigger-ului (docs/R5_MIGRARE_1b_prag_exact.sql).
-// Aceeași valoare / o cifră lipsă => ''.
+// |Δ| exact (valorile canonice, până la 6 zecimale — „+0,001 mc”, nu „+0 mc”); față de 0 nu există procent (=> mare). Identic, octet
+// cu octet, cu textul trigger-ului (docs/R5_MIGRARE_1b_prag_exact.sql). Aceeași valoare / o cifră lipsă => ''.
+// Reparația rundei 1 (verificatorul BD, minor „severitatea la limită”): pragul de 1 % se compară pe valoarea EXACTĂ (|Δ| × 100 < |a|,
+// aritmetică întreagă), nu pe procentul deja rotunjit (0,999 % dădea „diferență mare … +1 %”), iar procentul AFIȘAT e TRUNCHIAT la 2
+// zecimale (0,999 % => „0,99 %”): textul nu mai poate arăta pragul atins când diferența e sub el; 0 => „sub 0,01 %”.
 export function descrieDiferenta(vechi, nou, { lungime = true, unitate = 'm' } = {}) {
   const a = valoareCanonica(vechi), b = valoareCanonica(nou)
   if (a === null || b === null || a === b) return ''
   const d = b - a, ad = d < 0 ? -d : d, aa = a < 0 ? -a : a
   const semn = d > 0 ? '+' : '-'
-  const pct = aa === BI(0) ? null : imparteRotunjit(ad * BI(10000), aa)   // sutimi de procent
-  const mica = pct !== null && pct < BI(PRAG_SEVERITATE_PROCENT * 100) && (!lungime || ad < BI(PRAG_SEVERITATE_LUNGIME_M * 1000000))
+  const pct = aa === BI(0) ? null : (ad * BI(10000)) / aa   // sutimi de procent, TRUNCHIAT (BigInt: împărțire întreagă)
+  const mica = pct !== null && ad * BI(100) < aa * BI(PRAG_SEVERITATE_PROCENT) && (!lungime || ad < BI(PRAG_SEVERITATE_LUNGIME_M * 1000000))
   const tp = pct === null ? '' : pct === BI(0) ? ', sub 0,01 %' : `, ${semn}${fmtRo(Number(pct) / 100)} %`
   return `diferență ${mica ? 'mică' : 'mare'}: ${semn}${fmtMilionimi(ad)} ${unitate}${tp}`
 }
@@ -160,7 +170,7 @@ export function schimbariRelevante(vechi, patch, referinta = null) {
       extra = { unitati: pl ? ['m', 'm'] : [unitateAfisata(ref.um), unitateAfisata(nou.um)] }
       if (relevant && ea !== null && eb !== null && (pl || normUm(ref.um) === normUm(nou.um))) {
         extra.severitate = descrieDiferenta(ea, eb, { lungime: pl || esteUnitateLungime(nou.um), unitate: extra.unitati[1] }) +
-          (pl && (numar(r) === null || numar(b) === null) ? `, efectiv ${fmtRo(ea)} m → ${fmtRo(eb)} m` : '')
+          (pl && (numar(r) === null || numar(b) === null) ? `, efectiv ${fmtExact(ea)} m → ${fmtExact(eb)} m` : '')
       }
     } else if (camp === 'um') {
       // runda 6: normalizat (trim + lower + spații Unicode): „m” → „M” = doar formă; „m” → „ml” = relevant
@@ -181,9 +191,12 @@ export function schimbariRelevante(vechi, patch, referinta = null) {
   return { relevante, subPrag, derivate }
 }
 
-const scurt = (s, n = 60) => { const t = String(s ?? '—'); return t.length > n ? t.slice(0, n - 1) + '…' : t }
-// i = 0 (valoarea aprobată) / 1 (cea nouă); runda 1b: cifrele în unitatea lor (cantitatea: a rândului; cifra din planșă: m)
-const valoare = (x, v, i) => (CIFRE.has(x.camp) ? `${fmtRo(v)}${v == null ? '' : ' ' + (x.unitati?.[i] ?? 'm')}` : x.camp === 'licitatie_id' ? `#${v ?? '—'}` : `„${scurt(v ?? '—')}”`)
+// Reparația rundei 1 (verificatorul BD, minor „caractere astrale”): tăierea pe PUNCTE DE COD (Array.from), ca left() / length() din SQL —
+// pe unități UTF-16 un emoji la poziția 59–60 lăsa un surogat singur („�”), iar PostgREST poate refuza scrierea.
+const scurt = (s, n = 60) => { const t = String(s ?? '—'), cp = Array.from(t); return cp.length > n ? cp.slice(0, n - 1).join('') + '…' : t }
+// i = 0 (valoarea aprobată) / 1 (cea nouă); runda 1b: cifrele în unitatea lor (cantitatea: a rândului; cifra din planșă: m);
+// reparația rundei 1: cifrele EXACT (fmtExact, max. 6 zecimale), nu pe 2 zecimale
+const valoare = (x, v, i) => (CIFRE.has(x.camp) ? `${fmtExact(v)}${v == null ? '' : ' ' + (x.unitati?.[i] ?? 'm')}` : x.camp === 'licitatie_id' ? `#${v ?? '—'}` : `„${scurt(v ?? '—')}”`)
 export function descrieSchimbari({ relevante, derivate }) {
   const d = (derivate || []).map(x => `${x.eticheta} ${x.vechi ?? '—'} → ${x.nou ?? '—'}`)
   const c = (relevante || []).map(x => `${x.eticheta} (${valoare(x, x.vechi, 0)} → ${valoare(x, x.nou, 1)}${x.severitate ? '; ' + x.severitate : ''})`)
@@ -192,8 +205,8 @@ export function descrieSchimbari({ relevante, derivate }) {
 // momentul în UTC, „AAAA-LL-ZZ HH:MM” (ca to_char(… AT TIME ZONE 'UTC') din SQL), oricare ar fi fusul din text
 const momentUtc = t => { const d = new Date(t); return Number.isNaN(d.getTime()) ? String(t).slice(0, 16).replace('T', ' ') : d.toISOString().slice(0, 16).replace('T', ' ') }
 export function descrieAprobareaVeche(v) {
-  const p = [`cantitate ${fmtRo(v?.cantitate)}${v?.cantitate == null ? '' : ' ' + (v?.um || 'm')}`]
-  if (v?.cantitate_plansa != null) p.push(`cifra din planșă ${fmtRo(v.cantitate_plansa)} m`)
+  const p = [`cantitate ${fmtExact(v?.cantitate)}${v?.cantitate == null ? '' : ' ' + (v?.um || 'm')}`]
+  if (v?.cantitate_plansa != null) p.push(`cifra din planșă ${fmtExact(v.cantitate_plansa)} m`)
   if (v?.updated_at) p.push(`ultima scriere ${momentUtc(v.updated_at)}`)
   return p.join(', ')
 }
@@ -213,7 +226,15 @@ export const prefixInvalidare = nota => {
 }
 // scoate un prefix de invalidare anterior (să nu se adune la fiecare ciclu validare → schimbare)
 export const faraPrefixVechi = nota => { const s = String(nota ?? ''), pre = prefixInvalidare(s); return pre ? s.slice(pre.length).replace(/^ +/, '') : s }
+// Reparația rundei 1 (verificatorul BD, minor „nota pe drumul fără aplicație”): când SINGURA schimbare relevantă e cifra din planșă
+// (observația-candidat a unei citiri — cantitatea aprobată, unitatea și textele au rămas), nota spune „de reverificat — o citire nouă
+// nu infirmă aprobarea”, nu „aprobarea … nu mai e valabilă” (Copilot: conflictul / cifra unei recitiri justifică reverificarea, nu
+// concluzia că aprobarea umană era greșită). Statusul trece tot pe „diferenta”; prefixul și terminatorul rămân (prefixInvalidare).
+// SQL: aceeași ramură în trigger (v_rel_c = {cantitate_plansa}), nota octet cu octet (setul comun src/ofertareCantitati1b.cazuri.js).
+export const doarObservatiePlansa = sch => (sch?.relevante || []).length === 1 && sch.relevante[0].camp === 'cantitate_plansa' && !(sch.derivate || []).length
 export function notaInvalidare(aprobat, sch, notaNoua) {
+  if (doarObservatiePlansa(sch)) return `${PREFIX_INVALIDARE} (${descrieAprobareaVeche(aprobat)}) e de reverificat: s-a schimbat ${descrieSchimbari(sch)} — ` +
+    `o citire nouă a planșei nu infirmă aprobarea. Valoarea și aprobarea veche rămân în rând și în istoric; validarea se reface. ` + faraPrefixVechi(notaNoua)
   return `${PREFIX_INVALIDARE} (${descrieAprobareaVeche(aprobat)}) nu mai e valabilă: s-a schimbat ${descrieSchimbari(sch)}. ` +
     `Valoarea și aprobarea veche rămân în istoric; validarea se reface. ` + faraPrefixVechi(notaNoua)
 }

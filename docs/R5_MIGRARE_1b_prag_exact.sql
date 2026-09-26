@@ -35,6 +35,18 @@
 --   4) motivul 'modificat_sub_prag' rămâne (e în CHECK-ul tabelului și în view-ul propus) — din 1b înseamnă „doar formă”: texte cu
 --      majuscule / spații, unitatea „m” → „M”, cifre egale canonic (ex. 100 → 100,000 nu e nici măcar scriere distinctă; zgomot de
 --      virgulă mobilă sub 6 zecimale). Nicio cifră cu altă valoare nu mai ajunge acolo.
+--   5) REPARAȚIA RUNDEI 1 (verificatorul BD, minorii „severitatea la limită”, „cifrele din notă”, „caractere astrale”, „nota pe drumul fără
+--      aplicație”; setul comun src/ofertareCantitati1b.cazuri.js: 43 de cazuri, nota SQL = JS octet cu octet):
+--      a) pragul de 1 % se compară pe valoarea EXACTĂ (|Δ| × 100 < |a|, aritmetică întreagă), iar procentul AFIȘAT e TRUNCHIAT la 2
+--         zecimale (div pe pozitive): 0,999 % => „diferență mică … +0,99 %” (înainte „diferență mare … +1 %”, decis pe procentul rotunjit);
+--      b) cifrele din notă (aprobarea veche, schimbarea, „efectiv”) EXACTE — valoarea canonică cu toate zecimalele semnificative, max. 6
+--         (to_char pe round(x, 6)): „100 m → 100,000001 m”, „1,084 mc → 1,085 mc” (înainte „100 m → 100 m”, „1,08 mc → 1,09 mc”);
+--      c) tăierea textelor la 60 de caractere rămâne pe caractere (left / length — puncte de cod); JS-ul a fost aliniat (Array.from), ca să
+--         nu mai lase un surogat singur;
+--      d) când SINGURA schimbare relevantă e cifra din planșă (observația unei citiri — cantitatea aprobată, unitatea, textele au rămas),
+--         nota spune „aprobarea veche (…) e de reverificat: s-a schimbat cifra din planșă (…) — o citire nouă a planșei nu infirmă
+--         aprobarea. Valoarea și aprobarea veche rămân în rând și în istoric; validarea se reface.” (Copilot: recitirea justifică
+--         reverificarea, nu concluzia că aprobarea umană era greșită). Statusul tot „diferenta”; prefixul și terminatorul — neschimbate.
 -- Roluri (neschimbat, acum strict): `cantitate` = valoarea aprobată / folosită în ofertă; `cantitate_plansa` = observația-candidat a
 -- citirii. O observație diferită de cea aprobată scoate rândul pe „diferenta” („de reverificat”); valoarea aprobată rămâne în rând
 -- (transferul / CAD nu scriu `cantitate` pe un rând validat), în notă (prefixul numește aprobarea veche) și în istoric.
@@ -157,13 +169,14 @@ BEGIN
           v_dmu := (round(eb, 6) - round(ea, 6)) * 1000000;   -- Δ în milionimi (întreg exact)
           v_amu := abs(round(ea, 6)) * 1000000;
           v_semn := CASE WHEN v_dmu > 0 THEN '+' ELSE '-' END;
-          v_pct := CASE WHEN v_amu = 0 THEN NULL ELSE div(2 * abs(v_dmu) * 10000 + v_amu, 2 * v_amu) END;   -- sutimi de procent, jumătatea în sus
+          -- reparația rundei 1: procentul AFIȘAT e TRUNCHIAT (div pe pozitive = floor), pragul se compară pe valoarea exactă (mai jos)
+          v_pct := CASE WHEN v_amu = 0 THEN NULL ELSE div(abs(v_dmu) * 10000, v_amu) END;   -- sutimi de procent, trunchiat
           -- |Δ| exact, cu toate zecimalele semnificative (max. 6): „+0,8”, „+0,001”, „-1.110” (ca fmtMilionimi din JS)
-          v_sev := 'diferență ' || CASE WHEN v_pct < 100 AND (NOT v_lung OR abs(v_dmu) < 1000000) THEN 'mică' ELSE 'mare' END || ': ' || v_semn ||
+          v_sev := 'diferență ' || CASE WHEN v_amu > 0 AND abs(v_dmu) * 100 < v_amu AND (NOT v_lung OR abs(v_dmu) < 1000000) THEN 'mică' ELSE 'mare' END || ': ' || v_semn ||
                    rtrim(rtrim(translate(to_char(abs(v_dmu) / 1000000, 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ',') || ' ' || v_u_nou ||
                    CASE WHEN v_pct IS NULL THEN '' WHEN v_pct = 0 THEN ', sub 0,01 %' ELSE ', ' || v_semn || public.ofertare_fmt_ro(v_pct / 100) || ' %' END ||
                    CASE WHEN k = 'cantitate_plansa' AND (nr IS NULL OR nb IS NULL)
-                        THEN ', efectiv ' || public.ofertare_fmt_ro(ea) || ' m → ' || public.ofertare_fmt_ro(eb) || ' m' ELSE '' END;
+                        THEN ', efectiv ' || coalesce(rtrim(rtrim(translate(to_char(round(ea, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m → ' || coalesce(rtrim(rtrim(translate(to_char(round(eb, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m' ELSE '' END;
         END IF;
       END IF;
     ELSIF k = 'um' THEN   -- unitatea NORMALIZATĂ (ca normUm din JS și filtrele de rețea ale view-ului / v6)
@@ -179,10 +192,10 @@ BEGIN
     IF v_rel THEN
       v_rel_c := v_rel_c || k;
       v_desc := v_desc || format('%s (%s → %s%s)', c_etichete ->> k,
-        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN public.ofertare_fmt_ro(r::numeric) || CASE WHEN r IS NULL THEN '' ELSE ' ' || v_u_vechi END
+        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN coalesce(rtrim(rtrim(translate(to_char(round(r::numeric, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || CASE WHEN r IS NULL THEN '' ELSE ' ' || v_u_vechi END
              WHEN k = 'licitatie_id' THEN '#' || coalesce(r, '—')
              ELSE '„' || CASE WHEN length(coalesce(r, '—')) > 60 THEN left(coalesce(r, '—'), 59) || '…' ELSE coalesce(r, '—') END || '”' END,
-        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN public.ofertare_fmt_ro(b::numeric) || CASE WHEN b IS NULL THEN '' ELSE ' ' || v_u_nou END
+        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN coalesce(rtrim(rtrim(translate(to_char(round(b::numeric, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || CASE WHEN b IS NULL THEN '' ELSE ' ' || v_u_nou END
              WHEN k = 'licitatie_id' THEN '#' || coalesce(b, '—')
              ELSE '„' || CASE WHEN length(coalesce(b, '—')) > 60 THEN left(coalesce(b, '—'), 59) || '…' ELSE coalesce(b, '—') END || '”' END,
         CASE WHEN v_sev IS NULL THEN '' ELSE '; ' || v_sev END);
@@ -211,9 +224,13 @@ BEGIN
       IF v_nota LIKE 'Rândul era VALIDAT%' AND strpos(v_nota, c_final) > 0 THEN
         v_nota := ltrim(substr(v_nota, strpos(v_nota, c_final) + length(c_final)));
       END IF;
-      v_nota := format('%s (cantitate %s%s%s%s) nu mai e valabilă: s-a schimbat %s. Valoarea și aprobarea veche rămân în istoric; %s ',
-                  c_prefix, public.ofertare_fmt_ro(v_ref_cant), CASE WHEN v_ref_cant IS NULL THEN '' ELSE ' ' || coalesce(nullif(v_ref_um, ''), 'm') END,
-                  CASE WHEN v_ref_cp IS NULL THEN '' ELSE ', cifra din planșă ' || public.ofertare_fmt_ro(v_ref_cp) || ' m' END,
+      -- reparația rundei 1: cifrele aprobate EXACT (max. 6 zecimale); SINGURA schimbare relevantă = cifra din planșă (observația unei
+      -- citiri) => „e de reverificat … o citire nouă a planșei nu infirmă aprobarea” (pereche cu notaInvalidare / doarObservatiePlansa)
+      v_nota := format(CASE WHEN v_rel_c = ARRAY['cantitate_plansa'] AND cardinality(v_der) = 0
+                  THEN '%s (cantitate %s%s%s%s) e de reverificat: s-a schimbat %s — o citire nouă a planșei nu infirmă aprobarea. Valoarea și aprobarea veche rămân în rând și în istoric; %s '
+                  ELSE '%s (cantitate %s%s%s%s) nu mai e valabilă: s-a schimbat %s. Valoarea și aprobarea veche rămân în istoric; %s ' END,
+                  c_prefix, coalesce(rtrim(rtrim(translate(to_char(round(v_ref_cant, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—'), CASE WHEN v_ref_cant IS NULL THEN '' ELSE ' ' || coalesce(nullif(v_ref_um, ''), 'm') END,
+                  CASE WHEN v_ref_cp IS NULL THEN '' ELSE ', cifra din planșă ' || coalesce(rtrim(rtrim(translate(to_char(round(v_ref_cp, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m' END,
                   CASE WHEN v_ref_upd IS NULL THEN '' ELSE ', ultima scriere ' || to_char(v_ref_upd AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') END,
                   array_to_string(v_der || v_desc, '; '), c_final) || v_nota;
       NEW.status := 'diferenta';

@@ -25,6 +25,7 @@ export const REGEX_INTERZICE_CUMUL = String.raw`(cumul\w*\s+(de\s+)?(mai\s+multe
 
 // R5 sarcina 2 (d): mesajele de lipsă grupate pe unitate (fără „X m” peste unități diferite)
 import { grupeDinView, textCantitatiPeUnitati } from './ofertareCantitatiAprobare.js'
+import { NOTA_LUNGIMI, textRestante } from './ofertareTransferRestante.js'
 const num = v => (v == null || v === '') ? null : Number(v)
 const fmt = n => Math.round(n).toLocaleString('ro-RO')
 const rel = (a, b) => a ? Math.abs(b - a) / a : (b ? Infinity : 0)
@@ -72,9 +73,13 @@ export function controlCantitati(x) {
     `totalurile din v_ofertare_pt_stare (F3 / memoriu / planșe) nu le cuprind; scrie „m” în 📋 Cantități` : ''
   // R5 sarcina 2 (a) (Copilot: „nimic scris ≠ nicio problemă”): planșele cu conflicte de transfer DESCHISE — sursa informativă (planșele)
   // e incompletă chiar dacă niciun rând nu e nevalidat => niciun „ok” verde: WARN „INCOMPLET, de reverificat” (ca rândurile fără tip).
+  // Reparația rundei 1 (ADDENDUM 2 Copilot, a / b / d): WARN aici e pentru lucrul intermediar; APROBAREA FINALĂ o blochează rândul
+  // „sursa_cantitati” din poartă (ofertarePoarta.js) + trigger-ul pachetului în BD. Restanțele sunt numite DISTINCT, cu acțiunea lor;
+  // lungimile din conflicte nu sunt „metri lipsă”.
   const tcd = num(x.transfer_conflicte_docs), tcn = num(x.transfer_conflicte_n), tic = num(x.transfer_in_curs)
-  const txtTc = tcd > 0 ? ` · INCOMPLET, de reverificat — sursă incompletă: ${tcn === 1 ? '1 conflict nerezolvat' : `${tcn} conflicte nerezolvate`} la transferul din ${tcd === 1 ? '1 planșă' : `${tcd} planșe`}` +
-    `${x.transfer_conflicte_lista ? ` (${x.transfer_conflicte_lista})` : ''} — nescrise în cantități; recitește planșa sau confirmă explicit (✋) în Documente` : ''
+  const tcRest = textRestante(x.transfer_restante)
+  const txtTc = tcd > 0 ? ` · INCOMPLET, de reverificat — sursă incompletă: ${tcn === 1 ? '1 restanță deschisă' : `${tcn} restanțe deschise`} la transferul din ${tcd === 1 ? '1 planșă' : `${tcd} planșe`}` +
+    `${x.transfer_conflicte_lista ? ` (${x.transfer_conflicte_lista})` : ''}${tcRest ? ` — ${tcRest}` : ''} — nescrise în cantități (${NOTA_LUNGIMI}); recitește planșa sau confirmă explicit (✋) în Documente; aprobarea finală rămâne blocată până atunci` : ''
   const txtTic = tic > 0 ? ` · transfer din planșă în curs (${tic}) — reîncarcă după ce se termină` : ''
   // R5 sarcina 2 (c): view-ul n-a putut fi citit (eroare / inexistent — de ex. codul publicat înainte de migrare) => „nu putem verifica”
   // cantitățile nevalidate și sursa (planșele), BLOCK — oricare ar fi F3 (și când lipsește). Nu „zero restanțe”.

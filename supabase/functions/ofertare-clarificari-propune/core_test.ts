@@ -118,14 +118,25 @@ Deno.test('sarcina 2: conflictele transferului fără rând intră în prompt; v
     try { await propuneClarificari(supa, { licitatie_id: 95, dry_run: true }) } finally { globalThis.fetch = fetchVechi }
     return JSON.parse(corp).messages[0].content as string
   }
-  // doc 470 (lic. 95): derivarea legacy de azi = 2 conflicte deschise (Dn60 nestandard, adnotări pe Dn absent), zero rânduri
-  const m = await rulare({ v_ofertare_transfer_conflicte: [{ document_id: 470, nume_original: 'Schema tehnologica Valcelele alimentare din Stefan Voda.pdf', stare: 'conflicte', n: 2, deschis: true,
-    conflicte: [{ tip: 'dn_nestandard', text: 'Dn nestandard Dn60: 110 m — NU intră în cantități (de verificat Dn-ul pe planșă)' }] },
-    { document_id: 471, nume_original: 'PL5.pdf', stare: 'fara_conflicte', n: 0, deschis: false }] })
-  assert(m.includes('CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE (2 pe 1 planșe; NESCRISE în cantități'), m.slice(m.indexOf('CONFLICTE'), m.indexOf('CONFLICTE') + 160))
-  assert(m.includes('Dn nestandard Dn60: 110 m'))
-  assertFalse(m.includes('PL5.pdf'), 'cele închise nu intră')
+  // doc 470 (lic. 95): după migrarea 2 (reparația rundei 1) — Dn60 nestandard, adnotări pe Dn absent, evaluare parțială (cod vechi);
+  // 471: legacy_partial; 472: fără conflicte (închis)
+  const m = await rulare({ v_ofertare_transfer_conflicte: [{ document_id: 470, nume_original: 'Schema tehnologica Valcelele alimentare din Stefan Voda.pdf', stare: 'conflicte', n: 3, deschis: true,
+    restante: [{ tip: 'adnotari_dn_absent', n: 1 }, { tip: 'dn_nestandard', n: 1 }, { tip: 'evaluare_partiala', n: 1 }] },
+    { document_id: 471, nume_original: 'PL5.pdf', stare: 'legacy_partial', n: 1, deschis: true, restante: [{ tip: 'evaluare_partiala', n: 1 }] },
+    { document_id: 472, nume_original: 'PL4.pdf', stare: 'fara_conflicte', n: 0, deschis: false, restante: [] }] })
+  const sec = m.slice(m.indexOf('STAREA TRANSFERULUI'), m.indexOf('STAREA TRANSFERULUI') + 2000)
+  // ADDENDUM 2 Copilot (b): restanțe DISTINCTE, fiecare cu cauza și acțiunea; NICIUNA ca întrebare pentru autoritate
+  assert(sec.startsWith('STAREA TRANSFERULUI DIN PLANȘE — RESTANȚE INTERNE ALE OFERTANTULUI (4 pe 2 planșe; NESCRISE în cantități). NU formula clarificări către autoritate din ele'), sec.slice(0, 200))
+  assert(sec.includes('"restanta":"evaluare parțială (cod vechi)","n":2') && sec.includes('eroare internă de procesare — NU e o problemă a documentației'), sec)
+  assert(sec.includes('"restanta":"Dn nestandard (în afara catalogului)","n":1,"cauza":"Dn citit care nu e în catalogul nostru de diametre — NU înseamnă că diametrul e imposibil"'), sec)
+  assert(sec.includes('"restanta":"adnotări fără corespondent în tabel"') && sec.includes('NU neapărat un tronson suplimentar'), sec)
+  assert(sec.includes('lungimile din conflicte sunt observații pe planșă (pot fi suprapuse), nu metri lipsă'), sec)
+  assertFalse(/pot justifica o clarificare/.test(m), 'înainte: „pot justifica o clarificare de tip C” pentru toată lista')
+  assertFalse(m.includes('PL4.pdf'), 'cele închise nu intră')
   const e = await rulare({}, { v_ofertare_transfer_conflicte: 'relation "public.v_ofertare_transfer_conflicte" does not exist' })
-  assert(e.includes('CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE: NU AU PUTUT FI CITITE (relation "public.v_ofertare_transfer_conflicte" does not exist) — nu presupune că nu există'))
-  assertEquals(sectiuneConflictePlanse({ data: [], error: null }), 'CONFLICTE NEREZOLVATE LA TRANSFERUL DIN PLANȘE: niciunul deschis.')
+  assert(e.includes('STAREA TRANSFERULUI DIN PLANȘE (verificare INTERNĂ): NU A PUTUT FI CITITĂ (relation "public.v_ofertare_transfer_conflicte" does not exist) — nu presupune că nu există restanțe'))
+  assertEquals(sectiuneConflictePlanse({ data: [], error: null }), 'STAREA TRANSFERULUI DIN PLANȘE (verificare INTERNĂ): nicio restanță deschisă.')
+  // transfer amânat (eroare internă de procesare) — NU e prezentat ca problemă a documentației
+  const am = sectiuneConflictePlanse({ data: [{ document_id: 1, nume_original: 'PL1.pdf', stare: 'neefectuat', n: 1, deschis: true, restante: [{ tip: 'transfer_amanat', n: 1 }] }], error: null })
+  assert(am.includes('eroare internă de procesare — NU e o problemă a documentației: [{"restanta":"transfer amânat"') && am.includes('nu e o contradicție a documentației'), am)
 })

@@ -30,10 +30,10 @@ describe('sarcina 2 (a): conflict FĂRĂ rând, cu toate rândurile validate —
     const g = poarta({ ...SURSA_OK, conflicte: [CONFLICT_130] })
     const cant = rand(g, 'cant'), front = rand(g, 'front')
     expect(cant.stare).toBe('block')
-    expect(cant.detalii).toBe('2 rânduri rețea, toate validate · sursă incompletă: 2 conflicte nerezolvate la transferul din 1 planșă („8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf” (2)) — ' +
-      'nescrise în cantități, deci neaprobate de nimeni; recitește planșa sau confirmă explicit (✋ „confirmă conflictele”) în Documente')
+    expect(cant.detalii).toBe('2 rânduri rețea, toate validate · sursă incompletă: 2 restanțe deschise la transferul din 1 planșă („8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf” (2)) — ' +
+      'nescrise în cantități, deci neaprobate de nimeni (lungimile din conflicte sunt observații pe planșă (pot fi suprapuse), nu metri lipsă); recitește planșa sau confirmă explicit (✋ rezolvare / excepție justificată) în Documente')
     expect([front.stare, front.incomplet]).toEqual(['warn', true])
-    expect(front.detalii).toMatch(/^INCOMPLET, de reverificat — sursă incompletă: 2 conflicte/)
+    expect(front.detalii).toMatch(/^INCOMPLET, de reverificat — sursă incompletă: 2 restanțe/)
   })
   it('conflictul CONFIRMAT de om / închis prin recitire (deschis=false) => nu mai blochează; transferul în curs => blochează până se termină', () => {
     expect(rand(poarta({ ...SURSA_OK, conflicte: [{ ...CONFLICT_130, deschis: false, stare: 'conflicte' }] }), 'cant').stare).toBe('ok')
@@ -43,7 +43,7 @@ describe('sarcina 2 (a): conflict FĂRĂ rând, cu toate rândurile validate —
   it('„Propune din cantități” numește sursa incompletă (fronturile nu sunt prezentate drept complete)', () => {
     const f = fronturiDinCantitati(VALIDATE, '', { ...SURSA_OK, conflicte: [CONFLICT_130] })
     expect(f.fronturi).toHaveLength(2)
-    expect(f.text_sursa).toMatch(/^sursă incompletă: 2 conflicte nerezolvate/)
+    expect(f.text_sursa).toMatch(/^sursă incompletă: 2 restanțe deschise/)
     expect(fronturiDinCantitati(VALIDATE, '', SURSA_OK).text_sursa).toBe('')
   })
   it('H2: F3 validată = fronturi, 0 rânduri nevalidate, dar o planșă cu conflicte deschise => WARN „INCOMPLET” (nu ok); evalueazaPoarta: rezervă, nu verde', () => {
@@ -52,8 +52,9 @@ describe('sarcina 2 (a): conflict FĂRĂ rând, cu toate rândurile validate —
       transfer_conflicte_docs: 1, transfer_conflicte_n: 2, transfer_conflicte_lista: '8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf (2)', transfer_in_curs: 0 }, error: null }) }
     const h = controlCantitati(st)
     expect(h.stare).toBe('warn')
-    expect(h.detalii).toBe('700 m în F3 și în grafic · INCOMPLET, de reverificat — sursă incompletă: 2 conflicte nerezolvate la transferul din 1 planșă ' +
-      '(8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf (2)) — nescrise în cantități; recitește planșa sau confirmă explicit (✋) în Documente')
+    expect(h.detalii).toBe('700 m în F3 și în grafic · INCOMPLET, de reverificat — sursă incompletă: 2 restanțe deschise la transferul din 1 planșă ' +
+      '(8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf (2)) — nescrise în cantități (lungimile din conflicte sunt observații pe planșă (pot fi suprapuse), nu metri lipsă); ' +
+      'recitește planșa sau confirmă explicit (✋) în Documente; aprobarea finală rămâne blocată până atunci')
     expect(controlCantitati({ ...st, transfer_conflicte_docs: 0, transfer_conflicte_n: 0 }).stare).toBe('ok')
   })
 })
@@ -115,5 +116,100 @@ describe('sarcina 2 (d): unitățile — fără „X m” peste unități diferi
     // rețeaua fără tip, cu un rând fără cantitate: „(48.195 m; 1 poziție fără cantitate determinată)”, nu „6 rânduri (48.195 m)”
     const ft = controlCantitati({ ...baza, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: 48195, fara_tip_nevalidate_fara_cant: 1 })
     expect(ft.detalii).toMatch(/6 rânduri de rețea fără tip de sursă, nevalidate \(48\.195 m; 1 poziție fără cantitate determinată\)/)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+// R5 — REPARAȚIA RUNDEI 1 (verificatorii + ADDENDUM 2 Copilot, 26.09.2026)
+// ════════════════════════════════════════════════════════════════
+import { controlSursaAprobareFinala } from './ofertarePoarta.js'
+import { RESTANTE, restantePeTip as restPeTip, textRestante } from './ofertareTransferRestante.js'
+import { readFileSync } from 'node:fs'
+// poarta propunerii „verde” (toate celelalte rânduri ok) — ca în ofertarePoarta.test.js
+const VERDE = { capitole: 5, fara_capitol: 0, de_raspuns: 10, cu_capitol: 10, cerinte_neverificate: 0, cerinte_neconfirmate_cu_capitol: 0,
+  documentatie_verificata: true, documentatie_blocaj: null, capcane: 0, capcane_descoperite: 0, capitole_goale: 0, capitole_nu_e_cazul: 0,
+  afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0, capitole_nescrise_de_om: 0, observatii_deschise: 0, documente: 4, documente_necitite: 0,
+  grafic_versiune: 1, grafic_avertismente: 0, lista_f3_m: 700, grafic_fronturi_m: 700 }
+const VIEW_OK = { licitatie_id: 3, lista_f3_nevalidate: 0, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0,
+  um_de_normalizat: 0, transfer_conflicte_docs: 0, transfer_conflicte_n: 0, transfer_in_curs: 0, transfer_restante: {} }
+
+describe('reparația rundei 1 — ADDENDUM 2 Copilot, testul final 1: toate cantitățile validate + conflict relevant DESCHIS => aprobarea finală BLOCATĂ, chiar dacă H2 e WARN', () => {
+  it('H2 = WARN (lucru intermediar), rândul „sursa_cantitati” = BLOCK => poarta (semnarea „gata de depus” + aprobarea pachetului) blocată', () => {
+    const st = { ...VERDE, ...campuriCantitatiNevalidate({ data: { ...VIEW_OK, transfer_conflicte_docs: 1, transfer_conflicte_n: 3,
+      transfer_conflicte_lista: 'Schema tehnologica Valcelele.pdf (3)', transfer_restante: { dn_nestandard: 1, adnotari_dn_absent: 1, evaluare_partiala: 1 } }, error: null }) }
+    const ev = evalueazaPoarta(st)
+    expect(ev.randuri.find(r => r.k === 'cantitati').stare).toBe('warn')
+    const sc = ev.randuri.find(r => r.k === 'sursa_cantitati')
+    expect(sc.stare).toBe('block')
+    expect(sc.detalii).toMatch(/^3 restanțe deschise la transferul din 1 planșă \(Schema tehnologica Valcelele\.pdf \(3\)\) — evaluare parțială \(cod vechi\) ×1 \(reevaluează/)
+    expect(sc.detalii).toMatch(/Dn nestandard \(în afara catalogului\) ×1 \(verifică pe planșă și în catalog/)
+    expect(ev.stare).toBe('block')   // OfertarePropunere: aprobaPachet / semneaza refuză pe ev.stare === 'block'
+    // după confirmarea (rezolvare / excepție justificată) — view-ul nu mai numără documentul => poarta verde
+    const ev2 = evalueazaPoarta({ ...VERDE, ...campuriCantitatiNevalidate({ data: VIEW_OK, error: null }) })
+    expect([ev2.randuri.find(r => r.k === 'sursa_cantitati').stare, ev2.blocaje]).toEqual(['ok', []])   // restul rândurilor (garanție …) sunt rezerve ale fixture-ului
+  })
+  it('transfer în curs (impact nestabilit) => BLOCK; câmpurile transfer_* absente (view vechi) => BLOCK „nu putem verifica”', () => {
+    expect(controlSursaAprobareFinala({ transfer_conflicte_docs: 0, transfer_in_curs: 1 }).stare).toBe('block')
+    expect(controlSursaAprobareFinala({ lista_f3_nevalidate: 0 })).toMatchObject({ stare: 'block', detalii: expect.stringMatching(/^nu putem verifica restanțele/) })
+  })
+})
+
+describe('reparația rundei 1 — ADDENDUM 2 Copilot, testul final 2: view indisponibil + utilizatorul confirmă avertismentul => draft permis; aprobarea finală BLOCATĂ', () => {
+  it('draftul continuă (fronturile propuse, cu avertismentul numit); poarta finală blocată de H2 ȘI de „sursa_cantitati”', () => {
+    // draft: „Propune din cantități” merge pe rândurile validate, cu textul „nu putem verifica” (omul îl vede și continuă pe parametri)
+    const f = fronturiDinCantitati(VALIDATE, '', null)
+    expect(f.fronturi).toHaveLength(2)
+    expect(f.text_sursa).toMatch(/^nu putem verifica sursa cantităților/)
+    // editorul de cantități: confirmarea explicită e în OfertareCantitati.saveC (istoric indisponibil => window.confirm) — codul e în sursă
+    const ed = readFileSync(new URL('./OfertareCantitati.jsx', import.meta.url), 'utf8')
+    expect(ed).toMatch(/if \(ra\.eroare && !window\.confirm\(`Nu putem verifica valoarea APROBATĂ a rândului/)
+    // aprobarea finală: blocată
+    const st = { ...VERDE, ...campuriCantitatiNevalidate({ data: null, error: { message: 'relation "public.v_ofertare_cantitati_nevalidate" does not exist' } }) }
+    const ev = evalueazaPoarta(st)
+    expect([ev.randuri.find(r => r.k === 'cantitati').stare, ev.randuri.find(r => r.k === 'sursa_cantitati').stare, ev.stare]).toEqual(['block', 'block', 'block'])
+    expect(ev.randuri.find(r => r.k === 'sursa_cantitati').detalii).toMatch(/draftul poate continua, aprobarea finală rămâne blocată/)
+  })
+})
+
+describe('reparația rundei 1 — restanțele DISTINCTE (ADDENDUM 2 Copilot, b) și lungimile „nu metri lipsă” (d)', () => {
+  it('fiecare tip scris de handler / SQL are cauză, acțiune și categorie; niciunul nu e întrebare pentru autoritate', () => {
+    const tipuri = ['transfer_eroare', 'transfer_amanat', 'transfer_intrerupt', 'necunoscut', 'evaluare_partiala', 'nerezolvat_la_recitire', 'ambiguu', 'total_ambiguu',
+      'de_verificat', 'identitate', 'identitate_incerta', 'nr_lipsa', 'nr_fara_lungime', 'fara_dn', 'dn_nestandard', 'adnotari_dn_absent']
+    expect(Object.keys(RESTANTE).sort()).toEqual([...tipuri].sort())
+    for (const t of tipuri) expect(RESTANTE[t].cauza && RESTANTE[t].actiune && ['procesare_interna', 'decizie_interna', 'verificare_plansa'].includes(RESTANTE[t].categorie)).toBeTruthy()
+    // transfer amânat ≠ contradicție a autorității; Dn nestandard ≠ diametru imposibil; adnotare ≠ tronson suplimentar
+    expect(RESTANTE.transfer_amanat.categorie).toBe('procesare_interna')
+    expect(RESTANTE.dn_nestandard.cauza).toMatch(/NU înseamnă că diametrul e imposibil/)
+    expect(RESTANTE.adnotari_dn_absent.cauza).toMatch(/NU neapărat un tronson suplimentar/)
+  })
+  it('textul: pe tip, cu acțiunea; docs fără `restante` (view vechi) nu inventează un tip', () => {
+    const docs = [{ deschis: true, n: 3, restante: [{ tip: 'dn_nestandard', n: 1 }, { tip: 'adnotari_dn_absent', n: 1 }, { tip: 'evaluare_partiala', n: 1 }] },
+      { deschis: true, n: 1, restante: [{ tip: 'evaluare_partiala', n: 1 }] }, { deschis: false, n: 2, restante: [{ tip: 'ambiguu', n: 2 }] }, { deschis: true, n: 5 }]
+    expect(restPeTip(docs)).toEqual({ dn_nestandard: 1, adnotari_dn_absent: 1, evaluare_partiala: 2 })
+    expect(textRestante(restPeTip(docs))).toBe('evaluare parțială (cod vechi) ×2 (reevaluează cu codul nou pe citirea salvată (fără cost AI) sau confirmă explicit); ' +
+      'adnotări fără corespondent în tabel ×1 (verifică pe planșă dacă adnotarea corespunde unui rând din tabel); Dn nestandard (în afara catalogului) ×1 (verifică pe planșă și în catalog; corectează citirea sau adaugă Dn-ul)')
+  })
+  it('poarta graficului: textul sursei nu mai spune „conflicte” fără cauză și nu adună lungimile ca metri lipsă', () => {
+    const g = poarta({ ...SURSA_OK, conflicte: [{ ...CONFLICT_130, n: 3, restante: [{ tip: 'dn_nestandard', n: 1 }, { tip: 'adnotari_dn_absent', n: 1 }, { tip: 'evaluare_partiala', n: 1 }] }] })
+    const d = rand(g, 'cant').detalii
+    expect(d).toMatch(/3 restanțe deschise .* — evaluare parțială \(cod vechi\) ×1 .*; adnotări fără corespondent în tabel ×1 .*; Dn nestandard \(în afara catalogului\) ×1/)
+    expect(d).toMatch(/lungimile din conflicte sunt observații pe planșă \(pot fi suprapuse\), nu metri lipsă/)
+    expect(d).not.toMatch(/\d m lips/)
+  })
+})
+
+describe('reparația rundei 1 — verificatorul UI, minor: cantitățile din mesajele de lipsă sunt EXACTE (0,004 mc nu mai apare „0 mc”)', () => {
+  it('textCantitatiPeUnitati / textLipsa: 0,004 mc => „0,004 mc”; 0,004 km => „0,004 km”', () => {
+    expect(textCantitatiPeUnitati(grupeDinRanduri([{ um: 'mc', cantitate: 0.004 }]))).toBe('0,004 mc')
+    expect(textCantitatiPeUnitati(grupeDinRanduri([{ um: 'km', cantitate: 0.004 }, { um: 'm', cantitate: 12.3456 }]))).toBe('lungimi 0,004 km + 12,3456 m')
+    const L = { lipsa: [{ id: 9, denumire: 'Beton', status: 'extras', um: 'mc', cantitate: 0.004, motiv: 'invalidat, ieșit din rețea' }] }
+    expect(textLipsa(L)).toBe('lipsește 1 rând necesar nevalidat (0,004 mc): #9 „Beton” (extras, invalidat, ieșit din rețea, 0,004 mc)')
+  })
+})
+
+describe('reparația rundei 1 — copia modulului restanțelor din generatorul de clarificări', () => {
+  it('supabase/functions/ofertare-clarificari-propune/restante.js = src/ofertareTransferRestante.js, octet cu octet', () => {
+    expect(readFileSync(new URL('../supabase/functions/ofertare-clarificari-propune/restante.js', import.meta.url), 'utf8'))
+      .toBe(readFileSync(new URL('./ofertareTransferRestante.js', import.meta.url), 'utf8'))
   })
 })
