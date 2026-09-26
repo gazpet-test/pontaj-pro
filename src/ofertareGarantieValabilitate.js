@@ -23,6 +23,8 @@
 //  6. Polița în ORIGINAL + termen decalat: cererea de prelungire NU schimbă perioada afișată a poliței
 //     (valabil_*) — polița fizică acoperă tot perioada veche până la „act adițional primit”. Cererea
 //     rămâne în observații cu un marcaj ⟦…⟧ citit de stareGarantie().
+//  7. Propagarea termenului (evalueazaGarantie / semnalReverificare): termen mutat ⇒ cerința recalculată și
+//     semnal de reverificare pe tab, KPI și eticheta tab-ului; polița emisă își păstrează perioada din poliță.
 //
 // Funcții PURE (fără React / Supabase), testate în ofertareGarantieValabilitate.test.js.
 // ════════════════════════════════════════════════════════════════
@@ -263,14 +265,77 @@ export function stareGarantie({ g, deAcum, necesarPana }) {
   // (rezistă și dacă revenirea valabil_* după mail n-a reușit)
   const acoperaDe = inAsteptare?.acDe || g.valabil_de || null
   const acoperaPana = inAsteptare?.acPana || g.valabil_pana || null
-  const decalat = !!(g.termen_la_cerere && deAcum && ziDepunere(g.termen_la_cerere) !== deAcum)
+  const termenCerere = ziDepunere(g.termen_la_cerere)
+  const decalat = !!(termenCerere && deAcum && termenCerere !== deAcum)
   const prelungireCurenta = inAsteptare && inAsteptare.de === deAcum ? inAsteptare : null
   const prelungireVeche = inAsteptare && inAsteptare.de !== deAcum ? inAsteptare : null
   const insuficient = !!(acoperaPana && necesarPana && acoperaPana < necesarPana)
+  // termenul mutat MAI DEVREME: polița începe după noua zi de depunere ⇒ nu acoperă depunerea
+  const incepeDupaTermen = !!(acoperaDe && deAcum && acoperaDe > deAcum)
   const antet = !(acoperaDe || acoperaPana) ? '' : original
     ? `polița valabilă ${fmtIso(acoperaDe)} – ${fmtIso(acoperaPana)}${inAsteptare ? ` · prelungire cerută la ${fmtIso(inAsteptare.de)} – ${fmtIso(inAsteptare.pana)} (neconfirmată)` : ''}`
     : `perioadă cerută ${fmtIso(g.valabil_de)} – ${fmtIso(g.valabil_pana)}`
-  return { original, decalat, inAsteptare, prelungireCurenta, prelungireVeche, acoperaDe, acoperaPana, insuficient, antet }
+  return { original, decalat, termenCerere, inAsteptare, prelungireCurenta, prelungireVeche, acoperaDe, acoperaPana, insuficient, incepeDupaTermen, antet }
+}
+
+// ════════════════════════════════════════════════════════════════
+// Propagarea termenului de depunere (R7, test de propagare cerut de Copilot, 26.09.2026)
+//   Termenul se schimbă ⇒ (1) cerința se recalculează pe termenul nou; (2) garanția existentă primește semnalul de
+//   reverificare — vizibil în tab-ul 🛡, pe KPI-ul „Garanție participare” și pe eticheta tab-ului, din ACEEAȘI funcție;
+//   (3) o poliță EMISĂ păstrează perioada din poliță — nimic nu o „prelungește” fără act adițional;
+//   (4) fără durată implicită (nici 90, nici 150): cerința necitită ⇒ acoperirea rămâne „de verificat”, nu verde.
+// ════════════════════════════════════════════════════════════════
+export const NIVEL_REVERIFICARE = { nu_acopera: 'nu acoperă termenul', de_verificat: 'de reverificat' }
+
+// st = stareGarantie(...); → { da, nivel: 'nu_acopera'|'de_verificat'|null, motive: [text], acoperaVerificat }
+// acoperaVerificat = polița acoperă DOVEDIT noul termen + valabilitatea cerută (singurul caz în care omul poate
+// închide reverificarea fără act adițional — vezi patchVerificatAcoperire)
+export function semnalReverificare(st, { deAcum, necesarPana } = {}) {
+  if (!st) return { da: false, nivel: null, motive: [], acoperaVerificat: false }
+  const m = []
+  if (!deAcum) m.push('licitația nu are termen de depunere — acoperirea garanției nu se poate verifica')
+  if (st.decalat) m.push(`termenul de depunere s-a mutat (${fmtIso(st.termenCerere)} → ${fmtIso(deAcum)}) față de cel pentru care s-a cerut polița`)
+  if (st.incepeDupaTermen) m.push(`polița începe abia pe ${fmtIso(st.acoperaDe)}, după ziua depunerii (${fmtIso(deAcum)})`)
+  if (st.insuficient) m.push(`polița acoperă până la ${fmtIso(st.acoperaPana)}, cerința cere până la ${fmtIso(necesarPana)}`)
+  if (st.inAsteptare) m.push(`prelungire cerută la ${fmtIso(st.inAsteptare.de)} – ${fmtIso(st.inAsteptare.pana)}, neconfirmată (fără act adițional)`)
+  if (deAcum && (st.decalat || st.inAsteptare) && !necesarPana) m.push('valabilitatea cerută pe termenul curent nu a putut fi calculată — acoperirea nu e verificată')
+  const acoperaVerificat = !!(deAcum && necesarPana && st.acoperaDe && st.acoperaPana && !st.incepeDupaTermen && !st.insuficient)
+  const nuAcopera = st.insuficient || st.incepeDupaTermen
+  return { da: m.length > 0, nivel: nuAcopera ? 'nu_acopera' : m.length ? 'de_verificat' : null, motive: m, acoperaVerificat }
+}
+
+// Evaluarea completă pe termenul CURENT — o singură sursă pentru tab, KPI și eticheta tab-ului.
+// g = rândul ofertare_garantii (sau null); termenDepunere = ofertare_licitatii.termen_depunere (timestamptz);
+// fisa = ofertare_licitatii.garantie_participare; cerinte = rândurile ofertare_cerinte relevante.
+export function evalueazaGarantie({ g, termenDepunere, fisa, cerinte }) {
+  const deAcum = ziDepunere(termenDepunere)
+  const propunere = propuneValabilitate(clasificaSurse({ fisa, cerinte }), deAcum)
+  const necesar = propunere.durata && deAcum ? calculeazaValabilitate(propunere.durata, deAcum) : null
+  const necesarPana = necesar?.pana || null
+  const st = stareGarantie({ g, deAcum, necesarPana })
+  return { deAcum, propunere, necesar, st, reverificare: semnalReverificare(st, { deAcum, necesarPana }) }
+}
+
+// Termenul s-a mutat la salvarea fișei licitației? (ziua din ora României) → { de, la } sau null
+export function termenMutat(vechi, nou) {
+  const a = ziDepunere(vechi), b = ziDepunere(nou)
+  return a === b ? null : { de: a, la: b }
+}
+
+// Polița acoperă DOVEDIT termenul nou ⇒ omul confirmă, iar termenul de referință devine cel curent.
+// Perioada poliței (valabil_*) NU se schimbă; se lasă urmă în observații. Altfel null (nu se poate închide așa).
+export function patchVerificatAcoperire({ g, ev, termenDepunere, azi }) {
+  if (!g || !ev?.reverificare?.acoperaVerificat || ev.st?.inAsteptare) return null
+  const linie = `${fmtIso(azi)}: termen ${fmtIso(ev.st.termenCerere)} → ${fmtIso(ev.deAcum)}; polița${g.polita_nr ? ` nr. ${g.polita_nr}` : ''} acoperă ${fmtIso(ev.st.acoperaDe)} – ${fmtIso(ev.st.acoperaPana)}, ` +
+    `suficient pentru cerință (până la ${fmtIso(ev.necesar.pana)}) — verificat, fără act adițional.`
+  return { termen_la_cerere: termenDepunere, observatii: adaugaObservatie(g.observatii, linie) }
+}
+
+// Pasul 4 („polița în original”): perioada se ia DIN POLIȚA FIZICĂ (precompletată cu perioada cerută, confirmată
+// de om). Fără asta, o actualizare cerută brokerului după plată ar trece drept prelungire emisă.
+export function perioadaPolita(de, pana) {
+  const zile = zileIntre(de, pana)
+  return zile > 0 ? { valabil_de: de, valabil_pana: pana, valabil_zile: zile } : null
 }
 
 // Trimite perioada nouă brokerului FĂRĂ să lase în BD o perioadă netrimisă.

@@ -5,6 +5,7 @@ import {
   plusZile, plusLuni, zileIntre, ziDepunere, extrageDurate, clasificaSurse, propuneValabilitate,
   calculeazaValabilitate, propuneActualizare, textDurata, MESAJ_NECITIT, MESAJ_CONFLICT, ETICHETA_REZUMAT,
   stareGarantie, trimiteActualizareSigur, patchActAditional, ultimaPrelungire, faraMarcaje, liniePrelungireCeruta, fmtIso,
+  evalueazaGarantie, semnalReverificare, termenMutat, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE,
 } from './ofertareGarantieValabilitate.js'
 
 describe('date calendaristice', () => {
@@ -429,5 +430,161 @@ describe('textDurata', () => {
     expect(textDurata({ n: 105, unitate: 'zile' })).toBe('105 zile')
     expect(textDurata({ n: 100, unitate: 'zile' })).toBe('100 de zile')
     expect(textDurata(null)).toBe('')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+// TEST DE PROPAGARE (R7, cerut de Copilot 26.09.2026) — de păstrat:
+//  (1) mutarea termenului de depunere recalculează valabilitatea cerută a garanției;
+//  (2) garanția existentă primește semnalul de reverificare când nu mai acoperă noul termen + valabilitatea cerută;
+//  (3) polița EMISĂ nu e considerată prelungită: perioada ei rămâne cea din poliță până la actul adițional;
+//  (4) fără 90 de zile implicit (#487).
+// Sursele sunt cele REALE ale lic. 95 (Vâlcelele): rezumatul din fișă + cerințele 6386/6427 (fără durată).
+// ════════════════════════════════════════════════════════════════
+describe('propagarea termenului de depunere → garanția de participare (lic. 95, T → T+30 zile)', () => {
+  const FISA_95 = '370.000 lei (fișa de date III.1.6.a, doc 479), conform art. 154 L98/2016; virament sau instrument de garantare; valabilitate ≥ perioada de valabilitate a ofertei (4 luni de la termenul-limită).'
+  const CER_95 = [
+    { id: 6386, text_cerinta: 'Garantie de participare de 370.000 lei, constituita conform art. 154 din Legea 98/2016; virament in contul RO71TREZ2015006XXX000189, Trezoreria Calarasi, UAT Valcelele.', stare: 'de_analizat', inlocuita_de: null },
+    { id: 6427, text_cerinta: 'Prezentarea garanției de participare.', stare: 'de_analizat', inlocuita_de: null },
+  ]
+  const T = '2026-10-19T12:00:00+00:00'           // termenul actual al lic. 95 (SELECT 26.09.2026)
+  const T30 = '2026-11-18T12:00:00.000Z'          // T + 30 de zile, cum îl scrie formularul (toISOString)
+  const X = '2027-02-19'                          // polița emisă pe termenul T: 4 luni de la 19.10.2026
+  // polița emisă (în original) pe termenul T, acoperind exact cerința de atunci
+  const POLITA = Object.freeze({ id: 99, licitatie_id: 95, status: 'original', polita_nr: 'TEST-95', valabil_de: '2026-10-19', valabil_pana: X, valabil_zile: 123,
+    termen_la_cerere: '2026-10-19 12:00:00+00', observatii: null })
+  const evalua = (g, termen, extra = {}) => evalueazaGarantie({ g, termenDepunere: termen, fisa: FISA_95, cerinte: CER_95, ...extra })
+
+  it('înainte de mutare (termen T): cerința 4 luni → 19.02.2027; polița o acoperă; niciun semnal (KPI verde e corect)', () => {
+    const ev = evalua(POLITA, T)
+    expect(ev.deAcum).toBe('2026-10-19')
+    expect(ev.propunere.durata).toEqual({ n: 4, unitate: 'luni' })
+    expect(ev.necesar).toEqual({ pana: X, zile: 123 })
+    expect(ev.st).toMatchObject({ decalat: false, insuficient: false, incepeDupaTermen: false, acoperaPana: X })
+    expect(ev.reverificare).toEqual({ da: false, nivel: null, motive: [], acoperaVerificat: true })
+  })
+
+  it('SCENARIUL COMPLET: termen T → T+30 ⇒ cerința nouă (18.03.2027), semnal de reverificare, polița emisă rămâne până la X', () => {
+    const ev = evalua(POLITA, T30)
+    // (1) cerința se recalculează pe termenul nou, în unitatea ei (4 luni calendaristice, nu 123 de zile copiate)
+    expect(termenMutat(T, T30)).toEqual({ de: '2026-10-19', la: '2026-11-18' })
+    expect(ev.deAcum).toBe('2026-11-18')
+    expect(ev.propunere.durata).toEqual({ n: 4, unitate: 'luni' })
+    expect(ev.necesar).toEqual({ pana: '2027-03-18', zile: 120 })
+    expect(ev.necesar.pana).not.toBe(plusZile('2026-11-18', 123))   // nu „aceeași durată în zile” de la cererea veche
+    // (3) polița EMISĂ: perioada rămâne cea din poliță (X), nimic nu o „prelungește”
+    expect(ev.st.acoperaDe).toBe('2026-10-19')
+    expect(ev.st.acoperaPana).toBe(X)
+    expect(POLITA.valabil_pana).toBe(X)                              // rândul nu e atins de recalculare
+    expect(ev.st.antet).toBe('polița valabilă 19.10.2026 – 19.02.2027')
+    // (2) semnalul: termen mutat + polița nu acoperă cerința nouă ⇒ „nu acoperă termenul”
+    expect(ev.st).toMatchObject({ decalat: true, insuficient: true, incepeDupaTermen: false, termenCerere: '2026-10-19' })
+    expect(ev.reverificare.da).toBe(true)
+    expect(ev.reverificare.nivel).toBe('nu_acopera')
+    expect(NIVEL_REVERIFICARE[ev.reverificare.nivel]).toBe('nu acoperă termenul')
+    expect(ev.reverificare.motive).toEqual([
+      'termenul de depunere s-a mutat (19.10.2026 → 18.11.2026) față de cel pentru care s-a cerut polița',
+      'polița acoperă până la 19.02.2027, cerința cere până la 18.03.2027',
+    ])
+    // nu se poate închide „verificat” fără act adițional: acoperirea nu e dovedită
+    expect(ev.reverificare.acoperaVerificat).toBe(false)
+    expect(patchVerificatAcoperire({ g: POLITA, ev, termenDepunere: T30, azi: '2026-09-26' })).toBe(null)
+  })
+
+  it('T → T+30, polița emisă: cererea de prelungire trimisă NU o prelungește; doar actul adițional o face', async () => {
+    const row = { ...POLITA }, patch = async p => { Object.assign(row, p) }, mail = async () => ({ ok: true })
+    const ev0 = evalua(row, T30)
+    const cerut = { valabil_de: ev0.deAcum, valabil_pana: ev0.necesar.pana, valabil_zile: ev0.necesar.zile, termen_la_cerere: T30 }
+    const linieObs = liniePrelungireCeruta({ azi: '2026-09-26', termenVechi: '2026-10-19', termenNou: ev0.deAcum, polita: row.polita_nr,
+      acDe: ev0.st.acoperaDe, acPana: ev0.st.acoperaPana, de: cerut.valabil_de, pana: cerut.valabil_pana, durata: ev0.propunere.durata })
+    const r = await trimiteActualizareSigur({ g: { ...row }, cerut, original: true, linieObs, patch, mail })
+    expect(r).toMatchObject({ ok: true, mail: true, revenire: true })
+    const ev1 = evalua(row, T30)
+    expect(row.valabil_pana).toBe(X)                                  // BD: perioada poliței, nu cea cerută
+    expect(ev1.st.acoperaPana).toBe(X)
+    expect(ev1.st.prelungireCurenta).toMatchObject({ de: '2026-11-18', pana: '2027-03-18' })
+    expect(ev1.reverificare.nivel).toBe('nu_acopera')                  // semnalul rămâne
+    expect(ev1.reverificare.motive).toContain('prelungire cerută la 18.11.2026 – 18.03.2027, neconfirmată (fără act adițional)')
+    // actul adițional (confirmat de om) e singurul care schimbă perioada poliței
+    await patch(patchActAditional({ g: row, de: '2026-11-18', pana: '2027-03-18', termenDepunere: T30, azi: '2026-10-05' }))
+    const ev2 = evalua(row, T30)
+    expect(ev2.st.acoperaPana).toBe('2027-03-18')
+    expect(ev2.reverificare).toMatchObject({ da: false, nivel: null, motive: [] })
+  })
+
+  it('(4) T → T+30 cu cerința NECITIBILĂ: fără 90 de zile implicit — acoperirea rămâne „de reverificat”, nu verde', () => {
+    const ev = evalueazaGarantie({ g: POLITA, termenDepunere: T30, fisa: '370.000 lei', cerinte: CER_95 })
+    expect(ev.propunere.durata).toBe(null)
+    expect(ev.propunere.motiv).toBe(MESAJ_NECITIT)
+    expect(ev.necesar).toBe(null)                                      // nici 17.01.2027, nici 18.02.2027 (90 de zile)
+    expect(ev.st.insuficient).toBe(false)                              // nu se poate afirma…
+    expect(ev.reverificare.da).toBe(true)                              // …dar nici nu e verde
+    expect(ev.reverificare.nivel).toBe('de_verificat')
+    expect(ev.reverificare.acoperaVerificat).toBe(false)
+    expect(ev.reverificare.motive).toContain('valabilitatea cerută pe termenul curent nu a putut fi calculată — acoperirea nu e verificată')
+    expect(JSON.stringify(ev)).not.toMatch(/2027-01-17|2027-02-16/)   // T+90 / T+30+90
+  })
+
+  it('termen mutat MAI DEVREME (T → T−10): polița începe după ziua depunerii ⇒ nu acoperă', () => {
+    const ev = evalua(POLITA, '2026-10-09T12:00:00+00:00')
+    expect(ev.necesar.pana).toBe('2027-02-09')
+    expect(ev.st).toMatchObject({ decalat: true, insuficient: false, incepeDupaTermen: true })
+    expect(ev.reverificare.nivel).toBe('nu_acopera')
+    expect(ev.reverificare.motive).toContain('polița începe abia pe 19.10.2026, după ziua depunerii (09.10.2026)')
+    expect(patchVerificatAcoperire({ g: POLITA, ev, termenDepunere: '2026-10-09T12:00:00+00:00', azi: '2026-09-26' })).toBe(null)
+  })
+
+  it('T → T+30, dar polița emisă e destul de lungă: semnal „de reverificat”; omul confirmă fără act, perioada poliței neschimbată', () => {
+    const lunga = { ...POLITA, valabil_pana: '2027-06-30', valabil_zile: 254 }
+    const ev = evalua(lunga, T30)
+    expect(ev.reverificare).toMatchObject({ da: true, nivel: 'de_verificat', acoperaVerificat: true })
+    const p = patchVerificatAcoperire({ g: lunga, ev, termenDepunere: T30, azi: '2026-09-27' })
+    expect(Object.keys(p).sort()).toEqual(['observatii', 'termen_la_cerere'])   // valabil_* NU se ating
+    expect(p.termen_la_cerere).toBe(T30)
+    expect(p.observatii).toBe('27.09.2026: termen 19.10.2026 → 18.11.2026; polița nr. TEST-95 acoperă 19.10.2026 – 30.06.2027, suficient pentru cerință (până la 18.03.2027) — verificat, fără act adițional.')
+    const dupa = evalua({ ...lunga, ...p }, T30)
+    expect(dupa.st.acoperaPana).toBe('2027-06-30')
+    expect(dupa.reverificare).toMatchObject({ da: false, nivel: null })
+    // termenul se mută DIN NOU ⇒ semnalul revine
+    expect(evalua({ ...lunga, ...p }, '2026-12-01T12:00:00Z').reverificare.da).toBe(true)
+  })
+
+  it('polița „achitată” cu perioada actualizată la broker: la „original” se reține perioada DIN POLIȚĂ, nu cea cerută', () => {
+    // după mutare, cererea de actualizare (status achitata) a scris în BD perioada cerută + termenul nou…
+    const achitata = { ...POLITA, status: 'achitata', polita_nr: null, valabil_de: '2026-11-18', valabil_pana: '2027-03-18', valabil_zile: 120, termen_la_cerere: T30 }
+    expect(evalua(achitata, T30).reverificare.da).toBe(false)             // perioadă cerută suficientă (antet „perioadă cerută”)
+    expect(evalua(achitata, T30).st.antet).toBe('perioadă cerută 18.11.2026 – 18.03.2027')
+    // …dar polița fizică sosită e cea veche (brokerul n-a reemis): omul trece perioada de pe poliță la pasul 4
+    const per = perioadaPolita('2026-10-19', X)
+    expect(per).toEqual({ valabil_de: '2026-10-19', valabil_pana: X, valabil_zile: 123 })
+    const orig = { ...achitata, status: 'original', polita_nr: 'TEST-95', ...per }
+    const ev = evalua(orig, T30)
+    expect(ev.st.acoperaPana).toBe(X)
+    expect(ev.reverificare.nivel).toBe('nu_acopera')
+    // perioadă inversată / goală ⇒ refuzată (nu se salvează o poliță fără perioadă)
+    expect(perioadaPolita(X, '2026-10-19')).toBe(null)
+    expect(perioadaPolita('', X)).toBe(null)
+  })
+
+  it('poliță încă necerută în original (cerere_trimisa) + termen mutat ⇒ semnal și acolo', () => {
+    const cerere = { ...POLITA, status: 'cerere_trimisa', polita_nr: null }
+    const ev = evalua(cerere, T30)
+    expect(ev.st.original).toBe(false)
+    expect(ev.reverificare).toMatchObject({ da: true, nivel: 'nu_acopera' })
+  })
+
+  it('fără garanție ⇒ fără semnal; fără termen de depunere ⇒ „de reverificat”, nu verde', () => {
+    expect(evalua(null, T30).reverificare).toEqual({ da: false, nivel: null, motive: [], acoperaVerificat: false })
+    const ev = evalua(POLITA, null)
+    expect(ev.reverificare).toMatchObject({ da: true, nivel: 'de_verificat' })
+    expect(ev.reverificare.motive[0]).toMatch(/nu are termen de depunere/)
+    expect(semnalReverificare(null)).toEqual({ da: false, nivel: null, motive: [], acoperaVerificat: false })
+  })
+
+  it('termenMutat: aceeași zi (altă oră) nu e mutare; ziua se ia în ora României', () => {
+    expect(termenMutat('2026-10-19T09:00:00Z', '2026-10-19T12:00:00+00:00')).toBe(null)
+    expect(termenMutat('2026-10-19T12:00:00Z', '2026-10-19T22:30:00Z')).toEqual({ de: '2026-10-19', la: '2026-10-20' })  // 01:30 ora RO
+    expect(termenMutat(null, null)).toBe(null)
+    expect(termenMutat(null, T30)).toEqual({ de: null, la: '2026-11-18' })
   })
 })

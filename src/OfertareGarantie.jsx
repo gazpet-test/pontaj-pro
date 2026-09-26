@@ -10,11 +10,43 @@
 //       Avertizarea de decalare rămâne și după „original”: cererea de prelungire NU schimbă perioada afișată a poliței
 //       (polița fizică acoperă perioada veche) până la „act adițional primit”; mail eșuat ⇒ revenire în BD.
 //       Logica e în ofertareGarantieValabilitate.js (pură, testată).
+// R7 propagare (26.09.2026): termenul mutat ⇒ evalueazaGarantie() recalculează cerința și dă semnalul de reverificare —
+//       același în tab, pe KPI-ul „Garanție participare” și pe eticheta tab-ului (useSemnalGarantie, în fișa licitației).
+//       Polița acoperă dovedit termenul nou ⇒ „✓ Acoperă — verificat” (fără act adițional, cu urmă în observații).
+//       Pasul 4 ia perioada DIN POLIȚA FIZICĂ (precompletată cu perioada cerută) — o cerere nu devine prelungire emisă.
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
-import { ziDepunere, clasificaSurse, propuneValabilitate, calculeazaValabilitate, propuneActualizare, textDurata, zileIntre, MESAJ_NECITIT,
-  stareGarantie, faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional } from './ofertareGarantieValabilitate.js'
+import { ziDepunere, calculeazaValabilitate, propuneActualizare, textDurata, zileIntre, MESAJ_NECITIT,
+  faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional,
+  evalueazaGarantie, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE } from './ofertareGarantieValabilitate.js'
+
+// cerințele din registru care pot conține valabilitatea (garanție / ofertă) — aceeași interogare în tab și în KPI
+const qCerinteGarantie = licId => supabase.from('ofertare_cerinte').select('id, text_cerinta, stare, inlocuita_de, sursa_document_id, sursa_pagina')
+  .eq('licitatie_id', licId).is('inlocuita_de', null).or('text_cerinta.ilike.%garan%particip%,text_cerinta.ilike.%valabil%').order('id').limit(300)
+const qGarantie = (licId, cols = '*') => supabase.from('ofertare_garantii').select(cols).eq('licitatie_id', licId).neq('status', 'anulata').order('id', { ascending: false }).limit(1).maybeSingle()
+
+// Semnalul garanției pentru fișa licitației (KPI + eticheta tab-ului): undefined = se încarcă, null = fără garanție,
+// altfel rezultatul evalueazaGarantie(). Se recalculează la fiecare reîncărcare a licitației (obiect `l` nou),
+// deci și după mutarea termenului de depunere sau după o acțiune din tab-ul 🛡 (onChanged → load).
+export function useSemnalGarantie(l) {
+  const [ev, setEv] = useState(undefined)
+  useEffect(() => {
+    let viu = true
+    if (!l?.id || !l.garantie_status) { setEv(null); return }
+    setEv(undefined)
+    Promise.all([qGarantie(l.id, 'id, status, valabil_de, valabil_pana, valabil_zile, termen_la_cerere, observatii, polita_nr'), qCerinteGarantie(l.id)])
+      .then(([{ data: gg, error: e1 }, { data: cc, error: e2 }]) => {
+        if (!viu) return
+        // eroare de citire ⇒ NU verde: semnal „de reverificat” cu motivul
+        if (e1 || e2) return setEv({ reverificare: { da: true, nivel: 'de_verificat', motive: [`garanția nu s-a putut citi: ${(e1 || e2).message}`], acoperaVerificat: false } })
+        setEv(gg ? evalueazaGarantie({ g: gg, termenDepunere: l.termen_depunere, fisa: l.garantie_participare, cerinte: cc || [] }) : null)
+      })
+      .catch(e => { if (viu) setEv({ reverificare: { da: true, nivel: 'de_verificat', motive: [`garanția nu s-a putut citi: ${e?.message || e}`], acoperaVerificat: false } }) })
+    return () => { viu = false }
+  }, [l])
+  return ev
+}
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   ofertare:'#3FB6E2', green:'#3FB950', blue:'#58A6FF', orange:'#F0883E', yellow:'#E3B341', red:'#F85149' }
@@ -45,28 +77,29 @@ export default function GarantieSection({ licitatie: l, profile, onChanged }) {
   const [msg, setMsg] = useState(null)          // { tip:'ok'|'err', text }
   const [form, setForm] = useState(null)        // formularul cererii (pasul 1)
   const [f2, setF2] = useState({ decont_valoare: '' })
-  const [f4, setF4] = useState({ polita_nr: '', polita_prima: '' })
+  const [f4, setF4] = useState({ polita_nr: '', polita_prima: '', de: '', pana: '' })
   const [cerinte, setCerinte] = useState([])    // cerințele din registru care pot conține valabilitatea (garanție / ofertă)
   const [actEdit, setActEdit] = useState(null)  // durata editată în bannerul de decalare ({ n, unitate }); null = propunerea
   const [actAd, setActAd] = useState(null)      // „act adițional primit”: { de, pana } editate; null = perioada cerută
 
   const load = async () => {
     const [{ data: gg }, { data: bb }, { data: dd }, { data: cc }] = await Promise.all([
-      supabase.from('ofertare_garantii').select('*, broker:ofertare_brokeri(id, nume, email, contact)').eq('licitatie_id', l.id).neq('status', 'anulata').order('id', { ascending: false }).limit(1).maybeSingle(),
+      qGarantie(l.id, '*, broker:ofertare_brokeri(id, nume, email, contact)'),
       supabase.from('ofertare_brokeri').select('*').eq('activ', true).order('implicit', { ascending: false }).order('nume'),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, fisier_path, size_bytes').eq('licitatie_id', l.id).in('tip', ['fisa_date', 'raspuns_clarificare', 'model_contract']).order('tip'),
-      supabase.from('ofertare_cerinte').select('id, text_cerinta, stare, inlocuita_de, sursa_document_id, sursa_pagina').eq('licitatie_id', l.id).is('inlocuita_de', null).or('text_cerinta.ilike.%garan%particip%,text_cerinta.ilike.%valabil%').order('id').limit(300),
+      qCerinteGarantie(l.id),
     ])
     setG(gg || null); setBrokeri(bb || []); setDocs(dd || []); setCerinte(cc || []); setActEdit(null); setActAd(null)
     if (gg) setF2(x => ({ ...x, decont_valoare: gg.decont_valoare ?? '' }))
+    // pasul 4: perioada din polița fizică, precompletată cu perioada cerută (omul o confirmă / corectează)
+    if (gg) setF4(x => ({ ...x, de: gg.valabil_de || '', pana: gg.valabil_pana || '' }))
   }
   useEffect(() => { load() }, [l.id])
 
-  // valabilitatea cerută: registrul de cerințe + rezumatul din fișa licitației (fără valoare implicită)
-  const deAcum = ziDepunere(l.termen_depunere)
-  const surse = clasificaSurse({ fisa: l.garantie_participare, cerinte })
-  const propunere = propuneValabilitate(surse, deAcum)
-  const necesar = propunere.durata && deAcum ? calculeazaValabilitate(propunere.durata, deAcum) : null
+  // valabilitatea cerută: registrul de cerințe + rezumatul din fișa licitației (fără valoare implicită), pe termenul CURENT;
+  // aceeași evaluare ca pe KPI (evalueazaGarantie): cerința, ce acoperă polița, semnalul de reverificare
+  const ev = evalueazaGarantie({ g, termenDepunere: l.termen_depunere, fisa: l.garantie_participare, cerinte })
+  const { deAcum, propunere, necesar } = ev
 
   // ── pasul 1: formularul cererii (valoare din fișă, valabilitatea din fișă/registru, text după modelul Cristinei)
   const pregateste = () => {
@@ -177,12 +210,18 @@ Vă mulțumim.`
   const salveazaOriginal = async () => {
     if (!fPol) return setMsg({ tip: 'err', text: 'Încarcă polița originală scanată (PDF).' })
     if (!f4.polita_nr.trim()) return setMsg({ tip: 'err', text: 'Completează numărul poliței.' })
+    // perioada DIN POLIȚĂ (nu cea doar cerută brokerului): o cerere de actualizare nu devine prelungire emisă
+    const per = perioadaPolita(f4.de, f4.pana)
+    if (!per) return setMsg({ tip: 'err', text: 'Completează perioada de valabilitate scrisă pe polița fizică (data de sfârșit după data de început).' })
+    const scurt = [necesar?.pana && per.valabil_pana < necesar.pana ? `se termină pe ${fmtZi(per.valabil_pana)}, cerința cere până la ${fmtZi(necesar.pana)}` : null,
+      deAcum && per.valabil_de > deAcum ? `începe pe ${fmtZi(per.valabil_de)}, după ziua depunerii (${fmtZi(deAcum)})` : null].filter(Boolean)
+    if (scurt.length && !confirm(`⚠ Polița nu acoperă cerința: ${scurt.join('; ')}.\n\nSalvezi totuși polița cu perioada ei reală? (semnalul de reverificare rămâne)`)) return
     try {
       setBusy('Se salvează polița…'); setMsg(null)
-      const p = { status: 'original', original_la: new Date().toISOString(), original_de: profile?.id || null, polita_nr: f4.polita_nr.trim(), polita_prima: f4.polita_prima !== '' ? Number(f4.polita_prima) : g.decont_valoare }
+      const p = { status: 'original', original_la: new Date().toISOString(), original_de: profile?.id || null, polita_nr: f4.polita_nr.trim(), polita_prima: f4.polita_prima !== '' ? Number(f4.polita_prima) : g.decont_valoare, ...per }
       p.polita_path = await urca(fPol, 'polita')
       await patch(p)
-      setMsg({ tip: 'ok', text: '✓ Polița în original e în platformă — indicatorul „Garanție participare” devine verde.' })
+      setMsg({ tip: 'ok', text: scurt.length ? `✓ Polița în original e în platformă, cu perioada ei reală — indicatorul „Garanție participare” rămâne „⚠ nu acoperă termenul” (${scurt.join('; ')}).` : '✓ Polița în original e în platformă — indicatorul „Garanție participare” devine verde.' })
       setFPol(null); await load(); onChanged?.()
     } catch (e) { setMsg({ tip: 'err', text: e.message }) }
     setBusy(null)
@@ -190,8 +229,8 @@ Vă mulțumim.`
   // termen decalat → actualizare perioadă la broker. Rămâne vizibil și după „original”: polița emisă
   // acoperă perioada veche, deci trebuie prelungită (act adițional) — altfel verdele de pe KPI minte.
   // stareGarantie: ce acoperă EFECTIV polița (nu perioada doar cerută), decalare, prelungire în așteptare, insuficiență
-  const st = stareGarantie({ g, deAcum, necesarPana: necesar?.pana || null })
-  const decalat = !!st?.decalat, insuficient = !!st?.insuficient
+  const st = ev.st, rev = ev.reverificare
+  const decalat = !!st?.decalat, insuficient = !!st?.insuficient, nuAcopera = rev.nivel === 'nu_acopera'
   // durata propusă pe termenul nou: cerința citibilă, SINGURĂ; durata cererii anterioare doar ca rezervă
   const propAct = g ? propuneActualizare(propunere, g.valabil_zile) : null
   const actDur = actEdit ? durataDin(actEdit.n, actEdit.unitate) : propAct?.durata || null
@@ -224,7 +263,7 @@ Vă mulțumim.`
         ? { tip: 'ok', text: `✓ Brokerul a primit perioada nouă (${perioada}). Polița rămâne afișată cu perioada ei reală până marchezi „act adițional primit”.` }
         : { tip: 'err', text: `Mailul a plecat, dar revenirea la perioada reală a poliței nu s-a salvat (${r.eroareRevenire}). Evidența prelungirii e în observații; polița acoperă ${fmtZi(st.acoperaDe)} – ${fmtZi(st.acoperaPana)}.` })
       else setMsg({ tip: 'ok', text: `✓ Brokerul a primit perioada nouă de valabilitate (${perioada}).` })
-      await load()
+      await load(); onChanged?.()   // KPI-ul și eticheta tab-ului se recalculează (useSemnalGarantie)
     } catch (e) { setMsg({ tip: 'err', text: 'Nu s-a salvat nimic: ' + e.message }) }
     setBusy(null)
   }
@@ -239,6 +278,20 @@ Vă mulțumim.`
       setBusy('Se salvează actul adițional…'); setMsg(null)
       await patch(p)
       setMsg({ tip: 'ok', text: `✓ Polița nr. ${g.polita_nr || '—'} e acum valabilă ${fmtZi(actAdDe)} – ${fmtZi(actAdPana)} (act adițional).` })
+      await load(); onChanged?.()
+    } catch (e) { setMsg({ tip: 'err', text: e.message }) }
+    setBusy(null)
+  }
+  // termen mutat, dar polița acoperă DOVEDIT noul termen + valabilitatea cerută ⇒ omul confirmă verificarea;
+  // perioada poliței NU se schimbă (doar termenul de referință + urmă în observații)
+  const confirmaVerificat = async () => {
+    const p = patchVerificatAcoperire({ g, ev, termenDepunere: l.termen_depunere, azi: ziDepunere(new Date().toISOString()) })
+    if (!p) return setMsg({ tip: 'err', text: 'Acoperirea nu e dovedită (cerința necitită, poliță mai scurtă sau care începe după depunere) — cere prelungirea la broker.' })
+    if (!confirm(`Ai verificat că polița${g.polita_nr ? ` nr. ${g.polita_nr}` : ''} (${fmtZi(st.acoperaDe)} – ${fmtZi(st.acoperaPana)}) acoperă noul termen de depunere (${fmtZi(deAcum)}) și valabilitatea cerută (până la ${fmtZi(necesar.pana)}), fără act adițional?\n\nPerioada poliței NU se modifică; se notează verificarea în observații.`)) return
+    try {
+      setBusy('Se salvează verificarea…'); setMsg(null)
+      await patch(p)
+      setMsg({ tip: 'ok', text: `✓ Verificat: polița acoperă termenul ${fmtZi(deAcum)} și cerința (până la ${fmtZi(necesar.pana)}).` })
       await load(); onChanged?.()
     } catch (e) { setMsg({ tip: 'err', text: e.message }) }
     setBusy(null)
@@ -292,10 +345,19 @@ Vă mulțumim.`
             </div>
           )}
           {!st?.prelungireCurenta && decalat && (
-            <div style={{ background:G.orange + '18', border:`1px solid ${G.orange}66`, borderRadius:8, padding:'10px 12px', marginBottom:12, fontSize:12.5, display:'flex', flexDirection:'column', gap:8 }}>
-              <span>⚠️ Termenul de depunere s-a decalat ({fmtZi(g.termen_la_cerere)} → <b>{fmtZi(l.termen_depunere)}</b>) — {g.status === 'original'
-                ? <>polița nr. <b>{g.polita_nr || '—'}</b> e deja în original pentru {fmtZi(st.acoperaDe)} – {fmtZi(st.acoperaPana)}: trebuie <b>prelungită</b> la broker (act adițional).</>
-                : <>perioada de valabilitate a poliței trebuie actualizată la broker.</>}</span>
+            <div style={{ background:(nuAcopera ? G.red : G.orange) + '18', border:`1px solid ${nuAcopera ? G.red : G.orange}66`, borderRadius:8, padding:'10px 12px', marginBottom:12, fontSize:12.5, display:'flex', flexDirection:'column', gap:8 }}>
+              {/* semnalul de reverificare: cerința recalculată pe termenul nou; polița emisă își păstrează perioada din poliță */}
+              <span>⚠️ Termenul de depunere s-a decalat ({fmtZi(g.termen_la_cerere)} → <b>{fmtZi(l.termen_depunere)}</b>) — <b>garanția e de reverificat</b>: {g.status === 'original'
+                ? <>polița nr. <b>{g.polita_nr || '—'}</b> e deja în original pentru {fmtZi(st.acoperaDe)} – {fmtZi(st.acoperaPana)}{nuAcopera
+                  ? <>{necesar?.pana ? <>, iar cerința pe termenul nou cere până la <b>{fmtZi(necesar.pana)}</b></> : null}: trebuie <b>prelungită</b> la broker (act adițional).</>
+                  : rev.acoperaVerificat ? <> și acoperă totuși noul termen și cerința (până la <b>{fmtZi(necesar.pana)}</b>) — verifică și marchează, sau cere prelungirea.</>
+                  : <>; valabilitatea cerută pe termenul nou nu a putut fi calculată — verifică manual acoperirea.</>}</>
+                : nuAcopera ? <>perioada de valabilitate a poliței trebuie actualizată la broker{necesar?.pana ? <> (cerința cere până la <b>{fmtZi(necesar.pana)}</b>)</> : null}.</>
+                : rev.acoperaVerificat ? <>perioada cerută ({fmtZi(st.acoperaDe)} – {fmtZi(st.acoperaPana)}) acoperă totuși noul termen și cerința (până la <b>{fmtZi(necesar.pana)}</b>) — verifică și marchează, sau actualizează la broker.</>
+                : <>valabilitatea cerută pe termenul nou nu a putut fi calculată — verifică manual perioada poliței.</>}</span>
+              {rev.motive.length > 0 && <span style={{ color:G.muted }}>De ce: {rev.motive.join('; ')}.</span>}
+              {rev.acoperaVerificat && !st.inAsteptare && <div><button style={{ ...S.btnS, padding:'6px 12px', fontSize:12, color:G.green, borderColor:G.green + '66' }} disabled={!!busy} onClick={confirmaVerificat}>
+                ✓ Acoperă noul termen — marchează verificat (fără act adițional)</button></div>}
               {st.prelungireVeche && <span style={{ color:G.muted }}>Cererea de prelungire anterioară ({fmtZi(st.prelungireVeche.de)} – {fmtZi(st.prelungireVeche.pana)}) era pentru alt termen și nu mai acoperă termenul curent.</span>}
               <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
                 <span style={{ color:G.muted }}>Valabilitate nouă:</span>
@@ -316,10 +378,12 @@ Vă mulțumim.`
               )}
             </div>
           )}
-          {!st?.prelungireCurenta && !decalat && insuficient && (
+          {!st?.prelungireCurenta && !decalat && (insuficient || st?.incepeDupaTermen) && (
             <div style={{ background:G.red + '14', border:`1px solid ${G.red}66`, borderRadius:8, padding:'10px 12px', marginBottom:12, fontSize:12.5 }}>
-              ⚠️ Polița {g.status === 'original' ? `nr. ${g.polita_nr || '—'} ` : ''}e valabilă doar până la <b>{fmtZi(st.acoperaPana)}</b>, dar cerința ({textDurata(propunere.durata)} de la {fmtZi(deAcum)}) cere până la <b>{fmtZi(necesar.pana)}</b>.
-              <span style={{ color:G.muted }}> Sursa: {propunere.sursa?.eticheta} — „{propunere.sursa?.fragment}” · verifică polița și cere brokerului corectarea perioadei.</span>
+              {insuficient
+                ? <>⚠️ Polița {g.status === 'original' ? `nr. ${g.polita_nr || '—'} ` : ''}e valabilă doar până la <b>{fmtZi(st.acoperaPana)}</b>, dar cerința ({textDurata(propunere.durata)} de la {fmtZi(deAcum)}) cere până la <b>{fmtZi(necesar.pana)}</b>.</>
+                : <>⚠️ Polița {g.status === 'original' ? `nr. ${g.polita_nr || '—'} ` : ''}începe abia pe <b>{fmtZi(st.acoperaDe)}</b>, după ziua depunerii (<b>{fmtZi(deAcum)}</b>).</>}
+              <span style={{ color:G.muted }}>{propunere.sursa ? ` Sursa: ${propunere.sursa.eticheta} — „${propunere.sursa.fragment}” ·` : ''} verifică polița și cere brokerului corectarea perioadei.</span>
             </div>
           )}
 
@@ -420,18 +484,30 @@ Vă mulțumim.`
               {g.status === 'achitata' && (
                 <div style={{ ...S.card, padding:12 }}>
                   <div style={{ fontSize:13, fontWeight:700, marginBottom:4 }}>🛡 Achitată {fmtZi(g.achitata_la)} — cere brokerului polița în original ({g.broker?.email}).</div>
-                  <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>Când vine originalul, scanează-l și încarcă-l aici; indicatorul „Garanție participare” devine verde.</div>
+                  <div style={{ fontSize:12, color:G.muted, marginBottom:8 }}>Când vine originalul, scanează-l și încarcă-l aici; indicatorul „Garanție participare” devine verde dacă perioada din poliță acoperă termenul de depunere și cerința.</div>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 160px 160px', gap:10, alignItems:'end' }}>
                     <div><Lbl>Poliță originală scanată (PDF) *</Lbl><input type="file" accept=".pdf" style={S.input} onChange={e => setFPol(e.target.files?.[0] || null)} /></div>
                     <div><Lbl>Nr. poliță *</Lbl><input style={S.input} value={f4.polita_nr} onChange={e => setF4({ ...f4, polita_nr: e.target.value })} /></div>
                     <div><Lbl>Primă plătită ({g.moneda})</Lbl><input style={S.input} type="number" step="0.01" placeholder={g.decont_valoare ?? ''} value={f4.polita_prima} onChange={e => setF4({ ...f4, polita_prima: e.target.value })} /></div>
                   </div>
+                  {/* perioada scrisă PE POLIȚĂ — precompletată cu perioada cerută; se corectează dacă polița spune altceva */}
+                  <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginTop:10, fontSize:12.5 }}>
+                    <span style={{ color:G.muted }}>Valabilă (scris pe poliță) de la *</span>
+                    <input style={{ ...S.input, width:150, padding:'5px 8px' }} type="date" value={f4.de} onChange={e => setF4({ ...f4, de: e.target.value })} />
+                    <span style={{ color:G.muted }}>până la *</span>
+                    <input style={{ ...S.input, width:150, padding:'5px 8px' }} type="date" value={f4.pana} onChange={e => setF4({ ...f4, pana: e.target.value })} />
+                    {zileIntre(f4.de, f4.pana) > 0 && <span style={{ color:G.dim }}>({zileIntre(f4.de, f4.pana)} zile)</span>}
+                    <span style={{ color:G.dim, flexBasis:'100%' }}>Precompletat cu perioada cerută brokerului — verifică pe polița fizică; platforma reține perioada din poliță, nu pe cea cerută.</span>
+                    {necesar?.pana && f4.pana && f4.pana < necesar.pana && <span style={{ color:G.red, flexBasis:'100%' }}>⚠ Mai scurtă decât cerința (până la {fmtZi(necesar.pana)}).</span>}
+                    {deAcum && f4.de && f4.de > deAcum && <span style={{ color:G.red, flexBasis:'100%' }}>⚠ Începe după ziua depunerii ({fmtZi(deAcum)}).</span>}
+                  </div>
                   <div style={{ marginTop:10, textAlign:'right' }}><button style={{ ...S.btnP, background:G.green }} disabled={!!busy} onClick={salveazaOriginal}>🛡 Salvează polița în original</button></div>
                 </div>
               )}
               {g.status === 'original' && (
-                <div style={{ ...S.card, padding:12, borderColor:G.green + '66' }}>
+                <div style={{ ...S.card, padding:12, borderColor:(rev.da ? (nuAcopera ? G.red : G.orange) : G.green) + '66' }}>
                   <div style={{ fontSize:13, fontWeight:700, color:G.green }}>✓ Polița nr. {g.polita_nr} este în original în platformă (primă {fmtLei(g.polita_prima, g.moneda)}, {fmtZi(g.original_la)}). Valabilă {fmtZi(st.acoperaDe)} – {fmtZi(st.acoperaPana)}.</div>
+                  {rev.da && <div style={{ fontSize:12.5, fontWeight:700, color: nuAcopera ? G.red : G.orange, marginTop:6 }}>⚠ Garanție {NIVEL_REVERIFICARE[rev.nivel]}: {rev.motive.join('; ')}.</div>}
                   {st.inAsteptare && (
                     <div style={{ fontSize:12.5, color:G.orange, marginTop:6 }}>⏳ Prelungire cerută brokerului{g.actualizare_trimisa_la ? ` pe ${fmtZi(g.actualizare_trimisa_la)}` : ''} la {fmtZi(st.inAsteptare.de)} – {fmtZi(st.inAsteptare.pana)} — neconfirmată; până la actul adițional polița acoperă doar până la {fmtZi(st.acoperaPana)}.</div>
                   )}
