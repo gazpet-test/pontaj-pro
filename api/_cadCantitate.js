@@ -4,9 +4,27 @@
 // Până la 25.09 rândul intra direct cu status 'validat' — o măsurătoare automată trecea drept cantitate aprobată
 // în poarta graficului și în poarta propunerii. Caz real: lic. 3, rândul 9 („Traseu rețea măsurat din desenul
 // proiectantului", 35.620,59 m), 'validat' cu created_at = updated_at = 28.08.2026 20:19:55, fără niciun om.
-// Acum: rând nou => 'extras'. Rând existent validat de om => nu i se schimbă nici cifra, nici statusul (ca în
-// transferul din planșă, handler.ts: „dacă cineva a validat deja poziția, nu-i schimbăm decizia"); primește doar
-// măsurătoarea nouă în cantitate_plansa și nota. Rând existent nevalidat => se actualizează, statusul rămâne al lui.
+// Acum: rând nou => 'extras'.
+//
+// R5 runda 4 (verificator R3, MAJOR): „aprobat = validat" trebuie să acopere și cantitate_plansa — cu baza „planșe",
+// graficul folosește tocmai coloana asta. Până acum rândul VALIDAT primea tăcut o măsurătoare nouă în cantitate_plansa
+// („nu i se schimbă nici cifra" era adevărat doar pentru `cantitate`), deci o cifră automată neverificată trecea drept
+// aprobată. Regula (aceeași ca în supabase/functions/ofertare-plansa-citeste/handler.ts, `cifraSchimbata`):
+//   măsurătoarea nouă diferă cu ≥ 1 m de cifra pe care rândul o avea deja (cantitate_plansa; dacă n-are, cantitate;
+//   dacă n-are niciuna, orice cifră e nouă) => status 'diferenta' și validarea se reface.
+// Statusul pleacă în patch ORICARE ar fi statusul citit: între SELECT-ul din cad-parse.js și UPDATE un om poate valida
+// rândul, iar UPDATE-ul nu are gardă pe status; cu 'diferenta' în patch, o validare dată pe cifra veche nu rămâne peste
+// cifra nouă. Aceeași cifră re-măsurată (< 1 m) nu atinge statusul: validarea rămâne.
+// Rândul validat își păstrează `cantitate` (cifra omului); cel nevalidat primește măsurătoarea și în `cantitate`.
+export const referintaCitire = r =>
+  r?.cantitate_plansa != null ? Number(r.cantitate_plansa) : r?.cantitate != null ? Number(r.cantitate) : null
+export const cifraSchimbata = (r, nou) => {
+  if (nou == null) return false
+  const ref = referintaCitire(r)
+  return ref === null || Math.abs(ref - Number(nou)) >= 1
+}
+const fmt = x => (+Number(x).toFixed(2)).toLocaleString('ro-RO')
+
 export function randCantitateCad({ licitatieId, denumire, c, notaAnaliza }, existent = null) {
   const l3d = c.lungime_3d_m
   const nota = `Măsurat din desen: ${l3d.toLocaleString('ro-RO')} m în spațiu, ${c.lungime_2d_m.toLocaleString('ro-RO')} m în plan` +
@@ -14,11 +32,17 @@ export function randCantitateCad({ licitatieId, denumire, c, notaAnaliza }, exis
   if (!existent) {
     return { op: 'insert', rand: { licitatie_id: licitatieId, denumire, cantitate: l3d, um: 'm', cantitate_plansa: l3d, status: 'extras', diferenta_nota: nota } }
   }
+  const ref = referintaCitire(existent)
+  const schimbat = cifraSchimbata(existent, l3d)
+  const deUnde = existent.cantitate_plansa != null ? 'măsurătoarea anterioară' : 'cantitatea'
   if (existent.status === 'validat') {
-    const vechi = Number(existent.cantitate)
-    const difera = existent.cantitate != null && Math.abs(vechi - l3d) >= 1
     return { op: 'update', id: existent.id, patch: { cantitate_plansa: l3d,
-      diferenta_nota: nota + (difera ? ` Rândul e validat cu ${vechi.toLocaleString('ro-RO')} m — noua măsurătoare diferă, verifică.` : '') } }
+      diferenta_nota: schimbat
+        ? `Rândul era VALIDAT cu ${ref === null ? 'nicio cifră' : `${deUnde} ${fmt(ref)} m`}; noua măsurătoare diferă — validarea se reface. ` + nota
+        : nota,
+      ...(schimbat ? { status: 'diferenta' } : {}) } }
   }
-  return { op: 'update', id: existent.id, patch: { cantitate: l3d, um: 'm', cantitate_plansa: l3d, diferenta_nota: nota } }
+  return { op: 'update', id: existent.id, patch: { cantitate: l3d, um: 'm', cantitate_plansa: l3d,
+    diferenta_nota: schimbat && ref !== null ? `Măsurătoarea diferă de ${deUnde} ${fmt(ref)} m. ` + nota : nota,
+    ...(schimbat ? { status: 'diferenta' } : {}) } }
 }

@@ -946,9 +946,14 @@ Deno.test('runda 4 transfer: Dn cu toate rândurile de verificat -> nota pe pozi
   // id 2 („extras”, nevalidată): cifra veche din planșă se golește, status „diferenta”
   assertEquals([id(2).cantitate, id(2).cantitate_plansa, id(2).status], [1100, null, 'diferenta'])
   assertEquals(id(2).diferenta_nota, 'De verificat: 1 rând Dn180 PE fără identitate sigură (600 m); cifra din planșă s-a golit (era 2.210 m, dintr-o citire anterioară).' + pe)
-  // id 3 (sigur) și TOTAL: doar partea sigură, restul numit
-  assertEquals([id(3).cantitate_plansa, id(3).status], [1740, 'validat'])
-  assertEquals([id(4).cantitate_plansa, id(4).status], [1740, 'validat'])
+  // id 3 (sigur) și TOTAL: doar partea sigură, restul numit.
+  // R5 runda 4 (verificator R3, MAJOR): ambele erau VALIDATE pe altă cifră din planșă (5.245 / 41.920) — citirea automată le
+  // schimbă cantitate_plansa (1.740), deci ies din „validat” („diferenta”) și nota spune pe ce cifră fusese dată validarea.
+  // Înainte: rămâneau „validat” cu o cifră pe care n-o verificase nimeni (cazul real lic. 3 din 15.09).
+  assertEquals([id(3).cantitate_plansa, id(3).status], [1740, 'diferenta'])
+  assert(id(3).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 5.245 m; planșa „pl1.1.pdf” dă acum 1.740 m — validarea se reface. '), id(3).diferenta_nota)
+  assertEquals([id(4).cantitate_plansa, id(4).status], [1740, 'diferenta'])
+  assert(id(4).diferenta_nota.startsWith('Rândul era VALIDAT cu cifra din planșă 41.920 m; planșa „pl1.1.pdf” dă acum 1.740 m — validarea se reface. '), id(4).diferenta_nota)
   assert(id(4).diferenta_nota.endsWith('De verificat, NEincluse în cifra din planșă: pe planșă: 3 rânduri de tabel fără identitate sigură (10.950 m).'), id(4).diferenta_nota)
   assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, material: 'PE', pozitie_id: 1, actiune: 'nota' }, { dn: 180, material: 'PE', pozitie_id: 2, actiune: 'golit' }])
 })

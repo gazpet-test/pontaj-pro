@@ -114,12 +114,13 @@ export default async function handler(req, res) {
       // Traseul cu cote e candidatul de conducta — intra ca pozitie de cantitate,
       // marcata ca provenind din desen, ca sa poata fi comparata cu memoriul.
       // R5 (25.09.2026): intra 'extras' (masuratoare automata), NU 'validat' — vezi _cadCantitate.js.
+      // R5 runda 4: o masuratoare noua (>= 1 m fata de cantitate_plansa / cantitate) scoate randul din 'validat' ('diferenta').
       const c = analiza.sumar.cu_cote
       let pozitie = null
       if (c.numar > 0 && c.lungime_3d_m > 0) {
         const denumire = `Traseu măsurat din desenul proiectantului (${nume})`
         const { data: existent } = await supa.from('ofertare_cantitati')
-          .select('id, cantitate, status').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
+          .select('id, cantitate, cantitate_plansa, status').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
         const scr = randCantitateCad({ licitatieId: doc.licitatie_id, denumire, c, notaAnaliza: analiza.nota }, existent)
         if (scr.op === 'update') await supa.from('ofertare_cantitati').update(scr.patch).eq('id', scr.id)
         else await supa.from('ofertare_cantitati').insert(scr.rand)

@@ -13,14 +13,33 @@ describe('randCantitateCad — o măsurătoare nu se auto-aprobă', () => {
     expect(r.rand.diferenta_nota).toMatch(/^Măsurat din desen: 35.620,59 m în spațiu/)
     expect(r.rand.diferenta_nota).not.toMatch(/undefined/)
   })
-  it('rând existent VALIDAT de om: nu i se schimbă cifra și nici statusul, doar măsurătoarea + nota', () => {
-    const r = randCantitateCad(arg, { id: 9, cantitate: 35000, status: 'validat' })
-    expect(r.op).toBe('update'); expect(r.patch).not.toHaveProperty('cantitate'); expect(r.patch).not.toHaveProperty('status')
-    expect(r.patch.cantitate_plansa).toBe(35620.59); expect(r.patch.diferenta_nota).toMatch(/validat cu 35.000 m — noua măsurătoare diferă/)
+  // R5 runda 4 (verificator R3, MAJOR / ADV2): înainte, rândul VALIDAT primea tăcut o măsurătoare nouă în cantitate_plansa
+  // (coloana folosită de grafic cu baza „planșe"), fără să-și schimbe statusul => cifră automată neverificată „aprobată".
+  it('rând VALIDAT + măsurătoare nouă diferită (≥ 1 m) => „diferenta", cantitate (a omului) neatinsă, nota cere revalidarea', () => {
+    const r = randCantitateCad(arg, { id: 9, cantitate: 35000, cantitate_plansa: 35000, status: 'validat' })
+    expect(r.op).toBe('update'); expect(r.patch).not.toHaveProperty('cantitate')
+    expect(r.patch.status).toBe('diferenta'); expect(r.patch.cantitate_plansa).toBe(35620.59)
+    expect(r.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT cu măsurătoarea anterioară 35\.000 m; noua măsurătoare diferă — validarea se reface\. Măsurat din desen/)
   })
-  it('rând existent nevalidat: se actualizează cifra, statusul rămâne al lui (nu devine validat)', () => {
-    const r = randCantitateCad(arg, { id: 9, cantitate: 1, status: 'extras' })
-    expect(r.patch.cantitate).toBe(35620.59); expect(r.patch).not.toHaveProperty('status')
+  it('ADV2 (lic. 3, rândul 9 real, validat 35.620,59): re-măsurare 41.000 => „diferenta"; aceeași cifră (< 1 m) => validarea rămâne', () => {
+    const r9 = { id: 9, cantitate: 35620.59, cantitate_plansa: 35620.59, status: 'validat' }
+    const alt = randCantitateCad({ ...arg, c: { numar: 1, lungime_3d_m: 41000, lungime_2d_m: 40990 } }, r9)
+    expect(alt.patch.status).toBe('diferenta'); expect(alt.patch.cantitate_plansa).toBe(41000)
+    const same = randCantitateCad({ ...arg, c: { numar: 1, lungime_3d_m: 35621.2, lungime_2d_m: 35600 } }, r9)
+    expect(same.patch).not.toHaveProperty('status'); expect(same.patch.diferenta_nota).not.toMatch(/VALIDAT/)
+  })
+  it('referința e cantitate_plansa, apoi cantitate (rând validat fără măsurătoare anterioară)', () => {
+    const r = randCantitateCad(arg, { id: 9, cantitate: 35000, cantitate_plansa: null, status: 'validat' })
+    expect(r.patch.status).toBe('diferenta'); expect(r.patch.diferenta_nota).toMatch(/cu cantitatea 35\.000 m/)
+    const ok = randCantitateCad(arg, { id: 9, cantitate: 35620, cantitate_plansa: null, status: 'validat' })
+    expect(ok.patch).not.toHaveProperty('status')
+  })
+  it('rând nevalidat: cifra se actualizează; statusul NU devine validat; cifră schimbată => „diferenta" (și contra cursei cu o validare)', () => {
+    const r = randCantitateCad(arg, { id: 9, cantitate: 1, cantitate_plansa: 1, status: 'extras' })
+    expect(r.patch.cantitate).toBe(35620.59); expect(r.patch.status).toBe('diferenta')
+    expect(r.patch.diferenta_nota).toMatch(/^Măsurătoarea diferă de măsurătoarea anterioară 1 m\./)
+    const la = randCantitateCad(arg, { id: 9, cantitate: 35620.59, cantitate_plansa: 35620.59, status: 'extras' })
+    expect(la.patch).not.toHaveProperty('status'); expect(la.patch.cantitate).toBe(35620.59)
   })
   it('nicio ramură nu scrie status=validat', () => {
     for (const ex of [null, { id: 1, status: 'extras' }, { id: 1, status: 'diferenta' }, { id: 1, status: 'validat', cantitate: 35620.59 }]) {

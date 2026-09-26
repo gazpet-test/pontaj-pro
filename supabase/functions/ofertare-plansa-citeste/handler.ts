@@ -1104,7 +1104,35 @@ export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[];
 // sau declarat tip_sursa='plansa' NU e memoriu. Până acum `cantitate` lui era citită drept „dinMemoriu": la o recitire
 // a planșei 470 (lic. 95) rândurile 1752–1756 ar fi primit „Planșa 1 confirmă: … m" — planșa confirmată de ea însăși,
 // pe cifre extrase și nevalidate — iar 1756 (Dn40) „Memoriu 13.140 m vs planșa 13.740 m".
-export const randDinPlansa = (r: any) => r?.tip_sursa === 'plansa' || /citit automat din scanare/i.test(String(r?.sursa || ''));
+// R5 runda 4 (verificator R3, ADV4): `tip_sursa` declarat (de om sau de extragere) BATE regex-ul pe sursă — un rând reclasificat
+// ca F3 / memoriu, dar cu sursa încă „citit automat din scanare”, e tratat după tipul declarat. Doar fără tip contează sursa.
+export const randDinPlansa = (r: any) => r?.tip_sursa ? r.tip_sursa === 'plansa' : /citit automat din scanare/i.test(String(r?.sursa || ''));
+// R5 runda 4 (ADV3): „recitire” = rândul a fost scris de un transfer din ACEEAȘI planșă — sursa lui începe cu eticheta ei
+// („Planșa 1 — …”; „Planșa 1” ≠ „Planșa 12”). Se acceptă ambele etichete posibile ale documentului (nr. din cartuș sau
+// numele fișierului), pentru că nr. citit din cartuș poate lipsi la o rulare. Limită: sursa nu poartă id-ul documentului,
+// deci două documente diferite cu același nr. de planșă nu se pot deosebi (vezi docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md).
+export const dinAceeasiPlansa = (r: any, etichete: string[]) => {
+  const s = String(r?.sursa || '').trim();
+  return etichete.some((e) => !!e && (s === e || s.startsWith(e + ' ')));
+};
+// R5 runda 4 (verificator R3, MAJOR): „aprobat = status 'validat'” acoperă și cantitate_plansa. O citire automată care pune pe
+// un rând o cifră diferită (≥ 1 m) de cea pe care rândul o avea deja — cantitate_plansa existentă sau, dacă n-avea, `cantitate`
+// (ori nicio cifră) — scoate rândul din 'validat': status 'diferenta', validarea se reface. Referința e cifra DEJA de pe rând:
+// aceeași cifră recitită nu redeschide o validare făcută după transferul anterior. Aceeași regulă în api/_cadCantitate.js.
+// Statusul pleacă în patch INDIFERENT de statusul citit: RPC-ul ofertare_transfer_plansa_cantitati aplică statusul din patch
+// fără gardă, deci o validare făcută între citirea de aici și RPC nu mai poate rămâne peste o cifră pe care n-a văzut-o.
+export const referintaCitire = (r: any): number | null =>
+  r?.cantitate_plansa != null ? Number(r.cantitate_plansa) : r?.cantitate != null ? Number(r.cantitate) : null;
+export const cifraSchimbata = (r: any, nou: number | null): boolean => {
+  if (nou == null) return false;
+  const ref = referintaCitire(r);
+  return ref === null || Math.abs(ref - Number(nou)) >= 1;
+};
+// ce cifră avea rândul când a fost validat (pentru nota care cere revalidarea)
+export const descriereReferinta = (r: any) => r?.cantitate_plansa != null
+  ? `cifra din planșă ${(+Number(r.cantitate_plansa).toFixed(1)).toLocaleString('ro-RO')} m`
+  : r?.cantitate != null ? `cantitatea ${(+Number(r.cantitate).toFixed(1)).toLocaleString('ro-RO')} m (fără cifră din planșă)` : 'nicio cifră';
+const ETICHETA_REF: Record<string, string> = { lista_f3: 'F3', lista_c6: 'C6', lista_alt: 'Lista de cantități', caiet: 'Caietul de sarcini', alt: 'Documentul-sursă', memoriu: 'Memoriu' };
 export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null, rulare: string, rest?: RestTransfer) {
   const ops: any[] = [];
   const fmtR = fmtM;
@@ -1246,14 +1274,23 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
   const ceVechi = (cp: number | null, golit: boolean) => golit
     ? `cifra din planșă s-a golit${cp !== null ? ` (era ${fmtR(cp)} m, dintr-o citire anterioară)` : ''}`
     : `cifra din planșă nu s-a actualizat${cp !== null ? ` (${fmtR(cp)} m e dintr-o citire anterioară)` : ''}`;
-
+  const eticheteDoc = [...new Set([eticheta, `Planșa „${doc.nume_original}”`])];
+  const pozitiiPe = (r: any) => [{ id: r.id, denumire: r.denumire }];
+  // R5 runda 4 (ADV3): rândul are cifra ALTEI planșe (sau a unei planșe nedeclarate) — nu e recitire, planșa de acum nu scrie pe el
+  const cifraAlteiPlanse = (r: any) => randDinPlansa(r) && !dinAceeasiPlansa(r, eticheteDoc);
   // Runda 6 (verificator runda 5, MAJOR — pre-existent, codul identic la 8a6fbbb): întâi se află ținta FIECĂRUI grup sigur, apoi se
   // scrie. Două grupuri sigure cu materiale diferite ((Dn, PE) + (Dn, OL) sau (Dn, PE) + (Dn, '')) care nimereau ACEEAȘI poziție
   // unică dădeau două update-uri pe același id; RPC-ul le aplică în ordine => ultimul câștiga, primul se pierdea TĂCUT (PE 500 +
   // OL 90 => cantitate_plansa 90, nota „-500 m” falsă). Acum poziția atinsă de mai multe grupuri e AMBIGUĂ: cantitate_plansa NU se
   // atinge, nota numește toate grupurile și metrii lor, „extras” => „diferenta” (validat rămâne validat), intrare în `ambigue[]`.
   // Rezultatul nu depinde de ordinea grupurilor (grupurile din notă sunt ordonate: Dn, material cunoscut, apoi fără material).
-  const tinte = [...peDiametru.values()].sort((a, b) => b.dn - a.dn).map((g) => ({ g, m: +g.m.toFixed(1), candidati: candidatiPe(g.dn, g.mat) }));
+  // R5 runda 4 (ADV5, același defect găsit independent): și ordinea grupurilor e deterministă (Dn desc, apoi material), deci și
+  // lista de operații trimisă RPC-ului e aceeași indiferent de ordinea tronsoanelor. La rebase-ul R5 peste R4 runda 6 a rămas
+  // semantica R4 (notă pe poziție, cifra neatinsă) în locul „nimic pe poziție” din R5: nota e singura urmă vizibilă în UI.
+  // Rebase peste R4 runda 12: candidații vin din `candidatiPe` (R4 runda 10–12: prioritatea non-„total” înaintea materialului,
+  // fail-safe pe „total” nerecunoscut, compatibilitatea de material) — R5 păstrează doar ordinea deterministă.
+  const tinte = [...peDiametru.values()].sort((a, b) => b.dn - a.dn || a.mat.localeCompare(b.mat))
+    .map((g) => ({ g, m: +g.m.toFixed(1), candidati: candidatiPe(g.dn, g.mat) }));
   const grupuriPeId = new Map<unknown, typeof tinte>();
   for (const x of tinte) if (x.candidati.length === 1) grupuriPeId.set(x.candidati[0].id, [...(grupuriPeId.get(x.candidati[0].id) || []), x]);
   const ordGrup = (a: typeof tinte[number], b: typeof tinte[number]) => ordCheie(`${a.g.dn}|${a.g.mat}`, `${b.g.dn}|${b.g.mat}`);
@@ -1265,17 +1302,17 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
     // Daca acelasi diametru apare pe mai multe pozitii (doua localitati, doua loturi, doua
     // materiale), NU ghicim care e. Pana acum `.find()` lua prima si suprascria tacut — iar
     // o plansa ulterioara putea suprascrie ce pusese cea dinainte. Ambiguitatea se RAPORTEAZA.
+    const dv = cheiRest(dn, g.mat).map((k) => descriereRestDn(rest, k)).filter(Boolean).join('; ');
     if (candidati.length > 1) {
       unde(g, m, `e ambiguu între ${candidati.length} poziții (nescris)`);
       for (const r of candidati) candidatiAmbigui.add(r.id);
-      const dv = cheiRest(dn, g.mat).map((k) => descriereRestDn(rest, k)).filter(Boolean).join('; ');
       ambigue.push({ dn, material: g.mat || null, metri: m, ...(dv ? { de_verificat: dv } : {}), pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
       continue;
     }
     const potrivit = candidati[0];
     const peAceeasi = potrivit ? grupuriPeId.get(potrivit.id)! : [];
     if (peAceeasi.length > 1) {
-      // runda 6: coliziune — o singură scriere pe id (la primul grup, în ordinea Dn), doar notă (+ „diferenta” pe „extras”)
+      // runda 6: coliziune — o singură scriere pe id (la primul grup, în ordinea Dn, material), doar notă (+ „diferenta” pe „extras”)
       unde(g, m, `e în coliziune pe poziția „${potrivit.denumire}” (nescris)`);
       if (coliziuniScrise.has(potrivit.id)) continue;
       coliziuniScrise.add(potrivit.id);
@@ -1284,23 +1321,39 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
       const lista = xs.map((x) => `${eticRest(`${x.g.dn}|${x.g.mat}`)}${x.g.mat ? '' : ' fără material'} ${fmtR(x.m)} m (${randuri(x.g.n)})`).join('; ');
       const cp = potrivit.cantitate_plansa == null ? null : Number(potrivit.cantitate_plansa);
       const chei = [...new Set(xs.flatMap((x) => cheiRest(x.g.dn, x.g.mat)))].sort(ordCheie);
+      const dns = [...new Set(xs.map((x) => x.g.dn))];
+      const dvC = chei.map((k) => descriereRestDn(rest, k)).filter(Boolean).join('; ');
+      const intrare = { dn: dns.length === 1 ? dns[0] : null, material: null, metri: suma, motiv: 'mai multe grupuri sigure (Dn, material) pe aceeași poziție — cantitate_plansa neatinsă',
+        grupuri: xs.map((x) => ({ dn: x.g.dn, material: x.g.mat || null, metri: x.m, randuri: x.g.n })), ...(dvC ? { de_verificat: dvC } : {}),
+        pozitii: pozitiiPe(potrivit) };
+      // rebase R5 peste R4: poziția cu cifra ALTEI planșe nu primește nici nota coliziunii (R5 ADV3: planșa de acum nu scrie pe ea)
+      if (cifraAlteiPlanse(potrivit)) {
+        ambigue.push({ ...intrare, motiv: `${intrare.motiv}; poziția are cifra altei planșe („${String(potrivit.sursa || potrivit.tip_sursa || '').slice(0, 80)}”) — nu se scrie nimic pe ea, decide omul` });
+        continue;
+      }
       const patch: Record<string, unknown> = { diferenta_nota: `De verificat: ${eticheta} dă ${xs.length} grupuri sigure pe aceeași poziție — ${lista}; ` +
         `împreună ${fmtR(suma)} m, dar nu se adună și nu se suprascriu automat (denumirea poziției nu le deosebește); ${ceVechi(cp, false)}.` + sufixDin(chei) };
       if (potrivit.status === 'extras') patch.status = 'diferenta';
       ops.push({ op: 'update', id: potrivit.id, patch });
-      const dns = [...new Set(xs.map((x) => x.g.dn))];
-      const dv = chei.map((k) => descriereRestDn(rest, k)).filter(Boolean).join('; ');
-      ambigue.push({ dn: dns.length === 1 ? dns[0] : null, material: null, metri: suma, motiv: 'mai multe grupuri sigure (Dn, material) pe aceeași poziție — cantitate_plansa neatinsă',
-        grupuri: xs.map((x) => ({ dn: x.g.dn, material: x.g.mat || null, metri: x.m, randuri: x.g.n })), ...(dv ? { de_verificat: dv } : {}),
-        pozitii: [{ id: potrivit.id, denumire: potrivit.denumire }] });
+      ambigue.push(intrare);
       continue;
     }
 
     if (potrivit) {
-      unde(g, m, `e pe poziția „${potrivit.denumire}”`);
       const dinPlansa = randDinPlansa(potrivit);
-      const dinMemoriu = potrivit.cantitate === null || dinPlansa ? null : Number(potrivit.cantitate);
-      const anterior = dinPlansa && potrivit.cantitate !== null ? Number(potrivit.cantitate) : null;
+      // R5 runda 4 (ADV3): rândul e din planșă, dar din ALTĂ planșă (sau planșă nedeclarată) => nu e recitire: cifra ei NU se
+      // suprascrie; se raportează ca ambiguu (poate fi altă zonă a rețelei — de adunat sau de separat, decide omul).
+      if (cifraAlteiPlanse(potrivit)) {
+        ambigue.push({ dn, material: g.mat || null, metri: m, ...(dv ? { de_verificat: dv } : {}),
+          motiv: `poziția are cifra altei planșe („${String(potrivit.sursa || potrivit.tip_sursa || '').slice(0, 80)}”) — ${eticheta.toLowerCase()} nu o suprascrie; decide omul (adună / separă / înlocuiește)`,
+          pozitii: pozitiiPe(potrivit) });
+        unde(g, m, `e pe poziția „${potrivit.denumire}”, cu cifra altei planșe (nescris)`);
+        continue;
+      }
+      unde(g, m, `e pe poziția „${potrivit.denumire}”`);
+      const dinMemoriu = potrivit.cantitate == null || dinPlansa ? null : Number(potrivit.cantitate);
+      const anterior = dinPlansa && potrivit.cantitate != null ? Number(potrivit.cantitate) : null;
+      const etRef = ETICHETA_REF[String(potrivit.tip_sursa || '')] || 'Memoriu';
       const nota = dinPlansa
         // rând din planșă: nu există referință din memoriu; spunem ce dă recitirea și dacă diferă de cifra din rând
         ? `Diametru care nu apare în cantitățile din memoriu. ${eticheta} (recitire) dă ${m.toLocaleString('ro-RO')} m pe ${g.n} tronsoane` +
@@ -1311,7 +1364,7 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
         ? `${eticheta} dă ${m.toLocaleString('ro-RO')} m pe ${g.n} tronsoane.`
         : Math.abs(dinMemoriu - m) < 1
           ? `${eticheta} confirmă: ${m.toLocaleString('ro-RO')} m.`
-          : `Memoriu ${dinMemoriu.toLocaleString('ro-RO')} m vs ${eticheta.toLowerCase()} ${m.toLocaleString('ro-RO')} m ` +
+          : `${etRef} ${dinMemoriu.toLocaleString('ro-RO')} m vs ${eticheta.toLowerCase()} ${m.toLocaleString('ro-RO')} m ` +
             `(${m - dinMemoriu > 0 ? '+' : ''}${(m - dinMemoriu).toLocaleString('ro-RO')} m, pe ${g.n} tronsoane citite din tabel).`;
       const patch: Record<string, unknown> = { cantitate_plansa: m, diferenta_nota: nota + sufixRest(dn, g.mat), updated_at: new Date().toISOString() };
       // daca cineva a validat deja pozitia, nu-i schimbam decizia — doar ii aratam nota
@@ -1320,6 +1373,13 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
       // R5: și recitirea care diferă de cifra din rând (tot din planșă) e o diferență de verificat, nu o confirmare
       const deComparat = dinMemoriu !== null ? dinMemoriu : anterior;
       if (potrivit.status === 'extras' && ((deComparat !== null && Math.abs(deComparat - m) >= 1) || cheiRest(dn, g.mat).length || rest?.incomplet)) patch.status = 'diferenta';
+      // R5 runda 4 (MAJOR): cifra din planșă se schimbă față de ce avea rândul => 'diferenta' ORICARE ar fi statusul citit
+      // (și pe 'validat': validarea s-a dat pe altă cifră; și în fereastra citire → RPC, vezi `cifraSchimbata`).
+      if (cifraSchimbata(potrivit, m)) {
+        if (potrivit.status === 'validat') patch.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(potrivit)}; ` +
+          `${eticheta.toLowerCase()} dă acum ${fmtR(m)} m — validarea se reface. ` + patch.diferenta_nota;
+        patch.status = 'diferenta';
+      }
       delete patch.updated_at; // îl pune RPC-ul (now())
       ops.push({ op: 'update', id: potrivit.id, patch });
     } else {
@@ -1367,6 +1427,13 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
     }
     const p = candidati[0];
     if (!p) { doarVerif.push({ dn, material, pozitie_id: null, actiune: 'fara_pozitie' }); continue; }
+    // R5 runda 4: poziția cu cifra ALTEI planșe nu se golește și nu primește notă. (Poziția unei coliziuni de grupuri sigure din
+    // planșa de acum are deja nota coliziunii în `ops` — restul se adaugă la ea mai jos, ca la orice poziție deja scrisă, runda 6.)
+    if (cifraAlteiPlanse(p)) {
+      ambigue.push({ dn, material, metri: 0, de_verificat: ce,
+        motiv: `poziția are cifra altei planșe („${String(p.sursa || p.tip_sursa || '').slice(0, 80)}”) — nu se golește`, pozitii: pozitiiPe(p) });
+      doarVerif.push({ dn, material, pozitie_id: p.id, actiune: 'ambiguu' }); continue;
+    }
     const deja = ops.find((o) => o.op === 'update' && o.id === p.id);
     if (deja) {
       // aceeași poziție primește deja cifra altui grup sigur (ex. singura poziție Dn110 ia Dn110 PE): cifra ei e incompletă
@@ -1434,7 +1501,7 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
   const total = +[...peDiametru.values()].reduce((s, g) => s + g.m, 0).toFixed(1);
   if (randTotal && ops.some((o) => o.op === 'update' && o.id === randTotal.id)) throw new Error('transfer: două scrieri pe rândul TOTAL (id ' + randTotal.id + ')');
   if (randTotal && peDiametru.size) {
-    const dinMemoriu = randTotal.cantitate === null ? null : Number(randTotal.cantitate);
+    const dinMemoriu = randTotal.cantitate == null ? null : Number(randTotal.cantitate);
     const patch: Record<string, unknown> = {
       cantitate_plansa: total,
       diferenta_nota: (dinMemoriu !== null && Math.abs(dinMemoriu - total) >= 1
@@ -1443,6 +1510,11 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
     };
     // runda 5 (verificator, minor): ca pe Dn — TOTAL „extras” cu rest de verificat pe planșă (cifra = doar partea sigură) => „diferenta”
     if (randTotal.status === 'extras' && rest?.global) patch.status = 'diferenta';
+    // R5 runda 4 (MAJOR): și TOTAL-ul — referința graficului („front”) când e validat — se revalidează dacă cifra din planșă se schimbă
+    if (cifraSchimbata(randTotal, total)) {
+      if (randTotal.status === 'validat') patch.diferenta_nota = `Rândul era VALIDAT cu ${descriereReferinta(randTotal)}; ${eticheta.toLowerCase()} dă acum ${fmtR(total)} m — validarea se reface. ` + patch.diferenta_nota;
+      patch.status = 'diferenta';
+    }
     ops.push({ op: 'update', id: randTotal.id, patch });
   } else if (randTotal) {
     // niciun rând sigur (cu Dn standard) pe planșă: totalul NU devine 0 m — doar nota (sau golire, dacă e „extras”)
