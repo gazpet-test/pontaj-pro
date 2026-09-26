@@ -138,12 +138,18 @@ export function evalueazaPoarta(st) {
   r.push({
     // NU „Cap. 4": la Contești graficul e anexă, la altele cap. 3 sau 8. Numărul vine din fișa de date.
     k:'grafic', titlu:'Graficul de execuție — versiune înghețată',
-    stare: !st.grafic_versiune ? 'warn' : (st.grafic_avertismente > 0 ? 'warn' : 'ok'),
+    // R5 runda 5 (minorul 5 al verificatorului): versiunea înghețată se reverifică față de cantitățile de ACUM (reverificareGraficInghetat,
+    // din OfertarePropunere): un rând-sursă de front invalidat după îngheț / rânduri necesare nevalidate => WARN „de reverificat”.
+    // Câmpul absent (versiune fără parametri, încărcare veche) = ca înainte; eroare la reverificare = WARN (control indisponibil ≠ zero).
+    stare: !st.grafic_versiune ? 'warn'
+      : (st.grafic_avertismente > 0 || st.grafic_de_reverificat > 0 || st.grafic_reverificare_eroare ? 'warn' : 'ok'),
     detalii: !st.grafic_versiune
       ? 'nicio versiune generată în grafic_versiuni'
       : `versiunea ${st.grafic_versiune}` + (st.grafic_avertismente > 0
           ? ` — înghețată cu ${st.grafic_avertismente} avertismente în poarta graficului, deschide Graficul și uită-te la ele`
-          : ', fără avertismente'),
+          : ', fără avertismente')
+        + (st.grafic_de_reverificat > 0 ? ` · DE REVERIFICAT față de cantitățile de acum (rezultat incomplet): ${st.grafic_de_reverificat_text}` : '')
+        + (st.grafic_reverificare_eroare ? ` · reverificarea față de cantitățile de acum n-a putut rula (${st.grafic_reverificare_eroare}) — control indisponibil` : ''),
   })
 
   // H2 (Sprint 3): cantitățile din Cantități vs fronturile graficului. Sursele vin tot din view.

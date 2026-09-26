@@ -9,7 +9,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
-import { aplicaRegulaAprobare, descrieSchimbari } from './ofertareCantitatiInvalidare.js'
+import { aplicaRegulaAprobare, descrieSchimbari, referinteDinIstoric } from './ofertareCantitatiInvalidare.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -74,6 +74,15 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
     // doar câmpurile scrise de server (statusul, nota, cifra din planșă, categoria din dicționar); editările în curs rămân
     setCant(cs => cs.map(x => x.id === id ? { ...x, status: f.status, diferenta_nota: f.diferenta_nota, cantitate_plansa: f.cantitate_plansa, categorie: f.categorie, updated_at: f.updated_at, _orig: f } : x))
   }
+  // R5 runda 5 (verificator, MAJOR 2): pragul se măsoară față de valoarea APROBATĂ (de la ultima validare, din istoric), nu față de
+  // valoarea de dinainte: altfel 5 editări de câte 0,99 m mutau cifra fără ca rândul să iasă din „validat”. Istoric indisponibil
+  // (migrarea neaplicată) => null => comparația cu rândul de acum (în BD, trigger-ul face aceeași comparație cu istoricul).
+  const referintaAprobare = async (id) => {
+    try {
+      const { data, error } = await supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv, valori_vechi, valori_noi').eq('cantitate_id', id).order('id')
+      return error ? null : (referinteDinIstoric(data).get(Number(id)) || null)
+    } catch { return null }
+  }
   const saveC = async (c) => {
     if (!c._mod) return
     const o = c._orig || c
@@ -83,7 +92,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
       specificatii: c.specificatii || null, sursa: c.sursa || null,
       diferenta_nota: c.diferenta_nota || null,
     }
-    const r = aplicaRegulaAprobare(o, patch)
+    const r = aplicaRegulaAprobare(o, patch, o.status === 'validat' ? await referintaAprobare(c.id) : null)
     if (r.invalidat && !window.confirm(`Rândul e VALIDAT. Modificarea schimbă ce s-a aprobat: ${descrieSchimbari(r.schimbari)}.
 
 ` +

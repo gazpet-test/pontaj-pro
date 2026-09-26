@@ -12,8 +12,11 @@ DROP TRIGGER IF EXISTS trg_zz_ofertare_cantitati_aprobare_del ON public.ofertare
 DROP FUNCTION IF EXISTS public.fn_trg_ofertare_cantitati_aprobare();
 DROP FUNCTION IF EXISTS public.ofertare_cantitati_atribute(text);
 DROP FUNCTION IF EXISTS public.ofertare_fmt_ro(numeric);
+DROP FUNCTION IF EXISTS public.ofertare_norm_text(text);
 COMMENT ON TABLE public.ofertare_cantitati_istoric IS 'R5 (26.09.2026): istoricul aprobărilor din ofertare_cantitati — trigger-ul a fost scos (rollback R1); tabelul păstrat, doar citire.';
 
+-- Runda 5: v_ofertare_cantitati_nevalidate (docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql) citește istoricul — înainte de R2,
+-- rollback-ul view-ului se face ÎNTÂI (altfel DROP TABLE e refuzat de dependență, fără nicio pierdere). R1 singur NU strică view-ul.
 -- (R2) — opțional, separat, doar pe tabel gol:
 -- DO $$ BEGIN
 --   IF EXISTS (SELECT 1 FROM public.ofertare_cantitati_istoric) THEN

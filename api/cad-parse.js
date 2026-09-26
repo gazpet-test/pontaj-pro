@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { citesteDxf } from './_dxf.js'
 import { randCantitateCad } from './_cadCantitate.js'
+import { referinteDinIstoric } from './_cantitatiInvalidare.js'
 
 const rulează = promisify(execFile)
 const BIN_DWG2DXF = path.join(process.cwd(), 'bin', 'dwg2dxf')
@@ -120,8 +121,15 @@ export default async function handler(req, res) {
       if (c.numar > 0 && c.lungime_3d_m > 0) {
         const denumire = `Traseu măsurat din desenul proiectantului (${nume})`
         const { data: existent } = await supa.from('ofertare_cantitati')
-          .select('id, um, cantitate, cantitate_plansa, status').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
-        const scr = randCantitateCad({ licitatieId: doc.licitatie_id, denumire, c, notaAnaliza: analiza.nota }, existent)
+          .select('id, um, cantitate, cantitate_plansa, status, diferenta_nota, updated_at').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
+        // R5 runda 5: valoarea APROBATĂ a rândului validat (istoric; tabel lipsă / eroare => null => rândul de acum)
+        let referinta = null
+        if (existent?.status === 'validat') {
+          const { data: ev, error: eIst } = await supa.from('ofertare_cantitati_istoric')
+            .select('id, cantitate_id, motiv, valori_vechi, valori_noi').eq('cantitate_id', existent.id).order('id')
+          if (!eIst) referinta = referinteDinIstoric(ev).get(Number(existent.id)) || null
+        }
+        const scr = randCantitateCad({ licitatieId: doc.licitatie_id, denumire, c, notaAnaliza: analiza.nota }, existent, referinta)
         if (scr.op === 'update') await supa.from('ofertare_cantitati').update(scr.patch).eq('id', scr.id)
         else await supa.from('ofertare_cantitati').insert(scr.rand)
         pozitie = c.lungime_3d_m

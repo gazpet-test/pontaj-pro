@@ -48,3 +48,21 @@ describe('randCantitateCad — o măsurătoare nu se auto-aprobă', () => {
     }
   })
 })
+
+// R5 runda 5 (verificatorul condițiilor 1–2)
+describe('randCantitateCad — runda 5', () => {
+  it('MAJOR 1: rândul INVALIDAT (nevalidat, prefixul regulii) își păstrează prefixul când re-măsurarea îi rescrie nota', () => {
+    const pre = 'Rândul era VALIDAT — aprobarea veche (cantitate 35.620,59 m) nu mai e valabilă: s-a schimbat unitatea de măsură („m” → „ml”). Valoarea și aprobarea veche rămân în istoric; validarea se reface.'
+    const r = randCantitateCad(arg, { id: 9, um: 'ml', cantitate: 35620.59, cantitate_plansa: 35620.59, status: 'diferenta', diferenta_nota: pre + ' Măsurat exact…' })
+    expect(r.patch.diferenta_nota.startsWith(pre + ' Măsurat din desen: 35.620,59 m')).toBe(true)
+  })
+  it('MAJOR 2: re-măsurări mici cumulate pe rândul VALIDAT — față de valoarea APROBATĂ (referința din istoric) => „diferenta”', () => {
+    const aprobat = { id: 9, cantitate: 35620.59, cantitate_plansa: 35620.59, status: 'validat', um: 'm' }
+    const acum = { ...aprobat, cantitate_plansa: 35621.4 }   // o re-măsurare anterioară, sub prag
+    const c2 = { numar: 1, lungime_3d_m: 35622.1, lungime_2d_m: 35600 }   // +0,7 față de acum, +1,51 față de aprobat
+    expect(randCantitateCad({ ...arg, c: c2 }, acum).patch).not.toHaveProperty('status')   // fără referință: gaura
+    const r = randCantitateCad({ ...arg, c: c2 }, acum, aprobat)
+    expect(r.patch.status).toBe('diferenta')
+    expect(r.patch.diferenta_nota).toMatch(/^Rândul era VALIDAT — aprobarea veche \(cantitate 35\.620,59 m, cifra din planșă 35\.620,59 m\) nu mai e valabilă: s-a schimbat cifra din planșă \(35\.620,59 m → 35\.622,1 m\)/)
+  })
+})

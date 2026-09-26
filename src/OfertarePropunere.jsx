@@ -26,7 +26,21 @@ import { construiestePropunere, construiesteBorderou, construiesteF23, construie
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 // R5 (Copilot 25.09.2026): H2 nu ia F3 drept referință aprobată cât are rânduri de rețea nevalidate (view separat, ca neconfirmatele).
-import { campuriCantitatiNevalidate } from './ofertareCantitatiAprobare.js'
+import { campuriCantitatiNevalidate, marcheazaInvalidate, reverificareGraficInghetat } from './ofertareCantitatiAprobare.js'
+// R5 runda 5 (minorul 5 al verificatorului): rândul „grafic” reverifică versiunea ÎNGHEȚATĂ (fronturile ei) față de cantitățile de ACUM
+// (+ istoricul aprobărilor, dacă migrarea e aplicată). Nicio versiune / fără parametri = {} (ca înainte); eroare = control indisponibil.
+async function campuriGraficReverificare(licId) {
+  try {
+    const [rV, rC, rI] = await Promise.all([
+      supabase.from('grafic_versiuni').select('versiune, parametri:snapshot->parametri').eq('licitatie_id', licId).order('versiune', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licId).order('id').limit(20000),
+      supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licId).order('id').limit(20000),
+    ])
+    if (rV.error || rC.error) return { grafic_reverificare_eroare: (rV.error || rC.error).message || 'eroare la citire' }
+    if (!rV.data?.parametri) return {}
+    return reverificareGraficInghetat(rV.data.parametri, marcheazaInvalidate(rC.data || [], rI.error ? [] : rI.data))
+  } catch (e) { return { grafic_reverificare_eroare: e?.message || String(e) } }
+}
 // P0 pas 2: rândul „documentatie” al porții. Eroare / lipsă = documentatie_verificata false → poarta spune „nu putem verifica”.
 const campuriDocumentatie = r => (!r || r.error || !r.data)
   ? { documentatie_verificata: false, documentatie_blocaj: null }
@@ -1236,7 +1250,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const rNc = await supabase.from('v_ofertare_pt_cerinte_neconfirmate').select('*').eq('licitatie_id', id).maybeSingle()
     const rCompl = await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', id).maybeSingle()
     const rNev = await supabase.from('v_ofertare_cantitati_nevalidate').select('*').eq('licitatie_id', id).maybeSingle()
-    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl), ...campuriCantitatiNevalidate(rNev) } : null); setCapitole(rCap.data || []); setCerinte(cer)
+    const grRev = rSt.data?.grafic_versiune ? await campuriGraficReverificare(id) : {}
+    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl), ...campuriCantitatiNevalidate(rNev), ...grRev } : null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
     // B (Domnesti 14.09): regula „o persoana nu poate cumula functii" se vede AICI, inainte sa existe vreo
     // persoana incarcata — nu doar in verdictul per afirmatie, care e gol cat timp propunerea nu e citita.
@@ -1843,6 +1858,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     { const rNc = await supabase.from('v_ofertare_pt_cerinte_neconfirmate').select('*').eq('licitatie_id', licId).maybeSingle(); if (!rNc.error && rNc.data) Object.assign(proaspat, rNc.data) }
     Object.assign(proaspat, campuriDocumentatie(await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', licId).maybeSingle()))
     Object.assign(proaspat, campuriCantitatiNevalidate(await supabase.from('v_ofertare_cantitati_nevalidate').select('*').eq('licitatie_id', licId).maybeSingle()))
+    if (proaspat.grafic_versiune) Object.assign(proaspat, await campuriGraficReverificare(licId))
     // Acelasi evaluator ca butonul si cardul. Daca cele trei ar diverge, butonul ar fi activ
     // dar semnarea ar cadea — sau invers, mai rau.
     const ev = evalueazaPoarta(proaspat)

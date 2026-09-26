@@ -18,14 +18,22 @@
 // Rândul validat își păstrează `cantitate` (cifra omului); cel nevalidat primește măsurătoarea și în `cantitate`.
 // R5 (Copilot 26.09.2026, condiția 1): regula stă într-un singur loc — _cantitatiInvalidare.js (copie identică a
 // src/ofertareCantitatiInvalidare.js); „cifra schimbată” = schimbarea RELEVANTĂ a cifrei din planșă efective.
-import { schimbariRelevante } from './_cantitatiInvalidare.js'
+// R5 runda 5 (verificator): (MAJOR 1) rândul INVALIDAT (nevalidat, cu prefixul regulii în notă) își păstrează prefixul când
+// măsurătoarea îi rescrie nota; (MAJOR 2) pe rândul VALIDAT, regula se aplică față de valoarea APROBATĂ (`referinta`, din istoric —
+// cad-parse.js o citește din ofertare_cantitati_istoric; lipsă = rândul de acum), ca re-măsurările mici cumulate să nu ocolească pragul.
+import { aplicaRegulaAprobare, pastreazaInvalidarea, schimbariRelevante } from './_cantitatiInvalidare.js'
 export const referintaCitire = r =>
   r?.cantitate_plansa != null ? Number(r.cantitate_plansa) : r?.cantitate != null ? Number(r.cantitate) : null
 export const cifraSchimbata = (r, nou) =>
   nou != null && schimbariRelevante(r, { cantitate_plansa: Number(nou) }).relevante.some(x => x.camp === 'cantitate_plansa')
 const fmt = x => (+Number(x).toFixed(2)).toLocaleString('ro-RO')
 
-export function randCantitateCad({ licitatieId, denumire, c, notaAnaliza }, existent = null) {
+export function randCantitateCad(date, existent = null, referinta = null) {
+  const r = randCantitateCadBrut(date, existent)
+  if (r.op !== 'update') return r
+  return { ...r, patch: aplicaRegulaAprobare(existent, pastreazaInvalidarea(existent, r.patch), referinta).patch }
+}
+function randCantitateCadBrut({ licitatieId, denumire, c, notaAnaliza }, existent = null) {
   const l3d = c.lungime_3d_m
   const nota = `Măsurat din desen: ${l3d.toLocaleString('ro-RO')} m în spațiu, ${c.lungime_2d_m.toLocaleString('ro-RO')} m în plan` +
     `${c.numar > 1 ? `, pe ${c.numar} trasee` : ''}. ${notaAnaliza || ''}`.trim()

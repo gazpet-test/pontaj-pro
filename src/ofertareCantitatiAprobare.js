@@ -14,6 +14,7 @@
 //
 // Funcții PURE (fără React, fără Supabase): se testează cu vitest (ofertareCantitatiAprobare.test.js).
 // ════════════════════════════════════════════════════════════════
+import { invalidateDinIstoric, prefixInvalidare } from './ofertareCantitatiInvalidare.js'
 
 export const STATUS_APROBAT = 'validat'
 export const esteAprobata = c => c?.status === STATUS_APROBAT
@@ -49,7 +50,17 @@ export function randuriFront(cantitati, baza = 'cantitate') {
 // rezultatul ca incomplet / de reverificat. „Necesare” = rândurile de rețea (randuriFront) nevalidate + rândurile INVALIDATE
 // (nota „Rândul era VALIDAT …”, pusă de regula aprobării) care au ieșit din setul de rețea (ex. unitatea m → ml, categoria
 // schimbată): altfel un rând aprobat, redeschis de o schimbare de unitate, n-ar mai apărea nicăieri.
-export const esteInvalidat = c => !esteAprobata(c) && /^Rândul era VALIDAT/.test(String(c?.diferenta_nota || ''))
+// R5 runda 5 (verificator, MAJOR 1): „invalidat” NU mai depinde doar de textul notei (transferul / CAD rescriu nota oricărui rând
+// nevalidat, deci o recitire ștergea semnalul). Surse: `invalidat_istoric` (pus de `marcheazaInvalidate` din istoricul BD —
+// ultimul eveniment 'invalidat' / 'redeschis', fără validare după el; aceeași regulă ca v_ofertare_cantitati_nevalidate) SAU
+// prefixul regulii în notă (până la aplicarea migrării; transferul și CAD îl păstrează acum, `pastreazaInvalidarea`).
+export const esteInvalidat = c => !esteAprobata(c) && (c?.invalidat_istoric === true || prefixInvalidare(c?.diferenta_nota) !== '')
+// cantitati + evenimentele din ofertare_cantitati_istoric (id, cantitate_id, motiv) => aceleași rânduri, cu `invalidat_istoric`
+// pe cele invalidate / redeschise după istoric. Istoric indisponibil (migrarea neaplicată) = [] => rămâne doar prefixul notei.
+export function marcheazaInvalidate(cantitati, evenimente) {
+  const inv = invalidateDinIstoric(evenimente)
+  return (cantitati || []).map(c => (inv.has(Number(c.id)) ? { ...c, invalidat_istoric: true } : c))
+}
 export function randuriLipsa(cantitati, cantitatiAsumate) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
@@ -167,6 +178,21 @@ export function controlFronturiGrafic(p, cantitati) {
   return { ...base, stare: dev > 0.1 || L.lipsa.length ? 'warn' : 'ok',
     detalii: incomplet + `${fronturi.length} fronturi, ${fmt(lf)} m (${ref ? `${Math.round(lf / ref * 100)}% din ${refTxt}` : 'fără referință validată'})` +
       (manuale ? ` · ${manuale} introduse manual` : '') }
+}
+
+// ── Poarta propunerii, rândul „grafic”: versiunea ÎNGHEȚATĂ reverificată față de cantitățile de ACUM (R5 runda 5, minorul 5) ──
+// H2 leagă F3 de fronturi, dar nu vede un rând-sursă de front (memoriu / planșă) invalidat DUPĂ îngheț (Dn / tronson schimbat,
+// aceeași lungime) și nici rândurile necesare nevalidate ivite după îngheț. Se rulează controlFronturiGrafic pe fronturile
+// versiunii înghețate (snapshot.parametri) față de cantitățile de acum (cu `marcheazaInvalidate`) => WARN „de reverificat”.
+// `parametri` lipsă (nicio versiune / versiune fără parametri) => {} (rândul „grafic” rămâne ca înainte).
+export function reverificareGraficInghetat(parametri, cantitati) {
+  if (!parametri || !Array.isArray(parametri.fronturi)) return {}
+  const c = controlFronturiGrafic(parametri, cantitati)
+  const parti = []
+  if (c.probleme.length) parti.push(`${c.probleme.length} din ${parametri.fronturi.length} fronturi nu mai vin din cantități validate cu cifra de acum: ` +
+    c.probleme.slice(0, 3).join('; ') + (c.probleme.length > 3 ? `; … încă ${c.probleme.length - 3}` : ''))
+  if (c.lipsa.length) parti.push(textLipsa({ lipsa: c.lipsa, peUm: randuriLipsa(cantitati, parametri.cantitati_asumate).peUm }, 3))
+  return { grafic_de_reverificat: c.probleme.length + c.lipsa.length, grafic_de_reverificat_text: parti.join(' · ') }
 }
 
 // ── Poarta propunerii (H2): câmpurile din v_ofertare_cantitati_nevalidate ──

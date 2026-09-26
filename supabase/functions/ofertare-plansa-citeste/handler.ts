@@ -18,7 +18,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
 // R5 (Copilot 26.09.2026, condiția 1): CÂND o aprobare nu mai e valabilă — copie identică a src/ofertareCantitatiInvalidare.js
-import { aplicaRegulaAprobare, schimbariRelevante } from './invalidare.js';
+import { aplicaRegulaAprobare, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
 import { cheieVersiune, cheiResetare, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
@@ -1142,6 +1142,42 @@ export const origineCifra = (r: any) => corectieR5B(r)
 export const descriereReferinta = (r: any) => r?.cantitate_plansa != null
   ? `cifra din planșă ${(+Number(r.cantitate_plansa).toFixed(1)).toLocaleString('ro-RO')} m${corectieR5B(r) ? ' (corectată, pasul B din R5 v2)' : ''}`
   : r?.cantitate != null ? `cantitatea ${(+Number(r.cantitate).toFixed(1)).toLocaleString('ro-RO')} m (fără cifră din planșă)` : 'nicio cifră';
+// R5 runda 5 (verificator, MAJOR 2): valoarea APROBATĂ a rândurilor validate (de la ultima validare) din ofertare_cantitati_istoric —
+// referința regulii aprobării, ca pașii mici cumulați (recitiri care diferă fiecare cu < 1 m) să nu ocolească pragul. Tabelul lipsă
+// (migrarea neaplicată) / orice eroare => Map gol => comparația cu rândul de acum (ca înainte). Doar citire.
+export async function referinteAprobare(supa: any, ids: unknown[]): Promise<Map<number, any>> {
+  if (!ids.length) return new Map();
+  try {
+    const { data, error } = await supa.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv, valori_vechi, valori_noi').in('cantitate_id', ids).order('id');
+    return error ? new Map() : referinteDinIstoric(data);
+  } catch { return new Map(); }
+}
+// Plasa finală a transferului, pe FIECARE update, chiar înainte de RPC (exportată ca să fie testată direct, cu o ramură simulată):
+//  - R5 pas B: marcajul „R5 v2 pas B” (și ce urmează după el) nu se pierde din notă, oricare ramură a rescris nota; cifra corectată
+//    nu se golește;
+//  - R5 runda 5 (MAJOR 1): rândul INVALIDAT (nevalidat, cu prefixul regulii în notă) își păstrează prefixul când ramura îi rescrie
+//    nota — altfel recitirea ștergea singurul semn că rândul fusese aprobat (și îl scotea tacit din lipsa porții graficului);
+//  - R5 condiția 1: o scriere care schimbă relevant un atribut al unui rând VALIDAT fără să-i fi schimbat și statusul => „diferenta”
+//    + aprobarea veche în notă, față de valoarea APROBATĂ (`refs`, din istoric; runda 5, MAJOR 2).
+export function plasaAprobare(ops: any[], existente: any[], refs: Map<number, any> = new Map()) {
+  const peIdExistent = new Map((existente || []).map((r: any) => [r.id, r]));
+  for (const o of ops) {
+    if (o.op !== 'update') continue;
+    const r: any = peIdExistent.get(o.id);
+    if (!r) continue;
+    if (corectieR5B(r)) {
+      if (o.patch.cantitate_plansa === null) delete o.patch.cantitate_plansa;
+      const vechi = String(r.diferenta_nota || '');
+      if ('diferenta_nota' in o.patch && !String(o.patch.diferenta_nota || '').includes(MARCAJ_R5B)) {
+        const i = vechi.indexOf(MARCAJ_R5B);
+        o.patch.diferenta_nota = `${o.patch.diferenta_nota || ''}${i >= 0 ? vechi.slice(i) : ` | ${vechi}`}`;
+      }
+    }
+    o.patch = pastreazaInvalidarea(r, o.patch);
+    o.patch = aplicaRegulaAprobare(r, o.patch, refs.get(Number(r.id)) || null).patch;
+  }
+  return ops;
+}
 const ETICHETA_REF: Record<string, string> = { lista_f3: 'F3', lista_c6: 'C6', lista_alt: 'Lista de cantități', caiet: 'Caietul de sarcini', alt: 'Documentul-sursă', memoriu: 'Memoriu' };
 export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null, rulare: string, rest?: RestTransfer) {
   const ops: any[] = [];
@@ -1194,6 +1230,8 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
   const { data: existente } = await supa.from('ofertare_cantitati')
     .select('id, denumire, categorie, um, cantitate, cantitate_plansa, status, sursa, tip_sursa, diferenta_nota')
     .eq('licitatie_id', doc.licitatie_id);
+  // R5 runda 5 (MAJOR 2): valoarea aprobată a rândurilor validate (istoric), pentru plasa de la final
+  const refs = await referinteAprobare(supa, (existente || []).filter((r: any) => r.status === 'validat').map((r: any) => r.id));
   // NU se mai filtreaza dupa numele categoriei. Pana la 11.09.2026 aici scria
   // `r.categorie === 'Rețea distribuție'`, iar in aceeasi zi categoriile au fost rescrise
   // dintr-un dictionar determinist: 'Rețea distribuție' a devenit 'Conducte și montaj',
@@ -1559,24 +1597,8 @@ export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nr
     ops.push({ op: 'update', id: randTotal.id, patch: patchDoarVerificare(randTotal, `nicio lungime sigură cu Dn standard pe ${eticheta.toLowerCase()}`) });
   }
 
-  // R5 pas B: marcajul „R5 v2 pas B” (și ce urmează după el) nu se pierde din notă, oricare ramură a rescris nota; cifra corectată
-  // nu se golește. R5 (Copilot 26.09.2026, condiția 1), plasa la nivel de aplicație (pereche cu trigger-ul propus în BD): o scriere
-  // care schimbă relevant un atribut al unui rând VALIDAT fără să-i fi schimbat și statusul => „diferenta” + aprobarea veche în notă.
-  const peIdExistent = new Map((existente || []).map((r: any) => [r.id, r]));
-  for (const o of ops) {
-    if (o.op !== 'update') continue;
-    const r: any = peIdExistent.get(o.id);
-    if (!r) continue;
-    if (corectieR5B(r)) {
-      if (o.patch.cantitate_plansa === null) delete o.patch.cantitate_plansa;
-      const vechi = String(r.diferenta_nota || '');
-      if ('diferenta_nota' in o.patch && !String(o.patch.diferenta_nota || '').includes(MARCAJ_R5B)) {
-        const i = vechi.indexOf(MARCAJ_R5B);
-        o.patch.diferenta_nota = `${o.patch.diferenta_nota || ''}${i >= 0 ? vechi.slice(i) : ` | ${vechi}`}`;
-      }
-    }
-    o.patch = aplicaRegulaAprobare(r, o.patch).patch;
-  }
+  // Plasa finală (R5 pas B, prefixul rândurilor invalidate, regula aprobării față de valoarea aprobată) — vezi `plasaAprobare`.
+  plasaAprobare(ops, existente || [], refs);
 
   const extra = doarVerif.length ? { doar_de_verificat: doarVerif } : {};
   if (!peDiametru.size && !ops.length) return { adaugate: 0, actualizate: 0, ambigue, total_m: 0, pe_diametre: {}, ...extra };

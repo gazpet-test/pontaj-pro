@@ -3,7 +3,8 @@
 -- „Existența rândului cu status='extras' nu demonstrează singură că a intrat în oferta aprobată."
 -- Context și inventarul consumatorilor: docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md.
 --
--- Se aplică DOAR cu GO Razvan, prin apply_migration (nume propus: r5_cantitati_nevalidate), ÎNAINTE de merge-ul ramurii
+-- Se aplică DOAR cu GO Razvan, prin apply_migration (nume propus: r5_cantitati_nevalidate), DUPĂ r5_cantitati_aprobare_istoric
+-- (docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql — view-ul citește istoricul; fără el, migrarea se oprește cu mesaj) și ÎNAINTE de merge-ul ramurii
 -- claude/cantitati-nevalidate-consumatori. Ordinea contează: codul nou citește v_ofertare_cantitati_nevalidate; fără view,
 -- rândul H2 („cantitati") din poarta propunerii spune „nu putem verifica" pe orice licitație care are F3 (fail-closed, ca
 -- P0c cu v_ofertare_pt_cerinte_neconfirmate). Azi (SELECT 25.09.2026) doar lic. 5 are F3 de rețea: 47 rânduri, toate 'extras'.
@@ -63,17 +64,32 @@
 -- 1) ─────────────────────────────────────────────────────────────────────────────────────────────────────
 -- R5 condiția 2 (Copilot 26.09.2026): rândul invalidat / nevalidat nu dispare TACIT. În plus față de runda 4: metrii pe fiecare
 -- sursă, rândurile de rețea fără tip de sursă (nu intră în nicio sumă a lui v_ofertare_pt_stare) și rândurile INVALIDATE care au
--- ieșit din setul de rețea (nota „Rândul era VALIDAT …” a regulii aprobării — ex. unitatea m → ml a scos un rând F3 din qm, deci
--- lista_f3_m a scăzut fără semnal). DROP + CREATE (coloane noi în mijloc); view-ul e nou, nimic nu depinde de el.
+-- ieșit din setul de rețea (ex. unitatea m → ml a scos un rând F3 din qm, deci lista_f3_m a scăzut fără semnal). DROP + CREATE
+-- (coloane noi în mijloc); view-ul e nou, nimic nu depinde de el.
+-- Runda 5 (verificator, MAJOR 1): „invalidat” NU mai depinde doar de textul notei — transferul din planșă și CAD rescriu nota
+-- oricărui rând nevalidat, deci o recitire ștergea prefixul „Rândul era VALIDAT …” și rândul ieșea tacit din numărătoare. Sursa
+-- principală e ISTORICUL (docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql): ultimul eveniment al rândului e 'invalidat' / 'redeschis'
+-- (fără 'validat' după el); prefixul notei rămâne sursă secundară (transferul și CAD îl păstrează acum). Aceeași regulă ca
+-- `esteInvalidat` + `marcheazaInvalidate` din src/ofertareCantitatiAprobare.js. ORDINEA: migrarea istoricului se aplică ÎNAINTE.
+DO $$ BEGIN
+  IF to_regclass('public.ofertare_cantitati_istoric') IS NULL THEN
+    RAISE EXCEPTION 'R5: aplică întâi docs/R5_MIGRARE_PROPUSA_aprobare_istoric.sql (r5_cantitati_aprobare_istoric) — view-ul citește istoricul';
+  END IF;
+END $$;
 DROP VIEW IF EXISTS public.v_ofertare_cantitati_nevalidate;
 CREATE VIEW public.v_ofertare_cantitati_nevalidate WITH (security_invoker = on) AS
-WITH b AS (
+WITH ist AS (
+  SELECT DISTINCT ON (h.cantitate_id) h.cantitate_id, h.motiv
+    FROM public.ofertare_cantitati_istoric h
+   ORDER BY h.cantitate_id, h.id DESC
+), b AS (
   SELECT q.licitatie_id, q.tip_sursa, q.status, q.cantitate,
          -- ACELAȘI filtru ca v_ofertare_pt_stare.qm (pg_get_viewdef, 25.09.2026); coalesce: um / categorie NULL = în afara rețelei
          coalesce(q.um = 'm'::text AND q.categorie ~* 'conduct|re[țt]ea'::text
            AND ((((COALESCE(q.obiect, ''::text) || ' '::text) || COALESCE(q.denumire, ''::text)) || ' '::text) || COALESCE(q.sursa, ''::text)) !~* 'total'::text, false) AS in_retea,
-         q.status <> 'validat' AND coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' AS invalidat
+         q.status <> 'validat' AND (coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' OR coalesce(i.motiv IN ('invalidat', 'redeschis'), false)) AS invalidat
     FROM public.ofertare_cantitati q
+    LEFT JOIN ist i ON i.cantitate_id = q.id
 )
 SELECT b.licitatie_id,
        count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status <> 'validat')                  AS lista_f3_nevalidate,
@@ -91,14 +107,15 @@ SELECT b.licitatie_id,
   FROM b
  GROUP BY b.licitatie_id
 HAVING count(*) FILTER (WHERE in_retea OR invalidat) > 0;
-REVOKE ALL ON public.v_ofertare_cantitati_nevalidate FROM PUBLIC, anon;
+-- runda 5: default privileges dau ALL pe obiectele noi — întâi REVOKE ALL (și de la authenticated), apoi doar SELECT
+REVOKE ALL ON public.v_ofertare_cantitati_nevalidate FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.v_ofertare_cantitati_nevalidate TO authenticated, service_role;
-COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25–26.09.2026): per licitație, câte rânduri de rețea (filtrul qm din v_ofertare_pt_stare) NU sunt validate de om (status<>validat), pe tip_sursa, cu metri; plus rândurile INVALIDATE (nota „Rândul era VALIDAT”) ieșite din setul de rețea. Citit de OfertarePropunere (H2, controlCantitati): F3 cu rânduri nevalidate nu e referință aprobată; rândurile fără tip / invalidate ieșite nu dispar tacit. security_invoker.';
+COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25–26.09.2026): per licitație, câte rânduri de rețea (filtrul qm din v_ofertare_pt_stare) NU sunt validate de om (status<>validat), pe tip_sursa, cu metri; plus rândurile INVALIDATE (istoricul: ultimul eveniment invalidat / redeschis; sau nota „Rândul era VALIDAT”) ieșite din setul de rețea. Citit de OfertarePropunere (H2, controlCantitati): F3 cu rânduri nevalidate nu e referință aprobată; rândurile fără tip / invalidate ieșite nu dispar tacit. security_invoker.';
 
 -- 2) ─────────────────────────────────────────────────────────────────────────────────────────────────────
 -- v6 (R5): față de live se schimbă DOAR: v_f3_n/v_f3_nev/v_f3_txt declarate; SELECT-ul F3 (filtrul qm, sumă doar din
--- 'validat' + numărători); formatul ro-RO al totalului; ramura nouă „2. Corespondența … (F3) în care este cuprins;" fără
--- total; 'f3_nevalidate' în rezultat. Restul = live.
+-- 'validat' + numărători, runda 5: + rândurile F3 invalidate ieșite din qm); formatul ro-RO al totalului; ramura nouă
+-- „2. Corespondența … (F3) în care este cuprins;" fără total; 'f3_nevalidate' în rezultat. Restul = live.
 CREATE OR REPLACE FUNCTION public.ofertare_clarificare_planse_auto(p_licitatie_id bigint)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -151,12 +168,23 @@ BEGIN
   -- Runda 4: setul = EXACT filtrul qm / lista_f3_m din v_ofertare_pt_stare (și din v_ofertare_cantitati_nevalidate, H2):
   -- um='m', categorie conductă/rețea, fără „total” în obiect/denumire/sursa. Filtrul vechi (um m/ml/M, denumire
   -- conduct/țeav/tub) lua și articole de deviz (lic. 5: +15 rânduri „M”, 1.227,89 m) și rândurile TOTAL (dublare).
-  SELECT round(sum(q.cantitate) FILTER (WHERE q.status = 'validat'), 1), count(*), count(*) FILTER (WHERE q.status <> 'validat')
+  -- Runda 5 (verificator, minor „um”): un rând F3 INVALIDAT care a ieșit din setul qm (ex. unitatea „m” → „M” / „ml”) nu mai e
+  -- omis tacit din total: se numără ca nevalidat (=> fără total) și ca rând F3 (=> textul cere corespondența, nu „nu le-am
+  -- identificat”). „Invalidat” = ca în v_ofertare_cantitati_nevalidate (istoric: ultimul eveniment invalidat / redeschis; sau
+  -- prefixul notei).
+  SELECT round(sum(x.cantitate) FILTER (WHERE x.status = 'validat' AND x.qm), 1),
+         count(*) FILTER (WHERE x.qm OR x.invalidat), count(*) FILTER (WHERE x.status <> 'validat' AND (x.qm OR x.invalidat))
     INTO v_f3, v_f3_n, v_f3_nev
-  FROM ofertare_cantitati q
-  WHERE q.licitatie_id = p_licitatie_id AND q.tip_sursa = 'lista_f3'
-    AND q.um = 'm' AND q.categorie ~* 'conduct|re[țt]ea'
-    AND (coalesce(q.obiect, '') || ' ' || coalesce(q.denumire, '') || ' ' || coalesce(q.sursa, '')) !~* 'total';
+  FROM (
+    SELECT q.cantitate, q.status,
+           coalesce(q.um = 'm' AND q.categorie ~* 'conduct|re[țt]ea'
+             AND (coalesce(q.obiect, '') || ' ' || coalesce(q.denumire, '') || ' ' || coalesce(q.sursa, '')) !~* 'total', false) AS qm,
+           q.status <> 'validat' AND (coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%'
+             OR coalesce((SELECT h.motiv FROM ofertare_cantitati_istoric h WHERE h.cantitate_id = q.id ORDER BY h.id DESC LIMIT 1)
+                         IN ('invalidat', 'redeschis'), false)) AS invalidat
+      FROM ofertare_cantitati q
+     WHERE q.licitatie_id = p_licitatie_id AND q.tip_sursa = 'lista_f3'
+  ) x;
   IF v_f3_nev > 0 THEN v_f3 := NULL; END IF;
   -- runda 4: format ro-RO neambiguu, independent de lc_numeric („,” și „.” din șablon sunt fixe, G/D ar urma locale-ul):
   -- 6519.8 → „6.519,8”; 6520 → „6.520”. Live scria „7.747.7” (separatorul de mii și zecimalele = același punct).

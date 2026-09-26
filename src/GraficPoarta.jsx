@@ -12,7 +12,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 // R5 (Copilot 25.09.2026): fronturile și rândul „cant" iau DOAR cantități validate de om (status='validat').
-import { fronturiDinCantitati } from './ofertareCantitatiAprobare.js'
+import { fronturiDinCantitati, marcheazaInvalidate } from './ofertareCantitatiAprobare.js'
 // R5 runda 4: checklist-ul porții = funcție pură, recalculată ÎNTREAGĂ pe cantitățile recitite înainte de îngheț
 import { BRANS_PE_KM, totalFronturi, durataMaxDinCerinte, calculeazaPoartaGrafic } from './graficPoartaCalcul.js'
 
@@ -210,16 +210,25 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
 
+  // R5 runda 5 (verificator, MAJOR 1): rândurile invalidate se recunosc după ISTORICUL aprobărilor, nu doar după textul notei (pe care
+  // o recitire de planșă îl rescrie). Istoric indisponibil (migrarea neaplicată) => doar prefixul notei, pe care transferul îl păstrează.
+  const istoricAprobari = async () => {
+    try {
+      const { data, error } = await supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licitatieId).order('id').limit(20000)
+      return error ? [] : (data || [])
+    } catch { return [] }
+  }
   const load = async () => {
-    const [{ data: par }, { data: cant }, { data: nor }, { data: cer }, { data: ver }] = await Promise.all([
+    const [{ data: par }, { data: cant }, { data: nor }, { data: cer }, { data: ver }, ist] = await Promise.all([
       supabase.from('grafic_parametri').select('*').eq('licitatie_id', licitatieId).maybeSingle(),
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licitatieId).order('id'),
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licitatieId).order('id').limit(20000),
       supabase.from('ofertare_norme_productivitate').select('cod, activitate, tip_lucrare, um, productie_zi, coef_iarna, coef_teren_greu, incredere, validat_la'),
       supabase.from('ofertare_cerinte').select('id, text_cerinta, tip, sursa_sectiune, document_probant').eq('licitatie_id', licitatieId).is('inlocuita_de', null)
         .or('document_probant.ilike.%grafic%,text_cerinta.ilike.%grafic%,text_cerinta.ilike.%jalo%,text_cerinta.ilike.%durata de execu%'),
       supabase.from('grafic_versiuni').select('id, versiune, mod, generat_la, generat_de, durata_zile, nota').eq('licitatie_id', licitatieId).order('versiune', { ascending: false }),
+      istoricAprobari(),
     ])
-    setCantitati(cant || []); setNorme(nor || []); setCerinte(cer || []); setVersiuni(ver || [])
+    setCantitati(marcheazaInvalidate(cant || [], ist)); setNorme(nor || []); setCerinte(cer || []); setVersiuni(ver || [])
     setP({ ...PARAM_DEFAULT, ...(par?.parametri || {}) })
   }
   useEffect(() => { load() }, [licitatieId])
@@ -268,9 +277,10 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
     try {
       // R5 (Copilot 25.09.2026): cantitățile se RECITESC din BD înainte de îngheț (ca semnarea propunerii):
       // între încărcare și click cineva poate redeschide (↩) un rând validat sau poate apărea un transfer nou.
-      const { data: proaspete, error: eCant } = await supabase.from('ofertare_cantitati')
-        .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licitatieId).order('id')
+      const [{ data: citite, error: eCant }, ist] = await Promise.all([supabase.from('ofertare_cantitati')
+        .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licitatieId).order('id').limit(20000), istoricAprobari()])
       if (eCant) throw new Error('nu s-au putut reciti cantitățile — nu se generează (' + eCant.message + ')')
+      const proaspete = marcheazaInvalidate(citite || [], ist)
       // R5 runda 4 (verificator R3): se recalculează TOATA poarta pe cantitățile proaspete (nu doar rândul „cant") —
       // referința și proveniența fronturilor depind și ele de ce e validat ACUM; ce se îngheață e poarta recalculată.
       const poartaInghetata = calculeazaPoartaGrafic({ p, cantitati: proaspete || [], norme, cerinte, durataMax })
