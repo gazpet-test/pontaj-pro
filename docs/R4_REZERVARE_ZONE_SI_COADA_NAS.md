@@ -3,23 +3,24 @@
 Data: 25.09.2026 (noapte) · Răspuns la verdictul Copilot: „Rămân coada independentă de browser și prevenirea apelurilor AI duplicate între taburi.”
 Runda 2 (după verificator): defectul major „citește de la zero cooperează” reparat + test; plafon pe `pana_la`; `/api/plansa-felii` fail-closed; corecturi de text; design NAS completat (§3). Plus un bug nou de agregare găsit pe planșa 470 (§5, commit separat).
 Runda 3 (verdictul Copilot pe deduplicare): dedup-ul pe multiset (`e762c6e`) e înlocuit cu **identitatea rândului de tabel** — (document, pagină, tabel identificat, Nr rând) — commit `a800d38` (§5).
+Runda 4 (26.09, verificatorul rundei 3): rândul de margine nu mai primește identitate prin poziție când tabelul are coloană Nr (blocant); Nr repetat / benzi nevecine / text contrazis / indexul tabelului în cheia de poziție (major); Dn cu toate rândurile de verificat menționat la transfer, fără early-return (major); `COD_VERSIUNE` 2026-09-26.8 (§5.3, §5.5).
 Ramură locală: `claude/r4-rezervare-zone` (bază `main` @ `8a6fbbb`; numerele de linie din §2 și §5 sunt pe capul ramurii). **Nimic deployat, nimic pushat, nicio scriere în BD** (doar SELECT-uri).
 
 **Verdict propus: PARȚIAL.**
 
-Teste finale pe ramură (pe capul ramurii, după `a800d38`; toate cu `--node-modules-dir=none --no-lock`, `deno.lock` neatins, md5 `875e293d…`):
+Teste finale pe ramură (pe capul ramurii, după runda 4; toate cu `--node-modules-dir=none --no-lock`, `deno.lock` neatins, md5 `875e293d…`):
 
 | Comandă | Rezultat |
 |---|---|
-| `deno test supabase/functions/ofertare-plansa-citeste` | **78/78** |
-| `deno test -A supabase/functions/` | **95/95** |
-| `concurenta_test.ts` rulat de 10 ori | 10/10 verzi, 47/47 de fiecare dată |
+| `deno test supabase/functions/ofertare-plansa-citeste` | **89/89** (după `a800d38`: 78/78) |
+| `deno test -A supabase/functions/` | **106/106** (după `a800d38`: 95/95) |
+| `concurenta_test.ts` rulat de 10 ori | 10/10 verzi, 49/49 de fiecare dată |
 | `node scripts/test-cas-felii.mjs` | **34/34** |
 | `node scripts/test-detector-sigla.mjs` | 23/23 |
 | `node scripts/verifica-poarta-identica.mjs` | OK |
 | `deno check` pe `index.ts` | OK |
 
-Testele noi pică pe codul vechi: cu gărzile de resetare dezactivate pică 5 teste de resetare. Pentru identitatea rândului, mutațiile pe o copie a funcției (identitate pe text / conflict ignorat / împerechere laxă / fără garda de bandă / fără prefixul de margine) fac să pice 8 / 3 / 5 / 2 / 2 teste (§5.6); pe contraexemplul Copilot, dedup-ul pe mulțime și cel pe multiset dau 1 rând, identitatea dă 2.
+Testele noi pică pe codul vechi: cu gărzile de resetare dezactivate pică 5 teste de resetare. Pentru identitatea rândului, mutațiile pe o copie a funcției (identitate pe text / conflict ignorat / împerechere laxă / fără garda de bandă / fără prefixul de margine) fac să pice 8 / 3 / 5 / 2 / 2 teste (§5.6); pe contraexemplul Copilot, dedup-ul pe mulțime și cel pe multiset dau 1 rând, identitatea dă 2. Runda 4: toate cele 11 teste noi pică pe `a800d38` (copie în scratchpad), iar 8 mutații pe regulile noi fac să pice 1–3 teste fiecare (§5.6).
 
 | Punct | Stare |
 |---|---|
@@ -227,7 +228,7 @@ Tabelul e mai simplu de auditat.
 
 **Planșa 1035:** doar adnotări (8), fără tabel.
 
-### 5.3 Regula implementată (`handler.ts:322 identificaRanduri`, apelată la l. 1098)
+### 5.3 Regula implementată (`handler.ts:346 identificaRanduri`, apelată la l. 1267)
 - **Identitate = (document, pagină, tabel identificat, Nr rând).**
   - Pagina vine din `surse_geom` prin `zone_geom` (implicit 1).
   - „Tabelul identificat” = setul de antete normalizate al fragmentului care poartă Nr.
@@ -251,7 +252,17 @@ Tabelul e mai simplu de auditat.
   - `conflicte[]`, `randuri_fara_identitate[]` (+ `_n`), `identitate_randuri` (lecturi, sigure prin Nr / prin poziție, fără identitate, conflicte);
   - un avertisment când există rânduri de verificat.
   - `lungime_totala_m` / `tronsoane_gasite` rămân cifra care intră în cantități (sigur − nestandard).
-- `COD_VERSIUNE` 2026-09-25.6 → **.7**.
+- `COD_VERSIUNE` 2026-09-25.6 → **.7** → **2026-09-26.8** (runda 4, mai jos).
+
+**Runda 4 (26.09, verificatorul rundei 3).** Principiul Copilot: nicio pierdere și nicio umflare **tăcută**. Ce nu e sigur trece la „de verificat”, cu total separat și motiv. Regulile noi din `identificaRanduri`:
+- **Poziția e identitate doar dacă niciun fragment din tabel nu are coloană Nr.** Tabelul = grupul fragmentelor împerecheate sigur. Rândul fără Nr dintr-un fragment împerecheat cu unul care are Nr intră la de verificat, cu motivul `MOTIV_AFARA_NR` („rând în afara fragmentului cu Nr”). Asta repară **blocantul**: rândul de margine transcris doar în felia cu lungimi (ex. Nr 38 în plus la baza lui `z1_7`) primea `poz z1_7#38` și se număra încă o dată prin Nr în banda 2. Efectul: 470 ieșea 49.225 m în loc de 48.905, fără niciun semnal. Tot aici: rândul legat de un Nr ilizibil din felia vecină merge la „Nr lipsă sau ilizibil pe rând (în felia vecină, împerecheată)”, nu primește poziție.
+- **Nr repetat.** Același (tabel, Nr) citit pe noduri din aceeași felie, dar în componente diferite, intră la de verificat: „Nr X repetat — tabel neidentificat sigur”. Acoperă două tabele cu antete identice (C) și numerotarea reluată (C2). Aceeași regulă se aplică și pentru benzi sau coloane nevecine (|Δr|>1 sau |Δc|>1; grilă necunoscută = nevecine), adică felii care nu se pot suprapune (B).
+- **Text contrazis.** Lecturile aceleiași identități din componente diferite (ex. suprapunerea verticală) care diferă pe o coloană de text comună (Strada / De la) nu se contopesc. Toate intră la de verificat. Comparația ignoră spațiile, punctuația și diacriticele, iar prefixul e admis la margine sau pe textul marcat „...”.
+- **Cheia de poziție** conține indexul tabelului din felie (`poz z1_2.t2#1`). Cazul D (două tabele fără Nr cu antete identice în aceeași felie) dă acum 4 rânduri / 950 m. Pe a800d38 dădea 300 m sigur + un conflict fals, iar 300 m se pierdeau. Același tabel fără Nr transcris de două ori în aceeași felie (aceleași rânduri L/Dn/Q) intră la de verificat: „posibilă transcriere dublă”.
+- **Semnale noi, fără metri:**
+  - `perechi[].randuri` / `neimperecheate` = numărul diferit de rânduri între fragmentele împerecheate, inclusiv la δ=0;
+  - `nrFaraLungime` → `sumar.nr_fara_lungime` (+ `_n`) și un avertisment = rânduri numerotate dintr-un fragment cu Nr împerecheat cu lungimi, al căror Nr nu primește nicio lungime în nicio felie.
+- Pe 470 (fixture = BD) nimic nu se schimbă: 133 de rânduri, 48.905 m, 0 de verificat, 0 conflicte. Cele 19 rânduri din suprapunerea verticală trec și de controlul de text. În afara feliilor `z?_6`/`z?_7`, 470 mai are un singur tabel: cartușul din `z5_6`, fără Nr și fără lungimi (SELECT 26.09). Pe 130 nici antetele nu au coloană Nr („Tronsoane”, „Tronson”; SELECT 26.09), iar tabelul cu lungimi stă în `z1_4`/`z1_5`, în aceeași bandă și în felii diferite. Am rulat regula veche și pe cea nouă pe o transcriere compactă a lui `z1_4`/`z1_5` (9 din 13 coloane plus tronsoanele, md5 identic cu BD pe toate 4 blocurile). Ambele dau 18 rânduri prin poziție / 37.320 m (Dn250 30.970, Dn180 1.105, Dn160 5.245), cu 0 de verificat.
 
 ### 5.4 Efect (simulat pe citirile salvate; nimic scris în BD)
 | | azi (BD) | multiset (`e762c6e`) | **identitate de rând** |
@@ -275,7 +286,7 @@ Tabelul e mai simplu de auditat.
 - Totalul corect din planșă (37.320) e egal cu totalul memoriului. Pe Dn250, diferența față de memoriu devine +7.340 m (în BD: +10.835).
 - Corecția e o modificare de date: se face doar prin preview → GO → apply.
 
-### 5.5 Transferul în cantități (`treciInCantitati`, l. 555; `notaRestTransfer`, l. 537)
+### 5.5 Transferul în cantități (`treciInCantitati`, l. 679; `notaRestTransfer`, l. 656; `descriereRestDn`, l. 649)
 - `cantitate_plansa` primește **doar** rândurile cu identitate sigură, fără conflict și cu Dn standard.
 - Restul **nu se promovează**. E numit în `diferenta_nota`, pe fiecare poziție atinsă și pe rândul de total:
   - rândurile fără identitate de pe Dn-ul poziției;
@@ -286,21 +297,47 @@ Tabelul e mai simplu de auditat.
   - 1751–1755 rămân neschimbate ca cifre, iar nota lor devine „Planșa 1 confirmă: … De verificat, NEincluse …”;
   - 0 inserări.
 - Rămân **nemodificate** (în afara fix-ului): eticheta „Memoriu” pe cifra venită din planșa însăși și „confirmă” pe propriile cifre.
-- Cum s-ar ajunge la retransfer: „continuă” / „reia” nu retransferă (transfer `facut` pe aceeași rulare; după `COD_VERSIUNE` .7 sunt refuzate fără `mixare_permisa`). Rămâne doar un „citește” complet, adică retăiere + ~35 de zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde).
+- Cum s-ar ajunge la retransfer: „continuă” / „reia” nu retransferă (transfer `facut` pe aceeași rulare; după o schimbare de `COD_VERSIUNE` — acum 2026-09-26.8 — sunt refuzate fără `mixare_permisa`). Rămâne doar un „citește” complet, adică retăiere + ~35 de zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde).
 
-Recomandare pentru 1756: corecția se face în reconcilierea R5, prin **preview → GO Razvan → apply**. SQL-ul e **neexecutat**. `analiza.citire_ai.sumar` al lui 470 rămâne 48.195 m până la o nouă citire.
+**Runda 4 — Dn cu TOATE rândurile „de verificat”** (verificatorul, MAJOR; test ADV-T). Pe `a800d38`, `peDiametru` se construia doar din rândurile sigure. Consecințele:
+- poziția unui Dn fără niciun rând sigur păstra tăcut `cantitate_plansa` și nota dintr-o citire anterioară;
+- fără niciun rând sigur pe planșă, `if (!peDiametru.size) return` ieșea fără nicio scriere.
+
+Acum:
+- `notaRestTransfer` numără pe Dn și **conflictele** (`c`, cu plafonul `mc` = varianta maximă). Un Dn doar cu conflicte nu mai scapă.
+- Pentru fiecare Dn din `rest.peDn` fără grup sigur (aceeași potrivire pe denumire ca la rândurile sigure):
+  - poziție **validată / „diferenta”** ⇒ update **doar pe notă**, ex. „De verificat: 2 rânduri Dn250 fără identitate sigură (10.350 m); cifra din planșă nu s-a actualizat (34.465 m e dintr-o citire anterioară). Pe planșă: …”. Decizia omului rămâne, iar cifra veche e numită drept veche;
+  - poziție **„extras”** (nevalidată) ⇒ `cantitate_plansa = null`, `status = 'diferenta'` și nota „… cifra din planșă s-a golit (era 2.210 m, dintr-o citire anterioară)”;
+  - mai multe poziții pe același Dn ⇒ `ambigue[]` (cu `de_verificat`). Nicio poziție sau Dn necunoscut ⇒ raportat în `cantitati.doar_de_verificat[]` (`fara_pozitie` / `fara_dn`). Din rânduri nesigure **nu se inserează** poziții.
+- **Fără early-return** cât timp există rest de menționat. Dacă nu există niciun rând sigur, TOTAL **nu devine 0 m**: primește aceeași notă, sau golire dacă e „extras”.
+- RPC-ul (live, `pg_get_functiondef` 26.09) aplică `cantitate_plansa` doar când cheia există în patch. Update-ul doar pe notă nu atinge cifra, iar `null` explicit o golește.
+- (verificator, minor) Pe un Dn cu rânduri de verificat:
+  - poziția **nouă** (doar partea sigură) intră cu `status = 'diferenta'`, nu „extras”;
+  - o poziție existentă „extras” trece tot în „diferenta”, chiar dacă cifra sigură egalează memoriul.
+
+**1756 — două variante, decizie separată pentru Razvan** (verificator, minor). Codul de retransfer schimbă **doar** `cantitate_plansa`; `cantitate` rămâne neatinsă (testul „identitate 470: retransfer…”: 13.140). Poziția 1756 a fost însă *creată* din planșă (`cantitate` = `cantitate_plansa` = 13.140), deci se poate argumenta și corectarea lui `cantitate`:
+- **Varianta A — doar `cantitate_plansa`** (ce ar face un retransfer): `cantitate` rămâne 13.140, iar poziția arată „memoriu 13.140 vs planșă 13.740”.
+- **Varianta B — `cantitate` + `cantitate_plansa`** (SQL-ul de mai jos): ambele devin 13.740.
+
+Corecția se face în reconcilierea R5, prin **preview → GO Razvan (A sau B) → apply**. SQL-ul e **neexecutat**. `analiza.citire_ai.sumar` al lui 470 rămâne 48.195 m până la o nouă citire.
 ```sql
 -- PREVIEW
 SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota, updated_at FROM ofertare_cantitati WHERE id = 1756;
--- APPLY (doar după GO Razvan; condiționat pe valorile de azi => 0 rânduri dacă s-a schimbat ceva)
+-- APPLY varianta A (doar după GO Razvan; condiționat pe valorile de azi => 0 rânduri dacă s-a schimbat ceva)
+-- UPDATE ofertare_cantitati SET cantitate_plansa = 13740, status = 'diferenta',
+--        diferenta_nota = 'Memoriu 13.140 m vs planșa 1 13.740 m (+600 m: Nr 40 și 41, C-tin Brâncoveanu Dn40 300 m, identice ca text cu Nr 37; deduplicare pe identitatea rândului). Neincluse: Nr 57 Dn60 nestandard 110 m, de verificat.',
+--        updated_at = now()
+--  WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND cantitate_plansa = 13140
+-- RETURNING id, cantitate, cantitate_plansa, status, updated_at;
+-- APPLY varianta B (doar după GO Razvan)
 UPDATE ofertare_cantitati
    SET cantitate = 13740, cantitate_plansa = 13740,
        diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 56 tronsoane citite din tabelul planșei (corecție 25.09: +600 m — rândurile Nr 40 și 41, C-tin Brâncoveanu Dn40 300 m, identice ca text cu Nr 37, erau numărate o dată; deduplicare pe identitatea rândului). Neincluse: Nr 57 Dn60 nestandard 110 m, de verificat.',
        updated_at = now()
  WHERE id = 1756 AND licitatie_id = 95 AND cantitate = 13140 AND cantitate_plansa = 13140
 RETURNING id, cantitate, cantitate_plansa, updated_at;
--- ROLLBACK (valorile de azi, SELECT 25.09, inclusiv updated_at):
--- UPDATE ofertare_cantitati SET cantitate = 13140, cantitate_plansa = 13140,
+-- ROLLBACK (A sau B; valorile de azi, SELECT 25.09, inclusiv status și updated_at):
+-- UPDATE ofertare_cantitati SET cantitate = 13140, cantitate_plansa = 13140, status = 'extras',
 --        diferenta_nota = 'Diametru care nu apare în cantitățile din memoriu. 54 tronsoane citite din tabelul planșei.',
 --        updated_at = '2026-09-25 16:51:08.040401+00'
 --  WHERE id = 1756;
@@ -308,7 +345,7 @@ RETURNING id, cantitate, cantitate_plansa, updated_at;
 
 ### 5.6 Teste
 - **Fixture reală** `fixture_470.ts`: feliile `z1_6..z4_7`, reduse la Nr, Strada, Str. De la, Str. Pana la (`z?_6`) și la rândul complet + tronsoanele (`z?_7`); antetele sunt exact ca în BD. Transcrierea e verificată prin SELECT față de fișier, pe fiecare din cele 8 felii: număr de rânduri, suma Nr, suma L și md5 pe câmpurile păstrate, **toate identice** (ex. `z2_6`: 52 de rânduri, ΣNr 2990, md5 `f36087…`; `z2_7`: ΣL 11.600, md5 tronsoane `552ee3…`).
-- **`agregare_test.ts`** (17 teste), cazurile cerute:
+- **`agregare_test.ts`** (26 de teste: 17 din runda 3 + 9 din runda 4), cazurile cerute în runda 3:
   - (1) Nr 37/40/41 cu text identic = 3 rânduri, și în aceeași felie, și cu Nr în `z2_6` / L în `z2_7`;
   - (2) același Nr în două felii suprapuse = o dată;
   - (3) contraexemplul Copilot = 2;
@@ -331,12 +368,48 @@ RETURNING id, cantitate, cantitate_plansa, updated_at;
   | fără garda de bandă pentru poziție | 2 |
   | fără prefixul de margine | 2 (fixture 470: banda 1 nu s-ar mai împerechea) |
 
+- **Runda 4 — testele adversariale ale verificatorului, devenite regresie.** Fiecare pică pe `a800d38`: rulate pe o copie din scratchpad cu handler-ul de la `a800d38`, la care am adăugat doar exportul constantei de motiv, ca importul să se lege. Eșecul e pe aserțiunea de fond (totaluri / starea din BD), nu pe câmpurile noi. Singura excepție e testul de semnal `nr_fara_lungime`, unde lipsa semnalului e chiar defectul.
+
+  | Test (runda 4) | Rezultat acum | Pe `a800d38` |
+  |---|---|---|
+  | BLOCANT sintetic: rândul 4 doar în `z1_7`, banda 2 îl are cu Nr | 5 rânduri / 1.500 m sigur + 400 m de verificat (`MOTIV_AFARA_NR`); `neimperecheate` [0, 1] | 6 / 1.900 m, 0 de verificat |
+  | BLOCANT fixture 470: Nr 38 în plus la baza lui `z1_7` / Nr 31 în plus la vârful lui `z2_7` | 133 / **48.905 m** în ambele variante + rândul în plus la de verificat (320 m, respectiv L-ul Nr 31) | 134 / 49.225 m și 134 / 49.205 m, 0 de verificat |
+  | C: două tabele cu antete identice în aceeași felie, Nr 1–2 fiecare | 0 sigure, 4 lecturi / 1.200 m de verificat („Nr repetat … de două ori în z2_3”) | 2 / 600 m |
+  | C2: numerotare reluată în același tabel | 0 sigure, 1.200 m de verificat | 2 / 600 m |
+  | B: același tabel/Nr în `z1_2` și `z3_5` (nevecine) | 0 sigure, 1.800 m de verificat; control: `z1_2`/`z2_2` (vecine) = 3 / 900 m | 3 / 900 m |
+  | D: două tabele fără Nr, antete identice, aceeași felie | 4 / **950 m** (`poz z1_2.t1#1` … `t2#2`); același tabel transcris de 2 ori ⇒ 1.000 m de verificat | 300 m + conflict fals 200/150, 300 m pierduți |
+  | text: același Nr în benzi vecine, Strada diferită | 0 sigure, 1.200 m de verificat; control: „C-tin Brancoveanu” / „Ctin  Brâncoveanu” și „Limita intra...” = același rând | 2 / 600 m |
+  | Nr ilizibil în felia cu Nr, rândul împerecheat din felia cu L | de verificat (motiv „în felia vecină”) | `poz z1_7#2` sigur |
+  | Nr fără nicio lungime (felia cu L a pierdut rândul de margine) | `nrFaraLungime` = [Nr 4, z1_6] + avertisment | nimic (lipsă tăcută) |
+  | transfer (handler): Dn250 / Dn180 doar de verificat, Dn160 sigur | id 1 („diferenta”): 34.465 păstrat, nota „… nu s-a actualizat (34.465 m e dintr-o citire anterioară)”; id 2 („extras”): `cantitate_plansa` null, „diferenta”; 0 inserări | id 1 cu „NOTA VECHE”, id 2 cu 2.210 |
+  | transfer (handler): niciun rând sigur | RPC rulat; Dn250 „extras” golit; TOTAL validat: 34.465 păstrat + notă, **nu 0 m** | early-return: 0 scrieri, cifre și note vechi |
+
+  În `concurenta_test.ts`, transferul cu rânduri de verificat verifică acum și `status = 'diferenta'` la inserare. Nota numește și conflictul pe Dn40 („1 conflict Dn40 (până la 330 m)”).
+- **Controale negative runda 4** (mutații pe o copie a handler-ului nou, cu testele neschimbate; copia nemutată trece 75/75 pe `agregare_test.ts` + `concurenta_test.ts`):
+
+  | Mutație | Teste care pică |
+  |---|---|
+  | fără interdicția poziției în grupul cu Nr | 2 (blocant sintetic + 470) |
+  | fără „Nr repetat” | 3 (B, C, C2) |
+  | cheie de poziție fără indexul tabelului | 1 (D) |
+  | fără textul contrazis | 1 |
+  | fără tratarea Dn-urilor doar de verificat | 2 (transfer) |
+  | fără „Nr ilizibil în vecină” | 1 |
+  | benzi nevecine permise | 1 (B) |
+  | fără garda „tabel dublat” | 1 (D) |
+
 ### 5.7 Limite cunoscute (documentate, nu blochează)
 - `total_de_verificat_m` e un **plafon brut**: fiecare lectură fără identitate se adună separat, deci un rând din suprapunerea verticală poate fi numărat de două ori; conflictele intră cu varianta maximă.
-- Două tabele **cu antete identice** pe aceeași pagină, cu Nr care se suprapun, se tratează ca un singur tabel:
-  - valori diferite ⇒ conflict (vizibil);
-  - valori identice ⇒ un rând (subnumărare posibilă, rară).
+- Două tabele **cu antete identice** și Nr care se suprapun:
+  - în aceeași felie, sau în felii nevecine ⇒ „de verificat” (runda 4: „Nr repetat”);
+  - în benzi sau coloane **vecine**, cu text diferit pe o coloană comună (Strada / De la) ⇒ „de verificat” (runda 4: text contrazis);
+  - în benzi vecine, cu L/Dn/Q diferite ⇒ conflict (vizibil);
+  - **rămâne neacoperit:** în benzi vecine, cu L, Dn, Q **și** text identice pe coloanele comune. Nu se pot deosebi de suprapunerea verticală a aceluiași tabel (fără coordonate pe rând), deci se numără ca un rând. Subnumărarea e posibilă doar dacă două rânduri din tabele diferite sunt identice pe toate coloanele citite.
 
   Cu antete diferite și același Nr ⇒ „de verificat”.
+- Garda „tabel dublat” (tabel fără Nr transcris de două ori în aceeași felie) prinde doar dublura **identică** pe toată secvența L/Dn/Q. O transcriere dublă parțială s-ar număra ca două tabele.
+- `nrFaraLungime` semnalează rândurile numerotate fără lungime doar pentru fragmentele cu Nr împerecheate sigur cu o felie cu lungimi. Dacă împerecherea eșuează, toată banda trece oricum la „de verificat” (ADV-H).
+- Comparația de text (runda 4) poate trimite la „de verificat” și două lecturi ale aceluiași rând transcrise foarte diferit, ex. o abreviere („Str. Florenta Albu” / „Florenta Albu”). Asta e fail-safe, nu tăcut; pe 470 nu apare niciun caz (19/19 rânduri din suprapunere trec).
+- La transfer, o poziție validată sau „diferenta” pe un Dn doar de verificat își păstrează `cantitate_plansa` din citirea anterioară, iar nota o numește explicit veche. Rândul TOTAL primește, când există rânduri sigure, doar partea sigură (cu restul numit în notă).
 - Împerecherea caută doar între felii vecine direct (c, c+1); un Nr aflat la două felii distanță ajunge la rând doar prin fragmentul din mijloc, dacă are câmpuri comune cu ambele.
 - Identitatea depinde de `tabele[].randuri`. Promptul (`INSTRUCTIUNI`) cere deja tabelele cu rânduri și nu s-a schimbat; o citire care n-ar transcrie rândurile ar da totul „de verificat”, nu un total pe text.
