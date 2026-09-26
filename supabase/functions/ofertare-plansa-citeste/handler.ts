@@ -35,7 +35,7 @@ const FELII_PE_RULARE = 4;
 const PARALEL = 2;
 const PARALEL_MAX = 4;
 const REINCERCARI = 2;
-const COD_VERSIUNE = '2026-09-26.13'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const COD_VERSIUNE = '2026-09-26.14'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -297,11 +297,29 @@ export const TOL_GEOM_PX = 2;
 const DN_STANDARD = new Set([16,20,25,32,40,50,63,65,75,80,90,100,110,125,140,150,160,180,200,225,250,280,300,315,350,355,400,450,500,560,600,630,700,800]);
 // runda 9: Dn-urile standard numite într-o denumire de poziție + dacă denumirea are un INTERVAL de Dn („De 63–110”, „Dn 32-110”,
 // „Dn 32…110”). Folosit la alegerea rândului TOTAL: „total” cu un singur Dn = subtotal pe Dn (candidat), cu interval / ≥ 2 Dn = total global.
+// runda 10 (verificatorul rundei 9, MAJOR TOTAL-b): și notația românească uzuală a intervalului — „Dn 63÷110”, „De 63 ÷ 110”,
+// „De 63/110”, „Dn 63 la 110”, „De 63 până la De 110” — și LISTELE de Dn după un prefix („Dn 63, 90 și 110”, „De 63; 90”, „Dn63 + 110”):
+// fiecare număr standard din listă e un Dn (≥ 2 Dn => total global). Al doilea capăt / elementul din listă NU e un Dn când e urmat de o
+// unitate sau de zecimale („Dn 63 - 200 m”, „De 110, 12,5 m”, „+ 20%”). „De 110/10” (grosimea peretelui): capătul al doilea mai mic și
+// nestandard => nu e interval (un interval urcă: „De 60–110”; descrescător doar cu ambele capete standard).
+const PREF_DN = '(?:\\bdn|\\bde|ø|Ø|φ)';
+const NU_UNITATE = '(?![.,]\\d|\\s*(?:%|(?:m|ml|km|buc|bucati|kg|ore)\\b))';
+const SEP_INTERVAL = '\\s*(?:[-–—÷/]|\\.{2,3}|…|\\b(?:pana\\s+)?la\\b)\\s*';
+const SEP_LISTA = '\\s*(?:[,;+&]|\\bsi\\b|\\bsau\\b)\\s*';
+const RE_DN_DENUMIRE = new RegExp(`${PREF_DN}\\s*(\\d{2,3})\\b` +
+  `(?:${SEP_INTERVAL}(?:${PREF_DN}\\s*)?(\\d{2,3})\\b${NU_UNITATE})?` +
+  `((?:${SEP_LISTA}(?:${PREF_DN}\\s*)?\\d{2,3}\\b${NU_UNITATE})*)`, 'gi');
 export function dnuriDenumire(s: unknown): { dn: number[]; interval: boolean } {
   const dn = new Set<number>(); let interval = false;
-  for (const m of faraDiacritice(String(s || '')).matchAll(/(?:\bdn|\bde|ø|Ø|φ)\s*(\d{2,3})\b(?:\s*(?:[-–—]|\.{2,3}|…)\s*(?:(?:dn|de|ø|Ø|φ)\s*)?(\d{2,3})\b)?/gi)) {
-    if (DN_STANDARD.has(Number(m[1]))) dn.add(Number(m[1]));
-    if (m[2]) { interval = true; if (DN_STANDARD.has(Number(m[2]))) dn.add(Number(m[2])); }
+  const std = (x: number) => DN_STANDARD.has(x);
+  for (const m of faraDiacritice(String(s || '')).matchAll(RE_DN_DENUMIRE)) {
+    const a = Number(m[1]);
+    if (std(a)) dn.add(a);
+    if (m[2]) {
+      const b = Number(m[2]);
+      if (b > a || (std(a) && std(b) && b !== a)) { interval = true; if (std(b)) dn.add(b); }
+    }
+    for (const x of (m[3] || '').matchAll(/(\d{2,3})\b/g)) if (std(Number(x[1]))) dn.add(Number(x[1]));
   }
   return { dn: [...dn].sort((a, b) => a - b), interval };
 }
@@ -1140,11 +1158,30 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   // „Total conducte De 110” e candidat doar când e singurul de pe Dn (altfel primește nota din bucla „total cu Dn”, mai jos).
   // Înainte, cu o poziție reală fără material („Conductă distribuție gaze Dn110”), filtrul pe material nu departaja => ambiguu, poziția
   // validată păstra tăcut cifra veche.
+  // runda 10 (verificatorul rundei 9): (1) MAJOR TOTAL-a — prioritatea se aplică ÎNAINTEA filtrului pe material (în `tinte` și în
+  // „doar de verificat”): un subtotal care poartă materialul grupului („Total conducte PE De 110”) nu mai ia cifra lângă poziția reală
+  // fără material („Conductă distribuție gaze Dn110”, formatul inserat de sistem), care păstra tăcut cifra și nota veche; subtotalul
+  // primește nota din bucla „total cu Dn”; (2) minor — subtotal = denumirea care ÎNCEPE cu „total” / „subtotal” (după numerotare sau
+  // semne), nu orice „total” din denumire: „Conductă PE Dn110 — lungime totală” e poziție reală (lângă „Conductă OL Dn110”, pe un grup
+  // fără material => AMBIGUU vizibil, ca înainte de runda 9, nu cifra pe poziția OL).
+  const eSubtotal = (r: any) => /^[^a-z]*(?:sub\s*-?\s*)?total/.test(faraDiacritice(String(r.denumire || '')).toLowerCase());
   const preferaFaraTotal = (cs: any[]) => {
     if (cs.length < 2) return cs;
-    const f = cs.filter((r: any) => !/total/i.test(r.denumire || ''));
+    const f = cs.filter((r: any) => !eSubtotal(r));
     return f.length && f.length < cs.length ? f : cs;
   };
+  // candidații unui (Dn, material): întâi pozițiile fără „total” (subtotal), apoi — tot cu mai mulți — departajarea după material
+  const candidatiPe = (dn: number, mat: string) => {
+    let cs = preferaFaraTotal(retea.filter((r: any) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || ''))));
+    // mai multe poziții pe același diametru => încearcă să departajezi după material, înainte de „ambiguu"
+    if (cs.length > 1 && mat) {
+      const peMat = cs.filter((r: any) => materialNorm(r.denumire) === mat);
+      if (peMat.length) cs = peMat;
+    }
+    return cs;
+  };
+  // pozițiile raportate în `ambigue` (nimic scris pe ele): bucla „total cu Dn” nu le mai adaugă o notă doar uneia dintre ele
+  const candidatiAmbigui = new Set<unknown>();
   // unde a ajuns fiecare grup sigur, pe Dn (pentru notele pozițiilor de pe Dn neatinse de el: MY-T4, „total” cu Dn)
   const undePeDn = new Map<number, string[]>();
   const unde = (g: { dn: number; mat: string }, m: number, ce: string) =>
@@ -1162,17 +1199,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   // OL 90 => cantitate_plansa 90, nota „-500 m” falsă). Acum poziția atinsă de mai multe grupuri e AMBIGUĂ: cantitate_plansa NU se
   // atinge, nota numește toate grupurile și metrii lor, „extras” => „diferenta” (validat rămâne validat), intrare în `ambigue[]`.
   // Rezultatul nu depinde de ordinea grupurilor (grupurile din notă sunt ordonate: Dn, material cunoscut, apoi fără material).
-  const tinte = [...peDiametru.values()].sort((a, b) => b.dn - a.dn).map((g) => {
-    let candidati = retea.filter((r: any) =>
-      new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${g.dn}\\b`, 'i').test(faraDiacritice(r.denumire || '')));
-    // mai multe poziții pe același diametru => încearcă să departajezi după material, înainte de „ambiguu"
-    if (candidati.length > 1 && g.mat) {
-      const peMat = candidati.filter((r: any) => materialNorm(r.denumire) === g.mat);
-      if (peMat.length) candidati = peMat;
-    }
-    candidati = preferaFaraTotal(candidati);
-    return { g, m: +g.m.toFixed(1), candidati };
-  });
+  const tinte = [...peDiametru.values()].sort((a, b) => b.dn - a.dn).map((g) => ({ g, m: +g.m.toFixed(1), candidati: candidatiPe(g.dn, g.mat) }));
   const grupuriPeId = new Map<unknown, typeof tinte>();
   for (const x of tinte) if (x.candidati.length === 1) grupuriPeId.set(x.candidati[0].id, [...(grupuriPeId.get(x.candidati[0].id) || []), x]);
   const ordGrup = (a: typeof tinte[number], b: typeof tinte[number]) => ordCheie(`${a.g.dn}|${a.g.mat}`, `${b.g.dn}|${b.g.mat}`);
@@ -1186,6 +1213,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
     // o plansa ulterioara putea suprascrie ce pusese cea dinainte. Ambiguitatea se RAPORTEAZA.
     if (candidati.length > 1) {
       unde(g, m, `e ambiguu între ${candidati.length} poziții (nescris)`);
+      for (const r of candidati) candidatiAmbigui.add(r.id);
       const dv = cheiRest(dn, g.mat).map((k) => descriereRestDn(rest, k)).filter(Boolean).join('; ');
       ambigue.push({ dn, material: g.mat || null, metri: m, ...(dv ? { de_verificat: dv } : {}), pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
       continue;
@@ -1265,14 +1293,11 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
     const dn = d === '?' ? null : Number(d);
     const material = mat || null;
     if (dn === null) { doarVerif.push({ dn, material, pozitie_id: null, actiune: 'fara_dn' }); continue; }
-    let candidati = retea.filter((r: any) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || '')));
-    // runda 5: același filtru pe material ca la ramura sigură (mai multe poziții pe Dn => cea cu materialul restului)
-    if (candidati.length > 1 && mat) {
-      const peMat = candidati.filter((r: any) => materialNorm(r.denumire) === mat);
-      if (peMat.length) candidati = peMat;
-    }
-    candidati = preferaFaraTotal(candidati);
+    // runda 5: același filtru pe material ca la ramura sigură (mai multe poziții pe Dn => cea cu materialul restului);
+    // runda 10: după prioritatea pozițiilor fără „total”, ca la ramura sigură
+    const candidati = candidatiPe(dn, mat);
     if (candidati.length > 1) {
+      for (const r of candidati) candidatiAmbigui.add(r.id);
       ambigue.push({ dn, material, metri: 0, de_verificat: ce, pozitii: candidati.slice(0, 6).map((r: any) => ({ id: r.id, denumire: r.denumire })) });
       doarVerif.push({ dn, material, pozitie_id: null, actiune: 'ambiguu' }); continue;
     }
@@ -1324,7 +1349,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   // Runda 9: cu prioritatea pozițiilor fără „total” (preferaFaraTotal), și pe un Dn fără grup sigur, doar cu rest de verificat (rândul
   // „doar de verificat” a mers la poziția reală) — nota numește restul de pe Dn-ul lui.
   for (const r of retea) {
-    if (!/total/i.test(r.denumire || '') || ops.some((o) => o.op === 'update' && o.id === r.id)) continue;
+    if (!/total/i.test(r.denumire || '') || candidatiAmbigui.has(r.id) || ops.some((o) => o.op === 'update' && o.id === r.id)) continue;
     const peDnRand = (d: number | string) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${d}\\b`, 'i').test(faraDiacritice(r.denumire || ''));
     const dns = [...undePeDn.keys()].filter(peDnRand).sort((a, b) => b - a);
     const cheiDoar = doarDeVerificat.filter((k) => { const d = k.split('|')[0]; return d !== '?' && !dns.includes(Number(d)) && peDnRand(d); });

@@ -888,6 +888,25 @@ Deno.test('runda 9: dnuriDenumire — un Dn = subtotal / poziție; interval sau 
   assertEquals(dnuriDenumire('Total rețea De 60–110'), { dn: [110], interval: true }, 'interval cu un capăt nestandard: tot interval')
   assertEquals(dnuriDenumire('TOTAL rețea distribuție'), { dn: [], interval: false })
 })
+Deno.test('runda 10: dnuriDenumire — intervalul românesc („÷”, „/”, „la”, „până la”) și listele de Dn; unitățile / grosimea nu sunt Dn (TOTAL-b, verificatorul rundei 9)', () => {
+  // 3197aa3: toate dădeau { dn: [63], interval: false } => subtotal Dn63
+  assertEquals(dnuriDenumire('Total rețea Dn 63÷110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea De 63 ÷ 110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea De 63/110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea Dn63/Dn110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea Dn 63 la 110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total conducte De 63 până la De 110'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total conducte Dn 63, 90 și 110'), { dn: [63, 90, 110], interval: false })
+  assertEquals(dnuriDenumire('Total conducte De 63; 90 + 110 mm'), { dn: [63, 90, 110], interval: false })
+  // un singur Dn: rămân subtotal / poziție (lungimi, procente, zecimale, grosimea peretelui, SDR, „la CT”)
+  for (const s of ['Total conducte PE De 110 x 6,6', 'Total conducte De 110 (L = 125 m)', 'Total conducte De110 SDR 11 - 17', 'Total conducte De 110 - 200 m',
+    'Total conducte De 110, 12,5 m', 'Total conducte De 110, 32,5 m', 'Total conducte De 110 + 20%', 'Total conducte De 110; 125 m', 'Total conducte De 110/10',
+    'Total conducte De 110 la CT', 'Total conducte De 110, 17 tronsoane'])
+    assertEquals(dnuriDenumire(s), { dn: [110], interval: false }, s)
+  assertEquals(dnuriDenumire('Total conducte PE 100 SDR11 De 63 (Ø 63 mm)'), { dn: [63], interval: false })
+  assertEquals(dnuriDenumire('Total conducte Dn 63 mm - 200 m'), { dn: [63], interval: false })
+  assertEquals(dnuriDenumire('Total conducte Dn 110 ÷ 63'), { dn: [63, 110], interval: true }, 'descrescător, ambele capete standard')
+})
 Deno.test('runda 9: notaRestTransfer — Nr fără lungime pe cheia (Dn, \'\') (NFL-DN) și tronsoanele sigure fără Dn pe (?, material) + global + incomplet (DN0)', () => {
   const idr = { faraIdentitate: [], conflicte: [], total_de_verificat_m: 0, nrFaraLungime: [{ nr: '2', zona: 'z1_1', dn: 90 }, { nr: '7', zona: 'z1_1' }] }
   const r = notaRestTransfer(idr, [], [{ lungime_m: 300, material: 'PE100' }, { lungime_m: 50 }])
