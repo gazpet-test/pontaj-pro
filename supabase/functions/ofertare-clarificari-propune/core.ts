@@ -14,6 +14,8 @@ const PROMPT = `Ești consilierul de ofertare al unui constructor român de cond
 
 Primești: (1) datele licitației, (2) REGISTRUL de cerințe extras din documentație (cu tipul: eliminatorie / propunere / forma / contractuala; câmpul GOL = cerința nu e acoperită cu ce are ofertantul, cu motivul), (3) diferențele găsite între listele de cantități, planșe și devize (dacă s-a rulat verificarea) și raportul ultimei verificări finale, (4) inventarul documentelor din documentație (doar nume și tip — nu conținutul), (5) clarificările DEJA propuse sau trimise la această licitație, (6) răspunsuri primite de la autorități la clarificări la ALTE licitații — doar ca să înveți cum se formulează și ce se răspunde de obicei.
 
+La (3): „cantitate" vine din documentul arătat în „sursa_cantitate" — NU neapărat din lista de cantități F3 (un transfer din planșă copiază cifra planșei în „cantitate"). validat_de_om: false = cifră extrasă automat, NEVERIFICATĂ de ofertant: o poți folosi ca să vezi unde e o diferență, dar NU o prezenta autorității ca valoare a listei ei sau a ofertei noastre și nu trage din ea concluzia că o cantitate e confirmată; în întrebare citezi documentul-sursă (planșă, memoriu, F3), nu rândul nostru.
+
 CÂND MERITĂ O CLARIFICARE:
 A. AMBIGUITATE REALĂ: un fragment cu două interpretări plauzibile, o contradicție între surse (fișa de date vs caiet de sarcini vs model de contract vs planșe) sau o informație necesară care lipsește. Explici intern interpretările și impactul fiecăreia. Lipsa unei resurse proprii (un gol), SINGURĂ, nu justifică întrebarea: dacă textul e clar și nu lasă loc de interpretare, golul e ferm, nu clarificare. Nu presupune echivalențe între autorizații, emitenți, titulari (firmă vs persoană) sau documente — dacă echivalența nu reiese din text, e o ambiguitate de întrebat, nu o concluzie.
 B. CERINȚE din registru: praguri fără unitate sau fără perioadă, „proiect similar” nedefinit, experiență „pe rol” vs „generală”, momentul de la care se calculează perioadele, formulare cerute dar lipsă din documentație, trimiteri la anexe inexistente.
@@ -46,6 +48,26 @@ export function asemanare(a: unknown, b: unknown): number {
   for (const w of A) if (B.has(w)) comune++
   return comune / (A.size + B.size - comune)
 }
+// R5 (Copilot 25.09.2026): un rând din ofertare_cantitati intră în prompt cu PROVENIENȚA cifrei și cu starea de
+// validare. Până acum `cantitate` pleca etichetat „lista": la lic. 95, rândul 1751 (Dn200 17.785 m, copiat din planșa
+// 470 de transfer, cu 13.765 m în afara UAT, nevalidat) ar fi apărut modelului ca „lista: 17785, plansa: 17785",
+// adică o F3 care nu există, confirmată de planșă. `status` se citește acum din BD (select-ul de mai jos).
+const SURSA_CANTITATE: Record<string, string> = {
+  lista_f3: 'lista de cantități F3', lista_c6: 'formularul C6', lista_alt: 'altă listă (C7–C9)', memoriu: 'memoriul tehnic',
+  plansa: 'planșă', caiet: 'caietul de sarcini', alt: 'alt document',
+}
+export const dinTransferPlansa = (r: any) => /citit automat din scanare/i.test(String(r?.sursa || ''))
+export function randCantitatePentruAI(r: any) {
+  const sursaCant = SURSA_CANTITATE[String(r?.tip_sursa || '')]
+    ?? (dinTransferPlansa(r) ? 'planșă (citire automată; cifra planșei copiată în cantitate)' : 'nedeclarată')
+  return {
+    id: r.id, obiect: r.obiect, cat: r.categorie, den: String(r.denumire || '').slice(0, 120), um: r.um,
+    cantitate: r.cantitate, sursa_cantitate: sursaCant, plansa: r.cantitate_plansa,
+    validat_de_om: r.status === 'validat', status: r.status || null,
+    nota: String(r.diferenta_nota || '').slice(0, 200), sursa: r.sursa,
+  }
+}
+
 // cheia de idempotență (Jakarinos 22.09): nu textul, ci licitația + cerințele citate + subiectul normalizat;
 // stabilă între rulări cât timp cerințele nu se re-extrag. Unică în BD (ofertare_clarificari.cheie).
 export async function cheieClarificare(licId: number, cerinteIds: number[], subiect: string): Promise<string> {
@@ -66,7 +88,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const [{ data: cerinte }, { data: acop }, { data: cant }, { data: verif }, { data: docs }, { data: clarLic }] = await Promise.all([
       supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
       supabase.from('ofertare_acoperire').select('cerinta_id, status, motiv, mod').eq('status', 'gol').limit(5000),
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa').eq('licitatie_id', licId).not('diferenta_nota', 'is', null).limit(40),
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status').eq('licitatie_id', licId).not('diferenta_nota', 'is', null).limit(40),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
       supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie').eq('licitatie_id', licId).order('nr'),
@@ -93,7 +115,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const contextul = [
       `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · procedura ${lic.tip_procedura || '?'} · criteriu ${lic.criteriu || '?'}\nOBIECT: ${String(lic.obiect || '').slice(0, 1500)}\nValoare estimată: ${lic.valoare_estimata ?? '?'} ${lic.moneda || 'RON'} · termen depunere: ${termen || '?'} · garanție participare: ${lic.garantie_participare ?? '?'} · loturi: ${lic.loturi ?? '?'}`,
       `REGISTRUL DE CERINȚE (${registru.length}; cele cu GOL sunt neacoperite):\n${JSON.stringify(registru)}`,
-      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}):\n${JSON.stringify((cant || []).map((r: any) => ({ id: r.id, obiect: r.obiect, cat: r.categorie, den: String(r.denumire || '').slice(0, 120), um: r.um, lista: r.cantitate, plansa: r.cantitate_plansa, nota: String(r.diferenta_nota || '').slice(0, 200), sursa: r.sursa })))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
+      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}; validat_de_om:false = extras automat, neverificat):\n${JSON.stringify((cant || []).map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
       `INVENTARUL DOCUMENTELOR IMPORTATE (${(docs || []).length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify((docs || []).map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
       `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${(clarLic || []).length}) — NU le repeta:\n${JSON.stringify((clarLic || []).map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
       `RĂSPUNSURI PRIMITE LA ALTE LICITAȚII (${raspunsuri.length}; întâi de la aceeași autoritate) — DOAR ca model de formulare, nu suprimă întrebări (R3):\n${JSON.stringify(raspunsuri.map((r: any) => ({ licitatie: r.lic?.nr_anunt, autoritate: String(r.lic?.autoritate || '').slice(0, 60), intrebare: String(r.intrebare || '').slice(0, 250), raspuns: String(r.raspuns || '').slice(0, 350) })))}`,

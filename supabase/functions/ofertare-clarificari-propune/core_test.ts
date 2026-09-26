@@ -1,0 +1,75 @@
+// deno test --node-modules-dir=none --no-lock -A supabase/functions/ofertare-clarificari-propune/core_test.ts
+// R5 (Copilot 25.09.2026): cantitățile nevalidate nu pleacă spre model ca valori „din listă" / aprobate.
+// Fixture = rândul REAL 1751 al lic. 95 (SELECT pe ofertare_cantitati, 25.09.2026).
+import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
+import { propuneClarificari, randCantitatePentruAI } from './core.ts'
+
+const R1751 = { id: 1751, licitatie_id: 95, obiect: null, categorie: 'Conducte și montaj', denumire: 'Conductă distribuție gaze Dn200', um: 'm',
+  cantitate: 17785, cantitate_plansa: 17785, status: 'extras', tip_sursa: null,
+  sursa: 'Planșa 1 — tabel de dimensionare, citit automat din scanare',
+  diferenta_nota: 'Diametru care nu apare în cantitățile din memoriu. 8 tronsoane citite din tabelul planșei.' }
+
+Deno.test('R5: rândul 1751 (extras din planșă) nu mai pleacă drept „lista", ci cu proveniența și validat_de_om=false', () => {
+  const x = randCantitatePentruAI(R1751)
+  assertEquals(x.cantitate, 17785)
+  assertEquals(x.sursa_cantitate, 'planșă (citire automată; cifra planșei copiată în cantitate)')
+  assertEquals(x.validat_de_om, false)
+  assertEquals(x.status, 'extras')
+  assertFalse('lista' in x, 'cheia „lista" dispare: cifra nu vine din F3')
+})
+
+Deno.test('R5: un rând F3 validat de om e etichetat ca atare', () => {
+  const x = randCantitatePentruAI({ ...R1751, id: 1, tip_sursa: 'lista_f3', status: 'validat', sursa: 'F3 obiect 1' })
+  assertEquals(x.sursa_cantitate, 'lista de cantități F3')
+  assertEquals(x.validat_de_om, true)
+})
+
+Deno.test('R5: diferenta / revizuit_clarificare / status lipsă = NU validat de om', () => {
+  for (const s of ['diferenta', 'revizuit_clarificare', undefined]) assertEquals(randCantitatePentruAI({ ...R1751, status: s }).validat_de_om, false)
+  assertEquals(randCantitatePentruAI({ ...R1751, sursa: 'memoriu, pag. 3' }).sursa_cantitate, 'nedeclarată')
+})
+
+// capăt-la-capăt, fără rețea: supabase simulat + fetch simulat care prinde promptul trimis la model (dry_run: nu scrie nimic)
+function supaFals(tabele: Record<string, any[]>) {
+  const selecturi: Record<string, string> = {}
+  return {
+    selecturi,
+    from(t: string) {
+      const b: any = {
+        select: (s: string) => { selecturi[t] = s; return b },
+        eq: () => b, neq: () => b, is: () => b, not: () => b, in: () => b, order: () => b, limit: () => b,
+        single: () => Promise.resolve({ data: (tabele[t] || [])[0] ?? null, error: null }),
+        maybeSingle: () => Promise.resolve({ data: (tabele[t] || [])[0] ?? null, error: null }),
+        insert: () => Promise.resolve({ data: null, error: null }),
+        upsert: () => ({ select: () => Promise.resolve({ data: [], error: null }) }),
+        then: (ok: any, ko: any) => Promise.resolve({ data: tabele[t] || [], error: null }).then(ok, ko),
+      }
+      return b
+    },
+  }
+}
+
+Deno.test('R5 capăt-la-capăt: select-ul citește status, iar promptul nu mai conține „lista":17785', async () => {
+  const supa = supaFals({
+    ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze' }],
+    ofertare_cerinte: [{ id: 1, tip: 'propunere', text_cerinta: 'Lungimea rețelei conform planșelor' }],
+    ofertare_acoperire: [], ofertare_cantitati: [R1751], ofertare_verificari: [], ofertare_documente_atribuire: [], ofertare_clarificari: [],
+  })
+  let corp = ''
+  const fetchVechi = globalThis.fetch
+  globalThis.fetch = ((_u: unknown, init?: RequestInit) => {
+    corp = String(init?.body || '')
+    return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: '{"clarificari":[]}' }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 }))
+  }) as typeof fetch
+  try {
+    const r = await propuneClarificari(supa, { licitatie_id: 95, dry_run: true })
+    assert(r.ok, JSON.stringify(r))
+  } finally { globalThis.fetch = fetchVechi }
+  assert(/\bstatus\b/.test(supa.selecturi.ofertare_cantitati), 'select-ul pe ofertare_cantitati include status')
+  const mesaj = JSON.parse(corp).messages[0].content as string
+  assert(mesaj.includes('"validat_de_om":false'), 'modelul vede că 1751 e nevalidat')
+  assert(mesaj.includes('"sursa_cantitate":"planșă (citire automată'), 'modelul vede proveniența din planșă')
+  assertFalse(mesaj.includes('"lista":17785'), 'nicio cifră din planșă etichetată „lista"')
+  const sistem = JSON.parse(corp).system[0].text as string
+  assert(sistem.includes('validat_de_om: false'), 'promptul explică regula')
+})

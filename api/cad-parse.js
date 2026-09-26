@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { citesteDxf } from './_dxf.js'
+import { randCantitateCad } from './_cadCantitate.js'
 
 const rulează = promisify(execFile)
 const BIN_DWG2DXF = path.join(process.cwd(), 'bin', 'dwg2dxf')
@@ -112,21 +113,17 @@ export default async function handler(req, res) {
 
       // Traseul cu cote e candidatul de conducta — intra ca pozitie de cantitate,
       // marcata ca provenind din desen, ca sa poata fi comparata cu memoriul.
+      // R5 (25.09.2026): intra 'extras' (masuratoare automata), NU 'validat' — vezi _cadCantitate.js.
       const c = analiza.sumar.cu_cote
       let pozitie = null
       if (c.numar > 0 && c.lungime_3d_m > 0) {
         const denumire = `Traseu măsurat din desenul proiectantului (${nume})`
         const { data: existent } = await supa.from('ofertare_cantitati')
-          .select('id').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
-        const rand = {
-          licitatie_id: doc.licitatie_id, denumire,
-          cantitate: c.lungime_3d_m, um: 'm', cantitate_plansa: c.lungime_3d_m, status: 'validat',
-          diferenta_nota: `Măsurat din desen: ${c.lungime_3d_m.toLocaleString('ro-RO')} m în spațiu, ${c.lungime_2d_m.toLocaleString('ro-RO')} m în plan` +
-            `${c.numar > 1 ? `, pe ${c.numar} trasee` : ''}. ${analiza.nota}`,
-        }
-        if (existent) await supa.from('ofertare_cantitati').update(rand).eq('id', existent.id)
-        else await supa.from('ofertare_cantitati').insert(rand)
-        pozitie = rand.cantitate
+          .select('id, cantitate, status').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
+        const scr = randCantitateCad({ licitatieId: doc.licitatie_id, denumire, c, notaAnaliza: analiza.nota }, existent)
+        if (scr.op === 'update') await supa.from('ofertare_cantitati').update(scr.patch).eq('id', scr.id)
+        else await supa.from('ofertare_cantitati').insert(scr.rand)
+        pozitie = c.lungime_3d_m
       }
 
       raport.push({

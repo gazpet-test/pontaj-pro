@@ -853,13 +853,16 @@ Deno.test('identitate 470: retransfer peste 1751–1756 -> doar 1756 (Dn40) prim
   const rows = (await tabele.from('ofertare_cantitati').select()).data
   const r1756 = rows.find((x: any) => x.id === 1756)
   assertEquals([r1756.cantitate, r1756.cantitate_plansa, r1756.status], [13140, 13740, 'diferenta'], 'cantitate NEatinsă; doar cantitate_plansa + status')
-  assert(r1756.diferenta_nota.startsWith('Memoriu 13.140 m vs planșa 1 13.740 m (+600 m, pe 56 tronsoane'), r1756.diferenta_nota)
+  // R5 (rebase peste R4): 1751–1756 sunt scrise de transferul ANTERIOR al aceleiași planșe => „recitire”, nu „Memoriu … vs planșa”
+  assert(r1756.diferenta_nota.startsWith('Diametru care nu apare în cantitățile din memoriu. Planșa 1 (recitire) dă 13.740 m pe 56 tronsoane — rândul are 13.140 m din citirea anterioară (+600 m)'), r1756.diferenta_nota)
+  assert(!/^Memoriu/.test(r1756.diferenta_nota), r1756.diferenta_nota)
   assert(r1756.diferenta_nota.endsWith('De verificat, NEincluse în cifra din planșă: pe planșă: Dn nestandard Dn60: 110 m.'), r1756.diferenta_nota)
   for (const [dn, id] of Object.entries(ids)) {
     if (dn === 'Dn40') continue
     const x = rows.find((y: any) => y.id === id)
     assertEquals([x.cantitate, x.cantitate_plansa, x.status], [AZI_470[dn], AZI_470[dn], 'extras'], dn)
-    assert(x.diferenta_nota.startsWith('Planșa 1 confirmă:'), `${dn}: ${x.diferenta_nota}`)   // nota se rescrie (auto-„confirmare”)
+    // înainte de R5: „Planșa 1 confirmă:” (planșa confirmată de ea însăși); acum: valoare din planșă, fără confirmare
+    assert(!/confirmă/.test(x.diferenta_nota) && x.diferenta_nota.includes('(recitire)') && x.diferenta_nota.includes('nu confirmare din memoriu'), `${dn}: ${x.diferenta_nota}`)
   }
 })
 Deno.test('identitate: transfer cu rânduri „de verificat” -> doar cele sigure în cantitate_plansa; restul numit în diferenta_nota, nepromovat', async () => {

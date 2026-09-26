@@ -27,20 +27,38 @@ const num = v => (v == null || v === '') ? null : Number(v)
 const fmt = n => Math.round(n).toLocaleString('ro-RO')
 const rel = (a, b) => a ? Math.abs(b - a) / a : (b ? Infinity : 0)
 
-export function controlCantitati({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafic_fronturi_m }) {
+// R5 (Copilot 25.09.2026): „extras" ≠ aprobat. F3 e referința de decontat a porții: dacă rândurile ei de rețea
+// NU sunt validate de un om (status='validat'), suma lor e o transcriere automată, nu o cantitate aprobată =>
+// BLOCK. Câmpurile *_nevalidate vin din v_ofertare_cantitati_nevalidate (propus în
+// docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql), lipite peste v_ofertare_pt_stare ca neconfirmatele.
+// Lipsă / invalid (view neaplicat, eroare) = control INDISPONIBIL = block cât timp F3 e folosită (≠ zero).
+// Memoriu / planșe / C6 rămân surse INFORMATIVE; când au rânduri nevalidate, cifra lor poartă „(nevalidat)".
+const nevalidat = nv => (Number(nv) > 0 ? ' (nevalidat)' : '')
+export function controlCantitati({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafic_fronturi_m,
+                                   lista_f3_nevalidate, lista_f3_nevalidate_m, lista_c6_nevalidate, memoriu_nevalidate, plansa_nevalidate }) {
   const f3 = num(lista_f3_m), gr = num(grafic_fronturi_m)
-  const base = { k: 'cantitati', lista_f3_m: f3, grafic_m: gr, diferenta_m: null, neclarificate: [] }
+  const nvF3 = num(lista_f3_nevalidate)
+  const base = { k: 'cantitati', lista_f3_m: f3, grafic_m: gr, diferenta_m: null, neclarificate: [], f3_nevalidate: nvF3 }
+  const surse = [['memoriu', num(memoriu_m), memoriu_nevalidate], ['planșe', num(plansa_m), plansa_nevalidate], ['C6', num(lista_c6_m), lista_c6_nevalidate]]
   if (f3 == null) {
-    const alt = [['memoriu', num(memoriu_m)], ['planșe', num(plansa_m)], ['C6', num(lista_c6_m)]].filter(([, v]) => v != null)
+    const alt = surse.filter(([, v]) => v != null)
     return { ...base, stare: 'block',
       detalii: 'lipsește lista de cantități F3 în ERP — graficul nu are punct de decontat'
-        + (alt.length ? ` (există doar ${alt.map(([n, v]) => `${n} ${fmt(v)} m`).join(', ')})` : '') }
+        + (alt.length ? ` (există doar ${alt.map(([n, v, nv]) => `${n} ${fmt(v)} m${nevalidat(nv)}`).join(', ')})` : '') }
   }
   // Surse informative care diferă de F3 peste toleranță: de rezolvat prin clarificare, nu de ales.
-  const neclarificate = [['memoriu', num(memoriu_m)], ['planșe', num(plansa_m)], ['C6', num(lista_c6_m)]]
+  const neclarificate = surse
     .filter(([, v]) => v != null && rel(f3, v) > H2_TOLERANTA_RELATIVA)
-    .map(([n, v]) => `${n} ${fmt(v)} m`)
+    .map(([n, v, nv]) => `${n} ${fmt(v)} m${nevalidat(nv)}`)
   const notaClar = neclarificate.length ? ` — diferență nerezolvată prin clarificare: ${neclarificate.join(', ')} vs F3 ${fmt(f3)} m` : ''
+  if (!Number.isInteger(nvF3) || nvF3 < 0) return { ...base, neclarificate, stare: 'block',
+    detalii: `F3 ${fmt(f3)} m, dar nu putem verifica dacă rândurile ei sunt validate de un om (controlul e indisponibil: v_ofertare_cantitati_nevalidate lipsește sau a dat eroare) — nu înseamnă că sunt nevalidate, înseamnă că nu știm` + notaClar }
+  if (nvF3 > 0) {
+    const mNv = num(lista_f3_nevalidate_m)
+    return { ...base, neclarificate, stare: 'block',
+      detalii: `F3 ${fmt(f3)} m include ${nvF3} ${nvF3 === 1 ? 'rând' : 'rânduri'} de rețea NEVALIDATE${mNv != null ? ` (${fmt(mNv)} m)` : ''} — transcrise automat, nu sunt cantități aprobate; verifică-le și validează-le (✓) în 📋 Cantități`
+        + (gr != null ? ` · fronturile graficului: ${fmt(gr)} m` : '') + notaClar }
+  }
   if (gr == null) return { ...base, neclarificate, stare: 'warn', detalii: 'graficul n-are fronturi definite — controlul nu se poate face' + notaClar }
   const dif = gr - f3, r = rel(f3, gr)
   if (r > H2_TOLERANTA_RELATIVA) return { ...base, neclarificate, diferenta_m: dif, stare: 'block',

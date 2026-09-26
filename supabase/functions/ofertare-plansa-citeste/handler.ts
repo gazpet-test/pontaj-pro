@@ -1100,7 +1100,12 @@ export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[];
   }
   return { peDnMat, global: p.join('; '), ...(nl.length || nf.length || faraDn.length ? { incomplet: true } : {}) };
 }
-async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null, rulare: string, rest?: RestTransfer) {
+// R5 (Copilot 25.09.2026): un rând scris de un transfer ANTERIOR din planșă (sursa „… citit automat din scanare")
+// sau declarat tip_sursa='plansa' NU e memoriu. Până acum `cantitate` lui era citită drept „dinMemoriu": la o recitire
+// a planșei 470 (lic. 95) rândurile 1752–1756 ar fi primit „Planșa 1 confirmă: … m" — planșa confirmată de ea însăși,
+// pe cifre extrase și nevalidate — iar 1756 (Dn40) „Memoriu 13.140 m vs planșa 13.740 m".
+export const randDinPlansa = (r: any) => r?.tip_sursa === 'plansa' || /citit automat din scanare/i.test(String(r?.sursa || ''));
+export async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa: string | null, rulare: string, rest?: RestTransfer) {
   const ops: any[] = [];
   const fmtR = fmtM;
   // runda 5: cheile de rest care privesc grupul sigur (dn, mat): (dn, mat) + (dn, material necunoscut) — un rând de verificat
@@ -1149,7 +1154,7 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
 
   const eticheta = nrPlansa ? `Planșa ${nrPlansa}` : `Planșa „${doc.nume_original}”`;
   const { data: existente } = await supa.from('ofertare_cantitati')
-    .select('id, denumire, categorie, um, cantitate, cantitate_plansa, status')
+    .select('id, denumire, categorie, um, cantitate, cantitate_plansa, status, sursa, tip_sursa')
     .eq('licitatie_id', doc.licitatie_id);
   // NU se mai filtreaza dupa numele categoriei. Pana la 11.09.2026 aici scria
   // `r.categorie === 'Rețea distribuție'`, iar in aceeasi zi categoriile au fost rescrise
@@ -1293,8 +1298,16 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
 
     if (potrivit) {
       unde(g, m, `e pe poziția „${potrivit.denumire}”`);
-      const dinMemoriu = potrivit.cantitate === null ? null : Number(potrivit.cantitate);
-      const nota = dinMemoriu === null
+      const dinPlansa = randDinPlansa(potrivit);
+      const dinMemoriu = potrivit.cantitate === null || dinPlansa ? null : Number(potrivit.cantitate);
+      const anterior = dinPlansa && potrivit.cantitate !== null ? Number(potrivit.cantitate) : null;
+      const nota = dinPlansa
+        // rând din planșă: nu există referință din memoriu; spunem ce dă recitirea și dacă diferă de cifra din rând
+        ? `Diametru care nu apare în cantitățile din memoriu. ${eticheta} (recitire) dă ${m.toLocaleString('ro-RO')} m pe ${g.n} tronsoane` +
+          (anterior !== null && Math.abs(anterior - m) >= 1
+            ? ` — rândul are ${anterior.toLocaleString('ro-RO')} m din citirea anterioară (${m - anterior > 0 ? '+' : ''}${(m - anterior).toLocaleString('ro-RO')} m); cifra nu e confirmată, verifică pe planșă.`
+            : ' (valoare din planșă, nu confirmare din memoriu).')
+        : dinMemoriu === null
         ? `${eticheta} dă ${m.toLocaleString('ro-RO')} m pe ${g.n} tronsoane.`
         : Math.abs(dinMemoriu - m) < 1
           ? `${eticheta} confirmă: ${m.toLocaleString('ro-RO')} m.`
@@ -1304,7 +1317,9 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
       // daca cineva a validat deja pozitia, nu-i schimbam decizia — doar ii aratam nota
       // (runda 4: și când pe același Dn există rânduri de verificat, cifra din planșă e incompletă => „diferenta”)
       // runda 7 (B3): și când secvența Nr a planșei e incompletă (cifra e doar partea citită)
-      if (potrivit.status === 'extras' && ((dinMemoriu !== null && Math.abs(dinMemoriu - m) >= 1) || cheiRest(dn, g.mat).length || rest?.incomplet)) patch.status = 'diferenta';
+      // R5: și recitirea care diferă de cifra din rând (tot din planșă) e o diferență de verificat, nu o confirmare
+      const deComparat = dinMemoriu !== null ? dinMemoriu : anterior;
+      if (potrivit.status === 'extras' && ((deComparat !== null && Math.abs(deComparat - m) >= 1) || cheiRest(dn, g.mat).length || rest?.incomplet)) patch.status = 'diferenta';
       delete patch.updated_at; // îl pune RPC-ul (now())
       ops.push({ op: 'update', id: potrivit.id, patch });
     } else {

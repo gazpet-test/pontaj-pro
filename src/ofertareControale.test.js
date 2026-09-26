@@ -2,33 +2,68 @@ import { describe, it, expect } from 'vitest'
 import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare, rolPiesa, controlPachetComplet } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
+// R5 (25.09.2026): F3 folosita ca referinta trebuie sa vina cu campul de validare; cazurile vechi = F3 validata integral.
+const h2 = (o) => controlCantitati({ lista_f3_nevalidate: 0, ...o })
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
   it('F3 = grafic, restul egal => ok', () =>
-    expect(controlCantitati({ lista_f3_m: 18007, lista_c6_m: 18007, memoriu_m: 18007, grafic_fronturi_m: 18007 }).stare).toBe('ok'))
+    expect(h2({ lista_f3_m: 18007, lista_c6_m: 18007, memoriu_m: 18007, grafic_fronturi_m: 18007 }).stare).toBe('ok'))
   it('rotunjire sub 0,1 % => warn, nu ok (se spune, nu se ascunde)', () => {
-    const r = controlCantitati({ lista_f3_m: 29980, grafic_fronturi_m: 29985 })
+    const r = h2({ lista_f3_m: 29980, grafic_fronturi_m: 29985 })
     expect(r.stare).toBe('warn'); expect(r.diferenta_m).toBe(5)
   })
   it('grafic ≠ F3 => block, cu ambele valori si diferenta', () => {
-    const r = controlCantitati({ lista_f3_m: 37320, grafic_fronturi_m: 29985 })
+    const r = h2({ lista_f3_m: 37320, grafic_fronturi_m: 29985 })
     expect(r.stare).toBe('block'); expect(r.diferenta_m).toBe(-7335); expect(r.detalii).toMatch(/37.320/)
   })
   it('372 vs 371 la 0,27 % => block', () =>
-    expect(controlCantitati({ lista_f3_m: 372, grafic_fronturi_m: 371 }).stare).toBe('block'))
+    expect(h2({ lista_f3_m: 372, grafic_fronturi_m: 371 }).stare).toBe('block'))
   it('lipsa F3 => block, chiar daca memoriul e egal cu graficul (Mostistea)', () => {
-    const r = controlCantitati({ lista_f3_m: null, memoriu_m: 29980, grafic_fronturi_m: 29985 })
+    const r = h2({ lista_f3_m: null, memoriu_m: 29980, grafic_fronturi_m: 29985 })
     expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/F3/); expect(r.detalii).toMatch(/memoriu 29.980/)
   })
   it('memoriu/planse/C6 diferite de F3 => warn "nerezolvata prin clarificare", nu block, si le listeaza', () => {
-    const r = controlCantitati({ lista_f3_m: 6520, lista_c6_m: 7077, memoriu_m: 5455, plansa_m: 4355, grafic_fronturi_m: 6520 })
+    const r = h2({ lista_f3_m: 6520, lista_c6_m: 7077, memoriu_m: 5455, plansa_m: 4355, grafic_fronturi_m: 6520 })
     expect(r.stare).toBe('warn'); expect(r.neclarificate).toHaveLength(3); expect(r.detalii).toMatch(/clarificare/)
   })
   it('diferenta reala + neclarificate => block, nota de clarificare ramane in detalii', () => {
-    const r = controlCantitati({ lista_f3_m: 6520, memoriu_m: 5455, grafic_fronturi_m: 5455 })
+    const r = h2({ lista_f3_m: 6520, memoriu_m: 5455, grafic_fronturi_m: 5455 })
     expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/clarificare/)
   })
   it('grafic fara fronturi => warn "nu se poate face"', () =>
-    expect(controlCantitati({ lista_f3_m: 100, grafic_fronturi_m: null }).stare).toBe('warn'))
+    expect(h2({ lista_f3_m: 100, grafic_fronturi_m: null }).stare).toBe('warn'))
+})
+
+// R5 (Copilot 25.09.2026): „extras" nu e aprobat. F3 nevalidata nu e referinta; memoriu/planse/C6 nevalidate se eticheteaza.
+describe('H2 R5 — F3 transcrisa automat si nevalidata NU e referinta aprobata', () => {
+  it('F3 = grafic, dar 47 de randuri F3 nevalidate (Domnesti, 6.520 m) => block, nu ok', () => {
+    const r = controlCantitati({ lista_f3_m: 6520, grafic_fronturi_m: 6520, lista_f3_nevalidate: 47, lista_f3_nevalidate_m: 6520 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/47 rânduri de rețea NEVALIDATE \(6.520 m\)/); expect(r.f3_nevalidate).toBe(47)
+  })
+  it('un singur rand nevalidat ajunge ca sa blocheze (singular corect)', () => {
+    const r = controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: 1 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând de rețea NEVALIDATE/)
+  })
+  it('control indisponibil (view lipsa: camp absent) cu F3 prezenta => block „nu putem verifica", NU ok', () => {
+    const r = controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/nu putem verifica/)
+  })
+  it('valoare invalida (null / negativ / text / fractie) = tot indisponibil', () => {
+    for (const v of [null, -1, 'x', 1.5]) expect(controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: v }).stare).toBe('block')
+  })
+  it('F3 validata integral => regula veche neschimbata (ok)', () =>
+    expect(controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: 0 }).stare).toBe('ok'))
+  it('lic. 95 dupa pasul A propus in R5 v2 (tip_sursa=plansa pe 13.765 m): „exista doar planse 13.765 m (nevalidat)"', () => {
+    const r = controlCantitati({ lista_f3_m: null, plansa_m: 13765, plansa_nevalidate: 1 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/planșe 13.765 m \(nevalidat\)/)
+  })
+  it('sursele informative nevalidate raman warn, dar poarta eticheta in lista neclarificatelor', () => {
+    const r = controlCantitati({ lista_f3_m: 44355, grafic_fronturi_m: 44355, lista_f3_nevalidate: 0, plansa_m: 13765, plansa_nevalidate: 1 })
+    expect(r.stare).toBe('warn'); expect(r.neclarificate).toEqual(['planșe 13.765 m (nevalidat)'])
+  })
+  it('fara F3 si fara campuri de validare: mesajul vechi, fara eticheta inventata', () => {
+    const r = controlCantitati({ lista_f3_m: null, memoriu_m: 29980 })
+    expect(r.detalii).toMatch(/memoriu 29.980 m\)/); expect(r.detalii).not.toMatch(/nevalidat/)
+  })
 })
 
 describe('H4 controlGarantie — luni + momentul de start, aceleasi peste tot', () => {

@@ -105,6 +105,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
 
   const fmtNr = v => (v || v === 0) ? new Intl.NumberFormat('ro-RO').format(v) : '—'
   const nrDif = (cant || []).filter(c => c.status === 'diferenta').length
+  // R5 (Copilot 25.09.2026): doar 'validat' e cantitate aprobată; restul nu intră ca aprobat în grafic / poarta propunerii.
+  const nrNevalidate = (cant || []).filter(c => c.status !== 'validat').length
 
   return (
     <div>
@@ -127,6 +129,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
           <div style={{ fontWeight:800, fontSize:13.5 }}>
             🧮 Cantități ({cant?.length ?? '...'})
             {nrDif > 0 && <span style={{ color:G.red, marginLeft:10, fontSize:12 }}>⚠ {nrDif} cu diferențe</span>}
+            {nrNevalidate > 0 && <span style={{ color:G.yellow, marginLeft:10, fontSize:12 }}
+              title="Rândurile nevalidate (🤖 extras / ⚠ diferență) sunt date de lucru: nu devin fronturi de grafic și nu trec drept F3 aprobată în poarta propunerii până nu le bifezi ✓">{nrNevalidate} nevalidate</span>}
           </div>
           <div style={{ display:'flex', gap:8 }}>
             <button style={{ ...S.btnP, padding:'5px 12px', fontSize:12, opacity: extrag ? 0.6 : 1 }} disabled={!!extrag} onClick={extrage}
@@ -160,7 +164,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
                       <input style={S.input} value={c.specificatii || ''} onChange={e => setC(c.id, 'specificatii', e.target.value)} onBlur={() => saveC(c)} /></td>
                     <td style={{ padding:'4px 7px', color:G.dim, fontSize:11, maxWidth:170, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={c.sursa || ''}>{c.sursa || '—'}</td>
                     <td style={{ padding:'4px 4px' }}>
-                      <button title={c.status === 'validat' ? 'Redeschide' : 'Validează'} onClick={() => valideazaC(c)}
+                      <button title={c.status === 'validat' ? 'Redeschide' : 'Validează — ai verificat cifra; abia atunci intră ca aprobată în grafic și în poarta propunerii'} onClick={() => valideazaC(c)}
                         style={{ ...S.btnS, padding:'3px 9px', fontSize:11, color: c.status === 'validat' ? G.dim : G.green, borderColor: (c.status === 'validat' ? G.dim : G.green) + '66' }}>
                         {c.status === 'validat' ? '↩' : '✓'}</button></td>
                     <td style={{ padding:'4px 4px' }}>

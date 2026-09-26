@@ -11,6 +11,8 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+// R5 (Copilot 25.09.2026): fronturile și rândul „cant" iau DOAR cantități validate de om (status='validat').
+import { controlCantitatiGrafic, fronturiDinCantitati } from './ofertareCantitatiAprobare.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -25,32 +27,8 @@ const S = {
   card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10 },
 }
 
-// ── Rândurile care reprezintă FRONTURILE de lucru (tronsoane cu lungime) ──────
-// 17.09.2026, Domnești: generatorul căuta `categorie ~ /rețea/`, nomenclatura de la
-// GAZE. La o licitație de APĂ categoriile se cheamă „Conducte și montaj" și
-// „TITLU SECȚIUNE", deci poarta găsea 0 rânduri de rețea și butonul rămânea
-// blocat pe o licitație cu datele complete în platformă (11 străzi, 5.455 m,
-// verificate față de fișa de date).
-//
-// Ordinea contează și NU e o preferință de stil:
-//   1. rândurile de TITLU SECȚIUNE („Extindere rețele ... - Făgului") sunt
-//      LUNGIMILE REALE pe stradă — exact ce trebuie unui front;
-//   2. categoriile de conducte sunt articole de DEVIZ: fiecare articol are metrii
-//      lui, iar suma lor (39.772 m la Domnești) e de 7 ori lungimea reală a
-//      rețelei. Folosite ca fronturi, ar produce un grafic de șapte ori mai lung.
-// De aceea titlurile de secțiune câștigă când există, și nu se amestecă niciodată
-// cele două surse.
-const rxFrontTitlu = /re[țt]ea|conduct|extindere/i
-const rxFrontCateg = /re[țt]ea|conduct/i
-function randuriFront(cantitati, baza = 'cantitate') {
-  const cuMetri = (cantitati || []).filter(c =>
-    String(c.um || '').toLowerCase() === 'm' &&
-    !/total/i.test(c.obiect || '') &&
-    Number(c[baza] ?? c.cantitate) > 0)
-  const titluri = cuMetri.filter(c => /titlu/i.test(c.categorie || '') && rxFrontTitlu.test(c.denumire || ''))
-  if (titluri.length) return titluri
-  return cuMetri.filter(c => rxFrontCateg.test(c.categorie || ''))
-}
+// ── Rândurile care reprezintă FRONTURILE de lucru: randuriFront, mutat neschimbat în
+// ofertareCantitatiAprobare.js (25.09.2026), împreună cu regula „aprobat = validat".
 
 const PARAM_DEFAULT = {
   tip_lucrare: 'retea_pehd',
@@ -257,22 +235,20 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   const setParam = (k, v) => { setP(x => ({ ...x, [k]: v })); setDirty(true) }
   const setFront = (i, k, v) => { setP(x => ({ ...x, fronturi: x.fronturi.map((f, j) => j === i ? { ...f, [k]: v } : f) })); setDirty(true) }
 
-  // fronturi propuse din cantități (rândurile de rețea cu metri, fără „total")
+  // fronturi propuse din cantități (rândurile de rețea cu metri, fără „total") — DOAR cele validate.
+  // R5 (Copilot 25.09.2026): la lic. 95 butonul punea ca front Dn200 17.785 m (extras din planșa 470,
+  // cu 13.765 m în afara UAT, nevalidați). Un rând 🤖 extras nu devine front până nu-l bifează un om.
   const propuneFronturi = () => {
-    const baza = p.cantitati_asumate === 'plansa' ? 'cantitate_plansa' : 'cantitate'
-    const fr = randuriFront(cantitati, baza)
-      .map(c => {
-        // numele frontului = ce e după liniuță („… - Făgului"), cu em-dash sau minus
-        const d = (c.denumire || '').replace(/Țeavă\s+PE\d+\s+SDR\d+\s*/i, '')
-        const dupaLiniuta = d.split(/\s[—–-]\s/).slice(1).join(' - ').trim()
-        return {
-          nume: dupaLiniuta || d.slice(0, 40),
-          lungime_m: Math.round(Number(c[baza] ?? c.cantitate)),
-          dn: ((c.denumire || '').match(/D[ne]?\s*(\d{2,3})/i) || [])[1] || '',
-          echipe: 1,
-        }
-      })
-    setParam('fronturi', fr)
+    const { fronturi, excluse, m_excluse } = fronturiDinCantitati(cantitati, p.cantitati_asumate)
+    const mEx = Math.round(m_excluse).toLocaleString('ro-RO')
+    if (!fronturi.length) {
+      showToast(excluse.length
+        ? `Niciun rând de rețea validat: ${excluse.length} rânduri (${mEx} m) sunt doar extrase. Verifică-le și validează-le (✓) în 📋 Cantități, apoi propune fronturile.`
+        : 'Niciun rând de rețea cu metri în Cantități.', 'err')
+      return
+    }
+    setParam('fronturi', fronturi)
+    if (excluse.length) showToast(`${fronturi.length} fronturi din rânduri validate. ${excluse.length} rânduri NEVALIDATE (${mEx} m) n-au fost propuse — validează-le în 📋 Cantități.`, 'err')
   }
 
   const salveaza = async () => {
@@ -287,11 +263,11 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   const poarta = useMemo(() => {
     if (!p) return []
     const out = []
-    const totalRetea = cantitati.find(c => /total/i.test(c.obiect || '') && c.um === 'm')
-    const reteaRows = randuriFront(cantitati, p.cantitati_asumate === 'plansa' ? 'cantitate_plansa' : 'cantitate')
-    const cuDif = reteaRows.filter(c => c.status === 'diferenta')
-    out.push({ k: 'cant', titlu: 'Cantități rețea în platformă', stare: !reteaRows.length ? 'block' : (cuDif.length && !p.cantitati_asumate) ? 'block' : cuDif.length ? 'warn' : 'ok',
-      detalii: !reteaRows.length ? 'niciun rând de rețea în Cantități' : `${reteaRows.length} rânduri rețea${totalRetea ? `, total declarat ${Number(totalRetea.cantitate).toLocaleString('ro-RO')} m` : ''}${cuDif.length ? ` · ${cuDif.length} cu diferență memoriu/planșă → alege baza (memoriu / planșă)` : ''}` })
+    // R5 (Copilot 25.09.2026): „cant" = BLOCK cât timp un rând de rețea nu e validat de om (vezi ofertareCantitatiAprobare.js).
+    const cc = controlCantitatiGrafic(cantitati, p.cantitati_asumate)
+    const totalRetea = cc.totalRetea
+    const reteaRows = cc.retea
+    out.push({ k: 'cant', titlu: 'Cantități rețea în platformă — validate de om', stare: cc.stare, detalii: cc.detalii })
     const lf = totalFronturi(p)
     const ref = Number(totalRetea?.cantitate) || reteaRows.reduce((s, c) => s + (Number(p.cantitati_asumate === 'plansa' ? c.cantitate_plansa : c.cantitate) || 0), 0)
     const dev = ref ? Math.abs(lf - ref) / ref : 1
@@ -318,13 +294,21 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
     if (rows?.length && !window.confirm(`Graficul curent (${rows.length} rânduri) va fi ÎNLOCUIT cu unul generat. Versiunea veche rămâne în istoric. Continui?`)) return
     setBusy(true)
     try {
+      // R5 (Copilot 25.09.2026): cantitățile se RECITESC din BD înainte de îngheț (ca semnarea propunerii):
+      // între încărcare și click cineva poate redeschide (↩) un rând validat sau poate apărea un transfer nou.
+      const { data: proaspete, error: eCant } = await supabase.from('ofertare_cantitati')
+        .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status').eq('licitatie_id', licitatieId).order('id')
+      if (eCant) throw new Error('nu s-au putut reciti cantitățile — nu se generează (' + eCant.message + ')')
+      const ccProaspat = controlCantitatiGrafic(proaspete || [], p.cantitati_asumate)
+      if (ccProaspat.stare === 'block') { setCantitati(proaspete || []); throw new Error('între timp cantitățile nu mai sunt toate validate: ' + ccProaspat.detalii) }
+      const poartaInghetata = poarta.map(r => r.k === 'cant' ? { ...r, stare: ccProaspat.stare, detalii: ccProaspat.detalii } : r)
       if (dirty) await salveaza()
       const { rows: gen, factor, intern, total } = motorPEHD(p, norme)
       // 1. înghețăm versiunea (înainte de a atinge grafic_activitati)
       const versiune = (versiuni[0]?.versiune || 0) + 1
       const { error: ev } = await supabase.from('grafic_versiuni').insert({
         licitatie_id: licitatieId, versiune, mod: p.mod, generat_de: profile?.id || null, durata_zile: total,
-        poarta, snapshot: { parametri: p, cantitati, norme: norme.filter(n => n.tip_lucrare === p.tip_lucrare), cerinte_ids: cerinte.map(c => c.id), factor_intindere: Math.round(factor * 100) / 100, durata_interna_zile: intern },
+        poarta: poartaInghetata, snapshot: { parametri: p, cantitati: proaspete || [], norme: norme.filter(n => n.tip_lucrare === p.tip_lucrare), cerinte_ids: cerinte.map(c => c.id), factor_intindere: Math.round(factor * 100) / 100, durata_interna_zile: intern },
         activitati: gen, nota: `${p.mod === 'oferta' ? 'Ofertă' : 'Intern'} · ${p.fronturi.length} fronturi · ${p.echipe} echipe · factor întindere ${factor.toFixed(2)} (intern ${intern} zile → ${total} zile)`,
       })
       if (ev) throw new Error(ev.message)
