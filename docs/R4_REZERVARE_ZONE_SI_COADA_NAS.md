@@ -229,13 +229,13 @@ Tabelul e mai simplu de auditat.
 
 **Planșa 1035:** doar adnotări (8), fără tabel.
 
-### 5.3 Regula implementată (`handler.ts:352 identificaRanduri`, apelată la l. 1325)
+### 5.3 Regula implementată (`handler.ts:385 identificaRanduri`, apelată la l. 1400)
 - **Identitate = (document, pagină, tabel identificat, Nr rând).**
   - Pagina vine din `surse_geom` prin `zone_geom` (implicit 1).
   - „Tabelul identificat” = setul de antete normalizate al fragmentului care poartă Nr.
   - Felia și regiunea rămân doar **proveniență**: `_zona`, `_regiune`, `_observatii` = feliile în care s-a văzut rândul.
 - **Legarea tronson → rând.** Tronsoanele cu `sursa='tabel'` se leagă 1:1, în ordine, de rândurile tabelelor din **aceeași** felie. Rândul trebuie să conțină lungimea (în m sau km), Dn-ul și măcar un capăt. Dacă numărul nu se potrivește sau valorile diferă, rândul intră la „de verificat”.
-- **Nr în altă felie decât lungimea** (cazul 470). Rândul se împerechează cu felia vecină pe orizontală din aceeași bandă (etichetă `r_c`/`r_c+1`, confirmată de `zone_geom` când există), dar **doar dacă e sigur**:
+- **Nr în altă felie decât lungimea** (cazul 470). Rândul se împerechează cu felia vecină pe orizontală din aceeași bandă (din runda 6: felii care se ating pe geometria reală `zone_geom`; fără geometrie, eticheta `r_c`/`r_c+1`), dar **doar dacă e sigur**:
   - există un singur decalaj δ (|δ| ≤ 2; un δ ≠ 0 cere minimum 2 perechi) la care fiecare pereche are **un câmp comun identic** și **niciun câmp comun contrazis**;
   - un prefix e admis doar pe coloana tăiată de marginea feliei sau pe textul marcat „...”;
   - mai multe decalaje valide = ambiguu, adică „de verificat”.
@@ -253,7 +253,7 @@ Tabelul e mai simplu de auditat.
   - `conflicte[]`, `randuri_fara_identitate[]` (+ `_n`), `identitate_randuri` (lecturi, sigure prin Nr / prin poziție, fără identitate, conflicte);
   - un avertisment când există rânduri de verificat.
   - `lungime_totala_m` / `tronsoane_gasite` rămân cifra care intră în cantități (sigur − nestandard).
-- `COD_VERSIUNE` 2026-09-25.6 → **.7** → **2026-09-26.8** (runda 4) → **2026-09-26.9** (runda 5, mai jos).
+- `COD_VERSIUNE` 2026-09-25.6 → **.7** → **2026-09-26.8** (runda 4) → **2026-09-26.9** (runda 5) → **2026-09-26.10** (runda 6, mai jos).
 
 **Runda 4 (26.09, verificatorul rundei 3).** Principiul Copilot: nicio pierdere și nicio umflare **tăcută**. Ce nu e sigur trece la „de verificat”, cu total separat și motiv. Regulile noi din `identificaRanduri`:
 - **Poziția e identitate doar dacă niciun fragment din tabel nu are coloană Nr.** Tabelul = grupul fragmentelor împerecheate sigur. Rândul fără Nr dintr-un fragment împerecheat cu unul care are Nr intră la de verificat, cu motivul `MOTIV_AFARA_NR` („rând în afara fragmentului cu Nr”). Asta repară **blocantul**: rândul de margine transcris doar în felia cu lungimi (ex. Nr 38 în plus la baza lui `z1_7`) primea `poz z1_7#38` și se număra încă o dată prin Nr în banda 2. Efectul: 470 ieșea 49.225 m în loc de 48.905, fără niciun semnal. Tot aici: rândul legat de un Nr ilizibil din felia vecină merge la „Nr lipsă sau ilizibil pe rând (în felia vecină, împerecheată)”, nu primește poziție.
@@ -272,15 +272,34 @@ Tabelul e mai simplu de auditat.
 
 În toate, cele 37 de rânduri din `z1_7` primeau poziție, iar Nr 32–37 (suprapunerea cu banda 2, 1.200 m) se numărau încă o dată prin Nr. Rezultatul era 139 de rânduri / **50.105 m** sigur, 0 de verificat, fără niciun semnal. Cazul e plauzibil: pe 130, `z2_4` și `z2_5` transcriu același tabel cu antete diferite („Tronsoane / Noduri / Localitate / Cod SIRUTA” față de „Tronson / Nod de la / Nod la / Localitate / Cod SIRUTA”; SELECT 26.09).
 
-Regula nouă (`handler.ts:486 coloaneCuNr`, verificarea la l. 519):
+Regula nouă (în runda 5 `coloaneCuNr`, pe etichetă; din runda 6 `coloanaCuNr`, `handler.ts:523`, verificarea la l. 556, pe geometrie — vezi mai jos):
 - **Poziția e interzisă în coloana de felii a unui tabel cu Nr.** Coloanele interzise sunt cele ale oricărui fragment dintr-un grup cu Nr (fragmentul cu Nr sau unul împerecheat sigur cu el), plus coloana din stânga și cea din dreapta, pe aceeași pagină, în **orice bandă**. Rândul trece la „de verificat” cu `MOTIV_COLOANA_NR`.
-- **De ce ajunge regula.** Un rând se numără de două ori doar dacă felia lui se suprapune fizic (|Δc| ≤ 1) cu o felie cu lungimi legată de un Nr, iar felia aceea face parte dintr-un grup cu Nr. Regula e mai largă decât proba verificatorului (fragment cu Nr la |Δc| ≤ 1). Prinde și tabelul întins pe 3 coloane de felii (Nr în `z?_5`, lungimi în `z?_7`) când banda 1 n-are fragmentul din mijloc. Acolo fragmentul cu Nr e la două coloane distanță, dar `z2_7` e în grupul cu Nr (testul sintetic din §5.6; proba verificatorului dă acolo 2.700 m în loc de 1.700).
-- Un fragment din grup cu Nr fără grilă în etichetă interzice poziția pe toată pagina.
+- **De ce ajunge regula** — *afirmație corectată în runda 6:* „un rând se numără de două ori doar dacă felia lui se suprapune fizic (|Δc| ≤ 1) cu o felie legată de un Nr” era **falsă**: tăietorul fixează ultima coloană la marginea planșei, care poate acoperi și coloana `_N-1` (|Δc| = 2). Regula corectă e pe suprapunerea fizică din `zone_geom` (runda 6, mai jos). Ce rămâne valabil: regula e mai largă decât proba verificatorului rundei 4 (fragment cu Nr la |Δc| ≤ 1). Prinde și tabelul întins pe 3 coloane de felii (Nr în `z?_5`, lungimi în `z?_7`) când banda 1 n-are fragmentul din mijloc. Acolo fragmentul cu Nr e la două coloane distanță, dar `z2_7` e în grupul cu Nr (testul sintetic din §5.6; proba verificatorului dă acolo 2.700 m în loc de 1.700).
+- Un fragment din grup cu Nr fără grilă în etichetă interzice poziția pe toată pagina (din runda 6: orice fragment fără geometrie, vezi mai jos).
 - **`perechi_neimperecheate`** (+ `_n`) intră în sumar, cu un avertisment („N perechi de felii vecine cu rânduri în afara suprapunerii (z1_6+z1_7: 0/1) …”) doar când există.
 
 Cifre:
 - **V1–V4:** 102 rânduri / **24.235 m** sigur (Nr 32–133, benzile 2–4) + 37 de rânduri / 25.870 m de verificat, fără dublare. Suma minus suprapunerea Nr 32–37 dă exact 48.905 m.
 - **Date reale.** Pe toate cele 8 documente cu citire, singurele fragmente cu coloană Nr sunt `z1_6`–`z4_6` din 470 (SELECT 26.09 pe cheile rândurilor), deci regula nu schimbă nimic pe ele: **470 = 133 / 48.905 m**, 0 de verificat, niciun avertisment de perechi; **130 = 18 / 37.320 m** prin poziție (transcrierea compactă `p130`, md5 = BD).
+
+**Runda 6 (26.09, verificatorul rundei 5) — vecinătatea feliilor pe geometria reală.** Regula pe coloană din runda 5 se baza pe etichetă (±1 coloană). Tăietorul (`api/plansa-felii.js` l. 318: `left = Math.min(c * pas, Math.max(0, meta.width - latura))`) fixează însă ultima coloană (și ultima bandă) la marginea planșei. Consecința:
+- când W mod pas < 0,272·pas (sub 383 px la pas 1.408), felia fixată `_N+1` acoperă și `_N-1`; sub 0,136·pas, `_N` și `_N+1` sunt chiar imagini identice. Mai departe de `_N-1` nu ajunge niciodată (la suprapunerea de 12%);
+- dacă tabelul cu Nr stă în `_N-1`, iar felia din mijloc `_N` nu-l transcrie sau cade, fâșia de lungimi din `_N+1` primea „poz …” și se număra a doua oară. Proba verificatorului: GEOM-1 (W = 7.340) 6 rânduri / **1.500 m** sigur în loc de 750, 0 de verificat; GEOM-E2E (W = 7.140) Dn63 `cantitate_plansa` 1.100 (corect 550), Dn40 400 (corect 200), nota „Memoriu 550 m vs planșa 7 1.100 m (+550 m…)”, „diferenta” — o diferență falsă prezentată ca reală.
+
+Regula nouă (`handler.ts:262–320` + `identificaRanduri`):
+- **Geometria** vine din `analiza.plansa.zone_geom` (scris de `/api/plansa-felii`: `[left, top, width, height, sursa]` în pixelii sursei, cheie = eticheta fără `z`, inclusiv prefixul `pN_` la mai multe pagini). E același obiect din care handler-ul citește deja planșa (`plansaD` → `identificaRanduri(toate, { plansa: plansaD })`), deci nu trebuie încărcat separat. SELECT 26.09: 7 documente au `zone_geom` (470–475, 1035), toate cu `[left, top, 1600, 1600, 0]`; doar 130 (citire veche) nu are.
+- **Relația „vecine / suprapuse”:** dreptunghiurile a două felii din aceeași sursă se intersectează sau se ating, cu toleranța `TOL_GEOM_PX` = 2 px. Pe ea se aplică toate cele trei reguli de identitate:
+  - **împerecherea fragmentelor** (`perechePosibila`): felii diferite, aceeași bandă (același `[top, top+height]`), intervale x care se ating; ordinea stânga/dreapta = x, apoi eticheta (două felii identice se împerechează o singură dată). Fâșia din coloana fixată se împerechează direct cu tabelul din `_N-1`, deci rândul văzut în ambele se numără **o dată** (GEOM-1: 3 rânduri / 750 m, perechea `z1_4+z1_6`);
+  - **„Nr repetat”** (`seSuprapun`): același (tabel, Nr) în felii care nu se ating ⇒ „de verificat”; în felii care se ating (inclusiv banda fixată care acoperă banda `_N-1`) ⇒ același rând;
+  - **poziția interzisă în coloana unui tabel cu Nr** (`coloanaCuNr`): intervalul x al feliei atinge intervalul x al oricărui fragment dintr-un grup cu Nr, pe aceeași pagină și sursă, în orice bandă ⇒ `MOTIV_COLOANA_NR`. Prinde fâșia din coloana fixată și când împerecherea e imposibilă (tabelul cu Nr e în banda vecină).
+- **Fallback fără geometrie** (tăiere veche; lipsă pe candidat sau pe fragmentul cu Nr) — conservator, niciodată umflare:
+  - împerecherea și „Nr repetat” rămân pe etichetă: vecinele ±1 se suprapun mereu într-o grilă cu suprapunere (asta e rostul ei), iar |Δ| ≥ 2 ⇒ „de verificat” (nu contopire);
+  - poziția e **interzisă pe toată pagina** unui tabel cu Nr, cu motivul `MOTIV_COLOANA_NR_FARA_GEOM` („… fără geometria zonelor (tăiere veche) — suprapunerea feliilor nu se poate exclude … (retaie planșa)”). Am ales toată pagina, nu ±2 coloane: ±2 ajunge doar pentru grila de azi (latura 1.600, suprapunere 12%); parametrii tăierilor vechi nu sunt în BD.
+
+Cifre (fără scrieri în BD):
+- **GEOM-1 / GEOM-2** (W = 7.340, `z1_5` netranscrisă sau căzută): **3 rânduri / 750 m** sigur, 0 de verificat (f1274a1: 6 / 1.500 m, 3 prin poziție). Fără geometrie: 750 m sigur + 750 m de verificat.
+- **GEOM-E2E** prin handler + RPC simulat (W = 7.140): Dn63 **550**, Dn40 **200**, „Planșa 7 confirmă: …”, „extras” (f1274a1: 1.100 / 400, diferență falsă).
+- **Date reale:** pe cele 7 geometrii din BD nicio pereche de felii la |Δ| ≥ 2 nu se atinge (cel mai mic gol: 70 px la 471/473/474, coloanele 2 și 4), deci relația geometrică dă aceleași vecinătăți ca eticheta. Coloană Nr are doar 470 (`z1_6`–`z4_6`, SELECT 26.09 pe cheile rândurilor), iar singurul document fără geometrie (130) n-are Nr, deci fallback-ul nu schimbă nimic. **470 = 133 / 48.905 m** (fixture cu `zone_geom` real din BD, 35 de zone; `geomTaiere(9362, 6623)` reproduce exact geometria din BD), **130 = 18 / 37.320 m** (transcrierea compactă `p130`, prin poziție).
 
 ### 5.4 Efect (simulat pe citirile salvate; nimic scris în BD)
 | | azi (BD) | multiset (`e762c6e`) | **identitate de rând** |
@@ -304,7 +323,7 @@ Cifre:
 - Totalul corect din planșă (37.320) e egal cu totalul memoriului. Pe Dn250, diferența față de memoriu devine +7.340 m (în BD: +10.835).
 - Corecția e o modificare de date: se face doar prin preview → GO → apply.
 
-### 5.5 Transferul în cantități (`treciInCantitati`, l. 711; `notaRestTransfer`, l. 688; `descriereRestDn`, l. 681; `cheieRest`, l. 678)
+### 5.5 Transferul în cantități (`treciInCantitati`, l. 748; `notaRestTransfer`, l. 725; `descriereRestDn`, l. 718; `cheieRest`, l. 715)
 - `cantitate_plansa` primește **doar** rândurile cu identitate sigură, fără conflict și cu Dn standard.
 - Restul **nu se promovează**. E numit în `diferenta_nota`, pe fiecare poziție atinsă și pe rândul de total:
   - rândurile fără identitate de pe Dn-ul poziției;
@@ -315,7 +334,7 @@ Cifre:
   - 1751–1755 rămân neschimbate ca cifre, iar nota lor devine „Planșa 1 confirmă: … De verificat, NEincluse …”;
   - 0 inserări.
 - Rămân **nemodificate** (în afara fix-ului): eticheta „Memoriu” pe cifra venită din planșa însăși și „confirmă” pe propriile cifre.
-- Cum s-ar ajunge la retransfer: „continuă” / „reia” nu retransferă (transfer `facut` pe aceeași rulare; după o schimbare de `COD_VERSIUNE` — acum 2026-09-26.9 — sunt refuzate fără `mixare_permisa`). Rămâne doar un „citește” complet, adică retăiere + ~35 de zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde).
+- Cum s-ar ajunge la retransfer: „continuă” / „reia” nu retransferă (transfer `facut` pe aceeași rulare; după o schimbare de `COD_VERSIUNE` — acum 2026-09-26.10 — sunt refuzate fără `mixare_permisa`). Rămâne doar un „citește” complet, adică retăiere + ~35 de zone plătite (ultima citire completă a lui 470: 2,595 USD în 9 runde).
 
 **Runda 4 — Dn cu TOATE rândurile „de verificat”** (verificatorul, MAJOR; test ADV-T). Pe `a800d38`, `peDiametru` se construia doar din rândurile sigure. Consecințele:
 - poziția unui Dn fără niciun rând sigur păstra tăcut `cantitate_plansa` și nota dintr-o citire anterioară;
@@ -343,6 +362,20 @@ Acum:
 - Pe T1: id 12 ⇒ `cantitate_plansa` null, „diferenta”, nota „De verificat: 1 rând Dn110 OL fără identitate sigură (90 m); cifra din planșă s-a golit (era 900 m, dintr-o citire anterioară).” Id 11 (PE) primește 500 m și rămâne „extras”: restul OL nu e al lui și e numit doar „pe planșă”. Pe `a9fe186`, id 11 trecea în „diferenta” din cauza rândului OL.
 - **Grup sigur ambiguu** (mai multe poziții pe același (Dn, M)): `ambigue[]` numește acum și restul de verificat de pe (Dn, M) (`de_verificat`).
 - **TOTAL** (minor): dacă e „extras” și există rest pe planșă (`rest.global`: fără identitate / conflicte / Dn nestandard) ⇒ „diferenta”, ca pe Dn. Pe datele reale nu schimbă nimic: lic. 3 are TOTAL (id 4) „validat”, iar lic. 95 n-are rând TOTAL (SELECT 26.09).
+
+**Runda 6 — două grupuri sigure pe aceeași poziție** (verificatorul rundei 5, MAJOR; pre-existent, codul era identic la `8a6fbbb`, de la split-ul Jakarinos 25.09). Grupurile sigure au cheie (Dn, material). Când două grupuri de pe același Dn, cu materiale diferite — (Dn, PE) și (Dn, OL), sau (Dn, PE) și (Dn, '') — găseau **aceeași** poziție unică, `treciInCantitati` punea două `update` pe același id. RPC-ul live le aplică în ordine (bucla `FOR` peste `p_randuri`), deci ultimul câștiga:
+- MY-T2: poziția „Conductă distribuție gaze Dn110”, PE 500 + OL 90 sigure ⇒ `cantitate_plansa` 90, nota „Memoriu 590 m vs planșa 90 m (-500 m…)”, „diferenta”: 500 m pierduți tăcut și o diferență falsă;
+- MY-T3: „Țeavă PE100 Dn110”, PE 500 + fără material 300 ⇒ 300, cei 500 m PE dispar.
+
+Acum (`handler.ts:818–871`): întâi se află ținta fiecărui grup sigur (aceeași potrivire pe Dn + filtrul pe material), apoi se scrie. Dacă **mai multe grupuri ajung la același candidat**, poziția e **ambiguă**:
+- `cantitate_plansa` **nu se atinge** (patch-ul n-are cheia, iar RPC-ul o aplică doar când există — `pg_get_functiondef` 26.09);
+- nota numește **toate** grupurile, cu metrii și rândurile lor, și spune că cifra din planșă e veche, ex. „De verificat: Planșa „PL1.1.pdf” dă 2 grupuri sigure pe aceeași poziție — Dn110 OL 90 m (1 rând); Dn110 PE 500 m (1 rând); împreună 590 m, dar nu se adună și nu se suprascriu automat (denumirea poziției nu le deosebește); cifra din planșă nu s-a actualizat (700 m e dintr-o citire anterioară).” Restul de verificat al grupurilor (cheile (Dn, M) și (Dn, '')) și `rest.global` se adaugă ca înainte;
+- „extras” ⇒ „diferenta”; „validat” / „diferenta” rămân, doar nota se schimbă;
+- `cantitati.ambigue[]` primește `{ dn, material: null, metri: suma, motiv, grupuri: [{dn, material, metri, randuri}], de_verificat?, pozitii: [{id, denumire}] }`;
+- o singură scriere pe id; grupurile din notă și din `ambigue` sunt ordonate (Dn descrescător, material cunoscut alfabetic, apoi fără material), deci rezultatul **nu depinde de ordinea** rândurilor (testat: ordine normală = inversată, aceeași stare în BD);
+- TOTAL rămâne suma tuturor grupurilor sigure (nu se pierde nimic din el). Grupurile cu poziții separate își primesc fiecare cifra, ca înainte (control).
+
+Pe datele de azi nu apare: singurul Dn cu material amestecat e 130 Dn250 (28 de lecturi din tabel fără material, 61.940 m brut, și 2 adnotări PE 100 / 5.170 m, care nu intră în total fiindcă există tabel; SELECT verificator 26.09).
 
 **1756 — două variante, decizie separată pentru Razvan** (verificator, minor). Codul de retransfer schimbă **doar** `cantitate_plansa`; `cantitate` rămâne neatinsă (testul „identitate 470: retransfer…”: 13.140). Poziția 1756 a fost însă *creată* din planșă (`cantitate` = `cantitate_plansa` = 13.140), deci se poate argumenta și corectarea lui `cantitate`:
 - **Varianta A — doar `cantitate_plansa`** (ce ar face un retransfer): `cantitate` rămâne 13.140, iar poziția arată „memoriu 13.140 vs planșă 13.740”.
@@ -380,7 +413,7 @@ SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota, update
 
 ### 5.6 Teste
 - **Fixture reală** `fixture_470.ts`: feliile `z1_6..z4_7`, reduse la Nr, Strada, Str. De la, Str. Pana la (`z?_6`) și la rândul complet + tronsoanele (`z?_7`); antetele sunt exact ca în BD. Transcrierea e verificată prin SELECT față de fișier, pe fiecare din cele 8 felii: număr de rânduri, suma Nr, suma L și md5 pe câmpurile păstrate, **toate identice** (ex. `z2_6`: 52 de rânduri, ΣNr 2990, md5 `f36087…`; `z2_7`: ΣL 11.600, md5 tronsoane `552ee3…`).
-- **`agregare_test.ts`** (31 de teste: 17 din runda 3 + 9 din runda 4 + 5 din runda 5), cazurile cerute în runda 3:
+- **`agregare_test.ts`** (36 de teste: 17 din runda 3 + 9 din runda 4 + 5 din runda 5 + 5 din runda 6), cazurile cerute în runda 3:
   - (1) Nr 37/40/41 cu text identic = 3 rânduri, și în aceeași felie, și cu Nr în `z2_6` / L în `z2_7`;
   - (2) același Nr în două felii suprapuse = o dată;
   - (3) contraexemplul Copilot = 2;
@@ -462,6 +495,37 @@ SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota, update
   | fără `perechi_neimperecheate` în sumar | 1 |
   | fără „diferenta” pe poziția atinsă deja de un grup sigur | 1 |
 
+- **Runda 6 — testele verificatorului rundei 5, devenite regresie** (`agregare_test.ts` +5, `concurenta_test.ts` +4). Cele 6 teste „MAJOR” pică pe `f1274a1`, pe aserțiunea de fond; controlul l-am rulat pe o copie din scratchpad (`neg6`): handler-ul de la `f1274a1` plus exportul constantei `MOTIV_COLOANA_NR_FARA_GEOM`, ca importul să se lege (95 de teste: 88 trec, 7 pică). Al 7-lea e testul sintetic din runda 5, cu așteptare schimbată intenționat: rulează acum cu geometria tăietorului (rezultat identic: 1.700 m + 1.000 m de verificat) și, separat, fără geometrie, unde tabelul fără Nr din `z1_2` trece și el la „de verificat” (`MOTIV_COLOANA_NR_FARA_GEOM`: 1.200 m sigur + 1.500 m). Cele 3 controale trec și pe `f1274a1`.
+
+  | Test (runda 6) | Rezultat acum | Pe `f1274a1` |
+  |---|---|---|
+  | GEOM-1 / GEOM-2: W = 7.340, tabel cu Nr în `z1_4`, `z1_5` netranscrisă / căzută, fâșia de lungimi în `z1_6` (fixată) | **3 / 750 m** sigur prin Nr, pereche `z1_4+z1_6`, `_observatii` [z1_4, z1_6]; fără geometrie 750 + 750 m de verificat (`…_FARA_GEOM`); control `z1_5` transcrisă = 750 m | 6 / 1.500 m, 3 prin poziție, 0 de verificat |
+  | Fâșia din coloana fixată (`z1_6`, rândurile 1–4) nu se poate împerechea: tabelul cu Nr e în banda 2 (`z2_4`, Nr 3–5); control: fâșie în `z1_1` | Nr 3–5 = **450 m** + 900 m de verificat (`MOTIV_COLOANA_NR`); control 5 rânduri, 2 prin poziție | 7 / 1.350 m, 4 prin poziție (Nr 3, 4 de două ori) |
+  | „Nr repetat” pe geometrie: H = 3.000, banda fixată `z3_2` atinge `z1_2`; `z1_2`/`z1_3` despărțite de 500 px; controale: geometria standard, gol de 1 px | `z3_2`: **3 / 900 m** (fără geometrie 1.800 m de verificat); despărțite: 1.800 m de verificat („felii care nu se suprapun”), 0 perechi; controalele 3 / 900 m | `z3_2`: 0 sigure / 1.800 m; despărțite: 3 / 900 m (eticheta c, c+1) |
+  | E2E GEOM (handler + RPC simulat, W = 7.140, `z1_5` = `z1_6`) | sumar 750 / 0, prin Nr 3; Dn63 **550**, Dn40 **200**, „Planșa 7 confirmă”, „extras” | 1.500 m, 3 prin poziție; Dn63 1.100, Dn40 400, „diferenta” falsă |
+  | Transfer: PE 500 + OL 90 sigure pe „Conductă distribuție gaze Dn110” (cifră veche 700), ordine normală și inversată | 700 neatins, „diferenta”, nota cu ambele grupuri; `ambigue[0].grupuri` OL 90 / PE 500; stare identică în ambele ordini | 90 (ultimul câștigă) |
+  | Transfer: PE 500 + fără material 300 (+ un rând PE de verificat 40 m) pe „Țeavă PE100 Dn110”; varianta validată | 800 neatins, „diferenta”, nota + „1 rând Dn110 PE fără identitate sigură (40 m)”; validat: 780 și „validat” rămân, doar nota | 300 (500 m PE pierduți) |
+  | Controale: `geomTaiere` = `zone_geom` din BD (470) și coloana fixată; fixture 470 cu `zone_geom` real; poziții PE / OL separate | 470 = **133 / 48.905 m**, 133 prin Nr, 0 de verificat, aceleași 4 perechi, 19 rânduri în două benzi; PE 500 / OL 90, `ambigue` gol | trec și pe `f1274a1` |
+
+- **Controale negative runda 6** (mutații pe o copie a handler-ului nou, cu testele neschimbate; copia nemutată trece 95/95 pe `agregare_test.ts` + `concurenta_test.ts`):
+
+  | Mutație | Teste care pică |
+  |---|---|
+  | împerecherea doar pe etichetă (c, c+1) | 3 (GEOM-1, E2E GEOM, „Nr repetat” pe geometrie) |
+  | coloana cu Nr pe etichetă ±1 (regula din `f1274a1`) | 3 (GEOM-1, fâșia fără pereche, sintetic runda 5) |
+  | fără fallback (fără geometrie ⇒ nicio interdicție) | 3 (GEOM-1, sintetic runda 5, E2E 470 V4) |
+  | fallback fără geometrie = eticheta ±1 | 2 (GEOM-1, sintetic runda 5) |
+  | „Nr repetat” pe etichetă ±1 | 1 |
+  | toleranță 0 px | 1 |
+  | coliziunea ignorată (ultimul grup câștigă) | 2 |
+  | nota coliziunii în ordinea grupurilor (nesortată) | 2 |
+  | coliziunea scrie suma grupurilor în `cantitate_plansa` | 2 |
+  | coliziunea fără „diferenta” pe „extras” | 2 |
+  | coliziunea fără intrare în `ambigue` | 2 |
+
+  E2E 470 V4 (fără `zone_geom` în simulare) trece acum prin fallback: rândurile din `z1_7` au motivul `MOTIV_COLOANA_NR_FARA_GEOM`; cifrele sunt aceleași (24.235 / 25.870 m).
+- Probele verificatorului rundei 5, rulate pe handler-ul nou (copie `r6v`): GEOM-1/2/3 = 750 m; GEOM-E2E = 550 / 200 „confirmă”; MY-T2 = 590 neatins + notă, MY-T3 = 800 neatins + notă; MY-T4 neschimbat (minorul, §5.7); testele adversariale din rundele 3–4 (`adv*`, `ver_test`, `ver_e2e_test`, 19 teste) dau loguri identice cu `f1274a1`; `p130_run` = 18 / 37.320 m.
+
 ### 5.7 Limite cunoscute (documentate, nu blochează)
 - `total_de_verificat_m` e un **plafon brut**: fiecare lectură fără identitate se adună separat, deci un rând din suprapunerea verticală poate fi numărat de două ori; conflictele intră cu varianta maximă.
 - Două tabele **cu antete identice** și Nr care se suprapun:
@@ -477,12 +541,14 @@ SELECT id, denumire, cantitate, cantitate_plansa, status, diferenta_nota, update
 - **La transfer:**
   - o poziție validată sau „diferenta” pe un (Dn, material) doar de verificat își păstrează `cantitate_plansa` din citirea anterioară, iar nota o numește explicit veche;
   - rândul TOTAL primește, când există rânduri sigure, doar partea sigură, cu restul numit în notă, iar din runda 5 trece în „diferenta” dacă era „extras”;
-  - un rest cu material necunoscut pe un Dn care are rânduri sigure e numit în nota fiecărei poziții sigure de pe Dn. O a doua poziție pe acel Dn, neatinsă de niciun grup sigur (ex. OL, când restul fără material ar putea fi OL), nu primește notă;
+  - un rest cu material necunoscut pe un Dn care are rânduri sigure e numit în nota fiecărei poziții sigure de pe Dn. O a doua poziție pe acel Dn, neatinsă de niciun grup sigur (ex. OL, când restul fără material ar putea fi OL), nu primește notă. **Rămâne deschis** (minorul verificatorului rundei 5, MY-T4: poziția OL rămâne 900 m „extras” cu nota veche; neatins în runda 6, care a tratat doar cele două majore);
+  - **coliziunea** (runda 6: mai multe grupuri sigure pe aceeași poziție) lasă `cantitate_plansa` neatinsă, cu nota care o numește veche, și trece poziția „extras” în „diferenta”. Nu o golește (ca „doar de verificat”), pentru că cerința a fost „niciun update de `cantitate_plansa` pe acel id”; golirea ar fi o alternativă de decis;
   - poziția neatinsă de citire își păstrează cifra, comportament de dinainte, nelegat de identitate.
-- **Regula pe coloana tabelului cu Nr (runda 5) e deliberat largă:**
-  - un tabel fără Nr care are lungimi și stă în aceeași coloană de felii (±1) cu un tabel cu Nr, pe aceeași pagină, trece la „de verificat” cu `MOTIV_COLOANA_NR`, chiar dacă e alt tabel. E fail-safe, cu motiv, nu tăcut. Pe datele de azi nu apare: singurele fragmente cu Nr sunt `z?_6` din 470 (SELECT 26.09);
-  - un fragment din grup cu Nr fără grilă în etichetă interzice poziția pe toată pagina.
-- **Împerecherea caută doar între felii vecine direct** (c, c+1). Un Nr aflat la două felii distanță ajunge la rând doar prin fragmentul din mijloc, dacă are câmpuri comune cu ambele. Dacă fragmentul din mijloc lipsește într-o bandă, dar există în alta, rândurile din banda fără mijloc trec la „de verificat” (regula pe coloană, testul sintetic).
+- **Regula pe coloana tabelului cu Nr (runda 5, pe geometrie din runda 6) e deliberat largă:**
+  - un tabel fără Nr care are lungimi și a cărui felie atinge pe orizontală o felie a unui tabel cu Nr (orice bandă, aceeași pagină) trece la „de verificat” cu `MOTIV_COLOANA_NR`, chiar dacă e alt tabel. E fail-safe, cu motiv, nu tăcut. Pe datele de azi nu apare: singurele fragmente cu Nr sunt `z?_6` din 470 (SELECT 26.09);
+  - **fără geometrie** (tăiere veche), poziția e interzisă pe **toată pagina** unui tabel cu Nr (`MOTIV_COLOANA_NR_FARA_GEOM`), inclusiv pentru un tabel fără Nr aflat departe. Remediul e retăierea (scrie `zone_geom`). Pe datele de azi nu apare: singurul document fără geometrie (130) n-are Nr.
+- **Împerecherea caută doar între felii care se ating în aceeași bandă** (runda 6: pe geometrie, deci și coloana fixată cu `_N-1`; fără geometrie, c și c+1). Un Nr aflat într-o felie care nu atinge felia cu lungimi ajunge la rând doar prin fragmentul din mijloc, dacă are câmpuri comune cu ambele. Dacă fragmentul din mijloc lipsește într-o bandă, dar există în alta, rândurile din banda fără mijloc trec la „de verificat” (regula pe coloană, testul sintetic).
+- **Felii identice** (runda 6): când ultimele două coloane (sau benzi) sunt fixate la margine (W mod pas < 0,136·pas), tăietorul produce două imagini identice. Agregarea le tratează corect (se împerechează ca felii care se ating, numărate o dată; un tabel fără Nr văzut în două benzi „identice” merge la „de verificat” prin garda multi-bandă), dar AI-ul e plătit de două ori pe aceeași imagine. Observație în afara scopului (`api/plansa-felii.js` nemodificat); pe geometriile din BD nu apare (cel mai mic rest W sau H mod pas: 454 px; felii identice abia sub 191 px, acoperirea lui `_N-1` sub 383 px).
 
   Dacă mijlocul lipsește în **toate** benzile:
   - tabelul pe mai multe benzi ⇒ „de verificat” (garda multi-bandă);
