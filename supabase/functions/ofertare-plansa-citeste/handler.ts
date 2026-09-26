@@ -602,10 +602,11 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
   const cuId: Id[] = [];
   const candPoz: { o: Obs; c: any }[] = [];
   const nrCuLungime = new Set<string>();                    // (pagină, Nr) legate de o lungime citită, orice ar ieși din ele
+  const nrCuLungimeTabel = new Set<string>();               // runda 8: (pagină, tabel, Nr) — același lucru, pe tabelul identificat
   for (const o of obs) {
     const c = infoComp.get(rad(nod(o.fr!, o.rand)))!;
     const fr = o.fr!;
-    for (const n of c.nrs.keys()) nrCuLungime.add(`${fr.pag}|${n}`);
+    for (const [n, sig] of c.nrs) { nrCuLungime.add(`${fr.pag}|${n}`); nrCuLungimeTabel.add(`${fr.pag}|${sig}|${n}`); }
     if (c.ambiguu) { nesigur(o.t, o.L, o.dn, 'împerechere ambiguă: rândul se leagă de două rânduri din aceeași felie', o.zona); continue; }
     if (c.nrs.size > 1) { nesigur(o.t, o.L, o.dn, `Nr diferit pentru același rând în felii vecine (${[...c.nrs.keys()].join(' / ')})`, o.zona); continue; }
     if (c.nrs.size === 1) {
@@ -862,13 +863,15 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
   // rândul cu Nr citit și lungimea necitită (tronson fără L) lipsea tăcut din total. Nu intră aici rândul a cărui lungime s-a citit,
   // dar a căzut la legarea tronson → rând (e deja „de verificat”, cu metrii lui). Dn-ul din celula rândului / a rândului împerecheat.
   const E_COL_DN = /\bdn\b|diametr/;
-  const nrFaraLungime: { nr: string; zona: string; dn?: number }[] = [];
+  // Același Nr cu lungime doar sub ALTE antete pe pagină (alt tabel, sau același tabel transcris cu alte antete) nu mai ascunde
+  // tăcut rândul: semnal cu `alt_tabel` (un tabel A cu Nr 1–2 și un tabel B cu Nr 2 fără L și Nr 3 dădeau 3 rânduri, niciun semnal).
+  const nrFaraLungime: { nr: string; zona: string; dn?: number; alt_tabel?: true }[] = [];
   const vazutNr = new Set<string>();
   for (const fr of frag) {
     if (!fr.colNr || (!cuLungimi(fr) && !nrImperecheatCuL.has(fr.i))) continue;
     fr.randuri.forEach((rw, k) => {
-      const n = nrRand(rw[fr.colNr!]); const cheie = `${fr.pag}|${n}`;
-      if (!n || nrCuLungime.has(cheie) || vazutNr.has(cheie)) return;
+      const n = nrRand(rw[fr.colNr!]); const cheie = `${fr.pag}|${fr.sig}|${n}`;
+      if (!n || nrCuLungimeTabel.has(cheie) || vazutNr.has(cheie)) return;
       const membri = comp.get(rad(nod(fr, k)))!.map((i) => noduri[i]);
       if (membri.some((m) => nodLNesigur.has(`${m.fr.i}:${m.rand}`))) return;
       let dn: number | null = null;
@@ -877,7 +880,7 @@ export function identificaRanduri(felii: any[], opt: { doc?: unknown; plansa?: a
         const v = numar(m.fr.randuri[m.rand][h]);
         if (v && v > 0) dn = v;
       }
-      vazutNr.add(cheie); nrFaraLungime.push({ nr: n, zona: fr.et, ...(dn ? { dn } : {}) });
+      vazutNr.add(cheie); nrFaraLungime.push({ nr: n, zona: fr.et, ...(dn ? { dn } : {}), ...(nrCuLungime.has(`${fr.pag}|${n}`) ? { alt_tabel: true as const } : {}) });
     });
   }
   // runda 7 (B3): golurile din secvența Nr a fiecărui tabel identificat (pagină + antete): un Nr între primul și ultimul citit
@@ -979,9 +982,9 @@ export const textNrLipsa = (x: { pagina: number; interval: [number, number]; lip
   `${x.nr_ilizibil ? `; ${randuri(x.nr_ilizibil)} cu Nr ilizibil în lectură, la „de verificat”` : ''}` +
   `${x.intre_grupuri ? `; Nr ${x.intre_grupuri} cad între felii care nu se ating (${(x.grupuri_felii || []).join(' / ')}) — pot fi și două tabele diferite cu aceleași antete` : ''})`;
 // runda 8 (verificatorul rundei 7, MAJOR): rândul cu Nr citit, dar fără nicio lungime citită — fratele lui B3, același regim (notă, ⚠, incomplet)
-export const textNrFaraLungime = (xs: { nr: string; zona?: string; dn?: number }[], n = xs.length) =>
+export const textNrFaraLungime = (xs: { nr: string; zona?: string; dn?: number; alt_tabel?: boolean }[], n = xs.length) =>
   `${n === 1 ? '1 rând cu Nr citit, dar fără nicio lungime citită' : `${n} rânduri cu Nr citit, dar fără nicio lungime citită`}: Nr ` +
-  `${xs.slice(0, 12).map((x) => `${x.nr}${x.dn ? ` (Dn${x.dn})` : ''}`).join(', ')}${n > 12 ? ', …' : ''} — ` +
+  `${xs.slice(0, 12).map((x) => `${x.nr}${x.dn || x.alt_tabel ? ` (${[x.dn ? `Dn${x.dn}` : '', x.alt_tabel ? 'același Nr are lungime doar într-un tabel cu alte antete' : ''].filter(Boolean).join('; ')})` : ''}`).join(', ')}${n > 12 ? ', …' : ''} — ` +
   `${n === 1 ? 'rândul există pe planșă, metrii lui nu sunt' : 'rândurile există pe planșă, metrii lor nu sunt'} în total`;
 export function notaRestTransfer(idr: { faraIdentitate: any[]; conflicte: any[]; total_de_verificat_m: number; nrLipsa?: any[]; nrFaraLungime?: any[] }, nestandard: any[] = []): RestTransfer {
   const fmt = fmtM;

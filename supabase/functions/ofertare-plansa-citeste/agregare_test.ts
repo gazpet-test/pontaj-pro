@@ -773,6 +773,15 @@ Deno.test('runda 8 NFL: tabel compact, Nr 2 citit fără lungime => nr_fara_lung
   assertEquals(notaRestTransfer(n).incomplet, true)
   // control: 470 intact => niciun Nr fără lungime
   assertEquals(identificaRanduri(feliiDin470(), { doc: 470, plansa: PLANSA470_REAL }).nrFaraLungime, [])
+  // același Nr cu lungime doar într-un ALT tabel (alte antete) de pe pagină nu mai ascunde rândul: tabelul A cu Nr 1–2, tabelul B cu
+  // Nr 2 fără L și Nr 3 (cheia (pagină, Nr) dădea 3 rânduri / 903 m, niciun semnal)
+  const CB = ['Nr', 'Sat', 'Diametru', 'Lungime (m)']
+  const TA = { denumire: 'A', coloane: C, randuri: [rd('1', 'A', '0,101'), rd('2', 'B', '0,102')] }
+  const TB = { denumire: 'B', coloane: CB, randuri: [{ 'Nr': '2', 'Sat': 'S2', 'Diametru': '90', 'Lungime (m)': '' }, { 'Nr': '3', 'Sat': 'S3', 'Diametru': '90', 'Lungime (m)': '700' }] }
+  const a = identificaRanduri([{ eticheta: 'z1_2', tabele: [TA, TB], tronsoane: [tr('A', 101), tr('B', 102), { de_la: 'S2', lungime_m: null, diametru_mm: 90, sursa: 'tabel' },
+    { de_la: 'S3', lungime_m: 700, diametru_mm: 90, sursa: 'tabel' }] }], { doc: 1 })
+  assertEquals([a.sigure.length, a.total_sigur_m, a.nrFaraLungime], [3, 903, [{ nr: '2', zona: 'z1_2', dn: 90, alt_tabel: true }]])
+  assert(textNrFaraLungime(a.nrFaraLungime).includes('Nr 2 (Dn90; același Nr are lungime doar într-un tabel cu alte antete)'))
 })
 
 // B2 (minor): subsecvența comună LUNGĂ, oricare ar fi antetele — reciproc, antete transcrise altfel, valoare citită diferit
