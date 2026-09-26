@@ -61,3 +61,24 @@ describe('F10 — Dn nu se trunchiază', () => {
     expect(controlFronturiGrafic({ fronturi: f.fronturi }, r).stare).toBe('block')
   })
 })
+
+// Contractul unităților (întrebarea din review-ul Copilot): cantitate_plansa e în metri — fără a doua conversie.
+import { inMetri as inMetriU } from './ofertareUnitati.js'
+import { controlTotaluri as controlTotaluriU } from './ofertareTotaluri.js'
+describe('unități: cantitate în unitatea rândului, cantitate_plansa în metri', () => {
+  it('km: cantitate 1 → 1000 m; cantitate_plansa 1000 → 1000 m (nu 1.000.000)', () => {
+    const r = { um: 'km', cantitate: 1, cantitate_plansa: 1000 }
+    expect(inMetriU(r)).toBe(1000)
+    expect(inMetriU(r, 'cantitate_plansa')).toBe(1000)
+  })
+  it('controlTotaluri pe baza planșei nu reaplică factorul km', () => {
+    const b = { licitatie_id: 1, obiect: 'Lot A', categorie: 'Conducte', tip_sursa: 'lista_f3', sursa: 'Doc 8', status: 'validat' }
+    const [t] = controlTotaluriU([
+      { ...b, id: 1, denumire: 'TOTAL', um: 'km', cantitate: 1.2, cantitate_plansa: 1200 },
+      { ...b, id: 2, denumire: 'Tronson A', um: 'km', cantitate: 1, cantitate_plansa: 1000 },
+      { ...b, id: 3, denumire: 'Tronson B', um: 'm', cantitate: 200, cantitate_plansa: 200 },
+    ], 'cantitate_plansa')
+    expect(t.stare).toBe('ok')
+    expect(t.declarat).toBe(1200)
+  })
+})

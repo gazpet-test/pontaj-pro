@@ -341,3 +341,39 @@ $fn$;
 -- Retrage întâi workerul F08; funcția nouă nu exista în migrarea 2.
 DROP FUNCTION IF EXISTS public.ofertare_plansa_analiza_cas(bigint,jsonb,jsonb);
 COMMIT;
+
+-- Revenire ofertare_totaluri_control la varianta din migrarea 2.
+CREATE OR REPLACE FUNCTION public.ofertare_totaluri_control(p_licitatie_id bigint, p_baza text DEFAULT 'cantitate')
+RETURNS jsonb LANGUAGE sql STABLE SET search_path TO 'public', 'pg_temp'
+AS $function$
+WITH r AS (
+ SELECT q.id, q.status, q.obiect, q.sursa,
+   public.ofertare_norm_text(q.obiect) o, public.ofertare_norm_text(q.sursa) s,
+   public.ofertare_norm_text(q.categorie) k, public.ofertare_norm_text(q.tip_sursa) ts,
+   public.ofertare_norm_text(q.um) um, public.ofertare_clasa_unitate(q.um) u,
+   CASE p_baza WHEN 'cantitate' THEN q.cantitate WHEN 'cantitate_plansa' THEN q.cantitate_plansa END v,
+   (coalesce(q.obiect,'') || ' ' || coalesce(q.denumire,'') || ' ' || coalesce(q.sursa,'')) ~* 'total' tot
+ FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id
+), t AS (
+ SELECT r.*, a.n, a.nt, a.complet, a.suma,
+   r.v * coalesce((r.u->>'factor')::numeric,1) declarat
+ FROM r CROSS JOIN LATERAL (
+   SELECT count(*) FILTER (WHERE NOT d.tot) n, count(*) FILTER (WHERE d.tot) nt,
+     bool_and(d.status IS NOT DISTINCT FROM 'validat' AND d.v IS NOT NULL AND d.u->>'tip' = r.u->>'tip'
+       AND (r.u->>'tip' = 'lungime' OR (r.u->>'tip' = 'alta' AND d.um = r.um))) FILTER (WHERE NOT d.tot) complet,
+     sum(d.v * coalesce((d.u->>'factor')::numeric,1)) FILTER (WHERE NOT d.tot AND d.status = 'validat'
+       AND d.u->>'tip' = r.u->>'tip' AND (r.u->>'tip' = 'lungime' OR (r.u->>'tip' = 'alta' AND d.um = r.um))) suma
+   FROM r d WHERE (d.o,d.s,d.k,d.ts) IS NOT DISTINCT FROM (r.o,r.s,r.k,r.ts)
+ ) a WHERE r.tot
+), e AS (
+ SELECT t.*, CASE WHEN coalesce(o,'') = '' OR coalesce(s,'') = '' OR coalesce(ts,'') = ''
+   OR n = 0 OR nt <> 1 OR NOT coalesce(complet,false) OR status IS DISTINCT FROM 'validat' OR v IS NULL OR u->>'tip' = 'de_verificat'
+   THEN 'necomparabil' WHEN round(declarat,6) IS DISTINCT FROM round(suma,6) THEN 'diferit' ELSE 'ok' END stare FROM t
+)
+SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'baza',p_baza,'obiect',obiect,'sursa',sursa,
+ 'declarat',declarat,'suma_detalii',suma,'um',CASE WHEN u->>'tip' = 'lungime' THEN 'm' ELSE um END,
+ 'stare',stare,'text',CASE stare WHEN 'necomparabil' THEN 'Totalul declarat nu poate fi verificat din detaliile disponibile.'
+ WHEN 'diferit' THEN 'Totalul declarat diferă de suma detaliilor validate.' ELSE '' END) ORDER BY id),'[]'::jsonb) FROM e
+$function$;
+REVOKE ALL ON FUNCTION public.ofertare_totaluri_control(bigint,text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.ofertare_totaluri_control(bigint,text) TO authenticated, service_role;

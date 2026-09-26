@@ -10,7 +10,9 @@ export function clasaUnitate(um) {
   return { tip: ALTE.has(u) ? 'alta' : 'de_verificat' }
 }
 
+// Contract: `cantitate` e în unitatea rândului; `cantitate_plansa` e deja în metri (handler-ul o scrie în m) — fără a doua conversie.
+export const factorBaza = (u, baza) => baza === 'cantitate_plansa' ? 1 : (u.factor || 1)
 export function inMetri(c, baza = 'cantitate') {
   const u = clasaUnitate(c?.um), v = c?.[baza]
-  return u.tip === 'lungime' && v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) * u.factor : null
+  return u.tip === 'lungime' && v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) * factorBaza(u, baza) : null
 }
