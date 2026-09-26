@@ -9,23 +9,24 @@ const R1751 = { id: 1751, licitatie_id: 95, obiect: null, categorie: 'Conducte �
   sursa: 'Planșa 1 — tabel de dimensionare, citit automat din scanare',
   diferenta_nota: 'Diametru care nu apare în cantitățile din memoriu. 8 tronsoane citite din tabelul planșei.' }
 
-Deno.test('R5: rândul 1751 (extras din planșă) nu mai pleacă drept „lista", ci cu proveniența și validat_de_om=false', () => {
+Deno.test('R5: rândul 1751 (extras din planșă) nu mai pleacă drept „lista", ci cu proveniența și status_validat=false', () => {
   const x = randCantitatePentruAI(R1751)
   assertEquals(x.cantitate, 17785)
   assertEquals(x.sursa_cantitate, 'planșă (citire automată; cifra planșei copiată în cantitate)')
-  assertEquals(x.validat_de_om, false)
+  assertEquals(x.status_validat, false)
+  assertFalse('validat_de_om' in x, 'runda 4: numele vechi (înșelător — „validat” n-are autor) nu mai pleacă')
   assertEquals(x.status, 'extras')
   assertFalse('lista' in x, 'cheia „lista" dispare: cifra nu vine din F3')
 })
 
-Deno.test('R5: un rând F3 validat de om e etichetat ca atare', () => {
+Deno.test('R5: un rând F3 marcat validat în platformă e etichetat ca atare (status_validat, nu „validat de om”)', () => {
   const x = randCantitatePentruAI({ ...R1751, id: 1, tip_sursa: 'lista_f3', status: 'validat', sursa: 'F3 obiect 1' })
   assertEquals(x.sursa_cantitate, 'lista de cantități F3')
-  assertEquals(x.validat_de_om, true)
+  assertEquals(x.status_validat, true)
 })
 
-Deno.test('R5: diferenta / revizuit_clarificare / status lipsă = NU validat de om', () => {
-  for (const s of ['diferenta', 'revizuit_clarificare', undefined]) assertEquals(randCantitatePentruAI({ ...R1751, status: s }).validat_de_om, false)
+Deno.test('R5: diferenta / revizuit_clarificare / status lipsă = NU marcat validat', () => {
+  for (const s of ['diferenta', 'revizuit_clarificare', undefined]) assertEquals(randCantitatePentruAI({ ...R1751, status: s }).status_validat, false)
   assertEquals(randCantitatePentruAI({ ...R1751, sursa: 'memoriu, pag. 3' }).sursa_cantitate, 'nedeclarată')
 })
 
@@ -67,9 +68,12 @@ Deno.test('R5 capăt-la-capăt: select-ul citește status, iar promptul nu mai c
   } finally { globalThis.fetch = fetchVechi }
   assert(/\bstatus\b/.test(supa.selecturi.ofertare_cantitati), 'select-ul pe ofertare_cantitati include status')
   const mesaj = JSON.parse(corp).messages[0].content as string
-  assert(mesaj.includes('"validat_de_om":false'), 'modelul vede că 1751 e nevalidat')
+  assert(mesaj.includes('"status_validat":false'), 'modelul vede că 1751 e nevalidat')
+  assertFalse(mesaj.includes('validat_de_om'), 'runda 4: niciun „validat_de_om” în payload')
   assert(mesaj.includes('"sursa_cantitate":"planșă (citire automată'), 'modelul vede proveniența din planșă')
   assertFalse(mesaj.includes('"lista":17785'), 'nicio cifră din planșă etichetată „lista"')
   const sistem = JSON.parse(corp).system[0].text as string
-  assert(sistem.includes('validat_de_om: false'), 'promptul explică regula')
+  assert(sistem.includes('status_validat: false'), 'promptul explică regula')
+  assert(sistem.includes('MARCAT VALIDAT ÎN PLATFORMĂ') && sistem.includes('nu dovedește singur că un om a verificat'), 'runda 4: „validat” = marcaj în platformă, nu dovadă de om')
+  assertFalse(sistem.includes('validat_de_om'))
 })

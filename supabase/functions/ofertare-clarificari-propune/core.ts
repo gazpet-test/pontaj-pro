@@ -14,7 +14,7 @@ const PROMPT = `Ești consilierul de ofertare al unui constructor român de cond
 
 Primești: (1) datele licitației, (2) REGISTRUL de cerințe extras din documentație (cu tipul: eliminatorie / propunere / forma / contractuala; câmpul GOL = cerința nu e acoperită cu ce are ofertantul, cu motivul), (3) diferențele găsite între listele de cantități, planșe și devize (dacă s-a rulat verificarea) și raportul ultimei verificări finale, (4) inventarul documentelor din documentație (doar nume și tip — nu conținutul), (5) clarificările DEJA propuse sau trimise la această licitație, (6) răspunsuri primite de la autorități la clarificări la ALTE licitații — doar ca să înveți cum se formulează și ce se răspunde de obicei.
 
-La (3): „cantitate" vine din documentul arătat în „sursa_cantitate" — NU neapărat din lista de cantități F3 (un transfer din planșă copiază cifra planșei în „cantitate"). validat_de_om: false = cifră extrasă automat, NEVERIFICATĂ de ofertant: o poți folosi ca să vezi unde e o diferență, dar NU o prezenta autorității ca valoare a listei ei sau a ofertei noastre și nu trage din ea concluzia că o cantitate e confirmată; în întrebare citezi documentul-sursă (planșă, memoriu, F3), nu rândul nostru.
+La (3): „cantitate" vine din documentul arătat în „sursa_cantitate" — NU neapărat din lista de cantități F3 (un transfer din planșă copiază cifra planșei în „cantitate"). status_validat: false = cifră extrasă automat, NEVERIFICATĂ de ofertant: o poți folosi ca să vezi unde e o diferență, dar NU o prezenta autorității ca valoare a listei ei sau a ofertei noastre și nu trage din ea concluzia că o cantitate e confirmată. status_validat: true = rând MARCAT VALIDAT ÎN PLATFORMĂ — marcajul nu are autor și nici dată, deci nu dovedește singur că un om a verificat cifra (au existat rânduri marcate automat); nici el nu e o cifră „confirmată" de citat autorității. În întrebare citezi documentul-sursă (planșă, memoriu, F3), nu rândul nostru.
 
 CÂND MERITĂ O CLARIFICARE:
 A. AMBIGUITATE REALĂ: un fragment cu două interpretări plauzibile, o contradicție între surse (fișa de date vs caiet de sarcini vs model de contract vs planșe) sau o informație necesară care lipsește. Explici intern interpretările și impactul fiecăreia. Lipsa unei resurse proprii (un gol), SINGURĂ, nu justifică întrebarea: dacă textul e clar și nu lasă loc de interpretare, golul e ferm, nu clarificare. Nu presupune echivalențe între autorizații, emitenți, titulari (firmă vs persoană) sau documente — dacă echivalența nu reiese din text, e o ambiguitate de întrebat, nu o concluzie.
@@ -63,7 +63,9 @@ export function randCantitatePentruAI(r: any) {
   return {
     id: r.id, obiect: r.obiect, cat: r.categorie, den: String(r.denumire || '').slice(0, 120), um: r.um,
     cantitate: r.cantitate, sursa_cantitate: sursaCant, plansa: r.cantitate_plansa,
-    validat_de_om: r.status === 'validat', status: r.status || null,
+    // R5 runda 4 (verificator R3): „validat_de_om" era înșelător — status 'validat' n-are autor/dată (lic. 3, rândul 9: CAD
+    // marcat validat automat). Câmpul spune doar ce e în platformă: marcat validat sau nu.
+    status_validat: r.status === 'validat', status: r.status || null,
     nota: String(r.diferenta_nota || '').slice(0, 200), sursa: r.sursa,
   }
 }
@@ -104,7 +106,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const raspunsuri = (rasp || []).sort((a: any, b: any) => (norm(b.lic?.autoritate).includes(norm(autor)) ? 1 : 0) - (norm(a.lic?.autoritate).includes(norm(autor)) ? 1 : 0)).slice(0, 25)
 
     const termen = lic.termen_depunere ? String(lic.termen_depunere).slice(0, 16) : null
-    const golMap = new Map(goluri.map((g: any) => [g.cerinta_id, g]))
+    const golMap = new Map<any, any>(goluri.map((g: any) => [g.cerinta_id, g]))
     const registru = (cerinte || []).map((c: any) => ({
       id: c.id, tip: c.tip, sectiune: c.sursa_sectiune || undefined, pagina: c.sursa_pagina || undefined, lot: c.lot || undefined,
       cand: c.cand_se_prezinta || undefined, doc: c.document_probant ? String(c.document_probant).slice(0, 120) : undefined,
@@ -115,7 +117,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const contextul = [
       `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · procedura ${lic.tip_procedura || '?'} · criteriu ${lic.criteriu || '?'}\nOBIECT: ${String(lic.obiect || '').slice(0, 1500)}\nValoare estimată: ${lic.valoare_estimata ?? '?'} ${lic.moneda || 'RON'} · termen depunere: ${termen || '?'} · garanție participare: ${lic.garantie_participare ?? '?'} · loturi: ${lic.loturi ?? '?'}`,
       `REGISTRUL DE CERINȚE (${registru.length}; cele cu GOL sunt neacoperite):\n${JSON.stringify(registru)}`,
-      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}; validat_de_om:false = extras automat, neverificat):\n${JSON.stringify((cant || []).map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
+      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify((cant || []).map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
       `INVENTARUL DOCUMENTELOR IMPORTATE (${(docs || []).length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify((docs || []).map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
       `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${(clarLic || []).length}) — NU le repeta:\n${JSON.stringify((clarLic || []).map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
       `RĂSPUNSURI PRIMITE LA ALTE LICITAȚII (${raspunsuri.length}; întâi de la aceeași autoritate) — DOAR ca model de formulare, nu suprimă întrebări (R3):\n${JSON.stringify(raspunsuri.map((r: any) => ({ licitatie: r.lic?.nr_anunt, autoritate: String(r.lic?.autoritate || '').slice(0, 60), intrebare: String(r.intrebare || '').slice(0, 250), raspuns: String(r.raspuns || '').slice(0, 350) })))}`,
@@ -143,7 +145,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     // dedup (#116, v2): (a) cheie stabilă (licitație + cerințe + subiect) → identic = sărit; (b) Jaccard pe
     // subiect+întrebare doar ca SEMNAL, prag 0.75 — nu mai comparăm și motivul intern din `sursa`
     const existente = (clarLic || []).map((q: any) => ({ cheie: q.cheie, text: `${String(q.sursa || '').split(' — ')[0]} ${q.intrebare || ''}` }))
-    const cheiExist = new Set(existente.map(e => e.cheie).filter(Boolean))
+    const cheiExist = new Set(existente.map((e: any) => e.cheie).filter(Boolean))
     const acceptate: any[] = [], sarite: any[] = []
     for (const p of parsed.clarificari.slice(0, MAX_PROPUNERI)) {
       const intrebare = String(p?.intrebare || '').trim()
@@ -156,7 +158,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       const cheie = await cheieClarificare(licId, ids, subiect)
       if (cheiExist.has(cheie) || acceptate.some(a => a.cheie === cheie)) { sarite.push({ subiect, motiv: 'cheie identică (deja propusă)' }); continue }
       const text = `${subiect} ${intrebare}`
-      const dublura = existente.find(e => asemanare(e.text, text) >= 0.75) || acceptate.find(a => asemanare(`${a.subiect} ${a.intrebare}`, text) >= 0.75)
+      const dublura = existente.find((e: any) => asemanare(e.text, text) >= 0.75) || acceptate.find(a => asemanare(`${a.subiect} ${a.intrebare}`, text) >= 0.75)
       if (dublura) { sarite.push({ subiect, motiv: 'aceeași decizie, altă formulare' }); continue }
       acceptate.push({ cheie, subiect, prioritate: ['eliminatorie', 'importanta', 'utila'].includes(p.prioritate) ? p.prioritate : 'utila', sursa_tip: p.sursa_tip, cerinte_ids: ids, referinta: p.referinta ? String(p.referinta).slice(0, 200) : null, fragment: fragment.slice(0, 300), interpretari: String(p.interpretari || '').slice(0, 500), risc_divulgare: p.risc_divulgare === true, motiv: String(p.motiv || '').slice(0, 500), intrebare: intrebare.slice(0, 2000) })
     }
