@@ -1509,6 +1509,13 @@ const ruleaza10 = async (poz: any[], felii: any) => {
   assertEquals(upd.length, new Set(upd).size, `un singur update pe id: ${JSON.stringify(upd)}`)
   return { j, rows, ops, id: (k: number) => rows.find((q: any) => q.id === k) }
 }
+// Rebase R5 peste R4 runda 10–12 (3039f2a): intenția R4 (ce poziție primește cifra, subtotalul doar notă, un update pe id) rămâne
+// verificată; pe un rând VALIDAT a cărui cifră din planșă se schimbă (≥ 1 m), regula R5 (cifraSchimbata) îl scoate din „validat”, cu
+// aprobarea veche numită în notă; și un rând „extras” a cărui cifră din planșă se schimbă trece pe „diferenta” (R5 runda 4).
+const fmtT = (x: number) => x.toLocaleString('ro-RO')
+const dupaR5 = (st: string, vechi: number, nou: number, nota: string): [string, string] => st === 'validat'
+  ? ['diferenta', `Rândul era VALIDAT cu cifra din planșă ${fmtT(vechi)} m; planșa „pl1.1.pdf” dă acum ${fmtT(nou)} m — validarea se reface. ${nota}`]
+  : [Math.abs(vechi - nou) >= 1 ? 'diferenta' : st, nota]
 Deno.test('runda 10 TOTAL-a (ADV10-1): subtotalul cu MATERIALUL grupului („Total conducte PE De 110”) + poziția reală fără material => poziția primește cifra, subtotalul notă; validat și extras, ambele ordini (7a7bf86: subtotalul lua 500, poziția păstra TĂCUT 480 „VECHE 3”)', async () => {
   for (const st of ['validat', 'extras']) for (const ordine of [0, 1]) {
     const poz = [{ id: 3, denumire: 'Conductă distribuție gaze Dn110', cantitate: 500, cantitate_plansa: 480, status: st, diferenta_nota: 'VECHE 3' },
@@ -1516,7 +1523,7 @@ Deno.test('runda 10 TOTAL-a (ADV10-1): subtotalul cu MATERIALUL grupului („Tot
     const r = await ruleaza10(ordine ? [...poz].reverse() : poz, feliiDn110('PE100'))
     const cum = `${st}, ordine ${ordine}`
     assertEquals(r.j.cantitati.ambigue, [], cum)
-    assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, st, 'Planșa „PL1.1.pdf” confirmă: 500 m.'], cum)
+    assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, ...dupaR5(st, 480, 500, 'Planșa „PL1.1.pdf” confirmă: 500 m.')], cum)
     assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [480, 'diferenta'], cum)
     assertEquals(r.id(4).diferenta_nota, 'De verificat: rând de total cu Dn în denumire (subtotal pe Dn sau poziție), neatribuit — grupurile sigure de pe Dn-ul lui ' +
       '(Planșa „PL1.1.pdf”): Dn110 PE 500 m e pe poziția „Conductă distribuție gaze Dn110”; nu se completează automat aici; cifra din planșă nu s-a actualizat (480 m e dintr-o citire anterioară).', cum)
@@ -1601,7 +1608,7 @@ Deno.test('runda 11 (MAJOR, ADV11-1): subtotal numerotat cu literă / cifre roma
       const r = await ruleaza10(ordine ? [...poz].reverse() : poz, feliiDn110('PE100'))
       const cum = `${den}, ordine ${ordine}`
       assertEquals(r.j.cantitati.ambigue, [], cum)
-      assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, 'validat', 'Planșa „PL1.1.pdf” confirmă: 500 m.'], cum)
+      assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, ...dupaR5('validat', 480, 500, 'Planșa „PL1.1.pdf” confirmă: 500 m.')], cum)
       assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [480, 'diferenta'], cum)
       assert(r.id(4).diferenta_nota.startsWith(nota11), cum + ': ' + r.id(4).diferenta_nota)
     }
@@ -1686,11 +1693,11 @@ Deno.test('runda 12 (MAJOR, ADV12-1): TOTAL cu interval CRESCĂTOR urmat de alt 
       const cum = `${den}, ${st}`
       // (a) cu poziția Dn63
       const r = await ruleaza10([d110, tot, d63], felii12())
-      assertEquals([r.id(6).cantitate_plansa, r.id(6).status, r.id(6).diferenta_nota], [1100, st, 'Planșa „PL1.1.pdf” confirmă totalul: 1.100 m.'], cum + ' (a)')
+      assertEquals([r.id(6).cantitate_plansa, r.id(6).status, r.id(6).diferenta_nota], [1100, ...dupaR5(st, 1000, 1100, 'Planșa „PL1.1.pdf” confirmă totalul: 1.100 m.')], cum + ' (a)')
       assertEquals([r.id(3).cantitate_plansa, r.id(5).cantitate_plansa, r.j.cantitati.adaugate, r.j.cantitati.ambigue], [900, 200, 0, []], cum + ' (a)')
       // (b) fără poziția Dn63: se inserează, TOTAL-ul nu primește 200 m
       const r2 = await ruleaza10([d110, tot], felii12())
-      assertEquals([r2.id(6).cantitate_plansa, r2.id(6).status, r2.id(6).diferenta_nota], [1100, st, 'Planșa „PL1.1.pdf” confirmă totalul: 1.100 m.'], cum + ' (b)')
+      assertEquals([r2.id(6).cantitate_plansa, r2.id(6).status, r2.id(6).diferenta_nota], [1100, ...dupaR5(st, 1000, 1100, 'Planșa „PL1.1.pdf” confirmă totalul: 1.100 m.')], cum + ' (b)')
       const n63 = r2.rows.find((q: any) => q.denumire === 'Conductă distribuție gaze PE Dn63')
       assertEquals([n63?.cantitate_plansa, r2.j.cantitati.adaugate, r2.j.cantitati.total_m], [200, 1, 1100], cum + ' (b)')
     }
@@ -1717,7 +1724,7 @@ Deno.test('runda 12 (MAJOR, ADV12-2): „total” NErecunoscut ca subtotal („A
       const r = await ruleaza10(ordine ? [...poz].reverse() : poz, feliiDn110('PE100'))
       const cum = `${den}, ordine ${ordine}`
       assertEquals(r.j.cantitati.ambigue, [], cum)
-      assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, 'validat', 'Planșa „PL1.1.pdf” confirmă: 500 m.'], cum)
+      assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [500, ...dupaR5('validat', 480, 500, 'Planșa „PL1.1.pdf” confirmă: 500 m.')], cum)
       assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [480, 'diferenta'], cum)
       assert(r.id(4).diferenta_nota.startsWith(nota11), cum + ': ' + r.id(4).diferenta_nota)
     }
@@ -1757,7 +1764,7 @@ Deno.test('runda 12 (minor, ADV12-4): compatibilitatea de material — grupul PE
     const r = await ruleaza10(ordine ? [...poz].reverse() : poz, f)
     const cum = `grup ${mat}, ordine ${ordine}`
     assertEquals(r.j.cantitati.ambigue, [], cum)
-    assertEquals([r.id(5).cantitate_plansa, r.id(5).status, r.id(5).diferenta_nota], [m, 'validat', `Planșa „PL1.1.pdf” confirmă: ${m} m.`], cum)
+    assertEquals([r.id(5).cantitate_plansa, r.id(5).status, r.id(5).diferenta_nota], [m, ...dupaR5('validat', 30, m, `Planșa „PL1.1.pdf” confirmă: ${m} m.`)], cum)
     assertEquals([r.id(3).cantitate_plansa, r.id(3).status, r.id(3).diferenta_nota], [70, 'extras', 'VECHE 3'], cum)
     assertEquals([r.id(4).cantitate_plansa, r.id(4).status], [30, 'diferenta'], cum)
     assert(r.id(4).diferenta_nota.startsWith(nota11), cum + ': ' + r.id(4).diferenta_nota)
