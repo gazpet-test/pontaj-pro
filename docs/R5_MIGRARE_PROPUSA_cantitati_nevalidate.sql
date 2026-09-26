@@ -1138,7 +1138,7 @@ DECLARE c record; v_st jsonb; v_cur jsonb; v_decizie jsonb; v_sursa text;
 BEGIN
   IF auth.uid() IS NULL OR NOT coalesce(public.fn_are_acces_ofertare(),false) THEN RETURN jsonb_build_object('error','fără acces la Ofertare'); END IF;
   IF coalesce(p_decizie,'') NOT IN ('revizuit','luat_act') THEN RETURN jsonb_build_object('error','alege revizuit sau, după transmitere, luat_act'); END IF;
-  IF length(btrim(coalesce(p_nota,''))) < CASE WHEN p_decizie='luat_act' THEN 10 ELSE 5 END THEN RETURN jsonb_build_object('error','nota de review este prea scurtă'); END IF;
+  IF length(btrim(coalesce(p_nota,''))) < (CASE WHEN p_decizie='luat_act' THEN 10 ELSE 5 END) THEN RETURN jsonb_build_object('error','nota de review este prea scurtă'); END IF;
   SELECT * INTO c FROM public.ofertare_clarificari WHERE id=p_id FOR UPDATE;
   IF NOT FOUND OR coalesce(c.cheie,'') NOT LIKE 'auto_planse_%' THEN RETURN jsonb_build_object('error','nu e ciornă automată'); END IF;
   v_st := public.ofertare_clarificare_baza_stare(c.licitatie_id,c.intrebare,c.sursa,c.baza_generare);

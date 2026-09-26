@@ -62,7 +62,9 @@ Deno.test('MAJOR 1 (lanțul transfer → grafic): rândul 2 VALIDAT trecut pe �
   const dupa = aplica([R1, ml], ops)
   const c = controlCantitatiGrafic(dupa, 'memoriu')
   assertEquals(c.stare, 'block', `grafic „cant” după transfer: ${c.stare} | lipsa: ${JSON.stringify(c.lipsa)}`)
-  assertEquals(c.lista.map((x: any) => [x.id, x.motiv]), [[2, 'invalidat, ieșit din rețea']])
+  // R9b (Copilot, ADDENDUM 5 B): „ml” e lungime prin mapare explicită (factor 1), deci rândul rămâne în rețea și e listat ca
+  // nevalidat (înainte ieșea din rețea). Poarta îl ține tot în lipsă, cu BLOCK.
+  assertEquals(c.lista.map((x: any) => [x.id, x.motiv]), [[2, 'nevalidat']])
 })
 
 Deno.test('MAJOR 2 → runda 1b (capăt la capăt): cifra din planșă 1.000 aprobată, rândul rămas pe 1.000,9 (stare veche, „sub prag” dinainte de 1b) → recitire 1.001,5 => „diferenta”, nota numește valoarea APROBATĂ din istoric', async () => {
