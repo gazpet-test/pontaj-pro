@@ -27,6 +27,7 @@ import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './Of
 import SourcePackSection from './OfertareSourcePack.jsx'
 import FormulareRegistruSection, { ClauzeContractSection } from './OfertareClauzeFormulare.jsx'
 import OfertareParteneri from './OfertareParteneri.jsx'
+import { raportTransferCantitati } from './ofertareTransferRaport.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1106,7 +1107,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           `${(sumar.avertismente || []).length ? ` · ⚠ ${sumar.avertismente.length} avertismente (vezi documentul)` : ''} · totaluri NEVALIDATE până la reconciliere` +
           `${sumar.lungime_declarata_m ? ` · lungime totală declarată pe planșă: ${sumar.lungime_declarata_m.toLocaleString('ro-RO')} m` : ''}` +
           `${sumar.metrici ? ` · ⏱ ${sumar.metrici.durata_s}s, ${sumar.metrici.runde} runde, ${sumar.metrici.limitari} limitări, ${sumar.metrici.reincercari} reîncercări, ~${sumar.metrici.cost_usd}$` : ''}` +
-          `${sumar.diametre_nestandard ? ` · ⚠ DE VERIFICAT: diametre nestandard ${sumar.diametre_nestandard.map(x => 'Dn' + x).join(', ')} (${sumar.nestandard_m.toLocaleString('ro-RO')} m) — NU s-au trecut în cantități` : ''}.`)
+          `${sumar.diametre_nestandard ? ` · ⚠ DE VERIFICAT: diametre nestandard ${sumar.diametre_nestandard.map(x => 'Dn' + x).join(', ')} (${sumar.nestandard_m.toLocaleString('ro-RO')} m) — NU s-au trecut în cantități` : ''}` +
+          // R5 condiția 2 (26.09.2026): ce n-a scris transferul (ambigue / doar „de verificat”) nu mai rămâne doar în JSON
+          `${(() => { const rp = raportTransferCantitati(sumar.cantitati); return rp && rp.text ? ` · ⚠ TRANSFER: ${rp.text} — vezi ⚠ pe document` : '' })()}.`)
       }
     } catch (e) {
       setWarn(`Eroare la citirea planșei: ${e.message}`)
@@ -1377,6 +1380,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       <span style={{ color:G.orange, marginLeft:6 }} title={`Pagini necitite: ${d.pagini_necitite.join(', ')}`}>· {d.pagini_necitite.length} necitite</span>
                     )}
                   </span>
+                  {/* R5 condiția 2: grupurile NESCRISE în cantități (ambigue) și Dn-urile doar „de verificat” — lista în tooltip */}
+                  {d.tip === 'plansa' && (() => { const rp = raportTransferCantitati(d.analiza?.citire_ai?.sumar?.cantitati)
+                    return rp && (rp.stare === 'de_verificat' || rp.stare === 'netrecut') && <span title={[rp.text, ...rp.linii].join('\n')} style={{ color: G.orange, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>⚠ transfer: {rp.stare === 'netrecut' ? 'netrecut în cantități' : `${rp.ambigue ? `${rp.ambigue} nescrise` : ''}${rp.ambigue && rp.de_verificat ? ', ' : ''}${rp.de_verificat ? `${rp.de_verificat} de verificat` : ''}`}</span> })()}
                   {d.tip === 'plansa' && (() => { const e = ETICHETA_REZ[d.analiza?.plansa?.rezultat] || (subPrag(d) ? ['sursă sub 2000px — de randat', G.orange, 'Sursa citită are sub 2000px; nu e dovadă de siglă — retaie (randare pagină completă)'] : null)
                     return e && <span title={e[2] + (d.analiza?.plansa?.rezultat_motiv ? `\n${d.analiza.plansa.rezultat_motiv}` : '')} style={{ color:e[1], fontSize:11, whiteSpace:'nowrap' }}>{e[0]}</span> })()}
                   {d.status_procesare === 'in_lucru' && (

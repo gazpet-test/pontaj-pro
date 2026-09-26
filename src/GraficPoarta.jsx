@@ -213,7 +213,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   const load = async () => {
     const [{ data: par }, { data: cant }, { data: nor }, { data: cer }, { data: ver }] = await Promise.all([
       supabase.from('grafic_parametri').select('*').eq('licitatie_id', licitatieId).maybeSingle(),
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status').eq('licitatie_id', licitatieId).order('id'),
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licitatieId).order('id'),
       supabase.from('ofertare_norme_productivitate').select('cod, activitate, tip_lucrare, um, productie_zi, coef_iarna, coef_teren_greu, incredere, validat_la'),
       supabase.from('ofertare_cerinte').select('id, text_cerinta, tip, sursa_sectiune, document_probant').eq('licitatie_id', licitatieId).is('inlocuita_de', null)
         .or('document_probant.ilike.%grafic%,text_cerinta.ilike.%grafic%,text_cerinta.ilike.%jalo%,text_cerinta.ilike.%durata de execu%'),
@@ -234,16 +234,17 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   // R5 (Copilot 25.09.2026): la lic. 95 butonul punea ca front Dn200 17.785 m (extras din planșa 470,
   // cu 13.765 m în afara UAT, nevalidați). Un rând 🤖 extras nu devine front până nu-l bifează un om.
   const propuneFronturi = () => {
-    const { fronturi, excluse, m_excluse } = fronturiDinCantitati(cantitati, p.cantitati_asumate)
+    const { fronturi, excluse, m_excluse, lipsa, text_lipsa } = fronturiDinCantitati(cantitati, p.cantitati_asumate)
     const mEx = Math.round(m_excluse).toLocaleString('ro-RO')
     if (!fronturi.length) {
-      showToast(excluse.length
-        ? `Niciun rând de rețea validat: ${excluse.length} rânduri (${mEx} m) sunt doar extrase. Verifică-le și validează-le (✓) în 📋 Cantități, apoi propune fronturile.`
+      showToast(lipsa.length
+        ? `Niciun rând de rețea validat — ${text_lipsa}. Verifică-le și validează-le (✓) în 📋 Cantități, apoi propune fronturile.`
         : 'Niciun rând de rețea cu metri în Cantități.', 'err')
       return
     }
     setParam('fronturi', fronturi)
-    if (excluse.length) showToast(`${fronturi.length} fronturi din rânduri validate. ${excluse.length} rânduri NEVALIDATE (${mEx} m) n-au fost propuse — validează-le în 📋 Cantități.`, 'err')
+    // R5 condiția 2: fronturile propuse sunt INCOMPLETE cât lipsesc rânduri necesare (le numim; poarta le arată ca „de reverificat”)
+    if (lipsa.length) showToast(`${fronturi.length} fronturi din rânduri validate — INCOMPLETE: ${text_lipsa}${excluse.length ? ` (${mEx} m nepropuși)` : ''}. Validează-le în 📋 Cantități și re-propune.`, 'err')
   }
 
   const salveaza = async () => {
@@ -268,7 +269,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
       // R5 (Copilot 25.09.2026): cantitățile se RECITESC din BD înainte de îngheț (ca semnarea propunerii):
       // între încărcare și click cineva poate redeschide (↩) un rând validat sau poate apărea un transfer nou.
       const { data: proaspete, error: eCant } = await supabase.from('ofertare_cantitati')
-        .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status').eq('licitatie_id', licitatieId).order('id')
+        .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota').eq('licitatie_id', licitatieId).order('id')
       if (eCant) throw new Error('nu s-au putut reciti cantitățile — nu se generează (' + eCant.message + ')')
       // R5 runda 4 (verificator R3): se recalculează TOATA poarta pe cantitățile proaspete (nu doar rândul „cant") —
       // referința și proveniența fronturilor depind și ele de ce e validat ACUM; ce se îngheață e poarta recalculată.
@@ -324,7 +325,16 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
             {poarta.map(r => (
               <div key={r.k} style={{ display: 'flex', gap: 8, padding: '6px 0', borderBottom: `1px solid ${G.border2}`, fontSize: 12.5 }}>
                 <span style={{ color: culoare[r.stare], fontSize: 14, lineHeight: '16px' }}>{icon[r.stare]}</span>
-                <div><div style={{ fontWeight: 700 }}>{r.titlu}</div><div style={{ color: G.muted, fontSize: 11.5 }}>{r.detalii}</div></div>
+                <div><div style={{ fontWeight: 700 }}>{r.titlu}{r.incomplet && <span style={{ color: G.yellow, fontSize: 11, marginLeft: 6 }}>INCOMPLET — de reverificat</span>}</div><div style={{ color: G.muted, fontSize: 11.5 }}>{r.detalii}</div>
+                  {/* R5 condiția 2: lista completă a rândurilor necesare care lipsesc (nevalidate / invalidate) — nimic nu dispare tacit */}
+                  {r.lista?.length > 0 && (
+                    <details style={{ marginTop: 3, fontSize: 11 }}>
+                      <summary style={{ cursor: 'pointer', color: G.yellow }}>{r.lista.length} {r.lista.length === 1 ? 'rând lipsă' : 'rânduri lipsă'} din cantitățile aprobate — lista</summary>
+                      {r.lista.map(x => (
+                        <div key={x.id} style={{ color: G.muted, padding: '1px 0 1px 10px' }}>#{x.id} {x.denumire} · {x.status}{x.motiv !== 'nevalidat' ? ` · ${x.motiv}` : ''} · {x.cantitate == null ? '?' : Number(x.cantitate).toLocaleString('ro-RO')} {x.um}</div>
+                      ))}
+                    </details>
+                  )}</div>
               </div>
             ))}
             <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

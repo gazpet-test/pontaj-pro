@@ -34,8 +34,30 @@ const rel = (a, b) => a ? Math.abs(b - a) / a : (b ? Infinity : 0)
 // Lipsă / invalid (view neaplicat, eroare) = control INDISPONIBIL = block cât timp F3 e folosită (≠ zero).
 // Memoriu / planșe / C6 rămân surse INFORMATIVE; când au rânduri nevalidate, cifra lor poartă „(nevalidat)".
 const nevalidat = nv => (Number(nv) > 0 ? ' (nevalidat)' : '')
-export function controlCantitati({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafic_fronturi_m,
-                                   lista_f3_nevalidate, lista_f3_nevalidate_m, lista_c6_nevalidate, memoriu_nevalidate, plansa_nevalidate }) {
+// R5 condiția 2 (Copilot 26.09.2026): rândul invalidat / nevalidat nu dispare TACIT din H2. Pe lângă F3:
+//  - rândurile INVALIDATE ieșite din setul de rețea (regula aprobării le-a scos din „validat”, iar unitatea / categoria schimbată
+//    le-a scos și din filtrul qm, deci lista_f3_m / fronturile au scăzut fără semnal) => BLOCK, numite cu metrii lor;
+//  - rândurile de rețea FĂRĂ tip de sursă, nevalidate (nu intră în F3, nici în memoriu / planșe) => niciun „ok” verde: WARN
+//    „INCOMPLET, de reverificat”, numite cu metrii lor;
+//  - câmpurile noi absente (view-ul în versiunea veche) => control parțial, WARN (nu „ok”).
+// Lista rândurilor: 📋 Cantități → „N nevalidate” (filtrul).
+export function controlCantitati(x) {
+  const r = controlCantitatiF3(x)
+  const inv = num(x.invalidate_in_afara_retea), invM = num(x.invalidate_in_afara_retea_m)
+  const ft = num(x.fara_tip_nevalidate), ftM = num(x.fara_tip_nevalidate_m)
+  const txtInv = inv > 0 ? ` · ${inv === 1 ? '1 rând INVALIDAT a ieșit' : `${inv} rânduri INVALIDATE au ieșit`} din setul de rețea (${invM != null ? `${fmt(invM)} m` : 'metri necunoscuți'}; ` +
+    `aprobarea veche nu mai e valabilă, unitatea / categoria s-a schimbat) — nu mai intră în F3 și nici în fronturi; reverifică în 📋 Cantități („N nevalidate”)` : ''
+  const txtFt = ft > 0 ? ` · INCOMPLET, de reverificat: ${ft} ${ft === 1 ? 'rând de rețea fără tip de sursă, nevalidat' : 'rânduri de rețea fără tip de sursă, nevalidate'} ` +
+    `(${ftM != null ? `${fmt(ftM)} m` : 'metri necunoscuți'}) — nu intră în F3 și nici în comparație (📋 Cantități → „N nevalidate”)` : ''
+  const partial = Number.isInteger(num(x.lista_f3_nevalidate)) && (x.invalidate_in_afara_retea === undefined || x.fara_tip_nevalidate === undefined)
+    ? ' · control parțial: nu știm dacă lipsesc rânduri fără tip de sursă / invalidate (v_ofertare_cantitati_nevalidate în versiunea veche)' : ''
+  const out = { ...r, invalidate_in_afara_retea: inv, fara_tip_nevalidate: ft, incomplet: !!(inv > 0 || ft > 0 || partial) }
+  if (!txtInv && !txtFt && !partial) return out
+  const stare = inv > 0 ? 'block' : r.stare === 'ok' ? 'warn' : r.stare
+  return { ...out, stare, detalii: r.detalii + txtInv + txtFt + partial }
+}
+function controlCantitatiF3({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafic_fronturi_m,
+                              lista_f3_nevalidate, lista_f3_nevalidate_m, lista_c6_nevalidate, memoriu_nevalidate, plansa_nevalidate }) {
   const f3 = num(lista_f3_m), gr = num(grafic_fronturi_m)
   const nvF3 = num(lista_f3_nevalidate)
   const base = { k: 'cantitati', lista_f3_m: f3, grafic_m: gr, diferenta_m: null, neclarificate: [], f3_nevalidate: nvF3 }

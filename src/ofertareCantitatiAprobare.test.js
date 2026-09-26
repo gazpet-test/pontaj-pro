@@ -1,7 +1,8 @@
 // R5 (Copilot 25.09.2026): „Existența rândului cu status='extras' nu demonstrează singură că a intrat în oferta
 // aprobată." Fixture = rândurile REALE 1751–1756 ale lic. 95 (SELECT pe ofertare_cantitati, 25.09.2026 22:3x).
 import { describe, it, expect } from 'vitest'
-import { esteAprobata, randuriFront, controlCantitatiGrafic, fronturiDinCantitati, controlFronturiGrafic, campuriCantitatiNevalidate } from './ofertareCantitatiAprobare.js'
+import { esteAprobata, randuriFront, controlCantitatiGrafic, fronturiDinCantitati, controlFronturiGrafic, campuriCantitatiNevalidate, randuriLipsa, esteInvalidat } from './ofertareCantitatiAprobare.js'
+import { aplicaRegulaAprobare } from './ofertareCantitatiInvalidare.js'
 
 const SURSA = 'Planșa 1 — tabel de dimensionare, citit automat din scanare'
 const r = (id, dn, m, extra = {}) => ({ id, obiect: null, categorie: 'Conducte și montaj', denumire: `Conductă distribuție gaze Dn${dn}`, um: 'm', cantitate: m, cantitate_plansa: m, status: 'extras', tip_sursa: null, sursa: SURSA, ...extra })
@@ -40,7 +41,9 @@ describe('controlCantitatiGrafic — randul „cant" din poarta graficului', () 
     expect(c.stare).toBe('block')
     expect(c.nevalidate.map(x => x.id)).toEqual([1751, 1752, 1753, 1754, 1755, 1756])
     expect(c.m_nevalidate).toBe(48195)
-    expect(c.detalii).toMatch(/6 din 6 rânduri de rețea NEVALIDATE \(48.195 m/)
+    expect(c.detalii).toMatch(/^6 din 6 rânduri de rețea NEVALIDATE — lipsesc 6 rânduri necesare nevalidate \(48\.195 m\): #1751 „Conductă distribuție gaze Dn200” \(extras, 17\.785 m\); #1752 /)
+    expect(c.detalii).toMatch(/; … încă 1 \(📋 Cantități → „N nevalidate”\)/)
+    expect(c.lista.map(x => x.id)).toEqual([1751, 1752, 1753, 1754, 1755, 1756]) // lista completă, pentru poartă
   })
   it('un singur rand nevalidat (1751) tine poarta inchisa chiar daca restul sunt validate', () => {
     const c = controlCantitatiGrafic(valideaza(LIC95, [1752, 1753, 1754, 1755, 1756]), 'memoriu')
@@ -150,4 +153,52 @@ describe('controlFronturiGrafic — fronturile SALVATE trebuie să vină din râ
     expect(controlFronturiGrafic(P(fr), LIC3_R).stare).not.toBe('block')
   })
   it('fără fronturi => block (neschimbat)', () => expect(controlFronturiGrafic(P([]), LIC3_R).stare).toBe('block'))
+})
+
+// ── R5 (Copilot 26.09.2026, condiția 2): rândul invalidat / nevalidat nu dispare TACIT din grafic prin filtrul status='validat' ──
+describe('condiția 2 — poarta graficului: semnal de lipsă, rezultat marcat incomplet', () => {
+  const LIC3 = [
+    { id: 1, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn250 — tronsoane magistrală', cantitate: 23630, cantitate_plansa: 34465 },
+    { id: 2, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi', cantitate: 1100, cantitate_plansa: 2210, specificatii: 'PE100 SDR11' },
+    { id: 3, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn160 — Coconi + Sultana', cantitate: 5250, cantitate_plansa: 5245 }]
+  // rândul 2 invalidat de regula aprobării (unitatea m → ml) — cu filtrul vechi ar fi dispărut din rețea și din lipsă
+  const inval = (rows, id, patch) => rows.map(x => x.id === id ? { ...x, ...aplicaRegulaAprobare(x, patch).patch } : x)
+  const LIC3_ML = inval(LIC3, 2, { um: 'ml' })
+  it('rândul invalidat pe unitate (m → ml) iese din randuriFront, dar e în lipsă („invalidat, ieșit din rețea”) și ține poarta închisă', () => {
+    expect(esteInvalidat(LIC3_ML[1])).toBe(true)
+    expect(randuriFront(LIC3_ML).map(x => x.id)).toEqual([1, 3])
+    const c = controlCantitatiGrafic(LIC3_ML, 'memoriu')
+    expect(c.stare).toBe('block')
+    expect(c.detalii).toMatch(/^lipsește 1 rând necesar nevalidat \(1\.100 ml\): #2 „Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi” \(diferenta, invalidat, ieșit din rețea, 1\.100 ml\)/)
+  })
+  it('control: fără invalidare (doar ↩ pe un rând din afara rețelei) nu apare nimic în plus', () => {
+    const r = randuriLipsa([...LIC3, { id: 5, status: 'extras', um: 'buc', categorie: null, denumire: 'SRM', cantitate: 1 }], 'memoriu')
+    expect(r.lipsa).toEqual([])
+  })
+  it('invalidare pe Dn (lungime identică): rândul rămâne în rețea, e NEVALIDAT => poarta block, lista îl numește', () => {
+    const rows = inval(LIC3, 2, { denumire: 'Țeavă PE100 SDR11 Dn160 — extravilan Mănăstirea→Coconi' })
+    const c = controlCantitatiGrafic(rows, 'plansa')
+    expect([c.stare, c.lista.map(x => [x.id, x.motiv, x.cantitate])]).toEqual(['block', [[2, 'nevalidat', 2210]]])
+  })
+  it('fronturile propuse din rândurile validate rămase => rândul „front” NU e verde: INCOMPLET, de reverificat (warn), cu lista', () => {
+    const { fronturi, lipsa, text_lipsa } = fronturiDinCantitati(LIC3_ML, 'memoriu')
+    expect(fronturi.map(f => f.cantitate_id)).toEqual([1, 3])
+    expect(lipsa.map(x => x.id)).toEqual([2]); expect(text_lipsa).toMatch(/^lipsește 1 rând necesar nevalidat \(1\.100 ml\)/)
+    const f = controlFronturiGrafic({ fronturi, cantitati_asumate: 'memoriu' }, LIC3_ML)
+    expect(f.stare).toBe('warn'); expect(f.incomplet).toBe(true)
+    expect(f.detalii).toMatch(/^INCOMPLET, de reverificat — lipsește 1 rând necesar nevalidat \(1\.100 ml\): #2 /)
+    // control: toate validate => ok, fără prefix
+    const g = controlFronturiGrafic({ fronturi: fronturiDinCantitati(LIC3, 'memoriu').fronturi, cantitati_asumate: 'memoriu' }, LIC3)
+    expect([g.stare, g.incomplet]).toEqual(['ok', false])
+  })
+})
+describe('campuriCantitatiNevalidate — câmpurile condiției 2', () => {
+  it('rând prezent cu câmpurile noi => numerele lor; rând prezent FĂRĂ ele (view vechi) => undefined (control parțial), nu 0; rând absent => 0', () => {
+    const nou = campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: '48195', invalidate_in_afara_retea: 1, invalidate_in_afara_retea_m: 300 } })
+    expect([nou.fara_tip_nevalidate, nou.fara_tip_nevalidate_m, nou.invalidate_in_afara_retea, nou.invalidate_in_afara_retea_m]).toEqual([6, 48195, 1, 300])
+    const vechi = campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0 } })
+    expect([vechi.fara_tip_nevalidate, vechi.invalidate_in_afara_retea]).toEqual([undefined, undefined])
+    const absent = campuriCantitatiNevalidate({ data: null })
+    expect([absent.fara_tip_nevalidate, absent.invalidate_in_afara_retea]).toEqual([0, 0])
+  })
 })

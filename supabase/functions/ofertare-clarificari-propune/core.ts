@@ -78,6 +78,10 @@ export async function cheieClarificare(licId: number, cerinteIds: number[], subi
   return Array.from(new Uint8Array(buf)).slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
+// R5 condiția 2: câte rânduri cu diferențe NU au intrat în prompt (limita) — spus explicit modelului, nu tăcut
+export const LIMITA_CANTITATI = 40
+export const randuriOmise = (total: number | null | undefined, trimise: number) =>
+  total != null && total > trimise ? ` din ${total} — LISTA E TRUNCHIATĂ: ${total - trimise} rânduri cu diferențe NU sunt aici; nu trage concluzii despre ele și nu spune că lipsesc` : ''
 export async function propuneClarificari(supabase: any, body: any): Promise<any> {
   const fail = (msg: string) => ({ error: msg })
   try {
@@ -87,10 +91,11 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const { data: lic } = await supabase.from('ofertare_licitatii').select('id, nr_anunt, autoritate, obiect, termen_depunere, valoare_estimata, moneda, tip_procedura, criteriu, garantie_participare, loturi').eq('id', licId).single()
     if (!lic) return fail('licitatie negasita')
 
-    const [{ data: cerinte }, { data: acop }, { data: cant }, { data: verif }, { data: docs }, { data: clarLic }] = await Promise.all([
+    const [{ data: cerinte }, { data: acop }, { data: cant, count: nCant }, { data: verif }, { data: docs }, { data: clarLic }] = await Promise.all([
       supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
       supabase.from('ofertare_acoperire').select('cerinta_id, status, motiv, mod').eq('status', 'gol').limit(5000),
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status').eq('licitatie_id', licId).not('diferenta_nota', 'is', null).limit(40),
+      // R5 condiția 2 (26.09.2026): limita de 40 nu mai taie TACIT — count exact, iar promptul spune câte au rămas pe dinafară
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
       supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie').eq('licitatie_id', licId).order('nr'),
@@ -117,7 +122,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const contextul = [
       `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · procedura ${lic.tip_procedura || '?'} · criteriu ${lic.criteriu || '?'}\nOBIECT: ${String(lic.obiect || '').slice(0, 1500)}\nValoare estimată: ${lic.valoare_estimata ?? '?'} ${lic.moneda || 'RON'} · termen depunere: ${termen || '?'} · garanție participare: ${lic.garantie_participare ?? '?'} · loturi: ${lic.loturi ?? '?'}`,
       `REGISTRUL DE CERINȚE (${registru.length}; cele cu GOL sunt neacoperite):\n${JSON.stringify(registru)}`,
-      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify((cant || []).map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
+      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}${randuriOmise(nCant, (cant || []).length)}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify((cant || []).map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
       `INVENTARUL DOCUMENTELOR IMPORTATE (${(docs || []).length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify((docs || []).map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
       `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${(clarLic || []).length}) — NU le repeta:\n${JSON.stringify((clarLic || []).map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
       `RĂSPUNSURI PRIMITE LA ALTE LICITAȚII (${raspunsuri.length}; întâi de la aceeași autoritate) — DOAR ca model de formulare, nu suprimă întrebări (R3):\n${JSON.stringify(raspunsuri.map((r: any) => ({ licitatie: r.lic?.nr_anunt, autoritate: String(r.lic?.autoritate || '').slice(0, 60), intrebare: String(r.intrebare || '').slice(0, 250), raspuns: String(r.raspuns || '').slice(0, 350) })))}`,

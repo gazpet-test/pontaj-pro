@@ -3,7 +3,9 @@ import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, contr
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 // R5 (25.09.2026): F3 folosita ca referinta trebuie sa vina cu campul de validare; cazurile vechi = F3 validata integral.
-const h2 = (o) => controlCantitati({ lista_f3_nevalidate: 0, ...o })
+// R5 condiția 2: câmpurile noi = 0 (licitație fără rânduri fără tip / invalidate); absente = „control parțial” (teste separate)
+const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0 }
+const h2 = (o) => controlCantitati({ lista_f3_nevalidate: 0, ...NOI0, ...o })
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
   it('F3 = grafic, restul egal => ok', () =>
     expect(h2({ lista_f3_m: 18007, lista_c6_m: 18007, memoriu_m: 18007, grafic_fronturi_m: 18007 }).stare).toBe('ok'))
@@ -51,7 +53,7 @@ describe('H2 R5 — F3 transcrisa automat si nevalidata NU e referinta aprobata'
     for (const v of [null, -1, 'x', 1.5]) expect(controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: v }).stare).toBe('block')
   })
   it('F3 validata integral => regula veche neschimbata (ok)', () =>
-    expect(controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: 0 }).stare).toBe('ok'))
+    expect(controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: 0, ...NOI0 }).stare).toBe('ok'))
   it('lic. 95 dupa pasul A propus in R5 v2 (tip_sursa=plansa pe 13.765 m): „exista doar planse 13.765 m (nevalidat)"', () => {
     const r = controlCantitati({ lista_f3_m: null, plansa_m: 13765, plansa_nevalidate: 1 })
     expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/planșe 13.765 m \(nevalidat\)/)
@@ -522,5 +524,31 @@ describe('controlPachetComplet — piesa poate exista la participant si tot sa l
     const r = c({ anexe_asteptate: ['Anexa 18', 'Anexa 19'], pachet_stare: 'aprobat',
       pachet_fisiere: [F('Anexa 18.pdf'), F('Anexa 19.pdf'), F('propunere.docx')] })
     expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/2 piese declarate/)
+  })
+})
+
+// ── R5 (Copilot 26.09.2026, condiția 2): H2 nu mai lasă să dispară tacit rândurile invalidate / fără tip ──
+describe('H2 R5 condiția 2 — semnal de lipsă, niciun „ok” verde incomplet', () => {
+  const baza = { lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0 }
+  it('F3 validată = fronturi, dar 1 rând F3 INVALIDAT a ieșit din rețea (m → ml, 300 m) => BLOCK, numit cu metrii', () => {
+    const r = controlCantitati({ ...baza, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 1, invalidate_in_afara_retea_m: 300 })
+    expect(r.stare).toBe('block'); expect(r.incomplet).toBe(true)
+    expect(r.detalii).toMatch(/^700 m în F3 și în grafic · 1 rând INVALIDAT a ieșit din setul de rețea \(300 m; aprobarea veche nu mai e valabilă/)
+  })
+  it('rânduri de rețea fără tip de sursă, nevalidate (lic. 95: 6 / 48.195 m) => cu F3 ok devine WARN „INCOMPLET, de reverificat”', () => {
+    const r = controlCantitati({ ...baza, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: 48195, invalidate_in_afara_retea: 0 })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/INCOMPLET, de reverificat: 6 rânduri de rețea fără tip de sursă, nevalidate \(48\.195 m\)/)
+  })
+  it('fără F3 (lic. 95 azi): block „lipsește F3”, iar rândurile fără tip sunt numite (nu doar „există doar planșe”)', () => {
+    const r = controlCantitati({ lista_f3_m: null, lista_f3_nevalidate: 0, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: 48195, invalidate_in_afara_retea: 0 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/^lipsește lista de cantități F3 .* 6 rânduri de rețea fără tip de sursă, nevalidate \(48\.195 m\)/)
+  })
+  it('câmpurile noi absente (view-ul vechi) => „control parțial”, WARN în loc de ok', () => {
+    const r = controlCantitati({ ...baza })
+    expect([r.stare, /control parțial/.test(r.detalii)]).toEqual(['warn', true])
+  })
+  it('control: toate zero => ok neschimbat', () => {
+    expect(controlCantitati({ ...baza, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0 })).toMatchObject({ stare: 'ok', incomplet: false })
   })
 })

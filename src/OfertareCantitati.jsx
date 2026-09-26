@@ -9,6 +9,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
+import { aplicaRegulaAprobare, descrieSchimbari } from './ofertareCantitatiInvalidare.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -33,6 +34,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
   const [licId, setLicId] = useState(initialLicId)
   const [cant, setCant] = useState(null)
   const [nrClar, setNrClar] = useState(null)   // doar numărul — lista e în ecranul ❓ Clarificări
+  // R5 (condiția 2): lista rândurilor nevalidate, trimisă aici de poarta graficului / H2 („lipsesc N rânduri nevalidate”)
+  const [doarNevalidate, setDoarNevalidate] = useState(false)
 
   useEffect(() => {
     if (licId == null && active.length) {
@@ -50,7 +53,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
       supabase.from('ofertare_cantitati').select('*').eq('licitatie_id', licId).order('ordine', { nullsFirst: false }).order('id').limit(20000),
       supabase.from('ofertare_clarificari').select('id', { count: 'exact', head: true }).eq('licitatie_id', licId),
     ])
-    setCant(c || []); setNrClar(nq ?? 0)
+    // _orig = rândul cum e în BD (regula aprobării compară cu el; updated_at = garda de concurență)
+    setCant((c || []).map(x => ({ ...x, _orig: x }))); setNrClar(nq ?? 0)
   }
   useEffect(() => { load() }, [licId])
 
@@ -58,18 +62,52 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
 
   // ── cantități ──
   const setC = (id, k, v) => setCant(cs => cs.map(c => c.id === id ? { ...c, [k]: v, _mod: true } : c))
+  // R5 (Copilot 26.09.2026, condiția 1): pe un rând VALIDAT, o schimbare relevantă (unitate, Dn / material / SDR în denumire sau
+  // specificații, obiect = tronson / etapă, categorie, sursă, cifră) face aprobarea veche nevalabilă => rândul trece pe ⚠ diferență,
+  // cu aprobarea veche numită în notă (în BD, trigger-ul propus o păstrează și în istoric). Omul e întrebat ÎNAINTE; refuzul
+  // anulează editarea. Salvarea are gardă pe updated_at: dacă rândul s-a schimbat între timp (transfer din planșă, alt utilizator),
+  // nu se scrie peste — se reîncarcă și se reface.
+  const cuGarda = (qb, o) => (o.updated_at == null ? qb.is('updated_at', null) : qb.eq('updated_at', o.updated_at))
+  const reimprospateaza = async (id) => {
+    const { data: f } = await supabase.from('ofertare_cantitati').select('*').eq('id', id).maybeSingle()
+    if (!f) { await load(); return }
+    // doar câmpurile scrise de server (statusul, nota, cifra din planșă, categoria din dicționar); editările în curs rămân
+    setCant(cs => cs.map(x => x.id === id ? { ...x, status: f.status, diferenta_nota: f.diferenta_nota, cantitate_plansa: f.cantitate_plansa, categorie: f.categorie, updated_at: f.updated_at, _orig: f } : x))
+  }
   const saveC = async (c) => {
     if (!c._mod) return
-    await supabase.from('ofertare_cantitati').update({
+    const o = c._orig || c
+    const patch = {
       obiect: c.obiect || null, categorie: c.categorie || null, denumire: c.denumire,
       um: c.um || null, cantitate: c.cantitate !== '' && c.cantitate != null ? Number(c.cantitate) : null,
       specificatii: c.specificatii || null, sursa: c.sursa || null,
-      diferenta_nota: c.diferenta_nota || null, updated_at: new Date().toISOString(),
-    }).eq('id', c.id)
+      diferenta_nota: c.diferenta_nota || null,
+    }
+    const r = aplicaRegulaAprobare(o, patch)
+    if (r.invalidat && !window.confirm(`Rândul e VALIDAT. Modificarea schimbă ce s-a aprobat: ${descrieSchimbari(r.schimbari)}.
+
+` +
+      'Aprobarea veche nu mai e valabilă: rândul trece pe ⚠ diferență și trebuie revalidat (✓). Valoarea veche rămâne în notă (și în istoric). Continui?')) {
+      setCant(cs => cs.map(x => x.id === c.id ? { ...o, _orig: o } : x)); return
+    }
+    const { data, error } = await cuGarda(supabase.from('ofertare_cantitati').update({ ...r.patch, updated_at: new Date().toISOString() })
+      .eq('id', c.id), o).select('id')
+    if (error) { showToast('Eroare la salvare: ' + error.message, 'err'); return }
+    if (!data?.length) { showToast('Rândul s-a schimbat între timp (transfer din planșă sau alt utilizator) — l-am reîncărcat; refă modificarea.', 'err'); await load(); return }
+    setCant(cs => cs.map(x => x.id === c.id ? { ...x, _mod: false } : x))
+    await reimprospateaza(c.id)
+    if (r.invalidat) showToast('Rândul a ieșit din „validat”: revalidează-l (✓) după verificare.', 'err')
   }
+  // ✓ / ↩ = UPDATE doar de status (validarea explicită). Garda pe updated_at: nu se validează o cifră pe care n-ai văzut-o
+  // (dacă un transfer a schimbat rândul după încărcarea ecranului, se reîncarcă în loc să se valideze).
   const valideazaC = async (c) => {
-    const nou = c.status === 'validat' ? 'extras' : 'validat'
-    await supabase.from('ofertare_cantitati').update({ status: nou, updated_at: new Date().toISOString() }).eq('id', c.id)
+    const o = c._orig || c
+    if (c._mod) { showToast('Salvează întâi modificarea rândului (ieși din câmp), apoi validează.', 'err'); return }
+    const nou = o.status === 'validat' ? 'extras' : 'validat'
+    const { data, error } = await cuGarda(supabase.from('ofertare_cantitati').update({ status: nou, updated_at: new Date().toISOString() })
+      .eq('id', c.id), o).select('id')
+    if (error) { showToast('Eroare: ' + error.message, 'err'); return }
+    if (!data?.length) showToast('Rândul s-a schimbat între timp — l-am reîncărcat; verifică-l din nou înainte de ✓.', 'err')
     await load()
   }
   const addC = async () => {
@@ -129,8 +167,8 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
           <div style={{ fontWeight:800, fontSize:13.5 }}>
             🧮 Cantități ({cant?.length ?? '...'})
             {nrDif > 0 && <span style={{ color:G.red, marginLeft:10, fontSize:12 }}>⚠ {nrDif} cu diferențe</span>}
-            {nrNevalidate > 0 && <span style={{ color:G.yellow, marginLeft:10, fontSize:12 }}
-              title="Rândurile nevalidate (🤖 extras / ⚠ diferență) sunt date de lucru: nu devin fronturi de grafic și nu trec drept F3 aprobată în poarta propunerii până nu le bifezi ✓">{nrNevalidate} nevalidate</span>}
+            {nrNevalidate > 0 && <span style={{ color:G.yellow, marginLeft:10, fontSize:12, cursor:'pointer', textDecoration: doarNevalidate ? 'underline' : 'none' }} onClick={() => setDoarNevalidate(v => !v)}
+              title="Rândurile nevalidate (🤖 extras / ⚠ diferență) sunt date de lucru: nu devin fronturi de grafic și nu trec drept F3 aprobată în poarta propunerii până nu le bifezi ✓. Click = arată doar rândurile nevalidate">{nrNevalidate} nevalidate{doarNevalidate ? ' (filtrat — click pentru toate)' : ''}</span>}
           </div>
           <div style={{ display:'flex', gap:8 }}>
             <button style={{ ...S.btnP, padding:'5px 12px', fontSize:12, opacity: extrag ? 0.6 : 1 }} disabled={!!extrag} onClick={extrage}
@@ -144,7 +182,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
               {['Status', 'Obiect', 'Cod', 'Denumire', 'UM', 'Cantitate', 'Specificații', 'Sursă', '', ''].map((h, i) => <th key={i} style={{ padding:'5px 7px', borderBottom:`1px solid ${G.border}` }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {(cant || []).map(c => {
+              {(cant || []).filter(c => !doarNevalidate || c.status !== 'validat').map(c => {
                 const [lbl, col] = CANT_STATUS[c.status] || CANT_STATUS.extras
                 return (
                   <tr key={c.id} style={{ borderBottom:`1px solid ${G.border2}`, background: c.status === 'diferenta' ? G.red + '0D' : 'transparent' }}>

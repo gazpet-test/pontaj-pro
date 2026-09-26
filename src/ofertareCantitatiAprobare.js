@@ -44,11 +44,42 @@ export function randuriFront(cantitati, baza = 'cantitate') {
   return cuMetri.filter(c => rxFrontCateg.test(c.categorie || ''))
 }
 
+// ── R5 (Copilot 26.09.2026, condiția 2): rândurile NECESARE care lipsesc din ce e aprobat ──
+// Un consumator care folosește doar rândurile validate NU le lasă să dispară tacit: le numără, le listează și își marchează
+// rezultatul ca incomplet / de reverificat. „Necesare” = rândurile de rețea (randuriFront) nevalidate + rândurile INVALIDATE
+// (nota „Rândul era VALIDAT …”, pusă de regula aprobării) care au ieșit din setul de rețea (ex. unitatea m → ml, categoria
+// schimbată): altfel un rând aprobat, redeschis de o schimbare de unitate, n-ar mai apărea nicăieri.
+export const esteInvalidat = c => !esteAprobata(c) && /^Rândul era VALIDAT/.test(String(c?.diferenta_nota || ''))
+export function randuriLipsa(cantitati, cantitatiAsumate) {
+  const baza = bazaCol(cantitatiAsumate)
+  const retea = randuriFront(cantitati, baza)
+  const inRetea = new Set(retea)
+  const cifra = c => { const v = c[baza] ?? c.cantitate; return v == null || v === '' ? null : Number(v) }
+  const lipsa = [
+    ...retea.filter(c => !esteAprobata(c)).map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: c.um || 'm', cantitate: cifra(c), motiv: 'nevalidat' })),
+    ...(cantitati || []).filter(c => !inRetea.has(c) && esteInvalidat(c) && !/total/i.test(c.obiect || ''))
+      .map(c => ({ id: c.id, denumire: c.denumire, status: c.status, um: c.um || '—', cantitate: cifra(c), motiv: 'invalidat, ieșit din rețea' })),
+  ]
+  const peUm = {}
+  for (const x of lipsa) if (x.cantitate != null) peUm[x.um] = (peUm[x.um] || 0) + x.cantitate
+  return { lipsa, peUm, m: peUm.m || 0 }
+}
+const cantPeUm = peUm => Object.entries(peUm).map(([um, v]) => `${fmt(v)} ${um}`).join(' + ') || 'cantitate necunoscută'
+export function textLipsa({ lipsa, peUm }, max = 5) {
+  if (!lipsa.length) return ''
+  const den = d => { const t = String(d || ''); return t.length > 60 ? t.slice(0, 59) + '…' : t }
+  const rand = x => `#${x.id} „${den(x.denumire)}” (${x.status || '—'}${x.motiv !== 'nevalidat' ? `, ${x.motiv}` : ''}, ${x.cantitate == null ? '?' : fmt(x.cantitate)} ${x.um})`
+  return `${lipsa.length === 1 ? 'lipsește 1 rând necesar nevalidat' : `lipsesc ${lipsa.length} rânduri necesare nevalidate`} (${cantPeUm(peUm)}): ` +
+    lipsa.slice(0, max).map(rand).join('; ') + (lipsa.length > max ? `; … încă ${lipsa.length - max} (📋 Cantități → „N nevalidate”)` : '')
+}
+
 // ── Rândul „cant" din poarta graficului ──
 // BLOCK cât timp vreun rând de rețea folosit ca front nu e validat: graficul se îngheață în
 // grafic_versiuni și ajunge în propunerea tehnică; o cifră extrasă automat nu intră acolo ca aprobată.
 // Schimbare față de regula veche: o diferență memoriu/planșă NU se mai închide doar alegând baza —
 // rândul trebuie și validat (alegerea bazei spune CARE coloană, nu că cifra e verificată).
+// R5 condiția 2: textul listează rândurile lipsă (id, denumire, status, cantitate pe unitate) și numără și rândurile invalidate
+// ieșite din rețea; `lista` = toate, pentru afișarea completă în poartă.
 export function controlCantitatiGrafic(cantitati, cantitatiAsumate) {
   const baza = bazaCol(cantitatiAsumate)
   const retea = randuriFront(cantitati, baza)
@@ -56,12 +87,13 @@ export function controlCantitatiGrafic(cantitati, cantitatiAsumate) {
   const nevalidate = retea.filter(c => !esteAprobata(c))
   const cuDif = retea.filter(c => c.status === 'diferenta')
   const mNevalidate = nevalidate.reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0)
+  const L = randuriLipsa(cantitati, cantitatiAsumate)
   const txtTotal = totalRetea
     ? `, total declarat ${fmt(nr(totalRetea.cantitate))} m${esteAprobata(totalRetea) ? '' : ' (nevalidat)'}` : ''
-  const base = { k: 'cant', retea, nevalidate, m_nevalidate: mNevalidate, totalRetea }
-  if (!retea.length) return { ...base, stare: 'block', detalii: 'niciun rând de rețea în Cantități' }
-  if (nevalidate.length) return { ...base, stare: 'block',
-    detalii: `${nevalidate.length} din ${retea.length} rânduri de rețea NEVALIDATE (${fmt(mNevalidate)} m: 🤖 extras / ⚠ diferență) — nu sunt cantități aprobate; verifică-le și validează-le (✓) în 📋 Cantități înainte de grafic`
+  const base = { k: 'cant', retea, nevalidate, m_nevalidate: mNevalidate, totalRetea, lipsa: L.lipsa, lista: L.lipsa }
+  if (!retea.length && !L.lipsa.length) return { ...base, stare: 'block', detalii: 'niciun rând de rețea în Cantități' }
+  if (L.lipsa.length) return { ...base, stare: 'block',
+    detalii: `${nevalidate.length ? `${nevalidate.length} din ${retea.length} rânduri de rețea NEVALIDATE — ` : ''}${textLipsa(L)} — nu sunt cantități aprobate: graficul ar fi INCOMPLET; verifică-le și validează-le (✓) în 📋 Cantități înainte de grafic`
       + (cuDif.length ? ` · ${cuDif.length} cu diferență memoriu/planșă → alege și baza (memoriu / planșă)` : '') + txtTotal }
   return { ...base, stare: 'ok', detalii: `${retea.length} rânduri rețea, toate validate${txtTotal}` }
 }
@@ -87,7 +119,9 @@ export function fronturiDinCantitati(cantitati, cantitatiAsumate) {
       cantitate_id: c.id ?? null, baza, lungime_sursa: Number(c[baza] ?? c.cantitate),
     }
   })
-  return { fronturi, excluse, m_excluse: excluse.reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0) }
+  // R5 condiția 2: și rândurile invalidate ieșite din rețea sunt numite (nu devin fronturi, dar nici nu dispar tacit)
+  const L = randuriLipsa(cantitati, cantitatiAsumate)
+  return { fronturi, excluse, m_excluse: excluse.reduce((s, c) => s + nr(c[baza] ?? c.cantitate), 0), lipsa: L.lipsa, text_lipsa: textLipsa(L, 4) }
 }
 
 // ── Rândul „front" din poarta graficului (R5 runda 4, verificator R3) ──
@@ -121,14 +155,17 @@ export function controlFronturiGrafic(p, cantitati) {
     if (f.lungime_sursa != null && Math.abs(acum - Number(f.lungime_sursa)) >= 1)
       probleme.push(`${et}: rândul-sursă #${c.id} s-a schimbat de la propunere (${fmt(f.lungime_sursa)} → ${fmt(acum)} m)`)
   })
-  const base = { k: 'front', ref, lf, probleme, manuale, totalAprobat }
-  if (!fronturi.length) return { ...base, stare: 'block', detalii: 'nedefinite — „Propune din cantități" apoi ajustezi' }
+  // R5 condiția 2: referința (rețeaua validată) și fronturile exclud rândurile nevalidate => rezultatul NU e complet; niciun „ok” verde
+  const L = randuriLipsa(cantitati, p?.cantitati_asumate)
+  const incomplet = L.lipsa.length ? `INCOMPLET, de reverificat — ${textLipsa(L, 3)}; ` : ''
+  const base = { k: 'front', ref, lf, probleme, manuale, totalAprobat, lipsa: L.lipsa, incomplet: !!L.lipsa.length }
+  if (!fronturi.length) return { ...base, stare: 'block', detalii: incomplet + 'nedefinite — „Propune din cantități" apoi ajustezi' }
   if (probleme.length) return { ...base, stare: 'block',
-    detalii: `${probleme.length} din ${fronturi.length} fronturi nu vin din cantități validate cu cifra de acum — apasă „Propune din cantități" (sau adaugă-le manual cu ＋): ` +
+    detalii: incomplet + `${probleme.length} din ${fronturi.length} fronturi nu vin din cantități validate cu cifra de acum — apasă „Propune din cantități" (sau adaugă-le manual cu ＋): ` +
       probleme.slice(0, 4).join('; ') + (probleme.length > 4 ? `; … încă ${probleme.length - 4}` : '') }
   const dev = ref ? Math.abs(lf - ref) / ref : 1
-  return { ...base, stare: dev > 0.1 ? 'warn' : 'ok',
-    detalii: `${fronturi.length} fronturi, ${fmt(lf)} m (${ref ? `${Math.round(lf / ref * 100)}% din ${refTxt}` : 'fără referință validată'})` +
+  return { ...base, stare: dev > 0.1 || L.lipsa.length ? 'warn' : 'ok',
+    detalii: incomplet + `${fronturi.length} fronturi, ${fmt(lf)} m (${ref ? `${Math.round(lf / ref * 100)}% din ${refTxt}` : 'fără referință validată'})` +
       (manuale ? ` · ${manuale} introduse manual` : '') }
 }
 
@@ -141,11 +178,21 @@ export function campuriCantitatiNevalidate(r) {
   if (!r || r.error) return {}
   const d = r.data || {}
   const n = v => (v == null ? 0 : Number(v))
+  const m = v => (v == null ? null : Number(v))
+  // R5 condiția 2: câmpurile noi (fără tip, invalidate ieșite din rețea). Rând prezent fără câmp = view-ul în versiunea veche =>
+  // `undefined` (controlCantitati spune „control parțial”, nu „0”); rând absent = licitația n-are rânduri de rețea = 0.
+  const nou = (k, f) => (r.data && !(k in d) ? undefined : f(d[k]))
   return {
     lista_f3_nevalidate: n(d.lista_f3_nevalidate),
-    lista_f3_nevalidate_m: d.lista_f3_nevalidate_m == null ? null : Number(d.lista_f3_nevalidate_m),
+    lista_f3_nevalidate_m: m(d.lista_f3_nevalidate_m),
     lista_c6_nevalidate: n(d.lista_c6_nevalidate),
     memoriu_nevalidate: n(d.memoriu_nevalidate),
     plansa_nevalidate: n(d.plansa_nevalidate),
+    fara_tip_nevalidate: nou('fara_tip_nevalidate', n),
+    fara_tip_nevalidate_m: nou('fara_tip_nevalidate_m', m),
+    retea_nevalidate: nou('retea_nevalidate', n),
+    retea_nevalidate_m: nou('retea_nevalidate_m', m),
+    invalidate_in_afara_retea: nou('invalidate_in_afara_retea', n),
+    invalidate_in_afara_retea_m: nou('invalidate_in_afara_retea_m', m),
   }
 }

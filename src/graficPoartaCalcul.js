@@ -27,10 +27,11 @@ export function calculeazaPoartaGrafic({ p, cantitati, norme, cerinte, durataMax
   const out = []
   // R5 (Copilot 25.09.2026): „cant" = BLOCK cât timp un rând de rețea nu e validat de om (vezi ofertareCantitatiAprobare.js).
   const cc = controlCantitatiGrafic(cantitati, p.cantitati_asumate)
-  out.push({ k: 'cant', titlu: 'Cantități rețea în platformă — validate de om', stare: cc.stare, detalii: cc.detalii })
+  // R5 condiția 2 (26.09.2026): `lista` = rândurile necesare nevalidate / invalidate — afișate integral sub rând și înghețate cu poarta
+  out.push({ k: 'cant', titlu: 'Cantități rețea în platformă — validate de om', stare: cc.stare, detalii: cc.detalii, ...(cc.lista?.length ? { lista: cc.lista } : {}) })
   // R5 runda 4: referința = totalul declarat doar dacă e validat; fronturile salvate trebuie să vină din rânduri validate.
   const cf = controlFronturiGrafic(p, cantitati)
-  out.push({ k: 'front', titlu: 'Fronturi de lucru (localități / tronsoane)', stare: cf.stare, detalii: cf.detalii })
+  out.push({ k: 'front', titlu: 'Fronturi de lucru (localități / tronsoane)', stare: cf.stare, detalii: cf.detalii, ...(cf.incomplet ? { incomplet: true } : {}) })
   const nv = (norme || []).filter(n => n.tip_lucrare === p.tip_lucrare)
   const val = nv.filter(n => n.incredere === 'validat')
   out.push({ k: 'norme', titlu: 'Norme de productivitate validate', stare: !val.length ? 'block' : val.length < nv.length ? 'warn' : 'ok',

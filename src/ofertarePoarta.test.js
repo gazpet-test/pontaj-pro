@@ -16,6 +16,8 @@ const VERDE = {
   lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
   // R5 (25.09.2026): din v_ofertare_cantitati_nevalidate — F3 validata integral
   lista_f3_nevalidate: 0, lista_f3_nevalidate_m: null, lista_c6_nevalidate: 0, memoriu_nevalidate: 0, plansa_nevalidate: 0,
+  // R5 condiția 2 (26.09.2026): câmpurile noi ale v_ofertare_cantitati_nevalidate
+  fara_tip_nevalidate: 0, fara_tip_nevalidate_m: null, invalidate_in_afara_retea: 0, invalidate_in_afara_retea_m: null,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
   anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'], identitate_straine: [], bransamente_in_capitole: [372], bransamente_in_cerinte: [372],

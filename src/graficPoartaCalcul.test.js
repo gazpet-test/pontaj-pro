@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { calculeazaPoartaGrafic, durataMaxDinCerinte, totalFronturi } from './graficPoartaCalcul.js'
 import { fronturiDinCantitati } from './ofertareCantitatiAprobare.js'
+import { aplicaRegulaAprobare } from './ofertareCantitatiInvalidare.js'
 
 const rand = (id, dn, m, status = 'validat') => ({ id, obiect: null, categorie: 'Conducte și montaj', denumire: `Țeavă PE100 SDR11 Dn${dn} — Str. ${id}`, um: 'm', cantitate: m, cantitate_plansa: m, status })
 const CANT = [rand(1, 110, 1000), rand(2, 90, 500)]
@@ -31,4 +32,15 @@ describe('calculeazaPoartaGrafic', () => {
     expect(stare(calculeazaPoartaGrafic({ p: { ...p, durata_luni: 14 }, cantitati: CANT, norme, cerinte, durataMax: 12 }), 'durata')).toBe('block')
   })
   it('fără p => []', () => expect(calculeazaPoartaGrafic({ p: null })).toEqual([]))
+  // R5 (Copilot 26.09.2026, condiția 2): rândul invalidat pe material (lungime identică) nu dispare tacit din poartă
+  it('rând invalidat pe material după propunere => „cant” block cu `lista` (#2), „front” marcat incomplet; ce se îngheață conține lista', () => {
+    const inval = CANT.map(c => c.id === 2 ? { ...c, ...aplicaRegulaAprobare(c, { denumire: 'Țeavă OL Dn90 — Str. 2' }).patch } : c)
+    const g = calculeazaPoartaGrafic({ p, cantitati: inval, norme, cerinte, durataMax: 12 })
+    const cant = g.find(r => r.k === 'cant'), front = g.find(r => r.k === 'front')
+    expect([cant.stare, cant.lista.map(x => [x.id, x.status, x.cantitate, x.um])]).toEqual(['block', [[2, 'diferenta', 500, 'm']]])
+    expect(cant.detalii).toMatch(/lipsește 1 rând necesar nevalidat \(500 m\): #2 „Țeavă OL Dn90 — Str\. 2” \(diferenta, 500 m\)/)
+    expect([front.stare, front.incomplet]).toEqual(['block', true])
+    expect(front.detalii).toMatch(/^INCOMPLET, de reverificat — /)
+    expect(JSON.parse(JSON.stringify(g)).find(r => r.k === 'cant').lista).toHaveLength(1) // grafic_versiuni.poarta (jsonb)
+  })
 })

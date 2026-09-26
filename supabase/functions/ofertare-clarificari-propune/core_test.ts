@@ -36,14 +36,15 @@ function supaFals(tabele: Record<string, any[]>) {
   return {
     selecturi,
     from(t: string) {
+      let lim = Infinity, cuCount = false
       const b: any = {
-        select: (s: string) => { selecturi[t] = s; return b },
-        eq: () => b, neq: () => b, is: () => b, not: () => b, in: () => b, order: () => b, limit: () => b,
+        select: (s: string, o?: any) => { selecturi[t] = s; cuCount = !!o?.count; return b },
+        eq: () => b, neq: () => b, is: () => b, not: () => b, in: () => b, order: () => b, limit: (n: number) => { lim = n; return b },
         single: () => Promise.resolve({ data: (tabele[t] || [])[0] ?? null, error: null }),
         maybeSingle: () => Promise.resolve({ data: (tabele[t] || [])[0] ?? null, error: null }),
         insert: () => Promise.resolve({ data: null, error: null }),
         upsert: () => ({ select: () => Promise.resolve({ data: [], error: null }) }),
-        then: (ok: any, ko: any) => Promise.resolve({ data: tabele[t] || [], error: null }).then(ok, ko),
+        then: (ok: any, ko: any) => Promise.resolve({ data: (tabele[t] || []).slice(0, lim), error: null, ...(cuCount ? { count: (tabele[t] || []).length } : {}) }).then(ok, ko),
       }
       return b
     },
@@ -76,4 +77,27 @@ Deno.test('R5 capăt-la-capăt: select-ul citește status, iar promptul nu mai c
   assert(sistem.includes('status_validat: false'), 'promptul explică regula')
   assert(sistem.includes('MARCAT VALIDAT ÎN PLATFORMĂ') && sistem.includes('nu dovedește singur că un om a verificat'), 'runda 4: „validat” = marcaj în platformă, nu dovadă de om')
   assertFalse(sistem.includes('validat_de_om'))
+})
+
+// R5 condiția 2 (26.09.2026): limita de 40 de rânduri nu mai taie TACIT
+Deno.test('R5 condiția 2: 45 de rânduri cu diferențe => promptul spune „40 din 45 — LISTA E TRUNCHIATĂ”; sub limită, nimic în plus', async () => {
+  const rulare = async (n: number) => {
+    const supa = supaFals({
+      ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze' }],
+      ofertare_cerinte: [{ id: 1, tip: 'propunere', text_cerinta: 'Lungimea rețelei conform planșelor' }],
+      ofertare_acoperire: [], ofertare_cantitati: Array.from({ length: n }, (_, i) => ({ ...R1751, id: 1751 + i })), ofertare_verificari: [], ofertare_documente_atribuire: [], ofertare_clarificari: [],
+    })
+    let corp = ''
+    const fetchVechi = globalThis.fetch
+    globalThis.fetch = ((_u: unknown, init?: RequestInit) => {
+      corp = String(init?.body || '')
+      return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: '{"clarificari":[]}' }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 }))
+    }) as typeof fetch
+    try { await propuneClarificari(supa, { licitatie_id: 95, dry_run: true }) } finally { globalThis.fetch = fetchVechi }
+    return JSON.parse(corp).messages[0].content as string
+  }
+  const m45 = await rulare(45)
+  assert(m45.includes('DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (40 din 45 — LISTA E TRUNCHIATĂ: 5 rânduri cu diferențe NU sunt aici'), m45.slice(m45.indexOf('DIFERENȚE'), m45.indexOf('DIFERENȚE') + 160))
+  const m3 = await rulare(3)
+  assert(m3.includes('DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (3; status_validat'), 'sub limită: fără mențiune')
 })
