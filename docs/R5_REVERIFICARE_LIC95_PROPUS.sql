@@ -5,8 +5,11 @@
 --
 -- La 25.09.2026 (SELECT-uri, după transferul din 16:51:08 UTC) NU există niciun derivat în BD: 0 grafic_parametri,
 -- 0 grafic_versiuni, 0 grafic_activitati, 0 ofertare_pt_poarta, 0 ofertare_pt_pachet, 0 ofertare_pt_capitole,
--- 0 ofertare_verificari, 0 ofertare_rfq, 0 clarificări legate de 1751–1756 sau generate de platformă după transfer,
--- 0 apeluri AI pe lic. 95 după transfer; v_ofertare_pt_stare: lista_f3_m / memoriu_m / plansa_m / grafic_fronturi_m = NULL;
+-- 0 ofertare_verificari, 0 ofertare_rfq, 0 clarificări legate de 1751–1756 sau generate de platformă după transfer;
+-- ai_usage_log după transfer: 0 pe licitație (ref_table='ofertare_licitatii') și 1 pe documentele ei — #4632
+-- (ofertare-plansa-citeste, doc 470, 16:52:38 = pasul „note lipite” al ACELEIAȘI citiri, nu un derivat al rândurilor;
+-- runda 4: preview-ul acoperă acum și ref_table='ofertare_documente_atribuire'; recontrolat 26.09.2026, identic);
+-- v_ofertare_pt_stare: lista_f3_m / memoriu_m / plansa_m / grafic_fronturi_m = NULL;
 -- v_ofertare_contradictii: 0 rânduri. Blocul (1) e deci o PLASĂ pentru fereastra până la merge-ul ramurii
 -- claude/cantitati-nevalidate-consumatori: dacă între timp cineva generează grafic / semnează poarta / rulează
 -- clarificările pe aceste cifre, rezultatul primește un marcaj vizibil „de reverificat". Pe starea de azi nu modifică nimic.
@@ -15,7 +18,9 @@
 -- (analiza.citire_ai e scrisă cu CAS pe `rev` de handler — o scriere manuală ar concura cu el).
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 
--- (0) PREVIEW — un singur SELECT (execute_sql întoarce doar ultimul rezultat). Așteptat azi: n = 0 peste tot.
+-- (0) PREVIEW — un singur SELECT (execute_sql întoarce doar ultimul rezultat). Așteptat azi: n = 0 peste tot, cu excepția
+--     ai_usage_log = 1 (#4632, vezi mai sus: apelul citirii planșei 470, nu un derivat) — un apel NOU pe licitație sau pe
+--     documentele ei, după 16:51:08, e de citit (ce funcție, pe ce document).
 SELECT 'grafic_versiuni' AS tabel, count(*) AS n, array_agg(id) AS ids FROM grafic_versiuni WHERE licitatie_id = 95
 UNION ALL SELECT 'grafic_parametri (fronturi)', count(*), array_agg(id) FROM grafic_parametri
   WHERE licitatie_id = 95 AND jsonb_array_length(coalesce(parametri->'fronturi', '[]'::jsonb)) > 0
@@ -28,8 +33,9 @@ UNION ALL SELECT 'ofertare_verificari', count(*), array_agg(id) FROM ofertare_ve
 UNION ALL SELECT 'ofertare_clarificari din cantități (legate sau platforma după transfer)', count(*), array_agg(id) FROM ofertare_clarificari
   WHERE licitatie_id = 95 AND (cantitate_id BETWEEN 1751 AND 1756 OR (origine = 'platforma' AND created_at >= '2026-09-25 16:51:08+00'))
 UNION ALL SELECT 'ofertare_rfq', count(*), array_agg(id) FROM ofertare_rfq WHERE licitatie_id = 95
-UNION ALL SELECT 'ai_usage_log după transfer', count(*), array_agg(id) FROM ai_usage_log
-  WHERE ref_table = 'ofertare_licitatii' AND ref_id = 95 AND created_at >= '2026-09-25 16:51:08+00';
+UNION ALL SELECT 'ai_usage_log după transfer (licitația sau documentele ei)', count(*), array_agg(id) FROM ai_usage_log
+  WHERE created_at >= '2026-09-25 16:51:08+00' AND ((ref_table = 'ofertare_licitatii' AND ref_id = 95)
+     OR (ref_table = 'ofertare_documente_atribuire' AND ref_id IN (SELECT id FROM ofertare_documente_atribuire WHERE licitatie_id = 95)));
 
 -- (1) APLICARE — un singur bloc DO (o tranzacție; orice RAISE EXCEPTION anulează tot). Idempotent: marcajul se pune o dată.
 --     Ce e deja trimis / depus NU se modifică: se raportează în NOTICE, pentru decizia omului.

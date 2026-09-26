@@ -10,14 +10,19 @@
 --
 -- Conține:
 --   1) VIEW NOU v_ofertare_cantitati_nevalidate (security_invoker) — câte rânduri de rețea NU sunt validate de om, pe surse.
---      Filtrul de rețea e IDENTIC cu CTE-ul qm din v_ofertare_pt_stare (dacă îl schimbi acolo, schimbă-l și aici).
+--      Filtrul de rețea e IDENTIC cu CTE-ul qm din v_ofertare_pt_stare (dacă îl schimbi acolo, schimbă-l și aici și în v6).
 --   2) ofertare_clarificare_planse_auto v6 — totalul F3 citat AUTORITĂȚII vine doar din rânduri validate; cât există
---      rânduri F3 de conductă nevalidate, textul cere corespondența fără total. Baza = funcția LIVE (verificat: repo v5
+--      rânduri F3 de rețea nevalidate, textul cere corespondența fără total. Baza = funcția LIVE (verificat: repo v5
 --      + linia `v_nou := v_noi > 0 AND v_standard` = live, md5 fără comentarii/spații 0875c2200e072289cd5b972b49cabb0c).
 --      Atenție: fișierul supabase/migrations/20260926b_…_v5.sql din repo NU e identic cu live (are `v_nou := v_noi > 0`).
+--      Runda 4 (verificator R3): setul F3 din v6 = EXACT filtrul qm / lista_f3_m din v_ofertare_pt_stare (același set ca
+--      view-ul de mai sus și H2), nu filtrul vechi (um m/ml/M + denumire conduct/țeav/tub), care lua și articole de deviz și
+--      rândurile TOTAL; numărul se scrie ro-RO fără ambiguitate („6.519,8 m”, „6.520 m”), independent de lc_numeric.
 --
 -- Rollback exact: docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate_ROLLBACK.sql.
--- Testat pe un Postgres 16 local de unică folosință (schemă minimă), nu pe BD-ul de producție.
+-- Testat local pe PGlite 0.5.8 (Postgres 18.3 compilat WASM, în proces, de unică folosință; schemă minimă cu coloanele reale),
+-- NU pe un Postgres 16 și nu pe BD-ul de producție — un Postgres local (initdb) a fost refuzat de izolarea worktree-ului.
+-- Scripturile de test: scratchpad/pglite/test_r5.mjs (runda 3) și test_r5_runda4.mjs (runda 4).
 --
 -- PREVIEW (rulează ÎNAINTE, doar SELECT; execute_sql întoarce doar ultimul rezultat → un SELECT per apel):
 --   (P1) ce va arăta view-ul, pe licitații:
@@ -31,11 +36,22 @@
 --      GROUP BY 1 ORDER BY 1;
 --     La 25.09.2026: lic. 3 → 0 F3 (memoriu 3 din 5 nevalidate); lic. 5 → F3 47 nevalidate / 6.520 m; lic. 95 → 6 fără tip,
 --     toate nevalidate (48.195 m); lic. 102 → 2 fără tip, nevalidate.
+--   (P1b) ce total F3 ar cita v6 (runda 4, filtrul qm; NULL = fără total, pentru că există F3 nevalidată) vs filtrul vechi:
+--     SELECT q.licitatie_id, count(*) FILTER (WHERE q.um='m' AND q.categorie ~* 'conduct|re[țt]ea'
+--              AND (coalesce(q.obiect,'')||' '||coalesce(q.denumire,'')||' '||coalesce(q.sursa,'')) !~* 'total') f3_qm_n,
+--            count(*) FILTER (WHERE q.um='m' AND q.categorie ~* 'conduct|re[țt]ea' AND q.status<>'validat'
+--              AND (coalesce(q.obiect,'')||' '||coalesce(q.denumire,'')||' '||coalesce(q.sursa,'')) !~* 'total') f3_qm_nev,
+--            round(sum(q.cantitate) FILTER (WHERE lower(coalesce(q.um,'')) ~ '^m(l|\.l\.)?\.?$' AND q.denumire ~* '(conduct|teav|țeav|tub)'), 1) f3_filtru_vechi_m
+--       FROM ofertare_cantitati q WHERE q.tip_sursa='lista_f3' GROUP BY 1 ORDER BY 1;
+--     La 26.09.2026: doar lic. 5 — qm 47 rânduri (6.519,79 m), toate nevalidate => v6 fără total; filtrul vechi 62 rânduri /
+--     7.747,68 m (+15 rânduri cu um „M” = articole de deviz, 1.227,89 m, ex. „MONTAREA PARAPETELOR SI PODETELOR…”), 0 rânduri TOTAL.
 --   (P2) ciornele automate „planse_auto" al căror text s-ar schimba la următorul apel (text standard + F3 cu rânduri nevalidate):
 --     SELECT c.id, c.licitatie_id, c.status, left(c.intrebare, 60) FROM ofertare_clarificari c
 --      WHERE c.origine='automat' AND c.cheie LIKE 'auto_planse_%' AND c.status IN ('propunere','de_trimis')
 --        AND left(coalesce(c.intrebare,''), 92) = 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe'
---        AND EXISTS (SELECT 1 FROM ofertare_cantitati q WHERE q.licitatie_id=c.licitatie_id AND q.tip_sursa='lista_f3' AND q.status<>'validat');
+--        AND EXISTS (SELECT 1 FROM ofertare_cantitati q WHERE q.licitatie_id=c.licitatie_id AND q.tip_sursa='lista_f3' AND q.status<>'validat'
+--                     AND q.um='m' AND q.categorie ~* 'conduct|re[țt]ea'
+--                     AND (coalesce(q.obiect,'')||' '||coalesce(q.denumire,'')||' '||coalesce(q.sursa,'')) !~* 'total');
 --     (#63 de la lic. 95 NU intră: text editat de om, iar lic. 95 n-are F3.)
 -- SANITY (după): SELECT * FROM v_ofertare_cantitati_nevalidate WHERE licitatie_id IN (3,5,95,102) ORDER BY 1;
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -61,8 +77,9 @@ GRANT SELECT ON public.v_ofertare_cantitati_nevalidate TO authenticated, service
 COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25.09.2026): per licitație, câte rânduri de rețea (filtrul qm din v_ofertare_pt_stare) NU sunt validate de om (status<>validat), pe tip_sursa. Citit de OfertarePropunere (H2, controlCantitati): F3 cu rânduri nevalidate nu e referință aprobată. security_invoker.';
 
 -- 2) ─────────────────────────────────────────────────────────────────────────────────────────────────────
--- v6 (R5): față de live se schimbă DOAR: v_f3_n/v_f3_nev declarate; SELECT-ul F3 (sumă doar din 'validat' + numărători);
--- ramura nouă „2. Corespondența … (F3) în care este cuprins;" fără total; 'f3_nevalidate' în rezultat. Restul = live.
+-- v6 (R5): față de live se schimbă DOAR: v_f3_n/v_f3_nev/v_f3_txt declarate; SELECT-ul F3 (filtrul qm, sumă doar din
+-- 'validat' + numărători); formatul ro-RO al totalului; ramura nouă „2. Corespondența … (F3) în care este cuprins;" fără
+-- total; 'f3_nevalidate' în rezultat. Restul = live.
 CREATE OR REPLACE FUNCTION public.ofertare_clarificare_planse_auto(p_licitatie_id bigint)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -74,7 +91,7 @@ DECLARE
   v_text text; v_lista text; v_det text; v_id bigint; v_nou boolean := false; v_resp uuid; v_nr int; v_noi int;
   v_antet constant text := 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe';
   v_standard boolean; v_tok text; v_det_fd text; v_ilizibile int; v_fara_date int;
-  v_f3_n int; v_f3_nev int;
+  v_f3_n int; v_f3_nev int; v_f3_txt text;
 BEGIN
   SELECT array_agg(id ORDER BY nume_original),
          array_agg(regexp_replace(nume_original, '\.pdf$', '', 'i') ORDER BY nume_original),
@@ -111,13 +128,22 @@ BEGIN
   IF v_ids IS NULL THEN RETURN jsonb_build_object('actiune','deja_trimise'); END IF;
 
   -- v6 (R5, Copilot 25.09.2026): cifra F3 citată AUTORITĂȚII vine DOAR din rânduri validate de om (status='validat').
-  -- Cât există rânduri F3 de conductă nevalidate (transcriere AI neverificată), textul cere corespondența FĂRĂ total.
-  SELECT round(sum(cantitate) FILTER (WHERE status = 'validat'), 1), count(*), count(*) FILTER (WHERE status <> 'validat')
+  -- Cât există rânduri F3 de rețea nevalidate (transcriere AI neverificată), textul cere corespondența FĂRĂ total.
+  -- Runda 4: setul = EXACT filtrul qm / lista_f3_m din v_ofertare_pt_stare (și din v_ofertare_cantitati_nevalidate, H2):
+  -- um='m', categorie conductă/rețea, fără „total” în obiect/denumire/sursa. Filtrul vechi (um m/ml/M, denumire
+  -- conduct/țeav/tub) lua și articole de deviz (lic. 5: +15 rânduri „M”, 1.227,89 m) și rândurile TOTAL (dublare).
+  SELECT round(sum(q.cantitate) FILTER (WHERE q.status = 'validat'), 1), count(*), count(*) FILTER (WHERE q.status <> 'validat')
     INTO v_f3, v_f3_n, v_f3_nev
-  FROM ofertare_cantitati
-  WHERE licitatie_id = p_licitatie_id AND tip_sursa = 'lista_f3'
-    AND lower(coalesce(um,'')) ~ '^m(l|\.l\.)?\.?$' AND denumire ~* '(conduct|teav|țeav|tub)';
+  FROM ofertare_cantitati q
+  WHERE q.licitatie_id = p_licitatie_id AND q.tip_sursa = 'lista_f3'
+    AND q.um = 'm' AND q.categorie ~* 'conduct|re[țt]ea'
+    AND (coalesce(q.obiect, '') || ' ' || coalesce(q.denumire, '') || ' ' || coalesce(q.sursa, '')) !~* 'total';
   IF v_f3_nev > 0 THEN v_f3 := NULL; END IF;
+  -- runda 4: format ro-RO neambiguu, independent de lc_numeric („,” și „.” din șablon sunt fixe, G/D ar urma locale-ul):
+  -- 6519.8 → „6.519,8”; 6520 → „6.520”. Live scria „7.747.7” (separatorul de mii și zecimalele = același punct).
+  v_f3_txt := CASE WHEN v_f3 IS NULL THEN NULL
+    WHEN v_f3 = trunc(v_f3) THEN translate(to_char(v_f3, 'FM999,999,999,990'), ',', '.')
+    ELSE translate(to_char(v_f3, 'FM999,999,999,990.0'), ',.', '.,') END;
 
   v_lista := array_to_string(v_nume, ', ');
   SELECT string_agg('   – ' || n, E'\n'), count(*) INTO v_det, v_ilizibile FROM unnest(v_nume, v_motive) t(n, m) WHERE m = 'ilizibil';
@@ -133,7 +159,7 @@ BEGIN
     '1. Lista tronsoanelor: denumire/capete tronson, lungime (m), diametru nominal, material și SDR, mod de pozare, subtraversări/traversări;' || E'\n' ||
     CASE WHEN coalesce(v_f3,0) > 0
       THEN '2. Corespondența fiecărui tronson cu poziția din lista de cantități (F3) în care este cuprins (lungimea totală de conductă din F3: ' ||
-           replace(to_char(v_f3, 'FM999G999G990D0'), ',', '.') || ' m);'
+           v_f3_txt || ' m);'
       WHEN v_f3_n > 0
       THEN '2. Corespondența fiecărui tronson cu poziția din lista de cantități (F3) în care este cuprins;'
       ELSE '2. Dacă documentația de atribuire cuprinde liste de cantități de lucrări pentru rețea (nu le-am identificat în documentația publicată) și, în caz afirmativ, publicarea acestora;'
