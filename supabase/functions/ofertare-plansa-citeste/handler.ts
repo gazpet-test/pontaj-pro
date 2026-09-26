@@ -35,7 +35,7 @@ const FELII_PE_RULARE = 4;
 const PARALEL = 2;
 const PARALEL_MAX = 4;
 const REINCERCARI = 2;
-const COD_VERSIUNE = '2026-09-26.15'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
+const COD_VERSIUNE = '2026-09-26.16'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
 const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
@@ -309,13 +309,25 @@ const DN_STANDARD = new Set([16,20,25,32,40,50,63,65,75,80,90,100,110,125,140,15
 // Pe „/” (grosimea peretelui: „De 225/20”, „De 180/16”) nu se aplică regula „descrescător cu ambele capete standard”: intervalul cu
 // „/” doar crescător („De 63/110”) sau cu prefix pe al doilea capăt („Dn110/Dn63”). Fără prefix, al doilea capăt al intervalului
 // trebuie să fie și el un Dn standard („De 110 - 120” = subtotal Dn110, nu interval).
+// runda 12 (verificatorul rundei 11, MAJOR — regresie TOTAL-b, fals-negativ): lista albă de mai sus respingea al doilea capăt al unui
+// interval CRESCĂTOR standard urmat de orice alt cuvânt („De 63 - 110 PEHD”, „De 63-110 (PE)”, „De 63 ÷ 110 pozate subteran”,
+// „De 63 - 110 conducte PE”) => subtotal Dn63: TOTAL-ul primea 200 m (sau rămânea pe cifra veche) și poziția Dn63 nu se insera.
+// Acum, pentru capătul FĂRĂ prefix al unui interval CRESCĂTOR cu ambele capete standard (a < b), se folosește o listă NEAGRĂ:
+// capătul e Dn, cu excepția zecimalelor și a unei unități / unui numărător după el (m, ml, metri, km, mp, %, buc, tronsoane,
+// branșamente, case, bar, kg, ore …). Lista albă strictă rămâne pentru capătul DESCRESCĂTOR și pentru elementele de listă
+// (fals-pozitivele rundei 10: „, 20 tronsoane”, „la 32 case”, „/ 16 bar”, „- 50 branșamente”, „De 225/20”).
+// Și (minor): descrescătorul fără prefix urmat de „mm” e grosimea peretelui („De 180 - 16 mm”, „De 225 - 20 mm”), nu interval.
 const PREF_DN = '(?:\\bdn|\\bde|ø|Ø|φ)';
 // cu prefix Dn, numărul E un Dn și când e urmat de o unitate („De 63 și De 110 m”: m e lungimea totalului); nu doar cu zecimale
 const NU_ZECIMALE = '(?![.,]\\d)';
 const URMARE_FARA_PREFIX = `${NU_ZECIMALE}(?=\\s*(?:$|[),;.:/÷–—+&…-]|mm\\b|(?:si|sau|la|pana|ol)\\b|pe(?:\\d|\\b)|sdr))`;
+// lista neagră (doar pentru capătul crescător fără prefix): zecimale sau o unitate / un numărător după număr
+const NU_UNITATE = `${NU_ZECIMALE}(?!\\s*(?:%|(?:m|ml|mc|mp|metri|metru|km|cm|buc|bucati|tronsoane|tronson|bransamente|bransament|case|bar|atm|kg|ore|zile|luni|ani)\\b))`;
 const SEP_INTERVAL = '\\s*(?:[-–—÷/]|\\.{2,3}|…|\\b(?:pana\\s+)?la\\b)\\s*';
 const SEP_LISTA = '\\s*(?:[,;+&]|\\bsi\\b|\\bsau\\b)\\s*';
-const CAPAT_2 = `(?:(${PREF_DN})\\s*(\\d{2,3})\\b${NU_ZECIMALE}|(\\d{2,3})\\b${URMARE_FARA_PREFIX})`;
+// grupuri: 3 prefixul capătului 2, 4 capătul cu prefix, 5 fără prefix urmat de „mm”, 6 fără prefix pe lista albă, 7 fără prefix pe
+// lista neagră (acceptat doar crescător, cu ambele capete standard)
+const CAPAT_2 = `(?:(${PREF_DN})\\s*(\\d{2,3})\\b${NU_ZECIMALE}|(\\d{2,3})\\b(?=\\s*mm\\b)|(\\d{2,3})\\b${URMARE_FARA_PREFIX}|(\\d{2,3})\\b${NU_UNITATE})`;
 const ELEM_LISTA = `(?:${PREF_DN}\\s*\\d{2,3}\\b${NU_ZECIMALE}|\\d{2,3}\\b${URMARE_FARA_PREFIX})`;
 const RE_DN_DENUMIRE = new RegExp(`${PREF_DN}\\s*(\\d{2,3})\\b(?:(${SEP_INTERVAL})${CAPAT_2})?((?:${SEP_LISTA}${ELEM_LISTA})*)`, 'gi');
 export function dnuriDenumire(s: unknown): { dn: number[]; interval: boolean } {
@@ -325,12 +337,14 @@ export function dnuriDenumire(s: unknown): { dn: number[]; interval: boolean } {
     const a = Number(m[1]);
     if (std(a)) dn.add(a);
     if (m[2]) {
-      const cuPrefix = !!m[3], b = Number(m[4] || m[5]);
-      const coboara = std(a) && std(b) && b !== a && (cuPrefix || !m[2].includes('/'));
-      // fără prefix, al doilea capăt trebuie să fie un Dn standard („De 110 - 120” nu e interval; „De 60–110” da)
-      if ((b > a && (cuPrefix || std(b))) || coboara) { interval = true; if (std(b)) dn.add(b); }
+      const cuPrefix = !!m[3], urmMm = !!m[5], slab = !!m[7], b = Number(m[4] || m[5] || m[6] || m[7]);
+      // fără prefix, al doilea capăt trebuie să fie un Dn standard („De 110 - 120” nu e interval; „De 60–110” da); pe lista neagră
+      // (capăt urmat de un cuvânt oarecare) și primul capăt trebuie să fie standard
+      const urca = b > a && (cuPrefix || (std(b) && (!slab || std(a))));
+      const coboara = !slab && std(a) && std(b) && b !== a && (cuPrefix || (!m[2].includes('/') && !urmMm));
+      if (urca || coboara) { interval = true; if (std(b)) dn.add(b); }
     }
-    for (const x of (m[6] || '').matchAll(/(\d{2,3})\b/g)) if (std(Number(x[1]))) dn.add(Number(x[1]));
+    for (const x of (m[8] || '').matchAll(/(\d{2,3})\b/g)) if (std(Number(x[1]))) dn.add(Number(x[1]));
   }
   return { dn: [...dn].sort((a, b) => a - b), interval };
 }
@@ -1180,17 +1194,34 @@ async function treciInCantitati(supa: any, doc: any, tronsoane: any[], nrPlansa:
   // poziția reală rămânea tăcut pe cifra veche); (2) minor — subtotalul cedează doar în favoarea pozițiilor COMPATIBILE ca material
   // (același material sau fără material; grupul fără material = oricare): „Total conducte OL De 110” lângă „Conductă PE Dn110”, cu
   // grupul OL, ia în continuare cifra OL (după filtrul pe material), nu o scrie peste poziția PE.
-  const eSubtotal = (r: any) => /^[^a-z]*(?:(?:[a-z]{1,2}|[ivxlc]+)[.)]\s*|(?:cap|art|poz|pct)\b\.?\s*[\w.]*\s*[-–.:)]?\s*)?(?:sub\s*-?\s*)?total\b/
+  // runda 12 (verificatorul rundei 11): (1) minor — pe ramura cu prefix („Cap.”, „Art.”, „Poz.”, „Pct.”) după prefix se acceptă doar
+  // un token de NUMEROTARE (cifre, cifre romane sau o literă), nu un cuvânt întreg: „Poz. conductă total PE Dn110” nu e subtotal;
+  // „total” poate continua cu litere („Totaluri conducte …”, ca pe 7065789). (2) MAJOR TOTAL-a — fail-safe STRUCTURAL în locul altor
+  // prefixe: dacă printre candidații rămași pe (Dn, material) e un rând cu „total” în denumire care NU e recunoscut ca subtotal
+  // („A.1 Total …”, „Lot 1 - Total …”, „Tronson A: Total …”, „Lungime totală conducte PE De 110”), compatibil ca material, lângă
+  // cel puțin încă o poziție compatibilă, filtrul pe material NU mai departajează: setul e AMBIGUU (vizibil în `ambigue`, nimic
+  // scris). Înainte, subtotalul nerecunoscut care purta materialul grupului lua cifra, iar poziția reală rămânea TĂCUT pe cifra veche.
+  // (3) minor — cu materialul grupului cunoscut, pozițiile de ALT material se scot din candidați când rămâne cel puțin una compatibilă
+  // (același material sau fără material): grupul OL cu „Conductă PE Dn110” + „Conductă distribuție gaze Dn110” merge pe a doua.
+  const eSubtotal = (r: any) => /^[^a-z]*(?:(?:[a-z]{1,2}|[ivxlc]+)[.)]\s*|(?:cap|art|poz|pct)\b\.?\s*(?:\d[\d.]*|[ivxlc]+|[a-z])\.?\s*[-–.:)]?\s*)?(?:sub\s*-?\s*)?total/
     .test(faraDiacritice(String(r.denumire || '')).toLowerCase());
+  const areTotal = (r: any) => /total/i.test(faraDiacritice(String(r.denumire || '')));
+  const compatibil = (mat: string) => (r: any) => !mat || !materialNorm(r.denumire) || materialNorm(r.denumire) === mat;
   const preferaFaraTotal = (cs: any[], mat: string) => {
     if (cs.length < 2) return cs;
     const f = cs.filter((r: any) => !eSubtotal(r));
-    const compatibil = (r: any) => !mat || !materialNorm(r.denumire) || materialNorm(r.denumire) === mat;
-    return f.length < cs.length && f.some(compatibil) ? f : cs;
+    return f.length < cs.length && f.some(compatibil(mat)) ? f : cs;
   };
   // candidații unui (Dn, material): întâi pozițiile fără „total” (subtotal), apoi — tot cu mai mulți — departajarea după material
   const candidatiPe = (dn: number, mat: string) => {
     let cs = preferaFaraTotal(retea.filter((r: any) => new RegExp(`(?:\\bdn|\\bde|ø|Ø|φ)\\s*${dn}\\b`, 'i').test(faraDiacritice(r.denumire || ''))), mat);
+    if (cs.length > 1 && mat) {
+      // runda 12 (3): doar pozițiile compatibile ca material, dacă există
+      const comp = cs.filter(compatibil(mat));
+      if (comp.length) cs = comp;
+    }
+    // runda 12 (2): un rând cu „total” nerecunoscut ca subtotal + încă o poziție compatibilă => ambiguu, fără departajare pe material
+    if (cs.length > 1 && cs.some((r: any) => areTotal(r) && !eSubtotal(r))) return cs;
     // mai multe poziții pe același diametru => încearcă să departajezi după material, înainte de „ambiguu"
     if (cs.length > 1 && mat) {
       const peMat = cs.filter((r: any) => materialNorm(r.denumire) === mat);

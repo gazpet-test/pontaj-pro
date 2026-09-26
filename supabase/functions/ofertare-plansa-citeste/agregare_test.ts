@@ -941,3 +941,29 @@ Deno.test('runda 11: dnuriDenumire — numărul FĂRĂ prefix Dn e Dn doar urmat
   assertEquals(dnuriDenumire('Total rețea Dn 63 - Dn 110 m'), { dn: [63, 110], interval: true })
   assertEquals(dnuriDenumire('Total rețea Dn 63 și 110 m'), { dn: [63], interval: false })
 })
+Deno.test('runda 12: dnuriDenumire — capătul CRESCĂTOR fără prefix, cu ambele capete standard, e Dn și urmat de alt cuvânt (listă neagră: zecimale / unități); descrescătorul și lista rămân pe lista albă; descrescător + „mm” = grosime', () => {
+  // 4c50dd2 (runda 11): { dn: [63], interval: false } => subtotal Dn63 (TOTAL-ul primea 200 m, Dn63 nu se insera); pe 7065789: interval
+  for (const s of ['Total rețea De 63 - 110 PEHD', 'Total rețea De 63-110 (PE)', 'Total rețea De 63 ÷ 110 pozate subteran', 'Total conducte De 63 - 110 conducte PE',
+    'Total rețea De 63 - 110 HDPE', 'Total rețea De 63 la 110 polietilenă', 'Total rețea Dn 63 până la 110 inclusiv'])
+    assertEquals(dnuriDenumire(s), { dn: [63, 110], interval: true }, s)
+  // lista neagră: zecimale sau unitate / numărător după capăt => nu e Dn (subtotal pe primul Dn)
+  for (const [s, dn] of [['Total conducte De 110 - 125 bar', 110], ['Total conducte De 110 - 160 buc', 110], ['Total conducte De 110 - 125 %', 110],
+    ['Total conducte De 63 - 110 tronsoane', 63], ['Total conducte De 63 - 110 m', 63], ['Total conducte De 63 - 110 metri', 63], ['Total conducte De 63 - 110 branșamente', 63],
+    ['Total conducte De 63 - 110 ml', 63], ['Total conducte De 63 - 110 km', 63], ['Total conducte De 63 - 110 case', 63], ['Total conducte De 110 - 160,5 PE', 110]] as [string, number][])
+    assertEquals(dnuriDenumire(s), { dn: [dn], interval: false }, s)
+  // lista neagră doar cu AMBELE capete standard (primul nestandard: nimic interval)
+  assertEquals(dnuriDenumire('Total conducte De 60 - 110 conducte'), { dn: [], interval: false })
+  // DESCRESCĂTOR fără prefix: tot lista albă — urmat de un cuvânt oarecare nu e interval; urmat de „ol” da
+  assertEquals(dnuriDenumire('Total conducte De 110 - 63 pozate'), { dn: [110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea Dn 110 - 63 OL'), { dn: [63, 110], interval: true })
+  // descrescător fără prefix urmat de „mm” = grosimea peretelui (minorul (1)); crescător cu „mm” și descrescător CU prefix rămân interval
+  assertEquals(dnuriDenumire('Total conducte De 180 - 16 mm'), { dn: [180], interval: false })
+  assertEquals(dnuriDenumire('Total conducte De 225 - 20 mm'), { dn: [225], interval: false })
+  assertEquals(dnuriDenumire('Total rețea De 63 - 110 mm'), { dn: [63, 110], interval: true })
+  assertEquals(dnuriDenumire('Total rețea Dn 110 - Dn 63 mm'), { dn: [63, 110], interval: true })
+  // lista albă a elementelor de listă: „&”, „÷”, „până”, „pe” doar ca material (nu „pentru”)
+  assertEquals(dnuriDenumire('Total rețea Dn 63, 90 & 110'), { dn: [63, 90, 110], interval: false })
+  assertEquals(dnuriDenumire('Total rețea Dn 32, 63 ÷ 110'), { dn: [32, 63], interval: false }, '≥ 2 Dn => TOTAL (110 după „÷” din listă nu se mai citește)')
+  assertEquals(dnuriDenumire('Total rețea Dn 110 și 90 până la 63'), { dn: [90, 110], interval: false }, '≥ 2 Dn => TOTAL')
+  assertEquals(dnuriDenumire('Total conducte De 110, 20 pentru branșamente'), { dn: [110], interval: false })
+})
