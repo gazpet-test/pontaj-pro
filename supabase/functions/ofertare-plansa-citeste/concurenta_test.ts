@@ -842,6 +842,9 @@ Deno.test('identitate 470: retransfer peste 1751–1756 -> doar 1756 (Dn40) prim
   assertEquals([j.sumar.total_sigur_m, j.sumar.total_de_verificat_m, j.sumar.conflicte, j.sumar.randuri_fara_identitate_n], [48905, 0, [], 0])
   assertEquals(j.sumar.identitate_randuri, { lecturi_tabel: 152, randuri_sigure: 133, prin_nr: 133, prin_pozitie: 0, fara_identitate: 0, conflicte: 0 })
   assertEquals([j.sumar.lungime_totala_m, j.sumar.tronsoane_gasite], [48795, 132], '48.905 − Nr 57 (Dn60 nestandard, 110 m)')
+  // runda 5: pe 470 curat toate perechile z?_6+z?_7 au același număr de rânduri => niciun semnal „în afara suprapunerii”
+  assertEquals([j.sumar.perechi_neimperecheate, j.sumar.perechi_neimperecheate_n], [undefined, undefined])
+  assert(!j.sumar.avertismente.some((a: string) => a.includes('în afara suprapunerii')), j.sumar.avertismente.join(' | '))
   assertEquals([j.sumar.diametre_nestandard, j.sumar.nestandard_m], [[60], 110])
   assertEquals(j.cantitati.pe_diametre, { Dn200: 17785, Dn125: 2275, Dn110: 780, Dn90: 4545, Dn63: 9670, Dn40: 13740 })
   assertEquals([j.cantitati.adaugate, j.cantitati.actualizate], [0, 6], 'niciun rând nou; cele 6 existente primesc patch')
@@ -888,7 +891,7 @@ Deno.test('identitate: transfer cu rânduri „de verificat” -> doar cele sigu
   // runda 4: pe un Dn cu rânduri de verificat, poziția nouă (doar partea sigură) intră „diferenta”, nu „extras”
   assertEquals(rows[0].status, 'diferenta')
   assertEquals(rows[0].diferenta_nota, 'Diametru care nu apare în cantitățile din memoriu. 1 tronsoane citite din tabelul planșei. De verificat, NEincluse în cifra din planșă: ' +
-    '1 rând Dn40 fără identitate sigură (250 m); 1 conflict Dn40 (până la 330 m); pe planșă: 1 rând de tabel fără identitate sigură (250 m); 1 conflict (același rând citit diferit: Nr 2 320 m Dn40 / 330 m Dn40).')
+    '1 rând Dn40 PE fără identitate sigură (250 m); 1 conflict Dn40 PE (până la 330 m); pe planșă: 1 rând de tabel fără identitate sigură (250 m); 1 conflict (același rând citit diferit: Nr 2 320 m Dn40 / 330 m Dn40).')
   assert(rows[0].diferenta_nota.includes('1 conflict (același rând citit diferit: Nr 2 320 m Dn40 / 330 m Dn40)'), rows[0].diferenta_nota)
   assert(j.sumar.avertismente.includes('1 rând de tabel fără identitate sigură și 1 conflict (același rând citit cu valori diferite): 580 m de verificat — NU intră în cantități'), j.sumar.avertismente.join(' | '))
   assertEquals(j.sumar.randuri_fara_identitate, [{ zona: 'z1_1', de_la: 'C', la: 'CT', lungime_m: 250, diametru_mm: 40, debit_mch: null, motiv: 'Nr lipsă sau ilizibil pe rând' }])
@@ -935,15 +938,15 @@ Deno.test('runda 4 transfer: Dn cu toate rândurile de verificat -> nota pe pozi
   const pe = ' Pe planșă: 3 rânduri de tabel fără identitate sigură (10.950 m).'
   // id 1 (status „diferenta”, pus de o citire anterioară): cifra veche rămâne, dar nota o NUMEȘTE ca veche (a800d38: „NOTA VECHE Dn250”)
   assertEquals([id(1).cantitate, id(1).cantitate_plansa, id(1).status], [23630, 34465, 'diferenta'])
-  assertEquals(id(1).diferenta_nota, 'De verificat: 2 rânduri Dn250 fără identitate sigură (10.350 m); cifra din planșă nu s-a actualizat (34.465 m e dintr-o citire anterioară).' + pe)
+  assertEquals(id(1).diferenta_nota, 'De verificat: 2 rânduri Dn250 PE fără identitate sigură (10.350 m); cifra din planșă nu s-a actualizat (34.465 m e dintr-o citire anterioară).' + pe)
   // id 2 („extras”, nevalidată): cifra veche din planșă se golește, status „diferenta”
   assertEquals([id(2).cantitate, id(2).cantitate_plansa, id(2).status], [1100, null, 'diferenta'])
-  assertEquals(id(2).diferenta_nota, 'De verificat: 1 rând Dn180 fără identitate sigură (600 m); cifra din planșă s-a golit (era 2.210 m, dintr-o citire anterioară).' + pe)
+  assertEquals(id(2).diferenta_nota, 'De verificat: 1 rând Dn180 PE fără identitate sigură (600 m); cifra din planșă s-a golit (era 2.210 m, dintr-o citire anterioară).' + pe)
   // id 3 (sigur) și TOTAL: doar partea sigură, restul numit
   assertEquals([id(3).cantitate_plansa, id(3).status], [1740, 'validat'])
   assertEquals([id(4).cantitate_plansa, id(4).status], [1740, 'validat'])
   assert(id(4).diferenta_nota.endsWith('De verificat, NEincluse în cifra din planșă: pe planșă: 3 rânduri de tabel fără identitate sigură (10.950 m).'), id(4).diferenta_nota)
-  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, pozitie_id: 1, actiune: 'nota' }, { dn: 180, pozitie_id: 2, actiune: 'golit' }])
+  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, material: 'PE', pozitie_id: 1, actiune: 'nota' }, { dn: 180, material: 'PE', pozitie_id: 2, actiune: 'golit' }])
 })
 Deno.test('runda 4 transfer: NICIUN rând sigur pe planșă -> fără early-return: pozițiile și TOTAL primesc nota / golirea, TOTAL nu devine 0', async () => {
   const { supa, n, tabele } = await lic3([
@@ -963,10 +966,133 @@ Deno.test('runda 4 transfer: NICIUN rând sigur pe planșă -> fără early-retu
   const id = (k: number) => rows.find((x: any) => x.id === k)
   const pe = ' Pe planșă: 1 rând de tabel fără identitate sigură (5.550 m); 1 conflict (același rând citit diferit: Nr 1 4.800 m Dn250 / 4.900 m Dn250).'
   assertEquals([id(1).cantitate, id(1).cantitate_plansa, id(1).status], [23630, null, 'diferenta'])
-  assertEquals(id(1).diferenta_nota, 'De verificat: 1 rând Dn250 fără identitate sigură (5.550 m); 1 conflict Dn250 (până la 4.900 m); cifra din planșă s-a golit (era 34.465 m, dintr-o citire anterioară).' + pe)
+  assertEquals(id(1).diferenta_nota, 'De verificat: 1 rând Dn250 PE fără identitate sigură (5.550 m); 1 conflict Dn250 PE (până la 4.900 m); cifra din planșă s-a golit (era 34.465 m, dintr-o citire anterioară).' + pe)
   // TOTAL validat: nu primește 0 m; cifra veche e numită ca veche
   assertEquals([id(4).cantitate_plansa, id(4).status], [34465, 'validat'])
   assertEquals(id(4).diferenta_nota, 'De verificat: nicio lungime sigură cu Dn standard pe planșa „pl1.1.pdf”; cifra din planșă nu s-a actualizat (34.465 m e dintr-o citire anterioară).' + pe)
-  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, pozitie_id: 1, actiune: 'golit' }])
+  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 250, material: 'PE', pozitie_id: 1, actiune: 'golit' }])
   assertEquals(n.rpc, 1, 'transferul rulează (a800d38: early-return, 0 scrieri, nota veche rămânea)')
+})
+
+// ---- 26.09.2026 — runda 5 (verificator runda 4): regresie prin handler + RPC simulat. Fiecare pică pe a9fe186. ----
+async function transfer470(mut: (et: string, r: any) => any) {
+  const { raspuns470, AZI_470 } = await import('./fixture_470.ts')
+  const Z = ['1_6', '1_7', '2_6', '2_7', '3_6', '3_7', '4_6', '4_7']
+  const pl = { ...PLANSA, zone_asteptate: Z, acoperire_demonstrata: true }
+  const { supa, n, tabele } = supaCu({ id: 470, licitatie_id: 95, nume_original: 'Schema.pdf', analiza: { plansa: pl } }, Z)
+  const ids: Record<string, number> = { Dn200: 1751, Dn125: 1752, Dn110: 1753, Dn90: 1754, Dn63: 1755, Dn40: 1756 }
+  for (const [dn, id] of Object.entries(ids)) await tabele.from('ofertare_cantitati').insert({ id, licitatie_id: 95, denumire: `Conductă distribuție gaze ${dn}`, um: 'm',
+    cantitate: AZI_470[dn], cantitate_plansa: AZI_470[dn], status: 'extras', extras_de_ai: true, sursa: 'Planșa 1 — tabel', diferenta_nota: 'veche' })
+  const ai = (async (_u: unknown, init?: RequestInit) => {
+    n.ai++
+    const et = /Bucata (\S+)/.exec(JSON.parse(String(init?.body || '{}')).messages?.[0]?.content?.find((c: any) => c.type === 'text')?.text || '')?.[1] || '?'
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(mut(et, structuredClone(raspuns470(et)))) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })
+  }) as typeof fetch
+  let j: any = null
+  for (let runde = 0; runde < 4; runde++) {
+    const r = await handler(cerereSvc(runde === 0 ? { doc_id: 470, de_la: 0 } : { doc_id: 470, mod: 'continua' }), svc(n, ai, supa))
+    assertEquals(r.status, 200)
+    j = await r.json(); if (!j.continua) break
+  }
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  return { j, id: (k: number) => rows.find((x: any) => x.id === k) }
+}
+Deno.test('runda 5 BLOCANT E2E (470, V4): z1_7 cu antete transcrise altfel -> fără umflare tăcută în cantitate_plansa (a9fe186: Dn40 14.720, Dn110 1.000, „diferență” falsă)', async () => {
+  const ren: Record<string, string> = { 'Strada': 'Denumire strada', 'Str. De la': 'De la strada', 'Str. Pana la': 'Pana la strada' }
+  const { j, id } = await transfer470((et, r) => {
+    if (et !== 'z1_7') return r
+    r.tabele[0].coloane = r.tabele[0].coloane.map((c: string) => ren[c] || c)
+    r.tabele[0].randuri = r.tabele[0].randuri.map((rw: any) => Object.fromEntries(Object.entries(rw).map(([k, v]) => [ren[k] || k, v])))
+    return r
+  })
+  assertEquals([j.sumar.total_sigur_m, j.sumar.total_de_verificat_m, j.sumar.randuri_fara_identitate_n], [24235, 25870, 37], 'a9fe186: 50.105 / 0 / 0')
+  assertEquals(j.sumar.identitate_randuri.prin_pozitie, 0)
+  // Dn40: doar partea sigură (benzile 2–4), „diferenta”, iar nota numește rândurile de verificat — nu +1.580 m „față de memoriu”
+  assertEquals([id(1756).cantitate, id(1756).cantitate_plansa, id(1756).status], [13140, 10440, 'diferenta'])
+  assert(id(1756).diferenta_nota.includes('De verificat, NEincluse în cifra din planșă: 13 rânduri Dn40 fără identitate sigură'), id(1756).diferenta_nota)
+  assertEquals(id(1753).cantitate_plansa, 450, 'a9fe186: 1.000 (Dn110 umflat cu 220 m)')
+  // Dn200: toate cele 8 rânduri sunt în z1_7 => nicio cifră sigură: poziția „extras” se golește, cu notă
+  assertEquals([id(1751).cantitate_plansa, id(1751).status], [null, 'diferenta'])
+  assert(id(1751).diferenta_nota.startsWith('De verificat: 8 rânduri Dn200 fără identitate sigură (17.785 m); cifra din planșă s-a golit (era 17.785 m'), id(1751).diferenta_nota)
+  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 200, material: null, pozitie_id: 1751, actiune: 'golit' }])
+})
+Deno.test('runda 5 (minor): rânduri în afara suprapunerii -> sumar.perechi_neimperecheate + avertisment (a9fe186: doar în idr, invizibil)', async () => {
+  // Nr 38 transcris în plus la baza lui z1_7 (z1_6 îl are tăiat): perechea z1_6+z1_7 are 37 / 38 de rânduri
+  const { raspuns470 } = await import('./fixture_470.ts')
+  const z26 = raspuns470('z2_6'), z27 = raspuns470('z2_7')
+  const k = z26.tabele[0].randuri.findIndex((x: any) => x['Nr crt'] === '38')
+  const { j } = await transfer470((et, r) => {
+    if (et === 'z1_7') { r.tabele[0].randuri.push(structuredClone(z27.tabele[0].randuri[k])); r.tronsoane.push(structuredClone(z27.tronsoane[k])) }
+    return r
+  })
+  assertEquals([j.sumar.total_sigur_m, j.sumar.randuri_fara_identitate_n], [48905, 1])
+  assertEquals(j.sumar.perechi_neimperecheate, [{ a: 'z1_6', b: 'z1_7', delta: 0, prin: 'câmp comun + ordine', randuri: [37, 38], neimperecheate: [0, 1] }])
+  assertEquals(j.sumar.perechi_neimperecheate_n, 1)
+  assert(j.sumar.avertismente.includes('1 pereche de felii vecine cu rânduri în afara suprapunerii (z1_6+z1_7: 0/1) — rândurile acelea nu s-au legat între felii ' +
+    '(margine tăiată sau rând omis la citire); vezi „de verificat” și „Nr fără lungime”'), j.sumar.avertismente.join(' | '))
+})
+Deno.test('runda 5 MAJOR transfer: Dn110 PE sigur + Dn110 OL doar de verificat, poziții separate PE / OL -> poziția OL golită cu notă (a9fe186: 900 m „extras”, „VECHE OL”)', async () => {
+  const { supa, n, tabele } = await lic3([
+    { id: 11, denumire: 'Țeavă PE100 Dn110', cantitate: 500, cantitate_plansa: 500, status: 'extras', diferenta_nota: 'VECHE PE' },
+    { id: 12, denumire: 'Țeavă OL Dn110 subtraversare', cantitate: 80, cantitate_plansa: 900, status: 'extras', diferenta_nota: 'VECHE OL' },
+  ])
+  const COLM = ['Nr crt', 'De la', 'La', 'Dn', 'Material', 'L (km)']
+  const rd = (nr: string, dl: string, mat: string, L: string) => ({ 'Nr crt': nr, 'De la': dl, 'La': 'CT', 'Dn': '110', 'Material': mat, 'L (km)': L })
+  const tr = (dl: string, mat: string, L: number) => ({ de_la: dl, la: 'CT', lungime_m: L, diametru_mm: 110, material: mat, sursa: 'tabel' })
+  const ai = aiFelii(n, { z1_1: { tronsoane: [tr('A', 'PE100', 500), tr('B', 'OL', 90)], tabele: [{ denumire: 'D', coloane: COLM, randuri: [rd('1', 'A', 'PE100', '0,5'), rd('?', 'B', 'OL', '0,09')] }] } })
+  const r = await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))
+  assertEquals(r.status, 200)
+  const j = await r.json()
+  assertEquals(j.cantitati.pe_diametre, { 'Dn110 PE': 500 })
+  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 110, material: 'OL', pozitie_id: 12, actiune: 'golit' }], 'a9fe186: lipsă (Dn110 „acoperit” de PE)')
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  const id = (k: number) => rows.find((x: any) => x.id === k)
+  const pe = ' Pe planșă: 1 rând de tabel fără identitate sigură (90 m).'
+  assertEquals([id(12).cantitate, id(12).cantitate_plansa, id(12).status], [80, null, 'diferenta'])
+  assertEquals(id(12).diferenta_nota, 'De verificat: 1 rând Dn110 OL fără identitate sigură (90 m); cifra din planșă s-a golit (era 900 m, dintr-o citire anterioară).' + pe)
+  // poziția PE: cifra sigură, fără rândul OL în nota ei pe Dn (doar pe planșă)
+  assertEquals([id(11).cantitate_plansa, id(11).status], [500, 'extras'])
+  assertEquals(id(11).diferenta_nota, 'Planșa „PL1.1.pdf” confirmă: 500 m. De verificat, NEincluse în cifra din planșă: pe planșă: 1 rând de tabel fără identitate sigură (90 m).')
+})
+Deno.test('runda 5 MAJOR transfer: o singură poziție Dn110 (fără material) + Dn110 PE sigur + Dn110 OL de verificat -> cifra PE + nota OL + „diferenta”', async () => {
+  // memoriul = 500 (egal cu partea sigură PE): „diferenta” vine DOAR din rândul OL de verificat de pe aceeași poziție
+  const { supa, n, tabele } = await lic3([{ id: 21, denumire: 'Conductă Dn110', cantitate: 500, cantitate_plansa: 590, status: 'extras', diferenta_nota: 'VECHE' }])
+  const COLM = ['Nr crt', 'De la', 'La', 'Dn', 'Material', 'L (km)']
+  const rd = (nr: string, dl: string, mat: string, L: string) => ({ 'Nr crt': nr, 'De la': dl, 'La': 'CT', 'Dn': '110', 'Material': mat, 'L (km)': L })
+  const tr = (dl: string, mat: string, L: number) => ({ de_la: dl, la: 'CT', lungime_m: L, diametru_mm: 110, material: mat, sursa: 'tabel' })
+  const ai = aiFelii(n, { z1_1: { tronsoane: [tr('A', 'PE100', 500), tr('B', 'OL', 90)], tabele: [{ denumire: 'D', coloane: COLM, randuri: [rd('1', 'A', 'PE100', '0,5'), rd('?', 'B', 'OL', '0,09')] }] } })
+  const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))).json()
+  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 110, material: 'OL', pozitie_id: 21, actiune: 'nota' }])
+  const x = (await tabele.from('ofertare_cantitati').select()).data.find((y: any) => y.id === 21)
+  assertEquals([x.cantitate_plansa, x.status], [500, 'diferenta'])
+  assertEquals(x.diferenta_nota, 'Planșa „PL1.1.pdf” confirmă: 500 m. De verificat, NEincluse în cifra din planșă: pe planșă: 1 rând de tabel fără identitate sigură (90 m).' +
+    ' De verificat (Dn110 OL, fără nicio cifră sigură): 1 rând Dn110 OL fără identitate sigură (90 m).')
+})
+Deno.test('runda 5 (minor) transfer: TOTAL „extras” cu rest de verificat pe planșă -> „diferenta” (a9fe186: rămânea „extras” cu cifra parțială)', async () => {
+  const { supa, n, tabele } = await lic3([
+    { id: 3, denumire: 'Țeavă PE100 SDR11 Dn160', cantitate: 1740, cantitate_plansa: 1740, status: 'validat', diferenta_nota: 'VECHE Dn160' },
+    { id: 4, denumire: 'TOTAL rețea distribuție', cantitate: 2340, cantitate_plansa: 2340, status: 'extras', diferenta_nota: 'VECHE TOTAL' },
+  ])
+  const ai = aiFelii(n, { z1_1: { tronsoane: [trT('C', 160, 1740), trT('D', 180, 600)],
+    tabele: [{ denumire: 'Dimensionare', coloane: COLT, randuri: [rdT('3', 'C', '160', '1,74'), rdT('', 'D', '180', '0,6')] }] } })
+  const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))).json()
+  assertEquals([j.sumar.total_sigur_m, j.sumar.total_de_verificat_m], [1740, 600])
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  const t = rows.find((y: any) => y.id === 4)
+  assertEquals([t.cantitate, t.cantitate_plansa, t.status], [2340, 1740, 'diferenta'], 'a9fe186: 1.740 „extras”')
+  assertEquals(t.diferenta_nota, 'Memoriu 2.340 m vs planșa „pl1.1.pdf” 1.740 m. De verificat, NEincluse în cifra din planșă: pe planșă: 1 rând de tabel fără identitate sigură (600 m).')
+  // Dn160 validat: cifra sigură, decizia omului rămâne
+  assertEquals([rows.find((y: any) => y.id === 3).cantitate_plansa, rows.find((y: any) => y.id === 3).status], [1740, 'validat'])
+})
+Deno.test('runda 5 transfer: grup sigur ambiguu (două poziții Dn110 PE) -> nimic scris, iar `ambigue` numește și restul de verificat de pe (Dn, material)', async () => {
+  const { supa, n, tabele } = await lic3([
+    { id: 31, denumire: 'Țeavă PE100 Dn110 — sat A', cantitate: 300, cantitate_plansa: 300, status: 'extras', diferenta_nota: 'VECHE A' },
+    { id: 32, denumire: 'Țeavă PE100 Dn110 — sat B', cantitate: 200, cantitate_plansa: 200, status: 'extras', diferenta_nota: 'VECHE B' },
+  ])
+  const ai = aiFelii(n, { z1_1: { tronsoane: [trT('A', 110, 500), trT('B', 110, 90)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'A', '110', '0,5'), rdT('?', 'B', '110', '0,09')] }] } })
+  const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))).json()
+  assertEquals(j.cantitati.ambigue, [{ dn: 110, material: 'PE', metri: 500, de_verificat: '1 rând Dn110 PE fără identitate sigură (90 m)',
+    pozitii: [{ id: 31, denumire: 'Țeavă PE100 Dn110 — sat A' }, { id: 32, denumire: 'Țeavă PE100 Dn110 — sat B' }] }])
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  assertEquals(rows.map((x: any) => [x.id, x.cantitate_plansa, x.status, x.diferenta_nota]), [[31, 300, 'extras', 'VECHE A'], [32, 200, 'extras', 'VECHE B']])
 })

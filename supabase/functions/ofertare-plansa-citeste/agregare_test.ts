@@ -3,8 +3,8 @@
 // + IDENTITATEA RÂNDULUI de tabel (doc, pagină, tabel, Nr) în locul dedup-ului pe text/multiset (Copilot, runda 3) —
 //   cazuri sintetice + fixture reală din planșa 470 (fixture_470.ts, z?_6 cu Nr + z?_7 cu lungimi).
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { agregaTronsoane, identificaRanduri, MOTIV_AFARA_NR, MOTIV_DN_ABSENT, notaRestTransfer, nrRand } from './handler.ts'
-import { AZI_470, feliiDin470 } from './fixture_470.ts'
+import { agregaTronsoane, identificaRanduri, MOTIV_AFARA_NR, MOTIV_COLOANA_NR, MOTIV_DN_ABSENT, notaRestTransfer, nrRand } from './handler.ts'
+import { AZI_470, feliiDin470, RANDURI_Z6 } from './fixture_470.ts'
 
 const total = (l: any[]) => l.reduce((s, t) => s + t.lungime_m, 0)
 
@@ -215,7 +215,7 @@ Deno.test('identitate (6) fixture 470: 133 rânduri, toate cu identitate sigură
   assertEquals([pc.length, L(pc)], [132, 48795])
   assertEquals(a.pentruCantitati.filter((t: any) => !DN.has(t.diametru_mm)).map((t: any) => [t._nr, t.diametru_mm, t.lungime_m]), [['57', 60, 110]])
   const rest = notaRestTransfer(r, a.pentruCantitati.filter((t: any) => !DN.has(t.diametru_mm)))
-  assertEquals(rest, { peDn: {}, global: 'Dn nestandard Dn60: 110 m' })
+  assertEquals(rest, { peDnMat: {}, global: 'Dn nestandard Dn60: 110 m' })
 })
 Deno.test('identitate (6b) fixture 470 fără coloana Nr (z?_6 lipsă) => nimic sigur, totul de verificat (nu 48.195 pe text)', () => {
   const r = identificaRanduri(feliiDin470().filter((f) => f.eticheta.endsWith('_7')), { doc: 470 })
@@ -334,4 +334,59 @@ Deno.test('runda 4: Nr fără nicio lungime (felia cu L a pierdut rândul de mar
   assertEquals([r.sigure.length, r.total_sigur_m, r.faraIdentitate.length], [3, 600, 0])
   assertEquals(r.nrFaraLungime, [{ nr: '4', zona: 'z1_6' }])
   assertEquals(r.perechi[0].neimperecheate, [1, 0])
+})
+
+// ---- 26.09.2026 — runda 5 (verificator runda 4): teste adversariale devenite regresie. Fiecare pică pe a9fe186. ----
+// BLOCANT: fix-ul din runda 4 (`grupCuNr`) vedea doar fragmentele împerecheate REUȘIT. Când felia cu Nr din banda 1 lipsește sau
+// are antete transcrise altfel, cele 37 de rânduri din z1_7 primeau „poz z1_7.t1#k”, iar Nr 32–37 (suprapunerea cu banda 2,
+// 1.200 m) se numărau încă o dată prin Nr: 139 de rânduri / 50.105 m sigur, 0 de verificat, fără niciun semnal.
+const PLANSA470 = { zone_geom: { '1_6': [7040, 0, 1600, 1600, 0], '1_7': [7762, 0, 1600, 1600, 0], '2_6': [7040, 1408, 1600, 1600, 0], '2_7': [7762, 1408, 1600, 1600, 0],
+  '3_6': [7040, 2816, 1600, 1600, 0], '3_7': [7762, 2816, 1600, 1600, 0], '4_6': [7040, 4224, 1600, 1600, 0], '4_7': [7762, 4224, 1600, 1600, 0] }, surse_geom: [{ pagina: 1 }] }
+const REDENUMIT: Record<string, string> = { 'Strada': 'Denumire strada', 'Str. De la': 'De la strada', 'Str. Pana la': 'Pana la strada' }
+const V470: [string, (f: any[]) => void][] = [
+  ['V1: z1_6 fără tabel transcris (fără eroare)', (f) => { f.find((x) => x.eticheta === 'z1_6').tabele = [] }],
+  ['V2: z1_6 cu antete transcrise altfel (nicio coloană comună cu z1_7)', (f) => {
+    const t = f.find((x) => x.eticheta === 'z1_6').tabele[0]
+    t.coloane = ['Nr crt', 'Nod plecare', 'Nod sosire', 'Localitate', 'Denumire strada', 'De la strada', 'Pana la strada']
+    t.randuri = RANDURI_Z6.z1_6.map(([nr, st, dl, pl]) => ({ 'Nr crt': nr, 'Denumire strada': st, 'De la strada': dl, 'Pana la strada': pl }))
+  }],
+  ['V3: z1_6 căzută (eroare)', (f) => { f.find((x) => x.eticheta === 'z1_6').eroare = 'timeout' }],
+  ['V4: z1_7 cu antete transcrise altfel, z1_6 normal', (f) => {
+    const t = f.find((x) => x.eticheta === 'z1_7').tabele[0]
+    t.coloane = t.coloane.map((c: string) => REDENUMIT[c] || c)
+    t.randuri = t.randuri.map((rw: any) => Object.fromEntries(Object.entries(rw).map(([k, v]) => [REDENUMIT[k] || k, v])))
+  }],
+]
+for (const [nume, mut] of V470) {
+  Deno.test(`runda 5 BLOCANT (fixture 470) ${nume} => z1_7 la „de verificat”, fără dublarea Nr 32–37 (a9fe186: 139 / 50.105 m sigur)`, () => {
+    const f: any[] = feliiDin470(); mut(f)
+    const r = identificaRanduri(f, { doc: 470, plansa: PLANSA470 })
+    assertEquals([r.sigure.length, r.total_sigur_m, r.prin.pozitie], [102, 24235, 0], 'a9fe186: 139 / 50.105 m, 37 prin poziție')
+    assertEquals([r.faraIdentitate.length, r.total_de_verificat_m, r.conflicte.length], [37, 25870, 0])
+    assert(r.faraIdentitate.every((t) => t._zona === 'z1_7' && t._motiv === MOTIV_COLOANA_NR), r.faraIdentitate[0]._motiv)
+    // benzile 2–4 rămân pe Nr (Nr 32–133), iar sigur + de verificat − suprapunerea Nr 32–37 (1.200 m) = totalul de referință
+    assertEquals(r.sigure.map((t) => Number(t._nr)).sort((a, b) => a - b), Array.from({ length: 102 }, (_, i) => i + 32))
+    assertEquals(+(r.total_sigur_m + r.total_de_verificat_m - 1200).toFixed(1), 48905)
+  })
+}
+Deno.test('runda 5 BLOCANT (sintetic): tabel pe 3 coloane de felii (Nr în z?_5, L în z?_7), banda 1 fără mijloc => z1_7 de verificat; tabelul fără Nr din z1_2 rămâne pe poziție', () => {
+  // banda 2: z2_5 (Nr) — z2_6 (Strada ↔ Pana la) — z2_7 (L) împerecheate în lanț; banda 1: z1_6 netranscrisă. Fragmentul cu Nr e la 2
+  // coloane de z1_7 (proba verificatorului, |Δc| ≤ 1 față de fragmentul cu Nr, nu-l prinde); coloana 7 e însă a tabelului cu Nr (z2_7).
+  const C5 = ['Nr crt', 'Sat', 'Strada'], C6x = ['Strada', 'Str. De la', 'Str. Pana la'], C7x = ['Str. Pana la', 'Dn ales (mm)', 'Debit mc/h', 'Lungime Km']
+  const f5 = (xs: Rd[]) => xs.map(([nr, st]) => ({ 'Nr crt': nr, 'Sat': 'S', 'Strada': st }))
+  const f6 = (xs: Rd[]) => xs.map(([nr, st]) => ({ 'Strada': st, 'Str. De la': 'N' + nr, 'Str. Pana la': 'N' + (Number(nr) + 1) }))
+  const f7 = (xs: Rd[]) => xs.map(([nr, , L]) => ({ 'Str. Pana la': 'N' + (Number(nr) + 1), 'Dn ales (mm)': '63', 'Debit mc/h': '10', 'Lungime Km': String(L / 1000).replace('.', ',') }))
+  const b1 = RR.slice(0, 4), b2 = RR.slice(2, 5)
+  const CX = ['Localitate', 'Tronson - Plecare', 'Tronson - Sosire', 'Lung. Trs. Km', 'Dn-ul de ales mm (ext)']
+  const control = { eticheta: 'z1_2', tabele: [{ denumire: 'Calcul X', coloane: CX, randuri: [
+    { 'Localitate': 'X', 'Tronson - Plecare': 'A', 'Tronson - Sosire': 'B', 'Lung. Trs. Km': '0,3', 'Dn-ul de ales mm (ext)': '40' },
+    { 'Localitate': 'X', 'Tronson - Plecare': 'B', 'Tronson - Sosire': 'C', 'Lung. Trs. Km': '0,2', 'Dn-ul de ales mm (ext)': '63' }] }],
+    tronsoane: [{ de_la: 'A', la: 'B', lungime_m: 300, diametru_mm: 40, zona: 'X', sursa: 'tabel' }, { de_la: 'B', la: 'C', lungime_m: 200, diametru_mm: 63, zona: 'X', sursa: 'tabel' }] }
+  const r = identificaRanduri([control, felieTab('z1_5', f5(b1), [], C5), felieTab('z1_7', f7(b1), t7(b1), C7x),
+    felieTab('z2_5', f5(b2), [], C5), felieTab('z2_6', f6(b2), [], C6x), felieTab('z2_7', f7(b2), t7(b2), C7x)], { doc: 1 })
+  assertEquals(r.perechi.map((p) => `${p.a}+${p.b}:${p.delta}`), ['z2_5+z2_6:0', 'z2_6+z2_7:0'])
+  assertEquals(r.sigure.map((t) => t._nr ?? t._identitate.split('|').pop()), ['3', '4', '5', 'poz z1_2.t1#1', 'poz z1_2.t1#2'])
+  assertEquals(r.total_sigur_m, 1700, 'a9fe186 (și proba |Δc| ≤ 1): 2.700 m — Nr 3 și 4 numărate o dată prin poziție (z1_7) și o dată prin Nr (banda 2)')
+  assertEquals(r.faraIdentitate.map((t) => [t._zona, t.lungime_m, t._motiv]), b1.map(([, , L]) => ['z1_7', L, MOTIV_COLOANA_NR]))
+  assertEquals(r.total_de_verificat_m, 1000)
 })
