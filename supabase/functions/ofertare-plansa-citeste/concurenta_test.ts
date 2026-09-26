@@ -995,7 +995,7 @@ async function transfer470(mut: (et: string, r: any) => any) {
     j = await r.json(); if (!j.continua) break
   }
   const rows = (await tabele.from('ofertare_cantitati').select()).data
-  return { j, id: (k: number) => rows.find((x: any) => x.id === k) }
+  return { j, id: (k: number) => rows.find((x: any) => x.id === k), doc: await citesteDoc(tabele) }
 }
 Deno.test('runda 5 BLOCANT E2E (470, V4): z1_7 cu antete transcrise altfel -> fără umflare tăcută în cantitate_plansa (a9fe186: Dn40 14.720, Dn110 1.000, „diferență” falsă)', async () => {
   const ren: Record<string, string> = { 'Strada': 'Denumire strada', 'Str. De la': 'De la strada', 'Str. Pana la': 'Pana la strada' }
@@ -1179,4 +1179,85 @@ Deno.test('runda 6 transfer (control, trece și pe f1274a1): grupuri pe material
   const x = await coliziune(poz, [['1', 'A', 'PE100', '0,5'], ['2', 'B', 'OL', '0,09']], false)
   assertEquals(x.rows.map((y: any) => [y.id, y.cantitate_plansa, y.status]), [[11, 500, 'extras'], [12, 90, 'extras']])
   assertEquals(x.j.cantitati.ambigue, [])
+})
+
+// ---- 26.09.2026 — runda 7: regresie prin handler + RPC simulat (raportul salvat și transferul, nu doar funcția pură) ----
+Deno.test('COPILOT-REG-2 (E2E): rândul văzut în două benzi e UNUL în citire_ai.tronsoane_unice, cu observațiile-sursă păstrate (_observatii + _surse)', async () => {
+  const { j, doc } = await transfer470((_et, r) => r)
+  assertEquals([j.sumar.total_sigur_m, j.sumar.identitate_randuri.randuri_sigure], [48905, 133])
+  const t37 = doc.analiza.citire_ai.tronsoane_unice.filter((t: any) => t._nr === '37')
+  assertEquals(t37.length, 1)
+  assertEquals(t37[0]._observatii, ['z1_7', 'z2_7'])
+  assertEquals(t37[0]._surse.map((x: any) => [x.zona, x.rand, x.lungime_m, x.nr_din]), [['z1_7', 37, 300, ['z1_6']], ['z2_7', 6, 300, ['z2_6']]])
+  assert(doc.text_extras.includes('(Nr 37; văzut în z1_7, z2_7)'), 'text_extras arată și el sursele')
+})
+Deno.test('runda 7 B3 (E2E): 470 fără Nr 50 în ambele felii => sumar nr_lipsa + total_sigur_incomplet + avertisment; nota FIECĂREI poziții numește golul, „extras” => „diferenta”; text_extras ⚠ (ab5c449: 48.685 m tăcut, 5 poziții „confirmă”)', async () => {
+  const { raspuns470 } = await import('./fixture_470.ts')
+  const k = raspuns470('z2_6').tabele[0].randuri.findIndex((x: any) => x['Nr crt'] === '50')
+  const { j, id, doc } = await transfer470((et, r) => {
+    if (et === 'z2_6' || et === 'z2_7') { r.tabele[0].randuri.splice(k, 1); if (et === 'z2_7') r.tronsoane.splice(k, 1) }
+    return r
+  })
+  assertEquals([j.sumar.total_sigur_m, j.sumar.total_de_verificat_m, j.sumar.total_sigur_incomplet, j.sumar.nr_lipsa_n], [48685, 0, true, 1])
+  assertEquals(j.sumar.nr_lipsa.map((x: any) => [x.lipsesc, x.interval]), [['50', [1, 133]]])
+  assert(j.sumar.avertismente.some((a: string) => a.startsWith('secvență Nr incompletă: lipsesc Nr 50 (p1, tabel cu Nr 1–133;')), j.sumar.avertismente.join(' | '))
+  const gol = 'pe planșă: Dn nestandard Dn60: 110 m; secvență Nr incompletă: lipsesc Nr 50 (p1, tabel cu Nr 1–133; 1 rând fără nicio lectură, metri necunoscuți).'
+  for (const k2 of [1751, 1752, 1753, 1754, 1755, 1756]) {
+    assert(id(k2).diferenta_nota.endsWith(gol), `${k2}: ${id(k2).diferenta_nota}`)
+    assertEquals(id(k2).status, 'diferenta', `${k2}: cifra din planșă e doar partea citită`)
+  }
+  assert(doc.text_extras.includes('⚠ SECVENȚĂ Nr INCOMPLETĂ: lipsesc Nr 50'), doc.text_extras.slice(-600))
+})
+Deno.test('runda 7 MY-T4: Dn110 PE sigur + Dn110 fără material „de verificat”, poziții PE și OL => nota și pe poziția OL, „extras” => „diferenta”, cifra ei nu se golește (ab5c449: OL 900 „extras”, nota veche)', async () => {
+  const { supa, n, tabele } = await lic3([
+    { id: 11, denumire: 'Țeavă PE100 Dn110', cantitate: 500, cantitate_plansa: 500, status: 'extras', diferenta_nota: 'VECHE PE' },
+    { id: 12, denumire: 'Țeavă OL Dn110 subtraversare', cantitate: 80, cantitate_plansa: 900, status: 'extras', diferenta_nota: 'VECHE OL' },
+  ])
+  const COLM = ['Nr crt', 'De la', 'La', 'Dn', 'Material', 'L (km)']
+  const rd = (nr: string, dl: string, mat: string, L: string) => ({ 'Nr crt': nr, 'De la': dl, 'La': 'CT', 'Dn': '110', 'Material': mat, 'L (km)': L })
+  const tr = (dl: string, mat: string | undefined, L: number) => ({ de_la: dl, la: 'CT', lungime_m: L, diametru_mm: 110, ...(mat ? { material: mat } : {}), sursa: 'tabel' })
+  const ai = aiFelii(n, { z1_1: { tronsoane: [tr('A', 'PE100', 500), tr('B', undefined, 90)], tabele: [{ denumire: 'D', coloane: COLM, randuri: [rd('1', 'A', 'PE100', '0,5'), rd('?', 'B', '', '0,09')] }] } })
+  const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))).json()
+  assertEquals(j.cantitati.pe_diametre, { 'Dn110 PE': 500 })
+  assertEquals(j.cantitati.doar_de_verificat, [{ dn: 110, material: null, pozitie_id: 12, actiune: 'nota_fara_material' }])
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  const id = (k: number) => rows.find((x: any) => x.id === k)
+  const pe = ' Pe planșă: 1 rând de tabel fără identitate sigură (90 m).'
+  assertEquals([id(12).cantitate, id(12).cantitate_plansa, id(12).status], [80, 900, 'diferenta'])
+  assertEquals(id(12).diferenta_nota, 'De verificat: 1 rând Dn110 fără identitate sigură (90 m) — fără material, pot fi ale acestei poziții (grupul sigur de pe Dn110 e pe alt material); ' +
+    'cifra din planșă nu s-a actualizat (900 m e dintr-o citire anterioară).' + pe)
+  // poziția PE: cifra sigură + restul fără material numit (ca înainte), „diferenta”
+  assertEquals([id(11).cantitate_plansa, id(11).status], [500, 'diferenta'])
+  assert(id(11).diferenta_nota.includes('1 rând Dn110 fără identitate sigură (90 m)'), id(11).diferenta_nota)
+  // poziția OL deja validată: decizia rămâne, doar nota
+  const v = await lic3([{ id: 11, denumire: 'Țeavă PE100 Dn110', cantitate: 500, cantitate_plansa: 500, status: 'extras' },
+    { id: 12, denumire: 'Țeavă OL Dn110 subtraversare', cantitate: 80, cantitate_plansa: 900, status: 'validat', diferenta_nota: 'VECHE OL' }])
+  await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(v.n, aiFelii(v.n, { z1_1: { tronsoane: [tr('A', 'PE100', 500), tr('B', undefined, 90)], tabele: [{ denumire: 'D', coloane: COLM, randuri: [rd('1', 'A', 'PE100', '0,5'), rd('?', 'B', '', '0,09')] }] } }), v.supa))
+  const x12 = (await v.tabele.from('ofertare_cantitati').select()).data.find((x: any) => x.id === 12)
+  assertEquals([x12.cantitate_plansa, x12.status], [900, 'validat'])
+  assert(x12.diferenta_nota.startsWith('De verificat: 1 rând Dn110 fără identitate sigură (90 m) — fără material'), x12.diferenta_nota)
+})
+Deno.test('runda 7 (minor verificator runda 6): rândul TOTAL nu e candidat pe Dn — „Total conducte De 110” nu mai primește două update-uri și nu mai face ambiguă poziția Dn110', async () => {
+  const COLM = ['Nr crt', 'De la', 'La', 'Dn', 'Material', 'L (km)']
+  const felii = { z1_1: { tronsoane: [{ de_la: 'A', la: 'CT', lungime_m: 500, diametru_mm: 110, material: 'PE100', sursa: 'tabel' }],
+    tabele: [{ denumire: 'D', coloane: COLM, randuri: [{ 'Nr crt': '1', 'De la': 'A', 'La': 'CT', 'Dn': '110', 'Material': 'PE100', 'L (km)': '0,5' }] }] } }
+  const ruleaza = async (pozitii: any[]) => {
+    const x = await lic3(pozitii)
+    const opsVazute: any[] = [], rpc0 = x.supa.rpc
+    x.supa.rpc = (nume: string, a: any) => { if (nume === 'ofertare_transfer_plansa_cantitati') opsVazute.push(...a.p_randuri); return rpc0(nume, a) }
+    const j = await (await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(x.n, aiFelii(x.n, felii), x.supa))).json()
+    const upd = opsVazute.filter((o) => o.op === 'update').map((o) => o.id)
+    assertEquals(upd.length, new Set(upd).size, `un singur update pe id: ${JSON.stringify(upd)}`)
+    return { j, rows: (await x.tabele.from('ofertare_cantitati').select()).data }
+  }
+  // (a) singura poziție „cu Dn110” e TOTAL-ul: grupul NU o ia (ab5c449: două update-uri pe id 4, ultimul câștiga)
+  const a = await ruleaza([{ id: 4, denumire: 'Total conducte De 110', cantitate: 500, cantitate_plansa: null, status: 'extras' }])
+  assertEquals(a.rows.find((r: any) => r.id === 4).cantitate_plansa, 500)
+  assert(a.rows.find((r: any) => r.id === 4).diferenta_nota.includes('confirmă totalul: 500 m'), a.rows.find((r: any) => r.id === 4).diferenta_nota)
+  assertEquals(a.j.cantitati.adaugate, 1, 'Dn110 PE intră ca poziție nouă (diametru absent), nu peste TOTAL')
+  // (b) poziția reală Dn110 + TOTAL cu Dn în nume: grupul își ia poziția (ab5c449: ambiguu, nimic scris pe Dn110)
+  const b = await ruleaza([{ id: 3, denumire: 'Conductă PE Dn110', cantitate: 500, cantitate_plansa: null, status: 'extras' },
+    { id: 4, denumire: 'Total conducte De 110', cantitate: 500, cantitate_plansa: null, status: 'extras' }])
+  assertEquals(b.rows.map((r: any) => [r.id, r.cantitate_plansa]), [[3, 500], [4, 500]])
+  assertEquals(b.j.cantitati.ambigue, [])
 })

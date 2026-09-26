@@ -124,6 +124,29 @@ export function acoperireScanPdf(a, scanMare = false) {
   return { demonstrata: true, tip: 'imagine_pagina_intreaga', motiv: `scanarea acoperă ${Math.round(fr * 100)}% din pagină, fără conținut în afara ei` }
 }
 
+// Runda 7 (26.09.2026): zonele unei surse, în ordinea tăierii. Ultima coloană / bandă e FIXATĂ la marginea planșei
+// (left = min(c·pas, W − latura)); când restul W (sau H) peste (N−1)·pas e ≤ latura − pas (~192 px la 1.600 / 12%), ultimele
+// două coloane (benzi) au același left (top) => aceeași imagine. Înainte se tăia, se urca și se PLĂTEA la AI de două ori
+// (agregarea o număra o dată, dar costul era dublu). Acum: dedup pe (left, top) ÎNAINTE de tăiere; se păstrează prima zonă
+// (eticheta mai mică), iar cea sărită e trecută în `identice` (proveniență). Nu apare pe geometriile din BD (cel mai mic rest: 454 px).
+export function zoneTaiere(meta, { latura, pas, coloane, randuri }, prefix = '') {
+  const vazute = new Map(), zone = [], identice = []
+  for (let r = 0; r < randuri; r++) {
+    for (let c = 0; c < coloane; c++) {
+      const left = Math.min(c * pas, Math.max(0, meta.width - latura))
+      const top = Math.min(r * pas, Math.max(0, meta.height - latura))
+      const width = Math.min(latura, meta.width - left)
+      const height = Math.min(latura, meta.height - top)
+      if (width < 50 || height < 50) continue
+      const zona = `${prefix}${r + 1}_${c + 1}`, k = `${left}|${top}`
+      if (vazute.has(k)) { identice.push([zona, vazute.get(k)]); continue }
+      vazute.set(k, zona)
+      zone.push({ zona, left, top, width, height })
+    }
+  }
+  return { zone, identice }
+}
+
 // Ciornă AUTOMATĂ de clarificare (niciodată trimisă) când planșe rămân necitibile — logica e în BD
 // (ofertare_clarificare_planse_auto, doar service_role): idempotentă, o ciornă per licitație pe lot.
 async function clarificareAuto(supa, licitatieId) {
@@ -310,16 +333,11 @@ export default async function handler(req, res) {
   // feliile vechi (altă grilă) s-ar citi și ele — le ștergem întâi
   const { data: vechi } = await supa.storage.from('ofertare').list(bazaCale, { limit: 200 })
   if (vechi?.length) await supa.storage.from('ofertare').remove(vechi.map((f) => `${bazaCale}/${f.name}`))
-  const felii = []
-  for (const [iSursa, { img: sursa, meta, prefix, g: { latura, pas, coloane, randuri } }] of surse.entries()) {
-  for (let r = 0; r < randuri; r++) {
-    for (let c = 0; c < coloane; c++) {
-      const left = Math.min(c * pas, Math.max(0, meta.width - latura))
-      const top = Math.min(r * pas, Math.max(0, meta.height - latura))
-      const width = Math.min(latura, meta.width - left)
-      const height = Math.min(latura, meta.height - top)
-      if (width < 50 || height < 50) continue
-      const zona = `${prefix}${r + 1}_${c + 1}`
+  const felii = [], zoneIdentice = []
+  for (const [iSursa, { img: sursa, meta, prefix, g }] of surse.entries()) {
+    const { zone, identice } = zoneTaiere(meta, g, prefix)
+    zoneIdentice.push(...identice)
+    for (const { zona, left, top, width, height } of zone) {
       try {
         const decupaj = sharp(sursa, { limitInputPixels: false, failOn: 'none' })
           .extract({ left, top, width, height })
@@ -336,7 +354,6 @@ export default async function handler(req, res) {
         felii.push({ zona, eroare: String(e?.message || e).slice(0, 120) })
       }
     }
-  }
   }
   const { meta: m0, verdict, g: { latura, coloane, randuri } } = surse[0]
 
@@ -364,6 +381,8 @@ export default async function handler(req, res) {
       surse_geom: surse.map((s) => ({ pagina: s.pagina || 1, latime: s.meta.width, inaltime: s.meta.height, dpi: s.dpi || null,
         latime_pt: s.latime_pt || null, inaltime_pt: s.inaltime_pt || null })),
       suprapunere: SUPRAPUNERE, felii_goale: reusite.filter((f) => f.goala).length,
+      // runda 7: zone identice cu una deja tăiată (ultimele coloane/benzi fixate la margine) — netăiate, neplătite: [sărită, păstrată]
+      ...(zoneIdentice.length ? { zone_identice: zoneIdentice } : {}),
       micsorare: +micsorare.toFixed(2), rezolutie_redusa: rezolutieRedusa,
       // 25.09.2026 (audit T4/T11): amprenta tăierii — o citire se poate relua pe zone doar pe ACEEAȘI tăiere
       taiat_la: new Date().toISOString(),
