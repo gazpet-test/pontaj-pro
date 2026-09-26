@@ -14,6 +14,15 @@ const VERDE = {
   cerinte_neconfirmate_cu_capitol: 0,
   documentatie_verificata: true, documentatie_blocaj: null, documentatie_esentiale: 5,
   lista_f3_m: 1000, lista_c6_m: 1000, memoriu_m: 1000, plansa_m: 1000, grafic_fronturi_m: 1000,
+  // R5 (25.09.2026): din v_ofertare_cantitati_nevalidate — F3 validata integral
+  lista_f3_nevalidate: 0, lista_f3_nevalidate_m: null, lista_c6_nevalidate: 0, memoriu_nevalidate: 0, plansa_nevalidate: 0,
+  // R5 condiția 2 (26.09.2026): câmpurile noi ale v_ofertare_cantitati_nevalidate
+  fara_tip_nevalidate: 0, fara_tip_nevalidate_m: null, invalidate_in_afara_retea: 0, invalidate_in_afara_retea_m: null,
+  total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0,
+  // R5 sarcina 2 (a): planșele cu conflicte de transfer deschise
+  transfer_conflicte_docs: 0, transfer_conflicte_n: 0, totaluri_control: [], unitati_de_verificat: 0, transfer_in_curs: 0,
+  // reparația rundei 2: validate fără cantitate, rețea în alte unități, rânduri aprobate șterse
+  lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0,
   garantie_cerut_luni: 36, garantie_cerut_moment: 'pif', garantie_oferit_luni: 36, garantie_oferit_moment: 'pif',
   garantie_confirmata: true, garantie_justificata: false, garantie_luni_in_capitole: [36], garantie_cerinte_lucrari: 2,
   anexe_referite: ['anexa 7'], anexe_existente: ['Anexa 7'], identitate_straine: [], bransamente_in_capitole: [372], bransamente_in_cerinte: [372],
@@ -116,9 +125,9 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 22 de randuri ale portii sunt prezente, in ordinea afisata', () => {
+  it('toate cele 23 de randuri ale portii sunt prezente, in ordinea afisata (R5 reparația rundei 1: + „sursa_cantitati” — aprobarea finală)', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','neconfirmate','documentatie','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
+      ['cuprins','fara','neverificate','neconfirmate','documentatie','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','sursa_cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
   })
 })
 
@@ -200,5 +209,19 @@ describe('P0 pas 2 — documentația de atribuire', () => {
   })
   it('complet și citit = ok', () => {
     expect(cu({}).randuri.find(x => x.k === 'documentatie').stare).toBe('ok')
+  })
+})
+
+// R5 (Copilot 25.09.2026): existența rândului 'extras' nu dovedește că a intrat în oferta aprobată.
+describe('R5 — poarta propunerii nu ia F3 nevalidata drept referinta aprobata', () => {
+  it('F3 cu randuri de retea nevalidate => block pe „cantitati", restul verde', () => {
+    const ev = cu({ lista_f3_nevalidate: 3, lista_f3_nevalidate_m: 250 })
+    expect(ev.stare).toBe('block'); expect(ev.blocaje).toEqual(['cantitati'])
+    expect(ev.randuri.find(x => x.k === 'cantitati').detalii).toMatch(/NEVALIDATE \(250 m\)/)
+  })
+  it('view-ul de validare lipsa (campuri absente) => block „nu putem verifica", nu verde', () => {
+    const ev = cu({ lista_f3_nevalidate: undefined })
+    expect(ev.blocaje).toEqual(['cantitati'])
+    expect(ev.randuri.find(x => x.k === 'cantitati').detalii).toMatch(/nu putem verifica/)
   })
 })

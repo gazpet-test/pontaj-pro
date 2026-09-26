@@ -2,33 +2,70 @@ import { describe, it, expect } from 'vitest'
 import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare, rolPiesa, controlPachetComplet } from './ofertareControale.js'
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
+// R5 (25.09.2026): F3 folosita ca referinta trebuie sa vina cu campul de validare; cazurile vechi = F3 validata integral.
+// R5 condiția 2: câmpurile noi = 0 (licitație fără rânduri fără tip / invalidate); absente = „control parțial” (teste separate)
+const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0, transfer_conflicte_docs: 0, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0 }
+const h2 = (o) => controlCantitati({ lista_f3_nevalidate: 0, ...NOI0, ...o })
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
   it('F3 = grafic, restul egal => ok', () =>
-    expect(controlCantitati({ lista_f3_m: 18007, lista_c6_m: 18007, memoriu_m: 18007, grafic_fronturi_m: 18007 }).stare).toBe('ok'))
+    expect(h2({ lista_f3_m: 18007, lista_c6_m: 18007, memoriu_m: 18007, grafic_fronturi_m: 18007 }).stare).toBe('ok'))
   it('rotunjire sub 0,1 % => warn, nu ok (se spune, nu se ascunde)', () => {
-    const r = controlCantitati({ lista_f3_m: 29980, grafic_fronturi_m: 29985 })
+    const r = h2({ lista_f3_m: 29980, grafic_fronturi_m: 29985 })
     expect(r.stare).toBe('warn'); expect(r.diferenta_m).toBe(5)
   })
   it('grafic ≠ F3 => block, cu ambele valori si diferenta', () => {
-    const r = controlCantitati({ lista_f3_m: 37320, grafic_fronturi_m: 29985 })
+    const r = h2({ lista_f3_m: 37320, grafic_fronturi_m: 29985 })
     expect(r.stare).toBe('block'); expect(r.diferenta_m).toBe(-7335); expect(r.detalii).toMatch(/37.320/)
   })
   it('372 vs 371 la 0,27 % => block', () =>
-    expect(controlCantitati({ lista_f3_m: 372, grafic_fronturi_m: 371 }).stare).toBe('block'))
+    expect(h2({ lista_f3_m: 372, grafic_fronturi_m: 371 }).stare).toBe('block'))
   it('lipsa F3 => block, chiar daca memoriul e egal cu graficul (Mostistea)', () => {
-    const r = controlCantitati({ lista_f3_m: null, memoriu_m: 29980, grafic_fronturi_m: 29985 })
+    const r = h2({ lista_f3_m: null, memoriu_m: 29980, grafic_fronturi_m: 29985 })
     expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/F3/); expect(r.detalii).toMatch(/memoriu 29.980/)
   })
   it('memoriu/planse/C6 diferite de F3 => warn "nerezolvata prin clarificare", nu block, si le listeaza', () => {
-    const r = controlCantitati({ lista_f3_m: 6520, lista_c6_m: 7077, memoriu_m: 5455, plansa_m: 4355, grafic_fronturi_m: 6520 })
+    const r = h2({ lista_f3_m: 6520, lista_c6_m: 7077, memoriu_m: 5455, plansa_m: 4355, grafic_fronturi_m: 6520 })
     expect(r.stare).toBe('warn'); expect(r.neclarificate).toHaveLength(3); expect(r.detalii).toMatch(/clarificare/)
   })
   it('diferenta reala + neclarificate => block, nota de clarificare ramane in detalii', () => {
-    const r = controlCantitati({ lista_f3_m: 6520, memoriu_m: 5455, grafic_fronturi_m: 5455 })
+    const r = h2({ lista_f3_m: 6520, memoriu_m: 5455, grafic_fronturi_m: 5455 })
     expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/clarificare/)
   })
   it('grafic fara fronturi => warn "nu se poate face"', () =>
-    expect(controlCantitati({ lista_f3_m: 100, grafic_fronturi_m: null }).stare).toBe('warn'))
+    expect(h2({ lista_f3_m: 100, grafic_fronturi_m: null }).stare).toBe('warn'))
+})
+
+// R5 (Copilot 25.09.2026): „extras" nu e aprobat. F3 nevalidata nu e referinta; memoriu/planse/C6 nevalidate se eticheteaza.
+describe('H2 R5 — F3 transcrisa automat si nevalidata NU e referinta aprobata', () => {
+  it('F3 = grafic, dar 47 de randuri F3 nevalidate (Domnesti, 6.520 m) => block, nu ok', () => {
+    const r = controlCantitati({ lista_f3_m: 6520, grafic_fronturi_m: 6520, lista_f3_nevalidate: 47, lista_f3_nevalidate_m: 6520 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/47 rânduri de rețea NEVALIDATE \(6.520 m\)/); expect(r.f3_nevalidate).toBe(47)
+  })
+  it('un singur rand nevalidat ajunge ca sa blocheze (singular corect)', () => {
+    const r = controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: 1 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând de rețea NEVALIDATE/)
+  })
+  it('control indisponibil (view lipsa: camp absent) cu F3 prezenta => block „nu putem verifica", NU ok', () => {
+    const r = controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/nu putem verifica/)
+  })
+  it('valoare invalida (null / negativ / text / fractie) = tot indisponibil', () => {
+    for (const v of [null, -1, 'x', 1.5]) expect(controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: v }).stare).toBe('block')
+  })
+  it('F3 validata integral => regula veche neschimbata (ok)', () =>
+    expect(controlCantitati({ lista_f3_m: 1000, grafic_fronturi_m: 1000, lista_f3_nevalidate: 0, ...NOI0 }).stare).toBe('ok'))
+  it('lic. 95 dupa pasul A propus in R5 v2 (tip_sursa=plansa pe 13.765 m): „exista doar planse 13.765 m (nevalidat)"', () => {
+    const r = controlCantitati({ lista_f3_m: null, plansa_m: 13765, plansa_nevalidate: 1 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/planșe 13.765 m \(nevalidat\)/)
+  })
+  it('sursele informative nevalidate raman warn, dar poarta eticheta in lista neclarificatelor', () => {
+    const r = controlCantitati({ lista_f3_m: 44355, grafic_fronturi_m: 44355, lista_f3_nevalidate: 0, plansa_m: 13765, plansa_nevalidate: 1 })
+    expect(r.stare).toBe('warn'); expect(r.neclarificate).toEqual(['planșe 13.765 m (nevalidat)'])
+  })
+  it('fara F3 si fara campuri de validare: mesajul vechi, fara eticheta inventata', () => {
+    const r = controlCantitati({ lista_f3_m: null, memoriu_m: 29980 })
+    expect(r.detalii).toMatch(/memoriu 29.980 m\)/); expect(r.detalii).not.toMatch(/nevalidat/)
+  })
 })
 
 describe('H4 controlGarantie — luni + momentul de start, aceleasi peste tot', () => {
@@ -487,5 +524,55 @@ describe('controlPachetComplet — piesa poate exista la participant si tot sa l
     const r = c({ anexe_asteptate: ['Anexa 18', 'Anexa 19'], pachet_stare: 'aprobat',
       pachet_fisiere: [F('Anexa 18.pdf'), F('Anexa 19.pdf'), F('propunere.docx')] })
     expect(r.stare).toBe('ok'); expect(r.detalii).toMatch(/2 piese declarate/)
+  })
+})
+
+// ── R5 (Copilot 26.09.2026, condiția 2): H2 nu mai lasă să dispară tacit rândurile invalidate / fără tip ──
+describe('H2 R5 condiția 2 — semnal de lipsă, niciun „ok” verde incomplet', () => {
+  const baza = { lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0 }
+  // sarcina 2 (d): rândul ieșit prin m → ml e acum în ml — cantitatea lui NU se mai scrie „300 m” (view: *_m = doar rândurile în m, *_pe_um)
+  it('F3 validată = fronturi, dar 1 rând F3 INVALIDAT a ieșit din rețea (m → ml, 300 ml) => BLOCK, numit cu unitatea lui', () => {
+    const r = controlCantitati({ ...baza, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 1, invalidate_in_afara_retea_m: null,
+      invalidate_in_afara_retea_pe_um: { ml: { suma: 300, randuri: 1, fara_cantitate: 0 } } })
+    expect(r.stare).toBe('block'); expect(r.incomplet).toBe(true)
+    expect(r.detalii).toMatch(/^700 m în F3 și în grafic · 1 rând INVALIDAT a ieșit din setul de rețea \(300 ml; aprobarea veche nu mai e valabilă/)
+  })
+  it('rânduri de rețea fără tip de sursă, nevalidate (lic. 95: 6 / 48.195 m) => cu F3 ok devine WARN „INCOMPLET, de reverificat”', () => {
+    const r = controlCantitati({ ...baza, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: 48195, invalidate_in_afara_retea: 0 })
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/INCOMPLET, de reverificat: 6 rânduri de rețea fără tip de sursă, nevalidate \(48\.195 m\)/)
+  })
+  it('fără F3 (lic. 95 azi): block „lipsește F3”, iar rândurile fără tip sunt numite (nu doar „există doar planșe”)', () => {
+    const r = controlCantitati({ lista_f3_m: null, lista_f3_nevalidate: 0, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: 48195, invalidate_in_afara_retea: 0 })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/^lipsește lista de cantități F3 .* 6 rânduri de rețea fără tip de sursă, nevalidate \(48\.195 m\)/)
+  })
+  it('câmpurile noi absente (view-ul vechi) => „control parțial”, WARN în loc de ok', () => {
+    const r = controlCantitati({ ...baza })
+    expect([r.stare, /control parțial/.test(r.detalii)]).toEqual(['warn', true])
+  })
+  it('control: toate zero => ok neschimbat', () => {
+    expect(controlCantitati({ ...baza, ...NOI0 })).toMatchObject({ stare: 'ok', incomplet: false })
+  })
+})
+
+describe('H2 runda 6 — TOTAL invalidat, unitate schimbată, unitate de normalizat (decis în audit, reversibil)', () => {
+  const baza = { lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0, ...NOI0 }
+  it('rând TOTAL invalidat => BLOCK, numit (ca poarta graficului)', () => {
+    const r = controlCantitati({ ...baza, total_invalidate: 1, total_invalidate_m: 48000, total_invalidate_pe_um: { m: { suma: 48000, randuri: 1, fara_cantitate: 0 } } })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând TOTAL INVALIDAT \(48\.000 m, referință, nu se adună\)/)
+  })
+  it('rând nevalidat ieșit din rețea prin unitate (m → ml) => BLOCK „unitate schimbată”, cu unitatea de acum (700 ml, nu „700 m”)', () => {
+    const r = controlCantitati({ ...baza, unitate_schimbata_in_afara_retea: 1, unitate_schimbata_in_afara_retea_m: null,
+      unitate_schimbata_in_afara_retea_pe_um: { ml: { suma: 700, randuri: 1, fara_cantitate: 0 } } })
+    expect(r.stare).toBe('block'); expect(r.detalii).toMatch(/1 rând nevalidat a ieșit din setul de rețea prin schimbarea unității \(700 ml; „unitate schimbată”\)/)
+  })
+  it('unitatea scrisă „M” / „m ” în rețea: în F3 => BLOCK (v_ofertare_pt_stare nu le adună); doar în alte surse => WARN', () => {
+    const f = controlCantitati({ ...baza, um_de_normalizat: 2, um_de_normalizat_m: 400, um_de_normalizat_f3: 1 })
+    expect(f.stare).toBe('block'); expect(f.detalii).toMatch(/2 rânduri de rețea au unitatea scrisă altfel decât „m” \(„M”, „m ”; 400 m, din care 1 în F3\)/)
+    expect(controlCantitati({ ...baza, um_de_normalizat: 2, um_de_normalizat_m: 400, um_de_normalizat_f3: 0 }).stare).toBe('warn')
+  })
+  it('view-ul intermediar (runda 5, fără câmpurile runda 6) => „control parțial”, nu ok', () => {
+    const r = controlCantitati({ lista_f3_m: 700, grafic_fronturi_m: 700, lista_f3_nevalidate: 0, fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0 })
+    expect([r.stare, /control parțial/.test(r.detalii)]).toEqual(['warn', true])
   })
 })

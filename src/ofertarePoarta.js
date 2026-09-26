@@ -14,6 +14,7 @@
 // ════════════════════════════════════════════════════════════════
 
 import { controlCantitati, controlGarantie, controlAnexe, controlIdentitate, controlNumereCheie, controlParticipare, controlPachetComplet, controlRelatiiGrafic, controlGraficSursa } from './ofertareControale.js'
+import { textRestante } from './ofertareTransferRestante.js'
 
 // st = un rând din v_ofertare_pt_stare. null = încă se încarcă.
 // Întoarce null cât timp st e null: un array gol de rânduri ar însemna „nimic de blocat",
@@ -138,17 +139,30 @@ export function evalueazaPoarta(st) {
   r.push({
     // NU „Cap. 4": la Contești graficul e anexă, la altele cap. 3 sau 8. Numărul vine din fișa de date.
     k:'grafic', titlu:'Graficul de execuție — versiune înghețată',
-    stare: !st.grafic_versiune ? 'warn' : (st.grafic_avertismente > 0 ? 'warn' : 'ok'),
+    // R5 runda 5 (minorul 5 al verificatorului): versiunea înghețată se reverifică față de cantitățile de ACUM (reverificareGraficInghetat,
+    // din OfertarePropunere): un rând-sursă de front invalidat după îngheț / rânduri necesare nevalidate => WARN „de reverificat”.
+    // Câmpul absent (versiune fără parametri, încărcare veche) = ca înainte; eroare la reverificare = WARN (control indisponibil ≠ zero).
+    stare: !st.grafic_versiune ? 'warn'
+      : (st.grafic_avertismente > 0 || st.grafic_de_reverificat > 0 || st.grafic_reverificare_eroare ? 'warn' : 'ok'),
     detalii: !st.grafic_versiune
       ? 'nicio versiune generată în grafic_versiuni'
       : `versiunea ${st.grafic_versiune}` + (st.grafic_avertismente > 0
           ? ` — înghețată cu ${st.grafic_avertismente} avertismente în poarta graficului, deschide Graficul și uită-te la ele`
-          : ', fără avertismente'),
+          : ', fără avertismente')
+        + (st.grafic_de_reverificat > 0 ? ` · DE REVERIFICAT față de cantitățile de acum (rezultat incomplet): ${st.grafic_de_reverificat_text}` : '')
+        + (st.grafic_reverificare_eroare ? ` · reverificarea față de cantitățile de acum n-a putut rula (${st.grafic_reverificare_eroare}) — control indisponibil` : ''),
   })
 
   // H2 (Sprint 3): cantitățile din Cantități vs fronturile graficului. Sursele vin tot din view.
   const h2 = controlCantitati(st)
   r.push({ k: h2.k, titlu: 'Cantitățile rețelei — lista F3 vs graficul', stare: h2.stare, detalii: h2.detalii })
+  // R5, reparația rundei 1 (ADDENDUM 2 Copilot, a + testele finale 1–2): APROBAREA FINALĂ. Poarta asta păzește doar acțiunile finale
+  // (📦 semnarea „gata de depus” și 🔏 aprobarea pachetului — lucrul pe draft: capitole, parametrii / fronturile graficului, editorul de
+  // cantități, nu trece prin ea). H2 rămâne WARN pe conflictele din planșe (lucru intermediar), dar un conflict de transfer DESCHIS —
+  // neconfirmat ca rezolvare / excepție justificată, deci cu impactul nestabilit — sau un transfer în curs BLOCHEAZĂ aici; controlul
+  // indisponibil (view lipsă / eroare / versiune fără câmp) = „nu putem verifica” = BLOCK, chiar dacă omul a confirmat avertismentul pe
+  // draft. Server-side: același blocaj în trigger-ul aprobării pachetului (docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql, 1b).
+  r.push(controlSursaAprobareFinala(st))
   // H4: garanția ca obiect (luni + moment), aceeași în cerință, formular și capitole.
   const h4 = controlGarantie(st)
   r.push({ k: h4.k, titlu: 'Garanția lucrărilor — luni și momentul de start', stare: h4.stare, detalii: h4.detalii })
@@ -185,6 +199,27 @@ export function evalueazaPoarta(st) {
     // Textele rezervelor, gata de pus în mesajul semnăturii: „semnat CU REZERVE: ...".
     rezerve: rezerve.map(x => `${x.titlu.toLowerCase()}: ${x.detalii}`),
   }
+}
+
+// Rândul „sursa_cantitati” (aprobarea finală) — funcție pură, testată și separat
+export function controlSursaAprobareFinala(st) {
+  const base = { k: 'sursa_cantitati', titlu: 'Sursa cantităților — restanțele transferului din planșe (aprobarea finală)' }
+  if (st?.cantitati_nevalidate_indisponibil) return { ...base, stare: 'block',
+    detalii: `nu putem verifica sursa cantităților (${st.cantitati_nevalidate_indisponibil}) — draftul poate continua, aprobarea finală rămâne blocată` }
+  if (!Array.isArray(st?.totaluri_control) || !Number.isInteger(st?.unitati_de_verificat)) return { ...base, stare: 'block',
+    detalii: 'nu putem verifica TOTAL și unitățile (control R9b indisponibil) — aprobarea finală rămâne blocată' }
+  const totaluri = st.totaluri_control.filter(t => t.stare !== 'ok')
+  if (st.unitati_de_verificat > 0 || totaluri.length) return { ...base, stare: 'block',
+    detalii: [st.unitati_de_verificat > 0 ? 'Unitate de verificat — baza este incompletă.' : '', ...totaluri.map(t => t.text)].filter(Boolean).join(' ') }
+  const tcd = st?.transfer_conflicte_docs, tic = st?.transfer_in_curs
+  if (!Number.isInteger(tcd) || !Number.isInteger(tic)) return { ...base, stare: 'block',
+    detalii: 'nu putem verifica restanțele transferului din planșe (v_ofertare_cantitati_nevalidate fără câmpurile transfer_*) — aprobarea finală rămâne blocată' }
+  if (tcd > 0) return { ...base, stare: 'block',
+    detalii: `${st.transfer_conflicte_n ?? '?'} restanțe deschise la transferul din ${tcd} ${tcd === 1 ? 'planșă' : 'planșe'}${st.transfer_conflicte_lista ? ` (${st.transfer_conflicte_lista})` : ''}` +
+      `${textRestante(st.transfer_restante) ? ` — ${textRestante(st.transfer_restante)}` : ''} — impactul asupra cantității / soluției ofertate nu e stabilit: ` +
+      'rezolvă-le (recitire care le acoperă) sau confirmă-le în Documente ca rezolvare / excepție justificată (drept de decizie)' }
+  if (tic > 0) return { ...base, stare: 'block', detalii: `transfer din planșă în curs (${tic}) — impactul nu e stabilit; reîncarcă după ce se termină` }
+  return { ...base, stare: 'ok', detalii: 'nicio restanță deschisă la transferul din planșe' }
 }
 
 // Verdictul pe care îl primește semnătura din ofertare_pt_poarta. Galben = se poate depune,

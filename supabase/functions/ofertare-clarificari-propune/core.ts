@@ -5,6 +5,7 @@
 // cantități, documentația și răspunsurile deja primite (de la această autoritate sau la alte licitații).
 // Scrie DOAR propuneri (status de_trimis, origine platforma) — omul le citește, le ajustează, le trimite.
 // Rulează identic în edge function (index.ts) și pe workerul NAS (worker/ofertare/clarificari.ts).
+import { CATEGORII_RESTANTE, infoRestanta, NOTA_LUNGIMI, restantePeTip } from './restante.js'
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
 const MODEL_IMPLICIT = 'claude-sonnet-5'
@@ -13,6 +14,8 @@ const MAX_PROPUNERI = 12
 const PROMPT = `Ești consilierul de ofertare al unui constructor român de conducte de gaze (rețele de distribuție, conducte de transport, branșamente, SRM), care pregătește o ofertă într-o licitație publică (SEAP, Legea 98/2016 sau 99/2016). Sarcina ta: să propui SOLICITĂRILE DE CLARIFICĂRI pe care ofertantul trebuie să le trimită autorității contractante înainte de termenul de depunere.
 
 Primești: (1) datele licitației, (2) REGISTRUL de cerințe extras din documentație (cu tipul: eliminatorie / propunere / forma / contractuala; câmpul GOL = cerința nu e acoperită cu ce are ofertantul, cu motivul), (3) diferențele găsite între listele de cantități, planșe și devize (dacă s-a rulat verificarea) și raportul ultimei verificări finale, (4) inventarul documentelor din documentație (doar nume și tip — nu conținutul), (5) clarificările DEJA propuse sau trimise la această licitație, (6) răspunsuri primite de la autorități la clarificări la ALTE licitații — doar ca să înveți cum se formulează și ce se răspunde de obicei.
+
+La (3): „cantitate" vine din documentul arătat în „sursa_cantitate" — NU neapărat din lista de cantități F3 (un transfer din planșă copiază cifra planșei în „cantitate"). status_validat: false = cifră extrasă automat, NEVERIFICATĂ de ofertant: o poți folosi ca să vezi unde e o diferență, dar NU o prezenta autorității ca valoare a listei ei sau a ofertei noastre și nu trage din ea concluzia că o cantitate e confirmată. status_validat: true = rând MARCAT VALIDAT ÎN PLATFORMĂ — marcajul nu are autor și nici dată, deci nu dovedește singur că un om a verificat cifra (au existat rânduri marcate automat); nici el nu e o cifră „confirmată" de citat autorității. În întrebare citezi documentul-sursă (planșă, memoriu, F3), nu rândul nostru.
 
 CÂND MERITĂ O CLARIFICARE:
 A. AMBIGUITATE REALĂ: un fragment cu două interpretări plauzibile, o contradicție între surse (fișa de date vs caiet de sarcini vs model de contract vs planșe) sau o informație necesară care lipsește. Explici intern interpretările și impactul fiecăreia. Lipsa unei resurse proprii (un gol), SINGURĂ, nu justifică întrebarea: dacă textul e clar și nu lasă loc de interpretare, golul e ferm, nu clarificare. Nu presupune echivalențe între autorizații, emitenți, titulari (firmă vs persoană) sau documente — dacă echivalența nu reiese din text, e o ambiguitate de întrebat, nu o concluzie.
@@ -46,6 +49,28 @@ export function asemanare(a: unknown, b: unknown): number {
   for (const w of A) if (B.has(w)) comune++
   return comune / (A.size + B.size - comune)
 }
+// R5 (Copilot 25.09.2026): un rând din ofertare_cantitati intră în prompt cu PROVENIENȚA cifrei și cu starea de
+// validare. Până acum `cantitate` pleca etichetat „lista": la lic. 95, rândul 1751 (Dn200 17.785 m, copiat din planșa
+// 470 de transfer, cu 13.765 m în afara UAT, nevalidat) ar fi apărut modelului ca „lista: 17785, plansa: 17785",
+// adică o F3 care nu există, confirmată de planșă. `status` se citește acum din BD (select-ul de mai jos).
+const SURSA_CANTITATE: Record<string, string> = {
+  lista_f3: 'lista de cantități F3', lista_c6: 'formularul C6', lista_alt: 'altă listă (C7–C9)', memoriu: 'memoriul tehnic',
+  plansa: 'planșă', caiet: 'caietul de sarcini', alt: 'alt document',
+}
+export const dinTransferPlansa = (r: any) => /citit automat din scanare/i.test(String(r?.sursa || ''))
+export function randCantitatePentruAI(r: any) {
+  const sursaCant = SURSA_CANTITATE[String(r?.tip_sursa || '')]
+    ?? (dinTransferPlansa(r) ? 'planșă (citire automată; cifra planșei copiată în cantitate)' : 'nedeclarată')
+  return {
+    id: r.id, obiect: r.obiect, cat: r.categorie, den: String(r.denumire || '').slice(0, 120), um: r.um,
+    cantitate: r.cantitate, sursa_cantitate: sursaCant, plansa: r.cantitate_plansa,
+    // R5 runda 4 (verificator R3): „validat_de_om" era înșelător — status 'validat' n-are autor/dată (lic. 3, rândul 9: CAD
+    // marcat validat automat). Câmpul spune doar ce e în platformă: marcat validat sau nu.
+    status_validat: r.status === 'validat', status: r.status || null,
+    nota: String(r.diferenta_nota || '').slice(0, 200), sursa: r.sursa,
+  }
+}
+
 // cheia de idempotență (Jakarinos 22.09): nu textul, ci licitația + cerințele citate + subiectul normalizat;
 // stabilă între rulări cât timp cerințele nu se re-extrag. Unică în BD (ofertare_clarificari.cheie).
 export async function cheieClarificare(licId: number, cerinteIds: number[], subiect: string): Promise<string> {
@@ -54,6 +79,34 @@ export async function cheieClarificare(licId: number, cerinteIds: number[], subi
   return Array.from(new Uint8Array(buf)).slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
+// R5 condiția 2: câte rânduri cu diferențe NU au intrat în prompt (limita) — spus explicit modelului, nu tăcut
+export const LIMITA_CANTITATI = 40
+export const randuriOmise = (total: number | null | undefined, trimise: number) =>
+  total != null && total > trimise ? ` din ${total} — LISTA E TRUNCHIATĂ: ${total - trimise} rânduri cu diferențe NU sunt aici; nu trage concluzii despre ele și nu spune că lipsesc` : ''
+// R5 sarcina 2 (a) (Copilot, închiderea R4/R5): conflictele transferului planșă → cantități care NU au produs niciun rând (grupuri ambigue,
+// Dn-uri doar „de verificat”, Nr lipsă, fără Dn…) nu apar în „DIFERENȚE CANTITĂȚI” (acolo sunt doar rândurile). Le trimitem separat,
+// din v_ofertare_transfer_conflicte (doar cele DESCHISE); citirea eșuată e spusă modelului — nu „nicio problemă”.
+// Reparația rundei 1 (ADDENDUM 2 Copilot, b): restanțele sunt DISTINCTE, fiecare cu cauza și acțiunea ei (./restante.js, copie identică a
+// src/ofertareTransferRestante.js), iar NICIUNA nu e, singură, o întrebare pentru autoritate: erorile interne de procesare (transfer
+// amânat / căzut / întrerupt, evaluare parțială, date corupte, conflict neacoperit de recitire) și deciziile noastre (poziții ambigue,
+// mai multe TOTAL) NU generează clarificări către AC; cele „de verificat pe planșă” (Dn nestandard, adnotări fără corespondent, Nr
+// lipsă…) pot duce la o clarificare DOAR dacă, după verificarea umană, documentația însăși rămâne lacunară / contradictorie — nu din
+// lista asta. Lungimile din conflicte sunt observații pe planșă (pot fi suprapuse), nu metri lipsă. (Înainte: „pot justifica o clarificare
+// de tip C” pentru toată lista.)
+export function sectiuneConflictePlanse(r: { data: any[] | null; error: any } | null): string {
+  if (!r || r.error) return `STAREA TRANSFERULUI DIN PLANȘE (verificare INTERNĂ): NU A PUTUT FI CITITĂ (${String(r?.error?.message || r?.error || 'nicio citire').slice(0, 120)}) — nu presupune că nu există restanțe și nu spune că planșele sunt complete; nu formula clarificări din asta.`
+  const desc = (r.data || []).filter((c: any) => c?.deschis === true)
+  if (!desc.length) return 'STAREA TRANSFERULUI DIN PLANȘE (verificare INTERNĂ): nicio restanță deschisă.'
+  const peTip: Record<string, number> = restantePeTip(desc)
+  const cat = (c: string) => Object.entries(peTip).filter(([t]) => infoRestanta(t).categorie === c)
+    .map(([t, n]) => { const i = infoRestanta(t); return { restanta: i.eticheta, n, cauza: i.cauza, actiune: i.actiune } })
+  const total = Object.values(peTip).reduce((q: number, n: number) => q + Number(n), 0)
+  return `STAREA TRANSFERULUI DIN PLANȘE — RESTANȚE INTERNE ALE OFERTANTULUI (${total} pe ${desc.length} planșe; NESCRISE în cantități). ` +
+    `NU formula clarificări către autoritate din ele — ${CATEGORII_RESTANTE.procesare_interna}: ${JSON.stringify(cat('procesare_interna'))}; ` +
+    `${CATEGORII_RESTANTE.decizie_interna}: ${JSON.stringify(cat('decizie_interna'))}; ` +
+    `${CATEGORII_RESTANTE.verificare_plansa} (o clarificare DOAR dacă, după verificarea umană, documentația însăși rămâne lacunară sau contradictorie — nu pe baza acestei liste; ${NOTA_LUNGIMI}): ${JSON.stringify(cat('verificare_plansa'))}. ` +
+    `Planșele: ${JSON.stringify(desc.slice(0, 10).map((c: any) => String(c.nume_original || '').split('/').pop()))}`
+}
 export async function propuneClarificari(supabase: any, body: any): Promise<any> {
   const fail = (msg: string) => ({ error: msg })
   try {
@@ -63,13 +116,17 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const { data: lic } = await supabase.from('ofertare_licitatii').select('id, nr_anunt, autoritate, obiect, termen_depunere, valoare_estimata, moneda, tip_procedura, criteriu, garantie_participare, loturi').eq('id', licId).single()
     if (!lic) return fail('licitatie negasita')
 
-    const [{ data: cerinte }, { data: acop }, { data: cant }, { data: verif }, { data: docs }, { data: clarLic }] = await Promise.all([
+    const [{ data: cerinte }, { data: acop }, { data: cant, count: nCant }, { data: verif }, { data: docs }, { data: clarLic }, rConfl] = await Promise.all([
       supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
       supabase.from('ofertare_acoperire').select('cerinta_id, status, motiv, mod').eq('status', 'gol').limit(5000),
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa').eq('licitatie_id', licId).not('diferenta_nota', 'is', null).limit(40),
+      // R5 condiția 2 (26.09.2026): limita de 40 nu mai taie TACIT — count exact, iar promptul spune câte au rămas pe dinafară
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
       supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie').eq('licitatie_id', licId).order('nr'),
+      // sarcina 2 (a): planșele cu conflicte de transfer (eroarea se păstrează, nu se înghite)
+      Promise.resolve(supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, restante').eq('licitatie_id', licId))
+        .then((r: any) => r, (e: any) => ({ data: null, error: e })),
     ])
     if (!cerinte?.length) return { ok: true, propuse: 0, scrise: 0, skip: 'registrul de cerințe e gol — extrage întâi cerințele' }
     const idsLic = new Set((cerinte || []).map((c: any) => c.id))
@@ -82,7 +139,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const raspunsuri = (rasp || []).sort((a: any, b: any) => (norm(b.lic?.autoritate).includes(norm(autor)) ? 1 : 0) - (norm(a.lic?.autoritate).includes(norm(autor)) ? 1 : 0)).slice(0, 25)
 
     const termen = lic.termen_depunere ? String(lic.termen_depunere).slice(0, 16) : null
-    const golMap = new Map(goluri.map((g: any) => [g.cerinta_id, g]))
+    const golMap = new Map<any, any>(goluri.map((g: any) => [g.cerinta_id, g]))
     const registru = (cerinte || []).map((c: any) => ({
       id: c.id, tip: c.tip, sectiune: c.sursa_sectiune || undefined, pagina: c.sursa_pagina || undefined, lot: c.lot || undefined,
       cand: c.cand_se_prezinta || undefined, doc: c.document_probant ? String(c.document_probant).slice(0, 120) : undefined,
@@ -93,7 +150,8 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const contextul = [
       `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · procedura ${lic.tip_procedura || '?'} · criteriu ${lic.criteriu || '?'}\nOBIECT: ${String(lic.obiect || '').slice(0, 1500)}\nValoare estimată: ${lic.valoare_estimata ?? '?'} ${lic.moneda || 'RON'} · termen depunere: ${termen || '?'} · garanție participare: ${lic.garantie_participare ?? '?'} · loturi: ${lic.loturi ?? '?'}`,
       `REGISTRUL DE CERINȚE (${registru.length}; cele cu GOL sunt neacoperite):\n${JSON.stringify(registru)}`,
-      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}):\n${JSON.stringify((cant || []).map((r: any) => ({ id: r.id, obiect: r.obiect, cat: r.categorie, den: String(r.denumire || '').slice(0, 120), um: r.um, lista: r.cantitate, plansa: r.cantitate_plansa, nota: String(r.diferenta_nota || '').slice(0, 200), sursa: r.sursa })))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
+      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}${randuriOmise(nCant, (cant || []).length)}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify((cant || []).map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
+      sectiuneConflictePlanse(rConfl),
       `INVENTARUL DOCUMENTELOR IMPORTATE (${(docs || []).length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify((docs || []).map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
       `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${(clarLic || []).length}) — NU le repeta:\n${JSON.stringify((clarLic || []).map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
       `RĂSPUNSURI PRIMITE LA ALTE LICITAȚII (${raspunsuri.length}; întâi de la aceeași autoritate) — DOAR ca model de formulare, nu suprimă întrebări (R3):\n${JSON.stringify(raspunsuri.map((r: any) => ({ licitatie: r.lic?.nr_anunt, autoritate: String(r.lic?.autoritate || '').slice(0, 60), intrebare: String(r.intrebare || '').slice(0, 250), raspuns: String(r.raspuns || '').slice(0, 350) })))}`,
@@ -121,7 +179,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     // dedup (#116, v2): (a) cheie stabilă (licitație + cerințe + subiect) → identic = sărit; (b) Jaccard pe
     // subiect+întrebare doar ca SEMNAL, prag 0.75 — nu mai comparăm și motivul intern din `sursa`
     const existente = (clarLic || []).map((q: any) => ({ cheie: q.cheie, text: `${String(q.sursa || '').split(' — ')[0]} ${q.intrebare || ''}` }))
-    const cheiExist = new Set(existente.map(e => e.cheie).filter(Boolean))
+    const cheiExist = new Set(existente.map((e: any) => e.cheie).filter(Boolean))
     const acceptate: any[] = [], sarite: any[] = []
     for (const p of parsed.clarificari.slice(0, MAX_PROPUNERI)) {
       const intrebare = String(p?.intrebare || '').trim()
@@ -134,7 +192,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       const cheie = await cheieClarificare(licId, ids, subiect)
       if (cheiExist.has(cheie) || acceptate.some(a => a.cheie === cheie)) { sarite.push({ subiect, motiv: 'cheie identică (deja propusă)' }); continue }
       const text = `${subiect} ${intrebare}`
-      const dublura = existente.find(e => asemanare(e.text, text) >= 0.75) || acceptate.find(a => asemanare(`${a.subiect} ${a.intrebare}`, text) >= 0.75)
+      const dublura = existente.find((e: any) => asemanare(e.text, text) >= 0.75) || acceptate.find(a => asemanare(`${a.subiect} ${a.intrebare}`, text) >= 0.75)
       if (dublura) { sarite.push({ subiect, motiv: 'aceeași decizie, altă formulare' }); continue }
       acceptate.push({ cheie, subiect, prioritate: ['eliminatorie', 'importanta', 'utila'].includes(p.prioritate) ? p.prioritate : 'utila', sursa_tip: p.sursa_tip, cerinte_ids: ids, referinta: p.referinta ? String(p.referinta).slice(0, 200) : null, fragment: fragment.slice(0, 300), interpretari: String(p.interpretari || '').slice(0, 500), risc_divulgare: p.risc_divulgare === true, motiv: String(p.motiv || '').slice(0, 500), intrebare: intrebare.slice(0, 2000) })
     }

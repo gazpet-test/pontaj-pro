@@ -24,11 +24,15 @@ import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.j
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
 import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
+// R5 runda 9: baza cifrelor ciornelor automate de clarificare (afișată oriunde e ciorna)
+import { stareBazaCiorna } from './ofertareClarificariBaza.js'
 import CerinteAcoperirePerechi from './OfertareCerinte.jsx'
 import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
 import SourcePackSection from './OfertareSourcePack.jsx'
 import FormulareRegistruSection, { ClauzeContractSection } from './OfertareClauzeFormulare.jsx'
 import OfertareParteneri from './OfertareParteneri.jsx'
+import { raportTransferCantitati } from './ofertareTransferRaport.js'
+import { restantePeTip as restantePeTipDoc, textRestante } from './ofertareTransferRestante.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -695,9 +699,17 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const [clarAuto, setClarAuto] = useState(null)
   useEffect(() => {
     if (!licitatie?.id || !docs) return
-    supabase.from('ofertare_clarificari').select('id, sursa').eq('licitatie_id', licitatie.id)
+    supabase.from('ofertare_clarificari').select('id, sursa, cheie, status').eq('licitatie_id', licitatie.id)
       .eq('origine', 'automat').like('cheie', 'auto_planse_%').in('status', ['propunere', 'de_trimis']).order('id', { ascending: false }).limit(1)
-      .then(({ data }) => setClarAuto(data?.[0] ? { id: data[0].id, n: String(data[0].sursa || '').replace('planse_auto:', '').split(',').filter(Boolean).length } : null))
+      // reparația rundei 1 (verificatorul UI, minor): se numără DOAR id-urile de planșe (tokenii gen_ / ev_ / revizie_* din sursa nu sunt planșe)
+      .then(async ({ data }) => {
+        if (!data?.[0]) return setClarAuto(null)
+        // R5 runda 9: și baza cifrelor schimbată de la generare (sau necontrolabilă) => „necesită revizie”
+        const rB = await supabase.from('v_ofertare_clarificari_baza').select('id, stare, marcaj_planse, text').eq('id', data[0].id)
+        const st = stareBazaCiorna(data[0], rB.error ? null : new Map((rB.data || []).map(r => [r.id, r])), rB.error ? (rB.error.message || 'eroare') : null)
+        setClarAuto({ id: data[0].id, n: String(data[0].sursa || '').replace('planse_auto:', '').split(',').filter(t => /^\d+$/.test(t.trim())).length,
+          deRevizuit: /(^|,)revizie_planse_auto(,|$)/.test(String(data[0].sursa || '')), baza: st.blocheaza && st.nivel !== 'ok' ? st.text : '' })
+      })
   }, [licitatie?.id, docs])
   const [upBusy, setUpBusy] = useState(null)   // text progres upload
   const [procBusy, setProcBusy] = useState(null) // text progres procesare
@@ -719,13 +731,19 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const [rezAplic, setRezAplic] = useState(null)
 
   const [eroareDocs, setEroareDocs] = useState(null)
+  // R5 sarcina 2 (a): conflictele transferului planșă → cantități, per document (v_ofertare_transfer_conflicte). Eroare / view lipsă
+  // (codul publicat înainte de migrarea 2) => { eroare } — insigna spune „nu putem verifica”, nu „fără conflicte”.
+  const [conflicteTr, setConflicteTr] = useState({ peDoc: new Map(), eroare: null })
   const load = async () => {
-    const [{ data, error }, { data: c }] = await Promise.all([
+    const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
         .eq('licitatie_id', licitatie.id).order('id'),
       supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licitatie.id).maybeSingle(),
+      supabase.from('v_ofertare_transfer_conflicte').select('document_id, stare, n, deschis, in_curs, token, sursa, confirmat_la, confirmare_nota, confirmare_tip, conflicte, restante, motiv')
+        .eq('licitatie_id', licitatie.id).then(r => r, e => ({ data: null, error: e })),
     ])
+    setConflicteTr(rTc?.error ? { peDoc: new Map(), eroare: rTc.error.message || String(rTc.error) } : { peDoc: new Map((rTc?.data || []).map(x => [x.document_id, x])), eroare: null })
     // Eroarea la citire era inghitita: lista ramanea `null`, ecranul arata „se incarca" la nesfarsit
     // si nimeni nu afla de ce. Acum se vede, si intrarea din Clarificari stie ca n-are pe ce lucra.
     if (error) { setEroareDocs(error.message); setWarn('Nu pot incarca documentele: ' + error.message); setDocs([]) }
@@ -940,6 +958,27 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     if (ignoratTehnic(d, docs)) return 'erori'
     return 'sarite'
   }
+  // R5 sarcina 2 (a): confirmarea umană EXPLICITĂ a conflictelor transferului unui document — notă obligatorie, pe tokenul văzut.
+  // Reparația rundei 1 (ADDENDUM 2 Copilot, „închiderea conflictelor”): = REZOLVARE sau EXCEPȚIE JUSTIFICATĂ, nu „am văzut avertismentul”;
+  // legată de rularea exactă (token), cu drept de DECIZIE (owner / responsabilul licitației / admin Ofertare — verificat în BD de
+  // ofertare_transfer_conflicte_confirma); nu validează cantități; o recitire nouă cu conflicte NU e acoperită.
+  const confirmaConflicte = async (d, tc) => {
+    const rest = textRestante(restantePeTipDoc([tc]))
+    const lista = [(tc.conflicte || []).slice(0, 8).map(x => `• ${x.text}`).join('\n'), rest ? `Restanțe: ${rest}` : ''].filter(Boolean).join('\n') || '(vezi ⚠ pe document)'
+    const tip = window.prompt(`„${String(d.nume_original).split('/').pop()}”: transferul din planșă are ${tc.n} ${tc.n === 1 ? 'restanță deschisă' : 'restanțe deschise'} ` +
+      `(nescrise în cantități):\n${lista}\n\nConfirmarea e o DECIZIE (owner / responsabil / admin Ofertare) și nu validează cantități. Scrie:\n` +
+      '  rezolvat — ai verificat / corectat (dovada o scrii la pasul următor)\n  exceptie — NU afectează cantitatea / soluția ofertată (justificarea, min. 20 de caractere)', 'rezolvat')
+    if (tip == null) return
+    const t = String(tip).trim().toLowerCase().replace('excepție', 'exceptie')
+    if (!['rezolvat', 'exceptie'].includes(t)) { setWarn('Confirmarea nu s-a salvat: scrie „rezolvat” sau „exceptie”.'); return }
+    const nota = window.prompt(t === 'exceptie'
+      ? 'Excepție justificată: de ce restanțele NU afectează cantitatea / soluția ofertată și ce sursă o acoperă? (min. 20 de caractere)'
+      : 'Rezolvat: ce ai verificat / corectat? (ex.: „verificat pe planșă: Dn110 e pe lotul 2, cantitatea e deja în poziția #32”)')
+    if (nota == null) return
+    const { data, error } = await supabase.rpc('ofertare_transfer_conflicte_confirma', { p_doc_id: d.id, p_token: tc.token, p_tip: t, p_nota: nota })
+    if (error || data?.error) { setWarn('Confirmarea nu s-a salvat: ' + (error?.message || data.error)); return }
+    await load()
+  }
   const bifeazaRelevanta = async (d, retrage = false) => {
     const nota = retrage ? null : window.prompt(`„${String(d.nume_original).split('/').pop()}" nu a putut fi citit automat.\nCe ai verificat? (ex.: „planșă consultată manual, fără cerințe noi" sau „nerelevant: jurnal de plotare")`)
     if (!retrage && nota == null) return
@@ -1063,6 +1102,19 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
         `${sumar.metrici ? ` · ⏱ ${sumar.metrici.durata_s}s total, ~${sumar.metrici.cost_usd}$ total` : ''}.`)
     } finally { setPlansaBusy(null); await load(); onChanged?.() }
   }
+  // R5, reparația rundei 1: REEVALUAREA citirii salvate cu codul de acum, FĂRĂ AI (cost 0) — pentru jurnalele scrise de codul vechi
+  // („evaluat de codul vechi — de reevaluat”) sau o recitire pe care vrei s-o refaci după o corecție în 📋 Cantități. Scrie în cantități ca
+  // un transfer obișnuit => doar ownerul / responsabilul (poarta pe cheltuială, verificată și în edge).
+  const reevalueazaPlansa = async (d) => {
+    if (!window.confirm(`Reevaluez „${String(d.nume_original).split('/').pop()}” cu codul de acum pe citirea SALVATĂ (fără AI, cost 0)?\n` +
+      'Transferul în cantități se reface (cifrele din planșă / notele rândurilor se pot schimba; rândurile validate cu altă cifră trec pe ⚠ de reverificat).')) return
+    setWarn(null); setPlansaBusy(`${d.nume_original}: reevaluez citirea salvată (fără AI)...`)
+    try {
+      const { data, error } = await supabase.functions.invoke('ofertare-plansa-citeste', { body: { doc_id: d.id, mod: 'reevalueaza' } })
+      if (error || data?.error) { setWarn(`Reevaluarea nu s-a făcut: ${await mesajInvoke(error, data)}`); return }
+      setWarn(`✅ Reevaluat fără AI: ${data.sumar?.tronsoane_gasite ?? '?'} tronsoane; transfer: ${data.cantitati?.adaugate ?? 0} adăugate, ${data.cantitati?.actualizate ?? 0} actualizate.`)
+    } finally { setPlansaBusy(null); await load(); onChanged?.() }
+  }
   const citestePlansa = async (d, eticheta = '', fin = false) => {
     let ok = false
     setWarn(null); setPlansaBusy(`${eticheta}${d.nume_original}: pregătesc feliile...`)
@@ -1102,7 +1154,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           `${(sumar.avertismente || []).length ? ` · ⚠ ${sumar.avertismente.length} avertismente (vezi documentul)` : ''} · totaluri NEVALIDATE până la reconciliere` +
           `${sumar.lungime_declarata_m ? ` · lungime totală declarată pe planșă: ${sumar.lungime_declarata_m.toLocaleString('ro-RO')} m` : ''}` +
           `${sumar.metrici ? ` · ⏱ ${sumar.metrici.durata_s}s, ${sumar.metrici.runde} runde, ${sumar.metrici.limitari} limitări, ${sumar.metrici.reincercari} reîncercări, ~${sumar.metrici.cost_usd}$` : ''}` +
-          `${sumar.diametre_nestandard ? ` · ⚠ DE VERIFICAT: diametre nestandard ${sumar.diametre_nestandard.map(x => 'Dn' + x).join(', ')} (${sumar.nestandard_m.toLocaleString('ro-RO')} m) — NU s-au trecut în cantități` : ''}.`)
+          `${sumar.diametre_nestandard ? ` · ⚠ DE VERIFICAT: diametre nestandard ${sumar.diametre_nestandard.map(x => 'Dn' + x).join(', ')} (${sumar.nestandard_m.toLocaleString('ro-RO')} m) — NU s-au trecut în cantități` : ''}` +
+          // R5 condiția 2 (26.09.2026): ce n-a scris transferul (ambigue / doar „de verificat”) nu mai rămâne doar în JSON
+          `${(() => { const rp = raportTransferCantitati(sumar.cantitati); return rp && rp.text ? ` · ⚠ TRANSFER: ${rp.text} — vezi ⚠ pe document` : '' })()}.`)
       }
     } catch (e) {
       setWarn(`Eroare la citirea planșei: ${e.message}`)
@@ -1373,6 +1427,27 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       <span style={{ color:G.orange, marginLeft:6 }} title={`Pagini necitite: ${d.pagini_necitite.join(', ')}`}>· {d.pagini_necitite.length} necitite</span>
                     )}
                   </span>
+                  {/* R5 condiția 2: grupurile NESCRISE în cantități (ambigue) și Dn-urile doar „de verificat” — lista în tooltip */}
+                  {/* reparația rundei 1 (verificatorul UI, minor): insigna și butonul pentru ORICE document cu înregistrare în view (nu doar tip „plansa”) —
+                      altfel un document reclasificat bloca poarta graficului fără să arate conflictul sau butonul */}
+                  {(d.tip === 'plansa' || conflicteTr.peDoc.has(d.id)) && (() => { const rp = raportTransferCantitati(d.analiza?.citire_ai?.sumar?.cantitati)
+                    // R5 sarcina 2: starea conflictelor vine din v_ofertare_transfer_conflicte (aceeași definiție ca poarta); insigna veche = doar detaliu
+                    const tc = conflicteTr.peDoc.get(d.id)
+                    const restTxt = tc ? textRestante(restantePeTipDoc([tc])) : ''
+                    const detaliu = [...(tc?.conflicte || []).map(x => `• ${x.text}`), restTxt ? `Restanțe: ${restTxt}` : '', tc?.motiv || '', ...(rp ? [rp.text, ...rp.linii] : [])].filter(Boolean).join('\n')
+                    if (conflicteTr.eroare && d.analiza?.citire_ai?.sumar?.cantitati) return <span title={`v_ofertare_transfer_conflicte: ${conflicteTr.eroare}`} style={{ color: G.red, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>⚠ transfer: nu putem verifica conflictele</span>
+                    if (tc?.in_curs) return <span style={{ color: G.muted, fontSize: 11, whiteSpace: 'nowrap' }}>⏳ transfer în curs</span>
+                    if (tc?.deschis) return <>
+                      <span title={detaliu || (tc.motiv || '')} style={{ color: G.orange, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>⚠ transfer: {tc.stare === 'neefectuat' ? 'netrecut în cantități' : tc.stare === 'legacy_partial' ? 'verificare indisponibilă (jurnal vechi) — ♻ reevaluează fără AI' : tc.stare === 'citire_neterminata' ? 'citire neterminată — nu putem verifica' : `${tc.n} ${tc.n === 1 ? 'restanță deschisă' : 'restanțe deschise'}`}</span>
+                      <button style={{ ...S.btnS, padding: '2px 8px', fontSize: 11, color: G.orange, borderColor: G.orange + '66' }}
+                        title="Sursa (planșa) e incompletă: poarta graficului o blochează, H2 o arată, aprobarea finală e blocată — până la o recitire care acoperă restanțele sau o confirmare ca REZOLVARE / EXCEPȚIE JUSTIFICATĂ (decizie: owner / responsabil / admin Ofertare)."
+                        onClick={() => confirmaConflicte(d, tc)}>✋ rezolvare / excepție</button>
+                      {d.analiza?.citire_ai?.gata && poatePorniProcesarea(profile, licitatie) && (
+                        <button style={{ ...S.btnS, padding: '2px 8px', fontSize: 11, color: G.blue, borderColor: G.blue + '66' }} disabled={!!plansaBusy}
+                          title="Reevaluează citirea SALVATĂ cu codul de acum — fără AI, cost 0 (ex. jurnal scris de codul vechi). Scrie în cantități ca un transfer."
+                          onClick={() => reevalueazaPlansa(d)}>♻ reevaluează (fără AI)</button>)}</>
+                    if (tc?.confirmat_la) return <span title={`${tc.n} restanțe, confirmate ${tc.confirmare_tip === 'exceptie' ? 'ca EXCEPȚIE JUSTIFICATĂ' : 'ca REZOLVATE'} ${new Date(tc.confirmat_la).toLocaleString('ro-RO')}: ${tc.confirmare_nota || ''}${detaliu ? `\n${detaliu}` : ''}`} style={{ color: G.green, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>✓ transfer: {tc.confirmare_tip === 'exceptie' ? 'excepție justificată' : 'rezolvat'}</span>
+                    return rp && (rp.stare === 'de_verificat' || rp.stare === 'netrecut') && <span title={[rp.text, ...rp.linii].join('\n')} style={{ color: G.orange, fontSize: 11, whiteSpace: 'nowrap', cursor: 'help' }}>⚠ transfer: {rp.stare === 'netrecut' ? 'netrecut în cantități' : `${rp.ambigue ? `${rp.ambigue} nescrise` : ''}${rp.ambigue && rp.de_verificat ? ', ' : ''}${rp.de_verificat ? `${rp.de_verificat} de verificat` : ''}`}</span> })()}
                   {d.tip === 'plansa' && (() => { const e = ETICHETA_REZ[d.analiza?.plansa?.rezultat] || (subPrag(d) ? ['sursă sub 2000px — de randat', G.orange, 'Sursa citită are sub 2000px; nu e dovadă de siglă — retaie (randare pagină completă)'] : null)
                     return e && <span title={e[2] + (d.analiza?.plansa?.rezultat_motiv ? `\n${d.analiza.plansa.rezultat_motiv}` : '')} style={{ color:e[1], fontSize:11, whiteSpace:'nowrap' }}>{e[0]}</span> })()}
                   {d.status_procesare === 'in_lucru' && (
@@ -1457,7 +1532,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       })()}
       {clarAuto?.n > 0 && (
         <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', background:'#1d1a0d', border:`1px solid ${G.orange}66`, borderRadius:10, padding:'8px 12px', marginTop:8, fontSize:12.5 }}>
-          <span>❓ Am pregătit automat o clarificare pentru <b>{clarAuto.n}</b> planș{clarAuto.n === 1 ? 'ă necitibilă' : 'e necitibile'} — verific-o în Clarificări <span style={{ color:G.muted }}>(ciornă, nu s-a trimis nimic)</span></span>
+          <span>❓ Am pregătit automat o clarificare pentru <b>{clarAuto.n}</b> planș{clarAuto.n === 1 ? 'ă necitibilă' : 'e necitibile'} — verific-o în Clarificări <span style={{ color:G.muted }}>(ciornă, nu s-a trimis nimic)</span>
+            {clarAuto.deRevizuit && <span style={{ color:G.orange }}> · ⚠ necesită revizie: planșele s-au schimbat de la textul ei (editat / aprobat de om — nu l-am atins)</span>}
+            {clarAuto.baza && <span style={{ color:G.orange }}> · ⚠ {clarAuto.baza}</span>}</span>
           {onGoClarificari && <button style={{ ...S.btnS, padding:'4px 10px', fontSize:12 }} onClick={onGoClarificari}>→ Clarificări</button>}
         </div>
       )}
@@ -3320,6 +3397,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const [packImportKey, setPackImportKey] = useState(0)   // P0c: după import din Source Pack, registrul se reîncarcă
   useEffect(() => { setSelCerinte([]) }, [l.id])
   const [clar, setClar] = useState(null)
+  const [clarBaza, setClarBaza] = useState({ peId: new Map(), eroare: null })   // R5 runda 9 — v_ofertare_clarificari_baza
   // Răzvan 07.09 (varianta C): mail „Etapa 1” către echipa Ofertare — previzualizare → confirmare → trimitere (edge fn ofertare-etapa1-mail)
   // #77 (15.09): lista de sarcini din mail se construiește în edge fn (stare() + htmlEtapa1) cu ACELEAȘI rânduri și aceeași ordine
   //   ca secțiunea „Cerințe & acoperire” filtrată „de rezolvat” (tip → nr_ordine, #nr_ordine pe rând); r.sarcini = rândurile listate.
@@ -3368,8 +3446,10 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
 
   useEffect(() => {
     if (tab !== 'clarificari') return
-    supabase.from('ofertare_clarificari').select('id, nr, intrebare, status, origine, citita_la, raspuns').eq('licitatie_id', l.id).order('nr')
+    supabase.from('ofertare_clarificari').select('id, nr, intrebare, status, origine, citita_la, raspuns, cheie, sursa').eq('licitatie_id', l.id).order('nr')
       .then(({ data }) => setClar(data || []))
+    supabase.from('v_ofertare_clarificari_baza').select('id, stare, marcaj_planse, text, amprenta_curenta').eq('licitatie_id', l.id)
+      .then(({ data, error }) => setClarBaza(error ? { peId: null, eroare: error.message || 'eroare' } : { peId: new Map((data || []).map(r => [r.id, r])), eroare: null }))
   }, [tab, l.id])
 
   const KPI = ({ l: lbl, v, unit, color }) => (
@@ -3482,6 +3562,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
                         <div style={{ fontSize:13.5, whiteSpace:'pre-wrap' }}>{q.intrebare}</div>
                         <div style={{ fontSize:11.5, color:G.dim, marginTop:4 }}>{q.origine === 'manual' ? '👤 încărcată manual' : '🤖 generată de platformă'}{q.origine === 'manual' && (q.citita_la ? ' · ✓ citită de platformă' : ' · ⚠ necitită')}</div>
                         {q.raspuns && <div style={{ fontSize:12.5, color:G.green, marginTop:6, whiteSpace:'pre-wrap' }}>↳ {q.raspuns}</div>}
+                        {(() => { const st = stareBazaCiorna(q, clarBaza.peId, clarBaza.eroare); return st.blocheaza || st.nivel === 'luat_act'
+                          ? <div style={{ fontSize:12, color: st.nivel === 'luat_act' ? G.muted : G.red, marginTop:5 }}>⚠ {(q.status === 'trimisa' || q.status === 'raspunsa') && st.nivel === 'schimbata' ? 'baza cifrelor s-a schimbat DUPĂ transmitere — textul transmis rămâne neschimbat' : st.text} (reconfirmare în ❓ Clarificări)</div> : null })()}
                       </div>
                       <span style={{ fontSize:11.5, fontWeight:800, color:col, whiteSpace:'nowrap' }}>{lbl}</span>
                     </div>) })}

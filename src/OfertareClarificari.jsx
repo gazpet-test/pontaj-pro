@@ -12,6 +12,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { imageToPdf } from './CitesteOricePanel.jsx'
+// R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
+import { eCiornaAutomata, stareBazaCiorna, textDiferente } from './ofertareClarificariBaza.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -48,6 +50,10 @@ const scorPotrivire = (a, b) => {
 // (ex. '…,revizie_v2_manual'). Parsare pe split(','), nu LIKE: textul liber al sursei conține virgule.
 export const tokeniRevizie = (sursa) => String(sursa || '').split(',').slice(1).map(t => t.trim()).filter(t => /^revizie_[a-z0-9_]+$/i.test(t))
 export const necesitaRevizie = (q) => tokeniRevizie(q?.sursa).length > 0
+// R5 sarcina 2 (e): marcajul pus de ofertare_clarificare_planse_auto v6 pe o ciornă PROTEJATĂ (editată / aprobată de om) care nu mai
+// corespunde planșelor — textul și statusul ei nu se ating automat. Omul îl scoate după revizie („✓ revizuită”); alte marcaje rămân.
+export const MARCAJ_REVIZIE_AUTO = 'revizie_planse_auto'
+export const faraMarcajRevizieAuto = (sursa) => { const p = String(sursa || '').split(','); return [p[0], ...p.slice(1).filter(t => t.trim() !== MARCAJ_REVIZIE_AUTO)].join(',') }
 
 export default function ClarificariPanel({ licitatii, profile, showToast, initialLicId = null, onInapoi = null, onDeschideAnaliza = null }) {
   const active = (licitatii || []).filter(l => !['castigata', 'pierduta', 'abandonata'].includes(l.status))
@@ -59,6 +65,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const [busy, setBusy] = useState(null)
   const [citindDoc, setCitindDoc] = useState(null) // id document răspuns în curs de citire AI
   const [legare, setLegare] = useState(null)       // { docId, bife:{clarId:true}, propuneri:{clarId:'raspuns_scurt'} } — panoul „La ce întrebări răspunde?”
+  // R5 runda 9: starea bazei cifrelor ciornelor automate (v_ofertare_clarificari_baza) — eroare / view lipsă = „nu putem verifica” (fail-closed)
+  const [baza, setBaza] = useState({ peId: new Map(), eroare: null })
   const numeProfil = (id) => profiles.find(p => p.id === id)?.name || '—'
   // Răzvan 07.09.2026: clarificările încărcate manual (PDF) sunt citite de platformă cu AI → citita_la + rezumat
   const citesteClarificare = async (q) => {
@@ -84,7 +92,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 
   const load = async () => {
     if (!licId) return
-    const [{ data: q }, { data: pr }, { data: dr }] = await Promise.all([
+    const [{ data: q }, { data: pr }, { data: dr }, rB] = await Promise.all([
       supabase.from('ofertare_clarificari').select('*').eq('licitatie_id', licId).order('nr'),
       supabase.from('profiles').select('id, name'),
       // PDF-urile de raspuns ale autoritatii, ca sa se poata lega de intrebarea careia ii raspund
@@ -95,8 +103,14 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       // documentatia revizuita e marcata ca atare in lista.
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, seap_meta, text_extras, fisier_path, created_at, analiza, analiza_la, status_procesare, eroare')
         .eq('licitatie_id', licId).eq('aparut_ulterior', true).order('id'),
+      supabase.from('v_ofertare_clarificari_baza').select('id, status, stare, mod_ciorna, mod_curent, amprenta_curenta, marcaj_planse, text, detalii').eq('licitatie_id', licId),
     ])
+    // Notificarea rulează separat; eșecul ei nu afectează salvarea sau controlul final.
+    void supabase.rpc('ofertare_clarificari_notifica', { p_licitatie_id: licId }).then(({ error, data }) => {
+      if (error || data?.error) showToast('Notificarea de review nu a fost emisă; controlul final rămâne activ.', 'warn')
+    }).catch(() => showToast('Notificarea de review nu a fost emisă; controlul final rămâne activ.', 'warn'))
     setClar(q || []); setProfiles(pr || []); setDocRasp(dr || [])
+    setBaza(rB?.error ? { peId: null, eroare: rB.error.message || 'eroare' } : { peId: new Map((rB?.data || []).map(r => [r.id, r])), eroare: null })
   }
   useEffect(() => { load(); setLegare(null) }, [licId])
 
@@ -104,13 +118,34 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 
   // ── clarificări ──
   const setQ = (id, k, v) => setClar(qs => qs.map(q => q.id === id ? { ...q, [k]: v, _mod: true } : q))
+  // R5 runda 9 (verificatorul UI, minor saveQ): `sursa` NU se mai scrie de aici — o copie locală veche ștergea marcajul „necesită revizie” și
+  // amprentele puse între timp de server (serverul le păstrează oricum: trg_ofertare_clarificari_baza). Marcajul se scoate doar prin
+  // reconfirmare (✓ revizuită). Eroarea serverului (ex. aprobarea / trimiterea unei ciorne cu cifrele schimbate) ajunge la om.
   const saveQ = async (q) => {
     if (!q._mod) return
-    await supabase.from('ofertare_clarificari').update({
-      intrebare: q.intrebare, sursa: q.sursa || null, raspuns: q.raspuns || null,
+    const { error } = await supabase.from('ofertare_clarificari').update({
+      intrebare: q.intrebare, raspuns: q.raspuns || null,
       raspuns_document_id: q.raspuns_document_id || null,
       status: q.status, updated_at: new Date().toISOString(),
     }).eq('id', q.id)
+    if (error) showToast('Nu s-a salvat: ' + error.message, 'err')
+    await load()
+  }
+  // R5 runda 9 (ADDENDUM 3 Copilot, 2): reconfirmarea = omul vede diferențele și decide PE BAZA DE ACUM (amprenta văzută; dacă datele se schimbă din
+  // nou, serverul refuză). Se aprobă textul exact; nicio validare automată a cifrelor din proză. Transmisă: doar „am luat act”.
+  const reconfirma = async (q, decizie) => {
+    const st = stareBazaCiorna(q, baza.peId, baza.eroare)
+    if (!st.rand?.amprenta_curenta) { showToast('Nu putem verifica baza cifrelor acum — reîncarcă.', 'err'); return }
+    if (q._mod) { showToast('Salvează textul înainte de reconfirmare.', 'err'); return }
+    const intrebari = {
+      revizuit: 'Ai revizuit textul față de cifrele / planșele de ACUM? Scrie pe scurt ce ai verificat (min. 5 caractere):',
+      luat_act: 'Clarificarea e deja transmisă — textul NU se schimbă. Ce faci: completare de trimis / de ce nu e nevoie (min. 10 caractere):',
+    }
+    let nota = ''
+    nota = window.prompt(intrebari[decizie] || 'Notă:') || ''; if (!nota.trim()) return
+    const { data, error } = await supabase.rpc('ofertare_clarificare_reconfirma', { p_id: q.id, p_amprenta: st.rand.amprenta_curenta, p_decizie: decizie, p_nota: nota })
+    if (error || data?.error) { showToast('Reconfirmare refuzată: ' + (data?.error || error?.message), 'err'); await load(); return }
+    showToast('✓ Decizia de review a fost înregistrată — nimic trimis.')
     await load()
   }
   // 22.09.2026: „Propune clarificări” — generatorul rulează pe workerul NAS (ofertare_clarificari_coada):
@@ -149,9 +184,12 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   // în textul întrebării ajunge la concurență. Antetul e emitentul adresei, e în regulă.
   const genereazaAdresa = async () => {
     // #63: întrebările marcate „revizie_*” în sursa NU intră în adresă (rămân vizibile în listă cu badge)
-    const deTrimis = (clar || []).filter(q => q.status === 'de_trimis' && (q.intrebare || '').trim() && !necesitaRevizie(q))
-    const excluse = (clar || []).filter(q => q.status === 'de_trimis' && necesitaRevizie(q)).length
-    if (!deTrimis.length) { showToast(`Nicio întrebare cu status „de trimis"${excluse ? ` (${excluse} excluse: necesită revizie)` : ''}.`, 'warn'); return }
+    // R5 runda 9 (ADDENDUM 3, C): starea bazei se RECITEȘTE din server chiar acum (nu din ecranul încărcat mai demult): o ciornă automată cu cifrele
+    // schimbate / nereconfirmate sau necontrolabilă (view indisponibil) NU intră în adresă
+    const { data: deTrimis, error: eExport } = await supabase.rpc('ofertare_clarificari_export', { p_licitatie_id: licId })
+    if (eExport || !Array.isArray(deTrimis)) { showToast('Export blocat: ' + (eExport?.message || 'verificare indisponibilă'), 'err'); return }
+    const excluse = 0
+    if (!deTrimis.length) { showToast('Nicio întrebare aprobată de exportat.', 'warn'); return }
     setBusy('PDF...')
     try {
       // HTML pe antet → html2canvas → A4 (fontul standard jsPDF nu are diacritice)
@@ -495,12 +533,39 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         title="Ai verificat că datele chiar lipsesc (nu sunt în memoriu, F3 sau alt document) — ciorna trece la „de trimis”"
                         onClick={() => { setQ(q.id, 'status', 'de_trimis'); saveQ({ ...q, status: 'de_trimis', _mod: true }) }}>✅ Confirm motivul — de trimis</button>}
                       {necesitaRevizie(q) && <span title={`Marcaj în sursă: ${tokeniRevizie(q.sursa).join(', ')} — exclusă din adresa generată până la revizie`} style={{ fontSize:10.5, fontWeight:700, color:G.red, background:G.red + '1A', border:`1px solid ${G.red}55`, borderRadius:5, padding:'1px 7px' }}>⚠ necesită revizie</span>}
+                      {/* R5 runda 9: „✓ revizuită” (marcajul planșelor) = reconfirmarea din panoul bazei, de mai jos — legată de baza de acum */}
                       {q.sursa && <span style={{ fontSize:11, color:G.dim }}>sursa: {q.sursa}</span>}
                       {q.fisier_path && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} onClick={async () => {
                         const { data } = await supabase.storage.from('ofertare').createSignedUrl(q.fisier_path, 600)
                         if (data?.signedUrl) window.open(data.signedUrl, '_blank')
                       }}>📄 PDF-ul depus</button>}
                     </div>
+                    {eCiornaAutomata(q) && (() => {
+                      // R5 runda 9: baza cifrelor ciornei față de acum — afișată oriunde e ciorna; aprobarea / trimiterea cer reconfirmarea (și serverul o cere)
+                      const st = stareBazaCiorna(q, baza.peId, baza.eroare)
+                      if (st.nivel === 'na') return null
+                      const transmisa = q.status === 'trimisa' || q.status === 'raspunsa'
+                      const dif = textDiferente(st.rand?.detalii)
+                      const col = st.nivel === 'ok' ? G.green : st.nivel === 'luat_act' ? G.muted : G.red
+                      return (
+                        <div style={{ marginTop:6, padding:'7px 10px', background:G.surface, borderRadius:7, borderLeft:`3px solid ${col}`, fontSize:12 }}>
+                          <div style={{ fontWeight:700, color:col }}>⚠ {transmisa && st.nivel === 'schimbata' ? 'baza cifrelor s-a schimbat DUPĂ transmitere — textul transmis rămâne neschimbat; evaluează o completare' : st.text || 'Text aprobat de om pe baza curentă; cantitățile din text nu sunt validate automat.'}</div>
+                          {st.rand?.detalii?.curent?.text && st.nivel !== 'nu_putem_verifica' && <div style={{ color:G.muted, marginTop:3 }}>acum: {st.rand.detalii.curent.text}</div>}
+                          {(st.rand?.detalii?.curent?.totaluri || []).map(t => <div key={t.id} style={{ marginTop:3 }}>TOTAL #{t.id}: declarat {t.declarat ?? 'necunoscut'} {t.um}; detalii validate {t.suma_detalii ?? 'necunoscute'} {t.um}. {t.text}</div>)}
+                          {dif.length > 0 && <details style={{ marginTop:3 }}><summary style={{ cursor:'pointer', color:G.muted }}>ce s-a schimbat față de baza ciornei ({dif.length})</summary>
+                            <ul style={{ margin:'4px 0 0', paddingLeft:18 }}>{dif.map((t, i) => <li key={i}>{t}</li>)}</ul></details>}
+                          {st.blocheaza && st.nivel !== 'nu_putem_verifica' && st.nivel !== 'luat_act' && (
+                            <div style={{ display:'flex', gap:6, marginTop:5, flexWrap:'wrap' }}>
+                              {transmisa
+                                ? <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} onClick={() => reconfirma(q, 'luat_act')}>👁 Am luat act</button>
+                                : <>
+                                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.green, borderColor:G.green + '66' }} title="Ai verificat textul exact pe datele curente; cifrele scrise manual rămân asumarea ta" onClick={() => reconfirma(q, 'revizuit')}>✓ Am revizuit textul — reconfirm</button>
+                                  </>}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                     {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }}>🤖 {q.citita_rezumat}</div>}
                     {/* Câmpul de răspuns apare de la „trimisă" încolo. Înainte era legat de status='raspunsa',
                         deci nimeni nu putea completa răspunsul fără să bifeze întâi că a primit unul. */}

@@ -1,0 +1,327 @@
+// R5 (Copilot 25.09.2026): „Existența rândului cu status='extras' nu demonstrează singură că a intrat în oferta
+// aprobată." Fixture = rândurile REALE 1751–1756 ale lic. 95 (SELECT pe ofertare_cantitati, 25.09.2026 22:3x).
+import { describe, it, expect } from 'vitest'
+import { esteAprobata, randuriFront, controlCantitatiGrafic, fronturiDinCantitati, controlFronturiGrafic, campuriCantitatiNevalidate, randuriLipsa, esteInvalidat } from './ofertareCantitatiAprobare.js'
+import { aplicaRegulaAprobare } from './ofertareCantitatiInvalidare.js'
+
+const SURSA = 'Planșa 1 — tabel de dimensionare, citit automat din scanare'
+const r = (id, dn, m, extra = {}) => ({ id, obiect: null, categorie: 'Conducte și montaj', denumire: `Conductă distribuție gaze Dn${dn}`, um: 'm', cantitate: m, cantitate_plansa: m, status: 'extras', tip_sursa: null, sursa: SURSA, ...extra })
+const LIC95 = [r(1751, 200, 17785), r(1752, 125, 2275), r(1753, 110, 780), r(1754, 90, 4545), r(1755, 63, 9670), r(1756, 40, 13140)]
+const valideaza = (rows, ids = null) => rows.map(x => (!ids || ids.includes(x.id)) ? { ...x, status: 'validat' } : x)
+
+describe('esteAprobata — doar bifa unui om', () => {
+  it('validat = aprobat; extras / diferenta / revizuit_clarificare / fara status = nu', () => {
+    expect(esteAprobata({ status: 'validat' })).toBe(true)
+    for (const s of ['extras', 'diferenta', 'revizuit_clarificare', undefined, null, 'VALIDAT']) expect(esteAprobata({ status: s })).toBe(false)
+    expect(esteAprobata(null)).toBe(false)
+  })
+})
+
+describe('randuriFront — mutat neschimbat din GraficPoarta', () => {
+  it('lic. 95: cele 6 randuri de conducta sunt fronturi (Σ 48.195 m)', () => {
+    const f = randuriFront(LIC95)
+    expect(f.map(x => x.id)).toEqual([1751, 1752, 1753, 1754, 1755, 1756])
+    expect(f.reduce((s, x) => s + x.cantitate, 0)).toBe(48195)
+  })
+  it('titlurile de sectiune castiga si nu se amesteca cu articolele de deviz (Domnesti)', () => {
+    const rows = [{ um: 'm', categorie: 'TITLU SECȚIUNE', denumire: 'Extindere rețele - Făgului', cantitate: 500 }, { um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE', cantitate: 3500 }]
+    expect(randuriFront(rows)).toHaveLength(1)
+  })
+  it('randurile „total" si cele fara metri nu sunt fronturi; baza planse ia cantitate_plansa', () => {
+    const rows = [{ um: 'm', obiect: 'TOTAL', categorie: 'Conducte', cantitate: 9 }, { um: 'buc', categorie: 'Conducte', cantitate: 5 },
+      { um: 'm', categorie: 'Conducte', cantitate: null, cantitate_plansa: 70 }]
+    expect(randuriFront(rows)).toHaveLength(0) // baza 'cantitate': rândul cu cantitate NULL nu e front
+    expect(randuriFront(rows, 'cantitate_plansa')).toHaveLength(1)
+  })
+})
+
+describe('controlCantitatiGrafic — randul „cant" din poarta graficului', () => {
+  it('lic. 95 azi (6 × extras): BLOCK, nu „ok" — 48.195 m nevalidati, inclusiv Dn200 17.785 m', () => {
+    const c = controlCantitatiGrafic(LIC95, '')
+    expect(c.stare).toBe('block')
+    expect(c.nevalidate.map(x => x.id)).toEqual([1751, 1752, 1753, 1754, 1755, 1756])
+    expect(c.m_nevalidate).toBe(48195)
+    expect(c.detalii).toMatch(/^6 din 6 rânduri de rețea NEVALIDATE — lipsesc 6 rânduri necesare nevalidate \(48\.195 m\): #1751 „Conductă distribuție gaze Dn200” \(extras, 17\.785 m\); #1752 /)
+    expect(c.detalii).toMatch(/; … încă 1 \(📋 Cantități → „N nevalidate”\)/)
+    expect(c.lista.map(x => x.id)).toEqual([1751, 1752, 1753, 1754, 1755, 1756]) // lista completă, pentru poartă
+  })
+  it('un singur rand nevalidat (1751) tine poarta inchisa chiar daca restul sunt validate', () => {
+    const c = controlCantitatiGrafic(valideaza(LIC95, [1752, 1753, 1754, 1755, 1756]), 'memoriu')
+    expect(c.stare).toBe('block'); expect(c.nevalidate.map(x => x.id)).toEqual([1751]); expect(c.m_nevalidate).toBe(17785)
+  })
+  it('regula veche „diferenta + baza aleasa = warn" nu mai trece: diferenta nevalidata = block', () => {
+    const rows = [r(1, 110, 1000, { status: 'diferenta', cantitate_plansa: 1200 })]
+    expect(controlCantitatiGrafic(rows, 'plansa').stare).toBe('block')
+    expect(controlCantitatiGrafic(rows, '').detalii).toMatch(/alege și baza/)
+  })
+  it('toate validate => ok; totalul declarat nevalidat e etichetat', () => {
+    const rows = [...valideaza(LIC95), { id: 9, obiect: 'Total rețea', um: 'm', categorie: 'Conducte', denumire: 'Total', cantitate: 48195, status: 'extras' }]
+    const c = controlCantitatiGrafic(rows, '')
+    expect(c.stare).toBe('warn'); expect(c.detalii).toMatch(/Totalul declarat nu poate fi verificat.*total declarat 48\.195 m \(nevalidat\)/)   // runda 9: perimetrul spus explicit
+  })
+  it('fara randuri de retea => block (neschimbat)', () =>
+    expect(controlCantitatiGrafic([], '').stare).toBe('block'))
+})
+
+describe('fronturiDinCantitati — „Propune din cantitati" doar din randuri validate', () => {
+  it('lic. 95 azi: niciun front propus, 6 randuri excluse (48.195 m)', () => {
+    const { fronturi, excluse, m_excluse } = fronturiDinCantitati(LIC95, '')
+    expect(fronturi).toEqual([]); expect(excluse).toHaveLength(6); expect(m_excluse).toBe(48195)
+  })
+  it('dupa validarea lui 1752–1756: 5 fronturi (30.410 m), Dn200 17.785 m ramane pe dinafara', () => {
+    const { fronturi, excluse } = fronturiDinCantitati(valideaza(LIC95, [1752, 1753, 1754, 1755, 1756]), '')
+    expect(fronturi.map(f => f.dn)).toEqual(['125', '110', '90', '63', '40'])
+    expect(fronturi.reduce((s, f) => s + f.lungime_m, 0)).toBe(30410)
+    expect(excluse.map(x => x.id)).toEqual([1751])
+  })
+  it('maparea numelui/lungimii/Dn e cea veche; runda 4: + proveniența (rândul-sursă, baza, cifra la propunere)', () => {
+    const rows = [{ id: 1, um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn110 — Făgului', cantitate: 512.4, cantitate_plansa: 530, status: 'validat' }]
+    expect(fronturiDinCantitati(rows, '').fronturi).toEqual([{ nume: 'Făgului', lungime_m: 512, dn: '110', echipe: 1, cantitate_id: 1, baza: 'cantitate', lungime_sursa: 512.4,
+      um_sursa: 'm', denumire_sursa: 'Țeavă PE100 SDR11 Dn110 — Făgului', obiect_sursa: null }])   // runda 9 (S4a): + atributele rândului-sursă
+    expect(fronturiDinCantitati(rows, 'plansa').fronturi[0]).toMatchObject({ lungime_m: 530, baza: 'cantitate_plansa', lungime_sursa: 530 })
+  })
+})
+
+describe('campuriCantitatiNevalidate — view lipsa ≠ zero', () => {
+  // sarcina 2 (c): în plus față de „niciun câmp”, motivul explicit — H2 spune „nu putem verifica” și blochează și fără F3
+  it('eroare (view neaplicat) => niciun câmp numeric, doar `cantitati_nevalidate_indisponibil` (H2 va spune „nu putem verifica")', () => {
+    expect(campuriCantitatiNevalidate({ error: { message: 'relation "public.v_ofertare_cantitati_nevalidate" does not exist' }, data: null }))
+      .toEqual({ cantitati_nevalidate_indisponibil: 'relation "public.v_ofertare_cantitati_nevalidate" does not exist' })
+    expect(campuriCantitatiNevalidate(null)).toEqual({ cantitati_nevalidate_indisponibil: 'nicio citire' })
+  })
+  it('rand lipsa (licitatia n-are randuri de retea) => 0', () =>
+    expect(campuriCantitatiNevalidate({ data: null, error: null }).lista_f3_nevalidate).toBe(0))
+  it('valorile din view trec numerice', () => {
+    const c = campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: '47', lista_f3_nevalidate_m: '6520', plansa_nevalidate: 20 }, error: null })
+    expect(c).toEqual({ lista_f3_nevalidate: 47, lista_f3_nevalidate_m: 6520, lista_c6_nevalidate: 0, memoriu_nevalidate: 0, plansa_nevalidate: 20 })
+  })
+})
+
+// ════════════════════════════════════════════════════════════════
+// R5 runda 4 (verificator R3): rândul „front" — referința și proveniența fronturilor salvate
+// ════════════════════════════════════════════════════════════════
+const P = (fronturi, baza = '') => ({ cantitati_asumate: baza, fronturi })
+describe('controlFronturiGrafic — referința doar din total VALIDAT (ADV6)', () => {
+  const rete = [r(1, 110, 1000, { status: 'validat' })]
+  const fr = fronturiDinCantitati(rete, '').fronturi
+  it('R9b: TOTAL nevalidat cere review, fără alegerea automată a referinței', () => {
+    const c = controlFronturiGrafic(P(fr), [...rete, { id: 2, obiect: 'Total rețea', um: 'm', categorie: 'Conducte', denumire: 'Total', cantitate: 50000, status: 'extras' }])
+    expect(c.ref).toBeNull(); expect(c.totalAprobat).toBe(false); expect(c.stare).toBe('warn')
+    expect(c.detalii).toMatch(/Totalul declarat nu poate fi verificat/)
+  })
+  it('R9b: TOTAL validat fără perimetru comparabil nu este ales ca referință', () => {
+    const c = controlFronturiGrafic(P(fr), [...rete, { id: 2, obiect: 'Total rețea', um: 'm', categorie: 'Conducte', denumire: 'Total', cantitate: 5000, status: 'validat' }])
+    expect(c.ref).toBeNull(); expect(c.stare).toBe('warn'); expect(c.detalii).toMatch(/Totalul declarat nu poate fi verificat/)
+  })
+  it('rânduri de rețea nevalidate nu intră în referință', () => {
+    const c = controlFronturiGrafic(P(fr), [...rete, r(3, 90, 4000)])
+    expect(c.ref).toBe(1000)
+  })
+})
+describe('controlFronturiGrafic — fronturile SALVATE trebuie să vină din rânduri validate cu cifra de acum', () => {
+  // lic. 3, grafic_parametri (SELECT 26.09.2026): 6 fronturi / 29.985 m, salvate 04.09 pe baza „planșe", fără legătură cu rândurile
+  const LIC3_FR = [['Oltenița racord + Ulmeni (magistrală)', 6200, '250'], ['Spanțov', 8015, '250'], ['Chiselet', 6255, '250'],
+    ['Mânăstirea + DJ303', 3165, '250'], ['Mânăstirea → Coconi (extravilan)', 1100, '180'], ['Coconi + Sultana', 5250, '160']].map(([nume, lungime_m, dn]) => ({ nume, lungime_m, dn, echipe: 1 }))
+  const LIC3_R = [
+    { id: 1, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn250 — tronsoane magistrală', cantitate: 23630, cantitate_plansa: 34465 },
+    { id: 2, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn180 — extravilan', cantitate: 1100, cantitate_plansa: 2210 },
+    { id: 3, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn160 — Coconi + Sultana', cantitate: 5250, cantitate_plansa: 5245 }]
+  it('lic. 3 real: 6 fronturi salvate înainte de R5, fără legătură => BLOCK chiar cu toate rândurile validate (înainte: doar warn)', () => {
+    const c = controlFronturiGrafic(P(LIC3_FR, 'plansa'), LIC3_R)
+    expect(c.stare).toBe('block'); expect(c.probleme).toHaveLength(6)
+    expect(c.detalii).toMatch(/^6 din 6 fronturi nu vin din cantități validate cu cifra de acum — apasă „Propune din cantități"/)
+  })
+  it('aceleași fronturi marcate manual (decizia omului) => trec, numărate în detalii', () => {
+    const c = controlFronturiGrafic(P(LIC3_FR.map(f => ({ ...f, manual: true })), 'plansa'), LIC3_R)
+    expect(c.stare).not.toBe('block'); expect(c.detalii).toMatch(/6 introduse manual/)
+  })
+  it('re-propuse din rândurile validate => ok; rândul-sursă redeschis (↩) => BLOCK', () => {
+    const fr = fronturiDinCantitati(LIC3_R, 'plansa').fronturi
+    expect(controlFronturiGrafic(P(fr, 'plansa'), LIC3_R).stare).toBe('ok')
+    const c = controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.map(x => x.id === 2 ? { ...x, status: 'diferenta' } : x))
+    expect(c.stare).toBe('block'); expect(c.detalii).toMatch(/rândul-sursă #2 nu e validat \(diferenta\)/)
+  })
+  it('cifra rândului-sursă s-a schimbat de la propunere (revalidat pe altă cifră) => BLOCK', () => {
+    const fr = fronturiDinCantitati(LIC3_R, 'plansa').fronturi
+    const c = controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.map(x => x.id === 2 ? { ...x, cantitate_plansa: 2600 } : x))
+    expect(c.stare).toBe('block'); expect(c.detalii).toMatch(/#2 s-a schimbat de la propunere \(2\.210 → 2\.600 m\)/)
+  })
+  it('runda 1b: ORICE altă cifră (2.210 → 2.210,4, revalidat) cere repropunere — nu doar ≥ 1 m; aceeași valoare scrisă altfel („2210.000”) nu', () => {
+    const fr = fronturiDinCantitati(LIC3_R, 'plansa').fronturi
+    const c = controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.map(x => x.id === 2 ? { ...x, cantitate_plansa: 2210.4 } : x))
+    expect(c.stare).toBe('block'); expect(c.detalii).toMatch(/#2 s-a schimbat de la propunere/)
+    expect(controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.map(x => x.id === 2 ? { ...x, cantitate_plansa: '2210.000' } : x)).stare).toBe('ok')
+  })
+  it('baza schimbată după propunere (planșe → memoriu) => BLOCK; rând-sursă șters => BLOCK', () => {
+    const fr = fronturiDinCantitati(LIC3_R, 'plansa').fronturi
+    expect(controlFronturiGrafic(P(fr, 'memoriu'), LIC3_R).detalii).toMatch(/propus pe altă bază \(planșe\)/)
+    expect(controlFronturiGrafic(P(fr, 'plansa'), LIC3_R.filter(x => x.id !== 3)).detalii).toMatch(/#3 nu mai există/)
+  })
+  it('lungimea editată de om pe un front propus (rândul neschimbat) => nu blochează', () => {
+    const fr = fronturiDinCantitati(LIC3_R, '').fronturi.map(f => f.cantitate_id === 1 ? { ...f, lungime_m: 20000 } : f)
+    expect(controlFronturiGrafic(P(fr), LIC3_R).stare).not.toBe('block')
+  })
+  it('fără fronturi => block (neschimbat)', () => expect(controlFronturiGrafic(P([]), LIC3_R).stare).toBe('block'))
+})
+
+// ── R5 (Copilot 26.09.2026, condiția 2): rândul invalidat / nevalidat nu dispare TACIT din grafic prin filtrul status='validat' ──
+describe('condiția 2 — poarta graficului: semnal de lipsă, rezultat marcat incomplet', () => {
+  const LIC3 = [
+    { id: 1, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn250 — tronsoane magistrală', cantitate: 23630, cantitate_plansa: 34465 },
+    { id: 2, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi', cantitate: 1100, cantitate_plansa: 2210, specificatii: 'PE100 SDR11' },
+    { id: 3, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn160 — Coconi + Sultana', cantitate: 5250, cantitate_plansa: 5245 }]
+  // rândul 2 invalidat de regula aprobării (unitatea m → ml) — cu filtrul vechi ar fi dispărut din rețea și din lipsă
+  const inval = (rows, id, patch) => rows.map(x => x.id === id ? { ...x, ...aplicaRegulaAprobare(x, patch).patch } : x)
+  const LIC3_ML = inval(LIC3, 2, { um: 'ml' })
+  it('R9b: rândul invalidat m → ml rămâne în rețea, dar nevalidat, și ține poarta închisă', () => {
+    expect(esteInvalidat(LIC3_ML[1])).toBe(true)
+    expect(randuriFront(LIC3_ML).map(x => x.id)).toEqual([1, 2, 3])
+    const c = controlCantitatiGrafic(LIC3_ML, 'memoriu')
+    expect(c.stare).toBe('block')
+    expect(c.detalii).toMatch(/lipsește 1 rând necesar nevalidat \(1\.100 ml\): #2 „Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi” \(diferenta, 1\.100 ml\)/)
+  })
+  it('control: fără invalidare (doar ↩ pe un rând din afara rețelei) nu apare nimic în plus', () => {
+    const r = randuriLipsa([...LIC3, { id: 5, status: 'extras', um: 'buc', categorie: null, denumire: 'SRM', cantitate: 1 }], 'memoriu')
+    expect(r.lipsa).toEqual([])
+  })
+  it('invalidare pe Dn (lungime identică): rândul rămâne în rețea, e NEVALIDAT => poarta block, lista îl numește', () => {
+    const rows = inval(LIC3, 2, { denumire: 'Țeavă PE100 SDR11 Dn160 — extravilan Mănăstirea→Coconi' })
+    const c = controlCantitatiGrafic(rows, 'plansa')
+    expect([c.stare, c.lista.map(x => [x.id, x.motiv, x.cantitate])]).toEqual(['block', [[2, 'nevalidat', 2210]]])
+  })
+  it('fronturile propuse din rândurile validate rămase => rândul „front” NU e verde: INCOMPLET, de reverificat (warn), cu lista', () => {
+    const { fronturi, lipsa, text_lipsa } = fronturiDinCantitati(LIC3_ML, 'memoriu')
+    expect(fronturi.map(f => f.cantitate_id)).toEqual([1, 3])
+    expect(lipsa.map(x => x.id)).toEqual([2]); expect(text_lipsa).toMatch(/^lipsește 1 rând necesar nevalidat \(1\.100 ml\)/)
+    const f = controlFronturiGrafic({ fronturi, cantitati_asumate: 'memoriu' }, LIC3_ML)
+    expect(f.stare).toBe('warn'); expect(f.incomplet).toBe(true)
+    expect(f.detalii).toMatch(/^INCOMPLET, de reverificat — lipsește 1 rând necesar nevalidat \(1\.100 ml\): #2 /)
+    // control: toate validate => ok, fără prefix
+    const g = controlFronturiGrafic({ fronturi: fronturiDinCantitati(LIC3, 'memoriu').fronturi, cantitati_asumate: 'memoriu' }, LIC3)
+    expect([g.stare, g.incomplet]).toEqual(['ok', false])
+  })
+})
+describe('campuriCantitatiNevalidate — câmpurile condiției 2', () => {
+  it('rând prezent cu câmpurile noi => numerele lor; rând prezent FĂRĂ ele (view vechi) => undefined (control parțial), nu 0; rând absent => 0', () => {
+    const nou = campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0, fara_tip_nevalidate: 6, fara_tip_nevalidate_m: '48195', invalidate_in_afara_retea: 1, invalidate_in_afara_retea_m: 300 } })
+    expect([nou.fara_tip_nevalidate, nou.fara_tip_nevalidate_m, nou.invalidate_in_afara_retea, nou.invalidate_in_afara_retea_m]).toEqual([6, 48195, 1, 300])
+    const vechi = campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0 } })
+    expect([vechi.fara_tip_nevalidate, vechi.invalidate_in_afara_retea]).toEqual([undefined, undefined])
+    const absent = campuriCantitatiNevalidate({ data: null })
+    expect([absent.fara_tip_nevalidate, absent.invalidate_in_afara_retea]).toEqual([0, 0])
+  })
+})
+
+// ── R5 runda 5 (verificatorul condițiilor 1–2) ──────────────────────────────────────────────────────────────────────────
+import { marcheazaInvalidate, reverificareGraficInghetat } from './ofertareCantitatiAprobare.js'
+import { pastreazaInvalidarea } from './ofertareCantitatiInvalidare.js'
+import { evalueazaPoarta } from './ofertarePoarta.js'
+describe('runda 5, MAJOR 1: rândul invalidat ieșit din rețea NU dispare după o recitire care îi rescrie nota', () => {
+  const LIC3 = [
+    { id: 1, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn250 — tronsoane magistrală', cantitate: 23630, cantitate_plansa: 34465 },
+    { id: 2, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn180 — extravilan Mănăstirea→Coconi', cantitate: 1100, cantitate_plansa: 2210, specificatii: 'PE100 SDR11' },
+    { id: 3, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn160 — Coconi + Sultana', cantitate: 5250, cantitate_plansa: 5245 }]
+  const ML = LIC3.map(x => x.id === 2 ? { ...x, um: 'ml', ...aplicaRegulaAprobare(x, { um: 'ml' }).patch } : x)
+  const notaRecitire = 'Memoriu 1.100 m vs planșa 1 2.210 m (+1.110 m, pe 2 tronsoane citite din tabel).'
+  // lanțul verificatorului: 1) m → ml (invalidat, prefix) 2) recitire => nota fără prefix (transferul vechi) 3) poarta „cant”
+  const recitit = (rows, patchFn) => rows.map(x => x.id === 2 ? { ...x, ...patchFn(x, { cantitate_plansa: 2210, diferenta_nota: notaRecitire }) } : x)
+  it('repro (codul vechi — nota rescrisă FĂRĂ prefix, fără istoric): până în runda 8 „cant” trecea pe ok, lipsa = []; runda 9 (M3): rândul „ml” din categoria de rețea e LIPSĂ „în altă unitate” și fără istoric', () => {
+    const rows = recitit(ML, (_x, p) => p)
+    const c = controlCantitatiGrafic(rows, 'memoriu')
+    expect([c.stare, c.lipsa.map(x => [x.id, x.motiv, x.um])]).toEqual(['block', [[2, 'nevalidat', 'ml']]])
+  })
+  it('sursa 1 — istoricul (ultimul eveniment „invalidat”): chiar cu nota rescrisă, rândul rămâne în lipsă, poarta block', () => {
+    const rows = marcheazaInvalidate(recitit(ML, (_x, p) => p), [{ id: 7, cantitate_id: 2, motiv: 'invalidat' }])
+    expect(esteInvalidat(rows[1])).toBe(true)
+    const c = controlCantitatiGrafic(rows, 'memoriu')
+    expect(c.stare).toBe('block')
+    expect(c.lista.map(x => [x.id, x.motiv])).toEqual([[2, 'nevalidat']])
+    // după o validare nouă (eveniment „validat” după invalidare) nu mai e invalidat
+    expect(marcheazaInvalidate(recitit(ML, (_x, p) => p), [{ id: 7, cantitate_id: 2, motiv: 'invalidat' }, { id: 8, cantitate_id: 2, motiv: 'validat' }])[1].invalidat_istoric).toBeUndefined()
+  })
+  it('sursa 2 — fără istoric (migrarea neaplicată): transferul / CAD PĂSTREAZĂ prefixul (pastreazaInvalidarea) => rândul rămâne în lipsă', () => {
+    const rows = recitit(ML, pastreazaInvalidarea)
+    expect(rows[1].diferenta_nota.endsWith(notaRecitire)).toBe(true)
+    const c = controlCantitatiGrafic(rows, 'memoriu')
+    expect([c.stare, c.lista.map(x => x.id)]).toEqual(['block', [2]])
+    const f = controlFronturiGrafic({ fronturi: fronturiDinCantitati(rows, 'memoriu').fronturi, cantitati_asumate: 'memoriu' }, rows)
+    expect([f.stare, f.incomplet]).toEqual(['warn', true])
+  })
+})
+
+describe('runda 5, minorul 5: poarta propunerii reverifică versiunea ÎNGHEȚATĂ față de cantitățile de acum', () => {
+  const C = [
+    { id: 1, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn110 — Făgului', cantitate: 700, tip_sursa: 'memoriu' },
+    { id: 2, status: 'validat', um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn90 — Teilor', cantitate: 300, tip_sursa: 'memoriu' }]
+  const inghetat = { fronturi: fronturiDinCantitati(C, 'memoriu').fronturi, cantitati_asumate: 'memoriu' }
+  const VERDE = { capitole: 1, fara_capitol: 0, de_raspuns: 1, cu_capitol: 1, cerinte_neverificate: 0, cerinte_neconfirmate_cu_capitol: 0,
+    observatii_deschise: 0, documente: 1, documente_necitite: 0, grafic_versiune: 1, grafic_avertismente: 0 }
+  const grafic = st => evalueazaPoarta(st).randuri.find(r => r.k === 'grafic')
+  it('cantitățile neschimbate => {grafic_de_reverificat: 0}, rândul „grafic” ok', () => {
+    const f = reverificareGraficInghetat(inghetat, C)
+    expect(f.grafic_de_reverificat).toBe(0)
+    expect(grafic({ ...VERDE, ...f }).stare).toBe('ok')
+  })
+  it('rândul-sursă al unui front invalidat DUPĂ îngheț (Dn schimbat, aceeași lungime; H2 rămâne ok pe totaluri) => WARN „de reverificat”', () => {
+    const acum = C.map(x => x.id === 2 ? { ...x, ...aplicaRegulaAprobare(x, { denumire: 'Țeavă PE100 SDR11 Dn63 — Teilor' }).patch, denumire: 'Țeavă PE100 SDR11 Dn63 — Teilor' } : x)
+    const f = reverificareGraficInghetat(inghetat, acum)
+    expect(f.grafic_de_reverificat).toBe(2)   // frontul „Teilor” (rândul-sursă nevalidat) + rândul lipsă
+    const g = grafic({ ...VERDE, ...f })
+    expect(g.stare).toBe('warn')
+    expect(g.detalii).toMatch(/DE REVERIFICAT față de cantitățile de acum \(rezultat incomplet\): 1 din 2 fronturi nu mai vin din cantități validate cu cifra de acum: „Teilor": rândul-sursă #2 nu e validat \(diferenta\) · lipsește 1 rând necesar nevalidat \(300 m\)/)
+  })
+  it('reverificarea n-a putut rula => WARN „control indisponibil”; fără versiune / fără parametri => neschimbat', () => {
+    expect(grafic({ ...VERDE, grafic_reverificare_eroare: 'timeout' }).stare).toBe('warn')
+    expect(reverificareGraficInghetat(null, C)).toEqual({})
+    expect(reverificareGraficInghetat({ mod: 'oferta' }, C)).toEqual({})
+  })
+})
+
+// ── runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil) ──
+import { aplicaRegulaUnitate } from './ofertareCantitatiInvalidare.js'
+describe('runda 6: unitatea normalizată în rețea, TOTAL invalidat listat, „unitate schimbată” — nimic tacit', () => {
+  const V = valideaza(LIC95)
+  it('R9b: „M” / „m ” / NBSP / „ml” sunt lungimi mapate explicit', () => {
+    const rows = [r(1, 110, 500, { um: 'M' }), r(2, 90, 300, { um: 'm ' }), r(3, 63, 200, { um: 'm ' }), r(4, 40, 100, { um: 'ml' })]
+    expect(randuriFront(rows).map(x => x.id)).toEqual([1, 2, 3, 4])
+    // sumele pe unitate nu se despart pe scriere
+    const L = randuriLipsa(rows, '')
+    // runda 9 (M3): rândul „ml” (nevalidat) nu mai dispare — e LIPSĂ „în altă unitate”, cu suma lui SEPARATĂ (fără conversie)
+    expect([L.lipsa.map(x => x.id), L.peUm]).toEqual([[1, 2, 3, 4], { m: 1000, ml: 100 }])
+  })
+  it('rând NEAPROBAT m → ml (repro adv_r5r5: lic. 3 rândul 6, 700 m): iese din rețea, dar e listat „unitate schimbată” — din istoric SAU din prefixul editorului', () => {
+    const r6 = r(6, 63, 700)
+    const inainte = randuriLipsa([...V, r6], '')
+    expect(inainte.lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat']])
+    // (a) cu istoricul (migrarea aplicată): eveniment 'unitate_schimbata', nota rescrisă oricum
+    const dupa = marcheazaInvalidate([...V, { ...r6, um: 'ml', diferenta_nota: 'altceva' }], [{ id: 1, cantitate_id: 6, motiv: 'unitate_schimbata' }])
+    const L = randuriLipsa(dupa, '')
+    expect(L.lipsa.map(x => [x.id, x.motiv, x.um, x.cantitate])).toEqual([[6, 'nevalidat', 'ml', 700]])
+    expect(controlCantitatiGrafic(dupa, '').stare).toBe('block')
+    // (b) fără istoric: prefixul pus de editor (aplicaRegulaUnitate)
+    const ed = { ...r6, ...aplicaRegulaUnitate(r6, { um: 'ml' }).patch }
+    expect(randuriLipsa([...V, ed], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat']])
+    // runda 9 (M3): și fără istoric și fără prefix rândul NU mai iese tacit — e în categoria de rețea, în altă unitate de lungime
+    expect(randuriLipsa([...V, { ...r6, um: 'ml' }], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat']])
+    // revalidat => nu mai lipsește
+    expect(randuriLipsa([...V, { ...ed, status: 'validat' }], '').lipsa).toEqual([])
+  })
+  it('rândul TOTAL invalidat e LISTAT ca referință (ca total_invalidate din view), fără să se adune la metrii lipsă', () => {
+    const tot = { id: 99, obiect: 'TOTAL', categorie: 'Conducte și montaj', denumire: 'Total rețea', um: 'm', cantitate: 48195, status: 'validat', diferenta_nota: null }
+    const inval = { ...tot, ...aplicaRegulaAprobare(tot, { cantitate: 48000 }).patch, cantitate: 48000 }
+    const L = randuriLipsa([...V, inval], '')
+    expect(L.lipsa.map(x => [x.id, x.motiv, x.referinta])).toEqual([[99, 'invalidat, rând TOTAL (referință, nu se adună)', true]])
+    expect(L.peUm).toEqual({})
+    expect(controlCantitatiGrafic([...V, inval], '').stare).toBe('block')
+    // „total” doar în denumire / sursă (ca filtrul qm) = tot rând TOTAL
+    const tot2 = { ...inval, obiect: null, categorie: 'Diverse', denumire: 'Lungime totală rețea' }
+    expect(randuriLipsa([...V, tot2], '').lipsa.map(x => x.motiv)).toEqual(['invalidat, rând TOTAL (referință, nu se adună)'])
+    // TOTAL doar extras (niciodată validat) nu e „lipsă” (nu e front și n-a fost aprobat)
+    expect(randuriLipsa([...V, { ...tot, status: 'extras' }], '').lipsa).toEqual([])
+  })
+  it('campuriCantitatiNevalidate: câmpurile runda 6 (absente în view-ul vechi => undefined, nu 0)', () => {
+    const c = campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0, total_invalidate: 1, total_invalidate_m: 48000, unitate_schimbata_in_afara_retea: 2, um_de_normalizat: 3, um_de_normalizat_f3: 1 } })
+    expect([c.total_invalidate, c.total_invalidate_m, c.unitate_schimbata_in_afara_retea, c.um_de_normalizat, c.um_de_normalizat_f3]).toEqual([1, 48000, 2, 3, 1])
+    expect(campuriCantitatiNevalidate({ data: { lista_f3_nevalidate: 0 } }).total_invalidate).toBe(undefined)
+  })
+})

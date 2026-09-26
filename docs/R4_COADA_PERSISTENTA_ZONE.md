@@ -7,6 +7,13 @@ Stare: pct. 1–5 **implementate în cod + teste** (fără schemă nouă, nimic 
 > - **Independența de browser — NU.** Bucla de citire rulează tot în browser: tab închis ⇒ citirea se oprește și se reia manual („continuă”). CAS-ul doar împiedică suprascrierea; nu continuă nimic singur.
 > - **Costul dublu între taburi — NU.** Două taburi care citesc aceleași zone plătesc de două ori; CAS + fuziunea păstrează rezultatul o singură dată, dar banii s-au cheltuit. Lease-ul de transfer (§1.1) serializează doar scrierea în `ofertare_cantitati`, nu citirea AI.
 > - Ambele se rezolvă **doar** prin coada persistentă (§2) = **schemă nouă ⇒ cere GO** de la Razvan. Până atunci rămân riscuri deschise.
+>
+> **Actualizare runda 3 (25.09, noapte) + corecturi după verificator — vezi `docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md`:**
+> costul dublu între taburi e **remediat în cod, nedeployat și netestat LIVE** — FĂRĂ schemă nouă: rezervare per
+> (document, zonă, tăiere) în `analiza.rezervari_zone`, prin CAS, înainte de apelul AI (al doilea tab primește 409 „în lucru
+> în alt tab”, zero AI; rezervarea expiră în 7 min, cu plafon, și se poate prelua; „citește” de la zero nu cooperează).
+> Se închide abia după deploy + testul LIVE cu 2 taburi. Reziduu: fereastra tăiere+upload din `/api/plansa-felii`.
+> Independența de browser rămâne deschisă: coada pe NAS e proiectată acolo (§3) + migrare propusă, neaplicată (cere GO).
 
 ## 1. Ce s-a implementat
 
