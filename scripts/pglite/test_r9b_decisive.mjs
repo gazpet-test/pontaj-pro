@@ -1,4 +1,4 @@
-// Testele decisive Copilot (ADDENDUM 5, R9b) pe PGlite. Rulat din scratchpad-ul sesiunii (fixture-urile reale și PGlite nu sunt în repo); păstrat aici ca referință a verificării: 30/30 la 26.09.2026.
+// Testele decisive Copilot (ADDENDUM 5, R9b + completarea: ordine, ciclul după transmitere, drepturi) pe PGlite — 37/37 la 26.09.2026. Rulat din scratchpad-ul sesiunii (fixture-urile reale și PGlite nu sunt în repo).
 // R5 sarcina 2 (Copilot, închiderea R4/R5, 26.09.2026 — condiția nr. 2 + observațiile): test local PGlite (Postgres 18.3, WASM) pentru
 // docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql (migrarea 2, versiunea sarcinii 2) peste migrarea 1 EXACT în forma aplicată în producție
 // + docs/R5_MIGRARE_1b_prag_exact.sql. Date: rândurile REALE (SELECT 26.09.2026) — ofertare_cantitati lic. 3 + lic. 95 + eșantionul 1b
@@ -259,6 +259,37 @@ await db.exec(`ALTER FUNCTION public.ofertare_f3_baza_off(bigint) RENAME TO ofer
 const e1 = await upd(D.id, `cheie = NULL`); ok(e1 !== 'ok', `6: cheie = NULL refuzat (${e1.slice(0, 100)})`)
 const e2 = await upd(D.id, `baza_generare = NULL`); ok(e2 !== 'ok', `6: baza_generare = NULL refuzat (${e2.slice(0, 100)})`)
 const e3 = await upd(D.id, `intrebare = 'x', cheie = 'manual_x', status = 'trimisa'`); ok(e3 !== 'ok', `6: text + cheie + status în aceeași comandă refuzat (${e3.slice(0, 100)})`)
+
+// ─── ADDENDUM Copilot (după 30/30): ordine, ciclul după transmitere, drepturi ───
+await db.exec(`ALTER FUNCTION public.ofertare_f3_baza_off(bigint) RENAME TO ofertare_f3_baza`).catch(() => {})
+const bz = async () => JSON.stringify((await q(`SELECT (public.ofertare_f3_baza($1)) - 'randuri' x`, [D.lic]))[0].x)
+const b1 = await bz()
+await q(`UPDATE ofertare_cantitati SET updated_at = now() + interval '1 day' WHERE licitatie_id = $1`, [D.lic])
+ok(b1 === await bz(), 'O: doar timestamp-urile/ordinea schimbate ⇒ baza neschimbată')
+// conflict deschis pe sursă + ciornă reconfirmată ⇒ aprobabilă (testul 2 a mers pe lic 95, care are conflicte deschise după migrare?)
+const tcl = await caUser(U_OF, () => q('SELECT document_id::int document_id, stare, n FROM v_ofertare_transfer_conflicte WHERE licitatie_id = $1', [D.lic])); console.log('conflicte lic', D.lic, JSON.stringify(tcl.map(t => [t.document_id, t.stare, t.n])))
+// drepturi: fără acces / editor fără drept de decizie
+const sX = await st(D.id)
+const txt0 = (await q(`SELECT intrebare, status, baza_generare::text b FROM ofertare_clarificari WHERE id = $1`, [D.id]))[0]
+for (const [u, nume] of [[U_ALT, 'fără acces Ofertare'], [U_ED, 'editor fără drept de decizie']]) {
+  const r = await caUser(u, async () => { try { return JSON.stringify((await q(`SELECT public.ofertare_clarificare_reconfirma($1, $2, 'revizuit', 'incercare fara drept') r`, [D.id, sX?.amprenta_curenta]))[0].r) } catch (e) { return 'ERR ' + e.message } })
+  const ex = await caUser(u, async () => { try { return JSON.stringify((await q(`SELECT public.ofertare_clarificari_export($1) x`, [D.lic]))[0].x).slice(0, 80) } catch (e) { return 'ERR ' + e.message } })
+  const tr = await caUser(u, async () => { try { await q(`UPDATE ofertare_clarificari SET status = 'de_trimis' WHERE id = $1`, [D.id]); return 'ok' } catch (e) { return 'ERR ' + e.message } })
+  const dupa = (await q(`SELECT intrebare, status, baza_generare::text b FROM ofertare_clarificari WHERE id = $1`, [D.id]))[0]
+  ok(!/"ok":true/.test(r) && JSON.stringify(dupa) === JSON.stringify(txt0), `D: ${nume} nu poate reconfirma; text/bază/status neschimbate (${r.slice(0, 90)} | status: ${tr.slice(0, 60)} | export: ${ex.slice(0, 60)})`)
+}
+// ciclul după transmitere: trimisa ⇒ text imuabil, datele schimbate nu o retrogradează
+const s7 = await st(D.id)
+await caUser(U_OF, () => q(`SELECT public.ofertare_clarificare_reconfirma($1, $2, 'revizuit', 'aprobat pentru transmitere') r`, [D.id, s7?.amprenta_curenta]))
+const t1 = await upd(D.id, `status = 'de_trimis'`); const t2 = await upd(D.id, `status = 'trimisa'`)
+ok(t2 === 'ok', `T: trimiterea pe baza curentă reconfirmată e permisă, cu conflictele sursei încă deschise (${t1} / ${t2})`)
+const tE = await upd(D.id, `intrebare = intrebare || ' modificat'`)
+ok(tE !== 'ok', `T: textul unei clarificări transmise nu se poate edita (${tE.slice(0, 90)})`)
+await q(`UPDATE ofertare_cantitati SET cantitate = coalesce(cantitate,0) + 2 WHERE id = $1`, [rr.id])
+const tS = (await q(`SELECT status FROM ofertare_clarificari WHERE id = $1`, [D.id]))[0].status
+ok(tS === 'trimisa', `T: date-sursă schimbate după transmitere ⇒ clarificarea rămâne „trimisă” (${tS})`)
+const tB = await upd(D.id, `status = 'propunere'`); ok(tB !== 'ok', `T: revenirea la propunere e refuzată (${tB.slice(0, 80)})`)
+
 // R2: rollback păstrează deciziile umane
 await db.exec(RB2)
 const col = await q(`SELECT 1 FROM information_schema.columns WHERE table_name = 'ofertare_clarificari' AND column_name = 'baza_generare'`)
