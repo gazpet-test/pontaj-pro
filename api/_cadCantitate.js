@@ -16,13 +16,13 @@
 // rândul, iar UPDATE-ul nu are gardă pe status; cu 'diferenta' în patch, o validare dată pe cifra veche nu rămâne peste
 // cifra nouă. Aceeași cifră re-măsurată (< 1 m) nu atinge statusul: validarea rămâne.
 // Rândul validat își păstrează `cantitate` (cifra omului); cel nevalidat primește măsurătoarea și în `cantitate`.
+// R5 (Copilot 26.09.2026, condiția 1): regula stă într-un singur loc — _cantitatiInvalidare.js (copie identică a
+// src/ofertareCantitatiInvalidare.js); „cifra schimbată” = schimbarea RELEVANTĂ a cifrei din planșă efective.
+import { schimbariRelevante } from './_cantitatiInvalidare.js'
 export const referintaCitire = r =>
   r?.cantitate_plansa != null ? Number(r.cantitate_plansa) : r?.cantitate != null ? Number(r.cantitate) : null
-export const cifraSchimbata = (r, nou) => {
-  if (nou == null) return false
-  const ref = referintaCitire(r)
-  return ref === null || Math.abs(ref - Number(nou)) >= 1
-}
+export const cifraSchimbata = (r, nou) =>
+  nou != null && schimbariRelevante(r, { cantitate_plansa: Number(nou) }).relevante.some(x => x.camp === 'cantitate_plansa')
 const fmt = x => (+Number(x).toFixed(2)).toLocaleString('ro-RO')
 
 export function randCantitateCad({ licitatieId, denumire, c, notaAnaliza }, existent = null) {

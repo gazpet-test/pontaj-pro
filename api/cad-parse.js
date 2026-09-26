@@ -120,7 +120,7 @@ export default async function handler(req, res) {
       if (c.numar > 0 && c.lungime_3d_m > 0) {
         const denumire = `Traseu măsurat din desenul proiectantului (${nume})`
         const { data: existent } = await supa.from('ofertare_cantitati')
-          .select('id, cantitate, cantitate_plansa, status').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
+          .select('id, um, cantitate, cantitate_plansa, status').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
         const scr = randCantitateCad({ licitatieId: doc.licitatie_id, denumire, c, notaAnaliza: analiza.nota }, existent)
         if (scr.op === 'update') await supa.from('ofertare_cantitati').update(scr.patch).eq('id', scr.id)
         else await supa.from('ofertare_cantitati').insert(scr.rand)

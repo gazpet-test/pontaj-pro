@@ -1165,7 +1165,7 @@ Deno.test('runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 OL 90 SIGURE pe o singur
   }
   assertEquals(a.rows, b.rows, 'aceeași stare în BD indiferent de ordinea rândurilor')
 })
-Deno.test('runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 fără material 300 SIGURE pe „Țeavă PE100 Dn110” => ambiguu (f1274a1: 300, cei 500 m PE dispar); validat rămâne validat', async () => {
+Deno.test('runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 fără material 300 SIGURE pe „Țeavă PE100 Dn110” => ambiguu (f1274a1: 300, cei 500 m PE dispar); pe un rând validat: iese din „validat” (R5 varianta B)', async () => {
   const rd: [string, string, string, string][] = [['1', 'A', 'PE100', '0,5'], ['2', 'B', '', '0,3'], ['?', 'C', 'PE100', '0,04']]
   const nota = (cp: string) => 'De verificat: Planșa „PL1.1.pdf” dă 2 grupuri sigure pe aceeași poziție — Dn110 PE 500 m (1 rând); Dn110 fără material 300 m (1 rând); ' +
     `împreună 800 m, dar nu se adună și nu se suprascriu automat (denumirea poziției nu le deosebește); cifra din planșă nu s-a actualizat (${cp} m e dintr-o citire anterioară).` +
@@ -1179,9 +1179,11 @@ Deno.test('runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 fără material 300 SIGU
     assertEquals(x.j.cantitati.ambigue[0].de_verificat, '1 rând Dn110 PE fără identitate sigură (40 m)')
   }
   assertEquals(a.rows, b.rows)
-  // poziție validată: decizia omului rămâne (status, cifră), doar nota
+  // poziție validată: cifra rămâne neatinsă, dar planșa nu confirmă cifra aprobată (coliziune = identitate ambiguă) =>
+  // R5 varianta B (26.09.2026): iese din „validat”, cu aprobarea veche numită; validarea se reface (înainte: „validat rămâne validat”)
   const v = await coliziune([{ ...poz[0], cantitate_plansa: 780, status: 'validat' }], rd, true)
-  assertEquals(v.rows.map((y: any) => [y.id, y.cantitate_plansa, y.status, y.diferenta_nota]), [[21, 780, 'validat', nota('780')]])
+  assertEquals(v.rows.map((y: any) => [y.id, y.cantitate_plansa, y.status, y.diferenta_nota]), [[21, 780, 'diferenta',
+    'Rândul era VALIDAT cu cifra din planșă 780 m; planșa „pl1.1.pdf” dă 2 grupuri sigure pe aceeași poziție, fără să confirme cifra — validarea se reface. ' + nota('780')]])
 })
 Deno.test('runda 6 transfer (control, trece și pe f1274a1): grupuri pe materiale diferite cu poziții SEPARATE => fiecare își primește cifra, nimic ambiguu', async () => {
   const poz = [{ id: 11, denumire: 'Țeavă PE100 Dn110', cantitate: 500, cantitate_plansa: null, status: 'extras' }, { id: 12, denumire: 'Țeavă OL Dn110', cantitate: 90, cantitate_plansa: null, status: 'extras' }]
