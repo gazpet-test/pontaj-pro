@@ -57,7 +57,7 @@ describe('controlCantitatiGrafic — randul „cant" din poarta graficului', () 
   it('toate validate => ok; totalul declarat nevalidat e etichetat', () => {
     const rows = [...valideaza(LIC95), { id: 9, obiect: 'Total rețea', um: 'm', categorie: 'Conducte', denumire: 'Total', cantitate: 48195, status: 'extras' }]
     const c = controlCantitatiGrafic(rows, '')
-    expect(c.stare).toBe('ok'); expect(c.detalii).toMatch(/toate validate, total declarat 48.195 m \(nevalidat\)/)
+    expect(c.stare).toBe('ok'); expect(c.detalii).toMatch(/în m, toate validate cu cantitate, total declarat 48\.195 m \(nevalidat\)/)   // runda 9: perimetrul spus explicit
   })
   it('fara randuri de retea => block (neschimbat)', () =>
     expect(controlCantitatiGrafic([], '').stare).toBe('block'))
@@ -76,7 +76,8 @@ describe('fronturiDinCantitati — „Propune din cantitati" doar din randuri va
   })
   it('maparea numelui/lungimii/Dn e cea veche; runda 4: + proveniența (rândul-sursă, baza, cifra la propunere)', () => {
     const rows = [{ id: 1, um: 'm', categorie: 'Conducte și montaj', denumire: 'Țeavă PE100 SDR11 Dn110 — Făgului', cantitate: 512.4, cantitate_plansa: 530, status: 'validat' }]
-    expect(fronturiDinCantitati(rows, '').fronturi).toEqual([{ nume: 'Făgului', lungime_m: 512, dn: '110', echipe: 1, cantitate_id: 1, baza: 'cantitate', lungime_sursa: 512.4 }])
+    expect(fronturiDinCantitati(rows, '').fronturi).toEqual([{ nume: 'Făgului', lungime_m: 512, dn: '110', echipe: 1, cantitate_id: 1, baza: 'cantitate', lungime_sursa: 512.4,
+      denumire_sursa: 'Țeavă PE100 SDR11 Dn110 — Făgului', obiect_sursa: null }])   // runda 9 (S4a): + atributele rândului-sursă
     expect(fronturiDinCantitati(rows, 'plansa').fronturi[0]).toMatchObject({ lungime_m: 530, baza: 'cantitate_plansa', lungime_sursa: 530 })
   })
 })
@@ -224,10 +225,10 @@ describe('runda 5, MAJOR 1: rândul invalidat ieșit din rețea NU dispare după
   const notaRecitire = 'Memoriu 1.100 m vs planșa 1 2.210 m (+1.110 m, pe 2 tronsoane citite din tabel).'
   // lanțul verificatorului: 1) m → ml (invalidat, prefix) 2) recitire => nota fără prefix (transferul vechi) 3) poarta „cant”
   const recitit = (rows, patchFn) => rows.map(x => x.id === 2 ? { ...x, ...patchFn(x, { cantitate_plansa: 2210, diferenta_nota: notaRecitire }) } : x)
-  it('repro (codul vechi — nota rescrisă FĂRĂ prefix, fără istoric): „cant” trece pe ok, lipsa = [] — gaura raportată', () => {
+  it('repro (codul vechi — nota rescrisă FĂRĂ prefix, fără istoric): până în runda 8 „cant” trecea pe ok, lipsa = []; runda 9 (M3): rândul „ml” din categoria de rețea e LIPSĂ „în altă unitate” și fără istoric', () => {
     const rows = recitit(ML, (_x, p) => p)
     const c = controlCantitatiGrafic(rows, 'memoriu')
-    expect([c.stare, c.lipsa]).toEqual(['ok', []])
+    expect([c.stare, c.lipsa.map(x => [x.id, x.motiv, x.um])]).toEqual(['block', [[2, 'nevalidat, în altă unitate decât m', 'ml']]])
   })
   it('sursa 1 — istoricul (ultimul eveniment „invalidat”): chiar cu nota rescrisă, rândul rămâne în lipsă, poarta block', () => {
     const rows = marcheazaInvalidate(recitit(ML, (_x, p) => p), [{ id: 7, cantitate_id: 2, motiv: 'invalidat' }])
@@ -286,7 +287,8 @@ describe('runda 6: unitatea normalizată în rețea, TOTAL invalidat listat, „
     expect(randuriFront(rows).map(x => x.id)).toEqual([1, 2, 3])
     // sumele pe unitate nu se despart pe scriere
     const L = randuriLipsa(rows, '')
-    expect([L.lipsa.map(x => x.id), L.peUm]).toEqual([[1, 2, 3], { m: 1000 }])
+    // runda 9 (M3): rândul „ml” (nevalidat) nu mai dispare — e LIPSĂ „în altă unitate”, cu suma lui SEPARATĂ (fără conversie)
+    expect([L.lipsa.map(x => x.id), L.peUm]).toEqual([[1, 2, 3, 4], { m: 1000, ml: 100 }])
   })
   it('rând NEAPROBAT m → ml (repro adv_r5r5: lic. 3 rândul 6, 700 m): iese din rețea, dar e listat „unitate schimbată” — din istoric SAU din prefixul editorului', () => {
     const r6 = r(6, 63, 700)
@@ -300,8 +302,8 @@ describe('runda 6: unitatea normalizată în rețea, TOTAL invalidat listat, „
     // (b) fără istoric: prefixul pus de editor (aplicaRegulaUnitate)
     const ed = { ...r6, ...aplicaRegulaUnitate(r6, { um: 'ml' }).patch }
     expect(randuriLipsa([...V, ed], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'unitate schimbată, ieșit din rețea']])
-    // control negativ: fără istoric și fără prefix => ar ieși tacit (de aceea există semnalul)
-    expect(randuriLipsa([...V, { ...r6, um: 'ml' }], '').lipsa).toEqual([])
+    // runda 9 (M3): și fără istoric și fără prefix rândul NU mai iese tacit — e în categoria de rețea, în altă unitate de lungime
+    expect(randuriLipsa([...V, { ...r6, um: 'ml' }], '').lipsa.map(x => [x.id, x.motiv])).toEqual([[6, 'nevalidat, în altă unitate decât m']])
     // revalidat => nu mai lipsește
     expect(randuriLipsa([...V, { ...ed, status: 'validat' }], '').lipsa).toEqual([])
   })

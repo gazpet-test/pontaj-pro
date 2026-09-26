@@ -52,7 +52,11 @@
 --      nu mai trece prin ofertare_fmt_ro (12 poziții): se scrie din sutimile exacte, cu același șablon lat — ca `fmtSutimi` din JS (BigInt).
 --      round(v_pct, 2) / 100: împărțirea numeric-ă a unui întreg mare (peste 16 cifre) ar avea scala 0 și ar rotunji sutimile („…823 %” în loc
 --      de „…822,5 %”, prins de suita verificatorului); cu scala 2 la deîmpărțit rezultatul e exact.
---      Nota SQL = JS octet cu octet pentru orice valoare sub 10^42 (fără sens fizic peste; acolo SQL ar scrie „###”, statusul rămâne același).
+--      Nota SQL = JS octet cu octet pentru valorile pe care JS le primește EXACT: până la ~15 cifre semnificative (cantitățile reale au sub
+--      10^9 și max. 6 zecimale). Runda 9 (verificatorul BD, minor): afirmația veche („orice valoare sub 10^42”) era prea largă — JS primește
+--      `numeric` ca double (JSON / PostgREST), deci la 17 cifre semnificative nota JS diferă („…234.568” vs „…234.567,5”); STATUSUL îl decide
+--      tot trigger-ul (JS poate cel mult rata o invalidare pe care trigger-ul o face oricum, nu poate inventa una). Șablonul SQL are 42 de
+--      poziții întregi (peste: „###”, statusul rămâne același).
 -- Roluri (neschimbat, acum strict): `cantitate` = valoarea aprobată / folosită în ofertă; `cantitate_plansa` = observația-candidat a
 -- citirii. O observație diferită de cea aprobată scoate rândul pe „diferenta” („de reverificat”); valoarea aprobată rămâne în rând
 -- (transferul / CAD nu scriu `cantitate` pe un rând validat), în notă (prefixul numește aprobarea veche) și în istoric.

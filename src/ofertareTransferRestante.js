@@ -33,9 +33,16 @@ export const RESTANTE = {
     cauza: 'transferul a rămas „în curs” peste 10 minute', actiune: 'reia citirea planșei' },
   necunoscut: { eticheta: 'stare necunoscută / date corupte', categorie: 'procesare_interna',
     cauza: 'jurnalul / înregistrarea transferului nu pot fi citite', actiune: 'reia citirea planșei' },
-  evaluare_partiala: { eticheta: 'evaluare parțială (cod vechi)', categorie: 'procesare_interna',
-    cauza: 'transferul a fost evaluat de codul vechi, care nu verifica identitatea rândurilor, secvența Nr, TOTAL-ul multiplu, adnotările',
-    actiune: 'reevaluează cu codul nou pe citirea salvată (fără cost AI) sau confirmă explicit' },
+  // runda 9 (ADDENDUM 3 Copilot, 3): jurnalul vechi = „verificare indisponibilă”, NU o contradicție a documentației și NU o recitire plătită
+  // obligatorie: întâi reevaluarea DETERMINISTĂ pe observațiile salvate (fără AI; versiunea evaluării se consemnează — citire_ai.reevaluat.cod
+  // + transfer_cantitati.cod_transfer); dacă observațiile salvate nu ajung (ex. citiri goale), recitire ȚINTITĂ a zonelor sau review uman documentat (✋)
+  evaluare_partiala: { eticheta: 'verificare indisponibilă (jurnal vechi)', categorie: 'procesare_interna',
+    cauza: 'transferul a fost evaluat de codul vechi, care nu verifica identitatea rândurilor, secvența Nr, TOTAL-ul multiplu, adnotările — incertitudine de verificare, NU o contradicție a documentației',
+    actiune: 'reevaluează determinist pe observațiile salvate (fără AI; versiunea evaluării se consemnează) — dacă nu ajung: recitire țintită a zonelor sau review uman documentat (✋)' },
+  // runda 9 (verificatorul BD, M12): o citire pe runde NETERMINATĂ (edge-ul publicat v25 rescrie jurnalul la fiecare rundă) — nu putem verifica
+  citire_neterminata: { eticheta: 'citire neterminată', categorie: 'procesare_interna',
+    cauza: 'o citire a planșei pe runde a rescris jurnalul anterior și nu s-a încheiat — conflictele transferului nu pot fi verificate (nu înseamnă zero)',
+    actiune: 'termină citirea planșei (continuă rundele) sau confirmă explicit (✋ rezolvare / excepție justificată)' },
   nerezolvat_la_recitire: { eticheta: 'conflict anterior neacoperit de recitire', categorie: 'procesare_interna',
     cauza: 'recitirea nu a acoperit zonele / Dn-urile / pozițiile conflictului anterior — un rezultat parțial nu-l poate închide prin absență',
     actiune: 'recitește planșa complet sau confirmă explicit (rezolvare / excepție justificată)' },

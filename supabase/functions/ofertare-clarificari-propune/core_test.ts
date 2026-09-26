@@ -118,7 +118,7 @@ Deno.test('sarcina 2: conflictele transferului fără rând intră în prompt; v
     try { await propuneClarificari(supa, { licitatie_id: 95, dry_run: true }) } finally { globalThis.fetch = fetchVechi }
     return JSON.parse(corp).messages[0].content as string
   }
-  // doc 470 (lic. 95): după migrarea 2 (reparația rundei 1) — Dn60 nestandard, adnotări pe Dn absent, evaluare parțială (cod vechi);
+  // doc 470 (lic. 95): după migrarea 2 (reparația rundei 1) — Dn60 nestandard, adnotări pe Dn absent, verificare indisponibilă — jurnal vechi (runda 9: „evaluare parțială (cod vechi)”);
   // 471: legacy_partial; 472: fără conflicte (închis)
   const m = await rulare({ v_ofertare_transfer_conflicte: [{ document_id: 470, nume_original: 'Schema tehnologica Valcelele alimentare din Stefan Voda.pdf', stare: 'conflicte', n: 3, deschis: true,
     restante: [{ tip: 'adnotari_dn_absent', n: 1 }, { tip: 'dn_nestandard', n: 1 }, { tip: 'evaluare_partiala', n: 1 }] },
@@ -127,7 +127,7 @@ Deno.test('sarcina 2: conflictele transferului fără rând intră în prompt; v
   const sec = m.slice(m.indexOf('STAREA TRANSFERULUI'), m.indexOf('STAREA TRANSFERULUI') + 2000)
   // ADDENDUM 2 Copilot (b): restanțe DISTINCTE, fiecare cu cauza și acțiunea; NICIUNA ca întrebare pentru autoritate
   assert(sec.startsWith('STAREA TRANSFERULUI DIN PLANȘE — RESTANȚE INTERNE ALE OFERTANTULUI (4 pe 2 planșe; NESCRISE în cantități). NU formula clarificări către autoritate din ele'), sec.slice(0, 200))
-  assert(sec.includes('"restanta":"evaluare parțială (cod vechi)","n":2') && sec.includes('eroare internă de procesare — NU e o problemă a documentației'), sec)
+  assert(sec.includes('"restanta":"verificare indisponibilă (jurnal vechi)","n":2') && sec.includes('eroare internă de procesare — NU e o problemă a documentației'), sec)
   assert(sec.includes('"restanta":"Dn nestandard (în afara catalogului)","n":1,"cauza":"Dn citit care nu e în catalogul nostru de diametre — NU înseamnă că diametrul e imposibil"'), sec)
   assert(sec.includes('"restanta":"adnotări fără corespondent în tabel"') && sec.includes('NU neapărat un tronson suplimentar'), sec)
   assert(sec.includes('lungimile din conflicte sunt observații pe planșă (pot fi suprapuse), nu metri lipsă'), sec)

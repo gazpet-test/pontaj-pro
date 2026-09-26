@@ -151,9 +151,24 @@ export function stareLegacy(c: any, s: any, conflicte: ConflictTransfer[]): { st
   if ('adaugate' in x) return { stare: 'legacy_partial', conflicte: [EVALUARE_PARTIALA] };
   return { stare: 'necunoscut', conflicte: [{ tip: 'necunoscut', text: 'jurnalul transferului are o formă necunoscută — nu putem verifica' }] };
 }
+// runda 9 (ADDENDUM 3 Copilot, 3): „verificare indisponibilă” — incertitudine de verificare, NU dovada unei contradicții în documentație; întâi
+// reevaluarea deterministă pe observațiile salvate (fără AI, versiunea evaluării consemnată), altfel recitire țintită / review uman documentat
 export const EVALUARE_PARTIALA: ConflictTransfer = { tip: 'evaluare_partiala', fara_cantitate: true,
-  text: 'transfer evaluat de codul VECHI (edge publicat înainte de R5): identitatea rândurilor, secvența Nr, rândurile fără lungime / fără Dn, ' +
-    'TOTAL-ul multiplu și adnotările NU au fost verificate — „fără conflicte” nu e dovedit; reevaluează cu codul nou pe citirea salvată sau confirmă explicit' };
+  text: 'verificare indisponibilă: transfer evaluat de codul VECHI (edge publicat înainte de R5) — identitatea rândurilor, secvența Nr, rândurile fără lungime / fără Dn, ' +
+    'TOTAL-ul multiplu și adnotările NU au fost verificate; „fără conflicte” nu e dovedit, dar nici o contradicție a documentației nu e dovedită. ' +
+    'Reevaluează determinist pe observațiile salvate (fără AI) sau, dacă nu ajung, recitire țintită / review uman documentat (✋)' };
+// ── RUNDA 9 (verificatorul BD, MAJOR M12): aceeași regulă ca ofertare_transfer_stare din SQL — o citire NETERMINATĂ (citire_ai.gata === false),
+// fără înregistrare de transfer și fără jurnal de cantități = stare DESCHISĂ „citire neterminată” (edge-ul publicat v25 rescrie jurnalul la
+// fiecare rundă; o rundă neterminată scotea conflictele din poartă). null = regula nu se aplică. NU e folosită la conversia din handler
+// (inregistrareLegacy): codul nou, la citirea COMPLETĂ, evaluează toată planșa (identitate, Nr, TOTAL, adnotări) — purtarea unei stări
+// fără ancore ar lăsa deschisă orice citire completă goală (planșă fără tronsoane). Exportată pentru paritatea SQL ↔ JS (teste).
+export function stareCitireNeterminata(analiza: any): { stare: string; n: number; restante: { tip: string; n: number }[] } | null {
+  const a = eObiect(analiza) ? analiza : null;
+  // o înregistrare prezentă (obiect — sau coruptă: formaCorupta / „necunoscut” în SQL) are prioritate
+  if (!a || a.transfer_cantitati != null || formaCorupta(a) || !eObiect(a.citire_ai) || a.citire_ai.gata !== false) return null;
+  if (eObiect(a.citire_ai.sumar) && eObiect(a.citire_ai.sumar.cantitati)) return null;
+  return { stare: 'citire_neterminata', n: 1, restante: [{ tip: 'citire_neterminata', n: 1 }] };
+}
 // ── Reparația rundei 2 (verificatorul UI, V-C4 — corupție de TIP): aceleași reguli ca ofertare_transfer_stare din SQL. O cheie a serverului
 // PREZENTĂ, dar de alt tip decât obiect (înregistrarea = array / text; jurnalul citire_ai / sumar / cantitati = text) => „necunoscut”
 // DESCHIS, nu „nimic”: înregistrarea coruptă contează oricând, jurnalul corupt doar fără o înregistrare-obiect. null (JSON) = absent.

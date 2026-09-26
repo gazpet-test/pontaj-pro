@@ -30,7 +30,7 @@ describe('sarcina 2 (a): conflict FĂRĂ rând, cu toate rândurile validate —
     const g = poarta({ ...SURSA_OK, conflicte: [CONFLICT_130] })
     const cant = rand(g, 'cant'), front = rand(g, 'front')
     expect(cant.stare).toBe('block')
-    expect(cant.detalii).toBe('2 rânduri rețea, toate validate · sursă incompletă: 2 restanțe deschise la transferul din 1 planșă („8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf” (2)) — ' +
+    expect(cant.detalii).toBe('2 rânduri rețea în m, toate validate cu cantitate · sursă incompletă: 2 restanțe deschise la transferul din 1 planșă („8.1. PT - 1.1 Schema tehnologica - Pl. 1.pdf” (2)) — ' +
       'nescrise în cantități, deci neaprobate de nimeni (lungimile din conflicte sunt observații pe planșă (pot fi suprapuse), nu metri lipsă); recitește planșa sau confirmă explicit (✋ rezolvare / excepție justificată) în Documente')
     expect([front.stare, front.incomplet]).toEqual(['warn', true])
     expect(front.detalii).toMatch(/^INCOMPLET, de reverificat — sursă incompletă: 2 restanțe/)
@@ -68,7 +68,7 @@ describe('sarcina 2 (c): view / istoric indisponibil => „nu putem verifica”,
   })
   it('view-ul conflictelor inexistent (cod nou publicat înainte de migrarea 2) => BLOCK cu motivul; istoricul indisponibil => BLOCK', () => {
     const e1 = rand(poarta({ conflicte: [], eroare_conflicte: 'relation "public.v_ofertare_transfer_conflicte" does not exist', eroare_istoric: null }), 'cant')
-    expect([e1.stare, e1.detalii]).toEqual(['block', '2 rânduri rețea, toate validate · nu putem verifica sursa (conflictele transferului din planșe indisponibile: relation "public.v_ofertare_transfer_conflicte" does not exist)'])
+    expect([e1.stare, e1.detalii]).toEqual(['block', '2 rânduri rețea în m, toate validate cu cantitate · nu putem verifica sursa (conflictele transferului din planșe indisponibile: relation "public.v_ofertare_transfer_conflicte" does not exist)'])
     const e2 = rand(poarta({ conflicte: [], eroare_conflicte: null, eroare_istoric: 'timeout' }), 'cant')
     expect([e2.stare, /nu putem verifica invalidările \(istoricul aprobărilor indisponibil: timeout\)/.test(e2.detalii)]).toEqual(['block', true])
     expect(stareSursa(null)).toMatchObject({ verificata: false, blocheaza: true })
@@ -141,7 +141,7 @@ describe('reparația rundei 1 — ADDENDUM 2 Copilot, testul final 1: toate cant
     expect(ev.randuri.find(r => r.k === 'cantitati').stare).toBe('warn')
     const sc = ev.randuri.find(r => r.k === 'sursa_cantitati')
     expect(sc.stare).toBe('block')
-    expect(sc.detalii).toMatch(/^3 restanțe deschise la transferul din 1 planșă \(Schema tehnologica Valcelele\.pdf \(3\)\) — evaluare parțială \(cod vechi\) ×1 \(reevaluează/)
+    expect(sc.detalii).toMatch(/^3 restanțe deschise la transferul din 1 planșă \(Schema tehnologica Valcelele\.pdf \(3\)\) — verificare indisponibilă \(jurnal vechi\) ×1 \(reevaluează/)
     expect(sc.detalii).toMatch(/Dn nestandard \(în afara catalogului\) ×1 \(verifică pe planșă și în catalog/)
     expect(ev.stare).toBe('block')   // OfertarePropunere: aprobaPachet / semneaza refuză pe ev.stare === 'block'
     // după confirmarea (rezolvare / excepție justificată) — view-ul nu mai numără documentul => poarta verde
@@ -174,7 +174,8 @@ describe('reparația rundei 1 — ADDENDUM 2 Copilot, testul final 2: view indis
 describe('reparația rundei 1 — restanțele DISTINCTE (ADDENDUM 2 Copilot, b) și lungimile „nu metri lipsă” (d)', () => {
   it('fiecare tip scris de handler / SQL are cauză, acțiune și categorie; niciunul nu e întrebare pentru autoritate', () => {
     const tipuri = ['transfer_eroare', 'transfer_amanat', 'transfer_intrerupt', 'necunoscut', 'evaluare_partiala', 'nerezolvat_la_recitire', 'ambiguu', 'total_ambiguu',
-      'de_verificat', 'identitate', 'identitate_incerta', 'nr_lipsa', 'nr_fara_lungime', 'fara_dn', 'dn_nestandard', 'adnotari_dn_absent']
+      'de_verificat', 'identitate', 'identitate_incerta', 'nr_lipsa', 'nr_fara_lungime', 'fara_dn', 'dn_nestandard', 'adnotari_dn_absent',
+      'citire_neterminata']   // runda 9 (M12): citirea pe runde neterminată
     expect(Object.keys(RESTANTE).sort()).toEqual([...tipuri].sort())
     for (const t of tipuri) expect(RESTANTE[t].cauza && RESTANTE[t].actiune && ['procesare_interna', 'decizie_interna', 'verificare_plansa'].includes(RESTANTE[t].categorie)).toBeTruthy()
     // transfer amânat ≠ contradicție a autorității; Dn nestandard ≠ diametru imposibil; adnotare ≠ tronson suplimentar
@@ -186,13 +187,13 @@ describe('reparația rundei 1 — restanțele DISTINCTE (ADDENDUM 2 Copilot, b) 
     const docs = [{ deschis: true, n: 3, restante: [{ tip: 'dn_nestandard', n: 1 }, { tip: 'adnotari_dn_absent', n: 1 }, { tip: 'evaluare_partiala', n: 1 }] },
       { deschis: true, n: 1, restante: [{ tip: 'evaluare_partiala', n: 1 }] }, { deschis: false, n: 2, restante: [{ tip: 'ambiguu', n: 2 }] }, { deschis: true, n: 5 }]
     expect(restPeTip(docs)).toEqual({ dn_nestandard: 1, adnotari_dn_absent: 1, evaluare_partiala: 2 })
-    expect(textRestante(restPeTip(docs))).toBe('evaluare parțială (cod vechi) ×2 (reevaluează cu codul nou pe citirea salvată (fără cost AI) sau confirmă explicit); ' +
+    expect(textRestante(restPeTip(docs))).toBe('verificare indisponibilă (jurnal vechi) ×2 (reevaluează determinist pe observațiile salvate (fără AI; versiunea evaluării se consemnează) — dacă nu ajung: recitire țintită a zonelor sau review uman documentat (✋)); ' +
       'adnotări fără corespondent în tabel ×1 (verifică pe planșă dacă adnotarea corespunde unui rând din tabel); Dn nestandard (în afara catalogului) ×1 (verifică pe planșă și în catalog; corectează citirea sau adaugă Dn-ul)')
   })
   it('poarta graficului: textul sursei nu mai spune „conflicte” fără cauză și nu adună lungimile ca metri lipsă', () => {
     const g = poarta({ ...SURSA_OK, conflicte: [{ ...CONFLICT_130, n: 3, restante: [{ tip: 'dn_nestandard', n: 1 }, { tip: 'adnotari_dn_absent', n: 1 }, { tip: 'evaluare_partiala', n: 1 }] }] })
     const d = rand(g, 'cant').detalii
-    expect(d).toMatch(/3 restanțe deschise .* — evaluare parțială \(cod vechi\) ×1 .*; adnotări fără corespondent în tabel ×1 .*; Dn nestandard \(în afara catalogului\) ×1/)
+    expect(d).toMatch(/3 restanțe deschise .* — verificare indisponibilă \(jurnal vechi\) ×1 .*; adnotări fără corespondent în tabel ×1 .*; Dn nestandard \(în afara catalogului\) ×1/)
     expect(d).toMatch(/lungimile din conflicte sunt observații pe planșă \(pot fi suprapuse\), nu metri lipsă/)
     expect(d).not.toMatch(/\d m lips/)
   })

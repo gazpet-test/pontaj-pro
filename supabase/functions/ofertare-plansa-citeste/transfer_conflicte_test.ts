@@ -4,7 +4,7 @@
 // Fixture-le „reale” = citire_ai.sumar al documentelor 470 / 471 / 130 / 1035 (SELECT 26.09.2026, doar câmpurile folosite).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import { conflicteTransfer, inregistrareDinTransfer } from './handler.ts'
-import { acoperit, confirmareValida, deschis, formaCorupta, inregistrareLegacy, inregistrarePrecedenta, inregistrareTransfer, MAX_ISTORIC, restantePeTip, stareLegacy } from './transfer_conflicte.ts'
+import { acoperit, confirmareValida, deschis, EVALUARE_PARTIALA, formaCorupta, inregistrareLegacy, inregistrarePrecedenta, inregistrareTransfer, MAX_ISTORIC, restantePeTip, stareCitireNeterminata, stareLegacy } from './transfer_conflicte.ts'
 
 // doc 470 (lic. 95), sumar din producție (26.09.2026): Dn60 nestandard 110 m + 3 adnotări pe Dn absent (1.770 m)
 const SUMAR_470 = { erori: 0, validat: false, cantitati: { ambigue: [], total_m: 48195, adaugate: 6, actualizate: 0, pe_diametre: { Dn40: 13140, Dn63: 9670, Dn90: 4545, Dn110: 780, Dn125: 2275, Dn200: 17785 } },
@@ -205,4 +205,15 @@ Deno.test('reparația rundei 2: forma coruptă (array / text) => înregistrare �
   const ob = { id: 'r1', stare: 'fara_conflicte', n: 0, conflicte: [] }
   assertEquals(inregistrarePrecedenta({ transfer_cantitati: ob, citire_ai: { sumar: { cantitati: 'x' } } }, conflicteTransfer), ob)
   assertEquals(inregistrarePrecedenta({ citire_ai: { sumar: {} } }, conflicteTransfer), null)
+})
+
+Deno.test('runda 9 (M12 + ADDENDUM 3, 3): citirea NETERMINATĂ fără înregistrare = deschisă (oglinda SQL); jurnalul vechi = „verificare indisponibilă”', () => {
+  // o rundă a edge-ului publicat (v25): citire_ai rescris, sumar fără `cantitati`, gata = false, fără transfer_cantitati
+  assertEquals(stareCitireNeterminata({ citire_ai: { gata: false, rulare: 'v25', sumar: { felii_citite: 3 } } }), { stare: 'citire_neterminata', n: 1, restante: [{ tip: 'citire_neterminata', n: 1 }] })
+  assertEquals(stareCitireNeterminata({ citire_ai: { gata: true, sumar: SUMAR_470 } }), null)
+  assertEquals(stareCitireNeterminata({ transfer_cantitati: { id: 'r1', stare: 'conflicte' }, citire_ai: { gata: false } }), null)   // înregistrarea = sursa de adevăr
+  assertEquals(stareCitireNeterminata({ transfer_cantitati: 'x', citire_ai: { gata: false } }), null)   // corupt => „necunoscut”, altă regulă
+  // conversia din handler NU poartă starea (o citire completă a codului nou reevaluează tot) — jurnalul fără cantități nu produce înregistrare legacy
+  assertEquals(inregistrareLegacy({ citire_ai: { gata: false, sumar: { felii_citite: 3 } } }, conflicteTransfer), null)
+  assert(/^verificare indisponibilă: /.test(EVALUARE_PARTIALA.text) && /nici o contradicție a documentației nu e dovedită/.test(EVALUARE_PARTIALA.text))
 })

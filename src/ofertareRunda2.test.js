@@ -52,7 +52,7 @@ describe('D1 / H2 — rândurile de rețea VALIDATE fără cantitate: totalul F3
   it('F3 500 m validat + 1 rând F3 validat FĂRĂ cantitate => H2 BLOCK (nu „500 m în F3 și în grafic” ok); poarta propunerii blocată', () => {
     const h = H2({ lista_f3_fara_cant: 1, retea_fara_cant: 1, lista_f3_validate_fara_cant: 1, retea_validate_fara_cant: 1 }, { lista_f3_m: 500, grafic_fronturi_m: 500 })
     expect(h.stare).toBe('block')
-    expect(h.detalii).toBe('500 m în F3 și în grafic · totalul F3 e PARȚIAL: 1 poziție F3 de rețea VALIDATĂ FĂRĂ cantitate determinată — „validat” fără cifră ' +
+    expect(h.detalii).toBe('500 m în subtotal F3 (doar pozițiile în m — NU e total) și în grafic · totalul F3 e PARȚIAL: 1 poziție F3 de rețea VALIDATĂ FĂRĂ cantitate determinată — „validat” fără cifră ' +
       'nu e o cantitate aprobată; completează cantitatea și revalidează (✓) în 📋 Cantități')
     const ev = evalueazaPoarta({ ...VERDE, lista_f3_m: 500, grafic_fronturi_m: 500, ...campuriCantitatiNevalidate({ data: { ...VIEW0, lista_f3_validate_fara_cant: 1, retea_validate_fara_cant: 1 }, error: null }) })
     expect(ev.stare).toBe('block')
@@ -111,7 +111,7 @@ describe('V-B3b — rândurile APROBATE ȘTERSE: „de reverificat”, stins de 
     const rest = [VALIDATE[0]]
     const c = controlCantitatiGrafic(rest, '', { conflicte: [], eroare_conflicte: null, eroare_istoric: null, sterse: st })
     expect(c.stare).toBe('warn')
-    expect(c.detalii).toMatch(/^1 rânduri rețea, toate validate · DE REVERIFICAT: 1 rând APROBAT/)
+    expect(c.detalii).toMatch(/^1 rânduri rețea în m, toate validate cu cantitate · DE REVERIFICAT: 1 rând APROBAT/)
     expect(controlCantitatiGrafic(rest, '', { conflicte: [], eroare_conflicte: null, eroare_istoric: null, sterse: [] }).stare).toBe('ok')
     const p = { tip_lucrare: 'retea_pehd', mod: 'oferta', data_start: '2026-10-01', durata_luni: 10, cantitati_asumate: '', echipe: 1, mediu: 'sat', include_bransamente: false,
       nr_bransamente: 0, ferestre_operator: 'x', fronturi: fronturiDinCantitati(rest, '').fronturi }

@@ -24,6 +24,19 @@ DROP TRIGGER IF EXISTS trg_ofertare_doc_conflict_pastrat ON public.ofertare_docu
 DROP FUNCTION IF EXISTS public.fn_trg_ofertare_doc_conflict_pastrat();
 DROP TRIGGER IF EXISTS trg_ofertare_cantitati_doar_om_valideaza ON public.ofertare_cantitati;
 DROP FUNCTION IF EXISTS public.fn_trg_ofertare_cantitati_doar_om_valideaza();
+-- Runda 9 (26.09.2026): baza cifrelor din ciornele de clarificare — view-ul, cele 2 trigger-e, reconfirmarea, funcțiile ajutătoare și coloana
+-- ofertare_clarificari.baza_generare (amprentele se pierd: sunt derivate; textele ciornelor, inclusiv o cifră marcată de om „valoare istorică”
+-- prin reconfirmare, RĂMÂN — sunt date ale omului). Fără coloană, v5 (mai jos) funcționează ca înainte.
+DROP VIEW IF EXISTS public.v_ofertare_clarificari_baza;
+DROP TRIGGER IF EXISTS trg_ofertare_clarificari_baza ON public.ofertare_clarificari;
+DROP FUNCTION IF EXISTS public.fn_trg_ofertare_clarificari_baza();
+DROP TRIGGER IF EXISTS trg_zzz_ofertare_cantitati_clar_baza ON public.ofertare_cantitati;
+DROP FUNCTION IF EXISTS public.fn_trg_ofertare_cantitati_clar_baza();
+DROP FUNCTION IF EXISTS public.ofertare_clarificare_reconfirma(bigint, text, text, text);
+DROP FUNCTION IF EXISTS public.ofertare_clarificare_baza_stare(bigint, text, text, jsonb);
+DROP FUNCTION IF EXISTS public.ofertare_clarificare_mod_text(text);
+DROP FUNCTION IF EXISTS public.ofertare_f3_baza(bigint);
+ALTER TABLE public.ofertare_clarificari DROP COLUMN IF EXISTS baza_generare;
 CREATE OR REPLACE FUNCTION public.fn_gate_depunere()
  RETURNS trigger
  LANGUAGE plpgsql
