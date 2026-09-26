@@ -12,7 +12,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 // R5 (Copilot 25.09.2026): fronturile și rândul „cant" iau DOAR cantități validate de om (status='validat').
-import { fronturiDinCantitati, marcheazaInvalidate } from './ofertareCantitatiAprobare.js'
+import { fronturiDinCantitati, marcheazaInvalidate, mesajPropuneFronturi, sterseDupaValidare } from './ofertareCantitatiAprobare.js'
 import { citestePaginat } from './ofertareCantitatiInvalidare.js'
 // R5 runda 4: checklist-ul porții = funcție pură, recalculată ÎNTREAGĂ pe cantitățile recitite înainte de îngheț
 import { BRANS_PE_KM, totalFronturi, durataMaxDinCerinte, calculeazaPoartaGrafic } from './graficPoartaCalcul.js'
@@ -220,7 +220,9 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   const istoricAprobari = async () => {
     try {
       // runda 6 (minorul verificatorului): DESCRESCĂTOR și paginat — nu se mai pierd tocmai cele mai noi evenimente (plafon PostgREST)
-      const { data, error } = await citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv')
+      // reparația rundei 2: și momentul + rândul șters (valori_vechi) — pentru rândurile APROBATE ȘTERSE (sterseDupaValidare)
+      const { data, error } = await citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric')
+        .select('id, cantitate_id, motiv, created_at, v_um:valori_vechi->>um, v_cant:valori_vechi->>cantitate, v_den:valori_vechi->>denumire')
         .eq('licitatie_id', licitatieId).order('id', { ascending: false }).range(a, b))
       return error ? { data: [], error: error.message || String(error) } : { data: data || [], error: null }
     } catch (e) { return { data: [], error: e?.message || String(e) } }
@@ -234,7 +236,8 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
       return error ? { data: [], error: error.message || String(error) } : { data: data || [], error: null }
     } catch (e) { return { data: [], error: e?.message || String(e) } }
   }
-  const sursaDin = (ist, conf) => ({ conflicte: conf.data, eroare_conflicte: conf.error, eroare_istoric: ist.error })
+  // reparația rundei 2: + rândurile APROBATE ȘTERSE după ultima versiune a graficului (`dupa`) — „de reverificat” în rândul „cant”
+  const sursaDin = (ist, conf, dupa) => ({ conflicte: conf.data, eroare_conflicte: conf.error, eroare_istoric: ist.error, sterse: sterseDupaValidare(ist.data, dupa) })
   const load = async () => {
     const [{ data: par }, { data: cant }, { data: nor }, { data: cer }, { data: ver }, ist, conf] = await Promise.all([
       supabase.from('grafic_parametri').select('*').eq('licitatie_id', licitatieId).maybeSingle(),
@@ -248,7 +251,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
       conflictePlanse(),
     ])
     setCantitati(marcheazaInvalidate(cant || [], ist.data)); setNorme(nor || []); setCerinte(cer || []); setVersiuni(ver || [])
-    setSursa(sursaDin(ist, conf))
+    setSursa(sursaDin(ist, conf, ver?.[0]?.generat_la))
     setP({ ...PARAM_DEFAULT, ...(par?.parametri || {}) })
   }
   useEffect(() => { load() }, [licitatieId])
@@ -263,19 +266,12 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
   // R5 (Copilot 25.09.2026): la lic. 95 butonul punea ca front Dn200 17.785 m (extras din planșa 470,
   // cu 13.765 m în afara UAT, nevalidați). Un rând 🤖 extras nu devine front până nu-l bifează un om.
   const propuneFronturi = () => {
-    const { fronturi, excluse, m_excluse, lipsa, text_lipsa, text_sursa } = fronturiDinCantitati(cantitati, p.cantitati_asumate, sursa)
-    const mEx = Math.round(m_excluse).toLocaleString('ro-RO')
-    if (!fronturi.length) {
-      showToast(lipsa.length
-        ? `Niciun rând de rețea validat — ${text_lipsa}. Verifică-le și validează-le (✓) în 📋 Cantități, apoi propune fronturile.`
-        : 'Niciun rând de rețea cu metri în Cantități.', 'err')
-      return
-    }
-    setParam('fronturi', fronturi)
-    // R5 condiția 2: fronturile propuse sunt INCOMPLETE cât lipsesc rânduri necesare (le numim; poarta le arată ca „de reverificat”)
-    if (lipsa.length) showToast(`${fronturi.length} fronturi din rânduri validate — INCOMPLETE: ${text_lipsa}${excluse.length ? ` (${mEx} m nepropuși)` : ''}. Validează-le în 📋 Cantități și re-propune.`, 'err')
-    // R5 sarcina 2: sursa incompletă (conflicte de transfer din planșe) / necitită — fronturile nu sunt prezentate drept complete
-    else if (text_sursa) showToast(`${fronturi.length} fronturi din rânduri validate — INCOMPLETE: ${text_sursa}.`, 'err')
+    const r = fronturiDinCantitati(cantitati, p.cantitati_asumate, sursa)
+    // R5 condiția 2 + sarcina 2 + reparația rundei 2: lipsa ȘI sursa incompletă, împreună (mesajPropuneFronturi — testată), nu else-if
+    const m = mesajPropuneFronturi(r)
+    if (!r.fronturi.length) { showToast(m.text, m.tip); return }
+    setParam('fronturi', r.fronturi)
+    if (m) showToast(m.text, m.tip)
   }
 
   const salveaza = async () => {
@@ -304,7 +300,7 @@ export default function PoartaGrafic({ licitatieId, profile, rows, dataStart, on
         .select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota, sursa').eq('licitatie_id', licitatieId).order('id').range(a, b)), istoricAprobari(), conflictePlanse()])
       if (eCant) throw new Error('nu s-au putut reciti cantitățile — nu se generează (' + eCant.message + ')')
       const proaspete = marcheazaInvalidate(citite || [], ist.data)
-      const sursaProaspata = sursaDin(ist, conf)
+      const sursaProaspata = sursaDin(ist, conf, versiuni[0]?.generat_la)
       // R5 runda 4 (verificator R3): se recalculează TOATA poarta pe cantitățile proaspete (nu doar rândul „cant") —
       // referința și proveniența fronturilor depind și ele de ce e validat ACUM; ce se îngheață e poarta recalculată.
       const poartaInghetata = calculeazaPoartaGrafic({ p, cantitati: proaspete || [], norme, cerinte, durataMax, sursa: sursaProaspata })

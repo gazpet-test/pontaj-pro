@@ -4,7 +4,7 @@
 // Fixture-le „reale” = citire_ai.sumar al documentelor 470 / 471 / 130 / 1035 (SELECT 26.09.2026, doar câmpurile folosite).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import { conflicteTransfer, inregistrareDinTransfer } from './handler.ts'
-import { acoperit, confirmareValida, deschis, inregistrareLegacy, inregistrareTransfer, MAX_ISTORIC, restantePeTip, stareLegacy } from './transfer_conflicte.ts'
+import { acoperit, confirmareValida, deschis, formaCorupta, inregistrareLegacy, inregistrarePrecedenta, inregistrareTransfer, MAX_ISTORIC, restantePeTip, stareLegacy } from './transfer_conflicte.ts'
 
 // doc 470 (lic. 95), sumar din producție (26.09.2026): Dn60 nestandard 110 m + 3 adnotări pe Dn absent (1.770 m)
 const SUMAR_470 = { erori: 0, validat: false, cantitati: { ambigue: [], total_m: 48195, adaugate: 6, actualizate: 0, pe_diametre: { Dn40: 13140, Dn63: 9670, Dn90: 4545, Dn110: 780, Dn125: 2275, Dn200: 17785 } },
@@ -178,4 +178,31 @@ Deno.test('sarcina 2: transferul căzut / amânat NU șterge conflictele anterio
 Deno.test('sarcina 2: plafonul listei — 45 de conflicte => n = 45, lista 40, „trunchiat” (nu se pierde numărul)', () => {
   const r = inregistrareTransfer(null, { conflicte: Array.from({ length: 45 }, (_, i) => ({ tip: 'ambiguu', text: String(i) })), id: 'Z', la: 'x', cod: 'c' })
   assertEquals([r.n, r.conflicte.length, r.trunchiat, deschis(r)], [45, 40, true, true])
+})
+
+// ── REPARAȚIA RUNDEI 2 (verificatorul UI, V-C4): corupția de TIP a cheilor serverului — aceleași reguli ca ofertare_transfer_stare (SQL) ──
+Deno.test('reparația rundei 2: forma coruptă (array / text) => înregistrare „necunoscut” DESCHISĂ, nu „nicio înregistrare”; închisă doar de o citire completă și negoală', () => {
+  // cele 3 forme ale verificatorului (V-C4) + citire_ai = text; controalele: obiect / null / absent
+  assertEquals(formaCorupta({ transfer_cantitati: [{ stare: 'conflicte', n: 3 }], citire_ai: { sumar: {} } }), 'transfer_cantitati de tip array')
+  assertEquals(formaCorupta({ citire_ai: { gata: true, sumar: { cantitati: 'EROARE: transfer întrerupt' } } }), 'cantitati nu e obiect')
+  assertEquals(formaCorupta({ citire_ai: { gata: true, sumar: 'corupt' } }), 'sumar nu e obiect')
+  assertEquals(formaCorupta({ citire_ai: 'x' }), 'citire_ai nu e obiect')
+  assertEquals(formaCorupta({ transfer_cantitati: null, citire_ai: { sumar: {} } }), null)
+  assertEquals(formaCorupta({ transfer_cantitati: { id: 'r1' }, citire_ai: { sumar: { cantitati: 'x' } } }), null)   // jurnal corupt, dar înregistrarea e sursa de adevăr
+  assertEquals(formaCorupta({ citire_ai: { sumar: SUMAR_130 } }), null)
+  const arr = { transfer_cantitati: [{ stare: 'conflicte', n: 3 }], citire_ai: { sumar: {} } }
+  const p = inregistrarePrecedenta(arr, conflicteTransfer)!
+  assertEquals([p.stare, p.n, p.conflicte[0].tip, deschis(p)], ['necunoscut', 1, 'necunoscut', true])
+  assert(/corupt \(transfer_cantitati de tip array\)/.test(p.conflicte[0].text))
+  // înainte: `transfer_cantitati ?? legacy` lua array-ul ca atare, iar inregistrareTransfer îl ignora => orice citire, chiar goală, „fără conflicte”
+  const goala = inregistrareTransfer(p, { conflicte: [], id: 'n1', la: '2026-09-26T12:00:00Z', cod: 'c', acoperire: { complet: true, zone: [], dn: [], cantitati_evaluate: false } })
+  assertEquals([goala.stare, goala.n, goala.conflicte[0].tip, goala.conflicte[0].tip_initial], ['conflicte', 1, 'nerezolvat_la_recitire', 'necunoscut'])
+  const partiala = inregistrareTransfer(p, { conflicte: [], id: 'n2', la: '2026-09-26T12:00:00Z', cod: 'c', acoperire: { complet: false, zone: ['z1_1'], dn: [110], cantitati_evaluate: true } })
+  assertEquals(partiala.stare, 'conflicte')
+  const completa = inregistrareTransfer(p, { conflicte: [], id: 'n3', la: '2026-09-26T12:00:00Z', cod: 'c', acoperire: { complet: true, zone: ['z1_1'], dn: [110], cantitati_evaluate: true } })
+  assertEquals([completa.stare, completa.inchis_prin], ['fara_conflicte', 'recitire_fara_conflicte'])
+  // înregistrarea-obiect rămâne precedenta (neschimbat)
+  const ob = { id: 'r1', stare: 'fara_conflicte', n: 0, conflicte: [] }
+  assertEquals(inregistrarePrecedenta({ transfer_cantitati: ob, citire_ai: { sumar: { cantitati: 'x' } } }, conflicteTransfer), ob)
+  assertEquals(inregistrarePrecedenta({ citire_ai: { sumar: {} } }, conflicteTransfer), null)
 })

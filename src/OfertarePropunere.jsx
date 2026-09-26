@@ -33,16 +33,18 @@ import { citestePaginat } from './ofertareCantitatiInvalidare.js'
 async function campuriGraficReverificare(licId) {
   try {
     const [rV, rC, rI] = await Promise.all([
-      supabase.from('grafic_versiuni').select('versiune, parametri:snapshot->parametri').eq('licitatie_id', licId).order('versiune', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('grafic_versiuni').select('versiune, generat_la, parametri:snapshot->parametri').eq('licitatie_id', licId).order('versiune', { ascending: false }).limit(1).maybeSingle(),
       citestePaginat((a, b) => supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota, sursa').eq('licitatie_id', licId).order('id').range(a, b)),
       // runda 6: istoricul DESCRESCĂTOR și paginat (citestePaginat)
       citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licId).order('id', { ascending: false }).range(a, b)),
     ])
     if (rV.error || rC.error) return { grafic_reverificare_eroare: (rV.error || rC.error).message || 'eroare la citire' }
-    if (!rV.data?.parametri) return {}
+    // reparația rundei 2: momentul ultimei versiuni — referința pentru rândurile aprobate ȘTERSE (H2: „de reverificat” doar după el)
+    const gl = { grafic_generat_la: rV.data?.generat_la ?? null }
+    if (!rV.data?.parametri) return gl
     // R5 sarcina 2 (c): istoricul necitit NU mai e „[]” tăcut (rândurile invalidate ar fi dispărut din reverificare) => control indisponibil
-    if (rI.error) return { grafic_reverificare_eroare: `istoricul aprobărilor indisponibil: ${rI.error.message || rI.error}` }
-    return reverificareGraficInghetat(rV.data.parametri, marcheazaInvalidate(rC.data || [], rI.data))
+    if (rI.error) return { ...gl, grafic_reverificare_eroare: `istoricul aprobărilor indisponibil: ${rI.error.message || rI.error}` }
+    return { ...gl, ...reverificareGraficInghetat(rV.data.parametri, marcheazaInvalidate(rC.data || [], rI.data)) }
   } catch (e) { return { grafic_reverificare_eroare: e?.message || String(e) } }
 }
 // P0 pas 2: rândul „documentatie” al porții. Eroare / lipsă = documentatie_verificata false → poarta spune „nu putem verifica”.

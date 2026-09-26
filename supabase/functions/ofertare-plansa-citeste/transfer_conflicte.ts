@@ -154,9 +154,38 @@ export function stareLegacy(c: any, s: any, conflicte: ConflictTransfer[]): { st
 export const EVALUARE_PARTIALA: ConflictTransfer = { tip: 'evaluare_partiala', fara_cantitate: true,
   text: 'transfer evaluat de codul VECHI (edge publicat înainte de R5): identitatea rândurilor, secvența Nr, rândurile fără lungime / fără Dn, ' +
     'TOTAL-ul multiplu și adnotările NU au fost verificate — „fără conflicte” nu e dovedit; reevaluează cu codul nou pe citirea salvată sau confirmă explicit' };
+// ── Reparația rundei 2 (verificatorul UI, V-C4 — corupție de TIP): aceleași reguli ca ofertare_transfer_stare din SQL. O cheie a serverului
+// PREZENTĂ, dar de alt tip decât obiect (înregistrarea = array / text; jurnalul citire_ai / sumar / cantitati = text) => „necunoscut”
+// DESCHIS, nu „nimic”: înregistrarea coruptă contează oricând, jurnalul corupt doar fără o înregistrare-obiect. null (JSON) = absent.
+const eObiect = (x: any) => !!x && typeof x === 'object' && !Array.isArray(x);
+const tipJs = (x: any) => (Array.isArray(x) ? 'array' : typeof x);
+export function formaCorupta(analiza: any): string | null {
+  const a = eObiect(analiza) ? analiza : {};
+  if ('transfer_cantitati' in a && a.transfer_cantitati !== null && !eObiect(a.transfer_cantitati)) return `transfer_cantitati de tip ${tipJs(a.transfer_cantitati)}`;
+  if (eObiect(a.transfer_cantitati)) return null;
+  const ca = a.citire_ai;
+  if ('citire_ai' in a && ca !== null && !eObiect(ca)) return 'citire_ai nu e obiect';
+  if (eObiect(ca) && 'sumar' in ca && ca.sumar !== null && !eObiect(ca.sumar)) return 'sumar nu e obiect';
+  if (eObiect(ca?.sumar) && 'cantitati' in ca.sumar && ca.sumar.cantitati !== null && !eObiect(ca.sumar.cantitati)) return 'cantitati nu e obiect';
+  return null;
+}
+// înregistrarea precedentă a unui document, pentru transferul nou: cea salvată (obiect) sau, fără ea, jurnalul vechi / forma coruptă convertite
+export const inregistrarePrecedenta = (analiza: any, conflicteDin: (c: any, s: any) => ConflictTransfer[], la?: string) =>
+  eObiect(analiza?.transfer_cantitati) ? analiza.transfer_cantitati : inregistrareLegacy(analiza, conflicteDin, la);
 // înregistrarea „legacy” sintetică: jurnalul vechi nelegat de nicio înregistrare, convertit ca să nu dispară când citirea nouă îl suprascrie
+// (reparația rundei 2: și forma coruptă => o înregistrare „necunoscut” deschisă, fără ancore — o închide doar o citire COMPLETĂ și negoală,
+// sau confirmarea omului; înainte, un array în transfer_cantitati era ignorat, iar orice citire, chiar goală, trecea peste el)
 export function inregistrareLegacy(analiza: any, conflicteDin: (c: any, s: any) => ConflictTransfer[], la?: string) {
   const a = analiza && typeof analiza === 'object' ? analiza : {};
+  const cor = formaCorupta(a);
+  if (cor) {
+    return {
+      v: VERSIUNE_INREGISTRARE, id: `corupt-js:${crypto.randomUUID()}`, sursa: 'necunoscut', la: la || null, cod: 'forma-corupta', cod_transfer: COD_TRANSFER,
+      stare: 'necunoscut', n: 1, conflicte: [{ tip: 'necunoscut', fara_cantitate: true,
+        text: `înregistrarea / jurnalul transferului anterior era corupt (${cor}) — nu putem verifica ce conflicte avea; îl închide doar o citire completă și negoală sau confirmarea explicită` }],
+      acoperire: null, confirmat_de: null, confirmat_la: null, confirmare_nota: null, confirmare_tip: null, confirmat_token: null, istoric: [],
+    };
+  }
   if (a.transfer_cantitati && typeof a.transfer_cantitati === 'object') return null;
   const s = a.citire_ai?.sumar, c = s?.cantitati;
   if (!c || typeof c !== 'object' || 'in_curs' in c || c.inregistrare_id) return null;

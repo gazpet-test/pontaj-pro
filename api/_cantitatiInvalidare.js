@@ -113,6 +113,8 @@ const fmtMilionimi = q => {
 // zecimalele semnificative (max. 6) —, nu pe 2 zecimale: „100 m → 100,000001 m”, „1,084 mc → 1,085 mc” (înainte „100 m → 100 m”,
 // „1,08 mc → 1,09 mc”, deci două cifre DIFERITE apăreau egale sau rotunjite). SQL: aceeași expresie în trigger (to_char pe round(x, 6)).
 export const fmtExact = v => { const q = valoareCanonica(v); return q === null ? '—' : fmtMilionimi(q) }
+// sutimi (BigInt, ≥ 0) → text ro-RO cu max. 2 zecimale semnificative: 80 → „0,8”; 100 → „1”; 12345 → „123,45” (procentul din notă)
+const fmtSutimi = p => { const fr = String(p % BI(100)).padStart(2, '0').replace(/0+$/, ''); return grupeaza(String(p / BI(100))) + (fr ? ',' + fr : '') }
 // SEVERITATEA unei diferențe (doar pentru notă; nu decide nimic): „diferență mică: +0,8 m, +0,03 %” / „diferență mare: -600 m,
 // -4,37 %”. Mică = sub 1 % relativ ȘI, pe unitățile de lungime, sub 1 m absolut (pe buc / mp / mc / kg … doar pragul relativ).
 // |Δ| exact (valorile canonice, până la 6 zecimale — „+0,001 mc”, nu „+0 mc”); față de 0 nu există procent (=> mare). Identic, octet
@@ -127,7 +129,8 @@ export function descrieDiferenta(vechi, nou, { lungime = true, unitate = 'm' } =
   const semn = d > 0 ? '+' : '-'
   const pct = aa === BI(0) ? null : (ad * BI(10000)) / aa   // sutimi de procent, TRUNCHIAT (BigInt: împărțire întreagă)
   const mica = pct !== null && ad * BI(100) < aa * BI(PRAG_SEVERITATE_PROCENT) && (!lungime || ad < BI(PRAG_SEVERITATE_LUNGIME_M * 1000000))
-  const tp = pct === null ? '' : pct === BI(0) ? ', sub 0,01 %' : `, ${semn}${fmtRo(Number(pct) / 100)} %`
+  // reparația rundei 2 (paritatea peste 1e18): procentul din sutimile EXACTE (BigInt), nu prin Number / fmtRo — ca șablonul lat din SQL
+  const tp = pct === null ? '' : pct === BI(0) ? ', sub 0,01 %' : `, ${semn}${fmtSutimi(pct)} %`
   return `diferență ${mica ? 'mică' : 'mare'}: ${semn}${fmtMilionimi(ad)} ${unitate}${tp}`
 }
 

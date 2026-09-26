@@ -49,12 +49,35 @@
 --      - v_ofertare_cantitati_nevalidate: transfer_restante (pe tip, pe licitație); v6: ciorna „a mașinii” doar după AMPRENTA textului
 --        generat (gen_<md5[:12]>) — un corp editat de om sub antet nu mai e rescris / retras; marcajul + notificarea O DATĂ PE EVENIMENT
 --        (ev_<md5[:12]> al textului generat + planșelor), nu la fiecare apel.
+--
+--   R2) REPARAȚIA RUNDEI 2 (verificatorii rundei 1, 26.09.2026) — detalii și dovezi: docs/R5_CONSUMATORI_CANTITATI_NEVALIDATE.md §15:
+--      - POARTA DE DEPUNERE (MAJOR): fn_gate_depunere (LIVE, trigger-ul trg_gate_depunere pe ofertare_licitatii, md5(prosrc)
+--        6ee66ed8decff19a0c303c324454cfe1) EXTINSĂ: trecerea în 'depusa' e refuzată cât sursa cantităților are restanțe de transfer deschise /
+--        un transfer în curs / controlul indisponibil (partea live — cerințe, acoperire, dovezi — NESCHIMBATĂ). Derogarea (derogare_depunere)
+--        rămâne decizia lui Razvan, ca azi; pentru partea R5 contează doar dacă trecerea o face cineva cu drept de decizie
+--        (fn_ofertare_source_pack_poate_decide) sau serverul. Rollback-ul pune la loc corpul live;
+--      - verificarea sursei = O SINGURĂ funcție, ofertare_r5_blocaj_sursa(licitație) (NOU), folosită de poarta pachetului și de cea de
+--        depunere; poarta pachetului o aplică și la aprobat → depus (un conflict apărut DUPĂ aprobare nu mai trece la depunere);
+--      - v6 (MAJOR): un rând F3 de rețea VALIDAT FĂRĂ cantitate => textul către autoritate NU mai citează total (era „…din F3: 500 m”);
+--        view-ul numără rândurile de rețea fără cantitate pe orice status (lista_f3_fara_cant, retea_fara_cant, *_validate_fara_cant);
+--        UPDATE-ul ciornei mașinii cu gardă (FOR UPDATE + status / text neschimbate) — fără „lost update” peste o editare umană;
+--      - view: rândurile APROBATE ȘTERSE (sterse_dupa_validare, _retea, _pe_um, _ultima, _lista — din istoric, motiv 'sters') și rândurile de
+--        rețea în ALTE unități decât m (retea_alte_unitati, _f3, _pe_um — „sute m”, „mc”, fără unitate), numite, fără conversie;
+--      - parsare defensivă și pe TIP: transfer_cantitati care nu e obiect, citire_ai / sumar / cantitati care nu sunt obiect => documentul
+--        e „necunoscut” DESCHIS (înainte: lipsea din view sau apărea „nimic” închis);
+--      - trigger NOU trg_ofertare_doc_conflict_pastrat: un utilizator FĂRĂ drept de decizie nu mai poate șterge / muta pe altă licitație un
+--        document cu conflicte de transfer deschise (scotea conflictul din poartă fără urmă);
+--      - trigger NOU trg_ofertare_cantitati_doar_om_valideaza: un proces al serverului (service_role) nu mai poate pune un rând în 'validat'
+--        (cad-parse PUBLICAT pe main îl scrie direct) — rândul rămâne 'extras' / statusul lui, cu nota spusă. Închide EFECTIV fereastra
+--        „fără import CAD” dintre migrare și deploy (nu mai e doar o regulă verbală); după deploy codul nou nu scrie oricum 'validat'.
 -- Rollback exact: docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate_ROLLBACK.sql.
 -- Testat local pe PGlite 0.5.8 (Postgres 18.3 compilat WASM, în proces, de unică folosință; schemă minimă cu coloanele reale),
 -- NU pe un Postgres 16 și nu pe BD-ul de producție — un Postgres local (initdb) a fost refuzat de izolarea worktree-ului.
 -- Scripturile de test: scratchpad/pglite/test_r5.mjs (runda 3) și test_r5_runda4.mjs (runda 4).
 -- Sarcina 2 (26.09.2026): scratchpad/pglite/test_sarcina2.mjs (75/75, peste migrarea 1 în forma aplicată + 1b, cu rândurile și documentele
 -- reale md5 = producția) + variantele _s2 ale suitelor anterioare; 12 mutații ale acestui fișier — toate prinse.
+-- Reparația rundei 2: scratchpad/pglite/test_sarcina2_r2.mjs (secțiunile R2-*, peste toate verificările rundei 1) + suitele verificatorilor
+-- (vf_bd/adv_bd.mjs, pglite/vfui_r1_adv.mjs) rulate pe această versiune: constatările C5 / C8 / C9b / D1 / V-C4 nu mai apar.
 -- Reparația rundei 1: scratchpad/pglite/test_sarcina2_r1.mjs (102/102) + variantele _r1 ale suitelor anterioare (66 / 18 / 13 / 17);
 -- 14 mutații ale acestui fișier (scratchpad/r1/mutanti.py, din 29 în total) — toate prinse; controale negative pe codul de la be63d25.
 --
@@ -115,16 +138,29 @@
 --     (471–475 au citiri goale => rămân deschise până la ✋ „excepție”). 0 pachete în BD — nimic aprobat nu e afectat retroactiv.
 --   (P4-R1) #63 (lic. 95, de_trimis, text editat, fără tokeni gen_ / ev_) => v6 „neschimbat”, nicio notificare (verificat în PGlite pe copia
 --     reală); la primul eveniment nou (altă mulțime de planșe) => marcaj + 1 notificare, apoi nimic până la următorul eveniment.
---   FERESTRE (între aplicarea migrărilor și merge / deploy): fără import CAD (cad-parse publicat scrie 'validat'); fără citiri de planșe cu
---     edge v25 (sigur, dar blochează până la reevaluare); deploy imediat după merge: ofertare-plansa-citeste, ofertare-clarificari-propune,
---     ofertare-document-nou-citeste (workerul NAS se actualizează singur la commitul nou de pe main).
+--   (P5-R2) reparația rundei 2 (SELECT pe producție 26.09.2026): poarta de depunere live = md5(prosrc) 6ee66ed8decff19a0c303c324454cfe1
+--     (trg_gate_depunere BEFORE UPDATE pe ofertare_licitatii); licitațiile în_lucru: 3 (termen 14.10), 5 (18.09), 93 (02.10), 95 (19.10);
+--     go: 15, 101, 102. După aplicare, „depusa” e refuzată pe lic. 3 și 95 (restanțe de transfer deschise) și pe 102 când va fi în lucru, până
+--     la ♻ reevaluare / ✋ confirmare / derogare (Razvan); 5 și 93 n-au jurnal de transfer => neatinse. Nicio licitație „depusa” nu e atinsă
+--     (trigger-ul verifică doar TRECEREA în depusa). 0 documente cu cheile serverului de alt tip (V-C4), 0 rânduri validate fără cantitate,
+--     istoricul gol (0 ștergeri), lic. 5: 29 de rânduri de rețea în alte unități (F3: 11 „mc”, 12 „sute m”; plus 1 „ore”, 5 fără unitate).
+--     Verificare statică: niciun cod de pe main sau de pe ramură nu scrie 'validat' din server, în afară de api/cad-parse.js PUBLICAT (main).
+--   FERESTRE (între aplicarea migrărilor și merge / deploy): importul CAD publicat NU mai poate scrie 'validat' (trigger-ul 0f îl ține
+--     'extras' / pe statusul vechi — suspendare efectivă a părții afectate, nu doar regulă verbală); fără citiri de planșe cu edge v25
+--     (sigur, dar blochează până la reevaluare); deploy imediat după merge: ofertare-plansa-citeste, ofertare-clarificari-propune,
+--     ofertare-document-nou-citeste (workerul NAS se actualizează singur la commitul nou de pe main); UI-ul publicat: bannerul din
+--     OfertareLicitatii numără tokenii gen_ / ev_ / revizie_ ca planșe (cosmetic, doar în fereastră).
 --   DUPĂ APLICARE: get_advisors + registru_automatizari (trigger-ul nou al cheilor serverului; confirmarea cu drept de decizie; extinderea
---     trigger-ului pachetului; modul „reevaluează” al edge-ului — nu citește conținut extern nou, scrie în cantități ca transferul, poarta
---     pe cheltuială owner / responsabil).
+--     trigger-ului pachetului ȘI a porții de depunere; trigger-ele noi ale rundei 2 — documentul cu conflicte nu se șterge / mută fără drept
+--     de decizie, serverul nu validează; modul „reevaluează” al edge-ului — nu citește conținut extern nou, scrie în cantități ca transferul,
+--     poarta pe cheltuială owner / responsabil).
 -- SANITY (după): SELECT * FROM v_ofertare_cantitati_nevalidate WHERE licitatie_id IN (3,5,95,102) ORDER BY 1;
 --   SELECT document_id, licitatie_id, sursa, stare, n, deschis, restante FROM v_ofertare_transfer_conflicte ORDER BY 1;
 --     -- R1: 8 rânduri, toate deschis; 470: legacy, conflicte, 3; celelalte: legacy, legacy_partial, 1
 --   SELECT tgname, tgenabled FROM pg_trigger WHERE tgrelid = 'public.ofertare_documente_atribuire'::regclass AND tgname = 'trg_ofertare_doc_chei_server';
+--   R2: SELECT tgname FROM pg_trigger WHERE tgname IN ('trg_ofertare_doc_conflict_pastrat', 'trg_ofertare_cantitati_doar_om_valideaza', 'trg_gate_depunere');  -- 3
+--       SELECT md5(prosrc) <> '6ee66ed8decff19a0c303c324454cfe1' FROM pg_proc WHERE proname = 'fn_gate_depunere';  -- true (extinsă)
+--       SELECT public.ofertare_r5_blocaj_sursa(95) IS NOT NULL, public.ofertare_r5_blocaj_sursa(5) IS NULL;  -- true, true
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 -- 1) ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -145,6 +181,11 @@ DO $$ BEGIN
   IF to_regprocedure('public.fn_ofertare_source_pack_poate_decide(bigint)') IS NULL OR to_regprocedure('public.fn_ofertare_pt_pachet_poarta_documentatie()') IS NULL
      OR to_regclass('public.v_ofertare_seap_completitudine') IS NULL THEN
     RAISE EXCEPTION 'R5: lipsesc obiectele live fn_ofertare_source_pack_poate_decide / fn_ofertare_pt_pachet_poarta_documentatie / v_ofertare_seap_completitudine';
+  END IF;
+  -- reparația rundei 2: poarta de DEPUNERE live (trigger-ul trg_gate_depunere pe ofertare_licitatii) — se extinde, nu se dublează
+  IF to_regprocedure('public.fn_gate_depunere()') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_gate_depunere' AND tgrelid = 'public.ofertare_licitatii'::regclass) THEN
+    RAISE EXCEPTION 'R5: lipsește poarta de depunere live (fn_gate_depunere + trg_gate_depunere pe ofertare_licitatii)';
   END IF;
 END $$;
 -- Runda 6 (decis în audit 26.09.2026 pe principiile Copilot, reversibil):
@@ -221,9 +262,24 @@ BEGIN
   IF jsonb_typeof(p_analiza) IS DISTINCT FROM 'object' THEN
     RETURN jsonb_build_object('sursa', 'nimic', 'n', 0, 'deschis', false, 'in_curs', false, 'restante', '[]'::jsonb);
   END IF;
+  -- REPARAȚIA RUNDEI 2 (verificatorul UI, V-C4 — corupție de TIP): o cheie a serverului PREZENTĂ, dar de alt tip decât obiect (înregistrarea =
+  -- array / text; jurnalul citire_ai / sumar / cantitati = text) NU mai e ignorată (înainte: documentul lipsea din view sau ieșea „nimic”
+  -- ÎNCHIS, deci 0 restanțe și aprobarea trecea). RAISE => blocul EXCEPTION de mai jos: „necunoscut” DESCHIS, cu motivul, doar pe acest
+  -- document. Înregistrarea coruptă contează oricând; jurnalul corupt doar fără o înregistrare-obiect (care e sursa de adevăr — inclusiv
+  -- cea creată de confirmarea umană a acestei stări). JSON null = cheie absentă. Producția (SELECT 26.09.2026): 0 documente cu astfel de forme.
+  IF p_analiza ? 'transfer_cantitati' AND jsonb_typeof(p_analiza -> 'transfer_cantitati') NOT IN ('object', 'null') THEN
+    RAISE EXCEPTION 'transfer_cantitati de tip %', jsonb_typeof(p_analiza -> 'transfer_cantitati');
+  END IF;
   v_rec := CASE WHEN jsonb_typeof(p_analiza -> 'transfer_cantitati') = 'object' THEN p_analiza -> 'transfer_cantitati' END;
   v_s := CASE WHEN jsonb_typeof(p_analiza -> 'citire_ai') = 'object' AND jsonb_typeof(p_analiza -> 'citire_ai' -> 'sumar') = 'object' THEN p_analiza -> 'citire_ai' -> 'sumar' END;
   v_c := CASE WHEN jsonb_typeof(v_s -> 'cantitati') = 'object' THEN v_s -> 'cantitati' END;
+  IF v_rec IS NULL AND (
+       (p_analiza ? 'citire_ai' AND jsonb_typeof(p_analiza -> 'citire_ai') NOT IN ('object', 'null'))
+    OR (jsonb_typeof(p_analiza -> 'citire_ai') = 'object' AND (p_analiza -> 'citire_ai') ? 'sumar'
+        AND jsonb_typeof(p_analiza -> 'citire_ai' -> 'sumar') NOT IN ('object', 'null'))
+    OR (v_s IS NOT NULL AND v_s ? 'cantitati' AND jsonb_typeof(v_s -> 'cantitati') NOT IN ('object', 'null'))) THEN
+    RAISE EXCEPTION 'jurnalul transferului (citire_ai / sumar / cantitati) nu e obiect';
+  END IF;
   IF v_rec IS NOT NULL THEN
     -- confirmarea VALIDĂ (pereche cu confirmareValida din transfer_conflicte.ts)
     -- coalesce(…, false): o cheie LIPSĂ (ex. confirmat_de absent lângă un confirmat_la valid) dă NULL în AND — fără coalesce, „deschis” ieșea
@@ -324,7 +380,12 @@ SELECT d.id AS document_id, d.licitatie_id, d.nume_original, d.tip,
   FROM public.ofertare_documente_atribuire d
  CROSS JOIN LATERAL (SELECT public.ofertare_transfer_stare(d.analiza) AS x) s
  WHERE jsonb_typeof(d.analiza) = 'object'
-   AND (jsonb_typeof(d.analiza -> 'transfer_cantitati') IS NOT NULL OR jsonb_typeof(d.analiza -> 'citire_ai' -> 'sumar' -> 'cantitati') = 'object');
+   -- reparația rundei 2 (V-C4): și documentele cu cheile serverului de alt TIP (înregistrare / jurnal corupt) — altfel lipseau din view (0 restanțe)
+   AND (d.analiza ? 'transfer_cantitati'
+        OR (d.analiza ? 'citire_ai' AND jsonb_typeof(d.analiza -> 'citire_ai') NOT IN ('object', 'null'))
+        OR (jsonb_typeof(d.analiza -> 'citire_ai') = 'object' AND (d.analiza -> 'citire_ai') ? 'sumar'
+            AND jsonb_typeof(d.analiza -> 'citire_ai' -> 'sumar') NOT IN ('object', 'null'))
+        OR (jsonb_typeof(d.analiza -> 'citire_ai' -> 'sumar') = 'object' AND (d.analiza -> 'citire_ai' -> 'sumar') ? 'cantitati'));
 REVOKE ALL ON public.v_ofertare_transfer_conflicte FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.v_ofertare_transfer_conflicte TO authenticated, service_role;
 COMMENT ON VIEW public.v_ofertare_transfer_conflicte IS 'R5 sarcina 2 + reparația rundei 1 (26.09.2026): per document (planșă), conflictele transferului planșă → cantități care nu au (neapărat) produs rânduri — deschis = sursă incompletă până la o recitire care le ACOPERĂ sau o confirmare umană VALIDĂ (ofertare_transfer_conflicte_confirma: rezolvare / excepție justificată, cu drept de decizie). restante = [{tip, n}] distincte (cauza și acțiunea: src/ofertareTransferRestante.js). Citit de poarta graficului, H2 (prin v_ofertare_cantitati_nevalidate), aprobarea finală (trigger-ul pachetului), Documente și generatorul de clarificări. security_invoker.';
@@ -446,6 +507,69 @@ DROP TRIGGER IF EXISTS trg_ofertare_doc_chei_server ON public.ofertare_documente
 CREATE TRIGGER trg_ofertare_doc_chei_server BEFORE INSERT OR UPDATE OF analiza ON public.ofertare_documente_atribuire
   FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_doc_chei_server();
 
+-- 0e) REPARAȚIA RUNDEI 2 (verificatorul BD, minorul C8): un editor Ofertare FĂRĂ drept de decizie scotea conflicte DESCHISE din poartă fără
+-- urmă — ștergând documentul (politica DELETE = fn_are_acces_ofertare) sau mutându-l pe altă licitație (UPDATE licitatie_id); trigger-ul
+-- cheilor păzește doar `analiza`. Acum, la o scriere DIRECTĂ a unui utilizator (authenticated / anon), ștergerea / mutarea unui document cu
+-- restanțe de transfer deschise (sau cu transfer în curs) cere dreptul de DECIZIE pe licitația de pe care pleacă (fn_ofertare_source_pack_
+-- poate_decide: owner / responsabil / admin Ofertare) — același drept ca la confirmarea conflictelor. Serverul (service_role), funcțiile
+-- DEFINER și ștergerea în cascadă a licitației (rulează ca proprietarul tabelului) trec. Niciun ecran nu șterge / mută azi documente
+-- (verificat în src/ la 26.09.2026) — trigger-ul închide calea directă (PostgREST). SECURITY INVOKER intenționat (vede rolul apelantului).
+CREATE OR REPLACE FUNCTION public.fn_trg_ofertare_doc_conflict_pastrat()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_st jsonb;
+BEGIN
+  IF current_user NOT IN ('authenticated', 'anon') THEN RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END; END IF;
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.licitatie_id IS NOT DISTINCT FROM OLD.licitatie_id THEN RETURN NEW; END IF;
+  END IF;
+  v_st := public.ofertare_transfer_stare(OLD.analiza);
+  IF (coalesce((v_st ->> 'deschis')::boolean, true) OR coalesce((v_st ->> 'in_curs')::boolean, false))
+     AND NOT coalesce(public.fn_ofertare_source_pack_poate_decide(OLD.licitatie_id), false) THEN
+    RAISE EXCEPTION 'Documentul „%” are restanțe DESCHISE la transferul din planșă (%): % lui ar scoate conflictele din poarta licitației #% fără rezolvare. Rezolvă-le (recitire) sau confirmă-le în Documente (✋ rezolvare / excepție justificată) — ori cere-o ownerului / responsabilului licitației / unui admin Ofertare.',
+      coalesce(OLD.nume_original, '#' || OLD.id), coalesce(v_st ->> 'n', '?') || ' restanțe', CASE WHEN TG_OP = 'DELETE' THEN 'ștergerea' ELSE 'mutarea' END, OLD.licitatie_id
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END $function$;
+REVOKE ALL ON FUNCTION public.fn_trg_ofertare_doc_conflict_pastrat() FROM PUBLIC, anon, authenticated;
+COMMENT ON FUNCTION public.fn_trg_ofertare_doc_conflict_pastrat() IS 'R5 reparația rundei 2 (26.09.2026): o ștergere / mutare pe altă licitație, DIRECTĂ (authenticated / anon), a unui document cu restanțe de transfer deschise cere dreptul de decizie pe licitație (fn_ofertare_source_pack_poate_decide) — conflictul nu mai iese din poartă fără rezolvare. SECURITY INVOKER intenționat.';
+DROP TRIGGER IF EXISTS trg_ofertare_doc_conflict_pastrat ON public.ofertare_documente_atribuire;
+CREATE TRIGGER trg_ofertare_doc_conflict_pastrat BEFORE DELETE OR UPDATE OF licitatie_id ON public.ofertare_documente_atribuire
+  FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_doc_conflict_pastrat();
+
+-- 0f) REPARAȚIA RUNDEI 2 (verificatorul BD, minorul C9b — „fereastra fără import CAD e doar o regulă verbală”): cad-parse PUBLICAT (main,
+-- api/cad-parse.js) scrie cu service_role rânduri cu status 'validat' — insert direct 'validat', iar pe un rând existent (chiar 'diferenta')
+-- îl RE-VALIDEAZĂ cu valoarea mașinii (istoricul înregistra 'validat'). R5: 'validat' = bifa ✓ a unui OM. Un proces al serverului
+-- (current_user = service_role: /api, edge-urile, workerul) NU mai poate pune un rând în 'validat': la INSERT rândul intră 'extras', la
+-- UPDATE își păstrează statusul (extras / diferenta / revizuit_clarificare); scrierea în rest trece (nimic nu se pierde), cu nota spusă.
+-- Pe un rând DEJA validat decide regula aprobării (trigger-ul trg_zz_…, după acesta: cifra / atributele schimbate => 'diferenta').
+-- Suspendă EFECTIV doar partea afectată a importului CAD publicat, între aplicarea migrării și deploy (Copilot, pct. 3: „suspendă doar
+-- transferurile automate afectate”); codul ramurii nu scrie 'validat' din server (cad-parse: 'extras'; transferul din planșă: prin RPC
+-- DEFINER, 'extras' / 'diferenta'), deci trigger-ul rămâne și după deploy, ca invariant. Omul (authenticated, ✓ din 📋 Cantități) și SQL-ul
+-- rulat de proprietar (postgres, cu GO) validează normal. SECURITY INVOKER intenționat (vede rolul apelantului).
+CREATE OR REPLACE FUNCTION public.fn_trg_ofertare_cantitati_doar_om_valideaza()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF current_user = 'service_role' AND NEW.status = 'validat' AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM 'validat') THEN
+    NEW.status := CASE WHEN TG_OP = 'INSERT' THEN 'extras' ELSE OLD.status END;
+    NEW.diferenta_nota := 'Scriere automată: „validat” cerut de un proces al serverului a fost refuzat — doar bifa ✓ a unui om validează (R5); rândul a rămas „'
+      || NEW.status || '”. ' || coalesce(NEW.diferenta_nota, '');
+  END IF;
+  RETURN NEW;
+END $function$;
+REVOKE ALL ON FUNCTION public.fn_trg_ofertare_cantitati_doar_om_valideaza() FROM PUBLIC, anon, authenticated;
+COMMENT ON FUNCTION public.fn_trg_ofertare_cantitati_doar_om_valideaza() IS 'R5 reparația rundei 2 (26.09.2026): un proces al serverului (service_role) nu poate pune un rând de cantități în „validat” (INSERT => extras; UPDATE => statusul vechi, cu notă) — doar bifa unui om validează. Închide fereastra importului CAD publicat (scria validat). SECURITY INVOKER intenționat.';
+DROP TRIGGER IF EXISTS trg_ofertare_cantitati_doar_om_valideaza ON public.ofertare_cantitati;
+-- numele sortează ÎNAINTE de trg_zz_ofertare_cantitati_aprobare (trigger-ele BEFORE rulează alfabetic): regula aprobării vede statusul corectat
+CREATE TRIGGER trg_ofertare_cantitati_doar_om_valideaza BEFORE INSERT OR UPDATE OF status ON public.ofertare_cantitati
+  FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_cantitati_doar_om_valideaza();
+
 -- 1, continuare ─────────────────────────────────────────────────────────────────────────────────────────
 -- v_ofertare_cantitati_nevalidate (comentariile de la „1)” de mai sus + cele de mai jos)
 -- Sarcina 2 (d) — UNITĂȚI: coloanele *_m ale grupurilor din AFARA rețelei (invalidate ieșite, TOTAL invalidate, unitate schimbată) însumau
@@ -453,7 +577,19 @@ CREATE TRIGGER trg_ofertare_doc_chei_server BEFORE INSERT OR UPDATE OF analiza O
 -- dă defalcarea pe unitate {um: {suma, randuri, fara_cantitate}} — mesajele le grupează pe lungimi / suprafețe / volume / bucăți / alte
 -- unități + poziții fără cantitate (JS: textCantitatiPeUnitati). *_fara_cant = rândurile fără cantitate determinată (nu „0 m”).
 -- Sarcina 2 (a): transfer_conflicte_* = documentele cu conflicte DESCHISE (v_ofertare_transfer_conflicte); licitația apare în view și
--- când nu are niciun rând de cantități (FULL JOIN) — „nimic scris ≠ nicio problemă”.
+-- când nu are niciun rând de cantități (lista `lic`; până în runda 1: FULL JOIN) — „nimic scris ≠ nicio problemă”.
+-- Reparația rundei 2 (verificatorii rundei 1):
+--  - rândurile de rețea FĂRĂ cantitate pe ORICE status (lista_f3_fara_cant, retea_fara_cant) și, separat, cele VALIDATE fără cantitate
+--    (lista_f3_validate_fara_cant, retea_validate_fara_cant): „validat” fără cifră nu e o cantitate aprobată — totalul F3 e parțial (H2 BLOCK,
+--    v6 fără total). Înainte, doar rândurile nevalidate fără cantitate erau numărate;
+--  - rândurile de rețea (categorie conductă / rețea, fără „total”) în ALTE unități decât m — „sute m”, „mc”, „ml”, fără unitate
+--    (retea_alte_unitati, _f3, _pe_um): în afara comparației F3 ↔ grafic, numite, FĂRĂ conversie (lic. 5 reală: 12 F3 în „sute m”, 11 F3 în
+--    „mc”); cele deja numărate ca invalidate / unitate schimbată NU se repetă aici;
+--  - rândurile APROBATE ȘTERSE (istoricul: motiv 'sters' — trigger-ul îl scrie DOAR pentru un rând 'validat'): sterse_dupa_validare, _retea,
+--    _pe_um, _ultima (momentul ultimei ștergeri), _lista (ultimele 20: cantitate_id, la, um, cantitate, denumire, retea) — consumatorii
+--    (H2, poarta graficului) le arată „de reverificat” până la o versiune nouă a graficului generată după ștergere;
+--  - licitațiile apar dacă au rânduri (de rețea / invalidate / în alte unități), conflicte de transfer deschise / în curs SAU ștergeri de
+--    rânduri aprobate (lista `lic`).
 CREATE VIEW public.v_ofertare_cantitati_nevalidate WITH (security_invoker = on) AS
 WITH ist AS (
   SELECT DISTINCT ON (h.cantitate_id) h.cantitate_id, h.motiv
@@ -470,6 +606,7 @@ WITH ist AS (
          -- filtrul qm din v_ofertare_pt_stare, cu unitatea NORMALIZATĂ (runda 6); coalesce: categorie NULL = în afara rețelei
          coalesce(public.ofertare_norm_text(q.um) = 'm'::text AND q.categorie ~* 'conduct|re[țt]ea'::text
            AND ((((COALESCE(q.obiect, ''::text) || ' '::text) || COALESCE(q.denumire, ''::text)) || ' '::text) || COALESCE(q.sursa, ''::text)) !~* 'total'::text, false) AS in_retea,
+         coalesce(q.categorie ~* 'conduct|re[țt]ea'::text, false) AS cat_retea,
          ((((COALESCE(q.obiect, ''::text) || ' '::text) || COALESCE(q.denumire, ''::text)) || ' '::text) || COALESCE(q.sursa, ''::text)) ~* 'total'::text AS e_total,
          q.status <> 'validat' AND ((coalesce(q.diferenta_nota, '') LIKE 'Rândul era VALIDAT%' AND strpos(q.diferenta_nota, 'validarea se reface.') > 0)
            OR coalesce(i.motiv IN ('invalidat', 'redeschis'), false)) AS invalidat,
@@ -478,12 +615,16 @@ WITH ist AS (
     FROM public.ofertare_cantitati q
     LEFT JOIN ist i ON i.cantitate_id = q.id
     LEFT JOIN ium u ON u.cantitate_id = q.id
-), b AS (
+), b1 AS (
   SELECT b0.*, (NOT in_retea AND unitate AND NOT invalidat AND NOT e_total) AS unitate_iesit,
          CASE WHEN NOT in_retea AND invalidat AND NOT e_total THEN 'inv'
               WHEN e_total AND invalidat THEN 'tot'
               WHEN NOT in_retea AND unitate AND NOT invalidat AND NOT e_total THEN 'us' END AS grup_afara
     FROM b0
+), b AS (
+  -- reparația rundei 2: rețea în ALTE unități (categoria de rețea, fără „total”, unitatea normalizată ≠ m), dacă nu e deja în alt grup
+  SELECT b1.*, (cat_retea AND NOT e_total AND um_norm <> 'm' AND grup_afara IS NULL) AS alte_um
+    FROM b1
 ), agg AS (
   SELECT b.licitatie_id,
        count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status <> 'validat')                  AS lista_f3_nevalidate,
@@ -507,18 +648,26 @@ WITH ist AS (
        count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm' AND tip_sursa = 'lista_f3')              AS um_de_normalizat_f3,
        count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status <> 'validat' AND cantitate IS NULL) AS lista_f3_nevalidate_fara_cant,
        count(*) FILTER (WHERE in_retea AND tip_sursa IS NULL AND status <> 'validat' AND cantitate IS NULL)      AS fara_tip_nevalidate_fara_cant,
-       count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm' AND cantitate IS NULL)                        AS um_de_normalizat_fara_cant
+       count(*) FILTER (WHERE in_retea AND um IS DISTINCT FROM 'm' AND cantitate IS NULL)                        AS um_de_normalizat_fara_cant,
+       -- reparația rundei 2: fără cantitate pe ORICE status + cele VALIDATE fără cantitate
+       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND cantitate IS NULL)                         AS lista_f3_fara_cant,
+       count(*) FILTER (WHERE in_retea AND cantitate IS NULL)                                                     AS retea_fara_cant,
+       count(*) FILTER (WHERE in_retea AND tip_sursa = 'lista_f3' AND status = 'validat' AND cantitate IS NULL)  AS lista_f3_validate_fara_cant,
+       count(*) FILTER (WHERE in_retea AND status = 'validat' AND cantitate IS NULL)                             AS retea_validate_fara_cant,
+       count(*) FILTER (WHERE alte_um)                                                                           AS retea_alte_unitati,
+       count(*) FILTER (WHERE alte_um AND tip_sursa = 'lista_f3')                                                AS retea_alte_unitati_f3
   FROM b
  GROUP BY b.licitatie_id
-HAVING count(*) FILTER (WHERE in_retea OR invalidat OR unitate_iesit) > 0
+HAVING count(*) FILTER (WHERE in_retea OR invalidat OR unitate_iesit OR alte_um) > 0
 ), pu AS (
-  SELECT b.licitatie_id, b.grup_afara, b.um_norm, sum(b.cantitate) AS suma, count(*) AS randuri, count(*) FILTER (WHERE b.cantitate IS NULL) AS fara_cant
-    FROM b WHERE b.grup_afara IS NOT NULL GROUP BY 1, 2, 3
+  SELECT b.licitatie_id, coalesce(b.grup_afara, 'au') AS grup, b.um_norm, sum(b.cantitate) AS suma, count(*) AS randuri, count(*) FILTER (WHERE b.cantitate IS NULL) AS fara_cant
+    FROM b WHERE b.grup_afara IS NOT NULL OR b.alte_um GROUP BY 1, 2, 3
 ), pj AS (
   SELECT pu.licitatie_id,
-         jsonb_object_agg(pu.um_norm, jsonb_build_object('suma', pu.suma, 'randuri', pu.randuri, 'fara_cantitate', pu.fara_cant)) FILTER (WHERE pu.grup_afara = 'inv') AS inv,
-         jsonb_object_agg(pu.um_norm, jsonb_build_object('suma', pu.suma, 'randuri', pu.randuri, 'fara_cantitate', pu.fara_cant)) FILTER (WHERE pu.grup_afara = 'tot') AS tot,
-         jsonb_object_agg(pu.um_norm, jsonb_build_object('suma', pu.suma, 'randuri', pu.randuri, 'fara_cantitate', pu.fara_cant)) FILTER (WHERE pu.grup_afara = 'us') AS us
+         jsonb_object_agg(pu.um_norm, jsonb_build_object('suma', pu.suma, 'randuri', pu.randuri, 'fara_cantitate', pu.fara_cant)) FILTER (WHERE pu.grup = 'inv') AS inv,
+         jsonb_object_agg(pu.um_norm, jsonb_build_object('suma', pu.suma, 'randuri', pu.randuri, 'fara_cantitate', pu.fara_cant)) FILTER (WHERE pu.grup = 'tot') AS tot,
+         jsonb_object_agg(pu.um_norm, jsonb_build_object('suma', pu.suma, 'randuri', pu.randuri, 'fara_cantitate', pu.fara_cant)) FILTER (WHERE pu.grup = 'us') AS us,
+         jsonb_object_agg(pu.um_norm, jsonb_build_object('suma', pu.suma, 'randuri', pu.randuri, 'fara_cantitate', pu.fara_cant)) FILTER (WHERE pu.grup = 'au') AS au
     FROM pu GROUP BY pu.licitatie_id
 ), tcd AS (
   SELECT c.licitatie_id, c.document_id, c.nume_original, c.n, c.deschis, c.in_curs, c.restante FROM public.v_ofertare_transfer_conflicte c
@@ -538,8 +687,32 @@ HAVING count(*) FILTER (WHERE in_retea OR invalidat OR unitate_iesit) > 0
             FROM tcd c CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.restante) = 'array' THEN c.restante ELSE '[]'::jsonb END) e
            WHERE c.deschis AND jsonb_typeof(e) = 'object' AND (e ->> 'tip') IS NOT NULL GROUP BY 1, 2) r
    GROUP BY r.licitatie_id
+), sh AS (
+  -- reparația rundei 2: rândurile APROBATE ȘTERSE (evenimentul 'sters' — scris doar pentru OLD.status = 'validat'), cu rândul întreg din valori_vechi
+  SELECT h.id, h.licitatie_id, h.cantitate_id, h.created_at,
+         coalesce(public.ofertare_norm_text(h.valori_vechi ->> 'um'), '') AS um_norm,
+         CASE WHEN jsonb_typeof(h.valori_vechi -> 'cantitate') = 'number' THEN (h.valori_vechi ->> 'cantitate')::numeric END AS cantitate,
+         left(h.valori_vechi ->> 'denumire', 80) AS denumire,
+         coalesce(public.ofertare_norm_text(h.valori_vechi ->> 'um') = 'm' AND (h.valori_vechi ->> 'categorie') ~* 'conduct|re[țt]ea'
+           AND (coalesce(h.valori_vechi ->> 'obiect', '') || ' ' || coalesce(h.valori_vechi ->> 'denumire', '') || ' ' || coalesce(h.valori_vechi ->> 'sursa', '')) !~* 'total', false) AS in_retea
+    FROM public.ofertare_cantitati_istoric h
+   WHERE h.motiv = 'sters' AND h.licitatie_id IS NOT NULL
+), sd AS (
+  SELECT sh.licitatie_id, count(*) AS n, count(*) FILTER (WHERE sh.in_retea) AS n_retea, max(sh.created_at) AS ultima,
+         to_jsonb((array_agg(jsonb_build_object('cantitate_id', sh.cantitate_id, 'la', sh.created_at, 'um', sh.um_norm, 'cantitate', sh.cantitate,
+                                                'denumire', sh.denumire, 'retea', sh.in_retea) ORDER BY sh.id DESC))[1:20]) AS lista
+    FROM sh GROUP BY sh.licitatie_id
+), sdu AS (
+  SELECT x.licitatie_id, jsonb_object_agg(x.um_norm, jsonb_build_object('suma', x.suma, 'randuri', x.randuri, 'fara_cantitate', x.fara_cant)) AS pe_um
+    FROM (SELECT sh.licitatie_id, sh.um_norm, sum(sh.cantitate) AS suma, count(*) AS randuri, count(*) FILTER (WHERE sh.cantitate IS NULL) AS fara_cant
+            FROM sh GROUP BY 1, 2) x
+   GROUP BY x.licitatie_id
+), lic AS (
+  SELECT licitatie_id FROM agg
+  UNION SELECT licitatie_id FROM tc WHERE docs > 0 OR in_curs > 0
+  UNION SELECT licitatie_id FROM sd
 )
-SELECT coalesce(a.licitatie_id, t.licitatie_id)                 AS licitatie_id,
+SELECT l.licitatie_id                                           AS licitatie_id,
        coalesce(a.lista_f3_nevalidate, 0)                       AS lista_f3_nevalidate,
        a.lista_f3_nevalidate_m,
        coalesce(a.lista_c6_nevalidate, 0)                       AS lista_c6_nevalidate,
@@ -569,16 +742,32 @@ SELECT coalesce(a.licitatie_id, t.licitatie_id)                 AS licitatie_id,
        coalesce(t.n, 0)                                         AS transfer_conflicte_n,
        coalesce(t.in_curs, 0)                                   AS transfer_in_curs,
        array_to_string(t.lista, '; ')                           AS transfer_conflicte_lista,
-       coalesce(tr.restante, '{}'::jsonb)                       AS transfer_restante
-  FROM agg a
-  FULL JOIN tc t ON t.licitatie_id = a.licitatie_id
-  LEFT JOIN pj p ON p.licitatie_id = coalesce(a.licitatie_id, t.licitatie_id)
-  LEFT JOIN tcr tr ON tr.licitatie_id = coalesce(a.licitatie_id, t.licitatie_id)
- WHERE a.licitatie_id IS NOT NULL OR t.docs > 0 OR t.in_curs > 0;
+       coalesce(tr.restante, '{}'::jsonb)                       AS transfer_restante,
+       -- reparația rundei 2
+       coalesce(a.lista_f3_fara_cant, 0)                        AS lista_f3_fara_cant,
+       coalesce(a.retea_fara_cant, 0)                           AS retea_fara_cant,
+       coalesce(a.lista_f3_validate_fara_cant, 0)               AS lista_f3_validate_fara_cant,
+       coalesce(a.retea_validate_fara_cant, 0)                  AS retea_validate_fara_cant,
+       coalesce(a.retea_alte_unitati, 0)                        AS retea_alte_unitati,
+       coalesce(a.retea_alte_unitati_f3, 0)                     AS retea_alte_unitati_f3,
+       coalesce(p.au, '{}'::jsonb)                              AS retea_alte_unitati_pe_um,
+       coalesce(s.n, 0)                                         AS sterse_dupa_validare,
+       coalesce(s.n_retea, 0)                                   AS sterse_dupa_validare_retea,
+       coalesce(su.pe_um, '{}'::jsonb)                          AS sterse_dupa_validare_pe_um,
+       s.ultima                                                 AS sterse_dupa_validare_ultima,
+       coalesce(s.lista, '[]'::jsonb)                           AS sterse_dupa_validare_lista
+  FROM lic l
+  LEFT JOIN agg a ON a.licitatie_id = l.licitatie_id
+  LEFT JOIN tc t ON t.licitatie_id = l.licitatie_id
+  LEFT JOIN pj p ON p.licitatie_id = l.licitatie_id
+  LEFT JOIN tcr tr ON tr.licitatie_id = l.licitatie_id
+  LEFT JOIN sd s ON s.licitatie_id = l.licitatie_id
+  LEFT JOIN sdu su ON su.licitatie_id = l.licitatie_id
+ WHERE l.licitatie_id IS NOT NULL;
 -- runda 5: default privileges dau ALL pe obiectele noi — întâi REVOKE ALL (și de la authenticated), apoi doar SELECT
 REVOKE ALL ON public.v_ofertare_cantitati_nevalidate FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.v_ofertare_cantitati_nevalidate TO authenticated, service_role;
-COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25–26.09.2026, runda 6 + sarcina 2): per licitație, câte rânduri de rețea (filtrul qm din v_ofertare_pt_stare, cu unitatea normalizată) NU sunt validate de om (status<>validat), pe tip_sursa, cu metri; plus rândurile INVALIDATE (istoricul aprobării: ultimul eveniment invalidat / redeschis; sau prefixul notei) ieșite din rețea, rândurile TOTAL invalidate (separat), rândurile neaprobate ieșite din rețea prin schimbarea unității și rândurile de rețea cu unitatea scrisă altfel decât exact m (pe care qm din v_ofertare_pt_stare nu le adună). Sarcina 2: *_m = doar rândurile în m, *_pe_um = defalcarea pe unitate (fără sume peste unități diferite), *_fara_cant = fără cantitate determinată; transfer_conflicte_* = planșele cu conflicte de transfer DESCHISE (v_ofertare_transfer_conflicte), și când licitația nu are niciun rând. Citit de OfertarePropunere (H2, controlCantitati): nimic nu dispare tacit. security_invoker.';
+COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25–26.09.2026, runda 6 + sarcina 2): per licitație, câte rânduri de rețea (filtrul qm din v_ofertare_pt_stare, cu unitatea normalizată) NU sunt validate de om (status<>validat), pe tip_sursa, cu metri; plus rândurile INVALIDATE (istoricul aprobării: ultimul eveniment invalidat / redeschis; sau prefixul notei) ieșite din rețea, rândurile TOTAL invalidate (separat), rândurile neaprobate ieșite din rețea prin schimbarea unității și rândurile de rețea cu unitatea scrisă altfel decât exact m (pe care qm din v_ofertare_pt_stare nu le adună). Sarcina 2: *_m = doar rândurile în m, *_pe_um = defalcarea pe unitate (fără sume peste unități diferite), *_fara_cant = fără cantitate determinată; transfer_conflicte_* = planșele cu conflicte de transfer DESCHISE (v_ofertare_transfer_conflicte), și când licitația nu are niciun rând. Reparația rundei 2: rândurile de rețea fără cantitate pe orice status și validate fără cantitate (*_fara_cant), rândurile de rețea în alte unități decât m (retea_alte_unitati*, fără conversie), rândurile aprobate ȘTERSE (sterse_dupa_validare*, din istoric). Citit de OfertarePropunere (H2, controlCantitati), de poarta pachetului și de poarta de depunere (ofertare_r5_blocaj_sursa): nimic nu dispare tacit. security_invoker.';
 
 -- 1b) ────────────────────────────────────────────────────────────────────────────────────────────────────
 -- REPARAȚIA RUNDEI 1 (ADDENDUM 2 Copilot, a — „APROBAREA FINALĂ”): „WARN [la H2] e bun pentru lucrul intermediar; la APROBAREA FINALĂ un
@@ -590,13 +779,46 @@ COMMENT ON VIEW public.v_ofertare_cantitati_nevalidate IS 'R5 (25–26.09.2026, 
 -- impactul nestabilit) sau un transfer în curs BLOCHEAZĂ aprobarea; view-ul indisponibil / eroarea = „nu putem verifica” = BLOCAT
 -- (control indisponibil ≠ zero) — și când utilizatorul a confirmat avertismentul pe draft. Partea de documentație e NESCHIMBATĂ
 -- (corpul live, md5(prosrc) a45ccdb853da8d7a6cabead04d9a95af, refăcut exact de rollback). Pachete existente: 0 (SELECT 26.09.2026).
+-- REPARAȚIA RUNDEI 2: verificarea sursei cantităților e O SINGURĂ funcție (ofertare_r5_blocaj_sursa), folosită de poarta pachetului și de
+-- poarta de depunere (fn_gate_depunere, mai jos). NULL = sursa e verificată și nu are restanțe; altfel textul blocajului (după prefixul
+-- porții). SECURITY INVOKER: rulează cu identitatea porții care o cheamă (trigger-e SECURITY DEFINER => proprietarul, fără RLS).
+CREATE OR REPLACE FUNCTION public.ofertare_r5_blocaj_sursa(p_licitatie_id bigint)
+ RETURNS text
+ LANGUAGE plpgsql
+ STABLE
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_tcd int; v_tcn int; v_tic int; v_tcl text; v_err text;
+BEGIN
+  BEGIN
+    SELECT coalesce(c.transfer_conflicte_docs, 0), coalesce(c.transfer_conflicte_n, 0), coalesce(c.transfer_in_curs, 0), c.transfer_conflicte_lista
+      INTO v_tcd, v_tcn, v_tic, v_tcl FROM public.v_ofertare_cantitati_nevalidate c WHERE c.licitatie_id = p_licitatie_id;
+  EXCEPTION WHEN others THEN v_err := SQLERRM;
+  END;
+  IF v_err IS NOT NULL THEN
+    RETURN format(': nu putem verifica sursa cantităților (conflictele transferului din planșe: %s) — nu înseamnă zero restanțe', v_err);
+  END IF;
+  IF coalesce(v_tcd, 0) > 0 THEN
+    RETURN format(' — sursa cantităților e incompletă: %s la transferul din %s (%s): rezolvă-le (recitire care le acoperă) sau confirmă-le în Documente (rezolvare / excepție justificată, cu drept de decizie)',
+      CASE WHEN v_tcn = 1 THEN '1 restanță deschisă' ELSE v_tcn || ' restanțe deschise' END, CASE WHEN v_tcd = 1 THEN '1 planșă' ELSE v_tcd || ' planșe' END,
+      coalesce(v_tcl, '—'));
+  END IF;
+  IF coalesce(v_tic, 0) > 0 THEN
+    RETURN format(' — transfer din planșă în curs (%s documente): impactul asupra cantităților nu e stabilit; reîncearcă după ce se termină', v_tic);
+  END IF;
+  RETURN NULL;
+END $function$;
+REVOKE ALL ON FUNCTION public.ofertare_r5_blocaj_sursa(bigint) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ofertare_r5_blocaj_sursa(bigint) TO service_role;
+COMMENT ON FUNCTION public.ofertare_r5_blocaj_sursa(bigint) IS 'R5 reparația rundei 2 (26.09.2026): blocajul aprobării finale din sursa cantităților (restanțe de transfer deschise / transfer în curs / control indisponibil = „nu putem verifica”, nu zero) — NULL = fără blocaj. Folosită de fn_ofertare_pt_pachet_poarta_documentatie și fn_gate_depunere.';
+
 CREATE OR REPLACE FUNCTION public.fn_ofertare_pt_pachet_poarta_documentatie()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO 'public', 'pg_temp'
 AS $function$
-DECLARE v_blocaj text; v_gasit boolean; v_tcd int; v_tcn int; v_tic int; v_tcl text; v_err text;
+DECLARE v_blocaj text; v_gasit boolean; v_r5 text;
 BEGIN
   IF (NEW.stare = 'aprobat' AND (TG_OP = 'INSERT' OR OLD.stare IS DISTINCT FROM 'aprobat'))
      OR (NEW.stare = 'depus' AND (TG_OP = 'INSERT' OR OLD.stare NOT IN ('aprobat', 'depus'))) THEN
@@ -607,28 +829,71 @@ BEGIN
     IF v_blocaj IS NOT NULL THEN
       RAISE EXCEPTION 'Aprobare blocată — documentația nu e completă: %', v_blocaj USING ERRCODE = 'P0001';
     END IF;
-    -- R5 (reparația rundei 1): sursa cantităților — conflictele transferului planșă → cantități DESCHISE blochează aprobarea finală
-    BEGIN
-      SELECT coalesce(c.transfer_conflicte_docs, 0), coalesce(c.transfer_conflicte_n, 0), coalesce(c.transfer_in_curs, 0), c.transfer_conflicte_lista
-        INTO v_tcd, v_tcn, v_tic, v_tcl FROM public.v_ofertare_cantitati_nevalidate c WHERE c.licitatie_id = NEW.licitatie_id;
-    EXCEPTION WHEN others THEN v_err := SQLERRM;
-    END;
-    IF v_err IS NOT NULL THEN
-      RAISE EXCEPTION 'Aprobare blocată: nu putem verifica sursa cantităților (conflictele transferului din planșe: %) — nu înseamnă zero restanțe', v_err USING ERRCODE = 'P0001';
-    END IF;
-    IF coalesce(v_tcd, 0) > 0 THEN
-      RAISE EXCEPTION 'Aprobare blocată — sursa cantităților e incompletă: % la transferul din % (%): rezolvă-le (recitire care le acoperă) sau confirmă-le în Documente (rezolvare / excepție justificată, cu drept de decizie)',
-        CASE WHEN v_tcn = 1 THEN '1 restanță deschisă' ELSE v_tcn || ' restanțe deschise' END, CASE WHEN v_tcd = 1 THEN '1 planșă' ELSE v_tcd || ' planșe' END,
-        coalesce(v_tcl, '—') USING ERRCODE = 'P0001';
-    END IF;
-    IF coalesce(v_tic, 0) > 0 THEN
-      RAISE EXCEPTION 'Aprobare blocată — transfer din planșă în curs (% documente): impactul asupra cantităților nu e stabilit; reîncearcă după ce se termină', v_tic USING ERRCODE = 'P0001';
+  END IF;
+  -- R5 (reparația rundei 1): sursa cantităților — conflictele transferului planșă → cantități DESCHISE blochează aprobarea finală.
+  -- Reparația rundei 2 (verificatorul BD, minor): și la aprobat → depus — un conflict apărut DUPĂ aprobare (ex. dintr-o recitire) nu mai
+  -- trece la depunere (partea de documentație rămâne ca live: nu se reverifică la aprobat → depus).
+  IF NEW.stare IN ('aprobat', 'depus') AND (TG_OP = 'INSERT' OR OLD.stare IS DISTINCT FROM NEW.stare) THEN
+    v_r5 := public.ofertare_r5_blocaj_sursa(NEW.licitatie_id);
+    IF v_r5 IS NOT NULL THEN
+      RAISE EXCEPTION 'Aprobare blocată%', v_r5 USING ERRCODE = 'P0001';
     END IF;
   END IF;
   RETURN NEW;
 END $function$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_pt_pachet_poarta_documentatie() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_ofertare_pt_pachet_poarta_documentatie() TO service_role;
+
+-- 1c) ────────────────────────────────────────────────────────────────────────────────────────────────────
+-- REPARAȚIA RUNDEI 2 (verificatorul BD, MAJOR + condiția „ADDENDUM 2 a”): POARTA DE DEPUNERE existentă — trigger-ul trg_gate_depunere pe
+-- ofertare_licitatii (BEFORE UPDATE, fn_gate_depunere, LIVE md5(prosrc) 6ee66ed8decff19a0c303c324454cfe1) — bloca trecerea în 'depusa'
+-- doar pentru cerințe, acoperire și dovezi. În producție sunt 0 pachete și 3 licitații „depusa” (SELECT 26.09.2026): depunerea se face
+-- practic prin STATUSUL licitației (OfertareLicitatii.jsx: in_lucru → depusa, update simplu, eroarea serverului apare în toast). Pe PGlite,
+-- cu definiția live, lic. 95 reală (Dn60 + adnotările de pe 470 deschise) trecea în „depusa” fără eroare. Copilot: „Conflictele Dn60 + 3
+-- adnotări pe 470 … să nu permită aprobarea ofertei fără rezolvare”.
+-- Acum: partea live NESCHIMBATĂ (același bloc, aceleași mesaje); în plus, trecerea în 'depusa' e refuzată cât ofertare_r5_blocaj_sursa
+-- întoarce un blocaj (restanțe de transfer deschise / transfer în curs / control indisponibil). Derogarea: derogare_depunere = true, ca
+-- azi „doar cu decizia lui Razvan”; pentru partea R5 contează doar dacă trecerea în 'depusa' o face cineva cu DREPT DE DECIZIE pe licitație
+-- (fn_ofertare_source_pack_poate_decide — același drept ca la confirmarea conflictelor) sau serverul / SQL-ul proprietarului (fără
+-- auth.uid()) — politica licitațiilor lasă ORICE utilizator autentificat să scrie derogare_depunere. Rollback: corpul live, exact.
+-- Efect la aplicare (SELECT 26.09.2026): lic. 3 (in_lucru, termen 14.10) și lic. 95 (in_lucru, termen 19.10) nu mai pot trece în „depusa”
+-- până la ♻ reevaluare (după deploy) / ✋ confirmare / derogare; lic. 5 și 93 (in_lucru) nu au jurnal de transfer => neatinse.
+CREATE OR REPLACE FUNCTION public.fn_gate_depunere()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  n_neconfirmate int; n_neacoperite int; n_rosii int; msg text; v_r5 text;
+BEGIN
+  IF NEW.status = 'depusa' AND OLD.status IS DISTINCT FROM 'depusa' AND NOT COALESCE(NEW.derogare_depunere, false) THEN
+    SELECT count(*) INTO n_neconfirmate FROM ofertare_cerinte c
+      WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.confirmata_de IS NULL;
+    SELECT count(*) INTO n_neacoperite FROM ofertare_cerinte c
+      WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL
+      AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id AND a.status IN ('acoperit','acoperit_partener'));
+    SELECT count(*) INTO n_rosii FROM ofertare_acoperire a
+      JOIN ofertare_cerinte c ON c.id = a.cerinta_id AND c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL
+      JOIN documente_firma d ON d.id = a.doc_firma_id
+      WHERE NOT d.utilizabil
+         OR (NOT d.fara_expirare AND d.data_valabilitate IS NOT NULL AND
+             d.data_valabilitate < COALESCE(NEW.termen_depunere::date, CURRENT_DATE) + CASE WHEN d.se_reemite THEN 0 ELSE 90 END);
+    IF n_neconfirmate > 0 OR n_neacoperite > 0 OR n_rosii > 0 THEN
+      msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire, %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii). Rezolvă-le sau setează derogare_depunere=true (doar cu decizia lui Razvan).', n_neconfirmate, n_neacoperite, n_rosii);
+      RAISE EXCEPTION '%', msg;
+    END IF;
+  END IF;
+  -- R5 (reparația rundei 2): sursa cantităților — restanțe de transfer din planșe deschise / transfer în curs / control indisponibil
+  IF NEW.status = 'depusa' AND OLD.status IS DISTINCT FROM 'depusa'
+     AND NOT (COALESCE(NEW.derogare_depunere, false) AND (auth.uid() IS NULL OR COALESCE(public.fn_ofertare_source_pack_poate_decide(NEW.id), false))) THEN
+    v_r5 := public.ofertare_r5_blocaj_sursa(NEW.id);
+    IF v_r5 IS NOT NULL THEN
+      RAISE EXCEPTION 'BLOCAT LA DEPUNERE%. Oferta nu se depune cu sursa cantităților nerezolvată; derogare_depunere=true doar cu decizia lui Razvan (pentru partea asta contează doar dacă depunerea o face ownerul / responsabilul / un admin Ofertare).', v_r5 USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+  RETURN NEW;
+END $function$;
 
 -- 2) ─────────────────────────────────────────────────────────────────────────────────────────────────────
 -- v6 (R5): față de live se schimbă DOAR: v_f3_n/v_f3_nev/v_f3_txt declarate; SELECT-ul F3 (filtrul qm, sumă doar din
@@ -645,7 +910,7 @@ DECLARE
   v_text text; v_lista text; v_det text; v_id bigint; v_nou boolean := false; v_resp uuid; v_nr int; v_noi int;
   v_antet constant text := 'Solicitare de clarificare (art. 160–161 din Legea nr. 98/2016) — date cantitative din planșe';
   v_standard boolean; v_tok text; v_det_fd text; v_ilizibile int; v_fara_date int;
-  v_f3_n int; v_f3_nev int; v_f3_txt text; v_f3_um int;
+  v_f3_n int; v_f3_nev int; v_f3_txt text; v_f3_um int; v_f3_fc int;
   v_protejat boolean; v_flag int := 0; v_tc int;
   v_msg_rev constant text := ': ciorna de clarificare pentru planșe, editată / aprobată de om, nu mai corespunde planșelor de acum. Textul și statusul ei NU s-au schimbat; e exclusă din adresa generată până o revizuiești (marcaj „necesită revizie”). NU s-a trimis nimic.';
   -- reparația rundei 1 (verificatorii, MAJOR v6 „ciorna umană suprascrisă”; ADDENDUM 2 Copilot, c): amprenta textului GENERAT (gen_…) și
@@ -730,10 +995,14 @@ BEGIN
   -- reală: 15 articole de deviz „M” în categoria „Conducte și montaj”, 1.227,89 m) e în setul normalizat, dar poate fi un articol de
   -- deviz => totalul NU se citează autorității cât există astfel de rânduri (v_f3_um > 0: fără total, ca la nevalidate) — nici
   -- umflare tăcută, nici omisiune tăcută; H2 le semnalează (um_de_normalizat_f3).
+  -- Reparația rundei 2 (verificatorul BD, MAJOR „v6 citează autorității un subtotal incomplet ca total”): un rând F3 de rețea VALIDAT fără
+  -- cantitate nu intra nici în sumă, nici în numărătoarea nevalidatelor => „lungimea totală … din F3: 500 m” cu un tronson fără cifră.
+  -- Acum v_f3_fc = rândurile F3 din qm FĂRĂ cantitate (orice status) => fără total (ca la nevalidate / unitate de normalizat).
   SELECT round(sum(x.cantitate) FILTER (WHERE x.status = 'validat' AND x.qm), 1),
          count(*) FILTER (WHERE x.qm OR x.invalidat), count(*) FILTER (WHERE x.status <> 'validat' AND (x.qm OR x.invalidat)),
-         count(*) FILTER (WHERE x.qm AND x.um IS DISTINCT FROM 'm')
-    INTO v_f3, v_f3_n, v_f3_nev, v_f3_um
+         count(*) FILTER (WHERE x.qm AND x.um IS DISTINCT FROM 'm'),
+         count(*) FILTER (WHERE x.qm AND x.cantitate IS NULL)
+    INTO v_f3, v_f3_n, v_f3_nev, v_f3_um, v_f3_fc
   FROM (
     SELECT q.cantitate, q.status, q.um,
            coalesce(public.ofertare_norm_text(q.um) = 'm' AND q.categorie ~* 'conduct|re[țt]ea'
@@ -748,7 +1017,7 @@ BEGIN
       FROM ofertare_cantitati q
      WHERE q.licitatie_id = p_licitatie_id AND q.tip_sursa = 'lista_f3'
   ) x;
-  IF v_f3_nev > 0 OR v_f3_um > 0 THEN v_f3 := NULL; END IF;
+  IF v_f3_nev > 0 OR v_f3_um > 0 OR v_f3_fc > 0 THEN v_f3 := NULL; END IF;
   -- runda 4: format ro-RO neambiguu, independent de lc_numeric („,” și „.” din șablon sunt fixe, G/D ar urma locale-ul):
   -- 6519.8 → „6.519,8”; 6520 → „6.520”. Live scria „7.747.7” (separatorul de mii și zecimalele = același punct).
   v_f3_txt := CASE WHEN v_f3 IS NULL THEN NULL
@@ -781,9 +1050,12 @@ BEGIN
   -- reparația rundei 1: amprenta textului generat acum și a evenimentului (textul generat + mulțimea planșelor)
   v_gen := left(md5(v_text), 12);
   v_ev := left(md5(v_text || '|' || array_to_string(v_ids, ',')), 12);
+  -- Reparația rundei 2 (verificatorul UI, PLAUSIBIL „lost update”): ciorna se citește FOR UPDATE — o salvare umană concurentă (editare /
+  -- „✅ de trimis”) așteaptă sau e văzută; în plus, UPDATE-ul ciornei mașinii (mai jos) are gardă pe status și pe text.
   SELECT * INTO v_draft FROM ofertare_clarificari
   WHERE licitatie_id = p_licitatie_id AND origine = 'automat' AND cheie LIKE 'auto_planse_%' AND status IN ('propunere','de_trimis')
-  ORDER BY id DESC LIMIT 1;
+  ORDER BY id DESC LIMIT 1
+  FOR UPDATE;
 
   IF FOUND THEN
     -- tokenii din sursa: planșele (cifrele, primul poartă prefixul „planse_auto:”), amprenta gen_, evenimentul ev_, marcajele revizie_*
@@ -816,6 +1088,9 @@ BEGIN
       -- (dacă era) rămâne cum e — dovada că textul NU mai e al mașinii; marcajul ',revizie_planse_auto' + o notificare internă, O SINGURĂ DATĂ
       -- PE EVENIMENT (ev_: textul generat + planșele): apeluri repetate, sau după „✓ revizuită” pe aceeași stare, nu mai marchează și nu
       -- mai notifică (ADDENDUM 2 Copilot, c); un eveniment nou (altă mulțime de planșe / alt text generat) — da, o dată. Nimic nu se trimite.
+      -- Reparația rundei 2 (verificatorul UI, V-E2 — informativ): o planșă care OSCILEAZĂ între stări (ok ↔ ilizibil, câte o recitire pornită de
+      -- om) dă câte o notificare la FIECARE schimbare de stare, și când revine pe o stare deja văzută — DELIBERAT: textul omului a fost revizuit
+      -- față de starea precedentă, iar planșele de acum diferă de ea. Documentat, nu reparat (o listă de amprente ar tăcea tocmai la revenire).
       v_flag := CASE WHEN v_tok_ev IS NOT DISTINCT FROM v_ev THEN 0 ELSE 1 END;
       SELECT 'planse_auto:' || array_to_string(v_ids, ',') || coalesce(string_agg(',' || x.t, '' ORDER BY x.o), '') INTO v_sursa_noua
         FROM unnest(string_to_array(coalesce(v_draft.sursa, ''), ',')) WITH ORDINALITY AS x(t, o)
@@ -834,11 +1109,15 @@ BEGIN
         'status', v_draft.status, 'marcat_acum', v_flag = 1, 'transfer_conflicte_deschise', v_tc);
     END IF;
     -- ciorna MAȘINII (textul = exact ultimul text generat, încă 'propunere'): se rescrie (text + planșe + amprenta nouă), rămâne 'propunere'
+    -- reparația rundei 2: gardă — se rescrie DOAR dacă e încă 'propunere' cu exact textul citit (altfel omul a scris între timp: nu se atinge)
     UPDATE ofertare_clarificari SET
       intrebare = v_text,
       sursa = 'planse_auto:' || array_to_string(v_ids, ',') || v_tok || ',gen_' || v_gen,
       status = 'propunere', updated_at = now()
-      WHERE id = v_draft.id;
+      WHERE id = v_draft.id AND status = 'propunere' AND intrebare IS NOT DISTINCT FROM v_draft.intrebare;
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('actiune','neschimbat_concurent','id',v_draft.id,'planse',cardinality(v_ids), 'transfer_conflicte_deschise', v_tc);
+    END IF;
     v_id := v_draft.id; v_nou := v_noi > 0;
   ELSE
     SELECT count(*) + 1 INTO v_lot FROM ofertare_clarificari WHERE licitatie_id = p_licitatie_id AND cheie LIKE 'auto_planse_%';
@@ -860,6 +1139,6 @@ BEGIN
     END IF;
   END IF;
   RETURN jsonb_build_object('actiune', CASE WHEN v_draft.id IS NOT NULL THEN 'actualizat' ELSE 'creat' END, 'id', v_id,
-    'planse', cardinality(v_ids), 'motive', to_jsonb(v_motive), 'ilizibile', v_ilizibile, 'fara_date', v_fara_date, 'f3_m', v_f3, 'f3_nevalidate', v_f3_nev, 'f3_um_de_normalizat', v_f3_um, 'transfer_conflicte_deschise', v_tc);
+    'planse', cardinality(v_ids), 'motive', to_jsonb(v_motive), 'ilizibile', v_ilizibile, 'fara_date', v_fara_date, 'f3_m', v_f3, 'f3_nevalidate', v_f3_nev, 'f3_um_de_normalizat', v_f3_um, 'f3_fara_cantitate', v_f3_fc, 'transfer_conflicte_deschise', v_tc);
 END $function$;
 REVOKE EXECUTE ON FUNCTION public.ofertare_clarificare_planse_auto(bigint) FROM PUBLIC, anon, authenticated;

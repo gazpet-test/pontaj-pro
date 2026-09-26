@@ -24,7 +24,9 @@ export const H2_TOLERANTA_RELATIVA = 0.001   // 0,1 %
 export const REGEX_INTERZICE_CUMUL = String.raw`(cumul\w*\s+(de\s+)?(mai\s+multe\s+)?(func[tț]i|rol|post|pozi[tț]i)|(func[tț]i|rol|post)\w*[^.]{0,40}cumul|nu poate (îndeplini|indeplini)|(o|aceea[sș]i) persoan[aă] nu poate|nu se (admite|accept[aă]) cumul)`
 
 // R5 sarcina 2 (d): mesajele de lipsă grupate pe unitate (fără „X m” peste unități diferite)
-import { grupeDinView, textCantitatiPeUnitati } from './ofertareCantitatiAprobare.js'
+import { grupeDinRanduri, grupeDinView, textCantitatiPeUnitati } from './ofertareCantitatiAprobare.js'
+// reparația rundei 2 (verificatorul UI, V-B2): F3 vs fronturi cu cifrele EXACTE (max. 6 zecimale) — „-0,4 m”, nu „-0 m”
+import { fmtExact } from './ofertareCantitatiInvalidare.js'
 import { NOTA_LUNGIMI, textRestante } from './ofertareTransferRestante.js'
 const num = v => (v == null || v === '') ? null : Number(v)
 const fmt = n => Math.round(n).toLocaleString('ro-RO')
@@ -81,20 +83,48 @@ export function controlCantitati(x) {
   const txtTc = tcd > 0 ? ` · INCOMPLET, de reverificat — sursă incompletă: ${tcn === 1 ? '1 restanță deschisă' : `${tcn} restanțe deschise`} la transferul din ${tcd === 1 ? '1 planșă' : `${tcd} planșe`}` +
     `${x.transfer_conflicte_lista ? ` (${x.transfer_conflicte_lista})` : ''}${tcRest ? ` — ${tcRest}` : ''} — nescrise în cantități (${NOTA_LUNGIMI}); recitește planșa sau confirmă explicit (✋) în Documente; aprobarea finală rămâne blocată până atunci` : ''
   const txtTic = tic > 0 ? ` · transfer din planșă în curs (${tic}) — reîncarcă după ce se termină` : ''
+  // Reparația rundei 2 (verificatorii rundei 1):
+  //  (a) rândurile de rețea VALIDATE fără cantitate — „validat” fără cifră nu e o cantitate aprobată: în F3 => totalul F3 e PARȚIAL => BLOCK
+  //      (MAJOR D1: v6 cita „…din F3: 500 m” cu un tronson fără cifră); în restul rețelei => WARN (nu intră în F3, dar nici nu e „0 m”);
+  //  (b) rândurile de rețea în ALTE unități decât m („sute m”, „mc”, „ml”, fără unitate) => WARN, în afara comparației, FĂRĂ conversie;
+  //  (c) rândurile APROBATE ȘTERSE după ultima versiune a graficului (x.grafic_generat_la; fără versiune = toate) => WARN „de reverificat”:
+  //      subtotalul rămas nu e prezentat drept complet; se stinge la repropunere (o versiune nouă a graficului, generată după ștergere).
+  const f3Vfc = num(x.lista_f3_validate_fara_cant), rVfc = num(x.retea_validate_fara_cant)
+  const txtF3Vfc = f3Vfc > 0 ? ` · totalul F3 e PARȚIAL: ${f3Vfc === 1 ? '1 poziție F3 de rețea VALIDATĂ' : `${f3Vfc} poziții F3 de rețea VALIDATE`} FĂRĂ cantitate determinată ` +
+    `— „validat” fără cifră nu e o cantitate aprobată; completează cantitatea și revalidează (✓) în 📋 Cantități` : ''
+  const rAltVfc = rVfc != null && f3Vfc != null ? rVfc - f3Vfc : 0
+  const txtRVfc = rAltVfc > 0 ? ` · INCOMPLET: ${rAltVfc === 1 ? '1 rând de rețea validat' : `${rAltVfc} rânduri de rețea validate`} (în afara F3) FĂRĂ cantitate determinată — nu „0 m”, necunoscut` : ''
+  const au = num(x.retea_alte_unitati), auF3 = num(x.retea_alte_unitati_f3)
+  const txtAu = au > 0 ? ` · ${au === 1 ? '1 rând de rețea e' : `${au} rânduri de rețea sunt`} în ALTE unități decât „m” (${textCantitatiPeUnitati(grupeDinView(x.retea_alte_unitati_pe_um))}` +
+    `${auF3 > 0 ? `; din care ${auF3} în F3` : ''}) — în afara comparației F3 ↔ grafic, FĂRĂ conversie; verifică-le separat (📋 Cantități)` : ''
+  const refGr = x.grafic_generat_la ? Date.parse(x.grafic_generat_la) : NaN
+  const dupaRef = la => !Number.isFinite(refGr) || !(Date.parse(la) <= refGr)
+  const stN = num(x.sterse_dupa_validare) || 0
+  const stL = Array.isArray(x.sterse_dupa_validare_lista) ? x.sterse_dupa_validare_lista : []
+  const stLista = stL.filter(e => dupaRef(e?.la))
+  // lista din view = ultimele 20 de ștergeri; dacă toate sunt după referință și au fost mai multe, cele mai vechi se numără și ele (fail-closed)
+  const stDupa = !stN ? 0 : !stL.length ? (dupaRef(x.sterse_dupa_validare_ultima) ? stN : 0)
+    : stLista.length + (stLista.length === stL.length && stN > stL.length ? stN - stL.length : 0)
+  const txtSt = stDupa > 0 ? ` · DE REVERIFICAT: ${stDupa === 1 ? '1 rând APROBAT (validat) a fost ȘTERS' : `${stDupa} rânduri APROBATE (validate) au fost ȘTERSE`}` +
+    `${Number.isFinite(refGr) ? ' după ultima versiune a graficului' : ''} (${stLista.length ? textCantitatiPeUnitati(grupeDinRanduri(stLista)) : textCantitatiPeUnitati(grupeDinView(x.sterse_dupa_validare_pe_um))}` +
+    `${stLista.length ? `: ${stLista.slice(0, 3).map(e => `#${e.cantitate_id}`).join(', ')}${stDupa > 3 ? ', …' : ''}` : ''}) — F3 / subtotalul rămas NU e neapărat complet; ` +
+    'verifică istoricul și regenerează graficul după verificare' : ''
   // R5 sarcina 2 (c): view-ul n-a putut fi citit (eroare / inexistent — de ex. codul publicat înainte de migrare) => „nu putem verifica”
   // cantitățile nevalidate și sursa (planșele), BLOCK — oricare ar fi F3 (și când lipsește). Nu „zero restanțe”.
   if (x.cantitati_nevalidate_indisponibil) {
     return { ...r, stare: 'block', incomplet: true, indisponibil: true,
       detalii: r.detalii + ` · nu putem verifica cantitățile nevalidate și sursa (planșele): v_ofertare_cantitati_nevalidate indisponibil (${x.cantitati_nevalidate_indisponibil}) — nu înseamnă zero restanțe, înseamnă că nu știm` }
   }
-  const noi = ['invalidate_in_afara_retea', 'fara_tip_nevalidate', 'total_invalidate', 'unitate_schimbata_in_afara_retea', 'um_de_normalizat', 'transfer_conflicte_docs']
+  const noi = ['invalidate_in_afara_retea', 'fara_tip_nevalidate', 'total_invalidate', 'unitate_schimbata_in_afara_retea', 'um_de_normalizat', 'transfer_conflicte_docs',
+    'lista_f3_validate_fara_cant', 'retea_alte_unitati', 'sterse_dupa_validare']
   const partial = Number.isInteger(num(x.lista_f3_nevalidate)) && noi.some(k => x[k] === undefined)
-    ? ' · control parțial: nu știm dacă lipsesc rânduri fără tip de sursă / invalidate / cu unitatea schimbată / conflicte de transfer din planșe (v_ofertare_cantitati_nevalidate în versiunea veche)' : ''
+    ? ' · control parțial: nu știm dacă lipsesc rânduri fără tip de sursă / invalidate / cu unitatea schimbată / validate fără cantitate / în alte unități / aprobate șterse / conflicte de transfer din planșe (v_ofertare_cantitati_nevalidate în versiunea veche)' : ''
   const out = { ...r, invalidate_in_afara_retea: inv, fara_tip_nevalidate: ft, total_invalidate: ti, unitate_schimbata_in_afara_retea: us, um_de_normalizat: un,
-    transfer_conflicte_docs: tcd, incomplet: !!(inv > 0 || ft > 0 || ti > 0 || us > 0 || un > 0 || tcd > 0 || tic > 0 || partial) }
-  if (!txtInv && !txtFt && !txtTi && !txtUs && !txtUn && !txtTc && !txtTic && !partial) return out
-  const stare = inv > 0 || ti > 0 || us > 0 || unF3 > 0 ? 'block' : r.stare === 'ok' ? 'warn' : r.stare
-  return { ...out, stare, detalii: r.detalii + txtInv + txtTi + txtUs + txtUn + txtFt + txtTc + txtTic + partial }
+    transfer_conflicte_docs: tcd, lista_f3_validate_fara_cant: f3Vfc, retea_alte_unitati: au, sterse_dupa_validare: stDupa,
+    incomplet: !!(inv > 0 || ft > 0 || ti > 0 || us > 0 || un > 0 || tcd > 0 || tic > 0 || f3Vfc > 0 || rAltVfc > 0 || au > 0 || stDupa > 0 || partial) }
+  if (!txtInv && !txtFt && !txtTi && !txtUs && !txtUn && !txtTc && !txtTic && !txtF3Vfc && !txtRVfc && !txtAu && !txtSt && !partial) return out
+  const stare = inv > 0 || ti > 0 || us > 0 || unF3 > 0 || f3Vfc > 0 ? 'block' : r.stare === 'ok' ? 'warn' : r.stare
+  return { ...out, stare, detalii: r.detalii + txtF3Vfc + txtInv + txtTi + txtUs + txtUn + txtFt + txtRVfc + txtAu + txtSt + txtTc + txtTic + partial }
 }
 function controlCantitatiF3({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafic_fronturi_m,
                               lista_f3_nevalidate, lista_f3_nevalidate_m, lista_c6_nevalidate, memoriu_nevalidate, plansa_nevalidate, lista_f3_nevalidate_fara_cant }) {
@@ -124,11 +154,11 @@ function controlCantitatiF3({ lista_f3_m, lista_c6_m, memoriu_m, plansa_m, grafi
   if (gr == null) return { ...base, neclarificate, stare: 'warn', detalii: 'graficul n-are fronturi definite — controlul nu se poate face' + notaClar }
   const dif = gr - f3, r = rel(f3, gr)
   if (r > H2_TOLERANTA_RELATIVA) return { ...base, neclarificate, diferenta_m: dif, stare: 'block',
-    detalii: `F3 ${fmt(f3)} m vs ${fmt(gr)} m în fronturile graficului: ${dif > 0 ? '+' : ''}${fmt(dif)} m (${(r * 100).toFixed(1)} %) — graficul se face pe cantitățile de decontat` + notaClar }
+    detalii: `F3 ${fmtExact(f3)} m vs ${fmtExact(gr)} m în fronturile graficului: ${dif > 0 ? '+' : ''}${fmtExact(dif)} m (${(r * 100).toFixed(1)} %) — graficul se face pe cantitățile de decontat` + notaClar }
   if (dif !== 0) return { ...base, neclarificate, diferenta_m: dif, stare: 'warn',
-    detalii: `F3 ${fmt(f3)} m vs ${fmt(gr)} m în fronturi: ${dif > 0 ? '+' : ''}${fmt(dif)} m, sub 0,1 % — rotunjire, dar spune-o în ofertă` + notaClar }
-  if (neclarificate.length) return { ...base, neclarificate, diferenta_m: 0, stare: 'warn', detalii: `${fmt(f3)} m în F3 și în grafic` + notaClar }
-  return { ...base, neclarificate, diferenta_m: 0, stare: 'ok', detalii: `${fmt(f3)} m în F3 și în grafic` }
+    detalii: `F3 ${fmtExact(f3)} m vs ${fmtExact(gr)} m în fronturi: ${dif > 0 ? '+' : ''}${fmtExact(dif)} m, sub 0,1 % — rotunjire, dar spune-o în ofertă` + notaClar }
+  if (neclarificate.length) return { ...base, neclarificate, diferenta_m: 0, stare: 'warn', detalii: `${fmtExact(f3)} m în F3 și în grafic` + notaClar }
+  return { ...base, neclarificate, diferenta_m: 0, stare: 'ok', detalii: `${fmtExact(f3)} m în F3 și în grafic` }
 }
 
 /**

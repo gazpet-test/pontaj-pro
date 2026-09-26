@@ -1,7 +1,9 @@
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 -- ROLLBACK pentru docs/R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql — NEAPLICAT, doar cu GO Razvan.
 -- 1) scoate view-ul nou; 2) readuce ofertare_clarificare_planse_auto EXACT la versiunea live din 25.09.2026
---    (md5 al corpului fără comentarii și spații = 0875c2200e072289cd5b972b49cabb0c, identic cu pg_proc.prosrc live).
+--    Reparația rundei 2 (verificatorul BD, minor „rollback-ul nu reface v5 EXACT”): corpul de mai jos e acum textul LIVE, cu comentariile
+--    de acolo (un singur „--”, cel despre v5), deci md5(prosrc) după rollback = 41b0a3fd9405f2a910efa27eed16ea55 = producția (SELECT
+--    26.09.2026), nu doar „logic identic” (md5 fără comentarii și spații 0875c2200e072289cd5b972b49cabb0c, tot identic).
 -- ATENȚIE: după rollback-ul view-ului, codul ramurii claude/cantitati-nevalidate-consumatori (dacă e deja pe main) face H2 să
 -- blocheze cu „nu putem verifica" pe licitațiile cu F3 — rollback-ul de BD se face ÎMPREUNĂ cu revert-ul codului.
 -- Sarcina 2 (26.09.2026): scoate și v_ofertare_transfer_conflicte, ofertare_transfer_conflicte_confirma, ofertare_transfer_stare.
@@ -12,8 +14,44 @@
 -- Reparația rundei 1 (26.09.2026): și trigger-ul care păstrează cheile serverului (fn_trg_ofertare_doc_chei_server), funcția ajutătoare
 -- ofertare_transfer_stare / ofertare_ts_valid, confirmarea cu 4 parametri, iar trigger-ul aprobării pachetului revine EXACT la corpul live
 -- (md5(prosrc) a45ccdb853da8d7a6cabead04d9a95af; ACL postgres + service_role, fără comentariu — verificat pe PGlite).
+-- Reparația rundei 2 (26.09.2026): și poarta de DEPUNERE revine EXACT la corpul live (fn_gate_depunere, md5(prosrc)
+-- 6ee66ed8decff19a0c303c324454cfe1; ACL postgres + service_role, fără comentariu), se scot funcția comună ofertare_r5_blocaj_sursa și
+-- trigger-ele noi: trg_ofertare_doc_conflict_pastrat (documentele cu conflicte) și trg_ofertare_cantitati_doar_om_valideaza (serverul nu
+-- validează — ATENȚIE: fără el, cad-parse PUBLICAT pe main scrie iar 'validat'; rollback-ul BD se face împreună cu revert-ul codului).
 DROP TRIGGER IF EXISTS trg_ofertare_doc_chei_server ON public.ofertare_documente_atribuire;
 DROP FUNCTION IF EXISTS public.fn_trg_ofertare_doc_chei_server();
+DROP TRIGGER IF EXISTS trg_ofertare_doc_conflict_pastrat ON public.ofertare_documente_atribuire;
+DROP FUNCTION IF EXISTS public.fn_trg_ofertare_doc_conflict_pastrat();
+DROP TRIGGER IF EXISTS trg_ofertare_cantitati_doar_om_valideaza ON public.ofertare_cantitati;
+DROP FUNCTION IF EXISTS public.fn_trg_ofertare_cantitati_doar_om_valideaza();
+CREATE OR REPLACE FUNCTION public.fn_gate_depunere()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  n_neconfirmate int; n_neacoperite int; n_rosii int; msg text;
+BEGIN
+  IF NEW.status = 'depusa' AND OLD.status IS DISTINCT FROM 'depusa' AND NOT COALESCE(NEW.derogare_depunere, false) THEN
+    SELECT count(*) INTO n_neconfirmate FROM ofertare_cerinte c
+      WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.confirmata_de IS NULL;
+    SELECT count(*) INTO n_neacoperite FROM ofertare_cerinte c
+      WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL
+      AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id AND a.status IN ('acoperit','acoperit_partener'));
+    SELECT count(*) INTO n_rosii FROM ofertare_acoperire a
+      JOIN ofertare_cerinte c ON c.id = a.cerinta_id AND c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL
+      JOIN documente_firma d ON d.id = a.doc_firma_id
+      WHERE NOT d.utilizabil
+         OR (NOT d.fara_expirare AND d.data_valabilitate IS NOT NULL AND
+             d.data_valabilitate < COALESCE(NEW.termen_depunere::date, CURRENT_DATE) + CASE WHEN d.se_reemite THEN 0 ELSE 90 END);
+    IF n_neconfirmate > 0 OR n_neacoperite > 0 OR n_rosii > 0 THEN
+      msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire, %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii). Rezolvă-le sau setează derogare_depunere=true (doar cu decizia lui Razvan).', n_neconfirmate, n_neacoperite, n_rosii);
+      RAISE EXCEPTION '%', msg;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $function$;
 CREATE OR REPLACE FUNCTION public.fn_ofertare_pt_pachet_poarta_documentatie()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -40,6 +78,7 @@ DROP FUNCTION IF EXISTS public.ofertare_transfer_conflicte_confirma(bigint, text
 DROP FUNCTION IF EXISTS public.ofertare_transfer_conflicte_confirma(bigint, text, text);
 DROP FUNCTION IF EXISTS public.ofertare_transfer_stare(jsonb);
 DROP FUNCTION IF EXISTS public.ofertare_ts_valid(text);
+DROP FUNCTION IF EXISTS public.ofertare_r5_blocaj_sursa(bigint);
 
 CREATE OR REPLACE FUNCTION public.ofertare_clarificare_planse_auto(p_licitatie_id bigint)
  RETURNS jsonb
@@ -70,9 +109,7 @@ BEGIN
           OR (analiza->'plansa'->>'citibila') = 'false'
           OR eroare IN ('citită fără rezultat','citită fără date cantitative','ilizibilă')
           OR (analiza->'plansa'->>'randare_esuata') = 'true' );
-    -- v4: eșecul tehnic (status eroare fără verdict de lizibilitate) NU mai e tratat ca „ilizibil”.
   IF v_ids IS NULL THEN
-    -- v4: se retrag DOAR ciornele cu textul standard; o ciornă editată de om rămâne (decide omul).
     UPDATE ofertare_clarificari SET status = 'retrasa', updated_at = now()
      WHERE licitatie_id = p_licitatie_id AND origine = 'automat' AND cheie LIKE 'auto_planse_%' AND status IN ('propunere','de_trimis')
        AND left(coalesce(intrebare,''), length(v_antet)) = v_antet;
@@ -117,9 +154,7 @@ BEGIN
   ORDER BY id DESC LIMIT 1;
 
   IF FOUND THEN
-    -- textul e încă cel generat de funcție? (orice text care nu începe cu antetul standard = editat de om)
     v_standard := left(coalesce(v_draft.intrebare, ''), length(v_antet)) = v_antet;
-    -- v4: marcajele rezervate de revizie (,revizie_*) din sursa se PĂSTREAZĂ la rescriere
     SELECT coalesce(string_agg(',' || t, '' ORDER BY o), '') INTO v_tok
       FROM unnest(string_to_array(v_draft.sursa, ',')) WITH ORDINALITY AS x(t, o) WHERE o > 1 AND t ~ '^revizie_[a-z0-9_]+$';
     SELECT count(*) INTO v_noi FROM unnest(v_ids) i

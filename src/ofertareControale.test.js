@@ -4,7 +4,7 @@ import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, contr
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 // R5 (25.09.2026): F3 folosita ca referinta trebuie sa vina cu campul de validare; cazurile vechi = F3 validata integral.
 // R5 condiția 2: câmpurile noi = 0 (licitație fără rânduri fără tip / invalidate); absente = „control parțial” (teste separate)
-const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0, transfer_conflicte_docs: 0 }
+const NOI0 = { fara_tip_nevalidate: 0, invalidate_in_afara_retea: 0, total_invalidate: 0, unitate_schimbata_in_afara_retea: 0, um_de_normalizat: 0, transfer_conflicte_docs: 0, lista_f3_validate_fara_cant: 0, retea_validate_fara_cant: 0, retea_alte_unitati: 0, sterse_dupa_validare: 0 }
 const h2 = (o) => controlCantitati({ lista_f3_nevalidate: 0, ...NOI0, ...o })
 describe('H2 controlCantitati — F3 e referinta, restul se clarifica', () => {
   it('F3 = grafic, restul egal => ok', () =>

@@ -20,7 +20,7 @@ import { poateCheltui } from './poarta.ts';
 // R5 (Copilot 26.09.2026, condiția 1): CÂND o aprobare nu mai e valabilă — copie identică a src/ofertareCantitatiInvalidare.js
 import { aceeasiValoare, aplicaRegulaAprobare, citestePaginat, DE_REVERIFICAT_CITIRE, descrieDiferenta, fmtRo, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
 // R5 sarcina 2 (Copilot, închiderea R4/R5, condiția 2a): conflictele transferului persistate pe document (analiza.transfer_cantitati)
-import { inregistrareLegacy, inregistrareTransfer, type Acoperire, type ConflictTransfer } from './transfer_conflicte.ts';
+import { inregistrareLegacy, inregistrarePrecedenta, inregistrareTransfer, type Acoperire, type ConflictTransfer } from './transfer_conflicte.ts';
 import { cheieVersiune, cheiResetare, elibereazaRezervari, fuzioneazaZone, leaseTransferOcupat, regiuneZona, revNou, rezervaChei, rezervariNoi, scrieCAS, shaGeometrie, transferDeReluat, versiuneIncompatibila } from './concurenta.ts';
 
 // Apelul AI trece prin aiFetch ca testele (poarta_test.ts) să-l poată număra; în producție = fetch.
@@ -2356,7 +2356,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   // convertit ÎNAINTE ca citirea asta să-l suprascrie — înregistrare „legacy” cu aceleași reguli ca derivarea SQL (inclusiv
   // 'legacy_partial', deschis). Altfel conflictele lui (doc 470: Dn60, adnotările) dispăreau tăcut la prima citire nouă, oricât de parțială.
   const tcLegacy = inregistrareLegacy(d.analiza, conflicteTransfer);
-  const prevInreg = d.analiza?.transfer_cantitati ?? tcLegacy;
+  // reparația rundei 2: precedenta = înregistrarea-OBIECT sau conversia (jurnal vechi / formă coruptă) — un array în transfer_cantitati nu mai
+  // trece drept „nicio înregistrare” (`??` îl lua ca atare, iar inregistrareTransfer îl ignora)
+  const prevInreg = inregistrarePrecedenta(d.analiza, conflicteTransfer);
   const amana = (c: Record<string, unknown>) => {
     inregAmanat = inregistrareDinTransfer(prevInreg, c, sumar, { id: crypto.randomUUID(), rulare: rulareNoua, citire: rulare,
       plansa: nrPlansa ? `Planșa ${nrPlansa}` : `Planșa „${doc.nume_original}”`, acoperire: acoperireCitire({ gata, toate, zoneLipsa, transfer: c }) });
@@ -2496,7 +2498,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         const caX = d.analiza?.citire_ai;
         if (caX?.transfer?.rulare !== rulareNoua || caX?.transfer?.de_la !== deLaLease) return { stop: { status: 409, error: 'lease pierdut' } };
         // reparația rundei 1: precedenta (inclusiv „legacy” convertită) + ACOPERIREA citirii — conflictele ei neacoperite rămân deschise
-        const inreg = inregistrareDinTransfer(d.analiza?.transfer_cantitati ?? inregistrareLegacy(d.analiza, conflicteTransfer), cantitati, sumar,
+        const inreg = inregistrareDinTransfer(inregistrarePrecedenta(d.analiza, conflicteTransfer), cantitati, sumar,
           { id: idInreg, rulare: rulareNoua, citire: ctx.rulare, plansa: plansaEt, acoperire: acoperireCitire({ gata: true, toate: ctx.toate, zoneLipsa: [], transfer: cantitati }) });
         return { upd: { analiza: { ...d.analiza, transfer_cantitati: inreg, citire_ai: { ...caX, rev: revNou(), sumar: { ...caX.sumar, cantitati },
           transfer: { ...caX.transfer, stare: eroare ? 'eroare' : 'facut', la: new Date().toISOString() } } } } };

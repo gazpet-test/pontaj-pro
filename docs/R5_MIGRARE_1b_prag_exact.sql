@@ -47,6 +47,12 @@
 --         nota spune „aprobarea veche (…) e de reverificat: s-a schimbat cifra din planșă (…) — o citire nouă a planșei nu infirmă
 --         aprobarea. Valoarea și aprobarea veche rămân în rând și în istoric; validarea se reface.” (Copilot: recitirea justifică
 --         reverificarea, nu concluzia că aprobarea umană era greșită). Statusul tot „diferenta”; prefixul și terminatorul — neschimbate.
+--   6) REPARAȚIA RUNDEI 2 (verificatorul BD, minor „paritatea notei peste 1e18”): șablonul to_char al cifrelor avea 18 poziții întregi —
+--      peste 1e18 SQL scria „###”, JS scria cifrele (statusul era identic). Acum 42 de poziții întregi (cifre, |Δ|, „efectiv”), iar procentul
+--      nu mai trece prin ofertare_fmt_ro (12 poziții): se scrie din sutimile exacte, cu același șablon lat — ca `fmtSutimi` din JS (BigInt).
+--      round(v_pct, 2) / 100: împărțirea numeric-ă a unui întreg mare (peste 16 cifre) ar avea scala 0 și ar rotunji sutimile („…823 %” în loc
+--      de „…822,5 %”, prins de suita verificatorului); cu scala 2 la deîmpărțit rezultatul e exact.
+--      Nota SQL = JS octet cu octet pentru orice valoare sub 10^42 (fără sens fizic peste; acolo SQL ar scrie „###”, statusul rămâne același).
 -- Roluri (neschimbat, acum strict): `cantitate` = valoarea aprobată / folosită în ofertă; `cantitate_plansa` = observația-candidat a
 -- citirii. O observație diferită de cea aprobată scoate rândul pe „diferenta” („de reverificat”); valoarea aprobată rămâne în rând
 -- (transferul / CAD nu scriu `cantitate` pe un rând validat), în notă (prefixul numește aprobarea veche) și în istoric.
@@ -173,10 +179,10 @@ BEGIN
           v_pct := CASE WHEN v_amu = 0 THEN NULL ELSE div(abs(v_dmu) * 10000, v_amu) END;   -- sutimi de procent, trunchiat
           -- |Δ| exact, cu toate zecimalele semnificative (max. 6): „+0,8”, „+0,001”, „-1.110” (ca fmtMilionimi din JS)
           v_sev := 'diferență ' || CASE WHEN v_amu > 0 AND abs(v_dmu) * 100 < v_amu AND (NOT v_lung OR abs(v_dmu) < 1000000) THEN 'mică' ELSE 'mare' END || ': ' || v_semn ||
-                   rtrim(rtrim(translate(to_char(abs(v_dmu) / 1000000, 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ',') || ' ' || v_u_nou ||
-                   CASE WHEN v_pct IS NULL THEN '' WHEN v_pct = 0 THEN ', sub 0,01 %' ELSE ', ' || v_semn || public.ofertare_fmt_ro(v_pct / 100) || ' %' END ||
+                   rtrim(rtrim(translate(to_char(abs(v_dmu) / 1000000, 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ',') || ' ' || v_u_nou ||
+                   CASE WHEN v_pct IS NULL THEN '' WHEN v_pct = 0 THEN ', sub 0,01 %' ELSE ', ' || v_semn || rtrim(rtrim(translate(to_char(round(v_pct, 2) / 100, 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.00'), ',.', '.,'), '0'), ',') || ' %' END ||
                    CASE WHEN k = 'cantitate_plansa' AND (nr IS NULL OR nb IS NULL)
-                        THEN ', efectiv ' || coalesce(rtrim(rtrim(translate(to_char(round(ea, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m → ' || coalesce(rtrim(rtrim(translate(to_char(round(eb, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m' ELSE '' END;
+                        THEN ', efectiv ' || coalesce(rtrim(rtrim(translate(to_char(round(ea, 6), 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m → ' || coalesce(rtrim(rtrim(translate(to_char(round(eb, 6), 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m' ELSE '' END;
         END IF;
       END IF;
     ELSIF k = 'um' THEN   -- unitatea NORMALIZATĂ (ca normUm din JS și filtrele de rețea ale view-ului / v6)
@@ -192,10 +198,10 @@ BEGIN
     IF v_rel THEN
       v_rel_c := v_rel_c || k;
       v_desc := v_desc || format('%s (%s → %s%s)', c_etichete ->> k,
-        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN coalesce(rtrim(rtrim(translate(to_char(round(r::numeric, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || CASE WHEN r IS NULL THEN '' ELSE ' ' || v_u_vechi END
+        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN coalesce(rtrim(rtrim(translate(to_char(round(r::numeric, 6), 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || CASE WHEN r IS NULL THEN '' ELSE ' ' || v_u_vechi END
              WHEN k = 'licitatie_id' THEN '#' || coalesce(r, '—')
              ELSE '„' || CASE WHEN length(coalesce(r, '—')) > 60 THEN left(coalesce(r, '—'), 59) || '…' ELSE coalesce(r, '—') END || '”' END,
-        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN coalesce(rtrim(rtrim(translate(to_char(round(b::numeric, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || CASE WHEN b IS NULL THEN '' ELSE ' ' || v_u_nou END
+        CASE WHEN k IN ('cantitate', 'cantitate_plansa') THEN coalesce(rtrim(rtrim(translate(to_char(round(b::numeric, 6), 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || CASE WHEN b IS NULL THEN '' ELSE ' ' || v_u_nou END
              WHEN k = 'licitatie_id' THEN '#' || coalesce(b, '—')
              ELSE '„' || CASE WHEN length(coalesce(b, '—')) > 60 THEN left(coalesce(b, '—'), 59) || '…' ELSE coalesce(b, '—') END || '”' END,
         CASE WHEN v_sev IS NULL THEN '' ELSE '; ' || v_sev END);
@@ -229,8 +235,8 @@ BEGIN
       v_nota := format(CASE WHEN v_rel_c = ARRAY['cantitate_plansa'] AND cardinality(v_der) = 0
                   THEN '%s (cantitate %s%s%s%s) e de reverificat: s-a schimbat %s — o citire nouă a planșei nu infirmă aprobarea. Valoarea și aprobarea veche rămân în rând și în istoric; %s '
                   ELSE '%s (cantitate %s%s%s%s) nu mai e valabilă: s-a schimbat %s. Valoarea și aprobarea veche rămân în istoric; %s ' END,
-                  c_prefix, coalesce(rtrim(rtrim(translate(to_char(round(v_ref_cant, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—'), CASE WHEN v_ref_cant IS NULL THEN '' ELSE ' ' || coalesce(nullif(v_ref_um, ''), 'm') END,
-                  CASE WHEN v_ref_cp IS NULL THEN '' ELSE ', cifra din planșă ' || coalesce(rtrim(rtrim(translate(to_char(round(v_ref_cp, 6), 'FM999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m' END,
+                  c_prefix, coalesce(rtrim(rtrim(translate(to_char(round(v_ref_cant, 6), 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—'), CASE WHEN v_ref_cant IS NULL THEN '' ELSE ' ' || coalesce(nullif(v_ref_um, ''), 'm') END,
+                  CASE WHEN v_ref_cp IS NULL THEN '' ELSE ', cifra din planșă ' || coalesce(rtrim(rtrim(translate(to_char(round(v_ref_cp, 6), 'FM999,999,999,999,999,999,999,999,999,999,999,999,990.000000'), ',.', '.,'), '0'), ','), '—') || ' m' END,
                   CASE WHEN v_ref_upd IS NULL THEN '' ELSE ', ultima scriere ' || to_char(v_ref_upd AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') END,
                   array_to_string(v_der || v_desc, '; '), c_final) || v_nota;
       NEW.status := 'diferenta';
