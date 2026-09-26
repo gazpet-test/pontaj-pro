@@ -3,7 +3,7 @@
 // + IDENTITATEA RÂNDULUI de tabel (doc, pagină, tabel, Nr) în locul dedup-ului pe text/multiset (Copilot, runda 3) —
 //   cazuri sintetice + fixture reală din planșa 470 (fixture_470.ts, z?_6 cu Nr + z?_7 cu lungimi).
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { agregaTronsoane, identificaRanduri, MOTIV_AFARA_NR, MOTIV_COLOANA_NR, MOTIV_DN_ABSENT, notaRestTransfer, nrRand } from './handler.ts'
+import { agregaTronsoane, identificaRanduri, MOTIV_AFARA_NR, MOTIV_COLOANA_NR, MOTIV_COLOANA_NR_FARA_GEOM, MOTIV_DN_ABSENT, notaRestTransfer, nrRand } from './handler.ts'
 import { AZI_470, feliiDin470, RANDURI_Z6 } from './fixture_470.ts'
 
 const total = (l: any[]) => l.reduce((s, t) => s + t.lungime_m, 0)
@@ -340,6 +340,17 @@ Deno.test('runda 4: Nr fără nicio lungime (felia cu L a pierdut rândul de mar
 // BLOCANT: fix-ul din runda 4 (`grupCuNr`) vedea doar fragmentele împerecheate REUȘIT. Când felia cu Nr din banda 1 lipsește sau
 // are antete transcrise altfel, cele 37 de rânduri din z1_7 primeau „poz z1_7.t1#k”, iar Nr 32–37 (suprapunerea cu banda 2,
 // 1.200 m) se numărau încă o dată prin Nr: 139 de rânduri / 50.105 m sigur, 0 de verificat, fără niciun semnal.
+// Runda 6: geometria reală a tăietorului (api/plansa-felii.js): latura 1.600, suprapunere 12% => pas 1.408;
+// left = min(c·pas, max(0, W − latura)), top la fel (c, r 0-based) — ultima coloană/bandă e FIXATĂ la marginea planșei.
+const PAS = Math.floor(1600 * (1 - 0.12)), LAT = 1600
+function geomTaiere(W: number, H: number, pagina = 1) {
+  const zone_geom: Record<string, number[]> = {}
+  for (let r = 0; r < Math.ceil(H / PAS); r++) for (let c = 0; c < Math.ceil(W / PAS); c++) {
+    const left = Math.min(c * PAS, Math.max(0, W - LAT)), top = Math.min(r * PAS, Math.max(0, H - LAT))
+    zone_geom[`${r + 1}_${c + 1}`] = [left, top, Math.min(LAT, W - left), Math.min(LAT, H - top), 0]
+  }
+  return { zone_geom, surse_geom: [{ pagina }] }
+}
 const PLANSA470 = { zone_geom: { '1_6': [7040, 0, 1600, 1600, 0], '1_7': [7762, 0, 1600, 1600, 0], '2_6': [7040, 1408, 1600, 1600, 0], '2_7': [7762, 1408, 1600, 1600, 0],
   '3_6': [7040, 2816, 1600, 1600, 0], '3_7': [7762, 2816, 1600, 1600, 0], '4_6': [7040, 4224, 1600, 1600, 0], '4_7': [7762, 4224, 1600, 1600, 0] }, surse_geom: [{ pagina: 1 }] }
 const REDENUMIT: Record<string, string> = { 'Strada': 'Denumire strada', 'Str. De la': 'De la strada', 'Str. Pana la': 'Pana la strada' }
@@ -382,11 +393,103 @@ Deno.test('runda 5 BLOCANT (sintetic): tabel pe 3 coloane de felii (Nr în z?_5,
     { 'Localitate': 'X', 'Tronson - Plecare': 'A', 'Tronson - Sosire': 'B', 'Lung. Trs. Km': '0,3', 'Dn-ul de ales mm (ext)': '40' },
     { 'Localitate': 'X', 'Tronson - Plecare': 'B', 'Tronson - Sosire': 'C', 'Lung. Trs. Km': '0,2', 'Dn-ul de ales mm (ext)': '63' }] }],
     tronsoane: [{ de_la: 'A', la: 'B', lungime_m: 300, diametru_mm: 40, zona: 'X', sursa: 'tabel' }, { de_la: 'B', la: 'C', lungime_m: 200, diametru_mm: 63, zona: 'X', sursa: 'tabel' }] }
-  const r = identificaRanduri([control, felieTab('z1_5', f5(b1), [], C5), felieTab('z1_7', f7(b1), t7(b1), C7x),
-    felieTab('z2_5', f5(b2), [], C5), felieTab('z2_6', f6(b2), [], C6x), felieTab('z2_7', f7(b2), t7(b2), C7x)], { doc: 1 })
+  const felii = [control, felieTab('z1_5', f5(b1), [], C5), felieTab('z1_7', f7(b1), t7(b1), C7x),
+    felieTab('z2_5', f5(b2), [], C5), felieTab('z2_6', f6(b2), [], C6x), felieTab('z2_7', f7(b2), t7(b2), C7x)]
+  // runda 6: cu geometria reală a tăietorului (W = 9.362, ca 470: coloana 7 nu atinge coloana 5)
+  const r = identificaRanduri(felii, { doc: 1, plansa: geomTaiere(9362, 3200) })
   assertEquals(r.perechi.map((p) => `${p.a}+${p.b}:${p.delta}`), ['z2_5+z2_6:0', 'z2_6+z2_7:0'])
   assertEquals(r.sigure.map((t) => t._nr ?? t._identitate.split('|').pop()), ['3', '4', '5', 'poz z1_2.t1#1', 'poz z1_2.t1#2'])
   assertEquals(r.total_sigur_m, 1700, 'a9fe186 (și proba |Δc| ≤ 1): 2.700 m — Nr 3 și 4 numărate o dată prin poziție (z1_7) și o dată prin Nr (banda 2)')
   assertEquals(r.faraIdentitate.map((t) => [t._zona, t.lungime_m, t._motiv]), b1.map(([, , L]) => ['z1_7', L, MOTIV_COLOANA_NR]))
   assertEquals(r.total_de_verificat_m, 1000)
+  // runda 6: FĂRĂ geometrie suprapunerea nu se poate exclude => poziția e interzisă pe toată pagina tabelului cu Nr (și z1_2)
+  const f = identificaRanduri(felii, { doc: 1 })
+  assertEquals(f.sigure.map((t) => t._nr), ['3', '4', '5'])
+  assertEquals(f.faraIdentitate.map((t) => [t._zona, t.lungime_m, t._motiv]),
+    [['z1_2', 300, MOTIV_COLOANA_NR_FARA_GEOM], ['z1_2', 200, MOTIV_COLOANA_NR_FARA_GEOM], ...b1.map(([, , L]) => ['z1_7', L, MOTIV_COLOANA_NR_FARA_GEOM])])
+  assertEquals([f.total_sigur_m, f.total_de_verificat_m], [1200, 1500])
+})
+
+// ---- 26.09.2026 — runda 6 (verificator runda 5, MAJOR): vecinătatea feliilor pe GEOMETRIA REALĂ, nu pe indicii din etichetă ----
+// Tăietorul fixează ultima coloană la marginea planșei; la W mod pas < 0,272·pas felia `_N+1` acoperă și `_N-1` (|Δc| = 2), deci
+// regula pe etichetă ±1 (f1274a1) nu vedea suprapunerea: fâșia de lungimi din felia fixată primea „poz …” și se număra a doua oară.
+// Fiecare test de mai jos pică pe f1274a1 (verificat pe copie), mai puțin controalele marcate.
+// zone_geom al planșei 470, din BD (SELECT 26.09: analiza->'plansa'->'zone_geom', W 9.362 × H 6.623, 35 de zone)
+const ZONE_GEOM_470: Record<string, number[]> = {
+  '1_1': [0, 0, 1600, 1600, 0], '1_2': [1408, 0, 1600, 1600, 0], '1_3': [2816, 0, 1600, 1600, 0], '1_4': [4224, 0, 1600, 1600, 0], '1_5': [5632, 0, 1600, 1600, 0], '1_6': [7040, 0, 1600, 1600, 0], '1_7': [7762, 0, 1600, 1600, 0],
+  '2_1': [0, 1408, 1600, 1600, 0], '2_2': [1408, 1408, 1600, 1600, 0], '2_3': [2816, 1408, 1600, 1600, 0], '2_4': [4224, 1408, 1600, 1600, 0], '2_5': [5632, 1408, 1600, 1600, 0], '2_6': [7040, 1408, 1600, 1600, 0], '2_7': [7762, 1408, 1600, 1600, 0],
+  '3_1': [0, 2816, 1600, 1600, 0], '3_2': [1408, 2816, 1600, 1600, 0], '3_3': [2816, 2816, 1600, 1600, 0], '3_4': [4224, 2816, 1600, 1600, 0], '3_5': [5632, 2816, 1600, 1600, 0], '3_6': [7040, 2816, 1600, 1600, 0], '3_7': [7762, 2816, 1600, 1600, 0],
+  '4_1': [0, 4224, 1600, 1600, 0], '4_2': [1408, 4224, 1600, 1600, 0], '4_3': [2816, 4224, 1600, 1600, 0], '4_4': [4224, 4224, 1600, 1600, 0], '4_5': [5632, 4224, 1600, 1600, 0], '4_6': [7040, 4224, 1600, 1600, 0], '4_7': [7762, 4224, 1600, 1600, 0],
+  '5_1': [0, 5023, 1600, 1600, 0], '5_2': [1408, 5023, 1600, 1600, 0], '5_3': [2816, 5023, 1600, 1600, 0], '5_4': [4224, 5023, 1600, 1600, 0], '5_5': [5632, 5023, 1600, 1600, 0], '5_6': [7040, 5023, 1600, 1600, 0], '5_7': [7762, 5023, 1600, 1600, 0],
+}
+// tabel cu Nr în z1_4 (Nr, Strada, Dn, L); felia fixată z1_6 vede doar fâșia de lungimi (W = 7.340: z1_6 = [5.740, 7.340], z1_4 = [4.224, 5.824])
+const RG: [string, string, string, number][] = [['1', 'Florilor', '63', 300], ['2', 'Salcamilor', '63', 250], ['3', 'Viilor', '40', 200], ['4', 'Plopilor', '40', 150], ['5', 'Morii', '63', 100]]
+const CG = ['Nr crt', 'Strada', 'Dn (mm)', 'Lungime (m)']
+const tabG = (et: string, xs: typeof RG) => felieTab(et, xs.map(([nr, st, dn, L]) => ({ 'Nr crt': nr, 'Strada': st, 'Dn (mm)': dn, 'Lungime (m)': String(L) })),
+  xs.map(([, st, dn, L]) => ({ de_la: st, lungime_m: L, diametru_mm: Number(dn), sursa: 'tabel' })), CG)
+const fasieG = (et: string, xs: typeof RG) => felieTab(et, xs.map(([, , , L]) => ({ 'Lungime (m)': String(L) })), xs.map(([, , , L]) => ({ lungime_m: L, sursa: 'tabel' })), ['Lungime (m)'])
+
+Deno.test('runda 6: geomTaiere reproduce exact zone_geom din BD (470) și coloana fixată de la W = 7.340 / 7.140', () => {
+  assertEquals(geomTaiere(9362, 6623).zone_geom, ZONE_GEOM_470)
+  assertEquals([geomTaiere(7340, 1600).zone_geom['1_6'], geomTaiere(7140, 1600).zone_geom['1_5'], geomTaiere(7140, 1600).zone_geom['1_6']],
+    [[5740, 0, 1600, 1600, 0], [5540, 0, 1600, 1600, 0], [5540, 0, 1600, 1600, 0]])
+})
+Deno.test('runda 6 MAJOR (GEOM-1): coloana fixată z1_6 acoperă z1_4 (|Δc| = 2), z1_5 fără tabel => rândul văzut în ambele se numără O DATĂ', () => {
+  const b = RG.slice(0, 3)
+  for (const [nume, z15] of [['z1_5 netranscrisă', felieTab('z1_5', [], [])], ['z1_5 căzută', { eticheta: 'z1_5', eroare: 'timeout' }]] as const) {
+    const r = identificaRanduri([tabG('z1_4', b), z15, fasieG('z1_6', b)], { doc: 1, plansa: geomTaiere(7340, 1600) })
+    assertEquals([r.sigure.length, r.total_sigur_m, r.prin.pozitie], [3, 750, 0], `${nume} — f1274a1: 6 rânduri / 1.500 m, 3 prin poziție`)
+    assertEquals([r.faraIdentitate.length, r.conflicte.length, r.total_de_verificat_m], [0, 0, 0])
+    assertEquals(r.perechi.map((p) => `${p.a}+${p.b}:${p.delta}`), ['z1_4+z1_6:0'], 'împerecherea urmează geometria, nu eticheta c+1')
+    assertEquals(r.sigure.map((t) => [t._nr, t._observatii]), [['1', ['z1_4', 'z1_6']], ['2', ['z1_4', 'z1_6']], ['3', ['z1_4', 'z1_6']]])
+  }
+  // fără geometrie (tăiere veche): suprapunerea nu se poate exclude => fâșia la „de verificat”, niciodată 1.500 m sigur
+  const f = identificaRanduri([tabG('z1_4', b), felieTab('z1_5', [], []), fasieG('z1_6', b)], { doc: 1 })
+  assertEquals([f.total_sigur_m, f.total_de_verificat_m], [750, 750])
+  assert(f.faraIdentitate.every((t) => t._zona === 'z1_6' && t._motiv === MOTIV_COLOANA_NR_FARA_GEOM), f.faraIdentitate[0]._motiv)
+  // control (trece și pe f1274a1): z1_5 transcrie fâșia (Dn + L) => lanțul z1_4–z1_5–z1_6, tot 750 m
+  const z15 = felieTab('z1_5', b.map(([, , dn, L]) => ({ 'Dn (mm)': dn, 'Lungime (m)': String(L) })), b.map(([, , dn, L]) => ({ lungime_m: L, diametru_mm: Number(dn), sursa: 'tabel' })), ['Dn (mm)', 'Lungime (m)'])
+  const c = identificaRanduri([tabG('z1_4', b), z15, fasieG('z1_6', b)], { doc: 1, plansa: geomTaiere(7340, 1600) })
+  assertEquals([c.total_sigur_m, c.total_de_verificat_m], [750, 0])
+})
+Deno.test('runda 6 MAJOR: fâșia din coloana fixată nu se poate împerechea (tabelul cu Nr e în banda vecină) => poziția interzisă pe geometrie, fără dublare', () => {
+  // banda 1: z1_4 / z1_5 netranscrise, z1_6 (fixată) vede fâșia de lungimi a rândurilor 1–4; banda 2: z2_4 are Nr 3–5 (3, 4 = suprapunerea verticală)
+  const r = identificaRanduri([felieTab('z1_4', [], []), felieTab('z1_5', [], []), fasieG('z1_6', RG.slice(0, 4)), tabG('z2_4', RG.slice(2, 5))],
+    { doc: 1, plansa: geomTaiere(7340, 3000) })
+  assertEquals(r.sigure.map((t) => t._nr), ['3', '4', '5'])
+  assertEquals([r.total_sigur_m, r.prin.pozitie], [450, 0], 'f1274a1: 7 rânduri / 1.350 m, 4 prin poziție — Nr 3 și 4 o dată prin „poz z1_6” și o dată prin Nr')
+  assertEquals(r.faraIdentitate.map((t) => [t._zona, t.lungime_m, t._motiv]), RG.slice(0, 4).map(([, , , L]) => ['z1_6', L, MOTIV_COLOANA_NR]))
+  assertEquals(r.total_de_verificat_m, 900)
+  // control (trece și pe f1274a1): fâșia într-o coloană care NU atinge tabelul cu Nr (z1_1 = [0, 1.600]) rămâne pe poziție
+  const c = identificaRanduri([fasieG('z1_1', RG.slice(0, 2)), tabG('z2_4', RG.slice(2, 5))], { doc: 1, plansa: geomTaiere(7340, 3000) })
+  assertEquals([c.sigure.length, c.prin.pozitie, c.faraIdentitate.length], [5, 2, 0])
+})
+Deno.test('runda 6 MAJOR: „Nr repetat” pe geometrie — banda fixată z3_2 atinge z1_2 (|Δr| = 2) => același rând; felii „vecine” în etichetă dar despărțite => de verificat', () => {
+  // H = 3.000: benzile 2 și 3 sunt fixate la top 1.400, deci z3_2 = [1.400, 3.000] atinge z1_2 = [0, 1.600]; tabelul (Nr 1–3) stă în fâșia comună
+  const t = [R('1'), R('2'), R('3')]
+  const g = identificaRanduri([felieTab('z1_2', t, [T(), T(), T()]), felieTab('z3_2', t, [T(), T(), T()])], { doc: 1, plansa: geomTaiere(4000, 3000) })
+  assertEquals([g.sigure.length, g.total_sigur_m, g.faraIdentitate.length], [3, 900, 0], 'f1274a1: 0 sigure, 1.800 m de verificat („felii care nu se suprapun”)')
+  assertEquals(g.sigure[0]._observatii, ['z1_2', 'z3_2'])
+  // fără geometrie: eticheta |Δr| = 2 => de verificat (conservator, nu umflare)
+  const e = identificaRanduri([felieTab('z1_2', t, [T(), T(), T()]), felieTab('z3_2', t, [T(), T(), T()])], { doc: 1 })
+  assertEquals([e.sigure.length, e.total_de_verificat_m], [0, 1800])
+  // z1_2 / z1_3 vecine în etichetă, dar geometria le desparte (500 px între ele) => nu se împerechează, același Nr => de verificat
+  const dep = { zone_geom: { '1_2': [0, 0, 1000, 1000, 0], '1_3': [1500, 0, 1000, 1000, 0] }, surse_geom: [{ pagina: 1 }] }
+  const d = identificaRanduri([felieTab('z1_2', t, [T(), T(), T()]), felieTab('z1_3', t, [T(), T(), T()])], { doc: 1, plansa: dep })
+  assertEquals([d.sigure.length, d.faraIdentitate.length, d.total_de_verificat_m, d.perechi.length], [0, 6, 1800, 0], 'f1274a1: 3 / 900 m sigur (eticheta c, c+1)')
+  assert(d.faraIdentitate[0]._motiv.includes('în z1_2 și z1_3, felii care nu se suprapun'), d.faraIdentitate[0]._motiv)
+  // control (trece și pe f1274a1): aceleași felii, geometria standard (se suprapun 192 px) => 3 / 900 m
+  const s = identificaRanduri([felieTab('z1_2', t, [T(), T(), T()]), felieTab('z1_3', t, [T(), T(), T()])], { doc: 1, plansa: geomTaiere(4000, 3000) })
+  assertEquals([s.sigure.length, s.total_sigur_m], [3, 900])
+  // „se ating” cu toleranță mică (TOL_GEOM_PX): 1 px între felii = vecine (control, trece și pe f1274a1)
+  const at = { zone_geom: { '1_2': [0, 0, 1000, 1000, 0], '1_3': [1001, 0, 1000, 1000, 0] }, surse_geom: [{ pagina: 1 }] }
+  const a = identificaRanduri([felieTab('z1_2', t, [T(), T(), T()]), felieTab('z1_3', t, [T(), T(), T()])], { doc: 1, plansa: at })
+  assertEquals([a.sigure.length, a.total_sigur_m, a.faraIdentitate.length], [3, 900, 0])
+})
+Deno.test('runda 6: fixture 470 cu zone_geom REAL din BD — neschimbat: 133 rânduri prin Nr, 48.905 m sigur, 0 de verificat, aceleași 4 perechi (control, trece și pe f1274a1)', () => {
+  const r = identificaRanduri(feliiDin470(), { doc: 470, plansa: { zone_geom: ZONE_GEOM_470, surse_geom: [{ pagina: 1, latime: 9362, inaltime: 6623, dpi: 200, latime_pt: 3370, inaltime_pt: 2384 }] } })
+  assertEquals([r.sigure.length, r.total_sigur_m, r.prin.nr, r.prin.pozitie], [133, 48905, 133, 0])
+  assertEquals([r.faraIdentitate.length, r.conflicte.length, r.total_de_verificat_m, r.nrFaraLungime.length], [0, 0, 0, 0])
+  assertEquals(r.perechi.map((p) => `${p.a}+${p.b}:${p.delta}`), ['z1_6+z1_7:0', 'z2_6+z2_7:0', 'z3_6+z3_7:0', 'z4_6+z4_7:0'])
+  assertEquals(r.sigure.filter((t) => t._observatii.length === 2).length, 19)
 })

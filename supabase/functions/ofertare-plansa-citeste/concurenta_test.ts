@@ -1096,3 +1096,87 @@ Deno.test('runda 5 transfer: grup sigur ambiguu (două poziții Dn110 PE) -> nim
   const rows = (await tabele.from('ofertare_cantitati').select()).data
   assertEquals(rows.map((x: any) => [x.id, x.cantitate_plansa, x.status, x.diferenta_nota]), [[31, 300, 'extras', 'VECHE A'], [32, 200, 'extras', 'VECHE B']])
 })
+
+// ---- 26.09.2026 — runda 6 (verificator runda 5): regresie prin handler + RPC simulat. Fiecare pică pe f1274a1. ----
+// MAJOR 1 (GEOM-E2E): coloana fixată a tăietorului (W = 7.140: z1_5 = z1_6 = [5.540, 7.140]) acoperă și z1_4 (|Δc| = 2). Tabelul cu
+// Nr e în z1_4, z1_5 nu transcrie nimic, z1_6 vede fâșia Dn + L. Pe f1274a1 fâșia primea „poz z1_6…” și se număra a doua oară.
+Deno.test('runda 6 MAJOR E2E (GEOM): fâșia din coloana fixată NU mai ajunge a doua oară în cantitate_plansa (f1274a1: Dn63 1.100, Dn40 400, „diferență” falsă)', async () => {
+  const Rg = [['1', 'Florilor', '63', 300], ['2', 'Salcamilor', '63', 250], ['3', 'Viilor', '40', 200]] as const
+  const CX = ['Nr crt', 'Strada', 'Dn (mm)', 'Lungime (m)']
+  const felii: Record<string, any> = {
+    z1_4: { cartus: { plansa_nr: '7' }, tabele: [{ denumire: 'Dimensionare', coloane: CX, randuri: Rg.map(([nr, st, dn, L]) => ({ 'Nr crt': nr, 'Strada': st, 'Dn (mm)': dn, 'Lungime (m)': String(L) })) }],
+      tronsoane: Rg.map(([, st, dn, L]) => ({ de_la: st, lungime_m: L, diametru_mm: Number(dn), sursa: 'tabel' })) },
+    z1_6: { tabele: [{ denumire: 'fragment', coloane: ['Dn (mm)', 'Lungime (m)'], randuri: Rg.map(([, , dn, L]) => ({ 'Dn (mm)': dn, 'Lungime (m)': String(L) })) }],
+      tronsoane: Rg.map(([, , dn, L]) => ({ lungime_m: L, diametru_mm: Number(dn), sursa: 'tabel' })) },
+  }
+  const Z = ['1_4', '1_5', '1_6']
+  const pl = { ...PLANSA, zone_asteptate: Z, acoperire_demonstrata: true,
+    zone_geom: { '1_4': [4224, 0, 1600, 1600, 0], '1_5': [5540, 0, 1600, 1600, 0], '1_6': [5540, 0, 1600, 1600, 0] }, surse_geom: [{ pagina: 1 }] }
+  const { supa, n, tabele } = supaCu({ id: 777, licitatie_id: 50, nume_original: 'PL7.pdf', analiza: { plansa: pl } }, Z)
+  await tabele.from('ofertare_cantitati').insert({ id: 63, licitatie_id: 50, um: 'm', denumire: 'Conductă PE100 Dn63', cantitate: 550, cantitate_plansa: null, status: 'extras' })
+  await tabele.from('ofertare_cantitati').insert({ id: 40, licitatie_id: 50, um: 'm', denumire: 'Conductă PE100 Dn40', cantitate: 200, cantitate_plansa: null, status: 'extras' })
+  const j = await (await handler(cerereSvc({ doc_id: 777, de_la: 0 }), svc(n, aiFelii(n, felii), supa))).json()
+  assertEquals([j.sumar.total_sigur_m, j.sumar.total_de_verificat_m, j.sumar.identitate_randuri.prin_nr, j.sumar.identitate_randuri.prin_pozitie], [750, 0, 3, 0],
+    'f1274a1: 1.500 m sigur, 3 prin poziție, 0 de verificat')
+  assertEquals(j.cantitati.pe_diametre, { Dn63: 550, Dn40: 200 })
+  const rows = (await tabele.from('ofertare_cantitati').select()).data
+  assertEquals(rows.map((x: any) => [x.id, x.cantitate_plansa, x.status, x.diferenta_nota]),
+    [[63, 550, 'extras', 'Planșa 7 confirmă: 550 m.'], [40, 200, 'extras', 'Planșa 7 confirmă: 200 m.']], 'f1274a1: 1.100 / 400, „Memoriu 550 m vs planșa 7 1.100 m (+550 m…)”')
+})
+
+// MAJOR 2 (pre-existent din 8a6fbbb): două grupuri SIGURE pe același Dn, materiale diferite, care nimeresc aceeași poziție unică.
+// Pe f1274a1: două update-uri pe același id, RPC-ul le aplică în ordine => ultimul câștigă (PE 500 + OL 90 => 90, nota „-500 m”).
+// Acum: ambiguu — cantitate_plansa neatinsă, nota numește toate grupurile, „extras” => „diferenta”; același rezultat în orice ordine.
+async function coliziune(pozitii: any[], randuriT: [string, string, string, string][], invers: boolean) {
+  const { supa, n, tabele } = await lic3(pozitii)
+  const COLM = ['Nr crt', 'De la', 'La', 'Dn', 'Material', 'L (km)']
+  let xs = randuriT.map(([nr, dl, mat, L]) => ({ rd: { 'Nr crt': nr, 'De la': dl, 'La': 'CT', 'Dn': '110', 'Material': mat, 'L (km)': L },
+    tr: { de_la: dl, la: 'CT', lungime_m: Math.round(numarKm(L) * 1000), diametru_mm: 110, ...(mat ? { material: mat } : {}), sursa: 'tabel' } }))
+  if (invers) xs = xs.reverse()
+  const ai = aiFelii(n, { z1_1: { tronsoane: xs.map((x) => x.tr), tabele: [{ denumire: 'D', coloane: COLM, randuri: xs.map((x) => x.rd) }] } })
+  const r = await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai, supa))
+  assertEquals(r.status, 200)
+  const j = await r.json()
+  return { j, rows: (await tabele.from('ofertare_cantitati').select()).data.map((x: any) => ({ ...x })), n }
+}
+const numarKm = (s: string) => Number(s.replace(',', '.'))
+Deno.test('runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 OL 90 SIGURE pe o singură poziție => ambiguu, nimic suprascris (f1274a1: 90, „-500 m”); ordine normală = inversată', async () => {
+  // cifra veche din planșă (700 m) ≠ suma grupurilor (590 m): nu se atinge, e numită veche
+  const poz = [{ id: 21, denumire: 'Conductă distribuție gaze Dn110', cantitate: 590, cantitate_plansa: 700, status: 'extras', diferenta_nota: 'VECHE' }]
+  const rd: [string, string, string, string][] = [['1', 'A', 'PE100', '0,5'], ['2', 'B', 'OL', '0,09']]
+  const a = await coliziune(poz, rd, false), b = await coliziune(poz, rd, true)
+  const nota = 'De verificat: Planșa „PL1.1.pdf” dă 2 grupuri sigure pe aceeași poziție — Dn110 OL 90 m (1 rând); Dn110 PE 500 m (1 rând); ' +
+    'împreună 590 m, dar nu se adună și nu se suprascriu automat (denumirea poziției nu le deosebește); cifra din planșă nu s-a actualizat (700 m e dintr-o citire anterioară).'
+  for (const x of [a, b]) {
+    assertEquals(x.rows.map((y: any) => [y.id, y.cantitate, y.cantitate_plansa, y.status, y.diferenta_nota]), [[21, 590, 700, 'diferenta', nota]])
+    assertEquals(x.j.cantitati.ambigue, [{ dn: 110, material: null, metri: 590, motiv: 'mai multe grupuri sigure (Dn, material) pe aceeași poziție — cantitate_plansa neatinsă',
+      grupuri: [{ dn: 110, material: 'OL', metri: 90, randuri: 1 }, { dn: 110, material: 'PE', metri: 500, randuri: 1 }], pozitii: [{ id: 21, denumire: 'Conductă distribuție gaze Dn110' }] }])
+    assertEquals(x.j.cantitati.pe_diametre, { 'Dn110 PE': 500, 'Dn110 OL': 90 })
+    assertEquals(x.n.inserts.filter((t: string) => t === 'ofertare_cantitati').length, 0)
+  }
+  assertEquals(a.rows, b.rows, 'aceeași stare în BD indiferent de ordinea rândurilor')
+})
+Deno.test('runda 6 MAJOR transfer: Dn110 PE 500 + Dn110 fără material 300 SIGURE pe „Țeavă PE100 Dn110” => ambiguu (f1274a1: 300, cei 500 m PE dispar); validat rămâne validat', async () => {
+  const rd: [string, string, string, string][] = [['1', 'A', 'PE100', '0,5'], ['2', 'B', '', '0,3'], ['?', 'C', 'PE100', '0,04']]
+  const nota = (cp: string) => 'De verificat: Planșa „PL1.1.pdf” dă 2 grupuri sigure pe aceeași poziție — Dn110 PE 500 m (1 rând); Dn110 fără material 300 m (1 rând); ' +
+    `împreună 800 m, dar nu se adună și nu se suprascriu automat (denumirea poziției nu le deosebește); cifra din planșă nu s-a actualizat (${cp} m e dintr-o citire anterioară).` +
+    ' De verificat, NEincluse în cifra din planșă: 1 rând Dn110 PE fără identitate sigură (40 m); pe planșă: 1 rând de tabel fără identitate sigură (40 m).'
+  // „extras” => „diferenta”, cifra veche rămâne (numită veche); ordine normală și inversată
+  const poz = [{ id: 21, denumire: 'Țeavă PE100 Dn110', cantitate: 800, cantitate_plansa: 800, status: 'extras', diferenta_nota: 'VECHE' }]
+  const a = await coliziune(poz, rd, false), b = await coliziune(poz, rd, true)
+  for (const x of [a, b]) {
+    assertEquals(x.rows.map((y: any) => [y.id, y.cantitate_plansa, y.status, y.diferenta_nota]), [[21, 800, 'diferenta', nota('800')]])
+    assertEquals(x.j.cantitati.ambigue[0].grupuri, [{ dn: 110, material: 'PE', metri: 500, randuri: 1 }, { dn: 110, material: null, metri: 300, randuri: 1 }])
+    assertEquals(x.j.cantitati.ambigue[0].de_verificat, '1 rând Dn110 PE fără identitate sigură (40 m)')
+  }
+  assertEquals(a.rows, b.rows)
+  // poziție validată: decizia omului rămâne (status, cifră), doar nota
+  const v = await coliziune([{ ...poz[0], cantitate_plansa: 780, status: 'validat' }], rd, true)
+  assertEquals(v.rows.map((y: any) => [y.id, y.cantitate_plansa, y.status, y.diferenta_nota]), [[21, 780, 'validat', nota('780')]])
+})
+Deno.test('runda 6 transfer (control, trece și pe f1274a1): grupuri pe materiale diferite cu poziții SEPARATE => fiecare își primește cifra, nimic ambiguu', async () => {
+  const poz = [{ id: 11, denumire: 'Țeavă PE100 Dn110', cantitate: 500, cantitate_plansa: null, status: 'extras' }, { id: 12, denumire: 'Țeavă OL Dn110', cantitate: 90, cantitate_plansa: null, status: 'extras' }]
+  const x = await coliziune(poz, [['1', 'A', 'PE100', '0,5'], ['2', 'B', 'OL', '0,09']], false)
+  assertEquals(x.rows.map((y: any) => [y.id, y.cantitate_plansa, y.status]), [[11, 500, 'extras'], [12, 90, 'extras']])
+  assertEquals(x.j.cantitati.ambigue, [])
+})
