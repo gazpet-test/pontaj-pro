@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import { mesajInvoke } from './lib/mesajInvoke.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
@@ -18,7 +19,8 @@ import RFQPanel from './OfertareRFQ.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem } from './OfertareClarificari.jsx'
-import GarantieSection from './OfertareGarantie.jsx'
+import GarantieSection, { useSemnalGarantie } from './OfertareGarantie.jsx'
+import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.js'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
 import { GbeLicitatie } from './GbeEvidenta.jsx'
 import { REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
@@ -96,17 +98,8 @@ const fmtTermen = t => t ? new Date(t).toLocaleString('ro-RO', { day:'2-digit', 
 // timestamptz → valoare pentru <input type="datetime-local"> (ora locală, nu UTC)
 const toLocalInput = t => { if (!t) return ''; const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16) }
 
-// R4 risc 3: la 409/403 functions.invoke dă FunctionsHttpError cu mesaj generic („non-2xx status code”);
-// mesajul real (ex. „scrisă simultan din altă parte”, „fără drept”) e în corpul răspunsului: error.context (Response).
-async function mesajInvoke(error, data) {
-  if (data?.error) return data.error
-  const ctx = error?.context
-  if (ctx && typeof ctx.json === 'function') {
-    try { const j = await ctx.clone().json(); if (j?.error || j?.message) return `${j.error || j.message}${ctx.status ? ` (HTTP ${ctx.status})` : ''}` } catch { /* nu e JSON */ }
-    try { const t = await ctx.text(); if (t) return `${t.slice(0, 300)}${ctx.status ? ` (HTTP ${ctx.status})` : ''}` } catch { /* corp deja citit */ }
-  }
-  return error?.message || 'eroare necunoscută'
-}
+// R4 risc 3: mesajul real al unei funcții Edge la non-2xx (409/403…) — funcția stă în ./lib/mesajInvoke.js
+// (import mai sus), folosită și de butonul 🤖 din 📋 Cantități (ofertareExtragereCantitati.js).
 
 export default function OfertareLicitatiiTab() {
   const [profile, setProfile] = useState(null)
@@ -290,6 +283,8 @@ export default function OfertareLicitatiiTab() {
       }
     }
     let licId = editRow?.id
+    // R7 propagare: termen mutat pe o licitație cu garanție în curs/emisă ⇒ semnal la salvare (tab-ul 🛡 și KPI-ul îl păstrează)
+    const mutat = editRow?.garantie_status ? termenMutat(editRow.termen_depunere, payload.termen_depunere) : null
     if (editRow) {
       const { error } = await supabase.from('ofertare_licitatii').update(payload).eq('id', editRow.id)
       if (error) { showToast('Eroare la salvare: ' + error.message, 'err'); return false }
@@ -308,7 +303,8 @@ export default function OfertareLicitatiiTab() {
       })
       if (eDoc) showToast('Licitația s-a salvat, dar fișa nu s-a atașat: ' + eDoc.message, 'warn')
     }
-    showToast(editRow ? 'Licitație actualizată.' : `Licitație înregistrată — ${payload.nr_anunt}.`)
+    if (mutat) showToast(`Licitație actualizată. ⚠ Termenul de depunere s-a mutat (${mutat.de ? new Date(mutat.de + 'T00:00:00').toLocaleDateString('ro-RO') : '—'} → ${mutat.la ? new Date(mutat.la + 'T00:00:00').toLocaleDateString('ro-RO') : '—'}) — garanția de participare e de reverificat (🛡 Garanție).`, 'warn')
+    else showToast(editRow ? 'Licitație actualizată.' : `Licitație înregistrată — ${payload.nr_anunt}.`)
     setShowForm(false); setEditRow(null)
     await load()
     return true
@@ -3421,6 +3417,13 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', l.id).maybeSingle()
       .then(({ data }) => setPtSt(data || null))
   }, [l.id])
+  // R7 propagare: semnalul garanției pe termenul CURENT (aceeași evaluare ca în tab-ul 🛡) — KPI-ul nu mai e verde
+  // doar pentru că status = 'original' când termenul s-a mutat sau polița nu acoperă cerința recalculată
+  // indicatorGarantie: KPI + eticheta tab-ului din aceeași funcție (testată); polița încă neoriginală rămâne „în curs” roșu,
+  // semnalul se adaugă lângă (nu o acoperă cu o etichetă mai slabă)
+  const semnalG = useSemnalGarantie(l)
+  const indG = indicatorGarantie({ status: l.garantie_status, fisa: l.garantie_participare, semnal: semnalG })
+  const tonG = { rosu: G.red, portocaliu: G.orange, verde: G.green, neutru: G.text }[indG.ton]
   const st = LICITATIE_STATUS[l.status] || LICITATIE_STATUS.identificata
   const next = TRANZITII[l.status] || []
   const sx = l._st || {}
@@ -3456,7 +3459,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     ['formulare', '🗂 Formulare de depus'],
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
-    ['garantie', `🛡 Garanție${l.garantie_status === 'original' ? ' · ✓' : l.garantie_status ? ' · în curs' : ''}`],
+    ['garantie', `🛡 Garanție${indG.tab}`],
     ['detalii', '📝 Detalii & decizie'],
     ['verificari', `🔍 Verificări${sx.verdict ? ` · ${sx.verdict.toUpperCase()}` : ''}`],
   ]
@@ -3493,7 +3496,9 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
           {sx.reverif > 0 && <KPI l="Dovezi de reverificat (cerința s-a schimbat)" v={sx.reverif} color={G.orange} />}
           {/* roșu până când polița/SGB e în original în platformă (garantie_status = 'original' — fluxul complet vine cu tabelul ofertare_garantii) */}
           <div onClick={() => setTab('garantie')} style={{ cursor:'pointer', display:'contents' }} title="Deschide fluxul garanției (cerere poliță → plată → original)">
-            <KPI l="Garanție participare" v={l.garantie_participare || '—'} unit={l.garantie_status === 'original' ? '✓ original' : l.garantie_status ? 'în curs' : ''} color={l.garantie_status === 'original' ? G.green : l.garantie_participare ? G.red : G.text} />
+            {/* R7: verde doar dacă polița e în original ȘI nu e nimic de reverificat pe termenul curent (se încarcă ⇒ neutru, nu verde);
+                garanția în curs rămâne roșie, cu semnalul adăugat („în curs · ⚠ de reverificat”) */}
+            <KPI l="Garanție participare" v={l.garantie_participare || '—'} unit={indG.unit} color={tonG} />
           </div>
         </div>
 

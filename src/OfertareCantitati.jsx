@@ -10,6 +10,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import { aplicaRegulaAprobare, aplicaRegulaUnitate, citestePaginat, descrieSchimbari, referinteDinIstoric } from './ofertareCantitatiInvalidare.js'
+import { ruleazaExtragere, mesajExtragere, reluareDupa } from './ofertareExtragereCantitati.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -143,22 +144,33 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
   }
 
   // 🤖 extragerea din documentație (ofertare-cantitati-extrage): funcția lucrează cu buget de timp
-  // și întoarce `continua` + `urmator` — o reluăm până termină. Costă (model AI), deci cu confirmare.
+  // și întoarce `continua` + `urmatorul` — o reluăm până termină. Costă (model AI), deci cu confirmare.
+  // Bucla + mesajele sunt în ofertareExtragereCantitati.js (25.09.2026, Jilava): eroarea reală (ex. 403
+  // „doar ownerul sau responsabilul") nu mai e acoperită de un fals „terminată: 0 rânduri", iar o rulare
+  // oprită de plafonul de apeluri SAU de o eroare trecătoare la mijloc (504/546, furnizor) se reia de unde
+  // a rămas, nu de la zero (feliile deja plătite nu se replătesc). La 401/403 nu se oferă o reluare nouă,
+  // dar se păstrează cea de dinainte de clic (reluareDupa(r, licId, reluare)).
   const [extrag, setExtrag] = useState(null)
+  const [reluare, setReluare] = useState(null)   // { licId, deLa } după o rulare neterminată / întreruptă
   const extrage = async () => {
     if (!licId || extrag) return
-    if (!window.confirm('Extrag cantitățile din documentația licitației cu AI (cost de ordinul centimilor)? Rândurile existente nu se șterg.')) return
-    let deLa = 0, pas = 0, scrise = 0
+    const deLa = reluare?.licId === licId ? reluare.deLa : 0
+    const intrebare = deLa
+      ? `Continui extragerea cantităților de la felia ${deLa + 1} (rularea anterioară s-a oprit acolo)? Costă (model AI).`
+      : 'Extrag cantitățile din documentația licitației cu AI (cost de ordinul centimilor pe felie)? Rândurile existente nu se șterg.'
+    if (!window.confirm(intrebare)) return
+    let feliaCurenta = deLa
     try {
-      while (pas < 40) {
-        pas++; setExtrag(`felia ${deLa + 1}…`)
-        const { data, error } = await supabase.functions.invoke('ofertare-cantitati-extrage', { body: { licitatie_id: licId, de_la: deLa } })
-        if (error || data?.error) { showToast('Extragere: ' + (data?.error || error.message), 'err'); break }
-        scrise += data?.scrise || 0
-        if (!data?.continua) break
-        deLa = data?.urmatorul ?? deLa + 1
-      }
-      showToast(`Extragere terminată: ${scrise} rânduri noi`, 'ok')
+      const r = await ruleazaExtragere(
+        body => supabase.functions.invoke('ofertare-cantitati-extrage', { body }),
+        licId, { deLa, onPas: i => { feliaCurenta = i; setExtrag(`felia ${i + 1}…`) } })
+      setReluare(reluareDupa(r, licId, reluare))
+      const m = mesajExtragere(r)
+      showToast(m.text, m.tip)
+    } catch (e) {
+      // excepție neașteptată (nu {error} de la invoke): păstrăm punctul de reluare dacă trecuserăm de prima felie
+      setReluare(feliaCurenta > 0 ? { licId, deLa: feliaCurenta } : null)
+      showToast('Extragere oprită: ' + (e?.message || e), 'err')
     } finally { setExtrag(null); await load() }
   }
 
@@ -193,7 +205,7 @@ export default function CantitatiPanel({ licitatii, profile, showToast, initialL
           </div>
           <div style={{ display:'flex', gap:8 }}>
             <button style={{ ...S.btnP, padding:'5px 12px', fontSize:12, opacity: extrag ? 0.6 : 1 }} disabled={!!extrag} onClick={extrage}
-              title="Citește lista de cantități / caietele deja importate și scrie pozițiile (F3 pe obiecte, cu cod articol)">{extrag ? '⏳ ' + extrag : '🤖 Extrage din documentație'}</button>
+              title="Citește lista de cantități / caietele deja importate și scrie pozițiile (F3 pe obiecte, cu cod articol)">{extrag ? '⏳ ' + extrag : reluare?.licId === licId ? `🤖 Continuă extragerea (felia ${reluare.deLa + 1})` : '🤖 Extrage din documentație'}</button>
             <button style={{ ...S.btnS, padding:'5px 12px', fontSize:12 }} onClick={addC}>＋ rând</button>
           </div>
         </div>

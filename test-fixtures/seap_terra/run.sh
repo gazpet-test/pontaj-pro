@@ -21,5 +21,5 @@ if command -v rar >/dev/null; then head -c 400000 /dev/urandom > "$D/z/mare.bin"
 mkdir -p "$D/w"
 LUCRU="$D/w" SEVENZIP=7z sh worker/ofertare/extractor/extractor.sh >/dev/null 2>&1 & EXT=$!
 trap 'kill $EXT 2>/dev/null; rm -rf "$D"' EXIT
-deno run --allow-read --allow-write="$D" --allow-env --allow-run=7z test-fixtures/seap_terra/seap_test.ts "$D"
+deno run --no-lock --allow-read --allow-write="$D" --allow-env --allow-run=7z test-fixtures/seap_terra/seap_test.ts "$D"   # --no-lock: să nu rescrie deno.lock
 bash test-fixtures/seap_terra/extractor_test.sh
