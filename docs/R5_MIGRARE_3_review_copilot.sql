@@ -152,28 +152,26 @@ BEGIN
     INTO v_conflicte FROM public.v_ofertare_transfer_conflicte t WHERE t.licitatie_id = p_licitatie_id AND (t.deschis OR t.in_curs);
   SELECT coalesce(jsonb_agg(jsonb_build_object('id',d.id,'nume',d.nume_original,'plansa',d.analiza->'plansa',
       'eroare',d.eroare,'fisier_path',d.fisier_path,'marime',d.size_bytes,
-      'sha256',CASE WHEN cardinality(h.hashuri)=1 AND m.ultim_eligibil IS DISTINCT FROM false THEN h.hashuri[1] END,
-      'hashuri',to_jsonb(h.hashuri),'manifest_ultim',m.ultim,
+      'sha256',CASE WHEN cardinality(h.hashuri)=1 AND h.hashuri[1]=ANY(m.eligibile) THEN h.hashuri[1] END,
+      'hashuri',to_jsonb(h.hashuri),'manifest',m.randuri,
       'fisier_sha256',to_jsonb(d)->'fisier_sha256','integritate',d.analiza->'integritate',
-      'identitate',CASE WHEN cardinality(h.hashuri)>1 OR m.ultim_eligibil=false THEN 'contradictorie'
-        WHEN cardinality(h.hashuri)=0 THEN 'limitata' ELSE 'verificata' END,
-      'identitate_incompleta',cardinality(h.hashuri)=0 AND m.ultim_eligibil IS DISTINCT FROM false) ORDER BY d.id),'[]'::jsonb) INTO v_doc
+      'identitate',CASE WHEN cardinality(h.hashuri)>1 THEN 'contradictorie'
+        WHEN cardinality(h.hashuri)=1 AND h.hashuri[1]=ANY(m.eligibile) THEN 'verificata' ELSE 'limitata' END,
+      'identitate_incompleta',cardinality(h.hashuri)=0 OR
+        (cardinality(h.hashuri)=1 AND NOT (h.hashuri[1]=ANY(m.eligibile)))) ORDER BY d.id),'[]'::jsonb) INTO v_doc
     FROM public.ofertare_documente_atribuire d
-    -- F04 2c: ultimul rând după id, NU ultimul eligibil/verificat_la.
-    -- Un rând nou neeligibil nu poate fi ascuns de un hash vechi sau de cel din analiză.
+    -- F04 2d: manifestul este mutabil; toate rândurile aceleiași licitații intră în amprentă.
+    -- Contradicțiile includ și hashurile neeligibile cu mărime concordantă.
     LEFT JOIN LATERAL (
-      SELECT array_agg(DISTINCT lower(s.sha256)) FILTER (WHERE s.eligibil) hashuri,
-        (array_agg(s.eligibil ORDER BY s.id DESC))[1] ultim_eligibil,
-        (jsonb_agg(jsonb_build_object('licitatie_id',s.licitatie_id,'marime',s.marime,
-          'stare',s.stare,'sha256',lower(s.sha256),'eligibil',s.eligibil) ORDER BY s.id DESC))->0 ultim
-      FROM (
-        SELECT m.*,coalesce(m.stare='deja_in_platforma' AND m.licitatie_id=d.licitatie_id
-          AND m.marime=d.size_bytes AND m.sha256 ~* '^[0-9a-f]{64}$',false) eligibil
-        FROM public.ofertare_seap_manifest m WHERE m.document_id=d.id
-      ) s
+      SELECT array_agg(DISTINCT lower(s.sha256)) FILTER (WHERE s.marime=d.size_bytes) hashuri,
+        coalesce(array_agg(DISTINCT lower(s.sha256)) FILTER (WHERE s.stare='deja_in_platforma'
+          AND s.marime=d.size_bytes AND s.sha256 ~* '^[0-9a-f]{64}$'),ARRAY[]::text[]) eligibile,
+        coalesce(jsonb_agg(jsonb_build_object('id',s.id,'stare',s.stare,
+          'sha256',lower(s.sha256),'marime',s.marime) ORDER BY s.id),'[]'::jsonb) randuri
+      FROM public.ofertare_seap_manifest s WHERE s.document_id=d.id AND s.licitatie_id=d.licitatie_id
     ) m ON true
     LEFT JOIN LATERAL (
-      -- Toate hashurile valide, inclusiv toate manifestele eligibile; ordine canonică.
+      -- Toate hashurile valide, indiferent de starea manifestului; ordine canonică.
       SELECT coalesce(array_agg(DISTINCT lower(x.hash) ORDER BY lower(x.hash)),ARRAY[]::text[]) hashuri
       FROM unnest(ARRAY[to_jsonb(d)->>'sha256',to_jsonb(d)->>'fisier_sha256',
         d.analiza#>>'{integritate,sha256}',d.analiza#>>'{integritate,fisier_sha256}']
@@ -192,7 +190,7 @@ BEGIN
     WHERE x->'unitate'->>'tip' = 'alta' AND NOT (x->>'total')::boolean GROUP BY 1
   ) a;
   RETURN jsonb_build_object('v',2,'evaluare','r9b','mod','corespondenta',
-    'amprenta',md5(jsonb_build_array('r5_f04_v3',v_randuri,v_conflicte,v_doc)::text),'randuri',v_randuri,
+    'amprenta',md5(jsonb_build_array('r5_f04_v4',v_randuri,v_conflicte,v_doc)::text),'randuri',v_randuri,
     'identitate_contradictorie',EXISTS (SELECT 1 FROM jsonb_array_elements(v_doc) x WHERE x->>'identitate'='contradictorie'),
     'identitate_incompleta',EXISTS (SELECT 1 FROM jsonb_array_elements(v_doc) x WHERE (x->>'identitate_incompleta')::boolean),
     'documente',v_doc,'n_f3',v_n,'n_de_verificat',v_nev+v_um,'de_verificat',jsonb_build_object('nevalidate',v_nev,'unitate_de_verificat',v_um),

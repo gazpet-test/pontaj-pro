@@ -308,3 +308,57 @@ Verificări:
 - PostgreSQL și PostgREST nu au fost executate, conform sarcinii; Claude rulează:
   `PGURI=postgres://postgres@localhost:5432/r9b_test_review_f node scripts/pg/test_r5_review_f.mjs`.
   Scriptul recreează exclusiv baza locală de test. Nu am rulat build, deploy sau migrări în producție.
+
+## Runda 2d
+
+Sarcina `JAK_F04D.md`: corecție locală pentru UPDATE pe un manifest vechi, ascuns anterior de
+ultimul ID și de filtrarea hashurilor după eligibilitate. Regulile de mai jos înlocuiesc regulile
+de selecție F04 din runda 2c. F02 DELETE și porțile pentru contradicții rămân neschimbate.
+
+- `ofertare_f3_baza` include în fiecare document lista `manifest` cu **toate** rândurile pentru
+  acel `document_id` și aceeași licitație, ordonate după ID: `{id, stare, sha256, marime}`.
+  SHA-256 este normalizat lowercase. Nu mai există `manifest_ultim` sau selecție după `id DESC`.
+  Modificarea câmpurilor urmărite ale oricărui rând schimbă amprenta, inclusiv pe rânduri neeligibile.
+  Inserarea unui duplicat identic schimbă și ea amprenta, deoarece ID-ul intră în listă.
+  Timestampurile rămân în afara amprentei; schimbarea exclusiv a literelor mari/mici din hash
+  nu schimbă hashul normalizat. Formula este `r5_f04_v4`; bazele anterioare cer reconfirmare.
+- Setul de contradicție reunește toate hashurile valide (64 hex) din cele patru câmpuri ale
+  documentului/analizei și din toate manifestele cu `marime=size_bytes`, **indiferent de stare**.
+  Cel puțin două hashuri distincte înseamnă `contradictorie`, cu exportul și excepția blocate.
+  Un manifest din altă licitație nu intră nici în listă, nici în setul de hashuri.
+- `verificata` cere exact un hash distinct și cel puțin un manifest eligibil care îl confirmă:
+  `deja_in_platforma`, aceeași mărime și același hash. Fără hash sau fără manifest eligibil →
+  `limitata`, inclusiv dacă singurul manifest este `ignorat` sau hashul există doar în analiză.
+  Hashul singular `sha256` este NULL dacă identitatea nu este verificată; lista `hashuri` păstrează
+  dovezile disponibile. Fluxul B existent cere excepția umană și reconfirmarea pe baza curentă.
+- Helperul `src/ofertareClarificariBaza.js` nu necesită modificări: consumă stările serverului,
+  iar stările și porțile lor nu se schimbă. Rollback-ul restaurează deja aceeași funcție și rămâne
+  neschimbat. COMMIT rămâne ultima instrucțiune, atât în migrare, cât și în rollback.
+
+Probe PostgreSQL scrise în `scripts/pg/test_r5_review_f.mjs`, **nerulate**, pentru Claude:
+
+- **a:** două rânduri eligibile A, reconfirmare, UPDATE pe cel mai vechi la `ignorat+B`:
+  amprentă schimbată, ultimul rând neschimbat, contradicție și refuzul exportului/excepției/trimiterii,
+  inclusiv după o nouă reconfirmare; refuzul excepției nu scrie audit.
+- **b:** UPDATE doar starea rândului vechi la `ignorat`, hash A păstrat: identitate verificată,
+  dar ciorna `schimbata` și export blocat până la reconfirmare; apoi `ok` și export permis.
+- **c:** singurul manifest devine `ignorat`, hash A păstrat: identitate limitată; reconfirmarea
+  singură nu permite export/trimitere; excepția B pe tokenul curent permite `ok_identitate_limitata`.
+- Probele F04 existente sunt păstrate. Aserțiunile care impuneau politica înlocuită în 2d au fost
+  adaptate: ultimul rând neeligibil nu anulează o dovadă eligibilă cu hash unic; lipsa unei dovezi
+  eligibile înseamnă limitare; duplicatul cu ID nou schimbă amprenta. Probele document-vs-manifest,
+  hashuri istorice contradictorii, lot mixt, audit și `luat_act` rămân.
+
+Verificări executate:
+
+- `npx --no-install vitest run`: oprit înaintea testelor, `esbuild: spawn EPERM`.
+- `node .jak/review-f2-vitest-native.mjs`: **805/807 teste trecute, 27/28 fișiere trecute**,
+  Vitest real 2.1.9, prin runnerul existent cu worker threads, fără esbuild.
+  Cele 22 fișiere Ofertare/Grafic însumează **734/734 teste trecute**.
+  Cele două eșecuri sunt în `src/service.test.js:39` și `:80`: 89 în loc de 90 zile și
+  urgență 0,9666667 în loc de 1. Acestea țin de calculul datelor din zona Service, neatinsă aici;
+  rezultatul general al suitei este eșuat. Runnerul nu validează transformările React/Vite.
+- `node --check` a trecut pentru ambele scripturi PG. Nicio probă PostgreSQL/PostgREST nu a fost
+  executată; nu afirmăm că probele SQL sunt verzi până nu le rulează Claude:
+  `PGURI=postgres://postgres@localhost:5432/r9b_test_review_f node scripts/pg/test_r5_review_f.mjs`.
+- Fără git, build, deploy sau aplicare SQL în producție.

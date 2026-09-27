@@ -210,10 +210,12 @@ teste.push(['F04 — identitatea fișierului schimbă amprenta; lipsa hashului e
     assert.notEqual(nou.amprenta, b.amprenta)
     b = nou
   }
-  assert.equal(b.identitate_incompleta, false)
+  assert.equal(b.identitate_incompleta, true, 'un hash în analiză nu substituie manifestul eligibil')
+  await observer.command(`INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare)
+    VALUES (${d.lic},${d.lic},'refacut','v2.pdf',101,repeat('b',64),'deja_in_platforma');`)
   await approved(observer, a, d)
   await observer.command(`UPDATE ofertare_documente_atribuire SET analiza=jsonb_set(analiza,'{integritate,sha256}','"${'c'.repeat(64)}"') WHERE id=${d.lic};`)
-  assert.equal((await state(observer,d)).stare, 'schimbata')
+  assert.equal((await state(observer,d)).stare, 'identitate_contradictorie')
 }])
 
 teste.push(['F04 — aplicare/rollback fără date modificate; aprobarea veche cere reverificare', async ({ observer, a }) => {
@@ -420,10 +422,14 @@ teste.push(['F04 B — manifest eligibil după document_id; lot mixt și mărime
   await approved(observer, a, d)
   await a.command(`UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${d.id};`)
   assert.equal((await a.value(`ofertare_clarificari_export(${d.lic})`)).length, 1)
-  await observer.command(`UPDATE ofertare_seap_manifest SET verificat_la='2020-01-01' WHERE document_id=${d.lic};
-    INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare,verificat_la)
+  await observer.command(`UPDATE ofertare_seap_manifest SET verificat_la='2020-01-01' WHERE document_id=${d.lic};`)
+  assert.equal((await baza()).amprenta, b.amprenta, 'data verificării nu schimbă identitatea')
+  await observer.command(`INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare,verificat_la)
       VALUES (${d.lic},${d.lic},'nou','plansa.pdf',123,repeat('a',64),'deja_in_platforma','2021-01-01');`)
-  assert.equal((await baza()).amprenta, b.amprenta, 'duplicatul identic și data verificării nu schimbă identitatea')
+  assert.notEqual((await baza()).amprenta, b.amprenta, 'fiecare rând, inclusiv duplicatul identic, intră în amprentă')
+  assert.equal((await baza()).documente[0].identitate, 'verificata')
+  await reconfirmaF04(a, d)
+  b = await baza()
   await observer.command(`UPDATE ofertare_seap_manifest SET sha256=repeat('b',64) WHERE document_id=${d.lic};`)
   const nou = await baza()
   assert.equal(nou.documente[0].sha256, 'b'.repeat(64))
@@ -443,9 +449,9 @@ teste.push(['F04 B — manifest eligibil după document_id; lot mixt și mărime
   await refuza(a, `SELECT ofertare_clarificari_export(${d.lic})`, 'Identitate limitată')
   await observer.command(`UPDATE ofertare_documente_atribuire SET size_bytes=124 WHERE id=${d.lic};`)
   b = await baza()
-  assert.equal(b.documente.find(x => x.id === d.lic).identitate, 'contradictorie')
+  assert.equal(b.documente.find(x => x.id === d.lic).identitate, 'limitata')
   assert.equal(b.documente.find(x => x.id === id).identitate, 'limitata')
-  assert.equal((await state(a, d)).stare, 'identitate_contradictorie')
+  assert.equal((await state(a, d)).stare, 'identitate_limitata')
 }])
 
 teste.push(['F04 B — regenerarea înainte de reconfirmare păstrează auditul; excepția rămâne per ciornă', async ({ observer, a }) => {
@@ -519,31 +525,38 @@ teste.push(['F04 2c — eroare_urcare/ignorat/urcat nu dovedesc obiectul, nici c
       if (cuHash) await observer.command(`UPDATE ofertare_documente_atribuire
         SET analiza=analiza||jsonb_build_object('integritate',jsonb_build_object('sha256',repeat('a',64))) WHERE id=${d.lic};`)
       const baza = await a.value(`ofertare_f3_baza(${d.lic})`)
-      assert.equal(baza.documente[0].identitate, 'contradictorie')
+      assert.equal(baza.documente[0].identitate, 'limitata')
       assert.equal(baza.documente[0].sha256, null)
-      assert.deepEqual(baza.documente[0].hashuri, cuHash ? ['a'.repeat(64)] : [])
+      assert.deepEqual(baza.documente[0].hashuri, ['a'.repeat(64)])
       const st = await state(a, d)
-      assert.equal(st.stare, 'identitate_contradictorie')
-      assert.match((await exceptieF04(a, d, st.amprenta_curenta)).error, /nu se poate accepta prin excepție/)
+      assert.equal(st.stare, 'identitate_limitata')
     }
   }
 }])
 
-teste.push(['F04 2c — ultimul id neeligibil nu permite fallback la manifestul vechi, indiferent de verificat_la', async ({ observer, a }) => {
+teste.push(['F04 2d — un rând neeligibil nu anulează dovada eligibilă; altă licitație nu intră în amprentă', async ({ observer, a }) => {
   for (const caz of ['eroare_urcare', 'ignorat', 'marime', 'licitatie']) {
     const d = await draft(observer)
     const altaLic = caz === 'licitatie' ? await licitatie(observer) : d.lic
+    await approved(observer, a, d)
     const veche = await a.value(`ofertare_f3_baza(${d.lic})`)
     await observer.command(`UPDATE ofertare_seap_manifest SET verificat_la='2099-01-01' WHERE document_id=${d.lic};
       INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare,verificat_la)
       VALUES (${altaLic},${d.lic},'ultimul','plansa.pdf',${caz === 'marime' ? 999 : 123},repeat('a',64),
         '${['eroare_urcare', 'ignorat'].includes(caz) ? caz : 'deja_in_platforma'}','2000-01-01');`)
     const noua = await a.value(`ofertare_f3_baza(${d.lic})`)
-    assert.equal(noua.documente[0].identitate, 'contradictorie')
-    assert.equal(noua.documente[0].manifest_ultim.eligibil, false)
+    assert.equal(noua.documente[0].identitate, 'verificata')
+    assert.equal(noua.documente[0].manifest.length, caz === 'licitatie' ? 1 : 2)
     assert.deepEqual(noua.documente[0].hashuri, ['a'.repeat(64)])
-    assert.notEqual(noua.amprenta, veche.amprenta)
-    assert.equal((await state(a, d)).stare, 'identitate_contradictorie')
+    if (caz === 'licitatie') {
+      assert.equal(noua.amprenta, veche.amprenta)
+      assert.equal((await state(a, d)).stare, 'ok')
+    } else {
+      assert.notEqual(noua.amprenta, veche.amprenta)
+      assert.equal((await state(a, d)).stare, 'schimbata')
+      await reconfirmaF04(a, d)
+      assert.equal((await state(a, d)).stare, 'ok')
+    }
   }
 }])
 
@@ -648,6 +661,86 @@ teste.push(['F04 2c — contradicția domină lotul mixt, o excepție anterioar�
     assert.equal(st.detalii.curent.identitate_incompleta, true)
     assert.equal(st.detalii.curent.identitate_contradictorie, true)
   }
+}])
+
+teste.push(['F04 2d a — UPDATE pe manifestul vechi A → ignorat+B blochează exportul și excepția', async ({ observer, a }) => {
+  const d = await draft(observer)
+  // Echivalentul #10 și #11: primul rând este creat de draft, al doilea are id mai mare.
+  await observer.command(`INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare)
+    VALUES (${d.lic},${d.lic},'al_doilea','plansa.pdf',123,repeat('A',64),'deja_in_platforma');`)
+  await approved(observer, a, d)
+  await a.command(`UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${d.id};`)
+  assert.equal((await a.value(`ofertare_clarificari_export(${d.lic})`)).length, 1)
+  const baza = () => a.value(`ofertare_f3_baza(${d.lic})`)
+  const inainte = await baza()
+  const [vechi, ultim] = inainte.documente[0].manifest
+  assert.ok(vechi.id < ultim.id)
+  assert.equal(ultim.sha256, 'a'.repeat(64))
+  await observer.command(`UPDATE ofertare_seap_manifest SET stare='ignorat',sha256=repeat('B',64) WHERE id=${vechi.id};`)
+  const dupa = await baza()
+  assert.notEqual(dupa.amprenta, inainte.amprenta)
+  assert.deepEqual(dupa.documente[0].manifest, [{ ...vechi, stare: 'ignorat', sha256: 'b'.repeat(64) }, ultim])
+  assert.deepEqual(dupa.documente[0].hashuri, ['a'.repeat(64), 'b'.repeat(64)])
+  assert.equal(dupa.documente[0].identitate, 'contradictorie')
+  assert.equal(dupa.documente[0].sha256, null)
+  for (const reconfirmat of [false, true]) {
+    if (reconfirmat) await reconfirmaF04(a, d)
+    const st = await state(a, d)
+    assert.equal(st.stare, 'identitate_contradictorie')
+    await refuza(a, `SELECT ofertare_clarificari_export(${d.lic})`, 'Export blocat: Identitate contradictorie')
+    assert.match((await exceptieF04(a, d, st.amprenta_curenta)).error, /nu se poate accepta prin excepție/)
+    assert.deepEqual((await state(a, d)).baza_generare, st.baza_generare)
+    await refuza(a, `UPDATE ofertare_clarificari SET status='trimisa' WHERE id=${d.id}`, 'Identitate contradictorie')
+  }
+}])
+
+teste.push(['F04 2d b — UPDATE doar stare pe rândul vechi schimbă amprenta; reconfirmarea restabilește ok', async ({ observer, a }) => {
+  const d = await draft(observer)
+  await observer.command(`INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare)
+    VALUES (${d.lic},${d.lic},'al_doilea','plansa.pdf',123,repeat('a',64),'deja_in_platforma');`)
+  await approved(observer, a, d)
+  await a.command(`UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${d.id};`)
+  const baza = () => a.value(`ofertare_f3_baza(${d.lic})`)
+  const inainte = await baza()
+  const [vechi, ultim] = inainte.documente[0].manifest
+  assert.ok(vechi.id < ultim.id)
+  assert.deepEqual(vechi, { id: vechi.id, stare: 'deja_in_platforma', sha256: 'a'.repeat(64), marime: 123 })
+  await observer.command(`UPDATE ofertare_seap_manifest SET stare='ignorat' WHERE id=${vechi.id};`)
+  const dupa = await baza()
+  assert.notEqual(dupa.amprenta, inainte.amprenta)
+  assert.deepEqual(dupa.documente[0].manifest, [{ ...vechi, stare: 'ignorat' }, ultim])
+  assert.deepEqual(dupa.documente[0].hashuri, ['a'.repeat(64)])
+  assert.equal(dupa.documente[0].identitate, 'verificata')
+  assert.equal((await state(a, d)).stare, 'schimbata')
+  await refuza(a, `SELECT ofertare_clarificari_export(${d.lic})`, 'Export blocat:.*baza s-a schimbat')
+  await reconfirmaF04(a, d)
+  assert.equal((await state(a, d)).stare, 'ok')
+  assert.equal((await a.value(`ofertare_clarificari_export(${d.lic})`)).length, 1)
+}])
+
+teste.push(['F04 2d c — singurul manifest devine ignorat: hash unic, identitate limitată, excepție B obligatorie', async ({ observer, a }) => {
+  const d = await draft(observer)
+  await approved(observer, a, d)
+  await a.command(`UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${d.id};`)
+  const inainte = await a.value(`ofertare_f3_baza(${d.lic})`)
+  await observer.command(`UPDATE ofertare_seap_manifest SET stare='ignorat' WHERE document_id=${d.lic};`)
+  const dupa = await a.value(`ofertare_f3_baza(${d.lic})`)
+  assert.notEqual(dupa.amprenta, inainte.amprenta)
+  assert.deepEqual(dupa.documente[0].hashuri, ['a'.repeat(64)])
+  assert.equal(dupa.documente[0].sha256, null)
+  assert.equal(dupa.documente[0].identitate, 'limitata')
+  assert.equal(dupa.identitate_incompleta, true)
+  assert.equal(dupa.identitate_contradictorie, false)
+  for (const reconfirmat of [false, true]) {
+    if (reconfirmat) await reconfirmaF04(a, d)
+    assert.equal((await state(a, d)).stare, 'identitate_limitata')
+    await refuza(a, `SELECT ofertare_clarificari_export(${d.lic})`, 'Export blocat: Identitate limitată')
+    await refuza(a, `UPDATE ofertare_clarificari SET status='trimisa' WHERE id=${d.id}`, 'Identitate limitată')
+  }
+  const st = await state(a, d)
+  assert.equal((await exceptieF04(a, d, st.amprenta_curenta)).ok, true)
+  assert.equal((await state(a, d)).stare, 'ok_identitate_limitata')
+  assert.equal((await a.value(`ofertare_clarificari_export(${d.lic})`)).length, 1)
 }])
 
 await runTests(teste, { reviewF: true })
