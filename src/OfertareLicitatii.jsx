@@ -734,6 +734,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // R5 sarcina 2 (a): conflictele transferului planșă → cantități, per document (v_ofertare_transfer_conflicte). Eroare / view lipsă
   // (codul publicat înainte de migrarea 2) => { eroare } — insigna spune „nu putem verifica”, nu „fără conflicte”.
   const [conflicteTr, setConflicteTr] = useState({ peDoc: new Map(), eroare: null })
+  // R4 #142 (27.09.2026): coada de citire a planșelor pe NAS. `null` = coada nu există încă (migrare neaplicată) sau
+  // workerul nu dă semn de viață de >10 min — atunci rămâne doar bucla din browser (failover, ca la celelalte cozi).
+  const [coadaPlanse, setCoadaPlanse] = useState(null)   // { peDoc: Map(doc_id → ultimul job), workerViu: bool }
   const load = async () => {
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
@@ -749,8 +752,27 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     if (error) { setEroareDocs(error.message); setWarn('Nu pot incarca documentele: ' + error.message); setDocs([]) }
     else { setEroareDocs(null); setDocs(data || []) }
     setCoada(c || null)
+    const [rJ, rHb] = await Promise.all([
+      supabase.from('ofertare_plansa_coada').select('id, doc_id, mod, stare, runde, cost_usd, eroare, motiv_anulare, cerut_la, terminat_la')
+        .eq('licitatie_id', licitatie.id).order('cerut_la', { ascending: false }).limit(200).then(r => r, e => ({ data: null, error: e })),
+      supabase.from('worker_heartbeat').select('ultimul').order('ultimul', { ascending: false }).limit(1).then(r => r, e => ({ data: null, error: e })),
+    ])
+    if (rJ?.error) setCoadaPlanse(null)
+    else {
+      const peDoc = new Map()
+      for (const j of rJ?.data || []) if (!peDoc.has(j.doc_id)) peDoc.set(j.doc_id, j)
+      const ult = rHb?.data?.[0]?.ultimul
+      setCoadaPlanse({ peDoc, workerViu: !!ult && Date.now() - new Date(ult).getTime() < 10 * 60_000 })
+    }
   }
   useEffect(() => { load() }, [licitatie.id])
+  // un job de planșă în coadă / în lucru pe NAS: reîmprospătăm la 20 s
+  const planseInCoada = [...(coadaPlanse?.peDoc?.values() || [])].some(j => ['asteapta', 'lucru'].includes(j.stare))
+  useEffect(() => {
+    if (!planseInCoada) return
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
+  }, [planseInCoada, licitatie.id])
   // Cât timp workerul de pe server citește, reîmprospătăm lista la 20s ca să se vadă progresul
   useEffect(() => {
     if (!coada?.activ) return
@@ -1114,6 +1136,28 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       if (error || data?.error) { setWarn(`Reevaluarea nu s-a făcut: ${await mesajInvoke(error, data)}`); return }
       setWarn(`✅ Reevaluat fără AI: ${data.sumar?.tronsoane_gasite ?? '?'} tronsoane; transfer: ${data.cantitati?.adaugate ?? 0} adăugate, ${data.cantitati?.actualizate ?? 0} actualizate.`)
     } finally { setPlansaBusy(null); await load(); onChanged?.() }
+  }
+  // R4 #142: tăierea (Vercel, secunde) + înscrierea în coada NAS; citirea o face workerul — tabul se poate închide.
+  // Poarta pe cheltuială (owner/responsabil) e verificată ÎN SQL, de ofertare_plansa_coada_inscrie.
+  const plansaInCoadaNAS = async (d) => {
+    setWarn(null); setPlansaBusy(`${d.nume_original}: pregătesc feliile pentru NAS...`)
+    try {
+      if (!d.analiza?.plansa?.cale_felii) {
+        const { data: sesiune } = await supabase.auth.getSession()
+        const r = await fetch('/api/plansa-felii', { method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sesiune?.session?.access_token || ''}` },
+          body: JSON.stringify({ doc_id: d.id }) })
+        const felii = await r.json().catch(() => ({}))
+        if (!r.ok) { setWarn(`Nu am putut pregăti planșa: ${felii.error || `HTTP ${r.status}`}`); return }
+        if (felii.citibila === false) { setWarn(`⚠️ ${felii.motiv}`); return }
+      }
+      const mod = d.analiza?.citire_ai && !d.analiza.citire_ai.gata ? 'continua' : 'citeste'
+      const { data, error } = await supabase.rpc('ofertare_plansa_coada_inscrie', { p_doc_id: d.id, p_mod: mod })
+      if (error) { setWarn(`Nu am putut pune planșa în coadă: ${error.message}`); return }
+      if (data?.eroare) { setWarn(`Nu am putut pune planșa în coadă: ${data.eroare}`); return }
+      setWarn(data?.existent ? `🗂 Planșa era deja în coada NAS (job #${data.id}, ${data.mod}) — nu s-a dublat nimic.`
+        : `🗂 Planșa e în coada NAS (job #${data.id}) — o citește serverul; poți închide tabul. Primești notificare la final.`)
+    } finally { setPlansaBusy(null); await load() }
   }
   const citestePlansa = async (d, eticheta = '', fin = false) => {
     let ok = false
@@ -1506,6 +1550,21 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     </button>
                     )
                   )}
+                  {d.tip === 'plansa' && coadaPlanse && (() => {
+                    const j = coadaPlanse.peDoc.get(d.id)
+                    const activ = j && ['asteapta', 'lucru'].includes(j.stare)
+                    const et = { asteapta: '⏳ în coadă NAS', lucru: `⚙️ se citește pe NAS (runda ${j?.runde || 0})`, gata: '✅ citit pe NAS',
+                      partial: '⚠ citit parțial pe NAS', eroare: '❌ eroare pe NAS', anulat: '⊘ anulat pe NAS', oprit_plafon: '💲 oprit la plafon' }
+                    return <>
+                      {j && <span title={j.motiv_anulare || j.eroare || `cerut ${String(j.cerut_la).slice(0, 16).replace('T', ' ')} · ${Number(j.cost_usd || 0).toFixed(2)} USD`}
+                        style={{ fontSize:11, color: j.stare === 'gata' ? G.green : ['eroare','anulat','oprit_plafon'].includes(j.stare) ? G.red : G.orange }}>{et[j.stare] || j.stare}</span>}
+                      {coadaPlanse.workerViu && !activ && (
+                        <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
+                          title="Citirea rulează pe serverul NAS, nu în browser — poți închide tabul. Aceeași poartă pe cost (owner/responsabil)."
+                          onClick={() => plansaInCoadaNAS(d)}>🗂 pe NAS</button>
+                      )}
+                    </>
+                  })()}
                 </div>
               )
             })}

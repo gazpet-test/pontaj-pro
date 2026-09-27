@@ -2011,6 +2011,14 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (!doc) return json({ error: 'document inexistent' }, 404);
 
   const plansa = doc.analiza?.plansa;
+  // #494 r5: aceeași poartă pentru citire și doar_lipire; câmpurile absente nu se compară.
+  const asteptat = body?.asteptat ?? {};
+  const prezent = (camp: string) => Object.prototype.hasOwnProperty.call(asteptat, camp);
+  if ((prezent('licitatie_id') && Number(asteptat.licitatie_id) !== Number(doc.licitatie_id)) ||
+      (prezent('fisier_path') && asteptat.fisier_path !== doc.fisier_path) ||
+      (prezent('taiat_la') && (asteptat.taiat_la ?? null) !== (plansa?.taiat_la ?? null)) ||
+      (prezent('cale_felii') && (asteptat.cale_felii ?? null) !== (plansa?.cale_felii ?? null)))
+    return json({ error: 'Documentul nu mai corespunde jobului — anulat', cost_usd: 0 }, 409);
   if (!plansa?.cale_felii) return json({ error: 'plansa nu e taiata in felii — ruleaza intai /api/plansa-felii' }, 400);
   if (plansa.citibila === false) return json({ error: 'plansa a fost marcata drept necitibila', motiv: plansa.motiv }, 400);
 
