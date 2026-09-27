@@ -32,9 +32,12 @@ export function corpRunda(job: any, doc: any, o: { deLa?: number | null; sari?: 
 }
 
 // Pasul 2: proveniența înghețată la înscriere trebuie să corespundă documentului de acum.
-export function motivAnulare(job: any, doc: any): string | null {
+export function motivAnulare(job: any, doc: any, hashuri: string[] = []): string | null {
   if (!doc) return 'documentul nu mai există'
   if (job.licitatie_id != null && Number(doc.licitatie_id) !== Number(job.licitatie_id)) return 'documentul a fost mutat pe altă licitație după înscriere'
+  if (job.fisier_path && doc.fisier_path !== job.fisier_path) return 'fișierul s-a schimbat după înscriere'
+  const valide = hashuri.filter(h => typeof h === 'string' && /^[a-f0-9]{64}$/i.test(h))
+  if (job.doc_sha256 != null && valide.length && !valide.some(h => h.toLowerCase() === job.doc_sha256.toLowerCase())) return 'fișierul s-a schimbat după înscriere'
   const p = doc.analiza?.plansa || {}
   if ((p.taiat_la ?? null) !== (job.taiat_la ?? null)) return 'planșa a fost retăiată după înscriere — reînscrie'
   if ((p.cale_felii ?? null) !== (job.cale_felii ?? null)) return 'feliile planșei s-au schimbat după înscriere — reînscrie'
@@ -96,7 +99,6 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
 
   let cost = Number(job.cost_usd || 0), runde = Number(job.runde || 0)
   const jurnal: any[] = Array.isArray(job.jurnal) ? [...job.jurnal] : []
-  const plafon = job.plafon_usd != null ? Number(job.plafon_usd) : PLAFON_IMPLICIT_USD
   // UPDATE condiționat pe preluarea CURENTĂ (claim_token unic per claim, nu numele workerului): o execuție veche care revine
   // după ce jobul a fost preluat din nou (chiar de o instanță cu același nume) scrie 0 rânduri => se oprește fără alt apel AI.
   const scrie = async (patch: Record<string, unknown>): Promise<boolean> => {
@@ -107,7 +109,7 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
   }
   const incheie = async (st: string, extra: Record<string, unknown> = {}) => {
     const final = st !== 'asteapta'
-    const ok = await scrie({ stare: st, ...(final ? { terminat_la: new Date().toISOString() } : {}), cost_usd: cost, rezervat_usd: 0, runde, jurnal, ...extra })
+    const ok = await scrie({ stare: st, ...(final ? { terminat_la: new Date().toISOString() } : {}), runde, jurnal, ...extra })
     if (ok && job.cerut_de && st !== 'asteapta') {
       const titlu = st === 'gata' ? 'citirea planșei s-a terminat' : st === 'partial' ? 'planșa e citită parțial (zone căzute)'
         : st === 'oprit_plafon' ? 'citirea planșei s-a oprit la plafonul de cost' : `citirea planșei: ${st}`
@@ -121,121 +123,161 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
     return ok
   }
 
-  const citesteDoc = async () => (await supabase.from('ofertare_documente_atribuire')
-    .select('id, licitatie_id, analiza').eq('id', job.doc_id).maybeSingle()).data
+  let hashuri: string[] = []
+  const citesteDoc = async () => {
+    const { data, error } = await supabase.from('ofertare_documente_atribuire')
+      .select('id, licitatie_id, fisier_path, analiza').eq('id', job.doc_id).maybeSingle()
+    if (error) throw new Error(`documentul nu poate fi verificat: ${error.message}`)
+    hashuri = []
+    if (job.doc_sha256 != null) {
+      const { data: manifest, error: em } = await supabase.from('ofertare_seap_manifest')
+        .select('sha256').eq('document_id', job.doc_id).eq('stare', 'deja_in_platforma')
+      if (em) throw new Error(`identitatea nu poate fi verificată: ${em.message}`)
+      hashuri = (manifest ?? []).map((m: any) => m.sha256).filter((h: any) => typeof h === 'string' && /^[a-f0-9]{64}$/i.test(h))
+    }
+    if (!hashuri.length) jurnal.push({ la: new Date().toISOString(), identitate: 'neverificata' })
+    return data
+  }
 
-  // Buget ÎNAINTE de apel (D1): plafonul pe job și plafonul pe zi se verifică pe cost + rezervare; rezervarea se scrie în
-  // rând (rezervat_usd) ca să intre în suma zilei văzută de alte joburi, apoi se regularizează la costul real.
+  // Rezervarea și ambele plafoane se verifică atomic în SQL. Registrul este singura sursă pentru costul cozii.
+  let rezervareId: number | null = null
   const bugetOk = async (rezerva: number): Promise<string | null> => {
-    if (cost + rezerva > plafon) return `plafon job ${plafon} USD: ${cost.toFixed(2)} consumat + ${rezerva} rezervat pentru runda următoare`
-    const { data: zi, error } = await supabase.rpc('ofertare_plansa_cost_zi', { p_exclude_id: job.id })
-    if (error) return `plafonul pe zi nu se poate verifica (${error.message}) — nu pornesc apeluri AI`
-    const plafonZi = Number(d.plafonZiUsd ?? PLAFON_ZI_USD)
-    if (Number(zi || 0) + cost + rezerva > plafonZi) return `plafon pe zi ${plafonZi} USD: ${(Number(zi || 0) + cost).toFixed(2)} consumat azi + ${rezerva} rezervat`
-    if (!(await scrie({ rezervat_usd: rezerva, cost_usd: cost }))) return 'lease'
+    const { data, error } = await supabase.rpc('ofertare_plansa_rezerva', {
+      p_job_id: job.id, p_claim_token: job.claim_token, p_suma: rezerva, p_plafon_zi: d.plafonZiUsd ?? PLAFON_ZI_USD,
+    })
+    if (error) return `bugetul nu se poate rezerva (${error.message}) — nu pornesc apeluri AI`
+    if (data?.ok !== true || data.rezervare_id == null) return data?.motiv ?? 'răspuns invalid la rezervarea bugetului'
+    rezervareId = data.rezervare_id
+    cost += rezerva // afișare conservatoare și dacă regularizarea nu mai răspunde; coada o actualizează numai SQL-ul
     return null
+  }
+  const regularizeaza = async (raspuns: any): Promise<boolean> => {
+    const cert = typeof raspuns?.cost_usd === 'number' && Number.isFinite(raspuns.cost_usd) && raspuns.cost_usd >= 0
+    const { data, error } = await supabase.rpc('ofertare_plansa_regularizeaza', {
+      p_rezervare_id: rezervareId, p_claim_token: job.claim_token, p_cost: cert ? raspuns.cost_usd : null, p_cert: cert,
+    })
+    if (error || data?.ok !== true || typeof data.cost_usd !== 'number' || !Number.isFinite(data.cost_usd)) {
+      // Nu mai apelăm AI: rezervarea rămasă în registru continuă să blocheze suma și la retry.
+      log(`job ${job.id}: regularizare eșuată`, error?.message ?? data?.motiv ?? 'răspuns invalid')
+      return false
+    }
+    cost = data.cost_usd
+    return true
   }
   const opresteLaBuget = async (motiv: string) => {
     if (motiv === 'lease') { log(`job ${job.id}: lease pierdut — mă opresc`); return true }
-    await incheie('oprit_plafon', { eroare: motiv, rezervat_usd: 0 }); return true
+    await incheie('oprit_plafon', { eroare: motiv }); return true
   }
 
-  let doc = await citesteDoc()
-  const m0 = motivAnulare(job, doc)
-  if (m0) { await incheie('anulat', { motiv_anulare: m0 }); log(`job ${job.id}: anulat — ${m0}`); return true }
+  try {
+    let doc = await citesteDoc()
+    const m0 = motivAnulare(job, doc, hashuri)
+    if (m0) { await incheie('anulat', { motiv_anulare: m0 }); log(`job ${job.id}: anulat — ${m0}`); return true }
 
-  let deLa: number | null = null, sari: string[] = [], pauzeAltTab = 0, ultimSumar: any = null, lipire = 0, terminat = false
-  while (!oprire() && runde < MAX_RUNDE) {
-    // Identitatea sursei se reverifică înaintea FIECĂRUI apel (inclusiv după pauza 409): retăiere / mutare = anulat, zero AI.
-    const m = motivAnulare(job, doc)
-    if (m) { await incheie('anulat', { motiv_anulare: m, rezervat_usd: 0 }); return true }
-    const mb = await bugetOk(REZERVA_RUNDA_USD)
-    if (mb) return await opresteLaBuget(mb)
-    const body = corpRunda(job, doc, { deLa, sari })
-    stare(`doc ${job.doc_id} · runda ${runde + 1} · ${body.mod ?? 'de_la ' + body.de_la}`)
-    const t0 = Date.now()
-    let status = 0, raspuns: any = {}
-    try {
-      const req = new Request('http://worker/ofertare-plansa-citeste', {
-        method: 'POST', body: JSON.stringify(body),
-        headers: { Authorization: `Bearer ${d.depsHandler.SERVICE}`, 'Content-Type': 'application/json' },
-      })
-      const res = await d.handler(req, d.depsHandler)
-      status = res.status
-      raspuns = await res.json().catch(() => ({}))
-    } catch (e) { status = 599; raspuns = { error: 'excepție: ' + String((e as Error)?.message ?? e) } }
-    const ms = Date.now() - t0, c = Number(raspuns?.cost_usd || 0)
-    cost += c
-    const cls = clasifica(status, raspuns)
-    jurnal.push({ la: new Date().toISOString(), body, status, clasa: cls, citite_acum: raspuns?.citite_acum ?? 0,
-      in_lucru_alt_tab: raspuns?.in_lucru_alt_tab ?? raspuns?.in_lucru ?? undefined, cost_usd: c, ms,
-      eroare: raspuns?.error ? String(raspuns.error).slice(0, 300) : undefined })
+    let deLa: number | null = null, sari: string[] = [], pauzeAltTab = 0, ultimSumar: any = null, lipire = 0, terminat = false
+    while (!oprire() && runde < MAX_RUNDE) {
+      // Identitatea sursei se reverifică înaintea FIECĂRUI apel (inclusiv după pauza 409): retăiere / mutare = anulat, zero AI.
+      const m = motivAnulare(job, doc, hashuri)
+      if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
+      const mb = await bugetOk(REZERVA_RUNDA_USD)
+      if (mb) return await opresteLaBuget(mb)
+      const body = corpRunda(job, doc, { deLa, sari })
+      stare(`doc ${job.doc_id} · runda ${runde + 1} · ${body.mod ?? 'de_la ' + body.de_la}`)
+      const t0 = Date.now()
+      let status = 0, raspuns: any = {}
+      try {
+        const req = new Request('http://worker/ofertare-plansa-citeste', {
+          method: 'POST', body: JSON.stringify(body),
+          headers: { Authorization: `Bearer ${d.depsHandler.SERVICE}`, 'Content-Type': 'application/json' },
+        })
+        const res = await d.handler(req, d.depsHandler)
+        status = res.status
+        raspuns = await res.json().catch(() => ({}))
+      } catch (e) { status = 599; raspuns = { error: 'excepție: ' + String((e as Error)?.message ?? e) } }
+      const ms = Date.now() - t0
+      const cert = typeof raspuns?.cost_usd === 'number' && Number.isFinite(raspuns.cost_usd) && raspuns.cost_usd >= 0
+      const c = cert ? raspuns.cost_usd : REZERVA_RUNDA_USD
+      const cls = clasifica(status, raspuns)
+      jurnal.push({ la: new Date().toISOString(), body, status, clasa: cls, citite_acum: raspuns?.citite_acum ?? 0,
+        in_lucru_alt_tab: raspuns?.in_lucru_alt_tab ?? raspuns?.in_lucru ?? undefined, cost_usd: c, cost_cert: cert, ms,
+        eroare: raspuns?.error ? String(raspuns.error).slice(0, 300) : undefined })
+      if (!(await regularizeaza(raspuns))) {
+        await incheie('eroare', { eroare: 'regularizarea costului a eșuat — rezervarea rămâne în buget' }); return true
+      }
 
-    if (cls === 'alt_tab') {
-      pauzeAltTab++
-      if (!(await scrie({ lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString(), jurnal, cost_usd: cost, rezervat_usd: 0 }))) return true
-      if (pauzeAltTab > MAX_PAUZE_ALT_TAB) {
+      if (cls === 'alt_tab') {
+        pauzeAltTab++
+        if (!(await scrie({ lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString(), jurnal }))) return true
+        if (pauzeAltTab > MAX_PAUZE_ALT_TAB) {
+          await incheie('asteapta', { urmatoarea_la: new Date(Date.now() + backoffMin(job.incercari) * 60_000).toISOString(),
+            luat_de: null, lease_pana: null, eroare: 'altă rulare ține zonele de prea mult timp — reiau mai târziu' })
+          return true
+        }
+        await sleep(PAUZA_ALT_TAB_MS); doc = await citesteDoc(); continue
+      }
+      if (cls === 'anulat') { await incheie('anulat', { motiv_anulare: String(raspuns?.error ?? 'conflict').slice(0, 500) }); return true }
+      if (cls === 'furnizor') {
+        if (Number(job.incercari || 0) >= Number(job.max_incercari || 3)) {
+          await incheie('eroare', { eroare: `furnizor: ${String(raspuns?.error ?? 'HTTP ' + status).slice(0, 400)} (după ${job.incercari} încercări)` })
+          return true
+        }
         await incheie('asteapta', { urmatoarea_la: new Date(Date.now() + backoffMin(job.incercari) * 60_000).toISOString(),
-          luat_de: null, lease_pana: null, eroare: 'altă rulare ține zonele de prea mult timp — reiau mai târziu' })
+          luat_de: null, lease_pana: null, eroare: String(raspuns?.error ?? `HTTP ${status}`).slice(0, 500) })
+        log(`job ${job.id}: eroare de furnizor (${status}) — reiau cu backoff`)
         return true
       }
-      await sleep(PAUZA_ALT_TAB_MS); doc = await citesteDoc(); continue
-    }
-    if (cls === 'anulat') { await incheie('anulat', { motiv_anulare: String(raspuns?.error ?? 'conflict').slice(0, 500) }); return true }
-    if (cls === 'furnizor') {
-      if (Number(job.incercari || 0) >= Number(job.max_incercari || 3)) {
-        await incheie('eroare', { eroare: `furnizor: ${String(raspuns?.error ?? 'HTTP ' + status).slice(0, 400)} (după ${job.incercari} încercări)` })
+      if (cls === 'invalid') {
+        await incheie('eroare', { eroare: `răspuns invalid de la handler (HTTP ${status}): ${String(raspuns?.error ?? 'fără „continua”').slice(0, 400)}` })
         return true
       }
-      await incheie('asteapta', { urmatoarea_la: new Date(Date.now() + backoffMin(job.incercari) * 60_000).toISOString(),
-        luat_de: null, lease_pana: null, eroare: String(raspuns?.error ?? `HTTP ${status}`).slice(0, 500) })
-      log(`job ${job.id}: eroare de furnizor (${status}) — reiau cu backoff`)
-      return true
-    }
-    if (cls === 'invalid') {
-      await incheie('eroare', { eroare: `răspuns invalid de la handler (HTTP ${status}): ${String(raspuns?.error ?? 'fără „continua”').slice(0, 400)}`, rezervat_usd: 0 })
-      return true
-    }
-    if (cls === 'business') { await incheie('eroare', { eroare: String(raspuns?.error ?? `HTTP ${status}`).slice(0, 500) }); return true }
+      if (cls === 'business') { await incheie('eroare', { eroare: String(raspuns?.error ?? `HTTP ${status}`).slice(0, 500) }); return true }
 
-    runde++
-    ultimSumar = raspuns?.sumar ?? ultimSumar
-    sari = Array.isArray(raspuns?.reincercate) ? raspuns.reincercate : sari
-    deLa = raspuns?.de_la_urmator ?? null
-    if (!(await scrie({ runde, cost_usd: cost, rezervat_usd: 0, jurnal, lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString() }))) {
-      log(`job ${job.id}: lease pierdut — mă opresc`); return true
+      runde++
+      ultimSumar = raspuns?.sumar ?? ultimSumar
+      sari = Array.isArray(raspuns?.reincercate) ? raspuns.reincercate : sari
+      deLa = raspuns?.de_la_urmator ?? null
+      if (!(await scrie({ runde, jurnal, lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString() }))) {
+        log(`job ${job.id}: lease pierdut — mă opresc`); return true
+      }
+      if (!raspuns.continua) { lipire = Number(raspuns?.lipire_necesara || 0); terminat = true; break }
+      doc = await citesteDoc()
     }
-    if (!raspuns.continua) { lipire = Number(raspuns?.lipire_necesara || 0); terminat = true; break }
-    doc = await citesteDoc()
-  }
-  if (oprire()) {   // SIGTERM: lăsăm jobul să fie reluat (lease-ul expiră), fără să-l închidem greșit
-    await scrie({ stare: 'asteapta', luat_de: null, lease_pana: null, claim_token: null, rezervat_usd: 0, jurnal, cost_usd: cost, runde }); return true
-  }
-  let lipireOk: boolean | undefined
-  if (lipire > 0) {
-    lipireOk = false
-    doc = await citesteDoc()
-    const m = motivAnulare(job, doc)
-    if (m) { await incheie('anulat', { motiv_anulare: m, rezervat_usd: 0 }); return true }
-    const mb = await bugetOk(REZERVA_LIPIRE_USD)
-    if (mb) return await opresteLaBuget(mb)
-    try {
-      const req = new Request('http://worker/ofertare-plansa-citeste', { method: 'POST', body: JSON.stringify({ doc_id: job.doc_id, doar_lipire: true }),
-        headers: { Authorization: `Bearer ${d.depsHandler.SERVICE}`, 'Content-Type': 'application/json' } })
-      const res = await d.handler(req, d.depsHandler)
-      const r = await res.json().catch(() => ({}))
-      cost += Number(r?.cost_usd || 0)
-      lipireOk = res.status === 200 && !r?.error
-      jurnal.push({ la: new Date().toISOString(), body: { doar_lipire: true }, status: res.status, cost_usd: Number(r?.cost_usd || 0),
+    if (oprire()) {   // SIGTERM: lăsăm jobul să fie reluat (lease-ul expiră), fără să-l închidem greșit
+      await scrie({ stare: 'asteapta', luat_de: null, lease_pana: null, claim_token: null, jurnal, runde }); return true
+    }
+    let lipireOk: boolean | undefined
+    if (lipire > 0) {
+      lipireOk = false
+      doc = await citesteDoc()
+      const m = motivAnulare(job, doc, hashuri)
+      if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
+      const mb = await bugetOk(REZERVA_LIPIRE_USD)
+      if (mb) return await opresteLaBuget(mb)
+      let status = 0, r: any = {}
+      try {
+        const req = new Request('http://worker/ofertare-plansa-citeste', { method: 'POST', body: JSON.stringify({ doc_id: job.doc_id, doar_lipire: true }),
+          headers: { Authorization: `Bearer ${d.depsHandler.SERVICE}`, 'Content-Type': 'application/json' } })
+        const res = await d.handler(req, d.depsHandler)
+        status = res.status
+        r = await res.json().catch(() => ({}))
+        lipireOk = status === 200 && typeof r?.perechi === 'number' && !r?.error
+      } catch (e) { status = 599; r = { error: String((e as Error)?.message ?? e).slice(0, 200) } }
+      const cert = typeof r?.cost_usd === 'number' && Number.isFinite(r.cost_usd) && r.cost_usd >= 0
+      jurnal.push({ la: new Date().toISOString(), body: { doar_lipire: true }, status,
+        cost_usd: cert ? r.cost_usd : REZERVA_LIPIRE_USD, cost_cert: cert,
         eroare: r?.error ? String(r.error).slice(0, 300) : undefined })
-    } catch (e) { jurnal.push({ la: new Date().toISOString(), body: { doar_lipire: true }, eroare: String((e as Error)?.message ?? e).slice(0, 200) }) }
+      if (!(await regularizeaza(r))) lipireOk = false
+    }
+    // MAX_RUNDE atins cu „continua” = citire neterminată → partial, cu motiv; niciodată „gata”.
+    const st = !terminat && !ultimSumar ? 'eroare' : stareFinala(ultimSumar, { terminat, lipireOk })
+    const motiv = !terminat ? `oprit după ${MAX_RUNDE} runde, citirea nu s-a terminat — pornește „continuă”`
+      : lipireOk === false ? 'lipirea notelor tăiate a eșuat — reia „lipește”' : undefined
+    await incheie(st, { ...(motiv ? { eroare: motiv } : {}), rezultat: ultimSumar ? { felii_citite: ultimSumar.felii_citite, erori: ultimSumar.erori, zone_cazute: ultimSumar.zone_cazute,
+      tronsoane: ultimSumar.tronsoane_gasite, lungime_m: ultimSumar.lungime_totala_m } : null })
+    log(`job ${job.id} (doc ${job.doc_id}): ${st} · ${runde} runde · ${cost.toFixed(2)} USD`)
+    return true
+  } catch (e) {
+    await incheie('eroare', { eroare: String((e as Error)?.message ?? e).slice(0, 500) })
+    return true
   }
-  // MAX_RUNDE atins cu „continua” = citire neterminată → partial, cu motiv; niciodată „gata”.
-  const st = !terminat && !ultimSumar ? 'eroare' : stareFinala(ultimSumar, { terminat, lipireOk })
-  const motiv = !terminat ? `oprit după ${MAX_RUNDE} runde, citirea nu s-a terminat — pornește „continuă”`
-    : lipireOk === false ? 'lipirea notelor tăiate a eșuat — reia „lipește”' : undefined
-  await incheie(st, { rezervat_usd: 0, ...(motiv ? { eroare: motiv } : {}), rezultat: ultimSumar ? { felii_citite: ultimSumar.felii_citite, erori: ultimSumar.erori, zone_cazute: ultimSumar.zone_cazute,
-    tronsoane: ultimSumar.tronsoane_gasite, lungime_m: ultimSumar.lungime_totala_m } : null })
-  log(`job ${job.id} (doc ${job.doc_id}): ${st} · ${runde} runde · ${cost.toFixed(2)} USD`)
-  return true
 }
