@@ -667,7 +667,7 @@ teste.push(['F04 2d a — UPDATE pe manifestul vechi A → ignorat+B blochează 
   const d = await draft(observer)
   // Echivalentul #10 și #11: primul rând este creat de draft, al doilea are id mai mare.
   await observer.command(`INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare)
-    VALUES (${d.lic},${d.lic},'al_doilea','plansa.pdf',123,repeat('A',64),'deja_in_platforma');`)
+    VALUES (${d.lic},${d.lic},'al_doilea','plansa.pdf',123,repeat('a',64),'deja_in_platforma');`)
   await approved(observer, a, d)
   await a.command(`UPDATE ofertare_clarificari SET status='de_trimis' WHERE id=${d.id};`)
   assert.equal((await a.value(`ofertare_clarificari_export(${d.lic})`)).length, 1)
@@ -676,7 +676,7 @@ teste.push(['F04 2d a — UPDATE pe manifestul vechi A → ignorat+B blochează 
   const [vechi, ultim] = inainte.documente[0].manifest
   assert.ok(vechi.id < ultim.id)
   assert.equal(ultim.sha256, 'a'.repeat(64))
-  await observer.command(`UPDATE ofertare_seap_manifest SET stare='ignorat',sha256=repeat('B',64) WHERE id=${vechi.id};`)
+  await observer.command(`UPDATE ofertare_seap_manifest SET stare='ignorat',sha256=repeat('b',64) WHERE id=${vechi.id};`)
   const dupa = await baza()
   assert.notEqual(dupa.amprenta, inainte.amprenta)
   assert.deepEqual(dupa.documente[0].manifest, [{ ...vechi, stare: 'ignorat', sha256: 'b'.repeat(64) }, ultim])
