@@ -96,6 +96,11 @@ timeoutul configurat și sare complet peste extragere/OCR. Ieșirea pentru impor
 importatorului. Nu se reia automat dacă se termină timpul sau abonamentul.
 Launcherul adaugă el însuși `pachet_id`, hashul promptului efectiv trimis, hashurile
 instrucțiunilor, `claude --version` și modelul raportat în `modelUsage` din jurnalul CLI.
+Înainte de orice apel CLI, verifică lista exactă din `felii/` și SHA-256 din bytes-ii
+fiecărui JPEG. Fișier lipsă, în plus sau modificat → cod 2 și motiv în jurnal.
+Hashurile calculate sunt în `felii_verificate`, separat de răspunsurile modelului.
+`config_cli` conține modelul raportat și SHA-256 al argumentului efectiv `-p`, inclusiv
+`prompts/plansa_felii.md` și instrucțiunile inserate. Ambele câmpuri sunt puse de launcher.
 Un jurnal fără un singur model Opus identificabil este refuzat. Fiecare lipire include
 `sha256_a` și `sha256_b`, în ordinea perechii; o nepotrivire în adaptor produce 422.
 
@@ -118,6 +123,11 @@ notează UUID-ul declarat, `pachet_id` și proveniența CLI.
 Folosește același handler (inclusiv CAS, transferul în cantități și eventualele
 ciorne locale de clarificare), cu adaptor AI fără rețea. Proveniența este `cli:opus`, iar
 tokenii și costul din `ai_usage_log` sunt zero; nu se folosește coada/bugetul API.
+Din r3, `citire_ai.versiune.config_cli` păstrează configurația reală; ea intră și în
+`versiune.prompt_sha`. Alt prompt efectiv sau alt model raportat → refuz la continuare,
+lipire și conflicte CAS, chiar dacă `pachet_id` este identic. Calculul `pachet_id` rămâne
+neschimbat. Rezultatele fără metadatele r3 cer recitire prin launcher; citirile salvate
+anterior fără configurație sunt incompatibile cu o continuare r3.
 
 O citire API existentă pe aceeași tăiere este refuzată cu 409; nu este resetată sau amestecată.
 În sens invers, API `doar_lipire` peste o citire `cli:opus` este refuzat implicit cu 409,

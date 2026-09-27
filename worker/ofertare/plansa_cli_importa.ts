@@ -12,6 +12,12 @@ export function verificaRezultat(m: Manifest, r: RezultatCli, pentruImport = tru
         ru.instructiuni_sha256 !== m.instructiuni_sha256 || ru.instructiuni_lipire_sha256 !== m.instructiuni_lipire_sha256 ||
         typeof ru.cli_version !== 'string' || !ru.cli_version.trim() || typeof ru.model !== 'string' || !/^claude-opus-/.test(ru.model))
       throw new Error('Proveniență CLI invalidă: prompt / versiune CLI / model raportat')
+    if (!r.config_cli || r.config_cli.model !== ru.model || r.config_cli.prompt_sha256 !== ru.prompt_sha256)
+      throw new Error('config_cli diferă de proveniența launcherului; refă citirea')
+    const verificate = r.felii_verificate
+    if (!verificate || Array.isArray(verificate) || typeof verificate !== 'object' ||
+        Object.keys(verificate).length !== m.felii.length || m.felii.some(f => verificate[f.eticheta] !== f.sha256))
+      throw new Error('SHA256 verificat de launcher lipsește sau diferă de manifest; refă citirea')
   }
   if (!r.felii || Array.isArray(r.felii) || typeof r.felii !== 'object' || !r.lipiri || Array.isArray(r.lipiri) || typeof r.lipiri !== 'object')
     throw new Error('Ieșire CLI invalidă: felii / lipiri')
@@ -81,6 +87,7 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
   const m: Manifest = JSON.parse(await Deno.readTextFile(`${dir}/manifest.json`))
   const r: RezultatCli = JSON.parse(await Deno.readTextFile(fisier))
   verificaRezultat(m, r)
+  const configCli = { model: r.config_cli.model, prompt_sha256: r.config_cli.prompt_sha256 }
   let doc = await citesteDoc(d.supa, m.doc_id)
   verificaIdentitate(m, doc)
   // Un pachet vechi nu poate fi etichetat cu promptul versiunii actuale a handlerului.
@@ -107,7 +114,7 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
   if (m.pachet_id !== pachetCurent || m.instructiuni_sha256 !== instructiuniSha || m.instructiuni_lipire_sha256 !== lipireSha)
     throw new Error('pachet_id diferă de handlerul/documentul curent; refă pregătirea și citirea')
   console.log(JSON.stringify({ eveniment: 'import_plansa_cli', operator_declarat: d.operatorDeclarat,
-    pachet_id: m.pachet_id, doc_id: m.doc_id, rulare: r.rulare }))
+    pachet_id: m.pachet_id, doc_id: m.doc_id, rulare: r.rulare, config_cli: configCli }))
 
   // Handlerul primește exact JPEG-urile verificate, fără un al doilea download după prima scriere.
   // DB/CAS rămân cele reale. Nicio coadă și nicio rezervare în bugetul API.
@@ -116,10 +123,11 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
     rpc: (name: string, args: any) => {
       if (name === 'ofertare_plansa_analiza_cas') {
         const prev = args.p_analiza_veche?.citire_ai
-        // Apărare suplimentară la limita importului: o citire API apărută concurent
+        // Apărare suplimentară la limita importului: o citire API sau cu altă configurație CLI
         // nu trebuie să primească note CLI nici la rezervare, nici la reîncercarea CAS.
-        if (prev?.taiat_la === m.taiat_la && (prev.model !== MODEL_CLI || prev.versiune?.model !== MODEL_CLI))
-          return Promise.resolve({ data: null, error: { message: 'Versiune incompatibilă: citire API; import CLI oprit' } })
+        if (prev?.taiat_la === m.taiat_la && (prev.model !== MODEL_CLI || prev.versiune?.model !== MODEL_CLI ||
+            prev.versiune?.config_cli?.model !== configCli.model || prev.versiune?.config_cli?.prompt_sha256 !== configCli.prompt_sha256))
+          return Promise.resolve({ data: null, error: { message: 'Versiune incompatibilă: altă citire/configurație CLI; import CLI oprit' } })
       }
       return d.supa.rpc(name, args)
     },
@@ -137,7 +145,7 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
       }
     } },
   }
-  const deps = { SERVICE: d.SERVICE, API_KEY: 'cli-abonament', modelEticheta: MODEL_CLI, supa,
+  const deps = { SERVICE: d.SERVICE, API_KEY: 'cli-abonament', modelEticheta: MODEL_CLI, configCli, supa,
     getUser: async () => null, fetch: fetchDinCli(m, r) }
   const asteptat = { licitatie_id: m.licitatie_id, fisier_path: m.fisier_path, taiat_la: m.taiat_la, cale_felii: m.cale_felii }
   const runde: any[] = []
@@ -180,7 +188,7 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
       ramase = out.perechi_ramase || 0
     } while (ramase)
   }
-  return { doc_id: m.doc_id, operator_declarat: d.operatorDeclarat, pachet_id: m.pachet_id, model: MODEL_CLI, cost_usd: 0, runde }
+  return { doc_id: m.doc_id, operator_declarat: d.operatorDeclarat, pachet_id: m.pachet_id, model: MODEL_CLI, config_cli: configCli, cost_usd: 0, runde }
 }
 
 if (import.meta.main) {

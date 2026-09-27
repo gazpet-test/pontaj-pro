@@ -9,6 +9,8 @@ export type Manifest = {
 }
 export type RezultatCli = {
   doc_id: number; taiat_la: string; pachet_id: string
+  config_cli: { model: string; prompt_sha256: string }
+  felii_verificate: Record<string, string> // SHA-256 calculat de launcher din JPEG-urile locale, înainte de CLI.
   rulare: { prompt_sha256: string; instructiuni_sha256: string; instructiuni_lipire_sha256: string; cli_version: string; model: string }
   felii: Record<string, { sha256: string; text: string }>
   lipiri: Record<string, { sha256_a: string; sha256_b: string; text: string }>

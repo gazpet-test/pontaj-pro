@@ -17,6 +17,32 @@ final() { # cod motiv
 # D4: fără pre-extragere/OCR. Verificarea manifestului precedă chiar autentificarea.
 if [ "$TASK" = "plansa_felii" ]; then
   [ -f /data/manifest.json ] || { J "plansa_felii: /data/manifest.json lipsește"; final 2 manifest_lipsa; }
+  # /data este :ro. Verificăm bytes-ii înainte de ORICE apel CLI (inclusiv --version).
+  node -e '
+    const fs=require("fs"), crypto=require("crypto");
+    try {
+      const m=JSON.parse(fs.readFileSync("/data/manifest.json","utf8"));
+      if(!Array.isArray(m.felii)||!m.felii.length) throw Error("manifest_felii_invalid");
+      const asteptate=new Set(), verificate=Object.create(null);
+      for(const f of m.felii) {
+        if(!f || !/^[a-zA-Z0-9_-]+$/.test(f.eticheta) || f.fisier!==`felii/${f.eticheta}.jpg` ||
+           !/^[a-f0-9]{64}$/.test(f.sha256) || asteptate.has(`${f.eticheta}.jpg`)) throw Error("manifest_felie_invalida");
+        asteptate.add(`${f.eticheta}.jpg`);
+      }
+      const intrari=fs.readdirSync("/data/felii",{withFileTypes:true});
+      if(intrari.some(f=>!f.isFile()||!asteptate.has(f.name))) throw Error("felii_in_plus_sau_neregulate");
+      if(intrari.length!==asteptate.size) throw Error("felii_lipsa");
+      for(const f of m.felii) {
+        const hash=crypto.createHash("sha256").update(fs.readFileSync(`/data/${f.fisier}`)).digest("hex");
+        if(hash!==f.sha256) throw Error(`sha256_felie_diferit:${f.eticheta}`);
+        verificate[f.eticheta]=hash;
+      }
+      fs.writeFileSync("/work/plansa_felii_verificate.json",JSON.stringify(verificate));
+    } catch(e) { console.error(e.code||e.message); process.exit(2); }
+  ' 2> /work/plansa_verificare.log || {
+    while IFS= read -r l; do J "plansa_felii: $l"; done < /work/plansa_verificare.log
+    final 2 felii_invalide
+  }
   TASK_MODEL=opus
   TURE_PLANSA=$(node -e 'const m=JSON.parse(require("fs").readFileSync("/data/manifest.json","utf8")); if(!Array.isArray(m.felii)||!m.felii.length||!Array.isArray(m.perechi_lipire))process.exit(2); console.log(12+4*m.felii.length+4*m.perechi_lipire.length)' 2>/dev/null) || final 2 manifest_invalid
   case "${TASK_MAX_TURNS:-}" in ''|*[!0-9]*) TASK_MAX_TURNS=$TURE_PLANSA ;; esac
@@ -113,6 +139,7 @@ $(cat /data/INSTRUCTIUNI_LIPIRE.md)"
       const id=sha(JSON.stringify({doc_id:m.doc_id,taiat_la:m.taiat_la,felii:m.felii.map(({eticheta,sha256})=>({eticheta,sha256})),perechi_lipire:m.perechi_lipire,instructiuni_sha256:a,instructiuni_lipire_sha256:b}));
       if(id!==m.pachet_id || a!==m.instructiuni_sha256 || b!==m.instructiuni_lipire_sha256 || !process.argv[2]) process.exit(2);
       fs.writeFileSync("/work/plansa_provenienta.json", JSON.stringify({pachet_id:m.pachet_id,
+        felii_verificate:JSON.parse(fs.readFileSync("/work/plansa_felii_verificate.json","utf8")),
         rulare:{prompt_sha256:sha(process.argv[1]),instructiuni_sha256:a,instructiuni_lipire_sha256:b,cli_version:process.argv[2]}}));
     } catch { process.exit(2); }
   ' "$PROMPT" "$CLI_VERSION" || final 2 pachet_invalid
@@ -160,6 +187,8 @@ if [ "$TASK" = "plansa_felii" ]; then
       const models=Object.keys(envelope.modelUsage||{});
       if(models.length!==1 || !/^claude-opus-/.test(models[0]) || meta.pachet_id!==m.pachet_id) process.exit(4);
       r.pachet_id=meta.pachet_id;
+      r.felii_verificate=meta.felii_verificate;
+      r.config_cli={model:models[0],prompt_sha256:meta.rulare.prompt_sha256};
       r.rulare={...meta.rulare,model:models[0]};
       fs.writeFileSync(process.argv[3],JSON.stringify(r,null,2)+"\n");
     } catch { process.exit(4); }

@@ -157,3 +157,70 @@ sh -n worker/claude-cli/run_pilot.sh
 Nu am rulat PostgREST/Storage real, Docker/NAS sau Claude CLI autentic. Nu am rulat
 vitest: schimbările sunt în workerul Deno, handler și scripturile shell, fără UI.
 Pachetele r1 nu se importă prin r2: trebuie pregătite și citite din nou.
+
+## r3 — bytes verificați și configurație CLI în compatibilitatea citirii
+
+Implementate numai D4-01 și D4-02 din `JAK_D4_r3.md`, fără git, producție,
+migrări sau modificarea cozii API/pilotului `run_pilot.sh`.
+
+- `worker/claude-cli/launcher.sh`: înainte de orice apel CLI, inclusiv `--version`,
+  compară lista exactă din `/data/felii` cu manifestul și calculează SHA-256 din
+  fiecare JPEG. Refuză fișiere modificate, lipsă, în plus, directoare și legături
+  simbolice, cu cod 2 și motiv în jurnal. Nu modifică manifestul. Scrie hashurile
+  calculate în `felii_verificate`, inclusiv pentru feliile fără răspuns de la model.
+- Launcherul scrie `config_cli = {model, prompt_sha256}` din `modelUsage` și hashul
+  argumentului efectiv `-p` (promptul `plansa_felii.md` plus textul adăugat și cele
+  două instrucțiuni). Suprascrie orice valori inventate de model.
+- `plansa_cli_comun.ts` / `plansa_cli_importa.ts`: tipuri și validare pentru aceste
+  câmpuri; hashuri verificate obligatorii și egale cu manifestul, configurație egală
+  cu proveniența rulării. Importul transmite configurația prin `Deps.configCli`, o
+  include în jurnal/rezultat și o verifică și în protecția suplimentară a CAS.
+  **Calculul `pachet_id` nu s-a schimbat.**
+- `handler.ts`: extensie opțională `Deps.configCli`; configurația intră în hashul
+  compus `versiune.prompt_sha` și se păstrează în `citire_ai.versiune.config_cli`.
+  Gărzile existente `versiuneIncompatibila` o disting la continuare, lipire și
+  recitirea CAS. Eticheta generală rămâne `cli:opus`; modelul concret este în
+  `config_cli.model`. Fără noul câmp, versiunea și comportamentul API rămân identice.
+  Regula existentă pentru `mixare_permisa` nu a fost modificată; importul nu o cere.
+- README actualizat. Rezultatele vechi fără metadatele r3 trebuie recitite prin
+  launcher; o citire salvată fără configurație nu este continuată tacit de r3.
+
+### Verificări r3
+
+- **49/49 funcții de test D4 trecute**: cele 35 existente + 14 noi. R1 importat
+  parțial → R2 cu același `pachet_id`, dar prompt V2 sau model B → HTTP 409, fără
+  scrieri și fără modificarea citirii. Acoperite și refuzul direct la lipire,
+  schimbarea concurentă a configurației la rezervarea/salvarea lipirii, precum și
+  metadatele absente/inconsistente. Testele existente dovedesc reluarea cu aceeași
+  configurație. Două fixture-uri r2 care simulează API au fost adaptate să elimine
+  și hashul compus/configurația CLI, nu doar să schimbe eticheta modelului.
+- **240/240 teste existente ale handlerului trecute, fără modificarea suitei.**
+- `deno check` a trecut pentru pregătire, import și testele D4, cu SDK-ul local
+  Supabase 2.105.3 și declarațiile sale TypeScript, prin mapare offline.
+- **2/2 teste Node fără subprocess trecute**: fragmentele reale ale launcherului
+  verifică bytes de pe disc (modificat/lipsă/în plus, inclusiv non-JPEG/director),
+  păstrează manifestul și suprascriu metadatele inventate de model.
+
+Cele 289 de funcții Deno au fost executate serial prin runnerul temporar `deno run`
+din `.tmp_jak_d4/runner-r3.ts`, cu mapare offline și adaptor `node:assert/strict`
+pentru JSR. **Nu sunt o rulare a runnerului standard și nu includ sanitizatoarele.**
+`deno test` standard a eșuat la descărcarea npm; cu maparea offline verificarea de
+tipuri a trecut, apoi runnerul a intrat în panică `deno_pipe`, Windows error 5.
+
+Testele complete ale launcherului au fost adăugate pentru JPEG modificat/lipsă/în
+plus: cod 2, motiv concret în jurnal, manifest intact, CLI fals neapelat (nici măcar
+`--version`). **Nu au putut rula aici**: `node --test` → `spawn EPERM`; fără izolarea
+Node, cele șase teste care cer shell au aceeași eroare. `sh -n launcher.sh` nu a
+putut porni din cauza „couldn't create signal pipe”, Windows error 5.
+
+De verificat pe Linux/NAS, fără CLI autentic și fără producție:
+
+```sh
+deno test -A --node-modules-dir=none worker/ofertare/plansa_cli_test.ts
+deno test -A --node-modules-dir=none supabase/functions/ofertare-plansa-citeste
+node --test worker/claude-cli/test-fixtures/plansa_felii_test.mjs
+sh -n worker/claude-cli/launcher.sh
+```
+
+Nu am rulat PostgREST/Storage real, Docker/NAS, Claude autentic sau vitest (fără
+modificări UI). Nu am solicitat secrete și nu am modificat date reale.

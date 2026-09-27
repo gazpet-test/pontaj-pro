@@ -1954,6 +1954,7 @@ export function raportIdentitate(idr: ReturnType<typeof identificaRanduri>) {
 export type Deps = {
   SERVICE: string; API_KEY: string | undefined;
   modelEticheta?: string; // D4: proveniența CLI; modelul cererii API rămâne MODEL.
+  configCli?: { model: string; prompt_sha256: string }; // D4 r3: model raportat + prompt efectiv, din launcher.
   supa: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch;
 };
 export function depsReale(): Deps {
@@ -2034,10 +2035,17 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 
   // proveniența rulării (T11): ce versiune de cod/prompt, ce model — calculată ÎNAINTE de orice citire,
   // ca reluarea să poată refuza amestecul de versiuni (R4/C4) fără cost.
-  const promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(INSTRUCTIUNI))))
+  let promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(INSTRUCTIUNI))))
     .slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
+  // Fără configCli, versiunea API rămâne identică. Configurația CLI intră în cheia
+  // existentă: toate gărzile continua/lipire/CAS o verifică fără reguli paralele.
+  const configCli = deps.configCli && { model: deps.configCli.model, prompt_sha256: deps.configCli.prompt_sha256 };
+  if (configCli) promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
+    new TextEncoder().encode(JSON.stringify({ prompt_sha: promptSha, config_cli: configCli })))))
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
   // + ce s-a citit (tăiere, grilă, fișier): diferențele aici => 409 chiar și cu mixare_permisa (concurenta.ts)
   const versiuneCur = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: deps.modelEticheta ?? MODEL, prompt_sha: promptSha,
+    ...(configCli ? { config_cli: configCli } : {}),
     taiat_la: plansa.taiat_la || null, cale_felii: plansa.cale_felii, geom_sha: await shaGeometrie(plansa),
     fisier: doc.nume_original, fisier_path: doc.fisier_path || null };
   const cheieVers = cheieVersiune(versiuneCur);

@@ -62,6 +62,8 @@ async function cuPachet(fn: (f: ReturnType<typeof fixture>, dir: string, m: Mani
   try {
     const f = fixture(nr), m = await pregatestePlansa(470, dir, f.d)
     const r: RezultatCli = { doc_id: m.doc_id, taiat_la: m.taiat_la, pachet_id: m.pachet_id,
+      config_cli: { model: 'claude-opus-5', prompt_sha256: await shaText('prompt launcher test') },
+      felii_verificate: Object.fromEntries(m.felii.map(f => [f.eticheta, f.sha256])),
       rulare: { prompt_sha256: await shaText('prompt launcher test'), instructiuni_sha256: m.instructiuni_sha256,
         instructiuni_lipire_sha256: m.instructiuni_lipire_sha256, cli_version: 'claude-test', model: 'claude-opus-5' },
       felii: Object.fromEntries(m.felii.map(x => [x.eticheta, { sha256: x.sha256, text: RASPUNS }])),
@@ -76,6 +78,88 @@ const cerere = (images: Uint8Array[], text = '') => ({ method: 'POST', body: JSO
   messages: [{ role: 'user', content: [...images.map(bytes => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: btoa(String.fromCharCode(...bytes)) } })), { type: 'text', text }] }],
 }) })
 const API = 'https://api.anthropic.com/v1/messages'
+
+for (const schimbare of ['prompt', 'model']) {
+  Deno.test(`D4 r3: R1 parțial, R2 același pachet cu alt ${schimbare} → 409 fără scrieri`, () => cuPachet(async (f, dir, m, r, fisier) => {
+    const lipsa = r.felii.z1_2
+    delete r.felii.z1_2
+    await Deno.writeTextFile(fisier, JSON.stringify(r))
+    await importaPlansa(fisier, dir, f.d)
+    eq(f.doc.status_procesare, 'partial')
+    eq(f.doc.analiza.citire_ai.versiune.config_cli, r.config_cli)
+    const before = structuredClone(f.doc), writes = f.n.scrieri
+    r.felii.z1_2 = lipsa
+    if (schimbare === 'prompt') r.config_cli.prompt_sha256 = r.rulare.prompt_sha256 = await shaText('prompt launcher V2')
+    else r.config_cli.model = r.rulare.model = 'claude-opus-5-1'
+    eq(r.pachet_id, m.pachet_id)
+    await Deno.writeTextFile(fisier, JSON.stringify(r))
+    await rejects(() => importaPlansa(fisier, dir, f.d), /HTTP 409.*altă versiune/)
+    eq(f.n.scrieri, writes); eq(f.doc, before)
+  }))
+
+  Deno.test(`D4 r3: doar_lipire cu alt ${schimbare} → 409 înainte de AI/scrieri`, () => cuPachet(async (f, dir, _m, r, fisier) => {
+    await importaPlansa(fisier, dir, f.d)
+    f.doc.analiza.citire_ai.felii[0].alte_mentiuni = ['Lungimea totală este ...']
+    const configCli = { ...r.config_cli }
+    if (schimbare === 'prompt') configCli.prompt_sha256 = await shaText('prompt V2')
+    else configCli.model = 'claude-opus-5-1'
+    const before = structuredClone(f.doc), writes = f.n.scrieri
+    const res = await handler(new Request('http://local', { method: 'POST', headers: { Authorization: 'Bearer service-test' },
+      body: JSON.stringify({ doc_id: 470, doar_lipire: true }) }), { ...f.d, API_KEY: 'cli-abonament', modelEticheta: 'cli:opus', configCli,
+      getUser: async () => null, fetch: async () => { throw new Error('AI nu trebuie apelat') } })
+    eq(res.status, 409); ok((await res.json()).error.includes('altă versiune'))
+    eq(f.n.scrieri, writes); eq(f.doc, before)
+  }))
+
+  for (const etapa of ['rezervare', 'salvare']) {
+    Deno.test(`D4 r3: ${schimbare} schimbat concurent la ${etapa} lipirii → 409 la recitirea CAS`, () => cuPachet(async (f, dir, _m, r, fisier) => {
+      await importaPlansa(fisier, dir, f.d)
+      const configCli = { ...r.config_cli }
+      // Obținem versiunea V2 de la handlerul real într-un document separat, fără importator.
+      const alta = fixture()
+      const nou = { ...configCli }
+      if (schimbare === 'prompt') nou.prompt_sha256 = await shaText('prompt V2')
+      else nou.model = 'claude-opus-5-1'
+      const req = (body: any) => new Request('http://local', { method: 'POST', headers: { Authorization: 'Bearer service-test' }, body: JSON.stringify({ doc_id: 470, ...body }) })
+      const altRes = await handler(req({}), { ...alta.d, API_KEY: 'cli-abonament', modelEticheta: 'cli:opus', configCli: nou,
+        getUser: async () => null, fetch: async () => Response.json({ content: [{ type: 'text', text: RASPUNS }] }) })
+      eq(altRes.status, 200)
+      f.doc.analiza.citire_ai.felii[0].alte_mentiuni = ['Lungimea totală este ...']
+      const rpc = f.d.supa.rpc
+      let conflict = false, ai = 0
+      f.d.supa.rpc = (name: string, args: any) => {
+        const p = args?.p_patch?.analiza
+        const tinta = etapa === 'salvare' ? p?.citire_ai?.note_lipite_perechi?.length :
+          Object.keys(p?.rezervari_zone?.zone || {}).some(z => z.startsWith('lipire:'))
+        if (name === 'ofertare_plansa_analiza_cas' && !conflict && tinta) {
+          conflict = true
+          f.doc.analiza.citire_ai.versiune = structuredClone(alta.doc.analiza.citire_ai.versiune)
+          return Promise.resolve({ data: false, error: null })
+        }
+        return rpc(name, args)
+      }
+      const res = await handler(req({ doar_lipire: true }), { ...f.d, API_KEY: 'cli-abonament', modelEticheta: 'cli:opus', configCli,
+        getUser: async () => null, fetch: async () => { ai++; return Response.json({ content: [{ type: 'text', text: '{"randuri":[]}' }] }) } })
+      eq(res.status, 409); eq(conflict, true); eq(ai, etapa === 'salvare' ? 1 : 0)
+      eq(f.doc.analiza.citire_ai.versiune.config_cli, nou)
+      eq(f.doc.analiza.citire_ai.note_lipite_perechi, undefined)
+    }))
+  }
+}
+
+for (const defect of ['lipsa', 'sha', 'extra', 'config_lipsa', 'config_model', 'config_prompt']) {
+  Deno.test(`D4 r3: proveniență launcher ${defect} → zero scrieri`, () => cuPachet(async (f, dir, _m, r, fisier) => {
+    if (defect === 'lipsa') delete (r as any).felii_verificate
+    if (defect === 'sha') r.felii_verificate.z1_1 = '0'.repeat(64)
+    if (defect === 'extra') r.felii_verificate.extra = '0'.repeat(64)
+    if (defect === 'config_lipsa') delete (r as any).config_cli
+    if (defect === 'config_model') r.config_cli.model = 'claude-opus-5-1'
+    if (defect === 'config_prompt') r.config_cli.prompt_sha256 = '0'.repeat(64)
+    await Deno.writeTextFile(fisier, JSON.stringify(r))
+    await rejects(() => importaPlansa(fisier, dir, f.d), /launcher|config_cli/)
+    eq(f.n.scrieri, 0)
+  }))
+}
 
 Deno.test('D4 r2: lipire veche A+B, B absent individual, manifest cu B nou → 422 fără text vechi', () => cuPachet(async (f, _dir, m, r) => {
   delete r.felii.z1_2
@@ -136,6 +220,9 @@ for (const etapa of ['rezervare', 'salvare']) {
     await importaPlansa(fisier, dir, f.d)
     const ca = f.doc.analiza.citire_ai
     ca.model = ca.versiune.model = 'claude-opus-5'
+    // Simulăm o citire API reală: fără configurația și hashul compus ale CLI.
+    ca.versiune.prompt_sha = (await shaText(INSTRUCTIUNI)).slice(0, 16)
+    delete ca.versiune.config_cli
     ca.felii[0].alte_mentiuni = ['Lungimea totală este ...']
     const rpc = f.d.supa.rpc
     let conflict = false, ai = 0
