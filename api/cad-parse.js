@@ -21,6 +21,8 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { citesteDxf } from './_dxf.js'
+import { randCantitateCad } from './_cadCantitate.js'
+import { citestePaginat, referinteDinIstoric } from './_cantitatiInvalidare.js'
 
 const rulează = promisify(execFile)
 const BIN_DWG2DXF = path.join(process.cwd(), 'bin', 'dwg2dxf')
@@ -112,21 +114,26 @@ export default async function handler(req, res) {
 
       // Traseul cu cote e candidatul de conducta — intra ca pozitie de cantitate,
       // marcata ca provenind din desen, ca sa poata fi comparata cu memoriul.
+      // R5 (25.09.2026): intra 'extras' (masuratoare automata), NU 'validat' — vezi _cadCantitate.js.
+      // R5 runda 4 / 1b: o masuratoare noua cu alta valoare (orice diferenta, fara prag de 1 m) fata de cantitate_plansa / cantitate scoate randul din 'validat' ('diferenta').
       const c = analiza.sumar.cu_cote
       let pozitie = null
       if (c.numar > 0 && c.lungime_3d_m > 0) {
         const denumire = `Traseu măsurat din desenul proiectantului (${nume})`
         const { data: existent } = await supa.from('ofertare_cantitati')
-          .select('id').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
-        const rand = {
-          licitatie_id: doc.licitatie_id, denumire,
-          cantitate: c.lungime_3d_m, um: 'm', cantitate_plansa: c.lungime_3d_m, status: 'validat',
-          diferenta_nota: `Măsurat din desen: ${c.lungime_3d_m.toLocaleString('ro-RO')} m în spațiu, ${c.lungime_2d_m.toLocaleString('ro-RO')} m în plan` +
-            `${c.numar > 1 ? `, pe ${c.numar} trasee` : ''}. ${analiza.nota}`,
+          .select('id, um, cantitate, cantitate_plansa, status, diferenta_nota, updated_at').eq('licitatie_id', doc.licitatie_id).eq('denumire', denumire).maybeSingle()
+        // R5 runda 5: valoarea APROBATĂ a rândului validat (istoric; tabel lipsă / eroare => null => rândul de acum)
+        let referinta = null
+        if (existent?.status === 'validat') {
+          // runda 6: descrescător + paginat — ultima validare nu poate fi tăiată de un plafon PostgREST
+          const { data: ev, error: eIst } = await citestePaginat((a, b) => supa.from('ofertare_cantitati_istoric')
+            .select('id, cantitate_id, motiv, valori_vechi, valori_noi').eq('cantitate_id', existent.id).order('id', { ascending: false }).range(a, b))
+          if (!eIst) referinta = referinteDinIstoric(ev).get(Number(existent.id)) || null
         }
-        if (existent) await supa.from('ofertare_cantitati').update(rand).eq('id', existent.id)
-        else await supa.from('ofertare_cantitati').insert(rand)
-        pozitie = rand.cantitate
+        const scr = randCantitateCad({ licitatieId: doc.licitatie_id, denumire, c, notaAnaliza: analiza.nota }, existent, referinta)
+        if (scr.op === 'update') await supa.from('ofertare_cantitati').update(scr.patch).eq('id', scr.id)
+        else await supa.from('ofertare_cantitati').insert(scr.rand)
+        pozitie = c.lungime_3d_m
       }
 
       raport.push({

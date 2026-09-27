@@ -1,0 +1,103 @@
+name: Ofertare - regresie determinista
+
+on:
+  pull_request:
+    paths:
+      - 'src/ofertare*'
+      - 'src/Ofertare*'
+      - 'src/grafic*'
+      - 'supabase/functions/ofertare-**'
+      - 'docs/R5_*.sql'
+      - 'docs/R5_MIGRARE_3*'
+      - 'scripts/pg/**'
+      - 'scripts/test-r5-r9b.mjs'
+      - '.github/workflows/ofertare-regresie.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/ofertare*'
+      - 'src/Ofertare*'
+      - 'src/grafic*'
+      - 'supabase/functions/ofertare-**'
+      - 'docs/R5_*.sql'
+      - 'docs/R5_MIGRARE_3*'
+      - 'scripts/pg/**'
+      - 'scripts/test-r5-r9b.mjs'
+      - '.github/workflows/ofertare-regresie.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: Vitest - ofertare si grafic
+        run: npx vitest run src/ofertare src/grafic src/Ofertare
+      - name: Regresie R5-R9b fara dependente
+        run: node --test scripts/test-r5-r9b.mjs
+
+  deno:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # Testele injecteaza clienti/fetch simulate; nu primesc secrete.
+      # Ca jobul `poarta` existent: fără --frozen (deno.lock nu acoperă dependențele testelor).
+      - name: Regresie Edge Functions cu dependente simulate
+        run: >-
+          deno test -A --node-modules-dir=none
+          supabase/functions/ofertare-plansa-citeste
+          supabase/functions/ofertare-clarificari-propune
+          supabase/functions/ofertare-document-nou-citeste
+
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Instaleaza clientul PostgreSQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - name: Probe R9b 2 si 3 pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/r9b
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_r9b_probe23.mjs
+      - name: Regresie F01-F06 pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/r9b_test_review_f
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_r5_review_f.mjs

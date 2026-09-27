@@ -3,7 +3,7 @@
 import { jsPDF } from 'jspdf'
 import sharp from 'sharp'
 import { analizeazaSemnale, randeazaVectorial } from '../api/_randare-pdf.js'
-import { jpegDinPdf, decideRuta, esteCitibila, acoperireScanPdf } from '../api/plansa-felii.js'
+import { jpegDinPdf, decideRuta, esteCitibila, acoperireScanPdf, zoneTaiere } from '../api/plansa-felii.js'
 
 // JPEG cu zgomot + linii (peste 10 KB, ca să-l vadă jpegDinPdf)
 async function jpeg(w, h, dens = 1) {
@@ -146,5 +146,23 @@ const r9 = await ruleaza('topo_rar_472', await pdfTopoRar())
 verifica(r9.sursa === 'randare_pagina', '9: plan topografic rar (472) => randarea paginii e citibilă, nu fallback pe siglă')
 const alb = await sharp({ create: { width: 3000, height: 4000, channels: 3, background: '#fff' } }).png().toBuffer()
 verifica((await esteCitibila(alb)).citibila === false, '9: pagină albă randată => necitibilă')
+// 10 (runda 7): felii identice (ultima coloană / bandă fixată la margine, rest ≤ latura − pas) se taie și se plătesc O DATĂ
+{
+  const g = (W, H) => ({ latura: 1600, pas: 1408, coloane: Math.ceil(W / 1408), randuri: Math.ceil(H / 1408) })
+  const a = zoneTaiere({ width: 7140, height: 1400 }, g(7140, 1400))
+  verifica(a.zone.map((z) => z.zona).join(',') === '1_1,1_2,1_3,1_4,1_5', '10: W 7.140 (rest 100 px), o bandă: z1_6 = z1_5 (left 5.540) => 5 zone, nu 6')
+  verifica(JSON.stringify(a.identice) === '[["1_6","1_5"]]', '10: zona sărită e trecută în `identice` ([sărită, păstrată])')
+  const b = zoneTaiere({ width: 7340, height: 1400 }, g(7340, 1400))
+  verifica(b.zone.length === 6 && !b.identice.length && b.zone[4].left === 5632 && b.zone[5].left === 5740, '10: W 7.340 (rest 300 px), o bandă: 6 zone distincte, coloana fixată la 5.740 (control)')
+  const c = zoneTaiere({ width: 7140, height: 3000 }, g(7140, 3000))
+  verifica(c.zone.length === 10 && c.identice.length === 8 && new Set(c.zone.map((z) => `${z.left}|${z.top}`)).size === 10, '10: W 7.140 × H 3.000: benzile 2 și 3 identice (top 1.400) + coloanele 5/6 => 10 zone unice, 8 sărite')
+  const d = zoneTaiere({ width: 9362, height: 6623 }, g(9362, 6623))
+  verifica(d.zone.length === 35 && !d.identice.length, '10: 470 (9.362 × 6.623): 35 zone, nimic sărit — geometria din BD neschimbată')
+  // H între pas și latură (1.408 < H ≤ 1.600): banda 2 are top 0 = banda 1 => sărită (înainte: toată banda plătită de două ori)
+  const e = zoneTaiere({ width: 4000, height: 1600 }, g(4000, 1600))
+  verifica(e.zone.length === 3 && JSON.stringify(e.identice) === '[["2_1","1_1"],["2_2","1_2"],["2_3","1_3"]]', '10: H 1.600: banda 2 identică cu banda 1 => 3 zone, nu 6')
+  const p = zoneTaiere({ width: 7140, height: 1400 }, g(7140, 1400), 'p2_')
+  verifica(p.zone[0].zona === 'p2_1_1' && p.identice[0][0] === 'p2_1_6', '10: prefixul paginii se păstrează (dedup doar în aceeași sursă)')
+}
 console.log(`\n${ok}/${tot} verificări trecute`)
 process.exit(ok === tot ? 0 : 1)
