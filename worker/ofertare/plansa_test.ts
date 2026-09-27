@@ -1,16 +1,16 @@
 // deno test -A --node-modules-dir=none worker/ofertare/plansa_test.ts — coada de planșe (#142), fără rețea și fără AI.
 import { assert, assertEquals } from 'https://deno.land/std@0.224.0/assert/mod.ts'
-import { corpRunda, motivAnulare, clasifica, proceseazaPlansa, PLAFON_IMPLICIT_USD } from './plansa.ts'
+import { corpRunda, motivAnulare, clasifica, proceseazaPlansa, fetchCuTimeout, PLAFON_IMPLICIT_USD, REZERVA_RUNDA_USD } from './plansa.ts'
 
-const JOB = { id: 7, doc_id: 470, mod: 'citeste', taiat_la: 't1', cale_felii: 'c1', cost_usd: 0, runde: 0, jurnal: [], incercari: 1, max_incercari: 3, cerut_de: 'u1', plafon_usd: null }
+const JOB = { id: 7, doc_id: 470, licitatie_id: 95, claim_token: 'tok1', mod: 'citeste', taiat_la: 't1', cale_felii: 'c1', cost_usd: 0, runde: 0, jurnal: [], incercari: 1, max_incercari: 3, cerut_de: 'u1', plafon_usd: null }
 const docCu = (ca: any = null, p: any = {}) => ({ id: 470, licitatie_id: 95, analiza: { plansa: { taiat_la: 't1', cale_felii: 'c1', ...p }, ...(ca ? { citire_ai: ca } : {}) } })
 
 // Supabase simulat: coada (un rând), documentul, notificările; UPDATE condiționat pe luat_de + stare='lucru'.
-function fakeSupa(o: { job?: any; doc?: any; rpcErr?: any; pierdeLeaseLa?: number } = {}) {
+function fakeSupa(o: { job?: any; doc?: any; rpcErr?: any; pierdeLeaseLa?: number; costZi?: number } = {}) {
   const st = { job: o.job ? { ...o.job, stare: 'lucru', luat_de: 'w1' } : null, doc: o.doc, notif: [] as any[], updates: 0 }
   return {
     st,
-    rpc: async (_n: string, _a: any) => o.rpcErr ? { data: null, error: o.rpcErr } : { data: st.job ? [st.job] : [], error: null },
+    rpc: async (n: string, _a: any) => n === 'ofertare_plansa_cost_zi' ? { data: o.costZi ?? 0, error: null } : o.rpcErr ? { data: null, error: o.rpcErr } : { data: st.job ? [{ ...st.job }] : [], error: null },
     from: (t: string) => {
       if (t === 'notifications') return { insert: async (r: any) => { st.notif.push(r); return { error: null } } }
       if (t === 'ofertare_documente_atribuire') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: st.doc }) }) }) }
@@ -22,7 +22,7 @@ function fakeSupa(o: { job?: any; doc?: any; rpcErr?: any; pierdeLeaseLa?: numbe
             eq: (k: string, v: unknown) => { conds[k] = v; return q },
             select: async () => {
               st.updates++
-              if (o.pierdeLeaseLa && st.updates >= o.pierdeLeaseLa) st.job.luat_de = 'alt'
+              if (o.pierdeLeaseLa && st.updates >= o.pierdeLeaseLa) st.job.claim_token = 'alt'
               const potriveste = st.job && Object.entries(conds).every(([k, v]) => st.job[k] === v)
               if (!potriveste) return { data: [], error: null }
               Object.assign(st.job, patch)
@@ -41,6 +41,7 @@ const raspunsuri = (lista: Array<[number, any]>) => {
   const handler = async (req: Request) => {
     apeluri.push(await req.json())
     const [s, b] = lista.shift() ?? [200, { continua: false, sumar: { erori: 0 } }]
+    if (s === -1) return new Response('nu e json', { status: 200 })
     return new Response(JSON.stringify(b), { status: s })
   }
   return { handler, apeluri }
@@ -66,7 +67,9 @@ Deno.test('motivAnulare: retăiere / felii schimbate / necitibilă / document ș
 })
 
 Deno.test('clasifica: 409 cu in_lucru = alt tab; 409 fără = anulat; 5xx/429 = furnizor; 4xx = business', () => {
-  assertEquals(clasifica(200, {}), 'ok')
+  assertEquals(clasifica(200, { continua: false }), 'ok')
+  assertEquals(clasifica(200, {}), 'invalid')
+  assertEquals(clasifica(200, { error: 'x', continua: false }), 'invalid')
   assertEquals(clasifica(409, { in_lucru: ['z1'] }), 'alt_tab')
   assertEquals(clasifica(409, { error: 'altă tăiere' }), 'anulat')
   assertEquals(clasifica(529, {}), 'furnizor')
@@ -97,7 +100,7 @@ Deno.test('409 alt tab: pauză și reluare pe continua, fără cost suplimentar'
 })
 
 Deno.test('plafon: peste plafon nu se mai face niciun apel AI', async () => {
-  const s = fakeSupa({ job: { ...JOB, cost_usd: PLAFON_IMPLICIT_USD }, doc: docCu() })
+  const s = fakeSupa({ job: { ...JOB, cost_usd: PLAFON_IMPLICIT_USD - REZERVA_RUNDA_USD + 0.01 }, doc: docCu() })
   const h = raspunsuri([])
   await proceseazaPlansa(deps(s, h.handler))
   assertEquals(h.apeluri.length, 0)
@@ -113,7 +116,7 @@ Deno.test('retăiere după înscriere: anulat, zero AI', async () => {
 })
 
 Deno.test('lease pierdut după prima rundă: workerul se oprește, fără alt apel AI', async () => {
-  const s = fakeSupa({ job: JOB, doc: docCu(), pierdeLeaseLa: 1 })
+  const s = fakeSupa({ job: JOB, doc: docCu(), pierdeLeaseLa: 2 })
   const h = raspunsuri([[200, { continua: true, de_la_urmator: 4, cost_usd: 0.5 }], [200, { continua: false }]])
   await proceseazaPlansa(deps(s, h.handler))
   assertEquals(h.apeluri.length, 1)
@@ -132,4 +135,82 @@ Deno.test('eroare de furnizor: înapoi în așteptare cu backoff; la ultima înc
 Deno.test('migrarea neaplicată (RPC lipsă): nimic de făcut, fără excepție', async () => {
   const s = fakeSupa({ rpcErr: { code: 'PGRST202', message: 'Could not find the function' } })
   assertEquals(await proceseazaPlansa(deps(s, raspunsuri([]).handler)), false)
+})
+
+// ---- Copilot #494 (27.09): reproducerile lui, acum regresii ----
+Deno.test('plafon job: 9,90 consumat + rezervarea rundei > 10 → oprit_plafon ÎNAINTE de apel (nu 10,40 și gata)', async () => {
+  assertEquals(PLAFON_IMPLICIT_USD, 10)
+  const s = fakeSupa({ job: { ...JOB, cost_usd: 9.9 }, doc: docCu() })
+  const h = raspunsuri([[200, { continua: false, cost_usd: 0.5, sumar: { erori: 0 } }]])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals(h.apeluri.length, 0)
+  assertEquals(s.st.job.stare, 'oprit_plafon')
+})
+
+Deno.test('plafon pe zi: 38 consumați azi de alte joburi + rezervarea > 40 → zero AI', async () => {
+  const s = fakeSupa({ job: JOB, doc: docCu(), costZi: 38 })
+  const h = raspunsuri([])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals(h.apeluri.length, 0)
+  assertEquals(s.st.job.stare, 'oprit_plafon')
+  assert(String(s.st.job.eroare).includes('pe zi'))
+})
+
+Deno.test('200 cu {error} / JSON invalid → eroare, nu gata', async () => {
+  for (const r of [[200, { error: 'boom' }], [-1, null]] as any[]) {
+    const s = fakeSupa({ job: JOB, doc: docCu() })
+    await proceseazaPlansa(deps(s, raspunsuri([r]).handler))
+    assertEquals(s.st.job.stare, 'eroare')
+    assertEquals(s.st.notif[0].type, 'warning')
+  }
+})
+
+Deno.test('MAX_RUNDE atins cu continua=true → partial cu motiv, nu gata', async () => {
+  const s = fakeSupa({ job: { ...JOB, mod: 'continua', plafon_usd: 1000 }, doc: docCu({ taiat_la: 't1' }) })
+  const lista: any[] = Array.from({ length: 30 }, () => [200, { continua: true, cost_usd: 0, sumar: { erori: 0 } }])
+  await proceseazaPlansa({ ...deps(s, raspunsuri(lista).handler), plafonZiUsd: 1e6 })
+  assertEquals(s.st.job.stare, 'partial')
+  assert(String(s.st.job.eroare).includes('runde'))
+})
+
+Deno.test('lipirea necesară eșuează (500) → partial, nu gata', async () => {
+  const s = fakeSupa({ job: JOB, doc: docCu({ taiat_la: 't1' }) })
+  const h = raspunsuri([[200, { continua: false, lipire_necesara: 2, sumar: { erori: 0 } }], [500, { error: 'lipire' }]])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals(h.apeluri.length, 2)
+  assertEquals(s.st.job.stare, 'partial')
+})
+
+Deno.test('retăiere în pauza 409 → anulat, fără al doilea apel (nu de_la:0 pe t2)', async () => {
+  const s = fakeSupa({ job: JOB, doc: docCu({ taiat_la: 't1' }) })
+  const h = raspunsuri([[409, { in_lucru: ['z1'] }], [200, { continua: false }]])
+  const sleep = async () => { s.st.doc = docCu(null, { taiat_la: 't2' }) }
+  await proceseazaPlansa({ ...deps(s, h.handler), sleep })
+  assertEquals(h.apeluri.length, 1)
+  assertEquals(s.st.job.stare, 'anulat')
+})
+
+Deno.test('document mutat pe altă licitație → anulat, zero AI', async () => {
+  const s = fakeSupa({ job: JOB, doc: { ...docCu(), licitatie_id: 96 } })
+  const h = raspunsuri([])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals(h.apeluri.length, 0)
+  assertEquals(s.st.job.stare, 'anulat')
+})
+
+Deno.test('execuție veche cu același nume de worker, după re-claim (alt token) → nu scrie nimic', async () => {
+  // după claim, jobul e preluat din nou (alt token), chiar de un worker tot „w1” — execuția noastră are tok1
+  const s = fakeSupa({ job: JOB, doc: docCu(), pierdeLeaseLa: 1 })
+  const h = raspunsuri([[200, { continua: false, sumar: { erori: 0 } }]])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals(h.apeluri.length, 0, 'rezervarea de buget nu se poate scrie => stop înainte de AI')
+  assertEquals(s.st.job.stare, 'lucru')
+})
+
+Deno.test('fetchCuTimeout: signal-ul apelantului nu anulează timeoutul', async () => {
+  let vazut: AbortSignal | undefined
+  const f = fetchCuTimeout((async (_u: any, i: any) => { vazut = i.signal; return new Response('') }) as any, 20)
+  await f('x', { signal: new AbortController().signal })
+  await new Promise(r => setTimeout(r, 60))
+  assert(vazut?.aborted, 'timeoutul trebuie să se aplice și cu signal existent')
 })

@@ -113,4 +113,31 @@ teste.push(['anon nu vede nimic; authenticated vede starea jobului', async ({ ob
   assert.ok(await b.value(`to_jsonb((SELECT count(*) FROM ofertare_plansa_coada)::int)`) >= 1)
 }])
 
+teste.push(['claim: token unic per preluare; rezervarea unui worker căzut se socotește cheltuită; plafonul pe zi = cost + rezervări, doar service_role', async ({ observer, b }) => {
+  await pregatire(observer)
+  const { doc } = await plansa(observer)
+  const j = await inscrie(b, doc)
+  await observer.command(`UPDATE ofertare_plansa_coada SET stare='anulat' WHERE id<>${j.id} AND stare IN ('asteapta','lucru');`)
+  await refuza(b, `SELECT ofertare_plansa_cost_zi(NULL)`, 'permission denied')
+  assert.equal(await observer.value(`(SELECT to_jsonb(plafon_usd) FROM ofertare_plansa_coada WHERE id=${j.id})`), 10)
+  const w = new Session('worker')
+  try {
+    await w.init(); await w.command(`SET ROLE service_role;`)
+    const t1 = await w.value(`(SELECT to_jsonb(claim_token) FROM ofertare_plansa_coada_ia('w1', 10))`)
+    assert.ok(t1)
+    // workerul rezervă 3 USD și cade; alt claim (același nume!) primește alt token și socotește rezervarea cheltuită
+    await observer.command(`UPDATE ofertare_plansa_coada SET cost_usd=2, rezervat_usd=3, lease_pana=now()-interval '1 min' WHERE id=${j.id};`)
+    const zi = await w.value(`to_jsonb(ofertare_plansa_cost_zi(NULL))`)
+    assert.ok(Number(zi) >= 5, 'suma zilei include rezervarea în zbor')
+    assert.equal(Number(await w.value(`to_jsonb(ofertare_plansa_cost_zi(${j.id}))`)) + 5, Number(zi))
+    const t2 = await w.value(`(SELECT to_jsonb(claim_token) FROM ofertare_plansa_coada_ia('w1', 10))`)
+    assert.ok(t2 && t2 !== t1, 'token nou la re-claim')
+    assert.equal(Number(await observer.value(`(SELECT to_jsonb(cost_usd) FROM ofertare_plansa_coada WHERE id=${j.id})`)), 5)
+    assert.equal(Number(await observer.value(`(SELECT to_jsonb(rezervat_usd) FROM ofertare_plansa_coada WHERE id=${j.id})`)), 0)
+    // execuția veche (t1) nu mai poate scrie
+    await w.command(`UPDATE ofertare_plansa_coada SET stare='gata' WHERE id=${j.id} AND claim_token='${t1}' AND stare='lucru';`)
+    assert.equal(await observer.value(`(SELECT to_jsonb(stare) FROM ofertare_plansa_coada WHERE id=${j.id})`), 'lucru')
+  } finally { await w.close() }
+}])
+
 await runTests(teste)

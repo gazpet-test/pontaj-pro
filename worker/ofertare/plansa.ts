@@ -11,7 +11,12 @@ export const MAX_PAUZE_ALT_TAB = 10
 export const MAX_RUNDE = 25
 export const TIMEOUT_AI_MS = 120_000
 export const PARALEL = 4
-export const PLAFON_IMPLICIT_USD = 8
+export const PLAFON_IMPLICIT_USD = 10      // D1 Răzvan 27.09: 10 USD pe planșă (job)
+export const PLAFON_ZI_USD = 40           // D1: 40 USD pe zi, pe toată coada (zi = calendarul Europe/Bucharest, vezi RPC)
+// Rezervarea ÎNAINTE de apel = costul maxim plauzibil al unei runde: handler-ul citește cel mult FELII_PE_RULARE=4 zone pe rundă,
+// iar cel mai scump apel pe zonă măsurat în ai_usage_log (124 apeluri plansa, 27.09.2026) = 0,71 USD → 4 × 0,75 = 3 USD.
+export const REZERVA_RUNDA_USD = 3
+export const REZERVA_LIPIRE_USD = 1
 
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[plansa]', ...a)
 
@@ -29,6 +34,7 @@ export function corpRunda(job: any, doc: any, o: { deLa?: number | null; sari?: 
 // Pasul 2: proveniența înghețată la înscriere trebuie să corespundă documentului de acum.
 export function motivAnulare(job: any, doc: any): string | null {
   if (!doc) return 'documentul nu mai există'
+  if (job.licitatie_id != null && Number(doc.licitatie_id) !== Number(job.licitatie_id)) return 'documentul a fost mutat pe altă licitație după înscriere'
   const p = doc.analiza?.plansa || {}
   if ((p.taiat_la ?? null) !== (job.taiat_la ?? null)) return 'planșa a fost retăiată după înscriere — reînscrie'
   if ((p.cale_felii ?? null) !== (job.cale_felii ?? null)) return 'feliile planșei s-au schimbat după înscriere — reînscrie'
@@ -38,8 +44,9 @@ export function motivAnulare(job: any, doc: any): string | null {
 
 // Pasul 6: clasificarea răspunsului handler-ului.
 export type Clasa = 'ok' | 'alt_tab' | 'anulat' | 'furnizor' | 'business'
-export function clasifica(status: number, body: any): Clasa {
-  if (status === 200) return 'ok'
+// Copilot #494: un 200 fără contract (JSON invalid, {error}, fără „continua” boolean) NU e succes.
+export function clasifica(status: number, body: any): Clasa | 'invalid' {
+  if (status === 200) return body && typeof body === 'object' && !body.error && typeof body.continua === 'boolean' ? 'ok' : 'invalid'
   if (status === 409) return Array.isArray(body?.in_lucru) ? 'alt_tab' : 'anulat'
   if (status >= 500 || status === 429) return 'furnizor'
   return 'business'
@@ -47,7 +54,9 @@ export function clasifica(status: number, body: any): Clasa {
 
 export const backoffMin = (incercari: number) => Math.min(60, 2 ** Math.max(1, incercari))
 
-export function stareFinala(sumar: any): 'gata' | 'partial' {
+// „gata” DOAR dacă handler-ul a spus explicit că a terminat, sumarul există, fără erori, iar lipirea necesară a reușit.
+export function stareFinala(sumar: any, o: { terminat?: boolean; lipireOk?: boolean } = {}): 'gata' | 'partial' {
+  if (!o.terminat || !sumar || o.lipireOk === false) return 'partial'
   return Number(sumar?.erori || 0) > 0 ? 'partial' : 'gata'
 }
 
@@ -59,13 +68,18 @@ export type DepsPlansa = {
   sleep?: (ms: number) => Promise<void>
   stare?: (s: string) => void
   oprire?: () => boolean
+  plafonZiUsd?: number
 }
 
 const sleepImplicit = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 // fetch cu timeout pe AI (pasul 4): în worker nu mai e ceasul Edge care să termine runda înaintea rezervării de 7 min.
 export const fetchCuTimeout = (f: typeof fetch = fetch, ms = TIMEOUT_AI_MS): typeof fetch =>
-  ((u: any, init: any = {}) => f(u, { ...init, signal: init.signal ?? AbortSignal.timeout(ms) })) as typeof fetch
+  ((u: any, init: any = {}) => {
+    // Copilot #494: signal-ul apelantului NU înlocuiește timeoutul — se compun (oricare anulează).
+    const t = AbortSignal.timeout(ms)
+    return f(u, { ...init, signal: init.signal ? AbortSignal.any([init.signal, t]) : t })
+  }) as typeof fetch
 
 // Ia un job și îl duce la capăt. Întoarce false când nu e nimic de luat (sau coada nu există încă).
 export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
@@ -83,16 +97,17 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
   let cost = Number(job.cost_usd || 0), runde = Number(job.runde || 0)
   const jurnal: any[] = Array.isArray(job.jurnal) ? [...job.jurnal] : []
   const plafon = job.plafon_usd != null ? Number(job.plafon_usd) : PLAFON_IMPLICIT_USD
-  // UPDATE condiționat pe lease: 0 rânduri => lease pierdut (alt worker a preluat) => ne oprim fără alt apel AI.
+  // UPDATE condiționat pe preluarea CURENTĂ (claim_token unic per claim, nu numele workerului): o execuție veche care revine
+  // după ce jobul a fost preluat din nou (chiar de o instanță cu același nume) scrie 0 rânduri => se oprește fără alt apel AI.
   const scrie = async (patch: Record<string, unknown>): Promise<boolean> => {
     const { data, error } = await supabase.from('ofertare_plansa_coada').update(patch)
-      .eq('id', job.id).eq('luat_de', worker).eq('stare', 'lucru').select('id')
+      .eq('id', job.id).eq('claim_token', job.claim_token).eq('stare', 'lucru').select('id')
     if (error) { log(`job ${job.id}: scriere eșuată:`, error.message); return false }
     return Array.isArray(data) && data.length === 1
   }
   const incheie = async (st: string, extra: Record<string, unknown> = {}) => {
     const final = st !== 'asteapta'
-    const ok = await scrie({ stare: st, ...(final ? { terminat_la: new Date().toISOString() } : {}), cost_usd: cost, runde, jurnal, ...extra })
+    const ok = await scrie({ stare: st, ...(final ? { terminat_la: new Date().toISOString() } : {}), cost_usd: cost, rezervat_usd: 0, runde, jurnal, ...extra })
     if (ok && job.cerut_de && st !== 'asteapta') {
       const titlu = st === 'gata' ? 'citirea planșei s-a terminat' : st === 'partial' ? 'planșa e citită parțial (zone căzute)'
         : st === 'oprit_plafon' ? 'citirea planșei s-a oprit la plafonul de cost' : `citirea planșei: ${st}`
@@ -109,13 +124,33 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
   const citesteDoc = async () => (await supabase.from('ofertare_documente_atribuire')
     .select('id, licitatie_id, analiza').eq('id', job.doc_id).maybeSingle()).data
 
+  // Buget ÎNAINTE de apel (D1): plafonul pe job și plafonul pe zi se verifică pe cost + rezervare; rezervarea se scrie în
+  // rând (rezervat_usd) ca să intre în suma zilei văzută de alte joburi, apoi se regularizează la costul real.
+  const bugetOk = async (rezerva: number): Promise<string | null> => {
+    if (cost + rezerva > plafon) return `plafon job ${plafon} USD: ${cost.toFixed(2)} consumat + ${rezerva} rezervat pentru runda următoare`
+    const { data: zi, error } = await supabase.rpc('ofertare_plansa_cost_zi', { p_exclude_id: job.id })
+    if (error) return `plafonul pe zi nu se poate verifica (${error.message}) — nu pornesc apeluri AI`
+    const plafonZi = Number(d.plafonZiUsd ?? PLAFON_ZI_USD)
+    if (Number(zi || 0) + cost + rezerva > plafonZi) return `plafon pe zi ${plafonZi} USD: ${(Number(zi || 0) + cost).toFixed(2)} consumat azi + ${rezerva} rezervat`
+    if (!(await scrie({ rezervat_usd: rezerva, cost_usd: cost }))) return 'lease'
+    return null
+  }
+  const opresteLaBuget = async (motiv: string) => {
+    if (motiv === 'lease') { log(`job ${job.id}: lease pierdut — mă opresc`); return true }
+    await incheie('oprit_plafon', { eroare: motiv, rezervat_usd: 0 }); return true
+  }
+
   let doc = await citesteDoc()
   const m0 = motivAnulare(job, doc)
   if (m0) { await incheie('anulat', { motiv_anulare: m0 }); log(`job ${job.id}: anulat — ${m0}`); return true }
 
-  let deLa: number | null = null, sari: string[] = [], pauzeAltTab = 0, ultimSumar: any = null, lipire = 0
+  let deLa: number | null = null, sari: string[] = [], pauzeAltTab = 0, ultimSumar: any = null, lipire = 0, terminat = false
   while (!oprire() && runde < MAX_RUNDE) {
-    if (cost >= plafon) { await incheie('oprit_plafon', { eroare: `plafon ${plafon} USD atins (${cost.toFixed(2)} USD)` }); return true }
+    // Identitatea sursei se reverifică înaintea FIECĂRUI apel (inclusiv după pauza 409): retăiere / mutare = anulat, zero AI.
+    const m = motivAnulare(job, doc)
+    if (m) { await incheie('anulat', { motiv_anulare: m, rezervat_usd: 0 }); return true }
+    const mb = await bugetOk(REZERVA_RUNDA_USD)
+    if (mb) return await opresteLaBuget(mb)
     const body = corpRunda(job, doc, { deLa, sari })
     stare(`doc ${job.doc_id} · runda ${runde + 1} · ${body.mod ?? 'de_la ' + body.de_la}`)
     const t0 = Date.now()
@@ -138,7 +173,7 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
 
     if (cls === 'alt_tab') {
       pauzeAltTab++
-      if (!(await scrie({ lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString(), jurnal, cost_usd: cost }))) return true
+      if (!(await scrie({ lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString(), jurnal, cost_usd: cost, rezervat_usd: 0 }))) return true
       if (pauzeAltTab > MAX_PAUZE_ALT_TAB) {
         await incheie('asteapta', { urmatoarea_la: new Date(Date.now() + backoffMin(job.incercari) * 60_000).toISOString(),
           luat_de: null, lease_pana: null, eroare: 'altă rulare ține zonele de prea mult timp — reiau mai târziu' })
@@ -157,35 +192,49 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       log(`job ${job.id}: eroare de furnizor (${status}) — reiau cu backoff`)
       return true
     }
+    if (cls === 'invalid') {
+      await incheie('eroare', { eroare: `răspuns invalid de la handler (HTTP ${status}): ${String(raspuns?.error ?? 'fără „continua”').slice(0, 400)}`, rezervat_usd: 0 })
+      return true
+    }
     if (cls === 'business') { await incheie('eroare', { eroare: String(raspuns?.error ?? `HTTP ${status}`).slice(0, 500) }); return true }
 
     runde++
     ultimSumar = raspuns?.sumar ?? ultimSumar
     sari = Array.isArray(raspuns?.reincercate) ? raspuns.reincercate : sari
     deLa = raspuns?.de_la_urmator ?? null
-    if (!(await scrie({ runde, cost_usd: cost, jurnal, lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString() }))) {
+    if (!(await scrie({ runde, cost_usd: cost, rezervat_usd: 0, jurnal, lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString() }))) {
       log(`job ${job.id}: lease pierdut — mă opresc`); return true
     }
-    if (!raspuns?.continua) { lipire = Number(raspuns?.lipire_necesara || 0); break }
+    if (!raspuns.continua) { lipire = Number(raspuns?.lipire_necesara || 0); terminat = true; break }
     doc = await citesteDoc()
-    const m = motivAnulare(job, doc)
-    if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
   }
   if (oprire()) {   // SIGTERM: lăsăm jobul să fie reluat (lease-ul expiră), fără să-l închidem greșit
-    await scrie({ stare: 'asteapta', luat_de: null, lease_pana: null, jurnal, cost_usd: cost, runde }); return true
+    await scrie({ stare: 'asteapta', luat_de: null, lease_pana: null, claim_token: null, rezervat_usd: 0, jurnal, cost_usd: cost, runde }); return true
   }
-  if (lipire > 0 && cost < plafon) {
+  let lipireOk: boolean | undefined
+  if (lipire > 0) {
+    lipireOk = false
+    doc = await citesteDoc()
+    const m = motivAnulare(job, doc)
+    if (m) { await incheie('anulat', { motiv_anulare: m, rezervat_usd: 0 }); return true }
+    const mb = await bugetOk(REZERVA_LIPIRE_USD)
+    if (mb) return await opresteLaBuget(mb)
     try {
       const req = new Request('http://worker/ofertare-plansa-citeste', { method: 'POST', body: JSON.stringify({ doc_id: job.doc_id, doar_lipire: true }),
         headers: { Authorization: `Bearer ${d.depsHandler.SERVICE}`, 'Content-Type': 'application/json' } })
       const res = await d.handler(req, d.depsHandler)
       const r = await res.json().catch(() => ({}))
       cost += Number(r?.cost_usd || 0)
-      jurnal.push({ la: new Date().toISOString(), body: { doar_lipire: true }, status: res.status, cost_usd: Number(r?.cost_usd || 0) })
+      lipireOk = res.status === 200 && !r?.error
+      jurnal.push({ la: new Date().toISOString(), body: { doar_lipire: true }, status: res.status, cost_usd: Number(r?.cost_usd || 0),
+        eroare: r?.error ? String(r.error).slice(0, 300) : undefined })
     } catch (e) { jurnal.push({ la: new Date().toISOString(), body: { doar_lipire: true }, eroare: String((e as Error)?.message ?? e).slice(0, 200) }) }
   }
-  const st = runde >= MAX_RUNDE && !ultimSumar ? 'eroare' : stareFinala(ultimSumar)
-  await incheie(st, { rezultat: ultimSumar ? { felii_citite: ultimSumar.felii_citite, erori: ultimSumar.erori, zone_cazute: ultimSumar.zone_cazute,
+  // MAX_RUNDE atins cu „continua” = citire neterminată → partial, cu motiv; niciodată „gata”.
+  const st = !terminat && !ultimSumar ? 'eroare' : stareFinala(ultimSumar, { terminat, lipireOk })
+  const motiv = !terminat ? `oprit după ${MAX_RUNDE} runde, citirea nu s-a terminat — pornește „continuă”`
+    : lipireOk === false ? 'lipirea notelor tăiate a eșuat — reia „lipește”' : undefined
+  await incheie(st, { rezervat_usd: 0, ...(motiv ? { eroare: motiv } : {}), rezultat: ultimSumar ? { felii_citite: ultimSumar.felii_citite, erori: ultimSumar.erori, zone_cazute: ultimSumar.zone_cazute,
     tronsoane: ultimSumar.tronsoane_gasite, lungime_m: ultimSumar.lungime_totala_m } : null })
   log(`job ${job.id} (doc ${job.doc_id}): ${st} · ${runde} runde · ${cost.toFixed(2)} USD`)
   return true

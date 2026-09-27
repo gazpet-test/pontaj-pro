@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS public.ofertare_plansa_coada (
   lease_pana    timestamptz,
   runde         int    NOT NULL DEFAULT 0,
   cost_usd      numeric(10,4) NOT NULL DEFAULT 0,
-  plafon_usd    numeric(10,2),                 -- NULL = fără plafon pe job; valoarea implicită o decide Razvan
+  plafon_usd    numeric(10,2) DEFAULT 10,      -- D1 Răzvan 27.09: 10 USD pe planșă (NULL => workerul folosește tot 10)
+  rezervat_usd  numeric(10,4) NOT NULL DEFAULT 0,   -- rezervarea rundei în zbor (intră în plafonul pe zi al tuturor joburilor)
+  claim_token   uuid,                          -- unic per preluare: scrierile workerului se condiționează pe el, nu pe nume
   jurnal        jsonb  NOT NULL DEFAULT '[]'::jsonb, -- pe rundă: {la, body, status, citite_acum, zone, in_lucru_alt_tab, cost_usd, ms}
   rezultat      jsonb,                         -- sumarul final (felii_citite, erori, tronsoane, lungime, cantitati)
   eroare        text,
@@ -128,13 +130,15 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
   -- joburile reluate de prea multe ori (worker mort repetat) nu se mai iau: eroare vizibilă
+  -- rezervarea unui worker căzut se socotește CHELTUITĂ (apelul AI poate fi plătit deși rezultatul nu s-a scris)
   UPDATE ofertare_plansa_coada SET stare = 'eroare', eroare = 'lease expirat de ' || incercari || ' ori — worker oprit repetat',
-         terminat_la = now()
+         terminat_la = now(), cost_usd = cost_usd + rezervat_usd, rezervat_usd = 0, claim_token = NULL
    WHERE stare = 'lucru' AND lease_pana < now() AND incercari >= max_incercari;
 
   RETURN QUERY
   UPDATE ofertare_plansa_coada q
-     SET stare = 'lucru', luat_de = p_worker, luat_la = now(),
+     SET stare = 'lucru', luat_de = p_worker, luat_la = now(), claim_token = gen_random_uuid(),
+         cost_usd = q.cost_usd + q.rezervat_usd, rezervat_usd = 0,
          lease_pana = now() + make_interval(mins => GREATEST(p_lease_min, 1)), incercari = q.incercari + 1
    WHERE q.id = (
      SELECT c.id FROM ofertare_plansa_coada c
@@ -149,6 +153,25 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.ofertare_plansa_coada_ia(text, int) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.ofertare_plansa_coada_ia(text, int) TO service_role;
 
+-- ---- Plafonul pe zi (D1: 40 USD/zi pe toată coada) — worker, DOAR service_role ----
+-- Ziua = calendarul Europe/Bucharest; un job se socotește în ziua în care a fost PRELUAT ultima dată (luat_la).
+-- Suma = cost consumat + rezervările în zbor ale celorlalte joburi (p_exclude_id = jobul apelantului, care își adaugă singur
+-- costul și rezervarea proprie).
+CREATE OR REPLACE FUNCTION public.ofertare_plansa_cost_zi(p_exclude_id bigint DEFAULT NULL)
+RETURNS numeric
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT COALESCE(sum(q.cost_usd + q.rezervat_usd), 0)
+    FROM ofertare_plansa_coada q
+   WHERE q.luat_la >= (date_trunc('day', now() AT TIME ZONE 'Europe/Bucharest') AT TIME ZONE 'Europe/Bucharest')
+     AND q.id IS DISTINCT FROM p_exclude_id;
+$$;
+REVOKE EXECUTE ON FUNCTION public.ofertare_plansa_cost_zi(bigint) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ofertare_plansa_cost_zi(bigint) TO service_role;
+
 -- Prelungirea lease-ului și finalizarea le face workerul direct (service_role), condiționat:
 --   UPDATE ofertare_plansa_coada SET lease_pana = now() + interval '10 min', runde = ..., cost_usd = ..., jurnal = ...
---    WHERE id = $1 AND luat_de = $worker AND stare = 'lucru'   -- 0 rânduri => lease pierdut => workerul se oprește
+--    WHERE id = $1 AND claim_token = $token AND stare = 'lucru'   -- 0 rânduri => lease pierdut => workerul se oprește
