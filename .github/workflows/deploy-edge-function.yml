@@ -63,7 +63,7 @@ jobs:
           # Funcțiile care rulează LIVE cu verify_jwt=false (listă derivată din
           # list_edge_functions la 25.09.2026). Au autentificare proprie în cod (cron/webhook/QR).
           # O funcție nouă cu verify_jwt=false trebuie adăugată AICI, altfel pleacă cu true.
-          NO_JWT=" dovezi-valabilitate-alerta hr-autorizatii-scan hr-digest-saptamanal hr-extrage-ci meta-publish meteo-sync nas-upload-url ofertare-alerte-mail ofertare-cantitati-extrage ofertare-document-nou-citeste ofertare-etapa1-mail ofertare-fisier-semnat ofertare-garantie-mail ofertare-participari-import ofertare-radar-scan ofertare-rfq-inbox ofertare-seap-veghe ofertare-verificare-finala ofertare-word-text olx-aplicari-sync recrutare-aplica salus tuya vercel-relay vicare "
+          NO_JWT=" dovezi-valabilitate-alerta hr-autorizatii-scan hr-digest-saptamanal hr-extrage-ci iot-terra meta-publish meteo-sync nas-upload-url ofertare-alerte-mail ofertare-cantitati-extrage ofertare-document-nou-citeste ofertare-etapa1-mail ofertare-fisier-semnat ofertare-garantie-mail ofertare-participari-import ofertare-radar-scan ofertare-rfq-inbox ofertare-seap-veghe ofertare-verificare-finala ofertare-word-text olx-aplicari-sync recrutare-aplica salus tuya vercel-relay vicare "
           for s in $LISTA; do
             extra=""
             if [[ "$NO_JWT" == *" $s "* ]]; then extra="--no-verify-jwt"; fi
