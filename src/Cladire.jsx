@@ -13,6 +13,83 @@ const S = { card: { background:G.card, border:`1px solid ${G.border}`, borderRad
 const fmtDT = (d) => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
 const nr = (v, dec = 1) => v == null ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: dec })
 
+// Aceleași praguri ca iot_verifica_terra; testul de paritate citește migrarea SQL.
+export const TERRA_PRAGURI = { disc_max: [45, 50], nvme_max: [65, 70], cpu: [80, 90], ambient: [35, 40] }
+export const TERRA_TACERE_MS = 30 * 60e3
+export const nivelTerra = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa'
+  : valoare > TERRA_PRAGURI[cheie][1] ? 'error' : valoare > TERRA_PRAGURI[cheie][0] ? 'warning' : 'ok'
+export const terraFaraDate = (cititLa, acum) => !cititLa || !Number.isFinite(Date.parse(cititLa)) || acum - Date.parse(cititLa) > TERRA_TACERE_MS
+
+// Mini-grafic comun pentru centrală și Terra; fiecare serie ignoră valorile lipsă.
+function Spark({ pts, k, color, min, max, um }) {
+  const vals = pts.map(x => x[k]).filter(Number.isFinite); if (vals.length < 2) return null
+  const lo = min ?? Math.min(...vals), hi = max ?? Math.max(...vals), W = 260, H = 44
+  const d = pts.filter(x => Number.isFinite(x[k])).map((x, i, arr) => `${(i / (arr.length - 1)) * W},${H - ((x[k] - lo) / ((hi - lo) || 1)) * H}`).join(' ')
+  return <div style={{ fontSize:11, color:G.dim }}><svg width={W} height={H} style={{ display:'block', maxWidth:'100%' }}><polyline points={d} fill="none" stroke={color} strokeWidth="1.5" /></svg>{nr(vals[vals.length - 1])} {um} ultima citire · min {nr(Math.min(...vals))} · max {nr(Math.max(...vals))} (24h)</div>
+}
+
+export function TerraCard({ dispozitiv, istoric = [], acum, eroare, incarcare = false }) {
+  const v = dispozitiv?.ultima_citire || {}, faraDate = terraFaraDate(dispozitiv?.citit_la, acum)
+  const culori = { lipsa: G.dim, ok: G.green, warning: G.yellow, error: G.red }
+  const discuri = Array.isArray(v.discuri) ? v.discuri : []
+  const goala = Object.keys(TERRA_PRAGURI).every(k => !Number.isFinite(v[k]))
+  const minute = dispozitiv?.citit_la ? Math.max(0, Math.floor((acum - Date.parse(dispozitiv.citit_la)) / 60e3)) : null
+  const pts = istoric.map(h => ({ la: h.la, ambient: h.valori?.ambient, disc_max: h.valori?.disc_max }))
+  const randuri = [['Ambient', 'ambient', v.ambient], ['CPU', 'cpu', v.cpu], ['NVMe max', 'nvme_max', v.nvme_max],
+    ...discuri.map(d => [d.dev, 'disc_max', d.temp])]
+  return <div style={{ ...S.card, borderColor: faraDate && !incarcare ? G.red : G.border }}>
+    <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
+      <div style={{ fontWeight:700 }}>🖥️ Server Terra</div>
+      {!incarcare && <span style={{ fontSize:11.5, color: faraDate ? G.red : G.dim }}>{faraDate ? 'fără date' : `acum ${minute} min`}</span>}
+    </div>
+    {incarcare ? <div style={{ color:G.dim, fontSize:12.5 }}>Se încarcă…</div> : <>
+      {faraDate && <div style={{ color:G.red, fontSize:12, marginBottom:8 }}>Ultima citire: {fmtDT(dispozitiv?.citit_la)}</div>}
+      {!faraDate && goala && <div style={{ color:G.yellow, fontSize:12, marginBottom:8 }}>Citire goală — temperaturile lipsesc.</div>}
+      {randuri.map(([eticheta, cheie, val]) => <div key={eticheta} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
+        <span style={{ color:G.muted }}>{eticheta}</span><b style={{ color:faraDate ? G.red : culori[nivelTerra(cheie, val)] }}>{nr(val)} °C</b>
+      </div>)}
+      {!discuri.length && <div style={{ fontSize:12, color:G.dim, marginTop:6 }}>Discuri: fără temperaturi.</div>}
+      <div style={{ marginTop:10, display:'grid', gap:6 }}>
+        <Spark pts={pts} k="ambient" color={G.blue} um="°C ambient" />
+        <Spark pts={pts} k="disc_max" color={G.orange} um="°C disc max" />
+        {!['ambient', 'disc_max'].some(k => pts.filter(p => Number.isFinite(p[k])).length >= 2) && <span style={{ fontSize:11, color:G.dim }}>Istoric 24 h insuficient pentru grafic.</span>}
+      </div>
+    </>}
+    {eroare && <div role="status" style={{ color:G.yellow, fontSize:12, marginTop:8 }}>{eroare}</div>}
+  </div>
+}
+
+function TerraMonitor() {
+  const [dispozitiv, setDispozitiv] = useState(null), [istoric, setIstoric] = useState([])
+  const [acum, setAcum] = useState(Date.now), [eroare, setEroare] = useState(null), [incarcare, setIncarcare] = useState(true)
+  useEffect(() => {
+    let oprit = false, inCurs = false
+    const load = async () => {
+      setAcum(Date.now())
+      if (inCurs) return
+      inCurs = true
+      try {
+        const { data: d, error } = await supabase.from('iot_dispozitive').select('id, ultima_citire, citit_la')
+          .eq('sursa', 'terra').eq('extern_id', 'terra').eq('activ', true).maybeSingle()
+        if (oprit) return
+        if (error) { setEroare('Nu pot actualiza datele Terra.'); return }
+        setDispozitiv(d)
+        if (!d) { setIstoric([]); setEroare(null); return }
+        const { data: h, error: eh } = await supabase.from('iot_citiri').select('la, valori').eq('dispozitiv_id', d.id)
+          .gte('la', new Date(Date.now() - 24 * 3600e3).toISOString()).order('la')
+        if (oprit) return
+        setIstoric(eh ? [] : h || []); setEroare(eh ? 'Istoricul Terra nu este disponibil.' : null)
+      } catch {
+        if (!oprit) setEroare('Nu pot actualiza datele Terra.')
+      } finally { inCurs = false; if (!oprit) setIncarcare(false) }
+    }
+    load()
+    const timer = setInterval(load, 60e3)
+    return () => { oprit = true; clearInterval(timer) }
+  }, [])
+  return <TerraCard dispozitiv={dispozitiv} istoric={istoric} acum={acum} eroare={eroare} incarcare={incarcare} />
+}
+
 // ── Live stream cameră Tuya (HLS). hls.js se încarcă la cerere de pe cdnjs (Safari/iOS redă HLS nativ, fără librărie).
 let _hlsP = null
 const loadHls = () => _hlsP || (_hlsP = new Promise((res, rej) => {
@@ -103,12 +180,6 @@ export default function Cladire() {
   const stareC = v.blocat === true ? { t: 'BLOCATĂ', c: G.red } : err.length ? { t: 'cu erori', c: G.orange } : v.arzator_activ ? { t: 'arde', c: G.green } : { t: 'în așteptare', c: G.muted }
   // mini-grafic 24h: presiune + tur
   const pts = istoric.map(h => ({ la: h.la, p: h.valori?.presiune_bar, t: h.valori?.temp_tur, a: h.valori?.arzator_activ }))
-  const Spark = ({ k, color, min, max, um }) => {
-    const vals = pts.map(x => x[k]).filter(x => typeof x === 'number'); if (vals.length < 2) return null
-    const lo = min ?? Math.min(...vals), hi = max ?? Math.max(...vals), W = 260, H = 44
-    const d = pts.filter(x => typeof x[k] === 'number').map((x, i, arr) => `${(i / (arr.length - 1)) * W},${H - ((x[k] - lo) / ((hi - lo) || 1)) * H}`).join(' ')
-    return <div style={{ fontSize:11, color:G.dim }}><svg width={W} height={H} style={{ display:'block' }}><polyline points={d} fill="none" stroke={color} strokeWidth="1.5" /></svg>{nr(vals[vals.length - 1])} {um} acum · min {nr(Math.min(...vals))} · max {nr(Math.max(...vals))} (24h)</div>
-  }
   const Row = ({ k, v: val, um }) => val == null ? null : <div style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}><span style={{ color:G.muted }}>{k}</span><b>{typeof val === 'number' ? nr(val) : String(val)}{um ? ' ' + um : ''}</b></div>
 
   return (
@@ -155,10 +226,12 @@ export default function Cladire() {
               <Row k="Ore / porniri arzător" v={v.arzator_stat ? `${nr(v.arzator_stat.ore, 0)} h / ${nr(v.arzator_stat.porniri, 0)}` : null} />
               {err.length > 0 && <div style={{ color:G.red, fontSize:12.5, fontWeight:700, marginTop:8 }}>⚠ Erori active: {err.map(e => `${e.cod} (${fmtDT(e.la)})`).join(', ')}</div>}
               {Array.isArray(v.mesaje) && v.mesaje.length > 0 && <div style={{ fontSize:11.5, color:G.dim, marginTop:6 }}>Ultimele mesaje: {v.mesaje.slice(0, 4).map(m => `${m.cod} · ${fmtDT(m.la)}`).join(' | ')}</div>}
-              <div style={{ marginTop:10, display:'grid', gap:6 }}><Spark k="p" color={G.blue} min={0} max={3} um="bar" /><Spark k="t" color={G.orange} um="°C tur" /></div>
+              <div style={{ marginTop:10, display:'grid', gap:6 }}><Spark pts={pts} k="p" color={G.blue} min={0} max={3} um="bar" /><Spark pts={pts} k="t" color={G.orange} um="°C tur" /></div>
             </>
           )}
         </div>
+
+        <TerraMonitor />
 
         {/* Termostate */}
         <div style={S.card}>
