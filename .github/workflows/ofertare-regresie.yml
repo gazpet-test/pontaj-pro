@@ -9,6 +9,8 @@ on:
       - 'supabase/functions/ofertare-**'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
+      - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
+      - 'worker/ofertare/plansa*.ts'
       - 'scripts/pg/**'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
@@ -21,6 +23,8 @@ on:
       - 'supabase/functions/ofertare-**'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
+      - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
+      - 'worker/ofertare/plansa*.ts'
       - 'scripts/pg/**'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
@@ -64,6 +68,7 @@ jobs:
           supabase/functions/ofertare-plansa-citeste
           supabase/functions/ofertare-clarificari-propune
           supabase/functions/ofertare-document-nou-citeste
+          worker/ofertare/plansa_test.ts
 
   postgres:
     runs-on: ubuntu-latest
@@ -101,3 +106,8 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/r9b_test_review_f
           PGPASSWORD: postgres
         run: node scripts/pg/test_r5_review_f.mjs
+      - name: Coada de planșe pe NAS (R4 #142) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/r9b_test_coada_plansa
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_r4_coada_plansa.mjs

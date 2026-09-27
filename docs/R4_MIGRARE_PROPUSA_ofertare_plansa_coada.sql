@@ -74,6 +74,7 @@ DECLARE
   v_owner boolean := false;
   v_sha   text;
   v_id    bigint;
+  v_mod_existent text;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'neautentificat'; END IF;
   IF p_mod NOT IN ('citeste', 'continua', 'reia_erori') THEN RAISE EXCEPTION 'mod invalid'; END IF;
@@ -106,12 +107,13 @@ BEGIN
   RETURNING id INTO v_id;
 
   IF v_id IS NULL THEN
-    SELECT q.id INTO v_id FROM ofertare_plansa_coada q
+    -- un singur job activ pe tăiere: întoarcem modul JOBULUI EXISTENT (UI nu afișează modul cerut ca fiind cel pus în coadă)
+    SELECT q.id, q.mod INTO v_id, v_mod_existent FROM ofertare_plansa_coada q
      WHERE q.doc_id = p_doc_id AND COALESCE(q.taiat_la, '') = COALESCE(v_doc.analiza -> 'plansa' ->> 'taiat_la', '')
        AND q.stare IN ('asteapta', 'lucru');
-    RETURN jsonb_build_object('id', v_id, 'existent', true);
+    RETURN jsonb_build_object('id', v_id, 'existent', true, 'mod', v_mod_existent);
   END IF;
-  RETURN jsonb_build_object('id', v_id, 'existent', false);
+  RETURN jsonb_build_object('id', v_id, 'existent', false, 'mod', p_mod);
 END;
 $$;
 REVOKE EXECUTE ON FUNCTION public.ofertare_plansa_coada_inscrie(bigint, text) FROM PUBLIC, anon;

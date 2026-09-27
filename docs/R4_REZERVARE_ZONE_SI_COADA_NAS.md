@@ -118,7 +118,10 @@ Alte rulări:
 - O rezervare falsă **sub plafon** (≤ now + 8 min), scrisă de un utilizator Ofertare direct în `analiza`, blochează cel mult 8 min. Restul îl limitează plafonul; poarta de scriere pe `analiza` e în afara R4 (§4).
 - UI: mesajul de 409 apare ca „Eroare la citire/reluare: Zonele … în lucru în alt tab …” (prin `mesajInvoke`). La final de buclă cu zone lăsate altui tab, UI spune tot „Planșă citită”, cu sumarul parțial (`in_lucru_alt_tab` nu e afișat). E cosmetic; `src/` a rămas neatins.
 
-## 3. Coada pe NAS (independentă de browser) — design + estimare; NEimplementată
+## 3. Coada pe NAS (independentă de browser)
+
+> **27.09.2026 — IMPLEMENTAT pe ramura `claude/r4-coada-plansa` (#142), migrare NEAPLICATĂ.** Worker `worker/ofertare/plansa.ts` (+ `plansa_test.ts`, 10/10 Deno), migrarea din `docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql` (+ `scripts/pg/test_r4_coada_plansa.mjs`, 6/6 pe PostgreSQL 16), UI „🗂 pe NAS” în `OfertareLicitatii.jsx`. Plafon implicit pe job: 8 USD (constantă `PLAFON_IMPLICIT_USD`, de confirmat de Răzvan). Fără migrare, workerul și butonul nu fac nimic (RPC lipsă ⇒ tăcere; tabel lipsă ⇒ butonul nu apare). Aplicarea migrării + registrul automatizărilor: după review Copilot și GO Răzvan.
+
 
 ### 3.1 De ce nu acum
 Estimarea e de 6–8 h (§3.9), peste ½ zi. Coada cere **schemă nouă** și e o **automatizare nouă care cheltuie AI** (CLAUDE.md pct. 3, 4, 7). În plus, workerul NAS își ia singur codul din `main`, deci un merge o pornește imediat. Se livrează doar cu GO și cu plafonul decis de Razvan.
