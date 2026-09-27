@@ -6,7 +6,7 @@ import { clasaUnitate } from '../src/ofertareUnitati.js'
 import { controlTotaluri } from '../src/ofertareTotaluri.js'
 import { controlCantitatiGrafic, controlFronturiGrafic, fronturiDinCantitati, randuriLipsa, categoriiRetea } from '../src/ofertareCantitatiAprobare.js'
 import { stareBazaCiorna, deExportat } from '../src/ofertareClarificariBaza.js'
-import { controlSursaAprobareFinala } from '../src/ofertarePoarta.js'
+import { controlSursaAprobareFinala, CONTOARE_BLOCANTE_CANTITATI } from '../src/ofertarePoarta.js'
 
 const r = (id, cantitate, extra = {}) => ({ id, licitatie_id: 1, obiect: 'Lot A', categorie: 'Conducte', sursa: 'Document #8',
   tip_sursa: 'lista_f3', denumire: 'Tronson A', status: 'validat', um: 'm', cantitate, ...extra })
@@ -76,7 +76,7 @@ test('Stările fără aprobare curentă, inclusiv luat_act, blochează exportul'
 })
 
 test('Poarta finală: control lipsă, TOTAL diferit, unitate neclară blocate', () => {
-  const st = { transfer_conflicte_docs: 0, transfer_in_curs: 0, totaluri_control: [], unitati_de_verificat: 0 }
+  const st = { ...Object.fromEntries(CONTOARE_BLOCANTE_CANTITATI.map(k => [k, 0])), transfer_conflicte_docs: 0, transfer_in_curs: 0, totaluri_control: [], unitati_de_verificat: 0 }
   assert.equal(controlSursaAprobareFinala(st).stare, 'ok')
   assert.equal(controlSursaAprobareFinala({ ...st, totaluri_control: undefined }).stare, 'block')
   assert.equal(controlSursaAprobareFinala({ ...st, unitati_de_verificat: 1 }).stare, 'block')

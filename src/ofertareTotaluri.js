@@ -1,5 +1,5 @@
 import { normUm, aceeasiValoare, fmtExact } from './ofertareCantitatiInvalidare.js'
-import { clasaUnitate } from './ofertareUnitati.js'
+import { clasaUnitate, factorBaza } from './ofertareUnitati.js'
 
 const total = c => /total/i.test(`${c.obiect || ''} ${c.denumire || ''} ${c.sursa || ''}`)
 const perimetru = c => ['licitatie_id', 'obiect', 'categorie', 'tip_sursa', 'sursa'].map(k => normUm(c[k]))
@@ -23,8 +23,8 @@ export function controlTotaluri(randuri = [], baza = 'cantitate') {
     const comparabil = !!p[1] && !!p[3] && !!p[4] && grup.filter(total).length === 1 && det.length > 0 &&
       u.tip !== 'de_verificat' && valida(t) && det.every(c => valida(c) && comparabila(c))
     const validate = det.filter(c => valida(c) && comparabila(c))
-    const suma = validate.length ? validate.reduce((s, c) => s + valoare(c) * (clasaUnitate(c.um).factor || 1), 0) : null
-    const declarat = valoare(t) == null ? null : valoare(t) * (u.factor || 1)
+    const suma = validate.length ? validate.reduce((s, c) => s + valoare(c) * factorBaza(clasaUnitate(c.um), baza), 0) : null
+    const declarat = valoare(t) == null ? null : valoare(t) * factorBaza(u, baza)
     const stare = !comparabil ? 'necomparabil' : aceeasiValoare(declarat, suma) ? 'ok' : 'diferit'
     return { id: t.id, baza, obiect: t.obiect, sursa: t.sursa, declarat, suma_detalii: det.length ? suma : null,
       um: u.tip === 'lungime' ? 'm' : t.um, stare, text: stare === 'necomparabil' ? TOTAL_NECOMPARABIL : stare === 'diferit' ? TOTAL_DIFERIT : '' }

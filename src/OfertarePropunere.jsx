@@ -27,6 +27,7 @@ import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit }
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
 // R5 (Copilot 25.09.2026): H2 nu ia F3 drept referință aprobată cât are rânduri de rețea nevalidate (view separat, ca neconfirmatele).
 import { campuriCantitatiNevalidate, marcheazaInvalidate, reverificareGraficInghetat } from './ofertareCantitatiAprobare.js'
+import { COLOANE_GRAFIC_REVERIFICARE } from './ofertareGraficReverificare.js'
 import { citestePaginat } from './ofertareCantitatiInvalidare.js'
 // R5 runda 5 (minorul 5 al verificatorului): rândul „grafic” reverifică versiunea ÎNGHEȚATĂ (fronturile ei) față de cantitățile de ACUM
 // (+ istoricul aprobărilor, dacă migrarea e aplicată). Nicio versiune / fără parametri = {} (ca înainte); eroare = control indisponibil.
@@ -34,7 +35,7 @@ async function campuriGraficReverificare(licId) {
   try {
     const [rV, rC, rI] = await Promise.all([
       supabase.from('grafic_versiuni').select('versiune, generat_la, parametri:snapshot->parametri').eq('licitatie_id', licId).order('versiune', { ascending: false }).limit(1).maybeSingle(),
-      citestePaginat((a, b) => supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, status, diferenta_nota, sursa').eq('licitatie_id', licId).order('id').range(a, b)),
+      citestePaginat((a, b) => supabase.from('ofertare_cantitati').select(COLOANE_GRAFIC_REVERIFICARE).eq('licitatie_id', licId).order('id').range(a, b)),
       // runda 6: istoricul DESCRESCĂTOR și paginat (citestePaginat)
       citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licId).order('id', { ascending: false }).range(a, b)),
     ])

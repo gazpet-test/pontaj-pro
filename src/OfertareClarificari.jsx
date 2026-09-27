@@ -13,7 +13,7 @@ import { supabase } from './lib/supabase.js'
 import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
-import { eCiornaAutomata, stareBazaCiorna, textDiferente } from './ofertareClarificariBaza.js'
+import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -67,6 +67,18 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const [legare, setLegare] = useState(null)       // { docId, bife:{clarId:true}, propuneri:{clarId:'raspuns_scurt'} } — panoul „La ce întrebări răspunde?”
   // R5 runda 9: starea bazei cifrelor ciornelor automate (v_ofertare_clarificari_baza) — eroare / view lipsă = „nu putem verifica” (fail-closed)
   const [baza, setBaza] = useState({ peId: new Map(), eroare: null })
+  const [dreptDecizie, setDreptDecizie] = useState(null)
+  const [exceptieInCurs, setExceptieInCurs] = useState(null)
+  // Poarta serverului include owner, responsabil și admin Ofertare. Un răspuns vechi nu dă drepturi pe altă licitație.
+  useEffect(() => {
+    let activ = true
+    setDreptDecizie(null)
+    if (licId && profile?.id) supabase.rpc('fn_ofertare_source_pack_poate_decide', { p_licitatie_id: licId })
+      .then(({ data, error }) => { if (activ && !error) setDreptDecizie({ licId, profileId: profile.id, permis: data === true }) })
+      .catch(() => {})
+    return () => { activ = false }
+  }, [licId, profile?.id])
+  const poateDecide = dreptDecizie?.licId === licId && dreptDecizie?.profileId === profile?.id && dreptDecizie?.permis === true
   const numeProfil = (id) => profiles.find(p => p.id === id)?.name || '—'
   // Răzvan 07.09.2026: clarificările încărcate manual (PDF) sunt citite de platformă cu AI → citita_la + rezumat
   const citesteClarificare = async (q) => {
@@ -148,8 +160,25 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     showToast('✓ Decizia de review a fost înregistrată — nimic trimis.')
     await load()
   }
+  const acceptaExceptieIdentitate = async (q) => {
+    const st = stareBazaCiorna(q, baza.peId, baza.eroare)
+    if (!poateAcceptaExceptieIdentitate(q, st, poateDecide) || exceptieInCurs) return
+    const motiv = window.prompt(`${st.text}\n\nMotivul acceptării excepției pentru această ciornă (minimum 10 caractere):`)
+    if (motiv == null) return
+    if (motiv.trim().length < 10) return showToast('Motivul trebuie să aibă minimum 10 caractere.', 'err')
+    setExceptieInCurs(q.id)
+    try {
+      const { data, error } = await supabase.rpc('ofertare_clarificare_exceptie_identitate', {
+        p_id: q.id, p_amprenta: st.rand.amprenta_curenta, p_motiv: motiv.trim(),
+      })
+      if (error || data?.error || data?.ok !== true) showToast('Excepție refuzată: ' + (data?.error || error?.message || 'răspuns neconfirmat'), 'err')
+      else showToast('Excepția a fost înregistrată. Exportul cere și reconfirmarea textului pe aceeași bază.')
+      await load()
+    } catch (error) { showToast('Excepția nu a putut fi confirmată: ' + error.message, 'err') }
+    finally { setExceptieInCurs(null) }
+  }
   // 22.09.2026: „Propune clarificări” — generatorul rulează pe workerul NAS (ofertare_clarificari_coada):
-  // goluri din acoperire + ambiguități din registru + diferențe de cantități + răspunsuri primite → propuneri de_trimis.
+  // goluri din acoperire + ambiguități din registru + diferențe de cantități + răspunsuri primite → propuneri de verificat.
   const propuneServer = async () => {
     if (!licId) return
     if (!(profile?.is_owner || licitatii?.find(l => l.id === licId)?.responsabil_id === profile?.id)) { showToast('Propunerea de clarificări o pornește ownerul sau responsabilul licitației (costă).', 'err'); return }
@@ -508,7 +537,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                 if (ins?.id) citesteClarificare({ id: ins.id })
               }} />
             </label>
-            <button style={{ ...S.btnS, padding:'5px 14px', fontSize:12 }} onClick={propuneServer} disabled={!!busy} title="Generatorul rulează pe workerul NAS: goluri din acoperire, ambiguități din registru, diferențe de cantități, răspunsuri primite — propuneri de_trimis, le verifici tu">☁️ Propune clarificări (Sonnet)</button>
+            <button style={{ ...S.btnS, padding:'5px 14px', fontSize:12 }} onClick={propuneServer} disabled={!!busy} title="Generatorul rulează pe workerul NAS: goluri din acoperire, ambiguități din registru, diferențe de cantități, răspunsuri primite — propuneri de verificat, le verifici tu">☁️ Propune clarificări (Sonnet)</button>
             <button style={{ ...S.btnP, padding:'5px 14px', fontSize:12 }} onClick={genereazaAdresa} disabled={!!busy}>📄 Generează adresa</button>
           </div>
         </div>
@@ -546,12 +575,14 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                       if (st.nivel === 'na') return null
                       const transmisa = q.status === 'trimisa' || q.status === 'raspunsa'
                       const dif = textDiferente(st.rand?.detalii)
-                      const col = st.nivel === 'ok' ? G.green : st.nivel === 'luat_act' ? G.muted : G.red
+                      const col = st.nivel === 'ok' ? G.green : st.nivel === 'ok_identitate_limitata' ? G.orange : st.nivel === 'luat_act' ? G.muted : G.red
                       return (
                         <div style={{ marginTop:6, padding:'7px 10px', background:G.surface, borderRadius:7, borderLeft:`3px solid ${col}`, fontSize:12 }}>
                           <div style={{ fontWeight:700, color:col }}>⚠ {transmisa && st.nivel === 'schimbata' ? 'baza cifrelor s-a schimbat DUPĂ transmitere — textul transmis rămâne neschimbat; evaluează o completare' : st.text || 'Text aprobat de om pe baza curentă; cantitățile din text nu sunt validate automat.'}</div>
                           {st.rand?.detalii?.curent?.text && st.nivel !== 'nu_putem_verifica' && <div style={{ color:G.muted, marginTop:3 }}>acum: {st.rand.detalii.curent.text}</div>}
                           {(st.rand?.detalii?.curent?.totaluri || []).map(t => <div key={t.id} style={{ marginTop:3 }}>TOTAL #{t.id}: declarat {t.declarat ?? 'necunoscut'} {t.um}; detalii validate {t.suma_detalii ?? 'necunoscute'} {t.um}. {t.text}</div>)}
+                          {poateAcceptaExceptieIdentitate(q, st, poateDecide) && <button style={{ ...S.btnS, marginTop:5, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }}
+                            disabled={!!exceptieInCurs} onClick={() => acceptaExceptieIdentitate(q)}>Accept excepția de identitate</button>}
                           {dif.length > 0 && <details style={{ marginTop:3 }}><summary style={{ cursor:'pointer', color:G.muted }}>ce s-a schimbat față de baza ciornei ({dif.length})</summary>
                             <ul style={{ margin:'4px 0 0', paddingLeft:18 }}>{dif.map((t, i) => <li key={i}>{t}</li>)}</ul></details>}
                           {st.blocheaza && st.nivel !== 'nu_putem_verifica' && st.nivel !== 'luat_act' && (

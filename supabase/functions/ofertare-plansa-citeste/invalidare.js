@@ -157,7 +157,13 @@ export function schimbariRelevante(vechi, patch, referinta = null) {
   const v = vechi || {}, p = patch || {}, ref = referinta || v
   const nou = { ...v, ...p }
   const relevante = [], subPrag = []
-  const efectiva = r => numar(r.cantitate_plansa ?? r.cantitate)
+  // Observația e deja în metri. Fallback-ul și referința aprobată poartă unitatea rândului.
+  const efectiva = r => {
+    if (r.cantitate_plansa != null) return numar(r.cantitate_plansa)
+    const c = numar(r.cantitate)
+    const factor = normUm(r.um) === 'km' ? 1000 : normUm(r.um) === 'hm' ? 100 : 1
+    return c === null ? null : c * factor
+  }
   for (const camp of CAMPURI_APROBARE) {
     if (!(camp in p)) continue
     const a = v[camp], b = nou[camp], r = ref[camp]

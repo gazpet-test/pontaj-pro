@@ -3,7 +3,7 @@
 // clarificările bune (Mânăstirea, 28.08) fuseseră scrise de mână din citirea documentației. Pasul ăsta le naște
 // din tot ce au lăsat în urmă ceilalți pași: golurile din acoperire, ambiguitățile din registru, diferențele de
 // cantități, documentația și răspunsurile deja primite (de la această autoritate sau la alte licitații).
-// Scrie DOAR propuneri (status de_trimis, origine platforma) — omul le citește, le ajustează, le trimite.
+// Scrie DOAR propuneri (status propunere, origine platforma) — omul le citește, le ajustează, le trimite.
 // Rulează identic în edge function (index.ts) și pe workerul NAS (worker/ofertare/clarificari.ts).
 import { CATEGORII_RESTANTE, infoRestanta, NOTA_LUNGIMI, restantePeTip } from './restante.js'
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
@@ -201,7 +201,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     let nr = Math.max(0, ...(clarLic || []).map((q: any) => Number(q.nr) || 0))
     const eticheta: Record<string, string> = { eliminatorie: '🚫', importanta: '⚠️', utila: 'ℹ️' }
     const noi = acceptate.map(a => ({
-      licitatie_id: licId, nr: ++nr, intrebare: a.intrebare, status: 'de_trimis', origine: 'platforma', cheie: a.cheie,
+      licitatie_id: licId, nr: ++nr, intrebare: a.intrebare, status: 'propunere', origine: 'platforma', cheie: a.cheie,
       // `sursa` = eticheta pentru om (nu mai e cheie de idempotență): prioritate, subiect, cerințe, referință, fragment, risc, motiv
       sursa: `${eticheta[a.prioritate]}${a.sursa_tip === 'modificare' ? ' [SOLICITARE DE MODIFICARE]' : ''}${a.risc_divulgare ? ' [risc divulgare]' : ''} ${a.subiect}${a.cerinte_ids.length ? ` (cerințe #${a.cerinte_ids.join(', #')})` : ''}${a.referinta ? ` · ${a.referinta}` : ''} — „${a.fragment}” — ${a.motiv}`.slice(0, 1200),
     }))

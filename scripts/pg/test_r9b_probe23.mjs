@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const OWNER = '00000000-0000-4000-8000-000000000121'
@@ -146,13 +147,27 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public,pg_t
     OR EXISTS (SELECT 1 FROM user_module_access WHERE profile_id=auth.uid() AND module='ofertare' AND access_level='admin'))
 $$;
 CREATE TABLE ofertare_documente_atribuire (id bigint PRIMARY KEY, licitatie_id bigint, nume_original text,
-  tip text, status_procesare text, eroare text, analiza jsonb, analiza_la timestamptz);
+  tip text, status_procesare text, eroare text, analiza jsonb, analiza_la timestamptz,
+  fisier_path text, size_bytes bigint, text_extras text, procesat_la timestamptz,
+  sha256 text, fisier_sha256 text);
 ALTER TABLE ofertare_documente_atribuire ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ofertare_documente_select ON ofertare_documente_atribuire FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
 CREATE POLICY ofertare_documente_update ON ofertare_documente_atribuire FOR UPDATE TO authenticated
   USING ((SELECT fn_are_acces_ofertare())) WITH CHECK ((SELECT fn_are_acces_ofertare()));
 CREATE POLICY ofertare_documente_insert ON ofertare_documente_atribuire FOR INSERT TO authenticated WITH CHECK ((SELECT fn_are_acces_ofertare()));
 CREATE POLICY ofertare_documente_delete ON ofertare_documente_atribuire FOR DELETE TO authenticated USING ((SELECT fn_are_acces_ofertare()));
+CREATE TABLE ofertare_seap_manifest (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  licitatie_id bigint NOT NULL REFERENCES ofertare_licitatii(id), arhiva_cheie text NOT NULL, cale text NOT NULL,
+  marime bigint NOT NULL, sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  document_id bigint REFERENCES ofertare_documente_atribuire(id) ON DELETE SET NULL,
+  stare text NOT NULL CHECK (stare IN ('urcat','deja_in_platforma','eroare_urcare','ignorat')),
+  motiv text, verificat_la timestamptz NOT NULL DEFAULT now(), UNIQUE (licitatie_id,arhiva_cheie,cale));
+ALTER TABLE ofertare_seap_manifest ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON ofertare_seap_manifest FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON ofertare_seap_manifest TO authenticated;
+CREATE POLICY seap_manifest_citire ON ofertare_seap_manifest FOR SELECT TO authenticated
+  USING (auth.uid() IS NOT NULL AND fn_are_acces_ofertare());
 CREATE TABLE ofertare_cantitati (id bigserial PRIMARY KEY, licitatie_id bigint NOT NULL, obiect text, categorie text,
   denumire text NOT NULL, um text, cantitate numeric, specificatii text, sursa text, cantitate_plansa numeric,
   diferenta_nota text, status text NOT NULL DEFAULT 'extras', extras_de_ai boolean DEFAULT true,
@@ -175,6 +190,9 @@ CREATE TABLE ofertare_clarificari (id bigserial PRIMARY KEY, licitatie_id bigint
   raspuns text, raspuns_la timestamptz, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now(),
   origine text, cheie text, fisier_path text, creat_de uuid, citita_la timestamptz, citita_rezumat text,
   raspuns_document_id bigint, UNIQUE (licitatie_id,cheie));
+-- Activată doar în proba DELETE 2c; probele de trigger anon verifică separat refuzul, înainte de RLS.
+CREATE POLICY clar_all ON ofertare_clarificari TO authenticated
+  USING (auth.uid() IS NOT NULL) WITH CHECK (auth.uid() IS NOT NULL);
 CREATE TABLE notifications (id bigserial PRIMARY KEY, profile_id uuid, type text, modul text, title text,
   message text, link_to text, created_at timestamptz DEFAULT now());
 CREATE TABLE seap_compl (licitatie_id bigint PRIMARY KEY, blocaj text);
@@ -194,7 +212,7 @@ CREATE TABLE documente_firma (id bigserial PRIMARY KEY, utilizabil boolean, fara
   data_valabilitate date, se_reemite boolean);
 `
 
-function setup() {
+function setup({ reviewF = false } = {}) {
   assert.ok(process.env.PGURI, 'Setează PGURI către o bază PostgreSQL 16 locală de test')
   const target = new URL(process.env.PGURI)
   assert.ok(['postgres:', 'postgresql:'].includes(target.protocol), 'PGURI trebuie să fie URI PostgreSQL')
@@ -215,6 +233,7 @@ function setup() {
     'R5_MIGRARE_PROPUSA_aprobare_istoric.sql', // prerequisite: istoric, helpers, triggerul înlocuit de 1b
     'R5_MIGRARE_1b_prag_exact.sql',
     'R5_MIGRARE_PROPUSA_cantitati_nevalidate.sql',
+    ...(reviewF ? ['R5_MIGRARE_3_review_copilot.sql'] : []),
   ].map(file => [file, readFileSync(new URL(`../../docs/${file}`, import.meta.url), 'utf8')])
   console.log(`SETUP PostgreSQL ${version}: recreare bază locală ${name}`)
   // Fără FORCE: nu închidem sesiunile altcuiva pentru a șterge baza.
@@ -250,8 +269,10 @@ async function draft(observer) {
     INSERT INTO seap_compl VALUES (${lic},NULL);
     INSERT INTO ofertare_cantitati(id,licitatie_id,denumire,categorie,um,cantitate,status,tip_sursa,sursa)
       VALUES (${lic},${lic},'Conductă PE100 Dn110','Conducte și montaj','m',100,'validat','lista_f3','F3 test');
-    INSERT INTO ofertare_documente_atribuire(id,licitatie_id,nume_original,tip,status_procesare,analiza)
-      VALUES (${lic},${lic},'Plansa test.pdf','plansa','finalizat','{"plansa":{"rezultat":"ilizibil","citibila":false}}');`)
+    INSERT INTO ofertare_documente_atribuire(id,licitatie_id,nume_original,tip,status_procesare,analiza,size_bytes,fisier_path)
+      VALUES (${lic},${lic},'Plansa test.pdf','plansa','finalizat','{"plansa":{"rezultat":"ilizibil","citibila":false}}',123,'test/plansa.pdf');
+    INSERT INTO ofertare_seap_manifest(licitatie_id,document_id,arhiva_cheie,cale,marime,sha256,stare)
+      VALUES (${lic},${lic},'test','plansa.pdf',123,repeat('a',64),'deja_in_platforma');`)
   const generated = await observer.value(`ofertare_clarificare_planse_auto(${lic})`)
   assert.equal(generated.actiune, 'creat', JSON.stringify(generated))
   const d = { lic, id: generated.id, quantity: lic }
@@ -475,8 +496,11 @@ const tests = [
   }],
 ]
 
+export async function runTests(probe, options = {}) {
+  const tests = probe
+  failed = 0; passed = 0
 try {
-  setup()
+  setup(options)
   for (const [name, test] of tests) {
     try {
       await withSessions(test)
@@ -500,3 +524,7 @@ try {
 }
 console.log(`Rezultat: ${passed} PASS, ${failed} FAIL; ${tests.length} probe definite.`)
 process.exitCode = failed ? 1 : 0
+
+}
+export { OWNER, RESPONSABIL, FARA_ACCES, Session, draft, state, approved, sqlText, runSql }
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await runTests(tests)
