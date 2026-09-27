@@ -13,9 +13,8 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.116.
 const sha = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b as Uint8Array<ArrayBuffer>))].map(x => x.toString(16).padStart(2, '0')).join('')
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i
 const ESTE_ARHIVA = /\.(zip|rar|7z)$/i
-// Protejează și preluarea unui lock expirat de două apeluri simultane în același proces.
+// Lock-ul de kernel nu protejează fiabil două apeluri din același proces.
 const verificariActive = new Set<string>()
-const LOCK_EXPIRAT_MS = 2 * 60 * 60_000
 
 export type Raport = {
   licitatie: number; seap_documente: number; fisiere: number; identice: number; diferite: number
@@ -24,7 +23,7 @@ export type Raport = {
 }
 type DocumentBd = { id: number; nume_original: string; fisier_path: string; size_bytes: number }
 
-export async function verificaManifest(supa: SupabaseClient<any, any, any>, licId: number, opt: { uscat?: boolean; semnal?: AbortSignal } = {}): Promise<Raport> {
+export async function verificaManifest(supa: SupabaseClient<any, any, any>, licId: number, opt: { uscat?: boolean; semnal?: AbortSignal; storage?: { url: string; cheie: string } } = {}): Promise<Raport> {
   const { uscat = false, semnal = new AbortController().signal } = opt
   let docs: { nume: string; url: string }[] = [], cookie = ''
   let dinBd: DocumentBd[] = []
@@ -36,6 +35,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
   if (verificariActive.has(lockPath)) throw new Error(`verificare deja în curs pentru ${licId}`)
   verificariActive.add(lockPath)
   let lock: Deno.FsFile | undefined
+  let lockObtinut = false
   let tmpCreat = false
   type Rand = { licitatie_id: number; arhiva_cheie: string; cale: string; marime: number; sha256: string; document_id: number | null; stare: string; motiv: string | null; verificat_la: string }
   const randuri: Rand[] = []
@@ -49,10 +49,14 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     const d = inPlatforma.get(cheieNume(cale.split('/').pop()!)) ?? inPlatforma.get(cheieNume(cale))
     if (!d) { rand.stare = 'eroare_urcare'; rand.motiv = 'LIPSĂ în platformă (verificare R6)'; tally.lipsa++; randuri.push(rand); return }
     rand.document_id = d.id; potrivite.add(d.id)
-    const { data, error } = await supa.storage.from('ofertare').createSignedUrl(d.fisier_path, 300)
+    const url = opt.storage?.url ?? Deno.env.get('SUPABASE_URL')
+    const cheie = opt.storage?.cheie ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
     semnal.throwIfAborted()
-    if (error || !data?.signedUrl) { rand.motiv = `Storage indisponibil: ${error?.message ?? 'URL semnat lipsă'}`; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return }
-    const raspuns = await fetch(data.signedUrl, { signal: semnal })
+    if (!url || !cheie) { rand.motiv = 'Storage indisponibil: configurație lipsă'; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return }
+    const path = d.fisier_path.split('/').map(encodeURIComponent).join('/')
+    const raspuns = await fetch(`${url.replace(/\/+$/, '')}/storage/v1/object/authenticated/ofertare/${path}`, {
+      headers: { Authorization: `Bearer ${cheie}`, apikey: cheie }, signal: semnal,
+    })
     if (raspuns.status !== 200) {
       await raspuns.body?.cancel()
       rand.motiv = `Storage indisponibil: HTTP ${raspuns.status}`; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return
@@ -67,16 +71,9 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
   try {
     semnal.throwIfAborted()
     await Deno.mkdir(LUCRU, { recursive: true })
-    try {
-      lock = await Deno.open(lockPath, { createNew: true, write: true })
-    } catch (e) {
-      if (!(e instanceof Deno.errors.AlreadyExists)) throw e
-      const info = await Deno.stat(lockPath)
-      if (!info.mtime || Date.now() - info.mtime.getTime() <= LOCK_EXPIRAT_MS) throw new Error(`verificare deja în curs pentru ${licId}`)
-      console.log(`[seap] #${licId}: preiau lock rămas de la crash, mai vechi de 2 h (${info.mtime.toISOString()})`)
-      await Deno.remove(lockPath)
-      lock = await Deno.open(lockPath, { createNew: true, write: true })
-    }
+    lock = await Deno.open(lockPath, { create: true, write: true })
+    lockObtinut = await lock.tryLock(true)
+    if (!lockObtinut) throw new Error(`verificare deja în curs pentru ${licId}`)
     await Deno.mkdir(tmp)
     tmpCreat = true
     semnal.throwIfAborted()
@@ -161,8 +158,8 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     try {
       if (tmpCreat) await Deno.remove(tmp, { recursive: true }).catch(() => {})
       if (lock) {
-        lock.close()
-        await Deno.remove(lockPath)
+        // Nu ștergem fișierul: procesele trebuie să blocheze mereu același obiect.
+        try { if (lockObtinut) await lock.unlock() } finally { lock.close() }
       }
     } finally { verificariActive.delete(lockPath) }
   }
