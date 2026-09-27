@@ -7,7 +7,8 @@ const docCu = (ca: any = null, p: any = {}) => ({ id: 470, licitatie_id: 95, ana
 
 // RPC-ul simulat execută verificare + inserare fără await între ele (secțiune serială, comună joburilor concurente).
 function fakeSupa(o: { job?: any; doc?: any; rpcErr?: any; pierdeLeaseLa?: number; costZi?: number;
-  buget?: { rows: any[]; costZi: number }; manifest?: any[]; manifestError?: any; regularizareError?: boolean } = {}) {
+  buget?: { rows: any[]; costZi: number }; manifest?: any[]; manifestError?: any; regularizareError?: boolean;
+  laRezervare?: (st: any, id: number) => void } = {}) {
   const st = { job: o.job ? { ...o.job, stare: 'lucru', luat_de: 'w1' } : null, doc: o.doc, notif: [] as any[], updates: 0 }
   const buget = o.buget ?? { rows: [] as any[], costZi: o.costZi ?? 0 }
   if (st.job?.cost_usd) buget.rows.push({ id: buget.rows.length + 1, job_id: st.job.id, cost_usd: st.job.cost_usd, stare: 'regularizat' })
@@ -31,6 +32,7 @@ function fakeSupa(o: { job?: any; doc?: any; rpcErr?: any; pierdeLeaseLa?: numbe
         const id = buget.rows.length + 1
         buget.rows.push({ id, job_id: a.p_job_id, claim_token: a.p_claim_token, rezervat_usd: a.p_suma, cost_usd: null, stare: 'rezervat' })
         st.job.cost_usd = sumaJob()
+        o.laRezervare?.(st, id)
         return { data: { ok: true, rezervare_id: id }, error: null }
       }
       if (n === 'ofertare_plansa_regularizeaza') {
@@ -325,9 +327,10 @@ Deno.test('fisier_path schimbat → anulat, zero AI și zero rezervări', async 
   assertEquals([h.apeluri.length, s.buget.rows.length], [0, 0])
 })
 
-Deno.test('manifest: alt hash → anulat; oricare hash egal → acceptat; lipsă hash valid → jurnal neverificata', async () => {
+Deno.test('manifest: A+B sau doar B → anulat; doar A (inclusiv duplicate) → acceptat; lipsă hash valid → jurnal neverificata', async () => {
   for (const [hashuri, final, neverificata] of [
-    [['b'.repeat(64)], 'anulat', false], [['b'.repeat(64), 'A'.repeat(64)], 'gata', false],
+    [['b'.repeat(64)], 'anulat', false], [['b'.repeat(64), 'A'.repeat(64)], 'anulat', false],
+    [['a'.repeat(64)], 'gata', false], [['a'.repeat(64), 'A'.repeat(64), 'invalid'], 'gata', false],
     [[], 'gata', true], [[null, '', 'invalid'], 'gata', true],
   ] as Array<[any[], string, boolean]>) {
     const s = fakeSupa({ job: { ...JOB, doc_sha256: 'a'.repeat(64) }, doc: docCu(), manifest: hashuri.map(sha256 => ({ sha256 })) })
@@ -335,7 +338,86 @@ Deno.test('manifest: alt hash → anulat; oricare hash egal → acceptat; lipsă
     await proceseazaPlansa(deps(s, h.handler))
     assertEquals(s.st.job.stare, final)
     assertEquals(h.apeluri.length, final === 'anulat' ? 0 : 1)
+    if (final === 'anulat') {
+      assertEquals(s.buget.rows.length, 0)
+      assertEquals(s.st.job.motiv_anulare, hashuri.length > 1
+        ? 'identitate contradictorie în manifest — de rezolvat înainte de citire' : 'fișierul s-a schimbat după înscriere')
+    }
     assertEquals(s.st.job.jurnal.some((r: any) => r.identitate === 'neverificata'), neverificata)
+  }
+})
+
+// ---- Copilot #494 runda 4: fereastra rezervării + contractul răspunsului final ----
+Deno.test('retăiere în RPC-ul de rezervare: anulat, zero apeluri, rezervare regularizată cost 0 cert', async () => {
+  const s = fakeSupa({ job: JOB, doc: docCu(), laRezervare: st => { st.doc = docCu(null, { taiat_la: 't2' }) } })
+  const h = raspunsuri([])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals([s.st.job.stare, h.apeluri.length, s.st.job.cost_usd], ['anulat', 0, 0])
+  assertEquals(s.buget.rows.map(r => [r.stare, r.cost_usd]), [['regularizat', 0]])
+})
+
+Deno.test('manifest schimbat în rezervare: recitit înainte de AI, anulare cu cost 0', async () => {
+  const manifest = [{ sha256: 'a'.repeat(64) }]
+  const s = fakeSupa({ job: { ...JOB, doc_sha256: 'a'.repeat(64) }, doc: docCu(), manifest,
+    laRezervare: () => { manifest.push({ sha256: 'b'.repeat(64) }) } })
+  const h = raspunsuri([])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals([s.st.job.stare, h.apeluri.length, s.st.job.cost_usd], ['anulat', 0, 0])
+  assertEquals(manifest.length, 2, 'nu șterge istoricul manifestului')
+  assertEquals(s.buget.rows[0].stare, 'regularizat')
+})
+
+Deno.test('retăiere în rezervarea lipirii: fără apel de lipire, costul citirii păstrat', async () => {
+  const s = fakeSupa({ job: JOB, doc: docCu(), laRezervare: (st, id) => {
+    if (id === 2) st.doc = docCu(null, { cale_felii: 'c2' })
+  } })
+  const h = raspunsuri([[200, { continua: false, cost_usd: 0.5, lipire_necesara: 1, sumar: { erori: 0 } }]])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals([s.st.job.stare, h.apeluri.length, s.st.job.cost_usd], ['anulat', 1, 0.5])
+  assertEquals(s.buget.rows.map(r => [r.stare, r.cost_usd]), [['regularizat', 0.5], ['regularizat', 0]])
+})
+
+Deno.test('sumar intermediar urmat de răspuns final fără sumar obiect → partial, fără rezultat vechi sau lipire', async () => {
+  for (const sumar of [undefined, null, [], 'invalid', 1]) {
+    const vechi = { erori: 0, tronsoane_gasite: 99 }
+    const s = fakeSupa({ job: JOB, doc: docCu() })
+    const h = raspunsuri([[200, { continua: true, cost_usd: 0, sumar: vechi }],
+      [200, { continua: false, cost_usd: 0, lipire_necesara: 1, sumar }]])
+    await proceseazaPlansa(deps(s, h.handler))
+    assertEquals([s.st.job.stare, s.st.job.eroare, s.st.job.rezultat], ['partial', 'răspuns final fără sumar', null])
+    assertEquals(h.apeluri.length, 2)
+    assertEquals(s.st.job.jurnal.filter((r: any) => r.status)[0].sumar, vechi)
+  }
+})
+
+Deno.test('sumarul final înlocuiește sumarul intermediar; asteptat prezent în toate modurile și la lipire', async () => {
+  const asteptat = { taiat_la: JOB.taiat_la, cale_felii: JOB.cale_felii }
+  for (const body of [corpRunda(JOB, docCu()), corpRunda(JOB, docCu({ taiat_la: 't1' })),
+    corpRunda(JOB, docCu({ taiat_la: 't1' }), { deLa: 4 }),
+    corpRunda({ ...JOB, mod: 'continua' }, docCu()), corpRunda({ ...JOB, mod: 'reia_erori' }, docCu())])
+    assertEquals(body.asteptat, asteptat)
+  const s = fakeSupa({ job: JOB, doc: docCu() })
+  const h = raspunsuri([[200, { continua: true, cost_usd: 0, sumar: { erori: 2 } }],
+    [200, { continua: false, cost_usd: 0.5, lipire_necesara: 1, sumar: { erori: 0, tronsoane_gasite: 5 } }],
+    [200, { perechi: 1, cost_usd: 0.2 }]])
+  await proceseazaPlansa(deps(s, h.handler))
+  assertEquals(s.st.job.stare, 'gata')
+  assertEquals(s.st.job.rezultat.tronsoane, 5)
+  assertEquals(h.apeluri.length, 3)
+  for (const body of h.apeluri) assertEquals(body.asteptat, asteptat)
+})
+
+Deno.test('409 retăiere din handler la citire sau lipire → anulat, cost 0 regularizat pentru apelul refuzat', async () => {
+  for (const lipire of [false, true]) {
+    const s = fakeSupa({ job: JOB, doc: docCu() })
+    const lista: Array<[number, any]> = lipire
+      ? [[200, { continua: false, cost_usd: 0.5, lipire_necesara: 1, sumar: { erori: 0 } }]] : []
+    lista.push([409, { error: 'Planșa nu mai corespunde jobului (retăiată) — anulat', cost_usd: 0 }])
+    const h = raspunsuri(lista)
+    await proceseazaPlansa(deps(s, h.handler))
+    assertEquals(s.st.job.stare, 'anulat')
+    assertEquals(s.st.job.cost_usd, lipire ? 0.5 : 0)
+    assertEquals(s.buget.rows.at(-1).stare, 'regularizat')
   }
 })
 

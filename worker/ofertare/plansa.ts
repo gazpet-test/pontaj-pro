@@ -24,11 +24,12 @@ const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 1
 // resetare în handler) DOAR dacă jobul e „citeste” și nu există nicio citire pe tăierea jobului; altfel continua/reia_erori.
 export function corpRunda(job: any, doc: any, o: { deLa?: number | null; sari?: string[] } = {}): Record<string, unknown> {
   const ca = doc?.analiza?.citire_ai
+  const baza = { doc_id: job.doc_id, asteptat: { taiat_la: job.taiat_la ?? null, cale_felii: job.cale_felii ?? null } }
   const citirePeTaiere = !!ca && (ca.taiat_la ?? null) === (job.taiat_la ?? null)
-  if (job.mod === 'reia_erori') return { doc_id: job.doc_id, mod: 'reia_erori', sari: o.sari ?? [], paralel: PARALEL }
-  if (job.mod === 'citeste' && !citirePeTaiere) return { doc_id: job.doc_id, de_la: 0, paralel: PARALEL }
-  if (job.mod === 'citeste' && o.deLa != null && o.deLa > 0) return { doc_id: job.doc_id, de_la: o.deLa, paralel: PARALEL }
-  return { doc_id: job.doc_id, mod: 'continua', paralel: PARALEL }
+  if (job.mod === 'reia_erori') return { ...baza, mod: 'reia_erori', sari: o.sari ?? [], paralel: PARALEL }
+  if (job.mod === 'citeste' && !citirePeTaiere) return { ...baza, de_la: 0, paralel: PARALEL }
+  if (job.mod === 'citeste' && o.deLa != null && o.deLa > 0) return { ...baza, de_la: o.deLa, paralel: PARALEL }
+  return { ...baza, mod: 'continua', paralel: PARALEL }
 }
 
 // Pasul 2: proveniența înghețată la înscriere trebuie să corespundă documentului de acum.
@@ -36,8 +37,9 @@ export function motivAnulare(job: any, doc: any, hashuri: string[] = []): string
   if (!doc) return 'documentul nu mai există'
   if (job.licitatie_id != null && Number(doc.licitatie_id) !== Number(job.licitatie_id)) return 'documentul a fost mutat pe altă licitație după înscriere'
   if (job.fisier_path && doc.fisier_path !== job.fisier_path) return 'fișierul s-a schimbat după înscriere'
-  const valide = hashuri.filter(h => typeof h === 'string' && /^[a-f0-9]{64}$/i.test(h))
-  if (job.doc_sha256 != null && valide.length && !valide.some(h => h.toLowerCase() === job.doc_sha256.toLowerCase())) return 'fișierul s-a schimbat după înscriere'
+  const valide = [...new Set(hashuri.filter(h => typeof h === 'string' && /^[a-f0-9]{64}$/i.test(h)).map(h => h.toLowerCase()))]
+  if (valide.length >= 2) return 'identitate contradictorie în manifest — de rezolvat înainte de citire'
+  if (job.doc_sha256 != null && valide.length === 1 && valide[0] !== job.doc_sha256.toLowerCase()) return 'fișierul s-a schimbat după înscriere'
   const p = doc.analiza?.plansa || {}
   if ((p.taiat_la ?? null) !== (job.taiat_la ?? null)) return 'planșa a fost retăiată după înscriere — reînscrie'
   if ((p.cale_felii ?? null) !== (job.cale_felii ?? null)) return 'feliile planșei s-au schimbat după înscriere — reînscrie'
@@ -169,18 +171,33 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
     await incheie('oprit_plafon', { eroare: motiv }); return true
   }
 
+  // Rezervarea poate aștepta un lock: sursa se recitește DUPĂ ea, înainte de citire sau lipire.
+  const verificaDupaRezervare = async () => {
+    let doc
+    try { doc = await citesteDoc() }
+    catch (e) { await regularizeaza({ cost_usd: 0 }); throw e } // niciun apel AI efectuat
+    const motiv = motivAnulare(job, doc, hashuri)
+    if (!motiv) return doc
+    const ok = await regularizeaza({ cost_usd: 0 })
+    await incheie('anulat', { motiv_anulare: motiv,
+      ...(!ok ? { eroare: 'regularizarea costului a eșuat — rezervarea rămâne în buget' } : {}) })
+    return null
+  }
+
   try {
     let doc = await citesteDoc()
     const m0 = motivAnulare(job, doc, hashuri)
     if (m0) { await incheie('anulat', { motiv_anulare: m0 }); log(`job ${job.id}: anulat — ${m0}`); return true }
 
-    let deLa: number | null = null, sari: string[] = [], pauzeAltTab = 0, ultimSumar: any = null, lipire = 0, terminat = false
+    let deLa: number | null = null, sari: string[] = [], pauzeAltTab = 0, sumarFinal: any = null, lipire = 0, terminat = false
     while (!oprire() && runde < MAX_RUNDE) {
       // Identitatea sursei se reverifică înaintea FIECĂRUI apel (inclusiv după pauza 409): retăiere / mutare = anulat, zero AI.
       const m = motivAnulare(job, doc, hashuri)
       if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
       const mb = await bugetOk(REZERVA_RUNDA_USD)
       if (mb) return await opresteLaBuget(mb)
+      doc = await verificaDupaRezervare()
+      if (!doc) return true
       const body = corpRunda(job, doc, { deLa, sari })
       stare(`doc ${job.doc_id} · runda ${runde + 1} · ${body.mod ?? 'de_la ' + body.de_la}`)
       const t0 = Date.now()
@@ -199,6 +216,7 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       const c = cert ? raspuns.cost_usd : REZERVA_RUNDA_USD
       const cls = clasifica(status, raspuns)
       jurnal.push({ la: new Date().toISOString(), body, status, clasa: cls, citite_acum: raspuns?.citite_acum ?? 0,
+        sumar: raspuns?.sumar,
         in_lucru_alt_tab: raspuns?.in_lucru_alt_tab ?? raspuns?.in_lucru ?? undefined, cost_usd: c, cost_cert: cert, ms,
         eroare: raspuns?.error ? String(raspuns.error).slice(0, 300) : undefined })
       if (!(await regularizeaza(raspuns))) {
@@ -233,13 +251,18 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       if (cls === 'business') { await incheie('eroare', { eroare: String(raspuns?.error ?? `HTTP ${status}`).slice(0, 500) }); return true }
 
       runde++
-      ultimSumar = raspuns?.sumar ?? ultimSumar
       sari = Array.isArray(raspuns?.reincercate) ? raspuns.reincercate : sari
       deLa = raspuns?.de_la_urmator ?? null
       if (!(await scrie({ runde, jurnal, lease_pana: new Date(Date.now() + LEASE_MIN * 60_000).toISOString() }))) {
         log(`job ${job.id}: lease pierdut — mă opresc`); return true
       }
-      if (!raspuns.continua) { lipire = Number(raspuns?.lipire_necesara || 0); terminat = true; break }
+      if (!raspuns.continua) {
+        if (!raspuns.sumar || typeof raspuns.sumar !== 'object' || Array.isArray(raspuns.sumar)) {
+          await incheie('partial', { eroare: 'răspuns final fără sumar', rezultat: null }); return true
+        }
+        sumarFinal = raspuns.sumar
+        lipire = Number(raspuns?.lipire_necesara || 0); terminat = true; break
+      }
       doc = await citesteDoc()
     }
     if (oprire()) {   // SIGTERM: lăsăm jobul să fie reluat (lease-ul expiră), fără să-l închidem greșit
@@ -253,9 +276,13 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
       const mb = await bugetOk(REZERVA_LIPIRE_USD)
       if (mb) return await opresteLaBuget(mb)
+      doc = await verificaDupaRezervare()
+      if (!doc) return true
+      const body = { doc_id: job.doc_id, doar_lipire: true,
+        asteptat: { taiat_la: job.taiat_la ?? null, cale_felii: job.cale_felii ?? null } }
       let status = 0, r: any = {}
       try {
-        const req = new Request('http://worker/ofertare-plansa-citeste', { method: 'POST', body: JSON.stringify({ doc_id: job.doc_id, doar_lipire: true }),
+        const req = new Request('http://worker/ofertare-plansa-citeste', { method: 'POST', body: JSON.stringify(body),
           headers: { Authorization: `Bearer ${d.depsHandler.SERVICE}`, 'Content-Type': 'application/json' } })
         const res = await d.handler(req, d.depsHandler)
         status = res.status
@@ -263,17 +290,20 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
         lipireOk = status === 200 && typeof r?.perechi === 'number' && !r?.error
       } catch (e) { status = 599; r = { error: String((e as Error)?.message ?? e).slice(0, 200) } }
       const cert = typeof r?.cost_usd === 'number' && Number.isFinite(r.cost_usd) && r.cost_usd >= 0
-      jurnal.push({ la: new Date().toISOString(), body: { doar_lipire: true }, status,
+      jurnal.push({ la: new Date().toISOString(), body, status,
         cost_usd: cert ? r.cost_usd : REZERVA_LIPIRE_USD, cost_cert: cert,
         eroare: r?.error ? String(r.error).slice(0, 300) : undefined })
       if (!(await regularizeaza(r))) lipireOk = false
+      if (clasifica(status, r) === 'anulat') {
+        await incheie('anulat', { motiv_anulare: String(r?.error ?? 'conflict').slice(0, 500) }); return true
+      }
     }
     // MAX_RUNDE atins cu „continua” = citire neterminată → partial, cu motiv; niciodată „gata”.
-    const st = !terminat && !ultimSumar ? 'eroare' : stareFinala(ultimSumar, { terminat, lipireOk })
+    const st = !terminat && !runde ? 'eroare' : stareFinala(sumarFinal, { terminat, lipireOk })
     const motiv = !terminat ? `oprit după ${MAX_RUNDE} runde, citirea nu s-a terminat — pornește „continuă”`
       : lipireOk === false ? 'lipirea notelor tăiate a eșuat — reia „lipește”' : undefined
-    await incheie(st, { ...(motiv ? { eroare: motiv } : {}), rezultat: ultimSumar ? { felii_citite: ultimSumar.felii_citite, erori: ultimSumar.erori, zone_cazute: ultimSumar.zone_cazute,
-      tronsoane: ultimSumar.tronsoane_gasite, lungime_m: ultimSumar.lungime_totala_m } : null })
+    await incheie(st, { ...(motiv ? { eroare: motiv } : {}), rezultat: sumarFinal ? { felii_citite: sumarFinal.felii_citite, erori: sumarFinal.erori, zone_cazute: sumarFinal.zone_cazute,
+      tronsoane: sumarFinal.tronsoane_gasite, lungime_m: sumarFinal.lungime_totala_m } : null })
     log(`job ${job.id} (doc ${job.doc_id}): ${st} · ${runde} runde · ${cost.toFixed(2)} USD`)
     return true
   } catch (e) {

@@ -2011,6 +2011,11 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (!doc) return json({ error: 'document inexistent' }, 404);
 
   const plansa = doc.analiza?.plansa;
+  // #494 r4: aceeași poartă pentru citire și doar_lipire, înainte de storage, rezervări și AI.
+  if (body?.asteptat !== undefined &&
+      ((body.asteptat?.taiat_la ?? null) !== (plansa?.taiat_la ?? null) ||
+       (body.asteptat?.cale_felii ?? null) !== (plansa?.cale_felii ?? null)))
+    return json({ error: 'Planșa nu mai corespunde jobului (retăiată) — anulat', cost_usd: 0 }, 409);
   if (!plansa?.cale_felii) return json({ error: 'plansa nu e taiata in felii — ruleaza intai /api/plansa-felii' }, 400);
   if (plansa.citibila === false) return json({ error: 'plansa a fost marcata drept necitibila', motiv: plansa.motiv }, 400);
 
