@@ -1,8 +1,10 @@
 -- Pregătită local; aplicare exclusiv de Claude după completarea TODO-CLAUDE.
 BEGIN;
 
-INSERT INTO public.iot_dispozitive (sursa, extern_id, nume, site_id, meta, activ, privat)
-VALUES ('terra', 'terra', 'Server Terra', 1, '{"tip":"server","model":"TerraMaster"}'::jsonb, true, false)
+-- citit_la = now() la inserare: grație de 30 min pentru instalarea scriptului pe Terra,
+-- ca să nu declanșeze alerta „Terra tăcut" înainte de prima citire reală.
+INSERT INTO public.iot_dispozitive (sursa, extern_id, nume, site_id, meta, activ, privat, citit_la)
+VALUES ('terra', 'terra', 'Server Terra', 1, '{"tip":"server","model":"TerraMaster"}'::jsonb, true, false, now())
 ON CONFLICT (sursa, extern_id) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION public.iot_verifica_terra()
