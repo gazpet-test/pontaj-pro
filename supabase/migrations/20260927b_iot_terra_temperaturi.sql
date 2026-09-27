@@ -67,12 +67,27 @@ END;
 $function$;
 REVOKE EXECUTE ON FUNCTION public.iot_verifica_terra() FROM PUBLIC, anon, authenticated;
 
--- TODO-CLAUDE: corpul actual iot_cron_tick / iot_verifica_incalzire nu există în repository.
--- Copiază aici CREATE OR REPLACE FUNCTION public.iot_cron_tick() cu corpul real exact,
--- adăugând DOAR următoarea instrucțiune lângă iot_verifica_incalzire,
--- ÎNAINTE de testul iot_integrari ... conectat:
--- BEGIN PERFORM public.iot_verifica_terra(); EXCEPTION WHEN OTHERS THEN NULL; END;
--- Confirmă și semnătura SQL iot_alerta (p_type, p_title, p_message), dedusă din vicare/index.ts,
--- și că sursa='terra' este permisă de schema existentă. Nu modificăm alte funcții IoT.
+-- iot_cron_tick: corpul real (preluat din producție), cu verificarea Terra adăugată ÎNAINTE
+-- de ieșirea devreme „nicio integrare conectată" — altfel alerta „Terra tăcut" nu ar rula când
+-- centrala/termostatele nu sunt conectate. Terra nu e o integrare cloud, deci nu depinde de iot_integrari.
+-- Restul corpului e NESCHIMBAT. iot_alerta are semnătura (p_type, p_title, p_message, p_link DEFAULT '/cladire').
+CREATE OR REPLACE FUNCTION public.iot_cron_tick()
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE s text; k text;
+BEGIN
+  -- Terra (server local, nu integrare cloud): rulează mereu, independent de iot_integrari.
+  BEGIN PERFORM public.iot_verifica_terra(); EXCEPTION WHEN OTHERS THEN NULL; END;
+  IF NOT EXISTS (SELECT 1 FROM public.iot_integrari WHERE stare = 'conectat') THEN RETURN; END IF;
+  BEGIN PERFORM public.iot_verifica_incalzire(); EXCEPTION WHEN OTHERS THEN NULL; END;
+  SELECT decrypted_secret INTO s FROM vault.decrypted_secrets WHERE name = 'IOT_CRON_SECRET' LIMIT 1;
+  FOR k IN SELECT cheie FROM public.iot_integrari WHERE stare = 'conectat' AND cheie IN ('vicare','salus','tuya') LOOP
+    PERFORM net.http_post(url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/' || k,
+      headers := jsonb_build_object('Content-Type','application/json','x-iot-secret', s), body := '{"actiune":"sync"}'::jsonb, timeout_milliseconds := 90000);
+  END LOOP;
+END $function$;
 
 COMMIT;
