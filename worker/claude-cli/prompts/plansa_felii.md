@@ -14,6 +14,7 @@ Pentru FIECARE intrare din `manifest.felii`, în ordinea manifestului:
 Pentru FIECARE pereche `[a,b]` din `manifest.perechi_lipire`, citește cu Read ambele
 imagini: a este în STÂNGA, b în DREAPTA. Aplică INSTRUCTIUNI_LIPIRE.md, reconstituind
 doar rândurile care trec peste margine. Păstrează JSON-ul brut ca text sub cheia `a+b`.
+Copiază și `sha256_a`, `sha256_b` din feliile manifestului, în ordinea `[a,b]`.
 Dacă nu există rânduri care continuă, răspunsul este `{"randuri":[]}`.
 
 Răspunde NUMAI cu un obiect JSON valid (fără Markdown):
@@ -25,7 +26,7 @@ Răspunde NUMAI cu un obiect JSON valid (fără Markdown):
         "<eticheta>": {"sha256":"<hash copiat>","text":"<JSON brut serializat ca șir JSON>"}
       },
       "lipiri": {
-        "<a>+<b>": {"text":"<JSON brut serializat ca șir JSON>"}
+        "<a>+<b>": {"sha256_a":"<hash a>","sha256_b":"<hash b>","text":"<JSON brut serializat ca șir JSON>"}
       }
     }
 
@@ -33,4 +34,5 @@ Folosește exact identitatea și etichetele din manifest. Include toate feliile 
 toate perechile; dacă o imagine nu poate fi deschisă, omite rezultatul ei (importul o va
 marca eroare reluabilă). Nu înlocui date lipsă cu un rezultat gol pretins valid.
 Nu scrie fișiere: launcherul salvează răspunsul în `out/<stamp>_plansa_felii.json`.
+Launcherul adaugă `pachet_id` și proveniența rulării; nu le declara tu.
 Ai numai Read, Glob, Grep; fără Bash, alte instrumente, subagenți sau acces la BD.

@@ -65,8 +65,13 @@ Coada automată rămâne pe API. Comenzile de mai jos sunt pentru teste/citiri/r
 de owner; nu se adaugă în cron sau în workerul automat. Containerul CLI primește numai
 JPEG-uri, manifestul și instrucțiunile; nu primește chei Supabase sau AI.
 
-Pe mașina workerului, cu mediul dedicat `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-`CERUT_DE` (UUID de owner), fără cheie AI:
+Acestea sunt **scripturi administrative**, rulate numai pe NAS de owner: **verificare
+administrativă, nu autentificare**. `OPERATOR_DECLARAT` este UUID-ul declarat din mediu;
+cine deține `service_role` pe gazdă poate declara alt UUID. Verificarea `profiles.is_owner`
+nu dovedește identitatea operatorului. Containerul CLI rămâne fără `service_role`.
+
+Pe NAS, cu mediul dedicat `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`OPERATOR_DECLARAT` (UUID declarat de owner), fără cheie AI:
 
 ```sh
 deno run -A worker/ofertare/plansa_cli_pregateste.ts 470 /cale/pachet-470
@@ -74,6 +79,8 @@ deno run -A worker/ofertare/plansa_cli_pregateste.ts 470 /cale/pachet-470
 
 Folderul de ieșire trebuie să fie gol. Pregătirea verifică `profiles.is_owner`, descarcă
 JPEG-urile și scrie hashurile SHA-256. Prompturile sunt exportate direct din handler.
+Manifestul include `pachet_id`: SHA-256 peste identitatea documentului și tăiere,
+lista ordonată de etichete/hashuri, perechi și hashurile celor două prompturi.
 Perechile pregătite sunt toate vecinătățile orizontale; handlerul alege la import numai
 perechile unde lectura semnalează note tăiate.
 
@@ -87,19 +94,34 @@ Launcherul folosește Opus, crește limita de ture după numărul de felii/perec
 timeoutul configurat și sare complet peste extragere/OCR. Ieșirea pentru import este
 `out/<stamp>_plansa_felii.json`; `.cli.json` și `.stderr` sunt diagnosticul CLI, nu intrarea
 importatorului. Nu se reia automat dacă se termină timpul sau abonamentul.
+Launcherul adaugă el însuși `pachet_id`, hashul promptului efectiv trimis, hashurile
+instrucțiunilor, `claude --version` și modelul raportat în `modelUsage` din jurnalul CLI.
+Un jurnal fără un singur model Opus identificabil este refuzat. Fiecare lipire include
+`sha256_a` și `sha256_b`, în ordinea perechii; o nepotrivire în adaptor produce 422.
 
-Înapoi pe mașina workerului, în același mediu dedicat ownerului:
+Pilotul necesită `flock`: ține lock exclusiv pe `.pilot.lock` până la ieșire. A doua
+rulare este refuzată imediat (cod 3). Fiecare rulare folosește `staging/<stamp>_<pid>`;
+trap-ul șterge numai propriul director, inclusiv la eroare. Nu șterge alte staging-uri.
+
+Pe NAS, în același mediu administrativ dedicat ownerului:
 
 ```sh
 deno run -A worker/ofertare/plansa_cli_importa.ts /cale/rezultat_plansa_felii.json /cale/pachet-470
 ```
 
 Importul verifică identitatea, tăierea, prompturile și hashurile locale/Storage înainte
-de scriere. Folosește același handler (inclusiv CAS, transferul în cantități și eventualele
+de scriere. `pachet_id` din rezultat trebuie să fie identic cu manifestul și cu cel
+recalculat din documentul/Storage curent și prompturile handlerului curent. Un rezultat
+vechi lângă un manifest nou este refuzat chiar dacă JPEG-urile sunt identice. Pachetele
+vechi fără proveniența r2 trebuie pregătite și citite din nou. Jurnalul JSON al importului
+notează UUID-ul declarat, `pachet_id` și proveniența CLI.
+Folosește același handler (inclusiv CAS, transferul în cantități și eventualele
 ciorne locale de clarificare), cu adaptor AI fără rețea. Proveniența este `cli:opus`, iar
 tokenii și costul din `ai_usage_log` sunt zero; nu se folosește coada/bugetul API.
 
 O citire API existentă pe aceeași tăiere este refuzată cu 409; nu este resetată sau amestecată.
+În sens invers, API `doar_lipire` peste o citire `cli:opus` este refuzat implicit cu 409,
+inclusiv la recitirile după conflicte CAS, prin regula existentă `versiuneIncompatibila`.
 O felie absentă din ieșirea CLI rămâne eroare și se poate relua prin aceeași comandă după
 completarea pachetului. Dacă lipirile sunt incomplete, feliile rămân salvate, iar comanda
 semnalează lipsa și se oprește înaintea lipirii. O tăiere sau un prompt schimbat cere un

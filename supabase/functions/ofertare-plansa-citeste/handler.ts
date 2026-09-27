@@ -2047,12 +2047,17 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (body?.doar_lipire === true) {
     const ca = doc.analiza?.citire_ai;
     if (!ca?.gata) return json({ error: 'planșa nu e citită complet' }, 400);
+    // D4 r2: lipirea are aceeași poartă de versiune ca reluarea, inclusiv după un conflict CAS.
+    const incomp = versiuneIncompatibila(ca, versiuneCur, mixarePermisa);
+    if (incomp) return json({ error: incomp, versiune_salvata: ca.versiune || null, versiune_curenta: versiuneCur }, 409);
     // R4 (runda 3): perechile se REZERVĂ înainte de AI (cheie „lipire:zA+zB”) — două taburi pe „note tăiate” nu mai
     // plătesc aceleași perechi; dacă toate perechile rămase sunt în lucru în alt tab => 409, zero AI.
     const taiatL = plansa.taiat_la || null, rulareL = crypto.randomUUID();
     const cheiePer = (p: string[]) => `lipire:${p.join('+')}`;
     const rzL = await rezervaChei(supa, docId, doc, rulareL, taiatL, (d: any, altii: Map<string, any>) => {
       const caX = d.analiza?.citire_ai;
+      const inc = versiuneIncompatibila(caX, versiuneCur, mixarePermisa);
+      if (inc) return { cand: [], lot: [], stop: { status: 409, error: inc } };
       if (!caX?.gata || (caX.taiat_la || null) !== (ca.taiat_la || null))
         return { cand: [], lot: [], stop: { status: 409, error: 'Citirea planșei s-a schimbat între timp (altă tăiere/recitire) — reia „lipește”.' } };
       const facuteX = new Set<string>([...(caX.note_lipite_perechi || []), ...(caX.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));
@@ -2087,6 +2092,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     // R4: scriere compare-and-set — notele se refac peste citirea PROASPĂTĂ dacă între timp a scris altcineva
     const w = await scrieCAS(supa, docId, rzL.doc, (d: any) => {
       const caX = d.analiza?.citire_ai;
+      const inc = versiuneIncompatibila(caX, versiuneCur, mixarePermisa);
+      if (inc) return { stop: { status: 409, error: inc } };
       if (!caX?.gata || (caX.taiat_la || null) !== (ca.taiat_la || null))
         return { stop: { status: 409, error: 'Citirea planșei s-a schimbat între timp (altă tăiere/recitire) — notele nu s-au salvat. Reia „lipește”.' } };
       const facuteX = new Set<string>([...(caX.note_lipite_perechi || []), ...(caX.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));

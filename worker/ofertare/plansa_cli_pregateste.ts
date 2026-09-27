@@ -1,6 +1,6 @@
 // deno run -A worker/ofertare/plansa_cli_pregateste.ts <doc_id> <dir_iesire>
 import { INSTRUCTIUNI, INSTRUCTIUNI_LIPIRE } from '../../supabase/functions/ofertare-plansa-citeste/handler.ts'
-import { citesteDoc, depsCliReale, descarca, listaFelii, perechiPosibile, sha256, verificaIdentitate, verificaManifest, verificaOwner, type DepsCli, type Manifest } from './plansa_cli_comun.ts'
+import { calculeazaPachetId, shaText, citesteDoc, depsCliReale, descarca, listaFelii, perechiPosibile, sha256, verificaIdentitate, verificaManifest, verificaOwner, type DepsCli, type Manifest } from './plansa_cli_comun.ts'
 
 export async function pregatestePlansa(docId: number, dir: string, d: DepsCli): Promise<Manifest> {
   await verificaOwner(d) // înainte de document, storage și orice fișier local
@@ -8,6 +8,7 @@ export async function pregatestePlansa(docId: number, dir: string, d: DepsCli): 
   if (!p?.cale_felii || !p?.taiat_la || p.citibila === false) throw new Error('Planșa trebuie tăiată și citibilă')
   const nume = await listaFelii(d.supa, p.cale_felii)
   const m: Manifest = { doc_id: doc.id, licitatie_id: doc.licitatie_id, fisier_path: doc.fisier_path,
+    pachet_id: '', instructiuni_sha256: await shaText(INSTRUCTIUNI), instructiuni_lipire_sha256: await shaText(INSTRUCTIUNI_LIPIRE),
     taiat_la: p.taiat_la, cale_felii: p.cale_felii, felii: [], perechi_lipire: [], generat_la: new Date().toISOString() }
   const imagini = new Map<string, Uint8Array>()
   for (const n of nume) {
@@ -18,6 +19,7 @@ export async function pregatestePlansa(docId: number, dir: string, d: DepsCli): 
   // Înaintea citirii nu știm ce note sunt tăiate: pregătim toate vecinătățile orizontale.
   // Handlerul importă numai perechile pe care le cere algoritmul lui existent.
   m.perechi_lipire = perechiPosibile(m.felii.map(f => f.eticheta))
+  m.pachet_id = await calculeazaPachetId(m, m.instructiuni_sha256, m.instructiuni_lipire_sha256)
   verificaManifest(m)
   verificaIdentitate(m, await citesteDoc(d.supa, docId))
   await Deno.mkdir(dir, { recursive: true })

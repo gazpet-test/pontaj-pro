@@ -2,33 +2,45 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 export type Manifest = {
+  pachet_id: string; instructiuni_sha256: string; instructiuni_lipire_sha256: string
   doc_id: number; licitatie_id: number; fisier_path: string; taiat_la: string; cale_felii: string
   felii: { eticheta: string; fisier: string; sha256: string }[]
   perechi_lipire: [string, string][]; generat_la: string
 }
 export type RezultatCli = {
-  doc_id: number; taiat_la: string
+  doc_id: number; taiat_la: string; pachet_id: string
+  rulare: { prompt_sha256: string; instructiuni_sha256: string; instructiuni_lipire_sha256: string; cli_version: string; model: string }
   felii: Record<string, { sha256: string; text: string }>
-  lipiri: Record<string, { text: string }>
+  lipiri: Record<string, { sha256_a: string; sha256_b: string; text: string }>
 }
-export type DepsCli = { supa: any; SERVICE: string; cerutDe: string }
+export type DepsCli = { supa: any; SERVICE: string; operatorDeclarat: string }
 export const MODEL_CLI = 'cli:opus'
 export const sha256 = async (bytes: Uint8Array): Promise<string> =>
   Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))))
     .map(b => b.toString(16).padStart(2, '0')).join('')
 
+export const shaText = (text: string) => sha256(new TextEncoder().encode(text))
+// Serializare explicită, stabilă; ordinea feliilor și orientarea perechilor fac parte din pachet.
+export const calculeazaPachetId = (m: Pick<Manifest, 'doc_id' | 'taiat_la' | 'felii' | 'perechi_lipire'>,
+  instructiuniSha: string, lipireSha: string) => shaText(JSON.stringify({
+    doc_id: m.doc_id, taiat_la: m.taiat_la,
+    felii: m.felii.map(({ eticheta, sha256 }) => ({ eticheta, sha256 })),
+    perechi_lipire: m.perechi_lipire, instructiuni_sha256: instructiuniSha, instructiuni_lipire_sha256: lipireSha,
+  }))
+
 export function depsCliReale(): DepsCli {
   const url = Deno.env.get('SUPABASE_URL'), SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-  const cerutDe = Deno.env.get('CERUT_DE') || ''
+  const operatorDeclarat = Deno.env.get('OPERATOR_DECLARAT') || ''
   if (!url || !SERVICE) throw new Error('Lipsesc SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY')
-  return { SERVICE, cerutDe, supa: createClient(url, SERVICE, { auth: { persistSession: false, autoRefreshToken: false } }) }
+  return { SERVICE, operatorDeclarat, supa: createClient(url, SERVICE, { auth: { persistSession: false, autoRefreshToken: false } }) }
 }
 
 export async function verificaOwner(d: DepsCli) {
-  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(d.cerutDe))
-    throw new Error('CERUT_DE trebuie să fie UUID-ul ownerului')
-  const { data, error } = await d.supa.from('profiles').select('is_owner').eq('id', d.cerutDe).maybeSingle()
-  if (error || data?.is_owner !== true) throw new Error('Refuz: CERUT_DE nu este owner')
+  // Verificare administrativă, nu autentificare: UUID declarat de operatorul NAS cu service_role.
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(d.operatorDeclarat))
+    throw new Error('Verificare administrativă: OPERATOR_DECLARAT trebuie să fie UUID-ul ownerului; nu este autentificare')
+  const { data, error } = await d.supa.from('profiles').select('is_owner').eq('id', d.operatorDeclarat).maybeSingle()
+  if (error || data?.is_owner !== true) throw new Error('Refuz administrativ: OPERATOR_DECLARAT nu este owner (nu autentificare)')
 }
 
 export async function citesteDoc(supa: any, docId: number) {
@@ -68,6 +80,8 @@ export function perechiPosibile(etichete: string[]): [string, string][] {
 }
 
 export function verificaManifest(m: Manifest) {
+  if (!m || [m.pachet_id, m.instructiuni_sha256, m.instructiuni_lipire_sha256].some(h => typeof h !== 'string' || !/^[a-f0-9]{64}$/.test(h)))
+    throw new Error('Manifest fără pachet_id / SHA256 prompturi valid; refă pregătirea')
   if (!m || !Number.isSafeInteger(m.doc_id) || m.doc_id <= 0 || !Number.isSafeInteger(m.licitatie_id) || m.licitatie_id <= 0 ||
       typeof m.fisier_path !== 'string' || !m.fisier_path || typeof m.taiat_la !== 'string' || !m.taiat_la ||
       typeof m.cale_felii !== 'string' || !m.cale_felii || !Array.isArray(m.felii) || !m.felii.length || !Array.isArray(m.perechi_lipire))

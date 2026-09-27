@@ -30,7 +30,8 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL 2>/dev/null
 [ -f "$PROMPT_F" ] || { J "prompt necunoscut: $TASK"; final 2 prompt_lipsa; }
 [ -d /data ] || { J "/data nu e montat"; final 2 fara_date; }
 command -v claude >/dev/null || { J "claude CLI lipsește din imagine"; final 2 fara_cli; }
-J "START task=$TASK cli=$(claude --version 2>/dev/null | head -1) model=${TASK_MODEL:-sonnet} effort=${TASK_EFFORT:-medium} timeout=${TASK_TIMEOUT_MIN:-15}m max_turns=${TASK_MAX_TURNS:-20} lic_id=${LIC_ID:-} nr_anunt=${LIC_NR_ANUNT:-}"
+CLI_VERSION=$(claude --version 2>/dev/null | head -1)
+J "START task=$TASK cli=$CLI_VERSION model=${TASK_MODEL:-sonnet} effort=${TASK_EFFORT:-medium} timeout=${TASK_TIMEOUT_MIN:-15}m max_turns=${TASK_MAX_TURNS:-20} lic_id=${LIC_ID:-} nr_anunt=${LIC_NR_ANUNT:-}"
 
 # 2. pre-extragere text (agentul nu are Bash): PDF → text cu marcaje ⟦PAGINA n⟧ (același format ca ingest-ul Deno), DOCX → text brut.
 if [ "$TASK" != "plansa_felii" ]; then
@@ -95,6 +96,26 @@ if [ "$TASK" = "plansa_felii" ]; then
   PROMPT="$(cat "$PROMPT_F")
 
 Pachetul este în /data: manifest.json, INSTRUCTIUNI.md, INSTRUCTIUNI_LIPIRE.md și felii/. Nu există text pre-extras. Răspunsul final JSON este salvat de launcher; tu nu scrii fișiere."
+  # Înghețăm promptul efectiv și proveniența ÎNAINTE de CLI; modelul nu furnizează aceste metadate.
+  PROMPT="$PROMPT
+
+INSTRUCTIUNI:
+$(cat /data/INSTRUCTIUNI.md)
+
+INSTRUCTIUNI_LIPIRE:
+$(cat /data/INSTRUCTIUNI_LIPIRE.md)"
+  node -e '
+    const fs=require("fs"), crypto=require("crypto"), sha=s=>crypto.createHash("sha256").update(s).digest("hex");
+    try {
+      const m=JSON.parse(fs.readFileSync("/data/manifest.json","utf8"));
+      const a=sha(fs.readFileSync("/data/INSTRUCTIUNI.md","utf8").replace(/\n$/, ""));
+      const b=sha(fs.readFileSync("/data/INSTRUCTIUNI_LIPIRE.md","utf8").replace(/\n$/, ""));
+      const id=sha(JSON.stringify({doc_id:m.doc_id,taiat_la:m.taiat_la,felii:m.felii.map(({eticheta,sha256})=>({eticheta,sha256})),perechi_lipire:m.perechi_lipire,instructiuni_sha256:a,instructiuni_lipire_sha256:b}));
+      if(id!==m.pachet_id || a!==m.instructiuni_sha256 || b!==m.instructiuni_lipire_sha256 || !process.argv[2]) process.exit(2);
+      fs.writeFileSync("/work/plansa_provenienta.json", JSON.stringify({pachet_id:m.pachet_id,
+        rulare:{prompt_sha256:sha(process.argv[1]),instructiuni_sha256:a,instructiuni_lipire_sha256:b,cli_version:process.argv[2]}}));
+    } catch { process.exit(2); }
+  ' "$PROMPT" "$CLI_VERSION" || final 2 pachet_invalid
 fi
 cd /work || final 2 fara_work
 timeout -s TERM "$(( ${TASK_TIMEOUT_MIN:-15} * 60 ))" claude -p "$PROMPT" \
@@ -130,7 +151,16 @@ if [ "$TASK" = "plansa_felii" ]; then
         if(!mf || f?.sha256!==mf.sha256 || typeof f?.text!=="string") process.exit(4);
       }
       const pairs=new Set(m.perechi_lipire.map(p=>p.join("+")));
-      for(const [et,p] of Object.entries(r.lipiri)) if(!pairs.has(et)||typeof p?.text!=="string") process.exit(4);
+      for(const [et,p] of Object.entries(r.lipiri)) {
+        const [a,b]=et.split("+");
+        if(!pairs.has(et)||typeof p?.text!=="string"||p.sha256_a!==m.felii.find(f=>f.eticheta===a)?.sha256||p.sha256_b!==m.felii.find(f=>f.eticheta===b)?.sha256) process.exit(4);
+      }
+      const meta=JSON.parse(fs.readFileSync("/work/plansa_provenienta.json","utf8"));
+      // modelUsage este jurnalul CLI, nu aliasul cerut prin --model și nu textul modelului.
+      const models=Object.keys(envelope.modelUsage||{});
+      if(models.length!==1 || !/^claude-opus-/.test(models[0]) || meta.pachet_id!==m.pachet_id) process.exit(4);
+      r.pachet_id=meta.pachet_id;
+      r.rulare={...meta.rulare,model:models[0]};
       fs.writeFileSync(process.argv[3],JSON.stringify(r,null,2)+"\n");
     } catch { process.exit(4); }
   ' "$OUT_JSON" "$OUT_MD" "$PLANSA_JSON" || final 6 plansa_json_invalid

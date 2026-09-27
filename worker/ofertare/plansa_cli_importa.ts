@@ -1,10 +1,18 @@
 // deno run -A worker/ofertare/plansa_cli_importa.ts <fisier_plansa_felii.json> <dir_pregatire>
 import { handler, INSTRUCTIUNI, INSTRUCTIUNI_LIPIRE } from '../../supabase/functions/ofertare-plansa-citeste/handler.ts'
-import { citesteDoc, depsCliReale, descarca, listaFelii, MODEL_CLI, sha256, verificaIdentitate, verificaManifest, verificaOwner, type DepsCli, type Manifest, type RezultatCli } from './plansa_cli_comun.ts'
+import { calculeazaPachetId, shaText, citesteDoc, depsCliReale, descarca, listaFelii, MODEL_CLI, sha256, verificaIdentitate, verificaManifest, verificaOwner, type DepsCli, type Manifest, type RezultatCli } from './plansa_cli_comun.ts'
 
-export function verificaRezultat(m: Manifest, r: RezultatCli) {
+export function verificaRezultat(m: Manifest, r: RezultatCli, pentruImport = true) {
   verificaManifest(m)
   if (!r || r.doc_id !== m.doc_id || r.taiat_la !== m.taiat_la) throw new Error('doc_id / taiat_la din CLI diferă de manifest')
+  if (pentruImport) {
+    if (r.pachet_id !== m.pachet_id) throw new Error('pachet_id din rezultat diferă de manifest; refă citirea')
+    const ru = r.rulare
+    if (!ru || typeof ru.prompt_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(ru.prompt_sha256) ||
+        ru.instructiuni_sha256 !== m.instructiuni_sha256 || ru.instructiuni_lipire_sha256 !== m.instructiuni_lipire_sha256 ||
+        typeof ru.cli_version !== 'string' || !ru.cli_version.trim() || typeof ru.model !== 'string' || !/^claude-opus-/.test(ru.model))
+      throw new Error('Proveniență CLI invalidă: prompt / versiune CLI / model raportat')
+  }
   if (!r.felii || Array.isArray(r.felii) || typeof r.felii !== 'object' || !r.lipiri || Array.isArray(r.lipiri) || typeof r.lipiri !== 'object')
     throw new Error('Ieșire CLI invalidă: felii / lipiri')
   const felii = new Map(m.felii.map(f => [f.eticheta, f]))
@@ -15,6 +23,9 @@ export function verificaRezultat(m: Manifest, r: RezultatCli) {
   const perechi = new Set(m.perechi_lipire.map(p => p.join('+')))
   for (const [et, p] of Object.entries(r.lipiri)) {
     if (!perechi.has(et) || !p || typeof p.text !== 'string') throw new Error(`Lipire CLI invalidă: ${et}`)
+    const [a, b] = et.split('+')
+    if (pentruImport && (p.sha256_a !== felii.get(a)!.sha256 || p.sha256_b !== felii.get(b)!.sha256))
+      throw new Error(`SHA256 lipire diferit de manifest: ${et}`)
     // Lipirea legacy nu păstrează eroarea JSON ca reluabilă. O respingem înainte de scrieri.
     try {
       const json = p.text.match(/\{[\s\S]*\}/)?.[0]
@@ -26,7 +37,8 @@ export function verificaRezultat(m: Manifest, r: RezultatCli) {
 
 // Adaptor strict în memorie: niciun fallback la fetch global, nici măcar pentru imagini URL.
 export function fetchDinCli(m: Manifest, r: RezultatCli): typeof fetch {
-  verificaRezultat(m, r)
+  // Importul validează pachetul înainte de scrieri; adaptorul refuză imaginea nepotrivită cu 422.
+  verificaRezultat(m, r, false)
   const felii = new Map(m.felii.map(f => [f.eticheta, f]))
   const lipsa = () => Response.json({ error: { message: 'Răspuns CLI negăsit pentru imaginea/perechea cerută (SHA256 / etichetă)' } }, { status: 422 })
   return (async (input: string | URL | Request, init?: RequestInit) => {
@@ -53,7 +65,10 @@ export function fetchDinCli(m: Manifest, r: RezultatCli): typeof fetch {
     } else {
       const et = texte.map((t: string) => /^Perechea (\S+)\. Reconstituie/.exec(t)?.[1]).find(Boolean)
       const candidati = m.perechi_lipire.filter(([a, b]) => felii.get(a)?.sha256 === hashuri[0] && felii.get(b)?.sha256 === hashuri[1] && (!et || `${a}+${b}` === et))
-      if (candidati.length === 1) raspuns = r.lipiri[candidati[0].join('+')]?.text
+      if (candidati.length === 1) {
+        const p = r.lipiri[candidati[0].join('+')]
+        if (p?.sha256_a === hashuri[0] && p?.sha256_b === hashuri[1]) raspuns = p.text
+      }
     }
     if (!raspuns) return lipsa()
     return Response.json({ content: [{ type: 'text', text: raspuns }], usage: { input_tokens: 0, output_tokens: 0 }, stop_reason: 'end_turn' })
@@ -70,20 +85,29 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
   verificaIdentitate(m, doc)
   // Un pachet vechi nu poate fi etichetat cu promptul versiunii actuale a handlerului.
   for (const [n, prompt] of [['INSTRUCTIUNI.md', INSTRUCTIUNI], ['INSTRUCTIUNI_LIPIRE.md', INSTRUCTIUNI_LIPIRE]])
-    if ((await Deno.readTextFile(`${dir}/${n}`)).trim() !== prompt.trim()) throw new Error(`Prompt schimbat: ${n}; refă pregătirea și citirea`)
+    if ((await Deno.readTextFile(`${dir}/${n}`)) !== prompt + '\n') throw new Error(`Prompt schimbat: ${n}; refă pregătirea și citirea`)
   const nume = await listaFelii(d.supa, m.cale_felii)
   if (JSON.stringify(nume) !== JSON.stringify(m.felii.map(f => `${f.eticheta}.jpg`).sort((a, b) => a.localeCompare(b))))
     throw new Error('Lista curentă din Storage diferă de manifest')
   const imagini = new Map<string, Uint8Array>()
+  const feliiCurente: Manifest['felii'] = []
   for (const f of m.felii) {
     const local = await Deno.readFile(`${dir}/${f.fisier}`)
     if (await sha256(local) !== f.sha256) throw new Error(`SHA256 local diferit de manifest: ${f.eticheta}`)
     const bytes = await descarca(d.supa, `${m.cale_felii}/${f.eticheta}.jpg`)
     if (await sha256(bytes) !== f.sha256) throw new Error(`SHA256 Storage diferit de manifest: ${f.eticheta}`)
+    feliiCurente.push({ ...f, sha256: await sha256(bytes) })
     imagini.set(`${m.cale_felii}/${f.eticheta}.jpg`, bytes)
   }
   doc = await citesteDoc(d.supa, m.doc_id)
   verificaIdentitate(m, doc) // exportul poate fi retăiat în timpul verificărilor
+  const instructiuniSha = await shaText(INSTRUCTIUNI), lipireSha = await shaText(INSTRUCTIUNI_LIPIRE)
+  const pachetCurent = await calculeazaPachetId({ doc_id: doc.id, taiat_la: doc.analiza.plansa.taiat_la,
+    felii: feliiCurente, perechi_lipire: m.perechi_lipire }, instructiuniSha, lipireSha)
+  if (m.pachet_id !== pachetCurent || m.instructiuni_sha256 !== instructiuniSha || m.instructiuni_lipire_sha256 !== lipireSha)
+    throw new Error('pachet_id diferă de handlerul/documentul curent; refă pregătirea și citirea')
+  console.log(JSON.stringify({ eveniment: 'import_plansa_cli', operator_declarat: d.operatorDeclarat,
+    pachet_id: m.pachet_id, doc_id: m.doc_id, rulare: r.rulare }))
 
   // Handlerul primește exact JPEG-urile verificate, fără un al doilea download după prima scriere.
   // DB/CAS rămân cele reale. Nicio coadă și nicio rezervare în bugetul API.
@@ -92,7 +116,7 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
     rpc: (name: string, args: any) => {
       if (name === 'ofertare_plansa_analiza_cas') {
         const prev = args.p_analiza_veche?.citire_ai
-        // Lipirea din handler nu are poartă de versiune. O citire API apărută concurent
+        // Apărare suplimentară la limita importului: o citire API apărută concurent
         // nu trebuie să primească note CLI nici la rezervare, nici la reîncercarea CAS.
         if (prev?.taiat_la === m.taiat_la && (prev.model !== MODEL_CLI || prev.versiune?.model !== MODEL_CLI))
           return Promise.resolve({ data: null, error: { message: 'Versiune incompatibilă: citire API; import CLI oprit' } })
@@ -156,7 +180,7 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
       ramase = out.perechi_ramase || 0
     } while (ramase)
   }
-  return { doc_id: m.doc_id, model: MODEL_CLI, cost_usd: 0, runde }
+  return { doc_id: m.doc_id, operator_declarat: d.operatorDeclarat, pachet_id: m.pachet_id, model: MODEL_CLI, cost_usd: 0, runde }
 }
 
 if (import.meta.main) {
