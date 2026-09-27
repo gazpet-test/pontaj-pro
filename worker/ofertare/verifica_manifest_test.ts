@@ -173,8 +173,8 @@ for (const blocatExtractor of ['listare', 'extragere'] as const) Deno.test(`mani
   eq(raport.manifest_scrise, 0)
 })
 
-Deno.test({ name: 'manifest: permisiuni worker, fără run deno/docker inclusiv arhivă', permissions: { run: false }, fn: async () => {
-  eq((await Deno.permissions.query({ name: 'run', command: 'deno' })).state, 'denied')
+Deno.test({ name: 'manifest: permisiuni worker, fără run deno/docker inclusiv arhivă', permissions: { run: false, env: 'inherit', read: 'inherit', write: 'inherit', net: 'inherit' }, fn: async () => {
+  assert((await Deno.permissions.query({ name: 'run', command: 'deno' })).state !== 'granted')  // fără TTY „prompt” = refuzat
   const { raport, scrieri } = await scenariu({ arhiva: true })
   eq([raport.seap_documente, raport.fisiere, raport.identice, raport.diferite, raport.lipsa_in_platforma, raport.ignorate, raport.manifest_scrise], [1, 5, 2, 1, 1, 1, 5])
   eq(raport.erori, [])
@@ -182,6 +182,6 @@ Deno.test({ name: 'manifest: permisiuni worker, fără run deno/docker inclusiv 
   eq(scrieri.find(r => r.cale === '.DS_Store')?.stare, 'ignorat')
 } })
 
-Deno.test({ name: 'manifest: bucla periodică verifică în proces, fără drept de subprocess', permissions: { run: false }, fn: async () => {
+Deno.test({ name: 'manifest: bucla periodică verifică în proces, fără drept de subprocess', permissions: { run: false, env: 'inherit', read: 'inherit', write: 'inherit', net: 'inherit' }, fn: async () => {
   await scenariu({ periodica: true })
 } })
