@@ -12,6 +12,9 @@ services:
     environment:
       REPO_URL: https://github.com/gazpet-test/pontaj-pro.git
       REPO_BRANCH: ${REPO_BRANCH:-main}
+      # 27.09.2026: repo-ul are package.json (Vite) → Deno 2 caută importurile npm: în node_modules/ (inexistent în /app)
+      # și workerul murea la pornire după #494 (handler-ul planșelor importă npm:@supabase/supabase-js). Ignorăm package.json.
+      DENO_NO_PACKAGE_JSON: "1"
       WORKER_PARALEL: ${WORKER_PARALEL:-2}
       WORKER_BUCATA_MAX: ${WORKER_BUCATA_MAX:-20000}
     volumes:
