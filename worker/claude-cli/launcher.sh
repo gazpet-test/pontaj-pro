@@ -14,6 +14,16 @@ final() { # cod motiv
   J "FINAL task=$TASK cod=$1 motiv=$2 durata=${DUR}s raport=$OUT_MD"
   exit "$1"
 }
+# D4: fără pre-extragere/OCR. Verificarea manifestului precedă chiar autentificarea.
+if [ "$TASK" = "plansa_felii" ]; then
+  [ -f /data/manifest.json ] || { J "plansa_felii: /data/manifest.json lipsește"; final 2 manifest_lipsa; }
+  TASK_MODEL=opus
+  TURE_PLANSA=$(node -e 'const m=JSON.parse(require("fs").readFileSync("/data/manifest.json","utf8")); if(!Array.isArray(m.felii)||!m.felii.length||!Array.isArray(m.perechi_lipire))process.exit(2); console.log(12+4*m.felii.length+4*m.perechi_lipire.length)' 2>/dev/null) || final 2 manifest_invalid
+  case "${TASK_MAX_TURNS:-}" in ''|*[!0-9]*) TASK_MAX_TURNS=$TURE_PLANSA ;; esac
+  [ "$TASK_MAX_TURNS" -ge "$TURE_PLANSA" ] || TASK_MAX_TURNS=$TURE_PLANSA
+  OUT_JSON="/out/${STAMP}_${TASK}.cli.json"
+  OUT_MD="/work/${STAMP}_${TASK}.txt"
+fi
 # 1. identitate: DOAR abonament (token setup-token). Orice cheie API moștenită ar factura API de la început.
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL 2>/dev/null
 [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || { J "CLAUDE_CODE_OAUTH_TOKEN lipsește din .env"; final 2 fara_token; }
@@ -23,6 +33,7 @@ command -v claude >/dev/null || { J "claude CLI lipsește din imagine"; final 2 
 J "START task=$TASK cli=$(claude --version 2>/dev/null | head -1) model=${TASK_MODEL:-sonnet} effort=${TASK_EFFORT:-medium} timeout=${TASK_TIMEOUT_MIN:-15}m max_turns=${TASK_MAX_TURNS:-20} lic_id=${LIC_ID:-} nr_anunt=${LIC_NR_ANUNT:-}"
 
 # 2. pre-extragere text (agentul nu are Bash): PDF → text cu marcaje ⟦PAGINA n⟧ (același format ca ingest-ul Deno), DOCX → text brut.
+if [ "$TASK" != "plansa_felii" ]; then
 mkdir -p /work/text
 N_PDF=0; N_DOCX=0; N_SARIT=0; MAX_FISIERE=300; MAX_MB=150
 OCR_MAX_PAG=${OCR_MAX_PAG:-250}; OCR_PAG_FISIER=${OCR_PAG_FISIER:-60}; echo 0 > /work/.ocr_pag; : > /work/.ocr_md5
@@ -74,11 +85,17 @@ J "inventar: $TOTAL_FIS fișiere în /data, $TXT texte extrase, OCR $(cat /work/
 [ "$TOTAL_FIS" -gt 0 ] || { J "STOP: /data e gol — LIC_FOLDER greșit? (docker creează un folder gol dacă ruta nu există)"; final 3 fara_fisiere; }
 [ "$TXT" -gt 0 ] || { J "STOP: niciun text extras (doar scanări?)"; final 3 fara_text; }
 if [ -d /context ] && [ -n "$(ls -A /context 2>/dev/null)" ]; then echo "" >> /work/INVENTAR.md; echo "Context suplimentar în /context: $(ls /context | tr '\n' ' ')" >> /work/INVENTAR.md; fi
+fi
 
 # 3. rularea agentului: doar Read/Glob/Grep, fără prompturi (dontAsk = orice ar cere aprobare e refuzat), fără subagenți, fără sesiune pe disc.
 PROMPT="$(cat "$PROMPT_F")
 
 Directoare: textele extrase sunt în /work/text (oglinda lui /data, cu ⟦PAGINA n⟧), originalele în /data (doar citire), inventarul în /work/INVENTAR.md, contextul opțional în /context$( [ -f /context/documente.json ] && echo " (documente.json = lista documentelor din ERP cu id, seap_cod, tip)" )."
+if [ "$TASK" = "plansa_felii" ]; then
+  PROMPT="$(cat "$PROMPT_F")
+
+Pachetul este în /data: manifest.json, INSTRUCTIUNI.md, INSTRUCTIUNI_LIPIRE.md și felii/. Nu există text pre-extras. Răspunsul final JSON este salvat de launcher; tu nu scrii fișiere."
+fi
 cd /work || final 2 fara_work
 timeout -s TERM "$(( ${TASK_TIMEOUT_MIN:-15} * 60 ))" claude -p "$PROMPT" \
   --model "${TASK_MODEL:-sonnet}" --effort "${TASK_EFFORT:-medium}" \
@@ -98,6 +115,29 @@ fi
 [ "$COD" -eq 124 ] && final 124 timeout
 [ "$COD" -ne 0 ] && final "$COD" claude_exit_$COD
 [ -s "$OUT_MD" ] || final 5 raport_gol
+if [ "$TASK" = "plansa_felii" ]; then
+  PLANSA_JSON="/out/${STAMP}_plansa_felii.json"
+  node -e '
+    const fs=require("fs");
+    try {
+      const envelope=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+      if(envelope.is_error || envelope.subtype!=="success") process.exit(4);
+      const raw=fs.readFileSync(process.argv[2],"utf8").trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/, "$1");
+      const r=JSON.parse(raw), m=JSON.parse(fs.readFileSync("/data/manifest.json","utf8"));
+      if(r.doc_id!==m.doc_id || r.taiat_la!==m.taiat_la || !r.felii || Array.isArray(r.felii) || typeof r.felii!=="object" || !r.lipiri || Array.isArray(r.lipiri) || typeof r.lipiri!=="object") process.exit(4);
+      for(const [et,f] of Object.entries(r.felii)) {
+        const mf=m.felii.find(x=>x.eticheta===et);
+        if(!mf || f?.sha256!==mf.sha256 || typeof f?.text!=="string") process.exit(4);
+      }
+      const pairs=new Set(m.perechi_lipire.map(p=>p.join("+")));
+      for(const [et,p] of Object.entries(r.lipiri)) if(!pairs.has(et)||typeof p?.text!=="string") process.exit(4);
+      fs.writeFileSync(process.argv[3],JSON.stringify(r,null,2)+"\n");
+    } catch { process.exit(4); }
+  ' "$OUT_JSON" "$OUT_MD" "$PLANSA_JSON" || final 6 plansa_json_invalid
+  OUT_MD="$PLANSA_JSON"
+  J "PLANSA=$PLANSA_JSON sha256=$(sha256sum "$PLANSA_JSON" | cut -c1-64)"
+  final 0 ok
+fi
 # 5. source_pack: rezultatul e JSON, nu raport → validator fără AI (excerpt-urile se caută literal în /work/text);
 #    pack-ul validat merge la worker (B2), care e singurul care scrie în BD. Rezultatul brut rămâne în .md pentru diagnoză.
 if [ "$TASK" = "source_pack" ]; then

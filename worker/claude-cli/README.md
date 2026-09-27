@@ -58,3 +58,58 @@ Răspunsul brut rămâne în `out/<stamp>_source_pack.md`; `verifica_pack.mjs` (
 `nereusite`. Rezultatul validat: `out/<stamp>_source_pack.pack.json` (jurnal: `pack VALIDARE …`, `PACK=…`).
 Opțional `context/documente.json` (lista documentelor din ERP: id, nume_fisier, seap_cod, tip, pagini) — de acolo ia
 agentul `seap_cod`. Containerul NU are chei: importul în BD îl face doar workerul (B2), din pack-ul validat.
+
+## Sarcina `plansa_felii` (D4, 27.09.2026) — numai la cererea manuală a ownerului
+
+Coada automată rămâne pe API. Comenzile de mai jos sunt pentru teste/citiri/recitiri pornite
+de owner; nu se adaugă în cron sau în workerul automat. Containerul CLI primește numai
+JPEG-uri, manifestul și instrucțiunile; nu primește chei Supabase sau AI.
+
+Pe mașina workerului, cu mediul dedicat `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`CERUT_DE` (UUID de owner), fără cheie AI:
+
+```sh
+deno run -A worker/ofertare/plansa_cli_pregateste.ts 470 /cale/pachet-470
+```
+
+Folderul de ieșire trebuie să fie gol. Pregătirea verifică `profiles.is_owner`, descarcă
+JPEG-urile și scrie hashurile SHA-256. Prompturile sunt exportate direct din handler.
+Perechile pregătite sunt toate vecinătățile orizontale; handlerul alege la import numai
+perechile unde lectura semnalează note tăiate.
+
+Transferă folderul pregătit pe NAS, apoi pornește manual pilotul:
+
+```sh
+sh run_pilot.sh "/cale/pachet-470" plansa_felii
+```
+
+Launcherul folosește Opus, crește limita de ture după numărul de felii/perechi, păstrează
+timeoutul configurat și sare complet peste extragere/OCR. Ieșirea pentru import este
+`out/<stamp>_plansa_felii.json`; `.cli.json` și `.stderr` sunt diagnosticul CLI, nu intrarea
+importatorului. Nu se reia automat dacă se termină timpul sau abonamentul.
+
+Înapoi pe mașina workerului, în același mediu dedicat ownerului:
+
+```sh
+deno run -A worker/ofertare/plansa_cli_importa.ts /cale/rezultat_plansa_felii.json /cale/pachet-470
+```
+
+Importul verifică identitatea, tăierea, prompturile și hashurile locale/Storage înainte
+de scriere. Folosește același handler (inclusiv CAS, transferul în cantități și eventualele
+ciorne locale de clarificare), cu adaptor AI fără rețea. Proveniența este `cli:opus`, iar
+tokenii și costul din `ai_usage_log` sunt zero; nu se folosește coada/bugetul API.
+
+O citire API existentă pe aceeași tăiere este refuzată cu 409; nu este resetată sau amestecată.
+O felie absentă din ieșirea CLI rămâne eroare și se poate relua prin aceeași comandă după
+completarea pachetului. Dacă lipirile sunt incomplete, feliile rămân salvate, iar comanda
+semnalează lipsa și se oprește înaintea lipirii. O tăiere sau un prompt schimbat cere un
+pachet nou. Importul poate scrie cantități prin regulile handlerului, deci se execută doar
+pe documentul/datasetul autorizat de owner.
+
+Teste locale, fără Claude real și fără producție:
+
+```sh
+deno test -A --node-modules-dir=none worker/ofertare/plansa_cli_test.ts
+deno test -A --node-modules-dir=none supabase/functions/ofertare-plansa-citeste
+node --test worker/claude-cli/test-fixtures/plansa_felii_test.mjs
+```

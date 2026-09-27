@@ -41,7 +41,7 @@ const PARALEL_MAX = 4;
 const REINCERCARI = 2;
 const COD_VERSIUNE = '2026-09-26.16'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
-const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
+export const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
 Extrage DOAR ce vezi scris efectiv in aceasta bucata. Nu deduce, nu completa din memorie, nu estima distante din desen.
 
@@ -1816,7 +1816,7 @@ function perechiDeLipit(felii: any[], toateNumele: Set<string>, facute = new Set
   return out.sort((a, b) => b.scor - a.scor).map((x) => x.p);
 }
 
-const INSTRUCTIUNI_LIPIRE = `Primesti DOUA bucati ALATURATE din aceeasi plansa de proiect: prima e in STANGA, a doua imediat in DREAPTA ei (se suprapun ~12% pe margine).
+export const INSTRUCTIUNI_LIPIRE = `Primesti DOUA bucati ALATURATE din aceeasi plansa de proiect: prima e in STANGA, a doua imediat in DREAPTA ei (se suprapun ~12% pe margine).
 Unele randuri de text (note, cartus, legenda, tabele) sunt taiate de marginea dintre ele. Reconstituie DOAR randurile care continua dintr-o bucata in cealalta, citind textul complet de la stanga la dreapta. Nu repeta textul care e deja intreg intr-o singura bucata.
 Raspunde NUMAI cu JSON valid: {"randuri": [{"text": "randul complet", "lungime_m": null, "diametru_mm": null}]}
 - lungime_m / diametru_mm: numai daca randul chiar scrie o lungime cu unitate de lungime (m, ml, km) sau un diametru. Daca unitatea e alta (mp, mc, ha) lasa lungime_m null si copiaza textul exact, cu unitatea lui. Fara separator de mii.
@@ -1953,6 +1953,7 @@ export function raportIdentitate(idr: ReturnType<typeof identificaRanduri>) {
 
 export type Deps = {
   SERVICE: string; API_KEY: string | undefined;
+  modelEticheta?: string; // D4: proveniența CLI; modelul cererii API rămâne MODEL.
   supa: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch;
 };
 export function depsReale(): Deps {
@@ -2036,7 +2037,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(INSTRUCTIUNI))))
     .slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
   // + ce s-a citit (tăiere, grilă, fișier): diferențele aici => 409 chiar și cu mixare_permisa (concurenta.ts)
-  const versiuneCur = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: MODEL, prompt_sha: promptSha,
+  const versiuneCur = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: deps.modelEticheta ?? MODEL, prompt_sha: promptSha,
     taiat_la: plansa.taiat_la || null, cale_felii: plansa.cale_felii, geom_sha: await shaGeometrie(plansa),
     fisier: doc.nume_original, fisier_path: doc.fisier_path || null };
   const cheieVers = cheieVersiune(versiuneCur);
@@ -2417,7 +2418,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (reev) for (const k of ['lungime_declarata_m', 'necorelare_unitate', 'note_lipite', 'perechi_lipite', 'provenienta'])
     if (ca0?.sumar && k in ca0.sumar && !(k in sumar)) sumar[k] = ca0.sumar[k];
   const versiune = reev && ca0?.versiune ? ca0.versiune : { ...versiuneCur, pagina: 1, dpi: plansaD.dpi || null };
-  const citireAi: any = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: reev ? (ca0?.model || MODEL) : MODEL, versiune, taiat_la: plansaD.taiat_la || null,
+  const citireAi: any = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: reev ? (ca0?.model || (deps.modelEticheta ?? MODEL)) : (deps.modelEticheta ?? MODEL), versiune, taiat_la: plansaD.taiat_la || null,
     ...(reev ? { reevaluat: { la: new Date().toISOString(), cod: COD_VERSIUNE, versiune_cod: versiuneCur, fara_ai: true } } : {}),
     ...(reev && ca0?.note_lipite ? { note_lipite: ca0.note_lipite, note_lipite_perechi: ca0.note_lipite_perechi } : {}),
     gata, actualizat: new Date().toISOString(), rev: revNou(), rulare,

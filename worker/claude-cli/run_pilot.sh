@@ -9,6 +9,7 @@ if [ "$TASK" = "source_pack" ] && [ -z "$LIC_ID" ]; then echo "ABORT: source_pac
 D=/Volume1/docker/gazpet-claude-cli; ST="$D/staging"
 DC=/Volume1/@apps/DockerEngine/dockerd/bin/docker-compose
 [ -d "$SRC" ] || { echo "ABORT: nu există $SRC"; exit 1; }
+if [ "$TASK" = "plansa_felii" ] && [ ! -f "$SRC/manifest.json" ]; then echo "ABORT: plansa_felii cere folderul pregătit, cu manifest.json"; exit 2; fi
 rm -rf "$ST" && mkdir -p "$ST" && cp -r "$SRC"/. "$ST"/ && chown -R 1000:1000 "$ST" && chmod -R u+rX,go-rwx "$ST"
 echo "staging: $(find "$ST" -type f | wc -l) fișiere din $SRC"
 cd "$D" && LIC_FOLDER="$ST" LIC_ID="$LIC_ID" LIC_NR_ANUNT="$LIC_NR_ANUNT" $DC -p gazpet-claude-cli run --rm claude-cli "$TASK"
