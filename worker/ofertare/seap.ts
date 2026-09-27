@@ -106,9 +106,10 @@ export const numeVolum = (v: { baza: string; nr: number }, cifre: number) => `${
 const LUCRU = Deno.env.get('SEAP_LUCRU') ?? '/seap-work'
 const TIMP_LISTARE_MS = 3 * 60_000, TIMP_EXTRAGERE_MS = 25 * 60_000
 const scrieAtomic = async (cale: string, text: string) => { await Deno.writeTextFile(`${cale}.tmp`, text); await Deno.rename(`${cale}.tmp`, cale) }
-async function asteapta(cale: string, ms: number, pasMs = 1000): Promise<boolean> {
+async function asteapta(cale: string, ms: number, pasMs = 1000, semnal?: AbortSignal): Promise<boolean> {
   const pana = Date.now() + ms
   while (Date.now() < pana) {
+    semnal?.throwIfAborted()
     try { await Deno.stat(cale); return true } catch { /* încă nu */ }
     await new Promise(r => setTimeout(r, pasMs))
   }
@@ -126,19 +127,21 @@ export async function pregatesteJob(dir: string) {
   await Deno.chmod(dir, 0o755); await Deno.chmod(`${dir}/in`, 0o755)
 }
 /** Listarea arhivei, făcută de extractor. `dir` = folderul jobului (pregatesteJob + in/<prima>). */
-export async function listeazaIzolat(dir: string, prima: string, ms = TIMP_LISTARE_MS): Promise<{ code: number; out: string; err: string }> {
+export async function listeazaIzolat(dir: string, prima: string, ms = TIMP_LISTARE_MS, semnal?: AbortSignal): Promise<{ code: number; out: string; err: string }> {
+  semnal?.throwIfAborted()
   await Deno.writeTextFile(`${dir}/prima`, prima)
   await scrieAtomic(`${dir}/cerere`, 'l')
-  if (!await asteapta(`${dir}/rasp/listare.gata`, ms)) return { code: -1, out: '', err: 'extractorul izolat (gazpet-seap-extractor) nu a răspuns la listare — e pornit?' }
+  if (!await asteapta(`${dir}/rasp/listare.gata`, ms, 1000, semnal)) return { code: -1, out: '', err: 'extractorul izolat (gazpet-seap-extractor) nu a răspuns la listare — e pornit?' }
   const code = Number((await Deno.readTextFile(`${dir}/rasp/listare.cod`)).trim())
   const out = await Deno.readTextFile(`${dir}/rasp/listare.txt`)
   const err = await Deno.readTextFile(`${dir}/rasp/listare.err`).catch(() => '')
   return { code, out, err }
 }
 /** Extragerea în <dir>/out, făcută de extractor DUPĂ ce listarea a fost aprobată. Cod ≠ 0 → motivul extractorului. */
-export async function extrageIzolat(dir: string, ms = TIMP_EXTRAGERE_MS): Promise<{ code: number; motiv: string }> {
+export async function extrageIzolat(dir: string, ms = TIMP_EXTRAGERE_MS, semnal?: AbortSignal): Promise<{ code: number; motiv: string }> {
+  semnal?.throwIfAborted()
   await scrieAtomic(`${dir}/cerere`, 'x')
-  if (!await asteapta(`${dir}/rasp/rezultat`, ms)) return { code: -1, motiv: 'extractorul izolat nu a terminat în timp util' }
+  if (!await asteapta(`${dir}/rasp/rezultat`, ms, 1000, semnal)) return { code: -1, motiv: 'extractorul izolat nu a terminat în timp util' }
   const [cod, ...rest] = (await Deno.readTextFile(`${dir}/rasp/rezultat`)).split('\n')
   return { code: Number(cod), motiv: rest.join(' ').trim() }
 }
@@ -192,8 +195,8 @@ function cookieDin(r: Response): string {
 }
 
 type DocSeap = { nume: string; url: string }
-export async function listaSeap(cNotice: number, tip: number): Promise<{ docs: DocSeap[]; cookie: string }> {
-  const r = await fetch(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?initNoticeId=${cNotice}&sysNoticeTypeId=${tip}`, { headers: SEAP_HDR })
+export async function listaSeap(cNotice: number, tip: number, semnal?: AbortSignal): Promise<{ docs: DocSeap[]; cookie: string }> {
+  const r = await fetch(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?initNoticeId=${cNotice}&sysNoticeTypeId=${tip}`, { headers: SEAP_HDR, signal: semnal })
   if (!r.ok) throw new Error(`lista SEAP HTTP ${r.status}`)
   const cookie = cookieDin(r)
   const d = await r.json()
@@ -207,12 +210,12 @@ export async function listaSeap(cNotice: number, tip: number): Promise<{ docs: D
   return { docs, cookie }
 }
 
-export async function descarca(doc: DocSeap, cookie: string, tinta: string): Promise<number> {
+export async function descarca(doc: DocSeap, cookie: string, tinta: string, semnal?: AbortSignal): Promise<number> {
   const link = doc.url.startsWith('http') ? doc.url : `https://e-licitatie.ro/${doc.url.replace(/^\/+/, '')}`
-  const r = await fetch(link, { headers: cookie ? { ...SEAP_HDR, Cookie: cookie } : SEAP_HDR })
+  const r = await fetch(link, { headers: cookie ? { ...SEAP_HDR, Cookie: cookie } : SEAP_HDR, signal: semnal })
   if (!r.ok || !r.body) throw new Error(`descărcare HTTP ${r.status}`)
   const f = await Deno.open(tinta, { write: true, create: true, truncate: true })
-  await r.body.pipeTo(f.writable)                     // flux direct pe disc — fără limită de memorie
+  await r.body.pipeTo(f.writable, { signal: semnal })  // flux direct pe disc — fără limită de memorie
   return (await Deno.stat(tinta)).size
 }
 
@@ -406,8 +409,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
 }
 
 // -- R6: verificarea periodică SEAP → Storage (hash), fără SSH -----------------------------------------
-// O licitație GO activă pe tură, doar dacă ultima ei verificare e mai veche de 7 zile. Rulează scriptul
-// verifica_manifest.ts ca proces copil (același cod ca rularea manuală), cu plafon de timp; rezultatul
+// O licitație GO activă pe tură, doar dacă ultima ei verificare e mai veche de 7 zile. Rulează în proces
+// verificaManifest (același cod ca rularea manuală), cu plafon de timp; rezultatul
 // rămâne în ofertare_seap_manifest (verificat_la). Nu urcă și nu modifică documente.
 const VERIFICARE_INTERVAL_MS = 7 * 24 * 3600_000
 const VERIFICARE_PLAFON_MS = 30 * 60_000
@@ -422,15 +425,13 @@ async function verificarePeriodica(supa: Supa, stare: (s: string) => void) {
       .order('verificat_la', { ascending: false }).limit(1).maybeSingle()
     if (ult && Date.now() - new Date(ult.verificat_la).getTime() < VERIFICARE_INTERVAL_MS) continue
     stare(`#${a.id} verificare hash SEAP ↔ Storage`)
-    const script = new URL('./verifica_manifest.ts', import.meta.url).pathname
     const ctl = new AbortController()
     const t = setTimeout(() => ctl.abort(), VERIFICARE_PLAFON_MS)
     try {
-      const r = await new Deno.Command(Deno.execPath(), { args: ['run', '-A', script, String(a.id)], stdout: 'piped', stderr: 'piped', signal: ctl.signal }).output()
-      const out = new TextDecoder().decode(r.stdout)
-      const m = out.match(/"identice":\s*(\d+)[\s\S]*?"diferite":\s*(\d+)[\s\S]*?"lipsa_in_platforma":\s*(\d+)/)
-      log(`#${a.id}: verificare ${r.success ? 'ok' : 'EȘEC cod ' + r.code}${m ? ` — identice ${m[1]}, diferite ${m[2]}, lipsă ${m[3]}` : ''}`)
-      if (!r.success) log(new TextDecoder().decode(r.stderr).slice(-500))
+      const { verificaManifest } = await import('./verifica_manifest_lib.ts')
+      const r = await verificaManifest(supa, a.id, { semnal: ctl.signal })
+      log(`#${a.id}: verificare ${r.erori.length ? 'EȘEC' : 'ok'} — identice ${r.identice}, diferite ${r.diferite}, lipsă ${r.lipsa_in_platforma}`)
+      if (r.erori.length) log(r.erori.join(' | ').slice(-500))
     } catch (e) {
       log(`#${a.id}: verificare oprită — ${(e as Error)?.message ?? e}`)
     } finally { clearTimeout(t) }
