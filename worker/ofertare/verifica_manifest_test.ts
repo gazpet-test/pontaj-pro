@@ -2,7 +2,7 @@
 // --allow-read=/app,/deno-dir,/tmp,/packs,/seap-work --allow-write=/deno-dir,/tmp,/packs,/seap-work
 // --allow-run=git,pdftotext,pdfinfo /app/worker/ofertare/verifica_manifest_test.ts
 // SEAP_TEST_ROOT=/seap-work; local: directorul curent sau SEAP_TEST_ROOT explicit.
-import { ok as assert, deepStrictEqual as eq } from 'node:assert/strict'
+import { ok as assert, deepStrictEqual as eq, rejects } from 'node:assert/strict'
 import { verificaManifest } from './verifica_manifest_lib.ts'
 import type { proceseazaSeap } from './seap.ts'
 
@@ -18,6 +18,9 @@ const surse: Record<string, string> = { 'a1.pdf': 'alpha', 'b.pdf': 'beta', 'c.p
 type Opt = {
   ctl?: AbortController; stopDupaPrimul?: boolean; blocat?: 'lista' | 'document' | 'storage' | 'flux'
   arhiva?: boolean; blocatExtractor?: 'listare' | 'extragere'; uscat?: boolean; periodica?: boolean
+  signedUrl?: string; eroareSemnare?: boolean; statusStorage?: number
+  inainte?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
+  laStorage?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
 }
 
 async function scenariu(opt: Opt = {}) {
@@ -62,21 +65,32 @@ async function scenariu(opt: Opt = {}) {
     },
     storage: { from(bucket: string) {
       eq(bucket, 'ofertare')
-      return { async download(path: string, _opt: unknown, fetchOpt: { signal: AbortSignal }) {
-        assert(fetchOpt.signal)
-        if (opt.blocat === 'storage') return await blocheaza(fetchOpt.signal)
-        storage++
-        const text = ({ '93/a': 'alpha', '93/b': 'beta', '93/c': 'ALTFEL' } as Record<string, string>)[path]
-        assert(text !== undefined, `obiect Storage neașteptat: ${path}`)
-        return { data: { arrayBuffer() {
-          if (opt.stopDupaPrimul && storage === 1) opt.ctl!.abort()
-          return Promise.resolve(enc.encode(text).buffer)
-        } }, error: null }
+      return { async createSignedUrl(path: string, expires: number) {
+        eq(expires, 300)
+        if (opt.eroareSemnare) return { data: null, error: { message: 'semnare refuzată' } }
+        return { data: { signedUrl: opt.signedUrl ?? `https://storage.invalid/${path}` }, error: null }
       } }
     } },
   } as unknown as Parameters<typeof verificaManifest>[0] & Parameters<typeof proceseazaSeap>[0]
   globalThis.fetch = async (input, init) => {
     const url = String(input)
+    if (url === opt.signedUrl) return fetchVechi(input, init) // integrare: fetch HTTP real, inclusiv AbortSignal
+    if (url.startsWith('https://storage.invalid/')) {
+      assert(init?.signal)
+      if (opt.blocat === 'storage') return await blocheaza(init.signal)
+      storage++
+      if (storage === 1) await opt.laStorage?.(root, supa)
+      const path = new URL(url).pathname.slice(1)
+      const text = ({ '93/a': 'alpha', '93/b': 'beta', '93/c': 'ALTFEL' } as Record<string, string>)[path]
+      assert(text !== undefined, `obiect Storage neașteptat: ${path}`)
+      const raspuns = new Response(text, { status: opt.statusStorage ?? 200 })
+      const arrayBuffer = raspuns.arrayBuffer.bind(raspuns)
+      raspuns.arrayBuffer = () => {
+        if (opt.stopDupaPrimul && storage === 1) opt.ctl!.abort()
+        return arrayBuffer()
+      }
+      return raspuns
+    }
     if (url.includes('/GetDfNoticeSectionFiles/')) {
       if (opt.blocat === 'lista') return await blocheaza(init?.signal)
       const nume = opt.arhiva ? ['set.zip'] : Object.keys(surse)
@@ -93,7 +107,9 @@ async function scenariu(opt: Opt = {}) {
     }))
     if (opt.arhiva && opt.blocatExtractor !== 'listare') {
       // Extractor simulat numai prin protocolul de fișiere; nu pornește niciun executabil.
-      const dir = `${root}/verif_93/0`
+      const directoare = (await copii(root)).filter(e => e.isDirectory && e.name.startsWith('verif_93_'))
+      eq(directoare.length, 1)
+      const dir = `${root}/${directoare[0].name}/0`
       const fisiere = { ...surse, '.DS_Store': 'junk' }
       await Deno.writeTextFile(`${dir}/rasp/listare.cod`, '0')
       await Deno.writeTextFile(`${dir}/rasp/listare.txt`, Object.entries(fisiere).map(([n, t]) => `Path = ${n}\nSize = ${t.length}\n`).join('\n'))
@@ -105,6 +121,7 @@ async function scenariu(opt: Opt = {}) {
     return new Response(opt.arhiva ? 'zip simulat' : surse[nume])
   }
   try {
+    await opt.inainte?.(root, supa)
     const raport = await verificaManifest(supa, 93, { uscat: opt.uscat, semnal: opt.ctl?.signal })
     if (opt.periodica) {
       // Instanță separată: LUCRU și curățenia de la pornire văd exclusiv directorul simulat.
@@ -185,3 +202,98 @@ Deno.test({ name: 'manifest: permisiuni worker, fără run deno/docker inclusiv 
 Deno.test({ name: 'manifest: bucla periodică verifică în proces, fără drept de subprocess', permissions: { run: false, env: 'inherit', read: 'inherit', write: 'inherit', net: 'inherit' }, fn: async () => {
   await scenariu({ periodica: true })
 } })
+
+Deno.test('manifest r2: două verificări simultane, a doua refuzată fără să atingă prima', async () => {
+  let verificat = false
+  const { raport } = await scenariu({ laStorage: async (root, supa) => {
+    const inainte = await copii(root)
+    const directoare = inainte.filter(e => e.isDirectory)
+    eq(directoare.length, 1)
+    assert(/^verif_93_[0-9a-f-]{36}$/.test(directoare[0].name))
+    const fisier = `${root}/${directoare[0].name}/0/in/a1.pdf`
+    eq(await Deno.readTextFile(fisier), 'alpha')
+    const lock = await Deno.stat(`${root}/verif_93.lock`)
+    await rejects(() => verificaManifest(supa, 93), /verificare deja în curs pentru 93/)
+    eq(await copii(root), inainte)
+    eq((await Deno.stat(`${root}/verif_93.lock`)).mtime, lock.mtime)
+    eq(await Deno.readTextFile(fisier), 'alpha')
+    verificat = true
+  } })
+  assert(verificat)
+  eq([raport.identice, raport.diferite, raport.lipsa_in_platforma, raport.manifest_scrise], [2, 1, 1, 4])
+  eq(raport.erori, [])
+})
+
+Deno.test('manifest r2: lock recent refuzat și păstrat; după eliberare se poate relua', async () => {
+  await scenariu({ inainte: async (root, supa) => {
+    const path = `${root}/verif_93.lock`
+    await Deno.writeTextFile(path, 'altă rulare')
+    await rejects(() => verificaManifest(supa, 93), /verificare deja în curs pentru 93/)
+    eq(await Deno.readTextFile(path), 'altă rulare')
+    eq((await copii(root)).map(e => e.name), ['verif_93.lock'])
+    await Deno.remove(path)
+  } })
+})
+
+Deno.test('manifest r2: lock mai vechi de 2 h preluat cu log explicit', async () => {
+  const logs: string[] = [], logVechi = console.log
+  console.log = (...args: unknown[]) => logs.push(args.join(' '))
+  try {
+    const { raport } = await scenariu({ inainte: async root => {
+      const path = `${root}/verif_93.lock`, vechi = new Date(Date.now() - 121 * 60_000)
+      await Deno.writeTextFile(path, '')
+      await Deno.utime(path, vechi, vechi)
+    } })
+    eq(raport.erori, [])
+    eq(raport.manifest_scrise, 4)
+    assert(logs.some(l => l.includes('#93') && l.includes('preiau lock') && l.includes('2 h')))
+  } finally { console.log = logVechi }
+})
+
+Deno.test('manifest r2: eroarea eliberează lock-ul și directorul propriu, păstrează directoarele străine', async () => {
+  await scenariu({ inainte: async (root, supa) => {
+    const strain = `${root}/verif_93_rulare_veche`
+    await Deno.mkdir(strain)
+    await Deno.writeTextFile(`${strain}/dovada`, 'păstrează')
+    const defect = { from() { throw new Error('eroare simulată înainte de SEAP') } } as unknown as typeof supa
+    await rejects(() => verificaManifest(defect, 93), /eroare simulată înainte de SEAP/)
+    eq((await copii(root)).map(e => e.name), ['verif_93_rulare_veche'])
+    eq(await Deno.readTextFile(`${strain}/dovada`), 'păstrează')
+    await Deno.remove(strain, { recursive: true })
+  } }) // O nouă verificare reușită dovedește și eliberarea protecției din proces.
+})
+
+for (const tip of ['semnare', 'HTTP'] as const) Deno.test(`manifest r2: eroare Storage ${tip} explicită`, async () => {
+  const { raport, scrieri } = await scenariu(tip === 'semnare' ? { eroareSemnare: true } : { statusStorage: 503 })
+  eq([raport.identice, raport.diferite, raport.erori.length], [0, 0, 3])
+  assert(raport.erori.every(e => e.includes(tip === 'semnare' ? 'semnare refuzată' : 'HTTP 503')))
+  assert(scrieri.filter(r => r.document_id !== null).every(r => r.motiv.startsWith('Storage indisponibil:')))
+})
+
+Deno.test('manifest r2: fetch Storage real blocat, plafon 300 ms, revine în sub 2 s', async () => {
+  const ctl = new AbortController(), serverCtl = new AbortController()
+  let acceptata = false
+  const server = Deno.serve({ hostname: '127.0.0.1', port: 0, signal: serverCtl.signal, onListen() {} }, () => {
+    acceptata = true
+    // Niciun răspuns cât timp verificarea rulează. Eliberăm handlerul numai la curățenia serverului.
+    return new Promise<Response>(resolve => serverCtl.signal.addEventListener('abort', () => resolve(new Response(null)), { once: true }))
+  })
+  const inceput = performance.now()
+  const timer = setTimeout(() => ctl.abort(), 300)
+  // Dacă anularea fetch-ului regresează, închidem serverul și eșuăm, fără a bloca suita.
+  const watchdog = setTimeout(() => serverCtl.abort(), 1800)
+  try {
+    const { raport, scrieri } = await scenariu({ ctl, signedUrl: `http://127.0.0.1:${server.addr.port}/blocat` })
+    assert(acceptata, 'cererea trebuie să ajungă la serverul HTTP real')
+    assert(!serverCtl.signal.aborted, 'verificarea trebuie să revină prin AbortSignal, fără închiderea serverului')
+    assert(performance.now() - inceput < 2000, 'fetch-ul real trebuie să se anuleze în sub 2 s')
+    eq(raport.erori, ['oprit la plafon'])
+    eq(raport.manifest_scrise, 0)
+    eq(scrieri, [])
+  } finally {
+    clearTimeout(timer)
+    clearTimeout(watchdog)
+    serverCtl.abort()
+    await server.finished
+  }
+})

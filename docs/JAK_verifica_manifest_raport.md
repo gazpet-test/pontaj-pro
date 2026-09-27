@@ -52,3 +52,37 @@ SEAP_TEST_ROOT=/tmp deno test --node-modules-dir=none --no-lock \
   --allow-run=git,pdftotext,pdfinfo worker/ofertare/verifica_manifest_test.ts
 deno test -A --node-modules-dir=none --no-lock worker/ofertare/
 ```
+
+## r2 — reparații după review-ul PR #498 (27.09.2026)
+
+Implementat exclusiv în verificarea în proces:
+
+- `verifica_manifest_lib.ts`: director propriu `verif_<licId>_<crypto.randomUUID()>`, creat după obținerea lock-ului și șters numai de proprietar. Nu mai șterge directorul comun la început. Lock exclusiv `verif_<licId>.lock` prin `Deno.open({ createNew: true, write: true })`; concurentul primește imediat `verificare deja în curs pentru <licId>`. Un set în proces protejează inclusiv preluarea lock-urilor expirate. Lock cu mtime mai vechi de 2 h: preluare cu log explicit. Fișierul de lock, descriptorul și protecția din proces se eliberează în `finally`, inclusiv la eroare/anulare; apelul refuzat nu șterge lock-ul altuia.
+- Storage: `createSignedUrl(path, 300)`, apoi `fetch(signedUrl, { signal: semnal })` și citirea corpului răspunsului. Erorile de semnare și HTTP diferit de 200 apar explicit în raport; corpul răspunsului HTTP respins este închis.
+- `seap.ts`: comentariu explicit — **AbortSignal oprește doar așteptarea, nu omoară 7z**. Oprirea extractorului o asigură timeout-ul hard propriu.
+- `verifica_manifest_test.ts`: stub-ul Storage semnează URL-uri, iar simularea extractorului găsește directorul unic. Cele 11 teste existente sunt păstrate; s-au adăugat **7 teste**: concurență cu director/fișier/lock intacte și rezultat corect; lock recent păstrat; lock expirat preluat cu log; eliberare după eroare fără ștergerea directoarelor străine; eroare de semnare; eroare HTTP; integrare HTTP locală cu anulare.
+
+Integrarea pornește `Deno.serve` pe `127.0.0.1`, port dinamic. Stub-ul `createSignedUrl` întoarce URL-ul local, iar cererea folosește **fetch-ul real**. Serverul acceptă cererea și nu răspunde în timpul verificării. Plafonul de 300 ms produce `erori: ['oprit la plafon']`, zero scrieri și revenire în sub 2 s. Testul verifică primirea cererii, curățenia fișierelor și revenirea înaintea închiderii serverului; serverul este închis în `finally`. Un watchdog face testul să eșueze fără să blocheze suita dacă anularea regresează.
+
+### Verificări r2 executate și limite
+
+Runnerul standard `deno test` pentru manifest cade în continuare pe Deno 2.9.7/Windows cu `Unexpected client pipe failure`, eroare 5. Încercarea standard a întregii suite este blocată la importurile externe JSR/esm.sh/npm. `deno check` este de asemenea blocat la descărcarea dependențelor esm.sh.
+
+Funcțiile originale de test au fost executate serial printr-un adaptor temporar `deno run`, fără sanitizatoarele runnerului standard:
+
+| Suită | Trecute | Eșuate | Omise |
+|---|---:|---:|---:|
+| `verifica_manifest_test.ts` | 18 | 0 | 0 |
+| `plansa_test.ts` | 36 | 0 | 0 |
+| `plansa_cli_test.ts` | 49 | 0 | 0 |
+| `citire_mare_test.ts` | 27 | 1 | 1 |
+| `ingest_mare_test.ts` | 2 | 0 | 2 |
+| Total | **132** | **1** | **3** |
+
+Eșecul este testul existent `ruleaza real: plafonul de timp oprește procesul cu semnal`: cu `-A`, verificarea permisiunii pentru `sleep` îl consideră disponibil, dar pornirea returnează `[-1, null]`, în locul rezultatului Linux `[143, 'SIGTERM']`. Cele trei omise necesită Poppler. Nu am modificat aceste teste sau codul aferent. **Nu declar suita standard „129 + 7 verde”**: aceasta trebuie executată în mediul Linux cu dependențele și executabilele reale.
+
+Manifestul a rulat fără mapări de dependențe, cu read/write limitate la repository, `--allow-net --allow-env --allow-run=git,pdftotext,pdfinfo --deny-run=deno,docker`; testele de permisiuni revocă dreptul `run`. Regresiile au folosit mapări temporare către Supabase local **2.105.3**, JSZip **3.10.1**, aserțiuni Node și un substitut `word-extractor` care aruncă la utilizare; citirea `.doc` nu este testată. Adaptoarele temporare au fost eliminate după verificare.
+
+Testul HTTP dovedește anularea transferului Storage; nu dovedește anularea cererii SDK `createSignedUrl`, care este apelată conform specificației și verifică semnalul după răspuns. Extractorul real și producția nu au fost accesate. Vitest/build nu au fost rulate, schimbarea fiind exclusiv în workerul Deno.
+
+Checkout-ul disponibil indică ramura cerută, dar referința locală este `1b31a306bf28bf88cb2d9389b70b61b227b4e2ac`, nu `61766dc` din specificație (citire directă a metadatelor locale). Am lucrat pe fișierele existente, fără comenzi git sau schimbarea checkout-ului. Fără modificări în `entrypoint.sh`, migrări ori acces la producție.

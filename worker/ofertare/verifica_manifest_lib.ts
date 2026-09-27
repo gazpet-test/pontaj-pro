@@ -13,6 +13,9 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.116.
 const sha = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b as Uint8Array<ArrayBuffer>))].map(x => x.toString(16).padStart(2, '0')).join('')
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i
 const ESTE_ARHIVA = /\.(zip|rar|7z)$/i
+// Protejează și preluarea unui lock expirat de două apeluri simultane în același proces.
+const verificariActive = new Set<string>()
+const LOCK_EXPIRAT_MS = 2 * 60 * 60_000
 
 export type Raport = {
   licitatie: number; seap_documente: number; fisiere: number; identice: number; diferite: number
@@ -28,7 +31,12 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
   let inPlatforma = new Map<string, DocumentBd>()
   let scrise = 0
   const LUCRU = Deno.env.get('SEAP_LUCRU') ?? '/seap-work'
-  const tmp = `${LUCRU}/verif_${licId}`
+  const tmp = `${LUCRU}/verif_${licId}_${crypto.randomUUID()}`
+  const lockPath = `${LUCRU}/verif_${licId}.lock`
+  if (verificariActive.has(lockPath)) throw new Error(`verificare deja în curs pentru ${licId}`)
+  verificariActive.add(lockPath)
+  let lock: Deno.FsFile | undefined
+  let tmpCreat = false
   type Rand = { licitatie_id: number; arhiva_cheie: string; cale: string; marime: number; sha256: string; document_id: number | null; stare: string; motiv: string | null; verificat_la: string }
   const randuri: Rand[] = []
   const tally = { identice: 0, diferite: 0, lipsa: 0, ignorate: 0, erori: [] as string[] }
@@ -41,10 +49,15 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     const d = inPlatforma.get(cheieNume(cale.split('/').pop()!)) ?? inPlatforma.get(cheieNume(cale))
     if (!d) { rand.stare = 'eroare_urcare'; rand.motiv = 'LIPSĂ în platformă (verificare R6)'; tally.lipsa++; randuri.push(rand); return }
     rand.document_id = d.id; potrivite.add(d.id)
-    const { data: blob, error } = await supa.storage.from('ofertare').download(d.fisier_path, {}, { signal: semnal })
+    const { data, error } = await supa.storage.from('ofertare').createSignedUrl(d.fisier_path, 300)
     semnal.throwIfAborted()
-    if (error || !blob) { rand.motiv = `Storage indisponibil: ${error?.message ?? 'gol'}`; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return }
-    const stoc = new Uint8Array(await blob.arrayBuffer())
+    if (error || !data?.signedUrl) { rand.motiv = `Storage indisponibil: ${error?.message ?? 'URL semnat lipsă'}`; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return }
+    const raspuns = await fetch(data.signedUrl, { signal: semnal })
+    if (raspuns.status !== 200) {
+      await raspuns.body?.cancel()
+      rand.motiv = `Storage indisponibil: HTTP ${raspuns.status}`; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return
+    }
+    const stoc = new Uint8Array(await raspuns.arrayBuffer())
     const shaStoc = await sha(stoc)
     if (shaStoc === rand.sha256) tally.identice++
     else { tally.diferite++; rand.motiv = `DIFERIT de Storage: sha ${shaStoc.slice(0, 12)}… / ${stoc.length} B vs SEAP ${rand.sha256.slice(0, 12)}… / ${buf.length} B` }
@@ -52,6 +65,20 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
   }
 
   try {
+    semnal.throwIfAborted()
+    await Deno.mkdir(LUCRU, { recursive: true })
+    try {
+      lock = await Deno.open(lockPath, { createNew: true, write: true })
+    } catch (e) {
+      if (!(e instanceof Deno.errors.AlreadyExists)) throw e
+      const info = await Deno.stat(lockPath)
+      if (!info.mtime || Date.now() - info.mtime.getTime() <= LOCK_EXPIRAT_MS) throw new Error(`verificare deja în curs pentru ${licId}`)
+      console.log(`[seap] #${licId}: preiau lock rămas de la crash, mai vechi de 2 h (${info.mtime.toISOString()})`)
+      await Deno.remove(lockPath)
+      lock = await Deno.open(lockPath, { createNew: true, write: true })
+    }
+    await Deno.mkdir(tmp)
+    tmpCreat = true
     semnal.throwIfAborted()
     const { data: lic, error: eL } = await supa.from('ofertare_licitatii').select('c_notice_id, sys_notice_type_id').eq('id', licId).abortSignal(semnal).single()
     semnal.throwIfAborted()
@@ -71,7 +98,6 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
       const k = v ? `rar:${v.baza.toLowerCase()}` : `f:${d.nume}`
       grupuri.set(k, [...(grupuri.get(k) || []), d])
     }
-    await Deno.remove(tmp, { recursive: true }).catch(() => {})
     let n = 0
     for (const [k, grup] of grupuri) {
       const dir = `${tmp}/${n++}`
@@ -132,7 +158,13 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     if (!semnal.aborted) throw e
     tally.erori.push('oprit la plafon')
   } finally {
-    await Deno.remove(tmp, { recursive: true }).catch(() => {})
+    try {
+      if (tmpCreat) await Deno.remove(tmp, { recursive: true }).catch(() => {})
+      if (lock) {
+        lock.close()
+        await Deno.remove(lockPath)
+      }
+    } finally { verificariActive.delete(lockPath) }
   }
   // documente din platformă fără corespondent în SEAP (urcate de mână, derivate, felii) — se raportează, nu se ating
   const faraSeap = (dinBd || []).filter(d => !potrivite.has(d.id) && d.fisier_path && !String(d.fisier_path).includes('/neincarcat/')).map(d => d.nume_original)

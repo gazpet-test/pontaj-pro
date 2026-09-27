@@ -107,6 +107,8 @@ const LUCRU = Deno.env.get('SEAP_LUCRU') ?? '/seap-work'
 const TIMP_LISTARE_MS = 3 * 60_000, TIMP_EXTRAGERE_MS = 25 * 60_000
 const scrieAtomic = async (cale: string, text: string) => { await Deno.writeTextFile(`${cale}.tmp`, text); await Deno.rename(`${cale}.tmp`, cale) }
 async function asteapta(cale: string, ms: number, pasMs = 1000, semnal?: AbortSignal): Promise<boolean> {
+  // AbortSignal încetează doar așteptarea; NU omoară 7z din containerul izolat.
+  // Oprirea extractorului este asigurată de timeout-ul hard propriu.
   const pana = Date.now() + ms
   while (Date.now() < pana) {
     semnal?.throwIfAborted()
