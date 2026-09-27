@@ -80,7 +80,8 @@ AS $function$
 DECLARE s text; k text;
 BEGIN
   -- Terra (server local, nu integrare cloud): rulează mereu, independent de iot_integrari.
-  BEGIN PERFORM public.iot_verifica_terra(); EXCEPTION WHEN OTHERS THEN NULL; END;
+  -- Fail-isolated: o eroare în verificarea Terra NU oprește restul cronului (SALUS/Tuya/încălzire).
+  BEGIN PERFORM public.iot_verifica_terra(); EXCEPTION WHEN OTHERS THEN RAISE WARNING 'iot_verifica_terra: %', SQLERRM; END;
   IF NOT EXISTS (SELECT 1 FROM public.iot_integrari WHERE stare = 'conectat') THEN RETURN; END IF;
   BEGIN PERFORM public.iot_verifica_incalzire(); EXCEPTION WHEN OTHERS THEN NULL; END;
   SELECT decrypted_secret INTO s FROM vault.decrypted_secrets WHERE name = 'IOT_CRON_SECRET' LIMIT 1;
