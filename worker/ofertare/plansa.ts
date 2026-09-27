@@ -24,7 +24,8 @@ const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 1
 // resetare în handler) DOAR dacă jobul e „citeste” și nu există nicio citire pe tăierea jobului; altfel continua/reia_erori.
 export function corpRunda(job: any, doc: any, o: { deLa?: number | null; sari?: string[] } = {}): Record<string, unknown> {
   const ca = doc?.analiza?.citire_ai
-  const baza = { doc_id: job.doc_id, asteptat: { taiat_la: job.taiat_la ?? null, cale_felii: job.cale_felii ?? null } }
+  const baza = { doc_id: job.doc_id, asteptat: { licitatie_id: job.licitatie_id ?? null, fisier_path: job.fisier_path ?? null,
+    taiat_la: job.taiat_la ?? null, cale_felii: job.cale_felii ?? null } }
   const citirePeTaiere = !!ca && (ca.taiat_la ?? null) === (job.taiat_la ?? null)
   if (job.mod === 'reia_erori') return { ...baza, mod: 'reia_erori', sari: o.sari ?? [], paralel: PARALEL }
   if (job.mod === 'citeste' && !citirePeTaiere) return { ...baza, de_la: 0, paralel: PARALEL }
@@ -131,13 +132,12 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       .select('id, licitatie_id, fisier_path, analiza').eq('id', job.doc_id).maybeSingle()
     if (error) throw new Error(`documentul nu poate fi verificat: ${error.message}`)
     hashuri = []
-    if (job.doc_sha256 != null) {
-      const { data: manifest, error: em } = await supabase.from('ofertare_seap_manifest')
-        .select('sha256').eq('document_id', job.doc_id).eq('stare', 'deja_in_platforma')
-      if (em) throw new Error(`identitatea nu poate fi verificată: ${em.message}`)
-      hashuri = (manifest ?? []).map((m: any) => m.sha256).filter((h: any) => typeof h === 'string' && /^[a-f0-9]{64}$/i.test(h))
-    }
-    if (!hashuri.length) jurnal.push({ la: new Date().toISOString(), identitate: 'neverificata' })
+    const { data: manifest, error: em } = await supabase.from('ofertare_seap_manifest')
+      .select('sha256').eq('document_id', job.doc_id).eq('stare', 'deja_in_platforma')
+    if (em) throw new Error(`identitatea nu poate fi verificată: ${em.message}`)
+    hashuri = (manifest ?? []).map((m: any) => m.sha256).filter((h: any) => typeof h === 'string' && /^[a-f0-9]{64}$/i.test(h))
+    // Un hash găsit ulterior nu dovedește identitatea înghețată la înscriere.
+    if (job.doc_sha256 == null || !hashuri.length) jurnal.push({ la: new Date().toISOString(), identitate: 'neverificata' })
     return data
   }
 
@@ -279,7 +279,8 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       doc = await verificaDupaRezervare()
       if (!doc) return true
       const body = { doc_id: job.doc_id, doar_lipire: true,
-        asteptat: { taiat_la: job.taiat_la ?? null, cale_felii: job.cale_felii ?? null } }
+        asteptat: { licitatie_id: job.licitatie_id ?? null, fisier_path: job.fisier_path ?? null,
+          taiat_la: job.taiat_la ?? null, cale_felii: job.cale_felii ?? null } }
       let status = 0, r: any = {}
       try {
         const req = new Request('http://worker/ofertare-plansa-citeste', { method: 'POST', body: JSON.stringify(body),

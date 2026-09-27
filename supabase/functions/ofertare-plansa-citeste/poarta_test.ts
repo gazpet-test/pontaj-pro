@@ -6,7 +6,7 @@ import { poateCheltui } from './poarta.ts'
 import { handler } from './handler.ts'
 
 // doc 470 (lic 95) are felii în storage (listă goală în fake => 404 „nicio felie", DUPĂ poartă)
-const DOCS = [{ id: 470, licitatie_id: 95, nume_original: 'PL1.pdf', analiza: { plansa: { cale_felii: 'x/470' } } }]
+const DOCS = [{ id: 470, licitatie_id: 95, fisier_path: 'PL1.pdf', nume_original: 'PL1.pdf', analiza: { plansa: { cale_felii: 'x/470' } } }]
 function ruleaza(uid: string, docId: number) {
   const { supa, n } = fakeSupa({ profiles: PROFILE, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: DOCS })
   const deps = { SERVICE: 'service-key', API_KEY: 'k', supa, getUser, fetch: fakeFetch(n) }
@@ -70,24 +70,37 @@ Deno.test('plansa: SERVICE nesetat ("") nu face din header gol o cheie valabilă
   for (const v of ['', 'Bearer ']) { const r = await ruleazaH({ Authorization: v }, ''); assertEquals(r.status, 401); zeroCost(r.n) }
 })
 
-// #494 r4: proveniența jobului se verifică înainte de orice rezervare sau AI, și la lipire.
+// #494 r5: proveniența jobului se verifică înainte de orice rezervare sau AI, și la lipire.
 Deno.test('plansa: asteptat diferit → 409, fără in_lucru, zero fetch/storage/scrieri pe citire și lipire', async () => {
   for (const doar_lipire of [false, true]) for (const asteptat of [
     { taiat_la: 'vechi', cale_felii: 'x/470' },
     { taiat_la: 't1', cale_felii: 'alta/cale' },
+    { licitatie_id: 96 },
+    { fisier_path: 'alta.pdf' },
+    { fisier_path: 'pl1.pdf' },
+    { fisier_path: 'PL1.pdf ' },
+    { licitatie_id: null },
+    { fisier_path: null },
+    { taiat_la: null },
+    { cale_felii: null },
   ]) {
     const doc = { ...DOCS[0], analiza: { plansa: { taiat_la: 't1', cale_felii: 'x/470' } } }
     const { supa, n } = fakeSupa({ ofertare_documente_atribuire: [doc] })
     const r = await handler(cerere('service-key', { doc_id: 470, doar_lipire, asteptat }),
       { SERVICE: 'service-key', API_KEY: 'k', supa, getUser, fetch: fakeFetch(n) })
     assertEquals(r.status, 409)
-    assertEquals(await r.json(), { error: 'Planșa nu mai corespunde jobului (retăiată) — anulat', cost_usd: 0 })
+    assertEquals(await r.json(), { error: 'Documentul nu mai corespunde jobului — anulat', cost_usd: 0 })
     zeroCost(n)
   }
 })
 
 Deno.test('plansa: asteptat egal sau absent → comportament identic pe citire și lipire', async () => {
-  for (const doar_lipire of [false, true]) for (const asteptat of [undefined, { taiat_la: null, cale_felii: 'x/470' }]) {
+  for (const doar_lipire of [false, true]) for (const asteptat of [
+    undefined, {}, { taiat_la: null, cale_felii: 'x/470' },
+    { licitatie_id: 95 }, { licitatie_id: '95' }, { fisier_path: 'PL1.pdf' },
+    { taiat_la: null }, { cale_felii: 'x/470' },
+    { licitatie_id: '95', fisier_path: 'PL1.pdf', taiat_la: null, cale_felii: 'x/470' },
+  ]) {
     const { supa, n } = fakeSupa({ ofertare_documente_atribuire: DOCS })
     const r = await handler(cerere('service-key', { doc_id: 470, doar_lipire, asteptat }),
       { SERVICE: 'service-key', API_KEY: 'k', supa, getUser, fetch: fakeFetch(n) })
