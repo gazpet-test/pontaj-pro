@@ -40,3 +40,12 @@ Reguli: (1) sarcină delimitată: obiectiv, context, fișiere permise, restricț
 | V2-J02 | Jakarinos | jak/v2-j02-gate-depusa | JAK-V2-03: `status='depusa'` cere pachet `depus` + ≥1 cerință (fn_gate_depunere) | migrare nouă + test pg | derogarea owner rămâne | test pg: depusa fără pachet refuzat; cu pachet depus trece | PR draft | Claude → Copilot GO | DA — NU pornește fără GO |
 | V2-J03 | Jakarinos | jak/v2-j03-edge-rol | JAK-V2-05/06: poartă de rol în cod pe edge `ofertare-e0-autofill/-inventar-ai/-citire-test/-triere` + rutele api/* care folosesc service_role | supabase/functions/<cele 4>/index.ts, api/*.js | anon + user fără modul → 401/403 înainte de orice cost | test Deno/Node pe handler cu JWT fără modul | PR draft | Claude → Copilot GO | DA (securitate) — NU pornește fără GO |
 | V2-J04 | Jakarinos | jak/v2-j04-bytes-depus | JAK-V2-02: la aprobat→depus serverul verifică existența obiectelor `depus_final`/`dovada_seap` în bucket (+ size) | migrare nouă + test pg | fără citire de conținut; doar storage.objects | test pg: manifest fictiv refuzat | PR draft | Claude → Copilot GO | DA — NU pornește fără GO |
+
+## Checkpoint noapte 28.09 (~20:40Z)
+| ID | Owner | Stare | Detaliu |
+|---|---|---|---|
+| JAK-V2-07b | Claude | PR #516 draft | fix service_role (uid NULL) + test; reprodus: original FAIL, fix PASS |
+| JAK-V2-07b | Copilot | **NO-GO** | (1) excepția uid NULL prea largă — service_role doar termen_depunere/documentatie_adusa_la/updated_at, cu claim-ul JWT role=service_role; postgres = excepție separată; teste negative: status/responsabil/UPDATE combinat refuzate. (2) SELECT pe cele 27 tabele rămâne separat și neschimbat în acest PR |
+| JAK-V2-07c | Jakarinos | în lucru (worktree pontaj-pro-jak2, PID 7560) | spec C:\Users\Public\spec_v2_07c.md = cele 2 cerințe Copilot |
+| V2-J01 | Jakarinos | în lucru (worktree pontaj-pro-jak) | harness P2 |
+| V2-M01 | Miloi | relansat | prima rulare: 0 output — a cerut comandă de terminal, refuzată în headless (denied_actions: RunCommand). Lecție: promptul Miloi spune explicit „doar instrumente de citire, fără comenzi” + lista fișierelor |
