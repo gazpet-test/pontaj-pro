@@ -25,6 +25,9 @@ export const RETEA_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60] }
 export const nivelRetea = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa'
   : valoare > RETEA_PRAGURI[cheie][1] ? 'error' : valoare > RETEA_PRAGURI[cheie][0] ? 'warning' : 'ok'
 
+// Camerele QNAP (ONVIF) primesc o poză nouă la ~2 min de la Terra; 10 min tăcere = semnal real de problemă.
+export const CAMERE_TACERE_MS = 10 * 60e3
+
 // Mini-grafic comun pentru centrală și Terra; fiecare serie ignoră valorile lipsă.
 function Spark({ pts, k, color, min, max, um }) {
   const vals = pts.map(x => x[k]).filter(Number.isFinite); if (vals.length < 2) return null
@@ -93,6 +96,77 @@ function TerraMonitor() {
     return () => { oprit = true; clearInterval(timer) }
   }, [])
   return <TerraCard dispozitiv={dispozitiv} istoric={istoric} acum={acum} eroare={eroare} incarcare={incarcare} />
+}
+
+// ── Camere QNAP (ONVIF): instantaneu la ~2 min prin Terra → iot-camera, NU live. URL semnat (5 min), reluat doar când
+// apare o citire nouă (citit_la se schimbă) — nu la fiecare poll, ca să nu reîncarce aceeași imagine degeaba.
+function CameraQnapItem({ dispozitiv, acum }) {
+  const [url, setUrl] = useState(null), [eroare, setEroare] = useState(null)
+  useEffect(() => {
+    let oprit = false
+    ;(async () => {
+      const { data, error } = await supabase.functions.invoke('iot-camera', { body: { actiune: 'poza', extern_id: dispozitiv.extern_id } })
+      if (oprit) return
+      if (error || data?.error) { setEroare(data?.error || error?.message || 'eroare la încărcare'); return }
+      setUrl(data.url); setEroare(null)
+    })()
+    return () => { oprit = true }
+  }, [dispozitiv.extern_id, dispozitiv.citit_la])
+  const faraDate = !dispozitiv.citit_la || acum - Date.parse(dispozitiv.citit_la) > CAMERE_TACERE_MS
+  const minute = dispozitiv.citit_la ? Math.max(0, Math.floor((acum - Date.parse(dispozitiv.citit_la)) / 60e3)) : null
+  return (
+    <div style={{ borderRadius:8, overflow:'hidden', border:`1px solid ${faraDate ? G.red + '88' : G.border}`, background:G.surface }}>
+      <div style={{ aspectRatio:'16/9', background:'#000', display:'flex', alignItems:'center', justifyContent:'center' }}>
+        {url ? <img src={url} alt={dispozitiv.nume} style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+          : <span style={{ color:G.dim, fontSize:11.5, padding:8, textAlign:'center' }}>{eroare || 'Se încarcă…'}</span>}
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', gap:8, padding:'6px 10px', fontSize:12 }}>
+        <span>{dispozitiv.nume}</span>
+        <span style={{ color: faraDate ? G.red : G.dim }}>{faraDate ? 'fără date' : `acum ${minute} min`}</span>
+      </div>
+    </div>
+  )
+}
+
+function CamereQnap() {
+  const [dispozitive, setDispozitive] = useState([])
+  const [acum, setAcum] = useState(Date.now), [eroare, setEroare] = useState(null), [incarcare, setIncarcare] = useState(true)
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    let oprit = false, inCurs = false
+    const load = async () => {
+      setAcum(Date.now())
+      if (inCurs) return
+      inCurs = true
+      try {
+        const { data, error } = await supabase.from('iot_dispozitive').select('id, extern_id, nume, citit_la')
+          .eq('sursa', 'qnap_cam').eq('activ', true).order('extern_id')
+        if (oprit) return
+        if (error) { setEroare('Nu pot actualiza camerele.'); return }
+        setDispozitive(data || []); setEroare(null)
+      } catch {
+        if (!oprit) setEroare('Nu pot actualiza camerele.')
+      } finally { inCurs = false; if (!oprit) setIncarcare(false) }
+    }
+    load()
+    const timer = setInterval(load, 60e3)
+    return () => { oprit = true; clearInterval(timer) }
+  }, [tick])
+  if (!incarcare && !dispozitive.length) return null
+  return (
+    <div style={S.card}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
+        <div style={{ fontWeight:700 }}>📷 Camere QNAP</div>
+        <span style={{ fontSize:11, color:G.dim }}>instantaneu la ~2 min · nu e live</span>
+        <button style={{ ...S.btnS, marginLeft:'auto', padding:'3px 9px' }} title="Reîmprospătează (nu declanșează o poză nouă pe cameră — aia vine de la Terra la ~2 min)" onClick={() => setTick(t => t + 1)}>🔄</button>
+      </div>
+      {incarcare ? <div style={{ color:G.dim, fontSize:12.5 }}>Se încarcă…</div>
+        : eroare ? <div style={{ color:G.yellow, fontSize:12.5 }}>{eroare}</div>
+        : <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:10 }}>
+            {dispozitive.map(d => <CameraQnapItem key={d.id} dispozitiv={d} acum={acum} />)}
+          </div>}
+    </div>
+  )
 }
 
 // ── Live stream cameră Tuya (HLS). hls.js se încarcă la cerere de pe cdnjs (Safari/iOS redă HLS nativ, fără librărie).
@@ -285,6 +359,8 @@ export default function Cladire() {
                 <span style={{ color:G.muted }}>{c.nume} <span style={{ fontSize:10.5, color:G.dim }}>{c.meta?.model || ''}</span></span><b style={{ color: r.online ? G.text : G.dim }}>{r.online ? (val || 'online') : 'offline'}</b></div> })}
           </div>
         )}
+
+        <CamereQnap />
 
         {/* Acasă — privat (doar iot_privat_acces + PIN) */}
         {privatOk && acasa.length > 0 && (
