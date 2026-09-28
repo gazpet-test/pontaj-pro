@@ -349,7 +349,7 @@ Deno.serve(async (req: Request) => {
     const registru = eligibile.map((c: any) =>
       `#${c.id} [${c.tip}${c.lot ? ' · lot ' + c.lot : ''}${dinSet.has(c.sursa_document_id) ? ' · ⟲ din acest raspuns' : ''}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}`).join('\n')
     const disp = lot.map((x: any) =>
-      `--- dispozitia ${x.nr || x.disp_id} (document ${x.doc_nume}) ---\nREZUMAT: ${x.rezumat}\nCITAT: ${x.citat}${x.loturi?.length ? '\nLOTURI: ' + x.loturi.join(', ') : ''}`).join('\n\n')
+      `--- dispozitia ${x.disp_id}${x.nr ? ' (nr. ' + x.nr + ' în document)' : ''} (document ${x.doc_nume}) ---\nREZUMAT: ${x.rezumat}\nCITAT: ${x.citat}${x.loturi?.length ? '\nLOTURI: ' + x.loturi.join(', ') : ''}`).join('\n\n')
 
     const prompt = PROMPT_COMPARA
       + `\n\nLOTUL SETULUI: ${set.lot || '(nedeclarat — tot registrul)'}`
@@ -386,7 +386,7 @@ Deno.serve(async (req: Request) => {
       const cid = fel === 'noua' ? null : Number(o.cerinta_id)
       // O cerinta din alta licitatie sau neeligibila pe lot nu are ce cauta aici.
       if (fel !== 'noua' && (!cid || !idsEligibile.has(cid))) { arunca('id de cerinta inexistent in registru'); continue }
-      const sursa = lot.find((x: any) => String(x.nr) === String(o.disp_nr)) || lot.find((x: any) => x.disp_id === o.disp_nr)
+      const sursa = lot.find((x: any) => x.disp_id === o.disp_nr) || (lot.filter((x: any) => String(x.nr) === String(o.disp_nr)).length === 1 ? lot.find((x: any) => String(x.nr) === String(o.disp_nr)) : undefined)
       // O operatie fara text nu are ce cauta in propunere: ar ajunge in conflicte abia la aplicare,
       // dupa ce omul a bifat-o degeaba.
       const textOp = String(o.text_nou || o.text_cerinta || '').trim()
@@ -402,7 +402,9 @@ Deno.serve(async (req: Request) => {
         tip: ['eliminatorie', 'propunere', 'forma', 'contractuala'].includes(o.tip) ? o.tip : 'propunere',
         document_probant: o.document_probant || null,
         cand_se_prezinta: ['duae', 'depunere', 'primul_loc'].includes(o.cand_se_prezinta) ? o.cand_se_prezinta : null,
-        lot: set.lot || null,
+        // Audit R03: lotul operației vine din DISPOZIȚIA-sursă (analiza citește „pentru Lot 2"), nu doar din
+        // set — UI-ul creează intenționat setul fără lot, deci set.lot era mereu null și lotul se pierdea.
+        lot: set.lot || (Array.isArray(sursa?.loturi) && sursa.loturi.length ? sursa.loturi.join(',') : null),
         // Sectiunea fina: „titlul setului · solicitarea 7". RPC-ul o foloseste daca exista, altfel
         // pune titlul setului — asa nu se mai pierde UNDE anume in raspuns scrie lucrul asta.
         sursa_sectiune: sursa?.nr ? `${set.titlu} · solicitarea ${sursa.nr}` : null,
@@ -410,7 +412,8 @@ Deno.serve(async (req: Request) => {
         sursa_pasaj: String(o.citat).slice(0, 400),
         motiv: String(o.motiv || '').slice(0, 300),
         incredere: ['ridicata', 'medie', 'scazuta'].includes(o.incredere) ? o.incredere : 'scazuta',
-        necesita_revizuire: o.necesita_revizuire === true,
+        // fără dispoziție-sursă identificată unic, proveniența nu e sigură → la om
+        necesita_revizuire: o.necesita_revizuire === true || !sursa,
         disp_id: sursa?.disp_id || null,
       })
     }
@@ -437,7 +440,7 @@ Deno.serve(async (req: Request) => {
     // Fiecare „neclar" primeste si el disp_id, ca operatiile: altfel nu se poate spune CARE dispozitie
     // a ramas fara verdict, ci doar cate — iar un numar nu se poate deschide.
     const neclareRunda = (Array.isArray(j.neclare) ? j.neclare : []).map((n: any) => {
-      const sd = lot.find((x: any) => String(x.nr) === String(n.disp_nr)) || lot.find((x: any) => x.disp_id === n.disp_nr)
+      const sd = lot.find((x: any) => x.disp_id === n.disp_nr) || (lot.filter((x: any) => String(x.nr) === String(n.disp_nr)).length === 1 ? lot.find((x: any) => String(x.nr) === String(n.disp_nr)) : undefined)
       return { ...n, disp_id: sd?.disp_id || null, doc_nume: sd?.doc_nume || null }
     })
     const neclareToate = [...(prop.neclare || []), ...neclareRunda]
@@ -466,7 +469,8 @@ Deno.serve(async (req: Request) => {
       // „fara_efect" e o CONCLUZIE si se scrie doar peste o analiza completa: zero operatii cu
       // dispozitii fara verdict sau cu propuneri respinse nu inseamna „nu schimba nimic",
       // inseamna „nu stim inca". Altfel starea din baza minte la fel ca ecranul.
-      stare: (operatii.length || raman || faraRezultat.length
+      // Audit R02: și punctele NECLARE țin concluzia deschisă — „neclar" nu e „nu schimbă nimic".
+      stare: (operatii.length || raman || faraRezultat.length || neclareToate.length
         || Object.keys(propNou.aruncate || {}).length) ? 'analizat' : 'fara_efect',
       updated_at: new Date().toISOString(),
     }).eq('id', setId)
