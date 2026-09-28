@@ -120,4 +120,10 @@ Tu scrii codul; Claude îl verifică pe Postgres 16 real, Deno și vitest, apoi 
   `scripts/pg/*.mjs` (PGURI local). Dacă un harness nu rulează la tine, **spune** — nu declara
   „trecut” ce n-ai rulat.
 - Fișiere mari (`App.jsx`, `Logistica.jsx`, `HR.jsx`…): modifici doar ce cere specificația.
+- Fixture-urile de test respectă schema și drepturile reale: constrângerile CHECK (ex.
+  `ofertare_seap_manifest.sha256` = hex cu litere mici) și GRANT-urile de producție (o funcție
+  fără EXECUTE pentru `authenticated` se apelează în test ca `observer`, nu ca utilizator).
+  Pe PR #491 exact asta a picat de două ori.
+- Datele mutabile nu au „ultimul rând după id”: dacă un tabel primește UPDATE pe rânduri vechi
+  (ex. manifestul SEAP), amprenta include toate rândurile, nu doar pe cel mai nou.
 - La final: raport scurt (`docs/…md`) — ce ai schimbat, unde, ce test, ce NU ai putut face.

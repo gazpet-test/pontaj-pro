@@ -1,7 +1,7 @@
 // ofertare-acoperire/core.ts — logica motorului de acoperire, FĂRĂ înveliș HTTP (22.09.2026).
 // Aceeași funcție rulează în edge function (index.ts = auth + Response) și în workerul de pe NAS
 // (worker/ofertare/acoperire.ts), unde nu există limita de 150 s a gateway-ului. Istoricul versiunilor: index.ts.
-import { turtesteCandidati, marcheazaSudoriNepotriviti } from './candidati.ts'
+import { turtesteCandidati, marcheazaSudoriNepotriviti, aplicaInsemexPrinPartener } from './candidati.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODEL = 'claude-opus-5'
@@ -44,6 +44,7 @@ IMPORTANT: raportezi FIECARE cerinta primita, inclusiv cele cu "nu_se_aplica". D
 
 - R20 (SUDURĂ — materialul conductei decide calificarea): catalogul are tipuri DISTINCTE de sudor — „Sudor PEHD" (polietilenă) și „Sudor electric autorizat" (oțel), plus câmpurile "procedeu_sudura" și "diametru_teava_mm". Materialul se ia din OBIECTUL CONTRACTULUI și din textul cerinței: rețea de DISTRIBUȚIE gaze = predominant PEHD; conductă de TRANSPORT / racorduri / stații = oțel. Un sudor de oțel NU acoperă îmbinări de polietilenă și invers — e aceeași greșeală ca un RTE pe alt domeniu (R10) sau o diplomă pe altă specialitate (R17). Dacă lucrarea are ambele materiale, spui în motiv că sunt acoperite ambele și cu cine. Dacă lipsește calificarea pe materialul cerut, e "gol" — nu o înlocuiești cu cealaltă.
   Cerințele de sudură din NTPEE (art. 236, 239) și similare cer DOUĂ lucruri: sudori autorizați ȘI aparate de sudură agrementate tehnic. Aparatele sunt documente de firmă (F<id>), de tip „revizie tehnică aparat sudură prin electrofuziune" / „cap la cap" (PE) — le cauți în catalogul de documente și le numești în motiv. Aparatele de electrofuziune/cap-la-cap sunt pentru PE; nu le invoca la sudură de oțel.
+- R21 (INSEMEX / ATEX pe FIRMĂ — regula Gazpet, 28.09.2026): Gazpet Instal NU deține atestat INSEMEX (ATEX) ca societate. O cerință care cere operatorului economic / ofertantului atestat sau autorizare INSEMEX / ATEX / GANEx se acoperă MEREU prin partener: status "acoperit_partener" cu partener_id-ul partenerului care are INSEMEX în "acopera" (ATSD, Roconsult). Nu cauți document de firmă F pentru ea și nu dai "gol" pe lipsa lui. Cerințele INSEMEX pe PERSONAL (persoane autorizate) rămân pe catalogul de autorizații personale, ca până acum.
 - R19 (ALTERNATIVE — între 0 și 3): la cerințele cu status "acoperit" sau "acoperit_partener", pui în "candidati" variantele care ACOPERĂ cerința, cea mai bună prima. NUMĂRUL NU E O ȚINTĂ. Fiecare variantă trebuie să îndeplinească INDEPENDENT toate condițiile obligatorii ale cerinței — domeniul cerut, valabilitatea la termen, specialitatea. O încălcare nu se compensează prin scor și nu se scuză prin „e singura alternativă". Dacă o singură persoană sau un singur document îndeplinește cerința, întorci UN candidat; asta e răspunsul corect, nu o lipsă. Nu relaxa nicio regulă (R6, R8, R10, R14, R17, R18) ca să ajungi la trei.
   "gol" ÎNSEAMNĂ GOL: dacă nimic din catalog nu acoperă cerința, "candidati" e [] și scrii în "motiv" al cerinței CE anume lipsește, concret („niciun RTE cu domeniul 9.1; avem 8.4D și 2.1", „nicio diplomă pe hidrotehnică"). NU pune în "candidati" variante respinse ca să pară că ai căutat — omul are nevoie să vadă golul, nu o listă de nepotriviri.
   ATENȚIE, capcana cea mai deasă: diploma, recomandarea și dovada de vechime ale ACELEIAȘI persoane NU sunt trei alternative — sunt un DOSAR care se adună. Alternative sunt persoane sau documente DIFERITE, fiecare capabil singur să țină cerința. Dacă cerința compusă are nevoie de D + R + V de la același om, e UN candidat, iar ce lipsește se scrie în motivul lui.
@@ -328,7 +329,7 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
     // raspunsul se taia (`trunchiat`) sau insertul pica, acoperirile vechi erau deja duse,
     // iar cerintele ramaneau fara niciun rand. Acum se construiesc intai randurile, apoi se
     // scriu printr-o singura tranzactie in BD (vezi fn_ofertare_acoperire_rescrie mai jos).
-    const rows: any[] = []
+    let rows: any[] = []
     const clarProps: { cerinta_id: number; intrebare: string }[] = []
 
     // 21.09.2026 — CANDIDATI MULTIPLI. AI-ul intoarce un obiect per CERINTA, cu `candidati: []`
@@ -463,6 +464,11 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
       rows, String(lic.obiect || ''),
       (cid: number) => String((cerinte || []).find((c: any) => c.id === cid)?.text_cerinta || ''),
       (id: any) => String((idsAuth.get(Number(id)) || {}).tip || ''),
+    )
+
+    // R21 în cod: INSEMEX/ATEX pe firmă → prin partener (decizie Răzvan 28.09.2026).
+    rows = aplicaInsemexPrinPartener(
+      rows, (cid: number) => String((cerinte || []).find((c: any) => c.id === cid)?.text_cerinta || ''), parteneri,
     )
 
     // Nimic de scris = nimic de sters. Altfel un raspuns gol ar goli tabelul.

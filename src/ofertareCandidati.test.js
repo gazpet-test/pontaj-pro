@@ -124,3 +124,31 @@ describe('marcheazaSudoriNepotriviti — R20 ca verificare, nu ca rugăminte', (
   it('lista goală => zero', () =>
     expect(marcheazaSudoriNepotriviti([], 'retea distributie', text, tip)).toBe(0))
 })
+
+import { eCerintaInsemexFirma, aplicaInsemexPrinPartener } from '../supabase/functions/ofertare-acoperire/candidati.ts'
+
+describe('R21 — INSEMEX pe firmă prin partener', () => {
+  const P = [{ id: 21, nume: 'ATSD', acopera: 'electrice; INSEMEX/ATEX pe firmă' }, { id: 30, nume: 'Roconsult', acopera: 'INSEMEX' }, { id: 5, nume: 'Proiectant X', acopera: 'proiectare gaze' }]
+  const txt = { 1: 'Ofertantul trebuie să dețină autorizație INSEMEX pentru lucrări în atmosfere potențial explozive', 2: 'Personal autorizat GANEx – INCD INSEMEX Petroșani', 3: 'RTE atestat ISC' }
+  const t = (id) => txt[id]
+  it('recunoaște firma, nu persoana', () => {
+    expect(eCerintaInsemexFirma(txt[1])).toBe(true)
+    expect(eCerintaInsemexFirma(txt[2])).toBe(false)
+    expect(eCerintaInsemexFirma(txt[3])).toBe(false)
+  })
+  it('golul pe firmă devine acoperit_partener pe ATSD + Roconsult; restul neatins', () => {
+    const rows = [{ cerinta_id: 1, status: 'gol', mod: 'gol', doc_firma_id: 9 }, { cerinta_id: 2, status: 'acoperit', autorizatie_id: 52 }, { cerinta_id: 3, status: 'gol' }]
+    const r = aplicaInsemexPrinPartener(rows, t, P)
+    const c1 = r.filter(x => x.cerinta_id === 1)
+    expect(c1.map(x => x.partener_id)).toEqual([21, 30])
+    expect(c1.every(x => x.status === 'acoperit_partener' && x.doc_firma_id === null)).toBe(true)
+    expect(r.find(x => x.cerinta_id === 2).autorizatie_id).toBe(52)
+    expect(r).toHaveLength(4)
+  })
+  it('fără partener INSEMEX rămâne gol, cu motiv clar', () => {
+    const r = aplicaInsemexPrinPartener([{ cerinta_id: 1, status: 'acoperit', doc_firma_id: 9 }], t, [P[2]])
+    expect(r).toHaveLength(1)
+    expect(r[0].status).toBe('gol')
+    expect(r[0].motiv).toMatch(/nu deține INSEMEX/)
+  })
+})
