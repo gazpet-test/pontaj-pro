@@ -661,6 +661,7 @@ export function PropunereRezumat({ st, onDeschide }) {
           {st.de_raspuns} cerințe de răspuns ({st.de_raspuns - st.de_forma} propunere + {st.de_forma} formă) ·{' '}
           <b style={{ color: st.cu_capitol ? G.green : G.red }}>{st.cu_capitol} au capitol</b>
           {st.inchise_cu_dovada > 0 && <> · {st.inchise_cu_dovada} închise cu dovadă în registru</>}
+          {st.dovada_de_verificat > 0 && <> · <b style={{ color:G.orange }}>{st.dovada_de_verificat} cu dovadă doar propusă (neverificată de om)</b></>}
           {st.capcane > 0 && <> · <b style={{ color:G.red }}>{st.capcane_descoperite} din {st.capcane} capcane de respingere, descoperite</b></>}
           {st.capitole === 0 && <> · cuprinsul propunerii nu e creat</>}
         </div>

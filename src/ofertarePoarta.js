@@ -34,6 +34,14 @@ export function evalueazaPoarta(st) {
     detalii: `${st.fara_capitol} din ${st.de_raspuns}` + (st.inchise_cu_dovada > 0 ? ` · ${st.inchise_cu_dovada} sunt închise cu dovadă în registru, nu cer capitol` : ''),
     filtru: 'fara',
   })
+  // R06 (audit Copilot): acoperirea propusă de AI NU e dovadă. Doar cea verificată pe scan de un om
+  // închide cerința; restul se vede separat, ca avertisment, până o confirmă cineva.
+  if ((st.dovada_de_verificat || 0) > 0) r.push({
+    k:'dovada_propusa', titlu:'Dovezi propuse de AI, neverificate de om',
+    stare: 'warn',
+    detalii: `${st.dovada_de_verificat} cerințe fără capitol au doar o acoperire propusă (acoperit/partener), nebifată „verificat pe scan” — nu sunt încă dovadă`,
+    filtru: 'fara',
+  })
   r.push({
     // P0.3 — ATRIBUIREA NU E CONFORMITATE. O cerinta cu capitol, dar pe care nimeni n-a
     // confirmat-o (stare <> 'verificata', sau verificata la o versiune veche a capitolului) NU e
