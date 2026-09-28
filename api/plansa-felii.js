@@ -10,6 +10,7 @@
 // iar orice decodor liber vede un dreptunghi gri. Fara verificarea asta, cineva ar fi
 // crezut ca AI-ul a citit plansa cand de fapt n-a vazut nimic, si ar fi ofertat pe ea.
 import { createClient } from '@supabase/supabase-js'
+import { poartaOfertare } from './_poartaOfertare.js'
 import sharp from 'sharp'
 
 // 25.09.2026: planșele VECTORIALE se randează cu pdf.js + @napi-rs/canvas (vezi _randare-pdf.js).
@@ -160,18 +161,12 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'doar POST' })
 
+  const refuzAcces = await poartaOfertare(req)
+  if (refuzAcces) return res.status(refuzAcces.status).json(refuzAcces.body)
+
   const SUPA_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
   const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
-  const SECRET = process.env.SEAP_IMPORT_SECRET
   if (!SUPA_URL || !SERVICE) return res.status(500).json({ error: 'lipsesc variabilele Supabase din Vercel' })
-
-  if (!SECRET || req.headers['x-import-secret'] !== SECRET) {
-    const jwt = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
-    if (!jwt || !ANON) return res.status(401).json({ error: 'unauthorized' })
-    const { data: u } = await createClient(SUPA_URL, ANON).auth.getUser(jwt)
-    if (!u?.user) return res.status(401).json({ error: 'unauthorized' })
-  }
 
   const corp = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
   const docId = Number(corp.doc_id)

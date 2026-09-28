@@ -4,6 +4,7 @@
 // pasajul copiat — aceleași coloane ca tabelul uman (protocol agreat cu GPT, runda 3-4).
 // Body: { doc_id, furnizor: 'gemini'|'openai', model?, pagini?: [de_la, pana_la], versiune? }
 // Scrie în ofertare_inventar_ai. NU atinge ofertare_cerinte (registrul de producție).
+import { poartaOfertare } from '../_shared/poartaOfertare.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
@@ -53,6 +54,8 @@ async function feliePdf(src: PDFDocument, start: number, end: number): Promise<U
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const refuzAcces = await poartaOfertare(req)
+  if (refuzAcces) return refuzAcces
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
 
