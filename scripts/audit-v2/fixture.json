@@ -1,15 +1,20 @@
 {
-  "licitatie_id": null,
+  "licitatie_id": 103,
   "cerinte": {
-    "D1": null,
-    "D6": null,
-    "D8": null
+    "D1": 6607,
+    "D6": 6656,
+    "D8": 6552,
+    "_nota": {
+      "D1": "cerința 6607 (nr 235, F3 pe obiect) — supersession Nectarinului De110/D125: cantități 1765 (AC 258), 2185 (PT scris), 2111/2112 (planșe); răspunsuri: doc 1298 (Consolidat 1, 11.09: D125=eroare, De110 corect), doc 1297 (Consolidat 2, 15.09: F3 rămâne D125, se prețuiește De110)",
+      "D6": "cerința 6656 (nr 274, subcontractant de specialitate drumuri; eliminatorie/capabilitate; 1 acoperire, 0 legături PT) + 6641/6642 (nr 225/226 subcontractanți în DUAE/PT); răspuns: doc 1297 pct 7 (regie proprie permisă dacă există capacitate)",
+      "D8": "cerința 6552 (nr 271, oferta nu se modifică după termen) + 6454 (nr 193 menținere ofertă); doc 1299 (Consolidat 3, 16.09): cererile de prelungire ACOPERITE (au răspuns) dar RESPINSE — termenul rămâne 18.09; în clonă termen_depunere = +30 zile de la clonare"
+    }
   },
-  "cdp_port": 9222,
+  "cdp_port": 9333,
   "cdp_target_id": null,
-  "cdp_port_2": 9222,
+  "cdp_port_2": 9333,
   "cdp_target_id_2": null,
-  "app_url": null,
+  "app_url": "https://pontaj-pro-sooty.vercel.app",
   "scenarii": {
     "01_seap_documente": {
       "preconditii": [],
@@ -279,7 +284,7 @@
       "preconditii": [],
       "obiect": {
         "tabela": "ofertare_cerinte",
-        "id": null
+        "id": 6656
       },
       "faze": {
         "aceeasi_cerinta": {
@@ -343,8 +348,8 @@
     }
   },
   "nr_anunt": "SANDBOX-V2-DOMNESTI",
-  "context_ui": null,
-  "ground_truth_json": null,
+  "context_ui": "Edge profil birou, CDP 9333, cont de test claude@gazpet.ro (10c105d3-536d-4ca6-b943-803592626909; is_owner=false, user_module_access ofertare:admin) — responsabilul clonei 103; al doilea context = alt tab/browser context cu același cont",
+  "ground_truth_json": "docs/AUDIT_OFERTARE_V2/dovezi/ground_truth_manifest_domnesti.txt (466 fișiere sha256; setul depus = 103/depus/* în storage, 81 obiecte)",
   "retete": {
     "01_seap_documente/import_copie": {
       "fisiere": null,
@@ -358,7 +363,7 @@
       "final_selector": null
     },
     "03_cerinte/confirmare_umana": {
-      "cerinta_id": null,
+      "cerinta_id": 6656,
       "actor_id": null,
       "confirma_selector": null,
       "final_selector": null
@@ -373,7 +378,7 @@
     },
     "04_clarificari/leaga_289": {
       "clarificare_id": null,
-      "document_id": null,
+      "document_id": 1297,
       "deschide_selector": null,
       "bifa_selector": null,
       "nr_selectate": null,
@@ -381,7 +386,7 @@
     },
     "04_clarificari/leaga_290": {
       "clarificare_id": null,
-      "document_id": null,
+      "document_id": 1298,
       "deschide_selector": null,
       "bifa_selector": null,
       "nr_selectate": null,
@@ -389,14 +394,14 @@
     },
     "04_clarificari/leaga_333": {
       "clarificare_id": null,
-      "document_id": null,
+      "document_id": 1299,
       "deschide_selector": null,
       "bifa_selector": null,
       "nr_selectate": null,
       "final_selector": null
     },
     "05_acoperire/alegere_umana": {
-      "cerinta_id": null,
+      "cerinta_id": 6656,
       "acoperire_id": null,
       "actor_id": null,
       "alege_selector": null,
@@ -528,6 +533,40 @@
       "doc_id": null,
       "pagini": null,
       "final_selector": null
+    }
+  },
+  "clona": {
+    "sursa_licitatie_id": 5,
+    "harta": "claude_docs.audit_v2_clona_103_map",
+    "documente": {
+      "1281": "AC 258",
+      "1282": "CAIET DE SARCINI (cs_volum)",
+      "1283": "DUAE xml (ignorat)",
+      "1284": "FORMULARE.doc",
+      "1285": "Fișa de date DF1279378",
+      "1286": "LISTE CANTITATI zip (ignorat — contează ca esențial necitit în v_ofertare_seap_completitudine)",
+      "1287": "PT.zip (ignorat)",
+      "1288-1294": "C6/C7/C8/C9/F1/F2/F3 fără valori (upload)",
+      "1295": "PT/01 Parte scrisă",
+      "1296": "PT/02 Parte desenată",
+      "1297": "Răspuns consolidat 2 (15.09)",
+      "1298": "Răspuns consolidat 1 (11.09)",
+      "1299": "Răspuns consolidat 3 (16.09)"
+    },
+    "clarificari": {
+      "67": "nr1 trimisa",
+      "68": "nr2 raspunsa (RTE domeniu)",
+      "69": "nr3",
+      "70": "nr4",
+      "71": "nr5",
+      "72": "nr6"
+    },
+    "capitole": "58–72 (15)",
+    "acoperire_revizie": 4,
+    "stare_porti_la_clonare": {
+      "v_ofertare_seap_completitudine.blocaj": "1 document(e) esențiale … necitite (=1286 zip)",
+      "ofertare_r5_blocaj_sursa": "lista_f3_nevalidate = 62",
+      "pachete": 0
     }
   }
 }
