@@ -269,6 +269,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   let tokIn = 0, tokOut = 0, poz = deLa, continua = false, scriseTotal = 0
   const raport: any[] = []
   const toate: any[] = []
+  const conflicteRevizie: any[] = []   // R10: poziții citite cu altă cantitate decât cea din BD
 
   while (poz < munca.length) {
     if (Date.now() - t0 > BUGET_MS) { continua = true; break }
@@ -370,6 +371,20 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       // upsert, nu insert: feliile se suprapun cu 2.000 de caractere si o reluare reprocesează
       // felii deja scrise. Fara asta, o reluare dubleaza cantitatile in tacere (24 de randuri
       // duplicate pe Domnesti, curatate la 11.09.2026). Indexul unic e pe (licitatie, denumire, sursa).
+      // Audit R10 (28.09.2026): ignoreDuplicates ascundea REVIZIILE — aceeași poziție (denumire+sursă)
+      // cu altă cantitate era aruncată în tăcere și rămânea valoarea veche. Acum diferențele se
+      // raportează explicit (conflicte_revizie), ca omul să decidă; nu suprascriem automat cifra aprobată.
+      try {
+        const { data: exist } = await db.from('ofertare_cantitati').select('id, denumire, sursa, cantitate')
+          .eq('licitatie_id', licId).in('denumire', [...new Set(feliaAsta.map(x => x.denumire))])
+        const peCheie = new Map((exist || []).map((e: any) => [`${e.denumire}\u0000${e.sursa}`, e]))
+        for (const x of feliaAsta) {
+          const e: any = peCheie.get(`${x.denumire}\u0000${x.sursa}`)
+          if (e && x.cantitate !== null && e.cantitate !== null && Number(e.cantitate) !== Number(x.cantitate)) {
+            conflicteRevizie.push({ id: e.id, denumire: x.denumire, sursa: x.sursa, cantitate_bd: e.cantitate, cantitate_noua: x.cantitate })
+          }
+        }
+      } catch (_) { /* detecția nu blochează scrierea; lipsa ei se vede ca 0 conflicte */ }
       const { data: ins, error: eIns } = await db.from('ofertare_cantitati')
         .upsert(feliaAsta, { onConflict: 'licitatie_id,denumire,sursa', ignoreDuplicates: true })
         .select('id')
@@ -392,6 +407,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     // pozițiile extrase pe tip_sursa (null = document care nu e listă de cantități) — control după fiecare apel
     pe_tip_sursa: toate.reduce((a: Record<string, number>, x) => { const k = x.tip_sursa ?? 'null'; a[k] = (a[k] || 0) + 1; return a }, {}),
     tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
+    // R10: aceeași poziție citită cu altă cantitate decât cea din BD — NU s-a suprascris; de decis de om
+    conflicte_revizie: conflicteRevizie,
   }
   // dry_run: previzualizare AI — a consumat credit (cost_usd de mai sus, jurnalizat), NU a salvat nimic.
   if (dryRun) return json({ ...comun, dry_run: true, previzualizare_platita: true,
