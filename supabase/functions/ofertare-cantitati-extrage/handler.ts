@@ -384,6 +384,14 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
             conflicteRevizie.push({ id: e.id, denumire: x.denumire, sursa: x.sursa, cantitate_bd: e.cantitate, cantitate_noua: x.cantitate })
           }
         }
+        // Propagare (Copilot 28.09): rândul cu cifra revizuită devine „diferenta” (de reverificat) — același
+        // mecanism de invalidare pe care îl urmăresc poarta PT, graficul și prețul; cifra veche NU se suprascrie.
+        for (const c of conflicteRevizie.filter(c => !c._marcat)) {
+          await db.from('ofertare_cantitati').update({ status: 'diferenta',
+            diferenta_nota: `Revizie la re-extragere: sursa dă ${c.cantitate_noua}, în registru e ${c.cantitate_bd} — de reverificat (valoarea din registru nu s-a schimbat).` })
+            .eq('id', c.id)
+          c._marcat = true
+        }
       } catch (_) { /* detecția nu blochează scrierea; lipsa ei se vede ca 0 conflicte */ }
       const { data: ins, error: eIns } = await db.from('ofertare_cantitati')
         .upsert(feliaAsta, { onConflict: 'licitatie_id,denumire,sursa', ignoreDuplicates: true })
