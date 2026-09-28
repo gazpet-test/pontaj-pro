@@ -13,6 +13,7 @@
 -- rulează după RLS USING și înainte de RLS WITH CHECK, deci prinde orice combinație de politici.
 -- Nu modifică politicile existente (fluxurile normale propus→aprobat→depus rămân valide).
 --
+-- Timpii aprobat_la/depus_la sunt puși de server (now()) în tranziție; nu se pot pre-seta.
 -- Matrice permisă:  propus → propus | aprobat(semnat de auth.uid())   ;   aprobat → depus   ;   depus → (imuabil)
 -- Refuzat explicit: aprobat → propus (retrogradare) ; propus → depus (sare peste aprobare) ; orice pe pachet depus.
 
@@ -33,6 +34,15 @@ BEGIN
      AND (NEW.aprobat_de IS DISTINCT FROM OLD.aprobat_de OR NEW.aprobat_la IS DISTINCT FROM OLD.aprobat_la) THEN
     RAISE EXCEPTION 'aprobat_de/aprobat_la nu se pot modifica după aprobare.' USING ERRCODE = 'P0001';
   END IF;
+  -- proveniența temporală o scrie SERVERUL (Copilot, NO-GO 1 pe #515): aprobat_de/aprobat_la/depus_la
+  -- nu se pot pre-seta de client; se completează doar în tranziția corespunzătoare, cu now().
+  IF OLD.stare = 'propus' AND NEW.stare = 'propus'
+     AND (NEW.aprobat_de IS DISTINCT FROM OLD.aprobat_de OR NEW.aprobat_la IS DISTINCT FROM OLD.aprobat_la) THEN
+    RAISE EXCEPTION 'aprobat_de/aprobat_la se scriu doar la aprobare (propus→aprobat).' USING ERRCODE = 'P0001';
+  END IF;
+  IF NEW.depus_la IS DISTINCT FROM OLD.depus_la AND NOT (OLD.stare = 'aprobat' AND NEW.stare = 'depus') THEN
+    RAISE EXCEPTION 'depus_la se scrie doar la depunere (aprobat→depus).' USING ERRCODE = 'P0001';
+  END IF;
   -- matricea de tranziții (numai la schimbarea stării)
   IF OLD.stare IS DISTINCT FROM NEW.stare THEN
     IF NOT ( (OLD.stare = 'propus'  AND NEW.stare = 'aprobat')
@@ -44,6 +54,8 @@ BEGIN
     IF NEW.stare = 'aprobat' AND (NEW.aprobat_de IS NULL OR NEW.aprobat_de IS DISTINCT FROM auth.uid()) THEN
       RAISE EXCEPTION 'Aprobarea trebuie semnată de utilizatorul curent (aprobat_de = auth.uid()).' USING ERRCODE = 'P0001';
     END IF;
+    IF NEW.stare = 'aprobat' THEN NEW.aprobat_la := now(); END IF;  -- ora aprobării = ora serverului
+    IF NEW.stare = 'depus'   THEN NEW.depus_la   := now(); END IF;  -- (și fn_pt_pachet_depus_verifica o face)
   END IF;
   RETURN NEW;
 END $function$;

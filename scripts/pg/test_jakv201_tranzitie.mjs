@@ -157,8 +157,22 @@ ${refuza(`UPDATE ofertare_pt_pachet SET stare='depus' WHERE licitatie_id=9003`, 
 -- INVALID: aprobare semnată în numele altcuiva
 INSERT INTO ofertare_pt_pachet(licitatie_id,versiune,stare) VALUES (9004,1,'propus');
 ${refuza(`UPDATE ofertare_pt_pachet SET stare='aprobat', aprobat_de='${ALT}', aprobat_la=now() WHERE licitatie_id=9004`, 'semnată de utilizatorul curent')}
+-- INVALID (NO-GO 1 Copilot): pre-setarea semnăturii / timpului pe propus, înainte de aprobare
+${refuza(`UPDATE ofertare_pt_pachet SET aprobat_de='${RESP}', aprobat_la='2000-01-01' WHERE licitatie_id=9004`, 'se scriu doar la aprobare')}
+${refuza(`UPDATE ofertare_pt_pachet SET depus_la='2000-01-01' WHERE licitatie_id=9004`, 'se scrie doar la depunere')}
+-- aprobare cu aprobat_la antedatat: trece, dar serverul pune now() (timpul clientului e ignorat)
+UPDATE ofertare_pt_pachet SET stare='aprobat', aprobat_de='${RESP}', aprobat_la='2000-01-01' WHERE licitatie_id=9004;
+${cere("(SELECT aprobat_la FROM ofertare_pt_pachet WHERE licitatie_id=9004) > now() - interval '1 minute'", 'aprobat_la trebuia pus de server (now), nu antedatat')}
+-- depus_la fals pe un pachet aprobat, fără tranziție: refuzat
+${refuza(`UPDATE ofertare_pt_pachet SET depus_la='2000-01-01' WHERE licitatie_id=9004`, 'se scrie doar la depunere')}
+-- depunere cu depus_la antedatat: serverul pune now()
+INSERT INTO ofertare_pt_pachet_fisiere(pachet_id,rol,nume,sha256) SELECT id,'depus_final','o.pdf',${sha} FROM ofertare_pt_pachet WHERE licitatie_id=9004;
+INSERT INTO ofertare_pt_pachet_fisiere(pachet_id,rol,nume,sha256) SELECT id,'dovada_seap','d.pdf',${sha} FROM ofertare_pt_pachet WHERE licitatie_id=9004;
+UPDATE ofertare_pt_pachet SET stare='depus', depus_la='2000-01-01' WHERE licitatie_id=9004;
+${cere("(SELECT depus_la FROM ofertare_pt_pachet WHERE licitatie_id=9004) > now() - interval '1 minute'", 'depus_la trebuia pus de server (now), nu antedatat')}
 -- INVALID: schimbarea versiunii pe un pachet existent
-${refuza(`UPDATE ofertare_pt_pachet SET versiune=2 WHERE licitatie_id=9004`, 'imuabile pe un pachet existent')}
+INSERT INTO ofertare_pt_pachet(licitatie_id,versiune,stare) VALUES (9005,1,'propus');
+${refuza(`UPDATE ofertare_pt_pachet SET versiune=2 WHERE licitatie_id=9005`, 'imuabile pe un pachet existent')}
 ${admin}
 SELECT 'JAKV201_OK';`)
 
