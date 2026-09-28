@@ -181,13 +181,18 @@ Deno.serve(async (req: Request) => {
           }, { onConflict: 'sursa,extern_id' }).select('id, site_id').single();
           if (disp?.id) await db.from('iot_citiri').insert({ dispozitiv_id: disp.id, valori: v });
           // Alerte (Răzvan 06.09.2026) → clopoțel owneri, dedupe 12h în iot_alerta(); blocaj / presiune / erori active
+          // iot_alerta poate eșua silențios (ex. CHECK constraint pe notifications.modul) — logăm eroarea RPC ca să nu mai treacă neobservată.
+          const alerta = async (p_title: string, p_message: string) => {
+            const { error } = await db.rpc('iot_alerta', { p_type: 'warning', p_title, p_message });
+            if (error) console.error('iot_alerta a eșuat:', p_title, error.message);
+          };
           const nume = `Centrala ${d.modelId?.includes('Vitodens_100') ? 'Vitodens 100-W' : d.modelId || ''} (sediu)`;
-          if (v.blocat === true) await db.rpc('iot_alerta', { p_type: 'warning', p_title: `🔒 ${nume} este BLOCATĂ`, p_message: 'Centrala raportează defecțiune care o blochează (System locked). Verifică ViCare și cheamă service-ul.' });
+          if (v.blocat === true) await alerta(`🔒 ${nume} este BLOCATĂ`, 'Centrala raportează defecțiune care o blochează (System locked). Verifică ViCare și cheamă service-ul.');
           const pres = typeof v.presiune_bar === 'number' ? v.presiune_bar : null;
-          if (pres !== null && pres < 1) await db.rpc('iot_alerta', { p_type: 'warning', p_title: `💧 ${nume}: presiune scăzută ${pres.toFixed(1)} bar`, p_message: 'Presiunea în instalație a scăzut sub 1 bar. Completează cu apă și verifică scurgeri / vas de expansiune.' });
-          if (pres !== null && pres > 2.8) await db.rpc('iot_alerta', { p_type: 'warning', p_title: `💧 ${nume}: presiune mare ${pres.toFixed(1)} bar`, p_message: 'Presiunea a urcat peste 2,8 bar. Risc de deschidere a supapei de siguranță — verifică vasul de expansiune.' });
+          if (pres !== null && pres < 1) await alerta(`💧 ${nume}: presiune scăzută ${pres.toFixed(1)} bar`, 'Presiunea în instalație a scăzut sub 1 bar. Completează cu apă și verifică scurgeri / vas de expansiune.');
+          if (pres !== null && pres > 2.8) await alerta(`💧 ${nume}: presiune mare ${pres.toFixed(1)} bar`, 'Presiunea a urcat peste 2,8 bar. Risc de deschidere a supapei de siguranță — verifică vasul de expansiune.');
           const err = (v.erori as any[]) || [];
-          if (err.length) await db.rpc('iot_alerta', { p_type: 'warning', p_title: `⚠ ${nume}: eroare ${err.map(e => e.cod).join(', ')}`, p_message: `Coduri active: ${err.map(e => `${e.cod} (${e.prioritate})`).join(', ')}. Vezi detalii în Clădire.` });
+          if (err.length) await alerta(`⚠ ${nume}: eroare ${err.map(e => e.cod).join(', ')}`, `Coduri active: ${err.map(e => `${e.cod} (${e.prioritate})`).join(', ')}. Vezi detalii în Clădire.`);
           out.push({ device: key, ok: true, ...v });
         }
       }
