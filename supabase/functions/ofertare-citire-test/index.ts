@@ -3,6 +3,7 @@
 // Scrie în ofertare_citire_test (NU atinge text_extras din producție). Același prompt ca
 // ingest-ul de producție (transcriere fidelă + marcaje ⟦PAGINA N⟧), ca să comparăm doar modelul.
 // Apelat de worker-ul SQL prin pg_net cu JWT service role; răspunde { continua, urmatoarea }.
+import { poartaOfertare } from '../_shared/poartaOfertare.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
@@ -36,6 +37,8 @@ async function feliePdf(src: PDFDocument, start: number, end: number): Promise<U
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const refuzAcces = await poartaOfertare(req)
+  if (refuzAcces) return refuzAcces
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
   try {

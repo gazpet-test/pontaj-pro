@@ -5,6 +5,7 @@
 //
 // ADUSĂ ÎN REPO la 12.09.2026, fără nicio modificare de cod: rula neversionată,
 // ca 105 din cele 129 de funcții. Nu poți face code review pe ce nu vezi.
+import { poartaOfertare } from '../_shared/poartaOfertare.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
@@ -51,6 +52,8 @@ function fileToBase64(bytes: Uint8Array): string {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const refuzAcces = await poartaOfertare(req)
+  if (refuzAcces) return refuzAcces
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })

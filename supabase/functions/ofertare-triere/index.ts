@@ -27,6 +27,7 @@
 //   modelul dă doar rol_canonic / natura_ceruta / exclude_transport pe rol; rândurile lui rămân rezervă pentru recomandările fără listă.
 // v1.5: o persoană = un rol, repartizare pe punctaj total, cu matricea persoană × rol scoasă în JSON înainte de alegere.
 // v1.6: la egalitate de punctaj total, câștigă repartizarea cu cea mai mare marjă peste prag.
+import { poartaOfertare } from '../_shared/poartaOfertare.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 // Versiune FIXATĂ intenționat (22.09.2026): cu `@2` flotant, bundlerul Supabase a cerut
 // varianta denonext a lui 2.117.0, pe care esm.sh nu o are publicată (auth-js dă 404), și
@@ -423,6 +424,10 @@ function matriceDinBD(parsed: any, recs: any[]) {
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const identitate: { userId?: string } = {}
+  const refuzAcces = await poartaOfertare(req, { context: identitate })
+  if (refuzAcces) return refuzAcces
+  const userId = identitate.userId!
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
 
@@ -430,15 +435,6 @@ Deno.serve(async (req: Request) => {
     const { licitatie_id, doc_id } = await req.json()
     const lid = Number(licitatie_id)
     if (!lid) return fail('licitatie_id lipsă')
-
-    // cine cere (pentru created_by) — JWT-ul userului vine în Authorization
-    let userId: string | null = null
-    try {
-      const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
-      const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
-      const { data: u } = await anon.auth.getUser()
-      userId = u?.user?.id || null
-    } catch (_) { /* fără user — rămâne null */ }
 
     // Fișa de date: cea indicată explicit sau prima de tip fisa_date a licitației
     let q = supabase.from('ofertare_documente_atribuire').select('id, nume_original, fisier_path, tip, size_bytes, pagini').eq('licitatie_id', lid)

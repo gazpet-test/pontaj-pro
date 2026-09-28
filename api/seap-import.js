@@ -17,6 +17,7 @@
 // - tip are CHECK in BD ('duae' nu e valoare valida), iar erorile de scriere se
 //   raporteaza — altfel fisierul ajunge in storage si documentul lipseste din lista.
 import { createClient } from '@supabase/supabase-js'
+import { poartaOfertare } from './_poartaOfertare.js'
 import { inflateRawSync } from 'node:zlib'
 import { continutSemnat } from './_p7s.js'
 import { randManifest, sha256Hex, dedupManifest, MANIFEST_CONFLICT, ARHIVA_SEAP } from './_manifest.js'
@@ -117,20 +118,17 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'doar POST' })
 
-  const SUPA_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
-  const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY
-  const ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
+  // Exceptia interna a veghei: secret configurat si egal; JWT-ul cere acces Ofertare.
   const SECRET = process.env.SEAP_IMPORT_SECRET
-  if (!SUPA_URL || !SERVICE) {
-    return res.status(500).json({ error: 'lipsesc SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY din variabilele de mediu Vercel' })
+  if (!SECRET || req.headers['x-import-secret'] !== SECRET) {
+    const refuzAcces = await poartaOfertare(req)
+    if (refuzAcces) return res.status(refuzAcces.status).json(refuzAcces.body)
   }
 
-  // acces: secretul serverului (veghea) SAU un utilizator logat (butonul din platforma)
-  if (!SECRET || req.headers['x-import-secret'] !== SECRET) {
-    const jwt = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
-    if (!jwt || !ANON) return res.status(401).json({ error: 'unauthorized' })
-    const { data: u } = await createClient(SUPA_URL, ANON).auth.getUser(jwt)
-    if (!u?.user) return res.status(401).json({ error: 'unauthorized' })
+  const SUPA_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+  const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!SUPA_URL || !SERVICE) {
+    return res.status(500).json({ error: 'lipsesc SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY din variabilele de mediu Vercel' })
   }
 
   const corp = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {})
