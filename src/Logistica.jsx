@@ -29,6 +29,7 @@ import SupapeDeclaratiiSection from './SupapeDeclaratiiSection.jsx'
 import DeclaratieTehnicaSection from './DeclaratieTehnicaSection.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
+import ImprumuturiEchipamente from './ImprumuturiEchipamente.jsx'  // TKT-2026-0127
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const G = {
@@ -2600,6 +2601,7 @@ function TabsBar({ tab, setTab, canSeeBotSugestii = false, sugestiiCount = 0, co
     { key: 'confirmare_ai', icon: '🤖', label: 'Confirmă AI', badge: confirmareAICount },
     { key: 'documente', icon: '📎', label: 'Documente' },
     { key: 'service',   icon: '🔧', label: 'Service' },
+    { key: 'imprumuturi', icon: '🤝', label: 'Împrumutat / Închiriat' },  // TKT-2026-0127
     { key: 'probleme',  icon: '🚨', label: 'Probleme Parc' },
     { key: 'tichete',   icon: '🎫', label: 'Tichete' },
     { key: 'transporturi', icon: '🚚', label: 'Transporturi' },
@@ -11985,6 +11987,8 @@ export default function LogisticaPage() {
       
       {/* TAB: Service (placeholder) */}
       {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
+
+      {tab === 'imprumuturi' && <ImprumuturiEchipamente active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
 
       {/* TAB: Probleme Parc Auto — problemă per vehicul cu istoric, raport ședință generat */}
       {tab === 'probleme' && <ParcAutoProbleme active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} profile={profile} showToast={showToast} />}
