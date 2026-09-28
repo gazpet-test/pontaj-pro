@@ -20,6 +20,11 @@ export const nivelTerra = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa
   : valoare > TERRA_PRAGURI[cheie][1] ? 'error' : valoare > TERRA_PRAGURI[cheie][0] ? 'warning' : 'ok'
 export const terraFaraDate = (cititLa, acum) => !cititLa || !Number.isFinite(Date.parse(cititLa)) || acum - Date.parse(cititLa) > TERRA_TACERE_MS
 
+// Aceleași praguri ca iot_verifica_retea (QNAP): cpu_temp [70,85], hdd_max [50,60].
+export const RETEA_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60] }
+export const nivelRetea = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa'
+  : valoare > RETEA_PRAGURI[cheie][1] ? 'error' : valoare > RETEA_PRAGURI[cheie][0] ? 'warning' : 'ok'
+
 // Mini-grafic comun pentru centrală și Terra; fiecare serie ignoră valorile lipsă.
 function Spark({ pts, k, color, min, max, um }) {
   const vals = pts.map(x => x[k]).filter(Number.isFinite); if (vals.length < 2) return null
@@ -167,6 +172,7 @@ export default function Cladire() {
   const centrala = disp.find(x => x.sursa === 'vicare'), v = centrala?.ultima_citire || {}
   const termostate = disp.filter(x => x.sursa === 'salus' && !x.privat)
   const acasa = disp.filter(x => x.privat)
+  const retea = disp.filter(x => x.sursa === 'retea' && !x.privat)
   const tuya = disp.filter(x => x.sursa === 'tuya' && !x.privat)
   const camere = tuya.filter(x => x.meta?.tip === 'camera'), tuyaAlte = tuya.filter(x => x.meta?.tip !== 'camera')
   // PIN pentru secțiunea privată: se compară SHA-256 în browser cu hash-ul din config; nu pleacă nicăieri
@@ -232,6 +238,32 @@ export default function Cladire() {
         </div>
 
         <TerraMonitor />
+
+        {/* Rețea & servere: ping (online/offline) + temperaturi QNAP; datele vin de la workerul retea-mon (Terra) prin iot-retea */}
+        {retea.length > 0 && (
+          <div style={S.card}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
+              <div style={{ fontWeight:700 }}>🌐 Rețea &amp; servere</div>
+              <span style={{ fontSize:11.5, color:G.dim }}>{retea.filter(x => x.ultima_citire?.online).length}/{retea.filter(x => x.meta?.asteptat_online !== false).length} online</span>
+            </div>
+            {retea.map(x => {
+              const r = x.ultima_citire || {}
+              const asteptat = x.meta?.asteptat_online !== false
+              const on = r.online === true
+              const culori = { lipsa: G.dim, ok: G.green, warning: G.yellow, error: G.red }
+              const temp = (cheie, et) => Number.isFinite(r[cheie]) &&
+                <span key={cheie} style={{ fontSize:11, color:culori[nivelRetea(cheie, r[cheie])], marginLeft:8 }}>{et} {nr(r[cheie])}°</span>
+              let stare
+              if (!asteptat && !on) stare = <b style={{ color:G.dim }}>neconfigurat</b>
+              else if (on) stare = <b style={{ color:G.green }}>● online{Number.isFinite(r.latency_ms) ? ` · ${nr(r.latency_ms)} ms` : ''}</b>
+              else stare = <b style={{ color:G.red }}>○ offline</b>
+              return <div key={x.id} style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'center', fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
+                <span style={{ color: on ? G.text : G.muted }}>{x.nume}{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}</span>
+                {stare}
+              </div>
+            })}
+          </div>
+        )}
 
         {/* Termostate */}
         <div style={S.card}>
