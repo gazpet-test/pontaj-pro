@@ -35,7 +35,10 @@ SET search_path = public, pg_temp
 AS $fn$
 DECLARE
   v_ofertare boolean := (SELECT public.fn_are_acces_ofertare());
-  v_admin boolean := (session_user = 'postgres');
+  -- Contextele fără utilizator final (service_role din edge/worker, sesiunea postgres) nu sunt restrânse:
+  -- auth.uid() NULL. Atenție: în SECURITY DEFINER current_user = proprietarul funcției, deci NU se folosește
+  -- current_user/rolbypassrls aici. Un apelant authenticated nu ajunge la trigger fără uid (politicile îl cer).
+  v_admin boolean := (session_user = 'postgres' OR auth.uid() IS NULL);
 BEGIN
   IF v_ofertare OR v_admin THEN
     RETURN NEW;

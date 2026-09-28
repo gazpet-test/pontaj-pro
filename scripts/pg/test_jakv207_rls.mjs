@@ -134,8 +134,11 @@ DO $setup$ BEGIN
 END $setup$;
 CREATE ROLE "${actor}" NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT;
 GRANT authenticated, anon TO "${actor}";
+DO $sr$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF; END $sr$;
+GRANT service_role TO "${actor}";
 CREATE SCHEMA auth;
 GRANT USAGE ON SCHEMA auth, public TO authenticated, anon;
+GRANT USAGE ON SCHEMA auth, public TO service_role;
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $fn$
   SELECT (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid
 $fn$;
@@ -184,6 +187,8 @@ ${baselinePolicies}
 ${readPolicies}
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.ofertare_licitatii,
   ${tables.map(t => 'public.' + t).join(', ')} TO authenticated;
+GRANT SELECT, UPDATE ON public.ofertare_licitatii TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO service_role;
 -- Sentinela cross-modul: nicio schimbare permisă asupra ei.
 CREATE TABLE public.ofertare_brokeri (id bigint PRIMARY KEY);
 ALTER TABLE public.ofertare_brokeri ENABLE ROW LEVEL SECURITY;
@@ -247,6 +252,14 @@ SELECT public.jakv207_assert(NOT EXISTS (SELECT 1 FROM public.ofertare_cantitati
 ${asAdmin}
 SELECT public.jakv207_assert(NOT public.fn_are_acces_ofertare(), 'Admin fără JWT');
 ${changed("UPDATE public.ofertare_licitatii SET status='go' WHERE id=2", 1, 'Excepția session_user postgres')}
+-- service_role (edge ofertare-seap-veghe / seap-import): session_user != postgres, fără uid, BYPASSRLS.
+RESET ROLE; RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION "${actor}";
+SET ROLE service_role;
+SET request.jwt.claims = '{"role":"service_role"}';
+SELECT public.jakv207_assert(session_user = '${actor}' AND current_user = 'service_role' AND auth.uid() IS NULL, 'Identitate service_role simulată');
+${changed("UPDATE public.ofertare_licitatii SET termen_depunere='2026-12-24T12:00:00Z' WHERE id=2", 1, 'service_role poate scrie termen_depunere (seap-veghe)')}
+${asAdmin}
 SELECT public.jakv207_assert(NOT has_function_privilege('anon',
   'public.fn_ofertare_licitatii_scriere()', 'EXECUTE'), 'Triggerul nu este apelabil de anon');
 SELECT public.jakv207_assert((SELECT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp']

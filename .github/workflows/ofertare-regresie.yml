@@ -111,3 +111,12 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/r9b_test_coada_plansa
           PGPASSWORD: postgres
         run: node scripts/pg/test_r4_coada_plansa.mjs
+      - name: Creeaza baza goala pt JAK-V2-07
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv207_test_ci;'
+      - name: RLS scriere Ofertare + DELETE owner (JAK-V2-07) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv207_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv207_rls.mjs
