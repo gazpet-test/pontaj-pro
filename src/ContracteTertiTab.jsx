@@ -46,6 +46,8 @@ const CAT_INFO = {
   executie:        { label:'Execuție',         icon:'🏗️', color:G.orange },
   prestari_servicii: { label:'Prestări servicii', icon:'🔧', color:G.blue   },
   furnizare_materiale: { label:'Furnizare materiale', icon:'📦', color:G.orange },
+  // TKT-2026-0077: aceeași listă alimentează formularul, filtrele și badge-urile.
+  comodat:         { label:'Comodat',           icon:'🤝', color:G.teal },
   paza:            { label:'Pază',              icon:'🛡️', color:G.purple },
   altele:          { label:'Altele',            icon:'📄', color:G.muted  },
 }
@@ -80,7 +82,33 @@ const STATUS_POLITA = {
 const fmtLei = n => n ? new Intl.NumberFormat('ro-RO', { style:'currency', currency:'RON', maximumFractionDigits:0 }).format(n) : '—'
 const fmtEur = n => n ? new Intl.NumberFormat('ro-RO', { style:'currency', currency:'EUR', maximumFractionDigits:0 }).format(n) : '—'
 const fmtDate = s => s ? new Date(s).toLocaleDateString('ro-RO', { day:'2-digit', month:'short', year:'numeric' }) : '—'
-const fmtVal = c => c.valoare_actuala_lei ? fmtLei(c.valoare_actuala_lei) : c.valoare_lei ? fmtLei(c.valoare_lei) : c.valoare_eur ? fmtEur(c.valoare_eur) : '—'
+// TKT-2026-0215: tarif afișat doar în lipsa unei valori totale, fără conversii în valoare_lei.
+const TARIF_UNITATI = { luna:'lună', ora:'oră', zi:'zi', buc:'buc', km:'km', mc:'mc', ml:'ml', mp:'mp', alt:'alt' }
+const fmtVal = c => Number(c.valoare_actuala_lei) ? fmtLei(c.valoare_actuala_lei) : Number(c.valoare_lei) ? fmtLei(c.valoare_lei) : Number(c.valoare_eur) ? fmtEur(c.valoare_eur)
+  : Number(c.tarif_valoare) > 0 ? `${Number(c.tarif_valoare).toLocaleString('ro-RO', { maximumFractionDigits:2 })} ${c.tarif_moneda === 'EUR' ? 'EUR' : 'lei'} / ${TARIF_UNITATI[c.tarif_unitate] || c.tarif_unitate || 'unitate'}` : '—'
+
+function valoriContract(f, modValoare) {
+  const numeric = v => v === '' || v == null ? null : Number(v)
+  const payload = {
+    valoare_lei:modValoare === 'total' ? numeric(f.valoare_lei) : null,
+    valoare_eur:modValoare === 'total' ? numeric(f.valoare_eur) : null,
+    tarif_valoare:modValoare === 'tarif' ? numeric(f.tarif_valoare) : null,
+    tarif_unitate:modValoare === 'tarif' ? f.tarif_unitate || null : null,
+    tarif_moneda:modValoare === 'tarif' ? f.tarif_moneda || 'RON' : 'RON',
+    tarif_descriere:modValoare === 'tarif' ? (f.tarif_descriere || '').trim() || null : null,
+  }
+  if ([payload.valoare_lei, payload.valoare_eur, payload.tarif_valoare].some(v => v !== null && (!Number.isFinite(v) || v < 0))) {
+    return { error:'Valoarea și tariful trebuie să fie numere pozitive sau zero.' }
+  }
+  if (modValoare === 'tarif' && payload.tarif_valoare != null && (!(payload.tarif_valoare > 0) || !Object.hasOwn(TARIF_UNITATI, payload.tarif_unitate) || !['RON', 'EUR'].includes(payload.tarif_moneda))) {
+    return { error:'Completează un tarif mai mare decât zero, unitatea și moneda.' }
+  }
+  // TKT-2026-0077: comodatul poate rămâne fără valoare sau cu valoare zero.
+  if (f.categorie !== 'comodat' && !(payload.valoare_lei > 0 || payload.valoare_eur > 0 || payload.tarif_valoare > 0)) {
+    return { error:'Completează cel puțin o valoare totală sau un tarif mai mare decât zero.' }
+  }
+  return { payload }
+}
 const getPartener = (c, benefMap) => c.partener_text || benefMap[c.beneficiar_id] || '—'
 
 function useToast() {
@@ -986,8 +1014,13 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     denumire: item.denumire || '',
     categorie: item.categorie || 'executie',
     sens: item.sens || 'incasare',
-    valoare_lei: item.valoare_lei || '',
-    valoare_eur: item.valoare_eur || '',
+    valoare_lei: item.valoare_lei ?? '',
+    valoare_eur: item.valoare_eur ?? '',
+    // TKT-2026-0215
+    tarif_valoare: item.tarif_valoare ?? '',
+    tarif_unitate: item.tarif_unitate || 'luna',
+    tarif_moneda: item.tarif_moneda || 'RON',
+    tarif_descriere: item.tarif_descriere || '',
     data_semnare: item.data_semnare || '',
     termen_executie_zile: item.termen_executie_zile || '',
     data_termen: item.data_termen || '',
@@ -1010,6 +1043,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   const [aiLoading, setAiLoading] = useState(false)
   // Mod partener: 'beneficiar' (din lista) sau 'text' (ad-hoc)
   const [partenerMode, setPartenerMode] = useState(item.partener_text ? 'text' : 'beneficiar')
+  const [modValoare, setModValoare] = useState(!Number(item.valoare_lei) && !Number(item.valoare_eur) && Number(item.tarif_valoare) > 0 ? 'tarif' : 'total')
   // Drag & drop PDF
   const [dragOver, setDragOver] = useState(false)
   // Link la Șantier (site_id) → auto-găsit proiect Execuție
@@ -1086,6 +1120,8 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     if (!f.denumire.trim()) return onError('Denumirea e obligatorie')
     if (partenerMode === 'beneficiar' && !f.beneficiar_id) return onError('Selectează beneficiar')
     if (partenerMode === 'text' && !f.partener_text.trim()) return onError('Completează partenerul')
+    const valori = valoriContract(f, modValoare)
+    if (valori.error) return onError(valori.error)
     setSaving(true)
     const payload = {
       beneficiar_id: partenerMode === 'beneficiar' && f.beneficiar_id ? Number(f.beneficiar_id) : null,
@@ -1094,8 +1130,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
       denumire: f.denumire.trim(),
       categorie: f.categorie,
       sens: f.sens,
-      valoare_lei: f.valoare_lei ? Number(f.valoare_lei) : null,
-      valoare_eur: f.valoare_eur ? Number(f.valoare_eur) : null,
+      ...valori.payload,
       data_semnare: f.data_semnare || null,
       termen_executie_zile: f.termen_executie_zile ? Number(f.termen_executie_zile) : null,
       data_termen: f.data_termen || null,
@@ -1114,7 +1149,10 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
       // Multi-șantier (12.06.2026): contractele de furnizare/prestări deservesc mai multe lucrări
       santiere_ids: f.santiere_ids.length ? f.santiere_ids : null,
       site_id: f.santiere_ids[0] || null,
-      ...(f.categorie === 'furnizare_materiale' ? { tip_contract: 'furnizare_materiale' } : {}),
+      // TKT-2026-0077: inclusiv la schimbarea categoriei unui comodat existent.
+      ...(['furnizare_materiale', 'prestari_servicii', 'comodat'].includes(f.categorie)
+        ? { tip_contract:f.categorie }
+        : item.tip_contract === 'comodat' ? { tip_contract:'prestari_servicii' } : {}),
     }
     let contractId = item.id
     if (isNew) {
@@ -1150,8 +1188,8 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           contract_id:   contractId,
           nr_contract:   f.numar_contract.trim() || null,
           data_contract: f.data_semnare || null,
-          valoare_lei:   f.valoare_lei ? Number(f.valoare_lei) : null,
-          valoare_eur:   f.valoare_eur ? Number(f.valoare_eur) : null,
+          valoare_lei:   payload.valoare_lei,
+          valoare_eur:   payload.valoare_eur,
         }).eq('id', proiectGasit.id)
       }
     } else if (f.categorie === 'executie' && !proiectExecId) {
@@ -1246,8 +1284,14 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           </div>
         </div>
 
-        {/* Valori */}
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+        {/* TKT-2026-0215: se salvează alternativa selectată. */}
+        <div style={{display:'flex', gap:14, flexWrap:'wrap'}}>
+          {[['total', 'Valoare totală'], ['tarif', 'Tarif (preț pe unitate)']].map(([v, label]) => <label key={v} style={{fontSize:13}}>
+            <input type="radio" name="mod-valoare-contract" checked={modValoare === v} onChange={() => setModValoare(v)} /> {label}
+          </label>)}
+        </div>
+        <div style={{fontSize:11, color:G.muted}}>La salvare se păstrează varianta selectată. {f.categorie === 'comodat' ? 'Pentru comodat, valoarea este opțională.' : ''}</div>
+        {modValoare === 'total' ? <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
           <div>
             <label style={S.lbl}>Valoare LEI (RON)</label>
             <input type="number" style={S.input} value={f.valoare_lei} onChange={e => setF({...f, valoare_lei:e.target.value})} placeholder="1500000" />
@@ -1257,6 +1301,13 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
             <input type="number" style={S.input} value={f.valoare_eur} onChange={e => setF({...f, valoare_eur:e.target.value})} placeholder="300000" />
           </div>
         </div>
+
+        : <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+          <label style={S.lbl}>Tarif<input style={S.input} type="number" min="0" step="any" value={f.tarif_valoare} onChange={e => setF({...f, tarif_valoare:e.target.value})} placeholder="500" /></label>
+          <label style={S.lbl}>Unitate<select style={S.input} value={f.tarif_unitate} onChange={e => setF({...f, tarif_unitate:e.target.value})}>{Object.entries(TARIF_UNITATI).map(([v, label]) => <option key={v} value={v}>{label}</option>)}</select></label>
+          <label style={S.lbl}>Monedă<select style={S.input} value={f.tarif_moneda} onChange={e => setF({...f, tarif_moneda:e.target.value})}><option value="RON">RON</option><option value="EUR">EUR</option></select></label>
+          <label style={S.lbl}>Descriere serviciu<input style={S.input} value={f.tarif_descriere} onChange={e => setF({...f, tarif_descriere:e.target.value})} placeholder="abonament mentenanță" /></label>
+        </div>}
 
         {/* Date */}
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12}}>
@@ -1320,7 +1371,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
 
           {/* ── 📍 Șantier asociat → sincronizare automată cu Proiect Execuție ── */}
         {/* ── 📦 Șantiere deservite — multi-select pentru furnizare materiale / prestări servicii (12.06.2026) ── */}
-        {['furnizare_materiale','prestari_servicii'].includes(f.categorie) && (
+        {['furnizare_materiale','prestari_servicii','comodat'].includes(f.categorie) && (
           <div style={{padding:12, background:G.surface, border:`1px solid ${G.orange}33`, borderRadius:8}}>
             <label style={{...S.lbl, color:G.orange}}>📍 Șantiere deservite (selectare multiplă)</label>
             <div style={{fontSize:10, color:G.dim, marginBottom:6}}>
@@ -1845,6 +1896,8 @@ function ContractDetailModal({ contract, beneficiari, canWrite, isOwner, onClose
           {[
             ['🏢 Partener', getPartener(contract, benefMap)],
             ['💰 Valoare', fmtVal(contract)],
+            // TKT-2026-0215
+            ...(contract.tarif_descriere ? [['Serviciu tarifat', contract.tarif_descriere]] : []),
             ['📅 Data semnare', fmtDate(contract.data_semnare)],
             ['📅 Data termen', fmtDate(contract.data_termen)],
             ['⏱ Termen execuție', contract.termen_executie_zile ? `${contract.termen_executie_zile} zile` : '—'],
