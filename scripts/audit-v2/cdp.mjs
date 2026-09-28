@@ -32,6 +32,7 @@ export class CDP {
   constructor(socket, target) {
     this.socket = socket; this.target = target; this.seq = 0
     this.pending = new Map(); this.requests = new Map(); this.logs = []; this.dialog = null
+    this.dialogLogs = []; this.dialogExpectation = null; this.dialogError = null
     socket.addEventListener('message', event => {
       const m = JSON.parse(event.data)
       if (m.id) {
@@ -45,7 +46,7 @@ export class CDP {
     })
   }
   event(method, p) {
-    if (method === 'Page.javascriptDialogOpening') this.dialog = { type: p.type }
+    if (method === 'Page.javascriptDialogOpening') this.raspundeDialog(p)
     if (method === 'Page.javascriptDialogClosed') this.dialog = null
     if (method === 'Network.requestWillBeSent' && ['Fetch', 'XHR'].includes(p.type)) {
       const u = new URL(p.request.url)
@@ -59,15 +60,45 @@ export class CDP {
     if (method === 'Network.loadingFinished') this.finalize(p.requestId, p.timestamp)
     if (method === 'Network.loadingFailed') this.finalize(p.requestId, p.timestamp, 0)
   }
+  raspundeDialog(p) {
+    this.dialog = { type: p.type, message: p.message }
+    const expected = this.dialogExpectation
+    const response = expected?.dialogs[expected.index]
+    const matches = response?.type === p.type
+    if (matches) expected.index++
+    const row = { ...this.dialog, asteptat: !!matches, accept: matches ? response.accept : false }
+    this.dialogLogs.push(row)
+    if (!matches) this.dialogError = new Error(`Dialog neașteptat (${p.type}): ${p.message}`)
+    // Abonarea este instalată în constructor; răspunsul NU așteaptă finalizarea clickului.
+    const handling = this.send('Page.handleJavaScriptDialog', { accept: row.accept,
+      ...(matches && p.type === 'prompt' ? { promptText: response.text } : {}) })
+    handling.then(() => {
+      row.raspuns = 'trimis'
+      if (this.dialogError) this.refuzaDialog(this.dialogError)
+      else if (++expected.answered === expected.dialogs.length) expected.resolve()
+    }, () => {
+      row.raspuns = 'eșuat'
+      this.refuzaDialog(this.dialogError || new Error(`Răspuns CDP eșuat la dialog (${p.type}): ${p.message}`))
+    })
+  }
+  refuzaDialog(error) {
+    this.dialogError = error
+    this.dialogExpectation?.reject(error)
+    for (const [id, p] of this.pending) {
+      if (p.method === 'Page.handleJavaScriptDialog') continue
+      clearTimeout(p.timer); this.pending.delete(id); p.reject(error)
+    }
+  }
   finalize(id, timestamp, status) {
     const r = this.requests.get(id)
     if (r) { if (status != null) r.status = status; r.durata_ms = Math.round((timestamp - r.inceput) * 1000); this.requests.delete(id) }
   }
   send(method, params = {}) {
+    if (this.dialogError && method !== 'Page.handleJavaScriptDialog') return Promise.reject(this.dialogError)
     const id = ++this.seq
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Timeout CDP: ${method}`)) }, 30000)
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, { resolve, reject, timer, method })
       this.socket.send(JSON.stringify({ id, method, params }))
     })
   }
@@ -96,10 +127,22 @@ export class CDP {
     } while (Date.now() < end)
     throw new Error('Timeout selector unic și vizibil')
   }
-  async click(selector) {
-    const p = await this.evalueaza(`(()=>{const e=(${gaseste})(${JSON.stringify(selector)}); if(e.disabled)throw Error(); e.scrollIntoView({block:'center'}); const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
-    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', clickCount: 1 })
-    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', clickCount: 1 })
+  async click(selector, dialog = null) {
+    let timer
+    const expected = dialog ? { dialogs: Array.isArray(dialog) ? dialog : [dialog], index: 0, answered: 0 } : null
+    const answered = expected ? new Promise((resolve, reject) => Object.assign(expected, { resolve, reject })) : null
+    answered?.catch(() => {}) // Poate fi respins înainte ca dispatchMouseEvent să răspundă.
+    this.dialogExpectation = expected
+    try {
+      const p = await this.evalueaza(`(()=>{const e=(${gaseste})(${JSON.stringify(selector)}); if(e.disabled)throw Error(); e.scrollIntoView({block:'center'}); const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+      await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...p, button: 'left', clickCount: 1 })
+      await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...p, button: 'left', clickCount: 1 })
+      if (answered) {
+        timer = setTimeout(() => expected.reject(new Error('Dialogul din rețetă nu a apărut')), 15000)
+        await answered
+      }
+      if (this.dialogError) throw this.dialogError
+    } finally { clearTimeout(timer); this.dialogExpectation = null }
   }
   async scrie(selector, text) {
     await this.evalueaza(`(()=>{const e=(${gaseste})(${JSON.stringify(selector)}); if(e.disabled||e.readOnly)throw Error(); e.focus();const proto=e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:e instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(String(text))});e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));})()`)
@@ -129,17 +172,27 @@ export class CDP {
     throw new Error('Captura depășește 2 MB chiar după reducere')
   }
   jurnal() { return this.logs.map(({ inceput, ...r }) => ({ ...r })) }
+  dialoguri() { return this.dialogLogs.map(r => ({ ...r })) }
   inchide() { this.socket.close() }
 }
 
-// targetId este obligatoriu când sunt mai multe taburi. Nu alegem accidental o licitație reală.
-export async function conecteaza(port, targetId = null) {
+export function selecteazaTab(tabs, targetId = null, { appUrl = 'https://pontaj-pro-sooty.vercel.app', excludeTarget = null } = {}) {
+  const origin = new URL(appUrl).origin
+  const pages = tabs.filter(t => {
+    if (t.type !== 'page' || t.id === excludeTarget) return false
+    if (targetId != null) return t.id === targetId
+    try { return new URL(t.url).origin === origin } catch { return false }
+  })
+  // Primul tab al aplicației; al doilea context exclude explicit primul target.
+  if (!pages.length || targetId != null && pages.length !== 1) throw new Error('Niciun tab CDP distinct pentru aplicația configurată')
+  return pages[0]
+}
+export async function conecteaza(port, targetId = null, options = {}) {
   if (!Number.isInteger(Number(port)) || Number(port) < 1 || Number(port) > 65535) throw new Error('Port CDP invalid')
   const response = await fetch(`http://127.0.0.1:${Number(port)}/json/list`, { signal: AbortSignal.timeout(5000) })
   if (!response.ok) throw new Error('Lista CDP indisponibilă')
-  const tabs = (await response.json()).filter(t => t.type === 'page' && (!targetId || t.id === targetId))
-  if (tabs.length !== 1) throw new Error('Selectează exact un tab prin cdp_target_id în fixture')
-  const endpoint = new URL(tabs[0].webSocketDebuggerUrl)
+  const tab = selecteazaTab(await response.json(), targetId, options)
+  const endpoint = new URL(tab.webSocketDebuggerUrl)
   if (!['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)) throw new Error('CDP acceptă numai loopback')
   const ws = new WebSocket(endpoint)
   await new Promise((resolve, reject) => {
@@ -147,7 +200,7 @@ export async function conecteaza(port, targetId = null) {
     ws.addEventListener('open', () => { clearTimeout(timer); resolve() }, { once: true })
     ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('CDP indisponibil')) }, { once: true })
   })
-  const c = new CDP(ws, tabs[0].id)
+  const c = new CDP(ws, tab.id)
   try { await c.send('Runtime.enable'); await c.send('Page.enable'); await c.send('Network.enable') }
   catch (e) { c.inchide(); throw e }
   return c

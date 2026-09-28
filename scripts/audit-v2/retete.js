@@ -121,7 +121,7 @@ export const PARAMETRI_EXEMPLU = Object.fromEntries(Object.entries(recipes).map(
 export function retete(fixture) {
   const out = structuredClone(fixture)
   out.scenarii ||= {}; out.retete_neconfigurate = []
-  const validL = Number.isSafeInteger(fixture.licitatie_id) && fixture.licitatie_id > 0 && fixture.licitatie_id !== 5
+  const validL = fixture.licitatie_id === 103
   for (const [pas, contract] of Object.entries(contracte)) {
     const cfg = out.scenarii[pas] ||= { preconditii: [], faze: {} }; cfg.faze ||= {}
     // Gardă minimă; precondițiile business se păstrează dacă operatorul le-a configurat.
@@ -136,7 +136,7 @@ export function retete(fixture) {
         out.retete_neconfigurate.push({ pas, faza: name, motiv }); continue
       }
       cfg.faze[name] = { ...r.build(p, fixture), sursa_reteta: r.sursa }
-      if (contract.concurenta) cfg.obiect = { tabela: contract.obiect, id: p.capitol_id }
+      // Obiectul concurent rămâne cel configurat explicit și verificat în snapshot.
     }
   }
   return out
