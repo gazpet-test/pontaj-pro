@@ -341,7 +341,7 @@ function ComboboxActiv({ value, onChange, active, required, readonly, placeholde
   )
 }
 
-function GrupAccordion({ grupa, items, expanded, onToggle, bife, onBifa, onBifaDetail, smartFillMap }) {
+function GrupAccordion({ grupa, items, expanded, onToggle, bife, onBifa, onBifaDetail, smartFillMap, precompletate = 0 }) {
   const checkedCount = items.filter(it => bife[it.id]).length
   return (
     <div style={{border:`1px solid ${G.border}`, borderRadius:8, marginBottom:8, overflow:'hidden'}}>
@@ -363,6 +363,8 @@ function GrupAccordion({ grupa, items, expanded, onToggle, bife, onBifa, onBifaD
       </div>
       {expanded && (
         <div style={{padding:'8px 0'}}>
+          {/* TKT-2026-0074 */}
+          {precompletate > 0 && <div style={{padding:'4px 14px 8px', fontSize:11, color:G.green}}>↳ {precompletate} piese precompletate din ultima mentenanță — verifică doar cantitatea și codul</div>}
           {items.map(it => {
             const checked = !!bife[it.id]
             const detail = bife[it.id] || {}
@@ -449,27 +451,57 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
   const [expanded, setExpanded] = useState({})
   const [saving, setSaving] = useState(false)
   const [smartFillMap, setSmartFillMap] = useState({})
+  // TKT-2026-0074: istoricul și intervențiile omului sunt izolate per activ.
+  const [istoricActiv, setIstoricActiv] = useState(null)
+  const [precompletate, setPrecompletate] = useState(0)
+  const automate = useRef(new Set())
+  const atinseManual = useRef(new Set())
+  const incercateAutomat = useRef(new Set())
+  const contextBife = useRef({ activId, tip })
 
   const activSelected = active.find(a => String(a.id) === String(activId))
 
   useEffect(() => {
-    if (!activId) { setSmartFillMap({}); return }
+    const altActiv = contextBife.current.activId !== activId
+    const autoIds = new Set(automate.current)
+    setBife(prev => altActiv ? {} : Object.fromEntries(Object.entries(prev).filter(([id]) => !autoIds.has(String(id)))))
+    if (altActiv) { atinseManual.current.clear(); setExtra([]) }
+    automate.current.clear()
+    incercateAutomat.current.clear()
+    setPrecompletate(0)
+    setExpanded({})
+    contextBife.current = { activId, tip }
+  }, [activId, tip])
+
+  useEffect(() => {
+    setSmartFillMap({})
+    setIstoricActiv(null)
+    if (!activId) return
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
-        .from('logistica_service_intrari')
-        .select('denumire, cod_piesa, id')
-        .eq('activ_id', Number(activId))
-        .not('cod_piesa', 'is', null)
-        .order('id', { ascending: false })
-        .limit(500)
-      if (cancelled || !data) return
-      const map = {}
-      for (const r of data) {
-        const k = norm(r.denumire)
-        if (k && r.cod_piesa && !map[k]) map[k] = r.cod_piesa
+      try {
+        const map = {}, ultime = {}
+        // Data lucrării are prioritate față de ordinea introducerii în sistem.
+        for (let offset = 0; ; offset += 500) {
+          const { data, error } = await supabase.from('logistica_service_intrari')
+            .select('denumire, cod_piesa, cantitate, data, id')
+            .eq('activ_id', Number(activId))
+            .order('data', { ascending:false, nullsFirst:false }).order('id', { ascending:false })
+            .range(offset, offset + 499)
+          if (cancelled) return
+          if (error) throw error
+          for (const r of data || []) {
+            const k = norm(r.denumire)
+            if (k && !Object.hasOwn(ultime, k)) ultime[k] = r
+            if (k && r.cod_piesa && !Object.hasOwn(map, k)) map[k] = r.cod_piesa
+          }
+          if (!data || data.length < 500) break
+        }
+        setSmartFillMap(map)
+        setIstoricActiv({ activId, ultime })
+      } catch (e) {
+        if (!cancelled) showToast('Istoricul activului nu a putut fi încărcat: ' + (e.message || e), 'error')
       }
-      setSmartFillMap(map)
     })()
     return () => { cancelled = true }
   }, [activId])
@@ -488,13 +520,35 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
     return g
   }, [itemiAplicabili])
 
+  // TKT-2026-0074: aplicăm fiecare preset o singură dată; rerandarea nu rebifează ce a debifat omul.
+  useEffect(() => {
+    if (tip !== 'mentenanta' || !activId || istoricActiv?.activId !== activId) return
+    const completari = {}, deschise = {}
+    for (const it of itemiAplicabili) {
+      const id = String(it.id)
+      if (norm(it.grupa) !== norm('1. Mentenanță Periodică') || atinseManual.current.has(id) || incercateAutomat.current.has(id)) continue
+      const ultima = istoricActiv.ultime[norm(it.denumire)]
+      if (!ultima) continue
+      incercateAutomat.current.add(id)
+      automate.current.add(id)
+      completari[id] = { denumire:it.denumire, subgrup:it.subgrup, cod_piesa:ultima.cod_piesa || '', cantitate:String(ultima.cantitate ?? '').trim() || String(it.cantitate_default ?? '') }
+      deschise[it.grupa] = true
+    }
+    if (Object.keys(completari).length) {
+      setBife(prev => ({ ...completari, ...prev }))
+      setExpanded(prev => ({ ...prev, ...deschise }))
+      setPrecompletate(n => n + Object.keys(completari).length)
+    }
+  }, [activId, tip, istoricActiv, itemiAplicabili])
+
   const handleBifa = (id, checked, it, smartCod) => {
+    atinseManual.current.add(String(id))
     setBife(prev => {
       const next = { ...prev }
       if (checked) {
         next[id] = {
           denumire: it.denumire,
-          cantitate: it.cantitate_default || '',
+          cantitate: String(it.cantitate_default ?? ''),
           cod_piesa: smartCod || '',
           subgrup: it.subgrup,
         }
@@ -505,6 +559,7 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
     })
   }
   const handleBifaDetail = (id, key, val) => {
+    atinseManual.current.add(String(id))
     setBife(prev => ({ ...prev, [id]: { ...prev[id], [key]: val } }))
   }
   const addExtra = () => setExtra(p => [...p, { denumire:'', cod_piesa:'', cantitate:'' }])
@@ -689,6 +744,7 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
                   onBifa={handleBifa}
                   onBifaDetail={handleBifaDetail}
                   smartFillMap={smartFillMap}
+                  precompletate={norm(gr) === norm('1. Mentenanță Periodică') ? precompletate : 0}
                 />
               ))}
             </div>
