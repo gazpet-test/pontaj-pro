@@ -17,6 +17,7 @@
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { normalizeazaSpecOrganigrama } from './core.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -142,33 +143,7 @@ ${ferestre.map((f, i) => `--- [${i + 1}] ${f.document} @${f.offset} ---\n${f.tex
   const tokIn = data.usage?.input_tokens || 0, tokOut = data.usage?.output_tokens || 0
   try { await db.from('ai_usage_log').insert({ function_name: 'ofertare-organigrama-spec', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * PRICE_IN + tokOut * PRICE_OUT, ref_table: 'ofertare_licitatii', ref_id: licId }) } catch { /* ignorăm */ }
 
-  // Normalizare pe contractul JSON (UI-ul se bazează pe forma exactă)
-  const arr = (v: unknown) => (Array.isArray(v) ? v : [])
-  const CAT = ['conducere', 'specialist', 'executie', 'suport'], FAZE = ['proiectare', 'executie'], FAZA_ROL = ['proiectare', 'executie', 'ambele']
-  const PERS = ['muncitori_calificati', 'muncitori_necalificati', 'tehnic', 'auxiliar', 'total']
-  const lc = (j.linii_cerute && typeof j.linii_cerute === 'object') ? j.linii_cerute : {}
-  const spec = {
-    obligatorie: !!j.obligatorie,
-    faze: arr(j.faze).map(String).filter((f: string) => FAZE.includes(f)),
-    roluri_cerute: arr(j.roluri_cerute).slice(0, 60).map((r: any) => ({
-      rol: String(r?.rol || '').slice(0, 200),
-      categorie: CAT.includes(r?.categorie) ? r.categorie : 'specialist',
-      obligatoriu: r?.obligatoriu !== false,
-      domeniu_isc: r?.domeniu_isc ? String(r.domeniu_isc).slice(0, 20) : null,
-      faza: FAZA_ROL.includes(r?.faza) ? r.faza : 'executie',
-      cerinte_persoana: r?.cerinte_persoana ? String(r.cerinte_persoana).slice(0, 600) : null,
-      citat: r?.citat ? String(r.citat).slice(0, 400) : null,
-    })).filter((r: any) => r.rol),
-    linii_cerute: { asociati: !!lc.asociati, subcontractanti: !!lc.subcontractanti, beneficiar: !!lc.beneficiar, proiectant: !!lc.proiectant, diriginte: !!lc.diriginte, biunivoc_cu_seful_de_santier: !!lc.biunivoc_cu_seful_de_santier },
-    personal_pe_categorii: arr(j.personal_pe_categorii).map(String).filter((p: string) => PERS.includes(p)),
-    per_operator: !!j.per_operator,
-    tabel_nominal: { cerut: !!j.tabel_nominal?.cerut, coloane: arr(j.tabel_nominal?.coloane).map(String).slice(0, 20) },
-    corelare_grafic: !!j.corelare_grafic,
-    documente_suport: arr(j.documente_suport).map(String).slice(0, 30),
-    format: { observatii: j.format?.observatii ? String(j.format.observatii).slice(0, 1500) : null },
-    domenii_isc_din_obiect: arr(j.domenii_isc_din_obiect).map(String).slice(0, 15),
-    avertismente: arr(j.avertismente).map(String).slice(0, 30),
-  }
+  const spec = normalizeazaSpecOrganigrama(j)
   const spec_citate = ferestre.map((f) => ({ document: f.document, document_id: f.document_id, offset: f.offset, text: f.text.slice(0, 300) }))
 
   // Upsert pe licitatie_id: `noduri` (organigrama construită în UI) rămâne neatinsă la re-extragere

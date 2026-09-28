@@ -773,16 +773,26 @@ export function controlRelatiiGrafic({ grafic_activitati_declarate, grafic_versi
 }
 
 // Piesa de tip grafic (Gantt / PERT / drum critic) din pachetul depus trebuie să vină dintr-o
-// versiune înghețată în grafic_versiuni. Dacă nu vine, e un document făcut în afara ERP-ului —
-// și atunci niciun control de consistență nu-l poate atinge. Se verifică pe numele/rolul
-// fișierelor din manifest.
+// versiune înghețată în grafic_versiuni. Numele/rolul identifică piesa, nu sursa ei.
+// sursa_versiune este text în manifest: acceptăm numărul versiunii sau „grafic@vN”.
+// Amprenta capitole@{...}, hash-ul fișierului și numele nu dovedesc versiunea graficului.
 const PIESA_GRAFIC = /grafic|gantt|pert|drum(ul)?\s*critic|e[șs]alonare|program(ul)?\s+de\s+execu/i
 export function controlGraficSursa({ pachet_fisiere, grafic_versiune, grafic_versiune_mod }) {
   const fisiere = (pachet_fisiere || []).filter(f => PIESA_GRAFIC.test(String(f?.nume || '')) || PIESA_GRAFIC.test(String(f?.rol || '')))
   const base = { k: 'grafic_sursa', piese: fisiere.map(f => f.nume) }
   if (!fisiere.length) return { ...base, stare: 'ok', detalii: 'pachetul nu conține (încă) piese de grafic' }
   if (!grafic_versiune) return { ...base, stare: 'block', cod: 'SCHEDULE_NOT_FROM_FROZEN_VERSION',
-    detalii: `${plural(fisiere.length, 'piesă de grafic în pachet', 'piese de grafic în pachet')} (${fisiere.map(f => f.nume).join(', ')}), dar nicio versiune înghețată în grafic_versiuni — graficul depus e făcut în afara ERP-ului și nu poate fi verificat` }
+    detalii: `${plural(fisiere.length, 'piesă de grafic în pachet', 'piese de grafic în pachet')} (${fisiere.map(f => f.nume).join(', ')}), dar nicio versiune înghețată în grafic_versiuni — sursa graficului depus nu poate fi verificată` }
+  const surse = fisiere.map(f => {
+    const m = String(f.sursa_versiune ?? '').trim().match(/^(?:grafic@v)?([1-9]\d*)$/)
+    return { nume: f.nume, versiune: m ? m[1] : null }
+  })
+  const diferite = surse.filter(f => f.versiune !== null && f.versiune !== String(grafic_versiune))
+  if (diferite.length) return { ...base, stare: 'block', cod: 'SCHEDULE_SOURCE_VERSION_MISMATCH',
+    detalii: `Sursa declarată diferă de versiunea înghețată curentă ${grafic_versiune}: ${diferite.map(f => `${f.nume} (versiunea ${f.versiune})`).join(', ')}` }
+  const necunoscute = surse.filter(f => f.versiune === null)
+  if (necunoscute.length) return { ...base, stare: 'warn', cod: 'SCHEDULE_SOURCE_UNVERIFIABLE',
+    detalii: `Nu putem verifica corespondența cu versiunea înghețată ${grafic_versiune}: ${necunoscute.map(f => f.nume).join(', ')} — lipsește legătura identificabilă cu versiunea graficului în sursa_versiune` }
   return { ...base, stare: 'ok',
     detalii: `${plural(fisiere.length, 'piesă de grafic', 'piese de grafic')} în pachet, versiunea înghețată ${grafic_versiune}${grafic_versiune_mod ? ` (${grafic_versiune_mod})` : ''}` }
 }
