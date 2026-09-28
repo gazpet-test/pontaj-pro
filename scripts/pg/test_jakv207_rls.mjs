@@ -58,15 +58,18 @@ const ids = {
   owner: '00000000-0000-4000-8000-000000000121',
 }
 const actor = 'jakv207_actor_' + process.pid
+const observer = 'jakv207_observer_' + process.pid
 function asUser(user) {
   return `RESET ROLE; RESET SESSION AUTHORIZATION;
     SET SESSION AUTHORIZATION "${actor}";
     SET ROLE authenticated;
+    SET request.jwt.claim.role = '';
     SET request.jwt.claims = ${sqlText(JSON.stringify({ sub: ids[user], role: 'authenticated' }))};
     SELECT public.jakv207_assert(current_user = 'authenticated' AND session_user = '${actor}'
       AND auth.uid() = '${ids[user]}'::uuid, 'Identitatea simulată trebuie să fie cea PostgREST');`
 }
-const asAdmin = `RESET ROLE; RESET SESSION AUTHORIZATION; SET request.jwt.claims = '{}';`
+const asAdmin = `RESET ROLE; RESET SESSION AUTHORIZATION;
+  SET request.jwt.claims = '{}'; SET request.jwt.claim.role = '';`
 function changed(sql, count, label) {
   return `WITH changed AS (${sql} RETURNING id)
     SELECT public.jakv207_assert(count(*) = ${count}, ${sqlText(label)}) FROM changed;`
@@ -85,6 +88,19 @@ function rejected(sql, state = '42501', message = null) {
     END $test$;`
 }
 const financeMessage = 'Modulul financiar poate modifica doar contract_id pe o licitație'
+const serviceMessage = 'Contextul automat (service_role) poate modifica doar termen_depunere/documentatie_adusa_la'
+const contextMessage = 'Contextul curent nu poate modifica o licitație'
+function rejectedUnchanged(set, message) {
+  return `DO $unchanged$
+    DECLARE before_row jsonb;
+    BEGIN
+      SELECT to_jsonb(l) INTO STRICT before_row FROM public.ofertare_licitatii l WHERE id=2;
+      ${rejected(`UPDATE public.ofertare_licitatii SET ${set} WHERE id=2`, 'P0001', message)}
+      PERFORM public.jakv207_assert(before_row IS NOT DISTINCT FROM
+        (SELECT to_jsonb(l) FROM public.ofertare_licitatii l WHERE id=2),
+        ${sqlText('Refuz integral, rând neschimbat: ' + set)});
+    END $unchanged$;`
+}
 const policySnapshot = `SELECT schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check
   FROM pg_policies WHERE schemaname = 'public'`
 const aclSnapshot = `SELECT c.oid, c.relacl, c.relrowsecurity, c.relforcerowsecurity
@@ -135,10 +151,19 @@ END $setup$;
 CREATE ROLE "${actor}" NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT;
 GRANT authenticated, anon TO "${actor}";
 DO $sr$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF; END $sr$;
+DO $sr_check$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role' AND rolbypassrls AND NOT rolsuper) THEN
+    RAISE EXCEPTION 'Fixture-ul cere service_role cu BYPASSRLS și fără SUPERUSER';
+  END IF;
+END $sr_check$;
 GRANT service_role TO "${actor}";
+-- Ajunge la trigger fără filtrare RLS; nu este postgres și nu are identitate service_role.
+CREATE ROLE "${observer}" NOLOGIN NOSUPERUSER BYPASSRLS;
+GRANT "${observer}" TO "${actor}";
 CREATE SCHEMA auth;
 GRANT USAGE ON SCHEMA auth, public TO authenticated, anon;
 GRANT USAGE ON SCHEMA auth, public TO service_role;
+GRANT USAGE ON SCHEMA auth, public TO "${observer}";
 CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $fn$
   SELECT (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid
 $fn$;
@@ -172,7 +197,7 @@ CREATE TABLE public.ofertare_licitatii (
   id bigint PRIMARY KEY, status text NOT NULL DEFAULT 'in_lucru',
   contract_id bigint REFERENCES public.jakv207_contracte(id),
   updated_at timestamptz DEFAULT now(), responsabil_id uuid REFERENCES public.profiles(id),
-  decizie_go text, termen_depunere timestamptz, c_notice_id text);
+  decizie_go text, termen_depunere timestamptz, documentatie_adusa_la timestamptz, c_notice_id text);
 ALTER TABLE public.ofertare_licitatii ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ofertare_licitatii_all ON public.ofertare_licitatii
   FOR ALL TO authenticated USING (auth.uid() IS NOT NULL);
@@ -188,6 +213,7 @@ ${readPolicies}
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.ofertare_licitatii,
   ${tables.map(t => 'public.' + t).join(', ')} TO authenticated;
 GRANT SELECT, UPDATE ON public.ofertare_licitatii TO service_role;
+GRANT SELECT, UPDATE ON public.ofertare_licitatii TO "${observer}";
 GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO service_role;
 -- Sentinela cross-modul: nicio schimbare permisă asupra ei.
 CREATE TABLE public.ofertare_brokeri (id bigint PRIMARY KEY);
@@ -213,19 +239,24 @@ const checks = `
 ${asUser('fara')}
 SELECT public.jakv207_assert(NOT public.fn_are_acces_ofertare(), 'Fără Ofertare');
 SELECT public.jakv207_assert((SELECT count(*) FROM public.ofertare_licitatii)=2, 'SELECT cross-modul păstrat');
+SELECT public.jakv207_assert((SELECT count(*) FROM public.ofertare_cantitati)>0,
+  'Fără modul: SELECT cantități păstrat după separarea FOR ALL');
 ${changed("UPDATE public.ofertare_licitatii SET status='depusa' WHERE id=1", 0, 'Fără modul: UPDATE zero')}
 ${changed('DELETE FROM public.ofertare_licitatii WHERE id=1', 0, 'Fără modul: DELETE zero')}
 ${rejected('INSERT INTO public.ofertare_licitatii(id) VALUES (3)')}
 ${rejected("INSERT INTO public.ofertare_cantitati(id,licitatie_id,denumire) VALUES (2,1,'Refuzat')")}
 ${changed('UPDATE public.ofertare_cantitati SET cantitate=200 WHERE id=1', 0, 'Fără modul: cantități UPDATE zero')}
 ${changed('DELETE FROM public.ofertare_cantitati WHERE id=1', 0, 'Fără modul: cantități DELETE zero')}
+SELECT public.jakv207_assert((SELECT count(*) FROM public.ofertare_cantitati)=1
+  AND (SELECT cantitate=100 FROM public.ofertare_cantitati WHERE id=1),
+  'Fără modul: scrierile refuzate păstrează cantitățile citibile și neschimbate');
 
 ${asUser('financiar')}
 ${changed("UPDATE public.ofertare_licitatii SET contract_id=10, updated_at='2026-09-28T12:00:00Z' WHERE id=1", 1, 'Financiar poate lega contractul')}
 SELECT public.jakv207_assert((SELECT contract_id=10 FROM public.ofertare_licitatii WHERE id=1), 'Contract salvat');
 ${[
   "status='depusa'", `responsabil_id='${ids.financiar}'`, "decizie_go='go'",
-  "termen_depunere='2026-12-01T12:00:00Z'", "c_notice_id='CN123'",
+  "termen_depunere='2026-12-01T12:00:00Z'", "documentatie_adusa_la='2026-09-28T12:00:00Z'", "c_notice_id='CN123'",
   "id=99", "contract_id=NULL, status='depusa'",
 ].map(set => rejected(`UPDATE public.ofertare_licitatii SET ${set} WHERE id=1`, 'P0001', financeMessage)).join('\n')}
 SELECT public.jakv207_assert((SELECT status='in_lucru' AND contract_id=10
@@ -256,9 +287,32 @@ ${changed("UPDATE public.ofertare_licitatii SET status='go' WHERE id=2", 1, 'Exc
 RESET ROLE; RESET SESSION AUTHORIZATION;
 SET SESSION AUTHORIZATION "${actor}";
 SET ROLE service_role;
+SET request.jwt.claim.role = '';
 SET request.jwt.claims = '{"role":"service_role"}';
 SELECT public.jakv207_assert(session_user = '${actor}' AND current_user = 'service_role' AND auth.uid() IS NULL, 'Identitate service_role simulată');
 ${changed("UPDATE public.ofertare_licitatii SET termen_depunere='2026-12-24T12:00:00Z' WHERE id=2", 1, 'service_role poate scrie termen_depunere (seap-veghe)')}
+${changed("UPDATE public.ofertare_licitatii SET documentatie_adusa_la='2026-09-28T12:00:00Z', updated_at='2026-09-28T12:00:00Z' WHERE id=2", 1, 'service_role poate scrie documentatie_adusa_la și updated_at')}
+${[
+  "status='depusa'", `responsabil_id='${ids.ofertare}'`, 'contract_id=10',
+  "termen_depunere='2027-01-01T12:00:00Z', status='depusa'",
+].map(set => rejectedUnchanged(set, serviceMessage)).join('\n')}
+-- Compatibilitate cu rolul JWT legacy și claims goale; aceeași limitare pe coloane.
+SET request.jwt.claims = '';
+SET request.jwt.claim.role = 'service_role';
+${changed("UPDATE public.ofertare_licitatii SET termen_depunere='2026-12-25T12:00:00Z' WHERE id=2", 1, 'service_role legacy poate scrie termen_depunere')}
+${rejectedUnchanged("status='depusa'", serviceMessage)}
+-- Un rol explicit din claims are prioritate față de rolul legacy.
+SET request.jwt.claims = '{"role":"authenticated"}';
+${rejectedUnchanged("status='depusa'", contextMessage)}
+${asAdmin}
+SET SESSION AUTHORIZATION "${actor}";
+SET ROLE "${observer}";
+SELECT public.jakv207_assert(session_user = '${actor}' AND current_user = '${observer}'
+  AND auth.uid() IS NULL AND (SELECT rolbypassrls AND NOT rolsuper FROM pg_roles WHERE rolname=current_user)
+  AND nullif(current_setting('request.jwt.claim.role', true), '') IS NULL
+  AND (current_setting('request.jwt.claims', true)::jsonb ->> 'role') IS NULL,
+  'Context fără uid/rol JWT: ajunge la trigger fără excepția postgres sau service_role');
+${["status='depusa'", 'contract_id=10', 'updated_at=now()'].map(set => rejectedUnchanged(set, contextMessage)).join('\n')}
 ${asAdmin}
 SELECT public.jakv207_assert(NOT has_function_privilege('anon',
   'public.fn_ofertare_licitatii_scriere()', 'EXECUTE'), 'Triggerul nu este apelabil de anon');
@@ -266,21 +320,46 @@ SELECT public.jakv207_assert((SELECT prosecdef AND proconfig @> ARRAY['search_pa
   FROM pg_proc WHERE oid='public.fn_ofertare_licitatii_scriere()'::regprocedure), 'SECURITY DEFINER și search_path');
 `
 
-const expectedValues = policies.map(([table,name,cmd]) => `(${sqlText(table)},${sqlText(name)},${sqlText(cmd)})`).join(',\n')
+const allPolicies = policies.filter(([, , cmd]) => cmd === 'ALL')
+const writePolicies = policies.flatMap(([table, name, cmd]) => cmd === 'ALL'
+  ? [['ins', 'INSERT'], ['upd', 'UPDATE'], ['del', 'DELETE']].map(([suffix, command]) => [table, `${name}_${suffix}`, command])
+  : [[table, name, cmd]])
+assert.equal(allPolicies.length, 21)
+assert.equal(writePolicies.length, 75)
+const expectedValues = writePolicies.map(([table,name,cmd]) => `(${sqlText(table)},${sqlText(name)},${sqlText(cmd)})`).join(',\n')
+const expectedReadValues = allPolicies.map(([table,name]) => `(${sqlText(table)},${sqlText(name)})`).join(',\n')
+const sectionBTables = tables.map(sqlText).join(', ')
 const catalogChecks = `
 SELECT public.jakv207_assert((SELECT count(*) FROM pg_policies
   WHERE schemaname='public' AND tablename='ofertare_licitatii')=4, 'Exact 4 politici pe licitații');
 WITH expected(tablename, policyname, cmd) AS (VALUES ${expectedValues})
-SELECT public.jakv207_assert(count(*)=33 AND bool_and(coalesce(
+SELECT public.jakv207_assert(count(*)=75 AND bool_and(coalesce(
   p.cmd=e.cmd AND p.roles=ARRAY['authenticated']::name[] AND p.permissive='PERMISSIVE'
   AND CASE WHEN e.cmd='INSERT' THEN p.qual IS NULL
     ELSE p.qual LIKE '%fn_are_acces_ofertare()%' AND p.qual NOT LIKE '%auth.uid()%' END
   AND CASE WHEN e.cmd='DELETE' THEN p.with_check IS NULL
     ELSE p.with_check LIKE '%fn_are_acces_ofertare()%' AND p.with_check NOT LIKE '%auth.uid()%' END
-, false)), 'Toate cele 33 politici au cmd/rol/poartă corecte')
+, false)), 'Toate cele 75 politici de scriere au cmd/rol/poartă corecte')
 FROM expected e JOIN pg_policies p USING (tablename, policyname) WHERE p.schemaname='public';
+WITH expected(tablename, oldname) AS (VALUES ${expectedReadValues})
+SELECT public.jakv207_assert(count(*)=21 AND bool_and(coalesce(
+  p.cmd='SELECT' AND p.roles=b.roles AND p.permissive=b.permissive
+  AND p.qual=b.qual AND p.with_check IS NULL
+, false)), 'Cele 21 SELECT noi păstrează exact USING și roles ale politicilor ALL vechi')
+FROM expected e
+JOIN before_policies b ON b.tablename=e.tablename AND b.policyname=e.oldname
+JOIN pg_policies p ON p.schemaname='public' AND p.tablename=e.tablename AND p.policyname=e.oldname || '_sel';
+SELECT public.jakv207_assert(NOT EXISTS (SELECT 1 FROM pg_policies
+  WHERE schemaname='public' AND tablename IN (${sectionBTables}) AND cmd='ALL'),
+  'Nicio politică ALL rămasă în secțiunea B');
+SELECT public.jakv207_assert((SELECT count(*) FROM pg_policies
+  WHERE schemaname='public' AND tablename IN (${sectionBTables})) = 96 +
+  (SELECT count(*) FROM before_policies WHERE tablename IN (${sectionBTables}) AND cmd='SELECT'),
+  'Secțiunea B: 75 scrieri + 21 SELECT noi + SELECT preexistente, fără politici suplimentare');
 ${equalSnapshots("SELECT * FROM before_policies WHERE cmd='SELECT'",
-  policySnapshot + " AND cmd='SELECT' AND tablename <> 'ofertare_licitatii'", 'SELECT existente intacte')}
+  policySnapshot + ` AND cmd='SELECT' AND tablename <> 'ofertare_licitatii'
+    AND (tablename, policyname) NOT IN (SELECT tablename, policyname || '_sel'
+      FROM before_policies WHERE tablename IN (${sectionBTables}) AND cmd='ALL')`, 'SELECT preexistente intacte')}
 ${equalSnapshots("SELECT * FROM before_policies WHERE tablename='ofertare_brokeri'",
   policySnapshot + " AND tablename='ofertare_brokeri'", 'Tabel exclus intact')}
 ${equalSnapshots('SELECT * FROM before_acl', aclSnapshot, 'Granturi și activare RLS intacte')}
@@ -303,7 +382,7 @@ try {
     + `SELECT public.jakv207_assert(to_regprocedure('public.fn_ofertare_licitatii_scriere()') IS NULL
       AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='a00_ofertare_licitatii_scriere'), 'Trigger și funcție eliminate');\n`
     + migration + '\n' + catalogChecks + '\nROLLBACK;\n'
-    + "SELECT 'PASS JAK-V2-07: RLS, trigger Financiar, owner DELETE, cascade, catalog, rerulare și rollback';\n"
+    + "SELECT 'PASS JAK-V2-07: RLS, SELECT păstrat, trigger Financiar/service_role/context necunoscut, owner DELETE, cascade, catalog, rerulare și rollback';\n"
   const output = execFileSync('psql', ['-X', '--no-password', '-qAt', '-v', 'ON_ERROR_STOP=1',
     '--dbname', target.href, '--file', '-'], {
     input: sql, encoding: 'utf8', timeout: 60000, maxBuffer: 4 * 1024 * 1024,
