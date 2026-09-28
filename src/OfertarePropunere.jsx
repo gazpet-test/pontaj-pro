@@ -21,6 +21,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import LantProbator from './OfertareLantProbator.jsx'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
 import { construiestePropunere, construiesteBorderou, construiesteF23, construiesteF9, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
@@ -309,10 +310,13 @@ function PoartaPT({ st, onFiltru }) {
 // ─────────────────────────────────────────────────────────────────
 // MATRICEA — cerințele, cu filtre și cele două acțiuni în bloc
 // ─────────────────────────────────────────────────────────────────
-function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, documente = [], filtru, setFiltru, sel, setSel,
+function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedite, documente = [], filtru, setFiltru, sel, setSel,
                           onAtribuie, onExcepta, onVerifica, onBlocheaza, onDovada, busy }) {
   const [capSel, setCapSel] = useState('')
   const [motiv, setMotiv] = useState('')
+  const [inspectata, setInspectata] = useState(null)
+  const selectate = cerinte.filter(c => sel.has(c.id))
+  const cerintaInspectata = selectate.find(c => c.id === inspectata) || selectate[selectate.length - 1]
 
   const legPe = useMemo(() => {
     const m = new Map()
@@ -352,7 +356,10 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, documente = [],
     ['gata',    'rezolvate'],
     ['',        'toate'],
   ]
-  const toggle = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggle = id => {
+    setInspectata(id)
+    setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
 
   return (
     <div>
@@ -389,6 +396,18 @@ function MatriceCerinte({ cerinte, legaturi, capitole, dovedite, documente = [],
           </div>
         </div>
       )}
+
+      {cerintaInspectata && <>
+        {selectate.length > 1 && <label style={{ ...S.lbl, marginBottom:8 }}>
+          Cerința inspectată în lanțul dovezii
+          <select value={cerintaInspectata.id} onChange={e => setInspectata(selectate.find(c => String(c.id) === e.target.value)?.id)}
+            style={{ ...S.input, marginTop:4 }}>
+            {selectate.map(c => <option key={c.id} value={c.id}>#{c.id} · {c.text_cerinta?.slice(0, 120)}</option>)}
+          </select>
+        </label>}
+        <LantProbator key={`${licId}:${cerintaInspectata.id}`} licId={licId} cerintaId={cerintaInspectata.id}
+          actualizare={legaturi} profiluri={profiluri} G={G} S={S} />
+      </>}
 
       <div style={{ ...S.card, overflow:'hidden' }}>
         {lista.length === 0 && <div style={{ padding:16, color:G.muted, fontSize:13 }}>Nicio cerință pe filtrul ăsta.</div>}
@@ -2133,6 +2152,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
       <div>
         <div style={{ ...S.lbl, marginBottom:8 }}>Matricea de conformitate</div>
         <MatriceCerinte
+          licId={licId} profiluri={profiluri}
           cerinte={cerinte} legaturi={legaturi} capitole={capitole} dovedite={dovedite} documente={documente}
           filtru={filtru} setFiltru={setFiltru} sel={sel} setSel={setSel}
           onAtribuie={atribuie} onExcepta={excepta}
