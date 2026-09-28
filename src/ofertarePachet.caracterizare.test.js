@@ -11,7 +11,7 @@ describe('pachetDepasit', () => {
     expect(pachetDepasit(null, [])).toBeNull()
   })
 
-  it('[JAK-V2-01] arunca eroare daca capitoleAcum este null sau lipseste (liste goale/null)', () => {
+  it('[GOL-M03-a] arunca eroare daca capitoleAcum este null sau lipseste (liste goale/null)', () => {
     // GOL: pachetDepasit arunca TypeError (capitole is not iterable) in loc sa returneze un verdict sau sa gestioneze lipsa datelor
     const pachet = { fisiere: [{ sursa_versiune: 'capitole@{1:v1}' }] }
     expect(() => pachetDepasit(pachet, null)).toThrow(TypeError)
@@ -32,7 +32,7 @@ describe('manifesteIdentice', () => {
     expect(manifesteIdentice(a, b)).toBe(false)
   })
 
-  it('[JAK-V2-02] arunca eroare cand un manifest este null in loc de lista goala', () => {
+  it('[GOL-M03-b] arunca eroare cand un manifest este null in loc de lista goala', () => {
     // GOL: manifesteIdentice arunca TypeError cand primeste null in loc sa il trateze drept manifest gol si sa returneze false
     const a = [{ rol: 'doc', sha256: 'a'.repeat(64) }]
     expect(() => manifesteIdentice(a, null)).toThrow(TypeError)
@@ -50,7 +50,7 @@ describe('controlPachetComplet', () => {
     expect(r.detalii).toContain('nu e încă asamblat')
   })
 
-  it('[JAK-V2-03] trateaza pachetul lipsa cu "ok" inclusiv pentru stare de pachet depus vs aprobat vs propus', () => {
+  it('[GOL-M03-c, posibil S09-10/JAK-V2-09] trateaza pachetul lipsa cu "ok" inclusiv pentru stare de pachet depus vs aprobat vs propus', () => {
     // GOL: un pachet care are starea 'depus', 'aprobat' sau 'propus', dar lista_fisiere este goala, 
     // primeste verdict 'ok' justificat ca "nu e inca asamblat", ceea ce contrazice stadiul sau.
     const stadii = ['depus', 'aprobat', 'propus']
