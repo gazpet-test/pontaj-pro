@@ -92,11 +92,13 @@ export default function BugReportButton({ profile }) {
     setErr(''); setCapturing(true); setHidden(true)
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     try {
+      // TKT-2026-0297: NU forța windowWidth/windowHeight la scrollWidth/scrollHeight — asta re-randează
+      // tot documentul de la 0 și pierde scroll-ul INTERN al panourilor (ex. acoperirea cerințelor din
+      // Ofertare, care derulează într-un container overflow, nu în fereastră). Lăsate implicite
+      // (= dimensiunea ferestrei), randarea rămâne identică cu ecranul, deci panourile derulate se captează corect.
       const canvas = await html2canvas(document.body, {
         x: window.scrollX, y: window.scrollY,
         width: window.innerWidth, height: window.innerHeight,
-        windowWidth: document.documentElement.scrollWidth,
-        windowHeight: document.documentElement.scrollHeight,
         scale: Math.min(window.devicePixelRatio || 1, 2),
         useCORS: true, logging: false, backgroundColor: G.bg,
       })
