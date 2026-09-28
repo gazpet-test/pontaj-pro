@@ -3499,7 +3499,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const zile = l.zile_ramase
   const cZile = zile == null ? G.muted : zile <= 3 ? G.red : zile <= 7 ? G.orange : zile <= 21 ? G.yellow : G.green
   const pct = sx.cerinte ? Math.round(100 * sx.acoperite / sx.cerinte) : 0
-  const VC = { verde: ['🟢 VERDE — depunere sigură', G.green], galben: ['🟡 GALBEN — de rezolvat înainte de depunere', G.yellow], rosu: ['🔴 ROȘU — NU se depune', G.red] }
+  const VC = { verde: ['🟢 VERDE — nimic în neregulă în registrul extras (nu verifică pachetul final depus)', G.green], galben: ['🟡 GALBEN — de rezolvat înainte de depunere', G.yellow], rosu: ['🔴 ROȘU — NU se depune', G.red] }
   const [vLbl, vCol] = VC[sx.verdict] || ['— verificare nerulată', G.dim]
   const fmtMil = v => v == null ? '—' : v >= 1e6 ? `${(v / 1e6).toLocaleString('ro-RO', { maximumFractionDigits: 2 })}` : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 0 }).format(v)
 
@@ -4650,7 +4650,7 @@ function VerificareFinalaSection({ licitatie: l }) {
     } catch (e) { setErr(String(e?.message || e)) } finally { setBusy(false) }
   }
 
-  const VC = { verde:['🟢 VERDE — depunere sigură', G.green], galben:['🟡 GALBEN — de rezolvat punctele înainte de depunere', G.yellow], rosu:['🔴 ROȘU — NU se depune', G.red] }
+  const VC = { verde:['🟢 VERDE — nimic în neregulă în registrul extras (nu verifică pachetul final depus)', G.green], galben:['🟡 GALBEN — de rezolvat punctele înainte de depunere', G.yellow], rosu:['🔴 ROȘU — NU se depune', G.red] }
   const arb = ultima?.raport?.arbitru || {}
   const [vLbl, vCol] = VC[ultima?.verdict] || ['— nerulată încă', G.dim]
 
