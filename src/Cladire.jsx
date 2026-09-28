@@ -253,12 +253,14 @@ export default function Cladire() {
               const culori = { lipsa: G.dim, ok: G.green, warning: G.yellow, error: G.red }
               const temp = (cheie, et) => Number.isFinite(r[cheie]) &&
                 <span key={cheie} style={{ fontSize:11, color:culori[nivelRetea(cheie, r[cheie])], marginLeft:8 }}>{et} {nr(r[cheie])}°</span>
+              const load = Number.isFinite(r.cpu_load) &&
+                <span style={{ fontSize:11, color:G.dim, marginLeft:8 }}>load {nr(r.cpu_load, 0)}%</span>
               let stare
               if (!asteptat && !on) stare = <b style={{ color:G.dim }}>neconfigurat</b>
               else if (on) stare = <b style={{ color:G.green }}>● online{Number.isFinite(r.latency_ms) ? ` · ${nr(r.latency_ms)} ms` : ''}</b>
               else stare = <b style={{ color:G.red }}>○ offline</b>
               return <div key={x.id} style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'center', fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
-                <span style={{ color: on ? G.text : G.muted }}>{x.nume}{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}</span>
+                <span style={{ color: on ? G.text : G.muted }}>{x.nume}{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}{load}</span>
                 {stare}
               </div>
             })}

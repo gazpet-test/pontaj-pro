@@ -10,6 +10,7 @@ SECRET_FILE=/root/.retea_mon_secret
 URL_FILE=/root/.retea_mon_url
 CONF_FILE=/root/retea-mon/tinte.conf
 NAS_PW_FILE=/root/.nas_pw
+MT_CRED_FILE=/root/.mikrotik_cred
 LOG_FILE=/var/log/retea-mon.log
 
 log_error() {
@@ -69,6 +70,17 @@ while IFS=' ' read -r extern_id ip tip _rest; do
     fi
     [ -n "${st:-}" ] && extra="${extra},\"cpu_temp\":${st}"
     [ -n "${hdmax:-}" ] && extra="${extra},\"hdd_max\":${hdmax}"
+  fi
+
+  # MikroTik: telemetrie prin REST API (RouterOS v7), doar dacă există credențiale (user:parola, read-only).
+  if [ "$online" = true ] && [ "$tip" = mikrotik ] && [ -r "$MT_CRED_FILE" ]; then
+    mtcred=$(cat "$MT_CRED_FILE")
+    res=$(curl -s -m 8 -u "$mtcred" "http://$ip/rest/system/resource" 2>/dev/null)
+    hlt=$(curl -s -m 8 -u "$mtcred" "http://$ip/rest/system/health" 2>/dev/null)
+    load=$(printf '%s' "$res" | sed -n 's/.*"cpu-load":"\([0-9]\{1,3\}\)".*/\1/p')
+    mttemp=$(printf '%s' "$hlt" | tr '}' '\n' | sed -n 's/.*"name":"temperature".*"value":"\([0-9]\{1,3\}\)".*/\1/p' | head -1)
+    [ -n "${load:-}" ] && extra="${extra},\"cpu_load\":${load}"
+    [ -n "${mttemp:-}" ] && extra="${extra},\"cpu_temp\":${mttemp}"
   fi
 
   lat_json=""

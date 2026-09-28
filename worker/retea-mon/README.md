@@ -10,6 +10,7 @@ Apare în ERP la Clădire → „🌐 Rețea & Servere".
 - `/root/.retea_mon_secret` (600) — secretul `RETEA_MON_SECRET` (o singură linie), identic cu cel din Vault (Supabase).
 - `/root/.retea_mon_url` (600) — `https://dxczwkbciseqniprspcu.supabase.co/functions/v1/iot-retea`.
 - `/root/.nas_pw` (600) — parola QNAP (user SSH `admin`), pentru temperaturi (`getsysinfo systmp/hdnum/hdtmp N`).
+- `/root/.mikrotik_cred` (600) — `user:parola` pentru MikroTik (user read-only, ex. `claude-mon`), telemetrie prin REST API v7 (`GET /rest/system/resource` + `/rest/system/health`: cpu-load, temperature). Opțional — fără el, MikroTik rămâne doar cu ping.
 - `/var/log/retea-mon.log` — erori, cu rotire simplă (~100 KB).
 
 ## Cron (la 10 min)
