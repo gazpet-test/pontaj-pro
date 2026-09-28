@@ -154,7 +154,7 @@ export default function Cladire() {
     const [{ data: s }, { data: d }, { data: a }, { data: pa }, { data: ig }] = await Promise.all([
       supabase.from('sites').select('id, name, adresa').eq('tip_locatie', 'sediu').eq('active', true).order('id').limit(1).maybeSingle(),
       supabase.from('iot_dispozitive').select('*').eq('activ', true).order('sursa').order('id'),
-      supabase.from('notifications').select('id, title, message, created_at, read_at').eq('modul', 'cladire').order('created_at', { ascending: false }).limit(10),
+      supabase.from('notifications').select('id, title, message, created_at, read_at').eq('modul', 'Clădire').order('created_at', { ascending: false }).limit(10),
       user ? supabase.from('iot_privat_acces').select('profile_id').eq('profile_id', user.id).maybeSingle() : { data: null },
       supabase.from('iot_integrari').select('config').eq('cheie', 'salus').maybeSingle(),
     ])
