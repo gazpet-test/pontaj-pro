@@ -111,3 +111,8 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/r9b_test_coada_plansa
           PGPASSWORD: postgres
         run: node scripts/pg/test_r4_coada_plansa.mjs
+      - name: Matricea de tranziții pachet (JAK-V2-01) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/r9b_test_jakv201
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv201_tranzitie.mjs
