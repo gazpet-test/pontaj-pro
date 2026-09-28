@@ -40,6 +40,9 @@ Deno.serve(async (req: Request) => {
     const { data: u } = await uc.auth.getUser()
     if (!u?.user) return json({ error: 'token invalid' }, 401)
     userId = u.user.id
+    // Audit R01 (28.09.2026): apelul costă AI — doar cine are modulul Ofertare (sau owner).
+    const { data: areAcces } = await uc.rpc('fn_are_acces_ofertare')
+    if (areAcces !== true) return json({ error: 'fără acces la modulul Ofertare' }, 403)
   }
   const KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
   if (!KEY) return json({ error: 'ANTHROPIC_API_KEY lipsă' }, 500)

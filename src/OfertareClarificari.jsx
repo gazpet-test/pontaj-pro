@@ -12,6 +12,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { imageToPdf } from './CitesteOricePanel.jsx'
+import PuncteClarificare from './OfertareClarificariPuncte.jsx'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 
@@ -604,6 +605,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                       <>
                         <textarea style={{ ...S.input, minHeight:40, resize:'vertical', marginTop:6, borderColor:G.green + '55' }} value={q.raspuns || ''} placeholder="Răspunsul autorității..."
                           onChange={e => setQ(q.id, 'raspuns', e.target.value)} onBlur={() => saveQ(q)} />
+                        {/* Audit R05: răspuns ≠ rezoluție — punctele întrebării, fiecare cu rezoluția și documentul care a rezolvat-o */}
+                        <PuncteClarificare clarificareId={q.id} documente={docRasp} showToast={showToast} />
                         {/* Răspunsurile vin din SEAP ca PDF-uri. Legarea lor aici e ce lipsea:
                             fără ea, PDF-ul era citit ca document oarecare și producea cerințe paralele,
                             neversionate, lângă cerințele pe care de fapt le modifica. */}

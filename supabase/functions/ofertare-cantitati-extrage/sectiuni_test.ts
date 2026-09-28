@@ -178,7 +178,8 @@ Deno.test('handler: reluare (de_la) exact pe felia C6 → fără căutarea obiec
   const r = await ruleaza([DOC_LISTA], { licitatie_id: 95, de_la: 1, max_felii: 1 })
   assertEquals(r.status, 200)
   assertEquals(r.j.continua, true); assertEquals(r.j.urmatorul, 2)
-  assertEquals(r.n.citiri.filter((t) => t === 'ofertare_cantitati').length, 1, 'doar upsert-ul, fără SELECT obiect')
+  // 2 = SELECT-ul R10 (detecția reviziilor de cantitate, audit 28.09) + upsert-ul; tot fără căutarea obiectului anterior
+  assertEquals(r.n.citiri.filter((t) => t === 'ofertare_cantitati').length, 2, 'R10 + upsert, fără SELECT obiect')
   assert(scrise(r.n).every((x) => x.tip_sursa === 'lista_c6'))
   assertEquals(r.j.raport, [{ doc: DOC_LISTA.nume_original, bucata: '2/3', tip_sursa: 'lista_c6', pozitii: 2 }])
 })

@@ -97,8 +97,8 @@ describe('controlGraficSursa — piesa de grafic vine dintr-o versiune îngheța
     const c = controlGraficSursa({ pachet_fisiere: [{ nume: 'Anexa 9 Grafic Gantt.pdf' }, { nume: 'Anexa 11 Diagrama PERT.pdf' }], grafic_versiune: null })
     expect(c.stare).toBe('block'); expect(c.cod).toBe('SCHEDULE_NOT_FROM_FROZEN_VERSION'); expect(c.piese).toHaveLength(2)
   })
-  it('cu versiune înghețată = ok și spune de unde vine', () => {
-    expect(controlGraficSursa({ pachet_fisiere: [{ rol: 'grafic' , nume: 'g.pdf' }], grafic_versiune: 3, grafic_versiune_mod: 'import' }).detalii).toMatch(/versiunea înghețată 3 \(import\)/)
+  it('cu sursa legată de versiunea înghețată = ok și spune de unde vine', () => {
+    expect(controlGraficSursa({ pachet_fisiere: [{ rol: 'grafic' , nume: 'g.pdf', sursa_versiune: '3' }], grafic_versiune: 3, grafic_versiune_mod: 'import' }).detalii).toMatch(/versiunea înghețată 3 \(import\)/)
   })
 })
 

@@ -476,18 +476,18 @@ async function exportaPNG({ el, licitatie }) {
 // ─────────────────────────────────────────────────────────────────
 // SPEC — afișare (ce a citit funcția din documente)
 // ─────────────────────────────────────────────────────────────────
-function SpecView({ spec, citate }) {
+export function SpecView({ spec, citate }) {
   const [desc, setDesc] = useState(false)
   if (!spec) return null
   const L = spec.linii_cerute || {}
-  const Chip = ({ ok, children }) => <span style={{ fontSize:11, padding:'1px 7px', borderRadius:10, border:`1px solid ${ok ? G.green : G.border}`, color: ok ? G.green : G.dim, marginRight:4 }}>{children}</span>
+  const Chip = ({ ok, children }) => <span title={ok == null ? 'Nu s-a putut stabili — verifică documentația' : undefined} style={{ fontSize:11, padding:'1px 7px', borderRadius:10, border:`1px solid ${ok === true ? G.green : G.border}`, color: ok === true ? G.green : ok === false ? G.dim : G.orange, marginRight:4 }}>{children}{ok == null ? ' (?)' : ''}</span>
   return (
     <div style={{ ...S.card, padding:12, fontSize:12 }}>
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:8 }}>
-        <b style={{ color: spec.obligatorie ? G.orange : G.muted }}>{spec.obligatorie ? '📌 Organigrama e cerută explicit' : 'Organigrama nu e cerută explicit (se depune oricum)'}</b>
-        {spec.per_operator && <Chip ok>per operator</Chip>}
-        {spec.corelare_grafic && <Chip ok>corelată cu graficul</Chip>}
-        {spec.tabel_nominal?.cerut && <Chip ok>tabel nominal{spec.tabel_nominal.coloane?.length ? `: ${spec.tabel_nominal.coloane.join(', ')}` : ''}</Chip>}
+        <b style={{ color: spec.obligatorie === false ? G.muted : G.orange }}>{spec.obligatorie === true ? '📌 Organigrama e cerută explicit' : spec.obligatorie === false ? 'Organigrama nu e cerută explicit (se depune oricum)' : 'Organigrama: nu s-a putut stabili — verifică documentația'}</b>
+        {spec.per_operator !== false && <Chip ok={spec.per_operator}>per operator</Chip>}
+        {spec.corelare_grafic !== false && <Chip ok={spec.corelare_grafic}>corelată cu graficul</Chip>}
+        {spec.tabel_nominal?.cerut !== false && <Chip ok={spec.tabel_nominal?.cerut}>tabel nominal{spec.tabel_nominal?.coloane?.length ? `: ${spec.tabel_nominal.coloane.join(', ')}` : ''}</Chip>}
       </div>
       {(spec.avertismente || []).length > 0 && (
         <div style={{ color:G.orange, marginBottom:8 }}>{spec.avertismente.map((a, i) => <div key={i}>⚠️ {a}</div>)}</div>
@@ -497,7 +497,7 @@ function SpecView({ spec, citate }) {
           <div style={S.lbl}>Roluri cerute ({(spec.roluri_cerute || []).length})</div>
           {(spec.roluri_cerute || []).map((r, i) => (
             <div key={i} style={{ padding:'3px 0', borderBottom:`1px solid ${G.border2}` }}>
-              <span style={{ color: r.obligatoriu ? G.red : G.muted, fontWeight:600 }}>{r.obligatoriu ? '● ' : '○ '}</span>
+              <span title={r.obligatoriu == null ? 'Nu s-a putut stabili — verifică documentația' : undefined} style={{ color: r.obligatoriu === true ? G.red : r.obligatoriu === false ? G.muted : G.orange, fontWeight:600 }}>{r.obligatoriu === true ? '● ' : r.obligatoriu === false ? '○ ' : '? '}</span>
               <b>{r.rol}</b>
               <span style={{ color:G.dim }}> · {r.categorie}{r.domeniu_isc ? ` · ISC ${r.domeniu_isc}` : ''}{r.faza ? ` · faza: ${r.faza}` : ''}</span>
               {r.cerinte_persoana && <div style={{ color:G.muted, fontSize:11 }}>{r.cerinte_persoana}</div>}

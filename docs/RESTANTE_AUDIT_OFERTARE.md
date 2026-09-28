@@ -66,3 +66,25 @@ Principii aplicate (Copilot): identitatea rândului = (document, pagină, tabel 
 | Testul de propagare: modificarea termenului de depunere actualizează calculul și semnalează reverificarea garanției; polița emisă nu e considerată automat prelungită | implementat și testat pe ramura `claude/r7-propagare-garantie` (`80d618f`, 81/81); nemergiuit; test LIVE după deploy (lic. 3: KPI roșu „⚠ nu acoperă termenul”; T → T+30 → T: bannerul „Prelungirea nu mai e necesară”) | Claude (GO merge), Razvan (test LIVE) |
 
 Nu se certifică oferta financiară finală cât timp cantitățile R5 sau condițiile care îi schimbă baza rămân neclarificate.
+
+## 28.09.2026 — Auditul de cod R01–R17 (Codex 17.09): ÎNCHIS (verdict final Copilot, 3 runde)
+PR #512 (Claude + Jakarinos). „Închis” = failure scenario-ul din audit nu mai trece tăcut; nu înseamnă că modulul nu mai are backlog.
+| R | Ce s-a făcut | Dovada |
+|---|---|---|
+| R01 | ofertare-clarificare-aplica: doar propunere + acces modul | cod |
+| R02 | neclar / efect_cantitati țin „fără efect” deschis (edge + UI) | cod |
+| R03 | lotul pe operație din dispoziția-sursă; disp_id unic | cod |
+| R04 | „aplicat” cumulat + istoric (fn_ofertare_raspuns_set_aplica) | test rollback |
+| R05 | ofertare_clarificari_puncte (cerință, răspuns, rezoluție, document rezolvator) | vitest 2 din 3 ⇒ deschisă |
+| R06 | dovada = verificat_pe_scan fără reverificare (PT warn, depunere block) | 93: fara_capitol neschimbat; gate |
+| R07 | gate: duplicate/nu_se_aplica/reverificare; derogare doar owner sau postgres | non-owner refuzat |
+| R08 | versionare la titlu/etichetă/formular/nr; editarea cerinței invalidează | 4→5; legătura → atribuita |
+| R09 | legătura blocată nu e mascată | view |
+| R10 | conflicte_revizie la re-extragere + rândul trece pe „diferenta” | Deno 25/25 |
+| R11 | depus_final + dovada_seap obligatorii pentru „depus”; SHA read-back din bucket | test rollback |
+| R12 | bucket doar cu modulul; obiectele din pachete aprobate/depuse imuabile; pachet doar „propus”, aprobare semnată, poartă append-only | 0 vs 1 rânduri |
+| R13 | grafic fără legătură cu versiunea = BLOCK la aprobare (WARN în lucru) | vitest |
+| R14 | eticheta verificării nu mai spune „depunere sigură” | cod |
+| R15 | pasaj integral; parțial separat; trunchiere explicită | Deno |
+| R16 | organigrama: necunoscut ≠ fals | Deno + vitest |
+| R17 | panoul „🔗 Lanțul dovezii” pe cerință | 27 teste |

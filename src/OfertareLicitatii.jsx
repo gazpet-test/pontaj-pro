@@ -1516,11 +1516,11 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     d.analiza.citire_ai.gata === false ? (
                       <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
                         title="Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."
-                        onClick={() => reiaPlansa(d, 'continua')}>⏯ continuă citirea</button>
+                        onClick={() => { if (window.confirm('Continui citirea planșei cu AI — zonele necitite se plătesc (zonele deja citite nu). Continui?')) reiaPlansa(d, 'continua') }}>⏯ continuă citirea</button>
                     ) : (d.analiza.citire_ai.sumar?.erori > 0 ? (
                       <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
                         title={`Recitește DOAR zonele căzute: ${(d.analiza.citire_ai.sumar.zone_cazute || []).join(', ')}`}
-                        onClick={() => reiaPlansa(d, 'reia_erori')}>🔁 reia zonele căzute ({d.analiza.citire_ai.sumar.erori})</button>
+                        onClick={() => { if (window.confirm('Recitesc cu AI doar zonele căzute — se plătesc. Continui?')) reiaPlansa(d, 'reia_erori') }}>🔁 reia zonele căzute ({d.analiza.citire_ai.sumar.erori})</button>
                     ) : null)
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
@@ -1545,7 +1545,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     ) : (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
                       title={plansaCitita(d) ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
-                      onClick={() => citestePlansa(d)}>
+                      onClick={() => { if (window.confirm('Citesc planșa cu AI — se taie în zone și fiecare zonă se plătește. Continui?')) citestePlansa(d) }}>
                       {plansaCitita(d) ? '📐 recitește' : '📐 citește'}
                     </button>
                     )
@@ -1618,6 +1618,10 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
         // verdict SI codul n-a respins nimic. Oricare din cele trei lipseste → nu se da concluzie.
         const analizaIncompleta = netrecut || (setRasp.propunere?.sold > 0)
           || Object.keys(setRasp.propunere?.aruncate || {}).length > 0
+          // Audit R02: punctele neclare țin concluzia deschisă — nu e „confirmă documentația".
+          || (setRasp.propunere?.neclare || []).length > 0
+          // R02 (Copilot 28.09): efectele cantitative din inventar țin și ele concluzia deschisă
+          || (setRasp.propunere?.dispozitii || []).some(x => x.tip === 'efect_cantitati' || x.tip === 'neclar')
         return (
           <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.purple}55`, background:G.purple + '0D' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:8 }}>
@@ -3499,7 +3503,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   const zile = l.zile_ramase
   const cZile = zile == null ? G.muted : zile <= 3 ? G.red : zile <= 7 ? G.orange : zile <= 21 ? G.yellow : G.green
   const pct = sx.cerinte ? Math.round(100 * sx.acoperite / sx.cerinte) : 0
-  const VC = { verde: ['🟢 VERDE — depunere sigură', G.green], galben: ['🟡 GALBEN — de rezolvat înainte de depunere', G.yellow], rosu: ['🔴 ROȘU — NU se depune', G.red] }
+  const VC = { verde: ['🟢 VERDE — nimic în neregulă în registrul extras (nu verifică pachetul final depus)', G.green], galben: ['🟡 GALBEN — de rezolvat înainte de depunere', G.yellow], rosu: ['🔴 ROȘU — NU se depune', G.red] }
   const [vLbl, vCol] = VC[sx.verdict] || ['— verificare nerulată', G.dim]
   const fmtMil = v => v == null ? '—' : v >= 1e6 ? `${(v / 1e6).toLocaleString('ro-RO', { maximumFractionDigits: 2 })}` : new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 0 }).format(v)
 
@@ -4650,7 +4654,7 @@ function VerificareFinalaSection({ licitatie: l }) {
     } catch (e) { setErr(String(e?.message || e)) } finally { setBusy(false) }
   }
 
-  const VC = { verde:['🟢 VERDE — depunere sigură', G.green], galben:['🟡 GALBEN — de rezolvat punctele înainte de depunere', G.yellow], rosu:['🔴 ROȘU — NU se depune', G.red] }
+  const VC = { verde:['🟢 VERDE — nimic în neregulă în registrul extras (nu verifică pachetul final depus)', G.green], galben:['🟡 GALBEN — de rezolvat punctele înainte de depunere', G.yellow], rosu:['🔴 ROȘU — NU se depune', G.red] }
   const arb = ultima?.raport?.arbitru || {}
   const [vLbl, vCol] = VC[ultima?.verdict] || ['— nerulată încă', G.dim]
 

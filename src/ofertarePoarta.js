@@ -34,6 +34,14 @@ export function evalueazaPoarta(st) {
     detalii: `${st.fara_capitol} din ${st.de_raspuns}` + (st.inchise_cu_dovada > 0 ? ` · ${st.inchise_cu_dovada} sunt închise cu dovadă în registru, nu cer capitol` : ''),
     filtru: 'fara',
   })
+  // R06 (audit Copilot): acoperirea propusă de AI NU e dovadă. Doar cea verificată pe scan de un om
+  // închide cerința; restul se vede separat, ca avertisment, până o confirmă cineva.
+  if ((st.dovada_de_verificat || 0) > 0) r.push({
+    k:'dovada_propusa', titlu:'Dovezi propuse de AI, neverificate de om',
+    stare: 'warn',
+    detalii: `${st.dovada_de_verificat} cerințe fără capitol au doar o acoperire propusă (acoperit/partener), nebifată „verificat pe scan” — nu sunt încă dovadă`,
+    filtru: 'fara',
+  })
   r.push({
     // P0.3 — ATRIBUIREA NU E CONFORMITATE. O cerinta cu capitol, dar pe care nimeni n-a
     // confirmat-o (stare <> 'verificata', sau verificata la o versiune veche a capitolului) NU e
@@ -184,7 +192,7 @@ export function evalueazaPoarta(st) {
   r.push({ k: h9.k, titlu: 'Pachetul depus — piesele din opis au fișier', stare: h9.stare, detalii: h9.detalii })
   // Laza: 16 din 66 relații „FS" cu ES(succesor) < EF(predecesor) — graficul scris de mână.
   // Întâi sursa (vine dintr-o versiune înghețată?), apoi consistența (declarațiile se țin?).
-  const h10 = controlGraficSursa(st)
+  const h10 = controlGraficSursa(st, { final: true })   // poarta = aprobarea pachetului
   r.push({ k: h10.k, titlu: 'Graficul din pachet — vine dintr-o versiune înghețată', stare: h10.stare, detalii: h10.detalii })
   const h11 = controlRelatiiGrafic(st)
   r.push({ k: h11.k, titlu: 'Graficul — relațiile declarate vs datele declarate', stare: h11.stare, detalii: h11.detalii })

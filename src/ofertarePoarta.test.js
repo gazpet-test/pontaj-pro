@@ -226,3 +226,17 @@ describe('R5 — poarta propunerii nu ia F3 nevalidata drept referinta aprobata'
     expect(ev.randuri.find(x => x.k === 'cantitati').detalii).toMatch(/nu putem verifica/)
   })
 })
+
+import { evalueazaPoarta as evR06 } from './ofertarePoarta.js'
+describe('R06 — dovada propusă de AI nu e dovadă', () => {
+  it('dovada_de_verificat > 0 dă avertisment separat', () => {
+    const r = evR06({ capitole: 3, de_raspuns: 10, de_forma: 0, fara_capitol: 0, inchise_cu_dovada: 0, dovada_de_verificat: 4, cu_capitol: 6 })
+    const rows = Array.isArray(r) ? r : (r.randuri || r.rows || r.controale || [])
+    expect(rows.find(y => y.k === 'dovada_propusa')?.stare).toBe('warn')
+  })
+  it('fără propuneri, rândul lipsește', () => {
+    const r = evR06({ capitole: 3, de_raspuns: 10, de_forma: 0, fara_capitol: 0, inchise_cu_dovada: 0, dovada_de_verificat: 0, cu_capitol: 10 })
+    const rows = Array.isArray(r) ? r : (r.randuri || r.rows || r.controale || [])
+    expect(rows.find(y => y.k === 'dovada_propusa')).toBeUndefined()
+  })
+})
