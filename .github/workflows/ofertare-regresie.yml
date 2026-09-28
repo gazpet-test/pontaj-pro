@@ -125,3 +125,12 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/jakv207_test_ci
           PGPASSWORD: postgres
         run: node scripts/pg/test_jakv207_rls.mjs
+      - name: Creeaza baza goala pt JAK-V2-03
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv203_test_ci;'
+      - name: Poarta depusa cu pachet si cerinte (JAK-V2-03) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv203_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv203_gate_depusa.mjs
