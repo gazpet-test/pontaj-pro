@@ -569,7 +569,8 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
     setSaving(true)
     try {
       let nrFinal = form.nr
-      if (isNew && !nrFinal) {
+      const nrAuto = isNew && !nrFinal   // TKT-2026-0281: la coliziune pe (serie,nr) reîncercăm doar dacă numărul e automat
+      if (nrAuto) {
         const { data: nextNr } = await supabase.rpc('fn_get_next_nr_factura', { p_serie: form.serie })
         nrFinal = nextNr
       }
@@ -628,7 +629,14 @@ function FacturaModal({ item, proiectDefault, slDefault, beneficiariLista, profi
       let err
       if (isNew) {
         if (profileId) payload.created_by = profileId
-        const res = await supabase.from('facturi_emise').insert(payload).select('id').single()
+        let res = await supabase.from('facturi_emise').insert(payload).select('id').single()
+        // TKT-2026-0281: alt coleg a emis între timp același număr → cu numerotare automată luăm următorul liber
+        for (let i = 0; nrAuto && res.error?.code === '23505' && i < 3; i++) {
+          const { data: nou } = await supabase.rpc('fn_get_next_nr_factura', { p_serie: form.serie })
+          nrFinal = nou; payload.nr = parseInt(nou)
+          res = await supabase.from('facturi_emise').insert(payload).select('id').single()
+        }
+        if (res.error?.code === '23505') throw new Error(`Numărul ${form.serie}-${payload.nr} este deja folosit de altă factură. Lasă câmpul „Nr." gol ca să primești automat următorul număr liber.`)
         err = res.error; savedId = res.data?.id
       } else {
         ({ error: err } = await supabase.from('facturi_emise').update(payload).eq('id', item.id))

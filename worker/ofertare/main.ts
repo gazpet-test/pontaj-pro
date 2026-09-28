@@ -14,6 +14,8 @@ import { proceseazaAcoperire } from './acoperire.ts'
 import { proceseazaClarificari } from './clarificari.ts'
 import { proceseazaSourcePacks } from './source_pack.ts'
 import { proceseazaSeap } from './seap.ts'
+import { proceseazaPlansa, fetchCuTimeout } from './plansa.ts'
+import { handler as handlerPlansa } from '../../supabase/functions/ofertare-plansa-citeste/handler.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
@@ -135,7 +137,9 @@ for (const s of ['SIGTERM', 'SIGINT'] as const) Deno.addSignalListener(s, () => 
 log(`[${NUME}] pornit · commit ${SHA} (${BRANCH}) · paralel ${PARALEL} · bucata_max ${BUCATA_MAX}`)
 await heartbeat({ stare: 'pornit' })
 let ultimHb = Date.now(), ultimGit = Date.now()
-let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false, seapInLucru = false
+let ingestInLucru = false, acoperireInLucru = false, clarificariInLucru = false, packInLucru = false, seapInLucru = false, plansaInLucru = false
+// R4 #142: citirea planșelor din ofertare_plansa_coada — același handler ca edge-ul, cu service_role și timeout pe AI.
+const depsPlansa = { SERVICE: SERVICE_KEY, API_KEY: env('ANTHROPIC_API_KEY'), supa: supabase, fetch: fetchCuTimeout(fetch), getUser: async () => null }
 while (!oprire) {
   try {
     if (inLucru.size < PARALEL) {
@@ -192,6 +196,13 @@ while (!oprire) {
       proceseazaSeap(supabase, () => oprire, s => inLucru.set(-4_000_000, `seap: ${s}`))
         .catch(e => log('seap:', (e as Error)?.message ?? e))
         .finally(() => { inLucru.delete(-4_000_000); seapInLucru = false })
+    }
+    if (!plansaInLucru) {   // un job de planșă odată (paralelismul e pe zone, în handler)
+      plansaInLucru = true
+      proceseazaPlansa({ supabase, handler: handlerPlansa, depsHandler: depsPlansa, worker: NUME, oprire: () => oprire,
+        stare: s => inLucru.set(-5_000_000, `planșă: ${s}`) })
+        .catch(e => log('plansa:', (e as Error)?.message ?? e))
+        .finally(() => { inLucru.delete(-5_000_000); plansaInLucru = false })
     }
     if (Date.now() - ultimHb >= HEARTBEAT_MS) { await heartbeat(); ultimHb = Date.now() }
     if (inLucru.size === 0 && Date.now() - ultimGit >= VERIFICA_GIT_MS) {

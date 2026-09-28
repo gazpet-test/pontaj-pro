@@ -1,0 +1,7 @@
+# tinte.conf — dispozitive de sondat: <extern_id> <ip> <tip>
+# tip: qnap (temp prin SSH) | mikrotik | device (doar ping)
+192.168.1.1 192.168.1.1 mikrotik
+192.168.1.99 192.168.1.99 device
+192.168.1.100 192.168.1.100 device
+192.168.1.42 192.168.1.42 qnap
+192.168.1.63 192.168.1.63 device

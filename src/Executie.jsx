@@ -385,6 +385,24 @@ function DashboardProiectePage({ onSelectProiect }) {
   const canEdit = isOwner || profile?.can_manage_contracts === true
   const [alertFilter, setAlertFilter] = useState(null)
   const [cautaProiect, setCautaProiect] = useState('')
+  // TKT-2026-0200: proiectele inactive stau în „Arhivă", nu amestecate cu cele active
+  const [vedereArhiva, setVedereArhiva] = useState(false)
+
+  // TKT-2026-0200: bifă rapidă activ/inactiv direct de pe card (aceeași coloană ca în „Editează")
+  async function comutaActiv(p) {
+    const devineActiv = p.activ === false
+    const intrebare = devineActiv
+      ? `Reactivezi proiectul ${p.cod_intern || p.nume}? Revine în lista proiectelor active.`
+      : `Muți proiectul ${p.cod_intern || p.nume} în arhivă (inactiv)?\nNu se șterge nimic — îl găsești în tabul „Arhivă" și îl poți reactiva oricând.`
+    if (!window.confirm(intrebare)) return
+    try {
+      const { error } = await supabase.from('executie_proiecte')
+        .update({ activ: devineActiv, updated_at: new Date().toISOString() }).eq('id', p.id)
+      if (error) throw error
+      showToast(devineActiv ? `✔ ${p.cod_intern || p.nume} reactivat` : `📦 ${p.cod_intern || p.nume} mutat în arhivă`, 'success')
+      loadAll()
+    } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') }
+  }
 
   // ─── Ordine începere/sistare detectate automat (email + NAS) — de confirmat ───
   const [ordineDetectate, setOrdineDetectate] = useState([])
@@ -488,23 +506,31 @@ function DashboardProiectePage({ onSelectProiect }) {
     }
   }, [proiecte])
 
+  const proiecteArhiva = useMemo(() => proiecte.filter(p => p.activ === false), [proiecte])
+  const potrivesteCautarea = useCallback((p) => {
+    const s = norm(cautaProiect)   // căutare fără diacritice
+    return norm(p.nume).includes(s) || norm(p.beneficiar).includes(s) ||
+      norm(p.cod_intern).includes(s) || norm(p.beneficiar_final).includes(s) ||
+      norm(p.nr_contract).includes(s)
+  }, [cautaProiect])
   const proiecteVizibile = useMemo(() => {
-    let list = proiecte
-    if (alertFilter === 'depasit')            list = kpiAlerte.depasit
-    else if (alertFilter === 'critic')        list = kpiAlerte.critic
-    else if (alertFilter === 'atentie')       list = kpiAlerte.atentie
-    else if (alertFilter === 'fara_contract') list = kpiAlerte.fara_contract
-    else if (alertFilter === 'fara_date')     list = kpiAlerte.fara_date
-    if (cautaProiect.trim()) {
-      const s = norm(cautaProiect)   // căutare fără diacritice
-      list = list.filter(p =>
-        norm(p.nume).includes(s) || norm(p.beneficiar).includes(s) ||
-        norm(p.cod_intern).includes(s) || norm(p.beneficiar_final).includes(s) ||
-        norm(p.nr_contract).includes(s)
-      )
+    // TKT-2026-0200: implicit doar cele active; inactivele doar în tabul „Arhivă"
+    // (filtrele de alertă privesc oricum doar proiectele active)
+    let list = vedereArhiva ? proiecteArhiva : proiecte.filter(p => p.activ !== false)
+    if (!vedereArhiva) {
+      if (alertFilter === 'depasit')            list = kpiAlerte.depasit
+      else if (alertFilter === 'critic')        list = kpiAlerte.critic
+      else if (alertFilter === 'atentie')       list = kpiAlerte.atentie
+      else if (alertFilter === 'fara_contract') list = kpiAlerte.fara_contract
+      else if (alertFilter === 'fara_date')     list = kpiAlerte.fara_date
     }
+    if (cautaProiect.trim()) list = list.filter(potrivesteCautarea)
     return list
-  }, [proiecte, alertFilter, kpiAlerte, cautaProiect])
+  }, [proiecte, proiecteArhiva, vedereArhiva, alertFilter, kpiAlerte, cautaProiect, potrivesteCautarea])
+  // Căutare din tabul „Active" care are rezultate doar în arhivă → le semnalăm, ca să nu pară că proiectul a dispărut
+  const gasiteInArhiva = useMemo(
+    () => (!vedereArhiva && cautaProiect.trim()) ? proiecteArhiva.filter(potrivesteCautarea).length : 0,
+    [vedereArhiva, cautaProiect, proiecteArhiva, potrivesteCautarea])
 
   // Proiecte cu probleme de configurare (pentru banner)
   const proiecteIncomplete = useMemo(
@@ -772,6 +798,29 @@ function DashboardProiectePage({ onSelectProiect }) {
         </div>
       )}
 
+      {/* TKT-2026-0200: Active / Arhivă (inactive) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[
+          { arhiva: false, label: `📁 Active (${proiecte.length - proiecteArhiva.length})`, color: G.executie },
+          { arhiva: true,  label: `📦 Arhivă — inactive (${proiecteArhiva.length})`,        color: G.muted },
+        ].map(t => {
+          const sel = vedereArhiva === t.arhiva
+          return (
+            <button key={String(t.arhiva)} onClick={() => { setVedereArhiva(t.arhiva); setAlertFilter(null) }} style={{
+              padding: '7px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontWeight: sel ? 700 : 500,
+              background: sel ? t.color + '22' : 'transparent', color: sel ? t.color : G.muted,
+              border: `1px solid ${sel ? t.color + '88' : G.border}`,
+            }}>{t.label}</button>
+          )
+        })}
+        {gasiteInArhiva > 0 && (
+          <button onClick={() => { setVedereArhiva(true); setAlertFilter(null) }} style={{
+            padding: '5px 10px', background: 'transparent', border: 'none', color: G.yellow,
+            fontSize: 12, cursor: 'pointer', textDecoration: 'underline',
+          }}>+ {gasiteInArhiva} {gasiteInArhiva === 1 ? 'rezultat' : 'rezultate'} în arhivă</button>
+        )}
+      </div>
+
       {/* Carduri proiecte */}
       {loading ? (
         <div style={{ textAlign: 'center', padding: '60px 0', color: G.muted }}>
@@ -782,9 +831,12 @@ function DashboardProiectePage({ onSelectProiect }) {
         <div style={{ textAlign: 'center', padding: '60px 0', color: G.muted }}>
           <div style={{ fontSize: 48, marginBottom: 12, opacity: 0.4 }}>📁</div>
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
-            {alertFilter ? 'Niciun proiect pentru filtrul selectat' : 'Niciun proiect înregistrat'}
+            {vedereArhiva ? (cautaProiect.trim() ? 'Niciun proiect din arhivă nu se potrivește căutării' : 'Niciun proiect în arhivă')
+              : alertFilter ? 'Niciun proiect pentru filtrul selectat'
+              : cautaProiect.trim() ? 'Niciun proiect activ nu se potrivește căutării'
+              : proiecte.length ? 'Niciun proiect activ — toate sunt în arhivă' : 'Niciun proiect înregistrat'}
           </div>
-          {isOwner && !alertFilter && <div style={{ fontSize: 13 }}>Apasă „＋ Proiect nou" pentru a adăuga primul proiect.</div>}
+          {isOwner && !alertFilter && !vedereArhiva && !cautaProiect.trim() && <div style={{ fontSize: 13 }}>Apasă „＋ Proiect nou" pentru a adăuga primul proiect.</div>}
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(520px, 1fr))', gap: 20 }}>
@@ -797,6 +849,7 @@ function DashboardProiectePage({ onSelectProiect }) {
               onOpen={(tab) => onSelectProiect(p.id, tab)}
               onDetail={() => setSelectedProiect(p)}
               onEdit={() => setEditProiect(p)}
+              onToggleActiv={() => comutaActiv(p)}
               onRefresh={loadAll}
               showToast={showToast}
             />
@@ -837,7 +890,7 @@ function DashboardProiectePage({ onSelectProiect }) {
 // ===========================================================================
 // PROIECT CARD — click pe titlu sau "→ Deschide" navighează la context
 // ===========================================================================
-function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, onRefresh, showToast }) {
+function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, onToggleActiv, onRefresh, showToast }) {
   const terminStatus = (() => {
     if (!p.data_termen) return null
     const zile = p.zile_pana_termen
@@ -1101,6 +1154,13 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <MeteoToggle siteId={p.site_id} canEdit={canEdit} />
+          {/* TKT-2026-0200: bifă rapidă activ ↔ arhivă */}
+          {canEdit && onToggleActiv && (
+            <button onClick={onToggleActiv} title={p.activ === false ? 'Readu proiectul în lista celor active' : 'Marchează proiectul inactiv și mută-l în arhivă'} style={{
+              padding: '6px 12px', background: 'transparent', border: `1px solid ${p.activ === false ? G.green + '66' : G.border}`,
+              borderRadius: 6, color: p.activ === false ? G.green : G.muted, fontSize: 12, cursor: 'pointer',
+            }}>{p.activ === false ? '↩ Reactivează' : '📦 Arhivează'}</button>
+          )}
           {canEdit && (
             <button onClick={onEdit} style={{
               padding: '6px 12px', background: 'transparent', border: `1px solid ${G.border}`,

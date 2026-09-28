@@ -41,7 +41,7 @@ const PARALEL_MAX = 4;
 const REINCERCARI = 2;
 const COD_VERSIUNE = '2026-09-26.16'; // se schimbă la fiecare modificare a citirii/agregării (proveniență T11)          // doar pe limitări/suprasarcină furnizor (429, 529, 5xx), cu așteptare
 
-const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
+export const INSTRUCTIUNI = `Esti inginer proiectant de retele de gaze naturale si citesti o BUCATA dintr-o plansa de proiect scanata (schema tehnologica, plan de situatie, profil).
 
 Extrage DOAR ce vezi scris efectiv in aceasta bucata. Nu deduce, nu completa din memorie, nu estima distante din desen.
 
@@ -1816,7 +1816,7 @@ function perechiDeLipit(felii: any[], toateNumele: Set<string>, facute = new Set
   return out.sort((a, b) => b.scor - a.scor).map((x) => x.p);
 }
 
-const INSTRUCTIUNI_LIPIRE = `Primesti DOUA bucati ALATURATE din aceeasi plansa de proiect: prima e in STANGA, a doua imediat in DREAPTA ei (se suprapun ~12% pe margine).
+export const INSTRUCTIUNI_LIPIRE = `Primesti DOUA bucati ALATURATE din aceeasi plansa de proiect: prima e in STANGA, a doua imediat in DREAPTA ei (se suprapun ~12% pe margine).
 Unele randuri de text (note, cartus, legenda, tabele) sunt taiate de marginea dintre ele. Reconstituie DOAR randurile care continua dintr-o bucata in cealalta, citind textul complet de la stanga la dreapta. Nu repeta textul care e deja intreg intr-o singura bucata.
 Raspunde NUMAI cu JSON valid: {"randuri": [{"text": "randul complet", "lungime_m": null, "diametru_mm": null}]}
 - lungime_m / diametru_mm: numai daca randul chiar scrie o lungime cu unitate de lungime (m, ml, km) sau un diametru. Daca unitatea e alta (mp, mc, ha) lasa lungime_m null si copiaza textul exact, cu unitatea lui. Fara separator de mii.
@@ -1953,6 +1953,8 @@ export function raportIdentitate(idr: ReturnType<typeof identificaRanduri>) {
 
 export type Deps = {
   SERVICE: string; API_KEY: string | undefined;
+  modelEticheta?: string; // D4: proveniența CLI; modelul cererii API rămâne MODEL.
+  configCli?: { model: string; prompt_sha256: string }; // D4 r3: model raportat + prompt efectiv, din launcher.
   supa: any; getUser: (jwt: string) => Promise<string | null>; fetch: typeof fetch;
 };
 export function depsReale(): Deps {
@@ -2011,6 +2013,14 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (!doc) return json({ error: 'document inexistent' }, 404);
 
   const plansa = doc.analiza?.plansa;
+  // #494 r5: aceeași poartă pentru citire și doar_lipire; câmpurile absente nu se compară.
+  const asteptat = body?.asteptat ?? {};
+  const prezent = (camp: string) => Object.prototype.hasOwnProperty.call(asteptat, camp);
+  if ((prezent('licitatie_id') && Number(asteptat.licitatie_id) !== Number(doc.licitatie_id)) ||
+      (prezent('fisier_path') && asteptat.fisier_path !== doc.fisier_path) ||
+      (prezent('taiat_la') && (asteptat.taiat_la ?? null) !== (plansa?.taiat_la ?? null)) ||
+      (prezent('cale_felii') && (asteptat.cale_felii ?? null) !== (plansa?.cale_felii ?? null)))
+    return json({ error: 'Documentul nu mai corespunde jobului — anulat', cost_usd: 0 }, 409);
   if (!plansa?.cale_felii) return json({ error: 'plansa nu e taiata in felii — ruleaza intai /api/plansa-felii' }, 400);
   if (plansa.citibila === false) return json({ error: 'plansa a fost marcata drept necitibila', motiv: plansa.motiv }, 400);
 
@@ -2025,10 +2035,17 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
 
   // proveniența rulării (T11): ce versiune de cod/prompt, ce model — calculată ÎNAINTE de orice citire,
   // ca reluarea să poată refuza amestecul de versiuni (R4/C4) fără cost.
-  const promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(INSTRUCTIUNI))))
+  let promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(INSTRUCTIUNI))))
     .slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
+  // Fără configCli, versiunea API rămâne identică. Configurația CLI intră în cheia
+  // existentă: toate gărzile continua/lipire/CAS o verifică fără reguli paralele.
+  const configCli = deps.configCli && { model: deps.configCli.model, prompt_sha256: deps.configCli.prompt_sha256 };
+  if (configCli) promptSha = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
+    new TextEncoder().encode(JSON.stringify({ prompt_sha: promptSha, config_cli: configCli })))))
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
   // + ce s-a citit (tăiere, grilă, fișier): diferențele aici => 409 chiar și cu mixare_permisa (concurenta.ts)
-  const versiuneCur = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: MODEL, prompt_sha: promptSha,
+  const versiuneCur = { functie: 'ofertare-plansa-citeste', cod: COD_VERSIUNE, model: deps.modelEticheta ?? MODEL, prompt_sha: promptSha,
+    ...(configCli ? { config_cli: configCli } : {}),
     taiat_la: plansa.taiat_la || null, cale_felii: plansa.cale_felii, geom_sha: await shaGeometrie(plansa),
     fisier: doc.nume_original, fisier_path: doc.fisier_path || null };
   const cheieVers = cheieVersiune(versiuneCur);
@@ -2038,12 +2055,17 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (body?.doar_lipire === true) {
     const ca = doc.analiza?.citire_ai;
     if (!ca?.gata) return json({ error: 'planșa nu e citită complet' }, 400);
+    // D4 r2: lipirea are aceeași poartă de versiune ca reluarea, inclusiv după un conflict CAS.
+    const incomp = versiuneIncompatibila(ca, versiuneCur, mixarePermisa);
+    if (incomp) return json({ error: incomp, versiune_salvata: ca.versiune || null, versiune_curenta: versiuneCur }, 409);
     // R4 (runda 3): perechile se REZERVĂ înainte de AI (cheie „lipire:zA+zB”) — două taburi pe „note tăiate” nu mai
     // plătesc aceleași perechi; dacă toate perechile rămase sunt în lucru în alt tab => 409, zero AI.
     const taiatL = plansa.taiat_la || null, rulareL = crypto.randomUUID();
     const cheiePer = (p: string[]) => `lipire:${p.join('+')}`;
     const rzL = await rezervaChei(supa, docId, doc, rulareL, taiatL, (d: any, altii: Map<string, any>) => {
       const caX = d.analiza?.citire_ai;
+      const inc = versiuneIncompatibila(caX, versiuneCur, mixarePermisa);
+      if (inc) return { cand: [], lot: [], stop: { status: 409, error: inc } };
       if (!caX?.gata || (caX.taiat_la || null) !== (ca.taiat_la || null))
         return { cand: [], lot: [], stop: { status: 409, error: 'Citirea planșei s-a schimbat între timp (altă tăiere/recitire) — reia „lipește”.' } };
       const facuteX = new Set<string>([...(caX.note_lipite_perechi || []), ...(caX.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));
@@ -2078,6 +2100,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     // R4: scriere compare-and-set — notele se refac peste citirea PROASPĂTĂ dacă între timp a scris altcineva
     const w = await scrieCAS(supa, docId, rzL.doc, (d: any) => {
       const caX = d.analiza?.citire_ai;
+      const inc = versiuneIncompatibila(caX, versiuneCur, mixarePermisa);
+      if (inc) return { stop: { status: 409, error: inc } };
       if (!caX?.gata || (caX.taiat_la || null) !== (ca.taiat_la || null))
         return { stop: { status: 409, error: 'Citirea planșei s-a schimbat între timp (altă tăiere/recitire) — notele nu s-au salvat. Reia „lipește”.' } };
       const facuteX = new Set<string>([...(caX.note_lipite_perechi || []), ...(caX.note_lipite || []).map((n: any) => n.perechea)].filter(Boolean).map(String));
@@ -2409,7 +2433,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   if (reev) for (const k of ['lungime_declarata_m', 'necorelare_unitate', 'note_lipite', 'perechi_lipite', 'provenienta'])
     if (ca0?.sumar && k in ca0.sumar && !(k in sumar)) sumar[k] = ca0.sumar[k];
   const versiune = reev && ca0?.versiune ? ca0.versiune : { ...versiuneCur, pagina: 1, dpi: plansaD.dpi || null };
-  const citireAi: any = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: reev ? (ca0?.model || MODEL) : MODEL, versiune, taiat_la: plansaD.taiat_la || null,
+  const citireAi: any = { felii: toate, sumar, tronsoane_unice: unice, metrici, model: reev ? (ca0?.model || (deps.modelEticheta ?? MODEL)) : (deps.modelEticheta ?? MODEL), versiune, taiat_la: plansaD.taiat_la || null,
     ...(reev ? { reevaluat: { la: new Date().toISOString(), cod: COD_VERSIUNE, versiune_cod: versiuneCur, fara_ai: true } } : {}),
     ...(reev && ca0?.note_lipite ? { note_lipite: ca0.note_lipite, note_lipite_perechi: ca0.note_lipite_perechi } : {}),
     gata, actualizat: new Date().toISOString(), rev: revNou(), rulare,

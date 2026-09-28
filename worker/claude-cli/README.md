@@ -58,3 +58,90 @@ Răspunsul brut rămâne în `out/<stamp>_source_pack.md`; `verifica_pack.mjs` (
 `nereusite`. Rezultatul validat: `out/<stamp>_source_pack.pack.json` (jurnal: `pack VALIDARE …`, `PACK=…`).
 Opțional `context/documente.json` (lista documentelor din ERP: id, nume_fisier, seap_cod, tip, pagini) — de acolo ia
 agentul `seap_cod`. Containerul NU are chei: importul în BD îl face doar workerul (B2), din pack-ul validat.
+
+## Sarcina `plansa_felii` (D4, 27.09.2026) — numai la cererea manuală a ownerului
+
+Coada automată rămâne pe API. Comenzile de mai jos sunt pentru teste/citiri/recitiri pornite
+de owner; nu se adaugă în cron sau în workerul automat. Containerul CLI primește numai
+JPEG-uri, manifestul și instrucțiunile; nu primește chei Supabase sau AI.
+
+Acestea sunt **scripturi administrative**, rulate numai pe NAS de owner: **verificare
+administrativă, nu autentificare**. `OPERATOR_DECLARAT` este UUID-ul declarat din mediu;
+cine deține `service_role` pe gazdă poate declara alt UUID. Verificarea `profiles.is_owner`
+nu dovedește identitatea operatorului. Containerul CLI rămâne fără `service_role`.
+
+Pe NAS, cu mediul dedicat `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`OPERATOR_DECLARAT` (UUID declarat de owner), fără cheie AI:
+
+```sh
+deno run -A worker/ofertare/plansa_cli_pregateste.ts 470 /cale/pachet-470
+```
+
+Folderul de ieșire trebuie să fie gol. Pregătirea verifică `profiles.is_owner`, descarcă
+JPEG-urile și scrie hashurile SHA-256. Prompturile sunt exportate direct din handler.
+Manifestul include `pachet_id`: SHA-256 peste identitatea documentului și tăiere,
+lista ordonată de etichete/hashuri, perechi și hashurile celor două prompturi.
+Perechile pregătite sunt toate vecinătățile orizontale; handlerul alege la import numai
+perechile unde lectura semnalează note tăiate.
+
+Transferă folderul pregătit pe NAS, apoi pornește manual pilotul:
+
+```sh
+sh run_pilot.sh "/cale/pachet-470" plansa_felii
+```
+
+Launcherul folosește Opus, crește limita de ture după numărul de felii/perechi, păstrează
+timeoutul configurat și sare complet peste extragere/OCR. Ieșirea pentru import este
+`out/<stamp>_plansa_felii.json`; `.cli.json` și `.stderr` sunt diagnosticul CLI, nu intrarea
+importatorului. Nu se reia automat dacă se termină timpul sau abonamentul.
+Launcherul adaugă el însuși `pachet_id`, hashul promptului efectiv trimis, hashurile
+instrucțiunilor, `claude --version` și modelul raportat în `modelUsage` din jurnalul CLI.
+Înainte de orice apel CLI, verifică lista exactă din `felii/` și SHA-256 din bytes-ii
+fiecărui JPEG. Fișier lipsă, în plus sau modificat → cod 2 și motiv în jurnal.
+Hashurile calculate sunt în `felii_verificate`, separat de răspunsurile modelului.
+`config_cli` conține modelul raportat și SHA-256 al argumentului efectiv `-p`, inclusiv
+`prompts/plansa_felii.md` și instrucțiunile inserate. Ambele câmpuri sunt puse de launcher.
+Un jurnal fără un singur model Opus identificabil este refuzat. Fiecare lipire include
+`sha256_a` și `sha256_b`, în ordinea perechii; o nepotrivire în adaptor produce 422.
+
+Pilotul necesită `flock`: ține lock exclusiv pe `.pilot.lock` până la ieșire. A doua
+rulare este refuzată imediat (cod 3). Fiecare rulare folosește `staging/<stamp>_<pid>`;
+trap-ul șterge numai propriul director, inclusiv la eroare. Nu șterge alte staging-uri.
+
+Pe NAS, în același mediu administrativ dedicat ownerului:
+
+```sh
+deno run -A worker/ofertare/plansa_cli_importa.ts /cale/rezultat_plansa_felii.json /cale/pachet-470
+```
+
+Importul verifică identitatea, tăierea, prompturile și hashurile locale/Storage înainte
+de scriere. `pachet_id` din rezultat trebuie să fie identic cu manifestul și cu cel
+recalculat din documentul/Storage curent și prompturile handlerului curent. Un rezultat
+vechi lângă un manifest nou este refuzat chiar dacă JPEG-urile sunt identice. Pachetele
+vechi fără proveniența r2 trebuie pregătite și citite din nou. Jurnalul JSON al importului
+notează UUID-ul declarat, `pachet_id` și proveniența CLI.
+Folosește același handler (inclusiv CAS, transferul în cantități și eventualele
+ciorne locale de clarificare), cu adaptor AI fără rețea. Proveniența este `cli:opus`, iar
+tokenii și costul din `ai_usage_log` sunt zero; nu se folosește coada/bugetul API.
+Din r3, `citire_ai.versiune.config_cli` păstrează configurația reală; ea intră și în
+`versiune.prompt_sha`. Alt prompt efectiv sau alt model raportat → refuz la continuare,
+lipire și conflicte CAS, chiar dacă `pachet_id` este identic. Calculul `pachet_id` rămâne
+neschimbat. Rezultatele fără metadatele r3 cer recitire prin launcher; citirile salvate
+anterior fără configurație sunt incompatibile cu o continuare r3.
+
+O citire API existentă pe aceeași tăiere este refuzată cu 409; nu este resetată sau amestecată.
+În sens invers, API `doar_lipire` peste o citire `cli:opus` este refuzat implicit cu 409,
+inclusiv la recitirile după conflicte CAS, prin regula existentă `versiuneIncompatibila`.
+O felie absentă din ieșirea CLI rămâne eroare și se poate relua prin aceeași comandă după
+completarea pachetului. Dacă lipirile sunt incomplete, feliile rămân salvate, iar comanda
+semnalează lipsa și se oprește înaintea lipirii. O tăiere sau un prompt schimbat cere un
+pachet nou. Importul poate scrie cantități prin regulile handlerului, deci se execută doar
+pe documentul/datasetul autorizat de owner.
+
+Teste locale, fără Claude real și fără producție:
+
+```sh
+deno test -A --node-modules-dir=none worker/ofertare/plansa_cli_test.ts
+deno test -A --node-modules-dir=none supabase/functions/ofertare-plansa-citeste
+node --test worker/claude-cli/test-fixtures/plansa_felii_test.mjs
+```

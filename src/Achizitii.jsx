@@ -13,6 +13,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
+import * as XLSX from 'xlsx-js-style'
 import ReceptieBucatiModal from './ReceptieBucatiModal.jsx'
 import CereriInterneProiect from './CereriInterneProiect.jsx'
 // Logo PDF: variantă CROP din logo.js — FĂRĂ blocul cu datele firmei (decizie Razvan 12.06,
@@ -473,6 +474,44 @@ function FurnizorCombobox({ value, onChange, furnizoriList, onFurnizorNou, showT
 // ════════════════════════════════════════════════════════════════════════════
 const LINIE_GOALA = () => ({ _k: uniq8(), denumire:'', um:'buc', cantitate:'', pret_unitar:'', termen_livrare:'', observatii:'' })
 
+// TKT-2026-0199: parsare strictă; textul necifric nu devine accidental zero.
+function numarExcel(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN
+  const raw = String(value ?? '').replace(/\s/g, '')
+  if (!raw) return null
+  const s = raw.includes(',') ? (/^[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+),\d+$/.test(raw) ? raw.replace(/\./g, '').replace(',', '.') : '') : raw
+  return /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(s) && Number.isFinite(Number(s)) ? Number(s) : NaN
+}
+
+function repereDinExcel(rows) {
+  const normCap = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s/g, '')
+  const alias = {
+    denumire:['denumire', 'articol', 'produs', 'material', 'descriere'], um:['um', 'u.m.', 'unitate'],
+    cantitate:['cantitate', 'cant', 'buc', 'qty'], pret_unitar:['pret', 'pretunitar', 'pu', 'pret/um'],
+    observatii:['observatii', 'specificatii', 'detalii'],
+  }
+  let cap = -1, coloane = {}
+  for (let i = 0; i < Math.min(10, rows.length); i++) {
+    const cells = rows[i].map(normCap)
+    const found = Object.fromEntries(Object.entries(alias).map(([k, names]) => [k, cells.findIndex(v => names.includes(v))]))
+    if (found.denumire >= 0 && found.cantitate >= 0) { cap = i; coloane = found; break }
+  }
+  if (cap < 0) throw new Error('Nu am recunoscut capul de tabel în primele 10 rânduri. Sunt necesare coloanele Denumire și Cantitate.')
+  const date = rows.slice(cap + 1).map((r, i) => ({ r, rand:cap + i + 2 })).filter(({ r }) => r.some(v => String(v ?? '').trim()))
+  if (date.length > 300) throw new Error('Fișierul conține peste 300 de rânduri. Împarte-l în fișiere de maximum 300 de repere.')
+  if (!date.length) throw new Error('Fișierul nu conține repere sub capul de tabel.')
+  return date.map(({ r, rand }) => {
+    const cell = k => r[coloane[k]] ?? ''
+    const denumire = String(cell('denumire')).trim(), cantitate = numarExcel(cell('cantitate')), pret = numarExcel(cell('pret_unitar'))
+    const erori = []
+    if (!denumire) erori.push('Lipsește denumirea')
+    if (!Number.isFinite(cantitate) || cantitate <= 0) erori.push('Cantitatea trebuie să fie un număr > 0')
+    if (pret !== null && (!Number.isFinite(pret) || pret < 0)) erori.push('Preț unitar invalid')
+    return { rand, denumire, um:String(cell('um')).trim(), cantitate, pret_unitar:pret ?? '', observatii:String(cell('observatii')).trim(),
+      cantitateText:String(cell('cantitate')), pretText:String(cell('pret_unitar')), erori }
+  })
+}
+
 function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sites, profile, onClose, onSaved, showToast }) {
   const editMode = !!comanda
   const [form, setForm] = useState(() => editMode ? {
@@ -494,6 +533,35 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
     ? comanda.linii.slice().sort((a, b) => (a.display_order || 0) - (b.display_order || 0)).map(l => ({ _k: uniq8(), denumire: l.denumire || '', um: l.um || '', cantitate: l.cantitate ?? '', pret_unitar: l.pret_unitar ?? '', termen_livrare: l.termen_livrare || '', observatii: l.observatii || '' }))
     : [LINIE_GOALA()])
   const [saving, setSaving] = useState(false)
+
+  // TKT-2026-0199: importul rămâne local până la salvarea normală a formularului.
+  const importInput = useRef(null)
+  const [importRows, setImportRows] = useState(null)
+  const [importBusy, setImportBusy] = useState(false)
+  const importaExcel = async e => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (!/\.(xlsx|xls|csv)$/i.test(file.name)) { showToast('Alege un fișier .xlsx, .xls sau .csv.', 'error'); return }
+    setImportBusy(true)
+    try {
+      // CSV rămâne text, pentru ca 1.234,56 să nu fie reinterpretat de cititor.
+      const wb = XLSX.read(await file.arrayBuffer(), { type:'array', raw:true })
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      if (!sheet) throw new Error('Fișierul nu conține nicio foaie.')
+      setImportRows(repereDinExcel(XLSX.utils.sheet_to_json(sheet, { header:1, defval:'', raw:true })))
+    } catch (err) { showToast('Import nereușit: ' + (err.message || err), 'error') } finally { setImportBusy(false) }
+  }
+  const descarcaSablon = () => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Denumire', 'UM', 'Cantitate', 'Preț unitar', 'Observații']]), 'Repere')
+    XLSX.writeFile(wb, 'Sablon_repere_comanda.xlsx')
+  }
+  const adaugaImport = () => {
+    const valide = (importRows || []).filter(r => !r.erori.length)
+    setLinii(ls => [...ls, ...valide.map(r => ({ _k:uniq8(), denumire:r.denumire, um:r.um, cantitate:r.cantitate, pret_unitar:r.pret_unitar, observatii:r.observatii, termen_livrare:'' }))])
+    setImportRows(null)
+  }
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setLinie = (k, field, v) => setLinii(ls => ls.map(l => l._k === k ? { ...l, [field]: v } : l))
@@ -646,6 +714,28 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
         </label>
 
         {/* Linii comandă */}
+        {/* TKT-2026-0199 */}
+        <div style={{ display:'flex', gap:8, marginTop:14 }}>
+          <input ref={importInput} type="file" accept=".xlsx,.xls,.csv" style={{ display:'none' }} onChange={importaExcel} />
+          <button style={S.btnS} disabled={saving || importBusy} onClick={() => importInput.current?.click()}>{importBusy ? 'Se citește...' : '📥 Import repere din Excel'}</button>
+          <button style={S.btnS} onClick={descarcaSablon}>⬇ Șablon Excel</button>
+        </div>
+        {importRows && <div role="dialog" aria-modal="true" aria-label="Previzualizare import repere" style={{ position:'fixed', inset:0, zIndex:1100, background:'rgba(0,0,0,.75)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+          <div style={{ ...S.card, width:'min(1000px,100%)', maxHeight:'85vh', overflowY:'auto' }}>
+            <div style={{ fontWeight:800, marginBottom:10 }}>Previzualizare import — {importRows.length} rânduri</div>
+            <div style={{ fontSize:12, marginBottom:10 }}>Rândurile roșii sunt excluse. Reperele valide se adaugă la cele existente în formular.</div>
+            <div style={{ overflowX:'auto' }}><table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+              <thead><tr>{['Rând', 'Denumire', 'UM', 'Cantitate', 'Preț unitar', 'Observații', 'Validare'].map(h => <th key={h} style={{ textAlign:'left', padding:6 }}>{h}</th>)}</tr></thead>
+              <tbody>{importRows.map(r => <tr key={r.rand} style={{ background:r.erori.length ? G.red + '22' : 'transparent', color:r.erori.length ? G.red : G.text }}>
+                {[r.rand, r.denumire, r.um, r.cantitateText, r.pretText, r.observatii, r.erori.join('; ') || '✓'].map((v, i) => <td key={i} style={{ padding:6, borderBottom:`1px solid ${G.border}` }}>{v}</td>)}
+              </tr>)}</tbody>
+            </table></div>
+            <div style={{ display:'flex', gap:8, marginTop:12 }}>
+              <button style={S.btnP} disabled={!importRows.some(r => !r.erori.length)} onClick={adaugaImport}>Adaugă {importRows.filter(r => !r.erori.length).length} repere</button>
+              <button style={S.btnS} onClick={() => setImportRows(null)}>Renunță</button>
+            </div>
+          </div>
+        </div>}
         <div style={{ marginTop:18 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
             <div style={{ fontSize:14, fontWeight:800 }}>📋 Linii comandă</div>
@@ -1053,6 +1143,15 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
     } finally { setRfqBusy(false) }
   }
   const [editTermene, setEditTermene] = useState(false)
+  // TKT-2026-0291: editarea antetului și anularea păstrează comanda și PDF-ul emis.
+  const poateEditaEmisa = ctx.canCreate && ['emisa', 'in_tranzit', 'ajunsa'].includes(c.status) && !c.receptie_mp_la && !c.receptie_achizitii_la
+  const [antetLocal, setAntetLocal] = useState(null)
+  const [motivAnulare, setMotivAnulare] = useState(null)
+  const deschideAntet = () => setAntetLocal({
+    persoana_contact: c.persoana_contact || '', telefon_contact: c.telefon_contact || '',
+    livrare_tip: c.livrare_tip || 'sediu', livrare_site_id: c.livrare_site_id || '',
+    data_livrare_estimata: c.data_livrare_estimata?.slice(0, 10) || '', observatii: c.observatii || '',
+  })
   const [termeneLocal, setTermeneLocal] = useState({})
   const [termenGlobalLocal, setTermenGlobalLocal] = useState('')
   const deschideEditTermene = () => {
@@ -1306,6 +1405,37 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
         )}
 
 
+        {/* TKT-2026-0291 */}
+        {antetLocal && poateEditaEmisa && <div style={{ ...S.card, marginTop:14 }}>
+          <div style={{ fontWeight:800, marginBottom:10 }}>Modifică datele comenzii</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            {[['persoana_contact', 'Persoană contact'], ['telefon_contact', 'Telefon contact'], ['data_livrare_estimata', 'Data livrării estimate']].map(([k, label]) => <label key={k}>{label}
+              <input style={S.input} type={k === 'data_livrare_estimata' ? 'date' : 'text'} value={antetLocal[k]} onChange={e => setAntetLocal(f => ({ ...f, [k]: e.target.value }))} />
+            </label>)}
+            <label>Livrare către<select style={S.input} value={antetLocal.livrare_tip} onChange={e => setAntetLocal(f => ({ ...f, livrare_tip:e.target.value, livrare_site_id:'' }))}>
+              <option value="sediu">Sediu</option><option value="santier">Șantier</option>
+            </select></label>
+            {antetLocal.livrare_tip === 'santier' && <label>Șantier<select style={S.input} value={antetLocal.livrare_site_id} onChange={e => setAntetLocal(f => ({ ...f, livrare_site_id:e.target.value }))}>
+              <option value="">— Alege șantierul —</option>
+              {Object.entries(ctx.sitesMap).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select></label>}
+          </div>
+          <label>Observații<textarea style={{ ...S.input, marginTop:8 }} value={antetLocal.observatii} onChange={e => setAntetLocal(f => ({ ...f, observatii:e.target.value }))} /></label>
+          <div style={{ display:'flex', gap:8, marginTop:10 }}>
+            <Btn disabled={antetLocal.livrare_tip === 'santier' && !antetLocal.livrare_site_id} onClick={async () => { if (await actions.salveazaAntet(c, antetLocal)) setAntetLocal(null) }}>💾 Salvează</Btn>
+            <Btn onClick={() => setAntetLocal(null)}>Renunță</Btn>
+          </div>
+        </div>}
+        {motivAnulare !== null && poateEditaEmisa && <div role="dialog" aria-modal="true" aria-label="Anulare comandă" style={{ position:'fixed', inset:0, zIndex:1100, background:'rgba(0,0,0,.75)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+          <div style={{ ...S.card, width:'min(520px,100%)' }}>
+            <div style={{ fontWeight:800 }}>Anulează {c.numar_comanda}</div>
+            <label>Motiv (minimum 5 caractere)<textarea autoFocus style={{ ...S.input, marginTop:10 }} value={motivAnulare} onChange={e => setMotivAnulare(e.target.value)} /></label>
+            <div style={{ display:'flex', gap:8, marginTop:12 }}>
+              <Btn color={G.red} disabled={motivAnulare.trim().length < 5} onClick={async () => { if (await actions.anuleazaEmisa(c, motivAnulare)) setMotivAnulare(null) }}>Confirmă anularea</Btn>
+              <Btn onClick={() => setMotivAnulare(null)}>Renunță</Btn>
+            </div>
+          </div>
+        </div>}
         {/* Acțiuni flux */}
         <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18, flexWrap:'wrap' }}>
           {['emisa','in_tranzit','ajunsa','receptionata','finalizata'].includes(c.status) && ctx.canCreate && !c.este_servicii && (
@@ -1314,6 +1444,10 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {profile?.is_owner && (
             <Btn color={G.red} onClick={() => actions.stergeComanda(c)}>🗑 Șterge definitiv</Btn>
           )}
+          {poateEditaEmisa && <>
+            <Btn color={G.red} onClick={() => setMotivAnulare('')}>⛔ Anulează comanda</Btn>
+            {!antetLocal && <Btn onClick={deschideAntet}>✏️ Modifică datele comenzii</Btn>}
+          </>}
           {c.status === 'draft' && ctx.canCreate && (<>
             <Btn color={G.red} onClick={() => actions.anuleaza(c)}>⛔ Anulează</Btn>
             <Btn color={G.border2} onClick={() => actions.editeaza(c)}><span style={{ color:G.text }}>✏️ Editează</span></Btn>
@@ -1337,6 +1471,8 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {/* TKT-2026-0040: undo „ajunsă" apăsat din greșeală → revine ÎN TRANZIT (înainte de recepție) */}
           {c.status === 'ajunsa' && ctx.canCreate && <Btn color={G.dim} onClick={() => actions.markStatus(c, 'in_tranzit')}>↩️ Anulează „ajunsă"</Btn>}
           {c.status === 'receptionata' && !c.este_servicii && <Btn color={G.green} onClick={() => actions.deschidePredare(c)}>🏬 Predare magazie (PV 2)</Btn>}
+          {/* TKT-2026-0195 */}
+          {['emisa','in_tranzit','ajunsa','receptionata'].includes(c.status) && ctx.canCreate && !c.este_servicii && (c.linii || []).some(l => l.cantitate_primita != null && Number(l.cantitate_primita) > (Number(l.cantitate_intrata_stoc) || 0)) && <Btn color={G.green} onClick={() => actions.predareParțiala(c)}>🏬 Predare parțială în stoc</Btn>}
           {/* TKT-2026-0131 (Kostas): comandă în stoc → creezi transport cu toate materialele,
               avizul se generează prin fluxul normal din Logistică → Transporturi */}
           {(c.status === 'in_stoc' || c.status === 'receptionata') && ctx.canCreate && !c.este_servicii && <Btn color={G.blue} onClick={() => actions.deschideAvizTransport(c)}>🚚 Creează aviz (transport)</Btn>}
@@ -1540,6 +1676,7 @@ export default function AchizitiiPage() {
       proiectNume: proiect ? `${proiect.cod_intern ? `[${proiect.cod_intern}] ` : ''}${proiect.nume}` : '',
       livrareTxt: c.livrare_tip === 'sediu' ? 'Sediu Gazpet Instal (Ploiești)' : `Șantier ${sitesMap[c.livrare_site_id] || '—'}`,
       canCreate,
+      sitesMap,
     }
   }, [furnizoriMap, contracteMap, proiecteMap, sitesMap, canCreate])
 
@@ -1690,6 +1827,41 @@ export default function AchizitiiPage() {
       } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
     },
 
+    // TKT-2026-0291: filtre verificate în UPDATE, inclusiv versiunea citită de om.
+    actualizeazaEmisa: async (c, payload, mesaj) => {
+      if (!canCreate || !['emisa', 'in_tranzit', 'ajunsa'].includes(c.status) || c.receptie_mp_la || c.receptie_achizitii_la) return false
+      setBusy(true)
+      try {
+        let query = supabase.from('comenzi_furnizor').update({ ...payload, updated_at:new Date().toISOString() })
+          .eq('id', c.id).eq('status', c.status).is('receptie_mp_la', null).is('receptie_achizitii_la', null)
+        query = c.updated_at ? query.eq('updated_at', c.updated_at) : query.is('updated_at', null)
+        const { data, error } = await query.select('id').maybeSingle()
+        if (error) throw error
+        if (!data) throw new Error('Comanda a fost modificată sau recepționată între timp. Reîncarcă și verifică datele.')
+        showToast(mesaj)
+        await loadAll()
+        return true
+      } catch (e) { showToast('Eroare: ' + (e.message || e), 'error'); return false } finally { setBusy(false) }
+    },
+    salveazaAntet: async (c, f) => {
+      if (!['sediu', 'santier'].includes(f.livrare_tip) || (f.livrare_tip === 'santier' && !f.livrare_site_id)) {
+        showToast('Alege șantierul de livrare.', 'error'); return false
+      }
+      return actions.actualizeazaEmisa(c, {
+        persoana_contact:f.persoana_contact.trim() || null, telefon_contact:f.telefon_contact.trim() || null,
+        livrare_tip:f.livrare_tip, livrare_site_id:f.livrare_tip === 'santier' ? f.livrare_site_id : null,
+        data_livrare_estimata:f.data_livrare_estimata || null, observatii:f.observatii.trim() || null,
+      }, 'Datele comenzii au fost actualizate.')
+    },
+    anuleazaEmisa: async (c, motiv) => {
+      if (motiv.trim().length < 5) { showToast('Completează motivul anulării (minimum 5 caractere).', 'error'); return false }
+      const data = new Date().toLocaleDateString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric' })
+      const nume = profilesMap[profile?.id] || profile?.name
+      if (!nume) { showToast('Numele profilului nu este disponibil. Reîncarcă pagina.', 'error'); return false }
+      return actions.actualizeazaEmisa(c, {
+        status:'anulata', observatii:`[ANULATĂ ${data} de ${nume}: ${motiv.trim()}]${c.observatii ? '\n' + c.observatii : ''}`,
+      }, 'Comanda a fost anulată și păstrată în Arhivă.')
+    },
     anuleaza: async (c) => {
       if (!window.confirm(`Anulezi comanda ${c.numar_comanda}? Acțiunea nu poate fi inversată din UI.`)) return
       await actions.markStatus(c, 'anulata')
@@ -1774,6 +1946,7 @@ export default function AchizitiiPage() {
     deschideReceptieTransport: (c) => { setSelectedId(null); setReceptieTransportId(c.id) },
     deschideAvizTransport: (c) => { setSelectedId(null); setAvizTransportId(c.id) },
     deschidePredare: (c) => { setSelectedId(null); setPredareId(c.id) },
+    predareParțiala: (c) => predareParțiala(c),
     deschideReceptieBucati: (c) => { setSelectedId(null); setReceptieBucatiId(c.id) },
   }
 
@@ -1833,6 +2006,8 @@ export default function AchizitiiPage() {
 
       // Idempotență: dacă intrarea acestei comenzi a fost deja înregistrată (retry după
       // o eroare mai jos în lanț), NU repet mișcările de stoc — evit dublarea.
+      // TKT-2026-0195: după o predare parțială, fluxul de transport direct ar dubla stocul
+      if ((c.linii || []).some(l => Number(l.cantitate_intrata_stoc) > 0)) throw new Error('Comanda are deja predări parțiale în stoc — folosește „Predare magazie (PV 2)" pentru rest.')
       const { count: dejaIntrat } = await supabase.from('stocuri_miscari')
         .select('id', { count: 'exact', head: true })
         .eq('ref_tip', 'comanda_furnizor').eq('ref_id', c.id).eq('tip', 'intrare_achizitie')
@@ -1934,25 +2109,51 @@ export default function AchizitiiPage() {
       await loadAll()
     } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
   }
-  const intraInStoc = async (c) => {
+  // TKT-2026-0195: intrarea în stoc e incrementală pe linie — intră doar diferența față de
+  // `cantitate_intrata_stoc`. Linia se „rezervă" întâi printr-un update condiționat (nimeni altcineva
+  // n-a intrat între timp), apoi se scrie mișcarea; dacă mișcarea eșuează, rezervarea se anulează.
+  // parțial=true: doar liniile cu „Recepție pe repere" (cantitate_primita completată).
+  const intraInStoc = async (c, { partial = false } = {}) => {
     const locatie_tip = c.livrare_tip === 'sediu' ? 'sediu' : 'proiect'
     const locatie_id = c.livrare_tip === 'sediu' ? null : (c.proiect_id || null)
-    // Intrare prin registrul de mișcări → trigger aplică în stoc + calculează cost mediu (WAC) din preț
-    // TKT-2026-0176: intră DOAR cantitățile efectiv primite (liniiReceptionate)
-    const miscari = liniiReceptionate(c.linii)
-      .map(l => ({
-        locatie_tip, locatie_id,
-        material_denumire: l.denumire, um: l.um || null,
-        delta: Number(l.cantitate || 0),
-        tip: 'intrare_achizitie',
-        motiv: `Recepție ${c.numar_comanda}`,
+    let intrate = 0
+    for (const l of (c.linii || [])) {
+      if (!l.denumire) continue
+      if (partial && l.cantitate_primita == null) continue
+      const tinta = partial ? (Number(l.cantitate_primita) || 0) : qtyEfectiva(l)
+      const deja = Number(l.cantitate_intrata_stoc) || 0
+      const delta = tinta - deja
+      if (!(delta > 0)) continue
+      const { data: rez, error: eR } = await supabase.from('comenzi_furnizor_linii')
+        .update({ cantitate_intrata_stoc: tinta }).eq('id', l.id).eq('cantitate_intrata_stoc', deja).select('id').maybeSingle()
+      if (eR) throw eR
+      if (!rez) throw new Error(`Reperul „${l.denumire}" a fost modificat între timp — reîncarcă pagina.`)
+      const { error } = await supabase.from('stocuri_miscari').insert({
+        locatie_tip, locatie_id, material_denumire: l.denumire, um: l.um || null,
+        delta, tip: 'intrare_achizitie',
+        motiv: `${partial ? 'Predare parțială' : 'Recepție'} ${c.numar_comanda}`,
         ref_tip: 'comanda_furnizor', ref_id: c.id,
         pret_unitar: (l.pret_unitar != null && l.pret_unitar !== '') ? Number(l.pret_unitar) : null,
-      }))
-    if (miscari.length) {
-      const { error } = await supabase.from('stocuri_miscari').insert(miscari)
-      if (error) throw error
+      })
+      if (error) {
+        await supabase.from('comenzi_furnizor_linii').update({ cantitate_intrata_stoc: deja }).eq('id', l.id).eq('cantitate_intrata_stoc', tinta)
+        throw error
+      }
+      intrate++
     }
+    return intrate
+  }
+  const predareParțiala = async (c) => {
+    const lista = (c.linii || []).filter(l => l.denumire && l.cantitate_primita != null && Number(l.cantitate_primita) > (Number(l.cantitate_intrata_stoc) || 0))
+    if (!lista.length) { showToast('Nimic nou de dat în stoc — completează întâi „📦 Recepție pe repere".', 'warn'); return }
+    const txt = lista.map(l => `• ${l.denumire}: +${fmtNr(Number(l.cantitate_primita) - (Number(l.cantitate_intrata_stoc) || 0))} ${l.um || ''}`).join('\n')
+    if (!window.confirm(`Predare parțială către magazie — ${c.numar_comanda}\n\n${txt}\n\nConfirmi că magazionerul a primit aceste cantități? Intră acum în stoc; restul intră la predarea finală.`)) return
+    setBusy(true)
+    try {
+      const n = await intraInStoc(c, { partial: true })
+      showToast(`🏬 ${n} repere intrate în stoc (predare parțială ${c.numar_comanda}).`)
+      setSelectedId(null); await loadAll()
+    } catch (e) { showToast('Eroare predare parțială: ' + (e.message || e), 'error'); await loadAll() } finally { setBusy(false) }
   }
   const finalizeazaPredare = async (pozaFile) => {
     const c = predareComanda; if (!c || !pozaFile) return

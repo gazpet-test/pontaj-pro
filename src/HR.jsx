@@ -23,6 +23,8 @@ import HrPersonalExtern from './HrPersonalExtern.jsx'
 import HrRecomandari from './HrRecomandari.jsx'
 import HrAutorizatiiCitire from './HrAutorizatiiCitire.jsx'
 import HrTipuriAutorizatii from './HrTipuriAutorizatii.jsx'
+import HrDiplomeCalificari from './HrDiplomeCalificari.jsx'
+import HrFormareProfesionala from './HrFormareProfesionala.jsx'
 
 // Theme
 const G = {
@@ -214,6 +216,7 @@ export default function HRPage() {
   const tabs = [
     { key: 'personal',    icon: '👥', label: 'Angajați' },
     { key: 'autorizatii', icon: '📋', label: 'Autorizații' },
+    { key: 'formare',     icon: '🎓', label: 'Formare (2 ani)' },   // TKT-2026-0198
     { key: 'extern',      icon: '🤝', label: 'Personal extern' },
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z + stats.viza_expirat },
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
@@ -300,7 +303,8 @@ export default function HRPage() {
       {load && <div style={{padding:60, textAlign:'center', color:G.muted}}><div className="sp" style={{margin:'0 auto'}}/></div>}
       
       {!load && tab === 'personal' && <TabPersonal employees={employees} autorizatii={autorizatii} onClickEmp={setEditEmp} showToast={showToast} />}
-      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} employees={employees} onClickEmp={setEditEmp} onAddAut={setShowAddAut} isAdmin={isAdmin} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} istoric={istoricAut} onReinnoieste={setReinnoireAut} />}
+      {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} employees={employees} onClickEmp={setEditEmp} onAddAut={setShowAddAut} isAdmin={isAdmin} canAccessPersonal={canAccessPersonal} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} istoric={istoricAut} onReinnoieste={setReinnoireAut} />}
+      {!load && tab === 'formare' && <HrFormareProfesionala employees={employees} autorizatii={autorizatii} tipuri={tipuri} profile={profile} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} onEditViza={(a) => setEditAut({ ...a, _focusViza: true })} />}
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
@@ -489,8 +493,27 @@ function TabPersonal({ employees, autorizatii, onClickEmp, showToast }) {
 // ===========================================================================
 // TAB AUTORIZAȚII — tabel cu toate
 // ===========================================================================
-function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAddAut, isAdmin, onReload, showToast, onEditAut, istoric = [], onReinnoieste }) {
+function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAddAut, isAdmin, canAccessPersonal = false, onReload, showToast, onEditAut, istoric = [], onReinnoieste }) {
   const [showIstoric, setShowIstoric] = useState(false)
+  const [showDiplome, setShowDiplome] = useState(false)   // TKT-2026-0196: diplome/calificări din dosare (ex. lăcătuși)
+  // TKT-2026-0265/0266: CV-ul stă deja în dosarul personal (tip „cv") — îl arătăm lângă nume,
+  // fără să mai fie atașat o dată la autorizații. RLS: îl văd doar cei cu acces la datele personale.
+  const [cvDupaAngajat, setCvDupaAngajat] = useState({})
+  useEffect(() => {
+    if (!canAccessPersonal) return
+    let anulat = false
+    supabase.from('hr_documente_personale')
+      .select('employee_id, fisier_path, fisier_nume, uploadat_la, tip:hr_documente_personale_tipuri!inner(cod)')
+      .eq('tip.cod', 'cv').eq('activ', true).is('deleted_at', null).not('fisier_path', 'is', null)
+      .order('uploadat_la', { ascending: false }).limit(3000)
+      .then(({ data }) => {
+        if (anulat || !data) return
+        const m = {}
+        for (const d of data) if (!m[d.employee_id]) m[d.employee_id] = d   // cel mai recent CV per om
+        setCvDupaAngajat(m)
+      })
+    return () => { anulat = true }
+  }, [canAccessPersonal])
   const [search, setSearch] = useState('')
   const [catFilter, setCatFilter] = useState('Toate')
   const [tipFilter, setTipFilter] = useState('')  // task #71: filtru pe tipul exact de autorizație (denumire), pt. export calificări
@@ -797,7 +820,14 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
   return (
     <div>
       {/* Export sudori pt propuneri tehnice: tabelul + scan-urile (anexele fizice) */}
-      <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginBottom:10}}>
+      <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginBottom:10, flexWrap:'wrap'}}>
+        {canAccessPersonal && (
+          <button onClick={() => setShowDiplome(v => !v)}
+            title="Diplomele și certificatele de calificare din dosarele personale (ex. toți lăcătușii cu seria și nr. diplomei) — cu export Excel"
+            style={{padding:'7px 13px', background: showDiplome ? G.hr + '22' : 'transparent', color:G.hr, border:`1px solid ${G.hr}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700}}>
+            🎓 Diplome & calificări (dosare)
+          </button>
+        )}
         <button onClick={exportSudoriXlsx} disabled={!!exporting}
           style={{padding:'7px 13px', background:'transparent', color:G.green, border:`1px solid ${G.green}55`, borderRadius:8, cursor:'pointer', fontSize:12, fontWeight:700, opacity:exporting ? .6 : 1}}>
           {exporting === 'xlsx' ? '…' : '📤'} Export sudori (XLSX)
@@ -817,6 +847,7 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
           {exporting === 'pdf' ? 'Se generează…' : '📎'} Anexă PDF (opis + scan-uri)
         </button>
       </div>
+      {canAccessPersonal && showDiplome && <HrDiplomeCalificari showToast={showToast} onClose={() => setShowDiplome(false)} />}
       {/* === CHIP-URI FILTRU pe TIP DOCUMENT === */}
       {(() => {
         const tipCountsAll = autorizatii.reduce((acc, a) => {
@@ -941,6 +972,11 @@ function TabAutorizatii({ autorizatii, tipuri, employees = [], onClickEmp, onAdd
                         style={{cursor:'pointer', color:G.blue, textDecoration:'underline dotted'}}>{a.employee_name}</span>
                     ) : a.employee_name })()}
                     {functieAngajat(a.employee_id) && <div style={{fontSize:10, color:G.muted, fontWeight:400}}>{functieAngajat(a.employee_id)}</div>}
+                    {cvDupaAngajat[a.employee_id] && (
+                      <button onClick={(e) => { e.stopPropagation(); handleViewPdf(cvDupaAngajat[a.employee_id].fisier_path, 'documente-personal') }}
+                        title={`CV din dosarul personal${cvDupaAngajat[a.employee_id].fisier_nume ? ': ' + cvDupaAngajat[a.employee_id].fisier_nume : ''} — nu trebuie atașat și aici`}
+                        style={{marginTop:4, padding:'1px 7px', background:G.blue+'18', color:G.blue, border:`1px solid ${G.blue}44`, borderRadius:4, fontSize:10, fontWeight:700, cursor:'pointer'}}>📄 CV</button>
+                    )}
                   </td>
                   <td style={tdStyle}>
                     <div style={{fontWeight:600}}>{a.tip_denumire}</div>
@@ -1045,11 +1081,58 @@ function TipuriAutorizatiiEditor({ tipuri, onReload, showToast }) {
     onReload()
   }
 
+  // TKT-2026-0292/0293/0295: HR adaugă singur o calificare/tip nou (până acum doar se editau cele existente)
+  const CATEGORII = ['profesional', 'cursuri', 'autorizari', 'anre', 'iscir', 'sudura', 'isu', 'transport', 'medical', 'mediu', 'altele']
+  const gol = { denumire: '', categorie: 'profesional', calificare_denumire: '', cod_cor: '' }
+  const [nou, setNou] = useState(gol)
+  const [adaug, setAdaug] = useState(false)
+  const codDin = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'TIP'
+  const adaugaTip = async () => {
+    const den = nou.denumire.trim()
+    if (!den) { showToast('Scrie denumirea tipului', 'error'); return }
+    if (tipuri.some(t => t.denumire.trim().toLowerCase() === den.toLowerCase())) { showToast('Există deja un tip cu denumirea asta', 'error'); return }
+    const cor = nou.cod_cor.trim()
+    if (cor && !/^\d{6}$/.test(cor)) { showToast('Codul COR are 6 cifre', 'error'); return }
+    setAdaug(true)
+    const baza = codDin(den)
+    let error
+    for (let i = 0; i < 5; i++) {
+      ({ error } = await supabase.from('hr_autorizatii_tipuri').insert({
+        cod: i ? `${baza}_${i + 1}` : baza, denumire: den, categorie: nou.categorie,
+        calificare_denumire: nou.calificare_denumire.trim() || null, cod_cor: cor || null,
+      }))
+      if (error?.code !== '23505') break
+    }
+    setAdaug(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast(`✓ Tip nou adăugat: ${den}`)
+    setNou(gol)
+    onReload()
+  }
+
   return (
     <div style={{...S.card, padding:14, marginBottom:14, borderColor: G.hr + '66'}}>
       <div style={{fontSize:13, fontWeight:700, color:G.hr, marginBottom:4}}>⚙ Tipuri de autorizații — calificare atestată și cod COR</div>
       <div style={{fontSize:11, color:G.muted, marginBottom:10}}>
         Completează cod COR doar pe tipurile care atestă o calificare/ocupație. Tipurile fără cod COR nu intră în raportul „📑 Calificare &gt; CIM".
+      </div>
+      <div style={{display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', marginBottom:12, padding:10, background:G.bg, borderRadius:8, border:`1px dashed ${G.hr}66`}}>
+        <span style={{fontSize:12, fontWeight:700, color:G.hr}}>➕ Tip nou:</span>
+        <input value={nou.denumire} onChange={e => setNou(n => ({ ...n, denumire: e.target.value }))}
+          placeholder="Denumire (ex: Operator devize)" style={{...S.input, padding:'6px 10px', flex:'2 1 220px'}} />
+        <select value={nou.categorie} onChange={e => setNou(n => ({ ...n, categorie: e.target.value }))}
+          style={{...S.input, padding:'6px 10px', flex:'0 1 130px'}}>
+          {CATEGORII.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <input value={nou.calificare_denumire} onChange={e => setNou(n => ({ ...n, calificare_denumire: e.target.value }))}
+          placeholder="Calificare (opțional)" style={{...S.input, padding:'6px 10px', flex:'1 1 160px'}} />
+        <input value={nou.cod_cor} onChange={e => setNou(n => ({ ...n, cod_cor: e.target.value }))}
+          placeholder="Cod COR" style={{...S.input, padding:'6px 10px', width:100}} />
+        <button onClick={adaugaTip} disabled={adaug || !nou.denumire.trim()}
+          style={{padding:'6px 12px', background: nou.denumire.trim() ? G.green : G.surface, color: nou.denumire.trim() ? '#fff' : G.muted,
+                  border:`1px solid ${nou.denumire.trim() ? G.green : G.border}`, borderRadius:6, cursor: nou.denumire.trim() ? 'pointer' : 'default', fontSize:12, fontWeight:700}}>
+          {adaug ? '…' : 'Adaugă'}
+        </button>
       </div>
       <div style={{overflowX:'auto'}}>
         <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>

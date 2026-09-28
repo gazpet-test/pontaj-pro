@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS public.ofertare_plansa_coada (
   lease_pana    timestamptz,
   runde         int    NOT NULL DEFAULT 0,
   cost_usd      numeric(10,4) NOT NULL DEFAULT 0,
-  plafon_usd    numeric(10,2),                 -- NULL = fără plafon pe job; valoarea implicită o decide Razvan
+  plafon_usd    numeric(10,2) DEFAULT 10,      -- D1 Răzvan 27.09: 10 USD pe planșă (NULL => workerul folosește tot 10)
+  claim_token   uuid,                          -- unic per preluare: scrierile workerului se condiționează pe el, nu pe nume
   jurnal        jsonb  NOT NULL DEFAULT '[]'::jsonb, -- pe rundă: {la, body, status, citite_acum, zone, in_lucru_alt_tab, cost_usd, ms}
   rezultat      jsonb,                         -- sumarul final (felii_citite, erori, tronsoane, lungime, cantitati)
   eroare        text,
@@ -60,6 +61,32 @@ GRANT ALL ON public.ofertare_plansa_coada TO service_role;
 CREATE POLICY ofertare_plansa_coada_citire ON public.ofertare_plansa_coada
   FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
 
+-- Registrul păstrează ziua REZERVĂRII, inclusiv după retry/re-claim sau regularizare a doua zi.
+CREATE TABLE IF NOT EXISTS public.ofertare_plansa_buget (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  job_id bigint NOT NULL REFERENCES public.ofertare_plansa_coada(id),
+  claim_token uuid NOT NULL,
+  zi date NOT NULL DEFAULT ((clock_timestamp() AT TIME ZONE 'Europe/Bucharest')::date),
+  rezervat_usd numeric(10,4) NOT NULL CHECK (rezervat_usd > 0 AND rezervat_usd < 'Infinity'::numeric),
+  cost_usd numeric(10,4) CHECK (cost_usd >= 0 AND cost_usd < 'Infinity'::numeric),
+  stare text NOT NULL DEFAULT 'rezervat' CHECK (stare IN ('rezervat', 'regularizat', 'incert')),
+  creat_la timestamptz NOT NULL DEFAULT clock_timestamp(),
+  regularizat_la timestamptz,
+  CHECK ((stare = 'rezervat' AND cost_usd IS NULL AND regularizat_la IS NULL)
+      OR (stare <> 'rezervat' AND cost_usd IS NOT NULL AND regularizat_la IS NOT NULL)),
+  CHECK (stare <> 'incert' OR cost_usd >= rezervat_usd)
+);
+CREATE INDEX IF NOT EXISTS ofertare_plansa_buget_job ON public.ofertare_plansa_buget(job_id);
+CREATE INDEX IF NOT EXISTS ofertare_plansa_buget_zi ON public.ofertare_plansa_buget(zi);
+ALTER TABLE public.ofertare_plansa_buget ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.ofertare_plansa_buget FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.ofertare_plansa_buget TO authenticated;
+GRANT ALL ON public.ofertare_plansa_buget TO service_role;
+REVOKE ALL ON SEQUENCE public.ofertare_plansa_buget_id_seq FROM PUBLIC, anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.ofertare_plansa_buget_id_seq TO service_role;
+CREATE POLICY ofertare_plansa_buget_citire ON public.ofertare_plansa_buget
+  FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+
 -- ---- Înscriere (UI) — poarta pe cheltuială verificată ÎN SQL (aceeași regulă ca poateCheltui din poarta.ts) ----
 CREATE OR REPLACE FUNCTION public.ofertare_plansa_coada_inscrie(p_doc_id bigint, p_mod text DEFAULT 'citeste')
 RETURNS jsonb
@@ -74,6 +101,7 @@ DECLARE
   v_owner boolean := false;
   v_sha   text;
   v_id    bigint;
+  v_mod_existent text;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'neautentificat'; END IF;
   IF p_mod NOT IN ('citeste', 'continua', 'reia_erori') THEN RAISE EXCEPTION 'mod invalid'; END IF;
@@ -106,12 +134,13 @@ BEGIN
   RETURNING id INTO v_id;
 
   IF v_id IS NULL THEN
-    SELECT q.id INTO v_id FROM ofertare_plansa_coada q
+    -- un singur job activ pe tăiere: întoarcem modul JOBULUI EXISTENT (UI nu afișează modul cerut ca fiind cel pus în coadă)
+    SELECT q.id, q.mod INTO v_id, v_mod_existent FROM ofertare_plansa_coada q
      WHERE q.doc_id = p_doc_id AND COALESCE(q.taiat_la, '') = COALESCE(v_doc.analiza -> 'plansa' ->> 'taiat_la', '')
        AND q.stare IN ('asteapta', 'lucru');
-    RETURN jsonb_build_object('id', v_id, 'existent', true);
+    RETURN jsonb_build_object('id', v_id, 'existent', true, 'mod', v_mod_existent);
   END IF;
-  RETURN jsonb_build_object('id', v_id, 'existent', false);
+  RETURN jsonb_build_object('id', v_id, 'existent', false, 'mod', p_mod);
 END;
 $$;
 REVOKE EXECUTE ON FUNCTION public.ofertare_plansa_coada_inscrie(bigint, text) FROM PUBLIC, anon;
@@ -126,13 +155,14 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
   -- joburile reluate de prea multe ori (worker mort repetat) nu se mai iau: eroare vizibilă
+  -- Rezervările workerului căzut rămân în registru; claim-ul nu le eliberează și nu le schimbă ziua.
   UPDATE ofertare_plansa_coada SET stare = 'eroare', eroare = 'lease expirat de ' || incercari || ' ori — worker oprit repetat',
-         terminat_la = now()
+         terminat_la = now(), claim_token = NULL
    WHERE stare = 'lucru' AND lease_pana < now() AND incercari >= max_incercari;
 
   RETURN QUERY
   UPDATE ofertare_plansa_coada q
-     SET stare = 'lucru', luat_de = p_worker, luat_la = now(),
+     SET stare = 'lucru', luat_de = p_worker, luat_la = now(), claim_token = gen_random_uuid(),
          lease_pana = now() + make_interval(mins => GREATEST(p_lease_min, 1)), incercari = q.incercari + 1
    WHERE q.id = (
      SELECT c.id FROM ofertare_plansa_coada c
@@ -147,6 +177,90 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.ofertare_plansa_coada_ia(text, int) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.ofertare_plansa_coada_ia(text, int) TO service_role;
 
+-- Ordinea comună a lock-urilor: zi bugetară → job → rezervare. Lock-ul de job serializează și zile diferite.
+-- SECURITY INVOKER: numai service_role are drepturile necesare; niciun privilegiu suplimentar nu e necesar.
+CREATE OR REPLACE FUNCTION public.ofertare_plansa_rezerva(
+  p_job_id bigint, p_claim_token uuid, p_suma numeric, p_plafon_zi numeric)
+RETURNS jsonb LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+DECLARE
+  v_zi date;
+  v_job ofertare_plansa_coada%ROWTYPE;
+  v_job_cost numeric;
+  v_zi_cost numeric;
+  v_id bigint;
+BEGIN
+  IF p_suma IS NULL OR p_suma <= 0 OR p_suma >= 'Infinity'::numeric
+     OR p_plafon_zi IS NULL OR p_plafon_zi < 0 OR p_plafon_zi >= 'Infinity'::numeric THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'buget invalid');
+  END IF;
+  -- Rotunjire conservatoare la precizia registrului.
+  p_suma := ceil(p_suma * 10000) / 10000;
+  LOOP
+    v_zi := (clock_timestamp() AT TIME ZONE 'Europe/Bucharest')::date;
+    PERFORM pg_advisory_xact_lock(494003, v_zi - DATE '2000-01-01');
+    EXIT WHEN v_zi = (clock_timestamp() AT TIME ZONE 'Europe/Bucharest')::date;
+  END LOOP;
+  SELECT * INTO v_job FROM ofertare_plansa_coada WHERE id = p_job_id FOR UPDATE;
+  IF NOT FOUND OR v_job.stare <> 'lucru' OR p_claim_token IS NULL
+     OR v_job.claim_token IS DISTINCT FROM p_claim_token THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'lease');
+  END IF;
+  SELECT COALESCE(sum(COALESCE(cost_usd, rezervat_usd)), 0) INTO v_job_cost
+    FROM ofertare_plansa_buget WHERE job_id = p_job_id;
+  IF v_job_cost + p_suma > COALESCE(v_job.plafon_usd, 10) THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'plafon job');
+  END IF;
+  SELECT COALESCE(sum(COALESCE(cost_usd, rezervat_usd)), 0) INTO v_zi_cost
+    FROM ofertare_plansa_buget WHERE zi = v_zi;
+  IF v_zi_cost + p_suma > p_plafon_zi THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'plafon pe zi');
+  END IF;
+  INSERT INTO ofertare_plansa_buget(job_id, claim_token, zi, rezervat_usd)
+    VALUES (p_job_id, p_claim_token, v_zi, p_suma) RETURNING id INTO v_id;
+  UPDATE ofertare_plansa_coada SET cost_usd = v_job_cost + p_suma WHERE id = p_job_id;
+  RETURN jsonb_build_object('ok', true, 'rezervare_id', v_id);
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION public.ofertare_plansa_rezerva(bigint, uuid, numeric, numeric) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ofertare_plansa_rezerva(bigint, uuid, numeric, numeric) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.ofertare_plansa_regularizeaza(
+  p_rezervare_id bigint, p_claim_token uuid, p_cost numeric, p_cert boolean)
+RETURNS jsonb LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+DECLARE
+  v_r ofertare_plansa_buget%ROWTYPE;
+  v_total numeric;
+BEGIN
+  SELECT * INTO v_r FROM ofertare_plansa_buget WHERE id = p_rezervare_id;
+  IF NOT FOUND OR p_claim_token IS NULL OR v_r.claim_token IS DISTINCT FROM p_claim_token THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'lease');
+  END IF;
+  IF (p_cert IS TRUE AND p_cost IS NULL)
+     OR (p_cost IS NOT NULL AND (p_cost < 0 OR p_cost >= 'Infinity'::numeric)) THEN
+    RETURN jsonb_build_object('ok', false, 'motiv', 'cost invalid');
+  END IF;
+  PERFORM pg_advisory_xact_lock(494003, v_r.zi - DATE '2000-01-01');
+  PERFORM 1 FROM ofertare_plansa_coada WHERE id = v_r.job_id FOR UPDATE;
+  SELECT * INTO v_r FROM ofertare_plansa_buget WHERE id = p_rezervare_id FOR UPDATE;
+  -- Tokenul aparține rezervării: și un răspuns întârziat poate contabiliza costul claim-ului vechi.
+  -- Repetarea RPC-ului nu regularizează a doua oară și nu poate elibera ulterior o sumă incertă.
+  IF v_r.stare = 'rezervat' THEN
+    UPDATE ofertare_plansa_buget
+       SET cost_usd = CASE WHEN p_cert IS TRUE THEN ceil(p_cost * 10000) / 10000
+                          ELSE greatest(ceil(p_cost * 10000) / 10000, rezervat_usd) END,
+           stare = CASE WHEN p_cert IS TRUE THEN 'regularizat' ELSE 'incert' END,
+           regularizat_la = clock_timestamp()
+     WHERE id = p_rezervare_id AND claim_token = p_claim_token;
+  END IF;
+  SELECT COALESCE(sum(COALESCE(cost_usd, rezervat_usd)), 0) INTO v_total
+    FROM ofertare_plansa_buget WHERE job_id = v_r.job_id;
+  UPDATE ofertare_plansa_coada SET cost_usd = v_total WHERE id = v_r.job_id;
+  RETURN jsonb_build_object('ok', true, 'cost_usd', v_total);
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION public.ofertare_plansa_regularizeaza(bigint, uuid, numeric, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ofertare_plansa_regularizeaza(bigint, uuid, numeric, boolean) TO service_role;
+
 -- Prelungirea lease-ului și finalizarea le face workerul direct (service_role), condiționat:
---   UPDATE ofertare_plansa_coada SET lease_pana = now() + interval '10 min', runde = ..., cost_usd = ..., jurnal = ...
---    WHERE id = $1 AND luat_de = $worker AND stare = 'lucru'   -- 0 rânduri => lease pierdut => workerul se oprește
+--   UPDATE ofertare_plansa_coada SET lease_pana = now() + interval '10 min', runde = ..., jurnal = ...
+--    WHERE id = $1 AND claim_token = $token AND stare = 'lucru'   -- 0 rânduri => lease pierdut => workerul se oprește
