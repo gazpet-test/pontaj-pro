@@ -1516,11 +1516,11 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     d.analiza.citire_ai.gata === false ? (
                       <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
                         title="Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."
-                        onClick={() => reiaPlansa(d, 'continua')}>⏯ continuă citirea</button>
+                        onClick={() => { if (window.confirm('Continui citirea planșei cu AI — zonele necitite se plătesc (zonele deja citite nu). Continui?')) reiaPlansa(d, 'continua') }}>⏯ continuă citirea</button>
                     ) : (d.analiza.citire_ai.sumar?.erori > 0 ? (
                       <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
                         title={`Recitește DOAR zonele căzute: ${(d.analiza.citire_ai.sumar.zone_cazute || []).join(', ')}`}
-                        onClick={() => reiaPlansa(d, 'reia_erori')}>🔁 reia zonele căzute ({d.analiza.citire_ai.sumar.erori})</button>
+                        onClick={() => { if (window.confirm('Recitesc cu AI doar zonele căzute — se plătesc. Continui?')) reiaPlansa(d, 'reia_erori') }}>🔁 reia zonele căzute ({d.analiza.citire_ai.sumar.erori})</button>
                     ) : null)
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
@@ -1545,7 +1545,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                     ) : (
                     <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
                       title={plansaCitita(d) ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
-                      onClick={() => citestePlansa(d)}>
+                      onClick={() => { if (window.confirm('Citesc planșa cu AI — se taie în zone și fiecare zonă se plătește. Continui?')) citestePlansa(d) }}>
                       {plansaCitita(d) ? '📐 recitește' : '📐 citește'}
                     </button>
                     )
