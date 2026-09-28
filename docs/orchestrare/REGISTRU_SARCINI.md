@@ -49,3 +49,21 @@ Reguli: (1) sarcină delimitată: obiectiv, context, fișiere permise, restricț
 | JAK-V2-07c | Jakarinos | în lucru (worktree pontaj-pro-jak2, PID 7560) | spec C:\Users\Public\spec_v2_07c.md = cele 2 cerințe Copilot |
 | V2-J01 | Jakarinos | în lucru (worktree pontaj-pro-jak) | harness P2 |
 | V2-M01 | Miloi | relansat | prima rulare: 0 output — a cerut comandă de terminal, refuzată în headless (denied_actions: RunCommand). Lecție: promptul Miloi spune explicit „doar instrumente de citire, fără comenzi” + lista fișierelor |
+
+## Checkpoint noapte 2 — 29.09 ~00:05 (Gazpet Forge; poarta = Copilot)
+Regula nouă (Răzvan, 28.09 seara): peste noapte GO de merge/apply DOAR cu acceptul explicit al lui Copilot.
+
+| Task | Owner | Stare | Poartă |
+|---|---|---|---|
+| JAK-V2-01 #515 | Claude | MERGED + APLICAT live (timpi puși de server) | Copilot GO (după NO-GO pe timpi) |
+| JAK-V2-07 #516 | Jakarinos (07c) + Claude | MERGED + APLICAT live; 0 scrieri slabe, 0 FOR ALL | Copilot GO (după 2 NO-GO) |
+| V2-J01 #518 | Jakarinos | draft, 106/106; rulare P2 pe 103 = GO separat | — |
+| V2-J02 #519 | Jakarinos | MERGED cod, **APPLY HOLD** (0 pachete PT live; Jilava 02.10) | Copilot GO merge / HOLD apply |
+| V2-J03 #521 | Jakarinos | draft; vitest 55/55, deno 19/19 | la Copilot |
+| V2-J04 | — | **BLOCKED_DECISION**: SHA-256 server-side (edge care recalculează din Storage) | Răzvan |
+| V2-M01 | Miloi | salvat `docs/AUDIT_OFERTARE_V2/MILOI_V2_M01_parity.md`; 18/26 UI_ONLY | verificat Claude 7 rânduri |
+| V2-M03 #520 | Miloi | draft; 24/24; ID-uri finding corectate de Claude | — |
+| AUDIT-DEROGARE | — | NOU (Copilot): tabel/RPC append-only pt derogarea owner înainte de folosirea ca procedură | de planificat |
+
+Lecții noapte: (1) Miloi pune ID-uri de finding fără să le verifice → review obligatoriu pe etichete; (2) scriptul cgpt iese înainte să termine Copilot → citit cu `tail` după 60–90 s; (3) containerul cloud se resetează → PG16 local se repornește la fiecare check-in.
+Nume echipă propus de Copilot: **Gazpet Forge** (alternativ Gazpet Control Room) — decide Răzvan.
