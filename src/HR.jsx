@@ -1045,11 +1045,58 @@ function TipuriAutorizatiiEditor({ tipuri, onReload, showToast }) {
     onReload()
   }
 
+  // TKT-2026-0292/0293/0295: HR adaugă singur o calificare/tip nou (până acum doar se editau cele existente)
+  const CATEGORII = ['profesional', 'cursuri', 'autorizari', 'anre', 'iscir', 'sudura', 'isu', 'transport', 'medical', 'mediu', 'altele']
+  const gol = { denumire: '', categorie: 'profesional', calificare_denumire: '', cod_cor: '' }
+  const [nou, setNou] = useState(gol)
+  const [adaug, setAdaug] = useState(false)
+  const codDin = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || 'TIP'
+  const adaugaTip = async () => {
+    const den = nou.denumire.trim()
+    if (!den) { showToast('Scrie denumirea tipului', 'error'); return }
+    if (tipuri.some(t => t.denumire.trim().toLowerCase() === den.toLowerCase())) { showToast('Există deja un tip cu denumirea asta', 'error'); return }
+    const cor = nou.cod_cor.trim()
+    if (cor && !/^\d{6}$/.test(cor)) { showToast('Codul COR are 6 cifre', 'error'); return }
+    setAdaug(true)
+    const baza = codDin(den)
+    let error
+    for (let i = 0; i < 5; i++) {
+      ({ error } = await supabase.from('hr_autorizatii_tipuri').insert({
+        cod: i ? `${baza}_${i + 1}` : baza, denumire: den, categorie: nou.categorie,
+        calificare_denumire: nou.calificare_denumire.trim() || null, cod_cor: cor || null,
+      }))
+      if (error?.code !== '23505') break
+    }
+    setAdaug(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast(`✓ Tip nou adăugat: ${den}`)
+    setNou(gol)
+    onReload()
+  }
+
   return (
     <div style={{...S.card, padding:14, marginBottom:14, borderColor: G.hr + '66'}}>
       <div style={{fontSize:13, fontWeight:700, color:G.hr, marginBottom:4}}>⚙ Tipuri de autorizații — calificare atestată și cod COR</div>
       <div style={{fontSize:11, color:G.muted, marginBottom:10}}>
         Completează cod COR doar pe tipurile care atestă o calificare/ocupație. Tipurile fără cod COR nu intră în raportul „📑 Calificare &gt; CIM".
+      </div>
+      <div style={{display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', marginBottom:12, padding:10, background:G.bg, borderRadius:8, border:`1px dashed ${G.hr}66`}}>
+        <span style={{fontSize:12, fontWeight:700, color:G.hr}}>➕ Tip nou:</span>
+        <input value={nou.denumire} onChange={e => setNou(n => ({ ...n, denumire: e.target.value }))}
+          placeholder="Denumire (ex: Operator devize)" style={{...S.input, padding:'6px 10px', flex:'2 1 220px'}} />
+        <select value={nou.categorie} onChange={e => setNou(n => ({ ...n, categorie: e.target.value }))}
+          style={{...S.input, padding:'6px 10px', flex:'0 1 130px'}}>
+          {CATEGORII.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <input value={nou.calificare_denumire} onChange={e => setNou(n => ({ ...n, calificare_denumire: e.target.value }))}
+          placeholder="Calificare (opțional)" style={{...S.input, padding:'6px 10px', flex:'1 1 160px'}} />
+        <input value={nou.cod_cor} onChange={e => setNou(n => ({ ...n, cod_cor: e.target.value }))}
+          placeholder="Cod COR" style={{...S.input, padding:'6px 10px', width:100}} />
+        <button onClick={adaugaTip} disabled={adaug || !nou.denumire.trim()}
+          style={{padding:'6px 12px', background: nou.denumire.trim() ? G.green : G.surface, color: nou.denumire.trim() ? '#fff' : G.muted,
+                  border:`1px solid ${nou.denumire.trim() ? G.green : G.border}`, borderRadius:6, cursor: nou.denumire.trim() ? 'pointer' : 'default', fontSize:12, fontWeight:700}}>
+          {adaug ? '…' : 'Adaugă'}
+        </button>
       </div>
       <div style={{overflowX:'auto'}}>
         <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
