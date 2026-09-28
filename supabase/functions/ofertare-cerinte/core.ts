@@ -118,21 +118,24 @@ function intervalPagini(b: string): { de_la: number | null; pana_la: number | nu
 
 // ── verificarea pasajului: în textul bucății, nu pe cuvântul modelului ───────
 const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[„”"«»']/g, '').replace(/\s+/g, ' ').trim()
-function verificaPasaj(bucata: string, bucataNorm: string, mapaPoz: number[], pasaj: string | null | undefined): { verificat: boolean; pagina: number | null; pasaj: string | null } {
-  const p = typeof pasaj === 'string' ? pasaj.trim().slice(0, 300) : ''
-  if (p.length < 20) return { verificat: false, pagina: null, pasaj: p || null }
+export function verificaPasaj(bucata: string, bucataNorm: string, mapaPoz: number[], pasaj: string | null | undefined): { verificat: boolean; pasaj_partial: boolean; pagina: number | null; pasaj: string | null } {
+  // Verificăm întregul citat, inclusiv un eventual final de după caracterul 300.
+  const p = typeof pasaj === 'string' ? pasaj.trim() : ''
+  if (p.length < 20) return { verificat: false, pasaj_partial: false, pagina: null, pasaj: p || null }
   const pn = norm(p)
   let poz = bucataNorm.indexOf(pn)
-  if (poz < 0 && pn.length > 80) poz = bucataNorm.indexOf(pn.slice(0, 80))   // începutul citatului ajunge
-  if (poz < 0) return { verificat: false, pagina: null, pasaj: p }
+  const verificat = pn.length > 0 && poz >= 0
+  if (!pn) return { verificat: false, pasaj_partial: false, pagina: null, pasaj: p }
+  if (poz < 0 && pn.length > 80) poz = bucataNorm.indexOf(pn.slice(0, 80))
+  if (poz < 0) return { verificat: false, pasaj_partial: false, pagina: null, pasaj: p }
   // pagina = ultimul marcaj DE DINAINTEA poziției găsite (în textul original)
   const pozOrig = mapaPoz[Math.min(poz, mapaPoz.length - 1)] ?? 0
   let pagina: number | null = null
   for (const m of bucata.matchAll(MARCAJ)) { if ((m.index ?? 0) <= pozOrig) pagina = Number(m[1]); else break }
-  return { verificat: true, pagina, pasaj: p }
+  return { verificat, pasaj_partial: !verificat, pagina, pasaj: p }
 }
 // mapa poziție-normalizat → poziție-original (aproximativă, dar suficientă pentru marcaje)
-function mapaPozitii(s: string): { n: string; mapa: number[] } {
+export function mapaPozitii(s: string): { n: string; mapa: number[] } {
   const mapa: number[] = []
   let n = ''
   let ultimSpatiu = true
@@ -194,7 +197,7 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
     } else {
       const { data: fise } = await supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, text_extras').eq('licitatie_id', licId).eq('tip', 'fisa_date').in('status_procesare', ['procesat', 'partial'])
-      const fisa = (fise || []).find(f => (f.text_extras || '').length > 500)
+      const fisa = (fise || []).find((f: any) => (f.text_extras || '').length > 500)
       if (!fisa) return fail('Nicio fișă de date procesată — rulează întâi ingestia (🤖 Procesează) pe documentul tip „fișa de date”.')
       const tot = fisa.text_extras as string
       srcDocId = fisa.id
@@ -232,7 +235,7 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
       .eq('context_cheie', ck).eq('verdict', 'corectat').order('corectat_la', { ascending: false }).limit(3)
     const fewshot = (fb && fb.length)
       ? `\nEXEMPLE DE CORECȚII UMANE anterioare pe aceeași autoritate (învață forma din diferențe, NU copia conținutul):\n` +
-        fb.map((x, i) => `Exemplul ${i + 1}: AI: ${JSON.stringify(x.output_ai)} → corectat: ${JSON.stringify(x.output_corectat)}`).join('\n') + '\n'
+        fb.map((x: any, i: number) => `Exemplul ${i + 1}: AI: ${JSON.stringify(x.output_ai)} → corectat: ${JSON.stringify(x.output_corectat)}`).join('\n') + '\n'
       : ''
 
     if (reset && nrBucata === 0) {
@@ -271,25 +274,31 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
     let trunchiat = data.stop_reason === 'max_tokens'
     try {
       const m = clean.match(/\{[\s\S]*\}/)
-      const parsed = JSON.parse(m ? m[0] : '{}')
+      if (!m) throw new Error('JSON incomplet')
+      const parsed = JSON.parse(m[0])
       lista = Array.isArray(parsed.cerinte) ? parsed.cerinte : []
     } catch (_) {
       const dupaCerinte = clean.slice(clean.indexOf('"cerinte"'))
       const objs = dupaCerinte.match(/\{[^{}]*\}/g) || []
       for (const o of objs) { try { lista.push(JSON.parse(o)) } catch (_) {} }
       trunchiat = true
-      if (!lista.length && !modCorpus) return fail('AI a răspuns într-un format neașteptat (nici recuperarea nu a găsit cerințe).')
+      if (!lista.length) return { ...fail('AI a răspuns într-un format neașteptat (nici recuperarea nu a găsit cerințe).'), trunchiat: true }
     }
 
     const TIPURI = ['eliminatorie', 'propunere', 'forma', 'contractuala']
     const CAND = ['duae', 'depunere', 'primul_loc']
+    // La exact 150 nu putem demonstra că modelul a epuizat toate cerințele.
+    trunchiat = trunchiat || lista.length >= 150
     let verificate = 0
+    const pasaje_partiale: { index: number; pagina: number | null }[] = []
     const rows = lista
       .filter((c: any) => c && typeof c.text_cerinta === 'string' && c.text_cerinta.trim())
       .slice(0, 150)
-      .map((c: any) => {
+      .map((c: any, index: number) => {
         const v = verificaPasaj(slice, sliceNorm, mapa, c.pasaj)
         if (v.verificat) verificate++
+        // Metadate în rezultat; nu introducem o coloană inexistentă în INSERT.
+        if (v.pasaj_partial) pasaje_partiale.push({ index, pagina: v.pagina })
         // pagina: din pasajul găsit (sigur); altfel a modelului, doar dacă e în intervalul bucății
         const pagModel = Number.isInteger(c.pagina) ? Number(c.pagina) : null
         const pagOk = pagModel !== null && pagini.de_la !== null && pagini.pana_la !== null && pagModel >= pagini.de_la && pagModel <= pagini.pana_la
@@ -316,7 +325,7 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
     const continua = nrBucata + 1 < toate.length
     return {
       ok: true, sectiune: modCorpus ? undefined : sectiune, doc_id: modCorpus ? srcDocId : undefined,
-      cerinte: rows.length, pasaje_verificate: verificate, bucata: nrBucata + 1, bucati: toate.length, pagini,
+      cerinte: rows.length, pasaje_verificate: verificate, pasaje_partiale, bucata: nrBucata + 1, bucati: toate.length, pagini,
       continua, bucata_urmatoare: continua ? nrBucata + 1 : null,
       trunchiat, model: MODEL, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cost_usd: Number(((data.usage?.input_tokens || 0) * PRICE_IN + (data.usage?.output_tokens || 0) * PRICE_OUT).toFixed(4)),

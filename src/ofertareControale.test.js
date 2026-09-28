@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest'
-import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare, rolPiesa, controlPachetComplet } from './ofertareControale.js'
+import { controlCantitati, controlGarantie, controlAnexe, normalizeazaRef, controlIdentitate, controlNumereCheie, controlParticipare, controlTronsoane, clasificaFrazaParticipare, rolPiesa, controlPachetComplet, controlGraficSursa } from './ofertareControale.js'
+
+describe('R13 — corespondența fiecărei piese cu graficul înghețat curent', () => {
+  const piesa = sursa_versiune => ({ nume: 'Grafic Gantt.pdf', sursa_versiune })
+  const control = (...fisiere) => controlGraficSursa({ grafic_versiune: 3, pachet_fisiere: fisiere })
+  it.each(['3', 'grafic@v3'])('sursa explicită %s corespunde versiunii curente', sursa => {
+    expect(control(piesa(sursa)).stare).toBe('ok')
+  })
+  it('o versiune veche declarată blochează, chiar dacă altă piesă e corectă sau fără sursă', () => {
+    const r = control(piesa('3'), piesa(null), { ...piesa('grafic@v2'), nume: 'PERT.pdf' })
+    expect(r.stare).toBe('block')
+    expect(r.detalii).toContain('curentă 3')
+    expect(r.detalii).toContain('PERT.pdf (versiunea 2)')
+  })
+  it.each([null, undefined, '', 'capitole@{3:v3}', 'sha256-necorelat', 'grafic@v3-rest'])('existența versiunii fără legătură (%s) nu dovedește sursa', sursa => {
+    const r = control(piesa(sursa))
+    expect(r.stare).toBe('warn')
+    expect(r.detalii).toMatch(/nu putem verifica corespondența/i)
+  })
+  it('toate piesele trebuie legate, inclusiv cele identificate numai după rol', () => {
+    expect(control(piesa('3'), { nume: 'anexa.pdf', rol: 'grafic' }).stare).toBe('warn')
+  })
+})
 
 // Regula: referinta = lista F3 (pe ea se pun banii). Memoriu/planse/C6 diferite = de clarificat, nu de ales.
 // R5 (25.09.2026): F3 folosita ca referinta trebuie sa vina cu campul de validare; cazurile vechi = F3 validata integral.
