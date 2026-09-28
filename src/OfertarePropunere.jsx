@@ -1879,7 +1879,13 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
         const cale = `pt/${licId}/v${p.versiune}/depus/${rol}_${String(f.name).replace(/[^A-Za-z0-9._-]+/g, '_')}`
         const { error } = await supabase.storage.from('ofertare').upload(cale, f, { upsert: false, contentType: f.type || undefined })
         if (error && !/exists/i.test(error.message)) throw new Error(`upload ${f.name}: ${error.message}`)
-        rows.push({ pachet_id: p.id, rol, nume: f.name, mime: f.type || null, size_bytes: f.size, sha256, fisier_path: cale })
+        // R11 (Copilot 28.09): hash-ul din manifest trebuie să fie al obiectului EFECTIV stocat — citim
+        // înapoi din bucket și comparăm; dacă diferă (ex. un fișier vechi la aceeași cale), refuzăm.
+        const { data: stocat, error: eDl } = await supabase.storage.from('ofertare').download(cale)
+        if (eDl || !stocat) throw new Error(`verificare după upload ${f.name}: ${eDl?.message || 'fișier negăsit'}`)
+        const shaStocat = await sha256Hex(stocat)
+        if (shaStocat !== sha256) throw new Error(`${f.name}: fișierul din bucket (SHA ${shaStocat.slice(0, 12)}…) nu e cel ales (SHA ${sha256.slice(0, 12)}…) — nu marchez depus`)
+        rows.push({ pachet_id: p.id, rol, nume: f.name, mime: f.type || null, size_bytes: stocat.size, sha256: shaStocat, fisier_path: cale })
       }
       for (const f of finale) await urca(f, 'depus_final')
       await urca(dovada, 'dovada_seap')
