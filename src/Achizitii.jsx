@@ -1471,6 +1471,8 @@ function ComandaDetailModal({ comanda, ctx, profile, profilesMap, onClose, actio
           {/* TKT-2026-0040: undo „ajunsă" apăsat din greșeală → revine ÎN TRANZIT (înainte de recepție) */}
           {c.status === 'ajunsa' && ctx.canCreate && <Btn color={G.dim} onClick={() => actions.markStatus(c, 'in_tranzit')}>↩️ Anulează „ajunsă"</Btn>}
           {c.status === 'receptionata' && !c.este_servicii && <Btn color={G.green} onClick={() => actions.deschidePredare(c)}>🏬 Predare magazie (PV 2)</Btn>}
+          {/* TKT-2026-0195 */}
+          {['emisa','in_tranzit','ajunsa','receptionata'].includes(c.status) && ctx.canCreate && !c.este_servicii && (c.linii || []).some(l => l.cantitate_primita != null && Number(l.cantitate_primita) > (Number(l.cantitate_intrata_stoc) || 0)) && <Btn color={G.green} onClick={() => actions.predareParțiala(c)}>🏬 Predare parțială în stoc</Btn>}
           {/* TKT-2026-0131 (Kostas): comandă în stoc → creezi transport cu toate materialele,
               avizul se generează prin fluxul normal din Logistică → Transporturi */}
           {(c.status === 'in_stoc' || c.status === 'receptionata') && ctx.canCreate && !c.este_servicii && <Btn color={G.blue} onClick={() => actions.deschideAvizTransport(c)}>🚚 Creează aviz (transport)</Btn>}
@@ -1944,6 +1946,7 @@ export default function AchizitiiPage() {
     deschideReceptieTransport: (c) => { setSelectedId(null); setReceptieTransportId(c.id) },
     deschideAvizTransport: (c) => { setSelectedId(null); setAvizTransportId(c.id) },
     deschidePredare: (c) => { setSelectedId(null); setPredareId(c.id) },
+    predareParțiala: (c) => predareParțiala(c),
     deschideReceptieBucati: (c) => { setSelectedId(null); setReceptieBucatiId(c.id) },
   }
 
@@ -2003,6 +2006,8 @@ export default function AchizitiiPage() {
 
       // Idempotență: dacă intrarea acestei comenzi a fost deja înregistrată (retry după
       // o eroare mai jos în lanț), NU repet mișcările de stoc — evit dublarea.
+      // TKT-2026-0195: după o predare parțială, fluxul de transport direct ar dubla stocul
+      if ((c.linii || []).some(l => Number(l.cantitate_intrata_stoc) > 0)) throw new Error('Comanda are deja predări parțiale în stoc — folosește „Predare magazie (PV 2)" pentru rest.')
       const { count: dejaIntrat } = await supabase.from('stocuri_miscari')
         .select('id', { count: 'exact', head: true })
         .eq('ref_tip', 'comanda_furnizor').eq('ref_id', c.id).eq('tip', 'intrare_achizitie')
@@ -2104,25 +2109,51 @@ export default function AchizitiiPage() {
       await loadAll()
     } catch (e) { showToast('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
   }
-  const intraInStoc = async (c) => {
+  // TKT-2026-0195: intrarea în stoc e incrementală pe linie — intră doar diferența față de
+  // `cantitate_intrata_stoc`. Linia se „rezervă" întâi printr-un update condiționat (nimeni altcineva
+  // n-a intrat între timp), apoi se scrie mișcarea; dacă mișcarea eșuează, rezervarea se anulează.
+  // parțial=true: doar liniile cu „Recepție pe repere" (cantitate_primita completată).
+  const intraInStoc = async (c, { partial = false } = {}) => {
     const locatie_tip = c.livrare_tip === 'sediu' ? 'sediu' : 'proiect'
     const locatie_id = c.livrare_tip === 'sediu' ? null : (c.proiect_id || null)
-    // Intrare prin registrul de mișcări → trigger aplică în stoc + calculează cost mediu (WAC) din preț
-    // TKT-2026-0176: intră DOAR cantitățile efectiv primite (liniiReceptionate)
-    const miscari = liniiReceptionate(c.linii)
-      .map(l => ({
-        locatie_tip, locatie_id,
-        material_denumire: l.denumire, um: l.um || null,
-        delta: Number(l.cantitate || 0),
-        tip: 'intrare_achizitie',
-        motiv: `Recepție ${c.numar_comanda}`,
+    let intrate = 0
+    for (const l of (c.linii || [])) {
+      if (!l.denumire) continue
+      if (partial && l.cantitate_primita == null) continue
+      const tinta = partial ? (Number(l.cantitate_primita) || 0) : qtyEfectiva(l)
+      const deja = Number(l.cantitate_intrata_stoc) || 0
+      const delta = tinta - deja
+      if (!(delta > 0)) continue
+      const { data: rez, error: eR } = await supabase.from('comenzi_furnizor_linii')
+        .update({ cantitate_intrata_stoc: tinta }).eq('id', l.id).eq('cantitate_intrata_stoc', deja).select('id').maybeSingle()
+      if (eR) throw eR
+      if (!rez) throw new Error(`Reperul „${l.denumire}" a fost modificat între timp — reîncarcă pagina.`)
+      const { error } = await supabase.from('stocuri_miscari').insert({
+        locatie_tip, locatie_id, material_denumire: l.denumire, um: l.um || null,
+        delta, tip: 'intrare_achizitie',
+        motiv: `${partial ? 'Predare parțială' : 'Recepție'} ${c.numar_comanda}`,
         ref_tip: 'comanda_furnizor', ref_id: c.id,
         pret_unitar: (l.pret_unitar != null && l.pret_unitar !== '') ? Number(l.pret_unitar) : null,
-      }))
-    if (miscari.length) {
-      const { error } = await supabase.from('stocuri_miscari').insert(miscari)
-      if (error) throw error
+      })
+      if (error) {
+        await supabase.from('comenzi_furnizor_linii').update({ cantitate_intrata_stoc: deja }).eq('id', l.id).eq('cantitate_intrata_stoc', tinta)
+        throw error
+      }
+      intrate++
     }
+    return intrate
+  }
+  const predareParțiala = async (c) => {
+    const lista = (c.linii || []).filter(l => l.denumire && l.cantitate_primita != null && Number(l.cantitate_primita) > (Number(l.cantitate_intrata_stoc) || 0))
+    if (!lista.length) { showToast('Nimic nou de dat în stoc — completează întâi „📦 Recepție pe repere".', 'warn'); return }
+    const txt = lista.map(l => `• ${l.denumire}: +${fmtNr(Number(l.cantitate_primita) - (Number(l.cantitate_intrata_stoc) || 0))} ${l.um || ''}`).join('\n')
+    if (!window.confirm(`Predare parțială către magazie — ${c.numar_comanda}\n\n${txt}\n\nConfirmi că magazionerul a primit aceste cantități? Intră acum în stoc; restul intră la predarea finală.`)) return
+    setBusy(true)
+    try {
+      const n = await intraInStoc(c, { partial: true })
+      showToast(`🏬 ${n} repere intrate în stoc (predare parțială ${c.numar_comanda}).`)
+      setSelectedId(null); await loadAll()
+    } catch (e) { showToast('Eroare predare parțială: ' + (e.message || e), 'error'); await loadAll() } finally { setBusy(false) }
   }
   const finalizeazaPredare = async (pozaFile) => {
     const c = predareComanda; if (!c || !pozaFile) return
