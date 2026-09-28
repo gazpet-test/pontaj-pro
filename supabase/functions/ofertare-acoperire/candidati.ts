@@ -82,3 +82,52 @@ export function marcheazaSudoriNepotriviti(
   }
   return marcate
 }
+
+// ── R21 în cod: INSEMEX / ATEX pe FIRMĂ se acoperă MEREU prin partener ───────────────────
+// Decizie Răzvan 28.09.2026: Gazpet NU deține atestat INSEMEX (ATEX) ca societate și nu îl
+// urmărește — când licitația îl cere operatorului economic, vine de la o societate externă
+// (ATSD / Roconsult). Nu e un „gol" de documente Gazpet. Autorizațiile INSEMEX PERSONALE
+// (Toma Răzvan, Nica Eugen) rămân ale noastre: o cerință care vorbește de personal/persoane
+// NU intră aici, o acoperă catalogul de autorizații ca până acum.
+
+export const eCerintaInsemex = (text: string) =>
+  /insemex|\batex\b|ganex|atmosfer[ăa]? (potențial |potential )?exploziv/i.test(String(text || ''))
+const ePePersoana = (text: string) =>
+  /personal|persoan|specialist|electrician|responsabil|angajat|lucr[ăa]tor|sudor|operator(?!(ul)? economic)/i.test(String(text || ''))
+
+/** Cerință INSEMEX/ATEX adresată FIRMEI (nu unei persoane). */
+export const eCerintaInsemexFirma = (text: string) => eCerintaInsemex(text) && !ePePersoana(text)
+
+/** Partenerii care aduc INSEMEX/ATEX: fișa lor (`acopera` = observații) trebuie s-o spună. */
+export const parteneriInsemex = (parteneri: any[]) =>
+  (parteneri || []).filter((p: any) => /insemex|\batex\b/i.test(`${p.acopera || ''} ${p.nume || ''}`))
+
+/** Înlocuiește rândurile cerințelor INSEMEX-pe-firmă cu „acoperit_partener" pe partenerii
+ *  INSEMEX (max. PLAFON_CANDIDATI). Fără partener INSEMEX activ → un singur rând „gol" cu motiv
+ *  clar. Cerințele fără niciun rând (AI-ul le-a omis) nu se inventează. Întoarce lista nouă. */
+export function aplicaInsemexPrinPartener(
+  rows: any[], textCerintei: (cerintaId: number) => string, parteneri: any[],
+): any[] {
+  const tinta = new Set<number>()
+  for (const r of rows || []) if (eCerintaInsemexFirma(textCerintei(r.cerinta_id))) tinta.add(r.cerinta_id)
+  if (!tinta.size) return rows
+  const part = parteneriInsemex(parteneri).slice(0, PLAFON_CANDIDATI)
+  const afara = (rows || []).filter(r => !tinta.has(r.cerinta_id))
+  for (const cid of tinta) {
+    const baza = (rows || []).find(r => r.cerinta_id === cid)
+    const gol = {
+      autorizatie_id: null, doc_firma_id: null, experienta_id: null, recomandare_id: null,
+      document_personal_id: null, valabil_la_depunere: null, verificat_pe_scan: false,
+    }
+    if (!part.length) {
+      const motiv = 'Gazpet nu deține INSEMEX pe firmă (R21) — se acoperă prin subcontractor (ATSD / Roconsult), dar niciun partener activ nu are INSEMEX în fișă.'
+      afara.push({ ...baza, ...gol, mod: 'gol', status: 'gol', partener_id: null, motiv, referinta_text: motiv, scor: null })
+      continue
+    }
+    part.forEach((p: any, i: number) => {
+      const motiv = `INSEMEX pe firmă prin ${p.nume} (R21 — Gazpet nu deține atestat propriu); documentul se cere partenerului la depunere.`
+      afara.push({ ...baza, ...gol, mod: 'partener', status: 'acoperit_partener', partener_id: p.id, motiv, referinta_text: motiv, scor: 90 - i * 10 })
+    })
+  }
+  return afara
+}
