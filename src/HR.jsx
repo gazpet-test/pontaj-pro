@@ -24,6 +24,7 @@ import HrRecomandari from './HrRecomandari.jsx'
 import HrAutorizatiiCitire from './HrAutorizatiiCitire.jsx'
 import HrTipuriAutorizatii from './HrTipuriAutorizatii.jsx'
 import HrDiplomeCalificari from './HrDiplomeCalificari.jsx'
+import HrFormareProfesionala from './HrFormareProfesionala.jsx'
 
 // Theme
 const G = {
@@ -215,6 +216,7 @@ export default function HRPage() {
   const tabs = [
     { key: 'personal',    icon: '👥', label: 'Angajați' },
     { key: 'autorizatii', icon: '📋', label: 'Autorizații' },
+    { key: 'formare',     icon: '🎓', label: 'Formare (2 ani)' },   // TKT-2026-0198
     { key: 'extern',      icon: '🤝', label: 'Personal extern' },
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z + stats.viza_expirat },
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
@@ -302,6 +304,7 @@ export default function HRPage() {
       
       {!load && tab === 'personal' && <TabPersonal employees={employees} autorizatii={autorizatii} onClickEmp={setEditEmp} showToast={showToast} />}
       {!load && tab === 'autorizatii' && <TabAutorizatii autorizatii={autorizatii} tipuri={tipuri} employees={employees} onClickEmp={setEditEmp} onAddAut={setShowAddAut} isAdmin={isAdmin} canAccessPersonal={canAccessPersonal} onReload={loadAll} showToast={showToast} onEditAut={setEditAut} istoric={istoricAut} onReinnoieste={setReinnoireAut} />}
+      {!load && tab === 'formare' && <HrFormareProfesionala employees={employees} autorizatii={autorizatii} tipuri={tipuri} profile={profile} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} onEditViza={(a) => setEditAut({ ...a, _focusViza: true })} />}
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
       {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
