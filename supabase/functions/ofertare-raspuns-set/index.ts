@@ -471,6 +471,8 @@ Deno.serve(async (req: Request) => {
       // inseamna „nu stim inca". Altfel starea din baza minte la fel ca ecranul.
       // Audit R02: și punctele NECLARE țin concluzia deschisă — „neclar" nu e „nu schimbă nimic".
       stare: (operatii.length || raman || faraRezultat.length || neclareToate.length
+        // R02 (Copilot 28.09): și dispozițiile cu efect asupra CANTITĂȚILOR (sau neclare din inventar) țin concluzia deschisă
+        || toate.some((x: any) => x.tip === 'efect_cantitati' || x.tip === 'neclar')
         || Object.keys(propNou.aruncate || {}).length) ? 'analizat' : 'fara_efect',
       updated_at: new Date().toISOString(),
     }).eq('id', setId)

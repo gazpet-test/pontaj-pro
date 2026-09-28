@@ -192,7 +192,7 @@ export function evalueazaPoarta(st) {
   r.push({ k: h9.k, titlu: 'Pachetul depus — piesele din opis au fișier', stare: h9.stare, detalii: h9.detalii })
   // Laza: 16 din 66 relații „FS" cu ES(succesor) < EF(predecesor) — graficul scris de mână.
   // Întâi sursa (vine dintr-o versiune înghețată?), apoi consistența (declarațiile se țin?).
-  const h10 = controlGraficSursa(st)
+  const h10 = controlGraficSursa(st, { final: true })   // poarta = aprobarea pachetului
   r.push({ k: h10.k, titlu: 'Graficul din pachet — vine dintr-o versiune înghețată', stare: h10.stare, detalii: h10.detalii })
   const h11 = controlRelatiiGrafic(st)
   r.push({ k: h11.k, titlu: 'Graficul — relațiile declarate vs datele declarate', stare: h11.stare, detalii: h11.detalii })

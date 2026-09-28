@@ -777,7 +777,8 @@ export function controlRelatiiGrafic({ grafic_activitati_declarate, grafic_versi
 // sursa_versiune este text în manifest: acceptăm numărul versiunii sau „grafic@vN”.
 // Amprenta capitole@{...}, hash-ul fișierului și numele nu dovedesc versiunea graficului.
 const PIESA_GRAFIC = /grafic|gantt|pert|drum(ul)?\s*critic|e[șs]alonare|program(ul)?\s+de\s+execu/i
-export function controlGraficSursa({ pachet_fisiere, grafic_versiune, grafic_versiune_mod }) {
+// R13 (Copilot 28.09): în poarta de APROBARE (final) lipsa legăturii cu versiunea = BLOCK; în lucru = WARN.
+export function controlGraficSursa({ pachet_fisiere, grafic_versiune, grafic_versiune_mod }, { final = false } = {}) {
   const fisiere = (pachet_fisiere || []).filter(f => PIESA_GRAFIC.test(String(f?.nume || '')) || PIESA_GRAFIC.test(String(f?.rol || '')))
   const base = { k: 'grafic_sursa', piese: fisiere.map(f => f.nume) }
   if (!fisiere.length) return { ...base, stare: 'ok', detalii: 'pachetul nu conține (încă) piese de grafic' }
@@ -791,7 +792,7 @@ export function controlGraficSursa({ pachet_fisiere, grafic_versiune, grafic_ver
   if (diferite.length) return { ...base, stare: 'block', cod: 'SCHEDULE_SOURCE_VERSION_MISMATCH',
     detalii: `Sursa declarată diferă de versiunea înghețată curentă ${grafic_versiune}: ${diferite.map(f => `${f.nume} (versiunea ${f.versiune})`).join(', ')}` }
   const necunoscute = surse.filter(f => f.versiune === null)
-  if (necunoscute.length) return { ...base, stare: 'warn', cod: 'SCHEDULE_SOURCE_UNVERIFIABLE',
+  if (necunoscute.length) return { ...base, stare: final ? 'block' : 'warn', cod: 'SCHEDULE_SOURCE_UNVERIFIABLE',
     detalii: `Nu putem verifica corespondența cu versiunea înghețată ${grafic_versiune}: ${necunoscute.map(f => f.nume).join(', ')} — lipsește legătura identificabilă cu versiunea graficului în sursa_versiune` }
   return { ...base, stare: 'ok',
     detalii: `${plural(fisiere.length, 'piesă de grafic', 'piese de grafic')} în pachet, versiunea înghețată ${grafic_versiune}${grafic_versiune_mod ? ` (${grafic_versiune_mod})` : ''}` }

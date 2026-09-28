@@ -18,6 +18,10 @@ describe('R13 — corespondența fiecărei piese cu graficul înghețat curent',
     expect(r.stare).toBe('warn')
     expect(r.detalii).toMatch(/nu putem verifica corespondența/i)
   })
+  it('la aprobarea finală, lipsa legăturii cu versiunea blochează (Copilot 28.09)', () => {
+    expect(controlGraficSursa({ grafic_versiune: 3, pachet_fisiere: [piesa(null)] }, { final: true }).stare).toBe('block')
+    expect(controlGraficSursa({ grafic_versiune: 3, pachet_fisiere: [piesa('3')] }, { final: true }).stare).toBe('ok')
+  })
   it('toate piesele trebuie legate, inclusiv cele identificate numai după rol', () => {
     expect(control(piesa('3'), { nume: 'anexa.pdf', rol: 'grafic' }).stare).toBe('warn')
   })

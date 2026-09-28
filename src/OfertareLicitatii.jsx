@@ -1620,6 +1620,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           || Object.keys(setRasp.propunere?.aruncate || {}).length > 0
           // Audit R02: punctele neclare țin concluzia deschisă — nu e „confirmă documentația".
           || (setRasp.propunere?.neclare || []).length > 0
+          // R02 (Copilot 28.09): efectele cantitative din inventar țin și ele concluzia deschisă
+          || (setRasp.propunere?.dispozitii || []).some(x => x.tip === 'efect_cantitati' || x.tip === 'neclar')
         return (
           <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.purple}55`, background:G.purple + '0D' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:8 }}>
