@@ -646,6 +646,20 @@ function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCap
 // ─────────────────────────────────────────────────────────────────
 // REZUMATUL din fișa licitației (tab)
 // ─────────────────────────────────────────────────────────────────
+// Audit R11: formularul de înregistrare a depunerii pe un pachet aprobat.
+function DepunerePachet({ p, busy, onInregistreaza }) {
+  const [finale, setFinale] = useState([])
+  const [dovada, setDovada] = useState(null)
+  return (
+    <div style={{ marginTop:6, padding:'6px 8px', borderRadius:6, border:`1px dashed ${G.blue}66`, display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', fontSize:11.5 }}>
+      <span style={{ color:G.blue, fontWeight:700 }}>📤 Aprobat ≠ depus.</span>
+      <label style={{ color:G.muted }}>Fișierele urcate în SEAP: <input type="file" multiple onChange={e => setFinale([...(e.target.files || [])])} /></label>
+      <label style={{ color:G.muted }}>Dovada SEAP: <input type="file" onChange={e => setDovada(e.target.files?.[0] || null)} /></label>
+      <button style={{ ...S.btnS, fontSize:11 }} disabled={busy || !finale.length || !dovada} onClick={() => onInregistreaza(p, finale, dovada)}>Înregistrează depunerea</button>
+    </div>
+  )
+}
+
 export function PropunereRezumat({ st, onDeschide }) {
   if (!st) return <div style={{ color:G.muted, fontSize:13, padding:12 }}>Se încarcă…</div>
   // Același evaluator ca panoul. Copia veche de aici NU avea capitole_goale și
@@ -1833,6 +1847,33 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     await load(licId)
   }
 
+  // Audit R11 (28.09.2026): pachetul APROBAT nu e încă oferta depusă. Depunerea se înregistrează
+  // cu fișierele exact cum au fost urcate în SEAP (SHA-256 calculat aici, pe bytes-ii încărcați) +
+  // dovada SEAP. BD refuză „depus” fără ambele (trg_pt_pachet_depus_verifica).
+  const inregistreazaDepunere = async (p, finale, dovada) => {
+    if (!finale?.length || !dovada) { showToast?.('Alege fișierele depuse în SEAP ȘI dovada depunerii.', 'err'); return }
+    setBusy(true)
+    try {
+      const rows = []
+      const urca = async (f, rol) => {
+        const sha256 = await sha256Hex(f)
+        const cale = `pt/${licId}/v${p.versiune}/depus/${rol}_${String(f.name).replace(/[^A-Za-z0-9._-]+/g, '_')}`
+        const { error } = await supabase.storage.from('ofertare').upload(cale, f, { upsert: false, contentType: f.type || undefined })
+        if (error && !/exists/i.test(error.message)) throw new Error(`upload ${f.name}: ${error.message}`)
+        rows.push({ pachet_id: p.id, rol, nume: f.name, mime: f.type || null, size_bytes: f.size, sha256, fisier_path: cale })
+      }
+      for (const f of finale) await urca(f, 'depus_final')
+      await urca(dovada, 'dovada_seap')
+      const { error: e1 } = await supabase.from('ofertare_pt_pachet_fisiere').insert(rows)
+      if (e1) throw new Error('manifest depunere: ' + e1.message)
+      const { error: e2 } = await supabase.from('ofertare_pt_pachet').update({ stare: 'depus' }).eq('id', p.id)
+      if (e2) throw new Error('marcare depus: ' + e2.message)
+      showToast?.(`Pachet v${p.versiune} marcat DEPUS: ${finale.length} fișiere finale + dovada SEAP, cu SHA-256.`, 'ok')
+      await load(licId)
+    } catch (e) { showToast?.('Înregistrarea depunerii a eșuat: ' + (e?.message || e), 'err') }
+    finally { setBusy(false) }
+  }
+
   const atribuie = async (capitolId) => {
     if (!sel.size || !capitolId) return
     setBusy(true)
@@ -2059,6 +2100,8 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
                   )}
                 </div>
                 {p.nota && <div style={{ color:G.orange, marginTop:2 }}>{p.nota}</div>}
+                {p.stare === 'aprobat' && <DepunerePachet p={p} busy={busy} onInregistreaza={inregistreazaDepunere} />}
+                {p.stare === 'depus' && p.depus_la && <div style={{ color:G.green, marginTop:2 }}>📤 depus {new Date(p.depus_la).toLocaleString('ro-RO')} — fișierele finale și dovada SEAP sunt în manifest</div>}
                 {(p.fisiere || []).map(f => (
                   <div key={f.rol + f.nume} style={{ color:G.dim, fontFamily:'ui-monospace, monospace', fontSize:11, marginTop:2 }}>
                     {f.rol} · {f.nume} · {f.size_bytes} B · {f.sha256.slice(0, 16)}… <span style={{ color:G.dim }}>{f.sursa_versiune}</span>
