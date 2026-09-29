@@ -1,11 +1,14 @@
 -- ============================================================================
 -- R3 — fost angajat Gazpet ca posibil colaborator extern, cu acord SIGUR (tri-valent)
--- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea C. Independentă de c/d ca obiecte.
+-- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea C (+ 0.2: corecțiile din 30.09).
+-- Depinde de 20260929c DOAR prin funcțiile de identitate (fn_identitate_om / fn_identitate_eticheta); de d nu.
+-- „Un om” = JWT authenticated venit prin PostgREST (login authenticator): nici service_role, nici pg_cron, nici o
+-- sesiune postgres care își pune singură claims de HR nu pot decide acordul (tri-starea e decizia unui om).
 --   * employees.colaborare_externa_* (necunoscut / accepta / refuza; implicit necunoscut,
 --     NICIODATĂ dedus automat; dovada: cine, când, notă sau document)
 --   * trg_employees_colab_ext_protectie_ins/_upd — doar un om (owner / can_modify_employees)
 --     setează acordul; confirmat_de/la sunt forțate din sesiune. Acordul e legat de încetarea
---     CURENTĂ: la reactivarea fișei sau la ștergerea datei de încetare revine la „necunoscut”
+--     CURENTĂ: la reactivarea fișei sau la ștergerea / SCHIMBAREA datei de încetare revine la „necunoscut”
 --     (direcția sigură; rând în jurnal cu sursa reset_automat) → nu se moștenește la o nouă plecare
 --   * hr_colaborare_externa_jurnal (append-only) + trg_employees_zz_colab_ext (sincronizare)
 --   * hr_personal_extern.fost_angajat_employee_id + fost_angajat_gazpet (marcaj generat)
@@ -47,22 +50,25 @@ COMMENT ON COLUMN public.employees.colaborare_externa_nota IS
   'Dovada acordului (text vizibil tuturor celor logați: fără date sensibile; documentul semnat merge în Documente personale).';
 
 -- C.2 Protecția stării --------------------------------------------------------------
--- Acordul se referă la încetarea CURENTĂ. La reactivare (active → true) sau la ștergerea datei de încetare
--- (anularea încetării / D4) se golește: status „necunoscut”, fără proveniență, fără notă/document (istoricul
--- rămâne în jurnal). NU e o deducere de acord (e direcția sigură) și rulează și pe calea de sistem.
--- Astfel „accepta” nu poate rămâne pe un angajat activ și nu se moștenește la următoarea plecare.
+-- Acordul se referă la încetarea CURENTĂ. La reactivare (active → true) sau la ștergerea / schimbarea datei de
+-- încetare (anularea încetării / D4 / altă încetare — audit B #9b) se golește: status „necunoscut”, fără
+-- proveniență, fără notă/document (istoricul rămâne în jurnal). NU e o deducere de acord (e direcția sigură) și
+-- rulează pentru orice identitate. Astfel „accepta” nu poate rămâne pe un angajat activ și nu trece la altă plecare.
+-- Orice altă schimbare a acordului cere un OM (fn_identitate_om: JWT authenticated prin PostgREST) cu drept
+-- owner / can_modify_employees. Refuzate explicit (fișa de securitate): service_role, pg_cron / migrări (db_login),
+-- GoTrue, și o sesiune directă (postgres/MCP) care își pune claims de HR (audit B #9a).
 CREATE OR REPLACE FUNCTION public.fn_employees_colab_ext_protectie()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
-DECLARE v_uid uuid := auth.uid();
+DECLARE v_uid uuid := public.fn_identitate_om();
 BEGIN
   IF TG_OP = 'INSERT' THEN
     RAISE EXCEPTION 'O fișă nouă începe cu acordul de colaborare externă „necunoscut”; acordul îl setează un om din HR după încetarea contractului'
       USING ERRCODE = '42501';
   END IF;
   IF (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
-     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS NULL) THEN
+     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS DISTINCT FROM OLD.termination_date) THEN
     NEW.colaborare_externa_status       := 'necunoscut';
     NEW.colaborare_externa_confirmat_de := NULL;
     NEW.colaborare_externa_confirmat_la := NULL;
@@ -78,7 +84,7 @@ BEGIN
     RETURN NEW;                                   -- s-a schimbat doar active / data încetării (ex. cron-ul)
   END IF;
   IF v_uid IS NULL THEN
-    RAISE EXCEPTION 'Acordul de colaborare externă îl setează doar un om din platformă (owner / HR), niciodată automat'
+    RAISE EXCEPTION 'Acordul de colaborare externă îl setează doar un om din platformă (owner / HR, prin aplicație), niciodată automat'
       USING ERRCODE = '42501';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.profiles
@@ -127,7 +133,8 @@ CREATE TABLE IF NOT EXISTS public.hr_colaborare_externa_jurnal (
   status_nou   text,
   nota         text,
   document     text,
-  facut_de     uuid,                    -- NULL = sistem (reset automat făcut fără JWT, ex. SQL de administrare)
+  facut_de     uuid,                    -- omul din platformă (JWT authenticated prin PostgREST); NULL = nu e un om
+  facut_de_identitate text,             -- identitatea EXPLICITĂ (fn_identitate_eticheta): db_login:postgres, owner:<uuid>…
   facut_la     timestamptz NOT NULL DEFAULT now(),
   sursa        text NOT NULL DEFAULT 'manual' CHECK (sursa IN ('manual','reset_automat'))
 );
@@ -141,11 +148,12 @@ CREATE POLICY hr_colab_ext_jurnal_select ON public.hr_colaborare_externa_jurnal
   USING (auth.uid() IS NOT NULL AND EXISTS (
     SELECT 1 FROM public.profiles WHERE id = auth.uid()
        AND (is_owner IS TRUE OR can_modify_employees IS TRUE OR can_access_personal_data IS TRUE)));
-REVOKE ALL ON TABLE public.hr_colaborare_externa_jurnal FROM PUBLIC, anon, authenticated;
-GRANT SELECT ON TABLE public.hr_colaborare_externa_jurnal TO authenticated;
-GRANT ALL ON TABLE public.hr_colaborare_externa_jurnal TO service_role;
-REVOKE ALL ON SEQUENCE public.hr_colaborare_externa_jurnal_id_seq FROM PUBLIC, anon, authenticated;
+-- P1 (audit C): service_role doar citește; scrierea e doar a triggerului SECURITY DEFINER.
+REVOKE ALL ON TABLE public.hr_colaborare_externa_jurnal FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.hr_colaborare_externa_jurnal TO authenticated, service_role;
+REVOKE ALL ON SEQUENCE public.hr_colaborare_externa_jurnal_id_seq FROM PUBLIC, anon, authenticated, service_role;
 
+-- P2 (audit C): garda rămâne SECURITY INVOKER intenționat — doar RAISE, nu citește/scrie date.
 CREATE OR REPLACE FUNCTION public.fn_hr_colab_ext_jurnal_imuabil()
 RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp
@@ -222,7 +230,7 @@ RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_uid   uuid := auth.uid();
+  v_uid   uuid := public.fn_identitate_om();
   v_owner boolean;
   v_e     record;
   v_pot   record;
@@ -284,20 +292,22 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
   v_reset boolean := (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
-                     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS NULL);
+                     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS DISTINCT FROM OLD.termination_date);
 BEGIN
   IF OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
      OR OLD.colaborare_externa_document IS DISTINCT FROM NEW.colaborare_externa_document THEN
-    INSERT INTO public.hr_colaborare_externa_jurnal (employee_id, status_vechi, status_nou, nota, document, facut_de, sursa)
+    INSERT INTO public.hr_colaborare_externa_jurnal (employee_id, status_vechi, status_nou, nota, document, facut_de,
+                                                     facut_de_identitate, sursa)
     VALUES (NEW.id, OLD.colaborare_externa_status, NEW.colaborare_externa_status,
             CASE WHEN v_reset
                  THEN format('Resetat automat: %s; acordul era pentru încetarea din %s. La o nouă plecare se reconfirmă.',
                              CASE WHEN OLD.active IS NOT TRUE AND NEW.active IS TRUE THEN 'fișa a fost reactivată'
-                                  ELSE 'data încetării a fost ștearsă' END,
+                                  WHEN NEW.termination_date IS NULL THEN 'data încetării a fost ștearsă'
+                                  ELSE 'data încetării a fost schimbată (' || to_char(NEW.termination_date, 'DD.MM.YYYY') || ')' END,
                              COALESCE(to_char(OLD.termination_date, 'DD.MM.YYYY'), '—'))
                  ELSE NEW.colaborare_externa_nota END,
-            NEW.colaborare_externa_document, auth.uid(),
+            NEW.colaborare_externa_document, public.fn_identitate_om(), public.fn_identitate_eticheta(),
             CASE WHEN v_reset THEN 'reset_automat' ELSE 'manual' END);
   END IF;
   IF (OLD.colaborare_externa_status = 'accepta' AND NEW.colaborare_externa_status IS DISTINCT FROM 'accepta')
@@ -322,7 +332,7 @@ RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_uid  uuid := auth.uid();
+  v_uid  uuid := public.fn_identitate_om();
   v_nota text := NULLIF(btrim(p_nota), '');
   v_doc  text := NULLIF(btrim(p_document), '');
   v_e    record;
@@ -357,15 +367,16 @@ BEGIN
                                     'schimbat', v_schimbat)
             FROM public.employees e WHERE e.id = p_employee_id);
 END $fn$;
-REVOKE ALL ON FUNCTION public.fn_colaborare_externa_seteaza(integer, text, text, text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.fn_colaborare_externa_seteaza(integer, text, text, text) TO authenticated, service_role;
+-- P3 (audit C): fără service_role (refuzat oricum în cod: tri-starea o decide doar un om).
+REVOKE ALL ON FUNCTION public.fn_colaborare_externa_seteaza(integer, text, text, text) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_colaborare_externa_seteaza(integer, text, text, text) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.fn_fost_angajat_leaga_extern(p_employee_id integer, p_extern_id bigint DEFAULT NULL)
 RETURNS bigint
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_uid  uuid := auth.uid();
+  v_uid  uuid := public.fn_identitate_om();
   v_e    public.employees%ROWTYPE;
   v_x    public.hr_personal_extern%ROWTYPE;
   v_id   bigint;
@@ -419,5 +430,5 @@ BEGIN
   END;
   RETURN v_id;
 END $fn$;
-REVOKE ALL ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) TO authenticated;

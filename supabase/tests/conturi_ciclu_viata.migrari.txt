@@ -1,6 +1,13 @@
 # Migrările aplicate de scripts/test_conturi_ciclu_viata.sh peste schelet, în ordine.
 # Câte o cale pe rând, relativă la rădăcina repo-ului; liniile goale și cele cu # se ignoră.
 # Pentru fiecare X.sql, dacă există X_ROLLBACK.sql, modul --rollback îl folosește automat (ordine inversă).
+#
+# „live: <cale>” = PRECONDIȚIE: migrare deja aplicată în producție, parte din starea de pornire.
+# S-A (trg_profiles_campuri_owner_only, 2 coloane: department + employee_id) e LIVE din 29.09 23:21 RO.
+# Fișierul e copiat EXACT de pe branch-ul S-A (md5(prosrc) = c06d7ce0f212c7bba2093c50614a88fc, verificat
+# de testul SA-01). Se aplică înaintea lui c/d/e, intră în instantaneul de schemă „dinainte” și NU se face
+# rollback la el: rollback-ul pachetului Conturi nu atinge triggerul S-A.
+live: supabase/migrations/20260929g_profiles_campuri_owner_only.sql
 supabase/migrations/20260929c_conturi_legare_automata.sql
 supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
 supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql

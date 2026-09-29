@@ -6560,15 +6560,17 @@ function AdminPage() {
     const {data,error}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:true})
     if(error){showToast('Eroare: '+error.message,'error');setLegare(false);return}
     // R1: potrivirea e pe emailul de LOGARE; la înscriere legarea nu se face singură, owner-ul o confirmă aici.
-    const MOTIVE={fara_candidat:'niciun candidat',ambiguu:'ambiguu (mai mulți candidați sau mai multe conturi pe aceeași fișă)',candidat_ocupat:'fișa are deja cont',email_diferit:'emailul din profil diferă de cel de logare — verifică manual',eroare:'eroare'}
+    const MOTIVE={fara_candidat:'niciun candidat',ambiguu:'ambiguu (mai mulți candidați sau mai multe conturi pe aceeași fișă)',candidat_ocupat:'fișa are deja cont',email_diferit:'emailul din profil diferă de cel de logare — verifică manual',neconfirmat:'nu era în previzualizarea confirmată',schimbat:'potrivirea s-a schimbat de la previzualizare',eroare:'eroare'}
     const deLegat=(data||[]).filter(r=>r.rezultat==='de_legat'), rest=(data||[]).filter(r=>r.rezultat!=='de_legat')
     const restTxt=rest.length?`\n\nRămân nelegate (${rest.length}):\n${rest.map(r=>`• ${r.email} — ${MOTIVE[r.rezultat]||r.rezultat}${r.employee_name?' ('+r.employee_name+')':''}`).join('\n')}`:''
     if(!deLegat.length){window.alert(`Nimic de legat automat.${restTxt}`);setLegare(false);return}
-    if(!window.confirm(`Previzualizare — se leagă ${deLegat.length} cont(uri):\n${deLegat.map(r=>`• ${r.email} → ${r.employee_name} (#${r.employee_id}, prin ${r.metoda||'?'}) · cont creat ${formatDataRo(r.cont_creat_la,{cuOra:true})||'?'}`).join('\n')}${restTxt}\n\n⚠️ Leagă doar conturile pe care le recunoști (create de tine). Un cont necunoscut ar primi acces la semnătura electronică a omului.\n\nContinui?`)){setLegare(false);return}
-    const {data:rez,error:e2}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:false})
+    if(!window.confirm(`Previzualizare — se leagă ${deLegat.length} cont(uri):\n${deLegat.map(r=>`• ${r.email} → ${r.employee_name} (#${r.employee_id}, prin ${r.metoda||'?'}) · cont creat ${formatDataRo(r.cont_creat_la,{cuOra:true})||'?'}${r.cont_incredere?' prin cont-nou':' prin înscriere / Dashboard (neverificat)'}`).join('\n')}${restTxt}\n\n⚠️ Leagă doar conturile pe care le recunoști (create de tine). Un cont necunoscut ar primi acces la semnătura electronică a omului.\n\nContinui?`)){setLegare(false);return}
+    // R1 (30.09): se leagă DOAR perechile confirmate aici; un cont apărut între timp iese „neconfirmat” (fără TOCTOU).
+    const {data:rez,error:e2}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:false,p_confirmate:deLegat.map(r=>({profile_id:r.profile_id,employee_id:r.employee_id}))})
     setLegare(false)
     if(e2){showToast('Eroare: '+e2.message,'error');return}
-    showToast(`🔗 ${(rez||[]).filter(r=>r.rezultat==='legat').length} cont(uri) legate automat`)
+    const nelegate=(rez||[]).filter(r=>r.rezultat==='neconfirmat'||r.rezultat==='schimbat')
+    showToast(`🔗 ${(rez||[]).filter(r=>r.rezultat==='legat').length} cont(uri) legate${nelegate.length?` · ${nelegate.length} sărite (${nelegate.map(r=>`${r.email}: ${MOTIVE[r.rezultat]}`).join('; ')})`:''}`,nelegate.length?'warn':'success')
     loadAll()
   }
 

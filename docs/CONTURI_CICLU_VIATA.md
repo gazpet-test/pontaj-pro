@@ -5,6 +5,7 @@ Cerințele lui Răzvan: **R1** legare automată cont↔fișă · **R2** contract
 Documentul e scris din rapoartele de citire (BD, UI, teste) și din SELECT-uri de verificare făcute pe 29.09. În producție nu s-a scris nimic.
 
 Migrări (fiecare cu `_ROLLBACK.sql` pereche):
+- **precondiție LIVE (nu face parte din pachet):** `supabase/migrations/20260929g_profiles_campuri_owner_only.sql` — S-A, live din 29.09 23:21 RO, copiat exact de pe branch-ul S-A (`md5(prosrc) = c06d7ce0f212c7bba2093c50614a88fc`); rollback-ul pachetului NU îl atinge
 - `supabase/migrations/20260929c_conturi_legare_automata.sql` (R1)
 - `supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql` (R2)
 - `supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql` (R3)
@@ -20,6 +21,10 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 | D3 | Alocările rămase după închiderea contului (aprobatori, responsabili, rute concediu): **A** doar alertă „Reasignează” · **B** dezactivare automată acolo unde există coloana `activ`. | **A**. Dezactivarea automată poate lăsa un flux fără niciun aprobator. |
 | D4 | La reactivarea unui angajat (butonul „Activ.” din /admin) data încetării rămâne completată, iar cron-ul îl dezactivează din nou a doua zi la 04:00 UTC. Ștergem `termination_date` la reactivare, după o confirmare explicită? | **Da.** Implementat în `toggleEmp` (fără D4 reactivarea e anulată de cron a doua zi), **încă neconfirmat de Răzvan**. Urma nu se pierde: data veche se adaugă în `observatii_hr` („Reactivat la …; încetarea anterioară: …”). Dacă Răzvan zice „nu”, se scoate `termination_date:null` din `toggleEmp`. |
 | D5 | Contul se închide în dimineața zilei `termination_date` (cron 04:00 UTC = 07:00 RO), la fel cum funcționează azi dezactivarea. Rămâne așa? | Da, fără schimbare de regulă. |
+| D7 | **(30.09, condiția Copilot „situație incompletă”)** Garda „alt contract activ” compară CNP-ul (normalizat). O fișă **fără CNP** = situație incompletă → contul NU se închide automat, doar alertă `cont_inchidere_suspendata` + `cont_activ_fost_angajat` cu `motiv_neinchis='cnp_lipsa'`. **A** așa (implementat, strict) · **B** fără CNP se închide oricum. Înainte de GO: `SELECT count(*) FILTER (WHERE NULLIF(regexp_replace(COALESCE(cnp,''),'[^0-9A-Za-z]','','g'),'') IS NULL), count(*) FROM employees WHERE active` (G.2). | **A**, dacă acoperirea CNP e aproape completă; altfel completare CNP înainte de apply. |
+| D8 | **(audit C A3-iv)** Orice cont cu `can_modify_employees` (6 conturi, inclusiv `claude@`) poate închide orice cont non-owner punând o dată de încetare ≤ azi (reversibil: jurnal + restaurare owner). **A** acceptăm, documentat (implementat azi) · **B** automat doar când declanșatorul e owner / cron, din HR doar „de confirmat” · **C** automat, cu excepția conturilor cu flaguri sensibile (`can_modify_employees`, `can_access_salarii`…), care merg la owner. | **C** (recomandarea auditului); necesită GO separat. |
+| D9 | **(audit A #5 / B #6)** Revocarea EFECTIVĂ a JWT-urilor deja emise: `fn_pgrst_pre_request` e creat de migrarea d, dar **activarea** e schimbare de configurație globală: `ALTER ROLE authenticator SET pgrst.db_pre_request = 'public.fn_pgrst_pre_request'; NOTIFY pgrst, 'reload config';` + JWT expiry 3600 → 900 s (Dashboard → Auth; Storage/Realtime nu trec prin hook). | Da, după apply și un test LIVE pe un cont de test; cu acordul explicit al lui Răzvan. |
+| D10 | **(audit C A1-iii)** Înscrierea publică oprită (D1-B) ca **precondiție de GO**. | Da. |
 | D6 | Opțional, în migrarea 1: protejăm și `department` la auto-modificare? Azi oricine își poate pune singur `department='HR'` (prin politica `profiles_update_own`), iar asta deschide 4 politici HR. Același lucru e posibil pentru flagurile neprotejate (`can_create_comenzi`, `can_manage_stoc`, `can_access_ctc`, `can_process_achizitii`, `can_use_document_scanner`, `receive_*`). | Da pentru `department`. Pentru flaguri, doar după un grep care confirmă că UI-ul nu le scrie pe profilul propriu. |
 
 ### 0.1 Corecții după review (29.09 seara) — ce s-a schimbat față de prima variantă
@@ -43,6 +48,29 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 | Minor — coliziunea de nume fără avertisment; fără dezlegare | Confirmarea arată externul existent (firmă, telefon, activ) și „colaborarea devine INACTIVĂ până la Acceptă”; „✂️ Dezleagă de fișă” în Personal extern (owner/HR; triggerul pune `activ=false` la dezlegare). | R3-23 |
 | Minor — `alocari_ramase` afișa nume de tabele | Etichete + locul real (Achiziții → tab Aprobatori, HR → Recrutare; restul „fără ecran: în BD, cu Claude”), link spre primul loc editabil. | vitest |
 | Minor — bannerul HR din „Editează Angajat” (RLS doar owner pe jurnal) | Starea vine din `fn_cont_stare_angajati` (accesibil HR); pentru non-owner: „anunță owner-ul (Răzvan)”. | — (UI) |
+
+### 0.2 Corecții după S-A live și review Copilot (30.09)
+
+**Context.** Triggerul S-A `trg_profiles_campuri_owner_only` (20260929g) e LIVE din 29.09 23:21 RO. Copilot a aprobat modelul de identitate: trec DOAR identități explicite — claims `role='service_role'`; claims `role='authenticated'` + `sub` = profil owner; FĂRĂ claims → doar `session_user IN ('postgres','supabase_admin')`. „`auth.uid() IS NULL` ⇒ sistem” e interzis; `current_user` într-o funcție SECURITY DEFINER nu e apelantul. Cele 3 audituri (A identitate, B condiții Copilot, C fișă + pct. 4) au dat NO-GO pe varianta din 29.09; tabelul de mai jos e răspunsul, punct cu punct. Harness-ul rulează acum cu S-A ca precondiție live și cu login-urile reale (`authenticator`, `supabase_auth_admin`, `postgres`); aceleași teste rulate pe varianta din 29.09 (cu psql continuând după erori) pică la 58 de ID-uri de test, inclusiv toate ID-urile noi din coloana „Teste” (unele eșecuri vechi sunt efecte în cascadă ale #1).
+
+| # | Constatare (audit) | Schimbare | Teste |
+|---|---|---|---|
+| 1 | **CRITIC** (A #1, B #1a, C A1-1, M3) — calea de încredere R1 nu mergea în producție: `handle_new_user` rulează pe login-ul GoTrue (`supabase_auth_admin`, fără claims), S-A refuza `UPDATE employee_id` cu 42501, eroarea era înghițită, iar pe alte domenii decât gazpet.ro owner-ul nu afla nimic | `handle_new_user` **nu mai scrie** `employee_id` (doar potrivire + notificare). RPC nou `fn_cont_leaga_la_creare(p_profile_id)` (c, A.3b): identitate DOAR `service_role` (funcția edge `cont-nou`, după `createUser`) sau `owner`; reverifică atomic (profil `FOR UPDATE` + indexul unic) marcajul `gazpet_legare_automata`, legătura liberă, `tip_cont`, emailul profilului = cel de logare, candidatul unic și liber; anunță `cont_legat_automat` / `cont_nelegat: eroare la legare`. `cont_nelegat` pleacă pe **orice** domeniu la eroare de potrivire și pe calea de încredere. `supabase_auth_admin` NU intră în lista albă S-A | T2b, SA-02, R1-01…R1-13 (prin `creeaza_cont_owner` = GoTrue + RPC), R1-30, R1-31, R1-32, R1-34 |
+| 2 | **CRITIC latent** (A #2, B #2, C A3-c, M2) — `fn_cont_inchide` golea `request.jwt.claims` / `claim.sub` ca UPDATE-ul de flaguri să pară „sistem” (impersonare; cu S-A extins 20260930a închiderea din UI s-ar fi anulat toată) | Fără niciun `set_config('request.jwt…')`. Decizia pe identitatea explicită (`fn_identitate_privilegiata`): owner / service_role / db_login → flagurile pe loc; altfel (HR prin UI) totul se revocă pe loc, iar flagurile intră în coada `conturi_inchideri_coada` (tip `flaguri`) și le pune pe false `fn_conturi_inchideri_sweep` (pg_cron la 5 min, login postgres). Varianta „claims service_role puse local” a fost respinsă (falsificare) | R2-01 (coadă → sweep), R2-18, R2-32 (grep), R2-33; rularea cu S-A extins (20260930a ca a doua precondiție): 1128/1128 |
+| 3 | **MAJOR** (A #3, B #5) — o închidere eșuată nu se mai reîncerca (cron-ul 13 atinge doar `active=true`); fișă dezactivată înainte de dată = cont niciodată închis; data pusă ulterior pe o fișă inactivă nu declanșa nimic | Coada: `reincercare` (eroare → reîncercare la fiecare rulare, cu `incercari` / `ultima_eroare`), `programata` (dezactivat înainte de dată → închis la scadență). Triggerul R2 pornește și la schimbarea `termination_date`. Sweep-ul reverifică TOATE condițiile (fișă încă inactivă, dată ajunsă, legătură, owner, tip cont, gardă); reactivarea anulează programările; restaurarea anulează tot din coadă | R2-05, R2-19, R2-19-bis, R2-36, R2-37 |
+| 4 | **MAJOR** (A #4, B #2, C A2, M1) — `trg_profiles_protectie_legatura` lăsa să treacă `auth.uid() IS NULL` (GoTrue, `authenticator` cu claims golite, anon printr-un RPC SECURITY DEFINER) | Funcții comune interne (c, A.0): `fn_identitate_claims` / `fn_identitate_privilegiata` (logica S-A copiată 1:1) / `fn_identitate_uid` / `fn_identitate_om` / `fn_identitate_eticheta`, SECURITY DEFINER, `search_path` fixat, fără EXECUTE pentru API. Protecția trece doar pe `fn_identitate_privilegiata() IS NOT NULL`; verificarea pe `employee_id` rămâne (redundantă cu S-A, apărare în adâncime). **Triggerul S-A e neatins** | R1-14 (existent), R1-14b (matrice 9 identități: decizia comună = S-A = protecția) |
+| 5 | **MAJOR** (A #5, B #6, C A3-e) — JWT-ul de acces deja emis rămâne valabil până la 1 h; sesiunile / refresh tokenurile | `fn_cont_inchide` **șterge** `auth.refresh_tokens` și `auth.sessions` (postgres are DELETE pe ambele, verificat live 30.09). Hook `fn_pgrst_pre_request` (d, B.5c): refuză 42501 o cerere authenticated cu închidere deschisă, ban activ sau `session_id` inexistent. **Creat, NEACTIVAT** (D9) | R2-01, R2-29, R2-29b (caracterizarea riscului fără hook) |
+| 6 | **MAJOR** (A #6, B #1b, C A1-2) — TOCTOU: `fn_cont_leaga_automat(false)` recalcula lista și lega și conturi apărute după previzualizare | Semnătură nouă `fn_cont_leaga_automat(p_simulare, p_confirmate jsonb)`: aplicarea leagă DOAR perechile `[{profile_id, employee_id}]` din previzualizare care se potrivesc încă (`neconfirmat` / `schimbat` altfel; fără listă → 22023). Previzualizarea arată și `cont_provider` / `cont_incredere`. `App.jsx` trimite lista confirmată | R1-19, R1-20, R1-21, R1-23, R1-33 |
+| 7 | **MAJOR** (A #7) — harness-ul dădea verde fals (`SET ROLE` lasă `session_user = postgres`; S-A lipsea din listă; GUC-uri vechi `claim.sub/role`) | Lista: `live: …20260929g…` ca precondiție (aplicată înaintea instantaneului „dinainte”, fără reaplicare / rollback). Schelet: rol `authenticator` LOGIN NOINHERIT (membru anon/authenticated/service_role); `ca_utilizator` / `ca_anon` / `ca_service_role` = `SET SESSION AUTHORIZATION authenticator` + `SET ROLE` + doar `request.jwt.claims`; `ca_login(<login>)` fără claims; `creeaza_cont` = `SET SESSION AUTHORIZATION supabase_auth_admin`; `creeaza_cont_owner` = GoTrue + RPC cu service_role | T2b, T3, SA-01…SA-03 |
+| 8 | **MINOR** (A #8, B #7, C A6) — „`facut_de` NULL = sistem” amesteca cron, migrare, service_role, GoTrue | Coloana `facut_de_identitate` în ambele jurnale (`db_login:postgres` · `service_role` · `owner:<uuid>` · `authenticated:<uuid>` · `fara_identitate:<login>`, cu `@<login>` când claims vin dintr-o conexiune directă); `facut_de` = omul din platformă (JWT prin PostgREST) sau NULL | R2-01, R2-02, R2-03, R2-17, R2-19-bis, R2-33, R3-25 |
+| 9 | **MINOR** (A #9) — porțile owner foloseau `auth.uid()` (un `sub` non-uuid dădea 22P02) | Toate porțile owner din c/d: `fn_identitate_privilegiata() = 'owner'`; uid-ul din `fn_identitate_uid()` | R1-35 |
+| 10 | **Condiția Copilot lipsă** (B #4, C A3-e) — garda „alt contract activ”, atomică | `fn_cont_garda_persoana(employee_id)`: aceeași persoană = același CNP normalizat; `pg_advisory_xact_lock` pe persoană luat în trigger ÎNAINTEA subtranzacțiilor de închidere + `trg_employees_persoana_lock` (INSERT / UPDATE OF cnp, active, termination_date) ia același lock. Alt contract activ sau CNP lipsă → NU se închide, doar `cont_inchidere_suspendata` + motiv în alertă. La încheierea ultimului contract se închid și conturile legate de fișele vechi ale aceleiași persoane | R2-28a, R2-28b, R2-28c, R2-28d (două conexiuni, `dblink`, `lock_timeout` → 55P03, plus control cu alt CNP) |
+| 11 | **Condiția Copilot parțială** (B #5-iii, #5-iv) — situații incomplete închise fără verificare | Cont legat marcat `extern` / `test` / `sistem` → neînchis, alertă. Cont NELEGAT cu emailul de logare = emailul fișei încheiate → `cont_posibil_aceeasi_persoana` (fără închidere) | R2-30, R2-31 |
+| 12 | Condiția Copilot „fără restaurare automată la reactivare” (B #8) — acoperită, dar testată parțial | Nicio schimbare de comportament; teste: flaguri, șantiere, sesiuni rămân închise; doar `termination_date = NULL` nu redă nimic; sweep-ul nu re-închide un cont restaurat. Restaurarea: lock profil → jurnal (aceeași ordine ca închiderea, B #7b) + **previzualizare** `p_simulare` (C A3-v) | R2-10, R2-11c, R2-36 |
+| 13 | R3 (B #9) — „om” = orice claims `authenticated`; schimbarea datei pe o fișă inactivă păstra acordul | Poarta R3 cere `fn_identitate_om()` (JWT prin PostgREST, login `authenticator`): o sesiune postgres/MCP cu claims de HR falsificate e refuzată. Resetul la „necunoscut” și la SCHIMBAREA datei de încetare | R3-07b, R3-24 |
+| 14 | pct. 4 (audit C P1–P5) | P1: jurnalele și coada — `service_role` doar SELECT (fără snapshot fabricat / „restaurat” fals). P2: gărzile append-only rămân SECURITY INVOKER (doar RAISE) — excepție motivată. P3: `service_role` scos din GRANT-urile RPC-urilor cu poartă owner/HR (+ view). P4: `handle_new_user` fără EXECUTE pentru service_role (rollback-ul îl repune, ca în producție). P5: coloanele R3 vizibile tuturor logaților — documentat (D1-B + restrângerea politicilor = decizie de drepturi) | R1-18, R2-12, R2-14b, R2-38, R3-25 |
+
+**Ce NU s-a rezolvat în cod (decizii / pași ai lui Răzvan):** D7 (CNP lipsă), D8 (cine poate declanșa închiderea), D9 (activarea hook-ului + JWT expiry), D10 (înscrierea publică), funcția edge `cont-nou` (nu există încă; până atunci calea de încredere = owner cheamă RPC-ul sau „Leagă automat”), UI-ul pentru bifarea individuală a perechilor și pentru previzualizarea restaurării (azi: listă completă în `window.confirm`; RPC-ul acceptă deja perechi individuale / `p_simulare`), trecerea S-A pe funcția comună (GO separat), `tip_cont` în lista S-A (GO separat), secretele în clar din `cron.job.command` (de mutat în Vault, lot separat).
 
 ---
 
@@ -78,7 +106,7 @@ Pe cele 25 de legături reale, regula fără ordine găsește corect 22 și nu d
 ### A.3 `public.handle_new_user()` extinsă
 Rămâne `SECURITY DEFINER`, cu `search_path` schimbat în `public, pg_temp`. Triggerul `on_auth_user_created` nu se atinge.
 
-**După review (0.1), comportamentul e:** potrivirea rulează la fiecare cont nou, dar `UPDATE … employee_id` se face **doar** dacă `NEW.raw_app_meta_data ->> 'gazpet_legare_automata' = 'true'` (calea de încredere: `auth.admin.createUser({…, app_metadata:{gazpet_legare_automata:true}})` cu `service_role`, din viitoarea funcție edge `cont-nou` cu poartă owner). Pe signUp public și pe Dashboard → Add user: contul rămâne nelegat și owner-ii primesc `cont_legare_propusa` („Cont nou X → propunere: NUME (#id, prin email/nume). Dacă tu ai creat contul, confirmă din Admin → Manageri → „Leagă automat”. Dacă nu-l recunoști, NU-l lega și închide-l.”) — pe orice domeniu. `cont_nelegat` rămâne pentru @gazpet.ro cu 0 / >1 candidați / candidat ocupat / eroare. Schița de mai jos e varianta inițială (legare la orice înscriere) — vezi codul din migrare.
+**Corecția 30.09 (0.2 #1):** triggerul NU mai face deloc `UPDATE … employee_id` (sub login-ul GoTrue S-A îl refuză). Pe calea de încredere legarea o face RPC-ul `fn_cont_leaga_la_creare` (A.3b), chemat de `cont-nou` cu service_role; `cont_nelegat` pleacă pe orice domeniu la eroare și pe calea de încredere. Textul următor descrie varianta din 29.09 (istoric). **După review (0.1), comportamentul era:** potrivirea rulează la fiecare cont nou, dar `UPDATE … employee_id` se face **doar** dacă `NEW.raw_app_meta_data ->> 'gazpet_legare_automata' = 'true'` (calea de încredere: `auth.admin.createUser({…, app_metadata:{gazpet_legare_automata:true}})` cu `service_role`, din viitoarea funcție edge `cont-nou` cu poartă owner). Pe signUp public și pe Dashboard → Add user: contul rămâne nelegat și owner-ii primesc `cont_legare_propusa` („Cont nou X → propunere: NUME (#id, prin email/nume). Dacă tu ai creat contul, confirmă din Admin → Manageri → „Leagă automat”. Dacă nu-l recunoști, NU-l lega și închide-l.”) — pe orice domeniu. `cont_nelegat` rămâne pentru @gazpet.ro cu 0 / >1 candidați / candidat ocupat / eroare. Schița de mai jos e varianta inițială (legare la orice înscriere) — vezi codul din migrare.
 ```sql
 BEGIN
   INSERT INTO public.profiles (id, email, name, role)
@@ -129,10 +157,12 @@ RETURN NEW;
 ```
 - Închide o gaură existentă: `profiles_update_own` permite oricui să-și pună singur `employee_id` = orice angajat nelegat (96 de angajați activi n-au cont). Asta dă acces la semnătura electronică a acelui angajat, prin `my_employee_id()`.
 - **După review:** refuză și schimbarea `profiles.email` de către non-owner (potrivirea nu se mai poate falsifica, notificările nu pot fi deturnate), iar pe un cont cu închidere nerestaurată (R2) refuză **orice** UPDATE de la non-owner (JWT-ul emis înainte de închidere rămâne valabil până la o oră). Referința la `conturi_inchideri_jurnal` e păzită de `to_regclass` (c rămâne independentă de d).
-- `department` și flagurile scăpate de `enforce_owner_only_salary_flags` sunt tratate separat de migrarea `20260929g_profiles_campuri_owner_only` (alt lot, D6); cele două triggere sunt compatibile (ambele 42501).
-- `handle_new_user` și cron-ul rulează cu `auth.uid()` NULL, deci trec. Owner-ul trece și el. UI-ul nu scrie nicăieri `employee_id` în afara modalului de owner (D.3).
+- **Corecția 30.09 (0.2 #4):** poarta nu mai e `auth.uid()` (codul de mai sus e istoric), ci `fn_identitate_privilegiata() IS NOT NULL` — aceeași regulă ca S-A: owner JWT, service_role JWT, login postgres/supabase_admin fără claims. GoTrue (`supabase_auth_admin`), `authenticator` cu claims golite și anon printr-un RPC SECURITY DEFINER sunt refuzați (R1-14b).
+- **Relația cu S-A (live):** ordinea BEFORE UPDATE pe `profiles` (alfabetică): `prevent_role_escalation_trigger` → `trg_enforce_owner_only_salary_flags` → `trg_profiles_campuri_owner_only` (S-A) → `trg_profiles_protectie_legatura` → `trg_protect_can_access_pontaj_brut`. S-A decide primul pe `department` / `employee_id`; `tip_cont`, `email` și contul închis le păzește doar protecția. Mesajele diferă, SQLSTATE e același (42501): UI-ul și testele se bazează pe SQLSTATE. Un `sub` care nu e uuid dă 22P02 din triggerele VECHI (`auth.uid()`), tot refuz. S-A NU refuză doar „authenticated non-owner”: refuză și login-urile fără claims în afară de postgres/supabase_admin — de aceea `handle_new_user` nu mai scrie în `profiles`.
+- Cron-ul (login postgres) și migrările trec prin identitatea explicită `db_login`, nu prin „lipsa identității”. UI-ul nu scrie nicăieri `employee_id` în afara modalului de owner (D.3).
 
-### A.5 Legarea la cerere, cu previzualizare: `public.fn_cont_leaga_automat(p_simulare boolean DEFAULT true)`
+### A.5 Legarea la cerere, cu previzualizare: `public.fn_cont_leaga_automat(p_simulare boolean DEFAULT true, p_confirmate jsonb DEFAULT NULL)`
+- **Corecția 30.09 (0.2 #6):** aplicarea (`p_simulare=false`) cere `p_confirmate = [{profile_id, employee_id}]` (lista din previzualizare, 22023 fără ea) și leagă doar perechile care se potrivesc încă; rezultate noi `neconfirmat` (cont apărut după previzualizare) și `schimbat`. Coloane noi: `cont_provider`, `cont_incredere`. Poarta: `fn_identitate_privilegiata() = 'owner'`. EXECUTE doar `authenticated` (P3). Punctele de mai jos descriu restul, neschimbat.
 - `RETURNS TABLE(profile_id uuid, email text, rezultat text, employee_id integer, employee_name text, metoda text, cont_creat_la timestamptz)` (după review: `email` = emailul de logare, plus metoda și data creării contului, ca owner-ul să recunoască un cont pe care nu l-a creat). Semnătura s-a schimbat → migrarea face `DROP FUNCTION IF EXISTS … (boolean)` înainte de `CREATE`.
 - Rezultatele posibile: `legat`, `de_legat` (în simulare), `ambiguu` (mai mulți candidați **sau** mai multe conturi nelegate cu același candidat unic), `fara_candidat`, `candidat_ocupat`, `email_diferit` (`profiles.email ≠ auth.users.email`: sărit, de verificat manual), `eroare`.
 - **Poartă în cod:** `auth.uid()` nenul și profilul apelantului are `is_owner`; altfel `RAISE … ERRCODE '42501'`.
@@ -175,7 +205,7 @@ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 | `auth.users.banned_until = '2999-12-31 00:00:00+00'` (aceeași valoare ca la închiderea manuală; nu folosim `infinity`, GoTrue citește data ca timestamp) | alocările de flux (D3): `comenzi_aprobatori`, `necesar_responsabili`, `hr_aprobatori`, `marketing_aprobatori`, `hr_concediu_rute`, `tichete_default_responsabili`, `hr_recrutare_pozitii.responsabil_id`. Primesc doar alertă. |
 | `auth.refresh_tokens.revoked = true` (`user_id` e **varchar**, se compară cu `id::text`) + `DELETE FROM auth.sessions` (`user_id` e uuid; tokenii legați cad prin `ON DELETE CASCADE`) | `ofertare_licitatii.responsabil_id`: modul înghețat, se documentează doar |
 
-**Risc rezidual:** un JWT de acces deja emis rămâne valabil până la expirare (setarea „JWT expiry” din Auth, implicit 3600 s). Revocarea sesiunii oprește doar reîmprospătarea lui.
+**Risc rezidual:** un JWT de acces deja emis rămâne valabil până la expirare (setarea „JWT expiry” din Auth, 3600 s în producție). Revocarea sesiunii oprește doar reîmprospătarea lui. **Corecția 30.09:** refresh tokenurile și sesiunile se ȘTERG; hook-ul `fn_pgrst_pre_request` (B.5c) închide fereastra pentru PostgREST după activare (D9); Storage / Realtime rămân acoperite doar de un JWT expiry mai scurt.
 
 Lista de flaguri se calculează la rulare, în `public.fn_cont_flaguri() RETURNS text[]` (STABLE, internă), din `pg_attribute`:
 - condiții: coloanele booleene din `profiles` cu `attname ~ '^(can_|receive_|email_notifications_)|^whatsapp_enabled$'` și `attname <> 'is_owner'`;
@@ -256,13 +286,15 @@ RETURN v_rez;
 ```
 **Notificările** (`cont_owner_neinchis`, `cont_inchis_automat`) sunt best-effort, fiecare în `BEGIN … EXCEPTION → RAISE WARNING`: închiderea rămâne făcută și dacă notificarea pică (inclusiv funcția lipsă după un rollback în ordine greșită).
 
-**Capcana cu triggerele owner-only.** Când închiderea o declanșează cineva din HR care nu e owner (`can_modify_employees`, adică Natalia, Oana, Cristina, Mădălina, Cristiana sau `claude@`), `auth.uid()` rămâne cel al acelui om. Atunci `trg_enforce_owner_only_salary_flags` pune la loc, **fără nicio eroare**, 8 flaguri, iar testul T3 confirmă asta. Soluția (a) de mai sus rezolvă problema fără să modifice cele 3 triggere existente:
+**Corecția 30.09 (0.2 #2) — schița de mai sus e ISTORICĂ.** `fn_cont_inchide` nu mai golește claims (era impersonarea „lipsei identității”, interzisă de modelul aprobat). Cu identitate privilegiată explicită (owner, service_role, db_login = pg_cron / migrare) flagurile se pun pe false pe loc; pe calea HR (identitate neprivilegiată) tot restul se revocă pe loc, flagurile intră în `conturi_inchideri_coada` (`tip='flaguri'`) și le pune pe false `fn_conturi_inchideri_sweep` (pg_cron `conturi_inchideri_coada`, la 5 minute, login postgres). Jurnalul primește `facut_de_identitate`. Refresh tokenurile se șterg (nu doar se revocă). Sursa nouă `coada_contract_incheiat` = închidere făcută de sweep.
+
+**Capcana cu triggerele owner-only (istoric, motivul variantei vechi).** Când închiderea o declanșează cineva din HR care nu e owner (`can_modify_employees`, adică Natalia, Oana, Cristina, Mădălina, Cristiana sau `claude@`), `auth.uid()` rămâne cel al acelui om. Atunci `trg_enforce_owner_only_salary_flags` pune la loc, **fără nicio eroare**, 8 flaguri, iar testul T3 confirmă asta. Soluția (a) de mai sus rezolvă problema fără să modifice cele 3 triggere existente:
 - Claims se golesc doar în funcția internă, pe care niciun client nu o poate apela, și doar pentru UPDATE-ul care pune flagurile pe false.
 - `set_config(…, true)` e local tranzacției. Dacă apare o eroare după golire, anularea subtranzacției readuce singură valorile GUC. Pe drumul normal le restaurăm explicit, pentru că o funcție cu `SET search_path` **nu** restaurează alte GUC-uri la ieșire.
 - **Interzis:** să pui `SET "request.jwt.claims" = ''` în definiția funcției. În producție `postgres` nu e superuser, deci `CREATE FUNCTION` ar da „permission denied to set parameter”. Local ar trece, pentru că acolo e superuser. Ar fi un test verde care minte.
 
 ### B.4 Wrapper-ul pentru owner: `public.fn_cont_inchide_owner(p_profile_id uuid, p_motiv text) RETURNS text`
-- **Poartă în cod:** apelantul e owner (`auth.uid()` nenul); altfel eroare 42501. Apoi apelează `fn_cont_inchide(…, 'manual_owner', <employee_id-ul profilului>)`.
+- **Poartă în cod:** `fn_identitate_privilegiata() = 'owner'` (corecția 30.09); altfel eroare 42501. Apoi apelează `fn_cont_inchide(…, 'manual_owner', <employee_id-ul profilului>)` — owner-ul are identitate privilegiată, deci închiderea e completă pe loc (R2-17), și cu S-A extins.
 - Se folosește pentru acțiunile din alertă: cont extern, cont activ pentru un angajat inactiv fără dată de încetare, dezactivare făcută înainte de data încetării.
 - GRANT EXECUTE TO authenticated; REVOKE FROM PUBLIC, anon.
 
@@ -281,12 +313,15 @@ Funcția e `SECURITY DEFINER SET search_path = public, pg_temp` și întoarce NU
 - Toate notificările din trigger (inclusiv cea din handler-ul de eroare) sunt în propriul `BEGIN … EXCEPTION`: nici o notificare lipsă nu blochează UPDATE-ul din HR sau lotul cron-ului (R2-26).
 - **Limită cunoscută:** o fișă dezactivată ÎNAINTE de data încetării (cu dată viitoare) nu mai e prinsă când data trece (cron-ul filtrează `active = true`) → rămâne alerta critică `cont_activ_fost_angajat` + „Închide contul acum”. `toggleEmp` folosește ziua BD (UTC), deci „Dezact.” nu mai creează singur cazul ăsta noaptea.
 
+**Corecția 30.09 (0.2 #3, #10, #11):** `WHEN (OLD.active IS DISTINCT FROM NEW.active OR OLD.termination_date IS DISTINCT FROM NEW.termination_date)`. La închidere: garda `fn_cont_garda_persoana` (CNP, lock pe persoană, ÎNAINTEA subtranzacțiilor) → alt contract activ / CNP lipsă → `cont_inchidere_suspendata`, fără închidere; cont `extern`/`test`/`sistem` → la fel; eroare → coadă `reincercare` + `cont_inchidere_esuata`; cont nelegat cu emailul fișei → `cont_posibil_aceeasi_persoana`; dezactivare cu dată în viitor → coadă `programata`; reactivare → programările / reîncercările se anulează. Limita „fișă dezactivată înainte de dată” de mai jos e închisă de coadă.
+
 **De ce AFTER UPDATE, cu WHEN pe `active`, și nu `UPDATE OF active`:**
 - **Calea UI** `saveEditEmp` trimite doar `termination_date`. `fn_employees_termination_notify` (BEFORE) pune `NEW.active=false`. Un trigger `UPDATE OF active` **nu ar porni**, pentru că nu ține cont de schimbările făcute de triggerele BEFORE. Triggerul AFTER vede NEW final. Același lucru pentru `toggleEmp`, care trimite `active` (și `termination_date`).
 - **Calea cron** (`hr_auto_deactivate_terminated`, jobul 13, 04:00 UTC, rulează ca postgres fără JWT) face `UPDATE active=false`, fără să schimbe `termination_date`. Primul bloc din triggerul BEFORE nu se execută, dar AFTER prinde tranziția. În jurnal apare `facut_de = NULL`, adică „sistem”.
 - **Jobul cron și `fn_employees_termination_notify` nu se modifică.** Nu există alte triggere AFTER UPDATE pe employees, iar sufixul `zz` doar fixează ordinea față de viitorul trigger R3.
 
-### B.6 Restaurarea: `public.fn_cont_restaureaza(p_jurnal_id bigint, p_nota text) RETURNS jsonb`
+### B.6 Restaurarea: `public.fn_cont_restaureaza(p_jurnal_id bigint, p_nota text, p_simulare boolean DEFAULT false) RETURNS jsonb`
+- **Corecția 30.09:** poarta `fn_identitate_privilegiata() = 'owner'`; lock pe profil ÎNAINTEA jurnalului (ordinea din `fn_cont_inchide`); `p_simulare=true` întoarce ce s-ar reda (module, șantiere, flaguri, ban) fără nicio scriere; restaurarea anulează intrările deschise din coadă (nimic nu re-închide automat un cont restaurat). EXECUTE doar `authenticated`.
 - **Poartă în cod:** `auth.uid()` nenul și profilul apelantului are `is_owner`; altfel eroare 42501. Asta respinge și cron-ul, `service_role`, anon și orice non-owner.
 - Blochează rândul din jurnal cu `FOR UPDATE`. Rândul trebuie să aibă `restaurat_la IS NULL` (altfel eroare „deja restaurat”), profilul trebuie să existe, iar `p_nota` trebuie să aibă cel puțin 5 caractere.
 - **Forma snapshot-ului** se verifică înainte de orice scriere: `versiune = 1`, `flaguri` obiect, `module` și `santiere` liste, cheia `banned_until` prezentă; altfel `22023` cu HINT „Corectează importul (G.7)” și jurnalul NU se marchează restaurat.
@@ -305,7 +340,16 @@ Funcția e `SECURITY DEFINER SET search_path = public, pg_temp` și întoarce NU
 - **Poartă:** owner, `can_modify_employees` sau `can_access_personal_data`. Pentru ceilalți întoarce **0 rânduri**, fără eroare, iar UI-ul doar ascunde indicatorul.
 - GRANT EXECUTE TO authenticated; REVOKE FROM PUBLIC, anon.
 
+### B.5b Coada închiderilor + sweep (30.09)
+- `public.conturi_inchideri_coada(id, profile_id, employee_id, tip ∈ {flaguri, reincercare, programata}, motiv, scadent_la, incercari, ultima_eroare, creat_la, creat_de_identitate, rezolvat_la, rezultat)`; o singură intrare deschisă per (profil, tip); RLS: SELECT doar owner (`auth.uid() IS NOT NULL`); `service_role` doar SELECT; scriere doar prin funcțiile R2.
+- `public.fn_conturi_inchideri_sweep()`: gardă `fn_identitate_privilegiata() IS NOT NULL`, EXECUTE revocat de la anon/authenticated/service_role; procesează intrările scadente (`FOR UPDATE SKIP LOCKED`), reverifică toate condițiile, întoarce numărătoarea pe rezultate. Programat în migrare (dacă există `cron`): `cron.schedule('conturi_inchideri_coada', '*/5 * * * *', 'SELECT public.fn_conturi_inchideri_sweep()')`; rollback-ul d îl scoate. Lucrează DOAR pe coadă → aplicarea nu închide nimic din datele existente.
+
+### B.5c Hook PostgREST pre-request: `public.fn_pgrst_pre_request()` (creat, NEACTIVAT)
+- Pentru claims `role='authenticated'` cu `sub` uuid: 42501 dacă există închidere deschisă, `banned_until > now()` sau `session_id` din token lipsește din `auth.sessions`. anon / service_role neatinse. EXECUTE pentru anon/authenticated/service_role (PostgREST îl cheamă cu rolul cererii).
+- Activarea (D9): `ALTER ROLE authenticator SET pgrst.db_pre_request = 'public.fn_pgrst_pre_request'; NOTIFY pgrst, 'reload config';`. Rollback-ul d refuză (55000) cât timp hook-ul e activ.
+
 ### B.8 Alerta extinsă: `CREATE OR REPLACE public.fn_admin_conturi_alerte()` (aceeași semnătură, aceeași poartă owner)
+- **30.09:** poarta `fn_identitate_privilegiata() = 'owner'`; `cont_activ_fost_angajat` primește în `alocari` motivul (`motiv_neinchis`: owner / tip_cont / fara_data / data_viitoare / cnp_lipsa / alt_contract_activ / in_coada / esuat_sau_neprins, plus `alt_contract`, `coada`); `inchis_cu_acces_rest` arată `flaguri_in_coada`. UI-ul (`adminAlerte.js`) nu afișează încă motivul (de făcut).
 | `cod` | Condiție | Prioritate în UI |
 |---|---|---|
 | `fara_angajat` | ca în A.6 | attention |
@@ -351,7 +395,7 @@ ALTER TABLE public.employees
 Funcția e atașată la două triggere:
 - `trg_employees_colab_ext_protectie_ins`: `BEFORE INSERT … WHEN (NEW.colaborare_externa_status <> 'necunoscut' OR NEW.colaborare_externa_confirmat_de IS NOT NULL OR NEW.colaborare_externa_confirmat_la IS NOT NULL)`. Pornește și aruncă eroare: o fișă nouă începe întotdeauna ca „necunoscut”.
 - `trg_employees_colab_ext_protectie_upd`: `BEFORE UPDATE … WHEN` se schimbă oricare dintre cele 5 coloane (`IS DISTINCT FROM`).
-  - `auth.uid()` NULL (sistem, cron, service_role, migrare) → `RAISE … 42501`: „starea o setează doar un om din platformă”.
+  - **30.09:** „om” = `fn_identitate_om()` (JWT authenticated prin PostgREST, login `authenticator`); altfel (sistem, cron, service_role, migrare, sesiune postgres cu claims de HR falsificate) → `RAISE … 42501`: „starea o setează doar un om din platformă”. Resetul la „necunoscut” se face și la SCHIMBAREA datei de încetare pe o fișă inactivă (R3-24).
   - Apelantul nu e owner și nu are `can_modify_employees` → 42501.
   - Status ≠ `necunoscut` și `NEW.termination_date IS NULL` → eroare („doar pentru contracte încheiate sau cu dată de încetare”).
   - `necunoscut` → golește `confirmat_de/la` și `document`.
@@ -362,7 +406,7 @@ Funcția e atașată la două triggere:
 ### C.3 Jurnalul acordului: `public.hr_colaborare_externa_jurnal`
 - Coloane: `id` identity PK, `employee_id integer NOT NULL` (fără FK), `status_vechi`, `status_nou`, `nota`, `document`, `facut_de uuid` (NULL = sistem), `facut_la timestamptz NOT NULL DEFAULT now()`, `sursa text NOT NULL DEFAULT 'manual' CHECK (sursa IN ('manual','reset_automat'))`. Rândul de reset are nota „Resetat automat: fișa a fost reactivată / data încetării a fost ștearsă; acordul era pentru încetarea din …”.
 - Append-only: trigger care refuză UPDATE, DELETE și TRUNCATE.
-- RLS: SELECT pentru `auth.uid() IS NOT NULL` și (owner SAU `can_modify_employees` SAU `can_access_personal_data`). Fără politici de scriere; REVOKE INSERT/UPDATE/DELETE/TRUNCATE de la authenticated, ALL de la anon; GRANT SELECT authenticated, ALL service_role.
+- RLS: SELECT pentru `auth.uid() IS NOT NULL` și (owner SAU `can_modify_employees` SAU `can_access_personal_data`). Fără politici de scriere; REVOKE ALL de la anon / authenticated / service_role; GRANT SELECT authenticated, service_role (P1, 30.09). Coloană nouă `facut_de_identitate`.
 - Se scrie **numai** din triggerul AFTER de la C.5.
 
 ### C.4 Legătura cu tabela de externi
@@ -392,12 +436,12 @@ CREATE TRIGGER trg_employees_zz_colab_ext AFTER UPDATE ON public.employees FOR E
      OR OLD.active IS DISTINCT FROM NEW.active)
   EXECUTE FUNCTION public.fn_employees_colab_ext_after();
 ```
-- Dacă s-a schimbat statusul, nota sau documentul → `INSERT` în `hr_colaborare_externa_jurnal`, cu `facut_de = auth.uid()`.
+- Dacă s-a schimbat statusul, nota sau documentul → `INSERT` în `hr_colaborare_externa_jurnal`, cu `facut_de = fn_identitate_om()` și `facut_de_identitate = fn_identitate_eticheta()` (30.09).
 - Dacă statusul a plecat de la `accepta`, sau angajatul a fost reactivat (`OLD.active IS NOT TRUE AND NEW.active IS TRUE`) → `UPDATE hr_personal_extern SET activ = false, updated_at = now() WHERE fost_angajat_employee_id = NEW.id AND activ`.
 - **Activarea nu se face niciodată automat.** Un om bifează „Colaborare activă”.
 
 ### C.6 Funcțiile apelabile din UI
-Ambele sunt `SECURITY DEFINER SET search_path = public, pg_temp`, cu poartă în cod: `auth.uid()` nenul și owner sau `can_modify_employees`. GRANT EXECUTE TO authenticated; REVOKE FROM PUBLIC, anon.
+Ambele sunt `SECURITY DEFINER SET search_path = public, pg_temp`, cu poartă în cod: `fn_identitate_om()` nenul (30.09) și owner sau `can_modify_employees`. GRANT EXECUTE TO authenticated; REVOKE FROM PUBLIC, anon, service_role (P3).
 
 - `fn_colaborare_externa_seteaza(p_employee_id integer, p_status text, p_nota text, p_document text DEFAULT NULL) RETURNS jsonb`:
   - validează statusul și dovada (pentru `accepta`/`refuza`: nota de cel puțin 5 caractere sau document), apoi face `UPDATE employees SET status, nota, document`;
@@ -605,6 +649,13 @@ Reguli generale: stilurile se scriu inline cu paleta G/S a fiecărui fișier, f�
 - **Harness `--rollback`:** rollback-ul c rulat înaintea lui d/e → refuzat, schema neschimbată.
 - **Verificare prin mutații** (locală, în scratchpad): fiecare corecție scoasă pe rând face harness-ul să pice exact la testul ei (13/13).
 
+### E.5 Teste adăugate / schimbate la 30.09 (după S-A live și review Copilot)
+Rulare: `bash scripts/test_conturi_ciclu_viata.sh --reaplica --rollback` → 367 aserțiuni pe fiecare trecere completă (26 în trecerea „doar BAZĂ” după rollback), 1128 în total, + gardă de ordine; aceeași rulare cu S-A extins (20260930a ca a doua precondiție, din scratchpad): 1128/1128.
+- **BAZĂ:** T2b (GoTrue = login `supabase_auth_admin`, fără claims), T3 (PostgREST = login `authenticator`, doar `request.jwt.claims`), SA-01 (S-A live, md5 canonic), SA-02 (S-A refuză GoTrue, acceptă postgres), SA-03.
+- **R1:** R1-14b (matricea de 9 identități), R1-18 (drepturi noi, P3/P4), R1-19/20/21/23 (aplicare cu lista confirmată), R1-30 (calea de încredere cu S-A), R1-31 (poarta RPC-ului: HR / cont / anon / authenticator / supabase_auth_admin / postgres refuzați, owner și service_role trec), R1-32 (fără marcaj), R1-33 (TOCTOU), R1-34 (notificare pe orice domeniu), R1-35 (sub non-uuid).
+- **R2:** R2-01 (calea HR: revocare pe loc + flaguri prin coadă), R2-02/R2-17 (owner JWT: pe loc), R2-03 (cron: `SET SESSION AUTHORIZATION postgres`, `db_login:postgres`), R2-05 (programare), R2-10 (nimic redat), R2-11c (previzualizare restaurare), R2-14b (P1), R2-19/19-bis (reîncercare), R2-28a–d (garda „alt contract activ”, inclusiv concurență cu `dblink`), R2-29/29b (hook pre-request), R2-30, R2-31, R2-32 (grep `set_config('request.jwt`), R2-33 (authenticator fără claims nu e „sistem”), R2-36 (restaurarea respectată), R2-37 (programare la scadență / anulată la reactivare), R2-38 (pct. 4).
+- **R3:** R3-07b (postgres cu claims HR falsificate → 42501), R3-24 (schimbarea datei resetează acordul), R3-25 (identitatea în jurnal, P1, P3).
+
 ### E.4 Vitest
 Fișier nou `src/conturiCicluViata.js` (funcții pure) + `src/conturiCicluViata.test.js`:
 - `esteFostAngajat(emp, today)`:
@@ -657,6 +708,7 @@ Completări în `src/adminAlerte.test.js`:
   - DROP pe `trg_profiles_protectie_legatura`, `fn_profiles_protectie_legatura`, `v_admin_conturi_alerte`, `fn_admin_conturi_alerte`, `fn_cont_leaga_automat`, `fn_cont_candidati_angajat`, `fn_cont_notifica_owneri`;
   - DROP COLUMN `profiles.tip_cont`.
   - Legăturile deja făcute rămân (sunt date corecte).
+- **30.09:** rollback-ul d scoate și jobul pg_cron `conturi_inchideri_coada`, coada, sweep-ul, garda / lock-ul pe persoană, hook-ul (refuză 55000 dacă hook-ul e ACTIV pe `authenticator`) și `fn_cont_restaureaza` în ambele semnături; rollback-ul c scoate funcțiile de identitate, `fn_cont_leaga_la_creare`, `fn_cont_leaga_automat` (ambele semnături) și repune EXECUTE pentru service_role pe `handle_new_user` (ACL-ul de producție); garda de ordine a lui c verifică și obiectele din e. **Niciun rollback nu atinge S-A** (precondiție live; verificat: instantaneul „dinainte” include S-A, iar SA-01 trece după rollback).
 - **Verificare:** `--rollback` compară schema cu `pg_dump`, înainte și după. Trebuie să iasă identică, fără `ROLLBACK_DIFF_TOLERAT`.
 
 ---
@@ -672,6 +724,7 @@ Completări în `src/adminAlerte.test.js`:
 ### G.2 Verificări în producție înainte de aplicare (doar SELECT)
 - Hash-ul `md5(pg_get_functiondef(...))` pentru `handle_new_user`, `fn_employees_termination_notify`, `enforce_owner_only_salary_flags`, `prevent_role_escalation`, `protect_can_access_pontaj_brut` trebuie să fie identic cu schelet-ul. Dacă au fost modificate între timp, te oprești și le arăți lui Răzvan.
 - `cron.job` 13: se verifică doar comanda, fără să fie copiată nicăieri, pentru că jobul are secrete.
+- **30.09:** `md5(prosrc)` pentru `fn_profiles_campuri_owner_only` = `c06d7ce0f212c7bba2093c50614a88fc` (S-A live; verificat 30.09) și ordinea triggerelor BEFORE UPDATE pe `profiles` (A.4); `has_table_privilege('postgres', 'auth.refresh_tokens'|'auth.sessions', 'DELETE')` = true (verificat 30.09); `pgrst.db_pre_request` NU e setat pe `authenticator`; nu există job cron `conturi_inchideri_coada`; acoperirea CNP (D7).
 - Obiectele cu numele noi nu trebuie să existe deja.
 - Cifrele de reper: 31 de profiluri, 25 legate, 6 nelegate, 2 owneri.
 
@@ -695,6 +748,7 @@ Completări în `src/adminAlerte.test.js`:
 - **Verificare:** `fara_angajat` = 0 rânduri.
 
 ### G.6 `apply_migration` d → verificări
+- **30.09:** `SELECT jobname, schedule, username FROM cron.job WHERE jobname = 'conturi_inchideri_coada'` → `*/5 * * * *`, `postgres`; coada goală; `SELECT fn_conturi_inchideri_sweep()` ca postgres → `{}`. Actualizare `registru_automatizari` (G.12) ÎNAINTE de apply.
 - `pg_get_triggerdef` pe `trg_employees_zz_ciclu_cont`: AFTER UPDATE, cu WHEN pe `active`.
 - Privilegii pe funcțiile interne.
 - Politica pe jurnal și `REVOKE`-urile.
@@ -718,7 +772,7 @@ Completări în `src/adminAlerte.test.js`:
 
 ### G.9 `get_advisors` (security + performance)
 - **Obiectele noi nu au voie să producă:** `rls_disabled`, `security_definer_view`, `function_search_path_mutable`, `policy_exists_rls_disabled`.
-- **Avertismente așteptate** pentru funcțiile SECURITY DEFINER apelabile de `authenticated`: `fn_cont_inchide_owner`, `fn_cont_restaureaza`, `fn_cont_leaga_automat`, `fn_admin_conturi_alerte`, `fn_cont_stare_angajati`, `fn_colaborare_externa_seteaza`, `fn_fost_angajat_leaga_extern`. Sunt intenționate, cu poartă de rol în cod, și se notează în registru.
+- **Avertismente așteptate** pentru funcțiile SECURITY DEFINER apelabile de `authenticated`: `fn_cont_inchide_owner`, `fn_cont_restaureaza`, `fn_cont_leaga_automat`, `fn_cont_leaga_la_creare`, `fn_admin_conturi_alerte`, `fn_cont_stare_angajati`, `fn_colaborare_externa_seteaza`, `fn_fost_angajat_leaga_extern`, `fn_pgrst_pre_request` (și anon: hook-ul, prin construcție). Sunt intenționate, cu poartă de rol în cod, și se notează în registru.
 
 ### G.10 Frontend și testare
 - PR, build validat, merge după OK-ul lui Răzvan, deploy Vercel în ~3 minute.
@@ -746,13 +800,97 @@ Completări în `src/adminAlerte.test.js`:
   - `HR.jsx:285` folosește `G.pink`, care nu există;
   - 5 angajați inactivi au încă `qr_pin_active = true`.
 
-### G.12 Fișa de securitate (`registru_automatizari`, CLAUDE.md pct. 7)
-Fără edge function nouă, fără cron nou, fără secret nou. Cron-ul `hr_auto_deactivate_terminated` rămâne neschimbat și devine declanșator indirect.
+### G.12 Fișa de securitate (`registru_automatizari`, CLAUDE.md pct. 7) — revizia 30.09 (fișa auditului C, actualizată după corecții)
 
-| | R1: `handle_new_user` (trigger `on_auth_user_created`) | R2: `trg_employees_zz_ciclu_cont` → `fn_cont_inchide` | R3: triggerele colab / extern |
+Se scrie în `registru_automatizari` **ÎNAINTE** de GO / apply (nu la final). Fără valori de secrete.
+
+**Ce aduce pachetul.** Fără edge function nouă și fără secret nou. **UN job pg_cron nou**: `conturi_inchideri_coada` (`*/5 * * * *`, login postgres, `SELECT public.fn_conturi_inchideri_sweep()`). 10 triggere (scriu: ciclul R2, sincronizarea R3 și protecția R3 care rescrie proveniența; restul gărzi / lock pe persoană), funcții interne (identitate, notificări, gardă, coadă), 8 RPC-uri cu poartă în cod, 1 hook PostgREST **neactivat**. Declanșatori existenți care devin indirecți: `on_auth_user_created` (GoTrue), cron 13 `hr_auto_deactivate_terminated` (postgres, 04:00 UTC), UPDATE-urile pe `employees` din UI.
+
+**Modelul de identitate (aprobat de Copilot, identic cu S-A):** trec doar claims `service_role`, claims `authenticated` + `sub` owner, sau login postgres/supabase_admin FĂRĂ claims (`fn_identitate_privilegiata`). „Om” (R3, atribuire) = JWT `authenticated` venit prin PostgREST (`session_user = authenticator`, `fn_identitate_om`). „`auth.uid() IS NULL` ⇒ sistem” nu mai apare nicăieri; niciun obiect din `public` nu mai scrie `request.jwt.*` (test R2-32).
+
+**Starea live pe care se sprijină fișa (SELECT read-only, 29–30.09):** pe `profiles` 4 triggere BEFORE UPDATE (3 vechi cu bypass `auth.uid() IS NULL` + S-A 2 coloane, md5 `c06d7ce0…`); 20260930a (S-A extins) NU e aplicat (pachetul e verificat și cu el: 1128/1128); pe `notifications` doar `trg_notificari_ruteaza_ofertare`, niciun cron nu citește `notifications` → notificările `cont_*` rămân în aplicație; nimic automat nu scrie `employees.termination_date` / `active` în afară de UI și cron 13; postgres are UPDATE pe `auth.users`, DELETE pe `auth.sessions` și `auth.refresh_tokens`; `authenticator` = LOGIN NOINHERIT, fără `pgrst.db_pre_request`; `jwt_exp = 3600`.
+
+#### A1. R1: `on_auth_user_created` → `handle_new_user()` (c, A.3)
+- **(a)** `NEW.email` (ales de ORICINE cât timp înscrierea publică e pornită — D1/D10, neverificat), `raw_app_meta_data.gazpet_legare_automata` (doar API-ul admin = service_role), `employees.name/email` (HR).
+- **(b)** INSERT în `profiles` (rol `manager_santier`, ca până acum) + `notifications` către owneri. **Nu mai scrie `employee_id`** (30.09). Nu trimite mail, nu atinge bani.
+- **(c)** SECURITY DEFINER (proprietar postgres), `session_user = supabase_auth_admin`, fără claims, fără service_role. DEFINER e necesar: GoTrue nu are drepturi în `public`.
+- **(d)** Oricine creează un cont GoTrue (signUp public cu cheia anon, Dashboard, API admin).
+- **(e)** Legarea NU se face din trigger: public/Dashboard → propunere + confirmarea owner-ului pe perechi (A5); calea de încredere → RPC-ul A1b.
+- **Verdict (a)∩(b):** triggerul doar citește și notifică → intersecția nu mai produce drepturi. Rămâne: inundarea owner-ilor cu notificări la signUp public (dedupe doar pe mesaj identic) → D10.
+
+#### A1b. RPC `fn_cont_leaga_la_creare(p_profile_id)` (c, A.3b) — calea de încredere
+- **(a)** marcajul `gazpet_legare_automata` (pus doar cu service_role), emailul de logare, `employees`.
+- **(b)** `profiles.employee_id` (doar din NULL, candidat unic și liber, sub `FOR UPDATE` + index unic) → acces la semnătura de pe fișă; notificări owner.
+- **(c)** SECURITY DEFINER; identitatea apelantului: DOAR `service_role` (funcția edge `cont-nou`, cu poartă owner în edge) sau `owner`. S-A acceptă ambele.
+- **(d)** EXECUTE: `authenticated` + `service_role`; poarta de rol în cod refuză HR, anon, authenticator / supabase_auth_admin / postgres fără claims (R1-31).
+- **(e)** Confirmarea umană = owner-ul care folosește `cont-nou` (edge-ul încă nu există: până atunci owner-ul cheamă RPC-ul sau „Leagă automat”). Fără marcaj → `fara_marcaj_incredere` (R1-32).
+
+#### A2. Gardă: `trg_profiles_protectie_legatura` (c, A.4)
+- **(a)** nu citește conținut extern. **(b)** doar refuză (42501): `employee_id`, `tip_cont`, `email`, orice UPDATE pe un cont închis. **(c)** DEFINER (jurnalul are RLS doar owner). **(d)** orice UPDATE pe `profiles`.
+- **Corectat 30.09:** trece doar `fn_identitate_privilegiata() IS NOT NULL` (M1). GoTrue, authenticator cu claims golite, anon printr-un RPC → refuz (R1-14b).
+
+#### A3. R2: `trg_employees_zz_ciclu_cont` → `fn_employees_ciclu_cont()` → `fn_cont_inchide()` (d, B.3–B.5)
+- **(a)** Nu citește conținut extern: `employees.active / termination_date / name / cnp / email` sunt puse de oameni (owner / HR) sau de cron 13 (care aplică date puse de oameni). Condiție: niciun import automat să nu scrie aceste câmpuri (adevărat azi).
+- **(b)** **Doar ia drepturi:** DELETE `user_module_access` / `profile_sites`, cele 22 de flaguri → false (pe loc sau prin coadă), `auth.users.banned_until = 2999-12-31`, DELETE `auth.refresh_tokens` și `auth.sessions`, jurnal + coadă + `notifications`. Nu dă drepturi, nu trimite mail, nu atinge bani.
+- **(c)** DEFINER (proprietar postgres), fără service_role (necesar pentru `auth.*` și tabelele doar-owner). **Corectat 30.09 (M2):** fără golirea claims; flagurile se scriu doar cu identitate privilegiată explicită, altfel coada.
+- **(d)** Oricine are UPDATE pe `employees` prin RLS (owner + `can_modify_employees`, 6 conturi inclusiv `claude@`), cron 13, service_role / postgres direct. Poarta = politica RLS; un HR poate închide orice cont non-owner punând o dată ≤ azi (reversibil) → **D8** (recomandat C).
+- **(e) Condițiile Copilot:**
+
+| Condiție | Stare 30.09 | Unde / test |
+|---|---|---|
+| Owner-ul exclus | ✓ | `fn_cont_inchide` sub `FOR UPDATE`; R2-07, R2-17 |
+| Garda „alt contract activ”, atomică | ✓ | `fn_cont_garda_persoana` + `trg_employees_persoana_lock` (advisory lock pe CNP); R2-28a–d |
+| Situație incompletă → doar alertă | ✓ | fără dată / dată viitoare / CNP lipsă / tip cont ≠ angajat / cont nelegat al aceleiași persoane; R2-04, R2-05, R2-28c, R2-30, R2-31; D7 |
+| Revocare efectivă (inclusiv sesiunile) | ✓ parțial → complet după D9 | sesiuni + refresh tokens șterse pe loc (R2-01); JWT deja emis: hook creat și testat (R2-29), activarea = D9 |
+| Jurnal de revenire | ✓ | append-only, `facut_de_identitate`, service_role doar citire (R2-14, R2-14b) |
+| Reactivare fără restaurare automată | ✓ | R2-10 (module, flaguri, șantiere, sesiuni, ban), R2-36 (sweep-ul nu re-închide un cont restaurat) |
+| Restaurare doar owner, cu previzualizare | ✓ (UI: previzualizarea încă nefolosită) | `fn_cont_restaureaza(…, p_simulare)`; R2-11c, R2-12 |
+
+#### A3b. Automatizare NOUĂ: pg_cron `conturi_inchideri_coada` → `fn_conturi_inchideri_sweep()` (d, B.5b)
+- **(a)** Nu citește conținut extern: coada (scrisă doar de funcțiile R2) + `employees` / `profiles` / jurnal.
+- **(b)** Doar ia drepturi: flaguri → false pe conturi cu închidere deschisă; închide conturile din coadă (reîncercare / programare) după reverificarea TUTUROR condițiilor (inclusiv garda). Nu dă drepturi, nu re-închide un cont restaurat (restaurarea anulează coada).
+- **(c)** Job pg_cron ca **postgres** (identitate explicită `db_login`), fără service_role, fără claims. Funcția e DEFINER cu gardă `fn_identitate_privilegiata() IS NOT NULL`.
+- **(d)** Doar pg_cron / postgres: EXECUTE revocat de la anon / authenticated / service_role (R2-33, R2-38). Lucrează DOAR pe coadă → aplicarea migrării nu închide nimic din datele existente.
+- **(e)** Declanșatorul inițial e mereu o dată de încetare pusă de un om; închiderea e reversibilă (jurnal + restaurare owner).
+
+#### A3c. Hook PostgREST `fn_pgrst_pre_request()` (d, B.5c) — NEACTIVAT
+- **(a)** doar claims-urile cererii. **(b)** doar refuză (42501) cererile unui cont închis / banat / cu sesiune ștearsă. **(c)** DEFINER (citește jurnalul, `auth.users`, `auth.sessions`). **(d)** PostgREST, la fiecare cerere, DUPĂ activare. **(e)** Activarea = D9 (acordul lui Răzvan); rollback-ul d refuză cât timp e activ.
+
+#### A4. Gărzi append-only: `trg_conturi_inchideri_append_only` / `_fara_truncate` (d) și `trg_hr_colab_ext_jurnal_imuabil` (e)
+- Refuză DELETE / TRUNCATE (și UPDATE, în afara completării unice a restaurării pe jurnalul R2). SECURITY INVOKER **intenționat** (P2: doar RAISE, nu accesează date); `search_path` fixat, EXECUTE revocat. Conforme.
+
+#### A4b. Lock pe persoană: `trg_employees_persoana_lock` (d)
+- **(a)** `employees.cnp`. **(b)** nu scrie nimic: doar `pg_advisory_xact_lock` pe CNP normalizat (serializează încheierea unui contract cu crearea / reactivarea altuia pentru aceeași persoană). **(c)** DEFINER. **(d)** INSERT / UPDATE OF cnp, active, termination_date pe `employees`. Conform.
+
+#### A5. R3: `trg_employees_colab_ext_protectie_ins/_upd` (e, C.2)
+- **(a)** nota / documentul (text scris de HR), `active`, `termination_date`. **(b)** forțează `confirmat_de/la` din sesiune; reset la „necunoscut” la reactivare / ștergerea / **schimbarea** datei (direcția sigură); altfel doar refuză. **(c)** DEFINER. **(d)** UPDATE pe `employees`; decizia cere un OM (`fn_identitate_om`): refuzate explicit service_role, pg_cron / migrări (`db_login`), GoTrue și o sesiune postgres/MCP cu claims de HR falsificate (R3-07, R3-07b). **(e)** Tri-starea o decide doar un om ✓. Nicio automatizare nu apelează `fn_colaborare_externa_seteaza`.
+
+#### A6. R3: `trg_employees_zz_colab_ext` → `fn_employees_colab_ext_after()` (e, C.5)
+- **(a)** copiază nota și documentul (HR). **(b)** scrie în `hr_colaborare_externa_jurnal` (cu `facut_de_identitate`), pune `hr_personal_extern.activ = false` — doar dezactivează. **(c)** DEFINER (authenticated nu scrie în jurnal; service_role doar citește — P1). **(d)** UPDATE pe `employees`. **(e)** ✓
+
+#### A7. R3: `trg_hr_personal_extern_fost_angajat` (e, C.4)
+- **(a)** `NEW.nume` / `NEW.email` — orice cont logat poate scrie în `hr_personal_extern`, deci practic conținut extern. **(b)** doar refuză sau pune `activ=false` la dezlegare; (a)∩(b) nu produce scrieri în alte tabele. **(c)** DEFINER. **(d)** orice cont logat; legarea / dezlegarea doar un om owner / HR (`fn_identitate_om`). **(e)** un omonim îl activează doar owner-ul. Limită: potrivirea pe nume se ocolește („Popescu I.”) — se închide doar prin restrângerea politicilor de scriere (decizie de drepturi, Răzvan).
+
+#### A8. Notificări `fn_cont_notifica_owneri()` (c)
+- **(a)** textul poate conține `NEW.email` (extern), `employees.name`, motivul. **(b)** `notifications` doar pentru owneri, tipurile: `cont_legat_automat`, `cont_legare_propusa`, `cont_nelegat`, `cont_owner_neinchis`, `cont_inchis_automat`, `cont_inchidere_esuata`, `cont_inchidere_suspendata`, `cont_posibil_aceeasi_persoana`, `cont_angajat_inactiv_fara_incetare`, `cont_angajat_reactivat` — rămân în aplicație (fără mail / WhatsApp, verificat live). **(c)** DEFINER. **(d)** internă, EXECUTE revocat. **(e)** informativă; o propunere e date, nu instrucțiune (pct. 10).
+
+#### RPC-uri pornite de un om (nu sunt automatizări; listate pentru (d))
+| RPC | Poartă în cod | EXECUTE | Ce face |
 |---|---|---|---|
-| (a) Conținut extern citit | Emailul contului nou. Cu înscriere publică (D1), e **text scris de oricine**. Mai citește `employees.name/email` (introduse de HR). | `employees.active/termination_date` (introduse de HR / cron) | Nota și documentul (text scris de HR) |
-| (b) Ce scrie | `profiles.employee_id` (doar pe NULL), `notifications` pentru owneri. Nu trimite mail. Nu dă drepturi. | Șterge `user_module_access` și `profile_sites`, pune flagurile pe false, `auth.users.banned_until`, revocă sesiuni și tokeni, scrie jurnal și `notifications`. **Doar ia drepturi**, nu le dă niciodată. Nu trimite mail. | Jurnalul acordului; `hr_personal_extern.activ = false` (doar dezactivează) |
-| (c) Identitate | SECURITY DEFINER `postgres` (BYPASSRLS, nu superuser). Necesar pentru că GoTrue (`supabase_auth_admin`) nu are drepturi pe `public`. Fără `service_role`. | SECURITY DEFINER `postgres`. Necesar pentru `auth.*` și tabelele owner-only. Claims se golesc doar pentru UPDATE-ul de flaguri pe false. | SECURITY DEFINER `postgres` |
-| (d) Cine pornește | Crearea unui cont în GoTrue | Orice UPDATE pe `employees` permis de RLS (owner / `can_modify_employees`) sau cron-ul. Funcțiile interne au REVOKE de la anon, authenticated și service_role. RPC-urile din UI verifică `is_owner` **în cod**. | RPC-urile verifică owner / `can_modify_employees` în cod. Triggerele refuză `auth.uid()` NULL. |
-| (e) Confirmare umană | **După review:** la signUp public / Dashboard legarea NU se face singură — owner-ul primește propunerea și confirmă (previzualizare → confirmare, cu data creării contului). Legare fără confirmare doar pe calea de încredere (`app_metadata` pus de `service_role`, deci de o funcție cu poartă owner). Potrivirea e pe emailul de logare, fără suprascriere, legătura și emailul profilului sunt protejate. Regula tare (a)+(b) e respectată (poartă = confirmarea owner-ului). D1-B rămâne recomandat. | Reacordarea drepturilor (restaurarea) e doar owner, explicit. Închiderea nu cere confirmare, pentru că direcția e sigură, iar declanșatorul e o dată pusă de un om. | Acordul îl setează doar un om, niciodată automat. Activarea externului o face doar un om. |
+| `fn_cont_leaga_automat(boolean, jsonb)` | owner | authenticated | leagă DOAR perechile confirmate din previzualizare |
+| `fn_cont_leaga_la_creare(uuid)` | service_role / owner | authenticated, service_role | calea de încredere (A1b) |
+| `fn_admin_conturi_alerte()` + `v_admin_conturi_alerte` | owner | authenticated | doar citire |
+| `fn_cont_inchide_owner` | owner | authenticated | închidere manuală (completă pe loc) |
+| `fn_cont_restaureaza(bigint, text, boolean)` | owner | authenticated | **redă drepturi** din snapshot; cu previzualizare |
+| `fn_cont_stare_angajati` | owner / HR / date personale (altfel 0 rânduri) | authenticated | doar citire |
+| `fn_colaborare_externa_seteaza` | om owner / HR | authenticated | setează acordul |
+| `fn_fost_angajat_leaga_extern` | om owner / HR | authenticated | creează sau leagă un extern |
+| `fn_pgrst_pre_request` | — (doar refuză) | anon, authenticated, service_role | hook, neactivat (D9) |
+
+#### pct. 4 (obiecte noi) — stare 30.09
+- Tabele noi (`conturi_inchideri_jurnal`, `conturi_inchideri_coada`, `hr_colaborare_externa_jurnal`): RLS activ, o singură politică SELECT cu `auth.uid() IS NOT NULL`, fără politici de scriere, fără `USING(true)`; `service_role` doar SELECT (P1); secvențele revocate.
+- View `v_admin_conturi_alerte`: `security_invoker = on`, SELECT doar `authenticated` (P3).
+- Funcții: toate SECURITY DEFINER cu `search_path = public, pg_temp` (excepție motivată: cele 2 gărzi append-only, P2); interne cu `REVOKE ALL FROM PUBLIC, anon, authenticated, service_role`; RPC-urile fără service_role acolo unde poarta e owner / om (P3); `handle_new_user` fără EXECUTE pentru service_role (P4).
+- P5 (documentat): coloanele `colaborare_externa_nota/_document` moștenesc `employees_select_all_authenticated USING (true)`; `fost_angajat_employee_id` moștenește scrierea pentru orice logat, păzită de trigger → D10 + restrângerea politicilor (decizie de drepturi).
+
+**Condiții pentru GO pe apply:** (1) D7–D10 decise de Răzvan; (2) fișa de mai sus în `registru_automatizari`; (3) GO Copilot pe delta 30.09 (diff-ul efectiv trimis în chat, pct. 11); (4) harness `--reaplica --rollback` verde (S-A live) + rularea de verificare cu 20260930a; (5) G.2 (md5-uri, drepturi, acoperire CNP).

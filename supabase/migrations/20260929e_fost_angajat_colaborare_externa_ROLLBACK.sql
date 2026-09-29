@@ -1,5 +1,5 @@
 -- ROLLBACK pentru 20260929e_fost_angajat_colaborare_externa.sql (primul din lanț: e → d → c).
--- Idempotent.
+-- Idempotent. NU atinge triggerul S-A (20260929g) și nici funcțiile de identitate din c (le șterge rollback-ul c).
 -- ⚠️ Se pierd marcajele „Fost angajat Gazpet” și acordurile de colaborare externă (plus jurnalul lor).
 --    Înainte: Claude exportă employees(colaborare_externa_*), hr_colaborare_externa_jurnal și
 --    legăturile hr_personal_extern.fost_angajat_employee_id în claude_context, cu confirmarea lui Răzvan.

@@ -7,6 +7,8 @@
 # port 5434, doar 127.0.0.1). Nu citește .env, nu folosește chei Supabase, nu atinge producția.
 #
 # Pași: pornește/verifică PG → recreează baza <..>_test → încarcă scheletul Supabase →
+#       aplică PRECONDIȚIILE LIVE (linii „live: <cale>” din listă = migrări deja aplicate în producție,
+#       ex. S-A 20260929g; fac parte din „starea dinainte”: nu se reaplică, nu se fac rollback) →
 #       aplică migrările din listă → rulează testele SQL (ASSERT) → exit ≠ 0 la eșec.
 #
 # Utilizare (din rădăcina repo-ului; ca root se trece automat pe utilizatorul postgres):
@@ -45,7 +47,7 @@ while [ $# -gt 0 ]; do
     --rollback) ROLLBACK=1 ;;
     --opreste)  OPRESTE=1 ;;
     --) shift; MIGRARI_ARG=("$@"); break ;;
-    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "Argument necunoscut: $1 (vezi --help)" >&2; exit 2 ;;
   esac
   shift
@@ -104,16 +106,22 @@ echo "→ schelet: ${SCHELET#$RADACINA/}"
 "${PSQL[@]}" -d "$BAZA" -f "$SCHELET" || esec "scheletul nu s-a încărcat"
 
 # --- 3. lista de migrări -------------------------------------------------------
-MIGRARI=()
+# „live: <cale>” = precondiție (migrare deja aplicată în producție): se aplică o singură dată, înaintea
+# instantaneului de schemă „dinainte”, și NU intră în reaplicare / rollback (rollback-ul pachetului nu o atinge).
+MIGRARI=(); PRECONDITII=()
 if [ ${#MIGRARI_ARG[@]} -gt 0 ]; then
   MIGRARI=("${MIGRARI_ARG[@]}")
 elif [ -f "$LISTA" ]; then
   while IFS= read -r linie || [ -n "$linie" ]; do
     linie="${linie%%#*}"; linie="$(echo "$linie" | xargs)"
-    [ -n "$linie" ] && MIGRARI+=("$linie")
+    case "$linie" in
+      "") ;;
+      live:*) PRECONDITII+=("$(echo "${linie#live:}" | xargs)") ;;
+      *) MIGRARI+=("$linie") ;;
+    esac
   done < "$LISTA"
 fi
-for m in ${MIGRARI[@]+"${MIGRARI[@]}"}; do [ -f "$(cale_abs "$m")" ] || mediu "migrare lipsă: $m"; done
+for m in ${PRECONDITII[@]+"${PRECONDITII[@]}"} ${MIGRARI[@]+"${MIGRARI[@]}"}; do [ -f "$(cale_abs "$m")" ] || mediu "migrare lipsă: $m"; done
 
 aplica_fisier() {  # ca apply_migration: o singură tranzacție, cu excepția fișierelor cu BEGIN/COMMIT proprii
   local f; f="$(cale_abs "$1")"
@@ -145,7 +153,11 @@ schema_snapshot() {  # schema fără date, cu ACL-uri, ca să prindă GRANT-uri/
 }
 
 # --- 4. rulare -----------------------------------------------------------------
-echo "→ migrări în listă: ${#MIGRARI[@]}"
+for m in ${PRECONDITII[@]+"${PRECONDITII[@]}"}; do
+  echo "→ precondiție live (starea producției, fără rollback): $m"
+  aplica_fisier "$m"
+done
+echo "→ migrări în listă: ${#MIGRARI[@]} (+ ${#PRECONDITII[@]} precondiții live)"
 SNAP_INAINTE=""
 if [ "$ROLLBACK" = 1 ]; then SNAP_INAINTE="$(mktemp)"; schema_snapshot > "$SNAP_INAINTE"; fi
 
@@ -193,4 +205,4 @@ if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
 fi
 
 if [ "$OPRESTE" = 1 ]; then ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null && echo "→ server oprit"; fi
-echo "PASS test_conturi_ciclu_viata: $TOTAL_OK aserțiuni OK, ${#MIGRARI[@]} migrări (bază $BAZA @ 127.0.0.1:$PORT)"
+echo "PASS test_conturi_ciclu_viata: $TOTAL_OK aserțiuni OK, ${#MIGRARI[@]} migrări + ${#PRECONDITII[@]} precondiții live (bază $BAZA @ 127.0.0.1:$PORT)"

@@ -7,9 +7,14 @@
 --     pe aceeași bază (ex. după migrare, apoi după rollback + reaplicare);
 --   * teste.assert(cond, 'Tn descriere') / teste.asteapta_eroare(sql, 'Tn ...', sqlstate, fragment)
 --     → la eșec RAISE EXCEPTION, psql oprește (ON_ERROR_STOP) și scriptul iese cu cod ≠ 0;
---   * identități: teste.ca_utilizator(uuid) = PostgREST cu JWT (SET ROLE authenticated),
---     teste.ca_anon(), teste.ca_service_role(), teste.ca_admin() = postgres fără JWT
---     (ca migrările și pg_cron); conturi noi: teste.creeaza_cont(email, uuid) = GoTrue;
+--   * identități (LOGIN real, corecția 30.09): teste.ca_utilizator(uuid) = PostgREST (login authenticator +
+--     SET ROLE authenticated + request.jwt.claims), teste.ca_anon(), teste.ca_service_role() (tot prin authenticator),
+--     teste.ca_login('<login>') = conexiune directă fără claims (ex. supabase_auth_admin, authenticator),
+--     teste.ca_admin() = login postgres fără claims (ca migrările și pg_cron); conturi noi:
+--     teste.creeaza_cont(email, uuid) = GoTrue (login supabase_auth_admin), teste.creeaza_cont_owner = funcția
+--     edge cont-nou (GoTrue cu marcaj de încredere + RPC fn_cont_leaga_la_creare cu service_role);
+--   * precondiția live: S-A 20260929g (trg_profiles_campuri_owner_only) e aplicat de harness înaintea pachetului;
+--   * coada R2 (pg_cron în producție): SELECT public.fn_conturi_inchideri_sweep() ca admin;
 --   * cron-ul de producție: teste.cron_hr_auto_deactivate_terminated() (copie exactă);
 --   * variabile psql prin RETURNING ... \gset (nu merg în interiorul blocurilor DO $$).
 -- Secțiunea „BAZĂ” fixează comportamentul actual al producției și trebuie să rămână verde
@@ -57,10 +62,24 @@ SELECT teste.assert(NOT has_table_privilege('supabase_auth_admin', 'public.emplo
   'T2 supabase_auth_admin nu are drepturi pe public.employees → logica din triggerul pe auth.users trebuie SECURITY DEFINER');
 SELECT teste.assert(NOT has_table_privilege('authenticated', 'auth.users', 'UPDATE'),
   'T2 authenticated nu poate scrie auth.users (banned_until se setează doar prin funcție SECURITY DEFINER)');
+-- T2b (audit A #7) harness-ul simulează LOGIN-UL real al GoTrue, nu doar rolul
+CREATE TABLE teste.captura_login (sesiune text, curent text, claims text);
+CREATE FUNCTION teste.fn_captura_login() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  INSERT INTO teste.captura_login VALUES (session_user, current_user, nullif(current_setting('request.jwt.claims', true), ''));
+  RETURN NULL;
+END $fn$;
+CREATE TRIGGER zz_test_captura_login AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION teste.fn_captura_login();
+SELECT teste.creeaza_cont('captura.login@gazpet.ro');
+DROP TRIGGER zz_test_captura_login ON auth.users;
+SELECT teste.assert((SELECT sesiune = 'supabase_auth_admin' AND claims IS NULL FROM teste.captura_login),
+  'T2b crearea contului rulează pe login-ul GoTrue: session_user = supabase_auth_admin, fără claims (ca în producție)');
 
 -- ---------------------------------------------------------------- BAZĂ: RLS + triggere owner-only
 SELECT teste.ca_utilizator(:'u_ion');
-SELECT teste.assert(auth.uid() = :'u_ion'::uuid AND current_user = 'authenticated', 'T3 identitate PostgREST simulată');
+SELECT teste.assert(auth.uid() = :'u_ion'::uuid AND current_user = 'authenticated' AND session_user = 'authenticator'
+                    AND nullif(current_setting('request.jwt.claim.sub', true), '') IS NULL,
+  'T3 identitate PostgREST simulată: login authenticator, rol authenticated, doar request.jwt.claims (PostgREST v12)');
 SELECT teste.asteapta_eroare(
   $$INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES ('00000000-0000-4000-8000-00000000a001', 'hr', 'admin')$$,
   'T3 non-owner nu își poate acorda module (RLS)', '42501');
@@ -110,6 +129,39 @@ SELECT teste.assert(teste.cron_hr_auto_deactivate_terminated() = 1, 'T5 cron-ul 
 SELECT teste.assert((SELECT NOT active FROM public.employees WHERE id = :emp_cron)
     AND (SELECT active FROM public.employees WHERE id = :emp_ion),
   'T5 cron: TEST CRON inactiv, POPESCU ION (dată viitoare) încă activ');
+
+-- ---------------------------------------------------------------- BAZĂ: precondiția live S-A (20260929g)
+-- md5 canonic al variantei LIVE (2 coloane) = c06d7ce0…; rularea de verificare cu S-A EXTINS (20260930a, NEAPLICAT în
+-- producție, pus ca a doua precondiție doar din scratchpad) are f4871f5a… — ambele sunt acceptate, variantă afișată.
+SELECT CASE md5(prosrc) WHEN 'c06d7ce0f212c7bba2093c50614a88fc' THEN 'live_20260929g'
+                        WHEN 'f4871f5a99d6d880cc62a80c3fe65c01' THEN 'extins_20260930a' END AS sa_varianta
+  FROM pg_proc WHERE oid = 'public.fn_profiles_campuri_owner_only()'::regprocedure \gset
+\echo '   S-A varianta:' :sa_varianta
+SELECT teste.assert(:'sa_varianta' IN ('live_20260929g', 'extins_20260930a')
+    AND (SELECT tgenabled = 'O' FROM pg_trigger WHERE tgname = 'trg_profiles_campuri_owner_only' AND tgrelid = 'public.profiles'::regclass),
+  'SA-01 S-A: trg_profiles_campuri_owner_only activ, md5(prosrc) = c06d7ce0f212c7bba2093c50614a88fc (= producția) sau varianta extinsă verificată');
+-- decizia unui UPDATE făcut printr-un RPC SECURITY DEFINER (ajunge la rând ocolind RLS): 'trece' sau SQLSTATE;
+-- modificarea se anulează mereu (P0T99), identitatea (login + claims) e a apelantului
+CREATE FUNCTION teste.decizie_rpc(p_sql text) RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  BEGIN
+    EXECUTE p_sql;
+    RAISE EXCEPTION 'anulat' USING ERRCODE = 'P0T99';
+  EXCEPTION
+    WHEN SQLSTATE 'P0T99' THEN RETURN 'trece';
+    WHEN OTHERS THEN RETURN SQLSTATE;
+  END;
+END $fn$;
+SELECT teste.ca_login('supabase_auth_admin');
+SELECT teste.decizie_rpc(format('UPDATE public.profiles SET employee_id = %s WHERE id = %L', :emp_cron, :'u_ion')) AS sa_gotrue \gset
+SELECT teste.ca_admin();
+SELECT teste.decizie_rpc(format('UPDATE public.profiles SET employee_id = %s WHERE id = %L', :emp_cron, :'u_ion')) AS sa_admin \gset
+SELECT teste.assert(:'sa_gotrue' = '42501' AND :'sa_admin' = 'trece',
+  'SA-02 S-A: login GoTrue (supabase_auth_admin, fără claims) NU poate scrie employee_id (42501); login postgres fără claims (cron / migrare) poate');
+SELECT teste.assert((SELECT array_agg(tgname::text ORDER BY tgname) FROM pg_trigger
+                      WHERE tgrelid = 'public.profiles'::regclass AND NOT tgisinternal AND tgtype & 2 = 2 AND tgtype & 16 = 16)
+                    @> ARRAY['trg_profiles_campuri_owner_only'],
+  'SA-03 S-A e trigger BEFORE UPDATE pe profiles');
 
 -- ---------------------------------------------------------------- BAZĂ: reguli Supabase pentru obiecte noi (CLAUDE.md pct. 4)
 CREATE TABLE public.tmp_canar_privilegii (id int);
@@ -186,7 +238,8 @@ DELETE FROM auth.users WHERE id = :'u_r1public';                                
 SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = :'u_r1public'), 'R1-00 curățenie: contul de test șters');
 
 -- R1-01 email identic (majuscule/spații pe fișă), metoda email, notificare owner — CALEA DE ÎNCREDERE
--- (contul creat de owner prin API-ul admin: app_metadata.gazpet_legare_automata = true, pe care signUp nu-l poate pune)
+-- (funcția edge cont-nou: createUser cu app_metadata.gazpet_legare_automata = true, pe care signUp nu-l poate pune,
+--  apoi RPC-ul fn_cont_leaga_la_creare cu service_role — teste.creeaza_cont_owner)
 SELECT teste.creeaza_cont_owner('legat.email@gazpet.ro', :'u_r1email');
 SELECT teste.assert((SELECT employee_id = :e_r1email FROM public.profiles WHERE id = :'u_r1email'),
   'R1-01 email identic (case/spații) → legat automat de fișa unică');
@@ -292,7 +345,7 @@ DROP TRIGGER a_test_preprofil ON auth.users;
 SELECT teste.assert((SELECT employee_id = :e_r1prex FROM public.profiles WHERE id = :'u_r1pre'),
   'R1-12 legătura existentă NU se suprascrie (candidatul unic pe email era altă fișă)');
 
--- R1-13 izolarea erorilor
+-- R1-13 izolarea erorilor (eroarea de legare apare acum în RPC-ul fn_cont_leaga_la_creare, nu în triggerul GoTrue)
 CREATE FUNCTION teste.fn_pica_legare() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
   IF NEW.employee_id IS DISTINCT FROM OLD.employee_id THEN RAISE EXCEPTION 'test: legarea pică'; END IF;
@@ -342,6 +395,54 @@ SELECT teste.assert((SELECT tip_cont = 'extern' FROM public.profiles WHERE id = 
   'R1-14 admin fără JWT (migrare / DML confirmat) poate marca tipul');
 UPDATE public.profiles SET tip_cont = NULL WHERE id = :'u_r1simplu';
 
+-- R1-14b (audit A #4, M1) matricea identităților: o SINGURĂ regulă (fn_identitate_privilegiata) = decizia S-A.
+-- Trec DOAR owner JWT / service_role JWT / login postgres fără claims. „auth.uid() IS NULL ⇒ sistem” nu mai deschide
+-- tip_cont / email (înainte treceau GoTrue, authenticator cu claims golite și anon printr-un RPC SECURITY DEFINER).
+CREATE FUNCTION teste.identitate() RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $fn$ SELECT public.fn_identitate_privilegiata() $fn$;
+CREATE FUNCTION teste.matrice_identitati(p_tinta uuid, p_emp bigint, p_owner uuid, p_hr uuid)
+RETURNS TABLE(identitate text, privilegiata text, sa text, tip text, login text) LANGUAGE plpgsql AS $fn$
+DECLARE v text;
+BEGIN
+  FOREACH v IN ARRAY ARRAY['owner','hr','simplu','anon','service_role','postgres','supabase_auth_admin','authenticator','sub_nu_uuid'] LOOP
+    PERFORM teste.ca_admin();
+    CASE v
+      WHEN 'owner' THEN PERFORM teste.ca_utilizator(p_owner);
+      WHEN 'hr' THEN PERFORM teste.ca_utilizator(p_hr);
+      WHEN 'simplu' THEN PERFORM teste.ca_utilizator(p_tinta);
+      WHEN 'anon' THEN PERFORM teste.ca_anon();
+      WHEN 'service_role' THEN PERFORM teste.ca_service_role();
+      WHEN 'postgres' THEN PERFORM teste.ca_login('postgres');
+      WHEN 'supabase_auth_admin' THEN PERFORM teste.ca_login('supabase_auth_admin');
+      WHEN 'authenticator' THEN PERFORM teste.ca_login('authenticator');
+      WHEN 'sub_nu_uuid' THEN PERFORM teste.ca_login_api('{"role":"authenticated","sub":"nu-e-uuid"}'::jsonb, 'authenticated');
+    END CASE;
+    identitate := v;
+    login := session_user;
+    privilegiata := teste.identitate();
+    sa := teste.decizie_rpc(format('UPDATE public.profiles SET employee_id = %s WHERE id = %L', p_emp, p_tinta));
+    tip := teste.decizie_rpc(format('UPDATE public.profiles SET tip_cont = %L WHERE id = %L', 'test', p_tinta));
+    PERFORM teste.ca_admin();
+    RETURN NEXT;
+  END LOOP;
+END $fn$;
+CREATE TEMP TABLE tmp_matrice AS SELECT * FROM teste.matrice_identitati(:'u_r1simplu', :e_r1liber, :'owner', :'u_hr');
+SELECT teste.assert((SELECT bool_and((privilegiata IS NOT NULL) = (sa = 'trece') AND (sa = 'trece') = (tip = 'trece')) FROM tmp_matrice),
+  'R1-14b pentru fiecare identitate: decizia funcției comune = decizia S-A (employee_id) = decizia protecției (tip_cont)');
+SELECT teste.assert((SELECT jsonb_object_agg(identitate, COALESCE(privilegiata, '—') || '/' || sa) FROM tmp_matrice)
+    = '{"owner":"owner/trece","hr":"—/42501","simplu":"—/42501","anon":"—/42501","service_role":"service_role/trece",
+        "postgres":"db_login/trece","supabase_auth_admin":"—/42501","authenticator":"—/42501","sub_nu_uuid":"—/22P02"}'::jsonb,
+  'R1-14b matricea de 9 identități: doar owner JWT / service_role JWT / login postgres fără claims trec');
+SELECT teste.assert((SELECT tip = '42501' FROM tmp_matrice WHERE identitate = 'supabase_auth_admin')
+    AND (SELECT tip = '42501' FROM tmp_matrice WHERE identitate = 'authenticator')
+    AND (SELECT login = 'authenticator' AND tip = '42501' FROM tmp_matrice WHERE identitate = 'anon'),
+  'R1-14b tip_cont: GoTrue fără claims / authenticator cu claims golite / anon printr-un RPC → 42501 (înainte: „sistem”, trecea)');
+SELECT teste.assert((SELECT privilegiata IS NULL AND sa <> 'trece' AND tip <> 'trece' FROM tmp_matrice WHERE identitate = 'sub_nu_uuid'),
+  'R1-14b JWT cu sub care nu e uuid: funcția comună întoarce NULL fără eroare; UPDATE-ul e refuzat (22P02 vine din triggerele VECHI prevent_role_escalation / enforce_owner_only, prin auth.uid() — fail-closed; porțile pachetului dau 42501, vezi R1-35)');
+SELECT teste.assert((SELECT employee_id IS NULL AND tip_cont IS NULL FROM public.profiles WHERE id = :'u_r1simplu'),
+  'R1-14b profilul țintă a rămas neschimbat după matrice');
+DROP TABLE tmp_matrice;
+
 -- R1-15 CHECK pe tip_cont
 SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET tip_cont = %L WHERE id = %L', 'altceva', :'u_r1simplu'),
   'R1-15 tip_cont în afara listei → CHECK', '23514');
@@ -390,18 +491,39 @@ SELECT teste.assert(NOT has_function_privilege('anon', 'public.fn_cont_notifica_
     AND NOT has_function_privilege('authenticated', 'public.fn_cont_notifica_owneri(text,text,text,text)', 'EXECUTE'),
   'R1-18 fn_cont_notifica_owneri e internă');
 SELECT teste.assert(NOT has_function_privilege('anon', 'public.handle_new_user()', 'EXECUTE')
-    AND NOT has_function_privilege('authenticated', 'public.handle_new_user()', 'EXECUTE'),
-  'R1-18 handle_new_user nu e apelabilă din API');
+    AND NOT has_function_privilege('authenticated', 'public.handle_new_user()', 'EXECUTE')
+    AND NOT has_function_privilege('service_role', 'public.handle_new_user()', 'EXECUTE'),
+  'R1-18 handle_new_user nu e apelabilă din API (P4: nici service_role)');
 SELECT teste.assert(NOT has_function_privilege('anon', 'public.fn_admin_conturi_alerte()', 'EXECUTE')
     AND has_function_privilege('authenticated', 'public.fn_admin_conturi_alerte()', 'EXECUTE')
-    AND NOT has_function_privilege('anon', 'public.fn_cont_leaga_automat(boolean)', 'EXECUTE')
-    AND has_function_privilege('authenticated', 'public.fn_cont_leaga_automat(boolean)', 'EXECUTE'),
+    AND NOT has_function_privilege('anon', 'public.fn_cont_leaga_automat(boolean,jsonb)', 'EXECUTE')
+    AND has_function_privilege('authenticated', 'public.fn_cont_leaga_automat(boolean,jsonb)', 'EXECUTE'),
   'R1-18 fn_admin_conturi_alerte / fn_cont_leaga_automat: EXECUTE doar pentru authenticated (poarta e în cod)');
+SELECT teste.assert(NOT has_function_privilege('service_role', 'public.fn_admin_conturi_alerte()', 'EXECUTE')
+    AND NOT has_function_privilege('service_role', 'public.fn_cont_leaga_automat(boolean,jsonb)', 'EXECUTE')
+    AND NOT has_table_privilege('service_role', 'public.v_admin_conturi_alerte', 'SELECT'),
+  'R1-18 P3: RPC-urile cu poartă owner nu mai au EXECUTE / SELECT pentru service_role');
+SELECT teste.assert(has_function_privilege('service_role', 'public.fn_cont_leaga_la_creare(uuid)', 'EXECUTE')
+    AND has_function_privilege('authenticated', 'public.fn_cont_leaga_la_creare(uuid)', 'EXECUTE')
+    AND NOT has_function_privilege('anon', 'public.fn_cont_leaga_la_creare(uuid)', 'EXECUTE'),
+  'R1-18 fn_cont_leaga_la_creare: EXECUTE pentru service_role (cont-nou) și authenticated (owner), nu anon');
+SELECT teste.assert((SELECT bool_and(NOT has_function_privilege(r, f, 'EXECUTE'))
+                       FROM unnest(ARRAY['anon','authenticated','service_role']) r,
+                            unnest(ARRAY['public.fn_identitate_claims()','public.fn_identitate_privilegiata()','public.fn_identitate_uid()',
+                                         'public.fn_identitate_om()','public.fn_identitate_eticheta()']) f),
+  'R1-18 funcțiile de identitate sunt interne (fără EXECUTE pentru anon / authenticated / service_role)');
 SELECT teste.assert((SELECT bool_and(p.prosecdef AND p.proconfig @> ARRAY['search_path=public, pg_temp'])
                        FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
                         AND p.proname IN ('fn_cont_candidati_angajat','fn_cont_notifica_owneri','handle_new_user',
-                                          'fn_profiles_protectie_legatura','fn_cont_leaga_automat','fn_admin_conturi_alerte')),
-  'R1-18 funcțiile R1: SECURITY DEFINER cu search_path = public, pg_temp');
+                                          'fn_profiles_protectie_legatura','fn_cont_leaga_automat','fn_admin_conturi_alerte',
+                                          'fn_cont_leaga_la_creare','fn_identitate_claims','fn_identitate_privilegiata',
+                                          'fn_identitate_uid','fn_identitate_om','fn_identitate_eticheta'))
+    AND (SELECT count(*) = 12 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+          AND p.proname IN ('fn_cont_candidati_angajat','fn_cont_notifica_owneri','handle_new_user',
+                            'fn_profiles_protectie_legatura','fn_cont_leaga_automat','fn_admin_conturi_alerte',
+                            'fn_cont_leaga_la_creare','fn_identitate_claims','fn_identitate_privilegiata',
+                            'fn_identitate_uid','fn_identitate_om','fn_identitate_eticheta')),
+  'R1-18 funcțiile R1 (12): SECURITY DEFINER cu search_path = public, pg_temp');
 
 -- R1-19 legarea la cerere (contul a apărut înaintea fișei)
 SELECT teste.creeaza_cont('gheorghe.vasilescu@gazpet.ro', :'u_r1tarziu');
@@ -418,8 +540,10 @@ SELECT teste.assert((SELECT rezultat FROM public.fn_cont_leaga_automat(true) WHE
   'R1-19 simularea clasifică ambiguu / candidat_ocupat / fara_candidat');
 SELECT teste.assert((SELECT count(*) FROM public.profiles WHERE employee_id IS NOT NULL) = :legate_inainte,
   'R1-19 simularea NU scrie nimic');
-SELECT teste.assert((SELECT rezultat = 'legat' FROM public.fn_cont_leaga_automat(false) WHERE profile_id = :'u_r1tarziu'),
-  'R1-19 p_simulare=false leagă potrivirea unică');
+SELECT COALESCE(jsonb_agg(jsonb_build_object('profile_id', profile_id, 'employee_id', employee_id)), '[]'::jsonb) AS lista_r119
+  FROM public.fn_cont_leaga_automat(true) WHERE rezultat = 'de_legat' \gset
+SELECT teste.assert((SELECT rezultat = 'legat' FROM public.fn_cont_leaga_automat(false, :'lista_r119'::jsonb) WHERE profile_id = :'u_r1tarziu'),
+  'R1-19 p_simulare=false + perechile confirmate din previzualizare leagă potrivirea unică');
 SELECT teste.assert((SELECT employee_id = :e_r1tarziu FROM public.profiles WHERE id = :'u_r1tarziu')
     AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1amb')
     AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1ocup')
@@ -445,8 +569,10 @@ SELECT teste.assert((SELECT count(*) = 2 FROM public.notifications WHERE profile
 SELECT teste.ca_utilizator(:'owner');
 SELECT teste.assert((SELECT count(*) = 2 FROM public.fn_cont_leaga_automat(true) WHERE profile_id IN (:'u_r1pub1', :'u_r1pub2') AND rezultat = 'de_legat'),
   'R1-20 previzualizarea le arată „de_legat”');
-SELECT teste.assert((SELECT count(*) = 2 FROM public.fn_cont_leaga_automat(false) WHERE profile_id IN (:'u_r1pub1', :'u_r1pub2') AND rezultat = 'legat'),
-  'R1-20 confirmarea owner-ului leagă (un clic)');
+SELECT COALESCE(jsonb_agg(jsonb_build_object('profile_id', profile_id, 'employee_id', employee_id)), '[]'::jsonb) AS lista_r120
+  FROM public.fn_cont_leaga_automat(true) WHERE rezultat = 'de_legat' \gset
+SELECT teste.assert((SELECT count(*) = 2 FROM public.fn_cont_leaga_automat(false, :'lista_r120'::jsonb) WHERE profile_id IN (:'u_r1pub1', :'u_r1pub2') AND rezultat = 'legat'),
+  'R1-20 confirmarea owner-ului (lista din previzualizare) leagă');
 SELECT teste.ca_admin();
 SELECT teste.assert((SELECT employee_id = :e_r1maria FROM public.profiles WHERE id = :'u_r1pub1')
     AND (SELECT employee_id = :e_r1vasile FROM public.profiles WHERE id = :'u_r1pub2'),
@@ -465,7 +591,7 @@ SELECT teste.ca_utilizator(:'owner');
 SELECT teste.assert((SELECT rezultat = 'email_diferit' AND email = 'atacator@adromevolution.ro' AND employee_id IS NULL
                      FROM public.fn_cont_leaga_automat(true) WHERE profile_id = :'u_r1spoof'),
   'R1-21 previzualizarea marchează „email_diferit” și arată emailul de LOGARE (nu pe cel falsificat)');
-SELECT teste.assert((SELECT rezultat = 'email_diferit' FROM public.fn_cont_leaga_automat(false) WHERE profile_id = :'u_r1spoof'),
+SELECT teste.assert((SELECT rezultat = 'email_diferit' FROM public.fn_cont_leaga_automat(false, '[]'::jsonb) WHERE profile_id = :'u_r1spoof'),
   'R1-21 aplicarea sare peste profilul cu email diferit');
 SELECT teste.assert((SELECT candidati = '[]'::jsonb AND email = 'atacator@adromevolution.ro' FROM public.v_admin_conturi_alerte
                      WHERE id = 'fara_angajat:' || :'u_r1spoof'),
@@ -496,11 +622,116 @@ SELECT teste.assert((SELECT count(*) = 2 AND bool_and(rezultat = 'ambiguu' AND e
                      FROM public.fn_cont_leaga_automat(true) WHERE profile_id IN (:'u_r1d1', :'u_r1d2')),
   'R1-23 previzualizare: ambele conturi „ambiguu” (aceeași fișă propusă de 2 conturi)');
 SELECT teste.assert((SELECT count(*) = 2 AND bool_and(rezultat = 'ambiguu')
-                     FROM public.fn_cont_leaga_automat(false) WHERE profile_id IN (:'u_r1d1', :'u_r1d2')),
+                     FROM public.fn_cont_leaga_automat(false, (SELECT jsonb_agg(jsonb_build_object('profile_id', x.profile_id, 'employee_id', x.employee_id))
+                                                                FROM public.fn_cont_leaga_automat(true) x WHERE x.profile_id IN (:'u_r1d1', :'u_r1d2')))
+                     WHERE profile_id IN (:'u_r1d1', :'u_r1d2')),
   'R1-23 aplicare: tot „ambiguu”, identic cu previzualizarea');
 SELECT teste.ca_admin();
 SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.profiles WHERE employee_id = :e_r1dublura),
   'R1-23 fișa nu s-a legat arbitrar de niciunul');
+
+-- R1-30 (audit A #1, CRITIC) calea de încredere cu S-A live: GoTrue (login supabase_auth_admin) NU mai încearcă
+-- UPDATE employee_id (S-A îl refuza cu 42501, iar eroarea era înghițită); legarea o face RPC-ul cu service_role.
+\set u_r1inc 00000000-0000-4000-8000-0000000b0019
+INSERT INTO public.employees (name, department, email, active) VALUES ('INCREDERE TOMA', 'Test', 'toma.incredere@gazpet.ro', true)
+  RETURNING id AS e_r1inc \gset
+SELECT teste.creeaza_cont('toma.incredere@gazpet.ro', :'u_r1inc', '{}'::jsonb, '{"gazpet_legare_automata": true}'::jsonb);
+SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1inc')
+    AND NOT EXISTS (SELECT 1 FROM public.notifications WHERE message LIKE '%toma.incredere@gazpet.ro%'),
+  'R1-30 createUser cu marcaj de încredere (GoTrue): fără UPDATE în trigger → nicio eroare 42501 înghițită, nicio notificare de eșec');
+SELECT teste.ca_service_role();
+SELECT teste.assert(session_user = 'authenticator' AND current_user = 'service_role', 'R1-30 actor: cont-nou cu cheia service (PostgREST)');
+SELECT public.fn_cont_leaga_la_creare(:'u_r1inc') AS rez_r1inc \gset
+SELECT teste.ca_admin();
+SELECT teste.assert(:'rez_r1inc' = 'legat' AND (SELECT employee_id = :e_r1inc FROM public.profiles WHERE id = :'u_r1inc')
+    AND (SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_legat_automat'
+           AND message LIKE 'Cont nou toma.incredere@gazpet.ro legat automat de INCREDERE TOMA%'),
+  'R1-30 RPC-ul cu service_role leagă (S-A acceptă service_role) și anunță owner-ul');
+SELECT teste.ca_service_role();
+SELECT teste.assert(public.fn_cont_leaga_la_creare(:'u_r1inc') = 'legatura_existenta', 'R1-30 al doilea apel → legatura_existenta (idempotent)');
+SELECT teste.ca_admin();
+
+-- R1-31 poarta RPC-ului: doar service_role (cont-nou) sau owner; lipsa identității nu deschide nimic
+\set u_r1inc2 00000000-0000-4000-8000-0000000b001a
+INSERT INTO public.employees (name, department, email, active) VALUES ('INCREDERE DOI', 'Test', 'doi.incredere@gazpet.ro', true)
+  RETURNING id AS e_r1inc2 \gset
+SELECT teste.creeaza_cont('doi.incredere@gazpet.ro', :'u_r1inc2', '{}'::jsonb, '{"gazpet_legare_automata": true}'::jsonb);
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_r1inc2'), 'R1-31 HR (JWT non-owner) → refuzat', '42501');
+SELECT teste.ca_utilizator(:'u_r1inc2');
+SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_r1inc2'), 'R1-31 contul însuși (JWT) → refuzat', '42501');
+SELECT teste.ca_anon();
+SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_r1inc2'), 'R1-31 anon → fără EXECUTE', '42501');
+SELECT teste.ca_login('authenticator');
+SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_r1inc2'), 'R1-31 authenticator fără claims → refuzat', '42501');
+SELECT teste.ca_login('supabase_auth_admin');
+SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_r1inc2'), 'R1-31 supabase_auth_admin fără claims → refuzat', '42501');
+SELECT teste.ca_admin();
+SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_r1inc2'),
+  'R1-31 login postgres fără claims → refuzat (RPC-ul e doar pentru cont-nou / owner; din SQL se leagă direct, cu confirmare)', '42501');
+SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1inc2'), 'R1-31 după refuzuri: contul tot nelegat');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert(public.fn_cont_leaga_la_creare(:'u_r1inc2') = 'legat', 'R1-31 owner (JWT) → legat');
+SELECT teste.ca_admin();
+
+-- R1-32 RPC-ul NU leagă un cont fără marcajul de încredere (signUp public), nici cu service_role
+\set u_r1pub3 00000000-0000-4000-8000-0000000b001b
+INSERT INTO public.employees (name, department, email, active) VALUES ('URSU PUBLIC', 'Test', 'ursu.public@gazpet.ro', true)
+  RETURNING id AS e_r1pub3 \gset
+SELECT teste.creeaza_cont('ursu.public@gazpet.ro', :'u_r1pub3');
+SELECT teste.ca_service_role();
+SELECT teste.assert(public.fn_cont_leaga_la_creare(:'u_r1pub3') = 'fara_marcaj_incredere', 'R1-32 cont public + service_role → fara_marcaj_incredere');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1pub3'), 'R1-32 contul public rămâne nelegat (doar propunere la owner)');
+
+-- R1-33 (audit A #6, TOCTOU) aplicarea leagă DOAR perechile confirmate din previzualizare
+\set u_r1tt1 00000000-0000-4000-8000-0000000b001c
+\set u_r1tt2 00000000-0000-4000-8000-0000000b001d
+INSERT INTO public.employees (name, department, email, active) VALUES ('TOCTOU UNU', 'Test', 'tt.unu@gazpet.ro', true) RETURNING id AS e_tt1 \gset
+INSERT INTO public.employees (name, department, email, active) VALUES ('TOCTOU DOI', 'Test', 'tt.doi.personal@gmail.com', true) RETURNING id AS e_tt2 \gset
+SELECT teste.creeaza_cont('tt.unu@gazpet.ro', :'u_r1tt1');
+SELECT teste.ca_utilizator(:'owner');
+SELECT jsonb_agg(jsonb_build_object('profile_id', profile_id, 'employee_id', employee_id)) AS lista_tt
+  FROM public.fn_cont_leaga_automat(true) WHERE rezultat = 'de_legat' AND profile_id = :'u_r1tt1' \gset
+SELECT teste.ca_admin();
+-- între previzualizare și „Continui”: cineva își face cont public cu emailul personal de pe altă fișă
+SELECT teste.creeaza_cont('tt.doi.personal@gmail.com', :'u_r1tt2');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.asteapta_eroare('SELECT * FROM public.fn_cont_leaga_automat(false)', 'R1-33 aplicarea fără lista confirmată → refuz', '22023');
+SELECT teste.assert((SELECT rezultat = 'de_legat' FROM public.fn_cont_leaga_automat(true) WHERE profile_id = :'u_r1tt2'),
+  'R1-33 contul nou apare „de_legat” într-o previzualizare NOUĂ');
+CREATE TEMP TABLE tmp_tt AS SELECT * FROM public.fn_cont_leaga_automat(false, :'lista_tt'::jsonb) WHERE profile_id IN (:'u_r1tt1', :'u_r1tt2');
+SELECT teste.assert((SELECT rezultat = 'legat' FROM tmp_tt WHERE profile_id = :'u_r1tt1')
+    AND (SELECT rezultat = 'neconfirmat' FROM tmp_tt WHERE profile_id = :'u_r1tt2'),
+  'R1-33 aplicarea cu lista din previzualizare: contul văzut → legat; contul apărut după → „neconfirmat”, NU se leagă');
+SELECT teste.assert((SELECT rezultat = 'schimbat' FROM public.fn_cont_leaga_automat(false,
+                       jsonb_build_array(jsonb_build_object('profile_id', :'u_r1tt2', 'employee_id', :e_tt1))) WHERE profile_id = :'u_r1tt2'),
+  'R1-33 pereche confirmată cu altă fișă decât potrivirea de acum → „schimbat”, nu se leagă');
+SELECT teste.assert((SELECT cont_incredere IS FALSE AND cont_provider = 'email' FROM public.fn_cont_leaga_automat(true) WHERE profile_id = :'u_r1tt2'),
+  'R1-33 previzualizarea arată provider-ul și marcajul de încredere (fals pentru signUp public)');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1tt2')
+    AND (SELECT employee_id = :e_tt1 FROM public.profiles WHERE id = :'u_r1tt1'),
+  'R1-33 fișa TOCTOU DOI rămâne nelegată');
+DROP TABLE tmp_tt;
+
+-- R1-34 (audit A #1) eroarea la potrivire și nelegarea pe calea de încredere ajung la owner pe ORICE domeniu
+ALTER FUNCTION public.fn_cont_candidati_angajat(text) RENAME TO fn_cont_candidati_angajat_ascuns_test;
+SELECT teste.creeaza_cont('eroare.potrivire@yahoo.com');
+ALTER FUNCTION public.fn_cont_candidati_angajat_ascuns_test(text) RENAME TO fn_cont_candidati_angajat;
+SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_nelegat'
+    AND message LIKE 'Cont nou eroare.potrivire@yahoo.com nelegat: eroare la potrivire:%'),
+  'R1-34 eroare la potrivire pe domeniu extern → owner-ul e anunțat (înainte: tăcere în afara gazpet.ro)');
+SELECT teste.creeaza_cont('extern.incredere@yahoo.com', gen_random_uuid(), '{}'::jsonb, '{"gazpet_legare_automata": true}'::jsonb);
+SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_nelegat'
+    AND message = 'Cont nou extern.incredere@yahoo.com nelegat: 0 candidați'),
+  'R1-34 cale de încredere fără candidat, domeniu extern → cont_nelegat');
+
+-- R1-35 (audit A #9) porțile owner cer identitatea explicită: JWT cu sub care nu e uuid → 42501, nu 22P02
+SELECT teste.ca_login_api('{"role":"authenticated","sub":"nu-e-uuid"}'::jsonb, 'authenticated');
+SELECT teste.asteapta_eroare('SELECT * FROM public.fn_cont_leaga_automat(true)', 'R1-35 fn_cont_leaga_automat, sub non-uuid → 42501', '42501');
+SELECT teste.asteapta_eroare('SELECT * FROM public.fn_admin_conturi_alerte()', 'R1-35 fn_admin_conturi_alerte, sub non-uuid → 42501', '42501');
+SELECT teste.ca_admin();
 
 -- ============================================================================
 -- R2 — contract închis → cont închis + jurnal + restaurare doar owner (migrarea 20260929d)
@@ -565,13 +796,14 @@ SELECT teste.assert(public.fn_cont_flaguri() = ARRAY[
     AND NOT ('is_owner' = ANY (public.fn_cont_flaguri())),
   'R2-00 fn_cont_flaguri() = exact cele 22 de flaguri, fără is_owner');
 
--- fișe + conturi (legate automat prin email)
-INSERT INTO public.employees (name, department, email, active) VALUES ('INCHIDERE UI', 'Test', 'r2.ui@gazpet.ro', true) RETURNING id AS e_r2ui \gset
-INSERT INTO public.employees (name, department, email, active) VALUES ('INCHIDERE TOGGLE', 'Test', 'r2.toggle@gazpet.ro', true) RETURNING id AS e_r2tg \gset
-INSERT INTO public.employees (name, department, email, active) VALUES ('FARA DATA', 'Test', 'r2.faradata@gazpet.ro', true) RETURNING id AS e_r2fd \gset
-INSERT INTO public.employees (name, department, email, active) VALUES ('DATA VIITOR', 'Test', 'r2.viitor@gazpet.ro', true) RETURNING id AS e_r2fv \gset
-INSERT INTO public.employees (name, department, email, active) VALUES ('VIITOR CRON', 'Test', 'r2.viitorcron@gazpet.ro', true) RETURNING id AS e_r2v2 \gset
-INSERT INTO public.employees (name, department, email, active) VALUES ('EROARE INCHIDERE', 'Test', 'r2.eroare@gazpet.ro', true) RETURNING id AS e_r2err \gset
+-- fișe + conturi (legate automat prin email). CNP pe fiecare fișă: garda „alt contract activ” (condiția Copilot)
+-- cere CNP-ul; fără el închiderea automată NU se face (situație incompletă → doar alertă, R2-28c).
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('INCHIDERE UI', 'Test', 'r2.ui@gazpet.ro', true, '1800101000011') RETURNING id AS e_r2ui \gset
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('INCHIDERE TOGGLE', 'Test', 'r2.toggle@gazpet.ro', true, '1800101000012') RETURNING id AS e_r2tg \gset
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('FARA DATA', 'Test', 'r2.faradata@gazpet.ro', true, '1800101000013') RETURNING id AS e_r2fd \gset
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('DATA VIITOR', 'Test', 'r2.viitor@gazpet.ro', true, '1800101000014') RETURNING id AS e_r2fv \gset
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('VIITOR CRON', 'Test', 'r2.viitorcron@gazpet.ro', true, '1800101000015') RETURNING id AS e_r2v2 \gset
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('EROARE INCHIDERE', 'Test', 'r2.eroare@gazpet.ro', true, '1800101000016') RETURNING id AS e_r2err \gset
 SELECT teste.creeaza_cont_owner('r2.ui@gazpet.ro', :'u_r2ui');
 SELECT teste.creeaza_cont_owner('r2.toggle@gazpet.ro', :'u_r2tg');
 SELECT teste.creeaza_cont_owner('r2.faradata@gazpet.ro', :'u_r2fd');
@@ -601,26 +833,43 @@ INSERT INTO public.notifications (profile_id, type, title, message) VALUES (:'u_
 SELECT count(*) AS audit_inainte FROM public.hr_employees_audit \gset
 SELECT teste.ca_utilizator(:'u_hr');
 UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_r2ui;
--- R2-18 claims restaurate după golirea locală din fn_cont_inchide
-SELECT teste.assert(auth.uid() = :'u_hr'::uuid AND current_user = 'authenticated',
-  'R2-18 după închidere, în aceeași tranzacție: auth.uid() = HR și current_user = authenticated');
+-- R2-18 identitatea HR e aceeași în toată tranzacția: fn_cont_inchide NU mai golește / repune claims
+SELECT teste.assert(auth.uid() = :'u_hr'::uuid AND current_user = 'authenticated' AND session_user = 'authenticator',
+  'R2-18 după închidere, în aceeași tranzacție: auth.uid() = HR, current_user = authenticated, login authenticator');
 SELECT teste.ca_admin();
 SELECT teste.assert((SELECT active = false FROM public.employees WHERE id = :e_r2ui),
   'R2-01 fișa e inactivă (UPDATE-ul HR a reușit)');
 SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.user_module_access WHERE profile_id = :'u_r2ui')
     AND NOT EXISTS (SELECT 1 FROM public.profile_sites WHERE profile_id = :'u_r2ui'),
   'R2-01 0 rânduri în user_module_access și profile_sites');
+SELECT teste.assert((SELECT banned_until = '2999-12-31 00:00:00+00' FROM auth.users WHERE id = :'u_r2ui')
+    AND NOT EXISTS (SELECT 1 FROM auth.sessions WHERE user_id = :'u_r2ui')
+    AND NOT EXISTS (SELECT 1 FROM auth.refresh_tokens WHERE user_id = :'u_r2ui'::text),
+  'R2-01 banned_until=2999-12-31, 0 sesiuni, 0 refresh tokens (ȘTERȘI, nu doar revocați) — pe loc, și pe calea HR');
+-- (audit A #2) calea HR = identitate neprivilegiată: flagurile NU se mai resetează prin golirea claims (falsificare),
+-- ci intră în coadă; le pune pe false fn_conturi_inchideri_sweep (pg_cron, login postgres = identitate explicită)
+SELECT teste.assert(teste.flaguri_toate(:'u_r2ui', true)
+    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2ui' AND tip = 'flaguri' AND rezolvat_la IS NULL
+           AND creat_de_identitate = 'authenticated:' || :'u_hr'),
+  'R2-01 calea HR: flagurile rămân până la coadă (fără falsificarea identității), intrare „flaguri” deschisă');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert((SELECT (alocari ->> 'flaguri_in_coada')::boolean FROM public.v_admin_conturi_alerte WHERE id = 'inchis_cu_acces_rest:' || :'u_r2ui'),
+  'R2-01 alerta inchis_cu_acces_rest arată că flagurile sunt în coadă');
+SELECT teste.ca_admin();
+SELECT public.fn_conturi_inchideri_sweep() AS sweep_r201 \gset
+SELECT teste.assert((:'sweep_r201'::jsonb ->> 'flaguri_resetate')::int = 1
+    AND (SELECT rezultat = 'flaguri_resetate' AND incercari = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2ui' AND tip = 'flaguri'),
+  'R2-01 sweep-ul cozii (cron, login postgres): o intrare procesată, rezolvată');
 SELECT teste.assert(teste.flaguri_toate(:'u_r2ui', false),
   'R2-01 toate cele 22 de flaguri sunt false');
 SELECT teste.assert((SELECT NOT (can_access_salarii OR can_access_personal_data OR can_access_pontaj_brut OR can_modify_employees
                            OR can_manage_contracts OR can_access_diurne OR can_access_financiar) FROM public.profiles WHERE id = :'u_r2ui'),
-  'R2-01 inclusiv cele 8 flaguri owner-only (capcana trg_enforce_owner_only_salary_flags evitată)');
-SELECT teste.assert((SELECT banned_until = '2999-12-31 00:00:00+00' FROM auth.users WHERE id = :'u_r2ui')
-    AND NOT EXISTS (SELECT 1 FROM auth.sessions WHERE user_id = :'u_r2ui')
-    AND NOT EXISTS (SELECT 1 FROM auth.refresh_tokens WHERE user_id = :'u_r2ui'::text AND revoked IS NOT TRUE),
-  'R2-01 banned_until=2999-12-31, 0 sesiuni, niciun refresh token activ (revocați; cei legați de sesiuni cad în cascadă)');
+  'R2-01 inclusiv cele 8 flaguri owner-only (capcana trg_enforce_owner_only_salary_flags evitată fără golirea claims)');
+SELECT teste.assert(teste.inchis_complet(:'u_r2ui'), 'R2-01 după coadă: cont închis complet');
 SELECT teste.assert((SELECT count(*) = 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2ui'),
   'R2-01 exact 1 rând în jurnal');
+SELECT teste.assert((SELECT facut_de_identitate = 'authenticated:' || :'u_hr' FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2ui'),
+  'R2-01 (audit A #8) jurnal: facut_de_identitate = authenticated:<HR> (identitate explicită)');
 SELECT teste.assert((SELECT facut_de = :'u_hr'::uuid AND sursa = 'trigger_contract_incheiat' AND employee_id = :e_r2ui
                           AND email = 'r2.ui@gazpet.ro' AND motiv LIKE 'Contract încheiat la %(fișa #' || :e_r2ui || ' INCHIDERE UI)'
                           AND restaurat_la IS NULL
@@ -657,9 +906,12 @@ SELECT teste.assert((SELECT facut_de = :'owner'::uuid AND sursa = 'trigger_contr
                           AND snapshot ->> 'banned_until' LIKE '2020-01-01%'
                      FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2tg'),
   'R2-02 jurnal cu facut_de = owner; snapshot păstrează flagurile mixte și banul vechi expirat');
+SELECT teste.assert((SELECT facut_de_identitate = 'owner:' || :'owner' FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2tg')
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2tg'),
+  'R2-02 owner (JWT legitim, login authenticator) → flagurile pe loc (S-A / triggerele vechi îl acceptă), nimic în coadă');
 
 -- R2-03 calea cron (postgres fără JWT) pe o fișă cu data de ieri
-INSERT INTO public.employees (name, department, email, active, termination_date) VALUES ('INCHIDERE CRON', 'Test', 'r2.cron@gazpet.ro', true, CURRENT_DATE - 1)
+INSERT INTO public.employees (name, department, email, active, termination_date, cnp) VALUES ('INCHIDERE CRON', 'Test', 'r2.cron@gazpet.ro', true, CURRENT_DATE - 1, '1800101000017')
   RETURNING id AS e_r2cron \gset
 SELECT teste.creeaza_cont('r2.cron@gazpet.ro', :'u_r2cron');
 SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r2cron'),
@@ -668,11 +920,16 @@ UPDATE public.profiles SET employee_id = :e_r2cron WHERE id = :'u_r2cron';
 INSERT INTO public.app_modules (key, name, is_active) VALUES ('test_modul_efemer', 'Modul efemer (test)', true);
 SELECT teste.da_acces(:'u_r2cron');
 INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES (:'u_r2cron', 'test_modul_efemer', 'viewer');
+SELECT teste.ca_login('postgres');                                     -- pg_cron: SET SESSION AUTHORIZATION postgres, fără claims
+SELECT teste.assert(session_user = 'postgres' AND nullif(current_setting('request.jwt.claims', true), '') IS NULL,
+  'R2-03 actor: login postgres fără claims (ca jobul pg_cron 13)');
 SELECT teste.assert(teste.cron_hr_auto_deactivate_terminated() >= 1, 'R2-03 cron-ul rulează');
-SELECT teste.assert(teste.inchis_complet(:'u_r2cron'), 'R2-03 cron: cont închis complet');
-SELECT teste.assert((SELECT facut_de IS NULL AND sursa = 'trigger_contract_incheiat' AND jsonb_array_length(snapshot -> 'module') = 3
+SELECT teste.assert(teste.inchis_complet(:'u_r2cron'), 'R2-03 cron: cont închis complet, pe loc (identitate explicită db_login)');
+SELECT teste.assert((SELECT facut_de IS NULL AND facut_de_identitate = 'db_login:postgres' AND sursa = 'trigger_contract_incheiat'
+                          AND jsonb_array_length(snapshot -> 'module') = 3
                      FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2cron'),
-  'R2-03 jurnal: facut_de NULL (sistem), sursa trigger_contract_incheiat');
+  'R2-03 jurnal: facut_de NULL (nu e un om), facut_de_identitate = db_login:postgres, sursa trigger_contract_incheiat');
+SELECT teste.ca_admin();
 
 -- R2-04 active=false FĂRĂ termination_date → NU se închide
 SELECT teste.ca_utilizator(:'u_hr');
@@ -700,6 +957,9 @@ SELECT teste.ca_admin();
 SELECT teste.assert((SELECT count(*) = 2 FROM public.user_module_access WHERE profile_id = :'u_r2fv')
     AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2fv'),
   'R2-05 dezactivat înainte de data încetării → neînchis');
+SELECT teste.assert((SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2fv' AND tip = 'programata'
+                       AND scadent_la = CURRENT_DATE + 10 AND rezolvat_la IS NULL),
+  'R2-05 (audit B #5-ii) închiderea e PROGRAMATĂ în coadă pentru data încetării');
 SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_angajat_inactiv_fara_incetare'
     AND message LIKE 'r2.viitor@gazpet.ro%înainte de data încetării%'),
   'R2-05 notificarea explică data din viitor');
@@ -709,6 +969,29 @@ SELECT teste.assert((SELECT count(*) = 1 FROM public.v_admin_conturi_alerte WHER
   'R2-05 alertă cont_activ_fost_angajat cu data viitoare');
 SELECT teste.ca_admin();
 
+-- R2-28d (garda „alt contract activ”, audit B #4) ATOMICĂ: cât timp tranzacția care încheie contractul ține lock-ul pe
+-- persoană, o fișă nouă activă cu același CNP (altă conexiune) așteaptă → lock_timeout 55P03 (nu se strecoară între
+-- verificare și închidere). Rulat ÎNAINTEA oricărui ALTER TABLE pe employees din tranzacția testului (ALTER TABLE ține
+-- AccessExclusiveLock până la final și ar bloca orice INSERT, indiferent de gardă) + control cu alt CNP.
+CREATE EXTENSION IF NOT EXISTS dblink WITH SCHEMA teste;
+\set u_r2p3 00000000-0000-4000-8000-0000000c0012
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('CONCURENT UNU', 'Test', 'r2.concurent@gazpet.ro', true, '1900303000033')
+  RETURNING id AS e_conc \gset
+SELECT teste.creeaza_cont_owner('r2.concurent@gazpet.ro', :'u_r2p3');
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_conc;
+SELECT teste.ca_admin();
+SELECT format('host=127.0.0.1 port=%s dbname=%s user=postgres', current_setting('port'), current_database()) AS conn_alt \gset
+SELECT teste.assert(teste.dblink_exec(:'conn_alt',
+    'BEGIN; SET LOCAL lock_timeout = ''300ms''; INSERT INTO public.employees (name, department, active, cnp) VALUES (''ALTA PERSOANA'', ''Test'', true, ''1900303000044''); ROLLBACK;') = 'ROLLBACK',
+  'R2-28d control: altă conexiune, altă persoană (alt CNP) → INSERT-ul trece (tabelul nu e blocat de tranzacția testului)');
+
+SELECT teste.asteapta_eroare(format('SELECT teste.dblink_exec(%L, %L)', :'conn_alt',
+    'BEGIN; SET LOCAL lock_timeout = ''300ms''; INSERT INTO public.employees (name, department, active, cnp) VALUES (''CONCURENT DOI'', ''Test'', true, ''1900303000033''); ROLLBACK;'),
+  'R2-28d altă conexiune: fișă nouă ACTIVĂ cu același CNP în timpul încheierii → așteaptă lock-ul persoanei (lock_timeout)', '55P03');
+SELECT teste.asteapta_eroare(format('SELECT teste.dblink_exec(%L, %L)', :'conn_alt',
+    'BEGIN; SET LOCAL lock_timeout = ''300ms''; SELECT public.fn_cont_lock_persoana(''1900303000033''); ROLLBACK;'),
+  'R2-28d altă conexiune: garda aceleiași persoane așteaptă și ea (55P03)', '55P03');
 -- R2-06 dată în viitor, fișa rămâne activă → nimic; „trece timpul” → cron-ul închide
 SELECT teste.ca_utilizator(:'u_hr');
 UPDATE public.employees SET termination_date = CURRENT_DATE + 5 WHERE id = :e_r2v2;
@@ -784,6 +1067,10 @@ SELECT teste.ca_admin();
 SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.user_module_access WHERE profile_id = :'u_r2tg')
     AND (SELECT banned_until = '2999-12-31 00:00:00+00' FROM auth.users WHERE id = :'u_r2tg'),
   'R2-10 reactivarea NU redă module și NU ridică banul');
+SELECT teste.assert(teste.flaguri_toate(:'u_r2tg', false)
+    AND NOT EXISTS (SELECT 1 FROM public.profile_sites WHERE profile_id = :'u_r2tg')
+    AND NOT EXISTS (SELECT 1 FROM auth.sessions WHERE user_id = :'u_r2tg'),
+  'R2-10 (audit B #8) reactivarea NU redă nici flagurile, nici șantierele, nici sesiunile');
 SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_angajat_reactivat'
     AND message LIKE 'r2.toggle@gazpet.ro%NU a fost redat automat%'),
   'R2-10 notificare cont_angajat_reactivat');
@@ -794,6 +1081,14 @@ SELECT teste.assert((SELECT count(*) = 1 FROM public.v_admin_conturi_alerte WHER
 
 -- R2-11 restaurare de către owner
 SELECT id AS j_tg FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2tg' \gset
+-- R2-11c (audit C v) previzualizarea restaurării: ce s-ar reda, fără nicio scriere
+SELECT public.fn_cont_restaureaza(:j_tg, NULL, true) AS sim_tg \gset
+SELECT teste.assert((:'sim_tg'::jsonb ->> 'simulare')::boolean
+    AND (:'sim_tg'::jsonb -> 'module_refacute') = '["executie","hr","magazie"]'::jsonb
+    AND (:'sim_tg'::jsonb -> 'flaguri') = :'flaguri_tg_inainte'::jsonb
+    AND NOT EXISTS (SELECT 1 FROM public.user_module_access WHERE profile_id = :'u_r2tg')
+    AND (SELECT restaurat_la IS NULL FROM public.conturi_inchideri_jurnal WHERE id = :j_tg),
+  'R2-11c p_simulare=true: arată modulele și flagurile, nu scrie nimic, jurnalul rămâne nerestaurat');
 SELECT public.fn_cont_restaureaza(:j_tg, 'Revine în firmă din 01.10') AS rez_tg \gset
 SELECT teste.ca_admin();
 SELECT teste.assert((SELECT jsonb_agg(jsonb_build_object('module', module, 'access_level', access_level) ORDER BY module)
@@ -832,10 +1127,11 @@ SELECT teste.ca_service_role();
 SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_restaureaza(%s, %L)', :j_ui, 'Încercare service'), 'R2-12 service_role (auth.uid NULL) → refuzat', '42501');
 SELECT teste.ca_admin();
 SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_restaureaza(%s, %L)', :j_ui, 'Încercare cron'), 'R2-12 admin fără JWT (cron) → refuzat', '42501');
-SELECT teste.assert(NOT has_function_privilege('anon', 'public.fn_cont_restaureaza(bigint,text)', 'EXECUTE')
+SELECT teste.assert(NOT has_function_privilege('anon', 'public.fn_cont_restaureaza(bigint,text,boolean)', 'EXECUTE')
+    AND NOT has_function_privilege('service_role', 'public.fn_cont_restaureaza(bigint,text,boolean)', 'EXECUTE')
     AND (SELECT restaurat_la IS NULL FROM public.conturi_inchideri_jurnal WHERE id = :j_ui)
     AND NOT EXISTS (SELECT 1 FROM public.user_module_access WHERE profile_id = :'u_r2ui'),
-  'R2-12 după refuzuri: jurnalul și contul neschimbate');
+  'R2-12 după refuzuri: jurnalul și contul neschimbate (P3: fără EXECUTE pentru anon / service_role)');
 
 -- R2-13 restaurarea sare peste un modul dispărut din app_modules
 DELETE FROM public.app_modules WHERE key = 'test_modul_efemer';
@@ -857,9 +1153,21 @@ SELECT teste.asteapta_eroare('TRUNCATE public.conturi_inchideri_jurnal', 'R2-14 
 SELECT teste.asteapta_eroare(format('UPDATE public.conturi_inchideri_jurnal SET restaurat_de = %L, restaurat_la = now(), restaurare_nota = %L WHERE id = %s', :'owner', 'a doua restaurare', :j_tg),
   'R2-14 a doua setare a restaurării → refuzat', NULL, 'deja restaurat');
 
+-- R2-14b (P1, audit C) service_role nu mai poate scrie în jurnal / coadă (un snapshot fabricat ar deveni drepturi)
+SELECT teste.ca_service_role();
+SELECT teste.asteapta_eroare(format('INSERT INTO public.conturi_inchideri_jurnal (profile_id, email, motiv, sursa, snapshot) VALUES (%L, %L, %L, %L, %L)',
+    :'u_ion', 'x@y.ro', 'snapshot fabricat', 'import_manual', '{"versiune":1,"flaguri":{"can_access_salarii":true},"module":[],"santiere":[],"banned_until":null}'),
+  'R2-14b service_role: INSERT în jurnal → refuzat', '42501');
+SELECT teste.asteapta_eroare(format('UPDATE public.conturi_inchideri_jurnal SET restaurat_de = %L, restaurat_la = now() WHERE id = %s', :'owner', :j_ui),
+  'R2-14b service_role: marcarea „restaurat” fără restaurare → refuzată', '42501');
+SELECT teste.asteapta_eroare(format('INSERT INTO public.conturi_inchideri_coada (profile_id, tip, motiv) VALUES (%L, %L, %L)', :'u_ion', 'reincercare', 'fals'),
+  'R2-14b service_role: INSERT în coadă → refuzat', '42501');
+SELECT teste.assert((SELECT count(*) > 0 FROM public.conturi_inchideri_jurnal), 'R2-14b service_role păstrează citirea jurnalului');
+SELECT teste.ca_admin();
+
 -- R2-15 RLS pe jurnal
 SELECT teste.ca_utilizator(:'owner');
-SELECT teste.assert((SELECT count(*) = 4 FROM public.conturi_inchideri_jurnal), 'R2-15 owner vede jurnalul (4 închideri până aici)');
+SELECT teste.assert((SELECT count(*) = 5 FROM public.conturi_inchideri_jurnal), 'R2-15 owner vede jurnalul (5 închideri până aici, cu R2-28d)');
 SELECT teste.asteapta_eroare(format('INSERT INTO public.conturi_inchideri_jurnal (profile_id, email, motiv, sursa, snapshot) VALUES (%L, %L, %L, %L, %L)',
     :'u_ion', 'x@y.ro', 'motiv fals', 'manual_owner', '{}'), 'R2-15 owner: INSERT direct prin API → refuzat', '42501');
 SELECT teste.asteapta_eroare(format('UPDATE public.conturi_inchideri_jurnal SET restaurare_nota = %L WHERE id = %s', 'x', :j_ui), 'R2-15 owner: UPDATE direct → refuzat', '42501');
@@ -904,6 +1212,9 @@ SELECT teste.assert((SELECT employee_id IS NULL AND sursa = 'manual_owner' AND f
     AND teste.inchis_complet(:'u_r2ext')
     AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'owner'),
   'R2-17 jurnal cu employee_id NULL, sursa manual_owner; owner-ul tot fără jurnal');
+SELECT teste.assert((SELECT facut_de_identitate = 'owner:' || :'owner' FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2ext')
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2ext'),
+  'R2-17 owner prin JWT legitim (login authenticator): închidere completă PE LOC, fără coadă');
 
 -- R2-19 izolarea erorilor: închiderea pică → UPDATE-ul din HR reușește
 INSERT INTO teste.pica_la_stergere VALUES (:'u_r2err');
@@ -921,14 +1232,17 @@ SELECT teste.assert((SELECT count(*) = 2 FROM public.user_module_access WHERE pr
 SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_inchidere_esuata'
     AND message LIKE 'r2.eroare@gazpet.ro%test: ștergerea modulelor pică%'),
   'R2-19 owner-ul primește cont_inchidere_esuata cu eroarea');
+SELECT teste.assert((SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2err' AND tip = 'reincercare'
+                       AND rezolvat_la IS NULL AND ultima_eroare LIKE 'test: ștergerea modulelor pică%'),
+  'R2-19 (audit A #3) închiderea eșuată intră în coadă pentru reîncercare (înainte: nu se mai reîncerca niciodată)');
 SELECT teste.ca_utilizator(:'owner');
 SELECT teste.assert((SELECT count(*) = 1 FROM public.v_admin_conturi_alerte WHERE id = 'cont_activ_fost_angajat:' || :'u_r2err'),
   'R2-19 alertă cont_activ_fost_angajat pentru închiderea eșuată');
 SELECT teste.ca_admin();
 
 -- R2-20 lotul cron nu se blochează când o închidere pică
-INSERT INTO public.employees (name, department, active, termination_date) VALUES ('LOT UNU', 'Test', true, CURRENT_DATE - 1) RETURNING id AS e_lot1 \gset
-INSERT INTO public.employees (name, department, active, termination_date) VALUES ('LOT DOI', 'Test', true, CURRENT_DATE - 1) RETURNING id AS e_lot2 \gset
+INSERT INTO public.employees (name, department, active, termination_date, cnp) VALUES ('LOT UNU', 'Test', true, CURRENT_DATE - 1, '1800101000018') RETURNING id AS e_lot1 \gset
+INSERT INTO public.employees (name, department, active, termination_date, cnp) VALUES ('LOT DOI', 'Test', true, CURRENT_DATE - 1, '1800101000019') RETURNING id AS e_lot2 \gset
 SELECT teste.creeaza_cont('r2.lot1@gazpet.ro', :'u_r2lot1');
 SELECT teste.creeaza_cont('r2.lot2@gazpet.ro', :'u_r2lot2');
 UPDATE public.profiles SET employee_id = :e_lot1 WHERE id = :'u_r2lot1';
@@ -943,6 +1257,18 @@ SELECT teste.assert((SELECT count(*) = 2 FROM public.employees WHERE id IN (:e_l
     AND (SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_inchidere_esuata' AND message LIKE 'r2.lot1@gazpet.ro%'),
   'R2-20 ambele dezactivate; LOT DOI închis, LOT UNU raportat ca eșuat');
 DROP TRIGGER zz_test_pica_stergere ON public.user_module_access;
+
+-- R2-19-bis (audit A #3) cauza eșecului a dispărut → sweep-ul (cron, login postgres) închide complet ambele conturi
+SELECT teste.ca_login('postgres');
+SELECT public.fn_conturi_inchideri_sweep() AS sweep_r219 \gset
+SELECT teste.ca_admin();
+SELECT teste.assert(teste.inchis_complet(:'u_r2err') AND teste.inchis_complet(:'u_r2lot1'),
+  'R2-19-bis după sweep: r2.eroare și LOT UNU închise complet (module, șantiere, flaguri, ban, sesiuni)');
+SELECT teste.assert((SELECT count(*) = 2 FROM public.conturi_inchideri_jurnal WHERE profile_id IN (:'u_r2err', :'u_r2lot1')
+                       AND sursa = 'coada_contract_incheiat' AND facut_de_identitate = 'db_login:postgres' AND motiv LIKE '%reîncercare după eșec')
+    AND (SELECT count(*) = 2 FROM public.conturi_inchideri_coada WHERE profile_id IN (:'u_r2err', :'u_r2lot1') AND tip = 'reincercare'
+           AND rezultat = 'inchis' AND rezolvat_la IS NOT NULL),
+  'R2-19-bis jurnal cu sursa coada_contract_incheiat / db_login:postgres; intrările din coadă rezolvate');
 
 -- inchis_dar_deblocat: cineva ridică banul direct (ex. din Dashboard) → alertă critică
 UPDATE auth.users SET banned_until = NULL WHERE id = :'u_r2lot2';
@@ -1000,9 +1326,9 @@ SELECT teste.assert((SELECT restaurat_la IS NULL FROM public.conturi_inchideri_j
 -- R2-26 (review, minor) triggerul R2 nu blochează nimic nici dacă notificarea lipsește (ordine greșită de rollback)
 \set u_r2fn 00000000-0000-4000-8000-0000000c000b
 \set u_r2fn2 00000000-0000-4000-8000-0000000c000c
-INSERT INTO public.employees (name, department, email, active, termination_date) VALUES ('FARA NOTIF', 'Test', 'r2.faranotif@gazpet.ro', true, CURRENT_DATE - 1)
+INSERT INTO public.employees (name, department, email, active, termination_date, cnp) VALUES ('FARA NOTIF', 'Test', 'r2.faranotif@gazpet.ro', true, CURRENT_DATE - 1, '1800101000020')
   RETURNING id AS e_r2fn \gset
-INSERT INTO public.employees (name, department, email, active) VALUES ('FARA NOTIF DOI', 'Test', 'r2.faranotif2@gazpet.ro', true)
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('FARA NOTIF DOI', 'Test', 'r2.faranotif2@gazpet.ro', true, '1800101000021')
   RETURNING id AS e_r2fn2 \gset
 SELECT teste.creeaza_cont('r2.faranotif@gazpet.ro', :'u_r2fn');
 SELECT teste.creeaza_cont_owner('r2.faranotif2@gazpet.ro', :'u_r2fn2');
@@ -1036,6 +1362,187 @@ SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.fn_cont_stare_angajati() WH
     AND NOT EXISTS (SELECT 1 FROM public.fn_cont_stare_angajati() WHERE employee_id IS NULL),
   'R2-27 HR vede în continuare doar conturile legate de fișe');
 SELECT teste.ca_admin();
+
+-- R2-28 (condiția Copilot, audit B #4) garda „alt contract activ”: aceeași persoană (același CNP) cu altă fișă activă
+\set u_r2p1 00000000-0000-4000-8000-0000000c0010
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('PERSOANA DUBLA', 'Test', 'r2.dubla@gazpet.ro', true, '1850505123456')
+  RETURNING id AS e_da \gset
+INSERT INTO public.employees (name, department, active, cnp) VALUES ('PERSOANA DUBLA', 'Execuție', true, ' 1850505-123456 ')
+  RETURNING id AS e_db \gset
+SELECT teste.creeaza_cont_owner('r2.dubla@gazpet.ro', :'u_r2p1');
+SELECT teste.assert((SELECT employee_id = :e_da FROM public.profiles WHERE id = :'u_r2p1'), 'R2-28 pregătire: contul e legat de fișa A');
+SELECT teste.da_acces(:'u_r2p1');
+-- R2-28a: HR încheie fișa A, dar omul are contractul B activ → contul NU se închide, doar alertă
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_da;
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT NOT active FROM public.employees WHERE id = :e_da)
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2p1')
+    AND (SELECT count(*) = 2 FROM public.user_module_access WHERE profile_id = :'u_r2p1')
+    AND (SELECT banned_until IS NULL FROM auth.users WHERE id = :'u_r2p1'),
+  'R2-28a contract A încheiat, contract B (același CNP, normalizat) activ → contul NU se închide');
+SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_inchidere_suspendata'
+    AND message LIKE 'r2.dubla@gazpet.ro%are alt contract ACTIV (fișa #' || :e_db || ')%'),
+  'R2-28a owner-ul primește cont_inchidere_suspendata cu fișa B');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert((SELECT alocari ->> 'motiv_neinchis' = 'alt_contract_activ' AND (alocari ->> 'alt_contract')::int = :e_db
+                     FROM public.v_admin_conturi_alerte WHERE id = 'cont_activ_fost_angajat:' || :'u_r2p1'),
+  'R2-28a alerta cont_activ_fost_angajat explică: alt_contract_activ (fișa B)');
+SELECT teste.ca_admin();
+-- R2-28b: se încheie și contractul B → contul legat de A (aceeași persoană) se închide
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_db;
+SELECT teste.ca_admin();
+SELECT public.fn_conturi_inchideri_sweep();
+SELECT teste.assert(teste.inchis_complet(:'u_r2p1')
+    AND (SELECT employee_id = :e_da AND motiv LIKE '%(fișa #' || :e_db || ' PERSOANA DUBLA)' FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2p1'),
+  'R2-28b ultimul contract al persoanei încheiat → contul legat de fișa A se închide (găsit prin CNP)');
+-- R2-28c: fișă fără CNP = situație incompletă → fără închidere automată, doar alertă
+\set u_r2p2 00000000-0000-4000-8000-0000000c0011
+INSERT INTO public.employees (name, department, email, active) VALUES ('FARA CNP', 'Test', 'r2.faracnp@gazpet.ro', true) RETURNING id AS e_fcnp \gset
+SELECT teste.creeaza_cont_owner('r2.faracnp@gazpet.ro', :'u_r2p2');
+SELECT teste.da_acces(:'u_r2p2');
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_fcnp;
+SELECT teste.ca_admin();
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2p2')
+    AND (SELECT count(*) = 2 FROM public.user_module_access WHERE profile_id = :'u_r2p2')
+    AND (SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_inchidere_suspendata'
+           AND message LIKE 'r2.faracnp@gazpet.ro%CNP lipsă%'),
+  'R2-28c fără CNP → contul NU se închide automat; owner-ul e anunțat');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert((SELECT alocari ->> 'motiv_neinchis' = 'cnp_lipsa' FROM public.v_admin_conturi_alerte WHERE id = 'cont_activ_fost_angajat:' || :'u_r2p2'),
+  'R2-28c alerta explică: cnp_lipsa');
+SELECT teste.ca_admin();
+-- R2-29 (audit A #5 / B #6) revocarea EFECTIVĂ a JWT-urilor deja emise: hook-ul PostgREST pre-request
+SELECT id AS sesiune_ion FROM auth.sessions WHERE user_id = :'u_ion' LIMIT 1 \gset
+SELECT teste.ca_utilizator(:'u_r2ui');
+SELECT teste.assert((SELECT count(*) > 0 FROM public.employees),
+  'R2-29b (caracterizare, FĂRĂ hook) contul închis cu JWT-ul încă valabil citește employees (CNP, IBAN) — riscul de acoperit');
+SELECT teste.asteapta_eroare('SELECT public.fn_pgrst_pre_request()', 'R2-29 cont închis (jurnal deschis) → hook-ul refuză cererea', '42501', 'închis');
+SELECT teste.ca_utilizator(:'u_r2blocat');
+SELECT teste.asteapta_eroare('SELECT public.fn_pgrst_pre_request()', 'R2-29 cont banat fără jurnal → refuz', '42501');
+SELECT teste.ca_login_api(jsonb_build_object('role', 'authenticated', 'sub', :'u_ion', 'session_id', gen_random_uuid()), 'authenticated');
+SELECT teste.asteapta_eroare('SELECT public.fn_pgrst_pre_request()', 'R2-29 sesiune ștearsă (session_id inexistent) → refuz', '42501', 'Sesiunea');
+SELECT teste.ca_login_api(jsonb_build_object('role', 'authenticated', 'sub', :'u_ion', 'session_id', :'sesiune_ion'), 'authenticated');
+SELECT teste.assert(teste.eroare('SELECT public.fn_pgrst_pre_request()') IS NULL, 'R2-29 utilizator activ cu sesiune validă → trece');
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT teste.assert(teste.eroare('SELECT public.fn_pgrst_pre_request()') IS NULL, 'R2-29 HR activ (fără session_id în token) → trece');
+SELECT teste.ca_anon();
+SELECT teste.assert(teste.eroare('SELECT public.fn_pgrst_pre_request()') IS NULL, 'R2-29 anon → trece (hook-ul privește doar authenticated)');
+SELECT teste.ca_service_role();
+SELECT teste.assert(teste.eroare('SELECT public.fn_pgrst_pre_request()') IS NULL, 'R2-29 service_role → trece');
+SELECT teste.ca_admin();
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole
+                                 WHERE r.rolname = 'authenticator' AND array_to_string(s.setconfig, ',') LIKE '%db_pre_request%'),
+  'R2-29 hook-ul e CREAT, dar NU e activat de migrare (ALTER ROLE authenticator = decizia lui Răzvan)');
+
+-- R2-30 (audit B #5-iii) alt cont NELEGAT al aceleiași persoane (emailul de logare = emailul de pe fișă) → doar alertă
+\set u_r2a1 00000000-0000-4000-8000-0000000c0013
+\set u_r2a2 00000000-0000-4000-8000-0000000c0014
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('DOUA CONTURI', 'Test', 'doua.conturi@yahoo.com', true, '1700707000077')
+  RETURNING id AS e_2c \gset
+SELECT teste.creeaza_cont('doua.conturi.firma@gazpet.ro', :'u_r2a1');
+UPDATE public.profiles SET employee_id = :e_2c WHERE id = :'u_r2a1';
+SELECT teste.creeaza_cont('doua.conturi@yahoo.com', :'u_r2a2');                     -- rămâne nelegat (doar propunere)
+SELECT teste.ca_utilizator(:'owner');
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_2c;
+SELECT teste.ca_admin();
+SELECT teste.assert(teste.inchis_complet(:'u_r2a1')
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2a2')
+    AND (SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_posibil_aceeasi_persoana'
+           AND message LIKE '%doua.conturi@yahoo.com%NU s-a închis automat%'),
+  'R2-30 contul legat se închide; contul nelegat cu emailul de pe fișă NU se închide, owner-ul primește cont_posibil_aceeasi_persoana');
+
+-- R2-31 (audit B #5-iv) cont marcat sistem / extern / test, legat de o fișă → nu se închide automat, doar alertă
+\set u_r2sis 00000000-0000-4000-8000-0000000c0015
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('CONT SISTEM', 'Test', 'r2.sistem@gazpet.ro', true, '1700707000088')
+  RETURNING id AS e_sis \gset
+SELECT teste.creeaza_cont_owner('r2.sistem@gazpet.ro', :'u_r2sis');
+UPDATE public.profiles SET tip_cont = 'sistem' WHERE id = :'u_r2sis';
+SELECT teste.da_acces(:'u_r2sis');
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_sis;
+SELECT teste.ca_admin();
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2sis')
+    AND (SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_inchidere_suspendata'
+           AND message LIKE 'r2.sistem@gazpet.ro%marcat „sistem”%'),
+  'R2-31 tip_cont=sistem legat de o fișă încheiată → neînchis, owner-ul decide');
+
+-- R2-32 (audit A #2, M2) niciun obiect din public nu mai golește / falsifică request.jwt.* (grep în pg_proc)
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+                                  AND p.prosrc ~* 'set_config\s*\(\s*''request\.jwt'),
+  'R2-32 fără set_config(''request.jwt…'') în funcțiile din public');
+
+-- R2-33 login authenticator FĂRĂ claims (ex. un RPC care golește claims) nu mai e tratat „ca sistem”
+\set u_r2fi 00000000-0000-4000-8000-0000000c0016
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('FARA IDENTITATE', 'Test', 'r2.faraidentitate@gazpet.ro', true, '1700707000099')
+  RETURNING id AS e_fi \gset
+SELECT teste.creeaza_cont_owner('r2.faraidentitate@gazpet.ro', :'u_r2fi');
+SELECT teste.da_acces(:'u_r2fi');
+CREATE FUNCTION teste.rpc_incheie(p_emp integer) RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $fn$ UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = p_emp $fn$;
+SELECT teste.ca_login('authenticator');
+SELECT teste.rpc_incheie(:e_fi);
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT facut_de IS NULL AND facut_de_identitate = 'fara_identitate:authenticator' FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2fi')
+    AND teste.flaguri_toate(:'u_r2fi', true)
+    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2fi' AND tip = 'flaguri' AND rezolvat_la IS NULL),
+  'R2-33 authenticator fără claims: închiderea se face, dar FĂRĂ privilegiu (flagurile în coadă), identitatea jurnalizată explicit');
+SELECT public.fn_conturi_inchideri_sweep();
+SELECT teste.assert(teste.inchis_complet(:'u_r2fi'), 'R2-33 după coadă: închis complet');
+SELECT teste.ca_login('authenticator');
+SELECT teste.asteapta_eroare('SELECT public.fn_conturi_inchideri_sweep()', 'R2-33 authenticator nu poate rula coada (fără EXECUTE)', '42501');
+SELECT teste.ca_login('supabase_auth_admin');
+SELECT teste.asteapta_eroare('SELECT public.fn_conturi_inchideri_sweep()', 'R2-33 supabase_auth_admin nu poate rula coada', '42501');
+SELECT teste.ca_admin();
+
+-- R2-36 restaurarea owner-ului e respectată: sweep-ul NU re-închide un cont restaurat (fișă tot inactivă, dată trecută)
+SELECT public.fn_conturi_inchideri_sweep();
+SELECT teste.assert((SELECT count(*) = 2 FROM public.user_module_access WHERE profile_id = :'u_r2cron')
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2cron' AND restaurat_la IS NULL),
+  'R2-36 contul restaurat de owner (R2-13) rămâne restaurat după sweep (nimic nu se re-aplică automat)');
+
+-- R2-37 (audit B #5-ii) închiderea PROGRAMATĂ: fișa dezactivată înainte de dată (R2-05) se închide când data ajunge
+ALTER TABLE public.employees DISABLE TRIGGER trg_employees_zz_ciclu_cont;           -- „trece timpul”, fără declanșator
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_r2fv;
+ALTER TABLE public.employees ENABLE TRIGGER trg_employees_zz_ciclu_cont;
+UPDATE public.conturi_inchideri_coada SET scadent_la = CURRENT_DATE WHERE profile_id = :'u_r2fv' AND tip = 'programata' AND rezolvat_la IS NULL;
+SELECT teste.ca_login('postgres');
+SELECT public.fn_conturi_inchideri_sweep() AS sweep_r237 \gset
+SELECT teste.ca_admin();
+SELECT teste.assert(teste.inchis_complet(:'u_r2fv')
+    AND (SELECT sursa = 'coada_contract_incheiat' AND motiv LIKE '%închidere programată' FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2fv')
+    AND (SELECT rezultat = 'inchis' FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2fv' AND tip = 'programata'),
+  'R2-37 la scadență sweep-ul (cron) închide contul programat');
+-- … iar o programare pentru o fișă REACTIVATĂ între timp se anulează (nimic nu se închide)
+\set u_r2re 00000000-0000-4000-8000-0000000c0017
+INSERT INTO public.employees (name, department, email, active, cnp) VALUES ('PROGRAMAT REACTIVAT', 'Test', 'r2.reactivat@gazpet.ro', true, '1700707000100')
+  RETURNING id AS e_re \gset
+SELECT teste.creeaza_cont_owner('r2.reactivat@gazpet.ro', :'u_r2re');
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET active = false, termination_date = CURRENT_DATE + 3 WHERE id = :e_re;
+UPDATE public.employees SET active = true, termination_date = NULL WHERE id = :e_re;
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT rezultat = 'anulat_reactivat' FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2re' AND tip = 'programata')
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2re'),
+  'R2-37 reactivarea anulează programarea; contul rămâne deschis');
+
+-- R2-38 pct. 4 pentru obiectele noi din d: tabele cu RLS, funcții interne fără EXECUTE din API
+SELECT teste.assert((SELECT relrowsecurity FROM pg_class WHERE oid = 'public.conturi_inchideri_coada'::regclass)
+    AND NOT has_table_privilege('authenticated', 'public.conturi_inchideri_coada', 'INSERT,UPDATE,DELETE')
+    AND NOT has_table_privilege('anon', 'public.conturi_inchideri_coada', 'SELECT')
+    AND (SELECT bool_and(NOT has_function_privilege(r, f, 'EXECUTE'))
+           FROM unnest(ARRAY['anon','authenticated','service_role']) r,
+                unnest(ARRAY['public.fn_conturi_inchideri_sweep()','public.fn_cont_garda_persoana(integer)',
+                             'public.fn_cont_lock_persoana(text)','public.fn_cont_cnp_normalizat(text)',
+                             'public.fn_employees_persoana_lock()','public.fn_cont_coada_pune(uuid,integer,text,text,date,text)']) f)
+    AND has_function_privilege('authenticated', 'public.fn_pgrst_pre_request()', 'EXECUTE')
+    AND (SELECT bool_and(p.prosecdef AND p.proconfig @> ARRAY['search_path=public, pg_temp']) FROM pg_proc p
+          WHERE p.pronamespace = 'public'::regnamespace
+            AND p.proname IN ('fn_conturi_inchideri_sweep','fn_cont_garda_persoana','fn_cont_lock_persoana','fn_cont_cnp_normalizat',
+                              'fn_employees_persoana_lock','fn_cont_coada_pune','fn_pgrst_pre_request')),
+  'R2-38 coada: RLS + doar citire owner; funcțiile noi SECURITY DEFINER + search_path, interne fără EXECUTE din API');
 
 -- ============================================================================
 -- R3 — fost angajat ca posibil colaborator extern, acord tri-valent (migrarea 20260929e)
@@ -1136,6 +1643,21 @@ SELECT teste.asteapta_eroare(format('UPDATE public.employees SET colaborare_exte
 SELECT teste.asteapta_eroare(format('SELECT public.fn_colaborare_externa_seteaza(%s, %L, %L)', :f5, 'refuza', 'Setat de un robot'),
   'R3-07 service_role prin RPC → refuz', '42501');
 SELECT teste.ca_admin();
+-- R3-07b (audit B #9a) „un om” = JWT prin PostgREST (login authenticator): o sesiune directă postgres (MCP / SQL editor)
+-- care își pune SINGURĂ claims de HR nu poate decide acordul (înainte: auth.uid() = HR → trecea)
+SELECT set_config('request.jwt.claims', json_build_object('sub', :'u_hr', 'role', 'authenticated')::text, false);
+SELECT teste.assert(session_user = 'postgres' AND auth.uid() = :'u_hr'::uuid, 'R3-07b actor: login postgres cu claims de HR falsificate');
+SELECT teste.asteapta_eroare(format('SELECT public.fn_colaborare_externa_seteaza(%s, %L, %L)', :f5, 'refuza', 'Setat din SQL cu claims HR'),
+  'R3-07b postgres + claims HR falsificate, prin RPC → refuz', '42501');
+SELECT teste.asteapta_eroare(format('UPDATE public.employees SET colaborare_externa_status = %L, colaborare_externa_nota = %L WHERE id = %s',
+    'refuza', 'Setat direct din SQL', :f5), 'R3-07b postgres + claims HR falsificate, UPDATE direct → refuz', '42501');
+SELECT teste.ca_admin();
+SELECT teste.ca_login('authenticator');
+SELECT teste.asteapta_eroare(format('SELECT public.fn_colaborare_externa_seteaza(%s, %L, %L)', :f5, 'refuza', 'Fără claims'),
+  'R3-07b authenticator fără claims → refuz', '42501');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT colaborare_externa_status = 'accepta' AND colaborare_externa_confirmat_de = :'u_hr'::uuid FROM public.employees WHERE id = :f5),
+  'R3-07b acordul lui f5 a rămas cel setat de HR prin aplicație');
 
 -- R3-08 CHECK-ul (cu protecția oprită în tranzacția testului)
 ALTER TABLE public.employees DISABLE TRIGGER trg_employees_colab_ext_protectie_upd;
@@ -1360,6 +1882,31 @@ SELECT teste.assert((SELECT NOT activ AND NOT fost_angajat_gazpet FROM public.hr
 SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :ext_f10),
   'R3-23 reactivarea rândului dezlegat, omonim cu fostul angajat → refuz', '23514', 'fost angajat Gazpet');
 SELECT teste.ca_admin();
+
+-- R3-24 (audit B #9b) SCHIMBAREA datei de încetare pe o fișă inactivă (altă încetare) → acordul revine la „necunoscut”
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = CURRENT_DATE - 5 WHERE id = :f2;          -- f2: „refuza” din R3-04, încetare CURRENT_DATE - 10
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT NOT active AND colaborare_externa_status = 'necunoscut' AND colaborare_externa_document IS NULL
+                          AND colaborare_externa_confirmat_de IS NULL FROM public.employees WHERE id = :f2)
+    AND (SELECT count(*) = 1 FROM public.hr_colaborare_externa_jurnal WHERE employee_id = :f2 AND sursa = 'reset_automat'
+           AND status_vechi = 'refuza' AND nota LIKE 'Resetat automat: data încetării a fost schimbată%'),
+  'R3-24 data încetării schimbată pe fișă inactivă → acordul NU trece la altă încetare: „necunoscut” + rând reset_automat');
+
+-- R3-25 (audit A #8 / C P1) jurnalul acordului: identitatea explicită + service_role doar citește
+SELECT teste.assert((SELECT facut_de_identitate = 'authenticated:' || :'u_hr' FROM public.hr_colaborare_externa_jurnal
+                      WHERE employee_id = :f1 AND status_nou = 'accepta' ORDER BY id LIMIT 1)
+    AND (SELECT facut_de_identitate = 'db_login:postgres' FROM public.hr_colaborare_externa_jurnal
+          WHERE employee_id = :f6 AND sursa = 'reset_automat'),
+  'R3-25 jurnalul acordului: facut_de_identitate = authenticated:<HR> (om) / db_login:postgres (reset din SQL)');
+SELECT teste.ca_service_role();
+SELECT teste.asteapta_eroare(format('INSERT INTO public.hr_colaborare_externa_jurnal (employee_id, status_nou, facut_de) VALUES (%s, %L, %L)', :f5, 'accepta', :'u_hr'),
+  'R3-25 service_role nu mai poate scrie în jurnalul acordului (P1)', '42501');
+SELECT teste.assert((SELECT count(*) > 0 FROM public.hr_colaborare_externa_jurnal), 'R3-25 service_role păstrează citirea');
+SELECT teste.ca_admin();
+SELECT teste.assert(NOT has_function_privilege('service_role', 'public.fn_colaborare_externa_seteaza(integer,text,text,text)', 'EXECUTE')
+    AND NOT has_function_privilege('service_role', 'public.fn_fost_angajat_leaga_extern(integer,bigint)', 'EXECUTE'),
+  'R3-25 P3: RPC-urile R3 (decizia unui om) fără EXECUTE pentru service_role');
 
 \endif
 
