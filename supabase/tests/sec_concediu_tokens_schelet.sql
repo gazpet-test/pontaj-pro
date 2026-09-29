@@ -79,7 +79,11 @@ INSERT INTO public.profiles (id, name, role, department, is_owner, can_access_pe
   ('00000000-0000-4000-8000-000000000303', 'Capcane de prefix',       'manager_santier', NULL,            false, false), -- ui: NU
   ('00000000-0000-4000-8000-000000000304', 'Dept HR fara modul',      'manager_santier', 'HR',            false, false), -- ui: NU (ProtectedRoute)
   ('00000000-0000-4000-8000-000000000305', 'Superadmin fara modul',   'superadmin',      'Administrativ', false, false), -- ui: NU
-  ('00000000-0000-4000-8000-000000000306', 'Date personale fara modul','manager_santier', NULL,           false, true);  -- ui: NU
+  ('00000000-0000-4000-8000-000000000306', 'Date personale fara modul','manager_santier', NULL,           false, true),  -- ui: NU
+  -- Runda 2 — limitele grupului țintă (regula actuală le dă acces; alegere de APROBAT, nu „HR legitim” automat)
+  ('00000000-0000-4000-8000-000000000203', 'hr viewer',               'manager_santier', NULL,            false, false), -- ui: DA (hr, viewer)
+  ('00000000-0000-4000-8000-000000000204', 'Submodul hr.recrutare',   'manager_santier', NULL,            false, false), -- ui: DA (hr.*)
+  ('00000000-0000-4000-8000-000000000205', 'Valoarea exacta hr.',     'manager_santier', NULL,            false, false); -- ui: DA ('hr.' începe cu 'hr.')
 INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
   ('00000000-0000-4000-8000-000000000126', 'hr', 'admin'),
   ('00000000-0000-4000-8000-000000000201', 'hr', 'editor'),
@@ -91,7 +95,74 @@ INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
   ('00000000-0000-4000-8000-000000000303', 'hrana', 'editor'),     -- prefix fără punct
   ('00000000-0000-4000-8000-000000000303', 'hr_extern', 'editor'),
   ('00000000-0000-4000-8000-000000000303', 'xhr.concedii', 'editor'),
-  ('00000000-0000-4000-8000-000000000303', ' hr', 'editor');
+  ('00000000-0000-4000-8000-000000000303', ' hr', 'editor'),
+  ('00000000-0000-4000-8000-000000000203', 'hr', 'viewer'),
+  ('00000000-0000-4000-8000-000000000204', 'hr.recrutare', 'editor'),
+  ('00000000-0000-4000-8000-000000000205', 'hr.', 'editor');
+
+-- ── Sursa drepturilor (runda 2): politicile de SCRIERE și triggerele live de pe profiles / user_module_access
+-- (citite read-only 30.09; corpurile funcțiilor = prosrc live, md5 identic; verificat de harness prin invarianți)
+ALTER TABLE public.profiles ADD COLUMN can_access_salarii boolean NOT NULL DEFAULT false,
+  ADD COLUMN can_access_pontaj_brut boolean NOT NULL DEFAULT false, ADD COLUMN can_modify_employees boolean NOT NULL DEFAULT false,
+  ADD COLUMN can_manage_contracts boolean NOT NULL DEFAULT false, ADD COLUMN can_access_diurne boolean NOT NULL DEFAULT false,
+  ADD COLUMN can_access_financiar boolean NOT NULL DEFAULT false;
+ALTER TABLE public.user_module_access ADD CONSTRAINT uma_profile_fk FOREIGN KEY (profile_id) REFERENCES public.profiles(id) ON DELETE CASCADE;
+CREATE FUNCTION public.prevent_role_escalation() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+BEGIN
+  -- Skip pentru service_role / migrări (auth.uid() = NULL)
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+  
+  -- Verifică modificare role
+  IF OLD.role IS DISTINCT FROM NEW.role THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.profiles 
+      WHERE id = auth.uid() AND is_owner = true
+    ) THEN
+      RAISE EXCEPTION 'Doar owners pot schimba rolul (incercat: % → %)', OLD.role, NEW.role;
+    END IF;
+  END IF;
+  
+  -- Verifică modificare is_owner
+  IF OLD.is_owner IS DISTINCT FROM NEW.is_owner THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.profiles 
+      WHERE id = auth.uid() AND is_owner = true
+    ) THEN
+      RAISE EXCEPTION 'Doar owners pot schimba flag-ul is_owner';
+    END IF;
+  END IF;
+  
+  RETURN NEW;
+END;
+$fn$;
+CREATE FUNCTION public.enforce_owner_only_salary_flags() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN NEW; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_owner = true) THEN
+    NEW.is_owner := OLD.is_owner;
+    NEW.can_access_salarii := OLD.can_access_salarii;
+    NEW.can_access_personal_data := OLD.can_access_personal_data;
+    NEW.can_access_pontaj_brut := OLD.can_access_pontaj_brut;
+    NEW.can_modify_employees := OLD.can_modify_employees;
+    NEW.can_manage_contracts := OLD.can_manage_contracts;
+    NEW.can_access_diurne := OLD.can_access_diurne;
+    NEW.can_access_financiar := OLD.can_access_financiar;
+  END IF;
+  RETURN NEW;
+END;
+$fn$;
+REVOKE EXECUTE ON FUNCTION public.prevent_role_escalation(), public.enforce_owner_only_salary_flags() FROM PUBLIC;
+CREATE TRIGGER prevent_role_escalation_trigger BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION prevent_role_escalation();
+CREATE TRIGGER trg_enforce_owner_only_salary_flags BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION enforce_owner_only_salary_flags();
+CREATE POLICY profiles_delete_owner ON public.profiles FOR DELETE TO authenticated USING (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true));
+CREATE POLICY profiles_insert_owner ON public.profiles FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true));
+CREATE POLICY profiles_update_own ON public.profiles FOR UPDATE TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+CREATE POLICY profiles_update_owner ON public.profiles FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true)) WITH CHECK (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true));
+CREATE POLICY user_module_access_delete_owner ON public.user_module_access FOR DELETE TO authenticated USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
+CREATE POLICY user_module_access_insert_owner ON public.user_module_access FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
+CREATE POLICY user_module_access_update_owner ON public.user_module_access FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true)) WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
 
 -- ── Unelte de test (schema t; nu intră în amprenta tabelului) ──
 CREATE SCHEMA t;

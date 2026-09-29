@@ -1,6 +1,8 @@
 # Patch de securitate 20261003d — tokenurile de concediu (`hr_concediu_tokens`)
 
-> **Stare: DOAR PREGĂTIRE, NEAPLICAT.** Copilot a dat „GO DOAR PREGĂTIRE” pe acest domeniu, separat de trezorerie (verdictul pe matrice, 30.09). Aplicarea cere **GO-ul lui Copilot pe revizia finală + acordul lui Răzvan**. Nimic nu s-a scris în producție: investigația a folosit doar SELECT pe cataloage și numărători agregate. **Nu s-a citit și nu apare aici nicio valoare de token, telefon sau IBAN.** Tokenurile din teste sunt fictive.
+> **Domeniul verdictului (formulare Copilot, 30.09): citirea directă prin rolurile API este restrânsă; obținerea tokenurilor prin toate căile aplicației nu este încă demonstrată ca restrânsă.** Un edge cu `service_role` poate citi în continuare tabelul; faptul că nu e afectat de patch e compatibilitate, nu dovada că propriul endpoint e autorizat corect.
+>
+> **Stare: DOAR PREGĂTIRE, NEAPLICAT.** Runda 2 (răspuns la verdictul „GO CU CORECTURI pe logică”): §8. Copilot a dat „GO DOAR PREGĂTIRE” pe acest domeniu, separat de trezorerie (verdictul pe matrice, 30.09). Aplicarea cere **GO-ul lui Copilot pe revizia finală + acordul lui Răzvan**. Nimic nu s-a scris în producție: investigația a folosit doar SELECT pe cataloage și numărători agregate. **Nu s-a citit și nu apare aici nicio valoare de token, telefon sau IBAN.** Tokenurile din teste sunt fictive.
 
 Fișiere:
 - `supabase/migrations/20261003d_sec_concediu_tokens.sql` — migrarea (BEGIN/COMMIT în fișier)
@@ -52,7 +54,7 @@ Cine vede linkurile azi prin UI (producție, 29.09): **10 conturi**, adică 2 ow
 ## 3. Patch-ul (`20261003d_sec_concediu_tokens.sql`)
 
 1. `BEGIN;` și `SET LOCAL search_path = public, pg_temp`, ca deparse-ul expresiilor să fie determinist.
-2. **Precondiție fail-closed.** Face o amprentă text completă pe trei componente: tabel (kind, RLS, FORCE, owner, moșteniri, ACL pe coloane), politici (nume, comandă, permisiv, roluri, md5 pe `qual`/`with_check`, cu `NULL` → `'<NULL>'`) și privilegii efective pentru `anon`, `authenticated`, `public` și `service_role` (`has_table_privilege`, deci inclusiv PUBLIC și moștenirea; `has_any_column_privilege` pentru granturile pe coloane; `… WITH GRANT OPTION`). Comparațiile sunt `IS [NOT] DISTINCT FROM`. Acceptă doar **perechi complete**: live (politică live + ACL live) sau patch (reaplicare, fără efect net). Refuză orice stare mixtă sau necunoscută. Verifică și dependențele politicii (`profiles.id/is_owner`, `user_module_access.profile_id/module`, cu tipuri).
+2. **Precondiție fail-closed.** Face o amprentă text completă pe trei componente: tabel (kind, RLS, FORCE, owner, moșteniri, ACL pe coloane), politici (nume, comandă, permisiv, roluri, md5 pe `qual`/`with_check`, cu `NULL` → `'<NULL>'`) și privilegii efective pentru `anon`, `authenticated`, `public` și `service_role` (`has_table_privilege`, deci inclusiv PUBLIC și moștenirea; `has_any_column_privilege` pentru granturile pe coloane; `… WITH GRANT OPTION`). Comparațiile sunt `IS [NOT] DISTINCT FROM`. Acceptă doar **perechi complete**: live (politică live + ACL live) sau patch (reaplicare, fără efect net). Refuză orice stare mixtă sau necunoscută. Verifică și dependențele politicii (`profiles.id/is_owner`, `user_module_access.profile_id/module`, cu tipuri) **și invarianții sursei drepturilor** (runda 2, blocul `<invarianti-20261003d>`, `[pre:invarianti]`): RLS pe `profiles` și `user_module_access`, toate politicile lor de scriere (md5 pe expresii), triggerele `prevent_role_escalation_trigger` și `trg_enforce_owner_only_salary_flags` (activare, definiție, md5 pe corpul funcției) și `anon`/`authenticated` fără BYPASSRLS/superuser. Valorile sunt cele citite read-only pe live pe 30.09 cu aceeași interogare; orice diferență refuză patch-ul (§8).
 3. Schimbarea: `DROP POLICY hr_tokens_sel` → `CREATE POLICY hr_tokens_sel_modul_hr … FOR SELECT TO authenticated USING (owner OR modul hr/hr.*)` → `REVOKE ALL … FROM PUBLIC, anon, authenticated` → `GRANT SELECT … TO authenticated`. `service_role` rămâne neatins.
 4. **Postcondiție înainte de `COMMIT`**: aceeași amprentă trebuie să fie exact ținta, altfel se anulează tot.
 5. `COMMIT;`. Fișierul nu are meta-comenzi psql, deci merge și ca un singur simple query.
@@ -61,7 +63,7 @@ Amprenta de producție a fost recalculată read-only cu **aceeași interogare** 
 
 ## 4. Testele și rezultatele
 
-`bash scripts/test_sec_concediu_tokens.sh` rulează pe un cluster PG16 **dedicat** (port 5483, `/tmp/pg_sec_concediu`, `autovacuum=off`) și refuză dacă pe port răspunde alt cluster. Rulat de 2 ori complet: **exit 0 de fiecare dată**, cu **73 de verificări în harness** și suita de comportament de **33 de verificări**, rulată în fiecare scenariu. **18 mutanți prinși.**
+`bash scripts/test_sec_concediu_tokens.sh` rulează pe un cluster PG16 **dedicat** (port 5483, `/tmp/pg_sec_concediu`, `autovacuum=off`) și refuză dacă pe port răspunde alt cluster. Rulat de 2 ori complet (după runda 2): **exit 0 de fiecare dată**, cu **91 de verificări în harness** și suita de comportament de **33 de verificări**, rulată în fiecare scenariu, plus suita `runda2` (12). **19 mutanți prinși.** Detaliile rundei 2: §8.
 
 - **Starea de azi reprodusă și demonstrată**: amprenta locală = producția. Suita „gaura” (8) trece pe live. Suita patch **pică pe live**, iar 12/12 verificări-cheie pică izolat.
 - **Comportament după patch** (suita, 33): edge-ul cu `service_role` validează tokenul, poate revoca (UPDATE `activ`) și reemite (INSERT), cu scrierile anulate în test. Owner, HR, cont Ofertare cu modul `hr` și sub-modul `hr.concedii` văd **exact aceleași rânduri ca azi** (număr + md5). Conturile fără modul, cu alte module, cu capcane de prefix (`HR`, `hrana`, `hr_extern`, `xhr.`, `' hr'`), departament HR fără modul, superadmin fără modul, `can_access_personal_data` fără modul, uid fără profil și JWT fără `sub` văd 0 rânduri, pe un tabel cu 5 rânduri (control pozitiv). `anon` primește refuz de privilegiu la SELECT, TRUNCATE și INSERT. Nimeni logat, nici HR, nici ownerul, nu poate scrie sau face TRUNCATE. PUBLIC/coloane/GRANT OPTION sunt goale. Robustețe: HR vede în continuare și dacă `profiles`/`user_module_access` ar fi restrânse la rândul propriu.
@@ -73,8 +75,9 @@ Amprenta de producție a fost recalculată read-only cu **aceeași interogare** 
 
 ## 5. Procedura de aplicare (după GO Copilot + acordul lui Răzvan)
 
-1. **Preview read-only**: rulezi interogarea de amprentă (blocul `<amprenta-20261003d>`) și o compari cu starea live din fișier. Numeri conturile care văd linkurile (owner + modul `hr`/`hr.*`), fără valori de tokenuri.
-2. **Confirmarea lui Răzvan** pe preview și pe deciziile din §6. Deciziile nu sunt condiție pentru patch.
+1. **Preview read-only**: rulezi interogarea de amprentă (blocul `<amprenta-20261003d>`) și interogarea de invarianți (blocul `<invarianti-20261003d>`, cu `SET search_path = public, pg_temp`) și le compari cu listele albe din fișier. Listezi **nominal** conturile care ar vedea linkurile (owner + modul `hr`/`hr.*`, cu `access_level` și modulul exact), fără valori de tokenuri, și **separat** categoriile excluse intenționat (departament HR, superadmin, `can_access_personal_data` fără modul).
+2. **CONDIȚIE: aprobarea explicită a lui Răzvan asupra grupului țintă** rezultat din preview (inclusiv: orice `hr.*`, `hr` cu `viewer`, valoarea exactă `'hr.'`, conturile de agent precum „Claude”, conturile din alte departamente cu modul `hr`). Fără această aprobare nu se aplică. Revocarea/reemiterea (§6) rămâne o operație separată și **nu** e condiție pentru patch; un drept distinct pentru distribuirea linkurilor poate veni ulterior.
+2b. **Probă obligatorie înainte de apply**: invarianții sursei drepturilor sunt egali cu cei din fișier (îi verifică oricum precondiția, atomic). Dacă diferă, se analizează ce s-a schimbat pe `profiles`/`user_module_access` și se consemnează revizia; nu se copiază hash-ul nou în fișier fără review.
 3. **Apply** cu `apply_migration` (nume `sec_concediu_tokens`) cu textul integral al fișierului, sau cu `psql -v ON_ERROR_STOP=1 -f`. Nu se lipesc bucăți.
 4. **Verificare**: amprenta = ținta. Contul de test fără modul (`test.fara.modul@…`) citește 0 rânduri prin REST. Natalia apasă „🔗 Link mobil” și primește linkul. Un link `/co` existent se deschide în continuare. Nimic nu se actualizează automat în listele albe: orice diferență de amprentă se analizează.
 
@@ -83,7 +86,15 @@ Revenirea nu are GO de execuție. Se folosește doar la cererea explicită a lui
 ## 6. DECIZIILE lui Răzvan (separat de patch)
 
 **(1) Revocarea/reemiterea celor 117 tokenuri expuse.** Restrângerea SELECT **nu invalidează** o copie obținută anterior: cine a listat tokenurile până acum le poate folosi în continuare pe `/co`. Opțiuni:
-- **A — reemitere pentru toți** (recomandat dacă se vrea închiderea expunerii). Operațional: fiecare link trimis pe WhatsApp încetează să mai meargă, iar HR (Natalia) trebuie să retrimită 105 linkuri noi angajaților activi, din butonul „🔗 Link mobil”. Tehnic se face cu `service_role`, în pattern-ul preview → confirmare → apply: `SELECT count(*)` pe ce se schimbă; apoi `UPDATE hr_concediu_tokens SET token = replace(gen_random_uuid()::text,'-','') WHERE … RETURNING employee_id`, fără afișarea tokenurilor; apoi verificare cu numărători.
+- **A — invalidare totală, apoi reemitere doar pentru eligibilii confirmați** (recomandat dacă se vrea închiderea expunerii; rescris după verdictul Copilot):
+  1. **Invalidarea tuturor celor 117 credentiale vechi** (niciun token vechi nu mai trece, nici la `?api=info`, nici la POST).
+  2. **Emiterea/activarea de credentiale noi numai pentru angajații confirmați ca eligibili** de Răzvan (azi candidații sunt cei 105 activi cu token). Un simplu `UPDATE … SET token = …` pe toate rândurile NU e acceptabil: ar da celor 12 plecați credentiale noi, încă active.
+  3. **Cei 12 angajați plecați: dezactivați** (`activ = false`, fără token nou) **după confirmarea lui Răzvan**, nominal.
+  4. **Cei 15 activi fără token: decizie separată de creare**; nu intră implicit în rotație.
+  5. **Preview nominal, fără tokenuri**: pentru fiecare rând vizat — `employee_id`, numele angajatului, clasificarea (activ-eligibil / plecat / fără token), acțiunea propusă (reemitere / dezactivare / nimic) și starea de referință (`activ`, `created_at`, `employees.active`, `termination_date`, plus un md5 al tokenului curent calculat în BD, neafișat ca valoare, doar ca amprentă de stare). **Apply-ul verifică în aceeași tranzacție că starea de referință nu s-a schimbat** de la confirmare; orice diferență oprește tot (nu se suprascrie tacit).
+  6. **Eligibilitatea angajatului și expirarea se verifică la edge atât la `?api=info`, cât și la POST** (controale complementare mecanismului de emitere, nu alternative). Lipsa informației de eligibilitate nu devine automat „eligibil” sau „neeligibil”: comportamentul se decide explicit.
+  7. Operațional: linkurile trimise pe WhatsApp încetează să meargă; HR retrimite linkurile noi eligibililor din butonul „🔗 Link mobil”. Tehnic cu `service_role`, pattern preview → confirmare → apply, cu `RETURNING employee_id` (niciodată tokenul) și verificare prin numărători.
+  8. Până la rotație sau o invalidare echivalentă, consemnarea rămâne: **„expunerea directă redusă; credentialele anterior accesibile rămân utilizabile”**. Cererile existente nu se șterg și nu se declară frauduloase automat.
 - **B — doar dezactivarea celor 12 ai angajaților plecați** (`activ=false`), fără efort pentru cei activi. Expunerea rămâne pentru cei 105.
 - **C — nimic** acum, cu riscul acceptat explicit.
 
@@ -106,3 +117,55 @@ Toate sunt schimbări de edge sau schemă, deci patch-uri separate.
 - **Simularea actorilor** folosește `SET ROLE` + claims. Asta demonstrează traseul RLS/privilegii, nu reproduce integral PostgREST sau edge-ul (`session_user` rămâne `postgres`; politica nu îl folosește).
 - **Edge-urile deployate**: 140 în producție, 50 în repo. S-a citit doar `concediu-mobil`. Pentru celelalte s-a verificat doar că nicio funcție din BD și niciun view nu referă tabelul. Un edge cu `service_role` nu e afectat de patch. Un edge care ar citi tokenurile **cu JWT-ul utilizatorului** ar fi restrâns ca REST-ul, ceea ce e comportamentul dorit.
 - Roluri de infrastructură (`pg_read_all_data`, `supabase_read_only_user`, `supabase_etl_admin` etc.) pot citi tabelul. Sunt limită de încredere, în afara patch-ului.
+
+## 8. Runda 2 — răspuns la verdict (Copilot 30.09, „GO CU CORECTURI pe logică”)
+
+Nu s-a atins BEGIN/COMMIT și nici traseul de livrare (runda 4 comună, se portează după #538/#542). Nimic aplicat pe live; pe Supabase doar SELECT pe cataloage (fără date de rând, fără tokenuri).
+
+### 8.1 Sursa drepturilor pe live (read-only, 30.09)
+
+| Obiect | Stare efectivă | Efect asupra autoatribuirii |
+|---|---|---|
+| `profiles` | RLS on (fără FORCE, owner `postgres`). Scriere: `profiles_insert_owner` / `profiles_delete_owner` / `profiles_update_owner` = doar owner; **`profiles_update_own` = oricine își poate face UPDATE la propriul rând** | UPDATE `is_owner` pe rândul propriu e oprit de triggere: `prevent_role_escalation_trigger` (ridică excepție la schimbarea `role`/`is_owner` de un non-owner; rulează primul, ordine alfabetică) și `trg_enforce_owner_only_salary_flags` (resetează `is_owner` + flagurile `can_access_*` la valoarea veche). INSERT profil propriu: doar owner |
+| `user_module_access` | RLS on. INSERT/UPDATE/DELETE: **doar owner**; fără triggere | un cont fără modul nu poate insera/modifica/prelua rânduri |
+| `handle_new_user` (SECURITY DEFINER, creează profilul la signup) | nu referă `is_owner` și nici `raw_*_meta_data` | profil nou = `is_owner` implicit `false` |
+| Alte funcții SECURITY DEFINER care scriu în `profiles`/`user_module_access` | niciuna găsită (căutare pe `prosrc` după `INSERT INTO`/`UPDATE`) | — |
+| `anon` / `authenticated` | fără BYPASSRLS, fără superuser | — |
+
+**Concluzie: azi un cont `authenticated` fără modul NU își poate autoatribui `is_owner` sau un rând în `user_module_access`** (pe căile verificate). Nu e finding blocant de autoatribuire.
+
+**Finding-uri noi (neblocante pentru acest patch, de raportat separat):**
+- **F1 — TRUNCATE pe sursa drepturilor.** `anon` și `authenticated` au `SELECT, INSERT, UPDATE, DELETE, TRUNCATE` pe `profiles` și `user_module_access` (default privileges Supabase). TRUNCATE **ocolește RLS**. Nu dă drepturi (nu se poate autoatribui nimic), dar un TRUNCATE pe `user_module_access` (nicio FK nu o referă) ar șterge toate drepturile, iar pe `profiles` … CASCADE ar lovi toate tabelele care o referă. PostgREST nu expune TRUNCATE, deci calea realistă e doar SQL direct / o funcție cu SQL dinamic; e igienă de privilegii, nu exploatare demonstrată. Același tipar ca pe `hr_concediu_tokens` (pe care patch-ul îl repară doar local).
+- **F2 — ocolirea triggerelor când `auth.uid()` e NULL.** `prevent_role_escalation` / `enforce_owner_only_salary_flags` sar peste verificare fără `sub` în JWT. Pentru `authenticated` fără `sub`, `profiles_update_own` nu potrivește niciun rând, deci nu e exploatabil prin API; dar orice cale `service_role` (edge-uri) poate seta `is_owner` fără verificare. Limită de încredere, ca în §7.
+- **Limită a căutării:** funcțiile cu SQL dinamic (`EXECUTE format(...)`) care ar scrie în aceste tabele nu sunt prinse de căutarea textuală; nici edge-urile (140 deployate) nu au fost inventariate pentru scrieri în `profiles`/`user_module_access`.
+
+### 8.2 Cerință → schimbare → test → rezultat
+
+| Cerință (verdict) | Schimbare | Test | Rezultat |
+|---|---|---|---|
+| §2 invarianții sursei drepturilor legați de aprobare | precondiție `[pre:invarianti]` în migrare (bloc `<invarianti-20261003d>`, liste albe = live 30.09); scheletul local reproduce politicile de scriere + triggerele live (corpurile funcțiilor cu md5 identic cu `prosrc` live) | 7 precondiții negative `INV:` (trigger dezactivat, trigger șters, corp funcție schimbat, politică INSERT pe rândul propriu, politică UPDATE lărgită, RLS oprit pe `user_module_access`, `authenticated BYPASSRLS`); mutantul `PRE_fara_invarianti` | toate refuzate fără urme; mutant prins; amprenta locală = live (drumul fericit trece precondiția) |
+| §4 autoatribuire | `t.escaladare` + `t.incercari_autoatribuire` (încercare + citire tokenuri în ACEEAȘI tranzacție) | X1–X8: UPDATE `is_owner` propriu (+ `can_access_personal_data`), INSERT `hr` / `hr.concedii` propriu, UPDATE rând propriu → `hr`, preluarea rândului `hr` al altcuiva, INSERT profil propriu `is_owner=true` (uid fără profil), DELETE profil owner | pe patch: toate refuzate (`P0001` / `42501` / 0 rânduri) și **vede=0**; suita PICĂ pe live (discriminare). Demonstrație: cu triggerele `profiles` oprite, peste patch, contul fără modul devine owner și vede 5/5 → de aceea precondiția |
+| §4 revocare în sesiune existentă | — | HR citește; se șterge accesul HR (commit); același JWT (claims identice), tranzacție nouă. La fel pentru owner retrogradat (`is_owner=false`), fără modul HR | 0 rânduri în ambele; contul HR rămâne superadmin + dept HR + date personale → nicio altă ramură |
+| §4 limitele grupului | 3 conturi fictive noi: `hr` viewer, `hr.recrutare`, valoarea exactă `'hr.'` | L1–L3, marcate `[DE APROBAT]` și afișate de harness ca „ALEGERI DE APROBAT” | regula actuală (= poarta UI) **le dă acces la toate tokenurile**; e o alegere care intră în aprobarea grupului țintă (§5 pas 2), nu „HR legitim” automat |
+| §4 dependențe RLS fără privilegii | — | fără SELECT pe `user_module_access.module` (grant doar pe alte coloane), fără SELECT pe `profiles.is_owner`, fără SELECT pe `user_module_access`, fără EXECUTE pe `auth.uid()` | **refuz sigur** `42501` pentru toți (owner, HR, Ofertare-hr, fără modul), niciodată rânduri, niciun fallback. Efect consemnat: **utilizatorii legitimi pierd și ei butonul** într-o asemenea stare. (USAGE pe schema `auth` NU e o dependență: politica reține OID-ul funcției) |
+| §4 token copiat înainte de patch | — | pe live, contul fără modul copiază un token FICTIV (neafișat); patch; listarea → 0; lookup-ul edge (`service_role`, `token + activ + format`) cu copia | **copia trece încă validarea edge** (`employee_id` corect). Limita patch-ului, raportată ca atare, nu cosmetizată; se închide doar prin §6 A |
+| §4 rotație (operație separată) | schelet documentat mai jos | — | neimplementat (nu face parte din acest patch) |
+| §5 aprobarea grupului țintă = condiție | procedura §5 pas 2 + 2b rescrise | — | — |
+| domeniul verdictului | formularea din antet | — | — |
+| §3 opțiunea A | §6 (1) A rescrisă (invalidare 117 → reemitere doar eligibili; 12 plecați dezactivați după confirmare; 15 fără token = decizie separată; preview nominal fără tokenuri + verificarea stării neschimbate la apply; eligibilitate/expirare la info ȘI POST) | — | — |
+
+### 8.3 Schelet pentru testul de rotație (se implementează odată cu operația §6 A, nu acum)
+
+Pe un schelet cu edge-ul emulat (lookup `token + activ + format` + verificarea eligibilității/expirării, aceeași funcție pentru `?api=info` și POST):
+1. Stare inițială: tokenuri vechi pentru un eligibil E, un plecat P și un rând fără token F; copiile vechi se păstrează în variabile, niciodată afișate.
+2. Preview nominal (fără tokenuri) → confirmare → apply cu verificarea stării de referință; o variantă în care starea se schimbă între preview și apply → apply-ul **refuză**, nimic modificat.
+3. Aserțiuni: tokenul vechi al lui E și al lui P refuzat la info **și** la POST; tokenul nou al lui E acceptat la ambele; P fără token nou și `activ=false`; F neatins; niciun rând „reemis” pentru P.
+4. Mutanți: `UPDATE` pe toate rândurile (P primește token nou → prins), verificarea doar la info (POST cu token vechi → prins), fără verificarea stării de referință (→ prins).
+5. Logurile probelor: `RETURNING employee_id`, numărători și md5 de stare; niciun token în clar.
+
+### 8.4 Ce rămâne deschis
+- **Aprobarea lui Răzvan pe grupul țintă** (inclusiv L1–L3 și conturile de agent) — condiție de apply.
+- Livrarea atomică / traseul (runda 4 comună), de portat aici după #538/#542.
+- F1 (TRUNCATE pe `profiles`/`user_module_access`), F2 (ocolirea triggerelor fără `auth.uid()`): patch-uri separate, cu acordul lui Răzvan.
+- Inventarul căilor `service_role` (edge-uri) care citesc tokenurile sau scriu în sursa drepturilor.
+- Rotația (§6 A) și verificarea eligibilității/expirării în edge: operații separate.

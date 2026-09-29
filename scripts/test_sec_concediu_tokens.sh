@@ -17,6 +17,7 @@
 #   4. precondiții negative (stări necunoscute/mixte → refuz, fără urme)
 #   5. revenirea (rollback tehnic): armări greșite/persistente/rămase → refuz; armată → live exact
 #   6. mutanți pe patch (fiecare protecție scoasă) și pe revenire → prinși
+#   7. runda 2: autoatribuire, revocare în sesiune, limitele grupului, dependențe fără privilegii, token copiat
 # ════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -267,6 +268,16 @@ sql_pg "REVOKE sc_citire FROM anon" || true
 neg "mixt: politica patch + ACL live" "DROP POLICY hr_tokens_sel ON public.hr_concediu_tokens; CREATE POLICY hr_tokens_sel_modul_hr ON public.hr_concediu_tokens AS PERMISSIVE FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner = true) OR EXISTS (SELECT 1 FROM public.user_module_access uma WHERE uma.profile_id = auth.uid() AND (uma.module = 'hr' OR left(uma.module, 3) = 'hr.')));" "$Q_PRE"
 neg "mixt: politica live + ACL patch" "REVOKE ALL ON public.hr_concediu_tokens FROM anon, authenticated; GRANT SELECT ON public.hr_concediu_tokens TO authenticated;" "$Q_PRE"
 neg "dependență lipsă (user_module_access.module redenumit)" "ALTER TABLE public.user_module_access RENAME COLUMN module TO modul;" "Precondiție 20261003d: lipsesc"
+Q_INV='Precondiție 20261003d: sursa drepturilor'
+neg "INV: trigger prevent_role_escalation dezactivat" "ALTER TABLE public.profiles DISABLE TRIGGER prevent_role_escalation_trigger;" "$Q_INV"
+neg "INV: trigger enforce_owner_only_salary_flags șters" "DROP TRIGGER trg_enforce_owner_only_salary_flags ON public.profiles;" "$Q_INV"
+neg "INV: corpul funcției trigger schimbat" "CREATE OR REPLACE FUNCTION public.prevent_role_escalation() RETURNS trigger LANGUAGE plpgsql AS \$x\$ BEGIN RETURN NEW; END \$x\$;" "$Q_INV"
+neg "INV: politică INSERT pe user_module_access pentru rândul propriu" "CREATE POLICY uma_self ON public.user_module_access FOR INSERT TO authenticated WITH CHECK (profile_id = auth.uid());" "$Q_INV"
+neg "INV: politica de UPDATE uma lărgită" "ALTER POLICY user_module_access_update_owner ON public.user_module_access USING (true) WITH CHECK (true);" "$Q_INV"
+neg "INV: RLS dezactivat pe user_module_access" "ALTER TABLE public.user_module_access DISABLE ROW LEVEL SECURITY;" "$Q_INV"
+sql_pg "ALTER ROLE authenticated BYPASSRLS"
+neg "INV: authenticated BYPASSRLS" "SELECT 1;" "$Q_INV"
+sql_pg "ALTER ROLE authenticated NOBYPASSRLS"
 
 pas "5. Revenirea (rollback tehnic, supabase/revenire/)"
 proaspat; aplica e1s "$MIG" || esec "migrarea înainte de rollback"
@@ -380,6 +391,9 @@ for n, (a, b) in M.items():
 ls = src.split('\n'); i = [k for k, l in enumerate(ls) if '[pre:stare]' in l]; assert len(i) == 1
 ls[i[0]] = "    v_stare := 'necunoscuta';"
 open(f'{d}/PRE_accepta_orice.sql', 'w').write('\n'.join(ls))
+ls = src.split('\n'); i = [k for k, l in enumerate(ls) if '[pre:invarianti]' in l]; assert len(i) == 1
+ls[i[0]] = "  IF false THEN"
+open(f'{d}/PRE_fara_invarianti.sql', 'w').write('\n'.join(ls))
 ls = src.split('\n'); i = [k for k, l in enumerate(ls) if '[pre:tabel]' in l]; assert len(i) == 1
 ls[i[0]] = "  IF false THEN"
 open(f'{d}/PRE_fara_tabel.sql', 'w').write('\n'.join(ls))
@@ -405,6 +419,67 @@ proaspat; sql "ALTER TABLE public.hr_concediu_tokens DISABLE ROW LEVEL SECURITY;
 aplica e1s "$BASE/mut/PRE_fara_tabel.sql" || true
 grep -q "tabelul nu e" "$BASE/out" && esec "PRE_fara_tabel neprins"
 ok "PRE_fara_tabel PRINS de testul „RLS dezactivat” (lipsește refuzul de precondiție; a oprit-o abia postcondiția)"; NM=$((NM + 1))
+proaspat; sql "ALTER TABLE public.profiles DISABLE TRIGGER prevent_role_escalation_trigger;" >/dev/null
+aplica e1s "$BASE/mut/PRE_fara_invarianti.sql" || true
+grep -q "sursa drepturilor" "$BASE/out" && esec "PRE_fara_invarianti neprins"
+[ "$(inregistrat)" = 1 ] || esec "PRE_fara_invarianti: trebuia să se aplice peste invariantul rupt (asta e defectul prins)"
+ok "PRE_fara_invarianti PRINS de testul „trigger prevent_role_escalation dezactivat” (patch-ul se aplică peste o sursă de drepturi ruptă)"; NM=$((NM + 1))
 NM=$((NM + 5))   # D4 + cei 4 mutanți pe revenire, raportați mai sus
+
+pas "7. Runda 2 (verdict §4): sursa drepturilor, revocare în sesiune, limitele grupului, dependențe fără privilegii, token copiat"
+# 7a. autoatribuire + limite: trece pe patch, PICĂ pe live (discriminare)
+proaspat
+[ "$(suita runda2)" = pica ] || esec "suita runda2 trece pe live — nu discriminează"
+ok "suita runda2 PICĂ pe live la „$(prima)” (pe live oricine vede oricum tokenurile)"
+aplica e1s "$MIG" || { cat "$BASE/out" >&2; esec "migrare"; }
+[ "$(suita runda2)" = trece ] || esec "suita runda2 pe patch: $(prima)"
+ok "autoatribuire refuzată + tokenuri invizibile în aceeași tranzacție: $(cat "$BASE/suita.n") verificări (X1–X8 is_owner / user_module_access / profil nou; L1–L3 limite)"
+sql "SELECT id || ' → ' || rezultat FROM t.incercari_autoatribuire()" | sed 's/^/        /'
+echo "      ALEGERI DE APROBAT (regula = poarta UI): 'hr' viewer, 'hr.recrutare', valoarea exactă 'hr.' VĂD toate tokenurile"
+# 7b. de ce contează invarianții: cu triggerele de pe profiles oprite, escaladarea reușește chiar peste patch
+sql "ALTER TABLE public.profiles DISABLE TRIGGER prevent_role_escalation_trigger; ALTER TABLE public.profiles DISABLE TRIGGER trg_enforce_owner_only_salary_flags;" >/dev/null
+R=$(sql "SELECT t.escaladare('00000000-0000-4000-8000-000000000301', 'UPDATE public.profiles SET is_owner = true WHERE id = auth.uid()')")
+[ "$R" = "OK:1 vede=5" ] || esec "demonstrația invariantului rupt: $R"
+ok "invariant rupt (triggere profiles oprite) + patch aplicat: contul fără modul devine owner și vede 5/5 → de aceea precondiția [pre:invarianti]"
+# 7c. revocarea dreptului într-o sesiune existentă: același JWT (claims identice), tranzacție nouă
+proaspat; aplica e1s "$MIG" || esec "migrare"
+TOT=$(sql "SELECT t.toate()")
+[ "$(sql "SELECT t.vede('authenticated','00000000-0000-4000-8000-000000000126')")" = "$TOT" ] || esec "HR nu vede înainte de revocare"
+sql "DELETE FROM public.user_module_access WHERE profile_id = '00000000-0000-4000-8000-000000000126'" >/dev/null
+[ "$(sql "SELECT t.vede('authenticated','00000000-0000-4000-8000-000000000126')")" = "OK:0:-" ] || esec "HR revocat vede încă"
+ok "revocare HR: același JWT, tranzacție nouă → 0 rânduri (rămâne superadmin + dept HR + date personale: nicio altă ramură)"
+[ "$(sql "SELECT t.vede('authenticated','00000000-0000-4000-8000-000000000121')")" = "$TOT" ] || esec "owner nu vede înainte"
+sql "UPDATE public.profiles SET is_owner = false WHERE id = '00000000-0000-4000-8000-000000000121'" >/dev/null
+[ "$(sql "SELECT t.vede('authenticated','00000000-0000-4000-8000-000000000121')")" = "OK:0:-" ] || esec "owner retrogradat vede încă"
+ok "owner retrogradat fără modul HR: același JWT → 0 rânduri"
+# 7d. dependențele RLS fără privilegiile de citire necesare → refuz sigur (eroare sau 0), niciodată rânduri
+dep() {  # dep <etichetă> <SQL de restrângere>
+  proaspat; aplica e1s "$MIG" || esec "migrare"; sql "$2" >/dev/null
+  local u r rez=""
+  for u in 121 126 201 301; do
+    r=$(sql "SELECT t.vede('authenticated','00000000-0000-4000-8000-000000000$u')")
+    [[ "$r" = ERR:42501 || "$r" = OK:0:- ]] || esec "$1: contul …$u a primit rânduri ($r) — fallback care lărgește"
+    rez="$rez …$u=$r"
+  done
+  [ "$(sql "SELECT t.vede('anon', NULL)")" = ERR:42501 ] || esec "$1: anon"
+  ok "$1 → refuz sigur:$rez (utilizatorii legitimi PIERD accesul — efect consemnat)"
+}
+dep "fără SELECT pe user_module_access.module" "REVOKE SELECT ON public.user_module_access FROM authenticated; GRANT SELECT (id, profile_id, access_level) ON public.user_module_access TO authenticated;"
+dep "fără SELECT pe profiles.is_owner" "REVOKE SELECT ON public.profiles FROM authenticated; GRANT SELECT (id, name, role, department) ON public.profiles TO authenticated;"
+dep "fără SELECT pe user_module_access (tabel)" "REVOKE SELECT ON public.user_module_access FROM authenticated;"
+dep "fără EXECUTE pe auth.uid()" "REVOKE EXECUTE ON FUNCTION auth.uid() FROM PUBLIC;"
+# (USAGE pe schema auth NU e o dependență: politica reține OID-ul funcției, deci nu are nevoie de căutare după nume)
+# 7e. token copiat ÎNAINTE de patch: listarea dispare, copia merge încă la edge (LIMITA patch-ului; tokenul e fictiv și NU se afișează)
+proaspat
+COPIE=$(sql "SELECT t.ca('authenticated','00000000-0000-4000-8000-000000000301', 'SELECT token FROM public.hr_concediu_tokens WHERE employee_id = 3')")
+[[ "$COPIE" =~ ^OK:[a-f0-9]{32}$ ]] || esec "copierea pe live nu a mers"
+COPIE=${COPIE#OK:}
+aplica e1s "$MIG" || esec "migrare"
+[ "$(sql "SELECT t.vede('authenticated','00000000-0000-4000-8000-000000000301')")" = "OK:0:-" ] || esec "după patch contul fără modul încă listează"
+R=$(sql "SELECT t.ca('service_role', NULL, \$q\$SELECT employee_id::text FROM public.hr_concediu_tokens WHERE token = '$COPIE' AND activ = true AND '$COPIE' ~ '^[a-f0-9]{32}\$'\$q\$)")
+unset COPIE
+[ "$R" = "OK:3" ] || esec "validarea edge a copiei: $R"
+ok "LIMITĂ DEMONSTRATĂ: după patch contul fără modul nu mai listează (0), dar tokenul copiat înainte trece încă validarea edge (info și POST folosesc același lookup) — se închide doar prin rotație/invalidare"
+
 
 printf '\n\033[32mTOATE TESTELE AU TRECUT\033[0m — %s verificări în harness + %s în suita patch (rulată în fiecare scenariu) ; mutanți prinși: %s\n' "$NV" "$N_PATCH" "$NM"
