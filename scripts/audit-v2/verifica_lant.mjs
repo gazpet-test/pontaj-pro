@@ -16,7 +16,7 @@ export async function citesteTabel(db, table, column, value, order = 'id') {
   const rows = []
   for (let offset = 0; ; offset += 500) {
     const { data, error } = await db.from(table).select('*').eq(column, value).order(order).range(offset, offset + 499)
-    if (error) throw new Error(`${table}: ${error.code || 'citire eșuată'}`)
+    if (error) throw Object.assign(new Error(`${table}: ${error.code || 'citire eșuată'}`), { code: error.code })
     rows.push(...data)
     if (data.length < 500) return rows
   }
