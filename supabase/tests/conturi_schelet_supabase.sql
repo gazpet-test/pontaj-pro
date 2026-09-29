@@ -570,27 +570,27 @@ BEGIN
   IF auth.uid() IS NULL THEN
     RETURN NEW;
   END IF;
-
+  
   -- Verifică modificare role
   IF OLD.role IS DISTINCT FROM NEW.role THEN
     IF NOT EXISTS (
-      SELECT 1 FROM public.profiles
+      SELECT 1 FROM public.profiles 
       WHERE id = auth.uid() AND is_owner = true
     ) THEN
       RAISE EXCEPTION 'Doar owners pot schimba rolul (incercat: % → %)', OLD.role, NEW.role;
     END IF;
   END IF;
-
+  
   -- Verifică modificare is_owner
   IF OLD.is_owner IS DISTINCT FROM NEW.is_owner THEN
     IF NOT EXISTS (
-      SELECT 1 FROM public.profiles
+      SELECT 1 FROM public.profiles 
       WHERE id = auth.uid() AND is_owner = true
     ) THEN
       RAISE EXCEPTION 'Doar owners pot schimba flag-ul is_owner';
     END IF;
   END IF;
-
+  
   RETURN NEW;
 END;
 $function$;
@@ -628,7 +628,7 @@ AS $function$
 BEGIN
   -- Skip check pentru service role (auth.uid() returnează NULL)
   IF auth.uid() IS NULL THEN RETURN NEW; END IF;
-
+  
   IF (OLD.can_access_pontaj_brut IS DISTINCT FROM NEW.can_access_pontaj_brut) THEN
     IF NOT EXISTS (
       SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_owner = true
@@ -710,38 +710,38 @@ DECLARE
 BEGIN
   -- Detect setare nouă termination_date (NULL → SET sau schimbare)
   IF (OLD.termination_date IS NULL AND NEW.termination_date IS NOT NULL)
-     OR (OLD.termination_date IS NOT NULL
-         AND NEW.termination_date IS NOT NULL
+     OR (OLD.termination_date IS NOT NULL 
+         AND NEW.termination_date IS NOT NULL 
          AND OLD.termination_date <> NEW.termination_date) THEN
-
+    
     -- Auto-deactivate dacă data trecuta sau azi
     IF NEW.termination_date <= CURRENT_DATE THEN
       NEW.active := false;
     END IF;
-
+    
     -- Count autorizații active pentru notificare
     SELECT COUNT(*) INTO v_count_aut
     FROM hr_autorizatii
     WHERE employee_id = NEW.id AND deleted_at IS NULL;
-
+    
     -- Notificare doar dacă există autorizații (altfel nu are sens)
     IF v_count_aut > 0 THEN
       v_data_str := TO_CHAR(NEW.termination_date, 'DD.MM.YYYY');
-
+      
       INSERT INTO notifications (profile_id, type, modul, title, message, link_to)
-      SELECT
+      SELECT 
         p.id,
         'hr_contract_inchis_autorizatii',
         'HR',
         '📦 Mută autorizațiile în arhivă',
-        v_count_aut || ' autorizații pentru ' || NEW.name
+        v_count_aut || ' autorizații pentru ' || NEW.name 
           || ' (contract încheiat la ' || v_data_str || ')',
         '/hr?tab=arhiva'
       FROM profiles p
       WHERE p.is_owner = true OR p.can_access_personal_data = true;
     END IF;
   END IF;
-
+  
   -- Detect ștergere termination_date (re-activare contract)
   IF OLD.termination_date IS NOT NULL AND NEW.termination_date IS NULL THEN
     -- Marchez notificările legate ca rezolvate
@@ -751,7 +751,7 @@ BEGIN
       AND message LIKE '%' || NEW.name || '%'
       AND action_taken IS NOT TRUE;
   END IF;
-
+  
   RETURN NEW;
 END;
 $function$;
