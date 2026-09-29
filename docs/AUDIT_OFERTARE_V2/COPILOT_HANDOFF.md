@@ -1,7 +1,7 @@
 # Handoff Copilot — PowPatroll (stare la 29.09.2026, 21:40)
 
 > **Ce e:** memoria lui „Copilot GPT - Ajutor Claude” (GPT custom în ChatGPT — fără API/CLI, doar chat). Când conversația se umple, se deschide una nouă și se lipește ca PRIM mesaj secțiunea **„Pentru lipit”** (de la „Echipa și regulile” până la „În lucru”) + ultimele 10 rânduri din **Jurnalul verdictelor**.
-> **Cine îl ține la zi:** Claude, după FIECARE verdict GO/NO-GO/HOLD (rând nou în jurnal + starea PR-ului în tabel). Copie în BD: `claude_docs` slug `handoff_copilot`.
+> **Cine îl ține la zi:** Claude, după FIECARE verdict GO/NO-GO/HOLD (rând nou în jurnal + starea PR-ului în tabel). Copie în BD: `claude_docs` slug `handoff_copilot`. Sursa: repo docs/AUDIT_OFERTARE_V2/COPILOT_HANDOFF.md.
 
 ## Conversații
 | # | Deschisă | URL | Închisă / motiv |
@@ -10,6 +10,7 @@
 | 2 | 29.09 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6abc000f-2a5c-83eb-912f-65bee6219a61 | activă |
 
 **Rotire:** nu așteptăm să se umple. Semnale: răspunsuri tot mai lente, „is responding” care nu se mai termină, pagina greu de deschis → conversație nouă. Regulă practică: după ~25–30 de schimburi mari sau după un pachet mare de review (diff-uri lungi), rotim. **Nu se dă reload cât scrie Copilot** (se pierde mesajul).
+**Canal tehnic (PC, Edge CDP 9333):** C:\Users\Public\cgpt_force.mjs (send/tail/state; din 29.09 scrie în compozitorul VIZIBIL — ChatGPT ține și compozitoare ascunse în DOM), cgpt_asteapta.mjs „<fragment din mesaj>” (așteaptă răspunsul stabil), cgpt_shot.mjs (captură ecran).
 
 ---
 # Pentru lipit (începe aici)
