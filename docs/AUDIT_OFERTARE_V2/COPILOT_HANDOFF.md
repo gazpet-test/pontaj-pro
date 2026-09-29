@@ -46,11 +46,10 @@ Verificator citate: AUTO mecanic = citatul există + hash-uri curente; AI = prop
 
 Observațiile tale non-blocker pe #530 (de făcut): la eșecul unei citiri auxiliare pagina să rămână read-only cu banner (nu inutilizabilă); regenerarea referinta_text să păstreze provenance/versionare.
 
-## Ordinea post-02.10 — ⚠️ NECONCORDANȚĂ, de confirmat de Răzvan
-- Rezumatul lui Claude (29.09): J04 apply + smoke → provider supraveghere + P2 → J07 apply + smoke → merge #530 (QW0) → invalidare/snapshot/concurență/idempotență → Quick Wins → EXIT REPORT.
-- Handoff-ul final Copilot conv. 1: **J04 → J07 → QW0 (#530) → P2** → invalidare upstream, snapshot aprobare, concurență/retry → EXIT REPORT (într-un loc apare și J04 → J07 → P2, fără QW0).
-- Copilot conv. 2 (29.09): istoricul nu fixează o ordine unică; sigure sunt doar „J04 primul” și „#530 nu primul”; poziția P2 față de J07 și #530 o decide Răzvan.
-- Până la confirmare nu contează (freeze până la 02.10); se decide înainte de primul merge post-Jilava.
+## Ordinea post-02.10 — DECISĂ de Răzvan (29.09, varianta A)
+**J04 merge/apply + smoke 103 → J07 merge/apply + smoke → QW0 (#530) → P2 pe 103 → invalidare upstream / snapshot aprobare / concurență-retry → EXIT REPORT.**
+- Istoric: rezumatul lui Claude avea J04 → P2 → J07 → #530 (varianta B, respinsă); handoff-ul final Copilot conv. 1 avea J04 → J07 → QW0 → P2 (adoptată).
+- Quick Wins PT (în afara QW0) vin după, în ordinea din PT_UX_TO_BE §3.
 Criteriile tale GO pentru confirmarea grupată de citate: PT_UX_TO_BE §6 („sistemul poate grupa munca, nu judecata”).
 
 ## Jilava (PT93, lic. 93) — de depus 02.10 12:00
@@ -79,3 +78,4 @@ Conturi ↔ angajați: (1) legare automată profil→angajat la crearea contului
 | 29.09 | 2 | Test coerență (3 întrebări) | Trecut: #530 NU primul (GO cod ≠ GO merge; ordinea J04→P2→J07→#530 rămâne); R2 — risc „contract închis dar alt contract activ” → gardă server-side atomică + test, owner exclus; 280 cerințe NU în bloc (AI candidate ≠ human verified) | garda „alt contract activ” de verificat în R2 înainte de GO |
 | 29.09 | 2 | Handoff final conv. 1 trimis integral | Primit. Ordinea post-02.10: istoricul nu fixează una unică (a recunoscut că la test preluase rezumatul lui Claude); J04 primul + #530 nu primul rămân; P2 vs J07/#530 → Răzvan. Paritatea NULL pe #530: îndeplinită, nu se redeschide. Read-only Jilava ≠ interdicție pe operațiunile de dosar autorizate | întrebare la Răzvan: ordinea A/B |
 | 29.09 | 1 (final) | Propunere „PowPatroll Memory / Context Registry” | (propunere, nu verdict) | Claude a propus 5 ajustări; Răzvan le-a acceptat pe toate (claude_context #1486); propunerea detaliată în lucru, implementarea după decizia lui Răzvan |
+| 29.09 | — | **Decizie Răzvan: ordinea post-02.10 = A** (J04 → J07 → QW0 → P2 → invalidare/snapshot/concurență → EXIT REPORT) | — | neconcordanța închisă; comunicată lui Copilot conv. 2 |
