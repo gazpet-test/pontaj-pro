@@ -1,0 +1,4 @@
+# Migrările aplicate de scripts/test_powpatroll_registry.sh peste schelet, în ordine.
+# Câte o cale pe rând, relativă la rădăcina repo-ului; liniile goale și cele cu # se ignoră.
+# Pentru fiecare X.sql, X_ROLLBACK.sql e folosit de --rollback (ordine inversă).
+supabase/migrations/20261005a_powpatroll_registry.sql
