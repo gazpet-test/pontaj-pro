@@ -111,10 +111,14 @@ BEGIN
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
 
   IF v_p.is_owner IS TRUE THEN                        -- SIGURANȚĂ: owner-ul nu se închide niciodată automat
-    PERFORM public.fn_cont_notifica_owneri('cont_owner_neinchis', '⚠️ Contract încheiat pentru un OWNER',
-      format('Contul OWNER %s (fișa #%s) NU a fost închis automat. Decide manual. Motiv: %s',
-             v_p.email, COALESCE(p_employee_id::text, v_p.employee_id::text, '—'), p_motiv),
-      '/admin?tab=managers&cont=' || p_profile_id::text);
+    BEGIN                                             -- notificarea e best-effort (nu blochează nimic)
+      PERFORM public.fn_cont_notifica_owneri('cont_owner_neinchis', '⚠️ Contract încheiat pentru un OWNER',
+        format('Contul OWNER %s (fișa #%s) NU a fost închis automat. Decide manual. Motiv: %s',
+               v_p.email, COALESCE(p_employee_id::text, v_p.employee_id::text, '—'), p_motiv),
+        '/admin?tab=managers&cont=' || p_profile_id::text);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'fn_cont_inchide notificare owner (%): % [%]', p_profile_id, SQLERRM, SQLSTATE;
+    END;
     RETURN 'sarit_owner';
   END IF;
 
@@ -174,9 +178,13 @@ BEGIN
   DELETE FROM auth.sessions WHERE user_id = p_profile_id;
 
   IF v_rez = 'inchis' THEN
-    PERFORM public.fn_cont_notifica_owneri('cont_inchis_automat', '🔒 Cont închis: ' || COALESCE(v_p.email, p_profile_id::text),
-      format('%s · jurnal #%s', p_motiv, v_jurnal),
-      '/admin?tab=managers&cont=' || p_profile_id::text);
+    BEGIN                                             -- best-effort: închiderea rămâne făcută și dacă notificarea pică
+      PERFORM public.fn_cont_notifica_owneri('cont_inchis_automat', '🔒 Cont închis: ' || COALESCE(v_p.email, p_profile_id::text),
+        format('%s · jurnal #%s', p_motiv, v_jurnal),
+        '/admin?tab=managers&cont=' || p_profile_id::text);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'fn_cont_inchide notificare (%): % [%]', p_profile_id, SQLERRM, SQLSTATE;
+    END;
   END IF;
   RETURN v_rez;
 END $fn$;
@@ -211,6 +219,7 @@ AS $fn$
 DECLARE
   r record;
   v_rez text;
+  v_err text;
 BEGIN
   IF OLD.active IS TRUE AND NEW.active IS FALSE THEN
     FOR r IN SELECT p.id, p.email FROM public.profiles p WHERE p.employee_id = NEW.id ORDER BY p.id LOOP
@@ -220,18 +229,27 @@ BEGIN
                      format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
                      'trigger_contract_incheiat', NEW.id);
         EXCEPTION WHEN OTHERS THEN
-          -- Nu blocăm NICIODATĂ UPDATE-ul din HR sau lotul cron-ului.
-          PERFORM public.fn_cont_notifica_owneri('cont_inchidere_esuata', '❌ Închiderea automată a contului a eșuat',
-            format('%s (fișa #%s %s): %s', r.email, NEW.id, NEW.name, SQLERRM),
-            '/admin?tab=managers&cont=' || r.id::text);
+          -- Nu blocăm NICIODATĂ UPDATE-ul din HR sau lotul cron-ului (nici dacă pică și notificarea).
+          v_err := SQLERRM;
+          BEGIN
+            PERFORM public.fn_cont_notifica_owneri('cont_inchidere_esuata', '❌ Închiderea automată a contului a eșuat',
+              format('%s (fișa #%s %s): %s', r.email, NEW.id, NEW.name, v_err),
+              '/admin?tab=managers&cont=' || r.id::text);
+          EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'fn_employees_ciclu_cont (%): închiderea a eșuat (%) și notificarea la fel: % [%]', r.email, v_err, SQLERRM, SQLSTATE;
+          END;
         END;
       ELSE
-        PERFORM public.fn_cont_notifica_owneri('cont_angajat_inactiv_fara_incetare', '⚠️ Angajat dezactivat fără contract încheiat',
-          format('%s (fișa #%s %s) a fost dezactivat%s. Contul NU s-a închis automat — verifică fișa sau închide contul manual.',
-                 r.email, NEW.id, NEW.name,
-                 CASE WHEN NEW.termination_date IS NULL THEN ' fără dată de încetare'
-                      ELSE ' înainte de data încetării (' || to_char(NEW.termination_date, 'DD.MM.YYYY') || ')' END),
-          '/admin?tab=managers&cont=' || r.id::text);
+        BEGIN
+          PERFORM public.fn_cont_notifica_owneri('cont_angajat_inactiv_fara_incetare', '⚠️ Angajat dezactivat fără contract încheiat',
+            format('%s (fișa #%s %s) a fost dezactivat%s. Contul NU s-a închis automat — verifică fișa sau închide contul manual.',
+                   r.email, NEW.id, NEW.name,
+                   CASE WHEN NEW.termination_date IS NULL THEN ' fără dată de încetare'
+                        ELSE ' înainte de data încetării (' || to_char(NEW.termination_date, 'DD.MM.YYYY') || ')' END),
+            '/admin?tab=managers&cont=' || r.id::text);
+        EXCEPTION WHEN OTHERS THEN
+          RAISE WARNING 'fn_employees_ciclu_cont notificare (%): % [%]', r.email, SQLERRM, SQLSTATE;
+        END;
       END IF;
     END LOOP;
   ELSIF OLD.active IS NOT TRUE AND NEW.active IS TRUE THEN
@@ -240,10 +258,14 @@ BEGIN
                FROM public.profiles p
                JOIN public.conturi_inchideri_jurnal j ON j.profile_id = p.id AND j.restaurat_la IS NULL
               WHERE p.employee_id = NEW.id ORDER BY p.id LOOP
-      PERFORM public.fn_cont_notifica_owneri('cont_angajat_reactivat', '↩ Angajat reactivat — contul rămâne închis',
-        format('%s (fișa #%s %s) a fost reactivat. Accesul NU a fost redat automat; restaurarea din jurnalul #%s o face doar owner-ul.',
-               r.email, NEW.id, NEW.name, r.jid),
-        '/admin?tab=managers&cont=' || r.id::text);
+      BEGIN
+        PERFORM public.fn_cont_notifica_owneri('cont_angajat_reactivat', '↩ Angajat reactivat — contul rămâne închis',
+          format('%s (fișa #%s %s) a fost reactivat. Accesul NU a fost redat automat; restaurarea din jurnalul #%s o face doar owner-ul.',
+                 r.email, NEW.id, NEW.name, r.jid),
+          '/admin?tab=managers&cont=' || r.id::text);
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'fn_employees_ciclu_cont notificare (%): % [%]', r.email, SQLERRM, SQLSTATE;
+      END;
     END LOOP;
   END IF;
   RETURN NULL;
@@ -285,6 +307,16 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = v_j.profile_id) THEN
     RAISE EXCEPTION 'Profilul % nu mai există; nu am ce restaura', v_j.profile_id USING ERRCODE = 'P0002';
+  END IF;
+  -- Forma snapshot-ului (B.2): altfel o restaurare „reușită” ar pierde flagurile/șantierele și ar marca
+  -- definitiv jurnalul ca restaurat (ex. un import manual cu forma {profile:{…}, module:[…]}).
+  IF (v_j.snapshot ->> 'versiune') IS DISTINCT FROM '1'
+     OR jsonb_typeof(v_j.snapshot -> 'flaguri') IS DISTINCT FROM 'object'
+     OR jsonb_typeof(v_j.snapshot -> 'module') IS DISTINCT FROM 'array'
+     OR jsonb_typeof(v_j.snapshot -> 'santiere') IS DISTINCT FROM 'array'
+     OR NOT (v_j.snapshot ? 'banned_until') THEN
+    RAISE EXCEPTION 'Snapshot-ul închiderii #% nu are forma așteptată (versiune 1: flaguri{}, module[], santiere[], banned_until); nu restaurez', p_jurnal_id
+      USING ERRCODE = '22023', HINT = 'Corectează importul (G.7) — jurnalul NU a fost marcat restaurat.';
   END IF;
 
   -- Module (doar cele care mai există în app_modules)
@@ -335,18 +367,21 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_restaureaza(bigint, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_cont_restaureaza(bigint, text) TO authenticated, service_role;
 
--- B.7 Starea contului pentru fișa HR --------------------------------------------
+-- B.7 Starea contului pentru fișa HR (și coloana „Stare” din Admin → Manageri) ------
 -- Owner / can_modify_employees / can_access_personal_data; ceilalți primesc 0 rânduri (fără eroare).
+-- Owner-ul primește TOATE conturile (inclusiv nelegate), ca „blocat” (ban fără jurnal) să apară și în Manageri.
 CREATE OR REPLACE FUNCTION public.fn_cont_stare_angajati()
 RETURNS TABLE(employee_id integer, profile_id uuid, email text, stare text, inchis_la timestamptz, jurnal_id bigint)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
+DECLARE v_owner boolean;
 BEGIN
   IF auth.uid() IS NULL OR NOT EXISTS (
        SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid()
           AND (pr.is_owner IS TRUE OR pr.can_modify_employees IS TRUE OR pr.can_access_personal_data IS TRUE)) THEN
     RETURN;
   END IF;
+  v_owner := EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid() AND pr.is_owner IS TRUE);
   RETURN QUERY
   SELECT p.employee_id::integer, p.id, p.email,
          CASE WHEN j.id IS NOT NULL THEN 'inchis'
@@ -356,8 +391,8 @@ BEGIN
     FROM public.profiles p
     LEFT JOIN public.conturi_inchideri_jurnal j ON j.profile_id = p.id AND j.restaurat_la IS NULL
     LEFT JOIN auth.users u ON u.id = p.id
-   WHERE p.employee_id IS NOT NULL
-   ORDER BY p.employee_id;
+   WHERE p.employee_id IS NOT NULL OR v_owner
+   ORDER BY p.employee_id NULLS LAST, p.id;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_stare_angajati() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_cont_stare_angajati() TO authenticated, service_role;
@@ -377,7 +412,7 @@ BEGIN
   END IF;
   RETURN QUERY
   WITH pr AS (
-    SELECT p.id AS pid, p.email AS pemail, p.tip_cont AS ptip, p.is_owner AS powner,
+    SELECT p.id AS pid, COALESCE(u.email, p.email) AS pemail, u.email AS uemail, p.tip_cont AS ptip, p.is_owner AS powner,
            p.employee_id::integer AS emp, e.id AS eid, e.name AS enume, e.active AS eactiv, e.termination_date AS etd,
            u.banned_until AS ban, j.id AS jid, j.facut_la AS jla, to_jsonb(p) AS pj
       FROM public.profiles p
@@ -405,7 +440,7 @@ BEGIN
            COALESCE((SELECT jsonb_agg(jsonb_build_object('employee_id', c.employee_id, 'employee_name', c.employee_name,
                                                          'metoda', c.metoda, 'profil_legat', c.profil_legat)
                                       ORDER BY c.employee_id)
-                       FROM public.fn_cont_candidati_angajat(pr.pemail) c), '[]'::jsonb) AS candidati,
+                       FROM public.fn_cont_candidati_angajat(pr.uemail) c), '[]'::jsonb) AS candidati,
            NULL::jsonb AS alocari
       FROM pr WHERE pr.emp IS NULL AND COALESCE(pr.ptip, 'angajat') = 'angajat'
     UNION ALL
@@ -444,7 +479,7 @@ BEGIN
       FROM pr JOIN aloc a ON a.pid = pr.pid WHERE a.alocari <> '{}'::jsonb
     UNION ALL
     -- inactiv_fara_data: fișe inactive fără dată de încetare (cu sau fără cont)
-    SELECT 'inactiv_fara_data', p.id, p.email, p.tip_cont, p.is_owner, e.id, e.name, e.active, e.termination_date,
+    SELECT 'inactiv_fara_data', p.id, COALESCE(u.email, p.email), p.tip_cont, p.is_owner, e.id, e.name, e.active, e.termination_date,
            u.banned_until, j.id, j.facut_la, NULL::jsonb, NULL::jsonb
       FROM public.employees e
       LEFT JOIN public.profiles p ON p.employee_id = e.id
