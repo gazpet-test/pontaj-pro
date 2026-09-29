@@ -17,7 +17,7 @@
   - ajustări de stoc făcute de conturi fără drept.
 
   Conturile din afara `@gazpet.ro` sunt 3, toate cunoscute: Acarpenaru (06.2026), `razvantrusuhome` (07.2026) și Dragoș Burdea / Adrom Evolution (01.09).
-- **Alertare:** notificare push trimisă la ~21:15 UTC, conform regulii Copilot („o cale concretă → alertare imediată prin canalul intern, nu autoaprobarea schimbărilor de drepturi”). Nu am modificat nimic.
+- **Alertare:** notificare push trimisă la ~21:05 UTC, conform regulii Copilot („o cale concretă → alertare imediată prin canalul intern, nu autoaprobarea schimbărilor de drepturi”). Nu am modificat nimic.
 - **Riscul depinde de înscrierea publică (D1).** Dacă „Allow new users to sign up” e încă pornit, oricine de pe internet își poate face cont și intră în categoria „orice cont logat”. Confirmarea din Dashboard e urgentă.
 - **Remediere recomandată, fără regresie** (după acordul tău): P2, P3, P6, P8, P11, P14, P15, apoi P1. P4, P5, P7, P9 și P12 cer întâi decizia ta despre cine are drept.
 
@@ -32,7 +32,7 @@
 
 **Neverificați adversarial** (plafonul de 5 verificatori; rămân cu verdictul inventarului): `fn_concediu_consolidare`/`fn_concediu_autogen`, `fn_ofertare_revizie_noua`, RLS `stocuri_miscari.sm_insert`, RLS `logistica_alimentari` DELETE/UPDATE.
 
-## 2. Indicii de exploatare (SELECT read-only, 29.09 ~21:10 UTC)
+## 2. Indicii de exploatare (SELECT read-only, 29.09 ~21:03 UTC)
 | Indicator | Rezultat |
 |---|---|
 | `hr_autorizatii.rsvti_confirmat_de` în afara setului HR/Administrativ/owner/`can_modify_employees`/superadmin | 0 |
