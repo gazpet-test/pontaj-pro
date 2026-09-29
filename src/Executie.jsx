@@ -53,7 +53,8 @@ const fmtM = v => {
 }
 const fmtLei = v => {
   if (!v) return '—'
-  return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON', maximumFractionDigits: 0 }).format(v)
+  // TKT-2026-0306: valorile de contract au bani (ex. 28.313.417,15 lei) — se afișează cu 2 zecimale
+  return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)
 }
 const fmtDate = v => {
   if (!v) return '—'
@@ -2214,11 +2215,11 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Valoare contract (RON)</label>
-              <input type="number" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)} style={fieldStyle} placeholder="0" min="0" step="1000" />
+              <input type="number" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)} style={fieldStyle} placeholder="0,00" min="0" step="0.01" />
             </div>
             <div>
               <label style={labelStyle}>Valoare contract (EUR)</label>
-              <input type="number" value={form.valoare_eur} onChange={e => set('valoare_eur', e.target.value)} style={fieldStyle} placeholder="0" min="0" step="1000" />
+              <input type="number" value={form.valoare_eur} onChange={e => set('valoare_eur', e.target.value)} style={fieldStyle} placeholder="0,00" min="0" step="0.01" />
             </div>
           </div>
 

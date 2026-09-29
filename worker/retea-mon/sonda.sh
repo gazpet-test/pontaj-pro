@@ -68,8 +68,20 @@ while IFS=' ' read -r extern_id ip tip _rest; do
         i=$((i + 1))
       done
     fi
+    # Volum principal (disc %), RAM (%) și starea RAID — un singur SSH pentru toate trei.
+    combo=$($SSHP "df -h /share/CACHEDEV1_DATA; echo ---F---; free; echo ---M---; cat /proc/mdstat" 2>/dev/null)
+    diskpct=$(printf '%s\n' "$combo" | awk '/CACHEDEV1_DATA/{gsub("%","",$5); if ($5 ~ /^[0-9]+$/) print $5}')
+    rampct=$(printf '%s\n' "$combo" | awk '/^ *Mem:/{if ($2>0) printf "%d", ($3*100/$2)}')
+    # (F) = marcaj standard Linux md pentru disc defect. NU verificăm underscore-uri din bracket-uri
+    # ([UU____] pe arrays de sistem QNAP cu sloturi rezervate pt. 24 discuri e normal, nu degradare.
+    raidbad=$(printf '%s\n' "$combo" | grep -c '(F)')
     [ -n "${st:-}" ] && extra="${extra},\"cpu_temp\":${st}"
     [ -n "${hdmax:-}" ] && extra="${extra},\"hdd_max\":${hdmax}"
+    [ -n "${diskpct:-}" ] && extra="${extra},\"disk_pct\":${diskpct}"
+    [ -n "${rampct:-}" ] && extra="${extra},\"ram_pct\":${rampct}"
+    if [ -n "${raidbad:-}" ]; then
+      if [ "$raidbad" -eq 0 ]; then extra="${extra},\"raid_ok\":true"; else extra="${extra},\"raid_ok\":false"; fi
+    fi
   fi
 
   # MikroTik: telemetrie prin REST API (RouterOS v7), doar dacă există credențiale (user:parola, read-only).

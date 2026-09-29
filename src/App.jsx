@@ -736,8 +736,9 @@ function Layout({ children }) {
       const [r1, r2, r3] = await Promise.all([
         supabase.from('tichete').select('id', { count:'exact', head:true })
           .eq('deschis_de', profile.id).in('status', ACTIVE),
+        // TKT-2026-0304: rezolvate de mine = în Arhivă, nu mai sunt „asignate mie” (așteaptă confirmarea creatorului)
         supabase.from('tichete').select('id', { count:'exact', head:true })
-          .eq('persoana_responsabila', profile.id).in('status', ACTIVE),
+          .eq('persoana_responsabila', profile.id).in('status', ACTIVE.filter(s => !DE_CONFIRMAT.includes(s))),
         supabase.from('tichete').select('id', { count:'exact', head:true })
           .eq('deschis_de', profile.id).in('status', DE_CONFIRMAT),
       ])
