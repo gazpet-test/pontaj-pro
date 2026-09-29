@@ -16,9 +16,11 @@ ERP intern pentru Gazpet Instal SRL (Ploiești, construcții conducte gaz, 127+ 
 Apoi, prin Supabase MCP, rulează:
 ```sql
 SELECT content_md FROM public.claude_docs WHERE slug = 'handoff_activ';
-SELECT category, title, content, priority, todo_section, todo_completed
-FROM public.v_claude_context_smart
+SELECT id, category, title, content, lungime_detalii, priority, todo_section, todo_completed
+FROM public.v_claude_context_start
 ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, category, created_at DESC;
+-- v_claude_context_start (29.09.2026): 'critical' vin cu text întreg, restul doar titlu + id (~208k caractere în loc de 1,23M).
+-- Detaliile unui item non-critic se citesc LA CERERE, când subiectul apare: SELECT id, content FROM public.claude_context WHERE id IN (...);
 SELECT slug, title, category FROM public.claude_docs WHERE active = true ORDER BY category, slug;
 ```
 Integrează natural (nu anunța „am citit memoria"). Reia exact de unde a rămas handoff-ul. NU repeta întrebări la care există deja răspuns în memorie.
