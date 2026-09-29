@@ -2,6 +2,17 @@
 -- Idempotent. Legăturile profiles.employee_id deja făcute RĂMÂN (sunt date corecte).
 -- ⚠️ Se pierde profiles.tip_cont (marcajele extern/test/sistem): exportă-le înainte în claude_context.
 
+-- Gardă de ordine: dacă obiectele din migrarea d mai există, fn_cont_notifica_owneri (șters mai jos) ar lipsi
+-- din triggerul R2 → refuzăm în loc să lăsăm un trigger pe employees care cheamă o funcție dispărută.
+DO $garda$
+BEGIN
+  IF to_regprocedure('public.fn_cont_inchide(uuid,text,text,integer)') IS NOT NULL
+     OR to_regclass('public.conturi_inchideri_jurnal') IS NOT NULL THEN
+    RAISE EXCEPTION 'Rollback-ul 20260929c rulează DUPĂ rollback-urile 20260929e și 20260929d (ordinea e → d → c)'
+      USING ERRCODE = '55000';
+  END IF;
+END $garda$;
+
 -- handle_new_user revine la corpul original, VERBATIM (inclusiv SET search_path TO 'public').
 CREATE OR REPLACE FUNCTION public.handle_new_user()
  RETURNS trigger

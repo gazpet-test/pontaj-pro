@@ -190,18 +190,35 @@ $function$;
 -- Ca în producție: funcția de trigger nu e apelabilă din API.
 REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
 
--- A.4 Protejarea legăturii și a tipului de cont --------------------------------
+-- A.4 Protejarea legăturii, a tipului de cont și a emailului ----------------------
 -- Închide gaura din profiles_update_own (oricine își putea pune singur employee_id = orice
 -- angajat nelegat → acces la semnătura lui). Sistemul (auth.uid() NULL) și owner-ul trec.
+--   * email: legarea la cerere și alerta citesc emailul de LOGARE, dar profiles.email apare în UI și
+--     primește notificările pe mail → îl schimbă doar owner-ul (Admin → Manageri, odată cu auth prin
+--     update_user_email_by_admin);
+--   * cont închis (R2, închidere nerestaurată în conturi_inchideri_jurnal): JWT-ul emis înainte de închidere
+--     rămâne valabil până la o oră → fără garda asta omul și-ar repune singur flagurile neprotejate
+--     (can_create_comenzi, receive_*, email_notifications_*...) prin profiles_update_own.
+--     Tabela e creată de migrarea d → verificare cu to_regclass (migrarea c rămâne independentă).
 CREATE OR REPLACE FUNCTION public.fn_profiles_protectie_legatura()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 BEGIN
-  IF auth.uid() IS NOT NULL
-     AND (NEW.employee_id IS DISTINCT FROM OLD.employee_id OR NEW.tip_cont IS DISTINCT FROM OLD.tip_cont)
-     AND NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_owner IS TRUE) THEN
+  IF auth.uid() IS NULL
+     OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_owner IS TRUE) THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.employee_id IS DISTINCT FROM OLD.employee_id OR NEW.tip_cont IS DISTINCT FROM OLD.tip_cont THEN
     RAISE EXCEPTION 'Doar owner poate lega un cont de o fișă sau marca tipul contului' USING ERRCODE = '42501';
+  END IF;
+  IF NEW.email IS DISTINCT FROM OLD.email THEN
+    RAISE EXCEPTION 'Emailul contului îl schimbă doar owner-ul (Admin → Manageri), odată cu emailul de logare' USING ERRCODE = '42501';
+  END IF;
+  IF to_regclass('public.conturi_inchideri_jurnal') IS NOT NULL THEN
+    IF EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j WHERE j.profile_id = OLD.id AND j.restaurat_la IS NULL) THEN
+      RAISE EXCEPTION 'Contul e închis (contract încheiat): profilul nu se mai poate modifica decât de owner' USING ERRCODE = '42501';
+    END IF;
   END IF;
   RETURN NEW;
 END $fn$;
@@ -211,46 +228,69 @@ CREATE TRIGGER trg_profiles_protectie_legatura BEFORE UPDATE ON public.profiles
   FOR EACH ROW EXECUTE FUNCTION public.fn_profiles_protectie_legatura();
 
 -- A.5 Legarea la cerere, cu previzualizare (poartă owner în cod) -----------------
-CREATE OR REPLACE FUNCTION public.fn_cont_leaga_automat(p_simulare boolean DEFAULT true)
-RETURNS TABLE(profile_id uuid, email text, rezultat text, employee_id integer, employee_name text)
+-- Potrivirea se face pe emailul de LOGARE (auth.users.email). Profilurile unde profiles.email diferă de
+-- emailul de logare sunt marcate „email_diferit” și sărite. Dacă mai multe conturi nelegate au același
+-- candidat unic → toate „ambiguu” (și în simulare, și la aplicare): owner-ul confirmă exact ce se aplică.
+-- cont_creat_la ajută owner-ul să recunoască un cont pe care NU l-a creat el (înscriere publică).
+DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean);
+CREATE FUNCTION public.fn_cont_leaga_automat(p_simulare boolean DEFAULT true)
+RETURNS TABLE(profile_id uuid, email text, rezultat text, employee_id integer, employee_name text,
+              metoda text, cont_creat_la timestamptz)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
   r record;
-  v_n integer; v_emp integer; v_nume text; v_ocupat boolean;
 BEGIN
   IF auth.uid() IS NULL OR NOT EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid() AND pr.is_owner IS TRUE) THEN
     RAISE EXCEPTION 'Doar owner poate lega automat conturile' USING ERRCODE = '42501';
   END IF;
   FOR r IN
-    SELECT pr.id AS pid, pr.email AS pemail
-      FROM public.profiles pr
-     WHERE pr.employee_id IS NULL AND COALESCE(pr.tip_cont, 'angajat') = 'angajat'
-     ORDER BY pr.email, pr.id
+    WITH baza AS (
+      SELECT pr.id AS pid, u.email AS uemail, u.created_at AS creat,
+             lower(btrim(COALESCE(pr.email, ''))) = lower(btrim(COALESCE(u.email, ''))) AS email_ok
+        FROM public.profiles pr
+        JOIN auth.users u ON u.id = pr.id
+       WHERE pr.employee_id IS NULL AND COALESCE(pr.tip_cont, 'angajat') = 'angajat'
+    ),
+    cand AS (
+      SELECT b.pid, count(c.employee_id) AS n, min(c.employee_id) AS emp, min(c.employee_name) AS nume,
+             min(c.metoda) AS met, COALESCE(bool_or(c.profil_legat IS NOT NULL), false) AS ocupat
+        FROM baza b
+        LEFT JOIN LATERAL public.fn_cont_candidati_angajat(b.uemail) c ON true
+       WHERE b.email_ok
+       GROUP BY b.pid
+    )
+    SELECT b.pid, b.uemail, b.creat, b.email_ok, c.n, c.emp, c.nume, c.met, c.ocupat,
+           count(*) FILTER (WHERE c.n = 1) OVER (PARTITION BY c.emp) AS pe_aceeasi_fisa
+      FROM baza b
+      LEFT JOIN cand c ON c.pid = b.pid
+     ORDER BY b.uemail, b.pid
   LOOP
-    SELECT count(*), min(c.employee_id), min(c.employee_name), COALESCE(bool_or(c.profil_legat IS NOT NULL), false)
-      INTO v_n, v_emp, v_nume, v_ocupat
-      FROM public.fn_cont_candidati_angajat(r.pemail) c;
-    profile_id := r.pid; email := r.pemail; employee_id := NULL; employee_name := NULL;
-    IF v_n = 0 THEN
+    profile_id := r.pid; email := r.uemail; cont_creat_la := r.creat;
+    employee_id := NULL; employee_name := NULL; metoda := NULL;
+    IF NOT r.email_ok THEN
+      rezultat := 'email_diferit';                        -- profiles.email ≠ emailul de logare: verifică manual
+    ELSIF COALESCE(r.n, 0) = 0 THEN
       rezultat := 'fara_candidat';
-    ELSIF v_n > 1 THEN
+    ELSIF r.n > 1 THEN
       rezultat := 'ambiguu';
     ELSE
-      employee_id := v_emp; employee_name := v_nume;
-      IF v_ocupat THEN
+      employee_id := r.emp; employee_name := r.nume; metoda := r.met;
+      IF r.ocupat THEN
         rezultat := 'candidat_ocupat';
+      ELSIF r.pe_aceeasi_fisa > 1 THEN
+        rezultat := 'ambiguu';                            -- mai multe conturi nelegate vor aceeași fișă
       ELSIF p_simulare THEN
         rezultat := 'de_legat';
       ELSE
         BEGIN
-          UPDATE public.profiles pr SET employee_id = v_emp
+          UPDATE public.profiles pr SET employee_id = r.emp
            WHERE pr.id = r.pid AND pr.employee_id IS NULL;
           rezultat := CASE WHEN FOUND THEN 'legat' ELSE 'candidat_ocupat' END;
         EXCEPTION
           WHEN unique_violation THEN rezultat := 'candidat_ocupat';
           WHEN OTHERS THEN
-            RAISE WARNING 'fn_cont_leaga_automat (%): % [%]', r.pemail, SQLERRM, SQLSTATE;
+            RAISE WARNING 'fn_cont_leaga_automat (%): % [%]', r.uemail, SQLERRM, SQLSTATE;
             rezultat := 'eroare';
         END;
       END IF;
@@ -262,6 +302,7 @@ REVOKE ALL ON FUNCTION public.fn_cont_leaga_automat(boolean) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_cont_leaga_automat(boolean) TO authenticated, service_role;
 
 -- A.6 Diagnosticul pentru alerta de administrare (semnătură FIXĂ; migrarea d o extinde) --
+-- Candidații și emailul afișat vin din emailul de LOGARE (auth.users.email), nu din profiles.email.
 CREATE OR REPLACE FUNCTION public.fn_admin_conturi_alerte()
 RETURNS TABLE(id text, cod text, profile_id uuid, email text, tip_cont text, is_owner boolean,
               employee_id integer, employee_name text, employee_active boolean, termination_date date,
@@ -274,12 +315,12 @@ BEGIN
     RAISE EXCEPTION 'Alertele de conturi sunt doar pentru owner' USING ERRCODE = '42501';
   END IF;
   RETURN QUERY
-  SELECT 'fara_angajat:' || p.id::text, 'fara_angajat'::text, p.id, p.email, p.tip_cont, p.is_owner,
+  SELECT 'fara_angajat:' || p.id::text, 'fara_angajat'::text, p.id, COALESCE(u.email, p.email), p.tip_cont, p.is_owner,
          NULL::integer, NULL::text, NULL::boolean, NULL::date, u.banned_until, NULL::bigint, NULL::timestamptz,
          COALESCE((SELECT jsonb_agg(jsonb_build_object('employee_id', c.employee_id, 'employee_name', c.employee_name,
                                                        'metoda', c.metoda, 'profil_legat', c.profil_legat)
                                     ORDER BY c.employee_id)
-                     FROM public.fn_cont_candidati_angajat(p.email) c), '[]'::jsonb),
+                     FROM public.fn_cont_candidati_angajat(u.email) c), '[]'::jsonb),
          NULL::jsonb
     FROM public.profiles p
     LEFT JOIN auth.users u ON u.id = p.id
