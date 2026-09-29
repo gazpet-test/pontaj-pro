@@ -1,31 +1,27 @@
 -- ============================================================================
--- S-A (29.09.2026) — profilul propriu nu mai poate acorda singur drepturi.
+-- S-A (29.09.2026) — contul propriu nu-și mai poate schimba singur department și employee_id.
 --
--- Gaura: politica profiles_update_own (auth.uid() = id) lasă orice cont să-și modifice propriul rând.
--- Triggerele existente păzesc doar role, is_owner și 7 flaguri (salarii, date personale, pontaj brut,
--- modificare angajați, contracte, diurne, financiar). Restul coloanelor care dau drepturi se pot
--- seta singur din consola browserului:
---   * department            → 4 politici de scriere pe department='HR' (hr_autorizatii, hr_autorizatii_tipuri,
---                              hr_formare_profesionala, hr_recrutare_pozitii);
---   * employee_id           → legarea contului de o fișă (semnătura/identitatea altui angajat);
---   * email                 → identitate în căutări după email (HrAngajatNouWizard → Cristiana, Logistica → m.alexandru)
---                              și destinatarul mailurilor trimise din edge functions; îl schimbă doar owner-ul
---                              (Admin → Manageri, odată cu emailul de logare prin update_user_email_by_admin);
---   * can_use_document_scanner → SELECT pe hr_autorizatii_propuneri + scanner_logs;
---   * can_manage_stoc       → ALL pe magazii, consumuri_proiect, consumuri_proiect_linii;
---   * can_create_comenzi / can_process_achizitii / can_access_ctc → drepturi Comercial;
---   * receive_tichete_* (6) → primește tichetele altor departamente;
---   * receive_bonuri_consum → poate prelua bonuri de consum;
---   * whatsapp_tier         → nivelul notificărilor WhatsApp.
--- Regresie: până la 02.06.2026 enforce_owner_only_salary_flags păzea și scannerul, receive_tichete_*,
--- cele 4 flaguri Comercial și whatsapp_tier; migrarea contracte_extensii_acte_aditionale_access
--- (20260602105459) a rescris funcția și le-a scăpat. Codul din App.jsx încă scrie că „triggerul BD protejează”.
+-- Gaura: politica profiles_update_own (auth.uid() = id) lasă orice cont să-și modifice propriul rând:
+--   * department  → 4 politici de scriere pe department='HR' (hr_autorizatii, hr_autorizatii_tipuri,
+--                   hr_formare_profesionala, hr_recrutare_pozitii);
+--   * employee_id → legarea contului de fișa altui angajat (semnătura/identitatea lui).
+-- Domeniul aprobat de Răzvan pentru la noapte (S-A) = exact aceste 2 coloane. Celelalte 14 coloane găsite
+-- (email + flagurile scăpate de enforce_owner_only_salary_flags la 02.06.2026) sunt în migrarea separată
+-- 20260930a_profiles_campuri_owner_only_extins.sql — se aplică doar cu acordul lui Răzvan.
 --
--- Ce face: un trigger NOU, separat (nu atinge funcțiile existente), care REFUZĂ vizibil (42501) orice
--- schimbare a acestor coloane venită de la un cont care nu e owner. Owner-ul și sistemul (auth.uid() NULL:
--- service_role, migrări, triggere interne) trec, exact ca triggerele existente.
+-- Cine trece (identitate explicită, NU „lipsa identității” — cerința Copilot, 29.09):
+--   1. cerere PostgREST (claims JWT prezente):
+--        role = 'service_role'                       → backend (edge functions cu cheia service);
+--        role = 'authenticated' + sub = profil owner → owner-ul (Admin → Manageri);
+--        orice altceva (anon, authenticated non-owner, claims fără sub) → refuz;
+--   2. fără claims = conexiune directă la BD: trec DOAR login-urile postgres / supabase_admin
+--      (migrări MCP/CLI, SQL editor, pg_cron — toate joburile cron rulează ca postgres). Orice alt login
+--      (authenticator cu claims golite, supabase_auth_admin, storage etc.) → refuz.
+--   session_user = identitatea de LOGIN a conexiunii (nu se schimbă în SECURITY DEFINER sau SET ROLE),
+--   deci nu e confundată cu proprietarul funcției.
+-- Modificările care nu ating coloanele protejate trec neverificate (autorizarea strictă doar pe schimbare).
 -- Nu atinge: date, politici, granturi, alte funcții. Nimic din Ofertare.
--- Rollback: 20260929g_profiles_campuri_owner_only_ROLLBACK.sql (DROP TRIGGER + DROP FUNCTION).
+-- Revenire: vezi …_ROLLBACK.sql (rollback TEHNIC) și docs/SECURITATE_SA_PROFILES.md §5 (revenirea operațională).
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.fn_profiles_campuri_owner_only()
@@ -33,34 +29,41 @@ RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_camp text;
+  v_camp   text;
+  v_claims jsonb;
+  v_rol    text;
+  v_sub    text;
 BEGIN
-  IF auth.uid() IS NULL
-     OR EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_owner IS TRUE) THEN
+  v_camp := CASE
+    WHEN NEW.department  IS DISTINCT FROM OLD.department  THEN 'department'
+    WHEN NEW.employee_id IS DISTINCT FROM OLD.employee_id THEN 'employee_id'
+  END;
+  IF v_camp IS NULL THEN
+    RETURN NEW;                                   -- nicio coloană protejată schimbată
+  END IF;
+
+  v_claims := coalesce(nullif(current_setting('request.jwt.claims', true), ''),
+                       nullif(current_setting('request.jwt.claim', true), ''))::jsonb;
+  v_rol := coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), v_claims ->> 'role');
+  v_sub := coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), v_claims ->> 'sub');
+
+  IF v_rol IS NULL AND v_sub IS NULL THEN
+    -- fără context de cerere: conexiune directă la BD
+    IF session_user IN ('postgres', 'supabase_admin') THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil (conexiune fără identitate autorizată: %)', v_camp, session_user
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF v_rol = 'service_role' THEN
     RETURN NEW;
   END IF;
-  v_camp := CASE
-    WHEN NEW.department               IS DISTINCT FROM OLD.department               THEN 'department'
-    WHEN NEW.employee_id              IS DISTINCT FROM OLD.employee_id              THEN 'employee_id'
-    WHEN NEW.email                    IS DISTINCT FROM OLD.email                    THEN 'email'
-    WHEN NEW.can_use_document_scanner IS DISTINCT FROM OLD.can_use_document_scanner THEN 'can_use_document_scanner'
-    WHEN NEW.can_manage_stoc          IS DISTINCT FROM OLD.can_manage_stoc          THEN 'can_manage_stoc'
-    WHEN NEW.can_create_comenzi       IS DISTINCT FROM OLD.can_create_comenzi       THEN 'can_create_comenzi'
-    WHEN NEW.can_process_achizitii    IS DISTINCT FROM OLD.can_process_achizitii    THEN 'can_process_achizitii'
-    WHEN NEW.can_access_ctc           IS DISTINCT FROM OLD.can_access_ctc           THEN 'can_access_ctc'
-    WHEN NEW.receive_tichete_logistica     IS DISTINCT FROM OLD.receive_tichete_logistica     THEN 'receive_tichete_logistica'
-    WHEN NEW.receive_tichete_hr            IS DISTINCT FROM OLD.receive_tichete_hr            THEN 'receive_tichete_hr'
-    WHEN NEW.receive_tichete_administrativ IS DISTINCT FROM OLD.receive_tichete_administrativ THEN 'receive_tichete_administrativ'
-    WHEN NEW.receive_tichete_it            IS DISTINCT FROM OLD.receive_tichete_it            THEN 'receive_tichete_it'
-    WHEN NEW.receive_tichete_comercial     IS DISTINCT FROM OLD.receive_tichete_comercial     THEN 'receive_tichete_comercial'
-    WHEN NEW.receive_tichete_financiar     IS DISTINCT FROM OLD.receive_tichete_financiar     THEN 'receive_tichete_financiar'
-    WHEN NEW.receive_bonuri_consum    IS DISTINCT FROM OLD.receive_bonuri_consum    THEN 'receive_bonuri_consum'
-    WHEN NEW.whatsapp_tier            IS DISTINCT FROM OLD.whatsapp_tier            THEN 'whatsapp_tier'
-  END;
-  IF v_camp IS NOT NULL THEN
-    RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil', v_camp USING ERRCODE = '42501';
+  IF v_rol = 'authenticated' AND v_sub IS NOT NULL
+     AND EXISTS (SELECT 1 FROM public.profiles WHERE id::text = v_sub AND is_owner IS TRUE) THEN
+    RETURN NEW;
   END IF;
-  RETURN NEW;
+  RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil', v_camp USING ERRCODE = '42501';
 END $fn$;
 
 REVOKE ALL ON FUNCTION public.fn_profiles_campuri_owner_only() FROM PUBLIC, anon, authenticated, service_role;
@@ -70,4 +73,4 @@ CREATE TRIGGER trg_profiles_campuri_owner_only BEFORE UPDATE ON public.profiles
   FOR EACH ROW EXECUTE FUNCTION public.fn_profiles_campuri_owner_only();
 
 COMMENT ON FUNCTION public.fn_profiles_campuri_owner_only() IS
-  'S-A 29.09.2026: department, employee_id, email și flagurile de drepturi scăpate de enforce_owner_only_salary_flags la 02.06.2026 se schimbă doar de owner (sau sistem).';
+  'S-A 29.09.2026: department și employee_id se schimbă doar de owner (JWT), service_role (JWT) sau login-urile postgres/supabase_admin fără context de cerere.';

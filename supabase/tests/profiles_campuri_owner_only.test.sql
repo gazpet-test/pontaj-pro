@@ -1,10 +1,12 @@
 -- ============================================================================
--- Teste S-A (29.09.2026) — trg_profiles_campuri_owner_only: un cont care nu e owner nu-și mai poate
--- acorda singur drepturi prin profiles_update_own (department, employee_id și flagurile scăpate la 02.06).
+-- Teste S-A — trg_profiles_campuri_owner_only: department / employee_id (20260929g) și, dacă e aplicată,
+-- extensia la 16 coloane (20260930a). Identitatea privilegiată e EXPLICITĂ: owner (JWT), service_role (JWT),
+-- login postgres/supabase_admin fără context de cerere. Lipsa identității NU deschide excepția.
 -- Rulare (cluster separat de testele conturi):
---   PGDATA_TEST=/tmp/pg_sa PGPORT_TEST=5436 PGDB_TEST=profiles_sa_test \
+--   PGDATA_TEST=/tmp/pg_sa PGPORT_TEST=5436 PGDB_TEST=profiles_sa_test LISTA_MIGRARI=/dev/null \
 --   TEST_SQL=supabase/tests/profiles_campuri_owner_only.test.sql \
---   bash scripts/test_conturi_ciclu_viata.sh --rollback -- supabase/migrations/20260929g_profiles_campuri_owner_only.sql
+--   bash scripts/test_conturi_ciclu_viata.sh --reaplica --rollback -- supabase/migrations/20260929g_profiles_campuri_owner_only.sql
+--   (+ supabase/migrations/20260930a_profiles_campuri_owner_only_extins.sql pentru varianta extinsă)
 -- doar_baza=true (după rollback) = starea de azi a producției: atacul TREBUIE să reușească (reproduce gaura).
 -- ============================================================================
 \set ON_ERROR_STOP on
@@ -18,6 +20,7 @@
 
 BEGIN;
 SELECT teste.assert(current_database() ~ '_test$', 'S0 baza este una locală *_test');
+SELECT teste.assert(session_user = 'postgres', 'S0 harness-ul rulează ca login postgres (ca MCP / pg_cron în producție)');
 
 -- ---------------------------------------------------------------- pregătire (admin)
 SELECT teste.creeaza_cont('owner.sa@gazpet.ro', :'owner');
@@ -26,6 +29,15 @@ SELECT teste.creeaza_cont('ion.sa@gazpet.ro', :'u_ion');
 SELECT teste.creeaza_cont('alt.sa@gazpet.ro', :'u_alt');
 INSERT INTO public.employees (name, department) VALUES ('SA-TEST ANGAJAT', 'Execuție') RETURNING id AS emp \gset
 UPDATE public.profiles SET department = 'Execuție' WHERE id IN (:'u_ion', :'u_alt');
+-- RPC de probă (NU există în producție): SECURITY DEFINER, proprietar postgres → ajunge la orice rând, ocolind RLS.
+CREATE FUNCTION public.sa_test_rpc(p_id uuid, p_dept text, p_nume text DEFAULT NULL) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE n integer;
+BEGIN
+  UPDATE public.profiles SET department = coalesce(p_dept, department), name = coalesce(p_nume, name) WHERE id = p_id;
+  GET DIAGNOSTICS n = ROW_COUNT; RETURN n;
+END $fn$;
+GRANT EXECUTE ON FUNCTION public.sa_test_rpc(uuid, text, text) TO PUBLIC;
 
 \if :doar_baza
 -- ---------------------------------------------------------------- BAZĂ = producția de azi: gaura există
@@ -38,22 +50,36 @@ WITH u AS (UPDATE public.profiles SET can_manage_stoc = true, receive_tichete_hr
 SELECT teste.ca_admin();
 \else
 -- ---------------------------------------------------------------- S1 obiectul există și e închis
-SELECT teste.assert((SELECT tgenabled = 'O' FROM pg_trigger WHERE tgname = 'trg_profiles_campuri_owner_only'
-                       AND tgrelid = 'public.profiles'::regclass), 'S1 triggerul există, BEFORE UPDATE, activ');
-SELECT teste.assert((SELECT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp']
-                     FROM pg_proc WHERE proname = 'fn_profiles_campuri_owner_only'),
-  'S1 funcția e SECURITY DEFINER cu search_path fixat');
+SELECT teste.assert((SELECT tgenabled = 'O' AND tgrelid = 'public.profiles'::regclass
+                            AND tgfoid = 'public.fn_profiles_campuri_owner_only()'::regprocedure
+                     FROM pg_trigger WHERE tgname = 'trg_profiles_campuri_owner_only'),
+  'S1 trigger → funcție → tabel: legătura corectă, activ');
+SELECT teste.assert((SELECT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(proowner) = 'postgres'
+                     FROM pg_proc WHERE oid = 'public.fn_profiles_campuri_owner_only()'::regprocedure),
+  'S1 funcția: SECURITY DEFINER, search_path fixat, proprietar postgres');
 SELECT teste.assert(NOT has_function_privilege('authenticated', 'public.fn_profiles_campuri_owner_only()', 'EXECUTE')
-                AND NOT has_function_privilege('anon', 'public.fn_profiles_campuri_owner_only()', 'EXECUTE'),
-  'S1 funcția nu e apelabilă din API (anon/authenticated)');
+                AND NOT has_function_privilege('anon', 'public.fn_profiles_campuri_owner_only()', 'EXECUTE')
+                AND NOT has_function_privilege('service_role', 'public.fn_profiles_campuri_owner_only()', 'EXECUTE'),
+  'S1 funcția nu e apelabilă direct din API');
+SELECT (pg_get_functiondef('public.fn_profiles_campuri_owner_only()'::regprocedure) LIKE '%can_manage_stoc%') AS extins \gset
+SELECT md5(pg_get_functiondef('public.fn_profiles_campuri_owner_only()'::regprocedure)) AS md5_def \gset
+\echo 'INFO md5(pg_get_functiondef) canonic =' :md5_def ' extins =' :extins
 
--- ---------------------------------------------------------------- S2 atacul: fiecare coloană, refuz 42501
+-- ---------------------------------------------------------------- S2 atacul direct (JWT non-owner), refuz 42501
 SELECT teste.ca_utilizator(:'u_ion');
 SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET %s WHERE id = auth.uid()', x.set_sql),
          'S2 non-owner NU își poate schimba singur ' || x.col, '42501', x.col)
+FROM (VALUES ('department', 'department = ''HR'''), ('employee_id', 'employee_id = ' || :'emp')) AS x(col, set_sql);
+SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = NULL WHERE id = auth.uid()',
+  'S2 valoare → NULL refuzat', '42501', 'department');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET department = ''HR'', employee_id = %s WHERE id = auth.uid()', :'emp'),
+  'S2 ambele simultan refuzat', '42501', NULL);
+SELECT teste.asteapta_eroare('UPDATE public.profiles SET name = ''Ion'', department = ''HR'' WHERE id = auth.uid()',
+  'S2 amestecat cu un câmp permis: tot refuz (nimic nu se scrie)', '42501', 'department');
+\if :extins
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET %s WHERE id = auth.uid()', x.set_sql),
+         'S2-EXT non-owner NU își poate schimba singur ' || x.col, '42501', x.col)
 FROM (VALUES
-  ('department',                    'department = ''HR'''),
-  ('employee_id',                   'employee_id = ' || :'emp'),
   ('email',                         'email = ''cristiana.puscasu@gazpet.ro'''),
   ('can_use_document_scanner',      'can_use_document_scanner = true'),
   ('can_manage_stoc',               'can_manage_stoc = true'),
@@ -69,14 +95,14 @@ FROM (VALUES
   ('receive_bonuri_consum',         'receive_bonuri_consum = true'),
   ('whatsapp_tier',                 'whatsapp_tier = ''critic''')
 ) AS x(col, set_sql);
-SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = NULL WHERE id = auth.uid()',
-  'S2 nici ștergerea department (NULL) nu trece', '42501', 'department');
-SELECT teste.asteapta_eroare('UPDATE public.profiles SET name = ''Ion'', department = ''HR'' WHERE id = auth.uid()',
-  'S2 amestecat cu un câmp permis: tot refuz (nimic nu se scrie)', '42501', 'department');
+\else
+-- Fără extensie, restul gaurii rămâne DESCHIS (documentat, așteaptă acordul lui Răzvan pe 20260930a).
+WITH u AS (UPDATE public.profiles SET can_manage_stoc = true WHERE id = auth.uid() RETURNING 1)
+  SELECT teste.assert(count(*) = 1, 'S2-REZIDUAL fără extensie: can_manage_stoc încă se poate autoseta (limitare consemnată)') FROM u;
+UPDATE public.profiles SET can_manage_stoc = false WHERE id = auth.uid();
+\endif
 SELECT teste.ca_admin();
-SELECT teste.assert((SELECT department = 'Execuție' AND employee_id IS NULL AND NOT can_manage_stoc AND NOT receive_tichete_hr
-                            AND whatsapp_tier = 'info' AND name <> 'Ion'
-                     FROM public.profiles WHERE id = :'u_ion'),
+SELECT teste.assert((SELECT department = 'Execuție' AND employee_id IS NULL AND name <> 'Ion' FROM public.profiles WHERE id = :'u_ion'),
   'S2 după refuzuri, rândul lui Ion e neschimbat');
 
 -- ---------------------------------------------------------------- S3 ce rămâne permis non-owner-ului
@@ -85,7 +111,7 @@ WITH u AS (UPDATE public.profiles SET name = 'Ion SA', phone_whatsapp = '+407123
                   email_notifications_enabled = false, email_notifications_logistica = false
            WHERE id = auth.uid() RETURNING 1)
   SELECT teste.assert(count(*) = 1, 'S3 non-owner își editează câmpurile personale (nume, WhatsApp, preferințe mail)') FROM u;
-WITH u AS (UPDATE public.profiles SET department = department, employee_id = employee_id, can_manage_stoc = can_manage_stoc,
+WITH u AS (UPDATE public.profiles SET department = department, employee_id = employee_id, email = email, can_manage_stoc = can_manage_stoc,
                   whatsapp_tier = whatsapp_tier, name = 'Ion SA2'
            WHERE id = auth.uid() RETURNING 1)
   SELECT teste.assert(count(*) = 1, 'S3 trimiterea valorilor NESCHIMBATE (ca formularul Manageri) trece') FROM u;
@@ -102,26 +128,74 @@ SELECT teste.ca_admin();
 SELECT teste.assert((SELECT NOT can_access_salarii FROM public.profiles WHERE id = :'u_ion'),
   'S4 enforce_owner_only_salary_flags încă resetează can_access_salarii');
 
--- ---------------------------------------------------------------- S5 owner, service_role, admin trec
+-- ---------------------------------------------------------------- S5 identitățile privilegiate EXPLICITE trec
 SELECT teste.ca_utilizator(:'owner');
-WITH u AS (UPDATE public.profiles SET department = 'HR', employee_id = :'emp', email = 'ion.nou.sa@gazpet.ro', can_manage_stoc = true, receive_tichete_hr = true,
-                  can_use_document_scanner = true, whatsapp_tier = 'manager', receive_bonuri_consum = true
+SELECT teste.assert(auth.role() = 'authenticated' AND auth.uid() = :'owner'::uuid, 'S5 actor: owner prin JWT authenticated (ca din Admin → Manageri)');
+WITH u AS (UPDATE public.profiles SET department = 'HR', employee_id = :'emp', email = 'ion.nou.sa@gazpet.ro', can_manage_stoc = true,
+                  receive_tichete_hr = true, can_use_document_scanner = true, whatsapp_tier = 'manager', receive_bonuri_consum = true
            WHERE id = :'u_ion' RETURNING 1)
   SELECT teste.assert(count(*) = 1, 'S5 owner-ul acordă department/employee_id/flaguri altcuiva') FROM u;
 WITH u AS (UPDATE public.profiles SET department = 'Conducere' WHERE id = auth.uid() RETURNING 1)
   SELECT teste.assert(count(*) = 1, 'S5 owner-ul își schimbă propriul department') FROM u;
 SELECT teste.ca_service_role();
+SELECT teste.assert(auth.role() = 'service_role' AND auth.uid() IS NULL, 'S5 actor: service_role prin JWT (edge functions)');
 WITH u AS (UPDATE public.profiles SET department = 'Logistică', can_manage_stoc = false WHERE id = :'u_ion' RETURNING 1)
-  SELECT teste.assert(count(*) = 1, 'S5 service_role (edge functions) trece') FROM u;
+  SELECT teste.assert(count(*) = 1, 'S5 service_role trece') FROM u;
 SELECT teste.ca_admin();
+SELECT teste.assert(session_user = 'postgres' AND auth.role() IS NULL AND auth.uid() IS NULL,
+  'S5 actor: login postgres, fără context de cerere (ca migrările MCP și pg_cron — cron.job.username = postgres)');
 WITH u AS (UPDATE public.profiles SET employee_id = NULL, receive_tichete_hr = false WHERE id = :'u_ion' RETURNING 1)
-  SELECT teste.assert(count(*) = 1, 'S5 admin fără JWT (migrări / pg_cron) trece') FROM u;
+  SELECT teste.assert(count(*) = 1, 'S5 login postgres fără claims trece') FROM u;
 
--- ---------------------------------------------------------------- S6 anon
+-- ---------------------------------------------------------------- S6 anon direct
 SELECT teste.ca_anon();
 WITH u AS (UPDATE public.profiles SET department = 'HR' RETURNING 1)
-  SELECT teste.assert(count(*) = 0, 'S6 anon: 0 rânduri (fără politică UPDATE), neschimbat') FROM u;
+  SELECT teste.assert(count(*) = 0, 'S6 anon direct: 0 rânduri (RLS; triggerul nici nu e atins)') FROM u;
 SELECT teste.ca_admin();
+
+-- ---------------------------------------------------------------- S11 anon printr-un RPC SECURITY DEFINER (ajunge la rând)
+SELECT teste.ca_anon();
+SELECT teste.assert(auth.role() = 'anon' AND auth.uid() IS NULL, 'S11 actor: anon (JWT fără sub)');
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
+  'S11 anon prin RPC SECURITY DEFINER NU schimbă department (lipsa UID nu deschide excepția)', '42501', 'department');
+SELECT teste.assert(public.sa_test_rpc(:'u_alt', NULL, 'Alt SA anon') = 1,
+  'S13 același RPC anon, doar câmp nesensibil (name): trece — autorizarea strictă doar la schimbare protejată');
+SELECT teste.ca_admin();
+
+-- ---------------------------------------------------------------- S12 contexte fără identitate autorizată
+DO $do$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticator') THEN
+    CREATE ROLE authenticator LOGIN NOINHERIT;                     -- login-ul PostgREST (local, anulat la ROLLBACK)
+  END IF;
+END $do$;
+GRANT USAGE ON SCHEMA teste TO authenticator, supabase_auth_admin;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO authenticator, supabase_auth_admin;
+SET SESSION AUTHORIZATION authenticator;
+SELECT teste.assert(session_user = 'authenticator' AND nullif(current_setting('request.jwt.claims', true), '') IS NULL
+                    AND nullif(current_setting('request.jwt.claim.role', true), '') IS NULL,
+  'S12 actor: login authenticator cu claims golite (ex. o funcție care golește claims)');
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
+  'S12 fără claims + login authenticator → refuz (nu e identitate autorizată)', '42501', 'authenticator');
+RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION supabase_auth_admin;
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
+  'S12 fără claims + login supabase_auth_admin (GoTrue) → refuz', '42501', 'supabase_auth_admin');
+RESET SESSION AUTHORIZATION;
+SELECT teste.ca_admin();
+-- claims prezente, dar incomplete / străine
+SELECT set_config('request.jwt.claims', '{"role":"authenticated"}', false), set_config('request.jwt.claim.role', 'authenticated', false);
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
+  'S12 claims authenticated FĂRĂ sub → refuz', '42501', 'department');
+SELECT set_config('request.jwt.claims', json_build_object('role','authenticated','sub', gen_random_uuid())::text, false),
+       set_config('request.jwt.claim.sub', '', false);
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
+  'S12 claims authenticated cu sub fără profil → refuz', '42501', 'department');
+SELECT set_config('request.jwt.claims', '{"role":"postgres"}', false), set_config('request.jwt.claim.role', 'postgres', false);
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
+  'S12 claims cu rol străin („postgres”) → refuz (doar service_role / owner trec pe calea JWT)', '42501', 'department');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT department = 'Execuție' FROM public.profiles WHERE id = :'u_alt'),
+  'S11/S12 rândul țintă (u_alt) are department neschimbat după toate tentativele');
 
 -- ---------------------------------------------------------------- S8 calea de CREARE (signup + INSERT/upsert din API)
 \set u_nou 00000000-0000-4000-8000-00000000b003
@@ -134,7 +208,7 @@ SELECT teste.assert((SELECT department IS NULL AND employee_id IS NULL AND role 
   'S8 signup cu metadata „HR/superadmin/flaguri”: profilul nou pornește fără niciun drept (metadata ignorată)');
 SELECT teste.ca_utilizator(:'u_nou');
 SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = ''HR'' WHERE id = auth.uid()',
-  'S8 contul abia creat nu-și poate pune department=HR după signup', '42501', 'department');
+  'S8 contul abia creat: NULL → HR refuzat', '42501', 'department');
 SELECT teste.asteapta_eroare(format('INSERT INTO public.profiles (id, email, department) VALUES (%L, %L, %L)',
                                     gen_random_uuid(), 'x.sa@gazpet.ro', 'HR'),
   'S8 INSERT direct din API de non-owner: refuzat de RLS', '42501', NULL);
@@ -145,53 +219,42 @@ SELECT teste.ca_admin();
 SELECT teste.assert((SELECT department IS NULL FROM public.profiles WHERE id = :'u_nou'),
   'S8 după tentative, contul nou tot fără department');
 
--- ---------------------------------------------------------------- S9 non-owner care ARE deja department='HR' și o fișă legată
+-- ---------------------------------------------------------------- S9 non-owner care ARE deja department='HR' și o fișă
 \set u_hr 00000000-0000-4000-8000-00000000b004
 SELECT teste.creeaza_cont('hr.sa@gazpet.ro', :'u_hr');
 INSERT INTO public.employees (name, department) VALUES ('SA-TEST HR', 'HR') RETURNING id AS emp_hr \gset
 INSERT INTO public.employees (name, department) VALUES ('SA-TEST ALT', 'Execuție') RETURNING id AS emp_alt \gset
-UPDATE public.profiles SET department = 'HR', employee_id = :'emp_hr' WHERE id = :'u_hr';   -- admin, ca owner-ul
+UPDATE public.profiles SET department = 'HR', employee_id = :'emp_hr' WHERE id = :'u_hr';
 SELECT teste.ca_utilizator(:'u_hr');
 SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = ''Execuție'' WHERE id = auth.uid()',
-  'S9 department=HR nu dă drept de schimbare: HR → altă valoare refuzat', '42501', 'department');
+  'S9 department=HR nu dă drept: HR → altă valoare refuzat', '42501', 'department');
 SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = NULL WHERE id = auth.uid()',
   'S9 HR → NULL refuzat', '42501', 'department');
 SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET employee_id = %s WHERE id = auth.uid()', :'emp_alt'),
   'S9 employee_id valoare → altă valoare refuzat', '42501', 'employee_id');
 SELECT teste.asteapta_eroare('UPDATE public.profiles SET employee_id = NULL WHERE id = auth.uid()',
   'S9 employee_id valoare → NULL refuzat', '42501', 'employee_id');
-SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET department = ''Logistică'', employee_id = %s WHERE id = auth.uid()', :'emp_alt'),
-  'S9 ambele simultan refuzat', '42501', NULL);
-WITH u AS (UPDATE public.profiles SET department = 'HR', can_manage_stoc = true WHERE id = :'u_ion' RETURNING 1)
-  SELECT teste.assert(count(*) = 0, 'S9 „HR” nu poate da altcuiva department/flaguri: 0 rânduri (RLS)') FROM u;
+WITH u AS (UPDATE public.profiles SET department = 'HR' WHERE id = :'u_ion' RETURNING 1)
+  SELECT teste.assert(count(*) = 0, 'S9 „HR” nu poate da altcuiva department: 0 rânduri (RLS)') FROM u;
 SELECT teste.ca_admin();
 SELECT teste.assert((SELECT department = 'HR' AND employee_id = :'emp_hr' FROM public.profiles WHERE id = :'u_hr'),
   'S9 rândul HR e neschimbat după refuzuri');
 
--- ---------------------------------------------------------------- S10 RPC SECURITY DEFINER: identitatea e apelantul (JWT), nu proprietarul funcției
-CREATE FUNCTION public.sa_test_rpc_definer(p_dept text) RETURNS integer
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-DECLARE n integer;
-BEGIN
-  UPDATE public.profiles SET department = p_dept WHERE id = auth.uid();   -- rulează ca postgres (BYPASSRLS)
-  GET DIAGNOSTICS n = ROW_COUNT; RETURN n;
-END $fn$;
-GRANT EXECUTE ON FUNCTION public.sa_test_rpc_definer(text) TO authenticated;
+-- ---------------------------------------------------------------- S10 RPC SECURITY DEFINER: identitatea e apelantul (JWT)
 SELECT teste.ca_utilizator(:'u_ion');
-SELECT teste.assert(current_user = 'authenticated', 'S10 apelantul e authenticated');
-SELECT teste.asteapta_eroare('SELECT public.sa_test_rpc_definer(''HR'')',
-  'S10 un RPC SECURITY DEFINER apelat de non-owner NU ocolește triggerul (auth.uid() = apelantul, nu postgres)', '42501', 'department');
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_ion', 'HR'),
+  'S10 RPC SECURITY DEFINER apelat de non-owner NU ocolește triggerul', '42501', 'department');
 SELECT teste.ca_utilizator(:'owner');
-SELECT teste.assert(public.sa_test_rpc_definer('Conducere') = 1, 'S10 același RPC apelat de owner trece');
+SELECT teste.assert(public.sa_test_rpc(:'u_ion', 'Conducere') = 1, 'S10 același RPC apelat de owner trece');
 SELECT teste.ca_admin();
-DROP FUNCTION public.sa_test_rpc_definer(text);
 
--- ---------------------------------------------------------------- S7 contul fostului non-owner devenit owner / invers
+-- ---------------------------------------------------------------- S7 owner retrogradat
 UPDATE public.profiles SET is_owner = false WHERE id = :'owner';
 SELECT teste.ca_utilizator(:'owner');
 SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = ''HR'' WHERE id = auth.uid()',
-  'S7 owner retrogradat: refuzul se aplică imediat (verificarea citește is_owner la fiecare UPDATE)', '42501', 'department');
+  'S7 owner retrogradat: refuz imediat (is_owner citit la fiecare UPDATE)', '42501', 'department');
 SELECT teste.ca_admin();
 \endif
 
+DROP FUNCTION public.sa_test_rpc(uuid, text, text);
 ROLLBACK;
