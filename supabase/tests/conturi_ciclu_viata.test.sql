@@ -127,18 +127,7 @@ SELECT teste.assert(NOT has_function_privilege('anon', 'public.tmp_canar_fn()', 
 \if :doar_baza
 \echo '   (R1–R3 sărite: rulare doar BAZĂ)'
 \else
--- ============================================================================
--- R1 — legare automată cont ↔ angajat (de completat după migrare)
--- ============================================================================
-
--- ============================================================================
--- R2 — contract închis → cont închis + jurnal + restaurare doar owner (de completat)
--- ============================================================================
-
--- ============================================================================
--- R3 — fost angajat ca posibil colaborator extern, acord tri-valent (de completat)
--- ============================================================================
-
+-- @@SECTIUNI_R@@
 \endif
 
 ROLLBACK;

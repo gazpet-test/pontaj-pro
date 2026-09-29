@@ -1,7 +1,6 @@
 # Migrările aplicate de scripts/test_conturi_ciclu_viata.sh peste schelet, în ordine.
 # Câte o cale pe rând, relativă la rădăcina repo-ului; liniile goale și cele cu # se ignoră.
-# Pentru fiecare X.sql, dacă există X_ROLLBACK.sql, modul --rollback îl folosește automat.
-# Exemplu (de decomentat când există fișierele):
-# supabase/migrations/20260929x_conturi_legare_automata_angajat.sql
-# supabase/migrations/20260929y_conturi_inchidere_la_contract_incheiat.sql
-# supabase/migrations/20260929z_hr_fost_angajat_colaborare_externa.sql
+# Pentru fiecare X.sql, dacă există X_ROLLBACK.sql, modul --rollback îl folosește automat (ordine inversă).
+supabase/migrations/20260929c_conturi_legare_automata.sql
+supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
+supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql

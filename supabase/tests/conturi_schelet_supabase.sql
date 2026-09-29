@@ -27,6 +27,12 @@
 --     lipsesc aici → își prinde singur eroarea (WARNING), exact ca în producție la eșec;
 --   * trg_hr_autorizatie_noua nu e copiat (nerelevant pentru conturi);
 --   * „postgres” local e SUPERUSER; în producție postgres e NOSUPERUSER + BYPASSRLS.
+--   * tabelele de alocări (comenzi_aprobatori, necesar_responsabili, hr_aprobatori, marketing_aprobatori,
+--     hr_concediu_rute, tichete_default_responsabili, hr_recrutare_pozitii) și profile_sites au
+--     coloanele/constrângerile/indexurile de producție (subset la hr_recrutare_pozitii); politicile lor
+--     necitite sunt înlocuite cu „SELECT pentru logați” (testele scriu în ele ca admin);
+--   * auth.users are în producție owner supabase_auth_admin: acolo NU se pot adăuga triggere pe el
+--     (local, testele R1-12 pun temporar unul, în tranzacția testului, doar ca să simuleze un profil preexistent).
 -- ============================================================================
 
 \set ON_ERROR_STOP on
@@ -293,6 +299,8 @@ CREATE TABLE public.profiles (
   CONSTRAINT profiles_role_chk CHECK (role = ANY (ARRAY['superadmin','admin_logistica','manager_santier','sef_echipa','contabilitate','hr','gestionar','magazioner'])),
   CONSTRAINT profiles_whatsapp_tier_check CHECK (whatsapp_tier = ANY (ARRAY['critic','manager','hr_contabil','info']))
 );
+-- Producție: o fișă de angajat are cel mult un cont (index parțial).
+CREATE UNIQUE INDEX uniq_profiles_employee_id ON public.profiles USING btree (employee_id) WHERE (employee_id IS NOT NULL);
 
 CREATE TABLE public.user_module_access (
   id serial PRIMARY KEY,
@@ -320,6 +328,7 @@ CREATE TABLE public.hr_personal_extern (
   updated_at timestamptz NOT NULL DEFAULT now(),
   partener_id bigint            -- FK spre ofertare_parteneri omis intenționat (Ofertare înghețat)
 );
+CREATE UNIQUE INDEX uq_hr_personal_extern_nume ON public.hr_personal_extern USING btree (lower(btrim(nume)));
 
 CREATE TABLE public.hr_autorizatii (            -- subset de coloane
   id bigserial PRIMARY KEY,
@@ -363,6 +372,80 @@ CREATE TABLE public.notifications (
   CONSTRAINT notifications_modul_check CHECK (modul = ANY (ARRAY['general','Logistică','Pontaj','Execuție','Financiar','Comercial','Administrativ','HR','Tichete','Rapoarte','Ședințe','Ofertare','Clădire']))
 );
 
+-- Drepturi pe șantiere (producție: coloane + constrângeri reale; FK granted_by → auth.users).
+CREATE TABLE public.profile_sites (
+  id serial PRIMARY KEY,
+  profile_id uuid REFERENCES public.profiles(id) ON DELETE CASCADE,
+  site_id integer REFERENCES public.sites(id) ON DELETE CASCADE,
+  created_at timestamptz DEFAULT now(),
+  valid_until date,
+  granted_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  note text,
+  CONSTRAINT profile_sites_profile_id_site_id_key UNIQUE (profile_id, site_id)
+);
+
+-- Alocări de flux (R2 B.8: doar alertă „Reasignează”). Subset de coloane, constrângeri reale.
+CREATE TABLE public.comenzi_aprobatori (
+  id bigserial PRIMARY KEY,
+  profile_id uuid NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
+  employee_id bigint REFERENCES public.employees(id) ON DELETE SET NULL,
+  rol_afisat text,
+  ordine integer NOT NULL DEFAULT 0,
+  activ boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.necesar_responsabili (
+  id bigserial PRIMARY KEY,
+  site_id integer NOT NULL REFERENCES public.sites(id) ON DELETE CASCADE,
+  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  rol text NOT NULL DEFAULT 'solicitant' CHECK (rol = ANY (ARRAY['solicitant','aprobator'])),
+  activ boolean NOT NULL DEFAULT true,
+  adaugat_la timestamptz NOT NULL DEFAULT now(),
+  adaugat_de uuid REFERENCES public.profiles(id),
+  CONSTRAINT necesar_responsabili_unic UNIQUE (site_id, profile_id, rol)
+);
+CREATE TABLE public.hr_aprobatori (
+  id serial PRIMARY KEY,
+  profile_id uuid NOT NULL REFERENCES public.profiles(id),
+  tip text NOT NULL CHECK (tip = ANY (ARRAY['mp','sef_birou'])),
+  eticheta text,
+  activ boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT hr_aprobatori_profile_id_tip_key UNIQUE (profile_id, tip)
+);
+CREATE TABLE public.marketing_aprobatori (
+  profile_id uuid NOT NULL PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+  adaugat_la timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.hr_concediu_rute (
+  id serial PRIMARY KEY,
+  employee_id integer NOT NULL UNIQUE REFERENCES public.employees(id),
+  aprobator_profile_id uuid NOT NULL REFERENCES public.profiles(id),
+  observatii text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.tichete_default_responsabili (
+  departament text NOT NULL PRIMARY KEY,
+  profile_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
+  set_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.hr_recrutare_pozitii (            -- subset de coloane
+  id serial PRIMARY KEY,
+  cod text UNIQUE,
+  denumire text NOT NULL,
+  site_id integer REFERENCES public.sites(id),
+  status text NOT NULL DEFAULT 'deschisa' CHECK (status = ANY (ARRAY['deschisa','suspendata','inchisa'])),
+  responsabil_id uuid REFERENCES public.profiles(id),
+  activ boolean DEFAULT true,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  deleted_at timestamptz,
+  deleted_by uuid REFERENCES public.profiles(id)
+);
+
+INSERT INTO public.sites (name) VALUES ('Șantier test Ploiești'), ('Șantier test Buzău'), ('Birou test');
+
 -- ---------------------------------------------------------------------------
 -- RLS + politici (verbatim din producție acolo unde sunt cunoscute)
 -- ---------------------------------------------------------------------------
@@ -375,6 +458,35 @@ ALTER TABLE public.hr_personal_extern  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_autorizatii      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_employees_audit  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profile_sites       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.comenzi_aprobatori  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.necesar_responsabili ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.hr_aprobatori       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.marketing_aprobatori ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.hr_concediu_rute    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tichete_default_responsabili ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.hr_recrutare_pozitii ENABLE ROW LEVEL SECURITY;
+
+-- profile_sites / comenzi_aprobatori: verbatim din producție
+CREATE POLICY profile_sites_delete_owner ON public.profile_sites FOR DELETE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
+CREATE POLICY profile_sites_insert_owner ON public.profile_sites FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
+CREATE POLICY profile_sites_select_authenticated ON public.profile_sites FOR SELECT TO authenticated USING (true);
+CREATE POLICY profile_sites_update_owner ON public.profile_sites FOR UPDATE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true))
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
+CREATE POLICY ca_select ON public.comenzi_aprobatori FOR SELECT TO authenticated USING (true);
+CREATE POLICY ca_write ON public.comenzi_aprobatori FOR ALL TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.is_owner = true))
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles p WHERE p.id = auth.uid() AND p.is_owner = true));
+-- celelalte tabele de alocări: politici de producție necitite → doar citire pentru logați (testele scriu ca admin)
+CREATE POLICY schelet_necesar_responsabili_select ON public.necesar_responsabili FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY schelet_hr_aprobatori_select ON public.hr_aprobatori FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY schelet_marketing_aprobatori_select ON public.marketing_aprobatori FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY schelet_hr_concediu_rute_select ON public.hr_concediu_rute FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY schelet_tichete_default_resp_select ON public.tichete_default_responsabili FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY schelet_hr_recrutare_pozitii_select ON public.hr_recrutare_pozitii FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
 
 -- sites / app_modules / hr_autorizatii: politici de producție necitite → doar citire pentru logați
 CREATE POLICY schelet_sites_select ON public.sites FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
@@ -699,6 +811,19 @@ BEGIN
   RAISE EXCEPTION 'ESEC TEST: % — trebuia să eșueze, dar a reușit: %', p_mesaj, p_sql USING ERRCODE = 'P0T01';
 END $fn$;
 
+-- Rulează p_sql; întoarce NULL la succes sau {state, msg, hint, detail} la eroare (pentru HINT-uri).
+CREATE FUNCTION teste.eroare(p_sql text) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE v_state text; v_msg text; v_hint text; v_detail text;
+BEGIN
+  BEGIN
+    EXECUTE p_sql;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT, v_hint = PG_EXCEPTION_HINT, v_detail = PG_EXCEPTION_DETAIL;
+    RETURN jsonb_build_object('state', v_state, 'msg', v_msg, 'hint', v_hint, 'detail', v_detail);
+  END;
+  RETURN NULL;
+END $fn$;
+
 -- Identitate PostgREST: claims JWT + SET ROLE authenticated (session_user rămâne postgres).
 CREATE FUNCTION teste.ca_utilizator(p_uid uuid) RETURNS void LANGUAGE plpgsql AS $fn$
 BEGIN
@@ -782,6 +907,11 @@ REVOKE EXECUTE ON FUNCTION teste.cron_hr_auto_deactivate_terminated() FROM PUBLI
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
+-- ACL-uri citite din producție (29.09): funcțiile de trigger existente au EXECUTE doar pentru
+-- postgres + service_role ({postgres=X/postgres,service_role=X/postgres}).
+REVOKE EXECUTE ON FUNCTION public.handle_new_user(), public.prevent_role_escalation(),
+  public.enforce_owner_only_salary_flags(), public.protect_can_access_pontaj_brut(),
+  public.fn_employees_termination_notify() FROM PUBLIC, anon, authenticated;
 
 RESET client_min_messages;
-\echo 'SCHELET OK: auth + public (profiles/employees/user_module_access/hr_personal_extern/notifications) + teste.*'
+\echo 'SCHELET OK: auth + public (profiles/employees/user_module_access/profile_sites/hr_personal_extern/notifications/alocări) + teste.*'
