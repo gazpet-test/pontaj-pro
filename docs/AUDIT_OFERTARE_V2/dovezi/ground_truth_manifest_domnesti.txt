@@ -1,0 +1,469 @@
+# Ground truth Domnești — manifest SHA-256 (generat 28.09.2026 pe PC birou, Get-FileHash)
+# rădăcină: Z:\Oferte\6.ALIMENTARI CU APA\19.Alim. cu apa com . Domnesti_Ilfov termne depunere 18.09.2026
+# format: sha256 bytes modificat cale_relativă   (467 fișiere, 890.799.982 bytes; setul depus efectiv = 'documente depuse in SEAP')
+4adc945d3ba8129b90fecdd99c8c9399ffc37433af0c40e42fdc78a65abc7a93 98716 2026-09-10T11:51:32 alberto dumitru\Declaratie disp. manager mediu.docx
+739462183bbd381f0db259571fcce4ba68893f5b23cb4c99489839eb585c7e94 657563 2026-09-15T08:29:05 alberto dumitru\Declaratie disp. manager mediu.pdf
+e0144fd95912a6ad1d43471fa22a5592908872f55b05f728d49f16fb25b4a9dd 281087 2026-09-14T10:08:00 alberto dumitru\Diploma managementul mediului.pdf
+9902d2561cf73dd017422e61135177b61248d6d8066689161f1a8858e3286f15 20879 2026-09-12T17:31:29 cerinte licitatie Domnesti.xlsx
+ac815e530602653312a4d83b772272a8c94b58d07a3b3add685f030d0c2fc6d7 241537 2026-09-15T16:10:18 clarificari\Raspuns consolidat - 2.pdf
+a0d572e71c86c317a6487ab6031d128d3d029b469d3448553faef0d537a23dc9 144732 2026-09-16T14:43:37 clarificari\Raspuns consolidat -3.pdf
+2678b19427eff799bb74f701d91dc3c8f699dbec52e9726a7a222b4196c5a7bc 234405 2026-09-11T09:11:20 clarificari\Raspuns consolidat.pdf
+65772b9540cb4c24a918f371ec8ad414fdc324c8bb5fce2becd54d16d74d8b65 14912 2026-09-15T16:41:41 clarificari\Solicitare clarificari Domnesti nr.2.docx
+93aa9e73372bb7a460feba45f3186d9c706709fa2dd7023a09c2c452a62662bb 19579 2026-09-15T16:55:27 clarificari\Solicitare clarificari Domnesti nr.2.docx.p7s
+c5eb1a7d9aa64a7dd6e0c9309a98dd2534f86722799192a349b08f49cd159c33 18482 2026-09-14T09:33:07 clarificari\Solicitare clarificari Domnesti.docx
+2387430797f9a3add417360cef9ee4d5e5a1cc1b30218f02a48006d0e33653f8 23163 2026-09-14T09:39:49 clarificari\Solicitare clarificari Domnesti.docx.p7s
+93bfafc730e7b96718411d3013a256f8eada0ba42292914e7b1c4fb181baeba0 252379 2026-09-07T16:11:47 doc SEAP\AC 258 din 24.08.2026.pdf
+654a78bd99656e266a9dabc29ee294fa576ec3e65ae49683c2305e7d76952806 666219 2026-09-07T16:11:47 doc SEAP\CAIET DE SARCINI.pdf
+3b0a07d2bf2226a1e721b66e0fe563f5b76c2f9e32e05af6a485b86809a4df65 258611 2026-09-07T16:11:47 doc SEAP\DUAE_CERERE_383900.xml
+dda798f455c3dfc6bdce15a448e844ce676b46f680b8c1e1a640f665b49023e5 330752 2026-09-07T16:11:47 doc SEAP\FORMULARE.doc
+80a2b0239bd097a9c92c9ae7c449e5782a43645232e1d328fa997744439aeb2a 292352 2026-09-07T16:11:47 doc SEAP\Instructiuni_ofertanti_FisaDate_DF1279378.pdf
+436fe2e35fa5d6c66a9b018bd997b4eefded982d9efc87a3151bb70e40a2739f 27093 2026-09-07T16:12:31 doc SEAP\LISTE CANTITATI FARA VALORI\LISTE CANTITATI FARA VALOR\C6 FARA VALORI EXTINDERE APA DOMNESTI REV.PDF
+6e948b6004462e905b1a89fa691dbab3a5634780f0549227701f5b4a85a17817 23478 2026-09-07T16:12:31 doc SEAP\LISTE CANTITATI FARA VALORI\LISTE CANTITATI FARA VALOR\C7 FARA VALORI EXTINDERE APA DOMNESTI REV.PDF
+c9a5d59ac210a2e601a4e4167726ea69252baf6538641ad20b59a27fd6319065 22171 2026-09-07T16:12:31 doc SEAP\LISTE CANTITATI FARA VALORI\LISTE CANTITATI FARA VALOR\C8 FARA VALORI EXTINDERE APA DOMNESTI REV.PDF
+dfa448931f98a2181892cbb33a46139f081b01a584c23e3bac1f713cc2a8a387 28587 2026-09-07T16:12:31 doc SEAP\LISTE CANTITATI FARA VALORI\LISTE CANTITATI FARA VALOR\C9 FARA VALORI EXTINDERE APA DOMNESTI REV.PDF
+9d3ae06c7fd3499f15bebc3c1f8493080e00dfc91890f872469863887e0ee599 23082 2026-09-07T16:12:31 doc SEAP\LISTE CANTITATI FARA VALORI\LISTE CANTITATI FARA VALOR\F1 FARA VALORI EXTINDERE APA DOMNESTI REV.PDF
+cc1df4d0a2c0c77bb067147a7c6e0129352531eae3c2a24603765028f89d7717 36928 2026-09-07T16:12:31 doc SEAP\LISTE CANTITATI FARA VALORI\LISTE CANTITATI FARA VALOR\F2 FARA VALORI EXTINDERE APA DOMNESTI REV.PDF
+99a9b841f0fa2e80dcd97d1826165936c0c6274a857df3d2403f9d3bf3775da4 258064 2026-09-07T16:12:31 doc SEAP\LISTE CANTITATI FARA VALORI\LISTE CANTITATI FARA VALOR\F3 FARA VALORI EXTINDERE APA DOMNESTI REV.PDF
+7ae3bc7ea5075500855e2348ff866c34ae2c246e622802d96c45648af3a18989 4487980 2026-09-07T16:12:37 doc SEAP\PT\PT\01. Parte scrisa PT.pdf
+d82eb8e81700aa6bbd1622de207091400eae10464e61434da27b4b096bec669a 11694037 2026-09-07T16:12:37 doc SEAP\PT\PT\02. Parte desenata PT.pdf
+04fe0a195dd5da5bd8b4912fdd3768e89a10654c42876e29f85175dba5c13bb8 3460647 2026-09-17T10:14:48 documente depuse in SEAP\1.Documente calificare.pdf
+6a573f64ba9cc1dad1de9077ab050e754ab57aad48d87116d52c72b4bc0327a3 3465388 2026-09-17T10:47:45 documente depuse in SEAP\1.Documente calificare.pdf.p7s
+8eed8ad60a101443ed2844af4bc65ef022ed35afaaef1bb70c41bf016d0635e1 18231582 2026-09-18T10:16:51 documente depuse in SEAP\1_PDFsam_3.propunere financiara .pdf
+509910e59e78bae77270b33dccb110726db62afae790ebc4fb846d4e8badfcd0 1275004 2026-09-15T13:13:25 documente depuse in SEAP\2. Polita_AX1008206.pdf
+c22ec791e01a53e2024677e54f996b63b2ab102ed98a1153438e1b3d3472a469 1279661 2026-09-17T10:48:05 documente depuse in SEAP\2. Polita_AX1008206.pdf.p7s
+b6ee5c5894732cdd1bdc3ffb9a23532b52c665ee5a3ddd008f63c76073430189 111237 2026-09-14T16:41:29 documente depuse in SEAP\2.1.Dovada platii.pdf
+e71b5a26df294c84a4c8a5f781d856239532c9c716fe3e9ac30dccfa886e62ad 115849 2026-09-17T10:48:25 documente depuse in SEAP\2.1.Dovada platii.pdf.p7s
+ff8e893f292b1fd260633ba77986a6e04c0d63d6985ad068a8c011e88d9f79ca 18529444 2026-09-18T08:46:43 documente depuse in SEAP\3.propunere financiara .pdf
+c6ff8c3c54cbe878bd0f8bad25f2676af021b6a33051fc478e77d5a2f51d0f15 18534146 2026-09-18T08:47:43 documente depuse in SEAP\3.propunere financiara .pdf.p7s
+7a99b0c410cc6027a7eec4c31ef9111848b9bfd6a71cf88901c69dc72cd4e333 30300700 2026-09-18T10:19:22 documente depuse in SEAP\4.1propunere tehnica pg 1_536.pdf
+4916c92a3a28a9b4318ace6cf8a2ddfe718d9073d969dbad9c6a25cf6a838c50 30305457 2026-09-18T10:23:53 documente depuse in SEAP\4.1propunere tehnica pg 1_536.pdf.p7s
+22bc1bac5563060646b2a679e16ec414d8d476bb41b411d5bd0d6b7ea502ca21 31194454 2026-09-18T10:19:27 documente depuse in SEAP\4.2propunere tehnica pg 537_630.pdf
+2598c176f3bd662708cc72b4e8bd7e6cdced64703dc08744bfeac07d1ee55a09 31199216 2026-09-18T10:24:32 documente depuse in SEAP\4.2propunere tehnica pg 537_630.pdf.p7s
+b8114f919b3409f5f6f0a3a9f5378692646749e1411d035012a7348594819dc2 29419168 2026-09-18T10:19:32 documente depuse in SEAP\4.3propunere tehnica pg 631_974.pdf
+4a9efc0fd9794de188199219cf287032347afe392f62615b64181fac0ef9d143 29423920 2026-09-18T10:25:15 documente depuse in SEAP\4.3propunere tehnica pg 631_974.pdf.p7s
+f87dd56eb81bf427e1e9c5f4c8ad651bc2f3332e32930dfa09fdce31e7ed4533 294782 2026-09-17T10:02:37 documente depuse in SEAP\calificare\DC. Opis Doc.eligibilitate Domnesti.pdf
+d6af5f38f5bd06cd06af5a0943e7a92bfe47e03d45612102e4ca2ea959ebe14a 791864 2026-09-16T15:33:46 documente depuse in SEAP\calificare\DC.1.Imputernicire Tanase_olograf.pdf
+0d9c7a069fe89e9de2a37e5965c2302e01f9d7217e75aa458e26581cd404f12b 64032 2026-09-17T09:37:34 documente depuse in SEAP\calificare\DC.10.Duae-14.09.2026 (1).pdf
+9fd6ffc98357de967ea2baf6dda437e6d51ef01d3298cf602ba9a96bd4a984ee 173929 2026-09-17T09:44:04 documente depuse in SEAP\calificare\DC.2.Formular 20.pdf
+af038272ffdf43fe3d1847f5b3b2ba88c2da5ecc4ba6b934971f17306e4850b5 122613 2026-09-17T08:15:06 documente depuse in SEAP\calificare\DC.3.Formular 1.pdf
+db56d63ca5ed4aace52fbc3d0aef44ed3695128a05f92ffb651ec24329b8ebe5 133343 2026-09-17T08:20:04 documente depuse in SEAP\calificare\DC.4.Formular 2.pdf
+149b592d65cb11b16ce85d86110ed757bad56f0c89450e817fe14c1e9caa17f1 140844 2026-09-17T08:40:55 documente depuse in SEAP\calificare\DC.5.Formular 3.pdf
+1bbbf129fec33d139a392fa4f91090a8b10b691ab91fe11366b117e5aef29dad 143116 2026-09-17T08:42:35 documente depuse in SEAP\calificare\DC.6.Formular 5.pdf
+dd9426afda20125fb3200825bd45c6acbd8c30a2319cf28d9aa0e65a1873223d 129947 2026-09-17T08:43:49 documente depuse in SEAP\calificare\DC.7.Formular 8.pdf
+1900ca6b1ec78f55962e74a4dceee93d8049d83bb05dadd6fcef42a3c5951690 214782 2026-09-14T13:35:15 documente depuse in SEAP\calificare\DC.8. Formular F17.pdf
+485f641de552be310b1769d52d8fb4f1eb8460086d4b787e1c3875f35e133dd1 1231270 2026-09-17T09:18:15 documente depuse in SEAP\calificare\DC.8.1.Formular F17.1.contr.ad.facturi facturi Krieb.pdf
+d07811417e6c84f0569be5405bd547179425ca4448786815fea2421b9be4b9ed 150737 2026-09-17T09:16:18 documente depuse in SEAP\calificare\DC.9.Formular 21.pdf
+60f4924a3b864a318dcaa842a54888149d3376f7546902bf3f5bfebd6532d566 179663 2026-09-18T08:38:32 documente depuse in SEAP\propunere financiara\OF.0.Opis Prop Financiara.docx
+134fe93aaf1687e1de91b1b74a934aad7ef488d60332344be44837ac237de9ad 289476 2026-09-18T08:38:46 documente depuse in SEAP\propunere financiara\OF.0.Opis Prop Financiara.pdf
+4dcff8369dcf0b52c3fc343814d0884d1d5cacbc47667d40ebcf6a3acee016c6 172054 2026-09-17T11:07:32 documente depuse in SEAP\propunere financiara\OF.1.Formular F12 Formular de oferta.pdf
+1900ca6b1ec78f55962e74a4dceee93d8049d83bb05dadd6fcef42a3c5951690 214782 2026-09-14T13:35:15 documente depuse in SEAP\propunere financiara\OF.10.1.Formular F17.pdf
+485f641de552be310b1769d52d8fb4f1eb8460086d4b787e1c3875f35e133dd1 1231270 2026-09-17T09:18:15 documente depuse in SEAP\propunere financiara\OF.10.2.Formular F17.1.contr.ad.facturi facturi Krieb.pdf
+074e9130d78507dd590e12d688429edc78bd79774eea4021deccee132b963701 886132 2026-09-18T08:43:14 documente depuse in SEAP\propunere financiara\OF.11..grafic valoric apa Domnesti.pdf
+2ed697fa9cb23b8a3c55de85a4c54c5715c6df884966d95ccb1ae363e187407d 252355 2026-09-17T08:02:07 documente depuse in SEAP\propunere financiara\OF.2.F1.pdf
+12deed959e35413ed7e7cd79e9daaaeda903203467b73bb3b8f5cf554bd1ab87 252204 2026-09-17T08:07:10 documente depuse in SEAP\propunere financiara\OF.3.1.F2_0153_0001.pdf
+3e387af7406709f3f805e42c8e0f4f0fc6f7e68a9ffb8913be0e08e342818471 252195 2026-09-17T08:05:42 documente depuse in SEAP\propunere financiara\OF.3.10.F2_0153_0010.pdf
+eb607bb4e0886f62366c9769d9b1d8a81dd0e4275fdd0da967c4022ff44aed8e 252202 2026-09-17T08:05:31 documente depuse in SEAP\propunere financiara\OF.3.11.F2_0153_0011.pdf
+5b2cf4482b487ee59271a566ddc3a94ba91fcdb6ff89b20cf3e86a6843818623 251928 2026-09-17T08:04:54 documente depuse in SEAP\propunere financiara\OF.3.12.F2_0153_0012.pdf
+20746ee318cf8a435aa06f05c4208a718643b85a63103416d342bdde4030b4a3 252201 2026-09-17T08:07:01 documente depuse in SEAP\propunere financiara\OF.3.2.F2_0153_0002.pdf
+cd735c7afc617ee8d75358cf6202ceacaee2545d1ed76bdf3586e20c86c9bc12 252208 2026-09-17T08:06:52 documente depuse in SEAP\propunere financiara\OF.3.3.F2_0153_0003.pdf
+3ff11933789aa141c6b678b6860e8114edce571f45684b6a327a2dea59c53254 252147 2026-09-17T08:06:43 documente depuse in SEAP\propunere financiara\OF.3.4.F2_0153_0004.pdf
+987dec3a9ae85e28ee9c7e90ea742b19f3751c9330afd50a75e155087e988acf 252202 2026-09-17T08:06:27 documente depuse in SEAP\propunere financiara\OF.3.5.F2_0153_0005.pdf
+13780b1a5a1db2af55630e13ef8269f02cd88e8be6179867dd8ddc08fdf9a733 252200 2026-09-17T08:06:18 documente depuse in SEAP\propunere financiara\OF.3.6.F2_0153_0006.pdf
+7d555d6747ee1c06b8d4a707b4a7cc297c851bc73190fa186f80e31bc4686b37 1841 2026-09-17T07:59:38 documente depuse in SEAP\propunere financiara\OF.3.7.F2_0153_0007.pdf
+44afdd5e98c704dafac1e7b0e3f3d64f31cc9932d8f8f90d6daa03abc50f39c9 252206 2026-09-17T08:06:02 documente depuse in SEAP\propunere financiara\OF.3.8.F2_0153_0008.pdf
+a024da546e76dc6b3fe0834f2f9fd60b45d18511d5dd8fbaf23cbf9bfc0c7e57 252145 2026-09-17T08:05:53 documente depuse in SEAP\propunere financiara\OF.3.9.F2_0153_0009.pdf
+3fb78ae2d70bdb98f8e5ee5b6e5d8e84849b1bac65ad4e9a6bfea8f8ff206459 11225843 2026-09-17T08:16:18 documente depuse in SEAP\propunere financiara\OF.4.Formularul F3.pdf
+c3df21c5a6a2b43b98ae8db233ae0fb3e7bdd1994e5057df0d39811b9e347271 377293 2026-09-17T08:44:11 documente depuse in SEAP\propunere financiara\OF.5.C6.pdf
+e12b42dc7763881eab78bf717d4b839378c9c3b297101e84c3614735932a5e79 342835 2026-09-17T08:43:56 documente depuse in SEAP\propunere financiara\OF.6.C7.pdf
+8996eb4acca07de2fef74afbec02f2d70098ab542f8a6c129afc3008e8cca580 344865 2026-09-17T08:43:46 documente depuse in SEAP\propunere financiara\OF.7.C8.pdf
+39424fb752af8a9f34f6a45c03105ceb78c3a7ff1ec659a184a79dbbea0e894b 343075 2026-09-17T08:43:34 documente depuse in SEAP\propunere financiara\OF.8.C9.pdf
+53ae730f6aab110c66ff3c0e269492bce8ba66dc330e8726427e78241333309e 176360 2026-09-14T13:34:33 documente depuse in SEAP\propunere financiara\OF.9.Formular F14.pdf
+ff8e893f292b1fd260633ba77986a6e04c0d63d6985ad068a8c011e88d9f79ca 18529444 2026-09-18T08:46:43 documente depuse in SEAP\propunere financiara\propunere financiara .pdf
+7a99b0c410cc6027a7eec4c31ef9111848b9bfd6a71cf88901c69dc72cd4e333 30300700 2026-09-18T10:19:22 documente depuse in SEAP\propunere tehnica\propunere tehnica pg 1_536.pdf
+22bc1bac5563060646b2a679e16ec414d8d476bb41b411d5bd0d6b7ea502ca21 31194454 2026-09-18T10:19:27 documente depuse in SEAP\propunere tehnica\propunere tehnica pg 537_630.pdf
+b8114f919b3409f5f6f0a3a9f5378692646749e1411d035012a7348594819dc2 29419168 2026-09-18T10:19:32 documente depuse in SEAP\propunere tehnica\propunere tehnica pg 631_974.pdf
+6c3af1cfb0f29b8ba85a4746fceb38598feac9ff20066f0a71c0506d0c0cdf73 91663289 2026-09-18T10:14:13 documente depuse in SEAP\propunere tehnica\propunere tehnica.pdf
+11bb11472ca61f70aec937278e318fa1e98dfef35ca3818adf384a016e9d39dc 138117 2026-09-17T10:30:49 Formulare Gazpet\calificare\DC. Opis Doc.eligibilitate Domnesti.docx
+b37e94fc2ee19c87fdc2ca35560be1bcad345ae79597eb8969a7cd5d634fe2d8 143583 2026-09-16T15:33:08 Formulare Gazpet\calificare\DC.1.Imputernicire Tanase_olograf.docx
+1a863871ddbaf69d4695964929086fb74feb1c1ed32b1a399dd98bf45d419290 132691 2026-09-17T09:44:17 Formulare Gazpet\calificare\DC.2.Formular 20.docx
+1fda0fadd1e593ffd22f212ec578a2ed8b5a17efe7260127b3dfceb49557c19e 68685 2026-09-17T08:15:22 Formulare Gazpet\calificare\DC.3.Formular 1.docx
+94a444d9dc2e0875a27634606bd8c9595095a4bfb029900299c53f8bcf1454bd 66881 2026-09-17T08:20:41 Formulare Gazpet\calificare\DC.4.Formular 2.docx
+c6fc9692c61dac794366d4beb29399397f9b7fce63d529951a4fef5ac4b03b0f 68363 2026-09-17T08:41:23 Formulare Gazpet\calificare\DC.5.Formular 3.docx
+9e62174653e700320bf17c5b1f293748cbca6600de8fe07ba25948d55b341327 68086 2026-09-17T08:42:52 Formulare Gazpet\calificare\DC.6.Formular 5.docx
+5ae7f75d638ead42898ae2627514af78faf08e608ec3258da9b1524b4e84dd6f 67643 2026-09-17T08:44:02 Formulare Gazpet\calificare\DC.7.Formular 8.docx
+c11ec9252e58023af1e5cbe89187ad7cd86b0530dd33564ca0b3851c34f608cc 66707 2026-09-17T09:16:30 Formulare Gazpet\calificare\DC.8.Formular 21.docx
+2b7eda7c4bbdffaf0432d4b6e58007ecb1d3a614774de326c1a91df0ad948449 70722 2026-09-14T13:35:00 Formulare Gazpet\calificare\Formular F17.docx
+1f96619060aec5fc505686bbcd14b07f7ae42f935b732249ad140b68c0a7d5d7 31714 2026-09-12T13:30:55 Formulare Gazpet\Formular F11 MODEL GPL.docx
+1043e0d67269db4cb4a27d6da8056ad9b282c43664e49210bfa72e224b255119 32946 2026-09-12T13:33:43 Formulare Gazpet\Formular F13 Acord de asociere.docx
+d7780e52180aa3b8cd5f16b9c751cb2ed591877b5fd6e50f6c481177e9e861dc 35349 2026-09-12T13:36:30 Formulare Gazpet\Formular F15 Angajament.docx
+69c41506677dd3ff7da4bbc9b719b2ceee36dce930af1e216a77ad4fadeba639 33495 2026-09-12T13:38:04 Formulare Gazpet\Formular F16 Acord subcontractare.docx
+9880718b415835e916bc332863728facb799e436d33e31c37520c0ab0c9d2a31 289394 2026-09-17T11:26:50 Formulare Gazpet\propunere financiara\GAZPET INSTAL S.pdf
+49cad30668304938bc9e3da46eb1070e6589c7e38236a51e03e88693d7cd20ba 179377 2026-09-17T11:27:03 Formulare Gazpet\propunere financiara\OF.0.Opis Prop Financiara.docx
+5ca145d2597d62ff647dd800425344eb1d4aec1d8e17d1adc755519cba76bcd4 110992 2026-09-17T11:07:20 Formulare Gazpet\propunere financiara\OF.1.Formular F12 Formular de oferta.docx
+4dcff8369dcf0b52c3fc343814d0884d1d5cacbc47667d40ebcf6a3acee016c6 172054 2026-09-17T11:07:32 Formulare Gazpet\propunere financiara\OF.1.Formular F12 Formular de oferta.pdf
+1900ca6b1ec78f55962e74a4dceee93d8049d83bb05dadd6fcef42a3c5951690 214782 2026-09-14T13:35:15 Formulare Gazpet\propunere financiara\OF.10.1.Formular F17.pdf
+485f641de552be310b1769d52d8fb4f1eb8460086d4b787e1c3875f35e133dd1 1231270 2026-09-17T09:18:15 Formulare Gazpet\propunere financiara\OF.10.2.Formular F17.1.contr.ad.facturi facturi Krieb.pdf
+4cda026350accb09d2adf1ca713f52de2499ca4fb160029499e4fe4bac5150f6 119757 2026-09-17T09:37:16 Formulare Gazpet\propunere financiara\OF.11.grafic valoric apa Domnesti.pdf
+f0b136a3d59b0999b5706df224ffe535b7af2c2f57666b7060c5203bff192f23 39936 2026-09-17T09:36:17 Formulare Gazpet\propunere financiara\OF.11.grafic valoric apa Domnesti.xls
+2ed697fa9cb23b8a3c55de85a4c54c5715c6df884966d95ccb1ae363e187407d 252355 2026-09-17T08:02:07 Formulare Gazpet\propunere financiara\OF.2.F1.pdf
+12deed959e35413ed7e7cd79e9daaaeda903203467b73bb3b8f5cf554bd1ab87 252204 2026-09-17T08:07:10 Formulare Gazpet\propunere financiara\OF.3.1.F2_0153_0001.pdf
+3e387af7406709f3f805e42c8e0f4f0fc6f7e68a9ffb8913be0e08e342818471 252195 2026-09-17T08:05:42 Formulare Gazpet\propunere financiara\OF.3.10.F2_0153_0010.pdf
+eb607bb4e0886f62366c9769d9b1d8a81dd0e4275fdd0da967c4022ff44aed8e 252202 2026-09-17T08:05:31 Formulare Gazpet\propunere financiara\OF.3.11.F2_0153_0011.pdf
+5b2cf4482b487ee59271a566ddc3a94ba91fcdb6ff89b20cf3e86a6843818623 251928 2026-09-17T08:04:54 Formulare Gazpet\propunere financiara\OF.3.12.F2_0153_0012.pdf
+20746ee318cf8a435aa06f05c4208a718643b85a63103416d342bdde4030b4a3 252201 2026-09-17T08:07:01 Formulare Gazpet\propunere financiara\OF.3.2.F2_0153_0002.pdf
+cd735c7afc617ee8d75358cf6202ceacaee2545d1ed76bdf3586e20c86c9bc12 252208 2026-09-17T08:06:52 Formulare Gazpet\propunere financiara\OF.3.3.F2_0153_0003.pdf
+3ff11933789aa141c6b678b6860e8114edce571f45684b6a327a2dea59c53254 252147 2026-09-17T08:06:43 Formulare Gazpet\propunere financiara\OF.3.4.F2_0153_0004.pdf
+987dec3a9ae85e28ee9c7e90ea742b19f3751c9330afd50a75e155087e988acf 252202 2026-09-17T08:06:27 Formulare Gazpet\propunere financiara\OF.3.5.F2_0153_0005.pdf
+13780b1a5a1db2af55630e13ef8269f02cd88e8be6179867dd8ddc08fdf9a733 252200 2026-09-17T08:06:18 Formulare Gazpet\propunere financiara\OF.3.6.F2_0153_0006.pdf
+7d555d6747ee1c06b8d4a707b4a7cc297c851bc73190fa186f80e31bc4686b37 1841 2026-09-17T07:59:38 Formulare Gazpet\propunere financiara\OF.3.7.F2_0153_0007.pdf
+44afdd5e98c704dafac1e7b0e3f3d64f31cc9932d8f8f90d6daa03abc50f39c9 252206 2026-09-17T08:06:02 Formulare Gazpet\propunere financiara\OF.3.8.F2_0153_0008.pdf
+a024da546e76dc6b3fe0834f2f9fd60b45d18511d5dd8fbaf23cbf9bfc0c7e57 252145 2026-09-17T08:05:53 Formulare Gazpet\propunere financiara\OF.3.9.F2_0153_0009.pdf
+3fb78ae2d70bdb98f8e5ee5b6e5d8e84849b1bac65ad4e9a6bfea8f8ff206459 11225843 2026-09-17T08:16:18 Formulare Gazpet\propunere financiara\OF.4.Formularul F3.pdf
+c3df21c5a6a2b43b98ae8db233ae0fb3e7bdd1994e5057df0d39811b9e347271 377293 2026-09-17T08:44:11 Formulare Gazpet\propunere financiara\OF.5.C6.pdf
+e12b42dc7763881eab78bf717d4b839378c9c3b297101e84c3614735932a5e79 342835 2026-09-17T08:43:56 Formulare Gazpet\propunere financiara\OF.6.C7.pdf
+8996eb4acca07de2fef74afbec02f2d70098ab542f8a6c129afc3008e8cca580 344865 2026-09-17T08:43:46 Formulare Gazpet\propunere financiara\OF.7.C8.pdf
+39424fb752af8a9f34f6a45c03105ceb78c3a7ff1ec659a184a79dbbea0e894b 343075 2026-09-17T08:43:34 Formulare Gazpet\propunere financiara\OF.8.C9.pdf
+bbfe5bf96fc77e6a4be54f654852e9c9e6291aab1ac32b9ef2bfbdae62f41e5e 69252 2026-09-14T13:34:44 Formulare Gazpet\propunere financiara\OF.9.Formular F14.docx
+53ae730f6aab110c66ff3c0e269492bce8ba66dc330e8726427e78241333309e 176360 2026-09-14T13:34:33 Formulare Gazpet\propunere financiara\OF.9.Formular F14.pdf
+5842d79fc15f27287d49f71f25c056049c770f46ddcca0c71156c716e636a009 88903 2026-09-12T19:52:55 Formulare Gazpet\propunere tehnica\Declaratie de insusire a Caietului de sarcini si clarificarilor.docx
+cb2b02164dccac5375cc8944137c742bf9645623f28de509bde3c37e2cb8f7fc 67755 2026-09-12T18:38:45 Formulare Gazpet\propunere tehnica\Formular F10.docx
+4956997394d566e66b0beb35535fe58f7701e46934893e43b4633b0e20d95877 69125 2026-09-12T18:52:43 Formulare Gazpet\propunere tehnica\Formular F14.docx
+44d8c19d52b1964b27ee186ceace05528c57a995d15004485a0621bbabbc6308 68456 2026-09-12T19:20:02 Formulare Gazpet\propunere tehnica\Formular F18.docx
+84e6f83926d96f38ac365cb4ef03a4699d2810baf6fc769c7118aa19e21eba7d 68341 2026-09-12T19:22:20 Formulare Gazpet\propunere tehnica\Formular F19.docx
+7e2ffec96062179e5164a9f430a8f83cdbeae276db9119931d5953fe2b70b3f4 30993 2026-09-12T13:46:23 Formulare Gazpet\propunere tehnica\Formular F22.docx
+00d337f1b77c88bcdd0ae28811c61bb4051e2051b6b35cda27eb1669c6cfb285 94655 2026-09-12T19:41:47 Formulare Gazpet\propunere tehnica\Formular F23.docx
+94ccc474d6aa6b67d247fb87fc7d299dd5c89f218756f66366f4abccb3fc5a4c 70421 2026-09-12T19:46:19 Formulare Gazpet\propunere tehnica\Formular F24.docx
+966da5266d657faf049bfa6a6e8972b8dfa22c4f1ed6a0611f0a530412fd29ad 68034 2026-09-12T16:31:54 Formulare Gazpet\propunere tehnica\Formular F4.docx
+16756552331466938d48741e031828173d29ef7394e41779b8a60631470d2558 78178 2026-09-12T17:46:11 Formulare Gazpet\propunere tehnica\Formular F6.docx
+54822584e402d3f3340c4c8b245893149e5d5a7e8d404561c456214aacfb49d3 69310 2026-09-12T16:52:24 Formulare Gazpet\propunere tehnica\Formular F7.docx
+09d4713d558492e184db44fed1dbc89bbcff87c43aef3230cefaa89356425ea6 42096 2026-09-12T17:57:40 Formulare Gazpet\propunere tehnica\Formular F9.docx
+02d388ad7f903bee3d15c0b5c0f15cb89a16f14a46d31a0c24728ae38827360d 278549 2026-09-11T12:54:43 Formulare Gazpet\propunere tehnica\Lista personal Gazpet.docx
+bebb3648510e7fec1cb63e45c8db5b72d3ccf7cf504b4ec047ccf23cf36b971a 278647 2026-09-12T20:44:19 Formulare Gazpet\propunere tehnica\S.docx
+2a393dc5537616c60ce94fc4b27c4c435f4c13d34937da390a78ac27a88282de 73639 2026-09-14T16:13:42 garantii\ABC\Decont.pdf
+b6ee5c5894732cdd1bdc3ffb9a23532b52c665ee5a3ddd008f63c76073430189 111237 2026-09-14T16:41:29 garantii\ABC\Dovada platii.pdf
+66affc939911eb969a89b5894006da386f1b5d4d3d9923ae56ca34b656f41585 1459419 2026-09-14T15:45:30 garantii\ABC\Oferta_AX1008206 (002).pdf
+509910e59e78bae77270b33dccb110726db62afae790ebc4fb846d4e8badfcd0 1275004 2026-09-15T13:13:25 garantii\ABC\Polita_AX1008206.pdf
+3dcce6bbc9fe25c5fe8286f4504a7773d9a9caf347ad8728b75913b256138491 148481 2026-09-15T08:10:00 Gazpet\grafic\- grafic executie apa Domnesti.pdf
+6eea73acf30410762c49da1d7b1bf5c1a392406d54c9c067decd1db07d8ae70e 14713 2026-09-15T09:20:38 Gazpet\grafic\grafic valoric apa Domnesti exemplu.xlsx
+72ca878da41b4d21ff1e6f2c52ef154967dbe7dcc155535046eb2229e7631d65 13392 2026-09-15T08:10:00 Gazpet\grafic\grafic valoric apa Domnesti.xlsx
+0f33f6e60be63d1acfe684d7fb0831b2dd631dc1267f99bf157f006822d7be64 6613 2026-09-11T20:00:02 Gazpet\HANDOFF.md
+c2c021595d7c5e5534ae3816407a069e995c4a7488ed1f2961e37b09f481ec3b 53760 2026-09-15T15:50:50 Gazpet\lucru\rev.0\extrase.xls
+840cad117d138784e292d7dfaccb83457135dfb3a3707c63eb53179b22c36db6 409430 2026-09-15T15:45:00 Gazpet\lucru\rev.0\F3 cu reteta .docx
+80149aae3a60b3fd4e659054b0e13ab127258af3596081938cb533c829018cbb 42496 2026-09-15T16:01:12 Gazpet\lucru\rev.0\F3 reuniune conducte.xls
+ff2b29bee6d321bfcdaf3c6b01987cc12a24353c5b346e7203cbdde937df5065 31232 2026-09-15T14:49:05 Gazpet\lucru\rev.0\F3 reuniune refacere sist. rutier.xls
+7b36e6a0d79833dd777cd5ee3a2f28bebe0d4a4a95303ee4ce3030436eaf2de3 55808 2026-09-16T09:02:27 Gazpet\lucru\rev.1\extrase rev.1.xls
+ddf35cff00ca85bdfe44629fd343ca2466b9b23b87808961e50c9a9282c17d12 368546 2026-09-16T07:55:15 Gazpet\lucru\rev.1\F3 cu reteta rev.1.docx
+ca15028bcf206fc22a8e20ceec5cebee90070a552ff68061164b1bfb9b572392 44544 2026-09-16T09:03:58 Gazpet\lucru\rev.1\F3 reuniune conducte rev.1.xls
+168084d01c55779f2c8afa4e9ad2767f03d4a299a119da88c641e5742a1d453e 32768 2026-09-16T09:08:24 Gazpet\lucru\rev.1\F3 reuniune refacere sist. rutier rev.1.xls
+883ca53e5ad2faa7548f61abb095f43dc1b91136c4bfbc00836cb7508c58036a 52736 2026-09-16T10:14:08 Gazpet\lucru\rev.2\extrase rev.2.xls
+0ecd66766d08394d7ed2707935e60a0b31aec24b6c84e28e72de474788cd2d36 378646 2026-09-16T10:20:22 Gazpet\lucru\rev.2\F3 cu reteta rev.2.docx
+9878fa95895d5409b85257af87d770dd95a169951e70897ab7ffb4a7fd01596d 48128 2026-09-16T11:15:02 Gazpet\lucru\rev.2\F3 reuniune conducte rev.2.xls
+45b3b7dae687a5a30879a28538124e6baa6292af495ce991acf21bc03e712545 31232 2026-09-16T10:18:39 Gazpet\lucru\rev.2\F3 reuniune refacere sist. rutier rev.2.xls
+80a38f92954656f082b853ec7133166b32a1d5a62f9a9e36eae705c231d69d28 36864 2026-09-16T11:18:24 Gazpet\lucru\rev.2\Formularul F3 OS.doc
+f0057b34aecfc4c33528a7f1ea2416185a0db8d92f595f9009d3eeb4fb72cdac 53248 2026-09-16T15:36:34 Gazpet\lucru\rev.3\extrase rev.3.xls
+0fc6d68a0052a18fbfbe08aeb6943cbcc66720cdcfa57f244121a59ccd06d346 30720 2026-09-16T15:18:21 Gazpet\lucru\rev.3\f1.xls
+ec25217fc822fd0818d9086c2e833c68e5476dd473113a157251c35b08e72692 98816 2026-09-17T08:42:05 Gazpet\lucru\valoare finala depusa\extrase.xls
+e9d1a1a239d73848330a37f240a32c2a6e8b3ab74739c804a051f6482dc60d24 12552 2026-09-17T07:58:06 Gazpet\lucru\valoare finala depusa\F1_0153.xls
+470f3ee89d9b81af1e077070f0b7cebecb24b8cc78471e32344b0f493e8303c7 12150 2026-09-17T07:58:47 Gazpet\lucru\valoare finala depusa\F2_0153_0001.xls
+b9b2ee85ff958f4e067091398f5d25c343c66868cc34696ad4ca9edf0e8f70fd 12184 2026-09-17T07:58:59 Gazpet\lucru\valoare finala depusa\F2_0153_0002.xls
+3103bf93840c09edf145b276cc6627496f652e7b54b4ea27abecda811a1a0ceb 12173 2026-09-17T07:59:10 Gazpet\lucru\valoare finala depusa\F2_0153_0003.xls
+4be00e9c8e0e32cd36e3145b97f544d10e957e5291f54adf00ee83ec3f4d2c07 12103 2026-09-17T07:59:17 Gazpet\lucru\valoare finala depusa\F2_0153_0004.xls
+1cd96ccecf4e5b2de1845a71444f870d0a6d8f964530e6d01cc310437ecab6f4 12165 2026-09-17T07:59:23 Gazpet\lucru\valoare finala depusa\F2_0153_0005.xls
+68d6ba231ba835cb8a420a0da8df143c4f68d4c339df0f4ee7ea3d24157f14ee 12187 2026-09-17T07:59:30 Gazpet\lucru\valoare finala depusa\F2_0153_0006.xls
+ca04a8fbb9ddfc0777dfe2cd4c02183e4f6727c5d115cd94cb00376796f472b2 12175 2026-09-17T07:59:41 Gazpet\lucru\valoare finala depusa\F2_0153_0007.xls
+4756e252099a8f4efb53a33e71c9c69311e99b0719bc6eddeb17edf32ee6ce11 12173 2026-09-17T07:59:48 Gazpet\lucru\valoare finala depusa\F2_0153_0008.xls
+8860e7932b4a8987a2aa3f6d8205b6737381870a2618bc29dd2a39222d376575 12102 2026-09-17T07:59:55 Gazpet\lucru\valoare finala depusa\F2_0153_0009.xls
+a569d0bd024dc104f46b39e1cc9f4baeb4737dbe40fe8ba6f075388ad11393df 12170 2026-09-17T08:00:03 Gazpet\lucru\valoare finala depusa\F2_0153_0010.xls
+d5b042a7720de299809ff8695aa324dcada09c9cee083c8eadc90f06d40ce219 12167 2026-09-17T08:00:10 Gazpet\lucru\valoare finala depusa\F2_0153_0011.xls
+c67832b1e83318552b72fe35143c154bd61fee5c1af010f725d781ce9d32fa77 11954 2026-09-17T08:00:19 Gazpet\lucru\valoare finala depusa\F2_0153_0012.xls
+187b062e3676b115979528babb65e7674c8bebfe2866781773a270bf88c93293 237624 2026-09-17T08:08:56 Gazpet\lucru\valoare finala depusa\Formularul F3.docx
+4253939b332683634b915a2ab4545f1e9010f3ff924ec2ab5f9f9f17b0fb4516 94720 2026-09-16T13:23:48 Gazpet\oferte furnizori\CAST\oferta cast.msg
+e040bf182f5a2ebdbebedeab0f997e0b66a9a31fe99348ef971e01f55d220126 46653 2026-09-16T13:21:41 Gazpet\oferte furnizori\CAST\SKM_C450i26091612180.pdf
+eac44e0b50a5ac20772f19d7ed568869610fa20e1bf5da57e5703aa853a3491f 124216 2026-08-19T08:28:40 Gazpet\oferte furnizori\Classbeton agrgate si beton_of de la RECEA MISLEA\OFERTA GAZPET INSTAL SRL- licitatie Conpet zona Recea-Mislea jud.Prahova2026-08-18T132934.212.pdf
+e45c7be17dc92df1d7b9bd385350f3af97fec566c0fb574e6a9aa77212692f75 37718 2026-09-16T12:37:45 Gazpet\oferte furnizori\Copy of extrase comparativa.xlsx
+1f1475f859f3289c30dac5005f9f82f1f8a3adc8debbc3425385d77d075e5a7a 368845 2026-05-18T10:20:00 Gazpet\oferte furnizori\de la alte licitatii\GAZPET INSTAL_1131103536.pdf
+f9e01f9c59b3e57341b087797d3cb92d0288bbcdec12266fc96080eeb6168061 193283 2026-05-18T10:20:00 Gazpet\oferte furnizori\de la alte licitatii\Hawle -camine beton\AT 046 - 2024 Camine rectangulare Aviz + ST AT.pdf
+6a66ee59e138830d708533be0cb76206d5123b82a53f6a5fd0cbc0133ea71dcd 138359 2026-04-30T08:50:00 Gazpet\oferte furnizori\de la alte licitatii\Oferta Hawle-MS-CL-R02-Lot 01 Valea Nirajului -Gazpet Instal-29.04.2026.pdf
+e89f5b9802e752ed501f6bb6c0c94da47a2aa4fb2a011957d0ad7e0890d443c8 66048 2026-09-16T08:33:50 Gazpet\oferte furnizori\extrase comparativa.xls
+ab6229d646f84bcc1d9945c9c8a6def10933dfda634a314cc34ab7ff5f68d8a0 384982 2026-09-16T10:22:00 Gazpet\oferte furnizori\fusion\Oferta comerciala Gazpet Instal SRL.pdf
+40dda9d74c3e784519364e4656269fdc4bb3ba4542516560598f56111e74f457 245917 2026-09-15T07:57:39 Gazpet\oferte furnizori\hidrant.png
+06ece1e960a6292622e972f97a50d6471094871d88954ded4f94643b272e13cb 720954 2026-09-14T15:43:30 Gazpet\oferte furnizori\meda plast\GAZPET INSTAL SRL - Oferta comerciala - Licitatie “ Extindere rețele alimentare cu apă potabilă, comuna Domnești, județul Ilfov” - 14.09.2026.pdf
+c3352de8667f94f44f8f5f7a985b6beaad8c7ca43c661ddc874e370c37d1efcd 12200168 2026-09-15T11:33:19 Gazpet\oferte furnizori\Oferta bordura elis pavaje pg11.pdf
+34994285c823e32826de92cc6b8e15f582cbc76b0563ca094e8e839df0309803 334517 2026-09-16T15:13:20 Gazpet\oferte furnizori\Screenshot 2026-09-16 151304.png
+5607d245cd16b79d8f671b92e0696d90b90e5a2213dcb088ba2c1ea2b72f14da 250368 2026-09-14T16:21:13 Gazpet\oferte furnizori\Tehnoworld\Q080359-GAZPET INSTAL SRL-14.09.2026  Cerere oferta de pret.msg
+554b944d56658b7908d16768689178f3101f3396bd4e11f0f6da5e5b42d2735a 160468 2026-09-14T16:20:51 Gazpet\oferte furnizori\Tehnoworld\Q080359-GAZPET INSTAL SRL-14.09.2026.pdf
+f378ded1d7dc238c8795689acf690a03681fe16b3783425a3712a7d4b3edb262 25185382 2026-09-14T16:21:33 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902.zip
+f7b84772ef672a3ad76a197604f67faadd93caed7cb8d8173ce16dabc0a77ef9 6214843 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\14_FISA TEHNICA PVC  multistrat.pdf
+1f61235d6cc3f333fb5f78027d034507b542832cd548685994240e42c672297b 646726 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\Aviz sanitar TW_28.05.2029 - Copy.pdf
+e0502b7b06168d3145b9b842b220678ae3417cbc95e5d3870ec89400104c66c2 569160 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\Aviz_Tehnic_021-05_104-2024_Tevi_multistrat_din_PEHD_pentru_instalatii_de_apa___TW.pdf
+9d4977ae5eccbd1747bd46cc9b0f512de5998c98b0b1a045c4a3d17f91545bc2 3241896 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\bandă avertizoare culoare albastră CU FIR.pdf
+a9795bf1b376419195b331cfafacf8efcc306acfe2504e409fdc4de492ea2e03 96 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\desktop.ini
+259ca31fe21158d1a4c191973abb8beeb28b48be67b1142f0be8cd9b1521249f 1013741 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\Fisa tehnica adaptor flansa SDR17 lung TW_v2 1.pdf
+ca596625bfc77732619c4311ca13f190ecb3550d947d057fb3496307040c9c11 832792 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\Fisa tehnica Banda avertizoare Canalizare 20cm latime.pdf
+f72c0e5d42fb409bbbce08064251a61fb175227190eaf8e0e30c3fad9be8cbd3 705136 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\fisa tehnica dop electrofuziune - NUPI.pdf
+a6ae8f31c0e0c65a33e764d6c42e2b802c4b62af32a676439fdc24f4472bcf0b 1240219 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\fisa tehnica mufa electrofuziune PE100 PN16 SDR11 - NUPI.pdf
+584e2ef71eac3e3812085067e26527f2a44e0d033e73ac21da0bbe2d2a96b94c 3366883 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\Fisa tehnica RSC corp plat.pdf
+48edc11b88200f38a842628a77d92ba085fdbfe297c6d13acb2268874ea8e450 2558750 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\fisa tehnica sa electrofuziune cu chinga - NUPI.pdf
+fd927760cce6a870162d00fdbe791d3532ddb50462778669372a8c50527592c4 898878 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\Fisa tehnica Teu egal electrofuziune 90°.pdf
+d81fea30f384efbf5bd02480f716ab744563649794b3b1cf3d298815b9c5f298 153035 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\FT TV PEHD_APA_PE80-PE100_ 12201_Rev1.pdf
+ad88a7b377cbc81772a3c4c3595bf0a287e344934f504d8ea0adb6f82b7ac392 261937 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\ISO 9001.pdf
+03653f29a1361a36b6d2f1d2119490287cd031f6278fb9e28840a8d52d6af184 262154 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\ISO_14001.pdf
+69bc44a39911766e6f7741368cc3499cf3f05262e5a3cb9493b974d72141b639 262880 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\ISO_45001.pdf
+5b5ff854cb85ee823b8e80881176185164e8a6c0a568d5ba050f863b929e2c91 503595 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\SC_TEHNOWORLD_672_005_expire_06_MAR_2026_EN_13476_2_ACCREDIA_REV0_ENG-signed.pdf
+009431d1902e9aeeb30965cb9675a3743e794153bb24d675bdd64d12f38317a6 499338 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\SC_TEHNOWORLD_672_005_expire_06_MAR_2029_EN_13476_2_ACCREDIA_REV1-signed.pdf
+957ac4138cbde1a10860cca282fe7ebf21f8f9d60e237c95215413a49a2d0077 475918 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\SC_TEHNOWORLD_672_005_expire_06_MAR_2029_UNI_EN_13476_2_ACCREDIA_REV1-signed.pdf
+4a8020d8d055bf5350437ed40e5684532d9d0b4f498ad5f5f693a95af8265d4f 1473226 2026-09-14T12:02:32 Gazpet\oferte furnizori\Tehnoworld\wetransfer_new-folder_2026-09-14_0902\New folder\teu bransament electrofuziune cu chinga.pdf
+5eb8ee1cfa21123d4bf4102cd7dafc63ccacc1ad9dfeccc97234487552a820bb 967730 2026-09-17T12:24:00 Gazpet\oferte furnizori\teraplast\AVIZ SANITAR Tevi si fitinguri PE100 apa - Teraplast 2024.pdf
+ad6eaa3c047a9f9de3130359f0c9e7a92599e2c0ed416a61eaab6ff9c0339bae 5675757 2026-09-15T13:09:00 Gazpet\oferte furnizori\teraplast\Catalog_distributie-apa-gaz.pdf
+770509e28f1925b1daa44ad2352d7f94e3ecf85aa6ef80fb5dae03a24d985dc4 84362 2026-09-15T13:08:40 Gazpet\oferte furnizori\teraplast\FB_20260915_1038_83121_GAZPET_INSTAL_S_R_L_Extindere_retele_alimentare_cu_apa_potabila_comuna_Domnesti_judetul_Ilfov.pdf
+75afa120e3c69d062df8384dd89a1f2703c36a91a0819cb9169b143fb9dbd5ac 235069 2026-09-15T13:09:00 Gazpet\oferte furnizori\teraplast\Fisa_tehnica_-_Tevi_APA_PE100_sau_PE100-RC_tip1_tip2.pdf
+427f341f2daa2bc4c20a97c294ed56154a6b8c48e64af3b7bae3fd364f6b36b5 794276 2026-09-15T13:09:00 Gazpet\oferte furnizori\teraplast\Fisa_tehnica_robinet_cu_sertar_cauciucat_corp_plat_PN16.pdf
+919b332c74a3d38e0d80a9af14be90ec5f9e80f919df36e6ce27844dce5d3fda 669533 2026-09-15T13:09:00 Gazpet\oferte furnizori\teraplast\Hidrant_DN80_subteran.pdf
+e7a2cd3461d78b0961372060a46af8577c7b283cae121669a29eb4104d9d2877 836050 2026-09-17T12:25:00 Gazpet\oferte furnizori\teraplast\Noticare Sanitara fitinguri PE100.pdf
+5e44b6dee3e051461678e21de5344bd1304d3207203a44266c25cb957d77897c 92092 2026-09-15T13:09:00 Gazpet\oferte furnizori\teraplast\Robinet_fonta_de_concesie-bransament.pdf
+04f75e03bf9176eed4307887ab5ec1c0eb7afecfb7a15c7ccf089e5743d7a20c 7688704 2026-09-16T13:10:58 Gazpet\oferte furnizori\teraplast\teraplast.msg
+f9e01f9c59b3e57341b087797d3cb92d0288bbcdec12266fc96080eeb6168061 193283 2026-09-17T09:49:00 Gazpet\oferte furnizori\umwelttechnik.ro camine\AT 046 - 2024 Camine rectangulare Aviz + ST AT.pdf
+cecb3b5f438f0ed1e3a9c3e277c52cef71f73ccd2295a4bc89e8785d02f53b09 133994 2026-09-17T09:49:00 Gazpet\oferte furnizori\umwelttechnik.ro camine\AvT AT001ST-046-2024-Aviz Tehnit Prelungit-27.06.2027.pdf
+88d4d83b183f659e74c0cac5805db914947f9caac90712af661ad707746c9c3d 243280 2026-09-17T09:50:00 Gazpet\oferte furnizori\umwelttechnik.ro camine\GAZPET INSTAL_1131106809.pdf
+3fd530b121309b587bf3cef828f1974d6da16cd3b0dc0066df71d3f69b338ffd 110855 2026-02-26T06:39:08 Gazpet\OS\Anexa 7 - HG 907.pdf
+c50411e1a350b662d373da88e4058582fb05e11cf31407c809fa970395ce9431 35533 2026-02-26T06:39:08 Gazpet\OS\Calculatie OS detaliata pt.1 luna.xlsx
+56c23148e1482880abe88372b50ee80e34d91954b16317cd116639181e3d2de2 21956 2026-02-26T06:39:08 Gazpet\OS\Calculatie OS mai simpla.xlsx
+308bec90f867e0657dfb2374d0a12e44ccabcb881b234c38d72a5d619d02fce5 31698 2026-09-11T10:08:09 Gazpet\OS\ce ar trebui sa cuprindem la OS.docx
+345a2b3f44f645deb81d6712770b12cdd565f9c1204e018de0f50eef2aaabe02 266084 2026-09-11T09:01:48 Gazpet\OS\Cerințe OS licitație.pdf
+9136d0ac005ad074dcdefb38c1400217258188cd2416a3be1c294bf4e1857ded 19295 2026-09-10T15:32:19 Gazpet\OS\explicatii OS alte lucrari.docx
+3fa6877c4516dd9d825566e7a7f94c5ad4a93a740eb5726b40210e3705b6a4bc 19095 2026-09-10T12:23:11 Gazpet\OS\raspuns Chatgpt deviz OS_1.docx
+a0475202ab17e5cc2ffeccaf3023a35f2bda3159113eadcd4cf643d9d5cfc964 18231 2026-09-10T18:00:01 Gazpet\OS\raspuns Chatgpt deviz OS_2 cantitati.docx
+6c3f6f993c367a712578e16f02aaecaf860dbeffbf81b3cf3ff41193ec3e8501 12896 2026-09-11T19:57:38 Gazpet\Solicitare clarificari Domnesti.docx
+a9e52e53070a8c20e201cf65003748013d49879056e1786aeb379e36e19f7e4c 7527 2026-09-11T19:37:19 Gazpet\VERIFICARE extrase C6-C9 si clauze - 11.09.2026.md
+d6e843d26e7be531cfc7c02b7e76cb052c180557065d2d31e22341bc50e721ae 9899 2026-09-11T18:56:30 Gazpet\VERIFICARE liste cantitati vs PT - 11.09.2026.md
+3f84149f1e7c59c60fc3fe6d0e53c343765aac0779b46691c6ce9463567cd057 1650176 2026-09-10T09:25:07 manole\documente Gazpet\ISO 9001_14001_45001 Gazpet.pdf
+69c035c23f7c3eac5f907a6362f4aafedea966462b8d6abb3cd4f50f7b304f00 5623899 2026-09-14T11:41:25 manole\experienta similara\exp.similara contr.741 Transgaz_Poiana Brasov.pdf
+ee3f7aa039a5d00fa9b75fc7c0923399f23e078cf13ed1d4455de9792307af19 10451307 2026-06-25T07:40:59 manole\experienta similara\Transgaz Balaceanca_Similara Gazpet.pdf
+ccfdecb7e4eb2f8bbede24ebc661a372c0d70918c1b19d24757b14bc652c06a3 125824 2026-09-14T13:28:33 manole\formulare\Declaratie de insusire a Caietului de sarcini si clarificarilor.docx
+22db33f08579561407b6f6aad36cf8511cc1b80478eb542145a37c73d886638e 355147 2026-09-14T13:28:44 manole\formulare\Declaratie de insusire a Caietului de sarcini si clarificarilor.pdf
+2d660e5bca860d1400eafdb70ec42efe9b1cd2042b79b4a651d2bc317206f3c6 67720 2026-09-14T13:33:40 manole\formulare\Formular F10.docx
+7599bc819f92523953b0b86fee233bab8c5e0a57874c693e87dd788651521c76 107664 2026-09-14T13:33:30 manole\formulare\Formular F10.pdf
+bbfe5bf96fc77e6a4be54f654852e9c9e6291aab1ac32b9ef2bfbdae62f41e5e 69252 2026-09-14T13:34:44 manole\formulare\Formular F14.docx
+53ae730f6aab110c66ff3c0e269492bce8ba66dc330e8726427e78241333309e 176360 2026-09-14T13:34:33 manole\formulare\Formular F14.pdf
+2b7eda7c4bbdffaf0432d4b6e58007ecb1d3a614774de326c1a91df0ad948449 70722 2026-09-14T13:35:00 manole\formulare\Formular F17.docx
+1900ca6b1ec78f55962e74a4dceee93d8049d83bb05dadd6fcef42a3c5951690 214782 2026-09-14T13:35:15 manole\formulare\Formular F17.pdf
+44be2eba7091605119fa547ffed6ca8ba40a589fc4f37edbf2a23bf35618224a 68425 2026-09-14T13:36:11 manole\formulare\Formular F18.docx
+1a358bcbd406ed9cbdfb58bb2138b972fb643da2234b6a1fcc1305037710b370 170238 2026-09-14T13:36:00 manole\formulare\Formular F18.pdf
+84e6f83926d96f38ac365cb4ef03a4699d2810baf6fc769c7118aa19e21eba7d 68341 2026-09-12T19:22:20 manole\formulare\Formular F19.docx
+0970edf3062cf7d8d92fca954510a85ef2df816ba45970312083937b87f234f3 176601 2026-09-14T13:36:29 manole\formulare\Formular F19.pdf
+c0d0b658554e247adbc5c2fe1ce3c18f8b9295c8867de2df7c803cdc9ddebcee 68194 2026-09-14T14:00:20 manole\formulare\Formular F22.docx
+98fc88a434608d6686cb02ec9466600c8c77d265a435cdda26d9d9039eaa986e 169583 2026-09-14T13:48:31 manole\formulare\Formular F22.pdf
+c0d383d14edb95f220b05f5b264a9bfbeaee2b642861b56937a332b2b440dce9 95325 2026-09-14T13:57:22 manole\formulare\Formular F23.docx
+4371ae396ea70a1275575f5c5eaff0c5a17c70e65b943d4552f1ec38e86662f8 428877 2026-09-14T13:57:30 manole\formulare\Formular F23.pdf
+6fe723c27a9f4f9ac71a43a57649938e98e20560324c99637fcfe821397aae52 69766 2026-09-14T13:49:13 manole\formulare\Formular F24.docx
+21344edb88c03ff7f57389c9debf2d14e0657ee703f94a1ba3d1448df22fb9f2 166268 2026-09-14T13:49:23 manole\formulare\Formular F24.pdf
+767ec91d6872e213587b89378d1cc514c1f4ae3eeaa6bd07c75aacc374d10adb 67728 2026-09-14T13:30:55 manole\formulare\Formular F4.docx
+13cc46c61ddd798c1404b243a18ed722a356159e1586de7d9264f7549d4f8c74 143185 2026-09-14T13:30:42 manole\formulare\Formular F4.pdf
+2e9705aeef3cb33a21ac7fe2dd9becd28cc78f016ed56870a17b83a818c7f89a 78494 2026-09-14T16:32:21 manole\formulare\Formular F6.docx
+0f1f52c6f79aa5b574ca9171de12f3e621e0c4107a4847896463099da93c3f64 234976 2026-09-14T16:32:40 manole\formulare\Formular F6.pdf
+61dffb9ba0da62ff71bf030c0e6509ac1df13f07ae7e8e6aefc10adbdb4bab54 69363 2026-09-14T13:32:14 manole\formulare\Formular F7 Balaceanca .docx
+148b97d306cc644a3da75c679941925de2924b7c2b0d24974f7ebff08b6c76dd 152350 2026-09-14T13:32:38 manole\formulare\Formular F7 Balaceanca .pdf
+743ec917b82fd821b1939d73a9f96bf693118bfa8fdcee370b366e7760654051 69387 2026-09-14T13:33:10 manole\formulare\Formular F7 SRM Brasov.docx
+a43cbc9ce74f73bd4007104877f191c41c22234d7e0883c2722da24084699df4 151145 2026-09-14T13:32:59 manole\formulare\Formular F7 SRM Brasov.pdf
+2790162f4b2ba69c05901c6430494c62232df74f970fc158eb159c5b975ed286 71781 2026-09-14T15:17:46 manole\formulare\Formular F9.docx
+6544a167fd9f80f59cf935ce9a929356c5f19cb1af52263e57b3bf5f65068743 165350 2026-09-14T16:39:06 manole\formulare\Formular F9.pdf
+7cabf50205f268b5ce746accee44380079f2c64fe99bc1595c2e79318336d447 279761 2026-09-14T15:22:44 manole\formulare\Lista personal Gazpet.docx
+b2c9a782c61033d82e3a7a39cf546027f073ec4686e647e61bcbc01f6ac1e3b2 370918 2026-09-14T15:22:53 manole\formulare\Lista personal Gazpet.pdf
+0aab04fdc79957a4c6bc9fe1fbb11763de30770c57f34480bb1bf513d50b80c4 14162 2026-09-16T16:59:21 manole\grafic valoric apa Domnesti.xlsx
+36abca5098c47b523270ba9494835ac81a87f6a45413e799fc30abcd5ef6d597 13251 2026-09-14T08:17:50 manole\grafic\F2 CUMULAT.xls.xlsb
+622f286b0f21349e13774b78b5add66c3f7aee38fbb3e45b1ef927282bc06eb9 1715 2026-09-12T21:15:34 manole\oferta fara valori\rev.0\153-man.pdf
+b0c55bc78238629d8bd5d445d3eeeee68bd76eeff025cb205d7234a961935f14 5882 2026-09-12T21:15:34 manole\oferta fara valori\rev.0\153-mat.pdf
+7c3975f5d5d5a49d4255ce64183af8ea8844d5e1e4d5e8dea9644ab01376e0a7 1677 2026-09-12T21:15:34 manole\oferta fara valori\rev.0\153-tra.pdf
+4a7c7133365b954d5665858d0a7aa5b8e0ef979ab2aafc20ed21dd3a7e154430 2029 2026-09-12T21:15:34 manole\oferta fara valori\rev.0\153-uti.pdf
+6ed6ae8d6234b73a9b10d2406731325b11df56d64ab5bd408572fa82bf128a04 12378 2026-09-12T21:08:58 manole\oferta fara valori\rev.0\F1.xlsb
+8159af3bb54d23f4bac720a59f34449fa800f5c9403ec302249a89a1872ad2d5 12145 2026-09-12T12:45:17 manole\oferta fara valori\rev.0\F2.OB1.xlsb
+9f09041e7718fb35051d730a011d490cec090a1f77fb812659bd9a7dae07270e 12148 2026-09-12T12:48:31 manole\oferta fara valori\rev.0\F2.OB10.xlsb
+3f98ac60858c179147b5abf4093a75f42b203d6dac88b656901c34a80effbc63 12148 2026-09-12T12:48:52 manole\oferta fara valori\rev.0\F2.OB11.xlsb
+de8c90b4e734af9160e33d4a60566c38f33db914c403905fe1b9ee4e990f8054 12165 2026-09-12T12:45:37 manole\oferta fara valori\rev.0\F2.OB2.xlsb
+015e5ee70a7444ebd8fa0348c67062480136dbd916dacef5634f226737dfa397 12159 2026-09-12T12:45:56 manole\oferta fara valori\rev.0\F2.OB3.xlsb
+83a0a387694e9c3c096c670664db83f3df5263ab979406f23d47a9e2b1edf16d 12119 2026-09-12T12:46:19 manole\oferta fara valori\rev.0\F2.OB4.xlsb
+029b2b0761d9a9862c62cfb78a2c48f8ab0c510728635c9327311def1d41ccf4 12150 2026-09-12T12:46:38 manole\oferta fara valori\rev.0\F2.OB5.xlsb
+db29d056033bf1fc50acc6dd585af845efbc196a2f06746516ca95811653a2f2 12157 2026-09-12T12:46:59 manole\oferta fara valori\rev.0\F2.OB6.xlsb
+2501ae0d8281d634981ab535231575dc33db25198180f8e40e684da1f21a4eb5 12160 2026-09-12T12:47:19 manole\oferta fara valori\rev.0\F2.OB7.xlsb
+d758e4b9a8169e69c30aeafec879bdc6e72dd25d6316dbf14185867d7e9bc00e 12158 2026-09-12T12:47:46 manole\oferta fara valori\rev.0\F2.OB8.xlsb
+2dc9aae12cd2c724e1463c2f6f4106ad4d075de2d13cfa0586f4529a5e59a3be 12114 2026-09-12T12:48:06 manole\oferta fara valori\rev.0\F2.OB9.xlsb
+fabf6039f9b9266f32a0627afa5703e39550c70987b9ce3bf22d87f7d9108c5b 183171 2026-09-12T21:14:49 manole\oferta fara valori\rev.0\F3 .docx
+5dc0c2dde72f775217fa2749969bbf0f6a58f4709bae295f0ac15cafdcd13374 1718 2026-09-16T16:34:56 manole\oferta fara valori\rev.1\153-man.pdf
+ad6fb22094751191a375611019f833b41e6cbd8ecc6cae1b4f81fd2411cdfed8 6142 2026-09-16T16:34:56 manole\oferta fara valori\rev.1\153-mat.pdf
+526dc1ba507519bce3d98fff46edf0f1e8562e4c1f9d8b0fb3e458a6d286f03f 1683 2026-09-16T16:34:56 manole\oferta fara valori\rev.1\153-tra.pdf
+a642ac5e4f28ccd0d22ee322f35d521dafaf04dc1e066d422f64b8ec82846f4b 2033 2026-09-16T16:34:56 manole\oferta fara valori\rev.1\153-uti.pdf
+4118329bfd981d7158d3d638bb459dc698231914e6e4a012bc8c7df81ace987d 12300 2026-09-16T16:24:58 manole\oferta fara valori\rev.1\F1_0153.xls
+f3a72a790ba0f7a17ea7832362932797bc71321fa240c0e4d86c20a76ab77801 1743 2026-09-16T16:26:01 manole\oferta fara valori\rev.1\F2_0153_0001.pdf
+1bfd0f65e6ab9fe806d30254f8106d263d418f6f4f3db4a65a4090c9d3fcdd5e 12067 2026-09-16T16:26:03 manole\oferta fara valori\rev.1\F2_0153_0001.xls
+354d27305b4196ee1b090828fd375c4fbf158778a435f81597db5e5c56733be2 1747 2026-09-16T16:26:29 manole\oferta fara valori\rev.1\F2_0153_0002.pdf
+23b17bb86abfee3dff2166150df115de9c8211dde09db97e3e88365ebe4e74ac 12072 2026-09-16T16:26:31 manole\oferta fara valori\rev.1\F2_0153_0002.xls
+b33a62e8bdd35bdedcfca814f7753106786ad45e5c36e82c3d6de5b17892b8fa 1748 2026-09-16T16:26:48 manole\oferta fara valori\rev.1\F2_0153_0003.pdf
+468fce8fe9d09ec473d85328821cfa312282541713831e1d96ed50db49b7b4b8 12071 2026-09-16T16:26:50 manole\oferta fara valori\rev.1\F2_0153_0003.xls
+3e84bba360f0a2ec117283f8eefe892652f454e4518906dc3ba91923f99f4134 1723 2026-09-16T16:27:05 manole\oferta fara valori\rev.1\F2_0153_0004.pdf
+e371c01fe4885a36705eb13d52c0ca149552cbe24fe12d66e02b7323e65e3602 12025 2026-09-16T16:27:07 manole\oferta fara valori\rev.1\F2_0153_0004.xls
+3c2fba39478ba5de131217fce4558aca3bfaaa9b6bb6a9e260e9c6f4c49d2a66 1748 2026-09-16T16:27:23 manole\oferta fara valori\rev.1\F2_0153_0005.pdf
+e08ea13af8ada84e8813fde870cfe6db2b46f21f6dde609c37990a3c5cd911e8 12078 2026-09-16T16:27:25 manole\oferta fara valori\rev.1\F2_0153_0005.xls
+4fc851019d76f92cd701d865839e2d034c19323262bee7c790039bcd29543365 1751 2026-09-16T16:28:20 manole\oferta fara valori\rev.1\F2_0153_0006.pdf
+39446730f8689d0c49db9296c89ec9dcbd8af8e2a2297f99d7110f6c0fdad856 12081 2026-09-16T16:28:31 manole\oferta fara valori\rev.1\F2_0153_0006.xls
+648c17faa43f728a43e6fb1237f177d7d2a461fbe037e6c8ededa5bbcf269443 1749 2026-09-16T16:28:51 manole\oferta fara valori\rev.1\F2_0153_0007.pdf
+a5975637376b9f094c79d083d8073ab3d63420207f4b4ab5251456ff711a8356 12080 2026-09-16T16:28:53 manole\oferta fara valori\rev.1\F2_0153_0007.xls
+d010f7edff037832025acf989c2b1078fdefeb72cc3958e41b68b2857a4a2eab 1750 2026-09-16T16:29:09 manole\oferta fara valori\rev.1\F2_0153_0008.pdf
+cf4006cc4ccbc5a3ed1e18122704f12923d99b0f95c3755a38a0f80d54d5007b 12073 2026-09-16T16:29:11 manole\oferta fara valori\rev.1\F2_0153_0008.xls
+86afeb74ff2e1d552aca211af5ce0e5125dbe42c8bbd3eb65783b01cd8c2449f 1725 2026-09-16T16:29:25 manole\oferta fara valori\rev.1\F2_0153_0009.pdf
+9eaad9fe55ee9beac0a2d66cf5cf3c33154a51926807beb0c73d689a03e2cd36 12031 2026-09-16T16:29:27 manole\oferta fara valori\rev.1\F2_0153_0009.xls
+e94096db9340a3dab88931629474c870fcdd5a537a6b4d596d781eaef1d2d1d7 1745 2026-09-16T16:29:43 manole\oferta fara valori\rev.1\F2_0153_0010.pdf
+f3315588defff517be398722fd3c4835b768d7542c312e59411bc85c85aa1037 12069 2026-09-16T16:29:44 manole\oferta fara valori\rev.1\F2_0153_0010.xls
+8f31be8be2cf12ba391ec0184f83ae993932ac75780e3ecd9c3ca3a000e297e9 1746 2026-09-16T16:30:11 manole\oferta fara valori\rev.1\F2_0153_0011.pdf
+4975001ef41c02e245ecb1af4d08253997abda74794f4cfddd9b5df22aaf1474 12065 2026-09-16T16:30:13 manole\oferta fara valori\rev.1\F2_0153_0011.xls
+3c9f4b522a873f2e3ca4def0ad0893c566f54bda40c481e8ee86be4c4e2ea61c 1653 2026-09-16T16:30:28 manole\oferta fara valori\rev.1\F2_0153_0012.pdf
+3cd8eeb1440fbfc69cac7a4366f61cad48ab2354efaa267d7e539c3b463f9557 11921 2026-09-16T16:30:30 manole\oferta fara valori\rev.1\F2_0153_0012.xls
+8941115fe1eaec8d14022789ee950f6cf4c128dcb6677b9b907c7e44b61d178a 183368 2026-09-16T16:34:20 manole\oferta fara valori\rev.1\Formularul F3.docx
+c650ad71362961302c70cc7b58ce982be2ae2db5db6198171364c1a714b0fcb7 823321 2026-09-16T16:38:18 manole\oferta fara valori\rev.1\Formularul F3.pdf
+977788790af3287c14377228e77ac2e4461d51ca0e19da19c7bb4b7d97453cd9 351466 2025-10-16T13:59:47 manole\PERSONAL\Apostol Andrut - topograf.pdf
+41f43285e75175fc42f366d8bbcedc7f0c0c7c30f0120bef1539cfd72f67bae9 102999 2026-04-21T13:44:00 manole\PERSONAL\ATSD hidranti\4.ISO 9001 + ISO14001 AN 2026.pdf
+0135f2ecbaa6ab047390e9b03725c38e89a66661a52223a8573872188a2737f3 115298 2026-03-26T15:39:03 manole\PERSONAL\ATSD hidranti\Autorizatie IGSU - Stingere 25.11.2025.pdf
+802f6d2790a7d9a44055d52c0dc428808073a883572f14161cdcb77029c9d0aa 722077 2026-09-14T08:25:16 manole\PERSONAL\ATSD hidranti\Contract cadru prestari servicii ATSD.pdf
+3b654334d8a5774baa20f39c4e2231d7514ef64e6dbeac01db942d3ec043e313 243486 2026-01-25T16:26:43 manole\PERSONAL\CERTIFICAT-MARUTOIU.pdf
+3f5081a3c2d77e482296adb5abcdbb560465110842c5eef9341f06def12af4af 1696121 2023-05-23T13:50:11 manole\PERSONAL\CQ\1.Certificat Manager calitate Stanescu Silviu.pdf
+a9eab7c571c3a27b51298e1e260232023d3436d5e741a3e440c191fa6df0973e 945492 2025-06-20T12:32:58 manole\PERSONAL\CQ\2.instalator ANRE EGD_EGT Stanescu Silviu.pdf
+e437a0f3b1e3a219f30ef02a491b7241f4bc6d276a2ae4b2a13d9b6a179b4c34 342620 2010-11-29T14:20:14 manole\PERSONAL\CQ\3.diploma licenta.pdf
+df47095d3aa81b2568087cd6d0d8d9055c44f47caf92bc5dec50e69da84e3b49 1081459 2022-05-30T15:32:04 manole\PERSONAL\Dumitrescu Cristina.pdf
+a43b979612e9bf49911adba5528a4a6c31a8f3d96bc1659f13f53dd420cbdbc6 1183435 2026-09-12T17:22:24 manole\PERSONAL\Inginer execuție – drumuri\Declaratie_CV.pdf
+a990a2ece613f4495ccd13faad68a49d897323d4063981620169822ed3e41422 387073 2026-09-10T13:22:00 manole\PERSONAL\Inginer execuție – drumuri\Diploma Ionescu Tiberiu.pdf
+2847cefccd80519f4aad16f462d44e400ccf03a2acdcc9cdd3c17e01e8a5922b 864532 2026-09-14T10:26:00 manole\PERSONAL\Inginer execuție –construcții hidrotehnice\DECLARATIE DE DISPONIBILITATE Tataru Adrian.pdf
+48ae98c661c6d4e0721548c21945af0397f70cf2b278c8928790c042f1f03bd2 98687 2026-09-14T08:57:20 manole\PERSONAL\Inginer execuție –construcții hidrotehnice\DECLARAŢIE DE DISPONIBILITATE.docx
+173a72f6a096a9e19e87939ba35d31b01b69fe8bc9cf4700eb01917cdec0187a 4815236 2026-09-14T10:26:00 manole\PERSONAL\Inginer execuție –construcții hidrotehnice\Tataru_Adrian_diploma_CH .PDF
+0d12867cd0ecee0a9bfb7f3615341731468c8d9bf75f20200d8e65f8ab0e7f19 1082854 2026-09-12T16:57:00 manole\PERSONAL\Manager mediu\Certificat CNFPA MM Rotar Irinel.pdf
+cae496c0a6bd06b2bf818b0d59252cc67b076cfc57537381d10cf9e776e41ee3 145271 2026-09-12T17:30:55 manole\PERSONAL\Manager mediu\Certificat Manager Deseuri 001.pdf
+eb5002bb322f369781030f076e1203bdb49837159ab1990cb8ed3a6419ae6e3e 1830663 2026-09-12T16:57:00 manole\PERSONAL\Manager mediu\Certificate ARC EOQ MM Rotar Irinel.pdf
+e59eb0581048a0db9ef7c823ecc0d767304ad0c01e3cf9e1df8e5c87d1e57a5f 318822 2026-09-12T17:28:46 manole\PERSONAL\Manager mediu\Declaratie disp. manager mediu.pdf
+d641af38b6876816de1a2024894c15378841200bad90fc6b8f2114399d53bf54 787398 2026-08-19T08:01:54 manole\PERSONAL\Manager proiect\1.Recomandare Manager Proiect Trusu Razvan.pdf
+c5c20a425070124f5d813345f8298519686bc93575ec7c74d05e91e1b4cca841 364767 2019-01-18T09:38:17 manole\PERSONAL\Manager proiect\2.certificat Manager proiect Trusu Razvan.pdf
+809158bbbba40d2652db8a8f8b14a884770a5b5f994b720ddaa62adc7bb38316 474483 2022-08-05T14:26:31 manole\PERSONAL\Manager proiect\3.certificat autorizare EGT, EGD Trusu Razvan 2027.pdf
+ab2ed6b14977d432da908809989fa3a189cbd958328c8eaed3931b17bb7b507d 523124 2015-08-31T12:21:54 manole\PERSONAL\Manager proiect\4.diploma fac trusu raz.pdf
+5bb4162ad726ac4867eadd838b828164c9a92ba9726517cb4e642cd9d4c49287 264323 2026-09-01T12:34:03 manole\PERSONAL\Manager proiect\5.CV Trusu Razvan.pdf
+a3c3fff00c7c85889334d70f78265b3eb1153bc52ee2a04f518ca0b8e57f6607 4840818 2022-06-08T08:47:27 manole\PERSONAL\Nisab contract autorizatii.pdf
+41875a2c5081efdd419895552e63267c7d84fd47acf5c8a3535564bbba0afdc1 369622 2026-09-09T11:20:51 manole\PERSONAL\registru_salariati_09.09.2026.pdf
+485cbf05b34eca3a019d2f6c3a7f77bac506b37adaf3de2e7f2f009cbc274827 703321 2025-06-27T13:55:52 manole\PERSONAL\RTE .ctii Dadulescu autoriz.pdf
+1bb5dfc90d46185cd0a97f1bb0e974ef03ff1c69621dc2763f3d7ebf6b43a166 733974 2026-09-10T13:22:00 manole\PERSONAL\RTE\AUTORIZATIE SI LEGITIMATIE - VRASTI.pdf
+2867232e52907be009b4d2aa1609922eb2e06925825b6e246f929a8bda3fefde 1462310 2026-09-12T17:23:19 manole\PERSONAL\RTE\Declaratie_CV.pdf
+81c90aea8b9933429e58c91d476ae3d2d295d7efd193bd8d6f6b7e5c11c31b57 1533176 2025-07-12T13:47:53 manole\PERSONAL\Sef santier\Pantea Constantin.pdf
+d45348767a31428454289c0dce2acf1e5570957ca7b3bbfd2cf5afbfba4f3d42 893887 2024-06-26T07:41:19 manole\PERSONAL\sudori OL\15.certificat sudor RINA Belecciu Paraschiv 111.pdf
+afb8531312b3d984c825ed6f75a69630676a868954f5d571a8560b656043f3a7 814611 2023-06-07T07:57:23 manole\PERSONAL\sudori OL\2. Autorizatie TUV Belecciu Costel Maricel 111 .pdf
+4c0c88620b38f1df8641ab50ebd2364b1991e6c5a602ab98f1f87fa9fd1ec3f9 110861 2024-03-20T10:29:07 manole\PERSONAL\sudori OL\2.1.Autorizatie TUV Belecciu Costel Maricel 111 mat.L415 .pdf
+ba5677326c75e1591e4592e34284d3e3720016ffa2c2a7ad67ac53f5f96077e0 668150 2024-10-02T10:19:10 manole\PERSONAL\sudori OL\2.2.Autorizatie ISCIR Belecciu Costel Maricel 111 Dn500.pdf
+0bc75398697438eb63d50f75d2d74a8cdf4c1635edb60c89a929f4e7f45567da 110963 2025-07-21T15:15:40 manole\PERSONAL\sudori OL\25. Autorizatie TUV Cernaianu Marinel Alexandru 111.pdf
+566341fa5c088a33e2d0d3d2735400725d97e36cbeed85bd7d9348812d1d2547 120014 2025-07-21T15:16:00 manole\PERSONAL\sudori OL\25.1.Autorizatie TUV Cernaianu Marinel Alexandru 135_136.pdf
+f64220a36b43af7ec903e0feca94263ad25a5f537d08a44b1a88024479aaaa14 1388431 2026-06-23T08:32:57 manole\PERSONAL\sudori OL\26.1.certificat sudor RINA Cernaianu Claudiu 135_136.pdf
+9246d7310f4b5904633c48918b55419f868f7ca3f9732e710d9d86f6a28c8462 625233 2025-09-12T12:57:19 manole\PERSONAL\sudori OL\26.certificat sudor RINA Cernaianu Claudiu 111.pdf
+1c4ba2b0b34ea8c773130133e5c89f8cff540e86d685af016ed37e4bf598f66b 125107 2024-08-20T11:51:53 manole\PERSONAL\sudori OL\4. Autorizatie TUV Huy Hoang Pham 111.pdf
+2f4c8b1b31814c8e0a11eb6d85d716d9723f95d90d90f5bb0f79bddb8c529732 233542 2024-02-15T10:22:26 manole\PERSONAL\sudori OL\4.1.Autorizatie TUV Huy Hoang Pham 135_136 .pdf
+ad35dc1ce11c8ccbc3adb18454a7bbb2bcb635614d5cd4656b32650fd7ddd280 958021 2024-06-26T07:41:45 manole\PERSONAL\sudori OL\4.2.certificat sudor RINA Pham Huy Hoang 111.pdf
+8ace289f46fd08aba149bfd384880ee68ccd6c3aa1b8b4970916ac6f718cf7f2 976224 2024-05-17T08:48:20 manole\PERSONAL\sudori OL\6. certificat sudor RINA Gamage Shashika Lakmal Akuretiya  111.PDF
+578a14500c121a474f0945c158d1955e7c42dfd519f3a6d80e9aeb0dc600c665 119472 2025-03-17T10:28:03 manole\PERSONAL\sudori OL\6.1.Autorizatie TUV Gamage Shashika Lakmal Akuretiya 135_136 .pdf
+c5a90045d8685afd48514ee7619f926eac340a72e60ad7596f60982dc5873620 911009 2024-05-17T08:52:34 manole\PERSONAL\sudori OL\7.1.certificat sudor RINA Gamage Prasanna Weerappulli 111.PDF
+17c8636707facb6b3f119963c04d2e1f19ec7064ca9d54846dea67af6af0b37a 110010 2025-03-17T08:28:57 manole\PERSONAL\sudori OL\7.Autorizatie TUV Gamage Prasanna Weerappulli 135_136 .pdf
+0209acdb56ab8c8d1849fcc746ca390394aaeec1b9772077df6e361a5dee3559 597684 2025-09-15T10:01:06 manole\PERSONAL\sudori OL\9. certificat sudor RINA Dovinca Ctin 141.pdf
+c86d5cc2d1ba5c1b0300c03f03d18bcaaaef3382613cee3ec23b7c3405056933 592001 2025-09-15T11:12:08 manole\PERSONAL\sudori OL\9.1 certificat sudor RINA Dovinca Ctin 141_.PDF
+3d1e52e420c51c15cba3c30d1334bff6704f03d25b26bec44855e36e19821738 615104 2025-09-15T11:09:28 manole\PERSONAL\sudori OL\9.2 certificat sudor RINA Dovinca Ctin 141_111.PDF
+98dab430bc77975f3cb21e96a5e758239f1ea57eb3cef9e71671c85e45e22bd2 597416 2025-09-15T11:54:07 manole\PERSONAL\sudori OL\9.3 certificat sudor RINA Dovinca Ctin 111.PDF
+2d44e76665f4603cb5132b0888b881f7c354de7eb0fd7c6bb0d34ced7a7316f5 2404425 2026-05-14T14:05:55 manole\PERSONAL\sudori PE\1. Autorizatie PE Florin Dumitrache .pdf
+364488bf4ede2d0c6d469781f7a318ac89e3c8e7a52d404366bbf7aed9c7e91c 1339378 2024-05-08T11:24:55 manole\PERSONAL\sudori PE\1.1.operator  sudura PEHD Dumitrache Florin.pdf
+d665aa7fe5ec1353aa64d71d4b356f69b6d87356f223cd4b802842f328a64aea 2387351 2026-05-14T14:06:59 manole\PERSONAL\sudori PE\2. Autorizatie PE Trusu Constantin-Dorel.pdf
+329b988abc9fc733f171e9c9aaaad1a4071f23552f606b95babf21be5aae2a5e 1339413 2024-05-08T11:19:51 manole\PERSONAL\sudori PE\2.1.operator sudura PEHD Trusu Constantin Dorel.pdf
+6598357be6b3da63e3b7733a37f63ffa25a91d22a305e7b0dc3a9fa3f483cddf 2390477 2026-05-14T14:02:05 manole\PERSONAL\sudori PE\3. Autorizatie PE Neculcea Ionut Daniel.pdf
+e8c27ef814167fb55afc42be42565b0c9589e86ff8471871e75f08e7b2c3126b 1345610 2024-05-08T11:22:26 manole\PERSONAL\sudori PE\3.1.operator sudura PEHD Neculcea Ionut Daniel.pdf
+c7047cec03e1a509c1eebeea1b63489b104eea833585aa414e7ffb7356efdf5d 2374278 2026-05-14T14:04:11 manole\PERSONAL\sudori PE\4. Autorizatie PE Ilie Corado.pdf
+abebb3d734234739b3289c82644f7bc2f6e6f676d1a4f4aca7542f60bc8ca224 1342715 2024-05-08T11:26:43 manole\PERSONAL\sudori PE\4.1.operator sudura PEHD Ilie Corado Florinel.pdf
+386efb674250b46448f73aa04a2946df389f6b684d676b977bd1b559b9438ea4 2382277 2026-05-14T14:07:42 manole\PERSONAL\sudori PE\5. Autorizatie PE Nica Eugen.pdf
+207a22a4fd05048da827b39446c79ba1a1b5623a303549fe3d83eb4341a85925 1344064 2024-05-08T11:21:11 manole\PERSONAL\sudori PE\5.1.operator sudura PEHD Nica Eugen.pdf
+4077fb79c53b8156c3225b3da408a063ae5a84e68418e6bb88044193fd85367d 3317529 2022-05-30T15:30:22 manole\PERSONAL\Tudorache Marilena.pdf
+1b2f074dbe23ff0d71c041cf2c3e172cea88aed8b4dbcb21942c6d474651adfc 90036772 2026-09-18T08:29:58 manole\primit 18.09.2026\propunere tehnica - Extindere retea apa Domnesti.pdf
+7f887a72e22582d50253eb66c3c6c174acdce74aa9443a4c4be1065f55505939 19614439 2026-09-16T17:25:17 manole\trimis 16.09.2026.zip
+5a531e217423e8966d9e8217a3be9570d47b0a63f592678540d6abc07bed32f0 296042 2026-09-09T12:36:00 manole\trimis 16.09.2026\18_Anexa 8_1_ SC CAST laborator constructii .pdf
+b8af45632cf9841682d902164a51484f5f53cb3a6a7d2be656f23fa1f564b8e6 227648 2026-09-15T08:24:00 manole\trimis 16.09.2026\alberto dumitru\CV european Alberto DUMITRU.pdf
+739462183bbd381f0db259571fcce4ba68893f5b23cb4c99489839eb585c7e94 657563 2026-09-15T08:29:05 manole\trimis 16.09.2026\alberto dumitru\Declaratie disp. manager mediu.pdf
+e0144fd95912a6ad1d43471fa22a5592908872f55b05f728d49f16fb25b4a9dd 281087 2026-09-14T10:08:00 manole\trimis 16.09.2026\alberto dumitru\Diploma managementul mediului.pdf
+3601fc26079c3259a23833ce15ae5d6ff8297bd6da9199d234c04a6502d8498c 1332276 2026-08-18T09:16:00 manole\trimis 16.09.2026\Autorizatie Laborator 4757 - 27.07.2026 expcoro.pdf
+e01eac7e9a30d8fdddcc3103488b7fe038e856e6d00597de465394b6608a0618 483681 2024-01-08T10:19:00 manole\trimis 16.09.2026\autorizatie laborator PC Gr.II -2022 elcas.pdf
+2c156053c4044cb61dcef2cfd81e3bf0d9a6be4211f0b725611535cf83add282 2509457 2026-09-16T14:20:28 manole\trimis 16.09.2026\Contract cadru prestari servicii_sistem rutier.pdf
+8845b8efbadc95fa679a8addb9978be02cda31e478744b9b6cb1ab788291a83f 4778576 2026-08-06T11:54:06 manole\trimis 16.09.2026\Contract, autorizatii laborator si anexa 1 Univtech.pdf
+d640952927ca8958017dd6340b7f941edc5b71a8bdb917cd08926c065ccb3649 556385 2026-09-15T14:57:07 manole\trimis 16.09.2026\Contract_prestari_servicii_proiectare 880 - 15.09.2026.pdf
+8a4830f272bc4a62bae58f9f10519291107ca2c47ae8b3d3db651e5348db6196 248399 2026-09-16T16:38:30 manole\trimis 16.09.2026\Documentatie materiale\Teraplast\AVIZ-SANITAR-nr.-8-06.10.2025-Tevi-si-fitinguri-PE100-apa-TERAPLAST.pdf
+ad6eaa3c047a9f9de3130359f0c9e7a92599e2c0ed416a61eaab6ff9c0339bae 5675757 2026-09-15T13:09:00 manole\trimis 16.09.2026\Documentatie materiale\Teraplast\Catalog_distributie-apa-gaz.pdf
+75afa120e3c69d062df8384dd89a1f2703c36a91a0819cb9169b143fb9dbd5ac 235069 2026-09-15T13:09:00 manole\trimis 16.09.2026\Documentatie materiale\Teraplast\Fisa_tehnica_-_Tevi_APA_PE100_sau_PE100-RC_tip1_tip2.pdf
+427f341f2daa2bc4c20a97c294ed56154a6b8c48e64af3b7bae3fd364f6b36b5 794276 2026-09-15T13:09:00 manole\trimis 16.09.2026\Documentatie materiale\Teraplast\Fisa_tehnica_robinet_cu_sertar_cauciucat_corp_plat_PN16.pdf
+919b332c74a3d38e0d80a9af14be90ec5f9e80f919df36e6ce27844dce5d3fda 669533 2026-09-15T13:09:00 manole\trimis 16.09.2026\Documentatie materiale\Teraplast\Hidrant_DN80_subteran.pdf
+5e44b6dee3e051461678e21de5344bd1304d3207203a44266c25cb957d77897c 92092 2026-09-15T13:09:00 manole\trimis 16.09.2026\Documentatie materiale\Teraplast\Robinet_fonta_de_concesie-bransament.pdf
+0aab04fdc79957a4c6bc9fe1fbb11763de30770c57f34480bb1bf513d50b80c4 14162 2026-09-16T16:59:21 manole\trimis 16.09.2026\grafic valoric apa Domnesti.xlsx
+5dc0c2dde72f775217fa2749969bbf0f6a58f4709bae295f0ac15cafdcd13374 1718 2026-09-16T16:34:56 manole\trimis 16.09.2026\oferta fara valori rev.1\153-man.pdf
+ad6fb22094751191a375611019f833b41e6cbd8ecc6cae1b4f81fd2411cdfed8 6142 2026-09-16T16:34:56 manole\trimis 16.09.2026\oferta fara valori rev.1\153-mat.pdf
+526dc1ba507519bce3d98fff46edf0f1e8562e4c1f9d8b0fb3e458a6d286f03f 1683 2026-09-16T16:34:56 manole\trimis 16.09.2026\oferta fara valori rev.1\153-tra.pdf
+a642ac5e4f28ccd0d22ee322f35d521dafaf04dc1e066d422f64b8ec82846f4b 2033 2026-09-16T16:34:56 manole\trimis 16.09.2026\oferta fara valori rev.1\153-uti.pdf
+4118329bfd981d7158d3d638bb459dc698231914e6e4a012bc8c7df81ace987d 12300 2026-09-16T16:24:58 manole\trimis 16.09.2026\oferta fara valori rev.1\F1_0153.xls
+f3a72a790ba0f7a17ea7832362932797bc71321fa240c0e4d86c20a76ab77801 1743 2026-09-16T16:26:01 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0001.pdf
+1bfd0f65e6ab9fe806d30254f8106d263d418f6f4f3db4a65a4090c9d3fcdd5e 12067 2026-09-16T16:26:03 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0001.xls
+354d27305b4196ee1b090828fd375c4fbf158778a435f81597db5e5c56733be2 1747 2026-09-16T16:26:29 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0002.pdf
+23b17bb86abfee3dff2166150df115de9c8211dde09db97e3e88365ebe4e74ac 12072 2026-09-16T16:26:31 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0002.xls
+b33a62e8bdd35bdedcfca814f7753106786ad45e5c36e82c3d6de5b17892b8fa 1748 2026-09-16T16:26:48 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0003.pdf
+468fce8fe9d09ec473d85328821cfa312282541713831e1d96ed50db49b7b4b8 12071 2026-09-16T16:26:50 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0003.xls
+3e84bba360f0a2ec117283f8eefe892652f454e4518906dc3ba91923f99f4134 1723 2026-09-16T16:27:05 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0004.pdf
+e371c01fe4885a36705eb13d52c0ca149552cbe24fe12d66e02b7323e65e3602 12025 2026-09-16T16:27:07 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0004.xls
+3c2fba39478ba5de131217fce4558aca3bfaaa9b6bb6a9e260e9c6f4c49d2a66 1748 2026-09-16T16:27:23 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0005.pdf
+e08ea13af8ada84e8813fde870cfe6db2b46f21f6dde609c37990a3c5cd911e8 12078 2026-09-16T16:27:25 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0005.xls
+4fc851019d76f92cd701d865839e2d034c19323262bee7c790039bcd29543365 1751 2026-09-16T16:28:20 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0006.pdf
+39446730f8689d0c49db9296c89ec9dcbd8af8e2a2297f99d7110f6c0fdad856 12081 2026-09-16T16:28:31 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0006.xls
+648c17faa43f728a43e6fb1237f177d7d2a461fbe037e6c8ededa5bbcf269443 1749 2026-09-16T16:28:51 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0007.pdf
+a5975637376b9f094c79d083d8073ab3d63420207f4b4ab5251456ff711a8356 12080 2026-09-16T16:28:53 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0007.xls
+d010f7edff037832025acf989c2b1078fdefeb72cc3958e41b68b2857a4a2eab 1750 2026-09-16T16:29:09 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0008.pdf
+cf4006cc4ccbc5a3ed1e18122704f12923d99b0f95c3755a38a0f80d54d5007b 12073 2026-09-16T16:29:11 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0008.xls
+86afeb74ff2e1d552aca211af5ce0e5125dbe42c8bbd3eb65783b01cd8c2449f 1725 2026-09-16T16:29:25 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0009.pdf
+9eaad9fe55ee9beac0a2d66cf5cf3c33154a51926807beb0c73d689a03e2cd36 12031 2026-09-16T16:29:27 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0009.xls
+e94096db9340a3dab88931629474c870fcdd5a537a6b4d596d781eaef1d2d1d7 1745 2026-09-16T16:29:43 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0010.pdf
+f3315588defff517be398722fd3c4835b768d7542c312e59411bc85c85aa1037 12069 2026-09-16T16:29:44 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0010.xls
+8f31be8be2cf12ba391ec0184f83ae993932ac75780e3ecd9c3ca3a000e297e9 1746 2026-09-16T16:30:11 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0011.pdf
+4975001ef41c02e245ecb1af4d08253997abda74794f4cfddd9b5df22aaf1474 12065 2026-09-16T16:30:13 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0011.xls
+3c9f4b522a873f2e3ca4def0ad0893c566f54bda40c481e8ee86be4c4e2ea61c 1653 2026-09-16T16:30:28 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0012.pdf
+3cd8eeb1440fbfc69cac7a4366f61cad48ab2354efaa267d7e539c3b463f9557 11921 2026-09-16T16:30:30 manole\trimis 16.09.2026\oferta fara valori rev.1\F2_0153_0012.xls
+8941115fe1eaec8d14022789ee950f6cf4c128dcb6677b9b907c7e44b61d178a 183368 2026-09-16T16:34:20 manole\trimis 16.09.2026\oferta fara valori rev.1\Formularul F3.docx
+c650ad71362961302c70cc7b58ce982be2ae2db5db6198171364c1a714b0fcb7 823321 2026-09-16T16:38:18 manole\trimis 16.09.2026\oferta fara valori rev.1\Formularul F3.pdf
+9e827b09b4790d6706e31ac6191188faf43236547296253b205e7be8f107af50 179045 2026-09-16T13:54:38 manole\trimis 16.09.2026\recomandare inginer apa_canal Dadulescu.pdf
+c9cc24b26c66b6b781d5f2122c6abeab55e9b83bf13e15e5e96f737e883e8aee 434989 2026-09-15T13:51:30 manole\trimis 16.09.2026\recomandare RTE apa_canal Dadulescu.pdf
+98885d7923d4f72afae9a318a4315893de9a4483e712fc7bd4f5b0b38178cb90 1231606 2025-05-23T09:51:18 manole\trimis 16.09.2026\Recomandari lucrari alim.apa Paulus_Pantea C-tin.pdf
+b13deb1f7452e412655c9b73dd72c4fea33331f5797235dc6f0e1298de6e4254 221688 2026-07-03T08:02:57 manole\trimis 17.09.2026\instructiuni de lucru\IL_025 Executia imbinarilor sudate.pdf
+0df52af31e89596dd51dd1ee48a59c095dec44c7f5c77cbc4af5b52ebee59f1f 228660 2026-07-03T08:04:02 manole\trimis 17.09.2026\instructiuni de lucru\IL_028 Protectia anticorosiva prin vopsire .pdf
+c734e6b9bf49444dbc67263d6945226a2f3fe57a663d0adb52385e1cdef1f509 203707 2026-07-03T08:19:03 manole\trimis 17.09.2026\instructiuni de lucru\IL_030 Proba de presiune a conductelor din otel.pdf
+36ddbcaf4411c772d8e8593b851b43d7d1e2c9018e75d398b4aa38bb068f2142 269726 2026-07-03T08:21:12 manole\trimis 17.09.2026\instructiuni de lucru\IL_031 Aplicarea izolatiei pe santier.pdf
+258a41f7eae06c2635eff289c15e3a5bc76dc25063e57c7512af3072825cb07a 279985 2026-07-03T08:21:51 manole\trimis 17.09.2026\instructiuni de lucru\IL_032 Executarea sapaturilor.pdf
+b8462339ed4f2ef8004888d7c462a07f59e0b5a16896e74b7911d85e7e1a6de4 179679 2026-07-03T08:22:18 manole\trimis 17.09.2026\instructiuni de lucru\IL_033 Executarea umpluturilor.pdf
+638b4673578b8d00438b63b63ab287983104219faffd5c14ae2800302999dc2b 210473 2026-07-03T08:22:57 manole\trimis 17.09.2026\instructiuni de lucru\IL_034 Armaturi.pdf
+38e555907d13fc7f12f71ed7e93ba32687d2918b4e9649de82af1dbafc4ee657 181051 2026-07-03T08:23:23 manole\trimis 17.09.2026\instructiuni de lucru\IL_035 Cofraje.pdf
+ee77d4f4d600f105d77d63810d23b6214ccd901a4dca294f0053ec00f66da87c 223072 2026-07-03T08:23:49 manole\trimis 17.09.2026\instructiuni de lucru\IL_036 TURNAREA BETONULUI.pdf
+6ef87501da45556a13547ca7d290b982fe4ce3b6b4f6c1e6b506d3f71da002f6 318213 2026-07-03T08:24:29 manole\trimis 17.09.2026\instructiuni de lucru\IL_037 Executarea gabioanelor.pdf
+6bc49878055d56caf5fcd8695dae64978804995ad66261fb1eabbb5fa137b97d 285035 2026-07-03T08:24:55 manole\trimis 17.09.2026\instructiuni de lucru\IL_038 Sudare tevi si fitinguri PEHD.pdf
+72a2ab8cadfbf9efbe746a84bf2045de1503025a3e465b50352069cce5a3313c 324585 2026-07-03T08:25:25 manole\trimis 17.09.2026\instructiuni de lucru\IL_039 Executia retelelor de alimentare cu apa , gaze si de canalizare.pdf
+e06079d57d769d43df23660bcc55dae1be1a44b809f931d3db069c723207fed7 260304 2026-07-03T08:29:52 manole\trimis 17.09.2026\instructiuni de lucru\IL_046 Montare hidranti rev.1.pdf
+bda13ccb4645f57eef200645a2d5296ed0f0b04596e5d87ece3c83317f621a0b 132011 2026-07-03T08:07:16 manole\trimis 17.09.2026\instructiuni de lucru\IL_049_Instructiune_lucru_subtraversari_supratraversari.pdf
+0ec6ac0db3099e9b7200f35441d401f7be6a8df60f25e48c11037bafcbf30194 133842 2026-07-03T08:31:51 manole\trimis 17.09.2026\instructiuni de lucru\IL_051 Drumuri rev.1.pdf
+807e1fd3e26fe81a1e884c110780010fef6870cb00e78a4cc1ba04fa547957bf 9572 2026-09-17T15:11:08 manole\trimis 17.09.2026\LISTA PROCEDURI DE SISTEM.xlsx
+33bf427216e93d337a07ba99e3032f78fa9e9737f3dd2549df0fd451d125ee73 10713 2026-09-14T09:16:45 manole\trimis\grafic.zip
+de291770d2c235569817f5eaf376d08d2bc8b1e629b7ce89307cbf8b33751470 294403 2026-09-14T09:16:31 manole\trimis\oferta fara valori.zip
+b4a0fb8cf7f241afae34380b107bd66d09a50f6adc52deb9ee20e355aa3a49fb 58312392 2026-09-14T14:02:47 manole\trimis\PERSONAL.zip
+5a531e217423e8966d9e8217a3be9570d47b0a63f592678540d6abc07bed32f0 296042 2026-09-09T12:36:00 manole\utilaje\Cast laborator constructii\18_Anexa 8_1_ SC CAST laborator constructii .pdf
+50502de5c6c6668a1df314dd8f1d0dccd94ffe292007220613c21a8e78fc51d8 457657 2026-09-09T12:37:00 manole\utilaje\Cast laborator constructii\AUTORIZATIE NR. 3953_08.12.2022.pdf
+5a531e217423e8966d9e8217a3be9570d47b0a63f592678540d6abc07bed32f0 296042 2024-11-28T06:54:12 manole\utilaje\Cast laborator constructii\Contract SC CAST laborator constructii .pdf
+bc37840964c971a50d9d1b88731face6d425a4a822bf98ead19aed60a0da02af 403422 2026-09-14T15:36:37 manole\utilaje\Lista utilaje Gazpet Instal.pdf
+543e4c78296c9d7e8fd42fe9845c5b76af2ba8657612232ff057c3c1eadd2b67 109179 2026-09-14T15:36:48 manole\utilaje\Lista utilaje Gazpet Instal.xlsx
+0d12867cd0ecee0a9bfb7f3615341731468c8d9bf75f20200d8e65f8ab0e7f19 1082854 2026-09-12T16:57:00 mari\Certificat CNFPA MM Rotar Irinel.pdf
+746bab28c529da6e3bcf5f2edd35d37714e8605c5bc35bf3230c3f2ad4e3f5a8 893326 2026-09-12T16:56:00 mari\Certificat Manager Deseuri 001.jpg
+eb5002bb322f369781030f076e1203bdb49837159ab1990cb8ed3a6419ae6e3e 1830663 2026-09-12T16:57:00 mari\Certificate ARC EOQ MM Rotar Irinel.pdf
+1874afe8d4a984a3d55d19c3f128eab20013b6f45005ef6ff626d98b00cafd4e 102665 2026-09-12T16:55:12 mari\Declaratie disp. manager mediu.docx
+cd0afd4c37d2e14d8ea38e06e9ee3c5907e4f46835bc781c6be12c1402cd8871 208242 2026-09-21T09:34:43 PV evaluare GP - anexa 1 .pdf
+f0663c6df2cacbb42ebfa65b9b4878fe0d0990e1e72bdd1c2e5aec55121480d4 116827 2026-09-08T13:46:52 SCN1179360 Anunt de participare simplificat.pdf
+1bb5dfc90d46185cd0a97f1bb0e974ef03ff1c69621dc2763f3d7ebf6b43a166 733974 2026-09-10T13:22:00 SORCHIV\1. PRIMITE 10.09.2026\AUTORIZATIE SI LEGITIMATIE - VRASTI.pdf
+a990a2ece613f4495ccd13faad68a49d897323d4063981620169822ed3e41422 387073 2026-09-10T13:22:00 SORCHIV\1. PRIMITE 10.09.2026\Diploma Ionescu Tiberiu.pdf
+ec6f6dfc2f47f62f5a907a4efe7265008442e06de4e43dfee1bb8898e69b1c0a 2147343 2026-09-10T13:20:00 SORCHIV\1. PRIMITE 10.09.2026\SKMBT_C36026091012370.pdf
+2c156053c4044cb61dcef2cfd81e3bf0d9a6be4211f0b725611535cf83add282 2509457 2026-09-16T14:20:28 SORCHIV\Contract cadru prestari servicii_sistem rutier.pdf
+a188f5fd0263bb2d11598894362ad16eb45039eafa4815756592521ca04c8b40 98706 2026-09-10T11:45:11 SORCHIV\DECLARAŢIE DE DISPONIBILITATE INGINER DRUMURI.docx
+b883ce77f87e7a43fbe16f18606fcc588d0311cde5d4b9e2c5eb1b2e4419a980 98606 2026-09-10T11:44:08 SORCHIV\DECLARAŢIE DE DISPONIBILITATE RTE.docx
+a188f5fd0263bb2d11598894362ad16eb45039eafa4815756592521ca04c8b40 98706 2026-09-10T11:45:11 tataru\DECLARAŢIE DE DISPONIBILITATE INGINER DRUMURI.docx

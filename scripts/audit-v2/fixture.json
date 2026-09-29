@@ -1,0 +1,572 @@
+{
+  "licitatie_id": 103,
+  "cerinte": {
+    "D1": 6607,
+    "D6": 6656,
+    "D8": 6552,
+    "_nota": {
+      "D1": "cerința 6607 (nr 235, F3 pe obiect) — supersession Nectarinului De110/D125: cantități 1765 (AC 258), 2185 (PT scris), 2111/2112 (planșe); răspunsuri: doc 1298 (Consolidat 1, 11.09: D125=eroare, De110 corect), doc 1297 (Consolidat 2, 15.09: F3 rămâne D125, se prețuiește De110)",
+      "D6": "cerința 6656 (nr 274, subcontractant de specialitate drumuri; eliminatorie/capabilitate; 1 acoperire, 0 legături PT) + 6641/6642 (nr 225/226 subcontractanți în DUAE/PT); răspuns: doc 1297 pct 7 (regie proprie permisă dacă există capacitate)",
+      "D8": "cerința 6552 (nr 271, oferta nu se modifică după termen) + 6454 (nr 193 menținere ofertă); doc 1299 (Consolidat 3, 16.09): cererile de prelungire ACOPERITE (au răspuns) dar RESPINSE — termenul rămâne 18.09; în clonă termen_depunere = +30 zile de la clonare"
+    }
+  },
+  "cdp_port": 9333,
+  "cdp_target_id": null,
+  "cdp_port_2": 9333,
+  "cdp_target_id_2": null,
+  "app_url": "https://pontaj-pro-sooty.vercel.app",
+  "scenarii": {
+    "01_seap_documente": {
+      "preconditii": [],
+      "faze": {
+        "import_copie": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "inlocuire_acelasi_nume": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "document_lipsa": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "02_citire": {
+      "preconditii": [],
+      "faze": {
+        "citire_integrala": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "recitire_idempotenta": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "03_cerinte": {
+      "preconditii": [],
+      "faze": {
+        "extragere": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "confirmare_umana": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "corectie": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "reextragere_pastreaza_corectie": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "trunchiere_semnalata": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "04_clarificari": {
+      "preconditii": [],
+      "faze": {
+        "leaga_289": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "leaga_290": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "leaga_333": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "aplica_D1": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "clarificare_dupa_PT": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "05_acoperire": {
+      "preconditii": [],
+      "faze": {
+        "motor": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "alegere_umana": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "verificare_scan": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "AI_neverificata": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "retry_pastreaza_alegerea": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "06_cantitati": {
+      "preconditii": [],
+      "faze": {
+        "validare_partiala": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "revizie_F3": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "diferenta_blocheaza": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "07_grafic": {
+      "preconditii": [],
+      "faze": {
+        "editare": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "inghetare": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "generare_PT": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "editare_dupa_PT": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "08_pt": {
+      "preconditii": [],
+      "faze": {
+        "generare": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "confirma_legaturi": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "verifica_D1": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "verifica_D6": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "verifica_D8": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "promisiune_peste_cerinta": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "editeaza_dupa_verificare": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "09_verificari": {
+      "preconditii": [],
+      "faze": {
+        "verificare_finala": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "modificare_versiune": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "verdict_invalideaza": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "10_pachet": {
+      "preconditii": [],
+      "faze": {
+        "pachet_incomplet": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "AI_neverificata_blocheaza": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "asamblare": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "upload_readback_hash": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "aprobare": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "semnare_poarta": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "modificare_fisier_dupa_aprobare": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "11_depunere": {
+      "preconditii": [],
+      "faze": {
+        "fara_dovada_SEAP": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "cu_depus_final_si_dovada": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "status_depusa": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "derogare_non_owner": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "12_comparatie": {
+      "preconditii": [],
+      "faze": {
+        "matrice_D1": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "matrice_D6": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "matrice_D8": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      }
+    },
+    "13_concurenta_cerinta": {
+      "preconditii": [],
+      "obiect": {
+        "tabela": "ofertare_cerinte",
+        "id": 6656
+      },
+      "faze": {
+        "aceeasi_cerinta": {
+          "actiuni": [],
+          "pregatire": [],
+          "pregatire_2": [],
+          "actiuni_2": [],
+          "postconditii": []
+        }
+      }
+    },
+    "14_concurenta_capitol": {
+      "preconditii": [],
+      "obiect": {
+        "tabela": "ofertare_pt_capitole",
+        "id": null
+      },
+      "faze": {
+        "acelasi_capitol": {
+          "actiuni": [],
+          "pregatire": [],
+          "pregatire_2": [],
+          "actiuni_2": [],
+          "postconditii": []
+        }
+      }
+    },
+    "15_concurenta_acoperire": {
+      "preconditii": [],
+      "obiect": {
+        "tabela": "ofertare_acoperire",
+        "id": null
+      },
+      "faze": {
+        "aceeasi_acoperire": {
+          "actiuni": [],
+          "pregatire": [],
+          "pregatire_2": [],
+          "actiuni_2": [],
+          "postconditii": []
+        }
+      }
+    },
+    "16_restart_worker": {
+      "preconditii": [],
+      "faze": {
+        "porneste_citire": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "dupa_restart": {
+          "actiuni": [],
+          "postconditii": []
+        },
+        "retry_idempotent": {
+          "actiuni": [],
+          "postconditii": []
+        }
+      },
+      "preconditii_reluare": []
+    }
+  },
+  "nr_anunt": "SANDBOX-V2-DOMNESTI",
+  "context_ui": "Edge profil birou, CDP 9333, cont de test claude@gazpet.ro (10c105d3-536d-4ca6-b943-803592626909; is_owner=false, user_module_access ofertare:admin) — responsabilul clonei 103; al doilea context = alt tab/browser context cu același cont",
+  "ground_truth_json": "docs/AUDIT_OFERTARE_V2/dovezi/ground_truth_manifest_domnesti.txt (466 fișiere sha256; setul depus = 103/depus/* în storage, 81 obiecte)",
+  "retete": {
+    "01_seap_documente/import_copie": {
+      "fisiere": null,
+      "nume": null,
+      "size_bytes": null,
+      "final_selector": null
+    },
+    "02_citire/citire_integrala": {
+      "doc_id": null,
+      "pagini": null,
+      "final_selector": null
+    },
+    "03_cerinte/confirmare_umana": {
+      "cerinta_id": 6656,
+      "actor_id": null,
+      "confirma_selector": null,
+      "final_selector": null
+    },
+    "03_cerinte/corectie": {
+      "cerinta_id": null,
+      "corectez_selector": null,
+      "text_selector": null,
+      "text": null,
+      "actor_id": null,
+      "final_selector": null
+    },
+    "04_clarificari/leaga_289": {
+      "clarificare_id": null,
+      "document_id": 1297,
+      "deschide_selector": null,
+      "bifa_selector": null,
+      "nr_selectate": null,
+      "final_selector": null
+    },
+    "04_clarificari/leaga_290": {
+      "clarificare_id": null,
+      "document_id": 1298,
+      "deschide_selector": null,
+      "bifa_selector": null,
+      "nr_selectate": null,
+      "final_selector": null
+    },
+    "04_clarificari/leaga_333": {
+      "clarificare_id": null,
+      "document_id": 1299,
+      "deschide_selector": null,
+      "bifa_selector": null,
+      "nr_selectate": null,
+      "final_selector": null
+    },
+    "05_acoperire/alegere_umana": {
+      "cerinta_id": 6656,
+      "acoperire_id": null,
+      "actor_id": null,
+      "alege_selector": null,
+      "final_selector": null
+    },
+    "05_acoperire/verificare_scan": {
+      "acoperire_id": null,
+      "actor_id": null,
+      "fisier_path": null,
+      "verifica_selector": null,
+      "final_selector": null
+    },
+    "05_acoperire/AI_neverificata": {
+      "cerinta_id": null,
+      "acoperire_id": null,
+      "selector": null
+    },
+    "06_cantitati/validare_partiala": {
+      "cantitate_id": null,
+      "nevalidata_id": null,
+      "valideaza_selector": null,
+      "final_selector": null
+    },
+    "06_cantitati/diferenta_blocheaza": {
+      "cantitate_id": null,
+      "pachete_count": null
+    },
+    "07_grafic/inghetare": {
+      "mod": null,
+      "versiune_noua": null,
+      "actor_id": null,
+      "are_activitati": null,
+      "final_selector": null
+    },
+    "08_pt/verifica_D1": {
+      "legatura_id": null,
+      "capitol_id": null,
+      "versiune": null,
+      "actor_id": null,
+      "locator": null,
+      "verifica_selector": null,
+      "final_selector": null
+    },
+    "08_pt/verifica_D6": {
+      "legatura_id": null,
+      "capitol_id": null,
+      "versiune": null,
+      "actor_id": null,
+      "locator": null,
+      "verifica_selector": null,
+      "final_selector": null
+    },
+    "08_pt/verifica_D8": {
+      "legatura_id": null,
+      "capitol_id": null,
+      "versiune": null,
+      "actor_id": null,
+      "locator": null,
+      "verifica_selector": null,
+      "final_selector": null
+    },
+    "08_pt/editeaza_dupa_verificare": {
+      "capitol_id": null,
+      "cerinta_id": null,
+      "text": null,
+      "versiune_noua": null,
+      "stare_lant_asteptata": null,
+      "deschide_editor_selector": null,
+      "final_selector": null
+    },
+    "09_verificari/modificare_versiune": {
+      "capitol_id": null,
+      "cerinta_id": null,
+      "text": null,
+      "versiune_noua": null,
+      "stare_lant_asteptata": null,
+      "deschide_editor_selector": null,
+      "final_selector": null
+    },
+    "10_pachet/pachet_incomplet": {
+      "pachete_count": null
+    },
+    "10_pachet/AI_neverificata_blocheaza": {
+      "pachete_count": null
+    },
+    "10_pachet/aprobare": {
+      "versiune_noua": null,
+      "actor_id": null,
+      "final_selector": null
+    },
+    "10_pachet/semnare_poarta": {
+      "versiune_noua": null,
+      "verdict_asteptat": null,
+      "final_selector": null
+    },
+    "11_depunere/fara_dovada_SEAP": {
+      "pachet_id": null,
+      "fisiere_finale": null,
+      "finale_selector": null,
+      "depune_selector": null
+    },
+    "11_depunere/cu_depus_final_si_dovada": {
+      "pachet_id": null,
+      "fisiere_finale": null,
+      "fisier_dovada": null,
+      "finale_selector": null,
+      "dovada_selector": null,
+      "depune_selector": null,
+      "final_selector": null
+    },
+    "11_depunere/status_depusa": {
+      "status_asteptat": null,
+      "final_selector": null
+    },
+    "12_comparatie/matrice_D1": {
+      "verigi_asteptate": null
+    },
+    "12_comparatie/matrice_D6": {
+      "verigi_asteptate": null
+    },
+    "12_comparatie/matrice_D8": {
+      "verigi_asteptate": null
+    },
+    "16_restart_worker/porneste_citire": {
+      "actor_id": null,
+      "final_selector": null
+    },
+    "16_restart_worker/dupa_restart": {
+      "doc_id": null,
+      "pagini": null,
+      "final_selector": null
+    }
+  },
+  "clona": {
+    "sursa_licitatie_id": 5,
+    "harta": "claude_docs.audit_v2_clona_103_map",
+    "documente": {
+      "1281": "AC 258",
+      "1282": "CAIET DE SARCINI (cs_volum)",
+      "1283": "DUAE xml (ignorat)",
+      "1284": "FORMULARE.doc",
+      "1285": "Fișa de date DF1279378",
+      "1286": "LISTE CANTITATI zip (ignorat — contează ca esențial necitit în v_ofertare_seap_completitudine)",
+      "1287": "PT.zip (ignorat)",
+      "1288-1294": "C6/C7/C8/C9/F1/F2/F3 fără valori (upload)",
+      "1295": "PT/01 Parte scrisă",
+      "1296": "PT/02 Parte desenată",
+      "1297": "Răspuns consolidat 2 (15.09)",
+      "1298": "Răspuns consolidat 1 (11.09)",
+      "1299": "Răspuns consolidat 3 (16.09)"
+    },
+    "clarificari": {
+      "67": "nr1 trimisa",
+      "68": "nr2 raspunsa (RTE domeniu)",
+      "69": "nr3",
+      "70": "nr4",
+      "71": "nr5",
+      "72": "nr6"
+    },
+    "capitole": "58–72 (15)",
+    "acoperire_revizie": 4,
+    "stare_porti_la_clonare": {
+      "v_ofertare_seap_completitudine.blocaj": "1 document(e) esențiale … necitite (=1286 zip)",
+      "ofertare_r5_blocaj_sursa": "lista_f3_nevalidate = 62",
+      "pachete": 0
+    }
+  }
+}
