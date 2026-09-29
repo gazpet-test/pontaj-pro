@@ -26,6 +26,7 @@ import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './Ofer
 import { construiestePropunere, construiesteBorderou, construiesteF23, construiesteF9, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
+import { citestePoartaServer } from './ofertarePoartaServer.js'
 // R5 (Copilot 25.09.2026): H2 nu ia F3 drept referință aprobată cât are rânduri de rețea nevalidate (view separat, ca neconfirmatele).
 import { campuriCantitatiNevalidate, marcheazaInvalidate, reverificareGraficInghetat } from './ofertareCantitatiAprobare.js'
 import { COLOANE_GRAFIC_REVERIFICARE } from './ofertareGraficReverificare.js'
@@ -1296,7 +1297,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const rCompl = await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', id).maybeSingle()
     const rNev = await supabase.from('v_ofertare_cantitati_nevalidate').select('*').eq('licitatie_id', id).maybeSingle()
     const grRev = rSt.data?.grafic_versiune ? await campuriGraficReverificare(id) : {}
-    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl), ...campuriCantitatiNevalidate(rNev), ...grRev } : null); setCapitole(rCap.data || []); setCerinte(cer)
+    const server = await citestePoartaServer(supabase, id, { recalculeazaText: true })
+    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl), ...campuriCantitatiNevalidate(rNev), ...grRev, ...server } : null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
     // B (Domnesti 14.09): regula „o persoana nu poate cumula functii" se vede AICI, inainte sa existe vreo
     // persoana incarcata — nu doar in verdictul per afirmatie, care e gol cat timp propunerea nu e citita.
@@ -1855,6 +1857,9 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
       // 3. manifestul
       const { error: e2 } = await supabase.from('ofertare_pt_pachet_fisiere').insert(manifest.map(m => ({ ...m, pachet_id: p.id })))
       if (e2) throw new Error('manifest: ' + e2.message)
+      const verificare = await citestePoartaServer(supabase, licId, { recalculeazaText: true })
+      if (verificare.poarta_server?.stare !== 'ok') throw new Error(verificare.poarta_server_eroare
+        || `Poarta server blochează: ${(verificare.poarta_server?.blocaje || []).join(', ')}`)
       // 4. aprobarea — dupa asta RLS nu mai lasa nicio modificare pe fisiere
       const { data: u } = await supabase.auth.getUser()
       const { error: e3 } = await supabase.from('ofertare_pt_pachet')
@@ -1906,11 +1911,22 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
           if (e1) throw new Error('manifest depunere: ' + e1.message)
         }
       }
+      // J04×J07 (plan §2 J07): AMBELE verificări rulează după scrierea manifestului și ÎNAINTE de stare='depus'.
+      // Serverul le impune oricum pe amândouă la tranziție (trg_ofertare_pt_pachet_poarta_documentatie → J07,
+      // trg_pt_pachet_depus_verifica → J04); aici doar le cerem și afișăm verdictul. Rulăm ambele chiar dacă
+      // prima refuză, ca omul să vadă toate motivele deodată; orice eroare/răspuns invalid = BLOCK.
+      // 1) J04: SHA-256 calculat pe server pentru fiecare fișier din manifest (PASS/REFUZ persistat).
       const { data: verificare, error: eVer } = await supabase.functions.invoke('ofertare-pachet-verifica', { body: { pachet_id: p.id } })
       const refuzuri = (verificare?.verificari || []).filter(v => v.rezultat !== 'PASS')
       setRefuzuriDepunere(prev => ({ ...prev, [p.id]: refuzuri }))
-      if (eVer || verificare?.ok !== true) throw new Error(verificare?.error || (refuzuri.length
+      // 2) J07: textul se recalculează DUPĂ manifest (hash-ul sursei include pachet_fisiere), apoi poarta agregată.
+      const poarta = await citestePoartaServer(supabase, licId, { recalculeazaText: true })
+      const motive = []
+      if (eVer || verificare?.ok !== true) motive.push(verificare?.error || (refuzuri.length
         ? 'Serverul a refuzat fișierele enumerate mai jos.' : eVer?.message || 'Verificarea serverului nu a confirmat pachetul.'))
+      if (poarta.poarta_server?.stare !== 'ok') motive.push(poarta.poarta_server_eroare
+        || `Poarta server blochează: ${(poarta.poarta_server?.blocaje || []).join(', ')}`)
+      if (motive.length) throw new Error(motive.join(' · '))
       const { data: depus, error: e2 } = await supabase.from('ofertare_pt_pachet').update({ stare: 'depus' }).eq('id', p.id).select('id').single()
       if (e2) throw new Error('marcare depus: ' + e2.message)
       if (!depus) throw new Error('marcare depus: pachetul nu a fost actualizat')
@@ -1954,6 +1970,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     Object.assign(proaspat, campuriDocumentatie(await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', licId).maybeSingle()))
     Object.assign(proaspat, campuriCantitatiNevalidate(await supabase.from('v_ofertare_cantitati_nevalidate').select('*').eq('licitatie_id', licId).maybeSingle()))
     if (proaspat.grafic_versiune) Object.assign(proaspat, await campuriGraficReverificare(licId))
+    Object.assign(proaspat, await citestePoartaServer(supabase, licId, { recalculeazaText: true }))
     // Acelasi evaluator ca butonul si cardul. Daca cele trei ar diverge, butonul ar fi activ
     // dar semnarea ar cadea — sau invers, mai rau.
     const ev = evalueazaPoarta(proaspat)
