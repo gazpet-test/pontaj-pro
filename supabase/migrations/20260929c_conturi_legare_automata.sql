@@ -4,9 +4,12 @@
 --   * profiles.tip_cont (excepții marcate o dată: extern/test/sistem)
 --   * fn_cont_candidati_angajat(email)  — potrivirea (internă)
 --   * fn_cont_notifica_owneri(...)      — notificări owner, cu dedupe (internă)
---   * handle_new_user()                 — leagă DOAR la candidat unic și liber, fără să blocheze contul
---   * trg_profiles_protectie_legatura   — employee_id / tip_cont se schimbă doar de owner (sau sistem)
---   * fn_cont_leaga_automat(simulare)   — legare la cerere, poartă owner în cod
+--   * handle_new_user()                 — leagă singur DOAR pe calea de încredere (app_metadata pus de service_role,
+--                                         ex. funcția edge cont-nou cu poartă owner) și doar la candidat unic și liber;
+--                                         la înscrierea publică / Dashboard doar PROPUNE (notificare), owner-ul confirmă
+--   * trg_profiles_protectie_legatura   — employee_id / tip_cont / email se schimbă doar de owner (sau sistem);
+--                                         un cont închis (R2) nu se mai poate auto-edita
+--   * fn_cont_leaga_automat(simulare)   — legare la cerere (un clic), poartă owner în cod, potrivire pe emailul de LOGARE
 --   * fn_admin_conturi_alerte() + v_admin_conturi_alerte — diagnostic, poartă owner în cod
 -- Idempotentă (rulează de două ori fără erori). Nu atinge datele.
 -- ============================================================================
@@ -27,7 +30,10 @@ COMMENT ON COLUMN public.profiles.tip_cont IS
 -- A.2 Potrivirea cont → angajat (internă) ---------------------------------------
 -- Univers: angajați activi cu contract neîncheiat. Pasul email (orice domeniu) are prioritate;
 -- dacă găsește ceva, pasul nume nu mai rulează. Pasul nume doar pe @gazpet.ro, ≥ 2 tokeni distincți,
--- fiecare token = cuvânt întreg din nume (fără diacritice), în orice ordine.
+-- fiecare token = cuvânt întreg din nume (fără diacritice), în orice ordine, IAR numele de familie
+-- (primul cuvânt din employees.name = „NUME_FAMILIE PRENUME...”) e obligatoriu printre tokeni
+-- (altfel „ana.maria@” s-ar lega de singura IONESCU ANA MARIA activă). Apelantul trimite emailul de
+-- LOGARE (auth.users.email), niciodată profiles.email.
 CREATE OR REPLACE FUNCTION public.fn_cont_candidati_angajat(p_email text)
 RETURNS TABLE(employee_id integer, employee_name text, metoda text, profil_legat uuid)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -57,6 +63,7 @@ AS $fn$
        AND i.domeniu = 'gazpet.ro'
        AND (SELECT count(DISTINCT t) FROM unnest(i.tokeni) t) >= 2
        AND regexp_split_to_array(upper(extensions.unaccent(btrim(u.name))), '[[:space:]-]+') @> i.tokeni
+       AND (regexp_split_to_array(upper(extensions.unaccent(btrim(u.name))), '[[:space:]-]+'))[1] = ANY (i.tokeni)
   ),
   toate AS (SELECT * FROM pe_email UNION ALL SELECT * FROM pe_nume)
   SELECT t.id, t.name, t.metoda,
@@ -91,6 +98,16 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_notifica_owneri(text, text, text, text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- A.3 handle_new_user extinsă. Triggerul on_auth_user_created NU se atinge.
+-- SECURITATE (constatarea critică din review, 29.09): în producție înscrierea publică e pornită
+-- (createManager → supabase.auth.signUp cu cheia anon, publică în bundle) și confirmarea emailului e
+-- automată. Dacă legarea s-ar face la ORICE înscriere, oricine și-ar face cont „prenume.nume@gazpet.ro”
+-- (sau cu emailul personal trecut pe fișă) și ar primi imediat fișa acelui om → semnătura lui electronică
+-- (hr_sem_self_* prin my_employee_id()). De aceea:
+--   * legarea SINGURĂ se face doar pe CALEA DE ÎNCREDERE: auth.users.raw_app_meta_data.gazpet_legare_automata = true.
+--     app_metadata îl poate pune DOAR service_role (API-ul admin GoTrue), nu signUp și nici Dashboard → Add user;
+--     e cârligul pentru funcția edge „cont-nou” cu poartă owner (D1 varianta C);
+--   * pe orice altă cale contul se creează nelegat, iar owner-ul primește PROPUNEREA (cont_legare_propusa)
+--     cu candidatul unic; legarea o confirmă dintr-un clic: Admin → Manageri → „Leagă automat” (fn_cont_leaga_automat).
 CREATE OR REPLACE FUNCTION public.handle_new_user()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -98,14 +115,16 @@ CREATE OR REPLACE FUNCTION public.handle_new_user()
  SET search_path = public, pg_temp
 AS $function$
 DECLARE
-  v_n      integer := 0;
-  v_emp    integer;
-  v_nume   text;
-  v_metoda text;
-  v_ocupat boolean := false;
-  v_legat  boolean := false;
-  v_eroare text;
-  v_motiv  text;
+  v_n         integer := 0;
+  v_emp       integer;
+  v_nume      text;
+  v_metoda    text;
+  v_ocupat    boolean := false;
+  v_legat     boolean := false;
+  v_incredere boolean := false;
+  v_are_fisa  boolean := false;
+  v_eroare    text;
+  v_motiv     text;
 BEGIN
   -- Inserăm doar dacă nu există deja (idempotent) — neschimbat
   INSERT INTO public.profiles (id, email, name, role)
@@ -117,14 +136,17 @@ BEGIN
   )
   ON CONFLICT (id) DO NOTHING;
 
-  -- R1 sub-bloc 1: legarea. Nicio eroare de aici nu are voie să blocheze crearea contului.
-  -- NU punem employee_id în INSERT: indexul unic uniq_profiles_employee_id ar pica tot contul.
+  -- R1 sub-bloc 1: potrivirea (+ legarea doar pe calea de încredere). Nicio eroare de aici nu are voie
+  -- să blocheze crearea contului. NU punem employee_id în INSERT: indexul unic ar pica tot contul.
   BEGIN
+    v_incredere := COALESCE(NEW.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true';
     SELECT count(*), min(c.employee_id), min(c.employee_name), min(c.metoda),
            COALESCE(bool_or(c.profil_legat IS NOT NULL), false)
       INTO v_n, v_emp, v_nume, v_metoda, v_ocupat
-      FROM public.fn_cont_candidati_angajat(NEW.email) c;
-    IF v_n = 1 AND NOT v_ocupat THEN
+      FROM public.fn_cont_candidati_angajat(NEW.email) c;       -- emailul de LOGARE (GoTrue)
+    SELECT p.employee_id IS NOT NULL INTO v_are_fisa FROM public.profiles p WHERE p.id = NEW.id;
+    v_are_fisa := COALESCE(v_are_fisa, false);
+    IF v_incredere AND v_n = 1 AND NOT v_ocupat AND NOT v_are_fisa THEN
       UPDATE public.profiles SET employee_id = v_emp
        WHERE id = NEW.id AND employee_id IS NULL;          -- nu suprascrie niciodată
       v_legat := FOUND;
@@ -140,6 +162,12 @@ BEGIN
     IF v_legat THEN
       PERFORM public.fn_cont_notifica_owneri('cont_legat_automat', '🔗 Cont nou legat automat de fișă',
         format('Cont nou %s legat automat de %s (#%s, prin %s)', NEW.email, v_nume, v_emp, v_metoda),
+        '/admin?tab=managers&cont=' || NEW.id::text);
+    ELSIF v_eroare IS NULL AND v_n = 1 AND NOT v_ocupat AND NOT v_are_fisa THEN
+      -- orice domeniu: potrivirea pe email poate fi și pe adresa personală trecută pe fișă
+      PERFORM public.fn_cont_notifica_owneri('cont_legare_propusa', '🔗 Cont nou: confirmă legarea de fișă',
+        format('Cont nou %s → propunere: %s (#%s, prin %s). Dacă tu ai creat contul, confirmă din Admin → Manageri → „Leagă automat”. Dacă nu-l recunoști, NU-l lega și închide-l.',
+               NEW.email, v_nume, v_emp, v_metoda),
         '/admin?tab=managers&cont=' || NEW.id::text);
     ELSIF lower(split_part(btrim(COALESCE(NEW.email, '')), '@', 2)) = 'gazpet.ro' THEN
       v_motiv := CASE
