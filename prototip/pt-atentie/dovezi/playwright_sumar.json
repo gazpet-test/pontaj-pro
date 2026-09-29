@@ -1,0 +1,1518 @@
+{
+  "generat_la": "2026-09-29T22:02:00.868Z",
+  "viewport": {
+    "width": 1400,
+    "height": 1000
+  },
+  "retea": {
+    "total_cereri": 1342,
+    "metode": {
+      "GET": 1342
+    },
+    "tipuri": {
+      "document": 61,
+      "script": 1281
+    },
+    "cereri_externe": 0,
+    "metode_non_get": 0,
+    "esuate": [],
+    "raspunsuri_http_eroare": [],
+    "websocket": [
+      "ws://localhost:5199/?token=<hmr>"
+    ],
+    "url_unice": [
+      "/",
+      "/.cache-vite/deps/chunk-5O4CPKAA.js",
+      "/.cache-vite/deps/chunk-LWYTYKHV.js",
+      "/.cache-vite/deps/react-dom_client.js",
+      "/.cache-vite/deps/react.js",
+      "/.cache-vite/deps/react_jsx-dev-runtime.js",
+      "/@fs/<worktree>/src/graficCPM.js",
+      "/@fs/<worktree>/src/ofertareCantitatiAprobare.js",
+      "/@fs/<worktree>/src/ofertareCantitatiInvalidare.js",
+      "/@fs/<worktree>/src/ofertareControale.js",
+      "/@fs/<worktree>/src/ofertarePoarta.js",
+      "/@fs/<worktree>/src/ofertareTotaluri.js",
+      "/@fs/<worktree>/src/ofertareTransferRestante.js",
+      "/@fs/<worktree>/src/ofertareUnitati.js",
+      "/@fs/home/user/pontaj-pro/node_modules/vite/dist/client/env.mjs",
+      "/@react-refresh",
+      "/@vite/client",
+      "/PtNecesitaAtentia.jsx",
+      "/atentie.js",
+      "/fixtures/l103.json",
+      "/main.jsx",
+      "/scenarii.js"
+    ],
+    "stocare_browser": {
+      "cookies": 0,
+      "origins": 0,
+      "indexedDB": [],
+      "localStorage": 0,
+      "sessionStorage": 0
+    },
+    "consola": [
+      "error: Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ]
+  },
+  "scenarii": [
+    {
+      "scenariu": "normal_proaspat",
+      "captura": "01_normal_proaspat.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 1,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "normal_interactiuni_extinse",
+      "captura": "02_normal_interactiuni_extinse.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 1,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 14,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": [],
+      "du_ma_apasate": 40,
+      "elemente_deschise": 39
+    },
+    {
+      "scenariu": "normal_fara_capitol",
+      "captura": "03_normal_fara_capitol.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 1,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 14,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_licitatie",
+      "captura": "04_eroare_licitatie.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_cerinte",
+      "captura": "05_eroare_cerinte.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          6
+        ],
+        [
+          "HUMAN_DECISION",
+          1
+        ],
+        [
+          "CONFIRM",
+          12
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 2,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_legaturi",
+      "captura": "06_eroare_legaturi.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          3
+        ],
+        [
+          "CONFIRM",
+          13
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 3,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_capitole",
+      "captura": "07_eroare_capitole.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          3
+        ],
+        [
+          "CONFIRM",
+          1
+        ],
+        [
+          "WARN",
+          9
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 2,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_acoperire",
+      "captura": "08_eroare_acoperire.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          6
+        ],
+        [
+          "HUMAN_DECISION",
+          5
+        ],
+        [
+          "CONFIRM",
+          35
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 4,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_pt_dovezi",
+      "captura": "09_eroare_pt_dovezi.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_documente",
+      "captura": "10_eroare_documente.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          9
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_pt_stare",
+      "captura": "11_eroare_pt_stare.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          6
+        ],
+        [
+          "HUMAN_DECISION",
+          6
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          2
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 5,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_seap_completitudine",
+      "captura": "12_eroare_seap_completitudine.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          8
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_r5",
+      "captura": "13_eroare_r5.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          8
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_e2_neconfirmate",
+      "captura": "14_eroare_e2_neconfirmate.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          27
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_echipa_blocaje",
+      "captura": "15_eroare_echipa_blocaje.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          8
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "eroare_cantitati_nevalidate",
+      "captura": "16_eroare_cantitati_nevalidate.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          8
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 2,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "date_vechi_30min",
+      "captura": "17_date_vechi_30min.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          11
+        ]
+      ],
+      "indisponibile": 1,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "date_expirate_3h",
+      "captura": "18_date_expirate_3h.png",
+      "verdict": "INDISPONIBIL",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 14,
+      "ok_randuri": null,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "ceas_real_browser",
+      "captura": "19_ceas_real_browser.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          11
+        ]
+      ],
+      "indisponibile": 1,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": [],
+      "ceas_real_utc": "2026-09-29T21:59:54.989Z"
+    },
+    {
+      "scenariu": "licitatia_B_in_incarcare",
+      "captura": "20_licitatia_B_in_incarcare.png",
+      "verdict": null,
+      "simulat_aparitii": 0,
+      "incarca": true,
+      "clase": [],
+      "indisponibile": 0,
+      "ok_randuri": null,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "licitatia_B_raspuns",
+      "captura": "21_licitatia_B_raspuns.png",
+      "verdict": "INDISPONIBIL",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [],
+      "indisponibile": 1,
+      "ok_randuri": null,
+      "lista_neconstruita": true,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [],
+      "jurnal": []
+    },
+    {
+      "scenariu": "cursa_cu_garda_in_timpul_cursei",
+      "captura": "22_cursa_cu_garda_in_timpul_cursei.png",
+      "verdict": null,
+      "simulat_aparitii": 0,
+      "incarca": true,
+      "clase": [],
+      "indisponibile": 0,
+      "ok_randuri": null,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [
+        "checkbox"
+      ],
+      "jurnal": [
+        "+0 ms · #19 · cerere pentru 103 (răspuns în 300 ms)",
+        "+101 ms · #20 · cerere pentru 9001 (răspuns în 1800 ms)"
+      ]
+    },
+    {
+      "scenariu": "cursa_cu_garda_final",
+      "captura": "23_cursa_cu_garda_final.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 1,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [
+        "checkbox"
+      ],
+      "jurnal": [
+        "+0 ms · #19 · cerere pentru 103 (răspuns în 300 ms)",
+        "+101 ms · #20 · cerere pentru 9001 (răspuns în 1800 ms)",
+        "+251 ms · #21 · cerere pentru 103 (răspuns în 300 ms)",
+        "+300 ms · #19 · IGNORAT: răspunsul pentru 103 a venit târziu (cererea curentă e #21)",
+        "+551 ms · #21 · aplicat: datele licitației 103",
+        "+1901 ms · #20 · IGNORAT: răspunsul pentru 9001 a venit târziu (cererea curentă e #21)"
+      ]
+    },
+    {
+      "scenariu": "cursa_fara_garda_inainte_de_B",
+      "captura": "24_cursa_fara_garda_inainte_de_B.png",
+      "verdict": "BLOCKED",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [
+        [
+          "BLOCK",
+          9
+        ],
+        [
+          "HUMAN_DECISION",
+          7
+        ],
+        [
+          "CONFIRM",
+          39
+        ],
+        [
+          "WARN",
+          10
+        ]
+      ],
+      "indisponibile": 1,
+      "ok_randuri": 6,
+      "lista_neconstruita": false,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 12,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [
+        "checkbox"
+      ],
+      "jurnal": [
+        "+0 ms · #22 · cerere pentru 103 (răspuns în 300 ms)",
+        "+100 ms · #23 · cerere pentru 9001 (răspuns în 1800 ms)",
+        "+250 ms · #24 · cerere pentru 103 (răspuns în 300 ms)",
+        "+335 ms · #22 · aplicat: datele licitației 103 (fără gardă)",
+        "+551 ms · #24 · aplicat: datele licitației 103 (fără gardă)"
+      ]
+    },
+    {
+      "scenariu": "cursa_fara_garda_final",
+      "captura": "25_cursa_fara_garda_final.png",
+      "verdict": "INDISPONIBIL",
+      "simulat_aparitii": 3,
+      "incarca": false,
+      "clase": [],
+      "indisponibile": 1,
+      "ok_randuri": null,
+      "lista_neconstruita": true,
+      "zero_simplu": false,
+      "nicio_exceptie": false,
+      "verde_3FB950": 0,
+      "ready": false,
+      "butoane_scriere": [],
+      "forms": 0,
+      "inputs": [
+        "checkbox"
+      ],
+      "jurnal": [
+        "+0 ms · #22 · cerere pentru 103 (răspuns în 300 ms)",
+        "+100 ms · #23 · cerere pentru 9001 (răspuns în 1800 ms)",
+        "+250 ms · #24 · cerere pentru 103 (răspuns în 300 ms)",
+        "+335 ms · #22 · aplicat: datele licitației 103 (fără gardă)",
+        "+551 ms · #24 · aplicat: datele licitației 103 (fără gardă)",
+        "+1901 ms · #23 · aplicat: datele licitației 9001 (fără gardă)"
+      ]
+    }
+  ],
+  "eroare_per_sursa": [
+    {
+      "sursa": "licitatie",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    },
+    {
+      "sursa": "cerinte",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 2
+    },
+    {
+      "sursa": "legaturi",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 3
+    },
+    {
+      "sursa": "capitole",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 2
+    },
+    {
+      "sursa": "acoperire",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 4
+    },
+    {
+      "sursa": "pt_dovezi",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    },
+    {
+      "sursa": "documente",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    },
+    {
+      "sursa": "pt_stare",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 5
+    },
+    {
+      "sursa": "seap_completitudine",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    },
+    {
+      "sursa": "r5",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    },
+    {
+      "sursa": "e2_neconfirmate",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    },
+    {
+      "sursa": "echipa_blocaje",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    },
+    {
+      "sursa": "cantitati_nevalidate",
+      "verdict": "BLOCKED",
+      "indisponibile": 2,
+      "ok_randuri": 6
+    }
+  ],
+  "clickuri": {
+    "a": {
+      "clickuri_dupa_intrare": 0,
+      "verdict": "BLOCKED",
+      "eticheta_verdict_o_linie": true,
+      "itemi": [
+        {
+          "clasa": "BLOCK",
+          "itemi": 9
+        },
+        {
+          "clasa": "HUMAN_DECISION",
+          "itemi": 7
+        },
+        {
+          "clasa": "CONFIRM",
+          "itemi": 39
+        },
+        {
+          "clasa": "WARN",
+          "itemi": 10
+        }
+      ],
+      "total_itemi": 65,
+      "blocante": 54,
+      "blocante_cu_du_ma": 54,
+      "blocante_cu_ai_de_facut": 54,
+      "inaltime_pagina_ecrane": 11.4,
+      "inaltime_lista_ecrane": 9.5
+    },
+    "bc_traseu_du_ma": {
+      "clickuri": 1,
+      "scrollY": 10060,
+      "vh": 1000,
+      "inaltime_pagina": 11432,
+      "workspace": "WORKSPACE CAPITOL 5 · V5",
+      "cerinte_capitol": 14,
+      "cerinte_si_text_in_ecran_simultan": true,
+      "randuri_cerinte_randate": 14
+    },
+    "bc_traseu_cuprins": {
+      "clickuri": 1,
+      "scroll_pana_la_cuprins_ecrane": 11.1,
+      "scrollY": 10432,
+      "vh": 1000,
+      "inaltime_pagina": 11432,
+      "workspace": "WORKSPACE CAPITOL 13 · V4",
+      "cerinte_capitol": 38,
+      "cerinte_si_text_in_ecran_simultan": false,
+      "randuri_cerinte_randate": 38
+    },
+    "bc_capitol_implicit": {
+      "clickuri": 0,
+      "scrollY": 0,
+      "vh": 1000,
+      "inaltime_pagina": 11432,
+      "workspace": "WORKSPACE CAPITOL 2 · V5",
+      "cerinte_capitol": 92,
+      "cerinte_si_text_in_ecran_simultan": false,
+      "randuri_cerinte_randate": 92
+    },
+    "f": {
+      "randuri_blocante": 54,
+      "destinatii": [
+        {
+          "regula": "CTRL.anexe",
+          "titlu": "Trimiterile din text — anexe, formulare, capitole existente",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Propunere tehnică\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide capitolele cu trimiterile"
+        },
+        {
+          "regula": "CTRL.cantitati",
+          "titlu": "Cantitățile rețelei — lista F3 vs graficul",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Cantități\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide Cantități (lista F3 vs fronturi)"
+        },
+        {
+          "regula": "CTRL.garantie",
+          "titlu": "Garanția lucrărilor — luni și momentul de start",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Propunere tehnică\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide Garanția (luni + moment de start)"
+        },
+        {
+          "regula": "DOC03",
+          "titlu": "Documentația de atribuire nu e completă și citită (R12)",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Documentația de atribuire\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide Documentația (esențialele necitite)"
+        },
+        {
+          "regula": "DEP01",
+          "titlu": "43 cerințe fără acoperire validă la depunere",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Acoperire / dovezi\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide acoperirea (dovezile) pe cerințele"
+        },
+        {
+          "regula": "R06_ELIM_FARA",
+          "titlu": "2 eliminatorii fără dovadă",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Acoperire / dovezi\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide acoperirea (dovezile) pe cerințele"
+        },
+        {
+          "regula": "R06_ELIM_PROPUSA",
+          "titlu": "22 eliminatorii cu dovadă doar propusă, neverificată pe scan",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Acoperire / dovezi\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide acoperirea (dovezile) pe cerințele"
+        },
+        {
+          "regula": "R5",
+          "titlu": "Sursa cantităților are blocaj (R5)",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Cantități\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide Cantități și validează pozițiile"
+        },
+        {
+          "regula": "F9",
+          "titlu": "Echipa F9: 10 blocaje „cerinta_descoperita\"",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Echipa F9\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide Echipa F"
+        },
+        {
+          "regula": "PT04",
+          "titlu": "Cap. 2 «…»: 1 capcană de respingere atribuită, neverificată",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 2 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 2 și decide pe fiecare capcană"
+        },
+        {
+          "regula": "PT04",
+          "titlu": "Cap. 3 «…»: 1 capcană de respingere atribuită",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 3 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 3 și decide pe fiecare capcană"
+        },
+        {
+          "regula": "PT04",
+          "titlu": "Cap. 10 «Măsuri aplicate de Ofertant pentru supravegherea lucrărilor în perioada de garanție acordat",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 10 · V4",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 10 și decide pe fiecare capcană"
+        },
+        {
+          "regula": "PT04",
+          "titlu": "Cap. 13 «…»: 4 capcane de respingere atribuite, neverificate",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 13 · V4",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 13 și decide pe fiecare capcană"
+        },
+        {
+          "regula": "R06_ELIM_AI_NA",
+          "titlu": "107 eliminatorii „nu se aplică\" fără decizie umană individuală",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Registrul cerințelor (E2)\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide registrul și decide pe fiecare cerință"
+        },
+        {
+          "regula": "R06_ELIM_NEDET",
+          "titlu": "1 eliminatorie fără document probant specificat",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Acoperire / dovezi\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide acoperirea (dovezile) pe cerințele"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 1: text AI v2 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 1 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 1 și citește textul"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 2: text AI v5 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 2 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 2 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 2 «…»: 90 confirmări E2 fără judecată individuală (în bloc /",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 2 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 2 «…» (v5): 91 cerințe atribuite, neverificate de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 2 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 2 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 3: text AI v3 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 3 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 3 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 3 «…»: 41 confirmări E2 fără judecată in",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 3 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 3 «…» (v3): 42 cerințe atribuite, neveri",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 3 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 3 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 4: text AI v2 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 4 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 4 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 4 «…»: 8 confirmări E2 fără judecată individual",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 4 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 4 «…» (v2): 8 cerințe atribuite, neverificate d",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 4 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 4 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 5: text AI v5 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 5 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 5 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 5 «…»: 14 confirmări E2",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 5 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 5 «…» (v5): 14 cerințe ",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 5 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 5 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 6: text AI v3 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 6 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 6 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 6 «…»: 18 ",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 6 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 6 «…» (v3)",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 6 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 6 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 7: text AI v3 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 7 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 7 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 7 «Modalitatea de efectuare a înregistrărilor și înregistrările efectuate în legătură cu indica",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 7 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 7 «Modalitatea de efectuare a înregistrărilor și înregistrările efectuate în legătură cu indica",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 7 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 7 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 8: text AI v3 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 8 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 8 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 8 «Măsuri aplicabile de Ofertant pe perioada Contractului pentru asigurarea îndeplinirii obliga",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 8 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 8 «Măsuri aplicabile de Ofertant pe perioada Contractului pentru asigurarea îndeplinirii obliga",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 8 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 8 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 9: text AI v2 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 9 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 9 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 9 «Măsuri aplicabile de Ofertant pe perioada Contractului pentru asigurarea îndeplinirii obliga",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 9 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 9 «Măsuri aplicabile de Ofertant pe perioada Contractului pentru asigurarea îndeplinirii obliga",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 9 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 9 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 10: text AI v4 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 10 · V4",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 10 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 10 «Măsuri aplicate de Ofertant pentru supravegherea lucrărilor în perioada de garanție acordat",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 10 · V4",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 10 «Măsuri aplicate de Ofertant pentru supravegherea lucrărilor în perioada de garanție acordat",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 10 · V4",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 10 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 11: text AI v2 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 11 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 11 și citește textul"
+        },
+        {
+          "regula": "CAP02",
+          "titlu": "Cap. 12: text AI v3 necitit de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 12 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 12 și citește textul"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 12 «…»: 14 confirmări E2 fără",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 12 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 12 «…» (v3): 24 cerințe atrib",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 12 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 12 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Cap. 13 «…»: 38 confirmări E2 fără judecată individuală (în bloc / fără mo",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 13 · V4",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "PT02",
+          "titlu": "Cap. 13 «…» (v4): 34 cerințe atribuite, neverificate de om",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 13 · V4",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide cap. 13 și examinează fiecare cerință lângă"
+        },
+        {
+          "regula": "E2_BLOC",
+          "titlu": "Fără capitol: 141 confirmări E2 fără judecată individuală (în bloc / fără moment) — de reexaminat un",
+          "clickuri": 1,
+          "ajunge_in": "mesaj inline: ecranul „Registrul cerințelor (E2)\" (nu există în prototip; elementele se deschid pe loc)",
+          "cerinte_si_text_simultan": null,
+          "ai_de_facut": "Deschide registrul și reexaminează fiecare cerință"
+        },
+        {
+          "regula": "R06_PROPUSA",
+          "titlu": "Cap. 2 «…»: 3 dovezi propuse de AI, neverificate pe scan",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 2 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide acoperirea și verifică fiecare dovadă pe"
+        },
+        {
+          "regula": "R06_PROPUSA",
+          "titlu": "Cap. 4 «…»: 2 dovezi propuse de AI, neverificate pe ",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 4 · V2",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide acoperirea și verifică fiecare dovadă pe"
+        },
+        {
+          "regula": "R06_PROPUSA",
+          "titlu": "Cap. 5 «…»: 2 dovezi propuse",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 5 · V5",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide acoperirea și verifică fiecare dovadă pe"
+        },
+        {
+          "regula": "R06_PROPUSA",
+          "titlu": "Cap. 6 «…»: 2 d",
+          "clickuri": 1,
+          "ajunge_in": "workspace: WORKSPACE CAPITOL 6 · V3",
+          "cerinte_si_text_simultan": true,
+          "ai_de_facut": "Deschide acoperirea și verifică fiecare dovadă pe"
+        }
+      ]
+    }
+  },
+  "butoane_unice_pe_toate_scenariile": [
+    "Arată toate (N)",
+    "Du-mă acolo",
+    "Du-mă →",
+    "Fără capitol (N cerințe PT)",
+    "N. <titlu capitol din cuprins> + progres",
+    "▶ Rulează A→B→A (B întârziat N,N s)",
+    "▸ Elemente (N)",
+    "▸ N rânduri fără excepție (doar din surse citite; proveniență om / server / regulă client — niciodată AI)",
+    "▾ Elemente (N)",
+    "▾ N rânduri fără excepție (doar din surse citite; proveniență om / server / regulă client — niciodată AI)"
+  ],
+  "nota": "Fișier de dovadă fără texte din fixture: titlurile de capitol sunt înlocuite cu «…»; capturile PNG (cu date) sunt locale, necomise (capturi/ e în .gitignore)."
+}
