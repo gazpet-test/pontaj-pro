@@ -27,6 +27,8 @@ FROM public.ofertare_licitatii
 WHERE id = :lic OR autoritate ILIKE '%jilava%' OR obiect ILIKE '%jilava%'
 ORDER BY id;
 -- 29.09: un singur rând, 93 | SCN1179907 | 2026-10-02 09:00+00 (12:00 RO) | in_lucru | go | derogare false | xmin 2346905
+-- J05 (Copilot): ÎNAINTE de acordare, Q01 + Q61b împreună: flag = false, derogare_motiv IS NULL, 0 rânduri de audit pe 93.
+--   Orice altceva = cineva a scris deja pe derogare: STOP.
 
 -- Q02 [TERMEN-DEPUNERE] Notificările veghei SEAP pentru anunț. O notificare NOUĂ „TERMEN MUTAT” = veghea a rescris termenul.
 SELECT n.created_at, n.title, left(n.message,220) AS mesaj, n.xmin::text AS xmin
@@ -675,33 +677,40 @@ ORDER BY p.versiune, f.id;
 -- 29.09: 0 rânduri. Pe traseul J05 trebuie să rămână 0 (nimeni nu creează pachet prin SQL).
 
 -- Q61 [J05-TABEL-AUDIT, J05-RPC-OWNER, SEAP-DOVADA] Auditul derogărilor (toate licitațiile)
--- CORECTAT 30.09: comparația „același motiv” se face pe md5 al textului ÎNTREG, nu pe left(motiv,300) + lungime.
+-- CORECTAT 30.09 (după verdictul Copilot): comparația se face pe textul ÎNTREG + SHA-256, nu pe left(motiv,300) + lungime.
 -- Motivul are ~2.700 de caractere, iar SHA-256-urile și nr. confirmării SEAP stau după caracterul 300.
 -- Finding J05 (investigat read-only 30.09): cei 9 cu modulul Ofertare pot modifica derogare_motiv
 -- sau retrage derogarea direct prin API, fără audit, iar 'depusa_pe_derogare' copiază coloana editabilă.
-SELECT id, licitatie_id, actiune, actor, session_user_name, char_length(motiv) AS motiv_len, md5(motiv) AS motiv_md5,
+SELECT id, licitatie_id, actiune, actor, session_user_name, char_length(motiv) AS motiv_len,
+       encode(extensions.digest(motiv, 'sha256'), 'hex') AS motiv_sha256,
        left(motiv, 120) AS motiv_inceput, status_vechi, status_nou, creat_la
 FROM public.ofertare_derogari_audit ORDER BY creat_la;
 -- 29.09: 2 rânduri, ambele pe 103 (smoke 29.09 05:12). După J05 pe Jilava:
 --   'derogare_acordata' cu actor = contul lui Răzvan (nu NULL / postgres);
 --   după „depusa”: 'depusa_pe_derogare' cu ACELAȘI md5 ca 'derogare_acordata' (Q61b).
 
--- Q61b [J05-INTEGRITATE] Motivul: coloana = auditul = textul aprobat (md5 notat OFFLINE înainte de apelul RPC)
-WITH ult AS (
-  SELECT DISTINCT ON (actiune) actiune, md5(motiv) AS m, actor, creat_la
-  FROM public.ofertare_derogari_audit WHERE licitatie_id = :lic ORDER BY actiune, creat_la DESC)
-SELECT l.derogare_depunere AS flag,
-       md5(l.derogare_motiv) AS md5_coloana,
-       (SELECT m FROM ult WHERE actiune = 'derogare_acordata')  AS md5_acordata,
-       (SELECT m FROM ult WHERE actiune = 'depusa_pe_derogare') AS md5_depusa,
-       (SELECT count(*) FROM public.ofertare_derogari_audit WHERE licitatie_id = :lic AND actiune = 'derogare_retrasa') AS retrageri,
-       md5(l.derogare_motiv) IS NOT DISTINCT FROM (SELECT m FROM ult WHERE actiune = 'derogare_acordata') AS coloana_eq_acordata,
-       (SELECT m FROM ult WHERE actiune = 'depusa_pe_derogare') IS NOT DISTINCT FROM (SELECT m FROM ult WHERE actiune = 'derogare_acordata') AS depusa_eq_acordata,
-       l.xmin::text AS xmin
-FROM public.ofertare_licitatii l WHERE l.id = :lic;
--- Așteptat după depunere: flag = true, coloana_eq_acordata = true, depusa_eq_acordata = true, retrageri = 0,
---   md5_acordata = md5-ul notat offline de Răzvan. Orice false = STOP și investigație (nu se „corectează” prin SQL).
--- Notează xmin-ul după depunere și reverifică-l până la fix: dacă se schimbă, cineva a scris pe rândul 93.
+-- Q61b [J05-INTEGRITATE] DETECȚIE (Copilot: nu e prevenție). Coloana = acordarea = depunerea = textul aprobat offline.
+-- Evenimentele se identifică univoc după id (nu „ultimul rând” ambiguu). „0 retrageri” = NEDEMONSTRAT:
+-- retragerile făcute direct prin API NU apar în jurnal.
+SELECT l.id, l.status, l.derogare_depunere AS flag,
+       encode(extensions.digest(l.derogare_motiv, 'sha256'), 'hex') AS sha_coloana,
+       a.id AS acordare_id, a.actor AS acordare_actor, a.creat_la AS acordare_la,
+       encode(extensions.digest(a.motiv, 'sha256'), 'hex') AS sha_acordata,
+       d.id AS depunere_id, d.actor AS depunere_actor, d.creat_la AS depunere_la,
+       encode(extensions.digest(d.motiv, 'sha256'), 'hex') AS sha_depusa,
+       (l.derogare_motiv = a.motiv) AS coloana_eq_acordata_text,
+       (d.motiv = a.motiv) AS depusa_eq_acordata_text,
+       (SELECT count(*) FROM public.ofertare_derogari_audit x WHERE x.licitatie_id = l.id) AS randuri_audit,
+       l.xmin::text AS xmin_semnal
+FROM public.ofertare_licitatii l
+LEFT JOIN LATERAL (SELECT * FROM public.ofertare_derogari_audit x WHERE x.licitatie_id = l.id AND x.actiune = 'derogare_acordata' ORDER BY x.id) a ON true
+LEFT JOIN LATERAL (SELECT * FROM public.ofertare_derogari_audit x WHERE x.licitatie_id = l.id AND x.actiune = 'depusa_pe_derogare' ORDER BY x.id) d ON true
+WHERE l.id = :lic;
+-- Așteptat după depunere: EXACT un rând 'derogare_acordata' (actor = contul lui Răzvan) și un rând 'depusa_pe_derogare';
+--   flag = true; ambele *_eq_*_text = true; sha_acordata = SHA-256 notat OFFLINE de Răzvan înainte de apel.
+--   Mai multe rânduri în rezultat = mai multe evenimente = STOP și investigație (nu se corectează prin SQL).
+-- xmin_semnal: se notează după depunere și se reverifică. Dacă se schimbă, cineva a scris pe rând.
+--   E doar un semnal: nu arată istoricul câmpurilor, nici autorul.
 
 -- Q62 [J05-RPC-OWNER, R5] Funcțiile porții: securitate, volatilitate, drepturi
 SELECT p.oid::regprocedure AS functie, p.prosecdef, p.provolatile, p.proacl::text AS acl
