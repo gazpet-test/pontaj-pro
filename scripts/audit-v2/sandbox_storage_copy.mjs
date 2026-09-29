@@ -13,7 +13,7 @@ export function verificaPerechi(pairs) {
   for (const p of pairs) {
     caleSandbox(p.cale_noua)
     if (typeof p.cale_veche !== 'string' || !p.cale_veche.startsWith('5/') || /\\|%|[?#]|(^|\/)\.\.?($|\/)/.test(p.cale_veche)
-      || p.cale_noua !== `sandbox-v2/${p.cale_veche}`) throw new Error('Pereche invalidă: doar 5/... → sandbox-v2/5/...')
+      || p.cale_noua !== `103/${p.cale_veche.slice(2)}`) throw new Error('Pereche invalidă: doar 5/... → 103/...')
     if (paths.has(p.cale_noua)) throw new Error('Destinație duplicată')
     paths.add(p.cale_noua)
   }

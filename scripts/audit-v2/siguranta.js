@@ -1,5 +1,5 @@
 export function verificaSandbox(licitatie, fixture) {
-  if (!Number.isSafeInteger(fixture.licitatie_id) || fixture.licitatie_id <= 0 || fixture.licitatie_id === 5
+  if (fixture.licitatie_id !== 103
     || !licitatie || String(licitatie.id) !== String(fixture.licitatie_id)
     || !/^SANDBOX-V2-.+/.test(licitatie.nr_anunt || '')) throw new Error('REFUZ: licitația nu este clona SANDBOX-V2 verificată în BD')
   return true
@@ -11,6 +11,7 @@ export function verificaIds(fixture, cerinte) {
   return ids
 }
 export function caleSandbox(path) {
-  if (typeof path !== 'string' || !path.startsWith('sandbox-v2/5/') || /\\|%|[?#]|(^|\/)\.\.?($|\/)/.test(path)) throw new Error('Destinație Storage în afara sandbox-v2/5/')
+  if (typeof path !== 'string' || !path.startsWith('103/') || !path.slice(4) || path.split('/').some(p => !p)
+    || /\\|%|[?#\x00-\x1f]|(^|\/)\.\.?($|\/)/.test(path)) throw new Error('Destinație Storage în afara clonei 103/')
   return path
 }
