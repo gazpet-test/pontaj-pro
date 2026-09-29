@@ -1,4 +1,4 @@
-# INCIDENT Audit V2 — „nu se aplică” și excepțiile puse doar de AI închid porțile (FALSE_GREEN)
+# INCIDENT Audit V2 (OPEN) — „nu se aplică” și excepțiile puse doar de AI închid porțile (FALSE_GREEN)
 
 - **Declanșare:** Copilot, 29.09 ~23:45 (ora RO): „Verificați read-only dacă cele 27 de eliminatorii și 36 de excepții AI sunt doar propuneri sau sunt tratate efectiv ca închideri definitive în poartă… În al doilea caz: incident Audit V2 și alertare internă imediată a lui Răzvan, fără corectări neautorizate.”
 - **Verificare:** Claude, read-only, 29.09 ~23:50. **Rezultat: al doilea caz, confirmat.**
