@@ -19,13 +19,14 @@
 //    De aceea rândul 1 (cuprins inexistent) e BLOCK din start, iar v_ofertare_pt_stare întoarce
 //    un rând pentru toate cele 73 de licitații, nu doar pentru cele cu cerințe.
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import LantProbator from './OfertareLantProbator.jsx'
 import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './OfertareRevizii.jsx'
 import { construiestePropunere, construiesteBorderou, construiesteF23, construiesteF9, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
+import { citesteDatePT, citesteSursePT, creeazaGardaIncarcarePT, inchisaCuDovadaPT } from './ofertarePropunereDate.js'
 // R5 (Copilot 25.09.2026): H2 nu ia F3 drept referință aprobată cât are rânduri de rețea nevalidate (view separat, ca neconfirmatele).
 import { campuriCantitatiNevalidate, marcheazaInvalidate, reverificareGraficInghetat } from './ofertareCantitatiAprobare.js'
 import { COLOANE_GRAFIC_REVERIFICARE } from './ofertareGraficReverificare.js'
@@ -34,19 +35,14 @@ import { citestePaginat } from './ofertareCantitatiInvalidare.js'
 // (+ istoricul aprobărilor, dacă migrarea e aplicată). Nicio versiune / fără parametri = {} (ca înainte); eroare = control indisponibil.
 async function campuriGraficReverificare(licId) {
   try {
-    const [rV, rC, rI] = await Promise.all([
-      supabase.from('grafic_versiuni').select('versiune, generat_la, parametri:snapshot->parametri').eq('licitatie_id', licId).order('versiune', { ascending: false }).limit(1).maybeSingle(),
-      citestePaginat((a, b) => supabase.from('ofertare_cantitati').select(COLOANE_GRAFIC_REVERIFICARE).eq('licitatie_id', licId).order('id').range(a, b)),
-      // runda 6: istoricul DESCRESCĂTOR și paginat (citestePaginat)
-      citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licId).order('id', { ascending: false }).range(a, b)),
-    ])
-    if (rV.error || rC.error) return { grafic_reverificare_eroare: (rV.error || rC.error).message || 'eroare la citire' }
-    // reparația rundei 2: momentul ultimei versiuni — referința pentru rândurile aprobate ȘTERSE (H2: „de reverificat” doar după el)
-    const gl = { grafic_generat_la: rV.data?.generat_la ?? null }
-    if (!rV.data?.parametri) return gl
-    // R5 sarcina 2 (c): istoricul necitit NU mai e „[]” tăcut (rândurile invalidate ar fi dispărut din reverificare) => control indisponibil
-    if (rI.error) return { ...gl, grafic_reverificare_eroare: `istoricul aprobărilor indisponibil: ${rI.error.message || rI.error}` }
-    return { ...gl, ...reverificareGraficInghetat(rV.data.parametri, marcheazaInvalidate(rC.data || [], rI.data)) }
+    const r = await citesteSursePT({
+      grafic_versiuni: () => supabase.from('grafic_versiuni').select('versiune, generat_la, parametri:snapshot->parametri').eq('licitatie_id', licId).order('versiune', { ascending: false }).limit(1).maybeSingle(),
+      ofertare_cantitati: () => citestePaginat((a, b) => supabase.from('ofertare_cantitati').select(COLOANE_GRAFIC_REVERIFICARE).eq('licitatie_id', licId).order('id').range(a, b)),
+      ofertare_cantitati_istoric: () => citestePaginat((a, b) => supabase.from('ofertare_cantitati_istoric').select('id, cantitate_id, motiv').eq('licitatie_id', licId).order('id', { ascending: false }).range(a, b)),
+    })
+    const gl = { grafic_generat_la: r.grafic_versiuni?.generat_la ?? null }
+    if (!r.grafic_versiuni?.parametri) return gl
+    return { ...gl, ...reverificareGraficInghetat(r.grafic_versiuni.parametri, marcheazaInvalidate(r.ofertare_cantitati || [], r.ofertare_cantitati_istoric)) }
   } catch (e) { return { grafic_reverificare_eroare: e?.message || String(e) } }
 }
 // P0 pas 2: rândul „documentatie” al porții. Eroare / lipsă = documentatie_verificata false → poarta spune „nu putem verifica”.
@@ -55,7 +51,7 @@ const campuriDocumentatie = r => (!r || r.error || !r.data)
   : { documentatie_verificata: true, documentatie_blocaj: r.data.blocaj || null, documentatie_esentiale: r.data.esentiale }
 import ClarificariAC from './OfertareClarificariAC.jsx'
 import OrganigramaSection from './OfertareOrganigrama.jsx'
-import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE, REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
+import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE } from './ofertareControale.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -310,7 +306,7 @@ function PoartaPT({ st, onFiltru }) {
 // ─────────────────────────────────────────────────────────────────
 // MATRICEA — cerințele, cu filtre și cele două acțiuni în bloc
 // ─────────────────────────────────────────────────────────────────
-function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedite, documente = [], filtru, setFiltru, sel, setSel,
+export function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedite, propuse, documente = [], filtru, setFiltru, sel, setSel,
                           onAtribuie, onExcepta, onVerifica, onBlocheaza, onDovada, busy }) {
   const [capSel, setCapSel] = useState('')
   const [motiv, setMotiv] = useState('')
@@ -336,7 +332,7 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
     if (filtru === 'fara')    return !areCap && !exceptat && !cuDovada
     if (filtru === 'capcane') return RX_CAPCANA.test(c.text_cerinta || '') && !areCap && !exceptat
     if (filtru === 'forma')   return c.tip === 'forma'
-    if (filtru === 'dovada')  return cuDovada && !areCap && !exceptat
+    if (filtru === 'dovada')  return inchisaCuDovadaPT(c.id, ls, dovedite)
     if (filtru === 'gata')    return areCap || exceptat
     // P0c: are capitol, dar nu e confirmată de om în registru (E2) — rândul de poartă „neconfirmate”.
     if (filtru === 'neconfirmate') return areCap && !c.confirmata_de
@@ -353,7 +349,7 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
     ['capcane', '🚫 capcane'],
     ['forma',   'de formă'],
     ['dovada',  'închise cu dovadă'],
-    ['gata',    'rezolvate'],
+    ['gata',    'atribuite/exceptate'],
     ['',        'toate'],
   ]
   const toggle = id => {
@@ -426,7 +422,8 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
                   <span style={{ fontSize:11, color: c.tip === 'forma' ? G.purple : G.blue }}>{c.tip}</span>
                   {c.sursa_sectiune && <span style={{ fontSize:11, color:G.dim }}>{c.sursa_sectiune}{c.sursa_pagina ? ` p.${c.sursa_pagina}` : ''}</span>}
                   {capcana && <span style={{ fontSize:11, color:G.red, fontWeight:700 }}>🚫 CAPCANĂ</span>}
-                  {dovedite.has(c.id) && !cap && !exc && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
+                  {inchisaCuDovadaPT(c.id, ls, dovedite) && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
+                  {propuse.has(c.id) && <span style={{ fontSize:11, color:G.orange }}>dovadă propusă — neverificată pe scan</span>}
                   {capNr && <span style={{ fontSize:11, color:G.green, fontWeight:600 }}>→ {capNr.eticheta || `cap. ${capNr.nr}`}</span>}
                   {exc && <span style={{ fontSize:11, color:G.orange }} title={exc.motiv}>⊘ exceptată</span>}
                   {/* P0.3: starea legaturii. Verde DOAR la 'verificata' la versiunea CURENTA a capitolului. */}
@@ -1223,6 +1220,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [cerinte, setCerinte] = useState([])
   const [legaturi, setLegaturi] = useState([])
   const [dovedite, setDovedite] = useState(new Set())
+  const [propuse, setPropuse] = useState(new Set())
   const [afirmatii, setAfirmatii] = useState([])
   const [regulaCumul, setRegulaCumul] = useState([])   // cerintele care interzic cumulul de functii (B, 14.09)
   const [tipuriAut, setTipuriAut] = useState([])
@@ -1248,105 +1246,67 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
 
   const lic = licitatii.find(l => String(l.id) === String(licId)) || null
 
+  const garda = useRef(creeazaGardaIncarcarePT())
+  garda.current.selecteaza(licId)
+  const [dateLicId, setDateLicId] = useState(null)
+  const dateCurente = dateLicId === licId && licId != null && !eroare
+
+  const golesteDate = () => {
+    setDateLicId(null); setSt(null); setEroare(null)
+    setCapitole([]); setCerinte([]); setLegaturi([]); setDovedite(new Set()); setPropuse(new Set())
+    setAfirmatii([]); setRegulaCumul([]); setTipuriAut([]); setAutExterne([])
+    setPachet([]); setEchipamente([]); setDocumente([]); setPachete([])
+    setObservatii([]); setVersiuni([]); setGarantie(null); setParticipanti([])
+    setDeclaratii([]); setAnexeAsteptate([]); setParteneri([]); setProfiluri(new Map())
+    setEchipa([]); setBlocajeF9([]); setSel(new Set())
+  }
+
   const load = async (id) => {
+    const token = garda.current.incepe(id)
+    // Un handler vechi poate termina după schimbarea licitației; nu pornește un reload peste ea.
+    if (token == null) return
+    golesteDate()
     if (!id) return
-    setEroare(null)
-    // Filtrele trebuie să fie IDENTICE cu cele din v_ofertare_pt_stare, altfel poarta
-    // numără altceva decât arată lista. limit(5000): PostgREST taie implicit la 1000.
-    const [rSt, rCap, rCer, rAfi, rTip, rExt, rObs, rProf, rDoc, rPac, rGar, rPart, rParteneri, rDecl, rAnx] = await Promise.all([
-      supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', id).maybeSingle(),
-      supabase.from('ofertare_pt_capitole').select('*').eq('licitatie_id', id).order('nr'),
-      supabase.from('ofertare_cerinte')
-        .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, sursa_pagina, confirmata_de')
-        .eq('licitatie_id', id).in('tip', ['propunere','forma'])
-        .is('inlocuita_de', null).is('duplicat_al', null)
-        .order('nr_ordine').limit(5000),
-      supabase.from('v_ofertare_pt_conformitate').select('*').eq('licitatie_id', id)
-        .order('text_brut').limit(2000),
-      supabase.from('hr_autorizatii_tipuri').select('cod, denumire, categorie')
-        .eq('activ', true).order('categorie').order('cod'),
-      // Autorizatiile FARA angajat = specialistii externi (terti sustinatori). Numele lor exista
-      // doar in fisier_nume/observatii, deci legatura o face omul, nu o ghicim noi.
-      supabase.from('hr_autorizatii').select('id, fisier_nume, observatii, data_expirare, tip_id')
-        .is('employee_id', null).is('deleted_at', null).order('id').limit(500),
-      supabase.from('ofertare_pt_observatii').select('*').eq('licitatie_id', id)
-        .order('cerut_la', { ascending: false }).limit(1000),
-      // Numele celor care au cerut/rezolvat. Fara ele istoricul arata uuid-uri, adica nimic.
-      supabase.from('profiles').select('id, name').limit(500),
-      supabase.from('ofertare_documente_atribuire').select('id, nume_original, revizie, pagini').eq('licitatie_id', id).order('id').limit(500),
-      supabase.from('ofertare_pt_pachet').select('*, fisiere:ofertare_pt_pachet_fisiere(rol, nume, sha256, size_bytes, sursa_versiune, anexa_ref, semnat, sursa_participant, unit_in)')
-        .eq('licitatie_id', id).order('versiune', { ascending: false }).limit(50),
-      supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', id).maybeSingle(),
-      supabase.from('ofertare_pt_participanti').select('*, partener:ofertare_parteneri(nume)').eq('licitatie_id', id).order('rol'),
-      supabase.from('ofertare_parteneri').select('id, nume').eq('activ', true).order('nume'),
-      supabase.from('ofertare_pt_declaratii').select('*').eq('licitatie_id', id).order('forma'),
-      supabase.from('ofertare_pt_anexe_asteptate')
-        .select('*, participant:ofertare_pt_participanti(id, nume, rol, partener:ofertare_parteneri(nume))')
-        .eq('licitatie_id', id).order('id'),
-    ])
-    const err = rSt.error || rCap.error || rCer.error || rAfi.error || rTip.error || rExt.error || rObs.error
-    if (err) { setEroare(err.message); showToast?.('Nu s-au putut încărca datele: ' + err.message, 'err'); return }
-    const cer = rCer.data || []
-    // P0c: rândul de poartă „neconfirmate” vine dintr-un view separat (poate lipsi până la aplicarea migrării → poarta veche).
-    const rNc = await supabase.from('v_ofertare_pt_cerinte_neconfirmate').select('*').eq('licitatie_id', id).maybeSingle()
-    const rCompl = await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', id).maybeSingle()
-    const rNev = await supabase.from('v_ofertare_cantitati_nevalidate').select('*').eq('licitatie_id', id).maybeSingle()
-    const grRev = rSt.data?.grafic_versiune ? await campuriGraficReverificare(id) : {}
-    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl), ...campuriCantitatiNevalidate(rNev), ...grRev } : null); setCapitole(rCap.data || []); setCerinte(cer)
-    setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
-    // B (Domnesti 14.09): regula „o persoana nu poate cumula functii" se vede AICI, inainte sa existe vreo
-    // persoana incarcata — nu doar in verdictul per afirmatie, care e gol cat timp propunerea nu e citita.
-    supabase.from('ofertare_cerinte').select('id, text_cerinta, tip, sursa_sectiune, sursa_pagina')
-      .eq('licitatie_id', id).is('inlocuita_de', null).is('duplicat_al', null)
-      .filter('text_cerinta', 'imatch', REGEX_INTERZICE_CUMUL).limit(20)
-      .then(r => setRegulaCumul(r.error ? [] : (r.data || [])))
-    setObservatii(rObs.data || [])
-    setDocumente(rDoc.data || [])
-    setPachete(rPac.data || [])
-    setGarantie(rGar.data || null); setParticipanti(rPart.data || []); setParteneri(rParteneri.data || [])
-    setDeclaratii(rDecl.data || []); setAnexeAsteptate(rAnx.data || [])
-    // profiles poate fi inchis de RLS pentru unii; atunci ramanem fara nume, nu fara ecran.
-    setProfiluri(new Map((rProf.data || []).map(p => [p.id, p.name])))
-    setPachet([]); setEchipamente([])  // pachetele-s per licitatie: altfel raman cele de la precedenta
-
-    // Istoricul, pentru capitolele licitatiei asteia. Se cere dupa capitole fiindca tabelul de
-    // versiuni n-are licitatie_id — atarna de capitol, si asa ramane o singura sursa de adevar.
-    const capIds = (rCap.data || []).map(c => c.id)
-    if (capIds.length) {
-      const rVer = await supabase.from('ofertare_pt_capitole_versiuni')
-        .select('*').in('capitol_id', capIds).order('versiune', { ascending: false }).limit(2000)
-      if (rVer.error) { showToast?.('Istoricul nu s-a putut citi: ' + rVer.error.message, 'err'); setVersiuni([]) }
-      else setVersiuni(rVer.data || [])
-    } else setVersiuni([])
-
-    const ids = cer.map(c => c.id)
-    if (ids.length) {
-      const [rLeg, rAcop] = await Promise.all([
-        supabase.from('ofertare_pt_legaturi').select('id, cerinta_id, capitol_id, fel, motiv, stare, locator_raspuns, verificat_la_versiunea, confirmat_la').in('cerinta_id', ids).limit(10000),
-        supabase.from('ofertare_acoperire').select('cerinta_id').in('cerinta_id', ids).in('status', ['acoperit','acoperit_partener']).limit(10000),
-      ])
-      if (rLeg.error || rAcop.error) {
-        const m = (rLeg.error || rAcop.error).message
-        setEroare(m); showToast?.('Legăturile nu s-au putut citi: ' + m, 'err'); return
-      }
-      setLegaturi(rLeg.data || [])
-      setDovedite(new Set((rAcop.data || []).map(a => a.cerinta_id)))
-    } else { setLegaturi([]); setDovedite(new Set()) }
-    await loadEchipa(id)
+    try {
+      const { initial: r, rest: x, dovedite: dovezi, propuse: propuneri } =
+        await citesteDatePT(supabase, id, campuriGraficReverificare)
+      if (!garda.current.actual(token)) return
+      // Publicăm doar după toate citirile, inclusiv cumul, istoric, legături și F9.
+      setSt(r.v_ofertare_pt_stare ? {
+        ...r.v_ofertare_pt_stare, ...x.v_ofertare_pt_cerinte_neconfirmate,
+        ...campuriDocumentatie({ data: x.v_ofertare_seap_completitudine }),
+        ...campuriCantitatiNevalidate({ data: x.v_ofertare_cantitati_nevalidate }),
+        ...x['reverificare grafic'],
+      } : null)
+      setCapitole(r.ofertare_pt_capitole || []); setCerinte(r.ofertare_cerinte || [])
+      setAfirmatii(r.v_ofertare_pt_conformitate || []); setTipuriAut(r.hr_autorizatii_tipuri || [])
+      setAutExterne(r.hr_autorizatii || []); setObservatii(r.ofertare_pt_observatii || [])
+      setDocumente(r.ofertare_documente_atribuire || []); setPachete(r.ofertare_pt_pachet || [])
+      setGarantie(r.ofertare_pt_garantie || null); setParticipanti(r.ofertare_pt_participanti || [])
+      setParteneri(r.ofertare_parteneri || []); setDeclaratii(r.ofertare_pt_declaratii || [])
+      setAnexeAsteptate(r.ofertare_pt_anexe_asteptate || [])
+      setProfiluri(new Map((r.profiles || []).map(p => [p.id, p.name])))
+      setRegulaCumul(x['ofertare_cerinte (regula cumul)'] || [])
+      setVersiuni(x.ofertare_pt_capitole_versiuni || []); setLegaturi(x.ofertare_pt_legaturi || [])
+      setDovedite(dovezi); setPropuse(propuneri)
+      setEchipa(x.v_ofertare_pt_echipa || []); setBlocajeF9(x.v_ofertare_pt_echipa_blocaje || [])
+      setDateLicId(id)
+    } catch (e) {
+      if (!garda.current.actual(token)) return
+      setSt(null)
+      setEroare(e?.message || String(e))
+      showToast?.('Nu s-au putut încărca datele: ' + (e?.message || String(e)), 'err')
+    }
   }
 
-  // Echipa propusa (F9) si poarta ei. Blocajele vin din BD, nu din UI: altfel se ocolesc.
-  const loadEchipa = async (id) => {
-    const [rE, rB] = await Promise.all([
-      supabase.from('v_ofertare_pt_echipa').select('*').eq('licitatie_id', id).order('ordine', { nullsFirst: false }).order('nume').limit(500),
-      supabase.from('v_ofertare_pt_echipa_blocaje').select('*').eq('licitatie_id', id).limit(200),
-    ])
-    if (rE.error || rB.error) { showToast?.('Echipa nu s-a putut citi: ' + (rE.error || rB.error).message, 'err'); return }
-    setEchipa(rE.data || []); setBlocajeF9(rB.data || [])
-  }
+  // F9 folosește aceeași încărcare protejată: erorile nu păstrează un verdict anterior.
+  const loadEchipa = load
 
   // showToast și load NU intră în deps: lecția casei (useCallback/useEffect cu showToast = loop infinit).
-  useEffect(() => { setSel(new Set()); load(licId) }, [licId])
+  useEffect(() => {
+    load(licId)
+    return () => garda.current.invalideaza()
+  }, [licId])
 
 
   // H4 — upsert-ul garanției; ștampila = userul curent + acum. Reîncărcăm view-ul, că rândul porții vine de acolo.
@@ -2039,7 +1999,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
   }
 
   // Cât timp st e null, evaluatorul întoarce null și butonul stă blocat: verde din lipsă de date, nu.
-  const evPoarta = evalueazaPoarta(st)
+  const evPoarta = evalueazaPoarta(dateCurente ? st : null)
   const blocat = !evPoarta || evPoarta.stare === 'block'
   const zile = zileRamase(lic?.termen_depunere)
 
@@ -2055,12 +2015,12 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
             termen {fmtZi(lic.termen_depunere)}{zile != null && zile >= 0 ? ` · ${zile} zile` : ''}
           </span>
         )}
-        <button onClick={() => exporta('propunere')} disabled={busy || !capitole.length}
+        <button onClick={() => exporta('propunere')} disabled={busy || !dateCurente || !capitole.length}
           title="Propunerea tehnică în Word: pagină de titlu, cuprins automat, capitolele pe secțiuni"
           style={{ ...S.btnS, marginLeft:'auto', opacity: (busy || !capitole.length) ? .45 : 1 }}>
           📄 Propunerea (Word)
         </button>
-        <button onClick={() => exporta('borderou')} disabled={busy || !capitole.length}
+        <button onClick={() => exporta('borderou')} disabled={busy || !dateCurente || !capitole.length}
           title="Borderoul pieselor îndosariate"
           style={{ ...S.btnS, opacity: (busy || !capitole.length) ? .45 : 1 }}>
           📋 Borderoul
@@ -2071,7 +2031,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
           style={{ ...S.btnS, opacity: busy ? .45 : 1 }}>
           🚜 Formular 23
         </button>
-        <button onClick={() => exportaF9(blocajeF9.length > 0)} disabled={busy || !echipa.length}
+        <button onClick={() => exportaF9(blocajeF9.length > 0)} disabled={busy || !dateCurente || !echipa.length}
           title={!echipa.length ? 'Pornește întâi echipa din acoperiri'
             : blocajeF9.length ? `Iese CIORNĂ: ${blocajeF9.length} motiv(e) blochează finalul` : 'Formularul 9 — personalul propus'}
           style={{ ...S.btnS, opacity: (busy || !echipa.length) ? .45 : 1,
@@ -2092,6 +2052,9 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
 
       {eroare && <div style={{ ...S.card, padding:12, borderColor:G.red + '55', color:G.red, fontSize:13 }}>{eroare}</div>}
 
+      {!dateCurente && !eroare && <div style={{ color:G.muted, padding:12 }}>Se încarcă datele propunerii…</div>}
+      {eroare && <button onClick={() => load(licId)} style={S.btnS}>Reîncarcă datele</button>}
+      {dateCurente && <>
       <PoartaPT st={st} onFiltru={f => { setFiltru(f); setSel(new Set())
         // matricea e mult mai jos in pagina — fara scroll, click-ul parea ca nu face nimic
         requestAnimationFrame(() => document.getElementById('matrice-conformitate')?.scrollIntoView({ behavior:'smooth', block:'start' })) }} />
@@ -2204,12 +2167,13 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
         <div style={{ ...S.lbl, marginBottom:8 }}>Matricea de conformitate</div>
         <MatriceCerinte
           licId={licId} profiluri={profiluri}
-          cerinte={cerinte} legaturi={legaturi} capitole={capitole} dovedite={dovedite} documente={documente}
+          cerinte={cerinte} legaturi={legaturi} capitole={capitole} dovedite={dovedite} propuse={propuse} documente={documente}
           filtru={filtru} setFiltru={setFiltru} sel={sel} setSel={setSel}
           onAtribuie={atribuie} onExcepta={excepta}
           onVerifica={verificaLegatura} onBlocheaza={blocheazaLegatura} onDovada={adaugaDovada} busy={busy}
         />
       </div>
+      </>}
     </div>
   )
 }
