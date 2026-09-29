@@ -1,18 +1,27 @@
 -- ============================================================================
 -- R2 — contract de muncă încheiat → contul platformei se închide automat, cu jurnal de revenire
--- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea B (+ 0.2: corecțiile din 30.09 după S-A live).
--- Depinde de 20260929c (fn_identitate_*, fn_cont_notifica_owneri). PRECONDIȚIE: S-A 20260929g live (neatins).
+-- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea B (+ 0.2: corecțiile din 30.09 după S-A live; 0.3: runda 3).
+-- Depinde de 20260929c (fn_identitate_*, fn_nume_*, fn_cont_notifica_owneri). PRECONDIȚIE: S-A 20260929g live (neatins).
+-- Citește și tabela de producție hr_employees_private (CNP-ul aplicației, index UNIQUE; nu o modifică, doar îi pune
+-- 2 triggere: lock pe persoană și garda „cont revocat”).
 --   * conturi_inchideri_jurnal (append-only, RLS doar owner citire, scriere doar prin funcții)
 --   * conturi_inchideri_coada  — ce nu se poate face pe loc: flagurile pe calea HR, reîncercări după eșec,
---                                închideri programate (dezactivat înainte de data încetării)
+--                                închideri programate (dezactivat înainte de data încetării); runda 3: backoff,
+--                                limită de încercări (abandonat_la), notificare o singură dată (notificat_la)
 --   * fn_cont_flaguri()        — lista flagurilor de acces din profiles (internă)
---   * fn_cont_garda_persoana() — gardă ATOMICĂ „alt contract activ” (același CNP), cu lock pe persoană (internă)
+--   * fn_cont_garda_persoana() — gardă ATOMICĂ „aceeași persoană” (internă): CNP din AMBELE surse (hr_employees_private
+--                                + employees), „situație incompletă” și pe nume de familie / email; lock pe persoană
 --   * fn_cont_inchide(...)     — închiderea idempotentă + convergentă (internă); FĂRĂ golirea claims
 --   * fn_cont_inchide_owner    — închidere manuală, poartă owner în cod
 --   * trg_employees_zz_ciclu_cont — AFTER UPDATE pe employees când se schimbă active SAU termination_date
---       (prinde calea UI, calea toggleEmp și cron-ul hr_auto_deactivate_terminated, neschimbat)
---   * trg_employees_persoana_lock — același lock pe persoană la INSERT / schimbarea cnp/active/termination_date
+--       (prinde calea UI, calea toggleEmp și cron-ul hr_auto_deactivate_terminated, neschimbat); o închidere
+--       RESTAURATĂ de owner nu se re-aplică automat decât la o nouă plecare (runda 3, X3)
+--   * trg_employees_persoana_lock / trg_hr_employees_private_persoana_lock — același lock pe persoană la orice scriere
+--       care poate crea / reactiva un contract sau schimba identitatea unei fișe (CNP în oricare sursă, nume, email)
+--   * trg_employees_00_cont_revocat / trg_hr_employees_private_00_cont_revocat — un cont închis / banat (JWT încă
+--       valabil) nu mai scrie fișe de angajat și date personale (runda 3, X10 / P1e-f)
 --   * fn_conturi_inchideri_sweep — procesarea cozii, rulată de pg_cron ca postgres (identitate explicită db_login)
+--   ORDINEA LOCK-URILOR (uniformă, runda 3): persoană (advisory) → profil (FOR UPDATE) → coadă / jurnal.
 --   * fn_pgrst_pre_request     — hook PostgREST pentru revocarea EFECTIVĂ a JWT-urilor deja emise;
 --                                CREAT, dar NEACTIVAT (activarea = ALTER ROLE authenticator, cu acordul lui Răzvan)
 --   * fn_cont_restaureaza      — revenire din jurnal, EXCLUSIV owner, cu previzualizare (p_simulare)
@@ -98,6 +107,10 @@ CREATE TRIGGER trg_conturi_inchideri_fara_truncate BEFORE TRUNCATE ON public.con
 --   reincercare — închiderea automată a picat (eroare) → se reîncearcă, cu numărul de încercări și ultima eroare;
 --   programata  — fișa dezactivată ÎNAINTE de data încetării → închiderea se face când data ajunge.
 -- Sweep-ul lucrează DOAR pe coadă → aplicarea migrării nu închide nimic din datele existente.
+-- Runda 3 (X6): după o eroare, următoarea încercare vine cu backoff (5 min · 2^(n-1), max. 6 h); după 8 eșecuri coada
+-- se oprește (abandonat_la) — intrarea rămâne DESCHISĂ (alerta o arată, rollback-ul d o vede), iar owner-ul primește
+-- o singură notificare la primul eșec (notificat_la; nu una la 5 minute după ce o citește) și una la abandonare.
+-- Un eveniment nou pe aceeași intrare (HR salvează din nou fișa, altă eroare din trigger) pornește un ciclu nou.
 CREATE TABLE IF NOT EXISTS public.conturi_inchideri_coada (
   id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   profile_id          uuid NOT NULL,
@@ -111,6 +124,9 @@ CREATE TABLE IF NOT EXISTS public.conturi_inchideri_coada (
   creat_de_identitate text,
   rezolvat_la         timestamptz,
   rezultat            text,
+  urmatoarea_incercare_la timestamptz,        -- backoff după eșec (NULL = la următoarea rulare)
+  abandonat_la        timestamptz,            -- limita de încercări atinsă: coada nu mai reîncearcă (intrarea rămâne deschisă)
+  notificat_la        timestamptz,            -- owner-ul a fost anunțat de eșecul intrării (o singură dată pe ciclu)
   CONSTRAINT conturi_inchideri_coada_rezolvare_chk CHECK ((rezolvat_la IS NULL) = (rezultat IS NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_conturi_inchideri_coada_deschisa
@@ -127,17 +143,22 @@ GRANT SELECT ON TABLE public.conturi_inchideri_coada TO authenticated, service_r
 REVOKE ALL ON SEQUENCE public.conturi_inchideri_coada_id_seq FROM PUBLIC, anon, authenticated, service_role;
 
 -- Pune (sau actualizează scadența) unei intrări deschise. Internă.
+-- p_eroare nenul = apelantul tocmai a anunțat owner-ul (cont_inchidere_esuata) → notificat_la = acum.
+-- Un eveniment nou pe o intrare deschisă = ciclu nou de reîncercări (runda 3: incercari / backoff / abandonare resetate).
 CREATE OR REPLACE FUNCTION public.fn_cont_coada_pune(p_profile_id uuid, p_employee_id integer, p_tip text, p_motiv text,
                                                      p_scadent date DEFAULT CURRENT_DATE, p_eroare text DEFAULT NULL)
 RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 BEGIN
-  INSERT INTO public.conturi_inchideri_coada (profile_id, employee_id, tip, motiv, scadent_la, ultima_eroare, creat_de_identitate)
-  VALUES (p_profile_id, p_employee_id, p_tip, p_motiv, COALESCE(p_scadent, CURRENT_DATE), p_eroare, public.fn_identitate_eticheta())
+  INSERT INTO public.conturi_inchideri_coada (profile_id, employee_id, tip, motiv, scadent_la, ultima_eroare, creat_de_identitate,
+                                              notificat_la)
+  VALUES (p_profile_id, p_employee_id, p_tip, p_motiv, COALESCE(p_scadent, CURRENT_DATE), p_eroare, public.fn_identitate_eticheta(),
+          CASE WHEN p_eroare IS NOT NULL THEN now() END)
   ON CONFLICT (profile_id, tip) WHERE rezolvat_la IS NULL
   DO UPDATE SET scadent_la = EXCLUDED.scadent_la, employee_id = EXCLUDED.employee_id, motiv = EXCLUDED.motiv,
-                ultima_eroare = COALESCE(EXCLUDED.ultima_eroare, public.conturi_inchideri_coada.ultima_eroare);
+                ultima_eroare = COALESCE(EXCLUDED.ultima_eroare, public.conturi_inchideri_coada.ultima_eroare),
+                incercari = 0, urmatoarea_incercare_la = NULL, abandonat_la = NULL, notificat_la = EXCLUDED.notificat_la;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_coada_pune(uuid, integer, text, text, date, text) FROM PUBLIC, anon, authenticated, service_role;
 
@@ -156,14 +177,23 @@ AS $fn$
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_flaguri() FROM PUBLIC, anon, authenticated, service_role;
 
--- B.3a Garda „alt contract activ” (condiția Copilot, audit B #4) --------------------
+-- B.3a Garda „aceeași persoană” (condiția Copilot, audit B #4; runda 3: X1 / X2) --------------------
 -- Nu există tabel de contracte: contractul = rândul din employees; aceeași persoană = același CNP (normalizat:
--- doar litere și cifre, majuscule — acoperă și un număr de pașaport). Întoarce NULL = se poate închide,
--- 'cnp_lipsa' = situație incompletă (NU se închide automat, doar alertă), 'alt_contract_activ:<id>'.
--- ATOMICĂ: pg_advisory_xact_lock pe persoană (ținut până la finalul tranzacției), luat și de
--- trg_employees_persoana_lock la INSERT / schimbarea cnp / active / termination_date → o fișă nouă activă a
--- aceleiași persoane nu se poate strecura între verificare și închidere. Verificarea citește DUPĂ lock
--- (funcție VOLATILE → instantaneu nou în READ COMMITTED).
+-- doar litere și cifre, majuscule — acoperă și un număr de pașaport).
+-- RUNDA 3 (X1, MAJOR): CNP-ul aplicației stă în hr_employees_private.cnp (Admin → Angajați → Editează, AdeverinteLegator;
+-- index UNIQUE — a doua fișă a aceluiași om NU poate primi același CNP acolo), iar employees.cnp îl scrie doar wizard-ul
+-- „Angajat nou”. „CNP cunoscut” = COALESCE(NULLIF(hp.cnp,''), e.cnp); când sursele diferă (0 cazuri la 30.09) contează
+-- AMBELE valori. NU se copiază CNP-uri în employees.cnp: employees e citibil de orice cont logat (regresie GDPR).
+-- Întoarce NULL = se poate închide; altfel NU se închide automat (doar alertă):
+--   'cnp_lipsa'                  — fișa nu are CNP în nicio sursă (situație incompletă, D7);
+--   'alt_contract_activ:<id>'    — altă fișă ACTIVĂ cu același CNP (în oricare sursă);
+--   'posibil_alt_contract:<id>'  — altă fișă ACTIVĂ fără niciun CNP cunoscut, cu același nume de familie (fn_nume_cuvinte,
+--                                  în ambele sensuri) sau același email → nu pot verifica că e alt om (situație incompletă).
+-- ATOMICĂ: pg_advisory_xact_lock pe cheile persoanei (CNP-uri, cuvintele numelui, emailul), ținute până la COMMIT; aceleași
+-- chei le iau trg_employees_persoana_lock și trg_hr_employees_private_persoana_lock la orice scriere care poate crea /
+-- reactiva un contract sau schimba identitatea unei fișe → o fișă nouă (și FĂRĂ CNP, cu același nume — X2) sau un CNP
+-- nou în datele personale nu se pot strecura între verificare și închidere. Verificarea citește DUPĂ lock (funcție
+-- VOLATILE → instantaneu nou în READ COMMITTED).
 CREATE OR REPLACE FUNCTION public.fn_cont_cnp_normalizat(p_cnp text)
 RETURNS text
 LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -172,6 +202,49 @@ AS $fn$
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_cnp_normalizat(text) FROM PUBLIC, anon, authenticated, service_role;
 
+-- CNP-urile cunoscute ale unei fișe (normalizate, distincte), din ambele surse.
+CREATE OR REPLACE FUNCTION public.fn_cont_persoana_cnp(p_employee_id integer)
+RETURNS text[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT COALESCE(array_agg(DISTINCT x.c ORDER BY x.c), '{}'::text[])
+    FROM (SELECT public.fn_cont_cnp_normalizat(hp.cnp) AS c FROM public.hr_employees_private hp WHERE hp.employee_id = p_employee_id
+          UNION ALL
+          SELECT public.fn_cont_cnp_normalizat(e.cnp) FROM public.employees e WHERE e.id = p_employee_id) x
+   WHERE x.c IS NOT NULL;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_persoana_cnp(integer) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Cheile de lock ale unei persoane: 'gazpet.persoana:<CNP>' (formatul din 30.09, același ca fn_cont_lock_persoana),
+-- 'gazpet.persoana.nume:<CUVÂNT>' pentru fiecare cuvânt al numelui, 'gazpet.persoana.email:<email>'.
+CREATE OR REPLACE FUNCTION public.fn_cont_persoana_chei(p_cnp text[], p_nume text, p_email text)
+RETURNS text[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT COALESCE(array_agg(DISTINCT x.k ORDER BY x.k), '{}'::text[])
+    FROM (SELECT 'gazpet.persoana:' || c AS k FROM unnest(COALESCE(p_cnp, '{}'::text[])) c WHERE c IS NOT NULL
+          UNION ALL
+          SELECT 'gazpet.persoana.nume:' || w FROM unnest(public.fn_nume_cuvinte(p_nume)) w
+          UNION ALL
+          SELECT 'gazpet.persoana.email:' || lower(btrim(p_email)) WHERE NULLIF(btrim(COALESCE(p_email, '')), '') IS NOT NULL) x;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_persoana_chei(text[], text, text) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Ia lock-urile în ordinea valorii hash (aceeași ordine globală în orice tranzacție → două tranzacții care își iau cheile
+-- dintr-o dată nu pot forma un ciclu). Reentrant: o cheie deja ținută de tranzacție nu mai blochează.
+CREATE OR REPLACE FUNCTION public.fn_cont_lock_chei(p_chei text[])
+RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE v_h bigint;
+BEGIN
+  FOR v_h IN SELECT DISTINCT hashtextextended(k, 0) FROM unnest(COALESCE(p_chei, '{}'::text[])) k WHERE k IS NOT NULL ORDER BY 1 LOOP
+    PERFORM pg_advisory_xact_lock(v_h);
+  END LOOP;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_lock_chei(text[]) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Compatibilitate (30.09): lock doar pe cheia unui CNP normalizat.
 CREATE OR REPLACE FUNCTION public.fn_cont_lock_persoana(p_cnp_normalizat text)
 RETURNS void
 LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
@@ -181,54 +254,185 @@ AS $fn$
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_lock_persoana(text) FROM PUBLIC, anon, authenticated, service_role;
 
+-- Altă fișă ACTIVĂ (contract neîncheiat) cu un CNP comun, în oricare sursă. NULL = niciuna.
+CREATE OR REPLACE FUNCTION public.fn_cont_alt_contract_activ(p_employee_id integer, p_cnp text[])
+RETURNS integer
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT min(b.id)
+    FROM public.employees b
+   WHERE b.id <> p_employee_id
+     AND b.active IS TRUE
+     AND (b.termination_date IS NULL OR b.termination_date > CURRENT_DATE)
+     AND cardinality(COALESCE(p_cnp, '{}'::text[])) > 0
+     AND (public.fn_cont_cnp_normalizat(b.cnp) = ANY (p_cnp)
+          OR EXISTS (SELECT 1 FROM public.hr_employees_private hp
+                      WHERE hp.employee_id = b.id AND public.fn_cont_cnp_normalizat(hp.cnp) = ANY (p_cnp)));
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_alt_contract_activ(integer, text[]) FROM PUBLIC, anon, authenticated, service_role;
+
+-- „Situație incompletă” pe nume / email: altă fișă ACTIVĂ fără niciun CNP cunoscut, cu același email (nevid) sau al cărei
+-- nume de familie apare printre cuvintele numelui fișei date ȘI invers (prinde și ordinea inversată „ION MARIN” /
+-- „MARIN ION”). Nu pot dovedi că e alt om → doar alertă. NULL = niciuna.
+CREATE OR REPLACE FUNCTION public.fn_cont_posibil_aceeasi_persoana(p_employee_id integer)
+RETURNS integer
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  WITH a AS (
+    SELECT e.id, public.fn_nume_cuvinte(e.name) AS cuv, public.fn_nume_familie(e.name) AS fam,
+           lower(btrim(COALESCE(e.email, ''))) AS em
+      FROM public.employees e WHERE e.id = p_employee_id
+  )
+  SELECT min(b.id)
+    FROM public.employees b, a
+   WHERE b.id <> a.id
+     AND b.active IS TRUE
+     AND (b.termination_date IS NULL OR b.termination_date > CURRENT_DATE)
+     AND cardinality(public.fn_cont_persoana_cnp(b.id)) = 0
+     AND ((a.em <> '' AND lower(btrim(COALESCE(b.email, ''))) = a.em)
+          OR (a.fam IS NOT NULL AND a.fam = ANY (public.fn_nume_cuvinte(b.name))
+              AND public.fn_nume_familie(b.name) = ANY (a.cuv)));
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_posibil_aceeasi_persoana(integer) FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.fn_cont_garda_persoana(p_employee_id integer)
 RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_cnp text;
-  v_alt integer;
+  v_chei    text[];
+  v_blocate text[] := '{}';
+  v_cnp     text[];
+  v_alt     integer;
 BEGIN
-  SELECT public.fn_cont_cnp_normalizat(e.cnp) INTO v_cnp FROM public.employees e WHERE e.id = p_employee_id;
-  IF v_cnp IS NULL THEN
+  -- 1) lock pe persoană; cheile se recalculează după lock (o scriere concurentă tocmai confirmată poate aduce un CNP /
+  --    nume nou) — cel mult 3 treceri, fiecare citire e o instrucțiune nouă (instantaneu nou)
+  FOR i IN 1..3 LOOP
+    SELECT public.fn_cont_persoana_chei(public.fn_cont_persoana_cnp(e.id), e.name, e.email) INTO v_chei
+      FROM public.employees e WHERE e.id = p_employee_id;
+    EXIT WHEN v_chei IS NULL OR v_chei <@ v_blocate;
+    PERFORM public.fn_cont_lock_chei(v_chei);
+    v_blocate := v_blocate || v_chei;
+  END LOOP;
+  -- 2) verificarea, DUPĂ lock
+  v_cnp := public.fn_cont_persoana_cnp(p_employee_id);
+  IF cardinality(v_cnp) = 0 THEN
     RETURN 'cnp_lipsa';
   END IF;
-  PERFORM public.fn_cont_lock_persoana(v_cnp);
-  SELECT e.id INTO v_alt
-    FROM public.employees e
-   WHERE e.id <> p_employee_id
-     AND public.fn_cont_cnp_normalizat(e.cnp) = v_cnp
-     AND e.active IS TRUE
-     AND (e.termination_date IS NULL OR e.termination_date > CURRENT_DATE)
-   ORDER BY e.id LIMIT 1;
+  v_alt := public.fn_cont_alt_contract_activ(p_employee_id, v_cnp);
   IF v_alt IS NOT NULL THEN
     RETURN 'alt_contract_activ:' || v_alt;
+  END IF;
+  v_alt := public.fn_cont_posibil_aceeasi_persoana(p_employee_id);
+  IF v_alt IS NOT NULL THEN
+    RETURN 'posibil_alt_contract:' || v_alt;
   END IF;
   RETURN NULL;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_garda_persoana(integer) FROM PUBLIC, anon, authenticated, service_role;
 
--- Același lock pe persoană la orice schimbare care poate crea / încheia un contract (ordonat, fără deadlock).
+-- Textul pentru owner al unui rezultat al gărzii (notificarea cont_inchidere_suspendata, din trigger și din coadă).
+CREATE OR REPLACE FUNCTION public.fn_cont_motiv_garda(p_garda text)
+RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT CASE
+    WHEN p_garda IS NULL THEN NULL
+    WHEN p_garda = 'cnp_lipsa' THEN 'CNP lipsă (nici în datele personale, nici pe fișă): nu pot verifica dacă omul are alt contract activ'
+    WHEN p_garda LIKE 'alt_contract_activ:%' THEN format('are alt contract ACTIV (fișa #%s), același CNP', split_part(p_garda, ':', 2))
+    WHEN p_garda LIKE 'posibil_alt_contract:%' THEN
+      format('posibil alt contract ACTIV: fișa #%s %s, fără CNP, cu același nume de familie sau email — completează CNP-ul ei (Admin → Angajați → date personale) sau închide contul manual',
+             split_part(p_garda, ':', 2), COALESCE((SELECT e.name FROM public.employees e WHERE e.id::text = split_part(p_garda, ':', 2)), ''))
+    ELSE p_garda END;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_motiv_garda(text) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Același lock pe persoană la orice scriere pe employees care poate crea / reactiva un contract sau schimba identitatea
+-- unei fișe (CNP, nume, email). O scriere care DOAR încheie / dezactivează (fișa nu rămâne contract activ, identitatea
+-- neschimbată — ex. cron-ul 13) nu poate crea „alt contract activ” → fără lock aici (garda fișei închise își ia singură
+-- lock-urile); așa cron-ul nu mai ține chei inutile pe rândurile lotului.
 CREATE OR REPLACE FUNCTION public.fn_employees_persoana_lock()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_nou   text := public.fn_cont_cnp_normalizat(NEW.cnp);
-  v_vechi text := CASE WHEN TG_OP = 'UPDATE' THEN public.fn_cont_cnp_normalizat(OLD.cnp) END;
+  v_priv text;
+  v_chei text[];
 BEGIN
-  IF v_vechi IS NOT NULL AND v_vechi IS DISTINCT FROM v_nou THEN
-    PERFORM public.fn_cont_lock_persoana(least(v_vechi, v_nou));
-    PERFORM public.fn_cont_lock_persoana(greatest(v_vechi, v_nou));
-  ELSE
-    PERFORM public.fn_cont_lock_persoana(v_nou);
+  IF TG_OP = 'UPDATE'
+     AND NEW.cnp IS NOT DISTINCT FROM OLD.cnp AND NEW.name IS NOT DISTINCT FROM OLD.name AND NEW.email IS NOT DISTINCT FROM OLD.email
+     AND NOT (NEW.active IS TRUE AND (NEW.termination_date IS NULL OR NEW.termination_date > CURRENT_DATE)) THEN
+    RETURN NEW;
   END IF;
+  IF TG_OP = 'UPDATE' THEN
+    SELECT public.fn_cont_cnp_normalizat(hp.cnp) INTO v_priv FROM public.hr_employees_private hp WHERE hp.employee_id = NEW.id;
+  END IF;
+  v_chei := public.fn_cont_persoana_chei(ARRAY[public.fn_cont_cnp_normalizat(NEW.cnp), v_priv], NEW.name, NEW.email);
+  IF TG_OP = 'UPDATE' THEN
+    v_chei := v_chei || public.fn_cont_persoana_chei(ARRAY[public.fn_cont_cnp_normalizat(OLD.cnp)], OLD.name, OLD.email);
+  END IF;
+  PERFORM public.fn_cont_lock_chei(v_chei);
   RETURN NEW;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_employees_persoana_lock() FROM PUBLIC, anon, authenticated, service_role;
 DROP TRIGGER IF EXISTS trg_employees_persoana_lock ON public.employees;
-CREATE TRIGGER trg_employees_persoana_lock BEFORE INSERT OR UPDATE OF cnp, active, termination_date ON public.employees
+CREATE TRIGGER trg_employees_persoana_lock BEFORE INSERT OR UPDATE OF cnp, active, termination_date, name, email ON public.employees
   FOR EACH ROW EXECUTE FUNCTION public.fn_employees_persoana_lock();
+
+-- Același lock la scrierea CNP-ului în datele personale (INSERT / UPDATE OF cnp, employee_id / DELETE): un CNP care apare,
+-- dispare sau se mută pe altă fișă în timpul unei închideri așteaptă garda (runda 3, X1).
+CREATE OR REPLACE FUNCTION public.fn_hr_employees_private_persoana_lock()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  PERFORM public.fn_cont_lock_chei(public.fn_cont_persoana_chei(
+    ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN public.fn_cont_cnp_normalizat(NEW.cnp) END,
+          CASE WHEN TG_OP <> 'INSERT' THEN public.fn_cont_cnp_normalizat(OLD.cnp) END], NULL, NULL));
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_hr_employees_private_persoana_lock() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS trg_hr_employees_private_persoana_lock ON public.hr_employees_private;
+CREATE TRIGGER trg_hr_employees_private_persoana_lock BEFORE INSERT OR UPDATE OF cnp, employee_id OR DELETE ON public.hr_employees_private
+  FOR EACH ROW EXECUTE FUNCTION public.fn_hr_employees_private_persoana_lock();
+
+-- B.3b Cont revocat = fără scrieri pe fișe (runda 3, X10 / P1e-f) -------------------------------------------
+-- Un cont cu închidere deschisă sau ban activ, cu JWT-ul emis înainte de închidere (valabil ≤ 1 h până la D9) și cu
+-- flagurile încă TRUE (calea HR, ≤ 5 min până la coadă), putea: încheia contractul altcuiva (închide conturi), goli
+-- CNP-uri (ocolește garda), edita fișe. Statement-level: refuză înainte de orice rând, 42501. Nu atinge cron-ul,
+-- migrările, service_role (fără uid) și nici un cont activ. Celelalte tabele (RLS pe JWT) rămân expuse până la D9.
+CREATE OR REPLACE FUNCTION public.fn_cont_revocat_nu_scrie()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE v_uid uuid := public.fn_identitate_uid();
+BEGIN
+  IF v_uid IS NOT NULL AND public.fn_identitate_revocata(v_uid) THEN
+    RAISE EXCEPTION 'Contul e închis sau blocat: nu mai poate modifica % (JWT emis înainte de închidere)', TG_TABLE_NAME
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NULL;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_revocat_nu_scrie() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS trg_employees_00_cont_revocat ON public.employees;
+CREATE TRIGGER trg_employees_00_cont_revocat BEFORE INSERT OR UPDATE OR DELETE ON public.employees
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_cont_revocat_nu_scrie();
+DROP TRIGGER IF EXISTS trg_hr_employees_private_00_cont_revocat ON public.hr_employees_private;
+CREATE TRIGGER trg_hr_employees_private_00_cont_revocat BEFORE INSERT OR UPDATE OR DELETE ON public.hr_employees_private
+  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_cont_revocat_nu_scrie();
+
+-- Ultima închidere a contului, dacă a fost RESTAURATĂ de owner (runda 3, X3). Cât timp e așa, nimic nu re-închide
+-- automat contul (corecția datei, data pusă ulterior pe o fișă inactivă, programarea) până la o acțiune explicită:
+-- închiderea manuală de către owner sau o NOUĂ plecare (fișa trece iar din activă în inactivă). NULL = nu e cazul.
+CREATE OR REPLACE FUNCTION public.fn_cont_restaurare_activa(p_profile_id uuid)
+RETURNS bigint
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT x.id FROM (SELECT j.id, j.restaurat_la FROM public.conturi_inchideri_jurnal j
+                     WHERE j.profile_id = p_profile_id ORDER BY j.id DESC LIMIT 1) x
+   WHERE x.restaurat_la IS NOT NULL;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_restaurare_activa(uuid) FROM PUBLIC, anon, authenticated, service_role;
 
 -- B.3 Închiderea (internă). Întoarce 'inchis' | 'deja_inchis' | 'sarit_owner' | 'inexistent'.
 -- CORECȚIA 30.09 (audit A #2, M2): NU se mai golesc claims (era impersonarea „lipsei identității”; cu S-A extins
@@ -238,7 +442,10 @@ CREATE TRIGGER trg_employees_persoana_lock BEFORE INSERT OR UPDATE OF cnp, activ
 --   * altfel (HR prin UI, orice altă identitate): tot restul se revocă pe loc, flagurile intră în coadă (tip
 --     'flaguri') și le pune pe false fn_conturi_inchideri_sweep (pg_cron, ≤ 5 min).
 -- Revocarea accesului: banned_until, refresh tokens ȘTERȘI, sesiuni ȘTERSE (JWT-urile deja emise rămân valabile
--- până la expirare — vezi fn_pgrst_pre_request, B.5c).
+-- până la expirare — vezi fn_pgrst_pre_request, B.5c; runda 3: contul revocat nu mai e „om” pentru porțile R3 și nu
+-- mai scrie fișe — fn_identitate_om / trg_employees_00_cont_revocat).
+-- Ordinea lock-urilor (uniformă în pachet, runda 3): profil (FOR UPDATE) → jurnal → coadă; apelanții care au nevoie de
+-- garda persoanei (triggerul, sweep-ul) iau lock-ul persoanei ÎNAINTEA profilului.
 CREATE OR REPLACE FUNCTION public.fn_cont_inchide(p_profile_id uuid, p_motiv text, p_sursa text, p_employee_id integer DEFAULT NULL)
 RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
@@ -366,12 +573,17 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_inchide_owner(uuid, text) TO authentica
 -- AFTER UPDATE + WHEN pe active SAU termination_date (nu UPDATE OF): vede și active=false pus de
 -- fn_employees_termination_notify (BEFORE) pe calea UI, UPDATE-ul cron-ului (fără JWT) și data pusă
 -- ULTERIOR pe o fișă deja inactivă (audit B #5-ii).
--- Pentru fiecare cont legat de fișă (și de celelalte fișe încheiate ale ACELEIAȘI persoane, după CNP):
+-- Pentru fiecare cont legat de fișă (și de celelalte fișe încheiate ale ACELEIAȘI persoane, după CNP din ambele surse):
 --   * owner → niciodată închis (notificare);
+--   * închidere RESTAURATĂ de owner (runda 3, X3) și fără o plecare nouă (fișa nu trece acum din activă în inactivă:
+--     corecția datei, data pusă ulterior) → nu se re-închide automat, doar notificare; o plecare nouă sau închiderea
+--     manuală a owner-ului ridică blocajul;
 --   * tip_cont extern/test/sistem → nu se închide automat (doar alertă) (audit B #5-iv);
---   * garda „alt contract activ” (ATOMICĂ, lock pe persoană) sau CNP lipsă → nu se închide (doar alertă);
+--   * garda „aceeași persoană” (ATOMICĂ, lock pe persoană): CNP lipsă / alt contract activ / posibil alt contract
+--     activ (fișă activă fără CNP, același nume de familie sau email) → nu se închide (doar alertă);
 --   * altfel fn_cont_inchide; o eroare → notificare + coadă 'reincercare' (nu blochează NICIODATĂ UPDATE-ul).
--- Dezactivare cu dată în VIITOR → coadă 'programata' (închiderea se face când data ajunge).
+-- Dezactivare cu dată în VIITOR → coadă 'programata' (închiderea se face când data ajunge), cu aceeași excepție pentru
+-- conturile restaurate fără plecare nouă.
 CREATE OR REPLACE FUNCTION public.fn_employees_ciclu_cont()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
@@ -380,9 +592,11 @@ DECLARE
   r        record;
   v_rez    text;
   v_err    text;
-  v_cnp    text := public.fn_cont_cnp_normalizat(NEW.cnp);
+  v_cnp    text[];
   v_garda  text;
   v_motiv  text;
+  v_rest   bigint;
+  v_plecare boolean := OLD.active IS TRUE;          -- trecere activ → inactiv = plecare nouă (omul a lucrat după o restaurare)
   v_inchide boolean := NEW.active IS FALSE AND NEW.termination_date IS NOT NULL AND NEW.termination_date <= CURRENT_DATE
                        AND (OLD.active IS TRUE OR OLD.termination_date IS DISTINCT FROM NEW.termination_date);
 BEGIN
@@ -394,22 +608,24 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
       v_garda := 'eroare_garda: ' || SQLERRM;
     END;
+    v_cnp := public.fn_cont_persoana_cnp(NEW.id);
     FOR r IN SELECT p.id, p.email, p.is_owner, p.tip_cont, p.employee_id::integer AS emp
                FROM public.profiles p
               WHERE p.employee_id = NEW.id
-                 OR (v_cnp IS NOT NULL AND p.employee_id IN (
+                 OR (cardinality(v_cnp) > 0 AND p.employee_id IN (
                       SELECT e.id FROM public.employees e
-                       WHERE e.id <> NEW.id AND public.fn_cont_cnp_normalizat(e.cnp) = v_cnp
+                       WHERE e.id <> NEW.id AND public.fn_cont_persoana_cnp(e.id) && v_cnp
                          AND e.active IS NOT TRUE AND e.termination_date IS NOT NULL AND e.termination_date <= CURRENT_DATE))
               ORDER BY p.id LOOP
+      v_rest := CASE WHEN NOT v_plecare THEN public.fn_cont_restaurare_activa(r.id) END;
       v_motiv := CASE
         WHEN r.is_owner IS TRUE THEN NULL             -- fn_cont_inchide întoarce sarit_owner și anunță
         WHEN EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j
                       WHERE j.profile_id = r.id AND j.restaurat_la IS NULL) THEN NULL   -- deja închis: reaplicare convergentă
+        WHEN v_rest IS NOT NULL THEN
+          format('contul a fost RESTAURAT de owner (jurnal #%s) și nu se re-închide automat la o corecție a fișei; închide-l manual dacă omul a plecat definitiv', v_rest)
         WHEN COALESCE(r.tip_cont, 'angajat') <> 'angajat' THEN format('contul e marcat „%s”, nu se închide automat', r.tip_cont)
-        WHEN v_garda = 'cnp_lipsa' THEN 'CNP lipsă pe fișă: nu pot verifica dacă omul are alt contract activ'
-        WHEN v_garda LIKE 'alt_contract_activ:%' THEN format('are alt contract ACTIV (fișa #%s), același CNP', split_part(v_garda, ':', 2))
-        WHEN v_garda IS NOT NULL THEN v_garda
+        ELSE public.fn_cont_motiv_garda(v_garda)
       END;
       IF v_motiv IS NOT NULL THEN
         BEGIN
@@ -463,14 +679,26 @@ BEGIN
   ELSIF NEW.active IS FALSE AND (OLD.active IS TRUE OR OLD.termination_date IS DISTINCT FROM NEW.termination_date) THEN
     FOR r IN SELECT p.id, p.email, p.is_owner, p.employee_id::integer AS emp
                FROM public.profiles p WHERE p.employee_id = NEW.id ORDER BY p.id LOOP
+      v_rest := CASE WHEN NOT v_plecare THEN public.fn_cont_restaurare_activa(r.id) END;
       IF NEW.termination_date IS NOT NULL AND NEW.termination_date > CURRENT_DATE AND r.is_owner IS NOT TRUE THEN
-        BEGIN                                         -- dezactivat înainte de dată: închiderea se programează
-          PERFORM public.fn_cont_coada_pune(r.id, r.emp, 'programata',
-            format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
-            NEW.termination_date);
-        EXCEPTION WHEN OTHERS THEN
-          RAISE WARNING 'fn_employees_ciclu_cont coadă (%): % [%]', r.email, SQLERRM, SQLSTATE;
-        END;
+        IF v_rest IS NULL THEN
+          BEGIN                                       -- dezactivat înainte de dată: închiderea se programează
+            PERFORM public.fn_cont_coada_pune(r.id, r.emp, 'programata',
+              format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
+              NEW.termination_date);
+          EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'fn_employees_ciclu_cont coadă (%): % [%]', r.email, SQLERRM, SQLSTATE;
+          END;
+        ELSE
+          BEGIN                                       -- cont restaurat de owner, fără plecare nouă: nu se programează
+            PERFORM public.fn_cont_notifica_owneri('cont_inchidere_suspendata', '⏸ Contract încheiat — contul NU s-a închis automat',
+              format('%s (fișa #%s %s): contul a fost RESTAURAT de owner (jurnal #%s) și nu se re-închide automat la o corecție a fișei (data încetării: %s). Contul rămâne deschis; închide-l manual din Admin → Manageri dacă omul a plecat definitiv.',
+                     r.email, NEW.id, NEW.name, v_rest, to_char(NEW.termination_date, 'DD.MM.YYYY')),
+              '/admin?tab=managers&cont=' || r.id::text);
+          EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'fn_employees_ciclu_cont notificare (%): % [%]', r.email, SQLERRM, SQLSTATE;
+          END;
+        END IF;
       END IF;
       IF OLD.active IS TRUE THEN
         BEGIN
@@ -521,85 +749,131 @@ CREATE TRIGGER trg_employees_zz_ciclu_cont AFTER UPDATE ON public.employees
 -- Gardă în cod: doar o identitate privilegiată explicită (fn_identitate_privilegiata); EXECUTE revocat de la
 -- toate rolurile API. Nu citește conținut extern; doar ia drepturi (flaguri → false, închideri), nu dă niciodată.
 -- Un cont restaurat de owner NU se re-închide: restaurarea anulează intrările din coadă și sweep-ul verifică
--- din nou toate condițiile (fișă încă inactivă, dată ajunsă, legătura neschimbată, gardă, tip cont, owner).
+-- din nou toate condițiile (fișă încă inactivă, dată ajunsă, legătura neschimbată, gardă, tip cont, owner, restaurare).
+-- Runda 3:
+--   * ordinea lock-urilor (X / 40P01): candidații se citesc FĂRĂ lock; pentru fiecare: persoana (garda, advisory) →
+--     profilul (FOR UPDATE) → intrarea din coadă (FOR UPDATE, recitită) → jurnalul (în fn_cont_inchide) — aceeași
+--     ordine ca fn_cont_inchide / fn_cont_restaureaza (profil înaintea cozii); varianta veche bloca intrarea întâi;
+--   * X6: după o eroare, backoff 5 min · 2^(n-1) (max. 6 h); după 8 eșecuri abandonat_la (coada se oprește, intrarea
+--     rămâne deschisă, alerta cont_activ_fost_angajat / inchis_cu_acces_rest o arată); owner-ul e anunțat o singură
+--     dată la primul eșec (dacă nu l-a anunțat deja triggerul) și o dată la abandonare — nu la fiecare rulare.
 CREATE OR REPLACE FUNCTION public.fn_conturi_inchideri_sweep()
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
+  c_max_incercari constant integer := 8;
   q        record;
+  x        public.conturi_inchideri_coada%ROWTYPE;
   e        record;
   v_rez    text;
   v_garda  text;
   v_set    text;
   v_n      jsonb := '{}'::jsonb;
   v_rezult text;
+  v_err    text;
+  v_email  text;
 BEGIN
   IF public.fn_identitate_privilegiata() IS NULL THEN
     RAISE EXCEPTION 'Coada închiderilor o procesează doar pg_cron (login postgres) sau o identitate privilegiată explicită'
       USING ERRCODE = '42501';
   END IF;
   SELECT string_agg(format('%I = false', f), ', ') INTO v_set FROM unnest(public.fn_cont_flaguri()) f;
-  FOR q IN SELECT * FROM public.conturi_inchideri_coada
-            WHERE rezolvat_la IS NULL AND scadent_la <= CURRENT_DATE
-            ORDER BY id FOR UPDATE SKIP LOCKED LOOP
+  FOR q IN SELECT c.id, c.profile_id, c.employee_id, c.tip
+             FROM public.conturi_inchideri_coada c
+            WHERE c.rezolvat_la IS NULL AND c.abandonat_la IS NULL AND c.scadent_la <= CURRENT_DATE
+              AND (c.urmatoarea_incercare_la IS NULL OR c.urmatoarea_incercare_la <= now())
+            ORDER BY c.id LOOP
     v_rezult := NULL;
+    v_garda := NULL;
     BEGIN
-      IF q.tip = 'flaguri' THEN
-        IF EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j WHERE j.profile_id = q.profile_id AND j.restaurat_la IS NULL)
-           AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = q.profile_id AND p.is_owner IS NOT TRUE) THEN
+      IF q.tip <> 'flaguri' AND q.employee_id IS NOT NULL THEN
+        v_garda := public.fn_cont_garda_persoana(q.employee_id);          -- 1) persoana (lock până la COMMIT)
+      END IF;
+      PERFORM 1 FROM public.profiles p WHERE p.id = q.profile_id FOR UPDATE;   -- 2) profilul
+      SELECT c.* INTO x FROM public.conturi_inchideri_coada c WHERE c.id = q.id FOR UPDATE;   -- 3) intrarea, recitită
+      IF NOT FOUND OR x.rezolvat_la IS NOT NULL OR x.abandonat_la IS NOT NULL THEN
+        CONTINUE;                                    -- rezolvată între timp (restaurare, închidere manuală, reactivare)
+      END IF;
+      IF x.tip = 'flaguri' THEN
+        IF NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = x.profile_id) THEN
+          v_rezult := 'anulat_profil_inexistent';
+        ELSIF EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j WHERE j.profile_id = x.profile_id AND j.restaurat_la IS NULL)
+              AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = x.profile_id AND p.is_owner IS NOT TRUE) THEN
           IF v_set IS NOT NULL THEN
-            EXECUTE format('UPDATE public.profiles SET %s WHERE id = $1', v_set) USING q.profile_id;
+            EXECUTE format('UPDATE public.profiles SET %s WHERE id = $1', v_set) USING x.profile_id;
           END IF;
           v_rezult := 'flaguri_resetate';
         ELSE
           v_rezult := 'anulat_restaurat';
         END IF;
       ELSE
-        SELECT x.* INTO e FROM public.employees x WHERE x.id = q.employee_id;
+        SELECT y.* INTO e FROM public.employees y WHERE y.id = x.employee_id;
         IF NOT FOUND
-           OR NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = q.profile_id AND p.employee_id = q.employee_id)
+           OR NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = x.profile_id AND p.employee_id = x.employee_id)
            OR e.active IS TRUE OR e.termination_date IS NULL THEN
           v_rezult := 'anulat_conditii';
         ELSIF e.termination_date > CURRENT_DATE THEN
-          UPDATE public.conturi_inchideri_coada SET scadent_la = e.termination_date WHERE id = q.id;   -- data s-a mutat
-        ELSIF EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j WHERE j.profile_id = q.profile_id AND j.restaurat_la IS NULL) THEN
+          UPDATE public.conturi_inchideri_coada SET scadent_la = e.termination_date WHERE id = x.id;   -- data s-a mutat
+        ELSIF EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j WHERE j.profile_id = x.profile_id AND j.restaurat_la IS NULL) THEN
           v_rezult := 'deja_inchis';
-        ELSIF EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = q.profile_id
+        ELSIF EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = x.profile_id
                         AND (p.is_owner IS TRUE OR COALESCE(p.tip_cont, 'angajat') <> 'angajat')) THEN
           v_rezult := 'suspendat_owner_sau_tip_cont';
+        ELSIF EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j
+                       WHERE j.id = public.fn_cont_restaurare_activa(x.profile_id) AND j.restaurat_la >= x.creat_la) THEN
+          v_rezult := 'anulat_restaurat';                -- restaurare mai nouă decât intrarea: decizia owner-ului rămâne
+        ELSIF v_garda IS NOT NULL THEN
+          v_rezult := 'suspendat_' || split_part(v_garda, ':', 1);
+          PERFORM public.fn_cont_notifica_owneri('cont_inchidere_suspendata', '⏸ Contract încheiat — contul NU s-a închis automat',
+            format('%s (fișa #%s %s): %s. Contul rămâne deschis; închide-l manual din Admin → Manageri sau corectează fișa.',
+                   (SELECT p.email FROM public.profiles p WHERE p.id = x.profile_id), e.id, e.name, public.fn_cont_motiv_garda(v_garda)),
+            '/admin?tab=managers&cont=' || x.profile_id::text);
         ELSE
-          v_garda := public.fn_cont_garda_persoana(e.id);      -- lock pe persoană până la COMMIT
-          IF v_garda IS NOT NULL THEN
-            v_rezult := 'suspendat_' || split_part(v_garda, ':', 1);
-            PERFORM public.fn_cont_notifica_owneri('cont_inchidere_suspendata', '⏸ Contract încheiat — contul NU s-a închis automat',
-              format('%s (fișa #%s %s): %s. Contul rămâne deschis; închide-l manual din Admin → Manageri sau corectează fișa.',
-                     (SELECT p.email FROM public.profiles p WHERE p.id = q.profile_id), e.id, e.name,
-                     CASE WHEN v_garda = 'cnp_lipsa' THEN 'CNP lipsă pe fișă: nu pot verifica dacă omul are alt contract activ'
-                          ELSE format('are alt contract ACTIV (fișa #%s), același CNP', split_part(v_garda, ':', 2)) END),
-              '/admin?tab=managers&cont=' || q.profile_id::text);
-          ELSE
-            v_rez := public.fn_cont_inchide(q.profile_id,
-                       format('Contract încheiat la %s (fișa #%s %s) · %s', to_char(e.termination_date, 'DD.MM.YYYY'), e.id, e.name,
-                              CASE q.tip WHEN 'programata' THEN 'închidere programată' ELSE 'reîncercare după eșec' END),
-                       'coada_contract_incheiat', e.id);
-            v_rezult := v_rez;                                -- fn_cont_inchide a rezolvat deja intrarea
-          END IF;
+          v_rez := public.fn_cont_inchide(x.profile_id,
+                     format('Contract încheiat la %s (fișa #%s %s) · %s', to_char(e.termination_date, 'DD.MM.YYYY'), e.id, e.name,
+                            CASE x.tip WHEN 'programata' THEN 'închidere programată' ELSE 'reîncercare după eșec' END),
+                     'coada_contract_incheiat', e.id);
+          v_rezult := v_rez;                                -- fn_cont_inchide a rezolvat deja intrarea
         END IF;
       END IF;
       IF v_rezult IS NOT NULL THEN
         UPDATE public.conturi_inchideri_coada
            SET rezolvat_la = COALESCE(rezolvat_la, now()), rezultat = COALESCE(rezultat, v_rezult), incercari = incercari + 1
-         WHERE id = q.id;
+         WHERE id = x.id;
         v_n := jsonb_set(v_n, ARRAY[v_rezult], to_jsonb(COALESCE((v_n ->> v_rezult)::int, 0) + 1));
       END IF;
     EXCEPTION WHEN OTHERS THEN
-      UPDATE public.conturi_inchideri_coada SET incercari = incercari + 1, ultima_eroare = SQLERRM WHERE id = q.id;
+      v_err := SQLERRM;
       v_n := jsonb_set(v_n, ARRAY['eroare'], to_jsonb(COALESCE((v_n ->> 'eroare')::int, 0) + 1));
-      PERFORM public.fn_cont_notifica_owneri('cont_inchidere_esuata', '❌ Închiderea automată a contului a eșuat',
-        format('%s (coada #%s, %s): %s · se reîncearcă la următoarea rulare',
-               (SELECT p.email FROM public.profiles p WHERE p.id = q.profile_id), q.id, q.tip, SQLERRM),
-        '/admin?tab=managers&cont=' || q.profile_id::text);
+      BEGIN
+        -- subtranzacția anulată a eliberat lock-urile din bloc → aceeași ordine: profil, apoi intrarea
+        PERFORM 1 FROM public.profiles p WHERE p.id = q.profile_id FOR UPDATE;
+        UPDATE public.conturi_inchideri_coada
+           SET incercari = incercari + 1, ultima_eroare = v_err,
+               urmatoarea_incercare_la = now() + least(interval '5 minutes' * power(2, incercari), interval '6 hours'),
+               abandonat_la = CASE WHEN incercari + 1 >= c_max_incercari THEN now() END
+         WHERE id = q.id AND rezolvat_la IS NULL
+        RETURNING * INTO x;
+        IF FOUND THEN
+          v_email := (SELECT p.email FROM public.profiles p WHERE p.id = q.profile_id);
+          IF x.abandonat_la IS NOT NULL THEN
+            PERFORM public.fn_cont_notifica_owneri('cont_inchidere_abandonata', '⛔ Închiderea automată a contului s-a oprit',
+              format('%s (coada #%s, %s): %s încercări eșuate, ultima: %s · coada NU mai reîncearcă — elimină cauza și închide contul manual (Admin → Manageri)',
+                     v_email, x.id, x.tip, x.incercari, v_err),
+              '/admin?tab=managers&cont=' || q.profile_id::text);
+          ELSIF x.notificat_la IS NULL THEN
+            PERFORM public.fn_cont_notifica_owneri('cont_inchidere_esuata', '❌ Închiderea automată a contului a eșuat',
+              format('%s (coada #%s, %s): %s · se reîncearcă automat (încercarea %s din %s; următoarea după %s)',
+                     v_email, x.id, x.tip, v_err, x.incercari, c_max_incercari,
+                     to_char(x.urmatoarea_incercare_la AT TIME ZONE 'Europe/Bucharest', 'DD.MM.YYYY HH24:MI')),
+              '/admin?tab=managers&cont=' || q.profile_id::text);
+            UPDATE public.conturi_inchideri_coada SET notificat_la = now() WHERE id = q.id;
+          END IF;
+        END IF;
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'fn_conturi_inchideri_sweep (coada #%): % [%] · eroarea inițială: %', q.id, SQLERRM, SQLSTATE, v_err;
+      END;
     END;
   END LOOP;
   RETURN v_n;
@@ -657,7 +931,9 @@ GRANT EXECUTE ON FUNCTION public.fn_pgrst_pre_request() TO anon, authenticated, 
 
 -- B.6 Restaurarea din jurnal — EXCLUSIV owner, cu previzualizare -----------------
 -- Nimic nu se redă automat (reactivarea doar anunță). Ordinea lock-urilor = cea din fn_cont_inchide
--- (profil, apoi jurnal), ca o închidere concurentă să nu lase jurnalul „restaurat” pe un cont banat (audit B #7b).
+-- (profil, apoi jurnal, apoi coada), ca o închidere concurentă să nu lase jurnalul „restaurat” pe un cont banat
+-- (audit B #7b) și ca sweep-ul să nu intre în deadlock cu restaurarea (runda 3: sweep-ul ia și el profilul întâi).
+-- După restaurare, contul NU se re-închide automat decât la o plecare nouă sau manual (fn_cont_restaurare_activa, X3).
 -- p_simulare = true: întoarce ce s-ar reface (module, șantiere, flaguri, ban), fără nicio scriere.
 DROP FUNCTION IF EXISTS public.fn_cont_restaureaza(bigint, text);
 CREATE OR REPLACE FUNCTION public.fn_cont_restaureaza(p_jurnal_id bigint, p_nota text, p_simulare boolean DEFAULT false)
@@ -773,6 +1049,7 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_restaureaza(bigint, text, boolean) TO a
 -- B.7 Starea contului pentru fișa HR (și coloana „Stare” din Admin → Manageri) ------
 -- Owner / can_modify_employees / can_access_personal_data; ceilalți primesc 0 rânduri (fără eroare).
 -- Owner-ul primește TOATE conturile (inclusiv nelegate), ca „blocat” (ban fără jurnal) să apară și în Manageri.
+-- Runda 3 (P1g): un cont REVOCAT (închidere deschisă / ban activ), cu JWT-ul și flagurile încă valabile, primește 0 rânduri.
 CREATE OR REPLACE FUNCTION public.fn_cont_stare_angajati()
 RETURNS TABLE(employee_id integer, profile_id uuid, email text, stare text, inchis_la timestamptz, jurnal_id bigint)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -781,7 +1058,7 @@ DECLARE
   v_uid   uuid := public.fn_identitate_uid();
   v_owner boolean := public.fn_identitate_privilegiata() IS NOT DISTINCT FROM 'owner';
 BEGIN
-  IF v_uid IS NULL OR NOT EXISTS (
+  IF v_uid IS NULL OR public.fn_identitate_revocata(v_uid) OR NOT EXISTS (
        SELECT 1 FROM public.profiles pr WHERE pr.id = v_uid
           AND (pr.is_owner IS TRUE OR pr.can_modify_employees IS TRUE OR pr.can_access_personal_data IS TRUE)) THEN
     RETURN;
@@ -804,8 +1081,14 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_stare_angajati() TO authenticated;
 -- B.8 Alerta extinsă (aceeași semnătură, aceeași poartă owner) --------------------
 -- cont_activ_fost_angajat primește în `alocari` motivul pentru care contul NU s-a închis automat:
 -- {"motiv_neinchis": owner | tip_cont | fara_data | data_viitoare | cnp_lipsa | alt_contract_activ |
---   in_coada | esuat_sau_neprins, "alt_contract": <id>, "coada": {tip, incercari, ultima_eroare, scadent_la}}.
--- inchis_cu_acces_rest arată și dacă flagurile sunt încă în coadă (calea HR, ≤ 5 min).
+--   posibil_alt_contract | esuat_abandonat | in_coada | restaurat | esuat_sau_neprins, "alt_contract": <id>,
+--   "coada": {tip, incercari, ultima_eroare, scadent_la, urmatoarea_incercare_la, abandonat_la},
+--   "restaurat": {jurnal_id, restaurat_la}}.
+-- Runda 3: CNP-ul din AMBELE surse (fn_cont_persoana_cnp); „posibil_alt_contract” (fișă activă fără CNP, același nume
+-- de familie / email); „restaurat” în locul lui „esuat_sau_neprins” pentru un cont restaurat de owner (X3);
+-- „esuat_abandonat” când coada s-a oprit după limita de încercări (X6).
+-- inchis_cu_acces_rest arată și dacă flagurile sunt încă în coadă (calea HR, ≤ 5 min) sau dacă resetarea lor s-a oprit.
+-- fara_angajat: marcajele de identitate ale contului, ca în c (P12b).
 CREATE OR REPLACE FUNCTION public.fn_admin_conturi_alerte()
 RETURNS TABLE(id text, cod text, profile_id uuid, email text, tip_cont text, is_owner boolean,
               employee_id integer, employee_name text, employee_active boolean, termination_date date,
@@ -822,8 +1105,12 @@ BEGIN
   WITH pr AS (
     SELECT p.id AS pid, COALESCE(u.email::text, p.email) AS pemail, u.email::text AS uemail, p.tip_cont AS ptip, p.is_owner AS powner,
            p.employee_id::integer AS emp, e.id AS eid, e.name AS enume, e.active AS eactiv, e.termination_date AS etd,
-           public.fn_cont_cnp_normalizat(e.cnp) AS ecnp,
-           u.banned_until AS ban, j.id AS jid, j.facut_la AS jla, to_jsonb(p) AS pj
+           public.fn_cont_persoana_cnp(e.id) AS ecnp,
+           u.banned_until AS ban, j.id AS jid, j.facut_la AS jla, to_jsonb(p) AS pj,
+           NULLIF(jsonb_strip_nulls(jsonb_build_object(
+             'email_diferit', CASE WHEN lower(btrim(COALESCE(p.email, ''))) <> lower(btrim(COALESCE(u.email::text, ''))) THEN true END,
+             'email_profil', CASE WHEN lower(btrim(COALESCE(p.email, ''))) <> lower(btrim(COALESCE(u.email::text, ''))) THEN p.email END,
+             'email_neconfirmat', CASE WHEN u.id IS NOT NULL AND u.email_confirmed_at IS NULL THEN true END)), '{}'::jsonb) AS marcaje
       FROM public.profiles p
       LEFT JOIN public.employees e ON e.id = p.employee_id
       LEFT JOIN auth.users u ON u.id = p.id
@@ -850,7 +1137,7 @@ BEGIN
                                                          'metoda', c.metoda, 'profil_legat', c.profil_legat)
                                       ORDER BY c.employee_id)
                        FROM public.fn_cont_candidati_angajat(pr.uemail) c), '[]'::jsonb) AS candidati,
-           NULL::jsonb AS alocari
+           pr.marcaje AS alocari
       FROM pr WHERE pr.emp IS NULL AND COALESCE(pr.ptip, 'angajat') = 'angajat'
     UNION ALL
     -- cont_activ_fost_angajat: legat de o fișă inactivă, fără închidere, nebanat (+ motivul)
@@ -862,21 +1149,27 @@ BEGIN
                 WHEN COALESCE(pr.ptip, 'angajat') <> 'angajat' THEN 'tip_cont'
                 WHEN pr.etd IS NULL THEN 'fara_data'
                 WHEN pr.etd > CURRENT_DATE THEN 'data_viitoare'
-                WHEN pr.ecnp IS NULL THEN 'cnp_lipsa'
+                WHEN cardinality(pr.ecnp) = 0 THEN 'cnp_lipsa'
                 WHEN alt.id IS NOT NULL THEN 'alt_contract_activ'
+                WHEN pos.id IS NOT NULL THEN 'posibil_alt_contract'
+                WHEN cq.id IS NOT NULL AND cq.abandonat_la IS NOT NULL THEN 'esuat_abandonat'
                 WHEN cq.id IS NOT NULL THEN 'in_coada'
+                WHEN rest.id IS NOT NULL THEN 'restaurat'
                 ELSE 'esuat_sau_neprins' END,
-             'alt_contract', alt.id,
+             'alt_contract', COALESCE(alt.id, pos.id),
              'coada', CASE WHEN cq.id IS NOT NULL THEN jsonb_build_object('tip', cq.tip, 'incercari', cq.incercari,
-                                                                          'ultima_eroare', cq.ultima_eroare, 'scadent_la', cq.scadent_la) END))
+                                                                          'ultima_eroare', cq.ultima_eroare, 'scadent_la', cq.scadent_la,
+                                                                          'urmatoarea_incercare_la', cq.urmatoarea_incercare_la,
+                                                                          'abandonat_la', cq.abandonat_la) END,
+             'restaurat', CASE WHEN rest.id IS NOT NULL THEN jsonb_build_object('jurnal_id', rest.id, 'restaurat_la', rest.restaurat_la) END))
       FROM pr
-      LEFT JOIN LATERAL (SELECT x.id FROM public.employees x
-                          WHERE pr.ecnp IS NOT NULL AND x.id <> pr.eid AND public.fn_cont_cnp_normalizat(x.cnp) = pr.ecnp
-                            AND x.active IS TRUE AND (x.termination_date IS NULL OR x.termination_date > CURRENT_DATE)
-                          ORDER BY x.id LIMIT 1) alt ON true
+      LEFT JOIN LATERAL (SELECT public.fn_cont_alt_contract_activ(pr.eid, pr.ecnp) AS id) alt ON true
+      LEFT JOIN LATERAL (SELECT public.fn_cont_posibil_aceeasi_persoana(pr.eid) AS id) pos ON true
       LEFT JOIN LATERAL (SELECT q.* FROM public.conturi_inchideri_coada q
                           WHERE q.profile_id = pr.pid AND q.rezolvat_la IS NULL AND q.tip IN ('reincercare', 'programata')
                           ORDER BY q.id LIMIT 1) cq ON true
+      LEFT JOIN LATERAL (SELECT j2.id, j2.restaurat_la FROM public.conturi_inchideri_jurnal j2
+                          WHERE j2.id = public.fn_cont_restaurare_activa(pr.pid)) rest ON true
      WHERE pr.eid IS NOT NULL AND pr.eactiv IS NOT TRUE AND pr.jid IS NULL
        AND (pr.ban IS NULL OR pr.ban < now())
     UNION ALL
@@ -894,7 +1187,10 @@ BEGIN
              'flaguri', (SELECT COALESCE(jsonb_agg(f.key ORDER BY f.key), '[]'::jsonb) FROM jsonb_each(pr.pj) f
                           WHERE f.key = ANY (v_flaguri) AND f.value = 'true'::jsonb),
              'flaguri_in_coada', EXISTS (SELECT 1 FROM public.conturi_inchideri_coada q
-                                          WHERE q.profile_id = pr.pid AND q.tip = 'flaguri' AND q.rezolvat_la IS NULL))
+                                          WHERE q.profile_id = pr.pid AND q.tip = 'flaguri' AND q.rezolvat_la IS NULL),
+             'flaguri_abandonate', EXISTS (SELECT 1 FROM public.conturi_inchideri_coada q
+                                            WHERE q.profile_id = pr.pid AND q.tip = 'flaguri' AND q.rezolvat_la IS NULL
+                                              AND q.abandonat_la IS NOT NULL))
       FROM pr WHERE pr.jid IS NOT NULL
                 AND (EXISTS (SELECT 1 FROM public.user_module_access m WHERE m.profile_id = pr.pid)
                   OR EXISTS (SELECT 1 FROM public.profile_sites s WHERE s.profile_id = pr.pid)

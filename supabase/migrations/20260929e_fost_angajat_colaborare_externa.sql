@@ -1,9 +1,13 @@
 -- ============================================================================
 -- R3 — fost angajat Gazpet ca posibil colaborator extern, cu acord SIGUR (tri-valent)
--- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea C (+ 0.2: corecțiile din 30.09).
--- Depinde de 20260929c DOAR prin funcțiile de identitate (fn_identitate_om / fn_identitate_eticheta); de d nu.
--- „Un om” = JWT authenticated venit prin PostgREST (login authenticator): nici service_role, nici pg_cron, nici o
--- sesiune postgres care își pune singură claims de HR nu pot decide acordul (tri-starea e decizia unui om).
+-- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea C (+ 0.2: corecțiile din 30.09; 0.3: runda 3).
+-- Depinde de 20260929c DOAR prin funcțiile de identitate (fn_identitate_om / fn_identitate_eticheta) și prin
+-- fn_nume_cuvinte (mutată în c în runda 3, o folosește și garda R2); de d nu.
+-- „Un om” = JWT authenticated venit prin PostgREST (login authenticator), al unui cont NErevocat (runda 3: fără
+-- închidere deschisă, fără ban activ): nici service_role, nici pg_cron, nici o sesiune postgres care își pune singură
+-- claims de HR, nici un HR cu contul tocmai închis (JWT încă valabil) nu pot decide acordul.
+-- „Fost angajat Gazpet” (marcajul de pe extern) ≠ acordul de colaborare: marcajul spune DOAR că omul a avut contract;
+-- acordul e separat, tri-valent (necunoscut / accepta / refuza), implicit necunoscut, setat doar de un om.
 --   * employees.colaborare_externa_* (necunoscut / accepta / refuza; implicit necunoscut,
 --     NICIODATĂ dedus automat; dovada: cine, când, notă sau document)
 --   * trg_employees_colab_ext_protectie_ins/_upd — doar un om (owner / can_modify_employees)
@@ -184,16 +188,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_hr_personal_extern_fost_angajat
 COMMENT ON COLUMN public.hr_personal_extern.fost_angajat_gazpet IS
   'Marcajul „Fost angajat Gazpet” (generat din fost_angajat_employee_id; nu se poate desincroniza).';
 
--- Cuvintele unui nume, normalizate (fără diacritice, majuscule, distincte, sortate) — pentru omonimie.
-CREATE OR REPLACE FUNCTION public.fn_nume_cuvinte(p_nume text)
-RETURNS text[]
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
-AS $fn$
-  SELECT COALESCE(array_agg(DISTINCT w ORDER BY w), '{}'::text[])
-    FROM unnest(regexp_split_to_array(upper(extensions.unaccent(btrim(COALESCE(p_nume, '')))), '[^[:alnum:]]+')) w
-   WHERE w <> '';
-$fn$;
-REVOKE ALL ON FUNCTION public.fn_nume_cuvinte(text) FROM PUBLIC, anon, authenticated, service_role;
+-- Cuvintele unui nume (fn_nume_cuvinte) vin din migrarea c (A.0b, runda 3): aceeași normalizare ca garda R2.
 
 -- Foștii angajați (contract încheiat, fișă inactivă) care se potrivesc cu un extern: email identic, sau
 -- nume cu ≥ 2 cuvinte în care numele de familie al fișei apare și un set de cuvinte îl conține pe celălalt

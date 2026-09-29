@@ -15,8 +15,10 @@
 #   bash scripts/test_conturi_ciclu_viata.sh                  # schelet + migrări din listă + teste
 #   bash scripts/test_conturi_ciclu_viata.sh --reaplica       # + migrările a 2-a oară (idempotență) + teste
 #   bash scripts/test_conturi_ciclu_viata.sh --rollback       # + ROLLBACK-uri în ordine inversă, schema
-#                                                             #   comparată cu cea dinainte, teste BAZĂ,
-#                                                             #   reaplicare + teste complete
+#                                                             #   comparată PAS CU PAS (după rollback-ul lui X =
+#                                                             #   schema de după migrarea dinaintea lui X) și cu
+#                                                             #   cea dinainte, gărzile rollback-urilor, teste
+#                                                             #   BAZĂ, reaplicare + teste complete
 #   bash scripts/test_conturi_ciclu_viata.sh --opreste        # oprește serverul la final
 #   bash scripts/test_conturi_ciclu_viata.sh -- a.sql b.sql   # migrări explicite în loc de fișierul-listă
 #
@@ -130,7 +132,22 @@ aplica_fisier() {  # ca apply_migration: o singură tranzacție, cu excepția fi
   echo "→ aplic ${f#$RADACINA/}"
   "${PSQL[@]}" -d "$BAZA" ${opt[@]+"${opt[@]}"} -f "$f" || esec "migrarea ${f#$RADACINA/} a eșuat"
 }
-aplica_migrari() { for m in ${MIGRARI[@]+"${MIGRARI[@]}"}; do aplica_fisier "$m"; done; }
+schema_snapshot() {  # schema fără date, cu ACL-uri, ca să prindă GRANT-uri/obiecte rămase după rollback
+  "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" --schema-only --no-owner \
+    | grep -vE '^(--|SET |SELECT pg_catalog\.set_config|\\(un)?restrict )' | sed '/^$/d'
+}
+
+# $1 = 1 → instantaneu de schemă după FIECARE migrare (prima aplicare, --rollback): rollback-ul fiecărei migrări trebuie
+# să readucă exact schema de după migrarea dinaintea ei (ex. rollback d = schema de după c, cu fn_admin_conturi_alerte din c).
+SNAP_PAS=()
+aplica_migrari() {
+  local i=0
+  for m in ${MIGRARI[@]+"${MIGRARI[@]}"}; do
+    aplica_fisier "$m"
+    if [ "${1:-0}" = 1 ]; then SNAP_PAS[$i]="$(mktemp)"; schema_snapshot > "${SNAP_PAS[$i]}"; fi
+    i=$((i + 1))
+  done
+}
 
 TOTAL_OK=0
 ruleaza_teste() {  # $1 = eticheta, $2 = doar_baza (true/false)
@@ -147,10 +164,6 @@ ruleaza_teste() {  # $1 = eticheta, $2 = doar_baza (true/false)
   echo "   [$1] $n aserțiuni OK"
 }
 
-schema_snapshot() {  # schema fără date, cu ACL-uri, ca să prindă GRANT-uri/obiecte rămase după rollback
-  "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" --schema-only --no-owner \
-    | grep -vE '^(--|SET |SELECT pg_catalog\.set_config|\\(un)?restrict )' | sed '/^$/d'
-}
 
 # --- 4. rulare -----------------------------------------------------------------
 for m in ${PRECONDITII[@]+"${PRECONDITII[@]}"}; do
@@ -161,7 +174,7 @@ echo "→ migrări în listă: ${#MIGRARI[@]} (+ ${#PRECONDITII[@]} precondiții
 SNAP_INAINTE=""
 if [ "$ROLLBACK" = 1 ]; then SNAP_INAINTE="$(mktemp)"; schema_snapshot > "$SNAP_INAINTE"; fi
 
-aplica_migrari
+aplica_migrari "$ROLLBACK"
 ruleaza_teste "după migrare" false
 
 if [ "$REAPLICA" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
@@ -184,11 +197,43 @@ if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
     echo "   gardă de ordine: ${RB0#$RADACINA/} înaintea celorlalte → refuzat, schema neschimbată"
     TOTAL_OK=$((TOTAL_OK + 1))
   fi
+  # Gardă coadă flaguri (runda 3, P9c): cu o intrare „flaguri” deschisă în coadă (cont închis pe calea HR cu flagurile
+  # încă TRUE), rollback-ul care o declară trebuie refuzat (55000) și fără efect; intrarea de test se șterge apoi.
+  for (( i=0; i<${#MIGRARI[@]}; i++ )); do
+    RBQ="$(cale_abs "${MIGRARI[$i]%.sql}_ROLLBACK.sql")"
+    if [ -f "$RBQ" ] && grep -q 'Gardă coadă flaguri' "$RBQ"; then
+      "${PSQL[@]}" -d "$BAZA" -c "INSERT INTO public.conturi_inchideri_coada (profile_id, tip, motiv) VALUES (gen_random_uuid(), 'flaguri', 'harness: gardă rollback coadă')" >/dev/null \
+        || esec "nu pot pune intrarea de test în coadă"
+      SNAP_Q="$(mktemp)"; schema_snapshot > "$SNAP_Q"
+      if ERR_Q="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$RBQ" 2>&1 >/dev/null)"; then
+        esec "rollback-ul ${RBQ#$RADACINA/} a rulat cu o intrare „flaguri” deschisă în coadă (trebuia refuzat)"
+      fi
+      echo "$ERR_Q" | grep -q 'intrări „flaguri” deschise' || { echo "$ERR_Q" >&2; esec "rollback-ul ${RBQ#$RADACINA/} a fost refuzat din alt motiv decât garda cozii"; }
+      schema_snapshot | diff -q "$SNAP_Q" - >/dev/null || esec "rollback-ul refuzat (gardă coadă) a lăsat totuși urme în schemă"
+      "${PSQL[@]}" -d "$BAZA" -c "DELETE FROM public.conturi_inchideri_coada WHERE motiv = 'harness: gardă rollback coadă'" >/dev/null
+      rm -f "$SNAP_Q"
+      echo "   gardă coadă flaguri: ${RBQ#$RADACINA/} cu o intrare „flaguri” deschisă → refuzat (55000), schema neschimbată"
+      TOTAL_OK=$((TOTAL_OK + 1))
+    fi
+  done
   for (( i=${#MIGRARI[@]}-1; i>=0; i-- )); do
     rb="${MIGRARI[$i]%.sql}_ROLLBACK.sql"
     [ -f "$(cale_abs "$rb")" ] || esec "lipsește rollback-ul pentru ${MIGRARI[$i]}"
     aplica_fisier "$rb"
+    if [ "$i" -gt 0 ] && [ -n "${SNAP_PAS[$((i - 1))]:-}" ]; then
+      SNAP_RB="$(mktemp)"; schema_snapshot > "$SNAP_RB"
+      if ! diff -u "${SNAP_PAS[$((i - 1))]}" "$SNAP_RB" > "$SNAP_RB.diff"; then
+        echo "!! după ${rb##*/} schema diferă de cea de după ${MIGRARI[$((i - 1))]##*/}:" >&2
+        head -80 "$SNAP_RB.diff" >&2
+        [ "${ROLLBACK_DIFF_TOLERAT:-0}" = 1 ] || esec "rollback pas cu pas incomplet: ${rb##*/}"
+      else
+        echo "   rollback pas cu pas: după ${rb##*/} schema = cea de după ${MIGRARI[$((i - 1))]##*/}"
+        TOTAL_OK=$((TOTAL_OK + 1))
+      fi
+      rm -f "$SNAP_RB" "$SNAP_RB.diff"
+    fi
   done
+  rm -f ${SNAP_PAS[@]+"${SNAP_PAS[@]}"}
   SNAP_DUPA="$(mktemp)"; schema_snapshot > "$SNAP_DUPA"
   if ! diff -u "$SNAP_INAINTE" "$SNAP_DUPA" > "$SNAP_DUPA.diff"; then
     echo "!! schema după rollback diferă de cea dinainte de migrări:" >&2

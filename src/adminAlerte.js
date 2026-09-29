@@ -188,6 +188,41 @@ function caleAlocari(alocari) {
   return tabel ? ALOCARI_CONTURI[tabel].path : null
 }
 
+// Runda 3: motivul calculat în BD (fn_admin_conturi_alerte → alocari.motiv_neinchis) pentru care un cont al unui
+// angajat inactiv NU s-a închis automat. Fără motiv (rânduri vechi) se păstrează explicația după dată.
+export function motivNeinchis(row, today) {
+  const a = row?.alocari || {}
+  const alt = a.alt_contract ? `fișa #${a.alt_contract}` : 'altă fișă'
+  const q = a.coada || {}
+  switch (a.motiv_neinchis) {
+    case 'owner': return 'OWNER: nu se închide automat, decide manual.'
+    case 'tip_cont': return `Contul e marcat „${row.tip_cont || '?'}”: nu se închide automat.`
+    case 'fara_data': return 'Fișa e inactivă fără dată de încetare.'
+    case 'data_viitoare': return `Dezactivat înainte de data încetării (${row.termination_date}); închiderea e programată pentru data încetării.`
+    case 'cnp_lipsa': return 'CNP lipsă (nici în datele personale, nici pe fișă): nu se poate verifica dacă omul are alt contract activ. Completează CNP-ul (Admin → Angajați → date personale) sau închide manual.'
+    case 'alt_contract_activ': return `Are alt contract ACTIV (${alt}, același CNP): contul rămâne deschis cât timp lucrează pe celălalt contract.`
+    case 'posibil_alt_contract': return `Posibil alt contract ACTIV (${alt}: același nume de familie sau email, fără CNP). Completează CNP-ul acelei fișe sau închide manual dacă e altă persoană.`
+    case 'in_coada': return `Închiderea e în coadă (${q.tip || '?'}; încercări: ${q.incercari ?? 0}${q.ultima_eroare ? `; ultima eroare: ${q.ultima_eroare}` : ''}).`
+    case 'esuat_abandonat': return `Închiderea automată a eșuat de ${q.incercari ?? '?'} ori și coada s-a oprit (ultima eroare: ${q.ultima_eroare || '?'}). Elimină cauza și închide contul acum.`
+    case 'restaurat': return `Restaurat de owner (jurnal #${a.restaurat?.jurnal_id ?? '?'}): nu se re-închide automat la corecții ale fișei; se închide la o nouă plecare sau manual.`
+    case 'esuat_sau_neprins': return 'Contul NU s-a închis automat: fișa a fost dezactivată înainte de data încetării (triggerul prinde doar trecerea activ → inactiv) sau închiderea a eșuat (vezi notificarea „închidere eșuată”).'
+    default: {
+      const zile = zileRamase(row.termination_date, today)
+      return !row.termination_date ? 'Fișa e inactivă fără dată de încetare.'
+        : zile > 0 ? `Dezactivat înainte de data încetării (${row.termination_date}).`
+        : 'Contul NU s-a închis automat: fișa a fost dezactivată înainte de data încetării (triggerul prinde doar trecerea activ → inactiv) sau închiderea a eșuat (vezi notificarea „închidere eșuată”).'
+    }
+  }
+}
+
+// Runda 3 (P12b): marcajele de identitate ale unui cont nelegat (emailul de logare ≠ profil / neconfirmat).
+export function marcajeIdentitate(alocari) {
+  const m = []
+  if (alocari?.email_diferit) m.push(`⚠️ Emailul de logare diferă de cel din profil (${alocari.email_profil || 'gol'}): verifică identitatea; „Leagă automat” îl sare.`)
+  if (alocari?.email_neconfirmat) m.push('⚠️ Emailul de logare e neconfirmat: „Leagă automat” îl sare până la confirmare.')
+  return m.join(' ')
+}
+
 export function alerteConturi(rows, today) {
   return rows.flatMap(row => {
     const meta = CONTURI[row.cod]
@@ -196,18 +231,20 @@ export function alerteConturi(rows, today) {
     const date = row.termination_date || (row.inchis_la ? ziBucuresti(new Date(row.inchis_la)) : null)
     const angajat = cod === 'inactiv_fara_data'
     let impact
-    if (cod === 'fara_angajat') impact = `Leagă fișa (Editează → Fișă angajat) sau marchează tipul (extern/test/sistem). Potrivire: ${descriereCandidati(row.candidati)}.`
+    let priority = meta.priority
+    if (cod === 'fara_angajat') {
+      const marcaje = marcajeIdentitate(row.alocari)
+      impact = `${marcaje ? marcaje + ' ' : ''}Leagă fișa (Editează → Fișă angajat) sau marchează tipul (extern/test/sistem). Potrivire: ${descriereCandidati(row.candidati)}.`
+    }
     if (cod === 'cont_activ_fost_angajat') {
       if (row.is_owner) impact = 'OWNER: nu se închide automat, decide manual.'
-      else {
-        const zile = zileRamase(row.termination_date, today)
-        const motiv = !row.termination_date ? 'Fișa e inactivă fără dată de încetare.'
-          : zile > 0 ? `Dezactivat înainte de data încetării (${row.termination_date}).`
-          : 'Contul NU s-a închis automat: fișa a fost dezactivată înainte de data încetării (triggerul prinde doar trecerea activ → inactiv) sau închiderea a eșuat (vezi notificarea „închidere eșuată”).'
-        impact = `Închide contul acum sau corectează fișa. ${motiv}`
-      }
+      else impact = `Închide contul acum sau corectează fișa. ${motivNeinchis(row, today)}`
+      // decizia conștientă a owner-ului (restaurare) nu e o urgență: amintire săptămânală, nu alertă critică
+      if (row.alocari?.motiv_neinchis === 'restaurat') priority = 'week'
     }
     if (cod === 'inchis_dar_deblocat' || cod === 'inchis_cu_acces_rest') impact = `Reaplică închiderea (Admin → Manageri → Edit → „🔒 Reaplică închiderea”; jurnal #${row.jurnal_id}). NU folosi „Restaurează”: redă TOT accesul — doar dacă omul revine în firmă.`
+    if (cod === 'inchis_cu_acces_rest' && row.alocari?.flaguri_abandonate) impact += ' Resetarea automată a flagurilor s-a oprit după eșecuri repetate.'
+    else if (cod === 'inchis_cu_acces_rest' && row.alocari?.flaguri_in_coada) impact += ' Flagurile de acces sunt în coadă (se pun pe false la următoarea rulare, ≤ 5 min).'
     if (cod === 'reactivat_acces_neredat') impact = `Dacă revine în firmă: Restaurează din jurnal #${row.jurnal_id}. Altfel verifică reactivarea.`
     if (cod === 'alocari_ramase') impact = `Reasignează: ${descriereAlocari(row.alocari)}.`
     const caleAloc = cod === 'alocari_ramase' ? caleAlocari(row.alocari) : null
@@ -215,7 +252,7 @@ export function alerteConturi(rows, today) {
     return [alerta('conturi', row.id, {
       title: meta.title,
       reference: [row.email || (row.profile_id ? 'cont fără email' : 'fără cont'), row.employee_name ? `${row.employee_name} (#${row.employee_id})` : null].filter(Boolean).join(' · '),
-      priority: meta.priority, date,
+      priority, date,
       owner: angajat ? 'HR · Admin → Angajați' : 'Owner · Admin → Manageri',
       path: angajat ? `/admin?tab=employees&angajat=${row.employee_id}` : caleAloc || `/admin?tab=managers&cont=${row.profile_id}`,
       impact,

@@ -50,8 +50,11 @@ DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean, jsonb);
 DROP FUNCTION IF EXISTS public.fn_cont_leaga_la_creare(uuid);
 DROP FUNCTION IF EXISTS public.fn_cont_candidati_angajat(text);
 DROP FUNCTION IF EXISTS public.fn_cont_notifica_owneri(text, text, text, text);
+DROP FUNCTION IF EXISTS public.fn_nume_familie(text);
+DROP FUNCTION IF EXISTS public.fn_nume_cuvinte(text);          -- runda 3: mutată din e în c (o folosesc d și e)
 DROP FUNCTION IF EXISTS public.fn_identitate_eticheta();
 DROP FUNCTION IF EXISTS public.fn_identitate_om();
+DROP FUNCTION IF EXISTS public.fn_identitate_revocata(uuid);
 DROP FUNCTION IF EXISTS public.fn_identitate_uid();
 DROP FUNCTION IF EXISTS public.fn_identitate_privilegiata();
 DROP FUNCTION IF EXISTS public.fn_identitate_claims();
