@@ -13,6 +13,14 @@ export function ziRomania(date = new Date()) {
   return `${get('year')}-${get('month')}-${get('day')}`
 }
 
+// Ziua „bazei de date” (UTC) — aceeași cu CURRENT_DATE din Postgres, cu triggerul R2 și cu cron-ul
+// hr_auto_deactivate_terminated. Închiderea automată cere termination_date <= CURRENT_DATE: între 00:00 și
+// ~03:00 ora României, ziRomania() e deja „mâine” pentru BD, iar o dezactivare cu data RO NU ar închide contul
+// (și cron-ul n-o mai prinde, fișa fiind deja inactivă). Pentru data implicită a încetării folosim ziua BD.
+export function ziBaza(date = new Date()) {
+  return date.toISOString().slice(0, 10)
+}
+
 // Fost angajat = contract încheiat (data există și a trecut / e azi) ȘI fișa nu e activă.
 // O fișă inactivă fără dată (ex. import greșit) sau cu dată în viitor NU e fost angajat.
 export function esteFostAngajat(emp, today = ziRomania()) {
@@ -62,10 +70,13 @@ export function mesajStareCont(row) {
   return null
 }
 
-// Coloana „Stare” din Admin → Manageri: tipul marcat (extern/test/sistem), închiderea deschisă sau „Activ”.
-export function stareContProfil(profile, inchidereDeschisa) {
+// Coloana „Stare” din Admin → Manageri: închiderea deschisă, blocarea logării fără jurnal (rândul din
+// fn_cont_stare_angajati — ex. o închidere manuală din Dashboard), tipul marcat (extern/test/sistem) sau „Activ”.
+export function stareContProfil(profile, inchidereDeschisa, stareCont = null) {
   if (!profile) return { text: '—', ton: 'neutru' }
   if (inchidereDeschisa) return { text: `🔒 Închis ${formatDataRo(inchidereDeschisa.facut_la)}`.trim(), ton: 'inchis' }
+  if (stareCont?.stare === 'inchis') return { text: `🔒 Închis ${formatDataRo(stareCont.inchis_la)}`.trim(), ton: 'inchis' }
+  if (stareCont?.stare === 'blocat') return { text: '🔒 Logare blocată (fără jurnal)', ton: 'inchis' }
   if (profile.tip_cont && profile.tip_cont !== 'angajat') return { text: profile.tip_cont, ton: 'marcat' }
   return { text: 'Activ', ton: 'activ' }
 }
@@ -79,7 +90,49 @@ export function externExistentDinEroare(error) {
 
 // Mesaj pentru bifa „Colaborare activă” a unui extern legat de un fost angajat.
 export const MESAJ_ACTIVARE_FARA_ACORD = 'Se poate activa doar după ce fostul angajat acceptă (HR → Foști angajați).'
-export function poateActivaColaborarea(extern, statusAcord) {
+// fostInca=false: fișa legată e din nou activă / fără contract încheiat (reangajat) → nu se activează (BD: 23514).
+export function poateActivaColaborarea(extern, statusAcord, fostInca = true) {
   if (!extern || extern.fost_angajat_employee_id == null) return true
-  return statusAcord === 'accepta'
+  return statusAcord === 'accepta' && fostInca !== false
+}
+
+// ---- Omonimie extern ↔ fost angajat (aceeași regulă ca fn_extern_fost_angajat_potrivire din BD) ----------
+// Cuvintele unui nume: fără diacritice (ș/ț cu virgulă sau sedilă), majuscule, distincte, sortate.
+export function cuvinteNume(nume) {
+  const t = String(nume ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
+  return [...new Set(t.split(/[^A-Z0-9]+/).filter(Boolean))].sort()
+}
+function primulCuvant(nume) {
+  return String(nume ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean)[0] || ''
+}
+// Un extern NELEGAT (nume / email) care e de fapt un fost angajat: email identic, sau ≥ 2 cuvinte cu numele de
+// familie al fișei (primul cuvânt din „NUME_FAMILIE PRENUME”) și un set de cuvinte îl conține pe celălalt.
+// Întoarce fișa fostului angajat sau null. BD-ul refuză oricum (23514); aici doar avertizăm înainte de salvare.
+export function fostAngajatPotrivit(extern, fosti, today = ziBaza()) {
+  if (!extern || extern.fost_angajat_employee_id != null) return null
+  const em = String(extern.email ?? '').trim().toLowerCase()
+  const x = cuvinteNume(extern.nume)
+  for (const e of fosti || []) {
+    if (!esteFostAngajat(e, today)) continue
+    if (em && String(e.email ?? '').trim().toLowerCase() === em) return e
+    const f = cuvinteNume(e.name)
+    if (x.length < 2 || f.length < 2 || !x.includes(primulCuvant(e.name))) continue
+    if (x.every(w => f.includes(w)) || f.every(w => x.includes(w))) return e
+  }
+  return null
+}
+export const MESAJ_OMONIM_FOST_ANGAJAT = 'E fost angajat Gazpet: folosește HR → Foști angajați → „Trece ca extern” (acordul lui se confirmă acolo). Dacă e altă persoană cu același nume, activarea o face owner-ul.'
+// Eroarea 23514 din triggerul BD pentru un extern nelegat omonim cu un fost angajat.
+export function esteEroareOmonim(error) {
+  return !!error && error.code === '23514' && /fost angajat Gazpet/i.test(String(error.message || ''))
+}
+// Eroarea 23514 pentru o fișă legată care nu (mai) e a unui fost angajat (ex. reangajat).
+export function esteEroareReangajat(error) {
+  return !!error && error.code === '23514' && /doar pentru un fost angajat/i.test(String(error.message || ''))
+}
+
+// Rândul din jurnalul acordului: cine l-a făcut (resetul automat la reactivare / anularea încetării are sursa proprie).
+export function autorJurnalAcord(row, numeProfil) {
+  if (row?.sursa === 'reset_automat') return `sistem (reset automat)${row.facut_de ? ` · declanșat de ${numeProfil || 'utilizator necunoscut'}` : ''}`
+  return numeProfil || 'utilizator necunoscut'
 }

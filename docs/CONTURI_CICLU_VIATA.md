@@ -15,12 +15,34 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 
 | # | Întrebare | Recomandare |
 |---|---|---|
-| D1 | **Înregistrarea publică de conturi.** În producție, confirmarea emailului e automată (`email_confirmed_at = created_at` la 10 din ultimele 12 conturi). `createManager` apelează `supabase.auth.signUp` din browser, deci înscrierea publică e probabil pornită. Consecința: oricine are cheia anon (publică, e în bundle) își poate face cont cu `prenume.nume@gazpet.ro`. Cu R1 contul se leagă automat de fișa acelui om și primește acces la semnătura lui electronică (`hr_sem_self_*`). Riscul există și azi, doar că e mai larg: oricine își poate seta singur `employee_id` (vezi pct. A.4). Variante: **A** lăsăm așa, cu notificare la owner pentru fiecare legare automată · **B** oprim înscrierea publică (Dashboard → Auth → „Allow new users to sign up” OFF), iar conturile noi se creează din Dashboard → „Add user” · **C** facem o funcție edge `cont-nou`, cu poartă owner, pentru `auth.admin.createUser` (lucru separat, cu fișă în registru). | **B acum, C mai târziu.** Starea setării o verifică Răzvan în Dashboard; nu se poate citi din SQL. |
+| D1 | **Înregistrarea publică de conturi.** În producție, confirmarea emailului e automată (`email_confirmed_at = created_at` la 10 din ultimele 12 conturi; recitit 29.09 seara: 15 din ultimele 20 confirmate în < 5 s). `createManager` apelează `supabase.auth.signUp` din browser, deci înscrierea publică e probabil pornită. Consecința: oricine are cheia anon (publică, e în bundle) își poate face cont cu `prenume.nume@gazpet.ro`. Cu R1 contul se leagă automat de fișa acelui om și primește acces la semnătura lui electronică (`hr_sem_self_*`). Riscul există și azi, doar că e mai larg: oricine își poate seta singur `employee_id` (vezi pct. A.4). Variante: **A** lăsăm așa, cu notificare la owner pentru fiecare legare automată · **B** oprim înscrierea publică (Dashboard → Auth → „Allow new users to sign up” OFF), iar conturile noi se creează din Dashboard → „Add user” · **C** facem o funcție edge `cont-nou`, cu poartă owner, pentru `auth.admin.createUser` (lucru separat, cu fișă în registru). | **B acum, C mai târziu.** Starea setării o verifică Răzvan în Dashboard; nu se poate citi din SQL. **După review (0.1):** migrarea c NU mai leagă singură la înscriere, deci nu mai depinde de D1 ca să fie sigură; B rămâne recomandat (un cont public tot primește `manager_santier` și citește `employees`). Cu B, `createManager` (signUp din browser) nu mai merge: toast-ul trimite la Dashboard → Add user, apoi „🔗 Leagă automat”. |
 | D2 | Ce tip primește `razvantrusuhome@gmail.com`: `test` sau `extern`? | `test` |
 | D3 | Alocările rămase după închiderea contului (aprobatori, responsabili, rute concediu): **A** doar alertă „Reasignează” · **B** dezactivare automată acolo unde există coloana `activ`. | **A**. Dezactivarea automată poate lăsa un flux fără niciun aprobator. |
-| D4 | La reactivarea unui angajat (butonul „Activ.” din /admin) data încetării rămâne completată, iar cron-ul îl dezactivează din nou a doua zi la 04:00 UTC. Ștergem `termination_date` la reactivare, după o confirmare explicită? | **Da.** |
+| D4 | La reactivarea unui angajat (butonul „Activ.” din /admin) data încetării rămâne completată, iar cron-ul îl dezactivează din nou a doua zi la 04:00 UTC. Ștergem `termination_date` la reactivare, după o confirmare explicită? | **Da.** Implementat în `toggleEmp` (fără D4 reactivarea e anulată de cron a doua zi), **încă neconfirmat de Răzvan**. Urma nu se pierde: data veche se adaugă în `observatii_hr` („Reactivat la …; încetarea anterioară: …”). Dacă Răzvan zice „nu”, se scoate `termination_date:null` din `toggleEmp`. |
 | D5 | Contul se închide în dimineața zilei `termination_date` (cron 04:00 UTC = 07:00 RO), la fel cum funcționează azi dezactivarea. Rămâne așa? | Da, fără schimbare de regulă. |
 | D6 | Opțional, în migrarea 1: protejăm și `department` la auto-modificare? Azi oricine își poate pune singur `department='HR'` (prin politica `profiles_update_own`), iar asta deschide 4 politici HR. Același lucru e posibil pentru flagurile neprotejate (`can_create_comenzi`, `can_manage_stoc`, `can_access_ctc`, `can_process_achizitii`, `can_use_document_scanner`, `receive_*`). | Da pentru `department`. Pentru flaguri, doar după un grep care confirmă că UI-ul nu le scrie pe profilul propriu. |
+
+### 0.1 Corecții după review (29.09 seara) — ce s-a schimbat față de prima variantă
+
+| Constatare | Ce s-a schimbat | Teste |
+|---|---|---|
+| **Critic** — legarea la ORICE înscriere (signUp public + confirmare automată ⇒ oricine ia fișa și semnătura altcuiva) | `handle_new_user` leagă singur **doar pe calea de încredere** (`auth.users.raw_app_meta_data.gazpet_legare_automata = true`, pe care îl poate pune doar `service_role` prin API-ul admin — cârlig pentru funcția edge `cont-nou`, D1-C). Altfel contul se creează nelegat, owner-ul primește **propunerea** `cont_legare_propusa` (candidatul unic, cu „dacă nu-l recunoști, NU-l lega”) și confirmă dintr-un clic: Admin → Manageri → „🔗 Leagă automat” (previzualizare cu data creării contului → confirmare). Pentru Răzvan: „legarea automată” = sistemul găsește singur fișa; legătura efectivă o dă owner-ul (sau calea de încredere). | R1-00, R1-20 |
+| **Major** — potrivirea din `profiles.email`, pe care utilizatorul și-l poate schimba singur | Potrivirea (`fn_cont_leaga_automat`, alerta `fara_angajat`) se face pe **emailul de logare** `auth.users.email`; profilurile cu `profiles.email ≠ auth.users.email` apar ca `email_diferit` și sunt sărite. `trg_profiles_protectie_legatura` refuză și schimbarea lui `profiles.email` de către non-owner (42501). Producție 29.09: 0 nepotriviri, iar UI-ul schimbă emailul doar din modalul owner-ului. | R1-14, R1-21 |
+| **Major** — pasul pe nume accepta doar prenumele (`ana.maria@` → IONESCU ANA MARIA) | Numele de familie (primul cuvânt din `employees.name`) e obligatoriu printre tokeni; ordinea rămâne liberă. Producție (SELECT 29.09): 22/22 legături reale găsite și cu regula strictă, 0 candidați unici greșiți. | R1-22 |
+| **Major** — extern NELEGAT, activ, cu numele unui fost angajat care a refuzat (fără marcaj, fără acord) | Triggerul de pe `hr_personal_extern` refuză (23514, HINT „HR → Foști angajați → Trece ca extern”) un rând nelegat + activ al cărui nume (fără diacritice, orice ordine, cu numele de familie, un set îl conține pe celălalt) sau email e al unui fost angajat; excepție: owner-ul (omonim = altă persoană). Se verifică la INSERT și la schimbarea `nume`/`email`/`activ` (rândurile vechi rămân editabile). UI: blocare în `ModalPersoana` + avertisment „Omonim cu fostul angajat” în listă. Restrângerea INSERT/UPDATE pe `hr_personal_extern` la owner/HR rămâne **decizie a lui Răzvan** (drepturi de acces) — nu s-a făcut. | R3-22 |
+| **Major** (×2) — acordul „accepta” supraviețuia reangajării și se moștenea la plecarea următoare | Acordul e legat de **încetarea curentă**: la reactivare (`active` → true) sau la ștergerea datei de încetare, `fn_employees_colab_ext_protectie` îl readuce la „necunoscut” (fără proveniență/notă/document) și pe calea de sistem; jurnalul primește rândul `sursa='reset_automat'` („acordul era pentru încetarea din …”, `facut_de` = cine a reactivat sau NULL = sistem). Poarta pe externul legat cere și ca fișa să fie **încă** a unui fost angajat. UI: „↩ Reangajat Gazpet (fișa activă)” în Personal extern. | R3-20, R3-21 |
+| **Major** — alertele `inchis_dar_deblocat` / `inchis_cu_acces_rest` nu aveau acțiunea în UI | Modalul „Editează Manager” arată pe un cont închis **„🔒 Reaplică închiderea”** (același `fn_cont_inchide_owner` → `deja_inchis`, convergent) lângă „↩ Restaurează”; textul alertei: „Reaplică închiderea… NU folosi Restaurează: redă TOT accesul — doar dacă omul revine în firmă”; confirmarea restaurării spune același lucru. | vitest (adminAlerte, gardă statică App.jsx) |
+| Minor — cont închis își repunea flaguri / email cu JWT-ul încă valabil | `trg_profiles_protectie_legatura`: dacă există închidere nerestaurată, orice UPDATE de la non-owner → 42501 (verificare cu `to_regclass`, migrarea c rămâne independentă de d). | R2-24 |
+| Minor — „Dezact.” noaptea (00:00–03:00 RO) nu închidea contul | `toggleEmp` pune data implicită = ziua BD (`ziBaza()`, UTC = `CURRENT_DATE`), la fel bannerul din „Editează Angajat”. Textul alertei pentru dată trecută explică „dezactivată înainte de dată sau închidere eșuată”. Cazul „fișă deja inactivă, data ajunge” rămâne doar alertă critică + închidere manuală (fără cron nou). | vitest (`ziBaza`) |
+| Minor — `fn_cont_restaureaza` accepta orice formă de snapshot | Refuză (22023, jurnalul NU e marcat) dacă snapshot-ul nu are `versiune=1`, `flaguri{}`, `module[]`, `santiere[]`, `banned_until`. G.7 convertește explicit. | R2-25 |
+| Minor — 2 conturi nelegate cu același candidat | Ambele `ambiguu`, și în previzualizare, și la aplicare. | R1-23 |
+| Minor — rollback c înaintea lui d lăsa triggerul R2 fără notificare | Gardă de ordine în rollback-ul c (refuz 55000, fără efect) + toate notificările din `fn_cont_inchide` / `fn_employees_ciclu_cont` sunt best-effort (`BEGIN … EXCEPTION`). | harness (gardă), R2-26 |
+| Minor — `stareContProfil` ignora banul fără jurnal | `fn_cont_stare_angajati` întoarce owner-ului toate conturile (și nelegate); coloana „Stare” arată „🔒 Logare blocată (fără jurnal)”. HR vede în continuare doar conturile legate. | R2-27, vitest |
+| Minor — badge „Fost angajat” pe fișa HR era cod mort | Butonul „📇 Fișa” din Foști angajați citește fișa după id și deschide `ModalProfilAngajat` (badge + „Cont platformă”). | — (UI) |
+| Minor — „Trece ca extern” pentru cei care au refuzat; dovada nu se putea actualiza | Ascuns la „Refuză”; buton „📎 Actualizează dovada” (aceeași stare, notă/document nou → `confirmat_la` nou). | vitest (gardă statică) |
+| Minor — coliziunea de nume fără avertisment; fără dezlegare | Confirmarea arată externul existent (firmă, telefon, activ) și „colaborarea devine INACTIVĂ până la Acceptă”; „✂️ Dezleagă de fișă” în Personal extern (owner/HR; triggerul pune `activ=false` la dezlegare). | R3-23 |
+| Minor — `alocari_ramase` afișa nume de tabele | Etichete + locul real (Achiziții → tab Aprobatori, HR → Recrutare; restul „fără ecran: în BD, cu Claude”), link spre primul loc editabil. | vitest |
+| Minor — bannerul HR din „Editează Angajat” (RLS doar owner pe jurnal) | Starea vine din `fn_cont_stare_angajati` (accesibil HR); pentru non-owner: „anunță owner-ul (Răzvan)”. | — (UI) |
 
 ---
 
@@ -45,16 +67,18 @@ Reguli exacte:
    - tokeni = `array_remove(regexp_split_to_array(upper(extensions.unaccent(split_part(lower(btrim(p_email)),'@',1))), '[._-]+'), '')`;
    - trebuie să existe **cel puțin 2 tokeni distincți**. Un singur token (`popescu@`) nu se potrivește niciodată;
    - cuvintele numelui = `regexp_split_to_array(upper(extensions.unaccent(btrim(e.name))), '[[:space:]-]+')`;
-   - potrivire = `cuvinte @> tokeni`: fiecare token e un cuvânt întreg din nume, **în orice ordine**. Inițialele nu trec (`m.alexandru`, `konstantinos.t` dau 0);
+   - potrivire = `cuvinte @> tokeni` **și** `cuvinte[1] = ANY(tokeni)`: fiecare token e un cuvânt întreg din nume, **în orice ordine**, iar numele de familie (primul cuvânt) e obligatoriu. Inițialele nu trec (`m.alexandru`, `konstantinos.t` dau 0), nici doar prenumele (`ana.maria@` → 0 pentru IONESCU ANA MARIA);
    - `extensions.unaccent` se scrie întotdeauna cu schema în față.
 4. `profil_legat` = `profiles.id` care are deja acel `employee_id`, dacă există.
 
-Pe cele 25 de legături reale, regula fără ordine găsește corect 22 și nu dă niciun fals pozitiv. Varianta cu ordinea „prenume.nume” ar fi ratat `apostol.andrut` și `titi.jeno`.
+Pe cele 25 de legături reale, regula fără ordine găsește corect 22 și nu dă niciun fals pozitiv; cu numele de familie obligatoriu tot 22/22 (SELECT 29.09 seara, pe `auth.users.email`). Apelanții trimit întotdeauna emailul de **logare** (`auth.users.email`), niciodată `profiles.email`. Varianta cu ordinea „prenume.nume” ar fi ratat `apostol.andrut` și `titi.jeno`.
 
 **Decizia de legare**, luată de apelant: se leagă numai dacă `count(*) = 1` **și** `profil_legat IS NULL`. Numărarea se face înainte de a exclude angajații deja legați: dacă ies 2 candidați și unul are deja cont, contul nou nu se leagă.
 
 ### A.3 `public.handle_new_user()` extinsă
 Rămâne `SECURITY DEFINER`, cu `search_path` schimbat în `public, pg_temp`. Triggerul `on_auth_user_created` nu se atinge.
+
+**După review (0.1), comportamentul e:** potrivirea rulează la fiecare cont nou, dar `UPDATE … employee_id` se face **doar** dacă `NEW.raw_app_meta_data ->> 'gazpet_legare_automata' = 'true'` (calea de încredere: `auth.admin.createUser({…, app_metadata:{gazpet_legare_automata:true}})` cu `service_role`, din viitoarea funcție edge `cont-nou` cu poartă owner). Pe signUp public și pe Dashboard → Add user: contul rămâne nelegat și owner-ii primesc `cont_legare_propusa` („Cont nou X → propunere: NUME (#id, prin email/nume). Dacă tu ai creat contul, confirmă din Admin → Manageri → „Leagă automat”. Dacă nu-l recunoști, NU-l lega și închide-l.”) — pe orice domeniu. `cont_nelegat` rămâne pentru @gazpet.ro cu 0 / >1 candidați / candidat ocupat / eroare. Schița de mai jos e varianta inițială (legare la orice înscriere) — vezi codul din migrare.
 ```sql
 BEGIN
   INSERT INTO public.profiles (id, email, name, role)
@@ -104,12 +128,13 @@ END IF;
 RETURN NEW;
 ```
 - Închide o gaură existentă: `profiles_update_own` permite oricui să-și pună singur `employee_id` = orice angajat nelegat (96 de angajați activi n-au cont). Asta dă acces la semnătura electronică a acelui angajat, prin `my_employee_id()`.
-- Dacă se acceptă D6, aceeași funcție protejează și `department` (și, eventual, flagurile).
+- **După review:** refuză și schimbarea `profiles.email` de către non-owner (potrivirea nu se mai poate falsifica, notificările nu pot fi deturnate), iar pe un cont cu închidere nerestaurată (R2) refuză **orice** UPDATE de la non-owner (JWT-ul emis înainte de închidere rămâne valabil până la o oră). Referința la `conturi_inchideri_jurnal` e păzită de `to_regclass` (c rămâne independentă de d).
+- `department` și flagurile scăpate de `enforce_owner_only_salary_flags` sunt tratate separat de migrarea `20260929g_profiles_campuri_owner_only` (alt lot, D6); cele două triggere sunt compatibile (ambele 42501).
 - `handle_new_user` și cron-ul rulează cu `auth.uid()` NULL, deci trec. Owner-ul trece și el. UI-ul nu scrie nicăieri `employee_id` în afara modalului de owner (D.3).
 
 ### A.5 Legarea la cerere, cu previzualizare: `public.fn_cont_leaga_automat(p_simulare boolean DEFAULT true)`
-- `RETURNS TABLE(profile_id uuid, email text, rezultat text, employee_id integer, employee_name text)`.
-- Rezultatele posibile: `legat`, `de_legat` (în simulare), `ambiguu`, `fara_candidat`, `candidat_ocupat`.
+- `RETURNS TABLE(profile_id uuid, email text, rezultat text, employee_id integer, employee_name text, metoda text, cont_creat_la timestamptz)` (după review: `email` = emailul de logare, plus metoda și data creării contului, ca owner-ul să recunoască un cont pe care nu l-a creat). Semnătura s-a schimbat → migrarea face `DROP FUNCTION IF EXISTS … (boolean)` înainte de `CREATE`.
+- Rezultatele posibile: `legat`, `de_legat` (în simulare), `ambiguu` (mai mulți candidați **sau** mai multe conturi nelegate cu același candidat unic), `fara_candidat`, `candidat_ocupat`, `email_diferit` (`profiles.email ≠ auth.users.email`: sărit, de verificat manual), `eroare`.
 - **Poartă în cod:** `auth.uid()` nenul și profilul apelantului are `is_owner`; altfel `RAISE … ERRCODE '42501'`.
 - Parcurge doar profilurile cu `employee_id IS NULL AND COALESCE(tip_cont,'angajat') = 'angajat'`.
 - `p_simulare=true` nu scrie nimic. Cu `false`, face `UPDATE … WHERE employee_id IS NULL`, fiecare rând în sub-bloc cu EXCEPTION.
@@ -125,7 +150,7 @@ RETURNS TABLE(id text, cod text, profile_id uuid, email text, tip_cont text, is_
               candidati jsonb, alocari jsonb)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 ```
-- **Poartă:** `auth.uid()` nenul și apelantul e owner; altfel `RAISE EXCEPTION … ERRCODE '42501'`. `incarcaSursaAdmin` transformă codul 42501 în starea `denied`. În migrarea 1 funcția întoarce doar `cod='fara_angajat'`: `employee_id IS NULL AND COALESCE(tip_cont,'angajat')='angajat'`, oricare ar fi domeniul, cu `candidati` = `jsonb_agg` din `fn_cont_candidati_angajat(email)`.
+- **Poartă:** `auth.uid()` nenul și apelantul e owner; altfel `RAISE EXCEPTION … ERRCODE '42501'`. `incarcaSursaAdmin` transformă codul 42501 în starea `denied`. În migrarea 1 funcția întoarce doar `cod='fara_angajat'`: `employee_id IS NULL AND COALESCE(tip_cont,'angajat')='angajat'`, oricare ar fi domeniul, cu `candidati` = `jsonb_agg` din `fn_cont_candidati_angajat(auth.users.email)`; coloana `email` = emailul de logare (`COALESCE(u.email::text, p.email)`).
 - `id` = `cod || ':' || COALESCE(profile_id::text, 'e' || employee_id)`. E text, unic și se poate ordona, cum cere `citesteToate`.
 - **View:** `CREATE VIEW public.v_admin_conturi_alerte WITH (security_invoker = on) AS SELECT * FROM public.fn_admin_conturi_alerte();`
   - GRANT SELECT pe view și EXECUTE pe funcție TO authenticated; REVOKE ALL FROM anon; REVOKE EXECUTE FROM PUBLIC.
@@ -229,6 +254,8 @@ DELETE FROM auth.sessions WHERE user_id = p_profile_id;
 IF v_rez = 'inchis' THEN PERFORM fn_cont_notifica_owneri('cont_inchis_automat', '🔒 Cont închis: <email>', '<motiv> · jurnal #<id>'); END IF;
 RETURN v_rez;
 ```
+**Notificările** (`cont_owner_neinchis`, `cont_inchis_automat`) sunt best-effort, fiecare în `BEGIN … EXCEPTION → RAISE WARNING`: închiderea rămâne făcută și dacă notificarea pică (inclusiv funcția lipsă după un rollback în ordine greșită).
+
 **Capcana cu triggerele owner-only.** Când închiderea o declanșează cineva din HR care nu e owner (`can_modify_employees`, adică Natalia, Oana, Cristina, Mădălina, Cristiana sau `claude@`), `auth.uid()` rămâne cel al acelui om. Atunci `trg_enforce_owner_only_salary_flags` pune la loc, **fără nicio eroare**, 8 flaguri, iar testul T3 confirmă asta. Soluția (a) de mai sus rezolvă problema fără să modifice cele 3 triggere existente:
 - Claims se golesc doar în funcția internă, pe care niciun client nu o poate apela, și doar pentru UPDATE-ul care pune flagurile pe false.
 - `set_config(…, true)` e local tranzacției. Dacă apare o eroare după golire, anularea subtranzacției readuce singură valorile GUC. Pe drumul normal le restaurăm explicit, pentru că o funcție cu `SET search_path` **nu** restaurează alte GUC-uri la ieșire.
@@ -251,6 +278,8 @@ Funcția e `SECURITY DEFINER SET search_path = public, pg_temp` și întoarce NU
   - altfel (fără dată, sau cu dată în viitor): **nu închide**, trimite doar notificarea `cont_angajat_inactiv_fara_incetare`.
 - **false → true** (reactivare): **nu redă nimic**. Dacă există o închidere nerestaurată, trimite notificarea `cont_angajat_reactivat` („accesul NU a fost redat automat; restaurarea din jurnal o face doar owner-ul”).
 - `active` NULL nu declanșează nimic, pentru că verificarea e `IS TRUE` / `IS FALSE`.
+- Toate notificările din trigger (inclusiv cea din handler-ul de eroare) sunt în propriul `BEGIN … EXCEPTION`: nici o notificare lipsă nu blochează UPDATE-ul din HR sau lotul cron-ului (R2-26).
+- **Limită cunoscută:** o fișă dezactivată ÎNAINTE de data încetării (cu dată viitoare) nu mai e prinsă când data trece (cron-ul filtrează `active = true`) → rămâne alerta critică `cont_activ_fost_angajat` + „Închide contul acum”. `toggleEmp` folosește ziua BD (UTC), deci „Dezact.” nu mai creează singur cazul ăsta noaptea.
 
 **De ce AFTER UPDATE, cu WHEN pe `active`, și nu `UPDATE OF active`:**
 - **Calea UI** `saveEditEmp` trimite doar `termination_date`. `fn_employees_termination_notify` (BEFORE) pune `NEW.active=false`. Un trigger `UPDATE OF active` **nu ar porni**, pentru că nu ține cont de schimbările făcute de triggerele BEFORE. Triggerul AFTER vede NEW final. Același lucru pentru `toggleEmp`, care trimite `active` (și `termination_date`).
@@ -260,6 +289,7 @@ Funcția e `SECURITY DEFINER SET search_path = public, pg_temp` și întoarce NU
 ### B.6 Restaurarea: `public.fn_cont_restaureaza(p_jurnal_id bigint, p_nota text) RETURNS jsonb`
 - **Poartă în cod:** `auth.uid()` nenul și profilul apelantului are `is_owner`; altfel eroare 42501. Asta respinge și cron-ul, `service_role`, anon și orice non-owner.
 - Blochează rândul din jurnal cu `FOR UPDATE`. Rândul trebuie să aibă `restaurat_la IS NULL` (altfel eroare „deja restaurat”), profilul trebuie să existe, iar `p_nota` trebuie să aibă cel puțin 5 caractere.
+- **Forma snapshot-ului** se verifică înainte de orice scriere: `versiune = 1`, `flaguri` obiect, `module` și `santiere` liste, cheia `banned_until` prezentă; altfel `22023` cu HINT „Corectează importul (G.7)” și jurnalul NU se marchează restaurat.
 - Reface ce era în snapshot:
   - **Module:** `INSERT … ON CONFLICT (profile_id, module) DO NOTHING`, doar pentru modulele care mai există în `app_modules`. `granted_by = auth.uid()`, `granted_at = now()`; valorile originale rămân în jurnal. Modulele sărite apar în rezultat.
   - **Șantiere:** la fel, doar pentru `sites` care mai există.
@@ -271,6 +301,7 @@ Funcția e `SECURITY DEFINER SET search_path = public, pg_temp` și întoarce NU
 
 ### B.7 Starea contului pentru fișa HR: `public.fn_cont_stare_angajati() RETURNS TABLE(employee_id integer, profile_id uuid, email text, stare text, inchis_la timestamptz, jurnal_id bigint)`
 - `stare` poate fi `activ`, `inchis` (există închidere nerestaurată) sau `blocat` (ban fără jurnal, de ex. o închidere manuală neimportată).
+- Owner-ul primește **toate** conturile (inclusiv cele nelegate, cu `employee_id` NULL) — sursa coloanei „Stare” din Admin → Manageri; HR / date personale primesc doar conturile legate de fișe. AdminPage o citește în `loadAll` și pentru bannerul din „Editează Angajat” (vizibil și HR).
 - **Poartă:** owner, `can_modify_employees` sau `can_access_personal_data`. Pentru ceilalți întoarce **0 rânduri**, fără eroare, iar UI-ul doar ascunde indicatorul.
 - GRANT EXECUTE TO authenticated; REVOKE FROM PUBLIC, anon.
 
@@ -326,9 +357,10 @@ Funcția e atașată la două triggere:
   - `necunoscut` → golește `confirmat_de/la` și `document`.
   - Altfel **forțează** `confirmat_de := auth.uid()` și `confirmat_la := now()`: nu se acceptă valori venite din client.
 - Rulează înaintea lui `trg_employees_termination_notify` (ordine alfabetică), dar cele două nu depind una de alta.
+- **După review — acordul e legat de încetarea curentă:** `WHEN`-ul triggerului de UPDATE include și `active` / `termination_date`. La reactivare (`OLD.active IS NOT TRUE AND NEW.active IS TRUE`) sau la ștergerea datei de încetare, funcția pune `necunoscut` și golește proveniența, nota și documentul, **înainte** de verificările de rol — e direcția sigură (nu deduce niciun acord), deci merge și pe calea de sistem (admin fără JWT). Dacă s-au schimbat doar `active`/`termination_date` fără reset (ex. cron-ul), funcția iese imediat. Efect: „accepta” nu poate rămâne pe un angajat activ și nu se moștenește la următoarea plecare.
 
 ### C.3 Jurnalul acordului: `public.hr_colaborare_externa_jurnal`
-- Coloane: `id` identity PK, `employee_id integer NOT NULL` (fără FK), `status_vechi`, `status_nou`, `nota`, `document`, `facut_de uuid NOT NULL`, `facut_la timestamptz NOT NULL DEFAULT now()`.
+- Coloane: `id` identity PK, `employee_id integer NOT NULL` (fără FK), `status_vechi`, `status_nou`, `nota`, `document`, `facut_de uuid` (NULL = sistem), `facut_la timestamptz NOT NULL DEFAULT now()`, `sursa text NOT NULL DEFAULT 'manual' CHECK (sursa IN ('manual','reset_automat'))`. Rândul de reset are nota „Resetat automat: fișa a fost reactivată / data încetării a fost ștearsă; acordul era pentru încetarea din …”.
 - Append-only: trigger care refuză UPDATE, DELETE și TRUNCATE.
 - RLS: SELECT pentru `auth.uid() IS NOT NULL` și (owner SAU `can_modify_employees` SAU `can_access_personal_data`). Fără politici de scriere; REVOKE INSERT/UPDATE/DELETE/TRUNCATE de la authenticated, ALL de la anon; GRANT SELECT authenticated, ALL service_role.
 - Se scrie **numai** din triggerul AFTER de la C.5.
@@ -348,7 +380,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_hr_personal_extern_fost_angajat
 - **Protecție** `trg_hr_personal_extern_fost_angajat`, BEFORE INSERT OR UPDATE, funcție SECURITY DEFINER. E necesară pentru că politica UPDATE de pe tabelă permite **oricărui** utilizator logat să scrie.
   - Setarea sau schimbarea lui `fost_angajat_employee_id` cere `auth.uid()` nenul și owner sau `can_modify_employees` (altfel 42501). Angajatul țintă trebuie să aibă `termination_date IS NOT NULL AND termination_date <= CURRENT_DATE AND active IS NOT TRUE`.
   - Dacă `NEW.fost_angajat_employee_id IS NOT NULL AND NEW.activ IS TRUE` și statusul angajatului ≠ `accepta` → `RAISE … ERRCODE '23514'` „Colaborarea poate fi activă doar dacă fostul angajat a acceptat”.
-  - Efectul: motorul de ofertare, care filtrează după `ext.activ`, nu poate folosi un fost angajat fără acord, **fără nicio modificare în codul Ofertare**. Cele 25 de rânduri existente nu sunt legate, deci nu sunt afectate.
+  - **După review** poarta are trei părți: (1) legarea/dezlegarea doar owner/HR, ținta = fost angajat; la **dezlegare** `activ := false`; (2) rând legat + activ ⇒ fișa e **încă** a unui fost angajat (23514 „e din nou activă”) **și** acordul e `accepta`; (3) rând **nelegat** + activ cu numele/emailul unui fost angajat ⇒ 23514 „E fost angajat Gazpet (fișa #id NUME)…” cu HINT spre HR → Foști angajați; excepție doar owner-ul (omonim = altă persoană). Potrivirea: `fn_extern_fost_angajat_potrivire(nume, email)` (internă) peste `fn_nume_cuvinte` (fără diacritice, cuvinte distincte): email identic, sau ≥ 2 cuvinte, numele de familie al fișei prezent, un set îl conține pe celălalt. Se verifică la INSERT și când se schimbă `nume`/`email`/`activ`.
+  - Efectul: motorul de ofertare, care filtrează după `ext.activ`, nu poate folosi un fost angajat fără acord **pe rândurile noi sau modificate**, fără nicio modificare în codul Ofertare. Limite care rămân: rândurile vechi nemodificate (25 azi, 0 omonime cu foști angajați la 29.09), activarea unui omonim de către owner, și politicile `hr_personal_extern_insert/update` care lasă orice logat să scrie (restrângerea la owner/HR = decizie de drepturi, cu acordul lui Răzvan). Cele 25 de rânduri existente nu sunt legate, deci nu sunt afectate.
 
 ### C.5 Sincronizarea: `public.fn_employees_colab_ext_after()` + `trg_employees_zz_colab_ext`
 ```sql
@@ -376,11 +409,12 @@ Ambele sunt `SECURITY DEFINER SET search_path = public, pg_temp`, cu poartă în
   - cu `p_extern_id`: leagă rândul existent, dacă e nelegat, și pune `activ := activ AND status = 'accepta'`;
   - fără `p_extern_id`: `INSERT` cu `nume = e.name`, `functie = COALESCE(e.functie, e.position)`, `telefon = e.telefon`, `email = NULLIF(e.email,'')`, `observatii = 'Fost angajat Gazpet (fișa #id), contract încheiat la <dată>'`, `activ = (status = 'accepta')`, `created_by = auth.uid()`;
   - la coliziune pe `uq_hr_personal_extern_nume` → eroare cu HINT „Există deja externul <nume> (#id): leagă-l explicit”.
-- Dezlegarea se face cu `UPDATE hr_personal_extern SET fost_angajat_employee_id = NULL`, din UI, de owner sau de cineva cu `can_modify_employees`; triggerul verifică rolul.
+- Dezlegarea se face cu `UPDATE hr_personal_extern SET fost_angajat_employee_id = NULL`, din UI (Personal extern → detalii → „✂️ Dezleagă de fișă”), de owner sau de cineva cu `can_modify_employees`; triggerul verifică rolul și pune `activ = false` (reactivarea trece prin verificarea de omonimie).
+- La coliziunea de nume, confirmarea din UI arată externul existent (firmă, telefon, email, activ) și avertizează că, fără „Acceptă”, colaborarea lui devine INACTIVĂ.
 
 ### C.7 Ofertare după 02.10 (doar documentare; nu se implementează acum)
 - **Azi, fără nicio schimbare în Ofertare:**
-  - un fost angajat trecut ca extern e „utilizabil” în ofertare doar prin `ext.activ = true`, iar asta cere acordul `accepta` (C.4);
+  - un fost angajat trecut ca extern e „utilizabil” în ofertare doar prin `ext.activ = true`, iar asta cere acordul `accepta` pentru încetarea curentă (C.2, C.4). Un extern **nelegat** nou/modificat cu numele unui fost angajat e refuzat (C.4 (3)); rămân excepțiile din C.4 (rânduri vechi, owner, politicile de scriere largi);
   - autorizațiile și recomandările lui rămân pe `employee_id` și sunt excluse de `titularActiv` (`emp.active = false`, în `ofertare-acoperire/core.ts:116` și `OfertareLicitatii.jsx:3090`).
 - **De făcut după 02.10:**
   - În `ofertare-acoperire/core.ts`, un titular `emp` inactiv se consideră disponibil **ca extern** doar dacă există simultan: un rând `hr_personal_extern` cu `fost_angajat_employee_id = emp.id` și `activ = true`, iar pe fișă `colaborare_externa_status = 'accepta'`.
@@ -411,6 +445,7 @@ Reguli generale: stilurile se scriu inline cu paleta G/S a fiecărui fișier, f�
   - indicator de cont: „🔒 Cont închis automat la <dată>” (`stare='inchis'`), „⚠️ Cont încă activ” (`activ`, cu link către alertă) sau nimic;
   - buton „Trece ca extern” (dacă nu e legat) → `rpc('fn_fost_angajat_leaga_extern')`. Dacă răspunsul e eroarea de coliziune pe nume, se oferă alegerea externului existent. Rândurile deja legate arată „Extern #id · colaborare activă/inactivă”.
 - **Cine editează:** `const poateColab = profile?.is_owner === true || profile?.can_modify_employees === true` (nu `isAdmin`). Ceilalți văd controlul fără să-l poată folosi.
+- **După review:** „📎 Actualizează dovada” (aceeași stare, notă/document nou); „Trece ca extern” ascuns la „Refuză”; confirmarea coliziunii arată externul existent și efectul (inactiv); „📇 Fișa” deschide `ModalProfilAngajat` (HR.jsx citește fișa după id); istoricul arată resetul automat ca „sistem (reset automat)”.
 - **Filtre:** stare acord (toate, necunoscut, acceptă, refuză) și căutare după nume.
 - **În `HR.jsx`:**
   - Arhivă (~2460-2473): lângă „🔒 Contract încheiat” se adaugă badge-ul „Fost angajat Gazpet”;
@@ -420,7 +455,8 @@ Reguli generale: stilurile se scriu inline cu paleta G/S a fiecărui fișier, f�
 - **Rândul din listă (~138-141):** dacă `p.fost_angajat_gazpet`, lângă nume apare badge-ul „Fost angajat Gazpet” și pastila stării de acord.
 - **Starea de acord:** se citește separat, `employees.select('id,name,termination_date,colaborare_externa_status,colaborare_externa_confirmat_la').in('id', idsLegate)`, fără embed (vezi C.4).
 - **Detalii extinse (~155-161):** „Acord colaborare: Acceptă · confirmat la …” și un link către HR → Foști angajați.
-- **`ModalPersoana` (~283-286):** dacă rândul e legat și statusul ≠ `accepta`, bifa „Colaborare activă” e dezactivată, cu textul „Se poate activa doar după ce fostul angajat acceptă (HR → Foști angajați)”. Eroarea `23514` venită din trigger se arată cu același text.
+- **`ModalPersoana` (~283-286):** dacă rândul e legat și statusul ≠ `accepta` (sau fișa legată e din nou activă), bifa „Colaborare activă” e dezactivată, cu textul „Se poate activa doar după ce fostul angajat acceptă (HR → Foști angajați)” / „reangajat”. Erorile `23514` din trigger se arată după mesaj (acord lipsă / reangajat / omonim).
+- **După review:** lista citește și foștii angajați (`employees` cu dată de încetare, inactivi) și marchează: „↩ Reangajat Gazpet (fișa activă)” în locul badge-ului pentru un rând legat de o fișă reactivată; „⚠️ Omonim cu fostul angajat #id — nelegat” pentru rândurile nelegate care se potrivesc (`fostAngajatPotrivit`, aceeași regulă ca BD). `ModalPersoana` blochează salvarea unui extern nou/redenumit/activat omonim cu un fost angajat (owner: confirmare explicită). Detalii: „✂️ Dezleagă de fișă” (props `poateLega`, `esteOwner` din HR.jsx).
 
 ### D.3 Admin: `src/App.jsx` (AdminPage)
 - **Tabelul Manageri (~7501):** coloane noi „Fișă angajat” (numele sau „— nelegat”) și „Stare” („Activ”, „🔒 Închis <dată>”, sau tipul contului: extern/test/sistem). Datele vin din `profiles` (deja `select('*')`) și din `employees`, deja încărcate, plus jurnalul (RLS owner).
@@ -432,11 +468,14 @@ Reguli generale: stilurile se scriu inline cu paleta G/S a fiecărui fișier, f�
 - **Secțiunea „Jurnal închideri conturi”** din tab-ul Manageri (doar owner): listă cu data, email, motiv, sursă, cine a făcut-o, și restaurat (sau nu).
 - **Butonul „Leagă automat conturile nelegate”:** `rpc('fn_cont_leaga_automat', {p_simulare:true})` → previzualizare → confirmare → `{p_simulare:false}`.
 - **Link-uri directe din alerte:** `/admin?tab=managers&cont=<profile_id>` deschide modalul contului; `/admin?tab=employees&angajat=<id>` deschide „Editează Angajat”. Se citesc cu `useSearchParams` după `loadAll`.
-- **`createManager` (~6646):** verifică eroarea de la `upsert`. După creare citește `profiles.employee_id` și afișează în toast „Legat automat de <NUME>” sau „Nelegat: alege fișa din Editează”.
+- **`createManager` (~6646):** verifică eroarea de la `upsert`. După creare citește `profiles.employee_id`; cum signUp nu mai leagă singur, toast-ul cere confirmarea prin „🔗 Leagă automat” (sau Edit → Fișă angajat). Dacă înscrierea publică e oprită (D1-B), toast-ul trimite la Dashboard → Add user.
+- **Previzualizarea „Leagă automat”** arată pe fiecare rând metoda și data creării contului, motivele celor sărite (inclusiv `email_diferit`) și avertismentul „leagă doar conturile pe care le recunoști”.
+- **Modalul „Editează Manager”** pe un cont închis: „🔒 Reaplică închiderea” + „↩ Restaurează din jurnal” (cu textul „redă TOT accesul: doar dacă omul revine în firmă”).
 - **`toggleEmp` (~6660):**
   - verifică `error` (azi nu o verifică);
   - la dezactivarea unui angajat cu cont legat: `window.confirm('Contul <email> va fi închis automat (drepturi scoase, logare blocată). Continui?')`;
-  - la reactivare (D4): `window.confirm` + `{active:true, termination_date:null}` și toast „Accesul NU se redă automat”.
+  - la reactivare (D4): `window.confirm` + `{active:true, termination_date:null}` și toast „Accesul NU se redă automat”; data veche se adaugă în `observatii_hr`; confirmarea spune că acordul de colaborare externă revine la „Necunoscut”;
+  - data implicită a încetării = `ziBaza()` (UTC = `CURRENT_DATE`), nu ziua RO (altfel, noaptea, contul nu se închidea).
 - **„Editează Angajat” (~6884-6886):** când `termination_date <= azi` și fișa are cont legat, lângă bannerul existent apare „Contul platformei <email> va fi închis automat la salvare”. Dacă data e în viitor: „… va fi închis automat în dimineața zilei <dată>”.
 - **`src/TabSemnaturi.jsx:78`:** mesajul devine „Contul tău nu e legat de fișa de angajat. Cere-i lui Răzvan să facă legătura (Admin → Manageri → Editează).”
 
@@ -456,9 +495,9 @@ Reguli generale: stilurile se scriu inline cu paleta G/S a fiecărui fișier, f�
   - `impact` = **acțiunea de făcut**:
     - `fara_angajat`: „Leagă fișa (Editează → Fișă angajat) sau marchează tipul (extern/test/sistem)”, plus candidații („1 candidat: X, are deja cont” / „2 candidați: X, Y” / „niciun candidat”);
     - `cont_activ_fost_angajat`: „Închide contul acum sau corectează fișa”; pentru owner: „OWNER: nu se închide automat, decide manual”; pentru dată lipsă sau în viitor, motivul;
-    - `inchis_dar_deblocat` / `inchis_cu_acces_rest`: „Reaplică închiderea sau restaurează formal din jurnal #id”;
+    - `inchis_dar_deblocat` / `inchis_cu_acces_rest`: „Reaplică închiderea (Admin → Manageri → Edit → „🔒 Reaplică închiderea”; jurnal #id). NU folosi „Restaurează”: redă TOT accesul — doar dacă omul revine în firmă.”;
     - `reactivat_acces_neredat`: „Dacă revine în firmă: Restaurează din jurnal #id. Altfel verifică reactivarea”;
-    - `alocari_ramase`: „Reasignează: comenzi_aprobatori 1, …”;
+    - `alocari_ramase`: „Reasignează: Achiziții → tab Aprobatori (aprobator comenzi) (1); …” (`ALOCARI_CONTURI`: etichetă + cale; tabelele fără ecran de editare sunt marcate „în BD, cu Claude”); link-ul duce la primul loc editabil;
     - `inactiv_fara_data`: „Completează data încetării sau șterge fișa demo”.
 - **În `incarcaSursaAdmin`:** `if (source.id === 'conturi') rows = alerteConturi(await read('v_admin_conturi_alerte'), today)`. Se folosește `from(view).select`, deci **fără `.rpc(`**, cum cere `adminAlerte.test.js:35-37`.
 - **`AdministratorAlerte.jsx`:**
@@ -558,6 +597,14 @@ Reguli generale: stilurile se scriu inline cu paleta G/S a fiecărui fișier, f�
 - R3-19 Ștergerea (de către owner) a unei fișe inactive legate de un extern → blocată de FK RESTRICT (23503).
 - R3-20 Reactivarea fostului angajat → externul legat trece pe `activ=false`.
 
+### E.3b Teste adăugate după review (29.09 seara)
+- **R1-00** signUp public cu emailul de pe fișă → nelegat + `cont_legare_propusa`. **R1-01…R1-13** folosesc `teste.creeaza_cont_owner` (calea de încredere). **R1-14** schimbarea `profiles.email` de către utilizator → 42501; owner-ul poate. **R1-19** previzualizarea are `cont_creat_la`.
+- **R1-20** signUp cu emailul personal de pe fișă / cu `prenume.nume@gazpet.ro` → nelegate, propuneri la owner, legare după confirmarea owner-ului. **R1-21** email falsificat în profil → `email_diferit`, sărit, alerta pe emailul de logare. **R1-22** `ana.maria@` / `maria.ana@` → 0; cu numele de familie → 1. **R1-23** două conturi cu același candidat → ambele `ambiguu`, nimic legat.
+- **R2-24** cont închis: auto-repunerea `email_notifications_*` / `whatsapp_enabled` și schimbarea emailului → 42501. **R2-25** snapshot în forma veche → 22023, jurnalul nemarcat. **R2-26** `fn_cont_notifica_owneri` redenumită temporar → cron-ul și dezactivarea fără dată nu pică, contul se închide. **R2-27** owner: `inchis` / `blocat` / `activ` și pentru conturi nelegate; HR doar legate.
+- **R3-20** (extins) reactivare → acord „necunoscut”, rând `reset_automat`; activarea externului pentru un reangajat → 23514; a doua încetare fără acord nou → 23514; cu acord nou → permis; fișă activă cu „accepta” forțat → 23514 („doar pentru un fost angajat”). **R3-21** reset pe calea admin (fără 42501, `facut_de` NULL) și la ștergerea datei; cron-ul nu atinge acordul. **R3-22** omonime (diacritice, ordine, prenume în plus, email) → 23514 cu HINT; „Radu Mihaela” și rândul inactiv → permise; activarea omonimului: simplu/HR refuz, owner permis; editarea altor câmpuri nu reverifică. **R3-23** dezlegare → `activ=false`, marcaj dispărut, reactivarea omonimului → 23514.
+- **Harness `--rollback`:** rollback-ul c rulat înaintea lui d/e → refuzat, schema neschimbată.
+- **Verificare prin mutații** (locală, în scratchpad): fiecare corecție scoasă pe rând face harness-ul să pice exact la testul ei (13/13).
+
 ### E.4 Vitest
 Fișier nou `src/conturiCicluViata.js` (funcții pure) + `src/conturiCicluViata.test.js`:
 - `esteFostAngajat(emp, today)`:
@@ -586,12 +633,13 @@ Completări în `src/adminAlerte.test.js`:
   - `sorteazaAlerte` funcționează pe rezultat.
 - **Garda statică existentă** (fără mutații în `adminAlerte.js` și `AdministratorAlerte.jsx`) rămâne verde.
 - **Gardă statică nouă:** `HrFostiAngajati.jsx` nu conține `.from('employees').update(`. Statusul trece doar prin `rpc('fn_colaborare_externa_seteaza'`.
+- **După review:** `ziBaza` (00:30 RO = ziua precedentă UTC); `stareContProfil` cu `blocat`; `cuvinteNume` / `fostAngajatPotrivit` / `esteEroareOmonim` / `esteEroareReangajat` / `autorJurnalAcord`; `poateActivaColaborarea(…, fostInca=false)`; alertele „Reaplică închiderea” și `ALOCARI_CONTURI`; gărzi statice: `toggleEmp` folosește `ziBaza()`, butonul „Reaplică închiderea” e în blocul contului închis, „Leagă automat” face previzualizarea înainte de confirmare, „Trece ca extern” e ascuns la „Refuză”.
 
 ---
 
 ## F. Rollback (fiecare fișier idempotent, rulat în ordinea e → d → c)
 - **`20260929e_…_ROLLBACK.sql`:**
-  - DROP pe triggerele `trg_employees_zz_colab_ext`, `trg_employees_colab_ext_protectie_ins/_upd`, `trg_hr_personal_extern_fost_angajat` și pe funcțiile lor;
+  - DROP pe triggerele `trg_employees_zz_colab_ext`, `trg_employees_colab_ext_protectie_ins/_upd`, `trg_hr_personal_extern_fost_angajat` și pe funcțiile lor (inclusiv `fn_extern_fost_angajat_potrivire`, `fn_nume_cuvinte`);
   - DROP pe `fn_colaborare_externa_seteaza` și `fn_fost_angajat_leaga_extern`;
   - DROP TABLE `hr_colaborare_externa_jurnal`;
   - pe `hr_personal_extern`: DROP index, constrângere, `fost_angajat_gazpet`, `fost_angajat_employee_id`;
@@ -604,6 +652,7 @@ Completări în `src/adminAlerte.test.js`:
   - DROP TABLE `conturi_inchideri_jurnal` (cu triggerele de append-only).
   - Conturile închise **rămân închise**, adică partea sigură. ⚠️ Jurnalul se exportă înainte în `claude_context`.
 - **`20260929c_…_ROLLBACK.sql`:**
+  - **gardă de ordine** la început: dacă `fn_cont_inchide(uuid,text,text,integer)` sau `conturi_inchideri_jurnal` mai există → `RAISE … 55000` („rulează DUPĂ rollback-urile e și d”), fără niciun efect (verificat de harness);
   - `handle_new_user` revine la corpul original, **verbatim** (cu `search_path TO 'public'`);
   - DROP pe `trg_profiles_protectie_legatura`, `fn_profiles_protectie_legatura`, `v_admin_conturi_alerte`, `fn_admin_conturi_alerte`, `fn_cont_leaga_automat`, `fn_cont_candidati_angajat`, `fn_cont_notifica_owneri`;
   - DROP COLUMN `profiles.tip_cont`.
@@ -630,6 +679,7 @@ Completări în `src/adminAlerte.test.js`:
 Îi arăți rezumatul, deciziile D1–D6 și lista de teste trecute. Aștepți un „da” explicit.
 
 ### G.4 `apply_migration` c → verificări
+- **Înainte:** Răzvan știe că, după c, conturile noi NU se mai leagă singure la signUp/Dashboard: primește propunerea și confirmă cu „🔗 Leagă automat” (sau se face funcția edge `cont-nou`, D1-C, care setează `app_metadata.gazpet_legare_automata`).
 - Pentru toți cei 31, `SELECT p.email, (SELECT jsonb_agg(c) FROM fn_cont_candidati_angajat(p.email) c) FROM profiles p` (postgres, fără poartă):
   - pe cei 25 legați, cel puțin 22 au candidat unic = legătura reală și **0** au un candidat unic diferit;
   - cei 6 nelegați au 0 candidați.
@@ -650,7 +700,7 @@ Completări în `src/adminAlerte.test.js`:
 - Politica pe jurnal și `REVOKE`-urile.
 
 ### G.7 DML: importul închiderilor manuale (preview → confirmare → apply)
-- **Jurnal:** 2 rânduri, `sursa='import_manual'`, `facut_de=NULL`, `motiv='Închidere manuală 29.09 la cererea lui Răzvan (claude_context 1483)'`. Snapshot-ul = JSON-ul din 1483, completat cu:
+- **Jurnal:** 2 rânduri, `sursa='import_manual'`, `facut_de=NULL`, `motiv='Închidere manuală 29.09 la cererea lui Răzvan (claude_context 1483)'`. ⚠️ 1483 are forma `{profile:{…flaguri…}, module:[…]}`, pe care `fn_cont_restaureaza` o **refuză** (B.6): DML-ul o convertește explicit în forma B.2 — `versiune: 1`, `flaguri` = `profile` restrâns la `fn_cont_flaguri()`, `module` (cu `access_level`), `santiere`, `banned_until`, `profil`, `rezumat` — iar preview-ul se verifică cu un SELECT pe `snapshot->'flaguri'` / `jsonb_typeof(...)` înainte de INSERT. Snapshot-ul = JSON-ul din 1483 convertit, completat cu:
   - rândul actual `profile_sites` al lui Sorin (azi 1, neinclus în 1483);
   - `banned_until` anterior = NULL.
 - **Convergența lui Sorin:** apoi, ca postgres, `SELECT fn_cont_inchide('<sorin>', '…', 'import_manual')` → `deja_inchis`. Funcția șterge rândul din `profile_sites`, deci se opresc mailurile `reminder-rapoarte`.
@@ -705,4 +755,4 @@ Fără edge function nouă, fără cron nou, fără secret nou. Cron-ul `hr_auto
 | (b) Ce scrie | `profiles.employee_id` (doar pe NULL), `notifications` pentru owneri. Nu trimite mail. Nu dă drepturi. | Șterge `user_module_access` și `profile_sites`, pune flagurile pe false, `auth.users.banned_until`, revocă sesiuni și tokeni, scrie jurnal și `notifications`. **Doar ia drepturi**, nu le dă niciodată. Nu trimite mail. | Jurnalul acordului; `hr_personal_extern.activ = false` (doar dezactivează) |
 | (c) Identitate | SECURITY DEFINER `postgres` (BYPASSRLS, nu superuser). Necesar pentru că GoTrue (`supabase_auth_admin`) nu are drepturi pe `public`. Fără `service_role`. | SECURITY DEFINER `postgres`. Necesar pentru `auth.*` și tabelele owner-only. Claims se golesc doar pentru UPDATE-ul de flaguri pe false. | SECURITY DEFINER `postgres` |
 | (d) Cine pornește | Crearea unui cont în GoTrue | Orice UPDATE pe `employees` permis de RLS (owner / `can_modify_employees`) sau cron-ul. Funcțiile interne au REVOKE de la anon, authenticated și service_role. RPC-urile din UI verifică `is_owner` **în cod**. | RPC-urile verifică owner / `can_modify_employees` în cod. Triggerele refuză `auth.uid()` NULL. |
-| (e) Confirmare umană | Legarea se face doar la potrivire unică, fără suprascriere, cu notificare la owner și legătura protejată. **Regula tare (a)+(b) e încălcată** dacă înscrierea publică e pornită: rămâne deschis până la D1 (B/C). | Reacordarea drepturilor (restaurarea) e doar owner, explicit. Închiderea nu cere confirmare, pentru că direcția e sigură, iar declanșatorul e o dată pusă de un om. | Acordul îl setează doar un om, niciodată automat. Activarea externului o face doar un om. |
+| (e) Confirmare umană | **După review:** la signUp public / Dashboard legarea NU se face singură — owner-ul primește propunerea și confirmă (previzualizare → confirmare, cu data creării contului). Legare fără confirmare doar pe calea de încredere (`app_metadata` pus de `service_role`, deci de o funcție cu poartă owner). Potrivirea e pe emailul de logare, fără suprascriere, legătura și emailul profilului sunt protejate. Regula tare (a)+(b) e respectată (poartă = confirmarea owner-ului). D1-B rămâne recomandat. | Reacordarea drepturilor (restaurarea) e doar owner, explicit. Închiderea nu cere confirmare, pentru că direcția e sigură, iar declanșatorul e o dată pusă de un om. | Acordul îl setează doar un om, niciodată automat. Activarea externului o face doar un om. |

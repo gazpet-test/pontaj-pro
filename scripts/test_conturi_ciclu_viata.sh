@@ -159,6 +159,19 @@ if [ "$REAPLICA" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
 fi
 
 if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
+  # Gardă de ordine: rollback-ul PRIMEI migrări rulat înaintea celorlalte trebuie refuzat și fără efect
+  # (doar dacă fișierul are o gardă declarată: „Gardă de ordine”).
+  RB0="$(cale_abs "${MIGRARI[0]%.sql}_ROLLBACK.sql")"
+  if [ ${#MIGRARI[@]} -gt 1 ] && [ -f "$RB0" ] && grep -q 'Gardă de ordine' "$RB0"; then
+    SNAP_G="$(mktemp)"; schema_snapshot > "$SNAP_G"
+    if "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$RB0" >/dev/null 2>&1; then
+      esec "rollback-ul ${RB0#$RADACINA/} a rulat în ordine greșită (înaintea celorlalte) fără să fie refuzat"
+    fi
+    schema_snapshot | diff -q "$SNAP_G" - >/dev/null || esec "rollback-ul refuzat a lăsat totuși urme în schemă"
+    rm -f "$SNAP_G"
+    echo "   gardă de ordine: ${RB0#$RADACINA/} înaintea celorlalte → refuzat, schema neschimbată"
+    TOTAL_OK=$((TOTAL_OK + 1))
+  fi
   for (( i=${#MIGRARI[@]}-1; i>=0; i-- )); do
     rb="${MIGRARI[$i]%.sql}_ROLLBACK.sql"
     [ -f "$(cale_abs "$rb")" ] || esec "lipsește rollback-ul pentru ${MIGRARI[$i]}"

@@ -310,8 +310,13 @@ export default function HRPage() {
       {!load && tab === 'formare' && <HrFormareProfesionala employees={employees} autorizatii={autorizatii} tipuri={tipuri} profile={profile} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} onEditViza={(a) => setEditAut({ ...a, _focusViza: true })} />}
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
-      {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
-      {!load && tab === 'fosti' && <HrFostiAngajati profile={profile} showToast={showToast} />}
+      {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} poateLega={profile?.is_owner === true || profile?.can_modify_employees === true} esteOwner={profile?.is_owner === true} />}
+      {!load && tab === 'fosti' && <HrFostiAngajati profile={profile} showToast={showToast} onDeschideFisa={async (id) => {
+        // fișa unui fost angajat nu e în lista HR (doar activi) → o citim după id și deschidem același modal
+        const { data, error } = await supabase.from('employees').select('*').eq('id', id).maybeSingle()
+        if (error || !data) { showToast('Nu pot deschide fișa: ' + (error?.message || 'nu există'), 'error'); return }
+        setEditEmp(data)
+      }} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'recomandari' && <HrRecomandari profile={profile} employees={employees} canEdit={canAccessPersonal || isAdmin || canUseScanner} showToast={showToast} />}
       {!load && tab === 'citire_aut' && canAccessPersonal && <HrAutorizatiiCitire profile={profile} canEdit={canAccessPersonal || isAdmin} showToast={showToast} />}

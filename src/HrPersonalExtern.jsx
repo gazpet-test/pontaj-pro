@@ -22,7 +22,10 @@ import { compressFileBeforeUpload } from './utils/compressFile'
 import DomeniiPicker from './HrDomeniiPicker.jsx'
 // 29.09.2026 R3: foști angajați Gazpet trecuți ca externi (marcaj + acord de colaborare)
 import { BadgeFostAngajat, PastilaAcord } from './HrFostiAngajati.jsx'
-import { etichetaColab, formatDataRo, poateActivaColaborarea, MESAJ_ACTIVARE_FARA_ACORD } from './conturiCicluViata.js'
+import {
+  etichetaColab, formatDataRo, poateActivaColaborarea, MESAJ_ACTIVARE_FARA_ACORD, esteFostAngajat,
+  fostAngajatPotrivit, MESAJ_OMONIM_FOST_ANGAJAT, esteEroareOmonim, esteEroareReangajat,
+} from './conturiCicluViata.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -59,7 +62,9 @@ function Modal({ titlu, onClose, children, latime = 560 }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = true }) {
+// poateLega = owner / can_modify_employees (dezlegarea de fișa unui fost angajat; BD-ul verifică rolul oricum).
+// esteOwner: doar owner-ul poate activa un extern omonim cu un fost angajat (altă persoană) — BD idem.
+export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = true, poateLega = false, esteOwner = false }) {
   const [persoane, setPersoane] = useState([])
   const [autorizatii, setAutorizatii] = useState([])
   const [load, setLoad] = useState(true)
@@ -68,15 +73,17 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
   const [editPers, setEditPers] = useState(null)    // {} = adăugare, obiect = editare
   const [addAut, setAddAut] = useState(null)        // persoana pentru care adaug autorizație
   const [acorduri, setAcorduri] = useState(new Map()) // employee_id → fișa fostului angajat (acordul de colaborare)
+  const [fosti, setFosti] = useState([])              // foștii angajați: detectarea externilor nelegați omonimi
   const nav = useNavigate()
 
   const incarca = useCallback(async () => {
     setLoad(true)
-    const [{ data: p, error: pe }, { data: a }] = await Promise.all([
+    const [{ data: p, error: pe }, { data: a }, { data: fa }] = await Promise.all([
       supabase.from('hr_personal_extern').select('*').order('nume'),
       supabase.from('hr_autorizatii')
         .select('id, extern_id, tip_id, numar_autorizatie, emitent, data_emitere, data_expirare, fara_expirare, domenii, fisier_path, fisier_nume, observatii')
         .not('extern_id', 'is', null).is('deleted_at', null),
+      supabase.from('employees').select('id,name,email,termination_date,active').not('termination_date', 'is', null).neq('active', true),
     ])
     if (pe) showToast?.('Nu pot încărca personalul extern: ' + pe.message, 'error')
     // Acordul foștilor angajați se citește separat, după id (fără embed: între cele două tabele
@@ -85,10 +92,11 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
     let acc = new Map()
     if (idsLegate.length) {
       const { data: emp } = await supabase.from('employees')
-        .select('id,name,termination_date,colaborare_externa_status,colaborare_externa_confirmat_la').in('id', idsLegate)
+        .select('id,name,active,termination_date,colaborare_externa_status,colaborare_externa_confirmat_la').in('id', idsLegate)
       acc = new Map((emp || []).map(e => [e.id, e]))
     }
     setAcorduri(acc)
+    setFosti(fa || [])
     setPersoane(p || [])
     setAutorizatii(a || [])
     setLoad(false)
@@ -103,6 +111,15 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
     const s = cauta.toLowerCase()
     return [p.nume, p.functie, p.firma].filter(Boolean).some(x => x.toLowerCase().includes(s))
   })
+
+  // Dezlegarea de fișă (legare greșită / omonim): colaborarea devine inactivă (triggerul BD o forțează).
+  const dezleaga = async (p) => {
+    if (!window.confirm(`Dezlegi „${p.nume}” de fișa fostului angajat?\n\n• marcajul „Fost angajat Gazpet” dispare\n• colaborarea devine INACTIVĂ; reactivarea verifică dacă numele e al unui fost angajat\n\nFolosește doar dacă legarea a fost greșită (altă persoană).`)) return
+    const { error } = await supabase.from('hr_personal_extern').update({ fost_angajat_employee_id: null, updated_at: new Date().toISOString() }).eq('id', p.id)
+    if (error) { showToast?.('Nu am putut dezlega: ' + error.message, 'error'); return }
+    showToast?.(`„${p.nume}” nu mai e legat de fișa fostului angajat (colaborare inactivă)`, 'success')
+    incarca()
+  }
 
   const deschidePdf = async (path) => {
     if (!path) return
@@ -146,6 +163,10 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
         const auts = autPentru(p.id)
         const expandat = deschis === p.id
         const fost = p.fost_angajat_gazpet ? acorduri.get(p.fost_angajat_employee_id) : null
+        // legat, dar fișa e din nou activă / fără încetare → „Reangajat”, nu „Fost angajat” (review 29.09)
+        const reangajat = p.fost_angajat_gazpet && fost && !esteFostAngajat(fost)
+        // nelegat, dar numele / emailul e al unui fost angajat → avertisment (BD refuză activarea nouă)
+        const omonim = !p.fost_angajat_gazpet ? fostAngajatPotrivit(p, fosti) : null
         return (
           <div key={p.id} style={{...S.card, marginBottom:10, overflow:'hidden', opacity: p.activ ? 1 : .55}}>
             <div onClick={() => setDeschis(expandat ? null : p.id)}
@@ -155,10 +176,20 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
                 <div style={{fontSize:14, fontWeight:800, color:G.text}}>
                   {p.nume}
                   {!p.activ && <span style={{marginLeft:8, fontSize:10, color:G.muted, fontWeight:600}}>(inactiv)</span>}
-                  {p.fost_angajat_gazpet && (
+                  {p.fost_angajat_gazpet && !reangajat && (
                     <span style={{display:'inline-flex', gap:6, marginLeft:8, verticalAlign:'middle', flexWrap:'wrap'}}>
                       <BadgeFostAngajat />
                       <PastilaAcord status={fost?.colaborare_externa_status} />
+                    </span>
+                  )}
+                  {reangajat && (
+                    <span style={{marginLeft:8, padding:'2px 7px', background:G.blue+'22', color:G.blue, borderRadius:4, fontSize:10, fontWeight:600, verticalAlign:'middle'}}>
+                      ↩ Reangajat Gazpet (fișa activă)
+                    </span>
+                  )}
+                  {omonim && (
+                    <span title={MESAJ_OMONIM_FOST_ANGAJAT} style={{marginLeft:8, padding:'2px 7px', background:G.yellow+'22', color:G.yellow, borderRadius:4, fontSize:10, fontWeight:600, verticalAlign:'middle'}}>
+                      ⚠️ Omonim cu fostul angajat #{omonim.id} — nelegat
                     </span>
                   )}
                 </div>
@@ -180,9 +211,23 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
                     <div>Fost angajat Gazpet{fost?.termination_date ? ` · contract încheiat la ${formatDataRo(fost.termination_date)}` : ''}</div>
                     <div>Acord colaborare: <strong style={{color: etichetaColab(fost?.colaborare_externa_status).culoare}}>{etichetaColab(fost?.colaborare_externa_status).label}</strong>
                       {fost?.colaborare_externa_confirmat_la && ` · confirmat la ${formatDataRo(fost.colaborare_externa_confirmat_la)}`}</div>
-                    <button onClick={() => nav('/hr?tab=fosti')} style={{background:'transparent', border:'none', color:G.blue, cursor:'pointer', fontSize:12, padding:0, marginTop:2}}>
-                      HR → Foști angajați ↗
-                    </button>
+                    {reangajat && <div style={{color:G.blue}}>Fișa e din nou activă (reangajat): colaborarea externă nu se poate activa; acordul se reconfirmă la o nouă plecare.</div>}
+                    <div style={{display:'flex', gap:12, alignItems:'center', flexWrap:'wrap', marginTop:2}}>
+                      <button onClick={() => nav('/hr?tab=fosti')} style={{background:'transparent', border:'none', color:G.blue, cursor:'pointer', fontSize:12, padding:0}}>
+                        HR → Foști angajați ↗
+                      </button>
+                      {poateLega && (
+                        <button onClick={() => dezleaga(p)} style={{background:'transparent', border:'none', color:G.red, cursor:'pointer', fontSize:12, padding:0}}>
+                          ✂️ Dezleagă de fișă
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {omonim && (
+                  <div style={{fontSize:12, color:G.yellow, marginBottom:10, lineHeight:1.6, padding:'8px 10px', border:`1px solid ${G.yellow}44`, borderRadius:8}}>
+                    Numele {omonim.email && p.email && String(omonim.email).trim().toLowerCase() === String(p.email).trim().toLowerCase() ? 'și emailul ' : ''}se potrivesc cu fostul angajat {omonim.name} (#{omonim.id}, contract încheiat la {formatDataRo(omonim.termination_date)}).
+                    Dacă e aceeași persoană, leag-o din HR → Foști angajați („Trece ca extern”) ca acordul ei să fie confirmat și să apară marcajul.
                   </div>
                 )}
                 {(p.telefon || p.email || p.cui_firma || p.observatii) && (
@@ -242,6 +287,8 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
 
       {editPers && (
         <ModalPersoana persoana={editPers} statusAcord={acorduri.get(editPers.fost_angajat_employee_id)?.colaborare_externa_status}
+          fostInca={editPers.fost_angajat_employee_id == null || esteFostAngajat(acorduri.get(editPers.fost_angajat_employee_id))}
+          fosti={fosti} esteOwner={esteOwner}
           onClose={() => setEditPers(null)}
           onSaved={() => { setEditPers(null); incarca() }} showToast={showToast} />
       )}
@@ -254,9 +301,9 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-function ModalPersoana({ persoana, statusAcord, onClose, onSaved, showToast }) {
-  // Un fost angajat legat poate avea colaborarea ACTIVĂ doar cu acordul „accepta” (triggerul BD refuză altfel, 23514).
-  const activareBlocata = !poateActivaColaborarea(persoana, statusAcord)
+function ModalPersoana({ persoana, statusAcord, fostInca = true, fosti = [], esteOwner = false, onClose, onSaved, showToast }) {
+  // Un fost angajat legat poate avea colaborarea ACTIVĂ doar dacă e ÎNCĂ fost angajat și a acceptat (BD: 23514).
+  const activareBlocata = !poateActivaColaborarea(persoana, statusAcord, fostInca)
   const nou = !persoana?.id
   const [nume, setNume] = useState(persoana.nume || '')
   const [functie, setFunctie] = useState(persoana.functie || '')
@@ -267,9 +314,18 @@ function ModalPersoana({ persoana, statusAcord, onClose, onSaved, showToast }) {
   const [observatii, setObservatii] = useState(persoana.observatii || '')
   const [activ, setActiv] = useState(persoana.activ !== false)
   const [saving, setSaving] = useState(false)
+  // Extern NELEGAT cu numele / emailul unui fost angajat: acordul și marcajul s-ar ocoli (review 29.09).
+  // Ca în BD: se verifică doar la adăugare sau când se schimbă numele / emailul / activarea (rândurile vechi rămân editabile).
+  const omonim = fostAngajatPotrivit({ nume, email, fost_angajat_employee_id: persoana.fost_angajat_employee_id }, fosti)
+  const deVerificat = activ && (nou || nume.trim() !== (persoana.nume || '').trim()
+    || (email.trim() || null) !== ((persoana.email || '').trim() || null) || persoana.activ === false)
 
   const salveaza = async () => {
     if (!nume.trim()) { showToast?.('Numele e obligatoriu', 'warn'); return }
+    if (omonim && deVerificat) {
+      if (!esteOwner) { showToast?.(MESAJ_OMONIM_FOST_ANGAJAT, 'warn'); return }
+      if (!window.confirm(`„${nume.trim()}” se potrivește cu fostul angajat ${omonim.name} (#${omonim.id}).\n\nConfirmi că e ALTĂ persoană și activezi colaborarea fără acordul din Foști angajați?`)) return
+    }
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
     const payload = {
@@ -284,6 +340,8 @@ function ModalPersoana({ persoana, statusAcord, onClose, onSaved, showToast }) {
     setSaving(false)
     if (error) {
       showToast?.(error.code === '23505' ? 'Există deja o persoană cu numele ăsta'
+        : esteEroareOmonim(error) ? MESAJ_OMONIM_FOST_ANGAJAT
+        : esteEroareReangajat(error) ? 'Fișa legată e din nou activă (reangajat): colaborarea externă nu se poate activa.'
         : error.code === '23514' ? MESAJ_ACTIVARE_FARA_ACORD
         : 'Eroare: ' + error.message, 'error')
       return
@@ -323,7 +381,12 @@ function ModalPersoana({ persoana, statusAcord, onClose, onSaved, showToast }) {
         Colaborare activă
       </label>
       {activareBlocata && (
-        <div style={{fontSize:11, color:G.yellow, marginBottom:16}}>{MESAJ_ACTIVARE_FARA_ACORD}</div>
+        <div style={{fontSize:11, color:G.yellow, marginBottom:16}}>{fostInca ? MESAJ_ACTIVARE_FARA_ACORD : 'Fișa legată e din nou activă (reangajat): colaborarea externă nu se poate activa.'}</div>
+      )}
+      {omonim && deVerificat && (
+        <div style={{fontSize:11, color:esteOwner ? G.yellow : G.red, marginTop:-8, marginBottom:16, lineHeight:1.5}}>
+          ⚠️ Se potrivește cu fostul angajat {omonim.name} (#{omonim.id}). {MESAJ_OMONIM_FOST_ANGAJAT}
+        </div>
       )}
       <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
         <button onClick={onClose} style={S.btnS}>Renunță</button>

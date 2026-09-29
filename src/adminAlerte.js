@@ -168,9 +168,24 @@ export function descriereCandidati(candidati) {
   return `${list.length} candidați: ${list.map(c => c.employee_name || `fișa #${c.employee_id}`).join(', ')}`
 }
 
+// Unde se reasignează fiecare alocare rămasă (tabelele din fn_admin_conturi_alerte → ecranul real).
+// path null = nu există ecran de editare: modificarea se face în BD (cu Claude, preview → confirmare).
+export const ALOCARI_CONTURI = {
+  comenzi_aprobatori:           { label: 'Achiziții → tab Aprobatori (aprobator comenzi)', path: '/achizitii' },
+  hr_recrutare_pozitii:         { label: 'HR → Recrutare (responsabil poziție)', path: '/hr?tab=recrutare' },
+  necesar_responsabili:         { label: 'Consumabile → responsabil necesar (fără ecran de editare: în BD, cu Claude)', path: null },
+  hr_aprobatori:                { label: 'HR → aprobator concedii (fără ecran de editare: în BD, cu Claude)', path: null },
+  hr_concediu_rute:             { label: 'HR → Concedii → rută de aprobare (fără ecran de editare: în BD, cu Claude)', path: null },
+  marketing_aprobatori:         { label: 'Marketing → aprobator postări (fără ecran de editare: în BD, cu Claude)', path: null },
+  tichete_default_responsabili: { label: 'Tichete → responsabil implicit departament (fără ecran de editare: în BD, cu Claude)', path: null },
+}
 function descriereAlocari(alocari) {
   const entries = Object.entries(alocari || {}).filter(([, n]) => Number(n) > 0)
-  return entries.length ? entries.map(([tabel, n]) => `${tabel} ${n}`).join(', ') : 'nicio alocare'
+  return entries.length ? entries.map(([tabel, n]) => `${ALOCARI_CONTURI[tabel]?.label || tabel} (${n})`).join('; ') : 'nicio alocare'
+}
+function caleAlocari(alocari) {
+  const tabel = Object.keys(ALOCARI_CONTURI).find(t => Number(alocari?.[t]) > 0 && ALOCARI_CONTURI[t].path)
+  return tabel ? ALOCARI_CONTURI[tabel].path : null
 }
 
 export function alerteConturi(rows, today) {
@@ -188,20 +203,21 @@ export function alerteConturi(rows, today) {
         const zile = zileRamase(row.termination_date, today)
         const motiv = !row.termination_date ? 'Fișa e inactivă fără dată de încetare.'
           : zile > 0 ? `Dezactivat înainte de data încetării (${row.termination_date}).`
-          : 'Închiderea automată nu s-a aplicat (vezi notificarea „închidere eșuată”).'
+          : 'Contul NU s-a închis automat: fișa a fost dezactivată înainte de data încetării (triggerul prinde doar trecerea activ → inactiv) sau închiderea a eșuat (vezi notificarea „închidere eșuată”).'
         impact = `Închide contul acum sau corectează fișa. ${motiv}`
       }
     }
-    if (cod === 'inchis_dar_deblocat' || cod === 'inchis_cu_acces_rest') impact = `Reaplică închiderea sau restaurează formal din jurnal #${row.jurnal_id}.`
+    if (cod === 'inchis_dar_deblocat' || cod === 'inchis_cu_acces_rest') impact = `Reaplică închiderea (Admin → Manageri → Edit → „🔒 Reaplică închiderea”; jurnal #${row.jurnal_id}). NU folosi „Restaurează”: redă TOT accesul — doar dacă omul revine în firmă.`
     if (cod === 'reactivat_acces_neredat') impact = `Dacă revine în firmă: Restaurează din jurnal #${row.jurnal_id}. Altfel verifică reactivarea.`
     if (cod === 'alocari_ramase') impact = `Reasignează: ${descriereAlocari(row.alocari)}.`
+    const caleAloc = cod === 'alocari_ramase' ? caleAlocari(row.alocari) : null
     if (cod === 'inactiv_fara_data') impact = 'Completează data încetării sau șterge fișa demo.'
     return [alerta('conturi', row.id, {
       title: meta.title,
       reference: [row.email || (row.profile_id ? 'cont fără email' : 'fără cont'), row.employee_name ? `${row.employee_name} (#${row.employee_id})` : null].filter(Boolean).join(' · '),
       priority: meta.priority, date,
       owner: angajat ? 'HR · Admin → Angajați' : 'Owner · Admin → Manageri',
-      path: angajat ? `/admin?tab=employees&angajat=${row.employee_id}` : `/admin?tab=managers&cont=${row.profile_id}`,
+      path: angajat ? `/admin?tab=employees&angajat=${row.employee_id}` : caleAloc || `/admin?tab=managers&cont=${row.profile_id}`,
       impact,
       reason: 'Diagnostic calculat din conturi, fișele de angajat și jurnalul închiderilor. Dreptul de logare și accesul nu se modifică de aici; acțiunile se fac doar din Admin, de owner.',
       locator: `v_admin_conturi_alerte · ${cod}`,

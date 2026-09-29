@@ -972,7 +972,9 @@ SELECT teste.ca_admin();
 
 -- R2-24 (review, minor) contul închis nu-și mai poate repune singur flagurile / emailul cu JWT-ul încă valabil
 SELECT teste.ca_utilizator(:'u_r2ui');
-SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET can_create_comenzi = true, receive_bonuri_consum = true, email_notifications_enabled = true WHERE id = %L', :'u_r2ui'),
+-- (flaguri pe care niciun alt trigger nu le păzește: email_notifications_*, whatsapp_enabled — mailurile
+--  de notificare ar pleca în continuare spre omul plecat)
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET email_notifications_enabled = true, email_notifications_logistica = true, whatsapp_enabled = true WHERE id = %L', :'u_r2ui'),
   'R2-24 cont închis: auto-repunerea flagurilor neprotejate → refuz', '42501', 'închis');
 SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET email = %L WHERE id = %L', 'personal.ana@yahoo.com', :'u_r2ui'),
   'R2-24 cont închis: schimbarea emailului (notificările ar pleca spre adresa personală) → refuz', '42501');
@@ -984,7 +986,7 @@ SELECT teste.assert(teste.flaguri_toate(:'u_r2ui', false)
 -- R2-25 (review, minor) restaurarea refuză un snapshot cu altă formă (ex. importul manual din claude_context 1483)
 INSERT INTO public.conturi_inchideri_jurnal (profile_id, email, employee_id, motiv, sursa, snapshot)
 VALUES (:'u_r2fd', 'r2.faradata@gazpet.ro', :e_r2fd, 'Import manual cu forma veche (test)', 'import_manual',
-        '{"profile": {"email_notifications_enabled": true, "can_create_comenzi": true}, "module": [{"module": "hr"}]}'::jsonb)
+        '{"profile": {"email_notifications_enabled": true, "can_create_comenzi": true}, "module": [{"module": "hr", "access_level": "viewer"}]}'::jsonb)
 RETURNING id AS j_r2import \gset
 SELECT teste.flaguri(:'u_r2fd') AS flaguri_fd_inainte \gset
 SELECT teste.ca_utilizator(:'owner');
@@ -1269,6 +1271,20 @@ UPDATE public.hr_personal_extern SET activ = true WHERE id = :ext_col;
 SELECT teste.assert((SELECT activ FROM public.hr_personal_extern WHERE id = :ext_col),
   'R3-20 cu acord nou pentru încetarea curentă → colaborarea se poate activa');
 SELECT teste.ca_admin();
+-- poarta pe rândul legat verifică și că fișa e ÎNCĂ a unui fost angajat (independent de reset):
+-- stare forțată cu protecția oprită în tranzacția testului (fișă reactivată care păstrează „accepta”)
+UPDATE public.hr_personal_extern SET activ = false WHERE id = :ext_col;
+ALTER TABLE public.employees DISABLE TRIGGER trg_employees_colab_ext_protectie_upd;
+UPDATE public.employees SET active = true WHERE id = :f4;
+ALTER TABLE public.employees ENABLE TRIGGER trg_employees_colab_ext_protectie_upd;
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :ext_col),
+  'R3-20 fișă din nou activă (chiar cu „accepta” rămas) → colaborarea externă nu se poate activa', '23514', 'doar pentru un fost angajat');
+SELECT teste.ca_admin();
+ALTER TABLE public.employees DISABLE TRIGGER trg_employees_colab_ext_protectie_upd;
+UPDATE public.employees SET active = false WHERE id = :f4;
+ALTER TABLE public.employees ENABLE TRIGGER trg_employees_colab_ext_protectie_upd;
+UPDATE public.hr_personal_extern SET activ = true WHERE id = :ext_col;             -- admin: f4 e din nou fost angajat cu „accepta”
 
 -- R3-21 resetul merge și pe calea de sistem (admin fără JWT) și la anularea încetării (fișa rămâne inactivă)
 INSERT INTO public.employees (name, department, active, termination_date) VALUES ('REACTIVAT ADMIN', 'Test', false, CURRENT_DATE - 3) RETURNING id AS f6 \gset

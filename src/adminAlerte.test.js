@@ -4,7 +4,7 @@ import {
   SURSE_ADMIN, areAccesAdministrator, areAccesSursa, ziBucuresti, zileRamase,
   alerteOfertare, alerteHr, alerteFirma, alerteFlota, alerteGbeAdmin,
   citesteToate, incarcaSursaAdmin, statusuriTransport,
-  alerteConturi, descriereCandidati, PRIORITATE_CONTURI, sorteazaAlerte, SELECT_ADMIN,
+  alerteConturi, descriereCandidati, PRIORITATE_CONTURI, sorteazaAlerte, SELECT_ADMIN, ALOCARI_CONTURI,
 } from './adminAlerte.js'
 
 const today = '2026-09-22'
@@ -201,11 +201,33 @@ describe('Conturi platformă (R1/R2): doar owner, numai citire', () => {
     expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: null })], today)[0].impact).toContain('fără dată de încetare')
     expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-10-05' })], today)[0].impact).toContain('înainte de data încetării (2026-10-05)')
     expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-09-20' })], today)[0].impact).toContain('Închide contul acum sau corectează fișa')
+    // review: data trecută = fișa dezactivată înainte de dată (fără notificare „închidere eșuată”) sau închidere eșuată
+    const trecut = alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-09-20' })], today)[0].impact
+    expect(trecut).toContain('dezactivată înainte de data încetării')
+    expect(trecut).toContain('NU s-a închis automat')
   })
   it('acțiunile pentru conturile închise și alocările rămase', () => {
-    expect(alerteConturi([row('inchis_dar_deblocat', { jurnal_id: 12 })], today)[0].impact).toBe('Reaplică închiderea sau restaurează formal din jurnal #12.')
+    // review (major): acțiunea recomandată există în UI („Reaplică închiderea”); restaurarea NU e recomandată
+    for (const cod of ['inchis_dar_deblocat', 'inchis_cu_acces_rest']) {
+      const [r] = alerteConturi([row(cod, { jurnal_id: 12 })], today)
+      expect(r.impact).toContain('Reaplică închiderea (Admin → Manageri → Edit → „🔒 Reaplică închiderea”; jurnal #12)')
+      expect(r.impact).toContain('NU folosi „Restaurează”')
+      expect(r.impact).not.toMatch(/restaurează formal/)
+      expect(r.path).toBe('/admin?tab=managers&cont=p1')
+    }
     expect(alerteConturi([row('reactivat_acces_neredat', { jurnal_id: 12 })], today)[0].impact).toContain('Restaurează din jurnal #12')
-    expect(alerteConturi([row('alocari_ramase', { alocari: { comenzi_aprobatori: 1, hr_aprobatori: 2 } })], today)[0].impact).toBe('Reasignează: comenzi_aprobatori 1, hr_aprobatori 2.')
+  })
+  it('alocările rămase: etichete și locul real de reasignare (nu nume de tabele)', () => {
+    const [r] = alerteConturi([row('alocari_ramase', { jurnal_id: 3, alocari: { comenzi_aprobatori: 1, hr_concediu_rute: 2 } })], today)
+    expect(r.impact).toBe('Reasignează: Achiziții → tab Aprobatori (aprobator comenzi) (1); HR → Concedii → rută de aprobare (fără ecran de editare: în BD, cu Claude) (2).')
+    expect(r.impact).not.toMatch(/comenzi_aprobatori|hr_concediu_rute/)
+    expect(r.path).toBe('/achizitii')
+    const [rec] = alerteConturi([row('alocari_ramase', { jurnal_id: 3, alocari: { hr_aprobatori: 1, hr_recrutare_pozitii: 1 } })], today)
+    expect(rec.path).toBe('/hr?tab=recrutare')
+    const [faraEcran] = alerteConturi([row('alocari_ramase', { jurnal_id: 3, alocari: { marketing_aprobatori: 1 } })], today)
+    expect(faraEcran.path).toBe('/admin?tab=managers&cont=p1')
+    expect(Object.keys(ALOCARI_CONTURI).sort()).toEqual(['comenzi_aprobatori', 'hr_aprobatori', 'hr_concediu_rute', 'hr_recrutare_pozitii',
+      'marketing_aprobatori', 'necesar_responsabili', 'tichete_default_responsabili'])
   })
   it('data alertei: data încetării sau ziua închiderii (România)', () => {
     expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-09-25' })], today)[0].date).toBe('2026-09-25')

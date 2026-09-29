@@ -19,7 +19,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import {
   COLAB_STARI, esteFostAngajat, valideazaColab, etichetaColab, formatDataRo, mesajStareCont,
-  externExistentDinEroare, ziRomania, NOTA_MIN,
+  externExistentDinEroare, ziRomania, NOTA_MIN, autorJurnalAcord,
 } from './conturiCicluViata.js'
 
 const G = {
@@ -55,7 +55,8 @@ export function PastilaAcord({ status, style }) {
   )
 }
 
-export default function HrFostiAngajati({ profile, showToast }) {
+// onDeschideFisa(employeeId): deschide fișa HR (ModalProfilAngajat) a fostului angajat — o dă HR.jsx.
+export default function HrFostiAngajati({ profile, showToast, onDeschideFisa }) {
   const nav = useNavigate()
   // Doar owner și HR cu can_modify_employees setează acordul (aceeași regulă ca în BD) — nu `isAdmin`.
   const poateColab = profile?.is_owner === true || profile?.can_modify_employees === true
@@ -68,7 +69,7 @@ export default function HrFostiAngajati({ profile, showToast }) {
   const [load, setLoad] = useState(true)
   const [cauta, setCauta] = useState('')
   const [filtru, setFiltru] = useState('toate')
-  const [formular, setFormular] = useState(null)    // { emp, status }
+  const [formular, setFormular] = useState(null)    // { emp, status, actualizare }
   const [istoric, setIstoric] = useState(null)      // { emp, rows, load }
   const [busyId, setBusyId] = useState(null)
 
@@ -104,7 +105,7 @@ export default function HrFostiAngajati({ profile, showToast }) {
   const deschideIstoric = async (emp) => {
     setIstoric({ emp, rows: [], load: true })
     const { data, error } = await supabase.from('hr_colaborare_externa_jurnal')
-      .select('id,status_vechi,status_nou,nota,document,facut_de,facut_la').eq('employee_id', emp.id).order('facut_la', { ascending: false })
+      .select('id,status_vechi,status_nou,nota,document,facut_de,facut_la,sursa').eq('employee_id', emp.id).order('facut_la', { ascending: false })
     if (error) { showToast?.('Nu pot citi istoricul: ' + error.message, 'error'); setIstoric(null); return }
     setIstoric({ emp, rows: data || [], load: false })
   }
@@ -116,7 +117,12 @@ export default function HrFostiAngajati({ profile, showToast }) {
     if (error) {
       const existent = externExistentDinEroare(error)
       if (existent && !externId) {
-        if (window.confirm(`${error.hint}\n\nLeg externul existent #${existent} de fișa lui ${emp.name}?`)) return treceCaExtern(emp, existent)
+        // Omonimul poate fi ALTĂ persoană, iar legarea îi face colaborarea inactivă fără acord „Acceptă”.
+        const { data: x } = await supabase.from('hr_personal_extern').select('id,nume,firma,telefon,email,activ').eq('id', existent).maybeSingle()
+        const detalii = x ? `\n\nExternul existent #${x.id}: ${x.nume}${x.firma ? ' · ' + x.firma : ''}${x.telefon ? ' · tel. ' + x.telefon : ''}${x.email ? ' · ' + x.email : ''} · colaborare ${x.activ ? 'ACTIVĂ' : 'inactivă'}` : ''
+        const efect = (emp.colaborare_externa_status || 'necunoscut') !== 'accepta' && x?.activ
+          ? '\n\n⚠️ Colaborarea lui devine INACTIVĂ până la acordul „Acceptă” (dispare din listele de externi activi, inclusiv din ofertare).' : ''
+        if (window.confirm(`${error.hint}${detalii}${efect}\n\nVerifică să fie ACEEAȘI persoană cu ${emp.name}. Leg externul #${existent} de fișă?`)) return treceCaExtern(emp, existent)
         return
       }
       showToast?.('Nu am putut trece ca extern: ' + error.message, 'error')
@@ -207,6 +213,13 @@ export default function HrFostiAngajati({ profile, showToast }) {
                 {status !== 'necunoscut' && (
                   <div style={{fontSize:11, color:G.muted, marginTop:6, lineHeight:1.5}}>
                     Confirmat de <strong style={{color:G.text}}>{nume.get(emp.colaborare_externa_confirmat_de) || 'utilizator necunoscut'}</strong> la {formatDataRo(emp.colaborare_externa_confirmat_la, { cuOra: true })}
+                    {poateColab && (
+                      <button onClick={() => setFormular({ emp, status, actualizare: true })}
+                        title="Reconfirmă aceeași stare cu o notă / un document nou (ex. acordul semnat primit ulterior); colaborarea din Personal extern nu se schimbă"
+                        style={{marginLeft:8, background:'transparent', border:'none', color:G.blue, cursor:'pointer', fontSize:11, padding:0}}>
+                        📎 Actualizează dovada
+                      </button>
+                    )}
                   </div>
                 )}
                 {emp.colaborare_externa_nota && (
@@ -220,6 +233,8 @@ export default function HrFostiAngajati({ profile, showToast }) {
                     <span style={{fontSize:11, fontWeight:700, color: ext.activ ? G.green : G.muted}}>
                       🤝 Extern #{ext.id} · colaborare {ext.activ ? 'activă' : 'inactivă'}
                     </span>
+                  ) : status === 'refuza' ? (
+                    <span style={{fontSize:11, color:G.muted}}>A refuzat colaborarea: nu se trece în Personal extern</span>
                   ) : poateColab && (
                     <button onClick={() => treceCaExtern(emp)} disabled={busyId === emp.id}
                       style={{...S.btnS, padding:'5px 10px', fontSize:11, borderColor:G.hr+'66', color:G.hr, opacity: busyId === emp.id ? .6 : 1}}>
@@ -229,6 +244,9 @@ export default function HrFostiAngajati({ profile, showToast }) {
                   {poateIstoric && (
                     <button onClick={() => deschideIstoric(emp)} style={{...S.btnS, padding:'5px 10px', fontSize:11}}>🕘 Istoric</button>
                   )}
+                  {onDeschideFisa && (
+                    <button onClick={() => onDeschideFisa(emp.id)} style={{...S.btnS, padding:'5px 10px', fontSize:11}}>📇 Fișa</button>
+                  )}
                 </div>
               </div>
             </div>
@@ -237,7 +255,7 @@ export default function HrFostiAngajati({ profile, showToast }) {
       })}
 
       {formular && (
-        <ModalAcord emp={formular.emp} status={formular.status} onClose={() => setFormular(null)}
+        <ModalAcord emp={formular.emp} status={formular.status} actualizare={formular.actualizare} onClose={() => setFormular(null)}
           onSaved={() => { setFormular(null); incarca() }} showToast={showToast} />
       )}
       {istoric && <ModalIstoric istoric={istoric} nume={nume} onClose={() => setIstoric(null)} />}
@@ -260,7 +278,7 @@ function Modal({ titlu, onClose, children, latime = 520 }) {
   )
 }
 
-function ModalAcord({ emp, status, onClose, onSaved, showToast }) {
+function ModalAcord({ emp, status, actualizare = false, onClose, onSaved, showToast }) {
   const e = etichetaColab(status)
   const [nota, setNota] = useState('')
   const [docRef, setDocRef] = useState('')
@@ -275,12 +293,18 @@ function ModalAcord({ emp, status, onClose, onSaved, showToast }) {
     })
     setSaving(false)
     if (error) { showToast?.('Nu am putut salva acordul: ' + error.message, 'error'); return }
-    showToast?.(`Acord colaborare externă: ${e.label} — ${emp.name}`, 'success')
+    showToast?.(`${actualizare ? 'Dovadă actualizată' : 'Acord colaborare externă'}: ${e.label} — ${emp.name}`, 'success')
     onSaved()
   }
 
   return (
-    <Modal titlu={`${e.icon} ${e.label} · ${emp.name}`} onClose={onClose}>
+    <Modal titlu={`${actualizare ? '📎 Actualizează dovada · ' : ''}${e.icon} ${e.label} · ${emp.name}`} onClose={onClose}>
+      {actualizare && (
+        <div style={{fontSize:12, color:G.muted, marginBottom:8, lineHeight:1.6}}>
+          Starea rămâne „{e.label}”; nota / documentul nou înlocuiesc dovada de pe fișă (cea veche rămâne în istoric),
+          iar cine/când se actualizează cu contul tău.
+        </div>
+      )}
       {status === 'necunoscut' ? (
         <div style={{fontSize:12, color:G.muted, marginBottom:12, lineHeight:1.6}}>
           Revii la „Necunoscut”: cine/când și documentul se șterg de pe fișă (rămân în istoric), iar dacă era trecut
@@ -326,7 +350,7 @@ function ModalIstoric({ istoric, nume, onClose }) {
           <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
             <PastilaAcord status={r.status_vechi} /> <span style={{color:G.muted}}>→</span> <PastilaAcord status={r.status_nou} />
           </div>
-          <div style={{color:G.muted, marginTop:4}}>{nume.get(r.facut_de) || 'utilizator necunoscut'} · {formatDataRo(r.facut_la, { cuOra: true })}</div>
+          <div style={{color:G.muted, marginTop:4}}>{autorJurnalAcord(r, nume.get(r.facut_de))} · {formatDataRo(r.facut_la, { cuOra: true })}</div>
           {r.nota && <div style={{marginTop:3, fontStyle:'italic'}}>„{r.nota}”</div>}
           {r.document && <div style={{marginTop:2, color:G.muted}}>📄 {r.document}</div>}
         </div>
