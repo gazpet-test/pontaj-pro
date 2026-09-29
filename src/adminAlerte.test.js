@@ -5,6 +5,7 @@ import {
   alerteOfertare, alerteHr, alerteFirma, alerteFlota, alerteGbeAdmin,
   citesteToate, incarcaSursaAdmin, statusuriTransport,
   alerteConturi, descriereCandidati, PRIORITATE_CONTURI, sorteazaAlerte, SELECT_ADMIN, ALOCARI_CONTURI,
+  motivNeinchis, marcajeIdentitate,
 } from './adminAlerte.js'
 
 const today = '2026-09-22'
@@ -232,6 +233,39 @@ describe('Conturi platformă (R1/R2): doar owner, numai citire', () => {
   it('data alertei: data încetării sau ziua închiderii (România)', () => {
     expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-09-25' })], today)[0].date).toBe('2026-09-25')
     expect(alerteConturi([row('inchis_dar_deblocat', { termination_date: null, inchis_la: '2026-09-21T22:30:00Z' })], today)[0].date).toBe('2026-09-22')
+  })
+  // Runda 3 (30.09): motivul din BD (alocari.motiv_neinchis) și marcajele de identitate ajung în textul alertei
+  it('motivul pentru care contul NU s-a închis vine din BD (runda 3)', () => {
+    const cu = (motiv, extra = {}) => row('cont_activ_fost_angajat', { termination_date: '2026-09-20', alocari: { motiv_neinchis: motiv, ...extra } })
+    expect(alerteConturi([cu('cnp_lipsa')], today)[0].impact).toContain('CNP lipsă (nici în datele personale, nici pe fișă)')
+    expect(alerteConturi([cu('alt_contract_activ', { alt_contract: 91 })], today)[0].impact).toContain('Are alt contract ACTIV (fișa #91, același CNP)')
+    const pos = alerteConturi([cu('posibil_alt_contract', { alt_contract: 92 })], today)[0].impact
+    expect(pos).toContain('Posibil alt contract ACTIV (fișa #92: același nume de familie sau email, fără CNP)')
+    expect(pos).toContain('Completează CNP-ul')
+    const ab = alerteConturi([cu('esuat_abandonat', { coada: { tip: 'reincercare', incercari: 8, ultima_eroare: 'x' } })], today)[0]
+    expect(ab.impact).toContain('a eșuat de 8 ori și coada s-a oprit'); expect(ab.priority).toBe('critical')
+    expect(alerteConturi([cu('in_coada', { coada: { tip: 'programata', incercari: 0 } })], today)[0].impact).toContain('Închiderea e în coadă (programata')
+    // X3: un cont restaurat de owner NU mai e „închidere eșuată” și nu e urgență critică
+    const rest = alerteConturi([cu('restaurat', { restaurat: { jurnal_id: 17 } })], today)[0]
+    expect(rest.impact).toContain('Restaurat de owner (jurnal #17)')
+    expect(rest.impact).not.toMatch(/eșuat|NU s-a închis automat/)
+    expect(rest.priority).toBe('week')
+    expect(alerteConturi([cu('esuat_sau_neprins')], today)[0].impact).toContain('NU s-a închis automat')
+    expect(motivNeinchis({ termination_date: null, alocari: null }, today)).toBe('Fișa e inactivă fără dată de încetare.')
+  })
+  it('fara_angajat: marcajele de identitate (email de logare ≠ profil / neconfirmat) — P12b', () => {
+    expect(marcajeIdentitate(null)).toBe('')
+    const [r] = alerteConturi([row('fara_angajat', { employee_id: null, employee_name: null, candidati: [{ employee_id: 5, employee_name: 'TINTA X' }],
+      alocari: { email_diferit: true, email_profil: 'p12.personal@gmail.com', email_neconfirmat: true } })], today)
+    expect(r.impact).toContain('Emailul de logare diferă de cel din profil (p12.personal@gmail.com)')
+    expect(r.impact).toContain('Emailul de logare e neconfirmat')
+    expect(r.impact).toContain('1 candidat: TINTA X')
+    const [f] = alerteConturi([row('fara_angajat', { employee_id: null, employee_name: null, candidati: [] })], today)
+    expect(f.impact).not.toContain('⚠️')
+  })
+  it('inchis_cu_acces_rest: flagurile în coadă / coada oprită', () => {
+    expect(alerteConturi([row('inchis_cu_acces_rest', { jurnal_id: 4, alocari: { flaguri_in_coada: true } })], today)[0].impact).toContain('Flagurile de acces sunt în coadă')
+    expect(alerteConturi([row('inchis_cu_acces_rest', { jurnal_id: 4, alocari: { flaguri_in_coada: true, flaguri_abandonate: true } })], today)[0].impact).toContain('s-a oprit după eșecuri repetate')
   })
   it('sorteazaAlerte funcționează pe rezultat (critice primele)', () => {
     const rows = alerteConturi([row('inactiv_fara_data', { profile_id: 'a' }), row('fara_angajat', { profile_id: 'b' }), row('inchis_cu_acces_rest', { profile_id: 'c', jurnal_id: 1 })], today)

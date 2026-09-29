@@ -1,9 +1,12 @@
 -- ============================================================================
 -- R1 — legarea automată cont ↔ fișă de angajat (profiles.employee_id)
--- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea A (+ 0.2: corecțiile din 30.09 după S-A live).
+-- Specificație: docs/CONTURI_CICLU_VIATA.md, secțiunea A (+ 0.2: corecțiile din 30.09 după S-A live; 0.3: runda 3).
 -- PRECONDIȚIE: S-A 20260929g (trg_profiles_campuri_owner_only) e LIVE; migrarea NU îl atinge.
 --   * fn_identitate_*()                 — identitatea apelantului: O SINGURĂ sursă de adevăr pentru pachet,
---                                         regula S-A copiată 1:1 (fără „auth.uid() IS NULL ⇒ sistem”) (interne)
+--                                         regula S-A copiată 1:1 (fără „auth.uid() IS NULL ⇒ sistem”) (interne);
+--                                         runda 3: „om” = JWT prin PostgREST al unui cont NErevocat (fără închidere
+--                                         deschisă, fără ban activ) — fn_identitate_revocata
+--   * fn_nume_cuvinte / fn_nume_familie — normalizarea numelor, comună pentru d (garda „aceeași persoană”) și e
 --   * profiles.tip_cont (excepții marcate o dată: extern/test/sistem)
 --   * fn_cont_candidati_angajat(email)  — potrivirea (internă)
 --   * fn_cont_notifica_owneri(...)      — notificări owner, cu dedupe (internă)
@@ -11,8 +14,8 @@
 --                                         supabase_auth_admin S-A refuză UPDATE-ul, iar eșecul era tăcut)
 --   * fn_cont_leaga_la_creare(profil)   — calea de încredere: RPC chemat de funcția edge cont-nou (service_role)
 --                                         sau de owner, după createUser cu app_metadata.gazpet_legare_automata
---   * trg_profiles_protectie_legatura   — employee_id / tip_cont / email se schimbă doar de o identitate
---                                         privilegiată explicită; un cont închis (R2) nu se mai poate auto-edita
+--   * trg_profiles_protectie_legatura   — employee_id / tip_cont / email / is_owner / role se schimbă doar de o
+--                                         identitate privilegiată explicită; un cont închis (R2) nu se mai poate auto-edita
 --   * fn_cont_leaga_automat(simulare, confirmate) — legare la cerere, poartă owner în cod; aplicarea leagă
 --                                         DOAR perechile confirmate din previzualizare (fără TOCTOU)
 --   * fn_admin_conturi_alerte() + v_admin_conturi_alerte — diagnostic, poartă owner în cod
@@ -82,15 +85,47 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_identitate_uid() FROM PUBLIC, anon, authenticated, service_role;
 
+-- Cont REVOCAT (runda 3, X10 / P1): închidere nerestaurată în jurnalul R2 sau ban activ în auth.users.
+-- JWT-ul emis înainte de închidere rămâne valabil până la o oră (hook-ul pre-request = D9, neactivat), iar flagurile
+-- lui rămân TRUE până rulează coada (≤ 5 min, calea HR) → fără verificarea asta un HR închis mai lucra ca HR.
+-- Tabela jurnalului e creată de migrarea d → verificare cu to_regclass (c rămâne independentă de d).
+CREATE OR REPLACE FUNCTION public.fn_identitate_revocata(p_uid uuid)
+RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  IF p_uid IS NULL THEN
+    RETURN false;
+  END IF;
+  IF EXISTS (SELECT 1 FROM auth.users u WHERE u.id = p_uid AND u.banned_until > now()) THEN
+    RETURN true;
+  END IF;
+  IF to_regclass('public.conturi_inchideri_jurnal') IS NOT NULL THEN
+    RETURN EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j WHERE j.profile_id = p_uid AND j.restaurat_la IS NULL);
+  END IF;
+  RETURN false;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_identitate_revocata(uuid) FROM PUBLIC, anon, authenticated, service_role;
+
 -- „Un om din platformă”: JWT authenticated venit prin PostgREST (login authenticator). O sesiune postgres
 -- (MCP / SQL editor) care își pune singură claims de HR NU e om (audit B #9a). Folosit de R3 (acordul
 -- de colaborare îl decide DOAR un om) și pentru atribuirea facut_de din jurnale.
+-- Runda 3: un cont revocat (închis / banat) NU mai e „om” — porțile R3 îl refuză imediat, nu după coadă.
 CREATE OR REPLACE FUNCTION public.fn_identitate_om()
 RETURNS uuid
-LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
-  SELECT CASE WHEN session_user = 'authenticator' THEN public.fn_identitate_uid() END;
-$fn$;
+DECLARE v_uid uuid;
+BEGIN
+  IF session_user IS DISTINCT FROM 'authenticator' THEN
+    RETURN NULL;
+  END IF;
+  v_uid := public.fn_identitate_uid();
+  IF v_uid IS NULL OR public.fn_identitate_revocata(v_uid) THEN
+    RETURN NULL;
+  END IF;
+  RETURN v_uid;
+END $fn$;
 REVOKE ALL ON FUNCTION public.fn_identitate_om() FROM PUBLIC, anon, authenticated, service_role;
 
 -- Eticheta de audit (jurnale): 'db_login:postgres' · 'service_role' · 'owner:<uuid>' · 'authenticated:<uuid>' ·
@@ -119,6 +154,27 @@ BEGIN
   RETURN v;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_identitate_eticheta() FROM PUBLIC, anon, authenticated, service_role;
+
+-- A.0b Normalizarea numelor (comună: garda „aceeași persoană” din d și omonimia din e) ------------------
+-- Mutată din e în runda 3 (d o folosește acum, iar d nu depinde de e). Cuvintele unui nume: fără diacritice,
+-- majuscule, distincte, sortate. Numele de familie = primul cuvânt din employees.name („NUME_FAMILIE PRENUME…”).
+CREATE OR REPLACE FUNCTION public.fn_nume_cuvinte(p_nume text)
+RETURNS text[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT COALESCE(array_agg(DISTINCT w ORDER BY w), '{}'::text[])
+    FROM unnest(regexp_split_to_array(upper(extensions.unaccent(btrim(COALESCE(p_nume, '')))), '[^[:alnum:]]+')) w
+   WHERE w <> '';
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_nume_cuvinte(text) FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.fn_nume_familie(p_nume text)
+RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT (array_remove(regexp_split_to_array(upper(extensions.unaccent(btrim(COALESCE(p_nume, '')))), '[^[:alnum:]]+'), ''))[1];
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_nume_familie(text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- A.1 Tipul contului -----------------------------------------------------------
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS tip_cont text;
@@ -297,8 +353,9 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
 -- auth.admin.createUser({…, app_metadata:{gazpet_legare_automata:true}}), sau de owner.
 -- Identitatea: DOAR 'service_role' sau 'owner' (fn_identitate_privilegiata) — pe ele S-A le acceptă.
 -- Reverifică ATOMIC (profil blocat FOR UPDATE + indexul unic uniq_profiles_employee_id): marcajul de încredere,
+-- emailul de logare CONFIRMAT (runda 3, condiția Copilot: identitate verificată = email de logare confirmat + marcaj),
 -- legătura încă liberă, tipul contului, emailul profilului = emailul de logare, candidatul UNIC și liber.
--- Întoarce: legat | legatura_existenta | fara_marcaj_incredere | tip_cont_exceptat | email_diferit |
+-- Întoarce: legat | legatura_existenta | fara_marcaj_incredere | email_neconfirmat | tip_cont_exceptat | email_diferit |
 --           fara_candidat | ambiguu | candidat_ocupat | inexistent | eroare.
 CREATE OR REPLACE FUNCTION public.fn_cont_leaga_la_creare(p_profile_id uuid)
 RETURNS text
@@ -309,6 +366,7 @@ DECLARE
   v_p      public.profiles%ROWTYPE;
   v_email  text;
   v_incr   boolean;
+  v_conf   boolean;
   v_n      integer;
   v_emp    integer;
   v_nume   text;
@@ -321,11 +379,12 @@ BEGIN
   END IF;
   SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
-  SELECT u.email::text, COALESCE(u.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true'
-    INTO v_email, v_incr
+  SELECT u.email::text, COALESCE(u.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true', u.email_confirmed_at IS NOT NULL
+    INTO v_email, v_incr, v_conf
     FROM auth.users u WHERE u.id = p_profile_id;
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
   IF NOT v_incr THEN RETURN 'fara_marcaj_incredere'; END IF;     -- signUp public / Dashboard: doar propunere
+  IF NOT v_conf THEN RETURN 'email_neconfirmat'; END IF;         -- ex. invitație neacceptată: fără dovada adresei
   IF v_p.employee_id IS NOT NULL THEN RETURN 'legatura_existenta'; END IF;
   IF COALESCE(v_p.tip_cont, 'angajat') <> 'angajat' THEN RETURN 'tip_cont_exceptat'; END IF;
   IF lower(btrim(COALESCE(v_p.email, ''))) <> lower(btrim(COALESCE(v_email, ''))) THEN RETURN 'email_diferit'; END IF;
@@ -371,6 +430,11 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_leaga_la_creare(uuid) TO authenticated,
 --   * cont închis (R2, închidere nerestaurată în conturi_inchideri_jurnal): JWT-ul emis înainte de închidere
 --     rămâne valabil până la o oră → fără garda asta omul și-ar repune singur flagurile neprotejate.
 --     Tabela e creată de migrarea d → verificare cu to_regclass (migrarea c rămâne independentă).
+--   * is_owner / role (runda 3, P10): triggerele vechi prevent_role_escalation / enforce_owner_only_salary_flags au
+--     bypass „auth.uid() IS NULL” → anon / authenticator cu claims golite / GoTrue printr-un RPC SECURITY DEFINER
+--     puteau pune is_owner = true (ancora identității „owner” a întregului pachet) sau role = superadmin. Acum trec
+--     DOAR identitățile privilegiate explicite (owner JWT — Admin → Manageri; service_role; postgres fără claims).
+--     Un authenticated non-owner e refuzat înainte de acest trigger de prevent_role_escalation (P0001).
 -- UI-ul și testele se bazează pe SQLSTATE 42501, nu pe text (S-A dă alt mesaj pentru employee_id).
 CREATE OR REPLACE FUNCTION public.fn_profiles_protectie_legatura()
 RETURNS trigger
@@ -382,6 +446,10 @@ BEGIN
   END IF;
   IF NEW.employee_id IS DISTINCT FROM OLD.employee_id OR NEW.tip_cont IS DISTINCT FROM OLD.tip_cont THEN
     RAISE EXCEPTION 'Doar owner poate lega un cont de o fișă sau marca tipul contului' USING ERRCODE = '42501';
+  END IF;
+  IF NEW.is_owner IS DISTINCT FROM OLD.is_owner OR NEW.role IS DISTINCT FROM OLD.role THEN
+    RAISE EXCEPTION 'Doar owner poate schimba rolul sau marcajul de owner al unui cont (identitate fără drept: %)',
+      public.fn_identitate_eticheta() USING ERRCODE = '42501';
   END IF;
   IF NEW.email IS DISTINCT FROM OLD.email THEN
     RAISE EXCEPTION 'Emailul contului îl schimbă doar owner-ul (Admin → Manageri), odată cu emailul de logare' USING ERRCODE = '42501';
@@ -407,6 +475,8 @@ CREATE TRIGGER trg_profiles_protectie_legatura BEFORE UPDATE ON public.profiles
 --   * un cont apărut după previzualizare (ex. signUp public cu emailul personal al altcuiva) → „neconfirmat”;
 --   * o pereche confirmată care acum ar lega altă fișă → „schimbat” (nu se leagă);
 --   * fără listă → 22023. Previzualizarea arată data creării, provider-ul și marcajul de încredere ale contului.
+-- Runda 3 (condiția Copilot „identitate verificată”): un cont cu emailul de logare NECONFIRMAT (email_confirmed_at NULL)
+-- nu se potrivește → „email_neconfirmat” (sărit; owner-ul îl poate lega manual după confirmare).
 DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean);
 DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean, jsonb);
 CREATE FUNCTION public.fn_cont_leaga_automat(p_simulare boolean DEFAULT true, p_confirmate jsonb DEFAULT NULL)
@@ -429,7 +499,8 @@ BEGIN
       SELECT pr.id AS pid, u.email AS uemail, u.created_at AS creat,
              u.raw_app_meta_data ->> 'provider' AS prov,
              COALESCE(u.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true' AS incr,
-             lower(btrim(COALESCE(pr.email, ''))) = lower(btrim(COALESCE(u.email, ''))) AS email_ok
+             lower(btrim(COALESCE(pr.email, ''))) = lower(btrim(COALESCE(u.email, ''))) AS email_ok,
+             u.email_confirmed_at IS NOT NULL AS conf
         FROM public.profiles pr
         JOIN auth.users u ON u.id = pr.id
        WHERE pr.employee_id IS NULL AND COALESCE(pr.tip_cont, 'angajat') = 'angajat'
@@ -439,10 +510,10 @@ BEGIN
              min(c.metoda) AS met, COALESCE(bool_or(c.profil_legat IS NOT NULL), false) AS ocupat
         FROM baza b
         LEFT JOIN LATERAL public.fn_cont_candidati_angajat(b.uemail) c ON true
-       WHERE b.email_ok
+       WHERE b.email_ok AND b.conf
        GROUP BY b.pid
     )
-    SELECT b.pid, b.uemail, b.creat, b.prov, b.incr, b.email_ok, c.n, c.emp, c.nume, c.met, c.ocupat,
+    SELECT b.pid, b.uemail, b.creat, b.prov, b.incr, b.email_ok, b.conf, c.n, c.emp, c.nume, c.met, c.ocupat,
            count(*) FILTER (WHERE c.n = 1) OVER (PARTITION BY c.emp) AS pe_aceeasi_fisa
       FROM baza b
       LEFT JOIN cand c ON c.pid = b.pid
@@ -452,6 +523,8 @@ BEGIN
     employee_id := NULL; employee_name := NULL; metoda := NULL;
     IF NOT r.email_ok THEN
       rezultat := 'email_diferit';                        -- profiles.email ≠ emailul de logare: verifică manual
+    ELSIF NOT r.conf THEN
+      rezultat := 'email_neconfirmat';                    -- adresa de logare nedovedită: fără potrivire automată
     ELSIF COALESCE(r.n, 0) = 0 THEN
       rezultat := 'fara_candidat';
     ELSIF r.n > 1 THEN
@@ -493,6 +566,9 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_leaga_automat(boolean, jsonb) TO authen
 
 -- A.6 Diagnosticul pentru alerta de administrare (semnătură FIXĂ; migrarea d o extinde) --
 -- Candidații și emailul afișat vin din emailul de LOGARE (auth.users.email), nu din profiles.email.
+-- Runda 3 (P12b): `alocari` poartă marcajele de identitate ale contului — email_diferit (+ email_profil) când emailul
+-- de logare ≠ profiles.email (ex. adresa de logare schimbată prin GoTrue), email_neconfirmat când adresa de logare
+-- nu e confirmată. „Leagă automat” sare peste amândouă; alerta le arată owner-ului.
 CREATE OR REPLACE FUNCTION public.fn_admin_conturi_alerte()
 RETURNS TABLE(id text, cod text, profile_id uuid, email text, tip_cont text, is_owner boolean,
               employee_id integer, employee_name text, employee_active boolean, termination_date date,
@@ -511,7 +587,10 @@ BEGIN
                                                        'metoda', c.metoda, 'profil_legat', c.profil_legat)
                                     ORDER BY c.employee_id)
                      FROM public.fn_cont_candidati_angajat(u.email) c), '[]'::jsonb),
-         NULL::jsonb
+         NULLIF(jsonb_strip_nulls(jsonb_build_object(
+           'email_diferit', CASE WHEN lower(btrim(COALESCE(p.email, ''))) <> lower(btrim(COALESCE(u.email::text, ''))) THEN true END,
+           'email_profil', CASE WHEN lower(btrim(COALESCE(p.email, ''))) <> lower(btrim(COALESCE(u.email::text, ''))) THEN p.email END,
+           'email_neconfirmat', CASE WHEN u.id IS NOT NULL AND u.email_confirmed_at IS NULL THEN true END)), '{}'::jsonb)
     FROM public.profiles p
     LEFT JOIN auth.users u ON u.id = p.id
    WHERE p.employee_id IS NULL AND COALESCE(p.tip_cont, 'angajat') = 'angajat'

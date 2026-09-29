@@ -24,7 +24,9 @@
 --     un trigger pe auth.users care nu e SECURITY DEFINER pică la crearea contului;
 --   * triggerele existente pe profiles/employees/notifications/auth.users, copiate verbatim;
 --   * politicile RLS din producție pe profiles/employees/user_module_access/
---     hr_personal_extern/notifications, copiate verbatim.
+--     hr_personal_extern/notifications/hr_employees_private, copiate verbatim;
+--   * hr_employees_private (runda 3): sursa CNP-ului în aplicație (UNIQUE pe cnp) — DDL, politici, trigger touch
+--     citite din catalogul de producție la 30.09 (doar definiții, nicio dată).
 -- Simplificări (documentate):
 --   * auth.sessions / auth.refresh_tokens / hr_autorizatii au doar coloanele relevante;
 --   * FK-urile spre tabele absente sunt omise: hr_personal_extern.partener_id →
@@ -357,6 +359,27 @@ CREATE TABLE public.hr_autorizatii (            -- subset de coloane
   CONSTRAINT hr_autorizatii_titular_unic CHECK ((employee_id IS NOT NULL) <> (extern_id IS NOT NULL))
 );
 
+-- Datele personale GDPR (sursa CNP-ului în aplicație: App.jsx Admin → Angajați → Editează, AdeverinteLegator).
+-- Producție (SELECT pe catalog 30.09): coloane, CHECK, UNIQUE(cnp), FK-uri, RLS + 4 politici, trigger touch — verbatim.
+CREATE TABLE public.hr_employees_private (
+  employee_id integer NOT NULL,
+  cnp text,
+  data_nastere date,
+  adresa_strada text,
+  adresa_oras text,
+  adresa_judet text,
+  adresa_cod_postal text,
+  adresa_tara text DEFAULT 'România'::text,
+  observatii_private text,
+  modificat_la timestamptz NOT NULL DEFAULT now(),
+  modificat_de uuid,
+  CONSTRAINT hr_employees_private_pkey PRIMARY KEY (employee_id),
+  CONSTRAINT hr_employees_private_cnp_chk CHECK (((cnp IS NULL) OR (cnp ~ '^[0-9]{13}$'::text))),
+  CONSTRAINT hr_employees_private_cnp_key UNIQUE (cnp),
+  CONSTRAINT hr_employees_private_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id) ON DELETE CASCADE,
+  CONSTRAINT hr_employees_private_modificat_de_fkey FOREIGN KEY (modificat_de) REFERENCES auth.users(id)
+);
+
 CREATE TABLE public.hr_employees_audit (
   id bigserial PRIMARY KEY,
   actiune text NOT NULL CHECK (actiune = ANY (ARRAY['INSERT','DELETE'])),
@@ -468,6 +491,7 @@ ALTER TABLE public.user_module_access  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_personal_extern  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_autorizatii      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_employees_audit  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.hr_employees_private ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profile_sites       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comenzi_aprobatori  ENABLE ROW LEVEL SECURITY;
@@ -512,6 +536,17 @@ CREATE POLICY employees_select_all_authenticated ON public.employees FOR SELECT 
 CREATE POLICY employees_update_authorized ON public.employees FOR UPDATE TO authenticated
   USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.is_owner = true OR profiles.can_modify_employees = true)))
   WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.is_owner = true OR profiles.can_modify_employees = true)));
+
+-- hr_employees_private: verbatim din producție (30.09)
+CREATE POLICY hr_employees_private_delete ON public.hr_employees_private FOR DELETE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
+CREATE POLICY hr_employees_private_insert ON public.hr_employees_private FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)));
+CREATE POLICY hr_employees_private_select ON public.hr_employees_private FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)));
+CREATE POLICY hr_employees_private_update ON public.hr_employees_private FOR UPDATE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)))
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)));
 
 CREATE POLICY hr_personal_extern_insert ON public.hr_personal_extern FOR INSERT TO authenticated WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY hr_personal_extern_select ON public.hr_personal_extern FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
@@ -770,6 +805,20 @@ $function$;
 -- NEW.active pus de acesta trebuie să fie AFTER UPDATE sau să aibă nume > 'trg_employees_termination_notify'.
 CREATE TRIGGER trg_employees_termination_notify BEFORE UPDATE ON public.employees FOR EACH ROW EXECUTE FUNCTION public.fn_employees_termination_notify();
 
+-- hr_employees_private: triggerul existent (verbatim, 30.09; SECURITY INVOKER, auth.uid() al apelantului).
+CREATE OR REPLACE FUNCTION public.tg_hr_employees_private_touch()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  NEW.modificat_la = NOW();
+  NEW.modificat_de = auth.uid();
+  RETURN NEW;
+END;
+$function$;
+CREATE TRIGGER trg_hr_employees_private_touch BEFORE INSERT OR UPDATE ON public.hr_employees_private FOR EACH ROW EXECUTE FUNCTION public.tg_hr_employees_private_touch();
+
 -- Copie de fidelitate (trigger existent pe notifications); nu se modifică.
 CREATE OR REPLACE FUNCTION public.fn_notificari_ruteaza_ofertare()
  RETURNS trigger
@@ -961,4 +1010,4 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user(), public.prevent_role_escalat
   public.fn_employees_termination_notify() FROM PUBLIC, anon, authenticated;
 
 RESET client_min_messages;
-\echo 'SCHELET OK: auth + public (profiles/employees/user_module_access/profile_sites/hr_personal_extern/notifications/alocări) + teste.*'
+\echo 'SCHELET OK: auth + public (profiles/employees/hr_employees_private/user_module_access/profile_sites/hr_personal_extern/notifications/alocări) + teste.*'
