@@ -45,3 +45,6 @@ Nimic din J07 nu se aplică înainte de 02.10 (Jilava).
 - H9: J07 acoperă doar relația opis → fișier efectiv. Hash-ul rămâne la J04 (nu se dublează).
 - Nu monolit: funcție agregatoare, dar fiecare control identificabil și testabil separat.
 - **H1 identitate = BUSINESS_DECISION_REQUIRED** (azi WARN; server enforcement: none; nu poate contribui la verde) până decide Răzvan.
+
+## Decizie Răzvan (29.09): H1 identitate = **B, rămâne WARN**
+Nu blochează aprobarea/depunerea (potrivirea e după text: alarme false posibile). Propunere Claude, de confirmat cu Copilot în J07: fiecare nume găsit primește o bifă umană „verificat” salvată pe server (actor, dată, hash-ul textului capitolului). Bifa expiră la editarea capitolului. Un nume nebifat rămâne avertisment vizibil, fără blocaj.
