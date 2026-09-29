@@ -1,7 +1,18 @@
-# Briefing Copilot — PowPatroll (stare la 29.09.2026, 21:15)
+# Handoff Copilot — PowPatroll (stare la 29.09.2026, 21:40)
 
-> Se lipește ca PRIM mesaj într-o conversație nouă cu „Copilot GPT - Ajutor Claude” când cea veche se umple. Claude îl ține la zi.
+> **Ce e:** memoria lui „Copilot GPT - Ajutor Claude” (GPT custom în ChatGPT — fără API/CLI, doar chat). Când conversația se umple, se deschide una nouă și se lipește ca PRIM mesaj secțiunea **„Pentru lipit”** (de la „Echipa și regulile” până la „În lucru”) + ultimele 10 rânduri din **Jurnalul verdictelor**.
+> **Cine îl ține la zi:** Claude, după FIECARE verdict GO/NO-GO/HOLD (rând nou în jurnal + starea PR-ului în tabel). Copie în BD: `claude_docs` slug `handoff_copilot`.
 
+## Conversații
+| # | Deschisă | URL | Închisă / motiv |
+|---|---|---|---|
+| 1 | ~24.09 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6aa6c22a-3a00-83ed-9ed9-968e89f8a8e5 | 29.09 — plină (răspunsuri lente, apoi nu se mai deschidea) |
+| 2 | 29.09 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6abc000f-2a5c-83eb-912f-65bee6219a61 | activă |
+
+**Rotire:** nu așteptăm să se umple. Semnale: răspunsuri tot mai lente, „is responding” care nu se mai termină, pagina greu de deschis → conversație nouă. Regulă practică: după ~25–30 de schimburi mari sau după un pachet mare de review (diff-uri lungi), rotim. **Nu se dă reload cât scrie Copilot** (se pierde mesajul).
+
+---
+# Pentru lipit (începe aici)
 ## Echipa și regulile
 - **Răzvan** (owner Gazpet Instal) decide. **Copilot** (tu) = poartă GO/NO-GO: merge/apply doar cu GO de la tine. **Claude** = coordonator (Claude Code). **Jakarinos** = Codex, cod greu. **Miloi** = taskuri mici.
 - Reguli Audit V2 (nenegociabile): AI candidate ≠ human verified; lipsa informației ≠ negativ; orice verdict final are provenance; modificările upstream invalidează downstream; gate-urile critice rămân server-side.
@@ -33,3 +44,14 @@ Criteriile tale GO pentru confirmarea grupată de citate: PT_UX_TO_BE §6 („si
 
 ## În lucru (în afara Ofertare, aprobat de Răzvan pentru acum)
 Conturi ↔ angajați: (1) legare automată profil→angajat la crearea contului (doar potrivire unică); (2) contract de muncă închis → cont închis automat (module, flaguri, login, sesiuni) cu jurnal de revenire, niciodată pentru owner, reactivarea nu redă accesul singură; (3) „Fost angajat Gazpet” + colaborare externă tri-stare (necunoscut/acceptă/refuză) setată doar de om. Implementat de echipa de agenți Claude, cu teste; va veni la tine pentru GO înainte de apply.
+
+---
+# Jurnalul verdictelor (append-only, cel mai nou jos)
+| Data | Conv. | Subiect | Verdict Copilot | Urmare |
+|---|---|---|---|---|
+| ≤28.09 | 1 | #524 J04 | GO cod; HOLD merge+apply | după 02.10 → smoke A→B pe 103 |
+| ≤28.09 | 1 | #526 J06/J06b | GO rulare pe 103 | P2 live după 02.10 |
+| ≤28.09 | 1 | #527 J07 | GO cod; HOLD | după J04 și 02.10 |
+| 29.09 | 1 | #529 audit UX PT | QW GO cu condiții; Workspace V2 GO direcție, HOLD producție; confirmare în bloc NO-GO | TO-BE rescris |
+| 29.09 | 1 | #530 QW0 fals verde | GO cod + test paritate NULL obligatoriu | test adăugat (36 combinații, JS = Postgres); merge după 02.10 |
+| 29.09 | 2 | Preluare context | „Context preluat.” fără neconcordanțe | test de coerență trimis |
