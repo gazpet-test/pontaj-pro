@@ -6,6 +6,9 @@ export type CitireRetea = {
   hdd_max: number | null;
   cpu_load: number | null;
   uptime_s: number | null;
+  disk_pct: number | null;
+  ram_pct: number | null;
+  raid_ok: boolean | null;
 };
 type Rezultat = { ok: true; citiri: CitireRetea[] } | { ok: false; error: string };
 
@@ -14,7 +17,7 @@ const obiect = (x: unknown): x is Record<string, unknown> =>
 const numarIn = (x: unknown, min: number, max: number): x is number =>
   typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max;
 
-const CHEI = ['extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s'];
+const CHEI = ['extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok'];
 
 // Validare strictă a unui lot de citiri de rețea. Senzorii lipsă sunt acceptați (null);
 // funcția SQL decide ce înseamnă offline/tăcut. Expeditorul nu poate crea dispozitive.
@@ -43,6 +46,9 @@ export function valideazaCitiri(body: unknown): Rezultat {
     if ('uptime_s' in c && (typeof c.uptime_s !== 'number' || !Number.isFinite(c.uptime_s) || c.uptime_s < 0)) {
       return { ok: false, error: 'uptime_s invalid' };
     }
+    if ('disk_pct' in c && !numarIn(c.disk_pct, 0, 100)) return { ok: false, error: 'disk_pct invalid' };
+    if ('ram_pct' in c && !numarIn(c.ram_pct, 0, 100)) return { ok: false, error: 'ram_pct invalid' };
+    if ('raid_ok' in c && typeof c.raid_ok !== 'boolean') return { ok: false, error: 'raid_ok invalid' };
     out.push({
       extern_id: c.extern_id,
       online: c.online,
@@ -51,6 +57,9 @@ export function valideazaCitiri(body: unknown): Rezultat {
       hdd_max: (c.hdd_max ?? null) as number | null,
       cpu_load: (c.cpu_load ?? null) as number | null,
       uptime_s: (c.uptime_s ?? null) as number | null,
+      disk_pct: (c.disk_pct ?? null) as number | null,
+      ram_pct: (c.ram_pct ?? null) as number | null,
+      raid_ok: (c.raid_ok ?? null) as boolean | null,
     });
   }
   return { ok: true, citiri: out };
