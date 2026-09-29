@@ -144,6 +144,47 @@ SELECT teste.ca_admin();
 SELECT teste.assert((SELECT department IS NULL FROM public.profiles WHERE id = :'u_nou'),
   'S8 după tentative, contul nou tot fără department');
 
+-- ---------------------------------------------------------------- S9 non-owner care ARE deja department='HR' și o fișă legată
+\set u_hr 00000000-0000-4000-8000-00000000b004
+SELECT teste.creeaza_cont('hr.sa@gazpet.ro', :'u_hr');
+INSERT INTO public.employees (name, department) VALUES ('SA-TEST HR', 'HR') RETURNING id AS emp_hr \gset
+INSERT INTO public.employees (name, department) VALUES ('SA-TEST ALT', 'Execuție') RETURNING id AS emp_alt \gset
+UPDATE public.profiles SET department = 'HR', employee_id = :'emp_hr' WHERE id = :'u_hr';   -- admin, ca owner-ul
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = ''Execuție'' WHERE id = auth.uid()',
+  'S9 department=HR nu dă drept de schimbare: HR → altă valoare refuzat', '42501', 'department');
+SELECT teste.asteapta_eroare('UPDATE public.profiles SET department = NULL WHERE id = auth.uid()',
+  'S9 HR → NULL refuzat', '42501', 'department');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET employee_id = %s WHERE id = auth.uid()', :'emp_alt'),
+  'S9 employee_id valoare → altă valoare refuzat', '42501', 'employee_id');
+SELECT teste.asteapta_eroare('UPDATE public.profiles SET employee_id = NULL WHERE id = auth.uid()',
+  'S9 employee_id valoare → NULL refuzat', '42501', 'employee_id');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET department = ''Logistică'', employee_id = %s WHERE id = auth.uid()', :'emp_alt'),
+  'S9 ambele simultan refuzat', '42501', NULL);
+WITH u AS (UPDATE public.profiles SET department = 'HR', can_manage_stoc = true WHERE id = :'u_ion' RETURNING 1)
+  SELECT teste.assert(count(*) = 0, 'S9 „HR” nu poate da altcuiva department/flaguri: 0 rânduri (RLS)') FROM u;
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT department = 'HR' AND employee_id = :'emp_hr' FROM public.profiles WHERE id = :'u_hr'),
+  'S9 rândul HR e neschimbat după refuzuri');
+
+-- ---------------------------------------------------------------- S10 RPC SECURITY DEFINER: identitatea e apelantul (JWT), nu proprietarul funcției
+CREATE FUNCTION public.sa_test_rpc_definer(p_dept text) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE n integer;
+BEGIN
+  UPDATE public.profiles SET department = p_dept WHERE id = auth.uid();   -- rulează ca postgres (BYPASSRLS)
+  GET DIAGNOSTICS n = ROW_COUNT; RETURN n;
+END $fn$;
+GRANT EXECUTE ON FUNCTION public.sa_test_rpc_definer(text) TO authenticated;
+SELECT teste.ca_utilizator(:'u_ion');
+SELECT teste.assert(current_user = 'authenticated', 'S10 apelantul e authenticated');
+SELECT teste.asteapta_eroare('SELECT public.sa_test_rpc_definer(''HR'')',
+  'S10 un RPC SECURITY DEFINER apelat de non-owner NU ocolește triggerul (auth.uid() = apelantul, nu postgres)', '42501', 'department');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert(public.sa_test_rpc_definer('Conducere') = 1, 'S10 același RPC apelat de owner trece');
+SELECT teste.ca_admin();
+DROP FUNCTION public.sa_test_rpc_definer(text);
+
 -- ---------------------------------------------------------------- S7 contul fostului non-owner devenit owner / invers
 UPDATE public.profiles SET is_owner = false WHERE id = :'owner';
 SELECT teste.ca_utilizator(:'owner');
