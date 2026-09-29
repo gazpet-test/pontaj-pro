@@ -16,9 +16,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { compressFileBeforeUpload } from './utils/compressFile'
 import DomeniiPicker from './HrDomeniiPicker.jsx'
+// 29.09.2026 R3: foști angajați Gazpet trecuți ca externi (marcaj + acord de colaborare)
+import { BadgeFostAngajat, PastilaAcord } from './HrFostiAngajati.jsx'
+import { etichetaColab, formatDataRo, poateActivaColaborarea, MESAJ_ACTIVARE_FARA_ACORD } from './conturiCicluViata.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -63,6 +67,8 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
   const [deschis, setDeschis] = useState(null)      // id persoană expandată
   const [editPers, setEditPers] = useState(null)    // {} = adăugare, obiect = editare
   const [addAut, setAddAut] = useState(null)        // persoana pentru care adaug autorizație
+  const [acorduri, setAcorduri] = useState(new Map()) // employee_id → fișa fostului angajat (acordul de colaborare)
+  const nav = useNavigate()
 
   const incarca = useCallback(async () => {
     setLoad(true)
@@ -73,6 +79,16 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
         .not('extern_id', 'is', null).is('deleted_at', null),
     ])
     if (pe) showToast?.('Nu pot încărca personalul extern: ' + pe.message, 'error')
+    // Acordul foștilor angajați se citește separat, după id (fără embed: între cele două tabele
+    // există mai multe relații, iar un embed nou ar cere !hr_personal_extern_fost_angajat_fk).
+    const idsLegate = [...new Set((p || []).map(x => x.fost_angajat_employee_id).filter(v => v != null))]
+    let acc = new Map()
+    if (idsLegate.length) {
+      const { data: emp } = await supabase.from('employees')
+        .select('id,name,termination_date,colaborare_externa_status,colaborare_externa_confirmat_la').in('id', idsLegate)
+      acc = new Map((emp || []).map(e => [e.id, e]))
+    }
+    setAcorduri(acc)
     setPersoane(p || [])
     setAutorizatii(a || [])
     setLoad(false)
@@ -129,6 +145,7 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
       {!load && filtrate.map(p => {
         const auts = autPentru(p.id)
         const expandat = deschis === p.id
+        const fost = p.fost_angajat_gazpet ? acorduri.get(p.fost_angajat_employee_id) : null
         return (
           <div key={p.id} style={{...S.card, marginBottom:10, overflow:'hidden', opacity: p.activ ? 1 : .55}}>
             <div onClick={() => setDeschis(expandat ? null : p.id)}
@@ -138,6 +155,12 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
                 <div style={{fontSize:14, fontWeight:800, color:G.text}}>
                   {p.nume}
                   {!p.activ && <span style={{marginLeft:8, fontSize:10, color:G.muted, fontWeight:600}}>(inactiv)</span>}
+                  {p.fost_angajat_gazpet && (
+                    <span style={{display:'inline-flex', gap:6, marginLeft:8, verticalAlign:'middle', flexWrap:'wrap'}}>
+                      <BadgeFostAngajat />
+                      <PastilaAcord status={fost?.colaborare_externa_status} />
+                    </span>
+                  )}
                 </div>
                 <div style={{fontSize:12, color:G.muted}}>
                   {[p.functie, p.firma].filter(Boolean).join(' · ') || 'fără funcție/firmă'}
@@ -152,6 +175,16 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
 
             {expandat && (
               <div style={{borderTop:`1px solid ${G.border}`, padding:'12px 16px', background:G.bg}}>
+                {p.fost_angajat_gazpet && (
+                  <div style={{fontSize:12, color:G.muted, marginBottom:10, lineHeight:1.7, padding:'8px 10px', border:`1px solid ${G.hr}44`, borderRadius:8}}>
+                    <div>Fost angajat Gazpet{fost?.termination_date ? ` · contract încheiat la ${formatDataRo(fost.termination_date)}` : ''}</div>
+                    <div>Acord colaborare: <strong style={{color: etichetaColab(fost?.colaborare_externa_status).culoare}}>{etichetaColab(fost?.colaborare_externa_status).label}</strong>
+                      {fost?.colaborare_externa_confirmat_la && ` · confirmat la ${formatDataRo(fost.colaborare_externa_confirmat_la)}`}</div>
+                    <button onClick={() => nav('/hr?tab=fosti')} style={{background:'transparent', border:'none', color:G.blue, cursor:'pointer', fontSize:12, padding:0, marginTop:2}}>
+                      HR → Foști angajați ↗
+                    </button>
+                  </div>
+                )}
                 {(p.telefon || p.email || p.cui_firma || p.observatii) && (
                   <div style={{fontSize:12, color:G.muted, marginBottom:10, lineHeight:1.7}}>
                     {p.cui_firma && <div>CUI firmă: <strong style={{color:G.text}}>{p.cui_firma}</strong></div>}
@@ -208,7 +241,8 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
       })}
 
       {editPers && (
-        <ModalPersoana persoana={editPers} onClose={() => setEditPers(null)}
+        <ModalPersoana persoana={editPers} statusAcord={acorduri.get(editPers.fost_angajat_employee_id)?.colaborare_externa_status}
+          onClose={() => setEditPers(null)}
           onSaved={() => { setEditPers(null); incarca() }} showToast={showToast} />
       )}
       {addAut && (
@@ -220,7 +254,9 @@ export default function HrPersonalExtern({ tipuri = [], showToast, canEdit = tru
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-function ModalPersoana({ persoana, onClose, onSaved, showToast }) {
+function ModalPersoana({ persoana, statusAcord, onClose, onSaved, showToast }) {
+  // Un fost angajat legat poate avea colaborarea ACTIVĂ doar cu acordul „accepta” (triggerul BD refuză altfel, 23514).
+  const activareBlocata = !poateActivaColaborarea(persoana, statusAcord)
   const nou = !persoana?.id
   const [nume, setNume] = useState(persoana.nume || '')
   const [functie, setFunctie] = useState(persoana.functie || '')
@@ -247,7 +283,9 @@ function ModalPersoana({ persoana, onClose, onSaved, showToast }) {
     const { error } = await q
     setSaving(false)
     if (error) {
-      showToast?.(error.code === '23505' ? 'Există deja o persoană cu numele ăsta' : 'Eroare: ' + error.message, 'error')
+      showToast?.(error.code === '23505' ? 'Există deja o persoană cu numele ăsta'
+        : error.code === '23514' ? MESAJ_ACTIVARE_FARA_ACORD
+        : 'Eroare: ' + error.message, 'error')
       return
     }
     showToast?.(nou ? 'Persoană adăugată' : 'Date salvate', 'success')
@@ -280,10 +318,13 @@ function ModalPersoana({ persoana, onClose, onSaved, showToast }) {
           placeholder="ex. colaborator extern, declarație de disponibilitate la dosar"
           style={{...S.input, resize:'vertical'}}/>
       </div>
-      <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:G.text, marginBottom:16, cursor:'pointer'}}>
-        <input type="checkbox" checked={activ} onChange={e => setActiv(e.target.checked)} style={{accentColor:G.hr}}/>
+      <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color: activareBlocata && !activ ? G.muted : G.text, marginBottom: activareBlocata ? 4 : 16, cursor: activareBlocata && !activ ? 'not-allowed' : 'pointer'}}>
+        <input type="checkbox" checked={activ} disabled={activareBlocata && !activ} onChange={e => setActiv(e.target.checked)} style={{accentColor:G.hr}}/>
         Colaborare activă
       </label>
+      {activareBlocata && (
+        <div style={{fontSize:11, color:G.yellow, marginBottom:16}}>{MESAJ_ACTIVARE_FARA_ACORD}</div>
+      )}
       <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
         <button onClick={onClose} style={S.btnS}>Renunță</button>
         <button onClick={salveaza} disabled={saving} style={{...S.btnP, opacity: saving ? .6 : 1}}>

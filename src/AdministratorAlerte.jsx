@@ -13,7 +13,7 @@ const S = {
 const PRIORITATI = { critical: ['Critică', G.red], week: ['În 7 zile', G.yellow], attention: ['De urmărit', G.blue], missing: ['Date lipsă', G.muted] }
 const STARI = { idle: 'Neevaluată', loading: 'Se evaluează', ok: 'Evaluată', denied: 'Acces insuficient', error: 'Eroare de citire' }
 const initial = () => Object.fromEntries(SURSE_ADMIN.map(s => [s.id, { state: 'idle', rows: [] }]))
-const SOURCE_LINK_LABELS = { ofertare: 'licitația', hr: 'autorizația', flota: 'vehiculul', firma: 'documentul', gbe: 'garanția' }
+const SOURCE_LINK_LABELS = { ofertare: 'licitația', hr: 'autorizația', flota: 'vehiculul', firma: 'documentul', gbe: 'garanția', conturi: 'contul' }
 const sourceById = Object.fromEntries(SURSE_ADMIN.map(s => [s.id, s]))
 const fmtDate = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('ro-RO') : 'Necunoscut'
 const fmtTime = value => value ? new Date(value).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Bucharest' }) : '—'
@@ -39,7 +39,7 @@ function RandAlerta({ item, evaluatedAt, openSource }) {
     <div style={S.small}>Responsabil: {item.owner}</div>
     <div style={{ ...S.row, justifyContent: 'space-between', marginTop: 8 }}>
       <div style={S.row}>
-        <button type="button" style={{ ...S.button, color: G.blue, border: 'none', background: 'transparent', padding: '8px 0' }} onClick={() => openSource(source.path)}>Deschide {SOURCE_LINK_LABELS[item.source] || source.label} ↗</button>
+        <button type="button" style={{ ...S.button, color: G.blue, border: 'none', background: 'transparent', padding: '8px 0' }} onClick={() => openSource(item.path || source.path)}>Deschide {SOURCE_LINK_LABELS[item.source] || source.label} ↗</button>
         <button type="button" style={{ ...S.button, color: G.blue, border: 'none', background: 'transparent' }} aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? 'Închide detaliile' : 'De ce apare'}</button>
       </div>
       <span style={S.small}>Evaluată · {fmtTime(evaluatedAt)}</span>

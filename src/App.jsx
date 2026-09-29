@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
+import { TIPURI_CONT, formatDataRo, stareContProfil, ziRomania } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -6467,6 +6468,10 @@ function AdminPage() {
   const [editEmp,setEditEmp]=useState(null)
   const [deleteEmpItem,setDeleteEmpItem]=useState(null)
   const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
+  // 29.09.2026 R1/R2: jurnalul închiderilor de conturi (RLS: doar owner) + legarea automată la cerere
+  const [inchideri,setInchideri]=useState([])
+  const [legare,setLegare]=useState(false)
+  const [searchParams,setSearchParams]=useSearchParams()
 
   const [calYear,setCalYear]=useState(new Date().getFullYear())
   // Date Identificare Firmă (din logistica_setari) — folosite pentru aviz, contracte HR, contracte comercial
@@ -6481,7 +6486,7 @@ function AdminPage() {
   useEffect(()=>{ loadAll() },[tab])
   const loadAll=async()=>{
     setLoad(true)
-    const [s,p,e,c,st,ps,fs,os,dep]=await Promise.all([
+    const [s,p,e,c,st,ps,fs,os,dep,jr]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
       supabase.from('employees').select('*,sites(name)').order('name'),
@@ -6491,8 +6496,13 @@ function AdminPage() {
       supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
       supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
       supabase.from('logistica_depozite').select('*,sites(name)').order('name'),
+      // R2: jurnalul închiderilor (RLS doar owner; pentru ceilalți nici nu cerem)
+      isSuperAdmin
+        ? supabase.from('conturi_inchideri_jurnal').select('id,profile_id,email,employee_id,motiv,sursa,facut_de,facut_la,restaurat_de,restaurat_la,restaurare_nota').order('facut_la',{ascending:false})
+        : Promise.resolve({ data: [] }),
     ])
     setSites(s.data||[])
+    setInchideri(jr?.error ? [] : (jr?.data||[]))
     setDepozite(dep.data||[])
     // Attach site_ids to each manager
     const mgrs=(p.data||[]).map(m=>({...m,site_ids:(ps.data||[]).filter(x=>x.profile_id===m.id).map(x=>x.site_id)}))
@@ -6504,6 +6514,54 @@ function AdminPage() {
     setLoad(false)
   }
   
+  // ════ 29.09.2026 R1/R2: ciclul de viață al conturilor (doar owner; poarta e și în BD) ════
+  const inchidereDeschisa = (pid) => inchideri.find(j => j.profile_id === pid && !j.restaurat_la) || null
+  const numeProfil = (id) => id ? (managers.find(m => m.id === id)?.name || 'utilizator necunoscut') : 'sistem (cron)'
+  const contPentruAngajat = (empId) => managers.find(m => m.employee_id === empId) || null
+  const openEditMgr=async(m)=>{
+    setEditMgr({...m,original_email:m.email,original_employee_id:m.employee_id??null,original_tip_cont:m.tip_cont??null})
+    const{data:ma}=await supabase.from('user_module_access').select('module, access_level').eq('profile_id',m.id)
+    const mods={};const levels={};(ma||[]).forEach(x=>{mods[x.module]=true;levels[x.module]=x.access_level||'editor'})
+    setEditMgrModules(mods);setEditMgrModuleLevels(levels)
+  }
+  const inchideContAcum=async()=>{
+    if(!editMgr) return
+    const motiv=window.prompt(`Motivul închiderii contului ${editMgr.email} (minim 5 caractere):`,'')
+    if(motiv===null) return
+    if(motiv.trim().length<5){showToast('Motivul trebuie să aibă minim 5 caractere','warn');return}
+    if(!window.confirm(`Închizi ACUM contul ${editMgr.email}?\n\n• drepturile pe module și șantiere se scot\n• flagurile de acces devin false\n• logarea se blochează și sesiunile se revocă\n\nRevenirea se face doar din „Restaurează din jurnal”.`)) return
+    const {data,error}=await supabase.rpc('fn_cont_inchide_owner',{p_profile_id:editMgr.id,p_motiv:motiv.trim()})
+    if(error){showToast('Eroare la închidere: '+error.message,'error');return}
+    const txt={inchis:'🔒 Cont închis (ce avea contul e salvat în jurnal)',deja_inchis:'Contul era deja închis — accesul rămas a fost scos din nou',sarit_owner:'Cont OWNER: nu se închide',inexistent:'Profilul nu există'}[data]||String(data)
+    showToast(txt,data==='inchis'||data==='deja_inchis'?'success':'warn')
+    setEditMgr(null);loadAll()
+  }
+  const restaureazaCont=async(j)=>{
+    const nota=window.prompt(`Restaurezi accesul contului ${j.email} din jurnalul #${j.id}?\nScrie motivul (minim 5 caractere):`,'')
+    if(nota===null) return
+    if(nota.trim().length<5){showToast('Nota trebuie să aibă minim 5 caractere','warn');return}
+    if(!window.confirm(`Confirmi restaurarea? Modulele, șantierele, flagurile și logarea revin la starea de dinainte de ${formatDataRo(j.facut_la,{cuOra:true})}. Sesiunile nu se refac (omul se loghează din nou).`)) return
+    const {data,error}=await supabase.rpc('fn_cont_restaureaza',{p_jurnal_id:j.id,p_nota:nota.trim()})
+    if(error){showToast('Eroare la restaurare: '+error.message,'error');return}
+    const sarite=[...(data?.module_sarite||[]),...(data?.santiere_sarite||[]).map(x=>'șantier #'+x)]
+    showToast(`↩ Cont restaurat: ${(data?.module_refacute||[]).length} module, ${(data?.santiere||[]).length} șantiere${sarite.length?` · sărite (nu mai există): ${sarite.join(', ')}`:''}`,sarite.length?'warn':'success')
+    setEditMgr(null);loadAll()
+  }
+  const legaAutomat=async()=>{
+    setLegare(true)
+    const {data,error}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:true})
+    if(error){showToast('Eroare: '+error.message,'error');setLegare(false);return}
+    const deLegat=(data||[]).filter(r=>r.rezultat==='de_legat'), rest=(data||[]).filter(r=>r.rezultat!=='de_legat')
+    const restTxt=rest.length?`\n\nRămân nelegate (${rest.length}):\n${rest.map(r=>`• ${r.email} — ${r.rezultat}${r.employee_name?' ('+r.employee_name+')':''}`).join('\n')}`:''
+    if(!deLegat.length){window.alert(`Nimic de legat automat.${restTxt}`);setLegare(false);return}
+    if(!window.confirm(`Previzualizare — se leagă ${deLegat.length} cont(uri):\n${deLegat.map(r=>`• ${r.email} → ${r.employee_name} (#${r.employee_id})`).join('\n')}${restTxt}\n\nContinui?`)){setLegare(false);return}
+    const {data:rez,error:e2}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:false})
+    setLegare(false)
+    if(e2){showToast('Eroare: '+e2.message,'error');return}
+    showToast(`🔗 ${(rez||[]).filter(r=>r.rezultat==='legat').length} cont(uri) legate automat`)
+    loadAll()
+  }
+
   // Save date firmă (în logistica_setari)
   const saveFirmaSetting = async (k, v) => {
     const { error } = await supabase.from('logistica_setari').upsert({ key: k, value: v, updated_at: new Date().toISOString() }, { onConflict: 'key' })
@@ -6536,6 +6594,10 @@ function AdminPage() {
   }
   const saveEditMgr=async()=>{
     if(!editMgr) return
+    // R2: pe un cont închis, salvarea NU ridică blocarea logării; bifarea de module cere confirmare explicită
+    const inchEdit=inchidereDeschisa(editMgr.id)
+    if(inchEdit && profile?.is_owner===true && Object.values(editMgrModules).some(Boolean)
+       && !window.confirm(`Contul ${editMgr.email} e ÎNCHIS (jurnal #${inchEdit.id}). Bifezi module pe un cont închis: logarea rămâne blocată, iar alerta „acces rămas” va apărea. Pentru revenire folosește „Restaurează din jurnal”.\n\nContinui salvarea?`)) return
     const updates = {
       name: editMgr.name,
       role: editMgr.role,
@@ -6583,6 +6645,13 @@ function AdminPage() {
       }
     })
     // WhatsApp: phone + enabled poate fi editat de orice owner; tier DOAR de owner (trigger BD verifică)
+    // R1: legătura cu fișa de angajat și tipul contului — doar owner (triggerul BD refuză pe oricine altcineva)
+    if (profile?.is_owner === true && (editMgr.employee_id ?? null) !== (editMgr.original_employee_id ?? null)) {
+      updates.employee_id = editMgr.employee_id || null
+    }
+    if (profile?.is_owner === true && (editMgr.tip_cont ?? null) !== (editMgr.original_tip_cont ?? null)) {
+      updates.tip_cont = editMgr.tip_cont || null
+    }
     if (editMgr.phone_whatsapp !== undefined) {
       updates.phone_whatsapp = editMgr.phone_whatsapp?.trim() || null
     }
@@ -6639,7 +6708,7 @@ function AdminPage() {
         showToast(`Profilul lui ${editMgr.name} s-a salvat, DAR: ${problemeSalvare.join(' · ')}`, 'error')
         loadAll()
       } else { showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll() }
-    } else showToast('Eroare: '+error.message,'error')
+    } else showToast(error.code==='23505'&&/employee_id/.test(error.message)?'Fișa aleasă are deja cont — alege altă fișă':'Eroare: '+error.message,'error')
   }
   const saveSetting=async(k,v)=>{ await supabase.from('settings').upsert({key:k,value:v,updated_at:new Date().toISOString()},{onConflict:'key'}); setSettings(prev=>({...prev,[k]:v})); showToast('✓ Salvat') }
 
@@ -6649,15 +6718,57 @@ function AdminPage() {
     const {data:au,error:ae}=await supabase.auth.signUp({email:nEmail,password:nPwd})
     if(ae){showToast(ae.message,'error');setCreating(false);return}
     if(au.user){
-      await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,department:nDept||null})
+      const {error:ue}=await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,department:nDept||null})
+      if(ue){showToast('Contul s-a creat, dar profilul nu s-a salvat: '+ue.message,'error');setCreating(false);loadAll();return}
       if(ROLES_WITH_SITES.includes(nRole) && nSite) await supabase.from('profile_sites').insert({profile_id:au.user.id,site_id:Number(nSite)})
-      showToast(`✓ ${nName}`); setNEmail('');setNName('');setNPwd('');loadAll()
+      // R1: handle_new_user leagă automat contul de fișă doar la potrivire unică (email / nume)
+      const {data:pr}=await supabase.from('profiles').select('employee_id').eq('id',au.user.id).maybeSingle()
+      const emp=pr?.employee_id?employees.find(e=>e.id===pr.employee_id):null
+      showToast(pr?.employee_id?`✓ ${nName} · Legat automat de ${emp?.name||'fișa #'+pr.employee_id}`:`✓ ${nName} · Nelegat: alege fișa din Editează`,pr?.employee_id?'success':'warn')
+      setNEmail('');setNName('');setNPwd('');loadAll()
     }
     setCreating(false)
   }
 
   const addEmployee=async()=>{ if(!eName.trim()){showToast('Introduceți numele','warn');return}; setAddingE(true); const {error}=await supabase.from('employees').insert({name:eName.trim(),department:eDept,position:ePos||null,site_id:eSite?Number(eSite):null,active:true,hire_date:eHireDate||null}); if(!error){showToast(`✓ ${eName}`);setEName('');setEPos('');setEHireDate('');loadAll()} else showToast('Eroare','error'); setAddingE(false) }
-  const toggleEmp=async(emp)=>{ const updates={active:!emp.active}; if(emp.active&&!emp.termination_date) updates.termination_date=new Date().toISOString().split('T')[0]; await supabase.from('employees').update(updates).eq('id',emp.id); setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,...updates}:e)); showToast(emp.active?`${emp.name} dezactivat`:`${emp.name} reactivat`,emp.active?'warn':'success') }
+  const toggleEmp=async(emp)=>{
+    // 29.09.2026 R2: dezactivarea cu contract încheiat închide automat contul legat (trigger BD);
+    // reactivarea NU redă accesul (doar owner-ul restaurează din jurnal) și șterge data încetării (D4),
+    // altfel cron-ul hr_auto_deactivate_terminated ar dezactiva fișa din nou a doua zi.
+    const azi=ziRomania(), cont=contPentruAngajat(emp.id)
+    let updates
+    if(emp.active){
+      updates={active:false}
+      if(!emp.termination_date) updates.termination_date=azi
+      const dataInc=updates.termination_date||emp.termination_date
+      if(cont && !window.confirm(dataInc<=azi
+        ?`Contul ${cont.email} va fi închis automat (drepturi scoase, logare blocată). Continui?`
+        :`Data încetării e în viitor (${formatDataRo(dataInc)}): contul ${cont.email} NU se închide acum și apare în alerte. Continui?`)) return
+    } else {
+      if(!window.confirm(`Reactivezi ${emp.name}?${emp.termination_date?` Data încetării (${formatDataRo(emp.termination_date)}) se șterge.`:''}${cont?`\n\nAccesul contului ${cont.email} NU se redă automat — restaurarea o face owner-ul din Manageri.`:''}`)) return
+      updates={active:true,termination_date:null}
+    }
+    const {error}=await supabase.from('employees').update(updates).eq('id',emp.id)
+    if(error){showToast('Eroare: '+error.message,'error');return}
+    setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,...updates}:e))
+    showToast(emp.active?`${emp.name} dezactivat${cont?' · contul se închide automat dacă a încetat contractul':''}`:`${emp.name} reactivat${cont?' · Accesul NU se redă automat':''}`,emp.active?'warn':'success')
+    if(cont) loadAll()
+  }
+  const openEditEmp=async(emp)=>{
+    const editObj={...emp}
+    // Pre-fetch date personale GDPR din hr_employees_private (RLS filtreaza automat)
+    const {data:pData}=await supabase.from('hr_employees_private').select('*').eq('employee_id',emp.id).maybeSingle()
+    if(pData){
+      editObj.cnp=pData.cnp||''
+      editObj.data_nastere=pData.data_nastere||''
+      editObj.adresa_strada=pData.adresa_strada||''
+      editObj.adresa_oras=pData.adresa_oras||''
+      editObj.adresa_judet=pData.adresa_judet||''
+      editObj.adresa_cod_postal=pData.adresa_cod_postal||''
+      editObj.adresa_tara=pData.adresa_tara||'România'
+    }
+    setEditEmp(editObj)
+  }
   const saveEditEmp=async()=>{
     if(!editEmp) return
     // Validare CNP (daca a fost completat)
@@ -6814,6 +6925,18 @@ function AdminPage() {
     if (!isSuperAdmin && !['employees','semnaturi'].includes(tab)) setTab('employees')
   }, [isSuperAdmin, tab])
 
+  // 29.09.2026: link-uri directe din alerte — /admin?tab=managers&cont=<profile_id> deschide contul,
+  // /admin?tab=employees&angajat=<id> deschide „Editează Angajat”. Se citesc după loadAll, apoi se șterg din URL.
+  useEffect(() => {
+    const t = searchParams.get('tab'), cont = searchParams.get('cont'), angajat = searchParams.get('angajat')
+    if (!t && !cont && !angajat) return
+    if (t && t !== tab && tabs.some(([v]) => v === t)) { setTab(t); return }
+    if (load) return
+    if (cont && isSuperAdmin) { const m = managers.find(x => x.id === cont); if (m) openEditMgr(m); else showToast('Contul din link nu (mai) există', 'warn') }
+    if (angajat) { const e = employees.find(x => String(x.id) === angajat); if (e) openEditEmp(e); else showToast('Fișa din link nu (mai) există', 'warn') }
+    setSearchParams({}, { replace: true })
+  }, [searchParams, load, tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <Layout>
       <Toast toast={toast}/>
@@ -6884,6 +7007,16 @@ function AdminPage() {
               <div style={{flex:1}}><Lbl>🔴 Data încetării ctr.</Lbl><input type="date" style={S.input} value={editEmp.termination_date||''} onChange={e=>setEditEmp({...editEmp,termination_date:e.target.value||null})}/></div>
             </div>
             {editEmp.termination_date&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:8,padding:'8px 12px',marginBottom:14,fontSize:11,color:G.red}}>⚠️ Contract încetat pe {new Date(editEmp.termination_date).toLocaleDateString('ro-RO')} — angajatul va fi vizibil în pontaj până la finalul lunii respective.</div>}
+            {editEmp.termination_date&&(()=>{
+              // R2: ce se întâmplă cu contul platformei legat de fișă
+              const cont=contPentruAngajat(editEmp.id); if(!cont) return null
+              const inch=inchidereDeschisa(cont.id), azi=ziRomania(), orig=employees.find(e=>e.id===editEmp.id)
+              const txt=inch?`🔒 Contul platformei ${cont.email} e deja închis (jurnal #${inch.id}).`
+                : orig && orig.active===false ? `Contul platformei ${cont.email} NU se închide automat (fișa era deja inactivă) — închide-l din Manageri.`
+                : editEmp.termination_date<=azi ? `🔒 Contul platformei ${cont.email} va fi închis automat la salvare (drepturi scoase, logare blocată).`
+                : `Contul platformei ${cont.email} va fi închis automat în dimineața zilei ${formatDataRo(editEmp.termination_date)}.`
+              return <div style={{background:G.bg,border:`1px solid ${G.orange}55`,borderRadius:8,padding:'8px 12px',marginTop:-6,marginBottom:14,fontSize:11,color:G.orange}}>{txt}</div>
+            })()}
 
             {/* === SECTIUNE: Date Contract === */}
             <div style={{marginTop:18,marginBottom:14,padding:'8px 12px',background:G.bg,borderRadius:8,borderLeft:`3px solid ${G.blue}`}}>
@@ -7019,6 +7152,40 @@ function AdminPage() {
               </select>
               <div style={{fontSize:10,color:G.muted,marginTop:3}}>Pe viitor: drepturile pot fi legate de departament</div>
             </div>
+            {profile?.is_owner === true && (()=>{
+              // 29.09.2026 R1/R2: legătura cu fișa, tipul contului, închiderea și restaurarea (doar owner)
+              const inch=inchidereDeschisa(editMgr.id)
+              const libere=employees.filter(e=>e.id===editMgr.employee_id||(e.active&&!managers.some(m=>m.employee_id===e.id)))
+              return (
+                <div style={{marginBottom:14,padding:12,background:G.bg,borderRadius:8,border:`1px solid ${inch?G.red+'88':G.border}`}}>
+                  <div style={{fontSize:11,fontWeight:700,color:G.blue,marginBottom:8,letterSpacing:.3}}>🔗 FIȘA DE ANGAJAT · TIPUL CONTULUI</div>
+                  <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                    <div style={{flex:'2 1 220px'}}><Lbl>Fișă angajat</Lbl>
+                      <select value={editMgr.employee_id||''} onChange={e=>setEditMgr({...editMgr,employee_id:e.target.value?Number(e.target.value):null})} style={{width:'100%'}}>
+                        <option value="">— nelegat —</option>
+                        {libere.map(e=><option key={e.id} value={e.id}>{e.name}{e.active?'':' (inactiv)'}</option>)}
+                      </select>
+                    </div>
+                    <div style={{flex:'1 1 140px'}}><Lbl>Tip cont</Lbl>
+                      <select value={editMgr.tip_cont||''} onChange={e=>setEditMgr({...editMgr,tip_cont:e.target.value||null})} style={{width:'100%'}}>
+                        <option value="">—</option>
+                        {TIPURI_CONT.map(t=><option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{fontSize:10,color:G.muted,marginTop:5}}>Doar fișele active fără cont. extern / test / sistem = excepție marcată o dată: contul iese din alerta „fără angajat”.</div>
+                  {inch ? (
+                    <div style={{marginTop:10,padding:'8px 10px',background:G.redDim,border:`1px solid ${G.red}66`,borderRadius:6,fontSize:11,color:G.red,lineHeight:1.5}}>
+                      🔒 Cont închis automat la {formatDataRo(inch.facut_la,{cuOra:true})} (jurnal #{inch.id}). Salvarea NU redă accesul și nu deblochează logarea.
+                      <div style={{color:G.muted,marginTop:3}}>Motiv: {inch.motiv}</div>
+                      <button onClick={()=>restaureazaCont(inch)} style={{...S.btnS,marginTop:8,padding:'5px 10px',fontSize:11,color:G.green,borderColor:G.green+'88'}}>↩ Restaurează din jurnal</button>
+                    </div>
+                  ) : editMgr.id !== profile?.id && !editMgr.is_owner && (
+                    <button onClick={inchideContAcum} style={{...S.btnS,marginTop:10,padding:'5px 10px',fontSize:11,color:G.red,borderColor:G.red+'88'}}>🔒 Închide contul acum</button>
+                  )}
+                </div>
+              )
+            })()}
             {profile?.is_owner === true && editMgr.id !== profile?.id && (
               <div style={{marginBottom:14,padding:12,background:editMgr.can_access_salarii?'#2A1A2A':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_access_salarii?G.red:G.border}66`}}>
                 <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
@@ -7495,9 +7662,15 @@ function AdminPage() {
 
       {tab==='managers'&&(
         <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
+          <div style={{minWidth:0}}>
+          {isSuperAdmin&&(
+            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:10}}>
+              <button onClick={legaAutomat} disabled={legare} style={{...S.btnS,fontSize:12,opacity:legare?.6:1}}>{legare?'Se verifică…':'🔗 Leagă automat conturile nelegate'}</button>
+            </div>
+          )}
           <div style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier / Departament</th><th></th></tr></thead>
+              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier / Departament</th><th>Fișă angajat</th><th>Stare</th><th></th></tr></thead>
               <tbody>{managers.map(m=>(
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
@@ -7507,9 +7680,31 @@ function AdminPage() {
                   {m.department && <div style={{color:G.blue,marginTop:2,fontSize:10,fontWeight:600}}>🏢 {m.department}</div>}
                   {!m.department && (m.site_ids||[]).length===0 && <span style={{color:G.dim}}>—</span>}
                 </td>
-                <td><button onClick={async()=>{setEditMgr({...m,original_email:m.email});const{data:ma}=await supabase.from('user_module_access').select('module, access_level').eq('profile_id',m.id);const mods={};const levels={};(ma||[]).forEach(x=>{mods[x.module]=true;levels[x.module]=x.access_level||'editor'});setEditMgrModules(mods);setEditMgrModuleLevels(levels)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
+                <td style={{fontSize:11}}>{m.employee_id?(employees.find(e=>e.id===m.employee_id)?.name||`fișa #${m.employee_id}`):<span style={{color:G.dim}}>— nelegat</span>}</td>
+                <td style={{fontSize:11,fontWeight:600}}>{(()=>{const st=stareContProfil(m,inchidereDeschisa(m.id));return <span style={{color:st.ton==='inchis'?G.red:st.ton==='marcat'?G.purple:G.green}}>{st.text}</span>})()}</td>
+                <td><button onClick={()=>openEditMgr(m)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
             )}
+          </div>
+          {isSuperAdmin&&(
+            <div style={{...S.card,marginTop:14,padding:16,overflowX:'auto'}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>🗂 Jurnal închideri conturi</div>
+              <div style={{fontSize:11,color:G.muted,marginBottom:10}}>Append-only: ce avea contul înainte de închidere. Restaurarea se face din „Edit” pe cont, doar de owner.</div>
+              {inchideri.length===0?<div style={{fontSize:12,color:G.dim}}>Nicio închidere înregistrată.</div>:(
+                <table><thead><tr style={{background:G.bg}}><th>Data</th><th>Cont</th><th>Motiv</th><th>Sursă</th><th>Făcut de</th><th>Restaurat</th></tr></thead>
+                <tbody>{inchideri.map(j=>(
+                  <tr key={j.id}>
+                    <td style={{fontSize:11,whiteSpace:'nowrap'}}>{formatDataRo(j.facut_la,{cuOra:true})}<div style={{color:G.dim,fontSize:10}}>#{j.id}</div></td>
+                    <td style={{fontSize:11}}>{j.email}</td>
+                    <td style={{fontSize:11,color:G.muted}}>{j.motiv}</td>
+                    <td style={{fontSize:10}}>{{trigger_contract_incheiat:'contract încheiat',manual_owner:'manual (owner)',import_manual:'import manual'}[j.sursa]||j.sursa}</td>
+                    <td style={{fontSize:11}}>{numeProfil(j.facut_de)}</td>
+                    <td style={{fontSize:11}}>{j.restaurat_la?<span style={{color:G.green}}>↩ {formatDataRo(j.restaurat_la)} · {numeProfil(j.restaurat_de)}{j.restaurare_nota?<div style={{color:G.muted}}>{j.restaurare_nota}</div>:null}</span>:<span style={{color:G.red}}>nu</span>}</td>
+                  </tr>
+                ))}</tbody></table>
+              )}
+            </div>
+          )}
           </div>
           <div style={{...S.card,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Adaugă Manager</div>
@@ -7599,21 +7794,7 @@ function AdminPage() {
                     <td style={{fontSize:11,color:emp.termination_date?G.red:G.dim}}>{emp.termination_date?new Date(emp.termination_date).toLocaleDateString('ro-RO'):'—'}</td>
                     <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:emp.active?G.greenDim:G.redDim,color:emp.active?G.green:G.red,border:`1px solid ${emp.active?G.green:G.red}44`}}>{emp.active?'●Activ':'○Inactiv'}</span></td>
                     <td><div style={{display:'flex',gap:5}}>
-                      <button onClick={async()=>{
-                        const editObj={...emp}
-                        // Pre-fetch date personale GDPR din hr_employees_private (RLS filtreaza automat)
-                        const {data:pData}=await supabase.from('hr_employees_private').select('*').eq('employee_id',emp.id).maybeSingle()
-                        if(pData){
-                          editObj.cnp=pData.cnp||''
-                          editObj.data_nastere=pData.data_nastere||''
-                          editObj.adresa_strada=pData.adresa_strada||''
-                          editObj.adresa_oras=pData.adresa_oras||''
-                          editObj.adresa_judet=pData.adresa_judet||''
-                          editObj.adresa_cod_postal=pData.adresa_cod_postal||''
-                          editObj.adresa_tara=pData.adresa_tara||'România'
-                        }
-                        setEditEmp(editObj)
-                      }} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
+                      <button onClick={()=>openEditEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
                       <button onClick={()=>toggleEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>{emp.active?'Dezact.':'Activ.'}</button>
                       {!emp.active&&<button onClick={()=>setDeleteEmpItem(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10,color:G.red,borderColor:G.red+'44'}}>🗑️</button>}
                     </div></td>
