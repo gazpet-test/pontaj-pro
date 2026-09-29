@@ -30,7 +30,7 @@ BEGIN
     RAISE EXCEPTION 'Alertele de conturi sunt doar pentru owner' USING ERRCODE = '42501';
   END IF;
   RETURN QUERY
-  SELECT 'fara_angajat:' || p.id::text, 'fara_angajat'::text, p.id, COALESCE(u.email, p.email), p.tip_cont, p.is_owner,
+  SELECT 'fara_angajat:' || p.id::text, 'fara_angajat'::text, p.id, COALESCE(u.email::text, p.email), p.tip_cont, p.is_owner,
          NULL::integer, NULL::text, NULL::boolean, NULL::date, u.banned_until, NULL::bigint, NULL::timestamptz,
          COALESCE((SELECT jsonb_agg(jsonb_build_object('employee_id', c.employee_id, 'employee_name', c.employee_name,
                                                        'metoda', c.metoda, 'profil_legat', c.profil_legat)

@@ -412,7 +412,7 @@ BEGIN
   END IF;
   RETURN QUERY
   WITH pr AS (
-    SELECT p.id AS pid, COALESCE(u.email, p.email) AS pemail, u.email AS uemail, p.tip_cont AS ptip, p.is_owner AS powner,
+    SELECT p.id AS pid, COALESCE(u.email::text, p.email) AS pemail, u.email::text AS uemail, p.tip_cont AS ptip, p.is_owner AS powner,
            p.employee_id::integer AS emp, e.id AS eid, e.name AS enume, e.active AS eactiv, e.termination_date AS etd,
            u.banned_until AS ban, j.id AS jid, j.facut_la AS jla, to_jsonb(p) AS pj
       FROM public.profiles p
@@ -479,7 +479,7 @@ BEGIN
       FROM pr JOIN aloc a ON a.pid = pr.pid WHERE a.alocari <> '{}'::jsonb
     UNION ALL
     -- inactiv_fara_data: fișe inactive fără dată de încetare (cu sau fără cont)
-    SELECT 'inactiv_fara_data', p.id, COALESCE(u.email, p.email), p.tip_cont, p.is_owner, e.id, e.name, e.active, e.termination_date,
+    SELECT 'inactiv_fara_data', p.id, COALESCE(u.email::text, p.email), p.tip_cont, p.is_owner, e.id, e.name, e.active, e.termination_date,
            u.banned_until, j.id, j.facut_la, NULL::jsonb, NULL::jsonb
       FROM public.employees e
       LEFT JOIN public.profiles p ON p.employee_id = e.id
