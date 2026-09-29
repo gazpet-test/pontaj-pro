@@ -49,3 +49,10 @@ Pentru semnare mai trebuie:
 - [ ] 0 BYPASS / 0 FALSE_GREEN critice/high; pe eliminatorii 0 CONFLICT / UNDETERMINED / MISSING_LINK nerezolvate;
 - [ ] CI pentru invarianții critici; ce rămâne manual e etichetat;
 - [ ] secțiune separată „NOT PROVEN”: ori limitare acceptată explicit de Răzvan, ori modulul rămâne parțial.
+
+## 8. Plan după Jilava (decizie Răzvan 29.09: B)
+Copilot a dat GO pe rularea celor 4 faze P2 (J06b) și GO pe codul J07. Runner-ul cere însă un provider server de **supraveghere completă** (read-only; toate tabelele și obiectele, inclusiv rândurile ascunse de RLS, cu hash). Ar fi o schimbare pe producție, iar Ofertare e înghețat până la Jilava. **Ordinea după 02.10:**
+1. J04 (#524): merge + deploy edge + apply + smoke A→B pe 103.
+2. Provider de supraveghere (RPC read-only, doar owner/service), apoi rularea celor 4 faze P2 pe 103, cu raport pe fiecare fază.
+3. J07 (#527): merge + deploy edge + apply + smoke cu cele 12 BLOCK pe 103. Înainte de merge: stale prin hash (nu timestamp); o eroare internă de control = BLOCK.
+4. Invalidare upstream, snapshot pe versiuni, concurență, idempotență (task-uri noi Jakarinos), P2 rest (Miloi selectori + ground truth), apoi EXIT REPORT cu „NOT PROVEN” și verdictul Copilot.
