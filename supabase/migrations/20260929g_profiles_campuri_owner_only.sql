@@ -8,6 +8,9 @@
 --   * department            → 4 politici de scriere pe department='HR' (hr_autorizatii, hr_autorizatii_tipuri,
 --                              hr_formare_profesionala, hr_recrutare_pozitii);
 --   * employee_id           → legarea contului de o fișă (semnătura/identitatea altui angajat);
+--   * email                 → identitate în căutări după email (HrAngajatNouWizard → Cristiana, Logistica → m.alexandru)
+--                              și destinatarul mailurilor trimise din edge functions; îl schimbă doar owner-ul
+--                              (Admin → Manageri, odată cu emailul de logare prin update_user_email_by_admin);
 --   * can_use_document_scanner → SELECT pe hr_autorizatii_propuneri + scanner_logs;
 --   * can_manage_stoc       → ALL pe magazii, consumuri_proiect, consumuri_proiect_linii;
 --   * can_create_comenzi / can_process_achizitii / can_access_ctc → drepturi Comercial;
@@ -39,6 +42,7 @@ BEGIN
   v_camp := CASE
     WHEN NEW.department               IS DISTINCT FROM OLD.department               THEN 'department'
     WHEN NEW.employee_id              IS DISTINCT FROM OLD.employee_id              THEN 'employee_id'
+    WHEN NEW.email                    IS DISTINCT FROM OLD.email                    THEN 'email'
     WHEN NEW.can_use_document_scanner IS DISTINCT FROM OLD.can_use_document_scanner THEN 'can_use_document_scanner'
     WHEN NEW.can_manage_stoc          IS DISTINCT FROM OLD.can_manage_stoc          THEN 'can_manage_stoc'
     WHEN NEW.can_create_comenzi       IS DISTINCT FROM OLD.can_create_comenzi       THEN 'can_create_comenzi'
@@ -66,4 +70,4 @@ CREATE TRIGGER trg_profiles_campuri_owner_only BEFORE UPDATE ON public.profiles
   FOR EACH ROW EXECUTE FUNCTION public.fn_profiles_campuri_owner_only();
 
 COMMENT ON FUNCTION public.fn_profiles_campuri_owner_only() IS
-  'S-A 29.09.2026: department, employee_id și flagurile de drepturi scăpate de enforce_owner_only_salary_flags la 02.06.2026 se schimbă doar de owner (sau sistem).';
+  'S-A 29.09.2026: department, employee_id, email și flagurile de drepturi scăpate de enforce_owner_only_salary_flags la 02.06.2026 se schimbă doar de owner (sau sistem).';

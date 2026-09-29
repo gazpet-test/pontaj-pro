@@ -54,6 +54,7 @@ SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET %s WHERE id = au
 FROM (VALUES
   ('department',                    'department = ''HR'''),
   ('employee_id',                   'employee_id = ' || :'emp'),
+  ('email',                         'email = ''cristiana.puscasu@gazpet.ro'''),
   ('can_use_document_scanner',      'can_use_document_scanner = true'),
   ('can_manage_stoc',               'can_manage_stoc = true'),
   ('can_create_comenzi',            'can_create_comenzi = true'),
@@ -103,7 +104,7 @@ SELECT teste.assert((SELECT NOT can_access_salarii FROM public.profiles WHERE id
 
 -- ---------------------------------------------------------------- S5 owner, service_role, admin trec
 SELECT teste.ca_utilizator(:'owner');
-WITH u AS (UPDATE public.profiles SET department = 'HR', employee_id = :'emp', can_manage_stoc = true, receive_tichete_hr = true,
+WITH u AS (UPDATE public.profiles SET department = 'HR', employee_id = :'emp', email = 'ion.nou.sa@gazpet.ro', can_manage_stoc = true, receive_tichete_hr = true,
                   can_use_document_scanner = true, whatsapp_tier = 'manager', receive_bonuri_consum = true
            WHERE id = :'u_ion' RETURNING 1)
   SELECT teste.assert(count(*) = 1, 'S5 owner-ul acordă department/employee_id/flaguri altcuiva') FROM u;

@@ -18,6 +18,7 @@ Neprotejate, dar folosite ca drept:
 |---|---|
 | `department` | 4 politici de scriere pe `department='HR'`: hr_autorizatii, hr_autorizatii_tipuri, hr_formare_profesionala, hr_recrutare_pozitii |
 | `employee_id` | legarea contului de fișa altui angajat (semnătura/identitatea lui) |
+| `email` | identitate în căutări după email (`HrAngajatNouWizard` → Cristiana, `Logistica` → m.alexandru) și destinatarul mailurilor din edge functions; legitim îl schimbă doar owner-ul (Admin → Manageri, împreună cu emailul de logare) |
 | `can_use_document_scanner` | SELECT pe hr_autorizatii_propuneri, INSERT pe scanner_logs |
 | `can_manage_stoc` | ALL pe magazii, consumuri_proiect, consumuri_proiect_linii |
 | `can_create_comenzi`, `can_process_achizitii`, `can_access_ctc` | drepturi Comercial (UI + funcții) |
@@ -30,7 +31,7 @@ Neprotejate, dar folosite ca drept:
 ## 2. Fix
 Migrarea `supabase/migrations/20260929g_profiles_campuri_owner_only.sql` adaugă un trigger nou, separat: `trg_profiles_campuri_owner_only`, BEFORE UPDATE pe `profiles`, cu funcția `fn_profiles_campuri_owner_only()`:
 - SECURITY DEFINER, `search_path = public, pg_temp`, EXECUTE revocat pentru toți;
-- dacă apelantul nu e sistemul (`auth.uid()` NULL) și nu e owner, orice schimbare (`IS DISTINCT FROM`, null-safe) a celor 15 coloane → `RAISE 42501`. Refuzul e vizibil și atomic: nicio altă modificare din aceeași cerere nu se scrie;
+- dacă apelantul nu e sistemul (`auth.uid()` NULL) și nu e owner, orice schimbare (`IS DISTINCT FROM`, null-safe) a celor 16 coloane → `RAISE 42501`. Refuzul e vizibil și atomic: nicio altă modificare din aceeași cerere nu se scrie;
 - nu atinge date, politici, granturi, funcțiile/triggerele existente. Nimic din Ofertare.
 
 ## 3. Identitatea excepției (cine trece)
@@ -51,7 +52,7 @@ PG16 local, pe scheletul Supabase (politicile și triggerele de producție pe `p
 | Grup | Ce dovedește |
 |---|---|
 | S1 | trigger activ; funcție SECURITY DEFINER cu search_path fixat; neapelabilă din API |
-| S2 | fiecare din cele 15 coloane refuzată pentru non-owner; valoare→NULL refuzată; amestec cu câmp permis refuzat integral; rândul rămâne neschimbat |
+| S2 | fiecare din cele 16 coloane refuzată pentru non-owner; valoare→NULL refuzată; amestec cu câmp permis refuzat integral; rândul rămâne neschimbat |
 | S3 | câmpurile personale (nume, WhatsApp, preferințe mail) trec; valorile neschimbate retrimise (formularul Manageri) trec; rândul altcuiva = 0 rânduri |
 | S4 | triggerele vechi funcționează ca înainte |
 | S5 | owner (pe alții și pe sine, prin JWT ca în UI), service_role și admin fără JWT trec |
@@ -81,4 +82,4 @@ Revenirea operațională:
 ## 7. Ce NU face — pentru Răzvan (30.09, 08:00)
 - **Datele existente nu se repară.** 21 de non-owneri au azi flaguri active (lista: SELECT read-only din 29.09, în chat). Fără jurnal pe `profiles` nu se poate dovedi cine le-a setat între 02.06 și azi; lipsa provenienței nu dovedește compromiterea. Orice corectare: preview → confirmare → apply.
 - **Înscrierea publică:** nu e considerată oprită fără dovadă (setarea Auth „Allow new users to sign up” din Supabase). Oprirea ei nu înlocuiește protecția.
-- `profiles.email` rămâne neprotejat; e acoperit de pachetul conturi R1 (după 02.10).
+- `profiles.email` e protejat de S-A (adăugat după finding-ul verificatorului de securitate din pachetul conturi); pachetul conturi R1 (după 02.10) îl păzește la fel — suprapunerea e inofensivă.
