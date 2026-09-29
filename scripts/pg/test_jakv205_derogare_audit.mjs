@@ -311,6 +311,7 @@ ${count(105, 1)}
 ${check(`(SELECT actor IS NULL AND session_user_name='postgres' FROM public.ofertare_derogari_audit WHERE licitatie_id=105)`, 'Sesiunea postgres auditată fără JWT')}
 ${rejected("UPDATE public.ofertare_derogari_audit SET motiv='alterat' WHERE licitatie_id=100", '42501', 'append-only')}
 ${rejected('DELETE FROM public.ofertare_derogari_audit WHERE licitatie_id=100', '42501', 'append-only')}
+SET CONSTRAINTS ALL IMMEDIATE; -- FK-ul auditului e DEFERRED (audit scris din BEFORE INSERT); TRUNCATE cere 0 evenimente în așteptare
 ${rejected('TRUNCATE public.ofertare_derogari_audit', '42501', 'append-only')}
 -- Chiar și cu privilegii acordate accidental, service_role nu poate rescrie auditul.
 SAVEPOINT service_trigger;
@@ -319,6 +320,7 @@ ${asUser()}
 SET ROLE service_role;
 ${rejected("UPDATE public.ofertare_derogari_audit SET motiv='alterat' WHERE licitatie_id=100", '42501', 'append-only')}
 ${rejected('DELETE FROM public.ofertare_derogari_audit WHERE licitatie_id=100', '42501', 'append-only')}
+SET CONSTRAINTS ALL IMMEDIATE; -- FK-ul auditului e DEFERRED (audit scris din BEFORE INSERT); TRUNCATE cere 0 evenimente în așteptare
 ${rejected('TRUNCATE public.ofertare_derogari_audit', '42501', 'append-only')}
 ${admin}
 ROLLBACK TO SAVEPOINT service_trigger;
