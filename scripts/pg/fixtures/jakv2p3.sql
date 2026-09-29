@@ -1,5 +1,5 @@
 -- Extensie a fixture-ului R5. Tabele sintetice; controalele și triggerele sunt SQL-ul real din repo.
-ALTER TABLE ofertare_cerinte ADD COLUMN duplicat_al bigint, ADD COLUMN tip text DEFAULT 'propunere', ADD COLUMN text_cerinta text;
+ALTER TABLE ofertare_cerinte ADD COLUMN IF NOT EXISTS duplicat_al bigint, ADD COLUMN IF NOT EXISTS tip text DEFAULT 'propunere', ADD COLUMN IF NOT EXISTS text_cerinta text;
 ALTER TABLE ofertare_acoperire ADD COLUMN verificat_pe_scan boolean DEFAULT false, ADD COLUMN reverificare_ceruta boolean DEFAULT false;
 ALTER TABLE ofertare_pt_pachet ADD COLUMN versiune integer NOT NULL DEFAULT 1 CHECK (versiune>=1),
   ADD COLUMN aprobat_de uuid REFERENCES profiles(id), ADD COLUMN aprobat_la timestamptz,

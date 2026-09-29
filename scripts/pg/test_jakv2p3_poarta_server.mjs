@@ -63,6 +63,8 @@ CREATE ROLE "${actor}" NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT;
 GRANT authenticated,anon,service_role TO "${actor}";
 CREATE FUNCTION jakv2p3_assert(ok boolean,msg text) RETURNS void LANGUAGE plpgsql AS $$
  BEGIN IF ok IS DISTINCT FROM true THEN RAISE EXCEPTION 'TEST FAIL: %',msg; END IF; END $$;
+-- fixture R5 nu are coloanele reale folosite de r08/J07 (live: ofertare_cerinte.text_cerinta există)
+ALTER TABLE public.ofertare_cerinte ADD COLUMN IF NOT EXISTS text_cerinta text;
 ${migration('20260928i_ofertare_r08_versiuni.sql')}
 ${read('scripts/pg/fixtures/jakv2p3.sql')}
 ${migration('20260913_ofertare_pt_pachet_manifest.sql')}
