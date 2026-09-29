@@ -25,6 +25,13 @@ export const RETEA_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60] }
 export const nivelRetea = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa'
   : valoare > RETEA_PRAGURI[cheie][1] ? 'error' : valoare > RETEA_PRAGURI[cheie][0] ? 'warning' : 'ok'
 
+// QNAP are card propriu (nu mai apare în lista generică „Rețea & servere").
+export const QNAP_EXTERN_ID = '192.168.1.42'
+export const QNAP_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60], disk_pct: [80, 90], ram_pct: [85, 95] }
+export const nivelQnap = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa'
+  : valoare > QNAP_PRAGURI[cheie][1] ? 'error' : valoare > QNAP_PRAGURI[cheie][0] ? 'warning' : 'ok'
+export const QNAP_TACERE_MS = 30 * 60e3
+
 // Camerele QNAP (ONVIF) primesc o poză nouă la ~2 min de la Terra; 10 min tăcere = semnal real de problemă.
 export const CAMERE_TACERE_MS = 10 * 60e3
 
@@ -96,6 +103,61 @@ function TerraMonitor() {
     return () => { oprit = true; clearInterval(timer) }
   }, [])
   return <TerraCard dispozitiv={dispozitiv} istoric={istoric} acum={acum} eroare={eroare} incarcare={incarcare} />
+}
+
+// ── Server QNAP: card propriu (ca Terra), cu tot ce oferă sonda (temperaturi, disc %, RAM %, RAID).
+export function QnapCard({ dispozitiv, acum, eroare, incarcare = false }) {
+  const v = dispozitiv?.ultima_citire || {}
+  const faraDate = !dispozitiv?.citit_la || acum - Date.parse(dispozitiv.citit_la) > QNAP_TACERE_MS
+  const culori = { lipsa: G.dim, ok: G.green, warning: G.yellow, error: G.red }
+  const minute = dispozitiv?.citit_la ? Math.max(0, Math.floor((acum - Date.parse(dispozitiv.citit_la)) / 60e3)) : null
+  const randuriTemp = [['Temperatură CPU', 'cpu_temp', v.cpu_temp, '°C'], ['Temperatură disc (max)', 'hdd_max', v.hdd_max, '°C'],
+    ['Disc ocupat', 'disk_pct', v.disk_pct, '%'], ['RAM ocupat', 'ram_pct', v.ram_pct, '%']]
+  return <div style={{ ...S.card, borderColor: faraDate && !incarcare ? G.red : G.border }}>
+    <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
+      <div style={{ fontWeight:700 }}>🗄️ Server QNAP</div>
+      {!incarcare && <span style={{ fontSize:11.5, color: faraDate ? G.red : (v.online ? G.green : G.red) }}>
+        {faraDate ? 'fără date' : v.online ? `● online · acum ${minute} min` : '○ offline'}</span>}
+    </div>
+    {incarcare ? <div style={{ color:G.dim, fontSize:12.5 }}>Se încarcă…</div> : <>
+      {faraDate && <div style={{ color:G.red, fontSize:12, marginBottom:8 }}>Ultima citire: {fmtDT(dispozitiv?.citit_la)}</div>}
+      {randuriTemp.map(([eticheta, cheie, val, um]) => <div key={cheie} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
+        <span style={{ color:G.muted }}>{eticheta}</span><b style={{ color:faraDate ? G.red : culori[nivelQnap(cheie, val)] }}>{Number.isFinite(val) ? `${nr(val, 0)} ${um}` : '—'}</b>
+      </div>)}
+      <div style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0' }}>
+        <span style={{ color:G.muted }}>RAID</span>
+        <b style={{ color: v.raid_ok == null ? G.dim : v.raid_ok ? G.green : G.red }}>{v.raid_ok == null ? '—' : v.raid_ok ? 'OK' : '⚠ degradat'}</b>
+      </div>
+    </>}
+    {eroare && <div role="status" style={{ color:G.yellow, fontSize:12, marginTop:8 }}>{eroare}</div>}
+  </div>
+}
+
+function QnapMonitor() {
+  const [dispozitiv, setDispozitiv] = useState(null)
+  const [acum, setAcum] = useState(Date.now), [eroare, setEroare] = useState(null), [incarcare, setIncarcare] = useState(true)
+  useEffect(() => {
+    let oprit = false, inCurs = false
+    const load = async () => {
+      setAcum(Date.now())
+      if (inCurs) return
+      inCurs = true
+      try {
+        const { data: d, error } = await supabase.from('iot_dispozitive').select('id, ultima_citire, citit_la')
+          .eq('sursa', 'retea').eq('extern_id', QNAP_EXTERN_ID).eq('activ', true).maybeSingle()
+        if (oprit) return
+        if (error) { setEroare('Nu pot actualiza datele QNAP.'); return }
+        setDispozitiv(d); setEroare(null)
+      } catch {
+        if (!oprit) setEroare('Nu pot actualiza datele QNAP.')
+      } finally { inCurs = false; if (!oprit) setIncarcare(false) }
+    }
+    load()
+    const timer = setInterval(load, 60e3)
+    return () => { oprit = true; clearInterval(timer) }
+  }, [])
+  if (!incarcare && !dispozitiv) return null
+  return <QnapCard dispozitiv={dispozitiv} acum={acum} eroare={eroare} incarcare={incarcare} />
 }
 
 // ── Camere QNAP (ONVIF): instantaneu la ~2 min prin Terra → iot-camera, NU live. URL semnat (5 min), reluat doar când
@@ -246,7 +308,7 @@ export default function Cladire() {
   const centrala = disp.find(x => x.sursa === 'vicare'), v = centrala?.ultima_citire || {}
   const termostate = disp.filter(x => x.sursa === 'salus' && !x.privat)
   const acasa = disp.filter(x => x.privat)
-  const retea = disp.filter(x => x.sursa === 'retea' && !x.privat)
+  const retea = disp.filter(x => x.sursa === 'retea' && !x.privat && x.extern_id !== QNAP_EXTERN_ID)
   const tuya = disp.filter(x => x.sursa === 'tuya' && !x.privat)
   const camere = tuya.filter(x => x.meta?.tip === 'camera'), tuyaAlte = tuya.filter(x => x.meta?.tip !== 'camera')
   // PIN pentru secțiunea privată: se compară SHA-256 în browser cu hash-ul din config; nu pleacă nicăieri
@@ -312,6 +374,7 @@ export default function Cladire() {
         </div>
 
         <TerraMonitor />
+        <QnapMonitor />
 
         {/* Rețea & servere: ping (online/offline) + temperaturi QNAP; datele vin de la workerul retea-mon (Terra) prin iot-retea */}
         {retea.length > 0 && (
