@@ -173,8 +173,21 @@ INSERT INTO public.employees (name, department, active) VALUES ('LEGARE EROARE',
 INSERT INTO public.employees (name, department, active) VALUES ('PICA NOTIF', 'Test', true) RETURNING id AS e_r1notif \gset
 INSERT INTO public.employees (name, department, active) VALUES ('LIBER LUCIAN', 'Test', true) RETURNING id AS e_r1liber \gset
 
--- R1-01 email identic (majuscule/spații pe fișă), metoda email, notificare owner
-SELECT teste.creeaza_cont('legat.email@gazpet.ro', :'u_r1email');
+-- R1-00 (review, critic) înscrierea publică NU leagă singură: doar propune candidatul unic owner-ului.
+-- Aceeași fișă și același email ca R1-01, dar prin signUp (fără app_metadata de încredere).
+\set u_r1public 00000000-0000-4000-8000-0000000b0013
+SELECT teste.creeaza_cont('legat.email@gazpet.ro', :'u_r1public');
+SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1public'),
+  'R1-00 înscriere publică (signUp) cu emailul de pe fișă → contul NU se leagă singur');
+SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_legare_propusa'
+    AND message LIKE 'Cont nou legat.email@gazpet.ro → propunere: EMAILESCU TEST (#' || :e_r1email || ', prin email)%NU-l lega%'),
+  'R1-00 owner-ul primește propunerea (cont_legare_propusa) cu candidatul unic');
+DELETE FROM auth.users WHERE id = :'u_r1public';                                   -- profilul cade în cascadă
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = :'u_r1public'), 'R1-00 curățenie: contul de test șters');
+
+-- R1-01 email identic (majuscule/spații pe fișă), metoda email, notificare owner — CALEA DE ÎNCREDERE
+-- (contul creat de owner prin API-ul admin: app_metadata.gazpet_legare_automata = true, pe care signUp nu-l poate pune)
+SELECT teste.creeaza_cont_owner('legat.email@gazpet.ro', :'u_r1email');
 SELECT teste.assert((SELECT employee_id = :e_r1email FROM public.profiles WHERE id = :'u_r1email'),
   'R1-01 email identic (case/spații) → legat automat de fișa unică');
 SELECT teste.assert((SELECT count(*) = 1 AND bool_and(metoda = 'email') FROM public.fn_cont_candidati_angajat('legat.email@gazpet.ro')),
@@ -184,10 +197,10 @@ SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile
   'R1-01 owner-ul primește notificarea cont_legat_automat');
 
 -- R1-02 diacritice (virgulă și sedilă), nume compus cu cratimă
-SELECT teste.creeaza_cont('ana-maria.stefanescu@gazpet.ro', :'u_r1diac');
+SELECT teste.creeaza_cont_owner('ana-maria.stefanescu@gazpet.ro', :'u_r1diac');
 SELECT teste.assert((SELECT employee_id = :e_r1diac FROM public.profiles WHERE id = :'u_r1diac'),
   'R1-02 ȘTEFĂNESCU ANA-MARIA ← ana-maria.stefanescu@gazpet.ro (fără diacritice, cu cratimă) → legat');
-SELECT teste.creeaza_cont('stefan.tutuianu@gazpet.ro', :'u_r1sed');
+SELECT teste.creeaza_cont_owner('stefan.tutuianu@gazpet.ro', :'u_r1sed');
 SELECT teste.assert((SELECT employee_id = :e_r1sed FROM public.profiles WHERE id = :'u_r1sed'),
   'R1-02 ŢUŢUIANU ŞTEFAN (ţ/ş cu sedilă) ← stefan.tutuianu@gazpet.ro → legat');
 
@@ -197,7 +210,7 @@ SELECT teste.assert((SELECT count(*) = 1 AND min(employee_id) = :e_r1diac AND bo
   'R1-03 stefanescu.ana@ găsește aceeași fișă (tokeni în orice ordine)');
 SELECT teste.assert((SELECT profil_legat = :'u_r1diac'::uuid FROM public.fn_cont_candidati_angajat('stefanescu.ana@gazpet.ro')),
   'R1-03 candidatul raportează profilul deja legat');
-SELECT teste.creeaza_cont('iordache.radu@gazpet.ro', :'u_r1ord');
+SELECT teste.creeaza_cont_owner('iordache.radu@gazpet.ro', :'u_r1ord');
 SELECT teste.assert((SELECT employee_id = :e_r1ord FROM public.profiles WHERE id = :'u_r1ord'),
   'R1-03 nume.prenume@ (IORDACHE RADU ← iordache.radu@) → legat');
 
@@ -226,7 +239,7 @@ SELECT teste.assert((SELECT count(*) = 2 FROM public.profiles WHERE id IN (:'u_r
 -- R1-07 candidatul unic are deja cont → nelegat, fără eroare
 SELECT teste.creeaza_cont('gelu.vechi@gazpet.ro', :'u_r1vechi');
 UPDATE public.profiles SET employee_id = :e_r1ocup WHERE id = :'u_r1vechi';          -- admin
-SELECT teste.creeaza_cont('gelu.ocupat@gazpet.ro', :'u_r1ocup');
+SELECT teste.creeaza_cont_owner('gelu.ocupat@gazpet.ro', :'u_r1ocup');
 SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1ocup')
     AND (SELECT employee_id = :e_r1ocup FROM public.profiles WHERE id = :'u_r1vechi'),
   'R1-07 candidat unic deja legat → contul nou se creează nelegat, cel vechi rămâne legat');
@@ -252,7 +265,7 @@ SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = 
   'R1-10 ion.popescu@gmail.com → pasul nume nu se aplică în afara gazpet.ro');
 SELECT teste.assert((SELECT count(*) = 0 FROM public.notifications WHERE type = 'cont_nelegat' AND message LIKE '%@gmail.com%'),
   'R1-10 cont extern nelegat → fără notificare cont_nelegat (doar @gazpet.ro)');
-SELECT teste.creeaza_cont('dragos.test@adromevolution.ro', :'u_r1adrom');
+SELECT teste.creeaza_cont_owner('dragos.test@adromevolution.ro', :'u_r1adrom');
 SELECT teste.assert((SELECT employee_id = :e_r1adrom FROM public.profiles WHERE id = :'u_r1adrom'),
   'R1-10 email identic pe fișă, alt domeniu (adromevolution.ro) → legat');
 
@@ -274,7 +287,7 @@ BEGIN
   RETURN NULL;
 END $fn$;
 CREATE TRIGGER a_test_preprofil AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION teste.fn_preprofil();
-SELECT teste.creeaza_cont('yanis.suprascris@gazpet.ro', :'u_r1pre');
+SELECT teste.creeaza_cont_owner('yanis.suprascris@gazpet.ro', :'u_r1pre');
 DROP TRIGGER a_test_preprofil ON auth.users;
 SELECT teste.assert((SELECT employee_id = :e_r1prex FROM public.profiles WHERE id = :'u_r1pre'),
   'R1-12 legătura existentă NU se suprascrie (candidatul unic pe email era altă fișă)');
@@ -286,7 +299,7 @@ BEGIN
   RETURN NEW;
 END $fn$;
 CREATE TRIGGER zz_test_pica_legare BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION teste.fn_pica_legare();
-SELECT teste.creeaza_cont('eroare.legare@gazpet.ro', :'u_r1err');
+SELECT teste.creeaza_cont_owner('eroare.legare@gazpet.ro', :'u_r1err');
 DROP TRIGGER zz_test_pica_legare ON public.profiles;
 SELECT teste.assert((SELECT count(*) = 1 FROM auth.users WHERE id = :'u_r1err')
     AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1err'),
@@ -297,7 +310,7 @@ SELECT teste.assert((SELECT count(*) = 1 FROM public.notifications WHERE profile
 CREATE FUNCTION teste.fn_pica_notif() RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN RAISE EXCEPTION 'test: notificarea pică'; END $fn$;
 CREATE TRIGGER zz_test_pica_notif BEFORE INSERT ON public.notifications FOR EACH ROW EXECUTE FUNCTION teste.fn_pica_notif();
-SELECT teste.creeaza_cont('notif.pica@gazpet.ro', :'u_r1notif');
+SELECT teste.creeaza_cont_owner('notif.pica@gazpet.ro', :'u_r1notif');
 DROP TRIGGER zz_test_pica_notif ON public.notifications;
 SELECT teste.assert((SELECT employee_id = :e_r1notif FROM public.profiles WHERE id = :'u_r1notif'),
   'R1-13 eroare la notificare → legarea rămâne făcută');
@@ -309,6 +322,8 @@ SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET employee_id = %s
   'R1-14 utilizatorul NU își poate lega singur contul de o fișă', '42501');
 SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET tip_cont = %L WHERE id = %L', 'test', :'u_r1simplu'),
   'R1-14 utilizatorul NU își poate marca singur tipul contului', '42501');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET email = %L WHERE id = %L', 'liber.lucian@gazpet.ro', :'u_r1simplu'),
+  'R1-14 utilizatorul NU își poate schimba singur profiles.email (review: falsificarea potrivirii)', '42501');
 UPDATE public.profiles SET whatsapp_enabled = true WHERE id = :'u_r1simplu';
 SELECT teste.assert((SELECT whatsapp_enabled FROM public.profiles WHERE id = :'u_r1simplu'),
   'R1-14 auto-editarea altor câmpuri ale profilului propriu funcționează în continuare');
@@ -317,6 +332,10 @@ UPDATE public.profiles SET employee_id = :e_r1liber, tip_cont = 'angajat' WHERE 
 SELECT teste.assert((SELECT employee_id = :e_r1liber AND tip_cont = 'angajat' FROM public.profiles WHERE id = :'u_r1simplu'),
   'R1-14 owner poate lega fișa și marca tipul');
 UPDATE public.profiles SET employee_id = NULL, tip_cont = NULL WHERE id = :'u_r1simplu';
+UPDATE public.profiles SET email = 'simplu.user.nou@gazpet.ro' WHERE id = :'u_r1simplu';
+SELECT teste.assert((SELECT email = 'simplu.user.nou@gazpet.ro' FROM public.profiles WHERE id = :'u_r1simplu'),
+  'R1-14 owner poate schimba emailul profilului (Admin → Manageri)');
+UPDATE public.profiles SET email = 'simplu.user@gazpet.ro' WHERE id = :'u_r1simplu';
 SELECT teste.ca_admin();
 UPDATE public.profiles SET tip_cont = 'extern' WHERE id = :'u_r1simplu';
 SELECT teste.assert((SELECT tip_cont = 'extern' FROM public.profiles WHERE id = :'u_r1simplu'),
@@ -406,7 +425,82 @@ SELECT teste.assert((SELECT employee_id = :e_r1tarziu FROM public.profiles WHERE
     AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1ocup')
     AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1dublu'),
   'R1-19 doar potrivirile unice și libere s-au legat (ambiguu / ocupat / email dublu rămân nelegate)');
+SELECT teste.assert((SELECT cont_creat_la IS NOT NULL AND metoda IS NULL FROM public.fn_cont_leaga_automat(true) WHERE profile_id = :'u_r1zero'),
+  'R1-19 previzualizarea arată data creării contului (owner-ul recunoaște un cont pe care nu l-a creat)');
 SELECT teste.ca_admin();
+
+-- R1-20 (review, critic) înscrierea publică: nimic legat singur, legarea o confirmă owner-ul dintr-un clic
+\set u_r1pub1 00000000-0000-4000-8000-0000000b0014
+\set u_r1pub2 00000000-0000-4000-8000-0000000b0015
+INSERT INTO public.employees (name, department, email, active) VALUES ('IONESCU MARIA', 'Test', 'maria.personal@gmail.com', true)
+  RETURNING id AS e_r1maria \gset
+INSERT INTO public.employees (name, department, active) VALUES ('POPESCU VASILE', 'Test', true) RETURNING id AS e_r1vasile \gset
+SELECT teste.creeaza_cont('maria.personal@gmail.com', :'u_r1pub1');                 -- signUp cu emailul personal de pe fișă
+SELECT teste.creeaza_cont('vasile.popescu@gazpet.ro', :'u_r1pub2');                 -- signUp „prenume.nume@gazpet.ro”
+SELECT teste.assert((SELECT count(*) = 2 FROM public.profiles WHERE id IN (:'u_r1pub1', :'u_r1pub2') AND employee_id IS NULL),
+  'R1-20 signUp (cheia anon) cu emailul personal de pe fișă / cu prenume.nume@gazpet.ro → NU se leagă (fără acces la semnătura victimei)');
+SELECT teste.assert((SELECT count(*) = 2 FROM public.notifications WHERE profile_id = :'owner' AND type = 'cont_legare_propusa'
+    AND (message LIKE 'Cont nou maria.personal@gmail.com → propunere: IONESCU MARIA%' OR message LIKE 'Cont nou vasile.popescu@gazpet.ro → propunere: POPESCU VASILE%')),
+  'R1-20 owner-ul primește câte o propunere, și pentru domeniul extern');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert((SELECT count(*) = 2 FROM public.fn_cont_leaga_automat(true) WHERE profile_id IN (:'u_r1pub1', :'u_r1pub2') AND rezultat = 'de_legat'),
+  'R1-20 previzualizarea le arată „de_legat”');
+SELECT teste.assert((SELECT count(*) = 2 FROM public.fn_cont_leaga_automat(false) WHERE profile_id IN (:'u_r1pub1', :'u_r1pub2') AND rezultat = 'legat'),
+  'R1-20 confirmarea owner-ului leagă (un clic)');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT employee_id = :e_r1maria FROM public.profiles WHERE id = :'u_r1pub1')
+    AND (SELECT employee_id = :e_r1vasile FROM public.profiles WHERE id = :'u_r1pub2'),
+  'R1-20 după confirmare, conturile sunt legate de fișele propuse');
+
+-- R1-21 (review, major) potrivirea se face pe emailul de LOGARE, nu pe profiles.email
+\set u_r1spoof 00000000-0000-4000-8000-0000000b0016
+INSERT INTO public.employees (name, department, active) VALUES ('VICTIMA SPOOF', 'Test', true) RETURNING id AS e_r1victima \gset
+SELECT teste.creeaza_cont('atacator@adromevolution.ro', :'u_r1spoof');
+SELECT teste.ca_utilizator(:'u_r1spoof');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET email = %L WHERE id = %L', 'spoof.victima@gazpet.ro', :'u_r1spoof'),
+  'R1-21 contul extern nu-și poate pune în profil emailul victimei', '42501');
+SELECT teste.ca_admin();
+UPDATE public.profiles SET email = 'spoof.victima@gazpet.ro' WHERE id = :'u_r1spoof';   -- nepotrivire moștenită (simulată ca admin)
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert((SELECT rezultat = 'email_diferit' AND email = 'atacator@adromevolution.ro' AND employee_id IS NULL
+                     FROM public.fn_cont_leaga_automat(true) WHERE profile_id = :'u_r1spoof'),
+  'R1-21 previzualizarea marchează „email_diferit” și arată emailul de LOGARE (nu pe cel falsificat)');
+SELECT teste.assert((SELECT rezultat = 'email_diferit' FROM public.fn_cont_leaga_automat(false) WHERE profile_id = :'u_r1spoof'),
+  'R1-21 aplicarea sare peste profilul cu email diferit');
+SELECT teste.assert((SELECT candidati = '[]'::jsonb AND email = 'atacator@adromevolution.ro' FROM public.v_admin_conturi_alerte
+                     WHERE id = 'fara_angajat:' || :'u_r1spoof'),
+  'R1-21 alerta fara_angajat: candidații și emailul vin din emailul de logare');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_r1spoof')
+    AND NOT EXISTS (SELECT 1 FROM public.profiles WHERE employee_id = :e_r1victima),
+  'R1-21 fișa victimei rămâne nelegată');
+
+-- R1-22 (review, major) numele de familie e obligatoriu în pasul pe nume
+INSERT INTO public.employees (name, department, active) VALUES ('IONESCU ANA MARIA', 'Test', true) RETURNING id AS e_r1anamaria \gset
+SELECT teste.assert((SELECT count(*) = 0 FROM public.fn_cont_candidati_angajat('ana.maria@gazpet.ro'))
+    AND (SELECT count(*) = 0 FROM public.fn_cont_candidati_angajat('maria.ana@gazpet.ro')),
+  'R1-22 ana.maria@ / maria.ana@ (doar prenume) → 0 candidați');
+SELECT teste.assert((SELECT count(*) = 1 AND min(employee_id) = :e_r1anamaria FROM public.fn_cont_candidati_angajat('ana.ionescu@gazpet.ro'))
+    AND (SELECT count(*) = 1 FROM public.fn_cont_candidati_angajat('ionescu.maria.ana@gazpet.ro')),
+  'R1-22 cu numele de familie (în orice ordine) → candidat unic');
+
+-- R1-23 (review, minor) două conturi nelegate cu același candidat unic → ambele „ambiguu”, nimic legat
+\set u_r1d1 00000000-0000-4000-8000-0000000b0017
+\set u_r1d2 00000000-0000-4000-8000-0000000b0018
+INSERT INTO public.employees (name, department, email, active) VALUES ('DUBLURA ION', 'Test', 'idublura.personal@gmail.com', true)
+  RETURNING id AS e_r1dublura \gset
+SELECT teste.creeaza_cont('ion.dublura@gazpet.ro', :'u_r1d1');
+SELECT teste.creeaza_cont('idublura.personal@gmail.com', :'u_r1d2');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert((SELECT count(*) = 2 AND bool_and(rezultat = 'ambiguu' AND employee_id = :e_r1dublura)
+                     FROM public.fn_cont_leaga_automat(true) WHERE profile_id IN (:'u_r1d1', :'u_r1d2')),
+  'R1-23 previzualizare: ambele conturi „ambiguu” (aceeași fișă propusă de 2 conturi)');
+SELECT teste.assert((SELECT count(*) = 2 AND bool_and(rezultat = 'ambiguu')
+                     FROM public.fn_cont_leaga_automat(false) WHERE profile_id IN (:'u_r1d1', :'u_r1d2')),
+  'R1-23 aplicare: tot „ambiguu”, identic cu previzualizarea');
+SELECT teste.ca_admin();
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.profiles WHERE employee_id = :e_r1dublura),
+  'R1-23 fișa nu s-a legat arbitrar de niciunul');
 
 -- ============================================================================
 -- R2 — contract închis → cont închis + jurnal + restaurare doar owner (migrarea 20260929d)
@@ -478,16 +572,16 @@ INSERT INTO public.employees (name, department, email, active) VALUES ('FARA DAT
 INSERT INTO public.employees (name, department, email, active) VALUES ('DATA VIITOR', 'Test', 'r2.viitor@gazpet.ro', true) RETURNING id AS e_r2fv \gset
 INSERT INTO public.employees (name, department, email, active) VALUES ('VIITOR CRON', 'Test', 'r2.viitorcron@gazpet.ro', true) RETURNING id AS e_r2v2 \gset
 INSERT INTO public.employees (name, department, email, active) VALUES ('EROARE INCHIDERE', 'Test', 'r2.eroare@gazpet.ro', true) RETURNING id AS e_r2err \gset
-SELECT teste.creeaza_cont('r2.ui@gazpet.ro', :'u_r2ui');
-SELECT teste.creeaza_cont('r2.toggle@gazpet.ro', :'u_r2tg');
-SELECT teste.creeaza_cont('r2.faradata@gazpet.ro', :'u_r2fd');
-SELECT teste.creeaza_cont('r2.viitor@gazpet.ro', :'u_r2fv');
-SELECT teste.creeaza_cont('r2.viitorcron@gazpet.ro', :'u_r2v2');
-SELECT teste.creeaza_cont('r2.eroare@gazpet.ro', :'u_r2err');
+SELECT teste.creeaza_cont_owner('r2.ui@gazpet.ro', :'u_r2ui');
+SELECT teste.creeaza_cont_owner('r2.toggle@gazpet.ro', :'u_r2tg');
+SELECT teste.creeaza_cont_owner('r2.faradata@gazpet.ro', :'u_r2fd');
+SELECT teste.creeaza_cont_owner('r2.viitor@gazpet.ro', :'u_r2fv');
+SELECT teste.creeaza_cont_owner('r2.viitorcron@gazpet.ro', :'u_r2v2');
+SELECT teste.creeaza_cont_owner('r2.eroare@gazpet.ro', :'u_r2err');
 SELECT teste.assert((SELECT count(*) = 6 FROM public.profiles
     WHERE (id, employee_id) IN ((:'u_r2ui', :e_r2ui), (:'u_r2tg', :e_r2tg), (:'u_r2fd', :e_r2fd), (:'u_r2fv', :e_r2fv),
                                 (:'u_r2v2', :e_r2v2), (:'u_r2err', :e_r2err))),
-  'R2 pregătire: cele 6 conturi s-au legat automat de fișele lor (R1)');
+  'R2 pregătire: cele 6 conturi (create pe calea de încredere) s-au legat automat de fișele lor (R1)');
 SELECT teste.da_acces(:'u_r2ui');
 SELECT teste.da_acces(:'u_r2fd');
 SELECT teste.da_acces(:'u_r2fv');
