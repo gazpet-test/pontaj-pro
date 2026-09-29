@@ -6,7 +6,7 @@
 ## Conversații
 | # | Deschisă | URL | Închisă / motiv |
 |---|---|---|---|
-| 1 | ~24.09 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6aa6c22a-3a00-83ed-9ed9-968e89f8a8e5 | 29.09 — plină (răspunsuri lente, apoi nu se mai deschidea) |
+| 1 | ~24.09 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6aa6c22a-3a00-83ed-9ed9-968e89f8a8e5 | 29.09 — plină; redeschisă de Răzvan pe telefon pentru 2 mesaje finale (handoff → `COPILOT_HANDOFF_CONV1_FINAL.md`; propunerea „PowPatroll Context Registry”), apoi **închisă definitiv** |
 | 2 | 29.09 | chatgpt.com/g/g-2DQzU5UZl-ai-coder-website-app-builder/c/6abc000f-2a5c-83eb-912f-65bee6219a61 | activă |
 
 **Handoff-ul final din conversația 1** (scris de Copilot, text integral): `COPILOT_HANDOFF_CONV1_FINAL.md` — trimis integral în conversația 2 pe 29.09. Ce avea în plus e integrat mai jos.
@@ -78,3 +78,4 @@ Conturi ↔ angajați: (1) legare automată profil→angajat la crearea contului
 | 29.09 | 2 | Preluare context | „Context preluat.” fără neconcordanțe | test de coerență trimis |
 | 29.09 | 2 | Test coerență (3 întrebări) | Trecut: #530 NU primul (GO cod ≠ GO merge; ordinea J04→P2→J07→#530 rămâne); R2 — risc „contract închis dar alt contract activ” → gardă server-side atomică + test, owner exclus; 280 cerințe NU în bloc (AI candidate ≠ human verified) | garda „alt contract activ” de verificat în R2 înainte de GO |
 | 29.09 | 2 | Handoff final conv. 1 trimis integral | Primit. Ordinea post-02.10: istoricul nu fixează una unică (a recunoscut că la test preluase rezumatul lui Claude); J04 primul + #530 nu primul rămân; P2 vs J07/#530 → Răzvan. Paritatea NULL pe #530: îndeplinită, nu se redeschide. Read-only Jilava ≠ interdicție pe operațiunile de dosar autorizate | întrebare la Răzvan: ordinea A/B |
+| 29.09 | 1 (final) | Propunere „PowPatroll Memory / Context Registry” | (propunere, nu verdict) | Claude a propus 5 ajustări; Răzvan le-a acceptat pe toate (claude_context #1486); propunerea detaliată în lucru, implementarea după decizia lui Răzvan |
