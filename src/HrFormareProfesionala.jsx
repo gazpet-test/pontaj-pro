@@ -8,6 +8,8 @@
 // Scadența = ultimul curs + 24 luni; fără niciun curs, termenul curge de la data angajării.
 // Certificatele de calificare din dosarele personale apar ca sugestie („📁 în dosar"), dar intră
 // în registru doar când omul confirmă (buton „↳ adaugă"): data unui certificat nu e automat un curs.
+// TKT-2026-0303 (30.09): la fel, cea mai recentă autorizație emisă (INSEMEX, RSVTI, ISCIR, SSM…) apare ca
+// sugestie „📜 autorizație" — tot cu confirmare; fișele medicale și permisele nu sunt cursuri.
 // Drepturi (RLS pe tabel): citire autentificați; scriere owner / can_modify_employees / superadmin /
 // departamentele HR și Administrativ — aceleași ca la autorizații.
 // ===========================================================================
@@ -57,6 +59,10 @@ const STARI = {
 }
 
 const FORM_GOL = { employeeIds:[], data_curs:'', tema:'', tip_autorizatie_id:'', furnizor:'', numar_certificat:'', durata_ore:'', observatii:'' }
+
+// Autorizații care nu vin dintr-un curs de formare (TKT-2026-0303)
+const CATEGORII_FARA_CURS = new Set(['medical', 'altele'])
+const nuEDinCurs = (a) => CATEGORII_FARA_CURS.has(a.tip_categorie) || /^(permis|card tahograf|declara)/i.test((a.tip_denumire || '').trim())
 
 export default function HrFormareProfesionala({ employees = [], autorizatii = [], tipuri = [], profile, canAccessPersonal = false, showToast }) {
   const [cursuri, setCursuri] = useState([])
@@ -116,6 +122,17 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
     }
     return m
   }, [autorizatii])
+  // TKT-2026-0303: cea mai recentă autorizație emisă (nu expirarea), ca sugestie de curs
+  const autDupaAngajat = useMemo(() => {
+    const m = {}, azi = isoAzi()
+    for (const a of autorizatii) {
+      if (!a.data_emitere || a.data_emitere > azi || nuEDinCurs(a)) continue
+      if (!m[a.employee_id] || a.data_emitere > m[a.employee_id].data)
+        m[a.employee_id] = { data: a.data_emitere, tip_id: a.tip_id, tip_denumire: a.tip_denumire, emitent: a.emitent,
+          numar: a.numar_autorizatie, fisier_nume: a.fisier_nume }
+    }
+    return m
+  }, [autorizatii])
   const numeTip = useMemo(() => Object.fromEntries(tipuri.map(t => [t.id, t.denumire])), [tipuri])
 
   const randuri = useMemo(() => {
@@ -125,14 +142,16 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
       const ultim = lista[0] || null
       const st = stareFormare(ultim?.data_curs, e.hire_date, azi)
       const dosar = dinDosar[e.id]
+      const aut = autDupaAngajat[e.id]
       return {
         e, ...imparteNume(e.name), lista, ultim, ...st,
         faraCurs: !ultim,
         calificari: [...(calificariDupaAngajat.get(e.id) || [])],
         dosar: dosar && (!ultim || dosar.data > ultim.data_curs) ? dosar : null,
+        autorizatie: aut && (!ultim || aut.data > ultim.data_curs) ? aut : null,
       }
     })
-  }, [employees, cursuriDupaAngajat, calificariDupaAngajat, dinDosar])
+  }, [employees, cursuriDupaAngajat, calificariDupaAngajat, dinDosar, autDupaAngajat])
 
   const numarare = useMemo(() => {
     const n = { toate: randuri.length, depasit:0, curand:0, in_termen:0, fara_date:0, fara_curs:0 }
@@ -160,6 +179,11 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
     const cal = dosar?.calificari?.length ? `Calificare ${dosar.calificari[0].toLowerCase()}` : ''
     setForm({ ...FORM_GOL, employeeIds, data_curs: dosar?.data || '', tema: cal,
       observatii: dosar?.fisier_nume ? `Din dosar: ${dosar.fisier_nume}` : '' })
+  }
+  const deschideFormAut = (employeeIds, aut) => {
+    setForm({ ...FORM_GOL, employeeIds, data_curs: aut.data, tema: aut.tip_denumire || '',
+      tip_autorizatie_id: aut.tip_id ? String(aut.tip_id) : '', furnizor: aut.emitent || '', numar_certificat: aut.numar || '',
+      observatii: `Din autorizația: ${aut.fisier_nume || aut.tip_denumire || ''}` })
   }
 
   const salveaza = async () => {
@@ -207,9 +231,10 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
       'Scadență următor curs': r.scadenta ? fmt(r.scadenta) : '',
       'Stare': STARI[r.stare].label + (r.faraCurs && r.stare !== 'fara_date' ? ' (fără curs în registru)' : ''),
       'În dosar (certificat)': r.dosar ? `${fmt(r.dosar.data)} — ${r.dosar.fisier_nume || ''}` : '',
+      'Autorizație recentă': r.autorizatie ? `${fmt(r.autorizatie.data)} — ${r.autorizatie.tip_denumire || ''}${r.autorizatie.emitent ? ` (${r.autorizatie.emitent})` : ''}` : '',
     }))
     const ws = XLSX.utils.json_to_sheet(rows)
-    ws['!cols'] = [{wch:18},{wch:22},{wch:20},{wch:36},{wch:12},{wch:12},{wch:32},{wch:24},{wch:14},{wch:26},{wch:44}]
+    ws['!cols'] = [{wch:18},{wch:22},{wch:20},{wch:36},{wch:12},{wch:12},{wch:32},{wch:24},{wch:14},{wch:26},{wch:44},{wch:44}]
     Object.keys(rows[0]).forEach((_, i) => {
       const cell = ws[XLSX.utils.encode_cell({ r: 0, c: i })]
       if (cell) cell.s = { font: { bold: true }, fill: { fgColor: { rgb: 'E8EEF7' } } }
@@ -240,6 +265,7 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
               Codul muncii art. 194 și CCM: fiecare angajat merge la un curs de formare/calificare cel puțin o dată la 2 ani.
               Scadența se calculează de la ultimul curs din registru; fără curs, de la data angajării.
               {canAccessPersonal && ' „📁 în dosar" = certificat de calificare găsit în dosarul personal — intră în registru doar dacă îl confirmi.'}
+              {' „📜 autorizație" = cea mai recentă autorizație emisă (ex. INSEMEX, RSVTI, ISCIR) — tot sugestie, intră în registru doar dacă o confirmi.'}
             </div>
           </div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
@@ -337,6 +363,12 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
                           <div style={{ fontSize:10.5, color:G.blue, marginTop:3 }} title={r.dosar.fisier_nume || ''}>
                             📁 în dosar: certificat {fmt(r.dosar.data)}
                             {canEdit && <button onClick={() => deschideForm([r.e.id], r.dosar)} style={{ marginLeft:6, padding:'0 6px', background:'transparent', border:`1px solid ${G.blue}55`, borderRadius:4, color:G.blue, fontSize:10, cursor:'pointer' }}>↳ adaugă</button>}
+                          </div>
+                        )}
+                        {r.autorizatie && (
+                          <div style={{ fontSize:10.5, color:G.purple, marginTop:3 }} title={r.autorizatie.fisier_nume || ''}>
+                            📜 autorizație: {r.autorizatie.tip_denumire} {fmt(r.autorizatie.data)}
+                            {canEdit && <button onClick={() => deschideFormAut([r.e.id], r.autorizatie)} style={{ marginLeft:6, padding:'0 6px', background:'transparent', border:`1px solid ${G.purple}55`, borderRadius:4, color:G.purple, fontSize:10, cursor:'pointer' }}>↳ adaugă</button>}
                           </div>
                         )}
                       </td>
