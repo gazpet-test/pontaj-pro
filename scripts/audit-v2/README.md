@@ -1,5 +1,7 @@
 # Harness audit V2
 
+**P2 / J06:** urmează [planul clonei 103](../../docs/AUDIT_OFERTARE_V2/P2_PLAN_RULARE.md). `--faza <nume>` selectează o singură probă. Implicit se selectează numai `cost_ai:false`; `--allow-ai` cere GO separat de buget și nu completează rețetele lipsă. UI_ONLY nu este MATCH pentru server. Helperul Storage cere acum același JWT `authenticated` ca verificatorul, fără `SUPABASE_KEY`/service_role. SDK-ul se încarcă numai la construirea clientului real, după validarea mediului; preview și testele mock rămân complet offline. Pentru toate testele Node din acest director este necesar Node 24 (aserțiuni native și opțiunea de izolare).
+
 Instrumente locale, fără dependențe noi. Node ≥22 (testat Node 24). Nu modifică aplicația, schema sau drepturile. Nicio rulare de aici nu acordă GO pentru clonare/live/cost AI.
 
 ## Ordinea de lucru pentru Claude

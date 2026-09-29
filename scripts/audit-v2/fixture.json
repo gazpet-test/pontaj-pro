@@ -21,15 +21,18 @@
       "faze": {
         "import_copie": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "inlocuire_acelasi_nume": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "document_lipsa": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -38,11 +41,13 @@
       "faze": {
         "citire_integrala": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "recitire_idempotenta": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         }
       }
     },
@@ -51,23 +56,28 @@
       "faze": {
         "extragere": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "confirmare_umana": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "corectie": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "reextragere_pastreaza_corectie": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "trunchiere_semnalata": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         }
       }
     },
@@ -76,23 +86,28 @@
       "faze": {
         "leaga_289": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "leaga_290": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "leaga_333": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "aplica_D1": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "clarificare_dupa_PT": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         }
       }
     },
@@ -101,23 +116,28 @@
       "faze": {
         "motor": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "alegere_umana": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "verificare_scan": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "AI_neverificata": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "retry_pastreaza_alegerea": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         }
       }
     },
@@ -126,15 +146,18 @@
       "faze": {
         "validare_partiala": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "revizie_F3": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "diferenta_blocheaza": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -143,19 +166,23 @@
       "faze": {
         "editare": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "inghetare": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "generare_PT": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "editare_dupa_PT": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -164,31 +191,38 @@
       "faze": {
         "generare": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "confirma_legaturi": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "verifica_D1": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "verifica_D6": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "verifica_D8": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "promisiune_peste_cerinta": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "editeaza_dupa_verificare": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -197,15 +231,18 @@
       "faze": {
         "verificare_finala": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "modificare_versiune": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "verdict_invalideaza": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -214,32 +251,43 @@
       "faze": {
         "pachet_incomplet": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "AI_neverificata_blocheaza": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "asamblare": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "upload_readback_hash": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "aprobare": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "semnare_poarta": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "modificare_fisier_dupa_aprobare": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
+      },
+      "context_ui": {
+        "tip": "select",
+        "selector": "css=select:has(option[value=\"103\"])"
       }
     },
     "11_depunere": {
@@ -247,19 +295,23 @@
       "faze": {
         "fara_dovada_SEAP": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "cu_depus_final_si_dovada": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "status_depusa": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "derogare_non_owner": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -268,15 +320,18 @@
       "faze": {
         "matrice_D1": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "matrice_D6": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         },
         "matrice_D8": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -292,7 +347,8 @@
           "pregatire": [],
           "pregatire_2": [],
           "actiuni_2": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -308,7 +364,8 @@
           "pregatire": [],
           "pregatire_2": [],
           "actiuni_2": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -324,7 +381,8 @@
           "pregatire": [],
           "pregatire_2": [],
           "actiuni_2": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": false
         }
       }
     },
@@ -333,15 +391,18 @@
       "faze": {
         "porneste_citire": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "dupa_restart": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         },
         "retry_idempotent": {
           "actiuni": [],
-          "postconditii": []
+          "postconditii": [],
+          "cost_ai": true
         }
       },
       "preconditii_reluare": []
@@ -349,7 +410,7 @@
   },
   "nr_anunt": "SANDBOX-V2-DOMNESTI",
   "context_ui": "Edge profil birou, CDP 9333, cont de test claude@gazpet.ro (10c105d3-536d-4ca6-b943-803592626909; is_owner=false, user_module_access ofertare:admin) — responsabilul clonei 103; al doilea context = alt tab/browser context cu același cont",
-  "ground_truth_json": "docs/AUDIT_OFERTARE_V2/dovezi/ground_truth_manifest_domnesti.txt (466 fișiere sha256; setul depus = 103/depus/* în storage, 81 obiecte)",
+  "ground_truth_json": null,
   "retete": {
     "01_seap_documente/import_copie": {
       "fisiere": null,
@@ -360,21 +421,25 @@
     "02_citire/citire_integrala": {
       "doc_id": null,
       "pagini": null,
-      "final_selector": null
+      "final_selector": null,
+      "selector": "text=☁️ Pe server",
+      "motiv_indisponibil": "Citirea poate costa AI; documentul și numărul de pagini integral citite trebuie stabilite din preview."
     },
     "03_cerinte/confirmare_umana": {
       "cerinta_id": 6656,
-      "actor_id": null,
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
       "confirma_selector": null,
-      "final_selector": null
+      "final_selector": null,
+      "motiv_indisponibil": "Cerința 6656 este identificată, dar butonul Confirm se repetă; lipsește selector unic de rând observat în DOM."
     },
     "03_cerinte/corectie": {
       "cerinta_id": null,
       "corectez_selector": null,
       "text_selector": null,
       "text": null,
-      "actor_id": null,
-      "final_selector": null
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
+      "final_selector": null,
+      "motiv_indisponibil": "Lipsesc textul corecției autorizate, selectorul unic al cerinței și starea inițială."
     },
     "04_clarificari/leaga_289": {
       "clarificare_id": null,
@@ -403,16 +468,18 @@
     "05_acoperire/alegere_umana": {
       "cerinta_id": 6656,
       "acoperire_id": null,
-      "actor_id": null,
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
       "alege_selector": null,
-      "final_selector": null
+      "final_selector": null,
+      "motiv_indisponibil": "Lipsesc ID-ul candidatului și selectorul unic; scanul trebuie citit de om înainte de confirmare."
     },
     "05_acoperire/verificare_scan": {
       "acoperire_id": null,
-      "actor_id": null,
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
       "fisier_path": null,
       "verifica_selector": null,
-      "final_selector": null
+      "final_selector": null,
+      "motiv_indisponibil": "Lipsesc ID-ul candidatului și selectorul unic; scanul trebuie citit de om înainte de confirmare."
     },
     "05_acoperire/AI_neverificata": {
       "cerinta_id": null,
@@ -432,36 +499,40 @@
     "07_grafic/inghetare": {
       "mod": null,
       "versiune_noua": null,
-      "actor_id": null,
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
       "are_activitati": null,
-      "final_selector": null
+      "final_selector": null,
+      "motiv_indisponibil": "Lipsesc modul, parametrii verificați, versiunea și dovada activităților existente. Nu ghicim confirmarea."
     },
     "08_pt/verifica_D1": {
       "legatura_id": null,
       "capitol_id": null,
       "versiune": null,
-      "actor_id": null,
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
       "locator": null,
       "verifica_selector": null,
-      "final_selector": null
+      "final_selector": null,
+      "motiv_indisponibil": "Verificarea răspunsului cere om, locator, ID legătură/capitol/versiune și selector unic de rând."
     },
     "08_pt/verifica_D6": {
       "legatura_id": null,
       "capitol_id": null,
       "versiune": null,
-      "actor_id": null,
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
       "locator": null,
       "verifica_selector": null,
-      "final_selector": null
+      "final_selector": null,
+      "motiv_indisponibil": "Verificarea răspunsului cere om, locator, ID legătură/capitol/versiune și selector unic de rând."
     },
     "08_pt/verifica_D8": {
       "legatura_id": null,
       "capitol_id": null,
       "versiune": null,
-      "actor_id": null,
+      "actor_id": "10c105d3-536d-4ca6-b943-803592626909",
       "locator": null,
       "verifica_selector": null,
-      "final_selector": null
+      "final_selector": null,
+      "motiv_indisponibil": "Verificarea răspunsului cere om, locator, ID legătură/capitol/versiune și selector unic de rând."
     },
     "08_pt/editeaza_dupa_verificare": {
       "capitol_id": null,
@@ -482,20 +553,16 @@
       "final_selector": null
     },
     "10_pachet/pachet_incomplet": {
-      "pachete_count": null
+      "selector": "text=🔏 Aprobă pachetul"
     },
     "10_pachet/AI_neverificata_blocheaza": {
       "pachete_count": null
     },
     "10_pachet/aprobare": {
-      "versiune_noua": null,
-      "actor_id": null,
-      "final_selector": null
+      "selector": "text=🔏 Aprobă pachetul"
     },
     "10_pachet/semnare_poarta": {
-      "versiune_noua": null,
-      "verdict_asteptat": null,
-      "final_selector": null
+      "selector": "text=📦 Semnează verdictul porții"
     },
     "11_depunere/fara_dovada_SEAP": {
       "pachet_id": null,
@@ -513,17 +580,22 @@
       "final_selector": null
     },
     "11_depunere/status_depusa": {
-      "status_asteptat": null,
-      "final_selector": null
+      "final_selector": "text=Eroare: BLOCAT LA DEPUNERE: lipseste pachetul PT in stare depus pentru licitatia 103."
     },
     "12_comparatie/matrice_D1": {
-      "verigi_asteptate": null
+      "verigi_asteptate": null,
+      "selector": "text=🔗 Lanțul dovezii · cerința #6607",
+      "motiv_indisponibil": "Titlul exact este demonstrat în UI; lipsesc ground truth JSON semantic și stările confirmate ale verigilor. Manifestul TXT nu este JSON."
     },
     "12_comparatie/matrice_D6": {
-      "verigi_asteptate": null
+      "verigi_asteptate": null,
+      "selector": "text=🔗 Lanțul dovezii · cerința #6656",
+      "motiv_indisponibil": "Titlul exact este demonstrat în UI; lipsesc ground truth JSON semantic și stările confirmate ale verigilor. Manifestul TXT nu este JSON."
     },
     "12_comparatie/matrice_D8": {
-      "verigi_asteptate": null
+      "verigi_asteptate": null,
+      "selector": "text=🔗 Lanțul dovezii · cerința #6552",
+      "motiv_indisponibil": "Titlul exact este demonstrat în UI; lipsesc ground truth JSON semantic și stările confirmate ale verigilor. Manifestul TXT nu este JSON."
     },
     "16_restart_worker/porneste_citire": {
       "actor_id": null,
@@ -533,6 +605,75 @@
       "doc_id": null,
       "pagini": null,
       "final_selector": null
+    },
+    "01_seap_documente/inlocuire_acelasi_nume": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "01_seap_documente/document_lipsa": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "02_citire/recitire_idempotenta": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "03_cerinte/extragere": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "03_cerinte/reextragere_pastreaza_corectie": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "03_cerinte/trunchiere_semnalata": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "04_clarificari/aplica_D1": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "04_clarificari/clarificare_dupa_PT": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "05_acoperire/motor": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "05_acoperire/retry_pastreaza_alegerea": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "06_cantitati/revizie_F3": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "07_grafic/editare": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "07_grafic/generare_PT": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "07_grafic/editare_dupa_PT": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "08_pt/generare": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "08_pt/confirma_legaturi": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "08_pt/promisiune_peste_cerinta": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "09_verificari/verificare_finala": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "09_verificari/verdict_invalideaza": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "10_pachet/asamblare": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "10_pachet/upload_readback_hash": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "10_pachet/modificare_fisier_dupa_aprobare": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
+    },
+    "11_depunere/derogare_non_owner": {
+      "motiv_indisponibil": "Traseul complet, selectorul unic sau postcondițiile aferente obiectului nu sunt demonstrate. Vezi RETETE_UI.md și P2_PLAN_RULARE.md."
     }
   },
   "clona": {
@@ -546,12 +687,12 @@
       "1285": "Fișa de date DF1279378",
       "1286": "LISTE CANTITATI zip (ignorat — contează ca esențial necitit în v_ofertare_seap_completitudine)",
       "1287": "PT.zip (ignorat)",
-      "1288-1294": "C6/C7/C8/C9/F1/F2/F3 fără valori (upload)",
       "1295": "PT/01 Parte scrisă",
       "1296": "PT/02 Parte desenată",
       "1297": "Răspuns consolidat 2 (15.09)",
       "1298": "Răspuns consolidat 1 (11.09)",
-      "1299": "Răspuns consolidat 3 (16.09)"
+      "1299": "Răspuns consolidat 3 (16.09)",
+      "1288-1294": "C6/C7/C8/C9/F1/F2/F3 fără valori (upload)"
     },
     "clarificari": {
       "67": "nr1 trimisa",
@@ -566,7 +707,9 @@
     "stare_porti_la_clonare": {
       "v_ofertare_seap_completitudine.blocaj": "1 document(e) esențiale … necitite (=1286 zip)",
       "ofertare_r5_blocaj_sursa": "lista_f3_nevalidate = 62",
-      "pachete": 0
+      "pachete": 0,
+      "nota_j06": "Specificația J06 descrie un document citit parțial; fixture-ul anterior descrie ZIP-ul 1286 necitit. Cauza exactă se recitește de operator din view; nu inventăm ID/pagini."
     }
-  }
+  },
+  "ground_truth_manifest_txt": "docs/AUDIT_OFERTARE_V2/dovezi/ground_truth_manifest_domnesti.txt (466 fișiere sha256; setul depus = 103/depus/* în storage, 81 obiecte)"
 }

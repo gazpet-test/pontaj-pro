@@ -10,6 +10,8 @@ import { salveazaJson, incarcaJson } from './dovezi.mjs'
 import { verdictAsertiuni, VERDICTE } from './asertiuni.js'
 import { comparaGroundTruth } from './comparatie.js'
 import { retete } from './retete.js'
+import { selecteazaFaze } from './costuri.js'
+import { verificaRefuzServer } from './refuz.js'
 import { VERIGI_AUXILIARE, eroriBlocante } from './rls.js'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -28,7 +30,7 @@ export async function snapshot(db, fixture, contract) {
   const lant = await verificaLant(db, fixture.licitatie_id, ids)
   const tabele = {}; const erori = {}; const eroriAuxiliare = {}
   await Promise.all([...new Set([...contract.tabele, 'ofertare_cerinte', 'ofertare_clarificari', 'ofertare_pt_capitole', 'ofertare_pt_pachet'])].map(async table => {
-    try { tabele[table] = await citesteTabel(db, table, 'licitatie_id', fixture.licitatie_id, table.endsWith('_coada') ? 'licitatie_id' : 'id') }
+    try { tabele[table] = await citesteTabel(db, table, 'licitatie_id', fixture.licitatie_id, (table.endsWith('_coada') || table.startsWith('v_')) ? 'licitatie_id' : 'id') }
     catch (e) {
       erori[table] = e.message
       if (VERIGI_AUXILIARE[table] && e.code === '42501') eroriAuxiliare[table] = e.message
@@ -116,16 +118,19 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
   const contract = contracte[pas]
   const fixturePath = args.includes('--fixture') ? args[args.indexOf('--fixture') + 1] : join(root, 'scripts/audit-v2/fixture.json')
   const fixture = retete(JSON.parse(await readFile(fixturePath, 'utf8')))
+  if (!contract) throw new Error('Scenariu invalid')
   const cfg = fixture.scenarii?.[pas] || {}
+  const selectie = selecteazaFaze(contract, cfg, args)
   if (!args.includes('--apply') || args.includes('--dry-run')) {
-    console.log(JSON.stringify({ mod: 'preview', pas, contract, configurat: cfg, mesaj: 'Nicio conexiune, nicio scriere. --apply numai după GO; fiecare fază cere acțiuni UI și aserțiuni concrete.' }, null, 2))
+    console.log(JSON.stringify({ mod: 'preview', pas, contract, ...selectie, configurat: cfg, mesaj: 'Nicio conexiune, nicio scriere. --apply numai după GO; fiecare fază cere acțiuni UI și aserțiuni concrete.' }, null, 2))
     return { verdict: 'UNDETERMINED', preview: true }
   }
   const dir = deps.dir || join(root, 'docs/AUDIT_OFERTARE_V2/dovezi', pas, new Date().toISOString().replace(/[:.]/g, '-'))
   await mkdir(dir, { recursive: true })
-  const raport = { pas, verdict: 'UNDETERMINED', faze: [], limite: [], inceput: new Date().toISOString() }
+  const raport = { pas, verdict: 'UNDETERMINED', faze: [], limite: [], inceput: new Date().toISOString(), ...selectie }
   const drivers = []; let db; let inainte
   try {
+    if (!selectie.selectate.length) throw new Error('Nicio fază fără AI selectată; fazele AI cer --allow-ai după GO de buget')
     db = deps.db || clientDinEnv()
     const lic = await citesteLicitatia(db, fixture.licitatie_id)
     verificaSandbox(lic, fixture) // ÎNAINTE de orice conexiune CDP / UI, inclusiv navigare.
@@ -168,14 +173,17 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
     }
     for (let i = start; i < contract.faze.length; i++) {
       const nume = contract.faze[i]; const phase = cfg.faze?.[nume]
+      if (!selectie.selectate.includes(nume)) continue
       if (!phase?.actiuni?.length || !phase.postconditii?.length) {
         raport.faze.push({ nume, verdict: 'UNDETERMINED', motiv: phase?.motiv_indisponibil || 'Acțiuni/selectori/postcondiții concrete necompletate' }); break
       }
       verificaSandbox(await citesteLicitatia(db, fixture.licitatie_id), fixture)
       for (const d of drivers) await verificaContextUI(d, lic, phase.context_ui || cfg.context_ui || fixture.context_ui)
       const before = contract.restart && start === 1 && i === 1 ? inainte : await snapshot(db, fixture, contract)
+      if (phase.preconditii?.length && verdictAsertiuni(phase.preconditii, before, before).verdict !== 'MATCH') throw new Error('Precondițiile fazei nu sunt îndeplinite')
       await salveazaJson(dir, `${i + 1}-${nume}-inainte`, before)
       await c.captura(join(dir, `${i + 1}-${nume}-inainte.png`))
+      const jurnalStart = c.jurnal().length
       const observatii = []
       if (contract.concurenta) {
         if (!phase.actiuni_2?.length || !phase.pregatire?.length || !phase.pregatire_2?.length) throw new Error('Concurența cere pregătire în ambele taburi și două liste de salvare')
@@ -193,7 +201,12 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
         rezultat.verdict = observatii.find(o => o.trece === false).la_esec
         rezultat.doarAuxiliare = false
       }
-      raport.faze.push({ nume, ...rezultat, observatii })
+      const cereri = c.jurnal().slice(jurnalStart)
+      if (rezultat.verdict === 'MATCH' && phase.refuz_server && !verificaRefuzServer(phase.refuz_server, cereri)) {
+        rezultat.verdict = 'UNDETERMINED'; rezultat.motiv = 'Lipsește cererea server respinsă și finalizată a acestei faze'
+      }
+      if (rezultat.verdict === 'MATCH' && phase.verdict_succes) rezultat.verdict = phase.verdict_succes
+      raport.faze.push({ nume, cost_ai: phase.cost_ai, ...rezultat, observatii, cereri, limita: phase.limita })
       if (contract.restart && i === 0) {
         await salveazaJson(dir, 'checkpoint', { pas, licitatie_id: fixture.licitatie_id,
           fixture_hash: createHash('sha256').update(JSON.stringify(fixture)).digest('hex'), snapshot_initial: `${i + 1}-${nume}-inainte`, snapshot_dupa_pornire: `${i + 1}-${nume}-dupa` })
@@ -204,7 +217,7 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
     }
     raport.verdict = raport.faze.find(p => p.verdict !== 'MATCH' && !p.doarAuxiliare)?.verdict
       || raport.faze.find(p => p.verdict !== 'MATCH')?.verdict
-      || (raport.faze.length === contract.faze.length - start && !raport.limite.length ? 'MATCH' : 'UNDETERMINED')
+      || (raport.faze.length === selectie.selectate.length - start && !raport.limite.length ? 'MATCH' : 'UNDETERMINED')
     raport.semnificatie = 'MATCH se referă strict la aserțiunile enumerate, nu certifică modulul sau întregul lanț.'
     if (pas === '06_cantitati') raport.limite.push('ofertare_r5_blocaj_sursa este funcție SQL, nu tabel. Verificatorul SELECT-only nu o apelează; blocarea se observă prin UI și read-back al stării pachetului.')
   } catch (e) {
