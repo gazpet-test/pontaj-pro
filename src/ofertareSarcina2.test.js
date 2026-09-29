@@ -7,6 +7,7 @@ import { campuriCantitatiNevalidate, controlCantitatiGrafic, controlFronturiGraf
   randuriLipsa, stareSursa, textCantitatiPeUnitati, textLipsa } from './ofertareCantitatiAprobare.js'
 import { controlCantitati } from './ofertareControale.js'
 import { evalueazaPoarta } from './ofertarePoarta.js'
+import { SERVER_OK } from '../test-fixtures/jakv2p3/poarta.mjs'
 
 const R = (id, den, m, status = 'validat', um = 'm') => ({ id, obiect: null, categorie: 'Conducte și montaj', denumire: den, um, cantitate: m, cantitate_plansa: m, status, diferenta_nota: null, sursa: 'Memoriu' })
 // lic. 3: rețeaua de memoriu, TOATE validate (0 rânduri nevalidate)
@@ -126,7 +127,7 @@ import { controlSursaAprobareFinala } from './ofertarePoarta.js'
 import { RESTANTE, restantePeTip as restPeTip, textRestante } from './ofertareTransferRestante.js'
 import { readFileSync } from 'node:fs'
 // poarta propunerii „verde” (toate celelalte rânduri ok) — ca în ofertarePoarta.test.js
-const VERDE = { capitole: 5, fara_capitol: 0, de_raspuns: 10, cu_capitol: 10, cerinte_neverificate: 0, cerinte_neconfirmate_cu_capitol: 0,
+const VERDE = { poarta_server: SERVER_OK, capitole: 5, fara_capitol: 0, de_raspuns: 10, cu_capitol: 10, cerinte_neverificate: 0, cerinte_neconfirmate_cu_capitol: 0,
   documentatie_verificata: true, documentatie_blocaj: null, capcane: 0, capcane_descoperite: 0, capitole_goale: 0, capitole_nu_e_cazul: 0,
   afirmatii: 3, afirmatii_blocante: 0, afirmatii_de_verificat: 0, capitole_nescrise_de_om: 0, observatii_deschise: 0, documente: 4, documente_necitite: 0,
   grafic_versiune: 1, grafic_avertismente: 0, lista_f3_m: 700, grafic_fronturi_m: 700 }

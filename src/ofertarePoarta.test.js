@@ -3,9 +3,11 @@
 // business pe care poarta a promis-o — daca un test pica, cineva a schimbat o promisiune.
 import { describe, it, expect } from 'vitest'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
+import { SERVER_OK } from '../test-fixtures/jakv2p3/poarta.mjs'
 
 // Un rand de v_ofertare_pt_stare cu TOTUL verde. Fiecare test strica exact un lucru.
 const VERDE = {
+  poarta_server: SERVER_OK,
   capitole: 5, capitole_goale: 0, capitole_nu_e_cazul: 0, capitole_nescrise_de_om: 0,
   de_raspuns: 10, de_forma: 2, cu_capitol: 10, fara_capitol: 0, inchise_cu_dovada: 0,
   capcane: 0, capcane_descoperite: 0,
@@ -40,9 +42,10 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
   it('st null = se incarca: intoarce null, NU un array gol (verdele fals din lipsa de date)', () => {
     expect(evalueazaPoarta(null)).toBeNull()
   })
-  it('tot verde -> ok, fara blocaje, fara rezerve', () => {
+  it('controale trecute -> fără blocaje; H1 așteaptă decizia și nu dă verde', () => {
     const ev = cu({})
-    expect(ev.stare).toBe('ok'); expect(ev.blocaje).toEqual([]); expect(ev.rezerve).toEqual([])
+    expect(ev.stare).toBe('warn'); expect(ev.blocaje).toEqual([])
+    expect(ev.rezerve).toHaveLength(1); expect(ev.rezerve[0]).toContain('BUSINESS_DECISION_REQUIRED')
   })
 
   describe('BLOCANTE — fapte, nu interpretari', () => {
@@ -94,7 +97,7 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
     it('"nu este cazul" -> warn (unele autoritati il interzic, altele nu)', () => expect(cu({ capitole_nu_e_cazul: 1 }).stare).toBe('warn'))
     it('rezervele sunt texte gata de pus in mesajul semnaturii', () => {
       const ev = cu({ observatii_deschise: 1 })
-      expect(ev.rezerve).toHaveLength(1); expect(ev.rezerve[0]).toMatch(/observa/i)
+      expect(ev.rezerve).toHaveLength(2); expect(ev.rezerve[0]).toMatch(/observa/i)
     })
   })
 
@@ -122,13 +125,16 @@ describe('evalueazaPoarta — o singura sursa de adevar', () => {
   })
 
   describe('verdictSemnatura — un singur loc decide verde/galben', () => {
-    it('ok -> verde', () => expect(verdictSemnatura(cu({}))).toBe('verde'))
+    it('ok -> verde (contract); H1 în așteptare păstrează poarta galbenă', () => {
+      expect(verdictSemnatura({ stare: 'ok' })).toBe('verde')
+      expect(verdictSemnatura(cu({}))).toBe('galben')
+    })
     it('orice rezerva -> galben; "galben" NU inseamna gata de depus (P0.2)', () => expect(verdictSemnatura(cu({ observatii_deschise: 1 }))).toBe('galben'))
   })
 
-  it('toate cele 23 de randuri ale portii sunt prezente, in ordinea afisata (R5 reparația rundei 1: + „sursa_cantitati” — aprobarea finală)', () => {
+  it('toate cele 24 de rânduri sunt prezente, inclusiv verdictul serverului J07', () => {
     expect(cu({}).randuri.map(r => r.k)).toEqual(
-      ['cuprins','fara','neverificate','neconfirmate','documentatie','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','sursa_cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii'])
+      ['cuprins','fara','neverificate','neconfirmate','documentatie','capcane','goale','nu_e_cazul','conformitate','nescrise','observatii','docs','grafic','cantitati','sursa_cantitati','garantie','anexe','identitate','numere','participare', 'pachet', 'grafic_sursa', 'grafic_relatii', 'server'])
   })
 })
 

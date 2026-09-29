@@ -9,6 +9,9 @@ on:
       - 'supabase/functions/ofertare-**'
       - 'supabase/functions/_shared/**'
       - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
+      - 'supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3*.sql'
+      - 'test-fixtures/jakv2p3/**'
+      - 'scripts/test-jakv2p3.mjs'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -30,6 +33,9 @@ on:
       - 'supabase/functions/ofertare-**'
       - 'supabase/functions/_shared/**'
       - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
+      - 'supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3*.sql'
+      - 'test-fixtures/jakv2p3/**'
+      - 'scripts/test-jakv2p3.mjs'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -63,6 +69,8 @@ jobs:
         run: npx vitest run src/ofertare src/grafic src/Ofertare api/_poartaOfertare.test.js
       - name: Regresie R5-R9b fara dependente
         run: node --test scripts/test-r5-r9b.mjs
+      - name: Poarta J07 - paritate UI si Edge
+        run: node --test scripts/test-jakv2p3.mjs
 
   deno:
     runs-on: ubuntu-latest
@@ -83,6 +91,7 @@ jobs:
           supabase/functions/ofertare-plansa-citeste
           supabase/functions/ofertare-clarificari-propune
           supabase/functions/ofertare-document-nou-citeste
+          supabase/functions/ofertare-poarta-text
           worker/ofertare/plansa_test.ts
 
   postgres:
@@ -158,3 +167,12 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/jakv205_test_ci
           PGPASSWORD: postgres
         run: node scripts/pg/test_jakv205_derogare_audit.mjs
+      - name: Creeaza baza goala pt J07 P3
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv2p3_test_ci;'
+      - name: Poarta server J07 - controale, invalidare si regresii
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv2p3_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv2p3_poarta_server.mjs

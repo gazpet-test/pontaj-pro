@@ -15,6 +15,7 @@
 
 import { controlCantitati, controlGarantie, controlAnexe, controlIdentitate, controlNumereCheie, controlParticipare, controlPachetComplet, controlRelatiiGrafic, controlGraficSursa } from './ofertareControale.js'
 import { textRestante } from './ofertareTransferRestante.js'
+import { randPoartaServer } from './ofertarePoartaServer.js'
 
 // st = un rând din v_ofertare_pt_stare. null = încă se încarcă.
 // Întoarce null cât timp st e null: un array gol de rânduri ar însemna „nimic de blocat",
@@ -179,7 +180,8 @@ export function evalueazaPoarta(st) {
   r.push({ k: h5.k, titlu: 'Trimiterile din text — anexe, formulare, capitole existente', stare: h5.stare, detalii: h5.detalii })
   // H1: numele altei lucrări rămas în text (copy-paste de la altă ofertă).
   const h1 = controlIdentitate(st)
-  r.push({ k: h1.k, titlu: 'Identitatea lucrării — nume din alte licitații', stare: h1.stare, detalii: h1.detalii })
+  r.push({ k: h1.k, titlu: 'Identitatea lucrării — nume din alte licitații', stare: 'warn',
+    cod: 'BUSINESS_DECISION_REQUIRED', detalii: h1.detalii + ' · BUSINESS_DECISION_REQUIRED — fără enforcement până la decizia lui Răzvan' })
   // H6: același număr de branșamente / racorduri peste tot (Hoghilag: 372 vs 371).
   const h6 = controlNumereCheie(st)
   r.push({ k: h6.k, titlu: 'Numerele cheie — branșamente și racorduri', stare: h6.stare, detalii: h6.detalii })
@@ -197,6 +199,7 @@ export function evalueazaPoarta(st) {
   const h11 = controlRelatiiGrafic(st)
   r.push({ k: h11.k, titlu: 'Graficul — relațiile declarate vs datele declarate', stare: h11.stare, detalii: h11.detalii })
 
+  r.push(randPoartaServer(st))
   const blocaje = r.filter(x => x.stare === 'block')
   const rezerve = r.filter(x => x.stare === 'warn')
   return {
