@@ -35,3 +35,13 @@ Cu un singur loc de evaluare pe server, UI-ul nu mai poate spune altceva decât 
 - UI-ul (`evalueazaPoarta`) afișează rezultatul serverului, nu îl recalculează (un singur adevăr). Testele de paritate: M01.
 
 Nimic din J07 nu se aplică înainte de 02.10 (Jilava).
+
+## Verdict Copilot (29.09): P3 clasificare GO; J07 design GO cu condiții
+- Regula „block UI ⇒ BLOCK server” e valabilă aici fiindcă cele 12 controale participă la verdictul de aprobare/depunere. Nu e principiu general.
+- `ofertare_poarta_server()` **fără apel de rețea**: citește doar rezultate persistate.
+- Un rezultat textual e legat de `control_code` + `parser_version` + hash-ul exact al sursei. Dacă se schimbă capitolul sau parserul, rezultatul devine invalid.
+- Lipsă / stale / eroare de parser ⇒ **UNDETERMINED ⇒ BLOCK** la aprobare/depunere.
+- Invalidare: o schimbare în amonte retrage sau face stale un verde existent. `neverificate` și `grafic_sursa`: BLOCK acum + INVALIDATE la schimbarea bazei.
+- H9: J07 acoperă doar relația opis → fișier efectiv. Hash-ul rămâne la J04 (nu se dublează).
+- Nu monolit: funcție agregatoare, dar fiecare control identificabil și testabil separat.
+- **H1 identitate = BUSINESS_DECISION_REQUIRED** (azi WARN; server enforcement: none; nu poate contribui la verde) până decide Răzvan.
