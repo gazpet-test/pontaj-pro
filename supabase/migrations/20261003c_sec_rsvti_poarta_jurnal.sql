@@ -1,5 +1,5 @@
 -- ============================================================================
--- SEC RSVTI (P1 / constatarea (1) din docs/SECURITATE_ADVISORS_2026-09-30.md) — 03.10.2026
+-- SEC RSVTI (P1 / constatarea (1) din docs/SECURITATE_ADVISORS_2026-09-30.md) — 03.10.2026, runda 2 (30.09)
 -- Poarta pe confirm_hr_autorizatie_rsvti + jurnalul hr_autorizatii_rsvti_confirmari, TRATATE ÎMPREUNĂ.
 --
 -- ⚠ NEAPLICAT. Se aplică doar după GO Copilot pe revizie + acordul explicit al lui Răzvan
@@ -13,27 +13,33 @@
 --     cu orice confirmat_de / date / scadență.
 --
 -- Ce face:
---   1. fn_poate_scrie_hr_autorizatii() — SURSA UNICĂ DE ADEVĂR pentru „cine scrie autorizații HR”:
---      predicat IDENTIC cu politica hr_autorizatii_write_authorized (verificat în precondiții: textul
---      politicii live și faptul că e singura politică de scriere pe hr_autorizatii). Nu schimbă dreptul nimănui.
+--   0. Precondiții fail-closed (§0) și postcondiții (§4): politica sursă și exclusivitatea ei pe hr_autorizatii;
+--      setul EXACT de triggere pe profiles (4, cu md5); RPC-ul = varianta live sau cea din acest patch;
+--      jurnalul: RLS activ și EXACT o politică de scriere (cea de azi sau, la reaplicare, cea din acest patch).
+--   1. fn_poate_scrie_hr_autorizatii() — sursa unică a PORȚII RSVTI (cine confirmă o viză prin RPC și cine
+--      inserează direct în jurnal): predicat IDENTIC cu politica hr_autorizatii_write_authorized (verificat în
+--      precondiții). Nu schimbă dreptul nimănui. NU descrie toate căile de scriere în hr_autorizatii:
+--      fn_hr_autorizatie_propunere_accepta (acceptarea propunerilor AI) are poarta ei și nu atinge rsvti_*.
 --   2. confirm_hr_autorizatie_rsvti — același contract (semnătură, tip returnat, efecte), plus:
 --      a) poarta, ÎNAINTE de orice citire/scriere: identitate explicită = sub-ul JWT rezolvat la un profil
 --         care trece fn_poate_scrie_hr_autorizatii(); fără identitate (auth.uid() NULL: service_role,
 --         conexiune directă, claims golite) ⇒ REFUZ 42501 — nicio decizie „uid NULL ⇒ sistem” (model S-A);
 --      b) regula datei: p_data_confirmare = data confirmării EFECTUATE (UI: „Data ultimei vize”, HR.jsx
 --         ~L2005, și „data confirmării vizei”, ~L2108) ⇒ nu în viitor (> azi în Europe/Bucharest,
---         independent de TimeZone-ul sesiunii) și nu înainte de data_emitere (dacă e completată);
+--         independent de TimeZone-ul sesiunii), o zi reală (finită, ≥ 2000-01-01) și nu înainte de
+--         data_emitere (dacă e completată); NULL explicit = azi în Europe/Bucharest (aceeași referință);
 --      c) scadența următoarei confirmări se calculează AICI din tipul autorizației (neschimbat);
 --         apelantul nu o poate trimite (semnătura nu are un astfel de parametru).
 --   3. Jurnalul:
---      a) politica INSERT (orice cont logat) → înlocuită cu una pe aceeași sursă de adevăr + atribuire:
+--      a) politica INSERT (orice cont logat) → înlocuită cu una pe aceeași poartă + atribuire:
 --         confirmat_de = cel care inserează (nu se mai poate semna în numele altcuiva);
 --      b) REVOKE UPDATE, DELETE de la anon și authenticated: azi NU există politici UPDATE/DELETE, deci
 --         RLS le refuză deja (0 rânduri) — REVOKE-ul nu schimbă niciun comportament, doar închide GRANT-ul;
 --      c) REVOKE INSERT de la anon: nu există politică INSERT pentru anon (RLS refuză deja).
 --   RPC-ul scrie în continuare (proprietar postgres, ocolește RLS) — calea legitimă a UI-ului rămâne.
 --
--- Revenire: …_ROLLBACK.sql = rollback TEHNIC (redeschide gaura; doar la cererea explicită a lui Răzvan).
+-- Revenire: …_ROLLBACK.sql = rollback TEHNIC, ARMAT (SET LOCAL propriu) și cu precondiții (starea = exact
+--           acest patch); redeschide gaura — doar la cererea explicită a lui Răzvan.
 --           Revenirea operațională (păstrează poarta): docs/SECURITATE_PATCH_RSVTI.md §6.
 -- ============================================================================
 
@@ -44,6 +50,7 @@ DO $pre$
 DECLARE
   v_pol record;
   v_n   integer;
+  v_ok  integer;
   v_md5 text;
 BEGIN
   -- 0a. politica sursă: textul analizat, ALL, authenticated, permisivă
@@ -57,34 +64,59 @@ BEGIN
      OR md5(regexp_replace(v_pol.with_check, '\s+', ' ', 'g')) <> 'cc78b7fd25efb09a9a572d7b6d8f554b' THEN
     RAISE EXCEPTION 'Precondiție: hr_autorizatii_write_authorized s-a schimbat față de analiza din 29.09 — fn_poate_scrie_hr_autorizatii() n-ar mai fi identică; se reanalizează';
   END IF;
-  -- 0b. e SINGURA politică prin care se scrie în hr_autorizatii (altfel „sursa unică” ar fi incompletă)
+  -- 0b. e SINGURA politică prin care se scrie în hr_autorizatii (altfel poarta n-ar mai fi „aceeași regulă”)
   SELECT count(*) INTO v_n FROM pg_policies
    WHERE schemaname = 'public' AND tablename = 'hr_autorizatii' AND cmd IN ('ALL', 'INSERT', 'UPDATE', 'DELETE');
   IF v_n <> 1 THEN
     RAISE EXCEPTION 'Precondiție: hr_autorizatii are % politici de scriere (așteptat 1)', v_n;
   END IF;
-  -- 0c. sursa drepturilor nu se poate autoatribui: is_owner/role (prevent_role_escalation),
-  --     can_modify_employees (enforce_owner_only_salary_flags), department (S-A, live din 29.09 20:21 UTC)
-  SELECT count(*) INTO v_n
-    FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
-   WHERE t.tgrelid = 'public.profiles'::regclass AND NOT t.tgisinternal AND t.tgenabled = 'O'
-     AND ((t.tgname = 'prevent_role_escalation_trigger'     AND p.prosrc LIKE '%OLD.role IS DISTINCT FROM NEW.role%'
-                                                             AND p.prosrc LIKE '%OLD.is_owner IS DISTINCT FROM NEW.is_owner%')
-       OR (t.tgname = 'trg_enforce_owner_only_salary_flags' AND p.prosrc LIKE '%NEW.can_modify_employees := OLD.can_modify_employees%')
-       OR (t.tgname = 'trg_profiles_campuri_owner_only'     AND p.prosrc LIKE '%NEW.department%IS DISTINCT FROM OLD.department%'));
-  IF v_n <> 3 THEN
-    RAISE EXCEPTION 'Precondiție: protecțiile pe profiles (role/is_owner, can_modify_employees, department/S-A) nu sunt toate active (%/3) — poarta s-ar putea ocoli prin autoatribuire', v_n;
+  -- 0c. sursa drepturilor nu se poate autoatribui: setul EXACT de triggere pe profiles (live PG17, citit 29.09):
+  --     4 triggere BEFORE UPDATE FOR EACH ROW (tgtype 19), activate, fără WHEN/listă de coloane, cu corpurile
+  --     analizate — is_owner/role (prevent_role_escalation), can_modify_employees (enforce_owner_only_salary_flags),
+  --     department (S-A), can_access_pontaj_brut. Un trigger în plus (de ex. unul care scrie department dintr-un
+  --     câmp editabil, sortat după S-A), unul lipsă, dezactivat sau cu alt corp ⇒ refuz.
+  SELECT count(*) INTO v_n FROM pg_trigger t WHERE t.tgrelid = 'public.profiles'::regclass AND NOT t.tgisinternal;
+  SELECT count(*) INTO v_ok
+    FROM pg_trigger t
+    JOIN pg_proc p ON p.oid = t.tgfoid
+    JOIN (VALUES ('prevent_role_escalation_trigger',     'prevent_role_escalation',         '16112659be92143e6539ae0e54e47a06'),
+                 ('trg_enforce_owner_only_salary_flags', 'enforce_owner_only_salary_flags', '0470660c0a819981ff914355c7f6d00a'),
+                 ('trg_profiles_campuri_owner_only',     'fn_profiles_campuri_owner_only',  'c06d7ce0f212c7bba2093c50614a88fc'),
+                 ('trg_protect_can_access_pontaj_brut',  'protect_can_access_pontaj_brut',  'ff277c90e02ef03d1efb34cd7e87b1d4'))
+         AS x(tg, fn, m)
+      ON t.tgname = x.tg AND p.proname = x.fn AND md5(p.prosrc) = x.m
+   WHERE t.tgrelid = 'public.profiles'::regclass AND NOT t.tgisinternal
+     AND t.tgenabled = 'O' AND t.tgtype = 19 AND t.tgqual IS NULL AND t.tgattr::text = ''
+     AND p.pronamespace = 'public'::regnamespace AND p.pronargs = 0 AND p.prosecdef
+     AND p.proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(p.proowner) = 'postgres';
+  IF v_n <> 4 OR v_ok <> 4 THEN
+    RAISE EXCEPTION 'Precondiție: triggerele de pe profiles nu sunt exact cele 4 analizate (% triggere, % conforme din 4) — sursa drepturilor porții s-ar putea autoatribui; se reanalizează', v_n, v_ok;
   END IF;
   -- 0d. RPC-ul e cel analizat (live 29.09) sau deja cel din acest patch (reaplicare)
   SELECT md5(prosrc) INTO v_md5 FROM pg_proc
    WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure;
-  IF v_md5 NOT IN ('527c0e4708dfe1f88cec03a77b6a26dd', '49a9d3a7fb8f30d9cb043db25f97f57f') THEN
+  IF v_md5 NOT IN ('527c0e4708dfe1f88cec03a77b6a26dd', '42e0528ed5af58c0cccc7b801aef4193') THEN
     RAISE EXCEPTION 'Precondiție: confirm_hr_autorizatie_rsvti diferă de versiunea analizată (md5 %)', v_md5;
+  END IF;
+  -- 0e. jurnalul: RLS activ și EXACT o politică de scriere — cea de azi sau (reaplicare) cea din acest patch.
+  --     Politicile permisive se adună cu OR: una în plus ar lăsa falsificarea deschisă și după migrare.
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.hr_autorizatii_rsvti_confirmari'::regclass) THEN
+    RAISE EXCEPTION 'Precondiție: RLS nu e activ pe hr_autorizatii_rsvti_confirmari';
+  END IF;
+  SELECT count(*) INTO v_n FROM pg_policies
+   WHERE schemaname = 'public' AND tablename = 'hr_autorizatii_rsvti_confirmari' AND cmd IN ('ALL', 'INSERT', 'UPDATE', 'DELETE');
+  SELECT count(*) INTO v_ok FROM pg_policies
+   WHERE schemaname = 'public' AND tablename = 'hr_autorizatii_rsvti_confirmari'
+     AND cmd = 'INSERT' AND permissive = 'PERMISSIVE' AND roles::text = '{authenticated}' AND qual IS NULL
+     AND ((policyname = 'hr_autorizatii_rsvti_confirmari_insert_authenticated' AND md5(with_check) = 'dc71e447411e7aaf354179a11ad2e2ae')
+       OR (policyname = 'hr_autorizatii_rsvti_confirmari_insert_autorizat'     AND md5(with_check) = '780014ba883836d16ffb7a014c7430c6'));
+  IF v_n <> 1 OR v_ok <> 1 THEN
+    RAISE EXCEPTION 'Precondiție: jurnalul are % politici de scriere (% recunoscute) — așteptat exact 1: cea de azi sau cea din acest patch; se reanalizează', v_n, v_ok;
   END IF;
 END $pre$;
 
 -- ---------------------------------------------------------------------------
--- 1. Sursa unică de adevăr: cine scrie autorizații HR (= hr_autorizatii_write_authorized)
+-- 1. Poarta RSVTI: cine confirmă vize / inserează în jurnal (= hr_autorizatii_write_authorized)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.fn_poate_scrie_hr_autorizatii()
 RETURNS boolean
@@ -105,7 +137,7 @@ $fn$;
 REVOKE ALL ON FUNCTION public.fn_poate_scrie_hr_autorizatii() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_poate_scrie_hr_autorizatii() TO authenticated, service_role;
 COMMENT ON FUNCTION public.fn_poate_scrie_hr_autorizatii() IS
-  'SEC RSVTI 03.10.2026: sursa unică pentru „cine scrie autorizații HR” — predicat identic cu politica hr_autorizatii_write_authorized (owner, can_modify_employees, superadmin, department HR/Administrativ). Fără identitate (auth.uid() NULL) ⇒ false.';
+  'SEC RSVTI 03.10.2026: poarta RSVTI — cine confirmă o viză prin confirm_hr_autorizatie_rsvti și cine inserează direct în hr_autorizatii_rsvti_confirmari. Predicat identic cu politica hr_autorizatii_write_authorized (owner, can_modify_employees, superadmin, department HR/Administrativ). Nu e sursa tuturor scrierilor în hr_autorizatii: fn_hr_autorizatie_propunere_accepta are poarta ei. Fără identitate (auth.uid() NULL) ⇒ false.';
 
 -- ---------------------------------------------------------------------------
 -- 2. RPC-ul: poartă + regula datei; scadența calculată aici
@@ -120,15 +152,15 @@ declare
   v_aut public.hr_autorizatii%rowtype;
   v_tip public.hr_autorizatii_tipuri%rowtype;
   v_user uuid := auth.uid();
-  -- data confirmării EFECTUATE (nu scadența); NULL explicit = azi, ca înainte
-  v_data date := coalesce(p_data_confirmare, current_date);
   -- „azi” pentru o firmă din România, independent de TimeZone-ul sesiunii (UTC în producție)
   v_azi  date := (now() at time zone 'Europe/Bucharest')::date;
+  -- data confirmării EFECTUATE (nu scadența); NULL explicit = azi în Europe/Bucharest, aceeași referință ca limita
+  v_data date := coalesce(p_data_confirmare, v_azi);
   v_next date;
   v_row public.hr_autorizatii_rsvti_confirmari%rowtype;
 begin
   -- (a) Poarta — înainte de orice citire/scriere. Identitate explicită: sub-ul JWT al unui profil cu drept
-  --     (aceeași sursă ca politica hr_autorizatii_write_authorized). Fără identitate ⇒ refuz, nu „sistem”.
+  --     (aceeași regulă ca politica hr_autorizatii_write_authorized). Fără identitate ⇒ refuz, nu „sistem”.
   if v_user is null or not public.fn_poate_scrie_hr_autorizatii() then
     raise exception 'Nu ai dreptul să confirmi viza RSVTI (doar HR/Administrativ, owner, superadmin sau can_modify_employees)'
       using errcode = '42501';
@@ -151,9 +183,13 @@ begin
     raise exception 'Tipul de autorizatie nu necesita confirmare RSVTI';
   end if;
 
-  -- (b) Regula datei: o confirmare efectuată nu poate fi în viitor și nici înainte de emiterea autorizației
+  -- (b) Regula datei: o confirmare efectuată e o zi reală, trecută sau de azi, și nu precede emiterea autorizației
   if v_data > v_azi then
     raise exception 'Data confirmării (%) nu poate fi în viitor (azi: %)', v_data, v_azi
+      using errcode = '22023';
+  end if;
+  if not isfinite(v_data) or v_data < date '2000-01-01' then
+    raise exception 'Data confirmării (%) nu e plauzibilă: minimul acceptat e 2000-01-01', v_data
       using errcode = '22023';
   end if;
   if v_aut.data_emitere is not null and v_data < v_aut.data_emitere then
@@ -197,10 +233,10 @@ $function$;
 REVOKE ALL ON FUNCTION public.confirm_hr_autorizatie_rsvti(bigint, date, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.confirm_hr_autorizatie_rsvti(bigint, date, text) TO authenticated, service_role;
 COMMENT ON FUNCTION public.confirm_hr_autorizatie_rsvti(bigint, date, text) IS
-  'SEC RSVTI 03.10.2026: poartă fn_poate_scrie_hr_autorizatii() (42501), dată confirmare efectuată ≤ azi (Europe/Bucharest) și ≥ data_emitere (22023); scadența = data + interval_confirmare_rsvti_luni al tipului (implicit 6).';
+  'SEC RSVTI 03.10.2026: poartă fn_poate_scrie_hr_autorizatii() (42501); data confirmării EFECTUATE: finită, între 2000-01-01 și azi (Europe/Bucharest), ≥ data_emitere (22023); NULL = azi (Europe/Bucharest). Scadența = data + interval_confirmare_rsvti_luni al tipului (implicit 6), calculată aici.';
 
 -- ---------------------------------------------------------------------------
--- 3. Jurnalul: aceeași sursă de adevăr la INSERT direct; fără UPDATE/DELETE din API
+-- 3. Jurnalul: aceeași poartă la INSERT direct; fără UPDATE/DELETE din API
 -- ---------------------------------------------------------------------------
 DROP POLICY IF EXISTS hr_autorizatii_rsvti_confirmari_insert_authenticated ON public.hr_autorizatii_rsvti_confirmari;
 DROP POLICY IF EXISTS hr_autorizatii_rsvti_confirmari_insert_autorizat ON public.hr_autorizatii_rsvti_confirmari;
@@ -208,7 +244,38 @@ CREATE POLICY hr_autorizatii_rsvti_confirmari_insert_autorizat ON public.hr_auto
   FOR INSERT TO authenticated
   WITH CHECK ((SELECT public.fn_poate_scrie_hr_autorizatii()) AND confirmat_de = (SELECT auth.uid()));
 COMMENT ON POLICY hr_autorizatii_rsvti_confirmari_insert_autorizat ON public.hr_autorizatii_rsvti_confirmari IS
-  'SEC RSVTI 03.10.2026: INSERT direct doar pentru cine scrie autorizații HR (fn_poate_scrie_hr_autorizatii) și doar în nume propriu. Calea normală rămâne RPC-ul confirm_hr_autorizatie_rsvti.';
+  'SEC RSVTI 03.10.2026: INSERT direct doar pentru cine trece poarta RSVTI (fn_poate_scrie_hr_autorizatii) și doar în nume propriu. Calea normală rămâne RPC-ul confirm_hr_autorizatie_rsvti.';
 
 REVOKE UPDATE, DELETE ON public.hr_autorizatii_rsvti_confirmari FROM anon, authenticated;
 REVOKE INSERT ON public.hr_autorizatii_rsvti_confirmari FROM anon;
+
+-- ---------------------------------------------------------------------------
+-- 4. Postcondiții — starea rezultată e EXACT cea din acest patch (altfel se anulează tot)
+-- ---------------------------------------------------------------------------
+DO $post$
+DECLARE
+  v_n  integer;
+  v_ok integer;
+BEGIN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure) <> '42e0528ed5af58c0cccc7b801aef4193'
+     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_poate_scrie_hr_autorizatii()'::regprocedure) <> 'a59aeb46d5007222067276184a63aaa0' THEN
+    RAISE EXCEPTION 'Postcondiție: corpul RPC-ului sau al helperului nu e cel din acest patch (md5)';
+  END IF;
+  SELECT count(*) INTO v_n FROM pg_policies
+   WHERE schemaname = 'public' AND tablename = 'hr_autorizatii_rsvti_confirmari' AND cmd IN ('ALL', 'INSERT', 'UPDATE', 'DELETE');
+  SELECT count(*) INTO v_ok FROM pg_policies
+   WHERE schemaname = 'public' AND tablename = 'hr_autorizatii_rsvti_confirmari'
+     AND policyname = 'hr_autorizatii_rsvti_confirmari_insert_autorizat'
+     AND cmd = 'INSERT' AND permissive = 'PERMISSIVE' AND roles::text = '{authenticated}' AND qual IS NULL
+     AND md5(with_check) = '780014ba883836d16ffb7a014c7430c6';
+  IF v_n <> 1 OR v_ok <> 1
+     OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.hr_autorizatii_rsvti_confirmari'::regclass) THEN
+    RAISE EXCEPTION 'Postcondiție: jurnalul nu are exact politica de scriere din acest patch (% politici de scriere, % conforme)', v_n, v_ok;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) a
+              WHERE c.oid = 'public.hr_autorizatii_rsvti_confirmari'::regclass
+                AND ((a.grantee = 'anon'::regrole::oid AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE'))
+                  OR (a.grantee = 'authenticated'::regrole::oid AND a.privilege_type IN ('UPDATE', 'DELETE')))) THEN
+    RAISE EXCEPTION 'Postcondiție: GRANT-urile de scriere pe jurnal (anon: INSERT/UPDATE/DELETE, authenticated: UPDATE/DELETE) n-au fost retrase';
+  END IF;
+END $post$;
