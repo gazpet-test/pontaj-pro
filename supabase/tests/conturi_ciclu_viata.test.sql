@@ -16,6 +16,11 @@
 -- și după migrările R1/R2/R3; testele noi se adaugă în secțiunile R1/R2/R3 de la final.
 -- ============================================================================
 \set ON_ERROR_STOP on
+-- doar_baza=true (dat de script după rollback) sare peste secțiunile R1–R3
+\if :{?doar_baza}
+\else
+  \set doar_baza false
+\endif
 \set owner 00000000-0000-4000-8000-000000000121
 \set u_ion 00000000-0000-4000-8000-00000000a001
 \set u_hr 00000000-0000-4000-8000-00000000a002
@@ -119,6 +124,9 @@ SELECT teste.assert(NOT has_function_privilege('anon', 'public.tmp_canar_fn()', 
     AND NOT has_function_privilege('authenticated', 'public.tmp_canar_fn()', 'EXECUTE'),
   'T6 după REVOKE FROM PUBLIC, anon, authenticated funcția nu mai e apelabilă din API');
 
+\if :doar_baza
+\echo '   (R1–R3 sărite: rulare doar BAZĂ)'
+\else
 -- ============================================================================
 -- R1 — legare automată cont ↔ angajat (de completat după migrare)
 -- ============================================================================
@@ -130,6 +138,8 @@ SELECT teste.assert(NOT has_function_privilege('anon', 'public.tmp_canar_fn()', 
 -- ============================================================================
 -- R3 — fost angajat ca posibil colaborator extern, acord tri-valent (de completat)
 -- ============================================================================
+
+\endif
 
 ROLLBACK;
 \echo 'PASS conturi_ciclu_viata.test.sql: toate aserțiunile au trecut'

@@ -753,7 +753,7 @@ BEGIN
   VALUES (p_uid, 'authenticated', 'authenticated', p_email, p_meta, '{"provider":"email"}'::jsonb, now(), now(), now());
   INSERT INTO auth.sessions (id, user_id, created_at, updated_at) VALUES (v_sesiune, p_uid, now(), now());
   INSERT INTO auth.refresh_tokens (token, user_id, revoked, created_at, updated_at, session_id)
-  VALUES (encode(extensions.gen_random_bytes(12), 'hex'), p_uid::text, false, now(), now(), v_sesiune);
+  VALUES (replace(gen_random_uuid()::text, '-', ''), p_uid::text, false, now(), now(), v_sesiune);
   EXECUTE 'RESET ROLE';
   PERFORM set_config('search_path', v_sp, false);
   RETURN p_uid;
