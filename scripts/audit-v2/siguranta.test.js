@@ -6,27 +6,28 @@ import { CDP, urlSigur } from './cdp.mjs'
 import { ruleaza, actiuneUI, verificaContextUI } from './scenariu.mjs'
 import { mascheaza, salveazaJson, incarcaJson } from './dovezi.mjs'
 import { mkdtemp, readdir, stat, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
+const tmpdir = () => fileURLToPath(new URL('./', import.meta.url))
 import { join } from 'node:path'
 
 describe('protecție anti-producție', () => {
   it('titlul copiat nu înlocuiește verificarea ID-ului selectat în UI', async () => {
     const d = { asteapta: async () => {}, observa: async () => ({ value: '5' }) }
-    await expect(verificaContextUI(d, { id: 100, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { tip: 'select', selector: 'css=select' })).rejects.toThrow('nu indică clona')
+    await expect(verificaContextUI(d, { id: 103, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { tip: 'select', selector: 'css=select' })).rejects.toThrow('nu indică clona')
   })
-  it.each([null, { id: 5, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { id: 100, nr_anunt: 'SCN111' }, { id: 99, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { id: 100, nr_anunt: 'sandbox-v2-test' }])('refuză %j', lic => {
-    expect(() => verificaSandbox(lic, { licitatie_id: 100 })).toThrow('REFUZ')
+  it.each([null, { id: 5, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { id: 103, nr_anunt: 'SCN111' }, { id: 99, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { id: 103, nr_anunt: 'sandbox-v2-test' }])('refuză %j', lic => {
+    expect(() => verificaSandbox(lic, { licitatie_id: 103 })).toThrow('REFUZ')
   })
   it('interzice licitația 5 chiar dacă numărul a fost schimbat', () => expect(() => verificaSandbox({ id: 5, nr_anunt: 'SANDBOX-V2-X' }, { licitatie_id: 5 })).toThrow())
-  it('acceptă numai id-ul clonei cu prefixul exact', () => expect(verificaSandbox({ id: 100, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { licitatie_id: 100 })).toBe(true))
-  it('respinge cerințe din original', () => expect(() => verificaIds({ licitatie_id: 100, cerinte: { D1: 1, D6: 2, D8: 3 } }, [1, 2, 3].map(id => ({ id, licitatie_id: 5 })))).toThrow())
+  it('acceptă numai id-ul clonei cu prefixul exact', () => expect(verificaSandbox({ id: 103, nr_anunt: 'SANDBOX-V2-DOMNESTI' }, { licitatie_id: 103 })).toBe(true))
+  it('respinge cerințe din original', () => expect(() => verificaIds({ licitatie_id: 103, cerinte: { D1: 1, D6: 2, D8: 3 } }, [1, 2, 3].map(id => ({ id, licitatie_id: 5 })))).toThrow())
   it.each(['5/a.pdf', 'sandbox-v2/5/../real.pdf', 'sandbox-v2/5/%2e%2e/a', 'sandbox-v2/5/..\\x'])('respinge destinația %s', p => expect(() => caleSandbox(p)).toThrow())
-  it('verifică corespondența exactă source/destination', () => expect(() => verificaPerechi([{ cale_veche: '5/a', cale_noua: 'sandbox-v2/5/b' }])).toThrow())
+  it('verifică corespondența exactă source/destination', () => expect(() => verificaPerechi([{ cale_veche: '5/a', cale_noua: '103/b' }])).toThrow())
   it('niciun apel Storage dacă licitația nu este sandbox', async () => {
     let accesStorage = 0
     const query = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: { id: 5, nr_anunt: 'REAL' } }) }
     const db = { from: () => query, storage: { from: () => { accesStorage++; throw Error() } } }
-    await expect(copiazaStorage(db, [{ cale_veche: '5/a', cale_noua: 'sandbox-v2/5/a' }], { licitatie_id: 5 }, async () => {})).rejects.toThrow('REFUZ')
+    await expect(copiazaStorage(db, [{ cale_veche: '5/a', cale_noua: '103/a' }], { licitatie_id: 5 }, async () => {})).rejects.toThrow('REFUZ')
     expect(accesStorage).toBe(0)
   })
   it('scenariul apply refuză licitația reală înainte de conectarea CDP', async () => {
@@ -40,13 +41,13 @@ describe('protecție anti-producție', () => {
     } finally { process.exitCode = exit; await rm(dir, { recursive: true, force: true }) }
   })
   it.each([true, false])('Storage compară bytes sursă/read-back (identic=%s)', async identic => {
-    const query = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: { id: 100, nr_anunt: 'SANDBOX-V2-DOMNESTI' } }) }
+    const query = { select: () => query, eq: () => query, maybeSingle: async () => ({ data: { id: 103, nr_anunt: 'SANDBOX-V2-DOMNESTI' } }) }
     let copie = 0; let salvat
     const db = { from: () => query, storage: { from: () => ({
       download: async p => ({ data: new Blob([p.startsWith('5/') || identic ? 'original' : 'diferit']) }),
       copy: async () => { copie++; return {} },
     }) } }
-    const task = copiazaStorage(db, [{ cale_veche: '5/a', cale_noua: 'sandbox-v2/5/a' }], { licitatie_id: 100 }, async value => { salvat = structuredClone(value) })
+    const task = copiazaStorage(db, [{ cale_veche: '5/a', cale_noua: '103/a' }], { licitatie_id: 103 }, async value => { salvat = structuredClone(value) })
     if (identic) { await task; expect(salvat[0].stare).toBe('identic'); expect(salvat[0].sha256).toMatch(/^[a-f0-9]{64}$/) }
     else { await expect(task).rejects.toThrow('SHA-256'); expect(salvat[0].stare).toBe('diferit') }
     expect(copie).toBe(1)

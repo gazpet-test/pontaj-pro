@@ -10,6 +10,7 @@ import { salveazaJson, incarcaJson } from './dovezi.mjs'
 import { verdictAsertiuni, VERDICTE } from './asertiuni.js'
 import { comparaGroundTruth } from './comparatie.js'
 import { retete } from './retete.js'
+import { VERIGI_AUXILIARE, eroriBlocante } from './rls.js'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 export async function verificaContextUI(driver, lic, context) {
@@ -22,13 +23,16 @@ export async function verificaContextUI(driver, lic, context) {
   }
   await driver.asteapta(`text=🏛 ${lic.nr_anunt}`)
 }
-async function snapshot(db, fixture, contract) {
-  const ids = Object.values(fixture.cerinte)
+export async function snapshot(db, fixture, contract) {
+  const ids = ['D1', 'D6', 'D8'].map(k => fixture.cerinte[k])
   const lant = await verificaLant(db, fixture.licitatie_id, ids)
-  const tabele = {}; const erori = {}
+  const tabele = {}; const erori = {}; const eroriAuxiliare = {}
   await Promise.all([...new Set([...contract.tabele, 'ofertare_cerinte', 'ofertare_clarificari', 'ofertare_pt_capitole', 'ofertare_pt_pachet'])].map(async table => {
     try { tabele[table] = await citesteTabel(db, table, 'licitatie_id', fixture.licitatie_id, table.endsWith('_coada') ? 'licitatie_id' : 'id') }
-    catch (e) { erori[table] = e.message }
+    catch (e) {
+      erori[table] = e.message
+      if (VERIGI_AUXILIARE[table] && e.code === '42501') eroriAuxiliare[table] = e.message
+    }
   }))
   const copii = async (table, column, parents) => {
     try { tabele[table] = await citesteDupaIds(db, table, column, parents) }
@@ -52,13 +56,44 @@ async function snapshot(db, fixture, contract) {
   tabele.ofertare_pt_anexe_asteptate = lant.randuri[0]?.anexe || []
   tabele.ofertare_seap_manifest ??= lant.randuri[0]?.manifest || []
   for (const d of lant.randuri) Object.assign(erori, d.erori)
-  return { lant, tabele, erori }
+  for (const [table, eroare] of Object.entries(eroriAuxiliare)) {
+    for (const r of lant.rezultate) for (const v of VERIGI_AUXILIARE[table]) {
+      const link = r.verigi[v]
+      r.verigi[v] = { ...link, stare: 'nedeterminat', de_ce: `${link.de_ce}; SELECT auxiliar refuzat: ${eroare}`,
+        eroriAuxiliare: { ...link.eroriAuxiliare, [table]: eroare } }
+    }
+  }
+  return { lant, tabele, erori, eroriAuxiliare }
 }
 
-export async function actiuneUI(driver, action, { readOnly = false } = {}) {
+function raspunsDialog(action) {
+  const text = action.prompt_env ? process.env[action.prompt_env] : action.text
+  const type = action.dialog_type || (action.prompt_env || action.text != null ? 'prompt' : 'confirm')
+  if (!['prompt', 'confirm', 'alert'].includes(type)) throw new Error('Tip de dialog invalid în rețetă')
+  if (type === 'prompt' && typeof text !== 'string') throw new Error('Textul promptului din rețetă lipsește')
+  return { type, accept: action.accept !== false, text }
+}
+
+export async function actiuniUI(driver, actions, options = {}) {
+  const observatii = []
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i]
+    const dialogs = []
+    if (action.tip === 'click') {
+      while (actions[i + 1 + dialogs.length]?.tip === 'confirma') dialogs.push(raspunsDialog(actions[i + 1 + dialogs.length]))
+    }
+    const dialog = dialogs.length ? dialogs : null
+    const obs = await actiuneUI(driver, action, { ...options, dialog })
+    if (obs) observatii.push(obs)
+    i += dialogs.length // Consumate prin evenimente CDP, înainte să se termine clickul.
+  }
+  return observatii
+}
+
+export async function actiuneUI(driver, action, { readOnly = false, dialog = null } = {}) {
   if (!action || !['click', 'scrie', 'asteapta', 'incarca', 'confirma', 'observa'].includes(action.tip)) throw new Error('Acțiune UI lipsă/invalidă; nu se execută JS arbitrar din fixture')
   if (readOnly && !['asteapta', 'observa'].includes(action.tip)) throw new Error('Comparația acceptă numai observații UI')
-  if (action.tip === 'confirma') return driver.confirma(action.accept === true, action.prompt_env ? process.env[action.prompt_env] : action.text)
+  if (action.tip === 'confirma') throw new Error('confirma trebuie să urmeze imediat clickului în rețetă')
   if (typeof action.selector !== 'string' || !action.selector) throw new Error('Selectorul trebuie completat după clonare')
   if (action.tip === 'asteapta') return driver.asteapta(action.selector, action.ms || 15000)
   if (action.tip === 'observa') {
@@ -74,7 +109,7 @@ export async function actiuneUI(driver, action, { readOnly = false } = {}) {
     return driver.incarca(action.selector, action.fisiere.map(f => resolve(f)))
   }
   if (action.tip === 'scrie') return driver.scrie(action.selector, action.text)
-  return driver.click(action.selector)
+  return driver.click(action.selector, dialog)
 }
 
 export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
@@ -102,20 +137,24 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
       await salveazaJson(dir, 'matrice-P4', comparaGroundTruth(inainte, gt))
       if (!gt.length) throw new Error('Ground truth indisponibil: matricea P4 este UNDETERMINED')
     }
-    if (Object.keys(inainte.erori).length) throw new Error('Precondiții necitite complet; consultați erorile din dovezi')
+    if (eroriBlocante(inainte).length) throw new Error('Precondiții necitite complet; consultați erorile din dovezi')
     const preconditii = contract.restart && args.includes('--resume') ? cfg.preconditii_reluare : cfg.preconditii
-    if (!preconditii?.length || verdictAsertiuni(preconditii, inainte, inainte).verdict !== 'MATCH') throw new Error('Precondiții lipsă sau neîndeplinite (la --resume se folosesc preconditii_reluare)')
+    const pre = verdictAsertiuni(preconditii, inainte, inainte)
+    if (pre.verdict !== 'MATCH' && !pre.doarAuxiliare) throw new Error('Precondiții lipsă sau neîndeplinite (la --resume se folosesc preconditii_reluare)')
+    if (pre.doarAuxiliare) raport.limite.push('Precondiții auxiliare nedeterminate: SELECT refuzat de RLS; verificările independente continuă.')
     const connect = deps.conecteaza || conecteaza
-    const c = await connect(fixture.cdp_port, fixture.cdp_target_id); drivers.push(c)
+    const c = await connect(fixture.cdp_port, fixture.cdp_target_id, { appUrl: fixture.app_url }); drivers.push(c)
     if (fixture.app_url && await c.evalueaza('location.origin') !== new URL(fixture.app_url).origin) throw new Error('Tabul CDP nu este aplicația configurată')
     // Sesiunea este deja autentificată. Operatorul deschide fișa clonei; nu selectăm după titlul copiat al licitației 5.
     await verificaContextUI(c, lic, cfg.context_ui || fixture.context_ui)
     if (contract.concurenta) {
       const obj = cfg.obiect
       if (!obj || obj.tabela !== contract.obiect || !inainte.tabele[obj.tabela]?.some(r => r.id === obj.id)) throw new Error('Obiectul concurent nu aparține clonei/D1,D6,D8')
-      const c2 = await connect(fixture.cdp_port_2 || fixture.cdp_port, fixture.cdp_target_id_2)
+      const samePort = Number(fixture.cdp_port_2 || fixture.cdp_port) === Number(fixture.cdp_port)
+      const c2 = await connect(fixture.cdp_port_2 || fixture.cdp_port, fixture.cdp_target_id_2,
+        { appUrl: fixture.app_url, excludeTarget: samePort ? c.target : null })
       drivers.push(c2)
-      if (c.target === c2.target && (fixture.cdp_port_2 || fixture.cdp_port) === fixture.cdp_port) throw new Error('Concurența cere două taburi distincte, nu două socket-uri către același DOM')
+      if (c.target === c2.target && samePort) throw new Error('Concurența cere două taburi distincte, nu două socket-uri către același DOM')
       if (await c.evalueaza('location.origin') !== await c2.evalueaza('location.origin')) throw new Error('Cele două sesiuni au origini diferite')
       await verificaContextUI(c2, lic, cfg.context_ui || fixture.context_ui)
     }
@@ -141,16 +180,19 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
       if (contract.concurenta) {
         if (!phase.actiuni_2?.length || !phase.pregatire?.length || !phase.pregatire_2?.length) throw new Error('Concurența cere pregătire în ambele taburi și două liste de salvare')
         // Barieră: ambele formulare trebuie încărcate/editate înaintea primei salvări.
-        await Promise.all(drivers.map(async (d, n) => { for (const a of n ? phase.pregatire_2 : phase.pregatire) await actiuneUI(d, a) }))
-        await Promise.all(drivers.map(async (d, n) => { for (const a of n ? phase.actiuni_2 : phase.actiuni) await actiuneUI(d, a) }))
-      } else for (const action of phase.actiuni) { const obs = await actiuneUI(c, action, contract); if (obs) observatii.push(obs) }
+        for (const obs of await Promise.all(drivers.map((d, n) => actiuniUI(d, n ? phase.pregatire_2 : phase.pregatire, contract)))) observatii.push(...obs)
+        for (const obs of await Promise.all(drivers.map((d, n) => actiuniUI(d, n ? phase.actiuni_2 : phase.actiuni, contract)))) observatii.push(...obs)
+      } else observatii.push(...await actiuniUI(c, phase.actiuni, contract))
       if (phase.asteapta) await c.asteapta(phase.asteapta, phase.timeout_ms || 30000)
       const after = await snapshot(db, fixture, contract)
       await salveazaJson(dir, `${i + 1}-${nume}-dupa`, after)
       for (let n = 0; n < drivers.length; n++) await drivers[n].captura(join(dir, `${i + 1}-${nume}-dupa-${n + 1}.png`))
-      const rezultat = Object.keys(after.erori).length || Object.keys(before.erori).length
+      const rezultat = eroriBlocante(after).length || eroriBlocante(before).length
         ? { verdict: 'UNDETERMINED', motiv: 'Eroare citire BD' } : verdictAsertiuni(phase.postconditii, before, after)
-      if (rezultat.verdict === 'MATCH' && observatii.some(o => o.trece === false)) rezultat.verdict = observatii.find(o => o.trece === false).la_esec
+      if ((rezultat.verdict === 'MATCH' || rezultat.doarAuxiliare) && observatii.some(o => o.trece === false)) {
+        rezultat.verdict = observatii.find(o => o.trece === false).la_esec
+        rezultat.doarAuxiliare = false
+      }
       raport.faze.push({ nume, ...rezultat, observatii })
       if (contract.restart && i === 0) {
         await salveazaJson(dir, 'checkpoint', { pas, licitatie_id: fixture.licitatie_id,
@@ -158,9 +200,10 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
         raport.limite.push('PAUZĂ — Claude repornește workerul. Reluare cu --apply --resume <checkpoint.json>; driverul nu repornește servicii.')
         console.log(raport.limite.at(-1)); break
       }
-      if (rezultat.verdict !== 'MATCH') break
+      if (rezultat.verdict !== 'MATCH' && !rezultat.doarAuxiliare) break
     }
-    raport.verdict = raport.faze.find(p => p.verdict !== 'MATCH')?.verdict
+    raport.verdict = raport.faze.find(p => p.verdict !== 'MATCH' && !p.doarAuxiliare)?.verdict
+      || raport.faze.find(p => p.verdict !== 'MATCH')?.verdict
       || (raport.faze.length === contract.faze.length - start && !raport.limite.length ? 'MATCH' : 'UNDETERMINED')
     raport.semnificatie = 'MATCH se referă strict la aserțiunile enumerate, nu certifică modulul sau întregul lanț.'
     if (pas === '06_cantitati') raport.limite.push('ofertare_r5_blocaj_sursa este funcție SQL, nu tabel. Verificatorul SELECT-only nu o apelează; blocarea se observă prin UI și read-back al stării pachetului.')
@@ -170,6 +213,7 @@ export async function ruleaza(pas, args = process.argv.slice(2), deps = {}) {
     if (db && inainte) try { await salveazaJson(dir, 'dupa-eroare', await snapshot(db, fixture, contract)) } catch { /* Eroarea inițială rămâne vizibilă. */ }
   } finally {
     for (let i = 0; i < drivers.length; i++) {
+      await salveazaJson(dir, `dialoguri-${i + 1}`, drivers[i].dialoguri?.() || [])
       await salveazaJson(dir, `jurnal-${i + 1}`, drivers[i].jurnal()); drivers[i].inchide()
     }
     await salveazaJson(dir, 'verdict', raport)

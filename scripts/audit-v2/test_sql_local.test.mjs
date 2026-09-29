@@ -1,4 +1,5 @@
-import test from 'node:test';
+// Același set rulează și standalone, și în comanda vitest a directorului.
+const { test } = await import(process.env.VITEST ? 'vitest' : 'node:test');
 import assert from 'node:assert/strict';
 import { localTarget, sqlLocal } from './test_sql_local.mjs';
 
