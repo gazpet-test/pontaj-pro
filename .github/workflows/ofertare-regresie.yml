@@ -25,6 +25,8 @@ on:
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
       - 'worker/ofertare/plansa*.ts'
       - 'scripts/pg/**'
+      - 'supabase/tests/j04xj07/**'
+      - 'scripts/test_j04xj07.sh'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
   push:
@@ -52,6 +54,8 @@ on:
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
       - 'worker/ofertare/plansa*.ts'
       - 'scripts/pg/**'
+      - 'supabase/tests/j04xj07/**'
+      - 'scripts/test_j04xj07.sh'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
   workflow_dispatch:
@@ -107,7 +111,7 @@ jobs:
 
   postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -205,3 +209,22 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/jakv0407_test_ci
           PGPASSWORD: postgres
         run: node scripts/pg/test_j04_j07_integrare.mjs
+      # Suita extinsa J04 x J07 (COPILOT_REVIEW_PLAN_A §2): teste SQL cu ASSERT (supabase/tests/j04xj07), fiecare in
+      # BEGIN...ROLLBACK; runner-ul isi creeaza si isi sterge singur bazele (jakv0407_test_jx + clona pentru 2 sesiuni).
+      - name: J04 x J07 extins - suita SQL JX-* (simetric, 12 controale, concurenta, parser, API, append-only, A-B)
+        env:
+          PGURI_ADMIN: postgres://postgres@localhost:5432/postgres
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_j04xj07.mjs
+      - name: J04 x J07 extins - mutanti (fiecare implementare stricata trebuie prinsa de un test)
+        env:
+          PGURI_ADMIN: postgres://postgres@localhost:5432/postgres
+          PGPASSWORD: postgres
+        run: |
+          for m in $(node -e "import('./scripts/pg/fixtures/j04xj07_mutanti.mjs').then(x => console.log(Object.keys(x.MUTANTI).join(' ')))"); do
+            if ! JX_MUTANT="$m" node scripts/pg/test_j04xj07.mjs > "mutant_$m.log" 2>&1; then
+              grep -E '^MUTANT|FAIL' "mutant_$m.log" || tail -20 "mutant_$m.log"
+              exit 1
+            fi
+            grep -E "^MUTANT $m:" "mutant_$m.log"
+          done
