@@ -1,6 +1,6 @@
 # Incident egress Supabase: 1,6 TB pe 24–25.09.2026 (buclă internă Ofertare, oprită)
 
-> **Stare:** cauza e găsită, cu încredere foarte mare (~99%). Bucla e oprită din **25.09, 16:10 UTC**, iar egress-ul a revenit aproape la zero. Dauna financiară e deja înregistrată în ciclul 07.09–07.10. **Rămâne decizia Q17 (spend cap) înainte de 03.10.**
+> **Stare (formularea Copilot, 30.09 ~01:30):** bucla dominantă de egress e **atribuită** prin dovezile raportate și **oprită** în intervalul observat (din 25.09, 16:10 UTC). **Prevenirea recidivei e incompletă.** Exploatarea externă e **nedemonstrată**, în limitele investigației. Incidentele de autorizare/confidențialitate sunt **OPEN**. Spend cap-ul (Q17) și măsurile de limitare a expunerii sunt **decizii explicite ale lui Răzvan**. Dauna financiară e deja înregistrată în ciclul 07.09–07.10.
 > Investigația a fost read-only, pe 30.09, între 00:30 și 01:30 ora RO, în workflow-ul `wf_75059be4-023`. Au lucrat 3 unghiuri independente (loguri gateway/Storage; Storage + conturi; procese interne), plus o sinteză care a refăcut socoteala pe fiecare zi a ciclului. Nimic nu s-a modificat în producție.
 
 ## 1. Cifrele (reconciliate cu dashboard-ul)
@@ -32,7 +32,7 @@
 
 ## 3. Ce NU a fost
 - **Abuz extern: exclus pentru egress** (cifrele se închid). `service_role` apare doar din birou, din edge runtime și de pe funcțiile Vercel.
-- **Signup-ul deschis nu a fost vectorul.** Nicio cerere `POST /auth/v1/signup` în zilele verificate. `auth.users`: 31 de conturi, toate cunoscute.
+- **Signup-ul deschis nu a fost vectorul.** În **toate cele 24 de zile verificate în loguri (06.09–29.09, 22:40 UTC)**: **0 cereri** pe `/auth/v1/signup`. Proba de control a mers: pe aceleași zile, zeci–sute de cereri `/auth/v1/*` pe zi. `auth.audit_log_entries` e gol, deci auditul auth trăiește doar în loguri. `auth.users` are 31 de conturi; persoanele sunt identificabile, dar **„persoana e cunoscută” ≠ „privilegiul e justificat”** (§5). Limită: IP-ul și cheia `service_role` identifică un canal de execuție, nu persoana sau cererea inițială.
 - **Scriptul din Logistică** (ipoteza lui Răzvan): nu. Acolo au fost doar actualizări de text. Nici scripturile de pe PC din 25.09 seara, care au citit planșe pe felii JPG, cu volum neglijabil.
 
 ## 4. Riscul să se repete (cod, NU se întâmplă acum)
@@ -63,8 +63,8 @@
   - `co***`: **superadmin neconfirmat**, fără niciun login;
   - un cont gmail fără login din 25.07;
   - `cl***`: `ofertare:admin` + `hr:editor`, fără `employee_id`;
-  - `ap***`: a intrat de pe 173.255.164.x (Voxility, hosting RO, probabil VPN; 58 de cereri pe 29.09, nimic descărcat).
-- **Chei:** **nu e nevoie de rotire pentru incident**. Fără grabă de rezolvat:
+  - `ap***`: o sesiune de pe 173.255.164.x (Voxility, hosting RO; natura conexiunii **nedeterminată**; 58 de cereri pe 29.09, nimic descărcat). Un IP de hosting nu dovedește nici atac, nici legitimitate.
+- **Chei:** egress-ul atribuit buclei **nu impune singur** rotirea, dar nici nu justifică verdictul general „rotirea nu e necesară” (Copilot). Rămâne de verificat cine poate vedea comenzile cron (`authenticated` nu are acces la schema `cron`) și dacă secretele au ajuns în repo, loguri sau rezultate distribuite. Dacă au ajuns la actori neautorizați, rotirea intră în răspunsul aprobat. Separat, fără grabă:
   - 9 din 51 de joburi cron au chei scrise în text → de mutat în Vault;
   - workerul NAS e pe cheia legacy JWT → de trecut pe `sb_secret`.
 - **Mărunte:**
@@ -83,17 +83,40 @@
 | 7 | Butonul „creare manager” mutat pe o funcție de admin cu verificare de owner | ERP-ul poate face iar conturi, fără signup public |
 | 8 | Spend cap pornit la loc după 07.10, **după** ce există alerta (3) și contorul în BD (4) | protecție pe ciclurile viitoare |
 
-## 7. De decis
-- **Q17 — spend cap, înainte de 03.10:**
-  - **A:** OFF acum, plătești ~41 $;
-  - **B:** rămâne ON → restricție 03–07.10, deci ERP-ul se oprește, poate și lucrul pe Jilava;
-  - **C:** tichet la suport + A ca plasă.
+## 7. De decis (după comisie)
+- **Q17 — spend cap, înainte de 03.10.** Comisia recomandă **A condiționat + C în paralel**. B nu e recomandat ca implicit: restricția de pe 03–07.10 se suprapune cu o posibilă depunere Jilava pe 06.10. Datele exacte și serviciile afectate se confirmă în cont.
+  - **A**: îl oprești, cu trei condiții (Copilot):
+    1. **autorizare financiară delimitată**: ~41 $ pentru consumul existent, separat de un buget explicit pentru consum nou. „41 $” nu e plafon tehnic și nici factura garantată;
+    2. **recidiva limitată ÎNAINTE de a scoate protecția**: se documentează cum rămân oprite sau strict controlate ingestia grea și sursele care o pot porni. „Coada e goală acum” nu ajunge. Orice oprire de worker/job sau patch are aprobare separată;
+    3. **verificare după schimbare**: starea setării, perioada, toate liniile din Usage/Upcoming Invoice, plus un test read-only că ERP-ul merge.
+  - **C**: cerere comercială de credit, cu „da”-ul tău pentru contactul extern și dovezi fără secrete. **NU** e prezentată ca „bug unic reparat”, pentru că riscul de recidivă e încă în cod.
+  - Decizia de continuitate nu așteaptă nici analizele, nici suportul.
+- **Ordinea prevenției** (Copilot + Jakarinos). E condiție pentru **reluarea ingestiei**, nu pentru ținerea spend cap-ului oprit:
+  1. închiderea căii anon pe `ofertare-ingest-doc`: PR de securitate separat; înainte de depunere cere excepție la freeze;
+  2. control persistent comun (worker, cron, edge): încercare + buget rezervate atomic înainte de GET/AI, revendicare exclusivă cu expirare, stare „blocat” la eșec de resurse; un 546 nu mai trece drept succes;
+  3. detectare și oprire controlată (praguri aprobate);
+  4. o singură descărcare pe versiune de conținut, iar edge-ul primește felia. Optimizarea `candidati()` intră în PR separat.
 
-  Recomandarea investigației: **A (+ C opțional)**. Comisia PowPatroll confirmă sau corectează.
-- Conturile din §5, fiecare cu da/nu.
-- Ordinea măsurilor 3–8 (după 02.10, fiecare cu GO).
+  Înainte de reluare, testele acoperă restart, eșec de resurse, 2 procese concurente, buget epuizat, expirarea revendicării și cererea neautorizată, fără AI plătit.
+- **Securitatea (§5) e o extindere de domeniu a incidentului OPEN, cu prioritate azi dimineață:**
+  - matricea de acces (profiles, user_module_access, personal, tokenuri, scriere/ștergere Storage);
+  - revizuirea conturilor și sesiunilor, cu preview și decizia ta;
+  - patch-uri separate: Ofertare / RSVTI + jurnal / stoc / **RLS citire + Storage** / TRUNCATE.
 
-## 8. Comisia PowPatroll (30.09, 01:00–01:40 RO)
+  Citirea neautorizată de date sensibile **nu** se amână automat după Jilava.
+- Conturile din §5: da/nu pe fiecare.
+
+## 8. Ce mai lipsește pentru închiderea dosarului (Copilot)
+- Reconcilierea contoarelor: 7.970 × 2 = 15.940 față de 16.021 de descărcări (81 neclasificate), plus cele 8.235 de „lansări”. Nu se forțează egalitatea.
+- Unitățile în bytes și versiunea obiectului servit (99,93 MB zecimali ≈ 95,30 MiB per descărcare).
+- Mesajul diagnostic real din spatele `WORKER_RESOURCE_LIMIT` (memorie sau altă limită). Legarea opririi de versiunea edge și de revizia workerului **efectiv rulate**, nu doar de ora merge-ului.
+- Corelarea cererilor de intrare cu joburile și transferurile (apelant → backend → Storage).
+- Dosarul reproductibil al probelor: interogări, ferestre UTC, filtre, ID-uri de cereri, versiuni. Acces controlat, fără tokenuri sau URL-uri semnate. Reziduul de 0,53 GB consemnat.
+- Celelalte linii de cost (apeluri AI, uncached egress).
+- **Integritatea dosarului Huedin:** doc 770 e `partial` (499 de pagini fără text), iar `ignorat`/`partial` ≠ extras/verificat. De verificat ce rezultate au folosit 770 și celelalte fișiere mari, fără un fals verde.
+- ✅ Acoperirea temporală a signup-ului: făcută 30.09, ~01:50. Pe 06.09–29.09: 0 cereri (§3).
+
+## 9. Comisia PowPatroll (30.09, 01:00–01:40 RO)
 
 Comisia a fost cerută de Răzvan: „dauna e făcută, vedem cum o reparăm și cum o evităm”. Părerile au fost date independent. Niciunul nu a văzut concluziile celorlalți înainte să răspundă.
 
@@ -101,7 +124,7 @@ Comisia a fost cerută de Răzvan: „dauna e făcută, vedem cum o reparăm și
 |---|---|---|
 | **Jakarinos** (Codex, read-only: cod + istoric git, fără BD) | faptele din billing + pistele, fără cauza găsită în loguri | **A ajuns singur la aceeași cauză.** Pe `8a6fbbb` (25.09), `ingest.ts` descarcă PDF-ul integral, iar fallback-ul AI îl descarcă din nou în edge. **Răspunsul `546 {code,message}` fără câmpul `error` e interpretat ca succes** (`ingest.ts:83,90`), deci documentul rămâne candidat și bucla îl reia. Limita „15 documente / 15 minute” cedează doar când există altă coadă activă. Calculul lui: 8.234 × 2 × 99,9 MB ≈ **1.646 GB**, față de 1.616 GB facturați. Reparațiile au intrat în edge în `1523f06` (25.09 19:09 RO) și în worker în `3069000` (26.09 02:52 RO), în acord cu logurile. Recitirea planșelor și auditul de hash **nu** pot explica volumul (25 de runde × 4 zone = maximum 100 de JPG, nu 100 de PDF-uri). |
 | **Miloi** (Gemini) | același brief | **Indisponibil.** Prima rulare: comandă refuzată în modul headless. A doua: **cota Google e epuizată** („Individual quota reached”, se resetează în ~142 h, adică **~06.10 seara**). Până atunci Miloi nu poate primi sarcini. |
-| **Copilot** | faptele complete + securitatea + opțiunile Q17 | *(în așteptare; răspunsul se trece aici)* |
+| **Copilot** | faptele complete + securitatea + opțiunile Q17 | **GO** pe atribuirea egress-ului buclei interne 770. **NO-GO** pe „remediat complet” și pe reluarea ingestiei în configurația actuală. **Q17: A condiționat + C în paralel.** Securitatea din §5 = extindere a incidentului OPEN, cu prioritate azi. Text integral: `INCIDENT_EGRESS_VERDICT_COPILOT_2026-09-30.md` |
 
 **Prevenția propusă de Jakarinos**, ordonată după efect/cost; toate după GO și după depunerea Jilava:
 1. **Oprire persistentă la lipsa de progres**, cu limită între ture și reporniri în `worker/ofertare/ingest.ts`. Un 546 nu mai trece ca succes. În `src/OfertareLicitatii.jsx` dispare retry-ul la 5 s după un răspuns neclar. Starea rămâne „necitit/eroare”, niciodată succes implicit.
