@@ -21,7 +21,7 @@ Formularea consemnată la cererea lui Copilot: **„BYPASS-uri de autorizare con
 ### Signup-ul era PORNIT (captura lui Răzvan, 30.09 00:30 RO)
 - „Allow new users to sign up” = ON. Deci „orice cont logat” = **oricine de pe internet**: își face cont cu propriul email, îl confirmă și primește acces la cele 4 căi. „Confirm email” ON nu protejează.
 - Cerut: OFF + „Save changes”. **Starea după: OFF, confirmat de Răzvan în chat („am oprit”, 30.09 ~00:35 RO).** Din SQL nu se poate verifica independent. Monitorizare: conturi noi în `auth.users`.
-- **Semnal separat — egress:** 1616 GB cached egress în ciclu (250 GB incluși). **Pe zile (captura lui Răzvan, 30.09 00:52 RO): ~0,44 TB pe 24.09 + 1,176 TB pe 25.09, ~0 în rest (inclusiv 26–29.09)** → eveniment trecut, nu scurgere în curs. Investigația read-only e în curs: ce a rulat pe 24–25.09 (buclă internă vs descărcare externă). Restricția de pe 03.10 ar opri ERP-ul.
+- **Semnal separat — egress:** 1616 GB cached egress în ciclu (250 GB incluși). **Pe zile (captura lui Răzvan, 30.09 00:52 RO): ~0,44 TB pe 24.09 + 1,176 TB pe 25.09, ~0 în rest (inclusiv 26–29.09)** → eveniment trecut, nu scurgere în curs. **Cauza găsită (30.09 ~01:30 RO): buclă internă Ofertare** (worker NAS + `ofertare-ingest-doc` pe doc 770, 95 MB, ~16.000 de descărcări, 99,1% din ciclu), oprită din 25.09 16:10 UTC; fără abuz extern. Detalii + constatările de securitate găsite pe drum (298/370 tabele citibile de orice cont logat, inclusiv IBAN-uri; 23 bucket-uri deschise; `handle_new_user` → `manager_santier`; calea anon pe `ofertare-ingest-doc`): `docs/INCIDENT_EGRESS_2026-09-25.md`. Restricția de pe 03.10 ar opri ERP-ul.
 
 ### Verificări read-only suplimentare (29.09 ~21:25 UTC, cerute de Copilot)
 | Indicator | Rezultat |
