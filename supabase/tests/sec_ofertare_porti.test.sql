@@ -8,7 +8,13 @@
 --                verificate byte cu byte prin md5) + ACL-ul live + harness-ul de test
 --   gaura        dovedește bypass-ul pe starea live (înainte de patch / după rollback tehnic)
 --   patched      teste obligatorii pe patch (apeluri directe + trasee legitime)
+--   runda2       testele verificatorului adversarial (30.09): VD4 sub-modul, VD5 podeaua
+--                pragului pe goluri reale, VD6 confirmat_de_om fără verdict_de, VE1/VE2 verdict
+--                de mașină cu verdict_de. Opțional -v doar=VD5 (un singur test), ca harness-ul
+--                să arate, test cu test, pe ce stare pică (live / v1 / mutanți).
 --   operational  după revenirea operațională: poarta rămâne închisă, logica veche revine
+-- Testele la nivel de fișier (VG1 armare persistentă, VG2 listă albă md5, VG3 revenire armată +
+-- precondiție) sunt în scripts/test_sec_ofertare.sh.
 --
 -- Identități simulate ca în PostgREST: SET ROLE authenticated/anon/service_role +
 -- request.jwt.claims (auth.uid() citește `sub`).
@@ -20,6 +26,7 @@ SET client_min_messages = notice;
 \set UID_MOD    '00000000-0000-4000-8000-000000000007'
 \set UID_NOMOD  '00000000-0000-4000-8000-000000000099'
 \set UID_VIEWER '00000000-0000-4000-8000-000000000055'
+\set UID_SUBMOD '00000000-0000-4000-8000-000000000066'
 \set ca_postgres 'RESET ROLE; RESET request.jwt.claims;'
 \set ca_anon     'RESET ROLE; SET request.jwt.claims TO ''{"role":"anon"}''; SET ROLE anon;'
 \set ca_fara_uid 'RESET ROLE; SET request.jwt.claims TO ''{"role":"authenticated"}''; SET ROLE authenticated;'
@@ -28,13 +35,27 @@ SET client_min_messages = notice;
 \set ca_mod      'RESET ROLE; SET request.jwt.claims TO ''{"sub":"00000000-0000-4000-8000-000000000007","role":"authenticated"}''; SET ROLE authenticated;'
 \set ca_owner    'RESET ROLE; SET request.jwt.claims TO ''{"sub":"00000000-0000-4000-8000-000000000121","role":"authenticated"}''; SET ROLE authenticated;'
 \set ca_viewer   'RESET ROLE; SET request.jwt.claims TO ''{"sub":"00000000-0000-4000-8000-000000000055","role":"authenticated"}''; SET ROLE authenticated;'
+\set ca_submod   'RESET ROLE; SET request.jwt.claims TO ''{"sub":"00000000-0000-4000-8000-000000000066","role":"authenticated"}''; SET ROLE authenticated;'
+\if :{?doar}
+\else
+  \set doar toate
+\endif
 
 SELECT (:'faza' = 'setup') AS f_setup, (:'faza' = 'gaura') AS f_gaura,
-       (:'faza' = 'patched') AS f_patched, (:'faza' = 'operational') AS f_oper,
-       (:'faza' IN ('setup', 'gaura', 'patched', 'operational')) AS f_valid \gset
+       (:'faza' = 'patched') AS f_patched, (:'faza' = 'runda2') AS f_runda2, (:'faza' = 'operational') AS f_oper,
+       (:'faza' IN ('setup', 'gaura', 'patched', 'runda2', 'operational')) AS f_valid,
+       (:'doar' IN ('toate', 'VD4', 'VD5', 'VD6', 'VE1', 'VE2')) AS doar_valid,
+       (:'doar' IN ('toate', 'VD4')) AS r_vd4, (:'doar' IN ('toate', 'VD5')) AS r_vd5,
+       (:'doar' IN ('toate', 'VD6')) AS r_vd6, (:'doar' IN ('toate', 'VE1')) AS r_ve1,
+       (:'doar' IN ('toate', 'VE2')) AS r_ve2 \gset
 \if :f_valid
 \else
-  \echo 'faza necunoscută: folosește setup | gaura | patched | operational'
+  \echo 'faza necunoscută: folosește setup | gaura | patched | runda2 | operational'
+  SELECT 1/0;
+\endif
+\if :doar_valid
+\else
+  \echo 'doar necunoscut: VD4 | VD5 | VD6 | VE1 | VE2 (sau lipsă = toate)'
   SELECT 1/0;
 \endif
 
@@ -303,26 +324,34 @@ CREATE FUNCTION t.inv_row(p_id bigint) RETURNS text LANGUAGE sql AS $$
   SELECT format('%s|%s|%s|%s', coalesce(pereche_cerinta_id::text, '-'), coalesce(verdict, '-'), coalesce(verdict_de::text, '-'), coalesce(verdict_la::text, '-'))
   FROM public.ofertare_inventar_ai WHERE id = p_id $$;
 
--- Fixture: 4 identități, 2 licitații cu dovezi alese de colegi, un inventar AI cu verdicte umane.
+-- Fixture: 5 identități, 3 licitații cu dovezi alese de colegi, un inventar AI cu verdicte umane,
+-- plus licitația 40 (runda 2): goluri REALE din același domeniu, cu similaritate 0.33–0.38.
 CREATE FUNCTION t.reset_fixture() RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   TRUNCATE public.ofertare_inventar_ai, public.ofertare_acoperire, public.ofertare_cerinte,
            public.user_module_access, public.profiles RESTART IDENTITY CASCADE;
   INSERT INTO public.profiles (id, is_owner) VALUES
     ('00000000-0000-4000-8000-000000000121', true),   -- owner
-    ('00000000-0000-4000-8000-000000000007', false),  -- are modulul ofertare (editor)
+    ('00000000-0000-4000-8000-000000000007', false),  -- are modulul ofertare (editor = „👁 Vizualizare” în UI)
     ('00000000-0000-4000-8000-000000000099', false),  -- NU are ofertare (are logistica)
-    ('00000000-0000-4000-8000-000000000055', false);  -- ofertare cu access_level viewer
+    ('00000000-0000-4000-8000-000000000055', false),  -- ofertare cu access_level viewer
+    ('00000000-0000-4000-8000-000000000066', false);  -- doar sub-modulul ofertare.licitatii (runda 2, VD4)
   INSERT INTO public.user_module_access (profile_id, module, access_level) VALUES
     ('00000000-0000-4000-8000-000000000007', 'ofertare',  'editor'),
     ('00000000-0000-4000-8000-000000000099', 'logistica', 'editor'),
-    ('00000000-0000-4000-8000-000000000055', 'ofertare',  'viewer');
+    ('00000000-0000-4000-8000-000000000055', 'ofertare',  'viewer'),
+    -- ruta /ofertare o lasă să intre (hasModuleAccess: m.startsWith('ofertare.')), poarta nu (module = 'ofertare')
+    ('00000000-0000-4000-8000-000000000066', 'ofertare.licitatii', 'admin');
   INSERT INTO public.ofertare_cerinte (id, licitatie_id, text_cerinta, inlocuita_de) VALUES
     (101, 10, 'Ofertantul trebuie sa detina autorizatie ANRE tip EDIB pentru executia retelelor de distributie gaze naturale', NULL),
     (102, 10, 'Ofertantul trebuie sa prezinte certificat ISO 9001 privind sistemul de management al calitatii', NULL),
     (103, 10, 'Cerinta veche inlocuita: autorizatie ANRE tip EDIB pentru retele de gaze', 101),
     (201, 20, 'Licitatia Jilava: responsabil tehnic cu executia atestat', NULL),
-    (301, 30, 'Experienta similara: minim un contract de retele gaze', NULL);
+    (301, 30, 'Experienta similara: minim un contract de retele gaze', NULL),
+    -- licitația 40 (runda 2, VD5/VD6): registrul are cerințe apropiate, dar ALTELE decât obligațiile 41–43
+    (401, 40, 'Ofertantul trebuie sa prezinte certificat ISO 9001 privind sistemul de management al calitatii', NULL),
+    (402, 40, 'Responsabil tehnic cu executia atestat pentru categoria de importanta C', NULL),
+    (403, 40, 'Garantia de buna executie este de 10% din valoarea contractului', NULL);
   INSERT INTO public.ofertare_acoperire (id, cerinta_id, mod, status, referinta_text, pozitie_id, ales, ales_de, updated_at) VALUES
     (1001, 101, 'personal', 'acoperit', 'dovada aleasa de colegul cu modul', NULL, true,  '00000000-0000-4000-8000-000000000007', '2026-09-20 10:00+00'),
     (1002, 101, 'personal', 'acoperit', 'candidat 2', NULL, false, NULL, '2026-09-20 10:00+00'),
@@ -341,7 +370,15 @@ BEGIN
     (6, 10, 'gemini', 1, 6, 'Personalul de santier va purta echipament de protectie', NULL, 'respins_de_om', NULL, '2026-09-20 10:00+00'),
     (7, 10, 'gemini', 1, 7, 'Ofertantul va prezenta lista subcontractantilor si partea din contract subcontractata', 102, 'acoperit', '00000000-0000-4000-8000-000000000007', '2026-09-20 10:00+00'),
     (20, 10, 'openai', 1, 1, 'Autorizatie ANRE tip EDIB pentru executia retelelor de distributie gaze naturale', NULL, NULL, NULL, NULL),
-    (30, 20, 'gemini', 1, 1, 'Autorizatie ANRE tip EDIB pentru executia retelelor de distributie gaze naturale', NULL, NULL, NULL, NULL);
+    (30, 20, 'gemini', 1, 1, 'Autorizatie ANRE tip EDIB pentru executia retelelor de distributie gaze naturale', NULL, NULL, NULL, NULL),
+    -- licitația 40: trei goluri reale (ISO 45001 ≠ 9001, diriginte ISC ≠ RTE, garanție de participare ≠ de bună
+    -- execuție; similaritate 0.375 / 0.362 / 0.333) și un „✓ adăugată” fără verdict_de, cum îl scrie UI-ul când
+    -- lipsește profilul (OfertareLicitatii.jsx L2426/L2444: verdict_de = profile?.id || null), cu verdict_la
+    -- din ceasul clientului (în viitor). Textul lui 44 e identic cu cerința 403: orice rescriere s-ar vedea.
+    (41, 40, 'gemini', 1, 1, 'Ofertantul va prezenta certificat ISO 45001 privind sanatatea si securitatea in munca', NULL, NULL, NULL, NULL),
+    (42, 40, 'gemini', 1, 2, 'Diriginte de santier autorizat ISC pentru categoria de importanta C', NULL, NULL, NULL, NULL),
+    (43, 40, 'gemini', 1, 3, 'Garantia de participare este de 1% din valoarea estimata si se constituie prin instrument bancar', NULL, NULL, NULL, NULL),
+    (44, 40, 'gemini', 1, 4, 'Garantia de buna executie este de 10% din valoarea contractului', NULL, 'confirmat_de_om', NULL, '2099-01-01 00:00+00');
 END $$;
 
 -- Copia e byte-identică cu live (md5 citit read-only din Supabase pe 29.09, PG 17.6).
@@ -389,7 +426,9 @@ SELECT t.inv_row(7) AS r7 \gset
 SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1)', 'G3 cu modul, apel ca în UI');
 :ca_postgres
 SELECT t.ok((SELECT verdict FROM public.ofertare_inventar_ai WHERE id = 3) = 'lipsa_din_registru', 'G3 „respins_de_om” rescris în folosire normală (bug-ul constatării 3)');
-SELECT t.ok(t.inv_row(7) <> :'r7', 'G3 rândul semnat de om (verdict_de) rescris');
+-- Rândul 7 (verdict de mașină „acoperit” + verdict_de) e recalculat. Nu e bug: runda 2 păstrează exact
+-- comportamentul ăsta (doar vocabularul uman e protejat, verdict_de nu îngheață rândul).
+SELECT t.ok(t.inv_row(7) <> :'r7', 'G3 rândul 7 (verdict de mașină cu verdict_de) recalculat — la fel și după patch (runda 2)');
 
 -- G4: fără uid (authenticated fără sub) pereche trece — nu există nicio poartă.
 SELECT t.reset_fixture();
@@ -508,28 +547,31 @@ SELECT t.inv_row(3) AS r3, t.inv_row(4) AS r4, t.inv_row(6) AS r6, t.inv_row(7) 
 :ca_mod
 SELECT imperecheate AS r_imp, ramase_fara_pereche AS r_ram FROM public.ofertare_inventar_pereche(10, 'gemini', 1) \gset
 :ca_postgres
-SELECT t.ok(:'r_imp' = '3' AND :'r_ram' = '4', 'P11 cu modul, apel ca în UI: întoarce (3 regăsite, 4 fără pereche)');
+SELECT t.ok(:'r_imp' = '2' AND :'r_ram' = '5', 'P11 cu modul, apel ca în UI: întoarce (2 regăsite, 5 fără pereche)');
 SELECT t.ok(t.inv_row(1) = '101|acoperit|-|-', 'P11 rând 1 → acoperit de cerința 101');
 SELECT t.ok(t.inv_row(2) = '-|lipsa_din_registru|-|-', 'P11 rând 2 → lipsă din registru (golul rămâne vizibil)');
 SELECT t.ok(t.inv_row(5) = '102|acoperit|-|-', 'P11 rând 5 → acoperit de 102');
 SELECT t.ok(t.inv_row(3) = :'r3', 'P11 respins_de_om (cu verdict_de) NEATINS');
 SELECT t.ok(t.inv_row(4) = :'r4', 'P11 confirmat_de_om NEATINS');
 SELECT t.ok(t.inv_row(6) = :'r6', 'P11 respins_de_om fără verdict_de (profil lipsă în UI) NEATINS');
-SELECT t.ok(t.inv_row(7) = :'r7', 'P11 rând semnat de om (verdict_de) NEATINS');
+-- Runda 2: rândul 7 are verdict de MAȘINĂ („acoperit”, pereche 102 la similaritate 0.17) cu verdict_de pus.
+-- verdict_de nu mai îngheață rândul: perechea falsă dispare, verdict_de/verdict_la rămân cum erau.
+SELECT t.ok(t.inv_row(7) = '-|lipsa_din_registru|00000000-0000-4000-8000-000000000007|2026-09-20 10:00:00+00',
+            'P11 rând 7 (verdict de mașină + verdict_de) RECALCULAT: perechea falsă 102 dispare, redevine „lipsă” (runda 2)');
 SELECT t.ok(t.inv_row(20) = :'r20' AND t.inv_row(30) = :'r30', 'P11 alt furnizor / altă licitație neatinse');
 
--- P12: prag limitat — p_prag=0 (atacul) se comportă ca pragul minim 0.30: golul rămâne.
+-- P12: prag limitat — p_prag=0 (atacul) se comportă ca podeaua 0.45 (= apelul din UI): golul rămâne.
 :ca_postgres
 SELECT t.reset_fixture();
 :ca_mod
 SELECT imperecheate AS r_imp, ramase_fara_pereche AS r_ram FROM public.ofertare_inventar_pereche(10, 'gemini', 1, 0) \gset
 :ca_postgres
-SELECT t.ok(:'r_imp' = '3' AND :'r_ram' = '4' AND t.inv_row(2) = '-|lipsa_din_registru|-|-', 'P12 p_prag=0 limitat la 0.30: golul (rând 2) rămâne „lipsă”');
+SELECT t.ok(:'r_imp' = '2' AND :'r_ram' = '5' AND t.inv_row(2) = '-|lipsa_din_registru|-|-', 'P12 p_prag=0 limitat la 0.45: golul (rând 2) rămâne „lipsă”');
 SELECT t.ok(t.inv_row(3) = :'r3' AND t.inv_row(6) = :'r6', 'P12 p_prag=0: respingerile omului neatinse');
 :ca_mod
 SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, -5)', 'P12 p_prag negativ acceptat, limitat');
 :ca_postgres
-SELECT t.ok(t.inv_row(2) = '-|lipsa_din_registru|-|-', 'P12 p_prag=-5 limitat la 0.30');
+SELECT t.ok(t.inv_row(2) = '-|lipsa_din_registru|-|-', 'P12 p_prag=-5 limitat la 0.45');
 
 -- P13: limita de sus — p_prag=2 limitat la 0.95 (textul identic se regăsește, cel de 0.75 nu).
 SELECT t.reset_fixture();
@@ -561,13 +603,117 @@ SELECT imperecheate AS r_imp FROM public.ofertare_inventar_pereche(99) \gset
 :ca_postgres
 SELECT t.ok(:'r_imp' = '0', 'P15 licitație fără inventar → (0, 0), ca înainte');
 
--- P16: rezidual documentat — fn_are_acces_ofertare() nu citește access_level: un „viewer”
--- pe Ofertare trece (la fel ca prin RLS). Nu schimbăm aici semantica porții comune.
+-- P16: rezidual documentat — fn_are_acces_ofertare() nu citește access_level DELOC. Nu e doar
+-- „viewer” (nivel pe care UI-ul nici nu-l oferă): „editor”, pe care ecranul de acces îl afișează
+-- ca „👁 Vizualizare (editor)” (App.jsx L7274), scrie la fel ca „admin”. La fel prin RLS.
+-- Nu schimbăm aici semantica porții comune (decizie separată, vezi docs).
 SELECT t.reset_fixture();
 :ca_viewer
-SELECT t.expect_ok('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', 'P16 REZIDUAL: viewer pe Ofertare trece poarta (semantica fn_are_acces_ofertare, la fel ca RLS)');
+SELECT t.expect_ok('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', 'P16 REZIDUAL: access_level viewer trece poarta la alegere');
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1)', 'P16 REZIDUAL: access_level viewer trece poarta la împerechere');
+:ca_mod
+SELECT t.expect_ok('SELECT * FROM public.fn_ofertare_alege_acoperire(1003)', 'P16 REZIDUAL: access_level editor („👁 Vizualizare” în UI) schimbă alegerea');
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1)', 'P16 REZIDUAL: access_level editor („👁 Vizualizare” în UI) rulează împerecherea');
 :ca_postgres
+SELECT t.ok((SELECT ales AND ales_de = :'UID_MOD' FROM public.ofertare_acoperire WHERE id = 1003), 'P16 REZIDUAL: alegerea făcută de „Vizualizare (editor)” chiar s-a scris');
 \echo '== PATCHED: toate testele au trecut =='
+\endif
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- RUNDA 2 (30.09): testele verificatorului adversarial, integrate. Fiecare bloc pornește din
+-- fixture curat, deci se poate rula și singur (-v doar=VD5). Pe ce stări pică fiecare: docs §10.
+\if :f_runda2
+\echo '== RUNDA 2: testele verificatorului =='
+
+-- VD4: sub-modulul „ofertare.*” trece ruta /ofertare din UI, dar nu poarta. Comportament VOIT
+-- (poarta = RLS-ul de scriere, neschimbat), fixat aici ca să nu se schimbe pe tăcute; regresie
+-- doar dacă în live există asemenea rânduri (preview §7: user_module_access LIKE 'ofertare%').
+\if :r_vd4
+:ca_postgres
+SELECT t.reset_fixture();
+SELECT t.acop_snapshot() AS s_acop, t.inv_snapshot() AS s_inv \gset
+:ca_submod
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'modulul Ofertare', 'VD4 sub-modul ofertare.licitatii (ruta /ofertare îl lasă să intre) → alege 42501: poarta cere module = ''ofertare'' exact');
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1)', '42501', 'modulul Ofertare', 'VD4 sub-modul ofertare.licitatii → „Compară cu registrul” 42501');
+SELECT t.ok(t.rows_affected('UPDATE public.ofertare_acoperire SET ales = false WHERE id = 1001') = 0, 'VD4 context: nici direct nu scrie (RLS, neschimbat) — patch-ul aliniază RPC-urile cu RLS');
+:ca_postgres
+SELECT t.ok(t.acop_snapshot() = :'s_acop' AND t.inv_snapshot() = :'s_inv', 'VD4 refuzurile n-au atins nimic');
+\endif
+
+-- VD5: podeaua pragului. Goluri REALE din același domeniu au similaritate 0.33–0.38: la 0.45 (UI)
+-- apar ca lipsă; o podea de 0.30 (v1) le-ar fi ascuns la cererea apelantului (p_prag=0 / 0.30).
+\if :r_vd5
+:ca_postgres
+SELECT t.reset_fixture();
+SELECT t.ok((SELECT count(*) = 3 AND bool_and(s >= 0.30 AND s < 0.45)
+               FROM (SELECT i.id, max(extensions.similarity(c.text_cerinta, i.obligatie)) AS s
+                       FROM public.ofertare_inventar_ai i
+                       JOIN public.ofertare_cerinte c ON c.licitatie_id = i.licitatie_id AND c.inlocuita_de IS NULL
+                      WHERE i.id IN (41, 42, 43) GROUP BY i.id) x),
+            'VD5 fixture: cele 3 obligații reale au cea mai bună similaritate în [0.30, 0.45) (0.375 / 0.362 / 0.333)');
+:ca_mod
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1)', 'VD5 apel ca în UI (0.45)');
+:ca_postgres
+SELECT t.ok((SELECT count(*) FROM public.ofertare_inventar_ai WHERE id IN (41, 42, 43) AND verdict = 'lipsa_din_registru' AND pereche_cerinta_id IS NULL) = 3, 'VD5 la 0.45 (UI): cele 3 goluri reale apar ca „lipsă din registru”');
+SELECT t.reset_fixture();
+:ca_mod
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1, 0)', 'VD5 p_prag=0');
+:ca_postgres
+SELECT t.ok((SELECT count(*) FROM public.ofertare_inventar_ai WHERE id IN (41, 42, 43) AND verdict = 'lipsa_din_registru' AND pereche_cerinta_id IS NULL) = 3, 'VD5 p_prag=0 → podeaua 0.45: golurile reale NU dispar');
+SELECT t.reset_fixture();
+:ca_mod
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1, 0.30)', 'VD5 p_prag=0.30');
+:ca_postgres
+SELECT t.ok((SELECT count(*) FROM public.ofertare_inventar_ai WHERE id IN (41, 42, 43) AND verdict = 'lipsa_din_registru' AND pereche_cerinta_id IS NULL) = 3, 'VD5 p_prag=0.30 (vechea podea) → tot 0.45: golurile reale NU dispar');
+SELECT t.reset_fixture();
+:ca_mod
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1, 0.44)', 'VD5 p_prag=0.44');
+:ca_postgres
+SELECT t.ok((SELECT count(*) FROM public.ofertare_inventar_ai WHERE id IN (41, 42, 43) AND verdict = 'lipsa_din_registru' AND pereche_cerinta_id IS NULL) = 3, 'VD5 p_prag=0.44 → 0.45: golurile reale NU dispar');
+\endif
+
+-- VD6: „✓ adăugată” scris de UI fără verdict_de (profil lipsă). După runda 2 doar vocabularul îl
+-- protejează (verdict_de nu mai contează), deci testul prinde orice scăpare din vocabular.
+\if :r_vd6
+:ca_postgres
+SELECT t.reset_fixture();
+SELECT t.inv_row(44) AS r44 \gset
+SELECT t.ok(:'r44' = '-|confirmat_de_om|-|2099-01-01 00:00:00+00', 'VD6 fixture: confirmat_de_om fără verdict_de, verdict_la în viitor (ceasul clientului)');
+:ca_mod
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1)', 'VD6 „Compară cu registrul” ca în UI');
+:ca_postgres
+SELECT t.ok(t.inv_row(44) = :'r44', 'VD6 confirmat_de_om FĂRĂ verdict_de NEATINS (textul e identic cu cerința 403, orice rescriere s-ar vedea)');
+:ca_mod
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1, 0.95)', 'VD6 și la pragul maxim');
+:ca_postgres
+SELECT t.ok(t.inv_row(44) = :'r44', 'VD6 neatins și la 0.95');
+\endif
+
+-- VE1: rând „semnat” fabricat prin REST de cineva CU modul (RLS permite): verdict de mașină
+-- „acoperit” pus peste un gol real + verdict_de al altcuiva (owner). v1 îl îngheța (verdict_de IS NULL).
+\if :r_ve1
+:ca_postgres
+SELECT t.reset_fixture();
+:ca_mod
+SELECT t.ok(t.rows_affected('UPDATE public.ofertare_inventar_ai SET verdict = ''acoperit'', pereche_cerinta_id = NULL, verdict_de = ''00000000-0000-4000-8000-000000000121'' WHERE id = 2') = 1, 'VE1 cu modul: REST pune „acoperit” + verdict_de al OWNER-ului pe un gol real (RLS permite)');
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1)', 'VE1 „Compară cu registrul” ca în UI');
+:ca_postgres
+SELECT t.ok(t.inv_row(2) = '-|lipsa_din_registru|00000000-0000-4000-8000-000000000121|-', 'VE1 golul ascuns se VINDECĂ: redevine „lipsă” (verdict_de nu mai îngheață rândul)');
+\endif
+
+-- VE2: verdict golit prin REST, verdict_de lăsat. v1 nu-l mai reevalua niciodată (invizibil în
+-- „doar ce lipsește”); acum e reevaluat ca orice rând fără decizie umană.
+\if :r_ve2
+:ca_postgres
+SELECT t.reset_fixture();
+:ca_mod
+SELECT t.ok(t.rows_affected('UPDATE public.ofertare_inventar_ai SET verdict = NULL, verdict_de = ''00000000-0000-4000-8000-000000000007'' WHERE id = 5') = 1, 'VE2 cu modul: REST golește verdictul, lasă verdict_de');
+SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1)', 'VE2 „Compară cu registrul”');
+:ca_postgres
+SELECT t.ok(t.inv_row(5) = '102|acoperit|00000000-0000-4000-8000-000000000007|-', 'VE2 rândul fără verdict (cu verdict_de) e REEVALUAT: primește perechea 102');
+\endif
+:ca_postgres
+\echo '== RUNDA 2: gata =='
 \endif
 
 -- ════════════════════════════════════════════════════════════════════════════

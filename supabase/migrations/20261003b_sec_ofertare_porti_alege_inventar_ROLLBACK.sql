@@ -9,20 +9,52 @@
 --     „respins_de_om” se rescrie la fiecare „Compară cu registrul”.
 --
 -- NU e calea de revenire obișnuită. Dacă patch-ul strică un flux legitim, folosește
--- 20261003b_sec_ofertare_porti_alege_inventar_REVENIRE_OPERATIONALA.sql: aceea readuce
--- logica veche, dar PĂSTREAZĂ poarta de modul (gaura rămâne închisă).
+-- 20261003b_sec_ofertare_porti_alege_inventar_REVENIRE_OPERATIONALA.sql (armată separat). Aceea
+-- păstrează poarta de modul: conturile FĂRĂ modulul Ofertare rămân refuzate. NU e însă „fără
+-- gaură”: pentru cei CU modulul readuce pragul liber (p_prag=0 ⇒ golurile dispar) și rescrierea
+-- lui „respins_de_om” la „Compară cu registrul”.
 --
--- Siguranță: fișierul nu face nimic dacă nu e armat explicit în aceeași sesiune, pe prima linie:
---   SET gazpet.rollback_tehnic_20261003b = 'REDESCHIDE_BYPASS';
--- Fără ea, blocul de mai jos se oprește cu eroare și nu schimbă nimic (tot fișierul e un
--- singur bloc DO, deci nu se poate aplica „pe jumătate”, nici fără tranzacție).
--- Folosire: cerere explicită a lui Răzvan în chat → preview (md5 curent) → apply_migration
--- cu linia SET de mai sus + acest fișier → verificare md5 = starea din 29.09.
+-- Siguranță (runda 2, 30.09):
+--   • armarea e explicită și doar în sesiunea apply-ului, pusă imediat înaintea fișierului:
+--       SET gazpet.rollback_tehnic_20261003b = 'REDESCHIDE_BYPASS';
+--   • o armare PERSISTENTĂ (ALTER DATABASE / ALTER ROLE … SET gazpet.rollback_tehnic_20261003b,
+--     orice scriere a numelui) blochează fișierul, chiar dacă linia SET e prezentă: armarea
+--     persistentă ar transforma rollback-ul într-o capcană pentru orice sesiune viitoare;
+--   • precondiție md5: pornește doar din starea patch-ului, a revenirii operaționale sau din
+--     starea live (reluare fără efect). O versiune ulterioară, necunoscută, nu se suprascrie.
+-- Fără toate trei, blocul DO se oprește cu eroare și nu schimbă nimic (BEGIN/COMMIT explicit).
+-- Folosire: cerere explicită a lui Răzvan în chat → preview (md5 curent, pg_db_role_setting) →
+-- apply_migration cu linia SET de mai sus + acest fișier → verificare md5 = starea din 29.09.
 -- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+
 DO $rollback_tehnic$
+DECLARE
+  v_alege   text;
+  v_pereche text;
 BEGIN
+  -- 1. Armare persistentă = refuz. Numele GUC-urilor nu țin cont de majuscule, deci nici căutarea.
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_db_role_setting s, unnest(s.setconfig) AS c(cfg)
+              WHERE lower(split_part(c.cfg, '=', 1)) = 'gazpet.rollback_tehnic_20261003b') THEN
+    RAISE EXCEPTION 'ROLLBACK TEHNIC 20261003b blocat: comutatorul e armat PERSISTENT (ALTER DATABASE/ROLE … SET gazpet.rollback_tehnic_20261003b, în pg_db_role_setting). Armarea e valabilă doar în sesiunea apply-ului: șterge întâi setarea cu ALTER DATABASE/ROLE … RESET gazpet.rollback_tehnic_20261003b.'
+      USING ERRCODE = '42501';
+  END IF;
+  -- 2. Armare explicită în sesiune.
   IF coalesce(current_setting('gazpet.rollback_tehnic_20261003b', true), '') <> 'REDESCHIDE_BYPASS' THEN
-    RAISE EXCEPTION 'ROLLBACK TEHNIC 20261003b blocat: redeschide bypass-ul pe Ofertare. Doar la cererea explicită a lui Răzvan, cu SET gazpet.rollback_tehnic_20261003b = ''REDESCHIDE_BYPASS''; în aceeași sesiune. Pentru revenire fără gaură: _REVENIRE_OPERATIONALA.sql.'
+    RAISE EXCEPTION 'ROLLBACK TEHNIC 20261003b blocat: redeschide bypass-ul pe Ofertare. Doar la cererea explicită a lui Răzvan, cu SET gazpet.rollback_tehnic_20261003b = ''REDESCHIDE_BYPASS''; în aceeași sesiune. Pentru o revenire care păstrează poarta de modul (dar readuce, pentru cei cu modulul, pragul liber și rescrierea lui respins_de_om): _REVENIRE_OPERATIONALA.sql, armată separat.'
+      USING ERRCODE = '42501';
+  END IF;
+  -- 3. Precondiție: pornim doar dintr-o stare cunoscută (listă albă md5, per funcție).
+  v_alege   := md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure));
+  v_pereche := md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure));
+  IF v_alege NOT IN ('1da7260d85e2441d93876c1c590d9f99',     -- patch 20261003b (runda 2)
+                     'd1a1a2a45cf57046cf7c26dc981c310f',     -- revenirea operațională
+                     '6c9995646a6dbe6da995e48a3a885fc9')     -- live 29.09 (reluare fără efect)
+     OR v_pereche NOT IN ('9cf65390fb07c4f84e508a511f8dbd9f', -- patch 20261003b (runda 2)
+                          '770c29d8066d3003fc0355fc93e7f3fb', -- revenirea operațională
+                          '500263dacba2b44e0caa1cb07db88d6e') -- live 29.09
+  THEN
+    RAISE EXCEPTION 'ROLLBACK TEHNIC 20261003b blocat: starea curentă nu e nici patch-ul, nici revenirea operațională, nici starea live din 29.09 (md5 alege %, pereche %). Cineva a lucrat pe funcții între timp: compară înainte de orice rollback.', v_alege, v_pereche
       USING ERRCODE = '42501';
   END IF;
 
@@ -127,3 +159,5 @@ $def_pereche$;
   PERFORM set_config('gazpet.rollback_tehnic_20261003b', '', false);
   RAISE WARNING 'ROLLBACK TEHNIC 20261003b aplicat: bypass-ul (2)+(3) pe Ofertare e REDESCHIS.';
 END $rollback_tehnic$;
+
+COMMIT;

@@ -9,44 +9,63 @@
 --   (3) public.ofertare_inventar_pereche(bigint,text,integer,real)
 --       Azi nu are nicio poartă, iar p_prag îl alege apelantul (cu 0 totul iese „acoperit”,
 --       golurile dispar). În plus, UPDATE-ul rescrie „respins_de_om” chiar în folosire
---       normală. Patch: poarta fn_are_acces_ofertare() + prag limitat la [0.30, 0.95]
---       + verdictele omului (confirmat_de_om, respins_de_om, orice rând cu verdict_de)
---       nu se mai ating.
+--       normală. Patch: poarta fn_are_acces_ofertare() + prag limitat la [0.45, 0.95]
+--       (podeaua = implicitul din UI) + verdictele omului (vocabularul confirmat_de_om /
+--       respins_de_om) nu se mai ating.
+--
+-- Runda 2 (30.09, corecturile verificatorului): podeaua pragului 0.30 → 0.45; protecția
+-- verdictelor doar pe vocabularul uman (nu și pe verdict_de); precondiție pe listă albă de md5
+-- (nu mai acceptă orice corp care poartă markerul); BEGIN/COMMIT explicit.
 --
 -- ⚠ NU SE APLICĂ fără: (a) excepția de securitate la freeze-ul Ofertare, acordată explicit
 --   de Răzvan pe domeniul exact al acestui fișier; (b) GO Copilot pe revizie. Pașii (preview →
 --   confirmare → apply → verificare) sunt în docs/SECURITATE_PATCH_OFERTARE.md.
--- ⚠ Se aplică DOAR întreg, într-o singură tranzacție (apply_migration). Nu pe bucăți.
+-- ⚠ Se aplică DOAR întreg, într-o singură tranzacție (BEGIN/COMMIT de mai jos, apply_migration).
 --
 -- Model de identitate (S-A): nicio ramură „auth.uid() IS NULL ⇒ sistem”. Fără uid = refuz
 -- 42501, inclusiv pentru service_role și postgres. Apelanții legitimi (OfertareCerinte.jsx,
--- OfertareLicitatii.jsx, ruta /ofertare cu requireModule:'ofertare') sunt toți utilizatori
--- cu uid și cu modulul Ofertare (sau owner).
+-- OfertareLicitatii.jsx) sunt utilizatori cu uid și cu modulul Ofertare (sau owner). Atenție:
+-- ruta /ofertare lasă să intre și un sub-modul „ofertare.*”, poarta cere module = 'ofertare'
+-- exact (ca RLS-ul de scriere); vezi docs §7, interogarea de preview pe sub-module.
 --
 -- Ce NU face: nu atinge tabele, politici, date, semnături. CREATE OR REPLACE păstrează
 -- semnătura, tipul întors și ACL-ul; ACL-ul e reafirmat explicit mai jos.
--- Revenire: _REVENIRE_OPERATIONALA.sql (păstrează poarta) sau _ROLLBACK.sql (TEHNIC —
--- redeschide bypass-ul; doar la cererea explicită a lui Răzvan).
+-- Revenire: _REVENIRE_OPERATIONALA.sql (armată separat; păstrează poarta de modul, dar pentru
+-- cei CU modul readuce pragul liber și rescrierea lui respins_de_om) sau _ROLLBACK.sql
+-- (TEHNIC — redeschide bypass-ul; doar la cererea explicită a lui Răzvan).
 -- Test: scripts/test_sec_ofertare.sh (PG16 local) + supabase/tests/sec_ofertare_porti.test.sql
 -- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
 
 -- ── 0. Precondiții: nu suprascriem o versiune pe care n-am auditat-o ─────────────
--- md5(pg_get_functiondef) citit read-only din live pe 29.09.2026 (PG 17.6). Se acceptă
--- starea auditată sau o stare care poartă deja markerul acestui patch (reaplicare).
+-- md5(pg_get_functiondef) pe listă albă, per funcție:
+--   • starea live din 29.09.2026 (PG 17.6, citită read-only; aceleași md5 în PG16) — prima aplicare;
+--   • starea acestui patch (runda 2) — reaplicare idempotentă;
+--   • starea _REVENIRE_OPERATIONALA.sql — reaplicare după o revenire operațională.
+-- Orice altceva e refuzat, inclusiv o versiune ulterioară care poartă markerul SEC-20261003b:
+-- cineva a lucrat pe funcție între timp și trebuie comparat, nu suprascris tacit.
+-- md5-urile patch-ului și ale revenirii sunt calculate în PG16 (scripts/test_sec_ofertare.sh le
+-- verifică); dacă în PG17 ies altfel, lista refuză (fail-closed) — vezi docs §7 pasul 4.
 DO $pre$
 DECLARE
-  v_acces   text := pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure);
-  v_alege   text := pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure);
-  v_pereche text := pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure);
+  v_acces   text := md5(pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure));
+  v_alege   text := md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure));
+  v_pereche text := md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure));
 BEGIN
-  IF md5(v_acces) <> '6991b618d5fabbefdbd14684d335db48' THEN
-    RAISE EXCEPTION 'Precondiție 20261003b: fn_are_acces_ofertare() diferă de starea auditată (md5 %). Poarta se sprijină pe ea: recitește definiția live și reauditează înainte de apply.', md5(v_acces);
+  IF v_acces <> '6991b618d5fabbefdbd14684d335db48' THEN
+    RAISE EXCEPTION 'Precondiție 20261003b: fn_are_acces_ofertare() diferă de starea auditată (md5 %). Poarta se sprijină pe ea: recitește definiția live și reauditează înainte de apply.', v_acces;
   END IF;
-  IF md5(v_alege) <> '6c9995646a6dbe6da995e48a3a885fc9' AND position('SEC-20261003b' IN v_alege) = 0 THEN
-    RAISE EXCEPTION 'Precondiție 20261003b: fn_ofertare_alege_acoperire s-a schimbat față de starea auditată (md5 %). Cineva a lucrat pe ea între timp: oprește-te și compară.', md5(v_alege);
+  IF v_alege NOT IN ('6c9995646a6dbe6da995e48a3a885fc9',   -- live 29.09
+                     '1da7260d85e2441d93876c1c590d9f99',   -- patch 20261003b (runda 2)
+                     'd1a1a2a45cf57046cf7c26dc981c310f')   -- revenirea operațională
+  THEN
+    RAISE EXCEPTION 'Precondiție 20261003b: fn_ofertare_alege_acoperire nu e în nicio stare cunoscută (live 29.09, patch, revenire operațională): md5 %. Cineva a lucrat pe ea între timp: oprește-te și compară.', v_alege;
   END IF;
-  IF md5(v_pereche) <> '500263dacba2b44e0caa1cb07db88d6e' AND position('SEC-20261003b' IN v_pereche) = 0 THEN
-    RAISE EXCEPTION 'Precondiție 20261003b: ofertare_inventar_pereche s-a schimbat față de starea auditată (md5 %). Cineva a lucrat pe ea între timp: oprește-te și compară.', md5(v_pereche);
+  IF v_pereche NOT IN ('500263dacba2b44e0caa1cb07db88d6e', -- live 29.09
+                       '9cf65390fb07c4f84e508a511f8dbd9f', -- patch 20261003b (runda 2)
+                       '770c29d8066d3003fc0355fc93e7f3fb') -- revenirea operațională
+  THEN
+    RAISE EXCEPTION 'Precondiție 20261003b: ofertare_inventar_pereche nu e în nicio stare cunoscută (live 29.09, patch, revenire operațională): md5 %. Cineva a lucrat pe ea între timp: oprește-te și compară.', v_pereche;
   END IF;
   IF to_regprocedure('extensions.similarity(text,text)') IS NULL THEN
     RAISE EXCEPTION 'Precondiție 20261003b: extensions.similarity(text,text) (pg_trgm) lipsește.';
@@ -128,8 +147,8 @@ CREATE OR REPLACE FUNCTION public.ofertare_inventar_pereche(p_lic bigint, p_furn
  SECURITY DEFINER
  SET search_path = public, pg_temp
 AS $function$
--- SEC-20261003b (constatarea 3): poarta de modul Ofertare, pragul nu mai e la alegerea
--- apelantului, iar ce a decis omul nu se mai rescrie.
+-- SEC-20261003b (constatarea 3): poarta de modul Ofertare, pragul nu mai poate coborî sub cel
+-- din UI, iar ce a decis omul nu se mai rescrie.
 DECLARE
   v_uid       uuid := auth.uid();
   v_furnizor  text;
@@ -146,9 +165,11 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  -- Prag limitat la [0.30, 0.95]; NULL → 0.45, ca implicitul pe care îl folosește UI-ul.
-  -- Cu 0 (sau negativ) totul ar ieși „acoperit”; peste 1 nimic. NaN/+∞ → 0.95, −∞ → 0.30.
-  v_prag := greatest(0.30::real, least(coalesce(p_prag, 0.45::real), 0.95::real));
+  -- Prag limitat la [0.45, 0.95]; NULL → 0.45. Podeaua e chiar implicitul din UI: apelantul poate
+  -- cere o potrivire mai strictă (mai multe goluri), niciodată una mai laxă. Sub 0.45 dispar goluri
+  -- reale din același domeniu (ISO 45001 vs 9001 = 0.375, diriginte ISC vs RTE = 0.362, garanție
+  -- de participare vs de bună execuție = 0.333). NaN/+∞ → 0.95, −∞ → 0.45.
+  v_prag := greatest(0.45::real, least(coalesce(p_prag, 0.45::real), 0.95::real));
 
   -- implicit: cea mai recenta rulare a furnizorului cerut (sau a oricaruia) pe licitatia asta
   SELECT i.furnizor, i.versiune INTO v_furnizor, v_versiune
@@ -179,10 +200,10 @@ BEGIN
          verdict = CASE WHEN b.cer_id IS NOT NULL THEN 'acoperit' ELSE 'lipsa_din_registru' END
     FROM best b
    WHERE i.id = b.inv_id
-     -- ce a decis omul nu se rescrie: nici „✓ adăugată” (confirmat_de_om), nici „✕ respinsă”
-     -- (respins_de_om), nici orice rând pe care un om și-a pus semnătura (verdict_de).
-     AND COALESCE(i.verdict, '') NOT IN ('confirmat_de_om', 'respins_de_om')
-     AND i.verdict_de IS NULL;
+     -- ce a decis omul nu se rescrie: „✓ adăugată” (confirmat_de_om) și „✕ respinsă” (respins_de_om),
+     -- exact vocabularul pe care UI-ul îl tratează ca decizie. verdict_de NU contează: un verdict de
+     -- mașină cu verdict_de pus prin REST se recalculează, ca înainte (nu rămâne înghețat).
+     AND COALESCE(i.verdict, '') NOT IN ('confirmat_de_om', 'respins_de_om');
   GET DIAGNOSTICS v_atinse = ROW_COUNT;
 
   RAISE LOG 'SEC-20261003b inventar_pereche: lic=% furnizor=% versiune=% prag_cerut=% prag_aplicat=% actualizate=% de=%',
@@ -224,3 +245,5 @@ BEGIN
     END IF;
   END LOOP;
 END $post$;
+
+COMMIT;

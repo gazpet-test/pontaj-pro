@@ -2,24 +2,53 @@
 -- 20261003b — REVENIRE OPERAȚIONALĂ (păstrează poarta de modul Ofertare)
 -- ════════════════════════════════════════════════════════════════════════════
 -- Când se folosește: patch-ul 20261003b a stricat un flux legitim din Ofertare și trebuie
--- revenit repede, FĂRĂ să redeschidem incidentul. Readuce logica de business din 29.09
--- (corpurile live), cu două lucruri păstrate:
+-- revenit repede, FĂRĂ să redeschidem ocolirea pentru conturile fără modul. Readuce logica de
+-- business din 29.09 (corpurile live), cu două lucruri păstrate:
 --   • poarta: auth.uid() obligatoriu + public.fn_are_acces_ofertare() (refuz 42501);
 --   • ACL-ul: fără PUBLIC/anon; EXECUTE doar authenticated + service_role.
--- Ce se pierde față de patch (asumat, doar pentru utilizatorii CU modulul Ofertare):
---   • p_prag revine la alegerea apelantului (0 ⇒ totul „acoperit”);
---   • „respins_de_om” (și rândurile cu verdict_de) se rescriu din nou la „Compară cu registrul”;
+-- NU e „fără gaură”. Ce se pierde față de patch (asumat, doar pentru utilizatorii CU modulul):
+--   • p_prag revine la alegerea apelantului (0 ⇒ totul „acoperit”, golurile dispar);
+--   • „respins_de_om” se rescrie din nou la „Compară cu registrul”;
 --   • dispare urma din jurnalul Postgres (RAISE LOG) și search_path revine la cel vechi.
 -- Nu e „ROLLBACK TEHNIC”: cel tehnic (fișierul _ROLLBACK.sql) scoate și poarta.
--- Aplicare: acordul lui Răzvan → apply_migration cu acest fișier întreg → verificarea din
--- docs/SECURITATE_PATCH_OFERTARE.md §6. Reaplicarea patch-ului pornind de aici e permisă
--- (precondiția patch-ului recunoaște markerul SEC-20261003b).
+--
+-- Siguranță (runda 2, 30.09):
+--   • ARMARE EXPLICITĂ, proprie, doar pe tranzacția apply-ului — prima linie din același
+--     apply_migration, înaintea fișierului (sau imediat după BEGIN, dacă se rulează din psql):
+--       SET LOCAL gazpet.revenire_operationala_20261003b = 'PASTREAZA_POARTA';
+--     SET LOCAL moare la COMMIT. Dacă linia ajunge în afara tranzacției (psql fără -1, înainte
+--     de BEGIN), nu are efect și fișierul refuză: fail-closed.
+--   • o armare PERSISTENTĂ (ALTER DATABASE / ALTER ROLE … SET gazpet.revenire_operationala_20261003b)
+--     blochează fișierul;
+--   • precondiție md5: se aplică DOAR din starea patch-ului 20261003b (runda 2). Din starea live,
+--     dintr-o revenire deja făcută sau dintr-o versiune ulterioară necunoscută: refuz, nimic schimbat.
+-- Aplicare: acordul lui Răzvan → apply_migration cu linia SET LOCAL + acest fișier întreg →
+-- verificarea din docs/SECURITATE_PATCH_OFERTARE.md §7. Reaplicarea patch-ului pornind de aici
+-- e permisă: md5-urile revenirii sunt în lista albă a patch-ului.
 -- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
 
 DO $pre$
+DECLARE
+  v_alege   text := md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure));
+  v_pereche text := md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure));
 BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_db_role_setting s, unnest(s.setconfig) AS c(cfg)
+              WHERE lower(split_part(c.cfg, '=', 1)) = 'gazpet.revenire_operationala_20261003b') THEN
+    RAISE EXCEPTION 'Revenire operațională 20261003b blocată: comutatorul e armat PERSISTENT (ALTER DATABASE/ROLE … SET gazpet.revenire_operationala_20261003b, în pg_db_role_setting). Șterge întâi setarea cu ALTER DATABASE/ROLE … RESET; armarea se face doar cu SET LOCAL în tranzacția apply-ului.'
+      USING ERRCODE = '42501';
+  END IF;
+  IF coalesce(current_setting('gazpet.revenire_operationala_20261003b', true), '') <> 'PASTREAZA_POARTA' THEN
+    RAISE EXCEPTION 'Revenire operațională 20261003b nearmată: readuce, pentru cei cu modulul Ofertare, pragul liber și rescrierea lui respins_de_om. Doar cu acordul lui Răzvan, cu SET LOCAL gazpet.revenire_operationala_20261003b = ''PASTREAZA_POARTA''; în aceeași tranzacție.'
+      USING ERRCODE = '42501';
+  END IF;
   IF md5(pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure)) <> '6991b618d5fabbefdbd14684d335db48' THEN
     RAISE EXCEPTION 'Revenire operațională 20261003b: fn_are_acces_ofertare() diferă de starea auditată; poarta n-ar mai însemna același lucru. Reauditează.';
+  END IF;
+  -- Doar din starea patch-ului 20261003b (runda 2): md5 calculat în PG16, verificat la apply în PG17.
+  IF v_alege <> '1da7260d85e2441d93876c1c590d9f99' OR v_pereche <> '9cf65390fb07c4f84e508a511f8dbd9f' THEN
+    RAISE EXCEPTION 'Revenire operațională 20261003b: se aplică doar din starea patch-ului 20261003b (md5 alege %, pereche %). Din starea live, dintr-o revenire deja făcută sau dintr-o versiune ulterioară nu se suprascrie nimic: compară întâi.', v_alege, v_pereche
+      USING ERRCODE = '42501';
   END IF;
 END $pre$;
 
@@ -139,4 +168,8 @@ BEGIN
       RAISE EXCEPTION 'Revenire operațională 20261003b: % a pierdut poarta de modul.', f;
     END IF;
   END LOOP;
+  -- Dezarmăm și varianta de sesiune (dacă cineva a folosit SET în loc de SET LOCAL).
+  PERFORM set_config('gazpet.revenire_operationala_20261003b', '', false);
 END $post$;
+
+COMMIT;
