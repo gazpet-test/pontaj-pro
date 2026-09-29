@@ -11,6 +11,7 @@ import { verdictAsertiuni } from './asertiuni.js'
 import { VERIGI_AUXILIARE, eroriBlocante } from './rls.js'
 import { contracte } from './contracte.js'
 import { retete } from './retete.js'
+import { ACTOR_TEST, completeazaDBSimulat, completeazaDriverSimulat, monitorSimulat } from './simulare-j06b.mjs'
 
 afterEach(() => { restoreEnv(); mock.timers.reset() })
 
@@ -122,7 +123,7 @@ describe('clona 103 și țintele CDP', () => {
   })
 })
 
-const fixture = { licitatie_id: 103, nr_anunt: 'SANDBOX-V2-DOMNESTI', cdp_port: 9333,
+const fixture = { actor_id: ACTOR_TEST, licitatie_id: 103, nr_anunt: 'SANDBOX-V2-DOMNESTI', cdp_port: 9333,
   cdp_target_id: null, cdp_target_id_2: null, app_url: 'https://pontaj-pro-sooty.vercel.app',
   cerinte: { D1: 6607, D6: 6656, D8: 6552, _nota: { D1: 'Doar documentație' } } }
 function databaseMock(errors = {}, overrides = {}) {
@@ -147,7 +148,9 @@ async function runMock(pas, config, db, connect) {
   try {
     const path = join(dir, 'fixture.json')
     await writeFile(path, JSON.stringify({ ...fixture, scenarii: { [pas]: config } }))
-    const result = await ruleaza(pas, ['--apply', '--allow-ai', '--fixture', path], { dir, db, conecteaza: connect })
+    const result = await ruleaza(pas, ['--apply', '--allow-ai', '--fixture', path], {
+      dir, serieDir: join(dir, 'serie'), db: completeazaDBSimulat(db), supraveghere: monitorSimulat(),
+      conecteaza: async (...a) => completeazaDriverSimulat(await connect(...a)) })
     return { result,
       verdict: JSON.parse(await readFile(join(dir, 'verdict.json'), 'utf8')),
       dialogs: await readFile(join(dir, 'dialoguri-1.json'), 'utf8').catch(() => '[]') }
@@ -215,7 +218,7 @@ describe('RLS auxiliar: verigă nedeterminată, verificări independente continu
     const r = await runMock('02_citire', { faze: { citire_integrala: {
       actiuni: [{ tip: 'click', selector: 'text=X' }], postconditii: [exists],
     } } }, databaseMock(), async () => d)
-    assert.partialDeepStrictEqual(r.verdict, { verdict: 'UNDETERMINED', eroare: 'Dialog neașteptat (confirm): Dialog de probă' })
+    assert.partialDeepStrictEqual(r.verdict, { verdict: 'UNDETERMINED', eroare: 'stare: 02_citire/citire_integrala: Dialog neașteptat (confirm): Dialog de probă' })
     assert.partialDeepStrictEqual(JSON.parse(r.dialogs)[0], { message: 'Dialog de probă', asteptat: false })
   })
 })

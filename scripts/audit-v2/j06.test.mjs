@@ -10,6 +10,7 @@ import { verificaRefuzServer } from './refuz.js'
 import { caleSandbox } from './siguranta.js'
 import { asertiune, verdictAsertiuni } from './asertiuni.js'
 import { ruleaza } from './scenariu.mjs'
+import { completeazaDBSimulat, completeazaDriverSimulat, monitorSimulat } from './simulare-j06b.mjs'
 
 const fixture = JSON.parse(await readFile(new URL('./fixture.json', import.meta.url), 'utf8'))
 const generat = retete(fixture)
@@ -124,7 +125,8 @@ for (const mod of ['refuz', 'bypass', 'fara_cerere', 'audit_modificat', 'RLS', '
   const dir = await mkdtemp(join(fileURLToPath(new URL('./', import.meta.url)), 'j06-test-'))
   try {
     const ui = mod.startsWith('ui_')
-    const r = await ruleaza(ui ? '10_pachet' : '11_depunere', ['--apply', '--faza', ui ? 'aprobare' : 'status_depusa'], { dir, db, conecteaza: async () => driver })
+    const r = await ruleaza(ui ? '10_pachet' : '11_depunere', ['--apply', '--faza', ui ? 'aprobare' : 'status_depusa'], {
+      dir, serieDir: join(dir, 'serie'), db: completeazaDBSimulat(db), supraveghere: monitorSimulat(tabele), conecteaza: async () => completeazaDriverSimulat(driver) })
     assert.equal(r.verdict, mod === 'ui_only' ? 'UI_ONLY' : mod === 'refuz' ? 'MATCH' : ['bypass', 'audit_modificat', 'ui_bypass'].includes(mod) ? 'BYPASS' : 'UNDETERMINED')
     if (ui || ['RLS', 'r5_schimbat'].includes(mod)) assert.equal(clicks, 0)
     else assert.equal(clicks, 1)

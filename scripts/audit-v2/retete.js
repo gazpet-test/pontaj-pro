@@ -2,6 +2,7 @@
 // Parametrii fixture.retete sunt completați din preview și DOM-ul clonei.
 import { contracte } from './contracte.js'
 import { costFaza } from './costuri.js'
+import { politicaFaza } from './politica-p2.js'
 
 const click = selector => ({ tip: 'click', selector })
 const scrie = (selector, text) => ({ tip: 'scrie', selector, text })
@@ -122,6 +123,25 @@ const imposibil = {
   '15_concurenta_acoperire/aceeasi_acoperire': 'Necesită selectori DOM ai celor doi candidați și istoricul alegerii; unicitatea finală singură nu ajunge.',
 }
 
+const verigaLipsa = {
+  '02_citire/recitire_idempotenta': 'fixture: doc_id, pagini integrale și postcondiție de dubluri pentru recitire',
+  '03_cerinte/extragere': 'selector: control unic de extragere; fixture: document sursă și set de cerințe așteptate',
+  '03_cerinte/reextragere_pastreaza_corectie': 'stare: cerință corectată și text autorizat; selector: control de reextragere',
+  '03_cerinte/trunchiere_semnalata': 'fixture: document și prag care reproduc trunchierea; selector: avertismentul așteptat',
+  '04_clarificari/aplica_D1': 'fixture: răspuns_set_id și punctul aplicabil D1; selector: control unic de aplicare',
+  '04_clarificari/clarificare_dupa_PT': 'stare: versiune PT verificată înaintea clarificării; fixture: răspuns ulterior și invalidarea așteptată',
+  '05_acoperire/motor': 'endpoint: motor izolat pe 103; fixture: candidați și cardinalități așteptate',
+  '05_acoperire/retry_pastreaza_alegerea': 'stare: candidat ales și ales_de; selector: retry motor, postcondiții alegerii păstrate',
+  '06_cantitati/revizie_F3': 'fixture: document F3 revizuit și cantitate_id; selector: pornirea reviziei',
+  '07_grafic/editare': 'fixture: activitate_id și valori autorizate; selector: editor unic de activitate',
+  '07_grafic/generare_PT': 'stare: grafic înghețat și versiune; selector: generare capitol PT asociat',
+  '07_grafic/editare_dupa_PT': 'stare: PT verificat cu versiunea graficului; fixture: activitate și modificare exactă',
+  '08_pt/generare': 'fixture: capitol_id și surse; selector: control unic de generare PT',
+  '08_pt/confirma_legaturi': 'fixture: legatura_id și sursă confirmată uman; selector: control unic de confirmare',
+  '08_pt/promisiune_peste_cerinta': 'fixture: text concret al promisiunii și cerinta_id; selector: editorul/verdictul aferent',
+  '09_verificari/verdict_invalideaza': 'stare: raport verificare și versiune capitol înainte/după; selector: verdict invalidat',
+}
+
 export const PARAMETRI_EXEMPLU = Object.fromEntries(Object.entries(recipes).map(([key, r]) => [key, Object.fromEntries(r.required.map(k => [k, null]))]))
 
 /** Returnează copie de fixture, cu fazele completabile și lista explicită a limitelor.
@@ -136,14 +156,23 @@ export function retete(fixture) {
     // Gardă minimă; precondițiile business se păstrează dacă operatorul le-a configurat.
     if (!cfg.preconditii?.length && validL && /^SANDBOX-V2-.+/.test(fixture.nr_anunt || '')) cfg.preconditii = [exists('ofertare_licitatii', { id: fixture.licitatie_id }, { nr_anunt: fixture.nr_anunt })]
     for (const name of contract.faze) {
-      const cost = costFaza(pas, name)
+      const politica = politicaFaza(pas, name)
+      const manual = cfg.faze[name] || {}
+      const cost = { ...costFaza(pas, name), ...politica,
+        // Un efect periculos declarat nu se pierde la regenerarea rețetei.
+        external_effect: manual.external_effect ?? politica.external_effect,
+        safe_rerun: politica.safe_rerun && manual.safe_rerun !== false,
+        expected_tables: manual.expected_tables ?? politica.expected_tables,
+        expected_storage: manual.expected_storage ?? politica.expected_storage,
+        requires_owner: manual.requires_owner === true,
+      }
       cfg.faze[name] = { ...cfg.faze[name], ...cost }
       if (cfg.faze[name]?.actiuni?.length && cfg.faze[name]?.postconditii?.length) continue
       const key = `${pas}/${name}`, r = recipes[key], p = fixture.retete?.[key] || {}
       const absent = r?.required.filter(k => p[k] == null || p[k] === '' || Array.isArray(p[k]) && !p[k].length || typeof p[k] === 'object' && !Array.isArray(p[k]) && !Object.keys(p[k]).length) || []
       if (!validL || !r || absent.length) {
-        const motiv = !validL ? 'ID clonă necompletat/invalid' : imposibil[key] || p.motiv_indisponibil || (!r ? 'Necesită selectori DOM și postcondiții specifice fixture-ului; vezi RETETE_UI.md.' : `Completează fixture.retete[${JSON.stringify(key)}]: ${absent.join(', ')}`)
-        cfg.faze[name] = { ...cost, actiuni: [], postconditii: [], motiv_indisponibil: motiv }
+        const motiv = !validL ? 'fixture: licitatie_id trebuie să fie 103' : verigaLipsa[key] || imposibil[key] || p.motiv_indisponibil || (!r ? 'selector: lipsesc controlul DOM unic și postcondițiile țintei acestei faze' : `fixture: lipsesc retete[${JSON.stringify(key)}].${absent.join(', ')}`)
+        cfg.faze[name] = { ...cost, actiuni: [], postconditii: [], motiv_indisponibil: `fixture: ${key}: ${motiv}` }
         out.retete_neconfigurate.push({ pas, faza: name, motiv }); continue
       }
       cfg.faze[name] = { ...cost, ...r.build(p, fixture), sursa_reteta: r.sursa }

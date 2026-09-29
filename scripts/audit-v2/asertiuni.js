@@ -32,12 +32,13 @@ export function asertiune(a, before, after) {
   const matches = r => Object.entries(a.asteptat).every(([k, v]) => same(path(r, k), v))
   return { trece: actual.length > 0 && (a.tip === 'all' ? actual.every(matches) : actual.some(matches)), observat: actual }
 }
-export const VERDICTE = ['MATCH', 'IMPLEMENTED_BUT_NOT_USED', 'UI_ONLY', 'SERVER_ONLY', 'PARTIAL', 'MISSING_LINK', 'WRONG_SEMANTICS', 'BYPASS', 'FALSE_GREEN', 'UNDETERMINED']
+export const VERDICTE = ['MATCH', 'IMPLEMENTED_BUT_NOT_USED', 'UI_ONLY', 'SERVER_ONLY', 'PARTIAL', 'MISSING_LINK', 'WRONG_SEMANTICS', 'BYPASS', 'FALSE_GREEN', 'UNDETERMINED', 'BLOCKED_BY_ROLE']
 export function verdictAsertiuni(assertions, before, after) {
   if (!assertions?.length) return { verdict: 'UNDETERMINED', rezultate: [], motiv: 'Nicio postcondiție configurată' }
   const rezultate = assertions.map(a => ({ asertiune: a, ...asertiune(a, before, after) }))
   // O încălcare demonstrată nu este ascunsă de un SELECT auxiliar refuzat.
-  const fail = rezultate.find(r => !r.trece && !r.nedeterminat) || rezultate.find(r => !r.trece)
+  const fail = rezultate.find(r => !r.trece && !r.nedeterminat && ['BYPASS', 'FALSE_GREEN'].includes(r.asertiune.la_esec))
+    || rezultate.find(r => !r.trece && !r.nedeterminat) || rezultate.find(r => !r.trece)
   const verdict = fail?.nedeterminat ? 'UNDETERMINED' : fail ? fail.asertiune.la_esec || 'PARTIAL' : 'MATCH'
   if (!VERDICTE.includes(verdict) || fail && verdict === 'MATCH') throw new Error('Clasificare la eșec invalidă')
   const doarAuxiliare = rezultate.some(r => !r.trece) && rezultate.filter(r => !r.trece).every(r => r.auxiliar)
