@@ -33,3 +33,19 @@ Stare: **DESCHIS**. Documentul se închide numai când toate criteriile Copilot 
 
 ## 6. Teste care protejează rezultatul
 `scripts/pg/test_jakv2*` (PG16), `scripts/audit-v2/*` (123), `src/ofertarePachet.caracterizare.test.js` (M03), CI `verifica` (repo ↔ edge).
+
+## 7. Criteriile de semnare Copilot (29.09, după planul Claude)
+Ordinea după 02.10: **J04 apply + smoke → J07 apply + smoke → P2 final**.
+P2: nu se cere 51/51. Fiecare fază neexecutată are una dintre justificări: (1) acoperită de un test black-box echivalent, (2) acoperită de un invariant server demonstrat + test adversarial, (3) NOT_APPLICABLE pe fixture. O tranziție critică fără probă echivalentă ⇒ **P2 PARTIAL, MODULE NOT YET CLOSED**.
+Black-box obligatoriu pe lanț: cerințe (versiunea curentă) → clarificare/rezolvare → dovadă → PT/versiune → pachet → obiect final/hash → aprobare → depunere/derogare.
+Pentru semnare mai trebuie:
+- [ ] invalidare upstream→downstream **demonstrată** (aprobi, schimbi în amonte, verdele vechi blochează);
+- [ ] snapshotul aprobării pe versiuni/hash-uri (cerințe, clarificări, dovezi, cantități, grafic, PT, artefacte);
+- [ ] concurență reală: două sesiuni pe aprobare/pachet/manifest/depunere;
+- [ ] retry/idempotență: clarificări/supersession, revizii de cantități, verificare hash, aprobare pachet, depunere;
+- [ ] J04 live pe 103, A→B complet;
+- [ ] J07 live pe 103: cele 12 BLOCK; parser/hash/rezultat stale = BLOCK; UI reflectă serverul;
+- [ ] Jilava 02.10: dovada lanțului real, derogarea auditată, cu invariantul ocolit numit;
+- [ ] 0 BYPASS / 0 FALSE_GREEN critice/high; pe eliminatorii 0 CONFLICT / UNDETERMINED / MISSING_LINK nerezolvate;
+- [ ] CI pentru invarianții critici; ce rămâne manual e etichetat;
+- [ ] secțiune separată „NOT PROVEN”: ori limitare acceptată explicit de Răzvan, ori modulul rămâne parțial.
