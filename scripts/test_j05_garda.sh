@@ -10,14 +10,18 @@
 # Faze (fiecare scenariu pe o bază NOUĂ: schelet cu definițiile live 30.09, md5 = live):
 #   1. LIVE          fără patch: fiecare caz P/H TREBUIE să pice; R/A/D/L trec.
 #   2. PATCH         migrarea × 2 → toate aserțiunile trec.
-#   3. RUNNERE       3 emulări de runner (psql -f; un singur simple query; BEGIN propriu + INSERT în
-#                    supabase_migrations.schema_migrations): aplicare + reaplicare; mutant cu eroare după
-#                    PRIMA schimbare și mutant cu eroare în POSTCONDIȚIE ⇒ stare inițială, migrare neînregistrată.
+#   S. STATIC        migrarea fără BEGIN/COMMIT (runda 4); garda de livrare prima și ultima; postcondiția înainte.
+#   3. LIVRARE       traseul EFECTIV (runda 4): scripts/livrare_migrare.sh = psql --single-transaction
+#                    [marcaj + migrare + INSERT în supabase_migrations.schema_migrations]: aplicare; reluare după
+#                    succes ⇒ refuz, fără dublare; eroare după PRIMA schimbare, în POSTCONDIȚIE și CHIAR la INSERT-ul
+#                    înregistrării ⇒ stare inițială (pg_dump identic), neînregistrată; reluare permisă după eșec;
+#                    fișierul rulat singur (psql -f, psql -c, -1 fără marcaj, marcaj de sesiune) ⇒ refuzat;
+#                    fișier cu COMMIT ⇒ runnerul refuză; „END;” la nivel de instrucțiune ⇒ garda de final.
 #   4. PRECONDIȚII   stări necunoscute / NULL / privilegii moștenite ⇒ migrarea refuză, fără urme.
 #   5. ROLLBACK      o singură sesiune psql: armări vechi / de sesiune / persistente / după eșec ⇒ refuz;
 #                    armat corect ⇒ schema = cea dinainte (pg_dump), dezarmat, gaura reapare; reluare = no-op.
 #   6. REAPLICARE    migrare → rollback → migrare ⇒ toate aserțiunile trec.
-#   7. MUTANȚI       fiecare protecție scoasă din fișierele noi ⇒ harness-ul o prinde.
+#   7. MUTANȚI       fiecare protecție scoasă din fișierele noi (inclusiv garda de livrare și runnerul) ⇒ prinsă.
 #   8. DISCRIMINARE  (opțional, VECHI=…) testele noi pică pe varianta anterioară acolo unde e slabă.
 # Coduri: 0 = PASS · 1 = eșec · 2 = mediu
 # ════════════════════════════════════════════════════════════════════════════
@@ -34,6 +38,10 @@ MIG="$ROOT/supabase/migrations/20261001a_ofertare_derogare_garda_j05.sql"
 RB="$ROOT/supabase/revenire/20261001a_ofertare_derogare_garda_j05_ROLLBACK.sql"
 TEST="$ROOT/supabase/tests/j05_garda.test.sql"
 ARM="SELECT set_config('gazpet.rollback_20261001a', 'SCOATE_GARDA_J05:' || txid_current(), true);"
+# Runda 4: gestionarul unic e scripts/livrare_migrare.sh; marcajul lui (aceeași tranzacție, legat de txid).
+NUME_MIG="20261001a_ofertare_derogare_garda_j05"
+LIV="${LIVRARE_FISIER:-$ROOT/scripts/livrare_migrare.sh}"
+MARCAJ="SELECT set_config('gazpet.livrare_migrare', '$NUME_MIG:' || txid_current(), true);"
 
 mediu() { printf '\nMEDIU: %s\n' "$*" >&2; exit 2; }
 esec()  { printf '\n\033[31mEȘEC: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -41,7 +49,7 @@ pas()   { printf '\n\033[1m── %s\033[0m\n' "$*"; }
 ok()    { printf '  OK  %s\n' "$*"; VERIF=$((VERIF + 1)); }
 VERIF=0
 
-for f in "$MIG" "$RB" "$TEST"; do [ -f "$f" ] || mediu "lipsește $f"; done
+for f in "$MIG" "$RB" "$TEST" "$LIV"; do [ -f "$f" ] || mediu "lipsește $f"; done
 [ -e "$ROOT/supabase/migrations/20261001a_ofertare_derogare_garda_j05_ROLLBACK.sql" ] && esec "rollback-ul nu are voie să stea în supabase/migrations (runnerul l-ar lua drept migrare)"
 [ -x "$PGBIN/postgres" ] || mediu "PostgreSQL 16 lipsește în $PGBIN"
 [[ "$PORT" =~ ^[0-9]{4,5}$ ]] || mediu "PGPORT invalid: $PORT"
@@ -84,25 +92,21 @@ baza_noua() {
   "${PSQL[@]}" -d postgres -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" -c "CREATE DATABASE $DB" >/dev/null
   "${PSQL[@]}" -d "$DB" -o /dev/null -v faza=setup -f "$TEST" >"$OUT/setup.out" 2>&1 || { tail -20 "$OUT/setup.out" >&2; esec "setup (schelet live)"; }
   grep -q 'SETUP OK' "$OUT/setup.out" || esec "setup incomplet"
-  # Tabela runner-ului Supabase, doar pentru emularea (c).
-  "${PSQL[@]}" -d "$DB" -c "CREATE SCHEMA supabase_migrations; CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, name text, statements text[])" >/dev/null
+  # Tabela de înregistrare, cu coloanele reale din producție (information_schema, citit read-only 30.09).
+  "${PSQL[@]}" -d "$DB" -c "CREATE SCHEMA supabase_migrations; CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, statements text[], name text, created_by text, idempotency_key text, rollback text[])" >/dev/null
 }
-# Trei emulări de runner. Ieșire 0 = migrarea a trecut ȘI e înregistrată (runner-ul înregistrează doar la succes).
-INREG="INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20261001a', 'ofertare_derogare_garda_j05');"
-runner() {  # $1 = a|b|c, $2 = fișier migrare, [$3 = SQL de perturbare, trimis în aceeași tranzacție]
+# Tranzacția runnerului de livrare, cu perturbare opțională în ACEEAȘI tranzacție (pentru precondiții / mutanți):
+# psql --single-transaction [marcaj + perturbare + migrare + înregistrare]. Traseul real (scripts/livrare_migrare.sh)
+# e testat separat în faza 3; aici e aceeași ordine, plus perturbarea.
+INREG="INSERT INTO supabase_migrations.schema_migrations (version, name) VALUES ('20261001000000', '$NUME_MIG');"
+runner() {  # $1 = a (păstrat pentru compatibilitate), $2 = fișier migrare, [$3 = SQL de perturbare]
   local pert="${3:-}" f="$2"
-  case "$1" in
-    a) "$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" ${pert:+-1 -c "$pert"} -f "$f" \
-         && "${PSQL[@]}" -d "$DB" -c "$INREG" ;;
-    b) "$PGBIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" -c "${pert:+BEGIN; $pert }$(cat "$f")" \
-         && "${PSQL[@]}" -d "$DB" -c "$INREG" ;;
-    c) "$PGBIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" -c "BEGIN; ${pert} $(cat "$f")
-$INREG
-COMMIT;" ;;
-  esac
+  "$PGBIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" --single-transaction \
+    -c "$MARCAJ" ${pert:+-c "$pert"} -f "$f" -c "$INREG"
 }
 aplica_migrare() { runner a "$MIG" >"$OUT/mig.out" 2>&1 || { cat "$OUT/mig.out" >&2; esec "migrarea 20261001a"; }; "${PSQL[@]}" -d "$DB" -c "DELETE FROM supabase_migrations.schema_migrations" >/dev/null; }
-inregistrata() { [ "$("${PSQL[@]}" -d "$DB" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '20261001a'")" != 0 ]; }
+inregistrata() { [ "$("${PSQL[@]}" -d "$DB" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = '$NUME_MIG'")" != 0 ]; }
+nr_inreg() { "${PSQL[@]}" -d "$DB" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = '$NUME_MIG'"; }
 teste() {  # $1 = live|patch, $2 = fișier de ieșire
   "${PSQL[@]}" -d "$DB" -o /dev/null -v faza="$1" -f "$TEST" >"$2" 2>&1 || { tail -20 "$2" >&2; esec "teste faza $1 (eroare de infrastructură)"; }
   grep -q 'TESTE_COMPLETE' "$2" || esec "testele faza $1 nu au rulat până la capăt"
@@ -154,6 +158,17 @@ i = m.index(anc2, post) + len(anc2)
 open(sys.argv[2] + '/eroare_in_postconditie.sql', 'w', encoding='utf-8').write(m[:i] + "  PERFORM 1/0;  -- MUTANT\n" + m[i:])
 PY
 
+# ── S. STATIC ──────────────────────────────────────────────────────────────────
+pas "S. Static: tranzacția o deține runnerul de livrare"
+static_mig() {  # $1 = fișier → 0 dacă e conform
+  ! sed 's/--.*$//' "$1" | grep -qiE '\b(COMMIT|ROLLBACK|ABORT|START\s+TRANSACTION|PREPARE\s+TRANSACTION)\b|\bBEGIN\s*(TRANSACTION|WORK)?\s*;' \
+  && [ "$(grep -v '^--' "$1" | grep -v '^\s*$' | head -1)" = 'DO $livrare_start$' ] \
+  && [ "$(grep -v '^\s*$' "$1" | tail -1)" = 'END $livrare_final$;' ] \
+  && [ "$(grep -n -x 'END \$post\$;' "$1" | tail -1 | cut -d: -f1)" -lt "$(grep -n -x 'DO \$livrare_final\$' "$1" | cut -d: -f1)" ]
+}
+static_mig "$MIG" || esec "S: migrarea trebuie să fie fără BEGIN/COMMIT, cu garda de livrare prima și ultima și postcondiția înaintea gărzii de final"
+ok "S migrarea: fără BEGIN/COMMIT (gestionar = runnerul), garda de livrare prima + ultima, postcondiția înainte de final"
+
 # ── 1. LIVE ────────────────────────────────────────────────────────────────────
 pas "1. LIVE (definițiile din 30.09, fără patch): cazurile P/H trebuie să pice"
 baza_noua
@@ -172,25 +187,81 @@ teste patch "$OUT/patch.out"
 verifica patch "$OUT/patch.out.rez" || esec "faza PATCH"
 ok "faza PATCH: toate aserțiunile trec"
 
-# ── 3. RUNNERE ─────────────────────────────────────────────────────────────────
-pas "3. Un singur gestionar de tranzacție (fișierul), demonstrat pe 3 runnere"
-for r in a b c; do
-  baza_noua
-  runner "$r" "$MIG" >"$OUT/run.out" 2>&1 || { cat "$OUT/run.out" >&2; esec "runner $r: aplicarea"; }
-  cu_garda && inregistrata || esec "runner $r: garda / înregistrarea lipsesc"
-  "${PSQL[@]}" -d "$DB" -c "DELETE FROM supabase_migrations.schema_migrations" >/dev/null
-  runner "$r" "$MIG" >"$OUT/run.out" 2>&1 || { cat "$OUT/run.out" >&2; esec "runner $r: reaplicarea"; }
-  cu_garda || esec "runner $r: garda după reaplicare"
-  ok "runner $r: aplicare + reaplicare, migrare înregistrată"
+# ── 3. LIVRARE ─────────────────────────────────────────────────────────────────
+# Traseul EFECTIV (runda 4, verdict Copilot #538 r3): scripts/livrare_migrare.sh = gestionarul unic.
+# faza_livrare MIG LIV — esec la prima abatere (folosită și de mutanții din faza 7, într-un subshell).
+livreaza() {  # $1 = fișier (copiat sub numele real: runnerul derivă numele din fișier), $2 = versiune, $3 = runner
+  mkdir -p "$OUT/livrare"; cp "$1" "$OUT/livrare/$NUME_MIG.sql"
+  set +e; PSQL_BIN="$PGBIN/psql" VERSIUNE_MIGRARE="$2" bash "${3:-$LIV}" "$OUT/livrare/$NUME_MIG.sql" -- \
+    -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" >"$OUT/liv.out" 2>&1; RC=$?; set -e
+}
+psql_db() { set +e; "$PGBIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" "$@" >"$OUT/liv.out" 2>&1; RC=$?; set -e; }
+INJ_REG="CREATE FUNCTION supabase_migrations.adv_injectie() RETURNS trigger LANGUAGE plpgsql AS \$i\$ BEGIN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.fn_ofertare_derogare_garda_j05()')) IS DISTINCT FROM 'f84c9aeeb80fd990ee6f5110865a1aac'
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'a00_ofertare_derogare_garda_j05') THEN
+    RAISE EXCEPTION 'injecție: garda NU e instalată la momentul înregistrării';
+  END IF;
+  RAISE EXCEPTION 'EROARE INJECTATĂ la INSERT în schema_migrations (garda instalată, postcondiții trecute)';
+END \$i\$;
+CREATE TRIGGER adv_injectie BEFORE INSERT ON supabase_migrations.schema_migrations FOR EACH ROW EXECUTE FUNCTION supabase_migrations.adv_injectie();"
+refuz_fara_urme() {  # $1 = eticheta, $2 = fragment, $3 = snapshot, $4 = înregistrări așteptate
+  [ $RC != 0 ] || esec "$1: trebuia să eșueze"
+  grep -qF -- "$2" "$OUT/liv.out" || { cat "$OUT/liv.out" >&2; esec "$1: a eșuat din alt motiv (lipsește „$2”)"; }
+  [ "$(nr_inreg)" = "$4" ] || esec "$1: înregistrări = $(nr_inreg), așteptat $4"
+  schema_snapshot > "$OUT/snap_acum.sql"
+  diff -u "$3" "$OUT/snap_acum.sql" > "$OUT/snap.diff" || { head -40 "$OUT/snap.diff" >&2; esec "$1: a rămas o urmă în schemă"; }
+  ok "$1 → refuzat, pg_dump identic (funcții/triggere/ACL inițiale), înregistrări: $4"
+}
+faza_livrare() {
+  local MIGF="$1" LIVF="$2" START="Livrare 20261001a: garda de livrare (start)"
+  # 3.1 succes: garda + O înregistrare (version, name, statements = fișierul întreg)
+  baza_noua; livreaza "$MIGF" 20261001000000 "$LIVF"
+  [ $RC = 0 ] || { cat "$OUT/liv.out" >&2; esec "3.1 livrarea fără eroare"; }
+  cu_garda && [ "$(nr_inreg)" = 1 ] || esec "3.1 garda / înregistrarea lipsesc"
+  [ "$("${PSQL[@]}" -d "$DB" -Atc "SELECT version FROM supabase_migrations.schema_migrations")" = 20261001000000 ] || esec "3.1 versiunea"
+  "${PSQL[@]}" -d "$DB" -Atc "SELECT statements[1] FROM supabase_migrations.schema_migrations" | cmp -s - <(cat "$MIGF"; echo) || esec "3.1 statements[1] ≠ fișierul"
+  ok "3.1 livrare: garda aplicată + înregistrată o dată (version, name $NUME_MIG, statements = fișierul octet cu octet)"
+  # 3.2 reluare după succes ⇒ refuz, anulat tot, fără dublare
+  schema_snapshot > "$OUT/snap_e.sql"; livreaza "$MIGF" 20261001000001 "$LIVF"
+  refuz_fara_urme "3.2 reluare după succes" "migrarea e deja înregistrată" "$OUT/snap_e.sql" 1
+  # 3.3 erori injectate
   for mut in eroare_dupa_prima_schimbare eroare_in_postconditie; do
-    baza_noua
-    if runner "$r" "$OUT/mut/$mut.sql" >"$OUT/run.out" 2>&1; then esec "runner $r: mutantul $mut a trecut"; fi
-    grep -q 'division by zero' "$OUT/run.out" || { cat "$OUT/run.out" >&2; esec "runner $r / $mut: eroarea injectată nu apare"; }
-    fara_garda || esec "runner $r / $mut: a rămas ceva din migrare"
-    inregistrata && esec "runner $r / $mut: migrarea apare înregistrată"
-    ok "runner $r, $mut → stare inițială, migrare neînregistrată"
+    baza_noua; schema_snapshot > "$OUT/snap_e.sql"; livreaza "$OUT/mut/$mut.sql" 20261001000000 "$LIVF"
+    refuz_fara_urme "3.3 $mut" "division by zero" "$OUT/snap_e.sql" 0
+    fara_garda || esec "3.3 $mut: a rămas ceva din migrare"
   done
-done
+  baza_noua; "${PSQL[@]}" -d "$DB" -c "$INJ_REG" >/dev/null; schema_snapshot > "$OUT/snap_e.sql"
+  livreaza "$MIGF" 20261001000000 "$LIVF"
+  refuz_fara_urme "3.3 eroare CHIAR la INSERT-ul în schema_migrations, după postcondiții și garda de final" \
+    "EROARE INJECTATĂ la INSERT în schema_migrations (garda instalată, postcondiții trecute)" "$OUT/snap_e.sql" 0
+  fara_garda || esec "3.3 eroare la înregistrare: garda a rămas"
+  # 3.4 reluarea PERMISĂ după eșec
+  "${PSQL[@]}" -d "$DB" -c "DROP TRIGGER adv_injectie ON supabase_migrations.schema_migrations; DROP FUNCTION supabase_migrations.adv_injectie();" >/dev/null
+  livreaza "$MIGF" 20261001000002 "$LIVF"
+  [ $RC = 0 ] && cu_garda && [ "$(nr_inreg)" = 1 ] || { cat "$OUT/liv.out" >&2; esec "3.4 reluarea permisă după eșec"; }
+  ok "3.4 reluare permisă după înregistrarea eșuată: garda + exact o înregistrare"
+  # 3.5 fișierul rulat SINGUR ⇒ garda de livrare (start) refuză
+  baza_noua; schema_snapshot > "$OUT/snap_e.sql"
+  psql_db -v ON_ERROR_STOP=1 -f "$MIGF";                      refuz_fara_urme "3.5 psql -f simplu (autocommit)" "$START" "$OUT/snap_e.sql" 0
+  psql_db -c "$(cat "$MIGF")";                                refuz_fara_urme "3.5 un singur query (psql -c, ca execute_sql)" "$START" "$OUT/snap_e.sql" 0
+  psql_db -v ON_ERROR_STOP=1 --single-transaction -f "$MIGF"; refuz_fara_urme "3.5 --single-transaction fără marcaj" "$START" "$OUT/snap_e.sql" 0
+  psql_db -v ON_ERROR_STOP=1 -c "SELECT set_config('gazpet.livrare_migrare', '$NUME_MIG:' || txid_current(), false)" -f "$MIGF"
+  refuz_fara_urme "3.5 marcaj de SESIUNE dintr-o tranzacție anterioară + psql -f" "$START" "$OUT/snap_e.sql" 0
+  psql_db -v ON_ERROR_STOP=1 -c "SET gazpet.livrare_migrare = '$NUME_MIG'" -f "$MIGF"
+  refuz_fara_urme "3.5 marcaj de sesiune fără txid" "$START" "$OUT/snap_e.sql" 0
+  # 3.6 control de tranzacție în fișier
+  awk '{print} !d && /^END \$function\$;$/ {print "COMMIT;  -- MUTANT"; d=1}' "$MIGF" > "$OUT/mut/liv_commit.sql"
+  livreaza "$OUT/mut/liv_commit.sql" 20261001000000 "$LIVF"; refuz_fara_urme "3.6 fișier cu COMMIT; (runnerul refuză)" "conține control de tranzacție" "$OUT/snap_e.sql" 0
+  awk '{print} !d && /^END \$function\$;$/ {print "select 1; commit ;  -- MUTANT"; d=1}' "$MIGF" > "$OUT/mut/liv_commit2.sql"
+  livreaza "$OUT/mut/liv_commit2.sql" 20261001000000 "$LIVF"; refuz_fara_urme "3.6 „select 1; commit ;” pe aceeași linie" "conține control de tranzacție" "$OUT/snap_e.sql" 0
+  awk '{print} !d && /^END \$function\$;$/ {print "END;  -- MUTANT (sinonim COMMIT)"; d=1}' "$MIGF" > "$OUT/mut/liv_end.sql"
+  livreaza "$OUT/mut/liv_end.sql" 20261001000000 "$LIVF"
+  [ $RC != 0 ] && grep -qF "Livrare 20261001a: garda de livrare (final" "$OUT/liv.out" && [ "$(nr_inreg)" = 0 ] \
+    || { cat "$OUT/liv.out" >&2; esec "3.6 „END;”: garda de final nu l-a prins"; }
+  ok "3.6 „END;” la nivel de instrucțiune: garda de final eșuează, NEÎNREGISTRAT (ce era înainte de END; e comis — limită documentată)"
+}
+pas "3. Traseul de livrare: scripts/livrare_migrare.sh (marcaj + migrare + înregistrare într-o singură tranzacție)"
+faza_livrare "$MIG" "$LIV"
 
 # ── 4. PRECONDIȚII ─────────────────────────────────────────────────────────────
 pas "4. Precondiții: stare necunoscută / NULL / privilegii ⇒ refuz, fără urme (perturbare + migrare într-o tranzacție)"
@@ -399,6 +470,41 @@ baza_noua
 if runner a "$M/fara_revoke.sql" >"$OUT/mut.out" 2>&1; then esec "mutant NU prins: REVOKE scos"; fi
 grep -q 'Postcondiție 20261001a' "$OUT/mut.out" && fara_garda || { cat "$OUT/mut.out" >&2; esec "REVOKE scos: postcondiția nu a refuzat curat"; }
 ok "mutant prins: REVOKE scos → postcondiția (ACL / privilegii) refuză înainte de COMMIT"
+# Garda de livrare și runnerul (runda 4): fiecare mutant trebuie să pice static_mig sau faza de livrare.
+livrare_mutant() {  # $1 = migrare, $2 = runner, $3 = descriere
+  local st="static OK" fz
+  static_mig "$1" || st="static PICĂ"
+  if ( faza_livrare "$1" "$2" ) >"$OUT/livm.out" 2>&1; then fz="faza 3 trece"; else fz="$(grep -m1 -o 'EȘEC: [^[]*' "$OUT/livm.out" | cut -c1-110)"; fi
+  [ "$st" = "static OK" ] && [ "$fz" = "faza 3 trece" ] && esec "mutant livrare NU prins: $3"
+  ok "mutant livrare prins: $3 ($st; $fz)"
+}
+python3 - "$MIG" "$LIV" "$M" <<'PY'
+import sys
+m = open(sys.argv[1], encoding='utf-8').read(); l = open(sys.argv[2], encoding='utf-8').read(); d = sys.argv[3]
+def bloc(tag):
+    a = m.index(f"DO ${tag}$"); b = m.index(f"END ${tag}$;") + len(f"END ${tag}$;"); return a, b
+a, b = bloc('livrare_start'); open(d + '/n_fara_start.sql', 'w').write(m[:a] + m[b:])
+a, b = bloc('livrare_final'); open(d + '/n_fara_final.sql', 'w').write(m[:a] + m[b:])
+x = m.replace("IS DISTINCT FROM '20261001a_ofertare_derogare_garda_j05:' || txid_current()", "IS NULL"); assert x.count('IS NULL') >= 2
+open(d + '/n_fara_txid.sql', 'w').write(x)
+run = '''"${PSQL_BIN:-psql}" -X -q -v ON_ERROR_STOP=1 --single-transaction \\
+  -f "$TMP/1_marcaj.sql" -f "$MIG" -f "$TMP/3_inregistrare.sql" "$@"'''
+assert run in l
+open(d + '/w_inreg_separata.sh', 'w').write(l.replace(run, '''"${PSQL_BIN:-psql}" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$TMP/1_marcaj.sql" -f "$MIG" "$@"
+"${PSQL_BIN:-psql}" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$TMP/1_marcaj.sql" -f "$TMP/3_inregistrare.sql" "$@"'''))
+open(d + '/w_fara_single.sh', 'w').write(l.replace(run, run.replace(' --single-transaction', '')))
+a = l.index('  printf "  IF EXISTS'); b = l.index('\n', l.index('deja înregistrată')) + 1
+open(d + '/w_fara_deja.sh', 'w').write(l[:a] + l[b:])
+a = l.index("if sed 's/--.*$//'"); b = l.index('fi\n', a) + 3
+open(d + '/w_fara_static.sh', 'w').write(l[:a] + l[b:])
+PY
+livrare_mutant "$M/n_fara_start.sql" "$LIV" "migrare fără garda de livrare de start"
+livrare_mutant "$M/n_fara_final.sql" "$LIV" "migrare fără garda de livrare de final"
+livrare_mutant "$M/n_fara_txid.sql" "$LIV" "garda de livrare nelegată de txid (orice marcaj)"
+livrare_mutant "$MIG" "$M/w_inreg_separata.sh" "runner: înregistrarea într-o tranzacție separată"
+livrare_mutant "$MIG" "$M/w_fara_single.sh" "runner: fără --single-transaction"
+livrare_mutant "$MIG" "$M/w_fara_deja.sh" "runner: fără refuzul „deja înregistrată”"
+livrare_mutant "$MIG" "$M/w_fara_static.sh" "runner: fără refuzul controlului de tranzacție"
 # Rollback
 rb_mutant() {  # $1 = mutant, $2 = descriere
   baza_noua; aplica_migrare

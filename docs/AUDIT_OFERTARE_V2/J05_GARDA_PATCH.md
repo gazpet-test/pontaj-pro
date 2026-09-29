@@ -1,5 +1,7 @@
 # J05 — garda derogării de depunere (patch `20261001a`) — PREGĂTIT LOCAL, NEAPLICAT
 
+> **Runda 4 (30.09): traseul de livrare** — după verdictul Copilot pe #538 r3 (NO-GO pe apply cu COMMIT în fișier): tranzacția o deține `scripts/livrare_migrare.sh`, fișierul nu mai are BEGIN/COMMIT, înregistrarea e în aceeași tranzacție; **§14**. Logica gărzii J05 e neschimbată.
+>
 > **Stare:** doar local (worktree pe `claude/erp-continuare-x4p5a7-j05-garda`, pornit din `origin/main` @ `76fd89d`). Fără commit, push sau apply. Producția (`dxczwkbciseqniprspcu`, PG 17.6) a fost citită pe 30.09 **doar prin SELECT pe cataloage** (`prosrc` și atributele din `pg_proc`, `pg_get_functiondef`, `pg_trigger`, `pg_policies`, `relacl`/`proacl`, `pg_constraint`, `pg_attribute`). Nicio dată reală nu a fost citită.
 >
 > **Fișiere:** `supabase/migrations/20261001a_ofertare_derogare_garda_j05.sql` · `supabase/revenire/20261001a_ofertare_derogare_garda_j05_ROLLBACK.sql` (NU e migrare; vezi `supabase/revenire/README.md`) · `supabase/tests/j05_garda.test.sql` · `scripts/test_j05_garda.sh`. Prefixul `20261001a` nu există pe niciun branch remote (verificat cu `git ls-tree` pe toate branch-urile după `git fetch`).
@@ -305,11 +307,10 @@ Pe toate acestea garda iese imediat (R04, R10, R12).
    WHERE l.relation = 'public.ofertare_licitatii'::regclass;
    ```
 
-3. **Apply:** `apply_migration`, nume `ofertare_derogare_garda_j05`, cu conținutul fișierului **exact**.
-   - Fișierul are `BEGIN`/`COMMIT` propriu. Dacă platforma deschide deja o tranzacție, `BEGIN`-ul interior dă doar un WARNING.
-   - Precondițiile și verificarea finală sunt în aceeași tranzacție cu DDL-ul: orice eșec anulează tot.
-   - Alternativ: `execute_sql` cu tot fișierul.
-   - Migrarea trebuie să ruleze ca `postgres` (cum rulează MCP). Verificarea finală refuză altă identitate ca proprietar al funcției `SECURITY DEFINER` și anulează tot.
+3. **Apply (runda 4, §14):** `bash scripts/livrare_migrare.sh supabase/migrations/20261001a_ofertare_derogare_garda_j05.sql -- "<URI postgres>"` — gestionarul unic: `psql --single-transaction` [marcaj + migrare + `INSERT` în `supabase_migrations.schema_migrations`].
+   - Fișierul NU mai are `BEGIN`/`COMMIT`; NU `apply_migration` / `execute_sql` (garda de livrare le refuză, fail-closed).
+   - Precondițiile, verificarea finală și înregistrarea sunt în aceeași tranzacție cu DDL-ul: orice eșec (inclusiv chiar la înregistrare) anulează tot.
+   - Migrarea trebuie să ruleze ca `postgres`. Verificarea finală refuză altă identitate ca proprietar al funcției `SECURITY DEFINER` și anulează tot.
 4. **Sanity după apply** (read-only):
 
    ```sql
@@ -475,8 +476,48 @@ Detalii despre mutanți:
 
 **Procedura de apply** (înlocuiește §8 pasul 3):
 
-- Se trimite fișierul întreg, cu LF (cu CRLF, `md5(prosrc)` iese altfel și postcondiția refuză). Oricare dintre cele 3 forme e demonstrată:
-  - `psql -f`;
-  - un singur query (`execute_sql` cu tot fișierul);
-  - `apply_migration`: dacă runner-ul deschide o tranzacție proprie, `BEGIN`-ul din fișier dă WARNING, iar `COMMIT`-ul fișierului o închide. Înregistrarea runner-ului rulează după el, deci o eroare a înregistrării ar lăsa migrarea aplicată, dar neînregistrată; se verifică cu sanity-ul de la pasul 4.
+- Se trimite fișierul întreg, cu LF (cu CRLF, `md5(prosrc)` iese altfel și postcondiția refuză). **Runda 4:** singura formă de livrare e `scripts/livrare_migrare.sh` (§14); formele r3 (`psql -f`, un singur query, `apply_migration`) sunt refuzate de garda de livrare.
 - **Nicio listă albă nu se actualizează automat.** Dacă o precondiție refuză pe live, se compară definiția și o amprentă nouă intră doar printr-un commit revizuit, cu un nou review Copilot.
+
+## 14. Runda 4 — traseul de livrare (răspuns la verdictul Copilot #538 r3)
+Verdict r3 (`docs/SECURITATE_PATCH_RSVTI_VERDICT_COPILOT_R3.md` pe #538): GO pe SQL, NO-GO pe apply, pentru că `COMMIT`-ul din fișier comitea patch-ul **înaintea** `INSERT`-ului în `supabase_migrations.schema_migrations`. Cerința: **un singur gestionar de tranzacție** care include DDL-ul, postcondițiile și înregistrarea. Logica patch-ului nu s-a schimbat; s-a schimbat doar artefactul de livrare. Totul e local; nimic aplicat, nimic pushat.
+
+**a) Traseul efectiv: de ce NU `apply_migration` (MCP).** `apply_migration` trimite SQL-ul la Management API (`POST /v1/projects/{ref}/database/migrations`, cod server închis; issue public supabase/mcp#241). Nici documentația Supabase (`search_docs`), nici codul public al MCP-ului nu spun dacă execuția și `INSERT`-ul în `schema_migrations` sunt în aceeași tranzacție, deci **nu se poate demonstra**. Pentru comparație, CLI-ul public (`supabase db push`, `pkg/migration/file.go`) pune instrucțiunile și `INSERT`-ul într-un singur `pgconn.Batch`, „implicitly transactional”, dar un `COMMIT` din fișier ar rupe și acolo tranzacția. Concluzia: traseul oficial e unul demonstrabil local, cu `psql`.
+
+**Procedura oficială** — `scripts/livrare_migrare.sh` (identic în #538 și #542, sha256 `9f921a0a…` la acest commit):
+```
+bash scripts/livrare_migrare.sh supabase/migrations/20261001a_ofertare_derogare_garda_j05.sql -- "<URI conexiune directă / Supavisor session mode, rol postgres>"
+# = psql -X -q -v ON_ERROR_STOP=1 --single-transaction \
+#       -f marcaj.sql  (SELECT set_config('gazpet.livrare_migrare', '20261001a_ofertare_derogare_garda_j05:' || txid_current(), true))
+#       -f 20261001a_ofertare_derogare_garda_j05.sql
+#       -f inregistrare.sql  (verifică marcajul; refuză dacă name='20261001a_ofertare_derogare_garda_j05' există deja;
+#                              INSERT (version AAAALLZZHHMMSS UTC, name, statements = fișierul întreg))
+```
+- Refuză înainte de conexiune un fișier cu control de tranzacție (`BEGIN;`, `COMMIT`, `ROLLBACK`, `ABORT`, `START TRANSACTION`, `PREPARE TRANSACTION`, în afara comentariilor `--`) sau fără garda de livrare.
+- `version` = timestamp UTC de 14 cifre (formatul folosit de `apply_migration` în producție, citit read-only din `schema_migrations`: ultimele versiuni `20260929…`); `name` = numele fișierului fără `.sql` (ca `20260929f_v_claude_context_start`); coloanele reale: `version, statements, name, created_by, idempotency_key, rollback` (information_schema, read-only).
+- **Precondiție de operare:** un `psql` ≥ 16 și un URI de conexiune cu rol `postgres` (parola bazei). Din sesiunea Claude există doar MCP, deci livrarea o rulează Răzvan (sau o sesiune cu URI-ul dat explicit de el). Transaction-mode pooler (6543) nu e necesar; se folosește conexiunea directă sau session mode (5432).
+
+**b) Fișierul fără BEGIN/COMMIT.** `BEGIN;` → garda de livrare de **start**; `COMMIT;` → garda de livrare de **final** (după postcondiții). Ambele: `current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261001a_ofertare_derogare_garda_j05:' || txid_current()` ⇒ `RAISE`. Ordinea în tranzacție: marcaj → gardă start → precondiții → DDL → postcondiții → gardă final → verificare + `INSERT` înregistrare → `COMMIT` (al runnerului). Postcondițiile rămân înainte de sfârșitul tranzacției (verificare statică în harness). Noul fișier: sha256 `66105ecd71c7ec571e3df4825e7e0aa5fb3627e716869572972cdf750c65d6c5`, 268 linii.
+
+**c) Fișierul rulat singur, fără runner.** `transaction_timestamp() <> statement_timestamp()` nu e fiabil; soluția robustă e marcajul **legat de txid**: `set_config(..., true)` e local tranzacției, iar în autocommit fiecare instrucțiune are alt txid. Demonstrat în harness (toate refuzate de garda de start, `pg_dump` identic, nicio înregistrare): `psql -f` simplu; un singur query (`psql -c`, echivalentul `execute_sql`); `psql --single-transaction` fără marcaj; marcaj de **sesiune** dintr-o tranzacție anterioară; `SET` de sesiune fără txid. Deci `apply_migration` / `execute_sql` pe acest fișier **refuză** (fail-closed) — nu există cale accidentală spre „aplicat, neînregistrat”.
+- **Limite documentate:** (1) cine pune manual marcajul corect în aceeași tranzacție (`BEGIN; set_config(…txid…); \i fișier; COMMIT;`) ocolește înregistrarea — e o acțiune deliberată, nu un accident; harness-ul o folosește intern (faza de patch fără tabel de înregistrare). (2) Un `END;` la nivel de instrucțiune (sinonim `COMMIT`) nu se poate deosebi textual de finalul unui corp plpgsql; îl prinde garda de **final** (marcajul dispare la COMMIT): runnerul eșuează și **nu înregistrează**, dar ce era înainte de `END;` rămâne comis. Testat ca mutant; regula de review: niciun `END;` în afara corpurilor `$…$`.
+- Dacă apare totuși „aplicat, neînregistrat” (ex. livrare manuală), conform verdictului: stop, reconciliere prin verificări read-only (amprentele din pasul de sanity), fără rollback tehnic pentru a alinia istoricul.
+
+**d) Harness (`scripts/test_j05_garda.sh, faza 3 rescrisă + faza S; `runner` din fazele 2/4/7 = aceeași tranzacție (marcaj + perturbare + migrare + INSERT)`), traseul real, pe o bază auxiliară cu `schema_migrations` având coloanele din producție:**
+
+| Test | Rezultat |
+|---|---|
+| livrare fără eroare | patch + **o** înregistrare (version, name, `statements[1]` = fișierul octet cu octet) |
+| reluare după succes (altă versiune) | refuz „deja înregistrată”, tot anulat, `pg_dump` identic, tot 1 înregistrare (fără dublare) |
+| `1/0` după prima schimbare · `1/0` în postcondiție | stare inițială (`pg_dump` identic), 0 înregistrări |
+| **eroare injectată CHIAR la `INSERT`-ul în `schema_migrations`** (trigger BEFORE INSERT care verifică întâi că patch-ul e instalat în tranzacție — deci toate postcondițiile și garda de final au trecut — apoi `RAISE`) | definiții/politici/ACL inițiale (`pg_dump` identic), **0 înregistrări** |
+| reluarea permisă după eșecul înregistrării | patch + exact o înregistrare |
+| fișierul singur (5 variante de mai sus) | refuzat de garda de start, fără urme |
+| fișier cu `COMMIT;` / `select 1; commit ;` | runnerul refuză înainte de conexiune |
+| fișier cu `END;` la nivel de instrucțiune | garda de final eșuează, neînregistrat (limita 2) |
+
+Rezultat: `PGPORT=5627 PGBASE=/tmp/pg_livr4_j05 bash scripts/test_j05_garda.sh`, de 2 ori: **PASS, live 150 aserțiuni (50 picate, toate în cazurile P/H) · patch 152 (0 picate) · 65 verificări de harness, exit 0** de fiecare dată.
+
+**Mutanți (runda 4):** în faza 7 a harness-ului, toți prinși la fiecare rulare: cei 15 mutanți existenți (migrare + rollback) și **7 noi**: fără garda de start (static + 3.5), fără garda de final (static + 3.6), garda fără txid (3.5, marcaj de sesiune), runner cu înregistrarea în tranzacție separată (**3.3, eroare la INSERT: urmă rămasă**), fără `--single-transaction` (3.1), fără refuzul „deja înregistrată” (3.2), fără refuzul controlului de tranzacție (3.6).
+
+**Rămâne deschis:** GO Copilot pe runda 4 (diff-ul efectiv: migrare + `scripts/livrare_migrare.sh` + harness) și acordul lui Răzvan; accesul `psql` + URI pentru operator; rularea pe PG17 (producția) rămâne neverificată local — refuzul e fail-closed (§ amprente).

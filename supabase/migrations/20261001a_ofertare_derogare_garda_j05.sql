@@ -22,7 +22,7 @@
 --     operatorul compară textul CHECK-ului cu cel din antet și actualizează amprenta doar prin commit revizuit;
 --   • toate comparațiile sunt NULL-safe (IS DISTINCT FROM); obiect lipsă = NULL = refuz;
 --   • stări COMPLETE: live (fără gardă) sau patch (reaplicare, no-op); orice stare mixtă e refuzată;
---   • postcondiție ÎNAINTE de COMMIT: amprente + privilegii EFECTIVE (has_function_privilege pentru anon,
+--   • postcondiție ÎNAINTE de înregistrare și de COMMIT-ul runnerului: amprente + privilegii EFECTIVE (has_function_privilege pentru anon,
 --     authenticated, PUBLIC pe gardă și pe funcțiile de trigger ale porții);
 --   • NICIO listă albă nu se actualizează automat după apply.
 --
@@ -31,16 +31,24 @@
 -- înghețul e legat de status='depusa'.
 --
 -- ⚠ NU SE APLICĂ fără: GO Copilot + acordul explicit al lui Răzvan + EXCEPȚIE DE FREEZE pe Ofertare.
--- ⚠ GESTIONARUL TRANZACȚIEI E ACEST FIȘIER (BEGIN; … COMMIT;). Se trimite ÎNTREG, cu LF. Comportament
---   demonstrat în scripts/test_j05_garda.sh pe 3 runnere: psql -f (ON_ERROR_STOP), un singur simple query
---   (psql -c) și runner cu BEGIN propriu + INSERT în supabase_migrations.schema_migrations în același string;
---   eroare injectată după prima schimbare sau în postcondiție ⇒ stare inițială, migrare neînregistrată.
---   La runner-ul cu BEGIN propriu, BEGIN-ul de mai jos dă WARNING, iar COMMIT-ul de aici îi închide tranzacția.
+-- ⚠ GESTIONARUL TRANZACȚIEI (runda 4, verdict Copilot #538 r3) = RUNNERUL scripts/livrare_migrare.sh:
+--   psql -X -v ON_ERROR_STOP=1 --single-transaction [marcaj de livrare + ACEST fișier + INSERT în
+--   supabase_migrations.schema_migrations]. Fișierul NU mai conține BEGIN/COMMIT. Garda de livrare (start + final)
+--   refuză rularea fără marcajul runnerului din aceeași tranzacție (psql -f simplu, psql -c, apply_migration MCP).
+--   Demonstrat în scripts/test_j05_garda.sh: eroare injectată după prima schimbare, în postcondiție sau CHIAR la
+--   INSERT-ul înregistrării ⇒ stare inițială, migrare neînregistrată; reluarea după succes e refuzată (fără dublare).
 -- Revenire: NU e în acest director — supabase/revenire/20261001a_ofertare_derogare_garda_j05_ROLLBACK.sql
 --   (rollback tehnic, redeschide J05; armare legată de txid, doar la cererea explicită a lui Răzvan).
 -- Test: scripts/test_j05_garda.sh + supabase/tests/j05_garda.test.sql (PG16 local, copia definițiilor live).
 -- ════════════════════════════════════════════════════════════════════════════
-BEGIN;
+DO $livrare_start$
+BEGIN
+  -- Garda de livrare (start): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261001a_ofertare_derogare_garda_j05:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261001a: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+  END IF;
+END $livrare_start$;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL search_path = public, pg_temp;
 
@@ -231,7 +239,7 @@ $amprente$;
   v_garda_exista boolean := to_regprocedure('public.fn_ofertare_derogare_garda_j05()') IS NOT NULL;
 BEGIN
   EXECUTE v_q INTO r;
-  -- Postcondiție ÎNAINTE de COMMIT: dacă pică, se anulează tot (inclusiv garda).
+  -- Postcondiție ÎNAINTE de înregistrare / COMMIT-ul runnerului: dacă pică, se anulează tot (inclusiv garda).
   IF (SELECT bool_and(v::boolean) FROM jsonb_each_text(r.fn_ok) AS e(k, v)) IS DISTINCT FROM true
      OR (SELECT count(*) FROM jsonb_object_keys(r.fn_ok)) IS DISTINCT FROM 7::bigint
      OR r.trg_licitatii IS DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr='
@@ -250,4 +258,11 @@ BEGIN
   END IF;
 END $post$;
 
-COMMIT;
+DO $livrare_final$
+BEGIN
+  -- Garda de livrare (final, după postcondiții): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261001a_ofertare_derogare_garda_j05:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261001a: garda de livrare (final, după postcondiții) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+  END IF;
+END $livrare_final$;
