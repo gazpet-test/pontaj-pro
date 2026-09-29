@@ -864,8 +864,10 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO anon, authenticated, service_r
 -- Simulează crearea unui cont de către GoTrue: INSERT în auth.users ca supabase_auth_admin
 -- cu search_path=auth (ca pe conexiunea reală) → declanșează on_auth_user_created.
 -- Adaugă și o sesiune + un refresh token nerevocat (pentru testele de revocare R2).
--- Se apelează ca admin.
-CREATE FUNCTION teste.creeaza_cont(p_email text, p_uid uuid DEFAULT gen_random_uuid(), p_meta jsonb DEFAULT '{}'::jsonb)
+-- Se apelează ca admin. p_app_meta se adaugă la raw_app_meta_data (în GoTrue îl poate pune DOAR API-ul admin,
+-- cu service_role — ex. {"gazpet_legare_automata": true} = calea de încredere R1; signUp public nu-l poate seta).
+CREATE FUNCTION teste.creeaza_cont(p_email text, p_uid uuid DEFAULT gen_random_uuid(), p_meta jsonb DEFAULT '{}'::jsonb,
+                                   p_app_meta jsonb DEFAULT '{}'::jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $fn$
 DECLARE v_sp text := current_setting('search_path'); v_sesiune uuid := gen_random_uuid();
 BEGIN
@@ -875,7 +877,7 @@ BEGIN
   PERFORM set_config('search_path', 'auth', false);
   EXECUTE 'SET ROLE supabase_auth_admin';
   INSERT INTO auth.users (id, aud, role, email, raw_user_meta_data, raw_app_meta_data, created_at, updated_at, email_confirmed_at)
-  VALUES (p_uid, 'authenticated', 'authenticated', p_email, p_meta, '{"provider":"email"}'::jsonb, now(), now(), now());
+  VALUES (p_uid, 'authenticated', 'authenticated', p_email, p_meta, '{"provider":"email"}'::jsonb || p_app_meta, now(), now(), now());
   INSERT INTO auth.sessions (id, user_id, created_at, updated_at) VALUES (v_sesiune, p_uid, now(), now());
   INSERT INTO auth.refresh_tokens (token, user_id, revoked, created_at, updated_at, session_id)
   VALUES (replace(gen_random_uuid()::text, '-', ''), p_uid::text, false, now(), now(), v_sesiune);
@@ -883,7 +885,13 @@ BEGIN
   PERFORM set_config('search_path', v_sp, false);
   RETURN p_uid;
 END $fn$;
-REVOKE EXECUTE ON FUNCTION teste.creeaza_cont(text, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
+REVOKE EXECUTE ON FUNCTION teste.creeaza_cont(text, uuid, jsonb, jsonb) FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
+-- Calea de încredere R1 (contul creat de owner prin API-ul admin): legare automată la creare.
+CREATE FUNCTION teste.creeaza_cont_owner(p_email text, p_uid uuid DEFAULT gen_random_uuid())
+RETURNS uuid LANGUAGE sql AS $fn$
+  SELECT teste.creeaza_cont(p_email, p_uid, '{}'::jsonb, '{"gazpet_legare_automata": true}'::jsonb)
+$fn$;
+REVOKE EXECUTE ON FUNCTION teste.creeaza_cont_owner(text, uuid) FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
 
 -- Copie EXACTĂ a comenzii pg_cron „hr_auto_deactivate_terminated” (cron.job 13, zilnic 04:00 UTC).
 -- Rulează ca admin (auth.uid() NULL), ca pg_cron în producție.

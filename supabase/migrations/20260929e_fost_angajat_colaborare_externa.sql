@@ -4,13 +4,18 @@
 --   * employees.colaborare_externa_* (necunoscut / accepta / refuza; implicit necunoscut,
 --     NICIODATĂ dedus automat; dovada: cine, când, notă sau document)
 --   * trg_employees_colab_ext_protectie_ins/_upd — doar un om (owner / can_modify_employees)
---     setează acordul; confirmat_de/la sunt forțate din sesiune
+--     setează acordul; confirmat_de/la sunt forțate din sesiune. Acordul e legat de încetarea
+--     CURENTĂ: la reactivarea fișei sau la ștergerea datei de încetare revine la „necunoscut”
+--     (direcția sigură; rând în jurnal cu sursa reset_automat) → nu se moștenește la o nouă plecare
 --   * hr_colaborare_externa_jurnal (append-only) + trg_employees_zz_colab_ext (sincronizare)
 --   * hr_personal_extern.fost_angajat_employee_id + fost_angajat_gazpet (marcaj generat)
---   * trg_hr_personal_extern_fost_angajat — legarea doar de owner/HR; colaborare ACTIVĂ doar cu acord „accepta”
+--   * trg_hr_personal_extern_fost_angajat — legarea doar de owner/HR; colaborare ACTIVĂ doar pentru un fost
+--     angajat (încă) cu acord „accepta”; un extern NELEGAT activ cu numele/emailul unui fost angajat e
+--     refuzat (în afară de owner), ca acordul și marcajul să nu poată fi ocolite; dezlegarea → inactiv
 --   * fn_colaborare_externa_seteaza / fn_fost_angajat_leaga_extern — RPC cu poartă de rol în cod
 -- Ofertare NU se modifică (înghețat până după 02.10): filtrul existent pe ext.activ face ca un
--- fost angajat fără acord să nu poată fi folosit. Idempotentă. Nu atinge datele existente.
+-- fost angajat fără acord să nu poată fi folosit — pentru rândurile NOI/modificate; cele 25 existente
+-- (0 omonime cu foști angajați la 29.09) nu sunt reverificate. Idempotentă. Nu atinge datele existente.
 -- ============================================================================
 
 -- C.1 Coloane noi pe employees ----------------------------------------------------
@@ -42,6 +47,10 @@ COMMENT ON COLUMN public.employees.colaborare_externa_nota IS
   'Dovada acordului (text vizibil tuturor celor logați: fără date sensibile; documentul semnat merge în Documente personale).';
 
 -- C.2 Protecția stării --------------------------------------------------------------
+-- Acordul se referă la încetarea CURENTĂ. La reactivare (active → true) sau la ștergerea datei de încetare
+-- (anularea încetării / D4) se golește: status „necunoscut”, fără proveniență, fără notă/document (istoricul
+-- rămâne în jurnal). NU e o deducere de acord (e direcția sigură) și rulează și pe calea de sistem.
+-- Astfel „accepta” nu poate rămâne pe un angajat activ și nu se moștenește la următoarea plecare.
 CREATE OR REPLACE FUNCTION public.fn_employees_colab_ext_protectie()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
@@ -51,6 +60,22 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     RAISE EXCEPTION 'O fișă nouă începe cu acordul de colaborare externă „necunoscut”; acordul îl setează un om din HR după încetarea contractului'
       USING ERRCODE = '42501';
+  END IF;
+  IF (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
+     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS NULL) THEN
+    NEW.colaborare_externa_status       := 'necunoscut';
+    NEW.colaborare_externa_confirmat_de := NULL;
+    NEW.colaborare_externa_confirmat_la := NULL;
+    NEW.colaborare_externa_nota         := NULL;
+    NEW.colaborare_externa_document     := NULL;
+    RETURN NEW;
+  END IF;
+  IF (OLD.colaborare_externa_status, OLD.colaborare_externa_confirmat_de, OLD.colaborare_externa_confirmat_la,
+      OLD.colaborare_externa_nota, OLD.colaborare_externa_document)
+     IS NOT DISTINCT FROM
+     (NEW.colaborare_externa_status, NEW.colaborare_externa_confirmat_de, NEW.colaborare_externa_confirmat_la,
+      NEW.colaborare_externa_nota, NEW.colaborare_externa_document) THEN
+    RETURN NEW;                                   -- s-a schimbat doar active / data încetării (ex. cron-ul)
   END IF;
   IF v_uid IS NULL THEN
     RAISE EXCEPTION 'Acordul de colaborare externă îl setează doar un om din platformă (owner / HR), niciodată automat'
@@ -89,7 +114,9 @@ CREATE TRIGGER trg_employees_colab_ext_protectie_upd BEFORE UPDATE ON public.emp
                   OR OLD.colaborare_externa_confirmat_de IS DISTINCT FROM NEW.colaborare_externa_confirmat_de
                   OR OLD.colaborare_externa_confirmat_la IS DISTINCT FROM NEW.colaborare_externa_confirmat_la
                   OR OLD.colaborare_externa_nota         IS DISTINCT FROM NEW.colaborare_externa_nota
-                  OR OLD.colaborare_externa_document     IS DISTINCT FROM NEW.colaborare_externa_document)
+                  OR OLD.colaborare_externa_document     IS DISTINCT FROM NEW.colaborare_externa_document
+                  OR OLD.active                          IS DISTINCT FROM NEW.active
+                  OR OLD.termination_date                IS DISTINCT FROM NEW.termination_date)
   EXECUTE FUNCTION public.fn_employees_colab_ext_protectie();
 
 -- C.3 Jurnalul acordului (append-only) ---------------------------------------------
@@ -100,8 +127,9 @@ CREATE TABLE IF NOT EXISTS public.hr_colaborare_externa_jurnal (
   status_nou   text,
   nota         text,
   document     text,
-  facut_de     uuid NOT NULL,
-  facut_la     timestamptz NOT NULL DEFAULT now()
+  facut_de     uuid,                    -- NULL = sistem (reset automat făcut fără JWT, ex. SQL de administrare)
+  facut_la     timestamptz NOT NULL DEFAULT now(),
+  sursa        text NOT NULL DEFAULT 'manual' CHECK (sursa IN ('manual','reset_automat'))
 );
 CREATE INDEX IF NOT EXISTS idx_hr_colab_ext_jurnal_employee ON public.hr_colaborare_externa_jurnal(employee_id);
 COMMENT ON TABLE public.hr_colaborare_externa_jurnal IS
@@ -148,15 +176,58 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_hr_personal_extern_fost_angajat
 COMMENT ON COLUMN public.hr_personal_extern.fost_angajat_gazpet IS
   'Marcajul „Fost angajat Gazpet” (generat din fost_angajat_employee_id; nu se poate desincroniza).';
 
--- Protecție: politica UPDATE de pe tabelă permite ORICĂRUI logat să scrie → poarta e aici.
+-- Cuvintele unui nume, normalizate (fără diacritice, majuscule, distincte, sortate) — pentru omonimie.
+CREATE OR REPLACE FUNCTION public.fn_nume_cuvinte(p_nume text)
+RETURNS text[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT COALESCE(array_agg(DISTINCT w ORDER BY w), '{}'::text[])
+    FROM unnest(regexp_split_to_array(upper(extensions.unaccent(btrim(COALESCE(p_nume, '')))), '[^[:alnum:]]+')) w
+   WHERE w <> '';
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_nume_cuvinte(text) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Foștii angajați (contract încheiat, fișă inactivă) care se potrivesc cu un extern: email identic, sau
+-- nume cu ≥ 2 cuvinte în care numele de familie al fișei apare și un set de cuvinte îl conține pe celălalt
+-- („Ștefănescu Ion” = STEFANESCU ION = „Ion Stefanescu”; „Radu Mihai” ⊂ RADU MIHAI ALEXANDRU). Internă.
+CREATE OR REPLACE FUNCTION public.fn_extern_fost_angajat_potrivire(p_nume text, p_email text)
+RETURNS TABLE(employee_id integer, employee_name text, metoda text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  WITH x AS (
+    SELECT public.fn_nume_cuvinte(p_nume) AS cuv, lower(btrim(COALESCE(p_email, ''))) AS em
+  ),
+  fosti AS (
+    SELECT e.id, e.name, lower(btrim(COALESCE(e.email, ''))) AS em, public.fn_nume_cuvinte(e.name) AS cuv,
+           (array_remove(regexp_split_to_array(upper(extensions.unaccent(btrim(e.name))), '[^[:alnum:]]+'), ''))[1] AS familie
+      FROM public.employees e
+     WHERE e.termination_date IS NOT NULL AND e.termination_date <= CURRENT_DATE AND e.active IS NOT TRUE
+  )
+  SELECT f.id, f.name, CASE WHEN x.em <> '' AND f.em = x.em THEN 'email' ELSE 'nume' END
+    FROM fosti f, x
+   WHERE (x.em <> '' AND f.em = x.em)
+      OR (cardinality(x.cuv) >= 2 AND cardinality(f.cuv) >= 2 AND f.familie = ANY (x.cuv)
+          AND (x.cuv <@ f.cuv OR f.cuv <@ x.cuv))
+   ORDER BY f.id;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_extern_fost_angajat_potrivire(text, text) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Protecție: politicile INSERT/UPDATE de pe tabelă permit ORICĂRUI logat să scrie → poarta e aici.
+--   (1) legarea / dezlegarea: doar owner / HR; ținta = fost angajat; dezlegarea face colaborarea inactivă;
+--   (2) rând legat + activ: fișa e ÎNCĂ a unui fost angajat și acordul e „accepta”;
+--   (3) rând NELEGAT + activ cu numele / emailul unui fost angajat → refuz (în afară de owner, care decide
+--       la omonimie), ca acordul și marcajul „Fost angajat Gazpet” să nu poată fi ocolite.
 CREATE OR REPLACE FUNCTION public.fn_hr_personal_extern_fost_angajat()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_uid uuid := auth.uid();
-  v_e   record;
+  v_uid   uuid := auth.uid();
+  v_owner boolean;
+  v_e     record;
+  v_pot   record;
 BEGIN
+  v_owner := v_uid IS NOT NULL AND EXISTS (SELECT 1 FROM public.profiles WHERE id = v_uid AND is_owner IS TRUE);
   IF (TG_OP = 'INSERT' AND NEW.fost_angajat_employee_id IS NOT NULL)
      OR (TG_OP = 'UPDATE' AND NEW.fost_angajat_employee_id IS DISTINCT FROM OLD.fost_angajat_employee_id) THEN
     IF v_uid IS NULL OR NOT EXISTS (SELECT 1 FROM public.profiles
@@ -170,12 +241,34 @@ BEGIN
         RAISE EXCEPTION 'Fișa #% nu e a unui fost angajat (contract încheiat și fișă inactivă)', NEW.fost_angajat_employee_id
           USING ERRCODE = '22023';
       END IF;
+    ELSIF TG_OP = 'UPDATE' THEN
+      NEW.activ := false;                           -- dezlegare: reactivarea trece prin verificarea (3)
     END IF;
   END IF;
-  IF NEW.fost_angajat_employee_id IS NOT NULL AND NEW.activ IS TRUE
-     AND COALESCE((SELECT e.colaborare_externa_status FROM public.employees e WHERE e.id = NEW.fost_angajat_employee_id), 'necunoscut') <> 'accepta' THEN
-    RAISE EXCEPTION 'Colaborarea poate fi activă doar dacă fostul angajat a acceptat (HR → Foști angajați)'
-      USING ERRCODE = '23514';
+  IF NEW.fost_angajat_employee_id IS NOT NULL AND NEW.activ IS TRUE THEN
+    SELECT e.active, e.termination_date, e.colaborare_externa_status INTO v_e
+      FROM public.employees e WHERE e.id = NEW.fost_angajat_employee_id;
+    IF NOT FOUND OR NOT (v_e.termination_date IS NOT NULL AND v_e.termination_date <= CURRENT_DATE AND v_e.active IS NOT TRUE) THEN
+      RAISE EXCEPTION 'Colaborarea externă poate fi activă doar pentru un fost angajat: fișa #% e din nou activă sau fără contract încheiat',
+        NEW.fost_angajat_employee_id USING ERRCODE = '23514';
+    END IF;
+    IF COALESCE(v_e.colaborare_externa_status, 'necunoscut') <> 'accepta' THEN
+      RAISE EXCEPTION 'Colaborarea poate fi activă doar dacă fostul angajat a acceptat (HR → Foști angajați)'
+        USING ERRCODE = '23514';
+    END IF;
+  END IF;
+  IF NEW.fost_angajat_employee_id IS NULL AND NEW.activ IS TRUE AND NOT v_owner
+     AND (TG_OP = 'INSERT' OR NEW.nume IS DISTINCT FROM OLD.nume OR NEW.email IS DISTINCT FROM OLD.email
+          OR NEW.activ IS DISTINCT FROM OLD.activ) THEN
+    SELECT p.employee_id, p.employee_name INTO v_pot
+      FROM public.fn_extern_fost_angajat_potrivire(NEW.nume, NEW.email) p LIMIT 1;
+    IF FOUND THEN
+      RAISE EXCEPTION 'E fost angajat Gazpet (fișa #% %): colaborarea se trece prin HR → Foști angajați, cu acordul lui',
+        v_pot.employee_id, v_pot.employee_name
+        USING ERRCODE = '23514',
+              HINT = format('Folosește HR → Foști angajați → „Trece ca extern” (fișa #%s %s). Dacă e altă persoană cu același nume, activarea o face owner-ul.',
+                            v_pot.employee_id, v_pot.employee_name);
+    END IF;
   END IF;
   RETURN NEW;
 END $fn$;
@@ -189,13 +282,23 @@ CREATE OR REPLACE FUNCTION public.fn_employees_colab_ext_after()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
+DECLARE
+  v_reset boolean := (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
+                     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS NULL);
 BEGIN
   IF OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
      OR OLD.colaborare_externa_document IS DISTINCT FROM NEW.colaborare_externa_document THEN
-    INSERT INTO public.hr_colaborare_externa_jurnal (employee_id, status_vechi, status_nou, nota, document, facut_de)
+    INSERT INTO public.hr_colaborare_externa_jurnal (employee_id, status_vechi, status_nou, nota, document, facut_de, sursa)
     VALUES (NEW.id, OLD.colaborare_externa_status, NEW.colaborare_externa_status,
-            NEW.colaborare_externa_nota, NEW.colaborare_externa_document, auth.uid());
+            CASE WHEN v_reset
+                 THEN format('Resetat automat: %s; acordul era pentru încetarea din %s. La o nouă plecare se reconfirmă.',
+                             CASE WHEN OLD.active IS NOT TRUE AND NEW.active IS TRUE THEN 'fișa a fost reactivată'
+                                  ELSE 'data încetării a fost ștearsă' END,
+                             COALESCE(to_char(OLD.termination_date, 'DD.MM.YYYY'), '—'))
+                 ELSE NEW.colaborare_externa_nota END,
+            NEW.colaborare_externa_document, auth.uid(),
+            CASE WHEN v_reset THEN 'reset_automat' ELSE 'manual' END);
   END IF;
   IF (OLD.colaborare_externa_status = 'accepta' AND NEW.colaborare_externa_status IS DISTINCT FROM 'accepta')
      OR (OLD.active IS NOT TRUE AND NEW.active IS TRUE) THEN

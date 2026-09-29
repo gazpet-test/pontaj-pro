@@ -12,6 +12,8 @@ DROP FUNCTION IF EXISTS public.fn_employees_colab_ext_protectie();
 
 DROP TRIGGER IF EXISTS trg_hr_personal_extern_fost_angajat ON public.hr_personal_extern;
 DROP FUNCTION IF EXISTS public.fn_hr_personal_extern_fost_angajat();
+DROP FUNCTION IF EXISTS public.fn_extern_fost_angajat_potrivire(text, text);
+DROP FUNCTION IF EXISTS public.fn_nume_cuvinte(text);
 
 DROP FUNCTION IF EXISTS public.fn_colaborare_externa_seteaza(integer, text, text, text);
 DROP FUNCTION IF EXISTS public.fn_fost_angajat_leaga_extern(integer, bigint);
