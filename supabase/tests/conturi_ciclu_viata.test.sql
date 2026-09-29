@@ -970,6 +970,71 @@ SELECT teste.assert((SELECT count(*) = 1 FROM public.comenzi_aprobatori WHERE pr
   'R2-23 alocarea NU se dezactivează automat (D3 varianta A)');
 SELECT teste.ca_admin();
 
+-- R2-24 (review, minor) contul închis nu-și mai poate repune singur flagurile / emailul cu JWT-ul încă valabil
+SELECT teste.ca_utilizator(:'u_r2ui');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET can_create_comenzi = true, receive_bonuri_consum = true, email_notifications_enabled = true WHERE id = %L', :'u_r2ui'),
+  'R2-24 cont închis: auto-repunerea flagurilor neprotejate → refuz', '42501', 'închis');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET email = %L WHERE id = %L', 'personal.ana@yahoo.com', :'u_r2ui'),
+  'R2-24 cont închis: schimbarea emailului (notificările ar pleca spre adresa personală) → refuz', '42501');
+SELECT teste.ca_admin();
+SELECT teste.assert(teste.flaguri_toate(:'u_r2ui', false)
+    AND (SELECT email = 'r2.ui@gazpet.ro' FROM public.profiles WHERE id = :'u_r2ui'),
+  'R2-24 flagurile rămân false și emailul neschimbat');
+
+-- R2-25 (review, minor) restaurarea refuză un snapshot cu altă formă (ex. importul manual din claude_context 1483)
+INSERT INTO public.conturi_inchideri_jurnal (profile_id, email, employee_id, motiv, sursa, snapshot)
+VALUES (:'u_r2fd', 'r2.faradata@gazpet.ro', :e_r2fd, 'Import manual cu forma veche (test)', 'import_manual',
+        '{"profile": {"email_notifications_enabled": true, "can_create_comenzi": true}, "module": [{"module": "hr"}]}'::jsonb)
+RETURNING id AS j_r2import \gset
+SELECT teste.flaguri(:'u_r2fd') AS flaguri_fd_inainte \gset
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.asteapta_eroare(format('SELECT public.fn_cont_restaureaza(%s, %L)', :j_r2import, 'Restaurare import vechi'),
+  'R2-25 snapshot fără versiune=1 / flaguri{} / santiere[] → refuz', '22023', 'forma așteptată');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT restaurat_la IS NULL FROM public.conturi_inchideri_jurnal WHERE id = :j_r2import)
+    AND teste.flaguri(:'u_r2fd') = :'flaguri_fd_inainte'::jsonb,
+  'R2-25 jurnalul NU e marcat restaurat, profilul neatins (se poate corecta importul)');
+
+-- R2-26 (review, minor) triggerul R2 nu blochează nimic nici dacă notificarea lipsește (ordine greșită de rollback)
+\set u_r2fn 00000000-0000-4000-8000-0000000c000b
+\set u_r2fn2 00000000-0000-4000-8000-0000000c000c
+INSERT INTO public.employees (name, department, email, active, termination_date) VALUES ('FARA NOTIF', 'Test', 'r2.faranotif@gazpet.ro', true, CURRENT_DATE - 1)
+  RETURNING id AS e_r2fn \gset
+INSERT INTO public.employees (name, department, email, active) VALUES ('FARA NOTIF DOI', 'Test', 'r2.faranotif2@gazpet.ro', true)
+  RETURNING id AS e_r2fn2 \gset
+SELECT teste.creeaza_cont('r2.faranotif@gazpet.ro', :'u_r2fn');
+SELECT teste.creeaza_cont_owner('r2.faranotif2@gazpet.ro', :'u_r2fn2');
+UPDATE public.profiles SET employee_id = :e_r2fn WHERE id = :'u_r2fn';
+SELECT teste.da_acces(:'u_r2fn');
+SELECT teste.da_acces(:'u_r2fn2');
+ALTER FUNCTION public.fn_cont_notifica_owneri(text, text, text, text) RENAME TO fn_cont_notifica_owneri_ascuns_test;
+SELECT teste.asteapta_eroare($$SELECT public.fn_cont_notifica_owneri('a', 'b', 'c')$$, 'R2-26 pregătire: fn_cont_notifica_owneri lipsește', '42883');
+SELECT teste.assert(teste.cron_hr_auto_deactivate_terminated() >= 1, 'R2-26 cron-ul NU pică fără funcția de notificare');
+SELECT teste.assert(teste.inchis_complet(:'u_r2fn') AND (SELECT NOT active FROM public.employees WHERE id = :e_r2fn),
+  'R2-26 fișa dezactivată și contul închis complet (notificarea e best-effort)');
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET active = false WHERE id = :e_r2fn2;                     -- ramura „fără dată” (doar notificare)
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT NOT active FROM public.employees WHERE id = :e_r2fn2)
+    AND (SELECT count(*) = 2 FROM public.user_module_access WHERE profile_id = :'u_r2fn2'),
+  'R2-26 dezactivarea fără dată reușește, contul rămâne deschis (fără notificare, fără eroare)');
+ALTER FUNCTION public.fn_cont_notifica_owneri_ascuns_test(text, text, text, text) RENAME TO fn_cont_notifica_owneri;
+
+-- R2-27 (review, minor) owner-ul vede starea TUTUROR conturilor (și nelegate / blocate fără jurnal)
+\set u_r2blocat 00000000-0000-4000-8000-0000000c000d
+SELECT teste.creeaza_cont('blocat.manual@gazpet.ro', :'u_r2blocat');
+UPDATE auth.users SET banned_until = '2999-12-31 00:00:00+00' WHERE id = :'u_r2blocat';   -- blocare din Dashboard, fără jurnal
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.assert((SELECT stare = 'inchis' AND employee_id IS NULL FROM public.fn_cont_stare_angajati() WHERE profile_id = :'u_r2ext')
+    AND (SELECT stare = 'blocat' FROM public.fn_cont_stare_angajati() WHERE profile_id = :'u_r2blocat')
+    AND (SELECT stare = 'activ' FROM public.fn_cont_stare_angajati() WHERE profile_id = :'u_ion'),
+  'R2-27 owner: cont extern închis = „inchis”, ban fără jurnal = „blocat”, restul „activ”');
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.fn_cont_stare_angajati() WHERE profile_id IN (:'u_r2ext', :'u_r2blocat'))
+    AND NOT EXISTS (SELECT 1 FROM public.fn_cont_stare_angajati() WHERE employee_id IS NULL),
+  'R2-27 HR vede în continuare doar conturile legate de fișe');
+SELECT teste.ca_admin();
+
 -- ============================================================================
 -- R3 — fost angajat ca posibil colaborator extern, acord tri-valent (migrarea 20260929e)
 -- ============================================================================
@@ -983,6 +1048,8 @@ SELECT teste.assert((SELECT count(*) = 0 FROM public.employees
     WHERE colaborare_externa_status <> 'necunoscut' OR colaborare_externa_confirmat_de IS NOT NULL
        OR colaborare_externa_confirmat_la IS NOT NULL OR colaborare_externa_document IS NOT NULL),
   'R3-01 toate fișele existente au acordul „necunoscut”, fără proveniență');
+-- rând vechi în Personal extern, omonim cu un viitor fost angajat (există dinaintea fișei; R3-12)
+INSERT INTO public.hr_personal_extern (nume, firma, activ) VALUES ('FOST COLIZIUNE', 'Firma X', true) RETURNING id AS ext_col \gset
 INSERT INTO public.employees (name, department, active, termination_date) VALUES ('FOST UNU', 'Test', false, CURRENT_DATE - 10) RETURNING id AS f1 \gset
 INSERT INTO public.employees (name, department, active, termination_date) VALUES ('FOST DOI', 'Test', false, CURRENT_DATE - 10) RETURNING id AS f2 \gset
 INSERT INTO public.employees (name, department, active, termination_date, functie, telefon, email)
@@ -990,7 +1057,6 @@ INSERT INTO public.employees (name, department, active, termination_date, functi
 INSERT INTO public.employees (name, department, active, termination_date) VALUES ('Fost Coliziune', 'Test', false, CURRENT_DATE - 10) RETURNING id AS f4 \gset
 INSERT INTO public.employees (name, department, active, termination_date) VALUES ('FOST CINCI', 'Test', false, CURRENT_DATE - 10) RETURNING id AS f5 \gset
 INSERT INTO public.employees (name, department, active) VALUES ('ACTIV COLAB', 'Test', true) RETURNING id AS a1 \gset
-INSERT INTO public.hr_personal_extern (nume, firma, activ) VALUES ('FOST COLIZIUNE', 'Firma X', true) RETURNING id AS ext_col \gset
 SELECT teste.assert((SELECT bool_and(colaborare_externa_status = 'necunoscut' AND colaborare_externa_confirmat_de IS NULL)
                      FROM public.employees WHERE id IN (:f1, :f2, :f3, :f4, :f5, :a1)),
   'R3-01 fișele noi încep ca „necunoscut”');
@@ -1179,6 +1245,104 @@ SELECT teste.assert((SELECT activ FROM public.hr_personal_extern WHERE id = :ext
 UPDATE public.employees SET active = true, termination_date = NULL WHERE id = :f4;
 SELECT teste.assert((SELECT activ = false FROM public.hr_personal_extern WHERE id = :ext_col),
   'R3-20 reactivarea fostului angajat → externul legat trece pe activ=false');
+-- (review, major) acordul e legat de încetarea curentă: la reactivare revine la „necunoscut”
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT colaborare_externa_status = 'necunoscut' AND colaborare_externa_confirmat_de IS NULL
+                          AND colaborare_externa_confirmat_la IS NULL AND colaborare_externa_nota IS NULL AND colaborare_externa_document IS NULL
+                     FROM public.employees WHERE id = :f4),
+  'R3-20 reactivare → acordul „accepta” revine la „necunoscut”, fără proveniență și fără notă');
+SELECT teste.assert((SELECT count(*) = 1 FROM public.hr_colaborare_externa_jurnal WHERE employee_id = :f4 AND sursa = 'reset_automat'
+                       AND status_vechi = 'accepta' AND status_nou = 'necunoscut' AND facut_de = :'u_hr'::uuid
+                       AND nota LIKE 'Resetat automat: fișa a fost reactivată; acordul era pentru încetarea din %'),
+  'R3-20 rând în jurnal: sursa reset_automat, cine a reactivat, încetarea la care se referea acordul');
+SELECT teste.ca_utilizator(:'u_ion');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :ext_col),
+  'R3-20 utilizator simplu: colaborare activă pentru un angajat REACTIVAT → refuz', '23514');
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :f4;          -- a doua plecare
+SELECT teste.assert((SELECT NOT active AND colaborare_externa_status = 'necunoscut' FROM public.employees WHERE id = :f4),
+  'R3-20 la a doua încetare acordul NU e moștenit: „necunoscut”');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :ext_col),
+  'R3-20 după a doua încetare, fără acord nou → colaborarea nu se poate activa', '23514', 'acceptat');
+SELECT public.fn_colaborare_externa_seteaza(:f4, 'accepta', 'Acord nou semnat la a doua plecare');
+UPDATE public.hr_personal_extern SET activ = true WHERE id = :ext_col;
+SELECT teste.assert((SELECT activ FROM public.hr_personal_extern WHERE id = :ext_col),
+  'R3-20 cu acord nou pentru încetarea curentă → colaborarea se poate activa');
+SELECT teste.ca_admin();
+
+-- R3-21 resetul merge și pe calea de sistem (admin fără JWT) și la anularea încetării (fișa rămâne inactivă)
+INSERT INTO public.employees (name, department, active, termination_date) VALUES ('REACTIVAT ADMIN', 'Test', false, CURRENT_DATE - 3) RETURNING id AS f6 \gset
+INSERT INTO public.employees (name, department, active, termination_date) VALUES ('ANULARE INCETARE', 'Test', false, CURRENT_DATE - 3) RETURNING id AS f7 \gset
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT public.fn_colaborare_externa_seteaza(:f6, 'accepta', 'Acord scris pentru test admin');
+SELECT public.fn_colaborare_externa_seteaza(:f7, 'refuza', 'Refuz scris pentru test anulare');
+SELECT teste.ca_admin();
+UPDATE public.employees SET active = true WHERE id = :f6;                               -- admin, auth.uid() NULL
+SELECT teste.assert((SELECT active AND colaborare_externa_status = 'necunoscut' FROM public.employees WHERE id = :f6)
+    AND (SELECT facut_de IS NULL AND sursa = 'reset_automat' FROM public.hr_colaborare_externa_jurnal WHERE employee_id = :f6 AND status_nou = 'necunoscut'),
+  'R3-21 reactivare ca admin (fără JWT): nu e blocată (42501), acordul revine la „necunoscut”, jurnal cu facut_de NULL = sistem');
+SELECT teste.ca_utilizator(:'u_hr');
+UPDATE public.employees SET termination_date = NULL WHERE id = :f7;                     -- „Editează Angajat”: data ștearsă
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT NOT active AND termination_date IS NULL AND colaborare_externa_status = 'necunoscut' FROM public.employees WHERE id = :f7)
+    AND (SELECT nota LIKE 'Resetat automat: data încetării a fost ștearsă%' FROM public.hr_colaborare_externa_jurnal
+          WHERE employee_id = :f7 AND sursa = 'reset_automat'),
+  'R3-21 ștergerea datei de încetare → acordul revine la „necunoscut” (invariantul „acord ⇒ contract încheiat”)');
+SELECT teste.ca_admin();
+SELECT teste.assert(teste.cron_hr_auto_deactivate_terminated() >= 0
+    AND (SELECT colaborare_externa_status = 'accepta' FROM public.employees WHERE id = :f4),
+  'R3-21 cron-ul (dezactivări) nu atinge acordul și nu e blocat de protecție');
+
+-- R3-22 (review, major) extern NELEGAT, activ, cu numele / emailul unui fost angajat → refuz (acordul nu se ocolește)
+INSERT INTO public.employees (name, department, active, termination_date) VALUES ('RADU MIHAI', 'Test', false, CURRENT_DATE - 5) RETURNING id AS f8 \gset
+INSERT INTO public.employees (name, department, email, active, termination_date)
+  VALUES ('STEFANESCU ION', 'Test', 'stefanescu.ion@yahoo.com', false, CURRENT_DATE - 5) RETURNING id AS f9 \gset
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT public.fn_colaborare_externa_seteaza(:f8, 'refuza', 'A refuzat colaborarea în scris');
+SELECT public.fn_colaborare_externa_seteaza(:f9, 'refuza', 'A refuzat colaborarea telefonic');
+SELECT teste.ca_utilizator(:'u_ion');
+SELECT teste.asteapta_eroare($$INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Radu Mihai', true)$$,
+  'R3-22 simplu: extern activ „Radu Mihai” (fost angajat care a refuzat) → refuz', '23514', 'fost angajat Gazpet');
+SELECT teste.asteapta_eroare($$INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Ștefănescu Ion', true)$$,
+  'R3-22 simplu: varianta cu diacritice „Ștefănescu Ion” → refuz', '23514', 'fost angajat Gazpet');
+SELECT teste.asteapta_eroare($$INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Ion Stefanescu Marian', true)$$,
+  'R3-22 simplu: alt ordin + un prenume în plus → refuz', '23514', 'fost angajat Gazpet');
+SELECT teste.asteapta_eroare($$INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Alt Nume Complet', ' Stefanescu.Ion@yahoo.com ', true)$$,
+  'R3-22 simplu: emailul fostului angajat → refuz', '23514', 'fost angajat Gazpet');
+SELECT teste.eroare($$INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Radu Mihai', true)$$) AS err_om \gset
+SELECT teste.assert(:'err_om'::jsonb ->> 'hint' LIKE 'Folosește HR → Foști angajați → „Trece ca extern” (fișa #' || :f8 || ' RADU MIHAI)%',
+  'R3-22 HINT-ul trimite la HR → Foști angajați, cu fișa');
+INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Radu Mihaela', true);
+INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Radu Mihai', false) RETURNING id AS ext_om \gset
+SELECT teste.assert((SELECT count(*) = 1 FROM public.hr_personal_extern WHERE nume = 'Radu Mihaela' AND activ)
+    AND (SELECT NOT activ FROM public.hr_personal_extern WHERE id = :ext_om),
+  'R3-22 alt nume („Radu Mihaela”) și un rând INACTIV cu numele fostului angajat → permise');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :ext_om),
+  'R3-22 simplu: activarea rândului omonim → refuz', '23514', 'fost angajat Gazpet');
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :ext_om),
+  'R3-22 HR: activarea rândului omonim → refuz (trece prin Foști angajați)', '23514', 'fost angajat Gazpet');
+SELECT teste.ca_utilizator(:'owner');
+UPDATE public.hr_personal_extern SET activ = true WHERE id = :ext_om;
+SELECT teste.assert((SELECT activ AND NOT fost_angajat_gazpet FROM public.hr_personal_extern WHERE id = :ext_om),
+  'R3-22 owner: activarea unui omonim (altă persoană) e decizia lui → permisă');
+SELECT teste.ca_utilizator(:'u_ion');
+UPDATE public.hr_personal_extern SET telefon = '0744000000' WHERE id = :ext_om;
+SELECT teste.assert((SELECT telefon = '0744000000' FROM public.hr_personal_extern WHERE id = :ext_om),
+  'R3-22 editarea altor câmpuri (nume/email/activ neschimbate) nu reverifică omonimia');
+SELECT teste.ca_admin();
+
+-- R3-23 (review, minor) dezlegarea din UI (HR): colaborarea devine inactivă; reactivarea trece prin verificarea de omonimie
+INSERT INTO public.employees (name, department, active, termination_date) VALUES ('DEZLEGAT TEST', 'Test', false, CURRENT_DATE - 2) RETURNING id AS f10 \gset
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT public.fn_colaborare_externa_seteaza(:f10, 'accepta', 'Acord scris pentru test dezlegare');
+SELECT public.fn_fost_angajat_leaga_extern(:f10) AS ext_f10 \gset
+SELECT teste.assert((SELECT activ AND fost_angajat_gazpet FROM public.hr_personal_extern WHERE id = :ext_f10), 'R3-23 pregătire: extern legat, activ');
+UPDATE public.hr_personal_extern SET fost_angajat_employee_id = NULL WHERE id = :ext_f10;
+SELECT teste.assert((SELECT NOT activ AND NOT fost_angajat_gazpet FROM public.hr_personal_extern WHERE id = :ext_f10),
+  'R3-23 dezlegare (HR) → colaborarea trece pe inactiv, marcajul dispare');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :ext_f10),
+  'R3-23 reactivarea rândului dezlegat, omonim cu fostul angajat → refuz', '23514', 'fost angajat Gazpet');
 SELECT teste.ca_admin();
 
 \endif
