@@ -8,6 +8,7 @@ on:
       - 'src/grafic*'
       - 'supabase/functions/ofertare-**'
       - 'supabase/functions/_shared/**'
+      - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -28,6 +29,7 @@ on:
       - 'src/grafic*'
       - 'supabase/functions/ofertare-**'
       - 'supabase/functions/_shared/**'
+      - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -147,3 +149,12 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/jakv203_test_ci
           PGPASSWORD: postgres
         run: node scripts/pg/test_jakv203_gate_depusa.mjs
+      - name: Creeaza baza goala pt JAK-V2-05
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv205_test_ci;'
+      - name: Audit append-only derogare depunere (JAK-V2-05) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv205_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv205_derogare_audit.mjs
