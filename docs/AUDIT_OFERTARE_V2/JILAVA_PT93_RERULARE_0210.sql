@@ -675,11 +675,33 @@ ORDER BY p.versiune, f.id;
 -- 29.09: 0 rânduri. Pe traseul J05 trebuie să rămână 0 (nimeni nu creează pachet prin SQL).
 
 -- Q61 [J05-TABEL-AUDIT, J05-RPC-OWNER, SEAP-DOVADA] Auditul derogărilor (toate licitațiile)
-SELECT id, licitatie_id, actiune, actor, session_user_name, char_length(motiv) AS motiv_len, left(motiv, 300) AS motiv,
-       status_vechi, status_nou, creat_la
+-- CORECTAT 30.09: comparația „același motiv” se face pe md5 al textului ÎNTREG, nu pe left(motiv,300) + lungime.
+-- Motivul are ~2.700 de caractere, iar SHA-256-urile și nr. confirmării SEAP stau după caracterul 300.
+-- Finding J05 (investigat read-only 30.09): cei 9 cu modulul Ofertare pot modifica derogare_motiv
+-- sau retrage derogarea direct prin API, fără audit, iar 'depusa_pe_derogare' copiază coloana editabilă.
+SELECT id, licitatie_id, actiune, actor, session_user_name, char_length(motiv) AS motiv_len, md5(motiv) AS motiv_md5,
+       left(motiv, 120) AS motiv_inceput, status_vechi, status_nou, creat_la
 FROM public.ofertare_derogari_audit ORDER BY creat_la;
--- 29.09: 2 rânduri, ambele pe 103 (smoke 29.09 05:12). După J05 pe Jilava: 'derogare_acordata' cu actor = contul lui Răzvan
---        (nu NULL / postgres); după „depusa”: 'depusa_pe_derogare' cu ACELAȘI motiv ca 'derogare_acordata'.
+-- 29.09: 2 rânduri, ambele pe 103 (smoke 29.09 05:12). După J05 pe Jilava:
+--   'derogare_acordata' cu actor = contul lui Răzvan (nu NULL / postgres);
+--   după „depusa”: 'depusa_pe_derogare' cu ACELAȘI md5 ca 'derogare_acordata' (Q61b).
+
+-- Q61b [J05-INTEGRITATE] Motivul: coloana = auditul = textul aprobat (md5 notat OFFLINE înainte de apelul RPC)
+WITH ult AS (
+  SELECT DISTINCT ON (actiune) actiune, md5(motiv) AS m, actor, creat_la
+  FROM public.ofertare_derogari_audit WHERE licitatie_id = :lic ORDER BY actiune, creat_la DESC)
+SELECT l.derogare_depunere AS flag,
+       md5(l.derogare_motiv) AS md5_coloana,
+       (SELECT m FROM ult WHERE actiune = 'derogare_acordata')  AS md5_acordata,
+       (SELECT m FROM ult WHERE actiune = 'depusa_pe_derogare') AS md5_depusa,
+       (SELECT count(*) FROM public.ofertare_derogari_audit WHERE licitatie_id = :lic AND actiune = 'derogare_retrasa') AS retrageri,
+       md5(l.derogare_motiv) IS NOT DISTINCT FROM (SELECT m FROM ult WHERE actiune = 'derogare_acordata') AS coloana_eq_acordata,
+       (SELECT m FROM ult WHERE actiune = 'depusa_pe_derogare') IS NOT DISTINCT FROM (SELECT m FROM ult WHERE actiune = 'derogare_acordata') AS depusa_eq_acordata,
+       l.xmin::text AS xmin
+FROM public.ofertare_licitatii l WHERE l.id = :lic;
+-- Așteptat după depunere: flag = true, coloana_eq_acordata = true, depusa_eq_acordata = true, retrageri = 0,
+--   md5_acordata = md5-ul notat offline de Răzvan. Orice false = STOP și investigație (nu se „corectează” prin SQL).
+-- Notează xmin-ul după depunere și reverifică-l până la fix: dacă se schimbă, cineva a scris pe rândul 93.
 
 -- Q62 [J05-RPC-OWNER, R5] Funcțiile porții: securitate, volatilitate, drepturi
 SELECT p.oid::regprocedure AS functie, p.prosecdef, p.provolatile, p.proacl::text AS acl
@@ -784,4 +806,5 @@ ORDER BY numar_tichet;
 --        0299 rezolvat 28.09 (documentele justificative se depun cu oferta)
 
 -- ===================== SFÂRȘIT =====================
--- Ordinea pe 02.10: Q01–Q06 → Q45, Q48, Q11 → Q13 (R5 = NULL, obligatoriu înainte de J05 / „depusa”) → Q29, Q61 → restul.
+-- Ordinea pe 02.10: Q01–Q06 → Q45, Q48, Q11 → Q13 (R5 = NULL, obligatoriu înainte de J05 / „depusa”) → Q29, Q61, Q61b → restul.
+-- J05 (30.09): Q01 confirmă derogare_motiv IS NULL înainte; acordarea DOAR prin RPC cu contul lui Răzvan; „depusa” o pune Răzvan imediat după; Q61b după depunere.

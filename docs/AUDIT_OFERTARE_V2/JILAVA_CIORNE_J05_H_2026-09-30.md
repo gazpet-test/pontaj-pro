@@ -52,7 +52,18 @@ Acceptarea riscurilor de mai sus: Răzvan Trușu, ⟨data/ora⟩, ÎNAINTE de de
 **Reguli (din raport §4.E și verdictele Copilot):**
 - Ordinea: întâi R5 = NULL (Q13), apoi derogarea (RPC, contul tău), apoi „depusa” din UI, apoi Q61. Q61 trebuie să arate același motiv în `derogare_acordata` și în `depusa_pe_derogare`.
 - După acordare, `derogare_motiv` nu se mai atinge.
-- Atenție: 9 profiluri cu modulul Ofertare pot edita motivul sau retrage derogarea fără rând de audit (raport §3.5). Sigur e doar rândul scris de RPC.
+- **Finding J05 de integritate, OPEN (mediu, nu e bypass de poartă; investigat read-only pe 30.09):**
+  - Cei 9 cu modulul Ofertare pot modifica `derogare_motiv` sau retrage derogarea (`derogare_depunere=false`) direct prin API. Nu rămâne niciun rând de audit, iar `updated_at` nu se schimbă.
+  - Rândul `depusa_pe_derogare` copiază **coloana editabilă**, nu motivul acordat.
+  - Vechea verificare Q61 compara doar primele 300 de caractere și lungimea, deci nu putea dovedi „același motiv”.
+  - UI-ul și exportul nu afișează deloc derogarea.
+- **Procedura pentru Jilava** (fără nicio schimbare de cod, freeze):
+  - (a) Q01 confirmă `derogare_motiv IS NULL`. Acordarea se face **doar prin RPC**, cu contul lui Răzvan.
+  - (b) „depusa” o pune Răzvan **imediat** după RPC.
+  - (c) **Q61b**, adăugat în SQL-ul de re-rulare: md5 pe motivul întreg. Coloana = `derogare_acordata` = `depusa_pe_derogare`, 0 retrageri.
+  - (d) md5-ul textului aprobat se notează **offline**, înainte de apel.
+  - (e) `xmin`-ul rândului 93 se notează după depunere și se reverifică până la fix.
+- Fix-ul după 02.10: trigger ca singur scriitor, doar owner-ul, cu audit la orice schimbare. `depusa_pe_derogare` va copia din ultimul `derogare_acordata`. Până la fix, „derogări auditabile persistent” **nu** se trece CONFIRMED.
 - Derogarea nu transformă cerințele neverificate în verificate și nu rezolvă lipsurile eliminatorii. Jilava rămâne dovadă **parțială**: dovedește depunerea și folosirea derogării, nu fluxul normal (Copilot, review plan A §4).
 
 ## 2. Nota de depunere — posibile alarme false H1 / H4 / H5 (DE VALIDAT de om)
