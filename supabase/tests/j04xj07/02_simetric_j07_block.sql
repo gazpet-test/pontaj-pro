@@ -24,7 +24,7 @@ SELECT jx.egal(jx.blocaje(1), '[]', 'pornim de la J07 OK');
 -- Coloana citită de sursa J07 dispare (view-urile o urmează prin attnum; funcția de sursă o cere după nume).
 ALTER TABLE ofertare_cerinte RENAME COLUMN text_cerinta TO text_cerinta_indisponibil;
 SELECT jx.fotografiaza('inainte_409');
--- @edge j07 1
+-- @edge j07 1 status=409
 SELECT jx.egal(jx.ultim('j07')->'status', '409', 'edge J07 → 409, sursa nu se poate citi');
 SELECT jx.neschimbat('inainte_409', 'edge-ul J07 refuzat (409) nu scrie nimic');
 SELECT jx.egal(jx.blocaje(1), '["garantie","anexe","numere","pachet"]', 'controalele text devin undetermined (sursă ilizibilă)');

@@ -36,10 +36,12 @@ SELECT jx.baza_intacta('JX-08a');
 
 -- JX-08b ─────────────────────────────────────────────────────────────────────────────────────────────
 BEGIN;
-SELECT jx.start('JX-08b', 'append-only pe server: UPDATE/DELETE/TRUNCATE pe verificările J04 și rezultatele J07 → REFUZ pentru cheia de serviciu (GRANT) și superuser (trigger); DELETE pe auditul J05 refuzat; manifest/pachet nemodificabile din API');
+SELECT jx.start('JX-08b', 'append-only pe server: UPDATE/DELETE/TRUNCATE pe verificările J04 și rezultatele J07 → REFUZ pentru cheia de serviciu (GRANT) și superuser (trigger, toate cele 6 combinații); DELETE pe auditul J05 refuzat; manifest/pachet nemodificabile din API');
 -- @edge j04 1
 -- @edge j07 1
 -- Două straturi: cheia de serviciu are doar SELECT+INSERT (GRANT); superuser-ul, care ocolește GRANT-urile, e oprit de trigger.
+-- Pe superuser: toate cele 6 combinații {UPDATE, DELETE, TRUNCATE} × {verificări J04, rezultate J07} (mutanții M19b / X19e
+-- recreau triggerul fără UPDATE, respectiv fără DELETE, și treceau de suită cât lipseau două din ele).
 :service
 SELECT jx.refuza($$UPDATE ofertare_pt_pachet_verificari SET rezultat = 'PASS', motiv = NULL$$, '42501', 'permission denied');
 SELECT jx.refuza($$DELETE FROM ofertare_pt_pachet_verificari WHERE rezultat = 'REFUZ'$$, '42501', 'permission denied');
@@ -47,9 +49,11 @@ SELECT jx.refuza($$UPDATE ofertare_poarta_rezultate_text SET stare = 'ok'$$, '42
 SELECT jx.refuza($$DELETE FROM ofertare_poarta_rezultate_text$$, '42501', 'permission denied');
 :admin
 SELECT jx.refuza($$UPDATE ofertare_pt_pachet_verificari SET motiv = 'rescris de superuser'$$, '42501', 'append-only');
+SELECT jx.refuza($$DELETE FROM ofertare_pt_pachet_verificari$$, '42501', 'append-only');
 SELECT jx.refuza($$TRUNCATE ofertare_pt_pachet_verificari$$, '42501', 'append-only');
-SELECT jx.refuza($$TRUNCATE ofertare_poarta_rezultate_text$$, '42501', 'append-only');
+SELECT jx.refuza($$UPDATE ofertare_poarta_rezultate_text SET stare = 'ok'$$, '42501', 'append-only');
 SELECT jx.refuza($$DELETE FROM ofertare_poarta_rezultate_text$$, '42501', 'append-only');
+SELECT jx.refuza($$TRUNCATE ofertare_poarta_rezultate_text$$, '42501', 'append-only');
 SELECT jx.refuza_oricare($$DELETE FROM ofertare_derogari_audit$$, ARRAY['42501', 'P0001']);
 :editor
 SELECT jx.refuza($$UPDATE ofertare_pt_pachet_fisiere SET sha256 = repeat('0', 64) WHERE pachet_id = 1$$, '42501', 'permission denied');
@@ -64,11 +68,11 @@ BEGIN;
 SELECT jx.start('JX-08c', 'edge-urile refuzate nu scriu nimic: J04 pe pachet inexistent (404) sau depus (409), J07 pe sursă ilizibilă (409); rezultatele noi se ADAUGĂ, cele vechi rămân (prefix identic)');
 :admin
 SELECT jx.fotografiaza('inainte');
--- @edge j04 99
+-- @edge j04 99 status=404
 SELECT jx.egal(jx.ultim('j04')->'status', '404', 'J04: pachet inexistent → 404');
 :admin
 ALTER TABLE ofertare_cerinte RENAME COLUMN text_cerinta TO text_cerinta_indisponibil;
--- @edge j07 1
+-- @edge j07 1 status=409
 SELECT jx.egal(jx.ultim('j07')->'status', '409', 'J07: sursă ilizibilă → 409');
 ALTER TABLE ofertare_cerinte RENAME COLUMN text_cerinta_indisponibil TO text_cerinta;
 SELECT jx.neschimbat('inainte', 'edge-urile refuzate nu au scris nimic');
@@ -88,7 +92,7 @@ SELECT jx.ok((SELECT count(*) FROM ofertare_poarta_rezultate_text) = (SELECT jso
 UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1;
 :admin
 SELECT jx.fotografiaza('depus');
--- @edge j04 1
+-- @edge j04 1 status=409
 SELECT jx.egal(jx.ultim('j04')->'status', '409', 'J04 pe pachet depus → 409');
 SELECT jx.neschimbat('depus', 'J04 refuzat pe pachet depus nu scrie');
 SELECT jx.trecut('JX-08c');

@@ -30,7 +30,7 @@ SELECT jx.start('JX-06b', 'edge-ul J07 rămas pe parserul v1 după upgrade-ul se
 CREATE OR REPLACE FUNCTION public.ofertare_poarta_parser_version() RETURNS text
   LANGUAGE sql IMMUTABLE SET search_path TO 'public', 'pg_temp' AS $f$ SELECT 'j07-text-v2'::text $f$;
 SELECT jx.fotografiaza('inainte_edge');
--- @edge j07 1
+-- @edge j07 1 status=409
 SELECT jx.egal(jx.ultim('j07')->'status', '409', 'edge v1 refuză să evalueze sub serverul v2');
 SELECT jx.neschimbat('inainte_edge', 'edge-ul refuzat nu scrie nimic');
 :editor

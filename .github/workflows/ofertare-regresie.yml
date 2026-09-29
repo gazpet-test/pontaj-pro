@@ -111,7 +111,7 @@ jobs:
 
   postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:16
@@ -128,9 +128,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Node 22 (>= 22.18): suita J04 x J07 importa handler-ele .ts REALE ale edge-urilor (type stripping implicit).
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Instaleaza clientul PostgreSQL
         run: |
           sudo apt-get update
@@ -216,15 +217,12 @@ jobs:
           PGURI_ADMIN: postgres://postgres@localhost:5432/postgres
           PGPASSWORD: postgres
         run: node scripts/pg/test_j04xj07.mjs
+      # Verificarea prin mutatii: fiecare implementare stricata din catalog (SQL + edge, M1...M19 + X*) trebuie UCISA de
+      # cel putin un test functional; controlul negativ M00_noop trebuie sa SUPRAVIETUIASCA. Cate o baza per mutant.
       - name: J04 x J07 extins - mutanti (fiecare implementare stricata trebuie prinsa de un test)
         env:
           PGURI_ADMIN: postgres://postgres@localhost:5432/postgres
           PGPASSWORD: postgres
-        run: |
-          for m in $(node -e "import('./scripts/pg/fixtures/j04xj07_mutanti.mjs').then(x => console.log(Object.keys(x.MUTANTI).join(' ')))"); do
-            if ! JX_MUTANT="$m" node scripts/pg/test_j04xj07.mjs > "mutant_$m.log" 2>&1; then
-              grep -E '^MUTANT|FAIL' "mutant_$m.log" || tail -20 "mutant_$m.log"
-              exit 1
-            fi
-            grep -E "^MUTANT $m:" "mutant_$m.log"
-          done
+          JX_PARALEL: '3'
+          JX_JURNALE: mutanti_j04xj07
+        run: node scripts/pg/test_j04xj07_mutanti.mjs

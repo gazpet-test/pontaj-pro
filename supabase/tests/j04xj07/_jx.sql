@@ -5,8 +5,10 @@
 -- Convenții:
 --   * Rolurile se schimbă cu macro-urile psql :admin / :editor / :owner / :fara_acces / :anon / :service
 --     (definite de runner): „editor” = authenticated cu modulul Ofertare, sesiune NE-postgres (session_user = jx_actor).
---   * Pașii „-- @edge j04|j07 …” din fișierele de test rulează MODULELE REALE ale edge-urilor (verificare.mjs,
---     evalueaza.mjs) ca service_role, în aceeași sesiune/tranzacție; după pas, sesiunea rămâne pe :admin.
+--   * Pașii „-- @edge j04|j07 …” din fișierele de test rulează HANDLER-ELE REALE ale edge-urilor (index.ts / handler.ts,
+--     cu poarta de rol poartaOfertare.ts, verificare.mjs și evalueaza.mjs), cu un client „PostgREST” simulat peste
+--     sesiunea testului (jx.rest, ca service_role), în aceeași tranzacție; după pas, sesiunea rămâne pe :admin.
+--     Statusul HTTP e verificat de runner: implicit 200, altfel cel cerut explicit (ex. „-- @edge j07 1 status=409”).
 --   * jx.refuza(sql, sqlstate, fragment) = refuz obligatoriu + dovada că starea și dovezile NU s-au schimbat.
 
 GRANT USAGE ON SCHEMA jx TO authenticated, anon, service_role;
@@ -186,14 +188,21 @@ BEGIN
   RAISE NOTICE 'JX_BAZA|%', p_id;
 END $$;
 
+-- Clientul „PostgREST” al edge-urilor simulate (runner): O instrucțiune (SELECT … → jsonb) rulată cu rolul CURENT
+-- (service_role pentru edge, authenticated + JWT pentru poarta de rol), într-o subtranzacție: o eroare SQL devine
+-- {"data": null, "error": {...}} — ca răspunsul PostgREST — fără să rupă tranzacția testului.
+CREATE FUNCTION jx.rest(p_sql text) RETURNS jsonb LANGUAGE plpgsql AS $$
+DECLARE r jsonb;
+BEGIN
+  EXECUTE p_sql INTO r;
+  RETURN jsonb_build_object('data', r, 'error', NULL);
+EXCEPTION WHEN OTHERS THEN
+  RETURN jsonb_build_object('data', NULL, 'error', jsonb_build_object('message', SQLERRM, 'code', SQLSTATE));
+END $$;
+
 GRANT SELECT, INSERT ON jx.raspunsuri, jx.fotografii TO authenticated, anon, service_role;
 GRANT USAGE ON SEQUENCE jx.raspunsuri_id_seq TO authenticated, anon, service_role;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA jx TO authenticated, anon, service_role;
-
--- Sursa J07 citită ca edge-ul (rolul curent = service_role): orice eroare RPC → NULL → edge-ul răspunde 409.
-CREATE FUNCTION jx.sursa_text(p_lic bigint) RETURNS jsonb LANGUAGE plpgsql AS $$
-BEGIN RETURN public.ofertare_poarta_text_sursa(p_lic); EXCEPTION WHEN OTHERS THEN RETURN NULL; END $$;
-GRANT EXECUTE ON FUNCTION jx.sursa_text(bigint) TO service_role;
 
 -- Instrucțiune fără efect: fie filtrată la 0 rânduri (RLS), fie refuzată cu unul din codurile date; starea neschimbată.
 CREATE FUNCTION jx.fara_efect_sau(p_sql text, p_coduri text[]) RETURNS text LANGUAGE plpgsql AS $$

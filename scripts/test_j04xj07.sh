@@ -7,20 +7,27 @@
 #
 # Pași: pornește/verifică clusterul → scripts/pg/test_j04xj07.mjs (creează baza jakv0407_test_jx, încarcă schema +
 #       migrările J04→J07 ×2 + helper-ele jx + starea de bază, rulează supabase/tests/j04xj07/NN_*.sql, fiecare test
-#       în BEGIN…ROLLBACK; testele cu două sesiuni pe o clonă de unică folosință) → șterge bazele → exit ≠ 0 la eșec.
+#       în BEGIN…ROLLBACK; testele cu două sesiuni pe o clonă de unică folosință; pașii @edge rulează handler-ele REALE
+#       ale edge-urilor) → șterge bazele → exit ≠ 0 la eșec.
 #
 # Utilizare (din rădăcina repo-ului; ca root, serverul rulează automat ca utilizatorul postgres):
 #   bash scripts/test_j04xj07.sh                 # suita extinsă (teste JX-*)
-#   bash scripts/test_j04xj07.sh --mutanti       # + fiecare implementare stricată (fără J04, fără J07, doar 1 control…)
-#                                                #   trebuie UCISĂ de cel puțin un test funcțional
+#   bash scripts/test_j04xj07.sh --mutanti       # + verificarea prin mutații (scripts/pg/test_j04xj07_mutanti.mjs): fiecare
+#                                                #   implementare stricată din catalog (SQL + edge, M1…M19 + X*) trebuie UCISĂ
+#                                                #   de cel puțin un test funcțional; controlul negativ M00_noop trebuie să
+#                                                #   supraviețuiască. În paralel: JX_PARALEL (implicit 4).
 #   bash scripts/test_j04xj07.sh --si-vechi      # + harness-urile PG existente (R9b, R5-F, R4, J01, J07-RLS, J03, J05,
 #                                                #   J07-P3, J04, integrarea J04×J07) pe același cluster, baze proprii
+#   bash scripts/test_j04xj07.sh --si-edge       # + testele edge/UI din CI: Deno (handler J07, hash J04: poarta de rol,
+#                                                #   body falsificat, parser) și node --test (paritate UI/Edge, ordinea UI J04×J07)
+#   bash scripts/test_j04xj07.sh --tot           # = --mutanti --si-vechi --si-edge (comanda pentru GO)
 #   bash scripts/test_j04xj07.sh --opreste       # oprește serverul la final
 #   bash scripts/test_j04xj07.sh -- '^0[45]'     # doar fișierele de test care se potrivesc regex-ului
 #
 # Variabile (opționale): PG_BIN=/usr/lib/postgresql/16/bin  PGDATA_TEST=/tmp/pg_j0407/data_jx  PGPORT_TEST=5440
-#   PGLOG_TEST=/tmp/pg_j0407/jx.log
-# Coduri de ieșire: 0 = PASS · 1 = test eșuat / mutant supraviețuitor · 2 = mediu (PG indisponibil, gardă refuzată)
+#   PGLOG_TEST=/tmp/pg_j0407/jx.log  JX_PARALEL=4
+# Cerințe: PostgreSQL 16, Node ≥ 22.18 (runner-ul importă handler-ele .ts reale); pentru --si-edge și deno 2.x.
+# Coduri de ieșire: 0 = PASS · 1 = test eșuat / mutant supraviețuitor · 2 = mediu (PG/Node/Deno indisponibil, gardă refuzată)
 # ============================================================================
 set -Eeuo pipefail
 
@@ -31,14 +38,16 @@ PORT="${PGPORT_TEST:-5440}"
 JURNAL_PG="${PGLOG_TEST:-/tmp/pg_j0407/jx.log}"
 JURNALE="$(dirname "$JURNAL_PG")"   # jurnalele mutanților / harness-urilor vechi
 
-MUTANTI=0; VECHI=0; OPRESTE=0; FILTRU=""
+MUTANTI=0; VECHI=0; EDGE=0; OPRESTE=0; FILTRU=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --mutanti)  MUTANTI=1 ;;
     --si-vechi) VECHI=1 ;;
+    --si-edge)  EDGE=1 ;;
+    --tot)      MUTANTI=1; VECHI=1; EDGE=1 ;;
     --opreste)  OPRESTE=1 ;;
     --) shift; FILTRU="${1:-}"; break ;;
-    -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,31p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "Argument necunoscut: $1 (vezi --help)" >&2; exit 2 ;;
   esac
   shift
@@ -51,6 +60,9 @@ esec()  { echo "FAIL: $*" >&2; exit 1; }
 [[ "$DATE_DIR" == /* && "$DATE_DIR" != "/" ]] || mediu "PGDATA_TEST trebuie să fie cale absolută"
 [ -x "$PG_BIN/postgres" ] || mediu "PostgreSQL lipsește în $PG_BIN"
 command -v node >/dev/null || mediu "node lipsește"
+node -e 'process.exit(process.features && process.features.typescript ? 0 : 1)' \
+  || mediu "Node $(node --version) nu elimină tipurile TypeScript: e nevoie de Node ≥ 22.18 (runner-ul importă handler-ele .ts reale)"
+if [ "$EDGE" = 1 ]; then command -v deno >/dev/null || mediu "deno lipsește (necesar pentru --si-edge / --tot)"; fi
 
 # Nicio variabilă libpq moștenită nu poate redirecționa conexiunea spre alt server.
 unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGPASSWORD PGPASSFILE PGSERVICE PGSERVICEFILE \
@@ -91,16 +103,11 @@ REZ=0
 echo "→ suita extinsă J04×J07 (scripts/pg/test_j04xj07.mjs)"
 node scripts/pg/test_j04xj07.mjs "$FILTRU" || REZ=1
 
-# --- 3. mutanți: fiecare trebuie UCIS --------------------------------------------
+# --- 3. mutanți: fiecare trebuie UCIS (în paralel, câte o bază de unică folosință per mutant) ----------------
 if [ "$MUTANTI" = 1 ]; then
-  for m in $(node -e "import('./scripts/pg/fixtures/j04xj07_mutanti.mjs').then(x => console.log(Object.keys(x.MUTANTI).join(' ')))"); do
-    if JX_MUTANT="$m" node scripts/pg/test_j04xj07.mjs "$FILTRU" > "$JURNALE/mutant_$m.log" 2>&1; then
-      grep -E "^MUTANT $m:" "$JURNALE/mutant_$m.log"
-    else
-      grep -E "^MUTANT|FAIL setup" "$JURNALE/mutant_$m.log" >&2 || tail -5 "$JURNALE/mutant_$m.log" >&2
-      echo "FAIL: mutantul $m NU a fost ucis" >&2; REZ=1
-    fi
-  done
+  echo "→ verificarea prin mutații (scripts/pg/test_j04xj07_mutanti.mjs, JX_PARALEL=${JX_PARALEL:-4})"
+  JX_JURNALE="$JURNALE/mutanti" JX_REZUMAT="$JURNALE/mutanti_rezumat.json" JX_FILTRU_FISIERE="$FILTRU" \
+    node scripts/pg/test_j04xj07_mutanti.mjs || REZ=1
 fi
 
 # --- 4. harness-urile existente, fiecare pe baza lui ------------------------------
@@ -131,6 +138,22 @@ if [ "$VECHI" = 1 ]; then
   for b in r9b r9b_test_review_f r9b_test_coada_plansa r9b_test_jakv201; do
     "${PSQL[@]}" -d postgres -c "DROP DATABASE IF EXISTS \"$b\" WITH (FORCE)" >/dev/null 2>&1 || true
   done
+fi
+
+# --- 5. testele edge / UI din CI (fără PG): Deno + node --test --------------------------------------------
+if [ "$EDGE" = 1 ]; then
+  echo "→ testele edge (Deno) și UI (node --test)"
+  ruleaza_edge() {  # $1 = eticheta, restul = comanda
+    local et="$1"; shift
+    if "$@" > "$JURNALE/edge_$et.log" 2>&1; then
+      echo "PASS $et — $(grep -E '^# (pass|fail) |passed|failed' "$JURNALE/edge_$et.log" | tail -2 | tr '\n' ' ' | cut -c1-150)"
+    else
+      tail -15 "$JURNALE/edge_$et.log" >&2; echo "FAIL $et" >&2; REZ=1
+    fi
+  }
+  ruleaza_edge deno_poarta_text env NO_COLOR=1 deno test -A --node-modules-dir=none supabase/functions/ofertare-poarta-text
+  ruleaza_edge deno_hash_j04 env NO_COLOR=1 deno test -A --node-modules-dir=none scripts/test-jakv202-hash-server.mjs
+  ruleaza_edge node_ui_j04_j07 node --test scripts/test-jakv2p3.mjs scripts/test-j04-j07-integrare.mjs
 fi
 
 if [ "$OPRESTE" = 1 ]; then ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null && echo "→ server oprit"; fi

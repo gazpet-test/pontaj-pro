@@ -114,6 +114,10 @@ UPDATE ofertare_pt_garantie SET oferit_luni = 24 WHERE licitatie_id = 1;
 SELECT jx.egal(jx.ultim('j04')->'ok', 'true', 'J04 PASS pe toate fișierele (nu J04 refuză)');
 SELECT jx.egal(jx.blocaje(1), '["garantie"]', 'blocaje = exact controlul provocat; celelalte 11 ok');
 SELECT jx.egal(jx.control(1, 'garantie')->'stare', '"block"', 'controlul garantie e BLOCK (nu undetermined)');
+-- Garanția are două straturi (SQL structurat live + rezultatul text al evaluatorului): aici blochează ramura SQL.
+-- Independența completă (text „ok” + structurat 24<36 → tot BLOCK) e în JX-MX-09s.
+SELECT jx.egal(jx.control(1, 'garantie')->'detalii', to_jsonb('Garanția oferită lipsește sau diferă de minimul / momentul cerut'::text),
+  'blocajul vine din ramura SQL structurată (live), nu din rezultatul text');
 :editor
 SELECT jx.refuza($$UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1$$, 'P0001', 'J07: controale blocante: ["garantie"]');
 SELECT jx.trecut('JX-04-07');
