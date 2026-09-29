@@ -3,6 +3,31 @@
 > **DOAR PREGĂTIRE** (programul de noapte Copilot, pct. 8). Totul e read-only: cataloage, `get_advisors`, grep în repo. Nu s-a aplicat niciun REVOKE sau poartă. Fiecare propunere cere acordul lui Răzvan și trece prin preview → confirmare → `apply_migration` → `get_advisors`.
 > Surse: workflow `wf_4bf75289-81f`, cu 1 inventar și 5 verificatori adversariali pe candidații critic/ridicat. Indiciile de exploatare le-am verificat eu, read-only, pe 29.09 la ~21:10 UTC.
 
+## ⚠ INCIDENT de expunere OPEN (verdict Copilot, 29.09 ~21:23 UTC)
+Formularea consemnată la cererea lui Copilot: **„BYPASS-uri de autorizare confirmate prin analiza definițiilor și permisiunilor; expunere actuală; exploatare NEDEMONSTRATĂ.”** Nu e un atac în desfășurare. E un incident deschis pentru posibilități actuale de modificare neautorizată.
+- **Escaladare:** Copilot a dat NO-GO pentru amânarea până la 08:00 și a cerut contact direct acum, inclusiv trezirea ta, cu confirmare de primire. S-au trimis două push-uri: ~21:05 UTC (informare) și ~21:24 UTC (URGENT, cu textul corectat de Copilot). **Confirmarea ta în chat lipsește încă.**
+- **Nu e autorizat nimic automat:** fără REVOKE, fără închiderea conturilor, fără modificarea joburilor, fără încălcarea freeze-ului. **Remedierile pe Ofertare, (2) și (3), cer o excepție explicită de securitate la freeze**, acordată de tine pe domeniul exact, apoi GO pe revizie.
+- **Formulare corectată:** nu „0 urme de abuz”, ci „niciun indiciu detectat în verificările efectuate, la momentul respectiv”. Verificările sunt limitate:
+  - flagurile se pot autoatribui;
+  - `profiles` nu are istoric;
+  - jurnalul RSVTI se poate falsifica.
+- **Interimar (GO Copilot):** doar re-rulări read-only ale indicatorilor în sesiunea curentă, fără cron nou și fără mecanism nou de notificare. La indicii noi, alertă imediată.
+- **Remedierea (GO pe pregătire, NO-GO pe un PR unic):** patch-uri distincte pe fiecare suprafață, cu teste:
+  - Ofertare (2)+(3): poartă de modul testată pe apeluri directe; păstrarea provenienței; `respins_de_om` protejat. Un prag nenul nu ajunge.
+  - RSVTI (1): RPC-ul și INSERT-ul direct în jurnal se tratează împreună. Data confirmării efectuate ≠ scadența următoarei confirmări.
+  - Stocuri / transferuri / 30a: decizia ta pe matricea de drepturi și acoperirea tuturor căilor de scriere, inclusiv REST direct. Integritatea (majuscule, stoc negativ, concurență) e o obligație separată.
+  - TRUNCATE / ACL: PR separat. Rămâne precondiție pentru P2, dar nu întârzie deciziile de mai sus.
+
+### Verificări read-only suplimentare (29.09 ~21:25 UTC, cerute de Copilot)
+| Indicator | Rezultat |
+|---|---|
+| `olx_tokens` accesibil? | GRANT SELECT există pentru `anon` și `authenticated`, dar RLS e activ cu **0 politici**, deci API-ul întoarce 0 rânduri. Nicio funcție și niciun view nu citesc tabela. **Nu e expus**; rămâne o problemă de igienă (P15). Tokenurile NU au fost citite. |
+| `ofertare_inventar_ai`: verdict uman (`verdict_de` completat) suprascris de `ofertare_inventar_pereche` | 0 |
+| `ofertare_inventar_ai`: `verdict_de` fără modulul Ofertare | 0 |
+| Licitații cu inventarul „tot acoperit”, 0 lipsuri (semnătura lui `p_prag=0`) | 0 |
+| Profiluri non-owner cu `can_manage_stoc` | **14** (Cristina Dumitrescu, contul Claude, Mioara Olaru, Mitrache Alexandru, Mirela Roșu, Mădălina Tănase, Răzvan Toma, Natalia Udrea, Eugen Nica, Kostas T, Brehui Ramona, Cioc Janeta, Amalia Pușcașu, Silviu Stănescu). **Nu se poate dovedi cine le-a pus**; confirmă tu lista. |
+| Transferuri de stoc în ultimele 30 de zile | 15. Neanalizate pe drept, pentru că lipsește matricea de drepturi. |
+
 ## 0. Pe scurt pentru Răzvan
 - **4 căi concrete de modificare neautorizată, confirmate de verificatori.** Oricine are cont (orice angajat logat) poate, printr-un apel RPC direct, fără ecran:
   1. `confirm_hr_autorizatie_rsvti`: prelungește viza RSVTI a oricui, cu orice dată, deci ascunde o viză expirată. Gravitate reală: **mare**.
@@ -10,7 +35,7 @@
   3. `ofertare_inventar_pereche`: cu `p_prag=0` ascunde obligațiile găsite de al doilea cititor AI. **Ridicat.**
   4. `fn_stoc_ajustare`: modifică stocul oricărei poziții. **Mai grav decât părea:** tabelele de stoc sunt deschise oricui e logat și direct prin REST, iar `can_manage_stoc` și-l poate pune oricine singur. Extensia S-A 30a ar închide acest flag.
   - Plus `fn_transfer_executa` (ridicat, confirmat): mută stoc între oricare locații; tabelele sunt oricum deschise.
-- **Indicii de exploatare: niciunul.** Toate verificările au dat 0:
+- **Indicii de exploatare: niciunul detectat în verificările efectuate** (limitate; vezi mai sus). Toate au dat 0:
   - confirmări RSVTI date de conturi fără drept HR;
   - confirmări RSVTI cu dată în viitor;
   - dovezi Ofertare alese de conturi fără modulul Ofertare;
