@@ -20,7 +20,7 @@ Formularea consemnată la cererea lui Copilot: **„BYPASS-uri de autorizare con
 
 ### Signup-ul era PORNIT (captura lui Răzvan, 30.09 00:30 RO)
 - „Allow new users to sign up” = ON. Deci „orice cont logat” = **oricine de pe internet**: își face cont cu propriul email, îl confirmă și primește acces la cele 4 căi. „Confirm email” ON nu protejează.
-- Cerut: OFF + „Save changes”. Starea după: ⟨de confirmat cu captură⟩.
+- Cerut: OFF + „Save changes”. **Starea după: OFF, confirmat de Răzvan în chat („am oprit”, 30.09 ~00:35 RO).** Din SQL nu se poate verifica independent. Monitorizare: conturi noi în `auth.users`.
 - **Semnal separat — egress:** 1616 GB cached egress în ciclu (250 GB incluși), cu o zi de ~1,18 TB. Investigația read-only e în curs: buclă internă vs descărcare externă. Restricția de pe 03.10 ar opri ERP-ul.
 
 ### Verificări read-only suplimentare (29.09 ~21:25 UTC, cerute de Copilot)
