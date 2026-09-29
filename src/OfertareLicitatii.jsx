@@ -113,6 +113,7 @@ export default function OfertareLicitatiiTab() {
   const [fStatus, setFStatus] = useState('active')
   const [fSegment, setFSegment] = useState('')
   const [fResp, setFResp] = useState('')          // filtru responsabil (profile id)
+  const [fBenef, setFBenef] = useState('')        // TKT-2026-0302: filtru după beneficiar (autoritate)
   const [cauta, setCauta] = useState('')          // TKT-2026-0260: căutare în listă, în loc de Ctrl+F
   const [echipa, setEchipa] = useState([])         // colegii cu acces la modulul Ofertare — candidați la „responsabil”
   const [toast, setToast] = useState(null)
@@ -220,8 +221,18 @@ export default function OfertareLicitatiiTab() {
     : fStatus === 'radar' ? /^Radar/i.test(r.observatii || '') && !FINALE.includes(r.status)
     : fStatus === 'probleme' ? areProbleme(r) && !FINALE.includes(r.status) : true)
     && (!fSegment || r.segment === fSegment) && (!fResp || r.responsabil_id === fResp)
+    && (!fBenef || normText(r.autoritate).includes(normText(fBenef)))
     && (!cautaN || [r.obiect, r.autoritate, r.nr_anunt, r.responsabil_nume, r.observatii]
       .some(v => normText(v).includes(cautaN))))
+  // TKT-2026-0302: lista beneficiarilor, grupați (Transgaz / Distrigaz / Delgaz / Romgaz / Conpet adună toate sucursalele), sortați după nr. licitații
+  const beneficiari = (() => {
+    const GRUP = [/transgaz/i, /distrigaz/i, /delgaz/i, /romgaz/i, /conpet/i, /premier energy/i]
+    const m = {}
+    rows.forEach(r => { const a = String(r.autoritate || '').trim(); if (!a) return
+      const g = GRUP.find(x => x.test(a)); const k = g ? a.match(g)[0].replace(/^\w/, c => c.toUpperCase()) : a
+      m[k] = (m[k] || 0) + 1 })
+    return Object.entries(m).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+  })()
   // contor pe responsabil: în lucru acum + total pe anul curent (cine ce are și câte face pe an)
   const anCurent = new Date().getFullYear()
   const perResp = {}
@@ -396,6 +407,10 @@ export default function OfertareLicitatiiTab() {
             {!!cauta && <button onClick={() => setCauta('')} title="Șterge căutarea"
               style={{ position:'absolute', right:6, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:G.muted, cursor:'pointer', fontSize:15, lineHeight:1, padding:2 }}>×</button>}
           </div>
+          <select style={{ ...S.input, width:'auto', maxWidth:220 }} value={fBenef} onChange={e => setFBenef(e.target.value)} title="Filtru după beneficiar (autoritatea contractantă)">
+            <option value="">Toți beneficiarii</option>
+            {beneficiari.map(([b, n]) => <option key={b} value={b}>{b} ({n})</option>)}
+          </select>
           <select style={{ ...S.input, width:'auto' }} value={fResp} onChange={e => alegeResp(e.target.value)} title="Filtru după responsabil">
             <option value="">Toți responsabilii</option>
             {echipa.map(p => <option key={p.id} value={p.id}>{p.name}{perResp[p.id] ? ` (${perResp[p.id].in_lucru} în lucru · ${perResp[p.id].an} în ${anCurent})` : ''}</option>)}

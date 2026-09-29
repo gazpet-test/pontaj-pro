@@ -7,6 +7,13 @@ on:
       - 'src/Ofertare*'
       - 'src/grafic*'
       - 'supabase/functions/ofertare-**'
+      - 'supabase/functions/_shared/**'
+      - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
+      - 'api/_poartaOfertare*'
+      - 'api/cad-parse.js'
+      - 'api/pdf-sparge.js'
+      - 'api/plansa-felii.js'
+      - 'api/seap-import.js'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
@@ -21,6 +28,13 @@ on:
       - 'src/Ofertare*'
       - 'src/grafic*'
       - 'supabase/functions/ofertare-**'
+      - 'supabase/functions/_shared/**'
+      - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
+      - 'api/_poartaOfertare*'
+      - 'api/cad-parse.js'
+      - 'api/pdf-sparge.js'
+      - 'api/plansa-felii.js'
+      - 'api/seap-import.js'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
@@ -46,7 +60,7 @@ jobs:
           node-version: '20'
       - run: npm ci
       - name: Vitest - ofertare si grafic
-        run: npx vitest run src/ofertare src/grafic src/Ofertare
+        run: npx vitest run src/ofertare src/grafic src/Ofertare api/_poartaOfertare.test.js
       - name: Regresie R5-R9b fara dependente
         run: node --test scripts/test-r5-r9b.mjs
 
@@ -65,6 +79,7 @@ jobs:
       - name: Regresie Edge Functions cu dependente simulate
         run: >-
           deno test -A --node-modules-dir=none
+          supabase/functions/_shared
           supabase/functions/ofertare-plansa-citeste
           supabase/functions/ofertare-clarificari-propune
           supabase/functions/ofertare-document-nou-citeste
@@ -111,3 +126,35 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/r9b_test_coada_plansa
           PGPASSWORD: postgres
         run: node scripts/pg/test_r4_coada_plansa.mjs
+      - name: Matricea de tranziții pachet (JAK-V2-01) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/r9b_test_jakv201
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv201_tranzitie.mjs
+      - name: Creeaza baza goala pt JAK-V2-07
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv207_test_ci;'
+      - name: RLS scriere Ofertare + DELETE owner (JAK-V2-07) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv207_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv207_rls.mjs
+      - name: Creeaza baza goala pt JAK-V2-03
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv203_test_ci;'
+      - name: Poarta depusa cu pachet si cerinte (JAK-V2-03) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv203_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv203_gate_depusa.mjs
+      - name: Creeaza baza goala pt JAK-V2-05
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv205_test_ci;'
+      - name: Audit append-only derogare depunere (JAK-V2-05) pe PostgreSQL 16 local
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv205_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv205_derogare_audit.mjs
