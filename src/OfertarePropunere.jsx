@@ -2092,7 +2092,9 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
 
       {eroare && <div style={{ ...S.card, padding:12, borderColor:G.red + '55', color:G.red, fontSize:13 }}>{eroare}</div>}
 
-      <PoartaPT st={st} onFiltru={f => { setFiltru(f); setSel(new Set()) }} />
+      <PoartaPT st={st} onFiltru={f => { setFiltru(f); setSel(new Set())
+        // matricea e mult mai jos in pagina — fara scroll, click-ul parea ca nu face nimic
+        requestAnimationFrame(() => document.getElementById('matrice-conformitate')?.scrollIntoView({ behavior:'smooth', block:'start' })) }} />
 
       <EchipaF9 echipa={echipa} blocaje={blocajeF9} busy={busy} onImporta={importaEchipa}
         onScoate={scoateDinEchipa} onConfirma={confirmaDisponibil} />
@@ -2198,7 +2200,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
           onExcepta={exceptaAfirmatie} onSetTip={setTipCerut} onSetExtern={setExtern} busy={busy} />
       </div>
 
-      <div>
+      <div id="matrice-conformitate" style={{ scrollMarginTop:12 }}>
         <div style={{ ...S.lbl, marginBottom:8 }}>Matricea de conformitate</div>
         <MatriceCerinte
           licId={licId} profiluri={profiluri}
