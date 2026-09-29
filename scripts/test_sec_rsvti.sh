@@ -6,8 +6,9 @@
 # Nu citește .env, nu folosește chei Supabase, nu atinge producția.
 #
 # Ciclul complet (runda 3 = răspunsul la NO-GO Copilot pe r2, docs/SECURITATE_PATCH_RSVTI.md §12):
-#   S. statice: rollback-ul NU e în supabase/migrations; CI referă doar fișiere anume; migrarea are BEGIN;…COMMIT;
-#      cu postcondiția înainte de COMMIT, rollback-ul nu are; nicio comparație „<>”/„NOT IN” (NULL-safe)
+#   S. statice: rollback-ul NU e în supabase/migrations; CI referă doar fișiere anume; migrarea NU are BEGIN/COMMIT
+#      (runda 4: gestionarul unic e scripts/livrare_migrare.sh), garda de livrare e prima și ultima, postcondiția
+#      între ele; rollback-ul nu are BEGIN/COMMIT; nicio comparație „<>”/„NOT IN” (NULL-safe)
 #   0. schelet (= producția de azi)       → teste GAURA
 #   0b. precondiții/postcondiții negative pe starea live (politica sursă fără USING/WITH CHECK, RLS oprit pe sursă,
 #       helper existent străin, granturi rămase prin PUBLIC / pe coloană / prin rol moștenit, proprietar schimbat, S1,
@@ -19,9 +20,11 @@
 #   3. rollback tehnic ARMAT (string-ul documentat) → dezarmat; schema = pasul 0; GAURA; suita PATCH CADE
 #   4. reaplicare                          → teste PATCH; suita GAURA CADE
 #   5. rollback armat local + de sesiune în aceeași tranzacție → trece, sesiunea e dezarmată; reaplicare = schema 4
-#   6. emulări de runner (bază auxiliară): (a) psql -f ON_ERROR_STOP, (b) un singur query, (c) runner care deschide
-#      tranzacția și înregistrează migrarea × {fără eroare, SELECT 1/0 după prima funcție, SELECT 1/0 în postcondiție};
-#      (a0) fără ON_ERROR_STOP; (c-reg) înregistrare eșuată ⇒ unde cade COMMIT-ul
+#   6. traseul EFECTIV de livrare (runda 4, bază auxiliară): scripts/livrare_migrare.sh (psql --single-transaction:
+#      marcaj + migrare + INSERT schema_migrations) × {fără eroare, 1/0 după prima funcție, 1/0 în postcondiție,
+#      eroare CHIAR la INSERT-ul în schema_migrations}; reluare permisă după eșec; reluare după succes ⇒ refuz,
+#      fără dublare; fișierul rulat singur (psql -f, psql -c, --single-transaction fără marcaj, marcaj de sesiune)
+#      ⇒ refuzat de garda de livrare, fără urme; runnerul refuză un fișier cu COMMIT; (mutant)
 #   7. ceas fix (libfaketime, repornirea serverului) 2026-09-29 23:30 UTC: data omisă / NULL = 30.09
 #
 # Utilizare (din rădăcina repo-ului; ca root, comenzile de server trec pe utilizatorul postgres prin su):
@@ -29,7 +32,7 @@
 #   bash scripts/test_sec_rsvti.sh --opreste   # + oprește serverul la final
 # Variabile opționale: PG_BIN=/usr/lib/postgresql/16/bin PGDATA_TEST=/tmp/pg_sec_rsvti PGPORT_TEST=5442
 #   PGDB_TEST=sec_rsvti_test PGLOG_TEST=/tmp/pg_sec_rsvti.log FAKETIME_LIB=…/libfaketime.so.1
-#   Doar pentru mutanți/discriminare: MIGRARE_FISIER=… ROLLBACK_FISIER=… (fișiere alternative)
+#   Doar pentru mutanți/discriminare: MIGRARE_FISIER=… ROLLBACK_FISIER=… LIVRARE_FISIER=… (fișiere alternative)
 # Coduri de ieșire: 0 = PASS · 1 = migrare/test eșuat · 2 = mediu (PG indisponibil, gardă refuzată)
 # ============================================================================
 set -Eeuo pipefail
@@ -49,6 +52,9 @@ FAKETIME_LIB="${FAKETIME_LIB:-/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.
 CEAS_FIX="2026-09-29 23:30:00"
 # Armarea documentată (runda 3): în aceeași tranzacție, legată de txid-ul ei.
 ARMARE="SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), true);"
+# Runda 4: marcajul de livrare pus de scripts/livrare_migrare.sh (aceeași tranzacție, legat de txid).
+MARCAJ="SELECT set_config('gazpet.livrare_migrare', '20261003c_sec_rsvti_poarta_jurnal:' || txid_current(), true);"
+LIVRARE="${LIVRARE_FISIER:-$RADACINA/scripts/livrare_migrare.sh}"
 
 OPRESTE=0
 for a in "$@"; do
@@ -67,7 +73,7 @@ esec()  { echo "FAIL: $*" >&2; exit 1; }
 [[ "$BAZA" =~ ^[a-z0-9_]+_test$ ]] || mediu "PGDB_TEST trebuie să se termine în _test (acum: $BAZA)"
 [[ "$DATE_DIR" == /tmp/* ]] || mediu "PGDATA_TEST trebuie să fie sub /tmp (acum: $DATE_DIR)"
 [ -x "$PG_BIN/postgres" ] || mediu "PostgreSQL lipsește în $PG_BIN"
-for f in "$SCHELET" "$TESTE" "$TESTE_CEAS" "$MIGRARE" "$ROLLBACK"; do [ -f "$f" ] || mediu "Fișier lipsă: $f"; done
+for f in "$SCHELET" "$TESTE" "$TESTE_CEAS" "$MIGRARE" "$ROLLBACK" "$LIVRARE"; do [ -f "$f" ] || mediu "Fișier lipsă: $f"; done
 
 # Nicio variabilă libpq moștenită nu poate redirecționa conexiunea spre alt server.
 unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGPASSWORD PGPASSFILE PGSERVICE PGSERVICEFILE \
@@ -137,9 +143,9 @@ curata_roluri
 echo "→ schelet: ${SCHELET#$RADACINA/}"
 baza_noua "$BAZA"
 
-aplica() {  # runner (a): psql -f cu ON_ERROR_STOP; tranzacția o gestionează FIȘIERUL (BEGIN;…COMMIT;)
-  echo "→ aplic ${1#$RADACINA/} (runner a)"
-  "${PSQL[@]}" -d "${2:-$BAZA}" -f "$1" || esec "${1#$RADACINA/} a eșuat"
+aplica() {  # tranzacția runnerului de livrare (--single-transaction + marcaj), fără tabelul de înregistrare (vezi §6)
+  echo "→ aplic ${1#$RADACINA/} (tranzacția runnerului de livrare, fără înregistrare)"
+  "${PSQL[@]}" -d "${2:-$BAZA}" --single-transaction -c "$MARCAJ" -f "$1" >/dev/null || esec "${1#$RADACINA/} a eșuat"
 }
 
 TOTAL_OK=0
@@ -172,7 +178,7 @@ teste_cad() {  # $1 = eticheta, $2 = gaura (true/false), $3 = fragment așteptat
 # Un scenariu negativ: pregătire (DDL) + fișierul, TOTUL într-o singură tranzacție care TREBUIE să eșueze.
 refuzat() {  # $1 = eticheta, $2 = fișier, $3 = fragment așteptat în eroare, $4 = SQL de pregătire ('' = nimic), $5 = 'armat' opțional
   local err; err="$(mktemp)"
-  local args=(-d "$BAZA" --single-transaction)
+  local args=(-d "$BAZA" --single-transaction -c "$MARCAJ")
   [ -n "$4" ] && args+=(-c "$4")
   [ "${5:-}" = armat ] && args+=(-c "$ARMARE")
   args+=(-f "$2")
@@ -236,12 +242,12 @@ while IFS= read -r ref; do
   [[ "$ref" =~ ^supabase/migrations/[0-9]{8}[a-z]?_[A-Za-z0-9_]+ ]] || esec "S: CI referă „$ref” (nu un fișier anume din supabase/migrations)"
 done <<< "$REFS"
 static "CI (.github/workflows) referă doar fișiere anume din supabase/migrations; nimic din supabase/revenire"
-[ "$(grep -cx 'BEGIN;' "$MIGRARE")" = 1 ] && [ "$(grep -cx 'COMMIT;' "$MIGRARE")" = 1 ] \
-  && [ "$(grep -n -x 'END \$post\$;' "$MIGRARE" | cut -d: -f1)" -lt "$(grep -n -x 'COMMIT;' "$MIGRARE" | cut -d: -f1)" ] \
-  && [ "$(grep -v '^--' "$MIGRARE" | grep -v '^\s*$' | head -1)" = "BEGIN;" ] \
-  && [ "$(grep -v '^\s*$' "$MIGRARE" | tail -1)" = "COMMIT;" ] \
-  || esec "S: migrarea trebuie să înceapă cu BEGIN; și să se termine cu COMMIT;, cu postcondiția înainte de COMMIT"
-static "migrarea: BEGIN; prima instrucțiune, COMMIT; ultima, postcondiția (§4) înainte de COMMIT"
+! grep -qiE '^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|ABORT)\s*(TRANSACTION|WORK)?\s*;' "$MIGRARE" \
+  && [ "$(grep -v '^--' "$MIGRARE" | grep -v '^\s*$' | head -1)" = 'DO $livrare_start$' ] \
+  && [ "$(grep -v '^\s*$' "$MIGRARE" | tail -1)" = 'END $livrare_final$;' ] \
+  && [ "$(grep -n -x 'END \$post\$;' "$MIGRARE" | cut -d: -f1)" -lt "$(grep -n -x 'DO \$livrare_final\$' "$MIGRARE" | cut -d: -f1)" ] \
+  || esec "S: migrarea: fără BEGIN/COMMIT, garda de livrare prima și ultima, postcondiția înaintea gărzii de final"
+static "migrarea: fără BEGIN/COMMIT (gestionar = runnerul de livrare), garda de livrare prima + ultima, postcondiția (§4) înainte de final"
 ! grep -qiE '^\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION)\s*;' "$ROLLBACK" || esec "S: rollback-ul nu trebuie să conțină BEGIN/COMMIT (gestionarul e operatorul)"
 static "rollback-ul: fără BEGIN/COMMIT (gestionarul e operatorul)"
 ! grep -nE '<>|NOT IN \(' "$MIGRARE" "$ROLLBACK" || esec "S: comparație „<>”/„NOT IN” în fișiere (nu e NULL-safe)"
@@ -425,68 +431,97 @@ aplica "$MIGRARE"
 fara_urme "$SNAP_4" "5 rollback + reaplicare ⇒ aceeași schemă ca la pasul 4"
 rm -f "$SNAP_4"
 
-# 6. Emulări de runner, pe o bază auxiliară (recreată pentru fiecare rulare).
-echo "→ 6. un singur gestionar al tranzacției: 3 emulări de runner × {fără eroare, eroare după prima funcție, eroare în postcondiție}"
-REG_TABEL="CREATE SCHEMA supabase_migrations; CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, name text, statements text[]);"
-inregistreaza_sql() { printf "INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES ('20261003c', 'sec_rsvti_poarta_jurnal', ARRAY[\$reg\$%s\$reg\$]);" "$(cat "$1")"; }
-ruleaza_runner() {  # $1 = a|b|c|a0, $2 = fișier; ieșire: cod în RC, stderr în $ERR_R
-  set +e
-  case "$1" in
-    a)  "${PSQL[@]}" -d "$BAZA_AUX" -f "$2" >/dev/null 2>"$ERR_R"; RC=$?
-        [ $RC = 0 ] && "${PSQL[@]}" -d "$BAZA_AUX" -c "$(inregistreaza_sql "$2")" >/dev/null 2>>"$ERR_R" ;;
-    b)  "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA_AUX" -c "$(cat "$2")" >/dev/null 2>"$ERR_R"; RC=$?
-        [ $RC = 0 ] && "${PSQL[@]}" -d "$BAZA_AUX" -c "$(inregistreaza_sql "$2")" >/dev/null 2>>"$ERR_R" ;;
-    c)  "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA_AUX" -c "BEGIN;
-$(cat "$2")
-$(inregistreaza_sql "$2")
-COMMIT;" >/dev/null 2>"$ERR_R"; RC=$? ;;
-    a0) "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA_AUX" -f "$2" >/dev/null 2>"$ERR_R"; RC=$? ;;
-  esac
-  set -e
+# 6. Traseul EFECTIV de livrare (runda 4, verdict Copilot r3): scripts/livrare_migrare.sh, pe o bază auxiliară.
+#    Gestionar unic = psql --single-transaction [marcaj + migrare + INSERT în schema_migrations].
+echo "→ 6. traseul de livrare: scripts/livrare_migrare.sh (marcaj + migrare + înregistrare într-o singură tranzacție)"
+# Coloanele reale din producție (information_schema, citit read-only 30.09).
+REG_TABEL="CREATE SCHEMA supabase_migrations; CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, statements text[], name text, created_by text, idempotency_key text, rollback text[]);"
+NUME_MIG="20261003c_sec_rsvti_poarta_jurnal"
+CONN_AUX=(-h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA_AUX")
+ERR_R="$(mktemp)"
+livreaza() {  # $1 = fișier (copiat sub numele real al migrării: runnerul derivă numele din fișier), $2 = versiune
+  mkdir -p "$VAR_DIR/livrare"; cp "$1" "$VAR_DIR/livrare/$NUME_MIG.sql"
+  set +e; PSQL_BIN="$PG_BIN/psql" VERSIUNE_MIGRARE="${2:-20261003000000}" bash "$LIVRARE" "$VAR_DIR/livrare/$NUME_MIG.sql" -- "${CONN_AUX[@]}" >/dev/null 2>"$ERR_R"; RC=$?; set -e
 }
-inregistrata() { "${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = 'sec_rsvti_poarta_jurnal'"; }
+psql_aux() { set +e; "$PG_BIN/psql" -X -q "${CONN_AUX[@]}" "$@" >/dev/null 2>"$ERR_R"; RC=$?; set -e; }
+inregistrata() { "${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = '$NUME_MIG'"; }
 stare_patch() { "${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure"; }
 MD5_PATCH="$(grep -m1 -oE "IS DISTINCT FROM '[0-9a-f]{32}'" <(sed -n '/^DO \$post\$$/,/^END \$post\$;$/p' "$MIGRARE") | grep -oE '[0-9a-f]{32}')"
-ERR_R="$(mktemp)"
-for runner in a b c; do
-  for var in ok err_prima err_post; do
-    baza_noua "$BAZA_AUX"; "${PSQL[@]}" -d "$BAZA_AUX" -c "$REG_TABEL" >/dev/null
-    SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
-    case $var in ok) F="$MIGRARE" ;; err_prima) F="$VAR_DIR/err_prima.sql" ;; err_post) F="$VAR_DIR/err_post.sql" ;; esac
-    ruleaza_runner "$runner" "$F"
-    if [ $var = ok ]; then
-      [ $RC = 0 ] || { cat "$ERR_R" >&2; esec "6 runner $runner: migrarea fără eroare a eșuat"; }
-      [ "$(stare_patch)" = "$MD5_PATCH" ] && [ "$(inregistrata)" = 1 ] || esec "6 runner $runner: patch neaplicat sau neînregistrat"
-      extra=""
-      if [ $runner = c ]; then
-        grep -q 'there is already a transaction in progress' "$ERR_R" && grep -q 'there is no transaction in progress' "$ERR_R" \
-          || { cat "$ERR_R" >&2; esec "6 runner c: lipsesc WARNING-urile BEGIN imbricat / COMMIT fără tranzacție"; }
-        extra=" (WARNING: BEGIN imbricat „already in progress”; COMMIT-ul runnerului „no transaction in progress”)"
-      fi
-      echo "   OK   6 runner $runner, fără eroare: patch aplicat + înregistrat o dată$extra"
-    else
-      [ $RC != 0 ] || esec "6 runner $runner/$var: trebuia să eșueze"
-      grep -q 'division by zero' "$ERR_R" || { cat "$ERR_R" >&2; esec "6 runner $runner/$var: a eșuat din alt motiv"; }
-      [ "$(inregistrata)" = 0 ] || esec "6 runner $runner/$var: migrarea apare înregistrată"
-      fara_urme "$SNAP_E" "6 runner $runner, SELECT 1/0 $([ $var = err_prima ] && echo "după prima funcție" || echo "în postcondiție"): funcții/politici/ACL inițiale, neînregistrată" "$BAZA_AUX"
-      NEG_OK=$((NEG_OK - 1))
-    fi
-    NEG_OK=$((NEG_OK + 1)); rm -f "$SNAP_E"
-  done
-done
-# (a0) psql fără ON_ERROR_STOP: fișierul rămâne atomic (COMMIT-ul unei tranzacții eșuate = ROLLBACK), dar psql iese cu 0.
-baza_noua "$BAZA_AUX"; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
-ruleaza_runner a0 "$VAR_DIR/err_prima.sql"
-[ $RC = 0 ] && grep -q 'current transaction is aborted' "$ERR_R" || esec "6 a0: comportament neașteptat (cod $RC)"
-fara_urme "$SNAP_E" "6 runner a0 (fără ON_ERROR_STOP), eroare după prima funcție: nimic comis, deși psql iese cu 0 ⇒ ON_ERROR_STOP=1 obligatoriu" "$BAZA_AUX"
+aux_nou() { baza_noua "$BAZA_AUX"; "${PSQL[@]}" -d "$BAZA_AUX" -c "$REG_TABEL" >/dev/null; }
+# Eroare injectată CHIAR la INSERT-ul în schema_migrations; triggerul verifică întâi că patch-ul e deja instalat
+# în tranzacție (deci TOATE postcondițiile și garda de final au trecut) — altfel eroarea ar fi alta.
+INJ_REG="CREATE FUNCTION supabase_migrations.adv_injectie() RETURNS trigger LANGUAGE plpgsql AS \$i\$ BEGIN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure) IS DISTINCT FROM '$MD5_PATCH'
+     OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_poate_scrie_hr_autorizatii') THEN
+    RAISE EXCEPTION 'injecție: patch-ul NU e instalat la momentul înregistrării';
+  END IF;
+  RAISE EXCEPTION 'EROARE INJECTATĂ la INSERT în schema_migrations (patch instalat, postcondiții trecute)';
+END \$i\$;
+CREATE TRIGGER adv_injectie BEFORE INSERT ON supabase_migrations.schema_migrations FOR EACH ROW EXECUTE FUNCTION supabase_migrations.adv_injectie();"
+esuat_fara_urme() {  # $1 = eticheta, $2 = fragment așteptat, $3 = snapshot, $4 = înregistrări așteptate (implicit 0)
+  [ $RC != 0 ] || esec "$1: trebuia să eșueze"
+  grep -qF -- "$2" "$ERR_R" || { cat "$ERR_R" >&2; esec "$1: a eșuat din alt motiv (lipsește „$2”)"; }
+  [ "$(inregistrata)" = "${4:-0}" ] || esec "$1: înregistrări = $(inregistrata), așteptat ${4:-0}"
+  fara_urme "$3" "$1 → refuzat, definiții/politici/ACL neschimbate, înregistrări: ${4:-0}" "$BAZA_AUX"
+}
+
+# 6.1 succes: patch + O înregistrare (version, name, statements = fișierul întreg)
+aux_nou; livreaza "$MIGRARE" 20261003000000
+[ $RC = 0 ] || { cat "$ERR_R" >&2; esec "6.1 livrarea fără eroare a eșuat"; }
+[ "$(stare_patch)" = "$MD5_PATCH" ] && [ "$(inregistrata)" = 1 ] || esec "6.1 patch neaplicat sau neînregistrat"
+[ "$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT version FROM supabase_migrations.schema_migrations")" = 20261003000000 ] \
+  || esec "6.1 versiunea înregistrată"
+"${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT statements[1] FROM supabase_migrations.schema_migrations WHERE name = '$NUME_MIG'" | cmp -s - <(cat "$MIGRARE"; echo) \
+  || esec "6.1 statements[1] nu e fișierul migrării, octet cu octet"
+echo "   OK   6.1 livrare: patch aplicat + înregistrat o dată (version 20261003000000, name $NUME_MIG, statements = fișierul)"; NEG_OK=$((NEG_OK + 1))
+# 6.2 reluare după succes (altă versiune) ⇒ refuz la înregistrare, anulat tot, fără dublare
+SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+livreaza "$MIGRARE" 20261003000001
+esuat_fara_urme "6.2 reluare după succes" "migrarea e deja înregistrată" "$SNAP_E" 1
 rm -f "$SNAP_E"
-# (c-reg) unde cade COMMIT-ul la runnerul (c): înregistrarea eșuează (versiune ocupată) DUPĂ COMMIT-ul fișierului.
-baza_noua "$BAZA_AUX"; "${PSQL[@]}" -d "$BAZA_AUX" -c "$REG_TABEL" -c "INSERT INTO supabase_migrations.schema_migrations VALUES ('20261003c', 'alta_migrare', NULL)" >/dev/null
-ruleaza_runner c "$MIGRARE"
-[ $RC != 0 ] && grep -q 'duplicate key' "$ERR_R" && [ "$(stare_patch)" = "$MD5_PATCH" ] && [ "$(inregistrata)" = 0 ] \
-  || esec "6 c-reg: comportament neașteptat"
-echo "   OK   6 runner c, înregistrare eșuată: patch-ul E aplicat (COMMIT-ul fișierului a închis tranzacția runnerului), neînregistrat — reaplicarea e idempotentă"
-NEG_OK=$((NEG_OK + 1)); rm -f "$ERR_R"
+
+# 6.3 erori injectate: după prima funcție, în postcondiție, CHIAR la INSERT-ul în schema_migrations
+for var in err_prima err_post err_reg; do
+  aux_nou
+  [ $var = err_reg ] && "${PSQL[@]}" -d "$BAZA_AUX" -c "$INJ_REG" >/dev/null
+  SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+  case $var in
+    err_prima) livreaza "$VAR_DIR/err_prima.sql"; esuat_fara_urme "6.3 1/0 după prima funcție" "division by zero" "$SNAP_E" ;;
+    err_post)  livreaza "$VAR_DIR/err_post.sql";  esuat_fara_urme "6.3 1/0 în postcondiție" "division by zero" "$SNAP_E" ;;
+    err_reg)   livreaza "$MIGRARE"; esuat_fara_urme "6.3 eroare CHIAR la INSERT-ul în schema_migrations, după postcondiții și garda de final" \
+                 "EROARE INJECTATĂ la INSERT în schema_migrations (patch instalat, postcondiții trecute)" "$SNAP_E"
+               [ "$(stare_patch)" != "$MD5_PATCH" ] || esec "6.3 err_reg: RPC-ul patch-ului a rămas"
+               # 6.4 reluarea PERMISĂ (după eșec): fără injecție ⇒ patch + o înregistrare
+               "${PSQL[@]}" -d "$BAZA_AUX" -c "DROP TRIGGER adv_injectie ON supabase_migrations.schema_migrations; DROP FUNCTION supabase_migrations.adv_injectie();" >/dev/null
+               livreaza "$MIGRARE" 20261003000002
+               [ $RC = 0 ] && [ "$(stare_patch)" = "$MD5_PATCH" ] && [ "$(inregistrata)" = 1 ] || { cat "$ERR_R" >&2; esec "6.4 reluarea permisă după eșec"; }
+               echo "   OK   6.4 reluare permisă după înregistrarea eșuată: patch + exact o înregistrare"; NEG_OK=$((NEG_OK + 1)) ;;
+  esac
+  rm -f "$SNAP_E"
+done
+
+# 6.5 fișierul rulat SINGUR, fără runner ⇒ garda de livrare (start) refuză, nimic comis
+aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+START="Livrare 20261003c: garda de livrare (start)"
+psql_aux -v ON_ERROR_STOP=1 -f "$MIGRARE";                      esuat_fara_urme "6.5 psql -f simplu (autocommit)" "$START" "$SNAP_E"
+psql_aux -c "$(cat "$MIGRARE")";                                esuat_fara_urme "6.5 un singur query (psql -c, ca execute_sql)" "$START" "$SNAP_E"
+psql_aux -v ON_ERROR_STOP=1 --single-transaction -f "$MIGRARE"; esuat_fara_urme "6.5 --single-transaction fără marcaj (fără înregistrare)" "$START" "$SNAP_E"
+psql_aux -v ON_ERROR_STOP=1 -c "SELECT set_config('gazpet.livrare_migrare', '$NUME_MIG:' || txid_current(), false)" -f "$MIGRARE"
+esuat_fara_urme "6.5 marcaj de SESIUNE dintr-o tranzacție anterioară + psql -f" "$START" "$SNAP_E"
+psql_aux -v ON_ERROR_STOP=1 -c "SET gazpet.livrare_migrare = '$NUME_MIG'" -f "$MIGRARE"
+esuat_fara_urme "6.5 marcaj de sesiune fără txid" "$START" "$SNAP_E"
+# 6.6 control de tranzacție în fișier ⇒ runnerul refuză înainte de conexiune; „END;” la nivel de instrucțiune
+#     (nedetectabil textual) ⇒ garda de final eșuează, NEÎNREGISTRAT (limită documentată: ce era înainte de END; e comis)
+awk '{print} !d && /^\$fn\$;$/ {print "COMMIT;  -- MUTANT"; d=1}' "$MIGRARE" > "$VAR_DIR/mut_commit.sql"
+livreaza "$VAR_DIR/mut_commit.sql"; esuat_fara_urme "6.6 mutant cu COMMIT; în fișier (runnerul refuză)" "conține control de tranzacție" "$SNAP_E"
+awk '{print} !d && /^\$fn\$;$/ {print "select 1; commit ;  -- MUTANT"; d=1}' "$MIGRARE" > "$VAR_DIR/mut_commit2.sql"
+livreaza "$VAR_DIR/mut_commit2.sql"; esuat_fara_urme "6.6 mutant „select 1; commit ;” pe aceeași linie" "conține control de tranzacție" "$SNAP_E"
+awk '{print} !d && /^\$fn\$;$/ {print "END;  -- MUTANT (sinonim COMMIT)"; d=1}' "$MIGRARE" > "$VAR_DIR/mut_end.sql"
+livreaza "$VAR_DIR/mut_end.sql"
+[ $RC != 0 ] && grep -qF "Livrare 20261003c: garda de livrare (final" "$ERR_R" && [ "$(inregistrata)" = 0 ] \
+  || { cat "$ERR_R" >&2; esec "6.6 mutant END;: garda de final nu l-a prins"; }
+echo "   OK   6.6 mutant „END;” la nivel de instrucțiune: garda de final eșuează, NEÎNREGISTRAT (prima parte comisă — limită documentată)"
+NEG_OK=$((NEG_OK + 1)); rm -f "$SNAP_E" "$ERR_R"
 
 # 7. Ceas fix: repornesc serverul cu libfaketime (@2026-09-29 23:30 UTC), apoi înapoi la ceasul real.
 echo "→ 7. ceas fix $CEAS_FIX UTC (libfaketime): data omisă și NULL ⇒ 30.09 (azi București) în UTC și Etc/GMT+12"

@@ -12,13 +12,14 @@
 --   * jurnalul se poate falsifica direct prin REST: politica INSERT e doar „auth.uid() IS NOT NULL”,
 --     cu orice confirmat_de / date / scadență.
 --
--- Tranzacția (runda 3): UN SINGUR gestionar = acest fișier (BEGIN; … COMMIT; explicit, mai jos). Precondițiile (§0)
---   și postcondițiile (§4) rulează ÎNAINTE de COMMIT: orice eșec anulează tot, inclusiv înlocuirile de funcții.
---   Comportamentul sub 3 feluri de runner e demonstrat în harness (docs §5, §12): psql -f cu ON_ERROR_STOP, un singur
---   query, runner care își deschide tranzacția și înregistrează migrarea în același string. La ultimul, BEGIN-ul de aici
---   dă doar WARNING („there is already a transaction in progress”), COMMIT-ul de aici închide tranzacția runnerului,
---   iar înregistrarea lui rulează după, separat (WARNING „there is no transaction in progress” la COMMIT-ul lui).
---   Migrarea rămâne atomică în toate trei; ce se verifică imediat după apply: docs §7 pasul 4.
+-- Tranzacția (runda 4, verdict Copilot r3): UN SINGUR gestionar = RUNNERUL scripts/livrare_migrare.sh
+--   (psql -X -v ON_ERROR_STOP=1 --single-transaction: marcaj de livrare + ACEST fișier + INSERT în
+--   supabase_migrations.schema_migrations, toate în aceeași tranzacție). Fișierul NU mai conține BEGIN/COMMIT.
+--   Precondițiile (§0), postcondițiile (§4) și garda de final rulează înainte de înregistrare și de COMMIT-ul
+--   runnerului: orice eșec (inclusiv chiar la INSERT-ul înregistrării) anulează tot.
+--   Garda de livrare (start + final): fără marcajul pus de runner în ACEEAȘI tranzacție (legat de txid) fișierul
+--   refuză — psql -f simplu, psql -c, apply_migration / execute_sql MCP nu îl pot aplica (docs §13).
+--   Ce se verifică imediat după apply: docs §7 pasul 4.
 --
 -- Ce face:
 --   0. Precondiții fail-closed, NULL-safe (IS DISTINCT FROM; o valoare NULL = refuz), ÎNAINTE de orice modificare:
@@ -50,7 +51,7 @@
 --      b) REVOKE UPDATE, DELETE de la anon și authenticated: azi NU există politici UPDATE/DELETE, deci
 --         RLS le refuză deja (0 rânduri) — REVOKE-ul nu schimbă niciun comportament, doar închide GRANT-ul;
 --      c) REVOKE INSERT de la anon: nu există politică INSERT pentru anon (RLS refuză deja).
---   4. Postcondiții înainte de COMMIT: md5 corpuri + semnătura RPC-ului, atributele funcțiilor (limbaj, volatilitate,
+--   4. Postcondiții înainte de COMMIT-ul runnerului: md5 corpuri + semnătura RPC-ului, atributele funcțiilor (limbaj, volatilitate,
 --      SECURITY DEFINER, proconfig exact, proprietar, tip întors), politica jurnalului + RLS, PRIVILEGIILE EFECTIVE
 --      (has_function_privilege / has_table_privilege / has_any_column_privilege pentru PUBLIC, anon, authenticated —
 --      acoperă moștenirea prin roluri și granturile pe coloane) și ACL-ul exact al celor două funcții.
@@ -62,7 +63,14 @@
 --           forward; artefact de test/revenire excepțională, FĂRĂ GO de execuție (supabase/revenire/README.md).
 --           Revenirea operațională (păstrează poarta): docs/SECURITATE_PATCH_RSVTI.md §6.
 -- ============================================================================
-BEGIN;
+DO $livrare_start$
+BEGIN
+  -- Garda de livrare (start): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003c_sec_rsvti_poarta_jurnal:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003c: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+  END IF;
+END $livrare_start$;
 
 -- ---------------------------------------------------------------------------
 -- 0. Precondiții — fail-closed dacă producția s-a schimbat față de analiza din 29.09 (NULL = refuz)
@@ -320,7 +328,7 @@ REVOKE UPDATE, DELETE ON public.hr_autorizatii_rsvti_confirmari FROM anon, authe
 REVOKE INSERT ON public.hr_autorizatii_rsvti_confirmari FROM anon;
 
 -- ---------------------------------------------------------------------------
--- 4. Postcondiții — ÎNAINTE de COMMIT: starea rezultată e EXACT cea din acest patch (altfel se anulează tot)
+-- 4. Postcondiții — ÎNAINTE de înregistrare și de COMMIT-ul runnerului: starea rezultată e EXACT cea din acest patch (altfel se anulează tot)
 -- ---------------------------------------------------------------------------
 DO $post$
 DECLARE
@@ -412,4 +420,11 @@ BEGIN
   END IF;
 END $post$;
 
-COMMIT;
+DO $livrare_final$
+BEGIN
+  -- Garda de livrare (final, după postcondiții): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003c_sec_rsvti_poarta_jurnal:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003c: garda de livrare (final, după postcondiții) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+  END IF;
+END $livrare_final$;

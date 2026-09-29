@@ -1,6 +1,7 @@
 # SEC RSVTI: poarta pe `confirm_hr_autorizatie_rsvti` și pe jurnal (P1 / constatarea (1)), 29.09→03.10.2026
 
 > **NEAPLICAT.** E un patch distinct, doar pentru suprafața RSVTI, așa cum a cerut Copilot. Se aplică doar după GO-ul lui Copilot pe această revizie și după acordul explicit al lui Răzvan (§7). Nu atinge Ofertare, datele, `profiles` sau alte funcții.
+> **Revizia 4 (30.09): traseul de livrare** — răspuns la verdictul Copilot r3 (GO SQL, NO-GO apply): tranzacția o deține `scripts/livrare_migrare.sh`, fișierul nu mai are BEGIN/COMMIT, înregistrarea e în aceeași tranzacție; **§13**. Logica RSVTI e neschimbată.
 > **Revizia 3 (30.09):** răspunsul la NO-GO-ul Copilot pe runda 2 (`e707ba5`, text integral în `SECURITATE_PATCH_RSVTI_VERDICT_COPILOT_R2.md`). Tabelul punct Copilot → schimbare → test → rezultat e la **§12**. Revizia 2 (corecturile verificatorului) e la §11; unde §0–§10 diferă de §11, e valabil textul actual.
 > **Consemnarea corectă a efectului, până la decizia A (§8.2):** „INSERT direct restrâns la grupul autorizat și identitatea proprie”. NU „jurnal de confirmări integral verificabil” și NU „RSVTI securizat complet”: P1b, ștergerea prin cascadă și suprascrierea fișei prin confirmări retroactive rămân findings **OPEN** (§8); P1b e pasul următor prioritar.
 > Tot ce am citit din producție a fost read-only: pe 29.09 după 21:30 UTC (runda 1: cataloage, `pg_policies`, ACL, `pg_stat_statements` doar rol și număr de apeluri, două SELECT-uri agregate care întorc doar numere și departamente) și pe 29.09 ~22:20 UTC (runda 2: **doar cataloage**: `pg_trigger`, `pg_proc`, `pg_policies`, `pg_class`, `pg_constraint`). N-am apelat nicio funcție a aplicației.
@@ -272,16 +273,11 @@ Rezultatele din 29.09:
 
 **Pasul 1b (runda 3), tot read-only:** `SELECT relrowsecurity FROM pg_class WHERE oid='public.hr_autorizatii'::regclass` (așteptat `t`); pe `hr_autorizatii_write_authorized`, `qual IS NOT NULL AND with_check IS NOT NULL` (așteptat `t`); `SELECT count(*) FROM pg_proc WHERE proname='fn_poate_scrie_hr_autorizatii'` (așteptat 0); `pg_get_function_arguments` pe RPC = `… DEFAULT CURRENT_DATE …`.
 
-**Pasul 2: confirmarea explicită a lui Răzvan**, pe exact acest fișier: sha256 `5a355506f18505494f296dcd93a52a7df7450d8e47033c00b0cfe80393d0853b`, 415 linii.
+**Pasul 2: confirmarea explicită a lui Răzvan**, pe exact acest fișier: sha256 `ed16a2d936cd9ca83e1beddcabab39d95ddad6c8135403ba9746c34939cb30ac`, 430 de linii (runda 4).
 
-**Pasul 3:** un singur `apply_migration`, cu numele `sec_rsvti_poarta_jurnal` și conținutul exact al fișierului. Fără alte migrări, fără DML. Fișierul e **singurul gestionar al tranzacției** (`BEGIN;` … postcondiții … `COMMIT;`). Comportamentul lui `apply_migration` nu se poate observa local, deci harness-ul emulează 3 runnere (pasul 6):
-- (a) `psql -X -v ON_ERROR_STOP=1 -f`: fișierul își deschide și își închide tranzacția; o eroare oprește psql, iar serverul anulează tot;
-- (b) un singur simple query: `BEGIN` deschide un bloc explicit; o eroare oprește mesajul, iar conexiunea închisă anulează tot;
-- (c) runner care își deschide tranzacția și înregistrează migrarea în același string (`BEGIN; <fișier>; INSERT INTO supabase_migrations.schema_migrations …; COMMIT;`): `BEGIN`-ul fișierului dă `WARNING: there is already a transaction in progress` și nu face nimic; **COMMIT-ul fișierului** comite tranzacția deschisă de runner (tot patch-ul); `INSERT`-ul runnerului rulează apoi într-o tranzacție implicită separată, iar `COMMIT`-ul runnerului dă `WARNING: there is no transaction in progress`. Deci patch-ul e atomic, dar înregistrarea e separată: dacă ea eșuează, patch-ul rămâne aplicat și neînregistrat (demonstrat, c-reg). Invers (înregistrat, dar neaplicat) nu se poate.
-- Cu erori injectate (`SELECT 1/0;` după prima înlocuire de funcție și, separat, în postcondiție), în toate trei funcțiile, politicile și ACL-urile rămân cele inițiale (`pg_dump` identic), iar migrarea nu apare înregistrată. Fără `ON_ERROR_STOP` (a0), fișierul rămâne atomic (`COMMIT` pe o tranzacție eșuată = `ROLLBACK`), dar psql iese cu 0; de aceea `ON_ERROR_STOP=1` e obligatoriu oriunde se folosește psql.
-- WARNING-urile de la (c) sunt așteptate și nu cer nicio acțiune. Dacă o precondiție sau o postcondiție pică, nu se aplică nimic: se reanalizează.
+**Pasul 3 (runda 4, înlocuiește textul r3):** livrare prin **`scripts/livrare_migrare.sh`** — gestionarul unic al tranzacției: `psql --single-transaction` cu marcaj + migrare + `INSERT` în `supabase_migrations.schema_migrations`, toate în aceeași tranzacție (§13). NU `apply_migration` / `execute_sql`: fișierul le refuză (garda de livrare). Fără alte migrări, fără DML. Orice eroare, inclusiv chiar la înregistrare, anulează tot; pe succes, patch-ul și înregistrarea există simultan. Emulările r3 (a/b/c) sunt înlocuite de testul traseului efectiv (harness pasul 6).
 
-**Pasul 4: verificare read-only imediat după apply.** Postcondițiile (înainte de COMMIT) verifică deja amprentele, semnătura, atributele, politica, privilegiile efective și ACL-ul funcțiilor. Citirea de după apply doar confirmă:
+**Pasul 4: verificare read-only imediat după apply.** Postcondițiile (înainte de COMMIT-ul runnerului) verifică deja amprentele, semnătura, atributele, politica, privilegiile efective și ACL-ul funcțiilor. Citirea de după apply doar confirmă:
 - `SELECT version, name FROM supabase_migrations.schema_migrations WHERE name = 'sec_rsvti_poarta_jurnal'`: exact un rând. Dacă patch-ul e aplicat, dar neînregistrat (posibil doar în varianta c): **fără INSERT manual**; se raportează, iar reaplicarea fișierului e idempotentă (precondițiile acceptă starea patch-ului);
 - privilegiile efective: `has_function_privilege` / `has_table_privilege` / `has_any_column_privilege` pentru `public`, `anon`, `authenticated` (așteptat: EXECUTE doar `authenticated`; pe jurnal nimic de scris pentru `public`/`anon`, fără UPDATE/DELETE pentru `authenticated`);
 - **amprentele nu se actualizează automat.** Dacă pe PG17 o amprentă diferă, migrarea se oprește singură (fail-closed, nimic aplicat). Se compară definițiile (`pg_get_functiondef`, textul din `pg_policies`) PG16 ↔ PG17, iar revizia se actualizează doar după review; hash-ul găsit **nu** se adaugă automat în lista albă.
@@ -408,3 +404,46 @@ Verdictul Copilot pe runda 2 (`e707ba5`): **NO-GO pe revizie, GO pe direcție** 
 **Amprente r3 (PG16):** RPC `md5(prosrc)` = `6185a9ddf13a9e666368858decfa9611` (r2 `42e0528e…`, neaplicat); helper `a59aeb46d5007222067276184a63aaa0` (neschimbat); politica jurnalului `md5(with_check)` = `780014ba883836d16ffb7a014c7430c6` (neschimbat); migrarea sha256 `5a355506f18505494f296dcd93a52a7df7450d8e47033c00b0cfe80393d0853b` (415 linii); rollback-ul sha256 `795ea5a0793c0eec0dcee5d8b1ab4a63ba2b63ea6fea5764977a591b6a6c5e2a` (234 de linii).
 
 **Limite:** comportamentul exact al `apply_migration` nu se poate observa local (de aceea cele 3 emulări). Deparse-ul PG17 al `DEFAULT NULL::date` și al politicii e presupus identic; dacă diferă, migrarea se oprește singură (§7 pasul 4). Testele de discriminare și mutanții rulează din scripturi scratch (nu în repo), pe același cluster.
+
+## 13. Runda 4 — traseul de livrare (răspuns la verdictul Copilot #538 r3)
+Verdict r3 (`docs/SECURITATE_PATCH_RSVTI_VERDICT_COPILOT_R3.md` pe #538): GO pe SQL, NO-GO pe apply, pentru că `COMMIT`-ul din fișier comitea patch-ul **înaintea** `INSERT`-ului în `supabase_migrations.schema_migrations`. Cerința: **un singur gestionar de tranzacție** care include DDL-ul, postcondițiile și înregistrarea. Logica patch-ului nu s-a schimbat; s-a schimbat doar artefactul de livrare. Totul e local; nimic aplicat, nimic pushat.
+
+**a) Traseul efectiv: de ce NU `apply_migration` (MCP).** `apply_migration` trimite SQL-ul la Management API (`POST /v1/projects/{ref}/database/migrations`, cod server închis; issue public supabase/mcp#241). Nici documentația Supabase (`search_docs`), nici codul public al MCP-ului nu spun dacă execuția și `INSERT`-ul în `schema_migrations` sunt în aceeași tranzacție, deci **nu se poate demonstra**. Pentru comparație, CLI-ul public (`supabase db push`, `pkg/migration/file.go`) pune instrucțiunile și `INSERT`-ul într-un singur `pgconn.Batch`, „implicitly transactional”, dar un `COMMIT` din fișier ar rupe și acolo tranzacția. Concluzia: traseul oficial e unul demonstrabil local, cu `psql`.
+
+**Procedura oficială** — `scripts/livrare_migrare.sh` (identic în #538 și #542, sha256 `9f921a0a…` la acest commit):
+```
+bash scripts/livrare_migrare.sh supabase/migrations/20261003c_sec_rsvti_poarta_jurnal.sql -- "<URI conexiune directă / Supavisor session mode, rol postgres>"
+# = psql -X -q -v ON_ERROR_STOP=1 --single-transaction \
+#       -f marcaj.sql  (SELECT set_config('gazpet.livrare_migrare', '20261003c_sec_rsvti_poarta_jurnal:' || txid_current(), true))
+#       -f 20261003c_sec_rsvti_poarta_jurnal.sql
+#       -f inregistrare.sql  (verifică marcajul; refuză dacă name='20261003c_sec_rsvti_poarta_jurnal' există deja;
+#                              INSERT (version AAAALLZZHHMMSS UTC, name, statements = fișierul întreg))
+```
+- Refuză înainte de conexiune un fișier cu control de tranzacție (`BEGIN;`, `COMMIT`, `ROLLBACK`, `ABORT`, `START TRANSACTION`, `PREPARE TRANSACTION`, în afara comentariilor `--`) sau fără garda de livrare.
+- `version` = timestamp UTC de 14 cifre (formatul folosit de `apply_migration` în producție, citit read-only din `schema_migrations`: ultimele versiuni `20260929…`); `name` = numele fișierului fără `.sql` (ca `20260929f_v_claude_context_start`); coloanele reale: `version, statements, name, created_by, idempotency_key, rollback` (information_schema, read-only).
+- **Precondiție de operare:** un `psql` ≥ 16 și un URI de conexiune cu rol `postgres` (parola bazei). Din sesiunea Claude există doar MCP, deci livrarea o rulează Răzvan (sau o sesiune cu URI-ul dat explicit de el). Transaction-mode pooler (6543) nu e necesar; se folosește conexiunea directă sau session mode (5432).
+
+**b) Fișierul fără BEGIN/COMMIT.** `BEGIN;` → garda de livrare de **start**; `COMMIT;` → garda de livrare de **final** (după postcondiții). Ambele: `current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003c_sec_rsvti_poarta_jurnal:' || txid_current()` ⇒ `RAISE`. Ordinea în tranzacție: marcaj → gardă start → precondiții → DDL → postcondiții → gardă final → verificare + `INSERT` înregistrare → `COMMIT` (al runnerului). Postcondițiile rămân înainte de sfârșitul tranzacției (verificare statică în harness). Noul fișier: sha256 `ed16a2d936cd9ca83e1beddcabab39d95ddad6c8135403ba9746c34939cb30ac`, 430 linii.
+
+**c) Fișierul rulat singur, fără runner.** `transaction_timestamp() <> statement_timestamp()` nu e fiabil; soluția robustă e marcajul **legat de txid**: `set_config(..., true)` e local tranzacției, iar în autocommit fiecare instrucțiune are alt txid. Demonstrat în harness (toate refuzate de garda de start, `pg_dump` identic, nicio înregistrare): `psql -f` simplu; un singur query (`psql -c`, echivalentul `execute_sql`); `psql --single-transaction` fără marcaj; marcaj de **sesiune** dintr-o tranzacție anterioară; `SET` de sesiune fără txid. Deci `apply_migration` / `execute_sql` pe acest fișier **refuză** (fail-closed) — nu există cale accidentală spre „aplicat, neînregistrat”.
+- **Limite documentate:** (1) cine pune manual marcajul corect în aceeași tranzacție (`BEGIN; set_config(…txid…); \i fișier; COMMIT;`) ocolește înregistrarea — e o acțiune deliberată, nu un accident; harness-ul o folosește intern (faza de patch fără tabel de înregistrare). (2) Un `END;` la nivel de instrucțiune (sinonim `COMMIT`) nu se poate deosebi textual de finalul unui corp plpgsql; îl prinde garda de **final** (marcajul dispare la COMMIT): runnerul eșuează și **nu înregistrează**, dar ce era înainte de `END;` rămâne comis. Testat ca mutant; regula de review: niciun `END;` în afara corpurilor `$…$`.
+- Dacă apare totuși „aplicat, neînregistrat” (ex. livrare manuală), conform verdictului: stop, reconciliere prin verificări read-only (amprentele din pasul de sanity), fără rollback tehnic pentru a alinia istoricul.
+
+**d) Harness (`scripts/test_sec_rsvti.sh, pasul 6 rescris + pasul S`), traseul real, pe o bază auxiliară cu `schema_migrations` având coloanele din producție:**
+
+| Test | Rezultat |
+|---|---|
+| livrare fără eroare | patch + **o** înregistrare (version, name, `statements[1]` = fișierul octet cu octet) |
+| reluare după succes (altă versiune) | refuz „deja înregistrată”, tot anulat, `pg_dump` identic, tot 1 înregistrare (fără dublare) |
+| `1/0` după prima schimbare · `1/0` în postcondiție | stare inițială (`pg_dump` identic), 0 înregistrări |
+| **eroare injectată CHIAR la `INSERT`-ul în `schema_migrations`** (trigger BEFORE INSERT care verifică întâi că patch-ul e instalat în tranzacție — deci toate postcondițiile și garda de final au trecut — apoi `RAISE`) | definiții/politici/ACL inițiale (`pg_dump` identic), **0 înregistrări** |
+| reluarea permisă după eșecul înregistrării | patch + exact o înregistrare |
+| fișierul singur (5 variante de mai sus) | refuzat de garda de start, fără urme |
+| fișier cu `COMMIT;` / `select 1; commit ;` | runnerul refuză înainte de conexiune |
+| fișier cu `END;` la nivel de instrucțiune | garda de final eșuează, neînregistrat (limita 2) |
+
+Rezultat: `bash scripts/test_sec_rsvti.sh` (PGDATA_TEST=/tmp/pg_livr4_rsvti/data PGPORT_TEST=5617), de 2 ori: **393 aserțiuni OK + 68 verificări negative/fără urme/statice, exit 0** de fiecare dată.
+
+**Mutanți (runda 4):** harness-ul complet, câte o rulare per mutant (`MIGRARE_FISIER` / `ROLLBACK_FISIER` / `LIVRARE_FISIER`): **26/26 prinși** — cei 11 mutanți r3 ai migrării (M08 „fără BEGIN/COMMIT” e retras: acum e starea corectă) și 7 ai rollback-ului, re-generați pe noul fișier; plus noii: migrare fără garda de start / fără garda de final / cu fișierul r3 (BEGIN/COMMIT) → pasul S; garda fără txid → 6.5 (marcaj de sesiune); runner cu înregistrarea în tranzacție separată → **6.3 (eroare la INSERT: urmă rămasă)**; runner fără `--single-transaction` → 6.1; fără refuzul „deja înregistrată” → 6.2; fără refuzul controlului de tranzacție → 6.6.
+
+**Rămâne deschis:** GO Copilot pe runda 4 (diff-ul efectiv: migrare + `scripts/livrare_migrare.sh` + harness) și acordul lui Răzvan; accesul `psql` + URI pentru operator; rularea pe PG17 (producția) rămâne neverificată local — refuzul e fail-closed (§ amprente).
