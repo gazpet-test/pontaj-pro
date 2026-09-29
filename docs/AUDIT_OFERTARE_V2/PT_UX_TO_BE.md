@@ -4,19 +4,27 @@
 > Direcție de produs (Răzvan): `INPUT MINIM → AUTO-RUN → HUMAN ONLY ON EXCEPTION → AUTO-CONTINUE`.
 > Reguli Audit V2 care NU se negociază: AI candidate ≠ human verified · lipsa informației ≠ negativ · orice verdict final are provenance · modificările upstream invalidează downstream · gate-urile critice rămân server-side.
 
-## 1. Top 10 probleme (ordonate după impactul asupra omului)
-| # | Problema | Exemplu PT93 | Impact |
-|---|---|---|---|
-| 1 | Verificarea cerințelor e manuală, una câte una, cu citat tastat | 280 cerințe × (click + prompt + reîncărcare completă) | Ore de muncă mecanică înainte de fiecare depunere; omul nu judecă, doar copiază locatoare |
-| 2 | Nu există spațiu de lucru pe capitol (cerințe + text + dovezi împreună) | La 1.c ai văzut cerința 5876 în matrice, textul în cuprins, 9 secțiuni mai sus | Omul ține contextul în cap; erori de tipul „răspunsul nu e acolo" descoperite târziu |
-| 3 | Poarta nu dă un verdict și nu spune ce ai de făcut | 22 rânduri, 17 fără acțiune; clickul pe rând nu făcea nimic vizibil (reparat azi, #528) | Omul nu știe de unde să înceapă |
-| 4 | Acceptarea textului AI cere o editare artificială | 22 capitole AI → rândul „nescrise" rămâne roșu până modifici ceva | Încurajează modificări false doar ca să treacă poarta — distruge semnalul „citit de om" |
-| 5 | Stările nu se auto-întrețin | 25 capitole cu text, dar `stare='gol'` | Poarta arată fals-roșu; omul pierde încrederea în semnale |
-| 6 | Munca zilnică e la capete, munca rară la mijloc | Matricea e blocul 15/15 | Scroll lung la fiecare operație |
-| 7 | Problemele trimit în alte module fără link și fără întoarcere | docs necitite → tab Documente; grafic → modul Grafic | Pierdere de context, drumuri dus-întors |
-| 8 | Aceeași cifră calculată în 5 locuri, cu 3 definiții | „neverificate": view vs filtru client vs badge | Cifre care nu bat între ele → suspiciune, verificări duble |
-| 9 | Date pe care sistemul le are deja se cer din nou omului | garanția (regex deja găsește 36 luni), anexele (H5), participanții (H8), echipa F9 (acoperire) | Formulare completate de mână cu ce e deja în BD |
-| 10 | Verdictul pe care îl vede omul e calculat în browser | `evalueazaPoarta` în 5 locuri; R5 nu e citit din UI | Risc ca UI-ul să spună „verde" și serverul „roșu" (sau invers) — exact ce repară J07 |
+## 0. Status după review (29.09 seara)
+- **Jakarinos** (a doua opinie, read-only, cu file:line): corecții factuale în AS-IS + 6 probleme noi care pot induce **fals verde**. Review complet: `PT_UX_REVIEW_JAKARINOS.md`.
+- **Copilot**: Quick Wins **GO cu condiții**; Workspace V2 **GO pe direcție/prototip, HOLD producție** până la verdict server complet; verificator de citate **GO pentru candidați, NO-GO pentru confirmarea în bloc în forma inițială**. Regula: *sistemul poate grupa munca, nu poate grupa judecata.*
+- **Ordinea de lucru acceptată:** corectitudine semantică / fals verde → verdict server explicabil → Workspace V2 → verificare asistată → optimizare clickuri.
+- Totalurile de tip „6 AUTO / 11 CONFIRM / 5 HUMAN" au fost **scoase**: nu erau reproductibile din date.
+
+## 1. Top 10 probleme (după impact × frecvență, ordinea Jakarinos acceptată de Copilot)
+| # | Problema | Exemplu concret |
+|---|---|---|
+| 1 | **Stări fals liniștitoare / divergență listă ↔ poartă** | Matricea arată „✓ dovadă în registru” pe baza statusului de acoperire, fără `verificat_pe_scan` (`OfertarePropunere.jsx:1326/1333/429`), contrar R06 server. **PT93, 29.09: 104 cerințe PT + 24 eliminatorii afișate „dovedite”, 0 verificate pe scan.** Poarta (view server) NU e afectată. „Rezolvate” = atribuite/exceptate, nu verificate (`:340`). Erori de citire afișate ca liste goale (`:1287`, `:1304-1307`). |
+| 2 | **Verdict final incomplet / neexplicat** | Verdictul se calculează în browser (`evalueazaPoarta` în 5 locuri); J07 acoperă 12 controale, nu tot (F9, E2, documentație, R5 rămân separat). 19 din 24 de rânduri de poartă fără acțiune. |
+| 3 | **Lipsește workspace-ul pe capitol** | La 1.c/cerința 5876: cerința în matrice (blocul 15), textul în cuprins (blocul 5). |
+| 4 | **Verificare cu locator tastat, fără textul capitolului** | 280 × (click + prompt + reîncărcare) la PT93; elimină căutarea/tastarea, nu lectura. |
+| 5 | **Acceptarea textului AI cere editare artificială; textul acceptat nu e protejat** | Generatorul protejează azi doar `sursa='om'` sau lacătul (`ofertare-genereaza-capitol/index.ts:243-248`). |
+| 6 | **Concurență, invalidare, retragerea unei verificări greșite** | `load()` nu anulează răspunsuri pentru altă licitație (`:1251-1349`); constatarea blocării se scrie dar nu se recitește (`:1773` vs `:1325`); după verificare dispar butoanele de blocare/dovadă (`:450-457`). |
+| 7 | **Rezolvarea blocajelor fără link și fără întoarcere la context** | docs necitite, grafic, cantități, H1/H4/H5/H8/H9. |
+| 8 | **Salvare lentă cu pierdere de stare** | Reîncărcare la bifă; rezultatele pachetelor personal/echipamente golite la reload (`:1310`). |
+| 9 | **Ordinea paginii** | Matricea ultima din 15 blocuri; excepțiile active trebuie să rămână vizibile la colapsare. |
+| 10 | **Pre-completare din surse verificate + F9 corect** | Importul F9 ia și alternativele, nu doar alegerea omului (`:1969-2003`). |
+
+Scos din top: „stare gol produce fals-roșu” — UI derivă deja eticheta din text (`:543/:584`); rămâne doar calitatea stării stocate.
 
 ## 2. Autonomie — clasificarea fiecărei operații umane de azi
 Format: **ce face omul azi → de ce e necesar → se poate automatiza? → ce dovadă îi trebuie sistemului → când escaladează la om**. Clasa: AUTO / CONFIRM / HUMAN_DECISION / BLOCK.
@@ -45,23 +53,33 @@ Format: **ce face omul azi → de ce e necesar → se poate automatiza? → ce d
 | Înregistrare depunere | **HUMAN_DECISION** (acțiune fizică SEAP) | 2 upload | hash + comparație automată cu pachetul aprobat (J04) | hash diferit → BLOCK |
 | Clarificări AC după depunere | ascuns până la depunere | — | — | — |
 
-**Rezultat:** din ~24 de intervenții umane de azi, 6 devin AUTO, 11 CONFIRM (un click pe o decizie pregătită), 5 rămân HUMAN_DECISION, iar BLOCK-urile apar doar când lipsește dovada. Operația #1 (280 verificări) devine: sistemul propune 280 de citate → omul parcurge doar lista „cerință | citat" și confirmă în bloc pe capitol, deschizând individual doar cele marcate „citat slab / negăsit".
+**Corecții după review (Jakarinos + Copilot), prevalează asupra tabelului:**
+- Excepție „nu se aplică la PT": **HUMAN_DECISION** motivată; CONFIRM doar pentru o regulă explicită demonstrabilă din sursă.
+- Calificare cerută: **AUTO doar copiază tipul exact din cerința verificată**; nu se deduce din autorizația candidatului.
+- Import F9: **AUTO doar pentru sincronizarea alegerilor umane curente**; handlerul actual nu e sigur de automatizat.
+- Blocaje deterministe (hash vechi, dovadă obligatorie lipsă, control indisponibil) → **BLOCK automat**; contradicția semantică rămâne decizie umană.
+- E2 (extracția obligației) și verificarea PT (răspunsul o satisface) rămân **două confirmări distincte**.
+- Dovadă „fără scan": BLOCK doar pentru documente probante obligatorii; cerințele satisfăcute prin text nu cer scan.
+- Clarificări AC: se afișează când există solicitare sau depunere, nu doar după marcajul ERP.
+- AUTO produce **candidați**; niciun AUTO nu scrie `verificata`/`confirmata_de`/acceptare. Operația de verificare devine: sistemul propune candidați (citat + locator + context); omul examinează fiecare rând în workspace-ul capitolului; salvarea poate fi grupată, judecata nu.
 
-## 3. Varianta A — Quick Wins (1–2 zile, risc mic, după 02.10)
-Format: problema → exemplu → schimbare → clickuri înainte/după → risc → invariant server neschimbat.
+## 3. Varianta A — Quick Wins (după 02.10, după GO Copilot)
+**QW0 (prioritar, bug nu UX): fals verde „dovedită".** Reproducere read-only (PT93: 104+24) → contract comun cu R06 (aceeași definiție ca serverul: acoperit **și** `verificat_pe_scan` **și** fără reverificare cerută) → test de regresie. Tot aici: „rezolvate” redenumit/redefinit, erorile de citire afișate ca erori, anularea răspunsurilor pentru altă licitație, recitirea constatării.
 
-| # | Problema → exemplu | Schimbare | Click înainte → după | Risc | Invariant server |
-|---|---|---|---|---|---|
-| QW1 | Nu există verdict unic → 22 rânduri | Banner sus `BLOCKED (7) · WARNINGS (4) · OK (11)` + lista doar a rândurilor ne-verzi; rândurile verzi colapsate | citit 22 rânduri → citit 1 linie + N probleme | mic (doar afișare) | verdictul rămâne `evalueazaPoarta` azi / J07 după; nu se schimbă regula |
-| QW2 | 17 rânduri fără acțiune | Fiecare rând ne-verde primește buton „Du-mă acolo" (tab/modul + filtru) și o frază „Ce ai de făcut" | căutare manuală → 1 click | mic | niciun gate atins |
-| QW3 | Cerințele capitolului invizibile → 1.c / 5876 | În expand-ul capitolului: lista cerințelor legate (text scurt + stare) + filtru matrice „cap. X" | scroll 9 secțiuni + căutare vizuală → 0 scroll | mic | `ofertare_pt_legaturi` neschimbat |
-| QW4 | Acceptare AI = editare falsă | Buton „✓ Am citit — accept vN" (scrie `acceptat_de/la/versiune`; poarta „nescrise" citește acceptarea) | deschide editor + modificare falsă + salvează (3C + edit) → 1C | mediu: necesită coloană nouă + ajustare view (schema → aprobare Răzvan) | text acceptat e legat de versiune; editare ulterioară invalidează acceptarea |
-| QW5 | Verificare prin `prompt()` fără să vezi textul | Panou lateral la ✓: cerința sus, textul capitolului cu căutare, click pe paragraf = locator | 1C + tastat citat → 2C, fără tastare | mic | aceeași scriere `verificata` + `verificat_la_versiunea` |
-| QW6 | Stare „gol" cu text | Afișare derivată: „are text" dacă `length(continut)>0`, iar starea BD e reparată la salvare | — | mic | starea nu intră în gate-uri critice |
-| QW7 | Ordinea paginii | Matricea imediat sub Cuprins; blocurile rare (pachete echip./personal, organigramă, clarificări AC, participanți, garanție) într-o secțiune „Date licitație" colapsată | scroll 9 secțiuni → 0–1 | mic | — |
-| QW8 | Mesaje fără pas următor | Rescriere cele 18 mesaje: „ce e / de ce contează / ce apeși" + numele rândului/capitolului exact („DEPĂȘIT: 1.c v5 > aprobat v4") | — | mic | — |
-| QW9 | Reîncărcare completă la fiecare bifă | Update local al rândului + reîncărcare doar a view-ului porții | 280 × ~20 query-uri → 280 × 2 | mediu (sincronizare) | gate-urile se recitesc oricum la semnare/aprobare (server) |
-| QW10 | Filtrul `neconfirmate` fără chip + ✓ care nu confirmă registrul | Chip vizibil + textul rândului spune explicit unde se confirmă (link) | — | mic | registrul E2 neschimbat |
+| # | Schimbare | Tip | Invariant server neschimbat |
+|---|---|---|---|
+| QW2 | Fiecare rând ne-verde are „Du-mă acolo” + „ce ai de făcut” (păstrează licitația/filtrul, cu întoarcere) | UI | niciun gate atins |
+| QW3 | Cerințele capitolului în expand (toate legăturile, stare atribuit/verificat/blocat/expirat) + filtru pe capitol | UI | `ofertare_pt_legaturi` neschimbat |
+| QW7 | Matricea sub cuprins; blocurile rare colapsate, blocajele active rămân în lista de atenție | UI | — |
+| QW8 | Mesaje cu cauza exactă (rând, capitol, versiune din manifest) | UI (+ eventual RPC extins) | regulile neschimbate |
+| QW10 | Chip „neconfirmate E2” + link spre registru; E2 rămâne separat de PT | UI | registrul E2 neschimbat |
+| QW1 | Banner BLOCKED/WARN/OK/indisponibil; zero BLOCK ≠ „gata de depus”; F9 vizibil separat | UI cu condiții | verdictul nu se schimbă |
+| QW5 | Panou de verificare cu textul integral + versiune; click pe paragraf = locator, verificarea rămâne explicită | UI cu condiții | aceeași scriere `verificata` |
+| QW9 | Update local + recitirea tuturor dependențelor porții (nu „2 query-uri”) | UI cu condiții | UI optimist nu deschide gate-ul |
+| QW4 | „Accept textul vN” — **livrare separată**: schemă + protecție în generator + invalidare + test concurență | server + schemă (aprobare Răzvan) | `sursa='ai'` păstrată; editarea invalidează acceptarea |
+| ~~QW6~~ | Retras: afișarea gol/scris e deja derivată; eventual doar indicator de contradicție stare stocată ↔ text | — | — |
+
+Ordine: QW0 → QW10 + QW2/QW8 → QW3 + QW5 → QW7 + QW1 → QW4 (separat) → QW9. Estimarea „1–2 zile" nu se mai susține pentru tot pachetul.
 
 ## 4. Varianta B — PT Workspace V2 (justificat: problema #1 nu se rezolvă din layout)
 ### 4.1 Ecranul principal (wireframe)
@@ -110,13 +128,13 @@ Invalidare: orice editare upstream (text capitol, cerință, clarificare, docume
 | (f) rezolv un blocaj | caut modulul | 1C „Du-mă acolo" / acțiune inline |
 | (g) gata de depunere | semnează + aprobă + scroll + confirm | notificare → „Semnează" (1C) → pachet deja generat |
 
-### 4.4 Ce trebuie construit (ordine sugerată, fiecare cu GO Copilot)
-1. J07 live (verdict server unic) — precondiție: UI afișează, nu recalculează.
-2. Coloane acceptare capitol (`acceptat_de/la/versiune`) + regula „nescrise" pe acceptare.
-3. Verificator de citate (edge/worker): per legătură cerință↔capitol întoarce `citat, locator, scor, parser_version, hash_text` → stocat ca **candidat** (`sursa='ai'`), niciodată `verificata`.
-4. Confirmare în bloc pe capitol (scrie `verificata` doar pentru rândurile afișate omului, cu `verificat_la_versiunea` + hash citat).
-5. Workspace capitol (UI) + ecranul „Necesită atenția ta".
-6. Pre-completări AUTO (cuprins, F9, garanție, anexe, participanți) cu provenance.
+### 4.4 Ce trebuie construit (ordine după review, fiecare cu GO Copilot)
+1. **Corectitudine semantică** (QW0): fals verde, „rezolvate", erori ca liste goale, concurență la schimbarea licitației.
+2. **Contract server agregat complet** (extinde J07; nu se prezintă J07 actual ca poarta completă): toate rândurile, F9, E2, documentație, R5, cu cauza + acțiunea.
+3. **Workspace pe capitol + acceptare sigură** (QW4 cu protecție în generator).
+4. **Candidați de citate** (GO Copilot): `QUOTE_FOUND` ≠ `REQUIREMENT_SATISFIED`; AI propune MATCH/PARTIAL/CONFLICT/UNDETERMINED; stocat ca candidat cu hash-uri și `parser_version`.
+5. **Confirmare grupată** — doar după criteriile din §6.
+6. **Automatizări și auto-continue** (cuprins, F9 din alegeri curente, garanție, anexe, participanți), toate ca candidați cu provenance.
 
 ## 5. Ce NU se schimbă (invarianți server)
 - Tranzițiile de stare și poarta de depunere (J02, matricea #515), derogarea auditată (J05), R5/R12 server-side, trigger-ul pe `ofertare_pt_pachet`, hash-ul pachetului (J04), legarea verdictelor de hash/versiune (J07).
@@ -124,7 +142,17 @@ Invalidare: orice editare upstream (text capitol, cerință, clarificare, docume
 - „Lipsă informație" rămâne UNDETERMINED/BLOCK pe eliminatorii, niciodată verde implicit.
 - Editarea upstream invalidează confirmările downstream (nu le șterge; le marchează stale și le readuce în lista de atenție).
 
-## 6. Rămâne de făcut înainte de decizie
-- Jakarinos: a doua părere pe §2 (verificatorul de citate: cum demonstrăm că nu devine „AI verifică AI") și pe §4.4 pct. 3–4.
-- Miloi: clickuri măsurate pe clona 103 pentru (a)–(g), ca să înlocuiască estimările din §4.3.
-- Copilot: GO/NO-GO pe Quick Wins (după 02.10) și pe direcția V2.
+## 6. Criteriile GO pentru confirmarea grupată (Copilot + Jakarinos)
+„Sistemul poate grupa munca, dar nu poate grupa judecata." Acceptat: „20 de rânduri examinate individual → un commit". Respins: „confirmă toate cele 87 cu scor > X".
+1. Fiecare candidat arată cerința completă (subpuncte, condiții), sursa autorității + clarificările aplicabile, citatul exact în context, documentul/locatorul, versiunea și hash-ul cerinței, hash-ul textului PT, `parser_version`, sursa.
+2. Zero preselecție după scor; omul marchează explicit fiecare rând (examinat / confirmat / respins); butonul salvează doar rândurile marcate, listate explicit.
+3. Serverul nu acceptă `verified=true` venit din client; actorul și timpul se stabilesc pe server.
+4. Commit atomic: dacă o cerință/capitol/sursă s-a schimbat între examinare și salvare → tot lotul refuzat ca stale, cu rândurile afectate listate; niciun commit parțial tăcut.
+5. Idempotență la dublu submit; concurență: o sesiune modifică capitolul, cealaltă confirmă → a doua e refuzată.
+6. Audit append-only: actor, timp, cerință/versiune/hash, capitol/versiune/hash, document/hash, locator, `parser_version`, model (dacă e AI), decizie.
+7. Teste negative obligatorii: citat real dar insuficient; citat contradictoriu; citat parțial/trunchiat; citat din versiune veche; clarificare înlocuită; același text în document greșit; conflict între surse; hash schimbat după review; același nume de fișier, bytes diferiți; candidat AI greșit.
+8. Evaluare oarbă pe cazuri reale (Domnești, Jilava), cu ground truth uman fără scor AI vizibil: câte fals-pozitive semantice propune și dacă interfața l-a făcut pe om să confirme ceva greșit; plus timp/clickuri înainte vs după, fără creșterea erorilor.
+
+## 7. Rămâne de făcut
+- Miloi: clickuri măsurate pe clona 103 pentru (a)–(g), în locul estimărilor din §4.3.
+- După 02.10: QW0 (reproducere + fix + test), apoi Quick Wins în ordinea din §3, fiecare cu GO Copilot.
