@@ -92,3 +92,22 @@
   Recomandarea investigației: **A (+ C opțional)**. Comisia PowPatroll confirmă sau corectează.
 - Conturile din §5, fiecare cu da/nu.
 - Ordinea măsurilor 3–8 (după 02.10, fiecare cu GO).
+
+## 8. Comisia PowPatroll (30.09, 01:00–01:40 RO)
+
+Comisia a fost cerută de Răzvan: „dauna e făcută, vedem cum o reparăm și cum o evităm”. Părerile au fost date independent. Niciunul nu a văzut concluziile celorlalți înainte să răspundă.
+
+| Membru | Ce a primit | Verdict |
+|---|---|---|
+| **Jakarinos** (Codex, read-only: cod + istoric git, fără BD) | faptele din billing + pistele, fără cauza găsită în loguri | **A ajuns singur la aceeași cauză.** Pe `8a6fbbb` (25.09), `ingest.ts` descarcă PDF-ul integral, iar fallback-ul AI îl descarcă din nou în edge. **Răspunsul `546 {code,message}` fără câmpul `error` e interpretat ca succes** (`ingest.ts:83,90`), deci documentul rămâne candidat și bucla îl reia. Limita „15 documente / 15 minute” cedează doar când există altă coadă activă. Calculul lui: 8.234 × 2 × 99,9 MB ≈ **1.646 GB**, față de 1.616 GB facturați. Reparațiile au intrat în edge în `1523f06` (25.09 19:09 RO) și în worker în `3069000` (26.09 02:52 RO), în acord cu logurile. Recitirea planșelor și auditul de hash **nu** pot explica volumul (25 de runde × 4 zone = maximum 100 de JPG, nu 100 de PDF-uri). |
+| **Miloi** (Gemini) | același brief | **Indisponibil.** Prima rulare: comandă refuzată în modul headless. A doua: **cota Google e epuizată** („Individual quota reached”, se resetează în ~142 h, adică **~06.10 seara**). Până atunci Miloi nu poate primi sarcini. |
+| **Copilot** | faptele complete + securitatea + opțiunile Q17 | *(în așteptare; răspunsul se trece aici)* |
+
+**Prevenția propusă de Jakarinos**, ordonată după efect/cost; toate după GO și după depunerea Jilava:
+1. **Oprire persistentă la lipsa de progres**, cu limită între ture și reporniri în `worker/ofertare/ingest.ts`. Un 546 nu mai trece ca succes. În `src/OfertareLicitatii.jsx` dispare retry-ul la 5 s după un răspuns neclar. Starea rămâne „necitit/eroare”, niciodată succes implicit.
+2. **Cache local + deduplicarea descărcărilor simultane**, cu cheie pe obiect și versiune/hash verificat și cotă de disc. Cache-ul nu înlocuiește verificarea integrității.
+3. **Buget de bytes și de încercări pe job, rezervat ÎNAINTE de GET**, contorizat și la eșec. Reluarea se face explicit, fără reset automat.
+4. **Reutilizarea tăierii în felii**, identificată prin hash sursă + parametri + versiunea algoritmului. Auditul deduplică pe obiect în aceeași rulare și face backoff persistent.
+5. **Monitorizare independentă de AI:** bytes, obiect, job, încercare, cu alertă la depășirea bugetului. Fără tokenuri și fără URL-uri semnate în loguri.
+
+Jakarinos mai notează că **plafonul de 35 MiB din `ofertare-garantie-mail` se verifică DUPĂ descărcare**, deci nu limitează traficul.
