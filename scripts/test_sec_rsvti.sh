@@ -1,28 +1,35 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Harness SQL local — SEC RSVTI (20261003c_sec_rsvti_poarta_jurnal.sql), runda 2.
+# Harness SQL local — SEC RSVTI (20261003c_sec_rsvti_poarta_jurnal.sql), runda 3.
 #
 # Rulează EXCLUSIV pe un PostgreSQL 16 local dedicat (implicit /tmp/pg_sec_rsvti, 127.0.0.1:5442).
 # Nu citește .env, nu folosește chei Supabase, nu atinge producția.
 #
-# Ciclul complet (Copilot: migrare → teste → rollback tehnic → teste care dovedesc gaura → reaplicare → teste):
-#   0. schelet (= producția de azi)       → teste GAURA (fidelitatea: atacurile reușesc pe varianta live)
-#   0b. precondiții negative pe starea live (S1 politică în plus pe jurnal, RLS oprit, S2 trigger în plus /
-#       dezactivat / alt corp / alt tip, RPC necunoscut) → migrarea REFUZATĂ, fără urme
-#   1. migrare                             → teste PATCH
-#   2. reaplicare (idempotență)            → teste PATCH; reaplicare peste o politică în plus → REFUZATĂ
-#   3a. rollback tehnic: nearmat / armat greșit / armat în altă tranzacție / peste un RPC modificat ulterior
-#       (S3) / helper sau politică schimbate / politică în plus / dependență nouă (S4) → REFUZAT, fără urme
-#   3. rollback tehnic ARMAT               → dezarmat la final; schema identică cu pasul 0; teste GAURA;
-#                                            suita PATCH CADE pe starea live (nu e „vacuu adevărată”)
-#   4. reaplicare                          → teste PATCH; suita GAURA CADE pe starea patch
-#   5. rollback armat GREȘIT (SET de sesiune) → comutatorul e dezarmat după rulare; reaplicare = schema de la 4
+# Ciclul complet (runda 3 = răspunsul la NO-GO Copilot pe r2, docs/SECURITATE_PATCH_RSVTI.md §12):
+#   S. statice: rollback-ul NU e în supabase/migrations; CI referă doar fișiere anume; migrarea are BEGIN;…COMMIT;
+#      cu postcondiția înainte de COMMIT, rollback-ul nu are; nicio comparație „<>”/„NOT IN” (NULL-safe)
+#   0. schelet (= producția de azi)       → teste GAURA
+#   0b. precondiții/postcondiții negative pe starea live (politica sursă fără USING/WITH CHECK, RLS oprit pe sursă,
+#       helper existent străin, granturi rămase prin PUBLIC / pe coloană / prin rol moștenit, proprietar schimbat, S1,
+#       S2, RPC necunoscut) → migrarea REFUZATĂ, fără urme
+#   1. migrare (runner a)                  → teste PATCH
+#   2. reaplicare (idempotență)            → teste PATCH; 2b reaplicare peste stare schimbată → REFUZATĂ
+#   3a. rollback tehnic: armare lipsă/greșită/de altă tranzacție/persistentă, precondiții → REFUZAT, fără urme
+#   3s. o singură sesiune psql: setare de sesiune rămasă; armare validă + eroare + ROLLBACK, apoi reluare → REFUZAT
+#   3. rollback tehnic ARMAT (string-ul documentat) → dezarmat; schema = pasul 0; GAURA; suita PATCH CADE
+#   4. reaplicare                          → teste PATCH; suita GAURA CADE
+#   5. rollback armat local + de sesiune în aceeași tranzacție → trece, sesiunea e dezarmată; reaplicare = schema 4
+#   6. emulări de runner (bază auxiliară): (a) psql -f ON_ERROR_STOP, (b) un singur query, (c) runner care deschide
+#      tranzacția și înregistrează migrarea × {fără eroare, SELECT 1/0 după prima funcție, SELECT 1/0 în postcondiție};
+#      (a0) fără ON_ERROR_STOP; (c-reg) înregistrare eșuată ⇒ unde cade COMMIT-ul
+#   7. ceas fix (libfaketime, repornirea serverului) 2026-09-29 23:30 UTC: data omisă / NULL = 30.09
 #
 # Utilizare (din rădăcina repo-ului; ca root, comenzile de server trec pe utilizatorul postgres prin su):
 #   bash scripts/test_sec_rsvti.sh             # ciclul complet
 #   bash scripts/test_sec_rsvti.sh --opreste   # + oprește serverul la final
 # Variabile opționale: PG_BIN=/usr/lib/postgresql/16/bin PGDATA_TEST=/tmp/pg_sec_rsvti PGPORT_TEST=5442
-#   PGDB_TEST=sec_rsvti_test PGLOG_TEST=/tmp/pg_sec_rsvti.log
+#   PGDB_TEST=sec_rsvti_test PGLOG_TEST=/tmp/pg_sec_rsvti.log FAKETIME_LIB=…/libfaketime.so.1
+#   Doar pentru mutanți/discriminare: MIGRARE_FISIER=… ROLLBACK_FISIER=… (fișiere alternative)
 # Coduri de ieșire: 0 = PASS · 1 = migrare/test eșuat · 2 = mediu (PG indisponibil, gardă refuzată)
 # ============================================================================
 set -Eeuo pipefail
@@ -35,15 +42,19 @@ BAZA="${PGDB_TEST:-sec_rsvti_test}"
 JURNAL_PG="${PGLOG_TEST:-/tmp/pg_sec_rsvti.log}"
 SCHELET="$RADACINA/supabase/tests/sec_rsvti_schelet.sql"
 TESTE="$RADACINA/supabase/tests/sec_rsvti.test.sql"
-MIGRARE="$RADACINA/supabase/migrations/20261003c_sec_rsvti_poarta_jurnal.sql"
-ROLLBACK="$RADACINA/supabase/migrations/20261003c_sec_rsvti_poarta_jurnal_ROLLBACK.sql"
-ARMARE="SET LOCAL gazpet.rollback_tehnic_20261003c = 'REDESCHIDE_GAURA_RSVTI';"
+TESTE_CEAS="$RADACINA/supabase/tests/sec_rsvti_ceas.test.sql"
+MIGRARE="${MIGRARE_FISIER:-$RADACINA/supabase/migrations/20261003c_sec_rsvti_poarta_jurnal.sql}"
+ROLLBACK="${ROLLBACK_FISIER:-$RADACINA/supabase/revenire/20261003c_sec_rsvti_poarta_jurnal_ROLLBACK.sql}"
+FAKETIME_LIB="${FAKETIME_LIB:-/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1}"
+CEAS_FIX="2026-09-29 23:30:00"
+# Armarea documentată (runda 3): în aceeași tranzacție, legată de txid-ul ei.
+ARMARE="SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), true);"
 
 OPRESTE=0
 for a in "$@"; do
   case "$a" in
     --opreste) OPRESTE=1 ;;
-    -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "Argument necunoscut: $a (vezi --help)" >&2; exit 2 ;;
   esac
 done
@@ -56,7 +67,7 @@ esec()  { echo "FAIL: $*" >&2; exit 1; }
 [[ "$BAZA" =~ ^[a-z0-9_]+_test$ ]] || mediu "PGDB_TEST trebuie să se termine în _test (acum: $BAZA)"
 [[ "$DATE_DIR" == /tmp/* ]] || mediu "PGDATA_TEST trebuie să fie sub /tmp (acum: $DATE_DIR)"
 [ -x "$PG_BIN/postgres" ] || mediu "PostgreSQL lipsește în $PG_BIN"
-for f in "$SCHELET" "$TESTE" "$MIGRARE" "$ROLLBACK"; do [ -f "$f" ] || mediu "Fișier lipsă: $f"; done
+for f in "$SCHELET" "$TESTE" "$TESTE_CEAS" "$MIGRARE" "$ROLLBACK"; do [ -f "$f" ] || mediu "Fișier lipsă: $f"; done
 
 # Nicio variabilă libpq moștenită nu poate redirecționa conexiunea spre alt server.
 unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGPASSWORD PGPASSFILE PGSERVICE PGSERVICEFILE \
@@ -79,12 +90,21 @@ if [ ! -f "$DATE_DIR/PG_VERSION" ]; then
 fi
 [ "$(cat "$DATE_DIR/PG_VERSION")" = 16 ] || mediu "$DATE_DIR nu este un cluster PostgreSQL 16"
 
-if ! "$PG_BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT" -t 2; then
-  echo "→ pornesc PostgreSQL pe 127.0.0.1:$PORT ($DATE_DIR, jurnal $JURNAL_PG)"
+porneste() {  # $1 = '' (ceas real) sau momentul UTC simulat (libfaketime, „@…”: pornește de acolo și curge)
   if [ "$(id -u)" = 0 ]; then touch "$JURNAL_PG"; chown postgres:postgres "$JURNAL_PG"; fi
-  ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -l "$JURNAL_PG" -w -t 30 start \
+  local pre=()
+  [ -n "${1:-}" ] && pre=(env TZ=UTC LD_PRELOAD="$FAKETIME_LIB" FAKETIME="@$1")
+  ca_postgres "${pre[@]}" "$PG_BIN/pg_ctl" -D "$DATE_DIR" -l "$JURNAL_PG" -w -t 30 start \
     -o "-p $PORT -c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp -c timezone=UTC" >/dev/null \
     || { tail -20 "$JURNAL_PG" >&2 || true; mediu "pg_ctl start a eșuat"; }
+}
+opreste() { ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null || mediu "pg_ctl stop a eșuat"; }
+CEAS_SIMULAT=0
+readuce_ceasul() { if [ "$CEAS_SIMULAT" = 1 ]; then CEAS_SIMULAT=0; opreste; porneste ""; fi; }
+trap readuce_ceasul EXIT
+if ! "$PG_BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT" -t 2; then
+  echo "→ pornesc PostgreSQL pe 127.0.0.1:$PORT ($DATE_DIR, jurnal $JURNAL_PG)"
+  porneste ""
 fi
 # Serverul de pe port TREBUIE să fie clusterul nostru — altfel refuz (nu dăm DROP DATABASE pe altceva).
 DIR_SERVER="$("${PSQL[@]}" -d postgres -Atc 'SHOW data_directory')" || mediu "nu mă pot conecta la 127.0.0.1:$PORT"
@@ -94,14 +114,32 @@ VER="$("${PSQL[@]}" -d postgres -Atc 'SHOW server_version_num')"
 
 # --- 2. bază nouă + schelet ----------------------------------------------------
 echo "→ recreez baza $BAZA"
-"${PSQL[@]}" -d postgres -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS \"$BAZA\" WITH (FORCE)" \
-  -c "CREATE DATABASE \"$BAZA\" TEMPLATE template0 ENCODING 'UTF8'" || mediu "nu pot recrea baza $BAZA"
+BAZA_AUX="${BAZA%_test}_aux_test"
+# Roluri de test (globale în cluster) rămase dintr-o rulare întreruptă: le șterg după bazele de test.
+curata_roluri() {
+  "${PSQL[@]}" -d postgres -c "SET client_min_messages = warning" \
+    -c "DROP DATABASE IF EXISTS \"$BAZA_AUX\" WITH (FORCE)" \
+    -c "DROP ROLE IF EXISTS sec_rsvti_r_mostenit, sec_rsvti_r_exec, sec_rsvti_r_alt" \
+    -c "DO \$c\$ DECLARE x record; BEGIN  -- armări persistente rămase dintr-o rulare întreruptă (doar comutatoarele gazpet.*)
+          FOR x IN SELECT s.setrole, s.setdatabase, split_part(c, '=', 1) AS n FROM pg_db_role_setting s, unnest(s.setconfig) c
+                    WHERE lower(c) LIKE 'gazpet.%' LOOP
+            IF x.setrole = 0 THEN EXECUTE format('ALTER DATABASE %I RESET %I', (SELECT datname FROM pg_database WHERE oid = x.setdatabase), x.n);
+            ELSE EXECUTE format('ALTER ROLE %I RESET %I', pg_get_userbyid(x.setrole), x.n); END IF;
+          END LOOP; END \$c\$" >/dev/null || mediu "nu pot curăța rolurile/setările de test"
+}
+baza_noua() {  # $1 = baza (*_test): recreată + schelet
+  "${PSQL[@]}" -d postgres -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS \"$1\" WITH (FORCE)" \
+    -c "CREATE DATABASE \"$1\" TEMPLATE template0 ENCODING 'UTF8'" >/dev/null || mediu "nu pot recrea baza $1"
+  "${PSQL[@]}" -d "$1" -f "$SCHELET" >/dev/null || esec "scheletul nu s-a încărcat în $1 (fidelitate?)"
+}
+"${PSQL[@]}" -d postgres -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS \"$BAZA\" WITH (FORCE)" >/dev/null || mediu "nu pot șterge baza $BAZA"
+curata_roluri
 echo "→ schelet: ${SCHELET#$RADACINA/}"
-"${PSQL[@]}" -d "$BAZA" -f "$SCHELET" || esec "scheletul nu s-a încărcat (fidelitate?)"
+baza_noua "$BAZA"
 
-aplica() {  # ca apply_migration: o singură tranzacție
-  echo "→ aplic ${1#$RADACINA/}"
-  "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$1" || esec "${1#$RADACINA/} a eșuat"
+aplica() {  # runner (a): psql -f cu ON_ERROR_STOP; tranzacția o gestionează FIȘIERUL (BEGIN;…COMMIT;)
+  echo "→ aplic ${1#$RADACINA/} (runner a)"
+  "${PSQL[@]}" -d "${2:-$BAZA}" -f "$1" || esec "${1#$RADACINA/} a eșuat"
 }
 
 TOTAL_OK=0
@@ -144,12 +182,12 @@ refuzat() {  # $1 = eticheta, $2 = fișier, $3 = fragment așteptat în eroare, 
   rm -f "$err"; NEG_OK=$((NEG_OK + 1))
 }
 
-schema_snapshot() {  # schema fără date, cu ACL-uri și comentarii
-  "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" --schema-only \
+schema_snapshot() {  # schema fără date, cu ACL-uri și comentarii ($1 = baza, implicit $BAZA)
+  "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U postgres -d "${1:-$BAZA}" --schema-only \
     | grep -vE '^(--|SET |SELECT pg_catalog\.set_config|\\(un)?restrict )' | sed '/^$/d'
 }
-fara_urme() {  # $1 = snapshot de referință, $2 = eticheta
-  local acum; acum="$(mktemp)"; schema_snapshot > "$acum"
+fara_urme() {  # $1 = snapshot de referință, $2 = eticheta, $3 = baza (implicit $BAZA)
+  local acum; acum="$(mktemp)"; schema_snapshot "${3:-}" > "$acum"
   if ! diff -u "$1" "$acum" > "$acum.diff"; then head -60 "$acum.diff" >&2; esec "$2: a rămas o urmă în schemă"; fi
   rm -f "$acum" "$acum.diff"; echo "   OK   $2: pg_dump identic (nicio urmă)"; NEG_OK=$((NEG_OK + 1))
 }
@@ -164,19 +202,70 @@ TRIGGER_IN_PLUS="CREATE FUNCTION public.adv_sync_dept() RETURNS trigger LANGUAGE
 CORP_TRIGGER_SCHIMBAT="DO \$d\$ DECLARE v text; BEGIN
   v := pg_get_functiondef('public.enforce_owner_only_salary_flags()'::regprocedure);
   EXECUTE replace(v, E'\nBEGIN\n', E'\nBEGIN\n  -- modificat\n'); END \$d\$;"
+POLITICA_SURSA="DROP POLICY hr_autorizatii_write_authorized ON public.hr_autorizatii; CREATE POLICY hr_autorizatii_write_authorized ON public.hr_autorizatii FOR ALL TO authenticated"
+HELPER_STRAIN="CREATE FUNCTION public.fn_poate_scrie_hr_autorizatii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS \$fn\$ SELECT true \$fn\$;"
+# Helperul aprobat, extras din migrare (fidel), pentru scenariile „corp aprobat, dar atribute/ACL diferite”.
+HELPER_APROBAT="$(awk '/^CREATE OR REPLACE FUNCTION public.fn_poate_scrie_hr_autorizatii/{f=1} f{print} f && /^\$fn\$;$/{exit}' "$MIGRARE")"
+[ -n "$HELPER_APROBAT" ] || mediu "nu găsesc definiția helperului în migrare"
+
+# Variante ale fișierului de migrare (erori injectate); verifică că injecția s-a făcut exact o dată.
+varianta() {  # $1 = tip, $2 = ieșire
+  case "$1" in
+    dupa_prima_functie) awk '{print} !d && /^\$fn\$;$/ {print "SELECT 1/0;  -- EROARE INJECTATĂ: după prima înlocuire de funcție"; d=1}' "$MIGRARE" > "$2" ;;
+    in_postconditie)    awk '!d && /^END \$post\$;$/ {print "  SELECT 1/0;  -- EROARE INJECTATĂ: în postcondiție"; d=1} {print}' "$MIGRARE" > "$2" ;;
+    grant_coloana)      awk '!d && /^DO \$post\$$/ {print "GRANT UPDATE (observatii) ON public.hr_autorizatii_rsvti_confirmari TO authenticated;  -- rămas după REVOKE"; d=1} {print}' "$MIGRARE" > "$2" ;;
+  esac
+  [ "$(grep -c 'EROARE INJECTATĂ\|rămas după REVOKE' "$2")" = 1 ] || mediu "varianta $1: punctul de injecție nu există exact o dată în $MIGRARE"
+}
+VAR_DIR="$(mktemp -d)"
+varianta dupa_prima_functie "$VAR_DIR/err_prima.sql"
+varianta in_postconditie    "$VAR_DIR/err_post.sql"
+varianta grant_coloana      "$VAR_DIR/grant_coloana.sql"
 
 # --- 3. ciclul -----------------------------------------------------------------
+echo "→ S. verificări statice"
+STATIC_OK=0
+static() { echo "   OK   S $1"; STATIC_OK=$((STATIC_OK + 1)); NEG_OK=$((NEG_OK + 1)); }
+! ls "$RADACINA"/supabase/migrations/ | grep -qi 'rollback.*20261003c\|20261003c.*rollback' \
+  || esec "S: un rollback 20261003c a rămas în supabase/migrations (runner-ele l-ar descoperi ca migrare forward)"
+[ -f "$RADACINA/supabase/revenire/README.md" ] || esec "S: lipsește supabase/revenire/README.md"
+static "rollback-ul tehnic 20261003c e în supabase/revenire/, nu în supabase/migrations/"
+REFS="$(grep -ohE "supabase/(migrations|revenire)[^'\" ]*" "$RADACINA"/.github/workflows/* || true)"
+while IFS= read -r ref; do
+  [ -z "$ref" ] && continue
+  [[ "$ref" =~ ^supabase/migrations/[0-9]{8}[a-z]?_[A-Za-z0-9_]+ ]] || esec "S: CI referă „$ref” (nu un fișier anume din supabase/migrations)"
+done <<< "$REFS"
+static "CI (.github/workflows) referă doar fișiere anume din supabase/migrations; nimic din supabase/revenire"
+[ "$(grep -cx 'BEGIN;' "$MIGRARE")" = 1 ] && [ "$(grep -cx 'COMMIT;' "$MIGRARE")" = 1 ] \
+  && [ "$(grep -n -x 'END \$post\$;' "$MIGRARE" | cut -d: -f1)" -lt "$(grep -n -x 'COMMIT;' "$MIGRARE" | cut -d: -f1)" ] \
+  && [ "$(grep -v '^--' "$MIGRARE" | grep -v '^\s*$' | head -1)" = "BEGIN;" ] \
+  && [ "$(grep -v '^\s*$' "$MIGRARE" | tail -1)" = "COMMIT;" ] \
+  || esec "S: migrarea trebuie să înceapă cu BEGIN; și să se termine cu COMMIT;, cu postcondiția înainte de COMMIT"
+static "migrarea: BEGIN; prima instrucțiune, COMMIT; ultima, postcondiția (§4) înainte de COMMIT"
+! grep -qiE '^\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION)\s*;' "$ROLLBACK" || esec "S: rollback-ul nu trebuie să conțină BEGIN/COMMIT (gestionarul e operatorul)"
+static "rollback-ul: fără BEGIN/COMMIT (gestionarul e operatorul)"
+! grep -nE '<>|NOT IN \(' "$MIGRARE" "$ROLLBACK" || esec "S: comparație „<>”/„NOT IN” în fișiere (nu e NULL-safe)"
+static "nicio comparație „<>” / „NOT IN (” în migrare și rollback (NULL-safe: IS [NOT] DISTINCT FROM)"
+
 SNAP_INAINTE="$(mktemp)"; schema_snapshot > "$SNAP_INAINTE"
 ruleaza_teste "0 schelet = producția de azi" true
 
-echo "→ 0b. precondiții negative pe starea live (fiecare într-o tranzacție anulată)"
-refuzat "S1 politică INSERT permisivă în plus pe jurnal" "$MIGRARE" "Precondiție: jurnalul are 2 politici de scriere" \
+echo "→ 0b. precondiții/postcondiții negative pe starea live (fiecare într-o tranzacție anulată)"
+refuzat "0a politica sursă ALL TO authenticated FĂRĂ USING/WITH CHECK (md5 NULL)" "$MIGRARE" "Precondiție 0a: hr_autorizatii_write_authorized s-a schimbat" \
+  "$POLITICA_SURSA;"
+refuzat "0a politica sursă doar cu USING (WITH CHECK NULL)" "$MIGRARE" "WITH CHECK absent" \
+  "$POLITICA_SURSA USING ((EXISTS ( SELECT 1 FROM profiles p WHERE ((p.id = auth.uid()) AND ((p.is_owner = true) OR (p.can_modify_employees = true) OR (p.role = 'superadmin'::text) OR (p.department = ANY (ARRAY['HR'::text, 'Administrativ'::text])))))));"
+refuzat "0a politica sursă USING (true) WITH CHECK (true) (control)" "$MIGRARE" "Precondiție 0a: hr_autorizatii_write_authorized s-a schimbat" \
+  "$POLITICA_SURSA USING (true) WITH CHECK (true);"
+refuzat "0a RLS dezactivat pe hr_autorizatii (tabelul sursă)" "$MIGRARE" "Precondiție 0a: RLS nu e activ pe hr_autorizatii" \
+  "ALTER TABLE public.hr_autorizatii DISABLE ROW LEVEL SECURITY;"
+refuzat "S1 politică INSERT permisivă în plus pe jurnal" "$MIGRARE" "Precondiție 0e: jurnalul are 2 politici de scriere" \
   "CREATE POLICY adv_jurnal_insert_extra ON public.hr_autorizatii_rsvti_confirmari FOR INSERT TO authenticated WITH CHECK ((auth.uid() IS NOT NULL));"
-refuzat "S1 politica de azi relaxată (același nume, WITH CHECK true)" "$MIGRARE" "Precondiție: jurnalul are 1 politici de scriere (0 recunoscute)" \
+refuzat "S1 politica de azi relaxată (același nume, WITH CHECK true)" "$MIGRARE" "Precondiție 0e: jurnalul are 1 politici de scriere (0 recunoscute)" \
   "ALTER POLICY hr_autorizatii_rsvti_confirmari_insert_authenticated ON public.hr_autorizatii_rsvti_confirmari WITH CHECK (true);"
-refuzat "S1 RLS oprit pe jurnal" "$MIGRARE" "Precondiție: RLS nu e activ pe hr_autorizatii_rsvti_confirmari" \
+refuzat "S1 RLS oprit pe jurnal" "$MIGRARE" "Precondiție 0e: RLS nu e activ pe hr_autorizatii_rsvti_confirmari" \
   "ALTER TABLE public.hr_autorizatii_rsvti_confirmari DISABLE ROW LEVEL SECURITY;"
-refuzat "S2 al 5-lea trigger pe profiles (scrie department, sortat după S-A)" "$MIGRARE" "Precondiție: triggerele de pe profiles nu sunt exact cele 4 analizate (5 triggere, 4 conforme" \
+refuzat "S2 al 5-lea trigger pe profiles (scrie department, sortat după S-A)" "$MIGRARE" "Precondiție 0c: triggerele de pe profiles nu sunt exact cele 4 analizate (5 triggere, 4 conforme" \
   "$TRIGGER_IN_PLUS"
 refuzat "S2 S-A dezactivat (DISABLE TRIGGER)" "$MIGRARE" "(4 triggere, 3 conforme" \
   "ALTER TABLE public.profiles DISABLE TRIGGER trg_profiles_campuri_owner_only;"
@@ -184,8 +273,23 @@ refuzat "S2 corpul unui trigger schimbat" "$MIGRARE" "(4 triggere, 3 conforme" \
   "$CORP_TRIGGER_SCHIMBAT"
 refuzat "S2 trigger cu același nume, dar AFTER UPDATE" "$MIGRARE" "(4 triggere, 3 conforme" \
   "DROP TRIGGER trg_protect_can_access_pontaj_brut ON public.profiles; CREATE TRIGGER trg_protect_can_access_pontaj_brut AFTER UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION protect_can_access_pontaj_brut();"
-refuzat "0d RPC live modificat între timp (necunoscut)" "$MIGRARE" "Precondiție: confirm_hr_autorizatie_rsvti diferă de versiunea analizată" \
+refuzat "0d RPC live modificat între timp (necunoscut)" "$MIGRARE" "Precondiție 0d: confirm_hr_autorizatie_rsvti nu e nici versiunea live" \
   "$INJECTEAZA_RPC"
+refuzat "0d RPC cu corpul live, dar altă semnătură (DEFAULT NULL::date)" "$MIGRARE" "Precondiție 0d: confirm_hr_autorizatie_rsvti nu e nici versiunea live" \
+  "DO \$d\$ BEGIN EXECUTE replace(pg_get_functiondef('public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure), 'DEFAULT CURRENT_DATE', 'DEFAULT NULL::date'); END \$d\$;"
+refuzat "0f helper existent cu ALT corp (înainte de orice modificare)" "$MIGRARE" "Precondiție 0f: fn_poate_scrie_hr_autorizatii există deja, dar nu e definiția aprobată (funcții cu acest nume: 1, corp md5: false" \
+  "$HELPER_STRAIN"
+refuzat "0f supraîncărcare fn_poate_scrie_hr_autorizatii(integer)" "$MIGRARE" "(funcții cu acest nume: 1, corp md5: absent" \
+  "CREATE FUNCTION public.fn_poate_scrie_hr_autorizatii(p integer) RETURNS boolean LANGUAGE sql AS \$fn\$ SELECT true \$fn\$;"
+refuzat "4d grant UPDATE pe coloană către PUBLIC, rămas după migrare" "$MIGRARE" "Postcondiție 4d: privilegiul efectiv UPDATE pentru public pe hr_autorizatii_rsvti_confirmari = true" \
+  "GRANT UPDATE (observatii) ON public.hr_autorizatii_rsvti_confirmari TO PUBLIC;"
+refuzat "4d grant UPDATE pe coloană către authenticated rămas după REVOKE (variantă a fișierului)" "$VAR_DIR/grant_coloana.sql" "Postcondiție 4d: privilegiul efectiv UPDATE pentru authenticated pe hr_autorizatii_rsvti_confirmari = true" ""
+refuzat "4d UPDATE pe jurnal printr-un rol moștenit de authenticated (WITH INHERIT TRUE)" "$MIGRARE" "Postcondiție 4d: privilegiul efectiv UPDATE pentru authenticated" \
+  "CREATE ROLE sec_rsvti_r_mostenit NOLOGIN; GRANT UPDATE ON public.hr_autorizatii_rsvti_confirmari TO sec_rsvti_r_mostenit; GRANT sec_rsvti_r_mostenit TO authenticated WITH INHERIT TRUE;"
+refuzat "4d EXECUTE pe RPC printr-un rol moștenit de anon (WITH INHERIT TRUE)" "$MIGRARE" "Postcondiție 4d: privilegiul efectiv EXECUTE pentru anon pe public.confirm_hr_autorizatie_rsvti" \
+  "CREATE ROLE sec_rsvti_r_exec NOLOGIN; GRANT EXECUTE ON FUNCTION public.confirm_hr_autorizatie_rsvti(bigint,date,text) TO sec_rsvti_r_exec; GRANT sec_rsvti_r_exec TO anon WITH INHERIT TRUE;"
+refuzat "4b RPC cu alt proprietar (CREATE OR REPLACE îl păstrează)" "$MIGRARE" "Postcondiție 4b: atributele funcțiilor" \
+  "CREATE ROLE sec_rsvti_r_alt NOLOGIN; ALTER FUNCTION public.confirm_hr_autorizatie_rsvti(bigint,date,text) OWNER TO sec_rsvti_r_alt;"
 fara_urme "$SNAP_INAINTE" "0b refuzurile pe starea live"
 
 aplica "$MIGRARE";  ruleaza_teste "1 după migrare" false
@@ -193,24 +297,34 @@ aplica "$MIGRARE";  ruleaza_teste "2 după reaplicare (idempotență)" false
 
 SNAP_PATCH="$(mktemp)"; schema_snapshot > "$SNAP_PATCH"
 echo "→ 2b. reaplicare peste o stare schimbată (tranzacții anulate)"
-refuzat "S1 reaplicare peste o politică ALL în plus pe jurnal" "$MIGRARE" "Precondiție: jurnalul are 2 politici de scriere" \
+refuzat "S1 reaplicare peste o politică ALL în plus pe jurnal" "$MIGRARE" "Precondiție 0e: jurnalul are 2 politici de scriere" \
   "CREATE POLICY adv_jurnal_all_extra ON public.hr_autorizatii_rsvti_confirmari FOR ALL TO authenticated USING (true) WITH CHECK (true);"
-refuzat "0d reaplicare peste un RPC corectat ulterior" "$MIGRARE" "Precondiție: confirm_hr_autorizatie_rsvti diferă de versiunea analizată" \
+refuzat "0d reaplicare peste un RPC corectat ulterior" "$MIGRARE" "Precondiție 0d: confirm_hr_autorizatie_rsvti nu e nici versiunea live" \
   "$INJECTEAZA_RPC"
+refuzat "0f reaplicare peste un helper cu alt corp" "$MIGRARE" "corp md5: false" \
+  "CREATE OR REPLACE FUNCTION public.fn_poate_scrie_hr_autorizatii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS \$fn\$ SELECT true \$fn\$;"
+refuzat "0f reaplicare peste helperul aprobat devenit SECURITY INVOKER" "$MIGRARE" "corp md5: true, atribute: false, ACL: true" \
+  "ALTER FUNCTION public.fn_poate_scrie_hr_autorizatii() SECURITY INVOKER;"
+refuzat "0f reaplicare peste helperul aprobat cu EXECUTE în plus pentru anon" "$MIGRARE" "corp md5: true, atribute: true, ACL: false" \
+  "GRANT EXECUTE ON FUNCTION public.fn_poate_scrie_hr_autorizatii() TO anon;"
+fara_urme "$SNAP_PATCH" "2b refuzurile pe starea patch"
 
 echo "→ 3a. rollback tehnic: armare și precondiții (tranzacții anulate)"
-refuzat "rollback NEARMAT" "$ROLLBACK" "ROLLBACK TEHNIC 20261003c blocat" ""
-refuzat "rollback armat cu altă valoare" "$ROLLBACK" "ROLLBACK TEHNIC 20261003c blocat" \
-  "SET LOCAL gazpet.rollback_tehnic_20261003c = 'da';"
-refuzat "rollback cu comutatorul Ofertare (20261003b)" "$ROLLBACK" "ROLLBACK TEHNIC 20261003c blocat" \
-  "SET LOCAL gazpet.rollback_tehnic_20261003b = 'REDESCHIDE_BYPASS';"
-# SET LOCAL într-o tranzacție ANTERIOARĂ a aceleiași sesiuni nu mai armează (a expirat la COMMIT).
-ERR_EXP="$(mktemp)"
-if "${PSQL[@]}" -d "$BAZA" -c "BEGIN" -c "$ARMARE" -c "COMMIT" -f "$ROLLBACK" >/dev/null 2>"$ERR_EXP"; then esec "rollback armat într-o tranzacție anterioară: trebuia REFUZAT"; fi
-grep -qF "ROLLBACK TEHNIC 20261003c blocat" "$ERR_EXP" || { cat "$ERR_EXP" >&2; esec "rollback cu armare expirată: alt motiv"; }
-rm -f "$ERR_EXP"; echo "   OK   rollback cu SET LOCAL expirat (tranzacție anterioară) → refuzat: blocat"; NEG_OK=$((NEG_OK + 1))
+BLOCAT="ROLLBACK TEHNIC 20261003c blocat: redeschide gaura RSVTI"
+refuzat "rollback NEARMAT" "$ROLLBACK" "$BLOCAT" ""
+refuzat "rollback armat cu altă valoare" "$ROLLBACK" "$BLOCAT" "SELECT set_config('gazpet.rollback_tehnic_20261003c', 'da', true);"
+refuzat "rollback armat în stilul r2 (SET LOCAL fără txid)" "$ROLLBACK" "$BLOCAT" "SET LOCAL gazpet.rollback_tehnic_20261003c = 'REDESCHIDE_GAURA_RSVTI';"
+refuzat "rollback armat cu txid-ul altei tranzacții" "$ROLLBACK" "$BLOCAT" \
+  "SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || (txid_current() - 1), true);"
+refuzat "rollback cu comutatorul Ofertare (20261003b)" "$ROLLBACK" "$BLOCAT" "SET LOCAL gazpet.rollback_tehnic_20261003b = 'REDESCHIDE_BYPASS';"
+refuzat "armare PERSISTENTĂ (ALTER DATABASE SET), chiar cu armarea tranzacției validă" "$ROLLBACK" "comutatorul e armat PERSISTENT" \
+  "ALTER DATABASE \"$BAZA\" SET gazpet.rollback_tehnic_20261003c = 'REDESCHIDE_GAURA_RSVTI';" armat
+refuzat "armare PERSISTENTĂ pe rol, nume cu majuscule (ALTER ROLE … SET \"Gazpet.ROLLBACK…\")" "$ROLLBACK" "comutatorul e armat PERSISTENT" \
+  "ALTER ROLE postgres SET \"Gazpet.ROLLBACK_tehnic_20261003c\" = 'x';" armat
 refuzat "S3 rollback armat peste un RPC corectat ulterior" "$ROLLBACK" "Precondiție rollback 20261003c: confirm_hr_autorizatie_rsvti nu e versiunea patch-ului" \
   "$INJECTEAZA_RPC" armat
+refuzat "rollback armat peste RPC-ul patch-ului cu semnătura schimbată (DEFAULT CURRENT_DATE)" "$ROLLBACK" "Precondiție rollback 20261003c: confirm_hr_autorizatie_rsvti nu e versiunea patch-ului" \
+  "DO \$d\$ BEGIN EXECUTE replace(pg_get_functiondef('public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure), 'DEFAULT NULL::date', 'DEFAULT CURRENT_DATE'); END \$d\$;" armat
 refuzat "rollback armat peste un helper schimbat" "$ROLLBACK" "Precondiție rollback 20261003c: fn_poate_scrie_hr_autorizatii lipsește sau nu e versiunea patch-ului" \
   "CREATE OR REPLACE FUNCTION public.fn_poate_scrie_hr_autorizatii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS \$fn\$ SELECT true \$fn\$;" armat
 refuzat "rollback armat peste politica patch-ului relaxată" "$ROLLBACK" "Precondiție rollback 20261003c: jurnalul are 1 politici de scriere (0 = cea din patch)" \
@@ -219,11 +333,65 @@ refuzat "rollback armat peste o politică de scriere în plus" "$ROLLBACK" "Prec
   "CREATE POLICY adv_jurnal_insert_extra ON public.hr_autorizatii_rsvti_confirmari FOR INSERT TO authenticated WITH CHECK ((auth.uid() IS NOT NULL));" armat
 refuzat "S4 rollback armat cu o dependență nouă de helper" "$ROLLBACK" "other objects depend on it" \
   "CREATE TABLE public.adv_dep (id int); ALTER TABLE public.adv_dep ENABLE ROW LEVEL SECURITY; CREATE POLICY adv_dep_p ON public.adv_dep FOR INSERT TO authenticated WITH CHECK ((SELECT public.fn_poate_scrie_hr_autorizatii()));" armat
-fara_urme "$SNAP_PATCH" "3a refuzurile pe starea patch"
+[ "$("${PSQL[@]}" -d postgres -Atc "SELECT count(*) FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.%'")" = 0 ] || esec "a rămas o setare persistentă după scenariile 3a"
 
-echo "→ 3. rollback tehnic ARMAT (SET LOCAL în aceeași tranzacție)"
-DEZ="$("${PSQL[@]}" -d "$BAZA" -At -c "BEGIN" -c "$ARMARE" -f "$ROLLBACK" -c "COMMIT" \
-        -c "SELECT 'dezarmat=' || (coalesce(current_setting('gazpet.rollback_tehnic_20261003c', true), '') = '')::text")" \
+echo "→ 3s. o singură sesiune psql, mai multe tranzacții (starea de sesiune persistă între ele)"
+SES="$(mktemp)"
+cat > "$SES" <<SQL
+\set ON_ERROR_STOP 1
+SELECT md5(pg_get_functiondef('public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure)) AS rpc0 \gset
+-- (1) setare PREEXISTENTĂ de sesiune (valoarea din r2), fără armare nouă
+SET gazpet.rollback_tehnic_20261003c = 'REDESCHIDE_GAURA_RSVTI';
+\set ON_ERROR_STOP 0
+BEGIN;
+\i $ROLLBACK
+COMMIT;
+\set ON_ERROR_STOP 1
+SELECT teste.assert(:'LAST_ERROR_MESSAGE' LIKE '$BLOCAT%', 'RB-S1 setare de sesiune preexistentă (fără txid), fără armare nouă → REFUZAT: ' || left(:'LAST_ERROR_MESSAGE', 60));
+\set LAST_ERROR_MESSAGE ''
+-- (2) setare de sesiune legată de o tranzacție ANTERIOARĂ (txid vechi), fără armare nouă
+SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), false);
+\set ON_ERROR_STOP 0
+BEGIN;
+\i $ROLLBACK
+COMMIT;
+\set ON_ERROR_STOP 1
+SELECT teste.assert(:'LAST_ERROR_MESSAGE' LIKE '$BLOCAT%', 'RB-S2 setare de sesiune cu txid-ul unei tranzacții anterioare → REFUZAT');
+\set LAST_ERROR_MESSAGE ''
+RESET gazpet.rollback_tehnic_20261003c;
+-- (3) armare VALIDĂ (locală + greșit și de sesiune, același txid) + eroare în fișier (precondiție) + ROLLBACK, apoi reluare
+\set ON_ERROR_STOP 0
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), true);
+SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), false);
+CREATE POLICY adv_jurnal_insert_extra ON public.hr_autorizatii_rsvti_confirmari FOR INSERT TO authenticated WITH CHECK ((auth.uid() IS NOT NULL));
+\i $ROLLBACK
+ROLLBACK;
+\set ON_ERROR_STOP 1
+SELECT teste.assert(:'LAST_ERROR_MESSAGE' LIKE 'Precondiție rollback 20261003c: jurnalul are 2 politici%', 'RB-S3 tranzacția armată valid a eșuat în precondiție și s-a anulat');
+SELECT teste.assert(coalesce(current_setting('gazpet.rollback_tehnic_20261003c', true), '') = '', 'RB-S3 după ROLLBACK armarea (inclusiv cea de sesiune din tranzacția eșuată) a dispărut');
+\set LAST_ERROR_MESSAGE ''
+\set ON_ERROR_STOP 0
+BEGIN;
+\i $ROLLBACK
+COMMIT;
+\set ON_ERROR_STOP 1
+SELECT teste.assert(:'LAST_ERROR_MESSAGE' LIKE '$BLOCAT%', 'RB-S3 reluare fără armare nouă, în aceeași sesiune → REFUZAT');
+SELECT teste.assert(md5(pg_get_functiondef('public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure)) = :'rpc0', 'RB-S RPC-ul patch-ului neschimbat după toate încercările');
+SQL
+IES="$(mktemp)"
+"${PSQL[@]}" -d "$BAZA" -f "$SES" >"$IES" 2>&1 || { cat "$IES" >&2; esec "3s: sesiunea unică a eșuat"; }
+N3S="$(grep -c 'NOTICE:  OK ' "$IES" || true)"
+[ "$N3S" = 6 ] || { cat "$IES" >&2; esec "3s: $N3S/6 aserțiuni"; }
+grep 'NOTICE:  OK ' "$IES" | sed 's/.*NOTICE:  /   /'
+NEG_OK=$((NEG_OK + 3)); TOTAL_OK=$((TOTAL_OK + N3S)); rm -f "$SES" "$IES"
+fara_urme "$SNAP_PATCH" "3a/3s refuzurile pe starea patch"
+
+echo "→ 3. rollback tehnic ARMAT: string-ul documentat (BEGIN; armare; fișier; COMMIT;) ca un singur query"
+DEZ="$("${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;
+$ARMARE
+$(cat "$ROLLBACK")
+COMMIT;" -c "SELECT 'dezarmat=' || (coalesce(current_setting('gazpet.rollback_tehnic_20261003c', true), '') = '')::text" 2>/dev/null | tail -1)" \
   || esec "rollback-ul tehnic armat a eșuat"
 [ "$DEZ" = "dezarmat=true" ] || esec "rollback-ul tehnic n-a dezarmat comutatorul ($DEZ)"
 echo "   OK   rollback aplicat; comutatorul e dezarmat în sesiune după COMMIT"; NEG_OK=$((NEG_OK + 1))
@@ -241,18 +409,99 @@ teste_cad "suita PATCH pe starea live (după rollback)" false "P1 helperul"
 aplica "$MIGRARE";  ruleaza_teste "4 după reaplicare: gaura închisă" false
 teste_cad "suita GAURA pe starea patch" true "G1 RPC-ul este exact cel LIVE"
 
-# 5. Folosire greșită: armare cu SET de SESIUNE (nu SET LOCAL). Rollback-ul trece, dar la final dezarmează și
-#    sesiunea (set_config(…, '', false)) — comutatorul nu rămâne armat pentru o rulare ulterioară. Apoi reaplicare.
+# 5. Operator care armează și local, și de sesiune (set_config(…, false)), în aceeași tranzacție: rollback-ul trece
+#    (txid-ul e al tranzacției), iar la final dezarmează și sesiunea. Apoi reaplicare ⇒ schema de la pasul 4.
 SNAP_4="$(mktemp)"; schema_snapshot > "$SNAP_4"
-echo "→ 5. rollback armat GREȘIT (SET de sesiune) → după rulare comutatorul e dezarmat; reaplicare"
-DEZ="$("${PSQL[@]}" -d "$BAZA" -At -c "SET gazpet.rollback_tehnic_20261003c = 'REDESCHIDE_GAURA_RSVTI';" -f "$ROLLBACK" \
-        -c "SELECT 'dezarmat=' || (coalesce(current_setting('gazpet.rollback_tehnic_20261003c', true), '') = '')::text")" \
-  || esec "rollback-ul armat cu SET de sesiune a eșuat"
-[ "$DEZ" = "dezarmat=true" ] || esec "după rollback, comutatorul setat la nivel de sesiune a rămas armat ($DEZ)"
-echo "   OK   armare de sesiune: comutatorul e dezarmat după rulare (nu rămâne pentru o a doua rulare)"; NEG_OK=$((NEG_OK + 1))
+echo "→ 5. rollback armat local + de sesiune în aceeași tranzacție → sesiunea e dezarmată după COMMIT; reaplicare"
+DEZ="$("${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;
+$ARMARE
+SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), false);
+$(cat "$ROLLBACK")
+COMMIT;" -c "SELECT 'dezarmat=' || (coalesce(current_setting('gazpet.rollback_tehnic_20261003c', true), '') = '')::text" 2>/dev/null | tail -1)" \
+  || esec "rollback-ul armat local + de sesiune a eșuat"
+[ "$DEZ" = "dezarmat=true" ] || esec "după rollback, armarea de sesiune a rămas ($DEZ)"
+echo "   OK   armare și de sesiune: comutatorul e dezarmat după COMMIT (fișierul dezarmează și sesiunea)"; NEG_OK=$((NEG_OK + 1))
 aplica "$MIGRARE"
 fara_urme "$SNAP_4" "5 rollback + reaplicare ⇒ aceeași schemă ca la pasul 4"
 rm -f "$SNAP_4"
 
-if [ "$OPRESTE" = 1 ]; then ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null && echo "→ server oprit"; fi
-echo "PASS test_sec_rsvti: $TOTAL_OK aserțiuni OK + $NEG_OK verificări negative/fără urme OK (bază $BAZA @ 127.0.0.1:$PORT)"
+# 6. Emulări de runner, pe o bază auxiliară (recreată pentru fiecare rulare).
+echo "→ 6. un singur gestionar al tranzacției: 3 emulări de runner × {fără eroare, eroare după prima funcție, eroare în postcondiție}"
+REG_TABEL="CREATE SCHEMA supabase_migrations; CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, name text, statements text[]);"
+inregistreaza_sql() { printf "INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES ('20261003c', 'sec_rsvti_poarta_jurnal', ARRAY[\$reg\$%s\$reg\$]);" "$(cat "$1")"; }
+ruleaza_runner() {  # $1 = a|b|c|a0, $2 = fișier; ieșire: cod în RC, stderr în $ERR_R
+  set +e
+  case "$1" in
+    a)  "${PSQL[@]}" -d "$BAZA_AUX" -f "$2" >/dev/null 2>"$ERR_R"; RC=$?
+        [ $RC = 0 ] && "${PSQL[@]}" -d "$BAZA_AUX" -c "$(inregistreaza_sql "$2")" >/dev/null 2>>"$ERR_R" ;;
+    b)  "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA_AUX" -c "$(cat "$2")" >/dev/null 2>"$ERR_R"; RC=$?
+        [ $RC = 0 ] && "${PSQL[@]}" -d "$BAZA_AUX" -c "$(inregistreaza_sql "$2")" >/dev/null 2>>"$ERR_R" ;;
+    c)  "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA_AUX" -c "BEGIN;
+$(cat "$2")
+$(inregistreaza_sql "$2")
+COMMIT;" >/dev/null 2>"$ERR_R"; RC=$? ;;
+    a0) "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA_AUX" -f "$2" >/dev/null 2>"$ERR_R"; RC=$? ;;
+  esac
+  set -e
+}
+inregistrata() { "${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = 'sec_rsvti_poarta_jurnal'"; }
+stare_patch() { "${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure"; }
+MD5_PATCH="$(grep -m1 -oE "IS DISTINCT FROM '[0-9a-f]{32}'" <(sed -n '/^DO \$post\$$/,/^END \$post\$;$/p' "$MIGRARE") | grep -oE '[0-9a-f]{32}')"
+ERR_R="$(mktemp)"
+for runner in a b c; do
+  for var in ok err_prima err_post; do
+    baza_noua "$BAZA_AUX"; "${PSQL[@]}" -d "$BAZA_AUX" -c "$REG_TABEL" >/dev/null
+    SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+    case $var in ok) F="$MIGRARE" ;; err_prima) F="$VAR_DIR/err_prima.sql" ;; err_post) F="$VAR_DIR/err_post.sql" ;; esac
+    ruleaza_runner "$runner" "$F"
+    if [ $var = ok ]; then
+      [ $RC = 0 ] || { cat "$ERR_R" >&2; esec "6 runner $runner: migrarea fără eroare a eșuat"; }
+      [ "$(stare_patch)" = "$MD5_PATCH" ] && [ "$(inregistrata)" = 1 ] || esec "6 runner $runner: patch neaplicat sau neînregistrat"
+      extra=""
+      if [ $runner = c ]; then
+        grep -q 'there is already a transaction in progress' "$ERR_R" && grep -q 'there is no transaction in progress' "$ERR_R" \
+          || { cat "$ERR_R" >&2; esec "6 runner c: lipsesc WARNING-urile BEGIN imbricat / COMMIT fără tranzacție"; }
+        extra=" (WARNING: BEGIN imbricat „already in progress”; COMMIT-ul runnerului „no transaction in progress”)"
+      fi
+      echo "   OK   6 runner $runner, fără eroare: patch aplicat + înregistrat o dată$extra"
+    else
+      [ $RC != 0 ] || esec "6 runner $runner/$var: trebuia să eșueze"
+      grep -q 'division by zero' "$ERR_R" || { cat "$ERR_R" >&2; esec "6 runner $runner/$var: a eșuat din alt motiv"; }
+      [ "$(inregistrata)" = 0 ] || esec "6 runner $runner/$var: migrarea apare înregistrată"
+      fara_urme "$SNAP_E" "6 runner $runner, SELECT 1/0 $([ $var = err_prima ] && echo "după prima funcție" || echo "în postcondiție"): funcții/politici/ACL inițiale, neînregistrată" "$BAZA_AUX"
+      NEG_OK=$((NEG_OK - 1))
+    fi
+    NEG_OK=$((NEG_OK + 1)); rm -f "$SNAP_E"
+  done
+done
+# (a0) psql fără ON_ERROR_STOP: fișierul rămâne atomic (COMMIT-ul unei tranzacții eșuate = ROLLBACK), dar psql iese cu 0.
+baza_noua "$BAZA_AUX"; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+ruleaza_runner a0 "$VAR_DIR/err_prima.sql"
+[ $RC = 0 ] && grep -q 'current transaction is aborted' "$ERR_R" || esec "6 a0: comportament neașteptat (cod $RC)"
+fara_urme "$SNAP_E" "6 runner a0 (fără ON_ERROR_STOP), eroare după prima funcție: nimic comis, deși psql iese cu 0 ⇒ ON_ERROR_STOP=1 obligatoriu" "$BAZA_AUX"
+rm -f "$SNAP_E"
+# (c-reg) unde cade COMMIT-ul la runnerul (c): înregistrarea eșuează (versiune ocupată) DUPĂ COMMIT-ul fișierului.
+baza_noua "$BAZA_AUX"; "${PSQL[@]}" -d "$BAZA_AUX" -c "$REG_TABEL" -c "INSERT INTO supabase_migrations.schema_migrations VALUES ('20261003c', 'alta_migrare', NULL)" >/dev/null
+ruleaza_runner c "$MIGRARE"
+[ $RC != 0 ] && grep -q 'duplicate key' "$ERR_R" && [ "$(stare_patch)" = "$MD5_PATCH" ] && [ "$(inregistrata)" = 0 ] \
+  || esec "6 c-reg: comportament neașteptat"
+echo "   OK   6 runner c, înregistrare eșuată: patch-ul E aplicat (COMMIT-ul fișierului a închis tranzacția runnerului), neînregistrat — reaplicarea e idempotentă"
+NEG_OK=$((NEG_OK + 1)); rm -f "$ERR_R"
+
+# 7. Ceas fix: repornesc serverul cu libfaketime (@2026-09-29 23:30 UTC), apoi înapoi la ceasul real.
+echo "→ 7. ceas fix $CEAS_FIX UTC (libfaketime): data omisă și NULL ⇒ 30.09 (azi București) în UTC și Etc/GMT+12"
+[ -f "$FAKETIME_LIB" ] || mediu "libfaketime lipsește ($FAKETIME_LIB)"
+opreste; CEAS_SIMULAT=1; porneste "$CEAS_FIX"
+CEAS="$("${PSQL[@]}" -d postgres -Atc "SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') || ' UTC / București ' || to_char(now() AT TIME ZONE 'Europe/Bucharest', 'YYYY-MM-DD HH24:MI')")"
+echo "   ceasul serverului: $CEAS"
+baza_noua "$BAZA_AUX"; aplica "$MIGRARE" "$BAZA_AUX"
+IES="$(mktemp)"
+"${PSQL[@]}" -d "$BAZA_AUX" -o /dev/null -f "$TESTE_CEAS" >"$IES" 2>&1 || { sed 's/^psql:[^ ]* //' "$IES" >&2; esec "7 ceas fix: $(grep -m1 -o 'ESEC TEST: .*' "$IES")"; }
+NC="$(grep -c 'NOTICE:  OK ' "$IES" || true)"; grep 'NOTICE:  OK ' "$IES" | sed 's/.*NOTICE:  /   /'
+TOTAL_OK=$((TOTAL_OK + NC)); rm -f "$IES"
+readuce_ceasul
+"${PSQL[@]}" -d postgres -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS \"$BAZA_AUX\" WITH (FORCE)" >/dev/null
+rm -rf "$VAR_DIR"
+
+if [ "$OPRESTE" = 1 ]; then opreste && echo "→ server oprit"; fi
+echo "PASS test_sec_rsvti: $TOTAL_OK aserțiuni OK + $NEG_OK verificări negative/fără urme/statice OK (bază $BAZA @ 127.0.0.1:$PORT)"

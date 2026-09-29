@@ -1,5 +1,5 @@
 -- ============================================================================
--- Teste SEC RSVTI — 20261003c_sec_rsvti_poarta_jurnal.sql (poarta RPC + jurnal, tratate împreună), runda 2.
+-- Teste SEC RSVTI — 20261003c_sec_rsvti_poarta_jurnal.sql (poarta RPC + jurnal, tratate împreună), runda 3.
 -- Rulează doar prin scripts/test_sec_rsvti.sh, pe scheletul supabase/tests/sec_rsvti_schelet.sql
 -- (PG16 local, bază *_test). Totul într-o tranzacție care se anulează la final (ROLLBACK).
 --
@@ -99,6 +99,31 @@ BEGIN
   RETURN r.id;
 END $fn$;
 
+-- Apel cu data OMISĂ (doar id-ul; valoarea implicită din semnătură): trebuie să înregistreze azi în Europe/Bucharest,
+-- oricare ar fi fusul sesiunii (runda 3: DEFAULT NULL::date; pe runda 2, DEFAULT CURRENT_DATE lua data sesiunii).
+CREATE FUNCTION teste.rpc_ok_omis(p_uid uuid, p_aut bigint, p_eticheta text)
+RETURNS bigint LANGUAGE plpgsql AS $fn$
+DECLARE r public.hr_autorizatii_rsvti_confirmari%rowtype; a public.hr_autorizatii%rowtype; t public.hr_autorizatii_tipuri%rowtype;
+        v_state text; v_msg text; v_azi date := (now() AT TIME ZONE 'Europe/Bucharest')::date; v_next date;
+BEGIN
+  PERFORM teste.ca_utilizator(p_uid);
+  BEGIN
+    SELECT * INTO r FROM public.confirm_hr_autorizatie_rsvti(p_aut);
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_msg = MESSAGE_TEXT;
+    PERFORM teste.ca_admin();
+    RAISE EXCEPTION 'ESEC TEST: % — RPC refuzat: % %', p_eticheta, v_state, v_msg USING ERRCODE = 'P0T01';
+  END;
+  PERFORM teste.ca_admin();
+  SELECT * INTO a FROM public.hr_autorizatii WHERE id = p_aut;
+  SELECT * INTO t FROM public.hr_autorizatii_tipuri WHERE id = a.tip_id;
+  v_next := (v_azi + make_interval(months => coalesce(t.interval_confirmare_rsvti_luni, 6)))::date;
+  PERFORM teste.assert(r.data_confirmare = v_azi AND r.urmatoarea_confirmare = v_next AND r.confirmat_de = p_uid
+                   AND a.rsvti_ultima_confirmare = v_azi AND a.rsvti_urmatoarea_confirmare = v_next,
+    format('%s: data OMISĂ → înregistrat %s (azi București %s; current_date sesiune %s)', p_eticheta, r.data_confirmare, v_azi, current_date));
+  RETURN r.id;
+END $fn$;
+
 -- Rezultatul unui apel RPC ca p_uid, FĂRĂ efecte: 'OK' sau SQLSTATE-ul refuzului. La succes scrierea se
 -- anulează (subtranzacție), deci numărul de rânduri din jurnal nu depinde de ramura luată.
 CREATE FUNCTION teste.rpc_stare(p_uid uuid, p_aut bigint, p_data date)
@@ -134,6 +159,7 @@ BEGIN
 END $fn$;
 GRANT EXECUTE ON FUNCTION teste.rpc_ok(uuid, bigint, date, text, date, text, date),
                           teste.rpc_stare(uuid, bigint, date),
+                          teste.rpc_ok_omis(uuid, bigint, text),
                           teste.echivalenta(uuid, boolean, text, bigint, integer) TO authenticated, anon, service_role;
 
 \if :gaura
@@ -144,6 +170,9 @@ SELECT teste.assert((SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.confirm
                     = '527c0e4708dfe1f88cec03a77b6a26dd', 'G1 RPC-ul este exact cel LIVE din 29.09 (md5 prosrc)');
 SELECT teste.assert((SELECT proacl::text FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure)
                     = '{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}', 'G1 ACL RPC = producția');
+SELECT teste.assert(pg_get_function_arguments('public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure)
+                    = 'p_autorizatie_id bigint, p_data_confirmare date DEFAULT CURRENT_DATE, p_observatii text DEFAULT NULL::text',
+  'G1 semnătura live: data omisă = DEFAULT CURRENT_DATE (fusul sesiunii)');
 SELECT teste.assert(to_regprocedure('public.fn_poate_scrie_hr_autorizatii()') IS NULL, 'G1 helperul nu există');
 SELECT teste.assert(EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'hr_autorizatii_rsvti_confirmari'
                               AND policyname = 'hr_autorizatii_rsvti_confirmari_insert_authenticated'
@@ -226,14 +255,14 @@ SELECT teste.assert((SELECT prosecdef AND proconfig @> ARRAY['search_path=public
                      FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure),
   'P1 RPC: SECURITY DEFINER, search_path fixat, proprietar postgres, același tip returnat');
 SELECT teste.assert(pg_get_function_arguments('public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure)
-                    = 'p_autorizatie_id bigint, p_data_confirmare date DEFAULT CURRENT_DATE, p_observatii text DEFAULT NULL::text'
+                    = 'p_autorizatie_id bigint, p_data_confirmare date DEFAULT NULL::date, p_observatii text DEFAULT NULL::text'
                 AND (SELECT count(*) FROM pg_proc WHERE proname = 'confirm_hr_autorizatie_rsvti') = 1,
-  'P1 RPC: semnătura neschimbată (UI compatibil); niciun parametru pentru scadență, nicio supraîncărcare');
+  'P1 RPC: aceleași tipuri (UI compatibil), DEFAULT NULL::date pentru dată (runda 3); niciun parametru pentru scadență, nicio supraîncărcare');
 SELECT teste.assert((SELECT proacl::text FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure)
                     = '{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}',
   'P1 RPC: ACL identic cu producția (fără PUBLIC/anon)');
 SELECT teste.assert((SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)'::regprocedure)
-                    = '42e0528ed5af58c0cccc7b801aef4193', 'P1 RPC: amprenta corpului = cea din migrare (de verificat live după apply)');
+                    = '6185a9ddf13a9e666368858decfa9611', 'P1 RPC: amprenta corpului = cea din migrare (de verificat live după apply)');
 SELECT teste.assert((SELECT position('fn_poate_scrie_hr_autorizatii' IN prosrc) > 0
                         AND position('fn_poate_scrie_hr_autorizatii' IN prosrc) < position('from public.hr_autorizatii' IN prosrc)
                         AND position('fn_poate_scrie_hr_autorizatii' IN prosrc) < position('insert into' IN prosrc)
@@ -264,6 +293,13 @@ SELECT teste.assert(NOT has_table_privilege('authenticated', 'public.hr_autoriza
                 AND has_table_privilege('authenticated', 'public.hr_autorizatii_rsvti_confirmari', 'SELECT')
                 AND has_table_privilege('service_role', 'public.hr_autorizatii_rsvti_confirmari', 'UPDATE'),
   'P1 jurnal: GRANT UPDATE/DELETE retras (anon+authenticated), INSERT retras de la anon; SELECT/INSERT authenticated și service_role neatinse');
+SELECT teste.assert(NOT has_any_column_privilege('public', 'public.hr_autorizatii_rsvti_confirmari', 'UPDATE')
+                AND NOT has_any_column_privilege('public', 'public.hr_autorizatii_rsvti_confirmari', 'INSERT')
+                AND NOT has_any_column_privilege('anon', 'public.hr_autorizatii_rsvti_confirmari', 'UPDATE')
+                AND NOT has_any_column_privilege('authenticated', 'public.hr_autorizatii_rsvti_confirmari', 'UPDATE')
+                AND NOT has_function_privilege('public', 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)', 'EXECUTE')
+                AND NOT has_function_privilege('public', 'public.fn_poate_scrie_hr_autorizatii()', 'EXECUTE'),
+  'P1 privilegii EFECTIVE (PUBLIC, coloane): nimic pentru PUBLIC; niciun UPDATE pe vreo coloană pentru anon/authenticated');
 SELECT teste.assert(EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'hr_autorizatii' AND policyname = 'hr_autorizatii_write_authorized'
                               AND md5(qual) = 'f2a295ca956d58971e6ec6779e9aa08a' AND md5(with_check) = 'f2a295ca956d58971e6ec6779e9aa08a')
                 AND EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'hr_autorizatii_tipuri' AND policyname = 'hr_autorizatii_tipuri_write_authorized'
@@ -339,6 +375,15 @@ SELECT teste.asteapta_eroare('SELECT public.fn_poate_scrie_hr_autorizatii()',
 SELECT teste.ca_admin();
 SELECT teste.assert(NOT has_function_privilege('anon', 'public.confirm_hr_autorizatie_rsvti(bigint,date,text)', 'EXECUTE'),
   'P4 has_function_privilege(anon, RPC) = false');
+-- P4-NULL (coerență cu #537): o poartă care ar întoarce NULL înseamnă refuz (IS NOT TRUE), nu „trece mai departe”
+SAVEPOINT p4_null;
+CREATE OR REPLACE FUNCTION public.fn_poate_scrie_hr_autorizatii() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = public, pg_temp AS $fn$ SELECT NULL::boolean $fn$;
+SELECT teste.ca_utilizator(:'u_hr');
+SELECT teste.asteapta_eroare(format('SELECT public.confirm_hr_autorizatie_rsvti(%s, %L::date, NULL)', :a1, :'azi'),
+  'P4 poarta care întoarce NULL → 42501 (IS NOT TRUE)', '42501', 'Nu ai dreptul');
+SELECT teste.ca_admin();
+ROLLBACK TO SAVEPOINT p4_null;
 SELECT teste.assert((SELECT count(*) FROM public.hr_autorizatii_rsvti_confirmari) = :jurnal0
                 AND (SELECT rsvti_ultima_confirmare IS NULL AND rsvti_urmatoarea_confirmare IS NULL AND rsvti_confirmat_de IS NULL
                      FROM public.hr_autorizatii WHERE id = :a1),
@@ -421,6 +466,7 @@ SELECT teste.rpc_ok(:'u_hr', :a1, '2025-01-15', NULL, '2025-07-15', 'P7 exact da
 SELECT teste.rpc_ok(:'u_hr', :a2, '2020-01-01', NULL, '2021-01-01', 'P7 fișă fără data_emitere → limita inferioară e doar minimul 2000-01-01 (2 fișe live fără data_emitere)');
 SELECT teste.rpc_ok(:'u_hr', :a3, NULL, NULL, (:'azi'::date + interval '6 months')::date,
                     'P7 p_data_confirmare NULL explicit (sesiune UTC) → azi în Europe/Bucharest, aceeași referință ca limita', :'azi');
+SELECT teste.rpc_ok_omis(:'u_hr', :a3, 'P7 sesiune UTC');
 
 -- ---------------------------------------------------------------- P7-TZ fusul orar al sesiunii nu mută „azi” — DETERMINIST
 -- Preluat din ADV-D4 (verificator): la orice oră, cel puțin una dintre Etc/GMT+12 (în urmă) și Pacific/Kiritimati
@@ -439,12 +485,14 @@ SELECT teste.rpc_ok(:'u_hr', :a1, :'azi', NULL, (:'azi'::date + interval '6 mont
                     format('P7-TZ sesiune Etc/GMT+12 (current_date %s): azi București ACCEPTAT', :'data_gmt12'));
 SELECT teste.rpc_ok(:'u_hr', :a1, NULL, NULL, (:'azi'::date + interval '6 months')::date,
                     format('P7-TZ sesiune Etc/GMT+12 (current_date %s): NULL ⇒ azi București, nu current_date-ul sesiunii', :'data_gmt12'), :'azi');
+SELECT teste.rpc_ok_omis(:'u_hr', :a1, 'P7-TZ sesiune Etc/GMT+12');
 SET LOCAL timezone = 'Pacific/Kiritimati';
 SELECT teste.assert(teste.rpc_stare(:'u_hr', :a1, :'data_kir') = CASE WHEN :'zona_fata'::boolean THEN '22023' ELSE 'OK' END,
        format('P7-TZ sesiune Pacific/Kiritimati: current_date-ul sesiunii (%s) → %s', :'data_kir',
               CASE WHEN :'zona_fata'::boolean THEN 'e mâine în București ⇒ REFUZAT 22023' ELSE 'e azi și în București ⇒ acceptat' END));
 SELECT teste.rpc_ok(:'u_hr', :a1, NULL, NULL, (:'azi'::date + interval '6 months')::date,
                     format('P7-TZ sesiune Pacific/Kiritimati (current_date %s): NULL ⇒ azi București, nu current_date-ul sesiunii', :'data_kir'), :'azi');
+SELECT teste.rpc_ok_omis(:'u_hr', :a1, 'P7-TZ sesiune Pacific/Kiritimati');
 SELECT teste.ca_utilizator(:'u_hr');
 SELECT teste.asteapta_eroare(format('SELECT public.confirm_hr_autorizatie_rsvti(%s, %L::date, NULL)', :a1, :'maine'),
   'P7-TZ sesiune Pacific/Kiritimati: mâine (București) tot refuzat', '22023', 'viitor');
@@ -505,8 +553,8 @@ SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.hr_autorizatii_rsvti_confir
                                   JOIN public.hr_autorizatii a ON a.id = c.autorizatie_id
                                   JOIN public.hr_autorizatii_tipuri t ON t.id = a.tip_id
                                  WHERE c.urmatoarea_confirmare <> (c.data_confirmare + make_interval(months => coalesce(t.interval_confirmare_rsvti_luni, 6)))::date)
-                AND (SELECT count(*) FROM public.hr_autorizatii_rsvti_confirmari) = 19,
-  'PF toate rândurile din jurnal (19: 18 prin RPC + 1 INSERT direct HR) au scadența = data + intervalul tipului');
+                AND (SELECT count(*) FROM public.hr_autorizatii_rsvti_confirmari) = 22,
+  'PF toate rândurile din jurnal (22: 21 prin RPC + 1 INSERT direct HR) au scadența = data + intervalul tipului');
 SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.hr_autorizatii_rsvti_confirmari c
                                  WHERE c.data_confirmare > :'azi'::date OR NOT isfinite(c.data_confirmare) OR c.data_confirmare < '2000-01-01'),
   'PF niciun rând din jurnal cu dată în viitor, nefinită sau înainte de 2000 (indicatorul din incident rămâne 0)');

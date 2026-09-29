@@ -1,17 +1,18 @@
 # SEC RSVTI: poarta pe `confirm_hr_autorizatie_rsvti` și pe jurnal (P1 / constatarea (1)), 29.09→03.10.2026
 
 > **NEAPLICAT.** E un patch distinct, doar pentru suprafața RSVTI, așa cum a cerut Copilot. Se aplică doar după GO-ul lui Copilot pe această revizie și după acordul explicit al lui Răzvan (§7). Nu atinge Ofertare, datele, `profiles` sau alte funcții.
-> **Revizia 2 (30.09):** conține corecturile verificatorului adversarial (verdict CU_CORECȚII, poarta rezistă). Tabelul constatare → schimbare → test e la **§11**.
+> **Revizia 3 (30.09):** răspunsul la NO-GO-ul Copilot pe runda 2 (`e707ba5`, text integral în `SECURITATE_PATCH_RSVTI_VERDICT_COPILOT_R2.md`). Tabelul punct Copilot → schimbare → test → rezultat e la **§12**. Revizia 2 (corecturile verificatorului) e la §11; unde §0–§10 diferă de §11, e valabil textul actual.
+> **Consemnarea corectă a efectului, până la decizia A (§8.2):** „INSERT direct restrâns la grupul autorizat și identitatea proprie”. NU „jurnal de confirmări integral verificabil” și NU „RSVTI securizat complet”: P1b, ștergerea prin cascadă și suprascrierea fișei prin confirmări retroactive rămân findings **OPEN** (§8); P1b e pasul următor prioritar.
 > Tot ce am citit din producție a fost read-only: pe 29.09 după 21:30 UTC (runda 1: cataloage, `pg_policies`, ACL, `pg_stat_statements` doar rol și număr de apeluri, două SELECT-uri agregate care întorc doar numere și departamente) și pe 29.09 ~22:20 UTC (runda 2: **doar cataloage**: `pg_trigger`, `pg_proc`, `pg_policies`, `pg_class`, `pg_constraint`). N-am apelat nicio funcție a aplicației.
 
 ## 0. Pe scurt
 - **Gaura închisă:** orice cont logat putea prelungi viza RSVTI a oricui, cu orice dată, printr-un apel RPC direct (`2099-01-01` ⇒ viză „valabilă” până în 2099; `infinity` ⇒ viză care nu mai expiră; `-infinity` sau o dată î.Hr. ⇒ gunoi pe fișă). Putea și să scrie direct în jurnal, în numele oricui.
 - **Fix-ul are trei părți, tratate împreună:**
   - **Poarta:** aceeași regulă ca politica de scriere pe `hr_autorizatii`, printr-o singură funcție, `fn_poate_scrie_hr_autorizatii()`. E sursa unică a **porții RSVTI** (RPC + INSERT direct în jurnal), nu a tuturor scrierilor în `hr_autorizatii`: `fn_hr_autorizatie_propunere_accepta` are poarta ei (§3). Drepturile nimănui nu se schimbă.
-  - **Regula datei:** data confirmării **efectuate** e o zi reală (finită, ≥ 2000-01-01), nu e în viitor (azi în `Europe/Bucharest`) și nu precede emiterea autorizației. `NULL` înseamnă azi în București. Scadența rămâne calculată în funcție, separat (§4.1).
+  - **Regula datei:** data confirmării **efectuate** e finită, ≥ 2000-01-01 (regulă de business), nu e în viitor (azi în `Europe/Bucharest`) și nu precede emiterea autorizației. Data **omisă** (semnătura are acum `DEFAULT NULL::date`) și `NULL` explicit înseamnă azi în București. Scadența rămâne calculată în funcție, separat (§4.1).
   - **Jurnalul:** INSERT direct e permis doar celor care trec aceeași poartă, și doar în nume propriu. UPDATE și DELETE nu mai sunt permise din API.
 - **Precondiții fail-closed (runda 2):** migrarea refuză dacă pe jurnal nu e **exact o** politică de scriere (cea de azi sau, la reaplicare, cea din patch) sau RLS e oprit, dacă pe `profiles` nu sunt **exact cele 4 triggere** analizate (cu md5) sau dacă RPC-ul live e altul. La final, o postcondiție verifică starea rezultată. Rollback-ul tehnic e **armat** (`SET LOCAL` propriu) și refuză orice stare care nu e exact patch-ul.
-- **Teste:** **358 de aserțiuni OK + 26 de verificări negative** pe PG16 local, pe ciclul complet (bază → refuzuri → migrare → reaplicare → refuzuri → rollback tehnic armat → reaplicare). Gaura e reprodusă pe varianta live și din nou după rollback. **14/14 mutanți** ai migrării sunt prinși de teste, **8/8 mutanți** ai precondițiilor/rollback-ului sunt prinși de harness. Testul de fus orar e determinist: verificat și cu ceas simulat, la 4 ore diferite (§5).
+- **Teste (runda 3):** **393 de aserțiuni OK + 65 de verificări negative/fără urme/statice**, rulat de două ori, exit 0; detalii §12. Runda 2 avea: **358 de aserțiuni OK + 26 de verificări negative** pe PG16 local, pe ciclul complet (bază → refuzuri → migrare → reaplicare → refuzuri → rollback tehnic armat → reaplicare). Gaura e reprodusă pe varianta live și din nou după rollback. **14/14 mutanți** ai migrării sunt prinși de teste, **8/8 mutanți** ai precondițiilor/rollback-ului sunt prinși de harness. Testul de fus orar e determinist: verificat și cu ceas simulat, la 4 ore diferite (§5).
 - **Risc de regresie, verificat pe producție:** **0 conturi** au confirmat vize fără să treacă noua poartă. Toate cele 9 rânduri din jurnal sunt de la 2 conturi (HR și Administrativ). Pe fișe, alte 26 de confirmări au `confirmat_de` NULL: vin dintr-un import direct, nu din RPC.
 - **Decizii pentru Răzvan** (niciuna nu e în patch; detalii la §8):
   1. Operatorul RSVTI (Nica Eugen, departamentul Execuție) **nu trece** poarta, nici azi, nici după patch. Dacă trebuie să confirme el vizele, e nevoie de un drept dedicat (A/B).
@@ -35,7 +36,9 @@ Nu apare nicio altă cale: nicio altă funcție SQL nu scrie în jurnal sau în 
    - 0a: politica `hr_autorizatii_write_authorized` nu mai are textul analizat (md5 pe textul cu spațiile normalizate = `cc78b7fd…`);
    - 0b: nu mai e singura politică de scriere pe `hr_autorizatii`;
    - 0c: pe `profiles` nu sunt **exact** cele 4 triggere analizate: nume, funcție, md5 al corpului, `tgtype` 19 (BEFORE UPDATE FOR EACH ROW), activate (`O`), fără WHEN și fără listă de coloane, funcții SECURITY DEFINER cu `search_path=public, pg_temp`, proprietar postgres. Un trigger în plus, unul lipsă, dezactivat sau cu alt corp ⇒ refuz;
-   - 0d: RPC-ul live nu e nici varianta analizată (`527c0e47…`), nici cea din patch (`42e0528e…`);
+   - 0d: RPC-ul live nu e nici varianta analizată (`527c0e47…` + `DEFAULT CURRENT_DATE`), nici cea din patch (`6185a9dd…` + `DEFAULT NULL::date`), verificate în pereche;
+   - 0a (runda 3): RLS activ pe `hr_autorizatii`; toate comparațiile sunt NULL-safe (`IS DISTINCT FROM`), deci o politică fără USING/WITH CHECK (md5 NULL) e refuzată;
+   - 0f (runda 3): helperul e absent sau exact definiția aprobată (md5 corp + atribute + ACL, fără supraîncărcări), altfel refuz înainte de orice modificare.
    - 0e: pe jurnal RLS nu e activ sau nu există **exact o** politică de scriere (ALL/INSERT/UPDATE/DELETE): cea de azi (`…_insert_authenticated`, md5 `with_check` `dc71e447…`) sau, la reaplicare, cea din patch (`…_insert_autorizat`, md5 `780014ba…`).
 1. **`fn_poate_scrie_hr_autorizatii()`:**
    - LANGUAGE sql, STABLE, SECURITY DEFINER, `search_path = public, pg_temp`;
@@ -51,7 +54,7 @@ Nu apare nicio altă cale: nicio altă funcție SQL nu scrie în jurnal sau în 
    - politica INSERT `…_insert_authenticated` se înlocuiește cu `…_insert_autorizat`: `(SELECT fn_poate_scrie_hr_autorizatii()) AND confirmat_de = (SELECT auth.uid())`;
    - `REVOKE UPDATE, DELETE … FROM anon, authenticated`;
    - `REVOKE INSERT … FROM anon`.
-4. **Postcondiții**, în aceeași tranzacție: md5 RPC = `42e0528e…`, md5 helper = `a59aeb46…`, pe jurnal RLS activ și exact politica de scriere din patch (md5 `780014ba…`), GRANT-urile de scriere retrase. Altfel se anulează tot.
+4. **Postcondiții, înainte de `COMMIT;`** (fișierul are `BEGIN;` … `COMMIT;`, runda 3): 4a md5 RPC `6185a9dd…` + semnătura `DEFAULT NULL::date`, md5 helper `a59aeb46…`, fără supraîncărcări; 4b atributele (limbaj, volatilitate, SECURITY DEFINER, `proconfig` exact, proprietar postgres, tip întors); 4c pe jurnal RLS activ și exact politica din patch (md5 `780014ba…`); 4d **privilegiile efective** (`has_function_privilege` / `has_table_privilege` / `has_any_column_privilege` pentru `public`, `anon`, `authenticated`: acoperă PUBLIC, moștenirea prin roluri și granturile pe coloane); 4e ACL-ul exact al celor două funcții. Altfel se anulează tot. RPC-ul refuză și când poarta întoarce NULL (`IS NOT TRUE`).
 
 **Ce NU schimbă:**
 - politicile de pe `hr_autorizatii` și `hr_autorizatii_tipuri`, deci cine poate scrie autorizații;
@@ -93,12 +96,12 @@ Copilot a cerut: „o copie a unei politici nu e suficientă fără verificarea 
 - **Funcția** calculează scadența: `data + interval luni`. UI-ul doar o previzualizează (`setMonth`, `src/HR.jsx:1842-1843`). Apelantul n-o trimite.
 - **Concluzie:** `p_data_confirmare` = **data confirmării efectuate** și nu e scadența. De aici:
   - nu poate fi în viitor;
-  - trebuie să fie o zi reală: finită (`isfinite`) și ≥ **2000-01-01**. Autorizațiile cu viză RSVTI expiră în câțiva ani, deci o viză de dinainte de 2000 e sigur o greșeală de introducere. Pragul e generos și acoperă și importuri vechi. `-infinity` și datele î.Hr. treceau pe live și aici erau acceptate și pentru HR (ADV-E2/E3);
+  - trebuie să fie finită (`isfinite`) și ≥ **2000-01-01**. Pragul e o **regulă de business** (date plauzibile pentru vize care expiră în câțiva ani), **nu o dovadă** că orice dată anterioară e o greșeală; un caz real sub prag se discută, nu se forțează. Pragul e generos și acoperă și importuri vechi. `-infinity` și datele î.Hr. treceau pe live și aici erau acceptate și pentru HR (ADV-E2/E3);
   - nu poate fi înainte de `data_emitere`;
   - scadența rămâne calculată în funcție.
 - **„Azi” se ia în `Europe/Bucharest`.** Producția e în UTC, iar PostgREST acceptă `Prefer: timezone`. Între 00:00 și 03:00, ora României, ziua UTC e încă ieri, așa că o limită UTC ar refuza o confirmare legitimă „de azi”. Data implicită din UI (ziua UTC) e mereu ≤ ziua din București. Testele au rulat chiar într-o astfel de fereastră (UTC 29.09, București 30.09).
 - **`NULL` explicit ⇒ azi în `Europe/Bucharest`** (runda 2, ADV-D5): aceeași referință ca limita, deci un `NULL` nu mai poate fi refuzat „în viitor” într-o sesiune cu fus orar la est de București. Înainte era `current_date`-ul sesiunii. UI-ul trimite mereu data, deci nu e o schimbare vizibilă.
-- **Rămâne ca înainte:** parametrul **omis** ia `DEFAULT CURRENT_DATE` din semnătură, evaluat în fusul sesiunii. La est de București rezultatul poate fi cel mult un refuz `22023`; la vest, data rămâne „ieri”, ca azi. Semnătura rămâne neschimbată pentru compatibilitatea cu UI-ul (P1), iar UI-ul nu omite niciodată data.
+- **Parametrul omis (runda 3, cerința Copilot):** semnătura are acum `DEFAULT NULL::date` (runda 2 păstra `DEFAULT CURRENT_DATE`, evaluat în fusul sesiunii: la 23:30 UTC, sesiune UTC, data omisă înregistra 29.09 în loc de 30.09). `CREATE OR REPLACE` acceptă schimbarea (același tip, același număr de valori implicite — verificat pe PG16; doar eliminarea unei valori implicite sau schimbarea tipului ei ar fi refuzate), iar ACL-ul se păstrează. Corpul rezolvă `coalesce(p_data_confirmare, v_azi)`. Tipurile nu se schimbă, deci UI-ul (care trimite mereu data) și PostgREST rămân compatibili. Dovada: testul cu ceas fix (§12).
 - Previzualizarea din UI (`setMonth`) și calculul SQL (`make_interval`) diferă la sfârșit de lună: 31.08 + 6 luni dă 03.03 în JS și 28.02 în SQL. Valoarea salvată e cea din SQL (P8). Diferența e preexistentă și e doar de afișare.
 
 ### 4.1 Data confirmării efectuate ≠ scadența (cerința Copilot, review plan v2, 30.09)
@@ -142,7 +145,7 @@ Cerința: „Pentru RSVTI, separați data confirmării efectuate de data următo
 | Grup | Ce dovedește |
 |---|---|
 | G1–G7 (gaura) | RPC = live (md5 `527c0e47…`); non-HR prin RPC → viză până la **2099-07-01**, deși direct în `hr_autorizatii` nu poate scrie (RLS); cont fără profil confirmă; jurnal falsificat în numele owner-ului, alt angajat, dată 2098; **UPDATE/DELETE pe jurnal = 0 rânduri deja azi** (dovada că REVOKE-ul nu schimbă comportamentul); anon INSERT deja refuzat de RLS; anon fără EXECUTE; non-HR cu `-infinity` acceptat |
-| P1 | helper și RPC: SECURITY DEFINER, `search_path`, proprietar, ACL (fără PUBLIC/anon), semnătura neschimbată și fără parametru de scadență, poarta înaintea oricărei citiri, amprentele (RPC `42e0528e…`, helper `a59aeb46…`), COMMENT-ul helperului; jurnal: politica veche a dispărut, RLS activ și exact o politică de scriere (md5 `780014ba…`); GRANT-uri retrase; politicile HR neatinse |
+| P1 | helper și RPC: SECURITY DEFINER, `search_path`, proprietar, ACL (fără PUBLIC/anon), semnătura neschimbată și fără parametru de scadență, poarta înaintea oricărei citiri, amprentele (RPC `6185a9dd…` în r3, helper `a59aeb46…`), COMMENT-ul helperului; jurnal: politica veche a dispărut, RLS activ și exact o politică de scriere (md5 `780014ba…`); GRANT-uri retrase; politicile HR neatinse |
 | P2 | helper ≡ politica live, pe matricea de 9 identități |
 | P3 | setul exact de 4 triggere pe `profiles`; sursa drepturilor nu se autoatribuie (department HR/Administrativ, role, is_owner refuzate; can_modify_employees resetat) |
 | P4 | refuz 42501: non-HR (dată validă și atacul 2099), id inexistent (fără oracol), `role=hr` fără departament, JWT fără profil, authenticated fără claims, service_role, postgres fără claims; anon fără EXECUTE pe RPC și pe helper; jurnal și fișă neschimbate |
@@ -205,18 +208,18 @@ Cerința: „Pentru RSVTI, separați data confirmării efectuate de data următo
 Limită: validarea dinamică e doar locală. Pe producție, după apply, verificarea e read-only (§7). Atacul nu se încearcă pe date reale.
 
 ## 6. Revenirea
-- **`…_ROLLBACK.sql` = rollback TEHNIC, armat.**
-  - Readuce exact starea de azi: RPC-ul live verbatim, politica veche, GRANT-urile, fără helper. Deci **redeschide gaura**. În producție se rulează doar la cererea explicită a lui Răzvan, cu motivul consemnat.
-  - **Armare (runda 2):** fișierul nu face nimic fără `SET LOCAL gazpet.rollback_tehnic_20261003c = 'REDESCHIDE_GAURA_RSVTI';`, pusă în **aceeași tranzacție**, pe prima linie. Comutatorul e al acestui patch: cel de la Ofertare, `…_20261003b`, nu-l armează. `SET LOCAL` expiră la COMMIT, iar la final rollback-ul dezarmează și sesiunea, deci nici un `SET` pus greșit nu rămâne armat (pasul 5 din harness).
-  - **Precondiții (runda 2, S3):** starea curentă trebuie să fie **exact** patch-ul: md5 RPC `42e0528e…`, md5 helper `a59aeb46…`, iar pe jurnal, politica din patch trebuie să fie singura de scriere. Peste o corecție ulterioară a RPC-ului (alt md5) rollback-ul **refuză**: nu readuce tacit varianta fără poartă peste o versiune neanalizată. Se reanalizează.
-  - **Postcondiții:** RPC = live (`527c0e47…`), helper absent, politica veche singura de scriere. O dependență nouă de helper (S4) face DROP să eșueze. Tot fișierul e **un singur bloc DO**, deci nu se aplică „pe jumătate”, nici fără tranzacție.
-  - Harness-ul dovedește că desfacerea e curată (`pg_dump` identic).
-  - Folosire: preview read-only (md5 curente), apoi un `apply_migration` cu linia `SET LOCAL` + conținutul exact al fișierului (sha256 `7311c5d588ce25c7115ebbba2a9e513305ad2284f3545f88b5688aed39069f68`, 170 de linii), apoi verificare read-only (md5 RPC = `527c0e47…`, helper absent). Dacă `apply_migration` n-ar rula într-o tranzacție, `SET LOCAL` n-ar avea efect și rollback-ul ar refuza (fail-closed).
+- **`supabase/revenire/20261003c_sec_rsvti_poarta_jurnal_ROLLBACK.sql` = rollback TEHNIC (runda 3: mutat din `supabase/migrations/`).** Artefact de test / revenire excepțională, **fără GO de execuție** (verdict Copilot r2); `supabase/revenire/README.md` explică de ce niciun runner și niciun CI nu-l ating.
+  - Readuce exact starea de azi (RPC live verbatim cu `DEFAULT CURRENT_DATE`, politica veche, GRANT-urile, fără helper), deci **redeschide gaura**. O folosire în producție cere decizia explicită a lui Răzvan + review separat; armarea nu e autorizare.
+  - **Tranzacția:** fișierul nu are `BEGIN`/`COMMIT`; gestionarul e operatorul, cu un singur string: `BEGIN; SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), true); <fișierul> COMMIT;`.
+  - **Armare legată de tranzacție (runda 3):** valoarea trebuie să fie `'REDESCHIDE_GAURA_RSVTI:' || txid_current()`. O setare de sesiune rămasă, una dintr-o tranzacție anterioară sau eșuată poartă alt txid ⇒ refuz. Armarea persistentă (`pg_db_role_setting`, nume comparat cu `lower()`) e refuzată chiar lângă o armare validă. La final se dezarmează și sesiunea.
+  - **Precondiții:** starea = exact patch-ul r3 (RPC `6185a9dd…` + `DEFAULT NULL::date`, helper `a59aeb46…` + atribute + ACL, politica din patch singura de scriere). **Postcondiții:** RPC `527c0e47…` + `DEFAULT CURRENT_DATE`, helper absent, politica veche, RLS, privilegiile efective de azi. Un singur bloc DO; o dependență nouă de helper (S4) face DROP să eșueze.
+  - Harness-ul dovedește că desfacerea e curată (`pg_dump` identic cu starea live).
 - **Revenirea operațională păstrează poarta:**
   1. **Utilizator legitim refuzat** (`42501 Nu ai dreptul să confirmi viza RSVTI…`): dreptul se dă prin mecanismul existent (department HR/Administrativ sau `can_modify_employees`, setate de owner), **cu acordul lui Răzvan** (CLAUDE.md pct. 3). Dacă e nevoie de un drept doar pentru vize (de ex. operatorul RSVTI), trebuie un flag dedicat + o migrare nouă revizuită.
   2. **Dată legitimă refuzată** (`22023`):
-     - o dată în viitor sau înainte de 2000 e o greșeală de introducere;
-     - o dată înainte de emitere înseamnă că `data_emitere` din fișă e greșită (poate fi completată și de scannerul AI, `hr-autorizatii-scan`) sau, la „Reînnoiește”, că s-a introdus viza autorizației vechi (§8). Se corectează fișa din „Editează”, apoi se confirmă viza.
+     - se verifică **documentele** și **versiunea autorizației** (ex. la „Reînnoiește” s-a introdus viza autorizației vechi, §8);
+     - refuzul „data confirmării precede emiterea” **nu dovedește** că `data_emitere` e greșită (poate fi, inclusiv din scannerul AI `hr-autorizatii-scan`, dar se stabilește din documente). **Nu se modifică o dată reală doar ca să treacă validarea**; fișa se corectează numai dacă documentul arată altă dată;
+     - pragul 2000-01-01 e o regulă de business, nu o dovadă că orice dată anterioară e o greșeală; un caz real sub prag se discută.
   3. **Funcția e defectă:** se face `CREATE OR REPLACE` cu corecția, revizuit (GO Copilot). Nu se revine niciodată la varianta fără poartă.
 
 ## 7. Apply: preview → confirmare → apply → verificare
@@ -267,15 +270,25 @@ Rezultatele din 29.09:
   - rânduri pe fișe fără `data_emitere`: 2;
   - autorizații de externi cu viză: 0.
 
-**Pasul 2: confirmarea explicită a lui Răzvan**, pe exact acest fișier: sha256 `efdd64a01cd10fbe8bd5507cb8bc5cc29a88f544440e763a6bc639f1a68a98aa`, 281 de linii.
+**Pasul 1b (runda 3), tot read-only:** `SELECT relrowsecurity FROM pg_class WHERE oid='public.hr_autorizatii'::regclass` (așteptat `t`); pe `hr_autorizatii_write_authorized`, `qual IS NOT NULL AND with_check IS NOT NULL` (așteptat `t`); `SELECT count(*) FROM pg_proc WHERE proname='fn_poate_scrie_hr_autorizatii'` (așteptat 0); `pg_get_function_arguments` pe RPC = `… DEFAULT CURRENT_DATE …`.
 
-**Pasul 3:** un singur `apply_migration`, cu numele `sec_rsvti_poarta_jurnal` și conținutul exact al fișierului. Fără alte migrări, fără DML. Dacă o precondiție sau o postcondiție pică, nu se aplică nimic: tranzacția se anulează și se reanalizează.
+**Pasul 2: confirmarea explicită a lui Răzvan**, pe exact acest fișier: sha256 `5a355506f18505494f296dcd93a52a7df7450d8e47033c00b0cfe80393d0853b`, 415 linii.
 
-**Pasul 4: verificare read-only după apply.** Postcondițiile migrării verifică deja, în tranzacție, amprentele, politica și GRANT-urile. Citirea de după apply doar confirmă.
+**Pasul 3:** un singur `apply_migration`, cu numele `sec_rsvti_poarta_jurnal` și conținutul exact al fișierului. Fără alte migrări, fără DML. Fișierul e **singurul gestionar al tranzacției** (`BEGIN;` … postcondiții … `COMMIT;`). Comportamentul lui `apply_migration` nu se poate observa local, deci harness-ul emulează 3 runnere (pasul 6):
+- (a) `psql -X -v ON_ERROR_STOP=1 -f`: fișierul își deschide și își închide tranzacția; o eroare oprește psql, iar serverul anulează tot;
+- (b) un singur simple query: `BEGIN` deschide un bloc explicit; o eroare oprește mesajul, iar conexiunea închisă anulează tot;
+- (c) runner care își deschide tranzacția și înregistrează migrarea în același string (`BEGIN; <fișier>; INSERT INTO supabase_migrations.schema_migrations …; COMMIT;`): `BEGIN`-ul fișierului dă `WARNING: there is already a transaction in progress` și nu face nimic; **COMMIT-ul fișierului** comite tranzacția deschisă de runner (tot patch-ul); `INSERT`-ul runnerului rulează apoi într-o tranzacție implicită separată, iar `COMMIT`-ul runnerului dă `WARNING: there is no transaction in progress`. Deci patch-ul e atomic, dar înregistrarea e separată: dacă ea eșuează, patch-ul rămâne aplicat și neînregistrat (demonstrat, c-reg). Invers (înregistrat, dar neaplicat) nu se poate.
+- Cu erori injectate (`SELECT 1/0;` după prima înlocuire de funcție și, separat, în postcondiție), în toate trei funcțiile, politicile și ACL-urile rămân cele inițiale (`pg_dump` identic), iar migrarea nu apare înregistrată. Fără `ON_ERROR_STOP` (a0), fișierul rămâne atomic (`COMMIT` pe o tranzacție eșuată = `ROLLBACK`), dar psql iese cu 0; de aceea `ON_ERROR_STOP=1` e obligatoriu oriunde se folosește psql.
+- WARNING-urile de la (c) sunt așteptate și nu cer nicio acțiune. Dacă o precondiție sau o postcondiție pică, nu se aplică nimic: se reanalizează.
+
+**Pasul 4: verificare read-only imediat după apply.** Postcondițiile (înainte de COMMIT) verifică deja amprentele, semnătura, atributele, politica, privilegiile efective și ACL-ul funcțiilor. Citirea de după apply doar confirmă:
+- `SELECT version, name FROM supabase_migrations.schema_migrations WHERE name = 'sec_rsvti_poarta_jurnal'`: exact un rând. Dacă patch-ul e aplicat, dar neînregistrat (posibil doar în varianta c): **fără INSERT manual**; se raportează, iar reaplicarea fișierului e idempotentă (precondițiile acceptă starea patch-ului);
+- privilegiile efective: `has_function_privilege` / `has_table_privilege` / `has_any_column_privilege` pentru `public`, `anon`, `authenticated` (așteptat: EXECUTE doar `authenticated`; pe jurnal nimic de scris pentru `public`/`anon`, fără UPDATE/DELETE pentru `authenticated`);
+- **amprentele nu se actualizează automat.** Dacă pe PG17 o amprentă diferă, migrarea se oprește singură (fail-closed, nimic aplicat). Se compară definițiile (`pg_get_functiondef`, textul din `pg_policies`) PG16 ↔ PG17, iar revizia se actualizează doar după review; hash-ul găsit **nu** se adaugă automat în lista albă.
 - RPC:
-  - `md5(prosrc)` = `42e0528ed5af58c0cccc7b801aef4193`;
+  - `md5(prosrc)` = `6185a9ddf13a9e666368858decfa9611`;
   - ACL = `{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}`;
-  - `pg_get_function_arguments` neschimbat.
+  - `pg_get_function_arguments` = `p_autorizatie_id bigint, p_data_confirmare date DEFAULT NULL::date, p_observatii text DEFAULT NULL::text`.
 - Helper:
   - `md5(prosrc)` = `a59aeb46d5007222067276184a63aaa0`;
   - ACL = `{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}`;
@@ -365,3 +378,33 @@ Verdictul verificatorului adversarial pe revizia 1 (commit `300c2a2`): **CU_CORE
 - rollback-ul: sha256 `7311c5d5…39069f68`, 170 de linii.
 
 **Neaplicat din listă:** nimic. Punctele 5–7 sunt, conform cererii, doar documentate, ca decizii pentru Răzvan.
+
+## 12. Runda 3 (30.09): răspuns la NO-GO Copilot
+Verdictul Copilot pe runda 2 (`e707ba5`): **NO-GO pe revizie, GO pe direcție** (text integral: `SECURITATE_PATCH_RSVTI_VERDICT_COPILOT_R2.md`). Totul e local (PG16, `127.0.0.1:5482`). Nimic nu e aplicat în Supabase și nimic nu e commis.
+
+| Punct Copilot | Schimbare | Test | Rezultat (r3 / r2) |
+|---|---|---|---|
+| Data **omisă** folosea `DEFAULT CURRENT_DATE` (fusul sesiunii) | Semnătura are `DEFAULT NULL::date`; corpul rezolvă `coalesce(…, azi București)`. `CREATE OR REPLACE` o acceptă (același tip și număr de valori implicite; ACL păstrat) | Pasul 7: ceas fix `libfaketime` 2026-09-29 23:30 UTC, sesiuni `UTC` și `Etc/GMT+12` (data sesiunii 29.09 < București 30.09): data omisă și `NULL` ⇒ 30.09. În suită: P7 și P7-TZ cu data omisă, la orice oră | r3: 12/12 OK. **r2 pică**: „C1 sesiune UTC: data OMISĂ → înregistrat 2026-09-29” |
+| 0a nu era fail-closed pe NULL; RLS pe tabelul sursă neverificat | Toate comparațiile din pre/postcondiții trec pe `IS [NOT] DISTINCT FROM` (verificare statică: zero `<>`/`NOT IN`); 0a verifică `relrowsecurity` pe `hr_autorizatii` | 0b: politica sursă `ALL TO authenticated` fără USING/WITH CHECK, doar cu USING, `USING(true)` (control), RLS oprit pe `hr_autorizatii` | r3: REFUZATE, fără urme. **r2 TRECE** (fără USING/WITH CHECK; RLS oprit) |
+| Helperul existent putea fi suprascris | 0f: absent sau exact definiția aprobată (md5 corp + atribute + ACL, fără supraîncărcări), înainte de orice modificare | 0b: alt corp, supraîncărcare; 2b: alt corp, SECURITY INVOKER, EXECUTE pentru anon | r3: REFUZATE. **r2 TRECE** (suprascrie tacit) |
+| Atomicitatea nedemonstrată; un singur gestionar | `BEGIN;` … `COMMIT;` în fișier (verificare statică: prima/ultima instrucțiune, postcondiția înainte de COMMIT) | Pasul 6: runner (a) `psql -f` + ON_ERROR_STOP, (b) un singur query, (c) runner cu BEGIN propriu + înregistrare în `supabase_migrations.schema_migrations`, fiecare cu {fără eroare, `SELECT 1/0` după prima înlocuire de funcție, `SELECT 1/0` în postcondiție}; (a0) fără ON_ERROR_STOP; (c-reg) înregistrare eșuată | r3: 9/9 + a0 + c-reg conforme; la (c) WARNING-urile documentate (§7 pasul 3). **r2 cu runner (a): URME rămase** (helper/RPC comise); r2 cu (b)/(c): atomic (runnerul ține tranzacția) |
+| Postcondiția: atribute și privilegii efective | 4b atribute; 4d `has_*` pentru `public`/`anon`/`authenticated` (moștenire, coloane); 4e ACL exact pe funcții; 4a include semnătura | 0b: UPDATE pe coloană către PUBLIC; UPDATE pe coloană către authenticated rămas după REVOKE (variantă a fișierului); rol moștenit (WITH INHERIT TRUE) cu UPDATE pentru authenticated și cu EXECUTE pe RPC pentru anon; RPC cu alt proprietar | r3: toate REFUZATE de postcondiție, totul anulat. **r2 TRECE** la toate 5 (cea către authenticated e o variantă a fișierului: pe r2, postcondiția pe `relacl` nu vede coloanele) |
+| Notă de semantică | Un `GRANT … (coloană) TO authenticated` **dinainte** nu poate rămâne: `REVOKE UPDATE ON tabel` retrage și granturile pe coloane ale aceluiași rol (verificat). Rămân posibile cele prin PUBLIC sau prin roluri moștenite, iar acestea sunt testate | — | — |
+| Rollback-ul în afara migrărilor | Mutat în `supabase/revenire/` + README (niciun runner, CI referă doar fișiere anume). Fișier fără BEGIN/COMMIT, string-ul operatorului | Pasul S (static) | r3: absent din `supabase/migrations`. r2: prezent |
+| Armarea nu dovedea SET LOCAL | Armare legată de `txid_current()`; refuz pentru armare persistentă (`pg_db_role_setting`, `lower()`); dezarmare finală | 3a: 13 refuzuri (fără armare, altă valoare, stil r2, alt txid, comutator Ofertare, persistent pe bază, persistent pe rol cu majuscule, precondiții, S4). 3s, **o singură sesiune psql**: SET de sesiune preexistent; set_config de sesiune cu txid vechi; armare validă (locală + de sesiune) + eroare în fișier + ROLLBACK, apoi reluare fără armare nouă. Pasul 5: dezarmarea sesiunii | r3: toate REFUZATE, sesiunea dezarmată. **r2 EXECUTĂ** rollback-ul cu SET de sesiune preexistent și cu armare persistentă. Reluarea după eșec e refuzată și de r2 (SET LOCAL se anulează), deci acolo testul nu discriminează |
+| Coerență cu #537 (NULL în poartă) | RPC: `fn_poate_scrie_hr_autorizatii() IS NOT TRUE` ⇒ 42501 | P4-NULL: helper care întoarce NULL | r3: 42501. **r2 TRECE** (poarta ocolită) |
+| Procedura operațională și formulările | §6 și antetul rollback-ului: „precedă emiterea” nu dovedește că `data_emitere` e greșită, nu se modifică o dată reală; pragul 2000-01-01 e regulă de business; consemnarea „INSERT direct restrâns…” (antet); P1b, cascada și suprascrierea retroactivă OPEN, P1b pas următor prioritar; amprentele nu intră automat în lista albă (§7 pasul 4) | — | — |
+
+**Rezultat harness:** `bash scripts/test_sec_rsvti.sh` cu `PGDATA_TEST=/tmp/pg_sec_rsvti_r3/data PGPORT_TEST=5482`, rulat de două ori: **393 de aserțiuni OK + 65 de verificări negative/fără urme/statice, exit 0** de fiecare dată.
+
+**Mutanți pe fișierele noi** (harness-ul complet cu `MIGRARE_FISIER` / `ROLLBACK_FISIER`): **19/19 prinși**.
+- Migrare:
+  - fără RLS pe sursă, 0a ne-NULL-safe, fără 0f, 0f fără ACL, 0f fără atribute, fără 4b, fără 4d, 4d fără coloane → fiecare cade la scenariul lui;
+  - fără BEGIN/COMMIT → pasul S;
+  - `DEFAULT CURRENT_DATE` → postcondiția 4a oprește migrarea. Fără verificarea semnăturii din 4a → P1 (semnătură); comportamental, testul cu ceas pică pe r2 (tabelul de mai sus);
+  - poarta `NOT` în loc de `IS NOT TRUE` → 4a (md5); comportamental, P4-NULL pe r2.
+- Rollback: armare fără txid, fără refuzul persistenței, nume fără `lower()`, fără dezarmare, fără precondiția RPC / helper / politică → fiecare cade la scenariul lui.
+
+**Amprente r3 (PG16):** RPC `md5(prosrc)` = `6185a9ddf13a9e666368858decfa9611` (r2 `42e0528e…`, neaplicat); helper `a59aeb46d5007222067276184a63aaa0` (neschimbat); politica jurnalului `md5(with_check)` = `780014ba883836d16ffb7a014c7430c6` (neschimbat); migrarea sha256 `5a355506f18505494f296dcd93a52a7df7450d8e47033c00b0cfe80393d0853b` (415 linii); rollback-ul sha256 `795ea5a0793c0eec0dcee5d8b1ab4a63ba2b63ea6fea5764977a591b6a6c5e2a` (234 de linii).
+
+**Limite:** comportamentul exact al `apply_migration` nu se poate observa local (de aceea cele 3 emulări). Deparse-ul PG17 al `DEFAULT NULL::date` și al politicii e presupus identic; dacă diferă, migrarea se oprește singură (§7 pasul 4). Testele de discriminare și mutanții rulează din scripturi scratch (nu în repo), pe același cluster.
