@@ -55,3 +55,4 @@ Conturi ↔ angajați: (1) legare automată profil→angajat la crearea contului
 | 29.09 | 1 | #529 audit UX PT | QW GO cu condiții; Workspace V2 GO direcție, HOLD producție; confirmare în bloc NO-GO | TO-BE rescris |
 | 29.09 | 1 | #530 QW0 fals verde | GO cod + test paritate NULL obligatoriu | test adăugat (36 combinații, JS = Postgres); merge după 02.10 |
 | 29.09 | 2 | Preluare context | „Context preluat.” fără neconcordanțe | test de coerență trimis |
+| 29.09 | 2 | Test coerență (3 întrebări) | Trecut: #530 NU primul (GO cod ≠ GO merge; ordinea J04→P2→J07→#530 rămâne); R2 — risc „contract închis dar alt contract activ” → gardă server-side atomică + test, owner exclus; 280 cerințe NU în bloc (AI candidate ≠ human verified) | garda „alt contract activ” de verificat în R2 înainte de GO |
