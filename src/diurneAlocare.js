@@ -89,6 +89,9 @@ export function valideazaIntrariDiurne({ df, dt, legalSet, diurnaAmt }) {
  *     conform aceleiași alocări — se compară cu ce s-a salvat efectiv în tranșele anterioare (reconciliere)
  *   - deVerificat = zilele (ISO) din TRANȘĂ cu CO ȘI diurnă bifată simultan — nu se rezolvă automat
  *   - deVerificatAnterior = aceleași conflicte în lunile tranșei, ANTERIOARE tranșei (influențează C și B)
+ *   - deVerificatUlterior = aceleași conflicte în lunile tranșei, DUPĂ dt (ex. tranșa 01–25.09, CO+diurnă pe
+ *     30.09): ziua de CO scade C (plafonul lunii) și deci afectează tranșa curentă, deși nu e în ea — se
+ *     semnalează, nu se rezolvă automat
  * @throws Error la intrări invalide (vezi valideazaIntrariDiurne)
  */
 export function alocaDiurneTransa({ recsLuna, df, dt, legalSet, diurnaAmt }) {
@@ -110,7 +113,7 @@ export function alocaDiurneTransa({ recsLuna, df, dt, legalSet, diurnaAmt }) {
 
   const out = new Map()
   for (const [empId, e] of perEmp) {
-    const res = { zileDiurna: 0, zileSalariu: 0, sumaDiurna: 0, sumaSalariu: 0, C: 0, B: 0, N: 0, sumaDiurnaAnterior: 0, deVerificat: [], deVerificatAnterior: [], segmente: [] }
+    const res = { zileDiurna: 0, zileSalariu: 0, sumaDiurna: 0, sumaSalariu: 0, C: 0, B: 0, N: 0, sumaDiurnaAnterior: 0, deVerificat: [], deVerificatAnterior: [], deVerificatUlterior: [], segmente: [] }
     for (const s of segs) {
       const luna = lunaDin(s.df), zl = zileLucr(luna)
       let coLucr = 0
@@ -121,6 +124,7 @@ export function alocaDiurneTransa({ recsLuna, df, dt, legalSet, diurnaAmt }) {
         if (lunaDin(d) !== luna) continue
         if (d < s.df) { B++; if (e.co.has(d)) res.deVerificatAnterior.push(d) }
         else if (d <= s.dt) { N++; if (e.co.has(d)) res.deVerificat.push(d) }
+        else if (e.co.has(d)) res.deVerificatUlterior.push(d)   // după tranșă, în aceeași lună: nu consumă, dar CO-ul scade C
       }
       const zileDiurna = Math.min(C, B + N) - Math.min(C, B)
       const zileSalariu = N - zileDiurna
@@ -131,72 +135,143 @@ export function alocaDiurneTransa({ recsLuna, df, dt, legalSet, diurnaAmt }) {
     }
     res.sumaDiurna = res.zileDiurna * amt
     res.sumaSalariu = res.zileSalariu * amt
-    res.deVerificat.sort(); res.deVerificatAnterior.sort()
-    if (res.N > 0 || res.B > 0) out.set(empId, res)
+    res.deVerificat.sort(); res.deVerificatAnterior.sort(); res.deVerificatUlterior.sort()
+    if (res.N > 0 || res.B > 0 || res.deVerificatUlterior.length) out.set(empId, res)
   }
   return out
 }
 
 /**
- * Reconciliere: cât s-a ÎNREGISTRAT efectiv (diurna_payment_details) în plățile salvate anterior tranșei,
- * atribuit lunilor tranșei [df, dt]. Se compară cu sumaDiurnaAnterior (recalculat).
- * @param {Array} p.plati  diurna_payments cu period_to < df, cu diurna_payment_details[{employee_id, amount}]
- *   - plată într-o singură lună → suma înregistrată intră întreagă în luna ei (dacă e printre lunile tranșei)
- *   - plată peste 1 ale lunii (ex. 26.09–02.10) → se recalculează cu aceeași formulă pe segmente și fiecare
- *     lună primește partea ei; diferența față de suma înregistrată (dacă există) rămâne în luna în care a
- *     început plata. Așa, la tranșa următoare din octombrie, cei X lei din 01–02.10 sunt ai lunii octombrie.
- *     recsLuna trebuie să acopere și lunile acelor plăți (snapshotul se extinde de la prima plată reconciliată).
- * @returns {Map<employee_id, number>} suma înregistrată atribuită lunilor tranșei
+ * Reconciliere: ce s-a ÎNREGISTRAT efectiv (diurna_payment_details, la momentul salvării) în plățile
+ * anterioare tranșei vs ce ar ieși ACUM din pontaj cu aceeași formulă. Cele trei mărimi sunt ținute STRICT separat:
+ *   (a) înregistrat  — suma salvată per plată/angajat (istoric; NU se recalculează, NU se schimbă când se
+ *                      modifică ulterior CO/pontaj/tarif). diurna_payment_details are DOAR total per plată
+ *                      (employee_id, days, amount) — nu are defalcare pe luni. De aceea, la o plată peste 1 ale
+ *                      lunii (ex. 26.09–02.10) partea înregistrată a fiecărei luni este NEDETERMINATĂ — nu se
+ *                      reconstruiește din recalcul și nu se atribuie prin convenție lunii de start.
+ *                      Excepție verificabilă: dacă rândul de detaliu poartă `amount_luni` ({ 'YYYY-MM': lei })
+ *                      a cărui sumă == amount, defalcarea salvată se folosește ca atare.
+ *   (b) recalculat   — aceeași plată, recalculată acum din recsLuna cu formula comună (per lună și total)
+ *   (c) diferența    — (a) − (b), pe TOATĂ plata (mereu determinabilă când (a) e validă)
+ * Sumă înregistrată nenumerică ('abc', null) → plata e marcată INVALIDĂ (nu se tratează ca 0).
+ *
+ * @param {Array} p.plati  diurna_payments cu period_to < df, cu diurna_payment_details[{employee_id, amount, amount_luni?}]
+ *   recsLuna trebuie să acopere și lunile acelor plăți (snapshotul se extinde de la prima plată reconciliată).
+ * @returns {Map<employee_id, {
+ *   inregistratLuni: number|null,  // (a) atribuit lunilor tranșei — null dacă e nedeterminat sau invalid
+ *   nedeterminat: boolean,          // ≥1 plată peste 1 ale lunii fără defalcare salvată
+ *   invalid: boolean,               // ≥1 sumă înregistrată nenumerică
+ *   inregistratTotal: number|null,  // (a) pe toate plățile reconciliate (întregi) — null dacă invalid
+ *   recalculatTotal: number,        // (b) pe aceleași plăți (întregi)
+ *   diferentaTotal: number|null,    // (c) = inregistratTotal − recalculatTotal — null dacă invalid
+ *   plati: [{ id, period_from, period_to, inregistrat, recalculat, diferenta, invalid, nedeterminat, luni:{'YYYY-MM':{inregistrat|null, recalculat}} }]
+ * }>}
  */
 export function platitAnteriorPeLuni({ plati, recsLuna, df, dt, legalSet, diurnaAmt }) {
   const amt = valideazaIntrariDiurne({ df, dt, legalSet, diurnaAmt })
   const luniTransa = new Set(segmenteLunare(df, dt).map(s => lunaDin(s.df)))
   const out = new Map()
-  const add = (id, v) => out.set(id, (out.get(id) || 0) + v)
+  const rec = id => { let r = out.get(id); if (!r) { r = { inregistratLuni: 0, nedeterminat: false, invalid: false, inregistratTotal: 0, recalculatTotal: 0, diferentaTotal: 0, plati: [] }; out.set(id, r) } return r }
+  const numar = v => (typeof v === 'number' && Number.isFinite(v)) ? v : (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null)
   for (const p of plati || []) {
-    if (!p || !esteDataValida(p.period_from) || !esteDataValida(p.period_to) || p.period_to >= df) continue
+    if (!p || !esteDataValida(p.period_from) || !esteDataValida(p.period_to) || p.period_from > p.period_to || p.period_to >= df) continue
     const det = p.diurna_payment_details || []
     const segs = segmenteLunare(p.period_from, p.period_to)
-    if (segs.length === 1) {
-      if (!luniTransa.has(lunaDin(p.period_from))) continue
-      for (const d of det) add(d.employee_id, Number(d.amount) || 0)
-      continue
-    }
+    const luniPlata = segs.map(s => lunaDin(s.df))
+    if (!luniPlata.some(l => luniTransa.has(l))) continue   // plata nu atinge nicio lună a tranșei
+    // (b) recalculul plății, acum, cu formula comună — pe segmente lunare
     const aloc = alocaDiurneTransa({ recsLuna, df: p.period_from, dt: p.period_to, legalSet, diurnaAmt: amt })
-    const lunaStart = lunaDin(p.period_from)
     for (const d of det) {
-      const inregistrat = Number(d.amount) || 0
+      const r = rec(d.employee_id)
       const a = aloc.get(d.employee_id)
-      const recalcTotal = a ? a.sumaDiurna : 0
-      const dif = inregistrat - recalcTotal
-      for (const s of segs) {
-        const luna = lunaDin(s.df)
-        if (!luniTransa.has(luna)) continue
-        const seg = a ? a.segmente.find(x => x.luna === luna) : null
-        add(d.employee_id, (seg ? seg.zileDiurna * amt : 0) + (luna === lunaStart ? dif : 0))
+      const inregistrat = numar(d.amount)
+      const recalculat = a ? a.sumaDiurna : 0
+      const luni = {}
+      for (const l of luniPlata) luni[l] = { inregistrat: null, recalculat: a ? ((a.segmente.find(x => x.luna === l) || {}).zileDiurna || 0) * amt : 0 }
+      const pl = { id: p.id, period_from: p.period_from, period_to: p.period_to, inregistrat, recalculat, diferenta: inregistrat === null ? null : inregistrat - recalculat, invalid: inregistrat === null, nedeterminat: false, luni }
+      if (inregistrat === null) {
+        r.invalid = true
+      } else if (luniPlata.length === 1) {
+        luni[luniPlata[0]].inregistrat = inregistrat            // o singură lună → totalul e al ei
+      } else {
+        // defalcare SALVATĂ, verificabilă (suma părților == total) — altfel nedeterminat
+        const al = d.amount_luni && typeof d.amount_luni === 'object' ? d.amount_luni : null
+        const parti = al ? luniPlata.map(l => numar(al[l])) : null
+        if (parti && parti.every(v => v !== null) && Math.abs(parti.reduce((s, v) => s + v, 0) - inregistrat) < 0.005) luniPlata.forEach((l, i) => { luni[l].inregistrat = parti[i] })
+        else pl.nedeterminat = true
       }
+      r.plati.push(pl)
+      r.recalculatTotal += recalculat            // (b) e independent de validitatea lui (a)
+      if (pl.invalid) continue
+      r.inregistratTotal += inregistrat
+      if (pl.nedeterminat) r.nedeterminat = true
+      else for (const l of luniPlata) if (luniTransa.has(l)) r.inregistratLuni += luni[l].inregistrat
     }
+  }
+  for (const r of out.values()) {
+    if (r.invalid) { r.inregistratLuni = null; r.inregistratTotal = null; r.diferentaTotal = null; continue }
+    r.diferentaTotal = r.inregistratTotal - r.recalculatTotal
+    if (r.nedeterminat) r.inregistratLuni = null
   }
   return out
 }
 
+/**
+ * Coloana „Diferență între suma înregistrată și suma recalculată" din export, pentru un angajat.
+ * @param rec  intrarea din platitAnteriorPeLuni (sau undefined = nicio plată anterioară reconciliată)
+ * @param sumaDiurnaAnterior  Σ min(C,B) × tarif din alocarea curentă (cât ar trebui plătit înainte de tranșă)
+ * @returns {{ valoare: number|null, text: string }}
+ *   - determinat: valoare = înregistrat (atribuit lunilor tranșei) − sumaDiurnaAnterior; text = '' dacă 0
+ *   - nedeterminat (plată peste 1 ale lunii fără defalcare) / invalid: valoare = null, text explică și arată
+ *     diferența pe TOATĂ plata (înregistrat − recalculat), care rămâne mereu vizibilă
+ */
+export function diferentaInregistratRecalculat(rec, sumaDiurnaAnterior) {
+  if (!rec) return { valoare: 0 - (sumaDiurnaAnterior || 0), text: '' }
+  const fmtP = p => `${p.period_from.slice(8, 10)}.${p.period_from.slice(5, 7)}–${p.period_to.slice(8, 10)}.${p.period_to.slice(5, 7)}`
+  if (rec.invalid) {
+    const inv = rec.plati.filter(p => p.invalid).map(p => `plata #${p.id} (${fmtP(p)})`).join(', ')
+    return { valoare: null, text: `INVALID: sumă înregistrată nenumerică în ${inv} — se verifică în Istoric` }
+  }
+  if (rec.nedeterminat) {
+    const ned = rec.plati.filter(p => p.nedeterminat).map(p => `${fmtP(p)}: înregistrat ${p.inregistrat} / recalculat ${p.recalculat} (dif. ${p.diferenta > 0 ? '+' : ''}${p.diferenta})`).join('; ')
+    return { valoare: null, text: `nedeterminat pe lună (plată peste 1 ale lunii, fără defalcare salvată) — pe toată plata: ${ned}` }
+  }
+  const v = rec.inregistratLuni - (sumaDiurnaAnterior || 0)
+  return { valoare: v, text: v !== 0 ? `${v > 0 ? '+' : ''}${v}` : '' }
+}
+
 // ════════════════════════════════════════════════════════════════
 // incarcaSnapshotDiurne — citirea COMUNĂ a intrărilor pentru cele trei fluxuri (export Excel, savePayment, BT).
-// Orice citire eșuată (employees, pontaj_records paginat, calendar_days, settings) sau paginare oprită la
-// limită → throw; apelantul afișează toast și OPREȘTE operația (nu continuă cu []).
+// Orice citire eșuată (employees, pontaj_records paginat, calendar_days, settings), paginare peste limită sau
+// snapshot INCOMPLET (numărul de rânduri citite ≠ count din BD) → throw; apelantul afișează toast și OPREȘTE
+// operația (nu continuă cu []).
 // Snapshotul e pe LUNILE ÎNTREGI atinse de tranșă (nu doar df→dt): fără bifele și CO-ul de dinaintea
 // tranșei, C și B ar ieși greșit (vezi testul „snapshot limitat la tranșă").
+// Scopul pe șantiere — contract explicit (fără „array gol = fără restricție"):
+//   scopGlobal: true            → toți angajații eligibili (admin/owner/contabilitate); siteIds trebuie să lipsească
+//   siteIds: [..]  (fără scopGlobal) → EXACT acele șantiere; [] → throw „niciun șantier permis"
+//   niciunul                    → throw (apelantul trebuie să spună explicit ce vrea)
+// Restricția pe șantier se aplică DOAR la lista de angajați; pontajul lor se citește de pe TOATE șantierele
+// (consumul lunar B și CO-ul contează indiferent unde a fost bifată ziua).
 // @param {object} o
 //   df, dt        tranșa
-//   siteIds       (opțional) restricție pe șantiere pentru non-admin
-//   recsSelect    (opțional) coloanele din pontaj_records (implicit doar cele necesare alocării)
+//   scopGlobal    true = fără restricție pe șantiere (explicit)
+//   siteIds       array de site_id permise (non-admin)
+//   recsSelect    (opțional) coloanele din pontaj_records (implicit doar cele necesare alocării + id)
 //   extindeDeLa   (opțional) ISO — snapshotul începe de la luna acestei date (reconciliere plăți peste 1 ale lunii)
 // ════════════════════════════════════════════════════════════════
 export const LIMITA_PAGINARE = 200000
-export async function incarcaSnapshotDiurne(supabase, { df, dt, siteIds = null, recsSelect = 'employee_id,date,diurna,norma', extindeDeLa = null } = {}) {
+export const PAGINA_PONTAJ = 1000
+export async function incarcaSnapshotDiurne(supabase, { df, dt, siteIds, scopGlobal = false, recsSelect = 'id,employee_id,date,diurna,norma', extindeDeLa = null } = {}) {
   if (!supabase) throw new Error('Client Supabase lipsă')
   if (!esteDataValida(df) || !esteDataValida(dt)) throw new Error(`Interval invalid: de la „${String(df)}" până la „${String(dt)}"`)
   if (df > dt) throw new Error(`Interval inversat: de la ${df} până la ${dt}`)
+  if (scopGlobal === true) {
+    if (siteIds !== undefined && siteIds !== null) throw new Error('Scop ambiguu: scopGlobal împreună cu siteIds — alege unul')
+  } else {
+    if (!Array.isArray(siteIds)) throw new Error('Scopul pe șantiere lipsește: apelantul trebuie să dea siteIds (array) sau scopGlobal: true')
+    if (siteIds.length === 0) throw new Error('Niciun șantier permis pentru utilizatorul curent — operația se oprește')
+  }
   const monthStart = inceputLuna(extindeDeLa && extindeDeLa < df ? extindeDeLa : df), monthEnd = sfarsitLuna(dt)
   const monthStartTransa = inceputLuna(df)
 
@@ -205,32 +280,42 @@ export async function incarcaSnapshotDiurne(supabase, { df, dt, siteIds = null, 
   const sAmt = (st || []).find(x => x.key === 'diurna_amount')
   if (!sAmt) throw new Error('Setarea „diurna_amount" lipsește')
   const diurnaAmt = valideazaIntrariDiurne({ df, dt, legalSet: new Set(), diurnaAmt: sAmt.value })
+  const sIban = (st || []).find(x => x.key === 'iban_firma')
 
   const { data: calData, error: eCal } = await supabase.from('calendar_days').select('date,type,description').gte('date', monthStart).lte('date', monthEnd)
   if (eCal) throw new Error('Nu s-a putut citi calendarul: ' + (eCal.message || eCal))
   const legalSet = new Set((calData || []).filter(d => d.type === 'legal').map(d => d.date))
 
   // Eligibili: activii + cei cu încetare de la începutul lunii tranșei încolo (au zile bifate înainte de plecare)
-  let eq = supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStartTransa}`).order('name')
-  if (Array.isArray(siteIds) && siteIds.length > 0) eq = eq.in('site_id', siteIds)
+  let eq = supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStartTransa}`).order('name').order('id')
+  if (scopGlobal !== true) eq = eq.in('site_id', siteIds)
   const { data: emps, error: eEmp } = await eq
   if (eEmp) throw new Error('Nu s-au putut citi angajații: ' + (eEmp.message || eEmp))
   const empIds = (emps || []).map(e => e.id)
 
   const recs = []
   if (empIds.length) {
+    // Paginare deterministă: ordonare pe cheie unică (employee_id, date, id), pagină de mărime explicită;
+    // se continuă până la pagină goală sau mai scurtă decât cea cerută; totalul se verifică față de limită
+    // ÎNAINTE de return și față de count-ul din BD (completitudine).
+    const filtre = q => q.gte('date', monthStart).lte('date', monthEnd).in('employee_id', empIds)
     let off = 0
     while (true) {
-      const { data: p, error: eRec } = await supabase.from('pontaj_records').select(recsSelect).gte('date', monthStart).lte('date', monthEnd).in('employee_id', empIds).range(off, off + 999)
+      const { data: p, error: eRec } = await filtre(supabase.from('pontaj_records').select(recsSelect)).order('employee_id').order('date').order('id').range(off, off + PAGINA_PONTAJ - 1)
       if (eRec) throw new Error('Nu s-a putut citi pontajul: ' + (eRec.message || eRec))
       if (!p || p.length === 0) break
       recs.push(...p)
-      if (p.length < 1000) break
-      off += 1000
-      if (off > LIMITA_PAGINARE) throw new Error(`Pontajul depășește limita de paginare (${LIMITA_PAGINARE} rânduri) — operația se oprește`)
+      if (recs.length > LIMITA_PAGINARE) throw new Error(`Pontajul depășește limita de paginare (${LIMITA_PAGINARE} rânduri) — operația se oprește`)
+      if (p.length < PAGINA_PONTAJ) break
+      off += PAGINA_PONTAJ
     }
+    const { count, error: eCnt } = await filtre(supabase.from('pontaj_records').select('*', { count: 'exact', head: true }))
+    if (eCnt) throw new Error('Nu s-a putut verifica completitudinea pontajului: ' + (eCnt.message || eCnt))
+    if (typeof count !== 'number') throw new Error('Nu s-a putut verifica completitudinea pontajului: count lipsă')
+    if (count !== recs.length) throw new Error(`Snapshot incomplet: ${recs.length} rânduri citite din ${count} în BD — operația se oprește`)
+    if (count > LIMITA_PAGINARE) throw new Error(`Pontajul depășește limita de paginare (${LIMITA_PAGINARE} rânduri) — operația se oprește`)
   }
-  return { df, dt, monthStart, monthEnd, monthStartTransa, diurnaAmt, legalSet, calData: calData || [], emps: emps || [], recs }
+  return { df, dt, monthStart, monthEnd, monthStartTransa, diurnaAmt, ibanFirma: sIban ? sIban.value : null, legalSet, calData: calData || [], emps: emps || [], recs, completitudine: { citite: recs.length, inBD: recs.length } }
 }
 
 // Alocarea direct dintr-un snapshot (aceleași intrări → aceleași sume în toate cele trei fluxuri)
@@ -241,13 +326,14 @@ export function alocaDinSnapshot(snap) {
 // Rezumat pentru confirmarea de salvare (savePayment): ce se va salva efectiv, recalculat din BD acum
 export function rezumatAlocare(alocare, emps) {
   const ids = emps ? new Set(emps.map(e => e.id)) : null
-  const r = { angajati: 0, zileDiurna: 0, sumaDiurna: 0, sumaSalariu: 0, conflicte: 0, conflicteAnterior: 0 }
+  const r = { angajati: 0, zileDiurna: 0, sumaDiurna: 0, sumaSalariu: 0, conflicte: 0, conflicteAnterior: 0, conflicteUlterior: 0 }
   for (const [id, a] of alocare) {
     if (ids && !ids.has(id)) continue
     if (a.N === 0) continue
     r.angajati++; r.zileDiurna += a.zileDiurna; r.sumaDiurna += a.sumaDiurna; r.sumaSalariu += a.sumaSalariu
     if (a.deVerificat.length) r.conflicte++
     if (a.deVerificatAnterior.length) r.conflicteAnterior++
+    if (a.deVerificatUlterior.length) r.conflicteUlterior++
   }
   return r
 }
