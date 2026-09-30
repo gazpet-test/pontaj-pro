@@ -185,6 +185,14 @@ try {
   refuz('mutant: GRANT authenticated TO service_role (EXECUTE efectiv prin membership) → postcondiția pică', `GRANT authenticated TO service_role;`, `REVOKE authenticated FROM service_role;`, /EXECUTE efectiv/)
   refuz('mutant: anon membru în authenticated → refuz (pre pe helper sau post EXECUTE efectiv)', `GRANT authenticated TO anon;`, `REVOKE authenticated FROM anon;`, /REFUZ J02b pre|EXECUTE efectiv/)
   refuz('mutant: EXECUTE către rol intermediar al cărui membru e service_role (default privileges) → postcondiția pică', `CREATE ROLE rpc_exec NOLOGIN; GRANT rpc_exec TO service_role; ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO rpc_exec;`, `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM rpc_exec; REVOKE rpc_exec FROM service_role; DROP ROLE rpc_exec;`, /J02b post/)
+  // Copilot (neblocant): graful SET ROLE. ACL-ul brut e verificat exact, deci EXECUTE-ul unui rol străin poate veni doar prin
+  // moștenire: rol intermediar NOINHERIT care moștenește explicit authenticated (⇒ are EXECUTE), iar service_role e membru în
+  // el WITH INHERIT FALSE, SET TRUE ⇒ has_function_privilege('service_role', …) rămâne false (verificarea veche trece), dar
+  // SET ROLE rpc_set dă EXECUTE → postcondiția nouă pică
+  refuz('mutant: rol intermediar NOINHERIT cu EXECUTE (via authenticated), service_role membru WITH SET fără INHERIT → postcondiția pică (graful SET ROLE)', `CREATE ROLE rpc_set NOLOGIN NOINHERIT; GRANT authenticated TO rpc_set WITH INHERIT TRUE; GRANT rpc_set TO service_role WITH INHERIT FALSE, SET TRUE;`, `REVOKE rpc_set FROM service_role; REVOKE authenticated FROM rpc_set; DROP ROLE rpc_set;`, /J02b post: service_role poate face SET ROLE (rpc_set|authenticated) \(SET\)/)
+  refuz('mutant: lanț anon → intermediar (doar SET) → rol cu EXECUTE (via authenticated) → postcondiția pică', `CREATE ROLE rpc_lant NOLOGIN NOINHERIT; GRANT authenticated TO rpc_lant WITH INHERIT TRUE; CREATE ROLE rpc_pas NOLOGIN NOINHERIT; GRANT rpc_lant TO rpc_pas WITH INHERIT FALSE, SET TRUE; GRANT rpc_pas TO anon WITH INHERIT FALSE, SET TRUE;`, `REVOKE rpc_pas FROM anon; REVOKE rpc_lant FROM rpc_pas; REVOKE authenticated FROM rpc_lant; DROP ROLE rpc_pas; DROP ROLE rpc_lant;`, /J02b post: anon poate face SET ROLE (rpc_pas|rpc_lant|authenticated) \(SET\)/)
+  // control (fără fals pozitiv): rol cu EXECUTE în care service_role e membru dar FĂRĂ SET și fără INHERIT — rămâne la livrarea din secțiunea 5
+  q(`CREATE ROLE rpc_fara_set NOLOGIN NOINHERIT; GRANT authenticated TO rpc_fara_set WITH INHERIT TRUE; GRANT rpc_fara_set TO service_role WITH INHERIT FALSE, SET FALSE;`)
   check('după drift-uri: amprentele sunt din nou cele live', md5Gate() === MD5_GATE_LIVE && q(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_are_acces_ofertare()'::regprocedure`) === MD5_HELPER)
 
   console.log('4. Testul SQL (același fișier ca pe clonă), fixture determinist 103 — BEGIN…ROLLBACK')
@@ -203,6 +211,7 @@ try {
   console.log('5. Livrare + ACL (postcondiția cerută de Copilot, verificată independent)')
   const r = livrare()
   check('livrarea prin gardă trece', r.ok, r.out.slice(0, 400))
+  check('control graf SET ROLE: rol cu EXECUTE în care service_role NU poate intra cu SET → nu blochează livrarea', r.ok && q(`SELECT has_function_privilege('rpc_fara_set', 'public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)', 'EXECUTE') AND NOT pg_has_role('service_role', 'rpc_fara_set', 'SET')`) === 't')
   check(`fn_gate_depunere nouă md5 = ${MD5_GATE_NOU}`, md5Gate() === MD5_GATE_NOU)
   check('după migrare: trigger identic cu live (md5 35e7d6a7…, O)', trigDef() === TRIG_LIVE + '|35e7d6a7f7d488556be1df754c26124f|O')
   const efectiv = rol => q(`SET ROLE ${rol}; SELECT has_function_privilege('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)', 'EXECUTE')::text || ',' || has_function_privilege('public.ofertare_revoca_neaplicabil(bigint,text)', 'EXECUTE')::text; RESET ROLE;`)

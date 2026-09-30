@@ -469,7 +469,7 @@ END $view$;
 -- 11. Postcondiții
 -- ---------------------------------------------------------------------------
 DO $post$
-DECLARE v_src text; v_def text; v_cnt int; r record; v_acl text; v_sp text;
+DECLARE v_src text; v_def text; v_cnt int; r record; v_acl text; v_sp text; v_opt text;
 BEGIN
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure('public.fn_gate_depunere()');
   IF position('(a.status = ''nu_se_aplica''' || chr(10) IN v_src) > 0 OR position('fn_ofertare_cerinta_na_confirmata(c.id, ''nu_se_aplica'')' IN v_src) = 0 THEN
@@ -517,6 +517,16 @@ BEGIN
        OR has_function_privilege('service_role', r.sig, 'EXECUTE') THEN
       RAISE EXCEPTION 'J02b post: EXECUTE efectiv pe % ≠ {authenticated} (anon/service_role îl au direct sau prin membership)', r.sig;
     END IF;
+  END LOOP;
+  -- graful SET ROLE (Copilot, neblocant): has_function_privilege urmează doar moștenirea (INHERIT); un rol NOINHERIT cu EXECUTE,
+  -- în care service_role / anon pot intra cu SET ROLE (direct sau în lanț), ar da tot EXECUTE. Orice rol R ≠ baza, atins cu
+  -- SET (PG16+: opțiunea SET a membership-ului; mai vechi: MEMBER), NU are voie să aibă EXECUTE pe RPC-urile umane.
+  v_opt := CASE WHEN current_setting('server_version_num')::int >= 160000 THEN 'SET' ELSE 'MEMBER' END;
+  FOR r IN SELECT s.sig, b.baza, g.rolname
+             FROM (VALUES ('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)'), ('public.ofertare_revoca_neaplicabil(bigint,text)')) AS s(sig),
+                  unnest(ARRAY['service_role','anon']) AS b(baza), pg_catalog.pg_roles g
+            WHERE g.rolname <> b.baza AND pg_has_role(b.baza, g.oid, v_opt) AND has_function_privilege(g.oid, to_regprocedure(s.sig), 'EXECUTE') LOOP
+    RAISE EXCEPTION 'J02b post: % poate face SET ROLE % (%), care are EXECUTE pe % — RPC-ul uman ar fi apelabil de %', r.baza, r.rolname, v_opt, r.sig, r.baza;
   END LOOP;
   -- triggerul porții: aceeași amprentă exactă ca înainte
   v_sp := current_setting('search_path');
