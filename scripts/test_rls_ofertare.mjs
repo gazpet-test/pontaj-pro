@@ -5,6 +5,8 @@
 // Dovedește: anon refuzat; cont logat fără modul refuzat (grupul A citire+scriere, grupul B scriere);
 // cont cu modulul „ofertare” permis; owner permis; md5 stare live reconstruită = cel citit pe 30.09;
 // migrarea refuză fără gardă / pe live schimbat / a doua oară; rollback-ul reface exact starea live.
+// Runda 2: amprenta exactă a helper-ului + overload-uri, ACL pe coloane, anon 8 privilegii, authenticated neatins,
+// compunerea cu SEC F1 (#551) în ambele ordini; rollback-ul nu reintroduce TRUNCATE peste F1.
 import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -21,8 +23,15 @@ const LIVE = readFileSync(join(ROOT, 'supabase/tests/rls_ofertare_live_state.sql
 const md5 = (re, s) => s.match(re)[1]
 const MD5_LIVE = md5(/≠ ([0-9a-f]{32})\). Se reface/, MIG)
 const MD5_PATCH = md5(/≠ starea patch-ului (\w+)'/, MIG)
-const A = ['oferta_materiale','ofertare_calibrari','ofertare_calibrari_subcontractori','ofertare_oferte_deschidere','ofertare_oferte_furnizori','ofertare_preturi_materiale','ofertare_preturi_unitare','ofertare_rfq','ofertare_rfq_destinatari','ofertare_rfq_materiale','ofertare_rfq_oferte','ofertare_rfq_preturi','probe_oferte']
-const B = ['ofertare_brokeri','ofertare_categorii_reguli','ofertare_experienta','ofertare_normative','ofertare_norme_productivitate','ofertare_parteneri','ofertare_radar']
+// Runda 2: grupul B redus la parteneri + norme (extinderea lui B = decizie de business a lui Răzvan)
+const A = ['oferta_materiale','ofertare_brokeri','ofertare_calibrari','ofertare_calibrari_subcontractori','ofertare_categorii_reguli','ofertare_experienta','ofertare_normative','ofertare_oferte_deschidere','ofertare_oferte_furnizori','ofertare_preturi_materiale','ofertare_preturi_unitare','ofertare_radar','ofertare_rfq','ofertare_rfq_destinatari','ofertare_rfq_materiale','ofertare_rfq_oferte','ofertare_rfq_preturi','probe_oferte']
+const B = ['ofertare_norme_productivitate','ofertare_parteneri']
+// SEC F1 (PR #551, 20260930i): doar în harness, pentru testul de compunere. Din migrations/ dacă e deja pe branch, altfel din branch-ul F1.
+const F1_NUME = '20260930i_sec_f1_truncate_revoke'
+let F1 = null
+try { F1 = readFileSync(join(ROOT, 'supabase/migrations', F1_NUME + '.sql'), 'utf8') } catch {
+  try { F1 = execFileSync('git', ['-C', ROOT, 'show', `${process.env.F1_REF || 'origin/claude/erp-continuare-x4p5a7-sec-f1f2'}:supabase/migrations/${F1_NUME}.sql`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch {}
+}
 const T = [...A, ...B]
 const U = { fara: '00000000-0000-0000-0000-000000000001', modul: '00000000-0000-0000-0000-000000000002', owner: '00000000-0000-0000-0000-000000000003', subm: '00000000-0000-0000-0000-000000000004' }
 
@@ -107,11 +116,35 @@ try {
   psql(`GRANT ALL ON public.ofertare_rfq TO anon;`)
   check('înapoi pe starea live', stare() === MD5_LIVE)
 
+  console.log('2b. Amprenta helper-ului, overload-uri, ACL pe coloane, stări anon (runda 2)')
+  const refuz = (nume, prep, undo, re) => { psql(prep); const r = livrare(MIG); check(nume, !r.ok && re.test(r.out) && stare() === MD5_LIVE, r.out.slice(0, 200)); psql(undo) }
+  const FN = 'public.fn_are_acces_ofertare()'
+  refuz('helper: doar search_path schimbat → refuz', `ALTER FUNCTION ${FN} SET search_path = public;`, `ALTER FUNCTION ${FN} SET search_path TO 'public', 'pg_temp';`, /amprenta/)
+  refuz('helper: doar proprietarul schimbat → refuz', `CREATE ROLE altul NOLOGIN; ALTER FUNCTION ${FN} OWNER TO altul;`, `ALTER FUNCTION ${FN} OWNER TO postgres; DROP ROLE altul;`, /amprenta/)
+  refuz('helper: EXECUTE dat lui anon → refuz', `GRANT EXECUTE ON FUNCTION ${FN} TO anon;`, `REVOKE EXECUTE ON FUNCTION ${FN} FROM anon;`, /amprenta/)
+  refuz('helper: EXECUTE dat lui PUBLIC → refuz', `GRANT EXECUTE ON FUNCTION ${FN} TO PUBLIC;`, `REVOKE EXECUTE ON FUNCTION ${FN} FROM PUBLIC;`, /amprenta/)
+  refuz('helper: VOLATILE în loc de STABLE → refuz', `ALTER FUNCTION ${FN} VOLATILE;`, `ALTER FUNCTION ${FN} STABLE;`, /amprenta/)
+  refuz('overload cu argument implicit în public → refuz', `CREATE FUNCTION public.fn_are_acces_ofertare(x int DEFAULT 0) RETURNS boolean LANGUAGE sql AS 'SELECT true';`, `DROP FUNCTION public.fn_are_acces_ofertare(int);`, /overload/)
+  refuz('overload în altă schemă → refuz', `CREATE SCHEMA altschema; CREATE FUNCTION altschema.fn_are_acces_ofertare() RETURNS boolean LANGUAGE sql AS 'SELECT true';`, `DROP SCHEMA altschema CASCADE;`, /overload/)
+  refuz('ACL pe coloană pentru anon → refuz (inventar coloane)', `GRANT SELECT (v) ON public.ofertare_rfq TO anon;`, `REVOKE SELECT (v) ON public.ofertare_rfq FROM anon;`, /pe coloane/)
+  refuz('ACL pe coloană pentru authenticated → refuz', `GRANT UPDATE (v) ON public.ofertare_parteneri TO authenticated;`, `REVOKE UPDATE (v) ON public.ofertare_parteneri FROM authenticated;`, /pe coloane/)
+  refuz('privilegiu pentru PUBLIC pe un tabel → refuz', `GRANT SELECT ON public.probe_oferte TO PUBLIC;`, `REVOKE SELECT ON public.probe_oferte FROM PUBLIC;`, /PUBLIC/)
+  refuz('anon cu GRANT OPTION → refuz', `GRANT SELECT ON public.ofertare_radar TO anon WITH GRANT OPTION;`, `REVOKE GRANT OPTION FOR SELECT ON public.ofertare_radar FROM anon;`, /privilegiile anon/)
+  refuz('anon fără TRUNCATE dar authenticated cu TRUNCATE (stare mixtă) → refuz', `REVOKE TRUNCATE ON ${T.map(t => 'public.' + t).join(', ')} FROM anon;`, `GRANT TRUNCATE ON ${T.map(t => 'public.' + t).join(', ')} TO anon;`, /privilegiile anon/)
+  refuz('anon fără MAINTAIN → refuz', `REVOKE MAINTAIN ON public.oferta_materiale FROM anon;`, `GRANT MAINTAIN ON public.oferta_materiale TO anon;`, /privilegiile anon/)
+  check('înapoi pe starea live (după toate refuzurile)', stare() === MD5_LIVE)
+  const authSnap = () => psql(`SELECT string_agg(t||':'||pr||'='||has_table_privilege('authenticated','public.'||t,pr), ';' ORDER BY t, pr) || '#' || coalesce((SELECT string_agg(c.relname||':'||x.privilege_type||':'||x.is_grantable, ';' ORDER BY c.relname, x.privilege_type) FROM pg_class c, aclexplode(c.relacl) x WHERE c.relnamespace='public'::regnamespace AND c.relname = ANY(ARRAY[${T.map(t => `'${t}'`).join(',')}]) AND x.grantee='authenticated'::regrole),'') FROM unnest(ARRAY[${T.map(t => `'${t}'`).join(',')}]) t, unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) pr`).out
+  const authInainte = authSnap()
+
   console.log('3. Migrarea (runner simulat)')
   const r2 = livrare(MIG)
   check('migrarea trece', r2.ok, r2.out)
   check(`md5 politici = starea patch (${MD5_PATCH})`, stare() === MD5_PATCH, stare())
   check('a doua livrare → refuz (deja aplicat)', !livrare(MIG).ok && stare() === MD5_PATCH)
+  const ANON8 = `SELECT count(*) FROM unnest(ARRAY[${T.map(t => `'${t}'`).join(',')}]) t, unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) pr WHERE has_table_privilege('anon','public.'||t,pr)`
+  check('anon: toate cele 8 privilegii de tabel (incl. REFERENCES/TRIGGER/MAINTAIN) = false pe toate 20', psql(ANON8).out === '0')
+  check('anon: niciun privilegiu pe coloane (column_privileges + has_any_column_privilege)', psql(`SELECT (SELECT count(*) FROM information_schema.column_privileges WHERE grantee IN ('anon','PUBLIC') AND table_schema='public' AND table_name = ANY(ARRAY[${T.map(t => `'${t}'`).join(',')}])) + (SELECT count(*) FROM unnest(ARRAY[${T.map(t => `'${t}'`).join(',')}]) t WHERE has_any_column_privilege('anon','public.'||t,'SELECT,INSERT,UPDATE,REFERENCES'))`).out === '0')
+  check('authenticated: privilegii de tabel + ACL identice înainte/după', authSnap() === authInainte)
 
   console.log('4. Matricea REST după patch')
   for (const t of T) {
@@ -138,6 +171,33 @@ try {
   check('md5 politici = exact starea live 30.09', stare() === MD5_LIVE, stare())
   check('anon are din nou ALL', psql(`SELECT bool_and(has_table_privilege('anon','public.'||t,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')) FROM unnest(ARRAY[${T.map(t => `'${t}'`).join(',')}]) t`).out === 't')
   check('re-livrare după rollback trece', livrare(MIG).ok && stare() === MD5_PATCH)
+
+  console.log('6. Compunere cu SEC F1 (#551, TRUNCATE retras) — F1 copiat doar în harness')
+  check('F1 disponibil (migrations/ sau branch-ul F1)', !!F1)
+  if (F1) {
+    const anonSet = `SELECT string_agg(DISTINCT (SELECT string_agg(x.privilege_type, ',' ORDER BY x.privilege_type) FROM aclexplode(c.relacl) x WHERE x.grantee='anon'::regrole), ' | ') FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relname = ANY(ARRAY[${T.map(t => `'${t}'`).join(',')}])`
+    const anonTrunc = () => psql(`SELECT count(*) FROM unnest(ARRAY[${T.map(t => `'${t}'`).join(',')}]) t WHERE has_table_privilege('anon','public.'||t,'TRUNCATE')`).out
+    psql(`GRANT TRUNCATE ON public.ofertare_rfq TO authenticated; REVOKE TRUNCATE ON public.probe_oferte FROM authenticated;`)
+    const amb = revenire(RB)
+    check('rollback cu stare F1 ambiguă (authenticated TRUNCATE pe 19/20) → refuz', !amb.ok && /ambiguă/.test(amb.out) && stare() === MD5_PATCH, amb.out.slice(0, 200))
+    psql(`GRANT TRUNCATE ON public.probe_oferte TO authenticated;`)
+    const f1 = livrare(F1, F1_NUME)
+    check('#552 → F1: F1 trece peste patch', f1.ok && stare() === MD5_PATCH, f1.out.slice(0, 300))
+    const rb2 = revenire(RB)
+    check('rollback #552 după F1 trece', rb2.ok, rb2.out.slice(0, 300))
+    check('DISCRIMINATOR: după rollback anon NU are TRUNCATE pe niciunul din 20', anonTrunc() === '0')
+    check('după rollback anon are exact cele 7 fără TRUNCATE, md5 live', psql(anonSet).out === 'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,UPDATE' && stare() === MD5_LIVE, psql(anonSet).out)
+    check('F1 → #552: migrarea acceptă starea post-F1 (anon fără TRUNCATE)', livrare(MIG).ok && stare() === MD5_PATCH && psql(ANON8).out === '0')
+    psql(`GRANT TRUNCATE ON public.ofertare_rfq TO anon;`)
+    check('rollback din patch cu anon TRUNCATE pe un tabel → refuz (anon are privilegii)', !revenire(RB).ok)
+    psql(`REVOKE TRUNCATE ON public.ofertare_rfq FROM anon;`)
+    check('rollback din nou (post-F1) → tot fără TRUNCATE pentru anon', revenire(RB).ok && anonTrunc() === '0' && stare() === MD5_LIVE)
+    psql(`GRANT TRUNCATE ON public.ofertare_rfq TO anon;`)
+    const mx = livrare(MIG)
+    check('post-F1 cu TRUNCATE anon pe un singur tabel (stare mixtă) → migrarea refuză', !mx.ok && /privilegiile anon/.test(mx.out), mx.out.slice(0, 200))
+    psql(`REVOKE TRUNCATE ON public.ofertare_rfq FROM anon;`)
+    check('authenticated fără TRUNCATE după F1, neatins de #552', psql(`SELECT count(*) FROM unnest(ARRAY[${T.map(t => `'${t}'`).join(',')}]) t WHERE has_table_privilege('authenticated','public.'||t,'TRUNCATE')`).out === '0')
+  }
 } catch (e) { fail++; console.error(e.message) }
 finally {
   try { srv('pg_ctl', ['-D', data, '-m', 'fast', 'stop']) } catch {}
