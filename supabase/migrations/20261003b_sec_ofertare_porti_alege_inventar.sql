@@ -22,8 +22,14 @@
 --     PARALLEL/COST/ROWS, semnătura (nume, tipuri, DEFAULT-uri, fără supraîncărcări), tipul
 --     întors și ACL-ul (sortat);
 --   • precondiția acceptă doar STĂRI COMPLETE (helper + alege + pereche, fiecare cu atributele
---     lui): live 29.09 | patch | oprire controlată (ultimele două: bază unde funcțiile au ajuns deja
---     acolo fără înregistrare; runner-ul refuză oricum o migrare deja înregistrată). Stare mixtă = refuz;
+--     lui). Stare mixtă = refuz;
+-- Runda 4 (30.09, răspuns la verdictul Copilot r3, GO CU CORECTURI):
+--   • stările de pornire acceptate sunt DOAR live 29.09 și patch (reaplicare fără efect). Starea
+--     „oprire” e REFUZATĂ: ieșirea din oprire se face exclusiv prin _REPORNIRE.sql (armare proprie,
+--     aprobare separată). Lipsa înregistrării în schema_migrations nu dovedește că oprirea trebuie
+--     anulată; o instalare neînregistrată se reconciliază separat, fără reactivare implicită;
+--   • starea completă include și privilegiile EFECTIVE (has_function_privilege pentru anon, PUBLIC,
+--     authenticated, service_role, cu moștenirea prin roluri), pe lângă ACL-ul exact, înainte și după;
 --   • postcondiția, ÎNAINTE de COMMIT (ultimul pas al blocului): starea rezultată = exact starea
 --     patch-ului, altfel RAISE și se anulează tot, inclusiv înregistrarea runner-ului;
 --   • tabelul stărilor cunoscute (constanta v_q) e identic, octet cu octet, în toate fișierele
@@ -49,8 +55,8 @@
 -- exact (ca RLS-ul de scriere); vezi docs §7, interogarea de preview pe sub-module.
 --
 -- Ce NU face: nu atinge tabele, politici, date, semnături. CREATE OR REPLACE păstrează
--- semnătura, tipul întors și ACL-ul; ACL-ul e reafirmat explicit mai jos (și refăcut, dacă
--- pornim din oprirea controlată).
+-- semnătura, tipul întors și ACL-ul; ACL-ul e reafirmat explicit mai jos (din live/patch nu
+-- schimbă nimic; din oprire nu se ajunge aici, precondiția refuză).
 -- Reveniri (NU sunt migrări; stau în supabase/revenire/, nu le parcurge niciun runner):
 --   _OPRIRE_CONTROLATA.sql — păstrează corpurile patch-ului, retrage EXECUTE (funcționalitatea
 --     se oprește, nu se redeschide); ieșirea din oprire = _REPORNIRE.sql (runner-ul comun nu reia o
@@ -72,18 +78,20 @@ WITH fn(ord, fn, nume, sig) AS (VALUES
   ('acces',   'secdef=t lang=sql vol=s strict=f leakproof=f parallel=u cost=100 rows=0 owner=postgres n=1 args=() rez=boolean'),
   ('alege',   'secdef=t lang=plpgsql vol=v strict=f leakproof=f parallel=u cost=100 rows=1000 owner=postgres n=1 args=(p_acoperire_id bigint) rez=TABLE(cerinta_id bigint, pozitie_id bigint, ales_id bigint, inlocuit_id bigint)'),
   ('pereche', 'secdef=t lang=plpgsql vol=v strict=f leakproof=f parallel=u cost=100 rows=1000 owner=postgres n=1 args=(p_lic bigint, p_furnizor text DEFAULT NULL::text, p_versiune integer DEFAULT NULL::integer, p_prag real DEFAULT 0.45) rez=TABLE(imperecheate integer, ramase_fara_pereche integer)')
-), cunoscut(stare, fn, md5_prosrc, config, acl) AS (VALUES
+), cunoscut(stare, fn, md5_prosrc, config, acl, efectiv) AS (VALUES
   -- STĂRI COMPLETE: o stare e recunoscută doar dacă TOATE trei funcțiile au rândul ei.
   -- md5(prosrc) = md5 al textului literal al corpului; ACL sortat (COLLATE "C").
-  ('live',   'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('live',   'alege',   '56a7c6ddd1e342c77e7b34f4e08ecab1', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('live',   'pereche', 'edd4819c81844baafc7eeade838cbcff', '{"search_path=public, extensions, pg_temp"}', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('patch',  'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('patch',  'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('patch',  'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('oprire', 'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('oprire', 'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}'),
-  ('oprire', 'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}')
+  -- efectiv (runda 4) = privilegiile EFECTIVE (has_function_privilege, cu moștenirea prin roluri) pentru
+  -- anon, PUBLIC, authenticated, service_role: același proacl cu altă apartenență la roluri = stare necunoscută.
+  ('live',   'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('live',   'alege',   '56a7c6ddd1e342c77e7b34f4e08ecab1', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('live',   'pereche', 'edd4819c81844baafc7eeade838cbcff', '{"search_path=public, extensions, pg_temp"}', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('patch',  'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('patch',  'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('patch',  'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('oprire', 'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('oprire', 'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}', 'anon=f public=f authenticated=f service_role=f'),
+  ('oprire', 'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}', 'anon=f public=f authenticated=f service_role=f')
 ), observat AS (
   SELECT fn.ord, fn.fn, md5(p.prosrc) AS md5_prosrc, p.proconfig::text AS config,
          (SELECT array_agg(a::text ORDER BY a::text COLLATE "C")
@@ -92,23 +100,26 @@ WITH fn(ord, fn, nume, sig) AS (VALUES
                 p.prosecdef, l.lanname, p.provolatile, p.proisstrict, p.proleakproof, p.proparallel, p.procost, p.prorows,
                 pg_get_userbyid(p.proowner),
                 (SELECT count(*) FROM pg_catalog.pg_proc q WHERE q.pronamespace = 'public'::regnamespace AND q.proname = fn.nume),
-                pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)) AS atribute
+                pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)) AS atribute,
+         format('anon=%s public=%s authenticated=%s service_role=%s',
+                has_function_privilege('anon', p.oid, 'EXECUTE'), has_function_privilege('public', p.oid, 'EXECUTE'),
+                has_function_privilege('authenticated', p.oid, 'EXECUTE'), has_function_privilege('service_role', p.oid, 'EXECUTE')) AS efectiv
     FROM fn
     LEFT JOIN pg_catalog.pg_proc p ON p.oid = to_regprocedure(fn.sig)
     LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
 ), potrivit AS (
-  SELECT o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute,
+  SELECT o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute, o.efectiv,
          array_agg(c.stare ORDER BY c.stare) FILTER (WHERE c.stare IS NOT NULL) AS stari
     FROM observat o
     JOIN fixe f ON f.fn = o.fn
     LEFT JOIN cunoscut c ON c.fn = o.fn AND c.md5_prosrc = o.md5_prosrc AND c.config IS NOT DISTINCT FROM o.config
-                        AND c.acl = o.acl AND f.atribute = o.atribute
-   GROUP BY o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute
+                        AND c.acl = o.acl AND f.atribute = o.atribute AND c.efectiv = o.efectiv
+   GROUP BY o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute, o.efectiv
 )
 SELECT (SELECT s.stare FROM (SELECT unnest(p.stari) AS stare FROM potrivit p) s
          GROUP BY s.stare HAVING count(*) = 3) AS stare,
        string_agg(format('%s=%s', p.fn, coalesce(array_to_string(p.stari, '/'), 'NECUNOSCUTĂ')), ', ' ORDER BY p.ord) AS rezumat,
-       string_agg(format('%s: md5(prosrc)=%s config=%s acl=%s %s', p.fn, p.md5_prosrc, p.config, p.acl, p.atribute),
+       string_agg(format('%s: md5(prosrc)=%s config=%s acl=%s efectiv=[%s] %s', p.fn, p.md5_prosrc, p.config, p.acl, p.efectiv, p.atribute),
                   E'\n' ORDER BY p.ord) AS detaliu
   FROM potrivit p
 $stari$;
@@ -120,12 +131,17 @@ BEGIN
   END IF;
 
   -- ── 0. Precondiții: pornim doar dintr-o STARE COMPLETĂ cunoscută ───────────────
-  -- live 29.09 (prima aplicare) | patch (reaplicare, fără efect) | oprire controlată (ieșirea din
-  -- oprire: corpurile sunt deja ale patch-ului, se refac GRANT-urile). Orice altceva — o stare
-  -- mixtă, o versiune ulterioară, alt proprietar, alt ACL, alt helper — e refuzat.
+  -- live 29.09 (prima aplicare) | patch (reaplicare, fără efect). Runda 4: „oprire” NU e acceptată —
+  -- migrarea nu e a doua cale de repornire; ieșirea din oprire = doar _REPORNIRE.sql, aprobată separat.
+  -- Orice altceva — o stare mixtă, o versiune ulterioară, alt proprietar, alt ACL, alte privilegii
+  -- efective (moștenire prin roluri), alt helper — e refuzat.
   EXECUTE v_q INTO v_stare, v_rezumat, v_detaliu;
-  IF coalesce(v_stare, '') NOT IN ('live', 'patch', 'oprire') THEN
-    RAISE EXCEPTION 'Precondiție 20261003b: starea curentă nu e o stare completă cunoscută (%). Se acceptă doar live 29.09, patch sau oprire controlată, pe toate trei funcțiile deodată. Cineva a lucrat pe funcții între timp: oprește-te și compară.', v_rezumat
+  IF v_stare = 'oprire' THEN
+    RAISE EXCEPTION 'Precondiție 20261003b: funcțiile sunt în OPRIRE CONTROLATĂ (%). Migrarea nu repornește: ieșirea din oprire se face doar prin fișierul de revenire _REPORNIRE.sql, cu aprobarea lui Răzvan. Nimic schimbat.', v_rezumat
+      USING DETAIL = v_detaliu;
+  END IF;
+  IF coalesce(v_stare, '') NOT IN ('live', 'patch') THEN
+    RAISE EXCEPTION 'Precondiție 20261003b: starea curentă nu e o stare completă cunoscută (%). Se acceptă doar live 29.09 sau patch, pe toate trei funcțiile deodată (corp, atribute, ACL, privilegii efective). Cineva a lucrat pe funcții sau pe roluri între timp: oprește-te și compară.', v_rezumat
       USING DETAIL = v_detaliu;
   END IF;
   RAISE NOTICE 'Precondiție 20261003b: pornim din starea completă „%”.', v_stare;
@@ -282,7 +298,7 @@ END $function$
 $def_pereche$;
 
   -- ── 3. ACL explicit: fără PUBLIC/anon; EXECUTE pentru authenticated (UI) și service_role ──
-  -- Din starea live/patch nu schimbă nimic; din oprirea controlată reface GRANT-urile retrase.
+  -- Din starea live/patch nu schimbă nimic (reafirmare); oprirea e refuzată mai sus.
   REVOKE ALL ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) FROM PUBLIC, anon;
   REVOKE ALL ON FUNCTION public.ofertare_inventar_pereche(bigint, text, integer, real) FROM PUBLIC, anon;
   GRANT EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) TO authenticated, service_role;

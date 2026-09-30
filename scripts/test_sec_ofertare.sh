@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════════════
-# Test PG16 LOCAL pentru patch-ul 20261003b (Ofertare (2)+(3)), runda 3. Nu atinge Supabase.
+# Test PG16 LOCAL pentru patch-ul 20261003b (Ofertare (2)+(3)), runda 4. Nu atinge Supabase.
+# Runda 4 (verdict Copilot r3, docs §12): migrarea pornește doar din live|patch (8-R4-1); privilegii efective în
+# starea completă (0g, 8-R4-2, 9 R4-2); eroare după primul REVOKE/GRANT (7-R4-5, 8-R4-5); pas 14: conexiuni
+# existente, apel în curs suspendat determinist, protecțiile patch-ului după repornire.
 #   bash scripts/test_sec_ofertare.sh              # rulează tot și oprește clusterul la final
 #   KEEP=1 bash scripts/test_sec_ofertare.sh       # lasă clusterul pornit (depanare)
 #   PGPORT=5491 PGBASE=/tmp/pg_x bash …            # alt port / alt cluster (implicit 5441, /tmp/pg_sec_ofertare)
@@ -11,7 +14,7 @@
 #
 # Ce demonstrează (răspunsul la NO-GO-ul Copilot pe 94909d6, docs §11):
 #   • stări COMPLETE (helper + alege + pereche, md5(prosrc) + atribute + ACL): migrarea pornește din
-#     live | patch | oprire; rollback-ul din patch | oprire | live; oprirea doar din patch. Orice stare
+#     live | patch (runda 4: NU din oprire); rollback-ul din patch | oprire | live; oprirea doar din patch. Orice stare
 #     mixtă sau atribut schimbat → refuz, fără urme (pas 9);
 #   • postcondiția înainte de COMMIT în fiecare fișier (pas 6, 7, 8, 11, 12);
 #   • UN SINGUR gestionar al tranzacției = runner-ul, pentru toate fișierele (niciunul n-are BEGIN/COMMIT;
@@ -53,6 +56,9 @@ LIVE_H="56a7c6ddd1e342c77e7b34f4e08ecab1 edd4819c81844baafc7eeade838cbcff"
 PATCH_H="${PATCH_H:-51865b69766f6baa53def9a6e6c6232b 4d90bf90b4bbfd6aea944e734f6c9ed9}"
 ACL_DESCHIS='{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'
 ACL_OPRIT='{postgres=X/postgres}'
+# Privilegii EFECTIVE (runda 4): has_function_privilege, cu moștenirea prin roluri
+EF_DESCHIS='anon=f public=f authenticated=t service_role=t'
+EF_OPRIT='anon=f public=f authenticated=f service_role=f'
 NUME_MIG=20261003b_sec_ofertare_porti_alege_inventar
 
 for f in "$MIG" "$RB" "$OPR" "$REP" "$LIVRARE" "$TEST"; do [ -f "$f" ] || { echo "Lipsește $f" >&2; exit 2; }; done
@@ -86,7 +92,9 @@ AMPRENTA_SQL="SELECT string_agg(format('%s prosrc=%s def=%s secdef=%s lang=%s vo
    f.fn, md5(p.prosrc), md5(pg_get_functiondef(p.oid)), p.prosecdef, l.lanname, p.provolatile, p.proisstrict, p.proleakproof, p.proparallel,
    p.procost, p.prorows, pg_get_userbyid(p.proowner), p.proconfig, pg_get_function_arguments(p.oid), pg_get_function_result(p.oid),
    (SELECT array_agg(a::text ORDER BY a::text COLLATE \"C\") FROM unnest(coalesce(p.proacl, acldefault('f', p.proowner))) a),
-   (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = 'public'::regnamespace AND q.proname = f.nume)), E'\n' ORDER BY f.ord)
+   (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = 'public'::regnamespace AND q.proname = f.nume))
+   || format(' efectiv=anon:%s,public:%s,authenticated:%s,service_role:%s', has_function_privilege('anon', p.oid, 'EXECUTE'), has_function_privilege('public', p.oid, 'EXECUTE'),
+             has_function_privilege('authenticated', p.oid, 'EXECUTE'), has_function_privilege('service_role', p.oid, 'EXECUTE')), E'\n' ORDER BY f.ord)
  FROM (VALUES (1, 'acces', 'fn_are_acces_ofertare', 'public.fn_are_acces_ofertare()'),
               (2, 'alege', 'fn_ofertare_alege_acoperire', 'public.fn_ofertare_alege_acoperire(bigint)'),
               (3, 'pereche', 'ofertare_inventar_pereche', 'public.ofertare_inventar_pereche(bigint,text,integer,real)')) f(ord, fn, nume, sig)
@@ -145,6 +153,12 @@ mutant_t1() {  # PERFORM 1/0 imediat după PRIMA înlocuire de funcție (EXECUTE
     || esec "T1: eroarea nu e între prima și a doua înlocuire de funcție"
 }
 curata_persistente() {  # ALTER ROLE e la nivel de cluster: supraviețuiește recreării bazei
+  # runda 4: și apartenențele la roluri create de testele de moștenire (tot la nivel de cluster)
+  sql_pg "DO \$m\$ DECLARE r record; BEGIN
+    FOR r IN SELECT g.rolname AS grup, m.rolname AS membru FROM pg_auth_members am JOIN pg_roles g ON g.oid = am.roleid JOIN pg_roles m ON m.oid = am.member
+              WHERE m.rolname IN ('anon', 'authenticated', 'service_role') LOOP
+      EXECUTE format('REVOKE %I FROM %I', r.grup, r.membru);
+    END LOOP; END \$m\$"
   sql_pg "DO \$c\$ DECLARE r record; BEGIN
     FOR r IN SELECT d.datname, ro.rolname, split_part(c, '=', 1) AS nume
                FROM pg_db_role_setting s CROSS JOIN LATERAL unnest(s.setconfig) c
@@ -203,6 +217,48 @@ vg1() {  # vg1 <eticheta> <fișier> <comutator> <valoare>: armare PERSISTENTĂ �
 armare_ramasa_dupa() {  # rulează revenirea în sesiune și întoarce valoarea comutatorului după COMMIT
   "${PSQL0[@]}" -q -At -v ON_ERROR_STOP=1 -c "$(sir_revenire "$1" "$2" "$3" "${4:-true}")" \
      -c "SELECT 'armare_ramasa=[' || coalesce(current_setting('$2', true), '') || ']'" 2>"$BASE/rev.err" | tail -1
+}
+
+ALEGE='public.fn_ofertare_alege_acoperire(bigint)'; PERECHE='public.ofertare_inventar_pereche(bigint,text,integer,real)'
+trei_refuza() {  # trei_refuza <eticheta>
+  refuzat "$1 → migrarea (livrare)" "Precondiție 20261003b: starea curentă nu e o stare completă" livrare "$MIG" 20261003999000
+  refuzat "$1 → rollback-ul armat" "ROLLBACK TEHNIC 20261003b blocat: starea curentă" revenire "$RB" "$C_RB" "$V_RB"
+  refuzat "$1 → oprirea armată" "se aplică doar din starea completă a patch-ului" revenire "$OPR" "$C_OP" "$V_OP"
+  refuzat "$1 → repornirea armată" "doar din starea completă „oprire”" revenire "$REP" "$C_RP" "$V_RP"
+}
+
+
+# ── Runda 4: sesiuni psql PERSISTENTE (conexiuni existente, apel în curs) ──────────────────────────────
+# ses_start <n>: psql în fundal, citește dintr-un FIFO (fd salvat în FD_<n>), scrie în $BASE/ses_<n>.out
+declare -A SES_FD=() SES_PID=(); SES_K=0
+ses_start() {
+  rm -f "$BASE/ses_$1.in"; mkfifo "$BASE/ses_$1.in"; : >"$BASE/ses_$1.out"
+  "$PGBIN/psql" -X -At -h 127.0.0.1 -p "$PGPORT" -U postgres -d "$DB" -v ON_ERROR_STOP=0 <"$BASE/ses_$1.in" >>"$BASE/ses_$1.out" 2>&1 &
+  SES_PID[$1]=$!
+  local fd; exec {fd}>"$BASE/ses_$1.in"; SES_FD[$1]=$fd
+  ses "$1" "SELECT 'pid=' || pg_backend_pid();"
+}
+ses_trimite() { printf '%s\n' "$2" >&"${SES_FD[$1]}"; }                       # fără așteptare
+ses_asteapta() {  # ses_asteapta <n> <marcaj>: până apare marcajul în ieșire (max 30 s)
+  local i; for i in $(seq 1 300); do grep -qx -- "$2" "$BASE/ses_$1.out" && return 0; sleep 0.1; done
+  cat "$BASE/ses_$1.out" >&2; esec "sesiunea $1: marcajul $2 n-a apărut"
+}
+ses() {  # ses <n> <sql>: trimite și așteaptă terminarea; ieșirea comenzii rămâne în $BASE/ses_<n>.out
+  SES_K=$((SES_K + 1)); ses_trimite "$1" "$2"; ses_trimite "$1" "\\echo __GATA_$SES_K"; ses_asteapta "$1" "__GATA_$SES_K"
+}
+ses_de_la() { wc -l <"$BASE/ses_$1.out"; }                                     # poziția curentă în ieșire
+ses_dupa() { tail -n +"$(($2 + 1))" "$BASE/ses_$1.out"; }                       # ieșirea de după poziție
+ses_stop() { ses_trimite "$1" '\q'; eval "exec ${SES_FD[$1]}>&-"; wait "${SES_PID[$1]}" 2>/dev/null || true; }
+CA_ID() {  # CA_ID <uid|-> : rolul authenticated cu claims (ca PostgREST); '-' = fără sub
+  if [ "$1" = - ]; then echo "RESET ROLE; SET request.jwt.claims TO '{\"role\":\"authenticated\"}'; SET ROLE authenticated;"
+  else echo "RESET ROLE; SET request.jwt.claims TO '{\"sub\":\"$1\",\"role\":\"authenticated\"}'; SET ROLE authenticated;"; fi
+}
+U_OWNER=00000000-0000-4000-8000-000000000121; U_MOD=00000000-0000-4000-8000-000000000007; U_NOMOD=00000000-0000-4000-8000-000000000099
+# Scenariul protecțiilor patch-ului (Copilot r3 §5, ultimul rând): fixture curat, apoi utilizatorul CU modul rulează
+# „Compară cu registrul” cu p_prag = 0 pe lic. 10 (respins_de_om 3/6, confirmat_de_om 4) și pe lic. 40 (goluri reale
+# 41–43, confirmat_de_om 44). Întoarce instantaneul inventarului (determinist: funcția nu atinge verdict_la).
+scenariu_protectii() {
+  sql "SELECT t.reset_fixture(); $(CA_ID $U_MOD) SELECT * FROM public.ofertare_inventar_pereche(10, 'gemini', 1, 0); SELECT * FROM public.ofertare_inventar_pereche(40, 'gemini', 1, 0); RESET ROLE; RESET request.jwt.claims; SELECT t.inv_snapshot()"
 }
 
 # ── Cluster dedicat ────────────────────────────────────────────────────────────
@@ -280,11 +336,17 @@ ok "0e tabelul stărilor cunoscute e identic, octet cu octet, în cele 4 fișier
 BLOC=$(awk '/\$stari\$$/{f++; next} f==1' "$MIG" | tr -s ' ')
 set -- $PATCH_H; P1=$1; P2=$2; set -- $LIVE_H; L1=$1; L2=$2
 CFG="{\"search_path=public, pg_temp\"}"; CFGX="{\"search_path=public, extensions, pg_temp\"}"
-for r in "'live', 'acces', '$H_ACCES', '$CFG', '$ACL_DESCHIS'" "'live', 'alege', '$L1', '$CFG', '$ACL_DESCHIS'" "'live', 'pereche', '$L2', '$CFGX', '$ACL_DESCHIS'" \
-         "'patch', 'acces', '$H_ACCES', '$CFG', '$ACL_DESCHIS'" "'patch', 'alege', '$P1', '$CFG', '$ACL_DESCHIS'" "'patch', 'pereche', '$P2', '$CFG', '$ACL_DESCHIS'" \
-         "'oprire', 'acces', '$H_ACCES', '$CFG', '$ACL_DESCHIS'" "'oprire', 'alege', '$P1', '$CFG', '$ACL_OPRIT'" "'oprire', 'pereche', '$P2', '$CFG', '$ACL_OPRIT'"; do
+# runda 4: fiecare rând poartă și privilegiile EFECTIVE cerute (matricea din verdictul r3)
+for r in "'live', 'acces', '$H_ACCES', '$CFG', '$ACL_DESCHIS', '$EF_DESCHIS'" "'live', 'alege', '$L1', '$CFG', '$ACL_DESCHIS', '$EF_DESCHIS'" "'live', 'pereche', '$L2', '$CFGX', '$ACL_DESCHIS', '$EF_DESCHIS'" \
+         "'patch', 'acces', '$H_ACCES', '$CFG', '$ACL_DESCHIS', '$EF_DESCHIS'" "'patch', 'alege', '$P1', '$CFG', '$ACL_DESCHIS', '$EF_DESCHIS'" "'patch', 'pereche', '$P2', '$CFG', '$ACL_DESCHIS', '$EF_DESCHIS'" \
+         "'oprire', 'acces', '$H_ACCES', '$CFG', '$ACL_DESCHIS', '$EF_DESCHIS'" "'oprire', 'alege', '$P1', '$CFG', '$ACL_OPRIT', '$EF_OPRIT'" "'oprire', 'pereche', '$P2', '$CFG', '$ACL_OPRIT', '$EF_OPRIT'"; do
   grep -qF "($r)" <<<"$BLOC" || esec "0e rândul ($r) lipsește din tabelul stărilor"
 done
+grep -qF "AND c.efectiv = o.efectiv" <<<"$BLOC" || esec "0g tabelul stărilor nu compară privilegiile efective"
+for rol in anon public authenticated service_role; do grep -qF "has_function_privilege('$rol', p.oid, 'EXECUTE')" <<<"$BLOC" || esec "0g lipsește has_function_privilege pentru $rol"; done
+ok "0g (runda 4) starea completă include privilegiile efective (has_function_privilege: anon, PUBLIC, authenticated, service_role) în toate cele 4 fișiere"
+grep -qF "IF coalesce(v_stare, '') NOT IN ('live', 'patch') THEN" "$MIG" && ! grep -qE "NOT IN \('live', 'patch', 'oprire'\)" "$MIG" || esec "0h migrarea trebuie să accepte ca stare de pornire DOAR live și patch"
+ok "0h (runda 4) migrarea acceptă ca stare de pornire doar live și patch (oprire → patch doar prin REPORNIRE)"
 [ "$(grep -cE "^ ?\('(live|patch|oprire)'," <<<"$BLOC")" = 9 ] || esec "0e tabelul stărilor are alte rânduri decât cele 9 așteptate"
 [ "$(grep -c "current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '$NUME_MIG:' || txid_current()" "$MIG")" = 2 ] || esec "0f migrarea trebuie să aibă garda de livrare la început și la final"
 ok "0f migrarea are garda de livrare (marcaj legat de txid) la început și după postcondiții"
@@ -343,6 +405,9 @@ faza patched || esec "teste patched"
 faza runda2 || esec "teste runda 2"
 faza runda3 || esec "teste runda 3"
 sql "SELECT t.captureaza('patch')" >/dev/null
+SCEN_PATCH=$(scenariu_protectii)
+grep -q '|respins_de_om|' <<<"$SCEN_PATCH" || esec "scenariul protecțiilor pe patch: fără respins_de_om"
+ok "R4-6 scenariul protecțiilor capturat pe PATCH, înainte de orice oprire (respins/confirmat_de_om, p_prag=0 pe lic. 10 și 40)"
 
 pas "6. Postcondiția migrării (înainte de COMMIT): variante neauditate ale fișierului"
 injecteaza "$MIG" '^-- SEC-20261003b \(constatarea 2\)' '-- VARIANTĂ NEAUDITATĂ (test postcondiție)' "$BASE/mig_corp.sql"
@@ -358,6 +423,9 @@ refuzat "7c armată cu comutatorul ROLLBACK-ului" "nearmată în tranzacția cur
 refuzat "7d comutatorul propriu, valoarea rollback-ului" "nearmată în tranzacția curentă" revenire "$OPR" "$C_OP" "$V_RB"
 refuzat "7e armare corectă, dar în ALTĂ tranzacție (-c separat)" "nearmată în tranzacția curentă" armare_separata "$OPR" "$C_OP" "$V_OP"
 vg1 "7f oprirea" "$OPR" "$C_OP" "$V_OP"
+injecteaza "$OPR" '^  REVOKE EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire' '  PERFORM 1/0;  -- EROARE INJECTATĂ (după primul REVOKE)' "$BASE/opr_err.sql"
+refuzat "7-R4-5 oprire armată cu eroare DUPĂ primul REVOKE → întreaga stare „patch” (ACL + privilegii efective), fără combinații" "division by zero" revenire "$BASE/opr_err.sql" "$C_OP" "$V_OP"
+e_stare patch "7-R4-5 după eroarea din oprire"
 injecteaza "$OPR" '^  REVOKE EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire' '  PERFORM 1/0;  -- EROARE INJECTATĂ (T2)' "$BASE/opr_t2.sql"
 t2_familie "7g oprirea" "$OPR" "$BASE/opr_t2.sql" "$C_OP" "$V_OP" "nearmată în tranzacția curentă"
 sed 's/^\(  REVOKE EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) FROM PUBLIC, anon, \)authenticated, \(service_role;\)$/\1\2/' "$OPR" >"$BASE/opr_post.sql"
@@ -371,15 +439,33 @@ faza oprire || esec "teste după oprire"
 refuzat "7j oprirea a doua oară (din OPRIRE)" "se aplică doar din starea completă a patch-ului" revenire "$OPR" "$C_OP" "$V_OP"
 
 # ── 8. Din oprire ────────────────────────────────────────────────────────────
-pas "8. Din OPRIRE: T1, postcondiția (GRANT lipsă), apoi ieșirea din oprire = REPORNIRE"
-t1 oprire
-grep -v '^  GRANT EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) TO authenticated, service_role;$' "$MIG" >"$BASE/mig_fara_grant.sql"
-refuzat "8a migrare fără GRANT pe alege, din OPRIRE → postcondiția" "Postcondiție 20261003b" livrare "$BASE/mig_fara_grant.sql" 20261003000060
-refuzat "8b livrarea migrării din OPRIRE: refuzată (deja înregistrată)" "deja înregistrată" livrare "$MIG" 20261003000100
+pas "8. Din OPRIRE: migrarea NU repornește (runda 4); moștenire prin roluri; eroare după primul GRANT; apoi REPORNIRE"
+# R4-1 (Copilot r3 §2, testul discriminatoriu): oprire, migrare NEÎNREGISTRATĂ, livrare normală → REFUZ, ACL-urile rămân de oprire.
+sql "CREATE TABLE t.migr_salvate AS SELECT * FROM supabase_migrations.schema_migrations; DELETE FROM supabase_migrations.schema_migrations" >/dev/null
+[ "$(n_migrari)" = 0 ] || esec "8-R4-1: înregistrarea nu a fost scoasă"
+refuzat "8-R4-1 din OPRIRE, fără înregistrare în schema_migrations, livrarea normală a migrării → REFUZ (nu e a doua cale de repornire)" "funcțiile sunt în OPRIRE CONTROLATĂ" livrare "$MIG" 20261003000100
+e_stare oprire "8-R4-1 după refuz: ACL-urile și privilegiile efective sunt tot ale opririi"
+mutant_t1 "$MIG" "$BASE/mig_t1.sql"
+refuzat "8-R4-1 T1 din OPRIRE neînregistrată: precondiția refuză înainte de orice înlocuire" "funcțiile sunt în OPRIRE CONTROLATĂ" livrare "$BASE/mig_t1.sql" 20261003999999
+refuzat "8-R4-1 psql -f simplu din OPRIRE (fără marcaj)" "garda de livrare (start)" runner_psql_f "$MIG"
+sql "INSERT INTO supabase_migrations.schema_migrations SELECT * FROM t.migr_salvate; DROP TABLE t.migr_salvate" >/dev/null
+refuzat "8a livrarea migrării din OPRIRE, înregistrată → REFUZ (precondiția, înaintea verificării înregistrării)" "funcțiile sunt în OPRIRE CONTROLATĂ" livrare "$MIG" 20261003000101
+# R4-2 (Copilot r3 §3): EXECUTE primit prin MOȘTENIRE, fără schimbarea proacl → starea nu mai e „oprire”
+[ "$(scurt)" = "$PATCH_H | $ACL_OPRIT | $ACL_OPRIT | $H_ACCES" ] || esec "8-R4-2: pornire"
+sql "GRANT postgres TO service_role" >/dev/null
+[ "$(scurt)" = "$PATCH_H | $ACL_OPRIT | $ACL_OPRIT | $H_ACCES" ] && [ "$(sql "SELECT has_function_privilege('service_role', '$ALEGE'::regprocedure, 'EXECUTE')")" = t ] \
+  || esec "8-R4-2: moștenirea nu a dat EXECUTE sau a schimbat proacl"
+ok "8-R4-2 service_role membru al proprietarului: proacl NESCHIMBAT ($ACL_OPRIT), dar has_function_privilege(service_role) = t"
+trei_refuza "8-R4-2 oprire + EXECUTE moștenit de service_role"
+sql "REVOKE postgres FROM service_role" >/dev/null
+e_stare oprire "8-R4-2 apartenența retrasă"
 refuzat "8c repornirea NEARMATĂ" "nearmată în tranzacția curentă" fara_armare "$REP"
 refuzat "8c repornirea armată cu comutatorul opririi" "nearmată în tranzacția curentă" revenire "$REP" "$C_OP" "$V_OP"
 grep -v '^  GRANT EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) TO authenticated, service_role;$' "$REP" >"$BASE/rep_fara_grant.sql"
 refuzat "8d repornire fără GRANT pe alege → postcondiția" "Postcondiție REPORNIRE" revenire "$BASE/rep_fara_grant.sql" "$C_RP" "$V_RP"
+injecteaza "$REP" '^  GRANT EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire' '  PERFORM 1/0;  -- EROARE INJECTATĂ (după primul GRANT)' "$BASE/rep_err.sql"
+refuzat "8-R4-5 repornire armată cu eroare DUPĂ primul GRANT → întreaga stare „oprire” (ACL + privilegii efective), fără combinații" "division by zero" revenire "$BASE/rep_err.sql" "$C_RP" "$V_RP"
+e_stare oprire "8-R4-5 după eroarea din repornire"
 R=$(armare_ramasa_dupa "$REP" "$C_RP" "$V_RP") || { cat "$BASE/rev.err" >&2; esec "8e repornirea armată"; }
 [ "$R" = "armare_ramasa=[]" ] || esec "repornire: comutatorul a rămas armat: $R"
 e_stare patch "8e repornirea armată: exact starea patch-ului (GRANT-uri refăcute), comutatorul dezarmat"
@@ -390,12 +476,6 @@ faza runda3 || esec "runda 3 după repornire"
 
 # ── 9. Stări mixte și atribute ───────────────────────────────────────────────
 pas "9. Stări MIXTE și atribute schimbate → migrarea, rollback-ul, oprirea și repornirea refuză, fără urme"
-trei_refuza() {  # trei_refuza <eticheta>
-  refuzat "$1 → migrarea (livrare)" "Precondiție 20261003b: starea curentă nu e o stare completă" livrare "$MIG" 20261003999000
-  refuzat "$1 → rollback-ul armat" "ROLLBACK TEHNIC 20261003b blocat: starea curentă" revenire "$RB" "$C_RB" "$V_RB"
-  refuzat "$1 → oprirea armată" "se aplică doar din starea completă a patch-ului" revenire "$OPR" "$C_OP" "$V_OP"
-  refuzat "$1 → repornirea armată" "doar din starea completă „oprire”" revenire "$REP" "$C_RP" "$V_RP"
-}
 for pr in "live patch" "patch live" "live oprire" "oprire live" "patch oprire" "oprire patch"; do
   set -- $pr
   sql "SELECT t.pune('alege', '$1'); SELECT t.pune('pereche', '$2')" >/dev/null
@@ -403,10 +483,10 @@ for pr in "live patch" "patch live" "live oprire" "oprire live" "patch oprire" "
   sql "SELECT t.pune('alege', 'patch'); SELECT t.pune('pereche', 'patch')" >/dev/null
 done
 e_stare patch "9 după stările mixte"
-ALEGE='public.fn_ofertare_alege_acoperire(bigint)'; PERECHE='public.ofertare_inventar_pereche(bigint,text,integer,real)'
 atribut() {  # atribut <eticheta> <SQL strică> <SQL repară>
   sql "$2" >/dev/null; trei_refuza "9 $1"; sql "$3" >/dev/null; e_stare patch "9 $1 reparat"
 }
+atribut "R4-2 moștenire: anon membru al authenticated (proacl neschimbat)" "GRANT authenticated TO anon" "REVOKE authenticated FROM anon"
 atribut "ACL: anon primește EXECUTE pe alege" "GRANT EXECUTE ON FUNCTION $ALEGE TO anon" "REVOKE EXECUTE ON FUNCTION $ALEGE FROM anon"
 atribut "ACL: service_role pierde EXECUTE pe pereche" "REVOKE EXECUTE ON FUNCTION $PERECHE FROM service_role" "GRANT EXECUTE ON FUNCTION $PERECHE TO service_role"
 atribut "SECURITY INVOKER pe pereche" "ALTER FUNCTION $PERECHE SECURITY INVOKER" "ALTER FUNCTION $PERECHE SECURITY DEFINER"
@@ -442,6 +522,7 @@ refuzat "11g rollback cu corp live schimbat → postcondiția" "Postcondiție RO
 R=$(armare_ramasa_dupa "$RB" "$C_RB" "$V_RB") || { cat "$BASE/rev.err" >&2; esec "rollback-ul armat"; }
 [ "$R" = "armare_ramasa=[]" ] || esec "rollback: comutatorul a rămas armat: $R"
 e_stare live "11h rollback-ul armat (procedura documentată) readuce exact starea live"
+SCEN_LIVE=$(scenariu_protectii)
 faza gaura || esec "gaura după rollback tehnic"
 faza_pica patched || esec "suita patched a trecut pe starea live (testele nu prind gaura)"
 ok "suita patched CADE pe starea live: $(primul_esec "$BASE/vacuu.out")"
@@ -486,6 +567,88 @@ ok "jurnal: alegere înlocuită ×$N_ALEGE; prag cerut 0 → 0.45 ×$N_PERECHE; 
 [ "$(sql "SELECT string_agg(version, ',' ORDER BY version) FROM supabase_migrations.schema_migrations")" = "20261003000000" ] \
   || esec "schema_migrations: $(sql "SELECT string_agg(version, ',') FROM supabase_migrations.schema_migrations")"
 ok "schema_migrations: exact livrarea reușită (20261003000000), o dată; nicio încercare eșuată, reluare sau revenire înregistrată"
+
+# ── 14. Runda 4: patch → oprire → repornire, conexiuni existente, apel în curs, protecțiile după repornire ──
+pas "14. Runda 4 (Copilot r3 §5): conexiuni EXISTENTE, apel ÎN CURS suspendat determinist, repornire cu protecțiile patch-ului"
+e_stare patch "14 pornire"
+sql "SELECT t.reset_fixture()" >/dev/null
+ses_start A; ses_start B
+# Conexiuni deschise ÎNAINTE de oprire, cu apeluri reușite (plan/cache încălzit): owner și utilizatorul cu modul.
+ses A "$(CA_ID $U_OWNER) SELECT 'A_owner_patch=' || ales_id FROM public.fn_ofertare_alege_acoperire(1003);"
+grep -qx 'A_owner_patch=1003' "$BASE/ses_A.out" || { cat "$BASE/ses_A.out" >&2; esec "14a owner pe patch, conexiunea A"; }
+ses B "$(CA_ID $U_MOD) SELECT 'B_mod_patch=' || imperecheate FROM public.ofertare_inventar_pereche(10, 'gemini', 1);"
+grep -q '^B_mod_patch=' "$BASE/ses_B.out" || { cat "$BASE/ses_B.out" >&2; esec "14a utilizator cu modul pe patch, conexiunea B"; }
+ok "14a pe PATCH, în conexiunile A (owner) și B (cu modul), deschise înainte de oprire: apelurile trec"
+
+# Apel ÎN CURS: C (cu modul) intră în pereche(40, p_prag=0) și e suspendat DETERMINIST înaintea UPDATE-ului:
+# L ține LOCK EXCLUSIVE pe ofertare_inventar_ai (SELECT-ul funcției trece, UPDATE-ul așteaptă).
+ses_start C; ses_start L
+sql "UPDATE public.ofertare_inventar_ai SET verdict = NULL, pereche_cerinta_id = NULL WHERE id IN (41, 42, 43)" >/dev/null
+INV0=$(sql "SELECT t.inv_row(41) || ';' || t.inv_row(42) || ';' || t.inv_row(43)")
+ses L "BEGIN; LOCK TABLE public.ofertare_inventar_ai IN EXCLUSIVE MODE; SELECT 'L_lock';"
+PC=$(sed -n 's/^pid=//p' "$BASE/ses_C.out" | head -1)
+ses C "$(CA_ID $U_MOD)"
+ses_trimite C "SELECT 'C_rezultat=' || imperecheate || '/' || ramase_fara_pereche FROM public.ofertare_inventar_pereche(40, 'gemini', 1, 0);"
+ses_trimite C '\echo __C_GATA'
+for i in $(seq 1 300); do
+  [ "$(sql "SELECT count(*) FROM pg_stat_activity WHERE pid = $PC AND wait_event_type = 'Lock' AND query LIKE '%ofertare_inventar_pereche%'")" = 1 ] && break
+  sleep 0.1; [ "$i" = 300 ] && esec "14b apelul C nu a ajuns să aștepte la UPDATE"
+done
+ok "14b apelul C (cu modul, pereche lic. 40, p_prag=0) a intrat în funcție și așteaptă înaintea scrierii (pg_stat_activity: wait_event_type=Lock)"
+
+# OPRIREA, într-o conexiune nouă (procedura documentată), cât timp C e în curs.
+R=$(armare_ramasa_dupa "$OPR" "$C_OP" "$V_OP") || { cat "$BASE/rev.err" >&2; esec "14c oprirea"; }
+e_stare oprire "14c oprirea COMISĂ cu apelul C încă în curs; verificată separat, după COMMIT, într-o conexiune nouă"
+# Conexiunile EXISTENTE (A, B) și identitățile: toate refuzate după COMMIT-ul opririi.
+p=$(ses_de_la A); ses A "$(CA_ID $U_OWNER) SELECT * FROM public.fn_ofertare_alege_acoperire(1002);"
+ses_dupa A "$p" | grep -q 'permission denied for function fn_ofertare_alege_acoperire' || { ses_dupa A "$p" >&2; esec "14d owner, conexiune existentă"; }
+p=$(ses_de_la B); ses B "$(CA_ID $U_MOD) SELECT * FROM public.ofertare_inventar_pereche(10, 'gemini', 1, 0);"
+ses_dupa B "$p" | grep -q 'permission denied for function ofertare_inventar_pereche' || { ses_dupa B "$p" >&2; esec "14d cu modul, conexiune existentă"; }
+p=$(ses_de_la B); ses B "$(CA_ID $U_NOMOD) SELECT * FROM public.ofertare_inventar_pereche(10);"
+ses_dupa B "$p" | grep -q 'permission denied' || esec "14d fără modul, conexiune existentă"
+p=$(ses_de_la B); ses B "$(CA_ID -) SELECT * FROM public.fn_ofertare_alege_acoperire(1002);"
+ses_dupa B "$p" | grep -q 'permission denied' || esec "14d fără uid, conexiune existentă"
+p=$(ses_de_la A); ses A "RESET ROLE; SET request.jwt.claims TO '{\"role\":\"service_role\"}'; SET ROLE service_role; SELECT * FROM public.ofertare_inventar_pereche(10);"
+ses_dupa A "$p" | grep -q 'permission denied' || esec "14d service_role, conexiune existentă"
+ok "14d în OPRIRE, din conexiunile EXISTENTE (deschise pe patch): owner, cu modul, fără modul, fără uid, service_role → permission denied"
+[ "$(sql "SELECT t.inv_row(41) || ';' || t.inv_row(42) || ';' || t.inv_row(43)")" = "$INV0" ] || esec "14e C a scris înainte de eliberarea blocării"
+ok "14e până la eliberarea blocării, apelul C n-a scris nimic (rândurile 41–43 neschimbate)"
+# Eliberăm blocarea: C își termină scrierea DUPĂ COMMIT-ul opririi (REVOKE nu anulează un apel început).
+ses L "COMMIT;"; ses_asteapta C __C_GATA
+grep -q '^C_rezultat=' "$BASE/ses_C.out" || { cat "$BASE/ses_C.out" >&2; esec "14f apelul C a căzut (așteptam să termine)"; }
+INV1=$(sql "SELECT t.inv_row(41) || ';' || t.inv_row(42) || ';' || t.inv_row(43)")
+[ "$INV1" != "$INV0" ] && [ "$INV1" = '-|lipsa_din_registru|-|-;-|lipsa_din_registru|-|-;-|lipsa_din_registru|-|-' ] || esec "14f scrierea lui C: $INV1"
+ok "14f CONSTATARE: apelul început înainte de oprire și-a terminat scrierea DUPĂ COMMIT-ul opririi ($(grep '^C_rezultat=' "$BASE/ses_C.out")); cu protecțiile patch-ului (p_prag=0 → 0.45, golurile 41–43 = lipsă). Oprirea NU se declară efectivă înainte de încheierea și reconcilierea apelurilor în curs (docs §12.3)"
+p=$(ses_de_la C); ses C "SELECT * FROM public.ofertare_inventar_pereche(40, 'gemini', 1, 0);"
+ses_dupa C "$p" | grep -q 'permission denied' || esec "14g C, al doilea apel"
+ok "14g aceeași conexiune C, apel NOU după oprire → permission denied"
+e_stare oprire "14g starea tot „oprire”"
+
+# Repornirea (conexiune nouă), apoi aceleași conexiuni existente.
+R=$(armare_ramasa_dupa "$REP" "$C_RP" "$V_RP") || { cat "$BASE/rev.err" >&2; esec "14h repornirea"; }
+e_stare patch "14h repornirea comisă; verificată separat"
+sql "SELECT t.reset_fixture()" >/dev/null
+p=$(ses_de_la A); ses A "$(CA_ID $U_OWNER) SELECT 'A_owner_rep=' || ales_id FROM public.fn_ofertare_alege_acoperire(1003);"
+ses_dupa A "$p" | grep -qx 'A_owner_rep=1003' || { ses_dupa A "$p" >&2; esec "14i owner după repornire"; }
+p=$(ses_de_la B); ses B "$(CA_ID $U_MOD) SELECT 'B_mod_rep=' || ales_id FROM public.fn_ofertare_alege_acoperire(1002);"
+ses_dupa B "$p" | grep -qx 'B_mod_rep=1002' || { ses_dupa B "$p" >&2; esec "14i cu modul după repornire"; }
+ok "14i după REPORNIRE, în conexiunile existente: owner și utilizatorul cu modul trec"
+p=$(ses_de_la B); ses B "$(CA_ID $U_NOMOD) SELECT * FROM public.fn_ofertare_alege_acoperire(2001);"
+ses_dupa B "$p" | grep -q 'modulul Ofertare' || { ses_dupa B "$p" >&2; esec "14j fără modul după repornire"; }
+p=$(ses_de_la B); ses B "$(CA_ID -) SELECT * FROM public.ofertare_inventar_pereche(10);"
+ses_dupa B "$p" | grep -q 'autentificat' || { ses_dupa B "$p" >&2; esec "14j fără uid după repornire"; }
+ok "14j după REPORNIRE: fără modul → 42501 „modulul Ofertare”, fără uid → 42501 „autentificat” (poarta patch-ului)"
+for n in A B C L; do ses_stop $n; done
+# Protecțiile patch-ului identice după repornire (respins_de_om, confirmat_de_om, p_prag=0).
+SCEN_REP=$(scenariu_protectii)
+[ "$SCEN_REP" = "$SCEN_PATCH" ] || { diff <(tr ';' '\n' <<<"$SCEN_PATCH") <(tr ';' '\n' <<<"$SCEN_REP") >&2 || true; esec "14k scenariul protecțiilor după repornire ≠ patch"; }
+UMANE="SELECT t.inv_row(3) || ';' || t.inv_row(6) || ';' || t.inv_row(4) || ';' || t.inv_row(44)"
+DUPA=$(sql "$UMANE"); sql "SELECT t.reset_fixture()" >/dev/null; INITIAL=$(sql "$UMANE")
+[ "$DUPA" = "$INITIAL" ] && grep -q 'respins_de_om' <<<"$DUPA" && grep -q 'confirmat_de_om' <<<"$DUPA" || esec "14k verdictele umane: $DUPA ≠ $INITIAL"
+ok "14k după REPORNIRE, scenariul p_prag=0 cu respins_de_om/confirmat_de_om dă EXACT rezultatul de pe patch (instantaneu identic); verdictele umane neatinse"
+[ -n "${SCEN_LIVE:-}" ] && [ "$SCEN_LIVE" != "$SCEN_PATCH" ] || esec "14k vacuitate: scenariul pe LIVE trebuia să difere"
+ok "14k discriminare: același scenariu pe starea LIVE (pas 11) dă alt rezultat (rescrie respins_de_om / ascunde golurile)"
+e_stare patch "14 final"
 curata_persistente
 
 printf '\n\033[32mTOATE TESTELE AU TRECUT\033[0m — %d verificări OK\n' "$N_OK"

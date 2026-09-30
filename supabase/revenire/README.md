@@ -4,8 +4,8 @@ Aici stau fișierele de revenire ale patch-ului de securitate Ofertare 20261003b
 
 | Fișier | Ce face | Cine decide |
 |---|---|---|
-| `20261003b_sec_ofertare_porti_alege_inventar_OPRIRE_CONTROLATA.sql` | Păstrează corpurile patch-ului și retrage EXECUTE pe cele 2 funcții (authenticated, anon, PUBLIC, service_role). Funcționalitatea se **oprește**, nu se redeschide. | Răzvan, explicit. |
-| `20261003b_sec_ofertare_porti_alege_inventar_REPORNIRE.sql` | Ieșirea din oprire: doar din starea „oprire”, reface GRANT-urile patch-ului; postcondiție = patch. (Migrarea nu se reia: `scripts/livrare_migrare.sh` refuză o migrare deja înregistrată.) | Răzvan, explicit. |
+| `20261003b_sec_ofertare_porti_alege_inventar_OPRIRE_CONTROLATA.sql` | Păstrează corpurile patch-ului și retrage EXECUTE pe cele 2 funcții (authenticated, anon, PUBLIC, service_role). Funcționalitatea se **oprește**, nu se redeschide. | Răzvan, explicit (schimbare de drepturi). Efectivă doar după verificarea separată și reconcilierea apelurilor în curs (docs §12.3). |
+| `20261003b_sec_ofertare_porti_alege_inventar_REPORNIRE.sql` | **Singura** ieșire din oprire: doar din starea „oprire”, reface GRANT-urile patch-ului; postcondiție = patch (ACL + privilegii efective). Migrarea refuză starea „oprire” (runda 4). | Răzvan, explicit. |
 | `20261003b_sec_ofertare_porti_alege_inventar_ROLLBACK.sql` | ROLLBACK TEHNIC: readuce starea live din 29.09 și **redeschide bypass-ul**. Artefact **fără GO de execuție**. | Doar la cererea explicită a lui Răzvan, după o decizie și un review Copilot specifice. |
 
 ## De ce nu le rulează nimeni automat

@@ -9,13 +9,21 @@
 --   • Corpurile patch-ului rămân NESCHIMBATE (poarta NULL-safe, prag [0.45, 0.95], verdictele
 --     omului neatinse). Fișierul nu creează și nu înlocuiește nicio funcție.
 --   • Retrage EXECUTE pe cele două funcții de la authenticated, anon, PUBLIC și service_role.
---     service_role nu le apelează (pg_stat_statements: niciun apel; poarta îl refuză oricum,
---     fiindcă n-are uid), deci retragerea nu strică nimic. Rămâne doar proprietarul (postgres).
---   • UI-ul primește „permission denied for function …” (42501): „alege” și „Compară cu
---     registrul” sunt oprite pentru toată lumea, inclusiv owner. Nimic nu se scrie prin ele:
---     verdictele umane rămân cum sunt, iar un p_prag=0 nu mai are pe unde să ascundă goluri.
+--     Rămâne doar proprietarul (postgres). Precondiția și postcondiția verifică și privilegiile
+--     EFECTIVE (has_function_privilege, cu moștenirea prin roluri), nu doar ACL-ul direct.
+--   • CE ÎNSEAMNĂ (formularea din verdictul Copilot r3, runda 4):
+--     Apelurile directe noi ale rolurilor API evaluate sunt refuzate după COMMIT. Apelurile deja
+--     începute și eventualele căi privilegiate intermediare se verifică separat. REST-ul direct pe
+--     tabele rămâne neschimbat.
+--     Concret: REVOKE nu anulează un apel deja început (testul „apel în curs” din harness: un apel
+--     suspendat înaintea scrierii își termină scrierea DUPĂ COMMIT-ul opririi). O funcție intermediară
+--     SECURITY DEFINER a proprietarului ar putea încă invoca ținta: inventarul live din 30.09 nu a găsit
+--     niciuna (docs §12.4), dar asta se reverifică la momentul opririi.
+--   • Oprirea se DECLARĂ efectivă doar după procedura din docs §12.3: COMMIT reușit, starea citită
+--     separat (postcondiție rulată din nou, într-o conexiune nouă), apelurile în curs începute înainte
+--     de COMMIT încheiate și scrierile lor reconciliate. Anularea de sesiuni (pg_cancel_backend /
+--     pg_terminate_backend) NU face parte din fișier: cere autorizare separată.
 --   • fn_are_acces_ofertare() NU se atinge: politicile RLS de scriere o folosesc.
---   • Calea directă prin REST pe tabele rămâne cum e azi: RLS, cu aceeași poartă de modul.
 -- Ieșirea din oprire = 20261003b_sec_ofertare_porti_alege_inventar_REPORNIRE.sql (reface GRANT-urile;
 -- pornește doar din oprire). Migrarea nu se reia: runner-ul comun refuză o migrare deja înregistrată.
 --
@@ -49,18 +57,20 @@ WITH fn(ord, fn, nume, sig) AS (VALUES
   ('acces',   'secdef=t lang=sql vol=s strict=f leakproof=f parallel=u cost=100 rows=0 owner=postgres n=1 args=() rez=boolean'),
   ('alege',   'secdef=t lang=plpgsql vol=v strict=f leakproof=f parallel=u cost=100 rows=1000 owner=postgres n=1 args=(p_acoperire_id bigint) rez=TABLE(cerinta_id bigint, pozitie_id bigint, ales_id bigint, inlocuit_id bigint)'),
   ('pereche', 'secdef=t lang=plpgsql vol=v strict=f leakproof=f parallel=u cost=100 rows=1000 owner=postgres n=1 args=(p_lic bigint, p_furnizor text DEFAULT NULL::text, p_versiune integer DEFAULT NULL::integer, p_prag real DEFAULT 0.45) rez=TABLE(imperecheate integer, ramase_fara_pereche integer)')
-), cunoscut(stare, fn, md5_prosrc, config, acl) AS (VALUES
+), cunoscut(stare, fn, md5_prosrc, config, acl, efectiv) AS (VALUES
   -- STĂRI COMPLETE: o stare e recunoscută doar dacă TOATE trei funcțiile au rândul ei.
   -- md5(prosrc) = md5 al textului literal al corpului; ACL sortat (COLLATE "C").
-  ('live',   'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('live',   'alege',   '56a7c6ddd1e342c77e7b34f4e08ecab1', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('live',   'pereche', 'edd4819c81844baafc7eeade838cbcff', '{"search_path=public, extensions, pg_temp"}', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('patch',  'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('patch',  'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('patch',  'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('oprire', 'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
-  ('oprire', 'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}'),
-  ('oprire', 'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}')
+  -- efectiv (runda 4) = privilegiile EFECTIVE (has_function_privilege, cu moștenirea prin roluri) pentru
+  -- anon, PUBLIC, authenticated, service_role: același proacl cu altă apartenență la roluri = stare necunoscută.
+  ('live',   'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('live',   'alege',   '56a7c6ddd1e342c77e7b34f4e08ecab1', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('live',   'pereche', 'edd4819c81844baafc7eeade838cbcff', '{"search_path=public, extensions, pg_temp"}', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('patch',  'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('patch',  'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('patch',  'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('oprire', 'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}', 'anon=f public=f authenticated=t service_role=t'),
+  ('oprire', 'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}', 'anon=f public=f authenticated=f service_role=f'),
+  ('oprire', 'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}', 'anon=f public=f authenticated=f service_role=f')
 ), observat AS (
   SELECT fn.ord, fn.fn, md5(p.prosrc) AS md5_prosrc, p.proconfig::text AS config,
          (SELECT array_agg(a::text ORDER BY a::text COLLATE "C")
@@ -69,23 +79,26 @@ WITH fn(ord, fn, nume, sig) AS (VALUES
                 p.prosecdef, l.lanname, p.provolatile, p.proisstrict, p.proleakproof, p.proparallel, p.procost, p.prorows,
                 pg_get_userbyid(p.proowner),
                 (SELECT count(*) FROM pg_catalog.pg_proc q WHERE q.pronamespace = 'public'::regnamespace AND q.proname = fn.nume),
-                pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)) AS atribute
+                pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)) AS atribute,
+         format('anon=%s public=%s authenticated=%s service_role=%s',
+                has_function_privilege('anon', p.oid, 'EXECUTE'), has_function_privilege('public', p.oid, 'EXECUTE'),
+                has_function_privilege('authenticated', p.oid, 'EXECUTE'), has_function_privilege('service_role', p.oid, 'EXECUTE')) AS efectiv
     FROM fn
     LEFT JOIN pg_catalog.pg_proc p ON p.oid = to_regprocedure(fn.sig)
     LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
 ), potrivit AS (
-  SELECT o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute,
+  SELECT o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute, o.efectiv,
          array_agg(c.stare ORDER BY c.stare) FILTER (WHERE c.stare IS NOT NULL) AS stari
     FROM observat o
     JOIN fixe f ON f.fn = o.fn
     LEFT JOIN cunoscut c ON c.fn = o.fn AND c.md5_prosrc = o.md5_prosrc AND c.config IS NOT DISTINCT FROM o.config
-                        AND c.acl = o.acl AND f.atribute = o.atribute
-   GROUP BY o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute
+                        AND c.acl = o.acl AND f.atribute = o.atribute AND c.efectiv = o.efectiv
+   GROUP BY o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute, o.efectiv
 )
 SELECT (SELECT s.stare FROM (SELECT unnest(p.stari) AS stare FROM potrivit p) s
          GROUP BY s.stare HAVING count(*) = 3) AS stare,
        string_agg(format('%s=%s', p.fn, coalesce(array_to_string(p.stari, '/'), 'NECUNOSCUTĂ')), ', ' ORDER BY p.ord) AS rezumat,
-       string_agg(format('%s: md5(prosrc)=%s config=%s acl=%s %s', p.fn, p.md5_prosrc, p.config, p.acl, p.atribute),
+       string_agg(format('%s: md5(prosrc)=%s config=%s acl=%s efectiv=[%s] %s', p.fn, p.md5_prosrc, p.config, p.acl, p.efectiv, p.atribute),
                   E'\n' ORDER BY p.ord) AS detaliu
   FROM potrivit p
 $stari$;
@@ -122,5 +135,6 @@ BEGIN
 
   -- 6. Dezarmăm comutatorul (și o eventuală variantă de sesiune), apoi anunțăm.
   PERFORM set_config('gazpet.oprire_controlata_20261003b', '', false);
-  RAISE WARNING 'OPRIRE CONTROLATĂ 20261003b aplicată: „alege” și „Compară cu registrul” sunt oprite (EXECUTE retras). Ieșirea din oprire = _REPORNIRE.sql (supabase/revenire).';
+  -- Mesajul NU e dovadă de COMMIT (e emis înainte de el): starea se verifică separat, după COMMIT.
+  RAISE NOTICE 'OPRIRE CONTROLATĂ 20261003b: postcondiție trecută în tranzacție (EXECUTE retras). Efectivă doar după COMMIT reușit și verificarea separată din docs §12.3. Ieșirea din oprire = _REPORNIRE.sql.';
 END $oprire_controlata$;
