@@ -654,7 +654,7 @@ function ImportFacturiModal({ contracte, profile, onClose, onDone }) {
 }
 
 // ─── Card contract ──────────────────────────────────────────────────────────
-function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onViewActe, onViewGBE, onViewPdf, onChangeStatus, isMama, nrCopii, totalCopii, totalFacturatCopii, collapsed, onToggleCollapse }) {
+function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFacturi, onViewActe, onViewGBE, onViewPdf, onChangeStatus, onArhiveaza, isMama, nrCopii, totalCopii, totalFacturatCopii, collapsed, onToggleCollapse }) {
   const tip = TIP_META_ALL[c.tip_contract]
   const rol = ROL_META[c.rol_gazpet]
   const st  = STATUS_META[c.status] || STATUS_META.draft
@@ -713,6 +713,7 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
               </span>
             )}
             <Badge label={st.label} color={st.color} />
+            {c.arhivat_la && <Badge label={`🗄 Arhivat ${new Date(c.arhivat_la).toLocaleDateString('ro-RO')}`} color={G.muted} />}
             {tip && <Badge label={tip.label} color={tip.color} emoji={tip.emoji} />}
             {rol && <Badge label={rol.label} color={rol.color} />}
             {/* Alerte critice */}
@@ -855,6 +856,13 @@ function ContractCard({ c, isOwner, canManage, onEdit, onViewLinii, onViewFactur
                 border: `1px solid ${G.orange}44`, borderRadius: 6, cursor: 'pointer',
                 fontSize: 11, fontWeight: 600,
               }}>✏️</button>
+            )}
+            {canManage && onArhiveaza && (
+              <button onClick={() => onArhiveaza(c)} title={c.arhivat_la ? 'Scoate din arhivă' : 'Arhivează (nu se șterge nimic — se poate dezarhiva)'} style={{
+                padding: '5px 10px', background: G.muted + '18', color: c.arhivat_la ? G.green : G.muted,
+                border: `1px solid ${G.border}`, borderRadius: 6, cursor: 'pointer',
+                fontSize: 11, fontWeight: 600,
+              }}>{c.arhivat_la ? '♻️ Dezarhivează' : '🗄 Arhivează'}</button>
             )}
           </div>
         </div>
@@ -2327,6 +2335,7 @@ export default function ContracteComerciale({ profile }) {
   const [acteContract, setActeContract] = useState(null)
   const [gbeContract, setGbeContract] = useState(null)
   const [importOpen, setImportOpen] = useState(false)
+  const [arataArhivate, setArataArhivate] = useState(false)  // TKT-2026-0307: arhivatele ascunse implicit
   const [expanded, setExpanded] = useState({})  // { [contractMamaId]: true=deschis }; gol = toate închise
 
   const toggleCollapse = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }))
@@ -2340,6 +2349,25 @@ export default function ContracteComerciale({ profile }) {
     if (nouStatus === c.status) return
     const { error } = await supabase.from('contracte_terti').update({ status: nouStatus, updated_at: new Date().toISOString() }).eq('id', c.id)
     if (error) { alert('Eroare la schimbare status: ' + error.message); return }
+    loadAll()
+  }
+
+  // TKT-2026-0307: arhivare reversibilă în loc de ștergere — liniile, actele, polițele, GBE-urile rămân
+  async function handleArhiveaza(c) {
+    const eticheta = `${c.numar_contract ? 'Nr. ' + c.numar_contract + ' — ' : ''}${c.denumire || ''}`
+    if (c.arhivat_la) {
+      if (!window.confirm(`Scoți din arhivă contractul „${eticheta}"?\nReapare în lista principală.`)) return
+      const { error } = await supabase.from('contracte_terti').update({ arhivat_la: null, arhivat_de: null, motiv_arhivare: null }).eq('id', c.id)
+      if (error) { alert('Eroare la dezarhivare: ' + error.message); return }
+    } else {
+      const motiv = window.prompt(`Arhivezi contractul „${eticheta}"?\n\nNu se șterge nimic: liniile, actele adiționale, polițele și GBE-urile rămân, iar contractul se poate dezarhiva oricând (comutatorul „arată arhivate").\n\nMotiv (opțional):`, '')
+      if (motiv === null) return
+      const { data: { user } } = await supabase.auth.getUser()
+      const { error } = await supabase.from('contracte_terti').update({
+        arhivat_la: new Date().toISOString(), arhivat_de: user?.id || null, motiv_arhivare: motiv.trim() || null,
+      }).eq('id', c.id)
+      if (error) { alert('Eroare la arhivare: ' + error.message); return }
+    }
     loadAll()
   }
 
@@ -2357,7 +2385,7 @@ export default function ContracteComerciale({ profile }) {
       supabase.from('v_contracte_cu_linii').select('*').order('sens').order('created_at', { ascending: false }),
       supabase.from('sites').select('id, name, denumire_qr').order('name'),
       supabase.from('beneficiari').select('id, nume').eq('activ', true).order('nume'),
-      supabase.from('contracte_terti').select('id, pdf_path, gbe_tip, gbe_pct_deblocare_receptie, gbe_pct_deblocare_final, garantie_perioada_luni, gbe_data_estimata_recuperare, gbe_observatii'),
+      supabase.from('contracte_terti').select('id, pdf_path, arhivat_la, motiv_arhivare, gbe_tip, gbe_pct_deblocare_receptie, gbe_pct_deblocare_final, garantie_perioada_luni, gbe_data_estimata_recuperare, gbe_observatii'),
       supabase.from('v_gbe_per_contract').select('contract_id, gbe_retinut, gbe_restituit, gbe_ramas'),
       supabase.from('gbe_polite').select('contract_id, data_expirare, valoare_lei').eq('activ', true),
     ])
@@ -2377,6 +2405,8 @@ export default function ContracteComerciale({ profile }) {
       return {
         ...c,
         pdf_path: base.pdf_path || null,
+        arhivat_la: base.arhivat_la || null,
+        motiv_arhivare: base.motiv_arhivare || null,
         gbe_tip: base.gbe_tip || null,
         gbe_pct_deblocare_receptie: base.gbe_pct_deblocare_receptie,
         gbe_pct_deblocare_final: base.gbe_pct_deblocare_final,
@@ -2394,8 +2424,11 @@ export default function ContracteComerciale({ profile }) {
   }
 
   // Filtrare
+  const nrArhivate = useMemo(() => contracte.filter(c => c.arhivat_la).length, [contracte])
+  // lista de lucru: fără arhivate (dacă nu s-a cerut explicit) — KPI, alerte și listă pleacă de aici
+  const contracteActive = useMemo(() => contracte.filter(c => !c.arhivat_la), [contracte])
   const filtered = useMemo(() => {
-    return (contracte || []).filter(c => {
+    return (arataArhivate ? contracte : contracteActive).filter(c => {
       if (filterSens !== 'toate' && c.sens !== filterSens) return false
       if (filterTip && c.tip_contract !== filterTip) return false
       if (filterStatus && c.status !== filterStatus) return false
@@ -2408,7 +2441,7 @@ export default function ContracteComerciale({ profile }) {
       }
       return true
     })
-  }, [contracte, filterSens, filterTip, filterStatus, search])
+  }, [contracte, contracteActive, arataArhivate, filterSens, filterTip, filterStatus, search])
 
   // Sortare (12.06.2026) — la valoare folosim valoarea ACTUALĂ (cu acte adiționale) dacă există
   const sorted = useMemo(() => {
@@ -2427,16 +2460,16 @@ export default function ContracteComerciale({ profile }) {
   const contracteUpstream = contracte.filter(c => c.sens === 'incasare')
 
   // KPIs
-  const totalUpstream   = contracte.filter(c => c.sens === 'incasare').reduce((s, c) => s + Number(c.valoare_lei || 0), 0)
-  const totalDownstream = contracte.filter(c => c.sens === 'plata').reduce((s, c) => s + Number(c.valoare_lei || 0), 0)
-  const nrDepasit       = contracte.reduce((s, c) => s + Number(c.nr_pret_depasit_neaprobat || 0), 0)
+  const totalUpstream   = contracteActive.filter(c => c.sens === 'incasare').reduce((s, c) => s + Number(c.valoare_lei || 0), 0)
+  const totalDownstream = contracteActive.filter(c => c.sens === 'plata').reduce((s, c) => s + Number(c.valoare_lei || 0), 0)
+  const nrDepasit       = contracteActive.reduce((s, c) => s + Number(c.nr_pret_depasit_neaprobat || 0), 0)
 
   return (
     <div>
       {/* Dashboard alerte */}
-      {!loading && contracte.length > 0 && (
+      {!loading && contracteActive.length > 0 && (
         <AlerteDashboard
-          contracte={contracte}
+          contracte={contracteActive}
           onFilterSens={s => setFilterSens(s)}
           onFilterStatus={s => setFilterStatus(s)}
           onOpenGbe={c => setGbeContract(c)}
@@ -2446,9 +2479,9 @@ export default function ContracteComerciale({ profile }) {
       {/* KPI */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
         {[
-          { icon: '🔼', label: 'Contracte upstream', value: contracte.filter(c => c.sens === 'incasare').length, color: G.blue },
+          { icon: '🔼', label: 'Contracte upstream', value: contracteActive.filter(c => c.sens === 'incasare').length, color: G.blue },
           { icon: '💰', label: 'Valoare upstream', value: fmtRON(totalUpstream), color: G.green },
-          { icon: '🔽', label: 'Contracte prestatori', value: contracte.filter(c => c.sens === 'plata').length, color: G.purple },
+          { icon: '🔽', label: 'Contracte prestatori', value: contracteActive.filter(c => c.sens === 'plata').length, color: G.purple },
           { icon: nrDepasit > 0 ? '⚠️' : '✅', label: 'Prețuri depășite neaprobate', value: nrDepasit || '0', color: nrDepasit > 0 ? G.red : G.green },
         ].map(k => (
           <div key={k.label} style={{
@@ -2502,6 +2535,11 @@ export default function ContracteComerciale({ profile }) {
           <option value="termen">⏳ Termen apropiat</option>
         </select>
 
+        <label title="Contractele arhivate sunt ascunse implicit; nu sunt șterse" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: arataArhivate ? G.text : G.muted, cursor: 'pointer' }}>
+          <input type="checkbox" checked={arataArhivate} onChange={e => setArataArhivate(e.target.checked)} />
+          🗄 Arată arhivate ({nrArhivate})
+        </label>
+
         {canManage && (
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
             <button onClick={() => setImportOpen(true)} style={{ ...S.btnP, background: G.green }}>
@@ -2539,7 +2577,7 @@ export default function ContracteComerciale({ profile }) {
 
               </div>
               {upstream.map(c => {
-                const childDs = contracte.filter(d => d.sens === 'plata' && String(d.contract_parinte_id) === String(c.id))
+                const childDs = (arataArhivate ? contracte : contracteActive).filter(d => d.sens === 'plata' && String(d.contract_parinte_id) === String(c.id))
                 return (
                   <React.Fragment key={c.id}>
                     <ContractCard c={c} isOwner={isOwner} canManage={canManage}
@@ -2555,7 +2593,8 @@ export default function ContracteComerciale({ profile }) {
                       onViewActe={c => setActeContract(c)}
                       onViewGBE={c => setGbeContract(c)}
                       onViewPdf={handleViewPdf}
-                      onChangeStatus={handleChangeStatus} />
+                      onChangeStatus={handleChangeStatus}
+                      onArhiveaza={handleArhiveaza} />
                     {childDs.length > 0 && expanded[c.id] && (
                       <div style={{ marginLeft: 24, marginBottom: 8 }}>
                         {childDs.map(d => {
@@ -2573,6 +2612,7 @@ export default function ContracteComerciale({ profile }) {
                                   <span style={{ fontSize: 12, fontWeight: 700, color: G.text, fontFamily: 'monospace' }}>Nr. {d.numar_contract || '—'}</span>
                                   <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dSt.color + '22', color: dSt.color, fontWeight: 700 }}>{dSt.label}</span>
                                   {dTip && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: dTip.color + '22', color: dTip.color }}>{dTip.emoji} {dTip.label}</span>}
+                                  {d.arhivat_la && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: G.muted + '22', color: G.muted, fontWeight: 700 }}>🗄 Arhivat</span>}
                                 </div>
                                 <div style={{ fontSize: 12, color: G.text, wordBreak: 'break-word' }}>{d.denumire}</div>
                                 <div style={{ fontSize: 11, color: G.muted, marginTop: 2 }}>{d.partener_text || d.beneficiar_name}{d.site_qr && ` · 📍 ${d.site_qr}`}</div>
@@ -2641,7 +2681,8 @@ export default function ContracteComerciale({ profile }) {
                   onViewActe={c => setActeContract(c)}
                   onViewGBE={c => setGbeContract(c)}
                   onViewPdf={handleViewPdf}
-                  onChangeStatus={handleChangeStatus} />
+                  onChangeStatus={handleChangeStatus}
+                  onArhiveaza={handleArhiveaza} />
               ))}
             </div>
           )}
