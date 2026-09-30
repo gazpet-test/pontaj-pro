@@ -17,6 +17,7 @@
 // v7: CORS complet cu x-client-info. v6: felia persistată. v5: 2 apeluri/invocare.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
+import { descarcaCuJurnal } from '../_shared/egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md) — APLICARE DUPĂ FREEZE
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
@@ -201,7 +202,7 @@ Deno.serve(async (req: Request) => {
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
     const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
 
-    const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(row.fisier_path)
+    const { data: blob, error: dlErr } = await descarcaCuJurnal(supabase, BUCKET, row.fisier_path, 'edge:ofertare-ingest-doc', docId)
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
     const bytes = new Uint8Array(await blob.arrayBuffer())
 
