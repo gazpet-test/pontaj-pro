@@ -519,3 +519,40 @@ Verdict R5: NO-GO ca standard comun, **arhitectura rundei 5 se păstrează** (co
 Rezultat: suita completă de **2 ori, exit 0** (393 aserțiuni OK + 192 verificări negative/fără urme/statice/mutanți). Validator sha256 `fa42296190fc…`, runner `1e1459f1fc41…`.
 
 **Limite declarate (neschimbate):** domeniul = doar operații tranzacționale PostgreSQL; marcajul/garda = protocol, nu autorizație; PG17 (producția) neverificat local — orice diferență e refuz fail-closed. **Rămâne deschis:** GO Copilot pe runda 6 și acordul lui Răzvan; verificarea read-only pe live a `pg_control_system()` pentru rolul operatorului.
+
+## 16. Runda 7 — runner (răspuns la verdictul Copilot R6, `docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R6.md`)
+
+Doar cele 3 blocante; arhitectura și restul regresiei (inclusiv eroarea injectată chiar la INSERT-ul înregistrării) neschimbate.
+
+1. **COPY** — validatorul refuză ORICE instrucțiune de nivel superior care conține `COPY` (FROM STDIN, TO STDOUT, PROGRAM,
+   fișier), înainte de conexiune (cod 3). Nu se încearcă modelarea formatului de date COPY. Migrările actuale (RSVTI,
+   trezorerie, concediu, ofertare, J05) nu folosesc COPY — rămân acceptate. Test 6.17: fragmentul exact din verdict, între
+   gărzi ⇒ refuz 3, psql nepornit, `proba_livrare_copy` absentă, 0 înregistrări. Control dinamic: cu validatorul slăbit
+   (regula COPY scoasă) runnerul real lasă tabela **comisă** (rândul `$date$`, COMMIT executat de psql) și raportează 10 —
+   deci regula e cea care oprește atacul, iar verificarea se face pe starea finală, nu pe exit code.
+2. **Configurare** — `set_config`: apelul e recunoscut în orice formă (`set_config`, `pg_catalog.set_config`,
+   `"set_config"`, `pg_catalog."set_config"`, `"pg_catalog"."SET_CONFIG"`); primul argument COMPLET, până la virgula de nivel 0,
+   trebuie să fie UN literal static simplu `'…'` (fără E/U&, cast, concatenare, literal continuat, `$…$`) ⇒ altfel refuz.
+   `SET`: numele e parsat ca ident(.ident)*, normalizat (neciat ⇒ lower, citat ⇒ exact, calificări unite), iar comparația
+   cu parametrii protejați e fără majuscule (ca `guc_name_compare` din PostgreSQL) și pe ultima componentă; după nume se
+   cere `=`/`TO`/`FROM CURRENT` — orice altă sintaxă (SET ROLE, SESSION AUTHORIZATION, TIME ZONE, CONSTRAINTS…) ⇒ refuz.
+   Cele 3 exemple din verdict sunt refuzate (6.0 și 6.18, prin runner, fără urme); `SET LOCAL search_path = public, pg_temp`,
+   `set_config('gazpet.…', <expresie>, true)` și `current_setting('gazpet.…')` rămân acceptate (6.18: APLICAT).
+   Delimitare păstrată: corpurile dinamice / funcțiile apelate rămân în review-ul artefactului; validatorul nu e sandbox.
+3. **Instanța autoritativă** — aprobarea țintei = `--tinta-db` + `--tinta-sistem` + **endpointul de scriere**
+   `--tinta-host` + `--tinta-port` (acum OBLIGATORII; fostele `--host/--port` au dispărut; `PGHOSTADDR`,
+   `PGTARGETSESSIONATTRS` refuzate). Pre-verificarea, tranzacția principală (în `1_pre`) și reconcilierea cer
+   `pg_is_in_recovery() = false`; altfel 22 (pre-verificare/reconciliere) sau refuz explicit în tranzacție. Limită: un
+   `--service` cu `hostaddr` în pg_service.conf rămâne responsabilitatea operatorului (host/port explicite au prioritate).
+   Test 6.19 cu **replică fizică reală** (pg_basebackup -R din clusterul A, port 5903, `pg_wal_replay_pause()`; același
+   nume de bază și același system_identifier verificate): R1 endpoint = replica ⇒ 22, nimic trimis; R2 livrare pe primar
+   + confirmare pierdută + reconciliere redirecționată la replica întârziată (0 rânduri) ⇒ **22, niciodată 10**; R2b idem
+   cu psql 0 ⇒ 22; R3 tranzacția principală pe replică ⇒ „instanța e în recovery”, primarul confirmă 0 ⇒ 10.
+
+Mutanți noi, toți prinși: runner — fără in_recovery la reconciliere (dă 10 fals, exact scenariul din verdict), fără
+verificarea din tranzacția principală, `--tinta-host` opțional; validator — fără regula COPY, set_config pe primul token,
+set_config citat nerecunoscut, comparație GUC sensibilă la majuscule, SET nerecunoscut acceptat.
+
+Porturi: A 5901, B 5902, replica 5903 (`/tmp/pg_sec_rsvti_r7*`). Suita completă rulată de 2 ori, exit 0:
+`PASS test_sec_rsvti: 393 aserțiuni OK + 225 verificări negative/fără urme/statice OK`. PG17 tot neverificat local.
+NEAPLICAT pe live, nepushat.

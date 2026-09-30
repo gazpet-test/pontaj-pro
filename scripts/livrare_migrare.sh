@@ -37,10 +37,14 @@
 # Utilizare (parola NU pe linia de comandă și nici în chat: ~/.pgpass / PGPASSFILE sau PGSERVICE + pg_service.conf):
 #   bash scripts/livrare_migrare.sh --migrare supabase/migrations/<nume>.sql --sha256 <hex64> \
 #        --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
-#        [--tinta-proiect <marcaj>] [--host H] [--port P] [--user U] [--service S]
+#        --tinta-host <H> --tinta-port <P> [--tinta-proiect <marcaj>] [--user U] [--service S]
+#   Runda 7: aprobarea țintei = db + system_identifier + ENDPOINTUL DE SCRIERE (host:port) [+ proiect]. Pre-verificarea,
+#   tranzacția principală și reconcilierea cer în plus pg_is_in_recovery() = false (o replică fizică are același
+#   system_identifier) ⇒ altfel 22 / refuz. Limită: --service nu trebuie să conțină hostaddr (PGHOSTADDR e refuzat).
 #   În loc de --sha256: --aprobare <fișier> cu un rând „<hex64>  <nume>.sql” (formatul sha256sum).
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
-# Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC.
+# Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
+# PGTARGETSESSIONATTRS.
 # PSQL_BIN (implicit psql) — binarul clientului; doar operatorul local îl setează (teste).
 #
 # Limită de încredere declarată: marcajul și garda sunt o gardă de PROTOCOL, nu o autorizație. Un operator
@@ -58,13 +62,13 @@ while [ $# -gt 0 ]; do
     --migrare) MIG="$2" ;;          --sha256) SHA="$2" ;;          --aprobare) APROBARE="$2" ;;
     --versiune) VERSIUNE="$2" ;;    --tinta-db) TINTA_DB="$2" ;;   --tinta-sistem) TINTA_SIS="$2" ;;
     --tinta-proiect) TINTA_PROI="$2" ;;
-    --host) C_HOST="$2" ;;          --port) C_PORT="$2" ;;         --user) C_USER="$2" ;;
+    --tinta-host) C_HOST="$2" ;;    --tinta-port) C_PORT="$2" ;;   --user) C_USER="$2" ;;
     --service) C_SERVICE="$2" ;;
-    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem [--tinta-proiect --host --port --user --service])" ;;
+    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem --tinta-host --tinta-port [--tinta-proiect --user --service])" ;;
   esac
   shift 2
 done
-for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC; do
+for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS; do
   [ -z "${!v+x}" ] || refuz 2 "variabila $v e setată (parola: ~/.pgpass / PGPASSFILE / PGSERVICE; nimic care schimbă execuția)"
 done
 [ -n "$MIG" ] && [ -f "$MIG" ] || refuz 2 "--migrare lipsă sau fișier inexistent: $MIG"
@@ -74,8 +78,9 @@ NUME="$(basename "$MIG" .sql)"
 [[ "$TINTA_DB" =~ ^[A-Za-z0-9_]{1,63}$ ]] || refuz 2 "--tinta-db obligatorie ([A-Za-z0-9_]): '$TINTA_DB'"
 [[ "$TINTA_SIS" =~ ^[0-9]{1,20}$ ]] || refuz 2 "--tinta-sistem OBLIGATORIU (system_identifier din pg_control_system(), cifre): '$TINTA_SIS'"
 [ -z "$TINTA_PROI" ] || [[ "$TINTA_PROI" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--tinta-proiect invalid"
-[ -z "$C_HOST" ] || [[ "$C_HOST" =~ ^[A-Za-z0-9._/-]{1,253}$ ]] || refuz 2 "--host invalid"
-[ -z "$C_PORT" ] || [[ "$C_PORT" =~ ^[0-9]{1,5}$ ]] || refuz 2 "--port invalid"
+# Runda 7: endpointul de SCRIERE aprobat (host + port) face parte din aprobare, ca --tinta-db/--tinta-sistem — obligatoriu.
+[[ "$C_HOST" =~ ^[A-Za-z0-9._/-]{1,253}$ ]] || refuz 2 "--tinta-host OBLIGATORIU (endpointul de scriere aprobat): '$C_HOST'"
+[[ "$C_PORT" =~ ^[0-9]{1,5}$ ]] || refuz 2 "--tinta-port OBLIGATORIU (portul endpointului de scriere aprobat): '$C_PORT'"
 [ -z "$C_USER" ] || [[ "$C_USER" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--user invalid"
 [ -z "$C_SERVICE" ] || [[ "$C_SERVICE" =~ ^[A-Za-z0-9_-]{1,63}$ ]] || refuz 2 "--service invalid"
 if [ -n "$APROBARE" ]; then
@@ -120,6 +125,8 @@ DO \$pre\$ BEGIN
     RAISE EXCEPTION 'Livrare $NUME: baza conectată (%) ≠ ținta aprobată $TINTA_DB', current_database(); END IF;
   IF (SELECT system_identifier::text FROM pg_control_system()) IS DISTINCT FROM '$TINTA_SIS' THEN
     RAISE EXCEPTION 'Livrare $NUME: system_identifier ≠ ținta aprobată $TINTA_SIS'; END IF;
+  IF pg_is_in_recovery() IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'Livrare $NUME: instanța e în recovery (replică) — nu e endpointul de scriere aprobat'; END IF;
 $PROI_CHECK
   IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE name = '$NUME') THEN
     RAISE EXCEPTION 'Livrare $NUME: migrarea e deja înregistrată — refuz (fără dublare)'; END IF;
@@ -143,13 +150,14 @@ SQL
 } > "$DIR/3_inreg.sql"
 # Reconcilierea (și pre-verificarea): read-only, READ COMMITTED explicit PRIMUL, lock-ul într-o instrucțiune separată
 # ÎNAINTEA SELECT-ului pe istoric ⇒ SELECT-ul primește un snapshot luat după eliberarea lock-ului.
-# Rezultat: db|system_identifier|proiect|relevante (nume SAU versiune)|exacte (nume+versiune+sha)
+# Rezultat: db|system_identifier|proiect|in_recovery|relevante (nume SAU versiune)|exacte (nume+versiune+sha)
 cat > "$DIR/reconc.sql" <<SQL
 BEGIN;
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
 SET LOCAL lock_timeout = '120s';
 SELECT pg_advisory_xact_lock($CHEIE);
 SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_control_system()) || '|' || $PROI_EXPR || '|' ||
+       pg_is_in_recovery()::text || '|' ||
        count(*) || '|' ||
        count(*) FILTER (WHERE version = '$VERSIUNE' AND name = '$NUME' AND encode(sha256(convert_to(statements[1], 'UTF8')), 'hex') = '$SHA')
   FROM supabase_migrations.schema_migrations WHERE version = '$VERSIUNE' OR name = '$NUME';
@@ -157,7 +165,7 @@ COMMIT;
 SQL
 chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql"
 
-CONN=(); [ -n "$C_HOST" ] && CONN+=(-h "$C_HOST"); [ -n "$C_PORT" ] && CONN+=(-p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")
+CONN=(-h "$C_HOST" -p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")   # explicite ⇒ au prioritate față de serviciu/mediu
 [ -n "$C_SERVICE" ] && export PGSERVICE="$C_SERVICE"
 CONN+=(-d "$TINTA_DB")   # validat [A-Za-z0-9_] ⇒ nu poate fi conninfo/URI
 export PGCLIENTENCODING=UTF8   # parametru de pornire al conexiunii: are prioritate față de setările rolului/bazei
@@ -170,12 +178,13 @@ reconciliaza() {
   RC_R=$?
   set -e
   R="$(tail -n 1 "$DIR/reconc.out")"
-  IFS='|' read -r R_DB R_SIS R_PROI R_REL R_EX <<<"$R" || true
+  IFS='|' read -r R_DB R_SIS R_PROI R_REC R_REL R_EX <<<"$R" || true
   [ "$RC_R" = 0 ] && [[ "${R_REL:-}" =~ ^[0-9]+$ ]] && [[ "${R_EX:-}" =~ ^[0-9]+$ ]] && [[ "${R_SIS:-}" =~ ^[0-9]+$ ]]
 }
-tinta_ok() { [ "$R_DB" = "$TINTA_DB" ] && [ "$R_SIS" = "$TINTA_SIS" ] && { [ -z "$TINTA_PROI" ] || [ "$R_PROI" = "$TINTA_PROI" ]; }; }
+# Runda 7: instanța AUTORITATIVĂ — o replică fizică are același db + system_identifier, deci se cere și in_recovery = false.
+tinta_ok() { [ "$R_DB" = "$TINTA_DB" ] && [ "$R_SIS" = "$TINTA_SIS" ] && [ "$R_REC" = false ] && { [ -z "$TINTA_PROI" ] || [ "$R_PROI" = "$TINTA_PROI" ]; }; }
 manual() {
-  echo "  Reconciliere manuală read-only (pe ținta aprobată; câmpuri: db|system_identifier|proiect|relevante|exacte):" >&2
+  echo "  Reconciliere manuală read-only (pe ținta aprobată; câmpuri: db|system_identifier|proiect|in_recovery|relevante|exacte):" >&2
   sed 's/^/    /' "$DIR/reconc.sql" >&2
   echo "  + starea obiectelor migrării (docs/SECURITATE_PATCH_RSVTI.md, Runda 5/6)." >&2
 }
@@ -185,7 +194,7 @@ if ! reconciliaza; then
   echo "✗ NEPORNIT: pre-verificarea n-a putut rula (cod $RC_R, rezultat '$R') — livrarea NU s-a trimis." >&2; exit 12
 fi
 if ! tinta_ok; then
-  echo "✗ ȚINTĂ NECONFIRMATĂ la pre-verificare: conectat la db=$R_DB system_identifier=$R_SIS proiect='$R_PROI', aprobat db=$TINTA_DB system_identifier=$TINTA_SIS proiect='$TINTA_PROI' — livrarea NU s-a trimis." >&2
+  echo "✗ ȚINTĂ NECONFIRMATĂ la pre-verificare: conectat la db=$R_DB system_identifier=$R_SIS in_recovery=$R_REC proiect='$R_PROI', aprobat db=$TINTA_DB system_identifier=$TINTA_SIS proiect='$TINTA_PROI' — livrarea NU s-a trimis." >&2
   exit 22
 fi
 if [ "$R_REL" = 1 ] && [ "$R_EX" = 1 ]; then
@@ -196,7 +205,7 @@ if [ "$R_REL" != 0 ]; then
   manual; exit 21
 fi
 
-echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]"
+echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS @ $C_HOST:$C_PORT: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]"
 set +e
 "$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
 RC_PSQL=$?
@@ -208,7 +217,7 @@ if ! reconciliaza; then
   manual; exit 20
 fi
 if ! tinta_ok; then
-  echo "✗ ȚINTĂ NECONFIRMATĂ la reconciliere: conectat la db=$R_DB system_identifier=$R_SIS proiect='$R_PROI' ≠ ținta aprobată — starea pe ținta aprobată e NECUNOSCUTĂ (psql $RC_PSQL). NU reluați." >&2
+  echo "✗ ȚINTĂ NECONFIRMATĂ la reconciliere: conectat la db=$R_DB system_identifier=$R_SIS in_recovery=$R_REC proiect='$R_PROI' ≠ ținta aprobată — starea pe ținta aprobată e NECUNOSCUTĂ (psql $RC_PSQL). NU reluați." >&2
   manual; exit 22
 fi
 if [ "$R_REL" = 1 ] && [ "$R_EX" = 1 ]; then

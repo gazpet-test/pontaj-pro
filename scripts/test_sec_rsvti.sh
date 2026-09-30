@@ -29,12 +29,16 @@
 #      conexiunii, starea finală), izolare (default_transaction_isolation=repeatable read pe cluster), ținta (2 clustere,
 #      aceeași bază, identități diferite; schimbarea țintei între execuție și reconciliere), clasificarea istoricului
 #      (relevante/exacte/conflicte: 0/10/11/21/22), mutanți noi pe fiecare punct
+#   6.17–6.20 (runda 7, verdict Copilot R6): COPY … FROM STDIN refuzat înainte de psql + control dinamic pe stare finală
+#      (validator slăbit ⇒ tabela comisă); set_config/SET normalizate (formele citate/calificate, argument complet);
+#      instanța autoritativă (replică fizică locală pg_basebackup -R, replay pus pe pauză ⇒ 22, niciodată 10); mutanți
 #   7. ceas fix (libfaketime, repornirea serverului) 2026-09-29 23:30 UTC: data omisă / NULL = 30.09
 #
 # Utilizare (din rădăcina repo-ului; ca root, comenzile de server trec pe utilizatorul postgres prin su):
 #   bash scripts/test_sec_rsvti.sh             # ciclul complet
 #   bash scripts/test_sec_rsvti.sh --opreste   # + oprește serverul la final
-# Variabile opționale: PG_BIN=/usr/lib/postgresql/16/bin PGDATA_TEST=/tmp/pg_sec_rsvti_r6 PGPORT_TEST=5823 (+ clusterul B: …_b, port+1)
+# Variabile opționale: PG_BIN=/usr/lib/postgresql/16/bin PGDATA_TEST=/tmp/pg_sec_rsvti_r7 PGPORT_TEST=5901 (+ clusterul B: …_b, port+1;
+#   replica fizică a lui A: …_replica, port+2)
 #   PGDB_TEST=sec_rsvti_test PGLOG_TEST=/tmp/pg_sec_rsvti.log FAKETIME_LIB=…/libfaketime.so.1
 #   Doar pentru mutanți/discriminare: MIGRARE_FISIER=… ROLLBACK_FISIER=… LIVRARE_FISIER=… (fișiere alternative)
 # Coduri de ieșire: 0 = PASS · 1 = migrare/test eșuat · 2 = mediu (PG indisponibil, gardă refuzată)
@@ -43,13 +47,16 @@ set -Eeuo pipefail
 
 RADACINA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_BIN="${PG_BIN:-/usr/lib/postgresql/16/bin}"
-DATE_DIR="${PGDATA_TEST:-/tmp/pg_sec_rsvti_r6}"
-PORT="${PGPORT_TEST:-5823}"
+DATE_DIR="${PGDATA_TEST:-/tmp/pg_sec_rsvti_r7}"
+PORT="${PGPORT_TEST:-5901}"
 # Runda 6: al doilea cluster (aceeași bază, altă identitate) pentru testele de țintă — port = PORT+1.
 DATE_DIR_B="${DATE_DIR}_b"
 PORT_B=$((PORT + 1))
+# Runda 7: replica fizică a clusterului A (pg_basebackup -R) pentru instanța autoritativă — port = PORT+2.
+DATE_DIR_R="${DATE_DIR}_replica"
+PORT_R=$((PORT + 2))
 BAZA="${PGDB_TEST:-sec_rsvti_test}"
-JURNAL_PG="${PGLOG_TEST:-/tmp/pg_sec_rsvti_r6.log}"
+JURNAL_PG="${PGLOG_TEST:-/tmp/pg_sec_rsvti_r7.log}"
 SCHELET="$RADACINA/supabase/tests/sec_rsvti_schelet.sql"
 TESTE="$RADACINA/supabase/tests/sec_rsvti.test.sql"
 TESTE_CEAS="$RADACINA/supabase/tests/sec_rsvti_ceas.test.sql"
@@ -470,7 +477,7 @@ livreaza() {
   : > "$SANT_LOG"
   set +e
   PSQL_BIN="$PSQL_T" bash "$r" --migrare "$VAR_DIR/livrare/$nume.sql" --sha256 "$s" --versiune "$v" \
-    --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --host 127.0.0.1 --port "$PORT" --user postgres "$@" >"$OUT_R" 2>"$ERR_R"
+    --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres "$@" >"$OUT_R" 2>"$ERR_R"
   RC=$?; set -e
 }
 psql_aux() { set +e; "$PG_BIN/psql" -X -q "${CONN_AUX[@]}" "$@" >/dev/null 2>"$ERR_R"; RC=$?; set -e; }
@@ -533,7 +540,17 @@ CAZURI_REFUZ=("END;" "end ;" "SELECT '--'; COMMIT;" "SELECT 1; commit ;" "COMMIT
   "RESET ALL;" "RESET search_path;" "SET search_path = public;" "SET LOCAL search_path = pg_temp, public;" "SET SESSION search_path = public, pg_temp;"
   "SET SCHEMA 'x';" "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;" "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ;"
   "SELECT set_config('search_path', 'x', true);" "SELECT set_config(v, 'x', true) FROM (SELECT 'search_path' AS v) s;"
-  "SELECT pg_catalog.set_config('Search_Path', 'x', false);")
+  "SELECT pg_catalog.set_config('Search_Path', 'x', false);"
+  # runda 7 — COPY (orice formă) și verificările de configurare (cele 3 exemple din verdictul R6 + variante)
+  "COPY public.proba_livrare_copy(v) FROM STDIN;" "copy t from stdin;" "COPY t TO STDOUT;" "COPY t FROM PROGRAM 'id';"
+  "COPY (SELECT 1) TO '/tmp/x';" "SELECT 1; COPY t FROM STDIN; SELECT 2;"
+  "SELECT set_config('client_' || 'encoding', 'LATIN1', true);" "SET LOCAL \"SEARCH_PATH\" = public, pg_catalog;"
+  "SELECT pg_catalog.\"set_config\"('search_path', 'public,pg_catalog', true);" "SELECT \"set_config\"('search_path', 'x', true);"
+  "SELECT \"pg_catalog\".\"SET_CONFIG\"('search_path', 'x', true);" "SELECT set_config('gazpet.x' || '', 'y', true);"
+  "SELECT set_config(E'search_path', 'x', true);" "SELECT set_config('search_path'::text, 'x', true);"
+  "SELECT set_config('search_'"$'\n'"'path', 'x', true);" "SELECT set_config(\$s\$search_path\$s\$, 'x', true);" "SELECT set_config;"
+  "SET LOCAL \"search_path\" = public, pg_temp;" "SET \"Search_Path\" TO public;" "SET LOCAL x.search_path = 'y';"
+  "SET ROLE postgres;" "SET SESSION AUTHORIZATION postgres;" "SET TIME ZONE 'UTC';" "SET CONSTRAINTS ALL DEFERRED;" "SET LOCAL;")
 CAZURI_OK=("CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS \$f\$ BEGIN RETURN 1; END; \$f\$;"
   "DO \$\$ BEGIN PERFORM 1; END \$\$;" "SELECT 'COMMIT; END;';" "SELECT '--', 1; -- COMMIT;" "/* COMMIT; /* END; */ */ SELECT 1;"
   "SELECT \$a\$ \$b\$ COMMIT; \$b\$ \$a\$;" "SELECT E'\\\\'' ; COMMIT; ';" "SELECT 1::int, 'a'::text;" "PREPARE p AS SELECT 1;"
@@ -541,7 +558,12 @@ CAZURI_OK=("CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS \$f\$ BEGIN RETU
   # runda 6: forma verificată de search_path, alte SET LOCAL, set_config pe gazpet.*, E'…' cu backslash, CRLF,
   #          backslash într-un literal DIN corpul $$ (nu e nivel superior; PL/pgSQL rulează cu standard_conforming_strings=on)
   "SET LOCAL search_path = public, pg_temp;" "SET LOCAL lock_timeout = '5s';" "SELECT set_config('gazpet.x', 'y', true);"
-  "SELECT E'a\\\\b', E'\\'';" "SELECT 1; -- COMMIT;"$'\r\n'"SELECT 2;" "DO \$\$ BEGIN PERFORM regexp_replace('a', '\\s', ''); END \$\$;")
+  "SELECT E'a\\\\b', E'\\'';" "SELECT 1; -- COMMIT;"$'\r\n'"SELECT 2;" "DO \$\$ BEGIN PERFORM regexp_replace('a', '\\s', ''); END \$\$;"
+  # runda 7: formele aprobate rămân acceptate (marcaje gazpet.* statice, apel calificat/citat cu nume static)
+  "SELECT set_config('gazpet.livrare_x', 'y:' || txid_current(), true);" "SELECT pg_catalog.set_config('gazpet.x', 'v' || 'w', true);"
+  "SELECT pg_catalog.\"set_config\"('gazpet.x', 'y', true);" "SELECT current_setting('gazpet.x', true);"
+  "SET LOCAL lock_timeout TO '5s';" "SET LOCAL \"lock_timeout\" = '5s';" "UPDATE t SET copy_nr = 1;"
+  "CREATE FUNCTION f() RETURNS void LANGUAGE sql SET search_path = public, pg_temp AS \$f\$ SELECT 1 \$f\$;")
 for c in "${CAZURI_REFUZ[@]}"; do valideaza_caz 1 "$c" || esec "6.0 validator: trebuia REFUZAT: $c"; done
 for c in "${CAZURI_OK[@]}"; do valideaza_caz 0 "$c" || esec "6.0 validator: trebuia ACCEPTAT: $c"; done
 set +e; python3 "$VALIDATOR" "$MIGRARE" >/dev/null 2>&1; RCV=$?; set -e
@@ -631,7 +653,7 @@ mutant_fisier() {  # $1 = linia inserată după prima funcție, $2 = ieșire
 i=0
 for linie in "COMMIT;  -- MUTANT" "select 1; commit ;  -- MUTANT" "END;  -- MUTANT (sinonim COMMIT)" "SELECT '--'; COMMIT;" \
              '\i /tmp/alt_fisier.sql' 'ABORT;' 'SAVEPOINT s1;' 'RELEASE SAVEPOINT s1;' 'PREPARE TRANSACTION '"'"'x'"'"';' \
-             'COMMIT PREPARED '"'"'x'"'"';' 'START TRANSACTION;' 'SELECT :var;' \
+             'COMMIT PREPARED '"'"'x'"'"';' 'START TRANSACTION;' 'SELECT :var;' 'COPY public.t_copy FROM STDIN;' 'copy public.t_copy to stdout;' \
              "SELECT 1; -- c"$'\r'"COMMIT;  -- MUTANT CR" "SET standard_conforming_strings = off; SELECT '\\'; -- '; COMMIT; -- '" \
              "SELECT '\\'; -- '; COMMIT; -- '"; do
   i=$((i + 1)); mutant_fisier "$linie" "$VAR_DIR/mut_$i.sql"
@@ -666,7 +688,7 @@ ok6 "6.7 TOCTOU: sursa modificată după pregătire ⇒ executată + înregistra
 aux_nou; printf '%s  %s.sql\n' "$SHA_MIG" "$NUME_MIG" > "$VAR_DIR/aprobare.sha256"
 cp "$MIGRARE" "$VAR_DIR/livrare/$NUME_MIG.sql"; : > "$SANT_LOG"
 set +e; PSQL_BIN="$PSQL_T" bash "$LIVRARE" --migrare "$VAR_DIR/livrare/$NUME_MIG.sql" --aprobare "$VAR_DIR/aprobare.sha256" --versiune 20261003000000 \
-  --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --host 127.0.0.1 --port "$PORT" --user postgres >"$OUT_R" 2>"$ERR_R"; RC=$?; set -e
+  --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >"$OUT_R" 2>"$ERR_R"; RC=$?; set -e
 [ $RC = 0 ] && [ "$(inregistrata)" = 1 ] || { cat "$ERR_R" >&2; esec "6.7 --aprobare (format sha256sum)"; }
 ok6 "6.7 --aprobare <fișier sha256sum>: APLICAT confirmat"
 
@@ -677,8 +699,8 @@ for extra in "-v ON_ERROR_STOP=0" "-f /tmp/x.sql" "-c SELECT_1" "--set ON_ERROR_
   livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- $extra
   refuz_preconex "6.8 opțiune nepermisă «$extra»" 2 "opțiune nepermisă" "$SNAP_E"
 done
-livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --host "127.0.0.1 options=-c"
-refuz_preconex "6.8 --host cu conninfo injectat" 2 "--host invalid" "$SNAP_E"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --tinta-host "127.0.0.1 options=-c"
+refuz_preconex "6.8 --tinta-host cu conninfo injectat" 2 "--tinta-host OBLIGATORIU" "$SNAP_E"
 for v in "PGPASSWORD=x" "PGOPTIONS=-c default_transaction_read_only=on" "PGDATABASE=postgres" "PSQLRC=/tmp/x"; do
   export "${v%%=*}=${v#*=}"; livreaza "$MIGRARE"; unset "${v%%=*}"
   refuz_preconex "6.8 variabila ${v%%=*} setată" 2 "variabila ${v%%=*}" "$SNAP_E"
@@ -686,6 +708,13 @@ done
 livreaza "$MIGRARE" 2026100300; refuz_preconex "6.8 versiune invalidă" 2 "--versiune" "$SNAP_E"
 livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --tinta-sistem ""
 refuz_preconex "6.8 --tinta-sistem lipsă (obligatoriu)" 2 "--tinta-sistem OBLIGATORIU" "$SNAP_E"
+# runda 7: endpointul de scriere (host + port) e parte din aprobare ⇒ obligatoriu; PGHOSTADDR ar redirecționa pe ascuns
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --tinta-host ""
+refuz_preconex "6.8 --tinta-host lipsă (obligatoriu)" 2 "--tinta-host OBLIGATORIU" "$SNAP_E"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --tinta-port ""
+refuz_preconex "6.8 --tinta-port lipsă (obligatoriu)" 2 "--tinta-port OBLIGATORIU" "$SNAP_E"
+export PGHOSTADDR=127.0.0.1; livreaza "$MIGRARE"; unset PGHOSTADDR
+refuz_preconex "6.8 variabila PGHOSTADDR setată" 2 "variabila PGHOSTADDR" "$SNAP_E"
 # ținta: system_identifier greșit ⇒ pre-verificarea refuză (22), livrarea nu se trimite
 livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --tinta-sistem 1
 esuat_fara_urme "6.8 ținta: system_identifier ≠ cel aprobat" "ȚINTĂ NECONFIRMATĂ la pre-verificare" "$SNAP_E" 0 22
@@ -741,7 +770,7 @@ concurenta() {  # $1 = runner ⇒ 0 dacă: exact un cod 0, celălalt 21 CONFLICT
   aux_nou; "${PSQL[@]}" -d "$BAZA_AUX" -c "CREATE TABLE public.t_concurenta (x bigint)" >/dev/null
   local s; s="$(sha "$VAR_DIR/concurenta.sql")"; mkdir -p "$VAR_DIR/c1" "$VAR_DIR/c2"
   cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c1/$NUME_C.sql"; cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c2/$NUME_C.sql"
-  local a=(--sha256 "$s" --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --host 127.0.0.1 --port "$PORT" --user postgres)
+  local a=(--sha256 "$s" --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres)
   PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c1/$NUME_C.sql" --versiune 20261003100001 "${a[@]}" >/dev/null 2>"$VAR_DIR/c1.err" & local p1=$!
   PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c2/$NUME_C.sql" --versiune 20261003100002 "${a[@]}" >/dev/null 2>"$VAR_DIR/c2.err" & local p2=$!
   set +e; wait $p1; local r1=$?; wait $p2; local r2=$?; set -e
@@ -906,7 +935,7 @@ asteapta() {  # $1 = descriere, $2 = comanda-condiție (max 15 s)
   for _ in $(seq 1 150); do eval "$2" && return 0; sleep 0.1; done; mediu "6.13: timeout la „$1”"
 }
 in_somn() { [ "$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'SELECT pg_sleep(2)%' AND state = 'active'")" = 1 ]; }
-C_ARGS() { echo --sha256 "$(sha "$VAR_DIR/concurenta.sql")" --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --host 127.0.0.1 --port "$PORT" --user postgres; }
+C_ARGS() { echo --sha256 "$(sha "$VAR_DIR/concurenta.sql")" --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres; }
 # T1: B face pre-verificarea (istoric gol), apoi A ia lock-ul și doarme; B intră în tranzacție și AȘTEAPTĂ lock-ul.
 #     După COMMIT-ul lui A, istoricul lui B TREBUIE să vadă înregistrarea (snapshot nou) ⇒ B refuză: exact una.
 izolare_principala() {  # $1 = runner ⇒ 0 dacă A=0, B=21, o înregistrare, un rând
@@ -1007,10 +1036,10 @@ inregistreaza B 20261003000000 "$NUME_MIG" "$MIGRARE"
   || mediu "6.14: înregistrarea exactă pe B nu are sha-ul aprobat"
 reg_b() { "${PSQL_B[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations"; }
 # W0 (control): aceeași rulare, cu identitatea LUI B aprobată ⇒ 11 — deci pe B „ar ieși succes” fără verificarea țintei
-aux_nou; livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --port "$PORT_B" --tinta-sistem "$SIS_B"
+aux_nou; livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --tinta-port "$PORT_B" --tinta-sistem "$SIS_B"
 [ $RC = 11 ] || { cat "$ERR_R" >&2; esec "6.14 W0 control: pe B cu identitatea lui B trebuia 11 (cod $RC)"; }
 tinta_gresita() {  # $1 = runner ⇒ ecou codul; conexiunea la B, identitatea aprobată = A
-  aux_nou; livreaza "$MIGRARE" 20261003000000 "" "$1" -- --port "$PORT_B"; echo "$RC"
+  aux_nou; livreaza "$MIGRARE" 20261003000000 "" "$1" -- --tinta-port "$PORT_B"; echo "$RC"
 }
 RCW="$(tinta_gresita "$LIVRARE")"
 [ "$RCW" = 22 ] && grep -qF "ȚINTĂ NECONFIRMATĂ la pre-verificare" "$ERR_R" && [ "$(reg_b)" = 1 ] && [ "$(inregistrata)" = 0 ] \
@@ -1149,6 +1178,165 @@ for m in v_cr v_bslash v_lexicale v_set v_set_config v_search_path v_garda; do
   [ $prins = 1 ] || for c in "${GARDA_REFUZ[@]}"; do VALIDATOR_G="$MUT/$m/v.py" garda_caz 1 "$c" || { prins=1; break; }; done
   [ $prins = 1 ] || esec "6.16 mutant de validator $m: NEPRINS"
   ok6 "6.16 mutant de validator $m ⇒ prins"
+done
+
+# ============================================================================
+# 6.17–6.20 — RUNDA 7 (verdict Copilot R6, docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R6.md)
+# ============================================================================
+# ---- 6.17 COPY … FROM STDIN: fragmentul exact din verdict, între gărzi --------------------------------------------
+echo "→ 6.17 COPY … FROM STDIN (fragmentul din verdictul R6), refuz înainte de psql + control dinamic pe starea finală"
+{ garda_sql "$NUME_MIG"
+  echo "CREATE TABLE public.proba_livrare_copy(v text);"
+  echo "COPY public.proba_livrare_copy(v) FROM STDIN;"
+  echo "\$date\$"
+  echo "\\."
+  echo "COMMIT;"
+  echo "-- \$date\$"
+  garda_sql "$NUME_MIG"; } > "$VAR_DIR/copy_atac.sql"
+grep -qxF '\.' "$VAR_DIR/copy_atac.sql" || mediu "6.17: fragmentul nu conține linia \\."
+aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+livreaza "$VAR_DIR/copy_atac.sql"; refuz_preconex "6.17 COPY FROM STDIN + \\. + COMMIT (fragmentul din verdict)" 3 "COPY la nivel superior" "$SNAP_E"
+[ "$(exista public.proba_livrare_copy)" = f ] || esec "6.17 starea finală: proba_livrare_copy există"
+ok6 "6.17 runnerul real: refuz 3 înainte de psql; stare finală: proba_livrare_copy ABSENTĂ, 0 înregistrări"
+# control dinamic: validatorul SLĂBIT (fără regula COPY) + runnerul real ⇒ psql citește „\$date\$” ca rând COPY, „\.”
+# încheie datele, COMMIT se execută ⇒ tabela rămâne COMISĂ (atacul real) — deci regula COPY e cea care îl oprește
+mkdir -p "$MUT/v_copy_r"; A='        if "COPY" in toks:' python3 - "$VALIDATOR" "$MUT/v_copy_r/v.py" <<'PY'
+import os, sys
+s = open(sys.argv[1]).read(); a = os.environ["A"]; assert s.count(a) == 1
+open(sys.argv[2], "w").write(s.replace(a, "        if False:"))
+PY
+python3 "$MUT/v_copy_r/v.py" "$VAR_DIR/copy_atac.sql" >/dev/null 2>&1 || mediu "6.17: validatorul slăbit trebuia să accepte fragmentul (reproducerea verdictului)"
+mkdir -p "$MUT/copy_vslab"; cp "$LIVRARE" "$MUT/copy_vslab/livrare_migrare.sh"; cp "$MUT/v_copy_r/v.py" "$MUT/copy_vslab/livrare_validator.py"
+aux_nou; livreaza "$VAR_DIR/copy_atac.sql" 20261003000000 "" "$MUT/copy_vslab/livrare_migrare.sh"
+[ "$(exista public.proba_livrare_copy)" = t ] || { cat "$ERR_R" >&2; esec "6.17 control dinamic: cu validatorul slăbit tabela trebuia comisă (atacul reprodus)"; }
+RAND="$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT string_agg(v, ',') FROM public.proba_livrare_copy")"
+[ "$RAND" = '$date$' ] || esec "6.17 control dinamic: rândul COPY = '$RAND' (așteptat \$date\$)"
+[ "$(inregistrata)" = 0 ] || esec "6.17 control dinamic: înregistrare neașteptată"
+ok6 "6.17 control dinamic: validator fără regula COPY ⇒ COMMIT executat de psql, proba_livrare_copy COMISĂ (rând '\$date\$'), runner cod $RC — mutant prins pe STAREA FINALĂ"
+rm -f "$SNAP_E"
+
+# ---- 6.18 CONFIGURARE: exemplele din verdictul R6 livrate prin runner ⇒ refuz înainte de psql; forma aprobată ⇒ APLICAT
+echo "→ 6.18 set_config / SET: formele citate/calificate/dinamice refuzate înainte de psql; formele aprobate acceptate"
+aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+for linie in "SELECT set_config('client_' || 'encoding', 'LATIN1', true);" 'SET LOCAL "SEARCH_PATH" = public, pg_catalog;' \
+             "SELECT pg_catalog.\"set_config\"('search_path', 'public,pg_catalog', true);"; do
+  { garda_sql "$NUME_MIG"; echo "CREATE TABLE public.t_cfg (x int);"; printf '%s\n' "$linie"; } > "$VAR_DIR/cfg.sql"
+  livreaza "$VAR_DIR/cfg.sql"; refuz_preconex "6.18 verdict R6: «$linie»" 3 "REFUZ validator" "$SNAP_E"
+  [ "$(exista public.t_cfg)" = f ] || esec "6.18 starea finală: t_cfg există"
+done
+NUME_S="20261003z_test_config"
+{ garda_sql "$NUME_S"; echo "SET LOCAL search_path = public, pg_temp;"
+  echo "SELECT set_config('gazpet.marcaj_test', 'x:' || txid_current(), true);"
+  echo "CREATE TABLE public.t_cfg AS SELECT current_setting('search_path') AS sp, current_setting('gazpet.marcaj_test', true) LIKE 'x:%' AS m;"
+} > "$VAR_DIR/cfg_ok.sql"
+NUME_T="$NUME_S" livreaza "$VAR_DIR/cfg_ok.sql" 20261003300000
+[ $RC = 0 ] && [ "$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT sp || '|' || m FROM public.t_cfg")" = "public, pg_temp|true" ] \
+  || { cat "$ERR_R" >&2; esec "6.18 forma aprobată SET LOCAL search_path + set_config('gazpet.…') trebuia APLICATĂ (cod $RC)"; }
+ok6 "6.18 forma aprobată (SET LOCAL search_path = public, pg_temp + set_config/current_setting pe gazpet.*) ⇒ APLICAT"
+rm -f "$SNAP_E"
+
+# ---- 6.19 INSTANȚA AUTORITATIVĂ: replică fizică locală a lui A (același nume de bază, același system_identifier) -----
+echo "→ 6.19 instanța autoritativă: replică fizică $DATE_DIR_R @ 127.0.0.1:$PORT_R (pg_basebackup -R, replay pe pauză)"
+[[ "$DATE_DIR_R" == /tmp/* ]] || mediu "replica trebuie sub /tmp"
+[ -x "$PG_BIN/pg_basebackup" ] || mediu "pg_basebackup lipsește"
+opreste_r() { [ -f "$DATE_DIR_R/postmaster.pid" ] && ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR_R" -m immediate -w stop >/dev/null 2>&1; true; }
+opreste_r; rm -rf "$DATE_DIR_R"; mkdir -p "$DATE_DIR_R"; [ "$(id -u)" = 0 ] && chown postgres:postgres "$DATE_DIR_R"; chmod 700 "$DATE_DIR_R"
+trap 'readuce_ceasul; opreste_r' EXIT
+aux_nou
+ca_postgres "$PG_BIN/pg_basebackup" -h 127.0.0.1 -p "$PORT" -U postgres -D "$DATE_DIR_R" -R -X stream -c fast >/dev/null 2>&1 \
+  || mediu "pg_basebackup a eșuat (pg_hba replication?)"
+ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR_R" -l "${JURNAL_PG%.log}_replica.log" -w -t 30 start \
+  -o "-p $PORT_R -c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp -c hot_standby=on" >/dev/null || mediu "pg_ctl start replica"
+PSQL_R=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT_R" -U postgres)
+[ "$(realpath "$("${PSQL_R[@]}" -d postgres -Atc 'SHOW data_directory')")" = "$(realpath "$DATE_DIR_R")" ] || mediu "pe portul $PORT_R rulează alt cluster"
+[ "$("${PSQL_R[@]}" -d postgres -Atc 'SELECT pg_is_in_recovery()')" = t ] || mediu "6.19: replica nu e în recovery"
+[ "$("${PSQL_R[@]}" -d postgres -Atc 'SELECT system_identifier FROM pg_control_system()')" = "$SIS_A" ] || mediu "6.19: replica are alt system_identifier"
+# sincronizează replica cu A (baza auxiliară nouă inclusă), apoi pune replay-ul pe pauză ⇒ replica „întârziată”
+replica_sincron_pauza() {
+  "${PSQL_R[@]}" -d postgres -Atc "SELECT pg_wal_replay_resume()" >/dev/null 2>&1 || true
+  local lsn; lsn="$("${PSQL[@]}" -d postgres -Atc "SELECT pg_current_wal_lsn()")"
+  for _ in $(seq 1 150); do
+    [ "$("${PSQL_R[@]}" -d postgres -Atc "SELECT pg_last_wal_replay_lsn() >= '$lsn'::pg_lsn")" = t ] && break; sleep 0.1; done
+  [ "$("${PSQL_R[@]}" -d postgres -Atc "SELECT pg_last_wal_replay_lsn() >= '$lsn'::pg_lsn")" = t ] || mediu "6.19: replica nu a prins primarul"
+  "${PSQL_R[@]}" -d postgres -Atc "SELECT pg_wal_replay_pause()" >/dev/null
+  for _ in $(seq 1 100); do [ "$("${PSQL_R[@]}" -d postgres -Atc "SELECT pg_get_wal_replay_pause_state()")" = paused ] && break; sleep 0.1; done
+  [ "$("${PSQL_R[@]}" -d postgres -Atc "SELECT pg_get_wal_replay_pause_state()")" = paused ] || mediu "6.19: replay-ul nu s-a oprit"
+  [ "$("${PSQL_R[@]}" -d "$BAZA_AUX" -Atc "SELECT current_database() || '|' || (SELECT system_identifier FROM pg_control_system())")" = "$BAZA_AUX|$SIS_A" ] \
+    || mediu "6.19: replica nu are aceeași bază + același system_identifier"
+}
+reg_r() { "${PSQL_R[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations"; }
+# wrapper: invocarea 1 (livrarea) rulează REAL pe primar; cu MOD_R=pierdut raportează apoi conexiune pierdută (2);
+# invocările ≥ REDIR_DE sunt redirecționate spre replică (portul aprobat → PORT_R); fiecare invocare se loghează
+cat > "$VAR_DIR/psql_replica" <<SH
+#!/usr/bin/env bash
+N="\$(cat "$VAR_DIR/rep_n" 2>/dev/null || echo 0)"; echo \$((N + 1)) > "$VAR_DIR/rep_n"
+redir=0; [ "\$N" -ge "\$REDIR_DE" ] && [ "\$N" -le "\${REDIR_PANA:-99}" ] && redir=1
+if [ \$redir = 1 ]; then a=(); for x in "\$@"; do [ "\$x" = "$PORT" ] && x="$PORT_R"; a+=("\$x"); done; set -- "\${a[@]}"; fi
+echo "\$N redir=\$redir \$*" >> "$SANT_LOG"
+if [ "\$N" = 1 ] && [ "\$MOD_R" = pierdut ]; then
+  "$PG_BIN/psql" "\$@" >/dev/null 2>&1; echo "psql: server closed the connection unexpectedly (simulat)" >&2; exit 2
+fi
+exec "$PG_BIN/psql" "\$@"
+SH
+chmod +x "$VAR_DIR/psql_replica"
+replica_scenariu() {  # $1 = runner, $2 = MOD_R (pierdut|normal), $3 = REDIR_DE, [$4 = REDIR_PANA] ⇒ RC
+  aux_nou; replica_sincron_pauza; rm -f "$VAR_DIR/rep_n"
+  MOD_R="$2" REDIR_DE="$3" REDIR_PANA="${4:-99}" PSQL_T="$VAR_DIR/psql_replica" livreaza "$MIGRARE" 20261003000000 "" "$1"
+}
+# R1: pre-verificarea DIRECT pe replică (portul replicii dat ca țintă) ⇒ 22, nimic trimis
+aux_nou; replica_sincron_pauza
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --tinta-port "$PORT_R"
+[ $RC = 22 ] && grep -qF "ȚINTĂ NECONFIRMATĂ la pre-verificare" "$ERR_R" && grep -qF "in_recovery=true" "$ERR_R" && [ "$(inregistrata)" = 0 ] \
+  || { cat "$ERR_R" >&2; esec "6.19 R1: pre-verificarea pe replică ⇒ trebuia 22 (cod $RC)"; }
+nu_s_a_livrat "6.19 R1"
+ok6 "6.19 R1: endpoint = replica (același db + system_identifier, in_recovery) ⇒ 22 la pre-verificare, nimic trimis"
+# R2: livrare pe PRIMAR, confirmarea pierdută, reconcilierea redirecționată spre replica întârziată (vede 0 rânduri)
+replica_scenariu "$LIVRARE" pierdut 2
+[ $RC = 22 ] && grep -qF "ȚINTĂ NECONFIRMATĂ la reconciliere" "$ERR_R" && grep -qF "in_recovery=true" "$ERR_R" \
+  || { cat "$ERR_R" >&2; esec "6.19 R2: reconcilierea pe replica întârziată ⇒ trebuia 22 (cod $RC)"; }
+[ "$(inregistrata)" = 1 ] && [ "$(stare_patch)" = "$MD5_PATCH" ] || esec "6.19 R2: livrarea trebuia comisă pe primar"
+[ "$(reg_r)" = 0 ] || esec "6.19 R2: replica trebuia să fie întârziată (0 înregistrări), are $(reg_r)"
+ok6 "6.19 R2: comis pe primar, confirmare pierdută, reconciliere pe replica întârziată (0 rânduri) ⇒ 22, NU 10"
+replica_scenariu "$LIVRARE" normal 2
+[ $RC = 22 ] && [ "$(inregistrata)" = 1 ] && [ "$(reg_r)" = 0 ] || { cat "$ERR_R" >&2; esec "6.19 R2b: psql 0 + reconciliere pe replică ⇒ trebuia 22 (cod $RC)"; }
+ok6 "6.19 R2b: psql raportează succes, reconciliere pe replica întârziată ⇒ 22 (nu 0, nu 20 fals)"
+# R3: tranzacția principală redirecționată spre replică (pre-verificarea și reconcilierea pe primar) ⇒ refuz explicit în
+#     tranzacție („în recovery”), apoi reconcilierea pe primar confirmă 0 rânduri ⇒ 10 (corect: nimic pe primar)
+replica_scenariu "$LIVRARE" normal 1 1
+[ $RC = 10 ] && grep -qF "instanța e în recovery" "$ERR_R" && [ "$(inregistrata)" = 0 ] \
+  || { cat "$ERR_R" >&2; esec "6.19 R3: tranzacția principală pe replică ⇒ trebuia refuzul „în recovery” + 10 (cod $RC)"; }
+ok6 "6.19 R3: tranzacția principală pe replică ⇒ refuz explicit „instanța e în recovery”, primarul confirmă 0 ⇒ 10"
+# mutanți de instanță autoritativă
+mutant_py fara_rec_reconc 'tinta_ok() { [ "$R_DB" = "$TINTA_DB" ] && [ "$R_SIS" = "$TINTA_SIS" ] && [ "$R_REC" = false ]' \
+                          'tinta_ok() { [ "$R_DB" = "$TINTA_DB" ] && [ "$R_SIS" = "$TINTA_SIS" ]'
+replica_scenariu "$MUT/fara_rec_reconc/livrare_migrare.sh" pierdut 2
+[ $RC != 22 ] || esec "6.19 mutant fără pg_is_in_recovery la reconciliere: NEPRINS"
+[ $RC = 10 ] && echo "   (mutantul reproduce verdictul: NEAPLICAT confirmat fals, deși primarul are înregistrarea)"
+ok6 "6.19 mutant fără in_recovery la pre-verificare/reconciliere ⇒ prins (cod $RC în loc de 22)"
+mutant_py fara_rec_princ "  IF pg_is_in_recovery() IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'Livrare \$NUME: instanța e în recovery (replică) — nu e endpointul de scriere aprobat'; END IF;
+" ""
+replica_scenariu "$MUT/fara_rec_princ/livrare_migrare.sh" normal 1 1
+grep -qF "instanța e în recovery" "$ERR_R" && esec "6.19 mutant fără verificarea din tranzacția principală: NEPRINS"
+ok6 "6.19 mutant fără pg_is_in_recovery în tranzacția principală ⇒ prins (refuzul explicit lipsește)"
+mutant_py host_optional '[[ "$C_HOST" =~ ^[A-Za-z0-9._/-]{1,253}$ ]] || refuz 2' '[ -z "$C_HOST" ] || [[ "$C_HOST" =~ ^[A-Za-z0-9._/-]{1,253}$ ]] || refuz 2'
+aux_nou; livreaza "$MIGRARE" 20261003000000 "" "$MUT/host_optional/livrare_migrare.sh" -- --tinta-host ""
+[ $RC != 2 ] || esec "6.19 mutant cu --tinta-host opțional: NEPRINS"
+ok6 "6.19 mutant cu --tinta-host opțional ⇒ prins (cod $RC, nu refuz 2)"
+opreste_r; rm -rf "$DATE_DIR_R"; trap readuce_ceasul EXIT
+
+# ---- 6.20 MUTANȚI de validator (runda 7), prinși de cazurile 6.0 -------------------------------------------------------
+mv_py v_copy '        if "COPY" in toks:' '        if False:'
+mv_py v_sc_primul_token ' and toks[k + 2].startswith("'"'"'") and toks[k + 3] == ","):' ' and toks[k + 2].startswith("'"'"'")):'
+mv_py v_sc_citat '    return tok == "SET_CONFIG" or (tok.startswith' '    return tok == "SET_CONFIG" and (tok.startswith'
+mv_py v_guc_majuscule '    n = nume.strip().lower()' '    n = nume.strip()'
+mv_py v_set_nerecunoscut "        raise Refuz(f\"SET cu sintaxă nerecunoscută (linia {ln}): {' '.join(toks[:5])}\")" '        return'
+for m in v_copy v_sc_primul_token v_sc_citat v_guc_majuscule v_set_nerecunoscut; do
+  prins=0
+  for c in "${CAZURI_REFUZ[@]}"; do VALIDATOR="$MUT/$m/v.py" valideaza_caz 1 "$c" || { prins=1; break; }; done
+  [ $prins = 1 ] || for c in "${CAZURI_OK[@]}"; do VALIDATOR="$MUT/$m/v.py" valideaza_caz 0 "$c" || { prins=1; break; }; done
+  [ $prins = 1 ] || esec "6.20 mutant de validator $m: NEPRINS"
+  ok6 "6.20 mutant de validator $m ⇒ prins"
 done
 
 rm -f "$SNAP_E" "$ERR_R" "$OUT_R"

@@ -19,6 +19,10 @@
 #     SET pe parametrii lexicali; search_path e acceptat DOAR în forma verificată „SET LOCAL search_path = public, pg_temp”
 #     (orice altă formă ⇒ refuz); set_config(...) la nivel superior: primul argument TREBUIE să fie un literal care nu
 #     numește un parametru protejat (argument dinamic ⇒ refuz).
+#   Runda 7 (verdict Copilot R6): REFUZ orice COPY la nivel superior (COPY … FROM STDIN schimbă citirea fișierului de
+#     către psql); set_config: primul argument COMPLET trebuie să fie un literal static simplu, apelul e recunoscut și
+#     citat/calificat (pg_catalog."set_config"); numele SET normalizate (neciat ⇒ lower, citat ⇒ exact, calificările
+#     unite; comparația cu parametrii protejați e fără majuscule, ca în PostgreSQL); SET cu sintaxă nerecunoscută ⇒ refuz.
 #   Runnerul fixează în plus, în tranzacție, înaintea migrării: READ COMMITTED, standard_conforming_strings = on,
 #   client_encoding = UTF8 (și PGCLIENTENCODING=UTF8 la conexiune).
 #
@@ -184,11 +188,23 @@ def instructiuni(text, corpuri=None, strict=True):
     return rez
 
 
+def e_ident(tok):
+    """Token de identificator: cuvânt (CUVANT, deja MAJUSCULE) sau identificator citat ('"'+nume)."""
+    return tok.startswith('"') or (CUVANT.fullmatch(tok) is not None)
+
+
 def nume_param(tok):
-    """Numele unui parametru dintr-un token: cuvânt (MAJUSCULE ⇒ lower) sau identificator citat ('"'+nume)."""
+    """Numele unui identificator ca în PostgreSQL: neciat ⇒ lowercase; citat ⇒ conținutul exact."""
     if tok.startswith('"'):
         return tok[1:]
     return tok.lower()
+
+
+def protejat(nume):
+    """Numele GUC se compară în PostgreSQL FĂRĂ diferență de majuscule (guc_name_compare) ⇒ comparăm pe lower, pe
+    numele întreg și pe ultima componentă (fail-closed pentru nume calificate)."""
+    n = nume.strip().lower()
+    return n in PROTEJATE or n.rsplit(".", 1)[-1] in PROTEJATE
 
 
 def are_apel_garda(instr):
@@ -225,22 +241,41 @@ def verifica_set(ln, toks):
         raise Refuz(f"SET incomplet (linia {ln})")
     if toks[k] in SET_INTERZISE or toks[1] in SET_INTERZISE - {"SESSION"}:
         raise Refuz(f"SET {toks[k]} la nivel superior (linia {ln}) — interzis (codificare/schemă/izolare)")
-    p = nume_param(toks[k])
-    if p in LEXICALE:
+    # numele: ident ( "." ident )* — normalizat (neciat ⇒ lower, citat ⇒ exact), apoi „=” / TO / FROM CURRENT și o valoare
+    if not e_ident(toks[k]):
+        raise Refuz(f"SET cu sintaxă nerecunoscută (linia {ln}): {' '.join(toks[:4])}")
+    parti = [nume_param(toks[k])]
+    k += 1
+    while k + 1 < len(toks) and toks[k] == "." and e_ident(toks[k + 1]):
+        parti.append(nume_param(toks[k + 1]))
+        k += 2
+    p = ".".join(parti)
+    if not (len(toks) > k + 1 and toks[k] in ("=", "TO")) and toks[k:] != ["FROM", "CURRENT"]:
+        # SET ROLE / SESSION AUTHORIZATION / TIME ZONE / CONSTRAINTS / XML OPTION … ⇒ nerecunoscut ⇒ refuz
+        raise Refuz(f"SET cu sintaxă nerecunoscută (linia {ln}): {' '.join(toks[:5])}")
+    if p.lower() in LEXICALE or p.lower().rsplit(".", 1)[-1] in LEXICALE:
         raise Refuz(f"SET {p} la nivel superior (linia {ln}) — parametru lexical, fixat de runner")
-    if p == "search_path":
+    if protejat(p):
         if toks != SEARCH_PATH_OK:
             raise Refuz(f"SET search_path la nivel superior (linia {ln}) acceptat doar ca "
                         f"„SET LOCAL search_path = public, pg_temp”: {' '.join(toks)}")
 
 
+def e_set_config(tok):
+    """Apelul set_config în orice formă: set_config, SET_CONFIG, "set_config" (și "SET_CONFIG" — fail-closed); calificarea
+    (pg_catalog. / "pg_catalog". / altă schemă) nu contează — se verifică numele funcției oricum ar fi calificat."""
+    return tok == "SET_CONFIG" or (tok.startswith('"') and tok[1:].lower() == "set_config")
+
+
 def verifica_set_config(ln, toks):
     for k, t in enumerate(toks):
-        if t == "SET_CONFIG":
-            if k + 2 >= len(toks) or toks[k + 1] != "(" or not toks[k + 2].startswith("'"):
-                raise Refuz(f"set_config la nivel superior cu argument nedeterminat (linia {ln}) — primul argument "
-                            f"trebuie să fie un literal")
-            if toks[k + 2][1:].strip().lower() in PROTEJATE:
+        if e_set_config(t):
+            # primul argument COMPLET (până la virgula de nivel 0) = UN singur literal static simplu '…' (fără prefix
+            # E/U&/B/X, fără cast, fără concatenare, fără literal continuat pe linia următoare, fără $…$)
+            if not (k + 3 < len(toks) and toks[k + 1] == "(" and toks[k + 2].startswith("'") and toks[k + 3] == ","):
+                raise Refuz(f"set_config la nivel superior cu primul argument nerecunoscut (linia {ln}) — acceptat doar "
+                            f"un literal static simplu urmat de virgulă: {' '.join(toks[k:k + 6])}")
+            if protejat(toks[k + 2][1:]):
                 raise Refuz(f"set_config('{toks[k + 2][1:]}') la nivel superior (linia {ln}) — parametru protejat")
 
 
@@ -270,6 +305,11 @@ def valideaza(cale, tag_interzis=None):
             raise Refuz(f"control de tranzacție la nivel superior (linia {ln}): {' '.join(toks[:3])}")
         if cap == "PREPARE" and len(toks) > 1 and toks[1] == "TRANSACTION":
             raise Refuz(f"control de tranzacție la nivel superior (linia {ln}): PREPARE TRANSACTION")
+        if "COPY" in toks:
+            # COPY … FROM STDIN schimbă modul în care psql citește fișierul (liniile devin date COPY până la „\.”) —
+            # tokenizerul SQL nu modelează formatul de date COPY ⇒ refuzăm ORICE COPY la nivel superior (inclusiv
+            # TO STDOUT / PROGRAM / fișier). Migrările actuale nu folosesc COPY.
+            raise Refuz(f"COPY la nivel superior (linia {ln}) — interzis în migrările livrate prin runner")
         verifica_set(ln, toks)
         verifica_set_config(ln, toks)
     if not garda_in_cod(text):
