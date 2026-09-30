@@ -13,14 +13,34 @@
 --       (podeaua = implicitul din UI) + verdictele omului (vocabularul confirmat_de_om /
 --       respins_de_om) nu se mai ating.
 --
--- Runda 2 (30.09, corecturile verificatorului): podeaua pragului 0.30 → 0.45; protecția
--- verdictelor doar pe vocabularul uman (nu și pe verdict_de); precondiție pe listă albă de md5
--- (nu mai acceptă orice corp care poartă markerul); BEGIN/COMMIT explicit.
+-- Runda 2 (30.09): podeaua 0.45; protecția verdictelor doar pe vocabularul uman.
+-- Runda 3 (30.09, răspuns la NO-GO Copilot pe 94909d6):
+--   • poarta e NULL-safe: IF fn_are_acces_ofertare() IS NOT TRUE (NULL = refuz, nu trecere);
+--   • amprente independente de versiunea PG: md5(prosrc) = md5 al textului literal al corpului,
+--     așa cum e scris în acest fișier (identic în PG16 și PG17), plus atributele verificate explicit:
+--     SECURITY DEFINER, proconfig exact, proprietar, limbaj, volatilitate, STRICT/LEAKPROOF/
+--     PARALLEL/COST/ROWS, semnătura (nume, tipuri, DEFAULT-uri, fără supraîncărcări), tipul
+--     întors și ACL-ul (sortat);
+--   • precondiția acceptă doar STĂRI COMPLETE (helper + alege + pereche, fiecare cu atributele
+--     lui): live 29.09 | patch | oprire controlată (ultimele două: bază unde funcțiile au ajuns deja
+--     acolo fără înregistrare; runner-ul refuză oricum o migrare deja înregistrată). Stare mixtă = refuz;
+--   • postcondiția, ÎNAINTE de COMMIT (ultimul pas al blocului): starea rezultată = exact starea
+--     patch-ului, altfel RAISE și se anulează tot, inclusiv înregistrarea runner-ului;
+--   • tabelul stărilor cunoscute (constanta v_q) e identic, octet cu octet, în toate fișierele
+--     20261003b (harness-ul verifică). NICIO listă nu se actualizează automat după apply: o
+--     amprentă nouă intră doar printr-un commit revizuit.
 --
 -- ⚠ NU SE APLICĂ fără: (a) excepția de securitate la freeze-ul Ofertare, acordată explicit
 --   de Răzvan pe domeniul exact al acestui fișier; (b) GO Copilot pe revizie. Pașii (preview →
---   confirmare → apply → verificare) sunt în docs/SECURITATE_PATCH_OFERTARE.md.
--- ⚠ Se aplică DOAR întreg, într-o singură tranzacție (BEGIN/COMMIT de mai jos, apply_migration).
+--   confirmare → apply → verificare) sunt în docs/SECURITATE_PATCH_OFERTARE.md §7.
+-- ⚠ LIVRARE (runda 4, traseul comun cu #538): UN SINGUR gestionar de tranzacție = runner-ul
+--   scripts/livrare_migrare.sh (psql --single-transaction): marcajul de livrare legat de txid +
+--   acest fișier + INSERT-ul în supabase_migrations.schema_migrations, în aceeași tranzacție.
+--   Fișierul NU conține BEGIN/COMMIT și are GARDĂ la început și la final (după postcondiții): cere
+--   current_setting('gazpet.livrare_migrare') = '<numele migrării>:' || txid_current(). Fără runner
+--   (psql -f simplu, execute_sql, apply_migration) refuză: nimic comis, nimic înregistrat.
+--   Tot fișierul e UN SINGUR bloc DO. Se trimite întreg, cu LF (cu CRLF md5(prosrc) iese altfel și
+--   postcondiția refuză).
 --
 -- Model de identitate (S-A): nicio ramură „auth.uid() IS NULL ⇒ sistem”. Fără uid = refuz
 -- 42501, inclusiv pentru service_role și postgres. Apelanții legitimi (OfertareCerinte.jsx,
@@ -29,44 +49,86 @@
 -- exact (ca RLS-ul de scriere); vezi docs §7, interogarea de preview pe sub-module.
 --
 -- Ce NU face: nu atinge tabele, politici, date, semnături. CREATE OR REPLACE păstrează
--- semnătura, tipul întors și ACL-ul; ACL-ul e reafirmat explicit mai jos.
--- Revenire: _REVENIRE_OPERATIONALA.sql (armată separat; păstrează poarta de modul, dar pentru
--- cei CU modul readuce pragul liber și rescrierea lui respins_de_om) sau _ROLLBACK.sql
--- (TEHNIC — redeschide bypass-ul; doar la cererea explicită a lui Răzvan).
+-- semnătura, tipul întors și ACL-ul; ACL-ul e reafirmat explicit mai jos (și refăcut, dacă
+-- pornim din oprirea controlată).
+-- Reveniri (NU sunt migrări; stau în supabase/revenire/, nu le parcurge niciun runner):
+--   _OPRIRE_CONTROLATA.sql — păstrează corpurile patch-ului, retrage EXECUTE (funcționalitatea
+--     se oprește, nu se redeschide); ieșirea din oprire = _REPORNIRE.sql (runner-ul comun nu reia o
+--     migrare deja înregistrată);
+--   _ROLLBACK.sql — TEHNIC, redeschide bypass-ul; artefact fără GO de execuție.
 -- Test: scripts/test_sec_ofertare.sh (PG16 local) + supabase/tests/sec_ofertare_porti.test.sql
 -- ════════════════════════════════════════════════════════════════════════════
-BEGIN;
-
--- ── 0. Precondiții: nu suprascriem o versiune pe care n-am auditat-o ─────────────
--- md5(pg_get_functiondef) pe listă albă, per funcție:
---   • starea live din 29.09.2026 (PG 17.6, citită read-only; aceleași md5 în PG16) — prima aplicare;
---   • starea acestui patch (runda 2) — reaplicare idempotentă;
---   • starea _REVENIRE_OPERATIONALA.sql — reaplicare după o revenire operațională.
--- Orice altceva e refuzat, inclusiv o versiune ulterioară care poartă markerul SEC-20261003b:
--- cineva a lucrat pe funcție între timp și trebuie comparat, nu suprascris tacit.
--- md5-urile patch-ului și ale revenirii sunt calculate în PG16 (scripts/test_sec_ofertare.sh le
--- verifică); dacă în PG17 ies altfel, lista refuză (fail-closed) — vezi docs §7 pasul 4.
-DO $pre$
+DO $migrare_20261003b$
 DECLARE
-  v_acces   text := md5(pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure));
-  v_alege   text := md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure));
-  v_pereche text := md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure));
+  v_q CONSTANT text := $stari$
+WITH fn(ord, fn, nume, sig) AS (VALUES
+  (1, 'acces',   'fn_are_acces_ofertare',       'public.fn_are_acces_ofertare()'),
+  (2, 'alege',   'fn_ofertare_alege_acoperire', 'public.fn_ofertare_alege_acoperire(bigint)'),
+  (3, 'pereche', 'ofertare_inventar_pereche',   'public.ofertare_inventar_pereche(bigint,text,integer,real)')
+), fixe(fn, atribute) AS (VALUES
+  -- atribute identice în toate stările: proprietar, SECURITY DEFINER, limbaj, volatilitate,
+  -- STRICT/LEAKPROOF/PARALLEL/COST/ROWS, n = câte funcții cu numele ăsta există în public
+  -- (fără supraîncărcări), semnătura cu nume și DEFAULT-uri, tipul întors
+  ('acces',   'secdef=t lang=sql vol=s strict=f leakproof=f parallel=u cost=100 rows=0 owner=postgres n=1 args=() rez=boolean'),
+  ('alege',   'secdef=t lang=plpgsql vol=v strict=f leakproof=f parallel=u cost=100 rows=1000 owner=postgres n=1 args=(p_acoperire_id bigint) rez=TABLE(cerinta_id bigint, pozitie_id bigint, ales_id bigint, inlocuit_id bigint)'),
+  ('pereche', 'secdef=t lang=plpgsql vol=v strict=f leakproof=f parallel=u cost=100 rows=1000 owner=postgres n=1 args=(p_lic bigint, p_furnizor text DEFAULT NULL::text, p_versiune integer DEFAULT NULL::integer, p_prag real DEFAULT 0.45) rez=TABLE(imperecheate integer, ramase_fara_pereche integer)')
+), cunoscut(stare, fn, md5_prosrc, config, acl) AS (VALUES
+  -- STĂRI COMPLETE: o stare e recunoscută doar dacă TOATE trei funcțiile au rândul ei.
+  -- md5(prosrc) = md5 al textului literal al corpului; ACL sortat (COLLATE "C").
+  ('live',   'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+  ('live',   'alege',   '56a7c6ddd1e342c77e7b34f4e08ecab1', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+  ('live',   'pereche', 'edd4819c81844baafc7eeade838cbcff', '{"search_path=public, extensions, pg_temp"}', '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+  ('patch',  'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+  ('patch',  'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+  ('patch',  'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+  ('oprire', 'acces',   '429d28e2a61fb24c8009d67050c16c85', '{"search_path=public, pg_temp"}',            '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
+  ('oprire', 'alege',   '51865b69766f6baa53def9a6e6c6232b', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}'),
+  ('oprire', 'pereche', '4d90bf90b4bbfd6aea944e734f6c9ed9', '{"search_path=public, pg_temp"}',            '{postgres=X/postgres}')
+), observat AS (
+  SELECT fn.ord, fn.fn, md5(p.prosrc) AS md5_prosrc, p.proconfig::text AS config,
+         (SELECT array_agg(a::text ORDER BY a::text COLLATE "C")
+            FROM unnest(coalesce(p.proacl, acldefault('f', p.proowner))) a)::text AS acl,
+         format('secdef=%s lang=%s vol=%s strict=%s leakproof=%s parallel=%s cost=%s rows=%s owner=%s n=%s args=(%s) rez=%s',
+                p.prosecdef, l.lanname, p.provolatile, p.proisstrict, p.proleakproof, p.proparallel, p.procost, p.prorows,
+                pg_get_userbyid(p.proowner),
+                (SELECT count(*) FROM pg_catalog.pg_proc q WHERE q.pronamespace = 'public'::regnamespace AND q.proname = fn.nume),
+                pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)) AS atribute
+    FROM fn
+    LEFT JOIN pg_catalog.pg_proc p ON p.oid = to_regprocedure(fn.sig)
+    LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang
+), potrivit AS (
+  SELECT o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute,
+         array_agg(c.stare ORDER BY c.stare) FILTER (WHERE c.stare IS NOT NULL) AS stari
+    FROM observat o
+    JOIN fixe f ON f.fn = o.fn
+    LEFT JOIN cunoscut c ON c.fn = o.fn AND c.md5_prosrc = o.md5_prosrc AND c.config IS NOT DISTINCT FROM o.config
+                        AND c.acl = o.acl AND f.atribute = o.atribute
+   GROUP BY o.ord, o.fn, o.md5_prosrc, o.config, o.acl, o.atribute
+)
+SELECT (SELECT s.stare FROM (SELECT unnest(p.stari) AS stare FROM potrivit p) s
+         GROUP BY s.stare HAVING count(*) = 3) AS stare,
+       string_agg(format('%s=%s', p.fn, coalesce(array_to_string(p.stari, '/'), 'NECUNOSCUTĂ')), ', ' ORDER BY p.ord) AS rezumat,
+       string_agg(format('%s: md5(prosrc)=%s config=%s acl=%s %s', p.fn, p.md5_prosrc, p.config, p.acl, p.atribute),
+                  E'\n' ORDER BY p.ord) AS detaliu
+  FROM potrivit p
+$stari$;
+  v_stare text; v_rezumat text; v_detaliu text;
 BEGIN
-  IF v_acces <> '6991b618d5fabbefdbd14684d335db48' THEN
-    RAISE EXCEPTION 'Precondiție 20261003b: fn_are_acces_ofertare() diferă de starea auditată (md5 %). Poarta se sprijină pe ea: recitește definiția live și reauditează înainte de apply.', v_acces;
+  -- Garda de livrare (start): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid).
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003b_sec_ofertare_porti_alege_inventar:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
   END IF;
-  IF v_alege NOT IN ('6c9995646a6dbe6da995e48a3a885fc9',   -- live 29.09
-                     '1da7260d85e2441d93876c1c590d9f99',   -- patch 20261003b (runda 2)
-                     'd1a1a2a45cf57046cf7c26dc981c310f')   -- revenirea operațională
-  THEN
-    RAISE EXCEPTION 'Precondiție 20261003b: fn_ofertare_alege_acoperire nu e în nicio stare cunoscută (live 29.09, patch, revenire operațională): md5 %. Cineva a lucrat pe ea între timp: oprește-te și compară.', v_alege;
+
+  -- ── 0. Precondiții: pornim doar dintr-o STARE COMPLETĂ cunoscută ───────────────
+  -- live 29.09 (prima aplicare) | patch (reaplicare, fără efect) | oprire controlată (ieșirea din
+  -- oprire: corpurile sunt deja ale patch-ului, se refac GRANT-urile). Orice altceva — o stare
+  -- mixtă, o versiune ulterioară, alt proprietar, alt ACL, alt helper — e refuzat.
+  EXECUTE v_q INTO v_stare, v_rezumat, v_detaliu;
+  IF coalesce(v_stare, '') NOT IN ('live', 'patch', 'oprire') THEN
+    RAISE EXCEPTION 'Precondiție 20261003b: starea curentă nu e o stare completă cunoscută (%). Se acceptă doar live 29.09, patch sau oprire controlată, pe toate trei funcțiile deodată. Cineva a lucrat pe funcții între timp: oprește-te și compară.', v_rezumat
+      USING DETAIL = v_detaliu;
   END IF;
-  IF v_pereche NOT IN ('500263dacba2b44e0caa1cb07db88d6e', -- live 29.09
-                       '9cf65390fb07c4f84e508a511f8dbd9f', -- patch 20261003b (runda 2)
-                       '770c29d8066d3003fc0355fc93e7f3fb') -- revenirea operațională
-  THEN
-    RAISE EXCEPTION 'Precondiție 20261003b: ofertare_inventar_pereche nu e în nicio stare cunoscută (live 29.09, patch, revenire operațională): md5 %. Cineva a lucrat pe ea între timp: oprește-te și compară.', v_pereche;
-  END IF;
+  RAISE NOTICE 'Precondiție 20261003b: pornim din starea completă „%”.', v_stare;
   IF to_regprocedure('extensions.similarity(text,text)') IS NULL THEN
     RAISE EXCEPTION 'Precondiție 20261003b: extensions.similarity(text,text) (pg_trgm) lipsește.';
   END IF;
@@ -76,11 +138,10 @@ BEGIN
            OR (table_name = 'ofertare_inventar_ai' AND column_name IN ('verdict', 'verdict_de', 'pereche_cerinta_id')))) <> 6 THEN
     RAISE EXCEPTION 'Precondiție 20261003b: coloanele ales/ales_de/pozitie_id sau verdict/verdict_de/pereche_cerinta_id nu sunt cele auditate.';
   END IF;
-END $pre$;
 
--- ── 1. (2) fn_ofertare_alege_acoperire: poarta de modul ──────────────────────────
--- Corpul e cel live (varianta „doi pași” din 25.09); se adaugă doar poarta și urma în jurnal.
-CREATE OR REPLACE FUNCTION public.fn_ofertare_alege_acoperire(p_acoperire_id bigint)
+  -- ── 1. (2) fn_ofertare_alege_acoperire: poarta de modul ──────────────────────────
+  -- Corpul e cel live (varianta „doi pași” din 25.09); se adaugă doar poarta și urma în jurnal.
+  EXECUTE $def_alege$CREATE OR REPLACE FUNCTION public.fn_ofertare_alege_acoperire(p_acoperire_id bigint)
  RETURNS TABLE(cerinta_id bigint, pozitie_id bigint, ales_id bigint, inlocuit_id bigint)
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -101,7 +162,8 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
   -- Poarta verifică înainte de orice citire: fără drept nu afli nici dacă varianta există.
-  IF NOT public.fn_are_acces_ofertare() THEN
+  -- IS NOT TRUE, nu NOT: un răspuns NULL al helperului înseamnă refuz, nu trecere (runda 3).
+  IF public.fn_are_acces_ofertare() IS NOT TRUE THEN
     RAISE EXCEPTION 'Nu ai acces la modulul Ofertare: nu poți schimba varianta de acoperire aleasă.'
       USING ERRCODE = '42501';
   END IF;
@@ -137,11 +199,12 @@ BEGIN
 
   RETURN QUERY SELECT v_cerinta, v_pozitie, p_acoperire_id, v_vechi;
 END;
-$function$;
+$function$
+$def_alege$;
 
--- ── 2. (3) ofertare_inventar_pereche: poartă + prag limitat + verdictele omului neatinse ──
--- similarity() e calificat cu schema (extensions), deci search_path = public, pg_temp (pct. 4).
-CREATE OR REPLACE FUNCTION public.ofertare_inventar_pereche(p_lic bigint, p_furnizor text DEFAULT NULL::text, p_versiune integer DEFAULT NULL::integer, p_prag real DEFAULT 0.45)
+  -- ── 2. (3) ofertare_inventar_pereche: poartă + prag limitat + verdictele omului neatinse ──
+  -- similarity() e calificat cu schema (extensions), deci search_path = public, pg_temp (pct. 4).
+  EXECUTE $def_pereche$CREATE OR REPLACE FUNCTION public.ofertare_inventar_pereche(p_lic bigint, p_furnizor text DEFAULT NULL::text, p_versiune integer DEFAULT NULL::integer, p_prag real DEFAULT 0.45)
  RETURNS TABLE(imperecheate integer, ramase_fara_pereche integer)
  LANGUAGE plpgsql
  SECURITY DEFINER
@@ -160,7 +223,8 @@ BEGIN
     RAISE EXCEPTION 'Trebuie să fii autentificat ca să compari inventarul cu registrul.'
       USING ERRCODE = '42501';
   END IF;
-  IF NOT public.fn_are_acces_ofertare() THEN
+  -- IS NOT TRUE, nu NOT: un răspuns NULL al helperului înseamnă refuz, nu trecere (runda 3).
+  IF public.fn_are_acces_ofertare() IS NOT TRUE THEN
     RAISE EXCEPTION 'Nu ai acces la modulul Ofertare: nu poți compara inventarul cu registrul.'
       USING ERRCODE = '42501';
   END IF;
@@ -214,36 +278,28 @@ BEGIN
          count(*) FILTER (WHERE i.pereche_cerinta_id IS NULL)::int
   FROM ofertare_inventar_ai i
   WHERE i.licitatie_id = p_lic AND i.furnizor = v_furnizor AND i.versiune = v_versiune;
-END $function$;
+END $function$
+$def_pereche$;
 
--- ── 3. ACL explicit (azi e deja așa; îl reafirmăm ca să nu depindem de default privileges) ──
-REVOKE ALL ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.ofertare_inventar_pereche(bigint, text, integer, real) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.ofertare_inventar_pereche(bigint, text, integer, real) TO authenticated, service_role;
+  -- ── 3. ACL explicit: fără PUBLIC/anon; EXECUTE pentru authenticated (UI) și service_role ──
+  -- Din starea live/patch nu schimbă nimic; din oprirea controlată reface GRANT-urile retrase.
+  REVOKE ALL ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) FROM PUBLIC, anon;
+  REVOKE ALL ON FUNCTION public.ofertare_inventar_pereche(bigint, text, integer, real) FROM PUBLIC, anon;
+  GRANT EXECUTE ON FUNCTION public.fn_ofertare_alege_acoperire(bigint) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.ofertare_inventar_pereche(bigint, text, integer, real) TO authenticated, service_role;
 
--- ── 4. Postcondiții: dacă ceva nu iese cum trebuie, se anulează toată tranzacția ──────
-DO $post$
-DECLARE
-  f regprocedure;
-BEGIN
-  FOREACH f IN ARRAY ARRAY['public.fn_ofertare_alege_acoperire(bigint)'::regprocedure,
-                           'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure] LOOP
-    IF has_function_privilege('public', f, 'EXECUTE') OR has_function_privilege('anon', f, 'EXECUTE') THEN
-      RAISE EXCEPTION 'Postcondiție 20261003b: % e executabilă de PUBLIC/anon.', f;
-    END IF;
-    IF NOT has_function_privilege('authenticated', f, 'EXECUTE') THEN
-      RAISE EXCEPTION 'Postcondiție 20261003b: authenticated a pierdut EXECUTE pe % (UI-ul s-ar rupe).', f;
-    END IF;
-    IF NOT (SELECT p.prosecdef AND p.proconfig = ARRAY['search_path=public, pg_temp']
-              FROM pg_proc p WHERE p.oid = f) THEN
-      RAISE EXCEPTION 'Postcondiție 20261003b: % nu e SECURITY DEFINER cu search_path = public, pg_temp.', f;
-    END IF;
-    IF position('fn_are_acces_ofertare()' IN pg_get_functiondef(f)) = 0
-       OR position('SEC-20261003b' IN pg_get_functiondef(f)) = 0 THEN
-      RAISE EXCEPTION 'Postcondiție 20261003b: % nu conține poarta/markerul patch-ului.', f;
-    END IF;
-  END LOOP;
-END $post$;
+  -- ── 4. Postcondiție, ÎNAINTE de COMMIT: starea rezultată = EXACT starea patch-ului ────────
+  -- (helper neatins; alege + pereche cu md5(prosrc) al corpurilor de mai sus, atributele și ACL-ul
+  -- patch-ului). Orice abatere — alt text al corpului (CRLF, altă versiune PG care l-ar rescrie),
+  -- alt ACL, alt proprietar — oprește tot: RAISE, iar tranzacția se anulează cu totul.
+  EXECUTE v_q INTO v_stare, v_rezumat, v_detaliu;
+  IF v_stare IS DISTINCT FROM 'patch' THEN
+    RAISE EXCEPTION 'Postcondiție 20261003b: starea rezultată nu e exact starea patch-ului (%). Nimic nu se comite: tranzacția se anulează.', v_rezumat
+      USING DETAIL = v_detaliu;
+  END IF;
 
-COMMIT;
+  -- Garda de livrare (final, după postcondiții): tot în tranzacția runner-ului, care înregistrează apoi migrarea.
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003b_sec_ofertare_porti_alege_inventar:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003b: garda de livrare (final, după postcondiții) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+  END IF;
+END $migrare_20261003b$;

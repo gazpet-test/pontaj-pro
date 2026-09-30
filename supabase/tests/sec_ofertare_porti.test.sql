@@ -1,20 +1,23 @@
 -- ════════════════════════════════════════════════════════════════════════════
 -- Test PG16 local pentru patch-ul 20261003b (Ofertare, constatările (2) și (3)).
--- Se rulează DOAR prin scripts/test_sec_ofertare.sh, pe clusterul dedicat (127.0.0.1:5441,
+-- Se rulează DOAR prin scripts/test_sec_ofertare.sh, pe clusterul dedicat (implicit 127.0.0.1:5441,
 -- PGDATA /tmp/pg_sec_ofertare), baza `sec_ofertare_test`. Nu atinge Supabase.
 --
 -- Fazele (psql -v faza=…):
---   setup        schelet minim + funcțiile LIVE din 29.09 (copiate cu pg_get_functiondef,
---                verificate byte cu byte prin md5) + ACL-ul live + harness-ul de test
+--   setup        schelet minim + funcțiile LIVE din 29.09 (verificate prin md5(prosrc) = valorile
+--                citite din live, plus atributele și ACL-ul live) + harness-ul de test, inclusiv
+--                t.captureaza/t.pune (stări complete și mixte construite din definiții reale)
 --   gaura        dovedește bypass-ul pe starea live (înainte de patch / după rollback tehnic)
 --   patched      teste obligatorii pe patch (apeluri directe + trasee legitime)
 --   runda2       testele verificatorului adversarial (30.09): VD4 sub-modul, VD5 podeaua
 --                pragului pe goluri reale, VD6 confirmat_de_om fără verdict_de, VE1/VE2 verdict
---                de mașină cu verdict_de. Opțional -v doar=VD5 (un singur test), ca harness-ul
---                să arate, test cu test, pe ce stare pică (live / v1 / mutanți).
---   operational  după revenirea operațională: poarta rămâne închisă, logica veche revine
--- Testele la nivel de fișier (VG1 armare persistentă, VG2 listă albă md5, VG3 revenire armată +
--- precondiție) sunt în scripts/test_sec_ofertare.sh.
+--                de mașină cu verdict_de. Opțional -v doar=VD5 (un singur test).
+--   runda3       răspunsul la NO-GO-ul Copilot (30.09): VN1 poarta NULL-safe (helperul întoarce
+--                NULL într-o tranzacție anulată → ambele funcții 42501, nimic scris). -v doar=VN1.
+--   oprire       după oprirea controlată: niciun apel nu mai trece (permission denied), verdictele
+--                umane rămân, pragul 0 nu mai poate ascunde goluri, nimic nu se scrie
+-- Testele la nivel de fișier (stări complete/mixte, atribute, postcondiții, tranzacție și runner,
+-- armare legată de txid, armare persistentă) sunt în scripts/test_sec_ofertare.sh.
 --
 -- Identități simulate ca în PostgREST: SET ROLE authenticated/anon/service_role +
 -- request.jwt.claims (auth.uid() citește `sub`).
@@ -42,20 +45,21 @@ SET client_min_messages = notice;
 \endif
 
 SELECT (:'faza' = 'setup') AS f_setup, (:'faza' = 'gaura') AS f_gaura,
-       (:'faza' = 'patched') AS f_patched, (:'faza' = 'runda2') AS f_runda2, (:'faza' = 'operational') AS f_oper,
-       (:'faza' IN ('setup', 'gaura', 'patched', 'runda2', 'operational')) AS f_valid,
-       (:'doar' IN ('toate', 'VD4', 'VD5', 'VD6', 'VE1', 'VE2')) AS doar_valid,
+       (:'faza' = 'patched') AS f_patched, (:'faza' = 'runda2') AS f_runda2,
+       (:'faza' = 'runda3') AS f_runda3, (:'faza' = 'oprire') AS f_oprire,
+       (:'faza' IN ('setup', 'gaura', 'patched', 'runda2', 'runda3', 'oprire')) AS f_valid,
+       (:'doar' IN ('toate', 'VD4', 'VD5', 'VD6', 'VE1', 'VE2', 'VN1')) AS doar_valid,
        (:'doar' IN ('toate', 'VD4')) AS r_vd4, (:'doar' IN ('toate', 'VD5')) AS r_vd5,
        (:'doar' IN ('toate', 'VD6')) AS r_vd6, (:'doar' IN ('toate', 'VE1')) AS r_ve1,
-       (:'doar' IN ('toate', 'VE2')) AS r_ve2 \gset
+       (:'doar' IN ('toate', 'VE2')) AS r_ve2, (:'doar' IN ('toate', 'VN1')) AS r_vn1 \gset
 \if :f_valid
 \else
-  \echo 'faza necunoscută: folosește setup | gaura | patched | runda2 | operational'
+  \echo 'faza necunoscută: folosește setup | gaura | patched | runda2 | runda3 | oprire'
   SELECT 1/0;
 \endif
 \if :doar_valid
 \else
-  \echo 'doar necunoscut: VD4 | VD5 | VD6 | VE1 | VE2 (sau lipsă = toate)'
+  \echo 'doar necunoscut: VD4 | VD5 | VD6 | VE1 | VE2 | VN1 (sau lipsă = toate)'
   SELECT 1/0;
 \endif
 
@@ -81,6 +85,8 @@ DO $roluri$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')          THEN CREATE ROLE anon NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')  THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF;
+  -- runda 3: un alt proprietar posibil (testul „alt proprietar ⇒ stare necunoscută”, harness pas 9)
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'proprietar_strain') THEN CREATE ROLE proprietar_strain NOLOGIN; END IF;
 END $roluri$;
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 -- Capcana Supabase: default privileges dau EXECUTE lui anon pe funcțiile NOI din public.
@@ -381,13 +387,61 @@ BEGIN
     (44, 40, 'gemini', 1, 4, 'Garantia de buna executie este de 10% din valoarea contractului', NULL, 'confirmat_de_om', NULL, '2099-01-01 00:00+00');
 END $$;
 
--- Copia e byte-identică cu live (md5 citit read-only din Supabase pe 29.09, PG 17.6).
-SELECT t.ok(md5(pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure)) = '6991b618d5fabbefdbd14684d335db48', 'S0 fn_are_acces_ofertare: copia locală = live (md5)');
-SELECT t.ok(md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure)) = '6c9995646a6dbe6da995e48a3a885fc9', 'S0 fn_ofertare_alege_acoperire: copia locală = live (md5)');
-SELECT t.ok(md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure)) = '500263dacba2b44e0caa1cb07db88d6e', 'S0 ofertare_inventar_pereche: copia locală = live (md5)');
+-- Copia e identică cu live. Runda 3: amprenta independentă de versiune e md5(prosrc) (textul literal
+-- al corpului), citită read-only din Supabase (PG 17.6) la 30.09 ~02:10 RO de coordonator.
+SELECT t.ok(md5(prosrc) = '429d28e2a61fb24c8009d67050c16c85', 'S0 fn_are_acces_ofertare: md5(prosrc) = live') FROM pg_proc WHERE oid = 'public.fn_are_acces_ofertare()'::regprocedure;
+SELECT t.ok(md5(prosrc) = '56a7c6ddd1e342c77e7b34f4e08ecab1', 'S0 fn_ofertare_alege_acoperire: md5(prosrc) = live') FROM pg_proc WHERE oid = 'public.fn_ofertare_alege_acoperire(bigint)'::regprocedure;
+SELECT t.ok(md5(prosrc) = 'edd4819c81844baafc7eeade838cbcff', 'S0 ofertare_inventar_pereche: md5(prosrc) = live') FROM pg_proc WHERE oid = 'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure;
+-- Și definiția întreagă (pg_get_functiondef) e aceeași ca în live: aici, în PG16, md5-urile coincid cu cele din PG 17.6.
+SELECT t.ok(md5(pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure)) = '6991b618d5fabbefdbd14684d335db48', 'S0 fn_are_acces_ofertare: pg_get_functiondef = live (md5)');
+SELECT t.ok(md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure)) = '6c9995646a6dbe6da995e48a3a885fc9', 'S0 fn_ofertare_alege_acoperire: pg_get_functiondef = live (md5)');
+SELECT t.ok(md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure)) = '500263dacba2b44e0caa1cb07db88d6e', 'S0 ofertare_inventar_pereche: pg_get_functiondef = live (md5)');
+-- Atributele live (citite de coordonator): SECURITY DEFINER, proprietar postgres, ACL {postgres, service_role,
+-- authenticated} (aici sortat), proconfig, volatilitate, tipul întors.
+SELECT t.ok(bool_and(p.prosecdef AND pg_get_userbyid(p.proowner) = 'postgres'
+                     AND (SELECT array_agg(a::text ORDER BY a::text COLLATE "C") FROM unnest(p.proacl) a)::text
+                         = '{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'), 'S0 toate trei: SECURITY DEFINER, proprietar postgres, ACL ca în live')
+  FROM pg_proc p WHERE p.oid IN ('public.fn_are_acces_ofertare()'::regprocedure, 'public.fn_ofertare_alege_acoperire(bigint)'::regprocedure,
+                                 'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure);
+SELECT t.ok(p.proconfig::text = '{"search_path=public, pg_temp"}' AND p.provolatile = 's' AND pg_get_function_result(p.oid) = 'boolean', 'S0 fn_are_acces_ofertare: proconfig, STABLE, boolean')
+  FROM pg_proc p WHERE p.oid = 'public.fn_are_acces_ofertare()'::regprocedure;
+SELECT t.ok(p.proconfig::text = '{"search_path=public, pg_temp"}' AND p.provolatile = 'v'
+            AND pg_get_function_result(p.oid) = 'TABLE(cerinta_id bigint, pozitie_id bigint, ales_id bigint, inlocuit_id bigint)', 'S0 fn_ofertare_alege_acoperire: proconfig, VOLATILE, TABLE(...)')
+  FROM pg_proc p WHERE p.oid = 'public.fn_ofertare_alege_acoperire(bigint)'::regprocedure;
+SELECT t.ok(p.proconfig::text = '{"search_path=public, extensions, pg_temp"}' AND p.provolatile = 'v'
+            AND pg_get_function_result(p.oid) = 'TABLE(imperecheate integer, ramase_fara_pereche integer)', 'S0 ofertare_inventar_pereche: proconfig, VOLATILE, TABLE(...)')
+  FROM pg_proc p WHERE p.oid = 'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure;
 SELECT t.ok(NOT has_function_privilege('anon', 'public.fn_ofertare_alege_acoperire(bigint)', 'EXECUTE')
         AND NOT has_function_privilege('public', 'public.fn_ofertare_alege_acoperire(bigint)', 'EXECUTE')
         AND has_function_privilege('authenticated', 'public.fn_ofertare_alege_acoperire(bigint)', 'EXECUTE'), 'S0 ACL ca în live (fără PUBLIC/anon)');
+
+-- Runda 3: stări complete și mixte, construite din definițiile REALE ale fiecărei stări.
+-- t.captureaza(stare) salvează pg_get_functiondef + ACL-ul celor 3 funcții (harness-ul o cheamă după
+-- setup = live, după migrare = patch, după oprire = oprire); t.pune(fn, stare) readuce o singură
+-- funcție în starea aceea (corp + atribute + ACL), ca să se poată compune o stare mixtă.
+CREATE TABLE t.stari_def (stare text, fn text, sig text, def text NOT NULL, acl aclitem[], PRIMARY KEY (stare, fn));
+CREATE FUNCTION t.captureaza(p_stare text) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  DELETE FROM t.stari_def WHERE stare = p_stare;
+  INSERT INTO t.stari_def (stare, fn, sig, def, acl)
+  SELECT p_stare, f.fn, f.sig, pg_get_functiondef(p.oid), p.proacl
+    FROM (VALUES ('acces', 'public.fn_are_acces_ofertare()'), ('alege', 'public.fn_ofertare_alege_acoperire(bigint)'),
+                 ('pereche', 'public.ofertare_inventar_pereche(bigint,text,integer,real)')) f(fn, sig)
+    JOIN pg_proc p ON p.oid = to_regprocedure(f.sig);
+  IF (SELECT count(*) FROM t.stari_def WHERE stare = p_stare) <> 3 THEN RAISE EXCEPTION 't.captureaza: lipsesc funcții'; END IF;
+END $$;
+CREATE FUNCTION t.pune(p_fn text, p_stare text) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE r t.stari_def; g record;
+BEGIN
+  SELECT * INTO STRICT r FROM t.stari_def WHERE fn = p_fn AND stare = p_stare;
+  EXECUTE r.def;
+  EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated, service_role', r.sig);
+  FOR g IN SELECT DISTINCT e.grantee FROM aclexplode(r.acl) e
+            WHERE e.grantee <> (SELECT proowner FROM pg_proc WHERE oid = to_regprocedure(r.sig)) LOOP
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %s', r.sig, CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(g.grantee)) END);
+  END LOOP;
+END $$;
+SELECT t.captureaza('live');
 SELECT t.reset_fixture();
 \echo '== SETUP gata =='
 \endif
@@ -397,8 +451,8 @@ SELECT t.reset_fixture();
 \echo '== GAURA: starea live din 29.09 permite bypass-ul (dovadă) =='
 :ca_postgres
 SELECT t.reset_fixture();
-SELECT t.ok(md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure)) = '6c9995646a6dbe6da995e48a3a885fc9', 'G0 alege = exact starea live din 29.09 (md5)');
-SELECT t.ok(md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure)) = '500263dacba2b44e0caa1cb07db88d6e', 'G0 pereche = exact starea live din 29.09 (md5)');
+SELECT t.ok(md5(prosrc) = '56a7c6ddd1e342c77e7b34f4e08ecab1', 'G0 alege = exact corpul live din 29.09 (md5(prosrc))') FROM pg_proc WHERE oid = 'public.fn_ofertare_alege_acoperire(bigint)'::regprocedure;
+SELECT t.ok(md5(prosrc) = 'edd4819c81844baafc7eeade838cbcff' AND proconfig::text = '{"search_path=public, extensions, pg_temp"}', 'G0 pereche = exact corpul live din 29.09 (md5(prosrc) + search_path)') FROM pg_proc WHERE oid = 'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure;
 
 -- G1: calea directă (REST pe tabel) e închisă de RLS pentru contul fără modul…
 :ca_nemod
@@ -717,41 +771,94 @@ SELECT t.ok(t.inv_row(5) = '102|acoperit|00000000-0000-4000-8000-000000000007|-'
 \endif
 
 -- ════════════════════════════════════════════════════════════════════════════
-\if :f_oper
-\echo '== REVENIRE OPERAȚIONALĂ: poarta rămâne, logica veche revine =='
+-- RUNDA 3 (30.09): răspunsul la NO-GO-ul Copilot pe 94909d6. Pe ce stări pică: docs §11.
+\if :f_runda3
+\echo '== RUNDA 3: poarta NULL-safe =='
+
+-- VN1: helperul fn_are_acces_ofertare() înlocuit, DOAR în tranzacția de mai jos (anulată la final), cu
+-- unul care întoarce NULL. Cu uid nenul, ambele funcții trebuie să refuze 42501 și să nu scrie nimic:
+-- NULL = refuz, nu trecere. Pe runda 2 (IF NOT …) NULL nu intra în ramura de refuz și apelul trecea.
+-- Datele se verifică ÎNAINTE de ROLLBACK (după el, orice scriere ar dispărea și testul ar fi vid).
+\if :r_vn1
 :ca_postgres
 SELECT t.reset_fixture();
-SELECT t.ok(position('SEC-20261003b-OPERATIONAL' IN pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure)) > 0
-        AND position('SEC-20261003b-OPERATIONAL' IN pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure)) > 0, 'O0 starea operațională e activă');
-SELECT t.ok(NOT has_function_privilege('anon', 'public.fn_ofertare_alege_acoperire(bigint)', 'EXECUTE')
-        AND NOT has_function_privilege('anon', 'public.ofertare_inventar_pereche(bigint,text,integer,real)', 'EXECUTE'), 'O0 anon fără EXECUTE');
+BEGIN;
+CREATE OR REPLACE FUNCTION public.fn_are_acces_ofertare()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $vn1$ SELECT NULL::boolean $vn1$;
+SELECT t.ok(md5(prosrc) <> '429d28e2a61fb24c8009d67050c16c85', 'VN1 helperul e înlocuit (numai în tranzacția testului)') FROM pg_proc WHERE oid = 'public.fn_are_acces_ofertare()'::regprocedure;
 SELECT t.acop_snapshot() AS s_acop, t.inv_snapshot() AS s_inv \gset
-:ca_nemod
-SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'modulul Ofertare', 'O1 fără modul → alege_acoperire 42501 (poarta păstrată)');
-SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', '42501', 'modulul Ofertare', 'O1 fără modul → inventar_pereche 42501 (poarta păstrată)');
-:ca_fara_uid
-SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'autentificat', 'O1 fără uid → 42501');
-SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10)', '42501', 'autentificat', 'O1 fără uid → pereche 42501');
-:ca_anon
-SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'permission denied', 'O1 anon → fără EXECUTE');
-:ca_postgres
-SELECT t.ok(t.acop_snapshot() = :'s_acop' AND t.inv_snapshot() = :'s_inv', 'O1 refuzurile n-au atins nimic');
 :ca_mod
-SELECT coalesce(inlocuit_id::text, 'NULL') AS r_inl FROM public.fn_ofertare_alege_acoperire(1002) \gset
-:ca_postgres
-SELECT t.ok(:'r_inl' = '1001' AND (SELECT ales AND ales_de = :'UID_MOD' FROM public.ofertare_acoperire WHERE id = 1002), 'O2 cu modul: alegerea merge');
+SELECT t.ok(public.fn_are_acces_ofertare() IS NULL, 'VN1 helperul întoarce NULL pentru un uid CU modul');
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'modulul Ofertare', 'VN1 helper NULL, uid cu modul → alege 42501 (NULL = refuz)');
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', '42501', 'modulul Ofertare', 'VN1 helper NULL, uid cu modul → pereche 42501 (NULL = refuz)');
 :ca_owner
-SELECT t.expect_ok('SELECT * FROM public.fn_ofertare_alege_acoperire(1003)', 'O2 owner: alegerea merge');
-:ca_mod
-SELECT imperecheate AS r_imp, ramase_fara_pereche AS r_ram FROM public.ofertare_inventar_pereche(10, 'gemini', 1) \gset
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1003)', '42501', 'modulul Ofertare', 'VN1 helper NULL, owner → alege 42501');
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1)', '42501', 'modulul Ofertare', 'VN1 helper NULL, owner → pereche 42501');
+:ca_nemod
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(2001)', '42501', 'modulul Ofertare', 'VN1 helper NULL, uid fără modul → alege 42501');
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10)', '42501', 'modulul Ofertare', 'VN1 helper NULL, uid fără modul → pereche 42501');
 :ca_postgres
-SELECT t.ok(:'r_imp'::int + :'r_ram'::int = 7, 'O3 cu modul: împerecherea merge (apel ca în UI)');
--- Ce se pierde, asumat, în revenirea operațională (doar pentru cine ARE modulul):
-SELECT t.ok((SELECT verdict FROM public.ofertare_inventar_ai WHERE id = 3) = 'lipsa_din_registru', 'O4 ASUMAT: logica veche rescrie din nou respins_de_om');
+SELECT t.ok(t.acop_snapshot() = :'s_acop' AND t.inv_snapshot() = :'s_inv', 'VN1 nicio modificare de date (verificat înainte de ROLLBACK)');
+ROLLBACK;
+SELECT t.ok(md5(prosrc) = '429d28e2a61fb24c8009d67050c16c85', 'VN1 după ROLLBACK helperul e din nou exact copia live') FROM pg_proc WHERE oid = 'public.fn_are_acces_ofertare()'::regprocedure;
+\endif
+:ca_postgres
+\echo '== RUNDA 3: gata =='
+\endif
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- OPRIRE CONTROLATĂ (runda 3): corpurile patch-ului rămân, EXECUTE e retras. Cerința Copilot: testele
+-- „verdictul uman respins rămâne neschimbat” și „pragul zero nu elimină lipsurile” rămân verzi și
+-- DUPĂ revenire — aici pentru că niciun apel nu mai trece.
+\if :f_oprire
+\echo '== OPRIRE CONTROLATĂ: nimic nu mai trece prin cele două funcții =='
+:ca_postgres
 SELECT t.reset_fixture();
+-- Starea dinaintea opririi: o comparare anterioară (la 0.45) marcase golurile reale drept „lipsă”.
+UPDATE public.ofertare_inventar_ai SET verdict = 'lipsa_din_registru' WHERE id IN (2, 41, 42, 43);
+SELECT t.ok(bool_and(NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+                     AND NOT has_function_privilege('public', p.oid, 'EXECUTE') AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')),
+            'OP0 EXECUTE retras pe ambele de la authenticated, anon, PUBLIC și service_role')
+  FROM pg_proc p WHERE p.oid IN ('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure, 'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure);
+SELECT t.ok(bool_and(position('SEC-20261003b' IN p.prosrc) > 0 AND position('IS NOT TRUE' IN p.prosrc) > 0), 'OP0 corpurile sunt ale patch-ului (poarta NULL-safe), neschimbate de oprire')
+  FROM pg_proc p WHERE p.oid IN ('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure, 'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure);
+SELECT t.ok(has_function_privilege('authenticated', 'public.fn_are_acces_ofertare()', 'EXECUTE'), 'OP0 fn_are_acces_ofertare() neatinsă: RLS-ul de scriere o folosește în continuare');
+SELECT t.acop_snapshot() AS s_acop, t.inv_snapshot() AS s_inv, t.inv_row(3) AS r3, t.inv_row(6) AS r6 \gset
 :ca_mod
-SELECT t.expect_ok('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', 'O4 ASUMAT: cu modul, p_prag=0 e din nou acceptat');
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', '42501', 'permission denied', 'OP1 cu modul: „Compară cu registrul” cu p_prag=0 → permission denied (oprit)');
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(40, ''gemini'', 1, 0)', '42501', 'permission denied', 'OP1 cu modul: p_prag=0 pe golurile reale (lic. 40) → permission denied');
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1)', '42501', 'permission denied', 'OP1 cu modul: apelul exact din UI → permission denied');
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'permission denied', 'OP1 cu modul: „alege” → permission denied');
+:ca_owner
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', '42501', 'permission denied', 'OP1 owner: pereche → permission denied (oprirea e pentru toți)');
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1003)', '42501', 'permission denied', 'OP1 owner: alege → permission denied');
+:ca_viewer
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10)', '42501', 'permission denied', 'OP1 viewer: pereche → permission denied');
+:ca_submod
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'permission denied', 'OP1 sub-modul: alege → permission denied');
+:ca_nemod
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', '42501', 'permission denied', 'OP1 fără modul: pereche → permission denied');
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(2001)', '42501', 'permission denied', 'OP1 fără modul: alege → permission denied');
+:ca_fara_uid
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10)', '42501', 'permission denied', 'OP1 fără uid: pereche → permission denied');
+:ca_service
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10)', '42501', 'permission denied', 'OP1 service_role: pereche → permission denied (EXECUTE retras și de la el)');
+SELECT t.expect_error('SELECT * FROM public.fn_ofertare_alege_acoperire(1002)', '42501', 'permission denied', 'OP1 service_role: alege → permission denied');
+:ca_anon
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', '42501', 'permission denied', 'OP1 anon: pereche → permission denied');
 :ca_postgres
-SELECT t.ok((SELECT count(*) FROM public.ofertare_inventar_ai WHERE licitatie_id = 10 AND furnizor = 'gemini' AND verdict = 'lipsa_din_registru') = 0, 'O4 ASUMAT: cu p_prag=0 golurile dispar (doar pentru utilizatorii cu modul)');
-\echo '== REVENIRE OPERAȚIONALĂ: poarta confirmată =='
+-- Proprietarul (postgres, din SQL editor) păstrează EXECUTE, dar poarta îl refuză fără uid (S-A).
+SELECT t.expect_error('SELECT * FROM public.ofertare_inventar_pereche(10, ''gemini'', 1, 0)', '42501', 'autentificat', 'OP1 postgres fără uid: pereche → 42501 din poartă');
+SELECT t.ok(t.acop_snapshot() = :'s_acop' AND t.inv_snapshot() = :'s_inv', 'OP2 niciun apel n-a scris nimic (ofertare_acoperire și ofertare_inventar_ai identice)');
+SELECT t.ok(t.inv_row(3) = :'r3' AND t.inv_row(6) = :'r6' AND :'r3' LIKE '%|respins_de_om|%' AND :'r6' LIKE '%|respins_de_om|%', 'OP3 verdictele umane respins_de_om (cu și fără verdict_de) rămân neschimbate');
+SELECT t.ok((SELECT count(*) FROM public.ofertare_inventar_ai WHERE id IN (2, 41, 42, 43) AND verdict = 'lipsa_din_registru' AND pereche_cerinta_id IS NULL) = 4, 'OP4 pragul 0 nu elimină lipsurile: golurile (2, 41, 42, 43) rămân „lipsă”, apelul fiind refuzat');
+-- Context, neschimbat de oprire: calea directă pe tabele rămâne la RLS (aceeași poartă de modul).
+:ca_nemod
+SELECT t.ok(t.rows_affected('UPDATE public.ofertare_acoperire SET ales = false WHERE id = 1001') = 0, 'OP5 context: fără modul, nici direct (RLS neschimbat)');
+:ca_postgres
+\echo '== OPRIRE CONTROLATĂ: confirmată =='
 \endif

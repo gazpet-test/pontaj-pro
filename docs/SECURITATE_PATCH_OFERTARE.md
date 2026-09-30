@@ -1,8 +1,8 @@
 # Patch de securitate Ofertare — constatările (2) și (3), 20261003b
 
-> **Stare: PREGĂTIT și testat local, runda 2 (corecturile verificatorului adversarial, verdict CU_CORECȚII, poarta corectă). NEAPLICAT.** Nu s-a atins nimic în Supabase (doar SELECT-uri read-only pe cataloage). Commit-ul îl face coordonatorul.
+> **Stare: PREGĂTIT și testat local, runda 3 (răspuns la NO-GO-ul Copilot pe runda 2, §11). NEAPLICAT.** Nu s-a atins nimic în Supabase. Commit-ul îl face coordonatorul.
 > **Aplicarea cere trei lucruri, în ordinea asta:** (1) excepția de securitate la freeze-ul Ofertare, acordată explicit de Răzvan pe domeniul exact al acestui patch (2 funcții, fără tabele sau date); (2) GO Copilot pe revizie, cu diff-ul și rezultatul testelor aduse efectiv în chat; (3) pașii din §7 (preview → confirmare → apply → verificare).
-> Context: incidentul de expunere OPEN din `docs/SECURITATE_ADVISORS_2026-09-30.md` (branch `claude/erp-continuare-x4p5a7`), §0 punctele 2 și 3, §1. Ce s-a schimbat în runda 2: §10.
+> Context: incidentul de expunere OPEN din `docs/SECURITATE_ADVISORS_2026-09-30.md` (branch `claude/erp-continuare-x4p5a7`), §0 punctele 2 și 3, §1. Ce s-a schimbat în runda 2: §10. În runda 3: §11 (secțiunile §4, §5, §7, §10.3 și §10.4 sunt actualizate; unde contrazic §10.1–§10.2, prevalează §11).
 
 ## 1. Pe scurt
 | | Azi (live, 29.09) | După patch |
@@ -64,57 +64,32 @@ Nicio ramură „`auth.uid() IS NULL` ⇒ sistem”. Fără uid, apelul primeșt
 ## 4. Fișiere (worktree `wt-sec-ofertare`, branch `claude/erp-continuare-x4p5a7-sec-ofertare`, din `origin/main`)
 | Fișier | Rol |
 |---|---|
-| `supabase/migrations/20261003b_sec_ofertare_porti_alege_inventar.sql` | Patch-ul, `BEGIN`/`COMMIT` explicit. Conține **precondiții pe listă albă md5**, per funcție: starea live, starea patch-ului, starea revenirii operaționale. Nu mai acceptă orice corp care poartă markerul `SEC-20261003b`. Urmează cele 2 funcții, ACL explicit și postcondiții (ACL, SECURITY DEFINER, search_path, poartă prezentă). |
-| `…_ROLLBACK.sql` | **ROLLBACK TEHNIC: redeschide bypass-ul; doar la cererea explicită a lui Răzvan.** `BEGIN`/`COMMIT` plus un bloc DO. Refuză în trei cazuri: (a) armare persistentă în `pg_db_role_setting`, oricum ar fi scris numele; (b) lipsește `SET gazpet.rollback_tehnic_20261003b = 'REDESCHIDE_BYPASS';` în sesiunea apply-ului; (c) starea curentă nu e patch, revenire sau live. Readuce starea din 29.09 **byte cu byte** (verifică md5 în interior), apoi dezarmează comutatorul. |
-| `…_REVENIRE_OPERATIONALA.sql` | Revenire care **păstrează poarta și ACL-ul** și readuce logica de business din 29.09. **NU e „fără gaură”**: pentru cei CU modul revin pragul liber și rescrierea lui `respins_de_om`. `BEGIN`/`COMMIT`. **Armare proprie**, doar pe tranzacție: `SET LOCAL gazpet.revenire_operationala_20261003b = 'PASTREAZA_POARTA';`. Refuză armarea persistentă. Se aplică **doar din starea patch-ului** (md5). |
-| `supabase/tests/sec_ofertare_porti.test.sql` | Scheletul minim, copia LIVE a celor 3 funcții, ACL-ul live, politicile RLS live și fixture-ul. În runda 2 fixture-ul a primit licitația 40 (goluri reale 0.33–0.38 și un `confirmat_de_om` fără `verdict_de`) și un utilizator cu sub-modul. Faze: `setup`, `gaura`, `patched`, **`runda2`** (VD4 VD5 VD6 VE1 VE2, rulabile și câte unul cu `-v doar=`) și `operational`. |
-| `scripts/test_sec_ofertare.sh` | Rulează toată secvența pe un cluster PG16 dedicat (implicit `/tmp/pg_sec_ofertare`, `127.0.0.1:5441`; `PGPORT`/`PGBASE` configurabile). Conține testele la nivel de fișier: VG1 (armare persistentă), VG2 (versiune ulterioară cu marker), VG3 (revenire armată și precondiție). Aplicările „ca apply_migration” trimit linia de armare și fișierul într-un singur query. `MIG`/`RB`/`OP`/`TEST` pot fi suprascrise, pentru analiza de mutanți pe fișiere. |
+| `supabase/migrations/20261003b_sec_ofertare_porti_alege_inventar.sql` | Patch-ul. **Fără BEGIN/COMMIT; se livrează doar prin `scripts/livrare_migrare.sh`** (gestionar unic: marcaj + migrare + INSERT în `schema_migrations`, §7). Un singur bloc DO, cu **gardă de livrare la început și la final**. Precondiție pe **stări complete** (helper + alege + pereche, fiecare cu md5(prosrc) + atribute + ACL): live 29.09 \| patch \| oprire. Cele 2 funcții (poarta NULL-safe `IS NOT TRUE`), ACL explicit, apoi **postcondiția înainte de COMMIT**: starea = exact patch-ul. |
+| `supabase/revenire/…_OPRIRE_CONTROLATA.sql` | **Nou (runda 3).** Păstrează corpurile patch-ului, retrage EXECUTE de la authenticated, anon, PUBLIC și service_role. Funcționalitatea se oprește, nu se redeschide. Pornește doar din patch. Armare proprie, legată de txid. Ieșirea = `_REPORNIRE.sql`. |
+| `supabase/revenire/…_REPORNIRE.sql` | **Nou (runda 4).** Ieșirea din oprire: doar din „oprire”, reface GRANT-urile patch-ului, postcondiție = patch. Armare proprie, legată de txid. |
+| `scripts/livrare_migrare.sh` | Traseul comun de livrare, copiat din #538 (`95be8d4`), neschimbat. |
+| `supabase/revenire/…_ROLLBACK.sql` | **Mutat din `migrations/`.** ROLLBACK TEHNIC, redeschide bypass-ul; **artefact fără GO de execuție**. Fără BEGIN/COMMIT (gestionarul e operatorul), un singur bloc DO, armare legată de txid, refuz la armare persistentă, pornește din patch \| oprire \| live, postcondiție = live. |
+| `supabase/revenire/README.md` | De ce nu le parcurge niciun runner, cum se execută, cine decide. |
+| ~~`…_REVENIRE_OPERATIONALA.sql`~~ | **Șters** (runda 3): readucea pragul liber și rescrierea lui `respins_de_om` (NO-GO Copilot). Nu se păstrează nicăieri ca variantă executabilă. |
+| `supabase/tests/sec_ofertare_porti.test.sql` | Schelet + copia LIVE (md5(prosrc) și atribute verificate) + fixture. Faze: `setup`, `gaura`, `patched`, `runda2`, **`runda3`** (VN1), **`oprire`**. `t.captureaza`/`t.pune` construiesc stări mixte din definiții reale. |
+| `scripts/test_sec_ofertare.sh` | Harness-ul complet pe un cluster PG16 dedicat: static (pas 0), runner-e emulate, T1/T2, stări mixte, atribute, postcondiții, VG1/VG2. `MIG`/`RB`/`OPR`/`REP`/`TEST`/`PATCH_H`/`STATIC` pot fi suprascrise pentru mutanți. |
+
+Alte fișiere `_ROLLBACK.sql` din `supabase/migrations/` (11, de ex. `20260928p_…_ROLLBACK.sql`) sunt o convenție preexistentă, în afara domeniului acestui patch; nu le-am mutat. Nici pe ele nu le parcurge vreun runner (aceeași verificare ca la pasul 0b), dar asta nu e verificat aici fișier cu fișier.
 
 ## 5. Teste — cum se rulează și ce au dat
-`bash scripts/test_sec_ofertare.sh` (`KEEP=1` lasă clusterul pornit; `PGPORT=5461 PGBASE=/tmp/pg_x` pentru alt cluster). Identitățile sunt simulate ca în PostgREST: `SET ROLE authenticated|anon|service_role` plus `request.jwt.claims`. În schelet, default privileges dau EXECUTE lui anon pe funcțiile noi, ca în Supabase. Dacă o migrare ar face DROP+CREATE în loc de CREATE OR REPLACE, testul P0 ar prinde-o.
+`bash scripts/test_sec_ofertare.sh` (`KEEP=1` lasă clusterul pornit; `PGPORT=5491 PGBASE=/tmp/pg_x` pentru alt cluster). Identitățile sunt simulate ca în PostgREST: `SET ROLE authenticated|anon|service_role` plus `request.jwt.claims`. În schelet, default privileges dau EXECUTE lui anon pe funcțiile noi, ca în Supabase.
 
-**Secvența rulată** (runda 2, 30.09, PG 16.13, `127.0.0.1:5461`):
-1. listele albe din fișiere = md5-urile din harness;
-2. setup (copia LIVE, md5 = live) → gaura pe copia live;
-3. migrare, cu md5 = cel din listele albe → migrare a doua oară (idempotentă) → suitele `patched` + `runda2`;
-4. rollback tehnic **nearmat** (refuzat);
-5. **VG1**: armare persistentă prin ALTER DATABASE și ALTER ROLE (și cu nume cu majuscule), pe rollback și pe revenire. Refuzată de fiecare dată, fără urme;
-6. rollback tehnic armat, ca apply_migration (md5 = live, comutatorul dezarmat în sesiune) → gaura → suita `patched` **cade** pe live → `runda2` test cu test pe live;
-7. 3 precondiții negative, plus **VG3** (revenirea din starea live e refuzată);
-8. reaplicare → teste;
-9. **VG2**: versiuni ulterioare cu marker, pe alege și pe pereche. Migrarea, revenirea și rollback-ul refuză, iar versiunea ulterioară rămâne intactă;
-10. revenire operațională: **VG3** nearmată / `SET LOCAL` în afara tranzacției / armată cu altă valoare (toate refuzate) → armată (md5 = cel din listele albe, armarea nu trece de COMMIT) → teste pe poartă → **VG3** a doua oară (refuzată);
-11. reaplicare peste starea operațională → teste → urma din jurnal (pragul cerut 0 și 0.3 → aplicat 0.45).
+Secvența (runda 3) și rezultatul: §11.2. **Rezultat: `TOATE TESTELE AU TRECUT`, exit 0, 502 verificări OK** (runda 2: 344), rulat de două ori pe PG 16.13 (`127.0.0.1:5491`).
 
-**Rezultat: `TOATE TESTELE AU TRECUT`, exit 0, 344 de verificări OK** (v1: 231).
+**Amprente md5(prosrc)** (textul literal al corpului; aceleași în PG16 și PG17, fiindcă PG stochează corpul așa cum e scris). Sunt valorile din tabelul stărilor, identic în toate fișierele:
 
-| Cerință (Copilot / task / verificator) | Teste | Rezultat |
-|---|---|---|
-| Non-owner fără modul primește 42501 pe ambele, la apel direct | P2 (inclusiv Jilava, id inexistent, `p_prag=0`, apel implicit) + O1 | ✅ `42501 Nu ai acces la modulul Ofertare…` |
-| Cu modulul Ofertare trece | P4, P6–P9 (alegere), P11–P14 (pereche) | ✅ |
-| Owner trece | P5, P15, O2 | ✅ |
-| anon nu are EXECUTE | P0 (ACL) + P1 (apel: `permission denied for function`) | ✅ |
-| Fără uid / service_role / postgres primesc refuz (S-A) | P3 | ✅ 42501 |
-| `p_prag` e limitat | P12 (0 și −5 → 0.45, golul rămâne), P13 (2 și NaN → 0.95), P14 (NULL → 0.45), **VD5** (0, 0.30, 0.44 pe goluri reale 0.33–0.38 → rămân goluri) | ✅ |
-| `respins_de_om` și `confirmat_de_om` rămân neatinse | P11, P12, **VD6** (`confirmat_de_om` fără `verdict_de`, text identic cu o cerință) | ✅ |
-| Verdictul de mașină cu `verdict_de` nu se îngheață | P11 rând 7 (perechea falsă 102, sim. 0.17, dispare), **VE1**, **VE2** | ✅ |
-| Sub-modul `ofertare.*`: comportament fixat (refuz, ca RLS) | **VD4** | ✅ 42501 |
-| `access_level` ignorat (rezidual, documentat) | P16: `viewer` și `editor` („👁 Vizualizare”) trec și scriu | ✅ (rezidual) |
-| Traseul legitim funcționează | P4 (butonul „alege”), P8 (OfertareCerinte: INSERT + RPC), P9 (OfertareLicitatii: UPDATE + RPC), P11 (pereche exact ca în UI: `(2, 5)`) | ✅ |
-| Proveniența | P4/P5/P9 (`ales_de` = cine a ales), pasul 11 (jurnalul are `inlocuit=1001 inlocuit_ales_de=<coleg> de=<cine>`) | ✅ |
-| Refuzurile nu lasă urme | P1–P3, O1, VD4 (instantanee înainte/după identice, inclusiv `updated_at`), VG1–VG3 (md5 neschimbat) | ✅ |
-| Rollback-ul tehnic reproduce gaura, reaplicarea o închide | G0–G5 după rollback, apoi suitele P + runda 2 complete după reaplicare | ✅ |
-| Armare persistentă refuzată | **VG1** (ALTER DATABASE / ALTER ROLE, nume cu majuscule; rollback și revenire) | ✅ |
-| Versiune ulterioară cu marker nesuprascrisă | **VG2** (alege și pereche; migrare, revenire, rollback) | ✅ |
-| Revenirea: armată explicit, doar din starea patch-ului | **VG3** (nearmată, `SET LOCAL` rătăcit, altă valoare, din live, peste versiune ulterioară, a doua oară) | ✅ |
+| Stare | helper | alege | pereche | ACL alege/pereche | proconfig pereche |
+|---|---|---|---|---|---|
+| live 29.09 | `429d28e2…` | `56a7c6ddd1e342c77e7b34f4e08ecab1` | `edd4819c81844baafc7eeade838cbcff` | authenticated, postgres, service_role | `public, extensions, pg_temp` |
+| **patch 20261003b (runda 3)** | `429d28e2…` | `51865b69766f6baa53def9a6e6c6232b` | `4d90bf90b4bbfd6aea944e734f6c9ed9` | authenticated, postgres, service_role | `public, pg_temp` |
+| **oprire controlată** | `429d28e2…` | `51865b69…` (= patch) | `4d90bf90…` (= patch) | **doar postgres** | `public, pg_temp` |
 
-**Amprente md5 (PG16).** Acestea sunt valorile din listele albe. Cele din PG17 se verifică la apply (§7, pasul 4).
-
-| Stare | alege | pereche |
-|---|---|---|
-| live 29.09 (identic în PG17.6) | `6c9995646a6dbe6da995e48a3a885fc9` | `500263dacba2b44e0caa1cb07db88d6e` |
-| **patch 20261003b, runda 2** | `1da7260d85e2441d93876c1c590d9f99` (neschimbat față de v1) | `9cf65390fb07c4f84e508a511f8dbd9f` (v1: `4ed88708…`, nu e în listă) |
-| revenire operațională | `d1a1a2a45cf57046cf7c26dc981c310f` | `770c29d8066d3003fc0355fc93e7f3fb` |
+Atributele comune tuturor stărilor (verificate explicit): SECURITY DEFINER, proprietar `postgres`, limbaj, volatilitate (helper `s`, celelalte `v`), STRICT/LEAKPROOF/PARALLEL/COST/ROWS implicite, semnătura cu nume și DEFAULT-uri, fără supraîncărcări (`n=1`), tipul întors.
 
 ## 6. Risc de regresie
 - **Utilizatorii legitimi:** risc mic.
@@ -130,55 +105,45 @@ Nicio ramură „`auth.uid() IS NULL` ⇒ sistem”. Fără uid, apelul primeșt
 - **Rezidual, neschimbat de patch:** §10.4.
 
 ## 7. Pașii de apply (după excepția de freeze, GO Copilot și acordul lui Răzvan)
-1. **Preview read-only**, cu rezultatul arătat lui Răzvan:
+1. **Preview read-only**, cu rezultatul arătat lui Răzvan. Interogarea de mai jos dă exact câmpurile pe care le compară fișierele (o linie per funcție):
    ```sql
-   SELECT md5(pg_get_functiondef('public.fn_are_acces_ofertare()'::regprocedure)) = '6991b618d5fabbefdbd14684d335db48' AS acces_ok,
-          md5(pg_get_functiondef('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure)) = '6c9995646a6dbe6da995e48a3a885fc9' AS alege_ok,
-          md5(pg_get_functiondef('public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure)) = '500263dacba2b44e0caa1cb07db88d6e' AS pereche_ok,
-          to_regprocedure('extensions.similarity(text,text)') IS NOT NULL AS trgm_ok;
-   -- cine le-a apelat de la resetul statisticilor (pe rol)
-   SELECT r.rolname, s.calls FROM extensions.pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid
-    WHERE s.query ILIKE '%fn_ofertare_alege_acoperire%' OR s.query ILIKE '%ofertare_inventar_pereche%';
-   -- cine va trece poarta: module = 'ofertare' trece (ORICE access_level, inclusiv „editor” = „👁 Vizualizare”);
-   -- 'ofertare.<ceva>' vede ecranul, dar e refuzat (azi deja de RLS la scrieri; după patch și la cele 2 RPC-uri)
+   SELECT f.fn, md5(p.prosrc), p.prosecdef, l.lanname, p.provolatile, pg_get_userbyid(p.proowner), p.proconfig,
+          pg_get_function_arguments(p.oid), pg_get_function_result(p.oid),
+          (SELECT array_agg(a::text ORDER BY a::text COLLATE "C") FROM unnest(coalesce(p.proacl, acldefault('f', p.proowner))) a) AS acl,
+          p.proisstrict, p.proleakproof, p.proparallel, p.procost, p.prorows,
+          (SELECT count(*) FROM pg_proc q WHERE q.pronamespace = 'public'::regnamespace AND q.proname = f.nume) AS n
+     FROM (VALUES ('acces','fn_are_acces_ofertare','public.fn_are_acces_ofertare()'),
+                  ('alege','fn_ofertare_alege_acoperire','public.fn_ofertare_alege_acoperire(bigint)'),
+                  ('pereche','ofertare_inventar_pereche','public.ofertare_inventar_pereche(bigint,text,integer,real)')) f(fn, nume, sig)
+     LEFT JOIN pg_proc p ON p.oid = to_regprocedure(f.sig) LEFT JOIN pg_language l ON l.oid = p.prolang;
+   SELECT to_regprocedure('extensions.similarity(text,text)') IS NOT NULL AS trgm_ok;
    SELECT module, access_level, count(*) FROM user_module_access WHERE module LIKE 'ofertare%' GROUP BY 1,2;
-   -- verdicte umane care de acum rămân fixe + verdicte de mașină cu verdict_de (se recalculează ca azi)
-   SELECT count(*) FILTER (WHERE verdict = 'respins_de_om') AS respinse, count(*) FILTER (WHERE verdict = 'confirmat_de_om') AS confirmate,
-          count(*) FILTER (WHERE verdict IN ('respins_de_om','confirmat_de_om') AND verdict_de IS NULL) AS umane_fara_verdict_de,
-          count(*) FILTER (WHERE verdict_de IS NOT NULL AND verdict IS DISTINCT FROM 'respins_de_om' AND verdict IS DISTINCT FROM 'confirmat_de_om') AS masina_cu_verdict_de
-     FROM public.ofertare_inventar_ai;
-   -- nicio armare persistentă a comutatoarelor de revenire (trebuie 0 rânduri)
-   SELECT setdatabase, setrole, c FROM pg_db_role_setting, unnest(setconfig) c WHERE lower(c) LIKE 'gazpet.%';
+   SELECT setdatabase, setrole, c FROM pg_db_role_setting, unnest(setconfig) c WHERE lower(c) LIKE 'gazpet.%';  -- 0 rânduri
    ```
-   Dacă un md5 diferă, apply-ul **se oprește**. Migrarea oricum ar refuza, dar trebuie văzut ce s-a schimbat.
-   Dacă interogarea pe module arată rânduri `ofertare.<ceva>`, se decide **înainte** de apply: fie acceptăm refuzul, fie Răzvan acordă explicit `ofertare` (CLAUDE.md pct. 3). Drepturile nu se schimbă din acest patch.
+   Se așteaptă exact rândurile `live` din §5 (md5(prosrc), ACL, proconfig) și **`n = 1`** pe toate trei. `n` (lipsa supraîncărcărilor) **nu e în datele citite pe 30.09**: dacă iese altfel, migrarea refuză (fail-closed) și se decide înainte de apply. Rândurile `ofertare.<ceva>` se decid ca în runda 2 (drepturile nu se schimbă din acest patch).
 2. **Confirmarea explicită a lui Răzvan**, plus delta pentru Copilot dacă starea s-a schimbat de la ultimul pack.
-3. **Apply:** `apply_migration` cu numele `20261003b_sec_ofertare_porti_alege_inventar` și fișierul **întreg**. `BEGIN`/`COMMIT` sunt în fișier, la fel precondițiile și postcondițiile.
-4. **Verificare:**
-   ```sql
-   SELECT p.oid::regprocedure, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon,
-          has_function_privilege('public', p.oid, 'EXECUTE') AS public_, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth,
-          p.proconfig, position('SEC-20261003b' IN pg_get_functiondef(p.oid)) > 0 AS marker, md5(pg_get_functiondef(p.oid))
-     FROM pg_proc p WHERE p.oid IN ('public.fn_ofertare_alege_acoperire(bigint)'::regprocedure,
-                                    'public.ofertare_inventar_pereche(bigint,text,integer,real)'::regprocedure);
+3. **Apply — traseul comun de livrare** (runda 4 a #538, aplicat identic aici): `scripts/livrare_migrare.sh`, copiat octet cu octet din #538 (commit `95be8d4`).
+   ```bash
+   bash scripts/livrare_migrare.sh supabase/migrations/20261003b_sec_ofertare_porti_alege_inventar.sql -- "$DB_URL"
    ```
-   - Se așteaptă: `anon=f`, `public_=f`, `auth=t`, `search_path=public, pg_temp`, `marker=t`.
-   - md5 trebuie să fie **alege `1da7260d85e2441d93876c1c590d9f99`, pereche `9cf65390fb07c4f84e508a511f8dbd9f`**.
-   - **Dacă în PG17 md5-urile ies altfel, oprește-te aici, înainte să fie nevoie de o revenire.** Listele albe (migrare, revenire, rollback) și `PATCH_MD5` din harness se actualizează într-un commit revizuit.
-   - Până atunci revenirea, rollback-ul și reaplicarea **refuză**. E fail-closed: nu strică nimic, dar le blochează.
-   - Apoi `get_advisors` (security).
-   - Test LIVE cu Ctrl+Shift+R, făcut de un utilizator **cu** modulul Ofertare:
-     - OfertareCerinte → „alege” pe un candidat;
-     - OfertareLicitatii → Acoperire → alegere manuală;
-     - „Verificare independentă” → „Compară cu registrul”: respingerile rămân „✕ respinsă”.
-   - Apoi urma `SEC-20261003b` în Postgres logs.
-   - Testul negativ live (cont fără modul) se face numai cu un cont existent. **Nu se creează conturi și nu se schimbă drepturi fără acordul lui Răzvan.**
-5. **Revenire, dacă e nevoie:** ambele fișiere refuză dacă preview-ul de armare persistentă din pasul 1 are rânduri.
-   - **Fluxul legitim s-a stricat:** `…_REVENIRE_OPERATIONALA.sql`, cu acordul lui Răzvan. În același `apply_migration`, prima linie e `SET LOCAL gazpet.revenire_operationala_20261003b = 'PASTREAZA_POARTA';`, urmată de fișierul întreg.
-     - Harness-ul simulează exact trimiterea ca un singur query. Dacă linia ajunge totuși în afara tranzacției, revenirea refuză (fail-closed) și linia se mută imediat după `BEGIN;`.
-     - Merge **doar din starea patch-ului**. Poarta rămâne, dar pentru cei cu modul revin pragul liber și rescrierea lui `respins_de_om`.
-   - **ROLLBACK TEHNIC** (`…_ROLLBACK.sql`): redeschide bypass-ul. Se folosește doar la cererea explicită a lui Răzvan, cu linia `SET gazpet.rollback_tehnic_20261003b = 'REDESCHIDE_BYPASS';` pusă înaintea fișierului în același apply.
-6. **După apply:** un rând în jurnalul verdictelor (`COPILOT_HANDOFF.md` + `handoff_copilot`), apoi actualizarea incidentului în `SECURITATE_ADVISORS_2026-09-30.md`: (2) și (3) trec din „expunere actuală” în „închis”, cu data apply-ului.
+   - **Un singur gestionar de tranzacție**: `psql -X -v ON_ERROR_STOP=1 --single-transaction` cu (1) marcajul `set_config('gazpet.livrare_migrare', '20261003b_sec_ofertare_porti_alege_inventar:' || txid_current(), true)`, (2) migrarea, (3) înregistrarea în `supabase_migrations.schema_migrations` (refuzată dacă numele e deja înregistrat). Orice eroare, inclusiv chiar la INSERT, anulează tot.
+   - Migrarea **nu are BEGIN/COMMIT** și are **gardă la început și la final** (după postcondiții): cere marcajul legat de txid-ul curent. Fără runner, refuză: `psql -f` simplu, un simple query, `BEGIN; …; COMMIT;` trimis ca `execute_sql`, și `apply_migration` (harness, pas 3a).
+   - **De ce nu `apply_migration`:** trimite SQL-ul la Management API (cod închis); nu se poate demonstra că execuția și înregistrarea sunt în aceeași tranzacție. Garda o face oricum să refuze (fail-closed).
+   - Cere conexiune directă la BD (`$DB_URL` cu parolă); de unde se rulează decide Răzvan.
+   - Harness: **T1** eroare după prima înlocuire de funcție → definițiile inițiale rămân, 0 înregistrări (din live și din oprire). **T3** eroare injectată chiar la INSERT (trigger BEFORE INSERT pe tabela emulată), după postcondiții și garda de final → stare inițială + 0 înregistrări. **Succes** → patch + exact o înregistrare, fără WARNING de tranzacție. **Reluarea** după succes → refuzată („deja înregistrată”), fără dublare, fără urme.
+4. **Imediat după apply:** interogarea din pasul 1 trebuie să dea exact rândurile `patch` din §5, iar `schema_migrations` exact un rând pentru versiune. Un apply reușit le garantează deja (postcondiția și INSERT-ul sunt în aceeași tranzacție); verificarea e o confirmare read-only.
+   - **Nicio listă de amprente nu se actualizează automat** cu ce se găsește după apply. Dacă ceva diferă, nu se „corectează” lista: se oprește, se compară, iar o amprentă nouă intră doar printr-un commit revizuit (Copilot + Răzvan).
+   - Apoi `get_advisors` (security) și testul LIVE (Ctrl+Shift+R, utilizator cu modulul): „alege” în OfertareCerinte, alegere manuală în OfertareLicitatii, „Compară cu registrul” (respingerile rămân „✕ respinsă”). Urma `SEC-20261003b` în Postgres logs. Test negativ doar cu un cont existent; nu se creează conturi și nu se schimbă drepturi.
+5. **Dacă un flux legitim s-a stricat: OPRIRE CONTROLATĂ** (`supabase/revenire/…_OPRIRE_CONTROLATA.sql`), cu acordul lui Răzvan, prin `execute_sql`, ca un singur string:
+   ```sql
+   BEGIN;
+   SELECT set_config('gazpet.oprire_controlata_20261003b', 'OPRESTE_ALEGE_SI_PERECHE:' || txid_current(), true);
+   <fișierul întreg>
+   COMMIT;
+   ```
+   **Ieșirea din oprire = `…_REPORNIRE.sql`** (aceeași formă, comutator `gazpet.repornire_20261003b` = `'REPORNESTE_ALEGE_SI_PERECHE:' || txid_current()`): doar din starea „oprire”, reface GRANT-urile, postcondiție = patch. Migrarea nu se reia: runner-ul comun refuză o migrare deja înregistrată. Revenirile nu trec prin `apply_migration`: nu sunt migrări și nu trebuie înregistrate ca aplicate. **De confirmat de Răzvan**: CLAUDE.md pct. 3 spune „DDL prin apply_migration”; aici excepția e voită.
+6. **ROLLBACK TEHNIC:** artefact fără GO de execuție. Folosirea cere cererea explicită a lui Răzvan plus o decizie și un review Copilot specifice. Execuția ar fi aceeași formă ca la pasul 5, cu `gazpet.rollback_tehnic_20261003b` = `'REDESCHIDE_BYPASS:' || txid_current()`.
+7. **După apply:** un rând în jurnalul verdictelor (`COPILOT_HANDOFF.md` + `handoff_copilot`), apoi actualizarea incidentului în `SECURITATE_ADVISORS_2026-09-30.md`: (2) și (3) trec la „expunere închisă prin poartă” (constatarea (3) rămâne deschisă pe partea de matching, §10.4 pct. 3).
 
 ## 8. Fișa pct. 7 (registru automatizări)
 **Nu e cazul.** Patch-ul nu adaugă edge functions, cron, trigger, webhook sau secrete. Modifică două RPC-uri pe care le pornește omul din UI. Pe scurt, pentru context:
@@ -194,8 +159,8 @@ Regula tare a pct. 7 („citește conținut extern și scrie ⇒ poartă de rol�
 - **Edge functions deployate:** regulile sarcinii permit doar SELECT pe cataloage, așa că nu le-am citit. Absența lor din repo, din `pg_cron` și din `pg_stat_statements` e un indiciu, nu o dovadă.
 - **`pg_stat_statements`:** acoperă doar perioada de după 07.08.2026, iar intrările pot fi evacuate. Pentru `pereche` n-am găsit nimic.
 - **Retenția jurnalelor Postgres în Supabase:** cât timp rămâne urma `RAISE LOG` n-am verificat exact. Depinde de plan și e de ordinul zilelor.
-- **Comportamentul în PG 17.6:** testele au rulat pe PG 16.13. Copiile live au dat md5 identice în PG16. md5-urile stărilor „patch” și „revenire” (listele albe) se confirmă abia la apply, cu fail-closed dacă diferă (§7, pasul 4).
-- **Cum trimite `apply_migration` textul:** l-am simulat ca un singur query (`psql -c`), în care `SET LOCAL` pus înaintea `BEGIN;` rămâne în tranzacție. N-am putut observa direct implementarea Supabase. Dacă diferă, revenirea refuză (fail-closed).
+- **Comportamentul în PG 17.6:** testele au rulat pe PG 16.13. Amprentele sunt acum md5(prosrc) (textul literal al corpului, fără deparsare), iar atributele deparsate (`pg_get_function_arguments/result`) au dat aceleași valori ca în live (PG 17.6). Orice diferență oprește apply-ul **înainte de COMMIT** (postcondiția), nu după.
+- **Cum trimit `apply_migration` / `execute_sql` textul:** neobservat direct. Harness-ul acoperă patru forme de runner (§7 pasul 3); cu runner-ul ca gestionar unic, o eroare oriunde (inclusiv la INSERT) nu lasă nimic comis și nimic înregistrat.
 - **Triggerul `trg_ofertare_acoperire_titular`:** nu e în scheletul din repo (patch-ul nu-l atinge). Suita verificatorului, cu triggerul live inclus, trece pe runda 2 (§10.2 D).
 - **Datele reale:** n-am rulat SELECT pe ele (doar cataloage). Nici pe `user_module_access`: numărătoarea pe sub-module se face în preview (§7). Indicatorii de exploatare din documentul de incident rămân cei din 29.09.
 
@@ -283,11 +248,16 @@ Limitele jurnalului, ca să fie clar ce **nu** garantează:
   - Contra: schemă nouă (tabel + RLS + GRANT + politici, pct. 4), deci excepție de freeze separată și propria revizie Copilot. Nu intră în acest patch (2 funcții).
 - **B. Acceptarea limitei:** rămâne `RAISE LOG`, documentat. Se revine la A când apare o nevoie de audit (dispută pe o dovadă aleasă, clarificări după depunere).
 
-**Propunerea mea:** B acum, ca patch-ul să rămână în domeniul excepției de freeze. A ca PR separat, după freeze, dacă Răzvan vrea audit pe alegeri. **Hotărăsc Răzvan și Copilot. Nu e implementat nimic.**
+**Poziția după verdictul Copilot (runda 3):**
+- **B e acceptabil doar pentru remedierea punctuală** (reducerea urgentă a bypass-ului), cu acceptarea explicită a limitei temporare de către Răzvan.
+- **A (sau un istoric persistent echivalent) e OBLIGAȚIE pentru închiderea auditului**, nu „dacă mai vrem audit”. Rămâne în backlog ca precondiție de închidere, PR separat, după freeze.
+- **`RAISE LOG` nu dovedește o schimbare comisă:** poate consemna o încercare dintr-o tranzacție anulată ulterior.
+- **Rămân OPEN:** pierderea alegerii precedente, scrierile directe prin REST și concurența. GO-ul punctual nu certifică proveniența alegerilor.
+- Nu e implementat nimic în acest patch.
 
 ### 10.4 Rezidual în afara patch-ului
 Neschimbate de patch, cu PR-ul sau decizia care le ține:
-1. **TRUNCATE pe `ofertare_inventar_ai`** (și `ofertare_acoperire`): `anon`/`authenticated` au privilegiul `D` (ACL live `arwdDxtm`), care ocolește RLS și poarta. Nu e accesibil prin PostgREST, dar la nivel SQL da (verificatorul, C11). Se rezolvă în **PR-ul separat P14** (TRUNCATE/ACL), pe care documentul de incident îl pune ca precondiție.
+1. **TRUNCATE pe `ofertare_inventar_ai`** (și `ofertare_acoperire`): `anon`/`authenticated` au privilegiul `D` (ACL live `arwdDxtm`), care ocolește RLS și poarta. Nu e accesibil prin PostgREST, dar la nivel SQL da (verificatorul, C11). Se rezolvă în **PR-ul separat P14** (TRUNCATE/ACL). **TRUNCATE rămâne precondiție pentru P2** (Copilot, runda 2). Nivelurile viewer/editor/admin și scrierile REST rămân în patch-uri distincte, cu domeniul limitat acceptat explicit.
 2. **`auth.uid()` se sprijină pe GUC-uri:** în live citește întâi `request.jwt.claim.sub` (legacy), apoi `request.jwt.claims`. Cine poate seta GUC-uri la nivel SQL se poate da drept oricine, inclusiv owner-ul:
    - o sesiune directă `postgres` sau dashboard;
    - o funcție SECURITY DEFINER care își face singură `set_config`.
@@ -297,13 +267,108 @@ Neschimbate de patch, cu PR-ul sau decizia care le ține:
    - ISO 14001 vs ISO 9001 = **0.574**; ANRE EDSB vs EDIB = **0.575** (textele verificatorului);
    - pe formulări aproape identice ajunge la 0.755 / 0.826 (măsurat local).
 
-   „Acoperit” poate deci ascunde un gol real și la pragul din UI. Podeaua 0.45 doar împiedică apelantul să înrăutățească situația. Remediul e o decizie de produs, în afara patch-ului: potrivire exactă pe coduri (ISO nnnnn, tip ANRE EDIB/EDSB/PDSB…) sau confirmare umană pentru „acoperit”.
+   „Acoperit” poate deci ascunde un gol real și la pragul din UI. Podeaua 0.45 doar împiedică apelantul să înrăutățească situația; **nu e dovadă semantică de satisfacere**.
+   **Nu e doar o decizie de produs** (Copilot, runda 2): similaritatea care produce „acoperit” și ascunde obligații neconfirmate **contrazice Audit V2**. Nu blochează poarta (reducerea expunerii), dar **blochează declararea matching-ului drept corect și închiderea constatării (3) complete**. Remediul (potrivire exactă pe coduri sau confirmare umană pentru „acoperit”) e un patch separat.
 4. **`access_level` ignorat** (P16): `viewer`, `editor` (afișat „👁 Vizualizare”) și `admin` scriu la fel, prin RPC și prin RLS. Un nivel „doar citire” real cere o schimbare în `fn_are_acces_ofertare` și în politici, adică o decizie separată.
 5. **Cine are modulul poate scrie `ales`/`verdict` direct prin REST.** Patch-ul închide doar ocolirea prin RPC a celor fără modul. VE1 arată că un „acoperit” fabricat prin REST se vindecă la următoarea comparare, dar până atunci e vizibil.
 6. *(minor, prin REST)* Vocabularul se compară exact: `Respins_de_om` (altă scriere, fără UI) se rescrie (verificatorul, E3).
+7. **Rollback-ul tehnic** (`supabase/revenire/…_ROLLBACK.sql`) e **artefact fără GO de execuție**: existența lui și a comutatorului nu autorizează folosirea.
+8. **Privilegiile SQL administrative** (sesiune `postgres`, dashboard) pot seta claims și ocoli orice poartă: limită de încredere. O cale API care ar permite falsificarea claims-urilor ar fi un bypass separat.
 
 ### 10.5 Ce n-am aplicat și de ce
 - **Proveniența (pct. 2):** nimic implementat, conform sarcinii. Decizia e în §10.3.
 - **Sub-module (pct. 4) și `access_level` (pct. 10):** comportamentul e neschimbat, conform sarcinii. Doar documentație, preview și teste care fixează comportamentul (VD4, P16).
 - **Reziduale (pct. 11):** doar documentate (§10.4). TRUNCATE are PR-ul lui (P14).
 - **md5 în PG17** pentru stările „patch” și „revenire”: nu se pot calcula local (doar PG16 disponibil). Listele albe sunt fail-closed, iar pasul 4 din §7 le confirmă la apply.
+
+## 11. Runda 3 (30.09): răspuns la NO-GO Copilot
+Verdictul integral: `docs/SECURITATE_PATCH_OFERTARE_VERDICT_COPILOT_R2.md`. Runda 3 include și verdictul Copilot pe #538 r3 (GO pe SQL, NO-GO pe runner-ul cu `BEGIN/COMMIT` în fișier) și traseul comun de livrare din #538 r4 (`95be8d4`).
+
+### 11.1 Punct Copilot → schimbare → test → rezultat
+| # | Punct Copilot | Schimbare | Test | Rezultat |
+|---|---|---|---|---|
+| 1 | Refuz pe NULL: `IF NOT helper` nu refuză un NULL | Ambele funcții: `IF public.fn_are_acces_ofertare() IS NOT TRUE THEN … 42501` | **VN1** (faza `runda3`): helper înlocuit într-o tranzacție anulată cu unul care întoarce NULL; uid cu modul, owner, fără modul → 42501 pe ambele; datele verificate înainte de ROLLBACK | ✅; **pică pe runda 2** |
+| 2 | md5 nu acoperă proprietarul sau ACL-ul; PG16/PG17 | Amprenta = **md5(prosrc)** (text literal, calculat și direct din fișier, fără PG) + atribute explicite: SECURITY DEFINER, proconfig, proprietar, limbaj, volatilitate, STRICT/LEAKPROOF/PARALLEL/COST/ROWS, semnătura cu DEFAULT-uri, `n=1` (fără supraîncărcări), tipul întors, **ACL sortat** | pas 0d–0e (fișier = constante), pas 4 (după livrare = constante), pas 9 (ACL anon, ACL fără service_role, SECURITY INVOKER, alt proprietar, search_path, STABLE, COST, helper schimbat, supraîncărcare) | ✅; ACL, proprietar și supraîncărcarea **trec de runda 2** |
+| 3 | Perechi, nu liste independente | Un singur tabel de **stări complete** (live \| patch \| oprire × helper/alege/pereche), identic octet cu octet în toate cele 4 fișiere. Migrarea: live \| patch \| oprire. Rollback: patch \| oprire \| live. Oprirea: patch. Repornirea: oprire. **Nicio stare mixtă acceptată** | pas 9: 6 stări mixte × 4 fișiere → refuz, fără urme | ✅; **runda 2 acceptă stările mixte** |
+| 4 | Comparația rezultatului înainte de COMMIT | Postcondiție în fiecare fișier: starea = exact starea țintă, altfel RAISE | 6a corp schimbat, 6b CRLF, 7h oprire fără un REVOKE, 8a/8d fără GRANT, 11g corp live schimbat, 12b rollback fără GRANT | ✅; **runda 2 comite** corpul schimbat și CRLF |
+| 5 | Revenirea operațională reintroduce pragul 0 și rescrierea `respins_de_om` | Șters `_REVENIRE_OPERATIONALA.sql`. Nou `_OPRIRE_CONTROLATA.sql`: corpurile rămân, EXECUTE retras (inclusiv de la service_role: 0 apeluri, poarta îl refuză oricum). Nou `_REPORNIRE.sql` (ieșirea din oprire) | faza `oprire`: toate identitățile primesc „permission denied”, `respins_de_om` neschimbat, golurile rămân la `p_prag=0`, nimic scris | ✅; revenirea rundei 2 **pică** faza `oprire` |
+| 6 | Revenirile descoperite ca migrări | Mutate în `supabase/revenire/` + README; nicio referință din workflow-uri/scripturi, fără `config.toml`, fără `db push` | pas 0a–0b | ✅ |
+| 7a | Un singur gestionar al tranzacției (runda 3 pe #538: COMMIT-ul din fișier comitea patch-ul înaintea înregistrării) | **Niciun fișier nu mai are BEGIN/COMMIT**; fiecare e un singur bloc DO. Migrarea se livrează doar prin `scripts/livrare_migrare.sh` (psql `--single-transaction`: marcaj + migrare + INSERT în `schema_migrations`), cu **gardă la început și la final** | 0c, 0f; 3a (psql -f, simple query, `BEGIN;…;COMMIT;` ca execute_sql/apply_migration → refuz); **T1** (eroare după prima înlocuire, din live și din oprire); **T3** (eroare chiar la INSERT, după postcondiții); succes = patch + 1 înregistrare; reluare → refuz, fără dublare | ✅; designul cu BEGIN/COMMIT în fișier **pică T3** (mutantul M1, §11.3) |
+| 7b | Armarea legată de tranzacție; SET-ul de sesiune rămas după eșec | Revenirile cer `'<VALOARE>:' \|\| txid_current()`; refuz la armare persistentă (`lower()`); dezarmare la final | **T2** (Copilot) + T2b, T2c, T2d pe oprire și rollback; VG1; armare din altă tranzacție, fără txid, comutatorul altui fișier | ✅; **runda 2 pică T2d** (SET de sesiune înaintea tranzacției + eroare → reluarea trecea) |
+| 8 | Proveniență, rezidualul 3, TRUNCATE, rollback tehnic | §10.3 și §10.4 rescrise pe poziția Copilot | — | documentat |
+
+### 11.2 Harness (runda 3)
+`PGPORT=5491 PGBASE=/tmp/pg_sec_of_r3 bash scripts/test_sec_ofertare.sh`, PG 16.13: **exit 0, 502 verificări OK, rulat de două ori.** Pașii: 0 static → 1 setup (copia live: md5(prosrc) + atribute = valorile citite din live) → 2 gaura → 3 T1 + runner-e neoficiale → 3b T3 → 4 livrare + reluare → 5 suitele → 6 postcondiții → 7 oprire (armare, VG1, T2*, postcondiție, suita `oprire`) → 8 din oprire (T1, postcondiție, repornire) → 9 stări mixte și atribute → 10 VG2 → 11 rollback tehnic (armare, VG1, T2*, postcondiție, gaura, vacuitate pe live, reluare fără efect) → 12 oprire → rollback din oprire → 13 final (jurnal, `schema_migrations` = o singură înregistrare).
+
+### 11.3 Discriminare și mutanți
+**Pe artefactele rundei 2 (`94909d6`)**, cu protocolul lor:
+
+| Test nou | Runda 2 | Runda 3 |
+|---|---|---|
+| VN1 poarta NULL-safe | **PICĂ** | trece |
+| Stări mixte (alege=live/pereche=patch și invers), migrare și rollback | **PICĂ** (acceptă) | trece |
+| ACL anon pe alege (migrare, rollback) | **PICĂ** (acceptă) | trece |
+| Alt proprietar pe alege | **PICĂ** (comis cu alt proprietar) | trece |
+| Supraîncărcare nouă | **PICĂ** (acceptă) | trece |
+| SECURITY INVOKER | trece (functiondef îl acoperea) | trece |
+| Postcondiție: corp schimbat / CRLF | **PICĂ** (comis) | trece |
+| T2 canonic (armare după BEGIN + eroare + ROLLBACK) | trece | trece |
+| T2d (SET de sesiune înaintea tranzacției + eroare, reluare) | **PICĂ** (reluarea trece) | trece |
+| Faza `oprire` după revenirea rundei | **PICĂ** | trece |
+| Static: reveniri în afara `migrations/`, fără BEGIN/COMMIT | **PICĂ** | trece |
+
+**Mutanți pe fișierele noi** (o protecție scoasă; primul pas care pică):
+- **Migrare:**
+  - BEGIN/COMMIT readăugate → 0c. Cu `STATIC=0`: refuzată de `livrare_migrare.sh` (T1). Cu runner-ul (c) din varianta intermediară: T3, patch comis fără înregistrare.
+  - fără precondiție → 9, prima stare mixtă;
+  - liste independente → 9, prima stare mixtă;
+  - fără atribute fixe → 0e. Cu `STATIC=0`: 9 SECURITY INVOKER;
+  - fără postcondiție → 6a;
+  - fără GRANT → 8b;
+  - fără garda de start → 0f;
+  - fără garda de final → 0f. **Cu `STATIC=0` supraviețuiește:** garda de start o acoperă; cea de final prinde doar un `END;` la nivel de instrucțiune, pe care nu-l putem construi fără să cadă alt pas.
+- **Rollback:**
+  - fără verificarea persistentă → 11e VG1;
+  - fără armare → 11a;
+  - fără txid → 11b;
+  - fără precondiție → 9;
+  - fără postcondiție → 11g;
+  - fără dezarmare → 11i;
+  - BEGIN/COMMIT readăugate → 0c. **Cu `STATIC=0` supraviețuiește:** blocul DO unic rămâne atomic, deci doar verificarea statică impune gestionarul unic.
+- **Oprire:**
+  - fără verificarea persistentă → 7f;
+  - fără armare → 7a;
+  - fără txid → 7b;
+  - fără precondiție → 7j;
+  - fără postcondiție → 7h;
+  - fără dezarmare → 12.
+- **Repornire:** fără armare → 8c; fără precondiție → 8f; fără postcondiție → 8d.
+- **Corp:** poarta `IF NOT` (liste actualizate, `PATCH_H` suprascris) → VN1.
+
+### 11.4 Amprente noi (md5(prosrc))
+- **patch:** alege `51865b69766f6baa53def9a6e6c6232b`, pereche `4d90bf90b4bbfd6aea944e734f6c9ed9`, ACL `{authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}`.
+- **oprire:** aceleași corpuri, ACL `{postgres=X/postgres}`.
+- **helper:** neschimbat (`429d28e2a61fb24c8009d67050c16c85`).
+
+Definiția exactă a helperului live, verificată local prin md5(prosrc) și md5(pg_get_functiondef):
+```sql
+CREATE OR REPLACE FUNCTION public.fn_are_acces_ofertare()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT auth.uid() IS NOT NULL AND (
+    EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid() AND pr.is_owner)
+    OR EXISTS (SELECT 1 FROM public.user_module_access uma
+               WHERE uma.profile_id = auth.uid() AND uma.module = 'ofertare')
+  );
+$function$
+```
+**Nicio listă nu se actualizează automat** după apply (§7 pasul 4).
+
+### 11.5 Deschis / de decis
+- **Ieșirea din oprire** e `_REPORNIRE.sql`, nu reaplicarea migrării: runner-ul comun refuză o migrare deja înregistrată. E o abatere de la instrucțiunea inițială a rundei 3, de confirmat.
+- **`n = 1`** (fără supraîncărcări) nu e în datele live citite: se confirmă în preview-ul din §7. Dacă diferă, migrarea refuză.
+- **Revenirile prin `execute_sql`** (DDL în afara `apply_migration`, CLAUDE.md pct. 3): excepție voită, de confirmat de Răzvan.
+- **Livrarea** cere `$DB_URL` cu parolă: decide Răzvan de unde se rulează.
