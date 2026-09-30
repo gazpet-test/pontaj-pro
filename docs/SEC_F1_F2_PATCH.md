@@ -1,0 +1,118 @@
+# SEC F1 + F2: TRUNCATE pe schema `public` și „auth.uid() IS NULL” în triggerele de pe `profiles` — 30.09.2026
+
+> **NEAPLICAT. Draft pentru review** (poarta GO/NO-GO Copilot) și pentru acordul explicit al lui Răzvan. Nicio migrare de aici nu a fost rulată; nu modifică date. Tot ce s-a citit din producție a fost **read-only** (30.09.2026, PG 17.6: `pg_class`/`aclexplode`, `pg_default_acl`, `pg_trigger`, `pg_proc`, `pg_policies`, `cron.job`, `has_table_privilege`, `pg_get_functiondef`). Nicio funcție a aplicației n-a fost apelată.
+> Cele două constatări vin din `docs/SECURITATE_ADVISORS_2026-09-30.md` (§3 TRUNCATE, cerința Copilot §5; P14 din lista de patch-uri) și din inventarul whitebox (S09-21, „TRUNCATE nu e supus RLS”). Sunt tratate în **două migrări separate**, fiecare cu rollback propriu, ca să poată primi GO independent.
+
+## 0. Pe scurt
+| | F1 — TRUNCATE | F2 — uid NULL în triggerele `profiles` |
+|---|---|---|
+| Fișier | `supabase/migrations/20260930i_sec_f1_truncate_revoke.sql` | `supabase/migrations/20260930j_sec_f2_profiles_uid_null.sql` |
+| Rollback | `..._ROLLBACK.sql` (același director) | `..._ROLLBACK.sql` (același director) |
+| Obiecte atinse | drepturile TRUNCATE ale `anon` și `authenticated` pe **toate** relațiile din `public` (345 tabele din 374 + 129 view-uri cu bitul inert) + setarea implicită a lui `postgres` pe `public` | 3 funcții-trigger: `prevent_role_escalation`, `enforce_owner_only_salary_flags`, `protect_can_access_pontaj_brut` |
+| Regresie pentru utilizatori | **zero** (nimic nu face TRUNCATE ca anon/authenticated; PostgREST nu poate emite TRUNCATE) | **zero** pentru utilizatorii reali (auth.uid() NOT NULL: cod identic). Contextele de sistem legitime (service_role prin REST, postgres/supabase_admin direct, pg_cron) trec în continuare |
+| Ce refuză după patch | — | UPDATE pe `profiles` fără `sub` în JWT și în afara contextului de sistem: cheia **anon**, JWT authenticated fără sub, claims golite, conexiune ca `authenticator` fără claims ⇒ `42501` |
+| Livrare | `scripts/livrare_migrare.sh` (branch `claude/erp-continuare-x4p5a7-sec-rsvti`); validatorul acceptă toate 4 fișierele | idem |
+
+## 1. F1 — TRUNCATE pentru anon/authenticated pe toată schema
+
+### 1.1 Constatarea (citită live, 30.09.2026)
+- **374** de tabele (relkind r/p) în `public`. Cu TRUNCATE efectiv: **anon 332**, **authenticated 344**, **345** pentru cel puțin unul dintre ele (advisors §3B numărase 370 / 332 / 340 / 341 pe 30.09 dimineața; între timp au apărut `ctc_*`, `hr_formare_profesionala`, `logistica_imprumuturi` — toate cu TRUNCATE pentru authenticated, dovadă că setarea implicită lucrează în continuare). Printre ele: **`profiles` și `user_module_access`** (sursa drepturilor de acces), `employees`, `employee_salaries`, `hr_*`, `pontaj_*`, `stocuri*`, `ofertare_*` (66 din 82).
+- **129 de view-uri** poartă și ele bitul TRUNCATE în ACL (inert: TRUNCATE nu se aplică pe view-uri), tot din setarea implicită.
+- **29 de tabele fără** TRUNCATE pentru niciunul dintre roluri: `app_secrets`, 11 `_backup_*`, 17 `ofertare_*` blindate explicit (`ofertare_derogari_audit`, `ofertare_source_pack*`, `ofertare_seap_cereri/_fisiere`, `ofertare_cerinte_dovezi/_subiect/_titular`, `ofertare_raspuns_set*`, `ofertare_plansa_buget/_coada`, `ofertare_pt_capitole_versiuni`, `ofertare_cantitati_istoric`, `ofertare_subiecte_regula`).
+- Asimetrii: 13 tabele doar la authenticated (`ctc_carti`, `ctc_documente_carte`, `ctc_template_pozitii`, `ctc_templates`, `hr_formare_profesionala`, `logistica_imprumuturi`, `ofertare_clarificari_puncte`, `ofertare_pt_afirmatii`, `ofertare_pt_capitole`, `ofertare_pt_legaturi`, `ofertare_pt_observatii`, `ofertare_pt_poarta`, `ofertare_seap_manifest`); 1 doar la anon (`ofertare_pt_pachet_fisiere` — REVOKE-ul din 20260924 făcut invers, advisors §3A).
+- **Cauza**: `pg_default_acl` pe schema `public`, pentru rolurile `postgres` **și** `supabase_admin`, obiect `r` (tabele): `anon=arwdDxtm`, `authenticated=arwdDxtm` (D = TRUNCATE, m = MAINTAIN). `PUBLIC` nu are TRUNCATE nicăieri (0). Niciun grant TRUNCATE nu e WITH GRANT OPTION (0). Toate relațiile din `public` sunt ale lui `postgres`. `service_role` are TRUNCATE pe 369/374 (neatins de patch).
+- **Mecanism / risc**: TRUNCATE nu trece prin RLS și nu declanșează triggerele de rând. PostgREST și pg_graphql nu îl pot emite. Exploatabil doar printr-o cale care rulează SQL arbitrar ca anon/authenticated — **azi nu există una** (advisors §3C). Riscul e latent (apărare în profunzime), nu activ.
+- **Regresie**: **0** funcții din `public`/`extensions` conțin `TRUNCATE` (căutare `\mtruncate\M` fără `date_trunc` în `pg_proc.prosrc`), **0** joburi `cron.job`, iar în `src/`, `supabase/functions/`, `worker/` nu există TRUNCATE în SQL (advisors §3C).
+
+### 1.2 Ce face migrarea `20260930i`
+0. **Garda de livrare** (start + final): rulează doar prin runner, în tranzacția lui.
+1. **Precondiții fail-closed** (nimic modificat la refuz): toate relațiile din `public` sunt ale lui `postgres` (altfel `REVOKE … ON ALL TABLES` ar eșua la jumătate); `PUBLIC` nu are TRUNCATE (0 — nu îl retragem de la PUBLIC, ar fi o schimbare neanalizată); nu există TRUNCATE WITH GRANT OPTION la anon/authenticated (0).
+2. **Inventar `RAISE NOTICE`**: un rând pentru fiecare tabel pe care anon/authenticated are TRUNCATE efectiv, plus totalurile (așteptat pe producție: 374 / 332 / 344 / 369). Rămâne în jurnalul livrării.
+3. `REVOKE TRUNCATE ON ALL TABLES IN SCHEMA public FROM anon, authenticated;` — tabele, partiții, view-uri, tabele străine.
+4. `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE TRUNCATE ON TABLES FROM anon, authenticated;` — tabelele noi create de `postgres` (migrări, SQL editor, MCP) nu mai primesc TRUNCATE.
+5. **Postcondiții** (înainte de înregistrare/COMMIT): 0 relații din `public` cu TRUNCATE **efectiv** (`has_table_privilege` — include PUBLIC și moștenirea prin roluri) pentru `anon`, `authenticated`, `public`; setarea implicită a lui `postgres` fără D pentru cele două roluri; `service_role` neatins (numărul lui de tabele cu TRUNCATE rămâne ≈ total).
+
+### 1.3 Limite / de notat
+- **Setarea implicită a lui `supabase_admin`** (`pg_default_acl`, tot `arwdDxtm` către anon/authenticated) **nu se poate schimba ca `postgres`** (`ALTER DEFAULT PRIVILEGES FOR ROLE` cere apartenența la rol). Tabelele create de `supabase_admin` (platformă; rar) ar primi din nou TRUNCATE. Nu apare în migrare; rămâne consemnat. Remediere posibilă doar din dashboard/suport Supabase sau printr-o verificare periodică (`get_advisors` / SELECT-ul din §4).
+- `MAINTAIN` (m) rămâne acordat — nu face parte din constatare; de discutat separat.
+- Bitul TRUNCATE de pe view-uri e retras și el (inert); rollback-ul îl readuce prin `GRANT … ON ALL TABLES`.
+
+### 1.4 Rollback `20260930i_…_ROLLBACK.sql`
+Redeschide gaura latentă — **fără GO de execuție**, doar la decizia explicită a lui Răzvan, cu motivul consemnat. Precondiție: 0 relații cu TRUNCATE pentru anon/authenticated (starea de după migrare). Pune la loc setarea implicită, apoi `GRANT TRUNCATE ON ALL TABLES` și retrage pe excepțiile de dinainte (29 + 13 + 1, listate nominal; tabelele dispărute între timp se sar cu NOTICE). Postcondiție: anon = total − 29 − 13, authenticated = total − 29 − 1 (pe 30.09: 332 / 344 din 374; tabelele create ulterior primesc TRUNCATE pentru ambele, ca sub setarea veche).
+
+## 2. F2 — „IF auth.uid() IS NULL THEN RETURN NEW” în triggerele de pe `profiles`
+
+### 2.1 Constatarea (citită live, 30.09.2026)
+`profiles` are exact 4 triggere, toate `BEFORE UPDATE FOR EACH ROW` (tgtype 19), activate, fără WHEN / listă de coloane, funcții `SECURITY DEFINER`, `search_path=public, pg_temp`, proprietar `postgres`, plpgsql:
+
+| Trigger | Funcție | md5(prosrc) live | Protejează | Comportament la `auth.uid()` NULL azi |
+|---|---|---|---|---|
+| `prevent_role_escalation_trigger` | `prevent_role_escalation` | `16112659be92143e6539ae0e54e47a06` | `role`, `is_owner` (RAISE) | **RETURN NEW necondiționat** |
+| `trg_enforce_owner_only_salary_flags` | `enforce_owner_only_salary_flags` | `0470660c0a819981ff914355c7f6d00a` | `is_owner`, `can_access_salarii`, `can_access_personal_data`, `can_access_pontaj_brut`, `can_modify_employees`, `can_manage_contracts`, `can_access_diurne`, `can_access_financiar` (resetare tăcută) | **RETURN NEW necondiționat** |
+| `trg_protect_can_access_pontaj_brut` | `protect_can_access_pontaj_brut` | `ff277c90e02ef03d1efb34cd7e87b1d4` | `can_access_pontaj_brut` (RAISE) | **RETURN NEW necondiționat** |
+| `trg_profiles_campuri_owner_only` | `fn_profiles_campuri_owner_only` (S-A, 29.09) | `c06d7ce0f212c7bba2093c50614a88fc` | `department`, `employee_id` | corect: claims + `session_user` — **neatins, e modelul urmat** |
+
+- `auth.uid()` (definiția live) = `request.jwt.claim.sub` sau `request.jwt.claims->>'sub'`. E NULL nu doar pentru service_role / conexiuni directe, ci și pentru **cheia anon** (claims `{"role":"anon"}`, fără sub), pentru un JWT `authenticated` fără `sub`, sau pentru claims golite. În toate aceste cazuri cele 3 triggere sar peste verificare.
+- Cale reală de exploatare azi: RLS pe `profiles` are politici doar pentru `authenticated` (`profiles_update_own`, `profiles_update_owner`), deci un UPDATE ca `anon` prin REST e refuzat de RLS înainte de trigger. Gaura devine activă dacă apare vreodată o politică pentru anon, o funcție SECURITY DEFINER care face UPDATE pe `profiles` cu claims lipsă, sau un JWT fără sub acceptat de PostgREST. E o apărare în profunzime pentru **sursa drepturilor** (aceleași câmpuri pe care S-A le-a blindat pentru `department`).
+- `user_module_access`: **0 triggere** (`pg_trigger`), politici doar pentru `authenticated` (select/insert/update/delete owner). Nimic de reparat pentru F2; intră în F1 (TRUNCATE).
+- Contexte de sistem care ating `profiles` azi: `handle_new_user` (trigger pe `auth.users`, INSERT — nu e afectat, triggerele sunt BEFORE UPDATE); **0** funcții din BD care fac `UPDATE profiles`; **0** joburi cron care ating `profiles`; `supabase_auth_admin` n-are UPDATE pe `profiles`. Edge functions / worker cu cheia service_role trec prin claim-ul `role = 'service_role'`.
+
+### 2.2 Ce face migrarea `20260930j`
+0. **Garda de livrare** (start + final).
+1. **Precondiții fail-closed** (`md5(prosrc)` canonic, pattern S-A): fiecare dintre cele 3 funcții are exact o definiție, atributele analizate (plpgsql, SECURITY DEFINER, `search_path=public, pg_temp`, proprietar postgres, RETURNS trigger, 0 argumente) și corpul **exact** varianta live (md5 de mai sus) sau, la reaplicare, exact varianta din patch; setul de triggere pe `profiles` e exact cel de 4; `fn_profiles_campuri_owner_only` e varianta canonică `c06d7ce0…`. Orice diferență ⇒ refuz, nimic modificat (testat: un corp modificat e prins — „doar 2 din 3 funcții”). ACL-ul celor 3 funcții e salvat pentru comparația de la final.
+2. `CREATE OR REPLACE` pe cele 3 funcții. Singura schimbare: blocul `IF auth.uid() IS NULL THEN RETURN NEW; END IF;` devine
+   ```
+   IF auth.uid() IS NULL THEN
+     v_rol := claim-ul role din JWT (request.jwt.claim.role / claims->>'role')
+     IF v_rol = 'service_role' THEN RETURN NEW;                                   -- PostgREST cu cheia service_role
+     IF v_rol IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN RETURN NEW;  -- conexiune directă, fără claims
+     RAISE EXCEPTION '…' USING ERRCODE = '42501';                                -- anon, JWT fără sub, claims golite, alt rol
+   END IF;
+   ```
+   Restul corpului (verificările pentru utilizatori reali, mesajele, resetarea tăcută din `enforce_owner_only_salary_flags`) e **identic** cu varianta live. `current_user` **nu** e folosit: funcțiile sunt SECURITY DEFINER, deci `current_user` e mereu `postgres` înăuntru; identitatea reală e în claims + `session_user` — exact regula din S-A.
+3. **Postcondiții**: md5(prosrc) = variantele din patch (`de9d346b0c5edfae03e73ea29c629509`, `096211e93a2596e6600c251af24a871d`, `e26b5f2b699f5dc8d8de1478dc57e2b0`), atributele neschimbate, **ACL identic** cu cel de dinainte (comparat text cu text), tot 4 triggere active pe `profiles`.
+
+### 2.3 Cine trece / cine e refuzat după F2 (la `auth.uid()` NULL)
+| Context | Înainte | După |
+|---|---|---|
+| Edge function / worker NAS / cron prin REST cu cheia `service_role` (claim role = service_role) | trece | **trece** |
+| `psql`/MCP/migrare ca `postgres` sau `supabase_admin`, fără claims (inclusiv pg_cron) | trece | **trece** |
+| Cheia **anon** prin REST (`{"role":"anon"}`, fără sub) | trece (dacă RLS ar lăsa) | **42501** |
+| JWT `authenticated` **fără** `sub` / claims golite | trece | **42501** |
+| Conexiune ca `authenticator` (sau alt rol) fără claims | trece | **42501** |
+| Utilizator real (sub prezent) | verificările de azi | **identic** |
+
+### 2.4 Rollback `20260930j_…_ROLLBACK.sql`
+Readuce **exact** corpurile live din 30.09 (md5 verificat în postcondiție: `16112659…`, `0470660c…`, `ff277c90…`), adică redeschide ocolirea. Precondiție: cele 3 funcții sunt exact variantele din patch (sau deja cele live — idempotent); nu se readuce varianta veche peste ceva neanalizat. ACL și atribute verificate identice. **Revenirea operațională** (păstrează politica): dacă un context de sistem legitim e refuzat cu 42501, mesajul spune rolul JWT și `session_user`; se decide explicit dacă intră în lista de sistem (o nouă migrare revizuită), nu se revine tacit.
+
+## 3. Verificare făcută (local, PostgreSQL 17, harness nepublicat)
+Harness pe un cluster local (roluri `anon`/`authenticated`/`service_role`/`authenticator`/`supabase_admin`, `auth.uid()`/`auth.role()` cu definițiile live, `profiles` cu cele 4 triggere cu corpurile live — md5 identice cu producția — și tabele de probă), fiecare fișier rulat exact ca prin runner (`psql --single-transaction`, marcajul `gazpet.livrare_migrare` legat de txid):
+- garda de livrare refuză fără marcaj; validatorul `scripts/livrare_validator.py` acceptă toate 4 fișierele (OK 6 / 7 / 7 / 7 instrucțiuni);
+- **F1**: inventarul NOTICE listează tabelele; după apply 0 TRUNCATE pentru anon/authenticated pe tabele și view-uri, service_role neatins, un tabel creat ulterior nu mai primește TRUNCATE (INSERT/SELECT etc. rămân); reaplicare idempotentă; rollback readuce starea (excepțiile inexistente sunt sărite cu NOTICE), rollback a doua oară e refuzat de precondiție, apply după rollback merge;
+- **F2**: apply / reapply / rollback / rollback a doua oară / apply din nou — toate trec, md5 exact la fiecare pas, ACL neschimbat; un corp modificat live e refuzat de precondiția 0b. Comportament: `postgres` direct ✔, `supabase_admin` direct ✔, `authenticator` + claims service_role ✔, cheia anon ✘ 42501, authenticated fără sub ✘ 42501, `authenticator` fără claims ✘ 42501; utilizator non-owner: schimbarea propriului `role` refuzată ca înainte, `can_access_salarii` resetat tăcut ca înainte, `department` refuzat de S-A ca înainte; owner poate schimba `role`/`can_access_pontaj_brut` altcuiva ca înainte.
+Ce NU s-a testat: pe producție nimic (read-only); PostgREST real (claims puse de PostgREST, nu prin `set_config`).
+
+## 4. Cum se aplică (după GO Copilot + acordul lui Răzvan)
+Traseul oficial, `scripts/livrare_migrare.sh` (branch `claude/erp-continuare-x4p5a7-sec-rsvti`; parola din `~/.pgpass`, endpointul de scriere aprobat):
+```
+sha256sum supabase/migrations/20260930i_sec_f1_truncate_revoke.sql      # -> hex aprobat
+bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260930i_sec_f1_truncate_revoke.sql \
+     --sha256 <hex64> --versiune <AAAALLZZHHMMSS> --tinta-db postgres --tinta-sistem <system_identifier> \
+     --tinta-host <host> --tinta-port <port>
+# apoi, separat, 20260930j_sec_f2_profiles_uid_null.sql (același tipar)
+```
+Ordinea F1 → F2 nu contează (independente). `apply_migration` / `execute_sql` MCP **nu** le pot aplica (garda). Preview read-only înainte (aceleași numere ca în §1.1 / §2.1):
+```sql
+SELECT count(*) FILTER (WHERE has_table_privilege('anon', c.oid, 'TRUNCATE')) AS anon,
+       count(*) FILTER (WHERE has_table_privilege('authenticated', c.oid, 'TRUNCATE')) AS authenticated, count(*) AS total
+  FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r','p');
+SELECT proname, md5(prosrc) FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+   AND proname IN ('prevent_role_escalation','enforce_owner_only_salary_flags','protect_can_access_pontaj_brut','fn_profiles_campuri_owner_only');
+```
+După apply: aceleași SELECT-uri (așteptat 0 / 0 / 374; md5 `de9d346b…`, `096211e9…`, `e26b5f2b…`, `c06d7ce0…` neschimbat), `get_advisors`, apoi un test din UI: owner schimbă drepturi în Administrare utilizatori (trebuie să meargă ca înainte); un cont fără is_owner nu poate (ca înainte).
+
+## 5. Decizii pentru Răzvan (nu sunt în patch)
+1. GO/NO-GO pe F1 și F2 separat (recomandare: ambele — regresie zero verificată).
+2. `MAINTAIN` pentru anon/authenticated (tot din setarea implicită) — de retras într-un patch separat sau nu.
+3. Setarea implicită a lui `supabase_admin` (§1.3) — verificare periodică sau cerere la Supabase.
+4. Rollback-urile stau în `supabase/migrations/` (convenția de pe `main`); pe branch-ul RSVTI s-a introdus `supabase/revenire/` pentru rollback-uri tehnice — de unificat la merge.
