@@ -77,7 +77,9 @@ Grupul B (runda 2) = **doar** `ofertare_parteneri` și `ofertare_norme_productiv
    \i supabase/revenire/20261004b_rls_ofertare_preturi_oferte_ROLLBACK.sql
    COMMIT;
    ```
-   Pornește doar din starea patch, reface exact cele 37 de politici citite pe 30.09 și ACL-ul anon (ALL fără F1, ALL fără TRUNCATE cu F1); postcondiție md5 = `9784b08e…`. Nu trece prin runner (validatorul îl refuză intenționat: nu are garda de livrare, are armare proprie, ca revenirile din #537).
+   Pornește doar din starea patch, reface exact cele 37 de politici citite pe 30.09. ACL-ul anon: fără F1 = ACL-ul din 30.09 (ALL); cu F1 aplicat = **rollback compus cu F1** (starea veche minus TRUNCATE), nu restaurare byte-for-byte a ACL-ului din 30.09. Postcondiție md5 = `9784b08e…`.
+6. **Rollback F1 după #552 = revenire coordonată, NU standalone**: rollback-ul F1 dă `GRANT TRUNCATE … TO anon, authenticated` pe tot `public` și ar încălca starea #552 pe cele 20 tabele. Ordinea: întâi rollback #552, apoi rollback F1 (sau F1 rollback adaptat să sară cele 20).
+7. Postcondiția migrării reverifică și amprenta helper-ului + lipsa overload-urilor (drift concurent → fail-closed). Nu trece prin runner (validatorul îl refuză intenționat: nu are garda de livrare, are armare proprie, ca revenirile din #537).
 
 ## 7. Test
 `node scripts/test_rls_ofertare.mjs` (ca root pornește serverul prin `runuser -u postgres`; `KEEP=1` păstrează clusterul). Rezultat: **147 trecute, 0 picate** (119 din runda 1, adaptate la grupurile noi, + 28 noi):
