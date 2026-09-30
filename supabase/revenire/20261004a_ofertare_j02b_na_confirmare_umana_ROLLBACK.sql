@@ -1,18 +1,24 @@
 -- ============================================================================
--- ROLLBACK J02b (20261004a_ofertare_j02b_na_confirmare_umana) — DRAFT
--- Reface EXACT definițiile live din 30.09.2026: fn_gate_depunere (md5(prosrc) 4bddf68c…) și v_ofertare_pt_stare
+-- REVENIRE J02b (20261004a_ofertare_j02b_na_confirmare_umana) — NU e migrare (nu o parcurge niciun runner).
+-- Reface EXACT definițiile live din 30.09.2026: fn_gate_depunere (md5(prosrc) 4bddf68c…, proprietar + ACL) și v_ofertare_pt_stare
 -- (md5(pg_get_viewdef) c77c49b8…, security_invoker=on, ACL ca pe live), apoi scoate obiectele J02b.
+-- REDESCHIDE „nu se aplică”/„exceptat” AI ca verde: se rulează doar cu acordul explicit al lui Răzvan.
 -- Confirmările umane NU se pierd: dacă tabelul are rânduri, se redenumește în ofertare_cerinte_na_confirmari_arhiva_j02b
--- (fără acces din aplicație); dacă e gol, se șterge.
--- Rulează DOAR prin scripts/livrare_migrare.sh (garda de livrare, tranzacție unică).
+-- (fără acces din aplicație, nici service_role); dacă e gol, se șterge.
+-- Armare (în aceeași tranzacție, fără nimic altceva):
+--   BEGIN;
+--   SELECT set_config('gazpet.revenire_20261004a', 'REVINE_J02B:' || txid_current(), true);
+--   \i supabase/revenire/20261004a_ofertare_j02b_na_confirmare_umana_ROLLBACK.sql
+--   COMMIT;
+-- Garda e verificată la start și la final (după postcondiții). Fără BEGIN/COMMIT în fișier.
 -- ============================================================================
 
-DO $livrare_start$
+DO $revenire_start$
 BEGIN
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261004b_ofertare_j02b_rollback:' || txid_current() THEN
-    RAISE EXCEPTION 'Livrare 20261004b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  IF current_setting('gazpet.revenire_20261004a', true) IS DISTINCT FROM 'REVINE_J02B:' || txid_current() THEN
+    RAISE EXCEPTION 'REFUZ: revenirea J02b nu e armată (gazpet.revenire_20261004a)' USING ERRCODE = '42501';
   END IF;
-END $livrare_start$;
+END $revenire_start$;
 
 DO $pre$
 BEGIN
@@ -118,8 +124,10 @@ GRANT ALL ON public.v_ofertare_pt_stare TO anon, authenticated, service_role;
 -- 3. obiectele J02b
 DROP VIEW public.v_ofertare_cerinte_na_stare;
 DROP FUNCTION public.ofertare_revoca_neaplicabil(bigint, text);
-DROP FUNCTION public.ofertare_confirma_neaplicabil(bigint, text, text, text);
+DROP FUNCTION public.ofertare_confirma_neaplicabil(bigint, text, text, text, bigint);
 DROP FUNCTION public.fn_ofertare_cerinta_na_confirmata(bigint, text);
+DROP FUNCTION public.fn_ofertare_na_confirmare_valida(bigint);
+DROP FUNCTION public.fn_ofertare_na_propunere_curenta(bigint, text);
 DROP FUNCTION public.fn_ofertare_cerinta_amprenta(bigint);
 DROP TABLE public.ofertare_j02b_rollback_def;
 DO $tab$
@@ -130,7 +138,7 @@ BEGIN
     EXECUTE 'DROP TABLE public.ofertare_cerinte_na_confirmari';
   ELSE
     EXECUTE 'DROP POLICY ofertare_na_conf_select ON public.ofertare_cerinte_na_confirmari';
-    EXECUTE 'REVOKE ALL ON public.ofertare_cerinte_na_confirmari FROM PUBLIC, anon, authenticated';
+    EXECUTE 'REVOKE ALL ON public.ofertare_cerinte_na_confirmari FROM PUBLIC, anon, authenticated, service_role';
     EXECUTE 'ALTER TABLE public.ofertare_cerinte_na_confirmari RENAME TO ofertare_cerinte_na_confirmari_arhiva_j02b';
     RAISE NOTICE 'J02b rollback: % confirmări umane păstrate în ofertare_cerinte_na_confirmari_arhiva_j02b', n;
   END IF;
@@ -139,8 +147,11 @@ END $tab$;
 -- 4. postcondiții: definițiile live exacte de dinainte
 DO $post$
 BEGIN
-  IF md5((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.fn_gate_depunere()'))) IS DISTINCT FROM '4bddf68cfe53107a622d210f4ef3ec51' THEN
-    RAISE EXCEPTION 'J02b rollback post: fn_gate_depunere ≠ live dinainte';
+  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_gate_depunere()') AND md5(p.prosrc) = '4bddf68cfe53107a622d210f4ef3ec51'
+        AND pg_get_userbyid(p.proowner)::text = 'postgres' AND p.prosecdef AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+        AND (SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type || ':' || x.is_grantable::text, ',' ORDER BY x.grantee::regrole::text) FROM aclexplode(p.proacl) x WHERE x.grantee <> 0) = 'postgres:EXECUTE:false,service_role:EXECUTE:false'
+        AND NOT EXISTS (SELECT 1 FROM aclexplode(p.proacl) x WHERE x.grantee = 0)) <> 1 THEN
+    RAISE EXCEPTION 'J02b rollback post: fn_gate_depunere ≠ live dinainte (md5/proprietar/ACL)';
   END IF;
   IF md5(pg_get_viewdef('public.v_ofertare_pt_stare'::regclass)) IS DISTINCT FROM 'c77c49b87642c5c2f584d2ed008c7bf3' THEN
     RAISE EXCEPTION 'J02b rollback post: v_ofertare_pt_stare ≠ live dinainte';
@@ -148,15 +159,16 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = 'public.v_ofertare_pt_stare'::regclass AND reloptions @> ARRAY['security_invoker=on']) THEN
     RAISE EXCEPTION 'J02b rollback post: security_invoker lipsă';
   END IF;
-  IF to_regprocedure('public.fn_ofertare_cerinta_amprenta(bigint)') IS NOT NULL OR to_regclass('public.v_ofertare_cerinte_na_stare') IS NOT NULL
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_cerinta_amprenta','fn_ofertare_na_propunere_curenta',
+        'fn_ofertare_na_confirmare_valida','fn_ofertare_cerinta_na_confirmata','ofertare_confirma_neaplicabil','ofertare_revoca_neaplicabil')) OR to_regclass('public.v_ofertare_cerinte_na_stare') IS NOT NULL
      OR to_regclass('public.ofertare_cerinte_na_confirmari') IS NOT NULL OR to_regclass('public.ofertare_j02b_rollback_def') IS NOT NULL THEN
     RAISE EXCEPTION 'J02b rollback post: obiecte J02b rămase';
   END IF;
 END $post$;
 
-DO $livrare_final$
+DO $revenire_final$
 BEGIN
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261004b_ofertare_j02b_rollback:' || txid_current() THEN
-    RAISE EXCEPTION 'Livrare 20261004b: garda de livrare (final) — rulează DOAR prin scripts/livrare_migrare.sh';
+  IF current_setting('gazpet.revenire_20261004a', true) IS DISTINCT FROM 'REVINE_J02B:' || txid_current() THEN
+    RAISE EXCEPTION 'REFUZ: revenirea J02b nu e armată (gazpet.revenire_20261004a, final)' USING ERRCODE = '42501';
   END IF;
-END $livrare_final$;
+END $revenire_final$;

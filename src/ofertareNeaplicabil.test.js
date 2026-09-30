@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { indexConfirmari, stareConfirmare, stareExceptarePT, nsaScoasa, statisticiAcoperire, TIP_NSA, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
+import { indexConfirmari, stareConfirmare, stareExceptarePT, nsaScoasa, statisticiAcoperire, propunereCurenta, TIP_NSA, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
 
 const conf = (cerinta_id, tip, valida, extra = {}) => ({ cerinta_id, tip, valida, revocata_la: null, ...extra })
 
@@ -83,5 +83,22 @@ describe('J02b — poarta PT (rândul „Cerințe fără capitol”)', () => {
   it('fără exceptări propuse ⇒ niciun text în plus', () => {
     const r = evalueazaPoarta({ capitole: 3, de_raspuns: 10, fara_capitol: 0 }).randuri.find(x => x.k === 'fara')
     expect(r.stare).toBe('ok'); expect(r.detalii).not.toMatch(/propus/)
+  })
+})
+
+describe('J02b runda 2 — propunerea concretă (id maxim, ca în BD)', () => {
+  it('exceptat: legătura cea mai nouă; capitolele nu contează', () => {
+    const ls = [{ id: 5, cerinta_id: 1, fel: 'exceptat' }, { id: 9, cerinta_id: 1, fel: 'exceptat' }, { id: 12, cerinta_id: 1, fel: 'capitol' }, { id: 20, cerinta_id: 2, fel: 'exceptat' }]
+    expect(propunereCurenta(ls, 1, TIP_EXCEPTAT_PT)).toBe(9)
+    expect(propunereCurenta(ls, 3, TIP_EXCEPTAT_PT)).toBe(null)
+  })
+  it('nu_se_aplica: rândul AI cel mai nou; fără rând ⇒ null (decizie fără propunere)', () => {
+    const ac = [{ id: 3, cerinta_id: 1, status: 'nu_se_aplica' }, { id: 7, cerinta_id: 1, status: 'gol' }, { id: 4, cerinta_id: 1, status: 'nu_se_aplica' }]
+    expect(propunereCurenta(ac, 1, TIP_NSA)).toBe(4)
+    expect(propunereCurenta(ac, 2, TIP_NSA)).toBe(null)
+    expect(propunereCurenta(null, 1, TIP_NSA)).toBe(null)
+  })
+  it('tip necunoscut ⇒ null', () => {
+    expect(propunereCurenta([{ id: 1, cerinta_id: 1, fel: 'exceptat', status: 'nu_se_aplica' }], 1, 'altceva')).toBe(null)
   })
 })

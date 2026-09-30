@@ -56,7 +56,7 @@ const campuriDocumentatie = r => (!r || r.error || !r.data)
 import ClarificariAC from './OfertareClarificariAC.jsx'
 import OrganigramaSection from './OfertareOrganigrama.jsx'
 import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE, REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
-import { indexConfirmari, stareExceptarePT, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
+import { indexConfirmari, stareExceptarePT, propunereCurenta, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -1929,18 +1929,23 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
   const excepta = async (motiv) => {
     if (!sel.size || !motiv) return
     setBusy(true)
-    const { error } = await supabase.from('ofertare_pt_legaturi')
+    const { data: noi, error } = await supabase.from('ofertare_pt_legaturi')
       .insert([...sel].map(id => ({ cerinta_id: id, capitol_id: null, fel: 'exceptat', motiv, sursa: 'om' })))
+      .select('id, cerinta_id')
     setBusy(false)
     if (error) { showToast?.('Excepția a eșuat: ' + error.message, 'err'); return }
-    // J02b: o singură cerință selectată ⇒ confirmarea umană se face acum (cu amprenta sursei). În bloc NU:
-    // fiecare rând se confirmă explicit din matrice („✓ Confirm exceptarea”), altfel rămâne propunere deschisă.
-    if (sel.size === 1) await confirmaExceptare({ id: [...sel][0] }, motiv, true)
+    // J02b: o singură cerință selectată ⇒ confirmarea umană se face acum (cu amprenta sursei), legată de legătura
+    // TOCMAI creată (runda 2: confirmarea validează o propunere concretă). În bloc NU: fiecare rând se confirmă
+    // explicit din matrice („✓ Confirm exceptarea”), altfel rămâne propunere deschisă.
+    if (sel.size === 1) await confirmaExceptare({ id: [...sel][0] }, motiv, true, noi?.[0]?.id ?? null)
     showToast?.(sel.size === 1 ? 'Cerință exceptată și confirmată.' : `${sel.size} cerințe marcate „exceptat” — confirmă fiecare rând ca să se închidă.`, 'ok')
     setSel(new Set()); await load(licId)
   }
 
-  const confirmaExceptare = async (c, motivInitial, faraReload) => {
+  const confirmaExceptare = async (c, motivInitial, faraReload, legaturaId) => {
+    // J02b r2: legătura „exceptat” VĂZUTĂ (cea mai nouă din matrice). Dacă între timp a apărut alta, RPC-ul refuză.
+    const propunere = legaturaId ?? propunereCurenta(legaturi, c.id, TIP_EXCEPTAT_PT)
+    if (propunere == null) { showToast?.('Nu există o legătură „exceptat” de confirmat — reîncarcă matricea.', 'err'); return }
     const motiv = motivInitial && faraReload ? motivInitial
       : window.prompt(`Exceptezi cerința #${c.nr_ordine ?? c.id} de la propunere. Motivul (obligatoriu, minim 5 caractere):`, motivInitial || '')
     if (!motiv || motiv.trim().length < 5) { showToast?.('Motivul are minim 5 caractere — neconfirmat.', 'err'); return }
@@ -1948,7 +1953,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     try {
       const { data: amp, error: eA } = await supabase.rpc('fn_ofertare_cerinta_amprenta', { p_cerinta_id: c.id })
       if (eA || !amp) { showToast?.('Amprenta sursei nu s-a putut citi: ' + (eA?.message || 'lipsă'), 'err'); return }
-      const { error } = await supabase.rpc('ofertare_confirma_neaplicabil', { p_cerinta_id: c.id, p_tip: TIP_EXCEPTAT_PT, p_motiv: motiv.trim(), p_amprenta_vazuta: amp })
+      const { error } = await supabase.rpc('ofertare_confirma_neaplicabil', { p_cerinta_id: c.id, p_tip: TIP_EXCEPTAT_PT, p_motiv: motiv.trim(), p_amprenta_vazuta: amp, p_propunere_id: propunere })
       if (error) { showToast?.('Confirmarea nu s-a salvat: ' + error.message, 'err'); return }
       if (!faraReload) { showToast?.('Exceptare confirmată.', 'ok'); await load(licId) }
     } finally { setBusy(false) }

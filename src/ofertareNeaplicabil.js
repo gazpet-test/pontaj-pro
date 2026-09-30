@@ -46,6 +46,20 @@ export function stareExceptarePT(legaturiCerinta, idx, cerintaId) {
   return { inchisa: false, propunere: true, eticheta: deAi ? '⊘ propunere AI: exceptată — neconfirmată' : '⊘ exceptată — lipsește confirmarea cu amprentă' }
 }
 
+// J02b runda 2: confirmarea validează o PROPUNERE CONCRETĂ — cea mai nouă (id maxim), exact ca în BD
+// (fn_ofertare_na_propunere_curenta). Exceptare PT: legătura fel='exceptat'; „nu se aplică”: rândul de acoperire
+// status='nu_se_aplica'. null = nicio propunere (pentru „nu se aplică” = decizie umană fără propunere AI).
+// Id-ul trimis la RPC e cel VĂZUT pe ecran: dacă între timp a apărut altă propunere, RPC-ul refuză (40001).
+export function propunereCurenta(randuri, cerintaId, tip) {
+  let max = null
+  for (const r of randuri || []) {
+    if (!r || r.cerinta_id !== cerintaId || r.id == null) continue
+    const e = tip === TIP_EXCEPTAT_PT ? r.fel === 'exceptat' : tip === TIP_NSA ? r.status === 'nu_se_aplica' : false
+    if (e && (max === null || r.id > max)) max = r.id
+  }
+  return max
+}
+
 // Registrul de acoperire: „scoasă" (nu se aplică) DOAR cu confirmare umană validă de tip nu_se_aplica.
 export function nsaScoasa(cerinta, idx) {
   if (!cerinta) return false

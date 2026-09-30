@@ -14,7 +14,7 @@ import { mesajInvoke } from './lib/mesajInvoke.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
-import { indexConfirmari, statisticiAcoperire, stareConfirmare, TIP_NSA } from './ofertareNeaplicabil.js'
+import { indexConfirmari, statisticiAcoperire, stareConfirmare, propunereCurenta, TIP_NSA } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
@@ -2571,6 +2571,7 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   const [acoperiri, setAcoperiri] = useState({})   // cerinta_id -> rând acoperire (+ autorizația join)
   // J02b: confirmările umane „nu se aplică” (cu amprenta sursei). Lipsă/eroare ⇒ index gol ⇒ nimic nu e închis.
   const [naIdx, setNaIdx] = useState(() => indexConfirmari([]))
+  const [acRaw, setAcRaw] = useState([])   // J02b r2: rândurile brute, ca să știm ce propunere AI „nu se aplică” confirmă omul
   const [busy, setBusy] = useState(null)
   const [warn, setWarn] = useState(null)
   const [fDoarGoluri, setFDoarGoluri] = useState(false)
@@ -2671,7 +2672,8 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       const rNa = await supabase.from('v_ofertare_cerinte_na_stare').select('cerinta_id, tip, valida, revocata_la, motiv, confirmat_la')
         .in('cerinta_id', cs.map(c => c.id)).limit(10000)
       setNaIdx(indexConfirmari(rNa.error ? [] : rNa.data))
-    } else { setAcoperiri({}); setNaIdx(indexConfirmari([])) }
+      setAcRaw(ac || [])
+    } else { setAcoperiri({}); setNaIdx(indexConfirmari([])); setAcRaw([]) }
   }
   useEffect(() => { load() }, [licitatie.id])
 
@@ -2684,7 +2686,9 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     try {
       const { data: amp, error: eA } = await supabase.rpc('fn_ofertare_cerinta_amprenta', { p_cerinta_id: c.id })
       if (eA || !amp) { setWarn('Amprenta sursei nu s-a putut citi: ' + (eA?.message || 'lipsă')); return }
-      const { error } = await supabase.rpc('ofertare_confirma_neaplicabil', { p_cerinta_id: c.id, p_tip: TIP_NSA, p_motiv: motiv.trim(), p_amprenta_vazuta: amp })
+      const { error } = await supabase.rpc('ofertare_confirma_neaplicabil', { p_cerinta_id: c.id, p_tip: TIP_NSA, p_motiv: motiv.trim(), p_amprenta_vazuta: amp,
+        // J02b r2: confirmarea se leagă de propunerea AI VĂZUTĂ (cel mai nou rând „nu se aplică”) sau de niciuna
+        p_propunere_id: propunereCurenta(acRaw, c.id, TIP_NSA) })
       if (error) { setWarn('Confirmarea nu s-a salvat: ' + error.message); return }
       await load()
     } finally { setBusy(null) }

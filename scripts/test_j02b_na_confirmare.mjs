@@ -1,0 +1,262 @@
+#!/usr/bin/env node
+// Test J02b (20261004a) pe Postgres LOCAL — nu atinge live. Rulare: node scripts/test_j02b_na_confirmare.mjs
+//   (PGBIN=/usr/lib/postgresql/17/bin, PGPORT=5498). Model: scripts/test_rls_ofertare.mjs (branch rls-ofertare).
+// Construiește schema minimă a producției pe care o atinge J02b (tabelele/coloanele citite de migrare), cu:
+//   * fn_are_acces_ofertare() cu amprenta EXACTĂ de pe live (md5 429d28e2…, ACL authenticated/postgres/service_role);
+//   * fn_gate_depunere() EXACTĂ de pe live (textul din revenire ⇒ md5 4bddf68c…, ACL postgres/service_role);
+//   * default privileges ca Supabase (ALL pe tabele/funcții/secvențe noi pentru anon/authenticated/service_role),
+//     ca să prindă un GRANT uitat;
+//   * v_ofertare_pt_stare MINIMĂ (security_invoker) care conține exact fragmentele înlocuite de migrare. Singura
+//     substituție din harness: md5-ul view-ului live (c77c49b8…) → md5-ul view-ului local, în migrare și în revenire.
+// Rulează și supabase/tests/j02b_na_confirmare_test.sql (același fișier ca pe clonă) pe un fixture DETERMINIST (licitația 103).
+import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const BIN = process.env.PGBIN || '/usr/lib/postgresql/17/bin'
+const PORT = process.env.PGPORT || '5498'
+const NUME = '20261004a_ofertare_j02b_na_confirmare_umana'
+const MIG_SRC = readFileSync(join(ROOT, 'supabase/migrations', NUME + '.sql'), 'utf8')
+const RB_SRC = readFileSync(join(ROOT, 'supabase/revenire', NUME + '_ROLLBACK.sql'), 'utf8')
+const TEST_SQL = readFileSync(join(ROOT, 'supabase/tests/j02b_na_confirmare_test.sql'), 'utf8')
+const MD5_VIEW_LIVE = 'c77c49b87642c5c2f584d2ed008c7bf3'
+const MD5_GATE_LIVE = '4bddf68cfe53107a622d210f4ef3ec51'
+const MD5_GATE_NOU = '59b42d41f8b67f60bfc283cbe0841017'
+const MD5_HELPER = '429d28e2a61fb24c8009d67050c16c85'
+const U = { fara: '00000000-0000-0000-0000-000000000001', modul: '00000000-0000-0000-0000-000000000002', owner: '00000000-0000-0000-0000-000000000003' }
+
+// textul EXACT al fn_gate_depunere live, din revenire
+const GATE_LIVE = RB_SRC.slice(RB_SRC.indexOf('CREATE OR REPLACE FUNCTION public.fn_gate_depunere()'), RB_SRC.indexOf('END $function$;') + 'END $function$;'.length)
+const HELPER = `CREATE OR REPLACE FUNCTION public.fn_are_acces_ofertare() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
+  SELECT auth.uid() IS NOT NULL AND (
+    EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid() AND pr.is_owner)
+    OR EXISTS (SELECT 1 FROM public.user_module_access uma
+               WHERE uma.profile_id = auth.uid() AND uma.module = 'ofertare')
+  );
+$function$;`
+
+const dir = mkdtempSync(join(tmpdir(), 'pg_j02b_'))
+const data = join(dir, 'data')
+let ok = 0, fail = 0
+const psql = (sql, { cwd } = {}) => {
+  try {
+    const out = execFileSync(join(BIN, 'psql'), ['-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-h', dir, '-p', PORT, '-U', 'postgres', '-d', 'postgres'],
+      { input: sql, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], cwd })
+    return { ok: true, out: out.trim() }
+  } catch (e) { return { ok: false, out: String(e.stderr || e.message).trim() } }
+}
+const q = sql => { const r = psql(sql); if (!r.ok) throw new Error(sql.slice(0, 120) + ' → ' + r.out); return r.out }
+const check = (name, cond, info = '') => { if (cond) { ok++; console.log('  ✔', name) } else { fail++; console.log('  ✘', name, info) } }
+let MIG = MIG_SRC, RB = RB_SRC
+const livrare = (sql = MIG, nume = NUME) => psql(`BEGIN;\nSELECT set_config('gazpet.livrare_migrare', '${nume}:' || txid_current(), true) \\g /dev/null\n${sql}\nCOMMIT;`)
+const revenire = (sql = RB, arm = 'REVINE_J02B:') => psql(`BEGIN;\nSELECT set_config('gazpet.revenire_20261004a', '${arm}' || txid_current(), true) \\g /dev/null\n${sql}\nCOMMIT;`)
+// o „cerere REST”: rol + claims în tranzacție, ca PostgREST
+const rest = (rol, uid, sql, fin = 'ROLLBACK') => psql(`BEGIN;\nSELECT set_config('request.jwt.claims', '${JSON.stringify(uid ? { sub: uid, role: rol } : { role: rol })}', true) \\g /dev/null\nSET LOCAL ROLE ${rol};\n${sql}\n${fin};`)
+const aplicat = () => q(`SELECT to_regclass('public.ofertare_cerinte_na_confirmari') IS NOT NULL`) === 't'
+const md5Gate = () => q(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_gate_depunere()'::regprocedure`)
+const md5View = () => q(`SELECT md5(pg_get_viewdef('public.v_ofertare_pt_stare'::regclass))`)
+
+const ROOTU = process.getuid && process.getuid() === 0
+const srv = (cmd, args) => ROOTU ? execFileSync('runuser', ['-u', 'postgres', '--', join(BIN, cmd), ...args], { stdio: 'ignore' }) : execFileSync(join(BIN, cmd), args, { stdio: 'ignore' })
+function porneste() {
+  if (ROOTU) chmodSync(dir, 0o777)
+  srv('initdb', ['-D', data, '-U', 'postgres', '-A', 'trust', '--no-sync'])
+  srv('pg_ctl', ['-D', data, '-o', `-p ${PORT} -k ${dir} -c listen_addresses=''`, '-w', 'start', '-l', join(dir, 'log')])
+}
+function schema() {
+  q(`
+CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS; CREATE ROLE altrol NOLOGIN;
+GRANT anon, authenticated, service_role TO postgres;
+CREATE SCHEMA auth; GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
+CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(current_setting('request.jwt.claims', true)::json->>'sub','')::uuid $$;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+-- ca Supabase: obiectele noi primesc ALL pentru anon/authenticated/service_role
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+CREATE TABLE public.profiles (id uuid PRIMARY KEY, is_owner boolean NOT NULL DEFAULT false);
+CREATE TABLE public.user_module_access (profile_id uuid, module text);
+INSERT INTO public.profiles VALUES ('${U.fara}', false), ('${U.modul}', false), ('${U.owner}', true);
+INSERT INTO public.user_module_access VALUES ('${U.modul}', 'ofertare'), ('${U.fara}', 'executie');
+${HELPER}
+REVOKE ALL ON FUNCTION public.fn_are_acces_ofertare() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO authenticated, service_role;
+CREATE TABLE public.ofertare_licitatii (id bigint PRIMARY KEY, status text, derogare_depunere boolean DEFAULT false, derogare_motiv text, termen_depunere timestamptz);
+CREATE TABLE public.ofertare_documente_atribuire (id bigint PRIMARY KEY, fisier_path text, size_bytes bigint, revizie text, procesat_la timestamptz, text_extras text);
+CREATE TABLE public.ofertare_cerinte (id bigint PRIMARY KEY, licitatie_id bigint REFERENCES public.ofertare_licitatii(id), tip text, text_cerinta text,
+  versiune int, sursa_document_id bigint, sursa_pagina int, sursa_pasaj text, inlocuita_de bigint, duplicat_al bigint,
+  confirmata_de uuid, confirmata_la timestamptz, stare text);
+CREATE TABLE public.documente_firma (id bigint PRIMARY KEY, utilizabil boolean DEFAULT true, fara_expirare boolean DEFAULT true, data_valabilitate date, se_reemite boolean DEFAULT false);
+CREATE TABLE public.ofertare_acoperire (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, cerinta_id bigint NOT NULL REFERENCES public.ofertare_cerinte(id),
+  status text NOT NULL, verificat_pe_scan boolean NOT NULL DEFAULT false, reverificare_ceruta boolean, doc_firma_id bigint, motiv text);
+CREATE TABLE public.ofertare_pt_pachet (licitatie_id bigint, versiune int, stare text);
+CREATE TABLE public.ofertare_pt_legaturi (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  cerinta_id bigint NOT NULL REFERENCES public.ofertare_cerinte(id) ON DELETE CASCADE, capitol_id bigint,
+  fel text NOT NULL DEFAULT 'capitol' CHECK (fel IN ('capitol','exceptat')), motiv text,
+  sursa text NOT NULL DEFAULT 'om' CHECK (sursa IN ('om','ai')), confirmat_de uuid, confirmat_la timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT ofertare_pt_legaturi_unic UNIQUE (cerinta_id, capitol_id));
+CREATE TABLE public.ofertare_derogari_audit (id bigserial PRIMARY KEY, licitatie_id bigint, actiune text, actor uuid, session_user_name text, motiv text, status_vechi text, status_nou text);
+CREATE FUNCTION public.fn_gate_depunere_derogare_owner() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT COALESCE((SELECT is_owner FROM public.profiles WHERE id = auth.uid()), false) $$;
+CREATE FUNCTION public.ofertare_r5_blocaj_sursa(bigint) RETURNS text LANGUAGE sql STABLE AS $$ SELECT NULL::text $$;
+${GATE_LIVE}
+REVOKE ALL ON FUNCTION public.fn_gate_depunere() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_gate_depunere();
+CREATE VIEW public.v_ofertare_pt_stare WITH (security_invoker = on) AS
+WITH cer AS (
+  SELECT c.id, c.licitatie_id,
+    (EXISTS (SELECT 1 FROM ofertare_pt_legaturi l_2 WHERE l_2.cerinta_id = c.id AND l_2.fel = 'capitol')) AS are_capitol,
+    (EXISTS (SELECT 1 FROM ofertare_pt_legaturi l_1 WHERE l_1.cerinta_id = c.id AND l_1.fel = 'exceptat')) AS exceptata,
+    (EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan)) AS dovedita,
+    (EXISTS (SELECT 1 FROM ofertare_acoperire a_1 WHERE a_1.cerinta_id = c.id AND a_1.status IN ('acoperit','acoperit_partener'))) AS propusa
+  FROM ofertare_cerinte c
+  WHERE c.tip IN ('propunere','forma') AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL)
+SELECT l.id AS licitatie_id, count(cer.id) AS de_raspuns,
+  count(*) FILTER (WHERE NOT cer.are_capitol AND NOT cer.exceptata AND NOT cer.dovedita AND NOT cer.propusa) AS fara_capitol,
+  count(*) FILTER (WHERE cer.exceptata) AS exceptate,
+  count(*) FILTER (WHERE cer.propusa AND NOT cer.dovedita AND NOT cer.are_capitol AND NOT cer.exceptata) AS dovada_de_verificat
+FROM ofertare_licitatii l LEFT JOIN cer ON cer.licitatie_id = l.id GROUP BY l.id;
+GRANT ALL ON public.v_ofertare_pt_stare TO anon, authenticated, service_role;
+-- fixture determinist: licitația 103 (F1 AI-only ×2, F2 fără acoperire, F3 cerință PT liberă ×2) + 104 (poarta cap-coadă)
+INSERT INTO public.ofertare_licitatii (id, status) VALUES (103, 'in_lucru'), (104, 'in_lucru');
+INSERT INTO public.ofertare_documente_atribuire VALUES (1, 'lic103/caiet.pdf', 1000, 'r1', '2026-09-20', 'text extras');
+INSERT INTO public.ofertare_cerinte (id, licitatie_id, tip, text_cerinta, versiune, sursa_document_id, sursa_pagina, sursa_pasaj) VALUES
+  (1001, 103, 'eliminatorie', 'Certificat ISO 9001', 1, 1, 3, 'pasaj 1'),
+  (1002, 103, 'eliminatorie', 'Autorizare ANRE', 1, 1, 4, 'pasaj 2'),
+  (1003, 103, 'eliminatorie', 'Experiență similară', 1, 1, 5, 'pasaj 3'),
+  (1004, 103, 'propunere', 'Descrierea tehnologiei de execuție', 1, 1, 9, 'pasaj 4'),
+  (1005, 103, 'forma', 'Grafic de execuție', 1, 1, 10, 'pasaj 5'),
+  (2001, 104, 'eliminatorie', 'Cerință unică 104', 1, NULL, NULL, NULL);
+INSERT INTO public.ofertare_acoperire (cerinta_id, status) VALUES (1001, 'nu_se_aplica'), (1002, 'nu_se_aplica'), (2001, 'nu_se_aplica');
+INSERT INTO public.ofertare_pt_pachet VALUES (104, 1, 'depus');
+UPDATE public.ofertare_cerinte SET confirmata_de = '${U.owner}', confirmata_la = now() WHERE licitatie_id = 104;
+`)
+}
+
+try {
+  porneste(); schema()
+  const md5ViewLocal = md5View()
+  MIG = MIG_SRC.split(MD5_VIEW_LIVE).join(md5ViewLocal)
+  RB = RB_SRC.split(MD5_VIEW_LIVE).join(md5ViewLocal)
+  console.log('1. Starea live reconstruită (amprente exacte)')
+  check(`fn_are_acces_ofertare md5 = ${MD5_HELPER}`, q(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_are_acces_ofertare()'::regprocedure`) === MD5_HELPER)
+  check(`fn_gate_depunere md5 = ${MD5_GATE_LIVE} (textul din revenire = live)`, md5Gate() === MD5_GATE_LIVE, md5Gate())
+  check('fn_gate_depunere ACL = postgres + service_role', q(`SELECT string_agg(x.grantee::regrole::text, ',' ORDER BY 1) FROM pg_proc p, aclexplode(p.proacl) x WHERE p.oid = 'public.fn_gate_depunere()'::regprocedure`) === 'postgres,service_role')
+  check('singura substituție: md5 view live → local (o apariție în migrare, două în revenire)',
+    MIG_SRC.split(MD5_VIEW_LIVE).length - 1 === 2 && RB_SRC.split(MD5_VIEW_LIVE).length - 1 === 2, `${MIG_SRC.split(MD5_VIEW_LIVE).length - 1}/${RB_SRC.split(MD5_VIEW_LIVE).length - 1}`)
+
+  console.log('2. Gărzi de livrare / revenire')
+  check('fără runner (fără gardă) → refuz', !psql(MIG).ok && !aplicat())
+  check('marcaj cu alt nume → refuz', !livrare(MIG, 'alt_nume').ok && !aplicat())
+  check('migrarea nu conține BEGIN/COMMIT', !/^\s*(BEGIN|COMMIT)\s*;/mi.test(MIG_SRC))
+  check('revenirea nu conține BEGIN/COMMIT', !/^\s*(BEGIN|COMMIT)\s*;/mi.test(RB_SRC))
+  check('revenire neînarmată → refuz', !psql(RB).ok)
+  check('revenire armată greșit → refuz', !revenire(RB, 'ALTCEVA:').ok)
+  const rNe = revenire()
+  check('revenire armată pe live (J02b neaplicat) → refuz', !rNe.ok && /nu pare aplicată/.test(rNe.out), rNe.out.slice(0, 200))
+  check('revenirea nu mai stă în supabase/migrations/', !existsSync(join(ROOT, 'supabase/migrations', NUME + '_ROLLBACK.sql')))
+
+  console.log('3. Precondiții fail-closed (amprente helper + poartă)')
+  const refuz = (nume, prep, undo, re) => { q(prep); const r = livrare(); check(nume, !r.ok && re.test(r.out) && !aplicat(), r.out.slice(0, 220)); q(undo) }
+  refuz('helper cu alt corp (md5) → refuz', HELPER.replace("= 'ofertare')", "= 'ofertare' )"), HELPER + `REVOKE ALL ON FUNCTION public.fn_are_acces_ofertare() FROM PUBLIC, anon; GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO authenticated, service_role;`, /fn_are_acces_ofertare\(\) lipsește sau diferă/)
+  refuz('helper cu EXECUTE pentru anon → refuz', `GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO anon;`, `REVOKE EXECUTE ON FUNCTION public.fn_are_acces_ofertare() FROM anon;`, /fn_are_acces_ofertare\(\) lipsește sau diferă/)
+  refuz('helper cu EXECUTE pentru PUBLIC → refuz', `GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO PUBLIC;`, `REVOKE EXECUTE ON FUNCTION public.fn_are_acces_ofertare() FROM PUBLIC;`, /fn_are_acces_ofertare\(\) lipsește sau diferă/)
+  refuz('helper VOLATILE → refuz', `ALTER FUNCTION public.fn_are_acces_ofertare() VOLATILE;`, `ALTER FUNCTION public.fn_are_acces_ofertare() STABLE;`, /fn_are_acces_ofertare\(\) lipsește sau diferă/)
+  refuz('helper alt search_path → refuz', `ALTER FUNCTION public.fn_are_acces_ofertare() SET search_path = public;`, `ALTER FUNCTION public.fn_are_acces_ofertare() SET search_path = public, pg_temp;`, /fn_are_acces_ofertare\(\) lipsește sau diferă/)
+  refuz('helper alt proprietar → refuz', `ALTER FUNCTION public.fn_are_acces_ofertare() OWNER TO altrol;`, `ALTER FUNCTION public.fn_are_acces_ofertare() OWNER TO postgres;`, /fn_are_acces_ofertare\(\) lipsește sau diferă/)
+  refuz('overload fn_are_acces_ofertare în altă schemă → refuz', `CREATE SCHEMA x; CREATE FUNCTION x.fn_are_acces_ofertare() RETURNS boolean LANGUAGE sql AS 'SELECT true';`, `DROP SCHEMA x CASCADE;`, /alt overload fn_are_acces_ofertare/)
+  refuz('poarta cu EXECUTE pentru authenticated → refuz', `GRANT EXECUTE ON FUNCTION public.fn_gate_depunere() TO authenticated;`, `REVOKE EXECUTE ON FUNCTION public.fn_gate_depunere() FROM authenticated;`, /fn_gate_depunere live diferă/)
+  refuz('poarta fără EXECUTE service_role → refuz', `REVOKE EXECUTE ON FUNCTION public.fn_gate_depunere() FROM service_role;`, `GRANT EXECUTE ON FUNCTION public.fn_gate_depunere() TO service_role;`, /fn_gate_depunere live diferă/)
+  refuz('poarta alt proprietar → refuz', `ALTER FUNCTION public.fn_gate_depunere() OWNER TO altrol;`, `ALTER FUNCTION public.fn_gate_depunere() OWNER TO postgres;`, /fn_gate_depunere live diferă/)
+  refuz('poarta cu alt corp (md5) → refuz', GATE_LIVE.replace('RETURN NEW;', 'RETURN NEW; '), GATE_LIVE, /fn_gate_depunere live diferă/)
+  check('după drift-uri: amprentele sunt din nou cele live', md5Gate() === MD5_GATE_LIVE && q(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_are_acces_ofertare()'::regprocedure`) === MD5_HELPER)
+
+  console.log('4. Testul SQL (același fișier ca pe clonă), fixture determinist 103 — BEGIN…ROLLBACK')
+  const tdir = join(dir, 'repo'); mkdirSync(join(tdir, 'supabase/migrations'), { recursive: true }); mkdirSync(join(tdir, 'supabase/tests'), { recursive: true })
+  writeFileSync(join(tdir, 'supabase/migrations', NUME + '.sql'), MIG)
+  const rT = psql(TEST_SQL, { cwd: tdir })
+  check('supabase/tests/j02b_na_confirmare_test.sql → J02b TEST PASS (T1–T8, fără SKIP)', rT.ok && /J02b TEST PASS/.test(rT.out) && !/SKIP/.test(rT.out), rT.out.slice(-600))
+  check('testul SQL nu lasă nimic în urmă', !aplicat())
+  check('testul SQL nu conține SKIP', !/SKIP/.test(TEST_SQL))
+  // fixture lipsă ⇒ FAIL (nu SKIP)
+  q(`CREATE TABLE _bk AS SELECT * FROM public.ofertare_cerinte WHERE id IN (1004, 1005); DELETE FROM public.ofertare_cerinte WHERE id IN (1004, 1005);`)
+  const rF = psql(TEST_SQL, { cwd: tdir })
+  check('fixture F3 lipsă ⇒ testul PICĂ (FIXTURE FAIL), nu sare', !rF.ok && /FIXTURE FAIL/.test(rF.out), rF.out.slice(-300))
+  q(`INSERT INTO public.ofertare_cerinte SELECT * FROM _bk; DROP TABLE _bk;`)
+
+  console.log('5. Livrare + ACL (postcondiția cerută de Copilot, verificată independent)')
+  const r = livrare()
+  check('livrarea prin gardă trece', r.ok, r.out.slice(0, 400))
+  check(`fn_gate_depunere nouă md5 = ${MD5_GATE_NOU}`, md5Gate() === MD5_GATE_NOU)
+  const priv = (rol, pr) => q(`SELECT has_table_privilege('${rol}', 'public.ofertare_cerinte_na_confirmari', '${pr}')`)
+  for (const rol of ['service_role', 'authenticated']) {
+    const bad = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'].filter(p => priv(rol, p) !== 'f')
+    check(`${rol}: INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN = false`, bad.length === 0, bad.join(','))
+    check(`${rol}: SELECT = true`, priv(rol, 'SELECT') === 't')
+  }
+  check('anon: niciun privilegiu (8 de tabel)', ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'].every(p => priv('anon', p) === 'f'))
+  check('PUBLIC: nimic în ACL-ul brut (tabel, view, secvență, copia de revenire)', q(`SELECT count(*) FROM pg_class c, aclexplode(c.relacl) x WHERE c.relname IN ('ofertare_cerinte_na_confirmari','v_ofertare_cerinte_na_stare','ofertare_cerinte_na_confirmari_id_seq','ofertare_j02b_rollback_def') AND x.grantee = 0`) === '0')
+  check('ACL brut tabel (fără proprietar) = authenticated:SELECT,service_role:SELECT', q(`SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type, ',' ORDER BY 1) FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.ofertare_cerinte_na_confirmari'::regclass AND x.grantee <> c.relowner`) === 'authenticated:SELECT,service_role:SELECT')
+  check('0 ACL pe coloane', q(`SELECT count(*) FROM pg_attribute WHERE attrelid IN ('public.ofertare_cerinte_na_confirmari'::regclass, 'public.v_ofertare_cerinte_na_stare'::regclass) AND attacl IS NOT NULL`) === '0')
+  check('secvența identity: nimeni în afară de proprietar', q(`SELECT count(*) FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.ofertare_cerinte_na_confirmari_id_seq'::regclass AND x.grantee <> c.relowner`) === '0')
+  check('copia de revenire: nimeni în afară de proprietar', q(`SELECT count(*) FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.ofertare_j02b_rollback_def'::regclass AND x.grantee <> c.relowner`) === '0')
+  check('RPC-urile: service_role/anon fără EXECUTE', q(`SELECT bool_or(has_function_privilege(r, f, 'EXECUTE')) FROM unnest(ARRAY['service_role','anon']) r, unnest(ARRAY['public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)','public.ofertare_revoca_neaplicabil(bigint,text)']) f`) === 'f')
+  const sr = (sql) => rest('service_role', null, sql)
+  check('service_role (REST): INSERT direct → permission denied', /permission denied/.test(sr(`INSERT INTO public.ofertare_cerinte_na_confirmari (cerinta_id, tip, actor, motiv, amprenta_sursa) VALUES (1001,'nu_se_aplica','${U.owner}','direct sr',md5('x'));`).out))
+  check('service_role (REST): UPDATE/DELETE/TRUNCATE → permission denied', ['UPDATE public.ofertare_cerinte_na_confirmari SET motiv = motiv;', 'DELETE FROM public.ofertare_cerinte_na_confirmari;', 'TRUNCATE public.ofertare_cerinte_na_confirmari;'].every(s => /permission denied/.test(sr(s).out)))
+  check('service_role (REST): SELECT permis', sr(`SELECT count(*) FROM public.ofertare_cerinte_na_confirmari;`).ok)
+  check('authenticated (REST, owner): INSERT/TRUNCATE direct → permission denied', ['INSERT INTO public.ofertare_cerinte_na_confirmari (cerinta_id, tip, actor, motiv, amprenta_sursa) VALUES (1001,\'nu_se_aplica\',\'' + U.owner + '\',\'direct auth\',md5(\'x\'));', 'TRUNCATE public.ofertare_cerinte_na_confirmari;'].every(s => /permission denied/.test(rest('authenticated', U.owner, s).out)))
+  check('anon (REST): SELECT → permission denied', /permission denied/.test(rest('anon', null, `SELECT 1 FROM public.ofertare_cerinte_na_confirmari;`).out))
+  check('a doua livrare → refuz (obiecte există)', !livrare().ok)
+
+  console.log('6. Comportament cap-coadă (REST simulat)')
+  const conf = (uid, cid, tip, extra = '') => rest('authenticated', uid, `SELECT public.ofertare_confirma_neaplicabil(${cid}, '${tip}', 'motiv de test J02b', public.fn_ofertare_cerinta_amprenta(${cid}), (SELECT propunere_id FROM public.fn_ofertare_na_propunere_curenta(${cid}, '${tip}')));${extra}`, 'COMMIT')
+  const rFara = conf(U.fara, 2001, 'nu_se_aplica')
+  check('cont fără modul Ofertare: confirmarea refuzată', !rFara.ok && /fără acces la Ofertare/.test(rFara.out), rFara.out.slice(0, 200))
+  check('cont fără modul: amprenta = NULL (fail-closed)', rest('authenticated', U.fara, `SELECT public.fn_ofertare_cerinta_amprenta(2001) IS NULL;`).out === 't')
+  const blocat = psql(`UPDATE public.ofertare_licitatii SET status = 'depusa' WHERE id = 104;`)
+  check('poarta: 104 cu „nu se aplică” doar AI → BLOCAT', !blocat.ok && /BLOCAT LA DEPUNERE: 0 cerințe neconfirmate de om, 1 cerințe .*din ele 1 au doar/.test(blocat.out), blocat.out.slice(0, 300))
+  const rMod = conf(U.modul, 2001, 'nu_se_aplica')
+  check('cont cu modul Ofertare: confirmarea trece (legată de rândul AI)', rMod.ok, rMod.out.slice(0, 200))
+  const trece = psql(`UPDATE public.ofertare_licitatii SET status = 'depusa' WHERE id = 104;`)
+  check('poarta: după confirmarea umană, 104 se depune', trece.ok, trece.out.slice(0, 300))
+  q(`UPDATE public.ofertare_licitatii SET status = 'in_lucru' WHERE id = 104;`)
+  const idConf = q(`SELECT id FROM public.ofertare_cerinte_na_confirmari WHERE cerinta_id = 2001 AND revocata_la IS NULL`)
+  check('revocare de către altcineva decât autorul (fără owner) → refuz', !rest('authenticated', U.fara, `SELECT public.ofertare_revoca_neaplicabil(${idConf}, 'revoc eu');`).ok)
+  check('revocare de owner → trece; poarta blochează din nou', rest('authenticated', U.owner, `SELECT public.ofertare_revoca_neaplicabil(${idConf}, 'revocat de owner test');`, 'COMMIT').ok
+    && !psql(`UPDATE public.ofertare_licitatii SET status = 'depusa' WHERE id = 104;`).ok)
+  check('reconfirmare după revocare → trece', conf(U.modul, 2001, 'nu_se_aplica').ok && q(`SELECT count(*) FROM public.ofertare_cerinte_na_confirmari WHERE cerinta_id = 2001`) === '2')
+
+  console.log('7. Revenirea (supabase/revenire/, armare proprie)')
+  const rb = revenire()
+  check('revenirea armată trece', rb.ok, rb.out.slice(0, 300))
+  check(`poarta revenită exact (md5 ${MD5_GATE_LIVE}, ACL postgres/service_role)`, md5Gate() === MD5_GATE_LIVE && q(`SELECT string_agg(x.grantee::regrole::text, ',' ORDER BY 1) FROM pg_proc p, aclexplode(p.proacl) x WHERE p.oid = 'public.fn_gate_depunere()'::regprocedure`) === 'postgres,service_role')
+  check('view revenit exact (md5 local de dinainte)', md5View() === md5ViewLocal)
+  check('confirmările umane păstrate în arhivă, fără acces pentru anon/authenticated/service_role',
+    q(`SELECT count(*) FROM public.ofertare_cerinte_na_confirmari_arhiva_j02b`) === '2'
+    && q(`SELECT bool_or(has_table_privilege(r, 'public.ofertare_cerinte_na_confirmari_arhiva_j02b', 'SELECT')) FROM unnest(ARRAY['anon','authenticated','service_role']) r`) === 'f')
+  check('obiectele J02b au dispărut', q(`SELECT count(*) FROM pg_proc WHERE proname IN ('fn_ofertare_cerinta_amprenta','fn_ofertare_na_propunere_curenta','fn_ofertare_na_confirmare_valida','fn_ofertare_cerinta_na_confirmata','ofertare_confirma_neaplicabil','ofertare_revoca_neaplicabil')`) === '0')
+  check('re-livrare cu arhiva prezentă → refuz', !livrare().ok)
+  q(`DROP TABLE public.ofertare_cerinte_na_confirmari_arhiva_j02b;`)
+  check('re-livrare după curățarea arhivei → trece', livrare().ok)
+  check('revenire pe tabel gol → trece și șterge tabelul', revenire().ok && q(`SELECT to_regclass('public.ofertare_cerinte_na_confirmari') IS NULL AND to_regclass('public.ofertare_cerinte_na_confirmari_arhiva_j02b') IS NULL`) === 't')
+
+  console.log('8. Nicio scriere directă în tabel din aplicație (src/, supabase/functions/, worker/)')
+  const fisiere = []
+  const umbla = d => { if (!existsSync(d)) return; for (const f of readdirSync(d)) { const p = join(d, f); if (f === 'node_modules') continue; const s = statSync(p); if (s.isDirectory()) umbla(p); else if (/\.(m?[jt]sx?|sql)$/.test(f)) fisiere.push(p) } }
+  for (const d of ['src', 'supabase/functions', 'worker']) umbla(join(ROOT, d))
+  const scrieri = fisiere.filter(f => {
+    const t = readFileSync(f, 'utf8')
+    return /ofertare_cerinte_na_confirmari['"`]\s*\)\s*\.\s*(insert|update|upsert|delete)/.test(t) || /(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(public\.)?ofertare_cerinte_na_confirmari\b/i.test(t)
+  })
+  check(`nicio scriere directă în ofertare_cerinte_na_confirmari (${fisiere.length} fișiere)`, scrieri.length === 0, scrieri.join(', '))
+} catch (e) {
+  fail++; console.log('  ✘ EROARE', e.message)
+} finally {
+  try { srv('pg_ctl', ['-D', data, '-m', 'immediate', 'stop']) } catch {}
+  rmSync(dir, { recursive: true, force: true })
+}
+console.log(`\n${ok} OK, ${fail} FAIL`)
+process.exit(fail ? 1 : 0)
