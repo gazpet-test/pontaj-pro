@@ -116,7 +116,18 @@ n_migrari() { sql "SELECT count(*) FROM supabase_migrations.schema_migrations"; 
 # ── Runner-e ─────────────────────────────────────────────────────────────────
 livrare() {  # livrare <fișier> <versiune>: traseul OFICIAL (scripts/livrare_migrare.sh), cu fișierul copiat sub numele migrării
   mkdir -p "$BASE/livr"; cp "$1" "$BASE/livr/$NUME_MIG.sql"
-  PSQL_BIN="$PGBIN/psql" VERSIUNE_MIGRARE="$2" bash "$LIVRARE" "$BASE/livr/$NUME_MIG.sql" -- -h 127.0.0.1 -p "$PGPORT" -U postgres -d "$DB"
+  # Runner comun ed7ecb0 (GO Copilot R9): sha256 aprobat + țintă explicită (db, system_identifier, host, port).
+  local sis; sis="$("$PGBIN/psql" -X -Atq -h 127.0.0.1 -p "$PGPORT" -U postgres -d "$DB" -c "SELECT system_identifier FROM pg_control_system()")"
+  PSQL_BIN="$PGBIN/psql" bash "$LIVRARE" --migrare "$BASE/livr/$NUME_MIG.sql" --sha256 "$(sha256sum "$BASE/livr/$NUME_MIG.sql" | cut -d' ' -f1)" \
+    --versiune "$2" --tinta-db "$DB" --tinta-sistem "$sis" --tinta-host 127.0.0.1 --tinta-port "$PGPORT" --user postgres
+}
+# Runner comun ed7ecb0: pre-verificarea refuză (CONFLICT) orice livrare când migrarea e deja înregistrată, ÎNAINTE de a trimite
+# fișierul. Ca postcondiția să fie exercitată pe o variantă (faza 6), rândul din istoric e scos temporar și pus la loc identic.
+livrare_fara_inreg() {
+  sql "CREATE TABLE t.bk_inreg AS SELECT * FROM supabase_migrations.schema_migrations WHERE name = '$NUME_MIG'; DELETE FROM supabase_migrations.schema_migrations WHERE name = '$NUME_MIG'" >/dev/null
+  local rc=0; livrare "$@" || rc=$?
+  sql "INSERT INTO supabase_migrations.schema_migrations SELECT * FROM t.bk_inreg; DROP TABLE t.bk_inreg" >/dev/null
+  return $rc
 }
 ins_sql() { printf "INSERT INTO supabase_migrations.schema_migrations (version, name, statements) VALUES ('%s', '%s', ARRAY[%s]);" \
   "$2" "$NUME_MIG" "\$stmt_20261003b\$$(cat "$1")\$stmt_20261003b\$"; }
@@ -221,7 +232,7 @@ armare_ramasa_dupa() {  # rulează revenirea în sesiune și întoarce valoarea 
 
 ALEGE='public.fn_ofertare_alege_acoperire(bigint)'; PERECHE='public.ofertare_inventar_pereche(bigint,text,integer,real)'
 trei_refuza() {  # trei_refuza <eticheta>
-  refuzat "$1 → migrarea (livrare)" "Precondiție 20261003b: starea curentă nu e o stare completă" livrare "$MIG" 20261003999000
+  refuzat "$1 → migrarea (livrare)" "Precondiție 20261003b: starea curentă nu e o stare completă" livrare_fara_inreg "$MIG" 20261003999000
   refuzat "$1 → rollback-ul armat" "ROLLBACK TEHNIC 20261003b blocat: starea curentă" revenire "$RB" "$C_RB" "$V_RB"
   refuzat "$1 → oprirea armată" "se aplică doar din starea completă a patch-ului" revenire "$OPR" "$C_OP" "$V_OP"
   refuzat "$1 → repornirea armată" "doar din starea completă „oprire”" revenire "$REP" "$C_RP" "$V_RP"
@@ -398,7 +409,7 @@ salveaza_stare patch
 ok "md5(prosrc) după livrare = PATCH_H ($PATCH_H) = valorile din fișiere; ACL neschimbat; fără WARNING de tranzacție"
 [ "$(sql "SELECT count(*) || ' ' || max(version) || ' ' || max(name) FROM supabase_migrations.schema_migrations")" = "1 20261003000000 $NUME_MIG" ] || esec "livrare: înregistrare"
 ok "livrare: patch + o înregistrare (20261003000000, $NUME_MIG) în aceeași tranzacție"
-refuzat "4b livrarea a doua oară (altă versiune): refuzată, fără dublare" "deja înregistrată" livrare "$MIG" 20261003000001
+refuzat "4b livrarea a doua oară (altă versiune): refuzată, fără dublare" "CONFLICT: istoricul are 1 rând" livrare "$MIG" 20261003000001
 
 pas "5. Teste pe PATCH: patched + runda 2 + runda 3 (VN1 poarta NULL-safe)"
 faza patched || esec "teste patched"
@@ -411,9 +422,9 @@ ok "R4-6 scenariul protecțiilor capturat pe PATCH, înainte de orice oprire (re
 
 pas "6. Postcondiția migrării (înainte de COMMIT): variante neauditate ale fișierului"
 injecteaza "$MIG" '^-- SEC-20261003b \(constatarea 2\)' '-- VARIANTĂ NEAUDITATĂ (test postcondiție)' "$BASE/mig_corp.sql"
-refuzat "6a migrare cu corp schimbat (o linie de comentariu)" "Postcondiție 20261003b" livrare "$BASE/mig_corp.sql" 20261003000050
+refuzat "6a migrare cu corp schimbat (o linie de comentariu)" "Postcondiție 20261003b" livrare_fara_inreg "$BASE/mig_corp.sql" 20261003000050
 sed 's/$/\r/' "$MIG" >"$BASE/mig_crlf.sql"
-refuzat "6b migrare cu CRLF (checkout Windows)" "Postcondiție 20261003b" livrare "$BASE/mig_crlf.sql" 20261003000051
+refuzat "6b migrare cu CRLF (checkout Windows)" "Postcondiție 20261003b" livrare_fara_inreg "$BASE/mig_crlf.sql" 20261003000051
 
 # ── 7. Oprire controlată ─────────────────────────────────────────────────────
 pas "7. OPRIRE CONTROLATĂ din PATCH: armare (txid), T2, VG1, postcondiție, apoi aplicare"
@@ -449,7 +460,7 @@ mutant_t1 "$MIG" "$BASE/mig_t1.sql"
 refuzat "8-R4-1 T1 din OPRIRE neînregistrată: precondiția refuză înainte de orice înlocuire" "funcțiile sunt în OPRIRE CONTROLATĂ" livrare "$BASE/mig_t1.sql" 20261003999999
 refuzat "8-R4-1 psql -f simplu din OPRIRE (fără marcaj)" "garda de livrare (start)" runner_psql_f "$MIG"
 sql "INSERT INTO supabase_migrations.schema_migrations SELECT * FROM t.migr_salvate; DROP TABLE t.migr_salvate" >/dev/null
-refuzat "8a livrarea migrării din OPRIRE, înregistrată → REFUZ (precondiția, înaintea verificării înregistrării)" "funcțiile sunt în OPRIRE CONTROLATĂ" livrare "$MIG" 20261003000101
+refuzat "8a livrarea migrării din OPRIRE, înregistrată → REFUZ (precondiția, înaintea verificării înregistrării)" "funcțiile sunt în OPRIRE CONTROLATĂ" livrare_fara_inreg "$MIG" 20261003000101
 # R4-2 (Copilot r3 §3): EXECUTE primit prin MOȘTENIRE, fără schimbarea proacl → starea nu mai e „oprire”
 [ "$(scurt)" = "$PATCH_H | $ACL_OPRIT | $ACL_OPRIT | $H_ACCES" ] || esec "8-R4-2: pornire"
 sql "GRANT postgres TO service_role" >/dev/null
@@ -538,7 +549,7 @@ R=$(armare_ramasa_dupa "$RB" "$C_RB" "$V_RB" false) || { cat "$BASE/rev.err" >&2
 [ "$R" = "armare_ramasa=[]" ] || esec "11i: după reluarea armată cu set_config(…, false), comutatorul a rămas în sesiune: $R"
 e_stare live "11i reluare fără efect din LIVE (armată greșit cu set_config(…, false)): trece, iar comutatorul e dezarmat după COMMIT"
 refuzat "11j oprirea din LIVE" "se aplică doar din starea completă a patch-ului" revenire "$OPR" "$C_OP" "$V_OP"
-refuzat "11k livrarea migrării din LIVE după rollback: refuzată (deja înregistrată; un nou patch = migrare nouă)" "deja înregistrată" livrare "$MIG" 20261003000200
+refuzat "11k livrarea migrării din LIVE după rollback: refuzată (deja înregistrată; un nou patch = migrare nouă)" "CONFLICT: istoricul are 1 rând" livrare "$MIG" 20261003000200
 sql "SELECT t.pune('alege', 'patch'); SELECT t.pune('pereche', 'patch')" >/dev/null
 e_stare patch "11l (infrastructura testului) readus în patch pentru pașii următori"
 

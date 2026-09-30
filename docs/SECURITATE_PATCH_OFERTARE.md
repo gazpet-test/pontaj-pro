@@ -448,3 +448,29 @@ Nu se folosesc drept dovezi: absența apelurilor din `pg_stat_statements` (nu do
 | Fără `efectiv` doar în rollback (`STATIC=0`) | 8-R4-2 → rollback-ul armat trece |
 
 Mutanții rundei 3 (§11.3) nu s-au reluat în runda asta; protecțiile pe care le țin sunt neschimbate. Excepție: mutantul „migrare fără GRANT” (§11.3, prins la 8b) devine **echivalent** — migrarea pornește acum doar din live/patch, unde ACL-ul are deja GRANT-urile, iar pasul 8 refuză oprirea înainte de GRANT.
+
+## Livrare: runner comun ed7ecb0 (GO Copilot R9)
+
+Migrarea se livrează DOAR prin runnerul comun `scripts/livrare_migrare.sh` + `scripts/livrare_validator.py`, copiate
+byte cu byte din ed7ecb0 (branch #538, validator a6188fb neschimbat):
+sha256 runner `bb223d90dcd3e932d7be8211cffb24cbbb6d0053c21bba333beca833892efb71`,
+sha256 validator `9356d2871ebd09b3184992193d3a249f29eca497c2ddce6c5488f1909cbb450d`.
+Validatorul acceptă migrarea (`python3 scripts/livrare_validator.py supabase/migrations/20261003b_sec_ofertare_porti_alege_inventar.sql <tag>` ⇒ `OK`).
+
+```bash
+bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261003b_sec_ofertare_porti_alege_inventar.sql \
+  --sha256 abac4ae7aecd0e3741a51d3873a52cfdd97b220634505e9888f71d1701dfcceb \
+  --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
+  --tinta-host <host_scriere_aprobat> --tinta-port <port> [--tinta-proiect <marcaj>] [--user <operator>]
+```
+(sha256 de mai sus = artefactul la commitul acestei secțiuni; la livrare se folosește sha256-ul APROBAT atunci.)
+Parola doar din `~/.pgpass`/`PGPASSFILE`; `--service`, URI-uri și opțiuni psql suplimentare sunt refuzate (exit 2).
+- **Ofertare cere excepția de freeze** înainte de livrare.
+
+Limite (verdict R9, `docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R9.md` pe #538):
+- GO-ul e pentru standardul de livrare, NU autorizează merge/apply.
+- La fiecare livrare: SHA-256 artefact, țintă + operator aprobați, pre/postcondiții, acordul lui Răzvan.
+- Opriri / reporniri / rollback — aprobate separat.
+- PG17 neverificat (server de test PG16); `pg_control_system()` rămâne (verificarea țintei).
+- Codurile 0/11 confirmă înregistrarea, nu înlocuiesc verificarea structurii + smoke.
+- Rezultat necunoscut / conflict / țintă neconfirmată ⇒ fără retry sau rollback automat (reconciliere manuală).
