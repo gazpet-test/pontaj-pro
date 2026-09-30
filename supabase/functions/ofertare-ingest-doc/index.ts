@@ -1,3 +1,5 @@
+// v13 (30.09.2026, DRAFT, nedeployat): GARDA — fără cale anonimă (secret de serviciu sau utilizator cu acces Ofertare),
+// contor persistent de încercări/descărcări cu blocare, scurtcircuit pe mărime+etag/sha256. Vezi docs/INGEST_GARDA.md.
 // v12 (14.09.2026): thinking disabled pe Sonnet 5 (gândea implicit în bugetul de output).
 // #51 14.09.2026: autorizat() — owner/responsabil, service_role, sau anon doar cu ofertare_ingest_coada activă.
 // ofertare-ingest-doc v11 (10.09.2026) — marcajele pornesc de la pagina_offset+1.
@@ -18,6 +20,8 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
+import { identificaApelant, dejaIngeratLaHash, sha256Hex } from '../_shared/gardaIngestLogica.ts'
+import { metaObiect, gardaIncearca, gardaRezultat } from '../_shared/gardaIngest.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -35,7 +39,7 @@ const MAX_CHUNK_BYTES = 24_000_000
 const MAX_TEXT = 900_000
 const MAX_OUT = 8000
 
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
+const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-ingest-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 
 // Marcajul de pagină: caractere pe care nu le produce niciun document real, ca să
 // nu se confunde cu textul. Extragerea cerințelor îl caută cu același regex.
@@ -86,41 +90,31 @@ function asiguraMarcaje(txt: string, s: number, e: number): string {
   return txt.replace(/⟦PAGINA (\d+)⟧/g, (m, p) => { const n = Number(p); return (n >= s + 1 && n <= e) ? m : `⟦PAGINA ${Math.min(Math.max(n, s + 1), e)}⟧` })
 }
 
-// #51 (14.09.2026): poarta pe cheltuială și pe SERVER, nu doar în UI. Cu verify_jwt=true cheia anon trece
-// ca Bearer, deci oricine cu cheia publică putea porni un apel plătit. Reguli:
-//  - service_role: liber (rutine interne);
-//  - JWT de utilizator: doar owner sau responsabilul licitației;
-//  - cheia anon (workerii server din ofertare_*_tick trimit anon JWT din Vault): doar cât coada licitației e activă.
-// Intoarce {eroare, uid}: uid = cine a pornit citirea, pentru procesat_de. NU se ia niciodata
-// din corpul cererii - clientul ar putea trimite orice; vine din JWT-ul verificat sau, pe calea
-// de server, din ofertare_ingest_coada.cerut_de (cine a apasat "Pe server").
-async function autorizat(req: Request, supabase: any, licId: number, coadaTabel: string | null): Promise<{ eroare: string | null; uid: string | null }> {
-  const cerutDeCoada = async () => {
-    if (!coadaTabel) return null
-    const { data } = await supabase.from(coadaTabel).select('cerut_de').eq('licitatie_id', licId).maybeSingle()
-    return data?.cerut_de || null
+// v13 GARDA (înlocuiește autorizat() din #51): cheia anon NU mai trece niciodată (era calea „coada activă" a tick-ului
+// pg_cron — cheia anon e publică, deci oricine putea porni citiri plătite cât o coadă era activă). Rolul NU se mai
+// citește din payload-ul JWT decodat local. Căi permise:
+//  - workerul NAS: header x-ingest-secret = OFERTARE_INGEST_SECRET (comparat în timp constant); uid = coada.cerut_de;
+//  - utilizator: JWT verificat de Auth + fn_are_acces_ofertare() (owner sau user_module_access 'ofertare')
+//    ȘI, fiind o acțiune care costă, owner sau responsabilul licitației (poarta pe cheltuială #51 rămâne).
+async function autorizat(req: Request, supabase: any, licId: number): Promise<{ eroare: string | null; status: number; uid: string | null }> {
+  const url = Deno.env.get('SUPABASE_URL')!, anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
+  const clientUser = (jwt: string) => createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${jwt}` } }, auth: { persistSession: false, autoRefreshToken: false } })
+  const id = await identificaApelant(req.headers, {
+    secretAsteptat: Deno.env.get('OFERTARE_INGEST_SECRET'),
+    getUser: async (jwt) => { const { data } = await clientUser(jwt).auth.getUser(); return data?.user?.id ?? null },
+    areAcces: async (jwt) => { const { data, error } = await clientUser(jwt).rpc('fn_are_acces_ofertare'); return !error && data === true },
+  })
+  if (id.tip === 'refuz') return { eroare: id.motiv, status: id.status, uid: null }
+  if (id.tip === 'serviciu') {
+    const { data } = await supabase.from('ofertare_ingest_coada').select('cerut_de').eq('licitatie_id', licId).maybeSingle()
+    return { eroare: null, status: 200, uid: data?.cerut_de || null }
   }
-  const jwt = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
-  if (!jwt) return { eroare: 'lipsește Authorization', uid: null }
-  // rolul se ia din payload-ul JWT: env-ul funcției poate avea alt format de cheie decât JWT-ul
-  // legacy pe care îl trimit workerii din Vault (verificat 14.09: comparația de string pica).
-  const rol = (() => { try { return JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role } catch (_) { return null } })()
-  if (jwt === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || rol === 'service_role') return { eroare: null, uid: await cerutDeCoada() }
-  if (jwt === Deno.env.get('SUPABASE_ANON_KEY') || rol === 'anon') {
-    if (!coadaTabel) return { eroare: 'apel neautorizat (cheie anon)', uid: null }
-    const { data: c } = await supabase.from(coadaTabel).select('activ, cerut_de').eq('licitatie_id', licId).maybeSingle()
-    return c?.activ ? { eroare: null, uid: c.cerut_de || null } : { eroare: 'apel neautorizat (cheie anon, coada nu e activă)', uid: null }
-  }
-  const anon = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
-  const { data: u } = await anon.auth.getUser()
-  const uid = u?.user?.id
-  if (!uid) return { eroare: 'sesiune invalidă', uid: null }
   const [{ data: prof }, { data: lic }] = await Promise.all([
-    supabase.from('profiles').select('is_owner').eq('id', uid).maybeSingle(),
+    supabase.from('profiles').select('is_owner').eq('id', id.uid).maybeSingle(),
     supabase.from('ofertare_licitatii').select('responsabil_id').eq('id', licId).maybeSingle(),
   ])
-  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === uid)) return { eroare: null, uid }
-  return { eroare: 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).', uid: null }
+  if (prof?.is_owner || (lic?.responsabil_id && lic.responsabil_id === id.uid)) return { eroare: null, status: 200, uid: id.uid }
+  return { eroare: 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).', status: 403, uid: null }
 }
 
 const JUNK_RE = /(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)Thumbs\.db$|(^|\/)desktop\.ini$/i
@@ -132,6 +126,7 @@ Deno.serve(async (req: Request) => {
   let pornitDe: string | null = null   // cine a pornit citirea (procesat_de)
 
   const fail = async (msg: string) => {
+    if (docId) await gardaRezultat(supabase, docId, { ok: false, eroare: msg })
     if (docId) { try { await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: msg.slice(0, 500) }).eq('id', docId) } catch (_) {} }
     return new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
   }
@@ -142,11 +137,11 @@ Deno.serve(async (req: Request) => {
     // iar două felii de scan cu Haiku pot depăși; din browser rămân 2 apeluri.
     const apeluriMax = Math.max(1, Math.min(Number(apeluri) || APELURI_PER_INVOCARE, APELURI_PER_INVOCARE))
     docId = Number(doc_id)
-    { const { data: dl } = await supabase.from('ofertare_documente_atribuire').select('licitatie_id').eq('id', docId).maybeSingle()
-      const na = await autorizat(req, supabase, Number(dl?.licitatie_id), 'ofertare_ingest_coada')
-      if (na.eroare) return new Response(JSON.stringify({ error: na.eroare }), { status: 200, headers: CORS })   // fără marcarea documentului ca eroare
-      pornitDe = na.uid }
     if (!docId) return new Response(JSON.stringify({ error: 'doc_id required' }), { status: 400, headers: CORS })
+    { const { data: dl } = await supabase.from('ofertare_documente_atribuire').select('licitatie_id').eq('id', docId).maybeSingle()
+      const na = await autorizat(req, supabase, Number(dl?.licitatie_id))
+      if (na.eroare) { const id = docId; docId = null; return new Response(JSON.stringify({ error: na.eroare, doc_id: id }), { status: na.status, headers: CORS }) }   // fără marcarea documentului ca eroare
+      pornitDe = na.uid }
 
     const { data: row, error: rErr } = await supabase.from('ofertare_documente_atribuire').select('*').eq('id', docId).single()
     if (rErr || !row) return new Response(JSON.stringify({ error: 'document negasit' }), { status: 404, headers: CORS })
@@ -195,6 +190,13 @@ Deno.serve(async (req: Request) => {
         eroare: `prea mare pentru citirea automată (${Math.round(Number(row.size_bytes) / 1048576)} MB > 60 MB) — de spart pe bucăți / procesat pe NAS` }).eq('id', docId)
       return new Response(JSON.stringify({ ok: true, skip: 'prea mare', continua: false }), { headers: CORS })
     }
+    // GARDA (2)+(3): înainte de orice descărcare — blocat / backoff / același fișier deja citit → fără descărcare
+    const meta = await metaObiect(supabase, BUCKET, row.fisier_path)
+    const garda = await gardaIncearca(supabase, docId, meta, 'edge:ofertare-ingest-doc')
+    if (garda.actiune !== 'continua') {
+      const id = docId; docId = null   // NU trece prin fail(): documentul nu se marchează 'eroare' (nu reintră în coadă)
+      return new Response(JSON.stringify({ ok: false, garda: garda.actiune, error: 'garda: ' + garda.motiv, pana_la: (garda as any).pana_la, doc_id: id, continua: false }), { headers: CORS })
+    }
     await supabase.from('ofertare_documente_atribuire')
       .update({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
       .eq('id', docId)
@@ -204,6 +206,10 @@ Deno.serve(async (req: Request) => {
     const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(row.fisier_path)
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
     const bytes = new Uint8Array(await blob.arrayBuffer())
+    const hash = await sha256Hex(bytes)
+    if (dejaIngeratLaHash({ ingerat_hash: garda.ingerat_hash ?? null } as any, hash, ['procesat', 'partial'].includes(row.status_procesare) && !reiaDeLaZero)) {
+      return new Response(JSON.stringify({ ok: true, skip: 'același sha256 deja citit', continua: false }), { headers: CORS })
+    }
 
     let pdf: PDFDocument
     try { pdf = await PDFDocument.load(bytes, { ignoreEncryption: true }) }
@@ -312,6 +318,7 @@ Deno.serve(async (req: Request) => {
     if (gata) upd.procesat_la = new Date().toISOString()
     const { error: upErr } = await supabase.from('ofertare_documente_atribuire').update(upd).eq('id', docId)
     if (upErr) return await fail('update: ' + upErr.message)
+    await gardaRezultat(supabase, docId, { ok: true, incheiat: gata, hash, size: bytes.length, etag: meta?.etag ?? null })
 
     return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: tokIn, tokens_out: tokOut }), { headers: CORS })
   } catch (e: any) {
