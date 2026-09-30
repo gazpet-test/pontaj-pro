@@ -16,19 +16,29 @@ export function alocareDinSnapshot(snap) {
 
 /**
  * (2) Payload-ul salvării (savePayment): ce intră în diurna_payments + diurna_payment_details.
- * Se salvează DOAR zile_diurnă / sumă_diurnă din alocare (în plafon); surplusul rămâne la salariu.
+ * Se salvează DOAR zile_diurnă / sumă_diurnă din alocare (în plafon); surplusul rămâne la salariu, dar se
+ * ÎNREGISTREAZĂ pe detaliu (zile_salariu, suma_salariu) și defalcarea pe luni (defalcare_luni) — ca reconcilierea
+ * ulterioară să nu recalculeze nimic.
  * @returns {{ plata: {period_from, period_to, payment_date, total_employees, total_days, total_amount, created_by},
- *             detalii: [{employee_id, employee_name, days, amount}] }}
+ *             detalii: [{employee_id, employee_name, days, amount, zile_diurna, zile_salariu, suma_salariu,
+ *                        defalcare_luni:[{luna, zile_diurna, suma_diurna, zile_salariu, suma_salariu}]}] }}
  * @throws dacă nu există nicio diurnă în perioadă (nimic de salvat)
  */
 export function construiestePayloadPlata({ snap, alocare, paymentDate, createdBy = null }) {
   if (!snap || !alocare) throw new Error('Snapshot sau alocare lipsă — nu se construiește payload')
+  const amt = snap.diurnaAmt
   const detalii = []
   for (const emp of snap.emps) {
     const a = alocare.get(emp.id)
     if (!a || a.N === 0) continue
     // includem toți cu diurne bifate, chiar dacă zilele în plafon = 0 (tot merge în salariu)
-    detalii.push({ employee_id: emp.id, employee_name: emp.name, days: a.zileDiurna, amount: a.sumaDiurna })
+    const defalcare_luni = (a.segmente || []).map(s => ({
+      luna: s.luna, zile_diurna: s.zileDiurna, suma_diurna: s.zileDiurna * amt, zile_salariu: s.zileSalariu, suma_salariu: s.zileSalariu * amt,
+    }))
+    detalii.push({
+      employee_id: emp.id, employee_name: emp.name, days: a.zileDiurna, amount: a.sumaDiurna,
+      zile_diurna: a.zileDiurna, zile_salariu: a.zileSalariu, suma_salariu: a.sumaSalariu, defalcare_luni,
+    })
   }
   if (!detalii.length) throw new Error('Nu există diurne în perioadă')
   const plata = {
@@ -41,6 +51,44 @@ export function construiestePayloadPlata({ snap, alocare, paymentDate, createdBy
   return { plata, detalii }
 }
 
+export const VERSIUNE_FORMULA_DIURNE = 'r5'
+
+/**
+ * (2b) Argumentele EXACTE pentru supabase.rpc('diurna_salveaza_plata', args) — o singură tranzacție pe server.
+ * Amprenta (sha256 hex peste forma canonică a pontajului din lunile snapshotului, tarif, zile legale și lista de
+ * angajați — amprentaHash din diurneAlocare.js) e recalculată de server; nepotrivire ⇒ P0002, nimic salvat.
+ * @throws dacă lipsește cheia de idempotență sau amprenta (nu se apelează RPC-ul „pe ghicite")
+ */
+export function construiesteApelRpc({ snap, alocare, idempotencyKey, amprenta, notes = null }) {
+  if (!idempotencyKey) throw new Error('Cheie de idempotență lipsă — nu se apelează salvarea')
+  if (typeof amprenta !== 'string' || !/^[0-9a-f]{64}$/.test(amprenta)) throw new Error('Amprenta datelor lipsă sau invalidă — nu se apelează salvarea')
+  const { detalii } = construiestePayloadPlata({ snap, alocare, paymentDate: null })
+  const employeeIds = snap.emps.map(e => e.id)
+  const tarifText = String(snap.diurnaAmt)
+  return {
+    p_period_from: snap.df, p_period_to: snap.dt, p_notes: notes,
+    p_detalii: detalii, p_idempotency_key: idempotencyKey,
+    p_amprenta: amprenta, p_employee_ids: employeeIds,
+    p_month_start: snap.monthStart, p_month_end: snap.monthEnd, p_tarif_text: tarifText,
+    p_baza_calcul: { amprenta, tarif: tarifText, month_start: snap.monthStart, month_end: snap.monthEnd, employee_ids_count: employeeIds.length, versiune_formula: VERSIUNE_FORMULA_DIURNE },
+  }
+}
+
+/**
+ * (2c) Orchestrarea salvării (savePayment, partea fără UI): UN apel RPC tranzacțional; fără insert-uri separate,
+ * fără ștergere compensatorie. Eroarea RPC-ului (inclusiv P0002 „datele s-au schimbat") se propagă neschimbată.
+ * @returns {Promise<{payment_id:number, inserted:boolean, total_employees?, total_days?, total_amount?}>}
+ */
+export async function salveazaPlataDiurne({ supabase, snap, alocare, idempotencyKey, amprenta, paymentDate = null, notes = null }) {
+  if (!supabase || typeof supabase.rpc !== 'function') throw new Error('Client Supabase lipsă')
+  const args = construiesteApelRpc({ snap, alocare, idempotencyKey, amprenta, notes })
+  if (paymentDate) args.p_payment_date = paymentDate
+  const { data, error } = await supabase.rpc('diurna_salveaza_plata', args)
+  if (error) { const e = new Error(error.message || String(error)); e.code = error.code; e.details = error.details; throw e }
+  if (!data || typeof data.payment_id !== 'number') throw new Error('Salvarea nu a întors id-ul plății')
+  return { payment_id: data.payment_id, inserted: data.inserted === true, total_employees: data.total_employees, total_days: data.total_days, total_amount: data.total_amount }
+}
+
 // (3) BT — BIC după codul băncii din IBAN
 export const BIC_MAP = { BTRL: 'BTRLRO22XXX', INGB: 'INGBROBUXX', RNCB: 'RNCBROBUXX', BRDE: 'BRDEROBUXX', BACX: 'BACXROBUXX', RZBR: 'RZBRROBUXX', CECE: 'CECEROBUXX', BRMA: 'BRMAROBUXX', UGBI: 'UGBIROBUXX', OTPV: 'OTPVROBUXX', TCCL: 'TCCLGB3L' }
 export function bicDinIban(iban) {
@@ -51,25 +99,39 @@ export function bicDinIban(iban) {
 export const HDR_BT = ['OrderNumber', 'SourceAccountNumber', 'TargetAccountNumber', 'BeneficiaryName', 'BeneficiaryBankBIC', 'BeneficiaryFiscalCode', 'Amount', 'PaymentRef1', 'PaymentRef2', 'ValueDate', 'Urgent']
 
 /**
- * (3) Rândurile fișierului BT — DOAR suma confirmată de diurnă (în plafonul lunar); surplusul NU se include.
+ * (3) Rândurile fișierului BT — din plata SALVATĂ (diurna_payments + diurna_payment_details citite din BD),
+ * NU dintr-un recalcul: suma din BT = amount-ul înregistrat pe detaliu. Detaliile cu amount ≤ 0 (tot surplusul →
+ * salariu) NU apar. IBAN-ul angajatului vine din `emps` (employees.iban) după employee_id.
+ * Compatibilitate (teste vechi): dacă se dau `snap` + `alocare` în loc de `plata` + `detalii`, detaliile se
+ * derivă prin construiestePayloadPlata — App.jsx NU folosește calea asta.
+ * @param {{plata:{period_from,period_to}, detalii:[{employee_id, employee_name, amount}], emps:[{id,name,iban}], ibanFirma:string, dataValuta:string}} p
  * @returns {{ rows: Array<Array>, faraIBAN: string[], total: number }}
- * @throws dacă nu există nicio sumă confirmată de plătit
+ * @throws dacă lipsește IBAN-ul firmei (fără fallback), lipsesc detaliile sau nu există nicio sumă de plătit
  */
-export function construiesteRanduriBT({ snap, alocare, ibanFirma, dataValuta }) {
-  if (!snap || !alocare) throw new Error('Snapshot sau alocare lipsă — nu se construiesc rândurile BT')
-  if (!ibanFirma) throw new Error('IBAN-ul firmei lipsește (setarea „iban_firma")')
+export function construiesteRanduriBT({ plata, detalii, emps, snap, alocare, ibanFirma, dataValuta }) {
+  if (!ibanFirma || !String(ibanFirma).trim()) throw new Error('IBAN-ul firmei lipsește (setarea „iban_firma")')
+  if (!detalii && snap && alocare) {
+    emps = emps || snap.emps
+    try { const p = construiestePayloadPlata({ snap, alocare, paymentDate: null }); plata = p.plata; detalii = p.detalii }
+    catch (e) { if (!/Nu există diurne/.test(e?.message || '')) throw e; detalii = [] }   // fără diurne ⇒ fără rânduri BT
+  }
+  if (!Array.isArray(detalii)) throw new Error('Plata sau detaliile lipsă — nu se construiesc rândurile BT')
+  if (!Array.isArray(emps)) throw new Error('Lista de angajați lipsă — nu se construiesc rândurile BT')
+  const empById = new Map(emps.map(e => [e.id, e]))
   const rows = [], faraIBAN = []
   let nr = 1
-  for (const emp of snap.emps) {
-    const a = alocare.get(emp.id)
-    if (!a || a.N === 0) continue
-    const sumaConfirmata = a.sumaDiurna
-    if (sumaConfirmata <= 0) continue   // tot surplusul — nu apare în BT diurne
-    if (!emp.iban) faraIBAN.push(emp.name)
-    rows.push([nr++, ibanFirma, emp.iban || '', emp.name, bicDinIban(emp.iban), '', sumaConfirmata, 'diurna', 'diurna', dataValuta, 'F'])
+  for (const d of detalii) {
+    const suma = Number(d.amount)
+    if (!Number.isFinite(suma)) throw new Error(`Sumă înregistrată nenumerică pe detaliul angajatului ${d.employee_id} („${d.amount}") — BT oprit`)
+    if (suma <= 0) continue   // tot surplusul — nu apare în BT diurne
+    const emp = empById.get(d.employee_id)
+    const nume = d.employee_name || emp?.name || String(d.employee_id)
+    const iban = emp?.iban || ''
+    if (!iban) faraIBAN.push(nume)
+    rows.push([nr++, ibanFirma, iban, nume, bicDinIban(iban), '', suma, 'diurna', 'diurna', dataValuta, 'F'])
   }
   if (!rows.length) throw new Error('Nu există diurne confirmate de plătit în această perioadă')
-  return { rows, faraIBAN, total: rows.reduce((s, r) => s + r[6], 0) }
+  return { rows, faraIBAN, total: rows.reduce((s, r) => s + r[6], 0), plata }
 }
 
 /**

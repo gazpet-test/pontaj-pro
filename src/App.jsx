@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, createContext, useContext, useRef, la
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
-import { incarcaSnapshotDiurne, platitAnteriorPeLuni, rezumatAlocare, inceputLuna, zileLucratoareLuna } from './diurneAlocare.js'
-import { alocareDinSnapshot, construiestePayloadPlata, construiesteRanduriBT, construiesteRanduriExport, textDeVerificat, HDR_BT } from './diurneFlux.js'
+import { incarcaSnapshotDiurne, platitAnteriorPeLuni, rezumatAlocare, inceputLuna, zileLucratoareLuna, amprentaHash } from './diurneAlocare.js'
+import { alocareDinSnapshot, construiestePayloadPlata, construiesteRanduriBT, construiesteRanduriExport, textDeVerificat, HDR_BT, salveazaPlataDiurne } from './diurneFlux.js'
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -2075,6 +2075,7 @@ function ReportsPage() {
   const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
   const [sf,setSf]=useState(todayStr()); const [st2,setSt2]=useState(todayStr())
   const [savingPayment,setSavingPayment]=useState(false); const savingPaymentRef=useRef(false)   // anti dublu-click (state-ul întârzie un render)
+  const cheieIdemDiurneRef=useRef({scop:null,key:null})   // cheia de idempotență a salvării: generată O DATĂ la afișarea confirmării, refolosită la retry (aceeași perioadă)
   const [payments,setPayments]=useState([])
   const [selectedPayment,setSelectedPayment]=useState(null)
   const [paymentDetails,setPaymentDetails]=useState([])
@@ -2971,7 +2972,7 @@ function ReportsPage() {
     // Scop explicit pe șantiere: admin → global; altfel EXACT șantierele profilului ([] → throw „niciun șantier permis")
     const scop=isAdmin?{scopGlobal:true}:{siteIds:profile?.site_ids||[]}
     const snap=await incarcaSnapshotDiurne(supabase,{df,dt,...scop})
-    // Alocare pe plafonul LUNAR per angajat — aceeași funcție ca în exportDiurne și exportBancaDiurne:
+    // Alocare pe plafonul LUNAR per angajat — aceeași funcție ca în exportDiurne:
     // C = zile lucr. − CO pe zile lucr., TOATE bifele consumă (și weekend), surplus → salariu.
     // Payload-ul (plata + detalii) se construiește PUR în diurneFlux.js din acest snapshot + alocare.
     const alocare=alocareDinSnapshot(snap)
@@ -2980,10 +2981,17 @@ function ReportsPage() {
     try{ payload=construiestePayloadPlata({snap,alocare,paymentDate:todayStr(),createdBy:null}) }
     catch(e){ showToast(e?.message||'Nu există diurne în perioadă','warn');return }
     const empStats=payload.detalii
+    // Amprenta datelor APROBATE (sha256 peste pontaj/CO/tarif/calendar/angajați din snapshot) — serverul o recalculează
+    // sub lock; dacă cineva a modificat ceva între confirmare și salvare ⇒ P0002 și nimic salvat.
+    const amprenta=await amprentaHash(snap)
 
     // Confirmare cu rezumatul a CE se salvează (recalculat din BD acum, nu din preview-ul de mai devreme)
     const rz=rezumatAlocare(alocare,emps)
     const conflicteTxt=(rz.conflicte||rz.conflicteAnterior||rz.conflicteUlterior)?`\n⚠ Conflicte CO + diurnă bifată: ${rz.conflicte} angajați în tranșă, ${rz.conflicteAnterior} înainte de tranșă, ${rz.conflicteUlterior} după tranșă (în aceeași lună) — se semnalează, nu se rezolvă automat`:'\nConflicte CO + diurnă: 0'
+    // Cheia de idempotență: O SINGURĂ dată pentru această perioadă; la retry (eroare de rețea) se refolosește ⇒ serverul nu dublează
+    const scopCheie=`${df}|${dt}`
+    if(cheieIdemDiurneRef.current.scop!==scopCheie||!cheieIdemDiurneRef.current.key) cheieIdemDiurneRef.current={scop:scopCheie,key:crypto.randomUUID()}
+    const idempotencyKey=cheieIdemDiurneRef.current.key
     const okSave=window.confirm(
       `💾 Salvezi plata de diurne ${new Date(df).toLocaleDateString('ro-RO')} — ${new Date(dt).toLocaleDateString('ro-RO')}?\n\n`+
       `Angajați: ${rz.angajati}\nZile diurnă (în plafon): ${rz.zileDiurna}\nSumă diurnă (se salvează): ${rz.sumaDiurna.toLocaleString('ro-RO')} RON\n`+
@@ -2991,21 +2999,21 @@ function ReportsPage() {
     )
     if(!okSave){showToast('Salvare anulată','warn');return}
 
-    // Re-verificare suprapunere IMEDIAT înainte de insert (altcineva / alt tab putea salva între timp)
+    // Re-verificare suprapunere IMEDIAT înainte de salvare (altcineva / alt tab putea salva între timp) — pre-check UI;
+    // garanția reală e pe server (lock advisory + trigger anti-suprapunere per angajat, într-o singură tranzacție)
     const blocaj2=suprapunereBlocanta(await citesteSuprapuneri())
     if(blocaj2){showToast('⚠ '+blocaj2+' (salvată între timp)','error');return}
 
-    const uid=(await supabase.auth.getUser()).data.user?.id
-    const {data:payment,error}=await supabase.from('diurna_payments').insert({...payload.plata,created_by:uid}).select().single()
-    if(error||!payment) throw new Error('Plata nu s-a putut salva: '+(error?.message||'fără răspuns'))
-    // Detaliile DOAR după ce plata s-a inserat; dacă eșuează → compensare (ștergem plata creată) + anunț
-    const {error:eDet}=await supabase.from('diurna_payment_details').insert(payload.detalii.map(e=>({payment_id:payment.id,...e})))
-    if(eDet){
-      const {error:eDel}=await supabase.from('diurna_payments').delete().eq('id',payment.id)
-      if(eDel) throw new Error(`Detaliile nu s-au salvat (${eDet.message||eDet}) și plata #${payment.id} NU a putut fi ștearsă (${eDel.message||eDel}) — verifică manual în Istoric`)
-      throw new Error(`Detaliile nu s-au salvat (${eDet.message||eDet}) — plata #${payment.id} a fost ștearsă, nimic nu a rămas salvat`)
+    // UN singur apel RPC tranzacțional (plată + detalii); fără insert-uri separate, fără ștergere compensatorie
+    let rezultat
+    try{ rezultat=await salveazaPlataDiurne({supabase,snap,alocare,idempotencyKey,amprenta,paymentDate:todayStr()}) }
+    catch(e){
+      if(e?.code==='P0002') cheieIdemDiurneRef.current={scop:null,key:null}   // datele s-au schimbat: următoarea încercare e o plată nouă
+      showToast(e?.message||String(e),'error'); return
     }
-    playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
+    cheieIdemDiurneRef.current={scop:null,key:null}
+    if(!rezultat.inserted){ showToast(`Plata există deja (retry) — #${rezultat.payment_id}`,'warn'); return }
+    playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată #${rezultat.payment_id}: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
   }catch(e){console.error('savePayment err:',e);showToast('Eroare la salvare: '+(e?.message||e),'error')}finally{savingPaymentRef.current=false;setSavingPayment(false)}
   }
 
@@ -4993,25 +5001,30 @@ function ReportsPage() {
   }
 
   const exportBancaDiurne=async()=>{
-    // Export BT format — DOAR suma confirmată de diurnă (în limita bugetului lunar)
-    // Surplusul care merge în salariu NU se include aici
+    // Export BT format — din plata SALVATĂ pe perioada exactă (diurna_payments + detalii), NU dintr-un recalcul:
+    // suma din BT = amount-ul înregistrat; surplusul (salariu) nu e în detalii cu sumă > 0, deci nu apare.
     if(!df||!dt){showToast('Selectează perioada pentru diurne','warn');return}
     setExpBT(true)
     try{
       if(df>dt){showToast('Interval inversat: „de la" e după „până la"','error');return}
-      // Snapshot COMUN (diurneAlocare.js) — identic cu savePayment și exportDiurne: settings (tarif, IBAN firmă),
-      // calendar, angajați eligibili, TOATE înregistrările lunilor atinse. Citire eșuată → throw → toast, fără export.
-      const scop=isAdmin?{scopGlobal:true}:{siteIds:profile?.site_ids||[]}
-      const snap=await incarcaSnapshotDiurne(supabase,{df,dt,...scop})
-      const ibanFirma=snap.ibanFirma||'RO25BTRLRONCRT0T18017E01'
-
-      // Alocare comună pe plafonul lunar (diurneAlocare.js) — identică cu savePayment și exportDiurne;
-      // rândurile BT se construiesc PUR în diurneFlux.js din același snapshot + alocare
-      const alocare=alocareDinSnapshot(snap)
+      const {data:plati,error:ePl}=await supabase.from('diurna_payments').select('*').eq('period_from',df).eq('period_to',dt)
+      if(ePl) throw new Error('Nu s-au putut citi plățile: '+(ePl.message||ePl))
+      if(!plati||plati.length===0){showToast('Nu există plată salvată pentru această perioadă — salvează întâi','warn');return}
+      if(plati.length>1){showToast(`Există ${plati.length} plăți salvate exact pe această perioadă (id ${plati.map(p=>p.id).join(', ')}) — alege din Istoric`,'error');return}
+      const plata=plati[0]
+      const {data:detalii,error:eDet}=await supabase.from('diurna_payment_details').select('*').eq('payment_id',plata.id).order('employee_id')
+      if(eDet) throw new Error('Nu s-au putut citi detaliile plății: '+(eDet.message||eDet))
+      if(!detalii||detalii.length===0){showToast(`Plata #${plata.id} nu are detalii salvate — nimic de exportat`,'error');return}
+      const empIds=[...new Set(detalii.map(d=>d.employee_id))]
+      const {data:emps,error:eEmp}=await supabase.from('employees').select('id,name,iban').in('id',empIds)
+      if(eEmp) throw new Error('Nu s-au putut citi angajații: '+(eEmp.message||eEmp))
+      const {data:sIban,error:eSt}=await supabase.from('settings').select('key,value').eq('key','iban_firma').maybeSingle()
+      if(eSt) throw new Error('Nu s-a putut citi setarea „iban_firma": '+(eSt.message||eSt))
+      const ibanFirma=sIban?.value   // fără fallback: lipsă ⇒ construiesteRanduriBT aruncă
       const _td=new Date(); const excelDateStr2=`${String(_td.getDate()).padStart(2,'0')}/${String(_td.getMonth()+1).padStart(2,'0')}/${_td.getFullYear()}`
       const HDR=HDR_BT
       let bt
-      try{ bt=construiesteRanduriBT({snap,alocare,ibanFirma,dataValuta:excelDateStr2}) }
+      try{ bt=construiesteRanduriBT({plata,detalii,emps:emps||[],ibanFirma,dataValuta:excelDateStr2}) }
       catch(e){ showToast(e?.message||'Nu există diurne confirmate de plătit în această perioadă','warn');setExpBT(false);return }
       const {rows,faraIBAN}=bt
 
@@ -5023,7 +5036,7 @@ function ReportsPage() {
       XLSX.writeFile(wb,`BT_Diurne_${df}_${dt}.xlsx`)
       const totalConfirmat=bt.total
       const msg=faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:' ✓'
-      playBeep(1040,0.18); showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
+      playBeep(1040,0.18); showToast(`✓ Export BT Diurne (plata #${plata.id}) — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
     }catch(e){console.error('exportBancaDiurne err:',e);showToast('Export BT oprit: '+(e?.message||e),'error')}finally{setExpBT(false)}
   }
 
