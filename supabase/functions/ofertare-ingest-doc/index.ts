@@ -135,8 +135,10 @@ Deno.serve(async (req: Request) => {
   let inc: Incercare | null = null
 
   const fail = async (msg: string) => {
-    if (inc) await inc.inchide({ rezultat: 'esec', eroare: msg })
-    if (docId) { try { await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: msg.slice(0, 500) }).eq('id', docId) } catch (_) {} }
+    // runda 3 (J2): cu token, starea 'eroare' se scrie de server ATOMIC cu eșecul (o încercare preluată nu mai atinge documentul);
+    // fără token (erori înainte de gardă, fără descărcare), ca înainte
+    if (inc) await inc.inchide({ rezultat: 'esec', eroare: msg, doc: { status_procesare: 'eroare', eroare: msg.slice(0, 500) } })
+    else if (docId) { try { await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: msg.slice(0, 500) }).eq('id', docId) } catch (_) {} }
     return new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
   }
 
@@ -152,7 +154,7 @@ Deno.serve(async (req: Request) => {
       if (na.eroare) { const id = docId; docId = null; return new Response(JSON.stringify({ error: na.eroare, doc_id: id }), { status: na.status, headers: CORS }) }   // fără marcarea documentului ca eroare
       pornitDe = na.uid }
 
-    const { data: row, error: rErr } = await supabase.from('ofertare_documente_atribuire').select('*').eq('id', docId).single()
+    let { data: row, error: rErr } = await supabase.from('ofertare_documente_atribuire').select('*').eq('id', docId).single()
     if (rErr || !row) return new Response(JSON.stringify({ error: 'document negasit' }), { status: 404, headers: CORS })
     // 22.09.2026 (Jilava): resturile de arhiva macOS (__MACOSX/._X.pdf = resource fork AppleDouble, .DS_Store)
     // nu sunt documente — 212-268 bytes fara antet PDF. Cazute pe 'eroare', se reluau la fiecare Procesare.
@@ -163,7 +165,7 @@ Deno.serve(async (req: Request) => {
     }
     // 'partial' se poate relua de la zero cu {reia:true} (ex. după ce s-a mărit plafonul);
     // 'procesat' nu se reia — ar dubla costul fără motiv.
-    const reiaDeLaZero = reia === true && row.status_procesare === 'partial'
+    let reiaDeLaZero = reia === true && row.status_procesare === 'partial'
     if (row.status_procesare === 'procesat' || (row.status_procesare === 'partial' && !reiaDeLaZero)) {
       return new Response(JSON.stringify({ ok: true, skip: 'deja ' + row.status_procesare, continua: false, pagini_necitite: row.pagini_necitite || [] }), { headers: CORS })
     }
@@ -216,6 +218,19 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ ok: false, garda: garda.actiune, error: 'garda: ' + garda.motiv, pana_la: (garda as any).pana_la, doc_id: id, continua: false }), { headers: CORS })
     }
     inc = incercareGarda(supabase, docId, garda.token!)
+    // Runda 3 (J1): `row` a fost citit ÎNAINTE de token — între timp altă încercare poate fi avansat/încheiat documentul.
+    // Acum lease-ul e al nostru (nimeni altcineva nu mai scrie): recitim și recalculăm TOT ce depinde de stare (reia, start,
+    // pagini_procesate, text_extras, pagini_necitite). Încheiat/ignorat între timp → închidem 'predat' (contoare neatinse), fără descărcare.
+    {
+      const { data: acum, error: eAcum } = await supabase.from('ofertare_documente_atribuire').select('*').eq('id', docId).single()
+      if (eAcum || !acum) return await fail('recitire după token: ' + (eAcum?.message || 'lipsă'))
+      row = acum
+      reiaDeLaZero = reia === true && row.status_procesare === 'partial'
+      if (row.status_procesare === 'procesat' || (row.status_procesare === 'partial' && !reiaDeLaZero) || row.status_procesare === 'ignorat') {
+        await inc.inchide({ rezultat: 'predat', eroare: 'documentul s-a încheiat între timp: ' + row.status_procesare })
+        return new Response(JSON.stringify({ ok: true, skip: 'deja ' + row.status_procesare + ' (recitit sub lease)', continua: false }), { headers: CORS })
+      }
+    }
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
     const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
 
@@ -230,9 +245,12 @@ Deno.serve(async (req: Request) => {
       await inc.inchide({ rezultat: 'succes', hash, size: bytes.length, etag: meta?.etag ?? null })
       return new Response(JSON.stringify({ ok: true, skip: 'același sha256 deja citit', continua: false }), { headers: CORS })
     }
-    await supabase.from('ofertare_documente_atribuire')
-      .update({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
-      .eq('id', docId)
+    // runda 3 (J2): marcajul in_lucru trece tot prin gardă (scris doar cu tokenul activ; prelungește lease-ul)
+    const mk = await inc.marcheaza({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
+    if (mk?.acceptat !== true) {
+      const id = docId; docId = null
+      return new Response(JSON.stringify({ ok: false, garda: 'token_pierdut', error: 'garda: lease-ul nu mai e al nostru — nu citesc', doc_id: id, continua: false }), { headers: CORS })
+    }
 
     let pdf: PDFDocument
     try { pdf = await PDFDocument.load(bytes, { ignoreEncryption: true }) }
@@ -339,10 +357,14 @@ Deno.serve(async (req: Request) => {
     }
     if (start === 0 && antet) { upd.antet = antet; upd.revizie = antet?.revizie || row.revizie || null; upd.ocr = pareScanat === true }
     if (gata) upd.procesat_la = new Date().toISOString()
-    const { error: upErr } = await supabase.from('ofertare_documente_atribuire').update(upd).eq('id', docId)
-    if (upErr) return await fail('update: ' + upErr.message)
-    // încheiat → 'succes' (memorează amprenta: nu se mai descarcă); felie citită, documentul continuă → 'progres'
-    await inc.inchide({ rezultat: gata ? 'succes' : 'progres', hash, size: bytes.length, etag: meta?.etag ?? null })
+    // încheiat → 'succes' (memorează amprenta: nu se mai descarcă); felie citită, documentul continuă → 'progres'.
+    // Runda 3 (J2): documentul se scrie de SERVER, în aceeași tranzacție cu verificarea tokenului — o încercare veche nu mai
+    // poate suprascrie progresul uneia noi. Respins / RPC pierdut → NU s-a salvat nimic, spunem asta.
+    await inc.inchide({ rezultat: gata ? 'succes' : 'progres', hash, size: bytes.length, etag: meta?.etag ?? null, doc: upd })
+    if (inc.raspuns?.acceptat !== true) {
+      const id = docId; docId = null
+      return new Response(JSON.stringify({ ok: false, garda: 'rezultat_respins', error: 'garda: rezultatul NU s-a salvat (token vechi/străin sau garda indisponibilă): ' + (inc.raspuns?.motiv ?? 'fără răspuns'), doc_id: id, continua: false }), { headers: CORS })
+    }
 
     return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: tokIn, tokens_out: tokOut }), { headers: CORS })
   } catch (e: any) {

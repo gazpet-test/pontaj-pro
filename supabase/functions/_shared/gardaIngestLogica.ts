@@ -20,7 +20,10 @@ export const GARDA = {
   pragEdgeBytes: 60 * 1024 * 1024,   // edge-ul refuză fără descărcare peste pragul ăsta (size_bytes din BD SAU mărimea din Storage)
 }
 export type ConfigGarda = typeof GARDA
-// Plafonul de egress al căii edge pe UN document, între două reactivări: maxDescarcari × pragEdgeBytes (= 5 033 164 800 B).
+// Plafonul NOMINAL de egress al căii edge pe UN document, între două reactivări, când o sursă de mărime (BD sau Storage) e
+// corectă: maxDescarcari × pragEdgeBytes (= 5 033 164 800 B). Limita dură locală (ambele mărimi greșite) = 80 × 200 MB ≈ 16 GB.
+// Termenul lucrului local al workerului (runda 3, J2): sub lease, ca nicio operație locală să nu depășească lease-ul.
+export const TERMEN_LOCAL_MS = 8 * 60_000
 export const egressMaximDocumentBytes = (cfg: ConfigGarda = GARDA) => cfg.maxDescarcari * cfg.pragEdgeBytes
 
 // ── (1) poarta de rol ─────────────────────────────────────────────────────────────────────────────
@@ -137,11 +140,15 @@ export function backoffSec(incercariEsuate: number, cfg: ConfigGarda = GARDA): n
 //  progres = o felie citită, documentul continuă — eșecurile se resetează;
 //  predat  = workerul NAS predă documentul altei căi (edge pentru scan, citire_mare peste 60 MB) — contoarele NU se ating;
 //  esec    = eșecurile +1, backoff 60 s × 2^(n−1) ≤ 6 h, blocare + notificare owner la plafon.
-export type Rezultat = 'succes' | 'progres' | 'predat' | 'esec'
-export type RaportIncercare = { rezultat: Rezultat; hash?: string | null; size?: number | null; etag?: string | null; eroare?: string | null }
+//  marcaj  = (runda 3) scriere intermediară a documentului + prelungirea lease-ului; încercarea rămâne deschisă.
+// `doc` (runda 3, J2): coloanele documentului de scris — le scrie SERVERUL, în aceeași tranzacție cu verificarea tokenului
+// (o încercare preluată/expirată nu mai poate suprascrie rezultatul alteia).
+export type Rezultat = 'succes' | 'progres' | 'predat' | 'esec' | 'marcaj'
+export type RaportIncercare = { rezultat: Rezultat; hash?: string | null; size?: number | null; etag?: string | null; eroare?: string | null; doc?: Record<string, unknown> | null }
 
 // Starea după un rezultat ACCEPTAT (oglinda funcției SQL ofertare_ingest_garda_rezultat — testată aici, aplicată acolo).
 export function dupaRezultat(s: StareGarda, r: Rezultat, acum: Date, cfg: ConfigGarda = GARDA): StareGarda & { blocat_acum: boolean } {
+  if (r === 'marcaj') return { ...s, blocat_acum: false }
   const esuate = r === 'esec' ? s.incercari_esuate + 1 : r === 'predat' ? s.incercari_esuate : 0
   const blocat = s.blocat || esuate >= cfg.maxIncercari || s.descarcari >= cfg.maxDescarcari
   return {
@@ -150,7 +157,8 @@ export function dupaRezultat(s: StareGarda, r: Rezultat, acum: Date, cfg: Config
   }
 }
 
-// ── exact-once: fiecare încercare acordată (incearca → continua) se închide cu EXACT un _rezultat ──
+// ── cel mult un raport de închidere trimis per token (runda 3: formularea corectă, nu „exact-once” end-to-end) ──
+// + contabilizare fail-safe a unui raport pierdut: lease-ul expiră, iar următorul _incearca îl închide ca abandonat (eșec).
 // Încercarea se marchează închisă SINCRON, înainte de RPC: o a doua închidere (alt drum, excepție după închidere, finally)
 // nu mai trimite nimic. Eroarea RPC-ului nu se propagă (nu maschează excepția originală); rezultatul pierdut pe rețea
 // lasă lease-ul să expire, iar următorul _incearca îl închide ca „abandonat” (eșec) — tot exact un rezultat per token.
@@ -158,19 +166,27 @@ export type Incercare = {
   readonly token: string
   readonly inchisa: boolean
   readonly raport: RaportIncercare | null
+  readonly raspuns: any                            // răspunsul serverului la închidere ({acceptat, …}) sau null (RPC pierdut)
   inchide(r: RaportIncercare): Promise<boolean>   // true = trimis acum; false = era deja închisă (nimic trimis)
+  marcheaza(doc: Record<string, unknown> | null): Promise<any>   // scriere intermediară + prelungire lease; null dacă e închisă
 }
 export function deschideIncercare(token: string, trimite: (token: string, r: RaportIncercare) => Promise<unknown>): Incercare {
   let raport: RaportIncercare | null = null
+  let raspuns: any = null
   return {
     token,
     get inchisa() { return raport !== null },
     get raport() { return raport },
+    get raspuns() { return raspuns },
     async inchide(r: RaportIncercare) {
       if (raport !== null) return false
       raport = r
-      try { await trimite(token, r) } catch (_) { /* lease-ul expiră → închisă ca abandonată de următorul _incearca */ }
+      try { raspuns = await trimite(token, r) } catch (_) { raspuns = null /* lease-ul expiră → abandonată la următorul _incearca */ }
       return true
+    },
+    async marcheaza(doc) {
+      if (raport !== null) return null
+      try { return await trimite(token, { rezultat: 'marcaj', doc }) } catch (_) { return null }
     },
   }
 }
@@ -183,11 +199,12 @@ export const plasaExactOnce = (inc: Incercare | null): Promise<boolean> =>
 //  - a aruncat înainte să o închidă → 'esec' cu mesajul excepției, apoi excepția se re-aruncă (apelantul o tratează ca înainte);
 //  - s-a întors fără să o închidă → 'esec' („fără rezultat explicit”) — plasa.
 // Edge-ul are aceeași structură scrisă direct în handler (catch → fail() închide 'esec'; finally → plasaExactOnce).
-export async function cuIncercare<T>(inc: Incercare, lucru: (inc: Incercare) => Promise<T>): Promise<T> {
+// docLaEsec (runda 3): coloanele documentului scrise ATOMIC cu eșecul (ex. status 'eroare'), tot sub token.
+export async function cuIncercare<T>(inc: Incercare, lucru: (inc: Incercare) => Promise<T>, docLaEsec?: (mesaj: string) => Record<string, unknown>): Promise<T> {
   try {
     return await lucru(inc)
   } catch (e) {
-    await inc.inchide({ rezultat: 'esec', eroare: 'excepție: ' + mesajEroare(e) })
+    await inc.inchide({ rezultat: 'esec', eroare: 'excepție: ' + mesajEroare(e), doc: docLaEsec ? docLaEsec(mesajEroare(e)) : null })
     throw e
   } finally {
     await plasaExactOnce(inc)
@@ -197,4 +214,11 @@ export async function cuIncercare<T>(inc: Incercare, lucru: (inc: Incercare) => 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
   return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+// Termen executabil (runda 3, J2): promisiunea pierde cursa după `ms` → excepție „termen depășit” (→ 'esec' prin cuIncercare).
+export function cuTermen<T>(p: Promise<T>, ms: number, ce: string): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined
+  const limita = new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error(`termen depășit: ${ce} (${Math.round(ms / 1000)} s)`)), Math.max(0, ms)) })
+  return Promise.race([p, limita]).finally(() => clearTimeout(t))
 }

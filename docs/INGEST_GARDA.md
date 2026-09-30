@@ -1,6 +1,6 @@
 # Garda citirii automate Ofertare (`ofertare-ingest-doc` + worker NAS)
 
-**Stare: DRAFT runda 2 — nimic deployat, nimic aplicat.** Închide condițiile de reluare a citirii automate după incidentul de
+**Stare: DRAFT runda 3 — nimic deployat, nimic aplicat. GO pe MECANISM ≠ reluarea ingestului (vezi „Livrare separată”).** Închide condițiile de reluare a citirii automate după incidentul de
 egress din 24–25.09.2026 (`docs/INCIDENT_EGRESS_2026-09-25.md`, verdictul `docs/INCIDENT_EGRESS_VERDICT_COPILOT_2026-09-30.md`,
 `docs/MONITOR_EGRESS.md`, PR #478). Runda 2 răspunde la NO-GO Copilot r1 (secțiunea [Runda 2](#runda-2-no-go-copilot-r1)).
 
@@ -22,10 +22,10 @@ Garanția corectă e **egress mărginit**:
 |---|---|
 | Descărcări / document între două reactivări (`maxDescarcari`, SQL `MAX_DL`) | **80** (toate căile gărzii: invocări edge + drumul local NAS) |
 | Mărimea maximă descărcată de edge | **60 MiB** (62 914 560 B): refuz fără descărcare dacă `size_bytes` din BD **sau** (runda 2) mărimea din metadatele Storage depășește pragul |
-| **Plafon de egress pe document, calea gărzii** | **80 × 60 MiB = 4 800 MiB ≈ 4,69 GiB ≈ 5,03 GB** (`egressMaximDocumentBytes()` = 5 033 164 800 B) |
+| **Plafon NOMINAL de egress pe document, calea edge** (valabil când cel puțin o sursă de mărime — BD sau Storage — e corectă) | **80 × 60 MiB = 4 800 MiB ≈ 4,69 GiB ≈ 5,03 GB** (`egressMaximDocumentBytes()` = 5 033 164 800 B) |
 | După încheiere (amprenta cunoscută) | **0** descărcări (status încheiat iese înainte; `deja_ingerat` pe mărime + etag) |
-| Drumul `citire_mare` (> 60 MB, NAS; în afara contorului gărzii) | ≤ 3 încercări × ≤ 200 MB (`MAX_INCERCARI_MARE`, `MAX_MARE_BYTES`) = 600 MB/document până la reset manual |
-| Limita teoretică dacă ambele mărimi (BD + Storage) lipsesc/sunt greșite | limita bucket-ului, 200 MB/descărcare ⇒ 16 000 MB/document |
+| Drumul `citire_mare` (> 60 MiB, NAS) — runda 3: **sub gardă** (token + lease reînnoit + descărcarea numărată în aceleași 80, fără restituire la SIGTERM) | contorul propriu: ≤ 3 încercări × ≤ 200 MiB (`MAX_INCERCARI_MARE`, `MAX_MARE_BYTES`) = **600 MiB** între reseturi; contorul gărzii (nerestituibil) plafonează oricum la 80 descărcări |
+| **Limita DURĂ locală** (ambele mărimi lipsă/greșite) | limita bucket-ului, 200 MiB/descărcare ⇒ 80 × 200 MiB = 16 000 MiB ≈ 15,6 GiB (~16,8 GB) pe document — **de aceea reluarea depinde OBLIGATORIU de #543** |
 
 Comparație cu incidentul: doc 770 (99,9 MB) × ~16 000 descărcări ≈ 1,6 TB. Plafonul e pe **document**; o licitație cu N documente
 poate consuma teoretic N × 4,69 GiB (200 de documente ≈ 938 GiB), peste cota ciclului (250 GB). De aici condiția de mai jos.
@@ -45,7 +45,7 @@ A = ce e în PR (egress mărginit + #543); B = schimbare de arhitectură, separa
 - **Tick-ul pg_cron `ofertare_ingest_tick`** (fallback când workerul NAS nu dă heartbeat) cheamă edge-ul cu `SUPABASE_ANON_JWT` din Vault. După deploy, apelurile lui sunt refuzate (401) — adică fallback-ul devine inert (fail-closed). Variante: A) îl lăsăm inert (recomandat până la reluarea completă); B) migrare separată care îi adaugă headerul `x-ingest-secret` citit din Vault (necesită secret în Vault = aceeași valoare ca în env-ul funcției).
 - Drumul local (pdftotext) → AI: documentul se descarcă o dată de worker și o dată per invocare edge; toate se numără în plafonul de 80.
 - Un document în curs cu multe felii (ex. 100 pagini Sonnet, felii de 2 → ~50 invocări) încape în 80; plafonul se poate ridica doar printr-o migrare nouă (constantele sunt oglindite în `GARDA`).
-- Lease-ul (10 min): o invocare edge trăiește ≤ 400 s (Pro), gateway-ul taie la 150 s; drumul local NAS (≤ 60 MiB + pdftotext + antet Haiku cu timeout 60 s) durează tipic câteva minute. O încercare care depășește 10 min își pierde lease-ul: rezultatul ei întârziat e respins (`token vechi`) și raportat, iar încercarea e numărată ca abandonată (eșec). Rezidual: pdftotext nu are timeout pe drumul local.
+- Lease-ul (10 min): o invocare edge trăiește ≤ 400 s (Pro), gateway-ul taie la 150 s; drumul local NAS (≤ 60 MiB + pdftotext + antet Haiku cu timeout 60 s) durează tipic câteva minute. Runda 3: lucrul local al workerului (download, pdfinfo, pdftotext, extragerea Word) are **termen executabil de 8 min** (`TERMEN_LOCAL_MS`, sub lease-ul de 10 min; procesul e oprit la termen ⇒ `esec`). Rezultatul unei încercări care a depășit lease-ul: **acceptat** dacă tokenul ei e încă cel memorat (nicio altă încercare nu a preluat documentul — nu a pornit nimic altceva); **respins** (`token vechi`, raportat, `rezultate_respinse +1`) dacă între timp un `_incearca` a preluat documentul — preluarea închide încercarea veche ca abandonată (eșec). Calea `citire_mare` (până la ~80 min) își prelungește lease-ul la 2 min (`marcaj`); prelungire respinsă ⇒ se oprește la felia următoare.
 - „Reia” (partial → de la zero, din UI) trimite gărzii mărime/etag goale, ca să nu fie oprit de `deja_ingerat` (runda 2; în runda 1 reluarea unui document parțial nemodificat era blocată).
 
 ## Ordinea de punere în funcțiune (fiecare pas cu acordul lui Razvan)
@@ -57,7 +57,7 @@ A = ce e în PR (egress mărginit + #543); B = schimbare de arhitectură, separa
 
 Revenire: `supabase/revenire/20260930k_ofertare_ingest_garda_ROLLBACK.sql` (NU e migrare; armare proprie
 `gazpet.revenire_20260930k = 'SCOATE_GARDA_INGEST:' || txid_current()` în aceeași tranzacție; pornește doar din amprenta exactă a
-patch-ului). Cu v13 deployat, după revenire citirea automată se oprește complet (RPC lipsă ⇒ fail-closed). Redeploy v12 = decizie
+patch-ului). Cu v13 deployat, după revenire se opresc (RPC lipsă ⇒ fail-closed) DOAR căile puse sub gardă: `ofertare-ingest-doc`, `ofertare-word-text` și toate căile workerului NAS (pdftotext, AI, felii > 60 MiB, Word). NU se opresc cititoarele din afara gărzii (ex. `ofertare-plansa-citeste`, `ofertare-document-nou-citeste`, `ofertare-clarificare-citeste`) — nu sunt acoperite de acest PR. Redeploy v12 = decizie
 separată (v12 are calea anon).
 
 ## Fișa de securitate (CLAUDE.md pct. 7)
@@ -83,7 +83,7 @@ separată (v12 are calea anon).
 | Comandă | Ce dovedește | Rezultat r2 |
 |---|---|---|
 | `node scripts/test_ingest_garda.mjs` (PG17 local, fără live) | SQL: livrare, precondiții, postcondiții, ACL + F1 în ambele ordini, REST, lease/token (inclusiv 10 sesiuni concurente), plafoane, revenire | **99/99** |
-| `npx vitest run src/ingestGarda.test.js` | poarta de rol; oglinda TS a gărzii (lease, abandon, 4 rezultate); exact-once (`deschideIncercare`/`cuIncercare`/`plasaExactOnce`); calculul de egress | **32/32** |
+| `npx vitest run src/ingestGarda.test.js` | poarta de rol; oglinda TS a gărzii (lease, abandon, 4 rezultate); cel mult un raport per token (`deschideIncercare`/`cuIncercare`/`plasaExactOnce`); calculul de egress | **32/32** |
 | `deno test --node-modules-dir=none --no-lock --allow-env --allow-read --allow-net=esm.sh,jsr.io supabase/functions/ofertare-ingest-doc/garda_test.ts` | edge, pe handler-ul real: exact un `_rezultat` pe fiecare drum după „continua” (inclusiv excepții) | **8/8** |
 | `deno test --node-modules-dir=none --no-lock --allow-env --allow-read --allow-write=/tmp --allow-run=pdftotext,pdfinfo worker/ofertare/ingest_garda_test.ts` | worker: exact un `_rezultat` pe fiecare drum (inclusiv excepții din blob / pdftotext / BD), filtrul de candidați | **11/11** |
 | `deno test … worker/ofertare/ingest_mare_test.ts` / `citire_mare_test.ts` | regresie: bucla 770, citirea pe felii | **4/4**, **29/29** |
@@ -117,3 +117,62 @@ sursă (test edge „peste 60 MB după mărimea din Storage”). Condiția de re
 - *Teste:* `test_ingest_garda.mjs` §0 (validator + control negativ, amprenta identică în 3 locuri, fără IF NOT EXISTS/OR REPLACE), §1 (fără runner / alt marcaj / marcaj de sesiune / alt rol / obiect străin în altă schemă / tabel străin / helper modificat / overload / dependențe ⇒ refuz, nimic creat), §2 (12 injecții ⇒ postcondiția refuză, nimic rămas; marcaj pierdut ⇒ garda finală refuză), §3 („deja aplicat”), §7 (revenire: nearmată, txid greșit, armare persistentă, stare ≠ patch, corp modificat ⇒ refuz; reușită ⇒ 0 obiecte; a doua ⇒ refuz; reaplicare; compunere cu F1).
 
 **Rămâne la Răzvan:** (i) A vs B pentru egress (A = acest PR + #543); (ii) semantica „rezultat întârziat cu token încă memorat = acceptat”; (iii) tick-ul pg_cron inert (A) sau cu secret din Vault (B); (iv) toate pașii de punere în funcțiune, în ordinea de mai sus.
+
+## Runda 3 (GO logică Copilot r2 + NO-GO Jakarinos r2)
+Formulare corectă (Copilot b): **nu „exact-once” end-to-end**, ci **cel mult un raport de închidere trimis per token** (a doua
+închidere e no-op local) **+ contabilizare fail-safe a unui raport pierdut** (lease-ul expiră, iar următoarea atingere a documentului —
+`_incearca` — îl închide ca abandonat = eșec). Secțiunile „Runda 2” care spun „exact-once” se citesc în acest sens.
+
+**J1 — `row` citit înainte de token (edge).** *Schimbat:* după `continua`, edge-ul RECITEȘTE documentul sub lease și recalculează tot
+ce depinde de stare (`reia`, start = `pagini_procesate`, `text_extras`, `pagini_necitite`, felia); încheiat/ignorat între timp ⇒ `predat`,
+fără descărcare. *Teste:* `garda_test.ts` „J1 (Jakarinos): progresul avansat de alții … 4 → 6, nu 2” și „J1: documentul încheiat … predat”
+— **pică pe edge-ul r2 (4811ddb), trec pe r3** (testele noi rulate pe edge-ul r2: 6 eșecuri).
+
+**J2 — tokenul protejează garda, nu rezultatul.** *Schimbat:* `ofertare_ingest_garda_rezultat(…, p_doc jsonb)` scrie coloanele
+documentului (listă albă de 13; altă cheie ⇒ eroare) **în aceeași tranzacție** cu verificarea tokenului (rândul gărzii `FOR UPDATE`) —
+inclusiv la erori (`esec` + `status_procesare='eroare'`) și pentru marcajul intermediar (`marcaj`: scrie `in_lucru` și prelungește lease-ul,
+fără a închide). Edge-ul și workerul (text local, Word, erori, excepții) NU mai scriu documentul direct după `continua`; răspuns
+`acceptat:false` / RPC pierdut ⇒ raportat „NU s-a salvat”, fără retry. Termen executabil local 8 min < lease 10 min (`cuTermen`; `ruleaza` cu
+`AbortSignal`). *Teste:* SQL §5b (B salvează; A cu token preluat e respins și NU suprascrie textul lui B; eroarea lui A nu marchează
+„eroare”; marcaj; cheie nepermisă; token străin); edge „J2 (Jakarinos)” + „marcaj respins”; worker „J2 (Jakarinos): încercarea veche …”,
+„marcaj respins”, „download agățat → termen”; vitest „runda 3”.
+
+**J3 — `citire_mare` înaintea gărzii.** *Schimbat:* `citesteMareCuGarda`: token + lease (reînnoit la 2 min; pierdut ⇒ oprire) + descărcarea
+numărată la `_incearca`, nerestituită la SIGTERM (contorul propriu `analiza.citire_mare` poate reveni; al gărzii nu). Și predarea „> 60 MiB
+după descărcare” își ia propria încercare. Plafon nominal corectat: **600 MiB** (nu MB). *Teste:* worker „J3 (Jakarinos): … in_curs ⇒ fără
+URL semnat/descărcare”, „> 60 MB → predat + încercarea pe felii închisă o dată” (surse `nas:ingest`, `nas:citire_mare`).
+
+**J4 — calea Word ocolea garda.** *Schimbat:* Word din worker: filtru `opritDeGarda`, token per document (`nas:word`), text scris atomic,
+Word corupt/„gol” = `esec` ⇒ blocat după 5. Edge `ofertare-word-text` (finding-ul lui din audit rămâne separat, nerescris): documentele deja
+procesate cu text NU se mai descarcă; restul trec prin gardă (`edge:ofertare-word-text`), cu scriere atomică. Afirmația „rollback-ul oprește
+complet ingestul” corectată (secțiunea Revenire). *Teste:* worker „J4 (Jakarinos): Word … corupt ⇒ esec; in_curs ⇒ fără descărcare”; edge-ul
+word-text: `deno check` curat (fără test de handler în această rundă).
+
+**J5 — revenirea și dependențele care dispar tăcut.** *Schimbat:* amprenta (aceeași în migrare pre/post și în revenire) cere 0 **reguli**
+(pg_rewrite), 0 **comentarii** (tabel, funcții, constrângeri, politici), 0 **statistici extinse**, 0 **publicații**, 0 **dependenți** normali
+(vederi etc.), plus politicile/triggerele deja exacte. *Teste:* SQL §7 — revenirea REFUZĂ, fără să șteargă nimic, cu: regulă, comentariu pe
+tabel, comentariu pe funcție, statistici extinse, publicație, politică în plus, vedere dependentă (7 cazuri).
+
+**Copilot (doc):** (a) rezultatul întârziat — aliniat în „Efecte secundare”; (b) formularea de mai sus; (c) 5,03 GB = plafon **nominal**,
+limita dură locală ~16 GB/document ⇒ reluarea depinde obligatoriu de #543. Non-blocant: `_reactiveaza` pe un document **neblocat** întoarce
+`false` și nu resetează nimic (test SQL §6).
+
+## Livrare separată: GO mecanism ≠ reluarea ingestului
+- **GO pe mecanism** (acest PR) = codul și migrarea pot fi livrate; NU înseamnă reluarea citirii automate.
+- **Reluarea ingestului: NO-GO** până când #543 (garda de bytes) e **live și verificat**. Apoi, fiecare pas cu acordul lui Răzvan:
+  1. secretul `OFERTARE_INGEST_SECRET` (edge + `.env` NAS);
+  2. migrarea 20260930k prin `scripts/livrare_migrare.sh` (sha256 aprobat) + `get_advisors`;
+  3. deploy edge `ofertare-ingest-doc` și `ofertare-word-text`;
+  4. workerul NAS (actualizare cod + repornire);
+  5. probe: anon → 401, secret greșit → 401, user fără modul → 403, două apeluri simultane pe același document → unul `in_curs`,
+     worker + edge concurent fără dublă descărcare;
+  6. abia apoi coada (`ofertare_ingest_coada.activ`).
+
+| Teste r3 | Rezultat |
+|---|---|
+| `node scripts/test_ingest_garda.mjs` (PG17) | **115/115** |
+| `npx vitest run` (suita completă; `src/ingestGarda.test.js` 36/36) | **1083/1083** |
+| edge `garda_test.ts` | **12/12** |
+| worker `ingest_garda_test.ts` | **14/14** |
+| `ingest_mare_test.ts` / `citire_mare_test.ts` | **4/4** / **29/29** |
+| `livrare_validator.py` (runner ed7ecb0) | **OK 22 instrucțiuni** |

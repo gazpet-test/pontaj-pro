@@ -58,6 +58,17 @@ SELECT jsonb_build_object(
   'indecsi', (SELECT md5(string_agg(replace(pg_get_indexdef(i.indexrelid), 'public.', ''), ', ' ORDER BY i.indexrelid::regclass::text))
               FROM pg_catalog.pg_index i WHERE i.indrelid = to_regclass('public.ofertare_ingest_garda')),
   'triggere', (SELECT count(*) FROM pg_catalog.pg_trigger t WHERE t.tgrelid = to_regclass('public.ofertare_ingest_garda') AND NOT t.tgisinternal),
+  -- runda 3 (J5): tot ce ar dispărea TĂCUT la DROP TABLE fără CASCADE: reguli (pg_rewrite), comentarii, statistici extinse,
+  -- publicații; plus dependenți străini (vederi etc.) care ar bloca DROP-ul — toate trebuie să fie 0
+  'reguli', (SELECT count(*) FROM pg_catalog.pg_rewrite w WHERE w.ev_class = to_regclass('public.ofertare_ingest_garda')),
+  'comentarii', (SELECT count(*) FROM pg_catalog.pg_description d WHERE (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid = to_regclass('public.ofertare_ingest_garda'))
+                   OR (d.classoid = 'pg_catalog.pg_proc'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_proc p WHERE p.proname LIKE 'ofertare_ingest_garda_%'))
+                   OR (d.classoid = 'pg_catalog.pg_constraint'::regclass AND d.objoid IN (SELECT k.oid FROM pg_catalog.pg_constraint k WHERE k.conrelid = to_regclass('public.ofertare_ingest_garda')))
+                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))),
+  'statistici', (SELECT count(*) FROM pg_catalog.pg_statistic_ext s WHERE s.stxrelid = to_regclass('public.ofertare_ingest_garda')),
+  'publicatii', (SELECT count(*) FROM pg_catalog.pg_publication_rel r WHERE r.prrelid = to_regclass('public.ofertare_ingest_garda')),
+  'dependenti', (SELECT count(*) FROM pg_catalog.pg_depend d WHERE d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = to_regclass('public.ofertare_ingest_garda') AND d.deptype = 'n'
+                   AND d.classid <> 'pg_catalog.pg_constraint'::regclass AND NOT (d.classid = 'pg_catalog.pg_class'::regclass AND d.objid = to_regclass('public.ofertare_ingest_garda'))),
   'politici', (SELECT string_agg(format('%s|%s|%s|%s|%s|%s', p.policyname, p.permissive, p.roles::text, p.cmd,
                 replace(coalesce(p.qual, ''), 'public.', ''), replace(coalesce(p.with_check, ''), 'public.', '')), ' ; ' ORDER BY p.policyname)
               FROM pg_catalog.pg_policies p WHERE p.schemaname = 'public' AND p.tablename = 'ofertare_ingest_garda'),
@@ -81,15 +92,20 @@ $amprenta$;
     "acl": "authenticated:SELECT:f,postgres:DELETE:f,postgres:INSERT:f,postgres:MAINTAIN:f,postgres:REFERENCES:f,postgres:SELECT:f,postgres:TRIGGER:f,postgres:TRUNCATE:f,postgres:UPDATE:f,service_role:DELETE:f,service_role:INSERT:f,service_role:MAINTAIN:f,service_role:REFERENCES:f,service_role:SELECT:f,service_role:TRIGGER:f,service_role:TRUNCATE:f,service_role:UPDATE:f",
     "acl_coloane": 0,
     "coloane": "3173b7044cb197d13b1edff9a8095cab",
+    "comentarii": 0,
     "constrangeri": "10d7c9327832bcae1d093bf69297a8e2",
+    "dependenti": 0,
     "functii": {
       "public.ofertare_ingest_garda_incearca(p_doc_id bigint, p_size bigint, p_etag text, p_sursa text)": "src=8471aaf1295ee51dd9b52af240c822ee secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=jsonb acl=postgres:EXECUTE:f,service_role:EXECUTE:f",
       "public.ofertare_ingest_garda_notifica(p_doc_id bigint, p_motiv text)": "src=4d77710e10c2081fe939f1a9f3acd88e secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=integer acl=postgres:EXECUTE:f",
-      "public.ofertare_ingest_garda_reactiveaza(p_doc_id bigint)": "src=e2d4dcf919db0e4a6379936d4b36fc18 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=boolean acl=authenticated:EXECUTE:f,postgres:EXECUTE:f",
-      "public.ofertare_ingest_garda_rezultat(p_doc_id bigint, p_token uuid, p_rezultat text, p_hash text, p_size bigint, p_etag text, p_eroare text)": "src=963f707f337132b975531f38922c7bd7 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=jsonb acl=postgres:EXECUTE:f,service_role:EXECUTE:f"
+      "public.ofertare_ingest_garda_reactiveaza(p_doc_id bigint)": "src=9c009931fc1fb163c680c83f1b399b07 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=boolean acl=authenticated:EXECUTE:f,postgres:EXECUTE:f",
+      "public.ofertare_ingest_garda_rezultat(p_doc_id bigint, p_token uuid, p_rezultat text, p_hash text, p_size bigint, p_etag text, p_eroare text, p_doc jsonb)": "src=d728fdc53fcb0293e91147adb77a9b59 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=jsonb acl=postgres:EXECUTE:f,service_role:EXECUTE:f"
     },
     "indecsi": "a6967eb5f0bbd64e83204fa34f644bca",
     "politici": "ofertare_ingest_garda_select|PERMISSIVE|{authenticated}|SELECT|((auth.uid() IS NOT NULL) AND fn_are_acces_ofertare())|",
+    "publicatii": 0,
+    "reguli": 0,
+    "statistici": 0,
     "tabel": "relkind=r owner=postgres rls=t force=f",
     "triggere": 0
   }'::jsonb;
@@ -141,6 +157,12 @@ BEGIN
   END IF;
   IF (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.proname = 'fn_are_acces_ofertare') <> 1 THEN
     RAISE EXCEPTION 'REFUZ 20260930k: există alt overload fn_are_acces_ofertare (în orice schemă) — politica ar putea fi deturnată';
+  END IF;
+  -- 0d'. coloanele documentului pe care _rezultat le poate scrie atomic (runda 3, J2) — toate trebuie să existe
+  IF (SELECT count(*) FROM pg_catalog.pg_attribute a WHERE a.attrelid = to_regclass('public.ofertare_documente_atribuire') AND NOT a.attisdropped
+        AND a.attname IN ('text_extras', 'pagini', 'size_bytes', 'pagini_procesate', 'pagini_felie', 'pagini_necitite', 'status_procesare',
+                          'eroare', 'antet', 'revizie', 'ocr', 'procesat_la', 'procesat_de')) IS DISTINCT FROM 13 THEN
+    RAISE EXCEPTION 'REFUZ 20260930k: ofertare_documente_atribuire nu are toate cele 13 coloane scrise prin _rezultat';
   END IF;
   -- 0e. rolurile și gen_random_uuid()
   IF (SELECT count(*) FROM pg_catalog.pg_roles r WHERE r.rolname IN ('anon', 'authenticated', 'service_role')) IS DISTINCT FROM 3
@@ -263,7 +285,7 @@ GRANT EXECUTE ON FUNCTION public.ofertare_ingest_garda_incearca(bigint, bigint, 
 -- p_rezultat: succes (încheiat: eșecuri 0 + amprenta) | progres (felie: eșecuri 0) | predat (NAS → edge/citire_mare:
 -- contoarele neatinse) | esec (eșecuri +1, backoff 60 s × 2^(n−1) ≤ 6 h). Blocare + notificare owner la plafon.
 CREATE FUNCTION public.ofertare_ingest_garda_rezultat(p_doc_id bigint, p_token uuid, p_rezultat text,
-  p_hash text, p_size bigint, p_etag text, p_eroare text)
+  p_hash text, p_size bigint, p_etag text, p_eroare text, p_doc jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE
   g ofertare_ingest_garda;
@@ -271,8 +293,12 @@ DECLARE
   MAX_INC CONSTANT integer := 5;
   MAX_DL CONSTANT integer := 80;
 BEGIN
-  IF p_rezultat IS NULL OR p_rezultat NOT IN ('succes', 'progres', 'predat', 'esec') THEN
-    RAISE EXCEPTION 'garda: rezultat necunoscut „%” (succes|progres|predat|esec)', coalesce(p_rezultat, '<null>');
+  IF p_rezultat IS NULL OR p_rezultat NOT IN ('succes', 'progres', 'predat', 'esec', 'marcaj') THEN
+    RAISE EXCEPTION 'garda: rezultat necunoscut „%” (succes|progres|predat|esec|marcaj)', coalesce(p_rezultat, '<null>');
+  END IF;
+  IF p_doc IS NOT NULL AND (jsonb_typeof(p_doc) <> 'object' OR EXISTS (SELECT 1 FROM jsonb_object_keys(p_doc) k WHERE k NOT IN ('text_extras', 'pagini',
+       'size_bytes', 'pagini_procesate', 'pagini_felie', 'pagini_necitite', 'status_procesare', 'eroare', 'antet', 'revizie', 'ocr', 'procesat_la', 'procesat_de'))) THEN
+    RAISE EXCEPTION 'garda: p_doc conține coloane nepermise';
   END IF;
   SELECT * INTO g FROM ofertare_ingest_garda WHERE doc_id = p_doc_id FOR UPDATE;
   IF NOT FOUND THEN
@@ -283,6 +309,31 @@ BEGIN
     RETURN jsonb_build_object('acceptat', false, 'rezultate_respinse', g.rezultate_respinse + 1,
       'motiv', CASE WHEN g.incercare_token IS NULL THEN 'token vechi: încercarea nu mai e deschisă (închisă deja sau preluată ca abandonată)'
                     ELSE 'token străin: altă încercare deține lease-ul' END);
+  END IF;
+  -- token ACTIV: scrierea documentului (dacă există) în ACEEAȘI tranzacție cu verificarea tokenului (rândul gărzii e blocat
+  -- FOR UPDATE, deci nicio preluare nu se poate strecura între verificare și scriere)
+  IF p_doc IS NOT NULL THEN
+    UPDATE ofertare_documente_atribuire d SET
+      text_extras      = CASE WHEN p_doc ? 'text_extras' THEN r.text_extras ELSE d.text_extras END,
+      pagini           = CASE WHEN p_doc ? 'pagini' THEN r.pagini ELSE d.pagini END,
+      size_bytes       = CASE WHEN p_doc ? 'size_bytes' THEN r.size_bytes ELSE d.size_bytes END,
+      pagini_procesate = CASE WHEN p_doc ? 'pagini_procesate' THEN r.pagini_procesate ELSE d.pagini_procesate END,
+      pagini_felie     = CASE WHEN p_doc ? 'pagini_felie' THEN r.pagini_felie ELSE d.pagini_felie END,
+      pagini_necitite  = CASE WHEN p_doc ? 'pagini_necitite' THEN r.pagini_necitite ELSE d.pagini_necitite END,
+      status_procesare = CASE WHEN p_doc ? 'status_procesare' THEN r.status_procesare ELSE d.status_procesare END,
+      eroare           = CASE WHEN p_doc ? 'eroare' THEN r.eroare ELSE d.eroare END,
+      antet            = CASE WHEN p_doc ? 'antet' THEN r.antet ELSE d.antet END,
+      revizie          = CASE WHEN p_doc ? 'revizie' THEN r.revizie ELSE d.revizie END,
+      ocr              = CASE WHEN p_doc ? 'ocr' THEN r.ocr ELSE d.ocr END,
+      procesat_la      = CASE WHEN p_doc ? 'procesat_la' THEN r.procesat_la ELSE d.procesat_la END,
+      procesat_de      = CASE WHEN p_doc ? 'procesat_de' THEN r.procesat_de ELSE d.procesat_de END
+    FROM jsonb_populate_record(NULL::ofertare_documente_atribuire, p_doc) r
+    WHERE d.id = p_doc_id;
+  END IF;
+  -- marcaj = scriere intermediară (ex. in_lucru) + prelungirea lease-ului; încercarea rămâne deschisă
+  IF p_rezultat = 'marcaj' THEN
+    UPDATE ofertare_ingest_garda SET in_curs_pana = now() + interval '10 minutes', updated_at = now() WHERE doc_id = p_doc_id RETURNING * INTO g;
+    RETURN jsonb_build_object('acceptat', true, 'pana_la', g.in_curs_pana);
   END IF;
   UPDATE ofertare_ingest_garda SET incercare_token = NULL, in_curs_pana = NULL, updated_at = now(),
     incercari_esuate = CASE p_rezultat WHEN 'esec' THEN incercari_esuate + 1 WHEN 'predat' THEN incercari_esuate ELSE 0 END,
@@ -303,10 +354,10 @@ BEGIN
   END IF;
   RETURN jsonb_build_object('acceptat', true, 'blocat', g.blocat, 'incercari_esuate', g.incercari_esuate, 'urmatoarea_dupa', g.urmatoarea_dupa);
 END $f$;
-REVOKE ALL ON FUNCTION public.ofertare_ingest_garda_rezultat(bigint, uuid, text, text, bigint, text, text) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.ofertare_ingest_garda_rezultat(bigint, uuid, text, text, bigint, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.ofertare_ingest_garda_rezultat(bigint, uuid, text, text, bigint, text, text, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.ofertare_ingest_garda_rezultat(bigint, uuid, text, text, bigint, text, text, jsonb) TO service_role;
 
--- RPC 3 — reactivare UMANĂ, doar owner. Resetează contoarele (nu și amprenta citirii).
+-- RPC 3 — reactivare UMANĂ, doar owner, doar pe un document BLOCAT. Resetează contoarele (nu și amprenta citirii).
 CREATE FUNCTION public.ofertare_ingest_garda_reactiveaza(p_doc_id bigint)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 BEGIN
@@ -315,7 +366,7 @@ BEGIN
   END IF;
   UPDATE ofertare_ingest_garda SET blocat = false, blocat_motiv = NULL, incercari_esuate = 0, descarcari = 0,
     urmatoarea_dupa = NULL, reactivat_de = auth.uid(), reactivat_la = now(), updated_at = now()
-  WHERE doc_id = p_doc_id;
+  WHERE doc_id = p_doc_id AND blocat;   -- runda 3: pe un document neblocat NU resetează nimic (întoarce false)
   RETURN FOUND;
 END $f$;
 REVOKE ALL ON FUNCTION public.ofertare_ingest_garda_reactiveaza(bigint) FROM PUBLIC, anon, authenticated, service_role;
@@ -339,6 +390,17 @@ SELECT jsonb_build_object(
   'indecsi', (SELECT md5(string_agg(replace(pg_get_indexdef(i.indexrelid), 'public.', ''), ', ' ORDER BY i.indexrelid::regclass::text))
               FROM pg_catalog.pg_index i WHERE i.indrelid = to_regclass('public.ofertare_ingest_garda')),
   'triggere', (SELECT count(*) FROM pg_catalog.pg_trigger t WHERE t.tgrelid = to_regclass('public.ofertare_ingest_garda') AND NOT t.tgisinternal),
+  -- runda 3 (J5): tot ce ar dispărea TĂCUT la DROP TABLE fără CASCADE: reguli (pg_rewrite), comentarii, statistici extinse,
+  -- publicații; plus dependenți străini (vederi etc.) care ar bloca DROP-ul — toate trebuie să fie 0
+  'reguli', (SELECT count(*) FROM pg_catalog.pg_rewrite w WHERE w.ev_class = to_regclass('public.ofertare_ingest_garda')),
+  'comentarii', (SELECT count(*) FROM pg_catalog.pg_description d WHERE (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid = to_regclass('public.ofertare_ingest_garda'))
+                   OR (d.classoid = 'pg_catalog.pg_proc'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_proc p WHERE p.proname LIKE 'ofertare_ingest_garda_%'))
+                   OR (d.classoid = 'pg_catalog.pg_constraint'::regclass AND d.objoid IN (SELECT k.oid FROM pg_catalog.pg_constraint k WHERE k.conrelid = to_regclass('public.ofertare_ingest_garda')))
+                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))),
+  'statistici', (SELECT count(*) FROM pg_catalog.pg_statistic_ext s WHERE s.stxrelid = to_regclass('public.ofertare_ingest_garda')),
+  'publicatii', (SELECT count(*) FROM pg_catalog.pg_publication_rel r WHERE r.prrelid = to_regclass('public.ofertare_ingest_garda')),
+  'dependenti', (SELECT count(*) FROM pg_catalog.pg_depend d WHERE d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = to_regclass('public.ofertare_ingest_garda') AND d.deptype = 'n'
+                   AND d.classid <> 'pg_catalog.pg_constraint'::regclass AND NOT (d.classid = 'pg_catalog.pg_class'::regclass AND d.objid = to_regclass('public.ofertare_ingest_garda'))),
   'politici', (SELECT string_agg(format('%s|%s|%s|%s|%s|%s', p.policyname, p.permissive, p.roles::text, p.cmd,
                 replace(coalesce(p.qual, ''), 'public.', ''), replace(coalesce(p.with_check, ''), 'public.', '')), ' ; ' ORDER BY p.policyname)
               FROM pg_catalog.pg_policies p WHERE p.schemaname = 'public' AND p.tablename = 'ofertare_ingest_garda'),
@@ -362,15 +424,20 @@ $amprenta$;
     "acl": "authenticated:SELECT:f,postgres:DELETE:f,postgres:INSERT:f,postgres:MAINTAIN:f,postgres:REFERENCES:f,postgres:SELECT:f,postgres:TRIGGER:f,postgres:TRUNCATE:f,postgres:UPDATE:f,service_role:DELETE:f,service_role:INSERT:f,service_role:MAINTAIN:f,service_role:REFERENCES:f,service_role:SELECT:f,service_role:TRIGGER:f,service_role:TRUNCATE:f,service_role:UPDATE:f",
     "acl_coloane": 0,
     "coloane": "3173b7044cb197d13b1edff9a8095cab",
+    "comentarii": 0,
     "constrangeri": "10d7c9327832bcae1d093bf69297a8e2",
+    "dependenti": 0,
     "functii": {
       "public.ofertare_ingest_garda_incearca(p_doc_id bigint, p_size bigint, p_etag text, p_sursa text)": "src=8471aaf1295ee51dd9b52af240c822ee secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=jsonb acl=postgres:EXECUTE:f,service_role:EXECUTE:f",
       "public.ofertare_ingest_garda_notifica(p_doc_id bigint, p_motiv text)": "src=4d77710e10c2081fe939f1a9f3acd88e secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=integer acl=postgres:EXECUTE:f",
-      "public.ofertare_ingest_garda_reactiveaza(p_doc_id bigint)": "src=e2d4dcf919db0e4a6379936d4b36fc18 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=boolean acl=authenticated:EXECUTE:f,postgres:EXECUTE:f",
-      "public.ofertare_ingest_garda_rezultat(p_doc_id bigint, p_token uuid, p_rezultat text, p_hash text, p_size bigint, p_etag text, p_eroare text)": "src=963f707f337132b975531f38922c7bd7 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=jsonb acl=postgres:EXECUTE:f,service_role:EXECUTE:f"
+      "public.ofertare_ingest_garda_reactiveaza(p_doc_id bigint)": "src=9c009931fc1fb163c680c83f1b399b07 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=boolean acl=authenticated:EXECUTE:f,postgres:EXECUTE:f",
+      "public.ofertare_ingest_garda_rezultat(p_doc_id bigint, p_token uuid, p_rezultat text, p_hash text, p_size bigint, p_etag text, p_eroare text, p_doc jsonb)": "src=d728fdc53fcb0293e91147adb77a9b59 secdef=t cfg=search_path=public, pg_temp owner=postgres lang=plpgsql vol=v strict=f rez=jsonb acl=postgres:EXECUTE:f,service_role:EXECUTE:f"
     },
     "indecsi": "a6967eb5f0bbd64e83204fa34f644bca",
     "politici": "ofertare_ingest_garda_select|PERMISSIVE|{authenticated}|SELECT|((auth.uid() IS NOT NULL) AND fn_are_acces_ofertare())|",
+    "publicatii": 0,
+    "reguli": 0,
+    "statistici": 0,
     "tabel": "relkind=r owner=postgres rls=t force=f",
     "triggere": 0
   }'::jsonb;

@@ -2,7 +2,7 @@
 // Runda 2: lease/token (oglinda SQL), exact-once (deschideIncercare / cuIncercare / plasaExactOnce), egress mărginit.
 import { describe, it, expect } from 'vitest'
 import { GARDA, egalTimpConstant, identificaApelant, decizieInainte, acelasiObiect, dejaIngeratLaHash, backoffSec, dupaRezultat, sha256Hex,
-  deschideIncercare, cuIncercare, plasaExactOnce, opritDeGarda, leaseActiv, inchideAbandonata, egressMaximDocumentBytes } from '../supabase/functions/_shared/gardaIngestLogica.ts'
+  deschideIncercare, cuIncercare, plasaExactOnce, cuTermen, opritDeGarda, leaseActiv, inchideAbandonata, egressMaximDocumentBytes } from '../supabase/functions/_shared/gardaIngestLogica.ts'
 
 const SECRET = 's'.repeat(40)
 const hdr = (o) => new Headers(o)
@@ -157,7 +157,7 @@ describe('exact-once (3): fiecare încercare acordată se închide cu EXACT un _
   it('cuIncercare: excepție aruncată ÎNAINTE de închidere → esec cu mesajul excepției, apoi excepția se re-aruncă', async () => {
     const f = fals(), inc = deschideIncercare('T3', f.trimite)
     await expect(cuIncercare(inc, async () => { throw new Error('pdftotext a căzut') })).rejects.toThrow('pdftotext a căzut')
-    expect(f.trimise).toEqual([{ token: 'T3', rezultat: 'esec', eroare: 'excepție: pdftotext a căzut' }])
+    expect(f.trimise).toEqual([{ token: 'T3', rezultat: 'esec', eroare: 'excepție: pdftotext a căzut', doc: null }])
   })
   it('cuIncercare: excepție DUPĂ închidere (ex. drumul predat → citesteCuAI aruncă) → nimic în plus trimis', async () => {
     const f = fals(), inc = deschideIncercare('T4', f.trimite)
@@ -182,5 +182,32 @@ describe('egress mărginit (4)', () => {
   it('plafon per document pe calea edge = 80 × 60 MiB = 4 800 MiB (5 033 164 800 B)', () => {
     expect(GARDA.maxDescarcari * GARDA.pragEdgeBytes / 1048576).toBe(4800)
     expect(egressMaximDocumentBytes()).toBe(5_033_164_800)
+  })
+})
+
+describe('runda 3', () => {
+  it('J2: inchide păstrează răspunsul serverului; marcheaza trimite „marcaj” fără să închidă, apoi nimic după închidere', async () => {
+    const trimise = []
+    const inc = deschideIncercare('T7', async (token, r) => { trimise.push(r.rezultat); return { acceptat: r.rezultat !== 'progres' } })
+    expect(await inc.marcheaza({ status_procesare: 'in_lucru' })).toEqual({ acceptat: true })
+    expect(inc.inchisa).toBe(false)
+    await inc.inchide({ rezultat: 'progres', doc: { pagini_procesate: 2 } })
+    expect(inc.raspuns).toEqual({ acceptat: false })   // server: token respins ⇒ apelantul NU raportează „salvat”
+    expect(await inc.marcheaza({})).toBe(null)
+    expect(trimise).toEqual(['marcaj', 'progres'])
+  })
+  it('J2: excepția închide cu docLaEsec (status eroare scris atomic sub token)', async () => {
+    const trimise = []
+    const inc = deschideIncercare('T8', async (token, r) => { trimise.push(r) })
+    await expect(cuIncercare(inc, async () => { throw new Error('x') }, (m) => ({ status_procesare: 'eroare', eroare: 'eroare: ' + m }))).rejects.toThrow('x')
+    expect(trimise[0].doc).toEqual({ status_procesare: 'eroare', eroare: 'eroare: x' })
+  })
+  it('J2: cuTermen — operația care depășește termenul aruncă „termen depășit”', async () => {
+    await expect(cuTermen(new Promise(() => {}), 20, 'pdftotext')).rejects.toThrow(/termen depășit: pdftotext/)
+    expect(await cuTermen(Promise.resolve(5), 1000, 'x')).toBe(5)
+  })
+  it('marcaj nu schimbă contoarele în oglinda TS', () => {
+    const x = dupaRezultat(st({ incercari_esuate: 2, incercare_token: 't', in_curs_pana: 'y' }), 'marcaj', ACUM)
+    expect([x.incercari_esuate, x.incercare_token]).toEqual([2, 't'])
   })
 })

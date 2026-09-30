@@ -58,7 +58,7 @@ const sr = (sql) => psql(`BEGIN;\nSET LOCAL ROLE service_role;\n${sql}\nCOMMIT;`
 const incearca = (doc, size = 'NULL', etag = 'NULL', sursa = 'test') => { const r = sr(`SELECT public.ofertare_ingest_garda_incearca(${doc}, ${size}, ${etag}, '${sursa}');`); return r.ok ? JSON.parse(r.out) : { eroare: r.out } }
 const rezultat = (doc, token, rez, extra = {}) => {
   const q = (v) => (v == null ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`)
-  const r = sr(`SELECT public.ofertare_ingest_garda_rezultat(${doc}, ${token == null ? 'NULL' : `'${token}'`}, ${q(rez)}, ${q(extra.hash)}, ${extra.size ?? 'NULL'}, ${q(extra.etag)}, ${q(extra.eroare)});`)
+  const r = sr(`SELECT public.ofertare_ingest_garda_rezultat(${doc}, ${token == null ? 'NULL' : `'${token}'`}, ${q(rez)}, ${q(extra.hash)}, ${extra.size ?? 'NULL'}, ${q(extra.etag)}, ${q(extra.eroare)}, ${extra.doc ? q(JSON.stringify(extra.doc)) + '::jsonb' : 'NULL'});`)
   return r.ok ? JSON.parse(r.out) : { eroare: r.out }
 }
 const rand = (doc) => JSON.parse(val(`SELECT coalesce((SELECT row_to_json(g) FROM ${T} g WHERE doc_id = ${doc}), 'null');`))
@@ -89,7 +89,7 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT nullif(
 CREATE TABLE public.profiles (id uuid PRIMARY KEY, is_owner boolean NOT NULL DEFAULT false);
 CREATE TABLE public.user_module_access (profile_id uuid, module text);
 CREATE TABLE public.notifications (id bigserial PRIMARY KEY, profile_id uuid, type text, modul text, title text, message text, link_to text, created_at timestamptz DEFAULT now());
-CREATE TABLE public.ofertare_documente_atribuire (id bigserial PRIMARY KEY, status_procesare text NOT NULL DEFAULT 'neprocesat');
+CREATE TABLE public.ofertare_documente_atribuire (id bigserial PRIMARY KEY, status_procesare text NOT NULL DEFAULT 'neprocesat', text_extras text, pagini int, size_bytes bigint, pagini_procesate int, pagini_felie int, pagini_necitite int[], eroare text, antet jsonb, revizie text, ocr boolean, procesat_la timestamptz, procesat_de uuid);
 CREATE FUNCTION public.fn_are_acces_ofertare() RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $function$
   SELECT auth.uid() IS NOT NULL AND (
     EXISTS (SELECT 1 FROM public.profiles pr WHERE pr.id = auth.uid() AND pr.is_owner)
@@ -149,6 +149,7 @@ try {
   check('helper-ul revenit la corpul live', val(`SELECT md5(prosrc) FROM pg_proc WHERE proname = 'fn_are_acces_ofertare'`) === '429d28e2a61fb24c8009d67050c16c85')
   refuzPre('overload fn_are_acces_ofertare(int) → refuz', `CREATE FUNCTION public.fn_are_acces_ofertare(x int DEFAULT 0) RETURNS boolean LANGUAGE sql AS 'SELECT true';`, 'DROP FUNCTION public.fn_are_acces_ofertare(int);', /overload/)
   refuzPre('ofertare_documente_atribuire.status_procesare varchar → refuz', `ALTER TABLE public.ofertare_documente_atribuire ALTER status_procesare TYPE varchar(40);`, `ALTER TABLE public.ofertare_documente_atribuire ALTER status_procesare TYPE text;`, /ofertare_documente_atribuire lipsește sau diferă/)
+  refuzPre('ofertare_documente_atribuire fără o coloană scrisă prin _rezultat (antet) → refuz', `ALTER TABLE public.ofertare_documente_atribuire RENAME antet TO antet_x;`, `ALTER TABLE public.ofertare_documente_atribuire RENAME antet_x TO antet;`, /13 coloane/)
   refuzPre('notifications fără coloana link_to → refuz', `ALTER TABLE public.notifications RENAME link_to TO link;`, `ALTER TABLE public.notifications RENAME link TO link_to;`, /dependențe lipsă/)
 
   console.log('2. Postcondiții — injecții care strică patch-ul ⇒ refuz, nimic rămas')
@@ -208,8 +209,9 @@ try {
   check('authenticated FĂRĂ modul: 0 rânduri (RLS)', rest('authenticated', U.fara, `SELECT count(*) FROM ${T};`).out === '0')
   check('owner: vede rândurile', rest('authenticated', U.owner, `SELECT count(*) FROM ${T};`).out === '1')
   for (const [rol, fn] of [['anon', 'ofertare_ingest_garda_incearca(1, NULL, NULL, NULL)'], ['authenticated', 'ofertare_ingest_garda_incearca(1, NULL, NULL, NULL)'],
-    ['authenticated', `ofertare_ingest_garda_rezultat(1, NULL, 'esec', NULL, NULL, NULL, NULL)`], ['authenticated', `ofertare_ingest_garda_notifica(1, 'x')`],
-    ['service_role', `ofertare_ingest_garda_notifica(1, 'x')`], ['anon', 'ofertare_ingest_garda_reactiveaza(1)'], ['service_role', 'ofertare_ingest_garda_reactiveaza(1)']]) {
+    ['authenticated', `ofertare_ingest_garda_rezultat(1, NULL, 'esec', NULL, NULL, NULL, NULL, NULL)`], ['authenticated', `ofertare_ingest_garda_notifica(1, 'x')`],
+    ['service_role', `ofertare_ingest_garda_notifica(1, 'x')`], ['anon', 'ofertare_ingest_garda_reactiveaza(1)'], ['service_role', 'ofertare_ingest_garda_reactiveaza(1)'],
+    ['authenticated', `ofertare_ingest_garda_rezultat(1, NULL, 'esec', NULL, NULL, NULL, NULL, '{"status_procesare":"procesat"}'::jsonb)`]]) {
     const x = rest(rol, rol === 'authenticated' ? U.owner : null, `SELECT public.${fn};`)
     check(`${rol}: EXECUTE ${fn.split('(')[0]} → permission denied`, !x.ok && /permission denied for function/.test(x.out), x.out)
   }
@@ -271,6 +273,26 @@ try {
   g2 = rand(2)
   check('predat → lease eliberat, eșecurile NEATINSE (2), amprenta neatinsă', rz.acceptat === true && g2.incercari_esuate === 2 && g2.incercare_token === null && g2.ingerat_hash === null, JSON.stringify(g2))
 
+  console.log('5b. J2 — scrierea documentului e ATOMICĂ cu tokenul (runda 3)')
+  const docS = (id) => JSON.parse(val(`SELECT row_to_json(d) FROM (SELECT status_procesare, text_extras, pagini_procesate FROM ofertare_documente_atribuire WHERE id = ${id}) d`))
+  const A = incearca(30)
+  psql(`UPDATE ${T} SET in_curs_pana = now() - interval '20 minutes' WHERE doc_id = 30;`)   // A a depășit lease-ul
+  const B = incearca(30)   // B preia (A = abandonat)
+  rz = rezultat(30, B.token, 'succes', { hash: 'hb', doc: { status_procesare: 'procesat', text_extras: 'TEXT NOU (B)', pagini_procesate: 4 } })
+  check('B (token activ) salvează documentul prin _rezultat: procesat, 4 pagini', rz.acceptat === true && docS(30).text_extras === 'TEXT NOU (B)' && docS(30).pagini_procesate === 4, JSON.stringify(rz))
+  rz = rezultat(30, A.token, 'progres', { doc: { status_procesare: 'in_lucru', text_extras: 'TEXT VECHI (A)', pagini_procesate: 2 } })
+  check('Jakarinos J2: A (token preluat) încearcă să salveze DUPĂ B → respins, documentul lui B NEATINS', rz.acceptat === false && docS(30).text_extras === 'TEXT NOU (B)' && docS(30).pagini_procesate === 4 && docS(30).status_procesare === 'procesat', JSON.stringify(docS(30)))
+  rz = rezultat(30, A.token, 'esec', { eroare: 'x', doc: { status_procesare: 'eroare', eroare: 'x' } })
+  check('eroarea încercării preluate nu marchează documentul „eroare”', rz.acceptat === false && docS(30).status_procesare === 'procesat')
+  const C = incearca(31)
+  rz = rezultat(31, C.token, 'marcaj', { doc: { status_procesare: 'in_lucru' } })
+  check('marcaj (in_lucru) cu token activ → scris, lease prelungit, încercarea rămâne deschisă', rz.acceptat === true && docS(31).status_procesare === 'in_lucru' && rand(31).incercare_token === C.token, JSON.stringify(rz))
+  rz = rezultat(31, C.token, 'progres', { doc: { id: 99 } })
+  check('p_doc cu o coloană nepermisă (id) → eroare, nimic scris, lease intact', !!rz.eroare && /nepermise/.test(rz.eroare) && rand(31).incercare_token === C.token, JSON.stringify(rz))
+  rz = rezultat(31, '11111111-1111-1111-1111-111111111111', 'marcaj', { doc: { status_procesare: 'eroare' } })
+  check('marcaj cu token străin → respins, documentul neatins', rz.acceptat === false && docS(31).status_procesare === 'in_lucru')
+  rezultat(31, C.token, 'predat')
+
   console.log('6. Plafoane, blocare, notificare, reactivare, scurtcircuit')
   let blocat = null
   for (let i = 1; i <= 5; i++) {
@@ -285,10 +307,13 @@ try {
   check('owner: _reactiveaza → true (comis de test mai jos)', re.ok && re.out === 't', re.out)
   psql(`BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claims', '{"sub":"${U.owner}","role":"authenticated"}', true); SELECT public.ofertare_ingest_garda_reactiveaza(3); COMMIT;`)
   check('după reactivare: deblocat, contoare 0, continua', rand(3).blocat === false && incearca(3).actiune === 'continua')
+  psql(`UPDATE ${T} SET descarcari = 7 WHERE doc_id = 3;`)
+  const rn = psql(`BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claims', '{"sub":"${U.owner}","role":"authenticated"}', true) \\g /dev/null\nSELECT public.ofertare_ingest_garda_reactiveaza(3); COMMIT;`)
+  check('owner: _reactiveaza pe un document NEblocat → false, contoarele neatinse', rn.ok && rn.out === 'f' && rand(3).descarcari === 7, rn.out)
   r = psql(`DO $t$ DECLARE c jsonb; x jsonb; BEGIN
     FOR i IN 1..80 LOOP c := public.ofertare_ingest_garda_incearca(4, NULL, NULL, 'plafon');
       IF c->>'actiune' <> 'continua' THEN RAISE EXCEPTION 'iteratia %: %', i, c; END IF;
-      x := public.ofertare_ingest_garda_rezultat(4, (c->>'token')::uuid, 'progres', NULL, NULL, NULL, NULL); END LOOP; END $t$;
+      x := public.ofertare_ingest_garda_rezultat(4, (c->>'token')::uuid, 'progres', NULL, NULL, NULL, NULL, NULL); END LOOP; END $t$;
     SELECT public.ofertare_ingest_garda_incearca(4, NULL, NULL, 'plafon')->>'actiune';`)
   check('80 de descărcări (felii) permise, a 81-a → blocat (egress mărginit: plafon 80/document)', r.ok && r.out.split('\n').pop() === 'blocat' && rand(4).descarcari === 80 && rand(4).blocat === true, r.out)
   // scurtcircuit: document încheiat + aceeași mărime + etag → deja_ingerat, fără lease și fără numărare
@@ -312,6 +337,19 @@ try {
   r = revenire(RB)
   check('armare PERSISTENTĂ prezentă (ALTER ROLE … SET) → refuz chiar dacă tranzacția e armată', !r.ok && /PERSISTENT/.test(r.out) && obiecteGarda() > 0, r.out)
   psql(`ALTER ROLE postgres RESET gazpet.revenire_20260930k;`)
+  for (const [nume, prep, undo, cheie] of [
+    ['o REGULĂ pe tabel (ar dispărea tăcut la DROP TABLE)', `CREATE RULE r_x AS ON UPDATE TO ${T} DO ALSO NOTIFY garda;`, `DROP RULE r_x ON ${T};`, 'reguli'],
+    ['un comentariu pe tabel', `COMMENT ON TABLE ${T} IS 'x';`, `COMMENT ON TABLE ${T} IS NULL;`, 'comentarii'],
+    ['un comentariu pe o funcție', `COMMENT ON FUNCTION public.ofertare_ingest_garda_notifica(bigint, text) IS 'x';`, `COMMENT ON FUNCTION public.ofertare_ingest_garda_notifica(bigint, text) IS NULL;`, 'comentarii'],
+    ['statistici extinse', `CREATE STATISTICS st_x ON blocat, descarcari FROM ${T};`, `DROP STATISTICS st_x;`, 'statistici'],
+    ['tabelul într-o publicație', `CREATE PUBLICATION pub_x FOR TABLE ${T};`, `DROP PUBLICATION pub_x;`, 'publicatii'],
+    ['o politică în plus', `CREATE POLICY p_x ON ${T} FOR SELECT TO authenticated USING (false);`, `DROP POLICY p_x ON ${T};`, 'politici'],
+    ['o vedere care depinde de tabel', `CREATE VIEW public.v_garda_x AS SELECT doc_id FROM ${T};`, `DROP VIEW public.v_garda_x;`, 'dependenti'],
+  ]) {
+    psql(prep); r = revenire(RB)
+    check(`Jakarinos J5: ${nume} → revenirea REFUZĂ (amprenta: ${cheie}), nimic șters`, !r.ok && new RegExp(`nu e amprenta exactă a patch-ului \\(diferă: [^)]*${cheie}`).test(r.out) && obiecteGarda() > 0, r.out)
+    psql(undo)
+  }
   psql(`GRANT INSERT ON ${T} TO authenticated;`)
   r = revenire(RB)
   check('stare ≠ amprenta patch-ului (INSERT dat lui authenticated) → refuz, nimic șters', !r.ok && /nu e amprenta exactă.*acl/.test(r.out) && obiecteGarda() > 0, r.out)

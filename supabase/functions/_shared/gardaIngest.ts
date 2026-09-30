@@ -34,11 +34,11 @@ export async function gardaIncearca(supa: Supa, docId: number, meta: MetaObiect 
 }
 
 // Închide încercarea `token`. Un rezultat cu token vechi/străin e ignorat de SQL (acceptat:false) și raportat aici în jurnal.
-export async function gardaRezultat(supa: Supa, docId: number, token: string, r: RaportIncercare): Promise<{ acceptat?: boolean; blocat?: boolean; motiv?: string } | null> {
+export async function gardaRezultat(supa: Supa, docId: number, token: string, r: RaportIncercare): Promise<{ acceptat?: boolean; blocat?: boolean; motiv?: string; pana_la?: string } | null> {
   try {
     const { data, error } = await supa.rpc('ofertare_ingest_garda_rezultat', {
       p_doc_id: docId, p_token: token, p_rezultat: r.rezultat, p_hash: r.hash ?? null,
-      p_size: r.size ?? null, p_etag: r.etag ?? null, p_eroare: r.eroare ?? null,
+      p_size: r.size ?? null, p_etag: r.etag ?? null, p_eroare: r.eroare ?? null, p_doc: r.doc ?? null,
     })
     if (error) { console.warn(`garda rezultat doc ${docId}:`, error.message); return null }
     if (data?.acceptat === false) console.warn(`garda rezultat doc ${docId} IGNORAT (${r.rezultat}):`, data.motiv)

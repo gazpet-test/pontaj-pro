@@ -25,7 +25,7 @@ globalThis.fetch = ((input: any, init?: any) => {
   return Promise.reject(new Error(`rețea interzisă în test: ${u}`))
 }) as typeof fetch
 
-const { citesteDocument, proceseazaIngest, PAUZE, ceas } = await import(new URL('./ingest.ts', import.meta.url).href)
+const { citesteDocument, proceseazaIngest, PAUZE, ceas, TERMENE } = await import(new URL('./ingest.ts', import.meta.url).href)
 PAUZE.edgeMs = 0; PAUZE.edgeNeclarMs = 0; PAUZE.reluareMareMs = 0
 ceas.dormi = () => Promise.resolve()
 
@@ -50,18 +50,21 @@ const TEXT = pdfMinimal([1, 2].map(i => `Caiet de sarcini pagina ${i}: conducta 
 const SCAN = pdfMinimal(['a', 'b'])   // sub pragul de text pe pagină → „scan” → predat la edge
 
 // ---- BD simulată + garda simulată (tokenuri) ----
-type Opt = { garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; updateAruncă?: 'in_lucru' | null; updateEroare?: 'final' | null }
+type Opt = { garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; marcajRespins?: boolean; respinge?: boolean; downloadAgata?: boolean }
+const likeRe = (p: string) => new RegExp('^' + p.split('%').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 's')
 function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number }>, opt: Opt = {}, garzi: any[] = []) {
   const tabele: Record<string, any[]> = { ofertare_documente_atribuire: docs, ai_usage_log: [], ofertare_ingest_garda: garzi, ofertare_ingest_lansari: [],
     ofertare_ingest_coada: [], notifications: [], ofertare_licitatii: [], ofertare_seap_manifest: [] }
-  const g = { incercari: [] as number[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[] }
+  const g = { incercari: [] as number[], surse: [] as string[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[], scrieriDirecte: [] as any[], marcaje: [] as any[] }
   const from = (t: string) => {
     tabele[t] ||= []
     const filtre: ((r: any) => boolean)[] = []
     let op: { tip: 'sel' | 'upd' | 'ins'; patch?: any } = { tip: 'sel' }
     const pot = () => tabele[t].filter(r => filtre.every(f => f(r)))
     const b: any = {
-      select: () => b, order: () => b, limit: () => b, not: () => b, like: () => b, or: () => b,
+      select: () => b, order: () => b, limit: () => b, or: () => b,
+      like: (c: string, p: string) => { filtre.push(r => likeRe(p).test(String(r[c] ?? ''))); return b },
+      not: (c: string, o: string, p: string) => { filtre.push(r => !(o === 'like' && likeRe(p).test(String(r[c] ?? '')))); return b },
       eq: (c: string, v: unknown) => { if (!c.includes('->')) filtre.push(r => String(r[c]) === String(v)); return b },
       neq: (c: string, v: unknown) => { filtre.push(r => String(r[c]) !== String(v)); return b },
       in: (c: string, v: unknown[]) => { filtre.push(r => v.map(String).includes(String(r[c]))); return b },
@@ -70,10 +73,7 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
       insert: (p: any) => { op = { tip: 'ins', patch: p }; return b },
       maybeSingle: () => Promise.resolve({ data: structuredClone(pot()[0] ?? null), error: null }),
       then: (ok: any, ko: any) => new Promise((res, rej) => {
-        if (op.tip === 'upd' && t === 'ofertare_documente_atribuire') {
-          if (opt.updateAruncă === 'in_lucru' && op.patch.status_procesare === 'in_lucru') return rej(new Error('BD: conexiune pierdută la update'))
-          if (opt.updateEroare === 'final' && ['procesat', 'partial'].includes(op.patch.status_procesare)) return res({ data: null, error: { message: 'constrângere încălcată' } })
-        }
+        if (op.tip === 'upd' && t === 'ofertare_documente_atribuire') g.scrieriDirecte.push(structuredClone(op.patch))
         if (op.tip === 'ins') { tabele[t].push(structuredClone(op.patch)); return res({ data: null, error: null }) }
         const rows = pot()
         if (op.tip === 'upd') for (const r of rows) Object.assign(r, structuredClone(op.patch))
@@ -85,7 +85,7 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
   const rpc = (nume: string, a: any) => {
     if (nume === 'ofertare_doc_de_citit') return Promise.resolve({ data: true, error: null })
     if (nume === 'ofertare_ingest_garda_incearca') {
-      g.incercari.push(a.p_doc_id)
+      g.incercari.push(a.p_doc_id); g.surse.push(a.p_sursa)
       if (opt.garda === 'eroare') return Promise.resolve({ data: null, error: { message: 'function does not exist' } })
       if (opt.garda === 'in_curs') return Promise.resolve({ data: { actiune: 'in_curs', motiv: 'altă încercare', pana_la: '2026-09-30T10:10:00Z' }, error: null })
       if (opt.garda === 'fara_token') return Promise.resolve({ data: { actiune: 'continua', descarcari: 1 }, error: null })
@@ -93,9 +93,13 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
       return Promise.resolve({ data: { actiune: 'continua', token, descarcari: 1, incercari_esuate: 0 }, error: null })
     }
     if (nume === 'ofertare_ingest_garda_rezultat') {
-      g.rezultate.push(structuredClone(a))
-      if (opt.rezultatEsueaza) return Promise.reject(new Error('rețea: rezultat pierdut'))
-      return Promise.resolve({ data: { acceptat: g.emise.get(a.p_token) === a.p_doc_id }, error: null })
+      ;(a.p_rezultat === 'marcaj' ? g.marcaje : g.rezultate).push(structuredClone(a))
+      if (opt.rezultatEsueaza && a.p_rezultat !== 'marcaj') return Promise.reject(new Error('rețea: rezultat pierdut'))
+      // serverul: token activ ⇒ scrie p_doc ATOMIC; respins ⇒ documentul neatins (runda 3, J2)
+      const ok = g.emise.get(a.p_token) === a.p_doc_id && !(a.p_rezultat === 'marcaj' ? opt.marcajRespins : opt.respinge)
+      if (ok && a.p_doc) Object.assign(tabele.ofertare_documente_atribuire.find(r => r.id === a.p_doc_id) ?? {}, structuredClone(a.p_doc))
+      if (ok && a.p_rezultat !== 'marcaj') g.emise.set(a.p_token, -1)   // închis: un al doilea raport ar fi „token vechi”
+      return Promise.resolve({ data: { acceptat: ok, motiv: ok ? undefined : 'token vechi/străin' }, error: null })
     }
     return Promise.resolve({ data: null, error: null })
   }
@@ -103,6 +107,7 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
     list: (_d: string, o: any) => Promise.resolve({ data: [{ name: o.search, metadata: { size: 1234, eTag: '"e1"' } }], error: null }),
     download: (p: string) => {
       g.descarcari.push(p)
+      if (opt.downloadAgata) return new Promise(() => {})
       const f = fisiere[p]
       if (!f) return Promise.resolve({ data: null, error: { message: 'Object not found' } })
       if (opt.blobAruncă) return Promise.resolve({ data: { arrayBuffer: () => Promise.reject(new Error('flux întrerupt la citirea blob-ului')) }, error: null })
@@ -114,7 +119,7 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
   // invarianta: fiecare token emis are EXACT un _rezultat; niciun _rezultat cu token neemis
   const exactOnce = () => {
     const pe = new Map<string, number>()
-    for (const r of g.rezultate) pe.set(r.p_token, (pe.get(r.p_token) ?? 0) + 1)
+    for (const r of g.rezultate.filter(x => x.p_rezultat !== 'marcaj')) pe.set(r.p_token, (pe.get(r.p_token) ?? 0) + 1)
     return [...g.emise.keys()].every(t => pe.get(t) === 1) && [...pe.keys()].every(t => g.emise.has(t))
   }
   return { supa: { from, rpc, storage } as any, tabele, g, exactOnce }
@@ -134,34 +139,48 @@ Deno.test({ ...Z, name: 'text local reușit → EXACT un _rezultat „succes” 
 
 Deno.test({ ...Z, name: 'download eșuat → EXACT un „esec”', fn: async () => {
   const m = mediu([doc(2)], {})
-  assertEquals(await citesteDocument(m.supa, doc(2), null), 'eroare: download')
+  assertEquals(await citesteDocument(m.supa, doc(2), null), 'eroare(salvat): download')
+  assertEquals(m.tabele.ofertare_documente_atribuire[0].status_procesare, 'eroare'); assertEquals(m.g.scrieriDirecte.length, 0)
   assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['esec']); assertMatch(m.g.rezultate[0].p_eroare, /^download: Object not found/)
 } })
 
 Deno.test({ ...Z, name: 'EXCEPȚIE la citirea blob-ului (după „continua”) → EXACT un „esec” cu mesajul excepției; excepția ajunge la apelant', fn: async () => {
   const m = mediu([doc(3)], { '7/atribuire/3.pdf': TEXT }, { blobAruncă: true })
-  await assertRejects(() => citesteDocument(m.supa, doc(3), null), Error, 'flux întrerupt')
+  assertMatch(await citesteDocument(m.supa, doc(3), null), /^eroare\(salvat\): flux întrerupt/)
   assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['esec']); assertMatch(m.g.rezultate[0].p_eroare, /^excepție: flux întrerupt/)
+  assertEquals(m.tabele.ofertare_documente_atribuire[0].status_procesare, 'eroare'); assertEquals(m.g.scrieriDirecte.length, 0)
 } })
 
 Deno.test({ ...Z, name: 'EXCEPȚIE din pdfinfo/pdftotext (Deno.Command aruncă) → EXACT un „esec”', fn: async () => {
   const m = mediu([doc(4)], { '7/atribuire/4.pdf': TEXT })
   const orig = Object.getOwnPropertyDescriptor(Deno, 'Command')!
   Object.defineProperty(Deno, 'Command', { configurable: true, value: class { constructor() { throw new Error('pdftotext: spawn ENOMEM') } } })
-  try { await assertRejects(() => citesteDocument(m.supa, doc(4), null), Error, 'ENOMEM') } finally { Object.defineProperty(Deno, 'Command', orig) }
+  try { assertMatch(await citesteDocument(m.supa, doc(4), null), /^eroare\(salvat\): pdftotext: spawn ENOMEM/) } finally { Object.defineProperty(Deno, 'Command', orig) }
   assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['esec']); assertMatch(m.g.rezultate[0].p_eroare, /excepție: pdftotext: spawn ENOMEM/)
 } })
 
-Deno.test({ ...Z, name: 'EXCEPȚIE din BD (update in_lucru aruncă) → EXACT un „esec”', fn: async () => {
-  const m = mediu([doc(5)], { '7/atribuire/5.pdf': TEXT }, { updateAruncă: 'in_lucru' })
-  await assertRejects(() => citesteDocument(m.supa, doc(5), null), Error, 'conexiune pierdută')
-  assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['esec'])
+Deno.test({ ...Z, name: 'J2: marcajul in_lucru respins (token preluat) → documentul NEATINS, nicio scriere directă', fn: async () => {
+  const m = mediu([doc(5)], { '7/atribuire/5.pdf': TEXT }, { marcajRespins: true })
+  assertMatch(await citesteDocument(m.supa, doc(5), null), /^garda: lease pierdut/)
+  assertEquals(m.tabele.ofertare_documente_atribuire[0].status_procesare, 'neprocesat'); assertEquals(m.g.scrieriDirecte.length, 0)
+  assert(m.exactOnce())
 } })
 
-Deno.test({ ...Z, name: 'update final cu eroare → EXACT un „esec” (explicit)', fn: async () => {
-  const m = mediu([doc(6)], { '7/atribuire/6.pdf': TEXT }, { updateEroare: 'final' })
-  assertMatch(await citesteDocument(m.supa, doc(6), null), /^eroare: update constrângere/)
-  assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['esec'])
+Deno.test({ ...Z, name: 'J2 (Jakarinos): încercarea veche salvează DUPĂ preluare → serverul respinge, textul NU e suprascris', fn: async () => {
+  const m = mediu([doc(6, { status_procesare: 'procesat', text_extras: 'TEXT NOU (B)' })], { '7/atribuire/6.pdf': TEXT }, { respinge: true })
+  assertMatch(await citesteDocument(m.supa, doc(6), null), /^garda: rezultat respins .* documentul NU s-a salvat/)
+  assertEquals(m.tabele.ofertare_documente_atribuire[0].text_extras, 'TEXT NOU (B)'); assertEquals(m.g.scrieriDirecte.length, 0)
+} })
+
+Deno.test({ ...Z, name: 'J2: download agățat → termen executabil (sub lease) → „esec” + documentul „eroare”, scris sub token', fn: async () => {
+  const vechi = TERMENE.lucruLocalMs; TERMENE.lucruLocalMs = 50
+  try {
+    const m = mediu([doc(12)], { '7/atribuire/12.pdf': TEXT }, { downloadAgata: true })
+    assertMatch(await citesteDocument(m.supa, doc(12), null), /^eroare\(salvat\): termen depășit: download/)
+    assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['esec'])
+    assertEquals(m.tabele.ofertare_documente_atribuire[0].status_procesare, 'eroare')
+  } finally { TERMENE.lucruLocalMs = vechi }
+  assert(TERMENE.lucruLocalMs < 10 * 60_000)
 } })
 
 Deno.test({ ...Z, name: 'scan → „predat” ÎNAINTE de apelul edge (lease eliberat, contoare neatinse), apoi edge-ul', fn: async () => {
@@ -174,7 +193,8 @@ Deno.test({ ...Z, name: 'scan → „predat” ÎNAINTE de apelul edge (lease el
 Deno.test({ ...Z, name: 'mai mare de 60 MB după descărcare → „predat” la citire_mare; o eroare ulterioară NU mai trimite nimic', fn: async () => {
   const m = mediu([doc(8)], { '7/atribuire/8.pdf': { mare: 61 * 1024 * 1024 } })
   try { await citesteDocument(m.supa, doc(8), null) } catch (_) { /* citire_mare pe BD simulată: indiferent */ }
-  assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['predat'])
+  // runda 3 (J3): după predare, citirea pe felii își ia PROPRIA încercare (token 2), închisă și ea o singură dată
+  assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['predat', 'esec']); assertEquals(m.g.surse, ['nas:ingest', 'nas:citire_mare'])
   assertEquals(m.tabele.ofertare_documente_atribuire[0].size_bytes, 61 * 1024 * 1024)
 } })
 
@@ -188,7 +208,8 @@ Deno.test({ ...Z, name: 'fără „continua” (in_curs / garda indisponibilă /
 
 Deno.test({ ...Z, name: 'RPC-ul _rezultat pică (rețea) → drumul se termină normal, o singură încercare de trimitere (lease-ul expiră → abandonat)', fn: async () => {
   const m = mediu([doc(10)], { '7/atribuire/10.pdf': TEXT }, { rezultatEsueaza: true })
-  assertMatch(await citesteDocument(m.supa, doc(10), null), /^procesat/)
+  // runda 3: fără confirmarea serverului NU pretindem „salvat” (documentul e scris doar de RPC-ul care a picat)
+  assertMatch(await citesteDocument(m.supa, doc(10), null), /^garda: rezultat respins \(fără răspuns\)/)
   assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['succes'])
 } })
 
@@ -212,4 +233,30 @@ Deno.test({ ...Z, name: 'proceseazaIngest: candidații cu lease activ / blocați
   assert(m2.exactOnce()); assertEquals(m2.g.rezultate.map(r => r.p_rezultat), ['esec'])
   assertEquals(m2.tabele.ofertare_documente_atribuire[0].status_procesare, 'eroare')
   assertMatch(m2.tabele.ofertare_documente_atribuire[0].eroare, /^eroare: flux întrerupt/)
+  assertEquals(m2.g.scrieriDirecte.filter(p => p.status_procesare === 'eroare').length, 0)   // scris doar sub token
+} })
+
+Deno.test({ ...Z, name: 'J3 (Jakarinos): PDF > 60 MB intră pe felii DOAR prin gardă — in_curs (alt worker descarcă) ⇒ fără URL semnat/descărcare', fn: async () => {
+  const mare = doc(40, { size_bytes: 99_000_000, status_procesare: 'ignorat', eroare: 'prea mare pentru citirea automată (95 MB > 60 MB)' })
+  let semnate = 0
+  const m = mediu([mare], {}, { garda: 'in_curs' })
+  const st0 = m.supa.storage.from(); m.supa.storage.from = () => ({ ...st0, createSignedUrl: () => { semnate++; return st0.createSignedUrl() } })
+  assertMatch(await citesteDocument(m.supa, mare, null), /^garda: in_curs/)
+  assertEquals(semnate, 0); assertEquals(m.g.surse, ['nas:citire_mare'])
+  const m2 = mediu([structuredClone(mare)], {})
+  await citesteDocument(m2.supa, mare, null)
+  assert(m2.exactOnce()); assertEquals(m2.g.surse, ['nas:citire_mare']); assertEquals(m2.g.rezultate.length, 1)
+} })
+
+Deno.test({ ...Z, name: 'J4 (Jakarinos): Word din worker trece prin gardă — corupt ⇒ „esec” (se numără spre blocare); in_curs ⇒ fără descărcare', fn: async () => {
+  const w = { id: 50, licitatie_id: 7, nume_original: 'Formular.docx', tip: 'formular', fisier_path: '7/atribuire/50.docx', status_procesare: 'ignorat', text_extras: null }
+  const m = mediu([w], { '7/atribuire/50.docx': new TextEncoder().encode('nu e zip') })
+  m.tabele.ofertare_ingest_coada.push({ licitatie_id: 7, activ: true, cerut_de: null, lansari: 0 })
+  await proceseazaIngest(m.supa, 7, () => false, () => {})
+  assertEquals(m.g.surse, ['nas:word']); assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['esec'])
+  assertEquals(m.g.scrieriDirecte.length, 0)
+  const m2 = mediu([structuredClone(w)], { '7/atribuire/50.docx': new TextEncoder().encode('nu e zip') }, { garda: 'in_curs' })
+  m2.tabele.ofertare_ingest_coada.push({ licitatie_id: 7, activ: true, cerut_de: null, lansari: 0 })
+  await proceseazaIngest(m2.supa, 7, () => false, () => {})
+  assertEquals(m2.g.descarcari.length, 0)
 } })
