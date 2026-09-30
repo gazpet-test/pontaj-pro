@@ -192,8 +192,11 @@ ok "faza PATCH: toate aserțiunile trec"
 # faza_livrare MIG LIV — esec la prima abatere (folosită și de mutanții din faza 7, într-un subshell).
 livreaza() {  # $1 = fișier (copiat sub numele real: runnerul derivă numele din fișier), $2 = versiune, $3 = runner
   mkdir -p "$OUT/livrare"; cp "$1" "$OUT/livrare/$NUME_MIG.sql"
-  set +e; PSQL_BIN="$PGBIN/psql" VERSIUNE_MIGRARE="$2" bash "${3:-$LIV}" "$OUT/livrare/$NUME_MIG.sql" -- \
-    -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" >"$OUT/liv.out" 2>&1; RC=$?; set -e
+  # Runner comun ed7ecb0 (GO Copilot R9): sha256 aprobat + țintă explicită (db, system_identifier, host, port).
+  local sis; sis="$("$PGBIN/psql" -X -Atq -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" -c "SELECT system_identifier FROM pg_control_system()")"
+  set +e; PSQL_BIN="$PGBIN/psql" bash "${3:-$LIV}" --migrare "$OUT/livrare/$NUME_MIG.sql" \
+    --sha256 "$(sha256sum "$OUT/livrare/$NUME_MIG.sql" | cut -d' ' -f1)" --versiune "$2" --tinta-db "$DB" --tinta-sistem "$sis" \
+    --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >"$OUT/liv.out" 2>&1; RC=$?; set -e
 }
 psql_db() { set +e; "$PGBIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$DB" "$@" >"$OUT/liv.out" 2>&1; RC=$?; set -e; }
 INJ_REG="CREATE FUNCTION supabase_migrations.adv_injectie() RETURNS trigger LANGUAGE plpgsql AS \$i\$ BEGIN
@@ -223,7 +226,7 @@ faza_livrare() {
   ok "3.1 livrare: garda aplicată + înregistrată o dată (version, name $NUME_MIG, statements = fișierul octet cu octet)"
   # 3.2 reluare după succes ⇒ refuz, anulat tot, fără dublare
   schema_snapshot > "$OUT/snap_e.sql"; livreaza "$MIGF" 20261001000001 "$LIVF"
-  refuz_fara_urme "3.2 reluare după succes" "migrarea e deja înregistrată" "$OUT/snap_e.sql" 1
+  refuz_fara_urme "3.2 reluare după succes" "CONFLICT: istoricul are 1 rând" "$OUT/snap_e.sql" 1
   # 3.3 erori injectate
   for mut in eroare_dupa_prima_schimbare eroare_in_postconditie; do
     baza_noua; schema_snapshot > "$OUT/snap_e.sql"; livreaza "$OUT/mut/$mut.sql" 20261001000000 "$LIVF"
@@ -251,14 +254,15 @@ faza_livrare() {
   refuz_fara_urme "3.5 marcaj de sesiune fără txid" "$START" "$OUT/snap_e.sql" 0
   # 3.6 control de tranzacție în fișier
   awk '{print} !d && /^END \$function\$;$/ {print "COMMIT;  -- MUTANT"; d=1}' "$MIGF" > "$OUT/mut/liv_commit.sql"
-  livreaza "$OUT/mut/liv_commit.sql" 20261001000000 "$LIVF"; refuz_fara_urme "3.6 fișier cu COMMIT; (runnerul refuză)" "conține control de tranzacție" "$OUT/snap_e.sql" 0
+  livreaza "$OUT/mut/liv_commit.sql" 20261001000000 "$LIVF"; refuz_fara_urme "3.6 fișier cu COMMIT; (runnerul refuză)" "control de tranzacție la nivel superior" "$OUT/snap_e.sql" 0
   awk '{print} !d && /^END \$function\$;$/ {print "select 1; commit ;  -- MUTANT"; d=1}' "$MIGF" > "$OUT/mut/liv_commit2.sql"
-  livreaza "$OUT/mut/liv_commit2.sql" 20261001000000 "$LIVF"; refuz_fara_urme "3.6 „select 1; commit ;” pe aceeași linie" "conține control de tranzacție" "$OUT/snap_e.sql" 0
+  livreaza "$OUT/mut/liv_commit2.sql" 20261001000000 "$LIVF"; refuz_fara_urme "3.6 „select 1; commit ;” pe aceeași linie" "control de tranzacție la nivel superior" "$OUT/snap_e.sql" 0
   awk '{print} !d && /^END \$function\$;$/ {print "END;  -- MUTANT (sinonim COMMIT)"; d=1}' "$MIGF" > "$OUT/mut/liv_end.sql"
   livreaza "$OUT/mut/liv_end.sql" 20261001000000 "$LIVF"
-  [ $RC != 0 ] && grep -qF "Livrare 20261001a: garda de livrare (final" "$OUT/liv.out" && [ "$(nr_inreg)" = 0 ] \
-    || { cat "$OUT/liv.out" >&2; esec "3.6 „END;”: garda de final nu l-a prins"; }
-  ok "3.6 „END;” la nivel de instrucțiune: garda de final eșuează, NEÎNREGISTRAT (ce era înainte de END; e comis — limită documentată)"
+  # Runner comun ed7ecb0: validatorul refuză END la nivel superior ÎNAINTE de conexiune (exit 3) — mai strict decât garda de final.
+  [ $RC = 3 ] && grep -qF "control de tranzacție la nivel superior" "$OUT/liv.out" && [ "$(nr_inreg)" = 0 ] \
+    || { cat "$OUT/liv.out" >&2; esec "3.6 „END;”: validatorul nu l-a refuzat"; }
+  ok "3.6 „END;” la nivel de instrucțiune: refuzat de validator înainte de conexiune (exit 3), NEÎNREGISTRAT"
 }
 pas "3. Traseul de livrare: scripts/livrare_migrare.sh (marcaj + migrare + înregistrare într-o singură tranzacție)"
 faza_livrare "$MIG" "$LIV"

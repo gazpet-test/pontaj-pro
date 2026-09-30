@@ -521,3 +521,33 @@ Rezultat: `PGPORT=5627 PGBASE=/tmp/pg_livr4_j05 bash scripts/test_j05_garda.sh`,
 **Mutanți (runda 4):** în faza 7 a harness-ului, toți prinși la fiecare rulare: cei 15 mutanți existenți (migrare + rollback) și **7 noi**: fără garda de start (static + 3.5), fără garda de final (static + 3.6), garda fără txid (3.5, marcaj de sesiune), runner cu înregistrarea în tranzacție separată (**3.3, eroare la INSERT: urmă rămasă**), fără `--single-transaction` (3.1), fără refuzul „deja înregistrată” (3.2), fără refuzul controlului de tranzacție (3.6).
 
 **Rămâne deschis:** GO Copilot pe runda 4 (diff-ul efectiv: migrare + `scripts/livrare_migrare.sh` + harness) și acordul lui Răzvan; accesul `psql` + URI pentru operator; rularea pe PG17 (producția) rămâne neverificată local — refuzul e fail-closed (§ amprente).
+
+## Livrare: runner comun ed7ecb0 (GO Copilot R9)
+
+Migrarea se livrează DOAR prin runnerul comun `scripts/livrare_migrare.sh` + `scripts/livrare_validator.py`, copiate
+byte cu byte din ed7ecb0 (branch #538, validator a6188fb neschimbat):
+sha256 runner `bb223d90dcd3e932d7be8211cffb24cbbb6d0053c21bba333beca833892efb71`,
+sha256 validator `9356d2871ebd09b3184992193d3a249f29eca497c2ddce6c5488f1909cbb450d`.
+Validatorul acceptă migrarea (`python3 scripts/livrare_validator.py supabase/migrations/20261001a_ofertare_derogare_garda_j05.sql <tag>` ⇒ `OK`).
+
+```bash
+bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261001a_ofertare_derogare_garda_j05.sql \
+  --sha256 66105ecd71c7ec571e3df4825e7e0aa5fb3627e716869572972cdf750c65d6c5 \
+  --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
+  --tinta-host <host_scriere_aprobat> --tinta-port <port> [--tinta-proiect <marcaj>] [--user <operator>]
+```
+(sha256 de mai sus = artefactul la commitul acestei secțiuni; la livrare se folosește sha256-ul APROBAT atunci.)
+Parola doar din `~/.pgpass`/`PGPASSFILE`; `--service`, URI-uri și opțiuni psql suplimentare sunt refuzate (exit 2).
+- **Ofertare cere excepția de freeze** înainte de livrare.
+
+Limite (verdict R9, `docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R9.md` pe #538):
+- GO-ul e pentru standardul de livrare, NU autorizează merge/apply.
+- La fiecare livrare: SHA-256 artefact, țintă + operator aprobați, pre/postcondiții, acordul lui Răzvan.
+- Opriri / reporniri / rollback — aprobate separat.
+- PG17 neverificat (server de test PG16); `pg_control_system()` rămâne (verificarea țintei).
+- Codurile 0/11 confirmă înregistrarea, nu înlocuiesc verificarea structurii + smoke.
+- Rezultat necunoscut / conflict / țintă neconfirmată ⇒ fără retry sau rollback automat (reconciliere manuală).
+
+**Stare test (30.09):** `scripts/test_j05_garda.sh` adaptat la CLI-ul runnerului comun; fazele 1–6 trec. Faza 7 cade la
+generarea mutanților de RUNNER (`w_*`), scriși pe textul runnerului vechi (runda 4) — de decis: rescriși pe ed7ecb0 sau
+lăsați suitei runnerului (`scripts/test_sec_rsvti.sh`, #538, faza 6.11). Neschimbați în acest commit.
