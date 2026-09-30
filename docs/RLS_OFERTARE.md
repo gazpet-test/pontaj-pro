@@ -1,6 +1,6 @@
 # RLS Ofertare — prețuri, oferte furnizori și celelalte tabele deschise (DRAFT, NEAPLICAT)
 
-Migrare: `supabase/migrations/20261003c_rls_ofertare_preturi_oferte.sql` · Revenire: `supabase/revenire/20261003c_rls_ofertare_preturi_oferte_ROLLBACK.sql`
+Migrare: `supabase/migrations/20261004b_rls_ofertare_preturi_oferte.sql` · Revenire: `supabase/revenire/20261004b_rls_ofertare_preturi_oferte_ROLLBACK.sql`
 Test: `node scripts/test_rls_ofertare.mjs` (PG17 local, 119 verificări) · Starea live reconstruită: `supabase/tests/rls_ofertare_live_state.sql`
 
 ## 1. De unde vine
@@ -62,13 +62,13 @@ Grupul B păstrează citirea pentru orice cont logat pentru că e citit în afar
    SELECT module, count(*) FROM user_module_access WHERE module LIKE 'ofertare%' GROUP BY 1; -- așteptat: doar 'ofertare'
    ```
 2. GO Copilot pe diff + acordul explicit al lui Răzvan (e schimbare de drepturi, pct. 3 CLAUDE.md) + excepția la freeze-ul Ofertare.
-3. `bash scripts/livrare_migrare.sh supabase/migrations/20261003c_rls_ofertare_preturi_oferte.sql …` (runner-ul din #537/#538; validatorul acceptă fișierul). Migrarea refuză fără gardă, pe live schimbat, pe ACL anon schimbat și a doua oară.
+3. `bash scripts/livrare_migrare.sh supabase/migrations/20261004b_rls_ofertare_preturi_oferte.sql …` (runner-ul din #537/#538; validatorul acceptă fișierul). Migrarea refuză fără gardă, pe live schimbat, pe ACL anon schimbat și a doua oară.
 4. Verificare: md5 politici = `59290db392d6f8828faed9b4d94770db`; `has_table_privilege('anon', t, …)` = false pe toate 20; test manual în UI: Ofertare → RFQ / Licitații / Parteneri cu un cont cu modul; Ședințe și Contracte → lista parteneri cu un cont fără modul.
 5. **Rollback** (redeschide expunerea, doar cu acordul lui Răzvan), într-o singură tranzacție:
    ```sql
    BEGIN;
-   SELECT set_config('gazpet.revenire_20261003c', 'REVINE_RLS_OFERTARE:' || txid_current(), true);
-   \i supabase/revenire/20261003c_rls_ofertare_preturi_oferte_ROLLBACK.sql
+   SELECT set_config('gazpet.revenire_20261004b', 'REVINE_RLS_OFERTARE:' || txid_current(), true);
+   \i supabase/revenire/20261004b_rls_ofertare_preturi_oferte_ROLLBACK.sql
    COMMIT;
    ```
    Pornește doar din starea patch, reface exact cele 37 de politici citite pe 30.09 și `GRANT ALL … TO anon`; postcondiție md5 = `9784b08e…`. Nu trece prin runner (validatorul îl refuză intenționat: nu are garda de livrare, are armare proprie, ca revenirile din #537).

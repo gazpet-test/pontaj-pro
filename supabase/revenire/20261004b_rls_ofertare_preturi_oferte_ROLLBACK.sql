@@ -1,21 +1,21 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- 20261003c_rls_ofertare_preturi_oferte_ROLLBACK — NU e migrare (nu o parcurge niciun runner). Reface EXACT politicile și ACL-ul anon
+-- 20261004b_rls_ofertare_preturi_oferte_ROLLBACK — NU e migrare (nu o parcurge niciun runner). Reface EXACT politicile și ACL-ul anon
 -- citite read-only pe 30.09 (pg_policies = pg_get_expr) pe cele 20 de tabele. REDESCHIDE expunerea:
 -- se rulează doar cu acordul explicit al lui Răzvan.
 -- Armare (în aceeași tranzacție, fără nimic altceva):
 --   BEGIN;
---   SELECT set_config('gazpet.revenire_20261003c', 'REVINE_RLS_OFERTARE:' || txid_current(), true);
---   \i supabase/revenire/20261003c_rls_ofertare_preturi_oferte_ROLLBACK.sql
+--   SELECT set_config('gazpet.revenire_20261004b', 'REVINE_RLS_OFERTARE:' || txid_current(), true);
+--   \i supabase/revenire/20261004b_rls_ofertare_preturi_oferte_ROLLBACK.sql
 --   COMMIT;
 -- Precondiție: starea = patch (md5 59290db392d6f8828faed9b4d94770db, anon fără privilegii). Postcondiție: md5 9784b08e2edf7f9c37b5e7873e6f0e04 + anon ALL.
 -- ════════════════════════════════════════════════════════════════════════════
-DO $revenire_20261003c$
+DO $revenire_20261004b$
 DECLARE
   v_stare text;
 BEGIN
   -- Garda (start)
-  IF current_setting('gazpet.revenire_20261003c', true) IS DISTINCT FROM 'REVINE_RLS_OFERTARE:' || txid_current() THEN
-    RAISE EXCEPTION 'REFUZ: revenirea nu e armată (gazpet.revenire_20261003c)' USING ERRCODE = '42501';
+  IF current_setting('gazpet.revenire_20261004b', true) IS DISTINCT FROM 'REVINE_RLS_OFERTARE:' || txid_current() THEN
+    RAISE EXCEPTION 'REFUZ: revenirea nu e armată (gazpet.revenire_20261004b)' USING ERRCODE = '42501';
   END IF;
   -- Precondiții: helper-ul neschimbat, RLS pornit pe toate 20 tabele
   IF to_regprocedure('public.fn_are_acces_ofertare()') IS NULL OR (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid = 'public.fn_are_acces_ofertare()'::regprocedure AND p.prosecdef AND p.provolatile = 's' AND md5(p.prosrc) = '429d28e2a61fb24c8009d67050c16c85' AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND has_function_privilege('authenticated', p.oid, 'EXECUTE')) <> 1 THEN
@@ -26,7 +26,7 @@ BEGIN
   END IF;
   v_stare := (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s|%s', tablename, policyname, permissive, roles::text, cmd, coalesce(qual,''), coalesce(with_check,'')), E'\n' ORDER BY tablename, policyname),'')) FROM pg_catalog.pg_policies WHERE schemaname = 'public' AND tablename = ANY(ARRAY['oferta_materiale','ofertare_brokeri','ofertare_calibrari','ofertare_calibrari_subcontractori','ofertare_categorii_reguli','ofertare_experienta','ofertare_normative','ofertare_norme_productivitate','ofertare_oferte_deschidere','ofertare_oferte_furnizori','ofertare_parteneri','ofertare_preturi_materiale','ofertare_preturi_unitare','ofertare_radar','ofertare_rfq','ofertare_rfq_destinatari','ofertare_rfq_materiale','ofertare_rfq_oferte','ofertare_rfq_preturi','probe_oferte']::text[]));
   IF v_stare IS DISTINCT FROM '59290db392d6f8828faed9b4d94770db' OR (SELECT count(*) FROM unnest(ARRAY['oferta_materiale','ofertare_brokeri','ofertare_calibrari','ofertare_calibrari_subcontractori','ofertare_categorii_reguli','ofertare_experienta','ofertare_normative','ofertare_norme_productivitate','ofertare_oferte_deschidere','ofertare_oferte_furnizori','ofertare_parteneri','ofertare_preturi_materiale','ofertare_preturi_unitare','ofertare_radar','ofertare_rfq','ofertare_rfq_destinatari','ofertare_rfq_materiale','ofertare_rfq_oferte','ofertare_rfq_preturi','probe_oferte']::text[]) t WHERE has_table_privilege('anon', 'public.'||t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) <> 0 THEN
-    RAISE EXCEPTION 'REFUZ: revenirea pornește doar din starea patch-ului 20261003c_rls_ofertare_preturi_oferte (md5 politici % ≠ 59290db392d6f8828faed9b4d94770db sau anon are privilegii)', v_stare;
+    RAISE EXCEPTION 'REFUZ: revenirea pornește doar din starea patch-ului 20261004b_rls_ofertare_preturi_oferte (md5 politici % ≠ 59290db392d6f8828faed9b4d94770db sau anon are privilegii)', v_stare;
   END IF;
   EXECUTE 'DROP POLICY oferta_materiale_rls_sel ON public.oferta_materiale';
   EXECUTE 'DROP POLICY oferta_materiale_rls_ins ON public.oferta_materiale';
@@ -174,8 +174,8 @@ BEGIN
     RAISE EXCEPTION 'POSTCONDIȚIE: anon nu are din nou ALL pe toate 20 tabele';
   END IF;
   -- Garda (final)
-  IF current_setting('gazpet.revenire_20261003c', true) IS DISTINCT FROM 'REVINE_RLS_OFERTARE:' || txid_current() THEN
-    RAISE EXCEPTION 'REFUZ: revenirea nu e armată (gazpet.revenire_20261003c)' USING ERRCODE = '42501';
+  IF current_setting('gazpet.revenire_20261004b', true) IS DISTINCT FROM 'REVINE_RLS_OFERTARE:' || txid_current() THEN
+    RAISE EXCEPTION 'REFUZ: revenirea nu e armată (gazpet.revenire_20261004b)' USING ERRCODE = '42501';
   END IF;
 END
-$revenire_20261003c$;
+$revenire_20261004b$;

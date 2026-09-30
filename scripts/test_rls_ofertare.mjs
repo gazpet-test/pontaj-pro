@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const BIN = process.env.PGBIN || '/usr/lib/postgresql/17/bin'
 const PORT = process.env.PGPORT || '5497'
-const NUME = '20261003c_rls_ofertare_preturi_oferte'
+const NUME = '20261004b_rls_ofertare_preturi_oferte'
 const MIG = readFileSync(join(ROOT, 'supabase/migrations', NUME + '.sql'), 'utf8')
 const RB = readFileSync(join(ROOT, 'supabase/revenire', NUME + '_ROLLBACK.sql'), 'utf8')
 const LIVE = readFileSync(join(ROOT, 'supabase/tests/rls_ofertare_live_state.sql'), 'utf8')
@@ -38,7 +38,7 @@ const psql = (sql, { user = 'postgres', expectErr = false } = {}) => {
 const check = (name, cond, info = '') => { if (cond) { ok++; console.log('  ✔', name) } else { fail++; console.log('  ✘', name, info) } }
 const stare = () => psql(`SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s|%s', tablename, policyname, permissive, roles::text, cmd, coalesce(qual,''), coalesce(with_check,'')), E'\\n' ORDER BY tablename, policyname),'')) FROM pg_policies WHERE schemaname='public' AND tablename = ANY(ARRAY[${T.map(t => `'${t}'`).join(',')}]);`).out
 const livrare = (sql, nume = NUME) => psql(`BEGIN;\nSELECT set_config('gazpet.livrare_migrare', '${nume}:' || txid_current(), true) \\g /dev/null\n${sql}\nCOMMIT;`)
-const revenire = sql => psql(`BEGIN;\nSELECT set_config('gazpet.revenire_20261003c', 'REVINE_RLS_OFERTARE:' || txid_current(), true) \\g /dev/null\n${sql}\nCOMMIT;`)
+const revenire = sql => psql(`BEGIN;\nSELECT set_config('gazpet.revenire_20261004b', 'REVINE_RLS_OFERTARE:' || txid_current(), true) \\g /dev/null\n${sql}\nCOMMIT;`)
 // o „cerere REST”: rol + claims în tranzacție, ca PostgREST
 const rest = (rol, uid, sql) => psql(`BEGIN;\nSET LOCAL ROLE ${rol};\nSELECT set_config('request.jwt.claims', '${JSON.stringify(uid ? { sub: uid, role: rol } : { role: rol })}', true) \\g /dev/null\n${sql}\nROLLBACK;`)
 

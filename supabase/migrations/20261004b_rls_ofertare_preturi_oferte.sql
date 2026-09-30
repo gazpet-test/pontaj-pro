@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- 20261003c_rls_ofertare_preturi_oferte — DRAFT, NEAPLICAT. RLS + privilegii pe tabelele Ofertare găsite deschise de matricea de acces
+-- 20261004b_rls_ofertare_preturi_oferte — DRAFT, NEAPLICAT. RLS + privilegii pe tabelele Ofertare găsite deschise de matricea de acces
 -- (docs/SECURITATE_MATRICE_ACCES_2026-09-30.md §1.5 și #6; recomandarea §4: fn_are_acces_ofertare() la
 -- citire ȘI scriere pe prețuri și oferte furnizori). Completează #537 (care nu atinge tabele/politici).
 -- Tabele (20): grupul A = citire ȘI scriere doar cu modulul Ofertare (fn_are_acces_ofertare()):
@@ -15,7 +15,7 @@
 --   Dacă live s-a schimbat, migrarea refuză și nu face nimic.
 -- Postcondiții: md5 politici = 59290db392d6f8828faed9b4d94770db; anon fără niciun privilegiu pe cele 20.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (gardă gazpet.livrare_migrare legată de txid; fără
---   BEGIN/COMMIT în fișier; un singur bloc DO). Revenire: supabase/revenire/20261003c_rls_ofertare_preturi_oferte_ROLLBACK.sql.
+--   BEGIN/COMMIT în fișier; un singur bloc DO). Revenire: supabase/revenire/20261004b_rls_ofertare_preturi_oferte_ROLLBACK.sql.
 -- Detalii, matrice, riscuri: docs/RLS_OFERTARE.md. Test: scripts/test_rls_ofertare.mjs.
 -- ════════════════════════════════════════════════════════════════════════════
 DO $migrare_20261003c$
@@ -23,8 +23,8 @@ DECLARE
   v_stare text;
 BEGIN
   -- Garda (start)
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003c_rls_ofertare_preturi_oferte:' || txid_current() THEN
-    RAISE EXCEPTION 'REFUZ: 20261003c_rls_ofertare_preturi_oferte se livrează doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare)' USING ERRCODE = '42501';
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261004b_rls_ofertare_preturi_oferte:' || txid_current() THEN
+    RAISE EXCEPTION 'REFUZ: 20261004b_rls_ofertare_preturi_oferte se livrează doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare)' USING ERRCODE = '42501';
   END IF;
   -- Precondiții: helper-ul neschimbat, RLS pornit pe toate 20 tabele
   IF to_regprocedure('public.fn_are_acces_ofertare()') IS NULL OR (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid = 'public.fn_are_acces_ofertare()'::regprocedure AND p.prosecdef AND p.provolatile = 's' AND md5(p.prosrc) = '429d28e2a61fb24c8009d67050c16c85' AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND has_function_privilege('authenticated', p.oid, 'EXECUTE')) <> 1 THEN
@@ -35,7 +35,7 @@ BEGIN
   END IF;
   v_stare := (SELECT md5(coalesce(string_agg(format('%s|%s|%s|%s|%s|%s|%s', tablename, policyname, permissive, roles::text, cmd, coalesce(qual,''), coalesce(with_check,'')), E'\n' ORDER BY tablename, policyname),'')) FROM pg_catalog.pg_policies WHERE schemaname = 'public' AND tablename = ANY(ARRAY['oferta_materiale','ofertare_brokeri','ofertare_calibrari','ofertare_calibrari_subcontractori','ofertare_categorii_reguli','ofertare_experienta','ofertare_normative','ofertare_norme_productivitate','ofertare_oferte_deschidere','ofertare_oferte_furnizori','ofertare_parteneri','ofertare_preturi_materiale','ofertare_preturi_unitare','ofertare_radar','ofertare_rfq','ofertare_rfq_destinatari','ofertare_rfq_materiale','ofertare_rfq_oferte','ofertare_rfq_preturi','probe_oferte']::text[]));
   IF v_stare = '59290db392d6f8828faed9b4d94770db' AND (SELECT count(*) FROM unnest(ARRAY['oferta_materiale','ofertare_brokeri','ofertare_calibrari','ofertare_calibrari_subcontractori','ofertare_categorii_reguli','ofertare_experienta','ofertare_normative','ofertare_norme_productivitate','ofertare_oferte_deschidere','ofertare_oferte_furnizori','ofertare_parteneri','ofertare_preturi_materiale','ofertare_preturi_unitare','ofertare_radar','ofertare_rfq','ofertare_rfq_destinatari','ofertare_rfq_materiale','ofertare_rfq_oferte','ofertare_rfq_preturi','probe_oferte']::text[]) t WHERE has_table_privilege('anon', 'public.'||t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) = 0 THEN
-    RAISE EXCEPTION 'REFUZ: starea e deja cea a patch-ului 20261003c_rls_ofertare_preturi_oferte (nimic de făcut; nu se reaplică)';
+    RAISE EXCEPTION 'REFUZ: starea e deja cea a patch-ului 20261004b_rls_ofertare_preturi_oferte (nimic de făcut; nu se reaplică)';
   END IF;
   IF v_stare IS DISTINCT FROM '9784b08e2edf7f9c37b5e7873e6f0e04' THEN
     RAISE EXCEPTION 'REFUZ: politicile live s-au schimbat față de citirea din 30.09 (md5 % ≠ 9784b08e2edf7f9c37b5e7873e6f0e04). Se reface pre-check-ul.', v_stare;
@@ -189,8 +189,8 @@ BEGIN
     RAISE EXCEPTION 'POSTCONDIȚIE: anon mai are privilegii pe cel puțin un tabel din listă';
   END IF;
   -- Garda (final)
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003c_rls_ofertare_preturi_oferte:' || txid_current() THEN
-    RAISE EXCEPTION 'REFUZ: 20261003c_rls_ofertare_preturi_oferte se livrează doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare)' USING ERRCODE = '42501';
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261004b_rls_ofertare_preturi_oferte:' || txid_current() THEN
+    RAISE EXCEPTION 'REFUZ: 20261004b_rls_ofertare_preturi_oferte se livrează doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare)' USING ERRCODE = '42501';
   END IF;
 END
 $migrare_20261003c$;
