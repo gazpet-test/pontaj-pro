@@ -35,8 +35,9 @@
 --   1b. (r4) CREATE OR REPLACE pe fn_profiles_campuri_owner_only: singura schimbare = ramura service_role cere și
 --        session_user = 'authenticator' ȘI current_setting('role') = 'service_role' + claim.role/claims.role contradictorii ⇒ 42501;
 --        ramura directă (fără rol și fără sub, session_user postgres/supabase_admin), ramura owner și mesajele rămân identice.
---   0e. (r4) Precondiție: 0 funcții SECURITY INVOKER în public, executabile de authenticated/anon, care conțin EXECUTE /
---        set_config / SET ROLE (gadgetul care ar ocoli legarea de rolul efectiv — rezidual acceptat, vezi doc „Rezidual”).
+--   0e. (r4, r5) Precondiție: 0 funcții SECURITY INVOKER în public/graphql_public, executabile de authenticated/anon, a căror
+--        definiție reconstruită (pg_get_functiondef — include BEGIN ATOMIC) conține EXECUTE / set_config / SET [SESSION|LOCAL]
+--        ROLE (gadgetul care ar ocoli legarea de rolul efectiv — rezidual acceptat, vezi doc §8).
 --   2. Postcondiții (toate 4 funcțiile): md5 prosrc = variantele din patch, atributele neschimbate, ACL identic cu cel de dinainte, setul de 4 triggere intact.
 --
 -- Tranzacția: UN SINGUR gestionar = scripts/livrare_migrare.sh (fără BEGIN/COMMIT în fișier; garda de livrare start + final).
@@ -115,17 +116,24 @@ BEGIN
   IF v_n IS DISTINCT FROM 4 OR v_ok IS DISTINCT FROM 4 THEN
     RAISE EXCEPTION 'Precondiție 0c: triggerele de pe profiles nu sunt exact cele 4 analizate (% triggere, % conforme)', v_n, v_ok;
   END IF;
-  -- 0e. (r4) rezidualul acceptat al legării de rolul efectiv: PostgreSQL verifică SET ROLE față de session_user (authenticator e
-  --     membru service_role), deci un RPC SECURITY INVOKER executabil de authenticated/anon care face set_config('role', …) /
-  --     SET ROLE / EXECUTE dinamic ar putea trece ramura (a). Azi (audit live 01.10): 0 astfel de funcții în public. Dacă apare
-  --     unul la momentul aplicării ⇒ REFUZ (aceeași interogare ca SQL-ul de control post-deploy din docs/SEC_F1_F2_PATCH.md).
-  SELECT count(*), string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO v_n, v_gadget
-    FROM pg_proc p
-   WHERE p.pronamespace = 'public'::regnamespace::oid AND NOT p.prosecdef
-     AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
-     AND (p.prosrc ~* '\mexecute\M' OR p.prosrc ~* 'set_config' OR p.prosrc ~* 'set\s+(local\s+)?role');
+  -- 0e. (r4, r5) rezidualul acceptat al legării de rolul efectiv: PostgreSQL verifică SET ROLE față de session_user (authenticator
+  --     e membru service_role), deci o funcție SECURITY INVOKER executabilă de authenticated/anon care face set_config('role', …) /
+  --     SET [SESSION|LOCAL] ROLE / EXECUTE dinamic ar putea trece ramura (a). Azi (audit live 01.10): 0 astfel de funcții.
+  --     r5: se scanează DEFINIȚIA RECONSTRUITĂ (pg_get_functiondef — acoperă și LANGUAGE sql BEGIN ATOMIC, al cărei corp stă în
+  --     prosqlbody cu prosrc gol, plus clauzele SET din antet), în schemele expuse de PostgREST: public și graphql_public.
+  --     prokind 'f'/'p' (agregatele nu au definiție reconstituibilă; CASE garantează că pg_get_functiondef nu e evaluat pe ele).
+  --     Fail-closed intenționat: fals-pozitivele (comentariu cu „execute”, set_config inofensiv) refuză și ele — omul analizează
+  --     lista din mesaj. Dacă apare vreuna la momentul aplicării ⇒ REFUZ. Aceeași interogare = SQL-ul de control post-deploy
+  --     din docs/SEC_F1_F2_PATCH.md §8.
+  SELECT count(*), string_agg(g.functie, ', ' ORDER BY g.functie) INTO v_n, v_gadget
+    FROM (SELECT p.oid::regprocedure::text AS functie,
+                 CASE WHEN p.prokind IN ('f', 'p') THEN pg_get_functiondef(p.oid) END AS def
+            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p') AND NOT p.prosecdef
+             AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))) g
+   WHERE g.def ~* '\mexecute\M' OR g.def ~* 'set_config' OR g.def ~* 'set\s+(session\s+|local\s+)?role';
   IF v_n IS DISTINCT FROM 0 THEN
-    RAISE EXCEPTION 'Precondiție 0e: % funcții SECURITY INVOKER din public, executabile de authenticated/anon, conțin EXECUTE/set_config/SET ROLE (gadget pentru SET ROLE service_role — rezidualul acceptat al F2 nu mai e 0): % — se analizează înainte de aplicare', v_n, v_gadget;
+    RAISE EXCEPTION 'Precondiție 0e: % funcții SECURITY INVOKER din public/graphql_public, executabile de authenticated/anon, conțin EXECUTE/set_config/SET [SESSION|LOCAL] ROLE în definiție (posibil gadget pentru SET ROLE service_role — rezidualul acceptat al F2 nu mai e 0; fail-closed, poate fi și fals-pozitiv): % — un om analizează lista înainte de aplicare', v_n, v_gadget;
   END IF;
   -- 0d. ACL-ul de azi al celor 4 funcții, salvat pentru comparația de la final (CREATE OR REPLACE trebuie să-l păstreze)
   PERFORM set_config('gazpet.sec_f2_acl_inainte',

@@ -146,9 +146,12 @@ echo "$r" | grep -q '"code":"42501"' && ok "E2E-10 r4: non-owner (sub) RPC set_c
 st=$(P -tA -c "SELECT role||'/'||coalesce(department,'')||'/'||coalesce(employee_id::text,'') FROM profiles WHERE id='$U2'")
 [ "$st" = "sef_sr/D_SR/7" ] && ok "E2E-11 starea după r4: role/department/employee_id = $st" || bad "E2E-11" "$st"
 # REZIDUAL ACCEPTAT (Copilot, r4): gadget INVOKER cu set_config('role','service_role') — documentat, NU numără ca FAIL
+dep0=$(P -tA -c "SELECT department FROM profiles WHERE id='$U2'")
 r=$(H "$J_AUTH_NOSUB" -X POST "http://127.0.0.1:$HPORT/rpc/rezidual_set_role" -d '{}')
-if echo "$r" | grep -q 'UPD'; then echo "REZIDUAL ACCEPTAT R-1 RPC INVOKER set_config('role','service_role') + claims ⇒ UPDATE department TRECE ($r) — acoperit de precondiția 0e / controlul post-deploy (0 gadgeturi live)"
-else echo "INFO R-1 rezidualul NU s-a reprodus (răspuns: $r)"; fi
+dep1=$(P -tA -c "SELECT department FROM profiles WHERE id='$U2'")   # persistarea: rândul recitit după cererea REST (commit-uită)
+if echo "$r" | grep -q 'UPD' && [ "$dep1" = rezidual ]; then
+  echo "REZIDUAL ACCEPTAT R-1 RPC INVOKER set_config('role','service_role') + claims ⇒ UPDATE department TRECE și PERSISTĂ (răspuns $r; department recitit: $dep0 → $dep1) — acoperit de precondiția 0e / controlul post-deploy (0 gadgeturi live)"
+else echo "INFO R-1 rezidualul NU s-a reprodus (răspuns: $r; department recitit: $dep0 → $dep1)"; fi
 P -c "UPDATE profiles SET department='D_SR' WHERE id='$U2'" >/dev/null
 # CONTROL r3: a 4-a funcție readusă la corpul live c06d7ce0… (nelegată) ⇒ același RPC TRECE (gaura pe care o închide r4)
 python3 - "$T/sec_f1_f2_fixture_triggers.sql" > "$D/fn4_live.sql" <<'PY2'
@@ -159,7 +162,10 @@ P -f "$D/fn4_live.sql" >/dev/null && m4=$(P -tA -c "SELECT md5(prosrc) FROM pg_p
 r=$(H "$J_AUTH" -X POST "http://127.0.0.1:$HPORT/rpc/escaladare_employee_id" -d '{}')
 st4=$(P -tA -c "SELECT employee_id FROM profiles WHERE id='$U2'"); P -c "UPDATE profiles SET employee_id=7 WHERE id='$U2'" >/dev/null
 echo "$r" | grep -q 'UPD' && [ "$st4" = 999 ] && [ "$m4" = c06d7ce0f212c7bba2093c50614a88fc ] && ok "CONTROL-r3 a 4-a = live $m4: același RPC ⇒ employee_id TRECE (gaura reprodusă, închisă de r4)" || bad "CONTROL-r3" "md5=$m4 $r"
-st=$(P -tA -c "SELECT role FROM profiles WHERE id='$U2'")
-[ "$st" = "sef_sr" ] && ok "E2E-7 starea finală: role=$st (nicio escaladare n-a trecut)" || bad "E2E-7" "role=$st"
+# E2E-7: verifică DOAR coloanele atinse de atacurile blocate (role prin E2E-2..6; is_owner și can_* nu sunt ținta niciunui atac
+# de aici, dar se recitesc ca să nu fi fost schimbate lateral). department/employee_id sunt verificate în E2E-11 — după el,
+# R-1 (rezidual) și CONTROL-r3 le modifică intenționat și sunt readuse de script.
+st=$(P -tA -c "SELECT role||'/'||is_owner||'/'||can_access_salarii||'/'||can_access_pontaj_brut||'/'||can_access_financiar||'/'||can_modify_employees FROM profiles WHERE id='$U2'")
+[ "$st" = "sef_sr/false/true/true/false/false" ] && ok "E2E-7 starea finală role/is_owner/can_access_salarii/can_access_pontaj_brut/can_access_financiar/can_modify_employees = $st (atacurile E2E-2..6 pe role n-au persistat; restul = valorile puse legitim de service_role în E2E-1b)" || bad "E2E-7" "$st"
 echo "=== TOTAL: $NFAIL eșecuri ==="
 [ $NFAIL = 0 ]

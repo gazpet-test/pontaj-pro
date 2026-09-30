@@ -79,6 +79,7 @@ o=$(run "$F1"); [ $? = 0 ] && ok "F1-i reaplicare idempotentă" || bad "F1-i" "$
 F2=$M/20260930j_sec_f2_profiles_uid_null.sql
 U2=22222222-2222-2222-2222-222222222222; U1=11111111-1111-1111-1111-111111111111
 MDQ="SELECT string_agg(proname||'='||md5(prosrc), ' ' ORDER BY proname) FROM pg_proc WHERE proname IN ('prevent_role_escalation','enforce_owner_only_salary_flags','protect_can_access_pontaj_brut','fn_profiles_campuri_owner_only')"
+RB0=$M/20260930j_sec_f2_profiles_uid_null_ROLLBACK.sql
 MD_PATCH="enforce_owner_only_salary_flags=daaa561298c10c259944600e6c39467e fn_profiles_campuri_owner_only=9acc36a4067eddbdf29956220023ea92 prevent_role_escalation=cf75b37d522e2a6b0b9c9eabd72c27b4 protect_can_access_pontaj_brut=2eec050b53f37ec995da79e93a2a4686"
 MD_LIVE="enforce_owner_only_salary_flags=0470660c0a819981ff914355c7f6d00a fn_profiles_campuri_owner_only=c06d7ce0f212c7bba2093c50614a88fc prevent_role_escalation=16112659be92143e6539ae0e54e47a06 protect_can_access_pontaj_brut=ff277c90e02ef03d1efb34cd7e87b1d4"
 # Suita de comportament pentru utilizatori reali (cazul 7) — rulată cu corpurile LIVE și apoi cu cele din patch; ieșirile trebuie identice
@@ -104,10 +105,44 @@ o=$(Q authenticator -tA -c "BEGIN" -c "SELECT set_config('request.jwt.claims','{
 echo "$o" | grep -q "^UPD$" && ok "F2-r4-control corp live c06d7ce0…: authenticated + claims service_role ⇒ department TRECE (gaura reprodusă)" || bad "F2-r4-control" "$o"
 P -c "ALTER TABLE profiles ENABLE TRIGGER USER;" >/dev/null
 suite7 > "$D/s7_live.txt"
-# 0e (r4): un RPC SECURITY INVOKER executabil de authenticated care conține set_config ⇒ F2 refuză (gadget SET ROLE)
-P -c "CREATE FUNCTION public.gadget_x() RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN PERFORM set_config('role','service_role',true); END \$f\$; GRANT EXECUTE ON FUNCTION public.gadget_x() TO authenticated;" >/dev/null
-o=$(run "$F2"); echo "$o" | grep -q "Precondiție 0e" && ok "F2-0e gadget INVOKER cu set_config executabil de authenticated ⇒ refuz" || bad "F2-0e" "$o"
-P -c "DROP FUNCTION public.gadget_x();" >/dev/null
+# 0e (r4, r5): gadgeturi SECURITY INVOKER executabile de authenticated/anon ⇒ F2 refuză; fiecare creat ÎNAINTE de apply, apoi șters.
+# g0e <caz> <nume funcție> <SQL creare> — așteaptă refuz 0e cu numele funcției în mesaj
+g0e() { local caz=$1 fn=$2 sql=$3
+  P -c "$sql" >/dev/null || { bad "F2-0e $caz" "crearea gadgetului a eșuat"; return; }
+  o=$(run "$F2"); echo "$o" | grep -q "Precondiție 0e" && echo "$o" | grep -qF "${fn#public.}" && ok "F2-0e $caz ⇒ refuz ($fn în mesaj)" || bad "F2-0e $caz" "$o"
+  P -c "DROP FUNCTION $fn" >/dev/null; }
+g0e "plpgsql set_config('role')"                    "public.gadget_x()" \
+  "CREATE FUNCTION public.gadget_x() RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN PERFORM set_config('role','service_role',true); END \$f\$"
+g0e "SQL-standard BEGIN ATOMIC set_config('role') (prosrc gol)" "public.gadget_atomic()" \
+  "CREATE FUNCTION public.gadget_atomic() RETURNS text LANGUAGE sql BEGIN ATOMIC SELECT set_config('role','service_role',true); END"
+g0e "SQL-standard BEGIN ATOMIC set_config(claims)"  "public.gadget_atomic_claims()" \
+  "CREATE FUNCTION public.gadget_atomic_claims() RETURNS text LANGUAGE sql BEGIN ATOMIC SELECT set_config('request.jwt.claims','{\"role\":\"service_role\"}',true); END"
+g0e "plpgsql SET SESSION ROLE"                      "public.gadget_session()" \
+  "CREATE FUNCTION public.gadget_session() RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN SET SESSION ROLE service_role; END \$f\$"
+g0e "plpgsql SET LOCAL ROLE"                        "public.gadget_local()" \
+  "CREATE FUNCTION public.gadget_local() RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN SET LOCAL ROLE service_role; END \$f\$"
+g0e "plpgsql EXECUTE dinamic"                       "public.gadget_exec(text)" \
+  "CREATE FUNCTION public.gadget_exec(q text) RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE q; END \$f\$"
+g0e "clauză SET role în antet (proconfig)"          "public.gadget_cfg()" \
+  "CREATE FUNCTION public.gadget_cfg() RETURNS int LANGUAGE sql SET role = 'service_role' AS 'SELECT 1'"
+P -c "CREATE SCHEMA IF NOT EXISTS graphql_public; GRANT USAGE ON SCHEMA graphql_public TO anon, authenticated;" >/dev/null
+g0e "funcție în graphql_public (EXECUTE)"           "graphql_public.gadget_gql(text)" \
+  "CREATE FUNCTION graphql_public.gadget_gql(q text) RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE q; END \$f\$"
+g0e "fals-pozitiv intenționat: comentariu cu execute" "public.fp_comentariu()" \
+  "CREATE FUNCTION public.fp_comentariu() RETURNS int LANGUAGE plpgsql AS \$f\$ BEGIN RETURN 1; /* nu face execute */ END \$f\$"
+# control: vechea interogare r4 (doar prosrc) NU vede corpul BEGIN ATOMIC — motivul r5
+P -c "CREATE FUNCTION public.gadget_atomic() RETURNS text LANGUAGE sql BEGIN ATOMIC SELECT set_config('role','service_role',true); END" >/dev/null
+n=$(P -tA -c "SELECT count(*) FROM pg_proc p WHERE p.oid='public.gadget_atomic()'::regprocedure AND (p.prosrc ~* '\mexecute\M' OR p.prosrc ~* 'set_config' OR p.prosrc ~* 'set\s+(local\s+)?role')")
+[ "$n" = 0 ] && ok "F2-0e-control interogarea r4 (prosrc) ratează BEGIN ATOMIC (0 potriviri) — r5 o prinde" || bad "F2-0e-control" "n=$n"
+P -c "DROP FUNCTION public.gadget_atomic()" >/dev/null
+# negative: NU sunt gadgeturi ⇒ F2 se aplică (SECURITY DEFINER nu poate face SET ROLE; fără EXECUTE pentru anon/authenticated; schemă neexpusă)
+P -c "CREATE FUNCTION public.neg_secdef() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$ BEGIN PERFORM set_config('request.jwt.claims','{}',true); END \$f\$;
+      CREATE FUNCTION public.neg_revocat() RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE 'select 1'; END \$f\$; REVOKE EXECUTE ON FUNCTION public.neg_revocat() FROM PUBLIC;
+      CREATE SCHEMA neexpusa; CREATE FUNCTION neexpusa.neg_schema() RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN SET LOCAL ROLE service_role; END \$f\$;
+      CREATE AGGREGATE public.neg_agg(int) (sfunc = int4pl, stype = int);" >/dev/null
+o=$(run "$F2"); [ $? = 0 ] && ok "F2-0e-neg SECDEF / EXECUTE revocat / schemă neexpusă / agregat ⇒ nu blochează (aplicat)" || bad "F2-0e-neg" "$o"
+P -c "DROP FUNCTION public.neg_secdef(), public.neg_revocat(); DROP SCHEMA neexpusa CASCADE; DROP AGGREGATE public.neg_agg(int);" >/dev/null
+o=$(run "$RB0"); [ $? = 0 ] && [ "$(P -tA -c "$MDQ")" = "$MD_LIVE" ] || bad "F2-0e-neg-rb" "$o"
 o=$(run "$F2"); [ $? = 0 ] && ok "F2-apply aplicare" || bad "F2-apply" "$o"
 md=$(P -tA -c "$MDQ")
 echo "INFO md5 după F2: $md"

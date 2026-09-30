@@ -235,7 +235,7 @@ Ramura (a): `v_rol = 'service_role' AND session_user = 'authenticator' AND curre
 
 ### 8.2 Schimbarea r4
 - Migrarea include acum și a 4-a funcție cu aceeași disciplină: precondiție md5 live `c06d7ce0…` SAU md5 patch (reaplicare), atribute neschimbate (plpgsql, SECDEF, `search_path=public, pg_temp`, proprietar postgres, ACL comparat înainte/după), setul de 4 triggere intact. Singura schimbare în corp: ramura `service_role` devine `v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role'`, plus regula „claim.role și claims.role nevide și diferite ⇒ 42501” (aliniată cu celelalte 3). Ramura directă (`v_rol IS NULL AND v_sub IS NULL` + `session_user` postgres/supabase_admin), ramura owner și mesajele rămân identice. Verificarea separată „0c: a 4-a e c06d7ce0…” a fost înlocuită de 0a/0b pe 4 funcții.
-- Precondiție nouă **0e**: refuz dacă există în `public` funcții SECURITY INVOKER executabile de authenticated/anon care conțin `EXECUTE`/`set_config`/`SET ROLE` (§8.4).
+- Precondiție nouă **0e**: refuz dacă există funcții SECURITY INVOKER executabile de authenticated/anon care conțin `EXECUTE`/`set_config`/`SET ROLE` (§8.4; extinsă în r5, §8.6).
 - ROLLBACK: readuce și a 4-a funcție la corpul live `c06d7ce0…` (precondiție: md5 patch nou sau deja live).
 
 | funcție | md5 live (pre-check / rollback) | md5 patch r4 |
@@ -254,15 +254,49 @@ Mecanism: PostgreSQL verifică `SET ROLE` față de `session_user`, nu față de
 
 Audit live read-only (01.10.2026 ~01:40): în `public` 57 funcții INVOKER, 38 executabile de authenticated, **0** care conțin `EXECUTE` sau `set_config` / `SET ROLE`.
 
-SQL de control (read-only) pentru rutina post-deploy — trebuie să întoarcă **0 rânduri**; aceeași interogare e precondiția 0e din migrare:
+SQL de control (read-only) pentru rutina post-deploy — trebuie să întoarcă **0 rânduri**; e exact interogarea precondiției 0e din migrare (varianta r5, §8.6):
 ```sql
-SELECT p.oid::regprocedure AS functie
-  FROM pg_proc p
- WHERE p.pronamespace = 'public'::regnamespace AND NOT p.prosecdef
-   AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
-   AND (p.prosrc ~* '\mexecute\M' OR p.prosrc ~* 'set_config' OR p.prosrc ~* 'set\s+(local\s+)?role');
+SELECT g.functie
+  FROM (SELECT p.oid::regprocedure::text AS functie,
+               CASE WHEN p.prokind IN ('f', 'p') THEN pg_get_functiondef(p.oid) END AS def
+          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p') AND NOT p.prosecdef
+           AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))) g
+ WHERE g.def ~* '\mexecute\M' OR g.def ~* 'set_config' OR g.def ~* 'set\s+(session\s+|local\s+)?role'
+ ORDER BY 1;
 ```
-Limită: detectează doar corpuri din `public` (nu alte scheme expuse, nici apeluri indirecte prin funcții din alte scheme); `\mexecute\M` poate da și fals-pozitive (ex. text în comentarii) — un rând întors se analizează, nu se ignoră.
+
+Limitele sunt în §8.6.
 
 ### 8.5 Neverificabil local
 Aceleași ca §7.4; nimic aplicat pe Supabase.
+
+### 8.6 Runda 5 (01.10.2026) — NO-GO pe 0e, reparat
+Verdict: a 4-a funcție, md5-urile și rollback-ul sunt confirmate; NO-GO doar pe precondiția 0e. Fiecare punct, schimbarea și testul:
+
+| # | Problema | Schimbarea r5 | Test |
+|---|---|---|---|
+| 1 | 0e scana doar `prosrc`; o funcție `LANGUAGE sql BEGIN ATOMIC … END` are corpul în `prosqlbody`, cu `prosrc` gol, deci scăpa | se scanează `pg_get_functiondef(p.oid)`, adică definiția reconstruită (corpul, inclusiv BEGIN ATOMIC, și clauzele `SET` din antet), doar pentru `prokind IN ('f','p')`. `CASE` garantează că nu e evaluată pe agregate/window, unde ar da eroare | harness: gadget BEGIN ATOMIC cu `set_config('role',…)` ⇒ refuz; BEGIN ATOMIC cu `set_config('request.jwt.claims',…)` ⇒ refuz; control: interogarea r4 (prosrc) are 0 potriviri pe același gadget; agregat în `public` ⇒ nu dă eroare, nu blochează |
+| 1 | regexul rata `SET SESSION ROLE` | `'set\s+(session\s+\|local\s+)?role'` (plus `'\mexecute\M'`, `'set_config'`) | gadget plpgsql `SET SESSION ROLE` ⇒ refuz; `SET LOCAL ROLE` ⇒ refuz; `EXECUTE` dinamic ⇒ refuz; clauză `SET role = …` în antet (proconfig) ⇒ refuz |
+| 1 | doar schema `public` | `public` ȘI `graphql_public` (ambele expuse de PostgREST) | funcție în `graphql_public` cu `EXECUTE` ⇒ refuz |
+| 2 | teste | 9 cazuri de refuz, fiecare gadget creat ÎNAINTE de apply și șters după, cu numele funcției verificat în mesaj; plus un caz negativ: SECURITY DEFINER cu `set_config`, `EXECUTE` revocat de la PUBLIC, schemă neexpusă, agregat ⇒ F2 se aplică | `test_sec_f1_f2.sh` |
+| 3 | fals-pozitive | **rămân fail-closed intenționat** (comentariu cu „execute”, `set_config` inofensiv, o funcție al cărei nume conține `set_config`, `RESET ROLE`). La refuz, un om analizează lista de funcții din mesajul 0e și decide: rescrie funcția, îi revocă EXECUTE de la anon/authenticated sau o face SECURITY DEFINER. Regexul nu se relaxează | fals-pozitiv „comentariu cu execute” ⇒ refuz (documentat ca așteptat) |
+| 4 | R-1 verifica doar răspunsul; mesajul E2E-7 promitea mai mult decât verifica | R-1 recitește rândul din BD după cererea REST (persistare: `department` D_SR → `rezidual`). E2E-7 verifică explicit `role`, `is_owner`, `can_access_salarii`, `can_access_pontaj_brut`, `can_access_financiar`, `can_modify_employees`; `department`/`employee_id` sunt verificate în E2E-11, înainte de R-1/CONTROL-r3, care le modifică intenționat | `test_sec_f2_postgrest.sh` |
+| 5 | doc | SQL-ul de control din §8.4 = interogarea nouă 0e | — |
+
+Limite cunoscute (neacoperite de 0e, intenționat):
+- **Scheme de platformă Supabase: `extensions`, `storage`, `realtime`** (și altele interne). Funcțiile de aici sunt ale platformei, schemele nu sunt expuse de PostgREST (`db-schemas` = public, graphql_public), iar noi nu le modificăm. Scanarea live din 01.10 (făcută de coordonator) a găsit 12 potriviri de platformă, de exemplu `realtime.apply_rls`, care face `SET ROLE`. Lista exactă o dă interogarea de mai jos (aceeași logică, pe schemele neexpuse); o recitim la fiecare upgrade de platformă, doar ca informare, nu ca blocaj:
+```sql
+SELECT n.nspname, p.oid::regprocedure AS functie, p.prosecdef
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname IN ('extensions', 'storage', 'realtime') AND p.prokind IN ('f', 'p')
+   AND (CASE WHEN p.prokind IN ('f', 'p') THEN pg_get_functiondef(p.oid) END) ~* '(\mexecute\M|set_config|set\s+(session\s+|local\s+)?role)'
+ ORDER BY 1, 2;
+```
+- **Apelurile indirecte sunt acoperite doar parțial.** O funcție expusă (public/graphql_public) care cheamă un helper INVOKER din altă schemă, iar helperul face `SET ROLE`/`set_config('role',…)`, nu e prinsă decât dacă textul funcției expuse conține el însuși unul dintre tipare. 0e nu urmărește graful de apeluri.
+- Detecția e textuală: un gadget scris ocolind tiparele (de ex. un apel dinamic construit prin concatenare într-o funcție din altă schemă) nu e prins. De aceea rezidualul rămâne „acceptat și monitorizat”, nu „eliminat”.
+
+Rezultate r5 (local, PG 17 + PostgREST 13.0.4):
+- `bash scripts/test_sec_f1_f2.sh`: **167 PASS / 0 FAIL** (157 din r4, din care cazul 0e unic e înlocuit de 9 cazuri de refuz + controlul prosrc + cazul negativ).
+- `POSTGREST=… bash scripts/test_sec_f2_postgrest.sh`: **16 PASS / 0 FAIL**, plus „REZIDUAL ACCEPTAT R-1”, cu persistarea verificată (nu contează ca FAIL).
+- Nimic rulat pe Supabase. Interogarea 0e nouă se rulează pe live de coordonator și trebuie să întoarcă 0 rânduri.
