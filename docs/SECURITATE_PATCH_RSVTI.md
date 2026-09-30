@@ -556,3 +556,43 @@ set_config citat nerecunoscut, comparație GUC sensibilă la majuscule, SET nere
 Porturi: A 5901, B 5902, replica 5903 (`/tmp/pg_sec_rsvti_r7*`). Suita completă rulată de 2 ori, exit 0:
 `PASS test_sec_rsvti: 393 aserțiuni OK + 225 verificări negative/fără urme/statice OK`. PG17 tot neverificat local.
 NEAPLICAT pe live, nepushat.
+
+## 17. Runda 8 — runner (răspuns la verdictul Copilot R7, `docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R7.md`)
+
+Un singur blocant + condițiile operaționale; arhitectura și regresia rundelor 4–7 neschimbate.
+
+1. **Identificatori Unicode `U&"…"`** — tokenizerul validatorului refuză la nivel superior orice ghilimea (`"` sau `'`)
+   precedată de tokenii `U`, `&` (cuvintele sunt normalizate la majuscule ⇒ și `u&`; comentariile/spațiile sunt sărite ⇒
+   și `U& /* c */ "…"`, fail-closed chiar dacă PostgreSQL n-ar lega acolo prefixul), indiferent de conținut și de
+   calificare (`pg_catalog.U&"…"`, `"pg_catalog".U&"…"`). Plus: cuvântul `UESCAPE` la nivel superior ⇒ refuz. Fără listă de
+   escape-uri (`\005F` nu e tratat special). Corpurile `$…$` nu sunt afectate (nu sunt nivel superior; revin review-ului).
+   **Decizia la `U&'…'` (literal):** refuzat la fel, la nivel superior. Motiv: valoarea lui se decodifică în server, deci un
+   `set_config(U&'search\005Fpath', …)` sau orice alt argument comparat de validator ar fi verificat pe alt text decât cel
+   executat; regula `set_config` cerea deja un literal simplu `'…'`, dar refuzul general e mai simplu și nu depinde de
+   poziție. Niciuna din migrările aprobate nu folosește `U&` / `UESCAPE` (verificat).
+2. **Condiții operaționale (implementate în runner, înainte de conexiune):**
+   * `PGSERVICE`, `PGSERVICEFILE`, `PGSYSCONFDIR` moștenite din mediu ⇒ refuz 2 (serviciul se dă DOAR prin `--service`).
+   * `--service S` ⇒ se citește configurația EFECTIVĂ în ordinea libpq (`~/.pg_service.conf`, apoi
+     `$(pg_config --sysconfdir)/pg_service.conf` doar dacă S nu e în fișierul utilizatorului); secțiunea poate conține
+     numai chei pe listă albă (host, port, dbname, user, ssl*, connect_timeout, application_name, passfile, keepalives*);
+     `hostaddr`, `options`, `target_session_attrs`, `service`, orice altceva ⇒ refuz 2; serviciu negăsit / sysconfdir
+     nedeterminabil ⇒ refuz 2. host/port/dbname rămân suprascrise de `--tinta-host/--tinta-port/--tinta-db`.
+     `PGHOSTADDR` era deja refuzat ⇒ endpointul efectiv = cel aprobat (precondiție verificată, nu doar declarată).
+   * **`pg_control_system()`** — pre-verificarea (read-only) cere întâi `has_function_privilege(…, 'EXECUTE')`; lipsa
+     dreptului ⇒ NEPORNIT 12 cu mesaj explicit, nimic trimis. Nu există cale de relaxare.
+   * **PG17** (producția) rămâne neverificat local (clusterele de test sunt PG16) — consemnat.
+
+**Teste noi** (`scripts/test_sec_rsvti.sh` 6.0, 6.21–6.23): 6.0 — 12 cazuri U&/UESCAPE refuzate (probele din verdict,
+`u&`, comentariu/linie nouă între U& și ghilimele, `U&'…'` în argument), 3 acceptate (`a & b`, identificatorul citat
+`"U&"`, U& în corp `$$`); migrările #537/#538/#540/#541/#542 acceptate. 6.21 — cele 4 probe (2 principale, UESCAPE '!',
+`"pg_catalog".`) livrate prin runner între gărzi ⇒ refuz 3, psql nepornit, `t_uni` absentă, 0 înregistrări, pg_dump
+identic; formele aprobate (`SET LOCAL search_path = public, pg_temp` + `set_config('gazpet.…')` static) ⇒ APLICAT +
+înregistrat. 6.22 — control dinamic direct pe PG local, fără validator: toate 3 formele schimbă `search_path`, forma
+concatenată pune `client_encoding = LATIN1` (blocantul era real); validator slăbit + runner real ⇒ migrarea APLICATĂ cu
+`search_path = public,pg_catalog`; mutanții „fără regula U&” și „fără UESCAPE” prinși. 6.23 — PGSERVICE/PGSERVICEFILE/
+PGSYSCONFDIR ⇒ refuz 2; `--service` cu hostaddr / options / inexistent ⇒ refuz 2; `--service` curat ⇒ APLICAT; rol fără
+drept pe `pg_control_system()` ⇒ 12 explicit, fără urme; mutantul fără verificarea dreptului prins.
+
+Suita completă rulată de 2 ori, exit 0: `PASS test_sec_rsvti: 393 aserțiuni OK + 253 verificări negative/fără urme/statice OK`.
+NEAPLICAT pe live. **Rămâne deschis:** GO Copilot pe runda 8 și acordul lui Răzvan; verificarea pe live (read-only) a
+dreptului rolului operatorului pe `pg_control_system()`; PG17.

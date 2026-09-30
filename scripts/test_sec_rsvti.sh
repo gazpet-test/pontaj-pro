@@ -32,6 +32,10 @@
 #   6.17–6.20 (runda 7, verdict Copilot R6): COPY … FROM STDIN refuzat înainte de psql + control dinamic pe stare finală
 #      (validator slăbit ⇒ tabela comisă); set_config/SET normalizate (formele citate/calificate, argument complet);
 #      instanța autoritativă (replică fizică locală pg_basebackup -R, replay pus pe pauză ⇒ 22, niciodată 10); mutanți
+#   6.21–6.23 (runda 8, verdict Copilot R7): identificatori/literali Unicode U&"…"/U&'…' (și UESCAPE) refuzați înainte de
+#      psql + control dinamic direct pe PG (U&"set\005Fconfig" chiar schimbă setarea) + validator slăbit ⇒ atac aplicat;
+#      PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR moștenite ⇒ refuz, --service verificat (hostaddr ⇒ refuz); drept pe
+#      pg_control_system() lipsă ⇒ NEPORNIT (12) fără relaxare
 #   7. ceas fix (libfaketime, repornirea serverului) 2026-09-29 23:30 UTC: data omisă / NULL = 30.09
 #
 # Utilizare (din rădăcina repo-ului; ca root, comenzile de server trec pe utilizatorul postgres prin su):
@@ -550,7 +554,14 @@ CAZURI_REFUZ=("END;" "end ;" "SELECT '--'; COMMIT;" "SELECT 1; commit ;" "COMMIT
   "SELECT set_config(E'search_path', 'x', true);" "SELECT set_config('search_path'::text, 'x', true);"
   "SELECT set_config('search_'"$'\n'"'path', 'x', true);" "SELECT set_config(\$s\$search_path\$s\$, 'x', true);" "SELECT set_config;"
   "SET LOCAL \"search_path\" = public, pg_temp;" "SET \"Search_Path\" TO public;" "SET LOCAL x.search_path = 'y';"
-  "SET ROLE postgres;" "SET SESSION AUTHORIZATION postgres;" "SET TIME ZONE 'UTC';" "SET CONSTRAINTS ALL DEFERRED;" "SET LOCAL;")
+  "SET ROLE postgres;" "SET SESSION AUTHORIZATION postgres;" "SET TIME ZONE 'UTC';" "SET CONSTRAINTS ALL DEFERRED;" "SET LOCAL;"
+  # runda 8 — escape-uri Unicode (probele din verdictul R7 + variante): orice U&"…"/U&'…'/UESCAPE la nivel superior
+  "SELECT pg_catalog.U&\"set\\005Fconfig\"('search_path','public,pg_catalog',true);"
+  "SELECT pg_catalog.U&\"set\\005Fconfig\"('client_' || 'encoding','LATIN1',true);"
+  "SELECT pg_catalog.U&\"set!005Fconfig\" UESCAPE '!' ('search_path','public,pg_catalog',true);"
+  "SELECT \"pg_catalog\".U&\"set\\005Fconfig\"('search_path','x',true);" "SELECT u&\"set\\005fconfig\"('search_path','x',true);"
+  "SELECT U&\"set_config\"('gazpet.x','y',true);" "SELECT U& /* c */ \"x\";" "SELECT U&"$'\n'"\"x\";" "SELECT U&'x';"
+  "SELECT set_config(U&'search\\005Fpath','x',true);" "SELECT set_config('gazpet.x', U&'y', true);" "SELECT 'x' UESCAPE '!';")
 CAZURI_OK=("CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS \$f\$ BEGIN RETURN 1; END; \$f\$;"
   "DO \$\$ BEGIN PERFORM 1; END \$\$;" "SELECT 'COMMIT; END;';" "SELECT '--', 1; -- COMMIT;" "/* COMMIT; /* END; */ */ SELECT 1;"
   "SELECT \$a\$ \$b\$ COMMIT; \$b\$ \$a\$;" "SELECT E'\\\\'' ; COMMIT; ';" "SELECT 1::int, 'a'::text;" "PREPARE p AS SELECT 1;"
@@ -563,7 +574,9 @@ CAZURI_OK=("CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS \$f\$ BEGIN RETU
   "SELECT set_config('gazpet.livrare_x', 'y:' || txid_current(), true);" "SELECT pg_catalog.set_config('gazpet.x', 'v' || 'w', true);"
   "SELECT pg_catalog.\"set_config\"('gazpet.x', 'y', true);" "SELECT current_setting('gazpet.x', true);"
   "SET LOCAL lock_timeout TO '5s';" "SET LOCAL \"lock_timeout\" = '5s';" "UPDATE t SET copy_nr = 1;"
-  "CREATE FUNCTION f() RETURNS void LANGUAGE sql SET search_path = public, pg_temp AS \$f\$ SELECT 1 \$f\$;")
+  "CREATE FUNCTION f() RETURNS void LANGUAGE sql SET search_path = public, pg_temp AS \$f\$ SELECT 1 \$f\$;"
+  # runda 8: „&” obișnuit, identificatorul citat "U&", U& în corpul unei funcții (nu e nivel superior)
+  "SELECT a & b FROM (SELECT 1 AS a, 3 AS b) s;" "SELECT \"U&\" FROM (SELECT 1 AS \"U&\") s;" "DO \$\$ BEGIN PERFORM U&'x'; END \$\$;")
 for c in "${CAZURI_REFUZ[@]}"; do valideaza_caz 1 "$c" || esec "6.0 validator: trebuia REFUZAT: $c"; done
 for c in "${CAZURI_OK[@]}"; do valideaza_caz 0 "$c" || esec "6.0 validator: trebuia ACCEPTAT: $c"; done
 set +e; python3 "$VALIDATOR" "$MIGRARE" >/dev/null 2>&1; RCV=$?; set -e
@@ -1338,6 +1351,104 @@ for m in v_copy v_sc_primul_token v_sc_citat v_guc_majuscule v_set_nerecunoscut;
   [ $prins = 1 ] || esec "6.20 mutant de validator $m: NEPRINS"
   ok6 "6.20 mutant de validator $m ⇒ prins"
 done
+
+# ---- 6.21 UNICODE: probele din verdictul R7 livrate prin runner ⇒ refuz înainte de psql, fără urme ------------------
+echo "→ 6.21 identificatori Unicode U&\"…\": refuz înainte de psql; formele aprobate rămân acceptate"
+aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+for linie in "SELECT pg_catalog.U&\"set\\005Fconfig\"('search_path','public,pg_catalog',true);" \
+             "SELECT pg_catalog.U&\"set\\005Fconfig\"('client_' || 'encoding','LATIN1',true);" \
+             "SELECT pg_catalog.U&\"set!005Fconfig\" UESCAPE '!' ('search_path','public,pg_catalog',true);" \
+             "SELECT \"pg_catalog\".U&\"set\\005Fconfig\"('search_path','public,pg_catalog',true);"; do
+  { garda_sql "$NUME_MIG"; echo "CREATE TABLE public.t_uni (x int);"; printf '%s\n' "$linie"; } > "$VAR_DIR/uni.sql"
+  livreaza "$VAR_DIR/uni.sql"; refuz_preconex "6.21 verdict R7: «$linie»" 3 "REFUZ validator" "$SNAP_E"
+  grep -qF "escape Unicode" "$ERR_R" || { cat "$ERR_R" >&2; esec "6.21 refuzat din alt motiv decât U&: $linie"; }
+  [ "$(exista public.t_uni)" = f ] && [ "$(inregistrata)" = 0 ] || esec "6.21 starea finală: t_uni există sau înregistrare"
+done
+rm -f "$SNAP_E"
+# formele aprobate (SET LOCAL search_path = public, pg_temp; set_config/current_setting statice pe gazpet.*) ⇒ APLICAT
+aux_nou; NUME_S="20261003z_test_config"
+{ garda_sql "$NUME_S"; echo "SET LOCAL search_path = public, pg_temp;"
+  echo "SELECT set_config('gazpet.marcaj_test', 'x:' || txid_current(), true);"
+  echo "CREATE TABLE public.t_uni AS SELECT current_setting('search_path') AS sp, current_setting('gazpet.marcaj_test', true) LIKE 'x:%' AS m;"
+} > "$VAR_DIR/uni_ok.sql"
+NUME_T="$NUME_S" livreaza "$VAR_DIR/uni_ok.sql" 20261003300000
+[ $RC = 0 ] && [ "$(inregistrata "$NUME_S")" = 1 ] && [ "$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT sp || '|' || m FROM public.t_uni")" = "public, pg_temp|true" ] \
+  || { cat "$ERR_R" >&2; esec "6.21 formele aprobate trebuiau APLICATE + înregistrate (cod $RC)"; }
+ok6 "6.21 formele aprobate (SET LOCAL search_path = public, pg_temp + set_config('gazpet.…') static) ⇒ APLICAT + înregistrat"
+
+# ---- 6.22 CONTROL DINAMIC direct pe PG local (FĂRĂ validator): U&"set\005Fconfig" chiar schimbă setarea -------------
+echo "→ 6.22 control dinamic pe PG local: U&\"set\\005Fconfig\" = set_config (blocantul era real)"
+for linie in "SELECT pg_catalog.U&\"set\\005Fconfig\"('search_path','public,pg_catalog',true);" \
+             "SELECT pg_catalog.U&\"set!005Fconfig\" UESCAPE '!' ('search_path','public,pg_catalog',true);" \
+             "SELECT \"pg_catalog\".U&\"set\\005Fconfig\"('search_path','public,pg_catalog',true);"; do
+  SP="$(printf 'BEGIN;\nSET LOCAL search_path = public, pg_temp;\n%s\nSELECT current_setting('"'"'search_path'"'"');\nROLLBACK;\n' "$linie" \
+        | "${PSQL[@]}" -d "$BAZA_AUX" -At 2>&1 | tail -n 1)"
+  [ "$SP" = "public,pg_catalog" ] || esec "6.22 control dinamic: «$linie» ⇒ search_path='$SP' (așteptat public,pg_catalog)"
+done
+CE="$(printf 'BEGIN;\n%s\nSELECT current_setting('"'"'client_encoding'"'"');\nROLLBACK;\n' "SELECT pg_catalog.U&\"set\\005Fconfig\"('client_' || 'encoding','LATIN1',true);" \
+      | "${PSQL[@]}" -d "$BAZA_AUX" -At 2>&1 | tail -n 1)"
+[ "$CE" = "LATIN1" ] || esec "6.22 control dinamic: client_encoding='$CE' (așteptat LATIN1)"
+ok6 "6.22 control dinamic (psql direct, fără validator): U&\"set\\005Fconfig\" (simplu, UESCAPE '!', \"pg_catalog\".) ⇒ search_path schimbat; concatenat ⇒ client_encoding=LATIN1"
+# validator SLĂBIT (fără regula U&) + runnerul real ⇒ proba e acceptată și APLICATĂ cu search_path schimbat
+mkdir -p "$MUT/uni_vslab"; cp "$LIVRARE" "$MUT/uni_vslab/livrare_migrare.sh"
+A='            if strict and cur[-2:] == ["U", "&"]:' python3 - "$VALIDATOR" "$MUT/uni_vslab/livrare_validator.py" <<'PY'
+import os, sys
+s = open(sys.argv[1]).read(); a = os.environ["A"]; assert s.count(a) == 1
+open(sys.argv[2], "w").write(s.replace(a, "            if False:"))
+PY
+aux_nou; NUME_S="20261003z_test_unicode"
+{ garda_sql "$NUME_S"; echo "SELECT pg_catalog.U&\"set\\005Fconfig\"('search_path','public,pg_catalog',true);"
+  echo "CREATE TABLE public.t_uni AS SELECT current_setting('search_path') AS sp;"; } > "$VAR_DIR/uni_atac.sql"
+NUME_T="$NUME_S" livreaza "$VAR_DIR/uni_atac.sql" 20261003400000 "" "$MUT/uni_vslab/livrare_migrare.sh"
+[ $RC = 0 ] && [ "$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT sp FROM public.t_uni")" = "public,pg_catalog" ] \
+  || { cat "$ERR_R" >&2; esec "6.22 validator slăbit: atacul trebuia reprodus (cod $RC)"; }
+ok6 "6.22 validator fără regula U& + runnerul real ⇒ migrarea APLICATĂ cu search_path='public,pg_catalog' (mutant prins pe starea finală)"
+mv_py v_unicode '            if strict and cur[-2:] == ["U", "&"]:' '            if False:'
+mv_py v_uescape '        if "UESCAPE" in toks:' '        if False:'
+for m in v_unicode v_uescape; do
+  prins=0
+  for c in "${CAZURI_REFUZ[@]}"; do VALIDATOR="$MUT/$m/v.py" valideaza_caz 1 "$c" || { prins=1; break; }; done
+  [ $prins = 1 ] || esec "6.22 mutant de validator $m: NEPRINS"
+  ok6 "6.22 mutant de validator $m ⇒ prins"
+done
+
+# ---- 6.23 CONDIȚII OPERAȚIONALE: serviciul efectiv (PGSERVICE moștenit / --service) și dreptul pe pg_control_system() --
+echo "→ 6.23 serviciul efectiv și dreptul pe pg_control_system()"
+aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+for v in "PGSERVICE=gazpet_live" "PGSERVICEFILE=/tmp/x.conf" "PGSYSCONFDIR=/tmp"; do
+  export "${v%%=*}=${v#*=}"; livreaza "$MIGRARE"; unset "${v%%=*}"
+  refuz_preconex "6.23 variabila ${v%%=*} moștenită din mediu" 2 "variabila ${v%%=*}" "$SNAP_E"
+done
+HOME_V="$HOME"; export HOME="$VAR_DIR/home"; mkdir -p "$HOME"
+printf '[svc_ostil]\nhost=127.0.0.1\nhostaddr=127.0.0.1\nport=%s\n[svc_opt]\nhost=x\noptions=-c search_path=pg_catalog\n[svc_ok]\nhost=127.0.0.1\nport=%s\nsslmode=disable\n' "$PORT_B" "$PORT" > "$HOME/.pg_service.conf"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_ostil
+refuz_preconex "6.23 --service cu hostaddr în configurația efectivă" 2 "chei nepermise: hostaddr" "$SNAP_E"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_opt
+refuz_preconex "6.23 --service cu options" 2 "chei nepermise: options" "$SNAP_E"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_absent
+refuz_preconex "6.23 --service inexistent (fail-closed)" 2 "negăsit" "$SNAP_E"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_ok
+[ $RC = 0 ] && [ "$(inregistrata)" = 1 ] || { cat "$ERR_R" >&2; export HOME="$HOME_V"; esec "6.23 --service curat trebuia APLICAT (cod $RC)"; }
+export HOME="$HOME_V"
+ok6 "6.23 --service cu chei pe lista albă ⇒ APLICAT; hostaddr/options/serviciu absent ⇒ refuz 2 înainte de conexiune"
+# rol fără drept de apel pe pg_control_system() ⇒ pre-verificarea refuză explicit (12), nimic trimis
+aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+"${PSQL[@]}" -d postgres -c "DROP ROLE IF EXISTS livr_fara_ctrl" -c "CREATE ROLE livr_fara_ctrl LOGIN" >/dev/null
+"${PSQL[@]}" -d "$BAZA_AUX" -c "REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC" >/dev/null
+SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+[ "$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT has_function_privilege('livr_fara_ctrl', 'pg_catalog.pg_control_system()', 'EXECUTE')")" = f ] \
+  || mediu "6.23: rolul de test are drept pe pg_control_system()"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --user livr_fara_ctrl
+[ $RC = 12 ] && grep -qF "nu are drept de apel pe pg_control_system()" "$ERR_R" && [ "$(inregistrata)" = 0 ] \
+  || { cat "$ERR_R" >&2; esec "6.23 fără drept pe pg_control_system() ⇒ trebuia 12 explicit (cod $RC)"; }
+nu_s_a_livrat "6.23 fără drept pg_control_system"
+fara_urme "$SNAP_E" "6.23 fără drept pe pg_control_system() ⇒ NEPORNIT 12, mesaj explicit, fără urme" "$BAZA_AUX"
+mutant_py fara_drept_ctrl "  IF NOT has_function_privilege('pg_catalog.pg_control_system()', 'EXECUTE') THEN" "  IF false THEN"
+livreaza "$MIGRARE" 20261003000000 "" "$MUT/fara_drept_ctrl/livrare_migrare.sh" -- --user livr_fara_ctrl
+grep -qF "nu are drept de apel pe pg_control_system()" "$ERR_R" && esec "6.23 mutant fără verificarea dreptului: NEPRINS"
+ok6 "6.23 mutant fără verificarea dreptului pe pg_control_system() ⇒ prins (mesajul explicit lipsește, cod $RC)"
+"${PSQL[@]}" -d postgres -c "DROP ROLE livr_fara_ctrl" >/dev/null 2>&1 || true
+rm -f "$SNAP_E"
 
 rm -f "$SNAP_E" "$ERR_R" "$OUT_R"
 

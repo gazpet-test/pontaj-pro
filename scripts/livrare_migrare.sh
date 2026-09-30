@@ -40,7 +40,9 @@
 #        --tinta-host <H> --tinta-port <P> [--tinta-proiect <marcaj>] [--user U] [--service S]
 #   Runda 7: aprobarea țintei = db + system_identifier + ENDPOINTUL DE SCRIERE (host:port) [+ proiect]. Pre-verificarea,
 #   tranzacția principală și reconcilierea cer în plus pg_is_in_recovery() = false (o replică fizică are același
-#   system_identifier) ⇒ altfel 22 / refuz. Limită: --service nu trebuie să conțină hostaddr (PGHOSTADDR e refuzat).
+#   system_identifier) ⇒ altfel 22 / refuz. (Runda 8: hostaddr în serviciu ⇒ refuz, vezi mai jos.)
+#   Runda 8: PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR din mediu ⇒ refuz; --service ⇒ secțiunea efectivă verificată pe listă
+#   albă de chei (hostaddr/options/target_session_attrs ⇒ refuz); pre-verificarea cere drept de apel pe pg_control_system().
 #   În loc de --sha256: --aprobare <fișier> cu un rând „<hex64>  <nume>.sql” (formatul sha256sum).
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
@@ -68,8 +70,10 @@ while [ $# -gt 0 ]; do
   esac
   shift 2
 done
-for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS; do
-  [ -z "${!v+x}" ] || refuz 2 "variabila $v e setată (parola: ~/.pgpass / PGPASSFILE / PGSERVICE; nimic care schimbă execuția)"
+# Runda 8: PGSERVICE / PGSERVICEFILE / PGSYSCONFDIR moștenite din mediu sunt refuzate — serviciul se dă DOAR prin --service,
+# ca să poată fi verificată configurația lui EFECTIVĂ (vezi verifica_serviciu mai jos).
+for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS PGSERVICE PGSERVICEFILE PGSYSCONFDIR; do
+  [ -z "${!v+x}" ] || refuz 2 "variabila $v e setată (parola: ~/.pgpass / PGPASSFILE; serviciul doar prin --service; nimic care schimbă execuția)"
 done
 [ -n "$MIG" ] && [ -f "$MIG" ] || refuz 2 "--migrare lipsă sau fișier inexistent: $MIG"
 NUME="$(basename "$MIG" .sql)"
@@ -90,6 +94,48 @@ if [ -n "$APROBARE" ]; then
   [ "$(printf '%s\n' "$SHA" | grep -c .)" = 1 ] || refuz 2 "fișierul de aprobare nu are exact un rând pentru $NUME.sql"
 fi
 [[ "$SHA" =~ ^[0-9a-f]{64}$ ]] || refuz 2 "sha256 aprobat lipsă/invalid (--sha256 <hex64> sau --aprobare)"
+
+# Runda 8: configurația EFECTIVĂ a serviciului (ordinea libpq: ~/.pg_service.conf, apoi <sysconfdir>/pg_service.conf
+# DOAR dacă serviciul nu e în fișierul utilizatorului). Secțiunea găsită poate conține numai chei pe listă albă; host,
+# port, dbname sunt oricum suprascrise de -h/-p/-d explicite. hostaddr (redirecționare pe ascuns față de host), options,
+# target_session_attrs, service, load_balance_hosts, client_encoding … ⇒ refuz. Serviciu negăsit / sysconfdir
+# nedeterminabil ⇒ refuz (fail-closed), totul ÎNAINTE de conexiune.
+verifica_serviciu() {
+  local sys; sys="$(pg_config --sysconfdir 2>/dev/null || true)"
+  python3 - "$1" "${HOME:-/nonexistent}/.pg_service.conf" "$sys" <<'PY' || refuz 2 "--service $1: configurația efectivă a serviciului nu e acceptată (vezi mai sus)"
+import os, sys
+srv, user, sysdir = sys.argv[1], sys.argv[2], sys.argv[3]
+PERMISE = {"host", "port", "dbname", "user", "sslmode", "sslrootcert", "sslcert", "sslkey", "sslcrl", "connect_timeout",
+           "application_name", "passfile", "keepalives", "keepalives_idle", "keepalives_interval", "keepalives_count"}
+def sectiune(f):
+    if not os.path.isfile(f):
+        return None
+    chei, gasit, cur = [], False, None
+    for ln in open(f, encoding="utf-8", errors="strict"):
+        ln = ln.strip()
+        if not ln or ln[0] == "#":
+            continue
+        if ln.startswith("["):
+            cur = ln.rstrip("]").lstrip("[")
+            gasit = gasit or cur == srv
+            continue
+        if cur == srv:
+            chei.append(ln.split("=", 1)[0].strip().lower())
+    return chei if gasit else None
+fis = [user] + ([os.path.join(sysdir, "pg_service.conf")] if sysdir else [])
+for f in fis:
+    chei = sectiune(f)
+    if chei is not None:
+        rele = sorted(set(chei) - PERMISE)
+        if rele:
+            print(f"REFUZ: serviciul {srv} din {f} conține chei nepermise: {', '.join(rele)}", file=sys.stderr); sys.exit(1)
+        print(f"→ serviciul {srv}: {f}, chei {sorted(set(chei))} (host/port/dbname suprascrise de ținta aprobată)")
+        sys.exit(0)
+print(f"REFUZ: serviciul {srv} negăsit în {fis}" + ("" if sysdir else " (sysconfdir nedeterminabil: pg_config lipsă)"), file=sys.stderr)
+sys.exit(1)
+PY
+}
+[ -z "$C_SERVICE" ] || verifica_serviciu "$C_SERVICE"
 
 # --- copia unică, protejată; TOT ce urmează folosește DOAR copia -------------
 DIR="$(mktemp -d)"; trap 'chmod -R u+w "$DIR" 2>/dev/null; rm -rf "$DIR"' EXIT
@@ -155,6 +201,10 @@ cat > "$DIR/reconc.sql" <<SQL
 BEGIN;
 SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
 SET LOCAL lock_timeout = '120s';
+DO \$drept\$ BEGIN
+  IF NOT has_function_privilege('pg_catalog.pg_control_system()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'LIVRARE_FARA_DREPT_PG_CONTROL_SYSTEM: rolul % nu poate apela pg_control_system() — ținta (system_identifier) nu se poate verifica', current_user; END IF;
+END \$drept\$;
 SELECT pg_advisory_xact_lock($CHEIE);
 SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_control_system()) || '|' || $PROI_EXPR || '|' ||
        pg_is_in_recovery()::text || '|' ||
@@ -191,6 +241,8 @@ manual() {
 
 # --- P. pre-verificare (nimic trimis dacă nu trece) ----------------------------
 if ! reconciliaza; then
+  grep -qF LIVRARE_FARA_DREPT_PG_CONTROL_SYSTEM "$DIR/reconc.out" && \
+    echo "✗ NEPORNIT: rolul de livrare nu are drept de apel pe pg_control_system() — verificarea țintei e obligatorie, nu se relaxează." >&2
   echo "✗ NEPORNIT: pre-verificarea n-a putut rula (cod $RC_R, rezultat '$R') — livrarea NU s-a trimis." >&2; exit 12
 fi
 if ! tinta_ok; then

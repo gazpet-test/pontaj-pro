@@ -23,6 +23,8 @@
 #     către psql); set_config: primul argument COMPLET trebuie să fie un literal static simplu, apelul e recunoscut și
 #     citat/calificat (pg_catalog."set_config"); numele SET normalizate (neciat ⇒ lower, citat ⇒ exact, calificările
 #     unite; comparația cu parametrii protejați e fără majuscule, ca în PostgreSQL); SET cu sintaxă nerecunoscută ⇒ refuz.
+#   Runda 8 (verdict Copilot R7): REFUZ la nivel superior orice U&"…" (identificator) și U&'…' (literal) — decodificarea
+#     escape-urilor se face în server, deci numele/argumentele verificate aici n-ar mai fi cele executate; și UESCAPE.
 #   Runnerul fixează în plus, în tranzacție, înaintea migrării: READ COMMITTED, standard_conforming_strings = on,
 #   client_encoding = UTF8 (și PGCLIENTENCODING=UTF8 la conexiune).
 #
@@ -113,6 +115,13 @@ def instructiuni(text, corpuri=None, strict=True):
             i += 1
             continue
         if c in "'\"":
+            if strict and cur[-2:] == ["U", "&"]:
+                # Runda 8 (verdict Copilot R7): U&"…" (identificator) / U&'…' (literal) cu escape-uri Unicode — numele
+                # real se decodifică abia în server (U&"set\005Fconfig" = set_config, cu sau fără UESCAPE), deci ar
+                # ocoli verificările pe nume/argumente. REFUZ la nivel superior, indiferent de conținut (fără listă de
+                # escape-uri), de majuscule (u&), de calificare și de spații/comentarii între U& și ghilimele.
+                raise Refuz(f"escape Unicode U&{c}…{c} la nivel superior (linia {linie(text, i)}) — interzis "
+                            f"(identificatorii/literalii U& se decodifică în server și ar ocoli validatorul)")
             # prefix E/e ⇒ escape-uri cu backslash (doar pentru '); U&, B, X, N — fără efect asupra delimitării
             esc = False
             if c == "'" and i > 0 and text[i - 1] in "eE" and not (i > 1 and (text[i - 2].isalnum() or text[i - 2] in "_$")):
@@ -310,6 +319,8 @@ def valideaza(cale, tag_interzis=None):
             # tokenizerul SQL nu modelează formatul de date COPY ⇒ refuzăm ORICE COPY la nivel superior (inclusiv
             # TO STDOUT / PROGRAM / fișier). Migrările actuale nu folosesc COPY.
             raise Refuz(f"COPY la nivel superior (linia {ln}) — interzis în migrările livrate prin runner")
+        if "UESCAPE" in toks:
+            raise Refuz(f"UESCAPE la nivel superior (linia {ln}) — escape-urile Unicode sunt interzise")
         verifica_set(ln, toks)
         verifica_set_config(ln, toks)
     if not garda_in_cod(text):
