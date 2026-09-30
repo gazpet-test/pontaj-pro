@@ -51,12 +51,14 @@ const TEXT = pdfMinimal([1, 2].map(i => `Caiet de sarcini pagina ${i}: conducta 
 const SCAN = pdfMinimal(['a', 'b'])   // sub pragul de text pe pagină → „scan” → predat la edge
 
 // ---- BD simulată + garda simulată (tokenuri) ----
-type Opt = { marcajAgataDupa?: number; preluatDupaAgatare?: boolean; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; marcajRespins?: boolean; respinge?: boolean; downloadAgata?: boolean }
+type Opt = { cas?: boolean; laAgatare?: () => void; marcajAgataDupa?: number; preluatDupaAgatare?: boolean; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; marcajRespins?: boolean; respinge?: boolean; downloadAgata?: boolean }
+// căi JSON (analiza->citire_mare->>rev) ca în PostgREST — folosite doar cu opt.cas (CAS-ul real din citire_mare.ts)
+const caleJson = (row: any, c: string) => { let v = row; for (const p of c.split(/->>?/)) v = v == null ? undefined : v[p]; return c.includes('->>') ? (v == null ? null : String(v)) : v }
 const likeRe = (p: string) => new RegExp('^' + p.split('%').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 's')
 function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number }>, opt: Opt = {}, garzi: any[] = []) {
   const tabele: Record<string, any[]> = { ofertare_documente_atribuire: docs, ai_usage_log: [], ofertare_ingest_garda: garzi, ofertare_ingest_lansari: [],
     ofertare_ingest_coada: [], notifications: [], ofertare_licitatii: [], ofertare_seap_manifest: [] }
-  const g = { incercari: [] as number[], surse: [] as string[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[], scrieriDirecte: [] as any[], marcaje: [] as any[], inZbor: 0, maxInZbor: 0 }
+  const g = { incercari: [] as number[], surse: [] as string[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[], scrieriDirecte: [] as any[], marcaje: [] as any[], cas: [] as any[], inZbor: 0, maxInZbor: 0 }
   const from = (t: string) => {
     tabele[t] ||= []
     const filtre: ((r: any) => boolean)[] = []
@@ -66,10 +68,10 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
       select: () => b, order: () => b, limit: () => b, or: () => b,
       like: (c: string, p: string) => { filtre.push(r => likeRe(p).test(String(r[c] ?? ''))); return b },
       not: (c: string, o: string, p: string) => { filtre.push(r => !(o === 'like' && likeRe(p).test(String(r[c] ?? '')))); return b },
-      eq: (c: string, v: unknown) => { if (!c.includes('->')) filtre.push(r => String(r[c]) === String(v)); return b },
+      eq: (c: string, v: unknown) => { if (!c.includes('->')) filtre.push(r => String(r[c]) === String(v)); else if (opt.cas) filtre.push(r => String(caleJson(r, c)) === String(v)); return b },
       neq: (c: string, v: unknown) => { filtre.push(r => String(r[c]) !== String(v)); return b },
       in: (c: string, v: unknown[]) => { filtre.push(r => v.map(String).includes(String(r[c]))); return b },
-      is: () => b,
+      is: (c: string, v: unknown) => { if (opt.cas) filtre.push(r => (caleJson(r, c) ?? null) === v); return b },
       update: (p: any) => { op = { tip: 'upd', patch: p }; return b },
       insert: (p: any) => { op = { tip: 'ins', patch: p }; return b },
       maybeSingle: () => Promise.resolve({ data: structuredClone(pot()[0] ?? null), error: null }),
@@ -77,6 +79,7 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
         if (op.tip === 'upd' && t === 'ofertare_documente_atribuire') g.scrieriDirecte.push(structuredClone(op.patch))
         if (op.tip === 'ins') { tabele[t].push(structuredClone(op.patch)); return res({ data: null, error: null }) }
         const rows = pot()
+        if (op.tip === 'upd' && t === 'ofertare_documente_atribuire') g.cas.push({ cm: structuredClone(op.patch?.analiza?.citire_mare ?? null), status: op.patch?.status_procesare, randuri: rows.length })
         if (op.tip === 'upd') for (const r of rows) Object.assign(r, structuredClone(op.patch))
         res({ data: structuredClone(rows), error: null })
       }).then(ok, ko),
@@ -98,6 +101,7 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
       if (a.p_rezultat === 'marcaj' && opt.marcajAgataDupa != null && g.marcaje.length > opt.marcajAgataDupa) {
         g.inZbor++; g.maxInZbor = Math.max(g.maxInZbor, g.inZbor)
         if (opt.preluatDupaAgatare) g.emise.set(a.p_token, -2)   // lease expirat, B a preluat documentul
+        opt.laAgatare?.()
         return new Promise(() => {})   // heartbeat fără răspuns
       }
       if (opt.rezultatEsueaza && a.p_rezultat !== 'marcaj') return Promise.reject(new Error('rețea: rezultat pierdut'))
@@ -313,6 +317,65 @@ Deno.test({ ...Z, name: 'Copilot r3 #3: > 60 MB după descărcare ⇒ size_bytes
     assertEquals(m.g.rezultate[0].p_doc, { size_bytes: 61 * 1024 * 1024 })
     assertEquals(m.tabele.ofertare_documente_atribuire[0].size_bytes, 61 * 1024 * 1024)
   } finally { _mare.citesteMare = orig }
+} })
+
+// Copilot (neblocant, după r4): același scenariu ca r3 #2, dar pe citesteMare REAL din citire_mare.ts (CAS pe
+// analiza->citire_mare->>rev), nu pe citirea simulată. A pornește sub gardă, heartbeat #2 nu răspunde, lease-ul expiră,
+// B preia și pornește PROPRIA citire (citesteMare real ⇒ rescrie rev-ul); orice scriere ulterioară a lui A (întreruperea
+// la felia următoare SAU rezultatul final) e refuzată de CAS; progresul lui B rămâne; A nu raportează procesat/parțial.
+// citire_mare.ts nu scrie pe felie (doar marcajul de început, întreruperea și finalul) — acestea sunt scrierile lui A.
+const { citesteMare: citesteMareReal } = await import(new URL('./citire_mare.ts', import.meta.url).href)
+async function scenariuPreluareReala(asteaptaPierdut: boolean) {
+  const vechi = { ...PAUZE }
+  PAUZE.leaseReinnoireMs = 5; PAUZE.marcajTermenMs = asteaptaPierdut ? 30 : 400
+  const id = 70 + (asteaptaPierdut ? 0 : 1)
+  const mare = doc(id, { size_bytes: TEXT.length, status_procesare: 'ignorat', eroare: 'prea mare pentru citirea automată (95 MB > 60 MB) — de spart pe bucăți / procesat pe NAS' })
+  let bPornit!: () => void, elibereazaB!: () => void
+  const bInCitire = new Promise<void>(r => { bPornit = r }), bLiber = new Promise<void>(r => { elibereazaB = r })
+  let promB: Promise<string> | null = null
+  const m = mediu([mare], { [mare.fisier_path]: TEXT }, {
+    cas: true, marcajAgataDupa: 1, preluatDupaAgatare: true,
+    // lease expirat ⇒ B preia documentul (token nou) și pornește citirea pe felii reală; se blochează la prima felie
+    laAgatare: () => { promB ??= citesteMareReal(m.supa, id, { cerutDe: 'B', pagini: async () => ({ nPag: 2 }),
+      extractor: () => async (de: number, la: number) => { bPornit(); await bLiber; return { ok: true, pagini: Array.from({ length: la - de + 1 }, (_, i) => `B pagina ${de + i} `.repeat(10)) } } }) },
+  })
+  const st0 = m.supa.storage.from()
+  const url = 'data:application/pdf;base64,' + btoa(String.fromCharCode(...TEXT))
+  let semnate = 0
+  m.supa.storage.from = () => ({ ...st0, createSignedUrl: async () => {
+    // A (primul URL semnat) descarcă abia după ce B a preluat și a intrat în citire (+ după expirarea termenului heartbeat-ului)
+    if (semnate++ === 0) { await bInCitire; if (asteaptaPierdut) await new Promise(r => setTimeout(r, 120)) }
+    return { data: { signedUrl: url }, error: null }
+  } })
+  try {
+    const rez = await citesteDocument(m.supa, mare, 'A')
+    const cmB = structuredClone(m.tabele.ofertare_documente_atribuire[0].analiza.citire_mare)
+    return { m, rez, cmB, promB: promB!, elibereazaB }
+  } finally { Object.assign(PAUZE, vechi) }
+}
+
+for (const asteaptaPierdut of [true, false]) Deno.test({ ...Z, name: `Copilot neblocant: preluare REALĂ pe citire_mare.ts — ${asteaptaPierdut ? 'A vede lease-ul pierdut ⇒ scrierea de întrerupere' : 'A termină citirea ⇒ scrierea finală „gata”'} refuzată de CAS, progresul lui B rămâne`, fn: async () => {
+  const { m, rez, cmB, promB, elibereazaB } = await scenariuPreluareReala(asteaptaPierdut)
+  const d = m.tabele.ofertare_documente_atribuire[0]
+  // scrierile: #0 = marcajul de început al lui A (rev A); #1 = marcajul lui B peste (rev B); tot ce scrie A după e refuzat
+  const [a0, b0, ...dupa] = m.g.cas
+  assertEquals([a0.randuri, a0.cm.stare, a0.cm.incercari], [1, 'in_curs', 1])
+  assertEquals([b0.randuri, b0.cm.stare, b0.cm.incercari], [1, 'in_curs', 2]); assert(b0.cm.rev !== a0.cm.rev)
+  assert(dupa.length >= 1, 'A trebuie să fi încercat o scriere după preluare')
+  for (const w of dupa) assertEquals(w.randuri, 0, `scrierea lui A (${w.cm?.stare}) trebuie refuzată de CAS`)
+  assertEquals(dupa.map(w => w.cm.stare), asteaptaPierdut ? ['eroare'] : ['gata'])   // întreruperea / finalul lui A
+  // progresul lui B rămâne intact: rev-ul, starea și autorul lui B
+  assertEquals(cmB.rev, b0.cm.rev); assertEquals(cmB.stare, 'in_curs')
+  assertEquals([d.status_procesare, d.procesat_de, d.text_extras], ['in_lucru', 'B', null])
+  // A nu raportează procesat/parțial și garda nu primește „succes”
+  assert(!/^gestionat: (procesat|partial)/.test(rez), rez)
+  assertMatch(rez, asteaptaPierdut ? /^gestionat: garda: lease pierdut/ : /^gestionat: eroare: rezultatul nu s-a putut scrie/)
+  assert(m.g.rezultate.every(x => x.p_rezultat !== 'succes'))
+  // B își termină citirea: scrierea lui finală trece (CAS pe rev-ul lui), textul e al lui B
+  elibereazaB()
+  assertMatch(await promB, /^procesat \(2 pagini/)
+  assertEquals(d.analiza.citire_mare.stare, 'gata'); assertEquals(d.analiza.citire_mare.incercari, 2)
+  assertMatch(d.text_extras, /B pagina 1/); assertEquals(d.procesat_de, 'B')
 } })
 
 Deno.test('grep: după „continua” nu există NICIUN UPDATE direct pe ofertare_documente_atribuire (worker + edge, căile sub gardă)', () => {
