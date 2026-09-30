@@ -145,3 +145,162 @@ describe('reguli sintetice', () => {
     expect(r).toMatchObject({ C: 21, N: 2, zileDiurna: 2 })
   })
 })
+
+// ════════════════════════════════════════════════════════════════
+// R3 (după NO-GO Copilot pe validarea cap-coadă): validare intrări, conflicte anterioare tranșei,
+// snapshot comun cu client Supabase mock (aceleași rânduri → export / save / BT aceleași sume).
+// ════════════════════════════════════════════════════════════════
+import { vi } from 'vitest'
+import { incarcaSnapshotDiurne, alocaDinSnapshot, platitAnteriorPeLuni, rezumatAlocare, valideazaIntrariDiurne, LIMITA_PAGINARE } from './diurneAlocare.js'
+
+describe('validarea intrărilor (throw cu mesaj clar)', () => {
+  const recs = recsDin([{ id: 1, diurna: ['2026-09-01'], norme: {} }])
+  const call = (o) => () => alocaDiurneTransa({ recsLuna: recs, df: '2026-09-01', dt: '2026-09-04', legalSet: LEGAL, diurnaAmt: AMT, ...o })
+  it('tarif invalid: undefined / null / "" / "abc" / -50 / Infinity / 0 → throw', () => {
+    for (const bad of [undefined, null, '', 'abc', -50, Infinity, 0, NaN, '0']) expect(call({ diurnaAmt: bad }), String(bad)).toThrow(/Tarif diurnă invalid/)
+    expect(call({ diurnaAmt: '50' })().get(1).sumaDiurna).toBe(50)   // string numeric din settings e acceptat
+  })
+  it('interval inversat sau date invalide → throw', () => {
+    expect(call({ df: '2026-09-10', dt: '2026-09-04' })).toThrow(/Interval inversat/)
+    expect(call({ df: '2026-13-01' })).toThrow(/Interval invalid/)
+    expect(call({ df: undefined })).toThrow(/Interval invalid/)
+    expect(call({ dt: '04.09.2026' })).toThrow(/Interval invalid/)
+  })
+  it('calendar neîncărcat (undefined/null/array) ≠ „fără sărbători" → throw; Set gol e explicit OK', () => {
+    expect(call({ legalSet: undefined })).toThrow(/Calendarul/)
+    expect(call({ legalSet: null })).toThrow(/Calendarul/)
+    expect(call({ legalSet: [] })).toThrow(/Calendarul/)
+    expect(call({ legalSet: new Set() })().get(1).C).toBe(22)
+    expect(valideazaIntrariDiurne({ df: '2026-09-01', dt: '2026-09-01', legalSet: new Set(), diurnaAmt: 50 })).toBe(50)
+  })
+})
+
+describe('conflict CO + diurnă ANTERIOR tranșei', () => {
+  it('CO+diurnă pe 01.09 cu tranșa 26–30 → în deVerificatAnterior, nu în deVerificat', () => {
+    const e = { id: 7, diurna: ['2026-09-01', '2026-09-28'], norme: { '2026-09-01': 'CO' } }
+    const r = aloca('2026-09-26', '2026-09-30', recsDin([e])).get(7)
+    expect(r.deVerificatAnterior).toEqual(['2026-09-01'])
+    expect(r.deVerificat).toEqual([])
+    // ziua de CO scade plafonul (C=21) și tot consumă ca bifă anterioară (B=1) — de asta se semnalează
+    expect(r).toMatchObject({ C: 21, B: 1, N: 1, zileDiurna: 1 })
+    // aceeași zi, dar tranșa o cuprinde → deVerificat
+    const r2 = aloca('2026-09-01', '2026-09-04', recsDin([e])).get(7)
+    expect(r2.deVerificat).toEqual(['2026-09-01']); expect(r2.deVerificatAnterior).toEqual([])
+  })
+})
+
+// ── Client Supabase mock: tabele în memorie + lanțul select/or/in/gte/lte/range/order, awaitable ──
+function mockSupabase(tables, { fail = {}, limitPage = 1000 } = {}) {
+  const calls = []
+  const build = (t) => {
+    const f = { gte: [], lte: [], in: [], or: null, range: null, order: null, select: '*' }
+    const q = {
+      select(c) { f.select = c; return q },
+      gte(col, v) { f.gte.push([col, v]); return q },
+      lte(col, v) { f.lte.push([col, v]); return q },
+      in(col, v) { f.in.push([col, new Set(v)]); return q },
+      or(expr) { f.or = expr; return q },
+      order(col) { f.order = col; return q },
+      range(a, b) { f.range = [a, b]; return q },
+      then(res, rej) {
+        calls.push({ t, ...f })
+        if (fail[t]) return Promise.resolve({ data: null, error: { message: fail[t] } }).then(res, rej)
+        let rows = (tables[t] || []).slice()
+        for (const [c, v] of f.gte) rows = rows.filter(r => r[c] >= v)
+        for (const [c, v] of f.lte) rows = rows.filter(r => r[c] <= v)
+        for (const [c, set] of f.in) rows = rows.filter(r => set.has(r[c]))
+        if (f.or) { // 'active.eq.true,termination_date.gte.YYYY-MM-DD'
+          const m = f.or.match(/^active\.eq\.true,termination_date\.gte\.(\S+)$/)
+          rows = rows.filter(r => r.active === true || (r.termination_date && r.termination_date >= m[1]))
+        }
+        if (f.order) rows.sort((a, b) => String(a[f.order]).localeCompare(String(b[f.order])))
+        if (f.range) rows = rows.slice(f.range[0], Math.min(f.range[1] + 1, f.range[0] + limitPage))
+        return Promise.resolve({ data: rows, error: null }).then(res, rej)
+      },
+    }
+    return q
+  }
+  return { from: build, calls }
+}
+const SETTINGS = [{ key: 'diurna_amount', value: '50' }, { key: 'iban_firma', value: 'RO00TEST' }]
+const empsFx = FX.employees.map(e => ({ id: e.id, name: e.name, active: true, termination_date: null, site_id: 1 }))
+const pontajFx = RECS.map((r, i) => ({ id: i + 1, ...r, site_id: 1 }))
+const T5 = { df: '2026-09-26', dt: '2026-09-30' }
+
+describe('incarcaSnapshotDiurne — adaptorul comun al celor 3 fluxuri (Supabase mock)', () => {
+  it('aceleași rânduri → export / savePayment / BT produc aceleași sume (Tharindu 133: 50 diurnă / 150 salariu)', async () => {
+    const sb = mockSupabase({ settings: SETTINGS, calendar_days: [], employees: empsFx, pontaj_records: pontajFx })
+    // export citește '*,sites(name)', save/BT doar coloanele alocării — aceleași sume
+    const sExport = await incarcaSnapshotDiurne(sb, { ...T5, recsSelect: '*,sites(name)' })
+    const sSave = await incarcaSnapshotDiurne(sb, { ...T5 })
+    const sBT = await incarcaSnapshotDiurne(sb, { ...T5, siteIds: [1] })
+    expect(sSave.diurnaAmt).toBe(50); expect(sSave.emps.length).toBe(84); expect(sSave.recs.length).toBe(RECS.length)
+    expect(sSave.monthStart).toBe('2026-09-01'); expect(sSave.monthEnd).toBe('2026-09-30')
+    const [aE, aS, aB] = [sExport, sSave, sBT].map(alocaDinSnapshot)
+    for (const id of [64, 133, 69, 129]) { expect(aS.get(id)).toEqual(aE.get(id)); expect(aB.get(id)).toEqual(aE.get(id)) }
+    expect(aS.get(133)).toMatchObject({ sumaDiurna: 50, sumaSalariu: 150 })
+    // ce salvează savePayment (zileDiurna × tarif) == ce trimite BT (sumaDiurna) == „Diurnă Max. Admisă" din export
+    const save = [...aS].filter(([, a]) => a.N > 0).map(([id, a]) => [id, a.zileDiurna * sSave.diurnaAmt])
+    const bt = [...aB].filter(([, a]) => a.N > 0).map(([id, a]) => [id, a.sumaDiurna])
+    expect(bt).toEqual(save)
+    // pontajul s-a citit pe LUNA ÎNTREAGĂ, cu paginare
+    const pag = sb.calls.filter(c => c.t === 'pontaj_records')
+    expect(pag.every(c => c.gte[0][1] === '2026-09-01' && c.lte[0][1] === '2026-09-30')).toBe(true)
+    expect(pag.length).toBeGreaterThan(3)   // 3 fluxuri × ≥1 pagină (fixture-ul are >1000 rânduri → ≥2 pagini fiecare)
+    // rezumatul pentru confirmarea de salvare
+    const rz = rezumatAlocare(aS, sSave.emps)
+    expect(rz.angajati).toBeGreaterThan(0)
+    expect(rz.sumaDiurna).toBe(save.reduce((s, [, v]) => s + v, 0))
+    expect(rz.sumaSalariu).toBe([...aS.values()].reduce((s, a) => s + a.sumaSalariu, 0))
+    expect(rz.conflicte + rz.conflicteAnterior).toBe([...aS.values()].filter(a => a.N > 0 && (a.deVerificat.length || a.deVerificatAnterior.length)).length)
+  })
+  it('citire eșuată (angajați / pontaj / calendar / settings) → throw, nu continuare cu []', async () => {
+    const base = { settings: SETTINGS, calendar_days: [], employees: empsFx, pontaj_records: pontajFx }
+    for (const [t, re] of [['employees', /angajații/], ['pontaj_records', /pontajul/], ['calendar_days', /calendarul/], ['settings', /setările/]]) {
+      const sb = mockSupabase(base, { fail: { [t]: 'boom ' + t } })
+      await expect(incarcaSnapshotDiurne(sb, T5), t).rejects.toThrow(re)
+    }
+    // setarea diurna_amount lipsă / invalidă → throw
+    await expect(incarcaSnapshotDiurne(mockSupabase({ ...base, settings: [] }), T5)).rejects.toThrow(/diurna_amount/)
+    await expect(incarcaSnapshotDiurne(mockSupabase({ ...base, settings: [{ key: 'diurna_amount', value: 'abc' }] }), T5)).rejects.toThrow(/Tarif diurnă invalid/)
+    await expect(incarcaSnapshotDiurne(mockSupabase(base), { df: '2026-09-30', dt: '2026-09-26' })).rejects.toThrow(/Interval inversat/)
+  })
+  it('paginarea oprită la limită → throw (nu rezultat trunchiat)', async () => {
+    const multe = Array.from({ length: LIMITA_PAGINARE + 2001 }, (_, i) => ({ id: i, employee_id: 1, date: '2026-09-01', diurna: true, norma: null }))
+    const sb = mockSupabase({ settings: SETTINGS, calendar_days: [], employees: [{ id: 1, name: 'X', active: true }], pontaj_records: multe })
+    await expect(incarcaSnapshotDiurne(sb, T5)).rejects.toThrow(/limita de paginare/)
+  })
+  it('snapshot limitat la tranșă (doar bifele din T5 pentru Tharindu) → 200/0 în loc de 50/150: de asta luna întreagă e obligatorie', () => {
+    const doarT5 = pontajFx.filter(r => r.employee_id === 133 && r.date >= T5.df && r.date <= T5.dt)
+    const gresit = alocaDiurneTransa({ recsLuna: doarT5, ...T5, legalSet: LEGAL, diurnaAmt: 50 }).get(133)
+    expect(gresit).toMatchObject({ B: 0, C: 22, sumaDiurna: 200, sumaSalariu: 0 })   // nu vede CO-ul (C) și nici bifele anterioare (B)
+    const corect = alocaDiurneTransa({ recsLuna: pontajFx.filter(r => r.employee_id === 133), ...T5, legalSet: LEGAL, diurnaAmt: 50 }).get(133)
+    expect(corect).toMatchObject({ B: 16, C: 17, sumaDiurna: 50, sumaSalariu: 150 })
+  })
+  it('tranșă 26.09–02.10 salvată, apoi tranșa următoare de octombrie → cei 100 lei din 01–02.10 sunt ai lunii octombrie în reconciliere', async () => {
+    const sept = Array.from({ length: 22 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`)
+    const zile = [...sept, '2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02', '2026-10-05', '2026-10-06']
+    const pontaj = zile.map((d, i) => ({ id: i, employee_id: 1, date: d, diurna: true, norma: null }))
+    const sb = mockSupabase({ settings: SETTINGS, calendar_days: [], employees: [{ id: 1, name: 'X', active: true }], pontaj_records: pontaj })
+    // 1) tranșa 26.09–02.10: 0 zile în sept (plafon atins), 2 în oct → se salvează 100 lei
+    const s1 = await incarcaSnapshotDiurne(sb, { df: '2026-09-26', dt: '2026-10-02' })
+    const a1 = alocaDinSnapshot(s1).get(1)
+    expect(a1).toMatchObject({ sumaDiurna: 100, sumaSalariu: 250 })
+    const platit = { id: 90, period_from: '2026-09-26', period_to: '2026-10-02', diurna_payment_details: [{ employee_id: 1, amount: a1.sumaDiurna }] }
+    // 2) tranșa următoare, 03–09.10: snapshotul se extinde de la 26.09 (luna plății reconciliate) ca să recalculeze segmentele ei
+    const s2 = await incarcaSnapshotDiurne(sb, { df: '2026-10-03', dt: '2026-10-09', extindeDeLa: platit.period_from })
+    expect(s2.monthStart).toBe('2026-09-01'); expect(s2.monthStartTransa).toBe('2026-10-01')
+    const a2 = alocaDinSnapshot(s2).get(1)
+    expect(a2).toMatchObject({ B: 2, N: 2, sumaDiurnaAnterior: 100, zileDiurna: 2 })
+    const pl = platitAnteriorPeLuni({ plati: [platit], recsLuna: s2.recs, df: '2026-10-03', dt: '2026-10-09', legalSet: s2.legalSet, diurnaAmt: s2.diurnaAmt })
+    expect(pl.get(1)).toBe(100)                       // partea de octombrie a plății 26.09–02.10
+    expect(pl.get(1) - a2.sumaDiurnaAnterior).toBe(0) // diferență înregistrat − recalculat = 0
+    // plată într-o singură lună: suma înregistrată intră întreagă; plată de după df nu se ia; diferența de sumă rămâne în luna de start
+    const doarSept = { period_from: '2026-09-19', period_to: '2026-09-25', diurna_payment_details: [{ employee_id: 1, amount: 350 }] }
+    expect(platitAnteriorPeLuni({ plati: [doarSept, platit], recsLuna: s2.recs, df: '2026-10-03', dt: '2026-10-09', legalSet: s2.legalSet, diurnaAmt: 50 }).get(1)).toBe(100)
+    expect(platitAnteriorPeLuni({ plati: [doarSept], recsLuna: s2.recs, df: '2026-09-26', dt: '2026-09-30', legalSet: s2.legalSet, diurnaAmt: 50 }).get(1)).toBe(350)
+    // 50 lei în plus înregistrați în plata pornită în septembrie → rămân în septembrie (luna de start), nu ajung în reconcilierea lui octombrie
+    const inregistratGresit = { ...platit, diurna_payment_details: [{ employee_id: 1, amount: 150 }] }
+    expect(platitAnteriorPeLuni({ plati: [inregistratGresit], recsLuna: s2.recs, df: '2026-10-03', dt: '2026-10-09', legalSet: s2.legalSet, diurnaAmt: 50 }).get(1)).toBe(100)
+  })
+})

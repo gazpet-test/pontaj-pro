@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, createContext, useContext, useRef, la
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
-import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
+import { alocaDinSnapshot, incarcaSnapshotDiurne, platitAnteriorPeLuni, rezumatAlocare, inceputLuna, zileLucratoareLuna } from './diurneAlocare.js'
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -2073,7 +2073,7 @@ function ReportsPage() {
   const [view,setView]=useState('summary'); const [diurnaAmt,setDiurnaAmt]=useState(50); const [suplAmt,setSuplAmt]=useState(15)
   const [df,setDf]=useState(todayStr()); const [dt,setDt]=useState(todayStr())
   const [sf,setSf]=useState(todayStr()); const [st2,setSt2]=useState(todayStr())
-  const [savingPayment,setSavingPayment]=useState(false)
+  const [savingPayment,setSavingPayment]=useState(false); const savingPaymentRef=useRef(false)   // anti dublu-click (state-ul întârzie un render)
   const [payments,setPayments]=useState([])
   const [selectedPayment,setSelectedPayment]=useState(null)
   const [paymentDetails,setPaymentDetails]=useState([])
@@ -2912,13 +2912,21 @@ function ReportsPage() {
     setPaymentDetails(data||[])
   }
 
+  // Suprapunere cu plățile existente: citire proaspătă din BD (se face la început ȘI imediat înainte de insert)
+  const citesteSuprapuneri=async()=>{
+    const {data,error}=await supabase.from('diurna_payments').select('*').lte('period_from',dt).gte('period_to',df)
+    if(error) throw new Error('Nu s-au putut citi plățile existente: '+(error.message||error))
+    return data||[]
+  }
   const savePayment=async()=>{
     if(!df||!dt){showToast('Selectează perioada','warn');return}
-    setSavingPayment(true)
+    if(savingPaymentRef.current||savingPayment) return   // dublu-click blocat cât timp se salvează
+    savingPaymentRef.current=true; setSavingPayment(true)
     try{
+    if(df>dt){showToast('Interval inversat: „de la" e după „până la"','error');return}
     // Check for overlap
-    const {data:existing}=await supabase.from('diurna_payments').select('*').lte('period_from',dt).gte('period_to',df)
-    
+    const existing=await citesteSuprapuneri()
+
     // Detect dacă perioada e o LUNĂ ÎNTREAGĂ (ziua 1 → ultima zi a aceleiași luni)
     // Plățile lunare au scop diferit: generarea ordinelor de deplasare pentru toată luna.
     // Trebuie să poată coexista cu plățile săptămânale (cash flow).
@@ -2930,12 +2938,19 @@ function ReportsPage() {
       if (f.getMonth() !== t.getMonth() || f.getFullYear() !== t.getFullYear()) return false
       return true
     })()
-    
-    if(existing?.length>0){
-      if (isFullMonthPeriod) {
+    // O plată cu EXACT aceeași perioadă e dublură indiferent de tip (și lunară, și săptămânală)
+    const dublura=(lista)=>lista.find(p=>p.period_from===df&&p.period_to===dt)
+    const suprapunereBlocanta=(lista)=>{
+      const d=dublura(lista); if(d) return `Există deja o plată salvată exact pe ${new Date(df).toLocaleDateString('ro-RO')} — ${new Date(dt).toLocaleDateString('ro-RO')} (id ${d.id})`
+      if(!isFullMonthPeriod&&lista.length>0) return `Suprapunere cu plata din ${new Date(lista[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(lista[0].period_to).toLocaleDateString('ro-RO')}!`
+      return null
+    }
+    const blocaj=suprapunereBlocanta(existing)
+    if(blocaj){showToast('⚠ '+blocaj,'error');return}
+    if(existing.length>0&&isFullMonthPeriod){
         // Bypass cu confirmation pentru plata lunară
         const lunaName = new Date(df + 'T12:00').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })
-        const listaSupra = existing.slice(0, 5).map(p => 
+        const listaSupra = existing.slice(0, 5).map(p =>
           `  • ${new Date(p.period_from).toLocaleDateString('ro-RO')} – ${new Date(p.period_to).toLocaleDateString('ro-RO')} (${p.total_employees} ang.)`
         ).join('\n')
         const ok = window.confirm(
@@ -2947,50 +2962,58 @@ function ReportsPage() {
           `(Plata lunară se salvează în PARALEL cu cele săptămânale, fără să le afecteze. ` +
           `Vei putea apoi genera ordinele de deplasare pentru întreaga lună.)`
         )
-        if (!ok) { setSavingPayment(false); return }
-        // Continuă - skip overlap check
-      } else {
-        showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
-        setSavingPayment(false); return
-      }
+        if (!ok) return
     }
 
-    // Alocare pe plafonul LUNAR per angajat — aceeași funcție ca în exportDiurne și exportBancaDiurne
-    // (diurneAlocare.js): C = zile lucr. − CO pe zile lucr., TOATE bifele consumă (și weekend), surplus → salariu.
+    // Snapshot COMUN (diurneAlocare.js): settings + calendar + angajați eligibili + pontajul lunilor ÎNTREGI atinse.
+    // Orice citire eșuată / paginare la limită → throw → toast, fără salvare. Tariful vine din settings (ca la BT).
+    const siteIds=!isAdmin?(profile?.site_ids||[]):null
+    const snap=await incarcaSnapshotDiurne(supabase,{df,dt,siteIds})
+    // Alocare pe plafonul LUNAR per angajat — aceeași funcție ca în exportDiurne și exportBancaDiurne:
+    // C = zile lucr. − CO pe zile lucr., TOATE bifele consumă (și weekend), surplus → salariu.
     // Se salvează zile_diurnă / sumă_diurnă din alocare; ce e peste plafon nu intră aici.
-    const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)   // lunile atinse de tranșă
-    const {data:calDat}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
-    const legalSetSave=new Set((calDat||[]).filter(d=>d.type==='legal').map(d=>d.date))
+    const alocare=alocaDinSnapshot(snap)
+    const emps=snap.emps
 
-    // Eligibili: activii + cei cu încetare de la începutul lunii încolo (au zile bifate înainte de plecare
-    // și trebuie plătiți; cu active=true dispăreau din plată — Băiesu Darius, Tudurachi, Ioan Sorin, sept 2026)
-    let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
-    if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
-    const {data:emps}=await eq
-    // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
-    let recs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
-    const alocare=alocaDiurneTransa({recsLuna:recs,df,dt,legalSet:legalSetSave,diurnaAmt})
-
-    const empStats=(emps||[]).map(emp=>{
+    const empStats=emps.map(emp=>{
       const a=alocare.get(emp.id)
       if(!a||a.N===0) return null
       // includem toti cu diurne bifate, chiar daca zilele in plafon = 0 (tot merge in salariu)
       return {id:emp.id,name:emp.name,days:a.zileDiurna,amount:a.sumaDiurna}
     }).filter(Boolean)
 
-    if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setSavingPayment(false);return}
+    if(!empStats.length){showToast('Nu există diurne în perioadă','warn');return}
+
+    // Confirmare cu rezumatul a CE se salvează (recalculat din BD acum, nu din preview-ul de mai devreme)
+    const rz=rezumatAlocare(alocare,emps)
+    const conflicteTxt=(rz.conflicte||rz.conflicteAnterior)?`\n⚠ Conflicte CO + diurnă bifată: ${rz.conflicte} angajați în tranșă, ${rz.conflicteAnterior} înainte de tranșă (în lună) — se semnalează, nu se rezolvă automat`:'\nConflicte CO + diurnă: 0'
+    const okSave=window.confirm(
+      `💾 Salvezi plata de diurne ${new Date(df).toLocaleDateString('ro-RO')} — ${new Date(dt).toLocaleDateString('ro-RO')}?\n\n`+
+      `Angajați: ${rz.angajati}\nZile diurnă (în plafon): ${rz.zileDiurna}\nSumă diurnă (se salvează): ${rz.sumaDiurna.toLocaleString('ro-RO')} RON\n`+
+      `Sumă peste plafon → la salariu (NU se salvează aici): ${rz.sumaSalariu.toLocaleString('ro-RO')} RON · tarif ${snap.diurnaAmt} RON/zi`+conflicteTxt
+    )
+    if(!okSave){showToast('Salvare anulată','warn');return}
+
+    // Re-verificare suprapunere IMEDIAT înainte de insert (altcineva / alt tab putea salva între timp)
+    const blocaj2=suprapunereBlocanta(await citesteSuprapuneri())
+    if(blocaj2){showToast('⚠ '+blocaj2+' (salvată între timp)','error');return}
+
     const uid=(await supabase.auth.getUser()).data.user?.id
     const {data:payment,error}=await supabase.from('diurna_payments').insert({
       period_from:df,period_to:dt,payment_date:todayStr(),
       total_employees:empStats.length,total_days:empStats.reduce((s,e)=>s+e.days,0),
       total_amount:empStats.reduce((s,e)=>s+e.amount,0),created_by:uid
     }).select().single()
-    if(!error&&payment){
-      await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
-      playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
-    } else showToast('Eroare la salvare','error')
-  }catch(e){showToast('Eroare la salvare','error')}finally{setSavingPayment(false)}
+    if(error||!payment) throw new Error('Plata nu s-a putut salva: '+(error?.message||'fără răspuns'))
+    // Detaliile DOAR după ce plata s-a inserat; dacă eșuează → compensare (ștergem plata creată) + anunț
+    const {error:eDet}=await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
+    if(eDet){
+      const {error:eDel}=await supabase.from('diurna_payments').delete().eq('id',payment.id)
+      if(eDel) throw new Error(`Detaliile nu s-au salvat (${eDet.message||eDet}) și plata #${payment.id} NU a putut fi ștearsă (${eDel.message||eDel}) — verifică manual în Istoric`)
+      throw new Error(`Detaliile nu s-au salvat (${eDet.message||eDet}) — plata #${payment.id} a fost ștearsă, nimic nu a rămas salvat`)
+    }
+    playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
+  }catch(e){console.error('savePayment err:',e);showToast('Eroare la salvare: '+(e?.message||e),'error')}finally{savingPaymentRef.current=false;setSavingPayment(false)}
   }
 
   const reexportPayment=async(payment)=>{
@@ -4749,37 +4772,27 @@ function ReportsPage() {
     // Din exportul ăsta se întocmesc ordinele de deplasare și se împart diurnele pe
     // lucrări, deci omul trebuie să rămână în listă până se închide luna, cu zilele
     // lucrate și cu 0 în dreptul zilelor de după încetare.
-    // Se includ deci și inactivii cu încetare în luna exportată.
-    const dLuna=new Date(dt)
-    const lunaStart=`${dLuna.getFullYear()}-${String(dLuna.getMonth()+1).padStart(2,'0')}-01`
-    const lFin=new Date(lunaStart); lFin.setMonth(lFin.getMonth()+1); lFin.setDate(0)
-    const lunaEnd=lFin.toISOString().split('T')[0]
+    // Criteriul e „încetare DE LA începutul lunii tranșei încolo" (în incarcaSnapshotDiurne).
 
-    // Criteriul e „încetare DE LA începutul lunii exportate încolo", nu „încetare
-    // ÎN luna exportată": cine a plecat pe 7 august a lucrat tot iulie, iar la
-    // exportul pe iulie trebuie să apară. Un filtru pe luna exportată l-ar sări.
-    let eq=supabase.from('employees').select('*').order('name')
-      .or(`active.eq.true,termination_date.gte.${lunaStart}`)
-    if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
-    const {data:emps}=await eq
+    // Tranșele deja salvate care se termină înainte de tranșă — DOAR pentru reconciliere („Diferență între
+    // suma înregistrată și suma recalculată"): ce s-a înregistrat efectiv vs ce ar fi trebuit conform alocării;
+    // nu se absoarbe în tranșa curentă. Se iau și plățile peste 1 ale lunii (ex. 26.09–02.10 la o tranșă din
+    // octombrie) — partea lor de octombrie se atribuie lunii octombrie (platitAnteriorPeLuni).
+    const {data:prevPaymentsInMonth,error:ePrev}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_to',inceputLuna(df)).lt('period_to',df).order('period_from',{ascending:true})
+    if(ePrev) throw new Error('Nu s-au putut citi plățile anterioare: '+(ePrev.message||ePrev))
+    const extindeDeLa=(prevPaymentsInMonth||[]).reduce((m,p)=>(!m||p.period_from<m)?p.period_from:m,null)
 
-    // Lunile atinse de tranșă (o tranșă peste 1 ale lunii se alocă pe segmente lunare, în diurneAlocare.js)
-    const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)
-
-    // Sărbători legale din calendar (zile lucrătoare = Luni-Vineri minus acestea; calendarul stochează doar non-lucrătoarele)
-    const {data:calData}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
-    const legalSet=new Set((calData||[]).filter(d=>d.type==='legal').map(d=>d.date))
+    // Snapshot COMUN (diurneAlocare.js) — aceleași intrări ca savePayment și BT: settings + calendar + angajați
+    // eligibili + TOATE înregistrările lunii/lunilor (nu doar df→dt): din ele ies CO-ul (plafon) și bifele
+    // dinaintea tranșei. Orice citire eșuată → throw → toast, fără export.
+    const siteIds=!isAdmin?(profile?.site_ids||[]):null
+    const snap=await incarcaSnapshotDiurne(supabase,{df,dt,siteIds,recsSelect:'*,sites(name)',extindeDeLa})
+    const {emps,legalSet,monthStartTransa:monthStart}=snap
+    const allRecs=snap.recs
+    const diurnaAmt=snap.diurnaAmt
     // Zile lucrătoare de la 1 ale lunii lui dt până la dt — doar informativ (antet + toast)
     const calWorkDays=zileLucratoareLuna(dt,legalSet).filter(d=>d<=dt).length
-
-    // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
-    // Paginare manuală
-    let allRecs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; allRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
-
-    // Tranșele deja salvate din aceeași lună (period_to < df) — DOAR pentru reconciliere („Diferență față de plătit"):
-    // ce s-a plătit efectiv vs ce ar fi trebuit conform alocării; nu se absoarbe în tranșa curentă
-    const {data:prevPaymentsInMonth}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
+    const platitPeLuni=platitAnteriorPeLuni({plati:prevPaymentsInMonth||[],recsLuna:allRecs,df,dt,legalSet,diurnaAmt})
 
     // Diurnele bifate în tranșă (pentru împărțirea pe șantiere)
     const diurnaRecs=allRecs.filter(r=>r.diurna===true&&r.date>=df&&r.date<=dt)
@@ -4787,7 +4800,7 @@ function ReportsPage() {
     // Alocare comună pe plafonul lunar (diurneAlocare.js) — aceeași ca în savePayment și exportBancaDiurne:
     // C = zile lucr. − CO pe zile lucr. (LL nu scade), B = bife dinaintea tranșei (și weekend), N = bife în tranșă,
     // zile diurnă = min(C,B+N) − min(C,B), restul → salariu. Fără plafon separat pe zilele lucrătoare ale tranșei.
-    const alocare=alocaDiurneTransa({recsLuna:allRecs,df,dt,legalSet,diurnaAmt})
+    const alocare=alocaDinSnapshot(snap)
 
     // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
@@ -4816,12 +4829,14 @@ function ReportsPage() {
       const pesteCumulat=pesteBuget
       const restDePlata=pesteBuget
 
-      // Reconciliere: ce s-a salvat efectiv în tranșele anterioare ale lunii vs alocarea recalculată.
-      // Diferență ≠ 0 = istoric lipsă (tranșă nesalvată / angajat exclus atunci) sau bife modificate după salvare.
-      const platitEfectiv=(prevPaymentsInMonth||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?Number(d.amount)||0:0)},0)
+      // Reconciliere: ce s-a înregistrat efectiv în plățile anterioare (atribuit lunilor tranșei) vs alocarea recalculată.
+      // Semn: pozitiv = înregistrat MAI MULT decât recalculat; negativ = mai puțin (tranșă nesalvată / angajat
+      // exclus atunci / bife modificate după salvare). Nu se corectează automat.
+      const platitEfectiv=platitPeLuni.get(emp.id)||0
       const diferentaPlatit=platitEfectiv-platitAnteriorSuma
-      // Zile cu CO ȘI diurnă bifată simultan — nu se rezolvă automat, se semnalează
+      // Zile cu CO ȘI diurnă bifată simultan — nu se rezolvă automat, se semnalează: în tranșă și (separat) înainte de tranșă, în lună
       const deVerificat=a?a.deVerificat:[]
+      const deVerificatAnterior=a?a.deVerificatAnterior:[]
       // ─────────────────────────────────────────────────────────────────────
 
       // Group by site
@@ -4838,7 +4853,7 @@ function ReportsPage() {
       return {nume:p[0],prenume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,
               diurnaMax:faraZile?0:diurnaMax,
               normeCumulate:C,zilePlatiteAnterior:B,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata,
-              deVerificat,diferentaPlatit,
+              deVerificat,deVerificatAnterior,diferentaPlatit,
               incetatLa:incetatInLuna?emp.termination_date:null}
     }).filter(Boolean).sort((a,b)=>{
       const n=(a.nume||'').localeCompare((b.nume||''),'ro')
@@ -4852,9 +4867,10 @@ function ReportsPage() {
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
     const HFILL='1F497D'; const TFILL='D9E1F2'; const GFILL='1F497D'; const WFILL='FFF2CC'
     const wb=XLSX.utils.book_new()
-    const hdrCols=['Nr.','Nume','Prenume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită','De verificat (CO + diurnă)','Diferență față de plătit (RON)']
+    const hdrCols=['Nr.','Nume','Prenume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită','De verificat (CO + diurnă)','Diferență între suma înregistrată și suma recalculată (RON)']
     const NC=hdrCols.length
-    const fmtVerif=e=>e.deVerificat?.length?`CO+diurnă: ${e.deVerificat.map(d=>d.slice(8,10)+'.'+d.slice(5,7)).join(', ')}`:''
+    const fmtZi=d=>d.slice(8,10)+'.'+d.slice(5,7)
+    const fmtVerif=e=>[e.deVerificat?.length?`CO+diurnă: ${e.deVerificat.map(fmtZi).join(', ')}`:'',e.deVerificatAnterior?.length?`ant.: ${e.deVerificatAnterior.map(fmtZi).join(', ')}`:''].filter(Boolean).join(' · ')
 
     const wsData=[]
     wsData.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
@@ -4903,7 +4919,7 @@ function ReportsPage() {
     const totalGenZile=empStats.reduce((s,e)=>s+e.totalZile,0)
     const totalGenVal=empStats.reduce((s,e)=>s+e.totalVal,0)
     const totalPeste=empStats.reduce((s,e)=>s+e.pesteLimita,0)
-    const totalDeVerificat=empStats.filter(e=>e.deVerificat?.length).length
+    const totalDeVerificat=empStats.filter(e=>e.deVerificat?.length||e.deVerificatAnterior?.length).length
     const totalDiferenta=empStats.reduce((s,e)=>s+e.diferentaPlatit,0)
     wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0,totalDeVerificat>0?`${totalDeVerificat} angajați`:'',totalDiferenta!==0?totalDiferenta:''])
     const totalGenRow=rowIdx+1
@@ -4944,8 +4960,17 @@ function ReportsPage() {
       sc(totalGenRow,c,{fill:{fgColor:{rgb:c>=7&&totalPeste>0?'FF0000':GFILL}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'center',vertical:'center'}})
     }
 
-    // Merge cells
+    // Notă de subsol (sub TOTAL GENERAL): explicația coloanelor de control
     ws['!merges']=ws['!merges']||[]
+    ;[
+      'Diferență între suma înregistrată și suma recalculată = suma salvată în plățile anterioare din lună (Istoric Plăți) − suma recalculată din pontaj cu aceeași formulă (Σ zile în plafon înainte de tranșă × tarif).',
+      'Semn: POZITIV = s-a înregistrat mai mult decât rezultă din pontaj; NEGATIV = mai puțin (tranșă nesalvată, angajat exclus atunci sau bife modificate după salvare). Nu se corectează automat — se verifică în Istoric.',
+      'De verificat: zile cu CO și diurnă bifată simultan — „CO+diurnă:" în tranșa exportată, „ant.:" înainte de tranșă, în aceeași lună (influențează plafonul și zilele consumate). Nu se rezolvă automat.',
+    ].forEach((txt,i)=>{
+      const r=totalGenRow+1+i, a=XLSX.utils.encode_cell({r,c:0})
+      ws[a]={v:txt,t:'s'}; ws[a].s={font:{italic:true,sz:9,color:{rgb:'595959'}},alignment:{horizontal:'left',vertical:'center',wrapText:false}}
+      ws['!merges'].push({s:{r,c:0},e:{r,c:NC-1}})
+    })
     // Antet firmă: A1:B1 (nume firmă) și A2:B2 (CUI/Reg.Com.) — îmbinate pe 2 coloane
     ws['!merges'].push({s:{r:0,c:0},e:{r:0,c:1}})
     ws['!merges'].push({s:{r:1,c:0},e:{r:1,c:1}})
@@ -4964,7 +4989,7 @@ function ReportsPage() {
     // Nota apare DOAR când angajatul depășește cumulat plafonul lunar (nu per perioadă)
     const angajatiPeste=empStats.filter(e=>e.depasesteLunar)
     if(angajatiPeste.length>0){
-      let nr2=totalGenRow+2
+      let nr2=totalGenRow+5
       ws['!merges']=ws['!merges']||[]
 
       // Rând alertă ATENȚIE contabilitate (deasupra titlului)
@@ -5024,9 +5049,9 @@ function ReportsPage() {
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
     const msgVerif=totalDeVerificat>0?` · ⚠ ${totalDeVerificat} de verificat (CO+diurnă)`:''
-    const msgDif=totalDiferenta!==0?` · ⚠ diferență față de plătit ${totalDiferenta} RON`:''
+    const msgDif=totalDiferenta!==0?` · ⚠ diferență înregistrat−recalculat ${totalDiferenta} RON`:''
     playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}${msgVerif}${msgDif}`)
-    }catch(e){showToast('Eroare la export diurne','error')}finally{setExpD(false)}
+    }catch(e){console.error('exportDiurne err:',e);showToast('Export oprit: '+(e?.message||e),'error')}finally{setExpD(false)}
   }
 
   const exportBancaDiurne=async()=>{
@@ -5035,24 +5060,19 @@ function ReportsPage() {
     if(!df||!dt){showToast('Selectează perioada pentru diurne','warn');return}
     setExpBT(true)
     try{
-      const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)   // lunile atinse de tranșă
-
-      // Eligibili: activii + cei cu încetare de la începutul lunii încolo (ca în savePayment)
-      let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
-      if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
-      const {data:emps}=await eq
-      // TOATE înregistrările lunii/lunilor — pentru plafon (CO) și bifele dinaintea tranșei
-      let recs = []
-      { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
-      const {data:st}=await supabase.from('settings').select('*')
+      if(df>dt){showToast('Interval inversat: „de la" e după „până la"','error');return}
+      // Snapshot COMUN (diurneAlocare.js) — identic cu savePayment și exportDiurne: settings (tarif, IBAN firmă),
+      // calendar, angajați eligibili, TOATE înregistrările lunilor atinse. Citire eșuată → throw → toast, fără export.
+      const siteIds=!isAdmin?(profile?.site_ids||[]):null
+      const snap=await incarcaSnapshotDiurne(supabase,{df,dt,siteIds})
+      const emps=snap.emps
+      const {data:st,error:eSt}=await supabase.from('settings').select('*')
+      if(eSt) throw new Error('Nu s-au putut citi setările: '+(eSt.message||eSt))
       const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
-      const diurnaAmt=Number(getSetting('diurna_amount',50))
       const ibanFirma=getSetting('iban_firma','RO25BTRLRONCRT0T18017E01')
-      const {data:calData2}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
-      const legalSet=new Set((calData2||[]).filter(d=>d.type==='legal').map(d=>d.date))
 
       // Alocare comună pe plafonul lunar (diurneAlocare.js) — identică cu savePayment și exportDiurne
-      const alocare=alocaDiurneTransa({recsLuna:recs,df,dt,legalSet,diurnaAmt})
+      const alocare=alocaDinSnapshot(snap)
 
       // BIC lookup
       const BIC_MAP={BTRL:'BTRLRO22XXX',INGB:'INGBROBUXX',RNCB:'RNCBROBUXX',BRDE:'BRDEROBUXX',BACX:'BACXROBUXX',RZBR:'RZBRROBUXX',CECE:'CECEROBUXX',BRMA:'BRMAROBUXX',UGBI:'UGBIROBUXX',OTPV:'OTPVROBUXX',TCCL:'TCCLGB3L'}
@@ -5065,7 +5085,7 @@ function ReportsPage() {
       const rows=[];let nr=1
       const faraIBAN=[]
 
-      ;(emps||[]).forEach(emp=>{
+      ;emps.forEach(emp=>{
         const a=alocare.get(emp.id)
         if(!a||a.N===0) return
         // Suma confirmata = doar zilele din plafonul lunar (zile_diurnă × lei/zi)
@@ -5087,7 +5107,7 @@ function ReportsPage() {
       const totalConfirmat=rows.reduce((s,r)=>s+r[6],0)
       const msg=faraIBAN.length?` · ⚠ IBAN lipsă: ${faraIBAN.join(', ')}`:' ✓'
       playBeep(1040,0.18); showToast(`✓ Export BT Diurne — ${rows.length} angajați · ${totalConfirmat.toLocaleString('ro-RO')} RON${msg}`)
-    }catch(e){showToast('Eroare export BT','error')}finally{setExpBT(false)}
+    }catch(e){console.error('exportBancaDiurne err:',e);showToast('Export BT oprit: '+(e?.message||e),'error')}finally{setExpBT(false)}
   }
 
   const exportSupl=async()=>{
