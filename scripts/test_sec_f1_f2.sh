@@ -176,7 +176,7 @@ if P -c "$GSQL" >/dev/null; then
   gm=$(P -tA -c "SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.fn_completare_aplica(bigint,boolean)')")
   o=$(run "$F2"); echo "$o" | grep -q "Precondiție 0e" && echo "$o" | grep -qF "fn_completare_aplica(bigint,boolean) [execute]" && ok "F2-0e G1 fn_completare_aplica cu md5 ≠ lista ($gm) ⇒ refuz" || bad "F2-0e G1" "$o"
   sed "s/47a7542895c0ce71cb0e44d2c26d0609/$gm/" "$F2" > "$D/f2_lista.sql"
-  [ "$(grep -c "$gm" "$D/f2_lista.sql")" = 1 ] || bad "F2-0e G2" "substituția md5 în copie nu e exact 1"
+  [ "$(grep -c "$gm" "$D/f2_lista.sql")" = 2 ] || bad "F2-0e G2" "substituția md5 în copie nu e exact 2 (pre + post 0e)"
   o=$(run "$D/f2_lista.sql" 20260930j_sec_f2_profiles_uid_null); r=$?
   [ $r = 0 ] && [ "$(P -tA -c "$MDQ")" = "$MD_PATCH" ] && ok "F2-0e G2 fn_completare_aplica DEFINER cu md5 exact din listă ⇒ NU blochează (aplicat)" || bad "F2-0e G2" "$o"
   o=$(run "$RB0"); [ $? = 0 ] && [ "$(P -tA -c "$MDQ")" = "$MD_LIVE" ] || bad "F2-0e G2-rb" "$o"
@@ -204,17 +204,32 @@ if P -c "CREATE FUNCTION public.neg_secdef() RETURNS bigint LANGUAGE plpgsql SEC
   P -c "DROP FUNCTION public.neg_secdef(), public.neg_revocat(), public.neg_window(); DROP SCHEMA neexpusa CASCADE; DROP AGGREGATE public.neg_agg(int);" >/dev/null 2>&1 || bad "F2-0e-neg" "DROP"
   o=$(run "$RB0"); [ $? = 0 ] && [ "$(P -tA -c "$MDQ")" = "$MD_LIVE" ] || bad "F2-0e-neg-rb" "$o"
 else bad "F2-0e-neg" "crearea fixture-urilor negative a eșuat (5 așteptate)"; fi
-# interogarea 0e din migrare = cea din doc (SQL-ul de control post-deploy) — extrasă din ambele, comparată linie cu linie
-python3 - "$F2" "$ROOT/docs/SEC_F1_F2_PATCH.md" > "$D/q0e.sql" <<'PY'
+# interogarea 0e: pre + postcondiția din migrare = SQL-ul de control din doc = scripts/control_0e.sql (normalizat linie cu linie)
+python3 - "$F2" "$ROOT/docs/SEC_F1_F2_PATCH.md" "$ROOT/scripts/control_0e.sql" > "$D/q0e.sql" <<'PY'
 import re,sys
-def q(p):
-    m=re.search(r"(-- SEC F2 0e \(r6\).*?ORDER BY 1)[;\n]", open(p).read(), re.S)
-    return m and "\n".join(l.strip() for l in m.group(1).split("\n"))
-a,b=q(sys.argv[1]),q(sys.argv[2])
-if not a or a!=b: print("migrare/doc diferă sau lipsesc"); sys.exit(1)
-print(b)
+def qs(p):
+    return ["\n".join(l.strip() for l in m.split("\n")) for m in re.findall(r"(-- SEC F2 0e \(r6\).*?ORDER BY 1)[;\n]", open(p).read(), re.S)]
+a,b,c=qs(sys.argv[1]),qs(sys.argv[2]),qs(sys.argv[3])
+if len(a)!=2 or len(b)!=1 or len(c)!=1 or len(set(a+b+c))!=1: print("diferă/lipsesc: migrare %d, doc %d, control %d, distincte %d"%(len(a),len(b),len(c),len(set(a+b+c)))); sys.exit(1)
+print(b[0])
 PY
-[ $? = 0 ] && ok "F2-0e-doc interogarea din migrare = SQL-ul de control din doc" || bad "F2-0e-doc" "$(cat "$D/q0e.sql")"
+[ $? = 0 ] && ok "F2-0e-doc precondiția 0e = postcondiția 0e = SQL-ul de control din doc = scripts/control_0e.sql" || bad "F2-0e-doc" "$(cat "$D/q0e.sql")"
+# control_0e.sql rulează read-only (fără gadgeturi ⇒ 0 rânduri)
+o=$(P -tA -c "SET default_transaction_read_only = on" -f "$ROOT/scripts/control_0e.sql" 2>&1); [ $? = 0 ] && [ -z "$o" ] && ok "F2-0e-control scripts/control_0e.sql read-only ⇒ 0 rânduri" || bad "F2-0e-control" "$o"
+# arhiva excepției whitelist: md5 al corpului dintre $function$ = cel din listă
+am=$(python3 -c 'import re,sys,hashlib;print(hashlib.md5(re.search(r"AS \$function\$(.*?)\$function\$",open(sys.argv[1]).read(),re.S).group(1).encode()).hexdigest())' "$ROOT/docs/sec_f2_whitelist/fn_completare_aplica_47a75428.sql")
+[ "$am" = 47a7542895c0ce71cb0e44d2c26d0609 ] && grep -qF "'47a7542895c0ce71cb0e44d2c26d0609'" "$F2" && ok "F2-0e-arhivă md5 corp fn_completare_aplica arhivat = $am = lista din migrare" || bad "F2-0e-arhivă" "md5=$am"
+# r7 — cursa precondiție→COMMIT: gadget creat „concurent” după pasul 1 (simulat în aceeași tranzacție, înaintea postcondiției 0e)
+python3 - "$F2" > "$D/f2_cursa.sql" <<'PY'
+import sys;s=open(sys.argv[1]).read();k="DO $post0e$"
+assert s.count(k)==1
+print(s.replace(k,"CREATE FUNCTION public.g_cursa() RETURNS void LANGUAGE sql SET \"request.jwt.claim.sub\" TO 'x' AS 'SELECT 1';\n"+k))
+PY
+if [ $? = 0 ]; then
+  o=$(run "$D/f2_cursa.sql" 20260930j_sec_f2_profiles_uid_null)
+  if echo "$o" | grep -q "Postcondiție 0e" && echo "$o" | grep -qF "g_cursa() [" && [ "$(P -tA -c "$MDQ")" = "$MD_LIVE" ] && [ -z "$(P -tA -c "SELECT to_regprocedure('public.g_cursa()')")" ]; then
+    ok "F2-0e-post gadget apărut după precondiție ⇒ postcondiția 0e refuză, totul anulat (md5 live, gadget inexistent)"; else bad "F2-0e-post" "$o"; fi
+else bad "F2-0e-post" "construcția copiei a eșuat"; fi
 o=$(run "$F2"); [ $? = 0 ] && ok "F2-apply aplicare" || bad "F2-apply" "$o"
 md=$(P -tA -c "$MDQ")
 echo "INFO md5 după F2: $md"

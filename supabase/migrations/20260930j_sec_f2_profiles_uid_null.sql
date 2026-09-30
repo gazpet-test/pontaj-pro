@@ -40,6 +40,7 @@
 --        session_authorization; set_config; request.jwt; session authorization; SET/RESET … ROLE; U&; comentarii imbricate)
 --        și nu are EXECUTE dinamic (DEFINER: doar lista revizuită legată de md5(prosrc)). Vezi doc §8.7.
 --   2. Postcondiții (toate 4 funcțiile): md5 prosrc = variantele din patch, atributele neschimbate, ACL identic cu cel de dinainte, setul de 4 triggere intact.
+--   2d. (r7) Postcondiție 0e: aceeași interogare ca precondiția 0e, rulată din nou la finalul tranzacției (cursa precondiție→COMMIT).
 --
 -- Tranzacția: UN SINGUR gestionar = scripts/livrare_migrare.sh (fără BEGIN/COMMIT în fișier; garda de livrare start + final).
 -- Rollback: supabase/migrations/20260930j_sec_f2_profiles_uid_null_ROLLBACK.sql (corpurile live din 30.09, verificate prin md5).
@@ -472,6 +473,52 @@ BEGIN
     RAISE EXCEPTION 'Postcondiție 2c: setul de triggere pe profiles nu mai e cel de 4 (% conforme)', v_n;
   END IF;
 END $post$;
+
+-- 2d. (r7) POSTCONDIȚIE 0e — ACEEAȘI interogare ca precondiția 0e, la finalul tranzacției: închide cursa în care altă sesiune
+--     creează/acordă un gadget între precondiție și COMMIT (sau chiar această tranzacție ar expune unul). ≠ 0 ⇒ se anulează tot.
+DO $post0e$
+DECLARE v_n int; v_gadget text;
+BEGIN
+  SELECT count(*), string_agg(q.functie || ' [' || q.motive || ']', '; ' ORDER BY q.functie) INTO v_n, v_gadget
+    FROM (
+           -- SEC F2 0e (r6) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate
+           WITH f AS (
+             SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
+                    EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
+                    CASE WHEN p.prokind IN ('f', 'p', 'w') THEN pg_get_functiondef(p.oid) END AS def
+               FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
+                AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+           ), t AS (
+             SELECT f.*,
+                    lower(replace(regexp_replace(regexp_replace(regexp_replace(f.def, '/\*.*?\*/', ' ', 'g'), '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'), '"', ''))
+                      || ' ; ' || lower(replace(f.def, '"', '')) AS txt
+               FROM f
+           ), m AS (
+             SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+                      CASE WHEN t.cfg THEN 'proconfig' END,
+                      CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
+                      CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
+                      CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
+                      CASE WHEN t.txt ~ '\m(set|reset)\M[^;]*\mrole\M'
+                             OR t.txt ~ '\m(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+                      CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
+                      CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+                      CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
+                             SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
+                              WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
+                    ], NULL) AS motive
+               FROM t
+           )
+           SELECT m.functie, m.prosecdef, array_to_string(m.motive, ',') AS motive
+             FROM m
+            WHERE cardinality(m.motive) > 0
+            ORDER BY 1
+         ) AS q;
+  IF v_n IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION 'Postcondiție 0e: % funcții expuse (public/graphql_public, EXECUTE pentru anon/authenticated) pot scrie GUC-urile de identitate sau au EXECUTE dinamic nerevizuit, apărute până la finalul tranzacției — se anulează tot (fail-closed): %', v_n, v_gadget;
+  END IF;
+END $post0e$;
 
 DO $livrare_final$
 BEGIN

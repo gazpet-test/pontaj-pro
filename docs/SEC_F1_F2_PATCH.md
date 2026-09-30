@@ -381,3 +381,26 @@ Rezultate r6 (local, PG 17 + PostgREST 13.0.4):
 - `bash scripts/test_sec_f1_f2.sh`: **185 PASS / 0 FAIL**.
 - `POSTGREST=… bash scripts/test_sec_f2_postgrest.sh`: **20 PASS / 0 FAIL**. R-1 reprodus și persistat (nereprodus = FAIL). CONTROL-0e: RPC creat după apply care falsifică doar `sub` (owner) ⇒ `employee_id` trece pe triggere (recitit), iar interogarea de control, extrasă din acest doc, îl listează (plus toate RPC-urile de atac). Sondele PostgREST sunt create acum DUPĂ apply: citesc `request.jwt` / `role`, deci 0e le refuza (fals-pozitiv fail-closed, comportament corect).
 - Interogarea r6 rulată read-only pe live (30.09): **0 rânduri** (fn_completare_aplica trece prin lista revizuită cu md5 `47a75428…`). Nimic aplicat pe Supabase.
+
+### 8.8 Runda 7 (01.10.2026) — Copilot: GO logică r6 + GO 0e ca invariant euristic, cu două întăriri înainte de merge
+
+| Punct (Copilot r6) | Schimbarea r7 | Test |
+|---|---|---|
+| Cursa precondiție → COMMIT: altă sesiune creează sau acordă un gadget după 0e | **Postcondiția 0e (2d)**: aceeași interogare rulată din nou la finalul tranzacției, după postcondițiile 2a–2c și înainte de garda finală. ≠ 0 ⇒ se anulează tot | harness `F2-0e-post`: o copie a migrării creează un gadget (clauza `SET "request.jwt.claim.sub"`) după pasul 1, înaintea postcondiției ⇒ „Postcondiție 0e”, md5-urile rămân cele live, gadgetul nu există după rollback |
+| 0e ca gate PERMANENT | `scripts/control_0e.sql`: interogarea exactă, read-only | harness `F2-0e-doc`: precondiția = postcondiția = SQL-ul din doc = `control_0e.sql`. `F2-0e-control`: rulat cu `default_transaction_read_only = on` ⇒ 0 rânduri |
+| Arhivarea excepției din listă | `docs/sec_f2_whitelist/fn_completare_aplica_47a75428.sql`: definiția exactă de pe live (`pg_get_functiondef`, citită read-only pe 01.10) | harness `F2-0e-arhivă`: md5 al corpului dintre `$function$` = `47a7542895c0ce71cb0e44d2c26d0609` = valoarea din listă |
+
+**Regula permanentă.** După ORICE migrare care creează sau modifică funcții, ACL-uri sau obiecte expuse în `public` / `graphql_public`, `scripts/control_0e.sql` trebuie să întoarcă **0 rânduri** înainte ca schimbarea să fie considerată livrată. Un rezultat ≠ 0 înseamnă că se analizează lista: rescriere, `REVOKE EXECUTE` sau intrare revizuită în listă (doar pentru EXECUTE la DEFINER, cu md5 și arhivă în `docs/sec_f2_whitelist/`). **De făcut în PR separat:** runner-ul `scripts/livrare_migrare.sh` (branch-ul sec-rsvti / #538) trebuie să ruleze `control_0e.sql` după fiecare livrare. Nu e integrat aici.
+
+**Justificarea excepției `fn_completare_aplica`** (md5 `47a75428…`):
+- Verifică drepturile înainte de orice: `is_owner OR can_manage_contracts` pe `auth.uid()`, altfel refuză.
+- Coloana ținută vine dintr-un whitelist fix de 15 câmpuri din `executie_proiecte` și e inserată prin `%I`.
+- Tipul cast-ului e ales dintr-un `CASE` cu literale.
+- Valorile trec prin `EXECUTE … USING`.
+- Nu scrie GUC-uri și nu atinge `profiles`.
+
+**Audit recomandat (read-only, NU blochează merge-ul):**
+- Funcțiile din TOATE schemele care conțin `set_config`, `request.jwt`, `session_authorization` sau `SET ROLE`.
+- Apelanții lor dintre cele 106 rutine expuse. Asta ar închide limita „apeluri indirecte” din §8.7.
+
+Rezultate r7 (local, PG 17 + PostgREST 13.0.4): `test_sec_f1_f2.sh` **188 PASS / 0 FAIL**; `test_sec_f2_postgrest.sh` **20 PASS / 0 FAIL**. Nimic aplicat pe Supabase.
