@@ -9,7 +9,7 @@
 -- Tokenul deschide pagina PUBLICĂ /co?t=TOKEN: sold CO + ultimele 8 cereri + depunere de cerere în numele
 -- angajatului. Expunere STRUCTURALĂ — nu furt demonstrat.
 --
--- Ce face (o singură tranzacție, gestionată de RUNNERUL scripts/livrare_migrare.sh — runda 4):
+-- Ce face (o singură tranzacție, gestionată de runnerul de livrare — tiparul rundei 4):
 --   1. precondiție fail-closed: pornește doar din starea LIVE exactă sau din starea PATCH (reaplicare);
 --      + invarianții sursei drepturilor (runda 2): politicile de scriere și triggerele care împiedică
 --      autoatribuirea is_owner / user_module_access sunt exact cele verificate pe live 30.09;
@@ -22,7 +22,7 @@
 -- Ce NU face: nu invalidează tokenurile (o copie luată anterior rămâne validă), nu schimbă edge-ul, UI-ul,
 -- datele sau alte tabele. Revocarea/reemiterea și expirarea = DECIZIILE lui Răzvan (doc §6).
 -- Scrierea rămâne ca azi: nicio politică de INSERT/UPDATE/DELETE → doar service_role/postgres.
--- Tranzacția (runda 4, traseul comun cu #538): UN SINGUR gestionar = scripts/livrare_migrare.sh
+-- Tranzacția (runda 4, traseul comun cu #538): UN SINGUR gestionar = runnerul de livrare (scripts/livrare_migrare.sh, refăcut în runda 5 după NO-GO Copilot r4; neportat aici)
 --   (psql -X -v ON_ERROR_STOP=1 --single-transaction: marcaj de livrare + ACEST fișier + INSERT în
 --   supabase_migrations.schema_migrations, toate în aceeași tranzacție). Fișierul NU conține BEGIN/COMMIT.
 --   Garda de livrare (start + final, legată de txid): fără marcajul runnerului fișierul refuză — psql -f simplu,
@@ -32,10 +32,10 @@
 -- ════════════════════════════════════════════════════════════════════════════
 DO $livrare_start$
 BEGIN
-  -- Garda de livrare (start): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- Garda de livrare (start): marcajul e pus de runnerul de livrare (runda 5) ÎN ACEEAȘI tranzacție (legat de txid);
   -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003d_sec_concediu_tokens:' || txid_current() THEN
-    RAISE EXCEPTION 'Livrare 20261003d: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+    RAISE EXCEPTION 'Livrare 20261003d: garda de livrare (start) — rulează DOAR prin runnerul de livrare (psql --single-transaction: marcaj + migrare + înregistrare în aceeași tranzacție)';
   END IF;
 END $livrare_start$;
 
@@ -227,9 +227,9 @@ END $post$;
 
 DO $livrare_final$
 BEGIN
-  -- Garda de livrare (final, după postcondiții): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- Garda de livrare (final, după postcondiții): marcajul e pus de runnerul de livrare (runda 5) ÎN ACEEAȘI tranzacție (legat de txid);
   -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003d_sec_concediu_tokens:' || txid_current() THEN
-    RAISE EXCEPTION 'Livrare 20261003d: garda de livrare (final, după postcondiții) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+    RAISE EXCEPTION 'Livrare 20261003d: garda de livrare (final, după postcondiții) — rulează DOAR prin runnerul de livrare (psql --single-transaction: marcaj + migrare + înregistrare în aceeași tranzacție)';
   END IF;
 END $livrare_final$;

@@ -2,13 +2,12 @@
 
 > **Domeniul verdictului (formulare Copilot, 30.09): citirea directă prin rolurile API este restrânsă; obținerea tokenurilor prin toate căile aplicației nu este încă demonstrată ca restrânsă.** Un edge cu `service_role` poate citi în continuare tabelul; faptul că nu e afectat de patch e compatibilitate, nu dovada că propriul endpoint e autorizat corect.
 >
-> **Revizia 4 (30.09): traseul de livrare comun** — fișierul nu mai are BEGIN/COMMIT; livrarea = `scripts/livrare_migrare.sh` (marcaj + migrare + înregistrare într-o singură tranzacție); **§9**. Logica patch-ului e neschimbată.
+> **Revizia 4 (30.09): tiparul de livrare** — fișierul nu mai are BEGIN/COMMIT, ci garda de livrare de start/final legată de txid; **runnerul comun NU e portat** (NO-GO Copilot r4 pe `scripts/livrare_migrare.sh`, se reface în runda 5); **§9**. Logica patch-ului e neschimbată.
 >
 > **Stare: DOAR PREGĂTIRE, NEAPLICAT.** Runda 2 (răspuns la verdictul „GO CU CORECTURI pe logică”): §8. Copilot a dat „GO DOAR PREGĂTIRE” pe acest domeniu, separat de trezorerie (verdictul pe matrice, 30.09). Aplicarea cere **GO-ul lui Copilot pe revizia finală + acordul lui Răzvan**. Nimic nu s-a scris în producție: investigația a folosit doar SELECT pe cataloage și numărători agregate. **Nu s-a citit și nu apare aici nicio valoare de token, telefon sau IBAN.** Tokenurile din teste sunt fictive.
 
 Fișiere:
-- `supabase/migrations/20261003d_sec_concediu_tokens.sql` — migrarea (fără BEGIN/COMMIT din runda 4; tranzacția o deține runnerul)
-- `scripts/livrare_migrare.sh` — traseul oficial de livrare (copie identică a celui din #538, §9)
+- `supabase/migrations/20261003d_sec_concediu_tokens.sql` — migrarea (fără BEGIN/COMMIT din runda 4; tranzacția o deține runnerul de livrare — §9)
 - `supabase/revenire/20261003d_sec_concediu_tokens_ROLLBACK.sql` — revenirea tehnică, fără GO de execuție (+ `supabase/revenire/README.md`)
 - `scripts/test_sec_concediu_tokens.sh` + `supabase/tests/sec_concediu_tokens_schelet.sql` + `supabase/tests/sec_concediu_tokens.test.sql` — harness-ul PG16 local
 
@@ -68,7 +67,7 @@ Amprenta de producție a fost recalculată read-only cu **aceeași interogare** 
 
 `bash scripts/test_sec_concediu_tokens.sh` rulează pe un cluster PG16 **dedicat** (port 5483, `/tmp/pg_sec_concediu`, `autovacuum=off`) și refuză dacă pe port răspunde alt cluster. Rulat de 2 ori complet (după runda 2): **exit 0 de fiecare dată**, cu **91 de verificări în harness** și suita de comportament de **33 de verificări**, rulată în fiecare scenariu, plus suita `runda2` (12). **19 mutanți prinși.** Detaliile rundei 2: §8.
 
-> **Runda 4:** punctele „3 emulări de runner” și „eroare injectată × 4 emulări” de mai jos sunt **înlocuite** de testul traseului real de livrare (§9). Cifrele actuale: 97 de verificări în harness, 25 de mutanți.
+> **Runda 4:** punctele „3 emulări de runner” și „eroare injectată × 4 emulări” de mai jos sunt **înlocuite** de testul traseului real de livrare (§9). Cifrele actuale: 90 de verificări în harness, 21 de mutanți.
 
 - **Starea de azi reprodusă și demonstrată**: amprenta locală = producția. Suita „gaura” (8) trece pe live. Suita patch **pică pe live**, iar 12/12 verificări-cheie pică izolat.
 - **Comportament după patch** (suita, 33): edge-ul cu `service_role` validează tokenul, poate revoca (UPDATE `activ`) și reemite (INSERT), cu scrierile anulate în test. Owner, HR, cont Ofertare cu modul `hr` și sub-modul `hr.concedii` văd **exact aceleași rânduri ca azi** (număr + md5). Conturile fără modul, cu alte module, cu capcane de prefix (`HR`, `hrana`, `hr_extern`, `xhr.`, `' hr'`), departament HR fără modul, superadmin fără modul, `can_access_personal_data` fără modul, uid fără profil și JWT fără `sub` văd 0 rânduri, pe un tabel cu 5 rânduri (control pozitiv). `anon` primește refuz de privilegiu la SELECT, TRUNCATE și INSERT. Nimeni logat, nici HR, nici ownerul, nu poate scrie sau face TRUNCATE. PUBLIC/coloane/GRANT OPTION sunt goale. Robustețe: HR vede în continuare și dacă `profiles`/`user_module_access` ar fi restrânse la rândul propriu.
@@ -83,7 +82,7 @@ Amprenta de producție a fost recalculată read-only cu **aceeași interogare** 
 1. **Preview read-only**: rulezi interogarea de amprentă (blocul `<amprenta-20261003d>`) și interogarea de invarianți (blocul `<invarianti-20261003d>`, cu `SET search_path = public, pg_temp`) și le compari cu listele albe din fișier. Listezi **nominal** conturile care ar vedea linkurile (owner + modul `hr`/`hr.*`, cu `access_level` și modulul exact), fără valori de tokenuri, și **separat** categoriile excluse intenționat (departament HR, superadmin, `can_access_personal_data` fără modul).
 2. **CONDIȚIE: aprobarea explicită a lui Răzvan asupra grupului țintă** rezultat din preview (inclusiv: orice `hr.*`, `hr` cu `viewer`, valoarea exactă `'hr.'`, conturile de agent precum „Claude”, conturile din alte departamente cu modul `hr`). Fără această aprobare nu se aplică. Revocarea/reemiterea (§6) rămâne o operație separată și **nu** e condiție pentru patch; un drept distinct pentru distribuirea linkurilor poate veni ulterior.
 2b. **Probă obligatorie înainte de apply**: invarianții sursei drepturilor sunt egali cu cei din fișier (îi verifică oricum precondiția, atomic). Dacă diferă, se analizează ce s-a schimbat pe `profiles`/`user_module_access` și se consemnează revizia; nu se copiază hash-ul nou în fișier fără review.
-3. **Apply (runda 4, înlocuiește textul anterior)**: numai prin `bash scripts/livrare_migrare.sh supabase/migrations/20261003d_sec_concediu_tokens.sql -- "<URI conexiune directă / session mode, rol postgres>"` (§9). NU `apply_migration` / `execute_sql` / `psql -f`: fișierul le refuză prin garda de livrare. Nu se lipesc bucăți. Dacă apare totuși „aplicat, neînregistrat” (livrare manuală): stop, reconciliere read-only, fără rollback tehnic pentru a alinia istoricul.
+3. **Apply (runda 4, înlocuiește textul anterior)**: numai prin runnerul de livrare comun, **după GO-ul lui Copilot pe runda 5** (§9); până atunci nu există traseu de apply aprobat. NU `apply_migration` / `execute_sql` / `psql -f`: fișierul le refuză prin garda de livrare. Nu se lipesc bucăți. Dacă apare totuși „aplicat, neînregistrat” (livrare manuală): stop, reconciliere read-only, fără rollback tehnic pentru a alinia istoricul.
 4. **Verificare**: amprenta = ținta. Contul de test fără modul (`test.fara.modul@…`) citește 0 rânduri prin REST. Natalia apasă „🔗 Link mobil” și primește linkul. Un link `/co` existent se deschide în continuare. Nimic nu se actualizează automat în listele albe: orice diferență de amprentă se analizează.
 
 Revenirea nu are GO de execuție. Se folosește doar la cererea explicită a lui Răzvan + review specific, în forma din antetul fișierului.
@@ -170,35 +169,29 @@ Pe un schelet cu edge-ul emulat (lookup `token + activ + format` + verificarea e
 
 ### 8.4 Ce rămâne deschis
 - **Aprobarea lui Răzvan pe grupul țintă** (inclusiv L1–L3 și conturile de agent) — condiție de apply.
-- Livrarea atomică: portată în runda 4 (§9); rămâne GO-ul Copilot pe diff-ul efectiv + accesul `psql` și URI-ul pentru operator.
+- Livrarea atomică: doar tiparul (gărzi) e portat (§9); runnerul comun = runda 5 (NO-GO Copilot r4), apoi portare + GO.
 - F1 (TRUNCATE pe `profiles`/`user_module_access`), F2 (ocolirea triggerelor fără `auth.uid()`): patch-uri separate, cu acordul lui Răzvan.
 - Inventarul căilor `service_role` (edge-uri) care citesc tokenurile sau scriu în sursa drepturilor.
 - Rotația (§6 A) și verificarea eligibilității/expirării în edge: operații separate.
 
-## 9. Runda 4 — traseul de livrare (portat din #538, commit 95be8d4)
+## 9. Runda 4 — tiparul de livrare (gărzile), fără runner
 
-Cerința comună (verdictul Copilot r3 pe #538): **un singur gestionar de tranzacție** care include DDL-ul, postcondiția și înregistrarea în `supabase_migrations.schema_migrations`. Logica patch-ului (precondiții, politică, privilegii, postcondiție, invarianți) nu s-a schimbat; s-a schimbat doar artefactul de livrare. Totul e local; nimic aplicat, nimic pushat.
+Cerința comună (verdictul Copilot r3 pe #538): un singur gestionar de tranzacție care include DDL-ul, postcondiția și înregistrarea în `supabase_migrations.schema_migrations`. **Runnerul comun `scripts/livrare_migrare.sh` (#538, 95be8d4) a primit NO-GO de la Copilot în r4** (`wt-sec-rsvti/docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R4.md`: filtrul de control al tranzacției e ocolibil, fișierul verificat/executat/înregistrat poate diferi, opțiunile psql nu sunt blocate) și se reface în runda 5. De aceea aici **NU e copiat**; s-a portat doar tiparul din fișier. Logica patch-ului e neschimbată. Totul e local; nimic aplicat, nimic pushat.
 
-**a) Runnerul** — `scripts/livrare_migrare.sh`, **copie identică** a celui din #538 (sha256 `9f921a0ab8a52d59d1999d42e3782849eee98de18c167e34110c3ea18dd74a18`, verificat cu `cmp`): `psql -X -q -v ON_ERROR_STOP=1 --single-transaction -f marcaj -f migrare -f înregistrare`. Marcajul: `set_config('gazpet.livrare_migrare', '20261003d_sec_concediu_tokens:' || txid_current(), true)`. Înregistrarea verifică marcajul, refuză dacă numele e deja înregistrat, apoi `INSERT (version AAAALLZZHHMMSS UTC, name, statements = fișierul întreg)`. Runnerul refuză înainte de conexiune un fișier cu control de tranzacție sau fără gardă. De ce nu `apply_migration`: #538 §13 a (nu se poate demonstra că execuția și înregistrarea sunt în aceeași tranzacție).
+**a) Fișierul** — `BEGIN;` → garda de livrare de **start**, `COMMIT;` → garda de **final** (după postcondiție); ambele: `current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003d_sec_concediu_tokens:' || txid_current()` ⇒ `RAISE`. Ordinea: marcaj → gardă start → precondiție (+ invarianți) → schimbare → postcondiție → gardă final → înregistrare → COMMIT al runnerului. Verificare statică în harness (pasul 0): fără control de tranzacție, garda de start prima, cea de final ultima, postcondiția înainte.
 
-**b) Fișierul** — `BEGIN;` → garda de livrare de **start**, `COMMIT;` → garda de **final** (după postcondiție); ambele: `current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003d_sec_concediu_tokens:' || txid_current()` ⇒ `RAISE`. Ordinea: marcaj → gardă start → precondiție (+ invarianți) → schimbare → postcondiție → gardă final → înregistrare → COMMIT-ul runnerului. Verificare statică în harness (pasul 0): fără control de tranzacție, garda de start prima, cea de final ultima, postcondiția înainte. Fișierul nou: sha256 `e28455b5f0e1ba49061e2b14977610289781a165d5853f41f4788a4b435741e6`, 235 de linii.
-
-**c) Harness** (`scripts/test_sec_concediu_tokens.sh`, pașii 2–3 rescriși; toate `aplica` trec acum prin runnerul real, pe o `schema_migrations` cu coloanele din producție):
+**b) Harness** (`scripts/test_sec_concediu_tokens.sh`, pașii 2–3): livrarea e **emulată în harness** după tiparul rundei 4 (`psql --single-transaction` cu marcaj + fișier + verificare marcaj/reluare + `INSERT` în `schema_migrations` cu coloanele din producție). E o probă a **fișierului**, nu a runnerului; testele runnerului (filtru, copie aprobată, opțiuni psql) țin de runda 5.
 
 | Test | Rezultat |
 |---|---|
-| livrare fără eroare | patch + **o** înregistrare (version, name, `statements[1]` = fișierul octet cu octet); owner/HR văd exact ce vedeau |
-| `1/0` după prima schimbare · în postcondiție · înainte de garda de final | stare inițială (amprentă identică), gaura reprodusă, **0 înregistrări** |
-| **eroare injectată CHIAR la `INSERT`-ul în `schema_migrations`** (trigger BEFORE INSERT care verifică întâi că patch-ul e instalat în tranzacție, apoi `RAISE`) | stare inițială, **0 înregistrări** |
-| reluarea după eșecul înregistrării | permisă: patch + exact o înregistrare |
-| reluarea după succes (altă versiune) | refuz „deja înregistrată”, stare patch neschimbată, tot 1 înregistrare |
+| livrare fără eroare | patch + **o** înregistrare (`statements[1]` = fișierul octet cu octet); owner/HR văd exact ce vedeau |
+| `1/0` după prima schimbare · în postcondiție · înainte de garda de final | stare inițială, gaura reprodusă, **0 înregistrări** |
+| **eroare injectată CHIAR la `INSERT`-ul în `schema_migrations`** (trigger BEFORE INSERT care verifică întâi că patch-ul e instalat în tranzacție) | stare inițială, **0 înregistrări** |
+| reluarea după eșecul înregistrării / după succes | permisă (patch + o înregistrare) / refuzată „deja înregistrată”, fără dublare |
 | fișierul singur: `psql -f`, `psql -c` (ca `execute_sql`), `--single-transaction` fără marcaj, marcaj de sesiune rămas, `SET` fără txid | refuzat de garda de start, fără urme, 0 înregistrări |
-| fișier cu `COMMIT;` / `select 1; commit ;` | runnerul refuză înainte de conexiune |
-| fișier cu `END;` la nivel de instrucțiune | garda de final eșuează, neînregistrat (limită: ce era înainte de `END;` e comis — regula de review: niciun `END;` în afara corpurilor `$…$`) |
-| mutanți: fără garda de start · fără garda de final · garda fără txid · `COMMIT` în fișier · runner fără `--single-transaction` · runner fără refuzul reluării · runner fără refuzul controlului de tranzacție · runner cu înregistrarea în tranzacție separată | **toți prinși** (în contor 7: cei trei statici — fără gardă start / final / cu `COMMIT` — numărați o dată; ultimul: eroarea la INSERT lasă patch-ul comis, neînregistrat — exact defectul r3) |
+| mutanți pe gardă: fără garda de start, garda fără txid; fără garda de final / `COMMIT` în fișier (static) | prinși |
+| `COMMIT;` / `select 1; commit ;` / `END;` la nivel de instrucțiune, rulate prin livrare | eșuate și **neînregistrate, dar prima parte rămâne comisă** → **LIMITĂ OPEN**, NU numărată ca mutant prins (conform verdictului r4); se închide doar prin validatorul runnerului din runda 5, înainte de execuție. Static, `COMMIT`-urile sunt prinse; `END;` nu |
 
-Reaplicarea din starea patch (recunoscută „fără efect net”) și reaplicarea după revenire se fac în tranzacția runnerului (marcaj, fără înregistrare) — același mecanism intern ca în #538 (limita 1 din #538 §13 c: cine pune manual marcajul corect ocolește înregistrarea; e o acțiune deliberată, nu un accident).
+**Rezultat:** `PGPORT=5641 PGBASE=/tmp/pg_conc_r4 bash scripts/test_sec_concediu_tokens.sh`, de 2 ori: **exit 0**, 90 de verificări în harness + 33 în suita patch, **21 de mutanți prinși**.
 
-**Rezultat:** `PGPORT=5641 PGBASE=/tmp/pg_conc_r4 bash scripts/test_sec_concediu_tokens.sh`, de 2 ori: **exit 0**, 97 de verificări în harness + 33 în suita patch, **25 de mutanți prinși** (18 anteriori fără D4, care nu mai are sens, + 7 de gardă/runner).
-
-**Rămâne deschis:** GO Copilot pe runda 4 (diff: migrare + runner + harness) și acordul lui Răzvan; accesul `psql` + URI pentru operator; rularea pe PG17 rămâne neverificată local (refuzul e fail-closed).
+**Rămâne deschis:** runnerul comun (runda 5) + portarea lui aici + GO Copilot; criteriul general de atomicitate (COMMIT/END accidental) = OPEN; rularea pe PG17 neverificată local (refuzul e fail-closed).
