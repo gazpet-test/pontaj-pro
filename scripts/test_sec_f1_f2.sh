@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Harness SQL LOCAL — SEC F1 (20260930i_sec_f1_truncate_revoke) + SEC F2 (20260930j_sec_f2_profiles_uid_null), runda 2.
+# Harness SQL LOCAL — SEC F1 (20260930i_sec_f1_truncate_revoke) + SEC F2 (20260930j_sec_f2_profiles_uid_null), runda 3.
+# Testul end-to-end cu PostgREST real (opțional): scripts/test_sec_f2_postgrest.sh.
 #
 # Rulează EXCLUSIV pe un cluster PostgreSQL 17 local, creat de script (initdb într-un director temporar, doar socket unix,
 # fără TCP). Nu citește .env, nu folosește chei Supabase, nu atinge producția. Refuză dacă PGHOST indică o gazdă nelocală.
@@ -137,6 +138,11 @@ for FN in prevent_role_escalation enforce_owner_only_salary_flags protect_can_ac
   x "9b  claims golite ('') + claim.role gol, sesiune postgres→authenticated (ramura b: session_user postgres)" ok postgres "SET LOCAL ROLE authenticated;;$C$E;;$R$E"
   x "9c  claims golite ('') + claim.role gol, authenticator→authenticated"      42501 authenticator "$C$E;;$R$E;;SET LOCAL ROLE authenticated"
   x "9d  claims {role:''} + claim.role=service_role, authenticator→service_role (rol gol = absent)" ok authenticator "$C{\"role\":\"\"}$E;;$R""service_role$E;;SET LOCAL ROLE service_role"
+  # r3: legarea de rolul SQL efectiv (current_setting('role')) pe ramura (a)
+  x "10a authenticator + SET ROLE service_role + claims/claim.role service_role" ok authenticator "$C{\"role\":\"service_role\"}$E;;$R""service_role$E;;SET LOCAL ROLE service_role"
+  x "10b authenticator + SET ROLE authenticated + claims/claim.role service_role" 42501 authenticator "$C{\"role\":\"service_role\"}$E;;$R""service_role$E;;SET LOCAL ROLE authenticated"
+  x "10c authenticator fără SET ROLE + claims/claim.role service_role"          42501 authenticator "$C{\"role\":\"service_role\"}$E;;$R""service_role$E"
+  x "10d authenticator + SET ROLE anon + claims service_role"                   42501 authenticator "$C{\"role\":\"service_role\"}$E;;SET LOCAL ROLE anon"
   P -c "ALTER TABLE profiles ENABLE TRIGGER USER;"
 done
 # Precondiția F2 refuză un corp live modificat; md5 pre-check-urile rămân pe corpurile live

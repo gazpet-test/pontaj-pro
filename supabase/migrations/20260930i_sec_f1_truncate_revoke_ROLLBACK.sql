@@ -5,8 +5,8 @@
 --   setarea implicită veche ar fi fost în vigoare). NU se rulează automat (niciun runner/CI/cron) — doar manual, prin
 --   scripts/livrare_migrare.sh, la decizia explicită a lui Răzvan.
 --
--- ⚠ Readuce EXACT drepturile TRUNCATE de dinainte (starea citită read-only pe 30.09.2026: anon 332 tabele,
---   authenticated 344, 345 pentru cel puțin unul) și setarea implicită a lui postgres pe public — adică REDESCHIDE
+-- ⚠ Readuce drepturile TRUNCATE pe relațiile existente la 30.09.2026 (starea citită read-only: anon 332 tabele,
+--   authenticated 344, 345 pentru cel puțin unul; NU exact pentru relațiile create ulterior — vezi mai sus) și setarea implicită a lui postgres pe public — adică REDESCHIDE
 --   gaura latentă. Fără GO de execuție: doar la decizia explicită a lui Răzvan, cu motivul consemnat, după review.
 --   Nu există nicio revenire operațională necesară: nimic din aplicație nu folosește TRUNCATE ca anon/authenticated.
 --

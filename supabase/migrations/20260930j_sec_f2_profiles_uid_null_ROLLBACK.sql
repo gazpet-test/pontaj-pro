@@ -27,9 +27,9 @@ DECLARE
 BEGIN
   -- 0a. fiecare funcție: o singură supraîncărcare, corp = varianta din patch SAU varianta live 30.09 (rollback deja aplicat), atribute exacte
   FOR r IN SELECT * FROM (VALUES
-                 ('prevent_role_escalation', 'a57629d9181332660443bed7b5eccd5b'),
-                 ('enforce_owner_only_salary_flags', '0f66e3367e230fe2b4a271e3387ce10d'),
-                 ('protect_can_access_pontaj_brut', 'cf47425d97bd9b4b1c03d78bff7b6e6e')) AS x(fn, m_live)
+                 ('prevent_role_escalation', 'cf75b37d522e2a6b0b9c9eabd72c27b4'),
+                 ('enforce_owner_only_salary_flags', 'daaa561298c10c259944600e6c39467e'),
+                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686')) AS x(fn, m_live)
   LOOP
     SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace::oid AND p.proname::text = r.fn;
     IF v_n IS DISTINCT FROM 1 THEN
@@ -51,9 +51,9 @@ BEGIN
   SELECT count(*) INTO v_ok
     FROM pg_proc p
     JOIN (VALUES
-                 ('prevent_role_escalation', 'a57629d9181332660443bed7b5eccd5b'),
-                 ('enforce_owner_only_salary_flags', '0f66e3367e230fe2b4a271e3387ce10d'),
-                 ('protect_can_access_pontaj_brut', 'cf47425d97bd9b4b1c03d78bff7b6e6e')) AS x(fn, m_live) ON p.oid = to_regprocedure('public.' || x.fn || '()')
+                 ('prevent_role_escalation', 'cf75b37d522e2a6b0b9c9eabd72c27b4'),
+                 ('enforce_owner_only_salary_flags', 'daaa561298c10c259944600e6c39467e'),
+                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686')) AS x(fn, m_live) ON p.oid = to_regprocedure('public.' || x.fn || '()')
     JOIN (VALUES
                  ('prevent_role_escalation', '16112659be92143e6539ae0e54e47a06'),
                  ('enforce_owner_only_salary_flags', '0470660c0a819981ff914355c7f6d00a'),

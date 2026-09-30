@@ -1,6 +1,6 @@
 # SEC F1 + F2: TRUNCATE pe schema `public` și „auth.uid() IS NULL” în triggerele de pe `profiles` — 30.09.2026
 
-> **Runda 2 (după verdictul review: F1 GO pe logică cu o corectură, F2 NO-GO) — vezi §6.** 
+> **Runda 3 (verdict r2: F1 GO pe logică, F2 NO-GO — ramura (a) trebuie legată și de rolul SQL efectiv, dovedit cu PostgREST real) — vezi §7. Runda 2 în §6.** 
 > **F1 remediat pe relațiile existente + prevenție pentru creatorul postgres; risc rezidual OPEN pentru obiecte create de supabase_admin (necesită acceptarea explicită a lui Răzvan) + control de drift postflight: has_table_privilege anon/authenticated TRUNCATE = 0/0 după fiecare deploy/migrare.**
 >
 > **NEAPLICAT. Draft pentru review** (poarta GO/NO-GO Copilot) și pentru acordul explicit al lui Răzvan. Nicio migrare de aici nu a fost rulată; nu modifică date. Tot ce s-a citit din producție a fost **read-only** (30.09.2026, PG 17.6: `pg_class`/`aclexplode`, `pg_default_acl`, `pg_trigger`, `pg_proc`, `pg_policies`, `cron.job`, `has_table_privilege`, `pg_get_functiondef`). Nicio funcție a aplicației n-a fost apelată.
@@ -67,23 +67,25 @@
    ```
    IF auth.uid() IS NULL THEN
      v_rol_claim  := nullif(request.jwt.claim.role, '')
-     v_rol_claims := nullif(request.jwt.claims::jsonb->>'role', '')   -- JSON invalid ⇒ NULL (bloc EXCEPTION)
+     v_rol_claims := nullif(request.jwt.claims::jsonb->>'role', '')   -- JSON invalid: auth.uid() de mai sus a căzut deja cu 22P02
      IF ambele nevide ȘI diferite THEN RAISE 42501;                    -- r2: surse contradictorii ⇒ fail-closed
      v_rol := coalesce(v_rol_claim, v_rol_claims)
-     IF v_rol = 'service_role' AND session_user = 'authenticator' THEN RETURN NEW;   -- r2: doar conexiunea PostgREST
+     IF v_rol = 'service_role' AND session_user = 'authenticator'
+        AND current_setting('role', true) = 'service_role' THEN RETURN NEW;   -- r2: conexiunea PostgREST; r3: + rolul SQL efectiv
      IF v_rol IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN RETURN NEW;  -- conexiune directă, fără claims
      RAISE EXCEPTION '…' USING ERRCODE = '42501';                                -- anon, JWT fără sub, claims golite, alt rol
    END IF;
    ```
    Restul corpului (verificările pentru utilizatori reali, mesajele, resetarea tăcută din `enforce_owner_only_salary_flags`) e **identic** cu varianta live. `current_user` **nu** e folosit: funcțiile sunt SECURITY DEFINER, deci `current_user` e mereu `postgres` înăuntru; identitatea reală e în claims + `session_user` — exact regula din S-A.
-3. **Postcondiții**: md5(prosrc) = variantele din patch r2 (`a57629d9181332660443bed7b5eccd5b`, `0f66e3367e230fe2b4a271e3387ce10d`, `cf47425d97bd9b4b1c03d78bff7b6e6e`; r1 era `de9d346b…`/`096211e9…`/`e26b5f2b…`, neaplicat nicăieri), atributele neschimbate, **ACL identic** cu cel de dinainte (comparat text cu text), tot 4 triggere active pe `profiles`.
+3. **Postcondiții**: md5(prosrc) = variantele din patch r3 (`cf75b37d522e2a6b0b9c9eabd72c27b4`, `daaa561298c10c259944600e6c39467e`, `2eec050b53f37ec995da79e93a2a4686`; r2 era `a57629d9…`/`0f66e336…`/`cf47425d…`, r1 era `de9d346b…`/`096211e9…`/`e26b5f2b…`, neaplicat nicăieri), atributele neschimbate, **ACL identic** cu cel de dinainte (comparat text cu text), tot 4 triggere active pe `profiles`.
 
 ### 2.3 Cine trece / cine e refuzat după F2 (la `auth.uid()` NULL)
 | Context | Înainte | După |
 |---|---|---|
-| Edge function / worker NAS / cron prin REST cu cheia `service_role` (claim role = service_role, session_user = authenticator) | trece | **trece** |
+| Edge function / worker NAS / cron prin REST cu cheia `service_role` (claim role = service_role, session_user = authenticator, rol efectiv service_role) | trece | **trece** |
 | Orice sesiune care NU e authenticator și își pune claim role = service_role prin `set_config` (ex. rol SQL cu UPDATE, postgres→SET ROLE authenticated) | trece | **42501** (r2) |
 | claim.role și claims.role contradictorii | trece | **42501** (r2) |
+| Sesiune `authenticator` al cărei rol SQL efectiv NU e service_role (ex. RPC rulat ca authenticated/anon care își pune singur claim-urile service_role prin `set_config`) | trece | **42501** (r3) |
 | `psql`/MCP/migrare ca `postgres` sau `supabase_admin`, fără claims (inclusiv pg_cron) | trece | **trece** |
 | Cheia **anon** prin REST (`{"role":"anon"}`, fără sub) | trece (dacă RLS ar lăsa) | **42501** |
 | JWT `authenticated` **fără** `sub` / claims golite | trece | **42501** |
@@ -96,7 +98,7 @@ Readuce **exact** corpurile live din 30.09 (md5 verificat în postcondiție: `16
 ## 3. Verificare făcută (local, PostgreSQL 17) — runda 1; runda 2 în §6, harness-ul e acum în repo
 Harness pe un cluster local (roluri `anon`/`authenticated`/`service_role`/`authenticator`/`supabase_admin`, `auth.uid()`/`auth.role()` cu definițiile live, `profiles` cu cele 4 triggere cu corpurile live — md5 identice cu producția — și tabele de probă), fiecare fișier rulat exact ca prin runner (`psql --single-transaction`, marcajul `gazpet.livrare_migrare` legat de txid):
 - garda de livrare refuză fără marcaj; validatorul `scripts/livrare_validator.py` acceptă toate 4 fișierele (OK 6 / 7 / 7 / 7 instrucțiuni);
-- **F1**: inventarul NOTICE listează tabelele; după apply 0 TRUNCATE pentru anon/authenticated pe tabele și view-uri, service_role neatins, un tabel creat ulterior nu mai primește TRUNCATE (INSERT/SELECT etc. rămân); reaplicare idempotentă; rollback readuce starea (excepțiile inexistente sunt sărite cu NOTICE), rollback a doua oară e refuzat de precondiție, apply după rollback merge;
+- **F1**: inventarul NOTICE listează tabelele; după apply 0 TRUNCATE pentru anon/authenticated pe tabele și view-uri, service_role neatins, un tabel creat ulterior nu mai primește TRUNCATE (INSERT/SELECT etc. rămân); reaplicare idempotentă; rollback readuce drepturile pe relațiile existente la 30.09 — revert tehnic, NU exact pentru relațiile create ulterior (excepțiile inexistente sunt sărite cu NOTICE), rollback a doua oară e refuzat de precondiție, apply după rollback merge;
 - **F2**: apply / reapply / rollback / rollback a doua oară / apply din nou — toate trec, md5 exact la fiecare pas, ACL neschimbat; un corp modificat live e refuzat de precondiția 0b. Comportament: `postgres` direct ✔, `supabase_admin` direct ✔, `authenticator` + claims service_role ✔, cheia anon ✘ 42501, authenticated fără sub ✘ 42501, `authenticator` fără claims ✘ 42501; utilizator non-owner: schimbarea propriului `role` refuzată ca înainte, `can_access_salarii` resetat tăcut ca înainte, `department` refuzat de S-A ca înainte; owner poate schimba `role`/`can_access_pontaj_brut` altcuiva ca înainte.
 Ce NU s-a testat: pe producție nimic (read-only); PostgREST real (claims puse de PostgREST, nu prin `set_config`).
 
@@ -117,7 +119,7 @@ SELECT count(*) FILTER (WHERE has_table_privilege('anon', c.oid, 'TRUNCATE')) AS
 SELECT proname, md5(prosrc) FROM pg_proc WHERE pronamespace = 'public'::regnamespace
    AND proname IN ('prevent_role_escalation','enforce_owner_only_salary_flags','protect_can_access_pontaj_brut','fn_profiles_campuri_owner_only');
 ```
-După apply: aceleași SELECT-uri (așteptat 0 / 0 / 374; md5 `a57629d9…`, `0f66e336…`, `cf47425d…`, `c06d7ce0…` neschimbat), `get_advisors`, apoi un test din UI: owner schimbă drepturi în Administrare utilizatori (trebuie să meargă ca înainte); un cont fără is_owner nu poate (ca înainte).
+După apply: aceleași SELECT-uri (așteptat 0 / 0 / 374; md5 `cf75b37d…`, `daaa5612…`, `2eec050b…`, `c06d7ce0…` neschimbat), `get_advisors`, apoi un test din UI: owner schimbă drepturi în Administrare utilizatori (trebuie să meargă ca înainte); un cont fără is_owner nu poate (ca înainte).
 
 ## 5. Decizii pentru Răzvan (nu sunt în patch)
 1. GO/NO-GO pe F1 și F2 separat (recomandare: ambele — regresie zero verificată).
@@ -139,14 +141,14 @@ După apply: aceleași SELECT-uri (așteptat 0 / 0 / 374; md5 `a57629d9…`, `0f
   ```
 
 ### 6.2 F2 (NO-GO → reparat)
-La `auth.uid() IS NULL` trec DOAR: (a) `v_rol = 'service_role' AND session_user = 'authenticator'` (PostgREST); (b) `v_rol IS NULL AND session_user IN ('postgres','supabase_admin')` (conexiune directă). Cele două surse ale rolului (`request.jwt.claim.role`, `request.jwt.claims->>'role'`, cu parsare sigură: JSON invalid ⇒ NULL) nu au voie să se contrazică (ambele nevide și diferite ⇒ 42501). Altfel 42501. Corpurile utilizatorilor reali neschimbate; md5 pre-check-urile pe corpurile live neschimbate (`16112659…`, `0470660c…`, `ff277c90…`); md5 noi (postcondiție + acceptate la reaplicare / ca precondiție în ROLLBACK):
-| funcție | md5 prosrc r2 |
+La `auth.uid() IS NULL` trec DOAR: (a) `v_rol = 'service_role' AND session_user = 'authenticator'` (PostgREST); (b) `v_rol IS NULL AND session_user IN ('postgres','supabase_admin')` (conexiune directă). Cele două surse ale rolului (`request.jwt.claim.role`, `request.jwt.claims->>'role'`; JSON invalid în claims ⇒ `auth.uid()` cade primul cu 22P02, fail-closed, înainte ca ramura să fie evaluată — nu „NULL”) nu au voie să se contrazică (ambele nevide și diferite ⇒ 42501). Altfel 42501. Corpurile utilizatorilor reali neschimbate; md5 pre-check-urile pe corpurile live neschimbate (`16112659…`, `0470660c…`, `ff277c90…`); md5 noi (postcondiție + acceptate la reaplicare / ca precondiție în ROLLBACK):
+| funcție | md5 prosrc r2 (înlocuit de r3, §7) |
 |---|---|
 | prevent_role_escalation | `a57629d9181332660443bed7b5eccd5b` |
 | enforce_owner_only_salary_flags | `0f66e3367e230fe2b4a271e3387ce10d` |
 | protect_can_access_pontaj_brut | `cf47425d97bd9b4b1c03d78bff7b6e6e` |
 
-**Pasul următor de întărire (NU în r2, doar după un test PostgREST real)**: pe ramura (a) și `current_setting('role') = 'service_role'` (rolul efectiv setat de PostgREST prin `SET LOCAL ROLE`). Fără el, o sesiune `authenticator` care ar putea rula SQL arbitrar cu claim service_role ar trece — azi PostgREST nu permite SQL arbitrar și nu expune `set_config`.
+Întărirea „și `current_setting('role') = 'service_role'` pe ramura (a)” a fost făcută în r3 (§7), după testul cu PostgREST real — care a arătat că fără ea r2 era ocolibil printr-un RPC.
 
 ### 6.3 Harness-ul (reluabil)
 `bash scripts/test_sec_f1_f2.sh` — cluster PostgreSQL 17 local nou (initdb în director temporar, doar socket unix), refuză dacă `PGHOST` indică o gazdă nelocală, șterge PGHOST/PGUSER/DATABASE_URL etc. Fixture: `supabase/tests/sec_f1_f2_fixture.sql` (roluri, `auth.uid()` stub pe `request.jwt.claim.sub`/`claims`, `profiles`, politici deschise intenționat — se testează triggerele, nu RLS; `service_role` BYPASSRLS ca în Supabase; rolul LOGIN `atacator` cu UPDATE pe profiles) + `supabase/tests/sec_f1_f2_fixture_triggers.sql` (S-A cu md5 `c06d7ce0…`, ACL, cele 4 triggere). Corpurile live ale celor 3 funcții se iau din fișierul ROLLBACK (precondiția 0b verifică md5-ul). Matricea F2 rulează pe **fiecare funcție separat** (doar triggerul ei activ; eroarea trebuie să poarte numele funcției). Generatorul corpurilor F2 (md5 calculat) nu e în repo; md5-urile sunt verificate de postcondiția migrării.
@@ -185,6 +187,43 @@ Control negativ: aceeași matrice rulată cu corpurile LIVE (F2 neaplicat) lasă
 Validator (`python3 validator.py`): F1 OK 6, F1 ROLLBACK OK 7, F2 OK 7, F2 ROLLBACK OK 7 instrucțiuni.
 
 ### 6.5 Neverificabil local
-- **PostgREST real** (claims puse de PostgREST, `SET LOCAL ROLE` al lui, cheia service_role reală) — simulat doar prin login `authenticator` + `SET ROLE` + `set_config`.
+- ~~PostgREST real~~ — verificat în r3 cu PostgREST 13.0.4 (§7).
 - Conexiunile reale ale workerului NAS / pg_cron / Supavisor (session_user efectiv) — de confirmat în producție după apply: dacă vreun context legitim primește 42501, mesajul arată rolul JWT și session_user.
 - Nimic rulat pe producție (doar SELECT în runda 1).
+
+## 7. Runda 3 (30.09.2026) — ramura (a) legată de rolul SQL efectiv, dovedit cu PostgREST real
+
+**Verdict r2**: F1 GO pe logică (doar formularea din documentație — corectată: rollback-ul F1 e revert tehnic, NU exact, peste tot); F2 NO-GO: ramura (a) trebuie să lege și rolul SQL EFECTIV, nu doar `session_user = 'authenticator'` + claim-ul JWT, cu dovadă pe un PostgREST real.
+
+### 7.1 PostgREST real: ce valori vede o funcție
+PostgREST **13.0.4** (release-ul oficial `postgrest-v13.0.4-linux-static-x86-64.tar.xz` de pe GitHub, sha256 binar `22fd686b…c4c6`), cluster PostgreSQL 17 local, `authenticator` LOGIN NOINHERIT cu `anon`/`authenticated`/`service_role` acordate, `jwt-secret` aleator, `auth.uid()` ca în Supabase. Sonda (`scripts/test_sec_f2_postgrest.sh`) apelată prin HTTP `POST /rpc/...`:
+
+| JWT | funcție | session_user | current_user | `current_setting('role')` | `request.jwt.claim.role` | `request.jwt.claims` | auth.uid() |
+|---|---|---|---|---|---|---|---|
+| anon | INVOKER | authenticator | anon | anon | NULL (nesetat) | `{"exp":…,"role":"anon"}` | NULL |
+| anon | DEFINER (sql și plpgsql) | authenticator | **postgres** | anon | NULL | idem | NULL |
+| authenticated + sub | INVOKER | authenticator | authenticated | authenticated | NULL | `{"exp":…,"role":"authenticated","sub":"2222…"}` | 2222… |
+| authenticated + sub | DEFINER | authenticator | **postgres** | authenticated | NULL | idem | 2222… |
+| service_role, fără sub | INVOKER | authenticator | service_role | service_role | NULL | `{"exp":…,"role":"service_role"}` | NULL |
+| service_role, fără sub | DEFINER | authenticator | **postgres** | **service_role** | NULL | idem | NULL |
+
+Concluzii: (1) `current_setting('role')` = rolul din JWT și **nu se schimbă** în SECURITY DEFINER (doar `current_user` devine proprietarul) ⇒ e condiția corectă pentru ramura (a). (2) PostgREST 13 nu mai setează GUC-urile vechi `request.jwt.claim.*` — rolul vine doar din `request.jwt.claims`; codul le citește pe ambele (compatibil). (3) `session_user` = `authenticator` pentru toate cererile REST.
+
+**Gaura din r2, reprodusă pe PostgREST real**: un RPC SECURITY INVOKER apelat cu JWT `authenticated` fără sub care face `set_config('request.jwt.claims','{"role":"service_role"}',true)` + `set_config('request.jwt.claim.role','service_role',true)` apoi `UPDATE profiles SET role='owner'` — cu r2 **trecea** (E2E-6 FAIL, rol schimbat în `owner`); cu r3 ⇒ 42501.
+
+### 7.2 Schimbarea r3
+Ramura (a): `v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role'`. Restul identic cu r2 (ramura b, contradicții, mesaje, corpul pentru utilizatori reali). md5 pre-check pe corpurile live neschimbate; md5 noi (postcondiție migrare, precondiție ROLLBACK):
+| funcție | md5 prosrc r3 |
+|---|---|
+| prevent_role_escalation | `cf75b37d522e2a6b0b9c9eabd72c27b4` |
+| enforce_owner_only_salary_flags | `daaa561298c10c259944600e6c39467e` |
+| protect_can_access_pontaj_brut | `2eec050b53f37ec995da79e93a2a4686` |
+
+### 7.3 Teste
+- `bash scripts/test_sec_f1_f2.sh`: **88 PASS / 0 FAIL** (cele 76 din r2 + 12 noi): 10a authenticator + SET ROLE service_role + claims service_role ⇒ trece; 10b authenticator + SET ROLE authenticated + claims service_role ⇒ 42501; 10c authenticator fără SET ROLE + claims service_role ⇒ 42501; 10d authenticator + SET ROLE anon + claims service_role ⇒ 42501 (×3 funcții).
+- `POSTGREST=/cale/postgrest bash scripts/test_sec_f2_postgrest.sh` (opțional, doar local, refuză PGHOST nelocal; exit 3 = SKIP fără binar): **11 PASS / 0 FAIL** — sonda; PATCH service_role pe `role` și `can_*` ⇒ permis (fără resetare); PATCH authenticated non-owner pe `role` ⇒ refuzat; PATCH authenticated fără sub / anon ⇒ 42501; RPC cu `set_config` (doar claim.role — contradicție ⇒ 42501; claims + claim.role consistente ⇒ 42501, oprit DOAR de legarea r3); starea finală fără escaladare. Control: același script cu fișierul r2 (`F2_FILE=…`) ⇒ E2E-6/E2E-7 FAIL.
+
+### 7.4 Neverificabil local
+- `session_user` efectiv al conexiunilor Supabase: Supavisor/pooler, pg_cron (`cron.job.username`), workerul NAS, Edge Functions care folosesc conexiune directă în loc de REST — de confirmat în producție după apply; un context legitim refuzat primește 42501 cu rolul JWT și session_user în mesaj.
+- Versiunea PostgREST din proiectul Supabase (testat 13.0.4) și eventualul `db-pre-request` configurat de platformă.
+- Nimic rulat pe producție; nicio scriere în Supabase.

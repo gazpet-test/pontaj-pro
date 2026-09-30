@@ -20,10 +20,12 @@
 --      trigger, fără argumente, o singură supraîncărcare); setul de triggere pe profiles e exact cel de 4 analizat (nume,
 --      funcție, tgtype 19, activate, fără WHEN/coloane). Orice diferență ⇒ refuz, nimic modificat.
 --   1. CREATE OR REPLACE pe cele 3 funcții: blocul „uid NULL ⇒ RETURN NEW” devine o politică explicită:
---        auth.uid() IS NULL ⇒ permis DOAR dacă (a) rolul JWT e 'service_role' ȘI session_user = 'authenticator' (PostgREST cu
+--        auth.uid() IS NULL ⇒ permis DOAR dacă (a) rolul JWT e 'service_role' ȘI session_user = 'authenticator' ȘI rolul SQL efectiv
+--        current_setting('role') = 'service_role' (r3) (PostgREST cu
 --        cheia service_role) sau (b) nu există niciun rol JWT (conexiune directă) ȘI session_user e postgres sau supabase_admin;
---        claim.role și claims.role contradictorii ⇒ refuz; JSON invalid ⇒ NULL; altfel RAISE 42501 (r2, după review).
---        Pasul următor de întărire (doar după un test PostgREST real): current_setting('role') = 'service_role' pe ramura (a).
+--        claim.role și claims.role contradictorii ⇒ refuz; JSON invalid în claims ⇒ auth.uid() cade primul cu 22P02
+--        (fail-closed); altfel RAISE 42501. r3: legarea de rolul efectiv, după testul cu PostgREST 13.0.4 real
+--        (scripts/test_sec_f2_postgrest.sh; valorile observate în docs/SEC_F1_F2_PATCH.md).
 --        current_user NU e folosit: funcțiile sunt SECURITY DEFINER, deci current_user = postgres mereu.
 --      Pentru utilizatorii reali (auth.uid() NOT NULL) comportamentul e IDENTIC cu cel de azi (aceleași verificări, aceleași
 --      mesaje, aceeași resetare tăcută la enforce_owner_only_salary_flags). ACL-ul funcțiilor nu se schimbă (CREATE OR REPLACE păstrează).
@@ -78,9 +80,9 @@ BEGIN
                  ('enforce_owner_only_salary_flags', '0470660c0a819981ff914355c7f6d00a'),
                  ('protect_can_access_pontaj_brut', 'ff277c90e02ef03d1efb34cd7e87b1d4')) AS x(fn, m_live) ON p.oid = to_regprocedure('public.' || x.fn || '()')
     JOIN (VALUES
-                 ('prevent_role_escalation', 'a57629d9181332660443bed7b5eccd5b'),
-                 ('enforce_owner_only_salary_flags', '0f66e3367e230fe2b4a271e3387ce10d'),
-                 ('protect_can_access_pontaj_brut', 'cf47425d97bd9b4b1c03d78bff7b6e6e')) AS y(fn, m_patch) ON y.fn = x.fn
+                 ('prevent_role_escalation', 'cf75b37d522e2a6b0b9c9eabd72c27b4'),
+                 ('enforce_owner_only_salary_flags', 'daaa561298c10c259944600e6c39467e'),
+                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686')) AS y(fn, m_patch) ON y.fn = x.fn
    WHERE md5(p.prosrc) IS NOT DISTINCT FROM x.m_live OR md5(p.prosrc) IS NOT DISTINCT FROM y.m_patch;
   IF v_ok IS DISTINCT FROM 3 THEN
     RAISE EXCEPTION 'Precondiție 0b: doar % din 3 funcții au corpul analizat (md5 prosrc live 30.09) sau pe cel din acest patch — corpul live diferă de ce s-a patch-uit; se reanalizează', v_ok;
@@ -128,16 +130,19 @@ DECLARE
   v_rol        text;
 BEGIN
   IF auth.uid() IS NULL THEN
-    -- SEC F2 r2 (30.09.2026): fără identitate de utilizator (sub în JWT), trecerea e permisă DOAR contextului de sistem EXPLICIT:
+    -- SEC F2 r3 (30.09.2026): fără identitate de utilizator (sub în JWT), trecerea e permisă DOAR contextului de sistem EXPLICIT:
     --   (a) PostgREST cu cheia service_role: rolul JWT = 'service_role' ȘI session_user = 'authenticator' (conexiunea PostgREST);
     --   (b) conexiune directă la BD: niciun rol JWT (nici claim.role, nici claims.role) ȘI session_user postgres / supabase_admin
     --       (migrări, SQL admin, pg_cron).
     --   Cele două surse ale rolului (request.jwt.claim.role și request.jwt.claims->>'role') nu au voie să se contrazică: ambele
-    --   nevide și diferite => refuz (fail-closed). JSON invalid în claims => rolul din claims e NULL.
+    --   nevide și diferite => refuz (fail-closed). JSON invalid în claims => auth.uid() (evaluat primul) cade cu 22P02,
+    --   fail-closed; handlerul de mai jos e doar apărare suplimentară.
     --   Orice altceva — cheia anon, un JWT authenticated fără sub, claim service_role pus prin set_config dintr-o altă sesiune,
     --   authenticator fără claims, alt rol de conexiune — e REFUZAT (42501). current_user NU e folosit: funcția e SECURITY
-    --   DEFINER, deci current_user e mereu proprietarul (postgres). Pasul următor (după un test PostgREST real): și
-    --   current_setting('role') = 'service_role' pe ramura (a).
+    --   DEFINER, deci current_user e mereu proprietarul (postgres). r3: ramura (a) cere și rolul SQL EFECTIV al cererii,
+    --   current_setting('role') = 'service_role' — PostgREST îl setează din JWT (SET LOCAL ROLE) și SECURITY DEFINER nu-l
+    --   schimbă (verificat cu PostgREST 13.0.4 real); un RPC rulat ca authenticated care își pune singur claim-urile
+    --   service_role are role = 'authenticated' => refuz.
     v_rol_claim := nullif(current_setting('request.jwt.claim.role', true), '');
     BEGIN
       v_rol_claims := nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
@@ -149,7 +154,7 @@ BEGIN
         USING ERRCODE = '42501';
     END IF;
     v_rol := coalesce(v_rol_claim, v_rol_claims);
-    IF v_rol = 'service_role' AND session_user = 'authenticator' THEN
+    IF v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role' THEN
       RETURN NEW;
     END IF;
     IF v_rol IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN
@@ -195,16 +200,19 @@ DECLARE
   v_rol        text;
 BEGIN
   IF auth.uid() IS NULL THEN
-    -- SEC F2 r2 (30.09.2026): fără identitate de utilizator (sub în JWT), trecerea e permisă DOAR contextului de sistem EXPLICIT:
+    -- SEC F2 r3 (30.09.2026): fără identitate de utilizator (sub în JWT), trecerea e permisă DOAR contextului de sistem EXPLICIT:
     --   (a) PostgREST cu cheia service_role: rolul JWT = 'service_role' ȘI session_user = 'authenticator' (conexiunea PostgREST);
     --   (b) conexiune directă la BD: niciun rol JWT (nici claim.role, nici claims.role) ȘI session_user postgres / supabase_admin
     --       (migrări, SQL admin, pg_cron).
     --   Cele două surse ale rolului (request.jwt.claim.role și request.jwt.claims->>'role') nu au voie să se contrazică: ambele
-    --   nevide și diferite => refuz (fail-closed). JSON invalid în claims => rolul din claims e NULL.
+    --   nevide și diferite => refuz (fail-closed). JSON invalid în claims => auth.uid() (evaluat primul) cade cu 22P02,
+    --   fail-closed; handlerul de mai jos e doar apărare suplimentară.
     --   Orice altceva — cheia anon, un JWT authenticated fără sub, claim service_role pus prin set_config dintr-o altă sesiune,
     --   authenticator fără claims, alt rol de conexiune — e REFUZAT (42501). current_user NU e folosit: funcția e SECURITY
-    --   DEFINER, deci current_user e mereu proprietarul (postgres). Pasul următor (după un test PostgREST real): și
-    --   current_setting('role') = 'service_role' pe ramura (a).
+    --   DEFINER, deci current_user e mereu proprietarul (postgres). r3: ramura (a) cere și rolul SQL EFECTIV al cererii,
+    --   current_setting('role') = 'service_role' — PostgREST îl setează din JWT (SET LOCAL ROLE) și SECURITY DEFINER nu-l
+    --   schimbă (verificat cu PostgREST 13.0.4 real); un RPC rulat ca authenticated care își pune singur claim-urile
+    --   service_role are role = 'authenticated' => refuz.
     v_rol_claim := nullif(current_setting('request.jwt.claim.role', true), '');
     BEGIN
       v_rol_claims := nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
@@ -216,7 +224,7 @@ BEGIN
         USING ERRCODE = '42501';
     END IF;
     v_rol := coalesce(v_rol_claim, v_rol_claims);
-    IF v_rol = 'service_role' AND session_user = 'authenticator' THEN
+    IF v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role' THEN
       RETURN NEW;
     END IF;
     IF v_rol IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN
@@ -251,16 +259,19 @@ DECLARE
   v_rol        text;
 BEGIN
   IF auth.uid() IS NULL THEN
-    -- SEC F2 r2 (30.09.2026): fără identitate de utilizator (sub în JWT), trecerea e permisă DOAR contextului de sistem EXPLICIT:
+    -- SEC F2 r3 (30.09.2026): fără identitate de utilizator (sub în JWT), trecerea e permisă DOAR contextului de sistem EXPLICIT:
     --   (a) PostgREST cu cheia service_role: rolul JWT = 'service_role' ȘI session_user = 'authenticator' (conexiunea PostgREST);
     --   (b) conexiune directă la BD: niciun rol JWT (nici claim.role, nici claims.role) ȘI session_user postgres / supabase_admin
     --       (migrări, SQL admin, pg_cron).
     --   Cele două surse ale rolului (request.jwt.claim.role și request.jwt.claims->>'role') nu au voie să se contrazică: ambele
-    --   nevide și diferite => refuz (fail-closed). JSON invalid în claims => rolul din claims e NULL.
+    --   nevide și diferite => refuz (fail-closed). JSON invalid în claims => auth.uid() (evaluat primul) cade cu 22P02,
+    --   fail-closed; handlerul de mai jos e doar apărare suplimentară.
     --   Orice altceva — cheia anon, un JWT authenticated fără sub, claim service_role pus prin set_config dintr-o altă sesiune,
     --   authenticator fără claims, alt rol de conexiune — e REFUZAT (42501). current_user NU e folosit: funcția e SECURITY
-    --   DEFINER, deci current_user e mereu proprietarul (postgres). Pasul următor (după un test PostgREST real): și
-    --   current_setting('role') = 'service_role' pe ramura (a).
+    --   DEFINER, deci current_user e mereu proprietarul (postgres). r3: ramura (a) cere și rolul SQL EFECTIV al cererii,
+    --   current_setting('role') = 'service_role' — PostgREST îl setează din JWT (SET LOCAL ROLE) și SECURITY DEFINER nu-l
+    --   schimbă (verificat cu PostgREST 13.0.4 real); un RPC rulat ca authenticated care își pune singur claim-urile
+    --   service_role are role = 'authenticated' => refuz.
     v_rol_claim := nullif(current_setting('request.jwt.claim.role', true), '');
     BEGIN
       v_rol_claims := nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
@@ -272,7 +283,7 @@ BEGIN
         USING ERRCODE = '42501';
     END IF;
     v_rol := coalesce(v_rol_claim, v_rol_claims);
-    IF v_rol = 'service_role' AND session_user = 'authenticator' THEN
+    IF v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role' THEN
       RETURN NEW;
     END IF;
     IF v_rol IS NULL AND session_user IN ('postgres', 'supabase_admin') THEN
@@ -305,9 +316,9 @@ BEGIN
   SELECT count(*) INTO v_ok
     FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
     JOIN (VALUES
-                 ('prevent_role_escalation', 'a57629d9181332660443bed7b5eccd5b'),
-                 ('enforce_owner_only_salary_flags', '0f66e3367e230fe2b4a271e3387ce10d'),
-                 ('protect_can_access_pontaj_brut', 'cf47425d97bd9b4b1c03d78bff7b6e6e')) AS y(fn, m) ON p.oid = to_regprocedure('public.' || y.fn || '()')
+                 ('prevent_role_escalation', 'cf75b37d522e2a6b0b9c9eabd72c27b4'),
+                 ('enforce_owner_only_salary_flags', 'daaa561298c10c259944600e6c39467e'),
+                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686')) AS y(fn, m) ON p.oid = to_regprocedure('public.' || y.fn || '()')
    WHERE md5(p.prosrc) IS NOT DISTINCT FROM y.m
      AND l.lanname::text IS NOT DISTINCT FROM 'plpgsql' AND p.prosecdef IS NOT DISTINCT FROM true
      AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']
