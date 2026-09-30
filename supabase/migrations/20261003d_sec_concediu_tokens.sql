@@ -9,7 +9,7 @@
 -- Tokenul deschide pagina PUBLICĂ /co?t=TOKEN: sold CO + ultimele 8 cereri + depunere de cerere în numele
 -- angajatului. Expunere STRUCTURALĂ — nu furt demonstrat.
 --
--- Ce face (o singură tranzacție, gestionată de ACEST fișier):
+-- Ce face (o singură tranzacție, gestionată de RUNNERUL scripts/livrare_migrare.sh — runda 4):
 --   1. precondiție fail-closed: pornește doar din starea LIVE exactă sau din starea PATCH (reaplicare);
 --      + invarianții sursei drepturilor (runda 2): politicile de scriere și triggerele care împiedică
 --      autoatribuirea is_owner / user_module_access sunt exact cele verificate pe live 30.09;
@@ -22,10 +22,22 @@
 -- Ce NU face: nu invalidează tokenurile (o copie luată anterior rămâne validă), nu schimbă edge-ul, UI-ul,
 -- datele sau alte tabele. Revocarea/reemiterea și expirarea = DECIZIILE lui Răzvan (doc §6).
 -- Scrierea rămâne ca azi: nicio politică de INSERT/UPDATE/DELETE → doar service_role/postgres.
--- Runner: psql -v ON_ERROR_STOP=1 -f, un singur simple query, sau runner cu tranzacție proprie —
--- toate trei demonstrate în scripts/test_sec_concediu_tokens.sh (fără meta-comenzi psql în fișier).
+-- Tranzacția (runda 4, traseul comun cu #538): UN SINGUR gestionar = scripts/livrare_migrare.sh
+--   (psql -X -v ON_ERROR_STOP=1 --single-transaction: marcaj de livrare + ACEST fișier + INSERT în
+--   supabase_migrations.schema_migrations, toate în aceeași tranzacție). Fișierul NU conține BEGIN/COMMIT.
+--   Garda de livrare (start + final, legată de txid): fără marcajul runnerului fișierul refuză — psql -f simplu,
+--   psql -c, apply_migration / execute_sql MCP nu îl pot aplica. Precondiția, schimbarea, postcondiția și garda
+--   de final rulează înaintea înregistrării și a COMMIT-ului runnerului: orice eșec anulează tot.
+--   Demonstrat în scripts/test_sec_concediu_tokens.sh pasul 3 (fără meta-comenzi psql în fișier).
 -- ════════════════════════════════════════════════════════════════════════════
-BEGIN;
+DO $livrare_start$
+BEGIN
+  -- Garda de livrare (start): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003d_sec_concediu_tokens:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003d: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+  END IF;
+END $livrare_start$;
 
 -- pg_get_expr califică funcțiile după search_path: îl fixăm ca amprentele să fie deterministe.
 SET LOCAL search_path = public, pg_temp;
@@ -156,7 +168,7 @@ COMMENT ON POLICY hr_tokens_sel_modul_hr ON public.hr_concediu_tokens IS
 REVOKE ALL ON TABLE public.hr_concediu_tokens FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON TABLE public.hr_concediu_tokens TO authenticated;
 
--- ── 3. POSTCONDIȚIE (înainte de COMMIT; orice abatere anulează TOT) ──
+-- ── 3. POSTCONDIȚIE (înainte de garda de final și de COMMIT-ul runnerului; orice abatere anulează TOT) ──
 -- <postconditie>
 DO $post$
 DECLARE
@@ -213,4 +225,11 @@ BEGIN
 END $post$;
 -- </postconditie>
 
-COMMIT;
+DO $livrare_final$
+BEGIN
+  -- Garda de livrare (final, după postcondiții): marcajul e pus de scripts/livrare_migrare.sh ÎN ACEEAȘI tranzacție (legat de txid);
+  -- lipsește / altă tranzacție ⇒ fișierul rulează fără gestionarul unic (psql -f simplu, autocommit, apply_migration, execute_sql).
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003d_sec_concediu_tokens:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003d: garda de livrare (final, după postcondiții) — rulează DOAR prin scripts/livrare_migrare.sh (psql --single-transaction: migrare + înregistrare în aceeași tranzacție)';
+  END IF;
+END $livrare_final$;
