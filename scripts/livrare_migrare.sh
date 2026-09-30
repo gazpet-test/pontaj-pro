@@ -1,30 +1,43 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Traseul OFICIAL de livrare pentru migrările cu gardă de livrare — runda 5 (verdict Copilot R4,
-# docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R4.md). Domeniu: DOAR operațiile care participă la tranzacția PostgreSQL.
+# Traseul OFICIAL de livrare pentru migrările cu gardă de livrare — runda 6 (verdict Copilot R5,
+# docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R5.md; arhitectura rundei 5 păstrată). Domeniu: DOAR operațiile care participă
+# la tranzacția PostgreSQL.
 #
 # UN SINGUR gestionar de tranzacție = psql --single-transaction, pe O COPIE locală protejată a artefactului APROBAT:
 #   0. înainte de conexiune: argumente pe listă albă, copie unică (mktemp, dir 700, fișier 400), sha256(copie) ==
 #      sha256 APROBAT (--sha256 sau --aprobare), validatorul (scripts/livrare_validator.py) pe ACEEAȘI copie
-#   1. pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare'))   — PRIMA instrucțiune: serializează livrările
-#   2. ținta: current_database() == --tinta-db (+ opțional system_identifier == --tinta-sistem)
-#   3. istoricul: nici numele, nici versiunea nu sunt în supabase_migrations.schema_migrations  (înainte de DDL)
-#   4. marcajul de livrare set_config('gazpet.livrare_migrare', '<nume>:' || txid_current(), true)
-#   5. COPIA (corpul migrării; gărzile ei de start/final)
-#   6. INSERT în schema_migrations (statements = COPIA) + verificare sha256(statements[1]) == sha256 aprobat
+#   P. PRE-VERIFICARE read-only (aceeași interogare ca reconcilierea): ținta (db + system_identifier [+ proiect]) și
+#      istoricul (relevante / exacte) ⇒ ținta greșită = 22, pereche exactă existentă = 11, altceva relevant = 21 —
+#      în toate trei cazurile livrarea NU se trimite.
+#   Tranzacția (fișiere generate de runner, niciunul din artefact):
+#   0_prolog: SET TRANSACTION ISOLATION LEVEL READ COMMITTED (PRIMA), SET LOCAL standard_conforming_strings = on,
+#             SET LOCAL client_encoding = 'UTF8' (+ PGCLIENTENCODING=UTF8 la conexiune) și verificarea lor
+#   1_pre:    pg_advisory_xact_lock(hashtext('gazpet.livrare_migrare')) — instrucțiune SEPARATĂ, înaintea istoricului;
+#             ținta: current_database() == --tinta-db, system_identifier == --tinta-sistem (OBLIGATORIU)
+#             [+ current_setting('gazpet.proiect_aprobat') == --tinta-proiect, opțional];
+#             istoricul: nici numele, nici versiunea în supabase_migrations.schema_migrations (snapshot nou după lock);
+#             marcajul set_config('gazpet.livrare_migrare', '<nume>:' || txid_current(), true)
+#   COPIA (corpul migrării; gărzile ei de start/final)
+#   3_inreg:  INSERT în schema_migrations (statements = COPIA) + verificare sha256(statements[1]) == sha256 aprobat
 #   Orice eroare ⇒ ROLLBACK la tot.
 #
-# Rezultat (cod de ieșire) — trei stări, stabilite după o RECONCILIERE read-only pe o conexiune nouă (care așteaptă
-# întâi lock-ul consultativ, deci tranzacția livrării s-a terminat, comisă sau anulată):
-#   0  APLICAT + ÎNREGISTRAT confirmat  (rândul name+version există și sha256(statements[1]) == aprobat)
-#   10 NEAPLICAT confirmat              (rândul name+version nu există ⇒ nimic comis: înregistrarea e în aceeași tranzacție)
-#   20 NECUNOSCUT                       (reconcilierea n-a putut stabili starea) ⇒ NU se reia, NU se face rollback
-#                                         automat; se rulează manual interogarea read-only tipărită.
+# Rezultat (cod de ieșire), stabilit după o RECONCILIERE read-only pe o conexiune nouă (READ COMMITTED explicit,
+# așteaptă întâi lock-ul consultativ ⇒ tranzacția livrării s-a terminat; aceeași verificare a țintei ca livrarea):
+#   0  APLICAT + ÎNREGISTRAT     exact 1 rând relevant și el e perechea exactă (nume + versiune + sha256 aprobat)
+#   10 NEAPLICAT confirmat       0 rânduri relevante (nume SAU versiune) pe ținta confirmată, iar psql a raportat eroare
+#   11 DEJA ÎNREGISTRAT          (pre-verificare) perechea exactă exista deja: „nu s-a reaplicat”
+#   12 NEPORNIT                  pre-verificarea n-a putut rula ⇒ livrarea nu s-a trimis
+#   20 NECUNOSCUT                reconcilierea n-a putut stabili starea ⇒ NU se reia, NU se face rollback automat
+#   21 CONFLICT                  rânduri relevante care nu sunt exact perechea aprobată (alt nume/versiune/sha, dubluri)
+#                                ⇒ reconciliere manuală necesară, FĂRĂ retry automat
+#   22 ȚINTĂ NECONFIRMATĂ        pre-verificarea sau reconcilierea a ajuns pe altă țintă (db/system_identifier/proiect)
 #   2  refuz la argumente, 3 refuz la artefact/validator — ambele ÎNAINTE de orice conexiune (neaplicat).
 #
 # Utilizare (parola NU pe linia de comandă și nici în chat: ~/.pgpass / PGPASSFILE sau PGSERVICE + pg_service.conf):
 #   bash scripts/livrare_migrare.sh --migrare supabase/migrations/<nume>.sql --sha256 <hex64> \
-#        --versiune <AAAALLZZHHMMSS> --tinta-db <baza> [--host H] [--port P] [--user U] [--service S] [--tinta-sistem ID]
+#        --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
+#        [--tinta-proiect <marcaj>] [--host H] [--port P] [--user U] [--service S]
 #   În loc de --sha256: --aprobare <fișier> cu un rând „<hex64>  <nume>.sql” (formatul sha256sum).
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC.
@@ -38,15 +51,16 @@ umask 077
 
 refuz() { echo "REFUZ (neaplicat, fără conexiune): $2" >&2; exit "$1"; }
 
-MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" C_HOST="" C_PORT="" C_USER="" C_SERVICE=""
+MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" TINTA_PROI="" C_HOST="" C_PORT="" C_USER="" C_SERVICE=""
 while [ $# -gt 0 ]; do
   [ $# -ge 2 ] || refuz 2 "opțiunea $1 fără valoare"
   case "$1" in
     --migrare) MIG="$2" ;;          --sha256) SHA="$2" ;;          --aprobare) APROBARE="$2" ;;
     --versiune) VERSIUNE="$2" ;;    --tinta-db) TINTA_DB="$2" ;;   --tinta-sistem) TINTA_SIS="$2" ;;
+    --tinta-proiect) TINTA_PROI="$2" ;;
     --host) C_HOST="$2" ;;          --port) C_PORT="$2" ;;         --user) C_USER="$2" ;;
     --service) C_SERVICE="$2" ;;
-    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db [--tinta-sistem --host --port --user --service])" ;;
+    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem [--tinta-proiect --host --port --user --service])" ;;
   esac
   shift 2
 done
@@ -58,7 +72,8 @@ NUME="$(basename "$MIG" .sql)"
 [[ "$NUME" =~ ^[0-9]{8}[a-z]?_[A-Za-z0-9_]+$ ]] || refuz 2 "nume de migrare invalid: $NUME"
 [[ "$VERSIUNE" =~ ^[0-9]{14}$ ]] || refuz 2 "--versiune obligatorie, 14 cifre (AAAALLZZHHMMSS): '$VERSIUNE'"
 [[ "$TINTA_DB" =~ ^[A-Za-z0-9_]{1,63}$ ]] || refuz 2 "--tinta-db obligatorie ([A-Za-z0-9_]): '$TINTA_DB'"
-[ -z "$TINTA_SIS" ] || [[ "$TINTA_SIS" =~ ^[0-9]{1,20}$ ]] || refuz 2 "--tinta-sistem invalid"
+[[ "$TINTA_SIS" =~ ^[0-9]{1,20}$ ]] || refuz 2 "--tinta-sistem OBLIGATORIU (system_identifier din pg_control_system(), cifre): '$TINTA_SIS'"
+[ -z "$TINTA_PROI" ] || [[ "$TINTA_PROI" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--tinta-proiect invalid"
 [ -z "$C_HOST" ] || [[ "$C_HOST" =~ ^[A-Za-z0-9._/-]{1,253}$ ]] || refuz 2 "--host invalid"
 [ -z "$C_PORT" ] || [[ "$C_PORT" =~ ^[0-9]{1,5}$ ]] || refuz 2 "--port invalid"
 [ -z "$C_USER" ] || [[ "$C_USER" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--user invalid"
@@ -84,15 +99,28 @@ echo "→ $NUME: sha256 $SHA_COPIE = aprobat; validator: $VAL_OUT"
 
 # --- fișierele runnerului (generate, nu provin din artefact) -----------------
 CHEIE="hashtext('gazpet.livrare_migrare')"
-SIS_CHECK=""
-[ -n "$TINTA_SIS" ] && SIS_CHECK="  IF (SELECT system_identifier::text FROM pg_control_system()) IS DISTINCT FROM '$TINTA_SIS' THEN
-    RAISE EXCEPTION 'Livrare $NUME: system_identifier ≠ ținta aprobată $TINTA_SIS'; END IF;"
+PROI_EXPR="coalesce(current_setting('gazpet.proiect_aprobat', true), '')"
+cat > "$DIR/0_prolog.sql" <<SQL
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+SET LOCAL standard_conforming_strings = on;
+SET LOCAL client_encoding = 'UTF8';
+DO \$prolog\$ BEGIN
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN RAISE EXCEPTION 'Livrare $NUME: izolarea nu e READ COMMITTED'; END IF;
+  IF current_setting('standard_conforming_strings') IS DISTINCT FROM 'on' THEN RAISE EXCEPTION 'Livrare $NUME: standard_conforming_strings nu e on'; END IF;
+  IF current_setting('client_encoding') IS DISTINCT FROM 'UTF8' THEN RAISE EXCEPTION 'Livrare $NUME: client_encoding nu e UTF8'; END IF;
+END \$prolog\$;
+SQL
+PROI_CHECK=""
+[ -n "$TINTA_PROI" ] && PROI_CHECK="  IF $PROI_EXPR IS DISTINCT FROM '$TINTA_PROI' THEN
+    RAISE EXCEPTION 'Livrare $NUME: marcajul de proiect ≠ ținta aprobată $TINTA_PROI'; END IF;"
 cat > "$DIR/1_pre.sql" <<SQL
 SELECT pg_advisory_xact_lock($CHEIE);
 DO \$pre\$ BEGIN
   IF current_database() IS DISTINCT FROM '$TINTA_DB' THEN
     RAISE EXCEPTION 'Livrare $NUME: baza conectată (%) ≠ ținta aprobată $TINTA_DB', current_database(); END IF;
-$SIS_CHECK
+  IF (SELECT system_identifier::text FROM pg_control_system()) IS DISTINCT FROM '$TINTA_SIS' THEN
+    RAISE EXCEPTION 'Livrare $NUME: system_identifier ≠ ținta aprobată $TINTA_SIS'; END IF;
+$PROI_CHECK
   IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE name = '$NUME') THEN
     RAISE EXCEPTION 'Livrare $NUME: migrarea e deja înregistrată — refuz (fără dublare)'; END IF;
   IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$VERSIUNE') THEN
@@ -113,38 +141,83 @@ SQL
   printf "    RAISE EXCEPTION 'Înregistrare %s: statements ≠ artefactul aprobat'; END IF;\n" "$NUME"
   printf 'END $verif$;\n'
 } > "$DIR/3_inreg.sql"
-chmod 400 "$DIR/1_pre.sql" "$DIR/3_inreg.sql"
+# Reconcilierea (și pre-verificarea): read-only, READ COMMITTED explicit PRIMUL, lock-ul într-o instrucțiune separată
+# ÎNAINTEA SELECT-ului pe istoric ⇒ SELECT-ul primește un snapshot luat după eliberarea lock-ului.
+# Rezultat: db|system_identifier|proiect|relevante (nume SAU versiune)|exacte (nume+versiune+sha)
+cat > "$DIR/reconc.sql" <<SQL
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
+SET LOCAL lock_timeout = '120s';
+SELECT pg_advisory_xact_lock($CHEIE);
+SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_control_system()) || '|' || $PROI_EXPR || '|' ||
+       count(*) || '|' ||
+       count(*) FILTER (WHERE version = '$VERSIUNE' AND name = '$NUME' AND encode(sha256(convert_to(statements[1], 'UTF8')), 'hex') = '$SHA')
+  FROM supabase_migrations.schema_migrations WHERE version = '$VERSIUNE' OR name = '$NUME';
+COMMIT;
+SQL
+chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql"
 
 CONN=(); [ -n "$C_HOST" ] && CONN+=(-h "$C_HOST"); [ -n "$C_PORT" ] && CONN+=(-p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")
 [ -n "$C_SERVICE" ] && export PGSERVICE="$C_SERVICE"
 CONN+=(-d "$TINTA_DB")   # validat [A-Za-z0-9_] ⇒ nu poate fi conninfo/URI
+export PGCLIENTENCODING=UTF8   # parametru de pornire al conexiunii: are prioritate față de setările rolului/bazei
 PSQL="${PSQL_BIN:-psql}"
 
-echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB: psql --single-transaction [lock + țintă + istoric + marcaj + copie + înregistrare]"
+# reconciliaza ⇒ RC_R, R, R_DB, R_SIS, R_PROI, R_REL, R_EX; întoarce 0 doar dacă rezultatul e complet și bine format
+reconciliaza() {
+  set +e
+  "$PSQL" -X -q -At -v ON_ERROR_STOP=1 -f "$DIR/reconc.sql" "${CONN[@]}" >"$DIR/reconc.out" 2>&1
+  RC_R=$?
+  set -e
+  R="$(tail -n 1 "$DIR/reconc.out")"
+  IFS='|' read -r R_DB R_SIS R_PROI R_REL R_EX <<<"$R" || true
+  [ "$RC_R" = 0 ] && [[ "${R_REL:-}" =~ ^[0-9]+$ ]] && [[ "${R_EX:-}" =~ ^[0-9]+$ ]] && [[ "${R_SIS:-}" =~ ^[0-9]+$ ]]
+}
+tinta_ok() { [ "$R_DB" = "$TINTA_DB" ] && [ "$R_SIS" = "$TINTA_SIS" ] && { [ -z "$TINTA_PROI" ] || [ "$R_PROI" = "$TINTA_PROI" ]; }; }
+manual() {
+  echo "  Reconciliere manuală read-only (pe ținta aprobată; câmpuri: db|system_identifier|proiect|relevante|exacte):" >&2
+  sed 's/^/    /' "$DIR/reconc.sql" >&2
+  echo "  + starea obiectelor migrării (docs/SECURITATE_PATCH_RSVTI.md, Runda 5/6)." >&2
+}
+
+# --- P. pre-verificare (nimic trimis dacă nu trece) ----------------------------
+if ! reconciliaza; then
+  echo "✗ NEPORNIT: pre-verificarea n-a putut rula (cod $RC_R, rezultat '$R') — livrarea NU s-a trimis." >&2; exit 12
+fi
+if ! tinta_ok; then
+  echo "✗ ȚINTĂ NECONFIRMATĂ la pre-verificare: conectat la db=$R_DB system_identifier=$R_SIS proiect='$R_PROI', aprobat db=$TINTA_DB system_identifier=$TINTA_SIS proiect='$TINTA_PROI' — livrarea NU s-a trimis." >&2
+  exit 22
+fi
+if [ "$R_REL" = 1 ] && [ "$R_EX" = 1 ]; then
+  echo "✓ DEJA ÎNREGISTRATĂ: $NUME v$VERSIUNE e deja înregistrată cu artefactul aprobat (sha256 $SHA); nu s-a reaplicat." >&2; exit 11
+fi
+if [ "$R_REL" != 0 ]; then
+  echo "✗ CONFLICT: istoricul are $R_REL rând(uri) cu numele $NUME sau versiunea $VERSIUNE, din care $R_EX perechea exactă aprobată — reconciliere manuală necesară, fără retry automat. Livrarea NU s-a trimis." >&2
+  manual; exit 21
+fi
+
+echo "→ livrare $NUME (versiune $VERSIUNE) pe ținta $TINTA_DB/$TINTA_SIS: psql --single-transaction [prolog + lock + țintă + istoric + marcaj + copie + înregistrare]"
 set +e
-"$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
+"$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"
 RC_PSQL=$?
 set -e
 
 # --- reconciliere read-only (conexiune nouă; așteaptă lock-ul ⇒ tranzacția livrării s-a terminat) ------------
-RECONC="BEGIN READ ONLY; SET LOCAL lock_timeout = '120s'; SELECT pg_advisory_xact_lock($CHEIE);
-SELECT count(*) FILTER (WHERE version = '$VERSIUNE' AND name = '$NUME') || '|' ||
-       count(*) FILTER (WHERE version = '$VERSIUNE' AND name = '$NUME' AND encode(sha256(convert_to(statements[1], 'UTF8')), 'hex') = '$SHA')
-  FROM supabase_migrations.schema_migrations WHERE version = '$VERSIUNE' OR name = '$NUME'; COMMIT;"
-set +e
-"$PSQL" -X -q -At -v ON_ERROR_STOP=1 -c "$RECONC" "${CONN[@]}" >"$DIR/reconc.out" 2>&1
-RC_R=$?
-R="$(tail -n 1 "$DIR/reconc.out")"
-set -e
-if [ "$RC_R" = 0 ] && [ "$R" = "1|1" ]; then
-  [ "$RC_PSQL" = 0 ] || echo "⚠ psql a raportat $RC_PSQL (confirmarea s-a pierdut), dar reconcilierea arată livrarea COMISĂ" >&2
+if ! reconciliaza; then
+  echo "✗ NECUNOSCUT: $NUME v$VERSIUNE (psql $RC_PSQL, reconciliere: cod $RC_R, rezultat '$R'). NU reluați, NU faceți rollback." >&2
+  manual; exit 20
+fi
+if ! tinta_ok; then
+  echo "✗ ȚINTĂ NECONFIRMATĂ la reconciliere: conectat la db=$R_DB system_identifier=$R_SIS proiect='$R_PROI' ≠ ținta aprobată — starea pe ținta aprobată e NECUNOSCUTĂ (psql $RC_PSQL). NU reluați." >&2
+  manual; exit 22
+fi
+if [ "$R_REL" = 1 ] && [ "$R_EX" = 1 ]; then
+  [ "$RC_PSQL" = 0 ] || echo "⚠ psql a raportat $RC_PSQL, dar înregistrarea exactă există acum (nu exista la pre-verificare): aplicat de această execuție (confirmare pierdută) sau de o livrare concurentă a aceluiași artefact." >&2
   echo "✓ APLICAT + ÎNREGISTRAT confirmat: $NUME v$VERSIUNE (sha256 $SHA)"; exit 0
 fi
-if [ "$RC_R" = 0 ] && [ "$R" = "0|0" ]; then
-  [ "$RC_PSQL" != 0 ] || { echo "✗ NECUNOSCUT: psql a raportat succes, dar înregistrarea lipsește — reconciliere manuală" >&2; exit 20; }
-  echo "✗ NEAPLICAT confirmat: $NUME v$VERSIUNE (psql $RC_PSQL; nicio înregistrare ⇒ nimic comis)" >&2; exit 10
+if [ "$R_REL" = 0 ]; then
+  [ "$RC_PSQL" != 0 ] || { echo "✗ NECUNOSCUT: psql a raportat succes, dar nu există nicio înregistrare relevantă — reconciliere manuală" >&2; manual; exit 20; }
+  echo "✗ NEAPLICAT confirmat: $NUME v$VERSIUNE (psql $RC_PSQL; 0 rânduri relevante pe ținta confirmată ⇒ nimic comis)" >&2; exit 10
 fi
-echo "✗ NECUNOSCUT: $NUME v$VERSIUNE (psql $RC_PSQL, reconciliere: cod $RC_R, rezultat '$R'). NU reluați, NU faceți rollback." >&2
-echo "  Reconciliere manuală read-only: $RECONC" >&2
-echo "  + starea obiectelor migrării (docs/SECURITATE_PATCH_RSVTI.md, Runda 5)." >&2
-exit 20
+echo "✗ CONFLICT: după livrare istoricul are $R_REL rând(uri) cu numele $NUME sau versiunea $VERSIUNE, din care $R_EX perechea exactă aprobată (psql $RC_PSQL) — reconciliere manuală necesară, fără retry automat." >&2
+manual; exit 21

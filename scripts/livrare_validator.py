@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
 # ============================================================================
-# Validatorul migrărilor livrate prin scripts/livrare_migrare.sh (runda 5, verdict Copilot R4).
-# Doar Python 3 stdlib — nicio dependență nouă.
+# Validatorul migrărilor livrate prin scripts/livrare_migrare.sh — runda 6 (verdict Copilot R5,
+# docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R5.md). Doar Python 3 stdlib — nicio dependență nouă.
 #
-# Un tokenizer SQL (nivel lexical, ca scanner-ul psql/PostgreSQL) care deosebește codul de nivel superior de:
-#   comentarii „--” și „/* */” (imbricate), literali '…' (cu '' dublat), E'…' (cu escape \), U&'…', B'…', X'…',
-#   identificatori "…", dollar-quoting $tag$…$tag$ (deci și corpurile PL/pgSQL).
+# Un tokenizer SQL (nivel lexical, aliniat cu scanner-ul psql/PostgreSQL) care deosebește codul de nivel superior de:
+#   comentarii „--” (terminate de LF SAU CR, ca în PostgreSQL: newline = [\n\r]) și „/* */” (imbricate),
+#   literali '…' (cu '' dublat), E'…' (cu escape \), U&'…', B'…', X'…', identificatori "…",
+#   dollar-quoting $tag$…$tag$ (deci și corpurile PL/pgSQL). Spațiu alb = exact setul PostgreSQL [ \t\n\r\f\v].
+#
+# ALINIEREA LEXICALĂ cu sesiunea (runda 6):
+#   * Invarianță la standard_conforming_strings: REFUZ orice backslash într-un literal obișnuit '…' (non-E, inclusiv
+#     U&'…'). Fără backslash acolo, textul se împarte IDENTIC cu standard_conforming_strings = on sau off, deci nici
+#     o setare venită din conexiune (ALTER ROLE/DATABASE … SET, serviciu, PGOPTIONS) nu poate schimba ce vede serverul
+#     față de ce vede validatorul. Literalii cu backslash se scriu E'…' (interpretați identic în ambele moduri).
+#   * REFUZ orice mențiune (oriunde, inclusiv comentarii/corpuri/literali, fără diacritice/majuscule) a parametrilor
+#     lexicali: standard_conforming_strings, client_encoding, escape_string_warning, backslash_quote.
+#   * La nivel superior: REFUZ RESET (orice), SET NAMES / SET SCHEMA / SET TRANSACTION / SET SESSION CHARACTERISTICS,
+#     SET pe parametrii lexicali; search_path e acceptat DOAR în forma verificată „SET LOCAL search_path = public, pg_temp”
+#     (orice altă formă ⇒ refuz); set_config(...) la nivel superior: primul argument TREBUIE să fie un literal care nu
+#     numește un parametru protejat (argument dinamic ⇒ refuz).
+#   Runnerul fixează în plus, în tranzacție, înaintea migrării: READ COMMITTED, standard_conforming_strings = on,
+#   client_encoding = UTF8 (și PGCLIENTENCODING=UTF8 la conexiune).
+#
 # Pe codul de nivel superior:
 #   * REFUZ orice backslash (meta-comandă psql: \i, \c, \set, \g, \! …) — psql le interpretează oriunde pe linie;
 #   * REFUZ interpolarea de variabile psql (:nume, :'nume', :"nume", :{?nume}) — „::” (cast) e permis;
@@ -14,7 +30,9 @@
 #       (COMMIT/ROLLBACK PREPARED sunt acoperite de COMMIT/ROLLBACK).
 #     Un „END” din corpul unei funcții ($$…$$) NU e la nivel superior ⇒ acceptat.
 #     Limită conștientă (fail-closed): corpurile SQL-standard „BEGIN ATOMIC … END” sunt refuzate — folosiți $$…$$.
-#   * cere garda de livrare: literalul 'gazpet.livrare_migrare' trebuie să apară.
+#   * garda de livrare: cere un APEL real current_setting('gazpet.livrare_migrare' …) în cod (nivel superior sau corp
+#     $…$ analizat lexical) — un comentariu sau un literal izolat NU ajung. E o verificare de PREZENȚĂ; poziția și
+#     logica gărzilor (prima/ultima, ce refuză) rămân parte din review-ul artefactului aprobat.
 # Literal/comentariu/dollar-quote neterminat, octeți non-UTF-8, NUL ⇒ REFUZ. Orice excepție ⇒ REFUZ (cod ≠ 0).
 #
 # Utilizare: python3 livrare_validator.py <fișier.sql> [<tag-interzis>]
@@ -25,9 +43,15 @@ import re
 import sys
 
 INTERZISE = {"BEGIN", "START", "COMMIT", "END", "ROLLBACK", "ABORT", "SAVEPOINT", "RELEASE"}
+LEXICALE = ("standard_conforming_strings", "client_encoding", "escape_string_warning", "backslash_quote")
+PROTEJATE = set(LEXICALE) | {"search_path"}
+SET_INTERZISE = {"NAMES", "SCHEMA", "TRANSACTION", "SESSION"}  # după SET [LOCAL]: alias-uri/izolare
+SEARCH_PATH_OK = ["SET", "LOCAL", "SEARCH_PATH", "=", "PUBLIC", ",", "PG_TEMP"]
+GARDA = "gazpet.livrare_migrare"
+SPATIU = " \t\n\r\f\v"
 IDENT_START = re.compile(r"[A-Za-z_\u0080-\U0010FFFF]")
 TAG = re.compile(r"\$([A-Za-z_\u0080-\U0010FFFF][A-Za-z0-9_\u0080-\U0010FFFF]*)?\$")
-CUVANT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+CUVANT = re.compile(r"[A-Za-z_\u0080-\U0010FFFF][A-Za-z0-9_$\u0080-\U0010FFFF]*")
 
 
 class Refuz(Exception):
@@ -38,16 +62,20 @@ def linie(text, poz):
     return text.count("\n", 0, poz) + 1
 
 
-def instructiuni(text):
-    """Întoarce lista instrucțiunilor de nivel superior: fiecare = listă de cuvinte-cheie/tokeni de nivel superior
-    (literalii, comentariile și corpurile $$ sunt înlocuite cu un marcaj, deci nu pot părea cod)."""
+def instructiuni(text, corpuri=None, strict=True):
+    """Întoarce lista instrucțiunilor de nivel superior: (linia, tokeni). Tokeni: cuvinte (MAJUSCULE), semne,
+    literali ca "'"+valoare, identificatori citați ca '"'+nume, corpuri $…$ ca "<DOLAR>" (conținutul în `corpuri`).
+    strict=False (analiza corpurilor pentru gardă): fără refuzurile de backslash/variabile."""
     i, n = 0, len(text)
     rez, cur, start = [], [], None
     while i < n:
         c = text[i]
         if c == "-" and text.startswith("--", i):
-            j = text.find("\n", i)
-            i = n if j < 0 else j + 1
+            # PostgreSQL: comment = "--"{non_newline}*, newline = [\n\r] ⇒ CR termină comentariul
+            j = i + 2
+            while j < n and text[j] not in "\n\r":
+                j += 1
+            i = j
             continue
         if c == "/" and text.startswith("/*", i):
             adanc, j = 1, i + 2
@@ -63,15 +91,21 @@ def instructiuni(text):
             i = j
             continue
         if c == "\\":
-            raise Refuz(f"meta-comandă psql / backslash la nivel superior (linia {linie(text, i)}): "
-                        f"{text[i:i + 20].splitlines()[0]!r}")
+            if strict:
+                raise Refuz(f"meta-comandă psql / backslash la nivel superior (linia {linie(text, i)}): "
+                            f"{text[i:i + 20].splitlines()[0]!r}")
+            cur.append(c)
+            i += 1
+            continue
         if c == ":":
             if text.startswith("::", i):
+                cur.append("::")
                 i += 2
                 continue
-            if i + 1 < n and (text[i + 1] in "'\"{" or IDENT_START.match(text[i + 1])):
+            if strict and i + 1 < n and (text[i + 1] in "'\"{" or IDENT_START.match(text[i + 1])):
                 raise Refuz(f"interpolare de variabilă psql la nivel superior (linia {linie(text, i)}): "
                             f"{text[i:i + 20].splitlines()[0]!r}")
+            cur.append(c)
             i += 1
             continue
         if c in "'\"":
@@ -80,22 +114,31 @@ def instructiuni(text):
             if c == "'" and i > 0 and text[i - 1] in "eE" and not (i > 1 and (text[i - 2].isalnum() or text[i - 2] in "_$")):
                 esc = True
             j = i + 1
+            val = []
             while True:
                 if j >= n:
                     raise Refuz(f"literal {c}…{c} neterminat (linia {linie(text, i)})")
                 ch = text[j]
-                if esc and ch == "\\":
-                    j += 2
-                    continue
+                if ch == "\\":
+                    if esc:
+                        val.append(text[j:j + 2])
+                        j += 2
+                        continue
+                    if c == "'" and strict:
+                        # invarianța la standard_conforming_strings: fără backslash în literalii obișnuiți
+                        raise Refuz(f"backslash într-un literal '…' obișnuit (linia {linie(text, j)}): interpretarea "
+                                    f"ar depinde de standard_conforming_strings — folosiți E'…'")
                 if ch == c:
                     if j + 1 < n and text[j + 1] == c:
+                        val.append(c)
                         j += 2
                         continue
                     break
+                val.append(ch)
                 j += 1
             if start is None:
                 start = i
-            cur.append("<LIT>")
+            cur.append(c + "".join(val))
             i = j + 1
             continue
         if c == "$":
@@ -109,8 +152,11 @@ def instructiuni(text):
                 if start is None:
                     start = i
                 cur.append("<DOLAR>")
+                if corpuri is not None:
+                    corpuri.append(text[m.end():j])
                 i = j + len(delim)
                 continue
+            cur.append(c)
             i += 1
             continue
         if c == ";":
@@ -119,7 +165,7 @@ def instructiuni(text):
             cur, start = [], None
             i += 1
             continue
-        if c.isspace():
+        if c in SPATIU:
             i += 1
             continue
         m = CUVANT.match(text, i)
@@ -138,6 +184,66 @@ def instructiuni(text):
     return rez
 
 
+def nume_param(tok):
+    """Numele unui parametru dintr-un token: cuvânt (MAJUSCULE ⇒ lower) sau identificator citat ('"'+nume)."""
+    if tok.startswith('"'):
+        return tok[1:]
+    return tok.lower()
+
+
+def are_apel_garda(instr):
+    for _, toks in instr:
+        for k in range(len(toks) - 2):
+            if toks[k] == "CURRENT_SETTING" and toks[k + 1] == "(" and toks[k + 2] == "'" + GARDA:
+                return True
+    return False
+
+
+def garda_in_cod(text, adanc=0):
+    corpuri = []
+    try:
+        instr = instructiuni(text, corpuri, strict=(adanc == 0))
+    except Refuz:
+        if adanc == 0:
+            raise
+        return False  # un corp care nu se analizează lexical ca SQL nu contează drept gardă
+    if are_apel_garda(instr):
+        return True
+    return adanc < 8 and any(garda_in_cod(c, adanc + 1) for c in corpuri)
+
+
+def verifica_set(ln, toks):
+    cap = toks[0]
+    if cap == "RESET":
+        raise Refuz(f"RESET la nivel superior (linia {ln}): {' '.join(toks[:3])} — poate readuce setările conexiunii")
+    if cap != "SET":
+        return
+    k = 1
+    if len(toks) > k and toks[k] in ("LOCAL", "SESSION") and not (toks[k] == "SESSION" and len(toks) > 2 and toks[2] == "CHARACTERISTICS"):
+        k += 1
+    if len(toks) <= k:
+        raise Refuz(f"SET incomplet (linia {ln})")
+    if toks[k] in SET_INTERZISE or toks[1] in SET_INTERZISE - {"SESSION"}:
+        raise Refuz(f"SET {toks[k]} la nivel superior (linia {ln}) — interzis (codificare/schemă/izolare)")
+    p = nume_param(toks[k])
+    if p in LEXICALE:
+        raise Refuz(f"SET {p} la nivel superior (linia {ln}) — parametru lexical, fixat de runner")
+    if p == "search_path":
+        if toks != SEARCH_PATH_OK:
+            raise Refuz(f"SET search_path la nivel superior (linia {ln}) acceptat doar ca "
+                        f"„SET LOCAL search_path = public, pg_temp”: {' '.join(toks)}")
+
+
+def verifica_set_config(ln, toks):
+    for k, t in enumerate(toks):
+        if t == "SET_CONFIG":
+            if k + 2 >= len(toks) or toks[k + 1] != "(" or not toks[k + 2].startswith("'"):
+                raise Refuz(f"set_config la nivel superior cu argument nedeterminat (linia {ln}) — primul argument "
+                            f"trebuie să fie un literal")
+            if toks[k + 2][1:].strip().lower() in PROTEJATE:
+                raise Refuz(f"set_config('{toks[k + 2][1:]}') la nivel superior (linia {ln}) — parametru protejat")
+
+
 def valideaza(cale, tag_interzis=None):
     brut = open(cale, "rb").read()
     if b"\x00" in brut:
@@ -151,6 +257,10 @@ def valideaza(cale, tag_interzis=None):
             raise Refuz("tag interzis invalid")
         if f"${tag_interzis}$" in text:
             raise Refuz(f"fișierul conține tag-ul rezervat al înregistrării ${tag_interzis}$")
+    mic = text.lower()
+    for p in LEXICALE:
+        if p in mic:
+            raise Refuz(f"fișierul menționează parametrul lexical {p} (interzis oriunde; runnerul îl fixează)")
     instr = instructiuni(text)
     if not instr:
         raise Refuz("fișier fără instrucțiuni")
@@ -160,8 +270,11 @@ def valideaza(cale, tag_interzis=None):
             raise Refuz(f"control de tranzacție la nivel superior (linia {ln}): {' '.join(toks[:3])}")
         if cap == "PREPARE" and len(toks) > 1 and toks[1] == "TRANSACTION":
             raise Refuz(f"control de tranzacție la nivel superior (linia {ln}): PREPARE TRANSACTION")
-    if "'gazpet.livrare_migrare'" not in text:
-        raise Refuz("lipsește garda de livrare ('gazpet.livrare_migrare')")
+        verifica_set(ln, toks)
+        verifica_set_config(ln, toks)
+    if not garda_in_cod(text):
+        raise Refuz("lipsește garda de livrare: niciun apel current_setting('gazpet.livrare_migrare' …) în cod "
+                    "(un comentariu sau un literal izolat nu ajung)")
     return len(instr)
 
 
