@@ -14,6 +14,7 @@ import { mesajInvoke } from './lib/mesajInvoke.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
+import { indexConfirmari, statisticiAcoperire, stareConfirmare, TIP_NSA } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
@@ -2568,6 +2569,8 @@ const ACOPERIRE_STATUS = {
 function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   const [cerinte, setCerinte] = useState(null)
   const [acoperiri, setAcoperiri] = useState({})   // cerinta_id -> rând acoperire (+ autorizația join)
+  // J02b: confirmările umane „nu se aplică” (cu amprenta sursei). Lipsă/eroare ⇒ index gol ⇒ nimic nu e închis.
+  const [naIdx, setNaIdx] = useState(() => indexConfirmari([]))
   const [busy, setBusy] = useState(null)
   const [warn, setWarn] = useState(null)
   const [fDoarGoluri, setFDoarGoluri] = useState(false)
@@ -2665,9 +2668,27 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       // preferință de afișare. Un test a și prins-o greșită la prima scriere.
       const map = grupeazaAcoperiri(ac || [])
       setAcoperiri(map)
-    } else setAcoperiri({})
+      const rNa = await supabase.from('v_ofertare_cerinte_na_stare').select('cerinta_id, tip, valida, revocata_la, motiv, confirmat_la')
+        .in('cerinta_id', cs.map(c => c.id)).limit(10000)
+      setNaIdx(indexConfirmari(rNa.error ? [] : rNa.data))
+    } else { setAcoperiri({}); setNaIdx(indexConfirmari([])) }
   }
   useEffect(() => { load() }, [licitatie.id])
+
+  // J02b: confirmarea umană „nu se aplică”. Amprenta se citește din BD și se trimite înapoi:
+  // dacă sursa s-a schimbat între timp, RPC-ul refuză (stale ⇒ refuz, nu confirmare pe altceva).
+  const confirmaNeaplicabil = async (c) => {
+    const motiv = window.prompt(`Cerința #${c.nr_ordine ?? c.id} nu se aplică. Motivul (obligatoriu, minim 5 caractere):`, c.stare_motiv || '')
+    if (!motiv || motiv.trim().length < 5) return
+    setBusy('na-' + c.id)
+    try {
+      const { data: amp, error: eA } = await supabase.rpc('fn_ofertare_cerinta_amprenta', { p_cerinta_id: c.id })
+      if (eA || !amp) { setWarn('Amprenta sursei nu s-a putut citi: ' + (eA?.message || 'lipsă')); return }
+      const { error } = await supabase.rpc('ofertare_confirma_neaplicabil', { p_cerinta_id: c.id, p_tip: TIP_NSA, p_motiv: motiv.trim(), p_amprenta_vazuta: amp })
+      if (error) { setWarn('Confirmarea nu s-a salvat: ' + error.message); return }
+      await load()
+    } finally { setBusy(null) }
+  }
 
   // 22.09.2026 (varianta A): propunerea rulează pe workerul NAS (worker/ofertare/acoperire.ts), cu ACELAȘI cod
   // ca edge function-ul (ofertare-acoperire/core.ts), dar fără limita de 150 s a gateway-ului — batch-ul
@@ -2745,31 +2766,11 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     await load()
   }
 
-  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0, nuSeAplica: 0, naElim: 0, nu_se_aplica: 0, reverif: 0, reverifElim: 0 }
-  ;(cerinte || []).forEach(c => {
-    const a = acoperiri[c.id]
-    // marcate „nu se aplică" de om: nu mai sunt goluri, dar rămân numărate separat (nimic nu dispare tăcut)
-    const scoasa = c.stare === 'nu_se_aplica'
-    if (scoasa) stats.nuSeAplica++
-    if (!a) { stats.neevaluate++; if (c.tip === 'eliminatorie' && !scoasa) stats.neevaluateElim++; return }
-    // Dovada pusa pe textul VECHI al cerintei nu se numara la ✅ nici aici. Panoul isi face propriile
-    // statistici, separat de KPI-uri: daca regula nu e scrisa in ambele locuri, ecranul se contrazice
-    // exact acolo unde lucreaza omul — sus „de reverificat", jos „acoperit".
-    const acop = a.status === 'acoperit' || a.status === 'acoperit_partener'
-    if (acop && a.reverificare_ceruta) {
-      stats.reverif++
-      if (c.tip === 'eliminatorie' && !scoasa) stats.reverifElim++
-      return
-    }
-    stats[a.status] = (stats[a.status] || 0) + 1
-    if (a.status === 'gol' && c.tip === 'eliminatorie' && !scoasa) stats.goluriElim++
-    // O eliminatorie pe care AI-ul o crede irelevantă rămâne în alarmă până confirmă un om
-    // în registru (cerinte.stare). Altfel modelul ar putea stinge singur poarta E3.
-    if (a.status === 'nu_se_aplica' && c.tip === 'eliminatorie' && !scoasa) stats.naElim++
-  })
-  // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă —
-  // iar o dovadă care așteaptă reverificare NU ține loc de dovadă (view-ul face la fel din 12.09)
-  const elimFaraDovada = stats.goluriElim + stats.neevaluateElim + stats.naElim + stats.reverifElim
+  // J02b: regula stă în src/ofertareNeaplicabil.js (cu teste). „Scoasă” = DOAR confirmare umană validă
+  // (actor + motiv + amprenta sursei curente); propunerea AI „nu se aplică” și stare='nu_se_aplica' veche fără
+  // amprentă NU mai scot eliminatoria din alarmă.
+  const stats = statisticiAcoperire(cerinte, acoperiri, naIdx)
+  const elimFaraDovada = stats.elimFaraDovada
   // Legătura cu registrul: ce e bifat sus se vede aici. Cu „doar bifatele" rămân doar
   // cerințele alese, ca să poți lucra pe un set restrâns fără să-l pierzi din ochi.
   const [fDoarBifate, setFDoarBifate] = useState(false)
@@ -2918,7 +2919,17 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                       style={{ fontSize:11.5, fontWeight:800, color: bifat ? G.ofertare : G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color: a ? st.color : G.dim, whiteSpace:'nowrap', minWidth:82 }}>{a ? st.label : '⬜ neevaluat'}</span>
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
-                    {c.stare === 'nu_se_aplica' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ</span>}
+                    {(() => {
+                      // J02b: închis DOAR cu confirmare umană pe amprenta sursei curente; restul = propunere.
+                      const stNa = stareConfirmare(naIdx, c.id, TIP_NSA)
+                      if (stNa === 'confirmata') return <span title={c.stare_motiv || 'confirmat de om pe versiunea curentă a sursei'} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ ✓ om</span>
+                      if (stNa !== 'invalidata' && c.stare !== 'nu_se_aplica' && a?.status !== 'nu_se_aplica') return null
+                      const txt = stNa === 'invalidata' ? '⚠ confirmare invalidată (sursa s-a schimbat)' : c.stare === 'nu_se_aplica' ? '⊘ nu se aplică — fără confirmare cu amprentă' : '⊘ propunere AI — deschisă'
+                      return <>
+                        <span title="Nu închide cerința până nu confirmă un om, cu motiv, pe versiunea curentă a sursei." style={{ fontSize:10, fontWeight:800, color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:8, padding:'1px 6px' }}>{txt}</span>
+                        <button onClick={() => confirmaNeaplicabil(c)} disabled={!!busy} style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5 }} title="Confirmare umană: motiv obligatoriu; se leagă de amprenta textului cerinței și a documentului sursă. Se invalidează singură dacă sursa se schimbă.">✓ Confirm „nu se aplică”</button>
+                      </>
+                    })()}
                     {c.stare === 'blocata' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>⛔ BLOCATĂ</span>}
                     {a?.domeniu_rte && <span title="Domeniul ISC RTE pe care motorul a judecat cerința (din obiectul contractului + textul cerinței, după nomenclatorul Procedurii ISC)" style={{ fontSize:10, fontWeight:800, color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:8, padding:'1px 6px', whiteSpace:'nowrap' }}>RTE {a.domeniu_rte}</span>}
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
