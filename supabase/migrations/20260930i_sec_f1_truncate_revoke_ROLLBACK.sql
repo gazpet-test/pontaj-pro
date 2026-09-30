@@ -1,6 +1,10 @@
 -- ============================================================================
 -- ROLLBACK TEHNIC pentru supabase/migrations/20260930i_sec_f1_truncate_revoke.sql (SEC F1, 30.09.2026).
 --
+-- ⚠ REVERT TEHNIC, NU EXACT: pentru tabelele create DUPĂ 30.09 nu reproduce o stare anterioară (le dă TRUNCATE ca și cum
+--   setarea implicită veche ar fi fost în vigoare). NU se rulează automat (niciun runner/CI/cron) — doar manual, prin
+--   scripts/livrare_migrare.sh, la decizia explicită a lui Răzvan.
+--
 -- ⚠ Readuce EXACT drepturile TRUNCATE de dinainte (starea citită read-only pe 30.09.2026: anon 332 tabele,
 --   authenticated 344, 345 pentru cel puțin unul) și setarea implicită a lui postgres pe public — adică REDESCHIDE
 --   gaura latentă. Fără GO de execuție: doar la decizia explicită a lui Răzvan, cu motivul consemnat, după review.

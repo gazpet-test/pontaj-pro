@@ -31,9 +31,14 @@
 --      docs/SEC_F1_F2_PATCH.md ca limită; tabelele create de supabase_admin (rar: platformă) ar primi din nou TRUNCATE.
 --   3. Postcondiții: niciun tabel/view din public cu TRUNCATE efectiv (has_table_privilege — include PUBLIC și moștenirea)
 --      pentru anon / authenticated / public; setarea implicită a lui postgres pe public fără D pentru anon/authenticated;
---      service_role neatins (369 din 374 înainte = după).
+--      service_role neatins: EXACT același număr ca înainte (gazpet.f1_sr_before, salvat în precondiție; r2 după review);
+--      sondă: un tabel nou creat de postgres în public și unul într-o schemă de unică folosință (șterse în aceeași tranzacție)
+--      nu primesc TRUNCATE pentru anon/authenticated.
+--   Risc rezidual OPEN: obiectele create de supabase_admin (setarea lui implicită nu se poate schimba ca postgres) — necesită
+--      acceptarea explicită a lui Răzvan + control de drift postflight (has_table_privilege anon/authenticated TRUNCATE = 0/0).
 --
--- Rollback: supabase/migrations/20260930i_sec_f1_truncate_revoke_ROLLBACK.sql (readuce exact starea din 30.09: 332 / 344).
+-- Rollback TEHNIC (revert, nu exact pentru tabelele create după 30.09; NU se rulează automat):
+--   supabase/migrations/20260930i_sec_f1_truncate_revoke_ROLLBACK.sql
 -- ============================================================================
 DO $livrare_start$
 BEGIN
@@ -98,6 +103,11 @@ BEGIN
   END LOOP;
   RAISE NOTICE 'SEC F1 înainte: % tabele în public; cu TRUNCATE: anon=% authenticated=% service_role=% (analiza 30.09: 374 / 332 / 344 / 369)',
     v_total, v_anon, v_auth, v_sr;
+  -- 0e. numărul EXACT de dinainte pentru service_role, salvat pentru postcondiția 3c (egalitate strictă, nu toleranță)
+  IF v_sr IS NULL THEN
+    RAISE EXCEPTION 'Precondiție 0e: numărul de tabele cu TRUNCATE pentru service_role nu s-a putut calcula';
+  END IF;
+  PERFORM set_config('gazpet.f1_sr_before', v_sr::text, true);
   IF v_anon + v_auth IS NOT DISTINCT FROM 0 THEN
     RAISE NOTICE 'SEC F1: niciun tabel cu TRUNCATE pentru anon/authenticated — probabil reaplicare; REVOKE-ul e idempotent';
   END IF;
@@ -122,6 +132,7 @@ DECLARE
   v_sr     integer;
   v_total  integer;
   v_def    integer;
+  v_sr_before integer;
 BEGIN
   -- 3a. privilegiul EFECTIV (include PUBLIC și moștenirea prin roluri): nicio relație din public cu TRUNCATE pentru anon / authenticated / public
   SELECT count(*) INTO v_n
@@ -141,13 +152,32 @@ BEGIN
   IF v_def IS DISTINCT FROM 0 THEN
     RAISE EXCEPTION 'Postcondiție 3b: setarea implicită a lui postgres pe public mai dă TRUNCATE (% intrări) către anon/authenticated', v_def;
   END IF;
-  -- 3c. service_role NEATINS: are TRUNCATE pe fiecare tabel pe care îl avea (comparat cu totalul minus cele blindate fără service_role)
+  -- 3c. service_role NEATINS: EXACT același număr de tabele cu TRUNCATE ca înainte (salvat în 0e în gazpet.f1_sr_before)
   SELECT count(*) INTO v_total FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p');
   SELECT count(*) INTO v_sr FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND has_table_privilege('service_role', c.oid, 'TRUNCATE') IS TRUE;
-  RAISE NOTICE 'SEC F1 după: % tabele în public; TRUNCATE anon=0 authenticated=0 service_role=%', v_total, v_sr;
-  IF v_sr IS NULL OR v_sr < v_total - 10 THEN
-    RAISE EXCEPTION 'Postcondiție 3c: service_role a rămas cu TRUNCATE pe doar % din % tabele (analiza: 369 din 374) — REVOKE-ul a atins alt rol', v_sr, v_total;
+  v_sr_before := nullif(current_setting('gazpet.f1_sr_before', true), '')::integer;
+  RAISE NOTICE 'SEC F1 după: % tabele în public; TRUNCATE anon=0 authenticated=0 service_role=% (înainte: %)', v_total, v_sr, v_sr_before;
+  IF v_sr_before IS NULL OR v_sr IS DISTINCT FROM v_sr_before THEN
+    RAISE EXCEPTION 'Postcondiție 3c: service_role are TRUNCATE pe % tabele, înainte pe % — REVOKE-ul a atins alt rol (sau lipsește starea din 0e)', v_sr, coalesce(v_sr_before::text, '<lipsă>');
+  END IF;
+  -- 3d. sondă: un tabel creat ACUM de postgres în public (setarea implicită pe schemă + cea globală) și unul într-o schemă de
+  --     unică folosință (doar setarea globală) nu primesc TRUNCATE pentru anon/authenticated. Ambele se șterg în aceeași tranzacție.
+  IF current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Postcondiție 3d: sonda trebuie creată de postgres (current_user = %)', current_user;
+  END IF;
+  CREATE TABLE public._sec_f1_sonda (id integer);
+  CREATE SCHEMA _sec_f1_sonda_schema;
+  CREATE TABLE _sec_f1_sonda_schema.sonda (id integer);
+  SELECT count(*) INTO v_n
+    FROM (VALUES ('public._sec_f1_sonda'::regclass), ('_sec_f1_sonda_schema.sonda'::regclass)) AS s(t)
+   WHERE pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = s.t))::text IS DISTINCT FROM 'postgres'
+      OR has_table_privilege('anon', s.t, 'TRUNCATE') IS NOT FALSE
+      OR has_table_privilege('authenticated', s.t, 'TRUNCATE') IS NOT FALSE;
+  DROP TABLE public._sec_f1_sonda;
+  DROP SCHEMA _sec_f1_sonda_schema CASCADE;
+  IF v_n IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION 'Postcondiție 3d: % din 2 tabele-sondă create de postgres primesc TRUNCATE pentru anon/authenticated (sau nu sunt ale lui postgres)', v_n;
   END IF;
 END $post$;
 
