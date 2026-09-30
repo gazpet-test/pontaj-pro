@@ -12,7 +12,7 @@ import {
   populeazaCarte, adaugaUnitate, BUCKET_CTC,
 } from './ctcDb.js'
 import {
-  grupeazaDocumente, progres, borderouCarte, numeProba, PRESETURI_TRONSON, PRESETURI_PROBA, STATUSE_CARTE, esteProba, etichetaTronson,
+  grupeazaDocumente, progres, borderouCarte, calculeazaMutare, numeProba, PRESETURI_TRONSON, PRESETURI_PROBA, STATUSE_CARTE, esteProba, etichetaTronson,
 } from './ctcUtil.js'
 import { genereazaBorderouPdf, construiesteZip, descarcaBlob } from './ctcExport.js'
 
@@ -124,12 +124,12 @@ function DetaliiModal({ doc, onClose, onSalveaza }) {
   )
 }
 
-function RandDoc({ d, busy, onUpload, onDeschide, onStatus, onVerificat, onPagini, onDetalii, onArhiva, onScoate, onDuplica, onSterge }) {
+function RandDoc({ d, busy, muta, onMuta, onUpload, onDeschide, onStatus, onVerificat, onPagini, onDetalii, onArhiva, onScoate, onDuplica, onSterge }) {
   const st = STATUS_DOC_UI[d.status] || STATUS_DOC_UI.lipsa
   const areFisier = !!d.fisier_path
   const inputRef = useRef(null)
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '26px minmax(0,1fr) 220px 70px 330px', gap: 10, alignItems: 'center', padding: '7px 14px', borderBottom: `1px solid ${G.border}`, fontSize: 12.5, opacity: d.status === 'na' ? 0.55 : 1 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '26px minmax(0,1fr) 220px 70px 380px', gap: 10, alignItems: 'center', padding: '7px 14px', borderBottom: `1px solid ${G.border}`, fontSize: 12.5, opacity: d.status === 'na' ? 0.55 : 1 }}>
       <span title={st.label} style={{ fontSize: 15 }}>{st.emoji}</span>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }} title={d.denumire_document}>
@@ -166,6 +166,8 @@ function RandDoc({ d, busy, onUpload, onDeschide, onStatus, onVerificat, onPagin
               <button onClick={() => onVerificat(d)} style={btnMic(d.status === 'verificat' ? G.green : G.muted)} title="Marchează ca verificat">{d.status === 'verificat' ? '✅' : '☑'} Verif.</button>
             )}
             {!areFisier && <button onClick={() => onStatus(d, d.status === 'na' ? 'lipsa' : 'na')} style={btnMic(G.dim)}>{d.status === 'na' ? 'Reactivează' : 'N/A'}</button>}
+            {muta && <button onClick={() => onMuta(d, -1)} disabled={!muta.sus} style={{ ...btnMic(G.muted), opacity: muta.sus ? 1 : 0.3 }} title="Mută mai sus în borderou">↑</button>}
+            {muta && <button onClick={() => onMuta(d, 1)} disabled={!muta.jos} style={{ ...btnMic(G.muted), opacity: muta.jos ? 1 : 0.3 }} title="Mută mai jos în borderou">↓</button>}
             <button onClick={() => onDetalii(d)} style={btnMic(G.muted)} title="Detalii / observații">✏️</button>
             <button onClick={() => onDuplica(d)} style={btnMic(G.muted)} title="Duplică poziția (ex. un certificat pe sudor)">⧉</button>
             {areFisier && <button onClick={() => onScoate(d)} style={btnMic(G.red)} title="Scoate fișierul de pe poziție">✕ fișier</button>}
@@ -219,6 +221,7 @@ export default function CtcCarteDetaliu({ carteId, profile, onBack }) {
     })
   }, [docs, filtru, search])
   const grupe = useMemo(() => grupeazaDocumente(vizibile), [vizibile])
+  const reordonareOk = filtru === 'toate' && !search.trim()   // ↑↓ doar pe lista completă (vecinii trebuie să fie cei reali)
 
   // ─── acțiuni pe poziție ───
   const upload = (d, file) => cuBusy(d.id, async () => {
@@ -247,6 +250,12 @@ export default function CtcCarteDetaliu({ carteId, profile, onBack }) {
     if (!window.confirm(`Scoți fișierul de pe poziția „${d.denumire_document}”?${d.sursa === 'upload' ? '\nFișierul încărcat aici se șterge din Storage.' : '\nDocumentul din arhiva comenzilor rămâne neatins.'}`)) return
     cuBusy(d.id, async () => { inlocuieste(await scoateFisier(d)) })
   }
+  const muta = (d, dir, grup) => cuBusy(d.id, async () => {
+    const upd = calculeazaMutare(grup, d.id, dir)
+    if (!upd.length) return
+    const rows = await Promise.all(upd.map(u => actualizeazaDoc(u.id, { ordine: u.ordine })))
+    setDocs(prev => prev.map(x => rows.find(r => r.id === x.id) || x))
+  })
   const duplica = (d) => cuBusy(d.id, async () => {
     const row = await adaugaPozitie(carteId, d, (d.ordine || 0) + 1)
     setDocs(prev => [...prev, row]); showToast('✓ Poziție duplicată')
@@ -393,13 +402,14 @@ export default function CtcCarteDetaliu({ carteId, profile, onBack }) {
               <span style={{ fontSize: 11.5, color: G.muted }}>{gp.incarcate}/{gp.aplicabile}</span>
             </div>
             <div style={{ overflowX: 'auto' }}>
-              {g.docs.map(d => {
+              {g.docs.map((d, idx) => {
                 const nouaCat = d.categorie !== catPrec
                 catPrec = d.categorie
                 return (
                   <div key={d.id}>
                     {nouaCat && <div style={{ padding: '5px 14px', fontSize: 10.5, fontWeight: 800, color: G.ctc, textTransform: 'uppercase', background: G.bg + '99' }}>{d.categorie}</div>}
-                    <RandDoc d={d} busy={busyDoc === d.id} onUpload={upload} onDeschide={deschide} onStatus={seteazaStatus} onVerificat={verificat}
+                    <RandDoc d={d} busy={busyDoc === d.id} onUpload={upload}
+                      muta={reordonareOk ? { sus: idx > 0, jos: idx < g.docs.length - 1 } : null} onMuta={(x, dir) => muta(x, dir, g.docs)} onDeschide={deschide} onStatus={seteazaStatus} onVerificat={verificat}
                       onPagini={pagini} onDetalii={(x) => setModal({ tip: 'detalii', doc: x })} onArhiva={(x) => setModal({ tip: 'arhiva', doc: x })}
                       onScoate={scoate} onDuplica={duplica} onSterge={sterge} />
                   </div>

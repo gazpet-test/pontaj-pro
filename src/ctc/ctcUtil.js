@@ -147,3 +147,15 @@ export function paginiDinBytes(bytes) {
     .map(m => Number(m[1] || m[2])).filter(Boolean)
   return counts.length ? Math.max(...counts) : null
 }
+
+// Mutare ↑/↓ în cadrul unui grup (aceeași listă sortată ca pe ecran). Întoarce cele 2 actualizări de `ordine`
+// de făcut, sau [] dacă nu se poate muta. Dacă cele două poziții au aceeași `ordine` (departajate doar de id),
+// o depărtăm cu 1 ca mutarea să aibă efect.
+export function calculeazaMutare(grup, id, dir) {
+  const i = grup.findIndex(d => d.id === id)
+  const j = i + dir
+  if (i < 0 || j < 0 || j >= grup.length) return []
+  const d = grup[i], n = grup[j]
+  if (d.ordine !== n.ordine) return [{ id: d.id, ordine: n.ordine }, { id: n.id, ordine: d.ordine }]
+  return [{ id: d.id, ordine: dir < 0 ? n.ordine - 1 : n.ordine + 1 }]
+}

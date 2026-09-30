@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   slugFisier, numeInZip, calculeazaOrdine, clonarePozitii, pozitiiPentruUnitate, calculeazaBorderou,
-  paginiBorderou, progres, grupeazaDocumente, paginiDinBytes, numeProba, esteProba, etichetaTronson,
+  paginiBorderou, progres, grupeazaDocumente, paginiDinBytes, numeProba, esteProba, etichetaTronson, calculeazaMutare,
 } from './ctcUtil.js'
 
 const T = [
@@ -138,5 +138,23 @@ describe('paginiDinBytes', () => {
   })
   it('null când nu se poate determina', () => {
     expect(paginiDinBytes(enc('nimic util aici'))).toBeNull()
+  })
+})
+
+describe('calculeazaMutare', () => {
+  const g = [{ id: 1, ordine: 10 }, { id: 2, ordine: 20 }, { id: 3, ordine: 30 }]
+  it('schimbă între ele ordinea a două poziții vecine', () => {
+    expect(calculeazaMutare(g, 2, -1)).toEqual([{ id: 2, ordine: 10 }, { id: 1, ordine: 20 }])
+    expect(calculeazaMutare(g, 2, 1)).toEqual([{ id: 2, ordine: 30 }, { id: 3, ordine: 20 }])
+  })
+  it('nu mută peste capete', () => {
+    expect(calculeazaMutare(g, 1, -1)).toEqual([])
+    expect(calculeazaMutare(g, 3, 1)).toEqual([])
+    expect(calculeazaMutare(g, 99, 1)).toEqual([])
+  })
+  it('ordine egală: depărtează cu 1, în direcția cerută', () => {
+    const e = [{ id: 1, ordine: 50 }, { id: 2, ordine: 50 }]
+    expect(calculeazaMutare(e, 2, -1)).toEqual([{ id: 2, ordine: 49 }])
+    expect(calculeazaMutare(e, 1, 1)).toEqual([{ id: 1, ordine: 51 }])
   })
 })
