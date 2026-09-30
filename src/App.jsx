@@ -2443,8 +2443,11 @@ function ReportsPage() {
       // Plus etichetă AK4/AL4 (Razvan a zis să le păstrăm ca info informativă)
       const TOTAL_ZILE_C = FIXED + days       // col index al „Total Zile"
       const TOTAL_ORE_C  = FIXED + days + 1   // col index al „Total Ore"
-      const WD_LABEL_C   = FIXED + days + 2   // col index al etichetei „Zile lucr. lună:"
-      const WD_VALUE_C   = FIXED + days + 3   // col index al valorii
+      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat (formule COUNTIF pe rândul Ora Intrare)
+      const NORME_TOTAL  = ['CO','CM','CFP','O']
+      const NORME_C0     = FIXED + days + 2
+      const WD_LABEL_C   = NORME_C0 + NORME_TOTAL.length   // col index al etichetei „Zile lucr. lună:"
+      const WD_VALUE_C   = WD_LABEL_C + 1                  // col index al valorii
       
       const R = []
       R.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
@@ -2458,10 +2461,10 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header rând 6
-      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, 'TOTAL ZILE','TOTAL ORE']
+      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, 'TOTAL ZILE','TOTAL ORE', ...NORME_TOTAL.map(n=>`ZILE ${n}`)]
       R.push(HDR)
       // Day abbr rând 7
-      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), '', '']
+      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), '', '', ...NORME_TOTAL.map(n=>NORME_LABELS[n]||n)]
       R.push(DNR)
       
       // Salariați
@@ -2481,9 +2484,12 @@ function ReportsPage() {
         // COUNTIF / SUM pe rândul Ore Lucrate (r+3)
         rCI.push({ f: `COUNTIF(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3},">0")`, t: 'n' })
         rCI.push({ f: `SUM(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3})`, t: 'n' })
-        rCO.push('', '')
-        rPM.push('', '')
-        rOL.push('', '')
+        // Zile CO/CM/CFP/O (TKT-2026-0311): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
+        NORME_TOTAL.forEach(n => rCI.push({ f: `COUNTIF(D${excelRow}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow},"${n}")`, t: 'n' }))
+        const gol = ['', '', ...NORME_TOTAL.map(() => '')]
+        rCO.push(...gol)
+        rPM.push(...gol)
+        rOL.push(...gol)
         R.push(rCI, rCO, rPM, rOL, [])
       })
       
@@ -2492,6 +2498,7 @@ function ReportsPage() {
         {wch:26},{wch:16},{wch:22},
         ...dayNums.map(()=>({wch:5.5})),
         {wch:11}, {wch:11},
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
         {wch:18}, {wch:11}
       ]
       
@@ -2527,7 +2534,7 @@ function ReportsPage() {
       let ri = 7  // 0-indexed (Excel rând 8)
       employees.forEach(emp => {
         for (let ro = 0; ro < 4; ro++) {
-          const TOTAL_C = FIXED + days + 2  // FĂRĂ ORE SUPL
+          const TOTAL_C = FIXED + days + 2 + NORME_TOTAL.length  // FĂRĂ ORE SUPL, cu zile CO/CM/CFP/O
           for (let c = 0; c < TOTAL_C; c++) {
             let s = {}
             if (c === 0) {
@@ -4542,8 +4549,11 @@ function ReportsPage() {
       const TOTAL_ZILE_C = FIXED + days        // ex Apr(30): col 33=AH; Mai(31): col 34=AI
       const TOTAL_ORE_C  = FIXED + days + 1    // ex Apr: col 34=AI; Mai: col 35=AJ
       const ORE_SUPL_C   = FIXED + days + 2    // ex Apr: col 35=AJ; Mai: col 36=AK
-      const WD_LABEL_C   = FIXED + days + 3    // etichetă „Zile lucr. lună:"
-      const WD_VALUE_C   = FIXED + days + 4    // valoarea numerică (folosită în formulă)
+      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat, după ORE SUPL (4 coloane)
+      const NORME_TOTAL  = ['CO','CM','CFP','O']
+      const NORME_C0     = FIXED + days + 3    // prima coloană de norme
+      const WD_LABEL_C   = FIXED + days + 3 + NORME_TOTAL.length    // etichetă „Zile lucr. lună:"
+      const WD_VALUE_C   = WD_LABEL_C + 1                            // valoarea numerică (folosită în formulă)
       const totalOreColLetter = XLSX.utils.encode_col(TOTAL_ORE_C)
       const wdValueColLetter  = XLSX.utils.encode_col(WD_VALUE_C)
 
@@ -4561,10 +4571,10 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header row (idx 5)
-      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE']
+      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`)]
       R.push(HDR)
       // Day names row (idx 6)
-      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','']
+      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n)]
       R.push(DNR)
 
       // Tracking metadata pentru istoric BD
@@ -4582,12 +4592,14 @@ function ReportsPage() {
         const rPM=['','','Pauza de Masă (ore)']
         const rOL=['','','Ore Lucrate']
         let tz=0, to=0
+        const normeCnt=Object.fromEntries(NORME_TOTAL.map(n=>[n,0]))
 
         for(let d=1;d<=days;d++){
           const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
           const {we,leg}=isOff(d)
           const rec=emp.records?.find(r=>r.date===ds)
           if(rec?.norma){
+            if(normeCnt[rec.norma]!==undefined) normeCnt[rec.norma]++
             rCI.push(rec.norma); rCO.push(''); rPM.push(''); rOL.push('')
           } else if(rec?.check_in){
             const hp=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
@@ -4610,8 +4622,11 @@ function ReportsPage() {
         // ORE SUPLIMENTARE — formula Excel pe primul rând (Ora Intrare)
         // = MAX(0, TotalOre{row} - WdValue$4 * 8) — referință absolută pe rând 4 pentru zile lucr.
         rCI.push({ f: `MAX(0, ${totalOreColLetter}${excelRow} - ${wdValueColLetter}$4*8)`, t: 'n' })
+        // Zile CO / CM / CFP / O (TKT-2026-0311) — 0 explicit când nu există, ca să se poată însuma
+        NORME_TOTAL.forEach(n=>rCI.push(normeCnt[n]))
 
-        rCO.push('','',''); rPM.push('','',''); rOL.push('','','')
+        const gol=['','','',...NORME_TOTAL.map(()=>'')]
+        rCO.push(...gol); rPM.push(...gol); rOL.push(...gol)
         R.push(rCI,rCO,rPM,rOL,[])
       })
 
@@ -4623,6 +4638,7 @@ function ReportsPage() {
         {wch:11},                  // TOTAL ZILE
         {wch:11},                  // TOTAL ORE
         {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
         {wch:18},                  // 'Zile lucr. lună:' label
         {wch:11}                   // valoare zile lucr.
       ]
@@ -4655,7 +4671,7 @@ function ReportsPage() {
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C = FIXED + days + 3  // include ORE SUPL
+          const TOTAL_C = FIXED + days + 3 + NORME_TOTAL.length  // include ORE SUPL + zile CO/CM/CFP/O
           for(let c=0;c<TOTAL_C;c++){
             let s={}
             if(c===0){
@@ -4683,6 +4699,11 @@ function ReportsPage() {
               // ro=1-3 (sub-rânduri): #F5F5F5 font 9 centrat
               s = ro===0
                 ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
+                : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
+            } else if(c>=NORME_C0 && c<NORME_C0+NORME_TOTAL.length) {
+              // ZILE CO/CM/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
+              s = ro===0
+                ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
             } else {
               s={fill:{fgColor:{rgb:ro===0?'D9E1F2':'F5F5F5'}},font:ro===0?{bold:true}:{sz:9},border:bd,alignment:alC}
