@@ -8,7 +8,7 @@ egress din 24–25.09.2026 (`docs/INCIDENT_EGRESS_2026-09-25.md`, verdictul `doc
 | Condiție | Implementare |
 |---|---|
 | (1) fără cale anonimă | `identificaApelant()` (`supabase/functions/_shared/gardaIngestLogica.ts`). Două căi: **serviciu** = header `x-ingest-secret` egal (timp constant) cu `OFERTARE_INGEST_SECRET` (≥ 32 caractere); **utilizator** = JWT verificat de Auth (`getUser`) + `fn_are_acces_ofertare()` (owner sau `user_module_access.module='ofertare'`) + poarta pe cheltuială #51 (owner sau responsabilul licitației). Cheia anon e refuzată mereu; rolul NU se mai citește din payload-ul JWT decodat local; `service_role` ca Bearer fără secret = refuz. Refuz = 401/403 fără a atinge documentul. |
-| (2) contor persistent + oprire | Tabel `ofertare_ingest_garda` (migrarea `20260930h_ofertare_ingest_garda.sql`). `ofertare_ingest_garda_incearca` (înainte de descărcare, atomic `FOR UPDATE`) și `ofertare_ingest_garda_rezultat` (după). 5 eșecuri consecutive → **blocat**; backoff 60 s × 2^(n−1), max 6 h. Deblocare DOAR `ofertare_ingest_garda_reactiveaza(doc_id)` — owner. |
+| (2) contor persistent + oprire | Tabel `ofertare_ingest_garda` (migrarea `20260930k_ofertare_ingest_garda.sql`). `ofertare_ingest_garda_incearca` (înainte de descărcare, atomic `FOR UPDATE`) și `ofertare_ingest_garda_rezultat` (după). 5 eșecuri consecutive → **blocat**; backoff 60 s × 2^(n−1), max 6 h. Deblocare DOAR `ofertare_ingest_garda_reactiveaza(doc_id)` — owner. |
 | (3) fără re-descărcări complete repetate | Plafon **80 descărcări/document** (toate invocările, toate feliile) → blocat. Înainte de descărcare: mărime + etag din `storage.list` egale cu amprenta ultimei citiri încheiate → `deja_ingerat`, fără octeți. După descărcare: sha256 egal pe document încheiat → skip. Garda e **fail-closed**: dacă RPC-ul nu răspunde, nu se descarcă. |
 | (4) alerte | La blocare: notificare către toți owner-ii (`ofertare_ingest_garda_notifica`, modul Ofertare). Consumul (bytes/obiect/oră, cota ciclului) rămâne la monitorul de egress (PR #543, branch `claude/erp-continuare-x4p5a7-monitor-egress`) — complementar: monitorul vede **bytes pe obiect** și blochează obiectul, garda vede **încercări pe document**. Se aplică amândouă; ordinea în cod: garda → poarta egress → descărcare. Integrarea `descarcaCuJurnal` se face la merge-ul celui de-al doilea PR (conflict mic, aceeași linie de `download`). |
 | Worker NAS | `worker/ofertare/garda.ts` reexportă aceleași adaptoare. `candidati()` exclude documentele blocate/în backoff; drumul local (pdftotext) apelează garda în jurul descărcării; drumul AI trimite `x-ingest-secret`, iar un răspuns `garda:*` al edge-ului oprește documentul în tura curentă fără reîncercare și fără a-i schimba statusul. PDF-urile > 60 MB (`citire_mare.ts`) au deja contorul lor persistent (`analiza.citire_mare`, max 3, CAS) și filtrul de candidați al gărzii. |
@@ -20,11 +20,11 @@ egress din 24–25.09.2026 (`docs/INCIDENT_EGRESS_2026-09-25.md`, verdictul `doc
 
 ## Ordinea de punere în funcțiune (fiecare pas cu acordul lui Razvan)
 1. Secret nou `OFERTARE_INGEST_SECRET` (≥ 32 caractere aleatoare) în Edge Function secrets și în `.env` workerului NAS (chmod 600).
-2. `apply_migration` `20260930h_ofertare_ingest_garda` + `get_advisors`.
+2. `apply_migration` `20260930k_ofertare_ingest_garda` + `get_advisors`.
 3. Deploy `ofertare-ingest-doc` (v13). Test: apel cu cheia anon → 401; cu secret greșit → 401; user fără modul → 403.
 4. Merge pe `main` → workerul face `git pull` și repornește.
 5. Reactivarea citirii (coada) — decizie separată.
-Rollback: `20260930h_ofertare_ingest_garda_ROLLBACK.sql` + redeploy v12 (atenție: v12 are calea anon).
+Rollback: `20260930k_ofertare_ingest_garda_ROLLBACK.sql` + redeploy v12 (atenție: v12 are calea anon).
 
 ## Fișa de securitate (CLAUDE.md pct. 7)
 - **(a) Conținut extern citit:** PDF-uri din documentațiile de atribuire SEAP (scrise de autorități contractante / proiectanți), trimise la Claude (Haiku/Sonnet) pentru transcriere; `nume_original` al fișierelor. Textul rezultat e DATE: se scrie în `text_extras`, nu declanșează nicio acțiune.

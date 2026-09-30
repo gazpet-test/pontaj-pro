@@ -2,7 +2,7 @@
 -- Contor PERSISTENT pe document: încercări eșuate (backoff exponențial, blocare la plafon), descărcări complete
 -- (plafon anti-egress), amprenta ultimei citiri încheiate (sha256 / mărime / etag) pentru scurtcircuit.
 -- Blocarea se scoate DOAR de om (owner), cu ofertare_ingest_garda_reactiveaza.
--- ADITIVĂ. NEAPLICATĂ pe live. Rollback: 20260930h_ofertare_ingest_garda_ROLLBACK.sql
+-- ADITIVĂ. NEAPLICATĂ pe live. Rollback: 20260930k_ofertare_ingest_garda_ROLLBACK.sql
 -- Constantele oglindesc GARDA din supabase/functions/_shared/gardaIngestLogica.ts (5 eșecuri, 60 s × 2^n ≤ 6 h, 80 descărcări).
 BEGIN;
 
