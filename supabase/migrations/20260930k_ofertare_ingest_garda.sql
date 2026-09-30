@@ -64,7 +64,8 @@ SELECT jsonb_build_object(
   'comentarii', (SELECT count(*) FROM pg_catalog.pg_description d WHERE (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid = to_regclass('public.ofertare_ingest_garda'))
                    OR (d.classoid = 'pg_catalog.pg_proc'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_proc p WHERE p.proname LIKE 'ofertare_ingest_garda_%'))
                    OR (d.classoid = 'pg_catalog.pg_constraint'::regclass AND d.objoid IN (SELECT k.oid FROM pg_catalog.pg_constraint k WHERE k.conrelid = to_regclass('public.ofertare_ingest_garda')))
-                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))),
+                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))
+                   OR (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid IN (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = to_regclass('public.ofertare_ingest_garda')))),
   'statistici', (SELECT count(*) FROM pg_catalog.pg_statistic_ext s WHERE s.stxrelid = to_regclass('public.ofertare_ingest_garda')),
   'publicatii', (SELECT count(*) FROM pg_catalog.pg_publication_rel r WHERE r.prrelid = to_regclass('public.ofertare_ingest_garda')),
   'dependenti', (SELECT count(*) FROM pg_catalog.pg_depend d WHERE d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = to_regclass('public.ofertare_ingest_garda') AND d.deptype = 'n'
@@ -159,10 +160,13 @@ BEGIN
     RAISE EXCEPTION 'REFUZ 20260930k: există alt overload fn_are_acces_ofertare (în orice schemă) — politica ar putea fi deturnată';
   END IF;
   -- 0d'. coloanele documentului pe care _rezultat le poate scrie atomic (runda 3, J2) — toate trebuie să existe
+  -- runda 4: nume ȘI tip (citite read-only pe live de Copilot)
   IF (SELECT count(*) FROM pg_catalog.pg_attribute a WHERE a.attrelid = to_regclass('public.ofertare_documente_atribuire') AND NOT a.attisdropped
-        AND a.attname IN ('text_extras', 'pagini', 'size_bytes', 'pagini_procesate', 'pagini_felie', 'pagini_necitite', 'status_procesare',
-                          'eroare', 'antet', 'revizie', 'ocr', 'procesat_la', 'procesat_de')) IS DISTINCT FROM 13 THEN
-    RAISE EXCEPTION 'REFUZ 20260930k: ofertare_documente_atribuire nu are toate cele 13 coloane scrise prin _rezultat';
+        AND (a.attname, format_type(a.atttypid, a.atttypmod)) IN (('text_extras', 'text'), ('pagini', 'integer'), ('size_bytes', 'bigint'),
+          ('pagini_procesate', 'integer'), ('pagini_felie', 'integer'), ('pagini_necitite', 'integer[]'), ('status_procesare', 'text'),
+          ('eroare', 'text'), ('antet', 'jsonb'), ('revizie', 'text'), ('ocr', 'boolean'), ('procesat_la', 'timestamp with time zone'),
+          ('procesat_de', 'uuid'))) IS DISTINCT FROM 13 THEN
+    RAISE EXCEPTION 'REFUZ 20260930k: ofertare_documente_atribuire nu are toate cele 13 coloane scrise prin _rezultat, cu tipurile așteptate';
   END IF;
   -- 0e. rolurile și gen_random_uuid()
   IF (SELECT count(*) FROM pg_catalog.pg_roles r WHERE r.rolname IN ('anon', 'authenticated', 'service_role')) IS DISTINCT FROM 3
@@ -396,7 +400,8 @@ SELECT jsonb_build_object(
   'comentarii', (SELECT count(*) FROM pg_catalog.pg_description d WHERE (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid = to_regclass('public.ofertare_ingest_garda'))
                    OR (d.classoid = 'pg_catalog.pg_proc'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_proc p WHERE p.proname LIKE 'ofertare_ingest_garda_%'))
                    OR (d.classoid = 'pg_catalog.pg_constraint'::regclass AND d.objoid IN (SELECT k.oid FROM pg_catalog.pg_constraint k WHERE k.conrelid = to_regclass('public.ofertare_ingest_garda')))
-                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))),
+                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))
+                   OR (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid IN (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = to_regclass('public.ofertare_ingest_garda')))),
   'statistici', (SELECT count(*) FROM pg_catalog.pg_statistic_ext s WHERE s.stxrelid = to_regclass('public.ofertare_ingest_garda')),
   'publicatii', (SELECT count(*) FROM pg_catalog.pg_publication_rel r WHERE r.prrelid = to_regclass('public.ofertare_ingest_garda')),
   'dependenti', (SELECT count(*) FROM pg_catalog.pg_depend d WHERE d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = to_regclass('public.ofertare_ingest_garda') AND d.deptype = 'n'

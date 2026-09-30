@@ -359,11 +359,11 @@ Deno.serve(async (req: Request) => {
     if (gata) upd.procesat_la = new Date().toISOString()
     // încheiat → 'succes' (memorează amprenta: nu se mai descarcă); felie citită, documentul continuă → 'progres'.
     // Runda 3 (J2): documentul se scrie de SERVER, în aceeași tranzacție cu verificarea tokenului — o încercare veche nu mai
-    // poate suprascrie progresul uneia noi. Respins / RPC pierdut → NU s-a salvat nimic, spunem asta.
+    // poate suprascrie progresul uneia noi. Respins → nimic scris; RPC pierdut → rezultat NECONFIRMAT (stare necunoscută).
     await inc.inchide({ rezultat: gata ? 'succes' : 'progres', hash, size: bytes.length, etag: meta?.etag ?? null, doc: upd })
     if (inc.raspuns?.acceptat !== true) {
       const id = docId; docId = null
-      return new Response(JSON.stringify({ ok: false, garda: 'rezultat_respins', error: 'garda: rezultatul NU s-a salvat (token vechi/străin sau garda indisponibilă): ' + (inc.raspuns?.motiv ?? 'fără răspuns'), doc_id: id, continua: false }), { headers: CORS })
+      return new Response(JSON.stringify({ ok: false, garda: 'rezultat_respins', error: 'garda: rezultat NECONFIRMAT — respins (token vechi/străin) sau fără răspuns (stare necunoscută): ' + (inc.raspuns?.motiv ?? 'fără răspuns'), doc_id: id, continua: false }), { headers: CORS })
     }
 
     return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: tokIn, tokens_out: tokOut }), { headers: CORS })

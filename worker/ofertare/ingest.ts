@@ -26,7 +26,12 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 // pauzele dintre reîncercări (ms) — obiect exportat ca testele să le poată pune pe 0.
 // edgeNeclarMs (runda 3): după un răspuns NECLAR al edge-ului (vezi raspunsNeclar) — cel puțin limita de timp a unei
 // invocări edge (400 s pe planul Pro; 504 vine la 150 s, deci invocarea mai poate trăi ≤250 s după el)
-export const PAUZE = { edgeMs: 15_000, edgeNeclarMs: 400_000, reluareMareMs: 30_000, leaseReinnoireMs: 2 * 60_000 }
+export const PAUZE = { edgeMs: 15_000, edgeNeclarMs: 400_000, reluareMareMs: 30_000, leaseReinnoireMs: 2 * 60_000, marcajTermenMs: 45_000 }
+// runda 4: punct de injecție pentru teste (citirea pe felii simulată); producția folosește citesteMare din citire_mare.ts
+export const _mare = { citesteMare }
+// runda 4 (Copilot 1): rezultatul unui drum după care ownership-ul documentului e la gardă / la altă încercare — apelantul
+// (proceseazaIngest) NU mai scrie NIMIC pe document, oricare ar fi rezultatul din aval
+export const GESTIONAT = 'gestionat: '
 // runda 3 (J2): termenul lucrului local sub lease (8 min < 10 min); obiect exportat ca testele să-l poată scurta
 export const TERMENE = { lucruLocalMs: TERMEN_LOCAL_MS }
 // dormitul din citesteCuAI, într-un obiect exportat: testele pun un ceas virtual (fără 400 s reale de așteptare)
@@ -200,16 +205,32 @@ async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | nu
   const garda = await gardaIncearca(supabase, doc.id, meta, 'nas:citire_mare')
   if (garda.actiune !== 'continua') return `garda: ${garda.actiune} — ${garda.motiv}`
   const inc = incercareGarda(supabase, doc.id, garda.token!)
-  let pierdut = false
-  const bataie = setInterval(() => { inc.marcheaza(null).then(r => { if (r?.acceptat !== true) pierdut = true }) }, PAUZE.leaseReinnoireMs)
+  // runda 4 (Copilot 2): heartbeat SERIALIZAT — următoarea prelungire pleacă doar după răspunsul celei anterioare; fiecare cu
+  // termen (PAUZE.marcajTermenMs); timeout / RPC fără răspuns / acceptat:false ⇒ pierdut (citirea se oprește la felia următoare)
+  let pierdut = false, viu = true
+  let trezeste: () => void = () => {}
+  const bucla = (async () => {
+    while (viu && !pierdut) {
+      await new Promise<void>(res => { const t = setTimeout(res, PAUZE.leaseReinnoireMs); trezeste = () => { clearTimeout(t); res() } })
+      if (!viu) break
+      let r: any = null
+      try { r = await cuTermen(inc.marcheaza(null), PAUZE.marcajTermenMs, 'prelungire lease') } catch (_) { r = null }
+      if (r?.acceptat !== true) pierdut = true
+    }
+  })()
   try {
-    return await cuIncercare(inc, async () => {
-      const rez = await citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare))
+    return GESTIONAT + await cuIncercare(inc, async () => {
+      const rez = await _mare.citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare))
+      if (pierdut) {   // lease pierdut: NU raportăm procesat/parțial, oricare ar fi rezultatul local
+        await inc.inchide({ rezultat: 'predat', eroare: 'lease pierdut în timpul citirii pe felii' })
+        return `garda: lease pierdut în timpul citirii pe felii — rezultat local ignorat (${rez.slice(0, 120)})`
+      }
       const r = /^(eroare|reia)/.test(rez) ? 'esec' : /^(procesat|partial)/.test(rez) ? 'succes' : 'predat'
       await inc.inchide({ rezultat: r, eroare: r === 'succes' ? null : rez.slice(0, 500) })
-      return pierdut ? `garda: lease pierdut în timpul citirii pe felii — ${rez}` : rez
+      if (r === 'succes' && inc.raspuns?.acceptat !== true) return `garda: rezultat NECONFIRMAT de gardă (${inc.raspuns?.motiv ?? 'fără răspuns'}) — stare necunoscută, nu raportez ${rez.split(' ')[0]}`
+      return rez
     })
-  } catch (e) { return 'eroare: ' + mesajEroare(e) } finally { clearInterval(bataie) }
+  } catch (e) { return GESTIONAT + 'eroare: ' + mesajEroare(e) } finally { viu = false; trezeste(); await bucla }
 }
 
 // Munca unei încercări acordate de gardă (lease-ul e al nostru). Fiecare `return` închide încercarea explicit; o excepție
@@ -226,17 +247,17 @@ async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: 
   const bytes = new Uint8Array(await cuTermen(blob.arrayBuffer() as Promise<ArrayBuffer>, termen - Date.now(), 'download (corp)'))
   if (bytes.length > PRAG_MARE) {
     // size_bytes lipsea/greșit în BD: scriem mărimea reală (o vede și poarta edge-ului) și trecem pe drumul pe felii
-    const { error: eSz } = await supabase.from('ofertare_documente_atribuire').update({ size_bytes: bytes.length }).eq('id', doc.id)
-    if (eSz) { await inc.inchide({ rezultat: 'esec', eroare: 'size_bytes ' + eSz.message }); return 'eroare: size_bytes ' + eSz.message }
-    // predat: citirea pe felii își ia propria încercare (runda 3, J3) — descărcarea de aici e deja numărată
-    await inc.inchide({ rezultat: 'predat', eroare: `peste ${Math.round(PRAG_MARE / 1048576)} MB după descărcare → citire pe felii (citire_mare)` })
+    // runda 4 (Copilot 3): mărimea reală se scrie ATOMIC cu predarea (sub token), nu printr-un UPDATE direct
+    await inc.inchide({ rezultat: 'predat', eroare: `peste ${Math.round(PRAG_MARE / 1048576)} MB după descărcare → citire pe felii (citire_mare)`, doc: { size_bytes: bytes.length } })
+    if (inc.raspuns?.acceptat !== true) return `garda: predare NECONFIRMATĂ (${inc.raspuns?.motiv ?? 'fără răspuns'}) — stare necunoscută`
     return await citesteMareCuGarda(supabase, { ...doc, size_bytes: bytes.length }, cerutDe, esteOprire, stare)
   }
   // predat către edge (scan / fără strat de text): lease-ul se eliberează ÎNAINTE, altfel edge-ul ar primi „in_curs”;
   // contoarele nu se ating (fiecare invocare edge își ia propria încercare, numărată acolo)
   const predaLaAI = async (motiv: string) => {
     await inc.inchide({ rezultat: 'predat', eroare: motiv })
-    return await citesteCuAI(supabase, doc.id, esteOprire)
+    // runda 4 (Copilot 1): ownership-ul e la edge (tokenurile lui) — orice rezultat din aval e „gestionat”, fără scriere aici
+    return GESTIONAT + await citesteCuAI(supabase, doc.id, esteOprire)
   }
   const cale = `/tmp/ingest_${doc.id}.pdf`
   await Deno.writeFile(cale, bytes)
@@ -263,7 +284,7 @@ async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: 
     if (antet) { upd.antet = antet; upd.revizie = antet?.revizie || doc.revizie || null }
     // runda 3 (J2): documentul se scrie de SERVER atomic cu verificarea tokenului (o încercare veche nu suprascrie una nouă)
     await inc.inchide({ rezultat: 'succes', hash: await sha256Hex(bytes), size: bytes.length, etag: meta?.etag ?? null, doc: upd })
-    if (inc.raspuns?.acceptat !== true) return `garda: rezultat respins (${inc.raspuns?.motiv ?? 'fără răspuns'}) — documentul NU s-a salvat`
+    if (inc.raspuns?.acceptat !== true) return `garda: rezultat NECONFIRMAT (${inc.raspuns?.motiv ?? 'fără răspuns'}) — respins sau fără răspuns, stare necunoscută apelantului`
     return `${upd.status_procesare} (${local.nPag} pagini, text local${necitite.length ? `, ${necitite.length} necitite` : ''})`
   } finally { try { await Deno.remove(cale) } catch (_) {} }
 }
@@ -410,7 +431,12 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
       try { rez = await citesteDocument(supabase, d, c.cerut_de ?? null, esteOprire, s => stare(`${s} (${citite + 1}; ${lista.length} rămase)`)) } catch (e) { rez = 'eroare: ' + String((e as Error)?.message ?? e) }
     }
     log(`#${licId} doc ${d.id} „${String(d.nume_original).slice(-50)}" → ${rez} · ${Math.round((Date.now() - t0) / 1000)} s`)
-    if (rez.startsWith('garda') || rez.startsWith('eroare(salvat)')) {
+    if (rez.startsWith(GESTIONAT)) {
+      // runda 4: după predare / pe calea pe felii, documentul NU se atinge de aici (fără fallback de 'eroare')
+      const interior = rez.slice(GESTIONAT.length)
+      if (/^(eroare|garda)/.test(interior)) esuate.add(d.id)
+      else if (!/^(reia|întrerupt)/.test(interior)) citite++
+    } else if (rez.startsWith('garda') || rez.startsWith('eroare(salvat)')) {
       // garda ține starea / eroarea e deja scrisă atomic sub token (runda 3): nicio scriere nepăzită aici
       esuate.add(d.id)   // blocat/backoff/deja citit: nu se atinge statusul (garda ține starea), nu se reia în tura asta
     } else if (rez.startsWith('eroare')) {

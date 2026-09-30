@@ -1,6 +1,6 @@
 # Garda citirii automate Ofertare (`ofertare-ingest-doc` + worker NAS)
 
-**Stare: DRAFT runda 3 — nimic deployat, nimic aplicat. GO pe MECANISM ≠ reluarea ingestului (vezi „Livrare separată”).** Închide condițiile de reluare a citirii automate după incidentul de
+**Stare: DRAFT runda 4 — nimic deployat, nimic aplicat. GO pe MECANISM ≠ reluarea ingestului (vezi „Livrare separată”).** Închide condițiile de reluare a citirii automate după incidentul de
 egress din 24–25.09.2026 (`docs/INCIDENT_EGRESS_2026-09-25.md`, verdictul `docs/INCIDENT_EGRESS_VERDICT_COPILOT_2026-09-30.md`,
 `docs/MONITOR_EGRESS.md`, PR #478). Runda 2 răspunde la NO-GO Copilot r1 (secțiunea [Runda 2](#runda-2-no-go-copilot-r1)).
 
@@ -132,7 +132,7 @@ fără descărcare. *Teste:* `garda_test.ts` „J1 (Jakarinos): progresul avansa
 documentului (listă albă de 13; altă cheie ⇒ eroare) **în aceeași tranzacție** cu verificarea tokenului (rândul gărzii `FOR UPDATE`) —
 inclusiv la erori (`esec` + `status_procesare='eroare'`) și pentru marcajul intermediar (`marcaj`: scrie `in_lucru` și prelungește lease-ul,
 fără a închide). Edge-ul și workerul (text local, Word, erori, excepții) NU mai scriu documentul direct după `continua`; răspuns
-`acceptat:false` / RPC pierdut ⇒ raportat „NU s-a salvat”, fără retry. Termen executabil local 8 min < lease 10 min (`cuTermen`; `ruleaza` cu
+`acceptat:false` ⇒ nimic scris; RPC pierdut ⇒ rezultat **NECONFIRMAT, stare necunoscută apelantului** (runda 4); fără retry. Termen executabil local 8 min < lease 10 min (`cuTermen`; `ruleaza` cu
 `AbortSignal`). *Teste:* SQL §5b (B salvează; A cu token preluat e respins și NU suprascrie textul lui B; eroarea lui A nu marchează
 „eroare”; marcaj; cheie nepermisă; token străin); edge „J2 (Jakarinos)” + „marcaj respins”; worker „J2 (Jakarinos): încercarea veche …”,
 „marcaj respins”, „download agățat → termen”; vitest „runda 3”.
@@ -162,7 +162,7 @@ limita dură locală ~16 GB/document ⇒ reluarea depinde obligatoriu de #543. N
 - **Reluarea ingestului: NO-GO** până când #543 (garda de bytes) e **live și verificat**. Apoi, fiecare pas cu acordul lui Răzvan:
   1. secretul `OFERTARE_INGEST_SECRET` (edge + `.env` NAS);
   2. migrarea 20260930k prin `scripts/livrare_migrare.sh` (sha256 aprobat) + `get_advisors`;
-  3. deploy edge `ofertare-ingest-doc` și `ofertare-word-text`;
+  3. deploy edge `ofertare-ingest-doc`; `ofertare-word-text` DOAR după ce finding-ul lui separat din audit (autorizarea apelantului) e închis — altfel endpoint-ul rămâne nedeployat/dezactivat;
   4. workerul NAS (actualizare cod + repornire);
   5. probe: anon → 401, secret greșit → 401, user fără modul → 403, două apeluri simultane pe același document → unul `in_curs`,
      worker + edge concurent fără dublă descărcare;
@@ -176,3 +176,31 @@ limita dură locală ~16 GB/document ⇒ reluarea depinde obligatoriu de #543. N
 | worker `ingest_garda_test.ts` | **14/14** |
 | `ingest_mare_test.ts` / `citire_mare_test.ts` | **4/4** / **29/29** |
 | `livrare_validator.py` (runner ed7ecb0) | **OK 22 instrucțiuni** |
+
+## Runda 4 (NO-GO Copilot r3 — 3 modificări de cod)
+1. **După `predat`, apelantul nu mai scrie nimic.** Rezultatele căilor predate (worker → edge) și ale căii pe felii poartă prefixul
+   `gestionat: `; `proceseazaIngest` NU execută pentru ele fallback-ul de `status 'eroare'` (doar numără). Singurul UPDATE direct rămas
+   e pe drumul FĂRĂ token (`trecereBlocata`, înaintea gărzii). *Test discriminator:* worker „Copilot r3 #1” — A predă, B (în aval) își
+   marchează documentul `in_lucru`, A primește eroare ⇒ statusul rămâne al lui B, 0 scrieri directe. (Regresie ajustată: în
+   `ingest_mare_test`, doc 900 rămâne `neprocesat` după predare — invocarea moartă o contabilizează garda ca abandonată.)
+2. **Heartbeat serializat pe calea pe felii.** Buclă care așteaptă răspunsul înainte de următoarea prelungire; fiecare `marcaj` cu termen
+   `PAUZE.marcajTermenMs` (45 s); timeout / fără răspuns / `acceptat:false` ⇒ lease pierdut ⇒ oprire la felia următoare și **nu se
+   raportează procesat/parțial**; succes doar cu `inc.raspuns.acceptat === true`. Scrierile interne ale `citire_mare` rămân protejate de
+   CAS-ul lor (`analiza.citire_mare.rev`, pe care B îl rescrie la pornire) și de oprirea prin `esteOprire`. *Test:* worker „Copilot r3 #2” —
+   #1 OK, #2 agățat, B preia ⇒ A întoarce „lease pierdut”, nu procesat, maxim 1 prelungire în zbor, 0 scrieri.
+3. **`size_bytes` la predarea > 60 MiB** se scrie atomic cu `predat` (`doc: { size_bytes }`); predare neconfirmată ⇒ fără citire pe felii.
+   *Teste:* „Copilot r3 #3” + **grep**: în `citesteDocument`, `citesteDupaGarda`, `citesteMareCuGarda`, Word după `gardaIncearca`, edge
+   `ofertare-ingest-doc` după `incercareGarda(` și `ofertare-word-text` după `incercareGarda(` nu există `.from('ofertare_documente_atribuire').update`.
+- *Hardening:* precondiția celor 13 coloane verifică **nume + tip** (antet jsonb, eroare text, ocr boolean, pagini/pagini_felie/pagini_procesate
+  integer, pagini_necitite integer[], procesat_de uuid, procesat_la timestamptz, revizie/status_procesare/text_extras text, size_bytes bigint);
+  test SQL „pagini_felie bigint → refuz”. Amprenta cere 0 comentarii și pe indecșii gărzii.
+- *Doc:* RPC pierdut ⇒ „NECONFIRMAT, stare necunoscută apelantului”; finding-ul `ofertare-word-text` (autorizarea apelantului) e în lista de reluare.
+
+| Teste r4 | Rezultat |
+|---|---|
+| SQL PG17 | **116/116** |
+| vitest (suita completă) | **1083/1083** |
+| edge `garda_test.ts` | **12/12** |
+| worker `ingest_garda_test.ts` | **18/18** |
+| `ingest_mare_test.ts` / `citire_mare_test.ts` | **4/4** / **29/29** |
+| validator runner | **OK 22** |

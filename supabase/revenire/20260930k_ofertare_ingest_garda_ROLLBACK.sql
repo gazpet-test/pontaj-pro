@@ -41,7 +41,8 @@ SELECT jsonb_build_object(
   'comentarii', (SELECT count(*) FROM pg_catalog.pg_description d WHERE (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid = to_regclass('public.ofertare_ingest_garda'))
                    OR (d.classoid = 'pg_catalog.pg_proc'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_proc p WHERE p.proname LIKE 'ofertare_ingest_garda_%'))
                    OR (d.classoid = 'pg_catalog.pg_constraint'::regclass AND d.objoid IN (SELECT k.oid FROM pg_catalog.pg_constraint k WHERE k.conrelid = to_regclass('public.ofertare_ingest_garda')))
-                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))),
+                   OR (d.classoid = 'pg_catalog.pg_policy'::regclass AND d.objoid IN (SELECT p.oid FROM pg_catalog.pg_policy p WHERE p.polrelid = to_regclass('public.ofertare_ingest_garda')))
+                   OR (d.classoid = 'pg_catalog.pg_class'::regclass AND d.objoid IN (SELECT i.indexrelid FROM pg_catalog.pg_index i WHERE i.indrelid = to_regclass('public.ofertare_ingest_garda')))),
   'statistici', (SELECT count(*) FROM pg_catalog.pg_statistic_ext s WHERE s.stxrelid = to_regclass('public.ofertare_ingest_garda')),
   'publicatii', (SELECT count(*) FROM pg_catalog.pg_publication_rel r WHERE r.prrelid = to_regclass('public.ofertare_ingest_garda')),
   'dependenti', (SELECT count(*) FROM pg_catalog.pg_depend d WHERE d.refclassid = 'pg_catalog.pg_class'::regclass AND d.refobjid = to_regclass('public.ofertare_ingest_garda') AND d.deptype = 'n'

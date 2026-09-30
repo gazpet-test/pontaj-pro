@@ -12,20 +12,21 @@ Deno.env.set('SUPABASE_SERVICE_ROLE_KEY', 'service-test')
 Deno.env.set('ANTHROPIC_API_KEY', 'k-test')
 Deno.env.set('OFERTARE_INGEST_SECRET', 's'.repeat(40))
 
-const retea = { edge: 0, anthropic: 0 }
+const retea = { edge: 0, anthropic: 0, edgeRasp: null as null | ((docId: number) => Response) }
 const fetchReal = globalThis.fetch
 globalThis.fetch = ((input: any, init?: any) => {
   const u = String(input?.url ?? input)
   if (u.startsWith('data:')) return fetchReal(input, init)
   if (u === `${URL_SB}/functions/v1/ofertare-ingest-doc`) {
     retea.edge++
+    if (retea.edgeRasp) return Promise.resolve(retea.edgeRasp(JSON.parse(init.body).doc_id))
     return Promise.resolve(new Response(JSON.stringify({ ok: true, doc_id: JSON.parse(init.body).doc_id, pagini: 2, pagini_procesate: 2, status: 'procesat', continua: false }), { status: 200 }))
   }
   if (u.startsWith('https://api.anthropic.com/')) { retea.anthropic++; return Promise.resolve(new Response(JSON.stringify({ error: { message: 'fără AI în test' } }), { status: 500 })) }
   return Promise.reject(new Error(`rețea interzisă în test: ${u}`))
 }) as typeof fetch
 
-const { citesteDocument, proceseazaIngest, PAUZE, ceas, TERMENE } = await import(new URL('./ingest.ts', import.meta.url).href)
+const { citesteDocument, proceseazaIngest, PAUZE, ceas, TERMENE, _mare } = await import(new URL('./ingest.ts', import.meta.url).href)
 PAUZE.edgeMs = 0; PAUZE.edgeNeclarMs = 0; PAUZE.reluareMareMs = 0
 ceas.dormi = () => Promise.resolve()
 
@@ -50,12 +51,12 @@ const TEXT = pdfMinimal([1, 2].map(i => `Caiet de sarcini pagina ${i}: conducta 
 const SCAN = pdfMinimal(['a', 'b'])   // sub pragul de text pe pagină → „scan” → predat la edge
 
 // ---- BD simulată + garda simulată (tokenuri) ----
-type Opt = { garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; marcajRespins?: boolean; respinge?: boolean; downloadAgata?: boolean }
+type Opt = { marcajAgataDupa?: number; preluatDupaAgatare?: boolean; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; marcajRespins?: boolean; respinge?: boolean; downloadAgata?: boolean }
 const likeRe = (p: string) => new RegExp('^' + p.split('%').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 's')
 function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number }>, opt: Opt = {}, garzi: any[] = []) {
   const tabele: Record<string, any[]> = { ofertare_documente_atribuire: docs, ai_usage_log: [], ofertare_ingest_garda: garzi, ofertare_ingest_lansari: [],
     ofertare_ingest_coada: [], notifications: [], ofertare_licitatii: [], ofertare_seap_manifest: [] }
-  const g = { incercari: [] as number[], surse: [] as string[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[], scrieriDirecte: [] as any[], marcaje: [] as any[] }
+  const g = { incercari: [] as number[], surse: [] as string[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[], scrieriDirecte: [] as any[], marcaje: [] as any[], inZbor: 0, maxInZbor: 0 }
   const from = (t: string) => {
     tabele[t] ||= []
     const filtre: ((r: any) => boolean)[] = []
@@ -94,6 +95,11 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
     }
     if (nume === 'ofertare_ingest_garda_rezultat') {
       ;(a.p_rezultat === 'marcaj' ? g.marcaje : g.rezultate).push(structuredClone(a))
+      if (a.p_rezultat === 'marcaj' && opt.marcajAgataDupa != null && g.marcaje.length > opt.marcajAgataDupa) {
+        g.inZbor++; g.maxInZbor = Math.max(g.maxInZbor, g.inZbor)
+        if (opt.preluatDupaAgatare) g.emise.set(a.p_token, -2)   // lease expirat, B a preluat documentul
+        return new Promise(() => {})   // heartbeat fără răspuns
+      }
       if (opt.rezultatEsueaza && a.p_rezultat !== 'marcaj') return Promise.reject(new Error('rețea: rezultat pierdut'))
       // serverul: token activ ⇒ scrie p_doc ATOMIC; respins ⇒ documentul neatins (runda 3, J2)
       const ok = g.emise.get(a.p_token) === a.p_doc_id && !(a.p_rezultat === 'marcaj' ? opt.marcajRespins : opt.respinge)
@@ -168,7 +174,7 @@ Deno.test({ ...Z, name: 'J2: marcajul in_lucru respins (token preluat) → docum
 
 Deno.test({ ...Z, name: 'J2 (Jakarinos): încercarea veche salvează DUPĂ preluare → serverul respinge, textul NU e suprascris', fn: async () => {
   const m = mediu([doc(6, { status_procesare: 'procesat', text_extras: 'TEXT NOU (B)' })], { '7/atribuire/6.pdf': TEXT }, { respinge: true })
-  assertMatch(await citesteDocument(m.supa, doc(6), null), /^garda: rezultat respins .* documentul NU s-a salvat/)
+  assertMatch(await citesteDocument(m.supa, doc(6), null), /^garda: rezultat NECONFIRMAT/)
   assertEquals(m.tabele.ofertare_documente_atribuire[0].text_extras, 'TEXT NOU (B)'); assertEquals(m.g.scrieriDirecte.length, 0)
 } })
 
@@ -186,7 +192,7 @@ Deno.test({ ...Z, name: 'J2: download agățat → termen executabil (sub lease)
 Deno.test({ ...Z, name: 'scan → „predat” ÎNAINTE de apelul edge (lease eliberat, contoare neatinse), apoi edge-ul', fn: async () => {
   const m = mediu([doc(7)], { '7/atribuire/7.pdf': SCAN })
   const e0 = retea.edge
-  assertMatch(await citesteDocument(m.supa, doc(7), null), /^procesat \(2\/2 pagini, AI\)/)
+  assertMatch(await citesteDocument(m.supa, doc(7), null), /^gestionat: procesat \(2\/2 pagini, AI\)/)
   assert(m.exactOnce()); assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['predat']); assertEquals(retea.edge - e0, 1)
 } })
 
@@ -209,7 +215,7 @@ Deno.test({ ...Z, name: 'fără „continua” (in_curs / garda indisponibilă /
 Deno.test({ ...Z, name: 'RPC-ul _rezultat pică (rețea) → drumul se termină normal, o singură încercare de trimitere (lease-ul expiră → abandonat)', fn: async () => {
   const m = mediu([doc(10)], { '7/atribuire/10.pdf': TEXT }, { rezultatEsueaza: true })
   // runda 3: fără confirmarea serverului NU pretindem „salvat” (documentul e scris doar de RPC-ul care a picat)
-  assertMatch(await citesteDocument(m.supa, doc(10), null), /^garda: rezultat respins \(fără răspuns\)/)
+  assertMatch(await citesteDocument(m.supa, doc(10), null), /^garda: rezultat NECONFIRMAT \(fără răspuns\)/)
   assertEquals(m.g.rezultate.map(r => r.p_rezultat), ['succes'])
 } })
 
@@ -260,3 +266,65 @@ Deno.test({ ...Z, name: 'J4 (Jakarinos): Word din worker trece prin gardă — c
   await proceseazaIngest(m2.supa, 7, () => false, () => {})
   assertEquals(m2.g.descarcari.length, 0)
 } })
+
+Deno.test({ ...Z, name: 'Copilot r3 #1: A predat → B are token + marcaj in_lucru → A primește eroare din aval ⇒ statusul rămâne al lui B, A nu scrie NIMIC', fn: async () => {
+  const d = doc(60)
+  const m = mediu([d], { '7/atribuire/60.pdf': SCAN })
+  m.tabele.ofertare_ingest_coada.push({ licitatie_id: 7, activ: true, cerut_de: null, lansari: 0 })
+  retea.edgeRasp = (id) => {   // în aval: B ia token și își marchează documentul, apoi A vede o eroare
+    Object.assign(m.tabele.ofertare_documente_atribuire.find(r => r.id === id)!, { status_procesare: 'in_lucru', procesat_de: 'B' })
+    return new Response(JSON.stringify({ error: 'Claude paginile 1-2: overloaded' }), { status: 200 })
+  }
+  try { await proceseazaIngest(m.supa, 7, () => false, () => {}) } finally { retea.edgeRasp = null }
+  const r = m.tabele.ofertare_documente_atribuire[0]
+  assertEquals([r.status_procesare, r.procesat_de], ['in_lucru', 'B'])
+  assertEquals(m.g.scrieriDirecte.length, 0)
+  assertEquals(m.g.rezultate.map(x => x.p_rezultat), ['predat'])
+} })
+
+Deno.test({ ...Z, name: 'Copilot r3 #2: heartbeat serializat — #1 OK, #2 fără răspuns, B preia ⇒ A se oprește, NU raportează procesat, nicio scriere', fn: async () => {
+  const vechi = { ...PAUZE }, orig = _mare.citesteMare
+  PAUZE.leaseReinnoireMs = 5; PAUZE.marcajTermenMs = 30
+  const mare = doc(61, { size_bytes: 99_000_000 })
+  const m = mediu([mare], {}, { marcajAgataDupa: 1, preluatDupaAgatare: true })
+  let feliiDupaOprire = 0
+  _mare.citesteMare = async (_s: any, _id: number, deps: any) => {
+    for (let i = 0; i < 200; i++) { if (deps.esteOprire()) return 'întrerupt: workerul se oprește'; await new Promise(r => setTimeout(r, 2)) ; feliiDupaOprire += deps.esteOprire() ? 1 : 0 }
+    return 'procesat (60 pagini, pe felii)'
+  }
+  try {
+    const rez = await citesteDocument(m.supa, mare, null)
+    assertMatch(rez, /^gestionat: garda: lease pierdut/)
+    assert(!/^gestionat: (procesat|partial)/.test(rez))
+    assertEquals(m.g.marcaje.length, 2)          // #1 acceptat, #2 agățat — niciun al treilea cât #2 e în zbor
+    assertEquals(m.g.maxInZbor, 1)
+    assertEquals(m.g.scrieriDirecte.length, 0); assertEquals(m.tabele.ofertare_documente_atribuire[0].status_procesare, 'neprocesat')
+    assert(m.g.rezultate.every(x => x.p_rezultat !== 'succes'))
+  } finally { Object.assign(PAUZE, vechi); _mare.citesteMare = orig }
+} })
+
+Deno.test({ ...Z, name: 'Copilot r3 #3: > 60 MB după descărcare ⇒ size_bytes scris ATOMIC cu predarea, fără UPDATE direct', fn: async () => {
+  const orig = _mare.citesteMare
+  _mare.citesteMare = async () => 'sărit: test'
+  try {
+    const m = mediu([doc(62)], { '7/atribuire/62.pdf': { mare: 61 * 1024 * 1024 } })
+    await citesteDocument(m.supa, doc(62), null)
+    assertEquals(m.g.scrieriDirecte.length, 0)
+    assertEquals(m.g.rezultate[0].p_doc, { size_bytes: 61 * 1024 * 1024 })
+    assertEquals(m.tabele.ofertare_documente_atribuire[0].size_bytes, 61 * 1024 * 1024)
+  } finally { _mare.citesteMare = orig }
+} })
+
+Deno.test('grep: după „continua” nu există NICIUN UPDATE direct pe ofertare_documente_atribuire (worker + edge, căile sub gardă)', () => {
+  const W = Deno.readTextFileSync(new URL('./ingest.ts', import.meta.url))
+  const corp = (nume: string) => { const i = W.indexOf(`function ${nume}(`); const j = W.indexOf('\n}\n', i); assert(i > 0 && j > i, nume); return W.slice(i, j) }
+  const RE = /from\('ofertare_documente_atribuire'\)\s*\.update/
+  for (const f of ['citesteDocument', 'citesteMareCuGarda', 'citesteDupaGarda']) assert(!RE.test(corp(f)), f)
+  const word = corp('citesteWordLicitatie'); assert(!RE.test(word.slice(word.indexOf('gardaIncearca'))), 'word')
+  const E = Deno.readTextFileSync(new URL('../../supabase/functions/ofertare-ingest-doc/index.ts', import.meta.url))
+  assert(!RE.test(E.slice(E.indexOf('inc = incercareGarda('))), 'edge ingest-doc')
+  const WT = Deno.readTextFileSync(new URL('../../supabase/functions/ofertare-word-text/index.ts', import.meta.url))
+  assert(!RE.test(WT.slice(WT.indexOf('incercareGarda('))), 'edge word-text')
+  // singurul UPDATE direct rămas în proceseazaIngest e pe drumul FĂRĂ token (trecereBlocata); rezultatele gestionate îl ocolesc
+  const pi = corp('proceseazaIngest'); assert(pi.indexOf('rez.startsWith(GESTIONAT)') < pi.indexOf("update({ status_procesare: 'eroare'"))
+})

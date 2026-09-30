@@ -150,6 +150,7 @@ try {
   refuzPre('overload fn_are_acces_ofertare(int) → refuz', `CREATE FUNCTION public.fn_are_acces_ofertare(x int DEFAULT 0) RETURNS boolean LANGUAGE sql AS 'SELECT true';`, 'DROP FUNCTION public.fn_are_acces_ofertare(int);', /overload/)
   refuzPre('ofertare_documente_atribuire.status_procesare varchar → refuz', `ALTER TABLE public.ofertare_documente_atribuire ALTER status_procesare TYPE varchar(40);`, `ALTER TABLE public.ofertare_documente_atribuire ALTER status_procesare TYPE text;`, /ofertare_documente_atribuire lipsește sau diferă/)
   refuzPre('ofertare_documente_atribuire fără o coloană scrisă prin _rezultat (antet) → refuz', `ALTER TABLE public.ofertare_documente_atribuire RENAME antet TO antet_x;`, `ALTER TABLE public.ofertare_documente_atribuire RENAME antet_x TO antet;`, /13 coloane/)
+  refuzPre('coloana pagini_felie cu alt TIP (bigint) → refuz (runda 4: nume + tip)', `ALTER TABLE public.ofertare_documente_atribuire ALTER pagini_felie TYPE bigint;`, `ALTER TABLE public.ofertare_documente_atribuire ALTER pagini_felie TYPE integer;`, /tipurile așteptate/)
   refuzPre('notifications fără coloana link_to → refuz', `ALTER TABLE public.notifications RENAME link_to TO link;`, `ALTER TABLE public.notifications RENAME link TO link_to;`, /dependențe lipsă/)
 
   console.log('2. Postcondiții — injecții care strică patch-ul ⇒ refuz, nimic rămas')

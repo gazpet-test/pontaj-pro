@@ -160,7 +160,9 @@ Deno.test({ name: 'proceseazaIngest: 770 (ignorat pe mărime) citit pe felii; do
   // (2) 900: răspunsul 546 fără `error` e EROARE cu motivul real (3 apeluri: 1 + 2 reîncercări), nu „citit” — înainte:
   //     „gata (?/? pagini, AI)”, citite++ și buclă; motivul scris era „revine în coadă…”, nu cauza
   assertEquals(apeluri.peDoc[900], 3)
-  assertEquals(d(900).status_procesare, 'eroare'); assertEquals(d(900).eroare, 'eroare: WORKER_LIMIT: Memory limit exceeded (HTTP 546)')
+  // #553 r4: după predarea către edge, workerul NU mai scrie pe document (ownership la gardă/edge; invocarea moartă
+  // se contabilizează ca abandonată de gardă); înainte: 'eroare' scris direct de worker
+  assertEquals(d(900).status_procesare, 'neprocesat')
   // (3) 901: ok:true dar rămâne candidat → a doua trecere e oprită de plasă (fără al doilea apel la edge)
   assertEquals(apeluri.peDoc[901], 1); assertEquals(apeluri.edge - edge0, 4)
   assertEquals(d(901).status_procesare, 'eroare'); assertMatch(d(901).eroare, /revine în coadă după o trecere în aceeași tură/)
