@@ -28,9 +28,9 @@ CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
                          (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')), '')::uuid
 $$;
 
--- tabela „schema_migrations” creată DOAR pentru emularea runner-ului (emularea 3)
+-- tabela „schema_migrations” (runda 4: scripts/livrare_migrare.sh înregistrează aici, în aceeași tranzacție)
 CREATE SCHEMA supabase_migrations;
-CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, name text, statements text[]);
+CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, statements text[], name text, created_by text, idempotency_key text, rollback text[]);  -- coloanele din producție
 GRANT ALL ON SCHEMA supabase_migrations TO postgres;
 GRANT ALL ON supabase_migrations.schema_migrations TO postgres;
 
@@ -42,7 +42,66 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authen
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
 
 CREATE TABLE public.profiles (
-  id uuid PRIMARY KEY, role text, is_owner boolean DEFAULT false, can_access_financiar boolean DEFAULT false);
+  id uuid PRIMARY KEY, role text, is_owner boolean DEFAULT false, can_access_financiar boolean DEFAULT false,
+  can_access_salarii boolean NOT NULL DEFAULT false, can_access_personal_data boolean NOT NULL DEFAULT false,
+  can_access_pontaj_brut boolean NOT NULL DEFAULT false, can_modify_employees boolean NOT NULL DEFAULT false,
+  can_manage_contracts boolean NOT NULL DEFAULT false, can_access_diurne boolean NOT NULL DEFAULT false);
+-- Runda 2: sursa drepturilor = politicile de SCRIERE + triggerele live de pe profiles (corpuri = prosrc live 30.09,
+-- md5 identic; aceleași ca în #540). Pe live is_owner/can_access_financiar sunt NOT NULL; aici rămân nullable
+-- doar ca testul „flag NULL” să rămână posibil (invariantul verifică tipul, nu NOT NULL).
+CREATE FUNCTION public.prevent_role_escalation() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+BEGIN
+  -- Skip pentru service_role / migrări (auth.uid() = NULL)
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+  
+  -- Verifică modificare role
+  IF OLD.role IS DISTINCT FROM NEW.role THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.profiles 
+      WHERE id = auth.uid() AND is_owner = true
+    ) THEN
+      RAISE EXCEPTION 'Doar owners pot schimba rolul (incercat: % → %)', OLD.role, NEW.role;
+    END IF;
+  END IF;
+  
+  -- Verifică modificare is_owner
+  IF OLD.is_owner IS DISTINCT FROM NEW.is_owner THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.profiles 
+      WHERE id = auth.uid() AND is_owner = true
+    ) THEN
+      RAISE EXCEPTION 'Doar owners pot schimba flag-ul is_owner';
+    END IF;
+  END IF;
+  
+  RETURN NEW;
+END;
+$fn$;
+CREATE FUNCTION public.enforce_owner_only_salary_flags() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $fn$
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN NEW; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND is_owner = true) THEN
+    NEW.is_owner := OLD.is_owner;
+    NEW.can_access_salarii := OLD.can_access_salarii;
+    NEW.can_access_personal_data := OLD.can_access_personal_data;
+    NEW.can_access_pontaj_brut := OLD.can_access_pontaj_brut;
+    NEW.can_modify_employees := OLD.can_modify_employees;
+    NEW.can_manage_contracts := OLD.can_manage_contracts;
+    NEW.can_access_diurne := OLD.can_access_diurne;
+    NEW.can_access_financiar := OLD.can_access_financiar;
+  END IF;
+  RETURN NEW;
+END;
+$fn$;
+REVOKE EXECUTE ON FUNCTION public.prevent_role_escalation(), public.enforce_owner_only_salary_flags() FROM PUBLIC;
+CREATE TRIGGER prevent_role_escalation_trigger BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION prevent_role_escalation();
+CREATE TRIGGER trg_enforce_owner_only_salary_flags BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION enforce_owner_only_salary_flags();
+CREATE POLICY profiles_delete_owner ON public.profiles FOR DELETE TO authenticated USING (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true));
+CREATE POLICY profiles_insert_owner ON public.profiles FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true));
+CREATE POLICY profiles_update_own ON public.profiles FOR UPDATE TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+CREATE POLICY profiles_update_owner ON public.profiles FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true)) WITH CHECK (EXISTS (SELECT 1 FROM profiles p2 WHERE p2.id = auth.uid() AND p2.is_owner = true));
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY profiles_select_all ON public.profiles FOR SELECT TO authenticated USING (true);
 CREATE TABLE public.user_module_access (profile_id uuid REFERENCES public.profiles(id), module text, access_level text);
