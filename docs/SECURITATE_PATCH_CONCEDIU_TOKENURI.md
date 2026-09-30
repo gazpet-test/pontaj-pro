@@ -195,3 +195,28 @@ Cerința comună (verdictul Copilot r3 pe #538): un singur gestionar de tranzac�
 **Rezultat:** `PGPORT=5641 PGBASE=/tmp/pg_conc_r4 bash scripts/test_sec_concediu_tokens.sh`, de 2 ori: **exit 0**, 90 de verificări în harness + 33 în suita patch, **21 de mutanți prinși**.
 
 **Rămâne deschis:** runnerul comun (runda 5) + portarea lui aici + GO Copilot; criteriul general de atomicitate (COMMIT/END accidental) = OPEN; rularea pe PG17 neverificată local (refuzul e fail-closed).
+
+## Livrare: runner comun ed7ecb0 (GO Copilot R9)
+
+Migrarea se livrează DOAR prin runnerul comun `scripts/livrare_migrare.sh` + `scripts/livrare_validator.py`, copiate
+byte cu byte din ed7ecb0 (branch #538, validator a6188fb neschimbat):
+sha256 runner `bb223d90dcd3e932d7be8211cffb24cbbb6d0053c21bba333beca833892efb71`,
+sha256 validator `9356d2871ebd09b3184992193d3a249f29eca497c2ddce6c5488f1909cbb450d`.
+Validatorul acceptă migrarea (`python3 scripts/livrare_validator.py supabase/migrations/20261003d_sec_concediu_tokens.sql <tag>` ⇒ `OK`).
+
+```bash
+bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261003d_sec_concediu_tokens.sql \
+  --sha256 581ed96a0b9fa0e8b72df4fe21dbceadf7b38fee1e29b5c00751494188ae816a \
+  --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
+  --tinta-host <host_scriere_aprobat> --tinta-port <port> [--tinta-proiect <marcaj>] [--user <operator>]
+```
+(sha256 de mai sus = artefactul la commitul acestei secțiuni; la livrare se folosește sha256-ul APROBAT atunci.)
+Parola doar din `~/.pgpass`/`PGPASSFILE`; `--service`, URI-uri și opțiuni psql suplimentare sunt refuzate (exit 2).
+
+Limite (verdict R9, `docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R9.md` pe #538):
+- GO-ul e pentru standardul de livrare, NU autorizează merge/apply.
+- La fiecare livrare: SHA-256 artefact, țintă + operator aprobați, pre/postcondiții, acordul lui Răzvan.
+- Opriri / reporniri / rollback — aprobate separat.
+- PG17 neverificat (server de test PG16); `pg_control_system()` rămâne (verificarea țintei).
+- Codurile 0/11 confirmă înregistrarea, nu înlocuiesc verificarea structurii + smoke.
+- Rezultat necunoscut / conflict / țintă neconfirmată ⇒ fără retry sau rollback automat (reconciliere manuală).
