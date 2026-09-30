@@ -171,6 +171,20 @@ try {
   refuz('poarta fără EXECUTE service_role → refuz', `REVOKE EXECUTE ON FUNCTION public.fn_gate_depunere() FROM service_role;`, `GRANT EXECUTE ON FUNCTION public.fn_gate_depunere() TO service_role;`, /fn_gate_depunere live diferă/)
   refuz('poarta alt proprietar → refuz', `ALTER FUNCTION public.fn_gate_depunere() OWNER TO altrol;`, `ALTER FUNCTION public.fn_gate_depunere() OWNER TO postgres;`, /fn_gate_depunere live diferă/)
   refuz('poarta cu alt corp (md5) → refuz', GATE_LIVE.replace('RETURN NEW;', 'RETURN NEW; '), GATE_LIVE, /fn_gate_depunere live diferă/)
+  // runda 3: amprenta exactă a triggerului (textul citit live read-only de coordonator)
+  const TRIG_LIVE = 'CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION fn_gate_depunere()'
+  const trigDef = () => q(`SET search_path = public, pg_temp; SELECT pg_get_triggerdef(t.oid, true) || '|' || md5(pg_get_triggerdef(t.oid, true)) || '|' || t.tgenabled::text FROM pg_trigger t WHERE t.tgname = 'trg_gate_depunere'`)
+  check('trigger local = textul live exact, md5 35e7d6a7…, tgenabled=O', trigDef() === TRIG_LIVE + '|35e7d6a7f7d488556be1df754c26124f|O', trigDef())
+  const TRIG_UNDO = `DROP TRIGGER IF EXISTS trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_gate_depunere();`
+  refuz('trigger DISABLE → refuz', `ALTER TABLE public.ofertare_licitatii DISABLE TRIGGER trg_gate_depunere;`, TRIG_UNDO, /trg_gate_depunere diferă/)
+  refuz('trigger recreat AFTER → refuz', `DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere AFTER INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_gate_depunere();`, TRIG_UNDO, /trg_gate_depunere diferă/)
+  refuz('trigger recreat cu WHEN (false) → refuz', `DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW WHEN (false) EXECUTE FUNCTION public.fn_gate_depunere();`, TRIG_UNDO, /trg_gate_depunere diferă/)
+  refuz('trigger doar BEFORE UPDATE → refuz', `DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere BEFORE UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_gate_depunere();`, TRIG_UNDO, /trg_gate_depunere diferă/)
+  check('trigger restaurat identic', trigDef() === TRIG_LIVE + '|35e7d6a7f7d488556be1df754c26124f|O')
+  // runda 3: EXECUTE efectiv prin membership ⇒ postcondiția pică
+  refuz('mutant: GRANT authenticated TO service_role (EXECUTE efectiv prin membership) → postcondiția pică', `GRANT authenticated TO service_role;`, `REVOKE authenticated FROM service_role;`, /EXECUTE efectiv/)
+  refuz('mutant: anon membru în authenticated → refuz (pre pe helper sau post EXECUTE efectiv)', `GRANT authenticated TO anon;`, `REVOKE authenticated FROM anon;`, /REFUZ J02b pre|EXECUTE efectiv/)
+  refuz('mutant: EXECUTE către rol intermediar al cărui membru e service_role (default privileges) → postcondiția pică', `CREATE ROLE rpc_exec NOLOGIN; GRANT rpc_exec TO service_role; ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO rpc_exec;`, `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM rpc_exec; REVOKE rpc_exec FROM service_role; DROP ROLE rpc_exec;`, /J02b post/)
   check('după drift-uri: amprentele sunt din nou cele live', md5Gate() === MD5_GATE_LIVE && q(`SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_are_acces_ofertare()'::regprocedure`) === MD5_HELPER)
 
   console.log('4. Testul SQL (același fișier ca pe clonă), fixture determinist 103 — BEGIN…ROLLBACK')
@@ -190,6 +204,10 @@ try {
   const r = livrare()
   check('livrarea prin gardă trece', r.ok, r.out.slice(0, 400))
   check(`fn_gate_depunere nouă md5 = ${MD5_GATE_NOU}`, md5Gate() === MD5_GATE_NOU)
+  check('după migrare: trigger identic cu live (md5 35e7d6a7…, O)', trigDef() === TRIG_LIVE + '|35e7d6a7f7d488556be1df754c26124f|O')
+  const efectiv = rol => q(`SET ROLE ${rol}; SELECT has_function_privilege('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)', 'EXECUTE')::text || ',' || has_function_privilege('public.ofertare_revoca_neaplicabil(bigint,text)', 'EXECUTE')::text; RESET ROLE;`)
+  check('SET ROLE service_role: has_function_privilege pe RPC-uri = false', efectiv('service_role') === 'false,false', efectiv('service_role'))
+  check('SET ROLE anon: false; SET ROLE authenticated: true', efectiv('anon') === 'false,false' && efectiv('authenticated') === 'true,true')
   const priv = (rol, pr) => q(`SELECT has_table_privilege('${rol}', 'public.ofertare_cerinte_na_confirmari', '${pr}')`)
   for (const rol of ['service_role', 'authenticated']) {
     const bad = ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'].filter(p => priv(rol, p) !== 'f')

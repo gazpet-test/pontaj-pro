@@ -47,7 +47,7 @@ veche e refuzată (`40001`). „Nu se aplică” sau „exceptat” scris de AI 
 - **Alternativa, neimplementată: „declarație umană autonomă”.** Omul declară „nu se aplică” pe versiunea sursei, indiferent ce propune AI-ul;
   o re-rulare AI nu ar redeschide cerința. Mai puțină muncă de reconfirmare după re-rulări, dar AI-ul poate schimba propunerea (alt motiv, altă legătură)
   fără ca omul s-o vadă. **Decizia îi aparține lui Răzvan**; până atunci rămâne semantica strictă (fail-closed).
-- Consecință practică a semanticii alese: o re-rulare a motorului de acoperire care rescrie rândurile `nu_se_aplica` (id nou sau conținut schimbat) redeschide cerințele confirmate.
+- Consecință practică a semanticii alese: o re-rulare a motorului de acoperire care rescrie rândurile `nu_se_aplica` (id nou sau conținut schimbat) redeschide cerințele confirmate — comportament voit (r3), motorul nu se modifică.
 
 ### Duplicate și revocare
 - Index unic parțial `ofertare_na_conf_activa_uq (cerinta_id, tip, amprenta_sursa, legatura_id, acoperire_id, amprenta_propunere) WHERE revocata_la IS NULL`.
@@ -113,7 +113,7 @@ COMMIT;
 - dacă există confirmări umane, tabelul **nu se șterge**: se redenumește în `ofertare_cerinte_na_confirmari_arhiva_j02b`, fără acces pentru `anon`/`authenticated`/`service_role`.
 
 ## Teste
-- **Local, determinist:** `node scripts/test_j02b_na_confirmare.mjs` (PG17 local, fără live) — **64/64 OK**. Construiește schema minimă cu helperul și poarta
+- **Local, determinist:** `node scripts/test_j02b_na_confirmare.mjs` (PG17 local, fără live) — **76/76 OK** (runda 3). Construiește schema minimă cu helperul și poarta
   EXACTE (md5 live) și default privileges ca Supabase; singura substituție e md5-ul view-ului live → md5-ul view-ului local. Acoperă: gărzi de livrare/revenire,
   14 drift-uri de precondiție (helper: corp, anon, PUBLIC, VOLATILE, search_path, proprietar, overload; poartă: authenticated, service_role, proprietar, corp),
   testul SQL de mai jos, ACL-ul cerut de Copilot (verificat independent + REST simulat pentru `service_role`/`authenticated`/`anon`), poarta cap-coadă
@@ -135,10 +135,22 @@ COMMIT;
 | 5 | Precondiția pe `fn_are_acces_ofertare()` doar md5; poarta doar md5; T8 putea ieși SKIP | Amprenta exactă ca în 20261004b + overload; poarta: proprietar + limbaj + SECDEF + search_path + ACL exact (pre și post); T8 cu fixture obligatoriu | harness §3 (14 drift-uri), „fixture lipsă ⇒ FAIL” |
 | 6 | Pragul de apply 02.10 | După depunerea Jilava confirmată (SEAP 06.10.2026); secvența preflight → BD → UI → smoke → revalidare; fără J05 | doc |
 
+## Runda 3 (Copilot: GO pe logica r2, NO-GO pe livrare pentru 2 întăriri)
+| # | Cerință | Schimbare | Test |
+|---|---|---|---|
+| 1 | ACL **efectiv** pe RPC-urile umane (nu doar ACL-ul brut) | Postcondiția SQL cere `has_function_privilege` (include membership) pe `ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)` și `ofertare_revoca_neaplicabil(bigint,text)`: authenticated → true, anon → false, service_role → false | harness: `SET ROLE service_role/anon/authenticated` + `has_function_privilege`; mutanți `GRANT authenticated TO service_role`, anon membru în authenticated, rol intermediar cu EXECUTE al cărui membru e service_role ⇒ refuz |
+| 2 | Amprenta exactă a `trg_gate_depunere`, pre și post | `md5(pg_get_triggerdef(oid, true)) = 35e7d6a7f7d488556be1df754c26124f` (textul live: `CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION fn_gate_depunere()`), cu `search_path` fixat pe `public, pg_temp` în bloc (prefixul de schemă nu mai depinde de sesiune), `tgenabled='O'`, `NOT tgisinternal`, un singur trigger cu numele ăsta | harness: textul local = textul live exact; DISABLE, AFTER, `WHEN (false)`, doar UPDATE ⇒ refuz; reverificat după migrare |
+
+### Precizări de semantică (acceptate de Copilot în r3)
+- Semantica „confirmarea validează o propunere concretă” e **acceptată**.
+- O re-rulare a motorului care rescrie rândurile `nu_se_aplica` **invalidează** confirmarea: comportament **voit**. Motorul nu se modifică.
+- `p_propunere_id = NULL` la `nu_se_aplica` fără propunere AI = **confirmarea stării concrete „nicio propunere”**; se invalidează dacă apare ulterior o propunere.
+- J02b **nu** rezolvă snapshot-ul dosarului la depunere (problemă separată, cunoscută).
+- Raportul 1.579 / 375 **se rerulează în preflight** (`docs/J02B_RAPORT_READONLY.sql`); nu e un număr înghețat.
+
 ## Decizii pentru Răzvan
-1. Semantica: **„validează o propunere concretă”** (implementată) vs. **„declarație umană autonomă”** (neimplementată) — vezi mai sus.
-2. Re-rularea motorului de acoperire după apply redeschide confirmările „nu se aplică” legate de rândurile rescrise. Acceptabil, sau motorul să nu mai rescrie rândurile `nu_se_aplica` confirmate?
-3. Ziua apply-ului (după 06.10) și cine face revalidarea listei de reconfirmare (1.579 de cerințe, 375 eliminatorii).
+1. Ziua apply-ului (după 06.10) și cine face revalidarea listei de reconfirmare (numerele din preflight).
+2. Alternativa „declarație umană autonomă” rămâne neimplementată; se redeschide doar la cererea lui Răzvan.
 
 ## Raport READ-ONLY: cerințe închise doar de AI pe licitații active
 Interogarea stă în `docs/J02B_RAPORT_READONLY.sql`. E doar SELECT și se poate rula și înainte, și după migrare. Licitație activă = status diferit de câștigată, pierdută sau abandonată.

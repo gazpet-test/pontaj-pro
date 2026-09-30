@@ -35,7 +35,7 @@ END $livrare_start$;
 -- 0. Precondiții (fail-closed): producția identică cu analiza din 30.09.2026
 -- ---------------------------------------------------------------------------
 DO $pre$
-DECLARE v_cnt int;
+DECLARE v_cnt int; v_sp text;
 BEGIN
   -- fn_are_acces_ofertare(): amprenta EXACTĂ ca în 20261004b (proprietar, limbaj, search_path, tip, semnătură, SECDEF,
   -- STABLE, md5, EXECUTE), fără alt overload cu același nume în nicio schemă
@@ -71,6 +71,17 @@ BEGIN
    WHERE tgname = 'trg_gate_depunere' AND tgrelid = 'public.ofertare_licitatii'::regclass
      AND tgfoid = to_regprocedure('public.fn_gate_depunere()');
   IF v_cnt <> 1 THEN RAISE EXCEPTION 'REFUZ J02b pre: trg_gate_depunere lipsă/diferit'; END IF;
+  -- amprenta EXACTĂ a triggerului (citită live read-only, runda 3): pg_get_triggerdef(oid, true) cu search_path fixat
+  -- (altfel prefixul de schemă depinde de sesiune), md5 35e7d6a7…, tgenabled='O', nu intern; exact un trigger cu numele ăsta
+  v_sp := current_setting('search_path');
+  PERFORM set_config('search_path', 'public, pg_temp', true);
+  SELECT count(*) INTO v_cnt FROM pg_trigger t
+   WHERE t.tgname = 'trg_gate_depunere' AND t.tgrelid = 'public.ofertare_licitatii'::regclass
+     AND md5(pg_get_triggerdef(t.oid, true)) = '35e7d6a7f7d488556be1df754c26124f' AND t.tgenabled = 'O' AND NOT t.tgisinternal;
+  PERFORM set_config('search_path', v_sp, true);
+  IF v_cnt <> 1 OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_gate_depunere') <> 1 THEN
+    RAISE EXCEPTION 'REFUZ J02b pre: trg_gate_depunere diferă de amprenta live (md5 35e7d6a7…, BEFORE INSERT OR UPDATE, FOR EACH ROW, fără WHEN, tgenabled=O)';
+  END IF;
 END $pre$;
 
 -- ---------------------------------------------------------------------------
@@ -458,7 +469,7 @@ END $view$;
 -- 11. Postcondiții
 -- ---------------------------------------------------------------------------
 DO $post$
-DECLARE v_src text; v_def text; v_cnt int; r record; v_acl text;
+DECLARE v_src text; v_def text; v_cnt int; r record; v_acl text; v_sp text;
 BEGIN
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure('public.fn_gate_depunere()');
   IF position('(a.status = ''nu_se_aplica''' || chr(10) IN v_src) > 0 OR position('fn_ofertare_cerinta_na_confirmata(c.id, ''nu_se_aplica'')' IN v_src) = 0 THEN
@@ -499,6 +510,23 @@ BEGIN
       RAISE EXCEPTION 'J02b post: % — proprietar/SECDEF/search_path/ACL incorecte (ACL %; așteptat %)', r.sig, v_acl, r.acl;
     END IF;
   END LOOP;
+  -- ACL EFECTIV (include moștenirea prin membership) pe RPC-urile umane: doar authenticated
+  FOR r IN SELECT * FROM (VALUES ('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)'), ('public.ofertare_revoca_neaplicabil(bigint,text)')) AS t(sig) LOOP
+    IF NOT has_function_privilege('authenticated', r.sig, 'EXECUTE')
+       OR has_function_privilege('anon', r.sig, 'EXECUTE')
+       OR has_function_privilege('service_role', r.sig, 'EXECUTE') THEN
+      RAISE EXCEPTION 'J02b post: EXECUTE efectiv pe % ≠ {authenticated} (anon/service_role îl au direct sau prin membership)', r.sig;
+    END IF;
+  END LOOP;
+  -- triggerul porții: aceeași amprentă exactă ca înainte
+  v_sp := current_setting('search_path');
+  PERFORM set_config('search_path', 'public, pg_temp', true);
+  SELECT count(*) INTO v_cnt FROM pg_trigger t
+   WHERE t.tgname = 'trg_gate_depunere' AND t.tgrelid = 'public.ofertare_licitatii'::regclass
+     AND md5(pg_get_triggerdef(t.oid, true)) = '35e7d6a7f7d488556be1df754c26124f' AND t.tgenabled = 'O' AND NOT t.tgisinternal
+     AND t.tgfoid = 'public.fn_gate_depunere()'::regprocedure;
+  PERFORM set_config('search_path', v_sp, true);
+  IF v_cnt <> 1 THEN RAISE EXCEPTION 'J02b post: trg_gate_depunere diferă de amprenta live'; END IF;
   IF has_function_privilege('authenticated', 'public.fn_gate_depunere()', 'EXECUTE') THEN
     RAISE EXCEPTION 'J02b post: authenticated are EXECUTE pe fn_gate_depunere';
   END IF;
