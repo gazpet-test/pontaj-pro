@@ -1,14 +1,17 @@
 // ════════════════════════════════════════════════════════════════
-// CTC.jsx — Modulul CTC - CĂRȚI TEHNICE (v0.5 — arhivă documente)
+// CTC.jsx — Modulul CTC - CĂRȚI TEHNICE (v0.6 — cărți tehnice + arhivă documente)
 // LIVE: 19.05.2026 placeholder (Etapa 15 Faza 1)
 // v0.5: 12.06.2026 — Arhivă reală per proiect: documentele de calitate
 //   + facturile încărcate pe comenzile furnizor (Achiziții) migrează
 //   automat aici, grupate pe proiect. Sursa: comenzi_furnizor_documente.
+// v0.6: 30.09.2026 — tab „Cărți tehnice" (src/ctc/*): carte per proiect, template per beneficiar,
+//   checklist pe tronsoane/probe, upload PDF, borderou PDF, ZIP. Arhiva v0.5 rămâne tab „Arhivă comenzi".
 // Owner principal: Apostol Andrut (cont de creat la Faza 5)
 // Next (Faza 5 completă): marcare arhivat, search full-text, export Excel
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import CtcCarti from './ctc/CtcCarti.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card2:'#1C2128', border:'#30363D',
@@ -24,7 +27,7 @@ const TIP_DOC = {
   altele:     { label: 'Alt doc.',    emoji: '📄', color: G.muted },
 }
 
-export default function CTCPage() {
+function ArhivaComenzi() {
   const [rows, setRows] = useState([])        // documente îmbogățite
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -115,15 +118,6 @@ export default function CTCPage() {
 
   return (
     <div style={{ background: G.bg, minHeight: 'calc(100vh - 60px)', color: G.text }}>
-      {/* Navbar modul */}
-      <div style={{ background: G.surface, borderBottom: `1px solid ${G.border}`, padding: '0 28px', position: 'sticky', top: 60, zIndex: 50 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 52 }}>
-          <div style={{ width: 30, height: 30, background: `linear-gradient(135deg,${G.ctc},#8957E5)`, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>📑</div>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>CTC — Cărți Tehnice</div>
-          <div style={{ marginLeft: 8, fontSize: 12, color: G.muted }}>Arhivă documente recepție · per proiect</div>
-        </div>
-      </div>
-
       <div style={{ padding: '24px 28px', maxWidth: 1300, margin: '0 auto' }}>
         {/* KPI */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12, marginBottom: 20 }}>
@@ -202,6 +196,45 @@ export default function CTCPage() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── Pagina modulului: taburi ───────────────────────────────────
+const TABURI = [['carti', '📑 Cărți tehnice'], ['arhiva', '🗄 Arhivă comenzi']]
+
+export default function CTCPage() {
+  const [tab, setTab] = useState(() => { try { return localStorage.getItem('ctc_tab') || 'carti' } catch (_) { return 'carti' } })
+  const [profile, setProfile] = useState(null)
+  useEffect(() => { try { localStorage.setItem('ctc_tab', tab) } catch (_) { /* fără storage: ok */ } }, [tab])
+  useEffect(() => {
+    let anulat = false
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || anulat) return
+      const { data } = await supabase.from('profiles').select('id, name, is_owner').eq('id', user.id).single()
+      if (!anulat) setProfile(data)
+    })()
+    return () => { anulat = true }
+  }, [])
+
+  return (
+    <div style={{ background: G.bg, minHeight: 'calc(100vh - 60px)', color: G.text }}>
+      <div style={{ background: G.surface, borderBottom: `1px solid ${G.border}`, padding: '0 28px', position: 'sticky', top: 60, zIndex: 50 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 52 }}>
+          <div style={{ width: 30, height: 30, background: `linear-gradient(135deg,${G.ctc},#8957E5)`, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>📑</div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>CTC — Cărți Tehnice</div>
+          <div style={{ display: 'flex', gap: 6, marginLeft: 18 }}>
+            {TABURI.map(([k, l]) => (
+              <button key={k} onClick={() => setTab(k)} style={{
+                padding: '6px 15px', borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                background: tab === k ? G.ctc + '22' : 'transparent', color: tab === k ? G.ctc : G.muted, border: `1px solid ${tab === k ? G.ctc + '66' : 'transparent'}`,
+              }}>{l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {tab === 'carti' ? <CtcCarti profile={profile} /> : <ArhivaComenzi />}
     </div>
   )
 }
