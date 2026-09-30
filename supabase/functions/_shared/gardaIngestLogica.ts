@@ -3,15 +3,25 @@
 // Condițiile de reluare după incidentul de egress 24–25.09.2026 (doc 770, ~16.000 descărcări):
 //  (1) fără cale anonimă: doar service_role cu secret dedicat (comparat în timp constant) sau utilizator cu acces Ofertare;
 //  (2) contor PERSISTENT de încercări pe document, cu backoff și blocare definitivă (reactivare doar de om);
-//  (3) fără descărcări complete repetate ale aceluiași fișier (plafon de descărcări + scurtcircuit pe hash/mărime/etag).
+//      runda 2: o singură încercare activă pe document — LEASE persistent (incercare_token + in_curs_pana, 10 min),
+//      iar fiecare încercare acordată se închide cu EXACT un rezultat (cuIncercare, mai jos);
+//  (3) EGRESS MĂRGINIT (runda 2 — reformulat; NU „fără re-download”): (a) după ce documentul e încheiat și amprenta
+//      lui e cunoscută, nu se mai descarcă (scurtcircuit mărime+etag înainte, sha256 după); (b) cât documentul e în
+//      lucru, fiecare invocare/felie descarcă obiectul ÎNTREG, dar numărul de descărcări e plafonat: maxDescarcari
+//      pe document între două reactivări ale ownerului. Plafon de egress pe document (calea edge, ≤ 60 MiB/descărcare):
+//      80 × 60 MiB = 4 800 MiB ≈ 4,69 GiB ≈ 5,03 GB — vezi egressMaximDocumentBytes. Garda de BYTES (cota ciclului) e #543.
 
 export const GARDA = {
   maxIncercari: 5,            // încercări EȘUATE consecutive → blocat
   backoffBazaSec: 60,         // 1, 2, 4, 8… minute între încercările eșuate
   backoffMaxSec: 6 * 3600,
   maxDescarcari: 80,          // descărcări complete ale aceluiași document (toate invocările, oricâte felii) → blocat
+  leaseSec: 10 * 60,          // o încercare deține documentul cel mult atât; > limita unei invocări edge (400 s, Pro)
+  pragEdgeBytes: 60 * 1024 * 1024,   // edge-ul refuză fără descărcare peste pragul ăsta (size_bytes din BD SAU mărimea din Storage)
 }
 export type ConfigGarda = typeof GARDA
+// Plafonul de egress al căii edge pe UN document, între două reactivări: maxDescarcari × pragEdgeBytes (= 5 033 164 800 B).
+export const egressMaximDocumentBytes = (cfg: ConfigGarda = GARDA) => cfg.maxDescarcari * cfg.pragEdgeBytes
 
 // ── (1) poarta de rol ─────────────────────────────────────────────────────────────────────────────
 // Comparație în timp constant (nu se oprește la primul octet diferit). Lungimea diferită → false,
@@ -53,12 +63,16 @@ export async function identificaApelant(headers: Headers, deps: DepsRol): Promis
   return ok ? { tip: 'utilizator', uid } : { tip: 'refuz', status: 403, motiv: 'nu ai acces la modulul Ofertare' }
 }
 
-// ── (2) + (3) contorul ────────────────────────────────────────────────────────────────────────────
+// ── (2) + (3) contorul, lease-ul și rezultatul ────────────────────────────────────────────────────
+// Sursa de adevăr e SQL (ofertare_ingest_garda_incearca / _rezultat, testate pe PG17 în scripts/test_ingest_garda.mjs).
+// decizieInainte / dupaRezultat / opritDeGarda sunt oglinda lor în TS (teste vitest + filtrul de candidați al workerului).
 export type StareGarda = {
   incercari_esuate: number
   descarcari: number
   blocat: boolean
   urmatoarea_dupa: string | null   // ISO; înainte de ea nu se încearcă
+  incercare_token?: string | null  // tokenul încercării care deține documentul (null = liber)
+  in_curs_pana?: string | null     // ISO; lease-ul tokenului
   ingerat_hash: string | null      // sha256 al fișierului la ultima citire încheiată
   ingerat_size: number | null
   ingerat_etag: string | null
@@ -68,18 +82,38 @@ export type MetaObiect = { size: number | null; etag: string | null }
 export type Decizie =
   | { actiune: 'blocat'; motiv: string }
   | { actiune: 'asteapta'; motiv: string; pana_la: string }
+  | { actiune: 'in_curs'; motiv: string; pana_la: string }
   | { actiune: 'deja_ingerat'; motiv: string }
-  | { actiune: 'continua' }
+  | { actiune: 'continua'; token?: string; pana_la?: string; ingerat_hash?: string | null }
+
+const ms = (iso: string | null | undefined) => (iso ? new Date(iso).getTime() : NaN)
+export const leaseActiv = (s: Pick<StareGarda, 'incercare_token' | 'in_curs_pana'> | null, acum: Date) =>
+  !!(s?.incercare_token && ms(s.in_curs_pana) > acum.getTime())
+
+// Lease expirat fără rezultat = încercare ABANDONATĂ (proces oprit: memorie, limită de timp, repornire, rezultat pierdut
+// pe rețea) → se numără ca eșec, cu backoff socotit de la expirarea lease-ului. Oglinda ramurii (b) din _incearca.
+export function inchideAbandonata(s: StareGarda, cfg: ConfigGarda = GARDA): StareGarda {
+  if (!s.incercare_token) return s
+  const n = s.incercari_esuate + 1
+  return { ...s, incercari_esuate: n, incercare_token: null, in_curs_pana: null,
+    urmatoarea_dupa: new Date(ms(s.in_curs_pana) + backoffSec(n, cfg) * 1000).toISOString() }
+}
 
 // Decizia ÎNAINTE de descărcare (doar din BD + metadatele obiectului din Storage, fără octeți).
-export function decizieInainte(s: StareGarda | null, meta: MetaObiect | null, docIncheiat: boolean, acum: Date, cfg: ConfigGarda = GARDA): Decizie {
-  if (s?.blocat) return { actiune: 'blocat', motiv: 'document blocat de gardă — reactivare manuală din ERP' }
+export function decizieInainte(s0: StareGarda | null, meta: MetaObiect | null, docIncheiat: boolean, acum: Date, cfg: ConfigGarda = GARDA): Decizie {
+  if (s0?.blocat) return { actiune: 'blocat', motiv: 'document blocat de gardă — reactivare manuală din ERP' }
+  if (s0 && leaseActiv(s0, acum)) return { actiune: 'in_curs', motiv: 'altă încercare lucrează pe document', pana_la: s0.in_curs_pana! }
+  const s = s0 ? inchideAbandonata(s0, cfg) : null
   if (s && s.descarcari >= cfg.maxDescarcari) return { actiune: 'blocat', motiv: `plafon de descărcări atins (${s.descarcari}/${cfg.maxDescarcari})` }
   if (s && s.incercari_esuate >= cfg.maxIncercari) return { actiune: 'blocat', motiv: `plafon de încercări eșuate atins (${s.incercari_esuate}/${cfg.maxIncercari})` }
-  if (s?.urmatoarea_dupa && new Date(s.urmatoarea_dupa).getTime() > acum.getTime()) return { actiune: 'asteapta', motiv: 'backoff după eșec', pana_la: s.urmatoarea_dupa }
+  if (s?.urmatoarea_dupa && ms(s.urmatoarea_dupa) > acum.getTime()) return { actiune: 'asteapta', motiv: 'backoff după eșec', pana_la: s.urmatoarea_dupa }
   if (docIncheiat && s && acelasiObiect(s, meta)) return { actiune: 'deja_ingerat', motiv: 'același fișier (mărime + etag) a fost deja citit' }
   return { actiune: 'continua' }
 }
+
+// Filtrul de candidați al workerului: nu alege documentele blocate, în backoff sau cu altă încercare în curs.
+export const opritDeGarda = (g: Pick<StareGarda, 'blocat' | 'urmatoarea_dupa' | 'incercare_token' | 'in_curs_pana'>, acum: Date) =>
+  g.blocat || ms(g.urmatoarea_dupa) > acum.getTime() || leaseActiv(g, acum)
 
 // Aceeași mărime ȘI (etag egal, dacă ambele există). Fără etag, mărimea singură NU ajunge.
 export function acelasiObiect(s: Pick<StareGarda, 'ingerat_size' | 'ingerat_etag'>, meta: MetaObiect | null): boolean {
@@ -98,17 +132,69 @@ export function backoffSec(incercariEsuate: number, cfg: ConfigGarda = GARDA): n
   return Math.min(cfg.backoffMaxSec, cfg.backoffBazaSec * 2 ** (incercariEsuate - 1))
 }
 
-// Starea după un rezultat (oglinda funcției SQL ofertare_ingest_garda_rezultat — testată aici, aplicată acolo).
-export function dupaRezultat(s: StareGarda, ok: boolean, acum: Date, cfg: ConfigGarda = GARDA): StareGarda & { blocat_acum: boolean } {
-  const esuate = ok ? 0 : s.incercari_esuate + 1
+// Rezultatul unei încercări (exact unul per token):
+//  succes  = documentul e încheiat (procesat/partial) — eșecurile se resetează, amprenta (sha256/mărime/etag) se memorează;
+//  progres = o felie citită, documentul continuă — eșecurile se resetează;
+//  predat  = workerul NAS predă documentul altei căi (edge pentru scan, citire_mare peste 60 MB) — contoarele NU se ating;
+//  esec    = eșecurile +1, backoff 60 s × 2^(n−1) ≤ 6 h, blocare + notificare owner la plafon.
+export type Rezultat = 'succes' | 'progres' | 'predat' | 'esec'
+export type RaportIncercare = { rezultat: Rezultat; hash?: string | null; size?: number | null; etag?: string | null; eroare?: string | null }
+
+// Starea după un rezultat ACCEPTAT (oglinda funcției SQL ofertare_ingest_garda_rezultat — testată aici, aplicată acolo).
+export function dupaRezultat(s: StareGarda, r: Rezultat, acum: Date, cfg: ConfigGarda = GARDA): StareGarda & { blocat_acum: boolean } {
+  const esuate = r === 'esec' ? s.incercari_esuate + 1 : r === 'predat' ? s.incercari_esuate : 0
   const blocat = s.blocat || esuate >= cfg.maxIncercari || s.descarcari >= cfg.maxDescarcari
   return {
-    ...s, incercari_esuate: esuate, blocat, blocat_acum: blocat && !s.blocat,
-    urmatoarea_dupa: ok ? null : new Date(acum.getTime() + backoffSec(esuate, cfg) * 1000).toISOString(),
+    ...s, incercari_esuate: esuate, blocat, blocat_acum: blocat && !s.blocat, incercare_token: null, in_curs_pana: null,
+    urmatoarea_dupa: r === 'esec' ? new Date(acum.getTime() + backoffSec(esuate, cfg) * 1000).toISOString() : r === 'predat' ? s.urmatoarea_dupa : null,
+  }
+}
+
+// ── exact-once: fiecare încercare acordată (incearca → continua) se închide cu EXACT un _rezultat ──
+// Încercarea se marchează închisă SINCRON, înainte de RPC: o a doua închidere (alt drum, excepție după închidere, finally)
+// nu mai trimite nimic. Eroarea RPC-ului nu se propagă (nu maschează excepția originală); rezultatul pierdut pe rețea
+// lasă lease-ul să expire, iar următorul _incearca îl închide ca „abandonat” (eșec) — tot exact un rezultat per token.
+export type Incercare = {
+  readonly token: string
+  readonly inchisa: boolean
+  readonly raport: RaportIncercare | null
+  inchide(r: RaportIncercare): Promise<boolean>   // true = trimis acum; false = era deja închisă (nimic trimis)
+}
+export function deschideIncercare(token: string, trimite: (token: string, r: RaportIncercare) => Promise<unknown>): Incercare {
+  let raport: RaportIncercare | null = null
+  return {
+    token,
+    get inchisa() { return raport !== null },
+    get raport() { return raport },
+    async inchide(r: RaportIncercare) {
+      if (raport !== null) return false
+      raport = r
+      try { await trimite(token, r) } catch (_) { /* lease-ul expiră → închisă ca abandonată de următorul _incearca */ }
+      return true
+    },
+  }
+}
+export const mesajEroare = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 400)
+// Plasa din `finally`: o încercare încă deschisă la ieșire se închide ca 'esec' (niciun drum nu lasă lease-ul agățat).
+export const plasaExactOnce = (inc: Incercare | null): Promise<boolean> =>
+  inc && !inc.inchisa ? inc.inchide({ rezultat: 'esec', eroare: 'încercare încheiată fără rezultat explicit' }) : Promise.resolve(false)
+// Rulează munca unei încercări acordate. Garanții, oricum s-ar termina `lucru`:
+//  - a închis-o explicit (succes/progres/predat/esec) → acela e singurul rezultat;
+//  - a aruncat înainte să o închidă → 'esec' cu mesajul excepției, apoi excepția se re-aruncă (apelantul o tratează ca înainte);
+//  - s-a întors fără să o închidă → 'esec' („fără rezultat explicit”) — plasa.
+// Edge-ul are aceeași structură scrisă direct în handler (catch → fail() închide 'esec'; finally → plasaExactOnce).
+export async function cuIncercare<T>(inc: Incercare, lucru: (inc: Incercare) => Promise<T>): Promise<T> {
+  try {
+    return await lucru(inc)
+  } catch (e) {
+    await inc.inchide({ rezultat: 'esec', eroare: 'excepție: ' + mesajEroare(e) })
+    throw e
+  } finally {
+    await plasaExactOnce(inc)
   }
 }
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const d = await crypto.subtle.digest('SHA-256', bytes)
+  const d = await crypto.subtle.digest('SHA-256', bytes as BufferSource)
   return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('')
 }

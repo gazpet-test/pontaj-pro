@@ -1,5 +1,9 @@
 // v13 (30.09.2026, DRAFT, nedeployat): GARDA — fără cale anonimă (secret de serviciu sau utilizator cu acces Ofertare),
 // contor persistent de încercări/descărcări cu blocare, scurtcircuit pe mărime+etag/sha256. Vezi docs/INGEST_GARDA.md.
+// v13 runda 2 (NO-GO Copilot r1): lease + token de încercare (o singură încercare pe document; „in_curs” = fără descărcare);
+// după „continua”, ORICE drum (succes, eroare, excepție, skip pe sha256) se închide cu EXACT un _rezultat (cuIncercare);
+// EGRESS MĂRGINIT, nu „fără re-download”: fiecare invocare descarcă obiectul întreg (≤ 60 MiB — acum și după mărimea din
+// Storage, nu doar size_bytes din BD), de cel mult 80 de ori pe document între două reactivări ⇒ ≤ 4 800 MiB/document.
 // v12 (14.09.2026): thinking disabled pe Sonnet 5 (gândea implicit în bugetul de output).
 // #51 14.09.2026: autorizat() — owner/responsabil, service_role, sau anon doar cu ofertare_ingest_coada activă.
 // ofertare-ingest-doc v11 (10.09.2026) — marcajele pornesc de la pagina_offset+1.
@@ -20,8 +24,11 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
-import { identificaApelant, dejaIngeratLaHash, sha256Hex } from '../_shared/gardaIngestLogica.ts'
-import { metaObiect, gardaIncearca, gardaRezultat } from '../_shared/gardaIngest.ts'
+import { GARDA, identificaApelant, dejaIngeratLaHash, sha256Hex, plasaExactOnce, type Incercare } from '../_shared/gardaIngestLogica.ts'
+import { metaObiect, gardaIncearca, incercareGarda } from '../_shared/gardaIngest.ts'
+
+// Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
+export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -98,7 +105,7 @@ function asiguraMarcaje(txt: string, s: number, e: number): string {
 //    ȘI, fiind o acțiune care costă, owner sau responsabilul licitației (poarta pe cheltuială #51 rămâne).
 async function autorizat(req: Request, supabase: any, licId: number): Promise<{ eroare: string | null; status: number; uid: string | null }> {
   const url = Deno.env.get('SUPABASE_URL')!, anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
-  const clientUser = (jwt: string) => createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${jwt}` } }, auth: { persistSession: false, autoRefreshToken: false } })
+  const clientUser = (jwt: string) => _deps.createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${jwt}` } }, auth: { persistSession: false, autoRefreshToken: false } })
   const id = await identificaApelant(req.headers, {
     secretAsteptat: Deno.env.get('OFERTARE_INGEST_SECRET'),
     getUser: async (jwt) => { const { data } = await clientUser(jwt).auth.getUser(); return data?.user?.id ?? null },
@@ -121,12 +128,14 @@ const JUNK_RE = /(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)Th
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
-  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  const supabase = _deps.createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
   let docId: number | null = null
   let pornitDe: string | null = null   // cine a pornit citirea (procesat_de)
+  // încercarea acordată de gardă (token + lease); null până la „continua”. inchide() trimite _rezultat O SINGURĂ dată.
+  let inc: Incercare | null = null
 
   const fail = async (msg: string) => {
-    if (docId) await gardaRezultat(supabase, docId, { ok: false, eroare: msg })
+    if (inc) await inc.inchide({ rezultat: 'esec', eroare: msg })
     if (docId) { try { await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: msg.slice(0, 500) }).eq('id', docId) } catch (_) {} }
     return new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
   }
@@ -190,16 +199,23 @@ Deno.serve(async (req: Request) => {
         eroare: `prea mare pentru citirea automată (${Math.round(Number(row.size_bytes) / 1048576)} MB > 60 MB) — de spart pe bucăți / procesat pe NAS` }).eq('id', docId)
       return new Response(JSON.stringify({ ok: true, skip: 'prea mare', continua: false }), { headers: CORS })
     }
-    // GARDA (2)+(3): înainte de orice descărcare — blocat / backoff / același fișier deja citit → fără descărcare
+    // Runda 2 (egress mărginit): mărimea REALĂ din Storage (metadata, fără octeți) peste prag → același refuz, fără descărcare.
+    // size_bytes din BD poate lipsi/fi greșit; plafonul „≤ 60 MiB pe descărcare” nu mai depinde doar de el.
     const meta = await metaObiect(supabase, BUCKET, row.fisier_path)
-    const garda = await gardaIncearca(supabase, docId, meta, 'edge:ofertare-ingest-doc')
+    if (Number(meta?.size) > GARDA.pragEdgeBytes) {
+      await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'ignorat', size_bytes: Number(meta!.size),
+        eroare: `prea mare pentru citirea automată (${Math.round(Number(meta!.size) / 1048576)} MB > 60 MB, mărimea din Storage) — de spart pe bucăți / procesat pe NAS` }).eq('id', docId)
+      return new Response(JSON.stringify({ ok: true, skip: 'prea mare', continua: false }), { headers: CORS })
+    }
+    // GARDA (2)+(3): înainte de orice descărcare — blocat / backoff / altă încercare în curs / același fișier deja citit →
+    // fără descărcare. „continua” vine cu un token + lease (10 min); de aici ÎNCOLO orice ieșire închide încercarea exact o dată.
+    // reia (partial → de la zero) e o cerere explicită a omului: fără scurtcircuitul mărime+etag (altfel „deja_ingerat” o bloca).
+    const garda = await gardaIncearca(supabase, docId, reiaDeLaZero ? null : meta, 'edge:ofertare-ingest-doc')
     if (garda.actiune !== 'continua') {
       const id = docId; docId = null   // NU trece prin fail(): documentul nu se marchează 'eroare' (nu reintră în coadă)
       return new Response(JSON.stringify({ ok: false, garda: garda.actiune, error: 'garda: ' + garda.motiv, pana_la: (garda as any).pana_la, doc_id: id, continua: false }), { headers: CORS })
     }
-    await supabase.from('ofertare_documente_atribuire')
-      .update({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
-      .eq('id', docId)
+    inc = incercareGarda(supabase, docId, garda.token!)
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
     const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
 
@@ -207,9 +223,16 @@ Deno.serve(async (req: Request) => {
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
     const bytes = new Uint8Array(await blob.arrayBuffer())
     const hash = await sha256Hex(bytes)
+    // Plasă: statusurile încheiate ies deja mai sus (fără gardă, fără descărcare), deci ramura e azi inaccesibilă; dacă se
+    // atinge vreodată, încercarea se închide ca 'succes' (amprenta e aceeași), iar statusul documentului NU se atinge
+    // (in_lucru se scrie abia după ea).
     if (dejaIngeratLaHash({ ingerat_hash: garda.ingerat_hash ?? null } as any, hash, ['procesat', 'partial'].includes(row.status_procesare) && !reiaDeLaZero)) {
+      await inc.inchide({ rezultat: 'succes', hash, size: bytes.length, etag: meta?.etag ?? null })
       return new Response(JSON.stringify({ ok: true, skip: 'același sha256 deja citit', continua: false }), { headers: CORS })
     }
+    await supabase.from('ofertare_documente_atribuire')
+      .update({ status_procesare: 'in_lucru', eroare: null, procesat_de: pornitDe, procesat_la: new Date().toISOString() })
+      .eq('id', docId)
 
     let pdf: PDFDocument
     try { pdf = await PDFDocument.load(bytes, { ignoreEncryption: true }) }
@@ -318,10 +341,15 @@ Deno.serve(async (req: Request) => {
     if (gata) upd.procesat_la = new Date().toISOString()
     const { error: upErr } = await supabase.from('ofertare_documente_atribuire').update(upd).eq('id', docId)
     if (upErr) return await fail('update: ' + upErr.message)
-    await gardaRezultat(supabase, docId, { ok: true, incheiat: gata, hash, size: bytes.length, etag: meta?.etag ?? null })
+    // încheiat → 'succes' (memorează amprenta: nu se mai descarcă); felie citită, documentul continuă → 'progres'
+    await inc.inchide({ rezultat: gata ? 'succes' : 'progres', hash, size: bytes.length, etag: meta?.etag ?? null })
 
     return new Response(JSON.stringify({ ok: true, doc_id: docId, pagini: nPag, pagini_procesate: poz, pagini_necitite: listaNecitite, status: upd.status_procesare, continua: !gata, caractere: textAcum.length, felie, antet: start === 0 ? antet : undefined, tokens_in: tokIn, tokens_out: tokOut }), { headers: CORS })
   } catch (e: any) {
+    // excepție după „continua” → fail() închide încercarea ca 'esec' cu mesajul ei (o singură dată)
     return await fail('Eroare neasteptata: ' + String(e?.message || e))
+  } finally {
+    // plasa exact-once: un drum care s-a întors fără să închidă încercarea o închide aici ca 'esec'
+    await plasaExactOnce(inc)
   }
 })

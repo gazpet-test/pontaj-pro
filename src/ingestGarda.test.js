@@ -1,6 +1,8 @@
 // Garda citirii automate Ofertare (docs/INGEST_GARDA.md): poarta de rol + contorul (logica pură comună edge/worker).
+// Runda 2: lease/token (oglinda SQL), exact-once (deschideIncercare / cuIncercare / plasaExactOnce), egress mărginit.
 import { describe, it, expect } from 'vitest'
-import { GARDA, egalTimpConstant, identificaApelant, decizieInainte, acelasiObiect, dejaIngeratLaHash, backoffSec, dupaRezultat, sha256Hex } from '../supabase/functions/_shared/gardaIngestLogica.ts'
+import { GARDA, egalTimpConstant, identificaApelant, decizieInainte, acelasiObiect, dejaIngeratLaHash, backoffSec, dupaRezultat, sha256Hex,
+  deschideIncercare, cuIncercare, plasaExactOnce, opritDeGarda, leaseActiv, inchideAbandonata, egressMaximDocumentBytes } from '../supabase/functions/_shared/gardaIngestLogica.ts'
 
 const SECRET = 's'.repeat(40)
 const hdr = (o) => new Headers(o)
@@ -94,15 +96,91 @@ describe('contor + scurtcircuit (2)(3)', () => {
     expect([0, 1, 2, 3].map(n => backoffSec(n))).toEqual([0, 60, 120, 240])
     expect(backoffSec(30)).toBe(GARDA.backoffMaxSec)
   })
-  it('eșecuri consecutive → blocat la plafon (o singură dată blocat_acum); succesul resetează', () => {
+  it('eșecuri consecutive → blocat la plafon (o singură dată blocat_acum); succesul/progresul resetează', () => {
     let s = st()
     const blocari = []
-    for (let i = 0; i < GARDA.maxIncercari + 2; i++) { s = dupaRezultat(s, false, ACUM); blocari.push(s.blocat_acum) }
+    for (let i = 0; i < GARDA.maxIncercari + 2; i++) { s = dupaRezultat(s, 'esec', ACUM); blocari.push(s.blocat_acum) }
     expect(s.blocat).toBe(true)
     expect(blocari.filter(Boolean).length).toBe(1)
-    const r = dupaRezultat(st({ incercari_esuate: 3, urmatoarea_dupa: 'x' }), true, ACUM)
-    expect([r.incercari_esuate, r.urmatoarea_dupa, r.blocat]).toEqual([0, null, false])
+    for (const r of ['succes', 'progres']) {
+      const x = dupaRezultat(st({ incercari_esuate: 3, urmatoarea_dupa: 'x', incercare_token: 't', in_curs_pana: 'y' }), r, ACUM)
+      expect([x.incercari_esuate, x.urmatoarea_dupa, x.blocat, x.incercare_token, x.in_curs_pana]).toEqual([0, null, false, null, null])
+    }
   })
-  it('succesul nu deblochează un document blocat', () => expect(dupaRezultat(st({ blocat: true }), true, ACUM).blocat).toBe(true))
+  it('predat: lease eliberat, contoarele NEATINSE', () => {
+    const x = dupaRezultat(st({ incercari_esuate: 3, urmatoarea_dupa: null, incercare_token: 't', in_curs_pana: 'y' }), 'predat', ACUM)
+    expect([x.incercari_esuate, x.blocat, x.incercare_token]).toEqual([3, false, null])
+  })
+  it('succesul nu deblochează un document blocat', () => expect(dupaRezultat(st({ blocat: true }), 'succes', ACUM).blocat).toBe(true))
   it('sha256Hex', async () => expect(await sha256Hex(new TextEncoder().encode('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'))
+})
+
+describe('lease + token (2) — oglinda SQL', () => {
+  const PANA = '2026-09-30T10:05:00Z', TRECUT = '2026-09-30T09:59:50Z'
+  it('lease activ → in_curs, fără numărare; blocat are prioritate', () => {
+    expect(decizieInainte(st({ incercare_token: 't', in_curs_pana: PANA }), null, false, ACUM)).toMatchObject({ actiune: 'in_curs', pana_la: PANA })
+    expect(decizieInainte(st({ blocat: true, incercare_token: 't', in_curs_pana: PANA }), null, false, ACUM).actiune).toBe('blocat')
+  })
+  it('lease expirat → abandonat = eșec +1, backoff de la EXPIRARE (60 s): 10 s în urmă → asteapta; 5 min în urmă → continua', () => {
+    const s = inchideAbandonata(st({ incercare_token: 't', in_curs_pana: TRECUT }))
+    expect([s.incercari_esuate, s.incercare_token, s.urmatoarea_dupa]).toEqual([1, null, '2026-09-30T10:00:50.000Z'])
+    expect(decizieInainte(st({ incercare_token: 't', in_curs_pana: TRECUT }), null, false, ACUM).actiune).toBe('asteapta')
+    expect(decizieInainte(st({ incercare_token: 't', in_curs_pana: '2026-09-30T09:55:00Z' }), null, false, ACUM).actiune).toBe('continua')
+  })
+  it('al 5-lea abandon → blocat', () =>
+    expect(decizieInainte(st({ incercari_esuate: GARDA.maxIncercari - 1, incercare_token: 't', in_curs_pana: '2026-09-30T08:00:00Z' }), null, false, ACUM).actiune).toBe('blocat'))
+  it('filtrul de candidați al workerului: blocat / backoff / lease activ = oprit; lease expirat = candidat (decide _incearca)', () => {
+    expect(opritDeGarda(st({ blocat: true }), ACUM)).toBe(true)
+    expect(opritDeGarda(st({ urmatoarea_dupa: PANA }), ACUM)).toBe(true)
+    expect(opritDeGarda(st({ incercare_token: 't', in_curs_pana: PANA }), ACUM)).toBe(true)
+    expect(opritDeGarda(st({ incercare_token: 't', in_curs_pana: TRECUT }), ACUM)).toBe(false)
+    expect(opritDeGarda(st(), ACUM)).toBe(false)
+    expect(leaseActiv(null, ACUM)).toBe(false)
+  })
+  it('lease-ul (10 min) acoperă o invocare edge întreagă (400 s pe Pro)', () => expect(GARDA.leaseSec).toBeGreaterThan(400))
+})
+
+describe('exact-once (3): fiecare încercare acordată se închide cu EXACT un _rezultat', () => {
+  const fals = () => { const trimise = []; return { trimise, trimite: async (token, r) => { trimise.push({ token, ...r }) } } }
+  it('închidere explicită → un singur RPC; a doua închidere (alt drum, finally) nu mai trimite nimic', async () => {
+    const f = fals(), inc = deschideIncercare('T1', f.trimite)
+    expect(await inc.inchide({ rezultat: 'succes', hash: 'h' })).toBe(true)
+    expect(await inc.inchide({ rezultat: 'esec', eroare: 'x' })).toBe(false)
+    expect(await plasaExactOnce(inc)).toBe(false)
+    expect(f.trimise).toEqual([{ token: 'T1', rezultat: 'succes', hash: 'h' }])
+  })
+  it('închideri CONCURENTE (fără await între ele) → tot un singur RPC', async () => {
+    const f = fals(), inc = deschideIncercare('T2', f.trimite)
+    await Promise.all([inc.inchide({ rezultat: 'progres' }), inc.inchide({ rezultat: 'esec' }), plasaExactOnce(inc)])
+    expect(f.trimise.map(x => x.rezultat)).toEqual(['progres'])
+  })
+  it('cuIncercare: excepție aruncată ÎNAINTE de închidere → esec cu mesajul excepției, apoi excepția se re-aruncă', async () => {
+    const f = fals(), inc = deschideIncercare('T3', f.trimite)
+    await expect(cuIncercare(inc, async () => { throw new Error('pdftotext a căzut') })).rejects.toThrow('pdftotext a căzut')
+    expect(f.trimise).toEqual([{ token: 'T3', rezultat: 'esec', eroare: 'excepție: pdftotext a căzut' }])
+  })
+  it('cuIncercare: excepție DUPĂ închidere (ex. drumul predat → citesteCuAI aruncă) → nimic în plus trimis', async () => {
+    const f = fals(), inc = deschideIncercare('T4', f.trimite)
+    await expect(cuIncercare(inc, async (i) => { await i.inchide({ rezultat: 'predat' }); throw new Error('edge') })).rejects.toThrow('edge')
+    expect(f.trimise.map(x => x.rezultat)).toEqual(['predat'])
+  })
+  it('cuIncercare: ieșire fără închidere explicită → plasa trimite esec o dată', async () => {
+    const f = fals(), inc = deschideIncercare('T5', f.trimite)
+    expect(await cuIncercare(inc, async () => 'gata')).toBe('gata')
+    expect(f.trimise).toEqual([{ token: 'T5', rezultat: 'esec', eroare: 'încercare încheiată fără rezultat explicit' }])
+  })
+  it('RPC-ul de rezultat care aruncă nu maschează rezultatul drumului și nu produce o a doua trimitere', async () => {
+    let n = 0
+    const inc = deschideIncercare('T6', async () => { n++; throw new Error('rețea') })
+    expect(await cuIncercare(inc, async (i) => { await i.inchide({ rezultat: 'succes' }); return 'ok' })).toBe('ok')
+    expect(n).toBe(1)
+    expect(inc.raport).toEqual({ rezultat: 'succes' })
+  })
+})
+
+describe('egress mărginit (4)', () => {
+  it('plafon per document pe calea edge = 80 × 60 MiB = 4 800 MiB (5 033 164 800 B)', () => {
+    expect(GARDA.maxDescarcari * GARDA.pragEdgeBytes / 1048576).toBe(4800)
+    expect(egressMaximDocumentBytes()).toBe(5_033_164_800)
+  })
 })

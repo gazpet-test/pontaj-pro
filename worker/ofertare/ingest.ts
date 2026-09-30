@@ -10,7 +10,7 @@ import JSZip from 'https://esm.sh/jszip@3.10.1'
 import WordExtractor from 'https://esm.sh/word-extractor@1.0.4'  // fără ?target=deno: acolo fs e null și extract() pică (testat 25.09)
 import { Buffer } from 'node:buffer'
 // R6 (26.09): PDF-urile peste pragul edge-ului (60 MB, ex. 770 Huedin) — descărcare în flux + pdftotext pe felii
-import { gardaIncearca, gardaRezultat, metaObiect, sha256Hex } from './garda.ts'   // GARDA (docs/INGEST_GARDA.md)
+import { cuIncercare, gardaIncearca, incercareGarda, metaObiect, opritDeGarda, sha256Hex, type Incercare, type MetaObiect } from './garda.ts'   // GARDA (docs/INGEST_GARDA.md)
 import { MAX_TEXT, MARCAJ_PREA_MARE, PRAG_MARE, citesteMare, compuneText, decizieCitireMare, esteMare, imparteText, mesajNecitite, trecereBlocata } from './citire_mare.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
@@ -168,17 +168,26 @@ const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: 
   cerutDe, esteOprire, stare, antet: antetDinText, modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
 })
 
-async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}): Promise<string> {
+export async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}): Promise<string> {
   // peste 60 MB (sau 'ignorat' de edge pe mărime): nu în memorie și nu prin edge (care îl refuză) — pe felii, pe disc
   if (esteMare(doc)) return await citesteMare(supabase, doc.id, depsMare(cerutDe, esteOprire, stare))
-  const off = Math.max(0, Number(doc.pagina_offset) || 0)
-  // GARDA (2)+(3): pe drumul local contorul se ține aici (pe drumul AI îl ține edge-ul, la fiecare invocare)
+  // GARDA (2)+(3): pe drumul local contorul se ține aici (pe drumul AI îl ține edge-ul, la fiecare invocare).
+  // Runda 2: „continua” = token + lease; altă încercare în curs („in_curs”) → fără descărcare. După „continua”, cuIncercare
+  // garantează EXACT un _rezultat: explicit pe fiecare drum, 'esec' pe excepție (download, pdfinfo/pdftotext, parser, BD).
   const meta = await metaObiect(supabase, BUCKET, doc.fisier_path)
   const garda = await gardaIncearca(supabase, doc.id, meta, 'nas:ingest')
   if (garda.actiune !== 'continua') return `garda: ${garda.actiune} — ${garda.motiv}`
+  const inc = incercareGarda(supabase, doc.id, garda.token!)
+  return await cuIncercare(inc, () => citesteDupaGarda(supabase, doc, inc, meta, cerutDe, esteOprire, stare))
+}
+
+// Munca unei încercări acordate de gardă (lease-ul e al nostru). Fiecare `return` închide încercarea explicit; o excepție
+// ajunge în cuIncercare (→ 'esec'), apoi în proceseazaIngest (→ documentul 'eroare', ca înainte).
+async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: MetaObiect | null, cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void): Promise<string> {
+  const off = Math.max(0, Number(doc.pagina_offset) || 0)
   const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(doc.fisier_path)
   if (dlErr || !blob) {
-    await gardaRezultat(supabase, doc.id, { ok: false, eroare: 'download: ' + (dlErr?.message || 'lipsă') })
+    await inc.inchide({ rezultat: 'esec', eroare: 'download: ' + (dlErr?.message || 'lipsă') })
     await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: ('download: ' + (dlErr?.message || 'lipsă')).slice(0, 500) }).eq('id', doc.id)
     return 'eroare: download'
   }
@@ -186,16 +195,24 @@ async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null,
   if (bytes.length > PRAG_MARE) {
     // size_bytes lipsea/greșit în BD: scriem mărimea reală (o vede și poarta edge-ului) și trecem pe drumul pe felii
     const { error: eSz } = await supabase.from('ofertare_documente_atribuire').update({ size_bytes: bytes.length }).eq('id', doc.id)
-    if (eSz) return 'eroare: size_bytes ' + eSz.message
+    if (eSz) { await inc.inchide({ rezultat: 'esec', eroare: 'size_bytes ' + eSz.message }); return 'eroare: size_bytes ' + eSz.message }
+    // predat: citire_mare.ts are contorul lui persistent (analiza.citire_mare, max 3) — descărcarea de aici e deja numărată
+    await inc.inchide({ rezultat: 'predat', eroare: `peste ${Math.round(PRAG_MARE / 1048576)} MB după descărcare → citire pe felii (citire_mare)` })
     return await citesteMare(supabase, doc.id, depsMare(cerutDe, esteOprire, stare))
+  }
+  // predat către edge (scan / fără strat de text): lease-ul se eliberează ÎNAINTE, altfel edge-ul ar primi „in_curs”;
+  // contoarele nu se ating (fiecare invocare edge își ia propria încercare, numărată acolo)
+  const predaLaAI = async (motiv: string) => {
+    await inc.inchide({ rezultat: 'predat', eroare: motiv })
+    return await citesteCuAI(supabase, doc.id, esteOprire)
   }
   const cale = `/tmp/ingest_${doc.id}.pdf`
   await Deno.writeFile(cale, bytes)
   try {
     const local = await textLocal(cale)
-    if (!local) return await citesteCuAI(supabase, doc.id, esteOprire)   // pdfinfo/pdftotext n-au putut → AI (și decide el dacă e corupt)
+    if (!local) return await predaLaAI('pdfinfo/pdftotext fără rezultat → AI')   // pdfinfo/pdftotext n-au putut → AI (și decide el dacă e corupt)
     const cuText = local.pagini.filter(p => p.replace(/\s/g, '').length >= PRAG_TEXT_PAGINA).length
-    if (cuText / local.nPag < PRAG_DOC_TEXT) return await citesteCuAI(supabase, doc.id, esteOprire)   // scan sau majoritar imagini → AI
+    if (cuText / local.nPag < PRAG_DOC_TEXT) return await predaLaAI('scan / majoritar imagini → AI')   // scan sau majoritar imagini → AI
     await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'in_lucru', eroare: null, procesat_de: cerutDe, procesat_la: new Date().toISOString() }).eq('id', doc.id)
     // aceeași compunere ca pe felii: peste plafon, paginile care nu mai încap intră în pagini_necitite (nu doar tăiere tăcută)
     const comp = compuneText(local.pagini, local.nPag, off, MAX_TEXT)
@@ -211,8 +228,8 @@ async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null,
     }
     if (antet) { upd.antet = antet; upd.revizie = antet?.revizie || doc.revizie || null }
     const { error: upErr } = await supabase.from('ofertare_documente_atribuire').update(upd).eq('id', doc.id)
-    if (upErr) { await gardaRezultat(supabase, doc.id, { ok: false, eroare: 'update ' + upErr.message }); return 'eroare: update ' + upErr.message }
-    await gardaRezultat(supabase, doc.id, { ok: true, incheiat: true, hash: await sha256Hex(bytes), size: bytes.length, etag: meta?.etag ?? null })
+    if (upErr) { await inc.inchide({ rezultat: 'esec', eroare: 'update ' + upErr.message }); return 'eroare: update ' + upErr.message }
+    await inc.inchide({ rezultat: 'succes', hash: await sha256Hex(bytes), size: bytes.length, etag: meta?.etag ?? null })
     return `${upd.status_procesare} (${local.nPag} pagini, text local${necitite.length ? `, ${necitite.length} necitite` : ''})`
   } finally { try { await Deno.remove(cale) } catch (_) {} }
 }
@@ -226,10 +243,12 @@ async function candidati(supabase: Supa, licId: number): Promise<any[]> {
     supabase.from('ofertare_documente_atribuire').select(COL)
       .eq('licitatie_id', licId).eq('status_procesare', 'ignorat').like('eroare', `${MARCAJ_PREA_MARE}%`).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
   ])
-  // GARDA: documentele blocate (plafon atins) sau în backoff nu mai sunt candidate — reactivare doar din ERP (owner)
+  // GARDA: documentele blocate (plafon atins), în backoff sau cu altă încercare în curs (lease neexpirat) nu sunt candidate —
+  // reactivare doar din ERP (owner). Decizia finală rămâne la _incearca (atomic); filtrul doar evită apeluri inutile.
   const toti = [...(docs ?? []), ...(mari ?? [])] as any[]
-  const { data: garzi } = toti.length ? await supabase.from('ofertare_ingest_garda').select('doc_id, blocat, urmatoarea_dupa').in('doc_id', toti.map(d => d.id)) : { data: [] }
-  const opriti = new Set(((garzi ?? []) as any[]).filter(g => g.blocat || (g.urmatoarea_dupa && new Date(g.urmatoarea_dupa).getTime() > Date.now())).map(g => g.doc_id))
+  const { data: garzi } = toti.length ? await supabase.from('ofertare_ingest_garda').select('doc_id, blocat, urmatoarea_dupa, incercare_token, in_curs_pana').in('doc_id', toti.map(d => d.id)) : { data: [] }
+  const acum = new Date()
+  const opriti = new Set(((garzi ?? []) as any[]).filter(g => opritDeGarda(g, acum)).map(g => g.doc_id))
   const out: any[] = []
   for (const d of toti) {
     if (opriti.has(d.id)) continue

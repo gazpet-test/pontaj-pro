@@ -106,9 +106,10 @@ function bd(tabele: Record<string, any[]>, fisiere: Record<string, Uint8Array>) 
     }
     return b
   }
-  // GARDA (docs/INGEST_GARDA.md): aici garda lasă mereu să treacă — logica ei e testată în src/ingestGarda.test.js
+  // GARDA (docs/INGEST_GARDA.md): aici garda lasă mereu să treacă (cu token de încercare, runda 2) — logica ei e testată în
+  // src/ingestGarda.test.js, SQL-ul în scripts/test_ingest_garda.mjs, exact-once pe worker în ingest_garda_test.ts
   const rpc = (nume: string, a: any) => Promise.resolve({ data: nume === 'ofertare_doc_de_citit' ? (/\.pdf *\d*$/i.test(a.p_nume) && a.p_tip !== 'plansa')
-    : nume === 'ofertare_ingest_garda_incearca' ? { actiune: 'continua', descarcari: 1, incercari_esuate: 0 } : null, error: null })
+    : nume === 'ofertare_ingest_garda_incearca' ? { actiune: 'continua', token: crypto.randomUUID(), descarcari: 1, incercari_esuate: 0 } : null, error: null })
   const storage = { from: () => ({
     download: (p: string) => Promise.resolve(fisiere[p] ? { data: new Blob([fisiere[p] as BlobPart]), error: null } : { data: null, error: { message: 'Object not found' } }),
     createSignedUrl: (p: string) => Promise.resolve(fisiere[p] ? { data: { signedUrl: 'data:application/pdf;base64,' + btoa(String.fromCharCode(...fisiere[p])) }, error: null } : { data: null, error: { message: 'Object not found' } }),
