@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Test RLS Ofertare (20261003c) pe Postgres LOCAL — simulează calea REST (PostgREST):
+// Test RLS Ofertare (20261004b) pe Postgres LOCAL — simulează calea REST (PostgREST):
 // SET LOCAL ROLE anon|authenticated + request.jwt.claims, exact cum face PostgREST pe fiecare cerere.
 // Nu atinge live. Rulare: node scripts/test_rls_ofertare.mjs   (PGBIN=/usr/lib/postgresql/17/bin, PGPORT=5497)
 // Dovedește: anon refuzat; cont logat fără modul refuzat (grupul A citire+scriere, grupul B scriere);

@@ -18,7 +18,7 @@
 --   BEGIN/COMMIT în fișier; un singur bloc DO). Revenire: supabase/revenire/20261004b_rls_ofertare_preturi_oferte_ROLLBACK.sql.
 -- Detalii, matrice, riscuri: docs/RLS_OFERTARE.md. Test: scripts/test_rls_ofertare.mjs.
 -- ════════════════════════════════════════════════════════════════════════════
-DO $migrare_20261003c$
+DO $migrare_20261004b$
 DECLARE
   v_stare text;
 BEGIN
@@ -193,4 +193,4 @@ BEGIN
     RAISE EXCEPTION 'REFUZ: 20261004b_rls_ofertare_preturi_oferte se livrează doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare)' USING ERRCODE = '42501';
   END IF;
 END
-$migrare_20261003c$;
+$migrare_20261004b$;
