@@ -1,11 +1,11 @@
 -- ============================================================================
 -- ROLLBACK TEHNIC pentru supabase/migrations/20260930j_sec_f2_profiles_uid_null.sql (SEC F2, 30.09.2026).
 --
--- ⚠ Readuce EXACT corpurile live din 30.09.2026 ale celor 3 funcții (md5 prosrc 16112659…, 0470660c…, ff277c90…), adică
+-- ⚠ Readuce EXACT corpurile live din 30.09.2026 ale celor 4 funcții (md5 prosrc 16112659…, 0470660c…, ff277c90…, c06d7ce0…), adică
 --   REDESCHIDE ocolirea „auth.uid() IS NULL ⇒ RETURN NEW”. Fără GO de execuție: doar la decizia explicită a lui Răzvan, cu
 --   motivul consemnat, după review. Revenirea operațională (păstrează politica): dacă un context de sistem legitim e refuzat
 --   cu 42501, se identifică rolul/conexiunea din mesaj și se decide explicit dacă intră în lista de sistem — nu se revine tacit.
---   Precondiție: cele 3 funcții sunt exact variantele din patch (altfel refuz — nu se readuce varianta veche peste ceva neanalizat).
+--   Precondiție: cele 4 funcții sunt exact variantele din patch (r4: a 4-a = 9acc36a4…) (altfel refuz — nu se readuce varianta veche peste ceva neanalizat).
 --   Postcondiție: md5 = variantele live 30.09, atribute și ACL neschimbate, 4 triggere pe profiles.
 -- Tranzacția: același gestionar unic, scripts/livrare_migrare.sh (garda de livrare pe numele acestui fișier).
 -- ============================================================================
@@ -25,11 +25,12 @@ DECLARE
   v_ok integer;
   r    record;
 BEGIN
-  -- 0a. fiecare funcție: o singură supraîncărcare, corp = varianta din patch SAU varianta live 30.09 (rollback deja aplicat), atribute exacte
+  -- 0a. fiecare dintre cele 4 funcții: o singură supraîncărcare, corp = varianta din patch SAU varianta live 30.09 (rollback deja aplicat), atribute exacte
   FOR r IN SELECT * FROM (VALUES
                  ('prevent_role_escalation', 'cf75b37d522e2a6b0b9c9eabd72c27b4'),
                  ('enforce_owner_only_salary_flags', 'daaa561298c10c259944600e6c39467e'),
-                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686')) AS x(fn, m_live)
+                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686'),
+                 ('fn_profiles_campuri_owner_only', '9acc36a4067eddbdf29956220023ea92')) AS x(fn, m_live)
   LOOP
     SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace::oid AND p.proname::text = r.fn;
     IF v_n IS DISTINCT FROM 1 THEN
@@ -53,16 +54,18 @@ BEGIN
     JOIN (VALUES
                  ('prevent_role_escalation', 'cf75b37d522e2a6b0b9c9eabd72c27b4'),
                  ('enforce_owner_only_salary_flags', 'daaa561298c10c259944600e6c39467e'),
-                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686')) AS x(fn, m_live) ON p.oid = to_regprocedure('public.' || x.fn || '()')
+                 ('protect_can_access_pontaj_brut', '2eec050b53f37ec995da79e93a2a4686'),
+                 ('fn_profiles_campuri_owner_only', '9acc36a4067eddbdf29956220023ea92')) AS x(fn, m_live) ON p.oid = to_regprocedure('public.' || x.fn || '()')
     JOIN (VALUES
                  ('prevent_role_escalation', '16112659be92143e6539ae0e54e47a06'),
                  ('enforce_owner_only_salary_flags', '0470660c0a819981ff914355c7f6d00a'),
-                 ('protect_can_access_pontaj_brut', 'ff277c90e02ef03d1efb34cd7e87b1d4')) AS y(fn, m_patch) ON y.fn = x.fn
+                 ('protect_can_access_pontaj_brut', 'ff277c90e02ef03d1efb34cd7e87b1d4'),
+                 ('fn_profiles_campuri_owner_only', 'c06d7ce0f212c7bba2093c50614a88fc')) AS y(fn, m_patch) ON y.fn = x.fn
    WHERE md5(p.prosrc) IS NOT DISTINCT FROM x.m_live OR md5(p.prosrc) IS NOT DISTINCT FROM y.m_patch;
-  IF v_ok IS DISTINCT FROM 3 THEN
-    RAISE EXCEPTION 'Precondiție 0b: doar % din 3 funcții au corpul analizat (md5 prosrc patch) sau pe cel din rollback (varianta live 30.09) — corpul live diferă de ce s-a patch-uit; se reanalizează', v_ok;
+  IF v_ok IS DISTINCT FROM 4 THEN
+    RAISE EXCEPTION 'Precondiție 0b: doar % din 4 funcții au corpul analizat (md5 prosrc patch) sau pe cel din rollback (varianta live 30.09) — corpul live diferă de ce s-a patch-uit; se reanalizează', v_ok;
   END IF;
-  -- 0c. setul EXACT de triggere pe profiles (4, BEFORE UPDATE FOR EACH ROW, activate, fără WHEN/coloane), cu al patrulea (S-A) neschimbat
+  -- 0c. setul EXACT de triggere pe profiles (4, BEFORE UPDATE FOR EACH ROW, activate, fără WHEN/coloane), (corpul celui de-al 4-lea, S-A, e verificat în 0a/0b)
   SELECT count(*) INTO v_n FROM pg_trigger t WHERE t.tgrelid = 'public.profiles'::regclass AND NOT t.tgisinternal;
   SELECT count(*) INTO v_ok
     FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
@@ -78,16 +81,13 @@ BEGIN
   IF v_n IS DISTINCT FROM 4 OR v_ok IS DISTINCT FROM 4 THEN
     RAISE EXCEPTION 'Precondiție 0c: triggerele de pe profiles nu sunt exact cele 4 analizate (% triggere, % conforme)', v_n, v_ok;
   END IF;
-  IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_profiles_campuri_owner_only()'))
-       IS DISTINCT FROM 'c06d7ce0f212c7bba2093c50614a88fc' THEN
-    RAISE EXCEPTION 'Precondiție 0c: fn_profiles_campuri_owner_only (S-A) nu mai e varianta canonică c06d7ce0… — modelul urmat de patch s-a schimbat; se reanalizează';
-  END IF;
-  -- 0d. ACL-ul de azi al celor 3 funcții, salvat pentru comparația de la final (CREATE OR REPLACE trebuie să-l păstreze)
+  -- 0d. ACL-ul de azi al celor 4 funcții, salvat pentru comparația de la final (CREATE OR REPLACE trebuie să-l păstreze)
   PERFORM set_config('gazpet.sec_f2_acl_inainte',
     (SELECT string_agg(p.proname::text || '=' || coalesce(p.proacl::text, '<null>'), ';' ORDER BY p.proname)
        FROM pg_proc p WHERE p.oid IN (to_regprocedure('public.prevent_role_escalation()'),
                                       to_regprocedure('public.enforce_owner_only_salary_flags()'),
-                                      to_regprocedure('public.protect_can_access_pontaj_brut()'))), true);
+                                      to_regprocedure('public.protect_can_access_pontaj_brut()'),
+                                   to_regprocedure('public.fn_profiles_campuri_owner_only()'))), true);
 END $pre$;
 
 -- 1. Corpurile live din 30.09.2026, neschimbate (md5 verificat în postcondiție)
@@ -170,6 +170,51 @@ BEGIN
 END;
 $function$;
 
+-- r4: al 4-lea trigger (S-A) readus la corpul live c06d7ce0f212c7bba2093c50614a88fc (ramura service_role NElegată de rolul efectiv).
+CREATE OR REPLACE FUNCTION public.fn_profiles_campuri_owner_only()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_camp   text;
+  v_claims jsonb;
+  v_rol    text;
+  v_sub    text;
+BEGIN
+  v_camp := CASE
+    WHEN NEW.department  IS DISTINCT FROM OLD.department  THEN 'department'
+    WHEN NEW.employee_id IS DISTINCT FROM OLD.employee_id THEN 'employee_id'
+  END;
+  IF v_camp IS NULL THEN
+    RETURN NEW;                                   -- nicio coloană protejată schimbată
+  END IF;
+
+  v_claims := coalesce(nullif(current_setting('request.jwt.claims', true), ''),
+                       nullif(current_setting('request.jwt.claim', true), ''))::jsonb;
+  v_rol := coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), v_claims ->> 'role');
+  v_sub := coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), v_claims ->> 'sub');
+
+  IF v_rol IS NULL AND v_sub IS NULL THEN
+    -- fără context de cerere: conexiune directă la BD
+    IF session_user IN ('postgres', 'supabase_admin') THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil (conexiune fără identitate autorizată: %)', v_camp, session_user
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF v_rol = 'service_role' THEN
+    RETURN NEW;
+  END IF;
+  IF v_rol = 'authenticated' AND v_sub IS NOT NULL
+     AND EXISTS (SELECT 1 FROM public.profiles WHERE id::text = v_sub AND is_owner IS TRUE) THEN
+    RETURN NEW;
+  END IF;
+  RAISE EXCEPTION 'Doar owner-ul poate modifica % pe un profil', v_camp USING ERRCODE = '42501';
+END $function$;
+
 -- ---------------------------------------------------------------------------
 -- 2. Postcondiții — ÎNAINTE de înregistrare și de COMMIT-ul runnerului: starea rezultată e EXACT starea live din 30.09 (altfel se anulează tot)
 -- ---------------------------------------------------------------------------
@@ -184,25 +229,27 @@ BEGIN
     JOIN (VALUES
                  ('prevent_role_escalation', '16112659be92143e6539ae0e54e47a06'),
                  ('enforce_owner_only_salary_flags', '0470660c0a819981ff914355c7f6d00a'),
-                 ('protect_can_access_pontaj_brut', 'ff277c90e02ef03d1efb34cd7e87b1d4')) AS y(fn, m) ON p.oid = to_regprocedure('public.' || y.fn || '()')
+                 ('protect_can_access_pontaj_brut', 'ff277c90e02ef03d1efb34cd7e87b1d4'),
+                 ('fn_profiles_campuri_owner_only', 'c06d7ce0f212c7bba2093c50614a88fc')) AS y(fn, m) ON p.oid = to_regprocedure('public.' || y.fn || '()')
    WHERE md5(p.prosrc) IS NOT DISTINCT FROM y.m
      AND l.lanname::text IS NOT DISTINCT FROM 'plpgsql' AND p.prosecdef IS NOT DISTINCT FROM true
      AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']
      AND pg_get_userbyid(p.proowner)::text IS NOT DISTINCT FROM 'postgres'
      AND p.prorettype IS NOT DISTINCT FROM 'trigger'::regtype::oid AND p.pronargs IS NOT DISTINCT FROM 0::int2;
-  IF v_ok IS DISTINCT FROM 3 THEN
-    RAISE EXCEPTION 'Postcondiție 2a: doar % din 3 funcții au corpul (md5 prosrc) și atributele starea live din 30.09', v_ok;
+  IF v_ok IS DISTINCT FROM 4 THEN
+    RAISE EXCEPTION 'Postcondiție 2a: doar % din 4 funcții au corpul (md5 prosrc) și atributele starea live din 30.09', v_ok;
   END IF;
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace::oid
-   AND p.proname IN ('prevent_role_escalation', 'enforce_owner_only_salary_flags', 'protect_can_access_pontaj_brut');
-  IF v_n IS DISTINCT FROM 3 THEN
-    RAISE EXCEPTION 'Postcondiție 2a: % definiții pentru cele 3 nume (așteptat 3, fără supraîncărcări)', v_n;
+   AND p.proname IN ('prevent_role_escalation', 'enforce_owner_only_salary_flags', 'protect_can_access_pontaj_brut', 'fn_profiles_campuri_owner_only');
+  IF v_n IS DISTINCT FROM 4 THEN
+    RAISE EXCEPTION 'Postcondiție 2a: % definiții pentru cele 4 nume (așteptat 4, fără supraîncărcări)', v_n;
   END IF;
   -- 2b. ACL identic cu cel de dinainte (CREATE OR REPLACE nu schimbă proacl; verificat explicit)
   SELECT string_agg(p.proname::text || '=' || coalesce(p.proacl::text, '<null>'), ';' ORDER BY p.proname) INTO v_acl
     FROM pg_proc p WHERE p.oid IN (to_regprocedure('public.prevent_role_escalation()'),
                                    to_regprocedure('public.enforce_owner_only_salary_flags()'),
-                                   to_regprocedure('public.protect_can_access_pontaj_brut()'));
+                                   to_regprocedure('public.protect_can_access_pontaj_brut()'),
+                                   to_regprocedure('public.fn_profiles_campuri_owner_only()'));
   IF v_acl IS DISTINCT FROM current_setting('gazpet.sec_f2_acl_inainte', true) OR v_acl IS NULL THEN
     RAISE EXCEPTION 'Postcondiție 2b: ACL-ul funcțiilor s-a schimbat (înainte: %, după: %)', current_setting('gazpet.sec_f2_acl_inainte', true), v_acl;
   END IF;

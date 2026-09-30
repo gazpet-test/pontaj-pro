@@ -53,7 +53,7 @@
 | `prevent_role_escalation_trigger` | `prevent_role_escalation` | `16112659be92143e6539ae0e54e47a06` | `role`, `is_owner` (RAISE) | **RETURN NEW necondiționat** |
 | `trg_enforce_owner_only_salary_flags` | `enforce_owner_only_salary_flags` | `0470660c0a819981ff914355c7f6d00a` | `is_owner`, `can_access_salarii`, `can_access_personal_data`, `can_access_pontaj_brut`, `can_modify_employees`, `can_manage_contracts`, `can_access_diurne`, `can_access_financiar` (resetare tăcută) | **RETURN NEW necondiționat** |
 | `trg_protect_can_access_pontaj_brut` | `protect_can_access_pontaj_brut` | `ff277c90e02ef03d1efb34cd7e87b1d4` | `can_access_pontaj_brut` (RAISE) | **RETURN NEW necondiționat** |
-| `trg_profiles_campuri_owner_only` | `fn_profiles_campuri_owner_only` (S-A, 29.09) | `c06d7ce0f212c7bba2093c50614a88fc` | `department`, `employee_id` | corect: claims + `session_user` — **neatins, e modelul urmat** |
+| `trg_profiles_campuri_owner_only` | `fn_profiles_campuri_owner_only` (S-A, 29.09) | `c06d7ce0f212c7bba2093c50614a88fc` | `department`, `employee_id` | claims + `session_user`, dar ramura `service_role` nelegată — **inclusă în patch în r4 (§8)** |
 
 - `auth.uid()` (definiția live) = `request.jwt.claim.sub` sau `request.jwt.claims->>'sub'`. E NULL nu doar pentru service_role / conexiuni directe, ci și pentru **cheia anon** (claims `{"role":"anon"}`, fără sub), pentru un JWT `authenticated` fără `sub`, sau pentru claims golite. În toate aceste cazuri cele 3 triggere sar peste verificare.
 - Cale reală de exploatare azi: RLS pe `profiles` are politici doar pentru `authenticated` (`profiles_update_own`, `profiles_update_owner`), deci un UPDATE ca `anon` prin REST e refuzat de RLS înainte de trigger. Gaura devine activă dacă apare vreodată o politică pentru anon, o funcție SECURITY DEFINER care face UPDATE pe `profiles` cu claims lipsă, sau un JWT fără sub acceptat de PostgREST. E o apărare în profunzime pentru **sursa drepturilor** (aceleași câmpuri pe care S-A le-a blindat pentru `department`).
@@ -227,3 +227,42 @@ Ramura (a): `v_rol = 'service_role' AND session_user = 'authenticator' AND curre
 - `session_user` efectiv al conexiunilor Supabase: Supavisor/pooler, pg_cron (`cron.job.username`), workerul NAS, Edge Functions care folosesc conexiune directă în loc de REST — de confirmat în producție după apply; un context legitim refuzat primește 42501 cu rolul JWT și session_user în mesaj.
 - Versiunea PostgREST din proiectul Supabase (testat 13.0.4) și eventualul `db-pre-request` configurat de platformă.
 - Nimic rulat pe producție; nicio scriere în Supabase.
+
+## 8. Runda 4 (30.09–01.10.2026): a 4-a funcție (`fn_profiles_campuri_owner_only`) + rezidualul SET ROLE
+
+### 8.1 Ce s-a găsit
+`fn_profiles_campuri_owner_only()` (triggerul `trg_profiles_campuri_owner_only`, protejează `department` și `employee_id`, SECURITY DEFINER, md5 live `c06d7ce0f212c7bba2093c50614a88fc`, reconfirmat live 30.09) era declarată în r1–r3 „model, nu se atinge”, dar avea exact gaura din r2: `IF v_rol = 'service_role' THEN RETURN NEW;`, fără legare de conexiune sau de rolul efectiv. Vectorul real: un utilizator **cu sub** (non-owner) apelează un RPC SECURITY INVOKER care face `set_config('request.jwt.claims','{"role":"service_role","sub":…}')` + `set_config('request.jwt.claim.role','service_role')`, apoi `UPDATE profiles SET employee_id=…`. Cum `auth.uid()` nu e NULL, celelalte 3 triggere nu intervin pe aceste coloane; decide doar a 4-a — și trecea. (Fără sub, UPDATE-ul era deja oprit de `prevent_role_escalation` r3.)
+
+### 8.2 Schimbarea r4
+- Migrarea include acum și a 4-a funcție cu aceeași disciplină: precondiție md5 live `c06d7ce0…` SAU md5 patch (reaplicare), atribute neschimbate (plpgsql, SECDEF, `search_path=public, pg_temp`, proprietar postgres, ACL comparat înainte/după), setul de 4 triggere intact. Singura schimbare în corp: ramura `service_role` devine `v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role'`, plus regula „claim.role și claims.role nevide și diferite ⇒ 42501” (aliniată cu celelalte 3). Ramura directă (`v_rol IS NULL AND v_sub IS NULL` + `session_user` postgres/supabase_admin), ramura owner și mesajele rămân identice. Verificarea separată „0c: a 4-a e c06d7ce0…” a fost înlocuită de 0a/0b pe 4 funcții.
+- Precondiție nouă **0e**: refuz dacă există în `public` funcții SECURITY INVOKER executabile de authenticated/anon care conțin `EXECUTE`/`set_config`/`SET ROLE` (§8.4).
+- ROLLBACK: readuce și a 4-a funcție la corpul live `c06d7ce0…` (precondiție: md5 patch nou sau deja live).
+
+| funcție | md5 live (pre-check / rollback) | md5 patch r4 |
+|---|---|---|
+| prevent_role_escalation | `16112659be92143e6539ae0e54e47a06` | `cf75b37d522e2a6b0b9c9eabd72c27b4` (neschimbat față de r3) |
+| enforce_owner_only_salary_flags | `0470660c0a819981ff914355c7f6d00a` | `daaa561298c10c259944600e6c39467e` (neschimbat) |
+| protect_can_access_pontaj_brut | `ff277c90e02ef03d1efb34cd7e87b1d4` | `2eec050b53f37ec995da79e93a2a4686` (neschimbat) |
+| fn_profiles_campuri_owner_only | `c06d7ce0f212c7bba2093c50614a88fc` | **`9acc36a4067eddbdf29956220023ea92`** (nou) |
+
+### 8.3 Teste r4 (local, PG 17 + PostgREST 13.0.4)
+- `bash scripts/test_sec_f1_f2.sh`: **157 PASS / 0 FAIL**. Nou: fixture = cele 4 md5 live; control „corp live c06d7ce0… ⇒ authenticated + claims service_role schimbă department” (gaura reprodusă); 0e (gadget INVOKER cu `set_config` ⇒ refuz); md5 după apply = cele 4 variante patch; matricea completă (1a…10d) rulată și pe a 4-a funcție, separat pe `department` și pe `employee_id`, plus 11a owner real ⇒ trece, 11b non-owner real ⇒ 42501, 11c anon ⇒ 42501, 11d sub non-owner + claims/claim.role service_role ca authenticated ⇒ 42501 (10a SET ROLE service_role ⇒ trece; 10b SET ROLE authenticated ⇒ 42501; 10c fără SET ROLE ⇒ 42501; 6a postgres direct ⇒ trece); reaplicare idempotentă; rollback ⇒ 4 md5 live + comportament utilizatori reali identic cu live; rollback reaplicat; reapply după rollback; precondiția refuză un corp modificat al celei de-a 4-a (și în rollback).
+- `POSTGREST=… bash scripts/test_sec_f2_postgrest.sh`: **16 PASS / 0 FAIL + 1 REZIDUAL ACCEPTAT**. Nou: E2E-8 service_role PATCH department/employee_id ⇒ permis; E2E-9 non-owner PATCH employee_id ⇒ 42501; E2E-10 non-owner (sub) RPC `set_config` claims/claim.role service_role + UPDATE employee_id ⇒ 42501; E2E-11 stare; CONTROL-r3: a 4-a readusă la `c06d7ce0…` ⇒ același RPC schimbă employee_id (gaura reprodusă). RPC-urile de atac sunt create după apply (altfel 0e refuză — exact rolul ei).
+
+### 8.4 Rezidual acceptat: gadget SET ROLE în RPC SECURITY INVOKER
+Mecanism: PostgreSQL verifică `SET ROLE` față de `session_user`, nu față de `current_user`. Prin PostgREST `session_user` = `authenticator`, care e membru `service_role`; deci un RPC **SECURITY INVOKER** apelat ca authenticated care face `PERFORM set_config('role','service_role',true)` și își falsifică claims trece toate cele 3 condiții ale ramurii (a) (reprodus: REZIDUAL ACCEPTAT R-1 în `test_sec_f2_postgrest.sh`). În SECURITY DEFINER `SET ROLE` e interzis. Un astfel de gadget ar fi oricum o escaladare mai largă decât profiles (orice tabel ca service_role, peste RLS) — Copilot l-a acceptat explicit ca rezidual, nu blocker.
+
+Audit live read-only (01.10.2026 ~01:40): în `public` 57 funcții INVOKER, 38 executabile de authenticated, **0** care conțin `EXECUTE` sau `set_config` / `SET ROLE`.
+
+SQL de control (read-only) pentru rutina post-deploy — trebuie să întoarcă **0 rânduri**; aceeași interogare e precondiția 0e din migrare:
+```sql
+SELECT p.oid::regprocedure AS functie
+  FROM pg_proc p
+ WHERE p.pronamespace = 'public'::regnamespace AND NOT p.prosecdef
+   AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+   AND (p.prosrc ~* '\mexecute\M' OR p.prosrc ~* 'set_config' OR p.prosrc ~* 'set\s+(local\s+)?role');
+```
+Limită: detectează doar corpuri din `public` (nu alte scheme expuse, nici apeluri indirecte prin funcții din alte scheme); `\mexecute\M` poate da și fals-pozitive (ex. text în comentarii) — un rând întors se analizează, nu se ignoră.
+
+### 8.5 Neverificabil local
+Aceleași ca §7.4; nimic aplicat pe Supabase.
