@@ -159,7 +159,7 @@ END $t5$;
 
 -- T5d: propunere AI NOUĂ (B după A) pe aceeași cerință ⇒ confirmarea lui A nu se moștenește
 RESET ROLE;
-INSERT INTO ofertare_acoperire (cerinta_id, status) VALUES (current_setting('j02b_t.cid')::bigint, 'nu_se_aplica');
+INSERT INTO ofertare_acoperire (cerinta_id, mod, status) VALUES (current_setting('j02b_t.cid')::bigint, 'nu_se_aplica', 'nu_se_aplica');
 SET LOCAL ROLE authenticated;
 DO $t5d$ DECLARE v_cid bigint := current_setting('j02b_t.cid')::bigint; pid bigint; BEGIN
   IF public.fn_ofertare_cerinta_na_confirmata(v_cid, 'nu_se_aplica') THEN RAISE EXCEPTION 'T5d FAIL: propunerea AI nouă a moștenit confirmarea'; END IF;
@@ -174,7 +174,7 @@ DO $t5e$ DECLARE v bigint := current_setting('j02b_t.cid2')::bigint; BEGIN
   IF NOT public.fn_ofertare_cerinta_na_confirmata(v, 'nu_se_aplica') THEN RAISE EXCEPTION 'T5e FAIL: confirmarea fără propunere nu închide'; END IF;
 END $t5e$;
 RESET ROLE;
-INSERT INTO ofertare_acoperire (cerinta_id, status) VALUES (current_setting('j02b_t.cid2')::bigint, 'nu_se_aplica');
+INSERT INTO ofertare_acoperire (cerinta_id, mod, status) VALUES (current_setting('j02b_t.cid2')::bigint, 'nu_se_aplica', 'nu_se_aplica');
 DO $t5e2$ BEGIN
   IF public.fn_ofertare_cerinta_na_confirmata(current_setting('j02b_t.cid2')::bigint, 'nu_se_aplica') THEN
     RAISE EXCEPTION 'T5e FAIL: propunerea AI apărută după decizia umană a moștenit-o';

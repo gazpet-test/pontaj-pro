@@ -90,7 +90,7 @@ CREATE TABLE public.ofertare_cerinte (id bigint PRIMARY KEY, licitatie_id bigint
   versiune int, sursa_document_id bigint, sursa_pagina int, sursa_pasaj text, inlocuita_de bigint, duplicat_al bigint,
   confirmata_de uuid, confirmata_la timestamptz, stare text);
 CREATE TABLE public.documente_firma (id bigint PRIMARY KEY, utilizabil boolean DEFAULT true, fara_expirare boolean DEFAULT true, data_valabilitate date, se_reemite boolean DEFAULT false);
-CREATE TABLE public.ofertare_acoperire (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, cerinta_id bigint NOT NULL REFERENCES public.ofertare_cerinte(id),
+CREATE TABLE public.ofertare_acoperire (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, cerinta_id bigint NOT NULL REFERENCES public.ofertare_cerinte(id), mod text NOT NULL,
   status text NOT NULL, verificat_pe_scan boolean NOT NULL DEFAULT false, reverificare_ceruta boolean, doc_firma_id bigint, motiv text);
 CREATE TABLE public.ofertare_pt_pachet (licitatie_id bigint, versiune int, stare text);
 CREATE TABLE public.ofertare_pt_legaturi (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -129,7 +129,7 @@ INSERT INTO public.ofertare_cerinte (id, licitatie_id, tip, text_cerinta, versiu
   (1004, 103, 'propunere', 'Descrierea tehnologiei de execuție', 1, 1, 9, 'pasaj 4'),
   (1005, 103, 'forma', 'Grafic de execuție', 1, 1, 10, 'pasaj 5'),
   (2001, 104, 'eliminatorie', 'Cerință unică 104', 1, NULL, NULL, NULL);
-INSERT INTO public.ofertare_acoperire (cerinta_id, status) VALUES (1001, 'nu_se_aplica'), (1002, 'nu_se_aplica'), (2001, 'nu_se_aplica');
+INSERT INTO public.ofertare_acoperire (cerinta_id, mod, status) VALUES (1001, 'nu_se_aplica', 'nu_se_aplica'), (1002, 'nu_se_aplica', 'nu_se_aplica'), (2001, 'nu_se_aplica', 'nu_se_aplica');
 INSERT INTO public.ofertare_pt_pachet VALUES (104, 1, 'depus');
 UPDATE public.ofertare_cerinte SET confirmata_de = '${U.owner}', confirmata_la = now() WHERE licitatie_id = 104;
 `)
