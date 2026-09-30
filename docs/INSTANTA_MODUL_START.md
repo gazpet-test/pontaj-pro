@@ -46,3 +46,10 @@ Ești o instanță Claude Code dedicată modulului **[MODUL]** din ERP-ul Gazpet
 - Q2-B: fără merge pe `main` și fără deploy Vercel până pe 02.10.2026 ora 12:00 (depunere Jilava), decât la cererea explicită a lui Răzvan.
 - Modulul Ofertare e înghețat: nu-l atingi nici măcar pentru un import de date.
 - Verifică secțiunea „⚠️ Atenționări” din `handoff_activ` la start: acolo apar restricțiile curente.
+
+## 7. Tichetele sunt ale sesiunii principale (decizie Răzvan, 30.09.2026)
+- Toate tichetele din platformă (🐛/💡 și cele de departament) se citesc, se atribuie, se rezolvă și se închid în sesiunea principală. Regula „merge singur pentru tichete” din CLAUDE.md pct. 1 **nu ți se aplică**.
+- Tu nu schimbi statusul, asignarea sau descrierea niciunui tichet, nu scrii `descriere_interventie`, nu faci corecturi de date pornite dintr-un tichet (nici cu preview) și nu propui variante de rezolvare pe tichete.
+- Poți citi tichetele doar ca să înțelegi contextul modulului. Ce observi util notezi în `handoff_[modul]`, secțiunea „⚠️ Observații pentru sesiunea principală”, ca date, fără propuneri de acțiune pe date.
+- Dacă un tichet cere ceva de ecran în modulul tău, sarcina îți vine de la Răzvan, formulată de el în chatul tău; nu o iei tu din listă.
+- Branch: lucrezi pe branch-ul dat de sesiune (harness-ul îl urmărește), iar titlul PR-ului începe cu `[Modul]`.
