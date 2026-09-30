@@ -471,6 +471,8 @@ exec "$PG_BIN/psql" "\$@"
 SH
 chmod +x "$VAR_DIR/psql_santinela"
 PSQL_T="$VAR_DIR/psql_santinela"
+# Gate-ul permanent 0e: runnerul citește scripts/control_0e.sql de lângă el ⇒ copiat identic lângă runnerii mutanți.
+cu_0e() { local d; d="$(dirname "$1")"; [ -f "$d/control_0e.sql" ] || cp "$RADACINA/scripts/control_0e.sql" "$d/control_0e.sql"; }
 # livreaza <fișier> [versiune] [sha aprobat] [runner] [-- opțiuni în plus]: copiat sub numele real al migrării
 livreaza() {
   local f="$1" v="${2:-20261003000000}" s="${3:-}" r="${4:-$LIVRARE}"; shift $(( $# < 4 ? $# : 4 ))
@@ -480,7 +482,7 @@ livreaza() {
   [ -n "$s" ] || s="$(sha "$VAR_DIR/livrare/$nume.sql")"
   : > "$SANT_LOG"
   set +e
-  PSQL_BIN="$PSQL_T" bash "$r" --migrare "$VAR_DIR/livrare/$nume.sql" --sha256 "$s" --versiune "$v" \
+  cu_0e "$r"; PSQL_BIN="$PSQL_T" bash "$r" --migrare "$VAR_DIR/livrare/$nume.sql" --sha256 "$s" --versiune "$v" \
     --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres "$@" >"$OUT_R" 2>"$ERR_R"
   RC=$?; set -e
 }
@@ -784,8 +786,8 @@ concurenta() {  # $1 = runner ⇒ 0 dacă: exact un cod 0, celălalt 21 CONFLICT
   local s; s="$(sha "$VAR_DIR/concurenta.sql")"; mkdir -p "$VAR_DIR/c1" "$VAR_DIR/c2"
   cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c1/$NUME_C.sql"; cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c2/$NUME_C.sql"
   local a=(--sha256 "$s" --tinta-db "$BAZA_AUX" --tinta-sistem "$SIS_A" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres)
-  PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c1/$NUME_C.sql" --versiune 20261003100001 "${a[@]}" >/dev/null 2>"$VAR_DIR/c1.err" & local p1=$!
-  PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c2/$NUME_C.sql" --versiune 20261003100002 "${a[@]}" >/dev/null 2>"$VAR_DIR/c2.err" & local p2=$!
+  cu_0e "$1"; PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c1/$NUME_C.sql" --versiune 20261003100001 "${a[@]}" >/dev/null 2>"$VAR_DIR/c1.err" & local p1=$!
+  cu_0e "$1"; PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c2/$NUME_C.sql" --versiune 20261003100002 "${a[@]}" >/dev/null 2>"$VAR_DIR/c2.err" & local p2=$!
   set +e; wait $p1; local r1=$?; wait $p2; local r2=$?; set -e
   local rows; rows="$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM public.t_concurenta")"
   local reg; reg="$(inregistrata "$NUME_C")"
@@ -956,10 +958,10 @@ izolare_principala() {  # $1 = runner ⇒ 0 dacă A=0, B=21, o înregistrare, un
   rm -rf "$POARTA"; mkdir -p "$POARTA" "$VAR_DIR/c1" "$VAR_DIR/c2"
   cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c1/$NUME_C.sql"; cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c2/$NUME_C.sql"
   # shellcheck disable=SC2046
-  PSQL_BIN="$VAR_DIR/psql_poarta" bash "$1" --migrare "$VAR_DIR/c2/$NUME_C.sql" --versiune 20261003100002 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c2.err" & local pb=$!
+  cu_0e "$1"; PSQL_BIN="$VAR_DIR/psql_poarta" bash "$1" --migrare "$VAR_DIR/c2/$NUME_C.sql" --versiune 20261003100002 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c2.err" & local pb=$!
   asteapta "B a terminat pre-verificarea" '[ "$(cat "$POARTA/n" 2>/dev/null)" = 2 ]'
   # shellcheck disable=SC2046
-  PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c1/$NUME_C.sql" --versiune 20261003100001 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c1.err" & local pa=$!
+  cu_0e "$1"; PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c1/$NUME_C.sql" --versiune 20261003100001 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c1.err" & local pa=$!
   asteapta "A ține lock-ul (pg_sleep)" in_somn
   touch "$POARTA/go"
   set +e; wait $pa; local ra=$?; wait $pb; local rb=$?; set -e
@@ -974,11 +976,11 @@ izolare_reconciliere() {  # $1 = runner ⇒ 0 dacă A=0, B=11, o înregistrare, 
   mkdir -p "$VAR_DIR/c1" "$VAR_DIR/c2"
   cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c1/$NUME_C.sql"; cp "$VAR_DIR/concurenta.sql" "$VAR_DIR/c2/$NUME_C.sql"
   # shellcheck disable=SC2046
-  PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c1/$NUME_C.sql" --versiune 20261003100001 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c1.err" & local pa=$!
+  cu_0e "$1"; PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c1/$NUME_C.sql" --versiune 20261003100001 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c1.err" & local pa=$!
   asteapta "A ține lock-ul (pg_sleep)" in_somn
   set +e
   # shellcheck disable=SC2046
-  PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c2/$NUME_C.sql" --versiune 20261003100001 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c2.err"; local rb=$?
+  cu_0e "$1"; PSQL_BIN="$PG_BIN/psql" bash "$1" --migrare "$VAR_DIR/c2/$NUME_C.sql" --versiune 20261003100001 $(C_ARGS) >/dev/null 2>"$VAR_DIR/c2.err"; local rb=$?
   wait $pa; local ra=$?; set -e
   local reg rows; reg="$(inregistrata "$NUME_C")"; rows="$("${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM public.t_concurenta")"
   echo "      (izolare RR, reconciliere: A=$ra B=$rb, înregistrări $reg, rânduri $rows)"
@@ -1461,6 +1463,21 @@ grep -qF "nu are drept de apel pe pg_control_system()" "$ERR_R" && esec "6.23 mu
 ok6 "6.23 mutant fără verificarea dreptului pe pg_control_system() ⇒ prins (mesajul explicit lipsește, cod $RC)"
 "${PSQL[@]}" -d postgres -c "DROP ROLE livr_fara_ctrl" >/dev/null 2>&1 || true
 rm -f "$SNAP_E"
+
+# 6.24 gate-ul permanent 0e (cerință Copilot PR #551 F2): după COMMIT, control_0e.sql read-only pe aceeași conexiune
+aux_nou; livreaza "$MIGRARE" 20261003000000
+[ $RC = 0 ] && grep -qF "GATE 0e: 0 funcții expuse" "$OUT_R" || { cat "$ERR_R" >&2; esec "6.24 fără gadget: trebuia 0 + GATE 0e curat (cod $RC)"; }
+ok6 "6.24 fără gadget expus ⇒ APLICAT + GATE 0e curat, cod 0"
+aux_nou
+"${PSQL[@]}" -d "$BAZA_AUX" -c "CREATE FUNCTION public.gadget_0e(v text) RETURNS text LANGUAGE sql SECURITY INVOKER AS \$g\$ SELECT set_config('request.jwt.claims', v, true) \$g\$;
+  REVOKE ALL ON FUNCTION public.gadget_0e(text) FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.gadget_0e(text) TO authenticated;" >/dev/null
+livreaza "$MIGRARE" 20261003000000
+[ $RC = 30 ] || { cat "$ERR_R" >&2; esec "6.24 gadget expus: cod $RC, așteptat 30"; }
+grep -qF "GATE 0e: gadget(uri) expus(e): public.gadget_0e(text)" "$ERR_R" && grep -qF "livrarea NU e considerată încheiată" "$ERR_R" \
+  || { cat "$ERR_R" >&2; esec "6.24 gadget expus: mesajul GATE 0e lipsește"; }
+[ "$(inregistrata)" = 1 ] && [ "$(stare_patch)" = "$MD5_PATCH" ] || esec "6.24 gadget: migrarea trebuia să rămână comisă (gate de „livrat”, nu rollback)"
+grep -qF "APLICAT + ÎNREGISTRAT confirmat" "$OUT_R" || esec "6.24 gadget: lipsește confirmarea aplicării înaintea gate-ului"
+ok6 "6.24 gadget INVOKER expus (EXECUTE authenticated, set_config) ⇒ cod 30, mesaj GATE 0e, migrarea rămâne comisă (fără rollback)"
 
 rm -f "$SNAP_E" "$ERR_R" "$OUT_R"
 
