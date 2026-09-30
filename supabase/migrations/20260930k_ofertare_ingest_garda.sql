@@ -160,7 +160,7 @@ BEGIN
     RAISE EXCEPTION 'REFUZ 20260930k: există alt overload fn_are_acces_ofertare (în orice schemă) — politica ar putea fi deturnată';
   END IF;
   -- 0d'. coloanele documentului pe care _rezultat le poate scrie atomic (runda 3, J2) — toate trebuie să existe
-  -- runda 4: nume ȘI tip (citite read-only pe live de Copilot)
+  -- runda 4: nume ȘI tip (citite read-only pe live de Claude, 01.10.2026)
   IF (SELECT count(*) FROM pg_catalog.pg_attribute a WHERE a.attrelid = to_regclass('public.ofertare_documente_atribuire') AND NOT a.attisdropped
         AND (a.attname, format_type(a.atttypid, a.atttypmod)) IN (('text_extras', 'text'), ('pagini', 'integer'), ('size_bytes', 'bigint'),
           ('pagini_procesate', 'integer'), ('pagini_felie', 'integer'), ('pagini_necitite', 'integer[]'), ('status_procesare', 'text'),
