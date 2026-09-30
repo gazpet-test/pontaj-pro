@@ -4830,12 +4830,12 @@ function ReportsPage() {
           si===0?emp.prenume:'',
           // la rândul gol al unui angajat cu încetare, în loc de „Nealocate" se
           // scrie motivul — altfel un 0 fără explicație pare o greșeală de export
-          (site.zile===0&&emp.incetatLa)?`Încetat ${fmtInc(emp.incetatLa)}`:site.name,
+          (site.zile===0&&emp.incetatLa)?`Încetat ${fmtInc(emp.incetatLa)}`:(site.zile===0&&emp.faraZileInTransa?'Fără zile în tranșă (reconciliere)':site.name),
           site.zile,
           diurnaAmt,
           site.val,
           si===0?emp.diurnaMax:'',
-          si===0?(emp.pesteLimita>0?emp.pesteLimita:(emp.incetatLa?0:'')):'',
+          si===0?(emp.pesteLimita>0?emp.pesteLimita:((emp.incetatLa||emp.faraZileInTransa)?0:'')):'',
           si===0?fmtVerif(emp):'',
           si===0?fmtDif(emp):''
         ])
@@ -4853,7 +4853,7 @@ function ReportsPage() {
     const totalGenZile=empStats.reduce((s,e)=>s+e.totalZile,0)
     const totalGenVal=empStats.reduce((s,e)=>s+e.totalVal,0)
     const totalPeste=empStats.reduce((s,e)=>s+e.pesteLimita,0)
-    const totalDeVerificat=empStats.filter(e=>e.deVerificat?.length||e.deVerificatAnterior?.length||e.deVerificatUlterior?.length).length
+    const totalDeVerificat=empStats.filter(e=>e.deVerificat?.length||e.deVerificatAnterior?.length||e.deVerificatUlterior?.length||e.distributieAmbigua?.length).length
     const nedeterminati=empStats.filter(e=>e.diferentaPlatit===null).length
     const totalDiferenta=empStats.reduce((s,e)=>s+(e.diferentaPlatit||0),0)
     const totalDifTxt=(totalDiferenta!==0?String(totalDiferenta):'')+(nedeterminati?` (+${nedeterminati} nedeterminat/invalid)`:'')
@@ -4903,6 +4903,7 @@ function ReportsPage() {
       'Semn: POZITIV = s-a înregistrat mai mult decât rezultă din pontaj; NEGATIV = mai puțin (tranșă nesalvată, angajat exclus atunci sau bife modificate după salvare). Nu se corectează automat — se verifică în Istoric.',
       'Plată peste 1 ale lunii (ex. 26.09–02.10): partea lunară înregistrată e NEDETERMINATĂ (detaliile plății au doar totalul) — se arată diferența pe toată plata (înregistrat − recalculat), nu se atribuie unei luni prin convenție.',
       'De verificat: zile cu CO și diurnă bifată simultan — „CO+diurnă:" în tranșa exportată, „ant.:" înainte de tranșă, „ult.:" după tranșă, în aceeași lună (CO-ul scade plafonul lunii). Nu se rezolvă automat.',
+      'Rândurile pe șantier: o zi = o zi. O zi bifată pe mai multe șantiere se numără o singură dată, la primul șantier după nume, și apare la „amb.:" (de verificat manual, nu se împarte automat). Angajații fără zile în tranșă, dar cu diferență de reconciliat sau conflicte în lună, rămân în listă cu 0.',
     ].forEach((txt,i)=>{
       const r=totalGenRow+1+i, a=XLSX.utils.encode_cell({r,c:0})
       ws[a]={v:txt,t:'s'}; ws[a].s={font:{italic:true,sz:9,color:{rgb:'595959'}},alignment:{horizontal:'left',vertical:'center',wrapText:false}}
@@ -4985,7 +4986,7 @@ function ReportsPage() {
     XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
-    const msgVerif=totalDeVerificat>0?` · ⚠ ${totalDeVerificat} de verificat (CO+diurnă)`:''
+    const msgVerif=totalDeVerificat>0?` · ⚠ ${totalDeVerificat} de verificat (CO+diurnă / șantier ambiguu)`:''
     const msgDif=(totalDiferenta!==0||nedeterminati)?` · ⚠ diferență înregistrat−recalculat ${totalDiferenta} RON${nedeterminati?` (+${nedeterminati} nedeterminat)`:''}`:''
     playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}${msgVerif}${msgDif}`)
     }catch(e){console.error('exportDiurne err:',e);showToast('Export oprit: '+(e?.message||e),'error')}finally{setExpD(false)}

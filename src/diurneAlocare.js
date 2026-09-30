@@ -167,6 +167,30 @@ export function alocaDiurneTransa({ recsLuna, df, dt, legalSet, diurnaAmt }) {
  *   plati: [{ id, period_from, period_to, inregistrat, recalculat, diferenta, invalid, nedeterminat, luni:{'YYYY-MM':{inregistrat|null, recalculat}} }]
  * }>}
  */
+/**
+ * Validarea STRICTĂ a defalcării salvate pe luni (`amount_luni`) a unui rând de detaliu de plată.
+ * @returns {number[]|null} părțile în ordinea `luniPlata`, sau null (→ nedeterminat) dacă:
+ *   - nu e obiect simplu; cheile nu sunt EXACT lunile plății (cheie în plus sau lipsă);
+ *   - o valoare nu e număr finit (string numeric acceptat), e negativă sau are mai mult de 2 zecimale;
+ *   - suma părților ≠ amount (toleranță 0.005).
+ */
+export function defalcareValida(amountLuni, luniPlata, amount) {
+  if (!amountLuni || typeof amountLuni !== 'object' || Array.isArray(amountLuni)) return null
+  const chei = Object.keys(amountLuni)
+  if (chei.length !== luniPlata.length || !luniPlata.every(l => Object.prototype.hasOwnProperty.call(amountLuni, l))) return null
+  const parti = []
+  for (const l of luniPlata) {
+    const raw = amountLuni[l]
+    const v = (typeof raw === 'number') ? raw : (typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN)
+    if (!Number.isFinite(v) || v < 0) return null
+    if (Math.abs(v * 100 - Math.round(v * 100)) > 1e-6) return null   // cel mult 2 zecimale
+    parti.push(v)
+  }
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return null
+  if (Math.abs(parti.reduce((s, v) => s + v, 0) - amount) >= 0.005) return null
+  return parti
+}
+
 export function platitAnteriorPeLuni({ plati, recsLuna, df, dt, legalSet, diurnaAmt }) {
   const amt = valideazaIntrariDiurne({ df, dt, legalSet, diurnaAmt })
   const luniTransa = new Set(segmenteLunare(df, dt).map(s => lunaDin(s.df)))
@@ -194,10 +218,11 @@ export function platitAnteriorPeLuni({ plati, recsLuna, df, dt, legalSet, diurna
       } else if (luniPlata.length === 1) {
         luni[luniPlata[0]].inregistrat = inregistrat            // o singură lună → totalul e al ei
       } else {
-        // defalcare SALVATĂ, verificabilă (suma părților == total) — altfel nedeterminat
-        const al = d.amount_luni && typeof d.amount_luni === 'object' ? d.amount_luni : null
-        const parti = al ? luniPlata.map(l => numar(al[l])) : null
-        if (parti && parti.every(v => v !== null) && Math.abs(parti.reduce((s, v) => s + v, 0) - inregistrat) < 0.005) luniPlata.forEach((l, i) => { luni[l].inregistrat = parti[i] })
+        // defalcare SALVATĂ, verificabilă STRICT — altfel nedeterminat (niciodată invalid, niciodată acceptată parțial):
+        // cheile == exact lunile plății (nici în plus, nici lipsă), fiecare valoare număr finit ≥ 0 cu cel mult 2 zecimale,
+        // suma părților == amount (toleranță 0.005)
+        const parti = defalcareValida(d.amount_luni, luniPlata, inregistrat)
+        if (parti) luniPlata.forEach((l, i) => { luni[l].inregistrat = parti[i] })
         else pl.nedeterminat = true
       }
       r.plati.push(pl)
@@ -243,8 +268,9 @@ export function diferentaInregistratRecalculat(rec, sumaDiurnaAnterior) {
 // ════════════════════════════════════════════════════════════════
 // incarcaSnapshotDiurne — citirea COMUNĂ a intrărilor pentru cele trei fluxuri (export Excel, savePayment, BT).
 // Orice citire eșuată (employees, pontaj_records paginat, calendar_days, settings), paginare peste limită sau
-// snapshot INCOMPLET (numărul de rânduri citite ≠ count din BD) → throw; apelantul afișează toast și OPREȘTE
-// operația (nu continuă cu []).
+// snapshot INCOMPLET (numărul de rânduri citite ≠ count din BD — și la pontaj, și la angajați) sau INCONSISTENT (id de
+// pontaj duplicat între pagini) → throw; apelantul afișează toast și OPREȘTE operația (nu continuă cu []).
+// Snapshotul poartă `amprenta` (forma canonică, vezi amprentaSnapshot) + `completitudine` / `angajati` {citite, inBD}.
 // Snapshotul e pe LUNILE ÎNTREGI atinse de tranșă (nu doar df→dt): fără bifele și CO-ul de dinaintea
 // tranșei, C și B ar ieși greșit (vezi testul „snapshot limitat la tranșă").
 // Scopul pe șantiere — contract explicit (fără „array gol = fără restricție"):
@@ -286,12 +312,25 @@ export async function incarcaSnapshotDiurne(supabase, { df, dt, siteIds, scopGlo
   if (eCal) throw new Error('Nu s-a putut citi calendarul: ' + (eCal.message || eCal))
   const legalSet = new Set((calData || []).filter(d => d.type === 'legal').map(d => d.date))
 
-  // Eligibili: activii + cei cu încetare de la începutul lunii tranșei încolo (au zile bifate înainte de plecare)
-  let eq = supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStartTransa}`).order('name').order('id')
-  if (scopGlobal !== true) eq = eq.in('site_id', siteIds)
-  const { data: emps, error: eEmp } = await eq
-  if (eEmp) throw new Error('Nu s-au putut citi angajații: ' + (eEmp.message || eEmp))
-  const empIds = (emps || []).map(e => e.id)
+  // Eligibili: activii + cei cu încetare de la începutul lunii tranșei încolo (au zile bifate înainte de plecare).
+  // Paginare deterministă (name, id) cu pagină explicită + count exact cu ACELEAȘI filtre → snapshot incomplet = throw
+  // (un server cu max-rows sub PAGINA_PONTAJ nu poate trunchia lista în tăcere).
+  const filtreEmp = q => { q = q.or(`active.eq.true,termination_date.gte.${monthStartTransa}`); return scopGlobal !== true ? q.in('site_id', siteIds) : q }
+  const emps = []
+  for (let off = 0; ; off += PAGINA_PONTAJ) {
+    const { data: p, error: eEmp } = await filtreEmp(supabase.from('employees').select('*')).order('name').order('id').range(off, off + PAGINA_PONTAJ - 1)
+    if (eEmp) throw new Error('Nu s-au putut citi angajații: ' + (eEmp.message || eEmp))
+    if (!p || p.length === 0) break
+    emps.push(...p)
+    if (emps.length > LIMITA_PAGINARE) throw new Error(`Angajații depășesc limita de paginare (${LIMITA_PAGINARE} rânduri) — operația se oprește`)
+    if (p.length < PAGINA_PONTAJ) break
+  }
+  const { count: countEmp, error: eCntEmp } = await filtreEmp(supabase.from('employees').select('*', { count: 'exact', head: true }))
+  if (eCntEmp) throw new Error('Nu s-a putut verifica completitudinea angajaților: ' + (eCntEmp.message || eCntEmp))
+  if (typeof countEmp !== 'number') throw new Error('Nu s-a putut verifica completitudinea angajaților: count lipsă')
+  if (countEmp !== emps.length) throw new Error(`Snapshot incomplet (angajați): ${emps.length} citiți din ${countEmp} în BD — operația se oprește`)
+  const empIds = emps.map(e => e.id)
+  let countRecs = 0
 
   const recs = []
   if (empIds.length) {
@@ -314,8 +353,47 @@ export async function incarcaSnapshotDiurne(supabase, { df, dt, siteIds, scopGlo
     if (typeof count !== 'number') throw new Error('Nu s-a putut verifica completitudinea pontajului: count lipsă')
     if (count !== recs.length) throw new Error(`Snapshot incomplet: ${recs.length} rânduri citite din ${count} în BD — operația se oprește`)
     if (count > LIMITA_PAGINARE) throw new Error(`Pontajul depășește limita de paginare (${LIMITA_PAGINARE} rânduri) — operația se oprește`)
+    countRecs = count
+    // Un rând mutat între pagini (ex. data modificată între citiri) apare de două ori și altul lipsește — count-ul
+    // rămâne egal, deci doar unicitatea id-urilor prinde cazul.
+    const ids = new Set()
+    for (const r of recs) {
+      if (r.id == null) throw new Error('Snapshot inconsistent: rând de pontaj fără id — operația se oprește')
+      if (ids.has(r.id)) throw new Error('Snapshot inconsistent: rânduri duplicate între pagini — operația se oprește')
+      ids.add(r.id)
+    }
   }
-  return { df, dt, monthStart, monthEnd, monthStartTransa, diurnaAmt, ibanFirma: sIban ? sIban.value : null, legalSet, calData: calData || [], emps: emps || [], recs, completitudine: { citite: recs.length, inBD: recs.length } }
+  const snap = { df, dt, monthStart, monthEnd, monthStartTransa, diurnaAmt, ibanFirma: sIban ? sIban.value : null, legalSet, calData: calData || [], emps, recs, completitudine: { citite: recs.length, inBD: countRecs }, angajati: { cititi: emps.length, inBD: countEmp } }
+  snap.amprenta = amprentaSnapshot(snap)
+  return snap
+}
+
+// ════════════════════════════════════════════════════════════════
+// Amprenta snapshotului — forma CANONICĂ (recalculabilă server-side, byte-cu-byte):
+//   rândurile sortate după (employee_id asc, date asc, id asc), câte o linie
+//     `${employee_id}|${date}|${diurna === true ? 1 : 0}|${norma == null ? '' : String(norma)}`
+//   unite cu '\n', apoi
+//     '\n#tarif=' + diurnaAmt
+//     '\n#legal=' + [...legalSet].sort().join(',')
+//     '\n#emps=' + id-urile angajaților sortate NUMERIC, unite cu ','
+// Sortarea pe employee_id / id e numerică (numere), cu fallback pe comparație de string; date e comparată ca string ISO.
+// ════════════════════════════════════════════════════════════════
+const cmpNum = (a, b) => {
+  if (typeof a === 'number' && typeof b === 'number') return a - b
+  const sa = String(a), sb = String(b)
+  return sa < sb ? -1 : sa > sb ? 1 : 0
+}
+export function amprentaSnapshot(snap) {
+  const rows = (snap.recs || []).slice().sort((a, b) => cmpNum(a.employee_id, b.employee_id) || (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || cmpNum(a.id, b.id))
+  const linii = rows.map(r => `${r.employee_id}|${r.date}|${r.diurna === true ? 1 : 0}|${r.norma == null ? '' : String(r.norma)}`)
+  const legal = [...(snap.legalSet || [])].sort()
+  const emps = (snap.emps || []).map(e => e.id).sort(cmpNum)
+  return linii.join('\n') + '\n#tarif=' + snap.diurnaAmt + '\n#legal=' + legal.join(',') + '\n#emps=' + emps.join(',')
+}
+export async function amprentaHash(snap) {
+  const text = typeof snap === 'string' ? snap : amprentaSnapshot(snap)
+  const buf = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('')
 }
 
 // Alocarea direct dintr-un snapshot (aceleași intrări → aceleași sume în toate cele trei fluxuri)

@@ -90,32 +90,48 @@ export function construiesteRanduriExport({ snap, alocare, platitPeLuni = new Ma
     // Angajatul cu încetare în luna exportată rămâne în listă chiar dacă în tranșa asta are zero zile — apare cu 0,
     // ca să poată fi întocmit ordinul de deplasare și împărțită diurna pe lucrări până la închiderea lunii.
     const incetatInLuna = !emp.active && emp.termination_date && emp.termination_date >= monthStart
-    if (!er.length && !incetatInLuna) return null
+    const platitAnteriorSuma = a ? a.sumaDiurnaAnterior : 0 // Σ min(C,B) × lei/zi — cât ar fi trebuit plătit ca diurnă înainte de tranșă
+    // Reconciliere: înregistrat (istoric) vs recalculat — determinat / nedeterminat (plată peste 1 ale lunii) / invalid
+    const rec = platitPeLuni.get(emp.id)
+    const dif = diferentaInregistratRecalculat(rec, platitAnteriorSuma)
+    // Angajat FĂRĂ zile în tranșă, dar cu istoric de reconciliat (diferență ≠ 0, nedeterminat, invalid) sau cu conflicte
+    // CO+diurnă înainte/după tranșă în aceeași lună → rămâne în audit, cu 0 zile și toate sumele curente 0.
+    const areIstoric = !!rec && (rec.invalid || rec.nedeterminat || rec.diferentaTotal !== 0 || dif.valoare !== 0)
+    const areConflicte = !!a && (a.deVerificatAnterior.length > 0 || a.deVerificatUlterior.length > 0)
+    if (!er.length && !incetatInLuna && !areIstoric && !areConflicte) return null
     const C = a ? a.C : 0, B = a ? a.B : 0, N = a ? a.N : 0
     const diurnaReala = N                                   // zile distincte cu diurnă în tranșă (o zi pe două șantiere = o zi)
     const diurnaMax = a ? a.zileDiurna : 0                  // „Diurnă Max. Admisă" = zilele din tranșă care intră în plafonul lunar
     const pesteLimita = a ? a.zileSalariu : 0               // „Peste limită" = ce merge la salariu
     const bugetLunar = C * diurnaAmt
-    const platitAnteriorSuma = a ? a.sumaDiurnaAnterior : 0 // Σ min(C,B) × lei/zi — cât ar fi trebuit plătit ca diurnă înainte de tranșă
     const restBuget = Math.max(0, bugetLunar - platitAnteriorSuma)
     const sumaAcestExport = N * diurnaAmt
     const pesteBuget = a ? a.sumaSalariu : 0
-    // Reconciliere: înregistrat (istoric) vs recalculat — determinat / nedeterminat (plată peste 1 ale lunii) / invalid
-    const dif = diferentaInregistratRecalculat(platitPeLuni.get(emp.id), platitAnteriorSuma)
-    const siteMap = {}
-    er.forEach(r => { const s = r.sites?.name || 'Nealocate'; siteMap[s] = (siteMap[s] || 0) + 1 })
+    // Rândurile pe șantier: „o zi = o zi" și aici. Fiecare zi DISTINCTĂ se atribuie unui singur șantier —
+    // determinist, primul după nume dintre cele bifate în ziua aceea; două înregistrări pe același șantier în aceeași zi
+    // = o zi. Ziua bifată pe mai multe șantiere se semnalează în distributieAmbigua ('YYYY-MM-DD: A, B'), nu se împarte.
+    const peZi = new Map()
+    for (const r of er) { const s = r.sites?.name || 'Nealocate'; let set = peZi.get(r.date); if (!set) { set = new Set(); peZi.set(r.date, set) } set.add(s) }
+    const siteMap = {}, distributieAmbigua = []
+    for (const zi of [...peZi.keys()].sort()) {
+      const nume = [...peZi.get(zi)].sort()
+      siteMap[nume[0]] = (siteMap[nume[0]] || 0) + 1
+      if (nume.length > 1) distributieAmbigua.push(`${zi}: ${nume.join(', ')}`)
+    }
     let sites = Object.entries(siteMap).map(([name, zile]) => ({ name, zile, val: zile * diurnaAmt }))
     if (!sites.length) sites = [{ name: 'Nealocate', zile: 0, val: 0 }]
     const p = emp.name.split(' ')
-    const faraZile = diurnaReala === 0 && incetatInLuna
+    const faraZile = diurnaReala === 0
     return {
       nume: p[0], prenume: p.slice(1).join(' '), sites, totalZile: diurnaReala, totalVal: diurnaReala * diurnaAmt,
       diurnaMax: faraZile ? 0 : diurnaMax,
       normeCumulate: C, zilePlatiteAnterior: B, pesteLimita, pesteCumulat: pesteBuget, depasesteLunar: pesteBuget > 0,
       bugetLunar, platitAnteriorSuma, sumaAcestExport, restBuget, restDePlata: pesteBuget,
       deVerificat: a ? a.deVerificat : [], deVerificatAnterior: a ? a.deVerificatAnterior : [], deVerificatUlterior: a ? a.deVerificatUlterior : [],
+      distributieAmbigua,
       diferentaPlatit: dif.valoare, diferentaText: dif.text,
       incetatLa: incetatInLuna ? emp.termination_date : null,
+      faraZileInTransa: faraZile,
     }
   }).filter(Boolean).sort((a, b) => {
     const n = (a.nume || '').localeCompare((b.nume || ''), 'ro')
@@ -125,12 +141,15 @@ export function construiesteRanduriExport({ snap, alocare, platitPeLuni = new Ma
   return empStats
 }
 
-// Text pentru coloana „De verificat (CO + diurnă)" — în tranșă / înainte / după, în aceeași lună
+// Text pentru coloana „De verificat (CO + diurnă)" — în tranșă / înainte / după, în aceeași lună;
+// + „amb.:" = zile bifate pe mai multe șantiere (atribuite unui singur șantier în rândurile pe șantier, de verificat)
 const fmtZi = d => d.slice(8, 10) + '.' + d.slice(5, 7)
+const fmtAmb = s => { const i = s.indexOf(':'); return i === 10 ? fmtZi(s.slice(0, 10)) + s.slice(10) : s }
 export function textDeVerificat(e) {
   return [
     e.deVerificat?.length ? `CO+diurnă: ${e.deVerificat.map(fmtZi).join(', ')}` : '',
     e.deVerificatAnterior?.length ? `ant.: ${e.deVerificatAnterior.map(fmtZi).join(', ')}` : '',
     e.deVerificatUlterior?.length ? `ult.: ${e.deVerificatUlterior.map(fmtZi).join(', ')}` : '',
+    e.distributieAmbigua?.length ? `amb.: ${e.distributieAmbigua.map(fmtAmb).join('; ')}` : '',
   ].filter(Boolean).join(' · ')
 }
