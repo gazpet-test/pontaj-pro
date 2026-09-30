@@ -254,19 +254,44 @@ Mecanism: PostgreSQL verifică `SET ROLE` față de `session_user`, nu față de
 
 Audit live read-only (01.10.2026 ~01:40): în `public` 57 funcții INVOKER, 38 executabile de authenticated, **0** care conțin `EXECUTE` sau `set_config` / `SET ROLE`.
 
-SQL de control (read-only) pentru rutina post-deploy — trebuie să întoarcă **0 rânduri**; e exact interogarea precondiției 0e din migrare (varianta r5, §8.6):
+SQL de control (read-only) pentru rutina post-deploy — trebuie să întoarcă **0 rânduri**; e exact interogarea precondiției 0e din migrare (**varianta r6**, §8.7; înlocuiește variantele r4/r5):
 ```sql
-SELECT g.functie
-  FROM (SELECT p.oid::regprocedure::text AS functie,
-               CASE WHEN p.prokind IN ('f', 'p') THEN pg_get_functiondef(p.oid) END AS def
-          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-         WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p') AND NOT p.prosecdef
-           AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))) g
- WHERE g.def ~* '\mexecute\M' OR g.def ~* 'set_config' OR g.def ~* 'set\s+(session\s+|local\s+)?role'
+-- SEC F2 0e (r6) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate
+WITH f AS (
+  SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
+         EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
+         CASE WHEN p.prokind IN ('f', 'p', 'w') THEN pg_get_functiondef(p.oid) END AS def
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
+     AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+), t AS (
+  SELECT f.*,
+         lower(replace(regexp_replace(regexp_replace(regexp_replace(f.def, '/\*.*?\*/', ' ', 'g'), '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'), '"', ''))
+           || ' ; ' || lower(replace(f.def, '"', '')) AS txt
+    FROM f
+), m AS (
+  SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+           CASE WHEN t.cfg THEN 'proconfig' END,
+           CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
+           CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
+           CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
+           CASE WHEN t.txt ~ '\m(set|reset)\M[^;]*\mrole\M'
+                  OR t.txt ~ '\m(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+           CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
+           CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+           CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
+                  SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
+                   WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
+         ], NULL) AS motive
+    FROM t
+)
+SELECT m.functie, m.prosecdef, array_to_string(m.motive, ',') AS motive
+  FROM m
+ WHERE cardinality(m.motive) > 0
  ORDER BY 1;
 ```
 
-Limitele sunt în §8.6.
+Limitele sunt în §8.6 și §8.7.
 
 ### 8.5 Neverificabil local
 Aceleași ca §7.4; nimic aplicat pe Supabase.
@@ -276,7 +301,7 @@ Verdict: a 4-a funcție, md5-urile și rollback-ul sunt confirmate; NO-GO doar p
 
 | # | Problema | Schimbarea r5 | Test |
 |---|---|---|---|
-| 1 | 0e scana doar `prosrc`; o funcție `LANGUAGE sql BEGIN ATOMIC … END` are corpul în `prosqlbody`, cu `prosrc` gol, deci scăpa | se scanează `pg_get_functiondef(p.oid)`, adică definiția reconstruită (corpul, inclusiv BEGIN ATOMIC, și clauzele `SET` din antet), doar pentru `prokind IN ('f','p')`. `CASE` garantează că nu e evaluată pe agregate/window, unde ar da eroare | harness: gadget BEGIN ATOMIC cu `set_config('role',…)` ⇒ refuz; BEGIN ATOMIC cu `set_config('request.jwt.claims',…)` ⇒ refuz; control: interogarea r4 (prosrc) are 0 potriviri pe același gadget; agregat în `public` ⇒ nu dă eroare, nu blochează |
+| 1 | 0e scana doar `prosrc`; o funcție `LANGUAGE sql BEGIN ATOMIC … END` are corpul în `prosqlbody`, cu `prosrc` gol, deci scăpa | se scanează `pg_get_functiondef(p.oid)`, adică definiția reconstruită (corpul, inclusiv BEGIN ATOMIC, și clauzele `SET` din antet), doar pentru `prokind IN ('f','p')`. `CASE` garantează că nu e evaluată pe agregate, unde ar da eroare (r6: window sunt suportate și incluse — corectură, §8.7) | harness: gadget BEGIN ATOMIC cu `set_config('role',…)` ⇒ refuz; BEGIN ATOMIC cu `set_config('request.jwt.claims',…)` ⇒ refuz; control: interogarea r4 (prosrc) are 0 potriviri pe același gadget; agregat în `public` ⇒ nu dă eroare, nu blochează |
 | 1 | regexul rata `SET SESSION ROLE` | `'set\s+(session\s+\|local\s+)?role'` (plus `'\mexecute\M'`, `'set_config'`) | gadget plpgsql `SET SESSION ROLE` ⇒ refuz; `SET LOCAL ROLE` ⇒ refuz; `EXECUTE` dinamic ⇒ refuz; clauză `SET role = …` în antet (proconfig) ⇒ refuz |
 | 1 | doar schema `public` | `public` ȘI `graphql_public` (ambele expuse de PostgREST) | funcție în `graphql_public` cu `EXECUTE` ⇒ refuz |
 | 2 | teste | 9 cazuri de refuz, fiecare gadget creat ÎNAINTE de apply și șters după, cu numele funcției verificat în mesaj; plus un caz negativ: SECURITY DEFINER cu `set_config`, `EXECUTE` revocat de la PUBLIC, schemă neexpusă, agregat ⇒ F2 se aplică | `test_sec_f1_f2.sh` |
@@ -300,3 +325,59 @@ Rezultate r5 (local, PG 17 + PostgREST 13.0.4):
 - `bash scripts/test_sec_f1_f2.sh`: **167 PASS / 0 FAIL** (157 din r4, din care cazul 0e unic e înlocuit de 9 cazuri de refuz + controlul prosrc + cazul negativ).
 - `POSTGREST=… bash scripts/test_sec_f2_postgrest.sh`: **16 PASS / 0 FAIL**, plus „REZIDUAL ACCEPTAT R-1”, cu persistarea verificată (nu contează ca FAIL).
 - Nimic rulat pe Supabase. Interogarea 0e nouă se rulează pe live de coordonator și trebuie să întoarcă 0 rânduri.
+
+### 8.7 Runda 6 (01.10.2026) — NO-GO pe 0e (Copilot + Jakarinos), reparat
+
+A 4-a funcție, md5-urile și rollback-ul au fost confirmate de ambii reviewer-i. NO-GO-ul privește doar 0e.
+
+**Ce este 0e de acum.** 0e e un **INVARIANT DE CATALOG euristic**, nu o proprietate a triggerelor. Triggerele de pe `profiles` au încredere în GUC-urile JWT (`request.jwt.claim.sub`, `request.jwt.claims`, rolul SQL efectiv), deci **orice cod SQL expus prin PostgREST care poate scrie aceste GUC-uri e un gadget**, fie că e SECURITY INVOKER sau DEFINER, fie că folosește SET ROLE sau nu. 0e verifică, textual și în catalog, că la momentul aplicării nu există un astfel de cod în schemele expuse. Nu dovedește că nu poate exista.
+
+**Interogarea r6** (identică în precondiția 0e și în SQL-ul de control post-deploy, cu blocul reprodus mai jos; harness-ul verifică egalitatea):
+- **Funcții scanate:** din `public` și `graphql_public`, cu `prokind IN ('f','p','w')` (agregatele sunt excluse, pentru că `pg_get_functiondef` dă eroare pe ele; funcțiile window **sunt** suportate — corectura față de §8.6), executabile de `anon` sau `authenticated`, **INVOKER și DEFINER**.
+- **Text scanat:** `pg_get_functiondef` în două forme, concatenate cu ` ; `:
+  - **normalizată:** comentariile `/*…*/` scoase în două treceri (acoperă un nivel de imbricare), apoi `--…`, fiecare comentariu înlocuit cu un spațiu (așa cum îl tratează PostgreSQL), fără ghilimele duble, lower-case;
+  - **brută:** fără ghilimele duble, lower-case. Forma brută închide desincronizarea stripper-ului printr-un `'/*'` sau `'--'` pus într-un șir de caractere, care altfel ar „înghiți” cod real.
+- **Motive de refuz, pentru orice funcție expusă:**
+  1. **proconfig** (din catalog, nu din text): o intrare `~* '^(role|session_authorization|request\.jwt[^=]*)='`. Corectură la designul propus: `request\.jwt=` n-ar fi prins `request.jwt.claim.sub=…`.
+  2. **`set_config`**.
+  3. **`request` W `.` W `jwt`**, unde W înseamnă spații sau comentarii. Prinde și `SET request /*x*/ . jwt.claims`.
+  4. **`session` (`_`|W)+ `authorization`**. Prinde atât GUC-ul `session_authorization`, cât și instrucțiunea `SET SESSION AUTHORIZATION`.
+  5. **`\m(set|reset)\M[^;]*\mrole\M`**, plus varianta la nivel de token `set` W `[(session|local) W]` `role`. Varianta de token prinde `SET /*;*/ LOCAL ROLE`, unde `;` apare doar într-un comentariu.
+  6. **`\mu&`**: identificatori sau șiruri Unicode-escaped (`U&"rol\0065"`).
+  7. **Comentariu imbricat**: un `/*` deschis în interiorul unui comentariu.
+- **Motiv suplimentar, EXECUTE (`\mexecute\M`):** INVOKER ⇒ refuz; DEFINER ⇒ refuz, **cu excepția listei revizuite legate de md5(prosrc)**, aplicată doar pentru `prosecdef`: `('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')`. Motivul excepției: coloana vine dintr-un whitelist și e inserată prin `%I`, iar valorile trec prin `USING`. Un md5 diferit, sau funcția devenită INVOKER ⇒ refuz. Lista acoperă doar EXECUTE; motivele 1–7 rămân aplicate și funcțiilor listate.
+- **Cele 4 funcții trigger F2** conțin `request.jwt` și `SET LOCAL ROLE` (în comentarii). Nu sunt executabile de anon/authenticated (`REVOKE … FROM PUBLIC`), deci nu intră în scanare. Harness-ul verifică asta și arată că un `GRANT EXECUTE … TO authenticated` pe `fn_profiles_campuri_owner_only` ⇒ refuz.
+
+| Punct (reviewer) | Schimbarea r6 | Test |
+|---|---|---|
+| (A) Copilot: INVOKER cu clauza de funcție `SET "request.jwt.claim.sub" TO '<owner>'` + UPDATE employee_id ⇒ ramura owner trece, fără SET ROLE | proconfig din catalog (motiv 1) + `request.jwt` în text (motiv 3) | harness A ⇒ refuz (`proconfig`); PostgREST CONTROL-0e: același tip de RPC creat DUPĂ apply ⇒ bypass pe triggere demonstrat (rând recitit), iar interogarea de control îl prinde |
+| (B) Copilot: INVOKER cu `SET "request.jwt.claims" TO '{"role":"authenticated","sub":"<owner>"}'` + UPDATE department | idem | harness B ⇒ refuz (`proconfig`) |
+| (C) Copilot: RPC SECURITY DEFINER expus cu `set_config('request.jwt.claims', sub owner)` + UPDATE | DEFINER-ele intră în scanare (motivele 1–7 pentru toate funcțiile expuse) | harness C ⇒ refuz (`set_config`) |
+| (D) Jakarinos: `SET LOCAL "role" = 'service_role'` | ghilimelele duble eliminate înainte de regex | harness D ⇒ refuz |
+| (E) Jakarinos: `SET/*c*/LOCAL ROLE` | comentariile înlocuite cu spațiu (nu cu șir gol) + varianta de token | harness E ⇒ refuz; E2 (`'/*'` în șir + `SET /*;*/ LOCAL ROLE`) ⇒ refuz; E3 (`request /*x*/ . jwt`) ⇒ refuz; E4 (`U&"rol\0065"`) ⇒ refuz; E5 (comentariu imbricat) ⇒ refuz |
+| (F) DEFINER cu EXECUTE nelistat | EXECUTE la DEFINER ⇒ refuz, cu excepția listei cu md5 | harness F ⇒ refuz |
+| (G) lista revizuită | legată de semnătură + md5(prosrc) + `prosecdef` | G1: substitut `fn_completare_aplica` cu md5 ≠ lista ⇒ refuz. G2: copie a migrării cu md5-ul substitutului în listă ⇒ NU blochează. G3: corp modificat ⇒ refuz. G4: același md5, dar INVOKER ⇒ refuz. Corpul live nu e în repo; md5-ul exact `47a75428…` îl confirmă coordonatorul pe live (interogarea întoarce 0 rânduri) |
+| Jakarinos: R-1 nereprodus dădea doar INFO | R-1 nereprodus ⇒ **FAIL** (atât răspunsul, cât și persistarea recitită) | `test_sec_f2_postgrest.sh` |
+| Jakarinos: crearea fixture-urilor negative nu era verificată | fiecare CREATE verificat (cod de ieșire + existența în `pg_proc`); eșecul ⇒ FAIL | harness `g0e`, `F2-0e-neg` (5 obiecte numărate), G |
+| Jakarinos: doc — window vs agregate | corectat: window incluse, agregatele excluse | F2-0e-neg: o funcție window (`internal`) în `public` ⇒ fără eroare, nu blochează |
+
+Fals-pozitivele rămân **fail-closed intenționat**. Exemple: `UPDATE … SET role = …` într-o funcție expusă, cuvântul „execute”, „set_config” sau „request.jwt” într-un comentariu, un `'/*'` într-un șir. La un refuz 0e, mesajul listează `funcție [motive]`; un om analizează lista și decide între:
+- rescrierea funcției;
+- `REVOKE EXECUTE` de la anon/authenticated;
+- intrarea în lista revizuită, doar pentru EXECUTE la DEFINER și cu md5.
+
+Regexul nu se relaxează.
+
+**Limite cunoscute:**
+- **Apeluri indirecte.** O funcție expusă care cheamă un helper neexpus e prinsă doar dacă propriul ei text conține un tipar. Helperul poate fi în `public`, dar cu EXECUTE revocat de la anon/authenticated (un DEFINER proprietar postgres îl poate apela), sau în `extensions` / `storage` / `realtime` / alte scheme. 0e nu urmărește graful de apeluri. Același lucru pentru `dblink`/`pg_background` și alte extensii care execută SQL.
+- **Comentarii imbricate pe mai mult de un nivel.** Forma normalizată le rezolvă doar pe un nivel. Orice comentariu imbricat e oricum refuzat de motivul 7, pe forma brută.
+- **Construcții de nume prin concatenare în DEFINER-ii din lista revizuită.** Dacă în `fn_completare_aplica` s-ar construi dinamic `set_config`, `SET ROLE` sau `request.jwt`, textul nu le-ar conține. Protecția este md5-ul: orice schimbare de corp ⇒ refuz și re-review.
+- **Detecția e textuală**, pe definiția reconstruită. Un gadget scris în C (`LANGUAGE c`) necesită superuser și e în afara modelului.
+- **Scheme de platformă** (`extensions`, `storage`, `realtime`): vezi §8.6. Rămân neincluse.
+
+SQL de control post-deploy = interogarea din §8.4 (identică cu 0e). Trebuie să întoarcă **0 rânduri**.
+
+Rezultate r6 (local, PG 17 + PostgREST 13.0.4):
+- `bash scripts/test_sec_f1_f2.sh`: **185 PASS / 0 FAIL**.
+- `POSTGREST=… bash scripts/test_sec_f2_postgrest.sh`: **20 PASS / 0 FAIL**. R-1 reprodus și persistat (nereprodus = FAIL). CONTROL-0e: RPC creat după apply care falsifică doar `sub` (owner) ⇒ `employee_id` trece pe triggere (recitit), iar interogarea de control, extrasă din acest doc, îl listează (plus toate RPC-urile de atac). Sondele PostgREST sunt create acum DUPĂ apply: citesc `request.jwt` / `role`, deci 0e le refuza (fals-pozitiv fail-closed, comportament corect).
+- Interogarea r6 rulată read-only pe live (30.09): **0 rânduri** (fn_completare_aplica trece prin lista revizuită cu md5 `47a75428…`). Nimic aplicat pe Supabase.

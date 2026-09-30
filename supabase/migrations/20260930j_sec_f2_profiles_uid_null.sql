@@ -35,9 +35,10 @@
 --   1b. (r4) CREATE OR REPLACE pe fn_profiles_campuri_owner_only: singura schimbare = ramura service_role cere și
 --        session_user = 'authenticator' ȘI current_setting('role') = 'service_role' + claim.role/claims.role contradictorii ⇒ 42501;
 --        ramura directă (fără rol și fără sub, session_user postgres/supabase_admin), ramura owner și mesajele rămân identice.
---   0e. (r4, r5) Precondiție: 0 funcții SECURITY INVOKER în public/graphql_public, executabile de authenticated/anon, a căror
---        definiție reconstruită (pg_get_functiondef — include BEGIN ATOMIC) conține EXECUTE / set_config / SET [SESSION|LOCAL]
---        ROLE (gadgetul care ar ocoli legarea de rolul efectiv — rezidual acceptat, vezi doc §8).
+--   0e. (r4–r6) Precondiție = INVARIANT DE CATALOG euristic: nicio funcție expusă (public/graphql_public, EXECUTE pentru
+--        anon/authenticated, INVOKER sau DEFINER) nu scrie GUC-urile de identitate (proconfig role/request.jwt*/
+--        session_authorization; set_config; request.jwt; session authorization; SET/RESET … ROLE; U&; comentarii imbricate)
+--        și nu are EXECUTE dinamic (DEFINER: doar lista revizuită legată de md5(prosrc)). Vezi doc §8.7.
 --   2. Postcondiții (toate 4 funcțiile): md5 prosrc = variantele din patch, atributele neschimbate, ACL identic cu cel de dinainte, setul de 4 triggere intact.
 --
 -- Tranzacția: UN SINGUR gestionar = scripts/livrare_migrare.sh (fără BEGIN/COMMIT în fișier; garda de livrare start + final).
@@ -116,24 +117,55 @@ BEGIN
   IF v_n IS DISTINCT FROM 4 OR v_ok IS DISTINCT FROM 4 THEN
     RAISE EXCEPTION 'Precondiție 0c: triggerele de pe profiles nu sunt exact cele 4 analizate (% triggere, % conforme)', v_n, v_ok;
   END IF;
-  -- 0e. (r4, r5) rezidualul acceptat al legării de rolul efectiv: PostgreSQL verifică SET ROLE față de session_user (authenticator
-  --     e membru service_role), deci o funcție SECURITY INVOKER executabilă de authenticated/anon care face set_config('role', …) /
-  --     SET [SESSION|LOCAL] ROLE / EXECUTE dinamic ar putea trece ramura (a). Azi (audit live 01.10): 0 astfel de funcții.
-  --     r5: se scanează DEFINIȚIA RECONSTRUITĂ (pg_get_functiondef — acoperă și LANGUAGE sql BEGIN ATOMIC, al cărei corp stă în
-  --     prosqlbody cu prosrc gol, plus clauzele SET din antet), în schemele expuse de PostgREST: public și graphql_public.
-  --     prokind 'f'/'p' (agregatele nu au definiție reconstituibilă; CASE garantează că pg_get_functiondef nu e evaluat pe ele).
-  --     Fail-closed intenționat: fals-pozitivele (comentariu cu „execute”, set_config inofensiv) refuză și ele — omul analizează
-  --     lista din mesaj. Dacă apare vreuna la momentul aplicării ⇒ REFUZ. Aceeași interogare = SQL-ul de control post-deploy
-  --     din docs/SEC_F1_F2_PATCH.md §8.
-  SELECT count(*), string_agg(g.functie, ', ' ORDER BY g.functie) INTO v_n, v_gadget
-    FROM (SELECT p.oid::regprocedure::text AS functie,
-                 CASE WHEN p.prokind IN ('f', 'p') THEN pg_get_functiondef(p.oid) END AS def
-            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-           WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p') AND NOT p.prosecdef
-             AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))) g
-   WHERE g.def ~* '\mexecute\M' OR g.def ~* 'set_config' OR g.def ~* 'set\s+(session\s+|local\s+)?role';
+  -- 0e. (r4, r5, r6) INVARIANT DE CATALOG (euristic), nu proprietate a triggerelor: triggerele de pe profiles au încredere în
+  --     GUC-urile JWT (request.jwt.claim.sub / request.jwt.claims / role), deci ORICE cod SQL expus prin PostgREST care le poate
+  --     scrie e un gadget: (A) clauză de funcție SET "request.jwt.claim.sub"/"request.jwt.claims" = sub de owner ⇒ ramura
+  --     owner trece fără SET ROLE; (C) un RPC SECURITY DEFINER cu set_config('request.jwt.claims', …) — la fel; SET [LOCAL] ROLE
+  --     (și cu ghilimele / comentarii între cuvinte) ⇒ ramura service_role. Scanare: funcțiile din public/graphql_public
+  --     executabile de anon/authenticated, INVOKER ȘI DEFINER; proconfig din catalog + definiția reconstruită
+  --     (pg_get_functiondef; agregatele excluse — n-au definiție reconstituibilă; window incluse) în două forme: fără comentarii
+  --     (două treceri /*…*/ + --…, înlocuite cu spațiu) și brută (împotriva desincronizării stripper-ului prin '/*' sau '--' în
+  --     șiruri), ambele lower-case și fără ghilimele duble. EXECUTE: refuz la INVOKER; la DEFINER refuz cu excepția listei
+  --     revizuite legate de md5(prosrc). Fail-closed intenționat: fals-pozitivele refuză și ele — omul analizează lista din
+  --     mesaj (funcție + motiv). Aceeași interogare = SQL-ul de control post-deploy din docs/SEC_F1_F2_PATCH.md §8.7.
+  SELECT count(*), string_agg(q.functie || ' [' || q.motive || ']', '; ' ORDER BY q.functie) INTO v_n, v_gadget
+    FROM (
+           -- SEC F2 0e (r6) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate
+           WITH f AS (
+             SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
+                    EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
+                    CASE WHEN p.prokind IN ('f', 'p', 'w') THEN pg_get_functiondef(p.oid) END AS def
+               FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
+                AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+           ), t AS (
+             SELECT f.*,
+                    lower(replace(regexp_replace(regexp_replace(regexp_replace(f.def, '/\*.*?\*/', ' ', 'g'), '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'), '"', ''))
+                      || ' ; ' || lower(replace(f.def, '"', '')) AS txt
+               FROM f
+           ), m AS (
+             SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+                      CASE WHEN t.cfg THEN 'proconfig' END,
+                      CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
+                      CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
+                      CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
+                      CASE WHEN t.txt ~ '\m(set|reset)\M[^;]*\mrole\M'
+                             OR t.txt ~ '\m(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+                      CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
+                      CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+                      CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
+                             SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
+                              WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
+                    ], NULL) AS motive
+               FROM t
+           )
+           SELECT m.functie, m.prosecdef, array_to_string(m.motive, ',') AS motive
+             FROM m
+            WHERE cardinality(m.motive) > 0
+            ORDER BY 1
+         ) AS q;
   IF v_n IS DISTINCT FROM 0 THEN
-    RAISE EXCEPTION 'Precondiție 0e: % funcții SECURITY INVOKER din public/graphql_public, executabile de authenticated/anon, conțin EXECUTE/set_config/SET [SESSION|LOCAL] ROLE în definiție (posibil gadget pentru SET ROLE service_role — rezidualul acceptat al F2 nu mai e 0; fail-closed, poate fi și fals-pozitiv): % — un om analizează lista înainte de aplicare', v_n, v_gadget;
+    RAISE EXCEPTION 'Precondiție 0e: % funcții expuse (public/graphql_public, EXECUTE pentru anon/authenticated) pot scrie GUC-urile de identitate (role / request.jwt.* / session_authorization) sau au EXECUTE dinamic nerevizuit — gadget pentru triggerele de pe profiles (fail-closed, poate fi și fals-pozitiv; un om analizează lista): %', v_n, v_gadget;
   END IF;
   -- 0d. ACL-ul de azi al celor 4 funcții, salvat pentru comparația de la final (CREATE OR REPLACE trebuie să-l păstreze)
   PERFORM set_config('gazpet.sec_f2_acl_inainte',
