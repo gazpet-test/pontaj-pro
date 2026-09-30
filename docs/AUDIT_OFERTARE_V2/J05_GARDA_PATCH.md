@@ -548,6 +548,16 @@ Limite (verdict R9, `docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R9.md` pe #538):
 - Codurile 0/11 confirmă înregistrarea, nu înlocuiesc verificarea structurii + smoke.
 - Rezultat necunoscut / conflict / țintă neconfirmată ⇒ fără retry sau rollback automat (reconciliere manuală).
 
-**Stare test (30.09):** `scripts/test_j05_garda.sh` adaptat la CLI-ul runnerului comun; fazele 1–6 trec. Faza 7 cade la
-generarea mutanților de RUNNER (`w_*`), scriși pe textul runnerului vechi (runda 4) — de decis: rescriși pe ed7ecb0 sau
-lăsați suitei runnerului (`scripts/test_sec_rsvti.sh`, #538, faza 6.11). Neschimbați în acest commit.
+**Stare test (30.09, rezolvat):** `scripts/test_j05_garda.sh` trece complet (fazele 1–7; faza 8 rulează doar cu `VECHI=<dir>`, nesetat), rulat de 2 ori. Mutanții de
+RUNNER (`w_*`, 4 înainte / 4 după, niciunul scos sau slăbit) sunt generați acum pe textul runnerului ed7ecb0; runnerul și
+validatorul rămân byte-identice (sha256 bb223d90…efb71 / 9356d287…b450d). Maparea proprietăților:
+
+| Mutant | Proprietatea (runda 4) | Mecanismul în ed7ecb0 mutat | Prins de |
+|---|---|---|---|
+| `w_inreg_separata` | migrare + înregistrare atomice | apelul unic `psql --single-transaction` e spart în 2 tranzacții: [prolog+pre+COPIE] și [prolog+pre+3_inreg] | 3.3 (eroare injectată ⇒ înregistrare fără migrare) |
+| `w_fara_single` | gestionar unic de tranzacție | `--single-transaction` scos din apelul principal | 3.1 (marcajul `SET LOCAL`/`set_config(...,true)` se pierde ⇒ garda de start refuză) |
+| `w_fara_deja` | refuzul „deja înregistrată” | refuzul are acum 2 straturi: pre-verificarea (exit 11/21) + `IF EXISTS` nume/versiune din `1_pre`; mutantul le scoate pe AMBELE (unul singur e acoperit de celălalt) | 3.2 (a 2-a livrare ⇒ 2 rânduri în istoric, CONFLICT după livrare) |
+| `w_fara_static` | refuzul controlului de tranzacție | refuzul trăiește în `livrare_validator.py`; mutantul nu mai apelează validatorul | 3.6 (COMMIT în fișier ajunge la server; refuzat doar de garda de final, nu „control de tranzacție la nivel superior”) |
+
+Harness: validatorul se copiază lângă mutanți (runnerul îl apelează relativ la `BASH_SOURCE`) — fără copie, mutanții
+păreau „prinși” fals la 3.1 (validator lipsă). Ieșirea fiecărui mutant de livrare rămâne în `iesiri/livm_<runner>_<migrare>.out`.

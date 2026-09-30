@@ -478,10 +478,13 @@ ok "mutant prins: REVOKE scos → postcondiția (ACL / privilegii) refuză înai
 livrare_mutant() {  # $1 = migrare, $2 = runner, $3 = descriere
   local st="static OK" fz
   static_mig "$1" || st="static PICĂ"
-  if ( faza_livrare "$1" "$2" ) >"$OUT/livm.out" 2>&1; then fz="faza 3 trece"; else fz="$(grep -m1 -o 'EȘEC: [^[]*' "$OUT/livm.out" | cut -c1-110)"; fi
+  local lo="$OUT/livm_$(basename "$2" .sh)_$(basename "$1" .sql).out"
+  if ( faza_livrare "$1" "$2" ) >"$lo" 2>&1; then fz="faza 3 trece"; else fz="$(grep -m1 -o 'EȘEC: [^[]*' "$lo" | cut -c1-110)"; fi
   [ "$st" = "static OK" ] && [ "$fz" = "faza 3 trece" ] && esec "mutant livrare NU prins: $3"
   ok "mutant livrare prins: $3 ($st; $fz)"
 }
+# Validatorul e apelat relativ la runner ⇒ copie identică lângă mutanți (altfel „prinși” fals, la validator lipsă).
+cp "$(dirname "$LIV")/livrare_validator.py" "$M/livrare_validator.py"
 python3 - "$MIG" "$LIV" "$M" <<'PY'
 import sys
 m = open(sys.argv[1], encoding='utf-8').read(); l = open(sys.argv[2], encoding='utf-8').read(); d = sys.argv[3]
@@ -491,16 +494,28 @@ a, b = bloc('livrare_start'); open(d + '/n_fara_start.sql', 'w').write(m[:a] + m
 a, b = bloc('livrare_final'); open(d + '/n_fara_final.sql', 'w').write(m[:a] + m[b:])
 x = m.replace("IS DISTINCT FROM '20261001a_ofertare_derogare_garda_j05:' || txid_current()", "IS NULL"); assert x.count('IS NULL') >= 2
 open(d + '/n_fara_txid.sql', 'w').write(x)
-run = '''"${PSQL_BIN:-psql}" -X -q -v ON_ERROR_STOP=1 --single-transaction \\
-  -f "$TMP/1_marcaj.sql" -f "$MIG" -f "$TMP/3_inregistrare.sql" "$@"'''
-assert run in l
-open(d + '/w_inreg_separata.sh', 'w').write(l.replace(run, '''"${PSQL_BIN:-psql}" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$TMP/1_marcaj.sql" -f "$MIG" "$@"
-"${PSQL_BIN:-psql}" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$TMP/1_marcaj.sql" -f "$TMP/3_inregistrare.sql" "$@"'''))
-open(d + '/w_fara_single.sh', 'w').write(l.replace(run, run.replace(' --single-transaction', '')))
-a = l.index('  printf "  IF EXISTS'); b = l.index('\n', l.index('deja înregistrată')) + 1
-open(d + '/w_fara_deja.sh', 'w').write(l[:a] + l[b:])
-a = l.index("if sed 's/--.*$//'"); b = l.index('fi\n', a) + 3
-open(d + '/w_fara_static.sh', 'w').write(l[:a] + l[b:])
+# Runner comun ed7ecb0: mutanții w_* sunt generați pe textul runnerului ACTUAL (maparea: J05_GARDA_PATCH.md).
+run = '"$PSQL" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$DIR/0_prolog.sql" -f "$DIR/1_pre.sql" -f "$COPIE" -f "$DIR/3_inreg.sql" "${CONN[@]}"'
+assert l.count(run) == 1
+def scrie(nume, txt):
+    assert txt != l, nume; open(d + '/' + nume, 'w').write(txt)
+# 1. înregistrarea într-o tranzacție separată de migrare (atomicitate migrare+înregistrare)
+scrie('w_inreg_separata.sh', l.replace(run, run.replace(' -f "$DIR/3_inreg.sql"', '') + '\n' +
+      run.replace(' -f "$COPIE"', '')))
+# 2. fără gestionarul unic de tranzacție (autocommit per instrucțiune)
+scrie('w_fara_single.sh', l.replace(run, run.replace(' --single-transaction', '')))
+# 3. fără refuzul „deja înregistrată”: ambele straturi — pre-verificarea (exit 11/21) și verificarea din 1_pre
+x = l
+for f in ('if [ "$R_REL" = 1 ] && [ "$R_EX" = 1 ]; then\n  echo "✓ DEJA', 'if [ "$R_REL" != 0 ]; then\n  echo "✗ CONFLICT: istoricul'):
+    a = x.index(f); b = x.index('\nfi\n', a) + 4; x = x[:a] + x[b:]
+for f in ("  IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE name = '$NUME')",
+          "  IF EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '$VERSIUNE')"):
+    a = x.index(f); b = x.index('END IF;\n', a) + 8; x = x[:a] + x[b:]
+scrie('w_fara_deja.sh', x)
+# 4. fără refuzul controlului de tranzacție: în ed7ecb0 îl face validatorul ⇒ runnerul nu-l mai apelează
+v = 'VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG")" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"'
+assert l.count(v) == 1
+scrie('w_fara_static.sh', l.replace(v, 'VAL_OUT="validator omis (MUTANT)"'))
 PY
 livrare_mutant "$M/n_fara_start.sql" "$LIV" "migrare fără garda de livrare de start"
 livrare_mutant "$M/n_fara_final.sql" "$LIV" "migrare fără garda de livrare de final"
