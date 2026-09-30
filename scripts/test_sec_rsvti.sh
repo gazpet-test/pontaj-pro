@@ -34,7 +34,7 @@
 #      instanța autoritativă (replică fizică locală pg_basebackup -R, replay pus pe pauză ⇒ 22, niciodată 10); mutanți
 #   6.21–6.23 (runda 8, verdict Copilot R7): identificatori/literali Unicode U&"…"/U&'…' (și UESCAPE) refuzați înainte de
 #      psql + control dinamic direct pe PG (U&"set\005Fconfig" chiar schimbă setarea) + validator slăbit ⇒ atac aplicat;
-#      PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR moștenite ⇒ refuz, --service verificat (hostaddr ⇒ refuz); drept pe
+#      PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR/PGHOSTADDR/… moștenite ⇒ refuz, --service RETRAS (R9) ⇒ refuz; drept pe
 #      pg_control_system() lipsă ⇒ NEPORNIT (12) fără relaxare
 #   7. ceas fix (libfaketime, repornirea serverului) 2026-09-29 23:30 UTC: data omisă / NULL = 30.09
 #
@@ -1412,25 +1412,37 @@ for m in v_unicode v_uescape; do
   ok6 "6.22 mutant de validator $m ⇒ prins"
 done
 
-# ---- 6.23 CONDIȚII OPERAȚIONALE: serviciul efectiv (PGSERVICE moștenit / --service) și dreptul pe pg_control_system() --
-echo "→ 6.23 serviciul efectiv și dreptul pe pg_control_system()"
+# ---- 6.23 CONDIȚII OPERAȚIONALE (Runda 9): --service RETRAS, variabile libpq care redirecționează, pg_control_system() --
+echo "→ 6.23 --service retras, variabile PG* din mediu, dreptul pe pg_control_system()"
 aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
-for v in "PGSERVICE=gazpet_live" "PGSERVICEFILE=/tmp/x.conf" "PGSYSCONFDIR=/tmp"; do
+for v in "PGSERVICE=gazpet_live" "PGSERVICEFILE=/tmp/x.conf" "PGSYSCONFDIR=/tmp" "PGHOSTADDR=192.0.2.123" \
+         "PGOPTIONS=-c search_path=pg_catalog" "PGTARGETSESSIONATTRS=any" "PGLOADBALANCEHOSTS=random"; do
   export "${v%%=*}=${v#*=}"; livreaza "$MIGRARE"; unset "${v%%=*}"
   refuz_preconex "6.23 variabila ${v%%=*} moștenită din mediu" 2 "variabila ${v%%=*}" "$SNAP_E"
 done
 HOME_V="$HOME"; export HOME="$VAR_DIR/home"; mkdir -p "$HOME"
-printf '[svc_ostil]\nhost=127.0.0.1\nhostaddr=127.0.0.1\nport=%s\n[svc_opt]\nhost=x\noptions=-c search_path=pg_catalog\n[svc_ok]\nhost=127.0.0.1\nport=%s\nsslmode=disable\n' "$PORT_B" "$PORT" > "$HOME/.pg_service.conf"
-livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_ostil
-refuz_preconex "6.23 --service cu hostaddr în configurația efectivă" 2 "chei nepermise: hostaddr" "$SNAP_E"
-livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_opt
-refuz_preconex "6.23 --service cu options" 2 "chei nepermise: options" "$SNAP_E"
-livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_absent
-refuz_preconex "6.23 --service inexistent (fail-closed)" 2 "negăsit" "$SNAP_E"
+# proba Copilot R8: două secțiuni cu același nume — libpq folosește PRIMA (hostaddr), verificarea veche vedea doar a doua
+printf '[review_r8] # nota\nhostaddr=192.0.2.123\n[review_r8]\nhost=approved.example.invalid\n[review_opt] # nota\noptions=-c search_path=pg_catalog\n[review_opt]\nhost=127.0.0.1\n[svc_ok]\nhost=127.0.0.1\nport=%s\n' "$PORT" > "$HOME/.pg_service.conf"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service review_r8
+refuz_preconex "6.23 --service cu secțiune dublă (hostaddr în prima, proba R8)" 2 "--service nu mai e acceptat" "$SNAP_E"
+livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service review_opt
+refuz_preconex "6.23 --service cu secțiune dublă (options în prima)" 2 "--service nu mai e acceptat" "$SNAP_E"
 livreaza "$MIGRARE" 20261003000000 "" "$LIVRARE" -- --service svc_ok
-[ $RC = 0 ] && [ "$(inregistrata)" = 1 ] || { cat "$ERR_R" >&2; export HOME="$HOME_V"; esec "6.23 --service curat trebuia APLICAT (cod $RC)"; }
+refuz_preconex "6.23 --service valid, unic (suport retras)" 2 "--service nu mai e acceptat" "$SNAP_E"
+# mutantul care reacceptă --service (îl exportă ca PGSERVICE) ⇒ refuzul dispare
+mutant_py reaccepta_service '    --service) refuz 2 "--service nu mai e acceptat' '    --service) export PGSERVICE="$2" ;; --service-vechi) refuz 2 "x'
+livreaza "$MIGRARE" 20261003000000 "" "$MUT/reaccepta_service/livrare_migrare.sh" -- --service svc_ok
+{ [ $RC = 2 ] && grep -qF -- "--service nu mai e acceptat" "$ERR_R"; } && esec "6.23 mutant care reacceptă --service: NEPRINS"
+ok6 "6.23 mutant care reacceptă --service ⇒ prins (refuzul lipsește, cod $RC)"
 export HOME="$HOME_V"
-ok6 "6.23 --service cu chei pe lista albă ⇒ APLICAT; hostaddr/options/serviciu absent ⇒ refuz 2 înainte de conexiune"
+# endpoint explicit + passfile ⇒ APLICAT; PGHOST/PGPORT ostile din mediu nu schimbă ținta (unset în runner)
+aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
+PF="$VAR_DIR/pgpass_r9"; printf '127.0.0.1:%s:*:postgres:nefolosit\n' "$PORT" > "$PF"; chmod 600 "$PF"
+export PGPASSFILE="$PF" PGHOST=192.0.2.123 PGPORT="$PORT_B"
+livreaza "$MIGRARE" 20261003000000
+unset PGPASSFILE PGHOST PGPORT
+[ $RC = 0 ] && [ "$(inregistrata)" = 1 ] || { cat "$ERR_R" >&2; esec "6.23 endpoint explicit + PGPASSFILE (+PGHOST/PGPORT ostile) trebuia APLICAT (cod $RC)"; }
+ok6 "6.23 endpoint explicit + PGPASSFILE ⇒ APLICAT + înregistrat pe ținta aprobată (PGHOST/PGPORT ostile ignorate)"
 # rol fără drept de apel pe pg_control_system() ⇒ pre-verificarea refuză explicit (12), nimic trimis
 aux_nou; SNAP_E="$(mktemp)"; schema_snapshot "$BAZA_AUX" > "$SNAP_E"
 "${PSQL[@]}" -d postgres -c "DROP ROLE IF EXISTS livr_fara_ctrl" -c "CREATE ROLE livr_fara_ctrl LOGIN" >/dev/null

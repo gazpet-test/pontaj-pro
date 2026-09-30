@@ -596,3 +596,34 @@ drept pe `pg_control_system()` ⇒ 12 explicit, fără urme; mutantul fără ver
 Suita completă rulată de 2 ori, exit 0: `PASS test_sec_rsvti: 393 aserțiuni OK + 253 verificări negative/fără urme/statice OK`.
 NEAPLICAT pe live. **Rămâne deschis:** GO Copilot pe runda 8 și acordul lui Răzvan; verificarea pe live (read-only) a
 dreptului rolului operatorului pe `pg_control_system()`; PG17.
+
+## 18. Runda 9 — runner (răspuns la verdictul Copilot R8, `docs/LIVRARE_MIGRARE_VERDICT_COPILOT_R8.md`)
+
+Un singur blocant: `verifica_serviciu()` nu reproducea selecția libpq a secțiunii din `pg_service.conf` (antet cu
+comentariu + secțiune repetată ⇒ noi vedeam a doua secțiune, libpq folosește prima, cu `hostaddr`). Corecția minimă:
+
+1. **`--service` RETRAS** — refuz 2 înainte de orice conexiune, mesaj „--service nu mai e acceptat (Runda 9 …)”.
+   `verifica_serviciu()`, lista albă de chei, `C_SERVICE` și `export PGSERVICE` au fost șterse (fără cod mort).
+   Conexiunea = DOAR `-h --tinta-host -p --tinta-port -d --tinta-db [-U --user]`; parola din `~/.pgpass` / `PGPASSFILE`.
+   Un parser propriu de `pg_service.conf` ar trebui să reproducă exact libpq (inclusiv versiuni viitoare) — nu merită riscul.
+2. **Variabile libpq din mediu — decizia:**
+   * **refuz 2** (pot redirecționa sau schimba execuția): `PGSERVICE`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `PGHOSTADDR`
+     (ocolește rezolvarea lui host), `PGOPTIONS` (GUC-uri de sesiune), `PGTARGETSESSIONATTRS`, `PGLOADBALANCEHOSTS` (nou),
+     `PGDATABASE`, `PGPASSWORD`, `PSQLRC`. Fără serviciu, `~/.pg_service.conf` nu mai e citit deloc de libpq.
+   * **unset explicit**: `PGHOST`, `PGPORT` — oricum suprascrise de `-h`/`-p` explicite; eliminate ca endpointul să nu
+     depindă de mediu în nicio situație.
+   * **tolerate**: `PGUSER` (identitate, nu endpoint; `--user` are prioritate), `PGPASSFILE` (canalul de parolă permis),
+     `PGSSL*`/`PGCONNECT_TIMEOUT` (nu schimbă ținta; o țintă greșită e oricum prinsă de db + system_identifier +
+     `pg_is_in_recovery()` în pre-verificare). `PGCLIENTENCODING` e setat de runner (UTF8).
+3. **`pg_control_system()`** și restul rundelor 4–8 — neschimbate.
+
+**Teste** (`scripts/test_sec_rsvti.sh` 6.23, rescris): PGSERVICE / PGSERVICEFILE / PGSYSCONFDIR / PGHOSTADDR / PGOPTIONS /
+PGTARGETSESSIONATTRS / PGLOADBALANCEHOSTS ⇒ refuz 2, psql nepornit, pg_dump identic; proba R8 (2 secțiuni, hostaddr în
+prima) + `--service` ⇒ refuz 2 înainte de psql; aceeași structură cu `options` ⇒ refuz 2; `--service` valid, unic ⇒ refuz 2;
+mutantul care reacceptă `--service` (îl exportă ca PGSERVICE) ⇒ prins; endpoint explicit + `PGPASSFILE`, cu `PGHOST` /
+`PGPORT` ostile în mediu ⇒ APLICAT + înregistrat pe ținta aprobată; rol fără drept pe `pg_control_system()` ⇒ 12 (păstrat).
+Migrările #537/#538/#540/#541/#542 rămân acceptate.
+
+Suita completă rulată de 2 ori, exit 0: `PASS test_sec_rsvti: 393 aserțiuni OK + 262 verificări negative/fără urme/statice OK`.
+NEAPLICAT pe live. **Rămâne deschis:** GO Copilot pe runda 9 și acordul lui Răzvan; verificarea pe live (read-only) a
+dreptului rolului operatorului pe `pg_control_system()`; PG17 server.

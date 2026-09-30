@@ -34,19 +34,20 @@
 #   22 ȚINTĂ NECONFIRMATĂ        pre-verificarea sau reconcilierea a ajuns pe altă țintă (db/system_identifier/proiect)
 #   2  refuz la argumente, 3 refuz la artefact/validator — ambele ÎNAINTE de orice conexiune (neaplicat).
 #
-# Utilizare (parola NU pe linia de comandă și nici în chat: ~/.pgpass / PGPASSFILE sau PGSERVICE + pg_service.conf):
+# Utilizare (parola NU pe linia de comandă și nici în chat: ~/.pgpass / PGPASSFILE):
 #   bash scripts/livrare_migrare.sh --migrare supabase/migrations/<nume>.sql --sha256 <hex64> \
 #        --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
-#        --tinta-host <H> --tinta-port <P> [--tinta-proiect <marcaj>] [--user U] [--service S]
+#        --tinta-host <H> --tinta-port <P> [--tinta-proiect <marcaj>] [--user U]
 #   Runda 7: aprobarea țintei = db + system_identifier + ENDPOINTUL DE SCRIERE (host:port) [+ proiect]. Pre-verificarea,
 #   tranzacția principală și reconcilierea cer în plus pg_is_in_recovery() = false (o replică fizică are același
-#   system_identifier) ⇒ altfel 22 / refuz. (Runda 8: hostaddr în serviciu ⇒ refuz, vezi mai jos.)
-#   Runda 8: PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR din mediu ⇒ refuz; --service ⇒ secțiunea efectivă verificată pe listă
-#   albă de chei (hostaddr/options/target_session_attrs ⇒ refuz); pre-verificarea cere drept de apel pe pg_control_system().
+#   system_identifier) ⇒ altfel 22 / refuz. (Runda 9: servicii libpq refuzate, vezi mai jos.)
+#   Runda 9: suportul --service e RETRAS (verificarea noastră nu reproducea selecția libpq a secțiunii) ⇒ --service = refuz 2;
+#   PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR din mediu ⇒ refuz; pre-verificarea cere drept de apel pe pg_control_system().
 #   În loc de --sha256: --aprobare <fișier> cu un rând „<hex64>  <nume>.sql” (formatul sha256sum).
 # Orice altă opțiune (-v, -f, -c, --set, -d URI, …) ⇒ refuz înainte de conexiune. Nu se acceptă URI-uri de conexiune.
 # Variabile respinse (pot schimba execuția/ținta pe ascuns): PGPASSWORD, PGOPTIONS, PGDATABASE, PSQLRC, PGHOSTADDR,
-# PGTARGETSESSIONATTRS.
+# PGTARGETSESSIONATTRS, PGLOADBALANCEHOSTS, PGSERVICE, PGSERVICEFILE, PGSYSCONFDIR. PGHOST/PGPORT: eliminate explicit (unset)
+# — endpointul vine DOAR din --tinta-host/--tinta-port.
 # PSQL_BIN (implicit psql) — binarul clientului; doar operatorul local îl setează (teste).
 #
 # Limită de încredere declarată: marcajul și garda sunt o gardă de PROTOCOL, nu o autorizație. Un operator
@@ -57,7 +58,7 @@ umask 077
 
 refuz() { echo "REFUZ (neaplicat, fără conexiune): $2" >&2; exit "$1"; }
 
-MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" TINTA_PROI="" C_HOST="" C_PORT="" C_USER="" C_SERVICE=""
+MIG="" SHA="" APROBARE="" VERSIUNE="" TINTA_DB="" TINTA_SIS="" TINTA_PROI="" C_HOST="" C_PORT="" C_USER=""
 while [ $# -gt 0 ]; do
   [ $# -ge 2 ] || refuz 2 "opțiunea $1 fără valoare"
   case "$1" in
@@ -65,16 +66,16 @@ while [ $# -gt 0 ]; do
     --versiune) VERSIUNE="$2" ;;    --tinta-db) TINTA_DB="$2" ;;   --tinta-sistem) TINTA_SIS="$2" ;;
     --tinta-proiect) TINTA_PROI="$2" ;;
     --tinta-host) C_HOST="$2" ;;    --tinta-port) C_PORT="$2" ;;   --user) C_USER="$2" ;;
-    --service) C_SERVICE="$2" ;;
-    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem --tinta-host --tinta-port [--tinta-proiect --user --service])" ;;
+    --service) refuz 2 "--service nu mai e acceptat (Runda 9: suport retras — endpoint explicit --tinta-host/--tinta-port + ~/.pgpass/PGPASSFILE)" ;;
+    *) refuz 2 "opțiune nepermisă: $1 (doar --migrare --sha256|--aprobare --versiune --tinta-db --tinta-sistem --tinta-host --tinta-port [--tinta-proiect --user])" ;;
   esac
   shift 2
 done
-# Runda 8: PGSERVICE / PGSERVICEFILE / PGSYSCONFDIR moștenite din mediu sunt refuzate — serviciul se dă DOAR prin --service,
-# ca să poată fi verificată configurația lui EFECTIVĂ (vezi verifica_serviciu mai jos).
-for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS PGSERVICE PGSERVICEFILE PGSYSCONFDIR; do
-  [ -z "${!v+x}" ] || refuz 2 "variabila $v e setată (parola: ~/.pgpass / PGPASSFILE; serviciul doar prin --service; nimic care schimbă execuția)"
+# Runda 9: niciun serviciu libpq (nici --service, nici din mediu) și nicio variabilă care redirecționează/schimbă conexiunea.
+for v in PGPASSWORD PGOPTIONS PGDATABASE PSQLRC PGHOSTADDR PGTARGETSESSIONATTRS PGLOADBALANCEHOSTS PGSERVICE PGSERVICEFILE PGSYSCONFDIR; do
+  [ -z "${!v+x}" ] || refuz 2 "variabila $v e setată (parola: ~/.pgpass / PGPASSFILE; fără servicii libpq; nimic care schimbă execuția/ținta)"
 done
+unset PGHOST PGPORT   # suprascrise oricum de -h/-p explicite; eliminate ca endpointul să nu depindă de mediu
 [ -n "$MIG" ] && [ -f "$MIG" ] || refuz 2 "--migrare lipsă sau fișier inexistent: $MIG"
 NUME="$(basename "$MIG" .sql)"
 [[ "$NUME" =~ ^[0-9]{8}[a-z]?_[A-Za-z0-9_]+$ ]] || refuz 2 "nume de migrare invalid: $NUME"
@@ -86,7 +87,6 @@ NUME="$(basename "$MIG" .sql)"
 [[ "$C_HOST" =~ ^[A-Za-z0-9._/-]{1,253}$ ]] || refuz 2 "--tinta-host OBLIGATORIU (endpointul de scriere aprobat): '$C_HOST'"
 [[ "$C_PORT" =~ ^[0-9]{1,5}$ ]] || refuz 2 "--tinta-port OBLIGATORIU (portul endpointului de scriere aprobat): '$C_PORT'"
 [ -z "$C_USER" ] || [[ "$C_USER" =~ ^[A-Za-z0-9_.-]{1,63}$ ]] || refuz 2 "--user invalid"
-[ -z "$C_SERVICE" ] || [[ "$C_SERVICE" =~ ^[A-Za-z0-9_-]{1,63}$ ]] || refuz 2 "--service invalid"
 if [ -n "$APROBARE" ]; then
   [ -z "$SHA" ] || refuz 2 "--sha256 și --aprobare se exclud"
   [ -f "$APROBARE" ] || refuz 2 "fișier de aprobare lipsă: $APROBARE"
@@ -95,47 +95,6 @@ if [ -n "$APROBARE" ]; then
 fi
 [[ "$SHA" =~ ^[0-9a-f]{64}$ ]] || refuz 2 "sha256 aprobat lipsă/invalid (--sha256 <hex64> sau --aprobare)"
 
-# Runda 8: configurația EFECTIVĂ a serviciului (ordinea libpq: ~/.pg_service.conf, apoi <sysconfdir>/pg_service.conf
-# DOAR dacă serviciul nu e în fișierul utilizatorului). Secțiunea găsită poate conține numai chei pe listă albă; host,
-# port, dbname sunt oricum suprascrise de -h/-p/-d explicite. hostaddr (redirecționare pe ascuns față de host), options,
-# target_session_attrs, service, load_balance_hosts, client_encoding … ⇒ refuz. Serviciu negăsit / sysconfdir
-# nedeterminabil ⇒ refuz (fail-closed), totul ÎNAINTE de conexiune.
-verifica_serviciu() {
-  local sys; sys="$(pg_config --sysconfdir 2>/dev/null || true)"
-  python3 - "$1" "${HOME:-/nonexistent}/.pg_service.conf" "$sys" <<'PY' || refuz 2 "--service $1: configurația efectivă a serviciului nu e acceptată (vezi mai sus)"
-import os, sys
-srv, user, sysdir = sys.argv[1], sys.argv[2], sys.argv[3]
-PERMISE = {"host", "port", "dbname", "user", "sslmode", "sslrootcert", "sslcert", "sslkey", "sslcrl", "connect_timeout",
-           "application_name", "passfile", "keepalives", "keepalives_idle", "keepalives_interval", "keepalives_count"}
-def sectiune(f):
-    if not os.path.isfile(f):
-        return None
-    chei, gasit, cur = [], False, None
-    for ln in open(f, encoding="utf-8", errors="strict"):
-        ln = ln.strip()
-        if not ln or ln[0] == "#":
-            continue
-        if ln.startswith("["):
-            cur = ln.rstrip("]").lstrip("[")
-            gasit = gasit or cur == srv
-            continue
-        if cur == srv:
-            chei.append(ln.split("=", 1)[0].strip().lower())
-    return chei if gasit else None
-fis = [user] + ([os.path.join(sysdir, "pg_service.conf")] if sysdir else [])
-for f in fis:
-    chei = sectiune(f)
-    if chei is not None:
-        rele = sorted(set(chei) - PERMISE)
-        if rele:
-            print(f"REFUZ: serviciul {srv} din {f} conține chei nepermise: {', '.join(rele)}", file=sys.stderr); sys.exit(1)
-        print(f"→ serviciul {srv}: {f}, chei {sorted(set(chei))} (host/port/dbname suprascrise de ținta aprobată)")
-        sys.exit(0)
-print(f"REFUZ: serviciul {srv} negăsit în {fis}" + ("" if sysdir else " (sysconfdir nedeterminabil: pg_config lipsă)"), file=sys.stderr)
-sys.exit(1)
-PY
-}
-[ -z "$C_SERVICE" ] || verifica_serviciu "$C_SERVICE"
 
 # --- copia unică, protejată; TOT ce urmează folosește DOAR copia -------------
 DIR="$(mktemp -d)"; trap 'chmod -R u+w "$DIR" 2>/dev/null; rm -rf "$DIR"' EXIT
@@ -215,8 +174,7 @@ COMMIT;
 SQL
 chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql"
 
-CONN=(-h "$C_HOST" -p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")   # explicite ⇒ au prioritate față de serviciu/mediu
-[ -n "$C_SERVICE" ] && export PGSERVICE="$C_SERVICE"
+CONN=(-h "$C_HOST" -p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")   # explicite ⇒ au prioritate față de mediu
 CONN+=(-d "$TINTA_DB")   # validat [A-Za-z0-9_] ⇒ nu poate fi conninfo/URI
 export PGCLIENTENCODING=UTF8   # parametru de pornire al conexiunii: are prioritate față de setările rolului/bazei
 PSQL="${PSQL_BIN:-psql}"
