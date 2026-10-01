@@ -111,3 +111,24 @@ Verdict Copilot: GO pe migrarea #540, NO-GO pe fișierul DML. Am reparat cele do
 **Verificare:** pe un PG16 local, cu date fictive. Prima rulare dezactivează 12 tokenuri; a doua e refuzată de gardă. **Nerulat pe live.**
 
 **sha256:** `fb4477caa4047ef7b215a0fcbc326e491925eb8bd1fa7607e7200bebca0695b3`
+
+---
+## r2d — 540_DML_PREVIEW.sql r3, după NO-GO Copilot pe fb4477ca (01.10)
+1. **Gardă pe setul global.** În blocul DO, *toate* tokenurile active ale angajaților plecați (`t.activ AND e.active IS FALSE`, fără filtru pe `c_ids`) trebuie să fie exact cele 12 perechi aprobate, inclusiv `termination_date`. Se refuză și orice încetare cu dată NULL sau viitoare printre cele 12.
+   - Sanity-ul global (0 tokenuri active la plecați) e acum postcondiție în DO.
+   - Query-ul de după rămâne doar informativ.
+2. **Fingerprint.** Înainte de UPDATE se capturează `employee_id:md5(token)` pentru cele 12, ca NOTICE. Tokenul în clar nu apare nicăieri.
+   - Rollback-ul reactivează doar rândurile al căror `employee_id:md5(token)` coincide cu fingerprint-ul.
+   - Cere exact 12 potriviri și verifică `ROW_COUNT = 12`.
+   - E valabil doar imediat după rulare și după reverificare.
+3. **Hardening.**
+   - `FOR UPDATE` pe cele 12 rânduri din `employees` (ordonate după id), apoi pe cele din `hr_concediu_tokens`, înainte de precheck.
+   - Postcondiția revalidează că cele 12 sunt tot plecate, cu aceleași date, și inactive.
+
+**Testat local (PG16, date fictive):**
+- happy path: 12 dezactivate și fingerprint emis;
+- un al 13-lea plecat cu token activ: refuz la garda globală;
+- rollback cu fingerprint: 12 reactivate;
+- rollback repetat: refuz.
+
+**Nerulat pe live.** sha256: `10822c3f8c05336582bff3d0e5dcda0b4e27114b035378e189723e53806fa169`
