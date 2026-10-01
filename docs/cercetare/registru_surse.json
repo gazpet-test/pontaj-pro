@@ -46,7 +46,7 @@
   "baza_normativa_id": "anap-indrumare-liste-preturi-2023",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -73,7 +73,7 @@
   "baza_normativa_id": "anap-indrumare-pret-neobisnuit-2023",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -100,7 +100,7 @@
   "baza_normativa_id": "anap-neconformitati-lucrari",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -127,7 +127,7 @@
   "baza_normativa_id": "anap-notificare-art160-2018",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -279,7 +279,7 @@
   "baza_normativa_id": "din-30672",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -333,7 +333,7 @@
   "baza_normativa_id": "fidic-red-yellow",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -361,7 +361,7 @@
   "snapshot_sha256": "54fbafbfdfc6843e8193a2da1738a8928a985656c47054b6dcca6ad351d667d0",
   "snapshot_data": "2026-10-01",
   "nota": "Snapshot al hg1.pdf (AFIR, actualizat cu HG 965/2023) descărcat în runda 1; clauzele 15, 21, 36, 46–53, 61, 69a recitite în această rundă.",
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -410,7 +410,7 @@
   "baza_normativa_id": "hg-1336-2022",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -418,27 +418,29 @@
   "tip": "hg",
   "cod": "HG 1425/2006",
   "titlu": "Normele metodologice de aplicare a Legii 319/2006",
-  "emitent": "Guvernul Romaniei",
-  "editie": "modificat (ex. HG 955/2010) — neverificat",
-  "data_publicarii": null,
+  "emitent": "Guvernul României",
+  "editie": "Actualizată prin HG 955/2010, HG 1242/2011, HG 767/2016 (după iprotectiamuncii.ro)",
+  "data_publicarii": "2006-10-30",
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://www.iprotectiamuncii.ro/",
+  "url_oficial": "https://www.iprotectiamuncii.ro/legislatie-protectia-muncii/hg-1425-2006",
   "urluri_secundare": "https://www.iprotectiamuncii.ro/",
   "acces": "public",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "ssm"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": 16,
   "baza_normativa_id": "hg-1425-2006",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
-  "motiv_aplicabilitate": null
+  "snapshot_sha256": "803ff6bfbe24d7a13c92cc63f411a4836c903cfd027d7b701e244eb058540d1a",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Instruirea SSM (art. 77–100) se aplică tuturor lucrătorilor de pe șantier.",
+  "note": "Sursă secundară; modificările după 2016 neverificate."
  },
  {
   "source_id": "SRC-hg-273-1994-receptie",
@@ -464,35 +466,38 @@
   "baza_normativa_id": "hg-273-1994-receptie",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
   "source_id": "SRC-hg-300-2006",
   "tip": "hg",
   "cod": "HG 300/2006",
-  "titlu": "Cerintele minime de securitate si sanatate pentru santierele temporare sau mobile",
-  "emitent": "Guvernul Romaniei",
-  "editie": "modificata prin HG 601/2007 (neverificat)",
-  "data_publicarii": null,
-  "effective_from": null,
+  "titlu": "Cerințele minime de securitate și sănătate pentru șantierele temporare sau mobile",
+  "emitent": "Guvernul României",
+  "editie": "MO 252/21.03.2006; formă actualizată la 12.07.2007 (HG 601/2007, MO 470/12.07.2007)",
+  "data_publicarii": "2006-03-21",
+  "effective_from": "2007-01-01",
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://www.iprotectiamuncii.ro/legislatie-protectia-muncii/hg-300-2006",
+  "url_oficial": "https://wertykl.ro/wp-content/uploads/2016/07/HOTARARE-300-din-2006-privind-cerintele-SSM-pentru-santierele-temporare-si-mobile.pdf",
   "urluri_secundare": "https://www.iprotectiamuncii.ro/legislatie-protectia-muncii/hg-300-2006",
   "acces": "public",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "ssm",
+   "santier_conex"
   ],
-  "ultima_verificare": null,
-  "verificat_pe_sursa_primara": false,
+  "ultima_verificare": "2026-10-01",
+  "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 14,
   "baza_normativa_id": "hg-300-2006",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
-  "motiv_aplicabilitate": null
+  "snapshot_sha256": "23b53012ed4afbc4d6a803625ce9d1f9ceed5eae63374678c8006ec09fe0e73d",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Orice șantier de rețele (excavații, terasamente, instalații: anexa 1). Transpune Directiva 92/57/CEE.",
+  "note": "Și forma inițială: iprotectiamuncii.ro (sha256 HTML c2292732b9de57f0733752b2de45dbb4b7c8d13d47d5fe41715d32cc7d635e0d). Pragul de 1,5 m NU apare în text. Modificări după 2007 neverificate."
  },
  {
   "tip": "hg",
@@ -540,7 +545,7 @@
   "baza_normativa_id": "hg-394-2016",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -567,8 +572,84 @@
   "baza_normativa_id": "hg-395-2016",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-hg-525-1996-rgu",
+  "tip": "hg",
+  "cod": "HG 525/1996",
+  "titlu": "Regulamentul general de urbanism (republicat)",
+  "emitent": "Guvernul României",
+  "editie": "Consolidare valabilă 30.12.2014–17.03.2017 (edirect.e-guvernare.ro)",
+  "data_publicarii": "1996-07-16",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://edirect.e-guvernare.ro/Uploads/Legi/35452/HG%20525-1996.pdf",
+  "acces": "public",
+  "domenii": [
+   "drumuri",
+   "mediu"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Art. 20: avizul CFR la subtraversări CF; art. 19: ape navigabile; NTPEE art. 83 alin. (2) trimite la art. 28 alin. (9).",
+  "snapshot_sha256": "650bb3f63e08fcc0884760fa3adaf686a22c2ced0a1087522ce577fb214c7881",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": true,
+  "note": "Statutul după Legea 169/2026 (CATUC) nu a fost verificat: de confirmat dacă e menținut tranzitoriu."
+ },
+ {
+  "source_id": "SRC-hg-571-2016",
+  "tip": "hg",
+  "cod": "HG 571/2016",
+  "titlu": "Categoriile de construcții și amenajări care se supun avizării și/sau autorizării privind securitatea la incendiu",
+  "emitent": "Guvernul României",
+  "editie": "MO 628/16.08.2016; actualizată prin HG 1181/2022 (text la 30.09.2022)",
+  "data_publicarii": "2016-08-16",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://www.drimand.ro/download/09%20H.G.%20Nr.%20571%20din%2010%20august%202016.pdf",
+  "acces": "public",
+  "domenii": [
+   "ssm"
+  ],
+  "aplicabilitate_gazpet": "neaplicabil",
+  "motiv_aplicabilitate": "Rețelele de distribuție și SRM nu apar în anexele 1–2; se aplică doar dacă obiectivul include o clădire sau o stație din anexe.",
+  "snapshot_sha256": "11e6ae11c1920b407e5fbcb9f74870bcfca3ea82d73a2afa4c7b45ce7fce0e76",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": 19,
+  "verificat_pe_sursa_primara": true,
+  "note": ""
+ },
+ {
+  "source_id": "SRC-hg-601-2007",
+  "tip": "hg",
+  "cod": "HG 601/2007",
+  "titlu": "Modificarea și completarea unor acte normative din domeniul securității și sănătății în muncă (art. III — HG 300/2006)",
+  "emitent": "Guvernul României",
+  "editie": "MO 470/12.07.2007",
+  "data_publicarii": "2007-07-12",
+  "effective_from": "2007-07-12",
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "ssm"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Modifică HG 300/2006 (art. 3, 47, 51, 56, 62, 65, 68, anexele 2 și 4; introduce art. 70^1).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": false,
+  "note": "Cunoscut doar din notele formei consolidate HG 300."
  },
  {
   "source_id": "SRC-hg-668-2017",
@@ -616,8 +697,33 @@
   "baza_normativa_id": "hg-766-1997",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-hg-856-2002",
+  "tip": "hg",
+  "cod": "HG 856/2002",
+  "titlu": "Evidența gestiunii deșeurilor și lista deșeurilor, inclusiv periculoase",
+  "emitent": "Guvernul României",
+  "editie": null,
+  "data_publicarii": "2002-09-05",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "mediu"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Format de evidență a deșeurilor; raportul cu OUG 92/2021 art. 48 nu a fost verificat.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": 12,
+  "verificat_pe_sursa_primara": false,
+  "note": "Text necitit în această rundă."
  },
  {
   "source_id": "SRC-hg-907-2016",
@@ -643,7 +749,7 @@
   "baza_normativa_id": "hg-907-2016",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -769,7 +875,7 @@
   "baza_normativa_id": "indicatoare-norme-deviz-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -796,7 +902,7 @@
   "baza_normativa_id": "indicator-Ac",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -823,7 +929,7 @@
   "baza_normativa_id": "indicator-G-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -850,7 +956,7 @@
   "baza_normativa_id": "indicator-I-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -877,7 +983,7 @@
   "baza_normativa_id": "indicator-Ts-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -956,7 +1062,7 @@
   "baza_normativa_id": "instr-anap-1-2021",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -983,7 +1089,7 @@
   "baza_normativa_id": "instr-anap-2-2017",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1010,7 +1116,7 @@
   "baza_normativa_id": "instr-anap-2-2018",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1064,7 +1170,7 @@
   "baza_normativa_id": "iso-21307",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1091,7 +1197,7 @@
   "baza_normativa_id": "iso-9001-14001-45001",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1118,7 +1224,7 @@
   "baza_normativa_id": "legea-10-1995",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1148,6 +1254,32 @@
   "corectura": "Runda 1 indica 5 zile sub prag — GREȘIT pentru forma curentă; textul 2016 avea notificare prealabilă (art. 6) + 5 zile. Act modificator neidentificat pe sursă primară.",
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Orice contestație Gazpet la CNSC (DA, răspunsuri, rezultat)."
+ },
+ {
+  "source_id": "SRC-legea-107-1996-ape",
+  "tip": "lege",
+  "cod": "Legea 107/1996",
+  "titlu": "Legea apelor",
+  "emitent": "Parlamentul României",
+  "editie": "Text legeaz.net (art. 48–51, modificări semnalate până la OUG 3/2010)",
+  "data_publicarii": "1996-10-08",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://legeaz.net/legea-apelor-107-1996/art-50-gospodarirea-apelor",
+  "acces": "public",
+  "domenii": [
+   "mediu",
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Se aplică la traversările de cursuri de apă (art. 48 lit. e)) și la lucrările de alimentare cu apă/canalizare (lit. b), c)): aviz și autorizație de gospodărire a apelor.",
+  "snapshot_sha256": "529bb54f356952fbe254ac06ee4f85b3fb7161a6df6c56daf5b669a8b4aff195",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": false,
+  "note": "Text secundar; modificările 2010–2026 (inclusiv procedura de notificare) neverificate."
  },
  {
   "source_id": "SRC-legea-123-2012-gaze",
@@ -1255,31 +1387,58 @@
   "motiv_aplicabilitate": "Licența ANRSC privește operatorii, nu executantul."
  },
  {
+  "source_id": "SRC-legea-307-2006",
+  "tip": "lege",
+  "cod": "Legea 307/2006",
+  "titlu": "Apărarea împotriva incendiilor",
+  "emitent": "Parlamentul României",
+  "editie": null,
+  "data_publicarii": "2006-07-21",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "ssm"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Temeiul Ordinului MAI 163/2007 (art. 17 alin. (2)) și al HG 571/2016; articolele proprii nu au fost citite.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": 18,
+  "verificat_pe_sursa_primara": false,
+  "note": ""
+ },
+ {
   "source_id": "SRC-legea-319-2006",
   "tip": "lege",
   "cod": "Legea 319/2006",
-  "titlu": "Legea securitatii si sanatatii in munca",
-  "emitent": "Parlamentul Romaniei",
-  "editie": "cu modificarile ulterioare (neverificate in detaliu)",
-  "data_publicarii": null,
+  "titlu": "Legea securității și sănătății în muncă",
+  "emitent": "Parlamentul României",
+  "editie": "Text consolidat iprotectiamuncii.ro (consultat 01.10.2026)",
+  "data_publicarii": "2006-07-14",
   "effective_from": null,
   "effective_to": null,
-  "status": "in_vigoare",
+  "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://www.iprotectiamuncii.ro/legislatie-protectia-muncii/hg-300-2006",
+  "url_oficial": "https://www.iprotectiamuncii.ro/legislatie-protectia-muncii/legea-319-2006",
   "urluri_secundare": "https://www.iprotectiamuncii.ro/legislatie-protectia-muncii/hg-300-2006",
   "acces": "public",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "ssm"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": 15,
   "baza_normativa_id": "legea-319-2006",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
-  "motiv_aplicabilitate": null
+  "snapshot_sha256": "09bed9b442009ede8181f8cda434ea111b56d81a91c054ac3660eb175e731fb6",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Obligațiile generale ale angajatorului; art. 7 alin. (5) privește direct șantierele cu mai mulți executanți.",
+  "note": "Sursă secundară (site privat), nu MO."
  },
  {
   "source_id": "SRC-legea-50-1991",
@@ -1305,7 +1464,7 @@
   "baza_normativa_id": "legea-50-1991",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1332,7 +1491,7 @@
   "baza_normativa_id": "legea-51-2006-anrsc",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1340,23 +1499,26 @@
   "cod": "Legea 53/2003",
   "titlu": "Codul muncii (republicat)",
   "emitent": "Parlamentul României",
-  "editie": "Republicat MO 345/18.05.2011, cu modificările ulterioare — articole confirmate din surse secundare 10.2026",
-  "data_publicarii": null,
+  "editie": "Republicat MO 345/18.05.2011, cu modificările ulterioare; text consultat pe legeaz.net (etichetat „actualizat 2020”)",
+  "data_publicarii": "2003-02-05",
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
-  "url_oficial": "https://legislatie.just.ro (inaccesibil din sandbox)",
-  "acces": "partial",
+  "url_oficial": "https://legeaz.net/legea-53-2003-codul-muncii/art-123",
+  "acces": "public",
   "domenii": [
    "deviz",
-   "ssm"
+   "ssm",
+   "contract"
   ],
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Angajator; timpul de muncă, sporurile obligatorii și concediul intră în costul orar al manoperei (C7) și în justificarea prețului (HG 395 art. 136 alin. (2)).",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
+  "motiv_aplicabilitate": "Timpul de lucru, sporurile și repausul determină tariful orar și graficul de execuție din ofertă; L 98/2016 art. 51 obligă ofertantul să respecte legislația muncii.",
+  "snapshot_sha256": "9e898d1ccdc85d76be07147d5dfdd7b449fdc75c4581cd695c931eb35bc0a8a7",
+  "snapshot_data": "2026-10-01",
   "ultima_verificare": "2026-10-01",
-  "source_id": "SRC-legea-53-2003-codul-muncii"
+  "source_id": "SRC-legea-53-2003-codul-muncii",
+  "verificat_pe_sursa_primara": false,
+  "note": "Hash = pagina art. 123; s-au citit art. 112, 114, 115, 120–123, 125, 126, 135, 137, 139, 142, 145, 164, 166. Lista de sărbători (art. 139) de pe legeaz e depășită, deci și restul textului poate fi neactualizat: confirmă pe sursă oficială înainte de producție."
  },
  {
   "source_id": "SRC-legea-64-2008",
@@ -1406,7 +1568,7 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "Corectură: art. 175 alin. (2) lit. a) limitează cifra de afaceri minimă la 2× valoarea estimată (excepții justificate alin. (3)–(4)); art. 173 alin. (2) privește doar serviciile — pentru lucrări autorizarea se cere pe alin. (1).",
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1433,7 +1595,7 @@
   "baza_normativa_id": "legea-98-2016-art-200-201",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1460,8 +1622,34 @@
   "baza_normativa_id": "legea-99-2016",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-mdlpa-clarificari-catuc-2026-09",
+  "tip": "ghid",
+  "cod": "Clarificări MDLPA — aplicarea Legii 169/2026 (septembrie 2026)",
+  "titlu": "Clarificări privind aplicarea Codului amenajării teritoriului, urbanismului și construcțiilor",
+  "emitent": "MDLPA",
+  "editie": "15 răspunsuri; data 22.09.2026 (verificatori.ro) / 23.09.2026 (runda 1)",
+  "data_publicarii": "2026-09-22",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://primariacristian.ro/wp-content/uploads/2026/09/Clarificari-privind-aplicarea-Legii-nr.1692026-privind-Codul-amenajarii-teritoriului-urbanismului-si-constructiilor.pdf",
+  "acces": "public",
+  "domenii": [
+   "drumuri",
+   "contract"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Branșamentele pentru construcții existente: acord/autorizație a administratorului drumului (art. 267 alin. (1) L 169/2026), fără AC. Interpretare, nu act normativ.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": false,
+  "note": "PDF-ul nu s-a putut descărca (conexiune resetată); conținut preluat din rezumatul verificatori.ro și juridice.ro."
  },
  {
   "source_id": "SRC-norme-firma-softeh-valrom-pehd",
@@ -1487,7 +1675,7 @@
   "baza_normativa_id": "norme-firma-softeh-valrom-pehd",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1514,7 +1702,7 @@
   "baza_normativa_id": "np-133-2013",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1678,7 +1866,7 @@
   "baza_normativa_id": "ntpee-2018-sudura-ndt-izolatie-probe",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1705,7 +1893,7 @@
   "baza_normativa_id": "ntpee-procent-ndt",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1760,6 +1948,32 @@
   "ultima_verificare": "2026-10-01"
  },
  {
+  "source_id": "SRC-og-43-1997",
+  "tip": "og",
+  "cod": "OG 43/1997",
+  "titlu": "Ordonanța privind regimul drumurilor",
+  "emitent": "Guvernul României",
+  "editie": "Republicată MO 237/29.06.1998; consolidare 11.10.2019 (ultimul amendament L 203/2018)",
+  "data_publicarii": "1998-06-29",
+  "effective_from": "1998-01-01",
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://descarcari.tntsoftware.ro/leg/ordonanta-nr-43-1997-privind-regimul-drumurilor.pdf",
+  "acces": "public",
+  "domenii": [
+   "drumuri",
+   "santier_conex"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Orice rețea sau branșament în zona drumului public cere acordul și autorizația administratorului (art. 46, 48).",
+  "snapshot_sha256": "09d1f8d76ab6f144116660f49241ce01627449fe03e506670ae7fbf03bfe5fa6",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": true,
+  "note": "Modificările 2020–2026 neverificate; cnadnr.ro nu a răspuns."
+ },
+ {
   "source_id": "SRC-ord-anre-132-2021",
   "tip": "ordin_anre",
   "cod": "Ordin ANRE 132/2021",
@@ -1783,7 +1997,7 @@
   "baza_normativa_id": "ord-anre-132-2021",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1810,7 +2024,7 @@
   "baza_normativa_id": "ord-anre-156-2020",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1865,7 +2079,7 @@
   "baza_normativa_id": "ord-anre-182-2020",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1892,7 +2106,7 @@
   "baza_normativa_id": "ord-anre-2-2023",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -1901,26 +2115,28 @@
   "cod": "Ordin ANRE 239/2019",
   "titlu": "Norma tehnică privind delimitarea zonelor de protecție și de siguranță aferente capacităților energetice",
   "emitent": "ANRE",
-  "editie": "MO 36/20.01.2020, cu modificările ulterioare (înlocuiește Ordin 4/2007, conform NTPEE consolidat art. 32 alin. 2 lit. c)",
-  "data_publicarii": null,
-  "effective_from": null,
+  "editie": "Consolidare 14.03.2024 (Ord. ANRE 67/2020, 225/2020, 106/2023); MO 36 bis/20.01.2020",
+  "data_publicarii": "2020-01-20",
+  "effective_from": "2020-04-20",
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://migs.ro/wp-content/uploads/2023/02/NTPEE-2018-actualizat-cu-OANRE-89-modificat-cu-OANRE-2-din-2023.pdf",
+  "url_oficial": "https://www.distributieoltenia.ro/resources/ckfinder/core/connector/php/connector.php?command=Proxy&lang=en&type=Files&currentFolder=%2Futile%2Flegislatia-secundara%2Fnorme-si-normative-tehnice%2F&hash=24460cc7b9aefcd5&fileName=Norma+tehnic%C4%83+privind+delimitarea+zonelor+de+protec%C5%A3ie+%C5%9Fi+de+siguran%C5%A3%C4%83.pdf",
   "urluri_secundare": "https://migs.ro/wp-content/uploads/2023/02/NTPEE-2018-actualizat-cu-OANRE-89-modificat-cu-OANRE-2-din-2023.pdf",
   "acces": "public",
   "domenii": [
-   "tehnic_gaze_apa"
+   "tehnic_gaze_apa",
+   "santier_conex"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "ord-anre-239-2019",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
-  "motiv_aplicabilitate": null
+  "snapshot_sha256": "b0caac4fefd479bd5fa60e13c32014f7c2b117b3a840a7c69fd46b4d5e39f8c5",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Coexistența cu LES/LEA la orice săpătură; Legea 123/2012 art. 15 alin. (2).",
+  "note": "Anexa 6 (LEA > 1 kV) nu a fost extrasă detaliat."
  },
  {
   "source_id": "SRC-ord-anre-5-2009",
@@ -1997,7 +2213,7 @@
   "baza_normativa_id": "ord-anre-7-2022",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2024,7 +2240,7 @@
   "baza_normativa_id": "ordin-1014-874-2001-formulare-c",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2051,7 +2267,7 @@
   "baza_normativa_id": "ordin-1895-2016-rte",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2078,8 +2294,33 @@
   "baza_normativa_id": "ordin-2264-2018",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-ordin-828-2019-aviz-ape",
+  "tip": "ordin",
+  "cod": "Ordin MAP 828/2019",
+  "titlu": "Procedura și competențele de emitere, modificare și retragere a avizului de gospodărire a apelor (...)",
+  "emitent": "Ministerul Apelor și Pădurilor",
+  "editie": "MO 615/25.07.2019; formă valabilă 25.07.2019–24.11.2022",
+  "data_publicarii": "2019-07-25",
+  "effective_from": "2019-07-25",
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://rowater.ro/wp-content/uploads/2023/09/ORDIN-nr.-828-din-4-iulie-2019.pdf",
+  "acces": "public",
+  "domenii": [
+   "mediu"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Avizul ANAR la traversări de ape: notificarea începerii lucrărilor, conținutul documentației de subtraversare.",
+  "snapshot_sha256": "f3f3a51c7e7ddd7e45179f4d80607153cb285b53546e2a6add43703f7cb43385",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": true,
+  "note": "Modificat după 24.11.2022 (formă nouă neconsultată)."
  },
  {
   "source_id": "SRC-ordin-863-2008",
@@ -2105,8 +2346,59 @@
   "baza_normativa_id": "ordin-863-2008",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-ordin-mai-163-2007",
+  "tip": "ordin",
+  "cod": "Ordin MAI 163/2007",
+  "titlu": "Normele generale de apărare împotriva incendiilor",
+  "emitent": "Ministerul Administrației și Internelor",
+  "editie": "MO 216/29.03.2007",
+  "data_publicarii": "2007-03-29",
+  "effective_from": "2007-04-28",
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://www.upg-ploiesti.ro/sites/default/files/informatii_publice/situatii_urgenta/OMAI-nr-163-din-2007.pdf",
+  "acces": "public",
+  "domenii": [
+   "ssm"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Sudura și tăierea la conducte de gaze sau lângă instalații cu risc de explozie cer permis de lucru cu foc (art. 99–100); NTPEE art. 403 face trimitere la permis.",
+  "snapshot_sha256": "f4e2ab31a87a1fce054051a95f60260aac2b3dedfa1bc32c51b4a61ff328e221",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": true,
+  "note": "Formă publicată 2007; modificări ulterioare neverificate."
+ },
+ {
+  "source_id": "SRC-ordin-mi-mt-1112-411-2000",
+  "tip": "ordin",
+  "cod": "Ordin MI/MT 1112/411/2000",
+  "titlu": "Norme metodologice privind condițiile de închidere a circulației și de instituire a restricțiilor de circulație pentru lucrări în zona drumului public",
+  "emitent": "MI + MT",
+  "editie": "MO 397/24.08.2000; formă sintetică la 20.12.2020",
+  "data_publicarii": "2000-08-24",
+  "effective_from": "2000-10-23",
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://snppc.ro/uploads/fisiere/articole/NORME-METODOLOGICE-%C3%AEnchidere-a-circula%C5%A3iei-.pdf",
+  "acces": "public",
+  "domenii": [
+   "drumuri",
+   "ssm"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "OG 43/1997 art. 44 alin. (1) trimite la ordinul comun; orice lucrare care ocupă carosabilul sau trotuarul.",
+  "snapshot_sha256": "90016fa7a62f97a5bfa18555e7d915f77f521187fe3ad8c44ec811909325634b",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": true,
+  "note": "În vigoare la 20.12.2020 după forma sintetică; după această dată nu a fost verificat."
  },
  {
   "source_id": "SRC-ordin-mlptl-1568-2002-p91",
@@ -2132,8 +2424,112 @@
   "baza_normativa_id": "ordin-mlptl-1568-2002-p91",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-ordin-mt-1170-2018",
+  "tip": "ordin",
+  "cod": "Ordin MT 1170/2018",
+  "titlu": "Abrogarea Ordinului ministrului transporturilor nr. 1835/2017",
+  "emitent": "Ministerul Transporturilor",
+  "editie": null,
+  "data_publicarii": null,
+  "effective_from": "2018-07-26",
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "drumuri"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Doar pentru lanțul de abrogare.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": false,
+  "note": ""
+ },
+ {
+  "source_id": "SRC-ordin-mt-1294-2017",
+  "tip": "ordin",
+  "cod": "Ordin MT 1294/2017",
+  "titlu": "Norme tehnice privind amplasarea lucrărilor edilitare, a stâlpilor pentru instalații și a pomilor în localitățile urbane și rurale",
+  "emitent": "Ministerul Transporturilor",
+  "editie": "MO 746/18.09.2017",
+  "data_publicarii": "2017-09-18",
+  "effective_from": "2017-09-18",
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://www.legex.ro/Ordin-1294-2017-155781.aspx",
+  "acces": "public",
+  "domenii": [
+   "drumuri",
+   "gaze",
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Normă emisă în aplicarea OG 43/1997; adâncimi minime la traversări de drum în localități (pct. 3.21–3.22). Abrogă Ordinul MT 47/1998.",
+  "snapshot_sha256": "5700b8e92c89ca7f7d781bdacaa6bd96da27bdbcda6fe7c467f08fea0344a70a",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": true,
+  "note": "Text publicat inițial (legex); modificări ulterioare neverificate."
+ },
+ {
+  "source_id": "SRC-ordin-mt-1668-2023",
+  "tip": "ordin",
+  "cod": "Ordin MTI 1668/2023",
+  "titlu": "Norme tehnice privind condițiile de proiectare și amplasare a construcțiilor, instalațiilor și mijloacelor de publicitate în zona drumurilor de interes național (...)",
+  "emitent": "Ministerul Transporturilor și Infrastructurii",
+  "editie": "Ordin din 14.09.2023; forma publicată în MO (fără modificări ulterioare)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://lege5.ro/gratuit/ge2danrrgm2dc/normele-tehnice-privind-conditiile-de-proiectare-si-amplasare-a-constructiilor-instalatiilor-si-a-mijloacelor-de-publicitate-in-zona-drumurilor-de-interes-national-pe-poduri-pasaje-viaducte-in-tunelur",
+  "acces": "public",
+  "domenii": [
+   "drumuri",
+   "gaze",
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Drumuri naționale: adâncime minimă 2,00/1,50 m, tub de protecție, foraj, refacerea pe toată banda, garanție 5 ani (pct. 3.4).",
+  "snapshot_sha256": "2163d2962e25e15e873659d3809931e653e86ce3c99c5e11a4c72abef11595a5",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": true,
+  "note": "Numărul și data ordinului (1668/14.09.2023) vin din titlul de pe legislatie.just.ro din rezultatele de căutare; numărul MO nu a fost identificat. Înlocuiește practic Ordinul 1835/2017 (abrogat prin Ordinul 1170/2018)."
+ },
+ {
+  "source_id": "SRC-ordin-mt-1835-2017",
+  "tip": "ordin",
+  "cod": "Ordin MT 1835/2017",
+  "titlu": "Norme tehnice privind condițiile de proiectare și amplasare a construcțiilor, instalațiilor și mijloacelor de publicitate în zona drumurilor (...)",
+  "emitent": "Ministerul Transporturilor",
+  "editie": "MO 71/23.01.2018",
+  "data_publicarii": "2018-01-23",
+  "effective_from": "2018-01-23",
+  "effective_to": "2018-07-26",
+  "status": "abrogat",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "drumuri"
+  ],
+  "aplicabilitate_gazpet": "neaplicabil",
+  "motiv_aplicabilitate": "Numărul din prompt („Ordin MT 1835/2017”) nu e actual: ordinul a fost abrogat prin Ordinul MT 1170/2018; pentru drumurile naționale se aplică Ordinul 1668/2023, iar pentru localități Ordinul 1294/2017.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": false,
+  "note": "Statut din titlul lege5 (Ordinul 1170/2018 privind abrogarea)."
  },
  {
   "source_id": "SRC-oug-114-2011",
@@ -2159,8 +2555,58 @@
   "baza_normativa_id": "oug-114-2011",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-oug-12-1998-cfr",
+  "tip": "oug",
+  "cod": "OUG 12/1998",
+  "titlu": "Transportul pe căile ferate române și reorganizarea SNCFR",
+  "emitent": "Guvernul României",
+  "editie": "Text legeaz.net (dată de actualizare necunoscută)",
+  "data_publicarii": "1998-07-07",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://legeaz.net/oug-12-1998-transport-cfr-reorganizare-sncfr/art-29-siguranta-si-protectia-infrastructurii-feroviare",
+  "acces": "public",
+  "domenii": [
+   "drumuri"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Doar la trasee aflate la mai puțin de 100 m de axa unei căi ferate sau la subtraversări CF.",
+  "snapshot_sha256": "87e67602600f064556ff548d0bc49aaf0c6404ab863193b3e7c865de90cb5872",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": false,
+  "note": "Sursă secundară."
+ },
+ {
+  "source_id": "SRC-oug-195-2005",
+  "tip": "oug",
+  "cod": "OUG 195/2005",
+  "titlu": "Protecția mediului",
+  "emitent": "Guvernul României",
+  "editie": null,
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "mediu"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Actele de reglementare de mediu (acord/aviz) le obține beneficiarul; executantul preia condițiile prin PTE și CS. Exclus din cerințe (vezi note).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": 13,
+  "verificat_pe_sursa_primara": false,
+  "note": ""
  },
  {
   "source_id": "SRC-oug-47-2022",
@@ -2186,7 +2632,7 @@
   "baza_normativa_id": "oug-47-2022",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2218,6 +2664,31 @@
   "nota": "Art. 17 alin. (1), (3), (4), (8) lit. a1) și art. 1 alin. (3), art. 2 citite. Legea de aprobare și forma după 07.2022 NEVERIFICATE. HG 1586/2022 (metodologie) semnalată de surse secundare — necitită."
  },
  {
+  "source_id": "SRC-oug-92-2021",
+  "tip": "oug",
+  "cod": "OUG 92/2021",
+  "titlu": "Regimul deșeurilor",
+  "emitent": "Guvernul României",
+  "editie": "MO 820/26.08.2021; consolidare 22.12.2023 (ecoteca.ro)",
+  "data_publicarii": "2021-08-26",
+  "effective_from": "2021-08-26",
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://ecoteca.ro/wp-content/uploads/2023/12/OUG-92_2021.pdf",
+  "acces": "public",
+  "domenii": [
+   "mediu"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Executantul produce deșeuri C&D; titularul AC are planul de gestionare și ținta de 70% (art. 17 alin. (4), (7)).",
+  "snapshot_sha256": "ef47e3bb5fdd95bd92d7bf4676e681810e1ff25935534a11e9a51f57f78086da",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": 11,
+  "verificat_pe_sursa_primara": true,
+  "note": "Modificări după 12.2023 neverificate. Prezentarea MMAP (sha a33fd32e…) a fost folosită doar pentru orientare."
+ },
+ {
   "source_id": "SRC-oug-98-2017",
   "tip": "oug",
   "cod": "OUG 98/2017",
@@ -2241,7 +2712,7 @@
   "baza_normativa_id": "oug-98-2017",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2268,7 +2739,7 @@
   "baza_normativa_id": "pcf-002-ordin-1370-2014",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2295,7 +2766,7 @@
   "baza_normativa_id": "praguri-ue-2026-2027",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2322,7 +2793,7 @@
   "baza_normativa_id": "pt-cr-3-2025-rsvti",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2410,19 +2881,21 @@
   "source_id": "SRC-salariu-minim-constructii-2026",
   "tip": "oug",
   "cod": "OUG 114/2018 art. 71 + OUG 156/2024 art. LXIX",
-  "titlu": "Salariul de baza minim brut garantat in plata pentru domeniul constructiilor",
-  "emitent": "Guvernul Romaniei",
-  "editie": "4.582 lei/luna (27,714 lei/ora) in 2025 si 2026; nemodificat de OUG 29/2026 (care a abrogat doar regimul agricultura/industrie alimentara)",
+  "titlu": "Salariul de bază minim brut garantat în plată în domeniul construcțiilor",
+  "emitent": "Guvernul României",
+  "editie": "4.582 lei/lună în 2026 (confirmat în surse secundare la 01.10.2026)",
   "data_publicarii": null,
-  "effective_from": null,
+  "effective_from": "2025-01-01",
   "effective_to": null,
   "status": "in_vigoare",
   "inlocuit_de": null,
-  "url_oficial": "https://edevize.ro/salariu-minim-constructii/",
+  "url_oficial": "https://www.keez.ro/blog/salariul-minim-cat-e-netul-si-ce-obligatii-ai-ca-angajator.html",
   "urluri_secundare": "https://edevize.ro/salariu-minim-constructii/ ; https://www.contabun.ro/2026/04/28/salariul-minim-in-sectoarele-constructii-agricultura-si-industria-alimentara-de-la-1-iulie-2026/ ; https://startupcafe.ro/salariul-minim-2026-in-monitorul-oficial-hg-146-96219",
   "acces": "public",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "deviz",
+   "santier_conex"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
@@ -2431,8 +2904,9 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Tariful orar din C7 al ofertelor Gazpet; L98 art. 210 alin. (4).",
-  "nota": "Reconfirmat 01.10.2026 din surse secundare (salariile.ro, edevize.ro): 4.582 lei/27,714 lei/h pe tot 2026; textul OUG 156/2024 necitit."
+  "motiv_aplicabilitate": "Pragul minim legal al manoperei din ofertă (L 98/2016 art. 51, art. 210).",
+  "nota": "Reconfirmat 01.10.2026 din surse secundare (salariile.ro, edevize.ro): 4.582 lei/27,714 lei/h pe tot 2026; textul OUG 156/2024 necitit.",
+  "note": "Texte secundare 2026: keez.ro, calculvenituri.ro, cardiff.ro, folositor.ro: 4.582 lei tot anul 2026, inclusiv după creșterea salariului minim general la 4.325 lei din 01.07.2026. Textul oficial al OUG 156/2024 nu a fost citit."
  },
  {
   "source_id": "SRC-sr-1343-1",
@@ -2458,7 +2932,7 @@
   "baza_normativa_id": "sr-1343-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2512,7 +2986,7 @@
   "baza_normativa_id": "sr-en-10204",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2539,7 +3013,7 @@
   "baza_normativa_id": "sr-en-10208-2",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2566,7 +3040,7 @@
   "baza_normativa_id": "sr-en-10216-10217",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2620,7 +3094,7 @@
   "baza_normativa_id": "sr-en-12068",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2777,7 +3251,7 @@
   "baza_normativa_id": "sr-en-13509",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2804,7 +3278,7 @@
   "baza_normativa_id": "sr-en-15001",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2858,7 +3332,7 @@
   "baza_normativa_id": "sr-en-1594",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2912,7 +3386,7 @@
   "baza_normativa_id": "sr-en-1775",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -2939,7 +3413,7 @@
   "baza_normativa_id": "sr-en-752",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3015,7 +3489,7 @@
   "baza_normativa_id": "sr-en-iso-10675-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3042,7 +3516,7 @@
   "baza_normativa_id": "sr-en-iso-12944",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3069,7 +3543,7 @@
   "baza_normativa_id": "sr-en-iso-14731",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3096,7 +3570,7 @@
   "baza_normativa_id": "sr-en-iso-14732",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3123,7 +3597,7 @@
   "baza_normativa_id": "sr-en-iso-15589-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3177,7 +3651,7 @@
   "baza_normativa_id": "sr-en-iso-15614-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3204,7 +3678,7 @@
   "baza_normativa_id": "sr-en-iso-17635",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3231,7 +3705,7 @@
   "baza_normativa_id": "sr-en-iso-17636",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3258,7 +3732,7 @@
   "baza_normativa_id": "sr-en-iso-17637",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3285,7 +3759,7 @@
   "baza_normativa_id": "sr-en-iso-17640-11666",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3312,7 +3786,7 @@
   "baza_normativa_id": "sr-en-iso-21809-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3339,7 +3813,7 @@
   "baza_normativa_id": "sr-en-iso-21809-3",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3366,7 +3840,7 @@
   "baza_normativa_id": "sr-en-iso-3183",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3393,7 +3867,7 @@
   "baza_normativa_id": "sr-en-iso-3834",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3420,7 +3894,7 @@
   "baza_normativa_id": "sr-en-iso-5817",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3447,7 +3921,7 @@
   "baza_normativa_id": "sr-en-iso-8501-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3474,7 +3948,7 @@
   "baza_normativa_id": "sr-en-iso-8503-8502",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3501,7 +3975,7 @@
   "baza_normativa_id": "sr-en-iso-9606-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3528,7 +4002,7 @@
   "baza_normativa_id": "sr-en-iso-9712",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3555,7 +4029,7 @@
   "baza_normativa_id": "standard-performanta-distributie-gaze",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3582,7 +4056,7 @@
   "baza_normativa_id": "stas-1846",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": null,
+  "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
  {
@@ -3611,6 +4085,33 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. I."
+ },
+ {
+  "source_id": "SRC-stas-9312-87",
+  "tip": "standard",
+  "cod": "STAS 9312-87",
+  "titlu": "Subtraversări de căi ferate și drumuri cu conducte. Prescripții de proiectare",
+  "emitent": "IRS/ASRO",
+  "editie": "1987",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "drumuri",
+   "gaze",
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Incorporat prin referință de Ordinul MTI 1668/2023 pct. 3.4.4 alin. (3) pentru subtraversări DN; apare în NTPEE anexa 2 poz. 64.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "ofertare_normative_id": null,
+  "verificat_pe_sursa_primara": false,
+  "note": "Statutul ASRO (în vigoare/anulat) nu a fost verificat; conținutul nu a fost citit."
  },
  {
   "tip": "decizie_cnsc",

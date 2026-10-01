@@ -8599,10 +8599,10 @@
   "tip_consum": null,
   "domeniu": "ssm",
   "faza": "executie",
-  "incredere": "ridicata",
+  "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -8622,10 +8622,10 @@
   "tip_consum": null,
   "domeniu": "ssm",
   "faza": "executie",
-  "incredere": "ridicata",
+  "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -8645,10 +8645,10 @@
   "tip_consum": "estimare_interna",
   "domeniu": "deviz",
   "faza": "ofertare",
-  "incredere": "ridicata",
+  "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -8672,10 +8672,10 @@
   "tip_consum": null,
   "domeniu": "ssm",
   "faza": "executie",
-  "incredere": "ridicata",
+  "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -8699,10 +8699,10 @@
   "tip_consum": null,
   "domeniu": "ssm",
   "faza": "executie",
-  "incredere": "ridicata",
+  "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -10230,7 +10230,7 @@
   "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -10254,7 +10254,7 @@
   "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -10277,7 +10277,7 @@
   "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -10300,7 +10300,7 @@
   "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Text citit pe sursă secundară (site privat), nu în MO.",
   "tema": "santier_conex"
  },
  {
@@ -10782,10 +10782,10 @@
   "tip_consum": null,
   "domeniu": "gaze",
   "faza": "executie",
-  "incredere": "ridicata",
+  "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Formă sintetică 07.01.2019 (fișierul l123.txt din runda 1, sha256 87c17f9f…); numerotarea după modificările 2020–2026 neverificată.",
   "tema": "santier_conex"
  },
  {
@@ -10806,10 +10806,10 @@
   "tip_consum": null,
   "domeniu": "ssm",
   "faza": "executie",
-  "incredere": "ridicata",
+  "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": "Formă sintetică 07.01.2019 (fișierul l123.txt din runda 1, sha256 87c17f9f…); numerotarea după modificările 2020–2026 neverificată.",
   "tema": "santier_conex"
  },
  {
