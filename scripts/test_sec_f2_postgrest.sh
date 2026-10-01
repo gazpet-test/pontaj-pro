@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# ============================================================================
+# Test OPȚIONAL end-to-end cu un PostgREST REAL — SEC F2 (20260930j_sec_f2_profiles_uid_null), runda 6.
+#
+# EXCLUSIV local: cluster PostgreSQL 17 creat de script (initdb în director temporar, doar socket unix) + binarul PostgREST
+# (POSTGREST=/cale/postgrest, ex. release-ul oficial postgrest-v13.0.4-linux-static-x86-64) ascultând DOAR pe 127.0.0.1.
+# Nu citește .env, nu folosește chei Supabase (jwt-secret generat aleator), nu atinge producția. Refuză PGHOST nelocal.
+#
+# 1. Sonda: ce valori vede efectiv o funcție apelată prin PostgREST (session_user, current_user, role, claim.role, claims,
+#    auth.uid()) pentru JWT anon / authenticated cu sub / service_role fără sub — în SECURITY INVOKER și SECURITY DEFINER.
+# 2. F2 aplicat (ca runnerul): PATCH pe profiles cu service_role ⇒ permis; authenticated non-owner pe câmp protejat ⇒ refuz;
+#    RPC care își pune singur claim-urile service_role (set_config) apoi UPDATE ca authenticated ⇒ 42501 (r4: și pe
+#    employee_id/department, a 4-a funcție; control: cu a 4-a readusă la corpul live c06d7ce0… același RPC TRECE).
+#    R-1 (r6: nereprodus = FAIL): RPC SECURITY INVOKER care face set_config('role','service_role') + claims ⇒ trece (demonstrează
+#    de ce e nevoie de 0e). CONTROL-0e (r6): RPC care falsifică DOAR sub (clauze SET "request.jwt.claim(s)…" = owner) ⇒ UPDATE
+#    employee_id trece pe triggere (rând recitit) ȘI aceeași construcție e listată de interogarea de control 0e (din doc §8.4).
+#    RPC-urile de atac se creează DUPĂ aplicarea F2 (precondiția 0e ar refuza altfel — exact rolul ei).
+# Utilizare: POSTGREST=/cale/postgrest bash scripts/test_sec_f2_postgrest.sh   (F2_FILE=<alt fișier F2> opțional)
+# Ieșire: 0 toate trec, 1 eșecuri, 2 mediu, 3 PostgREST lipsă (SKIP).
+# ============================================================================
+set -u
+case "${PGHOST:-}" in
+  ""|localhost|127.0.0.1|::1|/*) ;;
+  *) echo "REFUZ: PGHOST=$PGHOST nu e local"; exit 2 ;;
+esac
+unset PGHOST PGHOSTADDR PGPORT PGUSER PGDATABASE PGPASSWORD PGSERVICE PGSERVICEFILE PGPASSFILE DATABASE_URL PGRST_DB_URI
+PGRST=${POSTGREST:-$(command -v postgrest || true)}
+[ -x "$PGRST" ] || { echo "SKIP: binarul PostgREST lipsește (setează POSTGREST=/cale/postgrest)"; exit 3; }
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+M=$ROOT/supabase/migrations; T=$ROOT/supabase/tests
+F2=${F2_FILE:-$M/20260930j_sec_f2_profiles_uid_null.sql}
+PGB=${PGBIN:-/usr/lib/postgresql/17/bin}; PORT=${PORT:-5498}; HPORT=${HTTP_PORT:-3998}
+D=$(mktemp -d "${TMPDIR:-/tmp}/sec_f2_pgrst.XXXXXX"); chmod 777 "$D"
+AS=""; if [ "$(id -u)" = 0 ]; then AS="su nobody -s /bin/bash -c"; chown nobody "$D"; fi
+pgctl() { if [ -n "$AS" ]; then $AS "$*"; else bash -c "$*"; fi; }
+pgctl "$PGB/initdb -D $D/data -U postgres -A trust >/dev/null && $PGB/pg_ctl -D $D/data -o '-k $D -p $PORT -c listen_addresses=' -l $D/log start >/dev/null" || { echo "initdb/pg_ctl a eșuat"; exit 2; }
+PID=""
+trap '[ -n "$PID" ] && kill $PID 2>/dev/null; pgctl "$PGB/pg_ctl -D $D/data stop -m fast >/dev/null"; rm -rf "$D"' EXIT
+P() { "$PGB/psql" -X -q -v ON_ERROR_STOP=1 -h "$D" -p "$PORT" -U postgres postgres "$@"; }
+NFAIL=0; ok() { echo "PASS $1"; }; bad() { echo "FAIL $1 — $2"; NFAIL=$((NFAIL+1)); }
+
+# --- fixture comună cu harness-ul SQL + corpurile live + triggere; authenticator NOINHERIT (ca în Supabase)
+P -f "$T/sec_f1_f2_fixture.sql" >/dev/null || exit 2
+python3 - "$M/20260930j_sec_f2_profiles_uid_null_ROLLBACK.sql" > "$D/live_fns.sql" <<'PY'
+import re,sys
+print("\n".join(f for f in re.findall(r"(CREATE OR REPLACE FUNCTION public\.\w+\(\).*?\$function\$;)", open(sys.argv[1]).read(), re.S) if "fn_profiles_campuri_owner_only" not in f))  # a 4-a: din fixture
+PY
+P -f "$D/live_fns.sql" >/dev/null && P -f "$T/sec_f1_f2_fixture_triggers.sql" >/dev/null || exit 2
+P <<'SQL' >/dev/null || exit 2
+ALTER ROLE authenticator NOINHERIT;
+SQL
+# --- F2 aplicat ca runnerul (marcaj + fișier, o singură tranzacție)
+{ echo "SELECT set_config('gazpet.livrare_migrare', '20260930j_sec_f2_profiles_uid_null:' || txid_current(), true);"; cat "$F2"; } > "$D/run.sql"
+o=$(P --single-transaction -f "$D/run.sql" 2>&1) && ok "F2 aplicat ($(basename "$F2"))" || { bad "F2 apply" "$o"; exit 1; }
+P <<'SQL' >/dev/null || exit 2
+-- sondele (r6: create DUPĂ apply — citesc request.jwt / role, deci 0e le-ar refuza, fals-pozitiv fail-closed)
+CREATE FUNCTION public.sonda() RETURNS jsonb LANGUAGE sql SECURITY INVOKER AS $$
+  SELECT jsonb_build_object('session_user', session_user::text, 'current_user', current_user::text,
+    'role', current_setting('role', true), 'claim_role', current_setting('request.jwt.claim.role', true),
+    'claim_sub', current_setting('request.jwt.claim.sub', true), 'claims', current_setting('request.jwt.claims', true),
+    'uid', auth.uid()) $$;
+CREATE FUNCTION public.sonda_definer() RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS $$ SELECT public.sonda() $$;
+CREATE FUNCTION public.sonda_definer_plpgsql() RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN RETURN jsonb_build_object('session_user', session_user::text, 'current_user', current_user::text, 'role', current_setting('role', true)); END $$;
+GRANT EXECUTE ON FUNCTION public.sonda(), public.sonda_definer(), public.sonda_definer_plpgsql() TO anon, authenticated, service_role;
+-- atacul: RPC SECURITY INVOKER care își pune singur rolul JWT service_role, apoi UPDATE pe profiles (JWT authenticated fără sub)
+CREATE FUNCTION public.escaladare_claim() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  UPDATE public.profiles SET role = 'owner' WHERE id = '22222222-2222-2222-2222-222222222222'; RETURN 'UPD'; END $$;
+CREATE FUNCTION public.escaladare_claims() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN PERFORM set_config('request.jwt.claims', '{"role":"service_role"}', true);
+  PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  UPDATE public.profiles SET role = 'owner' WHERE id = '22222222-2222-2222-2222-222222222222'; RETURN 'UPD'; END $$;
+-- r4: utilizator REAL non-owner (sub) — auth.uid() NOT NULL, deci celelalte 3 triggere nu intervin pe department/employee_id;
+-- doar a 4-a funcție decide. Își pune claims service_role (păstrând sub) + claim.role service_role.
+CREATE FUNCTION public.escaladare_employee_id() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN PERFORM set_config('request.jwt.claims', '{"role":"service_role","sub":"22222222-2222-2222-2222-222222222222"}', true);
+  PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  UPDATE public.profiles SET employee_id = 999 WHERE id = '22222222-2222-2222-2222-222222222222'; RETURN 'UPD'; END $$;
+-- rezidualul acceptat: gadget INVOKER care face și SET ROLE service_role (permis: session_user authenticator e membru service_role)
+CREATE FUNCTION public.rezidual_set_role() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN PERFORM set_config('request.jwt.claims', '{"role":"service_role"}', true);
+  PERFORM set_config('request.jwt.claim.role', 'service_role', true);
+  PERFORM set_config('role', 'service_role', true);
+  UPDATE public.profiles SET department = 'rezidual' WHERE id = '22222222-2222-2222-2222-222222222222'; RETURN 'UPD'; END $$;
+-- r6 CONTROL-0e: falsifică DOAR sub (owner U1), fără SET ROLE / claim service_role — creat DUPĂ apply (0e l-ar refuza)
+CREATE FUNCTION public.control_0e_sub() RETURNS text LANGUAGE plpgsql
+  SET "request.jwt.claim.sub" TO '11111111-1111-1111-1111-111111111111'
+  SET "request.jwt.claims" TO '{"role":"authenticated","sub":"11111111-1111-1111-1111-111111111111"}' AS $$
+BEGIN UPDATE public.profiles SET employee_id = 4242 WHERE id = '22222222-2222-2222-2222-222222222222'; RETURN 'UPD'; END $$;
+GRANT EXECUTE ON FUNCTION public.escaladare_claim(), public.escaladare_claims(), public.escaladare_employee_id(), public.rezidual_set_role(), public.control_0e_sub() TO anon, authenticated, service_role;
+NOTIFY pgrst, 'reload schema';
+SQL
+
+# --- PostgREST real
+SECRET=$(head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | head -c 48)
+cat > "$D/pgrst.conf" <<CONF
+db-uri = "postgres://authenticator@/postgres?host=$D&port=$PORT"
+db-schemas = "public"
+db-anon-role = "anon"
+jwt-secret = "$SECRET"
+server-host = "127.0.0.1"
+server-port = $HPORT
+log-level = "error"
+CONF
+"$PGRST" "$D/pgrst.conf" > "$D/pgrst.log" 2>&1 & PID=$!
+for i in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$HPORT/" && break; sleep 0.2; done
+curl -s -o /dev/null "http://127.0.0.1:$HPORT/" || { echo "PostgREST nu pornește: $(cat "$D/pgrst.log")"; exit 2; }
+echo "INFO $("$PGRST" --version 2>&1 | head -1)"
+jwt() { SECRET=$SECRET python3 -c '
+import sys,os,json,hmac,hashlib,base64,time
+b=lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+p=json.loads(sys.argv[1]); p["exp"]=int(time.time())+600
+h=b(json.dumps({"alg":"HS256","typ":"JWT"}).encode())+"."+b(json.dumps(p).encode())
+print(h+"."+b(hmac.new(os.environ["SECRET"].encode(),h.encode(),hashlib.sha256).digest()))' "$1"; }
+U1=11111111-1111-1111-1111-111111111111; U2=22222222-2222-2222-2222-222222222222
+J_ANON=$(jwt '{"role":"anon"}'); J_AUTH=$(jwt "{\"role\":\"authenticated\",\"sub\":\"$U2\"}")
+J_AUTH_NOSUB=$(jwt '{"role":"authenticated"}'); J_SR=$(jwt '{"role":"service_role"}')
+H() { curl -s -H "Authorization: Bearer $1" -H 'Content-Type: application/json' "${@:2}"; }
+
+echo "=== SONDA (valori observate prin PostgREST real) ==="
+for pair in "anon:$J_ANON" "authenticated+sub:$J_AUTH" "service_role:$J_SR"; do
+  n=${pair%%:*}; j=${pair#*:}
+  for f in sonda sonda_definer sonda_definer_plpgsql; do echo "$n | $f | $(H "$j" -X POST "http://127.0.0.1:$HPORT/rpc/$f" -d '{}')"; done
+done
+# verificarea valorilor pe care se bazează ramura (a) a patch-ului
+v=$(H "$J_SR" -X POST "http://127.0.0.1:$HPORT/rpc/sonda_definer_plpgsql" -d '{}')
+echo "$v" | grep -q '"role": "service_role"' && echo "$v" | grep -q '"session_user": "authenticator"' && echo "$v" | grep -q '"current_user": "postgres"' \
+  && ok "SONDA service_role în SECURITY DEFINER: session_user=authenticator, current_user=postgres, role=service_role" || bad "SONDA sr" "$v"
+v=$(H "$J_AUTH" -X POST "http://127.0.0.1:$HPORT/rpc/sonda_definer_plpgsql" -d '{}')
+echo "$v" | grep -q '"role": "authenticated"' && ok "SONDA authenticated în SECURITY DEFINER: role=authenticated" || bad "SONDA auth" "$v"
+
+echo "=== PATCH / RPC pe profiles ==="
+r=$(H "$J_SR" -X PATCH "http://127.0.0.1:$HPORT/profiles?id=eq.$U2" -H 'Prefer: return=representation' -d '{"role":"sef_sr"}')
+echo "$r" | grep -q '"role":"sef_sr"' && ok "E2E-1 service_role JWT: PATCH role ⇒ permis" || bad "E2E-1" "$r"
+r=$(H "$J_SR" -X PATCH "http://127.0.0.1:$HPORT/profiles?id=eq.$U2" -H 'Prefer: return=representation' -d '{"can_access_pontaj_brut":true,"can_access_salarii":true}')
+echo "$r" | grep -q '"can_access_salarii":true' && echo "$r" | grep -q '"can_access_pontaj_brut":true' && ok "E2E-1b service_role JWT: PATCH can_* ⇒ permis (fără resetare)" || bad "E2E-1b" "$r"
+r=$(H "$J_AUTH" -X PATCH "http://127.0.0.1:$HPORT/profiles?id=eq.$U2" -d '{"role":"owner"}')
+echo "$r" | grep -q "Doar owners pot schimba rolul" && ok "E2E-2 authenticated non-owner (sub): PATCH role ⇒ refuzat" || bad "E2E-2" "$r"
+r=$(H "$J_AUTH_NOSUB" -X PATCH "http://127.0.0.1:$HPORT/profiles?id=eq.$U2" -d '{"role":"owner"}')
+echo "$r" | grep -q '"code":"42501"' && ok "E2E-3 authenticated fără sub: PATCH role ⇒ 42501" || bad "E2E-3" "$r"
+r=$(H "$J_ANON" -X PATCH "http://127.0.0.1:$HPORT/profiles?id=eq.$U2" -d '{"role":"owner"}')
+echo "$r" | grep -q '"code":"42501"' && ok "E2E-4 anon JWT: PATCH role ⇒ 42501" || bad "E2E-4" "$r"
+r=$(H "$J_AUTH_NOSUB" -X POST "http://127.0.0.1:$HPORT/rpc/escaladare_claim" -d '{}')
+echo "$r" | grep -q '"code":"42501"' && ok "E2E-5 RPC set_config(claim.role=service_role) + UPDATE ca authenticated ⇒ 42501" || bad "E2E-5" "$r"
+r=$(H "$J_AUTH_NOSUB" -X POST "http://127.0.0.1:$HPORT/rpc/escaladare_claims" -d '{}')
+echo "$r" | grep -q '"code":"42501"' && ok "E2E-6 RPC set_config(claims+claim.role=service_role, consistente) + UPDATE ca authenticated ⇒ 42501 (doar legarea de rolul efectiv oprește)" || bad "E2E-6" "$r"
+r=$(H "$J_SR" -X PATCH "http://127.0.0.1:$HPORT/profiles?id=eq.$U2" -H 'Prefer: return=representation' -d '{"department":"D_SR","employee_id":7}')
+echo "$r" | grep -q '"department":"D_SR"' && echo "$r" | grep -q '"employee_id":7' && ok "E2E-8 service_role JWT: PATCH department/employee_id ⇒ permis (a 4-a funcție)" || bad "E2E-8" "$r"
+r=$(H "$J_AUTH" -X PATCH "http://127.0.0.1:$HPORT/profiles?id=eq.$U2" -d '{"employee_id":8}')
+echo "$r" | grep -q '"code":"42501"' && ok "E2E-9 authenticated non-owner (sub): PATCH employee_id ⇒ 42501" || bad "E2E-9" "$r"
+r=$(H "$J_AUTH" -X POST "http://127.0.0.1:$HPORT/rpc/escaladare_employee_id" -d '{}')
+echo "$r" | grep -q '"code":"42501"' && ok "E2E-10 r4: non-owner (sub) RPC set_config(claims+claim.role=service_role) + UPDATE employee_id ca authenticated ⇒ 42501" || bad "E2E-10" "$r"
+st=$(P -tA -c "SELECT role||'/'||coalesce(department,'')||'/'||coalesce(employee_id::text,'') FROM profiles WHERE id='$U2'")
+[ "$st" = "sef_sr/D_SR/7" ] && ok "E2E-11 starea după r4: role/department/employee_id = $st" || bad "E2E-11" "$st"
+# R-1 (Copilot r4; r6: nereprodus ⇒ FAIL): gadget INVOKER cu set_config('role','service_role') — motivul existenței lui 0e
+dep0=$(P -tA -c "SELECT department FROM profiles WHERE id='$U2'")
+r=$(H "$J_AUTH_NOSUB" -X POST "http://127.0.0.1:$HPORT/rpc/rezidual_set_role" -d '{}')
+dep1=$(P -tA -c "SELECT department FROM profiles WHERE id='$U2'")   # persistarea: rândul recitit după cererea REST (commit-uită)
+if echo "$r" | grep -q 'UPD' && [ "$dep1" = rezidual ]; then
+  ok "R-1 reprodus: RPC INVOKER set_config('role','service_role') + claims ⇒ UPDATE department TRECE și PERSISTĂ ($dep0 → $dep1) — acoperit de 0e / controlul post-deploy"
+else bad "R-1" "rezidualul NU s-a reprodus — testul nu mai demonstrează ce acoperă 0e (răspuns: $r; department recitit: $dep0 → $dep1)"; fi
+P -c "UPDATE profiles SET department='D_SR' WHERE id='$U2'" >/dev/null
+# CONTROL-0e (r6): doar sub falsificat (owner) ⇒ triggerele îl cred; interogarea 0e din doc îl listează
+e0=$(P -tA -c "SELECT employee_id FROM profiles WHERE id='$U2'")
+r=$(H "$J_AUTH" -X POST "http://127.0.0.1:$HPORT/rpc/control_0e_sub" -d '{}')
+e1=$(P -tA -c "SELECT employee_id FROM profiles WHERE id='$U2'")
+if echo "$r" | grep -q 'UPD' && [ "$e1" = 4242 ]; then ok "CONTROL-0e bypass pe triggere cu sub falsificat (owner) ⇒ employee_id $e0 → $e1 (recitit)"
+else bad "CONTROL-0e bypass" "nereprodus (răspuns: $r; employee_id $e0 → $e1)"; fi
+P -c "UPDATE profiles SET employee_id=7 WHERE id='$U2'" >/dev/null
+python3 -c "import re,sys;print(re.search(r'(-- SEC F2 0e \(r8\).*?ORDER BY 1);',open(sys.argv[1]).read(),re.S).group(1))" "$ROOT/docs/SEC_F1_F2_PATCH.md" > "$D/q0e.sql" || bad "CONTROL-0e" "interogarea din doc lipsește"
+q=$(P -tA -F'|' -f "$D/q0e.sql")
+echo "$q" | grep -Eq '^(public\.)?control_0e_sub\(\)\|f\|.*proconfig' && ok "CONTROL-0e interogarea de control (= 0e) listează control_0e_sub() [$(echo "$q" | grep control_0e_sub | cut -d'|' -f3)]" || bad "CONTROL-0e interogare" "$q"
+for g in escaladare_claim escaladare_claims escaladare_employee_id rezidual_set_role; do
+  echo "$q" | grep -Eq "^(public\.)?$g\(\)\|" || bad "CONTROL-0e interogare" "$g lipsește din listă"; done
+[ "$(echo "$q" | grep -c .)" = 6 ] && ! echo "$q" | grep -q '^sonda_definer_plpgsql' && ok "CONTROL-0e interogarea listează exact cele 6 funcții create după apply (5 atacuri/control + sonda() care citește request.jwt; r8: sonda_definer_plpgsql nu mai e listată — era fals pozitivul antet SET search_path + current_setting('role') din corp)" || bad "CONTROL-0e număr" "$q"
+# CONTROL r3: a 4-a funcție readusă la corpul live c06d7ce0… (nelegată) ⇒ același RPC TRECE (gaura pe care o închide r4)
+python3 - "$T/sec_f1_f2_fixture_triggers.sql" > "$D/fn4_live.sql" <<'PY2'
+import re,sys
+print(re.search(r"(CREATE FUNCTION public\.fn_profiles_campuri_owner_only\(\).*?\$function\$;)", open(sys.argv[1]).read(), re.S).group(1).replace("CREATE FUNCTION","CREATE OR REPLACE FUNCTION",1))
+PY2
+P -f "$D/fn4_live.sql" >/dev/null && m4=$(P -tA -c "SELECT md5(prosrc) FROM pg_proc WHERE proname='fn_profiles_campuri_owner_only'")
+r=$(H "$J_AUTH" -X POST "http://127.0.0.1:$HPORT/rpc/escaladare_employee_id" -d '{}')
+st4=$(P -tA -c "SELECT employee_id FROM profiles WHERE id='$U2'"); P -c "UPDATE profiles SET employee_id=7 WHERE id='$U2'" >/dev/null
+echo "$r" | grep -q 'UPD' && [ "$st4" = 999 ] && [ "$m4" = c06d7ce0f212c7bba2093c50614a88fc ] && ok "CONTROL-r3 a 4-a = live $m4: același RPC ⇒ employee_id TRECE (gaura reprodusă, închisă de r4)" || bad "CONTROL-r3" "md5=$m4 $r"
+# E2E-7: verifică DOAR coloanele atinse de atacurile blocate (role prin E2E-2..6; is_owner și can_* nu sunt ținta niciunui atac
+# de aici, dar se recitesc ca să nu fi fost schimbate lateral). department/employee_id sunt verificate în E2E-11 — după el,
+# R-1 (rezidual) și CONTROL-r3 le modifică intenționat și sunt readuse de script.
+st=$(P -tA -c "SELECT role||'/'||is_owner||'/'||can_access_salarii||'/'||can_access_pontaj_brut||'/'||can_access_financiar||'/'||can_modify_employees FROM profiles WHERE id='$U2'")
+[ "$st" = "sef_sr/false/true/true/false/false" ] && ok "E2E-7 starea finală role/is_owner/can_access_salarii/can_access_pontaj_brut/can_access_financiar/can_modify_employees = $st (atacurile E2E-2..6 pe role n-au persistat; restul = valorile puse legitim de service_role în E2E-1b)" || bad "E2E-7" "$st"
+echo "=== TOTAL: $NFAIL eșecuri ==="
+[ $NFAIL = 0 ]
