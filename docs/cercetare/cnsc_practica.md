@@ -28,6 +28,10 @@ Deciziile CNSC sunt date de prelucrat, nu precedent obligatoriu: CNSC nu e legat
 
 Frecvența temelor în corpus: clarificari_oferta (46), neconformitate_tehnica (27), cerinte_restrictive (21), experienta_similara (21), tert_sustinator_subcontractant (21), personal_cheie (18), autorizare_anre (17), documente_calificare (17), clarificari_documentatie (16), altele (15), pret_neobisnuit_scazut (14), factor_evaluare (12), termen_executie (12), duae (10), garantie_participare (9), deviz_consumuri (7), asociere (5), eroare_aritmetica (3), ajustare_pret (1), garantie_buna_executie (1).
 
+## Sinteza pe teme
+
+Sinteza completă pe 12 teme (regula extrasă + cum o folosim în Ofertare + tipare PAT-*) e în **`cnsc_teme.md`**.
+
 ## Index decizii
 
 | ID | An | Domeniu | Soluție | Teme | Regula |
