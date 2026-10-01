@@ -42,6 +42,17 @@
 
 ---
 
+## ⚠️ Control judiciar (verificat 02.10.2026 pe portal.just.ro)
+
+Din 37 de decizii-cheie căutate, 13 au fost atacate la curtea de apel: **9 menținute**, 4 modificate/desființate. Regulile de mai jos NU se folosesc fără verificarea hotărârii instanței:
+
+| Decizie | Rezultat | Instanța | Ce afectează |
+|---|---|---|---|
+| BO2026_1073 | **modificata** | Curtea de Apel Cluj (dosar 493/33/2026, conexat 520/33/2026) — Hotărârea nr. 12/2026 (08.06.2026); hotărârea finală nr. 826/2026 (29.06.2026) | Tema 3 (ES) — PV de recepție parțială; regula NU e confirmată judiciar |
+| BO2024_2604 | **desfiintata** | Curtea de Apel Oradea (dosar 418/35/2024) — 540/2024 | Top 10 pct. 3 — prelungirea valabilității ofertei/garanției; regula a căzut |
+| BO2026_328 | **modificata** | Curtea de Apel Pitești (dosar 137/46/2026) — 142/2026 (completată prin 197/2026) | Top 10 pct. 7 — clarificarea titularului activităților autorizate; anulată exact solicitarea de clarificări |
+| BO2026_621 | **modificata** | Curtea de Apel Târgu Mureș (dosar 133/43/2026) — 518/2026 | Documente justificative lipsă = vicii de formă clarificabile; regula a căzut în acest caz |
+
 ## 2. Prețul neobișnuit de scăzut (PANS), devizul și justificarea prețului
 
 **(a) Regulile extrase**

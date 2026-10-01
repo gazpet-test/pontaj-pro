@@ -57,7 +57,7 @@
    - răspunsul trebuie dat pe fiecare articol cerut;
    - prețurile justificate trebuie să fie identice cu cele din C6/F3.
 5. **Preț aparent neobișnuit de scăzut** = sub 80% din valoarea estimată (HG 395 art. 136 alin. (4)). Prețul mic singur nu e motiv de respingere. Justificarea se face cu documente, articol cu articol. Manopera se raportează la salariul minim în construcții (4.582 lei), calculat pe an. Cantitățile din F3 nu se reduc.
-6. **Experiența similară nu trebuie să fie identică:** lucrările de transport și branșamentele contează. Documentele trebuie să existe la termenul de depunere. Un PV de stadiu fizic poate fi folosit **doar dacă e confirmat de beneficiar**, nu de diriginte (BO2026_182, reverificat pe text). Recepția parțială nu dovedește singură experiența.
+6. **Experiența similară nu trebuie să fie identică:** lucrările de transport și branșamentele contează. Documentele trebuie să existe la termenul de depunere. Un PV de stadiu fizic poate fi folosit **doar dacă e confirmat de beneficiar**, nu de diriginte (BO2026_182, reverificat pe text). Recepția parțială nu dovedește singură experiența (BO2026_1073 — **modificată de CA Cluj**, regula nu e confirmată judiciar; de tratat cu prudență).
 7. **Autorizarea ANRE pentru asociați și subcontractanți:** practica CNSC e divergentă (BO2024_3288 vs BO2024_3232). Soluția: cerem la clarificări formularea expresă a cerinței.
 8. **Ajustarea prețului e obligatorie la contractele de lucrări peste 6 luni** (L98 art. 222², alin. (9)). Clauza 48.2 din HG 1/2018 (preț ferm 365 de zile) intră în conflict cu legea. ICCplr e un indice prognozat din Anexa 4 a OUG 64/2022, nepublicat de INS (răspunsul INS din BO2023_406); CNSC a anulat acolo pentru că formula OUG 64/2022 e destinată contractelor în derulare, nu procedurilor noi. Sumele reținute din HG 1 se aplică doar când garanția de bună execuție se constituie prin rețineri succesive.
 9. **NTPEE și standardele:**
@@ -76,6 +76,13 @@
     - concesiunea distribuției suprapusă peste licitație poate duce la anularea procedurii (BO2026_2669);
     - OUG 41/2025 a dus la anulări de proceduri PNRR;
     - costul verificatorilor de proiect trebuie inclus în valoarea estimată.
+
+## Calitate și control
+
+- **Audit pe eșantion:** 45 de cerințe, din care 37 OK, 7 cu nuanțe și 1 greșită. Rata de erori grave e de aproximativ 1–2%. Toate corecturile sunt aplicate (`audit_qa.md`).
+- **Reverificarea celor 41 de cerințe PRACTICA_CNSC pe text:** 15 OK, 23 nuanțate și 1 greșită. Greșeala: afirmația despre ICCplr era a autorității contractante, nu a CNSC. Corecturile sunt aplicate (`audit_cnsc_req.json`).
+- **Regula de 1%, reformulată:** pragul privește abaterile tehnice (HG 395 art. 134 alin. (9) lit. a)), nu erorile aritmetice.
+- **Control judiciar:** am căutat 37 de decizii-cheie; 13 au fost atacate la curtea de apel. Din ele, 9 au fost menținute, iar 4 modificate sau desființate: BO2026_1073, BO2024_2604, BO2026_328, BO2026_621. Toate 4 sunt marcate ⚠️ în fișe, în sinteză și în tipare.
 
 ## Ce surse lipsesc
 

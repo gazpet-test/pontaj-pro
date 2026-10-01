@@ -764,9 +764,9 @@
    "cost": "Costul reemiterii ATR și al eventualelor modificări de soluție.",
    "risc_respingere": "Ridicat: abaterea de la ATR → ofertă neconformă (BO2026_1073); lipsa/expirarea ATR se contestă în termenul de la publicarea DA, iar răspunsul dat altui operator nu redeschide termenul (BO2026_1149, vezi PAT-TRM-03)."
   },
-  "confidence": "ridicata",
+  "confidence": "medie",
   "requires_human_legal_review": false,
-  "note": "v1.2 (nou): Ord. ANRE 7/2022 art. 6 și anexa 5 art. 48 (REQ-P0-068/095) și NTPEE art. 7 alin. (4) (REQ-TG-102), verificate, confirmă rolul ATR în racordare; valabilitatea ATR nu are cerință verificată în registru — întrebarea nu citează un termen. Întrebarea se trimite în primele zile după publicare (termen de contestare DA)."
+  "note": "v1.2 (nou): Ord. ANRE 7/2022 art. 6 și anexa 5 art. 48 (REQ-P0-068/095) și NTPEE art. 7 alin. (4) (REQ-TG-102), verificate, confirmă rolul ATR în racordare; valabilitatea ATR nu are cerință verificată în registru — întrebarea nu citează un termen. Întrebarea se trimite în primele zile după publicare (termen de contestare DA). ⚠️ Control judiciar: BO2026_1073 modificata de Curtea de Apel Cluj — nu te baza pe acest precedent fără hotărârea instanței."
  },
  {
   "pattern_id": "PAT-INF-16",
@@ -906,7 +906,7 @@
   },
   "confidence": "medie",
   "requires_human_legal_review": true,
-  "note": "Contestarea factorului e posibilă dacă răspunsul nu clarifică — decizie juridică. Contopit cu: Factori de evaluare „locali” (angajați din zonă, vehicule, training) fără mod de verificare. Corectură runda 1: formularea „considerăm că favorizează operatorii locali… solicităm eliminarea” a fost scoasă (argumentație juridică agresivă). Contestarea se decide separat. v1.1: HG 395 art. 32 (REQ-P0-046) — factori clari, cu avantaj real și legătură cu obiectul; art. 32 alin. (4)–(5) (REQ-P0-043) — personalul punctat nu poate fi și criteriu de calificare. DIVERGENȚĂ de semnalat juridic: BO2024_2683 a reținut ponderea prețului ≤ 40 % la P+E pentru rețele de gaze, în timp ce REQ-P0-047 (HG 395 art. 32 alin. (6) / L98 art. 187 alin. (8)) limitează regula la serviciile intelectuale și la P+E pentru TEN-T și drumuri județene. Factorul „contract colectiv de muncă”: PAT-AMB-09. v1.2: Instr. ANAP 1/2017 art. 12 nota (ii) (REQ-SL-041): experții cu certificare legală (ex. RTE) nu pot fi factori de evaluare. Decizii noi: punctajul se acordă doar pe documentele de tipul cerut existente la termen (BO2025_2858); insuficiența documentării unui avantaj se sancționează prin punctaj, nu prin respingere (BO2026_544); depunctarea trebuie motivată pe întreaga ofertă (BO2024_1770); documentele justificative ale garanției extinse pot veni la clarificări dacă durata e în oferta inițială (BO2026_621); praguri pe numărul de proiecte ale experților legale dacă sunt justificate (BO2026_1536)."
+  "note": "Contestarea factorului e posibilă dacă răspunsul nu clarifică — decizie juridică. Contopit cu: Factori de evaluare „locali” (angajați din zonă, vehicule, training) fără mod de verificare. Corectură runda 1: formularea „considerăm că favorizează operatorii locali… solicităm eliminarea” a fost scoasă (argumentație juridică agresivă). Contestarea se decide separat. v1.1: HG 395 art. 32 (REQ-P0-046) — factori clari, cu avantaj real și legătură cu obiectul; art. 32 alin. (4)–(5) (REQ-P0-043) — personalul punctat nu poate fi și criteriu de calificare. DIVERGENȚĂ de semnalat juridic: BO2024_2683 a reținut ponderea prețului ≤ 40 % la P+E pentru rețele de gaze, în timp ce REQ-P0-047 (HG 395 art. 32 alin. (6) / L98 art. 187 alin. (8)) limitează regula la serviciile intelectuale și la P+E pentru TEN-T și drumuri județene. Factorul „contract colectiv de muncă”: PAT-AMB-09. v1.2: Instr. ANAP 1/2017 art. 12 nota (ii) (REQ-SL-041): experții cu certificare legală (ex. RTE) nu pot fi factori de evaluare. Decizii noi: punctajul se acordă doar pe documentele de tipul cerut existente la termen (BO2025_2858); insuficiența documentării unui avantaj se sancționează prin punctaj, nu prin respingere (BO2026_544); depunctarea trebuie motivată pe întreaga ofertă (BO2024_1770); documentele justificative ale garanției extinse pot veni la clarificări dacă durata e în oferta inițială (BO2026_621); praguri pe numărul de proiecte ale experților legale dacă sunt justificate (BO2026_1536). ⚠️ Control judiciar: BO2026_621 modificata de Curtea de Apel Târgu Mureș — nu te baza pe acest precedent fără hotărârea instanței."
  },
  {
   "pattern_id": "PAT-AMB-03",
@@ -2410,9 +2410,9 @@
    "cost": "Subcontractant autorizat.",
    "risc_respingere": "Mediu."
   },
-  "confidence": "ridicata",
+  "confidence": "medie",
   "requires_human_legal_review": true,
-  "note": "BO2023_657 (orice intervenție fizică pe SD cere ANRE) vs BO2023_416 (critica pe ANRE necerută în DA are șanse mici) — interpretări de cântărit juridic. v1.1: BO2021_973 — dacă DA cere doar ca lucrările de gaze să fie executate de un operator autorizat ANRE, ofertantul poate asigura asta prin contract cu o firmă autorizată; divergența BO2023_657 vs BO2023_416 rămâne. v1.2: BO2026_328 (apă-canal) — când DA cere informații despre autorizările pentru toate activitățile (inclusiv devieri de rețele de gaze), fiecare ofertant arată în ofertă cine le deține (el, asociat sau subcontractant declarat). Instr. ANAP 1/2021 art. 3 alin. (5) lit. a) (REQ-SL-049): relocarea conductei de gaze dintr-un contract de drumuri nu se atribuie ca lucrare suplimentară — întrebarea înainte de ofertare e cu atât mai utilă."
+  "note": "BO2023_657 (orice intervenție fizică pe SD cere ANRE) vs BO2023_416 (critica pe ANRE necerută în DA are șanse mici) — interpretări de cântărit juridic. v1.1: BO2021_973 — dacă DA cere doar ca lucrările de gaze să fie executate de un operator autorizat ANRE, ofertantul poate asigura asta prin contract cu o firmă autorizată; divergența BO2023_657 vs BO2023_416 rămâne. v1.2: BO2026_328 (apă-canal) — când DA cere informații despre autorizările pentru toate activitățile (inclusiv devieri de rețele de gaze), fiecare ofertant arată în ofertă cine le deține (el, asociat sau subcontractant declarat). Instr. ANAP 1/2021 art. 3 alin. (5) lit. a) (REQ-SL-049): relocarea conductei de gaze dintr-un contract de drumuri nu se atribuie ca lucrare suplimentară — întrebarea înainte de ofertare e cu atât mai utilă. ⚠️ Control judiciar: BO2026_328 modificata de Curtea de Apel Pitești — nu te baza pe acest precedent fără hotărârea instanței."
  },
  {
   "pattern_id": "PAT-CAL-04",
@@ -3055,7 +3055,7 @@
   },
   "confidence": "medie",
   "requires_human_legal_review": true,
-  "note": "v1.2 (nou): L169/2026 art. 527 alin. (3) și art. 574 (REQ-P1-076/077), L98 art. 154^2 alin. (6) (REQ-AD-026) și Instr. ANAP 2/2017 art. 11 alin. (3) (REQ-AD-039), verificate. NUANȚĂ între decizii: recepția parțială pe obiecte funcționale independent probează ES (BO2024_942), dar nu PV de stadiu fizic / acceptare la plată (BO2026_1073) și nici rețeaua nepusă în funcțiune recepționată parțial (BO2025_3035); discrepanțele de valoare peste prag se clarifică (BO2025_2271). DIVERGENȚĂ de reconfirmat pe PDF: în BO2026_182 raționamentul CNSC (cnsc_practica) arată că PV de stadiu fizic a fost ACCEPTAT ca dovadă (evaluare substanțială), în timp ce REQ-AD-045, extrasă din aceeași decizie, spune că NU dovedește — contradicție în registru. Verificare internă ERP: dată PVRTL < termen ofertare. Documentele ES în general: PAT-CAL-07."
+  "note": "v1.2 (nou): L169/2026 art. 527 alin. (3) și art. 574 (REQ-P1-076/077), L98 art. 154^2 alin. (6) (REQ-AD-026) și Instr. ANAP 2/2017 art. 11 alin. (3) (REQ-AD-039), verificate. NUANȚĂ între decizii: recepția parțială pe obiecte funcționale independent probează ES (BO2024_942), dar nu PV de stadiu fizic / acceptare la plată (BO2026_1073) și nici rețeaua nepusă în funcțiune recepționată parțial (BO2025_3035); discrepanțele de valoare peste prag se clarifică (BO2025_2271). DIVERGENȚĂ de reconfirmat pe PDF: în BO2026_182 raționamentul CNSC (cnsc_practica) arată că PV de stadiu fizic a fost ACCEPTAT ca dovadă (evaluare substanțială), în timp ce REQ-AD-045, extrasă din aceeași decizie, spune că NU dovedește — contradicție în registru. Verificare internă ERP: dată PVRTL < termen ofertare. Documentele ES în general: PAT-CAL-07. ⚠️ Control judiciar: BO2026_1073 modificata de Curtea de Apel Cluj — nu te baza pe acest precedent fără hotărârea instanței."
  },
  {
   "pattern_id": "PAT-CAL-19",
@@ -3144,9 +3144,9 @@
    "cost": "Corecția aritmetică schimbă totalul, nu prețurile unitare.",
    "risc_respingere": "Ridicat: modificarea prețurilor unitare (chiar < 1 %) face oferta inacceptabilă (BO2025_2853, BO2025_3667, BO2024_159); refuzul de a răspunde punctual — inacceptabilă (BO2025_3035); documentele de punctaj depuse ulterior nu se punctează (BO2025_2858)."
   },
-  "confidence": "ridicata",
+  "confidence": "medie",
   "requires_human_legal_review": false,
-  "note": "v1.2 (nou): Nu se trimite la AC (intrebare_propusa = null). HG 395 art. 134–135 și L98 art. 209 (REQ-AD-055…060, REQ-P0-049/050), verificate. Ce se poate: explicitarea/confirmarea a ce exista (BO2022_2774), documente preexistente omise (REQ-AD-054), justificative ale unui element existent (BO2026_621), extrase datate înainte de termen (BO2024_2990), descrieri tehnologice pentru lucrări minore cuantificate (BO2025_1542). Ce nu: elemente noi, inclusiv garanții noi (BO2025_187), documente lipsă din PT cerute expres (BO2025_3788). O întrebare vagă a comisiei nu poate duce la „neconcludent” (BO2022_1028). Cererea comisiei necontestată devine obligatorie (PAT-CAL-16, PAT-TRM-03)."
+  "note": "v1.2 (nou): Nu se trimite la AC (intrebare_propusa = null). HG 395 art. 134–135 și L98 art. 209 (REQ-AD-055…060, REQ-P0-049/050), verificate. Ce se poate: explicitarea/confirmarea a ce exista (BO2022_2774), documente preexistente omise (REQ-AD-054), justificative ale unui element existent (BO2026_621), extrase datate înainte de termen (BO2024_2990), descrieri tehnologice pentru lucrări minore cuantificate (BO2025_1542). Ce nu: elemente noi, inclusiv garanții noi (BO2025_187), documente lipsă din PT cerute expres (BO2025_3788). O întrebare vagă a comisiei nu poate duce la „neconcludent” (BO2022_1028). Cererea comisiei necontestată devine obligatorie (PAT-CAL-16, PAT-TRM-03). ⚠️ Control judiciar: BO2026_621 modificata de Curtea de Apel Târgu Mureș — nu te baza pe acest precedent fără hotărârea instanței."
  },
  {
   "pattern_id": "PAT-GAR-01",
@@ -3199,9 +3199,9 @@
    "cost": "Cost instrument. Comision instrument.",
    "risc_respingere": "Ridicat. Ridicat: GP lipsă/insuficientă nu se remediază (BO2021_2420)."
   },
-  "confidence": "ridicata",
+  "confidence": "medie",
   "requires_human_legal_review": true,
-  "note": "Contopire CL-B04 (partea de formă) + CL-B21. Scrisoarea IFN e admisă doar la lucrări cu VE ≤ 40.000.000 lei (REQ-AD-012). Contopit cu: Garanția de participare: cuantum și valabilitate. v1.1: confirmat — BO2020_2392: contează existența GP valabile la termen, nu secțiunea SEAP în care a fost încărcată; BO2026_15: prelungirea o cere AC, iar GP nu e criteriu de calificare; BO2025_1775: neprelungirea după respingere nu înlătură interesul de a contesta. v1.2: practică nouă pe GP — prelungirea valabilității: entitatea dovedește transmiterea cererii (BO2025_1037), iar o nouă cerere urmată de prelungire salvează oferta (BO2024_2604); GP mai scurtă nu se înlocuiește cu o garanție NOUĂ de la alt emitent (BO2023_2794); polița doar pe lider se corectează prin act adițional la aceeași poliță (BO2024_1043); GP de la terț/subcontractant cu destinație clară e valabilă (BO2022_2170); cererea de clarificare GP greșit adresată nu e „clară” (BO2022_219); originalul nu se cere dacă FDA prevede doar scanare (BO2021_610). BO2025_1883: GP emisă de IFN străin — CNSC nu s-a pronunțat pe fond (contestație fără cauțiune)."
+  "note": "Contopire CL-B04 (partea de formă) + CL-B21. Scrisoarea IFN e admisă doar la lucrări cu VE ≤ 40.000.000 lei (REQ-AD-012). Contopit cu: Garanția de participare: cuantum și valabilitate. v1.1: confirmat — BO2020_2392: contează existența GP valabile la termen, nu secțiunea SEAP în care a fost încărcată; BO2026_15: prelungirea o cere AC, iar GP nu e criteriu de calificare; BO2025_1775: neprelungirea după respingere nu înlătură interesul de a contesta. v1.2: practică nouă pe GP — prelungirea valabilității: entitatea dovedește transmiterea cererii (BO2025_1037), iar o nouă cerere urmată de prelungire salvează oferta (BO2024_2604); GP mai scurtă nu se înlocuiește cu o garanție NOUĂ de la alt emitent (BO2023_2794); polița doar pe lider se corectează prin act adițional la aceeași poliță (BO2024_1043); GP de la terț/subcontractant cu destinație clară e valabilă (BO2022_2170); cererea de clarificare GP greșit adresată nu e „clară” (BO2022_219); originalul nu se cere dacă FDA prevede doar scanare (BO2021_610). BO2025_1883: GP emisă de IFN străin — CNSC nu s-a pronunțat pe fond (contestație fără cauțiune). ⚠️ Control judiciar: BO2024_2604 desfiintata de Curtea de Apel Oradea — nu te baza pe acest precedent fără hotărârea instanței."
  },
  {
   "pattern_id": "PAT-GAR-02",
@@ -3294,9 +3294,9 @@
    "cost": "Provizioane pentru remedieri.",
    "risc_respingere": "Mediu dacă e factor de evaluare."
   },
-  "confidence": "ridicata",
+  "confidence": "medie",
   "requires_human_legal_review": true,
-  "note": "Contopire CL-D05 + CL-D06. temei de confirmat: clasele de consecințe și minimele CC1–CC4 din Legea 169/2026 (REQ-AD-142/144) sunt neverificate pe sursă — nu se citează. v1.1: confidence medie→ridicata — minimele pe clase de consecințe sunt acum verificate (REQ-AD-142/144 confirmate pe MO 661/2026; L169 art. 531 alin. (7)–(10), REQ-P1-080; echivalența categorii↔clase, art. 370 alin. (5), REQ-P1-081). HG 273/1994 art. 24: perioada ofertată nu poate fi sub minimul legal (REQ-P1-095). Pentru convenția tehnică ANRE: minimum 24 de luni (REQ-P0-091). Revizuirea juridică rămâne pentru corelarea celor două regimuri. v1.2: BO2025_2114 — garanția lucrărilor de 36 de luni nu poate fi pusă la îndoială pe motiv că producătorii dau garanții mai scurte pentru echipamente; BO2026_621 — memoriul justificativ al garanției extinse se poate depune la clarificări dacă durata e în oferta inițială."
+  "note": "Contopire CL-D05 + CL-D06. temei de confirmat: clasele de consecințe și minimele CC1–CC4 din Legea 169/2026 (REQ-AD-142/144) sunt neverificate pe sursă — nu se citează. v1.1: confidence medie→ridicata — minimele pe clase de consecințe sunt acum verificate (REQ-AD-142/144 confirmate pe MO 661/2026; L169 art. 531 alin. (7)–(10), REQ-P1-080; echivalența categorii↔clase, art. 370 alin. (5), REQ-P1-081). HG 273/1994 art. 24: perioada ofertată nu poate fi sub minimul legal (REQ-P1-095). Pentru convenția tehnică ANRE: minimum 24 de luni (REQ-P0-091). Revizuirea juridică rămâne pentru corelarea celor două regimuri. v1.2: BO2025_2114 — garanția lucrărilor de 36 de luni nu poate fi pusă la îndoială pe motiv că producătorii dau garanții mai scurte pentru echipamente; BO2026_621 — memoriul justificativ al garanției extinse se poate depune la clarificări dacă durata e în oferta inițială. ⚠️ Control judiciar: BO2026_621 modificata de Curtea de Apel Târgu Mureș — nu te baza pe acest precedent fără hotărârea instanței."
  },
  {
   "pattern_id": "PAT-GAR-04",

@@ -47,8 +47,16 @@
   "etapa": "rezultat + măsuri de remediere + anulare procedură",
   "fapte_relevante": "Experiența cerută: rețele gaze, valoare cumulată, max. 3 contracte, ultimii 5 ani; câștigătorul inițial a invocat 3 contracte (inclusiv sisteme inteligente de distribuție gaze cod SMIS), două doar cu PV de recepție parțială; răspunsuri beneficiari cu certificate de bună execuție; ATR publicat odată cu DA.",
   "concluzie_cnsc": "Respinge ca nefondate contestațiile și menține anularea procedurii; respinge intervenția și cererile de cheltuieli.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Cluj (dosar 493/33/2026, conexat 520/33/2026)",
+   "nr_hotarare": "Hotărârea nr. 12/2026 (08.06.2026); hotărârea finală nr. 826/2026 (29.06.2026)",
+   "data": "2026-06-29",
+   "rezultat": "modificata",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 493/33/2026",
+   "nota": "Decizia CNSC 1073/C9/5092,165,181 din 03.04.2026 (UAT Orașul Jibou, rețea inteligentă gaze Rona/Husia/Cuceu). CA a admis plângerile Art Instal și Proiect Invest și a modificat-o în parte: a admis contestația Art Instal (dosar 165/2026) și în parte pe a Proiect Invest (181/2026), anulând raportul nr. 313/16.01.2026 prin care oferta Art Instal (fostul câștigător, respins pe ES cu PV de recepție parțială) era inacceptabilă și procedura anulată. Prin hotărârea finală, a obligat UAT la reevaluarea ofertei Art Instal doar pe cerința privind procentul de deșeuri nepericuloase. Motivarea nu e publică pe portal; nu se știe dacă CA a infirmat explicit raționamentul CNSC pe PV parțiale. Regula din BO2026_1073 NU e confirmată judiciar — de tratat cu prudență."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețea inteligentă distribuție gaze, P+E, simplificată — tipic; probleme reale de dovedire a experienței pe rețele încă nefinalizate.",
    "mai_putin_comparabila": "Fișa de date avea o definiție strictă a „lucrărilor duse la bun sfârșit”.",
@@ -71,7 +79,8 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "60fa98712530ac72f8be644b672ea6f011e8af4d5b1c4e2f67fe1b158e892503",
-  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate).",
+  "avertisment_instanta": "⚠️ Decizia a fost MODIFICATA de Curtea de Apel Cluj (dosar 493/33/2026, conexat 520/33/2026) (Hotărârea nr. 12/2026 (08.06.2026); hotărârea finală nr. 826/2026 (29.06.2026), 2026-06-29) — regula NU se folosește fără verificarea hotărârii instanței. Decizia CNSC 1073/C9/5092,165,181 din 03.04.2026 (UAT Orașul Jibou, rețea inteligentă gaze Rona/Husia/Cuceu). CA a admis plângerile Art Instal și Proiect Invest și a modificat-o în parte: a admis contestația Art Instal (dosar 165/2026) și în parte pe a Proiect Invest (181/2026), anulând raportul nr. 313/16.01.2026 prin care oferta Art Instal (fostul câștigător, respins pe ES cu PV de recepție parțială) era inacceptabilă și procedura anulată. Prin hotărârea finală, a obligat UAT la reevaluarea ofertei Art Instal doar pe cerința privind procentul de deșeuri nepericuloase. Motivarea nu e publică pe portal; nu se știe dacă CA a infirmat explicit raționamentul CNSC pe PV parțiale. Regula din BO2026_1073 NU e confirmată judiciar — de tratat cu prudență."
  },
  {
   "id": "CNSC-BO2026_1149",
@@ -116,8 +125,16 @@
   "etapa": "documentatie/clarificari",
   "fapte_relevante": "Clarificare publicată 09.03.2026; contestație depusă în preziua termenului de ofertare, la peste 15 zile de la publicarea DA; 3 oferte depuse; procedura în evaluare tehnică.",
   "concluzie_cnsc": "Respinge excepția tardivității; respinge contestația ca nefondată; respinge cererea de suspendare (rămasă fără obiect) și cheltuielile de judecată.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Bacău (dosar 228/32/2026)",
+   "nr_hotarare": "433/2026",
+   "data": "2026-06-15",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 228/32/2026",
+   "nota": "Decizia 1149/C2/978/2026 (Autoprima Serv SRL c. Comuna Zemeș, extindere rețea gaze sat Bolătău; identificare confirmată în istoricul CNSC al dosarului 978/2026). Plângerea Autoprima Serv respinsă ca nefondată, inclusiv cererea de suspendare."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Extindere rețea gaze în sat, P+E, aviz tehnic al operatorului de distribuție — exact profilul Gazpet.",
    "mai_putin_comparabila": "Soluție procedurală (termen de contestare), fără analiza pe fond a valabilității ATP.",
@@ -188,8 +205,16 @@
   "etapa": "rezultat (reevaluare după control judiciar)",
   "fapte_relevante": "Curtea de apel (decizie din 2025, nr. anonimizat) a admis în parte plângerea împotriva deciziei CNSC din primul ciclu și a dispus reevaluarea câștigătorului; CNSC citează decizia CNSC 685/2025 ca decizia reevaluării.",
   "concluzie_cnsc": "Admite contestația primului contestator, anulează actele de reevaluare a ofertei câștigătoare și obligă la reevaluare în 10 zile; respinge contestația celui de-al doilea ca nefondată (lipsă interes/tardivitate).",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "N-am putut identifica dosarul CNSC. Pe portal.just nu există plângere cu numărul 1184 din 2026; dosarul 3378/2/2025 privește decizia 1184/C7/2025. Controlul judiciar al primei decizii din aceeași procedură e cunoscut deja din text (modificată în parte de CA)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Proiectare+execuție conducte de apă, grafice și deviz general — exact formularele din ofertele Gazpet.",
    "mai_putin_comparabila": "Ciclu procesual secund; analiza e limitată de hotărârea curții.",
@@ -401,8 +426,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Cash-flow: VE (cap. 4 și 5) × 2 luni / durata execuției; liderul a împărțit la 17 luni în loc de 15 și nu a declarat suma proprie. Experiența: max. 3 contracte, rețele edilitare subterane/fluide, din care ≥1 în domeniul instalațiilor de gaze naturale. Contract invocat: instalație de utilizare într-o incintă industrială cu SRM proprie (8 hale, CT, bucătării, incinerator). EDSB obținută după data-limită; caietul de sarcini doar obliga contractantul să mențină autorizațiile valabile. AC a anulat procedura după respingeri.",
   "concluzie_cnsc": "Respinge contestația primului ofertant; admite contestația asocierii — anulează raportul (inclusiv decizia de anulare a procedurii) în partea privind oferta ei, reevaluare în 15 zile; cheltuieli de judecată în favoarea asocierii.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 1360 din 29.04.2026 (istoric CNSC: dosare 1040 și 1050/2026 — Inspet SA și Nomis 2003 SRL c. ADI Gaze Naturale Stănilești–Lunca Banului, jud. Vaslui). Nicio plângere găsită (portal.just după număr și părți; istoric CNSC fără corespondență cu instanța)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Sistem de distribuție gaze în comune, P+E, 2025–2026 — tipic Gazpet; trei teme cheie (DUAE, EDSB, experiență instalații de utilizare).",
    "mai_putin_comparabila": "Procedură sectorială (L99); multe cifre anonimizate.",
@@ -469,8 +502,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Procedura fusese anulată pentru dezacordul unui proprietar privind traseul conductei; anularea a fost desființată de CNSC la contestația celuilalt ofertant. AC nu a publicat acea contestație în SEAP și nu a cerut prelungirea garanțiilor; a reluat evaluarea doar cu oferta care prelungise garanția (transmisă pe e-mail).",
   "concluzie_cnsc": "Admite în parte (privind propria ofertă): anulează raportul și obligă la reevaluarea ofertei contestatorului de la etapa anterioară anulării, în 10 zile; respinge în rest.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 15 din 05.01.2026 (istoric CNSC: dosar 4721/2025, Avi Prod Grup SRL c. Comuna Dărmănești). Nicio plângere găsită (portal.just după părți; istoric CNSC fără corespondență cu instanța). Dosarul CA Constanța 44/36/2025 privește decizia 15/C3/4101 din 08.01.2025."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețea inteligentă de distribuție gaze în comună — tipic Gazpet; problema garanției la proceduri prelungite prin contestații e frecventă.",
    "mai_putin_comparabila": "Context specific: anulare anterioară a procedurii.",
@@ -682,7 +723,15 @@
   "etapa": "rezultat",
   "fapte_relevante": "Două oferte; câștigătorul (asociere) 100 puncte, contestatorul 92,11 puncte. Expertul-cheie nr. 2 (instalator ANRE PGD) avea autorizația din 19.06.2023, dar cele 8 recomandări (Delgaz Grid, proiecte 2018-2024) erau emise de dirigintele de șantier, fără date de derulare, iar AC nu a verificat perioadele. Pentru ES în proiectare s-a depus un PV de recepție nr. 604911/18.08.2025, emis după data-limită de depunere; pentru ES în execuție, un PV intermediar (98% rețele / 99% racorduri) semnat de diriginte, nu de beneficiar. Termenul de contestare a curs de la accesul efectiv la dosar (04.12.2025), excepția tardivității fiind respinsă.",
   "concluzie_cnsc": "Respinge excepția tardivității; admite contestația și obligă AC ca în 15 zile să reevalueze oferta câștigătoare pe aspectele din considerente (verificarea perioadelor expertului 2 față de autorizarea ANRE, confirmarea recomandărilor/PV de către beneficiar, excluderea PV ulterior datei-limită, clarificarea valorii lucrărilor subcontractantului).",
-  "control_judiciar": null,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 182/C8/4870 din 23.01.2026: Dianova Instal SRL c. Municipiul Bistrița, admisă în parte. Pe portal.just nu există plângere (căutare după număr și după părți, ian.–apr. 2026). Istoricul CNSC al dosarului 4870/2025 nu arată nicio solicitare de la curtea de apel. Probabil decizia a rămas definitivă necontestată. Divergența cu BO2026_1073 rămâne doar la nivel CNSC, iar BO2026_1073 a fost modificată de CA Cluj."
+  },
   "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețele/branșamente gaze (proiectare+execuție), simplificată L98, experți ANRE și ES dovedită cu recomandări Delgaz — exact tipul de dosar pe care îl depune Gazpet.",
@@ -755,8 +804,16 @@
   "etapa": "rezultat (conformitate propunere tehnică)",
   "fapte_relevante": "Proiect tehnic publicat în SEAP cu liste de cantități și fișe F5 (pag. 375 și urm.); fișele câștigătorului în fișierul PT2 pag. 281–570; manuale la pag. 302 și 448. Contestatorul a studiat dosarul la CNSC și a depus concluzii scrise.",
   "concluzie_cnsc": "Admite contestația; anulează raportul în partea privind oferta câștigătoare; reevaluare de la etapa conformității propunerii tehnice, în 10 zile.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 1837/C1/1353 din 08.06.2026: Totalgaz Industrie c. SNTGN Transgaz. Nu am găsit plângere: nici în lista dosarelor Transgaz la CA Alba Iulia, nici în istoricul CNSC. Dosarele CA București din 2023 privesc alte decizii, 1837/C5/2023."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Lucrări de gaze naturale cu echipamente (robinete) și fișe F5 — practică curentă și la operatorii de distribuție.",
    "mai_putin_comparabila": "Racord/transport (presiuni mari), entitate sectorială; date anonimizate.",
@@ -823,8 +880,16 @@
   "etapa": "anulare procedura",
   "fapte_relevante": "3 oferte; contestatorul desemnat câștigător; comunicarea nr. 48744/05.11.2025 menționa condiția suspensivă; adresa internă nr. 19772 din 29.04.2026: demersuri la Ministerul Energiei, Economiei, MIPE, MDLPA fără rezultat (fără linii de finanțare eligibile, fără mecanisme naționale dedicate). Proiectarea demara doar după acordurile cu proprietarii de terenuri.",
   "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6 L101).",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel București (dosar 4416/2/2026)",
+   "nr_hotarare": "739/2026",
+   "data": "2026-09-08",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 4416/2/2026",
+   "nota": "Decizia 2006/C2/2007 din 19.06.2026 (Totalgaz Industrie c. Electrocentrale București, EPCC racordare CET-uri la Transgaz). Plângerea Totalgaz respinsă ca neîntemeiată."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Racord gaze naturale (EPCC) cu finanțare condiționată — situație frecventă și la rețele de distribuție finanțate din programe naționale.",
    "mai_putin_comparabila": "Procedură sectorială, racord la SNT pentru un CET (nu distribuție în comune); contestatorul era câștigătorul.",
@@ -900,8 +965,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Durata max. proiectare 4 luni, execuție 22 luni. Caietul de sarcini lista „experți secundari” cu autorizări ANRE (PGIU, PGD, EGD, EGIU), RTE domeniul distribuție, CQ EGD, RTS (ISCIR), 4-5 instalatori ANRE EGD/EGIU, sudori OL și PE — dar nominalizarea lor prin ofertă era „recomandată”, nu obligatorie. Experiența similară cerută: rețele distribuție gaze (km cumulați), puncte de depistare pierderi, ≥10 branșamente, PRM cu teletransmisie, dispecerat, racord și SRMP cu componentă inteligentă, în 1–3 contracte. Rețea PE100 SDR11 Dn200 L=3009 m cu foraj orizontal dirijat (subcontractant).",
   "concluzie_cnsc": "Admite în parte: anulează raportul, dispune reevaluarea ofertei contestatorului și verificarea experienței similare a câștigătorului în 10 zile; respinge celelalte critici.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 2328/C5/1924 din 17.07.2026: Teoval & Co SRL c. Comuna Belcești, jud. Iași. Nu am găsit plângere (portal.just după părți; istoric CNSC)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "P+E sistem de distribuție gaze în comună (2025–2026), cu listă detaliată de personal ANRE — exact profilul licitațiilor Gazpet.",
    "mai_putin_comparabila": "Rezultatul depinde de faptul că cerințele pentru experții secundari nu erau în anunț.",
@@ -1247,8 +1320,16 @@
   "etapa": "evaluare (reevaluare după decizie CNSC/CA)",
   "fapte_relevante": "VE 45.737.537,72 lei; anunț din 23.08.2024; solicitare de clarificări contestată nr. 86688/10.12.2025; contestație înregistrată 15.12.2025. Data din BO („05.02.2025”) e evident greșită — decizia e din 2026.",
   "concluzie_cnsc": "Respinge excepția nedepunerii cauțiunii și contestația ca nefondată; contestatoarea trebuie să răspundă la clarificări.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Pitești (dosar 137/46/2026)",
+   "nr_hotarare": "142/2026 (completată prin 197/2026)",
+   "data": "2026-03-30",
+   "rezultat": "modificata",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 137/46/2026",
+   "nota": "Decizia 328/C6/4912 din 05.02.2026 (Euskadi SRL c. Apă Canal 2000 SA). CA a modificat-o în parte: a admis contestația și a anulat solicitarea de clarificări nr. 86688/10.12.2025, menținând restul. Regula de la Top 10 pct. 7 (titularul fiecărei activități autorizate, clarificabil de EC) e afectată tocmai pe partea de clarificare; motivarea nu e publică pe portal."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețele apă-canal cu devieri de rețele de gaze naturale — exact interfața în care Gazpet aduce autorizarea ANRE.",
    "mai_putin_comparabila": "Procedură sectorială de valoare mare; contextul e o reevaluare după control judiciar.",
@@ -1271,7 +1352,8 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "e60d02f416b9c91412a1ca5d9ef6994c6326ffc40b0bdd27d0792daba95cfc2c",
-  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate).",
+  "avertisment_instanta": "⚠️ Decizia a fost MODIFICATA de Curtea de Apel Pitești (dosar 137/46/2026) (142/2026 (completată prin 197/2026), 2026-03-30) — regula NU se folosește fără verificarea hotărârii instanței. Decizia 328/C6/4912 din 05.02.2026 (Euskadi SRL c. Apă Canal 2000 SA). CA a modificat-o în parte: a admis contestația și a anulat solicitarea de clarificări nr. 86688/10.12.2025, menținând restul. Regula de la Top 10 pct. 7 (titularul fiecărei activități autorizate, clarificabil de EC) e afectată tocmai pe partea de clarificare; motivarea nu e publică pe portal."
  },
  {
   "id": "CNSC-BO2026_349",
@@ -1537,8 +1619,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Răspuns consolidat la clarificări 10742/16.11.2025 (liste de cantități corectate prin erată); clarificări 11976/14.11.2025, răspuns 2128/18.11.2025; raport 13275/16.12.2025; contestație 483/23.12.2025; contestație publicată în SEAP 21.01.2026; intervenție 4151/23.01.2026; concluzii scrise 537/11.02.2026.",
   "concluzie_cnsc": "Admite în principiu intervenția; respinge contestația ca nefondată; admite intervenția; respinge cheltuielile intervenientului.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Târgu Mureș (dosar 133/43/2026)",
+   "nr_hotarare": "518/2026",
+   "data": "2026-04-27",
+   "rezultat": "modificata",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 133/43/2026",
+   "nota": "Decizia 621/C6/5064 din 04.03.2026 (Termolang c. Orașul Miercurea Nirajului, intervenient asocierea Instgaz–Las Prom; PNI Anghel Saligny). CA a modificat-o în tot: a admis contestația Termolang, a anulat raportul procedurii nr. 13275/16.12.2025 și în parte PV de evaluare tehnică privind oferta Instgaz, cu reevaluare. Regula CNSC (documente justificative lipsă = vicii de formă clarificabile) a căzut în acest caz."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Extindere rețea gaze PNI, simplificată, ~6,7 mil. lei, factori de evaluare tipici (garanție, reprezentant antreprenor, șef șantier pe rețele de distribuție gaze).",
    "mai_putin_comparabila": "Majoritatea criticilor au căzut pe lipsa de probe, nu pe fond.",
@@ -1561,7 +1651,8 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "51dcc46658dd0cccc09a86efda7a0922c96cc65c2fe292c0494adf1770ecf5a7",
-  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate).",
+  "avertisment_instanta": "⚠️ Decizia a fost MODIFICATA de Curtea de Apel Târgu Mureș (dosar 133/43/2026) (518/2026, 2026-04-27) — regula NU se folosește fără verificarea hotărârii instanței. Decizia 621/C6/5064 din 04.03.2026 (Termolang c. Orașul Miercurea Nirajului, intervenient asocierea Instgaz–Las Prom; PNI Anghel Saligny). CA a modificat-o în tot: a admis contestația Termolang, a anulat raportul procedurii nr. 13275/16.12.2025 și în parte PV de evaluare tehnică privind oferta Instgaz, cu reevaluare. Regula CNSC (documente justificative lipsă = vicii de formă clarificabile) a căzut în acest caz."
  },
  {
   "id": "CNSC-BO2026_76",
@@ -1672,8 +1763,16 @@
   "etapa": "documentație",
   "fapte_relevante": "Cerința remediată: în ultimii 10 ani, max. 3 contracte în sisteme de transport gaze/instalații de utilizare de înaltă presiune, valoare ≥ [prag]; HDD cumulat [x] m, din care un foraj ≥ [y] m cu DN ≥ 600. Se acceptă lucrări executate parțial cu livrabil independent.",
   "concluzie_cnsc": "Respinge o contestație pentru neconstituirea cauțiunii și pe cealaltă ca nefondată.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Alba Iulia (dosar 241/57/2026)",
+   "nr_hotarare": "440/2026",
+   "data": "2026-05-13",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 241/57/2026",
+   "nota": "Decizia 804/C5/496/510/2026 din 18.03.2026 (Transgaz, DN700 Șendreni; contestatori Centrul de Foraje pentru Infrastructură / Totalgaz). Plângerea Totalgaz Industrie (în nume propriu și al asocierii cu Ness Proiect Europe) respinsă ca nefondată."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Gaze naturale — conducte, HDD, înaltă presiune; singura decizie din lot pe transport gaze.",
    "mai_putin_comparabila": "Transport (Transgaz), nu distribuție; nivelul de experiență e peste profilul curent Gazpet.",
@@ -2299,8 +2398,16 @@
   "etapa": "evaluare (clarificări după decizie definitivă)",
   "fapte_relevante": "Rezultate succesive: 1836/05.03.2024, raport 5778/18.07.2024, raport 325/17.01.2025 (comunicare 471/23.01.2025); clarificări 4436/26.11.2024; adresa contestată 3170/06.05.2025, răspuns 849/09.05.2025; contestație 866/13.05.2025; câștigătorul inițial prezentase în metodologie (pag. 106–458) prescripțiile Ord. ANRE 89/2018.",
   "concluzie_cnsc": "Admite în parte: anulează adresa 3170/06.05.2025 și actele subsecvente; obligă AC să execute decizia CA Ploiești 307/15.04.2025 în 10 zile lucrătoare; respinge ca inadmisibil capătul privind contravenția comisiei.",
-  "control_judiciar": "Deciziile anterioare din aceeași procedură menținute de CA Ploiești: dec. 810/24.10.2024 (plângere AC respinsă) și dec. 307/15.04.2025 (plângere AC respinsă, cu reîncadrarea subtraversărilor ca abatere tehnică minoră <1%).",
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 1542/C5/1710 din 04.06.2025: Inspet SA c. Comuna Contești, jud. Dâmbovița. Nu am găsit plângere: lista completă a dosarelor Comunei Contești pe portal.just conține doar plângerile împotriva deciziilor anterioare 2550/2024 și 440/2025, ambele respinse de CA Ploiești. Decizie ulterioară în aceeași procedură: 2027/C5/2435 din 16.07.2025 (Inspet), admisă cu remediere."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețea inteligentă de distribuție gaze, execuție, ~30 mil. lei; problemele (răsuflători, subtraversări) sunt specifice gazelor PE — direct aplicabile Gazpet.",
    "mai_putin_comparabila": "Context procesual atipic (patru cicluri).",
@@ -2589,8 +2696,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "VE 3.296.644,84 lei fără TVA; termen max. 12 luni. DA cerea Gantt pe zile, activități/subactivități cu resurse, drum critic separat, MPM, PERT, ciclogramă, alocare financiară lunară în procente, data semnării = depunere + 90 zile. Câștigătorul era și elaboratorul proiectului tehnic. Câștigătorul nu a justificat confidențialitatea → acces integral la dosar la CNSC.",
   "concluzie_cnsc": "Respinge excepția lipsei de interes; admite în parte: anulează raportul în partea privind oferta câștigătoare și obligă la reevaluarea ei în 10 zile; respinge criticile privind propria ofertă.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Ploiești (dosar 629/42/2025)",
+   "nr_hotarare": "805/2025",
+   "data": "2025-11-27",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 629/42/2025",
+   "nota": "Decizia 1775/C1/1915 din 25.06.2025 (Aqva Termo Sanit c. Comuna Ulmi; intervenient Casa Proiect Instal Consult). Plângerea Casa Proiect Instal Consult respinsă ca nefondată; excepția lipsei de interes respinsă."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Extindere rețea gaze în sate, valoare mică (3,3 mil. lei) — tipul cel mai frecvent de licitație pentru Gazpet.",
    "mai_putin_comparabila": "Exigențele de planificare sunt neobișnuit de detaliate în această DA.",
@@ -3006,8 +3121,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Anunț SCN1160376 publicat 21.03.2025; 3 oferte. Motive de neconformitate: (1) lipsă procedură tehnică execuție/instalare SRMP PN40 bar, depusă abia la clarificări; (2) documente de experiență a experților cu certificare specifică (RTE gaze naturale) depuse doar la clarificări. Câștigătorul subcontractează lucrările electrice unei firme cu autorizație ANRE C2A; și lui i s-au cerut clarificări (extras Revisal actualizat — considerat clarificare formală). Cauțiune 88.000 lei.",
   "concluzie_cnsc": "Respinge contestația ca nefondată; admite intervenția câștigătorului; respinge cheltuielile de judecată.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Timișoara (dosar 801/59/2025)",
+   "nr_hotarare": "701/2025",
+   "data": "2025-10-24",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 801/59/2025",
+   "nota": "Decizia 2118/C7/1991 din 23.07.2025 (Art Instal c. Orașul Sântana, intervenient Gaz Vest Rețele; PNI Anghel Saligny). Plângerea Art Instal respinsă ca neîntemeiată. Confirmat și în istoricul CNSC (plângere 18.08.2025)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Lucrare tipică Gazpet (Saligny, racord oțel PN40 + SRMP + rețea PE); motivul de respingere ține de conținutul propunerii tehnice.",
    "mai_putin_comparabila": "Cerința de proceduri pe fiecare categorie e specifică acestei DA.",
@@ -3367,8 +3490,16 @@
   "etapa": "rezultat (evaluare propunere tehnică)",
   "fapte_relevante": "2 oferte. Experiență similară cerută pe conducte de gaze de înaltă presiune; cerință autorizație ANRE tip ET. AC a emis „act de remediere” după contestație. Clarificarea AC punctele 5–9 privind personalul; răspuns nr. 136.",
   "concluzie_cnsc": "Admite în parte: anulează PV de evaluare în privința conformității ofertei câștigătoare și a punctajului tehnic, cu actele subsecvente până la etapa documentelor DUAE; obligă AC să reevalueze în 10 zile; respinge ca rămase fără obiect capetele deja remediate; cheltuieli parțiale.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "N-am putut identifica dosarul CNSC (decizie anonimizată). Dosarele 5743/2/2024 și 1178/54/2026 privesc alte decizii cu numărul 2430, din 2024 și 2026."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Lucrări de conducte de gaze, cerințe de personal ANRE/ISCIR/RTE — exact profilul Gazpet.",
    "mai_putin_comparabila": "Înaltă presiune (transport/racord), date anonimizate; nu se cunoaște VE.",
@@ -3578,8 +3709,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "VE 4.565.885,12 lei; anunț SCN din 04.12.2024; raport nr. 3563/06.08.2025; diferența de preț după „corecturi” 26.316,08 lei fără TVA (<1%).",
   "concluzie_cnsc": "Respinge contestația; admite intervenția câștigătorului; respinge cererile de cheltuieli.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 2853/C7/3177 din 25.09.2025: Mara Prod Com c. Comuna Cervenia, respinsă. Nu am găsit plângere (portal.just; istoric CNSC). Dosarul 1173/33/2023 de la CA Cluj privește altă decizie, 2853/C2/2023."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețele de apă cu liste de cantități pe străzi — speță curentă pentru Gazpet ca ofertant.",
    "mai_putin_comparabila": "Eroarea a fost provocată de chiar ofertant (prețuri unitare de 10x).",
@@ -3794,8 +3933,16 @@
   "etapa": "rezultat (reevaluare)",
   "fapte_relevante": "Decizia 2271/C9/2484 primită 14.08.2025; PV reevaluare 4904/18.08.2025; clarificări 4914/19.08.2025, răspuns 1081/20.08.2025; PV 5045/27.08.2025; raport 5212/05.09.2025, comunicare 5214/05.09.2025; contestație 1199/11.09.2025; cauțiune 65.310 lei; valoarea clarificată a experienței: 3.108.150,97 lei (peste pragul de 3.000.000 lei).",
   "concluzie_cnsc": "Respinge contestația ca nefondată.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 3035/C9/3605 din 09.10.2025: Aqva Termo Sanit c. Comuna Vlădeni. Nu am găsit plângere (portal.just; istoric CNSC). Decizia anterioară din aceeași procedură, 2271/C9/2484 din 06.08.2025, nu a fost atacată, potrivit textului BO2025_3035."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Extindere rețea gaze de mică valoare; problema rețelelor finalizate dar neracordate (SRMP/Transgaz întârziat) e frecventă la PNI/PNDL.",
    "mai_putin_comparabila": "Depinde de definiția „lucrări realizate” din fișa de date.",
@@ -4015,8 +4162,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "VE 20.847.715,68 lei (C+I 16.939.801,16; utilaje cu montaj 1.462.321,54; PT+DE 990.000; probe 208.349,49). Diverse și neprevăzute 1.777.922,98 lei la nivel de proiect, excluse expres din VE. Preț câștigător 21.947.574,07 lei. ~97 solicitări de clarificări către contestator. Factori de evaluare cu denumire dublată (5% și 30%). Contestația datată 02.09.2025, trimisă pe e-mail după program.",
   "concluzie_cnsc": "Respinge excepția tardivității; admite în parte (pct. B): anulează raportul privind oferta câștigătoare și obligă la reevaluarea ei începând cu propunerea financiară, în 10 zile; respinge criticile privind neconformitatea propriei oferte.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 3638/C3/3458 din 02.12.2025: AEDO Technologies SRL c. Comuna Baia, jud. Suceava. Nu am găsit plângere (portal.just; istoric CNSC)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Înființare rețea gaze Saligny, P+E, 2025 — profil Gazpet; lecții directe pentru redactarea propunerii tehnice și pentru prețul peste VE.",
    "mai_putin_comparabila": "Neconformitatea depinde de interdicția expresă a formulelor generice din această DA.",
@@ -4300,8 +4455,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "3 oferte depuse. FDA cap. IV.4.1 + CS cap. 10.4.3: RTE atestat ISC, experiență ≥3 ani și ≥1 contract ca RTE la conducte transport gaze înaltă presiune; domenii RTE 1.1, 6.1, 8.1, 8.4 (Ordin 1895/2016). Răspuns clarificare nr. 22 publicat 25.07.2025. Contestatorul a propus un al 5-lea RTE cu experiență, dar fără dovezi pentru cei 4. Intervenientul a renunțat la cererea de excludere (art. 180 L99).",
   "concluzie_cnsc": "Respinge contestația ca nefondată; admite intervenția în partea care sprijină entitatea; ia act de renunțarea la capătul privind excluderea.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 3788 din 12.12.2025 (istoric CNSC: dosar 4530/2025, Energofor SRL c. Electrocentrale București SA — deci entitatea NU e operatorul de transport, cum era dedus în fișă). Nicio plângere găsită (portal.just după număr și părți; istoricul CNSC fără corespondență cu instanța)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Cerință tipică de RTE pe domenii + experiență pe conducte de gaze, impusă de entitățile sectoriale din gaze.",
    "mai_putin_comparabila": "Transport gaze înaltă presiune (nu distribuție); valori și date anonimizate.",
@@ -4438,8 +4601,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "5 oferte; 4 respinse ca neconforme; câștigător cu 32.778.422,75 lei fără TVA (100 puncte); minuta comisiei 13.12.2024; cerere studiu dosar 17.12.2024, documente primite 23.12.2024; raport 146/16.01.2025, comunicare 151/16.01.2025; contestație 27.01.2025.",
   "concluzie_cnsc": "Admite excepția tardivității și respinge contestația ca tardivă; admite cererea de intervenție a câștigătorului; respinge cheltuielile intervenientului.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "N-am putut identifica dosarul CNSC. Dosarul 233/57/2026 de la CA Alba Iulia privește altă decizie, 748/C4/503/2026 (Spitalul Județean Alba Iulia)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețea inteligentă de distribuție gaze PNI Anghel Saligny, ~33 mil. lei — piața Gazpet; cerințe BIM apar tot mai des.",
    "mai_putin_comparabila": "Fondul (BIM) nu a fost analizat de CNSC — doar reproducerea motivelor AC.",
@@ -4714,7 +4885,15 @@
   "etapa": "rezultat",
   "fapte_relevante": "Orașul Șomcuta Mare, VE 4.845.289,41 lei, ES cerută = aceeași valoare în max. 2 contracte în 5 ani. Contestatorul (GETMAR) a depus contract de 8.498.937,15 lei (B.E.R.G./Neogas), recomandare, fișă de cont, facturi/centralizator de 8,64 mil. lei (1.848 pagini) și 236 de pagini de PV de recepție tehnică; AC l-a respins cu formula generică „documentele nu demonstrează experiența similară”, fără motiv concret. Câștigătorul a combinat un contract identic de 1.410.954,65 lei cu lucrări la o conductă de transport Transgaz (64.941.194,53 lei recepționate).",
   "concluzie_cnsc": "Admite în parte; anulează raportul procedurii și actele subsecvente; obligă AC să reevalueze oferta GETMAR de la etapa ES în 10 zile; respinge ca nefondate criticile contra câștigătorului; obligă AC la 4.000 lei cheltuieli (redus de la 12.100 lei).",
-  "control_judiciar": null,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 3952/C1/4610 din 31.12.2025: Getmar SRL c. Orașul Șomcuta Mare. Nu am găsit plângere (portal.just după părți; istoric CNSC)."
+  },
   "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Extindere distribuție gaze, simplificată, ~4,8 mil. lei, criteriu preț — profilul cel mai frecvent pentru Gazpet; arată și că lucrările de transport gaze se pot folosi ca ES pentru distribuție.",
@@ -5212,8 +5391,16 @@
   "etapa": "documentatie",
   "fapte_relevante": "VE 33.131.085,02 lei. Experiență cerută: max. 3 contracte, 30.000.000 lei fără TVA + ≥40 km rețea, racord ÎP, ≥1.000 branșamente, racord+SRMP ≥5.000 mc/h; servicii: ≥1.000.000 lei + proiectare ≥50 km. Răspunsul consolidat din 20.05.2024 a redus la 27 km și 2.700 mc/h. Personal: manager proiect, șef proiect, șef șantier — instalatori ANRE PGD și/sau EGD. Durată: 30 luni (fișă) vs 6+30=36 luni (formular). Suspendarea procedurii admisă prin încheiere.",
   "concluzie_cnsc": "Admite contestația; obligă AC să modifice documentația în 10 zile (experiență, F1–F3, planșă amplasament, autorizări ANRE personal, corelare durate); respinge excepția nulității contestației.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 1870 din 05.07.2024 (istoric CNSC: dosar 1810/2024, Bedamiro Holding Parcari Construct SA c. Comuna Luciu, jud. Buzău). Nicio plângere găsită (portal.just după număr și părți; istoric CNSC). Dosarul CA Brașov 463/64/2023 privește decizia 1870/C8/2023."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Înființare rețea distribuție gaze cu racord+SRMP, P+E, 2024 — profil Gazpet.",
    "mai_putin_comparabila": "Etapa documentație; soluțiile depind de redactarea concretă a DA.",
@@ -5352,8 +5539,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Clarificări 3178/14.05.2024 (întrebările 12–13), răspuns 00245/17.05.2024; raport 4648/10.07.2024 și comunicare 4650/10.07.2024 (SEAP 12.07.2024); contestație înregistrată 23.07.2024; caiet de sarcini: garanție lucrări min. 60 luni, Plan calitate conform SR EN ISO 9001:2015 / SR ISO 10005 și HG 766/1997; regula de calcul a duratei: zile lucrătoare/21 + 2 luni (≥6 luni) sau 4 luni (>12 luni) nefavorabile.",
   "concluzie_cnsc": "Respinge contestația ca nefondată; admite cererea de intervenție a câștigătorului.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 2462/C5/2533 din 02.09.2024: Urbantech Vad Module c. Comuna Constantin Daicoviciu, respinsă. Nu am găsit plângere (portal.just; istoric CNSC)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Execuție rețea distribuție gaze în comună — tipic Gazpet; formularul cu drum critic și perioadă nefavorabilă e răspândit în DA de gaze.",
    "mai_putin_comparabila": "Depinde de formularea exactă a cerinței din formular.",
@@ -5422,8 +5617,16 @@
   "etapa": "rezultat (după două reevaluări dispuse de CNSC)",
   "fapte_relevante": "Anunț 27.09.2023; termen 31.10.2023. Garanție 240.000 lei. Oferta câștigătoare 24.099.192,53 lei (97,4% din VE). Decizii CNSC anterioare în aceeași procedură: 11.03.2024 (menținută de CA Oradea, decizia 207/25.04.2024) și 07.06.2024. Raport procedură 4270/24.07.2024. Cauțiune 88.000 lei.",
   "concluzie_cnsc": "Respinge contestația ca nefondată.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Oradea (dosar 418/35/2024)",
+   "nr_hotarare": "540/2024",
+   "data": "2024-10-30",
+   "rezultat": "desfiintata",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 418/35/2024",
+   "nota": "Decizia 2604/C7/2656 din 16.09.2024 (Prodeximp c. UAT Comuna Vama, jud. Satu Mare). CA a admis plângerea și a desființat-o în totalitate: a admis contestația, a anulat în parte raportul procedurii (oferta Cornell's Floor declarată admisibilă) și a dispus reevaluarea acesteia. Regula CNSC din BO2024_2604, citată la Top 10 pct. 3, NU a rezistat controlului judiciar."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Canalizare la o comună, procedură simplificată, garanție prin poliță de asigurare — situație frecventă pentru Gazpet ca ofertant pe apă-canal.",
    "mai_putin_comparabila": "Soluție favorabilă câștigătorului; alte complete pot fi mai stricte cu nerăspunsul la cererea de prelungire.",
@@ -5446,7 +5649,8 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "c8d5e27e45ecb55f653a756f0af0c8cbdd800b32efd77a0bbc1893d2866acae4",
-  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate).",
+  "avertisment_instanta": "⚠️ Decizia a fost DESFIINTATA de Curtea de Apel Oradea (dosar 418/35/2024) (540/2024, 2024-10-30) — regula NU se folosește fără verificarea hotărârii instanței. Decizia 2604/C7/2656 din 16.09.2024 (Prodeximp c. UAT Comuna Vama, jud. Satu Mare). CA a admis plângerea și a desființat-o în totalitate: a admis contestația, a anulat în parte raportul procedurii (oferta Cornell's Floor declarată admisibilă) și a dispus reevaluarea acesteia. Regula CNSC din BO2024_2604, citată la Top 10 pct. 3, NU a rezistat controlului judiciar."
  },
  {
   "id": "CNSC-BO2024_2636",
@@ -5492,7 +5696,15 @@
   "etapa": "rezultat",
   "fapte_relevante": "Orașul Pogoanele, VE 64.132.883,69 lei, 2 asocieri ofertante, cauțiune 1.282.658 lei. Oferta contestatoarei a fost respinsă ca inacceptabilă pentru că un atestat al unui angajat al subcontractantului (Instgaz) lipsea din PDF și a fost trimis la clarificări, iar certificatul ONRC al terțului susținător/subcontractant aflat în insolvență a fost trimis tot la clarificări. Fișa de date cerea atestatele doar ofertantului de pe locul I, la finalul evaluării; documentele erau emise înainte de data-limită și nu schimbau situația ofertantului. AC nici nu emisese o comunicare a rezultatului semnată.",
   "concluzie_cnsc": "Admite contestația; anulează raportul procedurii nr. 10790/06.08.2024 în partea privind respingerea ofertei; obligă AC la reevaluare și nou raport în cel mult 20 de zile și la comunicarea rezultatului ambelor asocieri; obligă AC la 7.140 lei cheltuieli.",
-  "control_judiciar": null,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 2636/C4/2833 din 19.09.2024: Art Instal c. Orașul Pogoanele. Nu am găsit plângere (portal.just după părți, 2024–2025; istoric CNSC). Dosarele 1105/33/2023 și 593/46/2025 privesc alte decizii cu același număr, din 2023 și 2025."
+  },
   "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețea de distribuție gaze în oraș, ofertă în asociere cu subcontractant (Instgaz) — speță foarte apropiată de ofertele Gazpet; regula Manova (documente preexistente pot fi completate) e direct utilizabilă.",
@@ -5635,8 +5847,16 @@
   "etapa": "documentatie",
   "fapte_relevante": "VE 10.772.285,40 lei fără TVA, din care proiectare+AT 647.561,85 lei (incl. verificare tehnică 54.000 lei) și Dotări — instalația de racordare la SNT (IP+SRMP) 1.200.821,30 lei. Pondere preț 50%; cash-flow minim 3.000.000 lei / 4 luni (CNSC: 27,85% din VE). Manager de proiect: cerute autorizări ANRE EGD, EGIU, EGT, PGD, PGIU, PGT. Anunț SCN1151941/22.08.2024.",
   "concluzie_cnsc": "Admite contestația; dispune remedierea DA în 10 zile (verificare proiect, pondere preț 40%, cash-flow proporțional, eliminare ANRE la manager proiect, corelare cerințe personal/factori).",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 2683/C1/2979 din 23.09.2024: Diversinst SRL c. Comuna Malu Mare, Dolj. Nu am găsit plângere (portal.just după părți; istoric CNSC). Dosarele 510 și 511/57/2025 de la CA Alba Iulia privesc altă decizie, 2683/C2/2025."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Exact tipul de procedură în care intră Gazpet: P+E sistem de distribuție gaze în comună rurală, cu SRM/racord la SNT.",
    "mai_putin_comparabila": "Etapa documentație (nu evaluare); remediile depind de formularea concretă a DA.",
@@ -6128,8 +6348,16 @@
   "etapa": "documentatie",
   "fapte_relevante": "VE 113.523.101,09 lei. Experiență cerută: ≥120,563 km rețea, racord+SRMP/intervenții SRMP, puncte depistare pierderi, ≥5.224 branșamente din care ≥3.240 PRM cu teletransmisie. AC a eliminat la clarificări doar racordul ÎP și ANIF; a menținut ANRE PT/ET (firmă), Apele Române A–E, ISU, INSEMEX-GANEx și cerințele pentru experții secundari (PT/PGT, ET/EGT, RTE 8.4T/8.4D). Cauțiune 220.000 lei; procedura suspendată prin Încheierea 3489/C7/3708/01.11.2024.",
   "concluzie_cnsc": "Respinge excepția tardivității; respinge contestația ca nefondată; respinge cheltuielile (nedovedite).",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 3155/C7/3708 din 07.11.2024: Autoprima Serv c. ADI Fetești-Stelnica, respinsă. Nu am găsit plângere (portal.just după număr și după părți; istoric CNSC fără corespondență cu instanța)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Extindere rețea inteligentă de distribuție + PRM-uri — exact profilul Gazpet; lecție procedurală critică despre termenul de contestare.",
    "mai_putin_comparabila": "Valoare mare (>113 mil. lei), cuplare la SRMP Transgaz — justificarea AC pentru PT/ET ține de intervenția la SRMP.",
@@ -6279,8 +6507,16 @@
   "etapa": "documentatie",
   "fapte_relevante": "VE 13.357.780,25 lei (proiectare 637.500 lei; C+I 12.365.280,25 lei; utilaje cu montaj 305.000 lei; OS 50.000 lei). Durata 17 luni (primele 5 proiectare). Cash-flow inițial 5.000.000 lei/6 luni, redus prin erata automată DF1229133 (29.10.2024) la 4.714.510,67 lei = 13.357.780,25/17×6, dovada doar pentru locul 1. Cerința ANRE: proiectare SD + EDSB execuție, pentru fiecare asociat, subcontractant și terț susținător.",
   "concluzie_cnsc": "Respinge contestația ca nefondată (prima critică rămasă fără obiect după remediere).",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Oradea (dosar 544/35/2024)",
+   "nr_hotarare": "38/2025",
+   "data": "2025-02-03",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 544/35/2024",
+   "nota": "Decizia 3232/C9/3759 din 14.11.2024 (Remorini Grup c. UAT Comuna Auseu, Bihor). Plângerea Remorini Grup respinsă ca TARDIVĂ. Decizia a rămas definitivă, fără control pe fond."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Saligny, înființare rețea inteligentă în comună, P+E, 2024 — tipic Gazpet.",
    "mai_putin_comparabila": "CNSC nu a obligat AC să rescrie cerința; interpretarea restrictivă (doar subcontractanții de gaze) rezultă din considerente.",
@@ -6348,8 +6584,16 @@
   "etapa": "documentație",
   "fapte_relevante": "VE 13.165.042,97 lei, durată 17 luni. Fișa de date cerea autorizație ANRE de proiectare sisteme de distribuție și autorizație EDSB (sau echivalent) pentru execuție, de la fiecare asociat, fiecare terț susținător tehnic și eventualii subcontractanți; și cash-flow de minimum 5.000.000 lei pentru 6 luni. Contestatorul cerea eliminarea autorizării ANRE pentru subcontractanți/asociați care nu fac lucrări de gaze și a terțului susținător financiar; suspendarea fusese respinsă prin încheiere.",
   "concluzie_cnsc": "Respinge contestația ca nefondată și cererea de decalare a termenului de ofertare.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Oradea (dosar 529/35/2024)",
+   "nr_hotarare": "3/2025",
+   "data": "2025-01-17",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 529/35/2024",
+   "nota": "Decizia 3288/C4/3760 din 20.11.2024 (Remorini Grup c. UAT Comuna Vadu Crișului, Bihor; ANRE pentru toți asociații și subcontractanții de gaze). Plângerea Remorini Grup respinsă ca nefondată; regula e confirmată judiciar."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "P+E rețea gaze, simplificată, cerința ANRE EDSB pentru toți participanții — direct relevantă pentru structurarea asocierilor/subcontractărilor Gazpet.",
    "mai_putin_comparabila": "Decizie pe documentație; CNSC a tratat lucrările de gaze ca „tot unitar”, dar nu a analizat un subcontractant care face exclusiv lucrări non-gaz (ex. asfaltare).",
@@ -6421,8 +6665,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Termen oferte 26.08.2024; 2 oferte; clarificare 4407/20.09.2024, răspuns 495/24.09.2024; PV 4 nr. 4744/07.10.2024; raport 4939/21.10.2024, comunicare 4941/21.10.2024; Gantt: timp friguros 14.11.2025–16.03.2026.",
   "concluzie_cnsc": "Respinge contestația ca nefondată.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 3381/C4/3785 din 28.11.2024: Top Gaz SRL c. Comuna Fibiș, jud. Timiș, respinsă. Nu am găsit plângere la CA (portal.just; istoric CNSC). Dosarul 675/32/2025 de la CA Bacău privește altă decizie, 3381/C6/3984 din 2025 (Județul Neamț)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Execuție rețea distribuție gaze în comună, simplificată, 7,2 mil. lei — exact profilul Gazpet; Formularul 13 standard apare în multe DA.",
    "mai_putin_comparabila": "Soluția depinde de formularea concretă a Formularului 13.",
@@ -6638,8 +6890,16 @@
   "etapa": "reevaluare după decizie CNSC",
   "fapte_relevante": "Clarificare AC nr. 5812/27.11.2023 (detaliere + documente justificative); răspuns 1534/29.11.2023 (doar defalcare). Raport reevaluare nr. 341/23.01.2024. Plângerea împotriva deciziei 2695/2023 respinsă de CA (Decizia civilă 1402/15.12.2023). Cheltuieli acordate 5.950 lei.",
   "concluzie_cnsc": "Admite contestația; anulează raportul și actele subsecvente; obligă la reevaluarea ofertei câștigătoare în 10 zile; 5.950 lei cheltuieli.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Cluj (dosar 213/33/2024, conexat 232/33/2024)",
+   "nr_hotarare": "417/2024",
+   "data": "2024-04-09",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 213/33/2024",
+   "nota": "Decizia 449/C1/264 din 22.02.2024 (Dianova Instal c. Comuna Mica, jud. Cluj; aceeași procedură ca BO2023_2695). Plângerile Comunei Mica și ale asocierii Montrepcom–CIS Gaz respinse ca nefondate."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețea de distribuție gaze P+E — piața Gazpet; standardul de probă pentru justificarea prețului e direct aplicabil răspunsurilor noastre.",
    "mai_putin_comparabila": "Context de executare a unei decizii CNSC anterioare.",
@@ -7224,8 +7484,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "VE 70.615.161,86 lei. Cerință: experiență ≥55.000.000 lei fără TVA în max. 5 contracte, rețele de distribuție și/sau infrastructuri de gaze naturale, ultimii 5 ani. Contestatorul a invocat (prin terț/asociat, în DUAE) contractul BRUA Faza 1 Lot 3 Podișor–Recaș (Transgaz), lider asociere, 131,6 mil. lei executați (76,4%), PV terminare 16.08.2021; AC a cerut clarificări (09.12.2022), răspunsul cu recomandare Transgaz a fost respins.",
   "concluzie_cnsc": "Admite contestația; anulează raportul și obligă la reevaluarea ofertei în 10 zile; respinge intervenția câștigătorului.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 1336/C1/1141 din 14.06.2023: Habau SRL c. Asociația Administrativă Gaz Sud Bihor. Nu am găsit plângere, nici pe portal.just, nici în istoricul CNSC. Decizie ulterioară în aceeași procedură: 2745/C1/2840 din 20.11.2023 (Precon Transilvania), admisă cu remediere."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Rețele inteligente de distribuție gaze în comune — licitație de tip Gazpet; discuția transport vs distribuție e frecventă.",
    "mai_putin_comparabila": "Formula largă „și/sau infrastructuri de gaze naturale” a fost decisivă; la o cerință strict „distribuție” soluția poate diferi.",
@@ -7356,8 +7624,16 @@
   "etapa": "rezultat (reevaluare după o decizie CNSC anterioară)",
   "fapte_relevante": "Al doilea ciclu: prin Decizia CNSC nr. 2053/C4/1997 din 30.09.2022 se constatase deja că graficul Gantt al câștigătorului nu conținea activitatea „Montare contoare inteligente”, obligatorie conform fișei de date (cap. IV.4.1). La reevaluare, AC a cerut clarificări (adresa nr. 8092/10.10.2022), iar câștigătorul a indicat doar pagini din propunere (4, 14, 30-31; 4.233 branșamente cu sisteme inteligente), fără detalierea cerută (stadiu fizic, resurse). Oferta contestatorului a rămas respinsă: un acord-cadru (nr. 14887-900501/13.01.2017) nu poate dovedi ES, ci doar contractele subsecvente finalizate și recepționate.",
   "concluzie_cnsc": "Admite în parte; obligă AC să anuleze raportul procedurii nr. 9437/24.11.2022 privind oferta asocierii câștigătoare și comunicările, și dispune reevaluarea acesteia în 15 zile; criticile privind respingerea ofertei contestatorului — nefondate.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 140/C4/3012 din 18.01.2023: Inspet SA c. Comuna Mărăcineni. Nu am găsit plângere (portal.just; istoric CNSC). Decizia anterioară din aceeași procedură, 2053/C4/1997 din 30.09.2022, e «definitivă prin neatacare», potrivit textului BO2023_140."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "P+E sistem inteligent de distribuție gaze în comune — exact obiectul licitațiilor Gazpet; lecții pe graficul Gantt cu activități obligatorii și pe ES din acorduri-cadru (Delgaz/Distrigaz lucrează des cu acorduri-cadru).",
    "mai_putin_comparabila": "Decizia e în al doilea ciclu procesual și depinde de constatările deciziei anterioare; valoarea nu apare în text.",
@@ -7838,8 +8114,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "Anunț SCN1129675/11.08.2023; VE 19.004.953 lei (strategie: 18.547.528 lei). Oferta câștigătoare 17.135.646 lei fără TVA, din care OS 16.000 lei (deviz general SF: 427.425 lei). Cauțiune 88.000 lei. Cheltuieli acordate contestatorului 3.000 lei.",
   "concluzie_cnsc": "Admite în parte (costul Organizării de șantier): anulează raportul și obligă la reevaluarea ofertei câștigătoare prin clarificări în 10 zile; respinge celelalte critici; admite în parte intervenția.",
-  "control_judiciar": "Plângere respinsă de Curtea de Apel (Decizia civilă nr. 1402/15.12.2023) — informație preluată din BO2024_449, neverificată pe portalul instanței.",
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": true,
+   "instanta": "Curtea de Apel Cluj (dosar 1124/33/2023)",
+   "nr_hotarare": "1402/2023",
+   "data": "2023-12-15",
+   "rezultat": "mentinuta",
+   "link": "Portal instanțe (portalquery.just.ro, CautareDosare2) — dosar 1124/33/2023",
+   "nota": "Decizia 2695/C1/2913 din 15.11.2023 (Comuna Mica). Plângerea asocierii Dianova Instal respinsă; decizia menținută în întregime. Confirmă informația deja preluată din BO2024_449. Procedura a continuat cu BO2024_449 (re-contestație)."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "P+E rețea de distribuție gaze la o comună, criteriu preț — profilul principal al licitațiilor Gazpet.",
    "mai_putin_comparabila": "Situație specifică: liderul câștigător elaborase și SF-ul/devizul general.",
@@ -7903,7 +8187,15 @@
   "etapa": "rezultat",
   "fapte_relevante": "VE 18.903.716,36 lei; serviciile de proiectare estimate la 1.908.715,36 lei (inclusiv AT 588.935,67 lei; PT branșamente 393.750 lei). ES pentru proiectare: minimum 900.000 lei în max. 2 contracte, formulare generală. Asocierea contestatoare a prezentat un contract de P+E branșamente (nr. 4600021631/V37/1931) și unul de extinderi conducte și racorduri; AC a respins oferta (și apoi a anulat procedura, toate ofertele fiind respinse) fără să ceară documentele justificative DUAE și fără să verifice serviciile efectiv prestate.",
   "concluzie_cnsc": "Admite contestația; anulează actele privind respingerea ofertei și anularea procedurii, inclusiv comunicarea; obligă AC ca în 15 zile să continue procedura prin reevaluarea ofertei contestatoare.",
-  "control_judiciar": null,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 2717/C11/2797 din 17.11.2023: Inspet SA c. Comuna Felnac, jud. Arad. Nu am găsit plângere (portal.just după număr și după părți; istoric CNSC). Decizii ulterioare în aceeași procedură, ambele Inspet, admise cu remediere: 517/C11/260 din 29.02.2024 și 1362/C11/1123 din 20.05.2024."
+  },
   "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Alimentare cu gaze a comunelor, P+E, simplificată — portofoliul de branșamente/extinderi al Gazpet poate fi folosit ca ES pentru rețele de distribuție.",
@@ -10814,8 +11106,16 @@
   "etapa": "rezultat",
   "fapte_relevante": "VE totală ≈447,25 mil. lei fără TVA (toate loturile). Lotul 17: 4 oferte. Garanție constituită prin poliță de asigurare, încărcată în fișierul „Formular de ofertă ... propunere financiară lot 17”. Entitatea a cerut prelungirea valabilității ofertelor până la 31.12.2020 prin e-mail (termen 23.10.2020); contestatorul a trimis prelungirea ofertei și a poliței. Cauțiune 19.070 lei.",
   "concluzie_cnsc": "Respinge contestația primului ofertant (lipsă cauțiune); admite în parte a doua: anulează raportul pentru lotul 17 și dispune reevaluarea; 1.190 lei cheltuieli.",
-  "control_judiciar": null,
-  "control_judiciar_cautat": false,
+  "control_judiciar": {
+   "gasit": false,
+   "instanta": null,
+   "nr_hotarare": null,
+   "data": null,
+   "rezultat": "necunoscut",
+   "link": null,
+   "nota": "Decizia 2392/C4/2655,2674 din 22.12.2020: DSF Project Rețele și Expert Gaz Construct c. ENGIE România SA. Nu am găsit plângere (portal.just după părți; istoric CNSC). Dosarele 7157/2/2023 și 500, 504/64/2025 privesc alte decizii cu același număr."
+  },
+  "control_judiciar_cautat": true,
   "comparabilitate": {
    "de_ce_comparabila": "Acord-cadru de branșamente gaze cu operator de distribuție — piață directă Gazpet; garanția de participare e cerută la toate aceste proceduri.",
    "mai_putin_comparabila": "Context 2020 (OUG 114/2020 privind cauțiunea), procedură sectorială.",
