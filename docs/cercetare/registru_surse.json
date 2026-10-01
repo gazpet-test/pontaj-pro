@@ -131,6 +131,25 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-anre-proiect-completare-racordare-2023",
+  "tip": "document_consultare",
+  "cod": "Proiect ordin completare Ord. 7/2022 (ANRE, 20.02.2023)",
+  "titlu": "Proiect de Ordin pentru completarea Regulamentului privind racordarea la SD — referat de aprobare",
+  "emitent": "ANRE",
+  "editie": "consultare publică 20.02–21.03.2023",
+  "status": "proiect_adoptare_neconfirmata",
+  "url_oficial": "https://anre.ro/wp-content/uploads/2023/03/23-02-20-12-14-19Referat_de_aprobare.pdf",
+  "acces": "public",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Privește doar cererile de racordare depuse înainte de OUG 143/2021 și selectările eșuate.",
+  "snapshot_sha256": "e20e1827bddd6dcce349221efa7a76fc9d7d6c09a49da25ceb47b8e26b7cb433",
+  "snapshot_data": "2026-10-02",
+  "ultima_verificare": "2026-10-02"
+ },
+ {
   "source_id": "SRC-brml-lo-2022",
   "tip": "ordin",
   "cod": "Ordin BRML 77/2022 — L.O.-2022",
@@ -624,24 +643,29 @@
   "cod": "HG 395/2016",
   "titlu": "HG 395/2016 — Normele metodologice de aplicare a prevederilor referitoare la atribuirea contractului de achiziție publică/acordului-cadru din Legea 98/2016",
   "emitent": "Guvernul României",
-  "editie": "Formă consolidată CTCE valabilă 24.05.2024–13.06.2024 (ANAP). Modificatori: Ordin 264/2016, HG 866/2016, HG 419/2018, HG 485/2020, HG 375/2022, HG 336/2023, OUG 52/2024.",
+  "editie": "forma consolidată la 18.08.2026 (sursa: text sintetic SintAct pe avocat-achizitii-publice.ro — secundar); comparată cu CTCE ANAP 13.06.2024",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://anap.gov.ro/web/wp-content/uploads/2022/09/HOTARARE-nr.-395-2016-1.pdf",
+  "url_oficial": "https://avocat-achizitii-publice.ro/legislatie-achizitii-publice/hotararea-guvernului-nr-3952016/ (secundar)",
   "urluri_secundare": "https://anap.gov.ro/web/wp-content/uploads/2022/09/HOTARARE-nr.-395-2016-1.pdf",
   "acces": "public",
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 9,
   "baza_normativa_id": "hg-395-2016",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
+  "snapshot_sha256": "092b4766b40fba133cab86508e14666314568fe4f232ab6242b4812ef84ed742",
+  "snapshot_data": "2026-10-02",
+  "modificari_dupa_062024": [
+   "OUG 7/2026 (MO 146/25.02.2026), art. XXVII alin. (2) — abrogă art. 2 alin. (1) (compartimentul intern de achiziții al AC); fără efect pentru ofertant"
+  ],
+  "articole_verificate_neschimbate": "20–21, 27, 29–32, 35–41, 132–139, 166",
+  "nota": "Nota ÎCCJ HP 66/2018 apare la art. 133–134. Modificări după 18.08.2026 necitite (risc mic).",
   "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
@@ -920,6 +944,46 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "ultima_verificare": "2026-10-01"
+ },
+ {
+  "source_id": "SRC-iccj-hp-66-2018",
+  "tip": "decizie_iccj",
+  "cod": "Decizia ÎCCJ (HP) 66/2018",
+  "titlu": "Dezlegarea unei chestiuni de drept — reevaluarea ofertei după controlul CNSC/instanței",
+  "emitent": "Înalta Curte de Casație și Justiție",
+  "editie": "01.10.2018, MO 970/16.11.2018",
+  "data_publicarii": "2018-11-16",
+  "status": "in_vigoare",
+  "url_oficial": "https://www.juridice.ro/615417/ (secundar)",
+  "acces": "public",
+  "domenii": [
+   "achizitii"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Interpretare obligatorie a HG 395 art. 133–134 la reevaluare.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-02"
+ },
+ {
+  "source_id": "SRC-iccj-ril-23-2025",
+  "tip": "decizie_iccj",
+  "cod": "Decizia ÎCCJ (RIL) 23/2025",
+  "titlu": "Admisibilitatea cererii de intervenție principală la CNSC",
+  "emitent": "Înalta Curte de Casație și Justiție",
+  "editie": "doar dispozitivul, din nota textului sintetic L101 (18.08.2026)",
+  "status": "in_vigoare",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "achizitii"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Relevantă când Gazpet vrea să intervină într-o contestație a altui ofertant.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "nota": "Data și MO necitite.",
+  "ultima_verificare": "2026-10-02"
  },
  {
   "source_id": "SRC-indicatoare-norme-deviz-1981",
@@ -1406,27 +1470,33 @@
   "cod": "Legea 101/2016",
   "titlu": "Legea nr. 101/2016 privind remediile și căile de atac în materie de atribuire a contractelor de achiziție publică, sectoriale și de concesiune și organizarea CNSC",
   "emitent": "Parlamentul României",
-  "editie": "Text inițial MO 393/23.05.2016 citit local (l101.txt); forma curentă NECITITĂ. Art. 8 alin. (1) lit. b) în forma curentă = 7 zile sub prag (aplicat de Decizia CNSC 182/C8/4870 din 23.01.2026).",
+  "editie": "forma consolidată la 18.08.2026 (sursa: text sintetic SintAct pe avocat-achizitii-publice.ro — secundar); art. 61^1 confirmat și prin citarea textului în vigoare din Decizia CNSC BO2024_3004",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZTEwNWEwM2QtZjIyMi00ZmNjLTlhMTAtN2Y5MmJmNjEyMjEz&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI1XzI4NjMucGRm&action=aW5saW5l",
+  "url_oficial": "https://avocat-achizitii-publice.ro/legislatie-achizitii-publice/legea-nr-1012016/ (secundar)",
   "urluri_secundare": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZTEwNWEwM2QtZjIyMi00ZmNjLTlhMTAtN2Y5MmJmNjEyMjEz&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI1XzI4NjMucGRm&action=aW5saW5l",
-  "acces": "partial",
+  "acces": "public",
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": 10,
   "baza_normativa_id": "legea-101-2016",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "corectura": "Runda 1 indica 5 zile sub prag — GREȘIT pentru forma curentă; textul 2016 avea notificare prealabilă (art. 6) + 5 zile. Act modificator neidentificat pe sursă primară.",
+  "snapshot_sha256": "350160a145862fb8b533ed68bb7a8ecf7678b179f595896e8e7a004e2b1d7bb9",
+  "snapshot_data": "2026-10-02",
+  "corectura": "Termen contestație 10/7 zile (art. 8) CONFIRMAT; cap. II (notificare prealabilă) abrogat 04.06.2018 prin OUG 45/2018; plângere 10 zile (art. 29) la curtea de apel de la sediul AC (art. 32); cauțiune peste prag: 220.000 / 2.000.000 lei (NU 880.000 — valoare din forma 2019).",
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Orice contestație Gazpet la CNSC (DA, răspunsuri, rezultat)."
+  "motiv_aplicabilitate": "Orice contestație Gazpet la CNSC (DA, răspunsuri, rezultat).",
+  "modificari_dupa_062024": [
+   "Nicio modificare/abrogare datată 2024–2026 marcată în textul sintetic",
+   "Decizia ÎCCJ (RIL) 23/2025 — interpretează art. 3 alin. (1) lit. a), art. 8, art. 17 alin. (3): cererea de intervenție principală la CNSC e admisibilă"
+  ],
+  "articole_verificate": "8–11, 16–33, 49–50, 52^1, 59–61^1",
+  "nota": "Actul care a ridicat plafonul de la 880.000 la 2.000.000 lei NU a fost identificat (după 15.03.2019; candidați: OUG 114/2020 sau OG 3/2021 — neverificat). Art. 61^1 alin. (2^1)–(2^2) (loturi) apar concomitent ca text și ca «abrogat prin Decizia 221/2020» — de verificat pe forma oficială."
  },
  {
   "source_id": "SRC-legea-107-1996-ape",
@@ -1453,6 +1523,27 @@
   "ofertare_normative_id": null,
   "verificat_pe_sursa_primara": false,
   "note": "Text secundar; modificările 2010–2026 (inclusiv procedura de notificare) neverificate."
+ },
+ {
+  "source_id": "SRC-legea-118-2025",
+  "tip": "lege",
+  "cod": "Legea 118/2025",
+  "titlu": "Lege pentru aprobarea OUG 52/2024 (modificarea și abrogarea unor prevederi în domeniul achizițiilor publice și sectoriale)",
+  "emitent": "Parlamentul României",
+  "editie": "MO 619/01.07.2025; în vigoare 04.07.2025 (doar metadate, din juridice.ro)",
+  "data_publicarii": "2025-07-01",
+  "effective_from": "2025-07-04",
+  "status": "in_vigoare",
+  "url_oficial": "https://legislatie.just.ro/public/DetaliiDocument/299541 (inaccesibil)",
+  "acces": "metadata_only",
+  "domenii": [
+   "achizitii"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Aprobă OUG 52/2024; comparația textuală L98/HG395 nu arată modificări suplimentare.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-02"
  },
  {
   "source_id": "SRC-legea-123-2012-gaze",
@@ -1533,6 +1624,25 @@
   "source_id": "SRC-legea-208-2022"
  },
  {
+  "source_id": "SRC-legea-24-2000",
+  "tip": "lege",
+  "cod": "Legea 24/2000 (republicată)",
+  "titlu": "Legea privind normele de tehnică legislativă pentru elaborarea actelor normative",
+  "emitent": "Parlamentul României",
+  "editie": "republicată MO 260/21.04.2010, formă LEX EXPERT la 15.03.2011 (secundar); modificări ulterioare necitite",
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://www.rndvcsh.ro/wp-content/uploads/2017/04/Lege-Nr.24din-2000-Norme-tehnica-legislativa.pdf (secundar)",
+  "acces": "public",
+  "domenii": [
+   "general"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Art. 11 alin. (1) + art. 12 alin. (3): actele autorităților administrative autonome (ANRE) intră în vigoare la publicare dacă nu prevăd altă dată → Ord. 17/2026 în vigoare 26.05.2026.",
+  "snapshot_sha256": "2421ade754937d6155ebf5e4486eae20c77e81ee7767bb312e5944412b657bb9",
+  "snapshot_data": "2026-10-02",
+  "ultima_verificare": "2026-10-02"
+ },
+ {
   "source_id": "SRC-legea-241-2006",
   "tip": "lege",
   "cod": "Legea 241/2006 (republicată)",
@@ -1558,6 +1668,31 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "doar_referinta",
   "motiv_aplicabilitate": "Licența ANRSC privește operatorii, nu executantul."
+ },
+ {
+  "source_id": "SRC-legea-283-2024",
+  "tip": "lege",
+  "cod": "Legea 283/2024",
+  "titlu": "Lege privind modificarea și completarea unor acte normative, pentru stabilirea salariilor minime adecvate",
+  "emitent": "Parlamentul României",
+  "editie": "MO 1139/14.11.2024 (forma publicată; text legeaz.net — secundar)",
+  "data_publicarii": "2024-11-14",
+  "effective_from": "2024-11-17",
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://legeaz.net/monitorul-oficial-1139-2024/lege-283-2024 (secundar)",
+  "acces": "public",
+  "domenii": [
+   "achizitii",
+   "contract",
+   "munca"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Art. VIII modifică L98 (art. 187, 223); art. XI impune excludere, clauze contractuale și sancțiuni privind salariul minim în toate procedurile de achiziție publică.",
+  "snapshot_sha256": "87284a51b42556ec712ea55537bb621d3b01338c3c5b89cc26127f54a53d890e",
+  "snapshot_data": "2026-10-02",
+  "nota": "Art. II: ANAP actualiza documentele standard în 120 de zile — documentele ANAP actualizate necitite.",
+  "ultima_verificare": "2026-10-02"
  },
  {
   "source_id": "SRC-legea-307-2006",
@@ -1722,25 +1857,31 @@
   "cod": "Legea 98/2016",
   "titlu": "Legea nr. 98/2016 privind achizițiile publice",
   "emitent": "Parlamentul României",
-  "editie": "Formă consolidată CTCE valabilă 24.05.2024–13.06.2024 (publicată de ANAP); ultimul act modificator inclus: OUG 52/2024 (MO 483/24.05.2024). Modificări ulterioare iunie 2024 → oct. 2026 NEVERIFICATE (legislatie.just.ro inaccesibil).",
+  "editie": "forma consolidată la 18.02.2026 (sursa: text sintetic SintAct/Wolters Kluwer republicat pe avocat-achizitii-publice.ro — secundar); verificată programatic față de forma CTCE ANAP la 13.06.2024 (oficială)",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://anap.gov.ro/web/wp-content/uploads/2022/10/Legea-nr.-98-din-2016-privind-achizitiile-publice-versiune-actualizata-la-13.06.2024.pdf",
+  "url_oficial": "https://avocat-achizitii-publice.ro/legislatie-achizitii-publice/lege98-2016/ (secundar); oficial: https://legislatie.just.ro/Public/DetaliiDocument/178667 (INACCESIBIL — HTTP/2 PROTOCOL_ERROR)",
   "urluri_secundare": "https://anap.gov.ro/web/wp-content/uploads/2022/10/Legea-nr.-98-din-2016-privind-achizitiile-publice-versiune-actualizata-la-13.06.2024.pdf",
   "acces": "public",
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 5,
   "baza_normativa_id": "legea-98-2016",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "nota": "Corectură: art. 175 alin. (2) lit. a) limitează cifra de afaceri minimă la 2× valoarea estimată (excepții justificate alin. (3)–(4)); art. 173 alin. (2) privește doar serviciile — pentru lucrări autorizarea se cere pe alin. (1).",
+  "snapshot_sha256": "243d1e901b8f8c4898d2588d364757637af80230c5f8b81158ac42b835314df4",
+  "snapshot_data": "2026-10-02",
+  "nota": "Posibile modificări între 19.02.2026 și 02.10.2026 NECITITE. anap.gov.ro și cdep.ro au dat reset/503 prin proxy; lege5.ro gratuit afișează doar forma inițială.",
+  "modificari_dupa_062024": [
+   "Legea 283/2024 (MO 1139/14.11.2024, în vigoare 17.11.2024) — art. VIII: introduce art. 187 alin. (5) lit. d) (factor CCM) și art. 223 alin. (1) lit. c) (denunțare pentru încălcarea art. 51); modifică mențiunea de transpunere",
+   "Legea 118/2025 (MO 619/01.07.2025, în vigoare 04.07.2025) — aprobă OUG 52/2024; NU s-au găsit diferențe de text în art. 1–240 față de forma 13.06.2024 atribuibile ei (aprobare fără modificări — dedus din comparație, textul legii necitit)",
+   "Actualizarea pragurilor art. 7 alin. (1) pentru 2026–2027 (lucrări 26.960.556 lei) — prin Reg. delegate UE, mecanismul art. 8; vezi REQ-AD-088"
+  ],
+  "articole_verificate_neschimbate": "160–161, 172–183, 193–196, 209–210, 215–217 (diferențele găsite = formatare/numerotare)",
   "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
@@ -2039,7 +2180,8 @@
   "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Completare P2: anexa 2 «Lista standardelor» NU conține SR EN 12068, seria ISO 21809, ISO 5817/17635/17636/17637/10675/17640/11666, ISO 9606-1, ISO 3834, ISO 8501, ISO 12944, EN ISO 3183, EN 10204 — toate acestea vin din PT CR ISCIR, specificațiile operatorilor sau DA. Art. 75, 194-198 dau parametrii obligatorii pentru cantitățile de terasamente.",
-  "nota": "MO 462/2018 original: sha256 ac023a32…; forma consolidată e valabilă la 31.01.2023 — modificări ulterioare neverificate. Notele ^1/^5 din art. 1^1 trimit încă la Ord. 132/2021 și 182/2020."
+  "nota": "Dovadă negativă bazată pe lista ANRE (sursa emitentului); MO nu a fost căutat exhaustiv; legislatie.just.ro inaccesibil.",
+  "verificare_modificari": "Lista oficială ANRE «Norme tehnice» (anre.ro, persoane juridice – gaze naturale) la 02.10.2026: «Ord. 89/2018 … Modificat prin Ordinul 2/2023»; actele ANRE 2023–2026 listate (Ord. 96/2023 → Ord. 179/2015; Ord. 8/2025 → NT amonte; Ord. 53/2026 → amonte/licențe) NU modifică Ord. 89/2018."
  },
  {
   "source_id": "SRC-ntpee-2018-sudura-ndt-izolatie-probe",
@@ -2223,6 +2365,26 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-ord-anre-136-2022",
+  "tip": "ordin_anre",
+  "cod": "Ord. ANRE 136/2022",
+  "titlu": "Ordin de modificare a Regulamentului de racordare la SD (Ord. 7/2022)",
+  "emitent": "ANRE",
+  "editie": "07.12.2022 (metadate din antetul formei consolidate; MO necitit)",
+  "data_publicarii": null,
+  "status": "in_vigoare",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Modifică Ord. 7/2022; inclus în forma consolidată citită.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-02"
+ },
+ {
   "source_id": "SRC-ord-anre-156-2020",
   "tip": "ordin_anre",
   "cod": "Ordin ANRE 156/2020",
@@ -2255,9 +2417,9 @@
   "cod": "Ordin ANRE 17/2026",
   "titlu": "Regulamentul pentru autorizarea operatorilor economici care desfășoară activități în domeniul gazelor naturale",
   "emitent": "ANRE",
-  "editie": "21.05.2026, MO 444/26.05.2026 (ordinul nu stabilește altă dată → în vigoare la publicare, 26.05.2026 — dedus, nu scris explicit)",
+  "editie": "Ord. ANRE 17/21.05.2026, MO 444/26.05.2026; nemodificat conform listei ANRE la 02.10.2026",
   "data_publicarii": null,
-  "effective_from": null,
+  "effective_from": "2026-05-26",
   "effective_to": null,
   "status": "in_vigoare",
   "inlocuit_de": null,
@@ -2267,15 +2429,16 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 22,
   "baza_normativa_id": "ord-anre-17-2026",
-  "snapshot_sha256": "805ae32c896d0b573e2403555ba30f89596a3c00a14cc28efb75ec1291e4aa4e",
-  "snapshot_data": "2026-10-01",
+  "snapshot_sha256": "41c0645f1394370ec6d8a0ac2d58dfb98376623257a16ac2fc92b8fdfa08bb41",
+  "snapshot_data": "2026-10-02",
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Legea 123/2012 art. 119 pct. 1 + 121 → autorizarea EDSB/EDIB a Gazpet; matricea tipurilor în note_tehnic.md.",
-  "nota": "Neconcordanțe interne: art. 10 „PIH” vs tabel „PH”; anexa 3 pct. 2 (contract terț sudori) vs art. 14-15 (sudori salariați)."
+  "nota": "Hash-ul e al paginii ANRE de legislație (verificarea lipsei modificărilor); PDF-ul ordinului a fost citit în runda 2. Nu s-a găsit comunicat ANRE de prelungire a termenului.",
+  "termen_conformare": "art. 39: 3 luni de la intrarea în vigoare → 26.08.2026 (calculat; ordinul nu are dată proprie de intrare în vigoare, deci se aplică Legea 24/2000 art. 12 alin. (3))"
  },
  {
   "source_id": "SRC-ord-anre-182-2020",
@@ -2417,26 +2580,54 @@
   "cod": "Ordin ANRE 7/2022",
   "titlu": "Regulamentul privind racordarea la sistemul de distribuție a gazelor naturale",
   "emitent": "ANRE",
-  "editie": "23.02.2022, MO 196/28.02.2022; abrogă Ordin 18/2021 și 96/2018; cu modificările ulterioare (lista completă neverificată)",
+  "editie": "forma consolidată la 07.12.2022 (Ord. ANRE 7/2022 + Ord. ANRE 136/2022) — sursa: copie publicată de OSD Neogas (text); originalul ANRE (anre.ro/wp-content/uploads/2023/04/Ord_7_2022.pdf) e scanat, fără strat text",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://www.engie.ro/wp-content/uploads/2022/03/Ordinul-ANRE-nr-7-din-2022.pdf",
+  "url_oficial": "https://anre.ro/wp-content/uploads/2023/04/Ord_7_2022.pdf",
   "urluri_secundare": "https://www.engie.ro/wp-content/uploads/2022/03/Ordinul-ANRE-nr-7-din-2022.pdf",
   "acces": "public",
   "domenii": [
-   "tehnic_gaze_apa"
+   "tehnic_gaze_apa",
+   "gaze",
+   "contract"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 28,
   "baza_normativa_id": "ord-anre-7-2022",
+  "snapshot_sha256": "cca6da3dd0fe7f074e99329b0b727502cca30573ea2d0da350c35086bcc01e10",
+  "snapshot_data": "2026-10-02",
+  "modificari": [
+   "Ord. ANRE 136/07.12.2022 (inclus)",
+   "Proiect de ordin de completare (consultare 20.02–21.03.2023, privind cererile depuse înainte de OUG 143/2021) — adoptare NECONFIRMATĂ"
+  ],
+  "url_text": "https://neogas.ro/storage/app/media/Formulare/REGULAMENT%20RACORDARE%20ORDINUL%20ANRE%20NR.%207%20DIN%202022%20.pdf",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Legea 123/2012 art. 138 → regulamentul stabilește rolul OEP/OEE (Gazpet), termenele, convenția tehnică, GBE, recepția și PIF la racorduri/branșamente.",
+  "nota": "Trimite la tipurile de autorizație din Ord. 132/2021 (abrogat prin Ord. 17/2026, care păstrează denumirile). Nu confunda cu Ord. ANRE 7/2026 (acces și utilizare SD) — act diferit."
+ },
+ {
+  "source_id": "SRC-ord-anre-7-2026",
+  "tip": "ordin_anre",
+  "cod": "Ord. ANRE 7/2026",
+  "titlu": "Ordin pentru aprobarea Regulamentului privind accesul și utilizarea sistemelor de distribuție a gazelor naturale",
+  "emitent": "ANRE",
+  "editie": "31.03.2026, MO 368/04.05.2026; abrogă Ord. 97/2018 și 78/2020 (metadate din lista ANRE)",
+  "data_publicarii": "2026-05-04",
+  "status": "in_vigoare",
+  "url_oficial": "https://anre.ro/wp-content/uploads/2026/05/Ord-7-2026.pdf",
+  "acces": "public",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Acces/utilizare SD (relația OSD–furnizori/clienți); NU modifică racordarea. Inclus doar pentru a evita confuzia cu Ord. 7/2022.",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "ultima_verificare": "2026-10-02"
  },
  {
   "source_id": "SRC-ordin-1014-874-2001-formulare-c",
@@ -2832,6 +3023,26 @@
   "note": ""
  },
  {
+  "source_id": "SRC-oug-45-2018",
+  "tip": "oug",
+  "cod": "OUG 45/2018",
+  "titlu": "OUG pentru modificarea și completarea unor acte normative cu impact asupra sistemului achizițiilor publice",
+  "emitent": "Guvernul României",
+  "editie": "în vigoare 04.06.2018 (efect citit din textul sintetic L101)",
+  "effective_from": "2018-06-04",
+  "status": "in_vigoare",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "achizitii"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Art. IV pct. 3 abrogă cap. II L101 (notificarea prealabilă); introduce art. 61^1 (cauțiunea).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-02"
+ },
+ {
   "source_id": "SRC-oug-47-2022",
   "tip": "oug",
   "cod": "OUG 47/2022",
@@ -2857,6 +3068,27 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-oug-52-2024",
+  "tip": "oug",
+  "cod": "OUG 52/2024",
+  "titlu": "OUG pentru modificarea și abrogarea unor prevederi din acte normative în domeniul achizițiilor publice și achizițiilor sectoriale",
+  "emitent": "Guvernul României",
+  "editie": "MO 483/24.05.2024 (inclusă deja în forma CTCE 13.06.2024)",
+  "data_publicarii": "2024-05-24",
+  "effective_from": "2024-05-24",
+  "status": "in_vigoare_aprobata",
+  "url_oficial": "https://legislatie.just.ro/Public/DetaliiDocument/283230 (inaccesibil)",
+  "acces": "metadata_only",
+  "domenii": [
+   "achizitii"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Ultimul modificator inclus în forma ANAP; aprobată prin Legea 118/2025.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-02"
  },
  {
   "source_id": "SRC-oug-64-2022",
@@ -2885,6 +3117,27 @@
   "aplicabilitate_gazpet": "conditionata",
   "motiv_aplicabilitate": "Doar contracte cu fonduri externe nerambursabile în derulare la 05.2022; pentru oferte noi servește ca model de formulă (atenție la ICCplr nepublicat — BO2023_406).",
   "nota": "Art. 17 alin. (1), (3), (4), (8) lit. a1) și art. 1 alin. (3), art. 2 citite. Legea de aprobare și forma după 07.2022 NEVERIFICATE. HG 1586/2022 (metodologie) semnalată de surse secundare — necitită."
+ },
+ {
+  "source_id": "SRC-oug-7-2026",
+  "tip": "oug",
+  "cod": "OUG 7/2026",
+  "titlu": "OUG pentru modificarea și completarea unor acte normative și măsuri pentru creșterea capacității financiare a UAT",
+  "emitent": "Guvernul României",
+  "editie": "MO 146/25.02.2026 (doar efectul asupra HG 395, din textul sintetic)",
+  "data_publicarii": "2026-02-25",
+  "effective_from": "2026-02-25",
+  "status": "in_vigoare",
+  "url_oficial": "https://static.anaf.ro/static/10/Anaf/legislatie/OUG_7_2026.pdf",
+  "acces": "public",
+  "domenii": [
+   "achizitii"
+  ],
+  "aplicabilitate_gazpet": "neaplicabil",
+  "motiv_aplicabilitate": "Abrogă HG 395 art. 2 alin. (1) (organizarea compartimentului de achiziții al AC) — nu privește ofertantul.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-02"
  },
  {
   "source_id": "SRC-oug-92-2021",
@@ -6103,6 +6356,26 @@
   "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "doar_referinta",
   "motiv_aplicabilitate": "Practică CNSC — interpretare, nu normă; vezi câmpul comparabilitate în cnsc_practica.json"
+ },
+ {
+  "source_id": "SRC-CNSC-BO2024_3004",
+  "tip": "decizie_cnsc",
+  "cod": "Decizie CNSC BO2024_3004",
+  "titlu": "Respingere contestație pentru cauțiune constituită tardiv (citează integral art. 61^1 alin. (1) în vigoare)",
+  "emitent": "CNSC",
+  "editie": "Buletin oficial 2024 nr. 3004 (contestație înregistrată 15.10.2024)",
+  "status": "definitiva_necunoscut",
+  "url_oficial": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NDUwY2Y1MWMtMWE4Yy00NTVmLTg2ZjQtYTI5NzYzZjU0NGZm&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI0XzMwMDQucGRm&action=aW5saW5l",
+  "acces": "public",
+  "domenii": [
+   "achizitii"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Probă a textului în vigoare al L101 art. 61^1 (plafoane 35.000/88.000/220.000/2.000.000 lei).",
+  "snapshot_sha256": "a24482679e8cc1cd118686d0ab9dd94fd874fb9c556fb81cb3e9365fdd3e4530",
+  "snapshot_bytes": 220141,
+  "snapshot_data": "2026-10-02",
+  "ultima_verificare": "2026-10-02"
  },
  {
   "source_id": "SRC-CNSC-BO2024_3064",

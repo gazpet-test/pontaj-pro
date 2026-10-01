@@ -320,7 +320,7 @@ Modelul este **obligatoriu** pentru contractele de lucrări finanțate din fondu
 | 13 | Cuantumul GBE | Maximum 10% din preț fără TVA (implicit 10% la HG 1/2018) | L98 art. 154 alin. (3) | da |
 | 14 | Restituirea GBE la lucrări | 70% în 14 zile de la PV de recepție la terminare; 30% la recepția finală | L98 art. 154^2 alin. (5); HG 1/2018 cl. 15.6 | da |
 | 15 | Contestația la CNSC | 10 zile (valoare estimată cel puțin egală cu pragul JOUE) / 7 zile (sub prag), din ziua următoare luării la cunoștință | L101 art. 8 alin. (1) | parțial (decizii CNSC + surse secundare) |
-| 16 | Cauțiunea | În 5 zile de la sesizarea CNSC; 2%; plafon 35.000 / 88.000 lei sub prag; 220.000 / 880.000 lei peste prag | L101 art. 61^1 | sub prag: da; peste prag: nu |
+| 16 | Cauțiunea | În 5 zile de la sesizarea CNSC; 2%; plafon 35.000 / 88.000 lei sub prag; 220.000 / 2.000.000 lei peste prag (corectat 02.10; forma 2019 avea 880.000) | L101 art. 61^1 | sub prag: da; peste prag: nu |
 | 17 | Plângerea la curtea de apel | 10 zile de la comunicarea deciziei CNSC | L101 art. 29 | nu |
 | 18 | Plata situațiilor (HG 1/2018) | 30 de zile de la Certificatul de Plată; dobândă = rata de referință BNR + 8 puncte procentuale | HG 1/2018 cl. 50.4, 53.1 | da |
 | 19 | Revendicări (HG 1/2018) | Notificare în 30 de zile de la eveniment + detalii în 30 de zile | cl. 69a.1–69a.2 | da |
@@ -466,7 +466,7 @@ Modelul este **obligatoriu** pentru contractele de lucrări finanțate din fondu
   - Art. 8(1) lit. a) — 10 zile dacă valoarea estimată ≥ pragurile de publicare JOUE (lucrări 26.960.556 lei din 01.01.2026)
   - Art. 8(1) lit. b) — 7 zile dacă valoarea estimată < pragurile JOUE
   - Art. 61^1(1) lit. a) — sub prag: cauțiune 2% din valoarea estimată, max. 35.000 lei (contestații la documentație, etapa art. 17(1) lit. a) / max. 88.000 lei (contestații după evaluare, etapa art. 17(1) lit. b) — confirmat Decizia CNSC 2863/C4/3581/25.09.2025
-  - Art. 61^1(1) lit. b) — peste prag: 2%, plafoane 220.000 lei / 880.000 lei (text 2020; NECONFIRMAT în forma curentă)
+  - Art. 61^1(1) lit. b) — peste prag: 2%, plafoane 220.000 lei / 2.000.000 lei (forma curentă, confirmată de CNSC BO2024_3004; 880.000 era în forma 2018–2019) (verificat în forma curentă)
   - Art. 61^1(2) — acord-cadru: raportare la dublul valorii celui mai mare contract subsecvent; (2^1) loturi: valoarea lotului contestat
   - Art. 61^1(5) — restituire cauțiune nu mai devreme de 30 de zile de la rămânerea definitivă a deciziei CNSC
 - **Documente / atestări:**

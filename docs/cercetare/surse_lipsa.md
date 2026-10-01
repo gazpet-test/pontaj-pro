@@ -29,7 +29,7 @@
 **Legislație**
 - **Legea 169/2026**: trimiterile pe articole (art. 294–300, 343–345, 450–459, 531, 576–577) vin din surse secundare (verificatori.ro, arenaconstruct.ro).
 - **Ordin ANRE 17/2026**: data exactă a intrării în vigoare, deci termenul exact de conformare de 3 luni. Data ≈ 26.08.2026 e dedusă din publicarea în MO.
-- **L101/2016 la zi**: plafoanele cauțiunii peste prag (220.000 / 880.000 lei, din textul 2020), termenul plângerii la curtea de apel, notificarea prealabilă.
+- **L101/2016 la zi**: plafoanele cauțiunii peste prag (REZOLVAT 02.10: 220.000 / 2.000.000 lei), termenul plângerii la curtea de apel, notificarea prealabilă.
 - **L99/2016**: pragul de achiziție directă după Legea 208/2022.
 - **OUG 64/2022**: text integral și art. 17 (formulele de ajustare).
 - **Ordin ANRE 118/2013**: anexa cu valorile de probă pe clase de locație.

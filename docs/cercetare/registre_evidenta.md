@@ -1,7 +1,7 @@
 # Registre de evidență — surse, cerințe atomice, graf de aplicabilitate
 
 > Runda 2 · 01.10.2026 · mandat completat după review Copilot + Gemini (aprobat de Razvan „pornim cu ce avem”).
-> Fișiere: `registru_surse.json` (250 surse) · `registru_cerinte.json` (655 cerințe atomice) · `graf_aplicabilitate.json` (227 relații) · catalogul de tipare `clarificari_tipare.json` + `clarificari_matrice_model.md`.
+> Fișiere: `registru_surse.json` (282 surse) · `registru_cerinte.json` (751 cerințe atomice) · `graf_aplicabilitate.json` (249 relații) · catalogul de tipare `clarificari_tipare.json` + `clarificari_matrice_model.md`.
 
 ## Principiul: evidence-first
 
@@ -13,11 +13,11 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 
 | Aplicabilitate Gazpet | Surse |
 |---|---|
-| `doar_referinta` | 94 |
-| `neevaluat` | 72 |
-| `directa` | 48 |
-| `conditionata` | 31 |
-| `neaplicabil` | 5 |
+| `doar_referinta` | 121 |
+| `neevaluat` | 71 |
+| `directa` | 52 |
+| `conditionata` | 32 |
+| `neaplicabil` | 6 |
 
 `neevaluat` = surse din runda 1 neatinse de analiza de aplicabilitate din runda 2 (în principal standarde de material/izolație și acte conexe) — de evaluat la nevoie.
 
@@ -25,14 +25,14 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 
 | temei_tip | Cerințe | Înțeles |
 |---|---|---|
-| `OBLIGATORIE_LEGE` | 385 | lege / HG / ordin cu forță obligatorie |
+| `OBLIGATORIE_LEGE` | 480 | lege / HG / ordin cu forță obligatorie |
 | `OBLIGATORIE_DOC_ACHIZITIE` | 89 | obligatoriu doar fiindcă îl cere DA/contractul (ex. clauzele HG 1/2018, specificații operator invocate) |
 | `STANDARD_INCORPORAT_PRIN_REFERINTA` | 27 | standard făcut obligatoriu printr-o trimitere explicită dintr-un act obligatoriu (locator arătat) |
 | `VOLUNTAR_BUNA_PRACTICA` | 77 | standard/practică fără trimitere obligatorie |
-| `GHID_INTERPRETARE` | 39 | instrucțiuni/ghiduri ANAP, clarificări ministere |
+| `GHID_INTERPRETARE` | 40 | instrucțiuni/ghiduri ANAP, clarificări ministere |
 | `PRACTICA_CNSC` | 38 | interpretare CNSC — nu e lege, nu e precedent obligatoriu |
 
-Încredere: ridicata 450, medie 171, scazuta 34. Verificate pe sursă: 591 / 655. Cu standard licențiat necesar: 61.
+Încredere: ridicata 482, medie 235, scazuta 34. Verificate pe sursă: 687 / 751. Cu standard licențiat necesar: 61.
 
 ## Devize: patru tipuri de consum (nu le amestecăm)
 
@@ -143,6 +143,67 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 | REQ-AD-121 | achizitii | ofertare | 1837/C1/1961 | motivare (L98 art. 154 alin. (1), art. 187, 189) | Un factor de evaluare cu algoritm bazat pe noțiuni nedefinite (ex. „tronsoane” inexistente în SF) sau pe documente inexistente (PT la P+E) viciază procedura și duce la anulare. | PRACTICA_CNSC | ridicata |
 | REQ-AD-122 | achizitii | ofertare | 3657/C1/4067, 4182 | motivare (L98 art. 187, 189; HG 907/2016 art. 12) | La proiectare + execuție nu se pot cere în ofertă elemente care rezultă abia din PT (liste de cantități, extrase de resurse); factorii de evaluare trebuie să aducă un avantaj real și să nu favorizeze firmele locale. | PRACTICA_CNSC | ridicata |
 | REQ-AD-150 | achizitii | ofertare | Legea 10/1995 (republicata MO 765/30.09.2016) | art. 10, art. 41 (rămase în vigoare) — abrogare confirmată: Legea 169/2026 art. 576 alin. (3) lit. c) (MO 661/2026) | Din Legea 10/1995 rămân în vigoare doar art. 10 și art. 41; trimiterile din DA la alte articole (ex. categorii de importanță, obligațiile executantului) trebuie clarificate în raport cu Legea 169/2026. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-001 | achizitii | ofertare | Legea 101/2016 | art. 61^1 alin. (1) lit. b) | Peste pragul JOUE, cauțiunea este 2% din valoarea estimată, plafonată la 220.000 lei pentru contestațiile depuse până la termenul de depunere a ofertelor și la 2.000.000 lei pentru cele depuse după acesta. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-002 | achizitii | ofertare | Legea 101/2016 | art. 61^1 alin. (1) lit. a)–b) raportat la art. 17 alin. (1) lit. a)–b) | Etapa care stabilește plafonul cauțiunii se determină după data depunerii contestației față de data-limită de depunere a ofertelor (etapa a = până la termen; etapa b = după), nu după tipul actului contestat. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-003 | achizitii | ofertare | Legea 101/2016 | art. 61^1 alin. (2) | La acord-cadru, cauțiunea se calculează la dublul valorii estimate a celui mai mare contract subsecvent. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-004 | achizitii | calificare | Legea 101/2016 | art. 61^1 alin. (3)–(4) | Contestatorul respins de CNSC nu constituie cauțiune suplimentară pentru plângere; o altă persoană care formulează plângere constituie în prealabil o cauțiune de 50% din cea de la alin. (1). | OBLIGATORIE_LEGE | medie |
+| REQ-P0-005 | achizitii | calificare | Legea 101/2016 | art. 61^1 alin. (5)–(6) | Cauțiunea se restituie la cerere, depusă la CNSC și la AC, nu mai devreme de 30 de zile de la rămânerea definitivă a hotărârii; se restituie de îndată dacă AC declară expres că nu cere despăgubiri (AC răspunde în 2 zile). | OBLIGATORIE_LEGE | medie |
+| REQ-P0-006 | achizitii | ofertare | Legea 101/2016 | art. 61^1 alin. (5^1) | Dacă AC câștigă definitiv contestația, AC are obligația să facă demersurile de reținere a cauțiunii, în limita prejudiciilor create de întârzierea procedurii. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-007 | achizitii | calificare | Legea 101/2016 | art. 61^1 alin. (7)–(8) | CNSC se pronunță asupra cererii de restituire în 5 zile, prin încheiere atacabilă cu plângere în 5 zile; cauțiunea nerevendicată devine venit la bugetul de stat după 3 ani de la data la care putea fi cerută. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-008 | achizitii | ofertare | Legea 101/2016 | cap. II (art. 6–7) — abrogat | Notificarea prealabilă a AC înainte de contestare NU mai există: capitolul II a fost abrogat la 04.06.2018 prin OUG 45/2018 (art. IV pct. 3). | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-009 | achizitii | ofertare | Legea 101/2016 | art. 16 alin. (1) | Contestația se înaintează atât CNSC, cât și AC, până la expirarea termenului de contestare, sub sancțiunea respingerii ca tardivă. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-010 | achizitii | ofertare | Legea 101/2016 | art. 10; art. 11 alin. (1) | Contestația are elementele obligatorii de la art. 10 (inclusiv actul atacat, obiectul, motivarea în fapt și în drept, probele, semnătura); la cererea CNSC se completează în 3 zile, altfel e anulată. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-011 | achizitii | ofertare | Legea 101/2016 | art. 21 alin. (3) | Motivele noi de contestare sau capetele noi de cerere formulate prin concluzii ori precizări după expirarea termenului de contestare sunt inadmisibile. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-012 | achizitii | calificare | Legea 101/2016 | art. 17 alin. (3)–(4) | Ofertanții pot formula cerere de intervenție voluntară în 10 zile de la publicarea contestației în SEAP, transmisă CNSC, AC și contestatorului. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-013 | achizitii | ofertare | Legea 101/2016 | art. 19 alin. (1)–(3) | Părțile au acces la dosarul CNSC, mai puțin la documentele declarate și probate ca fiind confidențiale; documentele confidențiale din oferte se consultă doar cu acordul scris al ofertantului. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-014 | achizitii | calificare | Legea 101/2016 | art. 22 alin. (1)–(2); art. 23 alin. (2) | Suspendarea procedurii se cere CNSC (care decide în 3 zile) și se comunică simultan AC; încheierea se atacă separat cu plângere în 5 zile. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-015 | achizitii | calificare | Legea 101/2016 | art. 24 alin. (1)–(2) | CNSC soluționează contestația pe fond în 20 de zile de la primirea dosarului achiziției (10 zile la excepții), cu posibilă prelungire de 10 zile. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-016 | achizitii | ofertare | Legea 101/2016 | art. 9 alin. (1), (3) | AC poate adopta măsuri de remediere în cel mult 3 zile de la primirea contestației; dacă le consideră suficiente, contestatorul trimite CNSC și AC cererea de renunțare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-017 | achizitii | calificare | Legea 101/2016 | art. 26 alin. (9) | Cheltuielile de soluționare se recuperează de la partea în culpă doar dacă cererea, cu cuantum și dovezi, se depune înainte de pronunțarea deciziei CNSC. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-018 | achizitii | calificare | Legea 101/2016 | art. 29; art. 31 alin. (1) | Plângerea împotriva deciziei CNSC se depune în 10 zile de la comunicare, iar o copie se comunică celorlalte părți în același termen; dovada comunicării se depune la instanță până la primul termen, sub sancțiunea respingerii ca tardivă. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-019 | achizitii | calificare | Legea 101/2016 | art. 30 alin. (2); art. 31 alin. (3) | În plângere nu se pot invoca alte motive decât cele din contestația la CNSC și nu se pot depune probe noi. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-020 | achizitii | calificare | Legea 101/2016 | art. 32 alin. (1), (4)–(5) | Plângerea se judecă de curtea de apel (secția de contencios administrativ și fiscal) de la sediul AC, de urgență, în maximum 45 de zile; primul termen ≤ 20 de zile. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-021 | achizitii | contract | Legea 101/2016 | art. 9 alin. (4)–(5); art. 28 alin. (5) | După o decizie CNSC de menținere a rezultatului, AC are obligația să încheie contractul chiar dacă s-a formulat plângere (după termenul de așteptare); dacă CNSC a anulat actul, AC poate suspenda executarea până la soluția instanței. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-022 | achizitii | contract | Legea 101/2016 | art. 59 alin. (1), (4) | Termenul de așteptare până la semnare este de minimum 11 zile peste prag și 8 zile sub prag de la transmiterea deciziei de atribuire; contestația nu suspendă acest termen. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-023 | achizitii | ofertare | Legea 101/2016 | art. 49 alin. (2) | Contestațiile privind achizițiile directe (art. 68 L98) se judecă de tribunalul de la sediul AC (contencios administrativ), nu de CNSC, în maximum 45 de zile. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-024 | achizitii | calificare | Decizia ÎCCJ (HP) 66/2018 | dispozitiv (interpretarea HG 395 art. 65, 104 alin. (3), 133, 134 alin. (1) raportat la L101 art. 28 alin. (1)) | La reevaluarea dispusă de CNSC/instanță, AC poate verifica toate elementele tehnice și financiare ale ofertei apte să-i demonstreze admisibilitatea, dacă nu rezultă că le-a verificat anterior. | GHID_INTERPRETARE | medie |
+| REQ-P0-025 | achizitii | ofertare | Legea 98/2016 | art. 160 alin. (3) | AC publică răspunsurile împreună cu întrebările la adresa unde sunt documentele achiziției, fără să dezvăluie identitatea celui care a întrebat. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-026 | achizitii | ofertare | HG 395/2016 | art. 27 alin. (1) | Orice răspuns al AC la clarificări se postează în SEAP la secțiunea dedicată, semnat cu semnătură electronică extinsă bazată pe certificat calificat. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-027 | achizitii | ofertare | HG 395/2016 | art. 27 alin. (3)–(4) | AC menționează în anunț că răspunde la clarificările primite până la termenul-limită; dacă are două termene de răspuns, poate grupa întrebările pe cele două termene, asigurând timp adecvat pentru ofertare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-028 | achizitii | calificare | Legea 98/2016 | art. 172 alin. (1)–(2) | AC poate aplica doar trei categorii de criterii de capacitate: capacitatea de exercitare a activității profesionale, situația economică și financiară, capacitatea tehnică și profesională; orice altă cerință de capacitate este interzisă. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-029 | achizitii | calificare | Legea 98/2016 | art. 174 alin. (1)–(2) | AC poate cere documente despre capacitatea tehnică a subcontractanților pentru partea lor; dacă nu o dovedesc, AC respinge subcontractantul și cere o singură dată înlocuirea lui. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-030 | achizitii | calificare | Legea 98/2016 | art. 178 alin. (1)–(2) | Cerințele de capacitate tehnică și profesională trebuie să fie necesare și adecvate pentru resursele umane, tehnice și experiența cerute de contract și pot viza experiența din contracte anterioare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-031 | achizitii | calificare | Legea 98/2016 | art. 179 lit. c), g), i), j), k) | Pentru lucrări, capacitatea tehnică se poate dovedi prin: tehnicienii implicați (în special cei de control al calității); calificările personalului de conducere (doar dacă nu sunt factor de evaluare); numărul mediu anual de personal pe ultimii 3 ani; declarația privind utilajele și echipamentele; partea care va fi subcontractată. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-032 | achizitii | calificare | Legea 98/2016 | art. 180 alin. (1)–(3) | La procedurile pe loturi, cerințele de capacitate se aplică pe fiecare lot; cifra de afaceri și resursele tehnice/profesionale pot fi cerute pe grupuri de loturi doar dacă se pot atribui mai multe loturi aceluiași ofertant și contractele se execută simultan. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-033 | achizitii | calificare | Legea 98/2016 | art. 181 | Criteriile de capacitate, cerințele minime și mijloacele de probă se prevăd în anunțul de participare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-034 | achizitii | calificare | HG 395/2016 | art. 30 alin. (6) | Criteriile de calificare și selecție care apar în caietul de sarcini ori în documentația descriptivă, dar nu sunt în anunțul de participare/simplificat, sunt clauze nescrise. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-035 | achizitii | calificare | HG 395/2016 | art. 31 alin. (1)–(2) | AC nu poate restrânge participarea prin cerințe minime irelevante sau disproporționate față de natura și complexitatea contractului; indicatorii economico-financiari se pot cere doar dacă au legătură concretă cu riscul de neexecutare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-036 | achizitii | calificare | HG 395/2016 | art. 31 alin. (3) | La ofertă în asociere, AC poate cere ca fiecare asociat să îndeplinească cerințele proporțional cu cota sa de implicare, numai dacă prevede asta în DA. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-037 | achizitii | calificare | Legea 98/2016 | art. 182 alin. (1) | Ofertantul poate invoca susținerea unui terț pentru criteriile economico-financiare și/sau tehnico-profesionale, indiferent de natura relației juridice cu acesta. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-038 | achizitii | calificare | Legea 98/2016 | art. 183 alin. (1) | AC verifică dacă terțul susținător îndeplinește criteriile de capacitate relevante și nu se află în motivele de excludere de la art. 164, 165 și 167. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-039 | achizitii | calificare | Legea 98/2016 | art. 193 alin. (1) | La depunere, AC acceptă DUAE (declarație pe proprie răspundere actualizată) ca dovadă preliminară, în locul certificatelor, pentru excludere și capacitate. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-040 | achizitii | calificare | Legea 98/2016 | art. 193 alin. (6) | În procedura simplificată și în procedurile finanțate din PNRR, AC trebuie să selecteze în DUAE indicația globală «alpha» pentru toate criteriile de selecție. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-041 | achizitii | calificare | Legea 98/2016 | art. 194 | Un DUAE folosit într-o procedură anterioară se poate reutiliza dacă ofertantul confirmă că informațiile sunt încă corecte și valabile la data depunerii. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-042 | achizitii | calificare | Legea 98/2016 | art. 196 alin. (3) | AC poate invita ofertanții să completeze sau să clarifice documentele justificative depuse ca dovadă a informațiilor din DUAE. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-043 | achizitii | calificare | HG 395/2016 | art. 32 alin. (4)–(5) | Personalul desemnat punctat ca factor de evaluare nu poate fi cerut și drept criteriu de calificare; în acest caz calificarea poate privi doar personalul permanent, mai ales de conducere, altul decât cel desemnat. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-044 | achizitii | ofertare | Legea 98/2016 | art. 187 alin. (3^1) | Criteriul «prețul cel mai scăzut» poate fi folosit numai sub pragurile art. 7 alin. (1) (și la negocierea fără publicare de la art. 104 alin. (1) lit. b)). | OBLIGATORIE_LEGE | medie |
+| REQ-P0-045 | achizitii | ofertare | Legea 98/2016 | art. 187 alin. (5) lit. d) | Factorii de evaluare pot include existența unui contract colectiv de muncă la nivel de unitate, încheiat cu un sindicat, sau aplicabil la nivel de sector de negociere colectivă. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-046 | achizitii | ofertare | HG 395/2016 | art. 32 alin. (2), (8)–(9) | Factorii de evaluare și algoritmul se precizează clar și detaliat în DA, trebuie să aducă un avantaj real, să nu fie formali, să aibă legătură directă cu obiectul, iar ponderile nu pot distorsiona rezultatul. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-047 | achizitii | ofertare | HG 395/2016 | art. 32 alin. (6) raportat la L98 art. 187 alin. (8) | La contractele de la art. 187 alin. (8) L98 (servicii intelectuale; proiectare și execuție pentru infrastructura de transport TEN-T și drumuri județene), criteriul de calitate e obligatoriu și ponderea prețului ≤ 40%. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-048 | achizitii | ofertare | HG 395/2016 | art. 133 alin. (2)–(3) | Propunerea tehnică trebuie să corespundă cerințelor minime din caietul de sarcini; propunerea financiară trebuie să se încadreze în fonduri, să fie corelată cu cea tehnică, să nu intre sub art. 210 L98 și să nu încalce altă legislație incidentă. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-049 | achizitii | calificare | HG 395/2016 | art. 134 alin. (1), (3)–(4) | Comisia stabilește clarificările formale sau de confirmare și termenul de răspuns doar în zile lucrătoare, fără oră, în funcție de volumul și complexitatea lor; solicitarea trebuie să fie clară și suficient de detaliată. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-050 | achizitii | calificare | HG 395/2016 | art. 135 alin. (1)–(2) | Comisia poate cere corectarea viciilor de formă; dacă ofertantul nu acceptă corectarea, oferta devine inacceptabilă. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-051 | achizitii | calificare | Legea 98/2016 | art. 209 alin. (1^1) | În procedurile simplificate pentru proiecte de infrastructură finanțate din fonduri europene, clarificările/completările se cer de regulă de cel mult două ori în evaluare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-052 | achizitii | calificare | Legea 98/2016 | art. 210 alin. (2) lit. a)–c), e)–f) | Justificarea prețului aparent neobișnuit de scăzut poate privi: fundamentarea economică a prețului, soluțiile tehnice sau condițiile deosebit de favorabile, originalitatea, plata subcontractanților (art. 218) și eventualul ajutor de stat. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-053 | achizitii | calificare | HG 395/2016 | art. 136 alin. (3) | Dacă ofertantul nu prezintă informațiile cerute sau acestea nu justifică prețul scăzut, oferta este neconformă. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-054 | achizitii | ofertare | HG 395/2016 | art. 137 alin. (2) lit. b), e), f), j), k) | Oferta e inacceptabilă dacă: ofertantul nu îndeplinește calificarea sau n-a completat DUAE conform cerințelor; prețul depășește VE fără fonduri suplimentare sau cu depășirea pragului de modificare; documentele nu sunt semnate cu semnătură electronică extinsă; lipsește una dintre propuneri (tehnică/financiară). | OBLIGATORIE_LEGE | medie |
+| REQ-P0-055 | achizitii | ofertare | HG 395/2016 | art. 137 alin. (3) lit. a), c), d), e), g) | Oferta e neconformă dacă: nu satisface cerințele caietului de sarcini; are prețuri care nu rezultă din libera concurență și nu pot fi justificate; propunerea financiară nu e corelată cu cea tehnică sau încalcă legislația incidentă; nu distinge loturile; are preț/costuri neobișnuit de scăzute care nu asigură execuția. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-056 | achizitii | calificare | Legea 98/2016 | art. 215 alin. (3)–(5^1) | Oferta admisibilă nu e inacceptabilă, neconformă sau neadecvată; inacceptabilă = condiții de formă/calificare/preț peste VE; neconformă = nu respectă documentele achiziției, întârziată, indicii de înțelegeri sau PNS; neadecvată = lipsită de relevanță față de obiect. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-057 | achizitii | calificare | Legea 98/2016 | art. 215 alin. (1)–(2) | AC comunică rezultatul în cel mult 3 zile de la decizie, cu motivele concrete ale respingerii; ofertantul cu ofertă admisibilă necâștigătoare primește caracteristicile și avantajele relative ale ofertei câștigătoare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-058 | achizitii | calificare | Legea 98/2016 | art. 216 alin. (1^1); art. 217 alin. (6) | Raportul procedurii se publică în SEAP în aceeași zi cu comunicarea rezultatului; după comunicare, AC permite la cerere, în cel mult o zi lucrătoare, accesul ofertantului la raport și la informațiile neconfidențiale. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-059 | achizitii | calificare | HG 395/2016 | art. 138 alin. (2); art. 139 alin. (3) | La egalitate pe primul loc: la prețul cel mai scăzut AC cere noi propuneri financiare; la calitate-preț departajarea se face după factorii cu ponderea cea mai mare, apoi prin noi propuneri financiare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-060 | achizitii | ofertare | Legea 283/2024 | art. XI alin. (1) | Respectarea salariului minim brut garantat și a salariilor minime din contractele colective de muncă este obligatorie pentru toți operatorii economici care participă la proceduri de achiziție publică. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-061 | achizitii | calificare | Legea 283/2024 | art. XI alin. (3) | AC exclude ofertantul condamnat definitiv penal, în ultimii 2 ani înainte de depunerea ofertei, pentru încălcarea legislației privind stabilirea și plata salariilor minime. | OBLIGATORIE_LEGE | medie |
 | REQ-SC-051 | apa_canal | executie | Ordin MT 1294/2017 | Anexă pct. 3.21 | Traversările de drum cu conducte de lichide (apă, canalizare) se execută la cel puțin 1,50 m sub cota axului drumului și 0,80 m sub cota fundului șanțului. | OBLIGATORIE_LEGE | ridicata |
 | REQ-TG-139 | apa_canal | executie | NP 133-2022 vol. I (Ordin MDLPA 15/2023) | cap. 5, 5.2.13.3.1 alin. (5) și 5.2.13.3.2 alin. (5); cap. stații de pompare | La apă, instalațiile de gaze sub presiune din stațiile de tratare (CO2, O2) și recipientele sub presiune/echipamentele de ridicat din stațiile de pompare intră sub ISCIR (revizii și verificări periodice). | OBLIGATORIE_LEGE | medie |
 | REQ-TG-142 | apa_canal | ofertare | I 9-2022 | — | Normativul I 9 privește instalațiile sanitare din clădiri (nu gazele); ediția curentă I 9-2022 a abrogat I 9-2015. Nu se aplică rețelelor exterioare de apă-canal (NP 133-2022). | GHID_INTERPRETARE | medie ⚠️ |
@@ -315,6 +376,9 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 | REQ-AD-147 | contract | receptie | HG 273/1994 — Regulament privind receptia constructiilor (forma HG 343/2017) | art. 19–21 | Investitorul aprobă PV în 3 zile; garanția curge de la semnarea PV de către investitor; după PV nu se mai pot cere remedieri sau penalități neconsemnate, cu excepția viciilor ascunse și de structură. | OBLIGATORIE_LEGE | medie |
 | REQ-AD-148 | contract | receptie | HG 273/1994 — Regulament privind receptia constructiilor (forma HG 343/2017) | art. 24 | Recepția finală se convoacă de proprietar în cel mult 10 zile de la expirarea perioadei de garanție. | OBLIGATORIE_LEGE | medie |
 | REQ-AD-149 | contract | ofertare | HG 925/1995 | Regulament, art. 5 (alineatul final) | Proprietarii/investitorii încheie contracte distincte pentru verificarea tehnică a proiectelor cu verificatori atestați; verificarea e deci în sarcina investitorului, dacă DA nu o transferă expres. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-062 | contract | contract | Legea 283/2024 | art. XI alin. (5) | Contractele de achiziție publică includ clauze care obligă contractantul și subcontractanții să garanteze plata salariului minim brut și a salariilor minime din CCM. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-063 | contract | contract | Legea 283/2024 | art. XI alin. (4), (7) | Condamnarea definitivă pe durata contractului dă AC dreptul de reziliere; încălcarea clauzelor salariale se sancționează cu excluderea de la proceduri 2 ani sau 1 an de la reintrarea în legalitate confirmată de ITM. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-064 | contract | contract | Legea 98/2016 | art. 223 alin. (1) lit. c) | AC poate denunța unilateral contractul dacă contractantul sau subcontractanții nu mai respectă obligațiile de mediu, sociale și de muncă de la art. 51 alin. (1). | OBLIGATORIE_LEGE | medie |
 | REQ-P1-001 | contract | ofertare | HG 1/2018 | Anexa 1, Condiții Specifice — preambul și tabelul subclauzelor (5.1, 8.1, 9.1, 9.2, 10.1, 19.2, 24.1, 44.1) | Beneficiarul poate elabora Condiții Speciale doar pentru subclauzele din tabelul HG 1/2018; orice altă Condiție Specială este nulă, iar valorile implicite se pot schimba numai unde clauza spune „dacă Acordul Contractual nu prevede altfel”. | OBLIGATORIE_DOC_ACHIZITIE | ridicata |
 | REQ-P1-002 | contract | contract | HG 1/2018 | art. 4 (corpul hotărârii) | Prevederile HG 1/2018, inclusiv anexele, se aplică cu respectarea întocmai a L98, L99, L100, L101 și a legislației calității în construcții, care sunt prioritare. | OBLIGATORIE_LEGE | ridicata |
 | REQ-P1-003 | contract | ofertare | Legea 98/2016 | art. 222^2 alin. (9) coroborat cu HG 1/2018 art. 4 și Anexa 1 cl. 48.2 | Valoarea implicită din cl. 48.2 (prețuri ferme dacă Durata ≤ 365 zile) nu poate fi folosită pentru contractele de lucrări care durează peste 6 luni: L98 obligă AC să prevadă clauză de ajustare, iar legea are prioritate față de modelul HG 1/2018. | GHID_INTERPRETARE | medie |
@@ -511,6 +575,38 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 | REQ-SC-079 | drumuri | ofertare | Legea 169/2026 — Codul amenajarii teritoriului, urbanismului si constructiilor (CATUC) | art. 267 alin. (1) (după clarificarea MDLPA) | Branșarea la utilități pe domeniul public pentru construcții existente se face pe baza acordului/autorizației administratorului drumului; regimul pentru rețele noi de distribuție rămâne cel de autorizare din CATUC. | OBLIGATORIE_LEGE | scazuta ⚠️ |
 | REQ-SC-080 | drumuri | ofertare | OUG 12/1998 | art. 29 alin. (2), (4), (5) | Zona de siguranță a infrastructurii feroviare publice are cel mult 20 m de fiecare parte a axei căii ferate, iar zona de protecție cel mult 100 m de la axă; în zona de protecție se pot executa lucrări numai după reglementările ministerului transporturilor. | OBLIGATORIE_LEGE | medie |
 | REQ-SC-081 | drumuri | ofertare | HG 525/1996 | art. 20 alin. (4) lit. d); alin. (3) | Subtraversarea liniilor de cale ferată de conducte sub presiune de apă, gaze, produse petroliere și de rețele electrice/telecomunicații se autorizează numai cu avizul CN CFR SA și al ministerului; zona de protecție feroviară are 100 m de la limita zonei cadastrale CFR. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-065 | gaze | ofertare | Ordin ANRE 7/2022 | art. 5 alin. (2); art. 6 alin. (3) lit. a)–c) | Solicitantul racordării (client casnic/noncasnic, instituție) poate alege operatorul autorizat ANRE care proiectează și execută instalația de racordare: varianta a) OSD alege OEP/OEE; b) solicitantul alege direct; c) OSD realizează, dar solicitantul alege OEP/OEE. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-066 | gaze | calificare | Ordin ANRE 7/2022 | art. 5 alin. (3)–(4) | Racordarea la conducte de înaltă presiune se proiectează/execută doar de titulari PT/ET; la medie, redusă și joasă presiune doar de titulari PDSB/EDSB. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-067 | gaze | executie | Ordin ANRE 7/2022 | art. 5 alin. (1) lit. l); art. 38 alin. (4) | Proiectul instalației de racordare se verifică de un verificator de proiecte atestat ANRE tip VGd; OSD asigură verificarea în maximum 10 zile de la depunere. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-068 | gaze | ofertare | Ordin ANRE 7/2022 | art. 6 alin. (6)–(7) | Solicitarea de selectare se depune la OSD în maximum 5 zile de la primirea ATR și cuprinde datele OEP/OEE (tipul, numărul și valabilitatea autorizației ANRE), termenele de realizare și valoarea componentelor tarifului de racordare fără TVA. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-069 | gaze | contract | Ordin ANRE 7/2022 | art. 6 alin. (5) lit. b); art. 44 alin. (1) lit. b), (2) | Între OSD și OEP/OEE ales de solicitant se încheie convenția tehnică (clauzele minime din anexa 5) în 5 zile; contractul de prestări servicii solicitant–OEE se încheie înainte de depunerea solicitării de selectare. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-070 | gaze | ofertare | Ordin ANRE 7/2022 | art. 44 alin. (1) lit. a) | Când OSD alege OEP/OEE, o face în cel mult 60 de zile de la contractul de racordare, prin proceduri concurențiale, transparente și nediscriminatorii, iar pentru extinderi prin proceduri de achiziții publice. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-071 | gaze | executie | Ordin ANRE 7/2022 | art. 35 alin. (1) lit. a)–f) | OEP are termene maxime: documentație pentru CU în 10 zile de la convenția tehnică; pentru acordul administratorului de drum în 20 de zile; pentru avize în 10 zile de la CU; proiectul la VP în 30 de zile de la ultimul aviz; depunerea pentru AC în 5 zile; documentele de execuție la OSD în 5 zile de la AC. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-072 | gaze | executie | Ordin ANRE 7/2022 | art. 37 alin. (1) | Execuția, recepția și PIF a instalației de racordare se fac în maximum 90 de zile de la AC (sau ultimul act care permite începerea), din care recepția și PIF în maximum 18 zile de la notificarea terminării lucrărilor de către OEE. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-073 | gaze | executie | Ordin ANRE 7/2022 | art. 37 alin. (2) | Pentru extinderea/redimensionarea conductei necesare racordării, termenul total este de maximum 180 de zile de la AC, din care recepția și PIF în maximum 18 zile de la notificarea terminării. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-074 | gaze | executie | Ordin ANRE 7/2022 | art. 37 alin. (3) | Proiectarea, execuția și recepția tehnică a instalației de utilizare a clientului se fac, de regulă, în 30 de zile (clădire existentă) sau 90 de zile (clădire de construit) de la contractul de racordare. | OBLIGATORIE_LEGE | medie |
+| REQ-P0-075 | gaze | receptie | Ordin ANRE 7/2022 | art. 38 alin. (1)–(3) | Recepția racordului/extinderii se face conform Legii 123/2012 art. 162 alin. (1) și NTPEE; recepția la terminarea lucrărilor se face conform HG 273/1994 art. 10. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-076 | gaze | receptie | Ordin ANRE 7/2022 | art. 54^1 | Când racordul se execută în baza autorizației administratorului drumului, PV de recepție tehnică a racordului ține loc de PV de recepție la terminarea lucrărilor. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-077 | gaze | receptie | Ordin ANRE 7/2022 | art. 39 alin. (1), (5) | PIF a racordului și a SRM/PRM o face OSD conform NTPEE și presupune PV de PIF al racordului (NTPEE anexa 10) și PV de PIF al stației/postului de reglare (NTPEE anexa 11). | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-078 | gaze | receptie | Ordin ANRE 7/2022 | art. 39 alin. (3) | OSD pune în funcțiune instalația de utilizare în 5 sau 10 zile lucrătoare de la solicitarea executantului, în funcție de debit (trimitere la Ord. ANRE 156/2020 art. 25 alin. (1) lit. a)). | OBLIGATORIE_LEGE | medie |
+| REQ-P0-079 | gaze | executie | Ordin ANRE 7/2022 | art. 46 alin. (2) lit. f) | OEE anunță începerea lucrărilor la OSD, la emitentul autorizației de construire și la ISC, în numele OSD. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-080 | gaze | executie | Ordin ANRE 7/2022 | art. 46 alin. (2) lit. h) | OEE cere OSD desemnarea dirigintelui de șantier cu cel puțin 7 zile lucrătoare înainte de începerea execuției. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-081 | gaze | executie | Ordin ANRE 7/2022 | art. 46 alin. (2) lit. i) | OEE nu acoperă lucrările ascunse fără participarea și acceptul dirigintelui OSD; altfel suportă descoperirea și refacerea. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-082 | gaze | executie | Ordin ANRE 7/2022 | art. 46 alin. (2) lit. j) | OEE folosește numai materiale care respectă cerințele de calitate de la NTPEE art. 173. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-083 | gaze | receptie | Ordin ANRE 7/2022 | art. 46 alin. (2) lit. l) | Înainte de cererea de PIF, OEE predă OSD toate documentele care au stat la baza execuției, pentru întocmirea cărții construcției. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-084 | gaze | executie | Ordin ANRE 7/2022 | art. 46 alin. (2) lit. m) | OEE plătește amenzile aplicate OSD pentru refacerea necorespunzătoare a drumului, neasigurarea șantierului, excesul de material sau lucrul fără autorizație/aviz. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-085 | gaze | ofertare | Ordin ANRE 7/2022 | art. 54 | OSD nu are voie să proiecteze sau să execute instalații de utilizare pentru clienții din zona sa de concesiune (excepții: sistare la pericol de explozie, montare/demontare contoare). | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-086 | gaze | ofertare | Ordin ANRE 7/2022 | art. 53 | Dacă selectarea concurențială a OEP/OEE eșuează și solicitantul nu își alege OEP/OEE, OSD trebuie să realizeze el lucrările. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-087 | gaze | executie | Ordin ANRE 7/2022 | art. 50 | Solicitanții pot notifica ANRE despre încălcarea regulamentului de către OSD/OEP/OEE/VP, după ce s-au adresat întâi OSD. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-088 | gaze | contract | Ordin ANRE 7/2022 | anexa 5, art. 14 lit. i) | OEE notifică în scris OSD cu cel puțin 60 de zile înainte de expirarea autorizației ANRE de execuție. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-089 | gaze | receptie | Ordin ANRE 7/2022 | anexa 5, art. 14 lit. r), s), t) | OEE măsoară și trece în planul de situație cotele racordului față de repere fixe și obiectivele SD, execută gropile de poziție și readuce terenul la starea inițială, cu PV de refacere validat de autoritatea locală. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-090 | gaze | contract | Ordin ANRE 7/2022 | anexa 5, art. 16 | Pentru întârzieri sau execuție necorespunzătoare din vina sa, OEE plătește OSD penalități zilnice egale cu dobânda pentru obligațiile bugetare, din valoarea activității, plafonate la valoarea activității. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-091 | gaze | receptie | Ordin ANRE 7/2022 | anexa 5, art. 17 | Perioada de garanție a lucrărilor curge de la PVRTL până la PVRF, dar nu mai puțin de 24 de luni. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-092 | gaze | contract | Ordin ANRE 7/2022 | anexa 5, art. 18 alin. (1) | OEE constituie în favoarea OSD garanția de bună execuție de 10% din valoarea activității, în 5 zile lucrătoare de la convenția tehnică (virament în cont de garanție, SGB sau instrument de asigurare irevocabil), valabilă până la PVRF; altfel OSD poate rezilia. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-093 | gaze | receptie | Ordin ANRE 7/2022 | anexa 5, art. 18 alin. (2)–(3) | OSD execută GBE doar în limita prejudiciului, după notificare și termen de remediere; GBE se eliberează în două tranșe (14 zile de la PVRTL și 14 zile de la PVRF), procentele fiind stabilite în convenție. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-094 | gaze | executie | Ordin ANRE 7/2022 | anexa 5, art. 23 | Înainte de începerea lucrărilor, OEE încheie o asigurare valabilă pe toată durata convenției, pentru lucrări, utilaje, materiale, personal și daune către terți. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-095 | gaze | contract | Ordin ANRE 7/2022 | anexa 5, art. 48 | Documentele convenției tehnice sunt: solicitarea de selectare, ATR, contractul de racordare, procedura OSD, GBE, atestatul pentru refacerea terenului (dacă există) și graficul de proiectare/execuție. | OBLIGATORIE_LEGE | ridicata |
+| REQ-P0-096 | gaze | calificare | Ordin ANRE 17/2026 | art. 39 alin. (1)–(2); ordin art. 2–3; Legea 24/2000 art. 11 alin. (1), art. 12 alin. (3) | Ordinul a intrat în vigoare la publicare, 26.05.2026; termenul de 3 luni pentru dovada structurii minime de personal și a dotării pentru autorizațiile emise pe Ord. 132/2021 s-a împlinit la 26.08.2026. | OBLIGATORIE_LEGE | medie |
 | REQ-P1-073 | gaze | ofertare | Legea 123/2012 — Titlul II Gaze naturale | art. 160 alin. (1) (via REQ-TG-006); Ord. ANRE 133/2021 (regulament atestare verificatori gaze) | Pentru obiectivele din sectorul gazelor naturale, verificarea proiectelor o fac verificatori atestați de ANRE (regim special), separat de verificatorii MDLPA pe cerințe fundamentale. | GHID_INTERPRETARE | medie ⚠️ |
 | REQ-P1-099 | gaze | ofertare | Legea 50/1991 (republicata) | art. 11 alin. (1) lit. f) (abrogat) | Sub Legea 50/1991, reparațiile la branșamentele și racordurile exterioare aferente construcțiilor, în limitele proprietății, se executau fără autorizație de construire. | GHID_INTERPRETARE | medie |
 | REQ-P1-100 | gaze | executie | Legea 169/2026 — Codul amenajarii teritoriului, urbanismului si constructiilor (CATUC) | art. 299 alin. (2) lit. a) pct. 9 | Codul păstrează regula: reparațiile la branșamentele și racordurile exterioare aferente construcțiilor, în limitele proprietății, se fac fără nicio formalitate (fără autorizație și fără notificare), în afara zonelor protejate și a zonelor de protecție a monumentelor. | OBLIGATORIE_LEGE | ridicata |
@@ -989,6 +1085,86 @@ Am pornit de la obligațiile legale ale unui executant de rețele (gaze/apă-can
 - Id 19 (HG 571/2016): de marcat „neaplicabil la rețele/SRM” (actualizată prin HG 1181/2022).
 - De adăugat: OG 43/1997, Ordinul MT 1294/2017, Ordinul MTI 1668/2023, Ordinul 1112/411/2000, Legea 107/1996 + Ordinul 828/2019, Ordinul MAI 163/2007, Legea 53/2003, OUG 12/1998.
 - De nu adăugat: Ordinul MT 1835/2017 (abrogat).
+
+### P0 — L98/HG 395/L101 versiuni, racordare, NTPEE
+
+Doar citire. Fișiere: `cerinte_p0.json` (96), `surse_update_p0.json` (18 surse: 7 actualizate, 11 noi), `graf_p0.json` (22 muchii). Generatoare și snapshot-uri: `p0/gen_p0.py`, `p0/gen_p0_surse.py`, `p0/*.html|pdf`.
+
+### 1. Versiunea consolidată (L98 / HG 395 / L101)
+
+legislatie.just.ro: **inaccesibil** (HTTP/2 PROTOCOL_ERROR). anap.gov.ro și cdep.ro: reset/503 prin proxy. lege5.ro gratuit: doar forma inițială.
+Am folosit textele sintetice SintAct (Wolters Kluwer), republicate de avocat-achizitii-publice.ro (sursă **secundară** → încredere „medie”). Le-am comparat **programatic, articol cu articol** cu formele oficiale CTCE/ANAP la 13.06.2024 din runda 1.
+
+| Act | Ediție folosită | Modificări după 06.2024 găsite | Ating art. din P0? |
+|---|---|---|---|
+| L98/2016 | forma consolidată la 18.02.2026 (SintAct) | **Legea 283/2024** (MO 1139/14.11.2024): art. 187 alin. (5) lit. d) (factor CCM), art. 223 alin. (1) lit. c); praguri art. 7 pentru 2026; Legea 118/2025 aprobă OUG 52/2024 (fără diferențe textuale) | Evaluarea (187) — DA. 160–161, 172–183, 193–196, 209–210, 215–217 — **neschimbate** |
+| HG 395/2016 | forma consolidată la 18.08.2026 | doar OUG 7/2026 (abrogă art. 2 alin. (1), organizarea AC) | Nu (134–137 neschimbate) |
+| L101/2016 | forma consolidată la 18.08.2026 | nicio modificare datată 2024–2026; ÎCCJ RIL 23/2025 (intervenție principală admisibilă) | art. 8, 29, 61^1 neschimbate |
+
+**Rezervă:** pentru L98, eventualele modificări din 19.02–02.10.2026 nu au fost citite. Pentru HG 395 și L101, cele de după 18.08.2026.
+
+### 2. Constatări-cheie
+1. **Cauțiunea peste prag:** 2% din valoarea estimată, plafonată la **220.000 lei** (până la termenul ofertelor) și la **2.000.000 lei** (după termen), nu 880.000 lei.
+   - REQ-AD-085 trebuie corectat. Cei 880.000 lei veneau din forma din 2019.
+   - Textul în vigoare e confirmat de Decizia CNSC BO2024_3004.
+   - Actul care a ridicat plafonul nu a fost identificat.
+2. **Notificarea prealabilă nu mai există.** Cap. II din L101 a fost abrogat la 04.06.2018 (OUG 45/2018). Termenele sunt de **10 zile** (peste prag) și **7 zile** (sub prag).
+3. **Plângerea împotriva deciziei CNSC:**
+   - se depune în **10 zile** de la comunicare, la curtea de apel de la sediul AC (contencios administrativ);
+   - o copie se comunică celorlalte părți în același termen, altfel plângerea e tardivă;
+   - nu se admit motive sau probe noi.
+4. **Legea 283/2024 (nouă pentru ofertare):**
+   - **motiv de excludere:** condamnarea penală definitivă în ultimii 2 ani pentru nerespectarea salariului minim;
+   - **clauze contractuale obligatorii**, care se aplică și subcontractanților;
+   - **excludere 1–2 ani** pentru încălcarea acestor clauze.
+5. **Ord. ANRE 17/2026:**
+   - **nemodificat** (conform listei ANRE la 02.10.2026);
+   - ordinul nu prevede o dată proprie de intrare în vigoare, deci a intrat în vigoare la publicare, **26.05.2026** (Legea 24/2000 art. 11 alin. (1) și art. 12 alin. (3));
+   - termenul de 3 luni din art. 39 a expirat la **26.08.2026** (dată calculată).
+   - **De verificat urgent că Gazpet a depus dovada la ANRE.**
+6. **NTPEE:** ANRE nu listează alte modificări ale Ord. 89/2018 după Ord. 2/2023.
+7. **Racordare (Ord. 7/2022 + Ord. 136/2022):** 31 de cerințe pentru Gazpet ca OEE, printre care:
+   - solicitarea de selectare se depune în 5 zile de la ATR;
+   - convenția tehnică se încheie în 5 zile;
+   - garanția de bună execuție către OSD: 10%, în 5 zile lucrătoare;
+   - garanția lucrărilor: ≥ 24 de luni;
+   - termene: 90 de zile (racord) / 180 de zile (extindere), din care 18 zile pentru recepție și PIF;
+   - dirigintele OSD se cere cu 7 zile lucrătoare înainte de început;
+   - PIF se face cu PV pe anexele 10–11 din NTPEE.
+   - Modificările din 2023–2026 nu au putut fi confirmate. Proiectul de completare din 2023 privește doar cererile vechi.
+   - Nu confundați cu **Ord. ANRE 7/2026**, care reglementează accesul la SD, nu racordarea.
+
+### 3. Deduplicare
+Am comparat automat locatorii (articol + alineat) cu REQ-AD, REQ-TG și REQ-SC. Patru suprapuneri la nivel de alineat au fost păstrate intenționat, pentru că sunt pe litere diferite sau sunt corecturi:
+- 61^1 alin. (1) lit. b);
+- 210 alin. (2) lit. a)–c), e)–f);
+- 137 alin. (2) și alin. (3), pe alte litere.
+
+### Surse tipice de clarificări (noi)
+- **Cerință de calificare doar în caietul de sarcini** (HG 395 art. 30 alin. (6)): „Vă rugăm să confirmați că cerința [X] din caietul de sarcini, cap. [Y], nu constituie criteriu de calificare, întrucât nu este prevăzută în anunțul de participare (HG 395/2016 art. 30 alin. (6)).”
+- **Personal punctat și cerut și la calificare** (HG 395 art. 32 alin. (4)–(5)): „Vă rugăm să precizați dacă expertul [X] este criteriu de calificare sau factor de evaluare, având în vedere interdicția din HG 395/2016 art. 32 alin. (4).”
+- **DUAE detaliat într-o procedură simplificată** (L98 art. 193 alin. (6)): „Vă rugăm să confirmați aplicarea indicației globale «alpha» în DUAE, conform art. 193 alin. (6) din Legea 98/2016.”
+- **Prețul cel mai scăzut peste prag** (L98 art. 187 alin. (3^1)): se cere justificarea sau modificarea criteriului.
+
+### Propuneri platformă ERP
+- calculator de cauțiune (prag, etapa a/b, acord-cadru);
+- termene pentru contestare și plângere (D+10, comunicarea către părți);
+- alertă privind dovada depusă la ANRE pentru Ord. 17/2026;
+- flux de racordare: ATR → solicitare de selectare (5 zile) → convenție (5 zile) → GBE (5 zile lucrătoare) → diriginte (−7 zile lucrătoare) → execuție (90/180 de zile) → PIF;
+- clauza privind salariul minim (L283) propagată automat la subcontractanți.
+
+### Corecturi ofertare_normative
+- **id 28:** Ord. ANRE 7/2022 este corect pentru racordare. Notați modificarea prin Ord. 136/2022 și NU confundați cu Ord. 7/2026 (acces la SD).
+- **id 22:** de înlocuit cu Ord. ANRE 17/2026, în vigoare din 26.05.2026.
+- **id 10 (L101):** notificarea prealabilă e abrogată; cauțiunea peste prag are plafon de 2.000.000 lei.
+- **Nou:** de adăugat Legea 283/2024.
+
+### Surse lipsă
+- **Forma oficială curentă a L98, HG 395 și L101.** Trebuie confirmată pe legislatie.just.ro sau anap.gov.ro când sunt accesibile. Gratuit.
+- **Actul care a ridicat cauțiunea la 2.000.000 lei.**
+- **Textele Legii 118/2025, Ord. 136/2022 și ÎCCJ RIL 23/2025** (data, MO).
+- **Eventuale modificări ale Ord. 7/2022 după 12.2022.** Se pot verifica în Monitorul Oficial, Partea I (abonament) sau prin cerere la ANRE.
+- **Forma actualizată a Legii 24/2000.** Am citit forma din 2011; art. 12 alin. (3) e considerat neschimbat.
 
 ### P1 — HG 1/2018, ajustare, recepție, Legea 169/2026
 

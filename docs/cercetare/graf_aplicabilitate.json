@@ -1176,6 +1176,182 @@
   "tema": "santier_conex"
  },
  {
+  "from_source_id": "SRC-legea-283-2024",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "modifica",
+  "locator": "art. VIII pct. 1–2",
+  "nota": "introduce art. 187 alin. (5) lit. d) și art. 223 alin. (1) lit. c)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-283-2024",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "trimite_la",
+  "locator": "art. XI alin. (1)–(7)",
+  "nota": "norme autonome de excludere/clauze în procedurile L98",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-118-2025",
+  "to_source_id": "SRC-oug-52-2024",
+  "relatie": "modifica",
+  "locator": "articol unic",
+  "nota": "aprobă OUG 52/2024 (fără modificări textuale identificate)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-52-2024",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "modifica",
+  "locator": "art. I",
+  "nota": "inclus în forma CTCE 13.06.2024",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-52-2024",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "modifica",
+  "locator": "art. VIII",
+  "nota": "abrogări în HG 395 (art. 32 alin. (7), art. 93 alin. (4))",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-7-2026",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "abroga",
+  "locator": "art. XXVII alin. (2)",
+  "nota": "abrogă art. 2 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-45-2018",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "abroga",
+  "locator": "art. IV pct. 3",
+  "nota": "abrogă cap. II (notificarea prealabilă)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-45-2018",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "modifica",
+  "locator": "art. IV",
+  "nota": "introduce art. 61^1 (cauțiunea)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_3004",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "aplica",
+  "locator": "motivare",
+  "nota": "citează textul în vigoare al art. 61^1 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-iccj-hp-66-2018",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "dispozitiv",
+  "nota": "art. 65, 104 alin. (3), 133, 134 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-iccj-hp-66-2018",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "interpreteaza",
+  "locator": "dispozitiv",
+  "nota": "art. 28 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-iccj-ril-23-2025",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "interpreteaza",
+  "locator": "dispozitiv",
+  "nota": "art. 3 alin. (1) lit. a), art. 8, art. 17 alin. (3)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-101-2016",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "trimite_la",
+  "locator": "art. 61^1 alin. (1); art. 49 alin. (2)",
+  "nota": "pragurile art. 7 alin. (1); achiziția directă art. 68",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "trimite_la",
+  "locator": "art. 138 alin. (1) lit. d^1), art. 160 alin. (1), art. 162 alin. (1)",
+  "nota": "dreptul de a alege executantul; verificarea proiectelor; recepția",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-136-2022",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "modifica",
+  "locator": "—",
+  "nota": "forma consolidată 07.12.2022",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "trimite_la",
+  "locator": "art. 38 alin. (1)–(2), art. 39 alin. (1), (5); art. 46 alin. (2) lit. j); anexa 5 art. 14 lit. e), u)",
+  "nota": "recepție/PIF după NT, PV anexele 10–11, materiale art. 173",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "art. 38 alin. (3)",
+  "nota": "recepția la terminarea lucrărilor — art. 10",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-ord-anre-17-2026",
+  "relatie": "trimite_la",
+  "locator": "art. 5 alin. (3)–(4) (note de subsol)",
+  "nota": "trimiterea originară e la Ord. 132/2021, abrogat prin Ord. 17/2026 — tipurile PT/ET/PDSB/EDSB se citesc prin Ord. 17/2026",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-ord-anre-156-2020",
+  "relatie": "trimite_la",
+  "locator": "art. 39 alin. (3)",
+  "nota": "PIF instalații de utilizare — art. 25 alin. (1) lit. a)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-legea-319-2006",
+  "relatie": "trimite_la",
+  "locator": "anexa 5 art. 19",
+  "nota": "SSM în convenția tehnică",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-17-2026",
+  "to_source_id": "SRC-legea-24-2000",
+  "relatie": "aplica",
+  "locator": "art. 2–3 (fără dată proprie de intrare în vigoare)",
+  "nota": "intrare în vigoare la publicare — Legea 24/2000 art. 12 alin. (3)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-anre-proiect-completare-racordare-2023",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "modifica",
+  "locator": "proiect",
+  "nota": "adoptare neconfirmată",
+  "tema": "p0"
+ },
+ {
   "from_source_id": "SRC-legea-169-2026-catuc",
   "to_source_id": "SRC-legea-50-1991",
   "relatie": "abroga",
