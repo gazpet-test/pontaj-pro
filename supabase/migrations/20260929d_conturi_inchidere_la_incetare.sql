@@ -855,6 +855,12 @@ BEGIN
       IF NOT FOUND OR x.rezolvat_la IS NOT NULL OR x.abandonat_la IS NOT NULL THEN
         CONTINUE;                                    -- rezolvată între timp (restaurare, închidere manuală, reactivare)
       END IF;
+      -- r4 (Copilot pe dac4bda): upsert-ul fn_cont_coada_pune poate retargeta intrarea (employee_id A→B) cât timp sweep-ul
+      -- aștepta. Fișa blocată mai sus e A; nu blocăm B DUPĂ coadă (ar inversa ordinea fișă → advisory → profil → coadă).
+      -- Intrarea retargetată se procesează la rularea următoare, cu lock-urile luate în ordinea corectă.
+      IF (x.profile_id, x.employee_id, x.tip) IS DISTINCT FROM (q.profile_id, q.employee_id, q.tip) THEN
+        CONTINUE;
+      END IF;
       IF x.tip = 'flaguri' THEN
         IF NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = x.profile_id) THEN
           v_rezult := 'anulat_profil_inexistent';

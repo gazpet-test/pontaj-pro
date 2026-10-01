@@ -11,16 +11,30 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 - `supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql` (R2)
 - `supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql` (R3)
 
-**Amprente (r3, 01.10.2026 — după verdictul Copilot pe dad549b: D1 lock pe fișă în sweep, E1 serializare fost angajat ↔ extern, amprente helperi c)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
+**Amprente (r4, 01.10.2026 — d: CONTINUE la intrarea retargetată; c și e neschimbate față de r3)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
 
 | Fișier | sha256 |
 |---|---|
 | `20260929c_conturi_legare_automata.sql` | `9a3e0a133e50a1bc759ccaa4ec5b0c624f9e3516dc81ebe48792221455520d50` |
-| `20260929d_conturi_inchidere_la_incetare.sql` | `9eaa9f2a87969d2d65513c934148d939c4cbc7c0e5e7dcd0d34b49bf5d0b955a` |
+| `20260929d_conturi_inchidere_la_incetare.sql` | `d2468bbb60180d3a197960cf29edddaa296d235293eae80362d9f42214ab992d` |
 | `20260929e_fost_angajat_colaborare_externa.sql` | `1adac6d76bfce6608bd663a3640baea57f04b753951755040129cef725de19ef` |
 | `20260929c_conturi_legare_automata_ROLLBACK.sql` | `3e7b3af6e12160022fbd19ed73bd0709b72cd372da74d198ee2cb8d09a578256` |
 | `20260929d_conturi_inchidere_la_incetare_ROLLBACK.sql` | `c2e41e0e028ee9027823f48540e95fb2801cfad5fa16d2af9b291d739163b0e1` |
 | `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `5db7153f28fc5a625c3d48e5fb10cd5e86393b18eef8037368dfdac2251dffa3` |
+
+**Livrare (r4): versiuni și comenzile runner-ului.** Ordinea e strictă c → d → e, iar versiunile sunt > 20261001184500 (ultima de pe live la 01.10) și strict crescătoare. După fiecare pas, runner-ul rulează gate-ul 0e (cod 30/31 = stop).
+```
+bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929c_conturi_legare_automata.sql \
+  --sha256 9a3e0a133e50a1bc759ccaa4ec5b0c624f9e3516dc81ebe48792221455520d50 --versiune 20261001190000 \
+  --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
+bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql \
+  --sha256 d2468bbb60180d3a197960cf29edddaa296d235293eae80362d9f42214ab992d --versiune 20261001191500 \
+  --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
+bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql \
+  --sha256 <sha e după decizia E> --versiune 20261001193000 \
+  --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
+```
+e e blocată până la decizia lui Răzvan pe politica E (vezi delta r4). Sha-ul e de mai sus (`1adac6d7…`) e al variantei r3.
 
 **Aliniere SEC F2 r4 (01.10.2026).** `fn_identitate_privilegiata` întoarce `'service_role'` DOAR cu predicatul copiat textual din F2 (`20260930j`):
 `v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role'`; `request.jwt.claim.role` și
