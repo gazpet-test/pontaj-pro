@@ -989,3 +989,211 @@ Am pornit de la obligațiile legale ale unui executant de rețele (gaze/apă-can
 - Id 19 (HG 571/2016): de marcat „neaplicabil la rețele/SRM” (actualizată prin HG 1181/2022).
 - De adăugat: OG 43/1997, Ordinul MT 1294/2017, Ordinul MTI 1668/2023, Ordinul 1112/411/2000, Legea 107/1996 + Ordinul 828/2019, Ordinul MAI 163/2007, Legea 53/2003, OUG 12/1998.
 - De nu adăugat: Ordinul MT 1835/2017 (abrogat).
+
+### P1 — HG 1/2018, ajustare, recepție, Legea 169/2026
+
+### Ce am făcut
+- Am pornit de la `cerinte_achizitii_deviz.json`. Cele 150 de cerințe REQ-AD nu au fost duplicate. Am completat doar golurile, în **101 cerințe REQ-P1-001…101**.
+- **HG 1/2018:** am recitit textul AFIR (hg1.pdf, sha 54fbafbf…). Anexa 1 a fost citită integral pentru clauzele 7, 15, 35–38, 46–53, 57–70. Din Anexa 2 am preluat doar diferențele:
+  - avans în 2 tranșe, 5% + 10%;
+  - preț forfetar (cl. 49.1);
+  - reziliere la 120 de zile.
+- Toate clauzele-model au `temei_tip` = OBLIGATORIE_DOC_ACHIZITIE. Valoarea implicită apare în cerință, iar `conditii_aplicabilitate` precizează când Acordul Contractual o poate schimba.
+- **Legea 169/2026 (CATUC):** am găsit **textul oficial integral** (PDF MO 661/10.08.2026, copie pe verificatori.ro, sha 1b2c751a…). Pe text am confirmat:
+  - art. 576 alin. (3): abrogă L50/1991 și L10/1995, cu excepția art. 10 și 41;
+  - art. 577 alin. (1)–(8): menține HG 273/1994, HG 925/1995 și HG 766/1997;
+  - art. 583: regimul trimiterilor la actele abrogate;
+  - art. 267 (branșare), 277(5), 299, 370(5), 440–449, 451(3), 527–532, 556 (asigurări), 574.
+- **HG 273/1994 (forma HG 343/2017):** am citit integral regulamentul (PDF AICPS, sha 5bd0b05a…).
+- **OG 15/2021:** am citit textul semnat (PDF 1616.ro, nu din MO). Conține formula, tabelul 15 INS și ponderile din 2021.
+- **CNSC BO2023_406:** am recitit decizia pentru ICCplr și OUG 64.
+- **Metodologia OUG 64:** din ea rezultă tabelul INS 15.B.
+
+### Constatări importante
+1. **Conflict L98 – HG 1/2018 (REQ-P1-003).** Cl. 48.2 din HG 1/2018 lasă preț ferm implicit pentru o durată de până la 365 de zile. L98 art. 222^2 alin. (9), în forma OUG 52/2024, obligă însă la clauză de ajustare pentru lucrările de peste 6 luni, iar HG 1 art. 4 dă prioritate legii. Pentru contractele de 6–12 luni fără tabel de ajustare se pune întrebare la clarificări. Este interpretare proprie: nu am găsit practică CNSC.
+2. **Sumele Reținute (cl. 47.1, forma 2022–2023)** se aplică NUMAI când GBE se constituie prin rețineri succesive. REQ-AD-100 nu menționa această limită.
+3. **CATUC art. 556 – asigurări obligatorii pentru executant:** asigurare CAR și asigurare RC pentru vicii pe 10 ani, la asigurători ASF, prezentate la începerea lucrărilor. Este o obligație nouă, cu cost în ofertă. Atribuirea alineatelor la art. 556 e dedusă, pentru că paginarea pe coloane a PDF-ului e ambiguă.
+4. **Recepții parțiale pe tronsoane** la lucrări inginerești (art. 527 alin. (3)): le decide beneficiarul, la cererea executantului și cu avizul proiectantului. Se aplică și contractelor aflate în execuție la 25.08.2026 (art. 574).
+5. **Verificarea proiectelor:**
+   - obligația de a o asigura revine beneficiarului (art. 277 alin. (5));
+   - proiectele din CC1 nu se verifică (art. 440 alin. (3));
+   - verificatorul nu poate fi aceeași persoană juridică care a elaborat proiectul (art. 449 alin. (2)), deci la P+E e nevoie de un verificator extern;
+   - HG 925/1995 rămâne în vigoare doar cât nu contravine codului;
+   - la gaze se aplică în plus regimul ANRE (L123 art. 160, Ord. 133/2021).
+6. **ICCplr și OUG 64:**
+   - formula OUG 64 e gândită pentru contractele aflate în derulare; preluată într-o procedură nouă a dus la anulare (BO2023_406);
+   - ICCplr provine din Anexa 4 a OUG 64, nu de la INS, iar ultima lună de referință e februarie 2022.
+7. **Echivalarea D/C/B/A = CC1/CC2/CC3/CC4** (art. 370 alin. (5)): garanțiile implicite din HG 1 cl. 61.6 coincid cu minimele din art. 531 alin. (6).
+
+### Verificări trecute pe sursa primară (de propagat în REQ-AD)
+- **REQ-AD-142, 144:** art. 531 alin. (6) și (9) sunt corecte, deci se pot trece pe `verificat_pe_sursa` = true. Numerotarea „art. 466” din indexul verificatori.ro e greșită.
+- **REQ-AD-143:** art. 451 alin. (3) e confirmat.
+- **REQ-AD-150:** art. 576 alin. (3) lit. c) e confirmat.
+- **REQ-AD-145…148:** menținerea HG 273/1994 e confirmată pe MO (art. 577 alin. (6)).
+
+### Excluderi și analiza de aplicabilitate
+- **HG 845/2018** (recepția infrastructurii rutiere și feroviare naționale): apare doar în graf, ca mențiune. Gazpet nu execută infrastructură de transport de interes național.
+- **Tabelul INS 15.B** (OUG 64, cap. VI, transport): e păstrat doar ca reper pentru formulele pe resurse. Gazpet nu e pe proiecte de transport.
+- **OG 15/2021:** e un regim închis (contracte din 2021). L-am păstrat pentru structura indicilor și a ponderilor.
+
+### Ce n-am putut verifica
+- **Buletinul Statistic de Prețuri INS** (insse.ro: reset/503): nu am putut confirma dacă tabelul 15 conține indici separați pentru manoperă, utilaj și transport. Nici baza actuală a seriei nu e confirmată (2021 = 100 față de 113,8 din HG 1, cl. 48.5). Cele 3 cerințe pe INS au `verificat_pe_sursa:false` sau încredere medie.
+- **Textul HG 925/1995:**
+  - isc.gov.ro a dat eroare de certificat TLS la curl și 503 la WebFetch;
+  - cdep.ro a dat reset la curl și 404 la WebFetch;
+  - lege5.ro a dat 503.
+
+  Domeniile de atestare (ex. „Ig” pentru gaze, „Is” pentru instalații sanitare) apar doar în surse secundare, deci sunt NEVERIFICATE.
+- **OG 15/2021 în forma MO și Legea 281/2021 de aprobare:** necitite.
+- **PDF-ul cu clarificările MDLPA privind art. 267** (primariacristian.ro): conexiunea a fost resetată.
+- **Modificările HG 1/2018 după 17.10.2023 și ale HG 273/1994 după 2017:** neverificate (legislatie.just.ro e inaccesibil).
+
+### Corecturi ofertare_normative
+- **id 4 (Legea 10/1995):** e abrogată parțial; rămân doar art. 10 și 41. Confirmat pe MO.
+- **id 20 (Legea 50/1991):** e abrogată integral din 25.08.2026, iar Normele ei (Ord. 839/2009) au fost abrogate odată cu ea. Trebuie adăugată Legea 169/2026.
+- **id 21 (HG 273/1994):** e în vigoare, cu textul din HG 343/2017 și menținută prin art. 577 alin. (6) din L169/2026.
+- **De adăugat:**
+  - HG 1/2018;
+  - HG 925/1995;
+  - Metodologia OUG 64/2022, opțional.
+
+### P2 — standarde de execuție și norme de deviz gaze
+
+Runda 2, 01.10.2026. Doar citire.
+
+| Fișier | Conținut |
+|---|---|
+| `cerinte_p2_deviz.json` | 105 cerințe (REQ-P2-001…105) |
+| `graf_p2_deviz.json` | 62 de muchii |
+| `surse_update_p2_deviz.json` | 30 de surse: 22 noi, 8 actualizate |
+| Generatoare | `gen_p2.py`, `gen_p2b.py`; descărcările sunt în `src_p2/` |
+
+**Clasificarea cerințelor după `temei_tip`:**
+
+| Tip | Număr |
+|---|---|
+| VOLUNTAR_BUNA_PRACTICA | 64 |
+| STANDARD_INCORPORAT_PRIN_REFERINTA | 16 |
+| OBLIGATORIE_LEGE | 11 |
+| OBLIGATORIE_DOC_ACHIZITIE | 7 |
+| GHID_INTERPRETARE | 4 |
+| PRACTICA_CNSC | 3 |
+
+Clauzele de standard pe care nu le-am citit au mențiunea „NECESITĂ ACCES LA STANDARDUL LICENȚIAT” și `necesita_standard_licentiat: true`. Nu am scris nicio echivalență între standarde.
+
+### Ce am citit în această rundă
+
+- **NTPEE consolidat:** art. 6, 75, 194–201, 228, 235–246, 254–264 și anexa 2 integral.
+- **PT CR 9-2025:** art. 25, 30, 38, 43–45, 76 și anexa 16.
+- **PT CR 6-2025:** art. 12, 96 și anexa 24.
+- **Ghidul P91/1-02:** pct. 1.4, 2.2.2–2.2.6 și 3.3.1.4–3.3.1.5.
+- **Indicatorul Ts** (ediția COCC 2003, OCR public pe archive.org): pagina de gardă, sumarul, generalitățile TsA și TsC.
+- **Indicatorul Iz** (ediția 1983, OCR archive.org): sumarul și capitolul IZL.
+- **Cataloage:** COCC și CCC Moldova (lista indicatoarelor).
+- **Deviz public de branșament** de pe x-dev.ro.
+- **Studiul UTCN 224 CI/2018.**
+- **Decizii CNSC:** BO2024_696 și BO2024_3130.
+
+Pentru toate am trecut sha256 în `surse_update`.
+
+**Atenție:** copiile scanate ale indicatoarelor sunt ediții protejate de COCC. Din ele am extras doar titluri, capitole, coduri și unități de măsură. Nu am preluat niciun consum.
+
+### Sarcina A: constatări pe standarde
+
+1. **Încorporate legal de NTPEE sunt doar standardele de sudare din anexa 2 (poz. 29–37) și EN 12007-2**, prin art. 228 alin. (3), art. 235 alin. (4) și art. 50^1. Delimitarea „standarde specifice” este interpretarea noastră:
+   - EN 12732+A1:2014;
+   - ISO 15607:2004;
+   - ISO 15609-1:2005;
+   - ISO 15609-2:2002;
+   - ISO 15609-5:2012;
+   - ISO 9692-1:2014;
+   - ISO 9692-2:2000;
+   - ISO 6520-1/-2;
+   - EN 12007-2:2012 (numai prin art. 50^1).
+
+   Toate sunt trimiteri **datate**. Interpretarea noastră: ediția legală este cea din anexa 2 până la modificarea NTPEE. O ediție nouă (de ex. ISO 15609-1:2020) se acceptă numai prin DA sau prin clarificare.
+
+2. **Anexa 2 din NTPEE nu conține deloc** următoarele standarde: ISO 5817, 17635, 17636, 17637, 10675, 17640/11666, 9606-1, 3834, EN 12068, seria ISO 21809, ISO 8501, ISO 12944, EN ISO 3183, EN 10204. Ele intră în joc în trei moduri:
+   - **prin PT CR ISCIR, numai la examenele de autorizare:**
+     - PT CR 9 art. 30 cere nivelul B la proba sudorului;
+     - anexa 16 a PT CR 9 este o listă „exemplificativă”, iar trimiterile din articole sunt nedatate („standardul european aplicabil”);
+   - **prin specificațiile operatorilor** (ST-TOLNP, ST-TGPHD, ST 505), atunci când DA le invocă;
+   - **direct prin caietul de sarcini (CS).**
+
+   Consecință: nivelul ISO 5817 și procentul de NDT pentru sudurile de producție **nu vin din lege**. Dacă CS nu le precizează, se clarifică.
+
+3. **Ediții NTPEE față de edițiile curente:**
+
+   | Standard | Ediția citată de NTPEE | Ediția curentă |
+   |---|---|---|
+   | ISO 15609-1 | 2005 | 2020 |
+   | EN 13067 | 2013 | 2020 |
+   | EN 1555 | 2011/2013 | 2025 |
+   | EN 12007-5 | 2014 | 2024 |
+   | EN 12954 | 2002 | 2019 |
+
+   - Pentru EN 1555, Distrigaz ST-TGPHD citează ediția 2021. Rezultă trei ediții diferite în documente.
+   - EN ISO 15589-1:2026 are dop 31.01.2027.
+
+4. **Izolația.** NTPEE art. 259 alin. (3) definește izolația „întărită/foarte întărită” ca sistem pe bază de bitum, aceeași tehnologie pe care o normează IZL. Dacă un CS cere „foarte întărită” și ST-TOLNP cere 3LPE B2/B3, există o contradicție de clarificat. Seria STAS 7335 din anexa 2 nu include partea /3 (bitum).
+
+### Sarcina B: normele de deviz
+
+| Indicator | Există? | Ediții | Ce contează pentru gaze |
+|---|---|---|---|
+| **G** | da: conducte pentru transportul și distribuția gazelor și a lichidelor petroliere | 1981, 1996, rev. 2002 (COCC: 1999–2015) | GD (rețele, branșamente), GE (armături), GF (firide). Capitolele GA–GF le-am găsit doar în surse secundare |
+| **I** | da: încălzire centrală și gaze la construcții | 1981, rev. 2001 | doar instalații de utilizare (IC, ID, IA, IB) |
+| **Ts** | **un singur indicator**, în 2 volume | 1981, ediția COCC 2003 | TsA manual (UM: mc), TsC mecanic (**UM: 100 mc**), TsD umpluturi și compactare, TsF sprijiniri, TsI transport. Formele TSA/TSC sunt **capitole**, nu indicatoare |
+| **Iz** | **da, indicator separat** | 1981, rev. 1999 (tipărit 2001 și 2014) | IZL (bitum/PVC pe țevi de oțel în pământ, inclusiv completarea la îmbinări), IZA01 sablare. **Nu are norme pentru manșoane termocontractabile și nici pentru 3LPE** |
+| **C** | da | 1981, rev. 1999 | marginal. „CZ” este capitol din C (mortare) |
+| **D** | da | 1981 (COCC: rev. 1999–2015) | DG desfaceri, DA fundații, DB asfalt, DE borduri și trotuare, DI reparații. UTCN 2018: normele de utilaj sunt depășite |
+| **RpG** | da: reparații la instalații de gaze | 1981, rev. 1999 (tipărit 2002) | verificări de etanșeitate și presiune (RPGD13/14) |
+| **RpD** | da (numai în catalogul COCC) | 1999–2015 | reparații de drumuri și străzi |
+
+**Structura codului:** indicator + capitol + articol + variantă. Exemple: GD01C1 (țeavă de oțel Dn 100 în șanț), TSA02G1, IZL06C1, DG05A1.
+
+**CNSC 696/2024:** articolele „asimilate” nu fac oferta neconformă dacă DA nu le interzice.
+
+**Ce n-am găsit:** nicio sursă publică cu consumurile din G pentru PE (sudură cap la cap sau electrofuziune). Am marcat peste tot „consum normat — necesită indicatorul”.
+
+#### Separarea consumului pe 5 articole tipice (plus refacerea asfaltului)
+
+| Articol | obligatoriu_specificatie | referinta_indicator | productivitate_istorica | estimare_interna |
+|---|---|---|---|---|
+| Săpătură manuală | NTPEE art. 75 (≥ 0,9 m), 194 (lățimea 0,4 m + Dn, gropi de sudare), 195; volumul din F3 | TsA02/TsA04, ore/mc: necesită indicatorul | ore-om/mc din pontaj | ponderea manual/mecanic, sprijiniri neprevăzute |
+| Săpătură mecanică | aceleași dimensiuni + pat de nisip 10–15 cm (art. 196) | TsC02…, pe 100 mc: necesită indicatorul | mc pe oră de utilaj (foi de parcurs) | afânare, distanța de transport, așteptări |
+| Montaj PE Dn 110 EF | art. 197, 239, 240, 244: aparat agrementat, sudor ISCIR, nisip ≥ 10 cm; materialul din CS | G: neverificat. Reper de firmă SOFTEH-VALROM: ~0,88 h/sudură EF D110 | suduri/zi din memoria aparatelor EF | răcire, refaceri (art. 246) |
+| Montaj oțel Dn 100 sudat | art. 198, 235–238: NDT obligatoriu, 100% la sudurile de poziție, eclise; procentul NDT din CS | GD01: necesită indicatorul | suduri/zi, rata de respingere | reparații, protecție meteo |
+| Izolare îmbinări | art. 254 lit. b–c, 259, 262: PV, buletin de laborator; sistemul din CS | IZL (numai bitum), IZA01; pentru manșon: analiză proprie | îmbinări/zi, consum de manșoane | sablare mobilă, test cu scânteie |
+| Refacere asfalt | aviz administrator / Ordin 1668/2023 (DN), NTPEE art. 195 (desfacere 5–15 cm) | D: DG05, DA, DB, DI: necesită indicatorul | prețuri de la subcontractori de drumuri | suprafețe suplimentare cerute la recepție |
+
+### Excluse sau condiționate
+
+| Sursă | Motiv |
+|---|---|
+| SR EN 1594 | Numai pentru transport > 16 bar (cerință-filtru) |
+| SR EN 15001, SR EN 1775 | Instalații de utilizare. Acoperite de runda 1, fără cerințe noi |
+| SR EN 12327 | Acoperit de REQ-TG-112 |
+| Indicatoarele M1, Tf, Ac | Nu sunt rețele de gaze |
+| Copiile Ts și Iz de pe archive.org | Folosite doar pentru metadate (drepturi de autor COCC) |
+
+### Ce n-am putut verifica
+
+- **Paginile okazii, Scribd și pdfcoffee** (403 sau erori la încărcare): capitolele GA–GF și DA–DI le am doar din rezumatele căutării, cu `vps:false` sau încredere medie.
+- **OG 39/1998 art. 6:** cdep.ro și lege5 nu au răspuns, așa că articolul vine din fragmentul de căutare.
+- **CS Delgaz ICB 71082:** portalul a returnat HTML în loc de PDF.
+- **Ediția curentă ASRO** pentru ISO 15607, 9692-1, 6520-1, STAS 7335, 8804 și 2484.
+- **Locatorul exact al ISO 15614-1 în PT CR 7-2025:** textul a fost citit în runda 1 și nu e în director.
+- **Emitentul original din 1981** al indicatoarelor (ICCPDC sau INCERC?): neconfirmat.
+- **Statutul actual al Ord. 1014/874/2001.**
+
+### Corecturi pentru ofertare_normative
+
+| Rând | Corectură |
+|---|---|
+| **id 1 (NTPEE)** | Notă: anexa 2 nu conține ISO 5817/17635/9606-1, EN 12068 sau ISO 21809 |
+| **id 37 (ISO 5817)** și **id 46 (ISO 17635)** | Încorporate numai pentru examenele ISCIR (PT CR 9). Pentru producție vin din DA |
+| **id 38 (SR EN 12068)** | Ediția corectă e 2002, nu 1999 (DIN EN 12068:1999). Standardul nu e în NTPEE |
+| **id 41 (SR EN 12954)** | NTPEE citează ediția 2002; ediția curentă este 2019 |
+| **id 43 (SR EN 1555)** | Ediția curentă e 2025 |
+| **De adăugat** | Indicatoarele G, Ts, Iz, D și RpG ca „reper orientativ”; P91; PT CR 6/7/9-2025 |
