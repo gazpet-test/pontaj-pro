@@ -1,6 +1,9 @@
 # PR #543 — delta pentru Copilot (01.10.2026)
 
-context_version: 2026-10-01 · commit 8e1084e · generated_at: 2026-10-01
+context_version: 2026-10-01 · commit head 1675678 (codul + migrarea = 8e1084e; 1675678 adaugă doar acest doc) · generated_at: 2026-10-01
+
+> Corecție metadata (01.10, delta 543b): head-ul PR la momentul trimiterii era `1675678`, nu `8e1084e`.
+> Notă: comentariul din `20260930e_monitor_egress.sql` „Fără edge/worker cablat, poarta și jurnalul stau inerte” e depășit — workerul NAS e cablat în PR (edge-ul rămâne amânat). Migrarea e APLICATĂ live (versiunea 20261001175000), deci fișierul nu se mai modifică; corecția stă aici, în `543b_DELTA_COPILOT.md` și în antetul `20261002a_monitor_egress_fix.sql`.
 
 ## Ce s-a schimbat față de ultimul pack
 1. Merge cu origin/main (fără rebase/force), fără conflicte.
