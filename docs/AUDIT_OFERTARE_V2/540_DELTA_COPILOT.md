@@ -95,3 +95,19 @@ Cheia tabelei este `employee_id`; tabela nu are coloană `id`. Cele 12 tokenuri,
 - build OK.
 
 Migrarea și revenirea sunt neschimbate (sha256 ca la §4).
+
+---
+## r2c — 540_DML_PREVIEW.sql după NO-GO Copilot (01.10)
+Verdict Copilot: GO pe migrarea #540, NO-GO pe fișierul DML. Am reparat cele două probleme semnalate:
+
+1. Pasul (3) e acum **un singur bloc DO**, care face pe rând:
+   - recitește setul;
+   - îl compară cu cele **12 perechi fixe** (employee_id:termination_date) și verifică `active IS FALSE` și `termination_date <= CURRENT_DATE`; la orice diferență dă RAISE;
+   - face UPDATE și verifică `GET DIAGNOSTICS ROW_COUNT = 12`, altfel RAISE;
+   - verifică starea finală: niciunul dintre cele 12 nu mai e activ, iar cele dezactivate sunt exact lista aprobată; altfel RAISE;
+   - emite `ids_rollback` prin NOTICE.
+2. **Rollback:** e marcat explicit „valabil DOAR imediat după rulare și după reverificare”. Restaurează doar `ids_rollback` din NOTICE și refuză dacă starea nu mai e cea de imediat după DML.
+
+**Verificare:** pe un PG16 local, cu date fictive. Prima rulare dezactivează 12 tokenuri; a doua e refuzată de gardă. **Nerulat pe live.**
+
+**sha256:** `fb4477caa4047ef7b215a0fcbc326e491925eb8bd1fa7607e7200bebca0695b3`
