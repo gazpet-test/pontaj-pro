@@ -16,6 +16,7 @@
 // numărată și plafon de timp crescător); definitiv doar când pdfinfo a răspuns, dar fără „Pages:” (PDF necitibil).
 // Fără importuri la distanță: testele (citire_mare_test.ts) rulează fără rețea.
 import { createHash } from 'node:crypto'
+import { MESAJ_BLOCAT, egressBlocat, egressLog } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md) — APLICARE DUPĂ FREEZE
 
 export const PRAG_MARE = 60 * 1024 * 1024                 // același prag ca edge-ul ofertare-ingest-doc (PR #478)
 export const MARCAJ_PREA_MARE = 'prea mare pentru citirea automată'   // începutul motivului scris de edge peste prag
@@ -287,11 +288,14 @@ export async function citesteMare(supa: any, docId: number, deps: DepsMare): Pro
   try {
     // 2. descărcare în flux pe disc
     deps.stare?.(`PDF mare ${nume}: descarc`)
+    // monitor egress: obiect blocat de detector → eșec trecător (se reia după deblocarea owner-ului), fără descărcare
+    if (await egressBlocat(supa, BUCKET, doc.fisier_path)) return await esec(MESAJ_BLOCAT)
     const { data: su, error: eSu } = await supa.storage.from(BUCKET).createSignedUrl(doc.fisier_path, 3600)
     if (eSu || !su?.signedUrl) return await esec(`URL semnat din Storage: ${eSu?.message ?? 'lipsă'}`)
     let dl: { marime: number; sha256: string }
     try { dl = await descarcaPeDisc(su.signedUrl, cale) }
     catch (e) { const m = String((e as Error)?.message ?? e); return await esec(`descărcare: ${m}`, /peste plafonul/.test(m)) }
+    await egressLog(supa, BUCKET, doc.fisier_path, dl.marime, 'nas:citire_mare', docId)
     const marimeBd = Number(doc.size_bytes) || 0
     if (marimeBd && dl.marime !== marimeBd) return await esec(`descărcați ${dl.marime} B, în BD ${marimeBd} B — descărcare incompletă sau alt obiect`)
     if (deps.esteOprire?.()) return await intrerupt()

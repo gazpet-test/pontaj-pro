@@ -55,6 +55,7 @@ import Integrari from './Integrari.jsx'
 import Cladire from './Cladire.jsx'
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
+const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
@@ -1091,6 +1092,8 @@ function HomeDashboard() {
 
       {/* Corp home: salut + module (cifre live) + SCADA (todo #693) — componentă separată */}
       <HomeScada profile={profile} modules={modules} onOpen={p => nav(p)} />
+
+      {isSuperAdmin && <Suspense fallback={null}><MonitorEgress profile={profile} /></Suspense>}
 
       <div style={{textAlign:'center',padding:'16px',fontSize:11,color:'#E53935',fontWeight:700,borderTop:'1px solid #21262D',marginTop:'auto',letterSpacing:'.3px'}}>
         Made by Trusu Razvan - Administrator Gazpet Instal
