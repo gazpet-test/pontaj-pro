@@ -11,16 +11,16 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 - `supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql` (R2)
 - `supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql` (R3)
 
-**Amprente (01.10.2026 seara, după merge main + precondiții live F1/30a (md5 1114af39…)/handle_new_user; înainte: c a22f6535…, d dcc8e7f9…, e d4deb2ac…)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
+**Amprente (r3, 01.10.2026 — după verdictul Copilot pe dad549b: D1 lock pe fișă în sweep, E1 serializare fost angajat ↔ extern, amprente helperi c)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
 
 | Fișier | sha256 |
 |---|---|
-| `20260929c_conturi_legare_automata.sql` | `5baa8f28faeb9db6ddfa569cd1ab492d41f07058fec6b7b050ec36e41c01da88` |
-| `20260929d_conturi_inchidere_la_incetare.sql` | `bdd241a96d53af52fa1f16e139dfcb84bab2e94fb7e9e5414d3dd0d4894b5574` |
-| `20260929e_fost_angajat_colaborare_externa.sql` | `4a8c1bc955645a2500826fb590442c88c44aba4ac3b64c81b39cf85b33c08846` |
+| `20260929c_conturi_legare_automata.sql` | `9a3e0a133e50a1bc759ccaa4ec5b0c624f9e3516dc81ebe48792221455520d50` |
+| `20260929d_conturi_inchidere_la_incetare.sql` | `9eaa9f2a87969d2d65513c934148d939c4cbc7c0e5e7dcd0d34b49bf5d0b955a` |
+| `20260929e_fost_angajat_colaborare_externa.sql` | `1adac6d76bfce6608bd663a3640baea57f04b753951755040129cef725de19ef` |
 | `20260929c_conturi_legare_automata_ROLLBACK.sql` | `3e7b3af6e12160022fbd19ed73bd0709b72cd372da74d198ee2cb8d09a578256` |
 | `20260929d_conturi_inchidere_la_incetare_ROLLBACK.sql` | `c2e41e0e028ee9027823f48540e95fb2801cfad5fa16d2af9b291d739163b0e1` |
-| `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `5de2008d00d4ffc078ae10ddfae7c250bc609824386f1e82db46791441256319` |
+| `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `5db7153f28fc5a625c3d48e5fb10cd5e86393b18eef8037368dfdac2251dffa3` |
 
 **Aliniere SEC F2 r4 (01.10.2026).** `fn_identitate_privilegiata` întoarce `'service_role'` DOAR cu predicatul copiat textual din F2 (`20260930j`):
 `v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role'`; `request.jwt.claim.role` și
