@@ -385,6 +385,13 @@ AS $fn$
 DECLARE
   v_reset boolean := (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
                      OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS DISTINCT FROM OLD.termination_date);
+  -- r4 (varianta C, decizia lui Răzvan): fișa DEVINE „fost angajat” acum (nu era înainte, este după)
+  v_devine_fost boolean := (NEW.termination_date IS NOT NULL AND NEW.termination_date <= CURRENT_DATE AND NEW.active IS NOT TRUE)
+                           AND NOT (OLD.termination_date IS NOT NULL AND OLD.termination_date <= CURRENT_DATE AND OLD.active IS NOT TRUE);
+  v_em    text := lower(btrim(COALESCE(NEW.email, '')));
+  v_cuv   text[] := public.fn_nume_cuvinte(NEW.name);
+  v_fam   text := public.fn_nume_familie(NEW.name);
+  x       record;
 BEGIN
   IF OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
@@ -407,6 +414,34 @@ BEGIN
     UPDATE public.hr_personal_extern SET activ = false, updated_at = now()
      WHERE fost_angajat_employee_id = NEW.id AND activ;
   END IF;
+  -- r4 (E-LIFECYCLE, varianta C): externii ACTIVI NELEGAȚI care existau deja cu identitatea omului care tocmai a plecat.
+  --   * email identic  → dezactivare automată (direcția sigură; activarea o face din nou un om) + notificare owner;
+  --   * doar pe nume   → notificare owner, FĂRĂ dezactivare (poate fi altă persoană cu același nume).
+  -- Lock-urile advisory pe identitate sunt deja ținute (trg_employees_colab_ext_lock) ⇒ fără cursă cu un extern nou.
+  IF v_devine_fost THEN
+    FOR x IN
+      SELECT h.id, h.nume, (v_em <> '' AND lower(btrim(COALESCE(h.email, ''))) = v_em) AS pe_email
+        FROM public.hr_personal_extern h
+       WHERE h.fost_angajat_employee_id IS NULL AND h.activ IS TRUE
+         AND ((v_em <> '' AND lower(btrim(COALESCE(h.email, ''))) = v_em)
+              OR (cardinality(v_cuv) >= 2 AND cardinality(public.fn_nume_cuvinte(h.nume)) >= 2 AND v_fam = ANY (public.fn_nume_cuvinte(h.nume))
+                  AND (public.fn_nume_cuvinte(h.nume) <@ v_cuv OR v_cuv <@ public.fn_nume_cuvinte(h.nume))))
+       ORDER BY h.id
+    LOOP
+      IF x.pe_email THEN
+        UPDATE public.hr_personal_extern SET activ = false, updated_at = now() WHERE id = x.id;
+        PERFORM public.fn_cont_notifica_owneri('extern_fost_angajat_dezactivat', '⏸ Extern dezactivat: e fost angajat Gazpet',
+          format('Externul #%s %s are emailul fișei #%s %s, al cărei contract s-a încheiat. Colaborarea a fost oprită automat; se reactivează prin HR → Foști angajați, cu acordul lui.',
+                 x.id, x.nume, NEW.id, NEW.name),
+          '/hr?tab=fosti');
+      ELSE
+        PERFORM public.fn_cont_notifica_owneri('extern_fost_angajat_omonim', '⚠ Extern activ cu numele unui fost angajat',
+          format('Externul #%s %s are același nume ca fișa #%s %s, al cărei contract s-a încheiat. Nu l-am dezactivat (poate fi altă persoană): verifică și, dacă e același om, trece-l prin HR → Foști angajați.',
+                 x.id, x.nume, NEW.id, NEW.name),
+          '/hr?tab=fosti');
+      END IF;
+    END LOOP;
+  END IF;
   RETURN NULL;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_employees_colab_ext_after() FROM PUBLIC, anon, authenticated, service_role;
@@ -415,7 +450,8 @@ CREATE TRIGGER trg_employees_zz_colab_ext AFTER UPDATE ON public.employees FOR E
   WHEN (OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
      OR OLD.colaborare_externa_document IS DISTINCT FROM NEW.colaborare_externa_document
-     OR OLD.active IS DISTINCT FROM NEW.active)
+     OR OLD.active IS DISTINCT FROM NEW.active
+     OR OLD.termination_date IS DISTINCT FROM NEW.termination_date)
   EXECUTE FUNCTION public.fn_employees_colab_ext_after();
 
 -- C.6 Funcțiile apelabile din UI (poartă: owner sau can_modify_employees, în cod) ----

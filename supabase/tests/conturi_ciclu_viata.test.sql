@@ -2634,6 +2634,36 @@ SELECT teste.assert(NOT has_function_privilege('service_role', 'public.fn_colabo
     AND NOT has_function_privilege('service_role', 'public.fn_fost_angajat_leaga_extern(integer,bigint)', 'EXECUTE'),
   'R3-25 P3: RPC-urile R3 (decizia unui om) fără EXECUTE pentru service_role');
 
+-- E-LIFECYCLE-1 (r4, varianta C): externi ACTIVI NELEGAȚI care existau deja când omul devine fost angajat.
+--   email identic → dezactivare automată + notificare owner; doar nume → notificare owner, fără dezactivare;
+--   un extern fără nicio potrivire și unul legat de altă fișă nu sunt atinși.
+SELECT teste.ca_admin();
+INSERT INTO public.employees (name, department, email, active) VALUES ('LIFECU ANA', 'Test', 'lifecu.ana@exemplu.ro', true) RETURNING id AS el_ana \gset
+INSERT INTO public.employees (name, department, email, active) VALUES ('LIFECU BOGDAN', 'Test', 'lifecu.bogdan@exemplu.ro', true) RETURNING id AS el_bog \gset
+INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Firma Ana Extern', 'Lifecu.Ana@exemplu.ro ', true) RETURNING id AS xl_em \gset
+INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Bogdan Lifecu', 'alt.email@exemplu.ro', true) RETURNING id AS xl_nume \gset
+INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Lifecu Neinrudit Total', NULL, true) RETURNING id AS xl_nu \gset
+SELECT count(*) AS n_notif_el FROM public.notifications WHERE type IN ('extern_fost_angajat_dezactivat', 'extern_fost_angajat_omonim') \gset
+UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id IN (:el_ana, :el_bog);
+SELECT teste.assert((SELECT activ IS FALSE FROM public.hr_personal_extern WHERE id = :xl_em),
+  'E-LIFECYCLE-1 extern activ nelegat cu EMAILUL fostului angajat → dezactivat automat');
+SELECT teste.assert((SELECT activ IS TRUE FROM public.hr_personal_extern WHERE id = :xl_nume),
+  'E-LIFECYCLE-1 extern activ nelegat potrivit DOAR pe nume → rămâne activ (poate fi altă persoană)');
+SELECT teste.assert((SELECT activ IS TRUE FROM public.hr_personal_extern WHERE id = :xl_nu),
+  'E-LIFECYCLE-1 extern fără potrivire (alt nume de familie în poziția fișei, alt email) → neatins');
+SELECT teste.assert(EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'extern_fost_angajat_dezactivat'
+                             AND message LIKE '%#' || :xl_em || '%')
+    AND EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'extern_fost_angajat_omonim'
+                 AND message LIKE '%#' || :xl_nume || '%')
+    AND NOT EXISTS (SELECT 1 FROM public.notifications WHERE type LIKE 'extern_fost_angajat_%' AND message LIKE '%#' || :xl_nu || ' %'),
+  'E-LIFECYCLE-1 owner-ul primește notificare pentru ambele (dezactivat / omonim), nimic pentru externul fără potrivire');
+SELECT count(*) AS n_notif_el2 FROM public.notifications WHERE type IN ('extern_fost_angajat_dezactivat', 'extern_fost_angajat_omonim') \gset
+UPDATE public.employees SET observatii_hr = 'fără legătură' WHERE id = :el_ana;
+UPDATE public.employees SET termination_date = CURRENT_DATE - 1 WHERE id = :el_bog;   -- rămâne fost angajat: nu e o nouă plecare
+SELECT teste.assert(:n_notif_el2 > :n_notif_el
+    AND (SELECT count(*) FROM public.notifications WHERE type IN ('extern_fost_angajat_dezactivat', 'extern_fost_angajat_omonim')) = :n_notif_el2,
+  'E-LIFECYCLE-1 doar TRECEREA în „fost angajat” declanșează verificarea (alte UPDATE-uri pe fișa deja fostă nu re-notifică)');
+
 \endif
 
 ROLLBACK;
