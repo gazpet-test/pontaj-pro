@@ -29,6 +29,15 @@ COMMIT;
 - Precondițiile cer starea exactă a patch-ului. Postcondițiile cer starea exactă din 29.09.
 - La final, fișierul dezarmează și sesiunea.
 
+## 20261005a — SEC RSVTI P1b + jurnal A (`20261005a_sec_rsvti_p1b_jurnal_insert_ROLLBACK.sql`)
+Readuce starea 20261003c (poarta RPC rămâne): redeschide scrierea directă `rsvti_*` de către HR și INSERT-ul direct în jurnal. Același statut: fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261005a', 'REDESCHIDE_P1B_RSVTI:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiții = exact 20261005a; postcondiții = exact 20261003c (RPC `6185a9dd…`, fără trigger/funcții P1b, INSERT authenticated pe jurnal). Testat în `scripts/test_sec_rsvti_p1b.sh` pasul 6.
 ## 20261003b — SEC Ofertare (APLICAT 01.10, v20261001130000)
 
 Aici stau fișierele de revenire ale patch-ului de securitate Ofertare 20261003b. Nu sunt migrări forward și nu trebuie descoperite ca migrări.
