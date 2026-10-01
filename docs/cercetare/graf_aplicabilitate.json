@@ -1990,5 +1990,357 @@
   "locator": "F3 col. 1-3 (UM și cantitate impuse de proiectant)",
   "nota": "UM-ul din F3 primează față de UM-ul din indicator.",
   "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-10-1995",
+  "to_source_id": "SRC-np-133-2022-vol1",
+  "relatie": "aplica",
+  "locator": "art. 10 (preambul Ordin MDLPA 15/2023)",
+  "nota": "Art. 10 rămas în vigoare după L169/2026.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-10-1995",
+  "to_source_id": "SRC-np-133-2022-vol2",
+  "relatie": "aplica",
+  "locator": "art. 10 (preambul Ordin MDLPA 14/2023)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-10-1995",
+  "to_source_id": "SRC-np-133-2022-vol3",
+  "relatie": "aplica",
+  "locator": "art. 10 (preambul Ordin MDLPA 19/2023)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-np-133-2013",
+  "relatie": "abroga",
+  "locator": "Ordin MDLPA 15/2023 art. 4",
+  "nota": "Abrogă NP 133/1-2013.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-np-133-2013",
+  "relatie": "abroga",
+  "locator": "Ordin MDLPA 14/2023 art. 4",
+  "nota": "Abrogă NP 133/2-2013.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-241-2006",
+  "to_source_id": "SRC-np-133-2022-vol1",
+  "relatie": "interpreteaza",
+  "locator": "art. 3 lit. d), i)",
+  "nota": "Definiția sistemului public = domeniul NP 133 vol. I 1.4.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-241-2006",
+  "to_source_id": "SRC-np-133-2022-vol2",
+  "relatie": "interpreteaza",
+  "locator": "art. 3 lit. e), l)",
+  "nota": "Racord + cămin de racord = rețea publică.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-241-2006",
+  "to_source_id": "SRC-legea-51-2006-anrsc",
+  "relatie": "trimite_la",
+  "locator": "art. 1 alin. (3), art. 26 alin. (1)–(2)",
+  "nota": "Doar definire serviciu și licențiere operatori → neaplicabil executantului.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-51-2006-anrsc",
+  "to_source_id": "SRC-ord-anrsc-100-2023",
+  "relatie": "aplica",
+  "locator": "art. 20 alin. (1) lit. b), art. 21 alin. (2) (preambul Ord. 100/2023)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "abroga",
+  "locator": "art. 576 alin. (3) lit. c) (abrogare parțială; rămân art. 10 și 41)",
+  "nota": "Din runda p1.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-en-805",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (1); 7.3.7 alin. (3); cap. 9 alin. (9)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-6819",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (1); cap. 9 alin. (9); tabel 1.1 poz. 13 («SR 6819»)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-4163",
+  "relatie": "incorporeaza",
+  "locator": "cap. 9 alin. (9), (18); 9.2.1.1 alin. (5); 9.2.7.1 alin. (4); 9.2.7.2 alin. (1), (4), (12)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-8591",
+  "relatie": "incorporeaza",
+  "locator": "7.3.4.1 alin. (3); 9.1.2 alin. (2)–(3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-9312-87",
+  "relatie": "incorporeaza",
+  "locator": "7.2.5.5 alin. (2); 9.2.7.5 alin. (1)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-6054",
+  "relatie": "incorporeaza",
+  "locator": "7.2.1 alin. (2) lit. f) + tabel 1.1 poz. 57",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-9824-5",
+  "relatie": "incorporeaza",
+  "locator": "7.3.3 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-9570-1",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (6) lit. h); cap. 9 alin. (14) lit. h)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-1913-13",
+  "relatie": "incorporeaza",
+  "locator": "7.3.5 alin. (13); 7.3.8 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-en-124",
+  "relatie": "incorporeaza",
+  "locator": "9.2.7.1 alin. (4) lit. a); 9.2.7.2 alin. (1) lit. d)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-en-16907",
+  "relatie": "incorporeaza",
+  "locator": "7.3.1 alin. (9)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-hg-668-2017",
+  "relatie": "trimite_la",
+  "locator": "7.1.3 alin. (2) lit. a)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-oms-275-2012",
+  "relatie": "trimite_la",
+  "locator": "7.1.3 alin. (2) lit. b); tabel 1.2 poz. 7",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-hg-930-2005",
+  "relatie": "trimite_la",
+  "locator": "7.2.7 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "trimite_la",
+  "locator": "7.3.1 alin. (4)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-1343-1",
+  "relatie": "trimite_la",
+  "locator": "tabel 1.1 poz. 2",
+  "nota": "Doar proiectare.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-np-133-2022-vol3",
+  "relatie": "trimite_la",
+  "locator": "6.3 alin. (3) (pereți bazine aspirație)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-1610",
+  "relatie": "incorporeaza",
+  "locator": "3.6.1 alin. (10)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-805",
+  "relatie": "incorporeaza",
+  "locator": "3.4.5 alin. (4) lit. e) («SR EN 805:2000»)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-8591",
+  "relatie": "incorporeaza",
+  "locator": "3.4.1 alin. (8)–(9); 3.4.3.1.4 alin. (1) lit. b) («STAS 8591»)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-9312-87",
+  "relatie": "incorporeaza",
+  "locator": "3.4.6 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-6054",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.1.4 alin. (1) lit. a)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-9570-1",
+  "relatie": "incorporeaza",
+  "locator": "3.6.1 alin. (12) lit. h)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-12050-1",
+  "relatie": "incorporeaza",
+  "locator": "3.6.2 alin. (14)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-16907",
+  "relatie": "incorporeaza",
+  "locator": "3.6.2 alin. (16)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-124",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.5.1 alin. (3) lit. d); 3.4.3.5.5 alin. (4) lit. a) pct. v)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-752",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.5.1 alin. (3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-2448-sr-en-1917",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.5.1 alin. (3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-np-133-2022-vol1",
+  "relatie": "trimite_la",
+  "locator": "3.6 alin. (1) (execuție conform vol. I cap. 7.3); 3.4.10 alin. (1) (materiale, vol. I 7.1.3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-hg-668-2017",
+  "relatie": "trimite_la",
+  "locator": "3.4.10 alin. (3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-legea-107-1996-ape",
+  "relatie": "trimite_la",
+  "locator": "tabel 1.2 poz. 2; 3.4.6 alin. (4) (aviz administrator curs de apă)",
+  "nota": "Aviz gospodărire ape: deja în REQ-SC-087…094 — nu se duplică.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-legea-107-1996-ape",
+  "relatie": "trimite_la",
+  "locator": "tabel 1.2 poz. 1; 7.2.5.5 alin. (4)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol3",
+  "to_source_id": "SRC-stas-4165",
+  "relatie": "incorporeaza",
+  "locator": "5.1.13 alin. (6)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "interpreteaza",
+  "locator": "— (fără trimitere directă)",
+  "nota": "Distanțe apă/canal–gaze: SR 8591 prin NP 133 + NTPEE art. 29–30 (REQ-SC-114), cumulativ.",
+  "tema": "apa_canal"
  }
 ]

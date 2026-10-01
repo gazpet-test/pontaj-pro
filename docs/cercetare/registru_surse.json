@@ -875,6 +875,29 @@
   "nota": "Art. 5: proprietarii/investitorii încheie contracte distincte de verificare. Art. 6: verificatorul doar pe specialitățile atestate, nu propriile proiecte. Cazurile de obligativitate pe cerințe NU au fost citite."
  },
  {
+  "source_id": "SRC-hg-930-2005",
+  "tip": "hg",
+  "cod": "HG 930/2005",
+  "titlu": "Norme speciale privind caracterul și mărimea zonelor de protecție sanitară și hidrogeologică",
+  "emitent": "Guvernul României",
+  "editie": "necitit",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Trimis de NP 133 vol. I 7.2.7(2) pentru aducțiuni; obligația revine proiectului/beneficiarului.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
   "source_id": "SRC-i22",
   "tip": "normativ",
   "cod": "Normativ I 22-99",
@@ -1648,26 +1671,27 @@
   "cod": "Legea 241/2006 (republicată)",
   "titlu": "Legea serviciului de alimentare cu apă și de canalizare",
   "emitent": "Parlamentul României",
-  "editie": "republicată, cu modificări ulterioare (versiunea 2026 neverificată)",
+  "editie": "Republicată (MO 679/07.09.2015), cu modificări ulterioare — formă consolidată ANRSC (docx încărcat 01/2025); lista actelor modificatoare după 2015 neconfirmată",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://www.anrsc.ro/alimentare-cu-apa-si-canalizare/legislatie/",
+  "url_oficial": "https://www.anrsc.ro/wp-content/uploads/2025/01/Legea-nr-241-din-2006-apa-canaliz-modif-compl-ult.docx",
   "urluri_secundare": "https://www.anrsc.ro/alimentare-cu-apa-si-canalizare/legislatie/",
   "acces": "public",
   "domenii": [
    "tehnic_gaze_apa"
   ],
   "ultima_verificare": "2026-10-01",
-  "verificat_pe_sursa_primara": false,
+  "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "legea-241-2006",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": "doar_referinta",
-  "motiv_aplicabilitate": "Licența ANRSC privește operatorii, nu executantul."
+  "snapshot_sha256": "ee633eea77cd0296607b397bf110e4890b03b4a092e83027adf64cb3d95a921e",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Art. 3 (branșament/racord = rețea publică; aviz de branșare/racordare), art. 28 alin. (4) (răspunderea executantului), alin. (7) (recepție APL). Licența art. 26 = doar operatori.",
+  "nota": "Copie secundară: acilfov.ro (ultim amendament 29.12.2018), sha f9161276…."
  },
  {
   "source_id": "SRC-legea-283-2024",
@@ -1793,14 +1817,15 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "legea-51-2006-anrsc",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "neaplicabil",
+  "motiv_aplicabilitate": "Reglementează serviciul și licențierea operatorilor; nu impune cerințe executantului. Exclus din graful de execuție (trimitere doar din L241 art. 1 alin. (3), art. 26).",
+  "nota": "Textul L51 necitit; regulamentul de licențiere identificat: Ordin ANRSC 100/2023."
  },
  {
   "tip": "lege",
@@ -2050,7 +2075,7 @@
   "cod": "NP 133-2022 vol. I (Ordin MDLPA 15/2023)",
   "titlu": "Normativ privind proiectarea, execuția și exploatarea sistemelor de alimentare cu apă și canalizare ale localităților — Vol. I Sisteme de alimentare cu apă",
   "emitent": "MDLPA",
-  "editie": "Ordin 15/05.01.2023, MO 43 și 43 bis/16.01.2023; în vigoare la 30 zile de la publicare; abrogă NP 133/1-2013",
+  "editie": "Ordin MDLPA 15/05.01.2023, MO I 43/16.01.2023 (anexa în MO 43 bis); în vigoare la 30 de zile; art. 3 tranziție; art. 4 abrogă NP 133/1-2013",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -2070,7 +2095,7 @@
   "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Gazpet ofertant apă-canal; trimite explicit la SR EN 805, SR 4163-3, STAS 6819.",
-  "nota": "Snapshot = PDF drimand.ro cu vol. I-III (MO 41 bis/43 bis 2023)."
+  "nota": "Citit integral cap. 1, 6.3, 7.1.3, 7.2.1, 7.2.5.5, 7.2.7, 7.3.1–7.3.8, 9.1.2–9.1.3, 9.2.7.x, «Execuția rețelelor de distribuție». Inconsecvență: «SR 6819» (tabel 1.1) vs «STAS 6819» (7.3.6). NP 133 nu dă durata probei de presiune → SR EN 805/proiect."
  },
  {
   "source_id": "SRC-np-133-2022-vol2",
@@ -2078,7 +2103,7 @@
   "cod": "NP 133-2022 vol. II (Ordin MDLPA 14/2023)",
   "titlu": "Normativ NP 133-2022 — Vol. II Sisteme de canalizare",
   "emitent": "MDLPA",
-  "editie": "Ordin 14/05.01.2023, MO 41 și 41 bis/13.01.2023; vol. III (structuri hidroedilitare din beton) — Ordin 19/2023, MO 44/16.01.2023",
+  "editie": "Ordin MDLPA 14/05.01.2023, MO I 41/13.01.2023 (anexa în MO 41 bis); art. 4 abrogă NP 133/2-2013",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -2097,7 +2122,31 @@
   "snapshot_sha256": "481bd4e244b60d8fc868f7e66b7223dfe181e4adb6f9b355dfd46da4ff59549e",
   "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Canalizare; trimite explicit la SR EN 1610."
+  "motiv_aplicabilitate": "Canalizare; trimite explicit la SR EN 1610.",
+  "nota": "Citit 3.4.1, 3.4.3.1.2–3.4.3.1.5, 3.4.3.5.1, 3.4.3.5.5, 3.4.5, 3.4.6, 3.4.10, 3.6–3.6.2. «STAS 8591» în 3.4.3.1.4 = SR 8591 (tabel 1.1 poz. 46)."
+ },
+ {
+  "source_id": "SRC-np-133-2022-vol3",
+  "tip": "normativ",
+  "cod": "NP 133-2022 vol. III (Ordin MDLPA 19/2023)",
+  "titlu": "NP 133-2022 vol. III — Structuri hidroedilitare din beton armat și beton precomprimat",
+  "emitent": "MDLPA",
+  "editie": "Ordin 19/05.01.2023, MO I 44/16.01.2023, anexa în MO 44 bis",
+  "data_publicarii": "2023-01-16",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://www.drimand.ro/download/62%20NORMATIV%20NP%20133-2022.pdf",
+  "acces": "public",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Bazine/chesoane SP și rezervoare din beton; proba de etanșeitate STAS 4165 (5.1.13).",
+  "snapshot_sha256": "481bd4e244b60d8fc868f7e66b7223dfe181e4adb6f9b355dfd46da4ff59549e",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "nota": "Același PDF drimand.ro (pag. 666–858). Data ordinului verificată (5 ianuarie 2023)."
  },
  {
   "source_id": "SRC-nt-amonte-2025",
@@ -2336,6 +2385,29 @@
   "ofertare_normative_id": null,
   "verificat_pe_sursa_primara": true,
   "note": "Modificările 2020–2026 neverificate; cnadnr.ro nu a răspuns."
+ },
+ {
+  "source_id": "SRC-oms-275-2012",
+  "tip": "ordin",
+  "cod": "Ordin MS 275/2012",
+  "titlu": "Procedura de reglementare sanitară pentru produsele în contact cu apa potabilă",
+  "emitent": "Ministerul Sănătății",
+  "editie": "necitit (cu modificări ulterioare)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NP 133 vol. I 7.1.3(2)b + tabel 1.2 poz. 7: aviz sanitar pentru materialele de apă potabilă.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
  },
  {
   "source_id": "SRC-ord-anre-132-2021",
@@ -2628,6 +2700,29 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "ultima_verificare": "2026-10-02"
+ },
+ {
+  "source_id": "SRC-ord-anrsc-100-2023",
+  "tip": "ordin",
+  "cod": "Ordin ANRSC 100/2023",
+  "titlu": "Regulamentul privind acordarea licențelor în domeniul serviciilor de utilități publice din sfera ANRSC",
+  "emitent": "ANRSC",
+  "editie": "20.02.2023 (număr MO necitit)",
+  "data_publicarii": "2023-02-20",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://www.anrsc.ro/wp-content/uploads/2023/03/Ordinul-presedintelui-ANRSC-nr.-100-din-2023-pentru-aprobarea-Regulamentului-privind-acordarea-licentelor-in-domeniul-serviciilor-de-utilitati-publice-aflate-in-sfera-de-reglementare-a-ANRSC.docx",
+  "acces": "public",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Arată că licența ANRSC se acordă operatorilor (art. 13) → argument contra cerinței de licență pentru executant.",
+  "snapshot_sha256": "de6f221f282e90fb8dda78b4a7931eeeafe5edce1064445b8116fb5edd979870",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "nota": "Modificări ulterioare (ex. tarife Ord. 14/2024, 687/2024) neanalizate."
  },
  {
   "source_id": "SRC-ordin-1014-874-2001-formulare-c",
@@ -3405,14 +3500,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-1343-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Citat de NP 133 vol. I doar în tabelul 1.1 (calcul cantități de apă — proiectare)."
  },
  {
   "source_id": "SRC-sr-4163",
@@ -3440,6 +3535,29 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "SR 4163-3 încorporat prin NP 133-2022 vol. I cap. 9 alin. (9)."
+ },
+ {
+  "source_id": "SRC-sr-8591",
+  "tip": "standard",
+  "cod": "SR 8591",
+  "titlu": "Rețele edilitare subterane. Condiții de amplasare",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. I 7.3.4.1(3), 9.1.2(2); vol. II 3.4.1(8) — distanțe între rețele (inclusiv gaze).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
  },
  {
   "source_id": "SRC-sr-en-10204",
@@ -3550,6 +3668,29 @@
   "motiv_aplicabilitate": "SR EN 12007-2:2012 încorporat doar la calculul PE PI (NTPEE art. 50^1); restul seriei = recomandare."
  },
  {
+  "source_id": "SRC-sr-en-12050-1",
+  "tip": "standard",
+  "cod": "SR EN 12050-1",
+  "titlu": "Stații de pompare ape uzate pentru clădiri — Partea 1 (titlu ASRO neverificat)",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. II 3.6.2(14) pentru proba SPAU.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
   "source_id": "SRC-sr-en-12068",
   "tip": "standard",
   "cod": "SR EN 12068:2002",
@@ -3605,6 +3746,29 @@
   "motiv_aplicabilitate": "Nu e trimis de NTPEE; valorile de probă = NTPEE Tab. 8/8^1."
  },
  {
+  "source_id": "SRC-sr-en-124",
+  "tip": "standard",
+  "cod": "SR EN 124-1…-6",
+  "titlu": "Dispozitive de acoperire și închidere pentru cămine și guri de scurgere",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. I 9.2.7.x și vol. II 3.4.3.5.x.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
   "source_id": "SRC-sr-en-12732",
   "tip": "standard",
   "cod": "SR EN 12732+A1:2014",
@@ -3654,6 +3818,29 @@
   "snapshot_data": null,
   "ultima_verificare": "2026-10-01",
   "note": ""
+ },
+ {
+  "source_id": "SRC-sr-en-12889",
+  "tip": "standard",
+  "cod": "SR EN 12889",
+  "titlu": "Execuția fără tranșee și încercarea racordurilor și rețelelor de canalizare (titlu neverificat)",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "NU e citat de NP 133-2022 (căutare în vol. I–III) → voluntar; obligatoriu doar dacă DA îl invocă.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
  },
  {
   "source_id": "SRC-sr-en-12954",
@@ -3892,6 +4079,29 @@
   "note": ""
  },
  {
+  "source_id": "SRC-sr-en-16907",
+  "tip": "standard",
+  "cod": "SR EN 16907-1…-5",
+  "titlu": "Terasamente",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. I 7.3.1(9); vol. II 3.6.2(16).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
   "source_id": "SRC-sr-en-1775",
   "tip": "standard",
   "cod": "SR EN 1775:2008 (EN 1775:2007)",
@@ -3936,14 +4146,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-752",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. II 3.4.3.5.1 alin. (3) (cămine de vizitare)."
  },
  {
   "source_id": "SRC-sr-en-805",
@@ -3970,7 +4180,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. I 7.3.6 și cap. 9 alin. (9)."
+  "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. I 7.3.6 și cap. 9 alin. (9).",
+  "nota": "NP 133-2022 vol. II 3.4.5 alin. (4) lit. e) citează explicit «SR EN 805:2000»; vol. I nedatat (cea mai recentă ediție, 1.6 alin. (2))."
  },
  {
   "source_id": "SRC-sr-en-837",
@@ -4705,6 +4916,52 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-stas-1913-13",
+  "tip": "standard",
+  "cod": "STAS 1913/13",
+  "titlu": "Teren de fundare. Determinarea caracteristicilor de compactare. Încercarea Proctor",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. I 7.3.5(13), 7.3.8(2).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
+  "source_id": "SRC-stas-2448-sr-en-1917",
+  "tip": "standard",
+  "cod": "STAS 2448; SR EN 1917",
+  "titlu": "Canalizări. Cămine de vizitare (STAS 2448); Cămine de vizitare și de racord din beton (SR EN 1917)",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporate prin NP 133 vol. II 3.4.3.5.1(3).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
   "source_id": "SRC-stas-2484-sr-8050",
   "tip": "standard",
   "cod": "STAS 2484-85; SR 8050",
@@ -4728,9 +4985,55 @@
   "note": ""
  },
  {
+  "source_id": "SRC-stas-4165",
+  "tip": "standard",
+  "cod": "STAS 4165",
+  "titlu": "Probă de etanșeitate a recipientelor din beton (titlu exact neverificat)",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. III 5.1.13(6).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
+  "source_id": "SRC-stas-6054",
+  "tip": "standard",
+  "cod": "STAS 6054",
+  "titlu": "Teren de fundare. Adâncimi maxime de îngheț",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. II 3.4.3.1.4(1)a; vol. I prin 7.2.1(2)f + tabel 1.1 poz. 57.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
   "source_id": "SRC-stas-6819",
   "tip": "standard",
-  "cod": "STAS 6819",
+  "cod": "STAS 6819 / «SR 6819»",
   "titlu": "Alimentări cu apă. Aducțiuni (prescripții de proiectare și execuție)",
   "emitent": "ASRO",
   "editie": "ediție neverificată (citat de NP 133-2022 la proba de presiune)",
@@ -4752,7 +5055,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. I."
+  "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. I.",
+  "nota": "NP 133-2022 vol. I folosește ambele indicative (tabel 1.1 poz. 13 «SR 6819 … Studii, prescripții de proiectare și de execuție»; 7.3.6 «STAS 6819»). Ediția în vigoare se confirmă la ASRO."
  },
  {
   "source_id": "SRC-stas-7335",
@@ -4818,14 +5122,60 @@
    "gaze",
    "apa_canal"
   ],
-  "aplicabilitate_gazpet": "conditionata",
-  "motiv_aplicabilitate": "Incorporat prin referință de Ordinul MTI 1668/2023 pct. 3.4.4 alin. (3) pentru subtraversări DN; apare în NTPEE anexa 2 poz. 64.",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Încorporat și prin NP 133-2022 vol. I 7.2.5.5 alin. (2), 9.2.7.5 alin. (1) și vol. II 3.4.6 alin. (2) (apă-canal), pe lângă Ord. MTI 1668/2023.",
   "snapshot_sha256": null,
   "snapshot_data": null,
   "ultima_verificare": "2026-10-01",
   "ofertare_normative_id": null,
   "verificat_pe_sursa_primara": false,
   "note": "Statutul ASRO (în vigoare/anulat) nu a fost verificat; conținutul nu a fost citit."
+ },
+ {
+  "source_id": "SRC-stas-9570-1",
+  "tip": "standard",
+  "cod": "STAS 9570/1",
+  "titlu": "Marcarea și reperarea rețelelor de conducte și cabluri, în localități",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. I 7.3.6(6)h; vol. II 3.6.1(12)h.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
+ },
+ {
+  "source_id": "SRC-stas-9824-5",
+  "tip": "standard",
+  "cod": "STAS 9824/5",
+  "titlu": "Măsurători terestre. Trasarea pe teren a rețelelor de conducte, canale și cabluri",
+  "emitent": "ASRO",
+  "editie": "ediție neverificată (catalog ASRO necitit)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://www.asro.ro",
+  "acces": "metadata_only",
+  "domenii": [
+   "apa_canal"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Încorporat prin NP 133 vol. I 7.3.3(2).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "nota": ""
  },
  {
   "source_id": "SRC-utcn-224ci-2018",
