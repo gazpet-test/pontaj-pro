@@ -639,11 +639,11 @@ Pentru alte decizii pe aceste teme, vezi lucrarea de decizii CNSC a celorlalți 
 
 - Răspundem la fiecare articol cerut (3130/2024, 1923/2022).
 - Ancorăm răspunsul în pagina din oferta inițială (2774/2022).
-- Nu schimbăm prețuri unitare peste pragul de 1% (159/2024). Nuanță BO2025_187: retransmiterea întregii propuneri financiare nu face singură oferta inacceptabilă dacă AC analizează doar elementele cerute — inacceptabilă e introducerea de modificări necerute.
+- Abaterile tehnice corectate trebuie să rămână ≤ 1% din preț, cumulat (159/2024; HG 395 art. 134 alin. (9) lit. a)); nu prezentăm schimbări de cantități/prețuri drept „erori aritmetice”. Nuanță BO2025_187: retransmiterea întregii propuneri financiare nu face singură oferta inacceptabilă dacă AC analizează doar elementele cerute — inacceptabilă e introducerea de modificări necerute.
 - Pentru PNS: tarif orar explicit peste minim, oferte de la furnizori, utilaje proprii, transport inclus (104/2025, 448/2021).
 
 **Completări din practica CNSC (sinteză orchestrator):**
 - Termenele de răspuns la comisie: max. 15 zile lucrătoare inclusiv prelungirea (L98 art. 209 alin. (3)); documente justificative primul clasat 7+3 zile lucrătoare (art. 196 alin. (2)); garanția de participare — 3 zile (HG 395 art. 132 alin. (3)).
-- Corecturi la propunerea financiară: doar erori aritmetice / abateri minore, **cumulat sub 1% din prețul total** (HG 395 art. 137; BO2024_159 — 1,14% → respinsă).
+- Corecturi la propunerea financiară: erori aritmetice (fără prag) și abateri tehnice minore — o abatere nu e minoră dacă valoarea ei teoretică cumulată depășește **1% din prețul total** (HG 395 art. 134 alin. (9) lit. a); BO2024_159 — 1,14% → inacceptabilă).
 - Nu adăugăm la clarificări elemente obligatorii lipsă din propunerea tehnică (proceduri, activități Gantt) — BO2023_140, BO2022_1964.
 - La PNS: justificare pe FIECARE articol cerut, cu documente (BO2024_3130, BO2022_1923); tarif orar ≥ minim construcții calculat corect (BO2020_2124).

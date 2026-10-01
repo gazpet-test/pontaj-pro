@@ -52,7 +52,7 @@
    - cauțiunea: sub prag maximum 35.000 lei (contestarea documentației) sau 88.000 lei (rezultatul); peste prag maximum **220.000 / 2.000.000 lei** (corectat: înainte scria 880.000);
    - plângerea la curtea de apel se depune în 10 zile; notificarea prealabilă a fost abrogată.
 4. **Clarificări la ofertă:**
-   - corectarea prețurilor e permisă doar dacă modificările rămân **sub 1% din prețul total** (BO2024_159: la 1,14% oferta a fost respinsă);
+   - o abatere tehnică corectată e „minoră” doar dacă valoarea ei teoretică cumulată rămâne **≤ 1% din prețul total** (HG 395 art. 134 alin. (9) lit. a); BO2024_159: 1,14% → inacceptabilă); erorile aritmetice se corectează fără prag, dar schimbarea de cantități/prețuri nu e „eroare aritmetică”;
    - elementele obligatorii lipsă din propunerea tehnică (proceduri, Gantt) nu se mai pot adăuga;
    - răspunsul trebuie dat pe fiecare articol cerut;
    - prețurile justificate trebuie să fie identice cu cele din C6/F3.

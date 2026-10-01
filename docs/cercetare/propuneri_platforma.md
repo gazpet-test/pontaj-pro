@@ -25,7 +25,7 @@
 | P0.3 | **Injectarea catalogului în generator**: `catalog_clarificari.md` (67 șabloane, coduri `CL-X00`) + regulile de aur CNSC trimise ca context în `ofertare-clarificari-propune`; fiecare propunere returnează `cod_sablon` + `temei[]` + `precedent_cnsc[]`. | Azi propunerile n-au temei normativ; o clarificare cu temei și precedent e greu de ignorat de AC. | edge fn (cod) |
 | P0.4 | **Detector de acte/ediții depășite în DA** (listă de cuvinte-cheie → șablon): „132/2021”, „182/2020”, „Legea 50/1991”, „Legea 10/1995”, „863/2008”, „NP 133-2013”, „PT CR 9-2013”, „Ordin 32/2012”, „etanșeitate 24 ore”, „licență ANRSC”, „SR EN 12068:1999”, „3834-2:2006”, „HG 395 art. 164” … | Determinist, fără AI; produce întrebări CL-A gata făcute. | `ofertareControale.js` |
 | P0.5 | **Prag PNS**: alertă când oferta proprie < 80% VE (HG 395 art. 136 alin. (4)) → pornește dosarul de justificare; pentru concurenți < 80% fără cerere de justificare → motiv de contestare. | BO2023_1788, BO2025_104, BO2024_3130. | poartă |
-| P0.6 | **Regula 1%** la răspunsurile noastre la clarificări: Σ modificări / preț total, blocant ≥ 1%. | BO2024_159 (1,14% → respinsă). | `OfertareClarificariAC.jsx` |
+| P0.6 | **Regula 1% (abateri tehnice)** la răspunsurile noastre la clarificări: Σ |valoarea teoretică a abaterilor/omisiunilor tehnice corectate| / preț total, blocant > 1% (HG 395 art. 134 alin. (9) lit. a)); erorile aritmetice separat, fără prag. | BO2024_159 (1,14% → respinsă). | `OfertareClarificariAC.jsx` |
 
 ### P1 — tabele mici + controale deterministe
 

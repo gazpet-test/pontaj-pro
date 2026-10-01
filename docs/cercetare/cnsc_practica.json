@@ -8558,7 +8558,7 @@
    "clarificari_oferta",
    "eroare_aritmetica"
   ],
-  "regula": "Corecturile din propunerea financiară acceptate la clarificări sunt doar: erori aritmetice și abateri tehnice minore, cumulat sub 1% din prețul total; schimbarea prețurilor unitare peste acest prag = ofertă inacceptabilă.",
+  "regula": "O abatere/omisiune tehnică corectată la clarificări NU e „minoră” dacă cuantificarea ei teoretică în valoare monetară (cumulat, în plus și în minus) depășește 1% din prețul total (HG 395 art. 134 alin. (9) lit. a)) → ofertă inacceptabilă (alin. (6)). Erorile aritmetice se corectează fără prag valoric (alin. (10)), dar schimbarea cantităților/prețurilor unitare prezentată ca „eroare” nu e eroare aritmetică. În speță: 1,14% = cuantificarea tuturor abaterilor (inclusiv 3% indirecte + 3% profit).",
   "temei_legal": [
    "HG 395/2016 art. 134 alin. (5),(6),(9)",
    "Legea 98/2016 art. 209"
@@ -8609,7 +8609,8 @@
   "snapshot_data": "2026-10-01",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "331d7fadbeabf8909720135ae7b2ab74cb7ea83cbb1bcb5904ac7e853082be8a",
-  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate).",
+  "regula_initiala": "Corecturile din propunerea financiară acceptate la clarificări sunt doar: erori aritmetice și abateri tehnice minore, cumulat sub 1% din prețul total; schimbarea prețurilor unitare peste acest prag = ofertă inacceptabilă."
  },
  {
   "id": "CNSC-BO2022_1028",

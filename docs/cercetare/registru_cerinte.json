@@ -1510,8 +1510,8 @@
   "requirement_id": "REQ-AD-061",
   "source_id": "SRC-CNSC-BO2024_159",
   "editie": "Decizie CNSC BO2024_159",
-  "locator": "motivare (HG 395 art. 134 alin. (5), (6), (9))",
-  "cerinta": "Corecturile din propunerea financiară acceptate la clarificări sunt doar erorile aritmetice și abaterile minore cumulat sub 1%; modificarea prețurilor unitare cu efect de 1,14% din total a făcut oferta inacceptabilă.",
+  "locator": "motivare (HG 395 art. 134 alin. (5), (6), (9) lit. a), (10))",
+  "cerinta": "La clarificări, propunerea financiară se poate corecta doar pentru erori aritmetice (calcule greșite, HG 395 art. 134 alin. (10)) sau abateri tehnice minore; o abatere/omisiune NU e minoră dacă cuantificarea ei depășește 1% din prețul total (art. 134 alin. (9) lit. a)). Completarea unor articole omise din F3, schimbarea cantităților și a unor prețuri unitare (cumulat ≈1,14% din ofertă) nu sunt erori aritmetice — oferta a fost corect respinsă ca inacceptabilă (art. 134 alin. (5)-(6)).",
   "conditii_aplicabilitate": "Răspuns la clarificări cu modificări de prețuri unitare.",
   "temei_tip": "PRACTICA_CNSC",
   "obligatoriu_de_ce": "Decizie CNSC — obligatorie doar inter partes; arată cum aplică CNSC norma",
@@ -1529,6 +1529,7 @@
   "note": "",
   "comparabilitate": "Lucrări (apă-canal) — aceeași regulă de evaluare a PF.",
   "requirement_parinte": "REQ-AD-058",
+  "audit_qa": "GREȘIT",
   "tema": "achizitii_deviz"
  },
  {
@@ -3019,7 +3020,7 @@
   "requirement_id": "REQ-AD-121",
   "source_id": "SRC-CNSC-BO2025_1837",
   "editie": "Decizie CNSC 1837/C1/1961 (01.07.2025)",
-  "locator": "motivare (L98 art. 154 alin. (1), art. 187, 189)",
+  "locator": "motivare (L98 art. 154 alin. (1), art. 2 alin. (2); L101 art. 26 alin. (2) și (7)); art. 187/189 L98 doar în argumentele contestatorului",
   "cerinta": "Un factor de evaluare cu algoritm bazat pe noțiuni nedefinite (ex. „tronsoane” inexistente în SF) sau pe documente inexistente (PT la P+E) viciază procedura și duce la anulare.",
   "conditii_aplicabilitate": "Factori de evaluare neclari.",
   "temei_tip": "PRACTICA_CNSC",
@@ -3038,6 +3039,7 @@
   "note": "",
   "comparabilitate": "P+E rețele gaze — identic.",
   "requirement_parinte": "REQ-AD-010",
+  "audit_qa": "NUANȚĂ",
   "tema": "achizitii_deviz"
  },
  {
@@ -6549,11 +6551,11 @@
   "requirement_id": "REQ-TG-116",
   "source_id": "SRC-delgaz-st-505",
   "editie": "Delgaz Grid ST 505 A5 (01.2023)",
-  "locator": "ST 505 — documente",
+  "locator": "cap. 6.7 „Cerințe privind documentele însoțitoare ale produsului” (+ lista „la livrare”)",
   "cerinta": "Aparatele EF trebuie să aibă agrement tehnic + aviz CTPC (cu trimitere la NTPEE art. 239 alin. 2) și declarație de conformitate.",
-  "conditii_aplicabilitate": "Idem.",
+  "conditii_aplicabilitate": "Furnizare de aparate EF către Delgaz sau DA Delgaz care trimite la ST 505.",
   "temei_tip": "OBLIGATORIE_DOC_ACHIZITIE",
-  "obligatoriu_de_ce": "DA → ST 505; cerința de agrement e oricum obligatorie prin NTPEE art. 239 alin. (2).",
+  "obligatoriu_de_ce": "ST 505 (Delgaz Grid, A5/01.2023) se aplică achizițiilor Delgaz de aparate EF; pentru Gazpet devine obligatorie doar când DA/contractul o invocă. Independent, NTPEE art. 239 alin. (2) cere aparate de sudare PE agrementate tehnic (fără aviz CTPC).",
   "evidenta_ceruta": [
    "Agrement tehnic",
    "Aviz CTPC"
@@ -6567,6 +6569,7 @@
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "audit_qa": "NUANȚĂ",
   "tema": "tehnic"
  },
  {
@@ -8970,7 +8973,7 @@
   "editie": "Legea 53/2003 (Codul muncii) republicată, text legeaz.net etichetat «actualizat 2020», consultat 01.10.2026",
   "locator": "art. 142 alin. (1)–(2)",
   "cerinta": "Munca în zilele de sărbătoare legală se compensează cu timp liber în următoarele 30 de zile sau, dacă nu se poate, cu un spor de cel puțin 100% din salariul de bază.",
-  "conditii_aplicabilitate": "Lucrări urgente în zile de sărbătoare.",
+  "conditii_aplicabilitate": "Salariați care lucrează în zile de sărbătoare legală în unitățile/locurile de muncă prevăzute la art. 140–141 CM (activitate ce nu poate fi întreruptă); pentru alte cazuri de muncă în sărbători, verifică CCM/regulamentul intern.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Legea 53/2003 art. 142.",
   "evidenta_ceruta": [
@@ -8988,7 +8991,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "Lista sărbătorilor din art. 139 de pe legeaz.net este depășită (lipsesc zilele adăugate din 2024); verifică lista pe sursă oficială înainte de calculul orelor lucrătoare.",
+  "note": "Lista sărbătorilor din art. 139 de pe legeaz.net este depășită (lipsesc zilele adăugate din 2024); verifică lista pe sursă oficială înainte de calculul orelor lucrătoare. [Audit QA 02.10] Corectați url_oficial al SRC-legea-53-2003-codul-muncii (trimite la art-123). Lista sărbătorilor (art. 139) de verificat pe sursă oficială.",
+  "audit_qa": "NUANȚĂ",
   "tema": "santier_conex"
  },
  {
@@ -9658,7 +9662,7 @@
   "source_id": "SRC-ordin-mt-1668-2023",
   "editie": "Ordin MTI 1668/14.09.2023, Norme tehnice drumuri de interes național (forma publicată în MO, fără modificări ulterioare)",
   "locator": "Anexă pct. 3.4.4 alin. (1)–(2)",
-  "cerinta": "Subtraversările DN cu conducte se fac prin forare orizontală, cu conducta în tub de protecție sub ampriză și zona de siguranță, cu cămin în aval (în afara zonei de siguranță) pentru lichide sau conductă de aerisire pentru gaze.",
+  "cerinta": "Subtraversările drumurilor (DN) cu conducte se fac prin forare orizontală, cu conducta în tub de protecție sub ampriză și zona de siguranță; pentru lichide — cămin în aval, în afara zonei de siguranță; pentru gaze — conductă de aerisire. Excepțional (alin. (2)), căminul poate fi în zona de siguranță când limita ei coincide cu limita proprietăților, relieful e restrictiv sau amplasamentul e condiționat de alte instalații.",
   "conditii_aplicabilitate": "Subtraversări DN.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Ordin MTI 1668/2023.",
@@ -9675,6 +9679,7 @@
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "audit_qa": "NUANȚĂ",
   "tema": "santier_conex"
  },
  {
@@ -10944,7 +10949,7 @@
   "source_id": "SRC-ord-anre-239-2019",
   "editie": "Normă tehnică aprobată prin Ordin ANRE 239/2019, consolidare 14.03.2024 (Ord. 67/2020, 225/2020, 106/2023)",
   "locator": "art. 21 pct. 2 lit. a); pct. 3 lit. a)–b)",
-  "cerinta": "La cablurile electrice de medie/joasă tensiune pozate în pământ, zona de protecție coincide cu zona de siguranță, e simetrică față de axul traseului, are 0,8 m lățime și cel puțin 0,8 m adâncime de pozare; la cablurile în elemente prefabricate, zonele sunt mai mari (1 m, plus 0,5 m siguranță).",
+  "cerinta": "LES MT/JT pozate în pământ: zona de protecție coincide cu zona de siguranță, e simetrică față de ax, lățime 0,8 m, adâncime de pozare ≥ 0,8 m. LES în elemente prefabricate din beton: zona de protecție = lățimea prefabricatului, min. 1 m lățime și 1 m adâncime la MT (1,3 m adâncime la 110 kV), plus zonă de siguranță de 0,5 m în plan orizontal și în adâncime.",
   "conditii_aplicabilitate": "Săpături lângă LES.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Legea 123/2012 art. 15 → Ordin ANRE 239/2019.",
@@ -10964,6 +10969,7 @@
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "audit_qa": "NUANȚĂ",
   "tema": "santier_conex"
  },
  {
@@ -14651,7 +14657,7 @@
   "source_id": "SRC-hg-1-2018",
   "editie": "Text actualizat AFIR cu HG 965/2023 (MO 17.10.2023); Anexa 1 (execuție) — hg1.pdf sha256 54fbafbf…",
   "locator": "Anexa 1, cl. 69b.1",
-  "cerinta": "Beneficiarul are aceleași reguli: își notifică revendicarea (prelungirea garanției sau compensații) în 30 de zile de la eveniment sau de la data la care a aflat de el, altfel pierde dreptul pentru perioada anterioară.",
+  "cerinta": "Beneficiarul notifică revendicarea (prelungirea Perioadei de Garanție și/sau compensații) în 30 de zile de la apariția evenimentului, cu excepția cazului în care dovedește că nu avea cunoștință de el; dacă notifică mai târziu, suportă riscurile și consecințele produse până la data situată cu 30 de zile înaintea notificării.",
   "conditii_aplicabilitate": "Contract de lucrări pe modelul HG 1/2018 Anexa 1 (obligatoriu ≥ prag art. 7 alin. (1) lit. a) L98; facultativ sub prag)",
   "temei_tip": "OBLIGATORIE_DOC_ACHIZITIE",
   "obligatoriu_de_ce": "L98 art. 235 alin. (4) → HG 1/2018 art. 1 → Anexa 1 (Condiții Generale), aplicată prin contractul din DA",
@@ -14667,6 +14673,7 @@
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "audit_qa": "NUANȚĂ",
   "tema": "p1"
  },
  {
@@ -18292,7 +18299,7 @@
   "requirement_id": "REQ-P2-102",
   "source_id": "SRC-ntpee-2018",
   "editie": "NTPEE-2018 consolidat după Ord. ANRE 2/2023 (formă valabilă 31.01.2023)",
-  "locator": "art. 195",
+  "locator": "art. 195 (l_d); art. 194 alin. (2) (l_s)",
   "cerinta": "Refacere asfalt: lățimea de desfacere a îmbrăcăminții pe fiecare latură a șanțului este 5 cm la asfalt pe pat de beton și 15 cm la pavaje de piatră; suprafața de refacere = (lățime șanț + 2 × l_d) × lungime.",
   "conditii_aplicabilitate": "Articol tip 6 (cantitate).",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -18312,7 +18319,8 @@
   "incredere": "ridicata",
   "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Audit QA 02.10] Formula (l_s + 2·l_d) × L e calcul derivat de noi, nu text normativ.",
+  "audit_qa": "NUANȚĂ",
   "tema": "p2_deviz"
  },
  {
