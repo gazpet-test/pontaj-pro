@@ -425,6 +425,32 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
 -- legătura încă liberă, tipul contului, emailul profilului = emailul de logare, candidatul UNIC și liber.
 -- Întoarce: legat | legatura_existenta | fara_marcaj_incredere | email_neconfirmat | tip_cont_exceptat | email_diferit |
 --           fara_candidat | ambiguu | candidat_ocupat | inexistent | eroare.
+-- r6 (C-RACE-LINK-1): revalidarea candidatului SUB LOCK, comună celor două căi de legare. Apelantul ține deja profilul
+-- (FOR UPDATE); aici se blochează fișa candidată și se recalculează potrivirea (instrucțiuni noi ⇒ văd ce s-a comis între
+-- timp, ex. încheierea contractului). NULL = se poate lega; altfel rezultatul de întors, fără legare.
+CREATE OR REPLACE FUNCTION public.fn_cont_revalideaza_candidat(p_email text, p_emp integer)
+RETURNS text
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_n      integer;
+  v_emp    integer;
+  v_ocupat boolean;
+BEGIN
+  PERFORM 1 FROM public.employees e WHERE e.id = p_emp FOR UPDATE;
+  IF NOT EXISTS (SELECT 1 FROM public.employees e
+                  WHERE e.id = p_emp AND e.active IS TRUE AND (e.termination_date IS NULL OR e.termination_date > CURRENT_DATE)) THEN
+    RETURN 'fara_candidat';
+  END IF;
+  SELECT count(*), min(c.employee_id), COALESCE(bool_or(c.profil_legat IS NOT NULL), false)
+    INTO v_n, v_emp, v_ocupat
+    FROM public.fn_cont_candidati_angajat(p_email) c;
+  IF v_n = 0 THEN RETURN 'fara_candidat'; END IF;
+  IF v_n <> 1 OR v_emp IS DISTINCT FROM p_emp OR v_ocupat THEN RETURN 'schimbat'; END IF;
+  RETURN NULL;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_revalideaza_candidat(text, integer) FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.fn_cont_leaga_la_creare(p_profile_id uuid)
 RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
@@ -462,6 +488,10 @@ BEGIN
   IF v_n = 0 THEN RETURN 'fara_candidat'; END IF;
   IF v_n > 1 THEN RETURN 'ambiguu'; END IF;
   IF v_ocupat THEN RETURN 'candidat_ocupat'; END IF;
+  -- r6 (C-RACE-LINK-1): fișa candidată blocată (după profil, deja blocat sus) + revalidare sub lock: încă activă, fără
+  -- încetare trecută, potrivirea recalculată identică (un singur candidat, același, neocupat) ⇒ altfel fără legare.
+  v_rez := public.fn_cont_revalideaza_candidat(v_email, v_emp);
+  IF v_rez IS NOT NULL THEN RETURN v_rez; END IF;
   BEGIN
     UPDATE public.profiles SET employee_id = v_emp
      WHERE id = p_profile_id AND employee_id IS NULL;             -- nu suprascrie niciodată
@@ -614,9 +644,15 @@ BEGIN
         rezultat := 'schimbat';                           -- potrivirea s-a schimbat de la previzualizare
       ELSE
         BEGIN
-          UPDATE public.profiles pr SET employee_id = r.emp
-           WHERE pr.id = r.pid AND pr.employee_id IS NULL;
-          rezultat := CASE WHEN FOUND THEN 'legat' ELSE 'candidat_ocupat' END;
+          -- r6 (C-RACE-LINK-1): profilul, apoi fișa candidată, blocate; revalidare sub lock (activă, fără încetare trecută,
+          -- potrivire recalculată identică). Altfel „schimbat” / „fara_candidat”, fără legare.
+          PERFORM 1 FROM public.profiles pr WHERE pr.id = r.pid FOR UPDATE;
+          rezultat := public.fn_cont_revalideaza_candidat(r.uemail, r.emp);
+          IF rezultat IS NULL THEN
+            UPDATE public.profiles pr SET employee_id = r.emp
+             WHERE pr.id = r.pid AND pr.employee_id IS NULL;
+            rezultat := CASE WHEN FOUND THEN 'legat' ELSE 'candidat_ocupat' END;
+          END IF;
         EXCEPTION
           WHEN unique_violation THEN rezultat := 'candidat_ocupat';
           WHEN OTHERS THEN
@@ -679,15 +715,15 @@ DO $post_livrare$
 DECLARE v_n integer; v_lipsa text[];
 BEGIN
   -- funcțiile migrării există; cele SECURITY DEFINER au search_path fixat; niciuna executabilă de anon (excepții explicite)
-  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) f
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) f
    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) AND p.prosecdef
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) AND p.prosecdef
      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[])
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[])
      AND p.proname <> ALL(ARRAY[]::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
   -- triggerele cerute există și sunt active

@@ -357,6 +357,23 @@ BEGIN
         USING ERRCODE = '23514';
     END IF;
   END IF;
+  -- r6 (E-LIFECYCLE-2B): un extern NELEGAT care devine / rămâne activ cu emailul EXACT al unei fișe INACTIVE e refuzat
+  -- (23514) indiferent de termination_date și CHIAR pentru owner: e același om ⇒ trece prin HR → Foști angajați, cu acord.
+  -- Excepția owner-ului rămâne doar pentru potrivirea ambiguă pe nume (mai jos).
+  IF NEW.fost_angajat_employee_id IS NULL AND NEW.activ IS TRUE AND NULLIF(lower(btrim(COALESCE(NEW.email, ''))), '') IS NOT NULL
+     AND (TG_OP = 'INSERT' OR OLD.activ IS NOT TRUE OR NEW.email IS DISTINCT FROM OLD.email
+          OR OLD.fost_angajat_employee_id IS NOT NULL) THEN
+    SELECT e.id, e.name INTO v_pot FROM public.employees e
+     WHERE e.active IS NOT TRUE AND lower(btrim(COALESCE(e.email, ''))) = lower(btrim(NEW.email))
+     ORDER BY e.id LIMIT 1;
+    IF FOUND THEN
+      RAISE EXCEPTION 'E fost angajat Gazpet (fișa inactivă #% %, același email): colaborarea se trece prin HR → Foști angajați, cu acordul lui',
+        v_pot.id, v_pot.name
+        USING ERRCODE = '23514',
+              HINT = format('Folosește HR → Foști angajați → „Trece ca extern” (fișa #%s %s). Potrivirea pe email nu are excepție, nici pentru owner.',
+                            v_pot.id, v_pot.name);
+    END IF;
+  END IF;
   IF NEW.fost_angajat_employee_id IS NULL AND NEW.activ IS TRUE AND NOT v_owner
      AND (TG_OP = 'INSERT' OR NEW.nume IS DISTINCT FROM OLD.nume OR NEW.email IS DISTINCT FROM OLD.email
           OR NEW.activ IS DISTINCT FROM OLD.activ) THEN
@@ -572,11 +589,11 @@ BEGIN
    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[]) AND p.prosecdef
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colab_ext_lock','fn_employees_colab_ext_lock','fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[]) AND p.prosecdef
      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[])
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colab_ext_lock','fn_employees_colab_ext_lock','fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[])
      AND p.proname <> ALL(ARRAY[]::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
   -- tabelele noi: RLS activ, anon fără niciun drept

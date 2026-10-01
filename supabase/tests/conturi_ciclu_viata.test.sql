@@ -262,6 +262,85 @@ SELECT teste.assert((SELECT count(*) = 1 FROM public.conturi_inchideri_coada
 SELECT teste.dblink_disconnect('c_tine4');
 SELECT teste.dblink_disconnect('c_dsw');
 
+-- C-RACE-LINK-1 (r6): legarea cont ↔ fișă (owner, fn_cont_leaga_automat aplicare) e blocată la profil (ținut de altă
+-- tranzacție) DUPĂ ce a calculat candidatul; între timp altă conexiune încheie contractul fișei și comite. După eliberarea
+-- profilului legarea blochează fișa, revalidează sub lock și NU leagă („schimbat” / „fara_candidat”).
+SELECT gen_random_uuid() AS u_own, gen_random_uuid() AS u_lk \gset
+SELECT teste.dblink_exec(:'conn_lock', format($q$
+  INSERT INTO auth.users (id, aud, role, email, raw_app_meta_data, created_at, updated_at, email_confirmed_at)
+  VALUES (%1$L, 'authenticated', 'authenticated', 'owner.race@gazpet.ro', '{"provider":"email"}', now(), now(), now()),
+         (%2$L, 'authenticated', 'authenticated', 'link.race@gazpet.ro', '{"provider":"email"}', now(), now(), now());
+  UPDATE public.profiles SET is_owner = true WHERE id = %1$L;
+  INSERT INTO public.employees (name, department, email, active) VALUES ('LINKESCU RACE', 'Test', 'link.race@gazpet.ro', true);
+  INSERT INTO public.employees (name, department, email, active) VALUES ('CNPESCU UNU', 'Test', 'cnp.unu@exemplu.ro', true),
+                                                                        ('CNPESCU DOI', 'Test', 'cnp.doi@exemplu.ro', true);
+$q$, :'u_own', :'u_lk'));
+SELECT max(id) FILTER (WHERE name = 'LINKESCU RACE') AS e_lk, max(id) FILTER (WHERE name = 'CNPESCU UNU') AS e_cn1,
+       max(id) FILTER (WHERE name = 'CNPESCU DOI') AS e_cn2
+  FROM public.employees WHERE name IN ('LINKESCU RACE', 'CNPESCU UNU', 'CNPESCU DOI') \gset
+SELECT teste.dblink_connect('c_own', :'conn_lock');
+SELECT * FROM teste.dblink('c_own', format('SELECT teste.ca_utilizator(%L)::text', :'u_own')) AS t(x text);
+SELECT pid AS pid_own FROM teste.dblink('c_own', 'SELECT pg_backend_pid()') AS t(pid integer) \gset
+SELECT teste.dblink_connect('c_tine5', :'conn_lock');
+SELECT teste.dblink_exec('c_tine5', 'BEGIN');
+SELECT * FROM teste.dblink('c_tine5', format('SELECT id::text FROM public.profiles WHERE id = %L FOR UPDATE', :'u_lk')) AS t(id text);
+SELECT teste.dblink_send_query('c_own', format($q$SELECT COALESCE((SELECT string_agg(rezultat, ',') FROM public.fn_cont_leaga_automat(false, %L::jsonb) WHERE profile_id = %L), '<nimic>')$q$,
+  jsonb_build_array(jsonb_build_object('profile_id', :'u_lk', 'employee_id', :e_lk))::text, :'u_lk'));
+SELECT teste.assert(teste.asteapta_lock(:pid_own), 'C-RACE-LINK-1 legarea (owner) stă la profilul ținut de altă tranzacție, cu candidatul deja calculat');
+SELECT teste.dblink_exec('c_pg', format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id = %s', :e_lk));
+SELECT teste.dblink_exec('c_tine5', 'ROLLBACK');
+SELECT res AS lk_rez FROM teste.dblink_get_result('c_own') AS t(res text) \gset
+SELECT count(*) AS rest_lk FROM teste.dblink_get_result('c_own') AS t(res text) \gset
+\echo '   C-RACE-LINK-1 rezultat:' :lk_rez
+SELECT teste.assert(:'lk_rez' IN ('schimbat', 'fara_candidat')
+    AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_lk'),
+  'C-RACE-LINK-1 contractul încheiat între timp ⇒ revalidarea sub lock refuză legarea (schimbat / fara_candidat), profilul rămâne nelegat');
+SELECT teste.dblink_disconnect('c_tine5');
+SELECT teste.dblink_disconnect('c_own');
+
+-- D-RACE-CNP-NULL (r6): fișa fără CNP (nicio cheie de CNP); CNP-ul apare (NULL → X) în hr_employees_private în timp ce garda
+-- rulează ⇒ cheia stabilă gazpet.persoana.emp:<id> le serializează, în ambele ordini.
+SELECT teste.dblink_connect('c_g', :'conn_lock');
+SELECT teste.dblink_connect('c_h', :'conn_lock');
+SELECT pid AS pid_g FROM teste.dblink('c_g', 'SELECT pg_backend_pid()') AS t(pid integer) \gset
+SELECT pid AS pid_h FROM teste.dblink('c_h', 'SELECT pg_backend_pid()') AS t(pid integer) \gset
+-- ordinea 1: garda întâi (ține lock-urile), apoi CNP-ul apare în datele personale → așteaptă
+SELECT teste.dblink_exec('c_g', 'BEGIN');
+SELECT res AS g1 FROM teste.dblink('c_g', format('SELECT COALESCE(public.fn_cont_garda_persoana(%s), ''NULL'')', :e_cn1)) AS t(res text) \gset
+SELECT teste.dblink_send_query('c_h', format($q$INSERT INTO public.hr_employees_private (employee_id, cnp) VALUES (%s, '1900303000131')$q$, :e_cn1));
+SELECT teste.assert(:'g1' = 'cnp_lipsa' AND teste.asteapta_lock(:pid_h),
+  'D-RACE-CNP-NULL (1) garda a văzut „cnp_lipsa” și ține cheia fișei: CNP-ul nou în datele personale AȘTEAPTĂ');
+SELECT teste.dblink_exec('c_g', 'COMMIT');
+SELECT res AS h1 FROM teste.dblink_get_result('c_h') AS t(res text) \gset
+SELECT count(*) AS rest_h1 FROM teste.dblink_get_result('c_h') AS t(res text) \gset
+-- ordinea 2: CNP-ul apare întâi (necomis), apoi garda → așteaptă și, după COMMIT, vede CNP-ul
+SELECT teste.dblink_exec('c_h', 'BEGIN');
+SELECT teste.dblink_exec('c_h', format($q$INSERT INTO public.hr_employees_private (employee_id, cnp) VALUES (%s, '1900303000140')$q$, :e_cn2));
+SELECT teste.dblink_send_query('c_g', format('SELECT COALESCE(public.fn_cont_garda_persoana(%s), ''NULL'')', :e_cn2));
+SELECT teste.assert(teste.asteapta_lock(:pid_g), 'D-RACE-CNP-NULL (2) garda AȘTEAPTĂ CNP-ul necomis din datele personale (cheia fișei)');
+SELECT teste.dblink_exec('c_h', 'COMMIT');
+SELECT res AS g2 FROM teste.dblink_get_result('c_g') AS t(res text) \gset
+SELECT count(*) AS rest_g2 FROM teste.dblink_get_result('c_g') AS t(res text) \gset
+\echo '   D-RACE-CNP-NULL garda după COMMIT:' :g2
+SELECT teste.assert(:'g2' <> 'cnp_lipsa', 'D-RACE-CNP-NULL (2) după COMMIT garda vede CNP-ul nou (nu mai e „cnp_lipsa”): rulările sunt serializate');
+SELECT teste.dblink_disconnect('c_g');
+SELECT teste.dblink_disconnect('c_h');
+SELECT teste.dblink_exec(:'conn_lock', format($q$
+  SET session_replication_role = replica;
+  DELETE FROM public.hr_employees_private WHERE employee_id IN (%3$s, %4$s, %5$s);
+  DELETE FROM public.hr_colaborare_externa_jurnal WHERE employee_id IN (%3$s, %4$s, %5$s);
+  DELETE FROM public.hr_employees_audit WHERE employee_id IN (%3$s, %4$s, %5$s);
+  UPDATE public.profiles SET employee_id = NULL WHERE id IN (%1$L, %2$L);
+  DELETE FROM public.employees WHERE id IN (%3$s, %4$s, %5$s);
+  SET session_replication_role = origin;
+  DELETE FROM auth.users WHERE id IN (%1$L, %2$L);
+$q$, :'u_own', :'u_lk', :e_lk, :e_cn1, :e_cn2));
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM auth.users WHERE id IN (:'u_own', :'u_lk'))
+    AND NOT EXISTS (SELECT 1 FROM public.profiles WHERE id IN (:'u_own', :'u_lk'))
+    AND NOT EXISTS (SELECT 1 FROM public.employees WHERE id IN (:e_lk, :e_cn1, :e_cn2))
+    AND NOT EXISTS (SELECT 1 FROM public.hr_employees_private WHERE employee_id IN (:e_lk, :e_cn1, :e_cn2)),
+  'C-RACE-LINK-1 / D-RACE-CNP-NULL curățenie: datele comise au fost șterse');
+
 -- E-RACE-1: activarea externului (necomisă) ↔ acordul trece accepta → refuza.
 SELECT teste.dblink_exec('c_hr1', 'BEGIN');
 SELECT teste.dblink_exec('c_hr1', format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :x1));
@@ -2724,6 +2803,22 @@ INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Dan Servicii
 UPDATE public.employees SET active = false WHERE id = :el3;
 SELECT teste.assert((SELECT activ IS FALSE FROM public.hr_personal_extern WHERE id = :xl3_em),
   'E-LIFECYCLE-2 dezactivare fără termination_date → aceeași politică (extern pe email dezactivat)');
+
+-- E-LIFECYCLE-2B (r6): reactivarea unui extern NELEGAT cu emailul EXACT al unei fișe INACTIVE → refuz 23514, indiferent de
+-- termination_date și CHIAR pentru owner (excepția owner-ului rămâne doar la potrivirea ambiguă pe nume).
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :xl2_em),
+  'E-LIFECYCLE-2B dezactivare cu încetare +30 zile, apoi reactivarea externului pe email → refuz', '23514', 'același email');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :xl3_em),
+  'E-LIFECYCLE-2B fără termination_date: reactivarea externului pe email → refuz', '23514', 'același email');
+SELECT teste.ca_utilizator(:'owner');
+SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :xl2_em),
+  'E-LIFECYCLE-2B owner: reactivarea externului cu emailul exact al fișei inactive → refuz (fără excepție de owner)', '23514', 'același email');
+SELECT teste.asteapta_eroare($$INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Alt Extern Owner', 'VIITORU.CARMEN@exemplu.ro', true)$$,
+  'E-LIFECYCLE-2B owner: extern NOU activ cu emailul exact al fișei inactive → refuz', '23514', 'același email');
+INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Lifecu Bogdan Ionut', true) RETURNING id AS xl2_owner_nume \gset
+SELECT teste.assert((SELECT activ FROM public.hr_personal_extern WHERE id = :xl2_owner_nume),
+  'E-LIFECYCLE-2B owner: potrivirea DOAR pe nume cu un fost angajat (LIFECU BOGDAN) rămâne decizia owner-ului (permis)');
+SELECT teste.ca_admin();
 
 \endif
 

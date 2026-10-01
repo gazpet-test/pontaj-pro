@@ -364,7 +364,11 @@ BEGIN
   -- 1) lock pe persoană; cheile se recalculează după lock (o scriere concurentă tocmai confirmată poate aduce un CNP /
   --    nume nou) — cel mult 3 treceri, fiecare citire e o instrucțiune nouă (instantaneu nou)
   FOR i IN 1..3 LOOP
-    SELECT public.fn_cont_persoana_chei(public.fn_cont_persoana_cnp(e.id), e.name, e.email) INTO v_chei
+    -- r6 (D-RACE-CNP-NULL): + cheia stabilă a fișei (gazpet.persoana.emp:<id>), luată și de triggerul pe
+    -- hr_employees_private ⇒ un CNP care apare (NULL → X) în datele personale se serializează cu garda, chiar dacă fișa
+    -- n-avea încă nicio cheie de CNP. Aceeași sortare globală (fn_cont_lock_chei: după hash).
+    SELECT public.fn_cont_persoana_chei(public.fn_cont_persoana_cnp(e.id), e.name, e.email) || ('gazpet.persoana.emp:' || p_employee_id)
+      INTO v_chei
       FROM public.employees e WHERE e.id = p_employee_id;
     EXIT WHEN v_chei IS NULL OR v_chei <@ v_blocate;
     PERFORM public.fn_cont_lock_chei(v_chei);
@@ -444,7 +448,10 @@ AS $fn$
 BEGIN
   PERFORM public.fn_cont_lock_chei(public.fn_cont_persoana_chei(
     ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN public.fn_cont_cnp_normalizat(NEW.cnp) END,
-          CASE WHEN TG_OP <> 'INSERT' THEN public.fn_cont_cnp_normalizat(OLD.cnp) END], NULL, NULL));
+          CASE WHEN TG_OP <> 'INSERT' THEN public.fn_cont_cnp_normalizat(OLD.cnp) END], NULL, NULL)
+    -- r6 (D-RACE-CNP-NULL): cheia stabilă a fișei (veche / nouă), aceeași ca în fn_cont_garda_persoana
+    || ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN 'gazpet.persoana.emp:' || NEW.employee_id END,
+             CASE WHEN TG_OP <> 'INSERT' THEN 'gazpet.persoana.emp:' || OLD.employee_id END]);
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_hr_employees_private_persoana_lock() FROM PUBLIC, anon, authenticated, service_role;
@@ -1333,6 +1340,17 @@ BEGIN
    WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_alt_contract_activ','fn_cont_cnp_normalizat','fn_cont_coada_pune','fn_cont_flaguri','fn_cont_garda_persoana','fn_cont_inchide','fn_cont_inchide_owner','fn_cont_lock_chei','fn_cont_lock_persoana','fn_cont_motiv_garda','fn_cont_persoana_chei','fn_cont_persoana_cnp','fn_cont_posibil_aceeasi_persoana','fn_cont_restaurare_activa','fn_cont_restaureaza','fn_cont_revocat_nu_scrie','fn_cont_stare_angajati','fn_conturi_inchideri_append_only','fn_conturi_inchideri_sweep','fn_employees_ciclu_cont','fn_employees_persoana_lock','fn_hr_employees_private_persoana_lock','fn_pgrst_pre_request']::text[])
      AND p.proname <> ALL(ARRAY['fn_pgrst_pre_request']::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
+  -- r6 (hardening): amprenta EXACTĂ a celor două funcții interne sensibile (identitatea sesiunii, restaurarea flagurilor)
+  SELECT array_agg(w.sig ORDER BY w.sig) INTO v_lipsa
+    FROM (VALUES ('fn_identitate_sesiune', 'fn_identitate_sesiune()', '7b9a4321560cf3127c9f10df594ea302'),
+                 ('fn_cont_restaureaza_flaguri', 'fn_cont_restaureaza_flaguri(uuid,jsonb)', '71545de9629f5eb2925c4a259477cf42')) AS w(f, sig, m)
+   WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
+      OR NOT EXISTS (SELECT 1 FROM pg_proc p
+                      WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m AND p.prosecdef
+                        AND p.proconfig::text = '{"search_path=public, pg_temp"}'
+                        AND pg_get_userbyid(p.proowner)::text = 'postgres'
+                        AND p.proacl::text = '{postgres=X/postgres}');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: amprentă diferită (semnătură/md5/secdef/proconfig/owner/ACL): %', v_lipsa; END IF;
   -- tabelele noi: RLS activ, anon fără niciun drept
   SELECT array_agg(t) INTO v_lipsa FROM unnest(ARRAY['conturi_inchideri_jurnal','conturi_inchideri_coada']::text[]) t
    WHERE to_regclass('public.' || t) IS NULL

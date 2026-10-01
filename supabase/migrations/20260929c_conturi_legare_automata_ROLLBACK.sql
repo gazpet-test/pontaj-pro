@@ -48,6 +48,7 @@ DROP FUNCTION IF EXISTS public.fn_admin_conturi_alerte();
 DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean);
 DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean, jsonb);
 DROP FUNCTION IF EXISTS public.fn_cont_leaga_la_creare(uuid);
+DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(text, integer);
 DROP FUNCTION IF EXISTS public.fn_cont_candidati_angajat(text);
 DROP FUNCTION IF EXISTS public.fn_cont_notifica_owneri(text, text, text, text);
 DROP FUNCTION IF EXISTS public.fn_nume_familie(text);
