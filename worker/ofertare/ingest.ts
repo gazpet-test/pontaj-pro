@@ -10,6 +10,7 @@ import JSZip from 'https://esm.sh/jszip@3.10.1'
 import WordExtractor from 'https://esm.sh/word-extractor@1.0.4'  // fără ?target=deno: acolo fs e null și extract() pică (testat 25.09)
 import { Buffer } from 'node:buffer'
 // R6 (26.09): PDF-urile peste pragul edge-ului (60 MB, ex. 770 Huedin) — descărcare în flux + pdftotext pe felii
+import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md) — APLICARE DUPĂ FREEZE
 import { MAX_TEXT, MARCAJ_PREA_MARE, PRAG_MARE, citesteMare, compuneText, decizieCitireMare, esteMare, imparteText, mesajNecitite, trecereBlocata } from './citire_mare.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
@@ -167,7 +168,7 @@ async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null,
   // peste 60 MB (sau 'ignorat' de edge pe mărime): nu în memorie și nu prin edge (care îl refuză) — pe felii, pe disc
   if (esteMare(doc)) return await citesteMare(supabase, doc.id, depsMare(cerutDe, esteOprire, stare))
   const off = Math.max(0, Number(doc.pagina_offset) || 0)
-  const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(doc.fisier_path)
+  const { data: blob, error: dlErr } = await descarcaCuJurnal(supabase, BUCKET, doc.fisier_path, 'nas:ingest', doc.id)
   if (dlErr || !blob) {
     await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'eroare', eroare: ('download: ' + (dlErr?.message || 'lipsă')).slice(0, 500) }).eq('id', doc.id)
     return 'eroare: download'
@@ -269,7 +270,7 @@ async function citesteWordLicitatie(supabase: Supa, licId: number): Promise<numb
   for (const d of docs ?? []) {
     if (!d.fisier_path || /(^|\/)~\$/.test(d.nume_original || '')) continue
     try {
-      const { data: blob, error } = await supabase.storage.from(BUCKET).download(d.fisier_path)
+      const { data: blob, error } = await descarcaCuJurnal(supabase, BUCKET, d.fisier_path, 'nas:ingest-word', d.id)
       if (error || !blob) { log(`#${licId} word ${d.id}: download ${error?.message ?? 'lipsă'}`); continue }
       const octeti = new Uint8Array(await blob.arrayBuffer())
       const eDocx = /\.docx$/i.test(d.nume_original || '')
