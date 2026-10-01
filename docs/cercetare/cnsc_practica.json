@@ -1,5 +1,148 @@
 [
  {
+  "id": "CNSC-BO2026_1073",
+  "nr_decizie": "BO2026_1073 (nr./data anonimizate în BO; dosare conexate, inclusiv nr. 165/2026 și 181/2026)",
+  "buletin_oficial": "BO2026_1073",
+  "data": null,
+  "an": 2026,
+  "domeniu": "gaze",
+  "tema": [
+   "experienta_similara",
+   "documente_calificare",
+   "clarificari_oferta",
+   "altele"
+  ],
+  "regula": "Procesele-verbale de recepție parțială (stadiu fizic, acceptare la plată) ale unor rețele de gaze nu dovedesc „lucrări duse la bun sfârșit/recepționate pe obiecte”; nici adresele ulterioare ale beneficiarului nu le pot transforma în PV la terminarea lucrărilor. Iar o ofertă respinsă pentru nerespectarea ATR trebuie atacată pe fond, nu doar pe forma comunicării.",
+  "temei_legal": [
+   "Legea 98/2016 art. 212 alin. (1) lit. a), art. 215 alin. (2) lit. b)–c), art. 57",
+   "HG 343/2017 (Regulament recepție) art. 4, art. 6 lit. d)",
+   "Legea 50/1991 art. 37 alin. (2^3) — invocat de ofertant",
+   "HG 395/2016 art. 134 alin. (5), art. 137 alin. (2) lit. k)",
+   "Legea 101/2016 art. 5 alin. (2), art. 9 alin. (1), art. 17 alin. (3), art. 26 alin. (6)",
+   "CJUE C-54/21 Antea Polska; C-927/19; C-450/06 Varec"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NGQ3NTkxZjUtOTNmMC00ZDVmLWJkZTUtZTg5YzdmZmM3Mjcw&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzEwNzMucGRm&action=aW5saW5l",
+  "autoritate": "UAT (oraș)",
+  "obiect": "Servicii de proiectare și execuție — „Dezvoltarea rețelei inteligente de distribuție a gazelor naturale în satele aparținătoare orașului ...”, CPV conducte de alimentare cu gaz, procedură simplificată",
+  "problema": "Trei contestații conexate: (1) asocierea respinsă (propunerea tehnică — proiectare — nu respecta indicatorii și cerințele din Avizul tehnic de racordare publicat în DA) a atacat doar lipsa unei „comunicări a rezultatului” distincte (avea raportul + notificarea SEAP) și a cerut acces la partea de proiectare a ofertei câștigătoare (declarată confidențială); (2) după contestație, AC a luat măsuri de remediere (art. 9 L101): a reverificat experiența similară a câștigătorului — PV de recepție parțială (stadiu fizic 88% rețele, unul „cu unicul scop de acceptare la plată”), completate cu adrese ale beneficiarilor și certificate de bună execuție — și a declarat-o inacceptabilă, anulând procedura (nicio ofertă admisibilă); (3) fostul câștigător și prima asociere au atacat respingerea și anularea.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "(1) Raportul procedurii + textul SEAP cuprindeau motivul respingerii; lipsa unui document intitulat „comunicare” nu a împiedicat contestarea, iar contestatorul nu a criticat motivul (nerespectarea ATR) → oferta rămâne respinsă; comparația cu câștigătorul (art. 215 alin. 2 lit. c) nu se datorează ofertelor neconforme. Refuzul accesului la proiectarea declarată confidențială — corect (C-54/21 Antea Polska, C-927/19, Varec). Lipsa interesului contra câștigătorului — respinsă (se putea obține anularea). (2) Măsurile de remediere în 3 zile — termen respectat (art. 5 alin. 2). Fișa de date: „lucrări duse la bun sfârșit” = recepționate pe obiecte/la terminare/finală; PV de recepție parțială (art. 6 lit. d HG 343/2017) atestă doar stadiul fizic; recepția pe obiecte cere PV la terminare pentru părți distincte fizic și funcțional (art. 4), cu ISC; adresele ulterioare ale beneficiarilor nu pot transforma PV parțial în recepție pe obiect; nu se poate cere o nouă clarificare. (3) Ambele oferte respinse → anulare obligatorie (art. 212 alin. 1 lit. a L98).",
+  "cum_ne_ajuta": "(1) Experiență similară rețele gaze: nu folosim PV de recepție parțială (stadiu fizic/plată); folosim PVRTL (pe obiect distinct fizic și funcțional, cu ISC) sau recepție finală, emise ÎNAINTE de termenul de ofertare. (2) În P+E, propunerea de proiectare trebuie să respecte EXACT indicatorii din Avizul tehnic de racordare al operatorului (debite, presiuni, punct de racord) — e motiv de neconformitate. (3) Dacă suntem respinși, contestăm MOTIVUL de respingere, nu doar forma comunicării — altfel contestația cade. (4) Când facem contestație pe câștigător, AC poate aplica măsuri de remediere în 3 zile — urmărim SEAP.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare + execuție rețea inteligentă de distribuție gaze naturale (sate ale unui oraș)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "(1) asociere respinsă ca neconformă; (2) asociere desemnată inițial câștigătoare, respinsă după remediere",
+  "etapa": "rezultat + măsuri de remediere + anulare procedură",
+  "fapte_relevante": "Experiența cerută: rețele gaze, valoare cumulată, max. 3 contracte, ultimii 5 ani; câștigătorul inițial a invocat 3 contracte (inclusiv sisteme inteligente de distribuție gaze cod SMIS), două doar cu PV de recepție parțială; răspunsuri beneficiari cu certificate de bună execuție; ATR publicat odată cu DA.",
+  "concluzie_cnsc": "Respinge ca nefondate contestațiile și menține anularea procedurii; respinge intervenția și cererile de cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea inteligentă distribuție gaze, P+E, simplificată — tipic; probleme reale de dovedire a experienței pe rețele încă nefinalizate.",
+   "mai_putin_comparabila": "Fișa de date avea o definiție strictă a „lucrărilor duse la bun sfârșit”.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; în aceeași linie cu BO2025_3035."
+  },
+  "citate_cheie": [
+   {
+    "text": "procesul-verbal de recepție parțială nu atestă finalizarea lucrărilor, ci doar atestă stadiul fizic de execuție a lucrărilor",
+    "loc": "p. 19 (din 22)"
+   },
+   {
+    "text": "nefiind suficientă finalizarea lucrărilor",
+    "loc": "p. 21 (din 22)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "60ec55f903bec73c3d43d08054a60f7775175c189ace6ace07b30f2981dc4b10",
+  "snapshot_bytes": 304352,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "60fa98712530ac72f8be644b672ea6f011e8af4d5b1c4e2f67fe1b158e892503",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_1149",
+  "nr_decizie": "BO2026_1149 (nr./data anonimizate în BO)",
+  "buletin_oficial": "BO2026_1149",
+  "data": null,
+  "an": 2026,
+  "domeniu": "gaze",
+  "tema": [
+   "clarificari_documentatie",
+   "altele"
+  ],
+  "regula": "Lipsa/expirarea avizului tehnic de racordare al operatorului de distribuție e o critică a documentației de atribuire și trebuie contestată în termenul curs de la publicarea DA; un răspuns la clarificarea altui operator nu redeschide termenul de contestare.",
+  "temei_legal": [
+   "Legea 98/2016 art. 160 alin. (1)–(3)",
+   "Legea 101/2016 art. 8 alin. (1) lit. b), art. 5, art. 26 alin. (6)",
+   "HG 395/2016 art. 103 alin. (4) (invocat)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NjVhNzRiYmMtNDgyMy00MzQwLWIwYTctZjFhMzNmMzg3YzY3&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzExNDkucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună, jud. Bacău — numele investiției rămas în textul clarificării)",
+  "obiect": "Proiectare și execuție lucrări — „Extindere rețea de gaze naturale în satul Bolătău, ..., județul Bacău” (procedură simplificată, cel mai bun raport calitate-preț)",
+  "problema": "La o clarificare (cerere a altui operator) AC a atașat Avizul tehnic de principiu (ATP) al operatorului de distribuție (... Grid). Contestatorul a atacat răspunsul (09.03.2026) susținând că ATP era expirat, fără anexe, iar operatorul confirmase că nu poate fi prelungit (trebuia ATP nou) — deci SF și condițiile de ofertare nu mai erau valabile; cerea anularea procedurii.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Excepția tardivității respinsă (termenul curge de la actul indicat ca vătămător — răspunsul la clarificări). Pe fond: răspunsul e clar și complet raportat la întrebare (s-a cerut ATP „dacă există” și a fost atașat); întrebarea nu era a contestatorului, iar autorul ei și alți doi operatori au ofertat. În realitate se critica documentația de atribuire (incompletă — lipsa unui ATP valabil), care trebuia contestată în termen de la publicarea în SEAP; corespondența de clarificare nu prelungește și nu repune în termenul de contestare. Contestatorul nici nu ceruse el clarificări privind avizul. Cheltuieli de judecată (7.260 lei) respinse.",
+  "cum_ne_ajuta": "La orice licitație de extindere/înființare rețea gaze: verificăm imediat la publicare dacă ATP/avizul de racordare al operatorului (Delgaz Grid, Distrigaz Sud Rețele etc.) e în DA și dacă e valabil. Dacă lipsește/e expirat, cerem clarificare NOI, în primele zile, iar dacă răspunsul nu remediază, contestăm DA în termenul de la publicare (10/5 zile după valoare) — nu așteptăm răspunsurile date altora. Șablon clarificare: „Vă rugăm să publicați avizul tehnic de racordare/ATP emis de [operator] pentru [obiectiv], cu anexe, și să confirmați valabilitatea acestuia la data-limită de depunere; în caz de expirare, precizați dacă soluția tehnică din SF rămâne valabilă.”",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare + execuție extindere rețea distribuție gaze naturale",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "operator economic interesat (contestație împotriva răspunsului la clarificări)",
+  "etapa": "documentatie/clarificari",
+  "fapte_relevante": "Clarificare publicată 09.03.2026; contestație depusă în preziua termenului de ofertare, la peste 15 zile de la publicarea DA; 3 oferte depuse; procedura în evaluare tehnică.",
+  "concluzie_cnsc": "Respinge excepția tardivității; respinge contestația ca nefondată; respinge cererea de suspendare (rămasă fără obiect) și cheltuielile de judecată.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere rețea gaze în sat, P+E, aviz tehnic al operatorului de distribuție — exact profilul Gazpet.",
+   "mai_putin_comparabila": "Soluție procedurală (termen de contestare), fără analiza pe fond a valabilității ATP.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu are ca efect prelungirea perioadei legale de formulare a contestației sau decalarea datei de la care începe să curgă aceasta",
+    "loc": "p. 6 (din 7)"
+   },
+   {
+    "text": "nu reclamă răspunsul la clarificări, așa cum susține, ci documentația de atribuire pe care o consideră incompletă",
+    "loc": "p. 6 (din 7)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "5464b971e60510c1c9a8cbc7aa1f0d626926cc5a7e77d971671f0e2ad3d0e02b",
+  "snapshot_bytes": 186624,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "b4330d37c541b21165977ee277303efca69693fbe045fc170c76bb61d50084f1",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
   "id": "CNSC-BO2026_1184",
   "nr_decizie": "(anonimizat în BO)",
   "buletin_oficial": "BO2026_1184",
@@ -636,6 +779,74 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "00d6cde6cb39d9ad0d2a770c4a819f60187e2887ebc3ede60e9f6e733565685f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_2006",
+  "nr_decizie": "BO2026_2006 (nr./data anonimizate în BO)",
+  "buletin_oficial": "BO2026_2006",
+  "data": null,
+  "an": 2026,
+  "domeniu": "gaze",
+  "tema": [
+   "altele",
+   "termen_executie"
+  ],
+  "regula": "O clauză suspensivă de finanțare inserată în fișa de date și necontestată la timp leagă ofertantul: la expirarea termenului fără finanțare, anularea în temeiul art. 225 alin. (1) lit. c) L99 (art. 212 L98) e legală; ofertantul câștigător nu poate impune o soluție de finanțare proprie (credit-furnizor) neprevăzută în DA.",
+  "temei_legal": [
+   "Legea 99/2016 art. 225 alin. (1) lit. c) teza a II-a",
+   "Legea 99/2016 art. 2 (transparență, tratament egal)",
+   "Legea 101/2016 art. 26 alin. (6)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NTYzMGEyODUtZTZmYy00YzRmLWJkNzctOGRlOTRjM2E5NzUz&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzIwMDYucGRm&action=aW5saW5l",
+  "autoritate": "Entitate contractantă sectorială — producător de energie termică/electrică (Electrocentrale București S.A., numele rămas în fișa de date citată)",
+  "obiect": "Contract EPCC (proiectare + execuție) „Racordare la rețeaua Transgaz de transport gaze naturale a CET-urilor ...” – Obiectivul CET Vest",
+  "problema": "Câștigătorul a contestat anularea procedurii (art. 225 alin. 1 lit. c teza a II-a L99) motivată de neobținerea finanțării nerambursabile în termenul de 6 luni prevăzut de clauza suspensivă din fișa de date; reproșa lipsa de diligență a EC, necomunicarea SF promis prin clarificări și refuzul propunerii sale de finanțare (avans rambursabil/credit-furnizor).",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Clauza suspensivă (finanțare nerambursabilă în 6 luni de la raportul procedurii, altfel anulare) a rămas definitivă prin necontestare; prin depunerea ofertei, ofertantul și-a asumat riscul. EC a făcut demersuri la mai multe ministere — comportament diligent; oricum, la împlinirea termenului, singura opțiune era anularea, iar CNSC nu poate acorda un nou termen. Necomunicarea SF e irelevantă față de expirarea termenului. Acceptarea unui credit-furnizor propus de ofertant ar fi modificat condițiile procedurii după evaluare (transparență, tratament egal) — sintagma „altă sursă de finanțare” nu acoperea fonduri rambursabile. Evenimentele ulterioare anulării nu influențează legalitatea ei.",
+  "cum_ne_ajuta": "La licitațiile de racorduri/rețele finanțate condiționat (PNI Anghel Saligny, PNRR, Fondul pentru Modernizare, fonduri proprii + nerambursabile), verificăm în fișa de date existența unei clauze suspensive de finanțare și termenul ei; dacă e dezechilibrată (termen lung, fără despăgubire, fără menținerea garanției limitată), o contestăm/clarificăm ÎNAINTE de ofertare — după depunere e asumată. Nu propunem soluții de finanțare (avans rambursabil) ca alternativă: CNSC le consideră modificare a condițiilor procedurii. ERP: câmp „clauză suspensivă finanțare + termen” în fișa licitației, cu alertă la expirare.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   7,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "lucrări EPCC — racord la sistemul de transport gaze naturale (proiectare + execuție)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant desemnat câștigător",
+  "etapa": "anulare procedura",
+  "fapte_relevante": "3 oferte; contestatorul desemnat câștigător; comunicarea nr. 48744/05.11.2025 menționa condiția suspensivă; adresa internă nr. 19772 din 29.04.2026: demersuri la Ministerul Energiei, Economiei, MIPE, MDLPA fără rezultat (fără linii de finanțare eligibile, fără mecanisme naționale dedicate). Proiectarea demara doar după acordurile cu proprietarii de terenuri.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6 L101).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Racord gaze naturale (EPCC) cu finanțare condiționată — situație frecventă și la rețele de distribuție finanțate din programe naționale.",
+   "mai_putin_comparabila": "Procedură sectorială, racord la SNT pentru un CET (nu distribuție în comune); contestatorul era câștigătorul.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "Prin necontestarea ei și depunerea ofertei",
+    "loc": "p. 5 (din 7)"
+   },
+   {
+    "text": "singura posibilitate pe care o avea aceasta era aceea de anulare a procedurii de atribuire",
+    "loc": "p. 6 (din 7)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "dee27b0338177172060f6aceca5eb02579faf880eaf47b3e5968a82a37c68ff1",
+  "snapshot_bytes": 215192,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "f6038dfba0728099b5fb794054723f6ba3d794a89afe8a84eefdb8499a1886c6",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -1276,6 +1487,80 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "50feabd71756c7835cbd86189aa8a06f1903dd9026d666d461778fde267f7743",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_621",
+  "nr_decizie": "BO2026_621 (nr. anonimizat; data 04.03.2026)",
+  "buletin_oficial": "BO2026_621",
+  "data": "2026-03-04",
+  "an": 2026,
+  "domeniu": "gaze",
+  "tema": [
+   "clarificari_oferta",
+   "factor_evaluare",
+   "personal_cheie",
+   "documente_calificare",
+   "altele"
+  ],
+  "regula": "Documentele justificative lipsă din ofertă (memoriu pentru garanția ofertată, declarații de disponibilitate, alocare financiară în procente) pot fi depuse la clarificări ca vicii de formă, dacă elementul esențial (durata garanției, persoana, graficul) există în oferta inițială; criticile împotriva câștigătorului trebuie susținute cu probe concrete.",
+  "temei_legal": [
+   "Legea 98/2016 art. 209 alin. (1), art. 2 alin. (2) lit. e), art. 57",
+   "HG 395/2016 art. 134 alin. (5), art. 135 alin. (3), art. 137 alin. (3) lit. a)",
+   "Legea 101/2016 art. 17 alin. (3), art. 19, art. 26 alin. (6) și (9)",
+   "Cod procedură civilă art. 249, art. 61, 65, 453",
+   "CA București dec. 386/01.07.2019; CA Iași hot. 525/07.10.2024; CA Suceava dec. 861/2016"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZThiZjUyYjItNzRlMy00NmJkLThmNjItYzE0YWFmOWIxZGNm&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzYyMS5wZGY=&action=aW5saW5l",
+  "autoritate": "UAT — beneficiar PNI Anghel Saligny",
+  "obiect": "Execuție lucrări „Extindere rețea de distribuție a gazelor naturale în ..., ...” (PNI Anghel Saligny), CPV 45231221-0, procedură simplificată .../09.10.2025, VE 6.696.810 lei, cel mai bun raport calitate-preț",
+  "problema": "Locul II a criticat oferta câștigătoare (asociere): memoriul justificativ pentru garanția de 72 luni (factor 30 p; documente suport obligatorii) lipsea și a fost depus la clarificări (~126 pag.: fișe țeavă PEHD, certificate ISO, metodologii sudură cap-cap/electrofuziune); Formularul 8 și Formularele 18 (disponibilitate) lipsă inițial; Gantt fără alocare financiară lunară în procente; experiența reprezentantului antreprenorului și a șefului de șantier; organigramă; adecvare la constrângerile amplasamentului; modificarea denumirii unui articol din listele de cantități. AC restricționase accesul la ofertă pe motiv de confidențialitate.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Acces: declarația de confidențialitate a câștigătorului a fost generică, nedovedită → CNSC a pus la dispoziție toată oferta (art. 19 L101; CA Iași hot. 525/07.10.2024). Fond: garanția de 72 luni era asumată în oferta inițială, deci memoriul depus la clarificări = viciu de formă (art. 209 alin. 1 L98, art. 135 alin. 3 HG 395; CA București dec. 386/01.07.2019 — și lipsa unor documente poate fi viciu de formă). La fel Formularele 8/18 și alocarea financiară lunară (parametrul exista, doar nu în procente; restul graficului conform). Experiența experților — documentată (CV, diplome, decizii de numire). Criticile fără probe concrete (organigramă, constrângeri amplasament, articol din liste) respinse — sarcina probei (art. 249 CPC), mai ales după studierea dosarului. Neconcordanțe de dată în Gantt — irelevante, graficul se actualizează după semnare. Cheltuielile intervenientului accesoriu — respinse (art. 453 CPC, CA Suceava 861/2016).",
+  "cum_ne_ajuta": "(1) Când oferim garanție extinsă punctată (ex. 6 ani), atașăm din start memoriul justificativ + fișe PEHD/certificate + proceduri de sudură; dacă am omis, la clarificări îl putem depune (viciu de formă) — durata trebuie să fie însă scrisă în oferta inițială. (2) Pentru contestări ale câștigătorului: cerem studiu dosar la CNSC — o declarație de confidențialitate generică nu blochează accesul; criticăm doar cu probe concrete (pagină, document). (3) Declarația noastră de confidențialitate trebuie motivată concret (ce secret comercial, ce prejudiciu), altfel CNSC o înlătură.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 6696810.0,
+  "sub_prag": true,
+  "tip_contract": "lucrări — extindere rețea distribuție gaze naturale (PNI Anghel Saligny)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (garanție 30 p, reprezentant antreprenor 20 p, șef șantier 20 p etc.)",
+  "contestator_rol": "ofertant clasat pe locul II",
+  "etapa": "rezultat",
+  "fapte_relevante": "Răspuns consolidat la clarificări 10742/16.11.2025 (liste de cantități corectate prin erată); clarificări 11976/14.11.2025, răspuns 2128/18.11.2025; raport 13275/16.12.2025; contestație 483/23.12.2025; contestație publicată în SEAP 21.01.2026; intervenție 4151/23.01.2026; concluzii scrise 537/11.02.2026.",
+  "concluzie_cnsc": "Admite în principiu intervenția; respinge contestația ca nefondată; admite intervenția; respinge cheltuielile intervenientului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere rețea gaze PNI, simplificată, ~6,7 mil. lei, factori de evaluare tipici (garanție, reprezentant antreprenor, șef șantier pe rețele de distribuție gaze).",
+   "mai_putin_comparabila": "Majoritatea criticilor au căzut pe lipsa de probe, nu pe fond.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "situația în cauză poate fi încadrată ca un viciu de formă",
+    "loc": "p. 9 (din 18)"
+   },
+   {
+    "text": "formulând explicații generice fără, însă, a demonstra/dovedi, în concret, caracterul confidențial al înscrisurilor indicate",
+    "loc": "p. 6 (din 18)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "e4980a17174fea224c8da09c7fc2dacf83f0dee59ca6b2ce54e84c89ba742107",
+  "snapshot_bytes": 269043,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "51dcc46658dd0cccc09a86efda7a0922c96cc65c2fe292c0494adf1770ecf5a7",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -1965,6 +2250,79 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "71d8b80f22473d24af5e05bb3754f279c7e2973ee42b44705230afdb39dce8b1",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_1542",
+  "nr_decizie": "1542/C5/1710",
+  "buletin_oficial": "BO2025_1542",
+  "data": "2025-06-04",
+  "an": 2025,
+  "domeniu": "gaze",
+  "tema": [
+   "clarificari_oferta",
+   "neconformitate_tehnica",
+   "altele"
+  ],
+  "regula": "Lipsa descrierii tehnologice pentru lucrări minore ofertate și cuantificate (răsuflători, subtraversări) se poate completa prin clarificări: e viciu de formă dacă elementele există în ofertă sau abatere tehnică minoră dacă valoarea teoretică < 1% din preț; după o decizie definitivă, AC nu poate relua aceeași chestiune prin noi clarificări.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (6), (7) lit. a)–b), (9) lit. a), art. 135 alin. (1) și (3), art. 133 alin. (2)",
+   "Legea 98/2016 art. 3 alin. (1) lit. hh), art. 209 alin. (1), art. 224 alin. (1) lit. a), art. 226 alin. (1), art. 227",
+   "Legea 101/2016 art. 26 alin. (2), (5), (6), art. 28",
+   "Ordin ANRE 89/2018 (NTPEE-2018) — montaj răsuflători",
+   "CA Ploiești dec. 810/24.10.2024 și 307/15.04.2025"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MDI1YWVlOWEtYjU2Mi00NGVkLTg0ZDQtNzVmZDc1MTE2NDYx&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzE1NDIucGRm&action=aW5saW5l",
+  "autoritate": "Comuna Contești (Primăria), jud. Dâmbovița (denumire rămasă în textul răspunsului citat)",
+  "obiect": "Execuție lucrări „Dezvoltarea rețelei inteligente de distribuție a gazelor naturale ... pe teritoriul comunei ..., județul Dâmbovița”, licitație deschisă CN1059151/02.09.2023, VE 30.055.615,64 lei, cel mai bun raport calitate-preț",
+  "problema": "Al patrulea ciclu: oferta contestatorului (SA) fusese respinsă repetat pentru lipsa descrierii procesului tehnologic la montajul răsuflătorilor și la subtraversările cursurilor de apă (completate prin clarificări). CNSC (853/C11/764, 2550/C11/2627, 440/C11/304) și CA Ploiești (dec. 810/24.10.2024 și 307/15.04.2025) au stabilit că răsuflătorile = viciu de formă, iar subtraversările (0,95% din preț, <1%) = abatere tehnică minoră. AC a cerut din nou (adresa 3170/06.05.2025) „cuantificarea teoretică în valoare monetară a abaterii” pentru subtraversări.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Răsuflătorile erau prezente în ofertă (memoriu, planșa de detalii, listele de cantități — 1.227 buc. rețea + 3.291 buc. branșamente), deci completarea e confirmare/viciu de formă (art. 135 alin. 3 HG 395); trimiterea la Ord. ANRE 89/2018 e doar angajamentul de a respecta un normativ obligatoriu (CA Ploiești). Subtraversările: abaterea cuantificată chiar de AC la 0,95% < 1% = abatere tehnică minoră (art. 134 alin. 7 lit. b, alin. 9 lit. a). Noua clarificare ignoră autoritatea de lucru judecat și obligația de executare a deciziilor → anulată; AC obligată să pună în executare decizia CA Ploiești în 10 zile lucrătoare. Cererea de a constata contravenția membrilor comisiei (art. 227 L98) — inadmisibilă, competența fiind a Curții de Conturi (art. 226). Tratament egal: câștigătorului i s-a permis lămurirea „viziunii proprii” prin clarificări. Cauțiune 601.113 lei.",
+  "cum_ne_ajuta": "Dacă suntem respinși pentru lipsa metodologiei la sub-activități (răsuflători, subtraversări, foraje orizontale, cămine) deși le-am ofertat în liste de cantități: răspundem la clarificări indicând paginile din ofertă + calculăm ponderea valorică (<1% → abatere tehnică minoră, art. 134 alin. 9 lit. a HG 395) și contestăm cu această decizie. Prevenire: în metodologie, câte o fișă tehnologică scurtă pentru FIECARE articol din listele de cantități (inclusiv răsuflători NTPEE, subtraversări cursuri de apă), nu doar copierea normativului — CNSC cere „viziunea proprie”.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10,
+   1
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 30055615.64,
+  "sub_prag": false,
+  "tip_contract": "lucrări — dezvoltare rețea inteligentă de distribuție gaze naturale în comună",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant (SA) respins repetat",
+  "etapa": "evaluare (clarificări după decizie definitivă)",
+  "fapte_relevante": "Rezultate succesive: 1836/05.03.2024, raport 5778/18.07.2024, raport 325/17.01.2025 (comunicare 471/23.01.2025); clarificări 4436/26.11.2024; adresa contestată 3170/06.05.2025, răspuns 849/09.05.2025; contestație 866/13.05.2025; câștigătorul inițial prezentase în metodologie (pag. 106–458) prescripțiile Ord. ANRE 89/2018.",
+  "concluzie_cnsc": "Admite în parte: anulează adresa 3170/06.05.2025 și actele subsecvente; obligă AC să execute decizia CA Ploiești 307/15.04.2025 în 10 zile lucrătoare; respinge ca inadmisibil capătul privind contravenția comisiei.",
+  "control_judiciar": "Deciziile anterioare din aceeași procedură menținute de CA Ploiești: dec. 810/24.10.2024 (plângere AC respinsă) și dec. 307/15.04.2025 (plângere AC respinsă, cu reîncadrarea subtraversărilor ca abatere tehnică minoră <1%).",
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea inteligentă de distribuție gaze, execuție, ~30 mil. lei; problemele (răsuflători, subtraversări) sunt specifice gazelor PE — direct aplicabile Gazpet.",
+   "mai_putin_comparabila": "Context procesual atipic (patru cicluri).",
+   "nota": "Decizie CNSC cu control judiciar parțial pe aceeași procedură — mai solidă decât o decizie izolată."
+  },
+  "citate_cheie": [
+   {
+    "text": "descrierea viziunii personale a ofertantului cu privire la modul de executare a unor tipuri minore de lucrări",
+    "loc": "p. 13 (din 19)"
+   },
+   {
+    "text": "ignora atât autoritatea de lucru judecat a celor stabilite de către instanța judecătorească",
+    "loc": "p. 17 (din 19)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "bc09b33b7a28d39bf58fc9f9e6c83d6b997f6c1900c57ab8b9f63b32e89076c7",
+  "snapshot_bytes": 263363,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "86ce5222d28f2020d6a3e9640160ed52c8ffa396dc240f9c3f6898c99bdc2f42",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -2746,6 +3104,79 @@
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
+  "id": "CNSC-BO2025_2271",
+  "nr_decizie": "2271/C9/2484 (confirmat în decizia ulterioară BO2025_3035)",
+  "buletin_oficial": "BO2025_2271",
+  "data": "2025-08-06",
+  "an": 2025,
+  "domeniu": "gaze",
+  "tema": [
+   "experienta_similara",
+   "clarificari_oferta",
+   "documente_calificare",
+   "autorizare_anre",
+   "altele"
+  ],
+  "regula": "Discrepanțele de valoare între contract, recomandare și centralizatorul de plăți pentru o lucrare de rețea gaze — când toate depășesc pragul — și dubiile privind finalizarea nu justifică respingerea directă: AC trebuie să ceară clarificări suplimentare, fără ca aceasta să încalce tratamentul egal.",
+  "temei_legal": [
+   "Legea 98/2016 art. 196 alin. (1), art. 209 alin. (1), art. 57",
+   "HG 395/2016 art. 134 alin. (1)–(3) și (7), art. 127 alin. (1) lit. f)",
+   "Legea 101/2016 art. 19, art. 26 alin. (2), (5) și (6)",
+   "CJUE C-54/21 Antea Polska; C-927/19; C-450/06 Varec"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MTJhM2EyNTctOTAwOS00YjgyLTg3ZTUtMmQ1M2I1NjM4ZWNj&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzIyNzEucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună, jud. Argeș — sediul contestatorului)",
+  "obiect": "„Extindere rețea distribuție gaze naturale în comuna ..., județul ...”, CPV 45231221-0, procedură simplificată, VE 3.265.500 lei; anunț SCN.../28.05.2025, termen oferte 13.06.2025",
+  "problema": "Oferta contestatorului respinsă ca inacceptabilă pe experiența similară (≥1 contract, ≥3.000.000 lei fără TVA, rețele gaze, ultimii 5 ani): pentru același contract P+E de extindere distribuție gaz, valorile diferă între contract (3.410.600), recomandare (3.108.150,97) și centralizatorul de plăți final (3.029.629,76), iar PV de recepție era doar parțial. AC a refuzat o a doua clarificare invocând tratamentul egal. Contestatorul cerea și acces integral la oferta câștigătorului (declarată integral confidențială).",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Neconcordanțele de valoare (toate peste pragul minim) și dubiile privind finalizarea/conformitatea lucrărilor trebuiau lămurite prin clarificări (art. 134 alin. 1–3 HG 395/2016); faptul că s-au cerut deja documentele DUAE (art. 196 L98) nu interzice o nouă clarificare, care nu încalcă tratamentul egal; respingerea pe elemente neclare = evaluare superficială → reevaluare. Accesul la documentele confidențiale ale câștigătorului (propunere tehnică, financiară, documente experiență) refuzat legal (art. 19 L101; CJUE C-54/21 Antea Polska, C-927/19, C-450/06 Varec). Criticile împotriva câștigătorului respinse: autorizația ANRE de proiectare a inginerului exista în ofertă; mențiunile contradictorii din PV de evaluare = simple erori; preluarea caietului de sarcini în propunere nu e neconformitate când oferta conține proceduri, grafic, autorizații.",
+  "cum_ne_ajuta": "La dosarul de experiență similară pentru rețele gaze: corelăm valoarea din DUAE cu recomandarea și explicăm în nota DUAE diferențele (proiectare vs execuție, valoare contractată vs executată, PV parțial vs final). Dacă suntem respinși pentru discrepanțe de valoare peste prag, contestăm cu această decizie (art. 134 HG 395). Pentru acces la dosar: oferta concurentului declarată confidențială nu va fi deschisă — ne concentrăm pe PV-urile de evaluare. ERP: verificare automată „valoare DUAE = valoare recomandare/PV” cu explicație obligatorie la diferențe.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 3265500.0,
+  "sub_prag": true,
+  "tip_contract": "lucrări — extindere rețea distribuție gaze naturale",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Clarificare 3733/16.06.2025 (art. 196 L98), răspuns 17.06.2025; raport 3935/26.06.2025, comunicare 3937/26.06.2025; contestație 855/03.07.2025; cauțiune 65.310 lei; studiu dosar CNSC 28.07.2025. Contract de referință: P+E extindere sistem distribuție gaz, proiectare 170.000 + AT 13.000 lei.",
+  "concluzie_cnsc": "Admite în parte: anulează raportul și PV-urile în partea privind oferta contestatorului, obligă reevaluarea în 15 zile; respinge cererea de reevaluare a ofertei câștigătoare.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere rețea gaze, valoare mică (≈3,3 mil. lei), procedură simplificată — exact segmentul Gazpet; experiență similară pe rețele de gaze.",
+   "mai_putin_comparabila": "Fără analiză tehnică a ofertelor.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "existau anumite neconcordanțe între informațiile din cuprinsul acestora, însă acestea trebuiau lămurite prin intermediul unei solicitări de clarificări",
+    "loc": "p. 10 (din 12)"
+   },
+   {
+    "text": "O astfel de solicitare nu ar fi condus la încălcarea principiilor tratamentului egal și al nediscriminării",
+    "loc": "p. 10 (din 12)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "f40fcb3eb9ec11846f3b8f5840bba1fb552f28157e0ba40ac51a5c313ac58591",
+  "snapshot_bytes": 208851,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "5d22632286f903175e36790624ea84bdeceab28574845c825b8ae835d977fb87",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
   "id": "CNSC-BO2025_2294",
   "nr_decizie": "2294/C4/2851",
   "buletin_oficial": "BO2025_2294",
@@ -3033,6 +3464,78 @@
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
+  "id": "CNSC-BO2025_2820",
+  "nr_decizie": "2820/C1/3307",
+  "buletin_oficial": "BO2025_2820",
+  "data": "2025-09-22",
+  "an": 2025,
+  "domeniu": "gaze",
+  "tema": [
+   "altele"
+  ],
+  "regula": "O opoziție punctuală a unui proprietar (petiție, fără litigiu) privind un tronson nesemnificativ nu justifică anularea unei proceduri de proiectare și execuție a unei rețele de gaze: adaptarea traseului ține de proiectare, iar anularea cere o imposibilitate obiectivă, independentă de voința AC.",
+  "temei_legal": [
+   "Legea 98/2016 art. 212 alin. (1) lit. c) și alin. (2)",
+   "Legea 98/2016 art. 2 alin. (2)",
+   "HG 395/2016 art. 143 alin. (1), art. 145",
+   "HG 907/2016 art. 12",
+   "Legea 101/2016 art. 26 alin. (2) și (5)",
+   "CJUE C-451/08 Helmut Müller pct. 46; C-26/03 Stadt Halle pct. 37"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ODQ3NzczZmYtMjU0MC00ZWU1LWEzMTAtNjIzNTdjM2RlMmJi&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzI4MjAucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună) — beneficiar PNI Anghel Saligny",
+  "obiect": "Servicii de proiectare, asistență tehnică și execuție — „Dezvoltare rețea inteligentă de distribuție a gazelor naturale în ..., județul ...”, CPV 45231221-0, licitație deschisă, VE 30.507.585,27 lei, cel mai bun raport calitate-preț; rețea 35,647 km",
+  "problema": "AC a anulat procedura (raport 5475/14.08.2025, art. 212 alin. 1 lit. c L98) înainte de evaluare, pe motiv de „litigiu civil”: un proprietar a depus o petiție (22.07.2025) că nu e de acord cu trecerea conductei prin terenul său (~90 m din 35.647 m). Ofertantul a contestat anularea.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Petiția nu reflectă imposibilitatea încheierii/executării contractului: (1) anunțul prevedea conducta „în domeniul public de-a lungul drumurilor”, deci terenul privat ar putea afecta cel mult branșamentul petentului; (2) la P+E, proiectantul poate detalia și optimiza scenariul din SF (art. 12 HG 907/2016) — devierea traseului e chiar obiectul contractului; (3) 90 m din 35.647 m nu înseamnă revizuire substanțială a SF; HG 907/2016 cere refacerea documentației doar la depășirea indicatorilor aprobați. Motivul nu se încadrează în cazurile limitative ale art. 212; AC nu-și poate invoca propria culpă și nu poate crea circumstanțe artificiale de anulare (art. 143, 145 HG 395/2016; CJUE C-451/08 Helmut Müller, C-26/03 Stadt Halle). Cauțiune 610.151,71 lei.",
+  "cum_ne_ajuta": "Dacă o AC anulează o licitație de rețea gaze (P+E, PNI Anghel Saligny) pe motive de teren/proprietari/avize punctuale, contestăm cu această decizie: argumentele — traseul pe domeniul public, P+E permite optimizarea în PT (HG 907/2016 art. 12), proporția tronsonului afectat, modificarea de soluție în platforma MDLPA. În ofertă/metodologie putem include o clauză de risc „variante de traseu pentru tronsoane cu opoziția proprietarilor”.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   6,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 30507585.27,
+  "sub_prag": false,
+  "tip_contract": "proiectare + asistență tehnică + execuție rețea inteligentă de distribuție gaze naturale (PNI Anghel Saligny)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant",
+  "etapa": "anulare procedura (înainte de evaluare)",
+  "fapte_relevante": "Anunț .../11.04.2025; petiție 22.07.2025; raport de anulare 5475/14.08.2025; acces la dosar 21.08.2025 (raport, notă justificativă, petiție, CF, extras SF); contestație 1113/25.08.2025; tronson afectat ~90 m (≈0,25%); proiect finanțat prin PNI Anghel Saligny (MDLPA permite „modificare temă de proiectare/soluție”).",
+  "concluzie_cnsc": "Admite contestația, anulează raportul de anulare 5475/14.08.2025 și actele subsecvente, dispune continuarea procedurii în 10 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de distribuție gaze PNI Anghel Saligny, P+E, VE ~30 mil. lei — piața directă Gazpet.",
+   "mai_putin_comparabila": "Fără analiză privind ofertele; situație de fapt specifică (petiție, nu litigiu).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "revine în sarcina proiectantului sarcina de a identifica soluții punctuale de deviere a conductei de gaz",
+    "loc": "p. 8 (din 10)"
+   },
+   {
+    "text": "nu poate avea influență decât cel mult asupra branșamentului individual al petentului",
+    "loc": "p. 7 (din 10)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "11948b2a858120c250399d6505d5d7547bbcb4cc87dceef8503c176d9b9b9c24",
+  "snapshot_bytes": 165511,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "eea804915723d4944f2528644341ba927b225a02426c486993df0226a2d41e7f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
   "id": "CNSC-BO2025_2853",
   "nr_decizie": "2853/C7/3177",
   "buletin_oficial": "BO2025_2853",
@@ -3242,6 +3745,79 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "28ab62bdef10afe021de4b3e5bf13886e37bf6cbabfd8fd5b926f40751ef233f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_3035",
+  "nr_decizie": "BO2025_3035 (nr./data anonimizate în BO; al doilea ciclu după Decizia 2271/C9/2484 din 06.08.2025)",
+  "buletin_oficial": "BO2025_3035",
+  "data": null,
+  "an": 2025,
+  "domeniu": "gaze",
+  "tema": [
+   "experienta_similara",
+   "documente_calificare",
+   "clarificari_oferta"
+  ],
+  "regula": "Pentru experiența similară pe rețele de gaze, o rețea executată dar nepusă în funcțiune (fără racord/SRMP) și recepționată doar parțial nu dovedește „lucrări duse la bun sfârșit”; PVRTL obținut după termenul de ofertare nu poate fi folosit, iar refuzul de a răspunde punctual la clarificări face oferta inacceptabilă.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (1)–(5)",
+   "Legea 98/2016 art. 196, art. 209 alin. (2)",
+   "HG 343/2017 (recepția construcțiilor) — invocat de AC",
+   "Ordin ANRE 89/2018 (NTPEE-2018) — invocat de contestator",
+   "Legea 101/2016 art. 26 alin. (6), art. 28"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NTE3NjEzMDItZjQ1Ny00NzRlLTljNzctOGFmY2Q5MWVmZmE3&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzMwMzUucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună, jud. Argeș)",
+  "obiect": "„Extindere rețea distribuție gaze naturale în comuna ..., județul ...”, CPV 45231221-0, procedură simplificată SCN.../28.05.2025, VE 3.265.500 lei, termen oferte 13.06.2025",
+  "problema": "După reevaluarea dispusă de CNSC (BO2025_2271), AC a cerut clarificări: valoarea exactă, PV de recepție la terminarea lucrărilor (HG 343/2017), dovada că lucrările au fost duse la bun sfârșit conform normelor, caracterul distinct fizic și funcțional al părții recepționate. Contractul de referință (extindere distribuție gaz într-un sat, P+E) avea doar PV de recepție parțială din 27.06.2024 care menționa că rețeaua „poate funcționa independent după montarea SRMP-ului” (racordul Transgaz și SRMP în sarcina beneficiarului); PVRTL nr. 2020/29.07.2025 a fost obținut după termenul de ofertare (comisie 16.04–29.07.2025). Ofertantul a refuzat să depună PVRTL („alte documente” erau suficiente). Oferta respinsă din nou.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "AC a pus în aplicare decizia anterioară cu diligență (reevaluare începută la 4 zile de la primire). Decizia anterioară nu constatase îndeplinirea cerinței, ci obligase la clarificări; întrebările punctuale erau legitime, iar nelegalitatea lor trebuia contestată la primire (critica ulterioară e tardivă). PVRTL încheiat în iulie 2025 dovedește că la 13.06.2025 recepția nu era finalizată. Din PV parțial și recomandare nu rezultă că lucrările au fost duse la bun sfârșit și executate conform normelor; o rețea nefuncțională până la montarea SRMP nu e parte distinctă fizic și funcțional (clauzele 19.4, 19.6 din contract). Probele de presiune conform NTPEE-2018 invocate fără dovezi. Problemele cu UAT-beneficiar (schimbarea conducerii, SRMP nemontat) nu pot fi imputate AC.",
+  "cum_ne_ajuta": "Pentru dosarul de experiență similară Gazpet: folosim doar contracte cu PVRTL emis ÎNAINTE de termenul de ofertare; la rețele încă nealimentate (racord/SRM în sarcina altuia), cerem beneficiarului recepție parțială pentru tronsoane distincte fizic și funcțional + PV probe de presiune/etanșeitate NTPEE și confirmarea scrisă a funcționalității. Răspundem la clarificări EXACT la întrebare (chiar dacă le considerăm excesive) — sau le contestăm în termen. ERP: câmp „PVRTL nr./dată” obligatoriu pe fiecare contract de referință și alertă dacă data > termen ofertare.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10,
+   1
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 3265500.0,
+  "sub_prag": true,
+  "tip_contract": "lucrări — extindere rețea distribuție gaze naturale",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins (după reevaluare dispusă de CNSC)",
+  "etapa": "rezultat (reevaluare)",
+  "fapte_relevante": "Decizia 2271/C9/2484 primită 14.08.2025; PV reevaluare 4904/18.08.2025; clarificări 4914/19.08.2025, răspuns 1081/20.08.2025; PV 5045/27.08.2025; raport 5212/05.09.2025, comunicare 5214/05.09.2025; contestație 1199/11.09.2025; cauțiune 65.310 lei; valoarea clarificată a experienței: 3.108.150,97 lei (peste pragul de 3.000.000 lei).",
+  "concluzie_cnsc": "Respinge contestația ca nefondată.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere rețea gaze de mică valoare; problema rețelelor finalizate dar neracordate (SRMP/Transgaz întârziat) e frecventă la PNI/PNDL.",
+   "mai_putin_comparabila": "Depinde de definiția „lucrări realizate” din fișa de date.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; complementară cu BO2025_2271 (același dosar, primul ciclu)."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu se încheiase recepția lucrării",
+    "loc": "p. 16 (din 18)"
+   },
+   {
+    "text": "nefiind suficientă finalizarea lucrărilor",
+    "loc": "p. 17 (din 18)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d5bb7f829845c624468d66679d656257d84bcd14378bcaee02d47cfcad9d803e",
+  "snapshot_bytes": 243050,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a360126b0a8c718e39fbb58808274fdb2c3873cbb3208c7306945315fef595ea",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -3818,6 +4394,74 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "b2ba59203e0bd595f10aba809b207b3bdd4555af1909e95ab436ad6799c08870",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_748",
+  "nr_decizie": "BO2025_748 (nr./data anonimizate în BO)",
+  "buletin_oficial": "BO2025_748",
+  "data": null,
+  "an": 2025,
+  "domeniu": "gaze",
+  "tema": [
+   "neconformitate_tehnica",
+   "clarificari_oferta",
+   "altele"
+  ],
+  "regula": "Când AC comunică prin SEAP o decizie intermediară detaliată de respingere a ofertei (ex. după evaluarea tehnică), termenul de contestare curge de la acea comunicare, nu de la comunicarea finală a rezultatului care doar o reiterează.",
+  "temei_legal": [
+   "Legea 101/2016 art. 8 alin. (1) lit. a), art. 16 alin. (1), art. 17 alin. (3), art. 26 alin. (1) și (6)",
+   "HG 395/2016 art. 137 alin. (2) lit. a), art. 134"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NDRhZTg5NDQtZmU4MC00ZmFhLTlmMDYtNmU4ZTFjNzg3MzI4&pdfa1=ZmFsc2U=&filename=Qk8yMDI1Xzc0OC5wZGY=&action=aW5saW5l",
+  "autoritate": "UAT (oraș) — beneficiar PNI Anghel Saligny",
+  "obiect": "Proiectare + AT + execuție rețea de distribuție inteligentă a gazelor naturale (PNIAS), licitație deschisă, cel mai bun raport calitate-preț; termen ofertare 16.09.2024",
+  "problema": "Oferta contestatorului (lider de asociere) a fost respinsă ca neconformă (art. 137 alin. 2 lit. a HG 395/2016) pentru ignorarea cerințelor BIM din caietul de sarcini (cuvântul „BIM” lipsea din propunerea tehnică; completarea prin clarificări cu Revit/Civil 3D considerată completare ilegală și inadecvată pentru rețele de gaze). Motivele i-au fost comunicate detaliat printr-o „comunicare intermediară” în SEAP la 13.12.2024; contestatorul a atacat abia comunicarea finală a rezultatului (16.01.2025), contestând la 27.01.2025.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Actul vătămător era comunicarea intermediară din 13.12.2024, detaliată și cuprinzând in extenso motivele respingerii; comunicarea finală și raportul procedurii doar formalizează decizii deja opozabile, fără informații noi. Termenul de 10 zile (art. 8 alin. 1 lit. a L101, procedură peste prag) s-a împlinit la 23.12.2024; contestația transmisă la 27.01.2025 e tardivă (art. 16 alin. 1 — se înaintează și CNSC și AC în termen). Nu e posibilă repunerea în termen după dreptul comun; L101 e normă specială. Cerere de intervenție a câștigătorului admisă; cheltuielile intervenientului rămân în sarcina sa. Cauțiune 662.621,70 lei.",
+  "cum_ne_ajuta": "(1) ERP: orice „comunicare intermediară”/rezultat de etapă primit în SEAP pornește IMEDIAT ceasul de contestare (10 zile peste prag / 5 zile sub prag) — nu așteptăm raportul final. (2) Cerințele BIM din caietele de sarcini PNI pentru rețele de gaze trebuie tratate explicit în propunerea tehnică (metodologie, software, actualizare model în execuție); completarea ulterioară prin clarificări riscă să fie considerată completare a ofertei. Dacă cerința BIM e disproporționată pentru o rețea de gaze, o clarificăm/contestăm la DA.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "proiectare + AT + execuție rețea inteligentă de distribuție gaze naturale (PNI Anghel Saligny)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins (lider de asociere)",
+  "etapa": "rezultat",
+  "fapte_relevante": "5 oferte; 4 respinse ca neconforme; câștigător cu 32.778.422,75 lei fără TVA (100 puncte); minuta comisiei 13.12.2024; cerere studiu dosar 17.12.2024, documente primite 23.12.2024; raport 146/16.01.2025, comunicare 151/16.01.2025; contestație 27.01.2025.",
+  "concluzie_cnsc": "Admite excepția tardivității și respinge contestația ca tardivă; admite cererea de intervenție a câștigătorului; respinge cheltuielile intervenientului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea inteligentă de distribuție gaze PNI Anghel Saligny, ~33 mil. lei — piața Gazpet; cerințe BIM apar tot mai des.",
+   "mai_putin_comparabila": "Fondul (BIM) nu a fost analizat de CNSC — doar reproducerea motivelor AC.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; motivele BIM sunt poziția AC, nu a CNSC."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu fac decât să consemneze și să formalizeze decizii luate cu mult înainte, aduse la cunoștința contestatorului și deci opozabile acestuia",
+    "loc": "p. 9 (din 10)"
+   },
+   {
+    "text": "Consiliul nu va lua în considerare încercarea contestatorului de repunere în termenul de contestare",
+    "loc": "p. 10 (din 10)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "ae90e8275959b104843bc2da3c7e8e6d6e471798a8a0258370a8716ecbd9e001",
+  "snapshot_bytes": 167494,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "54bdd6fa350029bdcb743e6e2d8bb9ba266eff13eb967de7bf74dc0bfb543552",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -4449,6 +5093,75 @@
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
+  "id": "CNSC-BO2024_1770",
+  "nr_decizie": "BO2024_1770 (nr. anonimizat; data 27.06.2024)",
+  "buletin_oficial": "BO2024_1770",
+  "data": "2024-06-27",
+  "an": 2024,
+  "domeniu": "gaze",
+  "tema": [
+   "factor_evaluare",
+   "neconformitate_tehnica"
+  ],
+  "regula": "Un calificativ redus la un factor de evaluare calitativ (Plan de management al calității) nu poate fi motivat prin lipsa unor elemente care se regăsesc efectiv în propunerea tehnică; comisia trebuie să analizeze întreaga ofertă și să motiveze concret, altfel punctajul se reevaluează.",
+  "temei_legal": [
+   "HG 395/2016 art. 133 alin. (1)",
+   "Legea 98/2016 art. 154 alin. (1), art. 215 alin. (2) lit. c)",
+   "Legea 101/2016 art. 17 alin. (3), art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=Y2ZmNmIwNTEtYzM0Ny00Mjk1LWEwMTctY2MxNWUxZTVlYTVh&pdfa1=ZmFsc2U=&filename=Qk8yMDI0XzE3NzAucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună)",
+  "obiect": "Proiectare și execuție „Înființare rețea de alimentare și distribuție gaze naturale în ...”, CPV 45231221-0, licitație deschisă, VE 48.017.104,10 lei; factori: preț 40%, metodologie/Plan de management al calității 30%, program de execuție 20%, garanție 10%",
+  "problema": "Contestatorul (locul II, 90,61 p vs 94,76 p) a primit calificativul „Bine” (5 p în loc de 10) la subfactorul 3.1 „Gradul de adaptare al Planului calității la caracteristicile contractului” pe motiv că „nu a prezentat modalitatea de asigurare a monitorizării și trasabilității înregistrărilor privind calitatea” — criteriu de grilă nepublicat; susținea și că punctajul tehnic a scăzut în SEAP de la 60 la 55 după decriptarea prețurilor. 6 oferte, una respinsă.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Propunerea tehnică a contestatorului conținea explicit capitole de identificare și trasabilitate (procedura P3-03, trasabilitate prin documente de aprovizionare, PCCVI, recepții pe faze determinante), măsurare și monitorizare, controlul înregistrărilor; însuși PV-ul de evaluare consemna îndeplinirea cerinței minime privind Planul calității. Comisia a aplicat greșit art. 133 alin. (1) HG 395 ignorând informații existente în ofertă; AC nu a adus niciun contraargument concret în punctul de vedere. Diferența de 5 puncte a decis clasamentul → reevaluarea subfactorului 3.1 în 15 zile; cererea de intervenție a câștigătorului respinsă pe fond.",
+  "cum_ne_ajuta": "Planul calității pentru rețele de gaze: structurăm explicit pe subfactorii din fișa de date (adaptare la contract, responsabili CQ, control pe faze) și cu titluri „Monitorizare”, „Trasabilitate materiale (țeavă PE/oțel, fitinguri, certificate 3.1)”, „Controlul înregistrărilor”, „PCCVI pe faze determinante”, cu trimiteri la pagini în cuprins — ca să nu poată fi ignorate. La depunctare, cerem PV-ul de evaluare (art. 217 L98) și contestăm cu indicarea paginilor. ERP: matrice „cerință de punctaj → pagină în ofertă”.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 48017104.1,
+  "sub_prag": false,
+  "tip_contract": "proiectare + execuție înființare rețea de alimentare și distribuție gaze naturale",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant clasat pe locul II",
+  "etapa": "rezultat",
+  "fapte_relevante": "Raport 6899/03.04.2024, comunicare 6902/03.04.2024; PV evaluare tehnică 6149/19.03.2024; contestație 398/15.04.2024; cerere intervenție 707/26.04.2024; AC (adresa 10998/14.06.2024) a recunoscut „întoarceri la faza anterioară” în SEAP, dar punctajul a fost 25 p în ambele faze; câștigător: preț 34,76 p + tehnic 60 p.",
+  "concluzie_cnsc": "Admite în principiu intervenția; admite contestația; anulează raportul în partea privind propunerea tehnică a contestatorului și comunicarea; reevaluare subfactor 3.1 în 15 zile; respinge intervenția pe fond.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de distribuție gaze, P+E, ~48 mil. lei, factori de evaluare tipici (Plan calitate, program execuție, garanție) — modelul DA PNI.",
+   "mai_putin_comparabila": "CNSC nu s-a pronunțat pe acuzația de modificare a punctajului în SEAP după decriptare.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "Comisia de evaluare consideră îndeplinită cerința minimă solicitată în caietul de sarcini/fișa de date",
+    "loc": "p. 19 (din 21)"
+   },
+   {
+    "text": "nu prezintă niciun contraargument față de criticile contestatoarei",
+    "loc": "p. 19 (din 21)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "20b75c1e81f83e714605025ce846a12b6a781308527f9f8e109cafcc3f8fe030",
+  "snapshot_bytes": 265598,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "341d58421ea6ac5f29015cb3d22d3286057875559566f9ee86aa9df447c8b759",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
   "id": "CNSC-BO2024_1870",
   "nr_decizie": "1870/C?/... (anonimizat, BO2024_1870)",
   "buletin_oficial": "BO2024_1870",
@@ -4591,6 +5304,78 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "fbc51edb069a22039c418fd73149e11cf7e3c6a8770f91ae1475db387f2a1cec",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2024_2462",
+  "nr_decizie": "BO2024_2462 (nr./data anonimizate în BO; dosar CNSC 2533/2024)",
+  "buletin_oficial": "BO2024_2462",
+  "data": null,
+  "an": 2024,
+  "domeniu": "gaze",
+  "tema": [
+   "neconformitate_tehnica",
+   "termen_executie",
+   "clarificari_oferta"
+  ],
+  "regula": "Dacă DA impune ca graficul Gantt să includă perioada nefavorabilă de iarnă (ex. 4 luni pentru durate >12 luni) și proceduri tehnice de execuție, programarea lucrărilor de montaj conducte în acea perioadă și lipsa procedurii de lucru pe timp friguros fac oferta neconformă; ele nu pot fi completate prin clarificări.",
+  "temei_legal": [
+   "HG 395/2016 art. 123, art. 127 alin. (1) lit. f), h), j), art. 134 alin. (5), art. 137",
+   "Legea 98/2016 art. 3 lit. hh), art. 75, art. 209 alin. (2)",
+   "Normativ C 16/84 pct. 1.1, 1.2, 1.6",
+   "Legea 101/2016 art. 26 alin. (6)",
+   "CJUE C-27/15 Pizzo pct. 39, 42; C-42/13 pct. 42–44; C-336/12 Manova; C-131/16 pct. 28; C-599/10 SAG ELV"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MDdmYTdmNWItNDI0NS00MThkLWEwODMtOGY2NmE2Nzg5NDgz&pdfa1=ZmFsc2U=&filename=Qk8yMDI0XzI0NjIucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună)",
+  "obiect": "„Execuția lucrărilor aferente obiectivului de investiții «Înființare distribuție gaze naturale în ..., cu satele aparținătoare ...»”, licitație deschisă CN1064646/31.01.2024, execuție pe bază de PT anexat, durată 24 luni",
+  "problema": "DA (formular cadru propunere tehnică) cerea Gantt pe metoda drumului critic și, pentru durate >12 luni, includerea a 4 luni „perioadă nefavorabilă pentru lucrări”, plus proceduri tehnice de execuție. Ofertantul (asociere) a planificat în noiembrie–februarie montaj conductă, refacere amplasament etc., nu a avut procedură de lucru pe timp friguros; la clarificări a trimis procedura „ca completare” și a explicat că data de start e necunoscută și iernile recente au fost calde (sistare max. 1–2 săptămâni). Oferta respinsă ca inacceptabilă și neconformă.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Cerința privind cele 4 luni nefavorabile, necontestată, e obligatorie (art. 123 HG 395; art. 127 alin. 1). Lipsa unei date de start nu scutea ofertantul de a plasa cele 4 luni în Gantt; mutarea activităților din iarnă ar cere resurse suplimentare sau durată peste 24 de luni, deci graficul nu demonstrează încadrarea în termen. Normativul C 16/84 (15 noiembrie–15 martie, convențional timp friguros) impune planificarea temeinică a lucrărilor în această perioadă. Completarea propunerii cu procedura de timp friguros și înlocuirea Gantt-ului prin clarificări ar fi fost avantaj evident (art. 209 alin. 2 L98; art. 137 HG 395). CJUE C-27/15 Pizzo, C-42/13 Cartiera dell'Adda, C-336/12 Manova, C-131/16, C-599/10. Cauțiune 627.648 lei; intervenția câștigătorului admisă.",
+  "cum_ne_ajuta": "Pentru Gantt-ul la rețele de gaze cu durate >6/12 luni: citim regula „perioadă nefavorabilă” din formularul de propunere tehnică și o reprezentăm explicit (bloc de 2/4 luni) cu doar activitățile admise de C 16/84 (proiectare, aprovizionare, lucrări interioare/SRM în hală etc.), iar montajul conductelor și refacerile în afara ei; atașăm întotdeauna procedura de execuție pe timp friguros (PE: sudură cap la cap/electrofuziune la temperaturi scăzute, umpluturi, refaceri). Dacă data de start e incertă, folosim „luna 1..N” cu ipoteză declarată de start și poziționarea iernii. Împreună cu BO2024_3381: rezervele de neprevăzute ≠ perioada friguroasă.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "lucrări (execuție pe bază de PT) — înființare distribuție gaze naturale în comună cu sate",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins (lider de asociere)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Clarificări 3178/14.05.2024 (întrebările 12–13), răspuns 00245/17.05.2024; raport 4648/10.07.2024 și comunicare 4650/10.07.2024 (SEAP 12.07.2024); contestație înregistrată 23.07.2024; caiet de sarcini: garanție lucrări min. 60 luni, Plan calitate conform SR EN ISO 9001:2015 / SR ISO 10005 și HG 766/1997; regula de calcul a duratei: zile lucrătoare/21 + 2 luni (≥6 luni) sau 4 luni (>12 luni) nefavorabile.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată; admite cererea de intervenție a câștigătorului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Execuție rețea distribuție gaze în comună — tipic Gazpet; formularul cu drum critic și perioadă nefavorabilă e răspândit în DA de gaze.",
+   "mai_putin_comparabila": "Depinde de formularea exactă a cerinței din formular.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "lipsa din documentația de atribuire a unei anumite date de start pentru planificarea activitățile nu este de natură să absolve ofertanții",
+    "loc": "p. 25 (din 28)"
+   },
+   {
+    "text": "Perioada 15 noiembrie-15 martie este considerată perioadă convențională de timp friguros",
+    "loc": "p. 26 (din 28)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b67fa98f77fc38e879ed88125aa6543d2ebf8530e1545de72a82c56e94ff2e2f",
+  "snapshot_bytes": 352305,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "1a71636f07745e03a586e153d00c744d52506783f5eae2d5bcc86c3dd024bcc6",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -4874,6 +5659,79 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "0d4807c79d8fbb9ffd8b4b04d4a76f1e0c585dd85563659ae566b7bb2e1af675",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2024_2727",
+  "nr_decizie": "BO2024_2727 (nr./data anonimizate în BO; contestația nr. 1720/31.07.2024)",
+  "buletin_oficial": "BO2024_2727",
+  "data": null,
+  "an": 2024,
+  "domeniu": "gaze",
+  "tema": [
+   "clarificari_documentatie",
+   "cerinte_restrictive",
+   "personal_cheie",
+   "experienta_similara",
+   "deviz_consumuri"
+  ],
+  "regula": "Remedierile dispuse de CNSC asupra DA produc efecte doar dacă sunt publicate în SEAP înainte de termenul de ofertare; o clarificare nepublicată nu remediază, iar după depunerea ofertelor singura soluție este anularea procedurii.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2 alin. (2) lit. b) și d)",
+   "Legea 98/2016 art. 212 alin. (1) lit. c) și alin. (2)",
+   "Legea 101/2016 art. 26 alin. (2) lit. c), art. 8"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZTcyM2Q3NDAtMjIwNS00M2FjLThlZWYtMjlmODUxMGU4NTc0&pdfa1=ZmFsc2U=&filename=Qk8yMDI0XzI3MjcucGRm&action=aW5saW5l",
+  "autoritate": "UAT (oraș/comună, județul Buzău)",
+  "obiect": "„Înființare rețea de distribuție gaze naturale în ..., Județul Buzău”, CPV 45231221-0, licitație deschisă online, VE 33.131.085,02 lei, cel mai bun raport calitate-preț",
+  "problema": "Al doilea ciclu procesual: printr-o decizie CNSC anterioară, AC fusese obligată să modifice DA (eliminare prag valoric sau cantitativ la experiența similară — 30 mil. lei / rețea ≥40 km, 1.000 utilizatori, 5.000 mc/h; eliminare liste de cantități + extrase de resurse F1–F3 în ofertă; eliminare planșă limite instalații/clădiri existente; eliminare obligației ca managerul de proiect, șeful de proiect și șeful de șantier să fie instalatori autorizați ANRE PGD/EGD; corelare durată contract). AC a publicat în SEAP doar modificarea experienței similare (cu 2 zile înainte de termenul de ofertare); clarificarea internă cu restul modificărilor nu a fost publicată. A depus ofertă un singur operator.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Deși AC a redactat o clarificare care transpunea toate remedierile, aceasta nu a fost adusă la cunoștința operatorilor prin publicare în SEAP; s-a aplicat efectiv doar remedierea privind experiența similară. Se încalcă tratamentul egal și transparența (art. 2 alin. 2 lit. b, d L98). Ofertele fiind deja depuse, omisiunea nu mai poate fi corectată fără încălcarea principiilor → AC trebuia să anuleze procedura (art. 212 alin. 1 lit. c și alin. 2 L98). Cauțiune 662.662 lei.",
+  "cum_ne_ajuta": "Când câștigăm o contestație pe DA (ex. cerințe ANRE excesive pe funcții de management, liste F1–F3 în ofertă la P+E, praguri de experiență), monitorizăm în SEAP că TOATE remedierile sunt publicate efectiv și la timp; dacă AC aplică parțial sau publică cu 1–2 zile înainte de termen, contestăm din nou (actul atacat = clarificarea/erata generată după decizie) și cerem anularea. Decizia confirmă (citând decizia anterioară) că a cere ca managerul de proiect/șeful de proiect/șeful de șantier să fie instalatori ANRE PGD/EGD a fost considerat excesiv.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   6,
+   10,
+   1
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 33131085.02,
+  "sub_prag": false,
+  "tip_contract": "proiectare și execuție (P+E) înființare rețea de distribuție gaze naturale",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (2 factori)",
+  "contestator_rol": "operator economic interesat, contestator câștigător în primul ciclu (nu a ofertat)",
+  "etapa": "documentatie (punerea în aplicare a unei decizii CNSC)",
+  "fapte_relevante": "Răspuns consolidat la clarificări 20.05.2024 contestat anterior; erată automată 22.07.2024 (termen ofertare 26.07.2024); clarificare automată 24.07.2024 — doar pct. III.1.3 (experiență similară); fișa de date promitea răspunsuri cu 5 zile înainte de termen; 45 de zile între anunț și termenul final; o singură ofertă.",
+  "concluzie_cnsc": "Admite contestația și anulează procedura (anunțul de participare .../08.05.2024).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de distribuție gaze, P+E, oraș/comună — tipic PNI Anghel Saligny; cerințele remediate sunt frecvente în DA de gaze.",
+   "mai_putin_comparabila": "Problema e procedurală (publicarea remedierilor), nu tehnică.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; conținutul decizie anterioare e redat doar parțial."
+  },
+  "citate_cheie": [
+   {
+    "text": "respectiva clarificare nu a fost adusă la cunoștința operatorilor economici interesați de participarea la procedura de atribuire prin publicarea în SEAP",
+    "loc": "p. 8 (din 9)"
+   },
+   {
+    "text": "impunându-se eliminarea obligației ca Managerul de proiect, șeful de proiect și șeful de șantier să fie autorizați ca instalatori ANRE",
+    "loc": "p. 3 (din 9)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "2ddde82e9d941937b354e8483bc137586b6eed2eaebbeb15227a38db574f1f8c",
+  "snapshot_bytes": 172403,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "bbf314a3ab9241c9c9297d7738647800680c4d94c4109131c08eedd6c2e6aa31",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -5517,6 +6375,79 @@
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
+  "id": "CNSC-BO2024_3381",
+  "nr_decizie": "BO2024_3381 (nr./data anonimizate în BO; contestația 539/28.10.2024)",
+  "buletin_oficial": "BO2024_3381",
+  "data": null,
+  "an": 2024,
+  "domeniu": "gaze",
+  "tema": [
+   "neconformitate_tehnica",
+   "termen_executie",
+   "clarificari_oferta",
+   "clarificari_documentatie"
+  ],
+  "regula": "Când formularul de propunere tehnică cere în graficul Gantt rezerve de timp pentru situații neprevăzute și perioade cu restricții (timp friguros), ele trebuie prezentate distinct; perioada de iarnă fără activități nu ține loc de rezervă, iar un răspuns de clarificare care le confundă face oferta inacceptabilă/neconformă.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (1), (5) și (7), art. 137 alin. (3) lit. a), art. 123 alin. (1)",
+   "Legea 98/2016 art. 75, art. 209 alin. (1)–(2), art. 2 alin. (2) lit. b)",
+   "Normativ C 16-84 (lucrări pe timp friguros, 15.11–15.03)",
+   "Legea 101/2016 art. 26 alin. (6)",
+   "CJUE C-76/16 Ingsteel și Metrostav pct. 34; C-27/15 Pizzo pct. 36"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MzYwZWI0ZjgtNDMxOS00NWYxLWI4NzAtNjcyOTgxMmFhMTg0&pdfa1=ZmFsc2U=&filename=Qk8yMDI0XzMzODEucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună, județul Timiș)",
+  "obiect": "„Execuție de lucrări aferente investiției Înființare rețea distribuție gaze naturale în comuna ...”, CPV 45231221-0, procedură simplificată SCN1151280/08.08.2024, VE 7.180.800,40 lei, cel mai bun raport calitate-preț, durată 18 luni",
+  "problema": "Formularul 13 (propunere tehnică) cerea în graficul Gantt, distinct, (i) rezervele de timp pentru situații neprevăzute și (j) perioadele cu restricții. Ofertantul nu a marcat rezerve; la clarificări a răspuns că perioada de timp friguros 15 noiembrie–15 martie („8 luni”), lăsată fără activități, e rezerva pentru neprevăzute. Oferta a fost declarată inacceptabilă (răspuns neconcludent, art. 134 alin. 5 HG 395) și neconformă (art. 137 alin. 3 lit. a). Au fost 2 oferte; câștigător: Gaz Vest Rețele SRL.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "DA necontestată e obligatorie pentru ofertanți în cel mai mic detaliu (art. 75 L98, art. 123 alin. 1 HG 395; jurisprudență curți de apel; CJUE C-76/16 Ingsteel, C-27/15 Pizzo). Gantt-ul nu conținea informația de la lit. i); clarificarea a fost corect cerută. Rezervele de timp pentru neprevăzute nu se suprapun cu perioada de timp friguros (Normativ C 16-84: 15 noiembrie–15 martie) — trebuiau prezentate distinct; răspunsul era și eronat (perioada e de 4 luni, nu 8) și contradictoriu cu contestația. Ofertantul nu a cerut clarificări la DA asupra noțiunii, asumându-și riscul. Lipsa nu e abatere tehnică minoră (art. 134 alin. 7 HG 395), iar completarea Gantt-ului ar fi fost avantaj (art. 209 alin. 2 L98). Cauțiune 88.000 lei.",
+  "cum_ne_ajuta": "Checklist Gantt pentru rețele gaze (Formular 13 tipic): bară separată „rezervă de timp neprevăzute” (ex. 5–10% din durată, poziționată pe activitățile critice) + bară separată „perioadă cu restricții / timp friguros 15.11–15.03 (C 16-84)” + jaloane + drum critic + teste/probe + resurse pe etape. Dacă formularul cere elemente neclare, cerem clarificare LA DA (șablon: „Vă rugăm să precizați modul de reprezentare în Gantt a rezervelor de timp pentru situații neprevăzute — durată minimă, poziționare — și dacă acestea pot coincide cu perioadele cu restricții”). ERP: validare automată a Gantt-ului față de lista lit. a–k din Formularul 13.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 7180800.4,
+  "sub_prag": true,
+  "tip_contract": "lucrări — înființare rețea distribuție gaze naturale",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Termen oferte 26.08.2024; 2 oferte; clarificare 4407/20.09.2024, răspuns 495/24.09.2024; PV 4 nr. 4744/07.10.2024; raport 4939/21.10.2024, comunicare 4941/21.10.2024; Gantt: timp friguros 14.11.2025–16.03.2026.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Execuție rețea distribuție gaze în comună, simplificată, 7,2 mil. lei — exact profilul Gazpet; Formularul 13 standard apare în multe DA.",
+   "mai_putin_comparabila": "Soluția depinde de formularea concretă a Formularului 13.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "rezervele de timp pentru situații neprevăzute nu se suprapun cu perioada de timp friguros",
+    "loc": "p. 13 (din 14)"
+   },
+   {
+    "text": "Lipsa unui demers de a clarifica prevederea din Formularul 13 a condus la elaborarea unei oferte neconforme",
+    "loc": "p. 13 (din 14)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "c7ad42b2d1d9641bd9143108cba8a7f9f5504b8db87dc2d3bb5f8df2cb4bc744",
+  "snapshot_bytes": 231735,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "f7b4db9170daf4b9f2cb273ddd21aa99b464f82e7623defe0b8eb2ad4a6250e2",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
   "id": "CNSC-BO2024_3631",
   "nr_decizie": "3631/C?/... (anonimizat, BO2024_3631)",
   "buletin_oficial": "BO2024_3631",
@@ -5731,6 +6662,82 @@
   "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "f3f36d165999e86aa6ffff476d3fca1ebf51f44b420883752739158a12a86664",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2024_494",
+  "nr_decizie": "494/C1/43",
+  "buletin_oficial": "BO2024_494",
+  "data": "2024-02-28",
+  "an": 2024,
+  "domeniu": "gaze",
+  "tema": [
+   "cerinte_restrictive",
+   "deviz_consumuri",
+   "documente_calificare",
+   "termen_executie",
+   "clarificari_documentatie"
+  ],
+  "regula": "La P+E pentru rețele de distribuție gaze, AC nu poate cere în ofertă liste de cantități F1–F3/extrase de resurse (conținut de PT), tabele logistice de transport detaliate sau vizită obligatorie a amplasamentului cu planșă de constrângeri; ele sunt disproporționate față de nivelul SF. Termenul minim de ofertare curge însă de la transmiterea anunțului spre publicare.",
+  "temei_legal": [
+   "Legea 98/2016 art. 74 alin. (2), art. 12 lit. a), art. 49 alin. (1), art. 154 alin. (1), art. 155, art. 160",
+   "HG 395/2016 art. 20 alin. (10)–(11), art. 123, art. 127 alin. (1) lit. f)",
+   "HG 907/2016 art. 7 alin. (1), art. 12 alin. (1), (2), (4), Anexa 4 pct. 3.1–3.4, Anexa 10 cap. V",
+   "Notificarea ANAP din 30.05.2019 (bune practici lucrări cu proiectare)",
+   "Legea 101/2016 art. 26 alin. (2) și (7)",
+   "CJUE C-42/13 Cartiera dell'Adda"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NmNkNWM0M2QtYjBjMi00MDQxLWIxY2UtNjc4ZjZmYTkyYjYz&pdfa1=ZmFsc2U=&filename=Qk8yMDI0XzQ5NC5wZGY=&action=aW5saW5l",
+  "autoritate": "UAT / asociere de comune (sate Udați-Mânzu, Gherăseni — jud. Buzău)",
+  "obiect": "Proiectare + AT + execuție „Înființare sistem inteligent de distribuție gaze naturale în comuna ... – sate aparținătoare ... + Udați-Mânzu și Gherăseni”, CPV 45231221-0 (+71322200-3, 71356200-0), licitație deschisă CN1062996/27.12.2023, VE 58.428.886,44 lei, cel mai bun raport calitate-preț",
+  "problema": "Contestație la DA (o societate pe acțiuni): (A) termen de ofertare prea scurt (publicare 27.12, ofertare 08.01, SEAP nefuncțional 28.12–02.01, clarificări posibile doar o zi); (B) cerință de calificare — certificat MMSC pentru documentații de gospodărire a apelor (Ord. 584/2017) sau colaborare cu firmă acreditată; liste de cantități F1–F3 + extrase de resurse (HG 907/2016) în propunerea financiară, deși SF nu avea liste/planuri; Gantt + tabel transporturi (resursă aprovizionată, distanță, curse/zi etc.) + WBS; vizitare obligatorie a amplasamentului + planșă „constrângeri fizice”; 4 durate diferite ale contractului; execuția instalațiilor de utilizare la 34 obiective socio-culturale.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Respinse: termenul de 15 zile (art. 74 alin. 2 L98) se calculează de la transmiterea anunțului spre publicare (22.12.2023, art. 12 lit. a), deci respectat; refuzul prelungirii — justificat (alți 5 operatori nu au cerut); certificatul de gospodărire a apelor — justificat de interferența cu rețelele de apă-canal și condițiile avizatorilor, contestatorul a făcut doar afirmații generale. Admise: tabelul de transporturi = exagerat (Gantt doar proporțional cu detalierea SF); vizitarea obligatorie a amplasamentului + planșa = restrictivă (SF prezumă amplasamentul studiat — Anexa 4 HG 907/2016; art. 154–155 L98; CJUE C-42/13), poate fi doar opțională; listele F1–F3 + extrase de resurse fără prețuri = excesive la P+E, fiind conținut de proiect tehnic (art. 12 alin. 2 și 4, Anexa 10 cap. V HG 907/2016; Notificarea ANAP 30.05.2019); 4 durate diferite ale contractului = neclaritate. Termenul de ofertare fiind depășit, remedierea nu mai e posibilă → anulare (art. 26 alin. 2 și 7 L101).",
+  "cum_ne_ajuta": "Șabloane de contestare/clarificare DA pentru P+E gaze: (1) „Vă rugăm eliminarea cerinței F1–F3 + extrase de resurse în ofertă — conținut de PT (HG 907/2016 art. 12, Anexa 10 cap. V; Notificare ANAP 30.05.2019; Decizia CNSC 494/C1/43/2024)”; (2) vizita amplasamentului doar opțională; (3) Gantt la nivelul de detaliere al SF, fără tabele de transport/curse; (4) corelarea duratei contractului în toate documentele. Atenție: termenul de 15 zile se socotește de la transmiterea anunțului (nu publicare) — nu contestăm pe acest motiv. Cerința de atestat gospodărire ape poate fi acceptată dacă AC o justifică prin interferențe cu apă-canal.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   6,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 58428886.44,
+  "sub_prag": false,
+  "tip_contract": "proiectare + AT + execuție sistem inteligent de distribuție gaze naturale (comune)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "operator economic interesat (SA)",
+  "etapa": "documentatie",
+  "fapte_relevante": "Anunț transmis 22.12.2023, publicat 27.12.2023; termen ofertare 08.01.2024; cerere suspendare respinsă prin Încheierea 57/C1/43 din 10.01.2024; SF fără liste de cantități; autorizație de construire 63/2023 existentă; 34 obiective socio-culturale cu instalații de utilizare; avize apă-canal favorabile necondiționate.",
+  "concluzie_cnsc": "Admite contestația și dispune anularea procedurii (remedierea nu mai e posibilă după termenul de ofertare).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Sistem inteligent de distribuție gaze în comune, P+E, ~58 mil. lei — profilul licitațiilor PNI pe care participă Gazpet.",
+   "mai_putin_comparabila": "Soluția de anulare ține de calendarul procedurii.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; linia privind F1–F3 la P+E e constantă în practica CNSC."
+  },
+  "citate_cheie": [
+   {
+    "text": "vizitarea amplasamentului poate fi, cel mult, o facilitate opțională acordată de autoritatea contractantă ofertanților",
+    "loc": "p. 15 (din 20)"
+   },
+   {
+    "text": "cerința elaborării și prezentării propunerilor tehnice la nivel de articol de deviz este excesivă în cadrul prezentei proceduri de atribuire",
+    "loc": "p. 18 (din 20)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "a6d3ea18effa743289a758e8b0203e64b29bbd803a782da4c2ac223638065369",
+  "snapshot_bytes": 245403,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "cff041089b130635f7f9337f0a195a37f528f8534fdde6fd52c8a73d5dc701d3",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -7396,6 +8403,151 @@
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
+  "id": "CNSC-BO2023_675",
+  "nr_decizie": "675/C7/456",
+  "buletin_oficial": "BO2023_675",
+  "data": "2023-03-24",
+  "an": 2023,
+  "domeniu": "gaze",
+  "tema": [
+   "personal_cheie",
+   "factor_evaluare",
+   "clarificari_oferta",
+   "termen_executie",
+   "altele"
+  ],
+  "regula": "Când entitatea contractantă anunță la CNSC că reevaluează (achiesează), Consiliul anulează raportul și dispune reevaluarea; cererea de intervenție trebuie nu doar depusă, ci și comunicată părților în 10 zile de la publicarea contestației în SEAP, altfel e tardivă.",
+  "temei_legal": [
+   "Legea 101/2016 art. 9 alin. (1), art. 17 alin. (3)–(4), art. 26 alin. (2) și (5), art. 61^1",
+   "Legea 99/2016 art. 228 alin. (4)",
+   "HG 394/2016 art. 143 alin. (2) lit. b) și alin. (3) lit. a), art. 145, art. 154"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=YmIzMGExMjgtYjFhYy00ZmMwLTg1NjAtZDhjMjFiNjRlOWM2&pdfa1=ZmFsc2U=&filename=Qk8yMDIzXzY3NS5wZGY=&action=aW5saW5l",
+  "autoritate": "Entitate contractantă — asociație de dezvoltare intercomunitară pentru gaze (comunele Slobozia, Malu, Vedea, jud. Giurgiu)",
+  "obiect": "Proiectare tehnică, asistență tehnică și execuție — „Înființare sistem inteligent de distribuție gaze naturale în Comunele Slobozia, Malu și Vedea, jud. Giurgiu”, CPV 45231221-0, licitație deschisă (L99), VE 44.833.132,71 lei, cel mai bun raport calitate-preț",
+  "problema": "Contestatorul (locul II) a criticat punctajul maxim (15p) dat câștigătorului la factorul „Experiența experților cheie”: managerul de proiect, coordonatorul de proiectare (ANRE PGD/PGIU) și șeful de șantier (ANRE EGD/EGIU) aveau 5 lucrări dar în doar 1–2 contracte (algoritmul cerea ≥5 contracte comparabile), dovedite prin recomandări Engie România emise la 18.01.2023, după ofertare, ca răspuns la clarificări; CV-urile îi indicau în alte funcții (manager de proiect, nu șef de șantier). Critici și la jaloanele din Gantt și fezabilitatea termenului de 4 luni.",
+  "solutie": "admisa",
+  "rationament_cnsc": "EC a declarat că ia măsuri de remediere (art. 9 alin. 1 L101) și reevaluează ofertele — achiesare la contestație, recunoscând că evaluarea a fost insuficientă; CNSC anulează raportul și obligă reevaluarea ofertei câștigătoare sub aspectele criticate în 20 de zile. Cererea de intervenție a câștigătorului a fost respinsă ca tardivă: deși depusă la CNSC în 10 zile, nu a fost comunicată EC și contestatorului în termenul de 10 zile (art. 17 alin. 4 L101). Cauțiune 896.663 lei.",
+  "cum_ne_ajuta": "(1) Pentru factorul „experiența experților cheie” pe rețele de gaze, numărul de CONTRACTE distincte contează când algoritmul spune „contracte” — nu PV-uri de recepție multiple din același contract; pregătim pentru fiecare expert recomandări de la operator (Engie/Distrigaz, Delgaz) ÎNAINTE de ofertare, cu funcția exactă deținută. (2) Dacă suntem câștigători și se contestă: depunem cererea de intervenție la CNSC ȘI o comunicăm AC + contestatorului în 10 zile de la publicarea contestației în SEAP. ERP: alertă termen intervenție.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă (sectorială, mijloace electronice)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": 44833132.71,
+  "sub_prag": false,
+  "tip_contract": "proiectare + AT + execuție sistem inteligent de distribuție gaze naturale (3 comune)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant clasat pe locul II (asociere)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț CN1049944/01.12.2022; raport 112/13.02.2023; contestație 771/24.02.2023; contestație publicată în SEAP 28.02.2023; cerere intervenție depusă CNSC 10.03.2023, comunicată pe e-mail părților abia 15.03.2023; termen de execuție ofertat de câștigător: 4 luni; EC a susținut că termenul poate fi prelungit cu max. 2 luni prin act adițional.",
+  "concluzie_cnsc": "Admite contestația; obligă EC să anuleze raportul 112/2023 și să reevalueze oferta câștigătoare în 20 de zile; respinge ca tardivă cererea de intervenție.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Sistem inteligent de distribuție gaze în comune, P+E, experți ANRE (PGD/EGD) — profil Gazpet.",
+   "mai_putin_comparabila": "Soluția se bazează pe achiesarea EC, nu pe analiza de fond a criticilor.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "recunoscând astfel că evaluarea realizată de membrii comisiei de evaluare a fost insuficientă",
+    "loc": "p. 10 (din 11)"
+   },
+   {
+    "text": "aspect care conduce la tardivitatea cererii de intervenție formulate",
+    "loc": "p. 9 (din 11)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b45bd4c880e4e361d6dda222c326204a6d4cf8c81ae218461e503b59385bd075",
+  "snapshot_bytes": 180822,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "fcf8134915eb1f8616e8e6b92779bdcedcb3ccc9a565bf350d7347c171837c90",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2023_985",
+  "nr_decizie": "BO2023_985 (nr./data anonimizate în BO; contestația 574/28.03.2023)",
+  "buletin_oficial": "BO2023_985",
+  "data": null,
+  "an": 2023,
+  "domeniu": "gaze",
+  "tema": [
+   "autorizare_anre",
+   "neconformitate_tehnica",
+   "clarificari_oferta",
+   "documente_calificare"
+  ],
+  "regula": "Atestatele ANRE (ex. tip B/Bp pentru partea electrică a unui SRM) cerute doar în norme tehnice ale operatorului anexate caietului de sarcini sunt condiții de executare, nu criterii de calificare; lipsa lor la data ofertei nu justifică respingerea dacă anunțul de participare nu le prevede ca cerință cu mijloc de probă.",
+  "temei_legal": [
+   "Legea 98/2016 art. 181",
+   "HG 395/2016 art. 30 alin. (4) și (6), art. 20 alin. (10), art. 123 alin. (1), art. 127 alin. (2) lit. f), art. 134 alin. (5), art. 137 alin. (3) lit. a)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)",
+   "CJUE C-403/21 NV Construct; C-295/20 Sanresa pct. 62–63; C-278/14 Enterprise Focused Solutions; C-599/10 SAG ELV"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=YjQxYjY1NTktN2ZmYy00Njk4LWE5MTktMDQ1ZTcxMWE1MWI2&pdfa1=ZmFsc2U=&filename=Qk8yMDIzXzk4NS5wZGY=&action=aW5saW5l",
+  "autoritate": "Asociația de Dezvoltare Intercomunitară Transalpina Gaz (jud. Sibiu)",
+  "obiect": "Servicii de proiectare, AT și execuție — Racord și stație de reglare-măsurare (SRMP) pe raza UAT Tilișca pentru investiția „Înființare sistem de distribuție gaze naturale, racord și SRM în localitățile Jina, Poiana Sibiului, Rod, Tilișca, jud. Sibiu” (POIM, SMIS 145521), licitație deschisă CN1049400/11.11.2022, VE 4.880.588,12 lei, cel mai bun raport calitate-preț",
+  "problema": "Oferta (SA) respinsă ca neconformă și inacceptabilă pentru că nu deținea atestat ANRE tip B/Bp (instalații electrice 0,4 kV) — cerut doar în Norma tehnică Transgaz (aviz CTE 151/16.07.2018, SRM >4000 mc/h) anexată caietului de sarcini; ofertantul a răspuns la clarificări că reautorizarea tip B e în curs (cerere ANRE 18.01.2023). Fișa de date cerea doar ca firmele să fie „obligatoriu autorizate ANRE” ET/PT transport gaze, fără mijloc de probă. AC a și anulat procedura.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Criteriile de calificare trebuie să fie în anunțul de participare (art. 181 L98, art. 30 alin. 4 HG 395); cele aflate doar în caietul de sarcini sunt clauze nescrise (art. 30 alin. 6). Norma Transgaz arată ce autorizații sunt necesare la execuția contractului, nu la ofertare. Clarificarea a cerut un document pe care ofertantul nu era obligat să-l prezinte, deci răspunsul nu poate fi „neconcludent”. CJUE C-403/21 NV Construct (DA nu se completează de drept cu cerințe din reglementări speciale neprevăzute), C-295/20 Sanresa (condițiile de executare nu pot fi cerute la depunerea ofertei), C-278/14 Enterprise Focused Solutions. Ofertantul a obținut între timp atestatul tip B nr. 19204/24.03.2023 (Decizia ANRE 661/24.03.2023).",
+  "cum_ne_ajuta": "La SRM/SRMP și racorduri: verificăm separat (a) atestatele ANRE cerute în ANUNȚ/fișa de date (calificare — obligatoriu la ofertare) și (b) cele din normele Transgaz/Distrigaz/Delgaz anexate caietului de sarcini (executare — pot fi obținute după atribuire sau prin subcontractant). Dacă suntem respinși pe (b), contestăm cu această decizie. Gazpet: menținem la zi atestatele ANRE pentru gaze (EDIB/EDSB/PDSB etc.) și pentru partea electrică (B/Bp/Be) — ERP: alertă de expirare și cerere de reautorizare cu ≥60 zile înainte.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10,
+   3
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 4880588.12,
+  "sub_prag": false,
+  "tip_contract": "proiectare + AT + execuție racord și stație de reglare-măsurare (SRMP) pentru sistem nou de distribuție gaze",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins (SA)",
+  "etapa": "rezultat (și anulare procedură)",
+  "fapte_relevante": "Termen ofertare 19.12.2022; 3 oferte; clarificare 21.02.2023, răspuns 400/24.02.2023; raport 75/20.03.2023, comunicare 77/20.03.2023; termen proiectare PT 30 de zile; aviz tehnic de racordare Transgaz 55271/1 din 29.08.2022; fișa SRMP 36/06.09.2022; finanțare POIM.",
+  "concluzie_cnsc": "Admite contestația; obligă AC să anuleze decizia de anulare a procedurii și raportul în privința ofertei contestatorului și să o reevalueze în 15 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Racord + SRMP pentru sistem nou de distribuție gaze în comune (ADI) — lucrări pe care Gazpet le execută; norme Transgaz anexate la DA.",
+   "mai_putin_comparabila": "Problema e partea electrică (atestat B/Bp), nu gaze propriu-zise.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; contrastează cu decizii care au validat cerința ANRE pentru toți participanții când e în anunț."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu se poate prevala de prevederi ale documentației de atribuire care fac trimitere la prevederile caietului de sarcini",
+    "loc": "p. 14 (din 18)"
+   },
+   {
+    "text": "concludența răspunsului ar trebui să se raporteze la ce s-a cerut",
+    "loc": "p. 17 (din 18)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "e5c29d04e1ecc4b0aaf1f01982c3404d98d9ec62d6db5bd396dc1278e60ca351",
+  "snapshot_bytes": 269068,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "8f434026d0eff5f71686796c04da1de88cee2c957af4c36c8ad078ab96d12402",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
   "id": "CNSC-BO2024_159",
   "nr_decizie": "159/C?/... (anonimizat, BO2024_159)",
   "buletin_oficial": "BO2024_159",
@@ -8202,6 +9354,82 @@
   "snapshot_data": "2026-10-01",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "0f566c044cb636725050fa43c6dea3bffd7ea6fe1fa7de369bd5425742d71c46",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2022_2473",
+  "nr_decizie": "BO2022_2473 (nr./data anonimizate în BO; contestația 2871/19.10.2022)",
+  "buletin_oficial": "BO2022_2473",
+  "data": null,
+  "an": 2022,
+  "domeniu": "gaze",
+  "tema": [
+   "clarificari_documentatie",
+   "cerinte_restrictive",
+   "experienta_similara",
+   "deviz_consumuri",
+   "altele"
+  ],
+  "regula": "La P+E pentru rețele de gaze: costul verificării proiectelor de către verificatori atestați (L10/1995) trebuie inclus în valoarea estimată dacă îl suportă executantul; consultanții externi care au întocmit DA trebuie declarați pentru conflict de interese; F3 cu extrase de resurse nu se pot cere la ofertare (doar F1/F2).",
+  "temei_legal": [
+   "Legea 98/2016 art. 59, art. 63, art. 74 alin. (2), art. 143, 146–148, art. 160, art. 161 alin. (1)",
+   "Legea 10/1995 art. 13 alin. (1)–(2)",
+   "HG 907/2016 Anexa 7 (deviz general) cap. 3.5.5, Anexa 10 cap. V",
+   "Directiva 2014/24/UE art. 48, Anexa V partea B",
+   "Instrucțiunea ANAP 1/2017 (model propunere tehnică); Notificarea ANAP 30.05.2019",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NjdlY2VhMTAtN2U0Yi00Yjg4LTg1OGItNmVjMDgwOTUxYjlk&pdfa1=ZmFsc2U=&filename=Qk8yMDIyXzI0NzMucGRm&action=aW5saW5l",
+  "autoritate": "UAT (nedezvăluit)",
+  "obiect": "PT + AT + execuție lucrări pentru un obiectiv de rețea de distribuție gaze naturale (CPV 45231221-0), licitație deschisă pe 2 loturi, anunț de intenție PI1002660/09.08.2022 și anunț de participare CN1048075/09.10.2022, cel mai bun raport calitate-preț",
+  "problema": "Contestație la DA: (1) anunț de intenție „lapidar” folosit pentru reducerea termenului la 15 zile; (2) termen de clarificări de 11 zile înainte de termenul de ofertare (rămân 4 zile de studiu); (3) experiență similară de proiectare cerută și valoric (734.044,11 lei) și cantitativ (rețea ≥55 km într-un contract); (4) verificatorii de proiecte atestați, de asigurat de ofertant, fără buget în valoarea estimată; (5) declarația privind conflictul de interese nu includea consultantul care a întocmit DA și va evalua; (6) F2 + F3 cu extrase de resurse în propunerea financiară; (7) lipsa acordului contractual; (8) formular impus pentru propunerea tehnică; (9) alocări financiare în Gantt.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Respinse: anunțul de intenție respecta Anexa V partea B Dir. 2014/24, deci reducerea la 15 zile e legală (art. 74 alin. 2 L98); legea nu fixează un termen minim pentru întrebări, AC răspunde cu ≥10 zile (art. 160–161) și și-a justificat calendarul; formularul de propunere tehnică e legitim (model ANAP Instr. 1/2017). Rămase fără obiect: cerința de 55 km eliminată prin răspunsul consolidat 12130/20.10.2022; acord contractual anexat; alocarea financiară — doar în procente. Admise: (4) verificarea proiectelor de către verificatori atestați e obligatorie (art. 13 L10/1995) și cheltuială directă (cap. 3.5.5 din devizul general, HG 907/2016) — trebuie inclusă în VE; verificatorul poate fi angajatul proiectantului, dar nu-și verifică propriile proiecte; (5) persoanele externe care au întocmit DA trebuie incluse în lista persoanelor cu funcții de decizie (art. 59, 63 L98), declarația de expert cooptat nu suplinește; (6) F3 + extrase de resurse la P+E — nejustificate la ofertare (F1, F2 suficiente pentru verificarea prețului; Notificarea ANAP 2019). Cauțiune 220.000 lei.",
+  "cum_ne_ajuta": "Clarificări/contestații DA pentru P+E gaze: (1) „Vă rugăm să confirmați dacă onorariile verificatorilor de proiecte atestați (L10/1995 art. 13) sunt incluse în valoarea estimată la cap. 3.5.5 din devizul general; în caz contrar, solicităm suplimentarea VE (Decizia CNSC BO2022_2473).” (2) „Vă rugăm să completați lista persoanelor cu funcții de decizie cu reprezentanții consultantului care a elaborat DA (art. 63 L98).” (3) F3/extrase de resurse — eliminare. În ofertă, bugetăm explicit verificarea proiectelor (Vf/It pe specialități) ca cost direct. Atenție: reducerea termenului la 15 zile cu anunț de intenție e legală.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   4,
+   5,
+   6,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "licitație deschisă (2 loturi)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "proiectare (PT) + AT + execuție rețea de distribuție gaze naturale",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "operator economic interesat",
+  "etapa": "documentatie",
+  "fapte_relevante": "Anunț de intenție 09.08.2022; anunț de participare 09.10.2022; termen clarificări 11 zile, răspuns cu 6 zile înainte de ofertare; răspuns consolidat 12130/20.10.2022; punct de vedere AC 52511/26.10.2022; caietul de sarcini: recepția PAC/PT după vizele verificatorilor „puși la dispoziție de Antreprenor”.",
+  "concluzie_cnsc": "Admite contestația; obligă AC să modifice DA în 10 zile (VE cu verificare proiecte, lista persoanelor cu funcții de decizie, eliminarea F3/extrase de resurse) și să publice modificările în SEAP.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "P+E rețea de distribuție gaze, experiență de proiectare în rețele gaze — piața Gazpet; problema verificatorilor nebugetați e frecventă.",
+   "mai_putin_comparabila": "Obiectul exact e anonimizat.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "se impunea includerea valorii acestei activități în valoarea estimată a contractului ce urmează a fi încheiat",
+    "loc": "p. 19 (din 24)"
+   },
+   {
+    "text": "Autoritatea nu este abilitată să introducă cerințe care nu îi servesc la nimic",
+    "loc": "p. 21 (din 24)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "dff281d478029ebf583b00a73f4dcca7c644ed646e8a17f768f1eaa98898e2d0",
+  "snapshot_bytes": 362218,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "01dd887e1c7b04a48446a2537000a47274d10bb3117d1b627b8a79d5d2435bdb",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
@@ -9251,6 +10479,82 @@
   "snapshot_data": "2026-10-01",
   "temei_tip": "PRACTICA_CNSC",
   "snapshot_text_sha256": "c77a1c92f300b3ab9cb221b74fc5e914d8a5b8fd67745b9a79546b5bb70a1815",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2020_1798",
+  "nr_decizie": "1798/C3/1890",
+  "buletin_oficial": "BO2020_1798",
+  "data": "2020-10-02",
+  "an": 2020,
+  "domeniu": "gaze",
+  "tema": [
+   "personal_cheie",
+   "autorizare_anre",
+   "neconformitate_tehnica",
+   "termen_executie",
+   "clarificari_oferta"
+  ],
+  "regula": "Comisia nu poate respinge o ofertă pentru rețea de gaze pe baza unor cerințe introduse prin clarificări (specializări de proiectant pentru drumuri/subtraversări, ordinea internă a activităților de proiectare, reguli PMBOK pentru drumul critic) care nu există în documentația de atribuire; autorizările ANRE de proiectare acoperă sistemul de distribuție cu lucrările conexe.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2 alin. (2) lit. d)",
+   "HG 395/2016 art. 127 alin. (1) lit. f), art. 134 alin. (5), art. 137",
+   "HG 907/2016 art. 5 alin. (4)",
+   "Regulamentul ANRE pentru autorizarea persoanelor fizice în sectorul gazelor naturale (2014) art. 2 — tipuri PGD, PGIU, PGT, EGD, EGIU, EGT",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NWJlZTVjZmYtYjkxMS00MGM0LWI1ZWUtZjBmODM1OTM5ZWRm&pdfa1=ZmFsc2U=&filename=Qk8yMDIwXzE3OTgucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună, jud. Vâlcea — racord din conducta care alimentează orașul Băile Govora, aviz Distrigaz Sud Rețele)",
+  "obiect": "Servicii de proiectare, AT și execuție — „Înființare sistem de distribuție gaze naturale în ..., Județul ...”, procedură simplificată SCN1066838/15.04.2020; racord PE100 SDR11 Dn180, 1.700 m; rețea PE100 De125/110/90 (~18,8 km)",
+  "problema": "Oferta respinsă ca inacceptabilă și neconformă pe baza răspunsurilor la clarificări: (1) proiectanții propuși (autorizați ANRE PGD/PGIU/PGT, EGD/EGIU) erau ingineri metalurg, chimist, geolog — AC cerea specialiști pentru subtraversări, traversări, refaceri, organizare de șantier; (2) în Gantt, elaborarea documentațiilor pentru avize începea înaintea însușirii studiilor existente, iar ofertantul spunea că proiectarea poate începe înainte de autorizația de construire (AC invoca art. 5 alin. 4 HG 907/2016); (3) asistența tehnică pentru toate categoriile de lucrări; (4) drumul critic nu includea „activitățile de interfațare” marcate ca „critical” în Gantt (invocare PMBOK); (5) drumul critic prezentat ca tabel, nu diagramă.",
+  "solutie": "admisa",
+  "rationament_cnsc": "(1) DA cerea doar personal autorizat ANRE, fără specializări; autorizările PGD/PGIU etc. (Regulamentul ANRE de autorizare a persoanelor fizice din 2014, art. 2) acoperă proiectarea sistemului de distribuție, inclusiv activitățile conexe; subtraversările au pondere redusă; AC a introdus prin clarificări cerințe noi (proiectant de drumuri) — încălcarea transparenței (art. 2 alin. 2 lit. d L98); proiectantul poate apela la prestatori. (2) Art. 5 alin. (4) HG 907/2016 condiționează finalizarea PT de aprobarea indicatorilor și AC, nu interzice începerea lucrului; AC nu poate impune propriul grafic. (3) Asistența tehnică — aceeași cerință inexistentă. (4) Drumul critic conține activitățile care determină durata minimă, nu automat toate barele marcate „critical”; PMBOK e ghid, nu normă; conformitatea se verifică față de caietul de sarcini (art. 127 alin. 1 lit. f HG 395). (5) Informațiile erau în ofertă (pag. 890). Cauțiune 88.000 lei.",
+  "cum_ne_ajuta": "Pentru proiectarea de rețele gaze: cerința legală e autorizarea ANRE a persoanei (PGD/PGIU), nu o anumită diplomă — dacă AC cere ulterior ingineri de drumuri/structuri neprevăzuți în DA, invocăm această decizie. În Gantt-ul de proiectare putem suprapune elaborarea documentațiilor pentru avize cu ridicările topo — PT se finalizează după AC. Drumul critic: diagramă separată cu activitățile care dau durata minimă (organizare șantier, terasamente, pozare/îmbinare PE, umpluturi, refacere sistem rutier, dezafectare OS) — nu trebuie copiate toate barele roșii din Gantt.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   6,
+   9,
+   10,
+   22
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO descărcat cu curl de pe portal.cnsc.ro (pdftotext -layout): situația de fapt, analiza CNSC și dispozitivul; date anonimizate în BO marcate ca atare; citatele verificate automat în text.",
+  "sursa_cercetare": "cnsc_noi_lot5",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare + AT + execuție înființare sistem de distribuție gaze naturale (comună)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Clarificări 5479/31.07.2020; raport 6354/28.08.2020, comunicare 6358/28.08.2020; contestație 597/04.09.2020; aviz Distrigaz Sud Rețele pentru racord; subtraversări DN/DJ prin foraj orizontal; DA cerea WBS, Gantt cu cantități și manoperă, drum critic ca diagramă separată.",
+  "concluzie_cnsc": "Admite contestația, anulează raportul în partea privind oferta contestatorului și obligă continuarea evaluării cu luarea în considerare a propunerii tehnice, în 15 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Sistem de distribuție gaze nou în comună, P+E, PE100, racord pe avizul Distrigaz Sud Rețele — profil identic Gazpet.",
+   "mai_putin_comparabila": "Regulamentul ANRE de autorizare citat (2014) a fost înlocuit ulterior (Ord. ANRE 132/2021 etc.).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "prin punctul de vedere, autoritatea contractantă, “introduce” (aduce în discuție) o cerință nouă",
+    "loc": "p. 15 (din 23)"
+   },
+   {
+    "text": "Manualul PMI are rolul de ghid și nu de act normativ",
+    "loc": "p. 20 (din 23)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "1fd764e341e2301596422fd4ebd629e948a870c7edba064b9e16a86e3a818764",
+  "snapshot_bytes": 294440,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "96817a1cceddc972ad775ba6d81a6990ebe89df0b771495382e312bfb57f0178",
   "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
