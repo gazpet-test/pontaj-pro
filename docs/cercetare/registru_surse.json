@@ -1155,8 +1155,8 @@
   "baza_normativa_id": "indicator-Ac",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "doar_referinta",
-  "motiv_aplicabilitate": "Parte din seria 1981 = reper orientativ (P91 pct. 2.2.3); nicio muchie proprie în graf și nicio cerință. Relevant la ofertare apă-canal când F3 al proiectantului folosește articole Ac/RpAc."
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476)."
  },
  {
   "source_id": "SRC-indicator-c-1981",
@@ -1175,7 +1175,7 @@
    "deviz"
   ],
   "aplicabilitate_gazpet": "conditionata",
-  "motiv_aplicabilitate": "Lucrări de construcții accesorii (betoane, mortare cap. CZ, vopsitorii CN).",
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476).",
   "snapshot_sha256": null,
   "snapshot_data": null,
   "ultima_verificare": "2026-10-01",
@@ -1198,8 +1198,8 @@
    "deviz",
    "drumuri"
   ],
-  "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Refacerea carosabilului/trotuarului după șanț (cap. DG, DA, DB, DE, DI).",
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476).",
   "snapshot_sha256": null,
   "snapshot_data": null,
   "ultima_verificare": "2026-10-01",
@@ -1231,8 +1231,8 @@
   "baza_normativa_id": "indicator-G-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Indicatorul de bază pentru rețele/branșamente gaze (cap. GD/GE/GF); reper orientativ (P91).",
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476).",
   "note": "Capitolele GA-GF doar din rezumate de căutare (okazii.ro, intocmire-devize.ro) — nedeschise direct. Conținutul PE neverificat."
  },
  {
@@ -1262,7 +1262,7 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "aplicabilitate_gazpet": "conditionata",
-  "motiv_aplicabilitate": "Doar instalații de utilizare interioare (IU)."
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476)."
  },
  {
   "source_id": "SRC-indicator-iz-1981",
@@ -1281,8 +1281,8 @@
    "deviz",
    "gaze"
   ],
-  "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Cap. IZL (izolații anticorozive exterioare la țevi de oțel în pământ) și IZA (pregătire suprafețe/sablare) — reper pentru izolarea conductelor de oțel.",
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476).",
   "snapshot_sha256": "09739dd9d0d9763b90a5b1f0c7b5510928e01abc69559fc2b28f604d5041aca2",
   "snapshot_data": "2026-10-01",
   "ultima_verificare": "2026-10-01",
@@ -1306,7 +1306,7 @@
    "gaze"
   ],
   "aplicabilitate_gazpet": "conditionata",
-  "motiv_aplicabilitate": "Reparații/verificări la instalații de gaze existente.",
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476).",
   "snapshot_sha256": null,
   "snapshot_data": null,
   "ultima_verificare": "2026-10-01",
@@ -1337,8 +1337,8 @@
   "baza_normativa_id": "indicator-Ts-1981",
   "snapshot_sha256": "33495a7711c7550c142e7636b7a61dd1539573c14280561183730f8f4bcb4a07",
   "snapshot_data": "2026-10-01",
-  "aplicabilitate_gazpet": "doar_referinta",
-  "motiv_aplicabilitate": "Indicatoarele de norme de deviz sunt reper orientativ (Ghid P91/1-02 pct. 2.2.3), nu normă obligatorie; consumul obligatoriu vine din F3/proiect. Uniformizat cu restul seriei 1981.",
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Indicator de norme de deviz relevant pentru lucrările Gazpet, dar doar reper orientativ (Ghid P91/1-02 pct. 2.2.3) — nu normă obligatorie; consumul obligatoriu vine din F3/proiect/CS. Devine relevant ca referință la justificarea prețului (PNS); AC nu poate impune rețetele proiectantului (CNSC BO2018_6476).",
   "note": "Snapshot = OCR vol. I (archive.org, item indicator-de-norme-de-deviz-pentru-lucrari-de-terasamente-ts-1981-scan; vol. II sha256 3dd3a245…0827). Copie publică a unei ediții protejate (© COCC) — folosită doar pentru metadate, titluri de capitole/articole și UM; consumurile NU au fost extrase."
  },
  {
