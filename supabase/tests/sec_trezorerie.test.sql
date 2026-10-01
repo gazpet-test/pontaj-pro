@@ -92,9 +92,10 @@ BEGIN
     PERFORM pg_temp.eq(pg_temp.act('anon', NULL, q_ins), 'err:42501', format('anon INSERT %s', tbl));
     PERFORM pg_temp.eq(pg_temp.act('anon', NULL, q_upd), CASE WHEN acl THEN 'err:42501' ELSE 'ok:0' END, format('anon UPDATE %s', tbl));
     PERFORM pg_temp.eq(pg_temp.act('anon', NULL, q_del), CASE WHEN acl THEN 'err:42501' ELSE 'ok:0' END, format('anon DELETE %s', tbl));
-    PERFORM pg_temp.eq(pg_temp.act('anon', NULL, format('TRUNCATE public.%I CASCADE', tbl)), CASE WHEN acl THEN 'err:42501' ELSE 'ok:0' END, format('anon TRUNCATE %s', tbl));
+    PERFORM pg_temp.eq(pg_temp.act('anon', NULL, format('TRUNCATE public.%I CASCADE', tbl)), 'err:42501', format('anon TRUNCATE %s', tbl));
+    -- r2 01.10: TRUNCATE e închis pentru anon/authenticated în TOATE stările (F1 20260930i, aplicat 01.10).
     -- TRUNCATE ocolește RLS: după patch, authenticated nu-l mai are (nici ownerul aplicației prin JWT)
-    PERFORM pg_temp.eq(pg_temp.act('authenticated', u_owner, format('TRUNCATE public.%I CASCADE', tbl)), CASE WHEN acl THEN 'err:42501' ELSE 'ok:0' END, format('authenticated TRUNCATE %s', tbl));
+    PERFORM pg_temp.eq(pg_temp.act('authenticated', u_owner, format('TRUNCATE public.%I CASCADE', tbl)), 'err:42501', format('authenticated TRUNCATE %s', tbl));
     -- edge / service_role (BYPASSRLS) și postgres (MCP/migrări): neafectați
     PERFORM pg_temp.eq(pg_temp.act('service_role', NULL, q_sel), 'ok:3', format('service_role CITIRE %s', tbl));
     PERFORM pg_temp.eq(pg_temp.act('service_role', NULL, q_ins), 'ok:1', format('service_role INSERT %s', tbl));
