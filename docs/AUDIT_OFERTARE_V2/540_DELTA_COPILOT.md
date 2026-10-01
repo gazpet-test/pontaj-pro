@@ -132,3 +132,12 @@ Verdict Copilot: GO pe migrarea #540, NO-GO pe fișierul DML. Am reparat cele do
 - rollback repetat: refuz.
 
 **Nerulat pe live.** sha256: `10822c3f8c05336582bff3d0e5dcda0b4e27114b035378e189723e53806fa169`
+
+---
+## r2e — DML 540 APLICAT pe live (01.10.2026)
+- Rulat prin psql, ca bloc DO r3 (sha256 `10822c3f…a169`), după GO de la Copilot și confirmarea lui Răzvan. Consemnat în `claude_context` #1523.
+- Rezultat: 12 tokenuri dezactivate. Sanity check: 0 tokenuri active la angajații plecați, 105 active în total.
+- Fingerprint pentru rollback, format `employee_id:md5(token)`, fără tokenul în clar. E valabil doar imediat după rulare și numai la cererea lui Răzvan:
+  `17:5ab348be7ba1d75486c32732e58be24e,23:7f677d1159e907cd408f9a1b5a688341,32:7b6dce3d80d4477881f96e2af35ec2ee,36:1d4c55661f3ee107e8643ac5feba7910,46:10b30ca518147c930f17f91e7d12a5a5,47:093cc6f6dcc8cddff96694b263f49327,57:560471677badbd2cab95deb0477ac751,62:e987f68f348f0998127a7f01b14cf8ad,79:595a26bda1102271021f52c1d91be5ec,151:c44f891ac025b16ca89352533c8958df,155:de4e674206ea1d8b8ea6706ee55dc0ff,156:2013e6ac3c8375fae2ecfbbceb412f65`
+- Rămâne de făcut varianta A: reemiterea tokenurilor, odată cu patch-ul de expirare.
+- Branch-ul a fost actualizat cu `origin/main` printr-un merge. Conflictul din `supabase/revenire/README.md` s-a rezolvat păstrând ambele secțiuni.
