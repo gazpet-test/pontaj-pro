@@ -29,6 +29,27 @@ COMMIT;
 - Precondițiile cer starea exactă a patch-ului. Postcondițiile cer starea exactă din 29.09.
 - La final, fișierul dezarmează și sesiunea.
 
+## 20261003d — SEC HR tokenuri concediu (NEAPLICAT)
+
+Fișierele de aici **nu sunt migrări** și **nu le parcurge niciun runner** (Supabase CLI/MCP citesc doar
+`supabase/migrations/`; CI-ul referă doar fișiere anume de acolo). Sunt reveniri tehnice păstrate pentru
+test și pentru o eventuală revenire excepțională.
+
+Reguli:
+- **Fără GO de execuție.** Un fișier de aici se rulează doar la cererea explicită a lui Răzvan, după o decizie
+  și un review specifice (Copilot). Existența comutatorului de armare nu e autorizare.
+- **Gestionarul tranzacției e operatorul**: fișierele nu conțin `BEGIN/COMMIT`; se trimit într-un singur string
+  `BEGIN; SELECT set_config('<comutator>', '<valoare>:' || txid_current(), true); <fișier> COMMIT;`
+  (valoarea exactă e scrisă în antetul fiecărui fișier). Armarea persistentă (`ALTER DATABASE/ROLE … SET`) e refuzată.
+- Fiecare fișier pornește doar dintr-o stare exactă cunoscută și are postcondiție înainte de `COMMIT`.
+## 20261003e — SEC trezorerie (NEAPLICAT)
+
+Reveniri tehnice (rollback) pentru migrările de securitate. **Nu sunt migrări forward.**
+
+- Directorul e în afara `supabase/migrations/`, singurul pe care convenția Supabase CLI îl descoperă automat. Nimic de aici nu se aplică odată cu un patch.
+- Un fișier de aici nu are GO de execuție implicit. Se folosește doar la o revenire excepțională, cu decizia lui Răzvan și review, prin procedura din antetul fișierului.
+- Fișierele nu conțin `BEGIN`/`COMMIT`. Operatorul trimite un singur string, iar armarea stă în aceeași tranzacție, legată de `txid_current()`. Exemplu: `BEGIN; SELECT set_config('gazpet.rollback_tehnic_<id>', '<TOKEN>:' || txid_current(), true); <fișier> COMMIT;`.
+- Fiecare revenire refuză armarea persistentă (`pg_db_role_setting`), pornește doar din starea exactă a patch-ului, are postcondiție înainte de COMMIT și se dezarmează la final.
 ## 20261001a — J05 gardă derogări Ofertare (NEAPLICAT)
 
 Artefacte de **revenire** (rollback tehnic, oprire controlată). **Nu sunt migrări**: niciun runner nu parcurge directorul ăsta (`supabase db push`, `apply_migration` și harness-urile citesc doar `supabase/migrations/`).
@@ -86,3 +107,12 @@ SELECT set_config('gazpet.rollback_tehnic_20261006b', 'REDESCHIDE_IBAN_GARANTII:
 COMMIT;
 ```
 Testat în `scripts/test_sec_garantii_iban.sh` pasul 5.
+## 20261005b — RLS garanții (`20261005b_rls_garantii_scriere_ROLLBACK.sql`)
+Redeschide scrierea pentru orice cont logat pe `garantii`, `gbe_polite`, `gbe_restituiri`, `contracte_terti` (politicile din 01.10) și șterge `fn_poate_scrie_garantii()`. Același statut: fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.revenire_20261005b', 'REDESCHIDE_GARANTII:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = md5 politici `baf4aced…` (patch); postcondiție = `62f69c59…` (live 01.10). Testat în `scripts/test_rls_garantii.sh` pasul 5.
