@@ -32,6 +32,13 @@
 #   21 CONFLICT                  rânduri relevante care nu sunt exact perechea aprobată (alt nume/versiune/sha, dubluri)
 #                                ⇒ reconciliere manuală necesară, FĂRĂ retry automat
 #   22 ȚINTĂ NECONFIRMATĂ        pre-verificarea sau reconcilierea a ajuns pe altă țintă (db/system_identifier/proiect)
+#   30 GATE 0e: livrarea e COMISĂ și înregistrată, dar controlul permanent 0e (scripts/control_0e.sql, read-only) a găsit
+#      ≥1 funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) care poate scrie GUC-uri de identitate sau
+#      interpretează SQL primit ca argument (interpretor SQL: query_to_xml, ts_stat, crosstab, dblink, …)
+#      ⇒ livrarea NU e considerată încheiată. NU e rollback (migrarea rămâne comisă) — analiză înainte de a continua.
+#   31 GATE 0e NERULAT: livrarea e comisă, dar controlul 0e n-a putut rula ⇒ la fel, NU e considerată încheiată.
+#      Gate-ul 0e rulează DOAR după APLICAT + ÎNREGISTRAT confirmat, pe aceeași țintă/conexiune (-h/-p/-U/-d), într-o
+#      tranzacție READ ONLY separată. Nu există opțiune de a-l sări (cerință Copilot PR #551 F2).
 #   2  refuz la argumente, 3 refuz la artefact/validator — ambele ÎNAINTE de orice conexiune (neaplicat).
 #
 # Utilizare (parola NU pe linia de comandă și nici în chat: ~/.pgpass / PGPASSFILE):
@@ -104,6 +111,8 @@ cp -- "$MIG" "$COPIE"; chmod 400 "$COPIE"
 SHA_COPIE="$(sha256sum "$COPIE" | cut -d' ' -f1)"
 [ "$SHA_COPIE" = "$SHA" ] || refuz 3 "sha256 al artefactului ($SHA_COPIE) ≠ sha256 aprobat ($SHA)"
 TAG="reg_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+CONTROL_0E="$(dirname "${BASH_SOURCE[0]}")/control_0e.sql"
+[ -f "$CONTROL_0E" ] || refuz 3 "gate-ul permanent 0e lipsește: $CONTROL_0E"
 VAL_OUT="$(python3 "$(dirname "${BASH_SOURCE[0]}")/livrare_validator.py" "$COPIE" "$TAG")" || refuz 3 "validatorul a refuzat $NUME (vezi mai sus)"
 echo "→ $NUME: sha256 $SHA_COPIE = aprobat; validator: $VAL_OUT"
 
@@ -172,7 +181,21 @@ SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_cont
   FROM supabase_migrations.schema_migrations WHERE version = '$VERSIUNE' OR name = '$NUME';
 COMMIT;
 SQL
-chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql"
+# Gate-ul permanent 0e (după livrare): copie protejată a scripts/control_0e.sql, într-o tranzacție READ ONLY.
+# Același prolog lexical ca livrarea (standard_conforming_strings/client_encoding pot veni ostile din ALTER DATABASE … SET):
+# fără el, regex-urile cu „\” din control_0e.sql se parsează greșit ⇒ GATE 0e NERULAT (prins de 6.12).
+{ cat <<'P0E'
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
+SET LOCAL standard_conforming_strings = on;
+SET LOCAL client_encoding = 'UTF8';
+DO $p0e$ BEGIN
+  IF current_setting('standard_conforming_strings') IS DISTINCT FROM 'on' OR current_setting('client_encoding') IS DISTINCT FROM 'UTF8'
+    THEN RAISE EXCEPTION 'Gate 0e: prolog lexical neaplicat'; END IF;
+END $p0e$;
+P0E
+  cat "$CONTROL_0E"; printf '\nCOMMIT;\n'; } > "$DIR/control_0e.sql"
+chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql" "$DIR/control_0e.sql"
 
 CONN=(-h "$C_HOST" -p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")   # explicite ⇒ au prioritate față de mediu
 CONN+=(-d "$TINTA_DB")   # validat [A-Za-z0-9_] ⇒ nu poate fi conninfo/URI
@@ -195,6 +218,24 @@ manual() {
   echo "  Reconciliere manuală read-only (pe ținta aprobată; câmpuri: db|system_identifier|proiect|in_recovery|relevante|exacte):" >&2
   sed 's/^/    /' "$DIR/reconc.sql" >&2
   echo "  + starea obiectelor migrării (docs/SECURITATE_PATCH_RSVTI.md, Runda 5/6)." >&2
+}
+
+# Gate permanent 0e (cerință Copilot PR #551 F2): rulează DUPĂ COMMIT ⇒ nu face rollback; un eșec înseamnă „comis, dar
+# livrarea NU e considerată încheiată” (cod 30/31), cu analiză manuală înainte de orice pas următor.
+gate_0e() {
+  set +e
+  "$PSQL" -X -q -At -F ' | ' -v ON_ERROR_STOP=1 -f "$DIR/control_0e.sql" "${CONN[@]}" >"$DIR/0e.out" 2>&1
+  local rc=$?
+  set -e
+  if [ "$rc" != 0 ]; then
+    echo "✗ GATE 0e NERULAT (cod psql $rc): $NUME v$VERSIUNE e COMISĂ, dar controlul 0e n-a putut rula — livrarea NU e considerată încheiată; analizează înainte de a continua." >&2
+    sed 's/^/    /' "$DIR/0e.out" >&2; exit 31
+  fi
+  if [ -s "$DIR/0e.out" ]; then
+    echo "✗ GATE 0e: gadget(uri) expus(e): $(paste -sd ';' "$DIR/0e.out") — $NUME v$VERSIUNE e COMISĂ (fără rollback), dar livrarea NU e considerată încheiată; analizează înainte de a continua." >&2
+    exit 30
+  fi
+  echo "✓ GATE 0e: 0 funcții expuse care pot scrie GUC-uri de identitate sau interpreta SQL (interpretor SQL) — livrare încheiată."
 }
 
 # --- P. pre-verificare (nimic trimis dacă nu trece) ----------------------------
@@ -232,7 +273,8 @@ if ! tinta_ok; then
 fi
 if [ "$R_REL" = 1 ] && [ "$R_EX" = 1 ]; then
   [ "$RC_PSQL" = 0 ] || echo "⚠ psql a raportat $RC_PSQL, dar înregistrarea exactă există acum (nu exista la pre-verificare): aplicat de această execuție (confirmare pierdută) sau de o livrare concurentă a aceluiași artefact." >&2
-  echo "✓ APLICAT + ÎNREGISTRAT confirmat: $NUME v$VERSIUNE (sha256 $SHA)"; exit 0
+  echo "✓ APLICAT + ÎNREGISTRAT confirmat: $NUME v$VERSIUNE (sha256 $SHA)"
+  gate_0e; exit 0
 fi
 if [ "$R_REL" = 0 ]; then
   [ "$RC_PSQL" != 0 ] || { echo "✗ NECUNOSCUT: psql a raportat succes, dar nu există nicio înregistrare relevantă — reconciliere manuală" >&2; manual; exit 20; }

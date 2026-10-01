@@ -8,6 +8,11 @@
 // Scadența = ultimul curs + 24 luni; fără niciun curs, termenul curge de la data angajării.
 // Certificatele de calificare din dosarele personale apar ca sugestie („📁 în dosar"), dar intră
 // în registru doar când omul confirmă (buton „↳ adaugă"): data unui certificat nu e automat un curs.
+// TKT-2026-0303 (30.09): la fel, cea mai recentă autorizație emisă (INSEMEX, RSVTI, ISCIR, SSM…) apare ca
+// sugestie „📜 autorizație" — tot cu confirmare; fișele medicale și permisele nu sunt cursuri.
+// TKT-2026-0308 (30.09, varianta A): autorizațiile din fișa HR intră AUTOMAT în istoric, fără „↳ adaugă"
+// (view `v_hr_formare_cursuri` = registru manual + autorizații; sursă unică = hr_autorizatii, nimic copiat).
+// Rândurile „📜 din HR" se editează/șterg doar în fișa HR. „Calificări în ERP" nu mai include fișe medicale/permise.
 // Drepturi (RLS pe tabel): citire autentificați; scriere owner / can_modify_employees / superadmin /
 // departamentele HR și Administrativ — aceleași ca la autorizații.
 // ===========================================================================
@@ -58,6 +63,10 @@ const STARI = {
 
 const FORM_GOL = { employeeIds:[], data_curs:'', tema:'', tip_autorizatie_id:'', furnizor:'', numar_certificat:'', durata_ore:'', observatii:'' }
 
+// Autorizații care nu vin dintr-un curs de formare (TKT-2026-0303)
+const CATEGORII_FARA_CURS = new Set(['medical', 'altele'])
+const nuEDinCurs = (a) => CATEGORII_FARA_CURS.has(a.tip_categorie) || /^(permis|card tahograf|declara)/i.test((a.tip_denumire || '').trim())
+
 export default function HrFormareProfesionala({ employees = [], autorizatii = [], tipuri = [], profile, canAccessPersonal = false, showToast }) {
   const [cursuri, setCursuri] = useState([])
   const [loading, setLoading] = useState(true)
@@ -74,7 +83,7 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
 
   const incarca = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await supabase.from('hr_formare_profesionala')
+    const { data, error } = await supabase.from('v_hr_formare_cursuri')
       .select('*').order('data_curs', { ascending:false }).limit(20000)
     if (error) showToast?.('Eroare la citirea registrului: ' + error.message, 'error')
     setCursuri(data || [])
@@ -110,7 +119,7 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
   const calificariDupaAngajat = useMemo(() => {
     const m = new Map()
     for (const a of autorizatii) {
-      if (!a.tip_denumire) continue
+      if (!a.tip_denumire || nuEDinCurs(a)) continue   // TKT-2026-0308: fișa de aptitudini nu e calificare
       if (!m.has(a.employee_id)) m.set(a.employee_id, new Set())
       m.get(a.employee_id).add(a.tip_denumire)
     }
@@ -161,7 +170,6 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
     setForm({ ...FORM_GOL, employeeIds, data_curs: dosar?.data || '', tema: cal,
       observatii: dosar?.fisier_nume ? `Din dosar: ${dosar.fisier_nume}` : '' })
   }
-
   const salveaza = async () => {
     if (!form?.employeeIds?.length) return
     if (!form.data_curs) { showToast?.('Completează data cursului', 'error'); return }
@@ -189,8 +197,9 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
   }
 
   const sterge = async (c, numeAngajat) => {
+    if (c.sursa === 'autorizatie') { showToast?.('Autorizația vine din fișa HR — se modifică/șterge acolo', 'warning'); return }
     if (!window.confirm(`Ștergi cursul „${c.tema}" din ${fmt(c.data_curs)} pentru ${numeAngajat}?`)) return
-    const { error } = await supabase.from('hr_formare_profesionala').delete().eq('id', c.id)
+    const { error } = await supabase.from('hr_formare_profesionala').delete().eq('id', c.registru_id ?? c.id)
     if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
     showToast?.('Curs șters din registru', 'success')
     incarca()
@@ -203,13 +212,13 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
       'Calificări în ERP': r.calificari.join(', '),
       'Data angajării': r.e.hire_date ? fmt(r.e.hire_date) : '',
       'Ultimul curs': r.ultim ? fmt(r.ultim.data_curs) : 'niciunul',
-      'Tema': r.ultim?.tema || '', 'Furnizor': r.ultim?.furnizor || '',
+      'Tema': r.ultim?.tema || '', 'Sursa': r.ultim ? (r.ultim.sursa === 'autorizatie' ? 'autorizație HR' : 'registru') : '', 'Furnizor': r.ultim?.furnizor || '',
       'Scadență următor curs': r.scadenta ? fmt(r.scadenta) : '',
       'Stare': STARI[r.stare].label + (r.faraCurs && r.stare !== 'fara_date' ? ' (fără curs în registru)' : ''),
       'În dosar (certificat)': r.dosar ? `${fmt(r.dosar.data)} — ${r.dosar.fisier_nume || ''}` : '',
     }))
     const ws = XLSX.utils.json_to_sheet(rows)
-    ws['!cols'] = [{wch:18},{wch:22},{wch:20},{wch:36},{wch:12},{wch:12},{wch:32},{wch:24},{wch:14},{wch:26},{wch:44}]
+    ws['!cols'] = [{wch:18},{wch:22},{wch:20},{wch:36},{wch:12},{wch:12},{wch:32},{wch:14},{wch:24},{wch:14},{wch:26},{wch:44}]
     Object.keys(rows[0]).forEach((_, i) => {
       const cell = ws[XLSX.utils.encode_cell({ r: 0, c: i })]
       if (cell) cell.s = { font: { bold: true }, fill: { fgColor: { rgb: 'E8EEF7' } } }
@@ -240,6 +249,7 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
               Codul muncii art. 194 și CCM: fiecare angajat merge la un curs de formare/calificare cel puțin o dată la 2 ani.
               Scadența se calculează de la ultimul curs din registru; fără curs, de la data angajării.
               {canAccessPersonal && ' „📁 în dosar" = certificat de calificare găsit în dosarul personal — intră în registru doar dacă îl confirmi.'}
+              {' „📜 din HR" = autorizație introdusă în fișa HR (ex. INSEMEX, RSVTI, ISCIR) — apare automat, se modifică doar în fișa HR. Fișele medicale și permisele nu sunt cursuri.'}
             </div>
           </div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
@@ -330,7 +340,7 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
                         {r.ultim ? (
                           <>
                             <div style={{ fontWeight:600 }}>{fmt(r.ultim.data_curs)}</div>
-                            <div style={{ fontSize:11, color:G.muted }}>{r.ultim.tema}{r.ultim.furnizor ? ` · ${r.ultim.furnizor}` : ''}</div>
+                            <div style={{ fontSize:11, color:G.muted }}>{r.ultim.sursa === 'autorizatie' && <span style={{ color:G.purple }}>📜 din HR · </span>}{r.ultim.tema}{r.ultim.furnizor ? ` · ${r.ultim.furnizor}` : ''}</div>
                           </>
                         ) : <span style={{ color:G.yellow, fontSize:12 }}>niciun curs în registru</span>}
                         {r.dosar && (
@@ -366,6 +376,7 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
                           {r.lista.map(c => (
                             <div key={c.id} style={{ display:'flex', gap:10, alignItems:'center', fontSize:12, padding:'5px 0', borderBottom:`1px solid ${G.border2}` }}>
                               <span style={{ fontWeight:700, minWidth:86 }}>{fmt(c.data_curs)}</span>
+                              {c.sursa === 'autorizatie' && <span title="Vine automat din autorizațiile din fișa HR" style={{ fontSize:10, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:4, padding:'0 5px' }}>📜 din HR</span>}
                               <span style={{ flex:1 }}>{c.tema}
                                 <span style={{ color:G.muted }}>
                                   {c.tip_autorizatie_id && numeTip[c.tip_autorizatie_id] ? ` · ${numeTip[c.tip_autorizatie_id]}` : ''}
@@ -373,7 +384,7 @@ export default function HrFormareProfesionala({ employees = [], autorizatii = []
                                   {c.durata_ore ? ` · ${c.durata_ore} h` : ''}{c.observatii ? ` · ${c.observatii}` : ''}
                                 </span>
                               </span>
-                              {canEdit && <button onClick={() => sterge(c, r.e.name)} title="Șterge din registru" style={{ padding:'2px 7px', background:G.red + '18', color:G.red, border:`1px solid ${G.red}44`, borderRadius:4, fontSize:11, cursor:'pointer' }}>🗑</button>}
+                              {canEdit && c.sursa !== 'autorizatie' && <button onClick={() => sterge(c, r.e.name)} title="Șterge din registru" style={{ padding:'2px 7px', background:G.red + '18', color:G.red, border:`1px solid ${G.red}44`, borderRadius:4, fontSize:11, cursor:'pointer' }}>🗑</button>}
                             </div>
                           ))}
                         </td>
