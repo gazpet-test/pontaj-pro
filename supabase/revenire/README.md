@@ -28,3 +28,13 @@ COMMIT;
 - Armarea e legată de tranzacția curentă (`txid_current()`): o setare rămasă în sesiune, una dintr-o tranzacție anterioară sau eșuată și o armare persistentă (`ALTER DATABASE/ROLE … SET`, verificată în `pg_db_role_setting`, cu numele comparat prin `lower()`) sunt refuzate.
 - Precondițiile cer starea exactă a patch-ului. Postcondițiile cer starea exactă din 29.09.
 - La final, fișierul dezarmează și sesiunea.
+
+## 20261005a — SEC RSVTI P1b + jurnal A (`20261005a_sec_rsvti_p1b_jurnal_insert_ROLLBACK.sql`)
+Readuce starea 20261003c (poarta RPC rămâne): redeschide scrierea directă `rsvti_*` de către HR și INSERT-ul direct în jurnal. Același statut: fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261005a', 'REDESCHIDE_P1B_RSVTI:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiții = exact 20261005a; postcondiții = exact 20261003c (RPC `6185a9dd…`, fără trigger/funcții P1b, INSERT authenticated pe jurnal). Testat în `scripts/test_sec_rsvti_p1b.sh` pasul 6.

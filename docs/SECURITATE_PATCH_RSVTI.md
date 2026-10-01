@@ -627,3 +627,31 @@ Migrările #537/#538/#540/#541/#542 rămân acceptate.
 Suita completă rulată de 2 ori, exit 0: `PASS test_sec_rsvti: 393 aserțiuni OK + 262 verificări negative/fără urme/statice OK`.
 NEAPLICAT pe live. **Rămâne deschis:** GO Copilot pe runda 9 și acordul lui Răzvan; verificarea pe live (read-only) a
 dreptului rolului operatorului pe `pg_control_system()`; PG17 server.
+
+## 19. P1b + jurnal varianta A — `20261005a_sec_rsvti_p1b_jurnal_insert.sql` (01.10, NEAPLICAT)
+> Secțiunea cerută ca „§14”; numerele 14–18 erau deja ocupate de rundele runnerului, deci e §19.
+
+**Decizii (Răzvan, recomandările Claude din §8):** P1b = `rsvti_*` doar prin RPC; jurnal = varianta A (`REVOKE INSERT … FROM authenticated`).
+
+**Amprente live citite read-only (01.10, MCP `execute_sql` SELECT):** RPC `6185a9ddf13a9e666368858decfa9611` + semnătura `DEFAULT NULL::date`, proprietar postgres; helper `a59aeb46…`; politici: sursa `cc78b7fd…` (singura de scriere), jurnal `…_insert_autorizat` `780014ba…` (singura de scriere); triggere pe `hr_autorizatii`: doar `trg_hr_autorizatie_noua` (AFTER INSERT ROW, tgtype 5, corp `eafcc431…`); ACL jurnal `authenticated=arxtm` (INSERT la nivel de tabel), 0 granturi pe coloane; `rsvti_*` = 5 coloane nullable fără DEFAULT.
+
+**Mecanism:**
+- `fn_hr_autorizatii_rsvti_marcaj(bigint)` (SECURITY DEFINER, EXECUTE **doar** postgres ⇒ neexpusă, în afara gate-ului 0e): `set_config('gazpet.rsvti_rpc', '<txid>:<id>', true)`; cu NULL golește.
+- `trg_hr_autorizatii_rsvti_doar_rpc` BEFORE INSERT OR UPDATE ROW → `fn_trg_hr_autorizatii_rsvti_doar_rpc()` (**SECURITY INVOKER**, intenționat): INSERT cu vreun `rsvti_*` nenul sau UPDATE care schimbă vreun `rsvti_*` ⇒ 42501, cu excepția UPDATE-ului unde marcajul = `txid_current():id-ul rândului` **și** `current_user` = proprietarul RPC-ului. Prin REST `current_user` = `authenticated`, deci un marcaj falsificat (SQL direct) nu ajunge.
+- RPC: corp identic cu 20261003c + `perform …marcaj(p_autorizatie_id)` înainte de UPDATE și `perform …marcaj(null)` după. md5 nou `d0bc1be3cb50ec795aea95e02551ded5`. Corpul nu conține `set_config`/`execute` ⇒ gate 0e r8 = 0 rânduri.
+- Jurnal: `REVOKE INSERT … FROM PUBLIC, anon, authenticated`. Politica `…_insert_autorizat` rămâne (plasă, inertă fără grant).
+- Precondiții 0a–0e fail-closed (RPC live sau patch; helper; politici + RLS; funcții noi absente sau exacte; set exact de triggere). Postcondiții 5a–5e (md5 + atribute + semnătură, ACL exact — marcaj/trigger doar postgres, triggerul tgtype 23 activ, privilegii **efective** INSERT/UPDATE/DELETE false pe jurnal pentru PUBLIC/anon/authenticated, politicile neschimbate). Gărzi de livrare la start și final; fără BEGIN/COMMIT.
+- Amprente noi: marcaj `0384c47a9ad0e0a434ec5e74ed79e6f1`, trigger `7a721187ea236ee2d41359d46f357f70`.
+- sha256 migrare: `f6c25a09697da2c4c918c65d56af6b20ae775935503f0484aa23ec1f2db307a1`. Rollback tehnic `supabase/revenire/20261005a_sec_rsvti_p1b_jurnal_insert_ROLLBACK.sql` (armare `gazpet.rollback_tehnic_20261005a = 'REDESCHIDE_P1B_RSVTI:'||txid`, fără GO de execuție) — sha256 `b0d12aec00ada830ad505e393b2dd785f460b761ec06e8d442cf3fe1e21e9303`.
+
+**UI (`src/`) verificat:** nicio scriere directă `rsvti_*` (`HR.jsx` insert L1878 / update L1891, L2150, L549, L1539, L639/L1560; `TabDocumentePersonale.jsx:104`; `AdeverinteLegator.jsx:200/205` — payload-uri explicite, fără `rsvti_*`) și niciun INSERT direct în jurnal; confirmarea merge doar prin `rpc('confirm_hr_autorizatie_rsvti')` (`HR.jsx:1902`, `:2110`). `supabase/functions` nu atinge `rsvti`. UI-ul nu se schimbă.
+
+**Teste (`bash scripts/test_sec_rsvti_p1b.sh`, PG 17.11 local, PASS):** baza = schelet + 20261003c + fixture cu triggerul live (md5 identic) → suita GAURA trece (HR scrie direct scadența 2099 cu atribuire falsă; HR inserează în jurnal cu `created_at` 2099); fișier fără runner / marcaj greșit → refuz fără urme; 7 precondiții negative → refuz fără urme; livrare prin `scripts/livrare_migrare.sh` → cod 0 (inclusiv gate 0e); suita PATCH (39 aserțiuni): HR prin RPC OK, HR UPDATE pe fiecare `rsvti_*` (inclusiv NULL→dată și dată→NULL) refuz 42501, alte coloane și PATCH cu aceleași valori OK, INSERT fără `rsvti_*` OK / cu `rsvti_*` refuz, marcaj falsificat de HR refuz, helperul neapelabil, INSERT direct în jurnal (HR, owner, anon) refuz, owner direct refuz / prin RPC OK, service_role și postgres fără marcaj refuz, marcaj pentru alt rând / alt txid / multi-rând refuz, marcaj golit după RPC; suita GAURA cade pe patch; reaplicare idempotentă; **12 mutanți** toți prinși; rollback nearmat refuz, armat → schema = 20261003c (GAURA trece), reaplicare = patch, 0e = 0.
+
+**Regresii posibile:**
+- `service_role` / SQL direct (MCP, cron, edge) nu mai pot schimba `rsvti_*` fără RPC (care cere și identitate HR). Nu am găsit apelanți (repo). O corecție administrativă = tranzacție revizuită cu `ALTER TABLE … DISABLE TRIGGER` explicit.
+- Un script extern nelistat care inserează direct în jurnal primește 42501 (n-am găsit, §10).
+- `scripts/test_sec_rsvti.sh` / `sec_rsvti.test.sql` documentează comportamentele reziduale ale 20261003c (R1/R2: INSERT direct HR în jurnal, scriere directă `rsvti_*`) ca reușite; rulate peste 20261005a, acele aserțiuni ar cădea — e intenționat, suita veche descrie starea 20261003c.
+- Limită: un login `postgres` cu SQL direct își poate pune singur marcajul (superuser — prin definiție în afara modelului).
+
+**§8 actualizat:** pct. 1 (P1b) și pct. 2 (INSERT direct în jurnal) sunt închise de 20261005a după apply. Pct. 3–8 rămân deschise.
