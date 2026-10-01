@@ -67,7 +67,7 @@ veche e refuzată (`40001`). „Nu se aplică” sau „exceptat” scris de AI 
 | `ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)` | **NOU**. RPC: actor = `auth.uid()`, acces Ofertare, motiv, tip, cerință activă, `FOR UPDATE`, amprenta văzută = curentă, propunerea văzută = curentă, idempotent. EXECUTE doar `authenticated` |
 | `ofertare_revoca_neaplicabil(bigint,text)` | **NOU**. RPC: revocare cu motiv, de autor sau owner. EXECUTE doar `authenticated` |
 | `v_ofertare_cerinte_na_stare` | **NOU**. `security_invoker=on`, cu `valida`, `legatura_id`, `acoperire_id` |
-| `fn_gate_depunere()` | **ÎNLOCUIT**, după pre-verificare: md5 `4bddf68c…`, proprietar `postgres`, plpgsql, SECDEF, search_path, ACL EXECUTE exact `postgres`+`service_role`. Ramura `a.status='nu_se_aplica'` devine `fn_ofertare_cerinta_na_confirmata(c.id,'nu_se_aplica')`; mesajul primește contorul „din ele N au doar «nu se aplică» propus de AI”. Postcondiție: md5 `59b42d41…` + proprietar + ACL neschimbate |
+| `fn_gate_depunere()` | **ÎNLOCUIT**, după pre-verificare: md5 `4bddf68c…`, proprietar `postgres`, plpgsql, SECDEF, search_path, ACL EXECUTE exact `postgres`+`service_role`. Ramura `a.status='nu_se_aplica'` devine `fn_ofertare_cerinta_na_confirmata(c.id,'nu_se_aplica')`; mesajul primește contorul „din ele N au doar «nu se aplică» propus de AI”. Postcondiție: md5 `04102c5e…` (r5; r1–r4: `59b42d41…`) + proprietar + ACL neschimbate |
 | `v_ofertare_pt_stare` | **ÎNLOCUIT**, cu pre-verificare `md5(viewdef)=c77c49b8…`: `exceptata` cere și confirmare `exceptat_pt` validă; coloană nouă: `exceptate_propuse_ai` |
 | `src/ofertareNeaplicabil.js` (+ test) | Regula JS, fail-closed; r2: `propunereCurenta` (id maxim, ca în BD) |
 | `src/OfertareLicitatii.jsx` | contoare, badge-uri, buton „✓ Confirm «nu se aplică»”; r2: trimite `p_propunere_id` = rândul AI văzut |
@@ -174,3 +174,48 @@ Total: **1.579** cerințe închise în poarta de depunere doar de „nu se aplic
 - Migrarea n-a rulat pe schema reală: harness-ul local reproduce doar coloanele atinse, iar view-ul PT local e minim (conține exact fragmentele înlocuite). Testul SQL pe clonă inserează în `ofertare_acoperire` doar `(cerinta_id, status)`; dacă live are alte coloane NOT NULL fără default, fixture-ul trebuie completat.
 - „Confirmare în bloc NO-GO” (verdictul pe #529) a fost aplicat și aici: excepția pe mai multe cerințe creează doar propuneri, iar fiecare rând se confirmă separat.
 - Documentul de incident din 29–30.09 nu a fost găsit în repo și nici în `claude_context`. Specificația s-a luat din cerința reviewerului și din S05-02.
+
+## Runda 5 — comutator pe licitație (decizia lui Răzvan 01.10.2026, varianta B)
+
+**De ce:** aplicată pe toate licitațiile, J02b ar redeschide ~1.615 cerințe pe 5 licitații active (3, 5, 15, 93, 103).
+Varianta B: regula se pornește licitație cu licitație, de un om, într-un singur sens.
+
+**Ce face migrarea (aceeași, 20261004a):**
+- `ofertare_licitatii.j02b_activ boolean NOT NULL DEFAULT true`. Licitațiile existente la apply primesc `false`.
+  Nu se face cu UPDATE: coloana se adaugă cu `DEFAULT false`, apoi default-ul devine `true`. Astfel nu se rescrie niciun rând, nu pornesc triggerele și `updated_at` rămâne neatins. Postcondiția verifică numărul: toate cele N rânduri existente au `false`.
+- `fn_gate_depunere`: `v_j02b = NEW.j02b_activ OR OLD.j02b_activ`. Pe `false`, interogarea `n_neacoperite` și mesajul sunt textual cele live (`4bddf68c…`). Pe `true`, se aplică regula J02b. md5 nou: `04102c5e…`.
+- `v_ofertare_pt_stare`: `exceptata = EXISTS(exceptat) AND (NOT j02b_activ(licitație) OR confirmare umană validă)`. Dacă licitația lipsește, se consideră pornită (fail-closed).
+- `fn_ofertare_j02b_activeaza(p_licitatie_id)` (SECDEF): cere `auth.uid()` + `fn_are_acces_ofertare()` + (owner **sau** `responsabil_id` = uid). Merge doar pe `false→true`; dacă e deja pornită, întoarce o eroare. Întoarce numărul de cerințe redeschise și scrie un rând în jurnalul `ofertare_j02b_activari` (UNIQUE pe licitație, doar SELECT pentru utilizatori).
+- `fn_ofertare_j02b_impact(p_licitatie_id)`: întoarce câte cerințe se redeschid. Le numără pe cele cu „nu se aplică” AI fără dovadă și fără confirmare, plus cerințele PT exceptate fără capitol și fără confirmare. O folosește dialogul din UI.
+- `trg_ofertare_j02b_sens_unic` (BEFORE INSERT OR UPDATE):
+  - refuză `true→false` pe orice cale;
+  - refuză `false→true` fără marcajul RPC-ului (`gazpet.j02b_activeaza = <id>:<txid>`);
+  - refuză un INSERT cu `false`.
+- ACL: pe cele 2 RPC-uri EXECUTE doar pentru `authenticated` (ACL brut, efectiv și graful SET ROLE, ca la celelalte RPC-uri umane).
+- Postcondiție nouă: **verdictul porții nu se schimbă**. Înainte de orice modificare și după apply, se încearcă depunerea pe fiecare licitație nedepusă, într-o subtranzacție anulată. Se compară SQLSTATE și mesajul. Licitațiile 3, 5, 15, 93 și 103 trebuie să fie printre cele verificate.
+
+**Matricea de stări**
+
+| j02b_activ | „nu se aplică” AI la poartă | „exceptat” AI în v_ofertare_pt_stare | Tranziții permise |
+|---|---|---|---|
+| `false` (licitație existentă la apply) | închide cerința (regula live, mesaj identic) | exceptată (regula live); `exceptate_propuse_ai`=0 | → `true` doar prin RPC (owner/responsabil) |
+| `true` (licitație nouă / pornită) | NU închide; cere confirmare umană validă | doar cu confirmare umană validă | niciuna (→ `false` refuzat) |
+| INSERT | — | — | doar cu `true` (default) |
+
+**UI** (`OfertareLicitatii.jsx`, tabul Cerințe, deasupra Acoperirii):
+- `false`: banner „Confirmare umană pentru «nu se aplică» (J02b): OPRITĂ”. Butonul „Pornește J02b” apare doar la owner sau responsabil. Confirmarea spune câte cerințe se redeschid și că pasul e definitiv.
+- `true`: badge.
+- Coloana lipsă (migrare neaplicată): nu se afișează nimic.
+- Logica pură e în `src/ofertareNeaplicabil.js` (`stareComutatorJ02b`, `poatePorniJ02b`, cu teste).
+
+**Limite**
+- Contoarele și badge-urile client-side din Acoperire/Propunere rămân pe regula J02b strictă și când comutatorul e oprit. UI-ul e mai conservator decât poarta: arată „AI: nu se aplică – neconfirmată”, dar poarta veche trece.
+- Comutatorul în sens unic se poate ocoli de un superuser: `DISABLE TRIGGER`, `session_replication_role=replica` sau `set_config` pe marcaj din SQL editor. Din REST/PostgREST nu se poate ocoli (`set_config` nu e expus).
+- Re-livrarea după revenire pune din nou `false` pe TOATE licitațiile, inclusiv pe cele pornite între timp. Jurnalul vechi rămâne în `ofertare_j02b_activari_arhiva`, iar re-livrarea e refuzată cât arhiva există.
+- Postcondiția de verdict execută o încercare de depunere pe fiecare licitație nedepusă (~60 pe live). Încercarea e anulată, dar triggerele BEFORE/AFTER pe `ofertare_licitatii` rulează. Pe live sunt doar `a00_ofertare_licitatii_scriere` și `trg_gate_depunere`, citite read-only pe 01.10.
+- sha256 migrare r5: `2dcd168f4cbefbd97bbf6f4f65944cd83b5883224f8cf5256ea8e61167f8d5fd`.
+
+**Teste r5:**
+- harness `scripts/test_j02b_na_confirmare.mjs` pe PG17 local, cu secțiunea 5b nouă și pre/rollback extinse;
+- `supabase/tests/j02b_na_confirmare_test.sql`, cu T0 nou: pornire pe 103 prin RPC și `true→false` refuzat;
+- vitest `src/ofertareNeaplicabil.test.js`.

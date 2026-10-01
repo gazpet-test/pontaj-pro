@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { indexConfirmari, stareConfirmare, stareExceptarePT, nsaScoasa, statisticiAcoperire, propunereCurenta, TIP_NSA, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
+import { indexConfirmari, stareConfirmare, stareExceptarePT, nsaScoasa, statisticiAcoperire, propunereCurenta, stareComutatorJ02b, poatePorniJ02b, TIP_NSA, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
 
 const conf = (cerinta_id, tip, valida, extra = {}) => ({ cerinta_id, tip, valida, revocata_la: null, ...extra })
 
@@ -100,5 +100,23 @@ describe('J02b runda 2 — propunerea concretă (id maxim, ca în BD)', () => {
   })
   it('tip necunoscut ⇒ null', () => {
     expect(propunereCurenta([{ id: 1, cerinta_id: 1, fel: 'exceptat', status: 'nu_se_aplica' }], 1, 'altceva')).toBe(null)
+  })
+})
+
+describe('J02b r5 — comutatorul pe licitație', () => {
+  it('stare: lipsă coloană ⇒ null; false ⇒ oprita; true ⇒ pornita', () => {
+    expect(stareComutatorJ02b(null)).toBe(null)
+    expect(stareComutatorJ02b({ id: 1 })).toBe(null)
+    expect(stareComutatorJ02b({ id: 1, j02b_activ: false })).toBe('oprita')
+    expect(stareComutatorJ02b({ id: 1, j02b_activ: true })).toBe('pornita')
+  })
+  it('pornirea: doar owner sau responsabil, doar când e oprită', () => {
+    const lic = { id: 1, j02b_activ: false, responsabil_id: 'r' }
+    expect(poatePorniJ02b(lic, { id: 'o', is_owner: true })).toBe(true)
+    expect(poatePorniJ02b(lic, { id: 'r', is_owner: false })).toBe(true)
+    expect(poatePorniJ02b(lic, { id: 'x', is_owner: false })).toBe(false)
+    expect(poatePorniJ02b(lic, null)).toBe(false)
+    expect(poatePorniJ02b({ ...lic, j02b_activ: true }, { id: 'o', is_owner: true })).toBe(false)
+    expect(poatePorniJ02b({ id: 1 }, { id: 'o', is_owner: true })).toBe(false)
   })
 })

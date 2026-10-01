@@ -8,6 +8,7 @@
 --   F1: o cerință activă cu „nu se aplică” propus de AI și fără dovadă verificată;
 --   F2: o cerință activă fără niciun rând de acoperire;
 --   F3: o cerință PT (propunere/forma) activă, fără legături și fără acoperire „acoperit”.
+-- r5: T0 pornește J02b pe 103 (licitațiile existente la apply au j02b_activ=false) prin fn_ofertare_j02b_activeaza.
 -- Ieșire: „J02b TEST PASS” la final; orice eșec ⇒ excepție ⇒ ROLLBACK.
 -- Notă: variabilele psql NU se interpolează în blocurile DO ($…$) ⇒ fixture-ul trece prin GUC-uri j02b_t.*.
 -- ============================================================================
@@ -41,6 +42,25 @@ BEGIN
   PERFORM set_config('j02b_t.cid', v_cid::text, true), set_config('j02b_t.cid2', v_cid2::text, true),
           set_config('j02b_t.cpt', v_c::text, true), set_config('j02b_t.owner', v_owner::text, true);
 END $fx$;
+
+-- T0 (r5): licitația 103 exista la apply ⇒ J02b OPRIT; se pornește prin RPC de către owner (poarta de rol), apoi T1–T8
+DO $t0$ BEGIN
+  IF (SELECT j02b_activ FROM ofertare_licitatii WHERE id = 103) THEN RAISE EXCEPTION 'T0 FAIL: 103 are J02b pornit imediat după apply'; END IF;
+END $t0$;
+SELECT set_config('request.jwt.claims', json_build_object('sub', current_setting('j02b_t.owner'), 'role', 'authenticated')::text, true) \g /dev/null
+SET LOCAL ROLE authenticated;
+SELECT public.fn_ofertare_j02b_activeaza(103) \g /dev/null
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '{}', true) \g /dev/null
+DO $t0b$ BEGIN
+  IF NOT (SELECT j02b_activ FROM ofertare_licitatii WHERE id = 103) THEN RAISE EXCEPTION 'T0 FAIL: pornirea prin RPC nu a setat j02b_activ'; END IF;
+  IF (SELECT count(*) FROM ofertare_j02b_activari WHERE licitatie_id = 103) <> 1 THEN RAISE EXCEPTION 'T0 FAIL: pornirea nu e în jurnal'; END IF;
+  BEGIN
+    UPDATE ofertare_licitatii SET j02b_activ = false WHERE id = 103;
+    RAISE EXCEPTION 'T0 FAIL: true→false acceptat';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+END $t0b$;
 
 -- T1: AI-only ⇒ neconfirmată
 DO $t1$ BEGIN

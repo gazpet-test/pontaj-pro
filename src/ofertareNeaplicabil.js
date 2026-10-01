@@ -93,3 +93,16 @@ export function statisticiAcoperire(cerinte, acoperiri, idx) {
   stats.elimFaraDovada = stats.goluriElim + stats.neevaluateElim + stats.naElim + stats.reverifElim
   return stats
 }
+
+// J02b r5 (varianta B, 01.10.2026): comutator PE LICITAȚIE (ofertare_licitatii.j02b_activ), într-un singur sens.
+// 'pornita' | 'oprita' | null (null = coloana lipsește: migrarea J02b nu e aplicată ⇒ nu afișăm nimic).
+export function stareComutatorJ02b(lic) {
+  if (!lic || typeof lic.j02b_activ !== 'boolean') return null
+  return lic.j02b_activ ? 'pornita' : 'oprita'
+}
+
+// Butonul „Pornește J02b”: doar ownerul sau responsabilul licitației (aceeași poartă ca RPC-ul, care decide oricum).
+export function poatePorniJ02b(lic, profile) {
+  if (stareComutatorJ02b(lic) !== 'oprita' || !profile?.id) return false
+  return profile.is_owner === true || lic.responsabil_id === profile.id
+}

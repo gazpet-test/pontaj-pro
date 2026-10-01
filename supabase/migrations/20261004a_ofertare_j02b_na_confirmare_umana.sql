@@ -17,6 +17,15 @@
 --   AI-ul rămâne PROPUNERE: vizibilă, dar poarta rămâne deschisă (cerința neînchisă).
 -- Scriere în ofertare_cerinte_na_confirmari DOAR prin funcțiile SECURITY DEFINER (nici authenticated, nici service_role
 --   nu au INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN).
+-- RUNDA 5 (decizia lui Răzvan 01.10.2026, varianta B — COMUTATOR PE LICITAȚIE):
+--   * ofertare_licitatii.j02b_activ boolean NOT NULL DEFAULT true: licitațiile create după apply pornesc cu J02b;
+--   * TOATE licitațiile existente la apply primesc j02b_activ=false (ADD COLUMN cu DEFAULT false, apoi DEFAULT true:
+--     fără UPDATE pe rânduri ⇒ fără triggere, fără updated_at atins); postcondiție pe număr;
+--   * fn_gate_depunere și v_ofertare_pt_stare aplică regula J02b DOAR când j02b_activ; altfel ramura e textual cea live;
+--   * pornirea: doar fn_ofertare_j02b_activeaza(p_licitatie_id) (acces Ofertare + owner sau responsabil_id), jurnal în
+--     ofertare_j02b_activari; trg_ofertare_j02b_sens_unic refuză true→false (orice cale), false→true în afara RPC-ului
+--     și INSERT cu false;
+--   * postcondiție: verdictul porții pe licitațiile nedepuse (inclusiv 3, 5, 15, 93, 103) e identic înainte/după apply.
 -- Aditiv: tabel nou + funcții noi + view nou; fn_gate_depunere și v_ofertare_pt_stare sunt înlocuite doar după
 --   pre-verificarea amprentei definițiilor LIVE citite pe 30.09.2026 (altfel REFUZ).
 -- Revenire (NU e migrare, armare proprie): supabase/revenire/20261004a_ofertare_j02b_na_confirmare_umana_ROLLBACK.sql
@@ -67,6 +76,17 @@ BEGIN
            'fn_ofertare_cerinta_na_confirmata','ofertare_confirma_neaplicabil','ofertare_revoca_neaplicabil')) THEN
     RAISE EXCEPTION 'REFUZ J02b pre: obiecte J02b există deja (reaplicare)';
   END IF;
+  -- r5: comutatorul nu există încă (coloană, jurnal, RPC, trigger, funcția de impact)
+  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ofertare_licitatii'::regclass AND attname = 'j02b_activ' AND NOT attisdropped)
+     OR to_regclass('public.ofertare_j02b_activari') IS NOT NULL
+     OR to_regclass('public.ofertare_j02b_activari_arhiva') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('fn_ofertare_j02b_activeaza','fn_ofertare_j02b_sens_unic','fn_ofertare_j02b_impact'))
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ofertare_j02b_sens_unic') THEN
+    RAISE EXCEPTION 'REFUZ J02b pre: comutatorul j02b_activ / obiectele r5 există deja (reaplicare)';
+  END IF;
+  IF to_regclass('pg_temp._j02b_verdict') IS NOT NULL THEN
+    RAISE EXCEPTION 'REFUZ J02b pre: tabelul temporar _j02b_verdict există deja în sesiune';
+  END IF;
   SELECT count(*) INTO v_cnt FROM pg_trigger
    WHERE tgname = 'trg_gate_depunere' AND tgrelid = 'public.ofertare_licitatii'::regclass
      AND tgfoid = to_regprocedure('public.fn_gate_depunere()');
@@ -83,6 +103,45 @@ BEGIN
     RAISE EXCEPTION 'REFUZ J02b pre: trg_gate_depunere diferă de amprenta live (md5 35e7d6a7…, BEFORE INSERT OR UPDATE, FOR EACH ROW, fără WHEN, tgenabled=O)';
   END IF;
 END $pre$;
+
+-- ---------------------------------------------------------------------------
+-- 0b. (r5) Verdictul porții ÎNAINTE de orice schimbare, pe fiecare licitație nedepusă: încercarea de depunere într-o
+--     subtranzacție anulată (nimic nu rămâne). Se compară cu verdictul de după apply în postcondiții.
+-- ---------------------------------------------------------------------------
+CREATE TEMP TABLE _j02b_verdict (licitatie_id bigint PRIMARY KEY, pre text NOT NULL, post text) ON COMMIT DROP;
+DO $verdict_pre$
+DECLARE r record; v text;
+BEGIN
+  FOR r IN SELECT id FROM public.ofertare_licitatii WHERE status IS DISTINCT FROM 'depusa' ORDER BY id LOOP
+    BEGIN
+      UPDATE public.ofertare_licitatii SET status = 'depusa', derogare_depunere = false WHERE id = r.id;
+      RAISE EXCEPTION 'J02B_VERDICT_TRECE' USING ERRCODE = 'JB000';
+    EXCEPTION WHEN OTHERS THEN v := SQLSTATE || '|' || SQLERRM;
+    END;
+    INSERT INTO pg_temp._j02b_verdict (licitatie_id, pre) VALUES (r.id, v);
+  END LOOP;
+END $verdict_pre$;
+
+-- ---------------------------------------------------------------------------
+-- 0c. (r5) Comutatorul pe licitație. Existente ⇒ false (DEFAULT false la ADD, fără UPDATE pe rânduri); noi ⇒ true.
+-- ---------------------------------------------------------------------------
+DO $col$
+DECLARE n_tot bigint;
+BEGIN
+  SELECT count(*) INTO n_tot FROM public.ofertare_licitatii;
+  PERFORM set_config('j02b_r5.n_licitatii', n_tot::text, true);
+END $col$;
+ALTER TABLE public.ofertare_licitatii ADD COLUMN j02b_activ boolean NOT NULL DEFAULT false;
+ALTER TABLE public.ofertare_licitatii ALTER COLUMN j02b_activ SET DEFAULT true;
+COMMENT ON COLUMN public.ofertare_licitatii.j02b_activ IS
+  'J02b r5: true ⇒ „nu se aplică”/„exceptat” AI nu închid cerința fără confirmare umană. Licitațiile existente la apply = false; se pornește DOAR prin fn_ofertare_j02b_activeaza; într-un singur sens (trg_ofertare_j02b_sens_unic).';
+DO $col_post$
+BEGIN
+  IF (SELECT count(*) FROM public.ofertare_licitatii WHERE NOT j02b_activ) <> current_setting('j02b_r5.n_licitatii')::bigint
+     OR EXISTS (SELECT 1 FROM public.ofertare_licitatii WHERE j02b_activ) THEN
+    RAISE EXCEPTION 'J02b r5: nu toate licitațiile existente (%) au j02b_activ=false', current_setting('j02b_r5.n_licitatii');
+  END IF;
+END $col_post$;
 
 -- ---------------------------------------------------------------------------
 -- 1. Confirmările umane. Scriere DOAR prin RPC-urile SECURITY DEFINER; append-only (revocarea marchează, nu șterge).
@@ -351,7 +410,8 @@ SELECT k.id AS confirmare_id, k.cerinta_id, k.tip, k.actor, k.motiv, k.confirmat
 REVOKE ALL ON public.v_ofertare_cerinte_na_stare FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.v_ofertare_cerinte_na_stare TO authenticated, service_role;
 
--- 9. fn_gate_depunere: nu_se_aplica AI ⇒ NU mai acoperă; acoperă doar confirmarea umană validă.
+-- 9. fn_gate_depunere: nu_se_aplica AI ⇒ NU mai acoperă; acoperă doar confirmarea umană validă — DOAR când j02b_activ (r5).
+--    j02b_activ=false ⇒ interogarea și mesajul sunt textual cele live (md5 4bddf68c…).
 --    Singurele diferențe față de live (md5 4bddf68c…): ramura de acoperire + contorul n_na_ai din mesaj.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.fn_gate_depunere()
@@ -361,8 +421,10 @@ CREATE OR REPLACE FUNCTION public.fn_gate_depunere()
  SET search_path TO 'public', 'pg_temp'
 AS $function$
 DECLARE
-  n_active int; n_neconfirmate int; n_neacoperite int; n_rosii int; n_reverif int; n_na_ai int; msg text; v_r5 text;
+  n_active int; n_neconfirmate int; n_neacoperite int; n_rosii int; n_reverif int; n_na_ai int; msg text; v_r5 text; v_j02b boolean;
 BEGIN
+  -- J02b r5: comutatorul licitației (OLD inclus: o cerere care ar încerca să-l stingă odată cu depunerea rămâne pe regula nouă)
+  v_j02b := COALESCE(NEW.j02b_activ, true) OR (TG_OP = 'UPDATE' AND COALESCE(OLD.j02b_activ, true));
   IF COALESCE(NEW.derogare_depunere, false) AND (TG_OP = 'INSERT' OR NOT COALESCE(OLD.derogare_depunere, false))
      AND NOT public.fn_gate_depunere_derogare_owner() THEN
     RAISE EXCEPTION 'Derogarea de la poarta de depunere o poate da doar ownerul (Razvan).' USING ERRCODE = '42501';
@@ -378,6 +440,7 @@ BEGIN
     END IF;
     SELECT count(*) INTO n_neconfirmate FROM ofertare_cerinte c
       WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL AND c.confirmata_de IS NULL;
+    IF v_j02b THEN
     -- J02b: „nu se aplică” acoperă DOAR prin confirmare umană validă (amprenta sursei curente), nu prin a.status AI.
     SELECT count(*) INTO n_neacoperite FROM ofertare_cerinte c
       WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
@@ -390,6 +453,14 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
             AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))
       AND NOT public.fn_ofertare_cerinta_na_confirmata(c.id, 'nu_se_aplica');
+    ELSE
+      -- J02b oprit pe licitație: exact regula live (nu_se_aplica AI acoperă)
+    SELECT count(*) INTO n_neacoperite FROM ofertare_cerinte c
+      WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
+      AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
+            AND (a.status = 'nu_se_aplica'
+                 OR (a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))));
+    END IF;
     SELECT count(*) INTO n_rosii FROM ofertare_acoperire a
       JOIN ofertare_cerinte c ON c.id = a.cerinta_id AND c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       JOIN documente_firma d ON d.id = a.doc_firma_id
@@ -400,7 +471,11 @@ BEGIN
       JOIN ofertare_cerinte c ON c.id = a.cerinta_id AND c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       WHERE a.status IN ('acoperit','acoperit_partener') AND COALESCE(a.reverificare_ceruta, false);
     IF n_neconfirmate > 0 OR n_neacoperite > 0 OR n_rosii > 0 OR n_reverif > 0 THEN
-      msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire VERIFICATĂ de om (propunerea AI nu e dovadă; din ele %s au doar „nu se aplică” propus de AI — cer confirmare umană cu motiv pe versiunea curentă a sursei), %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii), %s dovezi cu reverificare cerută. Rezolvă-le sau derogare_depunere=true (o poate pune doar ownerul).', n_neconfirmate, n_neacoperite, n_na_ai, n_rosii, n_reverif);
+      IF v_j02b THEN
+        msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire VERIFICATĂ de om (propunerea AI nu e dovadă; din ele %s au doar „nu se aplică” propus de AI — cer confirmare umană cu motiv pe versiunea curentă a sursei), %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii), %s dovezi cu reverificare cerută. Rezolvă-le sau derogare_depunere=true (o poate pune doar ownerul).', n_neconfirmate, n_neacoperite, n_na_ai, n_rosii, n_reverif);
+      ELSE
+        msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire VERIFICATĂ de om (propunerea AI nu e dovadă), %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii), %s dovezi cu reverificare cerută. Rezolvă-le sau derogare_depunere=true (o poate pune doar ownerul).', n_neconfirmate, n_neacoperite, n_rosii, n_reverif);
+      END IF;
       RAISE EXCEPTION '%', msg;
     END IF;
   END IF;
@@ -448,7 +523,7 @@ DO $view$
 DECLARE
   v_def text := pg_get_viewdef('public.v_ofertare_pt_stare'::regclass);
   a1 text := $a$(l_1.fel = 'exceptat'::text)))) AS exceptata,$a$;
-  b1 text := $b$(l_1.fel = 'exceptat'::text)))) AND public.fn_ofertare_cerinta_na_confirmata(c.id, 'exceptat_pt'::text) AS exceptata,
+  b1 text := $b$(l_1.fel = 'exceptat'::text)))) AND ((NOT COALESCE((SELECT lj.j02b_activ FROM ofertare_licitatii lj WHERE lj.id = c.licitatie_id), true)) OR public.fn_ofertare_cerinta_na_confirmata(c.id, 'exceptat_pt'::text)) AS exceptata,
             (EXISTS ( SELECT 1 FROM ofertare_pt_legaturi l_3 WHERE ((l_3.cerinta_id = c.id) AND (l_3.fel = 'exceptat'::text)))) AS exceptata_propusa,$b$;
   a2 text := 'AS dovada_de_verificat' || chr(10) || '   FROM (ofertare_licitatii l';
   b2 text := 'AS dovada_de_verificat,' || chr(10)
@@ -466,16 +541,139 @@ BEGIN
 END $view$;
 
 -- ---------------------------------------------------------------------------
+-- 10b. (r5) Jurnalul pornirilor J02b (append-only; scriere doar prin fn_ofertare_j02b_activeaza)
+-- ---------------------------------------------------------------------------
+CREATE TABLE public.ofertare_j02b_activari (
+  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  licitatie_id  bigint NOT NULL UNIQUE,   -- fără FK: istoricul rămâne și dacă licitația se șterge
+  actor         uuid   NOT NULL REFERENCES public.profiles(id),
+  rol_actor     text   NOT NULL CHECK (rol_actor IN ('owner','responsabil')),
+  n_redeschise  integer NOT NULL CHECK (n_redeschise >= 0),
+  activat_la    timestamptz NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE public.ofertare_j02b_activari IS 'J02b r5: cine a pornit J02b pe o licitație, când și câte cerințe s-au redeschis atunci. Scriere doar prin fn_ofertare_j02b_activeaza.';
+ALTER TABLE public.ofertare_j02b_activari ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.ofertare_j02b_activari FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON public.ofertare_j02b_activari TO authenticated, service_role;
+REVOKE ALL ON SEQUENCE public.ofertare_j02b_activari_id_seq FROM PUBLIC, anon, authenticated, service_role;
+CREATE POLICY ofertare_j02b_activari_select ON public.ofertare_j02b_activari
+  FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL AND public.fn_are_acces_ofertare());
+
+-- ---------------------------------------------------------------------------
+-- 10c. (r5) Câte cerințe active s-ar redeschide la pornire (pentru dialogul din UI și pentru jurnal):
+--      „nu se aplică” AI fără dovadă verificată și fără confirmare umană validă (exact contorul n_na_ai din poartă)
+--      ∪ cerințe PT exceptate fără capitol și fără confirmare umană validă de tip exceptat_pt.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION public.fn_ofertare_j02b_impact(p_licitatie_id bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+ STABLE
+ SECURITY DEFINER
+ SET search_path = public, pg_temp
+AS $fn$
+DECLARE v int;
+BEGIN
+  IF auth.uid() IS NULL OR NOT COALESCE(public.fn_are_acces_ofertare(), false) THEN
+    RAISE EXCEPTION 'J02b: fără acces la Ofertare' USING ERRCODE = '42501';
+  END IF;
+  SELECT count(*) INTO v FROM public.ofertare_cerinte c
+   WHERE c.licitatie_id = p_licitatie_id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
+     AND ((EXISTS (SELECT 1 FROM public.ofertare_acoperire a WHERE a.cerinta_id = c.id AND a.status = 'nu_se_aplica')
+           AND NOT EXISTS (SELECT 1 FROM public.ofertare_acoperire a WHERE a.cerinta_id = c.id
+                 AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))
+           AND NOT public.fn_ofertare_cerinta_na_confirmata(c.id, 'nu_se_aplica'))
+       OR (c.tip IN ('propunere','forma')
+           AND EXISTS (SELECT 1 FROM public.ofertare_pt_legaturi l WHERE l.cerinta_id = c.id AND l.fel = 'exceptat')
+           AND NOT EXISTS (SELECT 1 FROM public.ofertare_pt_legaturi l WHERE l.cerinta_id = c.id AND l.fel = 'capitol')
+           AND NOT public.fn_ofertare_cerinta_na_confirmata(c.id, 'exceptat_pt')));
+  RETURN v;
+END $fn$;
+
+-- ---------------------------------------------------------------------------
+-- 10d. (r5) Triggerul „sens unic”: true→false refuzat pe orice cale; false→true doar din RPC (marcaj legat de txid
+--      și de licitație); INSERT cu j02b_activ=false refuzat (licitațiile noi pornesc cu J02b).
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION public.fn_ofertare_j02b_sens_unic()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT COALESCE(NEW.j02b_activ, false) THEN
+      RAISE EXCEPTION 'J02b: o licitație nouă pornește cu J02b activ (j02b_activ=false refuzat la INSERT)' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF OLD.j02b_activ AND NOT COALESCE(NEW.j02b_activ, false) THEN
+    RAISE EXCEPTION 'J02b: odată pornit pe licitația %, J02b nu se mai poate opri', OLD.id USING ERRCODE = '42501';
+  END IF;
+  IF NOT OLD.j02b_activ AND COALESCE(NEW.j02b_activ, false)
+     AND current_setting('gazpet.j02b_activeaza', true) IS DISTINCT FROM NEW.id::text || ':' || txid_current() THEN
+    RAISE EXCEPTION 'J02b: pornirea se face doar prin fn_ofertare_j02b_activeaza (owner sau responsabilul licitației)' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_j02b_sens_unic() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_ofertare_j02b_sens_unic BEFORE INSERT OR UPDATE ON public.ofertare_licitatii
+  FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_j02b_sens_unic();
+
+-- ---------------------------------------------------------------------------
+-- 10e. (r5) RPC: pornirea J02b pe o licitație (false→true). Poarta: utilizator autentificat + acces Ofertare +
+--      (owner SAU ofertare_licitatii.responsabil_id). Întoarce numărul de cerințe redeschise (scris și în jurnal).
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION public.fn_ofertare_j02b_activeaza(p_licitatie_id bigint)
+ RETURNS integer
+ LANGUAGE plpgsql
+ VOLATILE
+ SECURITY DEFINER
+ SET search_path = public, pg_temp
+AS $fn$
+DECLARE v_uid uuid := auth.uid(); v_owner boolean; l record; v_n int; v_rol text;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'J02b: pornirea cere un utilizator autentificat' USING ERRCODE = '42501';
+  END IF;
+  IF NOT COALESCE(public.fn_are_acces_ofertare(), false) THEN
+    RAISE EXCEPTION 'J02b: fără acces la Ofertare' USING ERRCODE = '42501';
+  END IF;
+  SELECT id, responsabil_id, j02b_activ INTO l FROM public.ofertare_licitatii WHERE id = p_licitatie_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'J02b: licitația % nu există', p_licitatie_id USING ERRCODE = 'P0002'; END IF;
+  v_owner := COALESCE((SELECT is_owner FROM public.profiles WHERE id = v_uid), false);
+  IF v_owner THEN v_rol := 'owner';
+  ELSIF l.responsabil_id IS NOT DISTINCT FROM v_uid THEN v_rol := 'responsabil';
+  ELSE
+    RAISE EXCEPTION 'J02b: doar ownerul sau responsabilul licitației % poate porni J02b', p_licitatie_id USING ERRCODE = '42501';
+  END IF;
+  IF l.j02b_activ THEN
+    RAISE EXCEPTION 'J02b: e deja pornit pe licitația % (comutatorul merge într-un singur sens)', p_licitatie_id USING ERRCODE = 'P0001';
+  END IF;
+  v_n := public.fn_ofertare_j02b_impact(p_licitatie_id);
+  PERFORM set_config('gazpet.j02b_activeaza', p_licitatie_id::text || ':' || txid_current(), true);
+  UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = p_licitatie_id;
+  PERFORM set_config('gazpet.j02b_activeaza', '', true);
+  INSERT INTO public.ofertare_j02b_activari (licitatie_id, actor, rol_actor, n_redeschise) VALUES (p_licitatie_id, v_uid, v_rol, v_n);
+  RETURN v_n;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_j02b_activeaza(bigint) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_ofertare_j02b_impact(bigint) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_ofertare_j02b_activeaza(bigint) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_ofertare_j02b_impact(bigint) TO authenticated;
+
+-- ---------------------------------------------------------------------------
 -- 11. Postcondiții
 -- ---------------------------------------------------------------------------
 DO $post$
 DECLARE v_src text; v_def text; v_cnt int; r record; v_acl text; v_sp text; v_opt text;
 BEGIN
   SELECT prosrc INTO v_src FROM pg_proc WHERE oid = to_regprocedure('public.fn_gate_depunere()');
-  IF position('(a.status = ''nu_se_aplica''' || chr(10) IN v_src) > 0 OR position('fn_ofertare_cerinta_na_confirmata(c.id, ''nu_se_aplica'')' IN v_src) = 0 THEN
+  -- r5: regula nouă doar pe ramura v_j02b; ramura veche (nu_se_aplica AI acoperă) apare exact o dată, după ELSE
+  IF position('fn_ofertare_cerinta_na_confirmata(c.id, ''nu_se_aplica'')' IN v_src) = 0 OR position('IF v_j02b THEN' IN v_src) = 0
+     OR (length(v_src) - length(replace(v_src, '(a.status = ''nu_se_aplica''' || chr(10), ''))) / length('(a.status = ''nu_se_aplica''' || chr(10)) <> 1
+     OR position('(a.status = ''nu_se_aplica''' || chr(10) IN v_src) < position('ELSE' || chr(10) || '      -- J02b oprit pe licitație' IN v_src) THEN
     RAISE EXCEPTION 'J02b post: fn_gate_depunere nu are ramura nouă';
   END IF;
-  IF md5(v_src) IS DISTINCT FROM '59b42d41f8b67f60bfc283cbe0841017' THEN
+  IF md5(v_src) IS DISTINCT FROM '04102c5e44af4f5fc2062c1a58737bdd' THEN
     RAISE EXCEPTION 'J02b post: fn_gate_depunere ≠ versiunea din acest fișier';
   END IF;
   -- fn_gate_depunere: proprietar + ACL neschimbate (postgres, service_role), fără PUBLIC
@@ -499,7 +697,9 @@ BEGIN
       ('public.fn_ofertare_na_confirmare_valida(bigint)', 'authenticated:EXECUTE:false,postgres:EXECUTE:false,service_role:EXECUTE:false'),
       ('public.fn_ofertare_cerinta_na_confirmata(bigint,text)', 'authenticated:EXECUTE:false,postgres:EXECUTE:false,service_role:EXECUTE:false'),
       ('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)', 'authenticated:EXECUTE:false,postgres:EXECUTE:false'),
-      ('public.ofertare_revoca_neaplicabil(bigint,text)', 'authenticated:EXECUTE:false,postgres:EXECUTE:false')) AS t(sig, acl)
+      ('public.ofertare_revoca_neaplicabil(bigint,text)', 'authenticated:EXECUTE:false,postgres:EXECUTE:false'),
+      ('public.fn_ofertare_j02b_activeaza(bigint)', 'authenticated:EXECUTE:false,postgres:EXECUTE:false'),
+      ('public.fn_ofertare_j02b_impact(bigint)', 'authenticated:EXECUTE:false,postgres:EXECUTE:false')) AS t(sig, acl)
   LOOP
     SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type || ':' || x.is_grantable::text, ',' ORDER BY x.grantee::regrole::text)
       INTO v_acl FROM pg_proc p, aclexplode(p.proacl) x WHERE p.oid = to_regprocedure(r.sig) AND x.grantee <> 0;
@@ -511,7 +711,7 @@ BEGIN
     END IF;
   END LOOP;
   -- ACL EFECTIV (include moștenirea prin membership) pe RPC-urile umane: doar authenticated
-  FOR r IN SELECT * FROM (VALUES ('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)'), ('public.ofertare_revoca_neaplicabil(bigint,text)')) AS t(sig) LOOP
+  FOR r IN SELECT * FROM (VALUES ('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)'), ('public.ofertare_revoca_neaplicabil(bigint,text)'), ('public.fn_ofertare_j02b_activeaza(bigint)'), ('public.fn_ofertare_j02b_impact(bigint)')) AS t(sig) LOOP
     IF NOT has_function_privilege('authenticated', r.sig, 'EXECUTE')
        OR has_function_privilege('anon', r.sig, 'EXECUTE')
        OR has_function_privilege('service_role', r.sig, 'EXECUTE') THEN
@@ -523,7 +723,7 @@ BEGIN
   -- SET (PG16+: opțiunea SET a membership-ului; mai vechi: MEMBER), NU are voie să aibă EXECUTE pe RPC-urile umane.
   v_opt := CASE WHEN current_setting('server_version_num')::int >= 160000 THEN 'SET' ELSE 'MEMBER' END;
   FOR r IN SELECT s.sig, b.baza, g.rolname
-             FROM (VALUES ('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)'), ('public.ofertare_revoca_neaplicabil(bigint,text)')) AS s(sig),
+             FROM (VALUES ('public.ofertare_confirma_neaplicabil(bigint,text,text,text,bigint)'), ('public.ofertare_revoca_neaplicabil(bigint,text)'), ('public.fn_ofertare_j02b_activeaza(bigint)'), ('public.fn_ofertare_j02b_impact(bigint)')) AS s(sig),
                   unnest(ARRAY['service_role','anon']) AS b(baza), pg_catalog.pg_roles g
             WHERE g.rolname <> b.baza AND pg_has_role(b.baza, g.oid, v_opt) AND has_function_privilege(g.oid, to_regprocedure(s.sig), 'EXECUTE') LOOP
     RAISE EXCEPTION 'J02b post: % poate face SET ROLE % (%), care are EXECUTE pe % — RPC-ul uman ar fi apelabil de %', r.baza, r.rolname, v_opt, r.sig, r.baza;
@@ -575,7 +775,65 @@ BEGIN
   END IF;
   SELECT count(*) INTO v_cnt FROM public.ofertare_cerinte_na_confirmari;
   IF v_cnt <> 0 THEN RAISE EXCEPTION 'J02b post: tabelul de confirmări trebuie să fie gol la livrare'; END IF;
+  -- r5: coloana (NOT NULL, DEFAULT true), toate rândurile existente false, jurnal gol
+  IF (SELECT count(*) FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+       WHERE a.attrelid = 'public.ofertare_licitatii'::regclass AND a.attname = 'j02b_activ' AND NOT a.attisdropped
+         AND a.atttypid = 'boolean'::regtype AND a.attnotnull AND pg_get_expr(d.adbin, d.adrelid) = 'true') <> 1 THEN
+    RAISE EXCEPTION 'J02b post r5: j02b_activ nu e boolean NOT NULL DEFAULT true';
+  END IF;
+  IF (SELECT count(*) FROM public.ofertare_licitatii WHERE NOT j02b_activ) <> current_setting('j02b_r5.n_licitatii')::bigint
+     OR (SELECT count(*) FROM public.ofertare_licitatii) <> current_setting('j02b_r5.n_licitatii')::bigint THEN
+    RAISE EXCEPTION 'J02b post r5: licitațiile existente (%) nu sunt toate cu J02b oprit', current_setting('j02b_r5.n_licitatii');
+  END IF;
+  IF (SELECT count(*) FROM public.ofertare_j02b_activari) <> 0 THEN RAISE EXCEPTION 'J02b post r5: jurnalul pornirilor nu e gol'; END IF;
+  -- r5: triggerul sens unic: exact unul, activ, BEFORE INSERT OR UPDATE, pe funcția lui, care nu e SECDEF și nu e apelabilă
+  v_sp := current_setting('search_path');
+  PERFORM set_config('search_path', 'public, pg_temp', true);
+  SELECT count(*) INTO v_cnt FROM pg_trigger t
+   WHERE t.tgname = 'trg_ofertare_j02b_sens_unic' AND t.tgrelid = 'public.ofertare_licitatii'::regclass AND t.tgenabled = 'O' AND NOT t.tgisinternal
+     AND t.tgfoid = 'public.fn_ofertare_j02b_sens_unic()'::regprocedure
+     AND pg_get_triggerdef(t.oid, true) = 'CREATE TRIGGER trg_ofertare_j02b_sens_unic BEFORE INSERT OR UPDATE ON ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION fn_ofertare_j02b_sens_unic()';
+  PERFORM set_config('search_path', v_sp, true);
+  IF v_cnt <> 1 OR (SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_ofertare_j02b_sens_unic') <> 1 THEN
+    RAISE EXCEPTION 'J02b post r5: trg_ofertare_j02b_sens_unic lipsă/diferit';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc p WHERE p.oid = 'public.fn_ofertare_j02b_sens_unic()'::regprocedure AND NOT p.prosecdef
+        AND pg_get_userbyid(p.proowner)::text = 'postgres' AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+        AND (SELECT string_agg(x.grantee::regrole::text, ',') FROM aclexplode(p.proacl) x) = 'postgres') <> 1 THEN
+    RAISE EXCEPTION 'J02b post r5: fn_ofertare_j02b_sens_unic proprietar/SECDEF/ACL incorecte';
+  END IF;
+  -- r5: jurnalul — doar SELECT pentru authenticated/service_role, nimic pentru anon/PUBLIC, secvența doar proprietarul
+  IF (SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type, ',' ORDER BY x.grantee::regrole::text, x.privilege_type)
+        FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.ofertare_j02b_activari'::regclass AND x.grantee <> c.relowner)
+     IS DISTINCT FROM 'authenticated:SELECT,service_role:SELECT'
+     OR EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.ofertare_j02b_activari_id_seq'::regclass AND x.grantee <> c.relowner)
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.ofertare_j02b_activari'::regclass AND a.attacl IS NOT NULL)
+     OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.ofertare_j02b_activari'::regclass) THEN
+    RAISE EXCEPTION 'J02b post r5: ACL/RLS pe ofertare_j02b_activari incorecte';
+  END IF;
+  -- r5: verdictul porții NESCHIMBAT pe fiecare licitație nedepusă (J02b oprit pe toate ⇒ comportament live exact)
+  FOR r IN SELECT licitatie_id FROM pg_temp._j02b_verdict ORDER BY licitatie_id LOOP
+    BEGIN
+      UPDATE public.ofertare_licitatii SET status = 'depusa', derogare_depunere = false WHERE id = r.licitatie_id;
+      RAISE EXCEPTION 'J02B_VERDICT_TRECE' USING ERRCODE = 'JB000';
+    EXCEPTION WHEN OTHERS THEN
+      UPDATE pg_temp._j02b_verdict SET post = SQLSTATE || '|' || SQLERRM WHERE licitatie_id = r.licitatie_id;
+    END;
+  END LOOP;
+  SELECT count(*) INTO v_cnt FROM pg_temp._j02b_verdict WHERE post IS DISTINCT FROM pre;
+  IF v_cnt <> 0 THEN
+    RAISE EXCEPTION 'J02b post r5: verdictul porții s-a schimbat pe % licitații (ex. %)', v_cnt,
+      (SELECT licitatie_id || ': ' || left(pre, 120) || ' → ' || left(post, 120) FROM pg_temp._j02b_verdict WHERE post IS DISTINCT FROM pre ORDER BY 1 LIMIT 1);
+  END IF;
+  IF EXISTS (SELECT 1 FROM unnest(ARRAY[3,5,15,93,103]::bigint[]) a(id)
+              WHERE EXISTS (SELECT 1 FROM public.ofertare_licitatii l WHERE l.id = a.id AND l.status IS DISTINCT FROM 'depusa')
+                AND NOT EXISTS (SELECT 1 FROM pg_temp._j02b_verdict v WHERE v.licitatie_id = a.id)) THEN
+    RAISE EXCEPTION 'J02b post r5: una dintre licitațiile active 3/5/15/93/103 n-a fost verificată';
+  END IF;
+  RAISE NOTICE 'J02b r5: % licitații cu J02b oprit; verdictul porții identic pe % licitații nedepuse',
+    current_setting('j02b_r5.n_licitatii'), (SELECT count(*) FROM pg_temp._j02b_verdict);
 END $post$;
+DROP TABLE pg_temp._j02b_verdict;
 
 DO $livrare_final$
 BEGIN

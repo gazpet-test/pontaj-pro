@@ -24,7 +24,7 @@ const RB_SRC = readFileSync(join(ROOT, 'supabase/revenire', NUME + '_ROLLBACK.sq
 const TEST_SQL = readFileSync(join(ROOT, 'supabase/tests/j02b_na_confirmare_test.sql'), 'utf8')
 const MD5_VIEW_LIVE = 'c77c49b87642c5c2f584d2ed008c7bf3'
 const MD5_GATE_LIVE = '4bddf68cfe53107a622d210f4ef3ec51'
-const MD5_GATE_NOU = '59b42d41f8b67f60bfc283cbe0841017'
+const MD5_GATE_NOU = '04102c5e44af4f5fc2062c1a58737bdd'
 const MD5_HELPER = '429d28e2a61fb24c8009d67050c16c85'
 const U = { fara: '00000000-0000-0000-0000-000000000001', modul: '00000000-0000-0000-0000-000000000002', owner: '00000000-0000-0000-0000-000000000003' }
 
@@ -84,7 +84,7 @@ INSERT INTO public.user_module_access VALUES ('${U.modul}', 'ofertare'), ('${U.f
 ${HELPER}
 REVOKE ALL ON FUNCTION public.fn_are_acces_ofertare() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO authenticated, service_role;
-CREATE TABLE public.ofertare_licitatii (id bigint PRIMARY KEY, status text, derogare_depunere boolean DEFAULT false, derogare_motiv text, termen_depunere timestamptz);
+CREATE TABLE public.ofertare_licitatii (id bigint PRIMARY KEY, status text, derogare_depunere boolean DEFAULT false, derogare_motiv text, termen_depunere timestamptz, responsabil_id uuid REFERENCES public.profiles(id));
 CREATE TABLE public.ofertare_documente_atribuire (id bigint PRIMARY KEY, fisier_path text, size_bytes bigint, revizie text, procesat_la timestamptz, text_extras text);
 CREATE TABLE public.ofertare_cerinte (id bigint PRIMARY KEY, licitatie_id bigint REFERENCES public.ofertare_licitatii(id), tip text, text_cerinta text,
   versiune int, sursa_document_id bigint, sursa_pagina int, sursa_pasaj text, inlocuita_de bigint, duplicat_al bigint,
@@ -121,6 +121,8 @@ FROM ofertare_licitatii l LEFT JOIN cer ON cer.licitatie_id = l.id GROUP BY l.id
 GRANT ALL ON public.v_ofertare_pt_stare TO anon, authenticated, service_role;
 -- fixture determinist: licitația 103 (F1 AI-only ×2, F2 fără acoperire, F3 cerință PT liberă ×2) + 104 (poarta cap-coadă)
 INSERT INTO public.ofertare_licitatii (id, status) VALUES (103, 'in_lucru'), (104, 'in_lucru');
+-- r5: 105 (blocată de poartă: cerință neconfirmată cu „nu se aplică” AI) și 106 (responsabil = contul cu modul Ofertare)
+INSERT INTO public.ofertare_licitatii (id, status, responsabil_id) VALUES (105, 'in_lucru', NULL), (106, 'in_lucru', '${U.modul}');
 INSERT INTO public.ofertare_documente_atribuire VALUES (1, 'lic103/caiet.pdf', 1000, 'r1', '2026-09-20', 'text extras');
 INSERT INTO public.ofertare_cerinte (id, licitatie_id, tip, text_cerinta, versiune, sursa_document_id, sursa_pagina, sursa_pasaj) VALUES
   (1001, 103, 'eliminatorie', 'Certificat ISO 9001', 1, 1, 3, 'pasaj 1'),
@@ -130,7 +132,10 @@ INSERT INTO public.ofertare_cerinte (id, licitatie_id, tip, text_cerinta, versiu
   (1005, 103, 'forma', 'Grafic de execuție', 1, 1, 10, 'pasaj 5'),
   (2001, 104, 'eliminatorie', 'Cerință unică 104', 1, NULL, NULL, NULL);
 INSERT INTO public.ofertare_acoperire (cerinta_id, mod, status) VALUES (1001, 'nu_se_aplica', 'nu_se_aplica'), (1002, 'nu_se_aplica', 'nu_se_aplica'), (2001, 'nu_se_aplica', 'nu_se_aplica');
-INSERT INTO public.ofertare_pt_pachet VALUES (104, 1, 'depus');
+INSERT INTO public.ofertare_pt_pachet VALUES (104, 1, 'depus'), (105, 1, 'depus');
+INSERT INTO public.ofertare_cerinte (id, licitatie_id, tip, text_cerinta, versiune) VALUES (3001, 105, 'eliminatorie', 'Cerință 105', 1), (3002, 105, 'eliminatorie', 'Cerință 105 b', 1), (4001, 106, 'eliminatorie', 'Cerință 106', 1);
+INSERT INTO public.ofertare_acoperire (cerinta_id, mod, status) VALUES (3001, 'nu_se_aplica', 'nu_se_aplica'), (4001, 'nu_se_aplica', 'nu_se_aplica');
+UPDATE public.ofertare_cerinte SET confirmata_de = '${U.owner}' WHERE id = 3001;
 UPDATE public.ofertare_cerinte SET confirmata_de = '${U.owner}', confirmata_la = now() WHERE licitatie_id = 104;
 `)
 }
@@ -146,6 +151,13 @@ try {
   check('fn_gate_depunere ACL = postgres + service_role', q(`SELECT string_agg(x.grantee::regrole::text, ',' ORDER BY 1) FROM pg_proc p, aclexplode(p.proacl) x WHERE p.oid = 'public.fn_gate_depunere()'::regprocedure`) === 'postgres,service_role')
   check('singura substituție: md5 view live → local (o apariție în migrare, două în revenire)',
     MIG_SRC.split(MD5_VIEW_LIVE).length - 1 === 2 && RB_SRC.split(MD5_VIEW_LIVE).length - 1 === 2, `${MIG_SRC.split(MD5_VIEW_LIVE).length - 1}/${RB_SRC.split(MD5_VIEW_LIVE).length - 1}`)
+
+  // r5: verdictele porții ÎNAINTE de apply (comparate după apply cu J02b oprit)
+  const incearca = id => psql(`BEGIN; UPDATE public.ofertare_licitatii SET status = 'depusa' WHERE id = ${id}; ROLLBACK;`)
+  const pre104 = incearca(104), pre105 = incearca(105)
+  check('pre-apply: 104 (doar „nu se aplică” AI) se depune pe regula live', pre104.ok, pre104.out.slice(0, 200))
+  check('pre-apply: 105 blocată (1 neconfirmată, 1 neacoperită)', !pre105.ok && /BLOCAT LA DEPUNERE: 1 cerințe neconfirmate de om, 1 cerințe/.test(pre105.out), pre105.out.slice(0, 200))
+  const viewPre = q(`SELECT string_agg(licitatie_id || ':' || de_raspuns || '/' || fara_capitol || '/' || exceptate || '/' || dovada_de_verificat, ',' ORDER BY licitatie_id) FROM public.v_ofertare_pt_stare`)
 
   console.log('2. Gărzi de livrare / revenire')
   check('fără runner (fără gardă) → refuz', !psql(MIG).ok && !aplicat())
@@ -180,6 +192,8 @@ try {
   refuz('trigger recreat AFTER → refuz', `DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere AFTER INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_gate_depunere();`, TRIG_UNDO, /trg_gate_depunere diferă/)
   refuz('trigger recreat cu WHEN (false) → refuz', `DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW WHEN (false) EXECUTE FUNCTION public.fn_gate_depunere();`, TRIG_UNDO, /trg_gate_depunere diferă/)
   refuz('trigger doar BEFORE UPDATE → refuz', `DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere BEFORE UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_gate_depunere();`, TRIG_UNDO, /trg_gate_depunere diferă/)
+  refuz('r5: coloana j02b_activ există deja → refuz', `ALTER TABLE public.ofertare_licitatii ADD COLUMN j02b_activ boolean;`, `ALTER TABLE public.ofertare_licitatii DROP COLUMN j02b_activ;`, /comutatorul j02b_activ/)
+  refuz('r5: RPC fn_ofertare_j02b_activeaza există deja → refuz', `CREATE FUNCTION public.fn_ofertare_j02b_activeaza(bigint) RETURNS int LANGUAGE sql AS 'SELECT 0';`, `DROP FUNCTION public.fn_ofertare_j02b_activeaza(bigint);`, /comutatorul j02b_activ/)
   check('trigger restaurat identic', trigDef() === TRIG_LIVE + '|35e7d6a7f7d488556be1df754c26124f|O')
   // runda 3: EXECUTE efectiv prin membership ⇒ postcondiția pică
   refuz('mutant: GRANT authenticated TO service_role (EXECUTE efectiv prin membership) → postcondiția pică', `GRANT authenticated TO service_role;`, `REVOKE authenticated FROM service_role;`, /EXECUTE efectiv/)
@@ -238,6 +252,54 @@ try {
   check('anon (REST): SELECT → permission denied', /permission denied/.test(rest('anon', null, `SELECT 1 FROM public.ofertare_cerinte_na_confirmari;`).out))
   check('a doua livrare → refuz (obiecte există)', !livrare().ok)
 
+  console.log('5b. Comutatorul J02b pe licitație (r5, varianta B)')
+  check('toate licitațiile existente la apply: j02b_activ=false', q(`SELECT count(*) FILTER (WHERE NOT j02b_activ) || '/' || count(*) FROM public.ofertare_licitatii`) === '4/4')
+  check('coloana: boolean NOT NULL DEFAULT true', q(`SELECT format_type(atttypid, atttypmod) || ',' || attnotnull || ',' || pg_get_expr(d.adbin, d.adrelid) FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = 'public.ofertare_licitatii'::regclass AND a.attname = 'j02b_activ'`) === 'boolean,true,true')
+  const post104 = incearca(104), post105 = incearca(105)
+  check('flag false: 104 se depune ca înainte (AI „nu se aplică” acoperă — regula veche)', post104.ok, post104.out.slice(0, 200))
+  check('flag false: 105 — mesaj de blocare IDENTIC cu cel dinainte de apply', !post105.ok && post105.out.split('\n')[0] === pre105.out.split('\n')[0], post105.out.slice(0, 300))
+  check('flag false: v_ofertare_pt_stare dă aceleași cifre ca înainte', q(`SELECT string_agg(licitatie_id || ':' || de_raspuns || '/' || fara_capitol || '/' || exceptate || '/' || dovada_de_verificat, ',' ORDER BY licitatie_id) FROM public.v_ofertare_pt_stare`) === viewPre)
+  // exceptare AI pe cerința PT 1004 (licitația 103, J02b oprit): numără ca exceptată (regula veche)
+  q(`INSERT INTO public.ofertare_pt_legaturi (cerinta_id, capitol_id, fel, motiv, sursa) VALUES (1004, NULL, 'exceptat', 'AI r5', 'ai')`)
+  const st103 = () => q(`SELECT fara_capitol || '/' || exceptate || '/' || exceptate_propuse_ai FROM public.v_ofertare_pt_stare WHERE licitatie_id = 103`)
+  check('flag false: exceptarea AI închide cerința PT (fara_capitol 1, exceptate 1, propuse_ai 0)', st103() === '1/1/0', st103())
+  // licitație nouă
+  check('licitație nouă (INSERT fără coloană) ⇒ j02b_activ=true', psql(`INSERT INTO public.ofertare_licitatii (id, status) VALUES (107, 'identificata');`).ok && q(`SELECT j02b_activ FROM public.ofertare_licitatii WHERE id = 107`) === 't')
+  const insFals = psql(`INSERT INTO public.ofertare_licitatii (id, status, j02b_activ) VALUES (108, 'identificata', false);`)
+  check('INSERT cu j02b_activ=false → refuz', !insFals.ok && /pornește cu J02b activ/.test(insFals.out), insFals.out.slice(0, 200))
+  // false→true în afara RPC-ului
+  check('false→true direct (postgres) → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(psql(`UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103;`).out))
+  check('false→true direct (REST owner) → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(rest('authenticated', U.owner, `UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103;`).out))
+  check('false→true cu marcaj pentru ALTĂ licitație → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(psql(`BEGIN; SELECT set_config('gazpet.j02b_activeaza', '104:' || txid_current(), true); UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103; ROLLBACK;`).out))
+  // RPC: porțile
+  const act = (rol, uid, id) => rest(rol, uid, `SELECT public.fn_ofertare_j02b_activeaza(${id});`, 'COMMIT')
+  const rAnon = act('anon', null, 106), rSr = act('service_role', null, 106)
+  check('RPC: anon → permission denied', !rAnon.ok && /permission denied/.test(rAnon.out), rAnon.out.slice(0, 150))
+  check('RPC: service_role → permission denied', !rSr.ok && /permission denied/.test(rSr.out), rSr.out.slice(0, 150))
+  const rFaraMod = act('authenticated', U.fara, 106)
+  check('RPC: cont fără modul Ofertare → refuz', !rFaraMod.ok && /fără acces la Ofertare/.test(rFaraMod.out), rFaraMod.out.slice(0, 150))
+  const rNeresp = act('authenticated', U.modul, 103)
+  check('RPC: modul Ofertare dar nici owner nici responsabil → refuz', !rNeresp.ok && /doar ownerul sau responsabilul/.test(rNeresp.out), rNeresp.out.slice(0, 150))
+  check('RPC: refuzurile nu au schimbat nimic (103, 106 oprite; jurnal gol)', q(`SELECT count(*) FILTER (WHERE j02b_activ) FROM public.ofertare_licitatii WHERE id IN (103, 106)`) === '0' && q(`SELECT count(*) FROM public.ofertare_j02b_activari`) === '0')
+  const impact = rest('authenticated', U.modul, `SELECT public.fn_ofertare_j02b_impact(106);`)
+  check('impact pe 106 = 1 cerință de redeschis', impact.ok && impact.out === '1', impact.out)
+  const rResp = act('authenticated', U.modul, 106)
+  check('RPC: responsabilul licitației pornește J02b → întoarce 1, jurnal cu rol responsabil', rResp.ok && rResp.out === '1' && q(`SELECT j02b_activ || ',' || (SELECT rol_actor || ':' || n_redeschise FROM public.ofertare_j02b_activari WHERE licitatie_id = 106) FROM public.ofertare_licitatii WHERE id = 106`) === 'true,responsabil:1', rResp.out.slice(0, 200))
+  const rDin = act('authenticated', U.modul, 106)
+  check('RPC: a doua pornire → „deja pornit”', !rDin.ok && /deja pornit/.test(rDin.out))
+  const rOwn103 = act('authenticated', U.owner, 103), rOwn104 = act('authenticated', U.owner, 104)
+  check('RPC: owner pornește 103 și 104', rOwn103.ok && rOwn104.ok, rOwn103.out + rOwn104.out)
+  check('flag true: exceptarea AI NU mai închide (fara_capitol 2, exceptate 0, propuse_ai 1)', st103() === '2/0/1', st103())
+  // true→false: toate căile
+  check('true→false direct (postgres) → refuz', /nu se mai poate opri/.test(psql(`UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104;`).out))
+  check('true→false REST owner → refuz', /nu se mai poate opri/.test(rest('authenticated', U.owner, `UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104;`).out))
+  check('true→false REST service_role → refuz', /nu se mai poate opri|permission denied/.test(rest('service_role', null, `UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104;`).out))
+  check('true→false cu marcajul RPC setat → tot refuz', /nu se mai poate opri/.test(psql(`BEGIN; SELECT set_config('gazpet.j02b_activeaza', '104:' || txid_current(), true); UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104; ROLLBACK;`).out))
+  check('true→false odată cu depunerea → refuz (și poarta evaluează regula nouă)', !psql(`UPDATE public.ofertare_licitatii SET j02b_activ = false, status = 'depusa' WHERE id = 104;`).ok)
+  check('flag true: 104 rămâne pornită', q(`SELECT j02b_activ FROM public.ofertare_licitatii WHERE id = 104`) === 't')
+  check('RPC fn_ofertare_j02b_activeaza: ACL brut exact authenticated + postgres', q(`SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type, ',' ORDER BY x.grantee::regrole::text) FROM pg_proc p, aclexplode(p.proacl) x WHERE p.oid = 'public.fn_ofertare_j02b_activeaza(bigint)'::regprocedure`) === 'authenticated:EXECUTE,postgres:EXECUTE')
+  check('jurnalul pornirilor: INSERT direct (REST owner) → permission denied', /permission denied/.test(rest('authenticated', U.owner, `INSERT INTO public.ofertare_j02b_activari (licitatie_id, actor, rol_actor, n_redeschise) VALUES (105, '${U.owner}', 'owner', 0);`).out))
+
   console.log('6. Comportament cap-coadă (REST simulat)')
   const conf = (uid, cid, tip, extra = '') => rest('authenticated', uid, `SELECT public.ofertare_confirma_neaplicabil(${cid}, '${tip}', 'motiv de test J02b', public.fn_ofertare_cerinta_amprenta(${cid}), (SELECT propunere_id FROM public.fn_ofertare_na_propunere_curenta(${cid}, '${tip}')));${extra}`, 'COMMIT')
   const rFara = conf(U.fara, 2001, 'nu_se_aplica')
@@ -266,9 +328,17 @@ try {
     && q(`SELECT bool_or(has_table_privilege(r, 'public.ofertare_cerinte_na_confirmari_arhiva_j02b', 'SELECT')) FROM unnest(ARRAY['anon','authenticated','service_role']) r`) === 'f')
   check('obiectele J02b au dispărut', q(`SELECT count(*) FROM pg_proc WHERE proname IN ('fn_ofertare_cerinta_amprenta','fn_ofertare_na_propunere_curenta','fn_ofertare_na_confirmare_valida','fn_ofertare_cerinta_na_confirmata','ofertare_confirma_neaplicabil','ofertare_revoca_neaplicabil')`) === '0')
   check('re-livrare cu arhiva prezentă → refuz', !livrare().ok)
-  q(`DROP TABLE public.ofertare_cerinte_na_confirmari_arhiva_j02b;`)
+  check('r5 revenit: coloana j02b_activ, triggerul și RPC-ul au dispărut; pornirile în arhivă (3), fără acces',
+    q(`SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.ofertare_licitatii'::regclass AND attname = 'j02b_activ' AND NOT attisdropped`) === '0'
+    && q(`SELECT count(*) FROM pg_trigger WHERE tgname = 'trg_ofertare_j02b_sens_unic'`) === '0'
+    && q(`SELECT count(*) FROM pg_proc WHERE proname IN ('fn_ofertare_j02b_activeaza','fn_ofertare_j02b_sens_unic','fn_ofertare_j02b_impact')`) === '0'
+    && q(`SELECT count(*) FROM public.ofertare_j02b_activari_arhiva`) === '3'
+    && q(`SELECT bool_or(has_table_privilege(r, 'public.ofertare_j02b_activari_arhiva', 'SELECT')) FROM unnest(ARRAY['anon','authenticated','service_role']) r`) === 'f')
+  check('re-livrare cu arhiva pornirilor prezentă → refuz', (() => { q(`DROP TABLE public.ofertare_cerinte_na_confirmari_arhiva_j02b;`); return !livrare().ok })())
+  q(`DROP TABLE public.ofertare_j02b_activari_arhiva;`)
   check('re-livrare după curățarea arhivei → trece', livrare().ok)
-  check('revenire pe tabel gol → trece și șterge tabelul', revenire().ok && q(`SELECT to_regclass('public.ofertare_cerinte_na_confirmari') IS NULL AND to_regclass('public.ofertare_cerinte_na_confirmari_arhiva_j02b') IS NULL`) === 't')
+  check('re-livrare: TOATE licitațiile existente (inclusiv 107 creată cu J02b pornit) revin la j02b_activ=false', q(`SELECT count(*) FILTER (WHERE NOT j02b_activ) || '/' || count(*) FROM public.ofertare_licitatii`) === '5/5')
+  check('revenire pe tabel gol → trece și șterge tabelul', revenire().ok && q(`SELECT to_regclass('public.ofertare_cerinte_na_confirmari') IS NULL AND to_regclass('public.ofertare_cerinte_na_confirmari_arhiva_j02b') IS NULL AND to_regclass('public.ofertare_j02b_activari') IS NULL AND to_regclass('public.ofertare_j02b_activari_arhiva') IS NULL`) === 't')
 
   console.log('8. Nicio scriere directă în tabel din aplicație (src/, supabase/functions/, worker/)')
   const fisiere = []

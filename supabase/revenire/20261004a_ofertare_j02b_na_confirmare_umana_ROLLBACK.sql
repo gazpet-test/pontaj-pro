@@ -5,6 +5,9 @@
 -- REDESCHIDE „nu se aplică”/„exceptat” AI ca verde: se rulează doar cu acordul explicit al lui Răzvan.
 -- Confirmările umane NU se pierd: dacă tabelul are rânduri, se redenumește în ofertare_cerinte_na_confirmari_arhiva_j02b
 -- (fără acces din aplicație, nici service_role); dacă e gol, se șterge.
+-- r5: scoate și comutatorul (trg_ofertare_j02b_sens_unic, fn_ofertare_j02b_activeaza, fn_ofertare_j02b_impact, coloana
+-- ofertare_licitatii.j02b_activ). Jurnalul pornirilor (ofertare_j02b_activari) se păstrează ca ofertare_j02b_activari_arhiva
+-- dacă are rânduri (fără acces din aplicație), altfel se șterge.
 -- Armare (în aceeași tranzacție, fără nimic altceva):
 --   BEGIN;
 --   SELECT set_config('gazpet.revenire_20261004a', 'REVINE_J02B:' || txid_current(), true);
@@ -32,6 +35,13 @@ BEGIN
   END IF;
   IF to_regclass('public.ofertare_cerinte_na_confirmari_arhiva_j02b') IS NOT NULL THEN
     RAISE EXCEPTION 'J02b rollback pre: arhiva există deja — REFUZ';
+  END IF;
+  IF to_regclass('public.ofertare_j02b_activari') IS NULL OR to_regprocedure('public.fn_ofertare_j02b_activeaza(bigint)') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ofertare_licitatii'::regclass AND attname = 'j02b_activ' AND NOT attisdropped) THEN
+    RAISE EXCEPTION 'J02b rollback pre: comutatorul r5 (j02b_activ / jurnal / RPC) lipsește — REFUZ';
+  END IF;
+  IF to_regclass('public.ofertare_j02b_activari_arhiva') IS NOT NULL THEN
+    RAISE EXCEPTION 'J02b rollback pre: arhiva pornirilor (ofertare_j02b_activari_arhiva) există deja — REFUZ';
   END IF;
 END $pre$;
 
@@ -121,7 +131,25 @@ END $view$;
 -- ACL identic cu live (30.09.2026)
 GRANT ALL ON public.v_ofertare_pt_stare TO anon, authenticated, service_role;
 
--- 3. obiectele J02b
+-- 3. obiectele J02b (r5 întâi: triggerul și RPC-urile comutatorului, apoi coloana — poarta și view-ul vechi nu o mai citesc)
+DROP TRIGGER trg_ofertare_j02b_sens_unic ON public.ofertare_licitatii;
+DROP FUNCTION public.fn_ofertare_j02b_sens_unic();
+DROP FUNCTION public.fn_ofertare_j02b_activeaza(bigint);
+DROP FUNCTION public.fn_ofertare_j02b_impact(bigint);
+DO $activari$
+DECLARE n int;
+BEGIN
+  SELECT count(*) INTO n FROM public.ofertare_j02b_activari;
+  IF n = 0 THEN
+    EXECUTE 'DROP TABLE public.ofertare_j02b_activari';
+  ELSE
+    EXECUTE 'DROP POLICY ofertare_j02b_activari_select ON public.ofertare_j02b_activari';
+    EXECUTE 'REVOKE ALL ON public.ofertare_j02b_activari FROM PUBLIC, anon, authenticated, service_role';
+    EXECUTE 'ALTER TABLE public.ofertare_j02b_activari RENAME TO ofertare_j02b_activari_arhiva';
+    RAISE NOTICE 'J02b rollback: % porniri J02b păstrate în ofertare_j02b_activari_arhiva', n;
+  END IF;
+END $activari$;
+ALTER TABLE public.ofertare_licitatii DROP COLUMN j02b_activ;
 DROP VIEW public.v_ofertare_cerinte_na_stare;
 DROP FUNCTION public.ofertare_revoca_neaplicabil(bigint, text);
 DROP FUNCTION public.ofertare_confirma_neaplicabil(bigint, text, text, text, bigint);
@@ -161,7 +189,11 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('fn_ofertare_cerinta_amprenta','fn_ofertare_na_propunere_curenta',
         'fn_ofertare_na_confirmare_valida','fn_ofertare_cerinta_na_confirmata','ofertare_confirma_neaplicabil','ofertare_revoca_neaplicabil')) OR to_regclass('public.v_ofertare_cerinte_na_stare') IS NOT NULL
-     OR to_regclass('public.ofertare_cerinte_na_confirmari') IS NOT NULL OR to_regclass('public.ofertare_j02b_rollback_def') IS NOT NULL THEN
+     OR to_regclass('public.ofertare_cerinte_na_confirmari') IS NOT NULL OR to_regclass('public.ofertare_j02b_rollback_def') IS NOT NULL
+     OR to_regclass('public.ofertare_j02b_activari') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('fn_ofertare_j02b_activeaza','fn_ofertare_j02b_sens_unic','fn_ofertare_j02b_impact'))
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ofertare_j02b_sens_unic')
+     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ofertare_licitatii'::regclass AND attname = 'j02b_activ' AND NOT attisdropped) THEN
     RAISE EXCEPTION 'J02b rollback post: obiecte J02b rămase';
   END IF;
 END $post$;
