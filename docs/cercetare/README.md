@@ -5,7 +5,7 @@ Instanța de cercetare (doar citire): practica CNSC + baza normativă pentru mod
 
 | Livrabil | Fișier | Stare |
 |---|---|---|
-| A. Practica CNSC | `cnsc_practica.md` / `cnsc_practica.json` | în lucru |
+| A. Practica CNSC | `cnsc_practica.md` / `cnsc_practica.json` | ✅ 53 decizii |
 | B. Baza normativă | `baza_normativa.md` / `baza_normativa.json` | în lucru |
 | C. Catalog clarificări (șabloane) | `catalog_clarificari.md` | în lucru |
 | D. Propuneri ERP | `propuneri_platforma.md` | în lucru |
