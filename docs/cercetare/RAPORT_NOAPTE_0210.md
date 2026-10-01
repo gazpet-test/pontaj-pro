@@ -7,7 +7,7 @@
 
 | # | Pas din coadă | Livrat | Fișiere |
 |---|---|---|---|
-| 1 | Practica CNSC (țintă ≥ 60) | **154 de decizii** citite integral, sinteză pe **15 teme** + Top 10 reguli | `cnsc_practica.md/.json`, `cnsc_teme.md` |
+| 1 | Practica CNSC (țintă ≥ 60) | **182 de decizii** citite integral, sinteză pe **15 teme** + Top 10 reguli | `cnsc_practica.md/.json`, `cnsc_teme.md` |
 | 2 | Registrul surselor + cerințe atomice P0 | **370 de surse**, **919 cerințe atomice**, **313 relații** în graful de aplicabilitate | `registru_surse.json`, `registru_cerinte.json`, `graf_aplicabilitate.json`, `registre_evidenta.md` |
 | 3 | Catalog de clarificări v1 (țintă ≥ 30 de tipare) | **96 de tipare (v1.2)**: întrebare neutră, impact intern separat, 35 cu review juridic | `clarificari_tipare.md/.json`, `clarificari_matrice_model.md` |
 | 4 | P1: HG 1/2018, OG 15/2021 + INS, HG 925, L10, HG 273, L50 | 101 cerințe P1, cu Legea 169/2026 citită pe textul din MO 661/2026 | idem registre (REQ-P1-*) |
@@ -19,11 +19,11 @@
 
 ### Cifre
 
-- **CNSC — 154 de decizii:**
-  - pe domenii: 69 apă-canal, 46 gaze, 18 distribuție, 21 lucrări/rețele generale;
-  - pe ani: 2020–2026, din care 2025: 41 și 2026: 26;
-  - pe lege: 125 pe L98 și 29 sectoriale pe L99;
-  - soluții: 63 admise, 41 admise parțial, 50 respinse;
+- **CNSC — 182 de decizii:**
+  - pe domenii: 95 apă-canal, 48 gaze, 18 distribuție, 21 lucrări/rețele generale;
+  - pe ani: 2020–2026 (lotul 6 a adăugat 28 din 2020–2022);
+  - pe lege: 141 pe L98 și 41 sectoriale pe L99;
+  - soluții: 71 admise, 45 admise parțial, 66 respinse
   - fiecare are amprentă `snapshot_text_sha256`. Portalul regenerează PDF-ul la fiecare descărcare, deci hash-ul PDF-ului nu e stabil.
 - **Cerințe — 919, pe tip de temei:**
   - OBLIGATORIE_LEGE: 600
@@ -33,8 +33,8 @@
   - STANDARD_INCORPORAT_PRIN_REFERINTA: 44
   - PRACTICA_CNSC: 41
 
-  Din ele, **835 sunt verificate pe sursă**.
-- **Tipare — 96:** 69 cu încredere ridicată, 25 medie, 2 scăzută. Toate cele 154 de decizii sunt citate în cel puțin un tipar.
+  Din ele, **864 sunt verificate pe sursă**; restul sunt standarde licențiate, indicatoare sau date interne.
+- **Tipare — 96:** 69 cu încredere ridicată, 25 medie, 2 scăzută. Cele 154 de decizii din loturile 1–5 sunt citate în cel puțin un tipar; lotul 6 (28 de decizii) încă nu e legat de tipare.
 
 ## Top 10 constatări pentru ofertare și clarificări
 
