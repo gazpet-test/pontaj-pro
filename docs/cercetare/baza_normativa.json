@@ -145,13 +145,13 @@
    "Cauțiunea (art. 61^1) — constituire în max. 5 zile de la sesizarea CNSC (în 2020 era 3 zile lucrătoare); plafoane diferențiate pe etapa procedurii (confirmat prin Decizia CNSC 2863/C4/3581 din 25.09.2025)"
   ],
   "inlocuit_de": null,
-  "ce_cere": "Contestația la CNSC sau acțiunea în instanță împotriva actelor AC (documentație, rezultat). Termen de 10 zile (procedură cu valoare estimată ≥ pragurile de publicare JOUE) sau 5 zile (sub prag), de la ziua următoare luării la cunoștință. Cauțiune obligatorie, sub sancțiunea respingerii.",
+  "ce_cere": "Contestația la CNSC sau acțiunea în instanță împotriva actelor AC (documentație, rezultat). Termen de 10 zile (procedură cu valoare estimată ≥ pragurile de publicare JOUE) sau 7 zile (sub prag), de la ziua următoare luării la cunoștință. Cauțiune obligatorie, sub sancțiunea respingerii.",
   "documente_atestari": [
    "Contestație + dovada cauțiunii (recipisă CEC/virament/scrisoare de garanție) în max. 5 zile de la sesizarea CNSC"
   ],
   "praguri": [
    "Art. 8(1) lit. a) — 10 zile dacă valoarea estimată ≥ pragurile de publicare JOUE (lucrări 26.960.556 lei din 01.01.2026)",
-   "Art. 8(1) lit. b) — 5 zile dacă valoarea estimată < pragurile JOUE",
+   "Art. 8(1) lit. b) — 7 zile dacă valoarea estimată < pragurile JOUE",
    "Art. 61^1(1) lit. a) — sub prag: cauțiune 2% din valoarea estimată, max. 35.000 lei (contestații la documentație, etapa art. 17(1) lit. a) / max. 88.000 lei (contestații după evaluare, etapa art. 17(1) lit. b) — confirmat Decizia CNSC 2863/C4/3581/25.09.2025",
    "Art. 61^1(1) lit. b) — peste prag: 2%, plafoane 220.000 lei / 880.000 lei (text 2020; NECONFIRMAT în forma curentă)",
    "Art. 61^1(2) — acord-cadru: raportare la dublul valorii celui mai mare contract subsecvent; (2^1) loturi: valoarea lotului contestat",
@@ -164,7 +164,7 @@
   "relevanta_clarificari": "Contestarea documentației (cerințe restrictive, clauze abuzive) curge de la publicarea documentației/răspunsului la clarificare. Recomandat: întâi întrebare de clarificare → dacă AC menține cerința, contestație în termen calculat de la publicarea răspunsului.",
   "articole_cheie": [
    "art. 6 — notificarea prealabilă (obligativitate eliminată prin Legea 208/2022 — de reconfirmat)",
-   "art. 8 — termene contestație 10/5 zile",
+   "art. 8 — termene contestație 10/7 zile",
    "art. 17 — etapele procedurii (relevante pentru plafonul cauțiunii)",
    "art. 29 / art. 32 — plângerea împotriva deciziei CNSC la curtea de apel (termen de 10 zile — NEVERIFICAT în forma curentă)",
    "art. 61^1 — cauțiunea"

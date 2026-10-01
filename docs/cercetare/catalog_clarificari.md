@@ -7,7 +7,7 @@
 ## Reguli de folosire (din lege și practica CNSC)
 
 1. **Termene:** AC răspunde cu **cel puțin 10 zile** înainte de termenul de depunere (6 zile la procedura simplificată pentru lucrări) — L98 art. 161; întrebările trebuie puse până la termenul-limită din anunț (L98 art. 160 alin. (2), HG 395 art. 27 alin. (2)). Răspuns întârziat → cerem prelungirea termenului (CL-P).
-2. **Ce nu se clarifică se contestă la timp:** contestarea documentației de atribuire are termen de **10 zile** (5 sub prag) de la publicare/răspuns — L101 art. 8. După depunere, o cerință acceptată tacit nu mai poate fi atacată eficient.
+2. **Ce nu se clarifică se contestă la timp:** contestarea documentației de atribuire are termen de **10 zile** (7 sub prag) de la publicare/răspuns — L101 art. 8. După depunere, o cerință acceptată tacit nu mai poate fi atacată eficient.
 3. **Clarificarea care închide disputa în favoarea noastră:** autorizarea ANRE expresă (tip + Ordin 17/2026), definirea noțiunilor din factorii de evaluare, procentul NDT, formula de ajustare — CNSC nu completează documentația „de drept” cu legi speciale (BO2022_2403, BO2023_416), deci ambiguitatea se închide ÎNAINTE de depunere.
 4. **Cantitățile F3 nu se corectează în ofertă** (BO2026_3104) — orice diferență se ridică la clarificări.
 5. **Formulare:** politicoasă, punctuală, cu trimitere la pagina/secțiunea din DA și la temei; o singură problemă pe întrebare; fără date care identifică strategia noastră de preț.

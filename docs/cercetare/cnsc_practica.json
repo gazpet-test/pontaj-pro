@@ -33,7 +33,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (contract de lucrări cu subfactori pentru proiectanți)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (subfactori experți 5% fiecare; metodologie/calitate 20%)",
+  "contestator_rol": "contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "DA cerea certificat ANIF pentru proiectare irigații și un alt certificat de atestare tip A, B, C, D1-D7, E, iar strategia de contractare nu le justifica distinct; AC invoca doar existența unor drumuri/terenuri agricole pe traseu, fără ca DTAC să arate sisteme de irigații pe amplasament. Experiența managerului de contract și a responsabilului SSM era limitată la contracte în domeniul gazelor, fără justificare. Subfactorii pentru ing. instalații electrice și SCADA (punctaj pe trepte 2-3 / 4-5 / >6 proiecte) erau legați de componenta de rețea inteligentă; numărul de trenchere a fost redus de AC de la 2-3 la 1 bucată în timpul contestației.",
+  "concluzie_cnsc": "Admite în parte (criticile 2.a, 2.b și critica privind experiența experților manager/SSM); obligă AC să modifice documentația în 10 zile. Respinge ca rămase fără obiect critica 1 (parțial) și 5 (trencher, după remediere) și ca neîntemeiată critica 4 (subfactori electric/SCADA); respinge cheltuielile ca nedovedite.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de distribuție gaze într-o comună, procedură simplificată L98, cerințe de calificare și factori de evaluare tipici licitațiilor la care participă Gazpet (atestate, experți, utilaje).",
+   "mai_putin_comparabila": "Decizie pe documentație (nu pe evaluare); soluția depinde de ce a scris AC în strategia de contractare a acelei proceduri; decizie anonimizată, fără valoare estimată publicată.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "este excesivă solicitarea autorității contractante ca ofertanții să depună „Certificat atestare ANIF pentru proiectare sisteme de irigații”",
+    "loc": "p. 7 (din 16)"
+   },
+   {
+    "text": "contestatorul nefăcând dovada caracterului restrictiv/nelegal al subfactorilor de evaluare",
+    "loc": "p. 15 (din 16)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "e7f841a6a88ee5ad9fb5399e36b4e2a33a16c602b0fa33fa3db6d7c7333e556c",
+  "snapshot_bytes": 269434,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2026_182",
@@ -48,7 +81,7 @@
    "factor_evaluare",
    "documente_calificare"
   ],
-  "regula": "ES se dovedește cu documente existente la data-limită de ofertare; experiența expertului contează doar după data autorizării ANRE; recomandările trebuie emise sau confirmate de beneficiar.",
+  "regula": "Nuanțare: CNSC nu a statuat că experiența expertului dinainte de autorizarea ANRE (19.06.2023) e automat exclusă; a reținut că AC nu a verificat și consemnat perioadele proiectelor față de data autorizării și a dispus reevaluare. Recomandările/PV-urile semnate de diriginte trebuie confirmate de beneficiar; documentele emise după data-limită nu pot dovedi ES.",
   "temei_legal": [
    "Legea 98/2016 art. 2 alin. (2), art. 196",
    "HG 343/2017 art. 19",
@@ -66,7 +99,41 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (PT+CS+DE + asistență tehnică + execuție)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (componentă tehnică: experiența experților-cheie)",
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Două oferte; câștigătorul (asociere) 100 puncte, contestatorul 92,11 puncte. Expertul-cheie nr. 2 (instalator ANRE PGD) avea autorizația din 19.06.2023, dar cele 8 recomandări (Delgaz Grid, proiecte 2018-2024) erau emise de dirigintele de șantier, fără date de derulare, iar AC nu a verificat perioadele. Pentru ES în proiectare s-a depus un PV de recepție nr. 604911/18.08.2025, emis după data-limită de depunere; pentru ES în execuție, un PV intermediar (98% rețele / 99% racorduri) semnat de diriginte, nu de beneficiar. Termenul de contestare a curs de la accesul efectiv la dosar (04.12.2025), excepția tardivității fiind respinsă.",
+  "concluzie_cnsc": "Respinge excepția tardivității; admite contestația și obligă AC ca în 15 zile să reevalueze oferta câștigătoare pe aspectele din considerente (verificarea perioadelor expertului 2 față de autorizarea ANRE, confirmarea recomandărilor/PV de către beneficiar, excluderea PV ulterior datei-limită, clarificarea valorii lucrărilor subcontractantului).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele/branșamente gaze (proiectare+execuție), simplificată L98, experți ANRE și ES dovedită cu recomandări Delgaz — exact tipul de dosar pe care îl depune Gazpet.",
+   "mai_putin_comparabila": "CNSC nu a decis definitiv neconformitatea, ci a trimis la reevaluare/clarificări; contract P+E, nu doar execuție.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "procesul-verbal de recepție nr. 604911/18.08.2025 nu putea fi avut în vedere de comisia de evaluare la momentul analizării ofertelor",
+    "loc": "p. 17 (din 19)"
+   },
+   {
+    "text": "valorificarea acestor recomandări este condiționată de confirmarea lor de către beneficiarul final al lucrărilor",
+    "loc": "p. 13 (din 19)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Nuanțare: CNSC nu a statuat că experiența expertului dinainte de autorizarea ANRE (19.06.2023) e automat exclusă; a reținut că AC nu a verificat și consemnat perioadele proiectelor față de data autorizării și a dispus reevaluare. Recomandările/PV-urile semnate de diriginte trebuie confirmate de beneficiar; documentele emise după data-limită nu pot dovedi ES.",
+  "regula_initiala": "ES se dovedește cu documente existente la data-limită de ofertare; experiența expertului contează doar după data autorizării ANRE; recomandările trebuie emise sau confirmate de beneficiar.",
+  "snapshot_sha256": "e5e67bbbbe5dd06512120cd5a9eb32e9754d7f9e592ef493b1593496bcbe9610",
+  "snapshot_bytes": 240547,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2026_2669",
@@ -98,7 +165,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 11837153.02,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (DTAC racord/SRMP, PTE, execuție rețea, branșamente)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "contestă documentația (concesionarul serviciului de distribuție, nu ofertant)",
+  "etapa": "documentație",
+  "fapte_relevante": "UAT-ul concesionase în 11.11.2024, pe 49 de ani, serviciul de distribuție gaze în 4 sate, cu obligația concesionarului de a dezvolta sistemul (grafic de investiții ~15,1 mil. lei cu TVA, completat prin act adițional nr. 1/11.07.2025). În 16.06.2026 același UAT a lansat licitație de P+E (VE 11.837.153,02 lei fără TVA, CPV 45231221-0, finanțare Anghel Saligny) pentru rețeaua din același perimetru. AC a recunoscut că nu știe exact obligațiile concesionarului din actul adițional.",
+  "concluzie_cnsc": "Respinge excepția inadmisibilității; admite contestația și anulează procedura de atribuire (nicio măsură de remediere posibilă); respinge cheltuielile ca nedovedite.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Proiectare+execuție rețea de distribuție gaze cu SRMP și branșamente, finanțare Anghel Saligny — profil tipic Gazpet; relevant pentru riscul de anulare a unei licitații unde Gazpet a investit în ofertă.",
+   "mai_putin_comparabila": "Speță rară (suprapunere cu o concesiune existentă), contestator = concesionar, nu ofertant; nu privește calificarea/evaluarea.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "să verifice și să se asigure că noua procedură de atribuire nu se suprapune și nu contravine contractului de concesiune deja existent",
+    "loc": "p. 9 (din 10)"
+   },
+   {
+    "text": "va anula procedura de atribuire în cauză întrucât nu este posibilă aplicarea niciunei măsuri de remediere",
+    "loc": "p. 9 (din 10)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "08d156819e3fc41ad8369f4da1a0bbb0a3b76aa39fab0cbf68d468117423c7c5",
+  "snapshot_bytes": 169680,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2026_3104",
@@ -131,7 +231,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "execuție",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Oferta câștigătoare (al cărei autor elaborase și proiectul tehnic) avea un preț de ~55% din valoarea estimată și reducea, față de listele publicate, orele de utilaj, cantitatea de conductă și transportul (cu 25%), explicând prin consumuri proprii/articole asimilate; comisia nu analizase aceste diferențe. Propunerea tehnică era asamblată din documente-tip de la lucrări de drumuri (pasaje ininteligibile pe zeci de pagini, referiri la membri ai unei asocieri inexistente), deși fișa de date sancționa expres cu neconformitatea o ofertă neparticularizată. Criticile privind justificarea prețului pe utilaje și cheltuielile indirecte de 10% au fost respinse.",
+  "concluzie_cnsc": "Admite contestația și dispune reevaluarea ofertei câștigătoare în maximum 15 zile (verificarea conformității propunerii tehnice cu listele de cantități din SEAP și reverificarea integrală a propunerii tehnice); respinge cheltuielile ca nedovedite și cererea de intervenție a câștigătorului ca nefondată.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Execuție rețele de distribuție și branșamente gaze, simplificată L98, preț vs. valoare estimată și liste de cantități — scenariu direct pentru ofertele Gazpet (și pentru atacarea concurenților).",
+   "mai_putin_comparabila": "Soluția este reevaluare, nu declarare directă a neconformității; elementele factuale (oferta copiată din drumuri) sunt extreme.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "reducerea cu 25% neputând fi justificată printr-o anumită asimilare a normelor de deviz",
+    "loc": "p. 13 (din 16)"
+   },
+   {
+    "text": "va dispune reevaluarea ofertei câștigătoare prin verificarea conformității propunerii tehnice cu listele de cantități publicate în SEAP",
+    "loc": "p. 13 (din 16)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b28edf6c977c41817a8594b98faf9d7a7841ba8e441253339af40eb1287967fa",
+  "snapshot_bytes": 252685,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-Decizie_271",
@@ -161,7 +294,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 11248662.25,
+  "sub_prag": true,
+  "tip_contract": "execuție",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (factori tehnici: metodologie, grafic)",
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Comuna Vinga (Arad), extindere rețea gaze în Mănăștur și Mailat, CPV 45231221-0, VE 11.248.662,25 lei. Contestatorul invoca lipsa organizării de șantier, a procedurilor tehnice PE100 SDR11, a planului calității și un grafic Gantt cu denumirea altui obiectiv (Caporal Alexa). CNSC a găsit elementele în alte foldere/fișiere ale ofertei (ex. „7.2 Proceduri/2. Org santier”, PCCVI); graficul (19 luni și 9 zile, 4 luni de întrerupere pe timp friguros, drum critic marcat) era particularizat („Echipa Manastur”, „Montaj SRS Vinga”).",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6 L101/2016) și admite cererea de intervenție a câștigătorului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "Execuție extindere rețea gaze PE, simplificată L98, propunere tehnică și grafic Gantt — exact formatul ofertelor Gazpet.",
+   "mai_putin_comparabila": "Decizia validează evaluarea AC pe fapte specifice (structura de foldere a ofertei); nu stabilește un standard general de punctare.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "eventualele erori de redactare nefiind de natură a schimba sensul și înțelesul propunerii tehnice",
+    "loc": "p. 44 (din 46)"
+   },
+   {
+    "text": "Consiliul va respinge, ca nefondată, contestația formulată de PROF CON INVEST SRL",
+    "loc": "p. 45 (din 46)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b268a26b16b42f193322929fa8429320b2d7fb9953d0f658e73b40d1f6664aab",
+  "snapshot_bytes": 457879,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2025_104",
@@ -191,7 +357,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 2210661,
+  "sub_prag": true,
+  "tip_contract": "execuție",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (punctaj tehnic menționat; neprecizat explicit)",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Extindere conductă de distribuție gaze, VE 2.210.661 lei fără TVA, 3 oferte, termen depunere 08.11.2024. Oferta contestatorului (65,37% din VE) a fost respinsă ca neconformă pentru justificare insuficientă a prețului, deși răspunsul conținea salariul mediu (6.720 lei), extras REVISAL cu ora de manoperă proprie 39,55 lei (sub cea ofertată), soluții tehnice, materiale, utilaje. CNSC: AC trebuia să trateze documentele ca început de dovadă și să ceară probe suplimentare; criticile contestatorului contra câștigătorului și propriului punctaj tehnic — lipsite de interes cât timp oferta sa revine în competiție pe locul I.",
+  "concluzie_cnsc": "Admite în parte; anulează raportul procedurii și comunicarea în partea privind respingerea ofertei contestatoare; obligă AC la reevaluare și nou raport în cel mult 20 de zile; respinge în rest ca nefondată.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere conductă distribuție gaze, simplificată, valoare mică (~2,2 mil. lei) — tipic pentru Gazpet; argumentația de justificare a prețului (REVISAL, manoperă) e direct reutilizabilă.",
+   "mai_putin_comparabila": "Evaluarea se bazează pe conținutul concret al justificării; altă AC/alt complet pot cere mai mult; criticile contra câștigătorului nu au fost analizate pe fond.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "oferta sa nu putea fi respinsă ca neconformă, pentru neconcludența răspunsului de justificare, acest răspuns fiind plauzibil, întemeiat și legal",
+    "loc": "p. 9 (din 11)"
+   },
+   {
+    "text": "comisia de evaluare era ținută să îi ceară societății dovezi suplimentare, care să o lămurească deplin asupra sustenabilității prețului",
+    "loc": "p. 9 (din 11)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "38f96278a13006870017ba93470103254ee45b7dfec37c77c60249cdae2618be",
+  "snapshot_bytes": 167242,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2025_1221",
@@ -222,7 +421,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": "Obiectul contractului nu a putut fi identificat (anonimizat); detaliile raționamentului sunt rezumate din extragere automată.",
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (rețea aducțiune apă, canalizare sub presiune, hidranți, drumuri)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins (atacă și oferta câștigătoare)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Al doilea ciclu procesual: printr-o decizie CNSC anterioară, AC fusese obligată să ceară clarificări înainte de a respinge oferta asocierii contestatoare. La clarificările nr. 752/21.02.2025 (unde în ofertă sunt organigrama, repartizarea activităților/utilajelor/personalului/materialelor pe fiecare asociat și pe subcontractant, metodologiile pentru rigole, aducțiune, canalizare sub presiune, drumuri), contestatoarea nu a indicat elementele, iar oferta invoca normative abrogate deși DA interzicea expres acest lucru. Criticile contra câștigătorului au fost respinse: CNSC a găsit în propunerea tehnică metodologiile (pag. 516, 527, 665, 2054-2057, 2647-2771).",
+  "concluzie_cnsc": "Admite în principiu cererea de intervenție; respinge excepțiile (inclusiv neconstituirea cauțiunii în termen); respinge contestația ca nefondată, inclusiv cheltuielile; admite intervenția câștigătorului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă/canal în asociere cu subcontractant, cu cerințe din caietul de sarcini privind repartizarea pe asociați — similar ofertelor Gazpet în asociere pe apă-canal.",
+   "mai_putin_comparabila": "Proiectare+execuție; decizie anonimizată (fără valoare); a doua rundă de contestație, deci contextul clarificărilor e specific.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "s-a limitat la susțineri generice, fără a produce vreo probă concretă, la obiect, care să demonstreze cele susținute",
+    "loc": "p. 40 (din 41)"
+   },
+   {
+    "text": "Respinge, ca nefondată, contestația formulată de ......, în contradictoriu cu ......, inclusiv cererea de acordare cheltuieli de judecată",
+    "loc": "p. 41 (din 41)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "bbe8c514085c9e4ba817f74818d2cba35011754797d3426593af90855343dc8c",
+  "snapshot_bytes": 499006,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2025_1837",
@@ -252,7 +484,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 24053708.6,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (factor „Planificarea adecvată a resurselor umane” 20%)",
+  "contestator_rol": "ofertant necâștigător (locul II) care atacă propria punctare și câștigătorul",
+  "etapa": "rezultat (viciu al documentației constatat la evaluare)",
+  "fapte_relevante": "Înființare sistem de distribuție gaze în comună și 2 sate, CPV 45231221-0, VE 24.053.708,60 lei. Algoritmul factorului de 20% acorda 20/10/5 puncte după detalierea resurselor umane „pe fiecare tronson specificat în schema de calcul aferentă proiectului tehnic” — dar la P+E proiectul tehnic nu exista, iar SF-ul publicat nu folosea noțiunea de tronson. Asocierea contestatoare a primit 10 puncte în loc de 20 pentru nedetalierea pe tronsoane, după o clarificare (nr. 105/8/15.04.2025).",
+  "concluzie_cnsc": "Admite contestația și dispune anularea procedurii (art. 26 alin. 2 și 7 L101/2016), remedierea DA nemaifiind posibilă după termenul de depunere; restul criticilor nu se mai analizează; respinge intervenția câștigătorului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "P+E sistem de distribuție gaze, simplificată L98, factori de evaluare tehnici — exact tipul de licitații Gazpet; argument util când un algoritm de punctare e neclar.",
+   "mai_putin_comparabila": "Soluția (anulare) depinde de formularea concretă a algoritmului; pentru Gazpet câștigătoare, același raționament poate duce la pierderea contractului.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Studiul de Fezabilitate ( SF) invocat de autoritatea contractantă nu conține nici o referire la noțiunea de „tronson”",
+    "loc": "p. 53 (din 55)"
+   },
+   {
+    "text": "va dispune anularea procedurii de atribuire",
+    "loc": "p. 54 (din 55)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "3b82c0718ffac7439e09d88805cdfa1fe44423bce99f1bdc1d0ecde2d31bff98",
+  "snapshot_bytes": 476568,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2025_187",
@@ -267,7 +532,7 @@
    "experienta_similara",
    "asociere"
   ],
-  "regula": "La clarificări nu se retransmit formulare financiare modificate din proprie inițiativă; documentele suport DUAE și experiența similară trebuie dovedite la cererea AC.",
+  "regula": "Corecție: CNSC a reținut că retransmiterea întregii propuneri financiare NU face prin ea însăși oferta inacceptabilă dacă AC analizează doar elementele cerute; inacceptabilă a fost introducerea la clarificări a unui element nou (garanția echipamentelor). Critica pe documentele suport DUAE (caziere) a fost respinsă — documentele existau; la ES, CNSC a cerut doar clarificarea celui de-al doilea contract, nu a constatat neîndeplinirea.",
   "temei_legal": [
    "Legea 98/2016 art. 209",
    "HG 395/2016 art. 134"
@@ -283,7 +548,41 @@
   "ofertare_normative_ids": [],
   "verificat": false,
   "nota_verificare": "Extragerea automată nu a indicat clar cine a contestat și dispozitivul exact; de recitit PDF-ul înainte de citare.",
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "execuție (creștere eficiență energetică liceu)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (inclusiv factor „perioada de garanție suplimentară”)",
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Asocierea câștigătoare a retransmis la clarificări întreaga propunere financiară; CNSC a reținut că asta nu e în sine o modificare nepermisă, cât timp comisia a analizat doar formularele cerute (organizarea de șantier reformatată fără schimbare de valori). Însă prin formularele F retransmise garanția echipamentelor a fost schimbată din „minim X ani” în „X ani”, element care nu exista în oferta inițială (nici declarație, nici fișe tehnice) — modificare nepermisă a ofertei. Pentru ES, PV-urile de recepție făceau trimitere la un al doilea contract despre care nu exista nicio informație, iar AC nu clarificase; critica privind cazierele (DUAE) a fost respinsă, documentele fiind depuse.",
+  "concluzie_cnsc": "Respinge excepția tardivității (contestația trimisă pe e-mail în ultima zi e în termen); admite contestația, anulează actele de desemnare a câștigătorului și comunicările; obligă AC ca în termenul fixat să reevalueze oferta asocierii conform motivării, să stabilească ofertele admisibile și să aplice criteriul; respinge intervenția.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Lecții transversale de clarificări (ce poți retrimite la clarificări, ce nu) și de ES dovedită prin PV-uri — aplicabile oricărei oferte Gazpet.",
+   "mai_putin_comparabila": "Clădire (eficiență energetică), nu rețele; decizie puternic anonimizată (cifre lipsă).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "redepunerea întregii propuneri financiare nu este de natură să determine neconcludența răspunsului",
+    "loc": "p. 41 (din 46)"
+   },
+   {
+    "text": "informația privind garanția de . ani acordată echipamentelor a intervenit în oferta asocierii criticate, pentru prima dată, cu ocazia răspunsului de clarificare",
+    "loc": "p. 45 (din 46)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Corecție: CNSC a reținut că retransmiterea întregii propuneri financiare NU face prin ea însăși oferta inacceptabilă dacă AC analizează doar elementele cerute; inacceptabilă a fost introducerea la clarificări a unui element nou (garanția echipamentelor). Critica pe documentele suport DUAE (caziere) a fost respinsă — documentele existau; la ES, CNSC a cerut doar clarificarea celui de-al doilea contract, nu a constatat neîndeplinirea.",
+  "regula_initiala": "La clarificări nu se retransmit formulare financiare modificate din proprie inițiativă; documentele suport DUAE și experiența similară trebuie dovedite la cererea AC.",
+  "snapshot_sha256": "8b8b06de8f823b48fb39d8a149703bf91152fb03d2e0514f0e59448c988c1d4d",
+  "snapshot_bytes": 543380,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2025_2344",
@@ -318,7 +617,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (extindere rețea canalizare și racorduri, CPV 45232400-6)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (factori tehnici 60 p + preț 40 p)",
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul și locul II",
+  "etapa": "rezultat",
+  "fapte_relevante": "Entitate contractantă sectorială (operator apă). Câștigătorul (asociere, 99,15 p) avea preț de 70,51% din VE; la justificarea prețului a depus un contract cu o terță firmă pentru refacerea sistemului rutier (balast stabilizat 25 cm, BAD 22.4 6 cm, BA16 4 cm) — firmă nedeclarată în DUAE ca subcontractant. Ofertantul de pe locul II (96,02 p) avea 76,63% din VE, dar entitatea nu i-a cerut justificarea prețului. Entitatea nu a răspuns punctual criticilor privind propunerea tehnică a locului II (grafic Gantt etc.).",
+  "concluzie_cnsc": "Admite contestația și dispune continuarea procedurii: anulează raportul și comunicarea în partea privind evaluarea câștigătorului (respinge intervenția acestuia) și, în parte, în partea privind locul II (obligă entitatea să ceară justificarea prețului de 76,63%); respinge critica privind inginerul geolog; ia act de renunțarea la o critică. Termen 15 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea canalizare + racorduri, cu refaceri de drum — lucrări de același tip cu cele Gazpet (apă-canal); regula subcontractantului pentru asfaltări e direct aplicabilă și la gaze.",
+   "mai_putin_comparabila": "Procedură sectorială (L99/HG 394/2016, entitate operator de apă) — la UAT-uri se aplică L98/HG 395/2016 (texte echivalente pe 80% și subcontractare); proiectare+execuție.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "prestând o parte din contract, societatea ... trebuia declarat subcontractant",
+    "loc": "p. 41 (din 48)"
+   },
+   {
+    "text": "justificarea prețului pe care l-a oferta, având în vedere că propunerea sa financiară este de 76,63% din valoarea estimată",
+    "loc": "p. 44 (din 48)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "920bda46f80ca1c0e1fa0305916bcb776b7227b0490af4912170417a3f1af3c0",
+  "snapshot_bytes": 470368,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2025_878",
@@ -349,7 +681,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 28395855.5,
+  "sub_prag": false,
+  "tip_contract": "execuție (rețele apă potabilă, gospodărie de apă, canalizare menajeră, stație de epurare; CPV 45231300-8)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "contestă documentația (a depus și ofertă)",
+  "etapa": "documentație",
+  "fapte_relevante": "Contestatorul a cerut eliminarea a ~15 cerințe: cifra de afaceri medie 55.000.000 lei (sub 2× VE de 28.395.855,50 lei), cash-flow 9.465.285,17 lei pentru 6 luni, autorizație ANRE tip III, personal (10 sudori ISCIR, RTE, declarații de disponibilitate notariale), normative de deviz în graficul Gantt. AC a remediat parțial (cash-flow dovedit și prin împrumuturi/extrase, eliminarea normativelor de deviz) și și-a justificat restul; contestatorul nu a răspuns la remedieri, nu a indicat praguri alternative și nu s-a prezentat la studiul dosarului.",
+  "concluzie_cnsc": "Respinge excepția lipsei de interes (depunerea ofertei nu înlătură interesul de a ataca DA); respinge contestația ca nefondată (art. 26 alin. 6) și cererea de cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal la comună, cerințe de calificare financiare și de personal tipice; util pentru strategia Gazpet de a contesta DA.",
+   "mai_putin_comparabila": "Peste pragul de publicare UE în procedura aleasă (licitație deschisă, ~28,4 mil. lei); include stație de epurare (lucrări pe care Gazpet nu le face de regulă); soluția ține de pasivitatea contestatorului.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "interesul de a ataca o documentație apreciată nelegală a fost pierdut prin alegerea operatorului economic de a participa cu ofertă",
+    "loc": "p. 15 (din 28)"
+   },
+   {
+    "text": "În lipsa unor argumente concrete din partea contestatoarei",
+    "loc": "p. 25 (din 28)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "56d06343dfe37968f1fb76601f85175685e564304a26ba261e2fd2d6a8ef629a",
+  "snapshot_bytes": 415662,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-Decizie_3952",
@@ -363,7 +728,7 @@
    "documente_calificare",
    "clarificari_oferta"
   ],
-  "regula": "AC trebuie să analizeze efectiv documentele de ES și să motiveze concret respingerea; conductele de transport gaze sunt ES superioară pentru distribuție.",
+  "regula": "Nuanțare: conducta de transport a fost acceptată ca ES pentru distribuție în contextul unei cerințe care admitea lucrări „de aceeași natură și complexitate sau superioare” și al unui al doilea contract identic (distribuție) depus de câștigător; nu e o regulă generală că transportul acoperă orice cerință limitată strict la distribuție.",
   "temei_legal": [
    "Legea 98/2016 art. 215, art. 216",
    "HG 395/2016 art. 65, art. 66, art. 137",
@@ -380,7 +745,41 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 4845289.41,
+  "sub_prag": true,
+  "tip_contract": "execuție (extindere sistem distribuție gaze, CPV 45333000-0)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins (clasat primul după preț) care atacă și câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Orașul Șomcuta Mare, VE 4.845.289,41 lei, ES cerută = aceeași valoare în max. 2 contracte în 5 ani. Contestatorul (GETMAR) a depus contract de 8.498.937,15 lei (B.E.R.G./Neogas), recomandare, fișă de cont, facturi/centralizator de 8,64 mil. lei (1.848 pagini) și 236 de pagini de PV de recepție tehnică; AC l-a respins cu formula generică „documentele nu demonstrează experiența similară”, fără motiv concret. Câștigătorul a combinat un contract identic de 1.410.954,65 lei cu lucrări la o conductă de transport Transgaz (64.941.194,53 lei recepționate).",
+  "concluzie_cnsc": "Admite în parte; anulează raportul procedurii și actele subsecvente; obligă AC să reevalueze oferta GETMAR de la etapa ES în 10 zile; respinge ca nefondate criticile contra câștigătorului; obligă AC la 4.000 lei cheltuieli (redus de la 12.100 lei).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere distribuție gaze, simplificată, ~4,8 mil. lei, criteriu preț — profilul cel mai frecvent pentru Gazpet; arată și că lucrările de transport gaze se pot folosi ca ES pentru distribuție.",
+   "mai_putin_comparabila": "Soluția pe ES-transport s-a sprijinit și pe faptul că câștigătorul avea și un contract identic de distribuție; formularea cerinței („aceeași natură... sau superioare”) a contat.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "verificarea îndeplinirii cerințelor de calificare nu se limitează la simpla inventariere a solicitărilor de clarificare și a răspunsurilor aferente",
+    "loc": "p. 16 (din 21)"
+   },
+   {
+    "text": "caracteristicile tehnice și constructive ale respectivei conducte, executată anterior, sunt mult superioare celei care urmează a fi executată",
+    "loc": "p. 18 (din 21)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Nuanțare: conducta de transport a fost acceptată ca ES pentru distribuție în contextul unei cerințe care admitea lucrări „de aceeași natură și complexitate sau superioare” și al unui al doilea contract identic (distribuție) depus de câștigător; nu e o regulă generală că transportul acoperă orice cerință limitată strict la distribuție.",
+  "regula_initiala": "AC trebuie să analizeze efectiv documentele de ES și să motiveze concret respingerea; conductele de transport gaze sunt ES superioară pentru distribuție.",
+  "snapshot_sha256": "c3b3111c5166a6fbf59c76ffc3b5bb41e827c91800e22fd42a9d9cd6a4377e5e",
+  "snapshot_bytes": 238497,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_1016",
@@ -411,7 +810,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (extindere rețea distribuție gaze în sate, CPV 45231221-0)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (factori de evaluare modificați prin clarificări)",
+  "contestator_rol": "contestă documentația (răspunsurile la clarificări care au relaxat cerințele)",
+  "etapa": "documentație",
+  "fapte_relevante": "Prin clarificarea nr. 1377/12.03.2024, AC a lărgit ES (minimum 6.941.452,82 lei, max. 2 contracte, 5 ani) acceptând, pe lângă rețele de distribuție gaze, și alte lucrări (drumuri/poduri sau lucrări de categoria C), la cererea unui operator. Contestatorul (o SA din domeniu) cerea restrângerea ES doar la rețele de gaze, invocând lipsa de experiență a concurenților. Cerința de cumul RTE + verificator + instalator autorizat la o singură persoană a fost eliminată de AC din oficiu după contestație.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6); critica privind cumulul RTE/verificator/instalator — rămasă fără obiect.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "P+E extindere gaze, simplificată; arată că Gazpet NU poate obține prin contestație restrângerea ES la gaze pentru a elimina concurenți generaliști.",
+   "mai_putin_comparabila": "Decizie pe documentație; criteriile de calificare țin de aprecierea fiecărei AC.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliul nu poate sancționa autoritatea contractantă pentru exercitarea dreptului său de a impune criterii de calificare care permit participarea mai multor operatori economici",
+    "loc": "p. 12 (din 13)"
+   },
+   {
+    "text": "O competiție mai largă în cadrul procedurii nu se poate considera că va afecta posibilitatea contestatoarei de a participa cu ofertă",
+    "loc": "p. 12 (din 13)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "92adcce7b31b207d31fa9ec87b83f243569a1554312237aeb724fdcbd612b310",
+  "snapshot_bytes": 219784,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_1699",
@@ -444,7 +876,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 12537176.53,
+  "sub_prag": true,
+  "tip_contract": "execuție (sistem alimentare cu apă în satele comunei, etapa I)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins (atacă și câștigătorul)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 12.537.176,53 lei. Oferta asocierii contestatoare a fost respinsă pentru 5 motive privind personalul și vizita: CV-uri nesemnate olograf/fără „conform cu originalul” (cerință expresă cu majuscule în fișa de date), lipsă recomandări pe funcția propusă, persoane fără certificare COR 325710, semnătură diferită CV vs. declarație, iar contestatorul nu a participat la vizita amplasamentului programată. DA nu fusese contestată. La câștigător, comisia a notat doar „stație betoane, asfalt pg. 1944-1979 – cerința îndeplinită”, fără verificarea atestărilor și a certificatelor de control al producției cerute.",
+  "concluzie_cnsc": "Admite în parte; anulează în parte raportul procedurii și actele subsecvente privind oferta câștigătoare și aplicarea criteriului; obligă AC să o reevalueze în 10 zile (cu clarificări privind infrastructura/stațiile); respinge ca nefondate cererile de reevaluare a ofertei contestatoarei și de constatare directă a neconformității câștigătorului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele de apă la comună, simplificată, cerințe de personal și forma documentelor — capcane frecvente în dosarele Gazpet.",
+   "mai_putin_comparabila": "Soluția depinde de formularea strictă a fișei de date (semnătură olografă + mențiune); altă DA poate permite completarea.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "La acest moment nu pot fi formulate critici vizavi de prevederile documentației de atribuire, întrucât ar fi vădit tardive",
+    "loc": "p. 13 (din 25)"
+   },
+   {
+    "text": "comisia de evaluare trebuie să solicite clarificări ofertantului câștigător",
+    "loc": "p. 24 (din 25)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "a6abbb9deb91f624bff669c93eaa3cb30b95982521fd996f3768784dc43a4aa8",
+  "snapshot_bytes": 315285,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_1706",
@@ -475,7 +940,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 6108096.08,
+  "sub_prag": true,
+  "tip_contract": "execuție (drumuri de exploatare agricolă / infrastructură rutieră și agricolă)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins (două contestații conexate ale unor ofertanți respinși)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Comisia a respins o ofertă pentru că nu a inclus RTE atestați pe „9.1 edilitare – organizare de șantier”, „6.1 instalații electrice” și autorizație ANRE pentru branșamentul organizării de șantier — cerințe pe care DA nu le prevedea, AC susținând că „se subînțelegeau” din articolele de deviz pentru branșamente provizorii. A doua ofertă a fost respinsă pentru grafic Gantt fără drum critic, jaloane, resurse pe săptămână, deși DA nu cerea acest nivel de detaliu; graficul încadra lucrările în cele 12 luni.",
+  "concluzie_cnsc": "Admite ambele contestații; anulează PV de evaluare tehnică nr. 1925/26.04.2024 și raportul procedurii în partea privind cele două oferte; obligă AC să reia evaluarea în 15 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula „evaluezi doar după ce scrie în DA” e transversală; tema ANRE/RTE pentru organizarea de șantier și graficul Gantt apar și în ofertele Gazpet.",
+   "mai_putin_comparabila": "Lucrări de drumuri agricole, nu rețele; nu privește ANRE pentru gaze.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "evaluarea ofertelor nu se putea efectua decât prin raportare la propriile cerințe impuse prin documentația de atribuire, fără nicio altă interpretare",
+    "loc": "p. 44 (din 53)"
+   },
+   {
+    "text": "a nivelului de detaliu la care se dorește să fie prezentat graficul",
+    "loc": "p. 51 (din 53)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "1cc8ccd3c6bce692ff5aedee7a2b7be273899dc5cd1e68c2732040f8e7edf3a9",
+  "snapshot_bytes": 560858,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_2636",
@@ -510,7 +1008,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 64132883.69,
+  "sub_prag": false,
+  "tip_contract": "execuție (înființare rețea distribuție gaze în oraș, CPV 45231221-0)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Orașul Pogoanele, VE 64.132.883,69 lei, 2 asocieri ofertante, cauțiune 1.282.658 lei. Oferta contestatoarei a fost respinsă ca inacceptabilă pentru că un atestat al unui angajat al subcontractantului (Instgaz) lipsea din PDF și a fost trimis la clarificări, iar certificatul ONRC al terțului susținător/subcontractant aflat în insolvență a fost trimis tot la clarificări. Fișa de date cerea atestatele doar ofertantului de pe locul I, la finalul evaluării; documentele erau emise înainte de data-limită și nu schimbau situația ofertantului. AC nici nu emisese o comunicare a rezultatului semnată.",
+  "concluzie_cnsc": "Admite contestația; anulează raportul procedurii nr. 10790/06.08.2024 în partea privind respingerea ofertei; obligă AC la reevaluare și nou raport în cel mult 20 de zile și la comunicarea rezultatului ambelor asocieri; obligă AC la 7.140 lei cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de distribuție gaze în oraș, ofertă în asociere cu subcontractant (Instgaz) — speță foarte apropiată de ofertele Gazpet; regula Manova (documente preexistente pot fi completate) e direct utilizabilă.",
+   "mai_putin_comparabila": "Peste pragul UE (64 mil. lei, licitație deschisă); soluția se sprijină pe faptul că fișa de date cerea atestatele doar locului I.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "atestatul furnizat de ... SRL fiind emis cu mult timp înainte de solicitarea de clarificări nr. 9593/12.07.2024, el trebuia luat în considerare de autoritate",
+    "loc": "p. 4 (din 8)"
+   },
+   {
+    "text": "în mod disproporționat și nelegal Orașul Pogoanele a respins oferta asocierii",
+    "loc": "p. 6 (din 8)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "5fd1e920b95b51a4dbb78ce3f999510ee7355a88d521a03fad92142d865c7137",
+  "snapshot_bytes": 237438,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_2669",
@@ -541,7 +1072,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă accelerată (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 72040486.97,
+  "sub_prag": false,
+  "tip_contract": "proiectare+execuție (extindere rețele apă, înființare canalizare menajeră; CPV 45231300-8)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (2 factori tehnici: planificare/grafic și asigurarea calității)",
+  "contestator_rol": "contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "Anunț CN1072180/14.08.2024, VE 72.040.486,97 lei, termen de ofertare 02.09.2024 (~19 zile, procedură accelerată) justificat de AC prin termenele finanțării și avizele neobținute — CNSC: întârzierea AC nu e urgență obiectivă (art. 74 alin. 3 L98). ES cerută reproducea obiectul contractului (P+E, apă și canalizare, valoare ~69 mil. lei) — de fapt lucrări identice; contestatorul a arătat că din 2018 au existat doar 2 astfel de proceduri în SEAP. Factorii tehnici (cu tabel de activități adăugat la modelul ANAP) au fost validați.",
+  "concluzie_cnsc": "Respinge excepția lipsei de interes; admite în parte (termenul de ofertare și cerința ES) și obligă AC la remedierea DA în 10 zile; respinge criticile privind factorii tehnici; obligă AC la 3.300 lei cheltuieli (proporțional).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal P+E; regulile ES „similar nu identic” și termenul minim de ofertare se aplică identic la licitațiile de gaze ale Gazpet.",
+   "mai_putin_comparabila": "Valoare mare (72 mil. lei, peste prag UE), licitație accelerată; P+E.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "prin solicitarea ca ofertanții să demonstreze că au mai executat anterior contracte identice, autoritatea contractantă nu a aplicat, în mod corespunzător, principiul proporționalității",
+    "loc": "p. 33 (din 37)"
+   },
+   {
+    "text": "Culpa autorității în întârzierea nejustificată a publicării anunțului de participare nu reprezintă o situație de urgență",
+    "loc": "p. 6 (din 37)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "635af8456bc7236478aae2e0ef99af27d85fe353faf08740d9feeb5e5df0c78f",
+  "snapshot_bytes": 340945,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_2884",
@@ -555,7 +1119,7 @@
    "clarificari_oferta",
    "tert_sustinator_subcontractant"
   ],
-  "regula": "Dovezile de experiență ale experților pot fi aduse la clarificări dacă confirmă situația declarată la depunere. Un ofertant de pe locul 3 trebuie să atace ambele oferte clasate înainte, altfel lipsă de interes.",
+  "regula": "Nuanțare la partea a doua: contestatorul de pe locul III a atacat ambele oferte; CNSC a respins pe fond criticile contra câștigătorului și, în consecință, a declarat lipsite de interes criticile contra locului II (nu mai putea câștiga). Regula corectă: pentru locul III, criticile contra locului II au interes doar dacă reușesc și cele contra locului I.",
   "temei_legal": [
    "Legea 98/2016 art. 209",
    "HG 395/2016 art. 134",
@@ -572,7 +1136,41 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "execuție (reabilitare/modernizare școală gimnazială, CPV 45214200-2)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant necâștigător (locul III) care atacă locurile I și II",
+  "etapa": "rezultat",
+  "fapte_relevante": "Pentru managerul de proiect, câștigătorul depusese recomandări ca diriginte de șantier, deși CV-ul arăta experiență de project manager; la clarificări (adresa nr. 28609/25.06.2024) a depus 4 recomandări + decizii de numire ca manager de proiect pe lucrări categoria C, emise anterior (2008-2022). CNSC a validat completarea, ca punere în acord a unor informații contradictorii. Criticile privind codul CAEN al subcontractantului (avea CAEN 4120) și documentele suport DUAE au fost respinse ca presupuneri.",
+  "concluzie_cnsc": "Respinge ca nefondată contestația privind oferta câștigătoare; admite excepția lipsei de interes și respinge ca lipsită de interes partea privind oferta de pe locul II; respinge cererea AC de cheltuieli (7.762,85 lei, nedovedite); admite intervenția câștigătorului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regulile despre completarea dovezilor pentru experți și despre interesul de a ataca locul II se aplică direct în licitațiile Gazpet.",
+   "mai_putin_comparabila": "Clădire (școală), nu rețele; criteriu și valoare neprecizate în textul anonimizat.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "se impunea lămurită fiind necesară punerea în concordanță a unor documente și informații contradictorii",
+    "loc": "p. 25 (din 37)"
+   },
+   {
+    "text": "autoarea contestației nu justifică un interes legitim, născut şi actual în contestarea ofertantului clasat pe locul II înaintea ofertei sale",
+    "loc": "p. 36 (din 37)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Nuanțare la partea a doua: contestatorul de pe locul III a atacat ambele oferte; CNSC a respins pe fond criticile contra câștigătorului și, în consecință, a declarat lipsite de interes criticile contra locului II (nu mai putea câștiga). Regula corectă: pentru locul III, criticile contra locului II au interes doar dacă reușesc și cele contra locului I.",
+  "regula_initiala": "Dovezile de experiență ale experților pot fi aduse la clarificări dacă confirmă situația declarată la depunere. Un ofertant de pe locul 3 trebuie să atace ambele oferte clasate înainte, altfel lipsă de interes.",
+  "snapshot_sha256": "cb83c53c6a6ca459519fe1326943e34ff0b5acf253613e120765d347f4552b9a",
+  "snapshot_bytes": 440558,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_2938",
@@ -601,7 +1199,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": null,
+  "tip_contract": "proiectare+execuție (înființare sistem distribuție gaze în comună, CPV 45231221-0)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (factori: experiența managerului de proiect, a șefului de șantier EDG/EGIU)",
+  "contestator_rol": "contestă documentația (răspunsul consolidat la clarificări)",
+  "etapa": "documentație",
+  "fapte_relevante": "Operatorii au cerut definirea „complexității similare” din factorii de evaluare, ce lucrări sunt similare cu rețelele de distribuție, dacă se acceptă conducta de transport (Ord. ANRE 133/2021) și perioada de raportare. Răspunsul consolidat nr. 6621/29.08.2024 a fost un text generic („documentația respectă în totalitate Legea 98/2016... experiența solicitată este detaliată în secțiunea aferentă”), fără răspuns punctual.",
+  "concluzie_cnsc": "Admite contestația; obligă AC să publice în SEAP un nou răspuns consolidat, punctual, cu decalarea termenului de depunere a ofertelor, în 15 zile; obligă AC la 5.000 lei cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Înființare distribuție gaze în comună; întrebări de clarificare tipice Gazpet (similaritate, transport vs. distribuție) — confirmă că un răspuns generic e atacabil.",
+   "mai_putin_comparabila": "Nu tranșează pe fond ce e „similar”; doar obligă AC să răspundă; valoarea nu apare în text.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "va dispune analiza punctuală a fiecărei solicitări de clarificări și publicarea în SEAP a unor răspunsuri clare, concrete",
+    "loc": "p. 15 (din 16)"
+   },
+   {
+    "text": "Obligă autoritatea contractantă la publicarea în SEAP a unui nou răspuns consolidat",
+    "loc": "p. 16 (din 16)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "3732329487138d496fa48056df8bb069caad4b31281ed66b4231a27a076aeb2b",
+  "snapshot_bytes": 259179,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_3130",
@@ -631,7 +1262,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 1504097.97,
+  "sub_prag": true,
+  "tip_contract": "execuție (reparații generale și renovare, CPV 45453000-7)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 1.504.097,97 lei, termen de ofertare 01.07.2024. Comisia a cerut justificarea a 142 de articole din oferta financiară (inclusiv prețuri considerate ridicate); contestatoarea a răspuns (nr. 9532/05.09.2024) fundamentând doar 9 articole, susținând că și pentru restul există fundamentare și invocând termenul scurt. AC a respins oferta ca neconformă (art. 210 L98, art. 136-137 HG 395/2016); CNSC a reținut că riscul răspunsului incomplet e al ofertantului (art. 134 alin. 5 HG 395/2016).",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6 L101/2016).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Lecție directă pentru Gazpet: la o cerere de justificare pe articole de deviz, se răspunde la TOATE articolele cerute, cu documente.",
+   "mai_putin_comparabila": "Renovare clădire, valoare mică; textul nu arată ce procent din VE reprezenta oferta.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Riscul întocmirii răspunsului la solicitările de clarificări, la fel ca şi cel al întocmirii ofertelor, cade în sarcina exclusivă a operatorului economic",
+    "loc": "p. 20 (din 22)"
+   },
+   {
+    "text": "prețurile aferente elementelor constitutive ale ofertei nu sunt elemente pur formale ale propunerii financiare",
+    "loc": "p. 20 (din 22)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "1c6f101a8f2748d521bce43cf1c8326e69a43c3aa7e9ad8f67ee2aebd4c899bd",
+  "snapshot_bytes": 290708,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_3288",
@@ -665,7 +1329,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 13165042.97,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (rețea inteligentă de distribuție gaze, durată 17 luni)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "VE 13.165.042,97 lei, durată 17 luni. Fișa de date cerea autorizație ANRE de proiectare sisteme de distribuție și autorizație EDSB (sau echivalent) pentru execuție, de la fiecare asociat, fiecare terț susținător tehnic și eventualii subcontractanți; și cash-flow de minimum 5.000.000 lei pentru 6 luni. Contestatorul cerea eliminarea autorizării ANRE pentru subcontractanți/asociați care nu fac lucrări de gaze și a terțului susținător financiar; suspendarea fusese respinsă prin încheiere.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată și cererea de decalare a termenului de ofertare.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "P+E rețea gaze, simplificată, cerința ANRE EDSB pentru toți participanții — direct relevantă pentru structurarea asocierilor/subcontractărilor Gazpet.",
+   "mai_putin_comparabila": "Decizie pe documentație; CNSC a tratat lucrările de gaze ca „tot unitar”, dar nu a analizat un subcontractant care face exclusiv lucrări non-gaz (ex. asfaltare).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Lucrările de execuţie pentru înfiinţarea reţelelor de distribuţie a gazelor naturale trebuie privite ca un tot unitar",
+    "loc": "p. 7 (din 14)"
+   },
+   {
+    "text": "solicitarea de a elimina pentru subcontractanți deținerea autorizării ANRE, pentru partea de proiectare sau execuție care îi va reveni",
+    "loc": "p. 13 (din 14)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b9d406fbbb918f088776cff63f432f59ff599296dc4880c7601baa33f6c8737e",
+  "snapshot_bytes": 228117,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_3657",
@@ -701,7 +1398,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 20887666.4,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (sistem inteligent de distribuție gaze în comună și 5 sate, CPV 45231221-0)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (inclusiv factori „asigurarea incluziunii sociale”, „achiziții responsabile social”, „achiziții ecologice”)",
+  "contestator_rol": "contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "VE 20.887.666,40 lei. Un factor de evaluare puncta numărul de persoane deja angajate din comuna respectivă (sub eticheta „incluziune socială”), deși populația nu era o categorie defavorizată; alți factori sociali/ecologici nu aduceau avantaj verificabil. DA cerea în ofertă planșa organizării de șantier, listele de cantități și extrasele de resurse, dovezi privind dreptul de exploatare al agregatelor și starea tehnică a utilajelor — elemente ce țin de PT, care la P+E se elaborează după atribuire. A doua contestație (alt operator) a fost respinsă ca inadmisibilă (depusă tardiv, sub forma unei intervenții).",
+  "concluzie_cnsc": "Respinge ca inadmisibilă contestația celui de-al doilea operator; admite contestația SA și obligă AC să remedieze DA în 10 zile: eliminarea celor 3 factori sociali/ecologici (cu libertatea de a-i înlocui sau redistribui punctajul) și a cerințelor ce țin de PT/execuție.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "P+E distribuție gaze, simplificată ~20,9 mil. lei — profil Gazpet; argumente directe pentru a contesta DA care cer „proiect tehnic în ofertă” sau favorizează firmele locale.",
+   "mai_putin_comparabila": "Decizie pe documentație; la contractele doar de execuție (cu PT existent) listele de cantități și extrasele sunt legitime în ofertă.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "o astfel de cerință conduce la favorizarea operatorilor economici autohtoni",
+    "loc": "p. 19 (din 29)"
+   },
+   {
+    "text": "nu trebuie elaborate mai multe proiecte tehnice, de către fiecare dintre ofertanți",
+    "loc": "p. 28 (din 29)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "2eaaebc21817cc2357487e1541f6aee35136bdf356802438eaaa396b9a3aaafd",
+  "snapshot_bytes": 303674,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_656",
@@ -733,7 +1463,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "proiectare+execuție (autostradă, subsecțiunile 3B3-3B4 cu tunel Meseș)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant în evaluare care atacă o solicitare de clarificări",
+  "etapa": "evaluare",
+  "fapte_relevante": "În etapa financiară, AC a trimis asocierii Solicitarea de clarificări nr. 9/893/26.01.2024 privind prețuri pe care le considera aparent neobișnuit de scăzute, fără a indica elementele de preț vizate punctual și reperele obiective de comparație (cataloage, buletine statistice, cotații) cerute de art. 134 alin. 4 și art. 136 alin. 1 HG 395/2016 și de nota N6 din fișa de date. AC susținea că o solicitare de clarificări nu poate fi cenzurată preventiv.",
+  "concluzie_cnsc": "Admite contestația; anulează în tot Solicitarea de clarificări nr. 9/893/26.01.2024; dispune continuarea procedurii prin finalizarea evaluării financiare în 20 de zile; respinge cererea de intervenție ca inadmisibilă.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula procedurală (o cerere de clarificări arbitrară se poate ataca imediat) e utilă Gazpet când primește cereri de justificare a prețului fără repere.",
+   "mai_putin_comparabila": "Megaproiect de infrastructură rutieră, mult peste prag, P+E; nicio legătură tehnică cu rețelele.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "elementele de pret respective trebuie sa poata fi verificate in mod transparent dupa repere prevazute in lege sau documentatie",
+    "loc": "p. 57 (din 59)"
+   },
+   {
+    "text": "Este total eronata sustinerea autoritatii contractante potrivit careia Consiliul nu poate cenzura preventiv solicitarea de clarificări",
+    "loc": "p. 57 (din 59)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "30cd893ca5f0eacb9d5db30e1bf6ef9b18bfb3bf12f3c200853487a416a5c336",
+  "snapshot_bytes": 573719,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_1378",
@@ -764,7 +1527,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 91705045.45,
+  "sub_prag": false,
+  "tip_contract": "proiectare+execuție (rețea inteligentă de distribuție gaze în comune și oraș, CPV 45231221-0)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins (atacă și câștigătorul)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț CN1047820/05.10.2022, VE 91.705.045,45 lei, 2 oferte. ES cerută: lucrări la „rețele de distribuție gaze naturale și/sau infrastructuri de gaze naturale”, minimum 80.000.000 lei în max. 5 contracte. Contestatorul a invocat un contract de conductă de transport gaze (km 320-479, Lot 3, contract 603/28.11.2017) și stații de reglare; AC l-a respins pe motiv că nu e rețea de distribuție. În apărare, AC a adus motive noi (cote din asociere, răspuns neconcludent) care nu figurau în comunicarea rezultatului. Criticile contra câștigătorului (recomandări, valoarea de 18.202.807,45 lei) au fost respinse.",
+  "concluzie_cnsc": "Respinge excepția tardivității; admite în parte; anulează raportul procedurii nr. 49/28.04.2023 în partea privind oferta contestatoarei și obligă AC la reevaluare și nou raport în cel mult 15 zile; respinge cererile privind oferta câștigătoare; admite în parte intervenția.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "P+E rețea de distribuție gaze; tranșează că lucrările de transport gaze intră în „infrastructuri de gaze naturale” — relevant pentru Gazpet ca ofertant și ca evaluator al concurenților.",
+   "mai_putin_comparabila": "Peste pragul UE (91,7 mil. lei); soluția se sprijină pe formularea „și/sau infrastructuri de gaze naturale”; dacă cerința e strict distribuție, rezultatul poate diferi.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "sintagma infrastructuri de gaze naturale acoperă inclusiv această componentă",
+    "loc": "p. 21 (din 25)"
+   },
+   {
+    "text": "în adresa de comunicare a rezultatului procedurii și în raportul procedurii nu a fost consemnat un astfel de temei",
+    "loc": "p. 22 (din 25)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "fa4af1d78e14e40aef5db2fedd5b6eb1b3be112f3a98f4b8f3d0c57944800454",
+  "snapshot_bytes": 379397,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_140",
@@ -795,7 +1591,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": null,
+  "tip_contract": "proiectare+execuție (înființare sistem inteligent de distribuție gaze în sate, CPV 45231221-0)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins (atacă și câștigătorul)",
+  "etapa": "rezultat (reevaluare după o decizie CNSC anterioară)",
+  "fapte_relevante": "Al doilea ciclu: prin Decizia CNSC nr. 2053/C4/1997 din 30.09.2022 se constatase deja că graficul Gantt al câștigătorului nu conținea activitatea „Montare contoare inteligente”, obligatorie conform fișei de date (cap. IV.4.1). La reevaluare, AC a cerut clarificări (adresa nr. 8092/10.10.2022), iar câștigătorul a indicat doar pagini din propunere (4, 14, 30-31; 4.233 branșamente cu sisteme inteligente), fără detalierea cerută (stadiu fizic, resurse). Oferta contestatorului a rămas respinsă: un acord-cadru (nr. 14887-900501/13.01.2017) nu poate dovedi ES, ci doar contractele subsecvente finalizate și recepționate.",
+  "concluzie_cnsc": "Admite în parte; obligă AC să anuleze raportul procedurii nr. 9437/24.11.2022 privind oferta asocierii câștigătoare și comunicările, și dispune reevaluarea acesteia în 15 zile; criticile privind respingerea ofertei contestatorului — nefondate.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "P+E sistem inteligent de distribuție gaze în comune — exact obiectul licitațiilor Gazpet; lecții pe graficul Gantt cu activități obligatorii și pe ES din acorduri-cadru (Delgaz/Distrigaz lucrează des cu acorduri-cadru).",
+   "mai_putin_comparabila": "Decizia e în al doilea ciclu procesual și depinde de constatările deciziei anterioare; valoarea nu apare în text.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "toate aceste informații trebuiau să se regăsească în propunerea tehnică încă de la depunerea acesteia",
+    "loc": "p. 54 (din 55)"
+   },
+   {
+    "text": "întrucât acordul-cadru nu este un contract de achiziție publică, acesta nu poate fi avut în vedere ca atare în dovedirea experineței similare",
+    "loc": "p. 34 (din 55)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d3a5e71f8d2cf3255f59b752f99870ca3c52b64b842b1671c776be52235c48e7",
+  "snapshot_bytes": 565700,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_1489",
@@ -826,7 +1655,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": 114380781.0,
+  "sub_prag": false,
+  "tip_contract": "execuție (CL8 – rețele de alimentare cu apă în localități)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "Entitate contractantă sectorială (operator regional apă), VE 114.380.781 lei. Cerința 1 de ES accepta doar „rețele de apă/canalizare și/sau aducțiuni de apă și/sau conducte de refulare”; contestatorul (o SA cu experiență în infrastructură de gaze/fluide sub presiune) a cerut includerea rețelelor de fluide/gaze sub presiune. Entitatea a invocat specificul lucrărilor ROMGAZ/TRANSGAZ și legislația diferită, fără să arate de ce un astfel de operator n-ar putea executa contractul.",
+  "concluzie_cnsc": "Admite contestația; dispune remedierea DA (eliminarea caracterului restrictiv al ES) și publicarea în SEAP în 10 zile, cu o nouă dată-limită de depunere a ofertelor.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Deschide ușa ca experiența Gazpet în rețele de gaze să fie acceptată la licitații de apă-canal (și invers) — direct relevant pentru diversificare.",
+   "mai_putin_comparabila": "Procedură sectorială (L99), valoare foarte mare (114 mil. lei, peste prag); decizie pe documentație — o altă entitate poate justifica mai bine restricția.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "lăsat în forma actuală criteriul de calificare privind experiența similară permite participarea la procedură doar a operatorilor economici specializați în lucrări de apă",
+    "loc": "p. 10 (din 10)"
+   },
+   {
+    "text": "Argumentele entității contractante nu pot fi considerate pertinente câtă vreme tind să susțină un tip de experiență interzis a fi solicitată",
+    "loc": "p. 10 (din 10)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "0f5cb631edae7b5a11064d1cf0a9f2283419c6c6bc208254865d3804e19db659",
+  "snapshot_bytes": 241582,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_1788",
@@ -857,7 +1719,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 1709968.38,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (PT, DE și execuție – înființare distribuție gaze în satul Ghighiu)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins (atacă și câștigătorul)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 1.709.968,38 lei. La justificarea prețului, contestatorul a prezentat tabele cu tarife orare și număr de ore, fără facturi, oferte de la furnizori, contracte, extrase de resurse; expertul cooptat a găsit erori de calcul (ex. utilaje 930 lei în loc de 4.050 lei) care, corectate, depășeau prețul ofertat, iar contestatorul a spus că le acoperă din profit; devizul declara cheltuieli indirecte 5% și profit 5%, justificarea folosea 20% și 30%. Pe oferta câștigătoare, criticile au fost lipsite de interes, existând un al doilea ofertant admisibil necontestat.",
+  "concluzie_cnsc": "Respinge excepția tardivității; respinge contestația ca nefondată (oferta corect respinsă ca neconformă; lipsă de interes privind câștigătorul).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "Distribuție gaze într-un sat, simplificată, valoare mică, criteriu preț — scenariu tipic Gazpet; arată ce NU e suficient ca justificare de preț.",
+   "mai_putin_comparabila": "Contract P+E (cu PT/DE); greșelile din ofertă erau evidente (procente contradictorii).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "verificarea răspunsului la solicitarea de justificare a prețului nu se limitează la simpla inventariere a prețurilor completate în câteva tabele",
+    "loc": "p. 18 (din 25)"
+   },
+   {
+    "text": "contestatorului nu a depus documente din care să rezulte prețul de la furnizorul său cum ar fi facturi, oferte, contracte de furnizare",
+    "loc": "p. 21 (din 25)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "903d7e689de4504ece757cbab4409a9a0e88163fe653a667e4db60020641fd6c",
+  "snapshot_bytes": 299238,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_2119",
@@ -872,7 +1767,7 @@
    "experienta_similara",
    "personal_cheie"
   ],
-  "regula": "Un răspuns evaziv la clarificări poate fi contestat (în 10 zile de la publicare) — CNSC obligă AC să răspundă și să prelungească termenul. Interdicția expertului comun pe mai multe loturi trebuie justificată.",
+  "regula": "Corecție de termen: CNSC a socotit termenul de contestare a răspunsului la clarificări după art. 8 alin. (1) lit. b) L101/2016 — 7 zile (publicat 11.08.2023, termen împlinit 18.08.2023), procedura fiind sub prag; termenul de 10 zile se aplică doar procedurilor peste pragurile UE. Restul regulii (răspuns evaziv atacabil; interdicția experților comuni pe loturi trebuie motivată) e susținut.",
   "temei_legal": [
    "Legea 98/2016 art. 160",
    "Legea 101/2016 art. 8",
@@ -889,7 +1784,41 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 13068296.6,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (semaforizare intersecții/treceri de pietoni, 2 loturi)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "contestă documentația (răspunsul consolidat la clarificări)",
+  "etapa": "documentație",
+  "fapte_relevante": "Anunț simplificat din 20.07.2023; răspunsul consolidat nr. 23550 a fost publicat la 11.08.2023, contestația înregistrată la 17.08.2023 — în termenul de 7 zile (art. 8 alin. 1 lit. b L101/2016), deci excepția tardivității a fost respinsă. La întrebările 12, 14-17 AC nu a răspuns sau a răspuns evaziv (ex. o cerere de clarificări pentru lotul 2 omisă complet). Prin răspunsul la întrebarea 2, AC a introdus interdicția de a folosi aceiași experți la ambele loturi („datorită volumului de lucrări”), nemotivată; răspunsul 21 modifica și el DA. O cerere modificatoare privind un răspuns ulterior (18.08.2023) trebuia formulată ca nouă contestație.",
+  "concluzie_cnsc": "Respinge excepția tardivității; admite contestația; anulează răspunsurile la clarificările nr. 2, 12, 14, 15, 16, 17 și 21; obligă AC ca în 15 zile să răspundă clar și complet, să modifice DA în consecință, să publice măsurile și să stabilească o nouă dată-limită de ofertare; respinge cererea AC de cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Mecanism procedural util oricărei licitații Gazpet: răspunsurile evazive sau care adaugă cerințe noi se atacă imediat, cu prelungirea termenului; relevant și pentru proceduri pe loturi (experți comuni).",
+   "mai_putin_comparabila": "Semaforizare (instalații electrice/rutiere), nu rețele subterane; P+E.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliul constată că cerința adăugată prin clarificarea citată nu a fost motivată în mod real de către achizitoare",
+    "loc": "p. 33 (din 37)"
+   },
+   {
+    "text": "o astfel de condiție restrânge în mod artificial concurența",
+    "loc": "p. 33 (din 37)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Corecție de termen: CNSC a socotit termenul de contestare a răspunsului la clarificări după art. 8 alin. (1) lit. b) L101/2016 — 7 zile (publicat 11.08.2023, termen împlinit 18.08.2023), procedura fiind sub prag; termenul de 10 zile se aplică doar procedurilor peste pragurile UE. Restul regulii (răspuns evaziv atacabil; interdicția experților comuni pe loturi trebuie motivată) e susținut.",
+  "regula_initiala": "Un răspuns evaziv la clarificări poate fi contestat (în 10 zile de la publicare) — CNSC obligă AC să răspundă și să prelungească termenul. Interdicția expertului comun pe mai multe loturi trebuie justificată.",
+  "snapshot_sha256": "328ac0f6b6d86c577d51eda998bd532c409c42320141c011d7b2af56dfc93575",
+  "snapshot_bytes": 377779,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_2237",
@@ -903,7 +1832,7 @@
    "experienta_similara",
    "clarificari_oferta"
   ],
-  "regula": "Terțul susținător necorespunzător nu duce direct la respingere: AC trebuie să ceară o dată înlocuirea lui; experiența similară parțial în afara perioadei de referință se analizează proporțional, prin clarificări.",
+  "regula": "Nuanțare: obligația de a cere o dată înlocuirea terțului e susținută (art. 197 alin. 2 L99, normă imperativă). Analiza proporțională a ES parțial în afara perioadei de referință (22% / 46%) provine din hotărârea Curții de Apel Cluj din ciclul anterior, pe care CNSC o aplică; CNSC nu a formulat-o ca regulă proprie și nu a cerut „clarificări” pentru ea.",
   "temei_legal": [
    "Legea 99/2016 art. 197 alin. (2)",
    "Legea 98/2016 art. 183 alin. (2) (echivalent)",
@@ -922,7 +1851,41 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă (sectorială, pe loturi)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": null,
+  "tip_contract": "execuție (CL3 lot 2 – extindere alimentare cu apă și canalizare în 4 comune; CPV 45231300-8)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat (reevaluare după hotărâre judecătorească)",
+  "fapte_relevante": "Curtea de Apel Cluj (Hotărârea intermediară nr. 3/22.03.2023 și hotărârea finală) desființase decizia CNSC anterioară și obligase entitatea la reevaluarea lotului 2, reținând că contractele terțului susținător se încadrau doar parțial în perioada de referință (ex. contractul nr. 3: 10 luni și 28 de zile din 48, ~22%; contractul nr. 2: ~46%) și că, dacă terțul nu îndeplinește criteriile, entitatea cere o singură dată înlocuirea lui (art. 197 alin. 2 L99). La reevaluare, entitatea a respins oferta ca inacceptabilă (răspuns „neconcludent”) fără să ceară înlocuirea terțului, deși contestatorul trimisese deja documentele unui terț nou.",
+  "concluzie_cnsc": "Admite contestația pentru lotul 2; anulează decizia de respingere, raportul procedurii nr. 15761/18.07.2023 și comunicările; dispune reevaluarea ofertei (cu aplicarea art. 197 alin. 2) și desemnarea câștigătorului în 15 zile; respinge cererea de intervenție.",
+  "control_judiciar": "Textul descrie controlul judiciar al deciziei CNSC din ciclul anterior al aceleiași proceduri: Curtea de Apel Cluj a desființat-o (Hotărârea intermediară nr. 3/22.03.2023) și, prin hotărârea finală (număr anonimizat), a obligat reevaluarea lotului 2. Pentru decizia de față nu se menționează plângere.",
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal în comune; lecție directă pentru ofertele Gazpet cu terț susținător: AC trebuie să ceară înlocuirea, nu să respingă direct.",
+   "mai_putin_comparabila": "Procedură sectorială (L99, art. 197 alin. 2); la L98 textul echivalent e art. 183 alin. (2). Raționamentul proporțional pe perioada de referință aparține Curții de Apel Cluj, nu CNSC.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "entitatea contractantă trebuia să facă aplicarea dispozițiilor art.197 alin.(2) din Legea nr.99/2016",
+    "loc": "p. 39 (din 40)"
+   },
+   {
+    "text": "articolul de lege reprezintă o normă imperativă, creând în sarcina entității contractante obligația de a solicita, o singură dată, înlocuirea terțului susținător",
+    "loc": "p. 39 (din 40)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Nuanțare: obligația de a cere o dată înlocuirea terțului e susținută (art. 197 alin. 2 L99, normă imperativă). Analiza proporțională a ES parțial în afara perioadei de referință (22% / 46%) provine din hotărârea Curții de Apel Cluj din ciclul anterior, pe care CNSC o aplică; CNSC nu a formulat-o ca regulă proprie și nu a cerut „clarificări” pentru ea.",
+  "regula_initiala": "Terțul susținător necorespunzător nu duce direct la respingere: AC trebuie să ceară o dată înlocuirea lui; experiența similară parțial în afara perioadei de referință se analizează proporțional, prin clarificări.",
+  "snapshot_sha256": "b4f535dd6ee9b3d67b33192a5ab4b51ff4c057ca9ba9310337441ff63dccca2b",
+  "snapshot_bytes": 490918,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_2717",
@@ -952,7 +1915,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 18903716.36,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (alimentare cu gaze naturale a unor comune; anunț SCN1125984/06.06.2023)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins (procedura anulată)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 18.903.716,36 lei; serviciile de proiectare estimate la 1.908.715,36 lei (inclusiv AT 588.935,67 lei; PT branșamente 393.750 lei). ES pentru proiectare: minimum 900.000 lei în max. 2 contracte, formulare generală. Asocierea contestatoare a prezentat un contract de P+E branșamente (nr. 4600021631/V37/1931) și unul de extinderi conducte și racorduri; AC a respins oferta (și apoi a anulat procedura, toate ofertele fiind respinse) fără să ceară documentele justificative DUAE și fără să verifice serviciile efectiv prestate.",
+  "concluzie_cnsc": "Admite contestația; anulează actele privind respingerea ofertei și anularea procedurii, inclusiv comunicarea; obligă AC ca în 15 zile să continue procedura prin reevaluarea ofertei contestatoare.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": true,
+  "comparabilitate": {
+   "de_ce_comparabila": "Alimentare cu gaze a comunelor, P+E, simplificată — portofoliul de branșamente/extinderi al Gazpet poate fi folosit ca ES pentru rețele de distribuție.",
+   "mai_putin_comparabila": "ES analizată e pentru componenta de proiectare (servicii), nu pentru execuție; contează formularea generală a cerinței.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Proiectarea acestor racorduri face parte din proiectarea lucrărilor de construire",
+    "loc": "p. 12 (din 14)"
+   },
+   {
+    "text": "Modul general de formulare a cerinței privind experiența similară nu îi permitea autorității contractante să aprecieze în sensul respingerii ofertei",
+    "loc": "p. 13 (din 14)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "03268cda3ad47ad18692e2efa62d772be8af9b8afb83c54ef068defad2bc366e",
+  "snapshot_bytes": 204303,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_406",
@@ -964,7 +1960,7 @@
   "tema": [
    "ajustare_pret"
   ],
-  "regula": "Clauza de ajustare din DA trebuie să folosească indici publicați efectiv de INS; o formulă inaplicabilă poate duce la anularea procedurii.",
+  "regula": "Nuanțare: motivul reținut de CNSC nu e doar că indicele nu era publicat, ci că formula preluată din art. 17 alin. (8) lit. a1) OUG 64/2022 e reglementată pentru contracte în derulare, nu pentru contracte viitoare (indicele ICCplr e prognozat de CNSP, nu publicat de INS). Anularea a fost decisă de AC, iar CNSC a validat-o; remedierea nu mai era posibilă după deschiderea ofertelor.",
   "temei_legal": [
    "Legea 98/2016 art. 212 alin. (1) lit. c)",
    "Legea 98/2016 art. 222",
@@ -982,7 +1978,41 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "execuție (amenajare mal Dunăre)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant unic care atacă anularea procedurii",
+  "etapa": "rezultat (anularea procedurii)",
+  "fapte_relevante": "O singură ofertă depusă; AC a anulat procedura (art. 212 alin. 1 lit. c L98) pentru că formula de ajustare a prețului din fișa de date și modelul de contract (clauza 7.3) era cea din art. 17 alin. (8) lit. a1) OUG 64/2022, concepută pentru contracte aflate deja în derulare și bazată pe indicele ICCplr prognozat de CNSP, care nu mai era publicat după februarie 2022. Contestatorul a propus înlocuirea cu ICC realizat de la INS și a depus corespondență cu INS; CNSC: modificarea ar schimba DA după deschiderea ofertelor.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (anularea procedurii de către AC menținută).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Clauzele de ajustare a prețului sunt critice pentru contractele de lucrări Gazpet multianuale; riscul ca o procedură câștigată să fie anulată din cauza formulei greșite din DA.",
+   "mai_putin_comparabila": "Lucrări hidrotehnice (mal Dunăre); speță legată de tranziția OUG 64/2022; ofertant unic.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "o formulă de calcul concepută expres pentru contracte aflate deja în derulare, eroare care pune în pericol posibilitatea de ajustare viitoare a prețului contractului",
+    "loc": "p. 10 (din 11)"
+   },
+   {
+    "text": "nu poate fi adoptată la acest moment fără ca aceasta să nu conducă la încălcarea principiilor prevăzute la art. 2 alin. (2)",
+    "loc": "p. 10 (din 11)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Nuanțare: motivul reținut de CNSC nu e doar că indicele nu era publicat, ci că formula preluată din art. 17 alin. (8) lit. a1) OUG 64/2022 e reglementată pentru contracte în derulare, nu pentru contracte viitoare (indicele ICCplr e prognozat de CNSP, nu publicat de INS). Anularea a fost decisă de AC, iar CNSC a validat-o; remedierea nu mai era posibilă după deschiderea ofertelor.",
+  "regula_initiala": "Clauza de ajustare din DA trebuie să folosească indici publicați efectiv de INS; o formulă inaplicabilă poate duce la anularea procedurii.",
+  "snapshot_sha256": "1e6c5e810c140da32f1380286bd39e40301cb15f42cad0cc5595d5758567a9f7",
+  "snapshot_bytes": 270458,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_416",
@@ -1011,7 +2041,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 650000,
+  "sub_prag": true,
+  "tip_contract": "servicii (studiu de fezabilitate pentru 8 blocuri P+5, CPV 71242000-6)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant necâștigător (locul 7) care atacă câștigătorul și alți 5 ofertanți",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 650.000 lei; 12 oferte, contestatorul pe ultimul loc admisibil (51,33 puncte, preț 650.000 lei). Câștigătorul a ofertat 317.000 lei (~48,77% din VE) și a justificat prețul (ore pe studiu, cheltuieli indirecte ~2,65%, profit ~7%). Contestatorul a cerut respingerea ofertelor concurente pentru lipsa autorizațiilor ANRE (proiectare instalații gaze/electrice) și ANCPI, dar DA nu cerea asemenea autorizații, iar criticile față de ceilalți 5 ofertanți erau generale.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6) și admite cererea de intervenție a câștigătorului.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Confirmă că Gazpet nu poate cere excluderea unui concurent pentru lipsa unei autorizații ANRE pe care DA nu o cere.",
+   "mai_putin_comparabila": "Servicii de proiectare (SF) pentru blocuri, partea de gaze auxiliară; valoare mică.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "nicăieri în documentaţia de atribuire, autoritatea contractantă nu a impus participanţilor la procedură obligativitatea depunerii autorizaţiilor la care face referire contestatorul",
+    "loc": "p. 44 (din 45)"
+   },
+   {
+    "text": "precedentul judiciar nu constituie izvor de drept în sistemul românesc",
+    "loc": "p. 44 (din 45)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "c11da4a9ed057a7a6953fb13316c74be56734dc227ec0f5a5dba52f60accef5a",
+  "snapshot_bytes": 511222,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_657",
@@ -1042,7 +2105,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 77200987.98,
+  "sub_prag": false,
+  "tip_contract": "execuție (reparații și întreținere străzi, alei, trotuare, parcări; CPV 45233142-6)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (preț 90%, experiența managerului de contract 10%)",
+  "contestator_rol": "ofertant necâștigător care atacă ofertele clasate înainte",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 77.200.987,98 lei. Caietul de sarcini includea ridicarea la cotă a răsuflătorilor de gaze. Asocierea clasată pe locul I a răspuns la clarificări că „nu este necesară” autorizarea ANRE, apoi a depus o autorizație EDIB abia odată cu cererea de intervenție la CNSC. Un alt ofertant a răspuns la clarificări cu declarația de disponibilitate a unui instalator autorizat ANRE (PFA, autorizația nr. 5240/27.01.2020) — acceptată ca suficientă, fără subcontractare (cu trimitere la Decizia CNSC 1043/C4/942/2022 menținută de CA București prin Hotărârea 1650/22.06.2022).",
+  "concluzie_cnsc": "Admite în parte; anulează raportul procedurii nr. 13812/09.02.2023 și comunicarea doar în partea privind evaluarea propunerii tehnice a asocierii de pe locul I; obligă AC la reevaluare cu aplicarea art. 134 alin. 5 HG 395/2016 în 15 zile; respinge ca nefondate criticile privind alt ofertant, ca inadmisibile/lipsite de interes pe cele privind restul.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Relevant pentru Gazpet ca potențial subcontractant/partener ANRE în contracte de drumuri și ca ofertant: intervențiile pe elemente de gaze cer autorizare ANRE, dovedită la clarificări.",
+   "mai_putin_comparabila": "Contract de drumuri (gazele sunt o componentă minoră), peste prag; un instalator autorizat cu declarație de disponibilitate a fost suficient — nu e nevoie neapărat de firmă autorizată EDIB.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "acest document trebuia transmis autorității contractante ca urmare a solicitării de clarificări aferentă și nu printr-o cerere de intervenție",
+    "loc": "p. 17 (din 25)"
+   },
+   {
+    "text": "nu trebuie, în mod necesar, desemnat un subcontractant, fiind suficientă existența declarațiilor de disponibilitate, însoțite de avizele/autorizațiile aferente",
+    "loc": "p. 20 (din 25)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d6dd57f59102e2a1cb5def5295494b32163d718a36fac778605813d80a623e42",
+  "snapshot_bytes": 282190,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2023_665",
@@ -1074,7 +2170,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 650000,
+  "sub_prag": true,
+  "tip_contract": "servicii (proiectare: PT, DTAC, DE pentru înființare rețea distribuție gaze)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (preț 40%, durata de predare 20%, experiență proiectant șef PGD 15%, manager proiect 15%, proiectant PGD 10%)",
+  "contestator_rol": "ofertant respins (atacă și câștigătorul)",
+  "etapa": "rezultat (reevaluare după decizie CNSC anterioară)",
+  "fapte_relevante": "VE 650.000 lei, 3 oferte; câștigătorul a ofertat 621.775 lei. După o primă decizie CNSC (16.11.2022, definitivă după respingerea plângerilor de către Curtea de Apel, hotărârea din 19.12.2022) care a dispus reevaluarea ofertei contestatoare, AC i-a trimis 19 întrebări (adresa nr. 161/06.01.2023) și a declarat neconcludente 12 răspunsuri, în special pentru că oferta menționa asistența tehnică pe perioada execuției, deși DA nici nu o includea expres, nici nu o excludea. Criticile contra câștigătorului au fost respinse ca tardive (aspecte deja verificate în primul ciclu) și formulate doar prin concluzii scrise.",
+  "concluzie_cnsc": "Admite în parte; anulează raportul procedurii nr. 1608/16.02.2023 privind evaluarea propunerii tehnice a contestatoarei și dispune reevaluarea ei (inclusiv cu privire la motivele de anulare a procedurii); respinge ca tardive criticile privind oferta câștigătoare.",
+  "control_judiciar": "Textul menționează controlul judiciar al deciziei CNSC anterioare din aceeași procedură (16.11.2022): plângerile câștigătorului și ale AC au fost respinse prin hotărârea civilă a Curții de Apel (număr anonimizat) din 19.12.2022. Pentru decizia de față nu se menționează plângere.",
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Proiectare rețea de distribuție gaze (PT/DTAC/DE), simplificată, personal PGD — relevant pentru componenta de proiectare a ofertelor Gazpet și pentru regula „ambiguitatea DA nu se întoarce contra ofertantului”.",
+   "mai_putin_comparabila": "Contract de servicii de proiectare de valoare mică, nu lucrări; al doilea ciclu procesual.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "regula în proiectare fiind că servciile de asistență tehnică pe perioada execuției lucrărilor sunt cuprinse în cadrul servicilor generale de proiectare",
+    "loc": "p. 49 (din 62)"
+   },
+   {
+    "text": "autoritatea contractantă nu a respectat principiile tratamentului egal și proporționalității în evaluarea ofertei contestatoarei",
+    "loc": "p. 60 (din 62)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "05230d87d0fa6c3f91e0abf34e291fc3f92f602e063be0e24f52916ab5cbe16d",
+  "snapshot_bytes": 815999,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2024_159",
@@ -1103,7 +2232,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 3457008.76,
+  "sub_prag": true,
+  "tip_contract": "execuție (lucrări de izolare termică)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins (clasat primul după preț)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 3.457.008,76 lei. La clarificări, asocierea clasată prima după preț a modificat elemente din propunerea financiară/tehnică; comisia a cuantificat abaterile la 33.639,54 lei + 3% cheltuieli indirecte + 3% profit = 35.688,18 lei, adică ~1,14% din prețul total — peste pragul de 1% din art. 134 alin. (9) HG 395/2016 — și a declarat oferta inacceptabilă. Contestatoarea susținea că sunt erori aritmetice, corectabile fără prag valoric; CNSC a reținut că erau abateri/omisiuni, nu erori aritmetice.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată și menține rezultatul procedurii (raportul nr. 246713/12.12.2023).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula pragului de 1% pentru abaterile corectate la clarificări se aplică identic ofertelor Gazpet (F3 / liste de cantități).",
+   "mai_putin_comparabila": "Lucrări de clădiri (izolare termică); calificarea „eroare aritmetică vs. abatere” depinde de speță.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "modificările operate de ofertant aşa cum am evidenţiat şi mai sus nu se încadrează în categoria erorilor aritmetice, ci reprezintă abateri / omisiuni",
+    "loc": "p. 21 (din 23)"
+   },
+   {
+    "text": "Consiliul constată temeinicia argumentelor reținute de membrii comisiei vizavi de neconcludența răspunsului",
+    "loc": "p. 21 (din 23)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "cbfbb9aabe7bfc555b8071833c8b5ca98ece252532c19361c78602c980a0fed8",
+  "snapshot_bytes": 440416,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_1028",
@@ -1134,7 +2296,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "execuție (reabilitare și extindere Compartiment Primiri Urgențe spital, CPV 45453000-7)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins care atacă și câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Oferta contestatorului a fost declarată inacceptabilă pentru „răspuns neconcludent” la o solicitare de clarificări bazată pe o frază generală din memoriul tehnic, formulată „unde se regăsesc în propunerea tehnică...”, deși ofertantul a răspuns indicând paragrafele din metodologie și structura organizatorică. Propunerea tehnică a câștigătorului era copiată cuvânt cu cuvânt din caietele de sarcini și memoriile tehnice, inclusiv instrucțiunile adresate executantului.",
+  "concluzie_cnsc": "Admite contestația; anulează declararea ca inacceptabilă a ofertei contestatoare, declararea ca admisibilă a ofertei câștigătoare și raportul procedurii nr. 3036/08.04.2022; dispune reevaluarea ambelor oferte și stabilirea câștigătorului în 10 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Ambele reguli (clarificări-pretext; propunere tehnică copy-paste din caiet) sunt transversale și utile la atacarea/apărarea ofertelor Gazpet.",
+   "mai_putin_comparabila": "Clădire de spital, nu rețele; valoarea nu e publicată.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "solicitarea de clarificari transmisa prin adresa nr. este un exemplu de solicitare pretext, nepertinenta si nejustificata",
+    "loc": "p. 28 (din 30)"
+   },
+   {
+    "text": "oferta tehnică depusă de ofertantul SC ......... ,,,, SRL nu reprezintă o ofertă tehnică în sine, nefiind concretă, personalizată",
+    "loc": "p. 29 (din 30)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "2ee12b7b45a6aad397e406a15f32b018edf245bcc44b774705546763f4b0491d",
+  "snapshot_bytes": 377410,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_1615",
@@ -1168,7 +2363,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (schimbare destinație și restaurare casă memorială, actualizare documentație, AT, execuție; include instalații gaze)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Asocierea câștigătoare repartizase proiectarea și AT (3,5%) și restul lucrărilor unui asociat, iar 22% (instalații electrice etc.) unui subcontractant cu atestat ANRE tip B pentru instalații electrice. Pentru instalațiile de gaze, asociatul nominalizase doar un colaborator persoană fizică cu autorizație ANRE, fără ca vreo societate din ofertă să dețină autorizație ANRE de firmă pentru gaze. AC invoca lipsa unei mențiuni exprese în DA; CNSC a reținut că autorizarea e o condiție legală de exercitare (Ord. ANRE 89/2018, 132/2021) pe care comisia trebuia să o verifice, iar un subcontractant nu poate fi introdus ulterior.",
+  "concluzie_cnsc": "Admite contestația; anulează actele de desemnare a ofertei câștigătoare și comunicările; obligă AC ca în 15 zile să aplice motivarea pentru oferta asocierii, să stabilească ofertele admisibile și să aplice criteriul de atribuire.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Arată că autorizația ANRE de firmă pentru gaze trebuie să existe în ofertă (la ofertant/asociat/subcontractant declarat) — relevant pentru Gazpet ca partener ANRE al constructorilor generali și pentru atacarea concurenților fără autorizare.",
+   "mai_putin_comparabila": "Clădire (restaurare), gazele fiind o componentă minoră; atenție: CNSC a considerat autorizarea obligatorie chiar fără mențiune expresă în DA, în timp ce alte decizii (BO2022_1746, BO2023_416) resping exact acest raționament — practică neunitară.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "pentru a putea proiecta este nevoie de o societate atestată ANRE, care la rândul ei să aibă personal atestat ANRE",
+    "loc": "p. 4 (din 23)"
+   },
+   {
+    "text": "Propunerea ulterioară a unui subcontractant nu intră în categoria viciilor de formă sau a abaterilor tehnice minore ce pot fi corectate",
+    "loc": "p. 21 (din 23)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b375483949b33c3d02acff68eef3440f339cf34d451011fbbb922bce7532e5ea",
+  "snapshot_bytes": 290970,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_1746",
@@ -1198,7 +2426,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 721000,
+  "sub_prag": true,
+  "tip_contract": "execuție (extindere rețea canalizare, apă, racorduri și branșamente pe o stradă)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț SCN 1106443/06.05.2022, VE 721.000 lei, 2 oferte. Contestatorul (oferta admisibilă, dar mai scumpă) susținea că câștigătorul nu are capacitatea de a executa toate categoriile de lucrări, lipsindu-i autorizări/avize cerute de legi speciale (nemenționate în DA). CNSC s-a sprijinit pe CJUE C-278/14 (Enterprise Focused Solutions) și pe pozițiile Comisiei Europene (C-295/20 Sanresa) privind neincorporarea automată a cerințelor din legi speciale.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal cu branșamente pe o stradă, valoare mică, preț — tipic Gazpet; utilă pentru apărarea unei oferte Gazpet atacate pe autorizări necerute în DA.",
+   "mai_putin_comparabila": "Practică neunitară: BO2022_1615 a reținut contrariul pentru autorizația ANRE la gaze; soluția depinde de complet și de natura autorizației.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "obligația de transparență interzice autorității contractante să respingă o ofertă care respectă cerințele documentației întemeindu-se pe motive care nu au fost prevăzute în aceasta",
+    "loc": "p. 9 (din 10)"
+   },
+   {
+    "text": "este o obligație pe care operatorul câștigător o va urmări în etapa execuției lucrărilor",
+    "loc": "p. 9 (din 10)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d0b90c4aa5a90e9ebcf862f4d0e9fb5bc5916d3749c73b8eeb59650d0cb3db31",
+  "snapshot_bytes": 232944,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_1923",
@@ -1230,7 +2491,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 3872509.36,
+  "sub_prag": true,
+  "tip_contract": "execuție (alimentare cu apă și canalizare – rest de executat; CPV 45232150-8)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat (al treilea ciclu de evaluare)",
+  "fapte_relevante": "VE 3.872.509,36 lei. Fișa de date (pct. IV.4.2) interzicea prețuri unitare diferite pentru același tip de operațiune/resursă. Pentru căminele de vizitare cu înălțimi diferite (art. 18-20 din devizul 310008) diferențele erau justificate, dar contestatorul nu a răspuns deloc pentru același cămin prefabricat H 1,5-2 m din alte 3 devize (art. 25/310058, 14/310078, 07/310718). Valoarea diferențelor (209,23 lei) a fost considerată irelevantă. Anterior, Curtea de Apel București (decizia civilă nr. 1457/07.06.2022, dosar 3394/2/2022) admisese plângerea AC împotriva Deciziei CNSC nr. 873/C9/842/22.04.2022 din aceeași procedură.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată; încuviințează și admite cererea de intervenție a asocierii câștigătoare.",
+  "control_judiciar": "Textul menționează controlul judiciar al unei decizii CNSC anterioare din aceeași procedură: Curtea de Apel București, Secția a VIII-a, decizia civilă nr. 1457/07.06.2022 (dosar 3394/2/2022) a admis plângerea AC și a modificat în parte Decizia CNSC nr. 873/C9/842/22.04.2022 (cu trimitere la art. 209 alin. 2 L98 — clarificările nu pot crea un avantaj evident). Pentru decizia de față nu se menționează plângere.",
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal, simplificată, criteriu preț; cerința de prețuri unitare unice și răspunsul complet la clarificări pe devize sunt direct aplicabile ofertelor Gazpet.",
+   "mai_putin_comparabila": "Soluția ține de formularea expresă din fișa de date; procedura avea istoric procesual complicat.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "cu toate că a primit o solicitare de clarificări explicită în referire la motivul pentru care a cuprins prețuri unitare diferite",
+    "loc": "p. 13 (din 14)"
+   },
+   {
+    "text": "este lipsită de relevanță, câtă vreme solicitarea de clarificări a autorității contractante este clară, iar ofertanta a răspuns doar parțial",
+    "loc": "p. 13 (din 14)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "035fdaa6cc8ed97edd121044db0630b9dbbcbbc7f6aa069390827c9217dab2d8",
+  "snapshot_bytes": 213987,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_1952",
@@ -1259,7 +2553,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă (sectorială, 2 loturi)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "proiectare+execuție (modernizare linie feroviară Caransebeș–Timișoara–Arad, loturile 3 și 4)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins (două asocieri, contestații conexate)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Garanții de participare de 10.000.000 lei (lot 1) și 20.000.000 lei (lot 2). Asocierile contestatoare au constituit garanția prin polițe emise la 23.02.2022 (prime plătite în aceeași zi) și le-au depus fizic la registratura entității înainte de termenul-limită, dar nu le-au încărcat în SEAP, cum cereau art. 42 alin. (4) HG 394/2016 și fișa de date; le-au încărcat la clarificări. Entitatea (CFR) a respins ofertele ca inacceptabile pentru neîncărcare și răspuns „neconcludent”. Motivele noi de respingere aduse abia în fața CNSC au fost declarate inadmisibile.",
+  "concluzie_cnsc": "Conexează contestațiile; admite în parte; anulează rapoartele procedurii (lot 1: nr. 17.A/1/400/29.07.2022; lot 2: nr. 17.A/1/502/08.08.2022) în partea privind respingerea ofertelor și evaluarea ofertei unei alte asocieri la lotul 2; obligă entitatea la reevaluare și noi rapoarte în cel mult 30 de zile; respinge cheltuielile, cererile de acces la ofertă și intervențiile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula privind garanția de participare (instrument existent și valabil, dar netransmis corect) e transversală pentru ofertele Gazpet.",
+   "mai_putin_comparabila": "Procedură sectorială (L99/HG 394/2016), infrastructură feroviară de valoare foarte mare; garanția fusese depusă fizic la registratură, deci entitatea o avea în posesie — fără acest element, soluția poate diferi.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "C.N.S.C. consideră că abordarea COMPANIEI NAȚIONALE DE CĂI FERATE “......”–S.A. este formalistă și disproporționată, respectiv nelegală",
+    "loc": "p. 46 (din 52)"
+   },
+   {
+    "text": "Adăugarea, în timpul judecării contestației, de alte motive de respingere (care nu au fost reținute de comisia de evaluare)",
+    "loc": "p. 46 (din 52)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d65a1ee384f8084bea83d1b8c488030a434b3635a5f31656262edf40505d8536",
+  "snapshot_bytes": 507966,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_1964",
@@ -1290,7 +2617,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 1082825.98,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (reabilitare rețele apă și canalizare pe 3 străzi; CPV 45232150-8)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins (atacă și câștigătorul)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 1.082.825,98 lei. Graficele Gantt de proiectare și execuție (pag. 394-398) erau scanate ilizibil: denumirile activităților nu se puteau citi, lipseau activitățile principale/secundare de proiectare și resursele; graficul de proiectare arăta 190 de zile lucrătoare (03.10.2022–30.06.2023, ~9 luni), deși DA cerea maximum 2 luni (iar oferta declara 2 luni la pag. 63). La clarificări contestatorul nu a indicat unde se află detalierea cerută; CNSC a validat respingerea (art. 134 alin. 5 HG 395/2016).",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal, simplificată, valoare mică, criteriu preț — profil tipic Gazpet; lecție practică: graficele încărcate în SEAP trebuie verificate pentru lizibilitate și corelare cu termenele DA.",
+   "mai_putin_comparabila": "P+E; soluția depinde de cerința expresă din caietul de sarcini privind conținutul graficului.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "durata activităților ce s-au dorit a fi înscrise în grafic nu corespunde cu solicitările documentației de atribuire",
+    "loc": "p. 9 (din 22)"
+   },
+   {
+    "text": "Consiliul reține că autoritatea contractantă a constatat în mod corect față de oferta contestatorului incidența prevederilor art. 134 alin. (5) din HG nr. 395/2016",
+    "loc": "p. 21 (din 22)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "646fd9c307c6619fd16cbfce90d2b164a03bbfd55ebe37f4ca22c6570c82d682",
+  "snapshot_bytes": 257344,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_2083",
@@ -1320,7 +2680,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "altele (furnizare echipamente pentru gaze medicale: aer comprimat, vacuum, distribuție oxigen)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "Contestatorul susținea că specificațiile tehnice favorizează un singur producător, fără să probeze existența unui singur producător pe piață; referirea la un singur echipament conform nu a fost considerată exhaustivă. AC a acceptat o parte din modificările cerute (în punctul de vedere), pe care CNSC a obligat-o să le publice prin erată (art. 55 HG 395/2016) cu nou termen de ofertare; pentru restul cerințelor, solicitarea de modificare a fost respinsă pentru lipsa probelor (art. 249 C.proc.civ.).",
+  "concluzie_cnsc": "Admite contestația și obligă AC să modifice/completeze DA conform considerentelor (doar punctele acceptate de AC/reținute), prin erată, în maximum 10 zile, cu nou termen de ofertare; cererea de anulare a procedurii — neimpusă.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula sarcinii probei la contestarea specificațiilor tehnice se aplică și la DA de rețele (de ex. cerințe de utilaje sau materiale).",
+   "mai_putin_comparabila": "Furnizare de echipamente medicale (gaze medicale), nu lucrări de rețele; domeniu tehnic diferit.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "opțiunea modificării cerințelor documentației de atribuire reprezintă un drept al autorității, iar nu o obligație",
+    "loc": "p. 17 (din 19)"
+   },
+   {
+    "text": "societatea contestatoare ar fi trebuit să probeze caracterul restrictiv al echipamentelor ce se dorește a fi achiziționate",
+    "loc": "p. 18 (din 19)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "07789021f55047764f33ae89b0530a9176b3a295216690901e4d6813ab334c83",
+  "snapshot_bytes": 258048,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_2170",
@@ -1351,7 +2744,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "altele (contract de servicii, obiect anonimizat)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Garanția de participare cerută: 1.300 lei, valabilă 2 luni, constituibilă și prin virament. Ofertantul a încărcat în SEAP dovada viramentului, dar plata fusese făcută din contul subcontractantului declarat, în contul AC, în numele ofertantului. AC a respins oferta ca inacceptabilă fără să ceară clarificări (deși art. 36/art. 132 alin. 3 HG 395/2016 cer clarificare cu termen de 3 zile pentru neconcordanțe de formă), invocând și o consiliere metodologică ANAP.",
+  "concluzie_cnsc": "Admite contestația; anulează raportul procedurii nr. 34219/05.10.2022 privind evaluarea ofertei contestatoare și actele subsecvente; obligă AC să o reevalueze în 15 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula garanției de participare (cine plătește, clarificarea înainte de respingere) e transversală pentru ofertele Gazpet în asociere/cu subcontractanți.",
+   "mai_putin_comparabila": "Contract de servicii de valoare foarte mică, obiect anonimizat.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu poate constitui garanția de participare prin virament bancar în numele ofertantului, care anume prevedere legală interzice aceasta",
+    "loc": "p. 9 (din 11)"
+   },
+   {
+    "text": "interpretarea la care s-a oprit autoritatea contractantă este excesiv de formalistă",
+    "loc": "p. 9 (din 11)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d8d5a8421e573803fcc13c4ac9788ddffbcfbe8d617f5df0ff826002a34e837e",
+  "snapshot_bytes": 247203,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_2403",
@@ -1386,7 +2812,40 @@
   ],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 650000,
+  "sub_prag": true,
+  "tip_contract": "servicii (proiectare: PT, DTAC, DE pentru înființare rețea distribuție gaze în comună)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (preț 40%, durata de predare 20%, experiențe experți PGD 15/15/10%)",
+  "contestator_rol": "ofertant respins (atacă și câștigătorul)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 650.000 lei, 3 oferte. Oferta contestatorului a fost respinsă în etapa DUAE pentru ES: AC a considerat contractul nr. 1396/04.05.2020 („întocmire documentație și asistență tehnică în vederea concesionării serviciului de distribuție gaze”) consultanță, nu proiectare. CNSC a aplicat definiția din Ord. ANRE 132/2021 (proiectarea include SF pentru concesiune și documentații tehnice). Critica contra câștigătorului — lipsa autorizației ANRE tip PT (instalații de înaltă presiune) — respinsă: DA cerea doar atestate PGD pentru proiectanți, iar DA nu se completează de drept cu legislația specială.",
+  "concluzie_cnsc": "Admite în parte; anulează raportul procedurii nr. 10033/17.10.2022 privind evaluarea ofertei contestatoare și dispune reevaluarea; respinge celelalte critici; admite în parte intervenția câștigătorului; obligă AC la 1.500 lei cheltuieli (reduse).",
+  "control_judiciar": "Nu în textul acestei decizii. Decizia ulterioară din aceeași procedură (BO2023_665) arată că Decizia CNSC din 16.11.2022 privind raportul nr. 10033/17.10.2022 — al cărei dispozitiv coincide cu cel de aici — a rămas definitivă după respingerea plângerilor câștigătorului și ale AC de către Curtea de Apel (hotărârea civilă din 19.12.2022, număr anonimizat). Identificarea ca aceeași decizie e o deducție din dispozitiv.",
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Proiectare rețea de distribuție gaze; confirmă că documentațiile tehnice ANRE (inclusiv SF pentru concesiune) sunt ES de proiectare — util pentru dosarele de calificare ale Gazpet pe componenta de proiectare.",
+   "mai_putin_comparabila": "Contract de servicii de valoare mică; în privința autorizației ANRE necerute în DA, practica e neunitară (vezi BO2022_1615).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "elaborarea unei documentații tehnice şi/sau a unui proiect tehnic în domeniul gazelor naturale reprezintă parte a proiectării",
+    "loc": "p. 30 (din 47)"
+   },
+   {
+    "text": "nu s-au solicitat deținerea altor atestate/autorizații pentru distribuția gazelor și în consecință, nici deținerea autorizației ANRE de tip PT",
+    "loc": "p. 32 (din 47)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "add5e5342c52bb3ad211e24beaff6e2a856696dfb525bf7309f62395ad089dd1",
+  "snapshot_bytes": 503232,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2022_2774",
@@ -1420,7 +2879,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": null,
+  "tip_contract": "execuție (reabilitare stații de pompare și canale de aducțiune irigații Babadag; CPV 45232120-9)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul și locurile 2-3",
+  "etapa": "rezultat",
+  "fapte_relevante": "Procedura avusese o decizie CNSC anterioară (nr. 1183/C10/1091/09.06.2022) menținută de Curtea de Apel (decizia nr. 2022/28.07.2022, dosar 4707/2/2022), invocată de AC. AC a cerut tuturor ofertanților clarificări; câștigătorul a transmis 2 fișe tehnice asumate de producător pentru instalația paratrăsnet, deși propunerea tehnică inițială conținea deja specificațiile și numele producătorului. Criticile noi din concluziile scrise au fost declarate inadmisibile (art. 21 alin. 3 L101/2016).",
+  "concluzie_cnsc": "Respinge contestația ca nefondată; admite cererea de intervenție; nu mai analizează criticile privind locurile 2 și 3.",
+  "control_judiciar": "Textul (în susținerile AC) menționează controlul judiciar al deciziei CNSC anterioare din aceeași procedură: Curtea de Apel (anonimizată) a respins, prin Decizia nr. 2022/28.07.2022 (dosar 4707/2/2022), plângerea contestatoarei împotriva Deciziei CNSC nr. 1183/C10/1091/09.06.2022. Pentru decizia de față nu se menționează plângere.",
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula „clarificarea poate confirma ce exista deja în ofertă” se aplică direct fișelor tehnice de materiale din ofertele Gazpet.",
+   "mai_putin_comparabila": "Lucrări hidrotehnice/stații de pompare irigații, nu rețele urbane; valoare neprecizată în text.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "prin răspunsul la clarificări nu s-au modificat echipamentele ofertate, caracteristicile acestora fiind doar confirmate de producător",
+    "loc": "p. 34 (din 35)"
+   },
+   {
+    "text": "Respingerea unei oferte fără a solicita clarificările necesare pentru evaluarea completă a unei oferte",
+    "loc": "p. 34 (din 35)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "c9308a0a4eb0b1d079e221a74a491d18ee98e7000c7185332996a2bb9c08c7bc",
+  "snapshot_bytes": 451635,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2021_1060",
@@ -1450,7 +2942,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_gaze"
+  "sursa_cercetare": "cnsc_gaze",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 62682470.61,
+  "sub_prag": false,
+  "tip_contract": "proiectare+execuție (modernizare și eficiență energetică corp spital județean; CPV 45215140-0)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 62.682.470,61 lei. Oferta câștigătoare (82,60% din VE) a primit două solicitări succesive de justificare a prețului — a doua cerând ce trebuia deja prezentat (costul manoperei, oferte de la furnizori). Apoi comisia a „corectat ca erori aritmetice” diferențe din listele de cantități depuse la justificare, majorând prețul de la 51.775.635 la 52.280.100 lei (+0,97% total, +21,47% la rândul 7 Instalații sanitare). În plus, propunerea tehnică nu cuprindea anexele 2 și 3 (lista orientativă de echipamente și fișele tehnice) cerute de DA, iar graficul de execuție avea 25 de luni.",
+  "concluzie_cnsc": "Admite contestația; obligă AC să anuleze raportul procedurii nr. 2854/09.03.2021 privind oferta câștigătoare și comunicările, și dispune reevaluarea integrală a acesteia în 15 zile; respinge intervenția.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regulile despre corecturi „aritmetice” după justificarea prețului și despre clarificările repetate care avantajează un ofertant sunt transversale și utile Gazpet (ca ofertant și ca contestator).",
+   "mai_putin_comparabila": "Clădire de spital, P+E, peste pragul UE; nu privește rețele.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "prin demersul făcut comisia de evaluare a avantajat ofertantul care ulterior a fost declarat câștigător",
+    "loc": "p. 46 (din 56)"
+   },
+   {
+    "text": "au fost aduse modificări valorii totale a propunerii financiare, respectiv o majorare a prețului total cu 0,97% și de 21,47% la cazul rândului 7",
+    "loc": "p. 48 (din 56)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "f7858711d9abecf1afe09d4c1cfb7c08257e16574799c19b491908276e2e5d3f",
+  "snapshot_bytes": 514023,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2021_1317",
@@ -1481,7 +3006,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată (online, sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "altele (furnizare piese de schimb – ansamblu cap cilindri telescopici; CPV 42124150-0)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "Contract sectorial de furnizare, VE 92.813,50 euro (valoarea în lei nu e dată). Modelul de contract (art. 10 alin. 3 pct. iv-viii) impunea emitenților de garanții de bună execuție: rating extern Fitch/S&P/Moody's minimum BB- (naționali) sau BBB- (străini), pentru asigurători indicatori ASF ≥70% din media națională, prime brute ≥70.000.000 lei, active ≥200.000.000 lei și verificare directă cu emitentul. Entitatea invoca importanța pieselor pentru mentenanță; CNSC: art. 47 HG 394/2016 protejează deja entitatea, condițiile sunt excesive față de valoare.",
+  "concluzie_cnsc": "Admite contestația; obligă entitatea să continue procedura cu eliminarea cerințelor de la pct. iv-viii din Secțiunea IV (model de contract), prin erată publicată cu cel puțin 3 zile lucrătoare înainte de termenul de ofertare, în 15 zile; obligă entitatea la 2.380 lei cheltuieli.",
+  "control_judiciar": "Textul menționează controlul judiciar al încheierii de suspendare din aceeași cauză: plângerea entității împotriva Încheierii CNSC nr. 1296/C6/1161/14.05.2021 a fost respinsă de Curtea de Apel Constanța, Secția a II-a civilă, de contencios administrativ și fiscal, prin Hotărârea nr. 104/02.06.2021 (dosar 208/36/2021). Pentru decizia pe fond nu se menționează plângere.",
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Condiții excesive pentru emitenții garanțiilor apar și în DA de lucrări (inclusiv la operatori de distribuție) și scumpesc ofertele Gazpet; argumentul de proporționalitate e reutilizabil.",
+   "mai_putin_comparabila": "Procedură sectorială de furnizare, valoare mică (~93.000 euro); nu e contract de lucrări.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "obligațiile impuse la punctele (iv) - (viii) sunt complet disproporționate în raport cu valoarea estimată (92.813,50 euro)",
+    "loc": "p. 6 (din 21)"
+   },
+   {
+    "text": "Consiliul va admite solicitarea contestatoarei de eliminarea a cerințelor de la pct. iv la pct. viii din Secțiunea IV - Propunere de Contract",
+    "loc": "p. 20 (din 21)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "e2896ff8925e15e96a7d9fa377d5040fe3bdc3696751750a1f3b5d8094132084",
+  "snapshot_bytes": 287136,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2021_159",
@@ -1495,7 +3053,7 @@
    "documente_calificare",
    "tert_sustinator_subcontractant"
   ],
-  "regula": "Când CS cere expres activități care pot fi făcute doar de persoane autorizate (OCPI, aviz GA), ofertantul trebuie să demonstreze autorizarea proprie sau prin subcontractant declarat.",
+  "regula": "Nuanțare: CNSC nu a declarat oferta neconformă pentru lipsa autorizărilor; a obligat AC să verifice capacitatea legală (direct sau prin subcontractanți declarați) și, pentru avizul de gospodărire a apelor, să ceară întâi relații de la Apele Române, apoi clarificări de la ofertant. Obligația de autorizare depinde de confirmarea că activitatea e efectiv necesară.",
   "temei_legal": [
    "Legea 98/2016 art. 55",
    "Legea 98/2016 art. 193 alin. (3)",
@@ -1517,7 +3075,41 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": null,
+  "tip_contract": "servicii (proiectare/DALI pentru reparații curente la un pod, AC administrator de drumuri naționale)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant necâștigător care atacă câștigătorul",
+  "etapa": "rezultat",
+  "fapte_relevante": "Caietul de sarcini prevedea conținutul DALI conform HG 907/2016, inclusiv „studiu topografic vizat de OCPI”, și documentații pentru avize (Apele Române etc.) „dacă vor fi solicitate”. Câștigătorul nu dovedise autorizare ANCPI (proprie sau prin subcontractant declarat) pentru studiul topografic; AC susținea că nu e necesar avizul de gospodărire a apelor. CNSC a invocat o hotărâre anterioară a unei curți de apel, într-o speță similară cu aceeași AC, care obligase la reevaluare pe aceleași aspecte (OCPI, agrement feroviar).",
+  "concluzie_cnsc": "Admite contestația; anulează raportul procedurii și comunicările în partea privind oferta câștigătoare; obligă AC să ceară relații instituțiilor abilitate (Administrația Națională „Apele Române”), să clarifice și să reevalueze oferta și să emită un nou raport în cel mult 40 de zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Când caietul de sarcini include activități autorizate (topografie OCPI, avize), Gazpet trebuie să le acopere în ofertă prin subcontractanți declarați — situație frecventă la P+E rețele.",
+   "mai_putin_comparabila": "Servicii de proiectare pentru un pod (infrastructură rutieră), nu rețele; decizia trimite la clarificări, nu stabilește neconformitatea.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "direct sau prin subcontractanții declarați la momentul depunerii ofertelor, au capacitatea de a îndeplini în mod legal activitățile",
+    "loc": "p. 25 (din 25)"
+   },
+   {
+    "text": "Echivocul generat de compania organizatoare nu poate fi tranșat de către Consiliu",
+    "loc": "p. 24 (din 25)"
+   }
+  ],
+  "regula_verificata": false,
+  "corectie_regula": "Nuanțare: CNSC nu a declarat oferta neconformă pentru lipsa autorizărilor; a obligat AC să verifice capacitatea legală (direct sau prin subcontractanți declarați) și, pentru avizul de gospodărire a apelor, să ceară întâi relații de la Apele Române, apoi clarificări de la ofertant. Obligația de autorizare depinde de confirmarea că activitatea e efectiv necesară.",
+  "regula_initiala": "Când CS cere expres activități care pot fi făcute doar de persoane autorizate (OCPI, aviz GA), ofertantul trebuie să demonstreze autorizarea proprie sau prin subcontractant declarat.",
+  "snapshot_sha256": "67c530e9653ec7f88deb0dbae6d85fb93aa98e1ee56056e28e31ab18fa816d45",
+  "snapshot_bytes": 345476,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2021_2116",
@@ -1548,7 +3140,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "execuție (alimentare cu apă și canalizare menajeră pe 5 străzi, etapa II; ofertă cu termen 16.06.2021)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Oferta a fost respinsă ca inacceptabilă după clarificări pentru: (1) metodologie de execuție prezentată prin „însușirea cerințelor caietului de sarcini”, (2) o secțiune („Activități de interferare cu lucrările existente”, pag. 11-13) cu titlul, locația și activitățile altui obiectiv (înlocuire cămine, extindere canalizare existentă), explicată la clarificări doar ca „eroare de tehnoredactare a titlului”, (3) plan al calității copiat din caietul de sarcini, deși trebuia personalizat (pct. 6.1). Caietul de sarcini descria 550 m rețea și 12 racorduri PVC KG SN4 De160.",
+  "concluzie_cnsc": "Respinge excepțiile AC; respinge contestația ca nefondată (art. 26 alin. 6).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal mici, simplificată, criteriu preț — profil Gazpet; avertisment direct contra reutilizării necontrolate a propunerilor tehnice din alte proiecte.",
+   "mai_putin_comparabila": "Respingerea a venit după clarificări neconcludente; dacă AC nu cere clarificări, soluția poate fi diferită (vezi BO2022_1028).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu numai titlul lucrării și locația au fost altele, dar și activitățile care au fost menționate la acest capitol",
+    "loc": "p. 20 (din 22)"
+   },
+   {
+    "text": "documentul în cauză trebuia personalizat astfel cum prevăd cerințele caietului de sarcini",
+    "loc": "p. 21 (din 22)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "dff861fbc7510fd4077f70571fb7f06835b1309edb26b86ee908f7d73f363bad",
+  "snapshot_bytes": 265642,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2021_2420",
@@ -1579,7 +3204,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": null,
+  "tip_contract": "servicii (asistență tehnică/supervizare reabilitare termoficare, 7 obiective, 31,621 km)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins (singurul ofertant; procedura anulată)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Termen-limită 30.08.2021 ora 15:00. Asocierea a indicat în scrisoarea de înaintare o „Scrisoare de garanție bancară nr. ...” (fără traducere autorizată), dar la clarificarea cerută conform art. 36 HG 395/2016 a depus un alt document — o scrisoare de garanție de participare emisă la 30.08.2021, cu alt număr —, fără traducerea celei inițiale. AC a respins oferta ca inacceptabilă și, fiind singura, a anulat procedura (art. 212 alin. 1 lit. a L98).",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (excludere și anulare menținute).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regula privind garanția de participare (instrumentul trebuie să existe și să fie depus la termen; înlocuirea lui nu e viciu de formă) se aplică oricărei oferte Gazpet.",
+   "mai_putin_comparabila": "Servicii de supervizare termoficare, nu lucrări de rețele gaze/apă; ofertant străin (traducere).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Legislația achizițiilor publice prevede corectarea viciilor formale, ori înlocuirea garanției de participare nu este un viciu formal",
+    "loc": "p. 10 (din 11)"
+   },
+   {
+    "text": "documentul depus inițial de ofertant nu reprezintă „instrumentul de garantare” pe care ofertanta avea obligația să-l depună în SEAP odată cu oferta",
+    "loc": "p. 10 (din 11)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "c628134bd6ef17775369f41a5202cd81414beef0fb96ecb860a2154246d7f829",
+  "snapshot_bytes": 178429,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2021_448",
@@ -1609,7 +3267,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare+execuție (infrastructură cu mixtură asfaltică, lotul 1)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins",
+  "etapa": "rezultat",
+  "fapte_relevante": "Oferta asocierii contestatoare avea 78,71% din VE; AC a cerut justificarea prețului (adresa nr. 124/07.01.2021) și a respins-o ca neconformă, considerând unele prețuri aparent neobișnuit de scăzute față de piață (ex. mixtură asfaltică 290 lei/t față de 326 lei/t, raportat inclusiv la bursa de mărfuri). AC nu ceruse explicații despre posibilitatea îndeplinirii contractului la parametrii de calitate și nu revenise cu întrebări precise după răspunsul detaliat primit.",
+  "concluzie_cnsc": "Admite contestația; anulează în parte PV nr. 618/20.01.2021 de evaluare financiară, raportul procedurii nr. 952/28.01.2021 și actele subsecvente privind oferta contestatoare și desemnarea câștigătorului; obligă AC ca în 10 zile să reanalizeze propunerea financiară și să stabilească un nou rezultat.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Regulile de justificare a prețului (cerere precisă, sarcina AC de a dovedi imposibilitatea execuției) se aplică direct ofertelor Gazpet cu prețuri sub 80% din VE.",
+   "mai_putin_comparabila": "Lucrări rutiere/asfaltare (P+E), nu rețele; valoarea nu e publicată.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "pentru respingerea ofertei, simplul preț neobișnuit de scăzut al ei este o condiție obligatorie, însă nu și suficientă",
+    "loc": "p. 13 (din 14)"
+   },
+   {
+    "text": "legislația aplicabilă în materia achizițiilor publice nu interzice atribuirea contractului de achiziție publică la o valoare mai mică de 80% din cea estimată",
+    "loc": "p. 11 (din 14)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "ffc50edba0657589bb0158d310268a32f68cc2cecc591c5f812b6019bad17003",
+  "snapshot_bytes": 221442,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2021_99",
@@ -1639,7 +3330,40 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată (online)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 850929,
+  "sub_prag": true,
+  "tip_contract": "execuție (extindere rețea de apă și canalizare; CPV 45232400-6)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins",
+  "etapa": "evaluare (respingere în cursul evaluării)",
+  "fapte_relevante": "VE 850.929 lei, termen ofertare 08.10.2020. AC a prelungit perioada de evaluare până la 08.04.2021 și a cerut (11.12.2020) prelungirea valabilității ofertei și a garanției de participare, plus o adresă expresă de acord. Contestatoarea a răspuns că formularul de ofertă și garanția erau deja valabile până la 08.04.2021 și a explicat de ce nu e necesară prelungirea; AC a respins oferta (art. 137 alin. 2 lit. i și art. 134 alin. 5 HG 395/2016) pentru lipsa adresei de acord. La data deciziei, garanția și oferta erau încă valabile.",
+  "concluzie_cnsc": "Respinge excepția inadmisibilității; admite contestația; anulează adresa de comunicare și, în parte, PV din 18.12.2020 privind oferta contestatoarei; obligă AC ca în 10 zile să continue procedura prin reevaluarea ofertei.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere rețele apă-canal, simplificată, valoare mică — profil Gazpet; situație frecventă (prelungirea evaluării și a valabilității ofertei/garanției).",
+   "mai_putin_comparabila": "Soluția se sprijină pe faptul că documentele inițiale acopereau deja perioada cerută; dacă nu acopereau, refuzul prelungirii ar fi dus la respingere.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "membrii Comisiei de evaluare dând dovadă de un formalism excesiv",
+    "loc": "p. 17 (din 18)"
+   },
+   {
+    "text": "contestatoarea nu a refuzat să prelungească valabilitatea ofertei și a garanției de participare, confirmând prin răspuns valabilitatea lor",
+    "loc": "p. 17 (din 18)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "6adcecdb9c8f224b2c146de0e20f8aaaab943123b9943934a6bdef59e3180f10",
+  "snapshot_bytes": 240957,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  },
  {
   "id": "CNSC-BO2020_2124",
@@ -1670,6 +3394,39 @@
   "ofertare_normative_ids": [],
   "verificat": true,
   "nota_verificare": null,
-  "sursa_cercetare": "cnsc_apa_general"
+  "sursa_cercetare": "cnsc_apa_general",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 15369040.83,
+  "sub_prag": true,
+  "tip_contract": "execuție (înființare sistem canalizare ape menajere și stație de epurare)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant necâștigător care atacă ofertele de pe locurile II și III",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 15.369.040,83 lei; procedură lansată la 06.07.2020. Contestatorul susținea că ofertele concurente aveau manoperă sub minimul legal din construcții (3.000 lei brut/lună, OUG 114/2018 modificată prin OUG 43/2019), calculând 19,48 lei/oră prin scăderea a 160 de ore de concediu din 2.007,99 ore anuale. CNSC a validat calculul AC: 36.000 lei / 2.007,99 ore = 17,928 lei/oră (concediul de 20 zile face parte din zilele lucrătoare); ofertele aveau 18 lei/oră. Critica privind numărul de utilaje a fost respinsă: ofertele listau 60, respectiv 62 de utilaje/echipamente.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată (art. 26 alin. 6).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare menajeră (rețea) — lucrări din aria Gazpet apă-canal; metoda de verificare a manoperei minime în construcții e direct aplicabilă la orice ofertă Gazpet.",
+   "mai_putin_comparabila": "Include stație de epurare; valorile salariului minim din construcții s-au schimbat după 2020 — cifrele se recalculează, metoda rămâne.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliul apreciază că formula corectă de calcul este cea redată de achizitoare",
+    "loc": "p. 18 (din 22)"
+   },
+   {
+    "text": "legea admite ca cele 20 de zile de concediu de odihnă fac parte din totalul zilelor lucrătoare existente într- un an",
+    "loc": "p. 19 (din 22)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "ff5e93ec0044eb317b10d2c11262afa8f5756b02a54f5b5d695d398ba48da81a",
+  "snapshot_bytes": 263128,
+  "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
  }
 ]
