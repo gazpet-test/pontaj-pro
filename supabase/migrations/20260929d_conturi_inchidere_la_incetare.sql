@@ -920,6 +920,9 @@ BEGIN
                urmatoarea_incercare_la = now() + least(interval '5 minutes' * power(2, incercari), interval '6 hours'),
                abandonat_la = CASE WHEN incercari + 1 >= c_max_incercari THEN now() END
          WHERE id = q.id AND rezolvat_la IS NULL
+           -- r5 (D-ERR-IDENTITY): backoff / abandon / notificare DOAR pe intrarea pe care a lucrat sweep-ul; una retargetată
+           -- între timp (fn_cont_coada_pune: employee_id A→B) nu primește eroarea altei fișe ⇒ NOT FOUND, nimic de făcut
+           AND (profile_id, employee_id, tip) IS NOT DISTINCT FROM (q.profile_id, q.employee_id, q.tip)
         RETURNING * INTO x;
         IF FOUND THEN
           v_email := (SELECT p.email FROM public.profiles p WHERE p.id = q.profile_id);

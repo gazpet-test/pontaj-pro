@@ -111,19 +111,22 @@ SELECT teste.assert(NOT EXISTS (SELECT 1 FROM auth.users WHERE id = :'u_lock')
 -- ============================================================ r3 (verdict Copilot pe dad549b): teste de concurență REALE
 -- Două conexiuni (dblink), date comise, ordinea forțată determinist: prima tranzacție ține lock-ul, a doua e pornită și se
 -- verifică faptul că AȘTEAPTĂ (pg_stat_activity.wait_event_type = 'Lock'), apoi prima face COMMIT și se verifică starea finală.
-SELECT gen_random_uuid() AS u_dr, gen_random_uuid() AS u_ehr, gen_random_uuid() AS u_dr2, gen_random_uuid() AS u_dr3 \gset
+SELECT gen_random_uuid() AS u_dr, gen_random_uuid() AS u_ehr, gen_random_uuid() AS u_dr2, gen_random_uuid() AS u_dr3, gen_random_uuid() AS u_dr4 \gset
 SELECT teste.dblink_exec(:'conn_lock', format($q$
   INSERT INTO auth.users (id, aud, role, email, raw_app_meta_data, created_at, updated_at, email_confirmed_at)
   VALUES (%1$L, 'authenticated', 'authenticated', 'drace.unu@exemplu.ro', '{"provider":"email"}', now(), now(), now()),
          (%2$L, 'authenticated', 'authenticated', 'erace.hr@exemplu.ro', '{"provider":"email"}', now(), now(), now()),
          (%3$L, 'authenticated', 'authenticated', 'drace.doi@exemplu.ro', '{"provider":"email"}', now(), now(), now()),
-         (%4$L, 'authenticated', 'authenticated', 'drace.trei@exemplu.ro', '{"provider":"email"}', now(), now(), now());
+         (%4$L, 'authenticated', 'authenticated', 'drace.trei@exemplu.ro', '{"provider":"email"}', now(), now(), now()),
+         (%5$L, 'authenticated', 'authenticated', 'drace.cinci@exemplu.ro', '{"provider":"email"}', now(), now(), now());
   UPDATE public.profiles SET can_modify_employees = true WHERE id = %2$L;
   INSERT INTO public.employees (name, department, email, active, termination_date) VALUES
     ('DRACESCU UNU', 'Test', 'drace.unu@exemplu.ro', false, CURRENT_DATE),
     ('DRACESCU DOI', 'Test', 'drace.doi@exemplu.ro', false, CURRENT_DATE),   -- CNP pus mai jos (garda „aceeași persoană”)
     ('DRACESCU TREI', 'Test', 'drace.trei@exemplu.ro', false, CURRENT_DATE),
     ('DRACESCU PATRU', 'Test', 'drace.patru@exemplu.ro', false, CURRENT_DATE),
+    ('DRACESCU CINCI', 'Test', 'drace.cinci@exemplu.ro', false, CURRENT_DATE),
+    ('DRACESCU SASE', 'Test', 'drace.sase@exemplu.ro', false, CURRENT_DATE),
     ('ERACESCU UNU', 'Test', 'erace.unu@exemplu.ro', false, CURRENT_DATE - 1),
     ('ERACESCU DOI', 'Test', 'erace.doi@exemplu.ro', false, CURRENT_DATE - 1),
     ('GRACESCU TREI', 'Test', 'grace.trei@exemplu.ro', true, NULL);
@@ -139,11 +142,17 @@ SELECT teste.dblink_exec(:'conn_lock', format($q$
   UPDATE public.profiles SET employee_id = (SELECT id FROM public.employees WHERE name = 'DRACESCU TREI') WHERE id = %4$L;
   INSERT INTO public.conturi_inchideri_coada (profile_id, employee_id, tip, motiv, scadent_la)
   SELECT %4$L, id, 'programata', 'test D-RACE-2', CURRENT_DATE + 1 FROM public.employees WHERE name = 'DRACESCU TREI';
-$q$, :'u_dr', :'u_ehr', :'u_dr2', :'u_dr3'));
-SELECT max(id) FILTER (WHERE name = 'DRACESCU TREI') AS e_dr3a, max(id) FILTER (WHERE name = 'DRACESCU PATRU') AS e_dr3b,
+  UPDATE public.employees SET cnp = '1900303000115' WHERE name = 'DRACESCU CINCI';
+  UPDATE public.employees SET cnp = '1900303000123' WHERE name = 'DRACESCU SASE';
+  UPDATE public.profiles SET employee_id = (SELECT id FROM public.employees WHERE name = 'DRACESCU CINCI') WHERE id = %5$L;
+  INSERT INTO public.conturi_inchideri_coada (profile_id, employee_id, tip, motiv, scadent_la)
+  SELECT %5$L, id, 'programata', 'test D-RACE-ERR', CURRENT_DATE + 1 FROM public.employees WHERE name = 'DRACESCU CINCI';
+$q$, :'u_dr', :'u_ehr', :'u_dr2', :'u_dr3', :'u_dr4'));
+SELECT max(id) FILTER (WHERE name = 'DRACESCU CINCI') AS e_dr4a, max(id) FILTER (WHERE name = 'DRACESCU SASE') AS e_dr4b,
+       max(id) FILTER (WHERE name = 'DRACESCU TREI') AS e_dr3a, max(id) FILTER (WHERE name = 'DRACESCU PATRU') AS e_dr3b,
        max(id) FILTER (WHERE name = 'DRACESCU DOI') AS e_dr2, max(id) FILTER (WHERE name = 'DRACESCU UNU') AS e_dr, max(id) FILTER (WHERE name = 'ERACESCU UNU') AS e_f1,
        max(id) FILTER (WHERE name = 'ERACESCU DOI') AS e_f2, max(id) FILTER (WHERE name = 'GRACESCU TREI') AS e_g
-  FROM public.employees WHERE name IN ('DRACESCU TREI', 'DRACESCU PATRU', 'DRACESCU DOI', 'DRACESCU UNU', 'ERACESCU UNU', 'ERACESCU DOI', 'GRACESCU TREI') \gset
+  FROM public.employees WHERE name IN ('DRACESCU CINCI', 'DRACESCU SASE', 'DRACESCU TREI', 'DRACESCU PATRU', 'DRACESCU DOI', 'DRACESCU UNU', 'ERACESCU UNU', 'ERACESCU DOI', 'GRACESCU TREI') \gset
 -- acordul „accepta” și externii legați (inactivi) — puse de un OM din HR (JWT prin authenticator), ca în aplicație
 SELECT teste.dblink_connect('c_hr1', :'conn_lock');
 SELECT teste.dblink_connect('c_hr2', :'conn_lock');
@@ -222,6 +231,35 @@ SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WH
           WHERE profile_id = :'u_dr3' AND rezolvat_la IS NULL AND employee_id = :e_dr3b AND incercari = 0),
   'D-RACE-2 intrarea retargetată A→B e sărită (CONTINUE): contul nu se închide, intrarea rămâne deschisă pe B, neatinsă');
 SELECT teste.dblink_disconnect('c_tine3');
+
+-- D-RACE-ERR (r5, D-ERR-IDENTITY): eroare FORȚATĂ în sweep (lock_timeout la profilul ținut de altă tranzacție) cât timp
+-- intrarea e retargetată A→B și comisă. Handlerul de eroare face backoff / abandon / notificare DOAR dacă intrarea are încă
+-- (profil, fișă, tip) de la selecție; altfel NOT FOUND ⇒ nimic. Cronologie (lock_timeout 2s): t0 sweep-ul așteaptă profilul;
+-- retargetarea se comite; ~t0+2s prima eroare (55P03) → handlerul re-așteaptă profilul; t0+3s profilul e eliberat → handlerul
+-- își face UPDATE-ul de backoff pe o intrare care nu mai e a lui.
+SELECT teste.dblink_exec(:'conn_lock', format('UPDATE public.conturi_inchideri_coada SET scadent_la = CURRENT_DATE WHERE profile_id = %L AND rezolvat_la IS NULL', :'u_dr4'));
+SELECT teste.dblink_connect('c_tine4', :'conn_lock');
+SELECT teste.dblink_exec('c_tine4', 'BEGIN');
+SELECT * FROM teste.dblink('c_tine4', format('SELECT id::text FROM public.profiles WHERE id = %L FOR UPDATE', :'u_dr4')) AS t(id text);
+SELECT teste.dblink_exec('c_dsw', 'SET lock_timeout = ''2s''');
+SELECT teste.dblink_send_query('c_dsw', 'SELECT public.fn_conturi_inchideri_sweep()::text');
+SELECT teste.assert(teste.asteapta_lock(:pid_dsw), 'D-RACE-ERR pregătire: sweep-ul așteaptă profilul (ținut de altă tranzacție)');
+SELECT * FROM teste.dblink(:'conn_lock', format($q$SELECT public.fn_cont_coada_pune(%L, %s, 'programata', 'retargetare A→B (test D-RACE-ERR)', CURRENT_DATE)::text$q$,
+  :'u_dr4', :e_dr4b)) AS t(x text);
+SELECT pg_sleep(3);
+SELECT teste.dblink_exec('c_tine4', 'ROLLBACK');
+SELECT res AS sweep_dr4 FROM teste.dblink_get_result('c_dsw') AS t(res text) \gset
+SELECT count(*) AS rest_dr4 FROM teste.dblink_get_result('c_dsw') AS t(res text) \gset
+SELECT teste.dblink_exec('c_dsw', 'RESET lock_timeout');
+\echo '   D-RACE-ERR sweep:' :sweep_dr4
+SELECT teste.assert((:'sweep_dr4'::jsonb ->> 'eroare')::int = 1,
+  'D-RACE-ERR eroarea forțată a ajuns în handlerul sweep-ului (rezultat: eroare = 1)');
+SELECT teste.assert((SELECT count(*) = 1 FROM public.conturi_inchideri_coada
+                      WHERE profile_id = :'u_dr4' AND rezolvat_la IS NULL AND employee_id = :e_dr4b AND incercari = 0
+                        AND ultima_eroare IS NULL AND urmatoarea_incercare_la IS NULL AND abandonat_la IS NULL AND notificat_la IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_dr4'),
+  'D-RACE-ERR intrarea retargetată pe B rămâne curată: incercari = 0, fără ultima_eroare, fără backoff, neabandonată, nenotificată');
+SELECT teste.dblink_disconnect('c_tine4');
 SELECT teste.dblink_disconnect('c_dsw');
 
 -- E-RACE-1: activarea externului (necomisă) ↔ acordul trece accepta → refuza.
@@ -270,15 +308,17 @@ SELECT teste.dblink_exec(:'conn_lock', format($q$
   SET session_replication_role = replica;               -- doar pentru curățenia testului: jurnalele sunt append-only
   DELETE FROM public.hr_personal_extern WHERE id IN (%3$s, %4$s) OR lower(nume) = 'trei gracescu';
   DELETE FROM public.hr_colaborare_externa_jurnal WHERE employee_id IN (%5$s, %6$s, %7$s, %8$s);
-  DELETE FROM public.conturi_inchideri_coada WHERE profile_id IN (%1$L, %9$L, %11$L) OR employee_id IN (%5$s, %6$s, %7$s, %8$s, %10$s, %12$s, %13$s);
-  DELETE FROM public.conturi_inchideri_jurnal WHERE profile_id IN (%1$L, %9$L, %11$L);
-  DELETE FROM public.hr_employees_audit WHERE employee_id IN (%5$s, %6$s, %7$s, %8$s, %10$s, %12$s, %13$s);
-  UPDATE public.profiles SET employee_id = NULL WHERE id IN (%1$L, %9$L, %11$L);
-  DELETE FROM public.employees WHERE id IN (%5$s, %6$s, %7$s, %8$s, %10$s, %12$s, %13$s);
+  DELETE FROM public.conturi_inchideri_coada WHERE profile_id IN (%1$L, %9$L, %11$L, %14$L) OR employee_id IN (%5$s, %6$s, %7$s, %8$s, %10$s, %12$s, %13$s, %15$s, %16$s);
+  DELETE FROM public.conturi_inchideri_jurnal WHERE profile_id IN (%1$L, %9$L, %11$L, %14$L);
+  DELETE FROM public.hr_employees_audit WHERE employee_id IN (%5$s, %6$s, %7$s, %8$s, %10$s, %12$s, %13$s, %15$s, %16$s);
+  UPDATE public.profiles SET employee_id = NULL WHERE id IN (%1$L, %9$L, %11$L, %14$L);
+  DELETE FROM public.employees WHERE id IN (%5$s, %6$s, %7$s, %8$s, %10$s, %12$s, %13$s, %15$s, %16$s);
   SET session_replication_role = origin;
-  DELETE FROM auth.users WHERE id IN (%1$L, %2$L, %9$L, %11$L);
-$q$, :'u_dr', :'u_ehr', :x1, :x2, :e_dr, :e_f1, :e_f2, :e_g, :'u_dr2', :e_dr2, :'u_dr3', :e_dr3a, :e_dr3b));
-SELECT teste.assert(NOT EXISTS (SELECT 1 FROM auth.users WHERE id IN (:'u_dr', :'u_ehr', :'u_dr2', :'u_dr3'))
+  DELETE FROM auth.users WHERE id IN (%1$L, %2$L, %9$L, %11$L, %14$L);
+$q$, :'u_dr', :'u_ehr', :x1, :x2, :e_dr, :e_f1, :e_f2, :e_g, :'u_dr2', :e_dr2, :'u_dr3', :e_dr3a, :e_dr3b, :'u_dr4', :e_dr4a, :e_dr4b));
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM auth.users WHERE id IN (:'u_dr', :'u_ehr', :'u_dr2', :'u_dr3', :'u_dr4'))
+    AND NOT EXISTS (SELECT 1 FROM public.employees WHERE id IN (:e_dr4a, :e_dr4b))
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_dr4')
     AND NOT EXISTS (SELECT 1 FROM public.employees WHERE id IN (:e_dr3a, :e_dr3b))
     AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_dr3')
     AND NOT EXISTS (SELECT 1 FROM public.profiles WHERE id IN (:'u_dr', :'u_ehr', :'u_dr2'))
@@ -2663,6 +2703,27 @@ UPDATE public.employees SET termination_date = CURRENT_DATE - 1 WHERE id = :el_b
 SELECT teste.assert(:n_notif_el2 > :n_notif_el
     AND (SELECT count(*) FROM public.notifications WHERE type IN ('extern_fost_angajat_dezactivat', 'extern_fost_angajat_omonim')) = :n_notif_el2,
   'E-LIFECYCLE-1 doar TRECEREA în „fost angajat” declanșează verificarea (alte UPDATE-uri pe fișa deja fostă nu re-notifică)');
+
+-- E-LIFECYCLE-2 (r5, varianta A): dezactivare cu termination_date în VIITOR — la scadență nu mai vine niciun UPDATE, deci
+-- politica C se aplică anticipat, la dezactivare; trecerea timpului (fără UPDATE) nu mai are ce face.
+INSERT INTO public.employees (name, department, email, active) VALUES ('VIITORU CARMEN', 'Test', 'viitoru.carmen@exemplu.ro', true) RETURNING id AS el2 \gset
+INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Carmen Consult SRL', 'viitoru.carmen@exemplu.ro', true) RETURNING id AS xl2_em \gset
+INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Carmen Viitoru', NULL, true) RETURNING id AS xl2_nume \gset
+UPDATE public.employees SET active = false, termination_date = CURRENT_DATE + 30 WHERE id = :el2;
+SELECT teste.assert((SELECT activ IS FALSE FROM public.hr_personal_extern WHERE id = :xl2_em)
+    AND (SELECT activ IS TRUE FROM public.hr_personal_extern WHERE id = :xl2_nume),
+  'E-LIFECYCLE-2 dezactivare cu dată de încetare VIITOARE: externul pe email e dezactivat imediat, cel pe nume rămâne activ');
+SELECT teste.assert(EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'extern_fost_angajat_dezactivat'
+                             AND message LIKE '%#' || :xl2_em || '%')
+    AND EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'extern_fost_angajat_omonim'
+                 AND message LIKE '%#' || :xl2_nume || '%'),
+  'E-LIFECYCLE-2 owner-ul e notificat la dezactivare (anticipat), nu abia la data încetării');
+-- și o dezactivare FĂRĂ dată de încetare (varianta A: indiferent de termination_date)
+INSERT INTO public.employees (name, department, email, active) VALUES ('FARADATA DAN', 'Test', 'faradata.dan@exemplu.ro', true) RETURNING id AS el3 \gset
+INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Dan Servicii', 'faradata.dan@exemplu.ro', true) RETURNING id AS xl3_em \gset
+UPDATE public.employees SET active = false WHERE id = :el3;
+SELECT teste.assert((SELECT activ IS FALSE FROM public.hr_personal_extern WHERE id = :xl3_em),
+  'E-LIFECYCLE-2 dezactivare fără termination_date → aceeași politică (extern pe email dezactivat)');
 
 \endif
 

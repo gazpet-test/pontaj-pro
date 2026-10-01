@@ -385,9 +385,10 @@ AS $fn$
 DECLARE
   v_reset boolean := (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
                      OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS DISTINCT FROM OLD.termination_date);
-  -- r4 (varianta C, decizia lui Răzvan): fișa DEVINE „fost angajat” acum (nu era înainte, este după)
-  v_devine_fost boolean := (NEW.termination_date IS NOT NULL AND NEW.termination_date <= CURRENT_DATE AND NEW.active IS NOT TRUE)
-                           AND NOT (OLD.termination_date IS NOT NULL AND OLD.termination_date <= CURRENT_DATE AND OLD.active IS NOT TRUE);
+  -- r4 (varianta C) + r5 (varianta A, decizia lui Răzvan, E-LIFECYCLE-2): politica C se aplică din momentul în care fișa
+  -- trece din activă în inactivă, INDIFERENT de termination_date (și o dată de încetare viitoare: la scadență nu mai vine
+  -- niciun UPDATE, deci verificarea se face anticipat, la programare).
+  v_devine_fost boolean := OLD.active IS TRUE AND NEW.active IS NOT TRUE;
   v_em    text := lower(btrim(COALESCE(NEW.email, '')));
   v_cuv   text[] := public.fn_nume_cuvinte(NEW.name);
   v_fam   text := public.fn_nume_familie(NEW.name);
@@ -414,7 +415,8 @@ BEGIN
     UPDATE public.hr_personal_extern SET activ = false, updated_at = now()
      WHERE fost_angajat_employee_id = NEW.id AND activ;
   END IF;
-  -- r4 (E-LIFECYCLE, varianta C): externii ACTIVI NELEGAȚI care existau deja cu identitatea omului care tocmai a plecat.
+  -- r4 (E-LIFECYCLE, varianta C): externii ACTIVI NELEGAȚI care existau deja cu identitatea omului care tocmai a fost
+  -- dezactivat (r5: la dezactivare, chiar dacă data încetării e în viitor).
   --   * email identic  → dezactivare automată (direcția sigură; activarea o face din nou un om) + notificare owner;
   --   * doar pe nume   → notificare owner, FĂRĂ dezactivare (poate fi altă persoană cu același nume).
   -- Lock-urile advisory pe identitate sunt deja ținute (trg_employees_colab_ext_lock) ⇒ fără cursă cu un extern nou.

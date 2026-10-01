@@ -11,27 +11,27 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 - `supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql` (R2)
 - `supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql` (R3)
 
-**Amprente (r4 final, 01.10.2026 — d: CONTINUE la intrarea retargetată; e: varianta C aprobată de Răzvan pentru externii nelegați)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
+**Amprente (r5, 01.10.2026 — d: D-ERR-IDENTITY în handlerul de eroare al sweep-ului; e: varianta A (politica C la dezactivare, indiferent de data încetării))** — `sha256sum` pe fișierele din branch, de comparat la livrare:
 
 | Fișier | sha256 |
 |---|---|
 | `20260929c_conturi_legare_automata.sql` | `9a3e0a133e50a1bc759ccaa4ec5b0c624f9e3516dc81ebe48792221455520d50` |
-| `20260929d_conturi_inchidere_la_incetare.sql` | `d2468bbb60180d3a197960cf29edddaa296d235293eae80362d9f42214ab992d` |
-| `20260929e_fost_angajat_colaborare_externa.sql` | `13a718e94e79ea6719d8ea72a2ff35d0727953b0357beeeff2add255bee6aea8` |
+| `20260929d_conturi_inchidere_la_incetare.sql` | `28ba72ca6abcc73f72aa810c769d1a233bcadf943ffcd1589afd0dac9b1b6052` |
+| `20260929e_fost_angajat_colaborare_externa.sql` | `6c6522034516c135926fc197a67eac60da8a13c1672b63159b674264a50da498` |
 | `20260929c_conturi_legare_automata_ROLLBACK.sql` | `3e7b3af6e12160022fbd19ed73bd0709b72cd372da74d198ee2cb8d09a578256` |
 | `20260929d_conturi_inchidere_la_incetare_ROLLBACK.sql` | `c2e41e0e028ee9027823f48540e95fb2801cfad5fa16d2af9b291d739163b0e1` |
 | `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `5db7153f28fc5a625c3d48e5fb10cd5e86393b18eef8037368dfdac2251dffa3` |
 
-**Livrare (r4): versiuni și comenzile runner-ului.** Ordinea e strictă c → d → e, iar versiunile sunt > 20261001184500 (ultima de pe live la 01.10) și strict crescătoare. După fiecare pas, runner-ul rulează gate-ul 0e (cod 30/31 = stop).
+**Livrare (r5): versiuni și comenzile runner-ului (acceptate de Copilot: 210000 / 211500 / 213000).** Ordinea e strictă c → d → e, iar versiunile sunt > 20261001184500 (ultima de pe live la 01.10) și strict crescătoare. După fiecare pas, runner-ul rulează gate-ul 0e (cod 30/31 = stop).
 ```
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929c_conturi_legare_automata.sql \
-  --sha256 9a3e0a133e50a1bc759ccaa4ec5b0c624f9e3516dc81ebe48792221455520d50 --versiune 20261001190000 \
+  --sha256 9a3e0a133e50a1bc759ccaa4ec5b0c624f9e3516dc81ebe48792221455520d50 --versiune 20261001210000 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql \
-  --sha256 d2468bbb60180d3a197960cf29edddaa296d235293eae80362d9f42214ab992d --versiune 20261001191500 \
+  --sha256 28ba72ca6abcc73f72aa810c769d1a233bcadf943ffcd1589afd0dac9b1b6052 --versiune 20261001211500 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql \
-  --sha256 13a718e94e79ea6719d8ea72a2ff35d0727953b0357beeeff2add255bee6aea8 --versiune 20261001193000 \
+  --sha256 6c6522034516c135926fc197a67eac60da8a13c1672b63159b674264a50da498 --versiune 20261001213000 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
 ```
 
