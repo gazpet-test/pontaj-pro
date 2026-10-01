@@ -1,8 +1,42 @@
-# supabase/revenire/
+# supabase/revenire/ — rollback-uri tehnice (NU migrări)
 
-Artefacte de **revenire** (rollback tehnic, oprire controlată). **Nu sunt migrări**: niciun runner nu parcurge directorul ăsta (`supabase db push`, `apply_migration` și harness-urile citesc doar `supabase/migrations/`).
+Aici stau fișierele de revenire tehnică ale patch-urilor de securitate. **Nu sunt migrări forward** și nu se aplică odată cu patch-ul.
 
-- Fiecare fișier are antetul lui: ce redeschide, cine îl poate cere, cum se armează.
-- Rollback-urile tehnice redeschid o gaură de securitate. Se rulează doar la cererea explicită a lui Răzvan, după decizie și review specifice (Copilot). Existența fișierului sau a comutatorului de armare nu e autorizare.
-- Gestionarul tranzacției e operatorul. Fișierele nu conțin `BEGIN`/`COMMIT` și se trimit într-un singur string: `BEGIN;` + armarea legată de `txid_current()` + fișierul + `COMMIT;`.
-- Directorul poate apărea și pe alte branch-uri, cu alte fișiere. La merge se păstrează toate fișierele, iar README-ul se unește.
+## De ce e un director separat
+- **Niciun runner nu parcurge acest director.** Migrările se aplică manual, fișier cu fișier (MCP `apply_migration`, cu conținutul exact al fișierului). În repo nu există `supabase/config.toml` și nici un flux `supabase db push` care să enumere directoare.
+- **CI-ul nu-l atinge.** `.github/workflows/*` referă doar fișiere anume din `supabase/migrations/` (ex. `supabase/migrations/20260929b_ofertare_derogare_audit*.sql`), ca trigger de cale. Scripturile din `scripts/pg/` citesc fișiere numite explicit. Nimic nu referă `supabase/revenire/`. Harness-ul `scripts/test_sec_rsvti.sh` verifică static ambele lucruri, la fiecare rulare (pasul S).
+- Armarea care face un rollback să eșueze **nu e** același lucru cu excluderea lui: un rollback descoperit ca migrare ar opri tot traseul de migrări. De aceea mutarea.
+
+## Statut
+Fiecare fișier de aici e **artefact de test / revenire excepțională, fără GO de execuție**. Harness-ul îl folosește ca să dovedească faptul că migrarea se desface curat. O folosire în producție cere decizia explicită a lui Răzvan, cu motivul consemnat, plus un review separat (Copilot). Comutatorul de armare nu e o autorizare.
+
+## 20261003c — SEC RSVTI (`20261003c_sec_rsvti_poarta_jurnal_ROLLBACK.sql`)
+Redeschide gaura RSVTI (RPC fără poartă, jurnal falsificabil). Revenirea care păstrează poarta e descrisă în `docs/SECURITATE_PATCH_RSVTI.md` §6.
+
+**Procedura (doar după decizie + review).** Fișierul nu conține `BEGIN`/`COMMIT`, deci gestionarul tranzacției e operatorul. Se trimite **un singur string**:
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261003c', 'REDESCHIDE_GAURA_RSVTI:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+1. Preview read-only: md5-urile curente (RPC, helper, politica jurnalului) și `SELECT * FROM pg_db_role_setting`.
+2. Execuția string-ului de mai sus.
+3. Verificare read-only: RPC `md5(prosrc)` = `527c0e4708dfe1f88cec03a77b6a26dd`, semnătura cu `DEFAULT CURRENT_DATE`, helper absent.
+
+**Siguranțe:**
+- Armarea e legată de tranzacția curentă (`txid_current()`): o setare rămasă în sesiune, una dintr-o tranzacție anterioară sau eșuată și o armare persistentă (`ALTER DATABASE/ROLE … SET`, verificată în `pg_db_role_setting`, cu numele comparat prin `lower()`) sunt refuzate.
+- Precondițiile cer starea exactă a patch-ului. Postcondițiile cer starea exactă din 29.09.
+- La final, fișierul dezarmează și sesiunea.
+
+## 20260930k — garda citirii automate Ofertare (`20260930k_ofertare_ingest_garda_ROLLBACK.sql`, PR #553)
+Scoate tabelul `ofertare_ingest_garda` și cele 4 funcții. Cu edge-ul `ofertare-ingest-doc` v13 deployat, citirea automată se oprește complet (fail-closed). Revenirea la v12 e o decizie separată.
+
+**Procedura (doar după decizie + review).** Un singur string:
+```sql
+BEGIN;
+SELECT set_config('gazpet.revenire_20260930k', 'SCOATE_GARDA_INGEST:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Siguranțele (armare legată de txid, refuz la armare persistentă, precondiție pe amprenta exactă, DROP fără CASCADE) sunt descrise în antetul fișierului.
