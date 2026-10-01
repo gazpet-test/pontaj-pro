@@ -8,6 +8,9 @@
 # de testul SA-01). Se aplică înaintea lui c/d/e, intră în instantaneul de schemă „dinainte” și NU se face
 # rollback la el: rollback-ul pachetului Conturi nu atinge triggerul S-A.
 live: supabase/migrations/20260929g_profiles_campuri_owner_only.sql
+# SEC F1 (20260930i, live din 01.10.2026, v20261001123000): TRUNCATE retras de la anon/authenticated + setarea implicită
+# a lui postgres corectată — c/d/e o cer ca precondiție (tabelele noi din d/e nu primesc TRUNCATE).
+live: supabase/migrations/20260930i_sec_f1_truncate_revoke.sql
 # SEC F2 (20260930j, live din 01.10.2026 12:45 UTC) a rescris fn_profiles_campuri_owner_only (rol JWT contradictoriu ⇒ refuz,
 # service_role legat de session_user = authenticator + role = service_role) — e starea reală a producției.
 live: supabase/migrations/20260930j_sec_f2_profiles_uid_null.sql

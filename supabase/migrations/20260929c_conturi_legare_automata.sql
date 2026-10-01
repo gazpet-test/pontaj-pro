@@ -56,6 +56,26 @@ BEGIN
     RAISE EXCEPTION 'Precondiție: S-A (trg_profiles_campuri_owner_only pe profiles) nu e live — se reanalizează';
   END IF;
   IF to_regprocedure('extensions.unaccent(text)') IS NULL THEN RAISE EXCEPTION 'Precondiție: extensions.unaccent(text) lipsește'; END IF;
+  -- Live 01.10.2026: SEC F2 r4 (v20261001124500) a rescris fn_profiles_campuri_owner_only (md5 prosrc 9acc36a4…);
+  -- pachetul e aliniat la acel predicat. Altă variantă ⇒ starea de pornire s-a schimbat ⇒ refuz.
+  IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_profiles_campuri_owner_only()'))
+     IS DISTINCT FROM '9acc36a4067eddbdf29956220023ea92' THEN
+    RAISE EXCEPTION 'Precondiție: fn_profiles_campuri_owner_only nu e varianta SEC F2 r4 (md5 9acc36a4…) — se reanalizează';
+  END IF;
+  -- handle_new_user e RESCRISĂ de c: corpul live (01.10.2026, md5 94e5c5d3…) e cel din care pornește migrarea;
+  -- la reaplicare (c deja livrată ⇒ fn_cont_leaga_la_creare există) se acceptă varianta proprie.
+  IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('public.handle_new_user()'))
+     IS DISTINCT FROM '94e5c5d33116df4466fb2e714887a9b2'
+     AND to_regprocedure('public.fn_cont_leaga_la_creare(uuid)') IS NULL THEN
+    RAISE EXCEPTION 'Precondiție: handle_new_user() diferă de varianta live din 01.10.2026 (md5 94e5c5d3…) — se reanalizează';
+  END IF;
+  -- Live 01.10.2026 (citit read-only): SEC F1 (v20261001123000) — setarea implicită a lui postgres pe public nu mai dă
+  -- TRUNCATE lui anon/authenticated; tabelele create aici moștenesc asta. Dacă F1 a fost revertit, se reanalizează.
+  IF EXISTS (SELECT 1 FROM pg_default_acl d, aclexplode(d.defaclacl) a
+              WHERE d.defaclrole = 'postgres'::regrole AND d.defaclnamespace = 'public'::regnamespace AND d.defaclobjtype = 'r'
+                AND a.privilege_type = 'TRUNCATE' AND a.grantee IN ('anon'::regrole, 'authenticated'::regrole)) THEN
+    RAISE EXCEPTION 'Precondiție: SEC F1 nu e live (setarea implicită a lui postgres dă TRUNCATE lui anon/authenticated) — se reanalizează';
+  END IF;
 END $pre_livrare$;
 
 CREATE OR REPLACE FUNCTION public.fn_identitate_claims(OUT rol text, OUT sub text)

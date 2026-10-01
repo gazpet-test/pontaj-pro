@@ -11,13 +11,13 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 - `supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql` (R2)
 - `supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql` (R3)
 
-**Amprente (01.10.2026, după alinierea la SEC F2 r4 + gate 0e r8)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
+**Amprente (01.10.2026 seara, după merge main + precondiții live F1/F2/handle_new_user; înainte: c a22f6535…, d dcc8e7f9…, e d4deb2ac…)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
 
 | Fișier | sha256 |
 |---|---|
-| `20260929c_conturi_legare_automata.sql` | `a22f6535e3469a3eebdda38c4e0eba999acccac92df819c4c23298350e829846` |
-| `20260929d_conturi_inchidere_la_incetare.sql` | `dcc8e7f976fc7c7e0f5fa19279e040e027782405dd3146fe95456d890ddc0d83` |
-| `20260929e_fost_angajat_colaborare_externa.sql` | `d4deb2ac2d580735cf55301fc9cfcb68b5f51cfe5ef6e53811a84cdf299409b5` |
+| `20260929c_conturi_legare_automata.sql` | `c84c48cb3572f58e974d25e076da7843ef61ebe74c6453faea0b29a5859a83af` |
+| `20260929d_conturi_inchidere_la_incetare.sql` | `c9ace3c5443dbe46d465d48ca3684da0af55a51846983b2a67b6f7a89f2c9d69` |
+| `20260929e_fost_angajat_colaborare_externa.sql` | `4a8c1bc955645a2500826fb590442c88c44aba4ac3b64c81b39cf85b33c08846` |
 | `20260929c_conturi_legare_automata_ROLLBACK.sql` | `3e7b3af6e12160022fbd19ed73bd0709b72cd372da74d198ee2cb8d09a578256` |
 | `20260929d_conturi_inchidere_la_incetare_ROLLBACK.sql` | `c2e41e0e028ee9027823f48540e95fb2801cfad5fa16d2af9b291d739163b0e1` |
 | `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `5de2008d00d4ffc078ae10ddfae7c250bc609824386f1e82db46791441256319` |
