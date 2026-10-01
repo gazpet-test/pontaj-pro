@@ -34,7 +34,7 @@
   - PRACTICA_CNSC: 41
 
   Din ele, **864 sunt verificate pe sursă**; restul sunt standarde licențiate, indicatoare sau date interne.
-- **Tipare — 97:** 69 cu încredere ridicată, 25 medie, 2 scăzută. Toate cele 182 de decizii sunt citate în cel puțin un tipar.
+- **Tipare — 97:** 64 cu încredere ridicată, 31 medie, 2 scăzută; 35 cer review juridic. Toate cele 182 de decizii sunt citate în cel puțin un tipar.
 
 ## Top 10 constatări pentru ofertare și clarificări
 
