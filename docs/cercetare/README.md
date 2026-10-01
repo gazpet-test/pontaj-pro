@@ -19,7 +19,7 @@ Instanța de cercetare (doar citire): practica CNSC + baza normativă pentru mod
 | Registrul cerințelor atomice | `registru_cerinte.json` | 449 cerințe: locator exact, condiții de aplicabilitate, `temei_tip` (OBLIGATORIE_LEGE / OBLIGATORIE_DOC_ACHIZITIE / STANDARD_INCORPORAT_PRIN_REFERINTA / VOLUNTAR_BUNA_PRACTICA / GHID_INTERPRETARE / PRACTICA_CNSC), evidență, verificare, prag, încredere |
 | Graf de aplicabilitate | `graf_aplicabilitate.json` | 147 relații trimite_la / incorporeaza / abroga / inlocuieste … |
 | Explicații + index + matricea ANRE | `registre_evidenta.md` | evidence-first, etichete, analiza ISCIR/I6/I9, excluderi |
-| Tipare de clarificare | `clarificari_tipare.md/.json` | 96 tipare (v1.2): trigger, documente, `REQ-*`, întrebare NEUTRĂ, impact intern separat, ⚖️ review juridic (24) — **înlocuiește catalogul din runda 1** |
+| Tipare de clarificare | `clarificari_tipare.md/.json` | 97 tipare (v1.3): trigger, documente, `REQ-*`, întrebare NEUTRĂ, impact intern separat, ⚖️ review juridic (24) — **înlocuiește catalogul din runda 1** |
 | Matrice per licitație | `clarificari_matrice_model.md` | model document → cerință → requirement_id → status → tipar → draft → review → hash |
 | Fișe CNSC | `cnsc_practica.*` | re-verificate pe text: procedură, fapte, concluzie, comparabilitate, citate, control judiciar, sha256 |
 
