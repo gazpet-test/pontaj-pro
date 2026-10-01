@@ -13,6 +13,71 @@
 | **E. FIDIC Red/Yellow 1999/2017** | Clauze ajustare 13.8, revendicări 20.1 | ~100–300 €/carte (fidic.org) | **Nu** — Condițiile Particulare din contractele POIM ale beneficiarilor ajung. |
 | **F. DVS 2207-1:2015** | Parametri sudură cap-cap PE | ~40–80 € (DIN Media) | Opțional; operatorii (Distrigaz/Delgaz) îl citează în specificațiile lor. |
 
+
+## Actualizare 02.10.2026 (noapte) — goluri închise cu Firecrawl
+
+Prețuri ASRO citite efectiv (magazin.asro.ro, 02.10.2026) — pachetul recomandat la opțiunea B: **≈ 2,228 lei** total.
+
+| Standard | Preț (lei) | Sursa |
+|---|---|---|
+| SR EN 12732:2021 | 373.77 | https://magazin.asro.ro/ro/standard/277900 |
+| SR EN 12732+A1:2014 | None | https://magazin.asro.ro/ro/standard/227345 |
+| SR EN ISO 17635:2025 | 169.28 | https://magazin.asro.ro/ro/standard/286117 |
+| SR EN ISO 5817:2023 | 207.96 | https://magazin.asro.ro/ro/standard/281092 |
+| SR EN 12068:2002 | 263.22 | https://magazin.asro.ro/ro/standard/30458 |
+| SR EN ISO 21809-1:2019 | 318.52 | https://magazin.asro.ro/ro/standard/270931 |
+| SR EN 805:2025 | 373.77 | https://magazin.asro.ro/ro/standard/285800 |
+| SR EN 1610:2016 | 207.96 | https://magazin.asro.ro/ro/standard/241544 |
+| SR EN 12327:2012 | 160.98 | https://magazin.asro.ro/ro/standard/202972 |
+| SR EN ISO 3834-2:2021 | 152.7 | https://magazin.asro.ro/ro/standard/276136 |
+
+⚠️ Ediții corectate: **SR EN 12732+A1:2014 e anulat** — în vigoare ediția 2021; **SR EN 805:2025** a înlocuit ediția 2000; SR EN 1610 are ediția SR **2016**.
+
+Prefix cerințe: `REQ-SL-001…061` (`cerinte_surse_lipsa.json`). Actualizări de registru: `surse_update_surse_lipsa.json` (35). Graf: `graf_surse_lipsa.json` (20 muchii). Prețuri ASRO: `preturi_asro.json`.
+Unelte: Firecrawl (proxy enhanced + `waitFor` 10 s trece de anti-bot-ul ANAP și de 403 la Delgaz), curl direct pentru anre.ro / romgaz / brml / cnsc (doar prin **http**). Fișierele descărcate sunt în `lucru/sl/`.
+
+### Tabel gol → rezultat
+
+| # | Gol | Rezultat | Ce s-a găsit (rezumat + locator) | URL | sha256 |
+|---|---|---|---|---|---|
+| 1 | Prețuri ASRO (9 standarde) | **REZOLVAT** | Toate cele 9 prețuri sunt citite pe pagina produsului. Total ≈ **2.228 lei** pentru pachetul B. **Corecturi de ediție**: SR EN 12732+A1:2014 e **ANULAT** (în vigoare: SR EN 12732:2021). **SR EN 805:2025** înlocuiește 805:2000 (versiunea RO e din 31.08.2026). SR EN 1610 are ediția SR **2016**, nu 2015. Căutarea funcționează la `magazin.asro.ro/Search?q=` | magazin.asro.ro/ro/standard/{277900, 286117, 281092, 30458, 270931, 285800, 241544, 202972, 276136} | — (pagini HTML) |
+| 2 | Edițiile SR pentru EN 12327, ISO 21809-3 | **REZOLVAT** | Sunt în vigoare SR EN 12327:2012 (versiune RO 2015), SR EN ISO 21809-3:2016 și A1:2020. Rezumatul ASRO pentru 12327 precizează că presiunile, duratele și criteriile de probă **nu** sunt în standard | /standard/202972, /en/standard/245713, /274399 | — |
+| 3 | OUG 64/2022, textul și art. 17 | **REZOLVAT** (forma MO + modificarea din 2023) | Am citit art. 17 alin. (1)–(8): restul de executat, ajustarea la fiecare plată, indicii ICC, luna de referință, profitul implicit de 3%, ponderile pentru articole comasate și lucrările suplimentare. OUG 64 a fost aprobată prin **Legea 243/2022**. **OUG 44/2023** (MO 467/26.05.2023) modifică art. 17 alin. (8) și adaugă art. 8 alin. (4): după plafonul de 50%, contractul poate reveni la formula inițială. Formula propriu-zisă e imagine în MO și nu a putut fi capturată. Lipsește forma consolidată 2026 → REQ-SL-001…008 | lege5.ro (art. 17, Gratuit); federatiaconstructorilor.ro (OUG 44/2023) | md 1602a99f…; PDF OUG 44: 39e1f6c1… |
+| 4 | OG 15/2021, textul | **REZOLVAT** (forma MO) | Am citit actul integral, art. 1–8. **Art. 6** obligă AC să pună clauză de ajustare la lucrările de peste 6 luni. Art. 2: Va = C×Vo, plus ponderile INS. **Corectură**: actul e publicat în MO **833**/31.08.2021 și e în vigoare din 03.09.2021. Lipsește forma consolidată → REQ-SL-009…010 | lege5.ro/Gratuit/ha4damrsg4za | — |
+| 5 | HG 925/1995, textul | **PARȚIAL** | Am citit forma inițială din 1995: art. 7, 13 și 22 (obligațiile RTE). Modificările din HG 742/2018 au rămas necitite. curl eșuează pe isc.gov.ro (lanț TLS incomplet), am folosit Firecrawl → REQ-SL-011…014 | isc.gov.ro/files/2016/Legislatie/HG nr 925 din 1995.pdf | — |
+| 6 | Ord. ANRE 118/2013, anexa cu probele | **REZOLVAT** | Anexa agregată la 01.08.2018. **Art. 131**: NDT RT/UT ≥ 20/25/40/75 % pe clasele de locație 1–4. Se face 100 % la traversări, în zone populate, la sudura manuală la poziție și la cuplări. **Art. 134**: pph = 1,20×MOP (CL1–2) / 1,40×MOP (CL3–4), cel mult 1,8×MOP și 90 % din presiunea de probă la fabrică, durată ≥ 6 h. **Art. 135**: etanșeitate cu aer la MOP, ≥ 24 h. **Art. 136**: aparate cu clasa ±1,5 %. Fișierul `anre.ro/.../Ord_118_13.pdf` are o singură pagină (doar ordinul) → REQ-SL-015…027 | arhiva.anre.ro/download.php?f=hap%2Big%3D%3D… | 3c97e429… |
+| 7 | Numărul ordinului pentru standardul de performanță în distribuția gazelor | **REZOLVAT** | **Ord. ANRE 131/19.10.2022** (MO 1045/28.10.2022), în vigoare din 01.04.2023. Abrogă Ord. 162/2015. Art. 17 (IP4): refacerea terenurilor la starea inițială și răspuns în ≤ 20 de zile lucrătoare. Modificările ulterioare nu sunt verificate → REQ-SL-028…029 | romgaz.ro (PDF MO) | 0910d46e… |
+| 8 | Ordinul ANRSC pentru regulamentul de licențiere | **REZOLVAT** (doar numărul) | **Ord. ANRSC 100/2023**: regulamentul e datat 20.02.2023. Tarifele au fost modificate prin Ord. 687/2024 (știm doar titlul). Pentru Gazpet ca executant: doar referință | anrsc.ro/realizari-legislative | — |
+| 9 | Ord. ANRE 65/2023, textul | **PARȚIAL** | Am citit documentul ANRE de aplicare, nu ordinul. Viza e la 5 ani. Cererea se depune cu ≥ 30 de zile înainte, cu un curs absolvit în ultimele 12 luni. Tarif 250/125 lei. Legitimațiile vechi sunt asimilate → REQ-SL-030…031 | anre.ro/wp-content/uploads/2024/10/informatii_-autorizare_instalator.pdf | 465344e2… |
+| 10 | Ord. ANRE 17/2026, data intrării în vigoare | **PARȚIAL** | **MO 444/26.05.2026**, în vigoare de la **26.05.2026**. Art. 2 abrogă Ord. 132/2021. Termenul de conformare (~26.08.2026; o sursă secundară spune 21.08.2026) e în Regulamentul-anexă, pe care nu l-am citit → REQ-SL-060 | lege5.ro/Gratuit/ge4dmmrrgqzto | — |
+| 11 | L99/2016, pragul de achiziție directă după L208/2022 | **REZOLVAT** | Art. 12 alin. (4): **270.120 lei** pentru produse/servicii și **900.400 lei** pentru lucrări (L208/2022, în vigoare 10.09.2022). Sursa e forma ANAP la 13.06.2024. Lege5 Gratuit afișează încă valorile din 2016 → REQ-SL-051 | anap.gov.ro/…/Legea-nr.-99-din-2016-…13.06.2024-2.pdf | — |
+| 12 | ANAP — Îndrumarea privind propunerile financiare / PANS (2023) | **REZOLVAT** | Am citit integral cele 4 pagini. Pragul de 80 % din VE vine din HG 395 art. 136. AC nu poate respinge automat și nici prin comparație cu alte oferte. Justificarea se face prin defalcare pe resurse. Lista de dovezi acceptate e în document → REQ-SL-032…036 | anap.gov.ro/…/2023/05/Indrumare-evluarea-propunerilor-financiare._.pdf | — |
+| 13 | ANAP — Îndrumarea privind listele de prețuri (2023) | **REZOLVAT** | La P+E, listele de cantități sunt orientative. Dacă AC le impune, riscul cantităților trece la AC. Nu se plătește pe cantități reale (HG 1/2018 cl. 37.5, 49.1). Fișele F5 cer intervale de valori, nu valori fixe → REQ-SL-037…039 | anap.gov.ro/…/2023/03/Indrumare-privind-detalierea-excesiva-…pdf | md 2d42b69e… |
+| 14 | Instrucțiunea ANAP 1/2017, textul complet | **REZOLVAT** (text OCR) | Art. 3 alin. (4): pentru RTE și alte funcții certificate nu se pun criterii de calificare. Art. 11: experiența experților-cheie nu e criteriu de calificare. Art. 12 nota (ii): funcțiile certificate nu pot fi factori de evaluare. Art. 5: fără cerințe duble → REQ-SL-040…043 | anap.gov.ro/…/2017/01/Instructiunea-nr-1_2017.pdf | md f3c226c2… |
+| 15 | Instrucțiunea ANAP 1/2021, textul complet | **REZOLVAT** | Art. 2: clauzele de revizuire și remăsurătorile. Art. 3–5: plafonul de 50 % cumulat, raportat la valoarea ajustată. Art. 4: erorile de proiect nu sunt „imprevizibile”, iar o normă publicată după data de clarificare poate justifica o modificare. Art. 3 alin. (5) lit. a): exemplul cu relocarea conductei de gaze → REQ-SL-044…050 | anap.gov.ro/…/2021/01/Instructiune-MO-final.pdf | md 52f99c8c… |
+| 16 | BRML Ord. 204/2024 (L.O.) | **REZOLVAT** (L.O.-2022 primar; Ord. 204 din sursă secundară) | **L.O.-2022** (Ord. 77/2022, MO 332/05.04.2022): contoarele de gaz ≤ 2.500 m³/h au VP la 8 ani, contoarele de apă rece la 7 ani, aparatele pentru priza de pământ la 2 ani. **Constatare**: la manometre lista conține doar L62-3 (pneuri), deci manometrele de probă nu sunt în L.O. Ord. 204/2024 adaugă contoarele termomasice → REQ-SL-052…056 | brml.ro/sites/default/files/Ordinul_77_2022_LO_2022.pdf; ortexo.com | 33b46f69… |
+| 17 | INS — Buletinul statistic de prețuri, indicii pentru ajustare | **PARȚIAL** | Am confirmat că BSP nr. 10/2026 există, cu tabelele 15/15A/15B, iar seria TEMPO CNS107D are anul de bază 2021. **Valorile nu au fost citite**: PDF-ul 2026 nu e legat pe pagină și API-ul TEMPO dă timeout. Am consumat 95 de credite pe un BSP din 02/2024 | insse.ro/cms/ro/content/buletin-statistic-de-preţuri-nr102026 | — |
+| 18 | Delgaz — specificații pentru sudură/NDT/izolație | **PARȚIAL** | Lista ST 500–510 e accesibilă (Firecrawl enhanced), dar conține **doar echipamente**. Am citit ST 506 A3/2018 (aparate cap-cap PE). Acesta citează **NTPEE 2008, abrogat**. Arhiva „Cerinte-tehnice-DELGAZ-(3).zip” e blocată, iar procedurile de sudură/NDT/izolație n-au fost găsite → REQ-SL-061 | delgaz.ro/gaze-naturale/specificatii-tehnice | — |
+| 19 | Ghidul de bune practici CNSC | **PARȚIAL** | Descărcat prin http (200 pag.). E din **10/2015**, pe cadrul OUG 34/2006 (abrogat). Am citit doar cuprinsul: secțiunile D1–D8 și R1–R8. Spețele nu sunt extrase | http://portal.cnsc.ro/ghiddebunepractici.pdf | 3f415108… |
+| 20 | Rapoartele CNSC 2024/2025, statistici | **REZOLVAT** | **2025**: 5.178 contestații, 43,5 % admise. Lucrările reprezintă 38,06 %. Din admiteri, 94,6 % sunt remedieri. Curțile de apel au desființat 82 de decizii total și 173 parțial, din 3.958. **2024**: 4.529 contestații, 42,6 % admise, lucrări 36,45 % → REQ-SL-057…059 | cnsc.ro/wp-content/uploads/2025/raport/Raport.2024.RO.pdf; …/2026/raport/Raport.2025.RO.pdf | 1fcdfbe8… / 0ccbc6de… |
+| 21 | Ediția DIN 30672 | **PARȚIAL** | DIN 30672:1979-08 e ediția veche. Există DIN 30672-1/-2 (DVGW), iar partea 1 are **Ausgabe 2026-07** doar după un index secundar (baunormenlexikon) | baunormenlexikon.de; dinmedia.de | — |
+| 22 | anap.gov.ro anti-bot (tabel „Inaccesibile”) | **REZOLVAT tehnic** | Merge cu Firecrawl `proxy: enhanced` + `waitFor: 10000` + `maxAge: 0`. Fără `waitFor` primești pagina de verificare (503) | — | — |
+| 23 | portal.cnsc.ro (căutare) | **TOT INACCESIBIL** | Căutarea dă în continuare reset. PDF-urile merg pe **http://** (nu https) | — | — |
+| 24 | legislatie.just.ro / lege5 forma la zi | **TOT INACCESIBIL** | Nu am insistat (cf. instrucțiuni). Forma MO de pe lege5 Gratuit a fost suficientă pentru OUG 64, OG 15 și Ord. 17/2026 | — | — |
+| 25 | Legea 169/2026 (art.), NTPEE după 2023, HG 300/2006, L123 art. 109–121, Ord. 1014/874/2001, curțile de apel, deciziile CNSC publicate doar cu dispozitiv | **NEABORDAT** în această rundă | Rămân pe lista de verificat. Au nevoie de legislatie.just.ro sau de căutare manuală pe rejust/portal.just.ro | — | — |
+
+### Corecturi pentru registru / ofertare_normative
+- **id 31 / SR EN 12327**: ediția SR 2012 e confirmată. Standardul **nu conține** presiunile și duratele de probă.
+- **SR EN 12732**: în vigoare e ediția **2021**. 12732+A1:2014 e anulat, deși NTPEE îl citează (anexa 2).
+- **SR EN 805**: în vigoare e ediția **2025** (RO 31.08.2026). Valorile de probă preluate din ediția 2000 trebuie revalidate.
+- **SR EN 1610**: ediția SR corectă e **2016**.
+- **OG 15/2021**: e publicată în MO 833, nu 827.
+- **id 22 (Ord. ANRE 132/2021)**: e abrogat din **26.05.2026** prin Ord. 17/2026 (MO 444/26.05.2026).
+- **Delgaz ST 506**: citează NTPEE 2008 (abrogat). Merită o întrebare de clarificare dacă un caiet de sarcini o invocă.
+
+### Credite Firecrawl consumate (aprox.)
+Cam 300 de credite. Cele mai scumpe: L99 ANAP (103) și BSP 02/2024 (95, nerelevant).
+
 ## Inaccesibile tehnic (gratuite, dar blocate din mediul cloud)
 
 | Sursă | Problemă | Ce s-a pierdut | Soluție |
