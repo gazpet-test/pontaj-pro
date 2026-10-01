@@ -56,6 +56,7 @@ const campuriDocumentatie = r => (!r || r.error || !r.data)
 import ClarificariAC from './OfertareClarificariAC.jsx'
 import OrganigramaSection from './OfertareOrganigrama.jsx'
 import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE, REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
+import { indexConfirmari, stareExceptarePT, propunereCurenta, TIP_EXCEPTAT_PT, j02bActivPe } from './ofertareNeaplicabil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -311,7 +312,7 @@ function PoartaPT({ st, onFiltru }) {
 // MATRICEA — cerințele, cu filtre și cele două acțiuni în bloc
 // ─────────────────────────────────────────────────────────────────
 function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedite, documente = [], filtru, setFiltru, sel, setSel,
-                          onAtribuie, onExcepta, onVerifica, onBlocheaza, onDovada, busy }) {
+                          onAtribuie, onExcepta, onVerifica, onBlocheaza, onDovada, busy, naIdx, onConfirmaExceptare, j02b = true }) {
   const [capSel, setCapSel] = useState('')
   const [motiv, setMotiv] = useState('')
   const [inspectata, setInspectata] = useState(null)
@@ -331,7 +332,8 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
   const lista = useMemo(() => cerinte.filter(c => {
     const ls = legPe.get(c.id) || []
     const areCap = ls.some(l => l.fel === 'capitol')
-    const exceptat = ls.some(l => l.fel === 'exceptat')
+    // J02b: „exceptată” = închisă DOAR cu confirmare umană validă (amprenta sursei curente); AI = propunere.
+    const exceptat = stareExceptarePT(ls, naIdx, c.id, j02b).inchisa   // r6: legacy când J02b e oprit pe licitație
     const cuDovada = dovedite.has(c.id)
     if (filtru === 'fara')    return !areCap && !exceptat && !cuDovada
     if (filtru === 'capcane') return RX_CAPCANA.test(c.text_cerinta || '') && !areCap && !exceptat
@@ -415,6 +417,7 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
           const ls = legPe.get(c.id) || []
           const cap = ls.find(l => l.fel === 'capitol')
           const exc = ls.find(l => l.fel === 'exceptat')
+          const excSt = stareExceptarePT(ls, naIdx, c.id, j02b)
           const capcana = RX_CAPCANA.test(c.text_cerinta || '')
           const capNr = cap && capitole.find(k => k.id === cap.capitol_id)
           return (
@@ -426,9 +429,15 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
                   <span style={{ fontSize:11, color: c.tip === 'forma' ? G.purple : G.blue }}>{c.tip}</span>
                   {c.sursa_sectiune && <span style={{ fontSize:11, color:G.dim }}>{c.sursa_sectiune}{c.sursa_pagina ? ` p.${c.sursa_pagina}` : ''}</span>}
                   {capcana && <span style={{ fontSize:11, color:G.red, fontWeight:700 }}>🚫 CAPCANĂ</span>}
-                  {dovedite.has(c.id) && !cap && !exc && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
+                  {dovedite.has(c.id) && !cap && !excSt.inchisa && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
                   {capNr && <span style={{ fontSize:11, color:G.green, fontWeight:600 }}>→ {capNr.eticheta || `cap. ${capNr.nr}`}</span>}
-                  {exc && <span style={{ fontSize:11, color:G.orange }} title={exc.motiv}>⊘ exceptată</span>}
+                  {exc && excSt.inchisa && <span style={{ fontSize:11, color: j02b ? G.dim : G.orange }} title={exc.motiv}>{excSt.eticheta}</span>}
+                  {exc && excSt.propunere && <>
+                    <span style={{ fontSize:11, color:G.orange, fontWeight:600 }} title={exc.motiv}>{excSt.eticheta}</span>
+                    {onConfirmaExceptare && <button onClick={() => onConfirmaExceptare(c, exc.motiv)} disabled={busy}
+                      style={{ ...S.btnS, padding:'1px 7px', fontSize:10.5 }}
+                      title="Confirmare umană (motiv + amprenta sursei curente). Se invalidează singură dacă textul cerinței sau documentul sursă se schimbă.">✓ Confirm exceptarea</button>}
+                  </>}
                   {/* P0.3: starea legaturii. Verde DOAR la 'verificata' la versiunea CURENTA a capitolului. */}
                   {cap && capNr && (() => {
                     const laZi = cap.stare === 'verificata' && cap.verificat_la_versiunea === (capNr.versiune || 1)
@@ -1223,6 +1232,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [cerinte, setCerinte] = useState([])
   const [legaturi, setLegaturi] = useState([])
   const [dovedite, setDovedite] = useState(new Set())
+  const [naIdx, setNaIdx] = useState(() => indexConfirmari([]))   // J02b: confirmări umane cu amprentă
   const [afirmatii, setAfirmatii] = useState([])
   const [regulaCumul, setRegulaCumul] = useState([])   // cerintele care interzic cumulul de functii (B, 14.09)
   const [tipuriAut, setTipuriAut] = useState([])
@@ -1322,7 +1332,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const ids = cer.map(c => c.id)
     if (ids.length) {
       const [rLeg, rAcop] = await Promise.all([
-        supabase.from('ofertare_pt_legaturi').select('id, cerinta_id, capitol_id, fel, motiv, stare, locator_raspuns, verificat_la_versiunea, confirmat_la').in('cerinta_id', ids).limit(10000),
+        supabase.from('ofertare_pt_legaturi').select('id, cerinta_id, capitol_id, fel, motiv, sursa, stare, locator_raspuns, verificat_la_versiunea, confirmat_la').in('cerinta_id', ids).limit(10000),
         supabase.from('ofertare_acoperire').select('cerinta_id').in('cerinta_id', ids).in('status', ['acoperit','acoperit_partener']).limit(10000),
       ])
       if (rLeg.error || rAcop.error) {
@@ -1331,7 +1341,11 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       }
       setLegaturi(rLeg.data || [])
       setDovedite(new Set((rAcop.data || []).map(a => a.cerinta_id)))
-    } else { setLegaturi([]); setDovedite(new Set()) }
+      // J02b: lipsă view (migrare neaplicată) / eroare ⇒ index gol ⇒ nicio exceptare nu e verde (fail-closed).
+      const rNa = await supabase.from('v_ofertare_cerinte_na_stare').select('cerinta_id, tip, valida, revocata_la, motiv, confirmat_la')
+        .in('cerinta_id', ids).limit(10000)
+      setNaIdx(indexConfirmari(rNa.error ? [] : rNa.data))
+    } else { setLegaturi([]); setDovedite(new Set()); setNaIdx(indexConfirmari([])) }
     await loadEchipa(id)
   }
 
@@ -1915,12 +1929,36 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
   const excepta = async (motiv) => {
     if (!sel.size || !motiv) return
     setBusy(true)
-    const { error } = await supabase.from('ofertare_pt_legaturi')
+    const { data: noi, error } = await supabase.from('ofertare_pt_legaturi')
       .insert([...sel].map(id => ({ cerinta_id: id, capitol_id: null, fel: 'exceptat', motiv, sursa: 'om' })))
+      .select('id, cerinta_id')
     setBusy(false)
     if (error) { showToast?.('Excepția a eșuat: ' + error.message, 'err'); return }
-    showToast?.(`${sel.size} cerințe exceptate de la propunere.`, 'ok')
+    // J02b: o singură cerință selectată ⇒ confirmarea umană se face acum (cu amprenta sursei), legată de legătura
+    // TOCMAI creată (runda 2: confirmarea validează o propunere concretă). În bloc NU: fiecare rând se confirmă
+    // explicit din matrice („✓ Confirm exceptarea”), altfel rămâne propunere deschisă.
+    // r6: J02b oprit pe licitație ⇒ regula veche (legătura „exceptat” închide), fără confirmare.
+    const j02b = j02bActivPe(lic)
+    if (j02b && sel.size === 1) await confirmaExceptare({ id: [...sel][0] }, motiv, true, noi?.[0]?.id ?? null)
+    showToast?.(!j02b ? `${sel.size} cerințe exceptate de la propunere.` : sel.size === 1 ? 'Cerință exceptată și confirmată.' : `${sel.size} cerințe marcate „exceptat” — confirmă fiecare rând ca să se închidă.`, 'ok')
     setSel(new Set()); await load(licId)
+  }
+
+  const confirmaExceptare = async (c, motivInitial, faraReload, legaturaId) => {
+    // J02b r2: legătura „exceptat” VĂZUTĂ (cea mai nouă din matrice). Dacă între timp a apărut alta, RPC-ul refuză.
+    const propunere = legaturaId ?? propunereCurenta(legaturi, c.id, TIP_EXCEPTAT_PT)
+    if (propunere == null) { showToast?.('Nu există o legătură „exceptat” de confirmat — reîncarcă matricea.', 'err'); return }
+    const motiv = motivInitial && faraReload ? motivInitial
+      : window.prompt(`Exceptezi cerința #${c.nr_ordine ?? c.id} de la propunere. Motivul (obligatoriu, minim 5 caractere):`, motivInitial || '')
+    if (!motiv || motiv.trim().length < 5) { showToast?.('Motivul are minim 5 caractere — neconfirmat.', 'err'); return }
+    setBusy(true)
+    try {
+      const { data: amp, error: eA } = await supabase.rpc('fn_ofertare_cerinta_amprenta', { p_cerinta_id: c.id })
+      if (eA || !amp) { showToast?.('Amprenta sursei nu s-a putut citi: ' + (eA?.message || 'lipsă'), 'err'); return }
+      const { error } = await supabase.rpc('ofertare_confirma_neaplicabil', { p_cerinta_id: c.id, p_tip: TIP_EXCEPTAT_PT, p_motiv: motiv.trim(), p_amprenta_vazuta: amp, p_propunere_id: propunere })
+      if (error) { showToast?.('Confirmarea nu s-a salvat: ' + error.message, 'err'); return }
+      if (!faraReload) { showToast?.('Exceptare confirmată.', 'ok'); await load(licId) }
+    } finally { setBusy(false) }
   }
 
   const semneaza = async () => {
@@ -2208,6 +2246,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
           filtru={filtru} setFiltru={setFiltru} sel={sel} setSel={setSel}
           onAtribuie={atribuie} onExcepta={excepta}
           onVerifica={verificaLegatura} onBlocheaza={blocheazaLegatura} onDovada={adaugaDovada} busy={busy}
+          naIdx={naIdx} onConfirmaExceptare={confirmaExceptare} j02b={j02bActivPe(lic)}
         />
       </div>
     </div>
