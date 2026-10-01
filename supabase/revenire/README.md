@@ -37,6 +37,15 @@ Reveniri tehnice (rollback) pentru migrările de securitate. **Nu sunt migrări 
 - Un fișier de aici nu are GO de execuție implicit. Se folosește doar la o revenire excepțională, cu decizia lui Răzvan și review, prin procedura din antetul fișierului.
 - Fișierele nu conțin `BEGIN`/`COMMIT`. Operatorul trimite un singur string, iar armarea stă în aceeași tranzacție, legată de `txid_current()`. Exemplu: `BEGIN; SELECT set_config('gazpet.rollback_tehnic_<id>', '<TOKEN>:' || txid_current(), true); <fișier> COMMIT;`.
 - Fiecare revenire refuză armarea persistentă (`pg_db_role_setting`), pornește doar din starea exactă a patch-ului, are postcondiție înainte de COMMIT și se dezarmează la final.
+## 20261001a — J05 gardă derogări Ofertare (NEAPLICAT)
+
+Artefacte de **revenire** (rollback tehnic, oprire controlată). **Nu sunt migrări**: niciun runner nu parcurge directorul ăsta (`supabase db push`, `apply_migration` și harness-urile citesc doar `supabase/migrations/`).
+
+- Fiecare fișier are antetul lui: ce redeschide, cine îl poate cere, cum se armează.
+- Rollback-urile tehnice redeschid o gaură de securitate. Se rulează doar la cererea explicită a lui Răzvan, după decizie și review specifice (Copilot). Existența fișierului sau a comutatorului de armare nu e autorizare.
+- Gestionarul tranzacției e operatorul. Fișierele nu conțin `BEGIN`/`COMMIT` și se trimit într-un singur string: `BEGIN;` + armarea legată de `txid_current()` + fișierul + `COMMIT;`.
+- Directorul poate apărea și pe alte branch-uri, cu alte fișiere. La merge se păstrează toate fișierele, iar README-ul se unește.
+
 ## 20261005a — SEC RSVTI P1b + jurnal A (`20261005a_sec_rsvti_p1b_jurnal_insert_ROLLBACK.sql`)
 Readuce starea 20261003c (poarta RPC rămâne): redeschide scrierea directă `rsvti_*` de către HR și INSERT-ul direct în jurnal. Același statut: fără GO de execuție.
 ```sql
