@@ -98,6 +98,16 @@ Migrarea forward NU se rulează așa: ea trece doar prin `scripts/livrare_migrar
 
 O armare din altă tranzacție (SET de sesiune, `set_config(…, false)`, o tranzacție eșuată, o conexiune refolosită) are alt txid și e refuzată. Armarea persistentă (`ALTER DATABASE/ROLE … SET`) e refuzată. Fiecare fișier verifică înainte de COMMIT că starea rezultată e exact cea țintă; altfel se anulează tot. Detalii: `docs/SECURITATE_PATCH_OFERTARE.md` §7 și §11.
 
+## 20261006a — SEC F1b MAINTAIN (`20261006a_sec_f1b_maintain_revoke_ROLLBACK.sql`, NEAPLICAT)
+Redă MAINTAIN exact pe lista live din 01.10, recitită după #540/#541 (474 relații) + default ACL postgres; **redeschide** gaura. Fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261006a', 'REDESCHIDE_MAINTAIN:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Testat în `scripts/test_sec_f1b_maintain.sh` pasul 5.
+
 ## 20261006b — IBAN garanții (`20261006b_sec_garantii_iban_ROLLBACK.sql`, NEAPLICAT)
 Readuce starea live din 01.10 (SELECT pe tot tabelul `garantii`, view/RPC cu `g.iban` direct, fără `fn_garantie_iban`) și **redeschide expunerea IBAN**. Fără GO de execuție.
 ```sql
