@@ -1,6 +1,9 @@
--- Test local (PG 16 gol, fără Supabase) pentru 20260930e_monitor_egress.sql.
--- Rulare: createdb egress_test && psql -v ON_ERROR_STOP=1 -d egress_test -f supabase/tests/monitor_egress_stub.sql \
---           -f supabase/migrations/20260930e_monitor_egress.sql -f supabase/tests/monitor_egress_test.sql
+-- Test local (PG 17 gol, fără Supabase) pentru 20260930e_monitor_egress.sql.
+-- Rulare: createdb egress_test && psql -v ON_ERROR_STOP=1 -d egress_test -f supabase/tests/monitor_egress_stub.sql
+--         psql -v ON_ERROR_STOP=1 -d egress_test --single-transaction -f supabase/tests/monitor_egress_marcaj_runner.sql \
+--           -f supabase/migrations/20260930e_monitor_egress.sql
+--         psql -v ON_ERROR_STOP=1 -d egress_test -f supabase/tests/monitor_egress_test.sql
+-- (fără marcaj, migrarea trebuie refuzată de garda de livrare)
 \set ON_ERROR_STOP 1
 SET client_min_messages = notice;
 

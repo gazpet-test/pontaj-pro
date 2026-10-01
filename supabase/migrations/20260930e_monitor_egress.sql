@@ -2,8 +2,50 @@
 -- docs/INCIDENT_EGRESS_2026-09-25.md: doc 770, 95 MB, ~16.000 descărcări, 1,6 TB cached egress).
 -- A) jurnal descărcări + detector la 5 min + circuit breaker pe obiect (deblocare doar owner)
 -- B) statistici pentru widget-ul din ERP (doar owner) + alerte cotă ciclu la 50% / 80% din 250 GB.
--- NEAPLICATĂ pe live: se aplică doar cu acordul lui Răzvan (apply_migration). Rollback: 20260930e_monitor_egress_ROLLBACK.sql
-BEGIN;
+-- NEAPLICATĂ pe live (verificat read-only 01.10.2026: niciun obiect storage_egress_* / egress_*, niciun job cron egress_*).
+-- Se livrează DOAR prin scripts/livrare_migrare.sh, cu acordul lui Răzvan. Rollback: 20260930e_monitor_egress_ROLLBACK.sql
+-- Tranzacția: UN SINGUR gestionar = runnerul (psql --single-transaction). Fișierul NU conține BEGIN/COMMIT.
+-- Garda de livrare (start + final) refuză rularea fără marcajul runnerului legat de txid (psql -f / MCP nu o pot aplica).
+-- Precondiții fail-closed (secțiunea 0) + postcondiții (secțiunea final) — orice abatere anulează tot.
+DO $livrare_start$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260930e_monitor_egress:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260930e: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  END IF;
+END $livrare_start$;
+
+-- ── 0. Precondiții fail-closed ──────────────────────────────────────────────────────────
+DO $pre$
+DECLARE v_n integer;
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Precondiție 0a: migrarea rulează ca postgres (current_user = %)', current_user;
+  END IF;
+  -- 0b. nimic din monitor nu există deja (aplicare manuală parțială ⇒ se reanalizează, nu se suprascrie)
+  SELECT count(*) INTO v_n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname IN ('storage_egress_config','storage_descarcari_jurnal','storage_obiecte_blocate','storage_egress_alerte');
+  IF v_n IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'Precondiție 0b: % tabele storage_egress_* există deja — se reanalizează', v_n; END IF;
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname LIKE 'egress\_%';
+  IF v_n IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'Precondiție 0b: % funcții public.egress_* există deja — se reanalizează', v_n; END IF;
+  -- 0c. pg_cron prezent (detectorul e rostul migrării; fără cron ar rămâne doar jurnal, deci refuz explicit)
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'cron') THEN
+    RAISE EXCEPTION 'Precondiție 0c: schema cron (pg_cron) lipsește';
+  END IF;
+  SELECT count(*) INTO v_n FROM cron.job WHERE jobname IN ('egress_detector_5min', 'egress_jurnal_purge');
+  IF v_n IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'Precondiție 0c: % joburi cron egress_* există deja — se reanalizează', v_n; END IF;
+  -- 0d. dependențe: profiles.is_owner, notifications(profile_id,type,modul,title,message,link_to), funcția auth.uid()
+  SELECT count(*) INTO v_n FROM information_schema.columns
+   WHERE table_schema = 'public' AND ((table_name = 'profiles' AND column_name IN ('id','is_owner'))
+      OR (table_name = 'notifications' AND column_name IN ('profile_id','type','modul','title','message','link_to')));
+  IF v_n IS DISTINCT FROM 8 THEN RAISE EXCEPTION 'Precondiție 0d: coloanele profiles/notifications așteptate lipsesc (% din 8)', v_n; END IF;
+  IF to_regprocedure('auth.uid()') IS NULL THEN RAISE EXCEPTION 'Precondiție 0d: auth.uid() lipsește'; END IF;
+  -- 0e. notificările cu modul 'general' sunt permise de CHECK-ul existent (altfel detectorul ar pica la prima alertă)
+  SELECT count(*) INTO v_n FROM pg_constraint
+   WHERE conrelid = 'public.notifications'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%modul%'
+     AND pg_get_constraintdef(oid) NOT LIKE '%''general''%';
+  IF v_n IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'Precondiție 0e: CHECK-ul pe notifications.modul nu permite ''general'''; END IF;
+END $pre$;
 
 -- ── Config (un singur rând) ──────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.storage_egress_config (
@@ -60,7 +102,7 @@ ALTER TABLE public.storage_descarcari_jurnal  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.storage_obiecte_blocate    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.storage_egress_alerte      ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON public.storage_egress_config, public.storage_descarcari_jurnal, public.storage_obiecte_blocate, public.storage_egress_alerte FROM PUBLIC, anon;
+REVOKE ALL ON public.storage_egress_config, public.storage_descarcari_jurnal, public.storage_obiecte_blocate, public.storage_egress_alerte FROM PUBLIC, anon, authenticated;  -- default ACL Supabase dă arwdxtm și lui authenticated; rămâne doar SELECT
 GRANT SELECT ON public.storage_egress_config, public.storage_descarcari_jurnal, public.storage_obiecte_blocate, public.storage_egress_alerte TO authenticated;
 GRANT ALL ON public.storage_egress_config, public.storage_descarcari_jurnal, public.storage_obiecte_blocate, public.storage_egress_alerte TO service_role;
 GRANT USAGE ON SEQUENCE public.storage_descarcari_jurnal_id_seq, public.storage_egress_alerte_id_seq TO service_role;
@@ -248,4 +290,55 @@ DO $$ BEGIN
   END IF;
 END $$;
 
-COMMIT;
+
+-- ── Postcondiții — înainte de înregistrare și de COMMIT-ul runnerului (orice abatere ⇒ se anulează tot) ──
+DO $post$
+DECLARE v_n integer;
+BEGIN
+  -- p1. 4 tabele, toate cu RLS, fiecare cu exact politica _owner_select; anon fără niciun drept; authenticated doar SELECT
+  SELECT count(*) INTO v_n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relrowsecurity
+     AND c.relname IN ('storage_egress_config','storage_descarcari_jurnal','storage_obiecte_blocate','storage_egress_alerte');
+  IF v_n IS DISTINCT FROM 4 THEN RAISE EXCEPTION 'Postcondiție p1: % din 4 tabele cu RLS', v_n; END IF;
+  SELECT count(*) INTO v_n FROM pg_policies
+   WHERE schemaname = 'public' AND tablename IN ('storage_egress_config','storage_descarcari_jurnal','storage_obiecte_blocate','storage_egress_alerte');
+  IF v_n IS DISTINCT FROM 4 THEN RAISE EXCEPTION 'Postcondiție p1: % politici (așteptat 4, câte una SELECT owner)', v_n; END IF;
+  SELECT count(*) INTO v_n
+    FROM unnest(ARRAY['storage_egress_config','storage_descarcari_jurnal','storage_obiecte_blocate','storage_egress_alerte']) t,
+         unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) pr
+   WHERE has_table_privilege('anon', 'public.' || t, pr)
+      OR (pr <> 'SELECT' AND has_table_privilege('authenticated', 'public.' || t, pr));
+  IF v_n IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'Postcondiție p1: % drepturi în plus pe tabele pentru anon/authenticated', v_n; END IF;
+  -- p2. config: exact un rând
+  SELECT count(*) INTO v_n FROM public.storage_egress_config;
+  IF v_n IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'Postcondiție p2: storage_egress_config are % rânduri (așteptat 1)', v_n; END IF;
+  -- p3. 9 funcții; cele SECURITY DEFINER au search_path fixat
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'egress\_%';
+  IF v_n IS DISTINCT FROM 8 THEN RAISE EXCEPTION 'Postcondiție p3: % funcții egress_* (așteptat 8)', v_n; END IF;
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname LIKE 'egress\_%' AND p.prosecdef
+     AND NOT coalesce(p.proconfig @> ARRAY['search_path=public, pg_temp'], false);
+  IF v_n IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'Postcondiție p3: % funcții SECURITY DEFINER fără search_path fixat', v_n; END IF;
+  -- p4. nicio funcție egress_* executabilă de anon/PUBLIC; cele de scriere/poartă NU sunt executabile de authenticated
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname LIKE 'egress\_%'
+     AND (has_function_privilege('anon', p.oid, 'EXECUTE')
+       OR (p.proname IN ('egress_notifica_owner','egress_obiect_blocat','egress_log_descarcare','egress_detector')
+           AND has_function_privilege('authenticated', p.oid, 'EXECUTE')));
+  IF v_n IS DISTINCT FROM 0 THEN RAISE EXCEPTION 'Postcondiție p4: % funcții egress_* executabile de anon (sau de authenticated, pe cele interne)', v_n; END IF;
+  IF NOT has_function_privilege('service_role', 'public.egress_log_descarcare(text,text,bigint,text,bigint)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.egress_obiect_blocat(text,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'Postcondiție p4: service_role nu poate executa poarta/jurnalul (edge + worker ar rămâne fail-open permanent)';
+  END IF;
+  -- p5. exact cele 2 joburi cron
+  SELECT count(*) INTO v_n FROM cron.job WHERE jobname IN ('egress_detector_5min', 'egress_jurnal_purge') AND active;
+  IF v_n IS DISTINCT FROM 2 THEN RAISE EXCEPTION 'Postcondiție p5: % din 2 joburi cron egress active', v_n; END IF;
+  RAISE NOTICE 'Livrare 20260930e: monitor egress creat (4 tabele, 8 funcții, 2 joburi cron)';
+END $post$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260930e_monitor_egress:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260930e: garda de livrare (final) — marcajul s-a pierdut în timpul migrării; se anulează tot';
+  END IF;
+END $livrare_final$;
