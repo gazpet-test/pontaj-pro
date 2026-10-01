@@ -11,6 +11,7 @@ import WordExtractor from 'https://esm.sh/word-extractor@1.0.4'  // fără ?targ
 import { Buffer } from 'node:buffer'
 // R6 (26.09): PDF-urile peste pragul edge-ului (60 MB, ex. 770 Huedin) — descărcare în flux + pdftotext pe felii
 import { cuIncercare, cuTermen, gardaIncearca, incercareGarda, mesajEroare, metaObiect, opritDeGarda, sha256Hex, TERMEN_LOCAL_MS, type Incercare, type MetaObiect } from './garda.ts'   // GARDA (docs/INGEST_GARDA.md)
+import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md) — APLICARE DUPĂ FREEZE
 import { MAX_TEXT, MARCAJ_PREA_MARE, PRAG_MARE, citesteMare, compuneText, decizieCitireMare, esteMare, imparteText, mesajNecitite, trecereBlocata } from './citire_mare.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
@@ -238,7 +239,7 @@ async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | nu
 async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: MetaObiect | null, cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void): Promise<string> {
   const off = Math.max(0, Number(doc.pagina_offset) || 0)
   const termen = Date.now() + TERMENE.lucruLocalMs   // runda 3 (J2): tot lucrul local (download, pdfinfo, pdftotext) sub lease
-  const { data: blob, error: dlErr } = await cuTermen(supabase.storage.from(BUCKET).download(doc.fisier_path), termen - Date.now(), 'download') as any
+  const { data: blob, error: dlErr } = await cuTermen(descarcaCuJurnal(supabase, BUCKET, doc.fisier_path, 'nas:ingest', doc.id), termen - Date.now(), 'download') as any   // garda → poarta egress (#543) → descărcare
   if (dlErr || !blob) {
     const m = 'download: ' + (dlErr?.message || 'lipsă')
     await inc.inchide({ rezultat: 'esec', eroare: m, doc: { status_procesare: 'eroare', eroare: m.slice(0, 500) } })
@@ -371,7 +372,7 @@ async function citesteWordLicitatie(supabase: Supa, licId: number): Promise<numb
     try {
       await cuIncercare(inc, async () => {
         const termen = Date.now() + TERMENE.lucruLocalMs
-        const { data: blob, error } = await cuTermen(supabase.storage.from(BUCKET).download(d.fisier_path), termen - Date.now(), 'download word') as any
+        const { data: blob, error } = await cuTermen(descarcaCuJurnal(supabase, BUCKET, d.fisier_path, 'nas:ingest-word', d.id), termen - Date.now(), 'download word') as any
         if (error || !blob) { await inc.inchide({ rezultat: 'esec', eroare: 'download: ' + (error?.message ?? 'lipsă') }); log(`#${licId} word ${d.id}: download ${error?.message ?? 'lipsă'}`); return }
         const octeti = new Uint8Array(await cuTermen(blob.arrayBuffer() as Promise<ArrayBuffer>, termen - Date.now(), 'download word (corp)'))
         const eDocx = /\.docx$/i.test(d.nume_original || '')
