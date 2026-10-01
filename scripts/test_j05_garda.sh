@@ -156,6 +156,11 @@ post = m.index('DO $post$')
 anc2 = "  EXECUTE v_q INTO r;\n"
 i = m.index(anc2, post) + len(anc2)
 open(sys.argv[2] + '/eroare_in_postconditie.sql', 'w', encoding='utf-8').write(m[:i] + "  PERFORM 1/0;  -- MUTANT\n" + m[i:])
+anc3 = "END $pre$;\n"
+assert m.count(anc3) == 1
+drift = ("CREATE OR REPLACE FUNCTION public.fn_ofertare_j02b_sens_unic() RETURNS trigger LANGUAGE plpgsql "
+         "SET search_path TO 'public', 'pg_temp' AS $mut$BEGIN NEW.derogare_motiv := 'ocolire J05'; RETURN NEW; END$mut$;  -- MUTANT drift după PRE\n")
+open(sys.argv[2] + '/drift_j02b_intre_pre_post.sql', 'w', encoding='utf-8').write(m.replace(anc3, anc3 + drift))
 PY
 
 # ── S. STATIC ──────────────────────────────────────────────────────────────────
@@ -297,6 +302,7 @@ CAZURI_PRE=(
   "@GARDA_FARA_TRIGGER|nici live 30.09, nici patch|stare mixtă: funcția gărzii (patch) fără trigger"
   "ALTER ROLE anon INHERIT; GRANT service_role TO anon|Postcondiție 20261001a: o funcție de trigger|privilegiu MOȘTENIT: anon ajunge să execute poarta"
   "CREATE FUNCTION public.fn_ofertare_derogare_garda_j05() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$BEGIN RETURN NEW; END\$f\$; REVOKE ALL ON FUNCTION public.fn_ofertare_derogare_garda_j05() FROM PUBLIC; CREATE TRIGGER a00_ofertare_derogare_garda_j05 BEFORE UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_derogare_garda_j05()|nici live 30.09, nici patch|altă versiune a gărzii, cu trigger"
+  "CREATE OR REPLACE FUNCTION public.fn_ofertare_responsabil_setat_de() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp' AS \$f\$BEGIN IF TG_OP = 'INSERT' THEN NEW.responsabil_setat_de := CASE WHEN NEW.responsabil_id IS NULL THEN NULL ELSE auth.uid() END; ELSIF NEW.responsabil_id IS DISTINCT FROM OLD.responsabil_id THEN NEW.responsabil_setat_de := auth.uid(); ELSE NEW.responsabil_setat_de := OLD.responsabil_setat_de; END IF; NEW.derogare_motiv := 'ocolire J05'; RETURN NEW; END\$f\$|Precondiție 20261001a: funcțiile|J02b: fn_ofertare_responsabil_setat_de cu corp alterat (scrie derogare_motiv după gardă)"
 )
 extinde_pert() {  # @GARDA_FARA_TRIGGER = aplică funcția gărzii exact ca în patch, fără trigger
   if [ "$1" = "@GARDA_FARA_TRIGGER" ]; then
@@ -309,6 +315,10 @@ for c in "${CAZURI_PRE[@]}"; do
   negativ "$MIG" "$(extinde_pert "$pert")" "$frag" "$desc" || { cat "$OUT/pre.out" >&2; esec "precondiția nu a refuzat corect: $desc"; }
   ok "$desc → refuz, nimic aplicat"
 done
+# Re-review Copilot (NO-GO b83b7d7): drift pe corpul unei funcții-trigger J02b DUPĂ PRE, înainte de POST ⇒ POST refuză, rollback integral.
+negativ "$OUT/mut/drift_j02b_intre_pre_post.sql" "SELECT 1" "Postcondiție 20261001a: starea rezultată" "drift fn_ofertare_j02b_sens_unic între PRE și POST" \
+  || { cat "$OUT/pre.out" >&2; esec "POST nu a refuzat drift-ul J02b între PRE și POST"; }
+ok "drift J02b (fn_ofertare_j02b_sens_unic) între PRE și POST → POST refuză, nimic aplicat"
 
 # ── 5. ROLLBACK ────────────────────────────────────────────────────────────────
 pas "5. ROLLBACK (supabase/revenire): armare legată de txid, testată într-o singură sesiune psql"

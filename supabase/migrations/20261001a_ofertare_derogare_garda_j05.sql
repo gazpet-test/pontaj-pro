@@ -31,6 +31,8 @@
 --   (J02b r6: comutator j02b_activ + confirmare umană „nu se aplică”; ramurile de derogare și auditul neschimbate) și
 --   două triggere J02b noi pe ofertare_licitatii (trg_ofertare_j02b_sens_unic, trg_ofertare_responsabil_setat_de,
 --   BEFORE INSERT OR UPDATE, type=23). Garda rămâne PRIMA (a00_ofertare_derogare_garda_j05 < a00_… < trg_…, ordine C).
+--   Re-review Copilot (NO-GO b83b7d7): v_q amprentează și funcțiile-trigger J02b care rulează DUPĂ gardă
+--   (fn_ofertare_responsabil_setat_de d293542b…, fn_ofertare_j02b_sens_unic aa3c10df…), în PRE, POST și ROLLBACK.
 --   Restul amprentelor (RPC, a00, acces, owner, imuabil, CHECK, coloane) = neschimbate. Detalii: J05_DELTA_COPILOT.md.
 -- Ce NU face (docs/AUDIT_OFERTARE_V2/J05_GARDA_PATCH.md): nu atinge date, poarta, RPC-ul, auditul;
 -- GOL: retragerea / schimbarea motivului de către OWNER prin UPDATE direct nu lasă audit; INSERT neacoperit;
@@ -70,6 +72,8 @@ WITH ams(fn, sig, asteptat) AS (VALUES
   ('acces',    'public.fn_are_acces_ofertare()',                         'src=429d28e2a61fb24c8009d67050c16c85 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=sql vol=s strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=boolean acl={authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
   ('owner',    'public.fn_gate_depunere_derogare_owner()',               'src=e97f091143d6b492b6fdedf03dd283ea secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=sql vol=s strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=boolean acl={postgres=X/postgres,service_role=X/postgres}'),
   ('imuabil',  'public.fn_ofertare_derogari_audit_imuabil()',            'src=22bab03fb862ae7fbd95538aa4bd6b28 secdef=f cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}'),
+  ('j02b_rs',  'public.fn_ofertare_responsabil_setat_de()',             'src=d293542bb355ab377b4b68d5581692f0 secdef=f cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}'),
+  ('j02b_su',  'public.fn_ofertare_j02b_sens_unic()',                   'src=aa3c10df0e83a206b3490c7250c9580c secdef=f cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}'),
   ('garda',    'public.fn_ofertare_derogare_garda_j05()',                'src=f84c9aeeb80fd990ee6f5110865a1aac secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}')
 ), fn AS (
   SELECT a.fn, a.asteptat,
@@ -113,7 +117,8 @@ BEGIN
   -- 1. Funcțiile de care depinde garda: exact live 30.09 (md5(prosrc) + atribute + ACL), NULL-safe.
   IF (r.fn_ok ->> 'gate') IS DISTINCT FROM 'true' OR (r.fn_ok ->> 'rpc') IS DISTINCT FROM 'true'
      OR (r.fn_ok ->> 'a00') IS DISTINCT FROM 'true' OR (r.fn_ok ->> 'acces') IS DISTINCT FROM 'true'
-     OR (r.fn_ok ->> 'owner') IS DISTINCT FROM 'true' OR (r.fn_ok ->> 'imuabil') IS DISTINCT FROM 'true' THEN
+     OR (r.fn_ok ->> 'owner') IS DISTINCT FROM 'true' OR (r.fn_ok ->> 'imuabil') IS DISTINCT FROM 'true'
+     OR (r.fn_ok ->> 'j02b_rs') IS DISTINCT FROM 'true' OR (r.fn_ok ->> 'j02b_su') IS DISTINCT FROM 'true' THEN
     RAISE EXCEPTION 'Precondiție 20261001a: funcțiile de care depinde garda diferă de starea auditată 30.09. Recitește live și reauditează.'
       USING ERRCODE = '55000', DETAIL = coalesce(r.fn_dif, '-');
   END IF;
@@ -205,6 +210,8 @@ WITH ams(fn, sig, asteptat) AS (VALUES
   ('acces',    'public.fn_are_acces_ofertare()',                         'src=429d28e2a61fb24c8009d67050c16c85 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=sql vol=s strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=boolean acl={authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
   ('owner',    'public.fn_gate_depunere_derogare_owner()',               'src=e97f091143d6b492b6fdedf03dd283ea secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=sql vol=s strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=boolean acl={postgres=X/postgres,service_role=X/postgres}'),
   ('imuabil',  'public.fn_ofertare_derogari_audit_imuabil()',            'src=22bab03fb862ae7fbd95538aa4bd6b28 secdef=f cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}'),
+  ('j02b_rs',  'public.fn_ofertare_responsabil_setat_de()',             'src=d293542bb355ab377b4b68d5581692f0 secdef=f cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}'),
+  ('j02b_su',  'public.fn_ofertare_j02b_sens_unic()',                   'src=aa3c10df0e83a206b3490c7250c9580c secdef=f cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}'),
   ('garda',    'public.fn_ofertare_derogare_garda_j05()',                'src=f84c9aeeb80fd990ee6f5110865a1aac secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres}')
 ), fn AS (
   SELECT a.fn, a.asteptat,
@@ -247,7 +254,7 @@ BEGIN
   EXECUTE v_q INTO r;
   -- Postcondiție ÎNAINTE de înregistrare / COMMIT-ul runnerului: dacă pică, se anulează tot (inclusiv garda).
   IF (SELECT bool_and(v::boolean) FROM jsonb_each_text(r.fn_ok) AS e(k, v)) IS DISTINCT FROM true
-     OR (SELECT count(*) FROM jsonb_object_keys(r.fn_ok)) IS DISTINCT FROM 7::bigint
+     OR (SELECT count(*) FROM jsonb_object_keys(r.fn_ok)) IS DISTINCT FROM 9::bigint
      OR r.trg_licitatii IS DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=;trg_ofertare_j02b_sens_unic:public.fn_ofertare_j02b_sens_unic type=23 en=O qual_null=t attr=;trg_ofertare_responsabil_setat_de:public.fn_ofertare_responsabil_setat_de type=23 en=O qual_null=t attr='
      OR r.trg_audit IS DISTINCT FROM 'trg_ofertare_derogari_audit_imuabil:public.fn_ofertare_derogari_audit_imuabil type=58 en=O qual_null=t attr='
      OR r.chk IS DISTINCT FROM 'c|{3}|ccb3f643d993ae9d68284aca20a58366' THEN
