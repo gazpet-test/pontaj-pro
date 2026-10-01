@@ -27,6 +27,12 @@
 --   r8: cheile persoanei (garda, trg_employees_persoana_lock, trg_hr_employees_private_persoana_lock) se RECALCULEAZĂ după fiecare
 --       lock până la punct fix (identitate schimbată concurent ⇒ chei noi ținute; fără punct fix ⇒ 40001), toate trei cu cheia
 --       gazpet.persoana.emp:<id>; sweep-ul așteaptă doar la primul element ținut, apoi NOWAIT + „amanat_lock” (fără ciclu cu HR).
+--   r9: modul fără așteptare acoperă TOT elementul (și scrierile din fn_cont_inchide: auth.users, module, șantiere, tokens, sesiuni,
+--       intrările din coadă — preblocate NOWAIT); handlerul de eroare care reușește marchează v_tine (ține profil + intrare) și
+--       preblochează intrarea NOWAIT; punctul fix al buclelor de chei e un boolean pus doar la constatare (40001 real, nu tautologie).
+--       Neblocant, notat: contenția repetată pe același element amână nelimitat, fără contor / alertă (coloană nouă — nu în r9).
+--   r9 (P1-d): fișele istorice cu CNP comun nu se mai închid din triggerul fișei care se încheie (garda era a ei), ci intră în coadă
+--       ca elemente proprii, fiecare cu garda ei (sweep). Primitivele fn_cont_persoana_chei / fn_cont_lock_chei sunt definite în c (P1-c).
 --   * fn_pgrst_pre_request     — hook PostgREST pentru revocarea EFECTIVĂ a JWT-urilor deja emise;
 --                                CREAT, dar NEACTIVAT (activarea = ALTER ROLE authenticator, cu acordul lui Răzvan)
 --   * fn_cont_restaureaza      — revenire din jurnal, EXCLUSIV owner, cu previzualizare (p_simulare)
@@ -55,7 +61,7 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION 'Precondiție: migrarea rulează ca postgres (current_user = %)', current_user;
   END IF;
-  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_identitate_om','fn_identitate_privilegiata','fn_nume_familie','fn_cont_notifica_owneri']::text[]) f
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_identitate_om','fn_identitate_privilegiata','fn_nume_familie','fn_cont_notifica_owneri','fn_cont_persoana_chei','fn_cont_lock_chei']::text[]) f
    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Precondiție: lipsesc funcțiile migrării anterioare: %', v_lipsa; END IF;
   -- r3: nu doar numele — triggerul S-A e activ (O), cheamă exact funcția S-A și are tipul live (19 = BEFORE UPDATE FOR EACH ROW)
@@ -85,7 +91,10 @@ BEGIN
                  ('fn_identitate_eticheta', 'fn_identitate_eticheta()', '876a28f98d4f4aee76a0580dab4ecc51'),
                  ('fn_nume_familie', 'fn_nume_familie(text)', 'd45994c4bc8aaf51da653578c1cf86cf'),
                  ('fn_nume_cuvinte', 'fn_nume_cuvinte(text)', '8ec2a2ee5b6313ab55ba9ff1a1c6c998'),
-                 ('fn_cont_notifica_owneri', 'fn_cont_notifica_owneri(text,text,text,text)', 'ecfb5fa1d44c93c57df39aed1f5c9a5e')) AS w(f, sig, m)
+                 ('fn_cont_notifica_owneri', 'fn_cont_notifica_owneri(text,text,text,text)', 'ecfb5fa1d44c93c57df39aed1f5c9a5e'),
+                 -- r9 (P1-c): primitivele de serializare sunt ale lui c; d le reafirmă cu text identic (md5 verificat aici)
+                 ('fn_cont_persoana_chei', 'fn_cont_persoana_chei(text[],text,text)', '2687f39893a8ad113719facaffc67f6d'),
+                 ('fn_cont_lock_chei', 'fn_cont_lock_chei(text[])', 'db9b9899dbbece0ea56d6f0a71361aff')) AS w(f, sig, m)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m AND p.prosecdef
@@ -293,6 +302,8 @@ REVOKE ALL ON FUNCTION public.fn_cont_persoana_chei(text[], text, text) FROM PUB
 
 -- Ia lock-urile în ordinea valorii hash (aceeași ordine globală în orice tranzacție → două tranzacții care își iau cheile
 -- dintr-o dată nu pot forma un ciclu). Reentrant: o cheie deja ținută de tranzacție nu mai blochează.
+-- r9 (P1-c): fn_cont_persoana_chei și fn_cont_lock_chei sunt definite în c (A.1b) și REAFIRMATE aici cu text identic (CREATE OR
+-- REPLACE idempotent); rollback-ul d NU le șterge (le șterge rollback-ul c).
 CREATE OR REPLACE FUNCTION public.fn_cont_lock_chei(p_chei text[])
 RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
@@ -374,6 +385,7 @@ AS $fn$
 DECLARE
   v_chei    text[];
   v_blocate text[] := '{}';
+  v_fix     boolean := false;
   v_cnp     text[];
   v_alt     integer;
 BEGIN
@@ -381,6 +393,10 @@ BEGIN
   --    nume nou) — fiecare citire e o instrucțiune nouă (instantaneu nou), până la PUNCT FIX (toate cheile curente ținute).
   -- r8 (P1-1 Jakarinos pe b916970): bucla veche ieșea după 3 treceri și fără punct fix (cheile curente neținute ⇒ garda
   --    continua pe o identitate neblocată). Acum: 5 treceri; dacă identitatea se tot schimbă ⇒ 40001 (de reîncercat).
+  -- r9 (observația Jakarinos pe 14dc54b): verificarea finală „v_chei <@ v_blocate” era TAUTOLOGICĂ (după a 5-a trecere v_chei
+  --    tocmai fusese adăugat în v_blocate ⇒ 40001 nu se ridica niciodată; garda continua fără să fi recitit cheile după ultimul
+  --    lock). Acum punctul fix e un boolean pus EXCLUSIV la constatarea lui (cheile recitite ⊆ cele blocate ÎNAINTE de adăugare);
+  --    5 lock-uri fără constatare ⇒ 40001.
   FOR i IN 1..5 LOOP
     -- r6 (D-RACE-CNP-NULL): + cheia stabilă a fișei (gazpet.persoana.emp:<id>), luată și de triggerul pe
     -- hr_employees_private ⇒ un CNP care apare (NULL → X) în datele personale se serializează cu garda, chiar dacă fișa
@@ -388,11 +404,14 @@ BEGIN
     SELECT public.fn_cont_persoana_chei(public.fn_cont_persoana_cnp(e.id), e.name, e.email) || ('gazpet.persoana.emp:' || p_employee_id)
       INTO v_chei
       FROM public.employees e WHERE e.id = p_employee_id;
-    EXIT WHEN v_chei IS NULL OR v_chei <@ v_blocate;
+    IF v_chei IS NULL OR v_chei <@ v_blocate THEN
+      v_fix := true;                                 -- punct fix constatat: toate cheile CURENTE erau deja ținute
+      EXIT;
+    END IF;
     PERFORM public.fn_cont_lock_chei(v_chei);
     v_blocate := v_blocate || v_chei;
   END LOOP;
-  IF v_chei IS NOT NULL AND NOT (v_chei <@ v_blocate) THEN
+  IF NOT v_fix THEN
     RAISE EXCEPTION 'Identitatea fișei #% se schimbă concurent (CNP / nume / email): garda nu a ajuns la punct fix — reîncearcă', p_employee_id
       USING ERRCODE = '40001';
   END IF;
@@ -441,6 +460,7 @@ DECLARE
   v_priv    text;
   v_chei    text[];
   v_blocate text[] := '{}';
+  v_fix     boolean := false;
 BEGIN
   IF TG_OP = 'UPDATE'
      AND NEW.cnp IS NOT DISTINCT FROM OLD.cnp AND NEW.name IS NOT DISTINCT FROM OLD.name AND NEW.email IS NOT DISTINCT FROM OLD.email
@@ -449,6 +469,7 @@ BEGIN
   END IF;
   -- r8 (P1-1): rândul employees e deja ținut de UPDATE (OLD / NEW sunt versiunea curentă), dar CNP-ul din datele personale se
   -- citește fără lock ⇒ se recitește DUPĂ fiecare lock, până la punct fix (aceeași buclă ca în garda / triggerul hr_employees_private).
+  -- r9 (observația Jakarinos): punctul fix = boolean pus doar la constatare (vezi fn_cont_garda_persoana); 5 lock-uri fără ⇒ 40001.
   FOR i IN 1..5 LOOP
     IF TG_OP = 'UPDATE' THEN
       SELECT public.fn_cont_cnp_normalizat(hp.cnp) INTO v_priv FROM public.hr_employees_private hp WHERE hp.employee_id = NEW.id;
@@ -459,11 +480,14 @@ BEGIN
     IF TG_OP = 'UPDATE' THEN
       v_chei := v_chei || public.fn_cont_persoana_chei(ARRAY[public.fn_cont_cnp_normalizat(OLD.cnp)], OLD.name, OLD.email);
     END IF;
-    EXIT WHEN v_chei <@ v_blocate;
+    IF v_chei <@ v_blocate THEN
+      v_fix := true;
+      EXIT;
+    END IF;
     PERFORM public.fn_cont_lock_chei(v_chei);
     v_blocate := v_blocate || v_chei;
   END LOOP;
-  IF NOT (v_chei <@ v_blocate) THEN
+  IF NOT v_fix THEN
     RAISE EXCEPTION 'Identitatea fișei #% se schimbă concurent: lock-ul persoanei nu a ajuns la punct fix — reîncearcă', NEW.id
       USING ERRCODE = '40001';
   END IF;
@@ -492,6 +516,7 @@ DECLARE
   v_fixe    text[];
   v_chei    text[];
   v_blocate text[] := '{}';
+  v_fix     boolean := false;
 BEGIN
   v_fixe := public.fn_cont_persoana_chei(
     ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN public.fn_cont_cnp_normalizat(NEW.cnp) END,
@@ -511,11 +536,14 @@ BEGIN
       FROM public.employees e
       CROSS JOIN LATERAL unnest(public.fn_cont_persoana_chei(NULL, e.name, e.email)) k
      WHERE e.id IN (CASE WHEN TG_OP <> 'DELETE' THEN NEW.employee_id END, CASE WHEN TG_OP <> 'INSERT' THEN OLD.employee_id END);
-    EXIT WHEN v_chei <@ v_blocate;
+    IF v_chei <@ v_blocate THEN
+      v_fix := true;                                 -- r9: punct fix constatat (nu tautologia „tocmai adăugat ⊆ blocate”)
+      EXIT;
+    END IF;
     PERFORM public.fn_cont_lock_chei(v_chei);
     v_blocate := v_blocate || v_chei;
   END LOOP;
-  IF NOT (v_chei <@ v_blocate) THEN
+  IF NOT v_fix THEN
     RAISE EXCEPTION 'Identitatea fișei (nume / email) se schimbă concurent: lock-ul persoanei nu a ajuns la punct fix — reîncearcă'
       USING ERRCODE = '40001';
   END IF;
@@ -591,9 +619,32 @@ DECLARE
   v_snap     jsonb;
   v_set      text;
   v_amanat   boolean := false;
+  -- r9 (P2-2 Jakarinos pe 14dc54b): modul „fără așteptare” al sweep-ului (gazpet.cont_lock_nowait = on, pus de
+  -- fn_conturi_inchideri_sweep cât timp ține lock-uri de la un element anterior) acoperea fișa / cheile / profilul / intrarea,
+  -- dar NU scrierile de aici (module, șantiere, UPDATE auth.users, refresh tokens, sesiuni, alte intrări din coadă): sweep-ul
+  -- trecea de NOWAIT-uri și apoi AȘTEPTA la UPDATE-ul pe auth.users (ex. rând ținut de GoTrue) ținând lock-urile lui A —
+  -- cu cascada FK profiles → auth.users (ștergere GoTrue) = ciclu. În modul fără așteptare, rândurile pe care le scrie
+  -- închiderea se PREBLOCHEAZĂ cu NOWAIT, în ordinea pachetului (profil → auth.users → copii); orice contenție = 55P03 ⇒
+  -- subtranzacția elementului se anulează ÎNTREAGĂ în sweep (amanat_lock), nimic scris. În afara sweep-ului (trigger HR,
+  -- owner, restaurare) setarea e off ⇒ comportament neschimbat (așteaptă).
+  v_nowait   boolean := COALESCE(current_setting('gazpet.cont_lock_nowait', true), '') = 'on';
 BEGIN
-  SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;   -- serializează pe profil
+  IF v_nowait THEN
+    SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE NOWAIT;   -- serializează pe profil (fără așteptare)
+  ELSE
+    SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;          -- serializează pe profil
+  END IF;
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+  IF v_nowait THEN
+    -- r9: preblocare NOWAIT a tot ce scrie închiderea (profilul e deja ținut): rândul de logare, drepturile pe module /
+    -- șantiere, refresh tokens, sesiuni, intrările deschise din coadă ale contului. Un rând ținut de altă tranzacție ⇒ 55P03.
+    PERFORM 1 FROM auth.users u WHERE u.id = p_profile_id FOR NO KEY UPDATE NOWAIT;
+    PERFORM 1 FROM public.user_module_access m WHERE m.profile_id = p_profile_id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.profile_sites s WHERE s.profile_id = p_profile_id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM auth.refresh_tokens rt WHERE rt.user_id = p_profile_id::text FOR UPDATE NOWAIT;
+    PERFORM 1 FROM auth.sessions se WHERE se.user_id = p_profile_id FOR UPDATE NOWAIT;
+    PERFORM 1 FROM public.conturi_inchideri_coada c WHERE c.profile_id = p_profile_id AND c.rezolvat_la IS NULL FOR UPDATE NOWAIT;
+  END IF;
 
   -- r7 (P1-D, Jakarinos pe 0456f3b): pe căile AUTOMATE (trigger / coadă) decizia s-a luat pe un instantaneu dinaintea
   -- lock-ului. Aici, SUB lock, legătura trebuie să fie încă cea pe care s-a decis (profilul mutat de owner pe altă fișă
@@ -761,6 +812,22 @@ BEGIN
                         WHERE e.id <> NEW.id AND public.fn_cont_persoana_cnp(e.id) && v_cnp
                           AND e.active IS NOT TRUE AND e.termination_date IS NOT NULL AND e.termination_date <= CURRENT_DATE))
                ORDER BY p.id LOOP
+      -- r9 (P1-d Copilot „gardă tranzitivă pe CNP”): garda de mai sus e a lui NEW.id, nu a fișelor ISTORICE cu CNP comun. Contraexemplu
+      -- fără concurență: A (se încheie) CNP {X}; B istorică, inactivă, cu profil, CNP {X, Y} (fișă + date personale); C activă CNP {Y}:
+      -- garda(A) = NULL, dar garda(B) = alt_contract_activ:C ⇒ profilul lui B NU trebuie închis aici. garda(B) în buclă ar inversa
+      -- ordinea lock-urilor (fișa B nu e ținută). Fix: fișele istorice ale persoanei se pun în COADĂ, fiecare element propriu
+      -- (sweep: fișa r.emp FOR UPDATE → garda(r.emp) → profil → intrare), decizia se ia cu garda LOR.
+      IF r0.emp IS DISTINCT FROM NEW.id THEN
+        BEGIN
+          PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, 'programata',
+            format('Contract încheiat la %s (fișa #%s %s) · fișă istorică #%s a aceleiași persoane (CNP comun): se verifică cu garda ei, din coadă',
+                   to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name, r0.emp),
+            CURRENT_DATE);
+        EXCEPTION WHEN OTHERS THEN
+          RAISE WARNING 'fn_employees_ciclu_cont coadă fișă istorică (%): % [%]', r0.id, SQLERRM, SQLSTATE;
+        END;
+        CONTINUE;
+      END IF;
       -- r7 (P1-D, Jakarinos pe 0456f3b): candidații de mai sus vin dintr-un instantaneu NEblocat. Profilul se blochează
       -- ÎNAINTEA deciziei (ordinea pachetului: fișa — deja ținută de UPDATE-ul HR — → persoană (advisory, garda) → profil) și
       -- se recitește SUB lock: legătura, tipul contului, owner, restaurarea. Dacă legătura nu mai e cea de la selecție
@@ -979,6 +1046,10 @@ BEGIN
     v_rezult := NULL;
     v_garda := NULL;
     v_amanat := false;
+    -- r9 (P2-2): modul „fără așteptare” e pus pe TOT elementul (nu doar pe gardă): fn_cont_lock_chei (garda) ȘI fn_cont_inchide
+    -- (preblocare NOWAIT a rândurilor scrise: auth.users, module, șantiere, tokens, sesiuni, intrările din coadă) îl citesc.
+    -- Setarea e locală tranzacției (set_config … true) și se reface la fiecare element după v_tine; după buclă revine pe off.
+    PERFORM set_config('gazpet.cont_lock_nowait', CASE WHEN v_tine THEN 'on' ELSE 'off' END, true);
     BEGIN
       IF q.tip <> 'flaguri' AND q.employee_id IS NOT NULL THEN
         -- 0) fișa de angajat (r3, D1 Copilot): aceeași ordine ca un UPDATE HR pe employees (rând → advisory → profil → coadă).
@@ -990,10 +1061,8 @@ BEGIN
           PERFORM 1 FROM public.employees y WHERE y.id = q.employee_id FOR UPDATE;
         END IF;
         -- 1) persoana (lock până la COMMIT); r8: fără așteptare dacă sweep-ul ține deja lock-uri de la alt element
-        --    (setarea e locală subtranzacției: la 55P03 revine singură, la succes o punem înapoi imediat)
-        PERFORM set_config('gazpet.cont_lock_nowait', CASE WHEN v_tine THEN 'on' ELSE 'off' END, true);
+        --    (gazpet.cont_lock_nowait, pus mai sus pe tot elementul)
         v_garda := public.fn_cont_garda_persoana(q.employee_id);
-        PERFORM set_config('gazpet.cont_lock_nowait', 'off', true);
       END IF;
       IF v_tine THEN                                                           -- 2) profilul
         PERFORM 1 FROM public.profiles p WHERE p.id = q.profile_id FOR UPDATE NOWAIT;
@@ -1078,8 +1147,13 @@ BEGIN
       BEGIN
         -- subtranzacția anulată a eliberat lock-urile din bloc → aceeași ordine: profil, apoi intrarea
         -- (r8: fără așteptare dacă se țin lock-uri de la alt element; 55P03 aici ⇒ doar WARNING, backoff-ul se face la rularea următoare)
+        -- r9 (P2-3 Jakarinos pe 14dc54b): și intrarea se preblochează NOWAIT când se țin lock-uri anterioare (UPDATE-ul de mai
+        -- jos ar fi așteptat); iar dacă blocul reușește, lock-urile lui (profil + intrare) rămân până la COMMIT ⇒ v_tine := true
+        -- la final (înainte rămânea false ⇒ sweep-ul AȘTEPTA la elementul următor ținând profilul A: ciclu cu HR care ține fișa B
+        -- a aceleiași persoane și vrea profilul A).
         IF v_tine THEN
           PERFORM 1 FROM public.profiles p WHERE p.id = q.profile_id FOR UPDATE NOWAIT;
+          PERFORM 1 FROM public.conturi_inchideri_coada c WHERE c.id = q.id FOR UPDATE NOWAIT;
         ELSE
           PERFORM 1 FROM public.profiles p WHERE p.id = q.profile_id FOR UPDATE;
         END IF;
@@ -1108,12 +1182,14 @@ BEGIN
             UPDATE public.conturi_inchideri_coada SET notificat_la = now() WHERE id = q.id;
           END IF;
         END IF;
+        v_tine := true;   -- r9 (P2-3): blocul a reușit ⇒ profilul + intrarea rămân ținute până la COMMIT ⇒ de aici încolo NOWAIT
       EXCEPTION WHEN OTHERS THEN
         RAISE WARNING 'fn_conturi_inchideri_sweep (coada #%): % [%] · eroarea inițială: %', q.id, SQLERRM, SQLSTATE, v_err;
       END;
       END IF;   -- NOT v_amanat
     END;
   END LOOP;
+  PERFORM set_config('gazpet.cont_lock_nowait', 'off', true);
   RETURN v_n;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_conturi_inchideri_sweep() FROM PUBLIC, anon, authenticated, service_role;

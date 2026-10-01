@@ -16,6 +16,11 @@
 --                                         sau de owner, după createUser cu app_metadata.gazpet_legare_automata
 --                                         r8: email / confirmare / marcaj reverificate SUB lock-ul rândului din auth.users
 --                                         (fn_cont_revalideaza_candidat, FOR NO KEY UPDATE; ordinea fișă → profil → auth.users)
+--                                         r9: lock-ul pe auth.users e NOWAIT (fără ciclu cu ștergerea GoTrue + cascada FK pe
+--                                         profiles); rând ocupat ⇒ 'auth_ocupat' (subtranzacție abandonată, notificare owner)
+--                                         r9 (P1-c): cheile advisory ale identității de potrivire (fn_cont_chei_potrivire +
+--                                         fn_cont_lock_chei / fn_cont_persoana_chei, definite în c, reafirmate de d) luate
+--                                         fișă → persoană → profil ⇒ fără „candidat-fantomă” (vezi fereastra c→d la A.1b)
 --   * trg_profiles_protectie_legatura   — employee_id / tip_cont / email / is_owner / role se schimbă doar de o
 --                                         identitate privilegiată explicită; un cont închis (R2) nu se mai poate auto-edita
 --   * fn_cont_leaga_automat(simulare, confirmate) — legare la cerere, poartă owner în cod; aplicarea leagă
@@ -251,6 +256,66 @@ AS $fn$
 $fn$;
 REVOKE ALL ON FUNCTION public.fn_nume_familie(text) FROM PUBLIC, anon, authenticated, service_role;
 
+-- A.1b Primitivele comune de serializare pe persoană (r9, P1-c Copilot: definite AICI, în c — d le reafirmă identic) ---------
+-- c se aplică ÎNAINTEA lui d; legarea (fn_cont_revalideaza_candidat) ia cheile advisory ale identității de potrivire cu
+-- aceleași primitive pe care le folosesc garda și triggerele employees / hr_employees_private din d (aceleași chei, aceeași
+-- sortare după hash). Fereastra de livrare c→d: între c și d legarea ia cheile, dar scriitorii pe employees încă nu (triggerele
+-- vin cu d) ⇒ serializarea P1-c e efectivă abia după d. Fereastra e de minute, în aceeași sesiune a runner-ului (c → d → e, ordine
+-- strictă), fără conturi noi create între pași (cont-nou nu există încă; „Leagă automat” e doar al owner-ului, care livrează).
+-- Cheile: 'gazpet.persoana:<CNP normalizat>', 'gazpet.persoana.nume:<CUVÂNT>' (fn_nume_cuvinte), 'gazpet.persoana.email:<email>'.
+CREATE OR REPLACE FUNCTION public.fn_cont_persoana_chei(p_cnp text[], p_nume text, p_email text)
+RETURNS text[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT COALESCE(array_agg(DISTINCT x.k ORDER BY x.k), '{}'::text[])
+    FROM (SELECT 'gazpet.persoana:' || c AS k FROM unnest(COALESCE(p_cnp, '{}'::text[])) c WHERE c IS NOT NULL
+          UNION ALL
+          SELECT 'gazpet.persoana.nume:' || w FROM unnest(public.fn_nume_cuvinte(p_nume)) w
+          UNION ALL
+          SELECT 'gazpet.persoana.email:' || lower(btrim(p_email)) WHERE NULLIF(btrim(COALESCE(p_email, '')), '') IS NOT NULL) x;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_persoana_chei(text[], text, text) FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.fn_cont_lock_chei(p_chei text[])
+RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_h bigint;
+  -- r8 (P2 Jakarinos pe b916970): sweep-ul cere, DOAR cât timp ține deja lock-urile unui element procesat anterior,
+  -- varianta fără așteptare (gazpet.cont_lock_nowait = 'on', setare locală tranzacției, pusă de fn_conturi_inchideri_sweep
+  -- în subtranzacția elementului): o cheie ocupată ⇒ 55P03 (lock_not_available), nu intrare într-un ciclu de așteptare.
+  v_nowait boolean := COALESCE(current_setting('gazpet.cont_lock_nowait', true), '') = 'on';
+BEGIN
+  FOR v_h IN SELECT DISTINCT hashtextextended(k, 0) FROM unnest(COALESCE(p_chei, '{}'::text[])) k WHERE k IS NOT NULL ORDER BY 1 LOOP
+    IF v_nowait THEN
+      IF NOT pg_try_advisory_xact_lock(v_h) THEN
+        RAISE EXCEPTION 'cheia persoanei e ținută de altă tranzacție (fără așteptare)' USING ERRCODE = '55P03';
+      END IF;
+    ELSE
+      PERFORM pg_advisory_xact_lock(v_h);
+    END IF;
+  END LOOP;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_lock_chei(text[]) FROM PUBLIC, anon, authenticated, service_role;
+
+-- Cheile identității de POTRIVIRE ale unui email de logare (r9, P1-c): cheia emailului + (doar @gazpet.ro) cheia fiecărui token al
+-- părții locale (aceiași tokeni ca în fn_cont_candidati_angajat: upper(unaccent), despărțiți la . _ -) — exact cheile de nume pe care
+-- le ia o scriere pe employees care ar putea face o fișă candidată (fn_employees_persoana_lock din d: cuvintele numelui nou și vechi).
+CREATE OR REPLACE FUNCTION public.fn_cont_chei_potrivire(p_email text)
+RETURNS text[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  WITH i AS (SELECT lower(btrim(COALESCE(p_email, ''))) AS em)
+  SELECT COALESCE(array_agg(DISTINCT k ORDER BY k), '{}'::text[])
+    FROM (SELECT 'gazpet.persoana.email:' || em AS k FROM i WHERE em <> ''
+          UNION ALL
+          SELECT 'gazpet.persoana.nume:' || t
+            FROM i, unnest(array_remove(regexp_split_to_array(upper(extensions.unaccent(split_part(em, '@', 1))), '[._-]+'), '')) t
+           WHERE split_part(em, '@', 2) = 'gazpet.ro') x;
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_chei_potrivire(text) FROM PUBLIC, anon, authenticated, service_role;
+
 -- A.1 Tipul contului -----------------------------------------------------------
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS tip_cont text;
 DO $garda$
@@ -431,7 +496,7 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
 -- emailul de logare CONFIRMAT (runda 3, condiția Copilot: identitate verificată = email de logare confirmat + marcaj),
 -- legătura încă liberă, tipul contului, emailul profilului = emailul de logare, candidatul UNIC și liber.
 -- Întoarce: legat | legatura_existenta | fara_marcaj_incredere | email_neconfirmat | tip_cont_exceptat | email_diferit |
---           fara_candidat | ambiguu | candidat_ocupat | inexistent | eroare.
+--           fara_candidat | ambiguu | candidat_ocupat | inexistent | auth_ocupat (r9: rândul de logare ținut de GoTrue — reîncearcă) | eroare.
 -- r6 (C-RACE-LINK-1) + r7 (P1-C, Jakarinos pe 0456f3b): revalidarea COMPLETĂ sub lock, comună celor două căi de legare.
 -- Apelantul a calculat candidatul (p_emp) pe un instantaneu NEblocat. Aici, în ORDINEA COMUNĂ a pachetului (fișa employees
 -- FOR UPDATE → profilul FOR UPDATE, aceeași ca UPDATE-ul HR / sweep: fișă → advisory → profil), se recitesc AMBELE jumătăți
@@ -456,6 +521,13 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
 --     ciclu; așteptarea e cel mult durata unei tranzacții GoTrue pe acel utilizator.
 --   * Dreptul: SECURITY DEFINER (owner postgres) — UPDATE pe auth.users e deja folosit de d (banned_until); precondiția de mai jos
 --     refuză migrarea dacă postgres n-ar avea UPDATE pe auth.users (FOR NO KEY UPDATE îl cere).
+-- r9 (P2-1 Jakarinos pe 14dc54b): „GoTrue nu ține niciodată rândul așteptând ceva de-al nostru” era fals pentru ȘTERGEREA
+-- utilizatorului: DELETE auth.users ia rândul, iar cascada FK profiles → auth.users (ON DELETE CASCADE) așteaptă profilul — ținut
+-- de legare, care la pasul 3 așteaptă rândul din auth.users ⇒ ciclu (40P01), cu victimă posibil operația GoTrue. Acum pasul 3 e
+-- FOR NO KEY UPDATE **NOWAIT**, în subtranzacție: rândul ocupat (55P03) ⇒ subtranzacția se abandonează (fișa ȘI profilul se
+-- eliberează imediat — cascada GoTrue trece) și se întoarce rezultatul explicit 'auth_ocupat' (de reîncercat: calea de încredere
+-- anunță owner-ul cont_nelegat; legarea la cerere îl arată în UI). Ordinea fișă → profil → auth.users rămâne. Un 55P03 venit de la
+-- pașii 1–2 (doar cu lock_timeout pus din afară) NU e „auth_ocupat”: se propagă ca până acum (apelanții: 'eroare').
 DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(text, integer);
 DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(uuid, integer);   -- r7 (semnătura fără p_cere_marcaj)
 CREATE OR REPLACE FUNCTION public.fn_cont_revalideaza_candidat(p_profile_id uuid, p_emp integer, p_cere_marcaj boolean DEFAULT false)
@@ -470,15 +542,37 @@ DECLARE
   v_n      integer;
   v_emp    integer;
   v_ocupat boolean;
+  v_pas    integer := 0;
+  v_email0 text;
 BEGIN
   IF p_emp IS NULL OR p_profile_id IS NULL THEN RETURN 'fara_candidat'; END IF;
-  PERFORM 1 FROM public.employees e WHERE e.id = p_emp FOR UPDATE;                 -- 1) fișa
-  SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;       -- 2) profilul (recitit SUB lock)
-  IF NOT FOUND THEN RETURN 'inexistent'; END IF;
-  SELECT u.email::text, u.email_confirmed_at IS NOT NULL, COALESCE(u.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true'
-    INTO v_email, v_conf, v_incr
-    FROM auth.users u WHERE u.id = p_profile_id FOR NO KEY UPDATE;                  -- 3) rândul de logare, BLOCAT și recitit (r8)
-  IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+  BEGIN
+    v_pas := 1;
+    PERFORM 1 FROM public.employees e WHERE e.id = p_emp FOR UPDATE;                 -- 1) fișa
+    -- 1b) r9 (P1-c Copilot „candidat-fantomă”): universul candidaților (fn_cont_candidati_angajat) se recalculează mai jos, dar o
+    --     ALTĂ fișă putea deveni candidată între timp (T2 redenumește / pune emailul pe B și comite; d ia cheile advisory ale lui B,
+    --     c nu le lua) ⇒ „candidat unic” fals. Acum legarea ia cheile identității de potrivire (emailul de logare + tokenii de nume
+    --     pentru @gazpet.ro — fn_cont_chei_potrivire, EXACT cheile pe care le iau triggerele employees din d), în poziția comună a
+    --     pachetului: fișă → persoană (advisory) → profil → auth.users. Emailul de aici e citit fără lock; dacă sub lock (pasul 3)
+    --     e altul, cheile luate nu acoperă noul univers ⇒ 'schimbat' (de reîncercat), niciodată legare pe chei vechi.
+    SELECT u.email::text INTO v_email0 FROM auth.users u WHERE u.id = p_profile_id;
+    IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+    PERFORM public.fn_cont_lock_chei(public.fn_cont_chei_potrivire(v_email0));
+    v_pas := 2;
+    SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;       -- 2) profilul (recitit SUB lock)
+    IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+    v_pas := 3;
+    SELECT u.email::text, u.email_confirmed_at IS NOT NULL, COALESCE(u.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true'
+      INTO v_email, v_conf, v_incr
+      FROM auth.users u WHERE u.id = p_profile_id FOR NO KEY UPDATE NOWAIT;         -- 3) rândul de logare, BLOCAT FĂRĂ așteptare (r9) și recitit (r8)
+    IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+  EXCEPTION WHEN lock_not_available THEN
+    IF v_pas = 3 THEN
+      RETURN 'auth_ocupat';     -- r9: rândul din auth.users e ținut de GoTrue (ștergere / schimbare în curs): retragere curată, fără ciclu
+    END IF;
+    RAISE;
+  END;
+  IF lower(btrim(COALESCE(v_email, ''))) <> lower(btrim(COALESCE(v_email0, ''))) THEN RETURN 'schimbat'; END IF;   -- r9 (P1-c): chei luate pe alt email
   IF p_cere_marcaj AND NOT v_incr THEN RETURN 'fara_marcaj_incredere'; END IF;    -- marcajul retras cât timp se aștepta (r8)
   IF v_p.employee_id IS NOT NULL THEN RETURN 'legatura_existenta'; END IF;
   IF COALESCE(v_p.tip_cont, 'angajat') <> 'angajat' THEN RETURN 'tip_cont_exceptat'; END IF;
@@ -563,6 +657,12 @@ BEGIN
   IF v_rez = 'legat' THEN
     PERFORM public.fn_cont_notifica_owneri('cont_legat_automat', '🔗 Cont nou legat automat de fișă',
       format('Cont nou %s legat automat de %s (#%s, prin %s)', v_email, v_nume, v_emp, v_metoda),
+      '/admin?tab=managers&cont=' || p_profile_id::text);
+  ELSIF v_rez = 'auth_ocupat' THEN
+    -- r9 (P2-1): rândul de logare era ținut de GoTrue (ștergere / schimbare în curs) ⇒ legarea s-a retras fără să aștepte;
+    -- nu se reia singură (nu există coadă de legare): owner-ul o reia din Admin → Manageri → „Leagă automat” sau prin cont-nou.
+    PERFORM public.fn_cont_notifica_owneri('cont_nelegat', '⚠️ Cont nou nelegat de fișa de angajat',
+      format('Cont nou %s nelegat: contul de logare era în curs de modificare / ștergere (GoTrue) — reia legarea din Admin → Manageri → „Leagă automat”', v_email),
       '/admin?tab=managers&cont=' || p_profile_id::text);
   END IF;
   RETURN v_rez;
@@ -702,7 +802,8 @@ BEGIN
           -- r6 (C-RACE-LINK-1) + r7 (P1-C): lock fișă → profil (ordinea comună a pachetului) și revalidarea AMBELOR jumătăți
           -- sub lock (fișă activă; profil încă nelegat, tip angajat, email profil = email de logare recitit, confirmat;
           -- potrivire recalculată identică). Altfel rezultatul revalidării (schimbat / fara_candidat / tip_cont_exceptat /
-          -- email_diferit / email_neconfirmat / legatura_existenta / candidat_ocupat), fără legare.
+          -- email_diferit / email_neconfirmat / legatura_existenta / candidat_ocupat / auth_ocupat — r9: rândul de logare
+          -- ținut de GoTrue, fără așteptare; owner-ul reia „Leagă automat”), fără legare.
           rezultat := public.fn_cont_revalideaza_candidat(r.pid, r.emp);
           IF rezultat IS NULL THEN
             UPDATE public.profiles pr SET employee_id = r.emp
@@ -771,15 +872,15 @@ DO $post_livrare$
 DECLARE v_n integer; v_lipsa text[];
 BEGIN
   -- funcțiile migrării există; cele SECURITY DEFINER au search_path fixat; niciuna executabilă de anon (excepții explicite)
-  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) f
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_chei_potrivire','fn_cont_lock_chei','fn_cont_persoana_chei','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) f
    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) AND p.prosecdef
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_chei_potrivire','fn_cont_lock_chei','fn_cont_persoana_chei','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) AND p.prosecdef
      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[])
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_chei_potrivire','fn_cont_lock_chei','fn_cont_persoana_chei','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[])
      AND p.proname <> ALL(ARRAY[]::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
   -- triggerele cerute există și sunt active

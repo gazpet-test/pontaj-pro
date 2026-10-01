@@ -68,8 +68,7 @@ DROP FUNCTION IF EXISTS public.fn_cont_garda_persoana(integer);
 DROP FUNCTION IF EXISTS public.fn_cont_posibil_aceeasi_persoana(integer);
 DROP FUNCTION IF EXISTS public.fn_cont_alt_contract_activ(integer, text[]);
 DROP FUNCTION IF EXISTS public.fn_cont_lock_persoana(text);
-DROP FUNCTION IF EXISTS public.fn_cont_lock_chei(text[]);
-DROP FUNCTION IF EXISTS public.fn_cont_persoana_chei(text[], text, text);
+-- r9 (P1-c): fn_cont_lock_chei / fn_cont_persoana_chei sunt ale lui c (le șterge rollback-ul c), nu se ating aici
 DROP FUNCTION IF EXISTS public.fn_cont_coada_pune(uuid, integer, text, text, date, text);
 DROP FUNCTION IF EXISTS public.fn_cont_flaguri();
 

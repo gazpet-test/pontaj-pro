@@ -52,6 +52,9 @@ DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(uuid, integer, boole
 DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(uuid, integer);   -- r7 (dacă ar fi rămas)
 DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(text, integer);   -- r6 (dacă ar fi rămas)
 DROP FUNCTION IF EXISTS public.fn_cont_candidati_angajat(text);
+DROP FUNCTION IF EXISTS public.fn_cont_chei_potrivire(text);           -- r9 (P1-c)
+DROP FUNCTION IF EXISTS public.fn_cont_lock_chei(text[]);              -- r9 (P1-c): mutate din d în c
+DROP FUNCTION IF EXISTS public.fn_cont_persoana_chei(text[], text, text);
 DROP FUNCTION IF EXISTS public.fn_cont_notifica_owneri(text, text, text, text);
 DROP FUNCTION IF EXISTS public.fn_nume_familie(text);
 DROP FUNCTION IF EXISTS public.fn_nume_cuvinte(text);          -- runda 3: mutată din e în c (o folosesc d și e)
