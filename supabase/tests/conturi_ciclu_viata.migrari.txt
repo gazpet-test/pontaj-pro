@@ -14,6 +14,9 @@ live: supabase/migrations/20260930i_sec_f1_truncate_revoke.sql
 # SEC F2 (20260930j, live din 01.10.2026 12:45 UTC) a rescris fn_profiles_campuri_owner_only (rol JWT contradictoriu ⇒ refuz,
 # service_role legat de session_user = authenticator + role = service_role) — e starea reală a producției.
 live: supabase/migrations/20260930j_sec_f2_profiles_uid_null.sql
+# S-A extins 30a (#532, live din 01.10.2026, v20261001178000): fn_profiles_campuri_owner_only extinsă peste F2 r4
+# (md5 prosrc 1114af39…) — c/d o cer ca precondiție.
+live: supabase/migrations/20260930a_profiles_campuri_owner_only_extins.sql
 supabase/migrations/20260929c_conturi_legare_automata.sql
 supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
 supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql

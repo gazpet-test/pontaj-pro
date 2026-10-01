@@ -145,3 +145,104 @@ Versiunile sunt după ultima versiune live (20261001170000). Dacă J05 (#542) sa
 - Precondițiile md5 sunt stricte. Orice modificare a `handle_new_user` sau a `fn_profiles_campuri_owner_only` pe live înainte de livrare face ca migrarea să refuze (fail-closed, intenționat).
 - Precondițiile noi nu au teste negative dedicate în harness. Sunt acoperite doar pe calea pozitivă (pornire = starea live).
 - Default ACL-ul lui supabase_admin dă încă TRUNCATE (riscul rezidual F1). c/d/e rulează ca postgres, deci tabelele lor nu sunt afectate.
+
+---
+
+## ACTUALIZARE r2 (01.10.2026, după aplicarea #532 / 30a pe live)
+
+**context_version:** urmează commitul care conține acest document (peste merge-ul cu origin/main `02feb1f`).
+
+**Ce s-a schimbat:**
+1. **Merge `origin/main` cu #532 (02feb1f).** Au fost conflicte add/add doar în harness (`scripts/test_conturi_ciclu_viata.sh`, `supabase/tests/conturi_schelet_supabase.sql`). Am păstrat varianta din branch: e superset (precondiții live, login authenticator, hr_employees_private, snapshot pas cu pas). Fișierele 30a și testul lor au intrat neschimbate.
+2. **Live (SELECT):** `fn_profiles_campuri_owner_only` are md5 `1114af39c13e295dd2ab666dab495567`. Ultima versiune e `20261001178000`, iar handle_new_user a rămas `94e5c5d3…`.
+3. **c și d nu rescriu `fn_profiles_campuri_owner_only`.** Doar verifică existența triggerului (precondiție și postcondiție), deci nu anulează extinderea 30a. Testele confirmă că trec cu 30a activ.
+4. **Precondițiile c/d** cer acum md5 `1114af39…` (30a) în loc de `9acc36a4…` (F2 r4). Precondiția din e (F1) e neschimbată.
+5. **Harness:** în `migrari.txt` am adăugat `live: 20260930a_profiles_campuri_owner_only_extins.sql` după F2. Lanțul e acum S-A → F1 → F2 → 30a. Testul SA-01 acceptă varianta `live_30a_v20261001178000`; md5-ul local după aplicarea 30a = md5-ul live.
+
+**Amprente sha256 (r2):**
+| Fișier | r1 | r2 |
+|---|---|---|
+| c | c84c48cb… | `5baa8f28faeb9db6ddfa569cd1ab492d41f07058fec6b7b050ec36e41c01da88` |
+| d | c9ace3c5… | `bdd241a96d53af52fa1f16e139dfcb84bab2e94fb7e9e5414d3dd0d4894b5574` |
+| e | 4a8c1bc9… | `4a8c1bc955645a2500826fb590442c88c44aba4ac3b64c81b39cf85b33c08846` (neschimbat) |
+
+**Ordinea și versiunile** rămân aceleași: c `20261001180000` → d `20261001181500` → e `20261001183000`, toate după 30a (20261001178000).
+
+**Teste r2:** harness PG17 `--rollback` cu **892 aserțiuni PASS** (3 migrări + 4 precondiții live). Gate 0e: 0 rânduri local și 0 rânduri pe live. Validatorul trece pe toate 3. vitest: 1129 PASS. Build: OK.
+
+**Diff r2 (migrări + teste):**
+```diff
+diff --git a/supabase/migrations/20260929c_conturi_legare_automata.sql b/supabase/migrations/20260929c_conturi_legare_automata.sql
+index faa9579..1ffd1c8 100644
+--- a/supabase/migrations/20260929c_conturi_legare_automata.sql
++++ b/supabase/migrations/20260929c_conturi_legare_automata.sql
+@@ -56,11 +56,11 @@ BEGIN
+     RAISE EXCEPTION 'Precondiție: S-A (trg_profiles_campuri_owner_only pe profiles) nu e live — se reanalizează';
+   END IF;
+   IF to_regprocedure('extensions.unaccent(text)') IS NULL THEN RAISE EXCEPTION 'Precondiție: extensions.unaccent(text) lipsește'; END IF;
+-  -- Live 01.10.2026: SEC F2 r4 (v20261001124500) a rescris fn_profiles_campuri_owner_only (md5 prosrc 9acc36a4…);
++  -- Live 01.10.2026: S-A extins 30a (#532, v20261001178000, peste SEC F2 r4) a rescris fn_profiles_campuri_owner_only (md5 prosrc 1114af39…);
+   -- pachetul e aliniat la acel predicat. Altă variantă ⇒ starea de pornire s-a schimbat ⇒ refuz.
+   IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_profiles_campuri_owner_only()'))
+-     IS DISTINCT FROM '9acc36a4067eddbdf29956220023ea92' THEN
+-    RAISE EXCEPTION 'Precondiție: fn_profiles_campuri_owner_only nu e varianta SEC F2 r4 (md5 9acc36a4…) — se reanalizează';
++     IS DISTINCT FROM '1114af39c13e295dd2ab666dab495567' THEN
++    RAISE EXCEPTION 'Precondiție: fn_profiles_campuri_owner_only nu e varianta 30a (S-A extins peste F2 r4, md5 1114af39…) — se reanalizează';
+   END IF;
+   -- handle_new_user e RESCRISĂ de c: corpul live (01.10.2026, md5 94e5c5d3…) e cel din care pornește migrarea;
+   -- la reaplicare (c deja livrată ⇒ fn_cont_leaga_la_creare există) se acceptă varianta proprie.
+diff --git a/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql b/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
+index 34a3430..4db88e5 100644
+--- a/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
++++ b/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
+@@ -57,11 +57,11 @@ BEGIN
+     RAISE EXCEPTION 'Precondiție: S-A (trg_profiles_campuri_owner_only pe profiles) nu e live — se reanalizează';
+   END IF;
+   IF to_regclass('public.hr_employees_private') IS NULL THEN RAISE EXCEPTION 'Precondiție: public.hr_employees_private lipsește'; END IF;
+-  -- Live 01.10.2026: SEC F2 r4 (v20261001124500) a rescris fn_profiles_campuri_owner_only (md5 prosrc 9acc36a4…);
++  -- Live 01.10.2026: S-A extins 30a (#532, v20261001178000, peste SEC F2 r4) a rescris fn_profiles_campuri_owner_only (md5 prosrc 1114af39…);
+   -- pachetul e aliniat la acel predicat. Altă variantă ⇒ starea de pornire s-a schimbat ⇒ refuz.
+   IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_profiles_campuri_owner_only()'))
+-     IS DISTINCT FROM '9acc36a4067eddbdf29956220023ea92' THEN
+-    RAISE EXCEPTION 'Precondiție: fn_profiles_campuri_owner_only nu e varianta SEC F2 r4 (md5 9acc36a4…) — se reanalizează';
++     IS DISTINCT FROM '1114af39c13e295dd2ab666dab495567' THEN
++    RAISE EXCEPTION 'Precondiție: fn_profiles_campuri_owner_only nu e varianta 30a (S-A extins peste F2 r4, md5 1114af39…) — se reanalizează';
+   END IF;
+   -- Live 01.10.2026 (citit read-only): SEC F1 (v20261001123000) — setarea implicită a lui postgres pe public nu mai dă
+   -- TRUNCATE lui anon/authenticated; tabelele create aici moștenesc asta. Dacă F1 a fost revertit, se reanalizează.
+diff --git a/supabase/tests/conturi_ciclu_viata.migrari.txt b/supabase/tests/conturi_ciclu_viata.migrari.txt
+index 5b2c318..e2e419b 100644
+--- a/supabase/tests/conturi_ciclu_viata.migrari.txt
++++ b/supabase/tests/conturi_ciclu_viata.migrari.txt
+@@ -14,6 +14,9 @@ live: supabase/migrations/20260930i_sec_f1_truncate_revoke.sql
+ # SEC F2 (20260930j, live din 01.10.2026 12:45 UTC) a rescris fn_profiles_campuri_owner_only (rol JWT contradictoriu ⇒ refuz,
+ # service_role legat de session_user = authenticator + role = service_role) — e starea reală a producției.
+ live: supabase/migrations/20260930j_sec_f2_profiles_uid_null.sql
++# S-A extins 30a (#532, live din 01.10.2026, v20261001178000): fn_profiles_campuri_owner_only extinsă peste F2 r4
++# (md5 prosrc 1114af39…) — c/d o cer ca precondiție.
++live: supabase/migrations/20260930a_profiles_campuri_owner_only_extins.sql
+ supabase/migrations/20260929c_conturi_legare_automata.sql
+ supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
+ supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
+diff --git a/supabase/tests/conturi_ciclu_viata.test.sql b/supabase/tests/conturi_ciclu_viata.test.sql
+index 87b685a..ea35460 100644
+--- a/supabase/tests/conturi_ciclu_viata.test.sql
++++ b/supabase/tests/conturi_ciclu_viata.test.sql
+@@ -240,12 +240,14 @@ SELECT teste.assert((SELECT NOT active FROM public.employees WHERE id = :emp_cro
+ -- md5 canonic al variantei LIVE (2 coloane) = c06d7ce0…; rularea de verificare cu S-A EXTINS (20260930a, NEAPLICAT în
+ -- producție, pus ca a doua precondiție doar din scratchpad) are f4871f5a… — ambele sunt acceptate, variantă afișată.
+ -- 01.10.2026: producția are acum varianta SEC F2 r4 (20260930j, live 01.10) — md5 9acc36a4… (citit read-only de pe live).
++-- 01.10.2026 seara: 30a (#532) e LIVE (v20261001178000) peste F2 r4 — md5 1114af39… (citit read-only de pe live).
+ SELECT CASE md5(prosrc) WHEN 'c06d7ce0f212c7bba2093c50614a88fc' THEN 'live_20260929g'
+                         WHEN '9acc36a4067eddbdf29956220023ea92' THEN 'live_f2_20260930j'
+-                        WHEN 'f4871f5a99d6d880cc62a80c3fe65c01' THEN 'extins_20260930a' END AS sa_varianta
++                        WHEN 'f4871f5a99d6d880cc62a80c3fe65c01' THEN 'extins_20260930a'
++                        WHEN '1114af39c13e295dd2ab666dab495567' THEN 'live_30a_v20261001178000' END AS sa_varianta
+   FROM pg_proc WHERE oid = 'public.fn_profiles_campuri_owner_only()'::regprocedure \gset
+ \echo '   S-A varianta:' :sa_varianta
+-SELECT teste.assert(:'sa_varianta' IN ('live_20260929g', 'live_f2_20260930j', 'extins_20260930a')
++SELECT teste.assert(:'sa_varianta' IN ('live_20260929g', 'live_f2_20260930j', 'extins_20260930a', 'live_30a_v20261001178000')
+     AND (SELECT tgenabled = 'O' FROM pg_trigger WHERE tgname = 'trg_profiles_campuri_owner_only' AND tgrelid = 'public.profiles'::regclass),
+   'SA-01 S-A: trg_profiles_campuri_owner_only activ, md5(prosrc) = c06d7ce0f212c7bba2093c50614a88fc (= producția) sau varianta extinsă verificată');
+ -- decizia unui UPDATE făcut printr-un RPC SECURITY DEFINER (ajunge la rând ocolind RLS): 'trece' sau SQLSTATE;
+```
