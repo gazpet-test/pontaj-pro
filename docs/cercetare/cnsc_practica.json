@@ -1,5 +1,77 @@
 [
  {
+  "id": "CNSC-BO2026_1184",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_1184",
+  "data": null,
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "eroare_aritmetica",
+   "clarificari_oferta",
+   "deviz_consumuri",
+   "altele"
+  ],
+  "regula": "Neconcordanțele grafic execuție–grafic plăți–deviz general trebuie clarificate și calificate motivat (viciu de formă/eroare aritmetică vs. necorelare); simpla consemnare „răspuns concludent” nu e evaluare. Ofertantul care nu a contestat la timp respingerea sa e exclus definitiv și nu mai are interes.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (10), art. 135 alin. (3)",
+   "Legea 98/2016 art. 209",
+   "Legea 101/2016 art. 3 alin. (1) lit. f) și (3), art. 8 alin. (1) lit. b), art. 26 alin. (2), (5), (6)",
+   "Cod procedură civilă art. 431 alin. (2)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MmY3NGRhMDMtZmRmNi00MTFjLTg4ODItMTBjNGE4ODM5NTU4&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzExODQucGRm&action=aW5saW5l",
+  "autoritate": "Autoritate contractantă (anonimizată, cod CONS...)",
+  "obiect": "Servicii de proiectare și execuție lucrări pentru conducte de alimentare cu apă (CPV 45232150-8), procedură simplificată",
+  "problema": "Al doilea ciclu: curtea de apel a obligat AC să clarifice neconcordanțele câștigătorului între graficul de execuție, graficul estimat de plăți și devizul general (valori diferite) și să stabilească dacă sunt viciu de formă/eroare aritmetică sau necorelare. AC a cerut clarificări și a consemnat doar că răspunsul (valoarea lunii 4 preluată din eroare și la luna 5) e concludent. Un alt ofertant, respins în primul ciclu fără să conteste, a atacat și el rezultatul.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Hotărârea curții are putere de lucru judecat; AC trebuia să analizeze concret dacă sunt întrunite condițiile art. 135 alin. (3) HG 395 sau ale corecției aritmetice, nu doar să accepte răspunsul — conduită formală → reevaluare. Ofertantul respins definitiv în primul ciclu (necontestat) nu mai are interes să atace ofertele admisibile și nu poate fi repus în termen după 7 luni.",
+  "cum_ne_ajuta": "ERP: verificare automată de coerență între graficul Gantt (luni), graficul de plăți (F6C) și devizul general/formularul de ofertă — totaluri pe lună și pe capitole. Regula internă: contestăm ORICE respingere în termen (10 zile), altfel pierdem interesul pentru tot restul procedurii.",
+  "curte_apel": "Prima decizie CNSC din procedură a fost modificată în parte de curtea de apel (reevaluare dispusă); prezenta decizie verifică executarea acelei hotărâri.",
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract de proiectare și execuție conducte apă",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "doi contestatori: un ofertant admisibil (admis) și un ofertant respins definitiv (respins)",
+  "etapa": "rezultat (reevaluare după control judiciar)",
+  "fapte_relevante": "Curtea de apel (decizie din 2025, nr. anonimizat) a admis în parte plângerea împotriva deciziei CNSC din primul ciclu și a dispus reevaluarea câștigătorului; CNSC citează decizia CNSC 685/2025 ca decizia reevaluării.",
+  "concluzie_cnsc": "Admite contestația primului contestator, anulează actele de reevaluare a ofertei câștigătoare și obligă la reevaluare în 10 zile; respinge contestația celui de-al doilea ca nefondată (lipsă interes/tardivitate).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Proiectare+execuție conducte de apă, grafice și deviz general — exact formularele din ofertele Gazpet.",
+   "mai_putin_comparabila": "Ciclu procesual secund; analiza e limitată de hotărârea curții.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "fără a verifica dacă sunt întrunite cumulativ condițiile de la art. 135 alin. (3) din HG nr. 395/2016",
+    "loc": "analiza reevaluării"
+   },
+   {
+    "text": "autoritatea contractantă a nesocotit limitele reevaluării trasate de instanță, limitându-se la o conduită formală",
+    "loc": "analiza reevaluării"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "3f31fc22f8cc22fa7de8a95456085bc7ff308b3ad3f4c92591f87bca9a1f2a03",
+  "snapshot_bytes": 316383,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "c81f7f69ea3159914a3325b34c0345b386849c9a1b9099148fb57b2c7fc25f2d",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
   "id": "CNSC-BO2026_1237",
   "nr_decizie": "1237/2026 (BO, nr. complet anonimizat)",
   "buletin_oficial": "BO2026_1237",
@@ -66,7 +138,9 @@
   "snapshot_sha256": "e7f841a6a88ee5ad9fb5399e36b4e2a33a16c602b0fa33fa3db6d7c7333e556c",
   "snapshot_bytes": 269434,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "1b0de6dd3b03478ca6a413de9b8c57efeb800b3dca3f98fcc16c97c37cff568c",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_13",
@@ -129,7 +203,9 @@
   "snapshot_sha256": "8086c64e2ce096e35f130ee7ae567f695501cd17464d4f795a1b7157ec01dbbe",
   "snapshot_bytes": 236774,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "f8d6462b88af62f34d58ddfdecdcf1741c8a91cf5e108bec1c355be1e87f7d17",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_1360",
@@ -204,7 +280,9 @@
   "snapshot_sha256": "2fafc69144f82cf74e5cbff0552b3b4631b7aefa3a7ca1725ddffe0decf92366",
   "snapshot_bytes": 435315,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "964cc9a6ad17758f9f24892495b4dca4f3014b212c9527892479e802d49a97f3",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_15",
@@ -270,7 +348,154 @@
   "snapshot_sha256": "435786190574499ab01179bf5b3c31e8bed1c579264b6c92f5918bd571bc0695",
   "snapshot_bytes": 150055,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "92714d26c12faf6bdd1d9367ee24a64c4dbbdd938c6390ccbe2020e0a101dd78",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_1521",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_1521",
+  "data": null,
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "clarificari_documentatie",
+   "factor_evaluare",
+   "ajustare_pret",
+   "deviz_consumuri",
+   "cerinte_restrictive"
+  ],
+  "regula": "În contractele proiectare+execuție AC poate cere liste de cantități/consumuri estimate la ofertare; factorii calitativi pe metodologie sunt legali, dar inconsecvențele între formulare, instrucțiuni și datele tehnice ale DA trebuie remediate înainte de depunere.",
+  "temei_legal": [
+   "Legea 98/2016 art. 154, art. 187 alin. (5), art. 212 alin. (1) lit. d)",
+   "HG 395/2016 art. 1 alin. (4), art. 32",
+   "Legea 101/2016 art. 26 alin. (2) și (7)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=OGY1Yzk2MTUtNDdkYS00NWY4LWEwZWItYTA1ODk4MTBiMmI3&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzE1MjEucGRm&action=aW5saW5l",
+  "autoritate": "Comună (anonimizată) — autoritate contractantă",
+  "obiect": "Proiectare (PT, DE) + asistență tehnică + execuție „Înființare sistem de canalizare” în 2 sate, CPV 45232400-6, procedură simplificată",
+  "problema": "Ingaz (firmă de rețele gaze) a contestat documentația: factorul de evaluare „Abordarea propusă pentru implementarea contractului” (subiectiv), clauze de ajustare a prețului, cerința de liste de cantități la un contract proiectare+execuție, inconsecvențe (două seturi de cerințe pentru propunerea tehnică, debite în unități greșite, Qinf neintegrat în SPAU, „șef șantier restaurare arhitecturală”, metodologie pentru SF deja existent, grafic Gantt zile vs. luni).",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Factorul calitativ pe metodologie e permis (art. 187 alin. 5 L98) — nu toți ofertanții au dreptul la punctaj maxim; CNSC preia raționamentul unei curți de apel. Criticile pe ajustarea prețului au fost retrase. La proiectare+execuție, ofertanții trebuie să prezinte la ofertare informațiile necesare din PT (liste de cantități și consumuri estimate) pentru a fundamenta prețul. Inadvertențele tehnice și de formular încalcă obligația de informare completă (art. 154 L98, transparență) → remediere prin clarificări în 12 zile și nou termen de depunere de cel puțin 6 zile; anularea procedurii respinsă.",
+  "cum_ne_ajuta": "Model de contestație/clarificare pentru DA proiectare+execuție apă-canal: inconsecvențe formular vs. instrucțiuni, unități de măsură în tabele de debite, cerințe de personal irelevante. Șablon: „Formularul [nr] și Instrucțiunile [document] conțin cerințe diferite pentru propunerea tehnică ([exemplu]). Vă rugăm să precizați care set se aplică.” La P+E, Gazpet trebuie să-și facă propriul antemăsurător la ofertare.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract de proiectare și execuție canalizare",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "operator economic interesat (Ingaz) — contestă documentația",
+  "etapa": "documentație",
+  "fapte_relevante": "Contestator: Ingaz (societate de rețele/instalații gaze). Suspendarea respinsă anterior ca rămasă fără obiect. CNSC citează o hotărâre de curte de apel care a modificat o decizie CNSC privind un factor „metodologie” cu pondere 16%.",
+  "concluzie_cnsc": "Admite în parte; obligă AC la remediere în 12 zile și nou termen de depunere (≥6 zile de la publicarea măsurilor); respinge anularea procedurii.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Contestator din piața gaze care ofertează la canalizare — profil identic Gazpet; documentație P+E apă-canal.",
+   "mai_putin_comparabila": "Criticile pe ajustarea prețului au fost retrase, deci decizia nu tranșează ajustarea.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "operatorii economici au obligația ca, la data depunerii ofertelor, să prezinte informațiile necesare din proiectul tehnic",
+    "loc": "analiza listelor de cantități P+E"
+   },
+   {
+    "text": "Nu există nicio dispoziție legală care prevede că toți ofertanții sunt îndrituiți să obțină punctajele maxime la factorii de evaluare",
+    "loc": "analiza factorului de evaluare"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "7758abb272c213203425cc57dd76abcdfa14366678bf350849178239d22de55f",
+  "snapshot_bytes": 733573,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "6c49b2f248b2da0845e4caecbc3468f00eca332842e019b5e7dfe995e51ac824",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_1536",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_1536",
+  "data": null,
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "cerinte_restrictive",
+   "experienta_similara",
+   "factor_evaluare",
+   "personal_cheie",
+   "clarificari_documentatie"
+  ],
+  "regula": "Cerința de lichiditate/cash-flow trebuie corelată cu fluxul real de plăți al contractului; limitarea numărului de contracte pentru experiența similară trebuie motivată în strategia de contractare. Pragurile de punctaj pe numărul de proiecte ale experților sunt legale dacă sunt justificate și nu sunt condiții de calificare.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2, art. 172 alin. (5), art. 182",
+   "HG 395/2016 art. 32 alin. (1) și (9)",
+   "Instrucțiunea ANAP nr. 2/2017 art. 3, 6, 7",
+   "Legea 101/2016 art. 26 alin. (2) și (6)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MmY2YjcwMGEtODIyMS00NDQzLWJhOTgtZmZjMDNiYThhMjY4&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzE1MzYucGRm&action=aW5saW5l",
+  "autoritate": "Comună (anonimizată) — autoritate contractantă",
+  "obiect": "Proiectare și execuție rețele de apă/canalizare (~31 km și ~720 branșamente), CPV 45232150-8, licitație deschisă online, 18 luni execuție",
+  "problema": "Contestație la documentație: cash-flow negrevat pentru 10 luni (CF = VE × n / Dc), experiență similară execuție în max. 1 contract (remediat de AC la 2), experiență proiectare 21 km și 6.. branșamente într-un singur contract, piese desenate detaliate la ofertare (eliminate de AC), punctare experți pe 2-4 / 5-8 / >8 proiecte.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Cash-flow pe 10 luni e disproporționat când plățile se fac lunar la 30 de zile după situații de lucrări → se raportează la momentul primei plăți. Limitarea experienței similare la max. 2 contracte nemotivată în strategia de contractare (art. 7 Instrucțiunea ANAP 2/2017) e restrictivă; regulile de proiectare nu depind de dimensiunea rețelei. Remedierile acceptate de AC trebuie publicate în SEAP. Factorii pe experți cu praguri până la >8 proiecte nu sunt disproporționați — sunt criterii de evaluare, nu de calificare, justificate în strategie (art. 32 HG 395).",
+  "cum_ne_ajuta": "Argumentar pentru contestarea DA: cash-flow pe perioade lungi vs. plăți lunare; experiență similară în 1-2 contracte fără motivare în strategie. Dar factorii „nr. proiecte expert” rămân — ERP trebuie să țină evidența proiectelor fiecărui expert Gazpet (șef șantier, RTE, proiectant) cu recomandări.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "contract de proiectare și execuție rețele apă/canalizare",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "operator economic interesat (contestă documentația)",
+  "etapa": "documentație",
+  "fapte_relevante": "Experiență proiectare cerută: min. 21 km rețea apă/canal + branșamente într-un contract; factori pe manager contract, șef proiect instalații edilitare, șef șantier, proiectanți (2-4/5-8/>8 proiecte).",
+  "concluzie_cnsc": "Admite în parte: modificarea DA (cash-flow, experiență similară, publicarea remedierilor) în 10 zile; respinge critica privind factorii pe experți.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal cu branșamente, P+E, factori pe experți — profil Gazpet.",
+   "mai_putin_comparabila": "Pragurile valorice sunt anonimizate.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "A impune contractantului să dispună de disponibil în cont o sumă de bani pentru o perioadă de 10 luni",
+    "loc": "analiza cash-flow"
+   },
+   {
+    "text": "regulile și normele de proiectare nu se pot schimba, în funcție de dimensiunile rețelei",
+    "loc": "analiza experienței de proiectare"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "96813fa1e1a37b3ab2e2abed25932f994bc0d28b38d755396be733c3b88d1f1d",
+  "snapshot_bytes": 327308,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "7bff5a0dde7585420cef74b4b95693c7a2e8d5a932d31f10493b8d2bb0d10fc4",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_182",
@@ -337,7 +562,9 @@
   "snapshot_sha256": "e5e67bbbbe5dd06512120cd5a9eb32e9754d7f9e592ef493b1593496bcbe9610",
   "snapshot_bytes": 240547,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "95e4c2e7af4394a1e51fbfd7b64e1a1b48160b7e0fa6200badd73cb445c0a11b",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_1837",
@@ -407,7 +634,9 @@
   "snapshot_sha256": "7035b0a9fcbaebdc7c46e3c5556260be1807e05c68b0a2c50b9c8913d9640d73",
   "snapshot_bytes": 356536,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "00d6cde6cb39d9ad0d2a770c4a819f60187e2887ebc3ede60e9f6e733565685f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_2328",
@@ -482,7 +711,80 @@
   "snapshot_sha256": "05c39d3aead06ae55029099bf427c238146503b4bf74e3c5a5ed7b5b1b91a1fe",
   "snapshot_bytes": 415603,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a832bf7507deae51937159b68320707655ee2fdbcfe532586525cb934f8129c4",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_2480",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_2480",
+  "data": null,
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "termen_executie",
+   "factor_evaluare",
+   "asociere",
+   "experienta_similara",
+   "clarificari_oferta"
+  ],
+  "regula": "Un termen de execuție minim fixat în DA nu mai poate fi atacat ca „imposibil” după rezultat; termenul ofertat se verifică prin grafic și resurse. Suspiciunile anticoncurențiale fără indicii concrete nu duc la excludere, iar excluderea cere avizul Consiliului Concurenței.",
+  "temei_legal": [
+   "Legea 98/2016 art. 167 alin. (1) lit. d), (5), (6)",
+   "Legea 101/2016 art. 8, art. 26 alin. (6)",
+   "HG 395/2016 art. 134"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZjFiY2IyZTMtZmI3Ny00YTAzLTk5NTktODU1ZTkxZTI3OWMw&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzI0ODAucGRm&action=aW5saW5l",
+  "autoritate": "Autoritate contractantă (anonimizată)",
+  "obiect": "Lucrări rețele apă (inclusiv rezervor), CPV 45232150-8, procedură simplificată, 7 oferte",
+  "problema": "Ofertantul de pe locul 3 a contestat: suspiciuni de înțelegere anticoncurențială între primele două oferte (un acord de asociere al altui participant apărea în documentele unei asocieri în SEAP), experiența similară nedemonstrată, clarificări acordate câștigătorului pe grafic și fișe tehnice, punctarea termenului de execuție ofertat (minim 3 luni, contestat ca imposibil tehnic).",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Aprecierea indiciilor anticoncurențiale aparține AC, iar excluderea pe art. 167 alin. (1) lit. d) L98 cere punctul de vedere al Consiliului Concurenței; documentul era o eroare de afișare SEAP. Experiența similară dovedită (inclusiv prin acord de subcontractare). Clarificările s-au cerut identic tuturor — fără tratament inegal. Termenul minim de 3 luni stabilit de AC putea fi contestat doar la documentație; graficul și resursele câștigătorului demonstrează fezabilitatea.",
+  "cum_ne_ajuta": "Dacă un factor „termen de execuție” are un minim nerealist → contestăm DOCUMENTAȚIA în 10 zile, nu rezultatul. Pentru oferta proprie: termenul ofertat trebuie susținut de Gantt + resurse (ERP calculează automat plauzibilitatea). Atenție la documentele încărcate în SEAP (fără acte ale altor ofertanți).",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări rețele apă",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (factor termen de execuție)",
+  "contestator_rol": "ofertant admisibil clasat pe locul 3",
+  "etapa": "rezultat",
+  "fapte_relevante": "7 oferte, 4 respinse, 3 admisibile. Experiență similară: lucrări rețele apă/canalizare/aducțiuni/rețele de fluide/edilitare, în max. 2 contracte.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă, factor termen de execuție, asocieri — profil Gazpet.",
+   "mai_putin_comparabila": "Datele procedurii sunt anonimizate.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "Dacă acesta era imposibil, operatorul trebuia să depună contestație împotriva documentației",
+    "loc": "critica termenului de execuție"
+   },
+   {
+    "text": "graficul prezentat demonstrează posibilitatea executării lucrărilor în termen, iar resursele alocate sunt suficiente",
+    "loc": "critica termenului de execuție"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "5e70d61a72a76bd524e9ebf368b203a2a5da41cb7fc5e54de4f9f751ae56c0e7",
+  "snapshot_bytes": 235332,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "7381eae922f9ebf2bb37de64610bcff3cab23ee4995c5dbb8af9486a11b5c86c",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_2669",
@@ -547,7 +849,9 @@
   "snapshot_sha256": "08d156819e3fc41ad8369f4da1a0bbb0a3b76aa39fab0cbf68d468117423c7c5",
   "snapshot_bytes": 169680,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "160c6df28c3d11cc1f507067e9c94e8a9423917ebd15f5c755111c43da6af0a9",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_3104",
@@ -613,7 +917,218 @@
   "snapshot_sha256": "b28edf6c977c41817a8594b98faf9d7a7841ba8e441253339af40eb1287967fa",
   "snapshot_bytes": 252685,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "1201f0c52ad153a1ac23492abb41254b96b18f0207f8b731b03b5f78aa60e43f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_318",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_318",
+  "data": null,
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "cerinte_restrictive",
+   "documente_calificare",
+   "garantie_buna_executie"
+  ],
+  "regula": "Indicatorii financiari de calificare trebuie corelați cu durata și riscul contractului; un prag de solvabilitate generală ridicat la un contract de 12 luni este restrictiv, iar dacă termenul de depunere a trecut CNSC anulează procedura.",
+  "temei_legal": [
+   "Legea 98/2016 art. 172 alin. (1) lit. c) și alin. (5)",
+   "Legea 101/2016 art. 26 alin. (2) și (7)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=OTdmYjliMjQtZmU1NS00ZmQxLTk4YTctMzRkZDZmMzM2Mjli&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzMxOC5wZGY=&action=aW5saW5l",
+  "autoritate": "Autoritate contractantă (anonimizată, localitate rurală)",
+  "obiect": "Lucrări rețea apă și canalizare (infrastructură critică, CPV 45232400-6), procedură simplificată, durată contract 12 luni",
+  "problema": "Cerința de calificare „solvabilitate generală ≥ [prag anonimizat]” — contestată ca disproporționată; alte critici: revizii „la toate echipamentele” (ICECON/ITP) și termenul de plată din modelul de contract.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Solvabilitatea generală e indicator de structură patrimonială pe termen mediu-lung; pentru un contract de 12 luni nu reflectă capacitatea de plată curentă, iar pragul depășește valorile uzuale (AC nu a justificat de ce un prag mai mic nu ajungea) → încalcă art. 172 alin. (5) L98. Alternative mai puțin restrictive: lichiditate curentă, disponibil minim, linii de credit, plăți periodice, garanția de bună execuție. O singură ofertă depusă confirmă caracterul restrictiv; termenul de depunere a trecut → anularea procedurii.",
+  "cum_ne_ajuta": "Gazpet utilizează leasing/credite pentru utilaje → praguri de solvabilitate/îndatorare excesive ne afectează. Contestăm în termen cu argumentele din această decizie. Șablon: „Vă rugăm să justificați pragul de [x] al solvabilității generale pentru un contract de [12] luni sau să-l înlocuiți cu lichiditatea curentă ≥ 1 / acces la resurse financiare de [y] lei.”",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări rețele apă și canalizare",
+  "criteriu_atribuire": "—",
+  "contestator_rol": "operator economic interesat (contestă documentația)",
+  "etapa": "documentație",
+  "fapte_relevante": "Durata contractului 12 luni; procedura era în etapa „Evaluare calificare și tehnică” cu o singură ofertă depusă la data deciziei.",
+  "concluzie_cnsc": "Admite contestația și anulează procedura de atribuire.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea apă-canal la autoritate locală — piață directă.",
+   "mai_putin_comparabila": "Pragul exact este anonimizat.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "un contract pe 12 luni nu presupune expunere pe termen lung",
+    "loc": "analiza solvabilității"
+   },
+   {
+    "text": "fiind depusă o singură ofertă, aspect care, pe de o parte, confirmă caracterul restrictiv al documentației de atribuire",
+    "loc": "concluzie"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "a7a66384a07b3d92ec185f8528dc779069a70d2096c387e98393cf4370945321",
+  "snapshot_bytes": 164863,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "f0a253b7297c6f8e8a63d666c88c753c4a2a7f013744af15ab034455cfaa6da6",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_328",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_328",
+  "data": "2026-02-05",
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "autorizare_anre",
+   "documente_calificare",
+   "clarificari_oferta",
+   "tert_sustinator_subcontractant"
+  ],
+  "regula": "Când DA cere informații despre autorizările necesare tuturor activităților (inclusiv devieri de rețele de gaze), fiecare ofertant trebuie să arate în ofertă cine le deține (el, asociat sau subcontractant declarat); EC poate și trebuie să clarifice aceeași cerință la toți ofertanții, chiar dacă reevaluarea dispusă privea alte oferte.",
+  "temei_legal": [
+   "Legea 99/2016 art. 228 alin. (5)",
+   "HG 394/2016 art. 129 alin. (1), art. 143 alin. (3) lit. a) și alin. (5)",
+   "Legea 98/2016 art. 2 alin. (2) lit. b) (tratament egal, invocat)",
+   "Legea 101/2016 art. 26 alin. (6); CA București hotărârea din 10.11.2025"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=YTc4OGIxNDYtNDE1Mi00MDYwLWFiNjItMTYwMDMwNjljY2Zl&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzMyOC5wZGY=&action=aW5saW5l",
+  "autoritate": "Operator regional apă (entitate contractantă sectorială, anonimizată)",
+  "obiect": "CL5.1 „Reabilitarea și extinderea rețelelor de alimentare cu apă și canalizare în municipiul ... – Zona Nord”, CPV 45231300-8, licitație deschisă",
+  "problema": "După o decizie CNSC menținută de CA București (hotărârea din 10.11.2025) care a cerut reevaluarea ofertelor de pe locurile 1-2 pentru lipsa autorizărilor necesare (devieri rețele gaze naturale, rețele electrice, subtraversări CF/cursuri de apă, ISU), EC a cerut clarificări și ofertantului de pe locul 3 pe aceleași aspecte. Acesta a contestat solicitarea de clarificări ca depășind limitele reevaluării.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Curtea a stabilit cu putere de lucru judecat că ofertanții trebuiau să INDICE în propunerea tehnică informațiile despre atestatele/autorizațiile necesare pentru toate activitățile (inclusiv devieri gaze) și modul concret de acces la ele (asociat/subcontractant), nu să le anexeze. Principiul tratamentului egal obligă EC să verifice aceeași cerință la toți ofertanții, deci și la locul 3; solicitarea de clarificări e legală. Anterior: autorizația IGSU sau a unui asociat pe alt domeniu nu suplinește autorizațiile pentru devieri gaze; „colaboratorii” nedeclarați subcontractanți nu acoperă cerința.",
+  "cum_ne_ajuta": "Direct relevant: Gazpet are autorizare ANRE pentru gaze — în ofertele apă-canal cu devieri de rețele gaze ne putem oferi ca SUBCONTRACTANT/ASOCIAT declarat pentru devieri. Pentru ofertele proprii: tabel „activitate → autorizare necesară → titular (Gazpet/asociat/subcontractant) → nr. document” în propunerea tehnică. ERP: generator automat al acestui tabel din registrul de autorizări.",
+  "curte_apel": "Decizia CNSC anterioară din aceeași procedură a fost menținută de CA București (hotărârea din 10.11.2025), cu motivare substituită; prezenta decizie aplică acea hotărâre.",
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10,
+   22
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă online (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": 45737537.72,
+  "sub_prag": false,
+  "tip_contract": "contract sectorial de lucrări rețele apă și canalizare",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant clasat inițial pe locul 3",
+  "etapa": "evaluare (reevaluare după decizie CNSC/CA)",
+  "fapte_relevante": "VE 45.737.537,72 lei; anunț din 23.08.2024; solicitare de clarificări contestată nr. 86688/10.12.2025; contestație înregistrată 15.12.2025. Data din BO („05.02.2025”) e evident greșită — decizia e din 2026.",
+  "concluzie_cnsc": "Respinge excepția nedepunerii cauțiunii și contestația ca nefondată; contestatoarea trebuie să răspundă la clarificări.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal cu devieri de rețele de gaze naturale — exact interfața în care Gazpet aduce autorizarea ANRE.",
+   "mai_putin_comparabila": "Procedură sectorială de valoare mare; contextul e o reevaluare după control judiciar.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "obligaţia ofertanţilor nu era aceea de a anexa ofertei atestatele/ certificatele/agrementele necesare execuţiei lucrărilor",
+    "loc": "citat din hotărârea CA București reprodus în decizie"
+   },
+   {
+    "text": "entitatea nu putea să accepte, în continuare, admisibilitatea ofertei contestatoarei",
+    "loc": "analiza CNSC"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "a2f39070e179c5051f4784dca4cb1afe2a74f30e729caaccb4e282e309b526a1",
+  "snapshot_bytes": 234228,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "e60d02f416b9c91412a1ca5d9ef6994c6326ffc40b0bdd27d0792daba95cfc2c",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_349",
+  "nr_decizie": "349/C7/4899",
+  "buletin_oficial": "BO2026_349",
+  "data": "2026-02-06",
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "altele"
+  ],
+  "regula": "Deschiderea ofertelor fără comisie de evaluare numită este viciu ireparabil care justifică anularea procedurii; neregulile de comunicare a anulării nu o fac nelegală dacă nu au împiedicat contestarea.",
+  "temei_legal": [
+   "Legea 98/2016 art. 212 alin. (1) lit. c) și (2)",
+   "HG 395/2016 art. 126 alin. (1), art. 146 alin. (1), art. 148 lit. g)-h)",
+   "Legea 101/2016 art. 26 alin. (6), art. 53 alin. (1)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MTljMjllYTktODBmOS00NjQzLWFiYzgtYzVjMDIwNzI4OGM4&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzM0OS5wZGY=&action=aW5saW5l",
+  "autoritate": "UAT comună din județul Olt — autoritate contractantă",
+  "obiect": "Execuția lucrărilor „Extindere sistem de canalizare” (CPV 45232400-6), procedură simplificată, anunț SCN1165540/17.07.2025",
+  "problema": "AC a anulat procedura (Dispoziția primarului nr. 239/04.12.2025) pentru că deschisese ofertele fără să fi emis decizia de numire a comisiei de evaluare (confuzie între proceduri). Contestatorul cerea reluarea evaluării ofertei sale.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Deschiderea ofertelor în lipsa unei comisii de evaluare numite (art. 126 HG 395) viciază ireparabil procedura; numirea retroactivă nu e posibilă. Dacă ofertele nu ar fi fost deschise, CNSC putea dispune remedierea (numirea comisiei). Anularea pe art. 212 alin. (1) lit. c) și (2) L98 e corectă. Nerespectarea termenului de 3 zile pentru comunicarea motivului și motivele diferite din anunț vs. adresă nu au produs prejudiciu. Ofertantul are calea despăgubirilor.",
+  "cum_ne_ajuta": "La anulări: cerem imediat (art. 146 HG 395) raportul și decizia de numire a comisiei; ERP — câmp „comisie numită la data deschiderii?” în fișa procedurii. Contestația pe anulare are șanse mici când viciul e ireparabil; evaluăm despăgubiri.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 8322912.55,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări extindere canalizare",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant (6 oferte depuse)",
+  "etapa": "anulare procedură",
+  "fapte_relevante": "VE 8.322.912,55 lei fără TVA; termen depunere 14.08.2025; 6 ofertanți; anunț de anulare publicat 05.12.2025; cauțiune 88.000 lei.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată și cererea de cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere canalizare la comună — tipul de lucrare la care participă Gazpet ca ofertant apă-canal.",
+   "mai_putin_comparabila": "Viciu procedural intern al AC, nu ține de ofertă.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliul nu mai poate dispune nicio măsură de remediere a procedurii, aceasta fiind astfel viciată în mod ireparabil",
+    "loc": "concluzie anulare"
+   },
+   {
+    "text": "Consiliul ar fi putut dispune o măsură de remediere, în sensul obligării acesteia la desemnarea unei comisii",
+    "loc": "concluzie anulare"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "fcc7d6f3df1754e1f7c4a6503fd1bf3a7828e0f88707c76a4073045098cb7b4b",
+  "snapshot_bytes": 272477,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a228639dd8931f770d1c04cc37511a892ff206373a05213039e70098337ece9d",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_362",
@@ -684,7 +1199,84 @@
   "snapshot_sha256": "cb7258b55907c87b67bf3db2282aea6b9dedbebc18317c3e42a1cdd4f32d9717",
   "snapshot_bytes": 501774,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "497ed194e348162420d36ed9736d0e569290773077f70949625ac42c5f59ebd5",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_544",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_544",
+  "data": null,
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "autorizare_anre",
+   "clarificari_oferta",
+   "factor_evaluare",
+   "termen_executie",
+   "neconformitate_tehnica"
+  ],
+  "regula": "Comisia nu poate transforma o cerință privind autorizarea operatorului economic (ANRE gaze/electric, AFER) într-o cerință de autorizare a personalului; insuficiența documentării unui avantaj punctabil (ex. garanție extinsă) se sancționează prin punctaj, nu prin respingerea ofertei.",
+  "temei_legal": [
+   "Legea 98/2016 art. 209",
+   "HG 395/2016 art. 134-135",
+   "Ordin ANRE 132/2021 (invocat în DA)",
+   "Ordin ANRE 134/2021 (invocat în DA)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=OGQyZTQ0MDEtOWJkNy00MTZmLTkxNjYtZTFiZmM3NzM4YmJl&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzU0NC5wZGY=&action=aW5saW5l",
+  "autoritate": "UAT (anonimizat) — autoritate contractantă, proiect PNRR",
+  "obiect": "Proiectare și execuție „Extindere rețele de canalizare” în 2 localități, CPV 45232400-6, licitație deschisă online",
+  "problema": "Ofertele a două asocieri respinse ca neconforme după clarificări: lipsa autorizațiilor ANRE pentru PERSONAL în domeniul gazelor (DA cerea autorizare ANRE pentru proiectare/execuție protejare conducte de gaz PPI/EPI conform Ord. ANRE 132/2021 și aviz Romgaz), grafic necomplet (nu procentual, fără WBS, fără subactivități proiectare, drum critic diferențiat doar cromatic), „avantaje competitive” nedetaliate, garanție extinsă nejustificată.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Fișa de date cerea informații despre autorizarea OPERATORULUI ECONOMIC (AFER, ANRE electric C1A/C2A Ord. 134/2021, ANRE gaze Ord. 132/2021), nu despre personal — respingerea pe lipsa autorizațiilor de personal gaze e eronată. Avantajele competitive se cereau în rezumat, la latitudinea ofertantului. Deficiențele de prezentare a graficului (procent, WBS, legendă) au fost analizate formal. Lipsa justificării garanției suplimentare duce cel mult la neacordarea punctajului la factorul respectiv, nu la neconformitate.",
+  "cum_ne_ajuta": "Canalizare cu protejare/traversare conducte de gaz (PPI/EPI, aviz Romgaz/Distrigaz) — Gazpet poate fi asociat/subcontractant cu autorizarea ANRE a firmei. La respingeri pe „lipsă autorizare personal” când DA cere autorizare de firmă → contestăm cu această decizie. ERP: la extragerea cerințelor DA marcăm explicit „autorizare OE” vs. „atestat personal”.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10,
+   22
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "contract de proiectare și execuție rețele canalizare (PNRR)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "lideri de asociere respinși (două contestații conexate)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Raportul procedurii nr. 4807/17.06.2025; clarificări 3534-3535/30.04.2025. DA cerea: autorizație AFER (OMT 290/2000), atestate ANRE C1A/C2A, autorizație ANRE pentru proiectare/execuție protejare conducte gaz PPI și EPI (aviz Romgaz 196/2023).",
+  "concluzie_cnsc": "Conexează; admite ambele contestații; anulează raportul în privința celor două oferte; reevaluare în 10 zile; respinge cheltuielile (nedovedite).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Interfață canalizare–conducte de gaz cu cerință explicită de autorizare ANRE gaze (Ord. 132/2021).",
+   "mai_putin_comparabila": "Contestatorii erau asocieri respinse; câștigătorul nu e analizat.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "indicau obligația de prezentare, prin ofertă, a unor asemenea autorizații pentru operatorul economic, nu pentru personalul implicat",
+    "loc": "motivul II (gaze naturale)"
+   },
+   {
+    "text": "reprezintă un refuz de acordare a punctajului aferent factorului de evaluare corelativ, nu o caracteristică neconformă",
+    "loc": "motivul garanției suplimentare"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "8f4ce0229958ded87a55cf4636edaffbe3567dde71d4baab3a85f479066ee822",
+  "snapshot_bytes": 403604,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "50feabd71756c7835cbd86189aa8a06f1903dd9026d666d461778fde267f7743",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2026_76",
@@ -748,7 +1340,149 @@
   "snapshot_sha256": "50c9a53acaa0c22c8a6612af0850bc155f72cdac5e240043210358a9f5ce5963",
   "snapshot_bytes": 304566,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "0bf055ef4f54cab70b7bb2629c5705d832a87dafee1c3ebca925c72fb3119531",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_804",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_804",
+  "data": null,
+  "an": 2026,
+  "domeniu": "gaze",
+  "tema": [
+   "experienta_similara",
+   "cerinte_restrictive",
+   "altele"
+  ],
+  "regula": "Pentru lucrări de transport gaze de complexitate ridicată (subtraversare Dunăre HDD DN700), EC poate cere experiență pe 10 ani, în max. 3 contracte, inclusiv HDD de lungime și diametru minime; susținerea că cerința favorizează pe cineva trebuie dovedită. Fără cauțiune contestația e respinsă.",
+  "temei_legal": [
+   "Legea 101/2016 art. 9 alin. (1), art. 26 alin. (1) și (6), art. 61^1 alin. (1)",
+   "Instrucțiunea ANAP nr. 2/2017 art. 3",
+   "Cod procedură civilă art. 249"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=OGFmMDIzYWYtODdiOS00ZTE5LWI3MTctNGRkNmQzNTM0MWNh&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzgwNC5wZGY=&action=aW5saW5l",
+  "autoritate": "Operator de transport gaze naturale — dedus din obiect (DN700 Șendreni) și sediul din Piața ... Motaș (entitate contractantă sectorială; sediu în Piața ... Motaș — anonimizat)",
+  "obiect": "Lucrări pe conducta de transport gaze DN700 (tronson ... – Șendreni): transformare în conductă godevilabilă, gări de lansare-primire PIG, eliminare sifoane, înlocuire robinete DN700, subtraversare a Dunării prin foraj orizontal dirijat; CPV 45231220-3; licitație deschisă",
+  "problema": "Prin clarificare din oficiu, EC a modificat experiența similară: perioadă 10 ani în loc de 5, max. 3 contracte în loc de 5, lucrări în sisteme de transport gaze/instalații de înaltă presiune + foraj orizontal dirijat (inițial un foraj de min. [x] m și DN700). Două contestații: una fără cauțiune; cealaltă cerea revenirea la cerința inițială sau cumulul HDD.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Prima contestație — respinsă pentru neconstituirea cauțiunii (art. 61^1 L101; CNSC nu stabilește și nu comunică cuantumul). A doua: EC a remediat cerința (HDD cumulat de [x] m, din care un foraj de min. [y] m cu DN minim 600, în cadrul acelor contracte), conform Instrucțiunii ANAP 2/2017 art. 3; afirmația că cerința favorizează anumiți operatori nu e dovedită (art. 249 CPC). Instrucțiunea permite depășirea plafoanelor când complexitatea impune „exerciții” similare.",
+  "cum_ne_ajuta": "Cerințe-tip Transgaz pentru calificare: experiență în transport gaze/înaltă presiune pe 10 ani + HDD cu lungime și DN minime. ERP: evidența lucrărilor HDD Gazpet (lungime, DN, PV recepție) pentru eventuale asocieri/subcontractări. Atenție: cauțiunea CNSC se constituie din oficiu, fără notificare.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   7,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "contract sectorial de lucrări pe conductă de transport gaze naturale DN700",
+  "criteriu_atribuire": "—",
+  "contestator_rol": "doi operatori economici interesați (contestă documentația)",
+  "etapa": "documentație",
+  "fapte_relevante": "Cerința remediată: în ultimii 10 ani, max. 3 contracte în sisteme de transport gaze/instalații de utilizare de înaltă presiune, valoare ≥ [prag]; HDD cumulat [x] m, din care un foraj ≥ [y] m cu DN ≥ 600. Se acceptă lucrări executate parțial cu livrabil independent.",
+  "concluzie_cnsc": "Respinge o contestație pentru neconstituirea cauțiunii și pe cealaltă ca nefondată.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Gaze naturale — conducte, HDD, înaltă presiune; singura decizie din lot pe transport gaze.",
+   "mai_putin_comparabila": "Transport (Transgaz), nu distribuție; nivelul de experiență e peste profilul curent Gazpet.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu demonstrează prin niciun mijloc de probă aceste afirmații",
+    "loc": "analiza celei de-a doua contestații"
+   },
+   {
+    "text": "Consiliul neavând competența de a stabili un alt cuantum",
+    "loc": "analiza cauțiunii"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "be40aecdbfc62b99959b3efdda620ca6a38d1a387979b0e2ef26d64d097d9e26",
+  "snapshot_bytes": 222222,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "7b20f66059b04bb452a193c95c0c49ac2975ab39e7b1e1c03f8c7b775791f61b",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2026_809",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2026_809",
+  "data": null,
+  "an": 2026,
+  "domeniu": "apa_canal",
+  "tema": [
+   "ajustare_pret",
+   "cerinte_restrictive",
+   "termen_executie",
+   "clarificari_documentatie"
+  ],
+  "regula": "Dovezile de resurse care implică costuri (teren pentru organizarea de șantier, documente de la producători, liste nominale de muncitori) se pot cere la ofertare doar sub formă de angajament/declarație, cu dovada la câștigător; detalierea programului de execuție pe activități de max. 30 de zile e o cerință proporțională.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2 (proporționalitate), art. 172 (invocat)",
+   "OG 15/2021 (invocată în DA)",
+   "OUG privind ajustarea prețurilor contractelor în derulare — art. 1 alin. (1) (număr anonimizat în BO; contestatorul numea „OG 47/2022”)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=Y2YyZDA5ZjItY2QyZC00OWYzLWJjMTgtY2Q2NjE4NWEwMmVm&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzgwOS5wZGY=&action=aW5saW5l",
+  "autoritate": "Comună/Primărie (anonimizată) — autoritate contractantă",
+  "obiect": "„Extindere canalizare menajeră în satul ...” (CPV 45232400-6), procedură simplificată",
+  "problema": "Contestație la documentație: dovada dreptului de proprietate/folosință asupra terenului pentru organizarea de șantier încă de la ofertare; centralizator detaliat cu personalul muncitor + dovezi; documente justificative ale producătorilor; ajustarea prețului conform OG 15/2021 (contestatorul o considera abrogată și cerea formula OUG 2022); program de execuție cu activități de max. 30 de zile; vizită amplasament.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Admise: terenul pentru organizarea de șantier — la ofertare ajunge o declarație pe propria răspundere, dovada se dă de câștigător la execuție (cerința impune costuri nejustificate și favorizează firmele locale); centralizator personal înlocuit cu declarație privind efectivul mediu (AC a achiesat); documentele producătorilor înlocuite cu declarație privind materialele agrementate (AC a achiesat). Respinse: ajustarea prețului — ordonanța de urgență invocată de contestator se aplică doar contractelor în derulare la intrarea ei în vigoare, deci trimiterea AC nu e nelegală; detalierea activităților la max. 30 zile e justificată pentru monitorizarea lunară.",
+  "cum_ne_ajuta": "Șabloane de clarificare/contestare pentru DA apă-canal care cer teren organizare șantier, liste nominale de muncitori sau certificate producător la ofertare → propunem „declarație pe propria răspundere, documente la câștigător”. Ajustarea prețului: verificăm actul invocat în fișa de date (OG 15/2021 vs. ordonanța pentru contracte în derulare) — nu e motiv de contestare dacă formula e legală pentru contracte noi.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări extindere canalizare menajeră",
+  "criteriu_atribuire": "—",
+  "contestator_rol": "operator economic interesat (contestă documentația)",
+  "etapa": "documentație",
+  "fapte_relevante": "10 puncte de critică; admise punctele 5, 7, 9 și 10; procedura era suspendată.",
+  "concluzie_cnsc": "Admite în parte (pct. 5, 7, 9, 10); obligă AC la modificarea DA în 15 zile; respinge celelalte critici, anularea și cheltuielile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare menajeră rurală — cerințe tipice de documentație pe care Gazpet le întâlnește.",
+   "mai_putin_comparabila": "Identitatea actului de ajustare e anonimizată în BO; nu tranșează formula de ajustare.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "impunerea acestei cerințe încă din faza de ofertare obligă operatorii economici să suporte costuri nejustificate",
+    "loc": "pct. 9 — organizarea de șantier"
+   },
+   {
+    "text": "Faptul că există lucrări mai ample nu înseamnă că nu poate fi prezentat în cadrul programului de execuție nivelul de detaliu solicitat",
+    "loc": "pct. 6 — activități de max. 30 zile"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "428ef7254c86824e25d7e4cfc3ec2e4173b64bc0c66e0bd518f7e6ae20acfd48",
+  "snapshot_bytes": 230896,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "6007906883e6df388411c293717e5a97b96012745740744f88cbcc92121e0623",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-Decizie_271",
@@ -811,7 +1545,9 @@
   "snapshot_sha256": "b268a26b16b42f193322929fa8429320b2d7fb9953d0f658e73b40d1f6664aab",
   "snapshot_bytes": 457879,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "96f3199d00389d709307643d1e75fb82f7ab9e608daf651621a42eca54fb3468",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1037",
@@ -879,7 +1615,9 @@
   "snapshot_sha256": "aea13058f449a9186cad913a25941a356bc3fa4f8db0a97598627883890dfffe",
   "snapshot_bytes": 596739,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "efe36ca25693c1690b5e2326d9f3d90725c7fd1880e07df5ae71b12acc5804e9",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_104",
@@ -942,7 +1680,9 @@
   "snapshot_sha256": "38f96278a13006870017ba93470103254ee45b7dfec37c77c60249cdae2618be",
   "snapshot_bytes": 167242,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "9deef60bb1d8cbc8908ff9df5c6347a5e08f581b7e3ee9d7c3d988cdb556026f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1138",
@@ -1017,7 +1757,9 @@
   "snapshot_sha256": "b2692edf9784c974081f3fe228dbb00e086a47d8e7352844b2c37e7f3d9792a5",
   "snapshot_bytes": 1191919,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a79a4b3d937b3252d09c3d57dcf27270318bea8a2b6eeab50375030ca074b3af",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1221",
@@ -1081,7 +1823,221 @@
   "snapshot_sha256": "bbe8c514085c9e4ba817f74818d2cba35011754797d3426593af90855343dc8c",
   "snapshot_bytes": 499006,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "0746f4505b41e01785e62bc06d33b2255f819ad513eb7fc8879e5b235145a89e",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_1248",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_1248",
+  "data": null,
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "asociere",
+   "clarificari_oferta"
+  ],
+  "regula": "Repartizarea sarcinilor în asociere poate fi clarificată prin trimitere la acordul de asociere și la atestatele asociaților deja depuse; un astfel de răspuns e concludent și nu modifică oferta.",
+  "temei_legal": [
+   "HG 395/2016 art. 134, art. 135 alin. (3)",
+   "Legea 98/2016 art. 2 alin. (2) lit. b)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MGVjYjM3MDQtNDllOS00NDgwLThhZTgtNDkzYzJlMmIwZTNj&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzEyNDgucGRm&action=aW5saW5l",
+  "autoritate": "Comună (anonimizată) — autoritate contractantă",
+  "obiect": "„Înființare rețea de alimentare cu apă în comuna ... – proiectare și execuție”, CPV 45232150-8, procedură simplificată",
+  "problema": "La întrebarea „ce lucrări execută asociatul X”, asocierea a răspuns că X execută 2% — instalații electrice, conform acordului de asociere (91,88% / 2% / 6,12%) și atestatului ANRE de tip Be din oferta inițială (pag. 519). AC a considerat că răspunsul aduce „informații noi” și a respins oferta.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Informația rezulta din documentele existente în ofertă (acord de asociere cu procente + atestat ANRE) — răspunsul este clarificare de confirmare (art. 135 alin. 3 HG 395), nu completare. Altor ofertanți li s-a acceptat răspunsul cu trimitere la acordul de asociere — încălcarea tratamentului egal.",
+  "cum_ne_ajuta": "Șablon acord de asociere Gazpet: procente + listă explicită „lucrări executate de fiecare asociat” corelată cu atestatele (ANRE gaze/electric) atașate. În propunerea tehnică: secțiune obligatorie „Împărțirea sarcinilor” (cerință frecventă în fișa de date IV.4.1).",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 7267183.28,
+  "sub_prag": true,
+  "tip_contract": "contract de proiectare și execuție rețea alimentare cu apă",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "lider de asociere, ofertă respinsă",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 7.267.183,28 lei; acord de asociere nr. 180/04.11.2024; clarificare 11.03.2025, răspuns nr. 85/11.03.2025; PV 1959/24.03.2025; raport 2414/03.04.2025; contestație înregistrată 14.04.2025.",
+  "concluzie_cnsc": "Admite contestația; anulează parțial PV și raportul privind oferta asocierii; obligă AC să aplice motivarea și să finalizeze procedura în 10 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de apă P+E cu asociere și atestat ANRE pentru partea electrică — formulă pe care Gazpet o folosește.",
+   "mai_putin_comparabila": "Criteriu preț cel mai scăzut; valoare mică.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "nefiind vorba despre vreo modificare sau de vreo completare a ofertei",
+    "loc": "analiza răspunsului"
+   },
+   {
+    "text": "aceeași întrebare a fost transmisă și celorlalți participanți la procedură, iar răspunsurile primite au fost acceptate",
+    "loc": "tratament egal"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "05c56285bd457d0d6f3877ef4dffea240980e7d8fff1fe13e9b3ffaa91c199d2",
+  "snapshot_bytes": 199515,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "2e1bda42becd2e5fb3cc499852cc174d1729e061ff74317f387fb327fe511905",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_1524",
+  "nr_decizie": "1524/C4/1627",
+  "buletin_oficial": "BO2025_1524",
+  "data": "2025-06-03",
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "clarificari_oferta",
+   "neconformitate_tehnica",
+   "personal_cheie",
+   "garantie_buna_executie"
+  ],
+  "regula": "Omisiunile punctuale din propunerea tehnică (plan de control al calității, declarații de disponibilitate) se corectează ca abateri tehnice minore; respingerea pentru astfel de deficiențe la oferte voluminoase este disproporționată.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (1), (5)-(11), art. 135",
+   "Legea 98/2016 art. 49, art. 209",
+   "Legea 101/2016 art. 26 alin. (2)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=YzcyMGU1MzUtMWE0Ni00ZWZlLWJiNGMtYjNjMTg3Y2RmM2Zj&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzE1MjQucGRm&action=aW5saW5l",
+  "autoritate": "Comună (anonimizată) — autoritate contractantă",
+  "obiect": "„Conductă aducțiune pentru alimentarea cu apă a gospodăriei de apă ...”, CPV 45232150-8, procedură simplificată",
+  "problema": "Oferta respinsă pentru: lipsa din planul de control al calității a verificărilor pentru prizele de pământ, calificarea managerului de proiect (inginer instalații pentru protecția atmosferei), lipsa inițială a declarației de disponibilitate a utilajelor/mijloacelor de transport — completate/explicate prin clarificări.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Omisiunile sunt abateri tehnice minore corectabile (art. 134 alin. 7-9 HG 395) — AC nu exclusese abaterile pe acel punct; la o propunere de peste 1500 pagini erorile sunt inerente. Diploma managerului se încadra în domeniul „instalații” acceptat (formulare nelimitativă „etc. sau echivalent”). Declarația de disponibilitate depusă ulterior nu avantajează — contractul oricum obligă. GBE de 10% protejează AC. Respingerea = formalism excesiv, disproporționat (art. 49 L98 invocat; Manova C-336/12; CA Cluj dec. 387/2010). Criticile la câștigător — fără interes deocamdată.",
+  "cum_ne_ajuta": "Argument de contestație pentru respingeri formale pe omisiuni minore din PCCVI/declarații. ERP: checklist PCCVI pe categorii din F3 (inclusiv prize de pământ, probe de presiune) ca să evităm omisiunea.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări conductă de aducțiune apă",
+  "criteriu_atribuire": "—",
+  "contestator_rol": "ofertant respins (preț mai mic decât câștigătorul)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Data-limită oferte 07.06.2024; anunț din 26.04.2024; răspuns clarificare nr. 813/14.02.2025; raport nr. 2297/29.04.2025; contestație nr. 37/06.05.2025. Aceeași procedură a revenit la CNSC (BO2025_2886, contestația nr. 63/29.08.2025 — admisă).",
+  "concluzie_cnsc": "Admite în parte; anulează raportul și comunicarea privind respingerea ofertei; reclarificare și reevaluare în 20 de zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Conductă de aducțiune apă la comună — lucrare liniară similară rețelelor de gaze.",
+   "mai_putin_comparabila": "Raționament bazat pe proporționalitate, dependent de volum și context.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "Această mică abatere este de înțeles și acceptabilă de legiuitor",
+    "loc": "analiza prizelor de pământ"
+   },
+   {
+    "text": "erorile, abaterile și viciile ofertelor sunt inerente participării la proceduri complexe",
+    "loc": "concluzie"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "812102b48e0017e0fca2dbbc63c9b28dfe858a9bed7e81c7a126aa49daf35650",
+  "snapshot_bytes": 357890,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "71d8b80f22473d24af5e05bb3754f279c7e2973ee42b44705230afdb39dce8b1",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_1639",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_1639",
+  "data": null,
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "deviz_consumuri",
+   "clarificari_oferta",
+   "tert_sustinator_subcontractant",
+   "pret_neobisnuit_scazut"
+  ],
+  "regula": "Organizarea de șantier cerută ca poziție distinctă nu poate fi „ascunsă” în cheltuieli indirecte/profit; EC trebuie să o cuantifice și să refacă clasamentul. Procentele de subcontractare trebuie să corespundă valorilor ofertate.",
+  "temei_legal": [
+   "HG 394/2016 art. 133 alin. (1) lit. h) și j), art. 140 alin. (1)",
+   "Legea 99/2016 art. 222 (verificare preț)",
+   "CJUE C-336/12 Manova",
+   "Legea 101/2016 art. 26 alin. (2), (5), (9)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZTM1N2QzNjktMDcyYy00MGVhLTkzYjQtMDQxMzcxNjA0NDll&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzE2MzkucGRm&action=aW5saW5l",
+  "autoritate": "Operator apă (societate pe acțiuni, entitate contractantă sectorială, anonimizată; contestator din Constanța)",
+  "obiect": "„Deviere conductă fir II ... – la intrarea în localitatea ...”, CPV 45231300-8, procedură simplificată, preț cel mai scăzut",
+  "problema": "Câștigătorul nu a ofertat distinct organizarea de șantier, susținând că e inclusă în cheltuieli indirecte și profit; manoperă 28 lei/oră; centralizatorul lucrărilor subcontractanților completat prin clarificări; procent subcontractat 4,75% vs. 4,6% declarat (1,4% + 3,2%).",
+  "solutie": "admisa",
+  "rationament_cnsc": "Ofertantul nu se putea sustrage de la structura propunerii financiare impuse (organizare de șantier distinctă); EC trebuia să cuantifice organizarea de șantier și să refacă clasamentul (art. 133 alin. 1 lit. h, j HG 394; Manova C-336/12). Tariful de 28 lei/h justificat — fără critici concrete. Centralizatorul subcontractanților = clarificare de confirmare (acordurile existau). Necorelarea procentelor de subcontractare trebuia lămurită.",
+  "cum_ne_ajuta": "ERP: dacă DA are capitol/linie „organizare de șantier”, ea se cotează distinct (nu în indirecte). Control automat: Σ valori subcontractant / total ofertă = % declarat în acordurile de subcontractare (toleranță 0).",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": 11839294.55,
+  "sub_prag": true,
+  "tip_contract": "contract sectorial de lucrări deviere conductă de apă",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant clasat pe locul III",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 11.839.294,55 lei; câștigător 8.674.219,02 lei fără TVA, subcontractat 412.671,21 lei (4,75%); raport nr. 30267/09.05.2025; acorduri subcontractare din 20.03.2025; onorariu 7.000 lei.",
+  "concluzie_cnsc": "Admite contestația; anulează raportul privind oferta câștigătoare și clasamentul; obligă EC la reevaluare și la plata a 7.000 lei cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Deviere de conductă (tip de lucrare apropiat de devierile de gaze) la operator de utilități.",
+   "mai_putin_comparabila": "Conductă de apă, nu de gaze.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu a continuat procesul de cuantificare a organizării de șantier și de stabilire a clasamentului în funcție de acesta",
+    "loc": "concluzie"
+   },
+   {
+    "text": "nu se cunoaște cum anume a evaluat entitatea contractantă oferta sub acest aspect",
+    "loc": "procente subcontractare"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "5d826a261281668ac7d4b222b94733a86f7c4d8a83b9eb9c2cb98a717bb41cb5",
+  "snapshot_bytes": 371137,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "ba2498ee563909ae753391ecf9703ef281ddcd016ec275294501942748570713",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1699",
@@ -1151,7 +2107,9 @@
   "snapshot_sha256": "812ab7ea48e1ef159a8230cac82e7bdb0d45aecd26167121658d137845576ee0",
   "snapshot_bytes": 405701,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "e7f3150a22714914aa65e33b4de25022c01d90ab72676723e6cc2ae1de069d71",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1704",
@@ -1222,7 +2180,9 @@
   "snapshot_sha256": "9cb4311695cb68c13443180fa0065a5dc72ff11b6d49c630535a5790b4f0d8d5",
   "snapshot_bytes": 464781,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "2065d68334709999707c04c52b16209e99533c88fd69c38aa7195601b625896c",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1775",
@@ -1293,7 +2253,9 @@
   "snapshot_sha256": "ef7c89ad2f258f3968bca4cfe859f877176c247cf9e88c0dfc6a05e79c988143",
   "snapshot_bytes": 273365,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "60eb489d9e6df3a709e6795a51c54b144467958dfd18a0dd647467d9fdcd2950",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1837",
@@ -1356,7 +2318,9 @@
   "snapshot_sha256": "3b82c0718ffac7439e09d88805cdfa1fe44423bce99f1bdc1d0ecde2d31bff98",
   "snapshot_bytes": 476568,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "2510a5e71c70d7d7d68b02caf218597de9c706274c048d6b3e293d25111f2e70",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_187",
@@ -1421,7 +2385,9 @@
   "snapshot_sha256": "8b8b06de8f823b48fb39d8a149703bf91152fb03d2e0514f0e59448c988c1d4d",
   "snapshot_bytes": 543380,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "4caeec498de0ac989f169f234a76ba1dc760b127b02b21fa94f9a30fabe53d50",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_1883",
@@ -1489,7 +2455,152 @@
   "snapshot_sha256": "e5f9279b0878bd3ced10a007f2f6b6f3475a8366c7a2a9334644d59cfe399ed4",
   "snapshot_bytes": 98817,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "8b26184aa0af0f30e12b7d9d22b823ca1c994a5308847b34116a2e30df743833",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_204",
+  "nr_decizie": "204/C1/4294",
+  "buletin_oficial": "BO2025_204",
+  "data": "2025-01-28",
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "documente_calificare",
+   "asociere",
+   "duae",
+   "clarificari_oferta"
+  ],
+  "regula": "Certificatele ISO ale fiecărui asociat trebuie să fie valabile (inclusiv vizele anuale de supraveghere) la data-limită și la prezentarea documentelor-suport; nu pot fi înlocuite cu certificate obținute după evaluare/contestație.",
+  "temei_legal": [
+   "Legea 99/2016 art. 180 alin. (1) lit. h), art. 205 alin. (4), art. 219 alin. (1), art. 221 alin. (2)",
+   "HG 394/2016 art. 133 alin. (1), art. 143 alin. (2) lit. b)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZjFkNzI2M2UtOWJlMC00NTVmLTlhNjEtZTI0ZWEzYzhjNmJm&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzIwNC5wZGY=&action=aW5saW5l",
+  "autoritate": "Operator regional apă din județul Prahova (entitate contractantă sectorială, societate pe acțiuni, anonimizată)",
+  "obiect": "„PH-CL-01 Execuție rețele de alimentare cu apă și canalizare în Câmpina și Poiana Câmpina”, CPV 45231300-8, licitație deschisă",
+  "problema": "Asocierea câștigătoare declarase în DUAE că un asociat are ISO 9001 și ISO 14001; la documentele-suport certificatele (emise 11.03.2022) nu aveau viza anuală de supraveghere — valabile deci doar până la 11.03.2023. După contestație, asociatul a depus certificate noi (19.12.2024) de la alt organism.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Cerința (ISO pentru fiecare asociat, valabile la data prezentării) devenise obligatorie prin necontestare. Fără viza anuală, certificatele nu erau valabile nici la data-limită (06.06.2023), nici la prezentare (18.11.2024). „Documente justificative actualizate” înseamnă documentele deținute la data DUAE, eventual cu viza la zi — nu înlocuirea cu certificate noi; altfel s-ar crea avantaj evident (art. 221 alin. 2 L99). Inducerea în eroare prin DUAE intră sub art. 180 alin. (1) lit. h) L99. Disputa cu organismul de certificare nu e de competența CNSC.",
+  "cum_ne_ajuta": "Operatorul regional de apă din Prahova (identitate anonimizată în BO; probabil Hidro Prahova — neverificat), zona Gazpet. ERP — registrul de certificări: dată certificare inițială + date vize anuale + alertă cu 60 de zile înainte de audit; aceeași verificare pentru PARTENERII de asociere înainte de semnarea acordului. DUAE se completează doar pe documente valabile.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": 206281657.01,
+  "sub_prag": false,
+  "tip_contract": "contract sectorial de lucrări rețele apă și canalizare (fonduri europene)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant clasat pe locul 2 (din 2 oferte)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 206.281.657,01 lei; data-limită oferte 06.06.2023; documente-suport depuse 18.11.2024; raport nr. 1111/28.11.2024; contestație înregistrată 10.12.2024.",
+  "concluzie_cnsc": "Admite contestația; respinge intervenția câștigătorului; anulează raportul și obligă la reevaluarea ofertei asocierii în 10 zile; cheltuieli respinse ca nedovedite.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă-canal la operatorul regional din Prahova — beneficiar direct din zona Gazpet.",
+   "mai_putin_comparabila": "Valoare foarte mare; problema e la un asociat, nu la lider.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "în forma în care au fost depuse (fără viza anuală care să confirme menținerea valabilității), acestea nu sunt valabile la data prezentării",
+    "loc": "analiza certificatelor ISO"
+   },
+   {
+    "text": "ar determina apariția unui avantaj evident în favoarea intervenientului",
+    "loc": "analiza înlocuirii certificatelor"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "543aa55f2d301555b4e381d0be47df5755d8c249d13987e552d77a490e4dd043",
+  "snapshot_bytes": 1025905,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "849721daf89ff3b83a3d9a91ee743697144b97cef47590a1b84d8ee2cb17d8c1",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_2114",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_2114",
+  "data": null,
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "neconformitate_tehnica",
+   "clarificari_oferta",
+   "asociere",
+   "garantie_buna_executie"
+  ],
+  "regula": "Garanția de 36 de luni a lucrărilor nu poate fi pusă la îndoială pe motiv că producătorii dau garanții mai scurte pentru echipamente; preluarea unor pasaje din caietul de sarcini în propunerea tehnică nu face oferta neconformă.",
+  "temei_legal": [
+   "HG 394/2016 art. 22 alin. (1) lit. b), art. 129 alin. (1)",
+   "Legea 10/1995 (invocată de ofertant)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ODBiZmRmY2EtOGYyNS00MmMyLWI1YTYtMGNmNzc5N2MxYzk0&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzIxMTQucGRm&action=aW5saW5l",
+  "autoritate": "Operator regional apă (entitate contractantă sectorială, anonimizată)",
+  "obiect": "„Extinderea și reabilitarea rețelelor de alimentare cu apă și apă uzată în aglomerarea Corabia”, CPV 45231300-8, licitație deschisă",
+  "problema": "Oferta asocierii respinsă, între altele, pentru că fișele tehnice ale echipamentelor/materialelor aveau garanție de 24 luni, iar garanția lucrărilor cerută era de 36 luni; și pentru că propunerea tehnică „copia” pasaje din caietul de sarcini (fișa de date interzicea copierea).",
+  "solutie": "admisa",
+  "rationament_cnsc": "Garanția lucrărilor (răspunderea antreprenorului pentru vicii, clauza 61 din condițiile de contract) e distinctă de garanția comercială a produselor; antreprenorul răspunde pentru întreaga lucrare 36 luni, indiferent de garanția componentelor. Preluarea unor repere din caietul de sarcini într-o propunere tehnică de 3485 pagini nu e motiv de neconformitate; EC nici nu a cerut clarificări și nu a explicat impactul.",
+  "cum_ne_ajuta": "Răspuns-tip la clarificări „garanție lucrări vs. garanție produse” (Gazpet răspunde integral ca antreprenor, conform clauzei de garanție din contract). Propunerea tehnică poate prelua cerințele caietului ca structură, dar cu adaptare la ofertă.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   4,
+   7,
+   8,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "contract sectorial de lucrări rețele apă și apă uzată",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "lider de asociere, ofertă respinsă",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț 27.02.2025; raport nr. 0719/02.06.2025, adresa 0721/02.06.2025; contestație nr. 1350/13.06.2025; EC anulase procedura în același raport.",
+  "concluzie_cnsc": "Admite contestația; anulează raportul și actele subsecvente privind oferta contestatoarei; reevaluare în 15 zile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Operator regional apă, rețele apă și apă uzată, asociere — piață directă.",
+   "mai_putin_comparabila": "Propunere tehnică foarte voluminoasă; criteriul de copiere era specific DA.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "garanția unei întregi lucrări nu poate fi determinată doar de garanția unor produse, echipamente",
+    "loc": "motivul privind garanția"
+   },
+   {
+    "text": "preluarea, în propunerea tehnică, a anumitor pasaje, informații etc. din documentația tehnică nu poate constitui motiv de neconformitate",
+    "loc": "motivul privind copierea caietului"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "2c36a8f5de61b58801cc11c1dd4c5e59d4b83621b1aaefccc692a3546588a4ac",
+  "snapshot_bytes": 330231,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "c00fd7acdcaaf0e12fc36d7e3d0c9b34aaa2fd6b21592f51b282b545e3645087",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_2118",
@@ -1559,7 +2670,151 @@
   "snapshot_sha256": "035ad35b2f3410a13eaa4429de1827346ee63cae8ab735b6f3ae2b278f4aa706",
   "snapshot_bytes": 445936,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d4814ebf477d45cdfa5bcac83b8eecd82fec4c8394c2779aefc73d11b43c55a5",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_2237",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_2237",
+  "data": "2025-08-04",
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "factor_evaluare",
+   "termen_executie",
+   "clarificari_oferta",
+   "neconformitate_tehnica",
+   "autorizare_anre"
+  ],
+  "regula": "Comisia trebuie să consemneze concret verificarea fiecărei cerințe tehnice pentru fiecare ofertă; lipsa acestei analize obligă la reevaluare. Când fișa de date cere grafic general, Gantt și drum critic, acestea sunt documente distincte.",
+  "temei_legal": [
+   "HG 395/2016 art. 1 alin. (4), art. 128 alin. (3)-(5), art. 133 alin. (1), art. 134 alin. (5)",
+   "Legea 101/2016 art. 26 alin. (2), (5), (9)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=OTBhMGYyYjctNzVkZi00MTc4LWJmYmEtZGJlY2E5OTMwYzU2&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzIyMzcucGRm&action=aW5saW5l",
+  "autoritate": "UAT (anonimizat) — autoritate contractantă",
+  "obiect": "Execuție lucrări „Înființare rețea de canalizare și extindere rețea de apă” în 3 localități, CPV 45232400-6, licitație deschisă",
+  "problema": "Două contestații împotriva ofertelor de pe locurile 1-3: lipsa planșei cerute, metodologii pentru timp friguros și foraj prin percuție, grafic general/Gantt/drum critic, utilaje și specialiști, autorizare ANRE pentru lucrările electrice (subcontractant), normative abrogate. Factori: preț 80%, termen de execuție 10%, garanția lucrărilor 10%.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Procesul-verbal de evaluare și raportul expertului cooptat nu consemnează cum a fost verificată fiecare cerință (art. 133 alin. 1 HG 395; art. 128 alin. 3-5 privind rapoartele experților) — evaluarea nu e încheiată, reevaluare obligatorie. Graficul general, Gantt-ul (cu consumuri de manoperă, transport, utilaje) și diagrama drumului critic sunt trei documente distincte. CNSC nu se substituie comisiei.",
+  "cum_ne_ajuta": "ERP: pachet standard de planificare = 3 fișiere distincte (grafic general fizic pe luni/obiecte, Gantt cu consumuri C7/C8/transport, drum critic). Când contestăm, cerem PV de evaluare și raportul expertului — dacă nu consemnează verificarea punctuală, avem argument. Factori tipici: preț 80/termen 10/garanție 10.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 32316853.25,
+  "sub_prag": false,
+  "tip_contract": "contract de lucrări canalizare + extindere apă",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (preț 80%, termen execuție 10%, garanție lucrări 10%)",
+  "contestator_rol": "doi ofertanți clasați pe locurile II și IV",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț 23.04.2024; VE 32.316.853,25 lei; 4 oferte; clasament 100 / 98,05 / 91,78 / 89,22 puncte; raport nr. 8580/15.05.2025; Gantt cu ordin de începere 01.06.2024.",
+  "concluzie_cnsc": "Admite ambele contestații; anulează raportul privind ofertele de pe locurile 1-3; reevaluare în 15 zile; obligă AC la câte 7.140 lei cheltuieli (onorariu redus).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare + apă, factori termen/garanție — structura uzuală a licitațiilor la care participă Gazpet.",
+   "mai_putin_comparabila": "Criticile ANRE (electric) nu au fost tranșate de CNSC.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "procesul de evaluare a ofertelor în cauză nu s-a încheiat, motiv pentru care se impune obligarea autorității contractante la reevaluarea acestora",
+    "loc": "concluzie repetată pe critici"
+   },
+   {
+    "text": "este vorba despre trei documente distincte, Graficul general de realizare a investitiei, Graficul Gantt și Diagrama drumului critic",
+    "loc": "critica graficelor"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "99302c8cfbb135b625e0066b41a51186a29a54b1eb7aa6c59d5646a77ca58171",
+  "snapshot_bytes": 642773,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "5eacb411ab53a3e563fc90b1d7f09f17340b281af8e214e28ffe9d083083b205",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_2294",
+  "nr_decizie": "2294/C4/2851",
+  "buletin_oficial": "BO2025_2294",
+  "data": "2025-08-07",
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "garantie_buna_executie",
+   "cerinte_restrictive",
+   "clarificari_documentatie"
+  ],
+  "regula": "Reținerea unui procent din plata lucrărilor executate până la recepția la terminare (30%) nu poate fi impusă prin modelul de contract; protecția beneficiarului se face prin garanția de bună execuție reglementată.",
+  "temei_legal": [
+   "Legea 101/2016 art. 26 alin. (1), (2), (5), (6)",
+   "Legea 99/2016 (procedură sectorială)",
+   "Legea 72/2013 (invocată de contestator)",
+   "Legea 98/2016 art. 154 și HG 395/2016 art. 39 (invocate de contestator)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NzdlODkyNzctMTUwYS00ODM0LTlkOGQtNjM5MzI5ZmRhZmFj&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzIyOTQucGRm&action=aW5saW5l",
+  "autoritate": "Operator apă-canal (societate pe acțiuni, entitate contractantă sectorială, anonimizată)",
+  "obiect": "„Extinderea rețelei de canalizare pluvială pe strada Plantelor”, CPV 45232130-2, procedură simplificată sectorială",
+  "problema": "Modelul de contract prevedea plata facturilor în cuantum de max. 70%, restul de 30% după recepția la terminarea lucrărilor. Contestatorul: garanție de bună execuție mascată peste GBE de 10%, termen de plată nedeterminat (L72/2013), TVA plătit pe sume neîncasate. EC a „eliminat” clauza prin clarificări, dar a mutat-o în art. 2.2.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "EC a pretins eliminarea clauzei, dar a reintrodus-o la art. 2.2; temeiul invocat de EC (art. 26 alin. 1 lit. a L101) nici nu există. CNSC dispune eliminarea oricărei prevederi din DA/model de contract ca o parte din plata facturilor să se facă după recepția la terminarea lucrărilor. Critica privind art. 18.1 — rămasă fără obiect (deja modificat).",
+  "cum_ne_ajuta": "ERP — verificare automată a modelului de contract: clauze de plată condiționată de recepție, rețineri procentuale suplimentare la GBE, termene de plată >30 zile → semnal „contestabil”. Șablon: „Art. [x] condiționează plata a [y]% din lucrările executate de recepția la terminare, ceea ce echivalează cu o garanție suplimentară; solicităm eliminarea.”",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată (sectorială)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract sectorial de lucrări canalizare pluvială",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "operator economic interesat (contestă documentația)",
+  "etapa": "documentație",
+  "fapte_relevante": "GBE prevăzută la art. 11 din contract: 10%; impactul TVA estimat de contestator la peste 5,7 mil. lei; răspuns consolidat publicat 04.08.2025.",
+  "concluzie_cnsc": "Admite în parte: elimină orice prevedere de plată după recepție, în 15 zile; respinge ca rămasă fără obiect critica privind art. 18.1.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Operator apă-canal, contract de lucrări rețele — clauză care apare și la operatori de distribuție.",
+   "mai_putin_comparabila": "Decizie pe documentație; nu analizează în fond GBE.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "ca o parte din plata pentru facturile fiscale să se facă după recepția la terminarea lucrărilor",
+    "loc": "concluzie"
+   },
+   {
+    "text": "prevederea din Legea nr. 101/2016, invocată de entitatea contractantă nu există",
+    "loc": "analiza excepției"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "84e32dbef48d5cc98ae6b0c60d6be6cb4fc554d2434addc83b9b68aed2a6d37d",
+  "snapshot_bytes": 143031,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "caf5423217467f5b224d56c8e3770e15ffc530edef27387c236f245e6372159c",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_2344",
@@ -1627,7 +2882,9 @@
   "snapshot_sha256": "920bda46f80ca1c0e1fa0305916bcb776b7227b0490af4912170417a3f1af3c0",
   "snapshot_bytes": 470368,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "36fa651704ebf68cccc74a0a9109b2434847c0fa7c81821c0aa208f154617464",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_2430",
@@ -1701,7 +2958,9 @@
   "snapshot_sha256": "75a42c76835629768d2ec0e6c6aa1090725d35061b291cc1ffa58578abd88c78",
   "snapshot_bytes": 396148,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "f6ef8f44ecc8496c98d583da48b959b35b7bd9b5b33ef05fb2f0774be786b800",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_2767",
@@ -1769,7 +3028,149 @@
   "snapshot_sha256": "35ed0bce15bc6b14b696db75424c95e819b57ad7e67db35660e35d73fa63f2d4",
   "snapshot_bytes": 194863,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "4dba16511b11b24b2e249aa873b0e203cef0705f355ea72920022dd084964af7",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_2853",
+  "nr_decizie": "2853/C7/3177",
+  "buletin_oficial": "BO2025_2853",
+  "data": "2025-09-25",
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "eroare_aritmetica",
+   "deviz_consumuri",
+   "clarificari_oferta"
+  ],
+  "regula": "Modificarea din proprie inițiativă a prețurilor unitare în răspunsul la clarificări face oferta inacceptabilă, chiar dacă diferența e sub 1% și ofertantul o numește „eroare aritmetică”; pragul de 1% privește doar abaterile tehnice minore.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (6), (8), (10); art. 135 alin. (3)",
+   "Legea 101/2016 art. 26 alin. (6)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=YmEzOGUyYTgtMTMxZi00MWRjLWI1MjMtNTQ2MGZjNmQwODI5&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzI4NTMucGRm&action=aW5saW5l",
+  "autoritate": "Comună (anonimizată) — autoritate contractantă",
+  "obiect": "Lucrări rețele alimentare cu apă (CPV 45232150-8) pe mai multe străzi + extindere stație hidrofor, procedură simplificată online",
+  "problema": "Contestatorul a omis/necotat articole și nu a ofertat toate cantitățile; la clarificări a retransmis listele „cu corecturile aritmetice”, scăzând și prețuri unitare nesolicitate (TSD01D1 15,93 → 1,59 lei; TSD04B1 21,00 → 2,10 lei), cu diferență totală sub 1%. Oferta declarată inacceptabilă.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Clarificarea viza omisiunea articolelor și cantitățile neofertate (conformitate), nu o eroare aritmetică. Corecția aritmetică (art. 134 alin. 10 HG 395) se face doar la solicitarea comisiei și nu permite modificarea prețurilor unitare. Schimbarea prețului unitar nu e nici abatere tehnică minoră (alin. 8), nici viciu de formă (art. 135 alin. 3) — echivalează cu o nouă ofertă → art. 134 alin. (6).",
+  "cum_ne_ajuta": "ERP Ofertare: la răspunsul la clarificări, diff automat F3 inițial vs. revizuit — blochează orice modificare de preț unitar nesolicitată. Se corectează DOAR rezultatul operației (cantitate × preț). Verificare înainte de depunere: toate articolele și cantitățile AC sunt cotate (zero rânduri goale).",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 4565885.12,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări rețele apă",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins (inacceptabil)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 4.565.885,12 lei; anunț SCN din 04.12.2024; raport nr. 3563/06.08.2025; diferența de preț după „corecturi” 26.316,08 lei fără TVA (<1%).",
+  "concluzie_cnsc": "Respinge contestația; admite intervenția câștigătorului; respinge cererile de cheltuieli.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele de apă cu liste de cantități pe străzi — speță curentă pentru Gazpet ca ofertant.",
+   "mai_putin_comparabila": "Eroarea a fost provocată de chiar ofertant (prețuri unitare de 10x).",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "schimbarea prețului unitar conduce la depunerea unei noi oferte",
+    "loc": "analiza art. 134 alin. (8)"
+   },
+   {
+    "text": "aceste diminuări ale prețurilor unitare nu au fost considerate erori aritmetice",
+    "loc": "analiza comisiei confirmată de CNSC"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d50ea379fcd3268ab84dcd71d7d0318d922d04f75f5ddca43805562a104c9ae1",
+  "snapshot_bytes": 244235,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "96d1c98374692d555da04cfc96b89909ac49e4ec362584747c0ac6e9b3e8096b",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_2858",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_2858",
+  "data": null,
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "factor_evaluare",
+   "personal_cheie",
+   "clarificari_oferta",
+   "deviz_consumuri"
+  ],
+  "regula": "Punctajul la un factor de evaluare se acordă numai pe documentele de tipul cerut existente în ofertă la data-limită; recomandările depuse ulterior prin clarificări nu pot fi luate în calcul, iar deciziile interne de numire nu țin loc de recomandări ale beneficiarilor.",
+  "temei_legal": [
+   "Legea 98/2016 art. 209 alin. (1)-(2)",
+   "HG 395/2016 art. 134 alin. (1), art. 135 alin. (3)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MzRmYWQ5MDctNjk0OS00MDhjLTk4YzYtN2Y3NzE4NTEwZGNk&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzI4NTgucGRm&action=aW5saW5l",
+  "autoritate": "UAT (comună, anonimizată) — autoritate contractantă, proiect PNRR",
+  "obiect": "Execuție lucrări canalizare + stație de epurare (modul biologic), CPV 45232400-6, procedură simplificată",
+  "problema": "Câștigătorul a primit punctaj maxim la factorul „Experiența profesională specifică a managerului de contract/proiect” pe baza a 12 recomandări depuse abia prin răspunsul la clarificări; în ofertă avea doar decizii interne de numire (semnate chiar de administratorul său). Alte critici: nisip 0-7 mm din articolul de deviz impus (ACE08A1) vs. 0,1-0,4 mm cerut în caiet; consum specific kWh/m3; flux de numerar 6 mil. lei prin linie IMM Invest.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Documentele care aduc punctaj la un factor de evaluare trebuie să existe în ofertă la data-limită; completarea lor prin clarificări creează avantaj evident (art. 209 alin. 2 L98, art. 134 HG 395). Deciziile interne de numire nu se asimilează „recomandărilor/înscrisurilor certificate de beneficiari” cerute. Restul criticilor respinse: materialul din articolul de deviz impus de AC nu face oferta neconformă dacă propunerea tehnică declară materialul conform caietului; valorile calculabile matematic din datele ofertei pot fi clarificate; fluxul de numerar a fost dovedit cu extrase de cont, nu cu linia de credit. AC invocase OUG 41/2025 (stop atribuiri PNRR la autorități locale) doar în apărarea pe cheltuieli.",
+  "cum_ne_ajuta": "Pentru factorii „experiența expertului”: atașăm în ofertă recomandări/PV semnate de beneficiari pentru FIECARE proiect declarat; deciziile interne Gazpet nu ajung. ERP: checklist „dovezi punctaj experți” blocant la depunere. Dacă articolul de deviz impus de AC conține alt material decât caietul de sarcini → clarificare la DA (șablon: „Articolul [cod] din listele de cantități include [material]; caietul cere [alt material]. Care prevalează?”).",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată (fără licitație electronică)",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 21259454.74,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări canalizare + stație de epurare (PNRR)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant clasat pe locul II (al doilea contestator, prin cerere de intervenție principală)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 21.259.454,74 lei fără TVA; 2 oferte, ambele punctaj tehnic maxim, departajare pe preț; termen ofertat 12 luni; finanțare PNRR cu termen 30.06.2026. Raport procedură nr. 6169/27.06.2025. Cauțiune 88.000 lei.",
+  "concluzie_cnsc": "Admite în parte; anulează punctajul câștigătorului la factorul experienței managerului și aplicarea criteriului; reevaluare în 10 zile. Respinge restul criticilor.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare + stație epurare, factori de evaluare pe experți — tipic licitațiilor apă-canal la care participă Gazpet.",
+   "mai_putin_comparabila": "Problema e în principal de stație de epurare (modul biologic), nu de rețele.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu se poate accepta ca printr-un răspuns la clarificări să i se permită ofertantei criticate prezentarea unor documente în plus",
+    "loc": "analiza criticii V.3/VI.2"
+   },
+   {
+    "text": "deciziile interne prezentate autorității contractante la data limită de depunere a ofertelor nu se pot asimila",
+    "loc": "analiza criticii VI.2"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "60d11b97982da89a3bce5cdefa51ba63b4c44a1cace040931d96b8bd5a85df10",
+  "snapshot_bytes": 3717090,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d5e69c39e46d5cf2fcb7bde13cc744c757a42b46bb108ffd3bf3c047dd7ea56f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_286",
@@ -1839,7 +3240,9 @@
   "snapshot_sha256": "12b8bd3a5eaa5b320913d1d64f27ffe5ef29ffff8ad7045ee572c0b28bb24a01",
   "snapshot_bytes": 607848,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "28ab62bdef10afe021de4b3e5bf13886e37bf6cbabfd8fd5b926f40751ef233f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_3409",
@@ -1910,7 +3313,9 @@
   "snapshot_sha256": "8578edfb6dcbb4f19b8f82940d38ac08b5d14c3bc680a078e173d8bff4436182",
   "snapshot_bytes": 275988,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "ebe16564c8d9c6e8bd6f01cf665dbd3839c1f428448d9dca76410a7ed89b7d6d",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_352",
@@ -1982,7 +3387,9 @@
   "snapshot_sha256": "9a33029d06bc4f59fc2fa9ab473ea15d39d43a080c39a25eaf75169c5c702cdb",
   "snapshot_bytes": 539202,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d62c766c40171b2f17d5ccdef7e4be1949b172a77779dded01070a0fdcf34528",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_3638",
@@ -2054,7 +3461,222 @@
   "snapshot_sha256": "61fe8a225072d5d02a22c5ba5d8ee2515486c030cd31a3dc8c631edc4479c6c1",
   "snapshot_bytes": 335530,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "494ee17e40bbcbfca7617222f737747ac08dbd45eae96c84c404f7ce5fd506f5",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_3667",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_3667",
+  "data": null,
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "eroare_aritmetica",
+   "deviz_consumuri",
+   "termen_executie",
+   "clarificari_oferta",
+   "neconformitate_tehnica"
+  ],
+  "regula": "Corecția erorilor aritmetice nu permite modificarea prețurilor unitare (se corectează totalul, nu datele de intrare); modificarea prețurilor unitare prin clarificări face oferta inacceptabilă. Tabelul de planificare trebuie să respecte exact structura formularului AC.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (5), (6), (10), (11); art. 135 alin. (3); art. 137 alin. (2) lit. j) și alin. (3) lit. a), d)",
+   "Legea 98/2016 art. 209 alin. (2), art. 215 alin. (5)",
+   "Legea 101/2016 art. 26 alin. (2) lit. c) și alin. (7)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NjNlNmZhZTQtNjQyYi00MjYwLTk2ODctYzk2MTdkMTVlYzU3&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzM2NjcucGRm&action=aW5saW5l",
+  "autoritate": "UAT (anonimizat; localitățile Rogojel și Săcuieu menționate în text — jud. Cluj, dedus)",
+  "obiect": "Execuție lucrări rețele de distribuție apă potabilă și sisteme de canalizare (CPV 45232400-6), licitație deschisă",
+  "problema": "Trei oferte respinse (răspunsuri neconcludente: tabelul drumului critic fără coloana „durată zile lucrătoare” din Formularul 6, informații privind echipamentele după garanție, corelarea manoperă din deviz — ex. 130.519 ore — cu echipele și cele 12 luni). Câștigătorul își modificase prin clarificări prețurile unitare ale echipamentelor din F4, iar comisia acceptase ca „viciu de formă”.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Respingerile celor trei sunt corecte: tabel incomplet față de modelul AC; comisia nu poate repeta aceeași solicitare (art. 209 alin. 2 L98). Câștigătorul: corecția erorilor aritmetice se aplică rezultatului operației, cu date de intrare neschimbate — prețurile unitare nu pot fi modificate; nici viciul de formă nu permite modificarea propunerii financiare. Oferta intră sub art. 134 alin. (6) și (11) și art. 137 alin. (2) lit. j) HG 395; nu mai rămâne nicio ofertă → anularea procedurii.",
+  "cum_ne_ajuta": "ERP: (1) completare automată a tabelului drumului critic exact pe coloanele Formularului 6 (durată zile lucrătoare, rezervă pentru FIECARE activitate); (2) control de plauzibilitate: ore manoperă din C8/C7 ÷ (oameni × ore/zi) ≤ zilele alocate în Gantt; (3) blocarea modificărilor de preț unitar în răspunsuri. CNSC reproduce un ghid ANAP privind erorile aritmetice (diferențe de cantități = erori aritmetice corectabile; fără prag valoric).",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 46851725.0,
+  "sub_prag": false,
+  "tip_contract": "contract de lucrări apă potabilă și canalizare",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "trei ofertanți respinși (un ofertant și două asocieri)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 46.851.725 lei; anunț din 27.02.2025, termen 31.03.2025; durata maximă de execuție 12 luni; raport nr. 3633/04.08.2025; proces-verbal 3492/23.07.2025; cerere clarificări nr. 2964/11.06.2025.",
+  "concluzie_cnsc": "Respinge o contestație; admite în parte celelalte două (critica privind oferta câștigătoare); dispune anularea procedurii.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă + canalizare, grafice și corelare manoperă-termen — teme direct aplicabile ofertelor Gazpet.",
+   "mai_putin_comparabila": "Procedura s-a anulat pentru că toate ofertele au căzut.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "nici măcar eroarea aritmetică, care este singura excepție prin care se poate modifica propunerea financiară, nu permite modificarea prețurilor unitare",
+    "loc": "analiza ofertei câștigătoare"
+   },
+   {
+    "text": "Autoritatea contractantă nu putea solicita contestatoarei noi clarificări în legătură cu aceleași aspecte",
+    "loc": "analiza ofertei contestatoarei"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d1a424b668f017cc98d782dbf4bf7fda30d4842ab174abf6648d1376a4a2bc11",
+  "snapshot_bytes": 4305759,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "b218e139d9238637031bf28ff5e81ec6972b46cea5da69e852038c0b2ae164b1",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_3699",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_3699",
+  "data": null,
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "pret_neobisnuit_scazut",
+   "clarificari_oferta",
+   "neconformitate_tehnica",
+   "deviz_consumuri"
+  ],
+  "regula": "Verificarea prețului aparent neobișnuit de scăzut cere analiză de fond a justificărilor și documentelor (costuri utilaje, oferte furnizori); concluzia generică „prețul nu e neobișnuit de scăzut” nu e evaluare. Omisiunile de cost nu se „acoperă” automat din marja de profit fără analiză.",
+  "temei_legal": [
+   "Legea 99/2016 art. 222 alin. (1)-(3)",
+   "HG 394/2016 art. 141 alin. (3), art. 142 alin. (4) (prag 80% invocat), art. 140 (abateri minore, 1%)",
+   "Legea 101/2016 art. 26 alin. (2) și (5)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MmUxODAzZTMtNzExZC00ZjgxLWE1NjMtOGIzZTk4Y2ZjYjI5&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzM2OTkucGRm&action=aW5saW5l",
+  "autoritate": "Operator regional apă (entitate contractantă sectorială, anonimizată)",
+  "obiect": "Extinderea rețelelor de alimentare cu apă potabilă și canalizare menajeră într-un municipiu (CPV 45232150-8)",
+  "problema": "Câștigătorul (preț sub 80% din VE) a primit solicitare de justificare a prețului; comisia a copiat răspunsul (oferte furnizori pentru conducte, fitinguri, vane, cămine, agregate; profit 2% care „acoperă” cheltuielile omise identificate) și a concluzionat că prețul nu e neobișnuit de scăzut. Alte critici: necorelare tehnic-financiar, autorizație hidranți, ANIF, formular ofertă fără valoare în litere.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Evaluarea justificării prețului a fost superficială — redarea ad literam a răspunsului fără verificarea documentelor încalcă art. 222 L99; reevaluare cu luarea în considerare a criticilor punctuale. Necorelarea tehnic-financiar trebuia clarificată ca posibilă abatere tehnică minoră (prag 1%). Respinse: autorizația de hidranți nu era cerută; documentele suplimentare (ANIF) nu atrag sancțiuni; lipsa valorii în litere = viciu de formă.",
+  "cum_ne_ajuta": "La contestarea câștigătorilor cu preț mic: cerem acces la dosar și verificăm dacă comisia a analizat efectiv justificarea (nu doar a copiat-o). Pentru propriile justificări (art. 222 L99 / art. 210 L98): ERP generează dosar cu oferte furnizori corelate cu C6, costuri orare utilaje din C8, profit și cheltuieli indirecte explicite.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "licitație deschisă / procedură sectorială (BO indică simplificată în expunerea contestatorului)",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": null,
+  "tip_contract": "contract sectorial de lucrări rețele apă și canalizare",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant clasat pe locul III (prima contestație); a doua contestație — alt ofertant",
+  "etapa": "rezultat",
+  "fapte_relevante": "Șase ofertanți; câștigătorul cu preț sub 80% din VE; profit declarat 2%; EC a fost beneficiar POIM cu antreprenorul câștigător ca executant anterior.",
+  "concluzie_cnsc": "Admite în parte; anulează parțial PV de evaluare financiară și raportul privind ofertele de pe locurile I-II; reevaluare în 15 zile; respinge intervențiile.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Operator regional apă (L99), rețele apă-canal — piață directă Gazpet.",
+   "mai_putin_comparabila": "Datele de identificare și valorile sunt anonimizate în BO.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu există efectuată nicio analiză a justificărilor aduse de ofertantul",
+    "loc": "analiza prețului aparent neobișnuit de scăzut"
+   },
+   {
+    "text": "depunerea suplimentară a unor documente nu poate atrage vreo sancțiune",
+    "loc": "critica privind autorizația ANIF"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "a4fc89c098f76e4dd9e7a7495f1bc79679bcd4902144ef52d6e5cd2f46e06220",
+  "snapshot_bytes": 651379,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "4fd8ea212d6b279f441813cea250b3f107946baa3967d5b987d8011fe50deb95",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_3738",
+  "nr_decizie": "(anonimizat în BO)",
+  "buletin_oficial": "BO2025_3738",
+  "data": null,
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "altele",
+   "clarificari_documentatie"
+  ],
+  "regula": "Anularea pe imposibilitatea încheierii contractului (art. 212 alin. 1 lit. c L98) este legală când finanțarea a dispărut obiectiv (denunțare PNRR după OUG 41/2025 + rectificare bugetară), chiar dacă AC a întârziat culpabil; ofertantul vătămat poate cere doar despăgubiri.",
+  "temei_legal": [
+   "Legea 98/2016 art. 212 alin. (1) lit. c)",
+   "HG 395/2016 art. 143 alin. (1)",
+   "OUG 41/2025 art. 3 alin. (1)-(2) (citat în decizie)",
+   "Legea 101/2016 art. 26 alin. (6), art. 53"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MzhiZmJmNGUtM2UyNi00YzRmLTg4YWEtNjU5MzIzNjZmMWU0&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzM3MzgucGRm&action=aW5saW5l",
+  "autoritate": "Comună (anonimizată) — autoritate contractantă; investiție „Canalizare menajeră” finanțată PNRR",
+  "obiect": "Lucrări canalizare menajeră (CPV indicat în BO: 45232150-8), procedură simplificată, criteriu preț cel mai scăzut, 7 oferte",
+  "problema": "După două cicluri câștigate de asocierea contestatoare la CNSC și Curtea de Apel, AC a anulat procedura (raport nr. 13043/30.10.2025) pe art. 212 alin. (1) lit. c) L98, invocând denunțarea unilaterală a contractului de finanțare PNRR după OUG 41/2025 și diminuarea bugetului local cu 11.366.410 lei prin HCL. Contestatorul: OUG 41/2025 nu se aplică (procedura era finalizată), conduită culpabilă a AC.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Imposibilitatea încheierii contractului trebuie să fie obiectivă și neimputabilă AC. Notificarea de denunțare a contractului de finanțare a încetat sursa de finanțare; CNSC nu are competența să verifice legalitatea denunțării sau aplicarea art. 3 din OUG 41/2025. Fără fonduri alocate, CNSC nu poate obliga AC să încheie contractul, chiar dacă AC a avut conduită culpabilă (contract neîncheiat la 8 luni de la prima decizie). Rămâne deschisă calea despăgubirilor.",
+  "cum_ne_ajuta": "Risc PNRR/OUG 41/2025: la licitațiile apă-canal/gaze finanțate PNRR sau din fonduri cu termen, ERP trebuie să marcheze „risc anulare pe finanțare” și să documenteze costurile ofertei (pentru eventuale despăgubiri art. 53 L101). Nu investim în contestații lungi când finanțarea are termen apropiat.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări canalizare menajeră (PNRR)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "lider asociere desemnată câștigătoare în ciclurile anterioare",
+  "etapa": "anulare procedură",
+  "fapte_relevante": "Al treilea ciclu procesual; HCL de rectificare diminuează cu 11.366.410 lei capitolul 70.60 pentru „Canalizare menajeră”; durata de execuție ofertată 18 luni.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată; respinge cheltuielile (fără culpă procesuală dovedită).",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare finanțată PNRR — aceeași categorie de finanțare ca multe proceduri apă-canal 2024-2025.",
+   "mai_putin_comparabila": "Situație determinată de OUG 41/2025 (specifică PNRR), nu de evaluarea ofertei.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "Imposibilitatea încheierii contractului, ca premisă a anulării procedurii, trebuie să fie obiectivă",
+    "loc": "analiza anulării"
+   },
+   {
+    "text": "Această soluție, însă, nu exclude dreptul operatorului vătămat de actele autorității contractante de a solicita despăgubiri",
+    "loc": "concluzie"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "d8758356bb8b51ffc80c8f6f97ce843f4bd0253bcb9da616e5357ddacf946978",
+  "snapshot_bytes": 157546,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "cf0119a3912ea01088896f5d6d7716389c9fb865efe05540785ccac40c0ce6a0",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_3788",
@@ -2124,7 +3746,79 @@
   "snapshot_sha256": "49e03507064c21605b477979a5ce8f017dd0e3f71476282d7dee47e94ca901de",
   "snapshot_bytes": 287221,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "7076ed9f84303f78a827742455f19ee94901588aebf621357a3c3c4f84bad881",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
+ },
+ {
+  "id": "CNSC-BO2025_434",
+  "nr_decizie": "434/C11/4220",
+  "buletin_oficial": "BO2025_434",
+  "data": "2025-02-20",
+  "an": 2025,
+  "domeniu": "apa_canal",
+  "tema": [
+   "neconformitate_tehnica",
+   "deviz_consumuri",
+   "clarificari_oferta"
+  ],
+  "regula": "Orice lucrare pentru care lista de cantități a AC conține articol de deviz (ex. epuismente) trebuie acoperită de metodologia ofertei; materialul ofertat trebuie să acopere integral specificația din listă. Completările tehnice prin clarificări se acceptă doar cu analiză motivată de încadrare în art. 134-135 HG 395.",
+  "temei_legal": [
+   "HG 395/2016 art. 134 alin. (5)-(9), art. 135 alin. (1)-(3)",
+   "Legea 98/2016 art. 209",
+   "Legea 101/2016 art. 21 alin. (3), art. 26 alin. (2)"
+  ],
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NGY1YmRkMmQtMGU3Yi00NDZlLWFiNjgtMjczMmM0ODI0OWUy&pdfa1=ZmFsc2U=&filename=Qk8yMDI1XzQzNC5wZGY=&action=aW5saW5l",
+  "autoritate": "Comună (anonimizată) — autoritate contractantă",
+  "obiect": "„Sistem centralizat de canalizare menajeră” (localitate rurală), CPV 45232400-6, procedură simplificată",
+  "problema": "Oferta contestatoarei respinsă pentru mai multe motive: metodologie copiată/generală (SR 8591), lipsa articolelor de deviz pentru rețele de gaze în organizarea de șantier descrisă, balast 0-63 mm vs. 0-70 mm din listele de cantități, lipsa metodologiei pentru epuismente/sprijiniri/spargeri. A criticat și acceptarea fișelor tehnice completate abia prin clarificări la câștigător.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Două motive de respingere sunt corecte: balastul ofertat (max. 63 mm) nu acoperă intervalul impus prin listele de cantități; pentru epuismente există articol de deviz (TSA24A1) în listele AC, deci metodologia era necesară la ofertare și răspunsul a fost neconcludent. Restul motivelor nu mai e analizat. Proceduri tehnice pentru desfacere beton/sprijiniri pot ține loc de metodologie. La câștigător: experții cooptați nu au analizat dacă fișele tehnice depuse prin clarificări se încadrează în viciu de formă/abatere minoră (art. 134-135 HG 395) → reevaluare.",
+  "cum_ne_ajuta": "ERP — verificare automată: pentru fiecare articol de deviz din F3 (ex. TSA24A1 epuismente, sprijiniri, desfaceri) există capitol în metodologie? Granulații/materiale din articolele AC copiate identic în C6. Răspunsurile la clarificări nu pot spune „se stabilește la execuție” dacă AC a prevăzut articol.",
+  "curte_apel": null,
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "verificat": true,
+  "nota_verificare": "Citit din PDF-ul BO (pdftotext -layout), secțiunile de analiză CNSC și dispozitivul; date anonimizate în BO marcate ca atare. PDF descărcat cu curl de pe portal.cnsc.ro la 2026-10-02; portalul regenerează PDF-ul la fiecare cerere (sha256 diferă între descărcări, textul extras e identic).",
+  "sursa_cercetare": "cnsc_noi_lot4",
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 18691567.76,
+  "sub_prag": true,
+  "tip_contract": "contract de lucrări canalizare menajeră",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertant respins (neconform/inacceptabil)",
+  "etapa": "rezultat",
+  "fapte_relevante": "VE 18.691.567,76 lei; clarificări nr. 4301/02.07.2024 și 6610/17.10.2024; schimbare de expert cooptat în timpul evaluării; raport 7447/27.11.2024. Data din BO („20.02.2024”) e greșită — contestația e din dec. 2024, decizia din 2025.",
+  "concluzie_cnsc": "Admite în parte: anulează declararea câștigătoare a ofertei intervenientei și actele subsecvente, reevaluare; menține respingerea ofertei contestatoarei.",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare rurală cu liste de cantități și articole de deviz — situație tipică pentru Gazpet ca ofertant apă-canal.",
+   "mai_putin_comparabila": "Critica despre rețelele de gaze din organizarea de șantier nu a fost analizată de CNSC.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu."
+  },
+  "citate_cheie": [
+   {
+    "text": "ofertarea unui balast cu granulația de maxim 63 mm neacoperind tot intervalul impus prin documentație",
+    "loc": "motivul 7"
+   },
+   {
+    "text": "descrierea unei astfel de metodologii nu trebuia făcută în faza de ofertare nu poate fi reținută",
+    "loc": "motivul 8 (epuismente)"
+   }
+  ],
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "014cd4f17c33a3bdd73973071a7c43f9108786bce88a26fc2945dcfffb2bd048",
+  "snapshot_bytes": 472925,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "b2ba59203e0bd595f10aba809b207b3bdd4555af1909e95ab436ad6799c08870",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_806",
@@ -2196,7 +3890,9 @@
   "snapshot_sha256": "5ec64560c22b334065aa07e9fbf77a9c39a2e4f879f46005323cd910de68ea53",
   "snapshot_bytes": 701848,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "85d350fc3e83622ea604ad69b40bf66ce60bc69477540aec2bd1c809cf85407b",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_833",
@@ -2264,7 +3960,9 @@
   "snapshot_sha256": "b6bda16876b85252f8f6d74bb578d49b6c5ef983ccd878acdd8d977177f660c5",
   "snapshot_bytes": 437129,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "ed158368b27c0030fde331dc3278ee46a5fbd58c692ec8fc9ab02923d181c7b3",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2025_878",
@@ -2328,7 +4026,9 @@
   "snapshot_sha256": "56d06343dfe37968f1fb76601f85175685e564304a26ba261e2fd2d6a8ef629a",
   "snapshot_bytes": 415662,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "2fec6eb7e7b3ffdba49566eb623de39fa8273f2446ea7731642378d3bc0af4f9",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-Decizie_3952",
@@ -2393,7 +4093,9 @@
   "snapshot_sha256": "c3b3111c5166a6fbf59c76ffc3b5bb41e827c91800e22fd42a9d9cd6a4377e5e",
   "snapshot_bytes": 238497,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "38dcc5ffbc6f10475c1f870a5642c04e000d2669202a6121c216de3b98a0d44f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_1016",
@@ -2457,7 +4159,9 @@
   "snapshot_sha256": "92adcce7b31b207d31fa9ec87b83f243569a1554312237aeb724fdcbd612b310",
   "snapshot_bytes": 219784,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "e75eec060f0f091381bb8846ae24f3b46ca5b12b93b2c151455e4d566a0bf9e0",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_1043",
@@ -2528,7 +4232,9 @@
   "snapshot_sha256": "c92d79179d845f6f6efed21ba8aca4e13f2b3c93a03b4791afbccdf085cfbed1",
   "snapshot_bytes": 254324,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "9a33a618329996f32b05fc3718e55316e2af224c51976f3c6fda1247889a3838",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_1529",
@@ -2604,7 +4310,9 @@
   "snapshot_sha256": "2b62f6f578e257237557dd1c1342604c27bbbfdfe2c89193796bd0be9bb890ca",
   "snapshot_bytes": 283834,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "984b7aa39198d0a4aedee28d6ed0c23381c464355c20917e3f94ceae7bddeb95",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_1699",
@@ -2670,7 +4378,9 @@
   "snapshot_sha256": "a6abbb9deb91f624bff669c93eaa3cb30b95982521fd996f3768784dc43a4aa8",
   "snapshot_bytes": 315285,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "db0427fa100c1816764cb74e80e22f0aace73ea368f91801a360db71f13c859f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_1706",
@@ -2734,7 +4444,9 @@
   "snapshot_sha256": "1cc8ccd3c6bce692ff5aedee7a2b7be273899dc5cd1e68c2732040f8e7edf3a9",
   "snapshot_bytes": 560858,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "ba4fe39dd2b6fd7ca5ad9869236a951a11aebba2ce14aa28a31dc0a30900147f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_1870",
@@ -2809,7 +4521,9 @@
   "snapshot_sha256": "5e3a57f928799404d4d1881a9e699179b969cf388d14581fa94145f4a96d43e3",
   "snapshot_bytes": 227095,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "337b069517b828f0babcbd2af75ff761276e408cdacf360b357bd12e571eaeee",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_203",
@@ -2875,7 +4589,9 @@
   "snapshot_sha256": "e050f59ec8a6b7f59f085d47d4f9fc785837bb18d3eb1022b42bbeff5bfc8f0b",
   "snapshot_bytes": 811298,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "fbc51edb069a22039c418fd73149e11cf7e3c6a8770f91ae1475db387f2a1cec",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_2604",
@@ -2943,7 +4659,9 @@
   "snapshot_sha256": "a075b3880c1e3b1692e4e48315a83a1abda035c8459b371d188ddbe148d5f49a",
   "snapshot_bytes": 189323,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "c8d5e27e45ecb55f653a756f0af0c8cbdd800b32efd77a0bbc1893d2866acae4",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_2636",
@@ -3011,7 +4729,9 @@
   "snapshot_sha256": "5fd1e920b95b51a4dbb78ce3f999510ee7355a88d521a03fad92142d865c7137",
   "snapshot_bytes": 237438,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "0ae2b14493a9d4b8cccf365ede966552cdfd339c10b93a9c6ee3778522c58489",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_2669",
@@ -3075,7 +4795,9 @@
   "snapshot_sha256": "635af8456bc7236478aae2e0ef99af27d85fe353faf08740d9feeb5e5df0c78f",
   "snapshot_bytes": 340945,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "64d25e546d4e5f272318c077b7db3499495e232e3356bd576383a333cd8c9dec",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_2683",
@@ -3150,7 +4872,9 @@
   "snapshot_sha256": "304fcc71707533569959187f1a3ecedd379c17b7d3b26daace8ed8aa6eab2535",
   "snapshot_bytes": 236626,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "0d4807c79d8fbb9ffd8b4b04d4a76f1e0c585dd85563659ae566b7bb2e1af675",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_2884",
@@ -3215,7 +4939,9 @@
   "snapshot_sha256": "cb83c53c6a6ca459519fe1326943e34ff0b5acf253613e120765d347f4552b9a",
   "snapshot_bytes": 440558,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "84044d63462731297d46e18ae920146b0d9bd3036b5f9769a2defb7f9bafdec6",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_2938",
@@ -3277,7 +5003,9 @@
   "snapshot_sha256": "3732329487138d496fa48056df8bb069caad4b31281ed66b4231a27a076aeb2b",
   "snapshot_bytes": 259179,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "33dc64e3008ee502bb43d8809f24162061103cd37a364ba20d06f3e247eec131",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_2990",
@@ -3348,7 +5076,9 @@
   "snapshot_sha256": "e9bb5887c8ed63aa45b6683c8a51e2f6150309a7c0a8d3bb88e8a3b72cb921ec",
   "snapshot_bytes": 279982,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "38e21e7960a30fa3089ec11e6ad64473172b93ddab54fb2c36100ebcd49898a8",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3064",
@@ -3419,7 +5149,9 @@
   "snapshot_sha256": "55d626f96ec96c2609393d832f58cabb4abc6928439a7f672d863cc9158f2690",
   "snapshot_bytes": 255278,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "60b76c48a109c730e1515e27c266d84ac2520ad2d4a91ed9a4017a0f197a8f62",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3130",
@@ -3482,7 +5214,9 @@
   "snapshot_sha256": "1c6f101a8f2748d521bce43cf1c8326e69a43c3aa7e9ad8f67ee2aebd4c899bd",
   "snapshot_bytes": 290708,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "40fe36550e9ac98789179b4fba2eeb751684386bf37ea21865890b20c0011195",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3155",
@@ -3558,7 +5292,9 @@
   "snapshot_sha256": "a385e88eb19a4fb26f9aa0d3da4d3a36b98390e62a7c8aaf5d5af5a5418e7e00",
   "snapshot_bytes": 321839,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "85f2d24bff909bbfc9440e228a1e76ba16a0268018c9f141c8518f7e621eac1e",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3215",
@@ -3629,7 +5365,9 @@
   "snapshot_sha256": "2dcd9e187a3c0c62ef67677cd1671f1d1b44e5aa1e84c404012e7050fa9881a5",
   "snapshot_bytes": 624531,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "e4b3eefeecd40c8e33299182c80098f3a92de6a50c57836e05a35d5c39622dbd",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3232",
@@ -3705,7 +5443,9 @@
   "snapshot_sha256": "2c4f640a96eac73eabb3907a54a103ebc43b1acfc82abc7ed6496b25dedd74d0",
   "snapshot_bytes": 386872,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "c7e2e5f6b025eec9fdf6675684807d23f818c6cdf00c8c8adc10bf86e55f9fef",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3288",
@@ -3772,7 +5512,9 @@
   "snapshot_sha256": "b9d406fbbb918f088776cff63f432f59ff599296dc4880c7601baa33f6c8737e",
   "snapshot_bytes": 228117,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a5fc1130cc7b7b80becf5a1c83b0465080510839d08ffd08a8884c389613ff6f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3631",
@@ -3845,7 +5587,9 @@
   "snapshot_sha256": "097a39271bdd658d5e3cc7682f973504d7c1c98a092a6f4d32b5d93a82173522",
   "snapshot_bytes": 323456,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "c076b23746813022796007be54fd0f21459e7656b6d2a9944807cfc6548f1ecb",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_3657",
@@ -3914,7 +5658,9 @@
   "snapshot_sha256": "2eaaebc21817cc2357487e1541f6aee35136bdf356802438eaaa396b9a3aaafd",
   "snapshot_bytes": 303674,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "5c9b1e60e8698c8576307d5b16d096acc4310281f96036a463d8f33f80f541a2",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_449",
@@ -3983,7 +5729,9 @@
   "snapshot_sha256": "5f8aa25b3d95666d356ca6546a690d3aa625d12fc20bc59fa2d7b4f30bf45072",
   "snapshot_bytes": 352964,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "f3f36d165999e86aa6ffff476d3fca1ebf51f44b420883752739158a12a86664",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_632",
@@ -4053,7 +5801,9 @@
   "snapshot_sha256": "7e75f6edd8758d717a7715a2051a254ac64b44a2f4db997a0b94e60a06380fbe",
   "snapshot_bytes": 386157,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "79792ecb66c648ebe593d362b8c1420fdaba037c73c5618deef61c83487c0ac5",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_656",
@@ -4118,7 +5868,9 @@
   "snapshot_sha256": "30cd893ca5f0eacb9d5db30e1bf6ef9b18bfb3bf12f3c200853487a416a5c336",
   "snapshot_bytes": 573719,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "3349609e2e3006cc03bf262d8e081ea0888a6742b34a77ba4fad70aaf151d711",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_697",
@@ -4190,7 +5942,9 @@
   "snapshot_sha256": "1dd0a6460d17a680eabad28ba5b3d750542873123fefd7a76f13328f1e86b371",
   "snapshot_bytes": 617802,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "27d0ea45bd0ad21c54b22068eb610e4199415bb94dfb6a9dc1639e1f002bf5ca",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_717",
@@ -4262,7 +6016,9 @@
   "snapshot_sha256": "30c4367b719f8b73ca7c4a8900c030525a2ed21792690123f4247c8257d222b1",
   "snapshot_bytes": 320377,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "fa0a22785300a56b7df87d2d8f277138babae20343c82f267b80dd66429d3d7d",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_942",
@@ -4333,7 +6089,9 @@
   "snapshot_sha256": "0526746e93a0b7b6322d16613e1dc540cf2119de4cb6cb698acaa0a1896d6fae",
   "snapshot_bytes": 1221973,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a1b96c2606b0b91952a009f9175e70f6f7f0a79aebeaacc40674e78f9942b4a9",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_1128",
@@ -4408,7 +6166,9 @@
   "snapshot_sha256": "cc6b41b947f69082183e82e7df130f0c6b7b94afcf5d789acfa3348b3fad92c5",
   "snapshot_bytes": 541254,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "b1b9dfb140c31f14d2fa660452adbde699f8c95c59139a34f0a2f685f47d538d",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_1336",
@@ -4479,7 +6239,9 @@
   "snapshot_sha256": "18199faf8580374f8c9a44ac981487a53beb0c01859e230e495fb4cd07a9720d",
   "snapshot_bytes": 451432,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "7f4e8a996654b3ce950899a0c17d1fa4d6480536edc1a620ebdf39d765de5dc3",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_1378",
@@ -4543,7 +6305,9 @@
   "snapshot_sha256": "fa4af1d78e14e40aef5db2fedd5b6eb1b3be112f3a98f4b8f3d0c57944800454",
   "snapshot_bytes": 379397,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "4427eb552a147a7db1d3db10700b8ade9232507c6d2b9935662a527287dc9e79",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_140",
@@ -4607,7 +6371,9 @@
   "snapshot_sha256": "d3a5e71f8d2cf3255f59b752f99870ca3c52b64b842b1671c776be52235c48e7",
   "snapshot_bytes": 565700,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "b5cea8aa8c6d26e1e41e89a5324869cd50a2f7f8c976cb59aa108f728acd5c65",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_1489",
@@ -4671,7 +6437,9 @@
   "snapshot_sha256": "0f5cb631edae7b5a11064d1cf0a9f2283419c6c6bc208254865d3804e19db659",
   "snapshot_bytes": 241582,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "2cf345e27bb3802119d0e718feaa1f0fc9727fb60987b103fb5213f065731709",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_1788",
@@ -4735,7 +6503,9 @@
   "snapshot_sha256": "903d7e689de4504ece757cbab4409a9a0e88163fe653a667e4db60020641fd6c",
   "snapshot_bytes": 299238,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "07ee0993827500a19c96bd9e426c4c1f17ef84bd4dba1273348599c97464f3a2",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_2119",
@@ -4801,7 +6571,9 @@
   "snapshot_sha256": "328ac0f6b6d86c577d51eda998bd532c409c42320141c011d7b2af56dfc93575",
   "snapshot_bytes": 377779,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "277c7f67d9b79eeef58d0d91ef4e7b164f217c717d3e142eb22d1e26cf388f30",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_2185",
@@ -4866,7 +6638,9 @@
   "snapshot_sha256": "cca43ddb5aed27e986ff27bd329c3e54c7b612600f34bfd8bb9cd1c36c407c42",
   "snapshot_bytes": 311141,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d840bb7336ba71b382ac5ad56534eb2926f28a86810e8450c77411d1b3f347f7",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_2237",
@@ -4933,7 +6707,9 @@
   "snapshot_sha256": "b4f535dd6ee9b3d67b33192a5ab4b51ff4c057ca9ba9310337441ff63dccca2b",
   "snapshot_bytes": 490918,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "c3d469386ef10698ac72f6b96a3a90f4a9744ceb4b9cadd26c6e18c63c930ed8",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_246",
@@ -5003,7 +6779,9 @@
   "snapshot_sha256": "cd47239713bd347a102b7a4032d951e49cbfe5d5e90fe6acf8325b9cdc9237bc",
   "snapshot_bytes": 331119,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "cad71c7e5b4b42143a99823a370402f4264571d94c1c5f75b8e0ab161f2831a2",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_2695",
@@ -5075,7 +6853,9 @@
   "snapshot_sha256": "e15fa4a28570cb468f605c3a23f5484cea1f3108d17765cd42d1dfe88b15140c",
   "snapshot_bytes": 519552,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "1d94b9c657adc19507f64c33c370d8851c0bd6d30e51fcc236ab2ad825a16d94",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_2717",
@@ -5138,7 +6918,9 @@
   "snapshot_sha256": "03268cda3ad47ad18692e2efa62d772be8af9b8afb83c54ef068defad2bc366e",
   "snapshot_bytes": 204303,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "6dfc33a523dfa0972a5b957d01c621b49cac379e407914a9ca688ba310a6b149",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_2794",
@@ -5206,7 +6988,9 @@
   "snapshot_sha256": "02af7c1ae4d9b0a0eafe8fbe86669c55873d792c41b0ed88c0a72d5780621abd",
   "snapshot_bytes": 191289,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "f8154fe9d0f712bbe21bb98e077f5da392a71b9a9adccf443a3598a36385788f",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_406",
@@ -5270,7 +7054,9 @@
   "snapshot_sha256": "1e6c5e810c140da32f1380286bd39e40301cb15f42cad0cc5595d5758567a9f7",
   "snapshot_bytes": 270458,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d7bbd02f9611bbdba917b873a94cfc5adefe23c4bb1e076eff3543adf227e4ce",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_416",
@@ -5332,7 +7118,9 @@
   "snapshot_sha256": "c11da4a9ed057a7a6953fb13316c74be56734dc227ec0f5a5dba52f60accef5a",
   "snapshot_bytes": 511222,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d7d0e9ad076669d3bf65d0678975961b5c15a909fea72e3bd39eee1a4dba86e0",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_427",
@@ -5398,7 +7186,9 @@
   "snapshot_sha256": "a40c5db587e38afdd052d98313c742f28f4074743e8569ca18cea06bbe05289b",
   "snapshot_bytes": 266924,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d2972c4d1eff11f17b73d1c6d759881efea45c379b68eead76d73e2160563c6a",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_562",
@@ -5468,7 +7258,9 @@
   "snapshot_sha256": "2940840c66e856daa6f2dc3996ad292dd7bbe1207ba7b553eb8008936e9b9142",
   "snapshot_bytes": 432870,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "0c653bf3900694aafa5d110c85deb05fb89a9b38a20fd4d564faf1fb004e7e9b",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_657",
@@ -5532,7 +7324,9 @@
   "snapshot_sha256": "d6dd57f59102e2a1cb5def5295494b32163d718a36fac778605813d80a623e42",
   "snapshot_bytes": 282190,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "513253c03070982ecd215b1c9f25bc38a78637cb1f9f58c7142de13b624cda92",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2023_665",
@@ -5597,7 +7391,9 @@
   "snapshot_sha256": "05230d87d0fa6c3f91e0abf34e291fc3f92f602e063be0e24f52916ab5cbe16d",
   "snapshot_bytes": 815999,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "618f5d4930c181a36d31fd023021e503270fca659ff96c0b1d913358630082d7",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2024_159",
@@ -5659,7 +7455,9 @@
   "snapshot_sha256": "cbfbb9aabe7bfc555b8071833c8b5ca98ece252532c19361c78602c980a0fed8",
   "snapshot_bytes": 440416,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "331d7fadbeabf8909720135ae7b2ab74cb7ea83cbb1bcb5904ac7e853082be8a",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_1028",
@@ -5723,7 +7521,9 @@
   "snapshot_sha256": "2ee12b7b45a6aad397e406a15f32b018edf245bcc44b774705546763f4b0491d",
   "snapshot_bytes": 377410,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "4b78a8c7286f077507e13e4df75e4bd155e7d1adece65780082de683bb167024",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_1615",
@@ -5790,7 +7590,9 @@
   "snapshot_sha256": "b375483949b33c3d02acff68eef3440f339cf34d451011fbbb922bce7532e5ea",
   "snapshot_bytes": 290970,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a3fc074e81d0f6ae5f075e80df17e5f9b7486bedc4978cc2672e13823d93fa11",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_1746",
@@ -5853,7 +7655,9 @@
   "snapshot_sha256": "d0b90c4aa5a90e9ebcf862f4d0e9fb5bc5916d3749c73b8eeb59650d0cb3db31",
   "snapshot_bytes": 232944,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d68622024e411c8a0cb28d8ab8ec8db52c6a6e1a9f70b4fb6681b7d6ead81e8d",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_1923",
@@ -5918,7 +7722,9 @@
   "snapshot_sha256": "035fdaa6cc8ed97edd121044db0630b9dbbcbbc7f6aa069390827c9217dab2d8",
   "snapshot_bytes": 213987,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d8caed3b1d937940a89099c2caf72cd5f912d7c21fd2e88a598f8331988d07a1",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_1952",
@@ -5980,7 +7786,9 @@
   "snapshot_sha256": "d65a1ee384f8084bea83d1b8c488030a434b3635a5f31656262edf40505d8536",
   "snapshot_bytes": 507966,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "90d143db948f4fa1d9a4febc25fe047ade42617873c4b9d5d2c51f578b06f324",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_1964",
@@ -6044,7 +7852,9 @@
   "snapshot_sha256": "646fd9c307c6619fd16cbfce90d2b164a03bbfd55ebe37f4ca22c6570c82d682",
   "snapshot_bytes": 257344,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "fa4b200e85199a3d1da6ed762258870510c115820792298fc3b99b63edba5754",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_2053",
@@ -6115,7 +7925,9 @@
   "snapshot_sha256": "8384223efd943b02fa27d6f02aa07db18bb42cb02e5bb2710f785fa610c207c6",
   "snapshot_bytes": 403950,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "082f8b802697460c90853f0dd0d6fa3a96ab6304417b96e270e41c970e41865a",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_2083",
@@ -6178,7 +7990,9 @@
   "snapshot_sha256": "07789021f55047764f33ae89b0530a9176b3a295216690901e4d6813ab334c83",
   "snapshot_bytes": 258048,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "5f4877b4a66bb226d92cca2b2de26452886cfc760421cb92db13c7e4ab076350",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_2170",
@@ -6242,7 +8056,9 @@
   "snapshot_sha256": "d8d5a8421e573803fcc13c4ac9788ddffbcfbe8d617f5df0ff826002a34e837e",
   "snapshot_bytes": 247203,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d71fdc8d17b2305f6f127a4f65295809f396bbfa4c1ba9048422dbf0297103b3",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_219",
@@ -6314,7 +8130,9 @@
   "snapshot_sha256": "d96ea427fd2117600b2effc2bc80ea94a2121cc3d73201683e4b8457f9323943",
   "snapshot_bytes": 333868,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "e55c1a841784cddf9c708d0beaf982d4c74fde81b5d49b67acc5da722e7a0a15",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_2403",
@@ -6382,7 +8200,9 @@
   "snapshot_sha256": "add5e5342c52bb3ad211e24beaff6e2a856696dfb525bf7309f62395ad089dd1",
   "snapshot_bytes": 503232,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "0f566c044cb636725050fa43c6dea3bffd7ea6fe1fa7de369bd5425742d71c46",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_2747",
@@ -6452,7 +8272,9 @@
   "snapshot_sha256": "1e3eb85e6d82979fd24f8b09fdd0c788a027e845461e8995335e88e20a770e11",
   "snapshot_bytes": 376962,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "1662f5b7f611b440ad7ee018c89375ca0e3b95ad530259dbc266f2d478aa39fb",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_2768",
@@ -6523,7 +8345,9 @@
   "snapshot_sha256": "15c7d66effb3a92b318709122c7a803df9088ba966a5ba2fb94ca95fba7607b5",
   "snapshot_bytes": 248070,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a469a6bfb1c3c6c007b0c84c0eb901f218a28adb4bce38b42f09e73a2e1c37f5",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_2774",
@@ -6590,7 +8414,9 @@
   "snapshot_sha256": "c9308a0a4eb0b1d079e221a74a491d18ee98e7000c7185332996a2bb9c08c7bc",
   "snapshot_bytes": 451635,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "610c501e2682d21f219250245e65e3281f4be75312ec75666345df91a5982435",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2022_340",
@@ -6665,7 +8491,9 @@
   "snapshot_sha256": "26ea3cbe43ae60ad8d7d9e2a1cdede4d7b880c3f1d1ae8447c875feb87b7cb0a",
   "snapshot_bytes": 493221,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "a2d72ac84fbf0f5636e5c637d480ccd2ff7e196f18c11a71976b7751c20d95cd",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_1060",
@@ -6728,7 +8556,9 @@
   "snapshot_sha256": "f7858711d9abecf1afe09d4c1cfb7c08257e16574799c19b491908276e2e5d3f",
   "snapshot_bytes": 514023,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "5191eda606111108c8ab3473b14dbcffd10a275a6e007b6a7e45416c8df1ab89",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_1117",
@@ -6799,7 +8629,9 @@
   "snapshot_sha256": "e06773561cfbeb0e43ee9ba379e2547eb58e359667f691841b04fc4a23a0b37e",
   "snapshot_bytes": 657044,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "9195be249352e5010d4affaaec3151ec45736788e2c9644deea1c99f2144680d",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_1317",
@@ -6863,7 +8695,9 @@
   "snapshot_sha256": "e2896ff8925e15e96a7d9fa377d5040fe3bdc3696751750a1f3b5d8094132084",
   "snapshot_bytes": 287136,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "1281bea3c4c881a781922240388c05c008e5a2048731add2a84b75576b09e754",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_159",
@@ -6933,7 +8767,9 @@
   "snapshot_sha256": "67c530e9653ec7f88deb0dbae6d85fb93aa98e1ee56056e28e31ab18fa816d45",
   "snapshot_bytes": 345476,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "cd558d25e0bdd1509e2db168d8bb98062772cff9efc86a4ad4a1473b0ac88763",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_2116",
@@ -6997,7 +8833,9 @@
   "snapshot_sha256": "dff861fbc7510fd4077f70571fb7f06835b1309edb26b86ee908f7d73f363bad",
   "snapshot_bytes": 265642,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "3bc445c1543b8a59e0284c8daafff65ca38556d1ca09e8c1da1c50159c17ce56",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_2420",
@@ -7061,7 +8899,9 @@
   "snapshot_sha256": "c628134bd6ef17775369f41a5202cd81414beef0fb96ecb860a2154246d7f829",
   "snapshot_bytes": 178429,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "79d1b47dfda3079bc83782905456e37b5ede2454c5ca9794a23ad2f0f752f1ea",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_2679",
@@ -7130,7 +8970,9 @@
   "snapshot_sha256": "ec8963050dfa64f67c39c9735976ec5d8086b0875d3ac8a1fddc6a9095b9576c",
   "snapshot_bytes": 246952,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "40e906bce59b217aa06f3987717d3cfac4a257ae7bd383d26fe0e3e944f524be",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_448",
@@ -7193,7 +9035,9 @@
   "snapshot_sha256": "ffc50edba0657589bb0158d310268a32f68cc2cecc591c5f812b6019bad17003",
   "snapshot_bytes": 221442,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "4eb6c57272adf51b997c9f5cca10f25b6f27fcf50d03827205076388335de612",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_610",
@@ -7265,7 +9109,9 @@
   "snapshot_sha256": "d15cfc803d2f27af19fe108d5409776c01b2530f552c5cb4c1f58cda669f15df",
   "snapshot_bytes": 197174,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "b36d26f8e9e972de06bd9350c204015bf495865760480d03f6245e2a17df89a1",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_973",
@@ -7338,7 +9184,9 @@
   "snapshot_sha256": "6b7d146aae190bcbe5ff5297c56b71a018d293b8846ba1d70f64a5387f54d951",
   "snapshot_bytes": 420976,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "d4ab264fea08e85fc1f9ec7c6447bc37b6825dbbf755ae43c0670c1d6501bcf0",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2021_99",
@@ -7401,7 +9249,9 @@
   "snapshot_sha256": "6adcecdb9c8f224b2c146de0e20f8aaaab943123b9943934a6bdef59e3180f10",
   "snapshot_bytes": 240957,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "c77a1c92f300b3ab9cb221b74fc5e914d8a5b8fd67745b9a79546b5bb70a1815",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2020_2124",
@@ -7465,7 +9315,9 @@
   "snapshot_sha256": "ff5e93ec0044eb317b10d2c11262afa8f5756b02a54f5b5d695d398ba48da81a",
   "snapshot_bytes": 263128,
   "snapshot_data": "2026-10-01",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "0bd37ccc4bfc2fb9f3610ca8839f5d9db531a20755db752c2144d5c98849f2e4",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2020_2191",
@@ -7537,7 +9389,9 @@
   "snapshot_sha256": "a2183fa1483c764d4ade58bedc439ad80dc5e716b3ba7cff8147c0d6642cca2e",
   "snapshot_bytes": 301823,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "3c8a88db7a13ddc6817070daaee39cb2a5b1741863e9eedd9940d2c699e89f10",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2020_2251",
@@ -7607,7 +9461,9 @@
   "snapshot_sha256": "40d2d631138ea327784586f1a21b25ed66180d3b23bfdc961399e35e668803da",
   "snapshot_bytes": 1476835,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "5b16944f787e1408a82a14a7b060a5a69f9dcad68c162913d329901fbfa4140e",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  },
  {
   "id": "CNSC-BO2020_2392",
@@ -7675,6 +9531,8 @@
   "snapshot_sha256": "77c990ca9cfdc5369eb26fb24338bb778f93fb65482038066ed8a3fd42d6aaa9",
   "snapshot_bytes": 211092,
   "snapshot_data": "2026-10-02",
-  "temei_tip": "PRACTICA_CNSC"
+  "temei_tip": "PRACTICA_CNSC",
+  "snapshot_text_sha256": "7335686040dd1ea3770fe765f6b02ccac999aaea7a5ec6443ddfd29cafc55c3a",
+  "nota_snapshot": "portal.cnsc.ro regenerează PDF-ul la fiecare descărcare — sha256 al PDF-ului diferă între descărcări; amprenta stabilă e snapshot_text_sha256 (text extras cu pdftotext -layout, spații normalizate)."
  }
 ]
