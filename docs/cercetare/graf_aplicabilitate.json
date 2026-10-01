@@ -1318,5 +1318,501 @@
   "locator": "temei art. 41 L10/1995",
   "nota": "temeiul rămâne în vigoare (art. 41)",
   "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12732",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 37",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-15609-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 30",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-15607",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 29",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-15609-2",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 31",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-9692-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 33",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-6520-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 35",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12007",
+  "relatie": "incorporeaza",
+  "locator": "art. 50^1 alin. (2)",
+  "nota": "SR EN 12007-2:2012, doar calcul PE > 6 bar.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-13067",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 51",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-1555",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 52-55",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12954",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 49",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-stas-7335",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 38-46",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-stas-2484-sr-8050",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 50, 87",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-stas-8804",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 88-96",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-1167-1",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 56",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12007",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 1, 4-6",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-13100",
+  "relatie": "trimite_la",
+  "locator": "art. 245 + anexa 2 poz. 57-59",
+  "nota": "Obligatoriu doar dacă proiectul prevede NDT pe PE.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-pt-cr-7-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 236 alin. (3) («procedee certificate conform reglementărilor în vigoare»)",
+  "nota": "Calea RO: WPQR aprobat ISCIR.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-pt-cr-9-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 236 alin. (1), art. 239 alin. (5) («sudori autorizați de organisme abilitate»)",
+  "nota": "Organismul nu e numit; ISCIR = calea identificată.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-7-2025",
+  "to_source_id": "SRC-sr-en-iso-15614-1",
+  "relatie": "incorporeaza",
+  "locator": "încercări de tip pentru WPQR oțel (runda 1)",
+  "nota": "Locator exact de reconfirmat.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-7-2025",
+  "to_source_id": "SRC-sr-en-12814",
+  "relatie": "incorporeaza",
+  "locator": "încercări WPQR PEHD (runda 1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-5817",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17635",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17637",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17636",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-10675-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17640-11666",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-9606-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 25 alin. (1) lit. b) + anexa 16",
+  "nota": "Cale de acces la examen, nu obligație unică.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-16296",
+  "relatie": "incorporeaza",
+  "locator": "art. 43 + anexa 16",
+  "nota": "Examen PEHD.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-12814",
+  "relatie": "incorporeaza",
+  "locator": "art. 44-45 + anexa 16",
+  "nota": "Examen PEHD.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-10216-10217",
+  "relatie": "trimite_la",
+  "locator": "anexa 16",
+  "nota": "Material pentru probe.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-6-2025",
+  "to_source_id": "SRC-sr-en-iso-9712",
+  "relatie": "incorporeaza",
+  "locator": "art. 12 alin. (1) lit. b) + art. 96/anexa 24",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-iso-21809-1",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-iso-8501-1",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-iso-3183",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-10204",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tgphd",
+  "to_source_id": "SRC-sr-en-1555",
+  "relatie": "trimite_la",
+  "locator": "ST-TGPHD (2023)",
+  "nota": "Citează SR EN 1555:2021 — depășit de 2025.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tgphd",
+  "to_source_id": "SRC-sr-en-10204",
+  "relatie": "trimite_la",
+  "locator": "ST-TGPHD (2023)",
+  "nota": "Citează SR EN 1555:2021 — depășit de 2025.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-delgaz-st-505",
+  "to_source_id": "SRC-iso-12176",
+  "relatie": "aplica",
+  "locator": "ST 505 (cerințe aparat EF: cod de bare, memorie, protocoale)",
+  "nota": "Trimiterea explicită la ISO 12176 neconfirmată — relație de conținut.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-og-39-1998",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "interpreteaza",
+  "locator": "art. 6 alin. (1)",
+  "nota": "Standardele devin obligatorii doar prin reglementare/contract.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-sr-en-10208-2",
+  "to_source_id": "SRC-sr-en-iso-3183",
+  "relatie": "inlocuieste",
+  "locator": "—",
+  "nota": "Informație de specialitate, neverificată pe ASRO; direcția: 3183 înlocuiește 10208-2.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-sr-en-iso-15589-1",
+  "to_source_id": "SRC-sr-en-12954",
+  "relatie": "aplica",
+  "locator": "—",
+  "nota": "15589-1 = aplicația specifică la conducte a principiilor din 12954.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-g-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-i-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-iz-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-c-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-d-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-rpg",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-1014-874-2001-formulare-c",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. C.7.1 lit. c) (citat pe coperta Ts ed. 2003)",
+  "nota": "«pot fi folosite în mod orientativ».",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-indicator-iz-1981",
+  "to_source_id": "SRC-stas-7335",
+  "relatie": "trimite_la",
+  "locator": "cap. IZL generalități pct. 1.1 (STAS 7335/3-76)",
+  "nota": "Partea /3 nu e în anexa 2 NTPEE.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-indicator-iz-1981",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "aplica",
+  "locator": "cap. IZL ↔ NTPEE art. 259 alin. (3)",
+  "nota": "Același sistem bitum «întărită/foarte întărită».",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-indicator-iz-1981",
+  "to_source_id": "SRC-indicator-c-1981",
+  "relatie": "trimite_la",
+  "locator": "note cap. IZF/IZG (mortare în «C», cap. Z)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-utcn-224ci-2018",
+  "to_source_id": "SRC-indicator-d-1981",
+  "relatie": "interpreteaza",
+  "locator": "cap. 1.2-1.3",
+  "nota": "Normele de timp ale utilajelor din D 1981 sunt depășite.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_696",
+  "to_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "relatie": "aplica",
+  "locator": "motivare pag. 33-34",
+  "nota": "Articole asimilate admise dacă DA nu le interzice.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_696",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "aplica",
+  "locator": "răspuns la clarificări pct. 4 (TSC02A1, UM 100 mc)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-cocc-lista-indicatoare",
+  "to_source_id": "SRC-indicator-rpg",
+  "relatie": "trimite_la",
+  "locator": "catalog",
+  "nota": "Confirmă existența RpG/RpD/Iz.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ccc-md-lista-indicatoare",
+  "to_source_id": "SRC-indicator-g-1981",
+  "relatie": "trimite_la",
+  "locator": "poz. 10-11",
+  "nota": "Ediții 1996 și 2002.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-g-1981",
+  "relatie": "aplica",
+  "locator": "deviz branșament art. 4-12",
+  "nota": "Coduri GD/GE/GF.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-iz-1981",
+  "relatie": "aplica",
+  "locator": "art. 13 (IZL06C1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-d-1981",
+  "relatie": "aplica",
+  "locator": "art. 15-16 (DI10A1, DG05A1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-rpg",
+  "relatie": "aplica",
+  "locator": "deviz IU art. 12-13 (RPGD13A1, RPGD14A1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-907-2016",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "aplica",
+  "locator": "F3 col. 1-3 (UM și cantitate impuse de proiectant)",
+  "nota": "UM-ul din F3 primează față de UM-ul din indicator.",
+  "tema": "p2_deviz"
  }
 ]

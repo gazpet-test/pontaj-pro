@@ -175,6 +175,52 @@
   "ultima_verificare": "2026-10-01"
  },
  {
+  "source_id": "SRC-ccc-md-lista-indicatoare",
+  "tip": "ghid",
+  "cod": "CCC Moldova — Lista de indicatoare de norme de deviz (catalog bibliotecă)",
+  "titlu": "Lista de indicatoare de norme de deviz (exemplare deținute)",
+  "emitent": "Centrul de Cercetări în Construcții (ccc.md)",
+  "editie": "PDF 2017",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://ccc.md/wp-content/uploads/2017/01/LISTA-DE-INDICATOARE-DE-NORME-DE-DEVIZ.pdf",
+  "acces": "public",
+  "domenii": [
+   "deviz"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Titluri complete, ediții și anul tipăririi pentru indicatoarele românești (G 1996/2002, Ts 2003, Iz 2001/2014, RpG 2002).",
+  "snapshot_sha256": "43a57219217dab41ad53affe99e5e8f5058019ebd07bd6e1055581631df6ddd4",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "note": "Sursă secundară (catalog), dar descrie exemplare fizice — încredere medie."
+ },
+ {
+  "source_id": "SRC-cocc-lista-indicatoare",
+  "tip": "ghid",
+  "cod": "COCC — Indicatoare de norme de deviz (catalog)",
+  "titlu": "Lista indicatoarelor editate de COCC S.A.",
+  "emitent": "COCC S.A.",
+  "editie": "pagină web (consultată 01.10.2026)",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://www.cocc.ro/indicatoare_de_norme_de_deviz.htm",
+  "acces": "public",
+  "domenii": [
+   "deviz"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Confirmă existența G, I, Ts, Iz, C, D, RpG, RpD și stadiul (1981 vs revizuit 1999-2015).",
+  "snapshot_sha256": "cd0e658505bc3eac4902ce46ae06246ce24b3ceaa80f383c608a5c2efeb53e1e",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
   "source_id": "SRC-delgaz-st-505",
   "tip": "ghid",
   "cod": "Delgaz Grid ST 505 (A5, 01.2023)",
@@ -335,6 +381,29 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-gazpet-pontaj",
+  "tip": "intern",
+  "cod": "Pontaj + situații de lucrări Gazpet (ERP)",
+  "titlu": "Productivitate istorică Gazpet pe articole",
+  "emitent": "Gazpet Instal SRL",
+  "editie": "date interne — neinterogate în această rundă",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": null,
+  "acces": "metadata_only",
+  "domenii": [
+   "deviz"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Consumuri proprii permise de Ghid P91 pct. 3.3.1.4; baza pentru tip_consum = productivitate_istorica.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
  },
  {
   "source_id": "SRC-hg-1-2018",
@@ -907,12 +976,59 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-indicator-c-1981",
+  "tip": "normativ",
+  "cod": "Indicator C 1981",
+  "titlu": "Indicator de norme de deviz pentru lucrări de construcții industriale, agrozootehnice, locuințe și social-culturale — C",
+  "emitent": "Editor COCC",
+  "editie": "1981, rev. la nivelul 1999, 3 vol. (2000-2001) — ccc.md poz. 2-5; COCC: 4 vol., 1999-2015",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://www.cocc.ro/indicatoare_de_norme_de_deviz.htm",
+  "acces": "licentiat",
+  "domenii": [
+   "deviz"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Lucrări de construcții accesorii (betoane, mortare cap. CZ, vopsitorii CN).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
+  "source_id": "SRC-indicator-d-1981",
+  "tip": "normativ",
+  "cod": "Indicator D 1981",
+  "titlu": "Indicator de norme de deviz pentru lucrări de drumuri — D",
+  "emitent": "Editor COCC",
+  "editie": "1981 (tipărit 2001, 227 p. — ccc.md poz. 6); COCC: revizuit 1999-2015; UTCN 224 CI/2018 — actualizarea normelor de timp la utilaje",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://www.cocc.ro/indicatoare_de_norme_de_deviz.htm",
+  "acces": "licentiat",
+  "domenii": [
+   "deviz",
+   "drumuri"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Refacerea carosabilului/trotuarului după șanț (cap. DG, DA, DB, DE, DI).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": "Lista capitolelor DA-DI din rezumatul căutării (intocmire-devize.ro). COCC listează și RpD «Reparații de drumuri și străzi»."
+ },
+ {
   "source_id": "SRC-indicator-g-1981",
   "tip": "normativ",
-  "cod": "Indicator de norme de deviz G — 1981",
-  "titlu": "Indicator de norme de deviz pentru lucrari de conducte pentru transport si distributie a gazelor si lichidelor petroliere (G)",
-  "emitent": "idem seria 1981 (retiparit; editii revizuite 1996 / 2002 mentionate de librarii)",
-  "editie": "1981; revizuiri/retipariri semnalate 1996 si pana in 2002 (neconfirmat continutul revizuirilor)",
+  "cod": "Indicator G 1981",
+  "titlu": "Indicator de norme de deviz pentru lucrări de conducte pentru transport și distribuție a gazelor și lichidelor petroliere — G",
+  "emitent": "Editor COCC (ediții revizuite); emitentul original neconfirmat",
+  "editie": "1981; retipărire 1996 (178 p.); «ed. revizuită și completată la nivelul anului 2002» (242 p.) — catalog ccc.md poz. 10-11; COCC: «revizuit 1999-2015»",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -922,34 +1038,39 @@
   "urluri_secundare": "http://www.cocc.ro/indicatoare_de_norme_de_deviz.htm",
   "acces": "licentiat",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "deviz",
+   "gaze"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "indicator-G-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Indicatorul de bază pentru rețele/branșamente gaze (cap. GD/GE/GF); reper orientativ (P91).",
+  "note": "Capitolele GA-GF doar din rezumate de căutare (okazii.ro, intocmire-devize.ro) — nedeschise direct. Conținutul PE neverificat."
  },
  {
   "source_id": "SRC-indicator-i-1981",
   "tip": "normativ",
-  "cod": "Indicator de norme de deviz I — 1981",
-  "titlu": "Indicator de norme de deviz pentru lucrari de instalatii de incalzire centrala si gaze la constructii (I-1981), 2 volume",
-  "emitent": "seria 1981 (retiparit)",
-  "editie": "1981",
+  "cod": "Indicator I 1981",
+  "titlu": "Indicator de norme de deviz pentru lucrări de instalații de încălzire centrală și gaze la construcții — I",
+  "emitent": "Editor COCC",
+  "editie": "1981, rev. și completat la nivelul 2001 (259 p.) — ccc.md poz. 12",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare",
   "inlocuit_de": null,
-  "url_oficial": "https://www.librarie.net/p/130476/indicator-de-norme-de-deviz-pentru-lucrari-de-instalatii-de-incalzire-centrala-si-gaze-la-constructii-i-1981-2-volume",
+  "url_oficial": "http://www.cocc.ro/indicatoare_de_norme_de_deviz.htm",
   "urluri_secundare": "https://www.librarie.net/p/130476/indicator-de-norme-de-deviz-pentru-lucrari-de-instalatii-de-incalzire-centrala-si-gaze-la-constructii-i-1981-2-volume",
   "acces": "licentiat",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "deviz",
+   "gaze"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
@@ -957,16 +1078,64 @@
   "baza_normativa_id": "indicator-I-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Doar instalații de utilizare interioare (IU)."
+ },
+ {
+  "source_id": "SRC-indicator-iz-1981",
+  "tip": "normativ",
+  "cod": "Indicator Iz 1981",
+  "titlu": "Indicator de norme de deviz pentru lucrări de izolații la construcții și instalații — Iz",
+  "emitent": "Editor COCC (ediții revizuite); ed. 1983 scanată",
+  "editie": "1981; rev. la nivelul 1999 (tipărit 2001, 341 p.; și 2014, 344 p.) — ccc.md poz. 14-15; COCC listează «Iz 1981»",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://intocmire-devize.ro/indicator-norme-deviz-izolatii/",
+  "acces": "licentiat",
+  "domenii": [
+   "deviz",
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Cap. IZL (izolații anticorozive exterioare la țevi de oțel în pământ) și IZA (pregătire suprafețe/sablare) — reper pentru izolarea conductelor de oțel.",
+  "snapshot_sha256": "09739dd9d0d9763b90a5b1f0c7b5510928e01abc69559fc2b28f604d5041aca2",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "note": "Snapshot = OCR ed. 1983 (archive.org). Pagina intocmire-devize sha256 ca902484…a562. Normele IZL = bitum/PVC conform STAS 7335/3-76."
+ },
+ {
+  "source_id": "SRC-indicator-rpg",
+  "tip": "normativ",
+  "cod": "Indicator RpG",
+  "titlu": "Indicator de norme de deviz pentru lucrări de reparații la instalații de alimentare cu gaze naturale — RpG",
+  "emitent": "Editor COCC",
+  "editie": "1981, rev. la nivelul 1999, tipărit 2002 (169 p.) — ccc.md poz. 34; COCC: «RpG Reparații de instalații de gaze, 1999-2015»",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://www.cocc.ro/indicatoare_de_norme_de_deviz.htm",
+  "acces": "licentiat",
+  "domenii": [
+   "deviz",
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Reparații/verificări la instalații de gaze existente.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
  },
  {
   "source_id": "SRC-indicator-ts-1981",
   "tip": "normativ",
-  "cod": "Indicator de norme de deviz Ts — 1981",
-  "titlu": "Indicator de norme de deviz pentru lucrari de terasamente (Ts)",
-  "emitent": "seria 1981 (retiparit)",
-  "editie": "1981",
+  "cod": "Indicator Ts 1981",
+  "titlu": "Indicator de norme de deviz pentru lucrări de terasamente — Ts",
+  "emitent": "Editor actual COCC S.A. (se declară «singura societate abilitată oficial de MLPTL»); emitentul original 1981 neconfirmat",
+  "editie": "Ediția COCC 2003, 2 volume (vol. I: TsA-TsE; vol. II: TsF-TsJ), codificare resurse pe 13 caractere (adresa MLPTL 1143/DGT/24.03.1999); catalog ccc.md: 2003, 266 + 157 p.",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -976,16 +1145,18 @@
   "urluri_secundare": "http://www.cocc.ro/indicatoare_de_norme_de_deviz.htm",
   "acces": "licentiat",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "deviz"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "indicator-Ts-1981",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "snapshot_sha256": "33495a7711c7550c142e7636b7a61dd1539573c14280561183730f8f4bcb4a07",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Reper orientativ (Ghid P91 pct. 2.2.3); folosit de proiectanți în F3 pentru săpături/umpluturi la rețele gaze.",
+  "note": "Snapshot = OCR vol. I (archive.org, item indicator-de-norme-de-deviz-pentru-lucrari-de-terasamente-ts-1981-scan; vol. II sha256 3dd3a245…0827). Copie publică a unei ediții protejate (© COCC) — folosită doar pentru metadate, titluri de capitole/articole și UM; consumurile NU au fost extrase."
  },
  {
   "tip": "ghid",
@@ -1845,9 +2016,9 @@
   "source_id": "SRC-ntpee-2018",
   "tip": "ordin_anre",
   "cod": "Ordin ANRE 89/2018 (NTPEE-2018)",
-  "titlu": "Normele tehnice pentru proiectarea, executarea și exploatarea sistemelor de alimentare cu gaze naturale",
+  "titlu": "Norme tehnice pentru proiectarea, executarea și exploatarea sistemelor de alimentare cu gaze naturale",
   "emitent": "ANRE",
-  "editie": "MO 462/05.06.2018; forma consolidată verificată la 26.01.2023 (după Ordin ANRE 2/2023). Nu am găsit modificări ulterioare 2024–2026 (neconfirmat complet: lege5/legislatie.just.ro inaccesibile).",
+  "editie": "consolidat după Ord. ANRE 2/2023 (valabil 31.01.2023)",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -1857,7 +2028,8 @@
   "urluri_secundare": "https://migs.ro/wp-content/uploads/2023/02/NTPEE-2018-actualizat-cu-OANRE-89-modificat-cu-OANRE-2-din-2023.pdf ; original MO 462/2018: https://amstal.ro/wp-content/uploads/2018/12/NTPEE-2018-Ordin-ANRE-89-2018.pdf",
   "acces": "public",
   "domenii": [
-   "tehnic_gaze_apa"
+   "tehnic_gaze_apa",
+   "gaze"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
@@ -1866,7 +2038,7 @@
   "snapshot_sha256": "96ea57f56d15b0210ace09d2a47aecfda3b8a1cc9d6207407e16b00524e53c90",
   "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Legea 123/2012 art. 121 + art. 194 → normă tehnică obligatorie ≤ 10 bar. Anexa 2 = listă de recomandare (titlu + art. 6 alin. 2), obligatorie doar prin art. 228 alin. (3), 235 alin. (4), 50^1.",
+  "motiv_aplicabilitate": "Completare P2: anexa 2 «Lista standardelor» NU conține SR EN 12068, seria ISO 21809, ISO 5817/17635/17636/17637/10675/17640/11666, ISO 9606-1, ISO 3834, ISO 8501, ISO 12944, EN ISO 3183, EN 10204 — toate acestea vin din PT CR ISCIR, specificațiile operatorilor sau DA. Art. 75, 194-198 dau parametrii obligatorii pentru cantitățile de terasamente.",
   "nota": "MO 462/2018 original: sha256 ac023a32…; forma consolidată e valabilă la 31.01.2023 — modificări ulterioare neverificate. Notele ^1/^5 din art. 1^1 trimit încă la Ord. 132/2021 și 182/2020."
  },
  {
@@ -1973,6 +2145,29 @@
   "snapshot_data": "2026-10-01",
   "nota": "Snapshot = PDF consolidat ISTA (https://www.ista.com/.../ordonanta_20_din_1992.pdf); PDF-ul BRML e scanare 1992 fără OCR (sha256 fda3a71a…).",
   "ultima_verificare": "2026-10-01"
+ },
+ {
+  "source_id": "SRC-og-39-1998",
+  "tip": "og",
+  "cod": "OG 39/1998",
+  "titlu": "Ordonanța privind activitatea de standardizare națională în România",
+  "emitent": "Guvernul României",
+  "editie": "Formă curentă NECITITĂ (cdep.ro conexiune resetată, lege5 503, legislatie.just.ro inaccesibil); art. 6 alin. (1) din rezultatul căutării",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare_modificat",
+  "url_oficial": "https://www.cdep.ro/pls/legis/legis_pck.htp_act_text?idt=321",
+  "acces": "public",
+  "domenii": [
+   "calitate"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Regula generală: aplicarea standardelor e voluntară — standardul devine obligatoriu prin reglementare sau contract.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": "verificat_pe_sursa_primara=false"
  },
  {
   "source_id": "SRC-og-43-1997",
@@ -2430,29 +2625,30 @@
  {
   "source_id": "SRC-ordin-mlptl-1568-2002-p91",
   "tip": "ghid",
-  "cod": "Ordin MLPTL 1568/2002 — Ghid P91/1-02",
-  "titlu": "Ghid privind elaborarea devizelor la nivel de categorii de lucrari si obiecte de constructii pentru investitii realizate din fonduri publice — indicativ P91/1-02",
-  "emitent": "Ministerul Lucrarilor Publice, Transporturilor si Locuintei",
-  "editie": "2002; figura in lista reglementarilor tehnice valabile la 31.03.2010 (Decizia MDRT 27.129/28.04.2010), citat ca aplicabil de CNSC in 2018",
+  "cod": "Ghid P91/1-02 (Ord. MLPTL 1568/2002)",
+  "titlu": "Ghid privind elaborarea devizului general / devizelor pe categorii de lucrări",
+  "emitent": "MLPTL; elaborat de INCERC",
+  "editie": "Ord. 1568/15.10.2002 (PDF publicat de windev.ro)",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare",
   "inlocuit_de": null,
-  "url_oficial": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NWQ2ZTZiODMtYzc2OS00YTM3LWEwZmQtMmRkOTIwYzljYjgx&pdfa1=ZmFsc2U%3D&filename=Qk8yMDE4XzY0NzYucGRm&action=aW5saW5l",
+  "url_oficial": "https://www.windev.ro/wp-content/uploads/2015/02/Ghid-Devize-Indicativ-P91.pdf",
   "urluri_secundare": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NWQ2ZTZiODMtYzc2OS00YTM3LWEwZmQtMmRkOTIwYzljYjgx&pdfa1=ZmFsc2U%3D&filename=Qk8yMDE4XzY0NzYucGRm&action=aW5saW5l",
-  "acces": "partial",
+  "acces": "public",
   "domenii": [
-   "deviz_legi_conexe"
+   "deviz_legi_conexe",
+   "deviz"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "ordin-mlptl-1568-2002-p91",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "snapshot_sha256": "566bb66045f9c8627f7e44ea7d491c74d72b8d8ecf4d98f66a8f4b5a66450dad",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Pct. 1.4, 2.2.2-2.2.6, 3.3.1.4-3.3.1.5: indicatoare orientative, simboluri, consumuri proprii, lucrări fără normă."
  },
  {
   "source_id": "SRC-ordin-mt-1170-2018",
@@ -2825,11 +3021,11 @@
  },
  {
   "source_id": "SRC-pt-cr-6-2025",
-  "tip": "instructiune",
-  "cod": "PT CR 6-2025 (Ordin MEDAT 1172/2026)",
-  "titlu": "Autorizarea operatorilor control nedistructiv și a persoanelor juridice care efectuează examinări nedistructive și încercări distructive",
-  "emitent": "MEDAT / ISCIR",
-  "editie": "MO 658/07.08.2026; înlocuiește PT CR 6-2013",
+  "tip": "prescriptie_tehnica",
+  "cod": "PT CR 6-2025",
+  "titlu": "Autorizarea operatorilor NDT",
+  "emitent": "ISCIR / MEDAT (Ord. 1172/2026)",
+  "editie": "MO 658 bis/07.08.2026",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -2839,7 +3035,8 @@
   "urluri_secundare": "https://iscir.ro/wp-content/uploads/2026/08/PT-CR-6-2025.pdf",
   "acces": "public",
   "domenii": [
-   "tehnic_gaze_apa"
+   "tehnic_gaze_apa",
+   "calitate"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
@@ -2847,8 +3044,8 @@
   "baza_normativa_id": "pt-cr-6-2025",
   "snapshot_sha256": "5cbb6d65c4c0ce2f11a0c704b4f7a6ed65f47e5b341008395fbf43781ca603d9",
   "snapshot_data": "2026-10-01",
-  "aplicabilitate_gazpet": "conditionata",
-  "motiv_aplicabilitate": "Domeniu formal: instalații ISCIR (art. 1); pe SD gaze se folosește prin alegerea laboratorului „autorizat” (NTPEE art. 238)."
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Art. 12 alin. (1) lit. b) + art. 96 / anexa 24 (exemplificativ: SR EN ISO 9712:2022)."
  },
  {
   "source_id": "SRC-pt-cr-7-2025",
@@ -2879,11 +3076,11 @@
  },
  {
   "source_id": "SRC-pt-cr-9-2025",
-  "tip": "instructiune",
-  "cod": "PT CR 9-2025 (Ordin MEDAT 1172/2026)",
-  "titlu": "Autorizarea sudorilor care execută lucrări de sudare la instalațiile sub presiune și la instalațiile de ridicat și a operatorilor sudare țevi și fitinguri din PEHD",
-  "emitent": "Ministerul Economiei, Digitalizării, Antreprenoriatului și Turismului / ISCIR",
-  "editie": "Ordin 1172/24.07.2026, MO 658 și 658 bis/07.08.2026; abrogă Ordin ME 1001/2013 (PT CR 6/7/9-2013)",
+  "tip": "prescriptie_tehnica",
+  "cod": "PT CR 9-2025",
+  "titlu": "Autorizarea sudorilor și a operatorilor sudare PEHD",
+  "emitent": "ISCIR / MEDAT (Ord. 1172/2026)",
+  "editie": "MO 658 bis/07.08.2026",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -2893,7 +3090,9 @@
   "urluri_secundare": "https://iscir.ro/wp-content/uploads/2026/08/PT-CR-9-2025.pdf",
   "acces": "public",
   "domenii": [
-   "tehnic_gaze_apa"
+   "tehnic_gaze_apa",
+   "gaze",
+   "calitate"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
@@ -2901,8 +3100,8 @@
   "baza_normativa_id": "pt-cr-9-2025",
   "snapshot_sha256": "1e23b8b37d83f1e38d550e5cece368023b7739bb5df9c82fa51a2bed3fb7a291",
   "snapshot_data": "2026-10-01",
-  "aplicabilitate_gazpet": "conditionata",
-  "motiv_aplicabilitate": "Obligatoriu pentru operatorii PEHD (art. 1 alin. 2) și ca dovadă uzuală a „sudorului autorizat” cerut de NTPEE/Ord. 17; pentru sudorii de oțel pe SD e formal opțional (art. 2)."
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Art. 30 alin. (5)-(6), 43-45 trimit la «standardul european aplicabil» (nedatat); art. 76 + anexa 16 = listă EXEMPLICATIVĂ de standarde (ISO 5817:2023, 17635:2025, 9606-1:2017, EN 16296:2021, EN 12814…)."
  },
  {
   "source_id": "SRC-salariu-minim-constructii-2026",
@@ -3101,9 +3300,9 @@
   "source_id": "SRC-sr-en-12068",
   "tip": "standard",
   "cod": "SR EN 12068:2002",
-  "titlu": "Protecție catodică. Acoperiri organice exterioare pentru protecția împotriva coroziunii conductelor de oțel îngropate sau imersate în conjuncție cu protecția catodică. Benzi și materiale contractibile",
-  "emitent": "ASRO (adoptare CEN/ISO)",
-  "editie": "SR EN 12068:2002 — 'În vigoare' pe magazin.asro.ro (aprobat 26.09.2002, versiune RO 31.08.2008); EN 12068:1998 (DIN EN 12068:1999). NU a fost găsită dovadă că e înlocuit de EN ISO 21809-3",
+  "titlu": "Protecție catodică. Acoperiri organice exterioare pentru conducte îngropate — benzi și materiale termocontractabile",
+  "emitent": "ASRO (CEN)",
+  "editie": "SR EN 12068:2002 în vigoare (magazin.asro.ro, runda 1)",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -3111,9 +3310,10 @@
   "inlocuit_de": null,
   "url_oficial": "https://magazin.asro.ro/ro/standard/30458",
   "urluri_secundare": "https://magazin.asro.ro/ro/standard/30458",
-  "acces": "metadata_only",
+  "acces": "licentiat",
   "domenii": [
-   "sudura_ndt_izolatie_materiale"
+   "sudura_ndt_izolatie_materiale",
+   "gaze"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
@@ -3121,8 +3321,8 @@
   "baza_normativa_id": "sr-en-12068",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NU e în anexa 2 NTPEE; obligatoriu doar prin CS. Indicatorul Iz/IZL nu are norme pentru manșoane termocontractabile."
  },
  {
   "source_id": "SRC-sr-en-12327",
@@ -3177,6 +3377,30 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Încorporat prin NTPEE art. 235 alin. (4) → anexa 2 poz. 37."
+ },
+ {
+  "source_id": "SRC-sr-en-12814",
+  "tip": "standard",
+  "cod": "SR EN 12814-1:2001, -2:2021, -4+AC:2018, -5:2001",
+  "titlu": "Încercări ale îmbinărilor sudate ale semifabricatelor din materiale termoplastice",
+  "emitent": "ASRO (CEN)",
+  "editie": "Ediții după PT CR 9-2025 anexa 16",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze",
+   "calitate"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 art. 44-45 + anexa 16; PT CR 7-2025 (WPQR PEHD, runda 1).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
  },
  {
   "source_id": "SRC-sr-en-12954",
@@ -3311,20 +3535,21 @@
  {
   "source_id": "SRC-sr-en-1555",
   "tip": "standard",
-  "cod": "SR EN 1555-1…-4:2025 (+ SR EN 1555-5)",
-  "titlu": "Sisteme de conducte de materiale plastice pentru distribuția combustibililor gazoși. Polietilenă (PE)",
-  "emitent": "ASRO (adoptare CEN/ISO)",
-  "editie": "SR EN 1555-1:2025, -2:2025, -3:2025, -4:2025 înlocuiesc edițiile 2021 (Buletinul Standardizării 12/2025; anulări în BS 05/2026); EN 1555-x:2025 doa 2026-01-31; partea 5 — ediție neconfirmată",
+  "cod": "SR EN 1555-1…-4:2025",
+  "titlu": "Sisteme de conducte de materiale plastice pentru distribuția combustibililor gazoși — PE",
+  "emitent": "ASRO (CEN)",
+  "editie": "Trei ediții coexistă în documente: 2011/2013 (NTPEE anexa 2), 2021 (Distrigaz ST-TGPHD), 2025 (curentă)",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare",
   "inlocuit_de": null,
-  "url_oficial": "https://www.asro.ro/wp-content/uploads/2025/12/BS-12-2025.pdf",
+  "url_oficial": "https://magazin.asro.ro/",
   "urluri_secundare": "https://www.asro.ro/wp-content/uploads/2025/12/BS-12-2025.pdf",
   "acces": "licentiat",
   "domenii": [
-   "sudura_ndt_izolatie_materiale"
+   "sudura_ndt_izolatie_materiale",
+   "gaze"
   ],
   "ultima_verificare": "2026-10-01",
   "verificat_pe_sursa_primara": true,
@@ -3332,8 +3557,8 @@
   "baza_normativa_id": "sr-en-1555",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "doar_referinta",
-  "motiv_aplicabilitate": "Anexa 2 (recomandare) + specificații OSD; conformitatea produselor prin HG 668/2017."
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "OBLIGATORIE_DOC_ACHIZITIE prin specificația operatorului/CS; NTPEE doar recomandă."
  },
  {
   "source_id": "SRC-sr-en-1594",
@@ -3388,6 +3613,30 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. II 3.6.1 alin. (10)."
+ },
+ {
+  "source_id": "SRC-sr-en-16296",
+  "tip": "standard",
+  "cod": "SR EN 16296:2021 (+ SR EN 14728:2019)",
+  "titlu": "Imperfecțiuni în îmbinările sudate de materiale termoplastice — niveluri de calitate (16296) / clasificare (14728)",
+  "emitent": "ASRO (CEN)",
+  "editie": "Datele din PT CR 9-2025 anexa 16: SR EN 16296/30.07.2021; SR EN 14728/31.07.2019",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze",
+   "calitate"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 art. 43 + anexa 16 (exemplificativ) — examen operatori PEHD; la producție doar prin CS.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
  },
  {
   "source_id": "SRC-sr-en-1775",
@@ -3520,6 +3769,29 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-sr-en-iso-1167-1",
+  "tip": "standard",
+  "cod": "SR EN ISO 1167-1:2006 (ediția din NTPEE)",
+  "titlu": "Țevi, fitinguri, ansambluri termoplaste — rezistența la presiune internă. Metodă generală",
+  "emitent": "ASRO (CEN/ISO)",
+  "editie": "NTPEE anexa 2 poz. 56; ediție curentă neconfirmată",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Anexa 2 NTPEE (recomandare); relevant pentru producătorul de țeavă.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
   "source_id": "SRC-sr-en-iso-12944",
   "tip": "standard",
   "cod": "SR EN ISO 12944-1…-9",
@@ -3628,6 +3900,30 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-sr-en-iso-15607",
+  "tip": "standard",
+  "cod": "SR EN ISO 15607:2004 (ediția din NTPEE)",
+  "titlu": "Specificația și calificarea procedurilor de sudare pentru materiale metalice. Reguli generale",
+  "emitent": "ASRO (CEN/ISO)",
+  "editie": "NTPEE anexa 2 poz. 29 citează 2004; ediția curentă ASRO neconfirmată",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze",
+   "calitate"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "NTPEE art. 235 alin. (4) → anexa 2 poz. 29 (ediție datată).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
   "source_id": "SRC-sr-en-iso-15609-1",
   "tip": "standard",
   "cod": "SR EN ISO 15609-1:2020",
@@ -3653,6 +3949,29 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "directa",
   "motiv_aplicabilitate": "Încorporat prin NTPEE art. 228 alin. (3)/235 alin. (4) → anexa 2 poz. 30 (ediția 2005 citată)."
+ },
+ {
+  "source_id": "SRC-sr-en-iso-15609-2",
+  "tip": "standard",
+  "cod": "SR EN ISO 15609-2:2002+A1:2004",
+  "titlu": "WPS — Partea 2: sudarea cu gaze",
+  "emitent": "ASRO (CEN/ISO)",
+  "editie": "NTPEE anexa 2 poz. 31 (2002 + A1:2004 + C91:2009); ediția curentă neconfirmată",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NTPEE art. 235 alin. (4) → anexa 2 poz. 31; doar la sudare oxi-gaz.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
  },
  {
   "source_id": "SRC-sr-en-iso-15614-1",
@@ -3925,6 +4244,29 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-sr-en-iso-6520-1",
+  "tip": "standard",
+  "cod": "SR EN ISO 6520-1:2007 (ediția din NTPEE)",
+  "titlu": "Clasificarea imperfecțiunilor geometrice din îmbinările sudate — sudare prin topire",
+  "emitent": "ASRO (CEN/ISO)",
+  "editie": "NTPEE anexa 2 poz. 35 citează 2007; ediția curentă neconfirmată",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "NTPEE art. 235 alin. (4) → anexa 2 poz. 35.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
   "source_id": "SRC-sr-en-iso-8501-1",
   "tip": "standard",
   "cod": "SR EN ISO 8501-1:2007",
@@ -4004,6 +4346,29 @@
   "snapshot_data": null,
   "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
+ },
+ {
+  "source_id": "SRC-sr-en-iso-9692-1",
+  "tip": "standard",
+  "cod": "SR EN ISO 9692-1:2014 (ediția din NTPEE)",
+  "titlu": "Tipuri de pregătire a îmbinării — sudare cu arc și cu gaze a oțelurilor",
+  "emitent": "ASRO (CEN/ISO)",
+  "editie": "NTPEE anexa 2 poz. 33 citează 2014; ediția curentă neconfirmată",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "NTPEE art. 235 alin. (4) → anexa 2 poz. 33.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
  },
  {
   "source_id": "SRC-sr-en-iso-9712",
@@ -4087,6 +4452,29 @@
   "motiv_aplicabilitate": null
  },
  {
+  "source_id": "SRC-stas-2484-sr-8050",
+  "tip": "standard",
+  "cod": "STAS 2484-85; SR 8050",
+  "titlu": "Bitum pentru protecția conductelor metalice îngropate; Împâslituri din fibre de sticlă",
+  "emitent": "ASRO",
+  "editie": "Ediții după NTPEE anexa 2 poz. 50 și 87; stare curentă neverificată",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Materialele sistemelor bitum din NTPEE art. 259 alin. (3); anexa 2 = recomandare.",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
   "source_id": "SRC-stas-6819",
   "tip": "standard",
   "cod": "STAS 6819",
@@ -4114,6 +4502,52 @@
   "motiv_aplicabilitate": "Încorporat prin NP 133-2022 vol. I."
  },
  {
+  "source_id": "SRC-stas-7335",
+  "tip": "standard",
+  "cod": "STAS 7335 /1-86, /2-88, /4-77, /5-90, SR 7335-6:1998, /7-87, /8-85, /9-88, /10-77",
+  "titlu": "Protecția contra coroziunii a construcțiilor metalice îngropate (serie)",
+  "emitent": "ASRO (ex-IRS)",
+  "editie": "Ediții după NTPEE anexa 2 poz. 38-46; stare curentă neverificată. STAS 7335/3-76 (izolare cu bitum) — invocat de Iz/IZL — NU e în anexa 2",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "NTPEE anexa 2 poz. 38-46 (recomandare); art. 263 trimite generic la «prescripții tehnice».",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
+  "source_id": "SRC-stas-8804",
+  "tip": "standard",
+  "cod": "STAS 8804/1…/9-92; STAS 8805/2-74",
+  "titlu": "Fitinguri din oțel pentru sudare cap la cap",
+  "emitent": "ASRO",
+  "editie": "Ediții după NTPEE anexa 2 poz. 88-96; stare curentă neverificată",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "neconfirmat",
+  "url_oficial": "https://magazin.asro.ro/",
+  "acces": "licentiat",
+  "domenii": [
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "NTPEE anexa 2 (recomandare).",
+  "snapshot_sha256": null,
+  "snapshot_data": null,
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
   "source_id": "SRC-stas-9312-87",
   "tip": "standard",
   "cod": "STAS 9312-87",
@@ -4139,6 +4573,54 @@
   "ofertare_normative_id": null,
   "verificat_pe_sursa_primara": false,
   "note": "Statutul ASRO (în vigoare/anulat) nu a fost verificat; conținutul nu a fost citit."
+ },
+ {
+  "source_id": "SRC-utcn-224ci-2018",
+  "tip": "ghid",
+  "cod": "UTCN proiect 224 CI/2018",
+  "titlu": "Actualizarea normelor de deviz aferente indicatorului de norme de deviz pentru drumuri — indicator «D»",
+  "emitent": "Universitatea Tehnică din Cluj-Napoca",
+  "editie": "2018",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://actutil.utcluj.ro/documente/Proiect_stiintific_tehnic_224ci.pdf",
+  "acces": "public",
+  "domenii": [
+   "deviz",
+   "drumuri"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Argument tehnic: normele de timp ale utilajelor din D 1981 sunt depășite → justificare pentru consumuri proprii de utilaj.",
+  "snapshot_sha256": "5587dbef14f1d1275658aee38bd79ec9c127eceb8375fc3f8312ea87cac9989d",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "note": ""
+ },
+ {
+  "source_id": "SRC-xdev-model-deviz-gaze",
+  "tip": "ghid",
+  "cod": "x-dev.ro — model devize instalații gaze naturale",
+  "titlu": "Exemplu de antemăsurătoare branșament + instalație de utilizare (2000-2001)",
+  "emitent": "x-dev.ro (program de deviz)",
+  "editie": "date întocmire 20.09.2000 / rulare 21.03.2001",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "http://www.x-dev.ro/misc/deviz-inst-gaz.html",
+  "acces": "public",
+  "domenii": [
+   "deviz",
+   "gaze"
+  ],
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Coduri reale de articole G/TS/IZ/D/I/RpG într-un deviz de branșament.",
+  "snapshot_sha256": "92e0145d7cfe01b350b0da56ecd9c4613e00028b312325d2c1e8a55803a62e34",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "note": "Tehnologie veche (oțel + izolație bitum/PVC); doar pentru structura codurilor."
  },
  {
   "tip": "decizie_cnsc",
@@ -5540,6 +6022,30 @@
   "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "doar_referinta",
   "motiv_aplicabilitate": "Practică CNSC — interpretare, nu normă; vezi câmpul comparabilitate în cnsc_practica.json"
+ },
+ {
+  "source_id": "SRC-CNSC-BO2024_696",
+  "tip": "decizie_cnsc",
+  "cod": "696/C11/429, 448",
+  "titlu": "Decizia CNSC 696/C11/429,448 din 19.03.2024 (renovare energetică, PNRR, procedură simplificată)",
+  "emitent": "CNSC",
+  "editie": "19.03.2024",
+  "data_publicarii": "2024-03-19",
+  "effective_from": null,
+  "effective_to": null,
+  "status": "publicata",
+  "url_oficial": "portal.cnsc.ro (BO2024_696.pdf, descărcat în runda 1 în gaze_pdf/)",
+  "acces": "public",
+  "domenii": [
+   "achizitii",
+   "deviz"
+  ],
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Articole asimilate vs simbolurile din F3; UM 100 mc vs mc la TSC02A1.",
+  "snapshot_sha256": "a969b4d3aaa678508a3ec18bb91da965e7a4323b672233c03ca4afc18ee37254",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "note": "Lucrări de clădiri, nu gaze — comparabilitate limitată la regula despre simboluri. Neinclus în cnsc_existente.txt."
  },
  {
   "source_id": "SRC-CNSC-BO2024_942",
