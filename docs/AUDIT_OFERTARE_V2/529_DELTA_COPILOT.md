@@ -1,7 +1,7 @@
 # PR #529 (Conturi c/d/e) — delta pentru Copilot, 01.10.2026 seara
 
-**context_version (curent, r4):** branch `claude/erp-continuare-x4p5a7`, cod la commit `187542a`. Documentul e în commitul imediat următor.
-**Istoric:** r1 = `0407bf7` (secțiunile 1–7, păstrate ca istoric) · r2 = `dad549b` · r3 = `a1dddd5` (delta `dac4bda`) · r4 = `187542a`
+**context_version (curent, r4):** branch `claude/erp-continuare-x4p5a7`, cod la commit `f411d9e`. Documentul e în commitul imediat următor.
+**Istoric:** r1 = `0407bf7` (secțiunile 1–7, păstrate ca istoric) · r2 = `dad549b` · r3 = `a1dddd5` (delta `dac4bda`) · r4 = `187542a` + E varianta C `f411d9e`
 **Versiunile valabile sunt cele din r4** (secțiunile 5 / r2 / r3 au versiuni depășite).
 **Stare:** NEAPLICAT pe live. Nimic nu s-a scris în producție; verificările live au fost doar SELECT.
 
@@ -760,7 +760,7 @@ Versiunile sunt > 20261001184500 (ultima de pe live) și strict crescătoare. Co
 |---|---|---|---|
 | 1 | 20260929c_conturi_legare_automata.sql | `20261001190000` | `9a3e0a133e50a1bc759ccaa4ec5b0c624f9e3516dc81ebe48792221455520d50` (neschimbat față de r3) |
 | 2 | 20260929d_conturi_inchidere_la_incetare.sql | `20261001191500` | `d2468bbb60180d3a197960cf29edddaa296d235293eae80362d9f42214ab992d` |
-| 3 | 20260929e_fost_angajat_colaborare_externa.sql | `20261001193000` | **BLOCAT** până la decizia lui Răzvan pe politica E. Varianta r3 = `1adac6d7…` |
+| 3 | 20260929e_fost_angajat_colaborare_externa.sql | `20261001193000` | `13a718e94e79ea6719d8ea72a2ff35d0727953b0357beeeff2add255bee6aea8` (varianta C) |
 
 ### Preflight live read-only (01.10.2026, după J05 179000 și 543b 184500)
 | Verificare | Rezultat |
@@ -911,4 +911,129 @@ index 107d4e6..78338a8 100644
      AND NOT EXISTS (SELECT 1 FROM public.profiles WHERE id IN (:'u_dr', :'u_ehr', :'u_dr2'))
      AND NOT EXISTS (SELECT 1 FROM public.employees WHERE id IN (:e_dr, :e_f1, :e_f2, :e_g, :e_dr2))
      AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_dr2')
+```
+
+### E: varianta C aprobată de Răzvan (commit `f411d9e`)
+Se aplică doar la TRECEREA unei fișe în „fost angajat” (nu era înainte, este după UPDATE). Atunci, în `fn_employees_colab_ext_after`, pentru externii ACTIVI și NELEGAȚI:
+- **email identic** (lower/trim) → `activ = false` + notificare owner `extern_fost_angajat_dezactivat`. Reactivarea o face un om, prin HR → Foști angajați, cu acord;
+- **potrivire doar pe nume** (aceeași regulă ca `fn_extern_fost_angajat_potrivire`: numele de familie al fișei e în numele externului, iar un set de cuvinte îl conține pe celălalt) → notificare owner `extern_fost_angajat_omonim`, FĂRĂ dezactivare.
+
+Triggerul `trg_employees_zz_colab_ext` se declanșează acum și la schimbarea `termination_date`. Lock-urile pe identitate (`trg_employees_colab_ext_lock`) sunt deja ținute, deci nu apare o cursă cu un extern nou. Helperii folosiți (`fn_nume_cuvinte`, `fn_nume_familie`, `fn_cont_notifica_owneri`) sunt în amprenta din precondiția lui e.
+
+**E-LIFECYCLE-1** (secvențial):
+- externul cu emailul fostului angajat e dezactivat;
+- externul potrivit doar pe nume rămâne activ;
+- externul fără potrivire e neatins;
+- owner-ul primește ambele notificări;
+- UPDATE-urile ulterioare pe fișa deja fostă nu mai notifică.
+
+**Teste finale:** harness PG17 `--rollback`: **934 aserțiuni PASS**. Gate 0e: c = 0, c+d = 0, c+d+e = 0. Validator: e OK (54).
+
+**sha256 finale:** c `9a3e0a13…`, d `d2468bbb…`, e `13a718e9…` (complete în tabelul de mai sus și în `docs/CONTURI_CICLU_VIATA.md`, cu comenzile runner-ului).
+
+```diff
+diff --git a/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql b/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
+index c8e0cbe..917a7b9 100644
+--- a/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
++++ b/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
+@@ -385,6 +385,13 @@ AS $fn$
+ DECLARE
+   v_reset boolean := (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
+                      OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS DISTINCT FROM OLD.termination_date);
++  -- r4 (varianta C, decizia lui Răzvan): fișa DEVINE „fost angajat” acum (nu era înainte, este după)
++  v_devine_fost boolean := (NEW.termination_date IS NOT NULL AND NEW.termination_date <= CURRENT_DATE AND NEW.active IS NOT TRUE)
++                           AND NOT (OLD.termination_date IS NOT NULL AND OLD.termination_date <= CURRENT_DATE AND OLD.active IS NOT TRUE);
++  v_em    text := lower(btrim(COALESCE(NEW.email, '')));
++  v_cuv   text[] := public.fn_nume_cuvinte(NEW.name);
++  v_fam   text := public.fn_nume_familie(NEW.name);
++  x       record;
+ BEGIN
+   IF OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
+      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
+@@ -407,6 +414,34 @@ BEGIN
+     UPDATE public.hr_personal_extern SET activ = false, updated_at = now()
+      WHERE fost_angajat_employee_id = NEW.id AND activ;
+   END IF;
++  -- r4 (E-LIFECYCLE, varianta C): externii ACTIVI NELEGAȚI care existau deja cu identitatea omului care tocmai a plecat.
++  --   * email identic  → dezactivare automată (direcția sigură; activarea o face din nou un om) + notificare owner;
++  --   * doar pe nume   → notificare owner, FĂRĂ dezactivare (poate fi altă persoană cu același nume).
++  -- Lock-urile advisory pe identitate sunt deja ținute (trg_employees_colab_ext_lock) ⇒ fără cursă cu un extern nou.
++  IF v_devine_fost THEN
++    FOR x IN
++      SELECT h.id, h.nume, (v_em <> '' AND lower(btrim(COALESCE(h.email, ''))) = v_em) AS pe_email
++        FROM public.hr_personal_extern h
++       WHERE h.fost_angajat_employee_id IS NULL AND h.activ IS TRUE
++         AND ((v_em <> '' AND lower(btrim(COALESCE(h.email, ''))) = v_em)
++              OR (cardinality(v_cuv) >= 2 AND cardinality(public.fn_nume_cuvinte(h.nume)) >= 2 AND v_fam = ANY (public.fn_nume_cuvinte(h.nume))
++                  AND (public.fn_nume_cuvinte(h.nume) <@ v_cuv OR v_cuv <@ public.fn_nume_cuvinte(h.nume))))
++       ORDER BY h.id
++    LOOP
++      IF x.pe_email THEN
++        UPDATE public.hr_personal_extern SET activ = false, updated_at = now() WHERE id = x.id;
++        PERFORM public.fn_cont_notifica_owneri('extern_fost_angajat_dezactivat', '⏸ Extern dezactivat: e fost angajat Gazpet',
++          format('Externul #%s %s are emailul fișei #%s %s, al cărei contract s-a încheiat. Colaborarea a fost oprită automat; se reactivează prin HR → Foști angajați, cu acordul lui.',
++                 x.id, x.nume, NEW.id, NEW.name),
++          '/hr?tab=fosti');
++      ELSE
++        PERFORM public.fn_cont_notifica_owneri('extern_fost_angajat_omonim', '⚠ Extern activ cu numele unui fost angajat',
++          format('Externul #%s %s are același nume ca fișa #%s %s, al cărei contract s-a încheiat. Nu l-am dezactivat (poate fi altă persoană): verifică și, dacă e același om, trece-l prin HR → Foști angajați.',
++                 x.id, x.nume, NEW.id, NEW.name),
++          '/hr?tab=fosti');
++      END IF;
++    END LOOP;
++  END IF;
+   RETURN NULL;
+ END $fn$;
+ REVOKE ALL ON FUNCTION public.fn_employees_colab_ext_after() FROM PUBLIC, anon, authenticated, service_role;
+@@ -415,7 +450,8 @@ CREATE TRIGGER trg_employees_zz_colab_ext AFTER UPDATE ON public.employees FOR E
+   WHEN (OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
+      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
+      OR OLD.colaborare_externa_document IS DISTINCT FROM NEW.colaborare_externa_document
+-     OR OLD.active IS DISTINCT FROM NEW.active)
++     OR OLD.active IS DISTINCT FROM NEW.active
++     OR OLD.termination_date IS DISTINCT FROM NEW.termination_date)
+   EXECUTE FUNCTION public.fn_employees_colab_ext_after();
+ 
+ -- C.6 Funcțiile apelabile din UI (poartă: owner sau can_modify_employees, în cod) ----
+diff --git a/supabase/tests/conturi_ciclu_viata.test.sql b/supabase/tests/conturi_ciclu_viata.test.sql
+index 78338a8..dcea6fa 100644
+--- a/supabase/tests/conturi_ciclu_viata.test.sql
++++ b/supabase/tests/conturi_ciclu_viata.test.sql
+@@ -2634,6 +2634,36 @@ SELECT teste.assert(NOT has_function_privilege('service_role', 'public.fn_colabo
+     AND NOT has_function_privilege('service_role', 'public.fn_fost_angajat_leaga_extern(integer,bigint)', 'EXECUTE'),
+   'R3-25 P3: RPC-urile R3 (decizia unui om) fără EXECUTE pentru service_role');
+ 
++-- E-LIFECYCLE-1 (r4, varianta C): externi ACTIVI NELEGAȚI care existau deja când omul devine fost angajat.
++--   email identic → dezactivare automată + notificare owner; doar nume → notificare owner, fără dezactivare;
++--   un extern fără nicio potrivire și unul legat de altă fișă nu sunt atinși.
++SELECT teste.ca_admin();
++INSERT INTO public.employees (name, department, email, active) VALUES ('LIFECU ANA', 'Test', 'lifecu.ana@exemplu.ro', true) RETURNING id AS el_ana \gset
++INSERT INTO public.employees (name, department, email, active) VALUES ('LIFECU BOGDAN', 'Test', 'lifecu.bogdan@exemplu.ro', true) RETURNING id AS el_bog \gset
++INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Firma Ana Extern', 'Lifecu.Ana@exemplu.ro ', true) RETURNING id AS xl_em \gset
++INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Bogdan Lifecu', 'alt.email@exemplu.ro', true) RETURNING id AS xl_nume \gset
++INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Lifecu Neinrudit Total', NULL, true) RETURNING id AS xl_nu \gset
++SELECT count(*) AS n_notif_el FROM public.notifications WHERE type IN ('extern_fost_angajat_dezactivat', 'extern_fost_angajat_omonim') \gset
++UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id IN (:el_ana, :el_bog);
++SELECT teste.assert((SELECT activ IS FALSE FROM public.hr_personal_extern WHERE id = :xl_em),
++  'E-LIFECYCLE-1 extern activ nelegat cu EMAILUL fostului angajat → dezactivat automat');
++SELECT teste.assert((SELECT activ IS TRUE FROM public.hr_personal_extern WHERE id = :xl_nume),
++  'E-LIFECYCLE-1 extern activ nelegat potrivit DOAR pe nume → rămâne activ (poate fi altă persoană)');
++SELECT teste.assert((SELECT activ IS TRUE FROM public.hr_personal_extern WHERE id = :xl_nu),
++  'E-LIFECYCLE-1 extern fără potrivire (alt nume de familie în poziția fișei, alt email) → neatins');
++SELECT teste.assert(EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'extern_fost_angajat_dezactivat'
++                             AND message LIKE '%#' || :xl_em || '%')
++    AND EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'owner' AND type = 'extern_fost_angajat_omonim'
++                 AND message LIKE '%#' || :xl_nume || '%')
++    AND NOT EXISTS (SELECT 1 FROM public.notifications WHERE type LIKE 'extern_fost_angajat_%' AND message LIKE '%#' || :xl_nu || ' %'),
++  'E-LIFECYCLE-1 owner-ul primește notificare pentru ambele (dezactivat / omonim), nimic pentru externul fără potrivire');
++SELECT count(*) AS n_notif_el2 FROM public.notifications WHERE type IN ('extern_fost_angajat_dezactivat', 'extern_fost_angajat_omonim') \gset
++UPDATE public.employees SET observatii_hr = 'fără legătură' WHERE id = :el_ana;
++UPDATE public.employees SET termination_date = CURRENT_DATE - 1 WHERE id = :el_bog;   -- rămâne fost angajat: nu e o nouă plecare
++SELECT teste.assert(:n_notif_el2 > :n_notif_el
++    AND (SELECT count(*) FROM public.notifications WHERE type IN ('extern_fost_angajat_dezactivat', 'extern_fost_angajat_omonim')) = :n_notif_el2,
++  'E-LIFECYCLE-1 doar TRECEREA în „fost angajat” declanșează verificarea (alte UPDATE-uri pe fișa deja fostă nu re-notifică)');
++
+ \endif
+ 
+ ROLLBACK;
 ```
