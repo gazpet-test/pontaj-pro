@@ -1,7 +1,7 @@
 # Registre de evidență — surse, cerințe atomice, graf de aplicabilitate
 
 > Runda 2 · 01.10.2026 · mandat completat după review Copilot + Gemini (aprobat de Razvan „pornim cu ce avem”).
-> Fișiere: `registru_surse.json` (329 surse) · `registru_cerinte.json` (919 cerințe atomice) · `graf_aplicabilitate.json` (313 relații) · catalogul de tipare `clarificari_tipare.json` + `clarificari_matrice_model.md`.
+> Fișiere: `registru_surse.json` (370 surse) · `registru_cerinte.json` (919 cerințe atomice) · `graf_aplicabilitate.json` (313 relații) · catalogul de tipare `clarificari_tipare.json` + `clarificari_matrice_model.md`.
 
 ## Principiul: evidence-first
 
@@ -13,7 +13,7 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 
 | Aplicabilitate Gazpet | Surse |
 |---|---|
-| `doar_referinta` | 150 |
+| `doar_referinta` | 191 |
 | `neevaluat` | 67 |
 | `directa` | 55 |
 | `conditionata` | 50 |
@@ -97,7 +97,7 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 | REQ-AD-042 | achizitii | calificare | 2717/2023 (BO, nr. complet anonimizat) | motivare (L98 art. 196; HG 395 art. 29; Instr. 2/2017) | Experiența în branșamente/extinderi de distribuție gaze este experiență similară pentru rețele de distribuție gaze; AC trebuie să verifice conținutul real al contractelor. | PRACTICA_CNSC | ridicata |
 | REQ-AD-043 | achizitii | calificare | 3952/C1/4610 | motivare (L98 art. 215–216; HG 395 art. 137; Instr. 2/2017 art. 5 alin. (1)) | Conductele de transport gaze sunt experiență similară superioară pentru distribuție; respingerea ES trebuie motivată concret după analiza documentelor. | PRACTICA_CNSC | ridicata |
 | REQ-AD-044 | achizitii | calificare | 1489/2023 (BO, nr. complet anonimizat) | motivare (L99 art. 192; Instr. 2/2017 art. 5) | ES limitată strict la rețele de apă/canalizare este restrictivă; rețelele de fluide/gaze sub presiune pot fi cerute ca echivalente. | PRACTICA_CNSC | ridicata |
-| REQ-AD-045 | achizitii | calificare | 182/C8/4870 | motivare (L98 art. 2 alin. (2), art. 196; HG 343/2017 art. 19) | ES se dovedește cu documente existente la data-limită de depunere; un PV de constatare a stadiului fizic (98–99%) sau un PV de recepție emis după termen nu dovedește lucrări duse la bun sfârșit. | PRACTICA_CNSC | ridicata |
+| REQ-AD-045 | achizitii | calificare | 182/C8/4870 | motivare, pag. 14–15 (L98 art. 2 alin. (2), art. 196; HG 343/2017 art. 19) — reverificat pe text 02.10.2026 | ES se dovedește cu documente existente la data-limită de depunere. Dacă DA nu cere expres recepția finală, un PV de constatare a stadiului fizic (ex. 98–99%) poate fi element probator, DAR valorificarea lui ca ES e condiționată de confirmarea beneficiarului (înscrisuri emise/contrasemnate de acesta) — semnătura dirigintelui de șantier nu ajunge. Documentele emise după termen nu pot fi avute în vedere. | PRACTICA_CNSC | ridicata |
 | REQ-AD-046 | achizitii | calificare | 140/2023 (BO, nr. complet anonimizat) | motivare (L98 art. 196, 209; HG 395 art. 134) | Un acord-cadru nu dovedește prin el însuși ES; trebuie indicate în DUAE contractele subsecvente executate. Documentele cerute expres în propunerea tehnică (ex. proceduri de execuție) nu se completează prin clarificări. | PRACTICA_CNSC | ridicata |
 | REQ-AD-047 | achizitii | calificare | Legea 98/2016 | art. 182 alin. (2) | Pentru calificări educaționale/profesionale sau experiență, ofertantul se poate baza pe terț doar dacă terțul va executa efectiv lucrările pentru care e necesară capacitatea respectivă. | OBLIGATORIE_LEGE | ridicata |
 | REQ-AD-048 | achizitii | calificare | Legea 98/2016 | art. 182 alin. (3)–(4) | Odată cu angajamentul de susținere, ofertantul prezintă documentele transmise de terț din care rezultă modul efectiv în care terțul își va îndeplini angajamentul (anexe la angajament). | OBLIGATORIE_LEGE | ridicata |

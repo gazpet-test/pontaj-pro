@@ -1,8 +1,10 @@
 # Practica CNSC 2020–2026 — sinteză pe teme pentru Gazpet
 
-**Baza:** 136 de decizii CNSC (69 apă-canal, 28 gaze, 18 distribuție, 21 lucrări generale), dintre care 55 de contestații admise, 39 admise parțial și 42 respinse. 109 decizii sunt pe Legea 98/2016 (achiziții clasice) și 27 pe Legea 99/2016 (achiziții sectoriale). Sursa este `docs/cercetare/cnsc_practica.json`. Unde există o regulă corectată, s-a folosit forma corectată.
+**Baza:** 154 de decizii CNSC (69 apă-canal, 46 gaze, 18 distribuție, 21 lucrări generale), dintre care 63 de contestații admise, 41 admise parțial și 50 respinse. 125 de decizii sunt pe Legea 98/2016 (achiziții clasice) și 29 pe Legea 99/2016 (achiziții sectoriale). Sursa este `docs/cercetare/cnsc_practica.json`. Unde există o regulă corectată, s-a folosit forma corectată.
 
-**Ce e nou față de versiunea anterioară (90 de decizii):** s-au integrat 46 de decizii noi (loturile 3 și 4 de cercetare). S-au integrat și 3 decizii care erau deja în bază, dar nu fuseseră citate (BO2026_76, BO2024_3631, BO2023_406). Au apărut trei teme noi: 13 (ajustarea prețului și garanțiile din contract), 14 (anulări de procedură) și 15 (procedurile sectoriale pe L99).
+**Ce e nou față de versiunea anterioară (136 de decizii):** s-au integrat cele 18 decizii din lotul 5 de cercetare, toate pe gaze (16 pe L98, 2 pe L99; 8 admise, 2 admise parțial, 8 respinse). Ele aduc reguli noi despre recepția parțială ca dovadă a ES, avizul tehnic de racordare (ATR), Gantt-ul cu perioada de timp friguros, F1–F3 și vizita amplasamentului la P+E, costul verificării proiectelor în VE și clauza suspensivă de finanțare. Tiparele de clarificări citate pot fi și cele noi din catalogul v1.2 (PAT-INF-15, PAT-AMB-12, PAT-AMB-13, PAT-CAL-18, PAT-TRM-06, PAT-CTC-08 etc.).
+
+**Istoric:** versiunea cu 136 de decizii a integrat 46 de decizii din loturile 3 și 4 și 3 decizii din bază necitate până atunci (BO2026_76, BO2024_3631, BO2023_406). Atunci au apărut temele 13 (ajustarea prețului și garanțiile din contract), 14 (anulări de procedură) și 15 (procedurile sectoriale pe L99).
 
 > **Atenție:** deciziile CNSC sunt **practică de interpretare**, nu precedent obligatoriu. CNSC nu e legat de soluțiile anterioare, iar o decizie poate fi schimbată în instanță (BO2026_13). Regulile de mai jos arată cum a judecat CNSC până acum. Nu sunt lege. Unde practica e divergentă, o spunem explicit.
 
@@ -14,7 +16,8 @@
 
 **(a) Regulile extrase**
 
-1. **Oferta e neconformă când lipsește conținut tehnic cerut EXPRES în DA.** Exemple: proceduri tehnice de execuție pe categorii de lucrări, activități „obligatorii” în Gantt, drum critic, metodologie proprie în locul unei copii după caietul de sarcini. Aceste lipsuri nu se acoperă la clarificări (BO2025_2118, BO2023_140, BO2024_632, BO2025_1775, BO2022_2768, BO2025_3638, BO2021_2116, BO2026_3104). Formulele generice de tipul „se vor respecta” fac oferta neconformă dacă DA le interzice expres (BO2025_3638).
+1. **Oferta e neconformă când lipsește conținut tehnic cerut EXPRES în DA.** Exemple: proceduri tehnice de execuție pe categorii de lucrări, activități „obligatorii” în Gantt, drum critic, metodologie proprie în locul unei copii după caietul de sarcini. Aceste lipsuri nu se acoperă la clarificări (BO2025_2118, BO2023_140, BO2024_632, BO2025_1775, BO2022_2768, BO2025_3638, BO2021_2116, BO2026_3104). Formulele generice de tipul „se vor respecta” fac oferta neconformă dacă DA le interzice expres (BO2025_3638). La P+E, propunerea de proiectare care nu respectă indicatorii din avizul tehnic de racordare (ATR) publicat în DA e neconformă (BO2026_1073).
+   - **Gantt cu perioada nefavorabilă:** dacă DA cere ca Gantt-ul să includă perioada de iarnă (de exemplu 4 luni la durate peste 12 luni) și proceduri de execuție, programarea montajului conductelor în acea perioadă și lipsa procedurii de lucru pe timp friguros fac oferta neconformă. Ele nu se completează la clarificări (BO2024_2462). Când formularul cere rezerve de timp pentru situații neprevăzute, acestea se arată **distinct** de perioada de timp friguros (Normativul C 16-84: 15.11–15.03, invocat de CNSC). Perioada de iarnă fără activități nu ține loc de rezervă (BO2024_3381).
 2. **Fișele tehnice (F5) completate doar cu „CONFORM” sau cu „conform detalii de proiect” fac oferta neconformă.** Trebuie scrise caracteristicile concrete, producătorul și modelul. Un manual de producător cu mai multe variante constructive nu ține loc de angajament pentru un model anume. Lipsa nu e viciu de formă, iar AC nu e obligată să ceară clarificări (BO2026_1837 — robinete cu sferă pe gaze; BO2025_806).
 3. **Orice cerință minimă din formularele DA trebuie acoperită în ofertă:**
    - la proiectare plus execuție (P+E), planșele de organizare a execuției, schema monofilară și proiectul de organizare de șantier cerute la ofertă nu se pot amâna pe motiv că „PT se face ulterior” (BO2025_1704);
@@ -22,20 +25,20 @@
    - tabelul drumului critic se face exact pe coloanele formularului AC (BO2025_3667). Graficul general, Gantt-ul și diagrama drumului critic sunt trei documente distincte când fișa de date le cere pe toate (BO2025_2237);
    - la reofertarea dintr-un acord-cadru, relațiile de ordine impuse între prețurile unitare devin obligatorii. Încălcarea lor, chiar la sporuri de 0,10 lei, face oferta neconformă (BO2021_2679).
 4. **Oferta devine inacceptabilă din trei cauze:** răspunsul neconcludent la clarificări (art. 134 alin. 5 HG 395), modificarea ofertei prin clarificări (art. 134 alin. 6) și depășirea pragului de 1% (art. 134 alin. 9). Deciziile-sursă: BO2023_657, BO2023_246, BO2024_159, BO2021_1060, BO2020_2191, BO2025_1138, BO2025_2853. Calificarea (DUAE) se judecă pe art. 137 alin. 2 lit. b, dar acest temei e greșit pentru garanția de participare (BO2026_15).
-5. **Nu se respinge pentru cerințe care nu sunt scrise în DA.** Exemple: atestate, detalii Gantt, PCCVI sau planuri nesolicitate (BO2024_1706, BO2026_2328, BO2024_203, BO2023_665). Nici pentru greșeli de redactare care nu afectează conținutul (Decizie_271). Nici pentru omisiuni punctuale într-o ofertă voluminoasă, de exemplu o verificare lipsă din PCCVI sau o declarație de disponibilitate depusă ulterior: acestea sunt abateri tehnice minore (BO2025_1524). Un avantaj punctabil nedocumentat (garanție extinsă, „avantaje competitive”) duce cel mult la pierderea punctajului, nu la respingere (BO2026_544).
+5. **Nu se respinge pentru cerințe care nu sunt scrise în DA.** Exemple: atestate, detalii Gantt, PCCVI sau planuri nesolicitate (BO2024_1706, BO2026_2328, BO2024_203, BO2023_665). Nici pentru greșeli de redactare care nu afectează conținutul (Decizie_271). Nici pe cerințe introduse de comisie abia prin clarificări (specializări de proiectant pentru drumuri, reguli PMBOK pentru drumul critic), care nu există în DA (BO2020_1798). Atestatele ANRE cerute doar în normele operatorului anexate caietului de sarcini (de exemplu B/Bp pentru partea electrică a unui SRM) sunt condiții de executare, nu de calificare (BO2023_985). Nici pentru omisiuni punctuale într-o ofertă voluminoasă, de exemplu o verificare lipsă din PCCVI sau o declarație de disponibilitate depusă ulterior: acestea sunt abateri tehnice minore (BO2025_1524). Un avantaj punctabil nedocumentat (garanție extinsă, „avantaje competitive”) duce cel mult la pierderea punctajului, nu la respingere (BO2026_544). Lipsa descrierii tehnologice pentru lucrări minore ofertate și cuantificate (răsuflători, subtraversări) se completează la clarificări: e viciu de formă dacă elementele există în ofertă sau abatere tehnică minoră sub 1% din preț. După o decizie definitivă, AC nu poate relua aceeași chestiune prin noi clarificări (BO2025_1542).
 6. **Același standard pentru toți ofertanții.** Dacă la câștigător comisia citește Gantt-ul împreună cu restul ofertei, trebuie să facă la fel și la ceilalți (BO2022_2053). Comisia trebuie să consemneze concret cum a verificat fiecare cerință la fiecare ofertă. Altfel evaluarea se reia (BO2025_2237).
 7. **Practica e divergentă la Gantt și la copierea caietului de sarcini.**
-   - *Gantt:* BO2022_2053 și BO2026_544 consideră respingerea pentru forma Gantt-ului (procente, WBS, legendă) disproporționată. BO2022_1964, BO2024_717, BO2025_1775 și BO2025_3667 o mențin. Granița este dacă elementul era **cerut expres** în DA sau în formular. Când termenul de execuție e factor de evaluare, Gantt-ul trebuie să arate resursele pe activitate și planul pe fiecare asociat sau subcontractant (BO2024_717).
+   - *Gantt:* BO2022_2053 și BO2026_544 consideră respingerea pentru forma Gantt-ului (procente, WBS, legendă) disproporționată. BO2022_1964, BO2024_717, BO2025_1775 și BO2025_3667 o mențin. Granița este dacă elementul era **cerut expres** în DA sau în formular. Lotul 5 confirmă: cerințele exprese de Gantt (perioada nefavorabilă, rezervele de timp) sunt obligatorii dacă nu au fost contestate (BO2024_2462, BO2024_3381). Când termenul de execuție e factor de evaluare, Gantt-ul trebuie să arate resursele pe activitate și planul pe fiecare asociat sau subcontractant (BO2024_717). Drumul critic nu trebuie să copieze toate barele critice din Gantt (BO2020_1798).
    - *Copierea caietului de sarcini:* când DA o interzice, copierea în locul metodologiei face oferta neconformă, chiar și la câștigătorul care a fost proiectantul lucrării (BO2025_1775, BO2022_1028). În schimb, preluarea unor pasaje din caiet într-o propunere tehnică de mii de pagini nu e motiv de respingere (BO2025_2114).
 
 **(b) Cum o folosim în Ofertare**
 - Înainte de depunere facem un checklist cu tot ce DA cere „obligatoriu” sau „expres” în propunerea tehnică: proceduri pe fiecare categorie (inclusiv SRM, foraj, traversări), Gantt cu drum critic continuu, resurse pe activitate și metodologie scrisă pentru obiectivul concret (PAT-AMB-11). Nu folosim texte copiate din alte oferte (BO2026_3104).
 - Fișele F5 le completăm rând cu rând: DN, PN, material, tip de acționare, producător, cod de model și pagina din catalog. O celulă goală sau cu „conform” blochează exportul. Pentru materialele cu specificații ale operatorului de distribuție folosim PAT-STD-11.
 - Facem o matrice „cerință din formular → fișier sau pagină din propunerea tehnică”. Fiecare articol din F3 trebuie să aibă un capitol în metodologie. Dacă un articol de deviz impus de AC contrazice caietul de sarcini, aplicăm PAT-AMB-10.
-- Dacă DA e neclară despre nivelul de detaliu al Gantt-ului, aplicăm PAT-TRM-01. Dacă documentele DA se contrazic, aplicăm PAT-CTR-01. Dacă la P+E se cer la ofertă documente care țin de PT, aplicăm PAT-AMB-01 înainte de depunere, nu după.
+- Dacă DA e neclară despre nivelul de detaliu al Gantt-ului, aplicăm PAT-TRM-01. Pentru perioada nefavorabilă și rezervele de timp aplicăm PAT-TRM-06 înainte de depunere: bară separată „rezervă”, bară separată „timp friguros”, montajul conductelor în afara ei și procedura de lucru pe timp friguros atașată (BO2024_2462, BO2024_3381). Pentru ATR lipsă sau expirat folosim PAT-INF-15. Cerințele BIM din caietele de sarcini se tratează explicit în propunerea tehnică (BO2025_748). F5 cu valori fixe: PAT-STD-13. Dacă documentele DA se contrazic, aplicăm PAT-CTR-01. Dacă la P+E se cer la ofertă documente care țin de PT, aplicăm PAT-AMB-01 înainte de depunere, nu după.
 - Motiv de contestare: respingerea pe o cerință care nu e scrisă în DA, respingerea pentru omisiuni minore sau tratamentul inegal față de câștigător.
 
-**(c) Numărul de decizii:** 41 (18 admise, 11 admise parțial, 12 respinse).
+**(c) Numărul de decizii:** 48 (21 admise, 12 admise parțial, 15 respinse), din care 7 din lotul 5.
 
 ---
 
@@ -71,7 +74,7 @@
 - La cererea de justificare răspundem la **fiecare** articol cerut, cu documente. Dacă cererea e vagă, o putem contesta (BO2024_656).
 - Motive de contestare: câștigătorul e sub 80% și nu i s-a cerut justificarea (BO2025_2344), a redus cantitățile (BO2026_3104) sau comisia i-a copiat justificarea fără analiză (BO2025_3699). Peste 80% contestăm doar cu calcule concrete pe capitole, altfel riscăm cheltuielile (BO2025_1699).
 
-**(c) Numărul de decizii:** 24 etichetate PANS (11 admise, 6 admise parțial, 7 respinse). Alte 22 de decizii sunt etichetate „deviz și consumuri” și se suprapun parțial cu această temă.
+**(c) Numărul de decizii:** 24 etichetate PANS (11 admise, 6 admise parțial, 7 respinse). Alte 25 de decizii sunt etichetate „deviz și consumuri” (11 admise, 9 admise parțial, 5 respinse; 3 din lotul 5, despre F1–F3 la P+E — vezi tema 11) și se suprapun parțial cu această temă. Pregătirea internă a justificării: PAT-CTC-09; organizarea de șantier ca poziție distinctă: PAT-CNT-07.
 
 ---
 
@@ -85,7 +88,7 @@
    - la lucrări de complexitate ridicată (conductă de transport DN700, subtraversare de Dunăre prin foraj orizontal dirijat), entitatea poate cere 10 ani, cel mult 3 contracte și un foraj cu lungime și diametru minime. Cine susține că cerința favorizează pe cineva trebuie să o dovedească (BO2026_804).
 3. **Ce dovedește ES:**
    - recepția parțială pe obiecte funcționale independent (BO2024_942);
-   - procesul-verbal de stadiu fizic, acceptat la evaluarea pe fond (BO2026_182);
+   - procesul-verbal de stadiu fizic, acceptat la evaluarea pe fond (BO2026_182 — vezi divergența de mai jos);
    - acordul de subcontractare, în cazul concret din BO2026_2480;
    - studiile de teren din contractele de SF, care intră în ES de proiectare (BO2025_1138);
    - documentațiile tehnice din domeniul gazelor, care sunt servicii de proiectare (BO2022_2403).
@@ -93,15 +96,19 @@
    - acordul-cadru fără contractele subsecvente. Acestea se indică încă din DUAE (BO2023_140);
    - procesul-verbal emis după data-limită de depunere (BO2026_182);
    - recomandările semnate doar de diriginte, neconfirmate de beneficiar (BO2026_182);
-   - lucrările făcute ca subcontractant fără valoare individualizată (BO2026_182).
-5. **Comisia trebuie să verifice efectiv documentele suport pe fiecare componentă a ES** (BO2026_2328). Nu poate respinge doar după denumirea contractului (BO2026_1360, BO2023_2717). Nu poate exclude o parte a unui contract mixt, de exemplu canalizarea (BO2021_610). Motivele de respingere sunt doar cele scrise în comunicarea rezultatului (BO2023_1378).
+   - lucrările făcute ca subcontractant fără valoare individualizată (BO2026_182);
+   - procesele-verbale de recepție parțială care atestă doar stadiul fizic sau acceptarea la plată ale unei rețele de gaze. Recepția „pe obiecte” cere PV la terminare pentru părți distincte fizic și funcțional, iar adresele ulterioare ale beneficiarului nu le pot transforma în PV la terminare (BO2026_1073);
+   - o rețea executată, dar nepusă în funcțiune (fără racord sau SRMP) și recepționată doar parțial. PVRTL încheiat după termenul de ofertare nu se poate folosi (BO2025_3035).
+5. **Comisia trebuie să verifice efectiv documentele suport pe fiecare componentă a ES** (BO2026_2328). Nu poate respinge doar după denumirea contractului (BO2026_1360, BO2023_2717). Nu poate exclude o parte a unui contract mixt, de exemplu canalizarea (BO2021_610). Motivele de respingere sunt doar cele scrise în comunicarea rezultatului (BO2023_1378). Discrepanțele de valoare între contract, recomandare și centralizatorul de plăți, când toate valorile depășesc pragul, și dubiile privind finalizarea se lămuresc prin clarificări suplimentare, nu prin respingere directă (BO2025_2271). Dacă algoritmul unui factor spune „contracte”, se numără contractele distincte, nu PV-urile multiple din același contract (BO2023_675).
+6. **Practica e divergentă la PV-ul de stadiu fizic:** BO2026_182 l-a acceptat la evaluarea pe fond, iar BO2026_1073 și BO2025_3035 nu au acceptat recepțiile parțiale pe stadiu fizic. Granița pare a fi „obiect distinct fizic și funcțional” (BO2024_942). Atenție: cerința REQ-AD-045 din registru, extrasă din BO2026_182, spune contrariul raționamentului acestei decizii — de reconfirmat pe PDF.
 
 **(b) Cum o folosim în Ofertare**
 - Ținem un registru intern de contracte cu procese-verbale de recepție pe obiecte, confirmări ale beneficiarului (Delgaz, Distrigaz), valori individualizate pe subcontractare și pe categorii (gaze, apă, canalizare) și date anterioare termenului de depunere (PAT-CAL-07). Registrul ține și lucrările de foraj orizontal dirijat cu lungime, DN și PV, pentru asocieri pe transport gaze (BO2026_804).
 - Dacă DA cere ES „identică”, doar pe tipul de rețea din obiect sau în 1–2 contracte fără motivare, cerem clarificări sau contestăm (PAT-CAL-05). Dacă cere contracte „finalizate în ultimii 5 ani” sau un plafon peste VE, folosim PAT-CAL-06.
 - Contractele de transport, SRM sau branșamente le invocăm când textul cerinței permite. La respingere contestăm, pe baza BO2023_1336 și BO2023_1378.
+- Pentru rețelele de gaze folosim doar contracte cu PVRTL pe obiect distinct sau recepție finală, emise **înainte** de termenul de ofertare. ERP cere „nr./dată PVRTL” pe fiecare contract de referință și alertează dacă data e după termen (BO2025_3035, BO2026_1073). Dacă DA nu spune cum tratează recepțiile parțiale, cerem clarificări cu PAT-CAL-18. Valoarea din DUAE o corelăm cu recomandarea și explicăm diferențele (BO2025_2271).
 
-**(c) Numărul de decizii:** 26 (10 admise, 12 admise parțial, 4 respinse). Contestatorii au câștigat de cele mai multe ori.
+**(c) Numărul de decizii:** 31 (12 admise, 13 admise parțial, 6 respinse), din care 5 din lotul 5. Contestatorii au câștigat de cele mai multe ori, dar lotul 5 aduce două respingeri pe recepția parțială (BO2026_1073, BO2025_3035).
 
 ---
 
@@ -109,14 +116,14 @@
 
 **(a) Regulile extrase**
 
-1. **Autorizarea ANRE se cere doar celor care proiectează sau execută efectiv.** Impusă managerului de proiect, șefului de proiect sau șefului de șantier, e restrictivă (BO2024_1870, BO2024_2683). Experiența cerută strict „în gaze” pentru manager se elimină dacă nu e justificată (BO2026_1237). Comisia nu poate transforma o cerință de autorizare a **firmei** (ANRE gaze sau electric, AFER) într-o cerință de autorizare a **personalului** (BO2026_544).
+1. **Autorizarea ANRE se cere doar celor care proiectează sau execută efectiv.** Impusă managerului de proiect, șefului de proiect sau șefului de șantier, e restrictivă (BO2024_1870, BO2024_2683). Experiența cerută strict „în gaze” pentru manager se elimină dacă nu e justificată (BO2026_1237). Comisia nu poate transforma o cerință de autorizare a **firmei** (ANRE gaze sau electric, AFER) într-o cerință de autorizare a **personalului** (BO2026_544). BO2024_2727 confirmă, cu trimitere la decizia anterioară din aceeași procedură, că ANRE PGD/EGD cerut managerului de proiect, șefului de proiect și șefului de șantier e excesiv. Pentru proiectare, cerința legală e autorizarea ANRE a persoanei (PGD/PGIU), care acoperă sistemul de distribuție cu lucrările conexe; AC nu poate cere ulterior specializări de drumuri sau structuri neprevăzute în DA (BO2020_1798).
 2. **Calificările personalului cerute doar în caietul de sarcini, doar „recomandate” sau doar generic** („toate autorizațiile din legislație”) **nu pot fundamenta respingerea** (BO2026_2328, BO2024_717, BO2024_1706).
 3. **Granița dintre confirmare și completare:**
-   - *confirmare admisă:* oferta inițială arată că firma dispune de personal (număr, DUAE, Revisal), iar nominalizarea și autorizațiile depuse la clarificări doar confirmă (BO2022_340, BO2023_562, BO2024_2884). Tot confirmare sunt recomandările depuse la clarificări pentru contracte, PV sau decizii de numire aflate deja în ofertă (BO2025_806). Declarațiile de disponibilitate cu dată greșită (BO2023_665) și numele greșit al expertului, când documentele sunt corecte (BO2024_697), sunt vicii de formă;
+   - *confirmare admisă:* oferta inițială arată că firma dispune de personal (număr, DUAE, Revisal), iar nominalizarea și autorizațiile depuse la clarificări doar confirmă (BO2022_340, BO2023_562, BO2024_2884). Tot confirmare sunt recomandările depuse la clarificări pentru contracte, PV sau decizii de numire aflate deja în ofertă (BO2025_806). La fel, declarațiile de disponibilitate și documentele justificative ale unui element esențial deja ofertat (durata garanției, persoana, graficul) (BO2026_621). Declarațiile de disponibilitate cu dată greșită (BO2023_665) și numele greșit al expertului, când documentele sunt corecte (BO2024_697), sunt vicii de formă;
    - *completare interzisă:* DA cere ca personalul să fie nominalizat, cu atestate și dovada disponibilității, ca anexă la propunerea tehnică, iar ofertantul doar reproduce calificările minime și aduce numele și documentele la clarificări. Asta modifică oferta (BO2025_2430 — conducte de gaze de înaltă presiune). La fel, documentele de experiență lipsă pentru RTE-ii ceruți nu se mai pot depune (BO2025_3788).
 4. **Cerințele formale clare din DA** (CV semnat, dovezi de experiență) nu mai pot fi contestate după depunere, iar lipsa lor e fatală (BO2024_1699). Un răspuns la clarificări necontestat, care precizează că se cer 4 RTE și că experiența se dovedește pentru fiecare, devine obligatoriu (BO2025_3788). Experiența expertului se raportează la data autorizării lui ANRE: comisia trebuie să verifice perioadele (BO2026_182).
 5. **Echivalența funcțională se acceptă.** Experiența de șef de șantier pe rețele de apă-canal acoperă cerința pentru „inginer instalații hidroedilitare”, dacă studiile sunt în domeniu (BO2025_806). O diplomă de inginer de instalații se încadrează într-o cerință formulată nelimitativ („etc. sau echivalent”) (BO2025_1524).
-6. **Punctajul pe experți se acordă doar pe documentele din ofertă la data-limită.** Recomandările depuse ulterior nu contează. Deciziile interne de numire nu țin loc de recomandări ale beneficiarilor (BO2025_2858). Pragurile de punctaj pe numărul de proiecte ale experților (2–4, 5–8, peste 8) sunt legale dacă sunt justificate în strategie (BO2026_1536).
+6. **Punctajul pe experți se acordă doar pe documentele din ofertă la data-limită.** Recomandările depuse ulterior nu contează. Deciziile interne de numire nu țin loc de recomandări ale beneficiarilor (BO2025_2858). Pragurile de punctaj pe numărul de proiecte ale experților (2–4, 5–8, peste 8) sunt legale dacă sunt justificate în strategie (BO2026_1536). Când algoritmul punctează „contracte”, se numără contractele distincte (BO2023_675).
 7. **Interdicția aceluiași expert pe mai multe loturi trebuie motivată** (BO2023_2119). Revisal, declarațiile de disponibilitate, backstopping și asigurarea RC cerute la ofertare au fost eliminate de AC în cursul contestației (BO2025_833).
 
 **(b) Cum o folosim în Ofertare**
@@ -125,7 +132,7 @@
 - Cerem clarificări pe terminologia veche din DA („gradul II”, „RTE pentru gaze”), după PAT-CAL-04, și pe regulile pentru experți comuni pe loturi, după PAT-CAL-10. Orice răspuns al AC care schimbă cerințele de personal îl contestăm în termen, altfel devine obligatoriu (BO2025_3788).
 - Motiv de contestare a DA: ANRE cerut managerului sau șefului de șantier (PAT-CAL-15, BO2024_2683). Motiv de contestare a rezultatului: concurentul și-a nominalizat personalul abia la clarificări (BO2025_2430).
 
-**(c) Numărul de decizii:** 25 (5 admise, 12 admise parțial, 8 respinse).
+**(c) Numărul de decizii:** 29 (8 admise, 12 admise parțial, 9 respinse), din care 4 din lotul 5.
 
 ---
 
@@ -133,7 +140,7 @@
 
 **(a) Regulile extrase**
 
-1. **O autorizație care nu e cerută în anunț sau în fișa de date nu poate fi motiv de respingere.** Ține de execuție. Exemple: ANRE EDSB pentru firmă, ANRE PT, ANRE pentru instalații electrice, AFER, autorizații pentru apă (BO2026_1360, BO2022_2403, BO2024_1529, BO2023_416, BO2022_1746, BO2022_340). Autorizațiile și avizele puse în caietul de sarcini în sarcina antreprenorului nu devin cerințe de calificare (BO2022_2747, sectorial).
+1. **O autorizație care nu e cerută în anunț sau în fișa de date nu poate fi motiv de respingere.** Ține de execuție. Exemple: ANRE EDSB pentru firmă, ANRE PT, ANRE pentru instalații electrice, AFER, autorizații pentru apă (BO2026_1360, BO2022_2403, BO2024_1529, BO2023_416, BO2022_1746, BO2022_340). Autorizațiile și avizele puse în caietul de sarcini în sarcina antreprenorului nu devin cerințe de calificare (BO2022_2747, sectorial). Același lucru pentru atestatele ANRE cerute doar în normele tehnice ale operatorului anexate caietului de sarcini (B/Bp la SRM) (BO2023_985). Autorizările ANRE de proiectare acoperă sistemul de distribuție cu lucrările conexe (subtraversări, drumuri) (BO2020_1798).
    - **Excepție:** fișa de date cere dovada capacității pentru TOATE activitățile, iar caietul de sarcini include expres o activitate autorizată. Exemplu: AFER pentru subtraversare de cale ferată (BO2020_2191). Tot așa, dacă DA cere informații despre autorizările pentru toate activitățile, inclusiv devieri de rețele de gaze, ofertantul trebuie să arate în propunerea tehnică cine le deține: el, un asociat sau un subcontractant declarat. O autorizație IGSU sau una a unui asociat pe alt domeniu nu suplinește autorizația pentru gaze (BO2026_328).
    - **Nuanță:** AC trebuie să verifice capacitatea legală doar dacă activitatea e efectiv necesară (BO2021_159).
 2. **Autorizația de firmă nu se confundă cu cea a persoanelor.** Dacă fișa de date cere autorizarea operatorului economic (ANRE gaze după Ord. 132/2021, ANRE electric, AFER), oferta nu poate fi respinsă pe lipsa autorizațiilor personalului (BO2026_544).
@@ -151,7 +158,7 @@
 - **Oportunitate:** la contractele de apă-canal cu devieri, protejări sau traversări de conducte de gaze, Gazpet se poate oferi ca asociat sau subcontractant declarat, cu autorizația ANRE a firmei (BO2026_328, BO2026_544). Pentru aceste contracte folosim PAT-CAL-03. La cereri ISCIR fără obiect, folosim PAT-STD-09.
 - Nu contestăm concurenții pentru autorizații necerute în DA, pentru că șansele sunt mici (BO2023_416, BO2024_1529, BO2022_2747).
 
-**(c) Numărul de decizii:** 22 (8 admise, 6 admise parțial, 8 respinse).
+**(c) Numărul de decizii:** 25 (10 admise, 7 admise parțial, 8 respinse), din care 3 din lotul 5.
 
 ---
 
@@ -167,7 +174,8 @@
    - un aviz sanitar emis după termen se acceptă doar dacă confirmă o situație existentă la termen. Dacă agrementul acoperă alte diametre decât cele cerute, AC trebuie să lămurească (BO2024_3215).
 5. **Comisia trebuie să verifice efectiv documentele suport** față de DUAE (BO2026_2328) și să clarifice neconcordanțele, de exemplu procentul de subcontractare față de grafic (BO2021_1117). Dacă știe din alt dosar că autorizația AFER a subcontractantului a fost reînnoită, nu poate respinge pe expirarea ei (BO2021_610). Lipsa codului CAEN pentru activități secundare nu e motiv de respingere dacă DA nu-l cere (BO2023_246).
 6. **Motivele de excludere se declară transparent.** Un document constatator negativ (contract reziliat) duce la excludere dacă firma nu dovedește măsuri concrete de autocorectare. O acțiune în instanță respinsă nu ajunge (BO2024_697).
-7. **Dovezile care costă se cer la ofertare doar ca declarație.** Teren pentru organizarea de șantier, liste nominale de muncitori sau documente de la producători: la ofertă ajunge un angajament, iar dovada o dă câștigătorul (BO2026_809).
+7. **Documentele de recepție pentru ES trebuie să existe la termen.** PVRTL obținut după termenul de ofertare nu se folosește, iar adresele ulterioare ale beneficiarilor nu transformă un PV de recepție parțială în PV la terminare (BO2025_3035, BO2026_1073).
+8. **Dovezile care costă se cer la ofertare doar ca declarație.** Teren pentru organizarea de șantier, liste nominale de muncitori sau documente de la producători: la ofertă ajunge un angajament, iar dovada o dă câștigătorul (BO2026_809).
 
 **(b) Cum o folosim în Ofertare**
 - Completăm DUAE cu cifre concrete, nu formule sau fraze la viitor. Indicăm contractele subsecvente și sursa cash-flow-ului. La cerințele financiare scriem modalitatea de dovedire („extras de cont / linie de credit / scrisoare bancară”), nu indicatori de bilanț (BO2025_2767). Pentru fiecare asociat completăm rubricile lui (PAT-CAL-16).
@@ -176,7 +184,7 @@
 - Ținem un registru al documentelor constatatoare negative (ale noastre, ale asociaților, terților și subcontractanților) cu dosar de autocorectare gata de depus (BO2024_697).
 - Documentele suport (PAT-CAL-07, PAT-CAL-13) le pregătim înainte de depunere, chiar dacă se cer doar locului I. Dacă primim o cerere de clarificări vagă, o putem contesta (BO2026_362).
 
-**(c) Numărul de decizii:** 34, din care 15 etichetate DUAE și 26 documente de calificare (19 admise, 10 admise parțial, 5 respinse).
+**(c) Numărul de decizii:** 40, din care 15 etichetate DUAE și 32 documente de calificare (21 admise, 11 admise parțial, 8 respinse); 6 din lotul 5.
 
 ---
 
@@ -212,21 +220,23 @@
 1. **Clarificarea poate doar explicita sau confirma ce exista deja în ofertă.** Completarea care schimbă conținutul tehnic sau prețul e interzisă (BO2022_2774, BO2025_2118, BO2024_632, BO2020_2191). Granița practică:
    - **se pot aduce sau explica:** documente preexistente de calificare sau personal (BO2024_2636, BO2022_340, BO2023_562, BO2024_2990); repartizarea sarcinilor în asociere, prin trimitere la acordul de asociere și la atestatele deja depuse (BO2025_1248); centralizatorul lucrărilor subcontractate, când acordurile existau (BO2025_1639); recomandări care confirmă documente din ofertă (BO2025_806);
    - **nu se pot adăuga:** proceduri, metodologii, Gantt (BO2023_140, BO2025_1221, BO2025_3638); planșe și scheme cerute la P+E (BO2025_1704); valori în fișele F5 (BO2026_1837); nominalizarea personalului cerută în propunerea tehnică (BO2025_2430); recomandări noi pentru punctaj (BO2025_2858); oferte de la furnizori cerute în propunerea financiară (BO2022_2747); o garanție nouă (BO2023_2794);
-   - **element nou** introdus la clarificări face oferta inacceptabilă, de exemplu garanția echipamentelor. Retransmiterea propunerii financiare nu e fatală dacă AC analizează doar ce a cerut (BO2025_187).
+   - **element nou** introdus la clarificări face oferta inacceptabilă, de exemplu garanția echipamentelor. Retransmiterea propunerii financiare nu e fatală dacă AC analizează doar ce a cerut (BO2025_187);
+   - **se pot aduce, ca vicii de formă:** documentele justificative lipsă (memoriul pentru garanția ofertată, declarațiile de disponibilitate, alocarea financiară în procente), dacă elementul esențial există în oferta inițială (BO2026_621); descrierea tehnologică pentru lucrări minore ofertate și cuantificate (BO2025_1542);
+   - **nu se pot adăuga:** procedura de lucru pe timp friguros și un Gantt refăcut cu perioada nefavorabilă (BO2024_2462); rezervele de timp cerute distinct în Gantt (BO2024_3381).
 2. **Prețurile unitare nu se modifică la clarificări.** Corecția aritmetică se face la cererea comisiei și privește doar rezultatul operației (cantitate × preț), cu datele de intrare neschimbate (BO2025_2853, BO2025_3667). Pragul de 1% din propunerea financiară privește doar abaterile tehnice minore din propunerea tehnică, nu prețurile (BO2025_2853, BO2022_219). Schimbarea din proprie inițiativă a unor prețuri unitare face oferta inacceptabilă chiar sub 1% (BO2025_2853). 1,14% = ofertă inacceptabilă (BO2024_159). Majorarea unor poziții după justificarea prețului nu e eroare aritmetică (BO2021_1060). Nici modificarea valorilor pe asociați sau subcontractanți nu e (BO2025_1138).
 3. **Comisia trebuie să califice motivat răspunsul.** Trebuie să spună dacă e viciu de formă, eroare aritmetică sau necorelare. Simpla consemnare „răspuns concludent” nu e evaluare (BO2026_1184). Fișele tehnice depuse prin clarificări cer o analiză motivată pe art. 134–135 HG 395 (BO2025_434). Necorelarea dintre propunerea tehnică și cea financiară se clarifică ca posibilă abatere minoră, iar lipsa valorii în litere e viciu de formă (BO2025_3699).
 4. **Comisia nu poate repeta clarificările până „iese” oferta.** O a doua cerere care invită ofertantul să-și „revizuiască” propunerea creează avantaj nepermis (BO2025_1704). Aceeași solicitare nu se poate repeta (BO2025_3667). Răspunsul „se stabilește la execuție” e neconcludent dacă AC a prevăzut articol de deviz pentru acea lucrare (BO2025_434).
-5. **Cererea AC trebuie să fie clară și punctuală.** Un răspuns rezonabil la o întrebare vagă nu poate fi declarat „neconcludent” (BO2022_1028). Cererea cu date greșite nu e „clară și explicită” (BO2022_219). Cererea vagă sau fără temei se contestă direct (BO2026_362, BO2024_656). O cerere pe care nu o contești devine obligatorie și trebuie respectată întocmai (BO2023_246).
+5. **Cererea AC trebuie să fie clară și punctuală.** Un răspuns rezonabil la o întrebare vagă nu poate fi declarat „neconcludent” (BO2022_1028). Cererea cu date greșite nu e „clară și explicită” (BO2022_219). Cererea vagă sau fără temei se contestă direct (BO2026_362, BO2024_656). O cerere pe care nu o contești devine obligatorie și trebuie respectată întocmai (BO2023_246). Refuzul de a răspunde punctual la întrebări legitime, chiar dacă le consideri excesive, face oferta inacceptabilă (BO2025_3035). Discrepanțele de valoare la ES se clarifică suplimentar, fără ca asta să încalce tratamentul egal (BO2025_2271).
 6. **AC nu poate respinge direct pentru vicii de formă.** Exemple: semnătura electronică lipsă pe un răspuns care confirmă documente deja semnate (BO2023_562), declarații cu date greșite (BO2023_665), omisiuni punctuale într-o ofertă voluminoasă (BO2025_1524). Nici nu poate folosi o reevaluare dispusă de CNSC pentru a ridica neconformități noi (BO2024_3064). Contradicțiile din DA nu se întorc împotriva ofertantului (BO2023_665).
 
 **(b) Cum o folosim în Ofertare**
-- **Răspuns la clarificare:** confirmăm și trimitem la pagina din oferta inițială. Nu adăugăm conținut nou și nu retrimitem formulare financiare modificate.
+- **Răspuns la clarificare:** confirmăm și trimitem la pagina din oferta inițială. Nu adăugăm conținut nou și nu retrimitem formulare financiare modificate. Checklist intern: PAT-CAL-20.
 - ERP face automat diferența dintre F3 inițial și F3 revizuit și blochează orice modificare de preț unitar nesolicitată. Se corectează doar rezultatul operației. Înainte de depunere verificăm că toate articolele și cantitățile AC sunt cotate (BO2025_2853).
 - Cererea vagă sau peste lege o contestăm în termen (vezi tema 12). Dacă nu o contestăm, îi răspundem punct cu punct. Dacă cererea e greșită (altă poliță, altă ofertă), răspundem oricum pe fond și semnalăm eroarea (BO2022_219).
 - Când cerem noi clarificări la DA despre ce se depune, folosim PAT-AMB-01 și PAT-TRM-01. Pentru prețul unic pe resursă folosim PAT-AMB-04.
 - Motiv de contestare: comisia a acceptat la câștigător completări (personal, fișe, prețuri unitare) sau i-a cerut clarificări repetate (BO2025_1704, BO2025_3667).
 
-**(c) Numărul de decizii:** 80, din care 79 etichetate clarificări la ofertă și 7 erori aritmetice (33 admise, 27 admise parțial, 20 respinse).
+**(c) Numărul de decizii:** 91, din care 90 etichetate clarificări la ofertă și 7 erori aritmetice (36 admise, 29 admise parțial, 26 respinse); 11 din lotul 5.
 
 ---
 
@@ -234,20 +244,23 @@
 
 **(a) Regulile extrase**
 
-1. **Un răspuns care NU modifică DA nu redeschide termenul de contestare.** Cerințele restrictive se atacă de la publicarea DA. Contestarea unui refuz motivat („nu se acceptă”) nu mai poate obține eliminarea cerinței (BO2024_3155). Un termen minim de execuție fixat în DA nu mai poate fi atacat ca „imposibil” după rezultat (BO2026_2480).
+1. **Un răspuns care NU modifică DA nu redeschide termenul de contestare.** Cerințele restrictive se atacă de la publicarea DA. Contestarea unui refuz motivat („nu se acceptă”) nu mai poate obține eliminarea cerinței (BO2024_3155). Un termen minim de execuție fixat în DA nu mai poate fi atacat ca „imposibil” după rezultat (BO2026_2480). Lipsa sau expirarea ATR al operatorului de distribuție e o critică a DA și se contestă în termenul curs de la publicarea DA. Un răspuns dat la clarificarea altui operator nu redeschide termenul (BO2026_1149).
 2. **Un răspuns care MODIFICĂ sau precizează DA devine parte din ea dacă nu e contestat.** Exemple: un răspuns care cere documentele de calificare chiar la depunere și exclude scrisorile de la IFN sau asigurători (BO2024_2990), un răspuns care precizează câți RTE se cer (BO2025_3788), condiționările de prețuri din invitația de reofertare la un acord-cadru (BO2021_2679). Criticile ulterioare sunt tardive.
 3. **Un răspuns evaziv sau generic e atacabil**, de exemplu „DA respectă Legea 98” (BO2024_2938, BO2023_2119). Un răspuns care doar ajustează cifrele nu repară o cerință nelegală (BO2024_1870).
 4. **Relaxarea sau precizarea cerințelor prin clarificare din oficiu nu se atacă cu succes** doar pentru că lărgește concurența (BO2024_1016) sau pentru că schimbă formularea ES (BO2026_804).
-5. **Modificările acceptate se publică prin erată, cu nou termen de depunere** (BO2022_2083, BO2023_1128). Remedierile acceptate de AC trebuie publicate în SEAP (BO2026_1536). O clauză declarată „eliminată” prin clarificări, dar mutată în alt articol, rămâne nelegală, iar CNSC dispune eliminarea ei (BO2025_2294). Inconsecvențele dintre formulare, instrucțiuni și datele tehnice ale DA se remediază prin clarificări, cu nou termen de depunere (BO2026_1521). Termenele de clarificare de 1–2 zile lucrătoare, peste sărbători, sunt nelegale (BO2025_286).
+5. **Modificările acceptate se publică prin erată, cu nou termen de depunere** (BO2022_2083, BO2023_1128). Remedierile acceptate de AC trebuie publicate în SEAP (BO2026_1536). O clauză declarată „eliminată” prin clarificări, dar mutată în alt articol, rămâne nelegală, iar CNSC dispune eliminarea ei (BO2025_2294). Remedierile dispuse de CNSC asupra DA produc efecte doar dacă sunt publicate în SEAP înainte de termenul de depunere. O clarificare nepublicată nu remediază, iar după depunere singura soluție e anularea (BO2024_2727). Inconsecvențele dintre formulare, instrucțiuni și datele tehnice ale DA se remediază prin clarificări, cu nou termen de depunere (BO2026_1521). Termenele de clarificare de 1–2 zile lucrătoare, peste sărbători, sunt nelegale (BO2025_286).
 6. **Viciile DA descoperite după depunere duc la anularea procedurii** (vezi tema 14).
+7. **Ce a corectat CNSC în DA la P+E pe gaze (lotul 5):** listele F1–F3 cu extrase de resurse cerute la ofertă (conținut de PT), tabelele logistice de transport și vizita obligatorie a amplasamentului cu planșă de constrângeri (BO2024_494). Costul verificării proiectelor de către verificatori atestați trebuie inclus în valoarea estimată dacă îl suportă executantul, iar consultanții externi care au întocmit DA se declară pentru conflict de interese (BO2022_2473). Termenul minim de ofertare curge însă de la **transmiterea** anunțului spre publicare, nu de la publicare (BO2024_494).
 
 **(b) Cum o folosim în Ofertare**
-- Contestăm DA în termen de la publicare. Nu așteptăm răspunsul la clarificări (PAT-TRM-03).
+- Contestăm DA în termen de la publicare. Nu așteptăm răspunsul la clarificări (PAT-TRM-03). ATR-ul îl verificăm în primele zile după publicare și cerem clarificări cu PAT-INF-15 (BO2026_1149).
+- După o decizie CNSC favorabilă pe DA verificăm că **toate** remedierile sunt publicate în SEAP la timp. Altfel contestăm erata sau cerem anularea (BO2024_2727).
+- La P+E pe gaze: F1–F3 și vizita obligatorie le tratăm cu PAT-AMB-01, PAT-AMB-12 și PAT-AMB-13; costul verificatorilor în VE cu PAT-INF-05 (BO2022_2473, BO2024_494).
 - Fiecare răspuns la clarificări care schimbă ce se depune, când se depune sau cine poate emite documente îl marcăm în ERP ca cerință nouă, cu alertă de termen de contestare (BO2024_2990, BO2025_3788).
 - La răspunsuri evazive revenim cu PAT-AMB-08. Dacă răspunsul modifică DA, dar documentul nu e republicat, folosim PAT-CTR-03. Dacă răspunsul vine prea târziu față de termenul de depunere, folosim PAT-TRM-02. Dacă termenele cad peste sărbători, folosim PAT-TRM-05.
 - Înainte de a investi într-o ofertă verificăm concesiunea (PAT-INF-07) și corelarea VE pe lot (PAT-INF-11).
 
-**(c) Numărul de decizii:** 26 (10 admise, 7 admise parțial, 9 respinse).
+**(c) Numărul de decizii:** 31 (13 admise, 7 admise parțial, 11 respinse), din care 5 din lotul 5.
 
 ---
 
@@ -286,9 +299,10 @@
    - interdicția aceluiași expert pe mai multe loturi, nejustificată (BO2023_2119);
    - vizitarea amplasamentului ca o condiție de conformitate (BO2023_1128, BO2025_352);
    - dovezi costisitoare cerute la ofertare: teren pentru organizarea de șantier, liste nominale de muncitori, documente de la producători (BO2026_809);
-   - elemente care țin de PT cerute la P+E (BO2024_3657).
-3. **Practica e divergentă la listele de cantități cerute la P+E.** BO2025_352 consideră excesive listele F1–F3 și extrasele de resurse la nivel de articol de deviz când DA se bazează pe SF. BO2026_1521 admite cererea unor liste de cantități și consumuri **estimate**, ca să se fundamenteze prețul. Granița este nivelul de detaliu față de ce conține SF-ul. La cash-flow, BO2024_3232 a validat formula VE×n/durată justificată de AC, iar BO2026_1536 a cerut corelarea cu momentul primei plăți.
-4. **Factorii de evaluare trebuie să aducă un avantaj real și verificabil.** Nu pot favoriza firmele locale: angajați din comună, mașini electrice (BO2024_3657). Un algoritm bazat pe noțiuni nedefinite viciază procedura (BO2025_1837). La P+E ponderea prețului e de cel mult 40% (BO2024_2683). Punctajul trebuie motivat pe fiecare factor (BO2025_3409, BO2021_1117) și se acordă doar pe documentele din ofertă (BO2025_2858). Un avantaj nedocumentat pierde punctajul, dar nu duce la respingere (BO2026_544).
+   - elemente care țin de PT cerute la P+E (BO2024_3657); la gaze, F1–F3 cu extrase de resurse, tabelele de transport și vizita obligatorie cu planșă de constrângeri (BO2024_494, BO2022_2473);
+   - cerințele de personal cu ANRE pentru funcții de management, menținute de AC după o decizie CNSC (BO2024_2727).
+3. **Practica e divergentă la listele de cantități cerute la P+E.** BO2025_352, BO2024_494 și BO2022_2473 (gaze: doar F1/F2 la ofertare) consideră excesive listele F1–F3 și extrasele de resurse la nivel de articol de deviz când DA se bazează pe SF. BO2026_1521 admite cererea unor liste de cantități și consumuri **estimate**, ca să se fundamenteze prețul. Granița este nivelul de detaliu față de ce conține SF-ul. La cash-flow, BO2024_3232 a validat formula VE×n/durată justificată de AC, iar BO2026_1536 a cerut corelarea cu momentul primei plăți.
+4. **Factorii de evaluare trebuie să aducă un avantaj real și verificabil.** Nu pot favoriza firmele locale: angajați din comună, mașini electrice (BO2024_3657). Un algoritm bazat pe noțiuni nedefinite viciază procedura (BO2025_1837). La P+E ponderea prețului e de cel mult 40% (BO2024_2683). Punctajul trebuie motivat pe fiecare factor (BO2025_3409, BO2021_1117) și se acordă doar pe documentele din ofertă (BO2025_2858). Un calificativ redus pe Planul de management al calității nu poate fi motivat prin lipsa unor elemente care există efectiv în propunerea tehnică (BO2024_1770). Un avantaj nedocumentat pierde punctajul, dar nu duce la respingere (BO2026_544).
 5. **Ce a fost validat:**
    - factorii preluați din ghidul ANAP (BO2024_2669);
    - factorul calitativ pe metodologie („abordarea propusă”), chiar dacă nu toți primesc punctaj maxim (BO2026_1521);
@@ -303,11 +317,12 @@
 **(b) Cum o folosim în Ofertare**
 - La analiza DA rulăm PAT-CAL-05, 06, 08, 09 și 13, plus PAT-AMB-01 și PAT-AMB-02. Mai întâi cerem justificarea la clarificări, apoi contestăm **cu probe** (cost, proporționalitate), nu doar prin afirmații.
 - Gazpet folosește leasing și credite pentru utilaje, deci pragurile de solvabilitate sau de îndatorare excesive ne afectează direct. Le contestăm cu alternativele din BO2026_318: lichiditate curentă, disponibil minim, linii de credit (PAT-CAL-08).
-- Pentru vizita obligatorie, terenul de organizare de șantier sau listele nominale la ofertare propunem „declarație pe propria răspundere, documente la câștigător” (BO2025_352, BO2026_809).
+- Pentru vizita obligatorie, terenul de organizare de șantier sau listele nominale la ofertare propunem „declarație pe propria răspundere, documente la câștigător” (BO2025_352, BO2026_809, BO2024_494; PAT-AMB-12). Pentru indicatorii financiari necorelați folosim PAT-CAL-19.
+- Planul calității îl structurăm pe subfactorii din fișa de date, cu trimiteri la pagini, ca să nu poată fi ignorat la punctare (BO2024_1770).
 - Pentru factorul „experiența expertului” ERP ține evidența proiectelor fiecărui expert Gazpet, cu recomandări (BO2026_1536). Pentru factorul pe contractul colectiv de muncă folosim PAT-AMB-09.
 - Pentru utilajele cerute specific pregătim un contract de închiriere, în loc să contestăm (BO2026_1237).
 
-**(c) Numărul de decizii:** 42, din care 28 etichetate cerințe restrictive și 22 factori de evaluare (16 admise, 13 admise parțial, 13 respinse).
+**(c) Numărul de decizii:** 48, din care 31 etichetate cerințe restrictive și 25 factori de evaluare (21 admise, 13 admise parțial, 14 respinse); 6 din lotul 5.
 
 ---
 
@@ -315,28 +330,30 @@
 
 **(a) Regulile extrase**
 
-1. **Termenele de contestare sunt de 10 zile peste pragurile UE și de 7 zile sub prag** (art. 8 L101; BO2023_2119, cu termenul corectat). Termenul pentru criticile din dosar curge de la accesul efectiv la dosar (BO2026_182). Ziua expiră la ultima oră, așa că un e-mail trimis seara în ultima zi e în termen (BO2025_3638, BO2025_187). O contestație trimisă prin poștă în termen nu e tardivă (BO2025_1704).
+1. **Termenele de contestare sunt de 10 zile peste pragurile UE și de 7 zile sub prag** (art. 8 L101; BO2023_2119, cu termenul corectat). Termenul pentru criticile din dosar curge de la accesul efectiv la dosar (BO2026_182). Când AC comunică prin SEAP o decizie intermediară detaliată de respingere (de exemplu după evaluarea tehnică), termenul curge de la ea, nu de la comunicarea finală care doar o reiterează (BO2025_748). Lipsa ATR se atacă în termenul de la publicarea DA (BO2026_1149). Ziua expiră la ultima oră, așa că un e-mail trimis seara în ultima zi e în termen (BO2025_3638, BO2025_187). O contestație trimisă prin poștă în termen nu e tardivă (BO2025_1704).
 2. **Fără cauțiune, contestația se respinge fără analiză** (BO2024_3657, BO2020_2392, BO2026_804, BO2025_1883). Cauțiunea se constituie din oficiu: în BO2026_804 CNSC arată că nu stabilește și nu comunică cuantumul. În BO2025_1883 CNSC a cerut-o prin e-mail, iar contestatorul nu a plătit-o nici atunci. Cauțiunea plătită în 5 zile, cu prelungire peste zilele nelucrătoare, e în termen (BO2024_1529).
 3. **Criticile sunt tardive** dacă apar doar în concluziile scrise (BO2023_665), după studiul dosarului peste termen (BO2023_1788), sunt reluate după o respingere definitivă (BO2023_2185) sau vizează DA, răspunsuri la clarificări ori invitații de reofertare necontestate la timp (BO2025_3788, BO2024_2990, BO2021_2679, BO2026_2480).
 4. **Interesul de a contesta:**
    - depunerea ofertei nu înlătură interesul de a ataca DA (BO2025_878, BO2024_2669);
    - o excludere necontestată devine definitivă și nu poate fi „reabilitată” (BO2023_2185). Ofertantul care nu și-a atacat respingerea nu mai are interes să atace ofertele admisibile și nu poate fi repus în termen (BO2026_1184);
    - cine nu poate înlătura câștigătorul nu are interes față de locurile inferioare (BO2024_203, BO2024_2884). Ofertantul cu ofertă corect respinsă nu are interes să critice câștigătorul (BO2025_806);
-   - AC nu poate invoca la CNSC motive noi de respingere, nescrise în comunicare (BO2023_1378).
-5. **Accesul la dosar:** nu poate fi refuzat pe confidențialitate nedovedită (BO2025_3409, BO2026_1837). Dacă ambele părți și-au declarat ofertele confidențiale, accesul nu se extinde la oferta integrală a concurentului (BO2024_1043).
-6. **Executarea deciziilor și a hotărârilor:**
+   - AC nu poate invoca la CNSC motive noi de respingere, nescrise în comunicare (BO2023_1378). Invers, ofertantul respins trebuie să atace **motivul** respingerii, nu doar forma comunicării, altfel contestația cade (BO2026_1073).
+5. **Accesul la dosar:** nu poate fi refuzat pe confidențialitate nedovedită (BO2025_3409, BO2026_1837). O declarație de confidențialitate generică nu blochează accesul, dar partea de proiectare a ofertei, declarată și justificată confidențial, poate fi refuzată (BO2026_621, BO2026_1073). Dacă ambele părți și-au declarat ofertele confidențiale, accesul nu se extinde la oferta integrală a concurentului (BO2024_1043).
+6. **Achiesarea și intervenția:** când entitatea anunță la CNSC că reevaluează, Consiliul anulează raportul și dispune reevaluarea. Cererea de intervenție trebuie depusă **și** comunicată părților în 10 zile de la publicarea contestației în SEAP, altfel e tardivă (BO2023_675). AC poate lua măsuri de remediere în 3 zile de la contestație, inclusiv reverificarea câștigătorului (BO2026_1073).
+7. **Executarea deciziilor și a hotărârilor:**
    - decizia CNSC rămasă definitivă și hotărârea curții de apel au putere de lucru judecat. AC trebuie să le execute pe fond, nu formal (BO2026_1184, BO2024_449);
    - dacă instanța desființează decizia CNSC, actele emise în executarea ei cad (BO2026_13);
-   - reevaluarea dispusă de CNSC se face strict în limitele deciziei (BO2023_2185, BO2024_3064). **Nuanță:** la reevaluare, entitatea poate verifica aceeași cerință la toți ofertanții, din motive de tratament egal (BO2026_328).
-7. **Cheltuielile de judecată:** contestatorul cu critici speculative poate fi obligat la cheltuielile câștigătorului intervenient (BO2025_1699). Onorariile de avocat se reduc frecvent (BO2025_2430, BO2026_76).
+   - reevaluarea dispusă de CNSC se face strict în limitele deciziei (BO2023_2185, BO2024_3064). **Nuanță:** la reevaluare, entitatea poate verifica aceeași cerință la toți ofertanții, din motive de tratament egal (BO2026_328). După o decizie definitivă, AC nu poate relua aceeași chestiune prin noi clarificări (BO2025_1542). Remedierile DA dispuse de CNSC contează doar dacă sunt publicate înainte de termenul de depunere (BO2024_2727).
+8. **Cheltuielile de judecată:** contestatorul cu critici speculative poate fi obligat la cheltuielile câștigătorului intervenient (BO2025_1699). Onorariile de avocat se reduc frecvent (BO2025_2430, BO2026_76).
 
 **(b) Cum o folosim în Ofertare**
 - Ofertare trebuie să calculeze automat termenul de contestare (7 sau 10 zile, după prag) de la publicarea DA, a fiecărui răspuns la clarificări care modifică cerințe sau a rezultatului și să afișeze alerta (PAT-TRM-03).
 - Cauțiunea o plătim în aceeași zi cu contestația, fără să așteptăm vreo notificare (PAT-GAR-06).
+- Orice comunicare intermediară de respingere primită în SEAP pornește imediat ceasul de contestare (BO2025_748). Când suntem câștigători și se contestă, depunem cererea de intervenție la CNSC și o comunicăm AC și contestatorului în 10 zile (BO2023_675).
 - Contestăm **orice** respingere a ofertei noastre în termen, altfel pierdem interesul pentru tot restul procedurii (BO2026_1184).
 - Cerem accesul la dosar imediat după comunicare, inclusiv PV-ul de evaluare și raportul expertului cooptat. Atacăm întâi câștigătorul, apoi ceilalți.
 
-**(c) Numărul de decizii:** 37 de decizii care tratează aspecte procedurale: 24 din versiunea anterioară (8 admise, 8 admise parțial, 8 respinse) și 13 noi (4 admise, 2 admise parțial, 7 respinse). Nu există o etichetă separată pentru această temă, așa că deciziile au fost selectate după conținutul textului.
+**(c) Numărul de decizii:** 44 de decizii care tratează aspecte procedurale: 24 din versiunea cu 90 de decizii (8 admise, 8 admise parțial, 8 respinse), 13 din loturile 3–4 (4 admise, 2 admise parțial, 7 respinse) și 7 din lotul 5 (BO2026_1149, BO2025_748, BO2023_675, BO2026_1073, BO2024_2727, BO2026_621, BO2025_1542: 2 admise, 1 admisă parțial, 4 respinse). Nu există o etichetă separată pentru această temă, așa că deciziile au fost selectate după conținutul textului.
 
 ---
 
@@ -367,7 +384,9 @@
 
 1. **Anularea de către AC pentru imposibilitatea încheierii contractului** (art. 212 alin. 1 lit. c L98) cere o cauză obiectivă și neimputabilă. Granița o dă dovada încetării finanțării:
    - **legală:** finanțarea a dispărut efectiv (contractul de finanțare PNRR denunțat după OUG 41/2025, plus rectificare bugetară), chiar dacă AC a întârziat culpabil. CNSC nu poate obliga AC să încheie contractul fără fonduri. Ofertantului îi rămân doar despăgubirile (BO2025_3738);
-   - **nelegală:** AC invocă doar OUG 41/2025, fără notificarea de neacordare a finanțării și fără să arate că nu există altă sursă, cum cerea clauza suspensivă din fișa de date. OUG 41/2025 are excepții și nu impune automat anularea (BO2026_76).
+   - **nelegală:** AC invocă doar OUG 41/2025, fără notificarea de neacordare a finanțării și fără să arate că nu există altă sursă, cum cerea clauza suspensivă din fișa de date. OUG 41/2025 are excepții și nu impune automat anularea (BO2026_76);
+   - **clauza suspensivă necontestată leagă ofertantul:** la expirarea termenului fără finanțare, anularea e legală (art. 225 alin. 1 lit. c L99, echivalentul art. 212 L98). Câștigătorul nu poate impune o soluție proprie de finanțare (credit-furnizor) neprevăzută în DA (BO2026_2006, racord la transport gaze, sectorial).
+   - **nu justifică anularea:** opoziția punctuală a unui proprietar (petiție, fără litigiu) pe un tronson nesemnificativ dintr-o rețea de gaze P+E. Adaptarea traseului ține de proiectare, iar anularea cere o imposibilitate obiectivă, independentă de voința AC (BO2025_2820).
 2. **Ghidurile ANAP sunt orientative.** Includerea „Diverselor și neprevăzutelor” în valoarea estimată nu justifică singură anularea. Anularea e o măsură extremă, iar comisia nu poate ignora raportul expertului cooptat fără note individuale (BO2024_3631).
 3. **Vicii ireparabile care justifică anularea:**
    - deschiderea ofertelor fără comisie de evaluare numită. Numirea retroactivă nu e posibilă (BO2026_349);
@@ -375,17 +394,17 @@
    - valoarea estimată necorelată cu devizul din SF (BO2023_427);
    - un factor de evaluare bazat pe un PT inexistent (BO2025_1837);
    - suprapunerea cu obligațiile de investiții ale concesionarului (BO2026_2669).
-4. **CNSC anulează procedura** când DA e nelegală, iar termenul de depunere a trecut (BO2026_318, BO2025_352, BO2025_286), sau când nu mai rămâne nicio ofertă admisibilă (BO2025_3667). Dacă termenul nu a trecut, CNSC dispune remedierea DA, nu anularea (BO2026_1521, BO2022_2083).
+4. **CNSC anulează procedura** când DA e nelegală, iar termenul de depunere a trecut (BO2026_318, BO2025_352, BO2025_286, BO2024_2727 — remedieri nepublicate înainte de termen), sau când nu mai rămâne nicio ofertă admisibilă (BO2025_3667). Anularea de către AC după măsuri de remediere, când nicio ofertă nu mai e admisibilă, a fost menținută (BO2026_1073). Dacă termenul nu a trecut, CNSC dispune remedierea DA, nu anularea (BO2026_1521, BO2022_2083).
 5. **O decizie de anulare legată de o evaluare greșită** cade în partea privind oferta vătămată (BO2026_1360).
 6. **Neregulile de comunicare a anulării** (termenul de 3 zile, motive diferite în anunț și în adresă) nu o fac nelegală dacă nu au împiedicat contestarea (BO2026_349).
 
 **(b) Cum o folosim în Ofertare**
-- În fișa procedurii ERP extrage din fișa de date clauza suspensivă și condițiile de anulare. Marchează sursa de finanțare (PNRR, Anghel Saligny, PNDL) cu „risc de anulare pe finanțare” când termenul finanțării e apropiat (BO2025_3738, BO2026_76).
+- În fișa procedurii ERP extrage din fișa de date clauza suspensivă și condițiile de anulare. O clauză suspensivă dezechilibrată (termen lung, fără despăgubire, garanții menținute nelimitat) o clarificăm sau o contestăm **înainte** de ofertare (PAT-CTC-08, BO2026_2006). Marchează sursa de finanțare (PNRR, Anghel Saligny, PNDL) cu „risc de anulare pe finanțare” când termenul finanțării e apropiat (BO2025_3738, BO2026_76).
 - Documentăm costurile fiecărei oferte, pentru eventuale despăgubiri. Nu investim în contestații lungi când finanțarea expiră curând (BO2025_3738).
-- La o anulare cerem imediat raportul procedurii și decizia de numire a comisiei (BO2026_349). Dacă AC invocă doar OUG 41/2025 sau doar ghiduri ANAP, contestăm (BO2026_76, BO2024_3631).
+- La o anulare cerem imediat raportul procedurii și decizia de numire a comisiei (BO2026_349). Dacă AC invocă doar OUG 41/2025 sau doar ghiduri ANAP, contestăm (BO2026_76, BO2024_3631). La fel dacă o rețea de gaze P+E e anulată pe opoziția unor proprietari pe un tronson (BO2025_2820).
 - Înainte de a oferta verificăm concesiunea (PAT-INF-07), corelarea VE pe lot (PAT-INF-11), formula de ajustare (PAT-CTC-02) și termenele peste sărbători (PAT-TRM-05). Acestea sunt cauzele tipice de anulare după depunere.
 
-**(c) Numărul de decizii:** 15 decizii care tratează anularea procedurii (7 admise, 4 admise parțial, 4 respinse). Selecția s-a făcut după conținut.
+**(c) Numărul de decizii:** 19 decizii care tratează anularea procedurii (9 admise, 4 admise parțial, 6 respinse), din care 4 din lotul 5 (BO2026_2006, BO2025_2820, BO2024_2727, BO2026_1073). Selecția s-a făcut după conținut.
 
 ---
 
@@ -394,7 +413,7 @@
 **(a) Regulile extrase**
 
 1. **Pe fond, CNSC aplică aceeași logică.** Se schimbă temeiurile: HG 394/2016 în loc de HG 395/2016. Exemple din decizii: art. 140 alin. 4–5 (răspuns neconcludent, completare), art. 141 alin. 3 (viciu de formă), art. 142 alin. 4 (prețul aparent neobișnuit de scăzut), art. 143 alin. 3 (neconformitate). Din L99 apar art. 221 alin. 2 (avantaj evident), art. 222 (justificarea prețului), art. 228 (comunicarea rezultatului), art. 180 (excludere) și art. 197 alin. 2 (înlocuirea terțului). Căile de atac rămân pe Legea 101/2016, cu aceleași termene și aceeași cauțiune (BO2026_804).
-2. **Cine apare în bază:** majoritatea deciziilor sectoriale sunt la operatori regionali de apă-canal (19 din 27). Restul sunt la transport și distribuție de gaze, de exemplu un acord-cadru de înlocuire de branșamente (BO2021_2679) și o conductă de transport DN700 (BO2026_804).
+2. **Cine apare în bază:** majoritatea deciziilor sectoriale sunt la operatori regionali de apă-canal (19 din 29). Restul sunt la transport și distribuție de gaze, de exemplu un acord-cadru de înlocuire de branșamente (BO2021_2679), o conductă de transport DN700 (BO2026_804), un contract EPCC de racordare la sistemul de transport (BO2026_2006) și un sistem de distribuție P+E pe trei comune (BO2023_675).
 3. **La preț, tendința sectorială e mai permisivă pentru câștigător.** Peste 80% din VE, entitatea nu e obligată la verificări (BO2022_2747, BO2025_1699). Subevaluarea se judecă pe obiecte sau capitole, nu articol cu articol (BO2020_2251). Sub prag, analiza trebuie făcută pe fond (BO2025_3699), iar un element cotat la 1 leu cere documente (BO2024_3215). Pe L98, BO2023_2695 merge mai departe și cere justificarea unui element chiar peste 80% (vezi divergența de la tema 2).
 4. **Entitățile sectoriale aplică strict cerințele formale necontestate:** fișele F5 cu „CONFORM” (BO2026_1837), planșele cerute la P+E (BO2025_1704), RTE-ii precizați la clarificări (BO2025_3788), certificatele ISO cu viză (BO2025_204), condiționările de prețuri la reofertare (BO2021_2679).
 5. **Pot cere cerințe mai severe la complexitate ridicată,** dacă le justifică (BO2026_804). ES limitată strict la tipul de rețea rămâne restrictivă și în sectorial (BO2023_1489).
@@ -407,7 +426,9 @@
    - autorizațiile din caietul de sarcini nu devin cerințe de calificare (BO2022_2747, BO2026_1360), iar cererea de clarificări vagă se contestă (BO2026_362);
    - neconcordanțele din DUAE și punctajul tehnic trebuie clarificate și motivate (BO2021_1117, BO2023_246);
    - reținerile peste GBE se elimină (BO2025_2294);
-   - la reevaluare se verifică aceeași cerință la toți ofertanții (BO2026_328).
+   - la reevaluare se verifică aceeași cerință la toți ofertanții (BO2026_328);
+   - achiesarea entității și termenul de intervenție urmează L101, ca la L98 (BO2023_675);
+   - clauza suspensivă de finanțare necontestată leagă ofertanții și pe L99 (BO2026_2006).
 
 **(b) Cum o folosim în Ofertare**
 - Fișa procedurii are câmpul „lege aplicabilă (L98 / L99)”. Șabloanele de clarificări și contestații citează automat HG 394/2016 și articolele din L99 când procedura e sectorială.
@@ -415,7 +436,7 @@
 - La entitățile sectoriale din gaze verificăm specificațiile operatorului și documentele de inspecție pentru materiale (PAT-STD-11). Cerințele de ES la transport le tratăm cu PAT-CAL-05.
 - Peste 80% din VE nu contestăm prețul câștigătorului fără calcule pe capitole (BO2025_1699, BO2020_2251).
 
-**(c) Numărul de decizii:** 27 pe Legea 99/2016 (15 admise, 6 admise parțial, 6 respinse).
+**(c) Numărul de decizii:** 29 pe Legea 99/2016 (16 admise, 6 admise parțial, 7 respinse), din care 2 din lotul 5.
 
 ---
 
@@ -424,12 +445,12 @@
 1. **Răspunsul la clarificare confirmă, nu completează.** Procedurile, Gantt-ul, planșele, valorile din F5 și personalul nominalizat lipsă nu se mai pot aduce. Documentele care existau dinainte se pot aduce sau explica (BO2025_2118, BO2025_1704, BO2025_2430, BO2024_2636, BO2025_1248).
 2. **Prețurile unitare nu se ating la clarificări.** Corecția aritmetică privește doar rezultatul. Pragul de 1% e pentru abateri tehnice minore, nu pentru prețuri (BO2025_2853, BO2025_3667, BO2024_159, BO2022_219).
 3. **Sub 80% din VE, justificarea se dă cu documente pentru fiecare articol cerut,** cu prețuri identice cu cele din C6/F3, fără reducerea cantităților. Și peste 80%, elementele simbolice (organizare de șantier, repere la 1 leu) pot fi cerute la justificare. Practica e divergentă aici (BO2024_3130, BO2024_449, BO2023_2695, BO2024_3215 vs BO2024_2604).
-4. **Formularele tehnice se completează concret.** În F5 trecem valori, producător, model și pagina din catalog, niciodată „CONFORM”. Planificarea respectă exact coloanele formularului AC (BO2026_1837, BO2025_806, BO2025_3667).
-5. **„Similar” nu înseamnă „identic”, iar ES se dovedește cu PV anterioare termenului, confirmate de beneficiar.** Transportul, SRM-urile, branșamentele și canalizarea contează când textul cerinței permite. Acordul-cadru singur nu ajunge (BO2023_1336, BO2023_2717, BO2021_610, BO2026_182, BO2023_140).
+4. **Formularele tehnice se completează concret.** În F5 trecem valori, producător, model și pagina din catalog, niciodată „CONFORM”. Planificarea respectă exact coloanele formularului AC, iar Gantt-ul arată distinct perioada de timp friguros și rezervele de timp când DA le cere (BO2026_1837, BO2025_806, BO2025_3667, BO2024_2462, BO2024_3381).
+5. **„Similar” nu înseamnă „identic”, iar ES se dovedește cu PV anterioare termenului, confirmate de beneficiar.** Transportul, SRM-urile, branșamentele și canalizarea contează când textul cerinței permite. Acordul-cadru singur nu ajunge. La rețelele de gaze, PV-ul de recepție parțială pe stadiu fizic sau rețeaua nepusă în funcțiune nu au dovedit „lucrări duse la bun sfârșit” (BO2023_1336, BO2023_2717, BO2021_610, BO2026_182, BO2023_140, BO2026_1073, BO2025_3035).
 6. **Nu se respinge pe cerințe nescrise în anunț sau în fișa de date.** Autorizarea firmei nu se transformă în autorizarea personalului. Omisiunile minore nu duc la respingere (BO2024_1706, BO2026_544, BO2022_2747, BO2025_1524).
 7. **Fiecare activitate autorizată are un titular declarat în ofertă:** Gazpet, un asociat sau un subcontractant declarat, cu procent corelat cu valorile. Colaboratorii nedeclarați nu acoperă cerința (BO2026_328, BO2025_2344, BO2025_1639, BO2022_1615).
 8. **Personalul cheie și dovezile pentru punctaj intră în ofertă de la început:** nume, atestate valabile, recomandări semnate de beneficiari. ANRE se cere doar celor care execută sau proiectează gaze (BO2025_2430, BO2025_2858, BO2025_3788, BO2024_2683).
 9. **La garanția de participare contează instrumentul valabil la termen, emis pe numele asocierii.** Corecturile se fac doar prin act adițional la același instrument. Prelungirea o cere AC și trebuie să dovedească cererea (BO2020_2392, BO2023_2794, BO2024_1043, BO2025_1037, BO2026_15).
-10. **Contestăm în 7 sau 10 zile, cu cauțiunea plătită din oficiu:** DA, fiecare răspuns la clarificări care modifică cerințe și orice respingere a ofertei noastre. Ce nu contestăm devine obligatoriu sau definitiv (BO2024_3155, BO2025_3788, BO2024_2990, BO2026_1184, BO2026_804).
+10. **Contestăm în 7 sau 10 zile, cu cauțiunea plătită din oficiu:** DA (inclusiv ATR lipsă sau expirat și clauzele suspensive de finanțare), fiecare răspuns la clarificări care modifică cerințe, orice comunicare intermediară de respingere și orice respingere a ofertei noastre, atacând motivul, nu forma. Ce nu contestăm devine obligatoriu sau definitiv (BO2024_3155, BO2025_3788, BO2024_2990, BO2026_1184, BO2026_804, BO2026_1149, BO2025_748, BO2026_2006).
 
-**De urmărit separat:** anulările motivate de finanțare (OUG 41/2025, PNRR) sunt legale doar cu dovada că finanțarea a încetat (BO2025_3738 vs BO2026_76). Formulele de ajustare preluate din OUG 64/2022 pot duce la anularea procedurii (BO2023_406).
+**De urmărit separat:** anulările motivate de finanțare (OUG 41/2025, PNRR) sunt legale doar cu dovada că finanțarea a încetat (BO2025_3738 vs BO2026_76), dar o clauză suspensivă necontestată leagă ofertantul (BO2026_2006). Formulele de ajustare preluate din OUG 64/2022 pot duce la anularea procedurii (BO2023_406). Divergența pe PV-ul de stadiu fizic ca dovadă a ES (BO2026_182 vs BO2026_1073, BO2025_3035) trebuie reconfirmată pe PDF-uri.
