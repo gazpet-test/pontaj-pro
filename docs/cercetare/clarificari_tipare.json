@@ -1,0 +1,2365 @@
+[
+ {
+  "pattern_id": "PAT-CTR-01",
+  "cod_vechi": [
+   "CL-A07"
+  ],
+  "tip_problema": "contradictie",
+  "titlu": "Aceeași cerință are valori diferite în fișa de date, caietul de sarcini și contract",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini",
+    "contract"
+   ],
+   "semnal": "aceeași noțiune (termen de execuție, perioadă de garanție, servicii incluse — ex. asistență tehnică, obținere avize) apare cu valori/incluziuni diferite în ≥ 2 documente ale DA",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Caiet de sarcini",
+   "Model de contract / acord contractual"
+  ],
+  "normative_refs": [
+   "REQ-AD-010",
+   "REQ-AD-009"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_665"
+  ],
+  "intrebare_propusa": "Fișa de date ([secțiunea …], pag. […]) prevede [X]; caietul de sarcini ([cap. …], pag. […]) și/sau modelul de contract ([clauza …]) prevăd [Y]. Vă rugăm să precizați care prevedere se aplică și, dacă este cazul, să publicați documentele actualizate.",
+  "impact_intern": {
+   "tehnic": "Ofertăm pe o ipoteză tehnică greșită dacă alegem varianta nevalabilă.",
+   "cost": "Diferența de preț între variante (ex. servicii incluse/excluse).",
+   "risc_respingere": "Mediu: CNSC nu întoarce contradicția împotriva ofertantului (BO2023_665), dar disputa costă timp; se închide înainte de depunere."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-CTR-02",
+  "cod_vechi": [
+   "CL-C07"
+  ],
+  "tip_problema": "contradictie",
+  "titlu": "Cantitate din F3/lista de cantități diferită de planșe sau memoriu",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "planse",
+    "caiet_sarcini"
+   ],
+   "semnal": "pentru același articol (cod, UM) cantitatea din F3 diferă de cea măsurată pe planșe/memoriu (prag intern: > 2 % sau > 1 UM la articole unitare)",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Formular F3 / liste de cantități pe obiecte",
+   "Planșe (situație, profile longitudinale)",
+   "Memoriu tehnic"
+  ],
+  "normative_refs": [
+   "REQ-AD-074",
+   "REQ-AD-123",
+   "REQ-AD-107",
+   "REQ-AD-131"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2026_3104",
+   "SRC-CNSC-BO2021_1060"
+  ],
+  "intrebare_propusa": "La poziția [cod articol] din lista de cantități [nr./obiect] figurează [cantitate, UM]; din planșa [nr.] / memoriul tehnic (pag. […]) rezultă [cantitate, UM]. Vă rugăm să precizați cantitatea care trebuie ofertată și, dacă este cazul, să publicați lista de cantități corectată.",
+  "impact_intern": {
+   "tehnic": "Cantitatea reală de executat diferă de cea plătită/ofertată.",
+   "cost": "Ofertantul nu poate corecta F3 în ofertă; diferența rămâne risc de execuție (la preț unitar se plătește cantitatea măsurată, cl. 49.1).",
+   "risc_respingere": "Ridicat dacă reducem cantitatea în ofertă: cantitățile publicate sunt obligatorii (BO2026_3104)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Clarificarea e singurul canal de corectare înainte de depunere."
+ },
+ {
+  "pattern_id": "PAT-CTR-03",
+  "cod_vechi": [],
+  "tip_problema": "contradictie",
+  "titlu": "Răspunsul la clarificări modifică DA, dar documentul-sursă nu a fost republicat",
+  "trigger": {
+   "unde_cauti": [
+    "raspunsuri_clarificari",
+    "fisa_de_date",
+    "caiet_sarcini"
+   ],
+   "semnal": "un răspuns publicat schimbă o valoare/cerință, iar documentul DA cu aceeași cerință rămâne în forma inițială în SEAP",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Răspunsuri la clarificări (toate rundele)",
+   "Documentul DA vizat"
+  ],
+  "normative_refs": [
+   "REQ-AD-002",
+   "REQ-AD-007"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Prin răspunsul nr. [X] din [data] ați precizat [Y]; documentul [denumire] publicat (pag. […]) prevede în continuare [W]. Vă rugăm să confirmați că se aplică prevederea din răspunsul la clarificări și dacă documentul [denumire] va fi republicat în forma actualizată.",
+  "impact_intern": {
+   "tehnic": "Echipa poate lucra pe versiunea veche a cerinței.",
+   "cost": "Depinde de cerință.",
+   "risc_respingere": "Mediu: comisia poate evalua după documentul nemodificat."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "REQ-AD-007 (ghid ANAP 2020) nu e verificat pe sursă — folosit doar ca context, nu e citat."
+ },
+ {
+  "pattern_id": "PAT-INF-01",
+  "cod_vechi": [
+   "CL-A01"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Utilități subterane, avize de amplasament, autorizație de construire, predarea amplasamentului",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "planse",
+    "contract"
+   ],
+   "semnal": "DA nu conține planul cu rețelele edilitare existente, avizele de amplasament sau stadiul autorizației de construire; contractul are clauză de condiții fizice neprevăzute (cl. 21.1)",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Planșe de situație",
+   "Avize/acorduri anexate",
+   "Autorizație de construire",
+   "Condiții contractuale cl. 21.1"
+  ],
+  "normative_refs": [
+   "REQ-AD-113",
+   "REQ-SC-017",
+   "REQ-SC-110",
+   "REQ-SC-113"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să ne transmiteți, pentru [obiect], planurile de situație cu rețelele edilitare existente, avizele de amplasament obținute și autorizația de construire (sau termenul estimat de emitere), precum și termenul estimat de predare a amplasamentului. Vă rugăm să precizați și modul de tratare a rețelelor neidentificate în planuri, în raport cu subclauza 21.1 din condițiile contractuale.",
+  "impact_intern": {
+   "tehnic": "Risc de avarii la rețele existente; sondaje manuale suplimentare.",
+   "cost": "Sondaje, relocări, întârzieri neplătite.",
+   "risc_respingere": "Scăzut (nu afectează conformitatea), dar ridicat pe execuție."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-INF-02",
+  "cod_vechi": [
+   "CL-A05"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Lucrări în zona drumului: acord și autorizație de amplasare, restricții de circulație, tarife — în sarcina cui",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "fisa_de_date",
+    "F3"
+   ],
+   "semnal": "traseul este în zona drumului public (ampriză, zonă de siguranță) și DA nu precizează cine obține acordul prealabil/autorizația de amplasare și cine plătește tarifele; branșamente pentru construcții existente | SAU: lucrări în carosabil/trotuar fără articol în F3 pentru semnalizare temporară și fără precizarea cine obține aprobarea administratorului și a poliției rutiere",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Planșe de situație",
+   "F1/F3 (capitol avize)",
+   "Liste de cantități",
+   "Planșe de organizare"
+  ],
+  "normative_refs": [
+   "REQ-SC-041",
+   "REQ-SC-042",
+   "REQ-SC-044",
+   "REQ-SC-078",
+   "REQ-SC-079",
+   "REQ-SC-069",
+   "REQ-SC-070",
+   "REQ-SC-071",
+   "REQ-SC-073",
+   "REQ-SC-077"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Pentru [traseul / branșamentele] din zona drumului [denumire], vă rugăm să precizați cine obține acordul prealabil și autorizația de amplasare și/sau de acces și cine suportă tarifele aferente, precum și dacă documentația pentru restricționarea circulației (scheme de semnalizare temporară, rute ocolitoare) și aprobările aferente sunt în sarcina executantului. Dacă acestea sunt în sarcina executantului, vă rugăm să indicați capitolul din F1/F3 sau articolul din listele de cantități în care se cuprind.",
+  "impact_intern": {
+   "tehnic": "Fără autorizație, lucrarea se poate desființa (OG 43/1997 art. 46). Cererea se depune cu ≥ 30 de zile înainte de începere (unele categorii).",
+   "cost": "Tarife de utilizare și acces, garanții, termene de obținere. Semnalizare, personal, rute ocolitoare.",
+   "risc_respingere": "Scăzut. Scăzut; răspunderea pentru accidente revine executantului."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Corectură runda 1: regimul branșamentelor pentru construcții existente sub Legea 169/2026 (REQ-SC-078/079) e neverificat pe sursă — nu se citează în întrebare. Contopit cu: Restricții de circulație și semnalizare temporară — documentație, aprobări, cost."
+ },
+ {
+  "pattern_id": "PAT-INF-03",
+  "cod_vechi": [
+   "CL-A06"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Acorduri ale proprietarilor și despăgubiri pe trasee prin proprietăți private",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "planse",
+    "F3"
+   ],
+   "semnal": "traseul traversează proprietăți private și DA nu spune cine obține acordurile/convențiile și cine plătește eventualele despăgubiri",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Planșe de situație / plan cadastral",
+   "Caiet de sarcini",
+   "F1/F3"
+  ],
+  "normative_refs": [],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Pentru tronsoanele care traversează proprietăți private ([planșe/poziții]), vă rugăm să precizați dacă acordurile proprietarilor și eventualele despăgubiri sunt în sarcina autorității contractante / operatorului de distribuție sau a executantului și, în al doilea caz, capitolul din F1/F3 în care se cuprind.",
+  "impact_intern": {
+   "tehnic": "Blocaj de execuție pe proprietăți fără acord.",
+   "cost": "Despăgubiri necuantificabile la ofertare.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "scazuta",
+  "requires_human_legal_review": true,
+  "note": "temei de confirmat: șablonul din runda 1 invoca Legea 123/2012 art. 109–113; nicio cerință verificată în runda 2 — citarea a fost eliminată."
+ },
+ {
+  "pattern_id": "PAT-INF-04",
+  "cod_vechi": [
+   "CL-B12"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Coordonatorul SSM, PSS și declarația prealabilă — în sarcina cui",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "fisa_de_date",
+    "F3"
+   ],
+   "semnal": "pe șantier lucrează mai mulți antreprenori/subantreprenori și DA nu precizează cine asigură coordonatorul SSM pe durata realizării și cine depune declarația prealabilă la ITM",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "F3 / organizare de șantier"
+  ],
+  "normative_refs": [
+   "REQ-SC-003",
+   "REQ-SC-004",
+   "REQ-SC-001",
+   "REQ-SC-011"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați dacă coordonatorul în materie de securitate și sănătate pe durata realizării lucrării (HG nr. 300/2006, art. 7) va fi desemnat de autoritatea contractantă sau dacă serviciul este în sarcina executantului; în al doilea caz, vă rugăm să indicați articolul din F3 sau din organizarea de șantier în care se cuprinde costul.",
+  "impact_intern": {
+   "tehnic": "Lipsa coordonatorului blochează începerea lucrărilor.",
+   "cost": "Cost coordonator ≥ 5 ani experiență pe durata contractului.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-INF-05",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Verificarea proiectului (componenta de proiectare la P+E) — cine contractează și plătește verificatorii",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini",
+    "contract"
+   ],
+   "semnal": "contract de proiectare + execuție; DA nu spune cine plătește verificarea proiectului de verificatori atestați (ANRE pentru gaze, MDLPA pentru alte cerințe)",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Caiet de sarcini (tema de proiectare)",
+   "Formular de ofertă financiară"
+  ],
+  "normative_refs": [
+   "REQ-TG-006",
+   "REQ-AD-149",
+   "REQ-TG-024"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Pentru componenta de proiectare, vă rugăm să precizați dacă verificarea proiectului de către verificatori atestați este în sarcina autorității contractante sau a ofertantului și, în al doilea caz, capitolul din propunerea financiară în care se cuprinde.",
+  "impact_intern": {
+   "tehnic": "Execuția gazelor se face numai pe proiecte verificate (anexa 8 pct. 18 Ord. ANRE 17/2026).",
+   "cost": "Onorarii verificatori pe fiecare specialitate.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "REQ-AD-149 (HG 925/1995) are încredere medie."
+ },
+ {
+  "pattern_id": "PAT-INF-06",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Probe, recepție și punere în funcțiune cu operatorul de distribuție — tarife și cuplare",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "DA nu spune cine solicită/plătește prezența delegatului OSD la probe și recepții și cine execută cuplarea la rețeaua existentă",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Liste de cantități (probe, cuplări)",
+   "Aviz tehnic de racordare / acord OSD"
+  ],
+  "normative_refs": [
+   "REQ-TG-083",
+   "REQ-TG-007",
+   "REQ-TG-080",
+   "REQ-TG-099"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați cine solicită și cine suportă eventualele tarife ale operatorului de distribuție pentru participarea la probe, la recepția lucrărilor ascunse și la punerea în funcțiune, precum și dacă racordarea la rețeaua existentă (cuplarea) se execută de ofertant sau de operator.",
+  "impact_intern": {
+   "tehnic": "Cuplarea sub presiune cere echipamente/proceduri OSD.",
+   "cost": "Tarife OSD, echipe de cuplare.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-INF-07",
+  "cod_vechi": [
+   "CL-P04"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Localitate cu concesiune a serviciului de distribuție gaze",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini"
+   ],
+   "semnal": "localitatea din obiect are concesionar al distribuției; DA nu spune dacă investiția e în obligațiile concesionarului și cine preia rețeaua în exploatare",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Studiu de fezabilitate / memoriu",
+   "Avize OSD"
+  ],
+  "normative_refs": [],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2026_2669"
+  ],
+  "intrebare_propusa": "Vă rugăm să precizați dacă pentru [localitate] există un contract de concesiune a serviciului de distribuție a gazelor naturale, care este operatorul de distribuție și cine va prelua rețeaua în exploatare după recepție.",
+  "impact_intern": {
+   "tehnic": "Avizele și recepția depind de concesionar.",
+   "cost": "Poate apărea anularea procedurii (cost ofertare pierdut).",
+   "risc_respingere": "Procedura poate fi anulată (BO2026_2669)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "Fără requirement_id; temei doar precedentul CNSC."
+ },
+ {
+  "pattern_id": "PAT-INF-08",
+  "cod_vechi": [
+   "CL-T04"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Apă: lipsesc presiunea de încercare și pierderea admisibilă; ediția NP 133 neclară",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "planse"
+   ],
+   "semnal": "CS/proiectul de apă nu indică presiunea de probă și pierderea de presiune admisibilă pe tronsoane sau nu spune dacă e elaborat pe NP 133-2013 ori NP 133-2022",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini (probe)",
+   "Memoriu tehnic",
+   "Planșe"
+  ],
+  "normative_refs": [
+   "REQ-TG-149",
+   "REQ-TG-151",
+   "REQ-TG-152",
+   "REQ-TG-153",
+   "REQ-TG-157"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) nu indică presiunea de încercare și pierderea de presiune admisibilă pentru tronsoanele [X], valori care, potrivit NP 133-2022 vol. I, cap. 9 alin. (13), se stabilesc prin proiect. Vă rugăm să le comunicați și să precizați dacă proiectul este elaborat în baza NP 133-2013 sau a NP 133-2022.",
+  "impact_intern": {
+   "tehnic": "Fără valori, proba nu poate fi declarată reușită.",
+   "cost": "Durata/repetarea probelor.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Corectură runda 1: trimiterea la „7.3.6 alin. (2)” înlocuită cu cap. 9 alin. (13) (REQ-TG-157)."
+ },
+ {
+  "pattern_id": "PAT-INF-09",
+  "cod_vechi": [
+   "CL-T10"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Verificarea izolației conductei de oțel după umplerea șanțului — metodă și criteriu",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "CS cere „verificarea izolației” fără metodă, lungime de tronson, criteriu de acceptare sau articol în F3",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Liste de cantități"
+  ],
+  "normative_refs": [
+   "REQ-TG-080",
+   "REQ-TG-097",
+   "REQ-TG-081"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "NTPEE, art. 254, prevede verificarea rezistenței izolației după umplerea șanțului, consemnată în PV de lucrări ascunse cu buletin de laborator autorizat. Vă rugăm să precizați metoda de verificare cerută, lungimea tronsoanelor, criteriul de acceptare și articolul din listele de cantități în care se cuprinde.",
+  "impact_intern": {
+   "tehnic": "Metode diferite (rezistență izolație / DCVG / PCM) au echipamente diferite.",
+   "cost": "Laborator autorizat, repetări.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-INF-10",
+  "cod_vechi": [
+   "CL-T12"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Protecția catodică — inclusă sau nu în obiect",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3",
+    "planse"
+   ],
+   "semnal": "conductă de oțel îngropată; CS/F3 nu precizează dacă se execută stația de protecție catodică, anozi, prize sau doar posturi de măsurare și piese electroizolante",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Liste de cantități",
+   "Planșe"
+  ],
+  "normative_refs": [
+   "REQ-TG-110"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați dacă obiectul contractului include realizarea protecției catodice (stație, anozi, prize de pământ) sau numai posturile de măsurare și piesele electroizolante și, în primul caz, măsurătorile cerute la recepție.",
+  "impact_intern": {
+   "tehnic": "Domeniu de lucrări diferit (specialitate distinctă).",
+   "cost": "Semnificativ dacă include stația.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "scazuta",
+  "requires_human_legal_review": true,
+  "note": "temei de confirmat: șablonul vechi cita NTPEE art. 263 și SR EN 12954 / EN ISO 15589-1:2026 — fără cerință verificată (REQ-TG-110 neverificat, standard licențiat). Citările au fost scoase din întrebare."
+ },
+ {
+  "pattern_id": "PAT-INF-11",
+  "cod_vechi": [
+   "CL-C01"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Valoarea estimată pe lot/obiect nu este publicată",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "fișa de date dă doar VE totală (sau cu TVA / fără precizarea opțiunilor și a diverselor și neprevăzutelor)",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Anunț de participare"
+  ],
+  "normative_refs": [
+   "REQ-AD-066"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2025_647"
+  ],
+  "intrebare_propusa": "Vă rugăm să precizați valoarea estimată fără TVA pentru fiecare lot/obiect și dacă aceasta include [opțiunile / cheltuielile diverse și neprevăzute].",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Reperul pentru pragul de preț aparent neobișnuit de scăzut.",
+   "risc_respingere": "Indirect: pragul de 80 % declanșează justificarea prețului."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Corectură runda 1: motivul (pragul de 80 %) nu se mai menționează în întrebare — ar dezvălui strategia de preț."
+ },
+ {
+  "pattern_id": "PAT-INF-12",
+  "cod_vechi": [
+   "CL-C06"
+  ],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Formularele de extrase de resurse (C6–C9) sunt cerute, dar nepublicate",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "F3"
+   ],
+   "semnal": "fișa de date cere C6–C9 / extrase de resurse, dar formularele nu sunt în SEAP sau F3 nu are coloanele de resurse",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Formulare publicate"
+  ],
+  "normative_refs": [
+   "REQ-AD-129"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită formularele [C6–C9]. Vă rugăm să le publicați în format editabil sau să confirmați că se acceptă extrasele de resurse generate de programul de deviz al ofertantului, cu conținutul cerut (resursă, UM, cantitate, preț unitar, valoare).",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Timp de reformatare.",
+   "risc_respingere": "Mediu: formular lipsă = neconformitate formală posibilă."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "Ghidul P91/1-02 (REQ-AD-129) nu e verificat pe sursă — nu se citează."
+ },
+ {
+  "pattern_id": "PAT-AMB-01",
+  "cod_vechi": [
+   "CL-A08"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "P+E: se cer la ofertă documente care rezultă abia din proiectul tehnic",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini"
+   ],
+   "semnal": "contract de proiectare + execuție, iar fișa de date cere la ofertă liste de cantități, extrase de resurse, planșă de organizare sau alte elemente de PT",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Caiet de sarcini / tema de proiectare"
+  ],
+  "normative_refs": [
+   "REQ-AD-122",
+   "REQ-AD-123"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2024_3657"
+  ],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită la ofertă [liste de cantități / extrase de resurse / planșa de organizare de șantier], iar obiectul contractului include elaborarea proiectului tehnic. Vă rugăm să precizați dacă aceste documente se depun la ofertă sau se elaborează după semnarea contractului și, în primul caz, pe ce bază de cantități se întocmesc.",
+  "impact_intern": {
+   "tehnic": "Documente fără bază tehnică (PT inexistent).",
+   "cost": "Efort de ofertare nejustificat.",
+   "risc_respingere": "Mediu: neconformitate pentru document lipsă."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-AMB-02",
+  "cod_vechi": [
+   "CL-P02",
+   "CL-P03"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "Factori de evaluare: noțiuni nedefinite, documente inexistente sau angajamente fără mod de verificare",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "algoritmul unui factor folosește termeni nedefiniți („tronson”, „adecvat”, „detaliat”) sau trimite la un document nepublicat (PT la P+E) | SAU: factorul punctează elemente fără legătură directă cu obiectul (angajați din comună, vehicule electrice, instruiri) sau fără mecanism de verificare în execuție",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date — factori de evaluare",
+   "Documente publicate (SF/DALI/PT)",
+   "Model de contract (penalități pentru nerespectare)"
+  ],
+  "normative_refs": [
+   "REQ-AD-121",
+   "REQ-AD-122"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2025_1837",
+   "SRC-CNSC-BO2024_3657"
+  ],
+  "intrebare_propusa": "Pentru factorul de evaluare [denumire], vă rugăm să definiți noțiunea de [tronson / unitate de punctare] și să indicați documentul publicat din care rezultă [tronsoanele / lungimile], respectiv documentul la care se raportează ofertanții în condițiile în care proiectul tehnic se elaborează în cadrul contractului. Pentru factorul [denumire], vă rugăm să precizați și modul în care va fi verificat pe durata contractului angajamentul asumat prin ofertă și consecințele contractuale ale nerespectării lui.",
+  "impact_intern": {
+   "tehnic": "Punctaj imposibil de calculat obiectiv.",
+   "cost": "Ofertă tehnică construită pe ipoteze. Angajamente operaționale greu de respectat.",
+   "risc_respingere": "Risc de punctare arbitrară; procedura poate fi anulată (BO2025_1837). Mediu; un factor favorizant poate fi contestat (BO2024_3657)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "Contestarea factorului e posibilă dacă răspunsul nu clarifică — decizie juridică. Contopit cu: Factori de evaluare „locali” (angajați din zonă, vehicule, training) fără mod de verificare. Corectură runda 1: formularea „considerăm că favorizează operatorii locali… solicităm eliminarea” a fost scoasă (argumentație juridică agresivă). Contestarea se decide separat."
+ },
+ {
+  "pattern_id": "PAT-AMB-03",
+  "cod_vechi": [
+   "CL-C04",
+   "CL-C05"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "Rețete de consum și distanțe de transport ale proiectantului — obligatorii sau orientative",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini",
+    "raspunsuri_clarificari"
+   ],
+   "semnal": "F3/analizele de preț/răspunsurile AC impun „rețetele proiectantului”, consumuri sau o distanță de transport fixă",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "F3 și analize de preț publicate",
+   "Răspunsuri la clarificări",
+   "Caiet de sarcini"
+  ],
+  "normative_refs": [
+   "REQ-AD-130",
+   "REQ-AD-127",
+   "REQ-AD-128",
+   "REQ-AD-131",
+   "REQ-AD-133"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2018_6476"
+  ],
+  "intrebare_propusa": "Pentru articolele din Formularul F3 aferente [obiect/categorie], vă rugăm să precizați dacă consumurile de resurse (manoperă, utilaj, transport) și distanța de transport de [x] km indicate în [analizele de preț / documentația proiectantului] sunt obligatorii sau orientative, în condițiile respectării integrale a cantităților din F3 și a cerințelor din caietul de sarcini.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Diferențe de preț unitar.",
+   "risc_respingere": "Mediu: abaterea de la consumuri declarate obligatorii poate duce la neconformitate; reducerea cantităților de material nu e permisă (REQ-AD-131)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "P91/1-02 (REQ-AD-127/128) citit doar indirect, prin BO2018_6476 — nu se citează în întrebare. Un singur precedent CNSC, din 2018."
+ },
+ {
+  "pattern_id": "PAT-AMB-04",
+  "cod_vechi": [
+   "CL-C08"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "Preț unitar unic pe resursă în toate devizele",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "F3"
+   ],
+   "semnal": "fișa de date/formularele cer (sau nu exclud) prețuri unitare identice pentru aceeași resursă în devize diferite",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Instrucțiuni de completare formulare"
+  ],
+  "normative_refs": [
+   "REQ-AD-135"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2022_1923"
+  ],
+  "intrebare_propusa": "Vă rugăm să precizați dacă pentru aceeași resursă (material, manoperă, utilaj) prețul unitar trebuie să fie identic în toate devizele pe obiect și dacă este permisă diferențierea costului de transport pe obiecte.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Uniformizare prețuri.",
+   "risc_respingere": "Mediu: diferențe nejustificate → respingere la PANS (BO2022_1923)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-AMB-05",
+  "cod_vechi": [
+   "CL-C02"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "Plafon procentual pentru cheltuieli indirecte, profit sau organizare de șantier",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "F3"
+   ],
+   "semnal": "formularele sau fișa de date impun un procent maxim pentru indirecte/profit/OS",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "F1–F5"
+  ],
+  "normative_refs": [
+   "REQ-AD-124"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Fișa de date / formularul [denumire] (pag. […]) prevede un plafon de [x] % pentru [cheltuieli indirecte / profit / organizare de șantier]. Vă rugăm să precizați dacă depășirea acestui plafon conduce la respingerea ofertei sau dacă valoarea are caracter orientativ.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Structura prețului constrânsă.",
+   "risc_respingere": "Mediu."
+  },
+  "confidence": "scazuta",
+  "requires_human_legal_review": true,
+  "note": "temei de confirmat: runda 1 invoca abateri semnalate de ANAP în control ex-ante — sursă necitită în runda 2."
+ },
+ {
+  "pattern_id": "PAT-AMB-06",
+  "cod_vechi": [
+   "CL-B22"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "Autorizări speciale (topografie OCPI, aviz GA, ANRE, RTE pe domenii) — la ofertă sau la execuție",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini"
+   ],
+   "semnal": "CS menționează activități care cer autorizări (OCPI, gospodărire ape, ANRE, RTE), dar fișa de date nu spune dacă dovada se cere la ofertă",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Fișa de date — cerințe de calificare",
+   "Caiet de sarcini"
+  ],
+  "normative_refs": [
+   "REQ-AD-032",
+   "REQ-AD-029"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2022_1746",
+   "SRC-CNSC-BO2024_1706",
+   "SRC-CNSC-BO2021_159"
+  ],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) prevede activitatea [denumire], pentru care este necesară [autorizarea …]. Vă rugăm să precizați dacă dovada acestei autorizări se solicită la depunerea ofertei sau va fi verificată la începerea execuției.",
+  "impact_intern": {
+   "tehnic": "Subcontractant autorizat necesar.",
+   "cost": "Cost subcontractare.",
+   "risc_respingere": "Mediu: autorizările necerute expres nu pot fi motiv de respingere (BO2024_1706), dar verificarea în execuție rămâne."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "BO2021_159 — nuanță: CNSC a obligat AC să verifice capacitatea legală (direct sau prin subcontractanți), nu a declarat oferta neconformă."
+ },
+ {
+  "pattern_id": "PAT-AMB-07",
+  "cod_vechi": [
+   "CL-T13"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "Verificarea îmbinărilor din PE — alte încercări decât examinarea vizuală",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "CS nu precizează dacă la PE se cer încercări pe îmbinări de probă/nedistructive sau cere „încercări conform standardelor” fără frecvență",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Liste de cantități"
+  ],
+  "normative_refs": [
+   "REQ-TG-077",
+   "REQ-TG-078",
+   "REQ-TG-109"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "NTPEE, art. 245, prevede pentru îmbinările din polietilenă control vizual și, după caz, nedistructiv conform proiectului. Vă rugăm să precizați dacă se solicită și alte verificări decât examinarea vizuală, metodele, frecvența și articolul din listele de cantități în care se cuprind.",
+  "impact_intern": {
+   "tehnic": "Încercări pe epruvete/laborator.",
+   "cost": "Laborator, îmbinări de probă.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "SR EN 13100 / 12814 (REQ-TG-109) sunt recomandate (anexa 2), neverificate — nu se citează."
+ },
+ {
+  "pattern_id": "PAT-AMB-08",
+  "cod_vechi": [
+   "CL-P05",
+   "CL-P06"
+  ],
+  "tip_problema": "ambiguu",
+  "titlu": "Răspunsul AC la o clarificare este evaziv sau incomplet",
+  "trigger": {
+   "unde_cauti": [
+    "raspunsuri_clarificari"
+   ],
+   "semnal": "răspunsul reconfirmă generic DA („DA respectă legislația”, „conform caietului de sarcini”) sau nu tratează aspectul întrebat",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Răspunsuri la clarificări",
+   "Întrebarea inițială"
+  ],
+  "normative_refs": [
+   "REQ-AD-002",
+   "REQ-AD-008",
+   "REQ-AD-083",
+   "REQ-AD-084"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2024_2938",
+   "SRC-CNSC-BO2023_2119"
+  ],
+  "intrebare_propusa": "Revenim la întrebarea nr. [X] din [data]. Răspunsul publicat la [data] nu precizează [aspectul Y]. Vă rugăm să comunicați [valoarea / documentul / opțiunea] solicitată.",
+  "impact_intern": {
+   "tehnic": "Ipoteza rămâne deschisă.",
+   "cost": "Depinde.",
+   "risc_respingere": "Răspunsul evaziv poate fi contestat (BO2024_2938); termenul curge de la publicarea răspunsului."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "Corectură runda 1: CL-P06 menționa „termenul de contestare de 10 zile” — corect 10 zile peste prag / 7 zile sub prag (L101 art. 8 alin. (1); BO2023_2119, REQ-AD-083). Urmărirea termenului: PAT-TRM-03."
+ },
+ {
+  "pattern_id": "PAT-CNT-01",
+  "cod_vechi": [
+   "CL-T06",
+   "CL-C03"
+  ],
+  "tip_problema": "cantitate",
+  "titlu": "Extinderea controlului nedistructiv la sudurile din oțel și includerea lui în deviz",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "CS spune „suduri controlate nedistructiv conform normativelor” fără procent/metodă, sau F3 nu are articol pentru CND și buletine de laborator",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Liste de cantități",
+   "Planșe (poziția sudurilor de poziție)"
+  ],
+  "normative_refs": [
+   "REQ-TG-068",
+   "REQ-TG-069",
+   "REQ-TG-070",
+   "REQ-TG-096",
+   "REQ-TG-026"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) prevede „[citat]”, fără a preciza extinderea controlului nedistructiv. NTPEE, art. 238 alin. (4)–(5), prevede control nedistructiv obligatoriu la conductele subterane din oțel și pentru toate sudurile de poziție. Vă rugăm să precizați procentul de suduri examinate (altele decât sudurile de poziție), metoda de examinare și articolul din listele de cantități în care se cuprind examinările și buletinele de laborator.",
+  "impact_intern": {
+   "tehnic": "Volumul CND determină laboratorul și durata.",
+   "cost": "Semnificativ (RT/UT pe sudură).",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-CNT-02",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Elemente cerute de normativ lipsă din F3 (fir trasor, bandă de avertizare; la apă: ridicare topografică, spălare, dezinfecție)",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "conductă PE fără articol pentru fir trasor/cutii de acces sau conductă subterană fără bandă de avertizare în F3 | SAU: rețea de apă fără articole pentru spălare/dezinfecție sau pentru ridicarea topografică înainte de umplutură (format GIS al operatorului)",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Liste de cantități",
+   "Planșe",
+   "Caiet de sarcini"
+  ],
+  "normative_refs": [
+   "REQ-TG-060",
+   "REQ-TG-061",
+   "REQ-TG-158",
+   "REQ-TG-159"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Listele de cantități pentru [obiect] nu conțin articole pentru [element], prevăzut de [NTPEE, art. 203 (fir trasor) / NTPEE, art. 216 (bandă de avertizare) / NP 133-2022 vol. I, cap. 9 alin. (15)–(16) (ridicare topografică)]. Vă rugăm să precizați articolul în care este cuprins sau să publicați lista de cantități completată.",
+  "impact_intern": {
+   "tehnic": "Obligatorii la recepție. Fără releveu, recepția se blochează.",
+   "cost": "Material + manoperă pe toată lungimea. Topograf, analize apă.",
+   "risc_respingere": "Scăzut (cantitățile nu se modifică în ofertă). Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "Contopit cu: Apă: spălare, dezinfecție și ridicare topografică as-built fără articol în F3. REQ-TG-159 (dezinfecție) are încredere medie — nu se citează."
+ },
+ {
+  "pattern_id": "PAT-CNT-03",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Traversări de obstacole (drum național, cale ferată, curs de apă) — metodă, tub de protecție, avize și condițiile lor",
+  "trigger": {
+   "unde_cauti": [
+    "planse",
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "planșele arată subtraversare DN/CF/tramvai fără lungime/diametru de tub de protecție în F3 sau fără metoda de execuție (foraj vs șanț deschis) | SAU: planșele arată traversarea unui curs de apă/dig, iar avizul de gospodărire a apelor nu e anexat sau condițiile lui nu se regăsesc în F3",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Planșe (profil subtraversare)",
+   "Liste de cantități",
+   "Avize CNAIR / CFR",
+   "Planșe (profil traversare)",
+   "Aviz de gospodărire a apelor"
+  ],
+  "normative_refs": [
+   "REQ-SC-064",
+   "REQ-SC-068",
+   "REQ-SC-084",
+   "REQ-SC-086",
+   "REQ-SC-082",
+   "REQ-SC-087",
+   "REQ-SC-088",
+   "REQ-SC-089",
+   "REQ-SC-091",
+   "REQ-SC-093"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2021_159"
+  ],
+  "intrebare_propusa": "Pentru [subtraversarea DN … / căii ferate … / traversarea cursului de apă …] din [planșa …], vă rugăm să precizați metoda de execuție, lungimea și diametrul tubului de protecție, să ne transmiteți avizele obținute ([administrator drum / infrastructură feroviară / gospodărire a apelor]) și să precizați dacă condițiile impuse prin acestea sunt cuprinse în listele de cantități.",
+  "impact_intern": {
+   "tehnic": "Foraj orizontal obligatoriu sub DN, gropi în afara zonei de siguranță. Avizul impune adâncime sub talveg și notificarea începerii execuției.",
+   "cost": "Foraj, tub OL, cămine/aerisiri. Foraj/subtraversare, protecții de mal.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "Contopit cu: Traversare de curs de apă — avizul de gospodărire a apelor și condițiile lui. Cerințele SC-087…093 au încredere medie (text consolidat neconfirmat)."
+ },
+ {
+  "pattern_id": "PAT-CNT-04",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Deșeuri din construcții — transport, eliminare/valorificare, distanță",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "F3 are desfaceri (asfalt, beton, pământ excedentar) fără articol de transport/eliminare sau fără distanța până la operatorul autorizat",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Liste de cantități",
+   "Caiet de sarcini",
+   "Autorizație de construire (plan gestionare deșeuri)"
+  ],
+  "normative_refs": [
+   "REQ-SC-095",
+   "REQ-SC-096",
+   "REQ-SC-097",
+   "REQ-SC-099"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați dacă transportul și predarea către operatori autorizați a deșeurilor din construcții (inclusiv materialele din desfaceri și pământul excedentar) sunt în sarcina executantului, distanța de transport avută în vedere și articolele din listele de cantități în care se cuprind.",
+  "impact_intern": {
+   "tehnic": "Evidență lunară și raportare ANPM.",
+   "cost": "Transport + taxe de depozitare.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-STD-01",
+  "cod_vechi": [
+   "CL-T01"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Probă de etanșeitate „24 de ore” pentru orice tronson sau branșament",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini"
+   ],
+   "semnal": "CS cere probă de etanșeitate 24 h fără referire la volumul tronsonului (regex: 'etan[șs]eitate.{0,40}24\\s*(h|ore)')",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini (probe)",
+   "Grafic de execuție"
+  ],
+  "normative_refs": [
+   "REQ-TG-088",
+   "REQ-TG-087",
+   "REQ-TG-086",
+   "REQ-TG-089"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) prevede o durată de 24 de ore pentru proba de etanșeitate a [tronsoanelor / branșamentelor]. NTPEE, art. 273 alin. (2) și Tabelul nr. 8^1, stabilește durata probei în funcție de volumul tronsonului. Vă rugăm să precizați dacă durata se stabilește conform NTPEE sau dacă se solicită expres 24 de ore pentru toate tronsoanele și, în al doilea caz, dacă această durată este avută în vedere în termenul de execuție de [N] zile.",
+  "impact_intern": {
+   "tehnic": "Mobilizare echipamente de înregistrare, durată.",
+   "cost": "Ore de echipă/utilaj suplimentare la branșamente.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-STD-02",
+  "cod_vechi": [
+   "CL-T02"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Material sau SDR incompatibil cu treapta de presiune (ex. PE 80 la presiune medie)",
+  "trigger": {
+   "unde_cauti": [
+    "planse",
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "presiunea de proiect > 4 bar și materialul indicat este PE 80, sau SDR nespecificat/diferit între documente",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Planșe",
+   "Liste de cantități",
+   "Memoriu tehnic (regim de presiune)"
+  ],
+  "normative_refs": [
+   "REQ-TG-055",
+   "REQ-TG-056",
+   "REQ-TG-053"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "În [planșa / lista de cantități poz. X] conducta este indicată din [PE 80, SDR …], iar regimul de presiune din memoriu este [… bar]. NTPEE, art. 20 alin. (2), admite PE 80 numai până la 4 bar. Vă rugăm să precizați materialul și SDR-ul care trebuie ofertate.",
+  "impact_intern": {
+   "tehnic": "Material neconform la recepție.",
+   "cost": "Diferență de preț PE 80/PE 100 și SDR.",
+   "risc_respingere": "Scăzut dacă se clarifică; ridicat pe execuție."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-STD-03",
+  "cod_vechi": [
+   "CL-T03"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Adâncime de pozare sub 0,9 m sau distanțe față de alte rețele sub minimele NTPEE / ANRE electric",
+  "trigger": {
+   "unde_cauti": [
+    "planse",
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "profilul longitudinal indică acoperire < 0,9 m (≠ capăt branșament) sau distanțe față de canalizare/apă/cabluri sub tabelul 1 NTPEE / anexa 4b Ord. 239/2019, fără soluție de protecție",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Profile longitudinale",
+   "Planșe de situație",
+   "Liste de cantități (tuburi de protecție)",
+   "Avize deținători rețele"
+  ],
+  "normative_refs": [
+   "REQ-TG-059",
+   "REQ-SC-114",
+   "REQ-SC-115",
+   "REQ-SC-119",
+   "REQ-SC-120"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "În [planșa X], conducta este pozată la [0,6 m] adâncime / la [0,4 m] de [rețeaua …]. NTPEE prevede adâncimea minimă de 0,9 m (art. 75), cu reducere numai prin soluția proiectantului și acordul operatorului, respectiv distanțele minime din Tabelul nr. 1 (art. 30). Vă rugăm să precizați soluția de protecție prevăzută, dacă există acordul operatorului de distribuție și dacă elementele de protecție sunt cuprinse în listele de cantități.",
+  "impact_intern": {
+   "tehnic": "Neconformitate la recepția OSD.",
+   "cost": "Tuburi de protecție, săpătură suplimentară.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Corectură runda 1: trimiterile la NTPEE art. 35 și 35^1 (evaluare de risc, răsuflători) nu au cerință verificată — scoase din întrebare."
+ },
+ {
+  "pattern_id": "PAT-STD-04",
+  "cod_vechi": [
+   "CL-T05",
+   "CL-T14"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Canalizare: metoda probei de etanșeitate, criteriul de acceptare și inspecția CCTV",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "CS cere probă cu aer sau fără criteriu, sau F3 nu are articol pentru CCTV/probe",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Liste de cantități"
+  ],
+  "normative_refs": [
+   "REQ-TG-160",
+   "REQ-TG-161",
+   "REQ-TG-162",
+   "REQ-TG-163",
+   "REQ-TG-165"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "NP 133-2022 vol. II, 3.6.1, prevede inspecția CCTV a tronsoanelor supuse probei și proba de etanșeitate cu apă. Caietul de sarcini ([cap. …]) prevede [proba cu aer / nu precizează criteriul]. Vă rugăm să precizați metoda de probă cerută, volumul admisibil de apă adăugată și articolele din listele de cantități în care se cuprind inspecția CCTV și probele.",
+  "impact_intern": {
+   "tehnic": "CCTV prin contractor specializat.",
+   "cost": "CCTV + apă + repetări.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Corectură runda 1: precedentul „2344/2025” atașat la CL-T14 privește subcontractarea și PANS, nu CCTV — eliminat. SR EN 1610 (REQ-TG-165) necesită standard licențiat."
+ },
+ {
+  "pattern_id": "PAT-STD-05",
+  "cod_vechi": [
+   "CL-T07"
+  ],
+  "tip_problema": "standard",
+  "titlu": "„Clasa de calitate II” a sudurilor fără nivel de acceptare și criterii CND",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini"
+   ],
+   "semnal": "CS/proiectul indică „clasa II” fără nivel de calitate și criterii de acceptare pentru examinarea radiografică/ultrasonică",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Memoriu tehnic"
+  ],
+  "normative_refs": [
+   "REQ-TG-067",
+   "REQ-TG-054",
+   "REQ-TG-103"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "NTPEE, art. 238 alin. (1)–(2), prevede clasa de calitate II pentru îmbinările sudate din oțel, cu indicarea clasei în proiect. Vă rugăm să precizați nivelul de calitate și criteriile de acceptare pentru examinarea nedistructivă care se vor aplica la recepție (standardul și ediția).",
+  "impact_intern": {
+   "tehnic": "Criteriu de acceptare = rata de respingere a sudurilor.",
+   "cost": "Refaceri.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "Edițiile SR EN ISO 5817:2023 / 17635:2025 din runda 1 nu au cerință verificată (standard licențiat; anexa 2 NTPEE e orientativă) — nu se citează în întrebare."
+ },
+ {
+  "pattern_id": "PAT-STD-06",
+  "cod_vechi": [
+   "CL-T08"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Proceduri de sudare (WPQR): nivel cerut și acceptarea celor existente aprobate ISCIR",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "fisa_de_date"
+   ],
+   "semnal": "CS cere WPQR „nivel 1/2” sau proceduri noi fără a spune dacă se acceptă WPQR-urile existente aprobate",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Fișa de date (dacă e cerință de calificare)"
+  ],
+  "normative_refs": [
+   "REQ-TG-065",
+   "REQ-TG-138",
+   "REQ-TG-124"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "NTPEE, art. 236 alin. (3), cere procedee de sudare certificate. Caietul de sarcini ([cap. …]) prevede „[citat]”. Vă rugăm să precizați dacă se acceptă procedurile de sudare existente, aprobate, care acoperă materialul [L245/L290] și domeniul de grosimi [x–y mm], sau dacă sunt necesare calificări noi.",
+  "impact_intern": {
+   "tehnic": "Calificare nouă = timp + încercări.",
+   "cost": "Cost calificare procedură.",
+   "risc_respingere": "Scăzut (mediu dacă e cerință de calificare)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "PT CR 7-2025 (REQ-TG-138) are încredere medie; nivelurile 1/2 din SR EN ISO 15614-1 necesită standard licențiat."
+ },
+ {
+  "pattern_id": "PAT-STD-07",
+  "cod_vechi": [
+   "CL-T09"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Clasa izolației de fabrică, sistemul de izolare a îmbinărilor și pregătirea suprafeței",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "CS folosește terminologie veche („izolație foarte întărită”, STAS) sau nu indică clasa izolației/ sistemul pentru îmbinări",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Liste de cantități",
+   "Specificația operatorului (dacă e invocată)"
+  ],
+  "normative_refs": [
+   "REQ-TG-081",
+   "REQ-TG-118",
+   "REQ-TG-054"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) descrie izolația conductei de oțel prin „[citat]”. NTPEE, art. 262, prevede izolarea la producător și, pe șantier, doar a îmbinărilor, reparațiilor și ieșirilor din sol. Vă rugăm să precizați clasa izolației de fabrică, sistemul și clasa de izolare a îmbinărilor (bandă / manșon termocontractabil) și gradul de pregătire a suprafeței cerut pe șantier.",
+  "impact_intern": {
+   "tehnic": "Manșoane vs bandă; sablare pe șantier.",
+   "cost": "Diferențe semnificative pe îmbinare.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "SR EN ISO 21809-1/-3 figurează „NECONFIRMAT” (ofertare_normative id 40); clasa B2/B3 apare doar în ST-TOLNP Distrigaz (REQ-TG-118, obligatorie doar dacă DA o invocă)."
+ },
+ {
+  "pattern_id": "PAT-STD-08",
+  "cod_vechi": [
+   "CL-A04",
+   "CL-A03"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Trimiteri la acte normative abrogate sau la ediții de standarde înlocuite",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "fisa_de_date",
+    "contract"
+   ],
+   "semnal": "DA citează Ordinul MDLPL 863/2008, NTPEE-2008 (Ord. ANRE 5/2009), I 6, articole din Legea 10/1995 sau Legea 50/1991 etc. | SAU: CS citează o ediție de standard înlocuită (ex. listă din runda 1: SR EN 1555, SR EN ISO 17635, SR EN 12954, SR EN 13067, SR EN ISO 15589-1)",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Fișa de date",
+   "Model de contract",
+   "Catalog ASRO (ediții în vigoare)"
+  ],
+  "normative_refs": [
+   "REQ-AD-126",
+   "REQ-TG-141",
+   "REQ-TG-140",
+   "REQ-AD-150",
+   "REQ-TG-054",
+   "REQ-TG-062"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Documentația ([document, pag. …]) face trimitere la [actul / standardul, ediția …], [abrogat / înlocuit de …]. Vă rugăm să precizați actul normativ în vigoare la care se raportează cerința respectivă (de exemplu, HG nr. 907/2016 în locul Ordinului MDLPL nr. 863/2008, respectiv Normele tehnice aprobate prin Ordinul ANRE nr. 89/2018 în locul NTPEE-2008) și dacă se acceptă produse și proceduri conforme cu ediția standardului în vigoare la data depunerii ofertei.",
+  "impact_intern": {
+   "tehnic": "Cerințe tehnice depășite (ex. I 6). Produse certificate pe ediția nouă.",
+   "cost": "Mic.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "temei de confirmat pentru Legea 10/1995 / Legea 50/1991 vs Legea 169/2026 (REQ-AD-150 și CATUC neverificate; numerotarea CATUC diferă între surse) și pentru I 6 (REQ-TG-140, surse secundare). Acestea nu se citează în întrebare. Contopit cu: Ediții de standarde depășite în caietul de sarcini. Edițiile din runda 1 trebuie reconfirmate în catalogul ASRO. Anexa 2 NTPEE e orientativă (REQ-TG-054): un standard listat acolo nu e obligatoriu prin lege — obligativitatea vine din DA."
+ },
+ {
+  "pattern_id": "PAT-STD-09",
+  "cod_vechi": [],
+  "tip_problema": "standard",
+  "titlu": "DA cere ISCIR (autorizare, verificare, RSVTI) pentru conducte de distribuție, branșamente sau SRM",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "fisa_de_date"
+   ],
+   "semnal": "CS/FD cer 'ISCIR' sau 'RSVTI' în legătură cu conducta de distribuție, racorduri/branșamente, IU sau SRM (nu cu utilaje: compresoare cu recipient, macarale)",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-TG-131",
+   "REQ-TG-092",
+   "REQ-TG-132",
+   "REQ-TG-133"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) solicită [autorizare / verificare ISCIR / RSVTI] pentru [conducta de distribuție / branșamente / SRM]. Legea nr. 64/2008, art. 1 alin. (2) și anexa 1 pct. 3, exceptează sistemele de distribuție a gazelor naturale de la regimul ISCIR. Vă rugăm să precizați echipamentele la care se referă cerința și documentele care trebuie prezentate.",
+  "impact_intern": {
+   "tehnic": "Utilajele (recipiente > 0,5 bar, macarale) rămân sub ISCIR.",
+   "cost": "Mic.",
+   "risc_respingere": "Scăzut; dacă e cerință de calificare în FD → review juridic."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Corectură runda 1: ISCIR exclus pe rețelele de distribuție (Legea 64/2008 anexa 1 pct. 3). Sudorii rămân autorizați ISCIR prin PT CR 9-2025 (vezi PAT-CAL-11)."
+ },
+ {
+  "pattern_id": "PAT-STD-10",
+  "cod_vechi": [],
+  "tip_problema": "standard",
+  "titlu": "Metrologie: aparatele de presiune/temperatură folosite la probe — verificare metrologică vs etalonare",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini"
+   ],
+   "semnal": "CS cere „buletin de verificare metrologică BRML” pentru manometre/înregistratoare de probă",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Cerințe OSD pentru probe"
+  ],
+  "normative_refs": [
+   "REQ-TG-173",
+   "REQ-TG-176",
+   "REQ-TG-168",
+   "REQ-TG-170",
+   "REQ-TG-179"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) solicită [buletin de verificare metrologică] pentru aparatele de măsură folosite la probe. Vă rugăm să confirmați dacă, pentru aparatele de presiune și temperatură cu înregistrare prevăzute de NTPEE la art. 274, se acceptă certificatul de etalonare emis de un laborator acreditat, cu termenul de valabilitate indicat.",
+  "impact_intern": {
+   "tehnic": "Manometrele de probă nu sunt în L.O.-2022 (doar L62-3, pneuri).",
+   "cost": "Etalonare vs verificare.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "Ordinul BRML 204/2024 (modifică L.O.-2022) necitit — REQ-TG-179; de reverificat înainte de folosire."
+ },
+ {
+  "pattern_id": "PAT-STD-11",
+  "cod_vechi": [
+   "CL-T11"
+  ],
+  "tip_problema": "standard",
+  "titlu": "Specificațiile tehnice ale operatorului de distribuție și documentele de inspecție pentru materiale (3.1 / 3.2)",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini"
+   ],
+   "semnal": "CS nu spune dacă materialele/echipamentele trebuie să respecte ST ale OSD (ex. ST 505, ST-TGPHD, ST-TOLNP) sau le invocă fără ediție | SAU: CS cere „certificat de calitate” fără tip sau cere 3.2 fără a spune cine numește inspectorul și cine plătește",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Aviz OSD",
+   "Specificația operatorului"
+  ],
+  "normative_refs": [
+   "REQ-TG-115",
+   "REQ-TG-116",
+   "REQ-TG-117",
+   "REQ-TG-118",
+   "REQ-TG-095",
+   "REQ-TG-057"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați dacă materialele și echipamentele trebuie să respecte specificațiile tehnice ale operatorului de distribuție [denumire] și, în caz afirmativ, specificațiile și edițiile aplicabile, precum și tipul documentului de inspecție solicitat pentru [țeavă oțel / țeavă PE / fitinguri / robinete / izolație]. Dacă se solicită certificat de tip 3.2, vă rugăm să precizați cine desemnează reprezentantul cumpărătorului și cine suportă costul inspecției.",
+  "impact_intern": {
+   "tehnic": "Aparate EF cu cod de bare/memorie, vârstă material la livrare. Termene de livrare mai mari la 3.2.",
+   "cost": "Furnizori agreați OSD. Inspecție terță.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "Specificațiile OSD sunt OBLIGATORIE_DOC_ACHIZITIE doar când DA le invocă; altfel bună practică. Contopit cu: Tipul documentului de inspecție pentru materiale (3.1 / 3.2). SR EN 10204 — clauze necitite (standard licențiat); certificatul 3.1 apare în specificațiile Distrigaz (REQ-TG-117/118)."
+ },
+ {
+  "pattern_id": "PAT-CAL-01",
+  "cod_vechi": [
+   "CL-A02",
+   "CL-B17"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Autorizare ANRE: Ordinul 132/2021 citat, tip neprecizat, cerință lipsă sau tip necorelat cu regimul de presiune",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini",
+    "planse"
+   ],
+   "semnal": "FD cere 'autorizație ANRE … conform Ordin 132/2021', nu indică tipul (EDSB/PDSB/…), sau obiectul include gaze și FD nu cere autorizare | SAU: FD cere EDSB/PDSB, dar documentația conține obiective > 6 bar (ET/PT) sau > 10 bar (NT transport); sau invers",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date — cerințe de calificare",
+   "DUAE",
+   "Caiet de sarcini (obiect)",
+   "Fișa de date",
+   "Memoriu tehnic (regim de presiune)",
+   "Planșe"
+  ],
+  "normative_refs": [
+   "REQ-TG-008",
+   "REQ-TG-020",
+   "REQ-TG-014",
+   "REQ-TG-052",
+   "REQ-AD-029",
+   "REQ-TG-001",
+   "REQ-TG-028",
+   "REQ-TG-041",
+   "REQ-TG-053",
+   "REQ-TG-009",
+   "REQ-TG-143"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2022_1615",
+   "SRC-CNSC-BO2022_2403",
+   "SRC-CNSC-BO2024_2636",
+   "SRC-CNSC-BO2023_416"
+  ],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită „[citat cerință ANRE]”. Având în vedere că Regulamentul aprobat prin Ordinul ANRE nr. 17/2026 a înlocuit Ordinul ANRE nr. 132/2021, iar autorizațiile emise anterior rămân valabile (art. 39), vă rugăm să precizați: (a) tipurile de autorizație ANRE solicitate pentru [proiectare / execuție], corelate cu regimul de presiune al obiectivelor din contract ([… bar]); (b) dacă se acceptă autorizațiile emise în baza oricăruia dintre cele două regulamente; (c) etapa în care se prezintă documentele.",
+  "impact_intern": {
+   "tehnic": "Tipul greșit = lucrări neautorizate. Obiective PI cer ET + sudori OL suplimentari.",
+   "cost": "Subcontractant ET.",
+   "risc_respingere": "Ridicat: cerință nepublicată nu poate fi opusă (BO2022_2403), dar cerința lipsă lasă concurenți neautorizați. Ridicat pentru ofertantul fără tipul corect."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "Corectură runda 1: CL-B17 trimitea la „Ordinul 132/2021 sau actul în vigoare” — actul în vigoare e Ord. ANRE 17/2026. Verificare internă: dovada la ANRE a personalului/dotării în 3 luni (REQ-TG-020). Contopit cu: Tipul autorizației ANRE nu corespunde regimului de presiune al obiectivului. Ord. 17/2026 nu are praguri de diametru — doar tip obiectiv + presiune (REQ-TG-009)."
+ },
+ {
+  "pattern_id": "PAT-CAL-02",
+  "cod_vechi": [
+   "CL-B05",
+   "CL-B07"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Autorizare ANRE îndeplinită prin asociat sau subcontractant",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "FD cere autorizația ANRE de la ofertant/lider fără a preciza dacă poate fi îndeplinită de asociatul/subcontractantul care execută partea de gaze",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "DUAE",
+   "Acord de asociere / subcontractare"
+  ],
+  "normative_refs": [
+   "REQ-TG-016",
+   "REQ-TG-017",
+   "REQ-TG-018",
+   "REQ-AD-028",
+   "REQ-AD-029",
+   "REQ-AD-030"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2024_3288",
+   "SRC-CNSC-BO2022_1615"
+  ],
+  "intrebare_propusa": "Vă rugăm să precizați dacă cerința privind autorizația ANRE de tip [EDSB] se consideră îndeplinită de [asociatul / subcontractantul] care execută efectiv lucrările de gaze, în condițiile art. 34 din Regulamentul aprobat prin Ordinul ANRE nr. 17/2026 (subcontractare către operatori autorizați și coordonare printr-un instalator autorizat angajat al antreprenorului general).",
+  "impact_intern": {
+   "tehnic": "Coordonare obligatorie prin instalator propriu; răspundere solidară.",
+   "cost": "—",
+   "risc_respingere": "Ridicat."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "Interpretări în tensiune: L98 art. 172 alin. (4) (fără cerințe de participare pentru subcontractanți, REQ-AD-028) vs BO2024_3288 (AC poate cere ANRE de la toți subcontractanții care execută gaze, REQ-AD-030). Necesită analiză juridică."
+ },
+ {
+  "pattern_id": "PAT-CAL-03",
+  "cod_vechi": [
+   "CL-B18"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Intervenții pe rețele de gaze în contracte de drumuri sau apă-canal",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "LC/CS conțin relocări/protejări de conducte de gaze, ridicări la cotă de răsuflători/cutii, branșamente — fără cerință ANRE în FD",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Liste de cantități",
+   "Caiet de sarcini",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-TG-002",
+   "REQ-TG-014",
+   "REQ-SC-110",
+   "REQ-SC-113"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_657",
+   "SRC-CNSC-BO2023_416"
+  ],
+  "intrebare_propusa": "Pentru categoriile de lucrări [nr./denumire din lista de cantități] care presupun intervenții asupra sistemului de distribuție a gazelor naturale, vă rugăm să precizați dacă executantul acestora trebuie să dețină autorizație ANRE [tipul …] și dacă acesta trebuie nominalizat ca subcontractant în ofertă.",
+  "impact_intern": {
+   "tehnic": "Lucrări pe gaze doar cu operator autorizat.",
+   "cost": "Subcontractant autorizat.",
+   "risc_respingere": "Mediu."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "BO2023_657 (orice intervenție fizică pe SD cere ANRE) vs BO2023_416 (critica pe ANRE necerută în DA are șanse mici) — interpretări de cântărit juridic."
+ },
+ {
+  "pattern_id": "PAT-CAL-04",
+  "cod_vechi": [
+   "CL-B06",
+   "CL-B14"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Personal cheie: legitimații ANRE cu terminologie veche și RTE „pentru gaze”",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "FD folosește 'gradul I/II', 'IGIB', 'instalator autorizat ANRE' fără tipurile EGD/EGIU/EGT/PGD | SAU: FD cere 'RTE pentru gaze' / 'RTE autorizat ANRE'",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date — personal cheie",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-TG-048",
+   "REQ-TG-049",
+   "REQ-TG-003",
+   "REQ-TG-100",
+   "REQ-TG-015"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită „[text din fișa de date]”. Vă rugăm să precizați tipul de legitimație de instalator autorizat corespunzător, din cele prevăzute de Regulamentul aprobat prin Ordinul ANRE nr. 65/2023, modificat prin Ordinul ANRE nr. 85/2024 (de exemplu EGD / EGIU / EGT), precum și, pentru responsabilul tehnic cu execuția, domeniul de atestare solicitat.",
+  "impact_intern": {
+   "tehnic": "RTE nu semnează lucrările unde a fost instalator/sudor (Ord. 17/2026 art. 31 alin. (4)).",
+   "cost": "—",
+   "risc_respingere": "Ridicat la nominalizarea expertului. Ridicat."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "Vizarea legitimațiilor (REQ-TG-050) neverificată — verificare internă separată. Contopit cu: RTE „pentru lucrări de gaze”. REQ-TG-100 are încredere medie. Citarea „art. 121 din Legea 123/2012” din runda 1 nu a fost păstrată în întrebare."
+ },
+ {
+  "pattern_id": "PAT-CAL-05",
+  "cod_vechi": [
+   "CL-B01",
+   "CL-B15",
+   "CL-B20"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Experiență similară formulată ca „identică” sau limitată strict la tipul de rețea din obiect",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "ES cere strict 'rețea de distribuție gaze PE' / 'identic' / apă + canal + stație în același contract",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date — capacitate tehnică",
+   "Strategia de contractare (dacă e publicată)"
+  ],
+  "normative_refs": [
+   "REQ-AD-037",
+   "REQ-AD-042",
+   "REQ-AD-043",
+   "REQ-AD-044",
+   "REQ-AD-090",
+   "REQ-AD-027"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_1378",
+   "SRC-CNSC-Decizie_3952",
+   "SRC-CNSC-BO2023_2717",
+   "SRC-CNSC-BO2023_1489",
+   "SRC-CNSC-BO2024_2669"
+  ],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită experiență similară în „[citat]”. Vă rugăm să precizați dacă sunt acceptate și lucrări similare sau superioare din punctul de vedere al complexității (de exemplu [conducte de transport / branșamente și extinderi de rețea / rețele de fluide sub presiune]), avându-se în vedere art. 5 din Instrucțiunea ANAP nr. 2/2017, precum și dacă valoarea minimă poate fi atinsă prin mai multe contracte.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "—",
+   "risc_respingere": "Ridicat: excludere la calificare."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "Duplicat contopit (3 surse runda 1). Decizie_3952 — nuanță: transportul a fost acceptat pentru că cerința admitea lucrări „de aceeași natură și complexitate sau superioare”; nu e regulă generală. Cumulul prin mai multe contracte (Instr. 2/2017 art. 4) nu are cerință verificată — nu se citează."
+ },
+ {
+  "pattern_id": "PAT-CAL-06",
+  "cod_vechi": [
+   "CL-B01"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Experiență similară: contract „finalizat/semnat în ultimii 5 ani” sau plafon peste valoarea estimată",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "ES cere contract 'finalizat'/'semnat'/'început' în ultimii 5 ani sau plafon valoric > VE",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Valoarea estimată"
+  ],
+  "normative_refs": [
+   "REQ-AD-035",
+   "REQ-AD-036",
+   "REQ-AD-038",
+   "REQ-AD-039",
+   "REQ-AD-040"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită „[citat]”. Vă rugăm să confirmați că se acceptă partea de lucrări executată și recepționată în ultimii 5 ani dintr-un contract început anterior sau aflat în derulare, dovedită prin procese-verbale de recepție la terminarea lucrărilor pe obiecte (art. 11 din Instrucțiunea ANAP nr. 2/2017). Vă rugăm să precizați și dacă plafonul de [X] lei, raportat la valoarea estimată de [Y] lei, se menține (art. 3 alin. (3) lit. a) din aceeași instrucțiune).",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "—",
+   "risc_respingere": "Ridicat: excludere la calificare."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-CAL-07",
+  "cod_vechi": [
+   "CL-B16",
+   "CL-B02"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Documentele de dovedire a experienței similare",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "FD cere 'lucrări duse la bun sfârșit' fără listă de documente sau cu listă închisă (doar PV recepție finală) | SAU: FD nu spune cum se valorifică ES din contracte în care ofertantul a fost subcontractant/asociat",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Dosarul de referințe al ofertantului",
+   "Contracte de referință ale ofertantului"
+  ],
+  "normative_refs": [
+   "REQ-AD-039",
+   "REQ-AD-045",
+   "REQ-AD-046",
+   "REQ-AD-041"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2026_182",
+   "SRC-CNSC-Decizie_3952",
+   "SRC-CNSC-BO2023_140"
+  ],
+  "intrebare_propusa": "Vă rugăm să precizați dacă lista documentelor justificative pentru experiența similară este exemplificativă și dacă se acceptă [PV de recepție la terminarea lucrărilor pe obiect / PV de recepție parțială / recomandări ale beneficiarului / documente constatatoare]. Pentru lucrările executate ca subcontractant, vă rugăm să confirmați că se ia în considerare valoarea lucrărilor executate efectiv, confirmată de antreprenorul general și de beneficiarul final (art. 14 alin. (3) din Instrucțiunea ANAP nr. 2/2017), și documentele acceptate în acest scop.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "—",
+   "risc_respingere": "Ridicat: documentele emise după termenul de depunere nu dovedesc ES (BO2026_182). Ridicat."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "BO2026_182 — nuanță: CNSC nu a exclus automat experiența expertului anterioară autorizării ANRE; recomandările semnate de diriginte trebuie confirmate de beneficiar. Contopit cu: Experiență similară dobândită ca subcontractant sau în asociere."
+ },
+ {
+  "pattern_id": "PAT-CAL-08",
+  "cod_vechi": [
+   "CL-B03"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Cifra de afaceri minimă disproporționată sau pe mai mult de 3 ani",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "cifra de afaceri minimă > 2 × VE sau perioada de referință > ultimele 3 exerciții",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Valoarea estimată"
+  ],
+  "normative_refs": [
+   "REQ-AD-033",
+   "REQ-AD-034"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită o cifră de afaceri minimă anuală de [X] lei, respectiv de [N] ori valoarea estimată, pentru perioada [ani]. Vă rugăm să precizați motivele care justifică acest nivel, în sensul art. 175 alin. (3)–(4) din Legea nr. 98/2016, și perioada de referință avută în vedere (art. 177 alin. (1) lit. c)).",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "—",
+   "risc_respingere": "Ridicat."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "Corectură runda 1: plafonul de 2 × VE rezultă din L98 art. 175 alin. (2) lit. a), nu doar din avizele ANAP."
+ },
+ {
+  "pattern_id": "PAT-CAL-09",
+  "cod_vechi": [
+   "CL-B19",
+   "CL-B08"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Cerințe de nișă fără legătură aparentă cu lucrările (atestate de alt tip, licență ANRSC, experiență „exclusiv în gaze”, utilaje specifice)",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "cerință de calificare fără corespondent în lucrările din LC (ex. atestat ANIF, utilaj specific, experiență exclusivă) | SAU: FD cere 'licență ANRSC' pentru un contract de execuție lucrări",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Liste de cantități",
+   "Strategia de contractare"
+  ],
+  "normative_refs": [
+   "REQ-AD-027",
+   "REQ-TG-166"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2026_1237",
+   "SRC-CNSC-BO2022_2083",
+   "SRC-CNSC-BO2024_1016"
+  ],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită [cerința X, de exemplu licența ANRSC / atestatul …]. Vă rugăm să precizați activitatea sau categoria de lucrări din proiect pentru care este necesară această cerință și dacă aceasta constituie cerință de calificare pentru ofertantul care execută lucrările.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "—",
+   "risc_respingere": "Ridicat dacă nu o îndeplinim. Ridicat dacă nu o deținem."
+  },
+  "confidence": "scazuta",
+  "requires_human_legal_review": true,
+  "note": "Corectură runda 1: cererea „vă solicităm eliminarea” a fost scoasă din textul extern; eliminarea se urmărește, dacă e cazul, prin contestație (BO2022_2083: sarcina probei tehnice e a contestatorului). Contopit cu: Licență ANRSC cerută pentru un contract de execuție. temei de confirmat: Legea 241/2006 / 51/2006 nerecitite (REQ-TG-166 neverificat)."
+ },
+ {
+  "pattern_id": "PAT-CAL-10",
+  "cod_vechi": [
+   "CL-B23"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Personal cheie: același expert pe mai multe loturi și documentele de experiență",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "procedură pe loturi cu experți-cheie; FD nu spune dacă același expert poate fi propus pe mai multe loturi sau ce documente dovedesc experiența",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Formulare CV"
+  ],
+  "normative_refs": [
+   "REQ-AD-120"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_2119",
+   "SRC-CNSC-BO2024_1699"
+  ],
+  "intrebare_propusa": "Vă rugăm să precizați dacă același expert poate fi propus pentru loturile [1] și [2] și ce documente justificative ale experienței specifice se solicită la depunere.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "—",
+   "risc_respingere": "Ridicat: cerințele formale clare nu se mai pot contesta după depunere (BO2024_1699)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "REQ-AD-120 (Instr. ANAP 1/2017) neverificat — nu se citează."
+ },
+ {
+  "pattern_id": "PAT-CAL-11",
+  "cod_vechi": [
+   "CL-B10"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Calificarea sudorilor: autorizație ISCIR vs certificate EN ISO 9606-1 / EN 13067",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "fisa_de_date"
+   ],
+   "semnal": "CS/FD cer 'sudori certificați EN ISO 9606-1 / EN 13067' sau 'autorizați ISCIR' sau ambele | SAU: FD/CS cer sudori fără a spune dacă trebuie să fie salariați ai ofertantului sau ai membrului/subcontractantului care execută",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-TG-063",
+   "REQ-TG-074",
+   "REQ-TG-106",
+   "REQ-TG-120",
+   "REQ-TG-122",
+   "REQ-TG-135",
+   "REQ-TG-054",
+   "REQ-TG-025",
+   "REQ-TG-032",
+   "REQ-TG-033",
+   "REQ-TG-121"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini / fișa de date ([…]) solicită pentru sudori „[citat]”. Vă rugăm să precizați dacă autorizațiile emise de ISCIR conform PT CR 9-2025 (inclusiv cele emise anterior, valabile până la expirare potrivit art. 63) sunt acceptate ca dovadă a calificării, fără certificate suplimentare emise de un organism terț, și dacă sudorii trebuie să fie salariați ai ofertantului (sau ai membrului asocierii / subcontractantului care execută lucrările respective) ori se acceptă și sudori puși la dispoziție prin contract de prestări servicii.",
+  "impact_intern": {
+   "tehnic": "Dublă certificare = cost și timp. Autorizația ISCIR a sudorului e valabilă numai la angajator (PT CR 9-2025 art. 67).",
+   "cost": "Certificare terță per sudor.",
+   "risc_respingere": "Ridicat dacă e cerință de calificare. Mediu."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "Corectură runda 1: SR EN 13067 e doar recomandat în anexa 2 NTPEE (REQ-TG-106, REQ-TG-054) — obligatoriu numai dacă DA îl cere expres. Citarea „L98 art. 155” din runda 1 nu are cerință verificată — scoasă. Contopit cu: Sudori salariați vs sudori puși la dispoziție de terți. Neconcordanță internă Ord. ANRE 17/2026: anexa 3 pct. 2 (terț permis) vs art. 14 lit. d)–e) (salariați) — REQ-TG-025."
+ },
+ {
+  "pattern_id": "PAT-CAL-12",
+  "cod_vechi": [
+   "CL-B09"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "VERIFICARE INTERNĂ: autorizațiile sudorilor nominalizați (expirate sau la alt angajator)",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "pentru fiecare sudor nominalizat: data expirării autorizației < data-limită de depunere + durata execuției, sau angajatorul de pe autorizație ≠ Gazpet",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Registrul intern de autorizări sudori",
+   "REGES",
+   "Lista personalului nominalizat"
+  ],
+  "normative_refs": [
+   "REQ-TG-120",
+   "REQ-TG-121",
+   "REQ-TG-122",
+   "REQ-TG-127"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": null,
+  "impact_intern": {
+   "tehnic": "Sudor neautorizat nu poate lucra (PT CR 9-2025 art. 71).",
+   "cost": "Reautorizare.",
+   "risc_respingere": "Ridicat dacă sudorul e nominalizat în ofertă."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "Nu se trimite la AC (intrebare_propusa = null). Valabilitate 2 ani, numai la angajator; autorizațiile vechi valabile până la expirare."
+ },
+ {
+  "pattern_id": "PAT-CAL-13",
+  "cod_vechi": [
+   "CL-B11",
+   "CL-B13"
+  ],
+  "tip_problema": "calificare",
+  "titlu": "Certificări cerute la calificare (SR EN ISO 3834-2 / IWE, ISO 9001 / 14001 / 45001) — echivalențe",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "FD cere 'ISO 3834-2' sau 'IWE' ca cerință de calificare | SAU: FD cere certificat ISO 45001 (sau 9001/14001) fără clauză de echivalență",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-TG-030",
+   "REQ-AD-027"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) solicită [certificarea …]. Vă rugăm să precizați dacă se acceptă și certificate echivalente emise de organisme acreditate din alte state membre ori alte dovezi privind măsuri echivalente (de exemplu, pentru sudare, [responsabil cu tehnologia sudării atestat și proceduri de sudare aprobate]).",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Certificare 3834-2 costisitoare.",
+   "risc_respingere": "Ridicat. Mediu."
+  },
+  "confidence": "scazuta",
+  "requires_human_legal_review": true,
+  "note": "Afirmația din runda 1 „NTPEE nu impune ISO 3834” nu are cerință verificată explicită; Ord. ANRE 17/2026 cere doar declarație privind RTS atestat (REQ-TG-030). Contopit cu: Certificări ISO 9001 / 14001 / 45001 cerute — echivalențe. temei de confirmat: runda 1 invoca L98 art. 200–201; nicio cerință verificată în runda 2 — citarea scoasă."
+ },
+ {
+  "pattern_id": "PAT-GAR-01",
+  "cod_vechi": [
+   "CL-B04",
+   "CL-B21"
+  ],
+  "tip_problema": "garantie",
+  "titlu": "Garanția de participare: cuantum, valabilitate, forma instrumentului și condiții impuse emitentului",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "FD limitează instrumentul (doar bancă, rating minim, emitent nominalizat) sau cere original pe hârtie | SAU: GP exprimată doar procentual, > 1 % din VE, sau cu valabilitate diferită de valabilitatea ofertei",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Model de instrument de garantare",
+   "Anunț"
+  ],
+  "normative_refs": [
+   "REQ-AD-012",
+   "REQ-AD-013",
+   "REQ-AD-014",
+   "REQ-AD-020",
+   "REQ-AD-011",
+   "REQ-AD-064"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2021_1317",
+   "SRC-CNSC-BO2022_1952",
+   "SRC-CNSC-BO2021_2420",
+   "SRC-CNSC-BO2021_99"
+  ],
+  "intrebare_propusa": "Fișa de date ([secțiunea …]) prevede garanția de participare [ca procent / în valoare de …], cu valabilitate de [N] zile, constituită [numai prin … / de un emitent cu …]. Vă rugăm să precizați cuantumul în lei și perioada minimă de valabilitate a garanției și să confirmați că se acceptă oricare dintre formele prevăzute la art. 154 alin. (4) din Legea nr. 98/2016, inclusiv instrumentul emis de o societate de asigurări, transmis în SEAP odată cu oferta (art. 36 alin. (4)–(5) din HG nr. 395/2016).",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Cost instrument. Comision instrument.",
+   "risc_respingere": "Ridicat. Ridicat: GP lipsă/insuficientă nu se remediază (BO2021_2420)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": true,
+  "note": "Contopire CL-B04 (partea de formă) + CL-B21. Scrisoarea IFN e admisă doar la lucrări cu VE ≤ 40.000.000 lei (REQ-AD-012). Contopit cu: Garanția de participare: cuantum și valabilitate."
+ },
+ {
+  "pattern_id": "PAT-GAR-02",
+  "cod_vechi": [
+   "CL-D03"
+  ],
+  "tip_problema": "garantie",
+  "titlu": "Garanția de bună execuție cumulată cu Sumele Reținute; rețineri succesive; restituire",
+  "trigger": {
+   "unde_cauti": [
+    "contract",
+    "fisa_de_date"
+   ],
+   "semnal": "acordul contractual nu fixează GBE sau nu exclude Sumele Reținute (cl. 47.2), ori nu precizează constituirea prin rețineri succesive",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Acord contractual",
+   "Condiții generale/specifice HG 1/2018",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-AD-021",
+   "REQ-AD-023",
+   "REQ-AD-025",
+   "REQ-AD-094",
+   "REQ-AD-095",
+   "REQ-AD-100",
+   "REQ-AD-101"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați cuantumul garanției de bună execuție, dacă aceasta se poate constitui prin rețineri succesive (subclauza 15.1), dacă se aplică și Sumele Reținute prevăzute la subclauza 47.2 și modul de corelare cu subclauza 47.4, precum și procentul restituit la Recepția la Terminare (subclauza 15.6).",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Imobilizare de până la 10 % + 5 % din preț.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-GAR-03",
+  "cod_vechi": [
+   "CL-D05",
+   "CL-D06"
+  ],
+  "tip_problema": "garantie",
+  "titlu": "Perioada de garanție a lucrărilor: categoria de importanță / clasa de consecințe / garanția ANRE de 2 ani",
+  "trigger": {
+   "unde_cauti": [
+    "contract",
+    "fisa_de_date"
+   ],
+   "semnal": "acordul contractual nu indică perioada de garanție sau categoria de importanță; perioada de garanție e factor de evaluare fără minim legal precizat",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Acord contractual",
+   "Fișa de date (factori de evaluare)",
+   "Memoriu (categoria de importanță)"
+  ],
+  "normative_refs": [
+   "REQ-AD-110",
+   "REQ-TG-023",
+   "REQ-AD-142",
+   "REQ-AD-144"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați perioada de garanție a lucrărilor solicitată și categoria de importanță [sau clasa de consecințe] a lucrării, în raport cu subclauza 61.6 din condițiile contractuale, precum și dacă perioada de garanție constituie factor de evaluare și, în acest caz, valoarea minimă acceptată.",
+  "impact_intern": {
+   "tehnic": "Ord. ANRE 17/2026: garanție ≥ 2 ani de la PIF, menționată distinct în contract (REQ-TG-023).",
+   "cost": "Provizioane pentru remedieri.",
+   "risc_respingere": "Mediu dacă e factor de evaluare."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "Contopire CL-D05 + CL-D06. temei de confirmat: clasele de consecințe și minimele CC1–CC4 din Legea 169/2026 (REQ-AD-142/144) sunt neverificate pe sursă — nu se citează."
+ },
+ {
+  "pattern_id": "PAT-GAR-04",
+  "cod_vechi": [],
+  "tip_problema": "garantie",
+  "titlu": "Garanția pentru refacerea structurii rutiere (5 ani) și cine o asigură",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "contract"
+   ],
+   "semnal": "lucrări în ampriza unui DN/drum, cu refacere de structură rutieră; DA nu spune garanția aplicabilă refacerii sau cine e beneficiarul autorizației de amplasare",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Acord contractual",
+   "Aviz/autorizație administrator drum"
+  ],
+  "normative_refs": [
+   "REQ-SC-061",
+   "REQ-SC-062",
+   "REQ-SC-063",
+   "REQ-SC-075"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2025_2344"
+  ],
+  "intrebare_propusa": "Pentru refacerea structurii rutiere afectate pe [drumul …], vă rugăm să precizați perioada de garanție aplicabilă, dacă aceasta diferă de perioada de garanție a lucrărilor din contract și cine asigură garanția față de administratorul drumului.",
+  "impact_intern": {
+   "tehnic": "Refacerea se face de o societate specializată în drumuri.",
+   "cost": "Garanție ≥ 5 ani pe refacere.",
+   "risc_respingere": "Mediu: executantul efectiv al refacerii trebuie declarat subcontractant (BO2025_2344)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-TRM-01",
+  "cod_vechi": [
+   "CL-A09"
+  ],
+  "tip_problema": "termen",
+  "titlu": "Termenul de execuție și graficul Gantt — ce include și ce nivel de detaliu",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini",
+    "contract"
+   ],
+   "semnal": "termenul de execuție nu spune dacă include proiectarea, obținerea avizelor (ex. restricții circulație ≥ 30 zile, declarație ITM ≥ 30 zile) sau sezonul rece; FD cere Gantt fără nivel de detaliu",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Fișa de date",
+   "Acord contractual",
+   "Caiet de sarcini"
+  ],
+  "normative_refs": [
+   "REQ-AD-032",
+   "REQ-SC-070",
+   "REQ-SC-011"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2022_1964",
+   "SRC-CNSC-BO2024_1706"
+  ],
+  "intrebare_propusa": "Vă rugăm să precizați dacă termenul de execuție de [N] luni include perioada de [proiectare / obținere a avizelor și autorizațiilor / sezon rece] și ce nivel de detaliere se solicită pentru graficul de execuție (activități, resurse umane și utilaje).",
+  "impact_intern": {
+   "tehnic": "Programare realistă.",
+   "cost": "Penalități de întârziere.",
+   "risc_respingere": "Mediu: Gantt incomplet/incoerent = neconformitate (BO2022_1964)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-TRM-02",
+  "cod_vechi": [
+   "CL-P01"
+  ],
+  "tip_problema": "termen",
+  "titlu": "Răspunsurile la clarificări publicate cu mai puțin de 10 (6) zile înainte de termenul de depunere",
+  "trigger": {
+   "unde_cauti": [
+    "raspunsuri_clarificari"
+   ],
+   "semnal": "data publicării răspunsului > termen depunere − 10 zile (− 6 zile la procedura simplificată pentru lucrări), pentru întrebări transmise în termen",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Răspunsuri la clarificări (data publicării)",
+   "Anunț (termene)"
+  ],
+  "normative_refs": [
+   "REQ-AD-003",
+   "REQ-AD-004",
+   "REQ-AD-005",
+   "REQ-AD-001"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Răspunsurile la solicitările de clarificare transmise în termen au fost publicate la [data], cu [N] zile înainte de termenul de depunere a ofertelor ([data]). Având în vedere art. 161 din Legea nr. 98/2016, vă rugăm să analizați prelungirea termenului de depunere a ofertelor.",
+  "impact_intern": {
+   "tehnic": "Timp insuficient de integrare a răspunsurilor.",
+   "cost": "—",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Excepție: 5 zile la urgență demonstrată (REQ-AD-003)."
+ },
+ {
+  "pattern_id": "PAT-TRM-03",
+  "cod_vechi": [],
+  "tip_problema": "termen",
+  "titlu": "VERIFICARE INTERNĂ: termenul de contestare a documentației / a răspunsului la clarificări",
+  "trigger": {
+   "unde_cauti": [
+    "raspunsuri_clarificari",
+    "fisa_de_date"
+   ],
+   "semnal": "la publicarea DA sau a unui răspuns la clarificări care menține o cerință considerată restrictivă: termen = 10 zile (VE ≥ prag UE lucrări 26.960.556 lei) sau 7 zile (VE < prag), din ziua următoare luării la cunoștință",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Anunț (VE)",
+   "Data publicării DA / răspunsului"
+  ],
+  "normative_refs": [
+   "REQ-AD-083",
+   "REQ-AD-084",
+   "REQ-AD-088",
+   "REQ-AD-085",
+   "REQ-AD-086"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2026_182",
+   "SRC-CNSC-BO2023_2119",
+   "SRC-CNSC-BO2025_878",
+   "SRC-CNSC-BO2025_2863"
+  ],
+  "intrebare_propusa": null,
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Cauțiune 2 % din VE (plafoane sub prag 35.000 / 88.000 lei — neconfirmate în forma curentă).",
+   "risc_respingere": "Pierderea dreptului de a contesta cerința."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "Corectură runda 1: sub prag termenul este de 7 zile, nu 5 (BO2026_182, BO2023_2119). Textul curent L101 art. 8 nu a fost recitit (REQ-AD-083 neverificat) — de confirmat juridic. Cauțiunea are termen de decădere (BO2025_2863). Contestarea DA rămâne admisibilă și dacă depunem ofertă (BO2025_878). Nu se trimite la AC."
+ },
+ {
+  "pattern_id": "PAT-CTC-01",
+  "cod_vechi": [
+   "CL-D01"
+  ],
+  "tip_problema": "contract",
+  "titlu": "Ajustarea prețului lipsește la durate de peste 6 luni / contradicție cu prețul ferm (cl. 48.2)",
+  "trigger": {
+   "unde_cauti": [
+    "contract",
+    "fisa_de_date"
+   ],
+   "semnal": "durata de execuție > 6 luni și acordul contractual nu are clauză de ajustare sau rămâne pe regula implicită cl. 48.2 (preț ferm ≤ 365 de zile) | SAU: acordul contractual nu fixează data de referință sau exclude cl. 48.8",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Acord contractual",
+   "Condiții specifice",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-AD-078",
+   "REQ-AD-079",
+   "REQ-AD-102",
+   "REQ-AD-103",
+   "REQ-AD-104",
+   "REQ-AD-106",
+   "REQ-AD-105"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Durata de execuție este de [N] luni. Subclauza 48.2 din condițiile generale prevede prețuri ferme pentru durate de cel mult 365 de zile, iar art. 222^2 alin. (9) din Legea nr. 98/2016 prevede clauze de ajustare pentru contractele de lucrări cu durată mai mare de 6 luni. Vă rugăm să precizați clauza de ajustare aplicabilă: formula, indicii și sursa lor, ponderile, termenul fix și data de referință, precum și dacă se aplică subclauza 48.8 privind modificările legislative publicate după data de referință.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Risc de inflație pe materiale/manoperă. Creșteri legislative de cost neacoperite.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Contradicție internă identificată în runda 2 (HG 1/2018 cl. 48.2 vs L98 art. 222^2 alin. (9)). Contopit cu: Data de referință și ajustarea pentru modificări legislative (ex. salariul minim)."
+ },
+ {
+  "pattern_id": "PAT-CTC-02",
+  "cod_vechi": [
+   "CL-D07"
+  ],
+  "tip_problema": "contract",
+  "titlu": "Formula de ajustare folosește indici nepublicați (ex. ICCplr) sau preluați din OUG 64/2022",
+  "trigger": {
+   "unde_cauti": [
+    "contract"
+   ],
+   "semnal": "formula conține 'ICCplr', 'ICCmlr' sau trimite la art. 17 OUG 64/2022 pentru un contract nou",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Acord contractual",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-AD-081",
+   "REQ-AD-078",
+   "REQ-AD-116",
+   "REQ-AD-117",
+   "REQ-AD-119"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_406"
+  ],
+  "intrebare_propusa": "Formula de ajustare din [contract, art. / subclauza …] utilizează indicele [denumire]. Vă rugăm să precizați sursa oficială și tabelul în care este publicat lunar acest indice și, dacă acesta nu este publicat, indicele care îl înlocuiește.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Ajustare imposibil de calculat.",
+   "risc_respingere": "Procedura poate fi anulată (BO2023_406)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "Corectură runda 1: CL-D07 trimitea la „art. 164 HG 395/2016” — abrogat în 2023; temeiul curent e L98 art. 222^2. ICCplr nepublicat de INS din 03.2022; BO2023_406 — nuanță: formula OUG 64 art. 17 alin. (8) lit. a1) privește contractele în derulare, nu contractele noi."
+ },
+ {
+  "pattern_id": "PAT-CTC-03",
+  "cod_vechi": [
+   "CL-D02"
+  ],
+  "tip_problema": "contract",
+  "titlu": "Penalitățile de întârziere nu sunt stabilite (se aplică valoarea implicită din cl. 36.4)",
+  "trigger": {
+   "unde_cauti": [
+    "contract"
+   ],
+   "semnal": "acordul contractual nu precizează cuantumul penalităților de întârziere",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Acord contractual"
+  ],
+  "normative_refs": [
+   "REQ-AD-096",
+   "REQ-AD-097",
+   "REQ-AD-114"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați în Acordul Contractual cuantumul penalităților de întârziere pe zi (ca procent din prețul contractului sau din valoarea lucrărilor rămase de executat), întrucât, în lipsa acestei mențiuni, subclauza 36.4 conduce la o valoare zilnică egală cu Prețul Contractului împărțit la Durata de Execuție, plafonată la 15 %.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Expunere zilnică foarte mare.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-CTC-04",
+  "cod_vechi": [
+   "CL-D04"
+  ],
+  "tip_problema": "contract",
+  "titlu": "Avansul — acordare, cuantum și modul de recuperare",
+  "trigger": {
+   "unde_cauti": [
+    "contract",
+    "fisa_de_date"
+   ],
+   "semnal": "acordul contractual nu precizează avansul sau varianta de justificare (cl. 46.6 / 46.7)",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Acord contractual"
+  ],
+  "normative_refs": [
+   "REQ-AD-098",
+   "REQ-AD-099"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați dacă se acordă avans, cuantumul și numărul tranșelor, precum și varianta de justificare aplicabilă (subclauza 46.6 sau subclauza 46.7 din condițiile generale).",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "Flux de numerar.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ },
+ {
+  "pattern_id": "PAT-CTC-05",
+  "cod_vechi": [],
+  "tip_problema": "contract",
+  "titlu": "Contract cu prețuri unitare sau cu preț global — modul de plată a cantităților",
+  "trigger": {
+   "unde_cauti": [
+    "contract",
+    "fisa_de_date"
+   ],
+   "semnal": "DA nu precizează dacă se plătesc cantitățile măsurate (cl. 49.1) sau un preț forfetar",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Acord contractual",
+   "Fișa de date"
+  ],
+  "normative_refs": [
+   "REQ-AD-107"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Vă rugăm să precizați dacă contractul este cu prețuri unitare, cu plata cantităților efectiv executate și măsurate (subclauza 49.1 din condițiile generale), sau cu preț global.",
+  "impact_intern": {
+   "tehnic": "—",
+   "cost": "La preț global, diferențele de cantitate rămân la executant.",
+   "risc_respingere": "Scăzut."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": ""
+ }
+]

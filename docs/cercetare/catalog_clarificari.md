@@ -1,4 +1,6 @@
-# Catalog de clarificări — șabloane cu temei normativ și practică CNSC
+# Catalog de clarificări — șabloane cu temei normativ și practică CNSC (runda 1 — ISTORIC)
+
+> ⚠️ **Înlocuit de `clarificari_tipare.md` / `clarificari_tipare.json` (runda 2)**: tipare structurate, întrebări neutre, legate de cerințe verificate, cu review juridic marcat. Acest fișier rămâne doar ca istoric — unele formulări de aici sunt argumentative sau au temei neverificat; nu se trimit ca atare.
 
 > Livrabil C · 01.10.2026 · șabloane gata de adaptat pentru întrebările Gazpet către autoritățile contractante (AC).
 > Fiecare intrare: **situația** din documentație → **șablon** de întrebare (câmpurile `[ ]` se completează) → **temei** → **practică CNSC** (detalii în `cnsc_practica.md`, acte în `baza_normativa.md`).
@@ -637,7 +639,7 @@ Pentru alte decizii pe aceste teme, vezi lucrarea de decizii CNSC a celorlalți 
 
 - Răspundem la fiecare articol cerut (3130/2024, 1923/2022).
 - Ancorăm răspunsul în pagina din oferta inițială (2774/2022).
-- Nu schimbăm prețuri unitare și nu trimitem formulare financiare noi (159/2024, 187/2025).
+- Nu schimbăm prețuri unitare peste pragul de 1% (159/2024). Nuanță BO2025_187: retransmiterea întregii propuneri financiare nu face singură oferta inacceptabilă dacă AC analizează doar elementele cerute — inacceptabilă e introducerea de modificări necerute.
 - Pentru PNS: tarif orar explicit peste minim, oferte de la furnizori, utilaje proprii, transport inclus (104/2025, 448/2021).
 
 **Completări din practica CNSC (sinteză orchestrator):**

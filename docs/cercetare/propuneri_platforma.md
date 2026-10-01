@@ -61,6 +61,18 @@
 
 Recomandarea mea: **B**, în ordinea P0.1 → P1.1 → P0.3. Schema și aplicarea o decizi tu.
 
+## Actualizare runda 2 — schema propusă pentru varianta B (doar propunere)
+
+Registrele din runda 2 sunt gândite să fie importate 1:1, ca tabele separate de `ofertare_normative` (care rămâne lista de lucru din UI):
+- `norme_surse` ← `registru_surse.json` (cheie `source_id`; legătură opțională la `ofertare_normative.id`)
+- `norme_cerinte` ← `registru_cerinte.json` (cheie `requirement_id`, FK `source_id`)
+- `norme_graf` ← `graf_aplicabilitate.json`
+- `cnsc_decizii` ← `cnsc_practica.json`
+- `clarificari_tipare` ← `clarificari_tipare.json` (FK-uri logice spre `norme_cerinte`)
+- `ofertare_matrice_cerinte` (per licitație): document, pagină, citat, `requirement_id`, status, `pattern_id`, draft, review (cine/când), hash snapshot — vezi `clarificari_matrice_model.md`.
+
+Generatorul `ofertare-clarificari-propune` ar primi DOAR tiparele declanșate + cerințele lor cu `verificat_pe_sursa=true` → întrebare neutră + impact intern separat; tiparele ⚖️ cer review juridic uman înainte de export. RLS read-only pentru utilizatori, scriere doar owner.
+
 ## Anexă — propunerile brute ale fiecărei teme de cercetare
 
 
