@@ -71,3 +71,24 @@ Precondiții și harness. Patch-ul, starea țintă și postcondiția au rămas a
 
 ## 6. Cerere către Copilot
 Review pe diff-ul r2, mai ales pe ramura `[pre:maintain]` dependentă de versiune. Cerem GO sau NO-GO pe „gata de aplicare”. Aplicarea cere și acordul lui Răzvan pe variantă.
+
+---
+## r2b (01.10, după deciziile lui Răzvan și merge-ul cu #532/#542/#543)
+
+**Decizii luate**
+- **Varianta A:** citire și scriere doar pentru owner + `can_access_financiar`. Migrarea o implementează deja: ambii helperi verifică `is_owner IS TRUE OR can_access_financiar IS TRUE`. N-am schimbat codul.
+- **`can_access_financiar`:** nimeni nu-l primește; rămâne doar owner-ul. Nu e nevoie de DML.
+
+**Reverificare pe live după #532/#542/#543** (doar SELECT):
+- Politicile `trez_*_rw`, triggerele F2, politicile de scriere pe `profiles` și TRUNCATE-ul retras sunt identice cu r2.
+- Precondițiile r2 rămân valabile.
+
+**Fix în harness:** aceeași problemă ca la #540, cu `grep -q` sub `pipefail`. Aici chiar s-a manifestat: după merge, rularea pica cu „static: g_commit neprins”. Acum se folosește `grep >/dev/null`.
+
+**Rezultate:**
+- harness PG16: PASS (860 de verificări, 26 de mutanți prinși);
+- build OK.
+
+Migrarea și revenirea sunt neschimbate (sha256 ca la §4).
+
+**Încă deschise:** rezidualul prin `garantii` / RPC (decizia 3) și MAINTAIN după F1 (decizia 4).

@@ -117,7 +117,9 @@ END \$inreg\$;
 }
 inreg_nume() { "${ADM[@]}" -Atc "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = '$NUME_MIG'"; }
 verif_static() {  # fără control de tranzacție; garda de start prima, garda de final ultima; postcondiția înainte
-  ! sed 's/--.*$//' "$1" | grep -qiE '^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|ABORT)\s*(TRANSACTION|WORK)?\s*;|\bcommit\s*;' \
+  # r2 01.10: grep FĂRĂ -q — cu pipefail, grep -q închide pipe-ul devreme, sed primește SIGPIPE (141) și „!” transforma
+  # o potrivire într-un fals „curat” (intermitent, după mărimea fișierului).
+  ! sed 's/--.*$//' "$1" | grep -iE '^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|ABORT)\s*(TRANSACTION|WORK)?\s*;|\bcommit\s*;' >/dev/null \
   && [ "$(grep -v '^--' "$1" | grep -v '^\s*$' | head -1)" = 'DO $livrare_start$' ] \
   && [ "$(grep -v '^\s*$' "$1" | tail -1)" = 'END $livrare_final$;' ] \
   && [ "$(grep -n -x '\$post\$;' "$1" | cut -d: -f1)" -lt "$(grep -n -x 'DO \$livrare_final\$' "$1" | cut -d: -f1)" ] 2>/dev/null
