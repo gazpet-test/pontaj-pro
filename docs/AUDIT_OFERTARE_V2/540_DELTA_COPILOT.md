@@ -66,3 +66,32 @@ F1 a lăsat **MAINTAIN** pentru anon și authenticated pe tabelele din public: p
 
 ## 7. Cerere către Copilot
 Review pe diff-ul r2: precondiții, revenire, schelet și teste. Cerem GO sau NO-GO pe „gata de aplicare”. Aplicarea cere în plus acordul lui Răzvan.
+
+---
+## r2b (01.10, după deciziile lui Răzvan și merge-ul cu #532/#542/#543)
+
+**Decizii luate**
+- **Tokenurile expuse:** **B** acum (dezactivăm cele 12 ale angajaților plecați), apoi **A** (reemitere) odată cu patch-ul de expirare.
+- **Vizibilitate:** **A** (`hr` / `hr.*`). Migrarea implementează deja varianta asta, așa că n-am schimbat codul.
+
+**B se face prin DML separat, nu prin migrare.** Fișierul este `docs/AUDIT_OFERTARE_V2/540_DML_PREVIEW.sql` (sha256 `5ef687e7a5e1e7aab2b74bcf8be67ce61e5225484cfd1f00cab99215c7c2c7a4`) și **nu a fost rulat**. Conține:
+- preview read-only;
+- UPDATE cu listă fixă de 12 `employee_id` și gardă `n = 12`, cu RETURNING + `array_agg`;
+- sanity check: 0 tokenuri active la plecați, 105 active în total;
+- rollback de date.
+
+Cheia tabelei este `employee_id`; tabela nu are coloană `id`. Cele 12 tokenuri, citite pe live (employee_id, angajat, data încetării):
+79 NGUYEN VAN PHUNG 2026-07-11 · 156 NASTASE MARIUS CRISTIAN 2026-07-16 · 23 BUCSAIN LAURENTIU ADELIN 2026-07-20 · 151 PANATIE COSMIN IOAN 2026-07-20 · 36 CURCA ANDREEA ALEXANDRA 2026-07-31 · 46 DUMITRU MARIAN 2026-08-07 · 32 CODITA CORNELIU CRISTIAN 2026-09-01 · 47 EBETIUC EUGEN IONEL 2026-09-01 · 155 BUTUCAN NICOLAE MARIUS 2026-09-01 · 62 KUSHWAHA SHRIRAM 2026-09-07 · 17 BAIESU DARIUS OVIDIU 2026-09-11 · 57 IOAN SORIN ALEXANDRU 2026-09-25.
+
+**Reverificare pe live după #532/#542/#543** (doar SELECT):
+- Migrările noi pe live sunt `20260930a`, `20260930e`, `20261001a`, `20261002a`.
+- Nimic relevant pentru acest PR nu s-a schimbat: politica `hr_tokens_sel`, triggerele F2, politicile de scriere pe `profiles` și `user_module_access` și privilegiile fără TRUNCATE sunt identice cu r2.
+- Precondițiile r2 rămân valabile.
+
+**Fix în harness:** verificarea statică „fără COMMIT în fișier” folosea `grep -q` sub `pipefail`. `grep -q` putea închide pipe-ul devreme, `sed` primea SIGPIPE, iar `!` transforma potrivirea într-un fals „curat”, intermitent. Acum se folosește `grep >/dev/null`.
+
+**Rezultate:**
+- harness PG16: TOATE TESTELE AU TRECUT (90 de verificări + 33, 21 de mutanți prinși);
+- build OK.
+
+Migrarea și revenirea sunt neschimbate (sha256 ca la §4).

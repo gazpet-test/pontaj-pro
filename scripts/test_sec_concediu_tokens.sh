@@ -94,7 +94,8 @@ aplica() {  # aplica <mod> <fișier> [versiune]  → codul de ieșire
   return $rc
 }
 verif_static() {  # fără control de tranzacție; garda de start = prima instrucțiune, garda de final = ultima; postcondiția înainte
-  ! sed 's/--.*$//' "$1" | grep -qiE '^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|ABORT)\s*(TRANSACTION|WORK)?\s*;|\bcommit\s*;' \
+  # r2 01.10: grep FĂRĂ -q (cu pipefail, SIGPIPE pe sed + „!” dădea fals „curat”, intermitent)
+  ! sed 's/--.*$//' "$1" | grep -iE '^\s*(BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION|ABORT)\s*(TRANSACTION|WORK)?\s*;|\bcommit\s*;' >/dev/null \
   && [ "$(grep -v '^--' "$1" | grep -v '^\s*$' | head -1)" = 'DO $livrare_start$' ] \
   && [ "$(grep -v '^\s*$' "$1" | tail -1)" = 'END $livrare_final$;' ] \
   && [ "$(grep -n -x 'END \$post\$;' "$1" | cut -d: -f1)" -lt "$(grep -n -x 'DO \$livrare_final\$' "$1" | cut -d: -f1)" ] 2>/dev/null
