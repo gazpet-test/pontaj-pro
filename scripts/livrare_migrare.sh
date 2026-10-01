@@ -182,7 +182,19 @@ SELECT current_database() || '|' || (SELECT system_identifier::text FROM pg_cont
 COMMIT;
 SQL
 # Gate-ul permanent 0e (după livrare): copie protejată a scripts/control_0e.sql, într-o tranzacție READ ONLY.
-{ printf 'BEGIN;\nSET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;\n'; cat "$CONTROL_0E"; printf '\nCOMMIT;\n'; } > "$DIR/control_0e.sql"
+# Același prolog lexical ca livrarea (standard_conforming_strings/client_encoding pot veni ostile din ALTER DATABASE … SET):
+# fără el, regex-urile cu „\” din control_0e.sql se parsează greșit ⇒ GATE 0e NERULAT (prins de 6.12).
+{ cat <<'P0E'
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
+SET LOCAL standard_conforming_strings = on;
+SET LOCAL client_encoding = 'UTF8';
+DO $p0e$ BEGIN
+  IF current_setting('standard_conforming_strings') IS DISTINCT FROM 'on' OR current_setting('client_encoding') IS DISTINCT FROM 'UTF8'
+    THEN RAISE EXCEPTION 'Gate 0e: prolog lexical neaplicat'; END IF;
+END $p0e$;
+P0E
+  cat "$CONTROL_0E"; printf '\nCOMMIT;\n'; } > "$DIR/control_0e.sql"
 chmod 400 "$DIR/0_prolog.sql" "$DIR/1_pre.sql" "$DIR/3_inreg.sql" "$DIR/reconc.sql" "$DIR/control_0e.sql"
 
 CONN=(-h "$C_HOST" -p "$C_PORT"); [ -n "$C_USER" ] && CONN+=(-U "$C_USER")   # explicite ⇒ au prioritate față de mediu
