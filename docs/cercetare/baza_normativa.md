@@ -201,7 +201,7 @@ Data cercetării: 01.10.2026. Sursele primare citite integral: Legea 98/2016 și
 7. **Termenul de răspuns al AC la clarificări** (L98 art. 161, în forma dată de OUG 45/2018): răspunsul trebuie dat cu **cel puțin 10 zile** înainte de termenul de depunere (5 zile în caz de urgență). La procedura simplificată pentru lucrări termenul este de **cel puțin 6 zile**. Formula „a 10-a/a 11-a zi” din brief este doar o interpretare a acestui text; legea spune „cu cel puțin 10 zile înainte”. AC stabilește în anunț 1 sau 2 termene de răspuns (art. 160 alin. (2)), iar termenul-limită pentru întrebări trebuie corelat cu ele (HG 395 art. 27 alin. (2)).
 8. **Cauțiunea la CNSC** (L101 art. 61^1) se constituie în **maximum 5 zile de la sesizarea CNSC**. Termenul este de decădere: CNSC a respins o contestație pentru o cauțiune depusă cu 3 zile întârziere (Decizia 2863/C4/3581 din 25.09.2025).
    - Sub prag: 2% din valoarea estimată, plafonat la **35.000 lei** dacă se contestă documentația și la **88.000 lei** dacă se contestă rezultatul.
-   - Peste prag: plafoanele de 220.000 / 880.000 lei provin din textul din 2020 și nu au fost reconfirmate.
+   - Peste prag: plafoanele sunt 220.000 / 2.000.000 lei în forma curentă (corectat 02.10; 880.000 era în forma 2018–2019; CNSC BO2024_3004).
 9. **Termenele pentru clarificări la evaluare:**
    - răspunsul la clarificările comisiei: maximum **15 zile lucrătoare**, inclusiv prelungirea (L98 art. 209 alin. (3));
    - documentele justificative ale primului clasat: până la **7 + 3 zile lucrătoare** (art. 196 alin. (2));
