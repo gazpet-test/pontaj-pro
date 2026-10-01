@@ -31,7 +31,9 @@ export function evalueazaPoarta(st) {
   r.push({
     k:'fara', titlu:'Cerințe fără capitol',
     stare: st.fara_capitol > 0 ? 'block' : 'ok',
-    detalii: `${st.fara_capitol} din ${st.de_raspuns}` + (st.inchise_cu_dovada > 0 ? ` · ${st.inchise_cu_dovada} sunt închise cu dovadă în registru, nu cer capitol` : ''),
+    detalii: `${st.fara_capitol} din ${st.de_raspuns}` + (st.inchise_cu_dovada > 0 ? ` · ${st.inchise_cu_dovada} sunt închise cu dovadă în registru, nu cer capitol` : '')
+      // J02b: exceptările propuse de AI (sau fără confirmare umană cu amprentă) NU închid cerința — se văd, dar rămân în „fără capitol”.
+      + (st.exceptate_propuse_ai > 0 ? ` · ${st.exceptate_propuse_ai} exceptate doar propus (AI/neconfirmat) — deschise până confirmă un om` : ''),
     filtru: 'fara',
   })
   // R06 (audit Copilot): acoperirea propusă de AI NU e dovadă. Doar cea verificată pe scan de un om
