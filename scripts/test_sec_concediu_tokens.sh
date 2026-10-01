@@ -36,10 +36,10 @@ TPL=sc_tpl
 DB=sc_test
 GUC=gazpet.rollback_tehnic_20261003d
 ARM="SELECT set_config('$GUC', 'REDESCHIDE_CITIRE_TOKENURI:' || txid_current(), true);"
-# Amprentele de PRODUCȚIE, citite read-only pe 29.09 cu aceeași interogare (PG 17.6):
+# Amprentele de PRODUCȚIE, citite read-only pe 29.09 (privilegii recitite 01.10 după F1/F2) cu aceeași interogare (PG 17.6):
 PROD_TABEL='kind=r rls=t force=f owner=postgres mosteniri=0 col_acl=0'
 PROD_POL='hr_tokens_sel|r|permissive|authenticated|dc71e447411e7aaf354179a11ad2e2ae|<NULL>'
-PROD_PRIV='anon=SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN col=SELECT,INSERT,UPDATE,REFERENCES go= ; authenticated=SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN col=SELECT,INSERT,UPDATE,REFERENCES go= ; public= col= go= ; service_role=SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN col=SELECT,INSERT,UPDATE,REFERENCES go='
+PROD_PRIV='anon=SELECT,INSERT,UPDATE,DELETE,REFERENCES,TRIGGER,MAINTAIN col=SELECT,INSERT,UPDATE,REFERENCES go= ; authenticated=SELECT,INSERT,UPDATE,DELETE,REFERENCES,TRIGGER,MAINTAIN col=SELECT,INSERT,UPDATE,REFERENCES go= ; public= col= go= ; service_role=SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN col=SELECT,INSERT,UPDATE,REFERENCES go='
 # md5 al politicii noi: identic pe PG16 (aici) și PG18 (PGlite 0.5.8), verificat la pregătire.
 PATCH_POL_MD5=ab5d2578ccdd006d09e5691066ea094b
 
@@ -181,7 +181,7 @@ declare -A VEDE_AZI
 for u in 121 126 201 202; do VEDE_AZI[$u]=$(sql "SELECT t.vede('authenticated', '00000000-0000-4000-8000-000000000$u')"); done
 
 [ "$(suita gaura)" = trece ] || esec "gaura nu se reproduce pe starea live"
-ok "GAURA pe live: $(cat "$BASE/suita.n") verificări (cont fără modul citește tot; anon/authenticated au TRUNCATE)"
+ok "GAURA pe live: $(cat "$BASE/suita.n") verificări (cont fără modul citește tot; TRUNCATE închis deja de F1)"
 [ "$(suita patch)" = pica ] || esec "suita patch TRECE pe starea live — testele nu discriminează"
 ok "suita patch PICĂ pe live, la: $(prima)"
 # discriminare test cu test: fiecare verificare din suita patch, rulată izolat pe live
@@ -194,12 +194,10 @@ PICA_LIVE=$(sql "SELECT count(*) FROM (VALUES
   (t.vede('authenticated','00000000-0000-4000-8000-000000000306') = 'OK:0:-'),
   (t.vede('authenticated','00000000-0000-4000-8000-000000000399') = 'OK:0:-'),
   (t.vede('anon', NULL) = 'ERR:42501'),
-  (t.ca('anon', NULL, 'TRUNCATE public.hr_concediu_tokens') = 'ERR:42501'),
-  (t.ca('authenticated','00000000-0000-4000-8000-000000000301','TRUNCATE public.hr_concediu_tokens') = 'ERR:42501'),
   (t.ca('authenticated','00000000-0000-4000-8000-000000000126','UPDATE public.hr_concediu_tokens SET activ = false') = 'ERR:42501'),
   (NOT has_any_column_privilege('anon','public.hr_concediu_tokens','SELECT'))) v(trece) WHERE NOT trece")
-[ "$PICA_LIVE" = 12 ] || esec "pe live trebuiau să pice 12 verificări izolate (N1–N7, A1, A2, W-trunc, W5, P2), au picat $PICA_LIVE"
-ok "pe live pică izolat 12/12 verificări-cheie (N1–N7 fără drept, N8 trece și pe live: fără sub în JWT, A1/A2 anon, W TRUNCATE, W5, P2)"
+[ "$PICA_LIVE" = 10 ] || esec "pe live trebuiau să pice 10 verificări izolate (N1–N7, A1, W5, P2; TRUNCATE e închis deja de F1), au picat $PICA_LIVE"
+ok "pe live pică izolat 10/10 verificări-cheie (N1–N7 fără drept, N8 trece și pe live: fără sub în JWT, A1 anon, W5, P2; A2/W TRUNCATE trec deja după F1)"
 
 pas "2. Drumul fericit prin traseul de livrare (+ reaplicare în tranzacția runnerului)"
 proaspat

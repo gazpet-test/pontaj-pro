@@ -25,6 +25,7 @@ DO $rollback_tehnic$
 DECLARE
   v17 CONSTANT boolean := current_setting('server_version_num')::int >= 170000;
   v_toate CONSTANT text := 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' || CASE WHEN v17 THEN ',MAINTAIN' ELSE '' END;
+  v_toate_fara_trunc CONSTANT text := 'SELECT,INSERT,UPDATE,DELETE,REFERENCES,TRIGGER' || CASE WHEN v17 THEN ',MAINTAIN' ELSE '' END;
   v_col_toate CONSTANT text := 'SELECT,INSERT,UPDATE,REFERENCES';
   c_tabel CONSTANT text := 'kind=r rls=t force=f owner=postgres mosteniri=0 col_acl=0';
   c_pol_live CONSTANT text := 'hr_tokens_sel|r|permissive|authenticated|dc71e447411e7aaf354179a11ad2e2ae|<NULL>';
@@ -64,7 +65,7 @@ SELECT
 $amp$;
   v_t text; v_p text; v_a text;
 BEGIN
-  c_priv_live := format('anon=%1$s col=%2$s go= ; authenticated=%1$s col=%2$s go= ; public= col= go= ; service_role=%1$s col=%2$s go=', v_toate, v_col_toate);
+  c_priv_live := format('anon=%1$s col=%2$s go= ; authenticated=%1$s col=%2$s go= ; public= col= go= ; service_role=%3$s col=%2$s go=', v_toate_fara_trunc, v_col_toate, v_toate);  -- r2 01.10: live DUPĂ F1 (20260930i) = fără TRUNCATE pt anon/authenticated
   c_priv_patch := format('anon= col= go= ; authenticated=SELECT col=SELECT go= ; public= col= go= ; service_role=%1$s col=%2$s go=', v_toate, v_col_toate);
   -- 1. Armare persistentă = refuz (numele GUC nu țin cont de majuscule, deci nici căutarea).
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_db_role_setting s, unnest(s.setconfig) AS c(cfg)
@@ -87,6 +88,7 @@ BEGIN
   EXECUTE 'DROP POLICY hr_tokens_sel_modul_hr ON public.hr_concediu_tokens';
   EXECUTE 'CREATE POLICY hr_tokens_sel ON public.hr_concediu_tokens FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL)';
   EXECUTE 'GRANT ALL ON TABLE public.hr_concediu_tokens TO anon, authenticated';
+  EXECUTE 'REVOKE TRUNCATE ON TABLE public.hr_concediu_tokens FROM anon, authenticated';  -- r2 01.10: F1 rămâne în vigoare
 
   -- 4. Postcondiție: EXACT live 29.09.
   EXECUTE v_q INTO v_t, v_p, v_a;

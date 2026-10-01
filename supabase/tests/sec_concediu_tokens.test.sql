@@ -72,7 +72,7 @@ BEGIN
   RETURN n;
 END $f$;
 
--- Starea LIVE: gaura trebuie să existe (orice cont logat citește; anon/authenticated au TRUNCATE)
+-- Starea LIVE (01.10, după F1/F2): gaura de citire trebuie să existe (orice cont logat citește); TRUNCATE e deja închis de F1
 CREATE FUNCTION t.suita_gaura() RETURNS int LANGUAGE plpgsql AS $f$
 DECLARE n int := 0; v_tot text := t.toate();
 BEGIN
@@ -81,8 +81,8 @@ BEGIN
   PERFORM t.verifica('G2 capcane de prefix citesc toate', t.vede('authenticated', '00000000-0000-4000-8000-000000000303'), v_tot); n := n + 1;
   PERFORM t.verifica('G3 HR citește toate (flux legitim)', t.vede('authenticated', '00000000-0000-4000-8000-000000000126'), v_tot); n := n + 1;
   PERFORM t.verifica('G4 anon SELECT → 0 rânduri (fără politică, dar cu GRANT)', t.vede('anon', NULL), 'OK:0:-'); n := n + 1;
-  PERFORM t.verifica('G5 anon are TRUNCATE (ocolește RLS) — anulat', t.ca('anon', NULL, 'TRUNCATE public.hr_concediu_tokens'), 'OK:0'); n := n + 1;
-  PERFORM t.verifica('G6 fără modul are TRUNCATE — anulat', t.ca('authenticated', '00000000-0000-4000-8000-000000000301', 'TRUNCATE public.hr_concediu_tokens'), 'OK:0'); n := n + 1;
+  PERFORM t.verifica('G5 anon fără TRUNCATE (închis deja de F1 20260930i, live 01.10)', t.ca('anon', NULL, 'TRUNCATE public.hr_concediu_tokens'), 'ERR:42501'); n := n + 1;
+  PERFORM t.verifica('G6 fără modul fără TRUNCATE (închis deja de F1)', t.ca('authenticated', '00000000-0000-4000-8000-000000000301', 'TRUNCATE public.hr_concediu_tokens'), 'ERR:42501'); n := n + 1;
   PERFORM t.verifica('G7 fără modul UPDATE → 0 rânduri (RLS fără politică de scriere)', t.ca('authenticated', '00000000-0000-4000-8000-000000000301', 'UPDATE public.hr_concediu_tokens SET activ = false'), 'OK:0'); n := n + 1;
   RETURN n;
 END $f$;

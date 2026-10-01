@@ -47,6 +47,7 @@ DO $pre$
 DECLARE
   v17 CONSTANT boolean := current_setting('server_version_num')::int >= 170000;
   v_toate CONSTANT text := 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' || CASE WHEN v17 THEN ',MAINTAIN' ELSE '' END;
+  v_toate_fara_trunc CONSTANT text := 'SELECT,INSERT,UPDATE,DELETE,REFERENCES,TRIGGER' || CASE WHEN v17 THEN ',MAINTAIN' ELSE '' END;
   v_col_toate CONSTANT text := 'SELECT,INSERT,UPDATE,REFERENCES';
   -- Stări COMPLETE acceptate (perechi politici + privilegii; tabelul e același în ambele):
   c_tabel CONSTANT text := 'kind=r rls=t force=f owner=postgres mosteniri=0 col_acl=0';
@@ -92,7 +93,7 @@ $amp$;
   -- reanalizează și se consemnează revizia, nu se adaugă automat amprenta găsită.
   c_inv_tabele CONSTANT text := 'profiles rls=t force=f owner=postgres ; user_module_access rls=t force=f owner=postgres';
   c_inv_pol CONSTANT text := 'profiles.profiles_delete_owner|d|permissive|authenticated|c820f31f788833db3c8d7830979c8803|<NULL>;profiles.profiles_insert_owner|a|permissive|authenticated|<NULL>|c820f31f788833db3c8d7830979c8803;profiles.profiles_update_own|w|permissive|authenticated|bc9c729a84690340789a4e4f01175335|bc9c729a84690340789a4e4f01175335;profiles.profiles_update_owner|w|permissive|authenticated|c820f31f788833db3c8d7830979c8803|c820f31f788833db3c8d7830979c8803;user_module_access.user_module_access_delete_owner|d|permissive|authenticated|8d156f05d1916a18e703d322295e7715|<NULL>;user_module_access.user_module_access_insert_owner|a|permissive|authenticated|<NULL>|8d156f05d1916a18e703d322295e7715;user_module_access.user_module_access_update_owner|w|permissive|authenticated|8d156f05d1916a18e703d322295e7715|8d156f05d1916a18e703d322295e7715';
-  c_inv_trg CONSTANT text := 'profiles.prevent_role_escalation_trigger|O|93294585aa40f0ef96cfc50f3b525005|16112659be92143e6539ae0e54e47a06;profiles.trg_enforce_owner_only_salary_flags|O|235b88ed60c6cfe3eefb775b33a78aca|0470660c0a819981ff914355c7f6d00a';
+  c_inv_trg CONSTANT text := 'profiles.prevent_role_escalation_trigger|O|93294585aa40f0ef96cfc50f3b525005|cf75b37d522e2a6b0b9c9eabd72c27b4;profiles.trg_enforce_owner_only_salary_flags|O|235b88ed60c6cfe3eefb775b33a78aca|daaa561298c10c259944600e6c39467e';
   c_inv_rol CONSTANT text := 'anon bypassrls=f super=f ; authenticated bypassrls=f super=f';
   v_qi CONSTANT text := $inv$
 -- <invarianti-20261003d> (sursa drepturilor: profiles.is_owner + user_module_access; runda 2)
@@ -120,7 +121,7 @@ $inv$;
   v_i1 text; v_i2 text; v_i3 text; v_i4 text;
   v_t text; v_p text; v_a text; v_stare text;
 BEGIN
-  c_priv_live := format('anon=%1$s col=%2$s go= ; authenticated=%1$s col=%2$s go= ; public= col= go= ; service_role=%1$s col=%2$s go=', v_toate, v_col_toate);
+  c_priv_live := format('anon=%1$s col=%2$s go= ; authenticated=%1$s col=%2$s go= ; public= col= go= ; service_role=%3$s col=%2$s go=', v_toate_fara_trunc, v_col_toate, v_toate);  -- r2 01.10: live DUPĂ F1 (20260930i) = fără TRUNCATE pt anon/authenticated
   c_priv_patch := format('anon= col= go= ; authenticated=SELECT col=SELECT go= ; public= col= go= ; service_role=%1$s col=%2$s go=', v_toate, v_col_toate);
   -- dependențele politicii noi (tipuri exacte)
   IF (SELECT count(*) FROM pg_catalog.pg_attribute a
@@ -174,6 +175,7 @@ DO $post$
 DECLARE
   v17 CONSTANT boolean := current_setting('server_version_num')::int >= 170000;
   v_toate CONSTANT text := 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER' || CASE WHEN v17 THEN ',MAINTAIN' ELSE '' END;
+  v_toate_fara_trunc CONSTANT text := 'SELECT,INSERT,UPDATE,DELETE,REFERENCES,TRIGGER' || CASE WHEN v17 THEN ',MAINTAIN' ELSE '' END;
   v_col_toate CONSTANT text := 'SELECT,INSERT,UPDATE,REFERENCES';
   -- Stări COMPLETE acceptate (perechi politici + privilegii; tabelul e același în ambele):
   c_tabel CONSTANT text := 'kind=r rls=t force=f owner=postgres mosteniri=0 col_acl=0';
@@ -214,7 +216,7 @@ SELECT
 $amp$;
   v_t text; v_p text; v_a text;
 BEGIN
-  c_priv_live := format('anon=%1$s col=%2$s go= ; authenticated=%1$s col=%2$s go= ; public= col= go= ; service_role=%1$s col=%2$s go=', v_toate, v_col_toate);
+  c_priv_live := format('anon=%1$s col=%2$s go= ; authenticated=%1$s col=%2$s go= ; public= col= go= ; service_role=%3$s col=%2$s go=', v_toate_fara_trunc, v_col_toate, v_toate);  -- r2 01.10: live DUPĂ F1 (20260930i) = fără TRUNCATE pt anon/authenticated
   c_priv_patch := format('anon= col= go= ; authenticated=SELECT col=SELECT go= ; public= col= go= ; service_role=%1$s col=%2$s go=', v_toate, v_col_toate);
   EXECUTE v_q INTO v_t, v_p, v_a;
   IF v_t IS DISTINCT FROM c_tabel OR v_p IS DISTINCT FROM c_pol_patch OR v_a IS DISTINCT FROM c_priv_patch THEN
