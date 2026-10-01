@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
+import { zileOrdinDeplasare } from './diurneOrdin.js'
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -2156,6 +2157,8 @@ function ReportsPage() {
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
   const hasPontajBrutAccess = profile?.is_owner === true || profile?.can_access_pontaj_brut === true
+  // Diurne r6: scrierea în diurna_payments e permisă de RLS doar owner / can_access_salarii — butonul urmează aceeași poartă
+  const canSaveDiurnaPayment = profile?.is_owner === true || profile?.can_access_salarii === true
   
   // Lock-screen Istoric: reset timer la fiecare interactiune (mouse, keyboard, scroll, touch)
   useEffect(() => {
@@ -2930,6 +2933,7 @@ function ReportsPage() {
   }
 
   const savePayment=async()=>{
+    if(!canSaveDiurnaPayment){showToast('Salvarea plății de diurne e permisă doar owner / acces Salarii','error');return}
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setSavingPayment(true)
     try{
@@ -3004,7 +3008,8 @@ function ReportsPage() {
       total_amount:empStats.reduce((s,e)=>s+e.amount,0),created_by:uid
     }).select().single()
     if(!error&&payment){
-      await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
+      const {error:detErr}=await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
+      if(detErr){console.error('diurna_payment_details insert:',detErr);showToast(`⚠ Plata #${payment.id} s-a salvat FĂRĂ detalii angajați (${detErr.message||'eroare'}) — anunță owner-ul înainte de export BT`,'error');return}
       playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
     } else showToast('Eroare la salvare','error')
   }catch(e){showToast('Eroare la salvare','error')}finally{setSavingPayment(false)}
@@ -3065,8 +3070,10 @@ function ReportsPage() {
       const monthEnd = mE.toISOString().split('T')[0]
 
       // Calendar legal days
+      // Până la sfârșitul ultimei luni atinse de tranșă (alocaDiurneTransa are nevoie de lunile întregi)
+      const rangeEnd = sfarsitLuna(periodTo) > monthEnd ? sfarsitLuna(periodTo) : monthEnd
       const { data: calData } = await supabase.from('calendar_days')
-        .select('date,type,description').gte('date', monthStart).lte('date', monthEnd)
+        .select('date,type,description').gte('date', monthStart).lte('date', rangeEnd)
       const legalSet = new Set((calData || []).filter(x => x.type === 'legal').map(x => x.date))
       const legalNameMap = new Map((calData || []).filter(x => x.type === 'legal').map(x => [x.date, x.description || '']))
 
@@ -3100,7 +3107,7 @@ function ReportsPage() {
       while (true) {
         const { data: page } = await supabase.from('pontaj_records')
           .select('*, sites(name)')
-          .gte('date', monthStart).lte('date', monthEnd)
+          .gte('date', monthStart).lte('date', rangeEnd)
           .in('employee_id', empIds)
           .range(off, off + 999)
         if (!page || page.length === 0) break
@@ -3115,6 +3122,8 @@ function ReportsPage() {
       // (WE/sărbătoare lucrate sunt mutate în locul LL-urilor de pe zile lucrătoare)
       const NORME_LIST = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
       const sortedWorkDays = [...workDaySet].sort()
+      // Alocare comună (diurneAlocare.js) — aceeași ca exportDiurne / savePayment / exportBancaDiurne
+      const alocare = alocaDiurneTransa({ recsLuna: allRecs, df: periodFrom, dt: periodTo, legalSet, diurnaAmt: 0 })
       const empData = details.map(d => {
         const empRecs = allRecs.filter(r => r.employee_id === d.employee_id)
         const recsInPeriod = empRecs
@@ -3155,11 +3164,8 @@ function ReportsPage() {
         }
 
         // diurnaMax = plafonată la buget lunar (consistent cu savePayment) și la zilele NET
-        const zilePlatiteAnterior = empRecs.filter(r =>
-          r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)
-        ).length
-        const bugetLunarRamasZile = Math.max(0, workDaySet.size - zilePlatiteAnterior)
-        const diurnaMax = Math.min(bugetLunarRamasZile, netDays.length)
+        // 3A (01.10.2026): min(zileDiurna alocare comună, zile NET) — scade CO, numără weekendul, tranșe multiple
+        const diurnaMax = zileOrdinDeplasare(alocare.get(d.employee_id), netDays.length)
 
         // Distribuția = primele diurnaMax din netDays (cronologic)
         const distribution = netDays.slice(0, diurnaMax)
@@ -4828,7 +4834,11 @@ function ReportsPage() {
       // tranșa asta are zero zile — apare cu 0, ca să poată fi întocmit ordinul
       // de deplasare și împărțită diurna pe lucrări până la închiderea lunii.
       const incetatInLuna=!emp.active && emp.termination_date && emp.termination_date>=monthStart
-      if(!er.length && !incetatInLuna) return null
+      // r6: angajatul fără bife în tranșă dar cu diferență față de ce s-a plătit anterior în lună (exclus atunci /
+      // bife modificate după salvare) NU dispare — rămâne cu 0 zile și diferența la vedere
+      const platitEfectivPre=(prevPaymentsInMonth||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?Number(d.amount)||0:0)},0)
+      const areDiferenta=Math.abs(platitEfectivPre-(a?a.sumaDiurnaAnterior:0))>0.005
+      if(!er.length && !incetatInLuna && !areDiferenta) return null
 
       const C=a?a.C:0, B=a?a.B:0, N=a?a.N:0
       // Zile distincte cu diurnă în tranșă (o zi pe două șantiere = o zi)
@@ -6292,7 +6302,7 @@ function ReportsPage() {
           <span style={{fontSize:11,color:G.muted}}>Până la:</span>
           <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
           <button onClick={()=>requireUnlockThen('diurne')} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Export Diurne (necesită parolă)">{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
-          <button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>
+          {canSaveDiurnaPayment&&<button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>}
           <button onClick={exportBancaDiurne} disabled={expBT} style={{...S.btnP,background:'#0A3A6A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expBT?<><div className="sp"/>...</>:'🏦 Export Bancă'}</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnP,background:G.orange,fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Generează ordine de deplasare (xlsx + PDF cu semnături) — deschide Istoric Plăți Diurne, alegi luna, apoi generezi">📄 Ordine Deplasare</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnS,fontSize:12}}>📋 Istoric</button>

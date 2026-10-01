@@ -14,6 +14,7 @@ import { mesajInvoke } from './lib/mesajInvoke.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
+import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereCurenta, TIP_NSA, stareComutatorJ02b, poatePorniJ02b } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
@@ -2565,9 +2566,56 @@ const ACOPERIRE_STATUS = {
   regula_propunere:  { label:'👥 regulă → propunere', color:G.orange },
 }
 
+// J02b r5 (varianta B, Răzvan 01.10.2026): comutator pe licitație, într-un singur sens. Oprit ⇒ poarta folosește
+// regula veche („nu se aplică” AI închide); pornit ⇒ doar confirmarea umană închide. Pornirea: RPC fn_ofertare_j02b_activeaza
+// (owner / responsabil); oprirea nu există (triggerul din BD o refuză pe orice cale).
+function J02bComutator({ licitatie: l, profile, onChanged }) {
+  const [activ, setActiv] = useState(l?.j02b_activ)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  useEffect(() => { setActiv(l?.j02b_activ); setErr(null) }, [l?.id, l?.j02b_activ])
+  const lic = { ...l, j02b_activ: activ }
+  const stare = stareComutatorJ02b(lic)
+  if (!stare) return null
+  if (stare === 'pornita') return (
+    <div style={{ marginTop:14 }}>
+      <span title="„Nu se aplică”/„exceptat” propuse de AI nu închid cerința fără confirmare umană. Nu se mai poate opri." style={{ fontSize:11.5, fontWeight:700, padding:'3px 9px', borderRadius:999, background:G.green + '22', color:G.green, border:`1px solid ${G.green}55` }}>
+        ✓ J02b pornit — „nu se aplică” cere confirmare umană
+      </span>
+    </div>
+  )
+  const porneste = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const { data: n, error: e1 } = await supabase.rpc('fn_ofertare_j02b_impact', { p_licitatie_id: l.id })
+      if (e1) throw e1
+      if (!window.confirm(`Pornești J02b pe licitația ${l.nr_anunt || l.id}?\n\nSe redeschid ${n ?? 0} cerințe închise acum doar de AI („nu se aplică” / „exceptat”) — fiecare va cere confirmare umană cu motiv înainte de depunere.\n\nPornirea e DEFINITIVĂ: J02b nu se mai poate opri pe această licitație.`)) { setBusy(false); return }
+      const { error: e2 } = await supabase.rpc('fn_ofertare_j02b_activeaza', { p_licitatie_id: l.id })
+      if (e2) throw e2
+      setActiv(true); onChanged && onChanged()
+    } catch (e) { setErr(e?.message || String(e)) }
+    setBusy(false)
+  }
+  return (
+    <div style={{ marginTop:14, padding:'10px 14px', borderRadius:10, border:`1px solid ${G.orange}66`, background:G.orange + '14', display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+      <div style={{ fontSize:12.5, fontWeight:700, color:G.orange, flex:1, minWidth:220 }}>
+        Confirmare umană pentru «nu se aplică» (J02b): OPRITĂ
+        <div style={{ fontSize:11, fontWeight:400, color:G.muted, marginTop:2 }}>Pe licitația asta „nu se aplică” pus de AI încă închide cerința la poarta de depunere (regula veche).</div>
+        {err && <div style={{ fontSize:11, color:G.red, marginTop:4 }}>{err}</div>}
+      </div>
+      {poatePorniJ02b(lic, profile)
+        ? <button style={{ ...S.btnS, color:G.orange, borderColor:G.orange + '88', fontWeight:700 }} disabled={busy} onClick={porneste}>{busy ? '…' : 'Pornește J02b'}</button>
+        : <span style={{ fontSize:11, color:G.dim }}>o pornește ownerul sau responsabilul licitației</span>}
+    </div>
+  )
+}
+
 function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   const [cerinte, setCerinte] = useState(null)
   const [acoperiri, setAcoperiri] = useState({})   // cerinta_id -> rând acoperire (+ autorizația join)
+  // J02b: confirmările umane „nu se aplică” (cu amprenta sursei). Lipsă/eroare ⇒ index gol ⇒ nimic nu e închis.
+  const [naIdx, setNaIdx] = useState(() => indexConfirmari([]))
+  const [acRaw, setAcRaw] = useState([])   // J02b r2: rândurile brute, ca să știm ce propunere AI „nu se aplică” confirmă omul
   const [busy, setBusy] = useState(null)
   const [warn, setWarn] = useState(null)
   const [fDoarGoluri, setFDoarGoluri] = useState(false)
@@ -2665,9 +2713,30 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
       // preferință de afișare. Un test a și prins-o greșită la prima scriere.
       const map = grupeazaAcoperiri(ac || [])
       setAcoperiri(map)
-    } else setAcoperiri({})
+      const rNa = await supabase.from('v_ofertare_cerinte_na_stare').select('cerinta_id, tip, valida, revocata_la, motiv, confirmat_la')
+        .in('cerinta_id', cs.map(c => c.id)).limit(10000)
+      setNaIdx(indexConfirmari(rNa.error ? [] : rNa.data))
+      setAcRaw(ac || [])
+    } else { setAcoperiri({}); setNaIdx(indexConfirmari([])); setAcRaw([]) }
   }
   useEffect(() => { load() }, [licitatie.id])
+
+  // J02b: confirmarea umană „nu se aplică”. Amprenta se citește din BD și se trimite înapoi:
+  // dacă sursa s-a schimbat între timp, RPC-ul refuză (stale ⇒ refuz, nu confirmare pe altceva).
+  const confirmaNeaplicabil = async (c) => {
+    const motiv = window.prompt(`Cerința #${c.nr_ordine ?? c.id} nu se aplică. Motivul (obligatoriu, minim 5 caractere):`, c.stare_motiv || '')
+    if (!motiv || motiv.trim().length < 5) return
+    setBusy('na-' + c.id)
+    try {
+      const { data: amp, error: eA } = await supabase.rpc('fn_ofertare_cerinta_amprenta', { p_cerinta_id: c.id })
+      if (eA || !amp) { setWarn('Amprenta sursei nu s-a putut citi: ' + (eA?.message || 'lipsă')); return }
+      const { error } = await supabase.rpc('ofertare_confirma_neaplicabil', { p_cerinta_id: c.id, p_tip: TIP_NSA, p_motiv: motiv.trim(), p_amprenta_vazuta: amp,
+        // J02b r2: confirmarea se leagă de propunerea AI VĂZUTĂ (cel mai nou rând „nu se aplică”) sau de niciuna
+        p_propunere_id: propunereCurenta(acRaw, c.id, TIP_NSA) })
+      if (error) { setWarn('Confirmarea nu s-a salvat: ' + error.message); return }
+      await load()
+    } finally { setBusy(null) }
+  }
 
   // 22.09.2026 (varianta A): propunerea rulează pe workerul NAS (worker/ofertare/acoperire.ts), cu ACELAȘI cod
   // ca edge function-ul (ofertare-acoperire/core.ts), dar fără limita de 150 s a gateway-ului — batch-ul
@@ -2745,31 +2814,12 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
     await load()
   }
 
-  const stats = { acoperit: 0, acoperit_partener: 0, gol: 0, neevaluate: 0, goluriElim: 0, neevaluateElim: 0, nuSeAplica: 0, naElim: 0, nu_se_aplica: 0, reverif: 0, reverifElim: 0 }
-  ;(cerinte || []).forEach(c => {
-    const a = acoperiri[c.id]
-    // marcate „nu se aplică" de om: nu mai sunt goluri, dar rămân numărate separat (nimic nu dispare tăcut)
-    const scoasa = c.stare === 'nu_se_aplica'
-    if (scoasa) stats.nuSeAplica++
-    if (!a) { stats.neevaluate++; if (c.tip === 'eliminatorie' && !scoasa) stats.neevaluateElim++; return }
-    // Dovada pusa pe textul VECHI al cerintei nu se numara la ✅ nici aici. Panoul isi face propriile
-    // statistici, separat de KPI-uri: daca regula nu e scrisa in ambele locuri, ecranul se contrazice
-    // exact acolo unde lucreaza omul — sus „de reverificat", jos „acoperit".
-    const acop = a.status === 'acoperit' || a.status === 'acoperit_partener'
-    if (acop && a.reverificare_ceruta) {
-      stats.reverif++
-      if (c.tip === 'eliminatorie' && !scoasa) stats.reverifElim++
-      return
-    }
-    stats[a.status] = (stats[a.status] || 0) + 1
-    if (a.status === 'gol' && c.tip === 'eliminatorie' && !scoasa) stats.goluriElim++
-    // O eliminatorie pe care AI-ul o crede irelevantă rămâne în alarmă până confirmă un om
-    // în registru (cerinte.stare). Altfel modelul ar putea stinge singur poarta E3.
-    if (a.status === 'nu_se_aplica' && c.tip === 'eliminatorie' && !scoasa) stats.naElim++
-  })
-  // aceeași definiție ca v_ofertare_dashboard: eliminatorie fără rând „acoperit" = fără dovadă —
-  // iar o dovadă care așteaptă reverificare NU ține loc de dovadă (view-ul face la fel din 12.09)
-  const elimFaraDovada = stats.goluriElim + stats.neevaluateElim + stats.naElim + stats.reverifElim
+  // J02b: regula stă în src/ofertareNeaplicabil.js (cu teste). „Scoasă” = DOAR confirmare umană validă
+  // (actor + motiv + amprenta sursei curente); propunerea AI „nu se aplică” și stare='nu_se_aplica' veche fără
+  // amprentă NU mai scot eliminatoria din alarmă.
+  const j02b = j02bActivPe(licitatie)   // r6: UI-ul urmează comutatorul licitației (legacy când e oprit)
+  const stats = statisticiAcoperire(cerinte, acoperiri, naIdx, j02b)
+  const elimFaraDovada = stats.elimFaraDovada
   // Legătura cu registrul: ce e bifat sus se vede aici. Cu „doar bifatele" rămân doar
   // cerințele alese, ca să poți lucra pe un set restrâns fără să-l pierzi din ochi.
   const [fDoarBifate, setFDoarBifate] = useState(false)
@@ -2918,7 +2968,17 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                       style={{ fontSize:11.5, fontWeight:800, color: bifat ? G.ofertare : G.dim, minWidth:34, textAlign:'right', fontVariantNumeric:'tabular-nums' }}>#{c.nr_ordine}</span>
                     <span style={{ fontSize:10.5, fontWeight:800, color: a ? st.color : G.dim, whiteSpace:'nowrap', minWidth:82 }}>{a ? st.label : '⬜ neevaluat'}</span>
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
-                    {c.stare === 'nu_se_aplica' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ</span>}
+                    {(() => {
+                      // J02b: închis DOAR cu confirmare umană pe amprenta sursei curente; restul = propunere.
+                      const bNa = badgeNsa(c, a, naIdx, j02b)
+                      if (!bNa) return null
+                      if (bNa.fel === 'inchisa') return <span title={c.stare_motiv || (j02b ? 'confirmat de om pe versiunea curentă a sursei' : '')} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>{bNa.text}</span>
+                      const txt = bNa.text
+                      return <>
+                        <span title="Nu închide cerința până nu confirmă un om, cu motiv, pe versiunea curentă a sursei." style={{ fontSize:10, fontWeight:800, color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:8, padding:'1px 6px' }}>{txt}</span>
+                        <button onClick={() => confirmaNeaplicabil(c)} disabled={!!busy} style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5 }} title="Confirmare umană: motiv obligatoriu; se leagă de amprenta textului cerinței și a documentului sursă. Se invalidează singură dacă sursa se schimbă.">✓ Confirm „nu se aplică”</button>
+                      </>
+                    })()}
                     {c.stare === 'blocata' && <span title={c.stare_motiv || ''} style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>⛔ BLOCATĂ</span>}
                     {a?.domeniu_rte && <span title="Domeniul ISC RTE pe care motorul a judecat cerința (din obiectul contractului + textul cerinței, după nomenclatorul Procedurii ISC)" style={{ fontSize:10, fontWeight:800, color:G.blue, border:`1px solid ${G.blue}55`, borderRadius:8, padding:'1px 6px', whiteSpace:'nowrap' }}>RTE {a.domeniu_rte}</span>}
                     <span style={{ fontSize:11, color:G.muted, fontWeight:700, whiteSpace:'nowrap' }}>{c.sursa_sectiune}</span>
@@ -3606,6 +3666,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
               <CerinteSection licitatie={l} profile={profile} sel={selCerinte} setSel={setSelCerinte} reloadKey={packImportKey} />
               <SourcePackSection licitatie={l} profile={profile} onImported={() => { setPackImportKey(k => k + 1); onChanged?.() }} />
               <InventarIndependentSection licitatie={l} profile={profile} />
+              <J02bComutator licitatie={l} profile={profile} onChanged={onChanged} />
               <AcoperireSection licitatie={l} profile={profile} sel={selCerinte} />
             </>}
             {/* Pasul 1 din reproiectare: aceleași date, dar cerința și dovada pe același rând, cu

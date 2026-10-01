@@ -27,6 +27,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
+import GarantieRegistruLink from './OfertareGarantieRegistru.jsx'
 import { ziDepunere, calculeazaValabilitate, propuneActualizare, textDurata, zileIntre, MESAJ_NECITIT,
   faraMarcaje, liniePrelungireCeruta, trimiteActualizareSigur, patchActAditional,
   evalueazaGarantie, patchVerificatAcoperire, perioadaPolita, NIVEL_REVERIFICARE, semnalDinCitire, precompletarePerioada } from './ofertareGarantieValabilitate.js'
@@ -77,6 +78,18 @@ const fmtLei = (v, m = 'RON') => v == null || v === '' ? '—' : `${Number(v).to
 // durata din formular ({ valN, valU }) → { n, unitate } sau null dacă nu e completată
 const durataDin = (n, unitate) => Number(n) > 0 && Number.isInteger(Number(n)) ? { n: Number(n), unitate } : null
 const numar = s => { const m = String(s || '').replace(/\./g, '').replace(',', '.').match(/\d+(\.\d+)?/); return m ? Number(m[0]) : '' }
+
+// Banner compact (01.10.2026): un rând cu iconiță + „vezi detalii” pliabil; culoare discretă (bordură stânga), ok pe mobil
+function Banner({ c, titlu, children }) {
+  return (
+    <details style={{ background:c + '0D', border:`1px solid ${c}33`, borderLeft:`3px solid ${c}`, borderRadius:6, padding:'6px 10px', marginBottom:10, fontSize:12.5 }}>
+      <summary style={{ cursor:'pointer', listStylePosition:'inside', lineHeight:1.4, overflowWrap:'anywhere' }}>
+        {titlu} <span style={{ color:G.muted, fontSize:11.5 }}>· vezi detalii</span>
+      </summary>
+      <div style={{ display:'flex', flexDirection:'column', gap:8, marginTop:8, overflowWrap:'anywhere' }}>{children}</div>
+    </details>
+  )
+}
 
 export default function GarantieSection({ licitatie: l, profile, onChanged }) {
   const [g, setG] = useState(undefined)         // undefined = se încarcă, null = nu există
@@ -344,6 +357,7 @@ Vă mulțumim.`
         <span style={{ fontSize:13, color:G.muted }}>cerută în fișa de date: <b style={{ color:G.text }}>{l.garantie_participare || '—'}</b></span>
         {g && <span style={{ marginLeft:'auto', fontSize:12, color: st?.inAsteptare ? G.orange : G.dim }}>{g.broker?.nume}{st?.antet ? ` · ${st.antet}` : ''}</span>}
       </div>
+      <GarantieRegistruLink licitatie={l} profile={profile} valabilPana={necesar?.pana} />
       {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : G.green, marginBottom:10, padding:'8px 10px', background:G.card, borderRadius:7 }}>{msg.text}</div>}
       {busy && <div style={{ fontSize:12.5, color:G.ofertare, fontWeight:700, marginBottom:10 }}>⏳ {busy}</div>}
 
@@ -361,16 +375,16 @@ Vă mulțumim.`
           )}
           {/* polița în original + prelungire cerută pentru termenul curent: în așteptare până la actul adițional */}
           {st?.prelungireCurenta && (
-            <div style={{ background:G.orange + '18', border:`1px solid ${G.orange}66`, borderRadius:8, padding:'10px 12px', marginBottom:12, fontSize:12.5, display:'flex', flexDirection:'column', gap:8 }}>
+            <Banner c={G.orange} titlu={<>⏳ Prelungire cerută brokerului — <b>neconfirmată</b></>}>
               <span>⏳ Prelungire cerută brokerului{g.actualizare_trimisa_la ? ` pe ${fmtZi(g.actualizare_trimisa_la)}` : ''} la <b>{fmtZi(st.prelungireCurenta.de)} – {fmtZi(st.prelungireCurenta.pana)}</b> — <b>neconfirmată</b>.
                 {' '}Până la actul adițional, polița nr. <b>{g.polita_nr || '—'}</b> acoperă doar <b>{fmtZi(st.acoperaDe)} – {fmtZi(st.acoperaPana)}</b>{insuficient ? <>, iar cerința cere până la <b>{fmtZi(necesar.pana)}</b></> : null}.</span>
               {formAct(true)}
-            </div>
+            </Banner>
           )}
           {/* cerere de prelungire rămasă pentru ALT termen, iar termenul curent e din nou cel al poliței (T → T+30 → T):
               fără banner-ul de decalare nu exista nicio acțiune de închidere ⇒ „nu mai e necesară” (acoperire dovedită) sau act adițional */}
           {!decalat && st?.prelungireVeche && (
-            <div style={{ background:G.orange + '18', border:`1px solid ${G.orange}66`, borderRadius:8, padding:'10px 12px', marginBottom:12, fontSize:12.5, display:'flex', flexDirection:'column', gap:8 }}>
+            <Banner c={G.orange} titlu={<>⏳ Cerere de prelungire rămasă deschisă — <b>neconfirmată</b></>}>
               <span>⏳ Cererea de prelungire la <b>{fmtZi(st.prelungireVeche.de)} – {fmtZi(st.prelungireVeche.pana)}</b> a plecat pentru termenul {fmtZi(st.prelungireVeche.de)}, dar termenul de depunere e acum <b>{fmtZi(deAcum)}</b> — cererea a rămas deschisă, <b>neconfirmată</b>.
                 {' '}Polița nr. <b>{g.polita_nr || '—'}</b> acoperă <b>{fmtZi(st.acoperaDe)} – {fmtZi(st.acoperaPana)}</b>.</span>
               {rev.acoperaVerificat
@@ -379,10 +393,10 @@ Vă mulțumim.`
               {rev.acoperaVerificat && <div><button style={{ ...S.btnS, padding:'6px 12px', fontSize:12, color:G.green, borderColor:G.green + '66' }} disabled={!!busy} onClick={confirmaVerificat}>
                 ✓ Prelungirea nu mai e necesară — polița acoperă termenul curent</button></div>}
               {formAct(false)}
-            </div>
+            </Banner>
           )}
           {!st?.prelungireCurenta && decalat && (
-            <div style={{ background:(nuAcopera ? G.red : G.orange) + '18', border:`1px solid ${nuAcopera ? G.red : G.orange}66`, borderRadius:8, padding:'10px 12px', marginBottom:12, fontSize:12.5, display:'flex', flexDirection:'column', gap:8 }}>
+            <Banner c={nuAcopera ? G.red : G.orange} titlu={<>⚠️ Termen decalat ({fmtZi(g.termen_la_cerere)} → <b>{fmtZi(l.termen_depunere)}</b>) — garanția e de reverificat</>}>
               {/* semnalul de reverificare: cerința recalculată pe termenul nou; polița emisă își păstrează perioada din poliță */}
               <span>⚠️ Termenul de depunere s-a decalat ({fmtZi(g.termen_la_cerere)} → <b>{fmtZi(l.termen_depunere)}</b>) — <b>garanția e de reverificat</b>: {g.status === 'original'
                 ? <>polița nr. <b>{g.polita_nr || '—'}</b> e deja în original pentru {fmtZi(st.acoperaDe)} – {fmtZi(st.acoperaPana)}{nuAcopera
@@ -413,15 +427,15 @@ Vă mulțumim.`
               {necesar?.pana && actCalc?.pana && actCalc.pana < necesar.pana && (
                 <span style={{ color:G.red }}>⚠ Mai scurtă decât cerința ({textDurata(propunere.durata)} de la {fmtZi(deAcum)} → {fmtZi(necesar.pana)}).</span>
               )}
-            </div>
+            </Banner>
           )}
           {!st?.prelungireCurenta && !decalat && (insuficient || st?.incepeDupaTermen) && (
-            <div style={{ background:G.red + '14', border:`1px solid ${G.red}66`, borderRadius:8, padding:'10px 12px', marginBottom:12, fontSize:12.5 }}>
+            <Banner c={G.red} titlu={insuficient ? <>⚠️ Polița nu acoperă cerința (până la <b>{fmtZi(necesar.pana)}</b>)</> : <>⚠️ Polița începe după ziua depunerii</>}>
               {insuficient
                 ? <>⚠️ Polița {g.status === 'original' ? `nr. ${g.polita_nr || '—'} ` : ''}e valabilă doar până la <b>{fmtZi(st.acoperaPana)}</b>, dar cerința ({textDurata(propunere.durata)} de la {fmtZi(deAcum)}) cere până la <b>{fmtZi(necesar.pana)}</b>.</>
                 : <>⚠️ Polița {g.status === 'original' ? `nr. ${g.polita_nr || '—'} ` : ''}începe abia pe <b>{fmtZi(st.acoperaDe)}</b>, după ziua depunerii (<b>{fmtZi(deAcum)}</b>).</>}
               <span style={{ color:G.muted }}>{propunere.sursa ? ` Sursa: ${propunere.sursa.eticheta} — „${propunere.sursa.fragment}” ·` : ''} verifică polița și cere brokerului corectarea perioadei.</span>
-            </div>
+            </Banner>
           )}
 
           {/* pasul 1 — fără garanție: formular cerere */}
