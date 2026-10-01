@@ -11,28 +11,40 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 - `supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql` (R2)
 - `supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql` (R3)
 
-**Amprente (r6, 01.10.2026 — c: revalidarea candidatului sub lock (C-RACE-LINK-1); d: cheia gazpet.persoana.emp (D-RACE-CNP-NULL) + amprente în postcondiții; e: email exact cu fișă inactivă = refuz (E-LIFECYCLE-2B) + postcondiții pe lock-uri)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
+**Amprente (r8, 01.10.2026 — c: rândul din auth.users blocat la revalidare (email / confirmare / marcaj sub lock, C-RACE-AUTH-*); d: chei recalculate până la punct fix în gardă + ambele triggere de lock (D-RACE-CNP-REKEY*), sweep fără așteptare când ține lock-uri (D-RACE-SWEEP-CICLU); e: neschimbat față de r7)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
 
 | Fișier | sha256 |
 |---|---|
-| `20260929c_conturi_legare_automata.sql` | `286e1afb1f15cc316b1565d048e2a282f81d956b27851786e4e6326ae1490eb7` |
-| `20260929d_conturi_inchidere_la_incetare.sql` | `ddc04baaa48cff28f69ae009f8276b891d935b94aec79571cc7cae410ded52e7` |
-| `20260929e_fost_angajat_colaborare_externa.sql` | `870fdb3f8252e64e4e0ff136a21e2ba431da3e9aee8657448875e47c6745bd59` |
-| `20260929c_conturi_legare_automata_ROLLBACK.sql` | `be29df2cf6c1261af75e57d8bd54f3d0b8ebd69b9e39331805debba4200c1592` |
+| `20260929c_conturi_legare_automata.sql` | `4303655ffd6aae7b1ad4606f75b87d23c25c23e846d6379679e2b05d2f6e50cf` |
+| `20260929d_conturi_inchidere_la_incetare.sql` | `3e5e7b33a08d114a31a7e55996585c7e5f008f07ce438a998da4e3d453aa907f` |
+| `20260929e_fost_angajat_colaborare_externa.sql` | `be6366d9c4e1f110200569bbec6ebf04c234474f4944ec3875ec124eef635be9` |
+| `20260929c_conturi_legare_automata_ROLLBACK.sql` | `c8a64245579d9e36e6c7b88b7567e64cb0628ef3930bc12a5a9f29ad101dde36` |
 | `20260929d_conturi_inchidere_la_incetare_ROLLBACK.sql` | `c2e41e0e028ee9027823f48540e95fb2801cfad5fa16d2af9b291d739163b0e1` |
-| `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `5db7153f28fc5a625c3d48e5fb10cd5e86393b18eef8037368dfdac2251dffa3` |
+| `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `94eb12f925383a53648079c920c91ae4542867f5a2adb83bb7e15a0878e4e523` |
 
-**Livrare (r6; live la 20261001201500): versiuni și comenzile runner-ului (acceptate de Copilot: 210000 / 211500 / 213000).** Ordinea e strictă c → d → e, iar versiunile sunt > 20261001184500 (ultima de pe live la 01.10) și strict crescătoare. După fiecare pas, runner-ul rulează gate-ul 0e (cod 30/31 = stop).
+**Livrare (r8; versiunile r7, neschimbate: 230000 / 231500 / 233000).** Ordinea e strictă c → d → e, iar versiunile sunt > ultima versiune live (`20261001224000`, F1b) și strict crescătoare. După fiecare pas, runner-ul rulează gate-ul 0e (cod 30/31 = stop).
 ```
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929c_conturi_legare_automata.sql \
-  --sha256 286e1afb1f15cc316b1565d048e2a282f81d956b27851786e4e6326ae1490eb7 --versiune 20261001210000 \
+  --sha256 4303655ffd6aae7b1ad4606f75b87d23c25c23e846d6379679e2b05d2f6e50cf --versiune 20261001230000 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql \
-  --sha256 ddc04baaa48cff28f69ae009f8276b891d935b94aec79571cc7cae410ded52e7 --versiune 20261001211500 \
+  --sha256 3e5e7b33a08d114a31a7e55996585c7e5f008f07ce438a998da4e3d453aa907f --versiune 20261001231500 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql \
-  --sha256 870fdb3f8252e64e4e0ff136a21e2ba431da3e9aee8657448875e47c6745bd59 --versiune 20261001213000 \
+  --sha256 be6366d9c4e1f110200569bbec6ebf04c234474f4944ec3875ec124eef635be9 --versiune 20261001233000 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
+```
+
+**Preflight live înainte de GO (read-only; r8, cerut de Copilot pentru e).** Pe lângă controalele din r6 (md5 S-A / handle_new_user, obiecte c/d/e inexistente, gate 0e = 0), se rulează și:
+```sql
+-- c (r8): postgres trebuie să aibă SELECT + UPDATE pe auth.users (lock-ul rândului de logare la legare; d îl folosește deja la ban)
+SELECT has_table_privilege('postgres', 'auth.users', 'SELECT') AS sel, has_table_privilege('postgres', 'auth.users', 'UPDATE') AS upd;   -- așteptat: t, t
+-- e (r8): migrarea NU repară retrospectiv — externi activi NELEGAȚI (fost_angajat_employee_id IS NULL) cu emailul EXACT al unei fișe INACTIVE
+SELECT x.id, x.nume, x.email, e.id AS employee_id, e.name, e.termination_date
+  FROM public.hr_personal_extern x
+  JOIN public.employees e ON lower(btrim(e.email)) = lower(btrim(x.email))
+ WHERE x.activ IS TRUE AND x.fost_angajat_employee_id IS NULL AND NULLIF(btrim(COALESCE(x.email, '')), '') IS NOT NULL
+   AND e.active IS NOT TRUE;                                                          -- așteptat: 0 rânduri; altfel se decid manual înainte de e
 ```
 
 **Aliniere SEC F2 r4 (01.10.2026).** `fn_identitate_privilegiata` întoarce `'service_role'` DOAR cu predicatul copiat textual din F2 (`20260930j`):

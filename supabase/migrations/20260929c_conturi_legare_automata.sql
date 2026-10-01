@@ -14,6 +14,8 @@
 --                                         supabase_auth_admin S-A refuză UPDATE-ul, iar eșecul era tăcut)
 --   * fn_cont_leaga_la_creare(profil)   — calea de încredere: RPC chemat de funcția edge cont-nou (service_role)
 --                                         sau de owner, după createUser cu app_metadata.gazpet_legare_automata
+--                                         r8: email / confirmare / marcaj reverificate SUB lock-ul rândului din auth.users
+--                                         (fn_cont_revalideaza_candidat, FOR NO KEY UPDATE; ordinea fișă → profil → auth.users)
 --   * trg_profiles_protectie_legatura   — employee_id / tip_cont / email / is_owner / role se schimbă doar de o
 --                                         identitate privilegiată explicită; un cont închis (R2) nu se mai poate auto-edita
 --   * fn_cont_leaga_automat(simulare, confirmate) — legare la cerere, poartă owner în cod; aplicarea leagă
@@ -59,6 +61,11 @@ BEGIN
     RAISE EXCEPTION 'Precondiție: S-A (trg_profiles_campuri_owner_only pe profiles: activ, fn_profiles_campuri_owner_only, BEFORE UPDATE ROW) nu e live — se reanalizează';
   END IF;
   IF to_regprocedure('extensions.unaccent(text)') IS NULL THEN RAISE EXCEPTION 'Precondiție: extensions.unaccent(text) lipsește'; END IF;
+  -- r8 (P1-2): fn_cont_revalideaza_candidat blochează rândul din auth.users (FOR NO KEY UPDATE) ⇒ proprietarul funcțiilor
+  -- SECURITY DEFINER (postgres, = current_user aici) are nevoie de SELECT + UPDATE pe auth.users (d le folosește deja la ban).
+  IF NOT has_table_privilege(current_user, 'auth.users', 'SELECT') OR NOT has_table_privilege(current_user, 'auth.users', 'UPDATE') THEN
+    RAISE EXCEPTION 'Precondiție: % nu are SELECT + UPDATE pe auth.users (necesare pentru lock-ul rândului de logare la legare)', current_user;
+  END IF;
   -- Live 01.10.2026: S-A extins 30a (#532, v20261001178000, peste SEC F2 r4) a rescris fn_profiles_campuri_owner_only (md5 prosrc 1114af39…);
   -- pachetul e aliniat la acel predicat. Altă variantă ⇒ starea de pornire s-a schimbat ⇒ refuz.
   IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_profiles_campuri_owner_only()'))
@@ -436,8 +443,22 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
 -- cât timp legarea aștepta profilul) se lega totuși. NULL = se poate lega; altfel rezultatul de întors, fără legare.
 -- Lock-ul pe fișă e luat ÎNAINTEA profilului chiar dacă apelantul ținea deja profilul (reentrant) — vezi apelanții: niciunul
 -- nu mai ține profilul înainte de apel, ca ordinea fișă → profil să fie reală.
+-- r8 (P1-2 Jakarinos / P1-C Copilot pe b916970): identitatea de logare se recitea din auth.users FĂRĂ lock pe rând ⇒ GoTrue
+-- putea schimba / confirma emailul (sau marcajul putea fi retras) între recitire și UPDATE-ul pe profiles — lock-ul pe profil
+-- nu protejează rândul din auth.users. Acum rândul din auth.users e BLOCAT (FOR NO KEY UPDATE) și emailul, confirmarea ȘI
+-- marcajul gazpet_legare_automata (p_cere_marcaj = true pe calea de încredere) se citesc SUB acel lock.
+--   * Ordinea: fișă → profil → auth.users — auth.users DUPĂ profil (nu înaintea lui, cum sugera Copilot), ca să fie aceeași cu
+--     fn_cont_inchide din d (profil FOR UPDATE → UPDATE auth.users); două ordini opuse ar fi fost un ciclu nou (legare ↔ închidere).
+--   * FOR NO KEY UPDATE, nu FOR UPDATE: blochează exact UPDATE-urile GoTrue pe rând (schimbare / confirmare email, ban,
+--     metadata — toate iau NO KEY UPDATE sau mai tare), dar NU blochează FOR KEY SHARE = verificările FK ale GoTrue la login
+--     (INSERT în auth.sessions / auth.refresh_tokens) ⇒ un login în timpul legării nu așteaptă. GoTrue nu ține niciodată rândul
+--     din auth.users așteptând ceva de-al nostru (singurul trigger al pachetului pe auth.users e AFTER INSERT, pe rând NOU) ⇒ fără
+--     ciclu; așteptarea e cel mult durata unei tranzacții GoTrue pe acel utilizator.
+--   * Dreptul: SECURITY DEFINER (owner postgres) — UPDATE pe auth.users e deja folosit de d (banned_until); precondiția de mai jos
+--     refuză migrarea dacă postgres n-ar avea UPDATE pe auth.users (FOR NO KEY UPDATE îl cere).
 DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(text, integer);
-CREATE OR REPLACE FUNCTION public.fn_cont_revalideaza_candidat(p_profile_id uuid, p_emp integer)
+DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(uuid, integer);   -- r7 (semnătura fără p_cere_marcaj)
+CREATE OR REPLACE FUNCTION public.fn_cont_revalideaza_candidat(p_profile_id uuid, p_emp integer, p_cere_marcaj boolean DEFAULT false)
 RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
@@ -445,6 +466,7 @@ DECLARE
   v_p      public.profiles%ROWTYPE;
   v_email  text;
   v_conf   boolean;
+  v_incr   boolean;
   v_n      integer;
   v_emp    integer;
   v_ocupat boolean;
@@ -453,9 +475,11 @@ BEGIN
   PERFORM 1 FROM public.employees e WHERE e.id = p_emp FOR UPDATE;                 -- 1) fișa
   SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;       -- 2) profilul (recitit SUB lock)
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
-  SELECT u.email::text, u.email_confirmed_at IS NOT NULL INTO v_email, v_conf
-    FROM auth.users u WHERE u.id = p_profile_id;                                   -- emailul de logare, recitit
+  SELECT u.email::text, u.email_confirmed_at IS NOT NULL, COALESCE(u.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true'
+    INTO v_email, v_conf, v_incr
+    FROM auth.users u WHERE u.id = p_profile_id FOR NO KEY UPDATE;                  -- 3) rândul de logare, BLOCAT și recitit (r8)
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+  IF p_cere_marcaj AND NOT v_incr THEN RETURN 'fara_marcaj_incredere'; END IF;    -- marcajul retras cât timp se aștepta (r8)
   IF v_p.employee_id IS NOT NULL THEN RETURN 'legatura_existenta'; END IF;
   IF COALESCE(v_p.tip_cont, 'angajat') <> 'angajat' THEN RETURN 'tip_cont_exceptat'; END IF;
   IF NULLIF(lower(btrim(COALESCE(v_email, ''))), '') IS NULL
@@ -473,7 +497,7 @@ BEGIN
   IF v_ocupat THEN RETURN 'candidat_ocupat'; END IF;
   RETURN NULL;
 END $fn$;
-REVOKE ALL ON FUNCTION public.fn_cont_revalideaza_candidat(uuid, integer) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_cont_revalideaza_candidat(uuid, integer, boolean) FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.fn_cont_leaga_la_creare(p_profile_id uuid)
 RETURNS text
@@ -519,7 +543,9 @@ BEGIN
     -- r6 (C-RACE-LINK-1) + r7 (P1-C, P2): lock fișă → profil și revalidarea AMBELOR jumătăți (fișă activă; profil încă
     -- nelegat, tip angajat, email profil = email de logare recitit, confirmat; potrivirea recalculată identică) — ÎN blocul
     -- de excepții: un lock_timeout / 40P01 din așteptarea lock-urilor devine 'eroare' + notificare owner, nu scapă din RPC.
-    v_rez := public.fn_cont_revalideaza_candidat(p_profile_id, v_emp);
+    -- r8 (P1-2): p_cere_marcaj = true ⇒ marcajul gazpet_legare_automata, emailul de logare și confirmarea se reverifică SUB
+    -- lock-ul rândului din auth.users (citirile de mai sus erau doar filtrul rapid, nelegate de lock).
+    v_rez := public.fn_cont_revalideaza_candidat(p_profile_id, v_emp, true);
     IF v_rez IS NULL THEN
       UPDATE public.profiles SET employee_id = v_emp
        WHERE id = p_profile_id AND employee_id IS NULL;           -- nu suprascrie niciodată
