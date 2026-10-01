@@ -360,7 +360,7 @@
   "baza_normativa_id": "hg-1-2018",
   "snapshot_sha256": "54fbafbfdfc6843e8193a2da1738a8928a985656c47054b6dcca6ad351d667d0",
   "snapshot_data": "2026-10-01",
-  "nota": "Snapshot al hg1.pdf (AFIR, actualizat cu HG 965/2023) descărcat în runda 1; clauzele 15, 21, 36, 46–53, 61, 69a recitite în această rundă.",
+  "nota": "sha calculat pe hg1.pdf din runda 1 (text AFIR). Anexa 1 citită integral pentru cl. 7, 15, 35–38, 46–53, 57–70; Anexa 2 pentru cl. 46.7, 49.1, 65.1. Modificatori văzuți în text: HG 297/2022, 375/2022, 1347/2022, 965/2023. Modificări după 17.10.2023 NEVERIFICATE.",
   "aplicabilitate_gazpet": "neevaluat",
   "motiv_aplicabilitate": null
  },
@@ -448,7 +448,7 @@
   "cod": "HG 273/1994 — Regulament privind receptia constructiilor (forma HG 343/2017)",
   "titlu": "Regulamentul privind receptia constructiilor (inlocuit integral ca text prin HG 343/2017, MO 406/30.05.2017, in vigoare la 60 zile)",
   "emitent": "Guvernul Romaniei",
-  "editie": "Forma data de HG 343/2017; mentinut tranzitoriu de Legea 169/2026 art. 577 alin. (6) (dupa verificatori.ro)",
+  "editie": "Regulamentul în forma HG 343/2017 (MO 406/30.05.2017, PDF AICPS sha256 5bd0b05a…); menținut de L169/2026 art. 577 alin. (6); modificări 2017–2026 NEVERIFICATE",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -464,10 +464,11 @@
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 21,
   "baza_normativa_id": "hg-273-1994-receptie",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "snapshot_sha256": "5bd0b05af27413542ea9ffba1e86e9c57c21c25cb8606b4a514a7541f0fd6d85",
+  "snapshot_data": "2026-10-01",
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Menținut expres de L169/2026 art. 577 alin. (6) (verificat pe MO).",
+  "nota": "Textul integral al regulamentului (art. 1–40) citit. Modificări după 2017 neidentificate (legislatie.just.ro inaccesibil). Art. 2 alin. (2) și art. 15 alin. (3) lit. f) încă trimit la L10/1995 și L50/1991 → se citesc la cod (art. 583 alin. (3))."
  },
  {
   "source_id": "SRC-hg-300-2006",
@@ -758,7 +759,7 @@
   "cod": "HG 925/1995",
   "titlu": "Regulamentul de verificare si expertizare tehnica de calitate a proiectelor, a executiei lucrarilor si a constructiilor",
   "emitent": "Guvernul Romaniei",
-  "editie": "Text HG 925/1995 publicat de ISC (PDF 7 pagini); citit prin extragere țintită (Firecrawl query) art. 5–6 din Regulament",
+  "editie": "Menținut de L169/2026 art. 577 alin. (5) — confirmat pe MO; textul HG nu a putut fi recitit în această rundă (isc.gov.ro: TLS/503; cdep.ro: reset; lege5: 503)",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -771,13 +772,13 @@
    "deviz_legi_conexe"
   ],
   "ultima_verificare": "2026-10-01",
-  "verificat_pe_sursa_primara": true,
+  "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "hg-925-1995",
   "snapshot_sha256": null,
   "snapshot_data": null,
   "aplicabilitate_gazpet": "conditionata",
-  "motiv_aplicabilitate": "Relevant la contractele de proiectare + execuție și la recepție (referatele verificatorilor); menținut tranzitoriu de Legea 169/2026 (neconfirmat pe MO).",
+  "motiv_aplicabilitate": "Se aplică doar cât nu contravine L169 art. 440–449 (art. 583 alin. (2)).",
   "nota": "Art. 5: proprietarii/investitorii încheie contracte distincte de verificare. Art. 6: verificatorul doar pe specialitățile atestate, nu propriile proiecte. Cazurile de obligativitate pe cerințe NU au fost citite."
  },
  {
@@ -1008,7 +1009,8 @@
   "snapshot_data": null,
   "ultima_verificare": "2026-10-01",
   "source_id": "SRC-ins-buletin-statistic-preturi",
-  "nota": "Buletinul nu a putut fi descărcat (insse.ro 503); URL-ul secțiunii e presupus — de verificat."
+  "nota": "insse.ro inaccesibil și în această rundă (connection reset / 503). Structura tabelelor 15 / 15A / 15.B dedusă din HG 1/2018, OG 15/2021, OUG 64/2022 (via CNSC) și metodologia OUG 64. Titlul tabelului 15 după OG 15/2021: „Indicii de cost în construcții pe categorii de obiecte și pe elemente de structură”.",
+  "verificat_pe_sursa_primara": false
  },
  {
   "source_id": "SRC-instr-anap-1-2017",
@@ -1206,7 +1208,7 @@
   "cod": "Legea 10/1995 (republicata MO 765/30.09.2016)",
   "titlu": "Legea privind calitatea in constructii",
   "emitent": "Parlamentul Romaniei",
-  "editie": "Republicata 2016; ABROGATA in cea mai mare parte de la 25.08.2026 prin Legea 169/2026 — raman doar art. 10 si art. 41",
+  "editie": "Rămân în vigoare doar art. 10 și 41 — confirmat pe MO 661/2026 (L169 art. 576 alin. (3) lit. c))",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
@@ -1218,14 +1220,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
-  "verificat_pe_sursa_primara": false,
+  "ultima_verificare": "2026-10-01",
+  "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 4,
   "baza_normativa_id": "legea-10-1995",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Articolele rămase nu creează obligații pentru executant."
  },
  {
   "source_id": "SRC-legea-101-2016",
@@ -1315,27 +1317,27 @@
   "cod": "Legea 169/2026 — Codul amenajarii teritoriului, urbanismului si constructiilor (CATUC)",
   "titlu": "Codul amenajarii teritoriului, urbanismului si constructiilor",
   "emitent": "Parlamentul Romaniei",
-  "editie": "MO I nr. 661/10.08.2026; in vigoare 25.08.2026 (unele dispozitii tranzitorii cu termene proprii)",
-  "data_publicarii": null,
-  "effective_from": null,
+  "editie": "MO I nr. 661/10.08.2026 (PDF integral, sha256 1b2c751a…), în vigoare 25.08.2026 (art. 575: 15 zile de la publicare)",
+  "data_publicarii": "2026-08-10",
+  "effective_from": "2026-08-25",
   "effective_to": null,
   "status": "in_vigoare",
   "inlocuit_de": null,
-  "url_oficial": "https://verificatori.ro/cod-urbanism",
-  "urluri_secundare": "https://verificatori.ro/cod-urbanism ; https://verificatori.ro/cod-urbanism/legea-10-1995-ce-mai-ramane ; https://arenaconstruct.ro/catuc-mdlpa-clarifica-aplicarea-noului-cod-al-amenajarii-teritoriului-urbanismului-si-constructiilor/ ; https://www.artevis.ro/garantii-si-retineri-in-contractele-de-constructii/",
-  "acces": "partial",
+  "url_oficial": "https://monitoruloficial.ro/Monitorul-Oficial--PI--661--2026.html",
+  "urluri_secundare": "https://verificatori.ro/legislatie/legea-169-2026-cod-urbanism-monitorul-oficial-661.pdf (copie integrală MO 661/2026, 192 p.)",
+  "acces": "public",
   "domenii": [
    "deviz_legi_conexe"
   ],
   "ultima_verificare": "2026-10-01",
-  "verificat_pe_sursa_primara": false,
+  "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "legea-169-2026-catuc",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
+  "snapshot_sha256": "1b2c751a170561903dddf8eda06496bf95c467a140464401bfeb8a9d3981edef",
+  "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Garanții minime și vicii ascunse pentru lucrările Gazpet recepționate după 25.08.2026.",
-  "nota": "CONFLICT de numerotare între surse secundare: garanții art. 531 alin. (6) (artevis.ro) vs art. 466 „Durata garanțiilor” (index verificatori.ro); abrogări art. 576 (runda 1) vs art. 584 (index). Textul din MO 661/2026 trebuie citit înainte de folosirea oricărui locator."
+  "motiv_aplicabilitate": "Cod în vigoare pentru autorizare, calitate, recepție, garanții, asigurări — orice lucrare Gazpet.",
+  "nota": "Text oficial citit (PDF MO). Confirmate: art. 267, 277, 299, 370, 440–449, 451, 527–532, 556, 574–577, 583. REQ-AD-142/143/144/150 se pot trece pe verificat=true (art. 531 alin. (6),(9); art. 451 alin. (3); art. 576 alin. (3) lit. c)); art. 466 din indexul verificatori.ro era greșit. PDF-ul e copia de pe verificatori.ro a MO — sha calculat pe acea copie."
  },
  {
   "tip": "lege",
@@ -1446,10 +1448,10 @@
   "cod": "Legea 50/1991 (republicata)",
   "titlu": "Legea privind autorizarea executarii lucrarilor de constructii",
   "emitent": "Parlamentul Romaniei",
-  "editie": "Abrogata integral de la 25.08.2026 prin Legea 169/2026",
+  "editie": "Abrogată integral din 25.08.2026 — confirmat pe MO 661/2026 (L169 art. 576 alin. (3) lit. b)); Normele (Ord. 839/2009) abrogate prin lit. e)",
   "data_publicarii": null,
   "effective_from": null,
-  "effective_to": null,
+  "effective_to": "2026-08-24",
   "status": "abrogat",
   "inlocuit_de": "Legea 169/2026 (CATUC)",
   "url_oficial": "https://legeaz.net/legea-50-1991/art-11",
@@ -1458,14 +1460,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
-  "verificat_pe_sursa_primara": false,
+  "ultima_verificare": "2026-10-01",
+  "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 20,
   "baza_normativa_id": "legea-50-1991",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Interpretarea DA/contractelor vechi."
  },
  {
   "source_id": "SRC-legea-51-2006-anrsc",
@@ -1650,6 +1652,31 @@
   "ofertare_normative_id": null,
   "verificat_pe_sursa_primara": false,
   "note": "PDF-ul nu s-a putut descărca (conexiune resetată); conținut preluat din rezumatul verificatori.ro și juridice.ro."
+ },
+ {
+  "source_id": "SRC-metodologie-ajustare-oug-64-2022",
+  "tip": "ghid",
+  "cod": "Metodologie OUG 64/2022 (după OUG 109/2022)",
+  "titlu": "Metodologia de aplicare a formulelor de ajustare și revizuire a devizelor generale, prevăzute în OUG 64/2022, ca urmare a intrării în vigoare a OUG 109/2022",
+  "emitent": "NECONFIRMAT (probabil MIPE; publicată și pe sgg.gov.ro ca „ANEXE-4”)",
+  "editie": "2022",
+  "data_publicarii": null,
+  "effective_from": null,
+  "effective_to": null,
+  "status": "in_vigoare",
+  "url_oficial": "https://federatiaconstructorilor.ro/attachments/article/695/ANEXA-54.pdf",
+  "urluri_secundare": "https://sgg.gov.ro/1/wp-content/uploads/2022/05/ANEXE-4.pdf",
+  "acces": "public",
+  "domenii": [
+   "contract",
+   "deviz"
+  ],
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Contracte din fonduri externe în regim OUG 64/2022; descrie tabelele INS 15, 15A, 15.B.",
+  "snapshot_sha256": "9388783d80b53e07819a9197e11f1afcabe9f4b516db776f7ca022e371597099",
+  "snapshot_data": "2026-10-01",
+  "ultima_verificare": "2026-10-01",
+  "verificat_pe_sursa_primara": false
  },
  {
   "source_id": "SRC-norme-firma-softeh-valrom-pehd",
@@ -1902,15 +1929,15 @@
   "cod": "OG 15/2021",
   "titlu": "OG 15/2021 privind reglementarea unor măsuri fiscal-bugetare pentru ajustarea prețurilor contractelor de achiziție publică (aprobată cu modificări prin Legea 281/2021)",
   "emitent": "Guvernul României",
-  "editie": "30.08.2021; Legea 281/2021; formula din contractele OG 15 a fost înlocuită cu formula OUG 47/2022 art. 3(4) prin act adițional (OUG 47/2022 art. 4(4))",
+  "editie": "Text OG 15/2021 semnat (PDF publicat de 1616.ro, sha256 b3cc1c6e…) — nu e MO; modificările din Legea 281/2021 NECITITE",
   "data_publicarii": null,
   "effective_from": null,
   "effective_to": null,
   "status": "in_vigoare_modificat",
   "inlocuit_de": null,
-  "url_oficial": "https://anap.gov.ro/web/wp-content/uploads/2023/05/Cele-mai-frecvente-observatii-din-cadrul-avizelor-lucrari.pdf",
-  "urluri_secundare": "https://anap.gov.ro/web/wp-content/uploads/2023/05/Cele-mai-frecvente-observatii-din-cadrul-avizelor-lucrari.pdf",
-  "acces": "partial",
+  "url_oficial": "https://i0.1616.ro/media/2/2621/33219/20360442/4/majorare.pdf",
+  "urluri_secundare": "https://lege5.ro/gratuit/ha4damrsg4za/ordonanta-nr-15-2021-privind-reglementarea-unor-masuri-fiscal-bugetare (503)",
+  "acces": "public",
   "domenii": [
    "achizitii_contracte"
   ],
@@ -1918,11 +1945,11 @@
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "og-15-2021",
-  "snapshot_sha256": null,
-  "snapshot_data": null,
+  "snapshot_sha256": "b3cc1c6eed96acd1e1539dbdfd8f02098a65f96766e2d07c4359eda368e26de2",
+  "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "doar_referinta",
-  "motiv_aplicabilitate": "Mecanism istoric 2021 pentru contracte fără clauză de revizuire; înlocuit în practică de OUG 47/2022.",
-  "nota": "Formula C pe ICCM (tabel 15, ref. ian. 2021) și actul adițional în 30 de zile — doar din surse secundare (juridice.ro, zf.ro); lege5 503."
+  "motiv_aplicabilitate": "Regim de ajustare închis (contracte din 2021); util pentru structura indicilor INS și ponderi.",
+  "nota": "Text semnat (PM Cîțu), fără număr/dată MO în PDF; probabil textul adoptat publicat de presă. Intrare în vigoare 03.09.2021 (după surse secundare)."
  },
  {
   "source_id": "SRC-og-20-1992",
@@ -4968,8 +4995,9 @@
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": null,
-  "snapshot_sha256": "1e6c5e810c140da32f1380286bd39e40301cb15f42cad0cc5595d5758567a9f7",
+  "snapshot_sha256": "6edbaf655acd96d975021651241dcabc153bb06a86f62d9c42369f40fcb55f32",
   "snapshot_data": "2026-10-01",
+  "nota": "Recitit pentru ICCplr, tabelele 15/15A și OUG 64 art. 1 alin. (3).",
   "aplicabilitate_gazpet": "doar_referinta",
   "motiv_aplicabilitate": "Practică CNSC — interpretare, nu normă; vezi câmpul comparabilitate în cnsc_practica.json"
  },

@@ -1174,5 +1174,149 @@
   "locator": "art. 51 alin. (1)",
   "nota": "Idem (trimitere generică).",
   "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-50-1991",
+  "relatie": "abroga",
+  "locator": "art. 576 alin. (3) lit. b)",
+  "nota": "din 25.08.2026; și Ord. 839/2009 (lit. e))",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "abroga",
+  "locator": "art. 576 alin. (3) lit. c)",
+  "nota": "parțial: rămân art. 10 și 41",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "art. 577 alin. (6); art. 528 alin. (5)",
+  "nota": "menține regulamentul de recepție până la modificare",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-925-1995",
+  "relatie": "trimite_la",
+  "locator": "art. 577 alin. (5)",
+  "nota": "menținut, aplicabil cât nu contravine codului (art. 583 alin. (2))",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-766-1997",
+  "relatie": "trimite_la",
+  "locator": "art. 577 alin. (3)",
+  "nota": "anexele 1–5 menținute (inclusiv categoria de importanță)",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-907-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 577 alin. (1)–(2)",
+  "nota": "proiectele HG 907 pornite înainte de 25.08.2026 rămân pe regimul vechi",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-123-2012-gaze",
+  "relatie": "interpreteaza",
+  "locator": "art. 267 alin. (1) (drepturile operatorului de rețea)",
+  "nota": "branșare la rețele existente",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-273-1994-receptie",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "trimite_la",
+  "locator": "art. 2 alin. (2); art. 11 alin. (5); art. 17 alin. (1) lit. c)",
+  "nota": "trimiteri la articole abrogate → se citesc la L169 (art. 583 alin. (3))",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "aplica",
+  "locator": "temei: art. 235 alin. (4) L98; art. 4 (L98 prioritară)",
+  "nota": "",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "Anexa 1 și 2, cl. 48.5",
+  "nota": "ICC total, tabelul 15",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "Anexa 1, cl. 60.5, 62.2 („proces-verbal conform Legii”)",
+  "nota": "comisia și PV de recepție după regulament",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-legea-169-2026-catuc",
+  "relatie": "interpreteaza",
+  "locator": "Anexa 1, cl. 61.6 (categorii de importanță) ↔ L169 art. 370 alin. (5), art. 531 alin. (6)",
+  "nota": "valorile implicite coincid cu minimele pe CC",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-98-2016",
+  "to_source_id": "SRC-hg-1-2018",
+  "relatie": "modifica",
+  "locator": "art. 222^2 alin. (9) (forma OUG 52/2024) vs cl. 48.2",
+  "nota": "obligație de ajustare > 6 luni prevalează asupra pragului de 365 zile (interpretare)",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-og-15-2021",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "art. 2 alin. (2), (5)",
+  "nota": "ICCM tabel 15; ponderi",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-oug-64-2022",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "art. 17 alin. (8) (tabel 15, 15A)",
+  "nota": "ICCplr NU e INS (Anexa 4, CNSP)",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-metodologie-ajustare-oug-64-2022",
+  "to_source_id": "SRC-oug-64-2022",
+  "relatie": "aplica",
+  "locator": "întreg documentul",
+  "nota": "tabel 15.B pentru cap. VI",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_406",
+  "to_source_id": "SRC-oug-64-2022",
+  "relatie": "interpreteaza",
+  "locator": "motivare p. 8–9",
+  "nota": "formula e pentru contracte în derulare",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-925-1995",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "aplica",
+  "locator": "temei art. 41 L10/1995",
+  "nota": "temeiul rămâne în vigoare (art. 41)",
+  "tema": "p1"
  }
 ]
