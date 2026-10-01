@@ -35,7 +35,7 @@
 --   1b. (r4) CREATE OR REPLACE pe fn_profiles_campuri_owner_only: singura schimbare = ramura service_role cere și
 --        session_user = 'authenticator' ȘI current_setting('role') = 'service_role' + claim.role/claims.role contradictorii ⇒ 42501;
 --        ramura directă (fără rol și fără sub, session_user postgres/supabase_admin), ramura owner și mesajele rămân identice.
---   0e. (r4–r6) Precondiție = INVARIANT DE CATALOG euristic: nicio funcție expusă (public/graphql_public, EXECUTE pentru
+--   0e. (r4–r8) Precondiție = INVARIANT DE CATALOG euristic: nicio funcție expusă (public/graphql_public, EXECUTE pentru
 --        anon/authenticated, INVOKER sau DEFINER) nu scrie GUC-urile de identitate (proconfig role/request.jwt*/
 --        session_authorization; set_config; request.jwt; session authorization; SET/RESET … ROLE; U&; comentarii imbricate)
 --        și nu are EXECUTE dinamic (DEFINER: doar lista revizuită legată de md5(prosrc)). Vezi doc §8.7.
@@ -118,7 +118,7 @@ BEGIN
   IF v_n IS DISTINCT FROM 4 OR v_ok IS DISTINCT FROM 4 THEN
     RAISE EXCEPTION 'Precondiție 0c: triggerele de pe profiles nu sunt exact cele 4 analizate (% triggere, % conforme)', v_n, v_ok;
   END IF;
-  -- 0e. (r4, r5, r6) INVARIANT DE CATALOG (euristic), nu proprietate a triggerelor: triggerele de pe profiles au încredere în
+  -- 0e. (r4–r8) INVARIANT DE CATALOG (euristic), nu proprietate a triggerelor: triggerele de pe profiles au încredere în
   --     GUC-urile JWT (request.jwt.claim.sub / request.jwt.claims / role), deci ORICE cod SQL expus prin PostgREST care le poate
   --     scrie e un gadget: (A) clauză de funcție SET "request.jwt.claim.sub"/"request.jwt.claims" = sub de owner ⇒ ramura
   --     owner trece fără SET ROLE; (C) un RPC SECURITY DEFINER cu set_config('request.jwt.claims', …) — la fel; SET [LOCAL] ROLE
@@ -129,13 +129,20 @@ BEGIN
   --     șiruri), ambele lower-case și fără ghilimele duble. EXECUTE: refuz la INVOKER; la DEFINER refuz cu excepția listei
   --     revizuite legate de md5(prosrc). Fail-closed intenționat: fals-pozitivele refuză și ele — omul analizează lista din
   --     mesaj (funcție + motiv). Aceeași interogare = SQL-ul de control post-deploy din docs/SEC_F1_F2_PATCH.md §8.7.
+  --     (r8) Textul scanat = CORPUL funcției (prosrc; pentru BEGIN ATOMIC pg_get_function_sqlbody) + lista de argumente
+  --     (pg_get_function_arguments, prinde DEFAULT-urile) — nu antetul generat de pg_get_functiondef: clauzele SET din antet
+  --     sunt acoperite structural de proconfig (fals pozitivul RSVTI: antet SET search_path + corp cu p.role). Regula SET/RESET
+  --     ROLE se aplică doar la început de instrucțiune (început de text, ;, >>, begin/then/else/loop/atomic), deci nu prinde
+  --     UPDATE … SET role = …. Motiv nou „interpretor SQL”: query_to_xml & co., ts_stat/ts_rewrite, crosstab/connectby,
+  --     dblink*, xpath_table — execută SQL primit ca argument. Corp NULL ⇒ motiv „corp necitibil” (fail-closed).
   SELECT count(*), string_agg(q.functie || ' [' || q.motive || ']', '; ' ORDER BY q.functie) INTO v_n, v_gadget
     FROM (
-           -- SEC F2 0e (r6) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate
+           -- SEC F2 0e (r8) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate și nu interpretează SQL primit ca argument
            WITH f AS (
              SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
                     EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
-                    CASE WHEN p.prokind IN ('f', 'p', 'w') THEN pg_get_functiondef(p.oid) END AS def
+                    CASE WHEN p.prosqlbody IS NULL THEN p.prosrc ELSE pg_get_function_sqlbody(p.oid) END
+                      || E'\n ; ' || pg_get_function_arguments(p.oid) AS def
                FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
                 AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
@@ -146,14 +153,15 @@ BEGIN
                FROM f
            ), m AS (
              SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+                      CASE WHEN t.def IS NULL THEN 'corp necitibil' END,
                       CASE WHEN t.cfg THEN 'proconfig' END,
                       CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
                       CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
                       CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
-                      CASE WHEN t.txt ~ '\m(set|reset)\M[^;]*\mrole\M'
-                             OR t.txt ~ '\m(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+                      CASE WHEN t.txt ~ '(^|;|>>|\m(begin|then|else|loop|atomic)\M)(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
                       CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
                       CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+                      CASE WHEN t.txt ~ '\m(query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|ts_stat|ts_rewrite|crosstab|crosstab2|crosstab3|crosstab4|connectby|dblink|dblink_exec|dblink_open|dblink_send_query|xpath_table)\M' THEN 'interpretor SQL' END,
                       CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
                              SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
                               WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
@@ -481,11 +489,12 @@ DECLARE v_n int; v_gadget text;
 BEGIN
   SELECT count(*), string_agg(q.functie || ' [' || q.motive || ']', '; ' ORDER BY q.functie) INTO v_n, v_gadget
     FROM (
-           -- SEC F2 0e (r6) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate
+           -- SEC F2 0e (r8) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate și nu interpretează SQL primit ca argument
            WITH f AS (
              SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
                     EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
-                    CASE WHEN p.prokind IN ('f', 'p', 'w') THEN pg_get_functiondef(p.oid) END AS def
+                    CASE WHEN p.prosqlbody IS NULL THEN p.prosrc ELSE pg_get_function_sqlbody(p.oid) END
+                      || E'\n ; ' || pg_get_function_arguments(p.oid) AS def
                FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
                 AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
@@ -496,14 +505,15 @@ BEGIN
                FROM f
            ), m AS (
              SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+                      CASE WHEN t.def IS NULL THEN 'corp necitibil' END,
                       CASE WHEN t.cfg THEN 'proconfig' END,
                       CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
                       CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
                       CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
-                      CASE WHEN t.txt ~ '\m(set|reset)\M[^;]*\mrole\M'
-                             OR t.txt ~ '\m(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+                      CASE WHEN t.txt ~ '(^|;|>>|\m(begin|then|else|loop|atomic)\M)(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
                       CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
                       CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+                      CASE WHEN t.txt ~ '\m(query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|ts_stat|ts_rewrite|crosstab|crosstab2|crosstab3|crosstab4|connectby|dblink|dblink_exec|dblink_open|dblink_send_query|xpath_table)\M' THEN 'interpretor SQL' END,
                       CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
                              SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
                               WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END

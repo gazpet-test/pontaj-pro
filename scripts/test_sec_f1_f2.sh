@@ -162,6 +162,52 @@ g0e "funcție în graphql_public (EXECUTE)"           "graphql_public.gadget_gql
   "CREATE FUNCTION graphql_public.gadget_gql(q text) RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN EXECUTE q; END \$f\$" execute
 g0e "fals-pozitiv intenționat: comentariu cu execute" "public.fp_comentariu()" \
   "CREATE FUNCTION public.fp_comentariu() RETURNS int LANGUAGE plpgsql AS \$f\$ BEGIN RETURN 1; /* nu face execute */ END \$f\$" execute
+# r8 — interpretori SQL (Jakarinos r6): RPC care execută SQL primit ca argument fără niciun tipar interzis în propria definiție
+g0e "I1 INVOKER query_to_xml(q) + UPDATE employee_id" "public.g_i_inv(text)" \
+  "CREATE FUNCTION public.g_i_inv(q text) RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN PERFORM query_to_xml(q, false, false, ''); UPDATE public.profiles SET employee_id = 2 WHERE id = '$U2'; END \$f\$" "interpretor SQL"
+g0e "I2 DEFINER query_to_xml(q) + UPDATE employee_id" "public.g_i_def(text)" \
+  "CREATE FUNCTION public.g_i_def(q text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$ BEGIN PERFORM query_to_xml(q, false, false, ''); UPDATE public.profiles SET employee_id = 2 WHERE id = '$U2'; END \$f\$" "interpretor SQL"
+g0e "I3 BEGIN ATOMIC cursor_to_xml / query_to_xml(q)" "public.g_i_atomic(text)" \
+  "CREATE FUNCTION public.g_i_atomic(q text) RETURNS xml LANGUAGE sql BEGIN ATOMIC SELECT query_to_xml(q, false, false, ''); END" "interpretor SQL"
+g0e "I4 sql INVOKER ts_stat(q)" "public.g_i_tsstat(text)" \
+  "CREATE FUNCTION public.g_i_tsstat(q text) RETURNS bigint LANGUAGE sql AS \$f\$ SELECT count(*) FROM ts_stat(q) \$f\$" "interpretor SQL"
+# r8 — fals pozitiv RSVTI (#538): regula set/reset role se aplică pe CORP (nu pe antetul pg_get_functiondef) și doar la început de instrucțiune
+# fn_poate_scrie_hr_autorizatii: definiția exactă din 20261003c_sec_rsvti_poarta_jurnal.sql (branch claude/erp-continuare-x4p5a7-sec-rsvti)
+if P -c "CREATE OR REPLACE FUNCTION public.fn_poate_scrie_hr_autorizatii()
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_temp
+AS \$fn\$
+  SELECT EXISTS (
+    SELECT 1
+      FROM public.profiles p
+     WHERE p.id = auth.uid()
+       AND (p.is_owner = true
+            OR p.can_modify_employees = true
+            OR p.role = 'superadmin'
+            OR p.department = ANY (ARRAY['HR', 'Administrativ']))
+  )
+\$fn\$;
+REVOKE ALL ON FUNCTION public.fn_poate_scrie_hr_autorizatii() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.fn_poate_scrie_hr_autorizatii() TO authenticated;
+CREATE FUNCTION public.neg_upd_role(p_id uuid, p_rol text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS \$f\$
+BEGIN IF p_rol IS NOT NULL THEN UPDATE public.profiles SET role = p_rol WHERE id = p_id; END IF; END \$f\$;
+CREATE FUNCTION public.neg_upd_role_sql(p_id uuid) RETURNS void LANGUAGE sql SET search_path = public, pg_temp AS \$f\$
+UPDATE public.profiles SET role = 'x' WHERE id = p_id; UPDATE public.profiles SET
+  role = 'y' WHERE id = p_id \$f\$;
+CREATE FUNCTION public.neg_where_role() RETURNS bigint LANGUAGE sql STABLE SET search_path = public, pg_temp AS \$f\$ SELECT count(*) FROM public.profiles p WHERE p.role = 'x' \$f\$;
+CREATE FUNCTION public.neg_atomic_role(p_id uuid) RETURNS void LANGUAGE sql BEGIN ATOMIC UPDATE public.profiles SET role = 'x' WHERE id = p_id; END;" >/dev/null; then
+  n=$(P -tA -c "SELECT count(*) FROM pg_proc WHERE has_function_privilege('authenticated', oid, 'EXECUTE') AND oid IN (to_regprocedure('public.fn_poate_scrie_hr_autorizatii()'), to_regprocedure('public.neg_upd_role(uuid,text)'), to_regprocedure('public.neg_upd_role_sql(uuid)'), to_regprocedure('public.neg_where_role()'), to_regprocedure('public.neg_atomic_role(uuid)'))")
+  [ "$n" = 5 ] || bad "F2-0e-neg-r8" "expuse: $n/5"
+  # control: vechea regulă (r6, pe pg_get_functiondef) chiar prindea funcția RSVTI
+  c=$(P -tA -c "SELECT lower(pg_get_functiondef('public.fn_poate_scrie_hr_autorizatii()'::regprocedure)) ~ '\m(set|reset)\M[^;]*\mrole\M'")
+  [ "$c" = t ] && ok "F2-0e-control-r8 regula r6 (antet + corp) prindea fn_poate_scrie_hr_autorizatii (fals pozitiv reprodus)" || bad "F2-0e-control-r8" "c=$c"
+  o=$(P -tA -f "$ROOT/scripts/control_0e.sql" 2>&1); [ $? = 0 ] && [ -z "$o" ] && ok "F2-0e-neg-r8 control_0e.sql cu RSVTI + UPDATE … SET role (plpgsql/sql/BEGIN ATOMIC) + WHERE p.role ⇒ 0 rânduri" || bad "F2-0e-neg-r8 control" "$o"
+  o=$(run "$F2"); [ $? = 0 ] && ok "F2-0e-neg-r8 F2 se aplică peste fn_poate_scrie_hr_autorizatii (RSVTI #538) + UPDATE … SET role + WHERE p.role" || bad "F2-0e-neg-r8" "$o"
+  o=$(run "$RB0"); [ $? = 0 ] && [ "$(P -tA -c "$MDQ")" = "$MD_LIVE" ] || bad "F2-0e-neg-r8-rb" "$o"
+  P -c "DROP FUNCTION public.neg_upd_role(uuid,text), public.neg_upd_role_sql(uuid), public.neg_where_role(), public.neg_atomic_role(uuid)" >/dev/null || bad "F2-0e-neg-r8" "DROP"
+  # RSVTI rămâne pentru ultima verificare (interogarea finală pe o bază cu funcția RSVTI ⇒ 0 rânduri, după apply)
+else bad "F2-0e-neg-r8" "crearea fixture-urilor negative r8 a eșuat"; fi
 # o funcție trigger F2 devenită executabilă de authenticated ⇒ intră în scanare (corpul live c06d7ce0… citește request.jwt) ⇒ refuz
 if P -c "GRANT EXECUTE ON FUNCTION public.fn_profiles_campuri_owner_only() TO authenticated" >/dev/null; then
   o=$(run "$F2"); echo "$o" | grep -q "Precondiție 0e" && echo "$o" | grep -qF "fn_profiles_campuri_owner_only() [" && ok "F2-0e funcție trigger F2 expusă (GRANT authenticated) ⇒ refuz" || bad "F2-0e trigger expus" "$o"
@@ -208,7 +254,7 @@ else bad "F2-0e-neg" "crearea fixture-urilor negative a eșuat (5 așteptate)"; 
 python3 - "$F2" "$ROOT/docs/SEC_F1_F2_PATCH.md" "$ROOT/scripts/control_0e.sql" > "$D/q0e.sql" <<'PY'
 import re,sys
 def qs(p):
-    return ["\n".join(l.strip() for l in m.split("\n")) for m in re.findall(r"(-- SEC F2 0e \(r6\).*?ORDER BY 1)[;\n]", open(p).read(), re.S)]
+    return ["\n".join(l.strip() for l in m.split("\n")) for m in re.findall(r"(-- SEC F2 0e \(r8\).*?ORDER BY 1)[;\n]", open(p).read(), re.S)]
 a,b,c=qs(sys.argv[1]),qs(sys.argv[2]),qs(sys.argv[3])
 if len(a)!=2 or len(b)!=1 or len(c)!=1 or len(set(a+b+c))!=1: print("diferă/lipsesc: migrare %d, doc %d, control %d, distincte %d"%(len(a),len(b),len(c),len(set(a+b+c)))); sys.exit(1)
 print(b[0])
@@ -230,7 +276,22 @@ if [ $? = 0 ]; then
   if echo "$o" | grep -q "Postcondiție 0e" && echo "$o" | grep -qF "g_cursa() [" && [ "$(P -tA -c "$MDQ")" = "$MD_LIVE" ] && [ -z "$(P -tA -c "SELECT to_regprocedure('public.g_cursa()')")" ]; then
     ok "F2-0e-post gadget apărut după precondiție ⇒ postcondiția 0e refuză, totul anulat (md5 live, gadget inexistent)"; else bad "F2-0e-post" "$o"; fi
 else bad "F2-0e-post" "construcția copiei a eșuat"; fi
+python3 - "$F2" > "$D/f2_cursa_i.sql" <<'PY'
+import sys;s=open(sys.argv[1]).read();k="DO $post0e$"
+assert s.count(k)==1
+print(s.replace(k,"CREATE FUNCTION public.g_cursa_i(q text) RETURNS void LANGUAGE plpgsql AS $f$ BEGIN PERFORM query_to_xml(q, false, false, ''); UPDATE public.profiles SET employee_id = 2; END $f$;\n"+k))
+PY
+if [ $? = 0 ]; then
+  o=$(run "$D/f2_cursa_i.sql" 20260930j_sec_f2_profiles_uid_null)
+  if echo "$o" | grep -q "Postcondiție 0e" && echo "$o" | grep -qF "g_cursa_i(text) [interpretor SQL]" && [ "$(P -tA -c "$MDQ")" = "$MD_LIVE" ] && [ -z "$(P -tA -c "SELECT to_regprocedure('public.g_cursa_i(text)')")" ]; then
+    ok "F2-0e-post-r8 interpretor (query_to_xml) apărut după precondiție ⇒ postcondiția 0e refuză, totul anulat"; else bad "F2-0e-post-r8" "$o"; fi
+else bad "F2-0e-post-r8" "construcția copiei a eșuat"; fi
 o=$(run "$F2"); [ $? = 0 ] && ok "F2-apply aplicare" || bad "F2-apply" "$o"
+# r8: interogarea finală 0e pe o bază care conține funcția RSVTI (fn_poate_scrie_hr_autorizatii, EXECUTE authenticated) ⇒ 0 rânduri
+o=$(P -tA -c "SET default_transaction_read_only = on" -f "$ROOT/scripts/control_0e.sql" 2>&1)
+[ $? = 0 ] && [ -z "$o" ] && [ "$(P -tA -c "SELECT has_function_privilege('authenticated', to_regprocedure('public.fn_poate_scrie_hr_autorizatii()'), 'EXECUTE')")" = t ] \
+  && ok "F2-0e-final-r8 control_0e.sql după apply, cu RSVTI expusă ⇒ 0 rânduri" || bad "F2-0e-final-r8" "$o"
+
 md=$(P -tA -c "$MDQ")
 echo "INFO md5 după F2: $md"
 [ "$md" = "$MD_PATCH" ] && ok "F2-md5 cele 4 funcții = variantele patch" || bad "F2-md5" "$md"

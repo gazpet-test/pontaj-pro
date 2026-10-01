@@ -168,12 +168,12 @@ e1=$(P -tA -c "SELECT employee_id FROM profiles WHERE id='$U2'")
 if echo "$r" | grep -q 'UPD' && [ "$e1" = 4242 ]; then ok "CONTROL-0e bypass pe triggere cu sub falsificat (owner) ⇒ employee_id $e0 → $e1 (recitit)"
 else bad "CONTROL-0e bypass" "nereprodus (răspuns: $r; employee_id $e0 → $e1)"; fi
 P -c "UPDATE profiles SET employee_id=7 WHERE id='$U2'" >/dev/null
-python3 -c "import re,sys;print(re.search(r'(-- SEC F2 0e \(r6\).*?ORDER BY 1);',open(sys.argv[1]).read(),re.S).group(1))" "$ROOT/docs/SEC_F1_F2_PATCH.md" > "$D/q0e.sql" || bad "CONTROL-0e" "interogarea din doc lipsește"
+python3 -c "import re,sys;print(re.search(r'(-- SEC F2 0e \(r8\).*?ORDER BY 1);',open(sys.argv[1]).read(),re.S).group(1))" "$ROOT/docs/SEC_F1_F2_PATCH.md" > "$D/q0e.sql" || bad "CONTROL-0e" "interogarea din doc lipsește"
 q=$(P -tA -F'|' -f "$D/q0e.sql")
 echo "$q" | grep -Eq '^(public\.)?control_0e_sub\(\)\|f\|.*proconfig' && ok "CONTROL-0e interogarea de control (= 0e) listează control_0e_sub() [$(echo "$q" | grep control_0e_sub | cut -d'|' -f3)]" || bad "CONTROL-0e interogare" "$q"
 for g in escaladare_claim escaladare_claims escaladare_employee_id rezidual_set_role; do
   echo "$q" | grep -Eq "^(public\.)?$g\(\)\|" || bad "CONTROL-0e interogare" "$g lipsește din listă"; done
-[ "$(echo "$q" | grep -c .)" = 7 ] && ok "CONTROL-0e interogarea listează exact cele 7 funcții create după apply (5 atacuri/control + 2 sonde fals-pozitive)" || bad "CONTROL-0e număr" "$q"
+[ "$(echo "$q" | grep -c .)" = 6 ] && ! echo "$q" | grep -q '^sonda_definer_plpgsql' && ok "CONTROL-0e interogarea listează exact cele 6 funcții create după apply (5 atacuri/control + sonda() care citește request.jwt; r8: sonda_definer_plpgsql nu mai e listată — era fals pozitivul antet SET search_path + current_setting('role') din corp)" || bad "CONTROL-0e număr" "$q"
 # CONTROL r3: a 4-a funcție readusă la corpul live c06d7ce0… (nelegată) ⇒ același RPC TRECE (gaura pe care o închide r4)
 python3 - "$T/sec_f1_f2_fixture_triggers.sql" > "$D/fn4_live.sql" <<'PY2'
 import re,sys

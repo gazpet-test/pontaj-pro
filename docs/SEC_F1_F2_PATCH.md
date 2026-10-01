@@ -254,13 +254,14 @@ Mecanism: PostgreSQL verifică `SET ROLE` față de `session_user`, nu față de
 
 Audit live read-only (01.10.2026 ~01:40): în `public` 57 funcții INVOKER, 38 executabile de authenticated, **0** care conțin `EXECUTE` sau `set_config` / `SET ROLE`.
 
-SQL de control (read-only) pentru rutina post-deploy — trebuie să întoarcă **0 rânduri**; e exact interogarea precondiției 0e din migrare (**varianta r6**, §8.7; înlocuiește variantele r4/r5):
+SQL de control (read-only) pentru rutina post-deploy — trebuie să întoarcă **0 rânduri**; e exact interogarea precondiției 0e din migrare (**varianta r8**, §8.9; înlocuiește variantele r4–r7):
 ```sql
--- SEC F2 0e (r6) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate
+-- SEC F2 0e (r8) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate și nu interpretează SQL primit ca argument
 WITH f AS (
   SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
          EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
-         CASE WHEN p.prokind IN ('f', 'p', 'w') THEN pg_get_functiondef(p.oid) END AS def
+         CASE WHEN p.prosqlbody IS NULL THEN p.prosrc ELSE pg_get_function_sqlbody(p.oid) END
+           || E'\n ; ' || pg_get_function_arguments(p.oid) AS def
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
      AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
@@ -271,14 +272,15 @@ WITH f AS (
     FROM f
 ), m AS (
   SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+           CASE WHEN t.def IS NULL THEN 'corp necitibil' END,
            CASE WHEN t.cfg THEN 'proconfig' END,
            CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
            CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
            CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
-           CASE WHEN t.txt ~ '\m(set|reset)\M[^;]*\mrole\M'
-                  OR t.txt ~ '\m(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+           CASE WHEN t.txt ~ '(^|;|>>|\m(begin|then|else|loop|atomic)\M)(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
            CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
            CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+           CASE WHEN t.txt ~ '\m(query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|ts_stat|ts_rewrite|crosstab|crosstab2|crosstab3|crosstab4|connectby|dblink|dblink_exec|dblink_open|dblink_send_query|xpath_table)\M' THEN 'interpretor SQL' END,
            CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
                   SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
                    WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
@@ -404,3 +406,27 @@ Rezultate r6 (local, PG 17 + PostgREST 13.0.4):
 - Apelanții lor dintre cele 106 rutine expuse. Asta ar închide limita „apeluri indirecte” din §8.7.
 
 Rezultate r7 (local, PG 17 + PostgREST 13.0.4): `test_sec_f1_f2.sh` **188 PASS / 0 FAIL**; `test_sec_f2_postgrest.sh` **20 PASS / 0 FAIL**. Nimic aplicat pe Supabase.
+
+### 8.9 Runda 8 (01.10.2026) — decizia A (Răzvan): 0e rămâne invariant de catalog euristic; interpretori SQL + fals pozitivul RSVTI
+
+Răzvan a ales **varianta A**: 0e rămâne invariant de catalog euristic, fail-closed (Copilot acceptase deja euristicul). Interogarea din §8.4 e acum **varianta r8**. E identică în precondiția 0e, în postcondiția `$post0e$`, în §8.4 și în `scripts/control_0e.sql`, iar harness-ul `F2-0e-doc` verifică egalitatea.
+
+| Punct | Schimbarea r8 | Test |
+|---|---|---|
+| **Interpretori SQL** (Jakarinos r6): un RPC expus care cheamă `query_to_xml(q, …)` execută SQL primit ca argument, de exemplu `SELECT set_config('request.jwt.claim.sub', …)`. În propria lui definiție nu apare niciun tipar interzis | Motiv nou `interpretor SQL`, pe funcțiile INVOKER și pe cele DEFINER expuse. Prinde `\m(query_to_xml…\|cursor_to_xml…\|table_to_xml…\|schema_to_xml…\|database_to_xml…\|ts_stat\|ts_rewrite\|crosstab[2-4]?\|connectby\|dblink\|dblink_exec\|dblink_open\|dblink_send_query\|xpath_table)\M`. Live (citit read-only pe 01.10): **0** funcții expuse folosesc vreunul | `F2-0e I1` INVOKER `query_to_xml(q)` + UPDATE `employee_id`; `I2` același, DEFINER; `I3` BEGIN ATOMIC; `I4` `ts_stat(q)` ⇒ toate REFUZ. `F2-0e-post-r8`: un gadget interpretor creat „concurent” (după precondiție) ⇒ postcondiția 0e refuză și totul se anulează |
+| **Fals pozitiv real** găsit la integrarea gate-ului în runner (#538). Regula r6 `\m(set\|reset)\M[^;]*\mrole\M` rula pe `pg_get_functiondef`. Prindea `fn_poate_scrie_hr_autorizatii()` din migrarea RSVTI: antetul `SET search_path = public, pg_temp`, urmat de un corp SQL fără `;` care conține `p.role`. Cu ordinea #538 → F1 → F2, precondiția 0e a F2 ar fi refuzat | **(1)** Textul scanat e **corpul**, nu antetul. Pentru `prosqlbody IS NULL` se folosește `prosrc`; pentru BEGIN ATOMIC, `pg_get_function_sqlbody(oid)`, adică doar `BEGIN ATOMIC … END` / `RETURN …` deparsat de server. E mai robust decât decuparea textului din `pg_get_functiondef` și există din PG 14. La corp se adaugă `pg_get_function_arguments(oid)`, ca să fie scanate și expresiile `DEFAULT`. Clauzele `SET` din antet sunt acoperite structural de `proconfig`. Dacă nu se poate citi corpul (NULL) ⇒ motivul `corp necitibil` (fail-closed). **(2)** Regula SET/RESET ROLE se aplică doar **la început de instrucțiune**: început de text, `;`, `>>`, `begin`, `then`, `else`, `loop`, `atomic`. Între tokenuri pot sta spații sau comentarii, deci `UPDATE … SET role = …` nu se mai potrivește. Normalizarea rămâne aceeași: formă fără comentarii + formă brută, lower-case, fără ghilimele duble. Celelalte motive rămân neschimbate (`proconfig`, `set_config`, `request.jwt`, `session_authorization`, `u&`, comentariu imbricat, `execute` + lista DEFINER legată de md5 `47a75428…`) | `F2-0e-control-r8`: regula r6 aplicată pe `pg_get_functiondef` prinde funcția RSVTI (fals pozitiv reprodus). `F2-0e-neg-r8` folosește `fn_poate_scrie_hr_autorizatii` (definiția exactă de pe branch-ul sec-rsvti, EXECUTE authenticated), `UPDATE public.profiles SET role = …` în plpgsql DEFINER (după `THEN`), în `sql` (cu `SET` și `role` pe linii diferite) și în BEGIN ATOMIC, plus `SELECT … WHERE p.role = 'x'` ⇒ `control_0e.sql` dă 0 rânduri și F2 se aplică. `F2-0e-final-r8`: după apply, cu funcția RSVTI prezentă și expusă, `control_0e.sql` read-only dă **0 rânduri** |
+
+Toate testele pozitive existente rămân REFUZ: A–G, D/E `SET LOCAL "role"`, `SET/*c*/LOCAL ROLE`, E2 desincronizare, E3–E5, BEGIN ATOMIC `set_config`, `SET SESSION/LOCAL ROLE`, `SESSION AUTHORIZATION`, EXECUTE INVOKER, `proconfig`, `graphql_public`, `fp_comentariu`, funcția-trigger expusă și G1–G4.
+
+**Efect secundar în testul PostgREST.** Interogarea de control listează acum **6** funcții create după apply, nu 7: cele 5 atacuri/control + `sonda()`, care citește `request.jwt`. `sonda_definer_plpgsql` nu mai apare. Era exact același fals pozitiv: antetul `SET search_path` urmat de `current_setting('role')` în corp, fără `;` între ele.
+
+**Limite (neschimbate, euristic acceptat):**
+- Apelurile indirecte, către funcții din alte scheme, rămân în afara scanării (§8.7).
+- Un interpretor nou, care nu e în listă (de exemplu o extensie instalată ulterior), nu e prins.
+- Lista se extinde la nevoie, la fel ca motivele.
+
+Rezultate r8 (local, PG 17 + PostgREST 13.0.4):
+- `test_sec_f1_f2.sh`: **197 PASS / 0 FAIL**.
+- `test_sec_f2_postgrest.sh`: **20 PASS / 0 FAIL**.
+
+Nimic aplicat pe Supabase.
