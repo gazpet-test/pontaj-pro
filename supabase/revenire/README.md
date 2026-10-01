@@ -67,3 +67,13 @@ Repornirea: `gazpet.repornire_20261003b` = `'REPORNESTE_ALEGE_SI_PERECHE:' || tx
 Migrarea forward NU se rulează așa: ea trece doar prin `scripts/livrare_migrare.sh` (psql `--single-transaction`: marcaj de livrare + migrare + înregistrare în `schema_migrations`).
 
 O armare din altă tranzacție (SET de sesiune, `set_config(…, false)`, o tranzacție eșuată, o conexiune refolosită) are alt txid și e refuzată. Armarea persistentă (`ALTER DATABASE/ROLE … SET`) e refuzată. Fiecare fișier verifică înainte de COMMIT că starea rezultată e exact cea țintă; altfel se anulează tot. Detalii: `docs/SECURITATE_PATCH_OFERTARE.md` §7 și §11.
+
+## 20261005b — RLS garanții (`20261005b_rls_garantii_scriere_ROLLBACK.sql`)
+Redeschide scrierea pentru orice cont logat pe `garantii`, `gbe_polite`, `gbe_restituiri`, `contracte_terti` (politicile din 01.10) și șterge `fn_poate_scrie_garantii()`. Același statut: fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.revenire_20261005b', 'REDESCHIDE_GARANTII:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = md5 politici `baf4aced…` (patch); postcondiție = `62f69c59…` (live 01.10). Testat în `scripts/test_rls_garantii.sh` pasul 5.
