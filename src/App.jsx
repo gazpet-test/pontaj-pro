@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } fr
 import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
+import { zileOrdinDeplasare } from './diurneOrdin.js'
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -3068,8 +3069,10 @@ function ReportsPage() {
       const monthEnd = mE.toISOString().split('T')[0]
 
       // Calendar legal days
+      // Până la sfârșitul ultimei luni atinse de tranșă (alocaDiurneTransa are nevoie de lunile întregi)
+      const rangeEnd = sfarsitLuna(periodTo) > monthEnd ? sfarsitLuna(periodTo) : monthEnd
       const { data: calData } = await supabase.from('calendar_days')
-        .select('date,type,description').gte('date', monthStart).lte('date', monthEnd)
+        .select('date,type,description').gte('date', monthStart).lte('date', rangeEnd)
       const legalSet = new Set((calData || []).filter(x => x.type === 'legal').map(x => x.date))
       const legalNameMap = new Map((calData || []).filter(x => x.type === 'legal').map(x => [x.date, x.description || '']))
 
@@ -3103,7 +3106,7 @@ function ReportsPage() {
       while (true) {
         const { data: page } = await supabase.from('pontaj_records')
           .select('*, sites(name)')
-          .gte('date', monthStart).lte('date', monthEnd)
+          .gte('date', monthStart).lte('date', rangeEnd)
           .in('employee_id', empIds)
           .range(off, off + 999)
         if (!page || page.length === 0) break
@@ -3118,6 +3121,8 @@ function ReportsPage() {
       // (WE/sărbătoare lucrate sunt mutate în locul LL-urilor de pe zile lucrătoare)
       const NORME_LIST = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
       const sortedWorkDays = [...workDaySet].sort()
+      // Alocare comună (diurneAlocare.js) — aceeași ca exportDiurne / savePayment / exportBancaDiurne
+      const alocare = alocaDiurneTransa({ recsLuna: allRecs, df: periodFrom, dt: periodTo, legalSet, diurnaAmt: 0 })
       const empData = details.map(d => {
         const empRecs = allRecs.filter(r => r.employee_id === d.employee_id)
         const recsInPeriod = empRecs
@@ -3158,11 +3163,8 @@ function ReportsPage() {
         }
 
         // diurnaMax = plafonată la buget lunar (consistent cu savePayment) și la zilele NET
-        const zilePlatiteAnterior = empRecs.filter(r =>
-          r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)
-        ).length
-        const bugetLunarRamasZile = Math.max(0, workDaySet.size - zilePlatiteAnterior)
-        const diurnaMax = Math.min(bugetLunarRamasZile, netDays.length)
+        // 3A (01.10.2026): min(zileDiurna alocare comună, zile NET) — scade CO, numără weekendul, tranșe multiple
+        const diurnaMax = zileOrdinDeplasare(alocare.get(d.employee_id), netDays.length)
 
         // Distribuția = primele diurnaMax din netDays (cronologic)
         const distribution = netDays.slice(0, diurnaMax)
