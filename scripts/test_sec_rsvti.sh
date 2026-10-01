@@ -1477,7 +1477,7 @@ aux_nou
   REVOKE ALL ON FUNCTION public.gadget_0e(text) FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.gadget_0e(text) TO authenticated;" >/dev/null
 livreaza "$MIGRARE" 20261003000000
 [ $RC = 30 ] || { cat "$ERR_R" >&2; esec "6.24 gadget expus: cod $RC, așteptat 30"; }
-grep -qF "GATE 0e: gadget(uri) expus(e): public.gadget_0e(text)" "$ERR_R" && grep -qF "livrarea NU e considerată încheiată" "$ERR_R" \
+grep -qF "GATE 0e: gadget(uri) expus(e): gadget_0e(text) | " "$ERR_R" && grep -qF "livrarea NU e considerată încheiată" "$ERR_R" \
   || { cat "$ERR_R" >&2; esec "6.24 gadget expus: mesajul GATE 0e lipsește"; }
 [ "$(inregistrata)" = 1 ] && [ "$(stare_patch)" = "$MD5_PATCH" ] || esec "6.24 gadget: migrarea trebuia să rămână comisă (gate de „livrat”, nu rollback)"
 grep -qF "APLICAT + ÎNREGISTRAT confirmat" "$OUT_R" || esec "6.24 gadget: lipsește confirmarea aplicării înaintea gate-ului"
@@ -1486,7 +1486,7 @@ aux_nou
 "${PSQL[@]}" -d "$BAZA_AUX" -c "CREATE FUNCTION public.gadget_0e_xml(q text) RETURNS xml LANGUAGE sql SECURITY INVOKER AS \$g\$ SELECT query_to_xml(q, true, false, '') \$g\$;
   REVOKE ALL ON FUNCTION public.gadget_0e_xml(text) FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.gadget_0e_xml(text) TO authenticated;" >/dev/null
 livreaza "$MIGRARE" 20261003000000
-[ $RC = 30 ] && grep -qF "public.gadget_0e_xml(text)" "$ERR_R" && grep -qF "interpretor SQL" "$ERR_R" \
+[ $RC = 30 ] && grep -qF "gadget_0e_xml(text) | " "$ERR_R" && grep -qF "interpretor SQL" "$ERR_R" \
   || { cat "$ERR_R" >&2; esec "6.25 interpretor SQL expus: cod $RC, așteptat 30 cu motivul „interpretor SQL”"; }
 ok6 "6.25 r8: interpretor SQL expus (query_to_xml, EXECUTE authenticated) ⇒ cod 30, motiv „interpretor SQL”"
 # 6.26 r8: fără fals pozitiv pe RSVTI — fn_poate_scrie_hr_autorizatii (antet SET search_path + p.role în corp) e livrată la 6.24 cu GATE curat
