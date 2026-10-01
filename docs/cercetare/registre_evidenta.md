@@ -13,11 +13,10 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 
 | Aplicabilitate Gazpet | Surse |
 |---|---|
-| `doar_referinta` | 191 |
-| `neevaluat` | 67 |
-| `directa` | 55 |
-| `conditionata` | 50 |
-| `neaplicabil` | 7 |
+| `doar_referinta` | 222 |
+| `conditionata` | 78 |
+| `directa` | 60 |
+| `neaplicabil` | 10 |
 
 `neevaluat` = surse din runda 1 neatinse de analiza de aplicabilitate din runda 2 (în principal standarde de material/izolație și acte conexe) — de evaluat la nevoie.
 

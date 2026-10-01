@@ -46,8 +46,8 @@
   "baza_normativa_id": "anap-indrumare-liste-preturi-2023",
   "snapshot_sha256": "2d42b69ef3712e4492de7a0b426652f5f4b2aaab70f3091b2ae0d78c4639b4a0",
   "snapshot_data": "2026-10-02",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Ghid de interpretare ANAP (graf: interpretează HG 1/2018 anexa 2 cl. 37.5, 49.1–49.2 și HG 907/2016 anexa 10 F5; REQ-SL-036…038 = GHID_INTERPRETARE). Obligația vine din HG, nu din îndrumare; argument în clarificări."
  },
  {
   "source_id": "SRC-anap-indrumare-pret-neobisnuit-2023",
@@ -74,8 +74,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "REZOLVAT: citit integral (4 pag.) prin Firecrawl enhanced; fără snapshot binar.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Ghid ANAP fără forță obligatorie; reproduce HG 395/2016 art. 136 alin. (1), (4) (graf), care e sursa obligatorie a pragului (REQ-SL-031…035 = GHID_INTERPRETARE). Util la justificarea prețului."
  },
  {
   "source_id": "SRC-anap-neconformitati-lucrari",
@@ -95,14 +95,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "anap-neconformitati-lucrari",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Catalog ANAP de abateri ale AC din controlul ex-ante; nu creează obligații pentru ofertant; nicio muchie în graf și nicio cerință. Checklist de analiză DA / temei de clarificare."
  },
  {
   "source_id": "SRC-anap-notificare-art160-2018",
@@ -122,14 +122,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "anap-notificare-art160-2018",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Act de interpretare ANAP (graf: L98 art. 160 alin. (2), L99 art. 172 alin. (2)); REQ-AD-006 = GHID_INTERPRETARE, fără obligații proprii pentru ofertant."
  },
  {
   "source_id": "SRC-anre-proiect-completare-racordare-2023",
@@ -440,8 +440,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "PARȚIAL: ediția 2026-07 a părții 1 apare doar într-un index secundar — de confirmat pe dinmedia.de.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat: nu e în NTPEE anexa 2 și nicio specificație operator/DA din graf nu trimite la el (REQ-P2-045 = VOLUNTAR_BUNA_PRACTICA). Devine obligatoriu doar dacă CS îl cere."
  },
  {
   "source_id": "SRC-dvs-2207-1",
@@ -488,14 +488,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "fidic-red-yellow",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Cerut doar prin DA/contract: se aplică numai când AC adoptă condițiile FIDIC (ex. contracte POIM/PDD apă-canal); nu e impus de L98 (modelul legal e HG 1/2018). Fără muchie în graf; texte licențiate necitite."
  },
  {
   "source_id": "SRC-gazpet-pontaj",
@@ -538,15 +538,15 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "hg-1-2018",
   "snapshot_sha256": "54fbafbfdfc6843e8193a2da1738a8928a985656c47054b6dcca6ad351d667d0",
   "snapshot_data": "2026-10-01",
   "nota": "sha calculat pe hg1.pdf din runda 1 (text AFIR). Anexa 1 citită integral pentru cl. 7, 15, 35–38, 46–53, 57–70; Anexa 2 pentru cl. 46.7, 49.1, 65.1. Modificatori văzuți în text: HG 297/2022, 375/2022, 1347/2022, 965/2023. Modificări după 17.10.2023 NEVERIFICATE.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Emisă în baza L98 art. 235 alin. (4) (graf); obligatorie pentru AC la lucrări ≥ pragul L98 art. 7 alin. (1) lit. a) (art. 1–2), sub prag doar dacă DA o folosește. Clauzele obligă Gazpet prin contract (76 REQ OBLIGATORIE_DOC_ACHIZITIE)."
  },
  {
   "source_id": "SRC-hg-123-2015",
@@ -588,14 +588,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "hg-1336-2022",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "neaplicabil",
+  "motiv_aplicabilitate": "Regulament-cadru pentru cariera personalului contractual bugetar — nu privește executantul; probabil confuzie cu Ord. MDLPA 1336/2021 (ajustare prețuri POR). Nicio muchie/cerință."
  },
  {
   "source_id": "SRC-hg-1425-2006",
@@ -724,14 +724,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": 8,
   "baza_normativa_id": "hg-394-2016",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Normele metodologice ale L99/2016 (graf: aplică L99). Se aplică doar în achizițiile sectoriale (AC = operatori de distribuție gaze/apă); text necitit integral."
  },
  {
   "source_id": "SRC-hg-395-2016",
@@ -762,8 +762,8 @@
   ],
   "articole_verificate_neschimbate": "20–21, 27, 29–32, 35–41, 132–139, 166",
   "nota": "Nota ÎCCJ HP 66/2018 apare la art. 133–134. Modificări după 18.08.2026 necitite (risc mic).",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Normele metodologice ale L98/2016; L98 art. 154 alin. (5) și art. 160 alin. (2) trimit la norme (graf). 33 REQ OBLIGATORIE_LEGE (garanții, clarificări, preț neobișnuit art. 134–136) — orice procedură clasică la care participă Gazpet."
  },
  {
   "source_id": "SRC-hg-525-1996-rgu",
@@ -881,14 +881,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "hg-766-1997",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Menținut de Legea 169/2026 (CATUC) art. 577 alin. (3) — anexele 1–5 (carte tehnică, categorii de importanță) (graf). Documentele de calitate predate de executant la recepție, orice lucrare."
  },
  {
   "source_id": "SRC-hg-856-2002",
@@ -933,14 +933,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 6,
   "baza_normativa_id": "hg-907-2016",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Conținut-cadru documentații tehnico-economice pentru investiții publice (REQ-AD-123…127 OBLIGATORIE_LEGE, formulare F1–F5/F3); regim tranzitoriu L169/2026 art. 577 alin. (1)–(2) — doar proiecte pornite înainte de 25.08.2026. Aplicabil prin listele de cantități din DA publice."
  },
  {
   "source_id": "SRC-hg-925-1995",
@@ -1122,14 +1122,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "indicatoare-norme-deviz-1981",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Reper orientativ, nu normă obligatorie: Ghid P91/1-02 (Ord. MLPTL 1568/2002) pct. 2.2.3 (graf); ofertantul poate folosi consumuri proprii. Notă: SRC-indicator-ts-1981 e clasat «directa» — de armonizat."
  },
  {
   "source_id": "SRC-indicator-ac",
@@ -1149,14 +1149,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "indicator-Ac",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Parte din seria 1981 = reper orientativ (P91 pct. 2.2.3); nicio muchie proprie în graf și nicio cerință. Relevant la ofertare apă-canal când F3 al proiectantului folosește articole Ac/RpAc."
  },
  {
   "source_id": "SRC-indicator-c-1981",
@@ -1337,8 +1337,8 @@
   "baza_normativa_id": "indicator-Ts-1981",
   "snapshot_sha256": "33495a7711c7550c142e7636b7a61dd1539573c14280561183730f8f4bcb4a07",
   "snapshot_data": "2026-10-01",
-  "aplicabilitate_gazpet": "directa",
-  "motiv_aplicabilitate": "Reper orientativ (Ghid P91 pct. 2.2.3); folosit de proiectanți în F3 pentru săpături/umpluturi la rețele gaze.",
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Indicatoarele de norme de deviz sunt reper orientativ (Ghid P91/1-02 pct. 2.2.3), nu normă obligatorie; consumul obligatoriu vine din F3/proiect. Uniformizat cu restul seriei 1981.",
   "note": "Snapshot = OCR vol. I (archive.org, item indicator-de-norme-de-deviz-pentru-lucrari-de-terasamente-ts-1981-scan; vol. II sha256 3dd3a245…0827). Copie publică a unei ediții protejate (© COCC) — folosită doar pentru metadate, titluri de capitole/articole și UM; consumurile NU au fost extrase."
  },
  {
@@ -1442,8 +1442,8 @@
   "baza_normativa_id": "instr-anap-1-2021",
   "snapshot_sha256": "52f99c8c22df5bf16c3b4d70e929d6141f50e498e11a12188baec71b1ec31d6a",
   "snapshot_data": "2026-10-02",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Instrucțiune ANAP care interpretează L98 art. 221–222 / L99 art. 235–243 (graf; REQ-SL-043…049 GHID_INTERPRETARE). Relevantă doar la modificarea contractelor în derulare (acte adiționale)."
  },
  {
   "source_id": "SRC-instr-anap-2-2017",
@@ -1463,14 +1463,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "instr-anap-2-2017",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Instrucțiune ANAP în aplicarea L98 art. 178–179 lit. a)–b) / L99 art. 191–192 (graf; aplicată de CNSC BO2023_2717). Se aplică la procedurile cu cerință de experiență similară (REQ-AD-036…042)."
  },
  {
   "source_id": "SRC-instr-anap-2-2018",
@@ -1490,14 +1490,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "instr-anap-2-2018",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Existență/conținut neconfirmate; baza legală a ajustării s-a mutat în L98 art. 222^2. Lanț nedocumentat (nicio muchie/cerință) — context istoric."
  },
  {
   "source_id": "SRC-iso-12176",
@@ -1544,14 +1544,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "iso-21307",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat: nu e în NTPEE anexa 2 și nicio specificație operator din graf nu trimite (REQ-P2-030 VOLUNTAR). Obligatoriu doar dacă CS îl cere (proiecte cu finanțare internațională)."
  },
  {
   "source_id": "SRC-iso-9001-14001-45001",
@@ -1571,14 +1571,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "iso-9001-14001-45001",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Cerut doar prin DA: L98 art. 200 (calitate) și art. 201 (mediu) permit AC să ceară certificate; ISO 45001 fără articol dedicat. Nicio lege nu obligă executantul la certificare."
  },
  {
   "source_id": "SRC-legea-10-1995",
@@ -2050,8 +2050,8 @@
    "Actualizarea pragurilor art. 7 alin. (1) pentru 2026–2027 (lucrări 26.960.556 lei) — prin Reg. delegate UE, mecanismul art. 8; vezi REQ-AD-088"
   ],
   "articole_verificate_neschimbate": "160–161, 172–183, 193–196, 209–210, 215–217 (diferențele găsite = formatare/numerotare)",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Lege organică a achizițiilor publice clasice; 52 REQ OBLIGATORIE_LEGE (clarificări, garanții, calificare, ajustare art. 222^2). Orice procedură clasică la care Gazpet e ofertant."
  },
  {
   "source_id": "SRC-legea-98-2016-art-200-201",
@@ -2071,14 +2071,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 5,
   "baza_normativa_id": "legea-98-2016-art-200-201",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Articole din L98 (obligatorie) care se activează doar când DA cere certificate de calitate/mediu; art. 200 alin. (3) — probe echivalente. Fără muchie proprie în graf."
  },
  {
   "source_id": "SRC-legea-99-2016",
@@ -2105,8 +2105,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "REZOLVAT pragul de achiziție directă: 270.120 lei produse/servicii, 900.400 lei lucrări (Legea 208/2022).",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Lege obligatorie doar la achiziții sectoriale (AC = operatori distribuție gaze/apă); L101/2016 art. 8 alin. (1) o vizează (graf); 3 REQ OBLIGATORIE_LEGE."
  },
  {
   "source_id": "SRC-mdlpa-clarificari-catuc-2026-09",
@@ -2177,14 +2177,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "norme-firma-softeh-valrom-pehd",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Normă de firmă publică, fără act de aprobare (REQ-AD-132, REQ-P2-090 = VOLUNTAR_BUNA_PRACTICA); reper pentru consum PE, nu obligație."
  },
  {
   "source_id": "SRC-np-133-2013",
@@ -2204,14 +2204,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "np-133-2013",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Abrogat prin Ord. MDLPA 14/2023 și 15/2023 art. 4 (graf), dar art. 3 tranzitoriu: proiectele inițiate/recepționate înainte de ~15.02.2023 rămân pe NP 133-2013. Gazpet ofertant apă-canal."
  },
  {
   "source_id": "SRC-np-133-2022-vol1",
@@ -2395,14 +2395,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 1,
   "baza_normativa_id": "ntpee-2018-sudura-ndt-izolatie-probe",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Capitolele X–XII din NTPEE (Ord. ANRE 89/2018), aplicate prin Legea 123/2012 (graf SRC-ntpee-2018 → legea-123-2012 art. 6, 25–30): sudori autorizați art. 236, NDT art. 238, probe. Rețele de distribuție gaze."
  },
  {
   "source_id": "SRC-ntpee-procent-ndt",
@@ -2422,14 +2422,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 1,
   "baza_normativa_id": "ntpee-procent-ndt",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Sinteză internă, nu act normativ. Sursa obligatorie e NTPEE art. 238 alin. (4)–(5) (NDT la oțel subteran, 100% sudurile de poziție); procentul pentru restul sudurilor vine doar din proiect/CS/specificația operatorului."
  },
  {
   "source_id": "SRC-og-15-2021",
@@ -2572,14 +2572,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 22,
   "baza_normativa_id": "ord-anre-132-2021",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Abrogat prin Ord. ANRE 17/2026 art. 2 (graf), din 26.05.2026; autorizațiile emise pe el rămân valabile (art. 39) — relevant doar ca istoric al autorizării Gazpet."
  },
  {
   "source_id": "SRC-ord-anre-136-2022",
@@ -2619,14 +2619,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "ord-anre-156-2020",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NTPEE art. 268 alin. (2), 284 alin. (1), 289 alin. (1) și Ord. ANRE 7/2022 art. 39 alin. (3) trimit la ea (graf). Doar la lucrări care includ instalații de utilizare (probe, recepție, PIF IU)."
  },
  {
   "source_id": "SRC-ord-anre-162-2015",
@@ -2698,14 +2698,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 23,
   "baza_normativa_id": "ord-anre-182-2020",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Înlocuit de Ord. ANRE 65/2023 (graf); legitimațiile emise pe el rămân valabile până la expirare — doar istoric."
  },
  {
   "source_id": "SRC-ord-anre-2-2023",
@@ -2725,14 +2725,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 1,
   "baza_normativa_id": "ord-anre-2-2023",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Modifică NTPEE (art. I pct. 1–101: Tab. 8^1 etanșeitate, art. 254, 268–274, anexa 2) (graf); conținutul e în forma consolidată NTPEE aplicată la distribuție gaze prin Legea 123/2012."
  },
  {
   "source_id": "SRC-ord-anre-239-2019",
@@ -2934,14 +2934,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "ordin-1014-874-2001-formulare-c",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Statut actual neconfirmat; legătura cu P91 pct. 2.4 e presupusă (graf: «neverificată»); pct. C.7.1 lit. c) declară indicatoarele orientative. Lanț nedocumentat."
  },
  {
   "source_id": "SRC-ordin-1895-2016-rte",
@@ -2961,14 +2961,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": 26,
   "baza_normativa_id": "ordin-1895-2016-rte",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NTPEE art. 285 alin. (3) lit. b) trimite la ea (graf); RTE al executantului (HG 925/1995 art. 17). Se aplică cât HG 925/1995 rămâne compatibil cu L169/2026 (statut post-CATUC neverificat)."
  },
  {
   "source_id": "SRC-ordin-2264-2018",
@@ -2988,14 +2988,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 25,
   "baza_normativa_id": "ordin-2264-2018",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Atestare verificatori de proiecte/experți tehnici — nu RTE; relevant doar la proiectare+execuție. Nicio muchie în graf → lanț nedocumentat."
  },
  {
   "source_id": "SRC-ordin-828-2019-aviz-ape",
@@ -3040,14 +3040,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "ordin-863-2008",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "neaplicabil",
+  "motiv_aplicabilitate": "Abrogat prin HG 907/2016 art. 18 alin. (2) lit. b) (graf)."
  },
  {
   "source_id": "SRC-ordin-mai-163-2007",
@@ -3250,14 +3250,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "oug-114-2011",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "neaplicabil",
+  "motiv_aplicabilitate": "Achiziții în domeniile apărării și securității — în afara activității Gazpet (excepție teoretică: lucrări la unități militare). Nicio muchie/cerință."
  },
  {
   "source_id": "SRC-oug-12-1998-cfr",
@@ -3370,14 +3370,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "oug-47-2022",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Ajustarea prețurilor doar pentru contractele în derulare din sfera sa (REQ-AD-115 OBLIGATORIE_LEGE); înlocuiește formula OG 15/2021 prin act adițional (graf, nereverificat)."
  },
  {
   "source_id": "SRC-oug-52-2024",
@@ -3492,14 +3492,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "oug-98-2017",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Reglementează controlul ex-ante ANAP asupra AC; nu creează obligații pentru ofertant (explică doar termene/întârzieri — REQ-AD-006 condiții). Nicio muchie directă în graf."
  },
  {
   "source_id": "SRC-pcf-002-ordin-1370-2014",
@@ -3519,14 +3519,14 @@
   "domenii": [
    "deviz_legi_conexe"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "pcf-002-ordin-1370-2014",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat: nicio muchie din L169/2026 sau HG 925/1995 în graf; conținutul (faze determinante convocate de executant) e relevant la execuție, dar trimiterea obligatorie trebuie verificată post-CATUC."
  },
  {
   "source_id": "SRC-praguri-ue-2026-2027",
@@ -3546,14 +3546,14 @@
   "domenii": [
    "achizitii_contracte"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "praguri-ue-2026-2027",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "directa",
+  "motiv_aplicabilitate": "Regulamente UE direct aplicabile; L98 art. 7 alin. (1) lit. a) și L101 art. 8 alin. (1) trimit la praguri (graf; REQ-AD-088). Determină procedura și termenele de contestare."
  },
  {
   "source_id": "SRC-pt-cr-3-2025-rsvti",
@@ -3573,14 +3573,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "pt-cr-3-2025-rsvti",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Analiză ISCIR: conductele de distribuție gaze sunt sub ANRE, nu ISCIR; RSVTI e necesar doar pentru instalații ISCIR deținute (macarale, recipiente). Lanț din actul-cadru ISCIR nedocumentat în graf; text necitit."
  },
  {
   "source_id": "SRC-pt-cr-6-2025",
@@ -3792,14 +3792,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-10204",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Specificațiile Distrigaz ST-TOLNP și ST-TGPHD (2023) trimit la el (graf); obligatoriu doar când DA invocă specificația operatorului (REQ-P2-056 OBLIGATORIE_DOC_ACHIZITIE). Nu e în NTPEE anexa 2."
  },
  {
   "source_id": "SRC-sr-en-10208-2",
@@ -3819,14 +3819,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-10208-2",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Standard retras/înlocuit de SR EN ISO 3183 (graf, informație neverificată pe ASRO); dacă CS îl mai citează → clarificare (REQ-P2-053)."
  },
  {
   "source_id": "SRC-sr-en-10216-10217",
@@ -3846,14 +3846,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-10216-10217",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Singura trimitere: PT CR 9-2025 anexa 16 (material pentru probele de examen sudori) — nu pentru lucrări; NTPEE nu-l citează (REQ-P2-054 VOLUNTAR). Lanț pentru lucrări nedocumentat."
  },
  {
   "source_id": "SRC-sr-en-12007",
@@ -4154,14 +4154,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-13509",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat: fără trimitere din NTPEE/specificații operator în graf (REQ-P2-051 VOLUNTAR); doar dacă CS cere măsurători PC (DCVG/CIPS)."
  },
  {
   "source_id": "SRC-sr-en-15001",
@@ -4181,14 +4181,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-15001",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Instalații de utilizare industriale > 0,5 bar; nicio muchie în graf și nicio cerință → lanț nedocumentat."
  },
  {
   "source_id": "SRC-sr-en-1555",
@@ -4236,14 +4236,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 29,
   "baza_normativa_id": "sr-en-1594",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NT transport (Ord. ANRE 118/2013) anexa art. 134 alin. (3) trimite (recomandări) (graf); doar conducte de transport > 16 bar (Transgaz). Neaplicabil distribuției (REQ-P2-057)."
  },
  {
   "source_id": "SRC-sr-en-1610",
@@ -4338,14 +4338,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-1775",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Instalații de utilizare în clădiri ≤ 5 bar; baza normativă îl dă citat în NTPEE anexa 2 (SR EN 1775:2008) — poziția nelocalizată, fără muchie în graf. Doar la lucrări care includ instalații de utilizare."
  },
  {
   "source_id": "SRC-sr-en-752",
@@ -4442,14 +4442,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-10675-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 art. 30 alin. (5)–(6) + art. 76/anexa 16 îl încorporează exemplificativ, doar pentru examenul de autorizare sudori (graf). Pentru lucrări: numai dacă CS îl cere; NTPEE nu-l citează (REQ-P2-023)."
  },
  {
   "source_id": "SRC-sr-en-iso-1167-1",
@@ -4492,14 +4492,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-12944",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "NTPEE art. 257 cere vopsirea porțiunilor supraterane fără să numească standardul (recomandă STAS 10702/1, 10166/1); lanț nedocumentat (REQ-P2-048 VOLUNTAR) — obligatoriu doar prin CS."
  },
  {
   "source_id": "SRC-sr-en-iso-14731",
@@ -4519,14 +4519,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-14731",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat: nicio trimitere din NTPEE/PT CR (REQ-P2-016 VOLUNTAR); RTS e cerut de PT CR 9-2025, nu coordonatorul ISO 14731. Doar dacă DA îl cere."
  },
  {
   "source_id": "SRC-sr-en-iso-14732",
@@ -4546,14 +4546,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-14732",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat (REQ-P2-017: fără trimitere obligatorie identificată); operatori pentru sudare mecanizată — doar dacă CS o cere."
  },
  {
   "source_id": "SRC-sr-en-iso-15589-1",
@@ -4573,14 +4573,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 42,
   "baza_normativa_id": "sr-en-iso-15589-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat (REQ-P2-050 VOLUNTAR); aplică la conducte principiile SR EN 12954, care e citat în NTPEE anexa 2 poz. 49 — 15589-1 însă nu e citat."
  },
  {
   "source_id": "SRC-sr-en-iso-15607",
@@ -4674,14 +4674,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 32,
   "baza_normativa_id": "sr-en-iso-15614-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NTPEE art. 236 alin. (3) («procedee certificate») → PT CR 7-2025 → SR EN ISO 15614-1 (WPQR oțel) (graf; REQ-P2-013 STANDARD_INCORPORAT_PRIN_REFERINTA; locator PT CR 7 de reconfirmat). Doar la sudarea oțelului."
  },
  {
   "source_id": "SRC-sr-en-iso-17635",
@@ -4708,8 +4708,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "Preț 169,28 lei.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 art. 30 alin. (5)–(6) + art. 76/anexa 16 — exemplificativ, doar examenul ISCIR al sudorilor (graf). Pentru lucrări: numai când CS îl cere; NTPEE nu-l citează (REQ-P2-020)."
  },
  {
   "source_id": "SRC-sr-en-iso-17636",
@@ -4729,14 +4729,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 35,
   "baza_normativa_id": "sr-en-iso-17636",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 art. 30 alin. (5)–(6) + anexa 16 — exemplificativ, examen sudori (graf). La lucrări metoda RT nu e impusă de NTPEE; standardul vine din CS (REQ-P2-022)."
  },
  {
   "source_id": "SRC-sr-en-iso-17637",
@@ -4756,14 +4756,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 36,
   "baza_normativa_id": "sr-en-iso-17637",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 art. 30 alin. (5)–(6) + anexa 16 — exemplificativ, examen sudori (graf). NTPEE art. 238 alin. (3) cere control vizual fără standard; 17637 vine din CS (REQ-P2-021)."
  },
  {
   "source_id": "SRC-sr-en-iso-17640-11666",
@@ -4783,14 +4783,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-17640-11666",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 art. 30 alin. (5)–(6) + anexa 16 — exemplificativ, examen sudori (graf). Fără trimitere din NTPEE; la lucrări doar prin CS (REQ-P2-024)."
  },
  {
   "source_id": "SRC-sr-en-iso-21809-1",
@@ -4817,8 +4817,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "Preț 318,52 lei.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Specificația Distrigaz ST-TOLNP îl încorporează (izolație 3LPE B2/B3) (graf); obligatoriu doar când DA invocă ST-TOLNP (REQ-P2-042). Nu e în NTPEE anexa 2."
  },
  {
   "source_id": "SRC-sr-en-iso-21809-3",
@@ -4845,8 +4845,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "REZOLVAT: ediția SR există (id 245713 și 274399 pentru A1); preț necitit.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat: fără trimitere din NTPEE/ST-TOLNP (REQ-P2-043 VOLUNTAR); obligatoriu doar dacă CS îl cere (izolarea îmbinărilor)."
  },
  {
   "source_id": "SRC-sr-en-iso-3183",
@@ -4866,14 +4866,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-3183",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Specificația Distrigaz ST-TOLNP (2023) trimite la el (graf); obligatoriu doar când DA invocă ST-TOLNP (REQ-P2-052). Nu e în NTPEE anexa 2."
  },
  {
   "source_id": "SRC-sr-en-iso-3834",
@@ -4900,8 +4900,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "Preț 152,70 lei.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat: nicio trimitere din NTPEE, PT CR sau Ord. ANRE 17/2026 (REQ-P2-015 VOLUNTAR). Obligatoriu doar ca cerință DA (de verificat proporționalitatea)."
  },
  {
   "source_id": "SRC-sr-en-iso-5817",
@@ -4928,8 +4928,8 @@
   "snapshot_sha256": null,
   "snapshot_data": null,
   "nota": "Preț 207,96 lei.",
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "PT CR 9-2025 anexa 16 (exemplificativ, examen sudori) și NT transport 118/2013 anexa art. 132 alin. (3) (recomandare) (graf). La distribuție NTPEE art. 238 cere «clasa II» fără 5817 — nivelul vine din CS (REQ-P2-019)."
  },
  {
   "source_id": "SRC-sr-en-iso-6520-1",
@@ -4972,14 +4972,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-8501-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "Specificația Distrigaz ST-TOLNP (2023) trimite la el (graf); obligatoriu doar când DA invocă ST-TOLNP (REQ-P2-046)."
  },
  {
   "source_id": "SRC-sr-en-iso-8503-8502",
@@ -4999,14 +4999,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "sr-en-iso-8503-8502",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Lanț nedocumentat (REQ-P2-047: fără trimitere obligatorie); parametrii vin din fișa sistemului de izolare aprobat de OSD / CS."
  },
  {
   "source_id": "SRC-sr-en-iso-9606-1",
@@ -5026,14 +5026,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 33,
   "baza_normativa_id": "sr-en-iso-9606-1",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NTPEE art. 236 alin. (1) (sudori autorizați) → PT CR 9-2025 art. 25 alin. (1) lit. b) (nedatat) + anexa 16 (graf; REQ-P2-014 STANDARD_INCORPORAT_PRIN_REFERINTA). Cale de acces la autorizare, doar sudori oțel."
  },
  {
   "source_id": "SRC-sr-en-iso-9692-1",
@@ -5076,14 +5076,14 @@
   "domenii": [
    "sudura_ndt_izolatie_materiale"
   ],
-  "ultima_verificare": "2026-10-01",
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": true,
   "ofertare_normative_id": 45,
   "baza_normativa_id": "sr-en-iso-9712",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "conditionata",
+  "motiv_aplicabilitate": "NTPEE art. 238 alin. (4)–(5) (NDT de personal certificat) → PT CR 6-2025 art. 12 alin. (1) lit. b) + art. 96/anexa 24 (graf; REQ-P2-025 STANDARD_INCORPORAT_PRIN_REFERINTA). Se aplică la lucrările din oțel cu NDT."
  },
  {
   "source_id": "SRC-standard-performanta-distributie-gaze",
@@ -5131,14 +5131,14 @@
   "domenii": [
    "tehnic_gaze_apa"
   ],
-  "ultima_verificare": null,
+  "ultima_verificare": "2026-10-02",
   "verificat_pe_sursa_primara": false,
   "ofertare_normative_id": null,
   "baza_normativa_id": "stas-1846",
   "snapshot_sha256": null,
   "snapshot_data": null,
-  "aplicabilitate_gazpet": "neevaluat",
-  "motiv_aplicabilitate": null
+  "aplicabilitate_gazpet": "doar_referinta",
+  "motiv_aplicabilitate": "Dimensionare debite canalizare (proiectare); nicio muchie din NP 133-2022 sau alt act în graf → lanț nedocumentat; ediții neconfirmate."
  },
  {
   "source_id": "SRC-stas-1913-13",
