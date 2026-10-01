@@ -558,6 +558,62 @@ SELECT teste.assert((SELECT jsonb_object_agg(identitate, owner_flag || '/' || ro
   'R1-14b (P10) matricea is_owner / role: anon, authenticator cu claims golite și GoTrue printr-un RPC SECURITY DEFINER → 42501 (înainte: treceau prin bypass-ul triggerelor vechi); HR / cont simplu → P0001 (prevent_role_escalation)');
 SELECT teste.assert((SELECT employee_id IS NULL AND tip_cont IS NULL AND is_owner IS FALSE AND role = 'manager_santier' FROM public.profiles WHERE id = :'u_r1simplu'),
   'R1-14b profilul țintă a rămas neschimbat după matrice');
+
+-- R1-14c (01.10.2026) service_role legat ca în SEC F2 r4 (20260930j): claims service_role NU ajung — trebuie și
+-- session_user = 'authenticator' ȘI current_setting('role') = 'service_role'; claim.role ≠ claims.role ⇒ NULL.
+-- Fiecare caz: decizia funcției comune = decizia S-A rescrisă de F2 (employee_id) = decizia protecției (tip_cont).
+CREATE FUNCTION teste.eticheta() RETURNS text LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+  AS $fn$ SELECT public.fn_identitate_eticheta() $fn$;
+CREATE FUNCTION teste.matrice_sr_f2(p_tinta uuid, p_emp bigint)
+RETURNS TABLE(caz text, privilegiata text, eticheta text, sa text, tip text, login text, rol_sql text) LANGUAGE plpgsql AS $fn$
+DECLARE v text;
+BEGIN
+  FOREACH v IN ARRAY ARRAY['sr_fara_set_role','sr_role_authenticated','sr_set_role','postgres_direct','postgres_claims_sr',
+                           'sr_contradictoriu','sr_claim_vechi_set_role'] LOOP
+    PERFORM teste.ca_admin();
+    CASE v
+      WHEN 'sr_fara_set_role' THEN PERFORM teste.ca_login_api('{"role":"service_role"}'::jsonb, NULL);
+      WHEN 'sr_role_authenticated' THEN PERFORM teste.ca_login_api('{"role":"service_role"}'::jsonb, 'authenticated');
+      WHEN 'sr_set_role' THEN PERFORM teste.ca_login_api('{"role":"service_role"}'::jsonb, 'service_role');
+      WHEN 'postgres_direct' THEN PERFORM teste.ca_login('postgres');
+      WHEN 'postgres_claims_sr' THEN
+        PERFORM teste.ca_login('postgres');
+        PERFORM set_config('request.jwt.claims', '{"role":"service_role"}', false);
+      WHEN 'sr_contradictoriu' THEN
+        PERFORM teste.ca_login_api('{"role":"authenticated"}'::jsonb, 'service_role');
+        PERFORM set_config('request.jwt.claim.role', 'service_role', false);
+      WHEN 'sr_claim_vechi_set_role' THEN
+        PERFORM teste.ca_login_api(NULL, 'service_role');
+        PERFORM set_config('request.jwt.claim.role', 'service_role', false);
+    END CASE;
+    caz := v;
+    login := session_user;
+    rol_sql := current_setting('role', true);
+    privilegiata := teste.identitate();
+    eticheta := teste.eticheta();
+    sa := teste.decizie_rpc(format('UPDATE public.profiles SET employee_id = %s WHERE id = %L', p_emp, p_tinta));
+    tip := teste.decizie_rpc(format('UPDATE public.profiles SET tip_cont = %L WHERE id = %L', 'test', p_tinta));
+    PERFORM teste.ca_admin();
+    RETURN NEXT;
+  END LOOP;
+END $fn$;
+CREATE TEMP TABLE tmp_matrice_sr AS SELECT * FROM teste.matrice_sr_f2(:'u_r1simplu', :e_r1liber);
+SELECT teste.assert((SELECT bool_and((privilegiata IS NOT NULL) = (sa = 'trece') AND (sa = 'trece') = (tip = 'trece')) FROM tmp_matrice_sr),
+  'R1-14c fiecare caz service_role: fn_identitate_privilegiata = decizia S-A/F2 (employee_id) = protecția (tip_cont)');
+SELECT teste.assert((SELECT jsonb_object_agg(caz, COALESCE(privilegiata, '—') || '/' || sa) FROM tmp_matrice_sr)
+    = '{"sr_fara_set_role":"—/42501","sr_role_authenticated":"—/42501","sr_set_role":"service_role/trece",
+        "postgres_direct":"db_login/trece","postgres_claims_sr":"—/42501","sr_contradictoriu":"—/42501",
+        "sr_claim_vechi_set_role":"service_role/trece"}'::jsonb,
+  'R1-14c matricea F2: claims service_role fără SET ROLE / ca authenticated / din postgres / contradictorii → NULL; authenticator + SET ROLE service_role → service_role; postgres direct → db_login');
+SELECT teste.assert((SELECT login = 'authenticator' AND rol_sql = 'none' FROM tmp_matrice_sr WHERE caz = 'sr_fara_set_role')
+    AND (SELECT login = 'authenticator' AND rol_sql = 'service_role' FROM tmp_matrice_sr WHERE caz = 'sr_set_role')
+    AND (SELECT login = 'postgres' FROM tmp_matrice_sr WHERE caz = 'postgres_direct'),
+  'R1-14c contextul cazurilor e cel declarat (login + rol SQL efectiv)');
+SELECT teste.assert((SELECT eticheta = 'service_role' FROM tmp_matrice_sr WHERE caz = 'sr_set_role')
+    AND (SELECT bool_and(eticheta LIKE 'service_role_nelegat:%') FROM tmp_matrice_sr WHERE caz IN ('sr_fara_set_role','sr_role_authenticated')),
+  'R1-14c eticheta de audit: „service_role” doar legat; claims service_role nelegate → service_role_nelegat:<rol>');
+SELECT teste.assert((SELECT employee_id IS NULL AND tip_cont IS NULL FROM public.profiles WHERE id = :'u_r1simplu'),
+  'R1-14c profilul țintă a rămas neschimbat');
 DROP TABLE tmp_matrice;
 
 -- R1-15 CHECK pe tip_cont

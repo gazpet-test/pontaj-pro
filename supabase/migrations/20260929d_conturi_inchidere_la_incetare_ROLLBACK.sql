@@ -55,9 +55,11 @@ DROP TRIGGER IF EXISTS trg_hr_employees_private_00_cont_revocat ON public.hr_emp
 DROP FUNCTION IF EXISTS public.fn_cont_revocat_nu_scrie();
 DROP FUNCTION IF EXISTS public.fn_conturi_inchideri_sweep();
 DROP FUNCTION IF EXISTS public.fn_pgrst_pre_request();
+DROP FUNCTION IF EXISTS public.fn_identitate_sesiune();
 DROP FUNCTION IF EXISTS public.fn_cont_inchide_owner(uuid, text);
 DROP FUNCTION IF EXISTS public.fn_cont_restaureaza(bigint, text, boolean);
 DROP FUNCTION IF EXISTS public.fn_cont_restaureaza(bigint, text);
+DROP FUNCTION IF EXISTS public.fn_cont_restaureaza_flaguri(uuid, jsonb);
 DROP FUNCTION IF EXISTS public.fn_cont_stare_angajati();
 DROP FUNCTION IF EXISTS public.fn_cont_inchide(uuid, text, text, integer);
 DROP FUNCTION IF EXISTS public.fn_cont_restaurare_activa(uuid);

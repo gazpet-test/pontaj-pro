@@ -24,7 +24,8 @@
 
 -- A.0 Identitatea apelantului (corecția 30.09, audit A #4/#9) -------------------------
 -- Modelul aprobat de Copilot (poarta GO/NO-GO), identic cu S-A (20260929g, liniile 45-65):
---   claims role='service_role'                      → 'service_role'  (edge functions cu cheia service);
+--   claims role='service_role' + session_user='authenticator' + current_setting('role')='service_role' → 'service_role'
+--     (edge functions cu cheia service; legarea = SEC F2 r4, 20260930j — claims singure NU ajung);
 --   claims role='authenticated' + sub = profil owner → 'owner';
 --   FĂRĂ claims → 'db_login' DOAR pentru login-urile postgres / supabase_admin (migrări, SQL editor, pg_cron);
 --   orice altceva (anon, authenticated non-owner, claims fără sub, supabase_auth_admin = GoTrue, authenticator
@@ -75,14 +76,25 @@ CREATE OR REPLACE FUNCTION public.fn_identitate_privilegiata()
 RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
-DECLARE c record;
+DECLARE c record; v_rol text; v_rol_claim text; v_rol_claims text;
 BEGIN
   SELECT * INTO c FROM public.fn_identitate_claims();
   IF c.rol IS NULL AND c.sub IS NULL THEN
     -- fără context de cerere: conexiune directă la BD
     RETURN CASE WHEN session_user IN ('postgres', 'supabase_admin') THEN 'db_login' END;
   END IF;
-  IF c.rol = 'service_role' THEN
+  -- Aliniat la SEC F2 r4 (20260930j, 01.10.2026): claim.role și claims.role contradictorii ⇒ fără identitate;
+  -- service_role DOAR legat de conexiunea PostgREST (session_user = 'authenticator') ȘI de rolul SQL efectiv
+  -- (current_setting('role') = 'service_role', pus de PostgREST prin SET LOCAL ROLE). Un RPC rulat ca authenticated
+  -- care își pune singur claims service_role are role = 'authenticated' ⇒ NULL. Predicatul e copiat textual din F2.
+  v_rol_claim := nullif(current_setting('request.jwt.claim.role', true), '');
+  v_rol_claims := nullif(coalesce(nullif(current_setting('request.jwt.claims', true), ''),
+                                  nullif(current_setting('request.jwt.claim', true), ''))::jsonb ->> 'role', '');
+  IF v_rol_claim IS NOT NULL AND v_rol_claims IS NOT NULL AND v_rol_claim IS DISTINCT FROM v_rol_claims THEN
+    RETURN NULL;
+  END IF;
+  v_rol := c.rol;
+  IF v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role' THEN
     RETURN 'service_role';
   END IF;
   IF c.rol = 'authenticated' AND c.sub IS NOT NULL
@@ -167,7 +179,9 @@ BEGIN
     RETURN CASE WHEN session_user IN ('postgres', 'supabase_admin') THEN 'db_login:' ELSE 'fara_identitate:' END || session_user;
   END IF;
   v := CASE
-         WHEN c.rol = 'service_role' THEN 'service_role'
+         WHEN c.rol = 'service_role' THEN
+           CASE WHEN session_user = 'authenticator' AND current_setting('role', true) = 'service_role'
+                THEN 'service_role' ELSE 'service_role_nelegat:' || coalesce(current_setting('role', true), '') END
          WHEN c.rol = 'authenticated' AND c.sub IS NOT NULL THEN
            CASE WHEN EXISTS (SELECT 1 FROM public.profiles WHERE id::text = c.sub AND is_owner IS TRUE)
                 THEN 'owner:' ELSE 'authenticated:' END || c.sub

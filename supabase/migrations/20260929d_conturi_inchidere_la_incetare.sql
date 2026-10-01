@@ -923,6 +923,18 @@ END $cron$;
 --     ALTER ROLE authenticator SET pgrst.db_pre_request = 'public.fn_pgrst_pre_request';
 --     NOTIFY pgrst, 'reload config';
 --   Storage și Realtime NU trec prin hook → de scurtat și JWT expiry (Dashboard → Auth), ex. 900 s.
+-- (01.10.2026, gate 0e r8) Citirea session_id din JWT stă într-o funcție INTERNĂ (fără EXECUTE pentru anon/authenticated),
+-- ca hook-ul expus să nu conțină referințe la GUC-urile request.jwt* (invariantul de catalog SEC F2 0e).
+CREATE OR REPLACE FUNCTION public.fn_identitate_sesiune()
+RETURNS text
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  RETURN coalesce(nullif(current_setting('request.jwt.claims', true), ''),
+                  nullif(current_setting('request.jwt.claim', true), ''))::jsonb ->> 'session_id';
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_identitate_sesiune() FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.fn_pgrst_pre_request()
 RETURNS void
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
@@ -944,8 +956,7 @@ BEGIN
      OR EXISTS (SELECT 1 FROM auth.users u WHERE u.id = v_uid AND u.banned_until > now()) THEN
     RAISE EXCEPTION 'Contul a fost închis: accesul e revocat' USING ERRCODE = '42501';
   END IF;
-  v_sess := coalesce(nullif(current_setting('request.jwt.claims', true), ''),
-                     nullif(current_setting('request.jwt.claim', true), ''))::jsonb ->> 'session_id';
+  v_sess := public.fn_identitate_sesiune();
   IF v_sess ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      AND NOT EXISTS (SELECT 1 FROM auth.sessions s WHERE s.id = v_sess::uuid) THEN
     RAISE EXCEPTION 'Sesiunea a fost revocată' USING ERRCODE = '42501';
@@ -960,6 +971,24 @@ GRANT EXECUTE ON FUNCTION public.fn_pgrst_pre_request() TO anon, authenticated, 
 -- (audit B #7b) și ca sweep-ul să nu intre în deadlock cu restaurarea (runda 3: sweep-ul ia și el profilul întâi).
 -- După restaurare, contul NU se re-închide automat decât la o plecare nouă sau manual (fn_cont_restaurare_activa, X3).
 -- p_simulare = true: întoarce ce s-ar reface (module, șantiere, flaguri, ban), fără nicio scriere.
+-- (01.10.2026, gate 0e r8) UPDATE-ul dinamic al flagurilor la restaurare stă într-o funcție INTERNĂ (fără EXECUTE pentru
+-- anon/authenticated/service_role): fn_cont_restaureaza e expusă (authenticated) și nu mai conține EXECUTE dinamic.
+-- Cheile se refiltrează aici pe fn_cont_flaguri() (lista albă) — un apelant intern nu poate seta alte coloane.
+CREATE OR REPLACE FUNCTION public.fn_cont_restaureaza_flaguri(p_profile_id uuid, p_flaguri jsonb)
+RETURNS void
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+DECLARE v_set text;
+BEGIN
+  SELECT string_agg(format('%I = ($1 ->> %L)::boolean', k, k), ', ') INTO v_set
+    FROM jsonb_object_keys(COALESCE(p_flaguri, '{}'::jsonb)) k
+   WHERE k = ANY (public.fn_cont_flaguri());
+  IF v_set IS NOT NULL THEN
+    EXECUTE format('UPDATE public.profiles SET %s WHERE id = $2', v_set) USING p_flaguri, p_profile_id;
+  END IF;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_restaureaza_flaguri(uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+
 DROP FUNCTION IF EXISTS public.fn_cont_restaureaza(bigint, text);
 CREATE OR REPLACE FUNCTION public.fn_cont_restaureaza(p_jurnal_id bigint, p_nota text, p_simulare boolean DEFAULT false)
 RETURNS jsonb
@@ -975,7 +1004,6 @@ DECLARE
   v_s_ok    integer[] := '{}';
   v_s_sarit integer[] := '{}';
   v_fl      jsonb;
-  v_set     text;
   v_sim     boolean := COALESCE(p_simulare, false);
 BEGIN
   IF public.fn_identitate_privilegiata() IS DISTINCT FROM 'owner' THEN
@@ -1049,10 +1077,7 @@ BEGIN
       'banned_until', v_j.snapshot -> 'banned_until');
   END IF;
 
-  SELECT string_agg(format('%I = ($1 ->> %L)::boolean', k, k), ', ') INTO v_set FROM jsonb_object_keys(v_fl) k;
-  IF v_set IS NOT NULL THEN
-    EXECUTE format('UPDATE public.profiles SET %s WHERE id = $2', v_set) USING v_fl, v_j.profile_id;
-  END IF;
+  PERFORM public.fn_cont_restaureaza_flaguri(v_j.profile_id, v_fl);
 
   -- Logarea: banned_until revine la valoarea din snapshot (de regulă NULL). Sesiunile nu se refac.
   UPDATE auth.users SET banned_until = (v_j.snapshot ->> 'banned_until')::timestamptz WHERE id = v_j.profile_id;

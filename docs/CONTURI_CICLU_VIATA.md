@@ -11,6 +11,25 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 - `supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql` (R2)
 - `supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql` (R3)
 
+**Amprente (01.10.2026, după alinierea la SEC F2 r4 + gate 0e r8)** — `sha256sum` pe fișierele din branch, de comparat la livrare:
+
+| Fișier | sha256 |
+|---|---|
+| `20260929c_conturi_legare_automata.sql` | `a22f6535e3469a3eebdda38c4e0eba999acccac92df819c4c23298350e829846` |
+| `20260929d_conturi_inchidere_la_incetare.sql` | `dcc8e7f976fc7c7e0f5fa19279e040e027782405dd3146fe95456d890ddc0d83` |
+| `20260929e_fost_angajat_colaborare_externa.sql` | `d4deb2ac2d580735cf55301fc9cfcb68b5f51cfe5ef6e53811a84cdf299409b5` |
+| `20260929c_conturi_legare_automata_ROLLBACK.sql` | `3e7b3af6e12160022fbd19ed73bd0709b72cd372da74d198ee2cb8d09a578256` |
+| `20260929d_conturi_inchidere_la_incetare_ROLLBACK.sql` | `c2e41e0e028ee9027823f48540e95fb2801cfad5fa16d2af9b291d739163b0e1` |
+| `20260929e_fost_angajat_colaborare_externa_ROLLBACK.sql` | `5de2008d00d4ffc078ae10ddfae7c250bc609824386f1e82db46791441256319` |
+
+**Aliniere SEC F2 r4 (01.10.2026).** `fn_identitate_privilegiata` întoarce `'service_role'` DOAR cu predicatul copiat textual din F2 (`20260930j`):
+`v_rol = 'service_role' AND session_user = 'authenticator' AND current_setting('role', true) = 'service_role'`; `request.jwt.claim.role` și
+`claims.role` contradictorii ⇒ NULL. Claims `service_role` fără `SET ROLE` / sub `authenticated` / dintr-o sesiune `postgres` ⇒ NULL
+(teste R1-14c, 7 cazuri, decizia = cea a triggerului S-A rescris de F2). `fn_identitate_eticheta`: aceeași legare; claims nelegate ⇒
+`service_role_nelegat:<rol>`. Gate 0e (`scripts/control_0e.sql` de pe main) pe baza locală după aplicare: 0 rânduri — pentru asta
+`fn_pgrst_pre_request` citește `session_id` prin funcția internă `fn_identitate_sesiune()`, iar UPDATE-ul dinamic al flagurilor din
+`fn_cont_restaureaza` s-a mutat în funcția internă `fn_cont_restaureaza_flaguri(uuid, jsonb)` (ambele fără EXECUTE pentru anon/authenticated/service_role; lista albă de flaguri reverificată în helper).
+
 ---
 
 ## 0. Decizii de luat cu Răzvan înainte de aplicare (A/B/C)
@@ -54,7 +73,7 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 
 ### 0.2 Corecții după S-A live și review Copilot (30.09)
 
-**Context.** Triggerul S-A `trg_profiles_campuri_owner_only` (20260929g) e LIVE din 29.09 23:21 RO. Copilot a aprobat modelul de identitate: trec DOAR identități explicite — claims `role='service_role'`; claims `role='authenticated'` + `sub` = profil owner; FĂRĂ claims → doar `session_user IN ('postgres','supabase_admin')`. „`auth.uid() IS NULL` ⇒ sistem” e interzis; `current_user` într-o funcție SECURITY DEFINER nu e apelantul. Cele 3 audituri (A identitate, B condiții Copilot, C fișă + pct. 4) au dat NO-GO pe varianta din 29.09; tabelul de mai jos e răspunsul, punct cu punct. Harness-ul rulează acum cu S-A ca precondiție live și cu login-urile reale (`authenticator`, `supabase_auth_admin`, `postgres`); aceleași teste rulate pe varianta din 29.09 (cu psql continuând după erori) pică la 58 de ID-uri de test, inclusiv toate ID-urile noi din coloana „Teste” (unele eșecuri vechi sunt efecte în cascadă ale #1).
+**Context.** Triggerul S-A `trg_profiles_campuri_owner_only` (20260929g) e LIVE din 29.09 23:21 RO. Copilot a aprobat modelul de identitate: trec DOAR identități explicite — claims `role='service_role'` (din 01.10: legat de `session_user='authenticator'` + `current_setting('role')='service_role'`, ca SEC F2 r4); claims `role='authenticated'` + `sub` = profil owner; FĂRĂ claims → doar `session_user IN ('postgres','supabase_admin')`. „`auth.uid() IS NULL` ⇒ sistem” e interzis; `current_user` într-o funcție SECURITY DEFINER nu e apelantul. Cele 3 audituri (A identitate, B condiții Copilot, C fișă + pct. 4) au dat NO-GO pe varianta din 29.09; tabelul de mai jos e răspunsul, punct cu punct. Harness-ul rulează acum cu S-A ca precondiție live și cu login-urile reale (`authenticator`, `supabase_auth_admin`, `postgres`); aceleași teste rulate pe varianta din 29.09 (cu psql continuând după erori) pică la 58 de ID-uri de test, inclusiv toate ID-urile noi din coloana „Teste” (unele eșecuri vechi sunt efecte în cascadă ale #1).
 
 | # | Constatare (audit) | Schimbare | Teste |
 |---|---|---|---|
