@@ -2,7 +2,11 @@
 -- docs/INCIDENT_EGRESS_2026-09-25.md: doc 770, 95 MB, ~16.000 descărcări, 1,6 TB cached egress).
 -- A) jurnal descărcări + detector la 5 min + circuit breaker pe obiect (deblocare doar owner)
 -- B) statistici pentru widget-ul din ERP (doar owner) + alerte cotă ciclu la 50% / 80% din 250 GB.
--- NEAPLICATĂ pe live (verificat read-only 01.10.2026: niciun obiect storage_egress_* / egress_*, niciun job cron egress_*).
+-- NEAPLICATĂ pe live (reverificat read-only 01.10.2026 după merge cu main: 0 tabele storage_egress_*, 0 funcții egress_*,
+--   0 joburi cron egress*, nicio intrare în schema_migrations; pg_cron prezent; 8/8 coloane profiles/notifications; auth.uid() există;
+--   notifications_modul_check include 'general' ⇒ gate 0e trece; 2 owneri; triggerul trg_notificari_ruteaza_ofertare nu atinge link_to '/').
+-- NU cere tokenul Supabase Management: edge-ul egress-usage-api (SUPABASE_MGMT_TOKEN) e AMÂNAT și scos din PR.
+--   Fără edge/worker cablat, poarta și jurnalul stau inerte (nimeni nu scrie în jurnal ⇒ detectorul nu blochează nimic).
 -- Se livrează DOAR prin scripts/livrare_migrare.sh, cu acordul lui Răzvan. Rollback: 20260930e_monitor_egress_ROLLBACK.sql
 -- Tranzacția: UN SINGUR gestionar = runnerul (psql --single-transaction). Fișierul NU conține BEGIN/COMMIT.
 -- Garda de livrare (start + final) refuză rularea fără marcajul runnerului legat de txid (psql -f / MCP nu o pot aplica).
@@ -312,7 +316,7 @@ BEGIN
   -- p2. config: exact un rând
   SELECT count(*) INTO v_n FROM public.storage_egress_config;
   IF v_n IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'Postcondiție p2: storage_egress_config are % rânduri (așteptat 1)', v_n; END IF;
-  -- p3. 9 funcții; cele SECURITY DEFINER au search_path fixat
+  -- p3. 8 funcții; cele SECURITY DEFINER au search_path fixat
   SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'egress\_%';
   IF v_n IS DISTINCT FROM 8 THEN RAISE EXCEPTION 'Postcondiție p3: % funcții egress_* (așteptat 8)', v_n; END IF;
   SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

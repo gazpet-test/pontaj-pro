@@ -1,5 +1,7 @@
 # Monitor egress Storage (varianta C = A + B)
 
+> **01.10.2026 (PR #543):** în PR intră doar migrarea + widgetul + workerul NAS. Edge-ul `egress-usage-api`, helperul `_shared/egress.ts` și cablarea în `ofertare-ingest-doc` au fost scoase din PR (AMÂNATE; CI „verifica” pica pe ingest-doc modificat fără deploy). Mențiunile de mai jos despre ele descriu varianta amânată.
+
 Decizia lui Răzvan după incidentul din 24–25.09.2026 (`docs/INCIDENT_EGRESS_2026-09-25.md`, pe branch-ul `claude/erp-continuare-x4p5a7`): doc 770 (95 MB) descărcat de ~16.000 de ori de workerul NAS și de `ofertare-ingest-doc`, 1,6 TB cached egress, aflat din billing după 4 zile.
 
 **Stare: PR draft. Nimic aplicat pe Supabase live, nimic deployat.**
