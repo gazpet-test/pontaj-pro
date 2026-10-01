@@ -84,7 +84,32 @@ INSERT INTO public.user_module_access VALUES ('${U.modul}', 'ofertare'), ('${U.f
 ${HELPER}
 REVOKE ALL ON FUNCTION public.fn_are_acces_ofertare() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_are_acces_ofertare() TO authenticated, service_role;
-CREATE TABLE public.ofertare_licitatii (id bigint PRIMARY KEY, status text, derogare_depunere boolean DEFAULT false, derogare_motiv text, termen_depunere timestamptz, responsabil_id uuid REFERENCES public.profiles(id));
+CREATE TABLE public.ofertare_licitatii (id bigint PRIMARY KEY, status text, derogare_depunere boolean DEFAULT false, derogare_motiv text, termen_depunere timestamptz, responsabil_id uuid REFERENCES public.profiles(id), contract_id bigint, documentatie_adusa_la timestamptz, updated_at timestamptz);
+-- r6: copia EXACTĂ (read-only, 01.10.2026) a triggerului live a00_ofertare_licitatii_scriere — orice cont Ofertare poate scrie orice coloană
+CREATE FUNCTION public.fn_ofertare_licitatii_scriere() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $a00$
+DECLARE
+  v_admin boolean := (session_user = 'postgres');
+  v_ofertare boolean := (SELECT public.fn_are_acces_ofertare());
+  v_service boolean := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', current_setting('request.jwt.claim.role', true)) = 'service_role';
+BEGIN
+  IF v_admin OR v_ofertare THEN RETURN NEW; END IF;
+  IF v_service THEN
+    IF (to_jsonb(OLD) - 'termen_depunere' - 'documentatie_adusa_la' - 'updated_at') IS DISTINCT FROM (to_jsonb(NEW) - 'termen_depunere' - 'documentatie_adusa_la' - 'updated_at') THEN
+      RAISE EXCEPTION 'Contextul automat (service_role) poate modifica doar termen_depunere/documentatie_adusa_la' USING ERRCODE = 'P0001';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.user_module_access u WHERE u.profile_id = auth.uid() AND u.module = 'financiar') THEN
+    RAISE EXCEPTION 'Contextul curent nu poate modifica o licitație' USING ERRCODE = 'P0001';
+  END IF;
+  IF (to_jsonb(OLD) - 'contract_id' - 'updated_at') IS DISTINCT FROM (to_jsonb(NEW) - 'contract_id' - 'updated_at') THEN
+    RAISE EXCEPTION 'Modulul financiar poate modifica doar contract_id pe o licitație' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END;
+$a00$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_licitatii_scriere() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER a00_ofertare_licitatii_scriere BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_licitatii_scriere();
 CREATE TABLE public.ofertare_documente_atribuire (id bigint PRIMARY KEY, fisier_path text, size_bytes bigint, revizie text, procesat_la timestamptz, text_extras text);
 CREATE TABLE public.ofertare_cerinte (id bigint PRIMARY KEY, licitatie_id bigint REFERENCES public.ofertare_licitatii(id), tip text, text_cerinta text,
   versiune int, sursa_document_id bigint, sursa_pagina int, sursa_pasaj text, inlocuita_de bigint, duplicat_al bigint,
@@ -270,7 +295,18 @@ try {
   // false→true în afara RPC-ului
   check('false→true direct (postgres) → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(psql(`UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103;`).out))
   check('false→true direct (REST owner) → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(rest('authenticated', U.owner, `UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103;`).out))
-  check('false→true cu marcaj pentru ALTĂ licitație → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(psql(`BEGIN; SELECT set_config('gazpet.j02b_activeaza', '104:' || txid_current(), true); UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103; ROLLBACK;`).out))
+  check('r6: false→true cu rând de activare pentru ALTĂ licitație (aceeași tranzacție) → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(psql(`BEGIN; INSERT INTO public.ofertare_j02b_activari (licitatie_id, actor, rol_actor, n_redeschise, txid) VALUES (104, '${U.owner}', 'owner', 0, txid_current()); UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103; ROLLBACK;`).out))
+  check('r6: false→true cu rând de activare din ALTĂ tranzacție → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(psql(`BEGIN; INSERT INTO public.ofertare_j02b_activari (licitatie_id, actor, rol_actor, n_redeschise, txid) VALUES (103, '${U.owner}', 'owner', 0, txid_current() - 1); UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103; ROLLBACK;`).out))
+  check('r6: GUC-ul vechi (gazpet.j02b_activeaza) nu mai armează nimic → refuz', /doar prin fn_ofertare_j02b_activeaza/.test(psql(`BEGIN; SELECT set_config('gazpet.j02b_activeaza', '103:' || txid_current(), true); UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = 103; ROLLBACK;`).out))
+  // r6: autoatribuire responsabil_id (calea live: a00 lasă orice cont Ofertare să scrie responsabil_id) → activarea refuzată
+  const auto1 = rest('authenticated', U.modul, `UPDATE public.ofertare_licitatii SET responsabil_id = '${U.modul}', responsabil_setat_de = NULL WHERE id = 103; SELECT public.fn_ofertare_j02b_activeaza(103);`, 'COMMIT')
+  check('r6: autoatribuire + activare în aceeași tranzacție → REFUZ', !auto1.ok && /doar ownerul sau responsabilul/.test(auto1.out), auto1.out.slice(0, 200))
+  const auto2 = rest('authenticated', U.modul, `UPDATE public.ofertare_licitatii SET responsabil_id = '${U.modul}', responsabil_setat_de = '${U.owner}' WHERE id = 103;`, 'COMMIT')
+  check('r6: autoatribuirea (commit separat) e posibilă pe live, dar responsabil_setat_de = cel care s-a numit (valoarea trimisă de client e ignorată)', auto2.ok && q(`SELECT responsabil_setat_de FROM public.ofertare_licitatii WHERE id = 103`) === U.modul, auto2.out.slice(0, 200))
+  const auto3 = rest('authenticated', U.modul, `SELECT public.fn_ofertare_j02b_activeaza(103);`, 'COMMIT')
+  check('r6: autoatribuire, apoi activare în altă tranzacție → REFUZ', !auto3.ok && /doar ownerul sau responsabilul/.test(auto3.out), auto3.out.slice(0, 200))
+  check('r6: refuzurile n-au atins 103 și jurnalul', q(`SELECT j02b_activ FROM public.ofertare_licitatii WHERE id = 103`) === 'f' && q(`SELECT count(*) FROM public.ofertare_j02b_activari`) === '0')
+  q(`UPDATE public.ofertare_licitatii SET responsabil_id = NULL WHERE id = 103;`)
   // RPC: porțile
   const act = (rol, uid, id) => rest(rol, uid, `SELECT public.fn_ofertare_j02b_activeaza(${id});`, 'COMMIT')
   const rAnon = act('anon', null, 106), rSr = act('service_role', null, 106)
@@ -294,7 +330,14 @@ try {
   check('true→false direct (postgres) → refuz', /nu se mai poate opri/.test(psql(`UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104;`).out))
   check('true→false REST owner → refuz', /nu se mai poate opri/.test(rest('authenticated', U.owner, `UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104;`).out))
   check('true→false REST service_role → refuz', /nu se mai poate opri|permission denied/.test(rest('service_role', null, `UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104;`).out))
-  check('true→false cu marcajul RPC setat → tot refuz', /nu se mai poate opri/.test(psql(`BEGIN; SELECT set_config('gazpet.j02b_activeaza', '104:' || txid_current(), true); UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104; ROLLBACK;`).out))
+  check('true→false cu rând de activare în tranzacția curentă → tot refuz', /nu se mai poate opri/.test(psql(`BEGIN; INSERT INTO public.ofertare_j02b_activari (licitatie_id, actor, rol_actor, n_redeschise, txid) VALUES (999, '${U.owner}', 'owner', 0, txid_current()); UPDATE public.ofertare_licitatii SET j02b_activ = false WHERE id = 104; ROLLBACK;`).out))
+  check('r6: jurnalul are txid-ul tranzacției de pornire pe fiecare rând', q(`SELECT count(*) FILTER (WHERE txid IS NULL) || '/' || count(*) FROM public.ofertare_j02b_activari`) === '0/3')
+  // r6: responsabil numit de owner (nu autoatribuit) → poate porni
+  q(`INSERT INTO public.ofertare_licitatii (id, status) VALUES (109, 'identificata');`)
+  check('r6: owner numește responsabilul (REST) → responsabil_setat_de = owner', rest('authenticated', U.owner, `UPDATE public.ofertare_licitatii SET responsabil_id = '${U.modul}' WHERE id = 109;`, 'COMMIT').ok && q(`SELECT responsabil_setat_de FROM public.ofertare_licitatii WHERE id = 109`) === U.owner)
+  // control 0e (gate-ul permanent din runner) pe baza după apply
+  const c0e = psql(readFileSync(join(ROOT, 'scripts/control_0e.sql'), 'utf8'))
+  check('r6: scripts/control_0e.sql după apply → 0 rânduri', c0e.ok && c0e.out === '', c0e.out.slice(0, 400))
   check('true→false odată cu depunerea → refuz (și poarta evaluează regula nouă)', !psql(`UPDATE public.ofertare_licitatii SET j02b_activ = false, status = 'depusa' WHERE id = 104;`).ok)
   check('flag true: 104 rămâne pornită', q(`SELECT j02b_activ FROM public.ofertare_licitatii WHERE id = 104`) === 't')
   check('RPC fn_ofertare_j02b_activeaza: ACL brut exact authenticated + postgres', q(`SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type, ',' ORDER BY x.grantee::regrole::text) FROM pg_proc p, aclexplode(p.proacl) x WHERE p.oid = 'public.fn_ofertare_j02b_activeaza(bigint)'::regprocedure`) === 'authenticated:EXECUTE,postgres:EXECUTE')
@@ -337,7 +380,7 @@ try {
   check('re-livrare cu arhiva pornirilor prezentă → refuz', (() => { q(`DROP TABLE public.ofertare_cerinte_na_confirmari_arhiva_j02b;`); return !livrare().ok })())
   q(`DROP TABLE public.ofertare_j02b_activari_arhiva;`)
   check('re-livrare după curățarea arhivei → trece', livrare().ok)
-  check('re-livrare: TOATE licitațiile existente (inclusiv 107 creată cu J02b pornit) revin la j02b_activ=false', q(`SELECT count(*) FILTER (WHERE NOT j02b_activ) || '/' || count(*) FROM public.ofertare_licitatii`) === '5/5')
+  check('re-livrare: TOATE licitațiile existente (inclusiv 107 și 109 create cu J02b pornit) revin la j02b_activ=false', q(`SELECT count(*) FILTER (WHERE NOT j02b_activ) || '/' || count(*) FROM public.ofertare_licitatii`) === '6/6')
   check('revenire pe tabel gol → trece și șterge tabelul', revenire().ok && q(`SELECT to_regclass('public.ofertare_cerinte_na_confirmari') IS NULL AND to_regclass('public.ofertare_cerinte_na_confirmari_arhiva_j02b') IS NULL AND to_regclass('public.ofertare_j02b_activari') IS NULL AND to_regclass('public.ofertare_j02b_activari_arhiva') IS NULL`) === 't')
 
   console.log('8. Nicio scriere directă în tabel din aplicație (src/, supabase/functions/, worker/)')

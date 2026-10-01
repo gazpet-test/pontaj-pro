@@ -189,7 +189,7 @@ Varianta B: regula se pornește licitație cu licitație, de un om, într-un sin
 - `fn_ofertare_j02b_impact(p_licitatie_id)`: întoarce câte cerințe se redeschid. Le numără pe cele cu „nu se aplică” AI fără dovadă și fără confirmare, plus cerințele PT exceptate fără capitol și fără confirmare. O folosește dialogul din UI.
 - `trg_ofertare_j02b_sens_unic` (BEFORE INSERT OR UPDATE):
   - refuză `true→false` pe orice cale;
-  - refuză `false→true` fără marcajul RPC-ului (`gazpet.j02b_activeaza = <id>:<txid>`);
+  - refuză `false→true` fără marcajul RPC-ului (`gazpet.j02b_activeaza = <id>:<txid>`) — **înlocuit în r6** cu rândul de jurnal din tranzacția curentă;
   - refuză un INSERT cu `false`.
 - ACL: pe cele 2 RPC-uri EXECUTE doar pentru `authenticated` (ACL brut, efectiv și graful SET ROLE, ca la celelalte RPC-uri umane).
 - Postcondiție nouă: **verdictul porții nu se schimbă**. Înainte de orice modificare și după apply, se încearcă depunerea pe fiecare licitație nedepusă, într-o subtranzacție anulată. Se compară SQLSTATE și mesajul. Licitațiile 3, 5, 15, 93 și 103 trebuie să fie printre cele verificate.
@@ -213,9 +213,48 @@ Varianta B: regula se pornește licitație cu licitație, de un om, într-un sin
 - Comutatorul în sens unic se poate ocoli de un superuser: `DISABLE TRIGGER`, `session_replication_role=replica` sau `set_config` pe marcaj din SQL editor. Din REST/PostgREST nu se poate ocoli (`set_config` nu e expus).
 - Re-livrarea după revenire pune din nou `false` pe TOATE licitațiile, inclusiv pe cele pornite între timp. Jurnalul vechi rămâne în `ofertare_j02b_activari_arhiva`, iar re-livrarea e refuzată cât arhiva există.
 - Postcondiția de verdict execută o încercare de depunere pe fiecare licitație nedepusă (~60 pe live). Încercarea e anulată, dar triggerele BEFORE/AFTER pe `ofertare_licitatii` rulează. Pe live sunt doar `a00_ofertare_licitatii_scriere` și `trg_gate_depunere`, citite read-only pe 01.10.
-- sha256 migrare r5: `2dcd168f4cbefbd97bbf6f4f65944cd83b5883224f8cf5256ea8e61167f8d5fd`.
+- sha256 migrare r5 (înlocuit de r6): `2dcd168f4cbefbd97bbf6f4f65944cd83b5883224f8cf5256ea8e61167f8d5fd`.
 
 **Teste r5:**
 - harness `scripts/test_j02b_na_confirmare.mjs` pe PG17 local, cu secțiunea 5b nouă și pre/rollback extinse;
 - `supabase/tests/j02b_na_confirmare_test.sql`, cu T0 nou: pornire pe 103 prin RPC și `true→false` refuzat;
 - vitest `src/ofertareNeaplicabil.test.js`.
+
+## Runda 6 (NO-GO Copilot pe r5 → 3 corecturi)
+
+**1. BLOCKER 0e — fără GUC.** `fn_ofertare_j02b_activeaza` (SECDEF, EXECUTE `authenticated`) conținea `set_config`, deci gate-ul
+permanent 0e r8 (`scripts/control_0e.sql`) ar fi oprit runner-ul cu codul 30. Acum armarea se face prin jurnal:
+- RPC-ul verifică actorul (auth + acces Ofertare + owner / responsabil nenumit de el însuși), calculează impactul;
+- **întâi** `INSERT INTO ofertare_j02b_activari (…, txid) VALUES (…, txid_current())` (coloană nouă `txid bigint NOT NULL`);
+- **apoi** `UPDATE ofertare_licitatii SET j02b_activ = true`;
+- `trg_ofertare_j02b_sens_unic` acceptă `false→true` doar dacă există rândul de activare al ACELEI licitații cu `txid = txid_current()`.
+Clientul nu are INSERT pe jurnal (doar SELECT), deci nu poate arma. Nicio funcție expusă nu mai conține `set_config`/`execute`/`current_setting`
+(postcondiție nouă r6 pe cele 3 funcții ale comutatorului). Harness: `scripts/control_0e.sql` (copie identică cu main) rulat după apply → **0 rânduri**.
+
+**2. Autoatribuirea `responsabil_id`.** Citit read-only pe live (01.10): `a00_ofertare_licitatii_scriere` face `RETURN NEW` pentru orice cont
+cu `fn_are_acces_ofertare()`, iar politica UPDATE cere doar acces Ofertare/financiar ⇒ **da, orice utilizator Ofertare își poate pune
+`responsabil_id = uid` și ar fi putut porni J02b.** Închis astfel (varianta aleasă — mai simplă decât istoricul pe tranzacții și acoperă și
+autoatribuirea comisă într-o tranzacție anterioară):
+- coloană nouă `ofertare_licitatii.responsabil_setat_de uuid`, scrisă EXCLUSIV de `trg_ofertare_responsabil_setat_de` (BEFORE INSERT OR UPDATE,
+  funcție non-SECDEF, fără EXECUTE pentru nimeni): la fiecare schimbare a `responsabil_id` = `auth.uid()`; altfel păstrează valoarea veche;
+  orice valoare trimisă de client e suprascrisă;
+- RPC-ul acceptă rolul „responsabil” doar dacă `responsabil_id = uid AND responsabil_setat_de IS DISTINCT FROM uid`;
+- rândurile existente la apply au `NULL` (responsabil numit înainte de r6 — tratat ca numit de altcineva; postcondiție: toate NULL).
+  Limită asumată: o autoatribuire făcută ÎNAINTE de apply nu se poate deosebi; ownerul o poate renumi.
+- UI: `poatePorniJ02b` ascunde butonul pentru responsabilul autoatribuit.
+Teste negative noi: autoatribuire + activare în aceeași tranzacție → REFUZ; autoatribuire comisă, apoi activare → REFUZ; `responsabil_setat_de`
+trimis de client e ignorat; owner numește responsabilul → `responsabil_setat_de = owner`. Harness-ul conține acum copia exactă a `a00` live.
+
+**3. UI-ul respectă flagul.** `src/ofertareNeaplicabil.js`: `j02bActivPe(lic)` (doar `true` explicit ⇒ strict; `false` sau coloană lipsă ⇒ legacy,
+ca poarta din BD), parametru `j02bActiv` pe `nsaScoasa`, `statisticiAcoperire`, `stareExceptarePT` și helper nou `badgeNsa`.
+- `false` ⇒ textual semantica dinainte de J02b: „nu se aplică” = `cerinte.stare='nu_se_aplica'`, badge „⊘ NU SE APLICĂ” fără buton,
+  exceptarea PT = orice legătură `exceptat` (filtrele gata/fără/capcane/dovadă ca înainte), exceptarea dintr-o selecție nu cere confirmare;
+- `true` ⇒ semantica strictă (doar confirmarea umană validă închide).
+Folosit în `OfertareLicitatii.jsx` (Acoperire: contoare + badge NSA) și `OfertarePropunere.jsx` (matrice, filtre, exceptare).
+Limita din r5 („UI mai conservator decât poarta”) dispare.
+
+**Postcondiții / amprente r6**
+- md5 migrare: `3f95e44f13bf3c4eaaa8666016bb5254`; sha256 migrare: `c8c535ad7a4b8ea6b0124994faeb4b88e98a322498cf032c35b0b1639a685f2f`.
+- md5 revenire: `db2050996dbd7a92fef43b1b231d1138`; sha256 revenire: `5a965cd6bd01fa2cf21cc93bdcbeea0094f5e07e3dbd3b8290cdd39a935bfda9`.
+
+**Teste r6:** harness PG17 `node scripts/test_j02b_na_confirmare.mjs` → 124 OK, 0 FAIL; `npx vitest run` → 1072 passed (1072); `npx vite build` OK.

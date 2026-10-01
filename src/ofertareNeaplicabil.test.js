@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { indexConfirmari, stareConfirmare, stareExceptarePT, nsaScoasa, statisticiAcoperire, propunereCurenta, stareComutatorJ02b, poatePorniJ02b, TIP_NSA, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
+import { indexConfirmari, stareConfirmare, stareExceptarePT, nsaScoasa, statisticiAcoperire, propunereCurenta, stareComutatorJ02b, poatePorniJ02b, badgeNsa, j02bActivPe, TIP_NSA, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
 
 const conf = (cerinta_id, tip, valida, extra = {}) => ({ cerinta_id, tip, valida, revocata_la: null, ...extra })
 
@@ -118,5 +118,62 @@ describe('J02b r5 — comutatorul pe licitație', () => {
     expect(poatePorniJ02b(lic, null)).toBe(false)
     expect(poatePorniJ02b({ ...lic, j02b_activ: true }, { id: 'o', is_owner: true })).toBe(false)
     expect(poatePorniJ02b({ id: 1 }, { id: 'o', is_owner: true })).toBe(false)
+  })
+})
+
+describe('J02b r6 — UI-ul urmează comutatorul licitației', () => {
+  const idxGol = indexConfirmari([])
+  const idxOk = indexConfirmari([conf(1, TIP_NSA, true), conf(5, TIP_EXCEPTAT_PT, true)])
+  const cerinte = [
+    { id: 1, tip: 'eliminatorie', stare: 'nu_se_aplica' },   // decizie veche din registru
+    { id: 2, tip: 'eliminatorie', stare: null },             // doar AI „nu se aplică”
+    { id: 3, tip: 'eliminatorie', stare: null },             // gol
+  ]
+  const ac = { 1: { status: 'nu_se_aplica' }, 2: { status: 'nu_se_aplica' }, 3: { status: 'gol' } }
+  it('j02bActivPe: doar true explicit ⇒ strict; false / lipsă coloană ⇒ legacy', () => {
+    expect(j02bActivPe({ j02b_activ: true })).toBe(true)
+    expect(j02bActivPe({ j02b_activ: false })).toBe(false)
+    expect(j02bActivPe({})).toBe(false)
+    expect(j02bActivPe(null)).toBe(false)
+  })
+  it('legacy (false): stare=nu_se_aplica scoate cerința; AI-only rămâne în alarmă (ca înainte de J02b)', () => {
+    const st = statisticiAcoperire(cerinte, ac, idxGol, false)
+    expect(st.nuSeAplica).toBe(1)
+    expect(st.naElim).toBe(1)
+    expect(st.goluriElim).toBe(1)
+    expect(st.elimFaraDovada).toBe(2)
+    expect(st.nsaPropuseAI).toBe(0)
+    expect(nsaScoasa(cerinte[0], idxGol, false)).toBe(true)
+  })
+  it('strict (true): fără confirmare nimic nu e scos; cu confirmare validă da', () => {
+    const st0 = statisticiAcoperire(cerinte, ac, idxGol, true)
+    expect(st0.nuSeAplica).toBe(0)
+    expect(st0.naElim).toBe(2)
+    expect(st0.nsaPropuseAI).toBe(2)
+    expect(st0.elimFaraDovada).toBe(3)
+    const st1 = statisticiAcoperire(cerinte, ac, idxOk, true)
+    expect(st1.nuSeAplica).toBe(1)
+    expect(st1.elimFaraDovada).toBe(2)
+  })
+  it('badge NSA: legacy = vechiul „⊘ NU SE APLICĂ” fără buton; strict = propunere deschisă / închis doar cu om', () => {
+    expect(badgeNsa(cerinte[0], ac[1], idxGol, false)).toEqual({ fel: 'inchisa', text: '⊘ NU SE APLICĂ', confirmabil: false })
+    expect(badgeNsa(cerinte[1], ac[2], idxGol, false)).toBe(null)
+    expect(badgeNsa(cerinte[0], ac[1], idxGol, true)).toMatchObject({ fel: 'deschisa', confirmabil: true })
+    expect(badgeNsa(cerinte[1], ac[2], idxGol, true)).toMatchObject({ fel: 'deschisa', text: '⊘ propunere AI — deschisă' })
+    expect(badgeNsa(cerinte[0], ac[1], idxOk, true)).toMatchObject({ fel: 'inchisa' })
+    expect(badgeNsa(cerinte[2], ac[3], idxGol, true)).toBe(null)
+  })
+  it('PT exceptare: legacy = orice legătură „exceptat” închide (gata/fără/capcane/dovadă ca înainte); strict = doar cu confirmare', () => {
+    const lsAi = [{ fel: 'exceptat', sursa: 'ai' }]
+    expect(stareExceptarePT(lsAi, idxGol, 4, false)).toMatchObject({ inchisa: true, propunere: false })
+    expect(stareExceptarePT(lsAi, idxGol, 4, true)).toMatchObject({ inchisa: false, propunere: true })
+    expect(stareExceptarePT(lsAi, idxOk, 5, true)).toMatchObject({ inchisa: true })
+    expect(stareExceptarePT([], idxGol, 4, false)).toMatchObject({ inchisa: false })
+  })
+  it('pornirea: responsabilul autoatribuit nu primește butonul', () => {
+    const u = { id: 'u1', is_owner: false }
+    expect(poatePorniJ02b({ j02b_activ: false, responsabil_id: 'u1', responsabil_setat_de: 'u1' }, u)).toBe(false)
+    expect(poatePorniJ02b({ j02b_activ: false, responsabil_id: 'u1', responsabil_setat_de: 'own' }, u)).toBe(true)
+    expect(poatePorniJ02b({ j02b_activ: false, responsabil_id: 'u1', responsabil_setat_de: null }, u)).toBe(true)
   })
 })

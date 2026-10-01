@@ -25,6 +25,12 @@
 --   * pornirea: doar fn_ofertare_j02b_activeaza(p_licitatie_id) (acces Ofertare + owner sau responsabil_id), jurnal în
 --     ofertare_j02b_activari; trg_ofertare_j02b_sens_unic refuză true→false (orice cale), false→true în afara RPC-ului
 --     și INSERT cu false;
+-- RUNDA 6 (NO-GO Copilot pe r5):
+--   * fără GUC: RPC-ul inserează ÎNTÂI rândul în ofertare_j02b_activari (cu txid = txid_current()), apoi face UPDATE;
+--     triggerul acceptă false→true doar dacă există rândul de activare al licitației din tranzacția curentă
+--     (gate-ul permanent 0e din scripts/control_0e.sql dă 0 rânduri; clientul nu are INSERT pe jurnal);
+--   * anti-autoatribuire: ofertare_licitatii.responsabil_setat_de (scris DOAR de trg_ofertare_responsabil_setat_de =
+--     auth.uid() la fiecare schimbare a responsabil_id); RPC-ul acceptă responsabilul doar dacă NU s-a numit singur.
 --   * postcondiție: verdictul porții pe licitațiile nedepuse (inclusiv 3, 5, 15, 93, 103) e identic înainte/după apply.
 -- Aditiv: tabel nou + funcții noi + view nou; fn_gate_depunere și v_ofertare_pt_stare sunt înlocuite doar după
 --   pre-verificarea amprentei definițiilor LIVE citite pe 30.09.2026 (altfel REFUZ).
@@ -81,7 +87,9 @@ BEGIN
      OR to_regclass('public.ofertare_j02b_activari') IS NOT NULL
      OR to_regclass('public.ofertare_j02b_activari_arhiva') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('fn_ofertare_j02b_activeaza','fn_ofertare_j02b_sens_unic','fn_ofertare_j02b_impact'))
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ofertare_j02b_sens_unic') THEN
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_ofertare_j02b_sens_unic','trg_ofertare_responsabil_setat_de'))
+     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_ofertare_responsabil_setat_de')
+     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ofertare_licitatii'::regclass AND attname = 'responsabil_setat_de' AND NOT attisdropped) THEN
     RAISE EXCEPTION 'REFUZ J02b pre: comutatorul j02b_activ / obiectele r5 există deja (reaplicare)';
   END IF;
   IF to_regclass('pg_temp._j02b_verdict') IS NOT NULL THEN
@@ -549,7 +557,8 @@ CREATE TABLE public.ofertare_j02b_activari (
   actor         uuid   NOT NULL REFERENCES public.profiles(id),
   rol_actor     text   NOT NULL CHECK (rol_actor IN ('owner','responsabil')),
   n_redeschise  integer NOT NULL CHECK (n_redeschise >= 0),
-  activat_la    timestamptz NOT NULL DEFAULT now()
+  activat_la    timestamptz NOT NULL DEFAULT now(),
+  txid          bigint NOT NULL           -- r6: tranzacția care a pornit J02b; triggerul sens unic o cere = txid_current()
 );
 COMMENT ON TABLE public.ofertare_j02b_activari IS 'J02b r5: cine a pornit J02b pe o licitație, când și câte cerințe s-au redeschis atunci. Scriere doar prin fn_ofertare_j02b_activeaza.';
 ALTER TABLE public.ofertare_j02b_activari ENABLE ROW LEVEL SECURITY;
@@ -609,7 +618,7 @@ BEGIN
     RAISE EXCEPTION 'J02b: odată pornit pe licitația %, J02b nu se mai poate opri', OLD.id USING ERRCODE = '42501';
   END IF;
   IF NOT OLD.j02b_activ AND COALESCE(NEW.j02b_activ, false)
-     AND current_setting('gazpet.j02b_activeaza', true) IS DISTINCT FROM NEW.id::text || ':' || txid_current() THEN
+     AND NOT EXISTS (SELECT 1 FROM public.ofertare_j02b_activari a WHERE a.licitatie_id = NEW.id AND a.txid = txid_current()) THEN
     RAISE EXCEPTION 'J02b: pornirea se face doar prin fn_ofertare_j02b_activeaza (owner sau responsabilul licitației)' USING ERRCODE = '42501';
   END IF;
   RETURN NEW;
@@ -617,6 +626,32 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_j02b_sens_unic() FROM PUBLIC, anon, authenticated, service_role;
 CREATE TRIGGER trg_ofertare_j02b_sens_unic BEFORE INSERT OR UPDATE ON public.ofertare_licitatii
   FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_j02b_sens_unic();
+
+-- ---------------------------------------------------------------------------
+-- 10d'. (r6) Anti-autoatribuire: cine a numit responsabilul. Scris DOAR de trigger (orice valoare trimisă de client e
+--       suprascrisă). NULL = responsabil numit înainte de r6 sau dintr-un context fără utilizator (admin/service).
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.ofertare_licitatii ADD COLUMN responsabil_setat_de uuid;
+COMMENT ON COLUMN public.ofertare_licitatii.responsabil_setat_de IS
+  'J02b r6: auth.uid() care a setat ultima dată responsabil_id (scris doar de trg_ofertare_responsabil_setat_de). fn_ofertare_j02b_activeaza refuză responsabilul care s-a numit singur.';
+CREATE FUNCTION public.fn_ofertare_responsabil_setat_de()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.responsabil_setat_de := CASE WHEN NEW.responsabil_id IS NULL THEN NULL ELSE auth.uid() END;
+  ELSIF NEW.responsabil_id IS DISTINCT FROM OLD.responsabil_id THEN
+    NEW.responsabil_setat_de := auth.uid();
+  ELSE
+    NEW.responsabil_setat_de := OLD.responsabil_setat_de;
+  END IF;
+  RETURN NEW;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_responsabil_setat_de() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER trg_ofertare_responsabil_setat_de BEFORE INSERT OR UPDATE ON public.ofertare_licitatii
+  FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_responsabil_setat_de();
 
 -- ---------------------------------------------------------------------------
 -- 10e. (r5) RPC: pornirea J02b pe o licitație (false→true). Poarta: utilizator autentificat + acces Ofertare +
@@ -637,22 +672,20 @@ BEGIN
   IF NOT COALESCE(public.fn_are_acces_ofertare(), false) THEN
     RAISE EXCEPTION 'J02b: fără acces la Ofertare' USING ERRCODE = '42501';
   END IF;
-  SELECT id, responsabil_id, j02b_activ INTO l FROM public.ofertare_licitatii WHERE id = p_licitatie_id FOR UPDATE;
+  SELECT id, responsabil_id, responsabil_setat_de, j02b_activ INTO l FROM public.ofertare_licitatii WHERE id = p_licitatie_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'J02b: licitația % nu există', p_licitatie_id USING ERRCODE = 'P0002'; END IF;
   v_owner := COALESCE((SELECT is_owner FROM public.profiles WHERE id = v_uid), false);
   IF v_owner THEN v_rol := 'owner';
-  ELSIF l.responsabil_id IS NOT DISTINCT FROM v_uid THEN v_rol := 'responsabil';
+  ELSIF l.responsabil_id IS NOT DISTINCT FROM v_uid AND l.responsabil_setat_de IS DISTINCT FROM v_uid THEN v_rol := 'responsabil';
   ELSE
-    RAISE EXCEPTION 'J02b: doar ownerul sau responsabilul licitației % poate porni J02b', p_licitatie_id USING ERRCODE = '42501';
+    RAISE EXCEPTION 'J02b: doar ownerul sau responsabilul licitației % (numit de altcineva, nu autoatribuit) poate porni J02b', p_licitatie_id USING ERRCODE = '42501';
   END IF;
   IF l.j02b_activ THEN
     RAISE EXCEPTION 'J02b: e deja pornit pe licitația % (comutatorul merge într-un singur sens)', p_licitatie_id USING ERRCODE = 'P0001';
   END IF;
   v_n := public.fn_ofertare_j02b_impact(p_licitatie_id);
-  PERFORM set_config('gazpet.j02b_activeaza', p_licitatie_id::text || ':' || txid_current(), true);
+  INSERT INTO public.ofertare_j02b_activari (licitatie_id, actor, rol_actor, n_redeschise, txid) VALUES (p_licitatie_id, v_uid, v_rol, v_n, txid_current());
   UPDATE public.ofertare_licitatii SET j02b_activ = true WHERE id = p_licitatie_id;
-  PERFORM set_config('gazpet.j02b_activeaza', '', true);
-  INSERT INTO public.ofertare_j02b_activari (licitatie_id, actor, rol_actor, n_redeschise) VALUES (p_licitatie_id, v_uid, v_rol, v_n);
   RETURN v_n;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_j02b_activeaza(bigint) FROM PUBLIC, anon, authenticated, service_role;
@@ -786,6 +819,18 @@ BEGIN
     RAISE EXCEPTION 'J02b post r5: licitațiile existente (%) nu sunt toate cu J02b oprit', current_setting('j02b_r5.n_licitatii');
   END IF;
   IF (SELECT count(*) FROM public.ofertare_j02b_activari) <> 0 THEN RAISE EXCEPTION 'J02b post r5: jurnalul pornirilor nu e gol'; END IF;
+  -- r6: niciun GUC / EXECUTE dinamic în funcțiile expuse ale comutatorului; trigger anti-autoatribuire prezent, neapelabil
+  IF EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN ('public.fn_ofertare_j02b_activeaza(bigint)'::regprocedure, 'public.fn_ofertare_j02b_impact(bigint)'::regprocedure,
+                'public.fn_ofertare_j02b_sens_unic()'::regprocedure) AND (p.prosrc ~* 'set_config|\mexecute\M|current_setting')) THEN
+    RAISE EXCEPTION 'J02b post r6: set_config/execute/current_setting în funcțiile comutatorului';
+  END IF;
+  IF (SELECT count(*) FROM pg_trigger t WHERE t.tgname = 'trg_ofertare_responsabil_setat_de' AND t.tgrelid = 'public.ofertare_licitatii'::regclass
+        AND t.tgenabled = 'O' AND NOT t.tgisinternal AND t.tgfoid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure) <> 1
+     OR (SELECT count(*) FROM pg_proc p WHERE p.oid = 'public.fn_ofertare_responsabil_setat_de()'::regprocedure AND NOT p.prosecdef
+           AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')) <> 1
+     OR EXISTS (SELECT 1 FROM public.ofertare_licitatii WHERE responsabil_setat_de IS NOT NULL) THEN
+    RAISE EXCEPTION 'J02b post r6: trg_ofertare_responsabil_setat_de lipsă/diferit sau responsabil_setat_de completat la apply';
+  END IF;
   -- r5: triggerul sens unic: exact unul, activ, BEFORE INSERT OR UPDATE, pe funcția lui, care nu e SECDEF și nu e apelabilă
   v_sp := current_setting('search_path');
   PERFORM set_config('search_path', 'public, pg_temp', true);

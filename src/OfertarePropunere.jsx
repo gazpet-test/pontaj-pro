@@ -56,7 +56,7 @@ const campuriDocumentatie = r => (!r || r.error || !r.data)
 import ClarificariAC from './OfertareClarificariAC.jsx'
 import OrganigramaSection from './OfertareOrganigrama.jsx'
 import { MOMENTE_GARANTIE, ROLURI_PARTICIPARE, REGEX_INTERZICE_CUMUL } from './ofertareControale.js'
-import { indexConfirmari, stareExceptarePT, propunereCurenta, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
+import { indexConfirmari, stareExceptarePT, propunereCurenta, TIP_EXCEPTAT_PT, j02bActivPe } from './ofertareNeaplicabil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -312,7 +312,7 @@ function PoartaPT({ st, onFiltru }) {
 // MATRICEA — cerințele, cu filtre și cele două acțiuni în bloc
 // ─────────────────────────────────────────────────────────────────
 function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedite, documente = [], filtru, setFiltru, sel, setSel,
-                          onAtribuie, onExcepta, onVerifica, onBlocheaza, onDovada, busy, naIdx, onConfirmaExceptare }) {
+                          onAtribuie, onExcepta, onVerifica, onBlocheaza, onDovada, busy, naIdx, onConfirmaExceptare, j02b = true }) {
   const [capSel, setCapSel] = useState('')
   const [motiv, setMotiv] = useState('')
   const [inspectata, setInspectata] = useState(null)
@@ -333,7 +333,7 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
     const ls = legPe.get(c.id) || []
     const areCap = ls.some(l => l.fel === 'capitol')
     // J02b: „exceptată” = închisă DOAR cu confirmare umană validă (amprenta sursei curente); AI = propunere.
-    const exceptat = stareExceptarePT(ls, naIdx, c.id).inchisa
+    const exceptat = stareExceptarePT(ls, naIdx, c.id, j02b).inchisa   // r6: legacy când J02b e oprit pe licitație
     const cuDovada = dovedite.has(c.id)
     if (filtru === 'fara')    return !areCap && !exceptat && !cuDovada
     if (filtru === 'capcane') return RX_CAPCANA.test(c.text_cerinta || '') && !areCap && !exceptat
@@ -417,7 +417,7 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
           const ls = legPe.get(c.id) || []
           const cap = ls.find(l => l.fel === 'capitol')
           const exc = ls.find(l => l.fel === 'exceptat')
-          const excSt = stareExceptarePT(ls, naIdx, c.id)
+          const excSt = stareExceptarePT(ls, naIdx, c.id, j02b)
           const capcana = RX_CAPCANA.test(c.text_cerinta || '')
           const capNr = cap && capitole.find(k => k.id === cap.capitol_id)
           return (
@@ -431,7 +431,7 @@ function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, dovedit
                   {capcana && <span style={{ fontSize:11, color:G.red, fontWeight:700 }}>🚫 CAPCANĂ</span>}
                   {dovedite.has(c.id) && !cap && !excSt.inchisa && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
                   {capNr && <span style={{ fontSize:11, color:G.green, fontWeight:600 }}>→ {capNr.eticheta || `cap. ${capNr.nr}`}</span>}
-                  {exc && excSt.inchisa && <span style={{ fontSize:11, color:G.dim }} title={exc.motiv}>{excSt.eticheta}</span>}
+                  {exc && excSt.inchisa && <span style={{ fontSize:11, color: j02b ? G.dim : G.orange }} title={exc.motiv}>{excSt.eticheta}</span>}
                   {exc && excSt.propunere && <>
                     <span style={{ fontSize:11, color:G.orange, fontWeight:600 }} title={exc.motiv}>{excSt.eticheta}</span>
                     {onConfirmaExceptare && <button onClick={() => onConfirmaExceptare(c, exc.motiv)} disabled={busy}
@@ -1937,8 +1937,10 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     // J02b: o singură cerință selectată ⇒ confirmarea umană se face acum (cu amprenta sursei), legată de legătura
     // TOCMAI creată (runda 2: confirmarea validează o propunere concretă). În bloc NU: fiecare rând se confirmă
     // explicit din matrice („✓ Confirm exceptarea”), altfel rămâne propunere deschisă.
-    if (sel.size === 1) await confirmaExceptare({ id: [...sel][0] }, motiv, true, noi?.[0]?.id ?? null)
-    showToast?.(sel.size === 1 ? 'Cerință exceptată și confirmată.' : `${sel.size} cerințe marcate „exceptat” — confirmă fiecare rând ca să se închidă.`, 'ok')
+    // r6: J02b oprit pe licitație ⇒ regula veche (legătura „exceptat” închide), fără confirmare.
+    const j02b = j02bActivPe(lic)
+    if (j02b && sel.size === 1) await confirmaExceptare({ id: [...sel][0] }, motiv, true, noi?.[0]?.id ?? null)
+    showToast?.(!j02b ? `${sel.size} cerințe exceptate de la propunere.` : sel.size === 1 ? 'Cerință exceptată și confirmată.' : `${sel.size} cerințe marcate „exceptat” — confirmă fiecare rând ca să se închidă.`, 'ok')
     setSel(new Set()); await load(licId)
   }
 
@@ -2244,7 +2246,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
           filtru={filtru} setFiltru={setFiltru} sel={sel} setSel={setSel}
           onAtribuie={atribuie} onExcepta={excepta}
           onVerifica={verificaLegatura} onBlocheaza={blocheazaLegatura} onDovada={adaugaDovada} busy={busy}
-          naIdx={naIdx} onConfirmaExceptare={confirmaExceptare}
+          naIdx={naIdx} onConfirmaExceptare={confirmaExceptare} j02b={j02bActivPe(lic)}
         />
       </div>
     </div>

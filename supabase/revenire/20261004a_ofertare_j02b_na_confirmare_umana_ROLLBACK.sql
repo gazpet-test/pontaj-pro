@@ -133,6 +133,8 @@ GRANT ALL ON public.v_ofertare_pt_stare TO anon, authenticated, service_role;
 
 -- 3. obiectele J02b (r5 întâi: triggerul și RPC-urile comutatorului, apoi coloana — poarta și view-ul vechi nu o mai citesc)
 DROP TRIGGER trg_ofertare_j02b_sens_unic ON public.ofertare_licitatii;
+DROP TRIGGER trg_ofertare_responsabil_setat_de ON public.ofertare_licitatii;
+DROP FUNCTION public.fn_ofertare_responsabil_setat_de();
 DROP FUNCTION public.fn_ofertare_j02b_sens_unic();
 DROP FUNCTION public.fn_ofertare_j02b_activeaza(bigint);
 DROP FUNCTION public.fn_ofertare_j02b_impact(bigint);
@@ -150,6 +152,7 @@ BEGIN
   END IF;
 END $activari$;
 ALTER TABLE public.ofertare_licitatii DROP COLUMN j02b_activ;
+ALTER TABLE public.ofertare_licitatii DROP COLUMN responsabil_setat_de;
 DROP VIEW public.v_ofertare_cerinte_na_stare;
 DROP FUNCTION public.ofertare_revoca_neaplicabil(bigint, text);
 DROP FUNCTION public.ofertare_confirma_neaplicabil(bigint, text, text, text, bigint);
@@ -192,8 +195,9 @@ BEGIN
      OR to_regclass('public.ofertare_cerinte_na_confirmari') IS NOT NULL OR to_regclass('public.ofertare_j02b_rollback_def') IS NOT NULL
      OR to_regclass('public.ofertare_j02b_activari') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('fn_ofertare_j02b_activeaza','fn_ofertare_j02b_sens_unic','fn_ofertare_j02b_impact'))
-     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ofertare_j02b_sens_unic')
-     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ofertare_licitatii'::regclass AND attname = 'j02b_activ' AND NOT attisdropped) THEN
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname IN ('trg_ofertare_j02b_sens_unic','trg_ofertare_responsabil_setat_de'))
+     OR EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'fn_ofertare_responsabil_setat_de')
+     OR EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.ofertare_licitatii'::regclass AND attname IN ('j02b_activ','responsabil_setat_de') AND NOT attisdropped) THEN
     RAISE EXCEPTION 'J02b rollback post: obiecte J02b rămase';
   END IF;
 END $post$;

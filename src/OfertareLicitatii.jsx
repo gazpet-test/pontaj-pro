@@ -14,7 +14,7 @@ import { mesajInvoke } from './lib/mesajInvoke.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
 import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } from './ofertareTitular.js'
-import { indexConfirmari, statisticiAcoperire, stareConfirmare, propunereCurenta, TIP_NSA, stareComutatorJ02b, poatePorniJ02b } from './ofertareNeaplicabil.js'
+import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereCurenta, TIP_NSA, stareComutatorJ02b, poatePorniJ02b } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
@@ -2817,7 +2817,8 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
   // J02b: regula stă în src/ofertareNeaplicabil.js (cu teste). „Scoasă” = DOAR confirmare umană validă
   // (actor + motiv + amprenta sursei curente); propunerea AI „nu se aplică” și stare='nu_se_aplica' veche fără
   // amprentă NU mai scot eliminatoria din alarmă.
-  const stats = statisticiAcoperire(cerinte, acoperiri, naIdx)
+  const j02b = j02bActivPe(licitatie)   // r6: UI-ul urmează comutatorul licitației (legacy când e oprit)
+  const stats = statisticiAcoperire(cerinte, acoperiri, naIdx, j02b)
   const elimFaraDovada = stats.elimFaraDovada
   // Legătura cu registrul: ce e bifat sus se vede aici. Cu „doar bifatele" rămân doar
   // cerințele alese, ca să poți lucra pe un set restrâns fără să-l pierzi din ochi.
@@ -2969,10 +2970,10 @@ function AcoperireSection({ licitatie, profile, onChanged, sel = [] }) {
                     {c.tip === 'eliminatorie' && <span style={{ fontSize:10, fontWeight:800, color:G.red, border:`1px solid ${G.red}55`, borderRadius:8, padding:'1px 6px' }}>ELIM</span>}
                     {(() => {
                       // J02b: închis DOAR cu confirmare umană pe amprenta sursei curente; restul = propunere.
-                      const stNa = stareConfirmare(naIdx, c.id, TIP_NSA)
-                      if (stNa === 'confirmata') return <span title={c.stare_motiv || 'confirmat de om pe versiunea curentă a sursei'} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>⊘ NU SE APLICĂ ✓ om</span>
-                      if (stNa !== 'invalidata' && c.stare !== 'nu_se_aplica' && a?.status !== 'nu_se_aplica') return null
-                      const txt = stNa === 'invalidata' ? '⚠ confirmare invalidată (sursa s-a schimbat)' : c.stare === 'nu_se_aplica' ? '⊘ nu se aplică — fără confirmare cu amprentă' : '⊘ propunere AI — deschisă'
+                      const bNa = badgeNsa(c, a, naIdx, j02b)
+                      if (!bNa) return null
+                      if (bNa.fel === 'inchisa') return <span title={c.stare_motiv || (j02b ? 'confirmat de om pe versiunea curentă a sursei' : '')} style={{ fontSize:10, fontWeight:800, color:G.purple, border:`1px solid ${G.purple}55`, borderRadius:8, padding:'1px 6px' }}>{bNa.text}</span>
+                      const txt = bNa.text
                       return <>
                         <span title="Nu închide cerința până nu confirmă un om, cu motiv, pe versiunea curentă a sursei." style={{ fontSize:10, fontWeight:800, color:G.orange, border:`1px solid ${G.orange}55`, borderRadius:8, padding:'1px 6px' }}>{txt}</span>
                         <button onClick={() => confirmaNeaplicabil(c)} disabled={!!busy} style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5 }} title="Confirmare umană: motiv obligatoriu; se leagă de amprenta textului cerinței și a documentului sursă. Se invalidează singură dacă sursa se schimbă.">✓ Confirm „nu se aplică”</button>
