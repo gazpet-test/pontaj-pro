@@ -170,7 +170,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Conținut cunoscut doar din articolul sirbuandvornicu.com; documentul ANAP nu a fost citit.",
+  "note": "Conținut cunoscut doar din articolul sirbuandvornicu.com; documentul ANAP nu a fost citit. [Confirmare 02.10: IMPOSIBIL] Sursa e doar proiect în consultare publică; fără text adoptat nu se poate confirma. Regula e oricum acoperită de L98 art. 160–161 și HG 395/2016 (de legat acolo).",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "achizitii_deviz"
  },
  {
@@ -2096,8 +2097,8 @@
  {
   "requirement_id": "REQ-AD-083",
   "source_id": "SRC-legea-101-2016",
-  "editie": "Text inițial MO 393/23.05.2016 (citit local); forma curentă NECITITĂ — art. 8 aplicat în forma curentă de CNSC 2026",
-  "locator": "art. 8 alin. (1) lit. a)–b)",
+  "editie": "Forma sintetică la 18.08.2026 (SintAct)",
+  "locator": "art. 8 alin. (1) lit. a)–b), alin. (2)",
   "cerinta": "Contestația la CNSC se depune în 10 zile când VE ≥ pragul de publicare în JOUE și în 7 zile când VE e sub prag, din ziua următoare luării la cunoștință.",
   "conditii_aplicabilitate": "Orice act al AC considerat nelegal (DA, răspunsuri la clarificări, rezultat).",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -2114,10 +2115,11 @@
   "tip_consum": null,
   "domeniu": "achizitii",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "CORECTURĂ față de runda 1 (care avea 5 zile sub prag): Decizia CNSC 182/C8/4870 din 23.01.2026 aplică explicit „termenul de 7 zile prevăzut de art. 8 alin. (1) lit. b)”. Textul inițial din 2016 (citit local) prevedea notificare prealabilă + 5 zile; actul modificator nu a fost identificat pe sursă primară.",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -2151,9 +2153,9 @@
  {
   "requirement_id": "REQ-AD-085",
   "source_id": "SRC-legea-101-2016",
-  "editie": "Text inițial MO 393/23.05.2016 (citit local); forma curentă NECITITĂ — art. 8 aplicat în forma curentă de CNSC 2026",
-  "locator": "art. 61^1 alin. (1)",
-  "cerinta": "Pentru soluționarea contestației se constituie cauțiune de 2% din VE; sub prag plafonul este 35.000 lei la contestarea DA și 88.000 lei la contestarea rezultatului; termen: 5 zile de la sesizarea CNSC.",
+  "editie": "Forma sintetică la 18.08.2026 (SintAct)",
+  "locator": "art. 61^1 alin. (1) lit. a)–b), alin. (2)–(2^2); art. 17 alin. (1)",
+  "cerinta": "Pentru soluționarea contestației se constituie, în max. 5 zile de la sesizarea CNSC, cauțiune de 2% din VE, plafonată: sub prag JOUE 35.000 lei (contestații depuse până la termenul-limită de depunere a ofertelor) / 88.000 lei (după acest termen); peste prag 220.000 lei / 2.000.000 lei.",
   "conditii_aplicabilitate": "Contestație la CNSC.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Legea 101/2016",
@@ -2163,16 +2165,17 @@
   "verificare": "Calculator cauțiune + alertă D+5 de la sesizare.",
   "prag": {
    "valoare": "2",
-   "unitate": "% din VE (cu plafoane)",
+   "unitate": "% din VE; plafon 35.000/88.000 lei sub prag, 220.000/2.000.000 lei peste prag",
    "operator": "="
   },
   "tip_consum": null,
   "domeniu": "achizitii",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Confirmat doar prin Decizia CNSC 2863/C4/3581 (25.09.2025) în runda 1; plafoanele peste prag (220.000/880.000 lei) NECONFIRMATE în forma curentă. Peste prag: plafon 220.000 lei (contestație până la termenul ofertelor) / 2.000.000 lei (după) — vezi REQ-P0 (corectură noapte; BO2024_3004).",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -2257,8 +2260,8 @@
  {
   "requirement_id": "REQ-AD-089",
   "source_id": "SRC-legea-99-2016",
-  "editie": "Formă curentă NECITITĂ; numerotarea articolelor confirmată doar prin citări în decizii CNSC / acte ANAP",
-  "locator": "art. 172 alin. (2) (echivalentul art. 160 alin. (2) L98)",
+  "editie": "Forma sintetică la 18.02.2026 (SintAct)",
+  "locator": "art. 172 alin. (2); art. 173 alin. (1)",
   "cerinta": "Entitățile contractante sectoriale stabilesc și ele prin anunț unul sau două termene de răspuns la clarificări.",
   "conditii_aplicabilitate": "Operatori de distribuție gaze / operatori regionali apă care cumpără ca entități sectoriale.",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -2271,10 +2274,11 @@
   "tip_consum": null,
   "domeniu": "achizitii",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -2303,9 +2307,9 @@
  {
   "requirement_id": "REQ-AD-091",
   "source_id": "SRC-legea-99-2016",
-  "editie": "Formă curentă NECITITĂ; numerotarea articolelor confirmată doar prin citări în decizii CNSC / acte ANAP",
-  "locator": "art. 197 alin. (2); art. 222 alin. (1)–(2) (după citările CNSC)",
-  "cerinta": "În achizițiile sectoriale, înlocuirea terțului susținător necorespunzător (art. 197 alin. (2)) și declararea subcontractanților (art. 222) urmează aceleași reguli ca L98 art. 183 alin. (2) și art. 218–219.",
+  "editie": "Forma sintetică la 18.02.2026 (SintAct)",
+  "locator": "art. 197 alin. (2); art. 68; art. 183; art. 232–233",
+  "cerinta": "În achizițiile sectoriale, EC cere o singură dată înlocuirea terțului susținător care nu îndeplinește criteriile sau e în motive de excludere (art. 197 alin. (2)); subcontractanții se declară în ofertă (art. 68), se verifică pentru excludere (art. 183) și pot fi plătiți direct (art. 232).",
   "conditii_aplicabilitate": "Proceduri sectoriale.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Legea 99/2016 — confirmat doar prin deciziile CNSC BO2023_2237 și BO2025_2344",
@@ -2317,10 +2321,11 @@
   "tip_consum": null,
   "domeniu": "achizitii",
   "faza": "calificare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Text L99 necitit; numerotarea preluată din decizii CNSC.",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -2989,9 +2994,9 @@
  {
   "requirement_id": "REQ-AD-118",
   "source_id": "SRC-og-15-2021",
-  "editie": "MO 30.08.2021, aprobată prin Legea 281/2021 — text primar NECITIT (doar surse secundare)",
-  "locator": "art. 1–3 (după surse secundare)",
-  "cerinta": "OG 15/2021 a permis ajustarea, prin act adițional încheiat în 30 de zile, a valorii materialelor din contractele de lucrări fără clauză de revizuire, cu coeficientul C bazat pe ICCM (INS, tabel 15) raportat la ianuarie 2021 și ponderea P a materialelor.",
+  "editie": "Forma publicată în MO (30.08.2021); fără modificările Legii 281/2021",
+  "locator": "art. 1 alin. (1)–(2); art. 2 alin. (2), (3), (6), (7), (10)–(12)",
+  "cerinta": "OG 15/2021 a permis ajustarea prețului contractelor de lucrări în derulare, fără clauză de revizuire, pentru restul de executat: solicitare în 15 zile de la intrarea în vigoare, act adițional în max. 15 zile după; Va = C × Vo, cu C calculat din ICCM (INS, Buletinul Statistic de Prețuri tabel 15) lună curentă / ianuarie 2021 și ponderea P a materialelor.",
   "conditii_aplicabilitate": "Contracte vechi (2021); înlocuit în practică de OUG 47/2022.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "OG 15/2021 aprobată prin Legea 281/2021",
@@ -3003,10 +3008,11 @@
   "tip_consum": null,
   "domeniu": "contract",
   "faza": "executie",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "medie",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Text primar necitit (lege5 503); formulă din juridice.ro / zf.ro.",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -3029,14 +3035,15 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Structura tabelelor 15/15A confirmată prin textul OUG 64/2022 și HG 1/2018; buletinul INS nu a putut fi descărcat (insse.ro 503). Defalcarea pe manoperă/utilaj/transport din tabelul 15 NEVERIFICATĂ.",
+  "note": "Structura tabelelor 15/15A confirmată prin textul OUG 64/2022 și HG 1/2018; buletinul INS nu a putut fi descărcat (insse.ro 503). Defalcarea pe manoperă/utilaj/transport din tabelul 15 NEVERIFICATĂ. [Confirmare 02.10: IMPOSIBIL] Buletinul nu a putut fi citit. Confirmat parțial: tabelul 15 = «Indicii de cost în construcții pe categorii de obiecte și pe elemente de structură» (OG 15/2021 art. 2 alin. (2)); ICC = medie ponderată a indicilor materiale, utilaje, transport, cheltuieli indirecte și câștig salarial brut (TEMPO CNS107D). Numărul «15A» pentru ponderi rămâne neconfirmat pe buletin.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "achizitii_deviz"
  },
  {
   "requirement_id": "REQ-AD-120",
   "source_id": "SRC-instr-anap-1-2017",
-  "editie": "MO 32/2017 — text integral NECITIT (doar surse secundare)",
-  "locator": "art. referitoare la experții-cheie (numerotare neconfirmată)",
+  "editie": "Instrucțiunea ANAP 1/2017, MO 32/11.01.2017 (text LEX EXPERT)",
+  "locator": "art. 12 lit. a); art. 11 alin. (1)–(2); art. 10 alin. (3)",
   "cerinta": "Factorii de evaluare privind calificarea/experiența experților-cheie trebuie să fie extensii ale cerințelor minime obligatorii din specificații, nu cerințe noi.",
   "conditii_aplicabilitate": "Criteriu cel mai bun raport calitate-preț cu experți-cheie.",
   "temei_tip": "GHID_INTERPRETARE",
@@ -3049,10 +3056,11 @@
   "tip_consum": null,
   "domeniu": "achizitii",
   "faza": "ofertare",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "medie",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Doar din rezumate secundare; ponderea maximă/minimă a factorului preț menționată în surse secundare NU a fost preluată (neverificată).",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -3201,8 +3209,8 @@
  {
   "requirement_id": "REQ-AD-127",
   "source_id": "SRC-ordin-mlptl-1568-2002-p91",
-  "editie": "Ordin MLPTL 1568/2002 — conținut citit doar prin citările din Decizia CNSC BO2018_6476",
-  "locator": "pct. 1.4 și pct. 3.3.1.4",
+  "editie": "P 91/1-02 (Ordin MLPTL 1568/15.10.2002)",
+  "locator": "pct. 1.4; 2.2.2; 3.3.1.4; 3.3.1.5",
   "cerinta": "Ofertantul poate folosi pentru prețurile unitare fie consumurile din indicatoarele de norme, fie consumuri proprii corespunzătoare tehnologiei sale.",
   "conditii_aplicabilitate": "Elaborarea analizelor de preț.",
   "temei_tip": "GHID_INTERPRETARE",
@@ -3216,18 +3224,19 @@
   "tip_consum": "productivitate_istorica",
   "domeniu": "deviz",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Puncte citate în Decizia CNSC BO2018_6476; ghidul nu a fost citit integral.",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "achizitii_deviz"
  },
  {
   "requirement_id": "REQ-AD-128",
   "source_id": "SRC-ordin-mlptl-1568-2002-p91",
-  "editie": "Ordin MLPTL 1568/2002 — conținut citit doar prin citările din Decizia CNSC BO2018_6476",
-  "locator": "pct. 2.2.3",
-  "cerinta": "Indicatoarele de norme de deviz din seria 1981 sunt un reper orientativ, nu o normă obligatorie; o abatere față de ele e motiv de justificare, nu de neconformitate automată.",
+  "editie": "P 91/1-02 (Ordin MLPTL 1568/15.10.2002)",
+  "locator": "pct. 2.2.3 (și 2.2.2)",
+  "cerinta": "Indicatoarele de norme de deviz seria 1981 (revizuite și completate după 1998) sunt un reper orientativ pentru proiectant și ofertant, nu o normă obligatorie de consum.",
   "conditii_aplicabilitate": "Comparații consum ofertat vs indicator.",
   "temei_tip": "GHID_INTERPRETARE",
   "obligatoriu_de_ce": "Ghid P91/1-02 (Ordin 1568/2002)",
@@ -3239,18 +3248,19 @@
   "tip_consum": "referinta_indicator",
   "domeniu": "deviz",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "„Pare insuficient față de indicator” ≠ „contravine normei obligatorii”.",
+  "note": "„Pare insuficient față de indicator” ≠ „contravine normei obligatorii”. [Confirmare 02.10] Interpretare (nu text P91): o abatere față de indicator se tratează prin justificare, nu ca neconformitate automată — vezi practica CNSC BO2018_6476.",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
   "requirement_id": "REQ-AD-129",
   "source_id": "SRC-ordin-mlptl-1568-2002-p91",
-  "editie": "Ordin MLPTL 1568/2002 — conținut citit doar prin citările din Decizia CNSC BO2018_6476",
-  "locator": "pct. 2.4",
-  "cerinta": "Oferta de preț e însoțită de cele patru extrase de resurse: materiale, manoperă, utilaj, transport (formularele C6–C9 în practica AC).",
+  "editie": "P 91/1-02",
+  "locator": "pct. 2.4.1–2.4.3",
+  "cerinta": "Pentru fiecare deviz pe categorii de lucrări, ofertantul întocmește patru extrase de resurse: materiale, forță de muncă, utilaj de construcții, transporturi (cantități din antemăsurătoare × consumuri din norme sau proprii).",
   "conditii_aplicabilitate": "DA care cere extrase de resurse.",
   "temei_tip": "OBLIGATORIE_DOC_ACHIZITIE",
   "obligatoriu_de_ce": "Obligatoriu când fișa de date cere C6–C9; P91 descrie conținutul",
@@ -3265,10 +3275,11 @@
   "tip_consum": null,
   "domeniu": "deviz",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10] Formularele C6–C9 = practică AC/DA, nu text P91.",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -3349,7 +3360,7 @@
   "requirement_id": "REQ-AD-133",
   "source_id": "SRC-ordin-mlptl-1568-2002-p91",
   "editie": "P91 + pontaj Gazpet",
-  "locator": "pct. 1.4 / 3.3.1.4 (consumuri proprii)",
+  "locator": "pct. 1.4; 2.2.2; 3.3.1.4",
   "cerinta": "Consumurile proprii Gazpet (ore/m, ore/sudură din pontaj pe proiecte recepționate) pot fundamenta analizele de preț și justificarea prețului, dacă sunt documentate.",
   "conditii_aplicabilitate": "Ofertare cu consumuri sub indicator.",
   "temei_tip": "VOLUNTAR_BUNA_PRACTICA",
@@ -3364,9 +3375,10 @@
   "domeniu": "deviz",
   "faza": "ofertare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -3389,7 +3401,9 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " ⛔ INFIRMAT la verificarea pe sursă 02.10: P91 nu conține regula despre marcarea estimărilor interne fără istoric. E regulă internă de bună practică Gazpet. Propunere: păstrare, dar mutată pe SRC-gazpet-pontaj / temei_tip VOLUNTAR_BUNA_PRACTICA, tip_consum «estimare_interna».",
+  "infirmat": true,
+  "confirmare_0210": "INFIRMAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -3421,8 +3435,8 @@
  {
   "requirement_id": "REQ-AD-136",
   "source_id": "SRC-salariu-minim-constructii-2026",
-  "editie": "OUG 156/2024 art. LXIX; valabil 2025–2026 (surse secundare 2026)",
-  "locator": "OUG 156/2024 art. LXIX",
+  "editie": "OUG 156/2024 art. LXIX, aplicabil de la 01.01.2025; text din act compus Lex Expert 09.10.2025",
+  "locator": "OUG 156/2024 art. LXIX alin. (1)–(2) (reprodus ca NOTA ETO la art. 164 Codul muncii)",
   "cerinta": "Salariul minim brut în construcții în 2026 este 4.582 lei/lună (27,714 lei/oră), neschimbat la 01.07.2026 (când minimul general a crescut la 4.325 lei).",
   "conditii_aplicabilitate": "Personal Gazpet încadrat în activități de construcții (CAEN 41–43), normă întreagă.",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -3441,9 +3455,10 @@
   "domeniu": "deviz",
   "faza": "ofertare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Valori confirmate din surse secundare 2026 (salariile.ro, edevize.ro); textul OUG nu a fost citit.",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -3466,15 +3481,16 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "CAM 2,25% e calcul propriu din Codul fiscal, NEVERIFICAT în această rundă.",
+  "note": "CAM 2,25% e calcul propriu din Codul fiscal, NEVERIFICAT în această rundă. [Confirmare 02.10: IMPOSIBIL] Eliminarea facilităților fiscale din construcții de la 01.01.2025 apare doar în surse secundare; legislatie.just.ro inaccesibil (HTTP/2). Atenție: art. LXIX alin. (2) din OUG 156/2024 încă menționează «anularea acordării facilităților fiscale» — de lămurit pe textul Codului fiscal (art. 60 pct. 5, art. 138^1, art. 154).",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "achizitii_deviz"
  },
  {
   "requirement_id": "REQ-AD-138",
   "source_id": "SRC-legea-53-2003-codul-muncii",
-  "editie": "Legea 53/2003 republicată — articole confirmate doar prin surse secundare (lege5/codulmuncii.ro), 10.2026",
-  "locator": "art. 122–123",
-  "cerinta": "Munca suplimentară se compensează cu timp liber plătit în 60 de zile calendaristice; altfel se plătește cu un spor de cel puțin 75% din salariul de bază.",
+  "editie": "Legea 53/2003 rep., act compus 09.10.2025 (Lex Expert)",
+  "locator": "art. 122 alin. (1) (mod. OUG 117/2021); art. 123 alin. (1)–(2)",
+  "cerinta": "Munca suplimentară se compensează cu ore libere plătite în următoarele 90 de zile calendaristice; altfel se plătește cu un spor negociat de cel puțin 75% din salariul de bază.",
   "conditii_aplicabilitate": "Ofertă care presupune ore suplimentare.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Legea 53/2003",
@@ -3491,16 +3507,17 @@
   "domeniu": "deviz",
   "faza": "ofertare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CORECTAT",
   "tema": "achizitii_deviz"
  },
  {
   "requirement_id": "REQ-AD-139",
   "source_id": "SRC-legea-53-2003-codul-muncii",
-  "editie": "Legea 53/2003 republicată — articole confirmate doar prin surse secundare (lege5/codulmuncii.ro), 10.2026",
-  "locator": "art. 126",
+  "editie": "Legea 53/2003 rep., act compus 09.10.2025 (Lex Expert)",
+  "locator": "art. 125 alin. (1)–(2); art. 126",
   "cerinta": "Munca de noapte (cel puțin 3 ore între 22:00–06:00) se compensează cu program redus cu o oră sau cu spor de 25% din salariul de bază.",
   "conditii_aplicabilitate": "Lucrări de noapte (ex. traversări, intervenții cu restricții de trafic).",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -3518,15 +3535,16 @@
   "domeniu": "deviz",
   "faza": "ofertare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "achizitii_deviz"
  },
  {
   "requirement_id": "REQ-AD-140",
   "source_id": "SRC-legea-53-2003-codul-muncii",
-  "editie": "Legea 53/2003 republicată — articole confirmate doar prin surse secundare (lege5/codulmuncii.ro), 10.2026",
+  "editie": "Legea 53/2003 rep., act compus 09.10.2025 (Lex Expert)",
   "locator": "art. 145 alin. (1)",
   "cerinta": "Concediul de odihnă anual minim este de 20 de zile lucrătoare; costul lui trebuie acoperit de tariful orar al orelor productive.",
   "conditii_aplicabilitate": "Calculul tarifului orar din C7.",
@@ -3545,9 +3563,10 @@
   "domeniu": "deviz",
   "faza": "ofertare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "achizitii_deviz"
  },
  {
@@ -5017,8 +5036,8 @@
   "requirement_id": "REQ-TG-050",
   "source_id": "SRC-ord-anre-65-2023",
   "editie": "Ord. ANRE 65/2023 (MO 409/12.05.2023) modificat prin Ord. ANRE 85/2024 (MO 1225/05.12.2024) — citit doar textul Ord. 85/2024",
-  "locator": "vizarea legitimațiilor (Ord. 65/2023)",
-  "cerinta": "Legitimațiile instalatorilor se vizează periodic (5 ani, conform sursei secundare din runda 1) — de verificat în textul Ord. 65/2023.",
+  "locator": "Regulament aprobat prin Ord. ANRE 65/2023, art. 11 (numerotare după reproducerea iLegis); ghid ANRE secț. IV",
+  "cerinta": "Autorizația de instalator ANRE se vizează la 5 ani de la emitere sau de la ultima vizare; legitimațiile vechi, aflate în termen, sunt asimilate autorizațiilor până la expirare.",
   "conditii_aplicabilitate": "Personal cheie.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Idem.",
@@ -5026,14 +5045,19 @@
    "Legitimație cu viză valabilă"
   ],
   "verificare": "Registru HR cu date de viză.",
-  "prag": null,
+  "prag": {
+   "valoare": "5",
+   "unitate": "ani",
+   "operator": "<="
+  },
   "tip_consum": null,
   "domeniu": "gaze",
   "faza": "calificare",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "medie",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Textul integral al Ord. 65/2023 nu a fost citit în această rundă.",
+  "confirmare_0210": "CORECTAT",
   "tema": "tehnic"
  },
  {
@@ -6306,7 +6330,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT. Corectură de ediție din catalogul ASRO (preturi_asro.json, runda surse lipsă 02.10): +A1:2014 anulat.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6329,7 +6354,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6352,7 +6378,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "Ediții curente neverificate; source_id agregat pe familia WPS — se poate crea SRC dedicat.",
+  "note": "Ediții curente neverificate; source_id agregat pe familia WPS — se poate crea SRC dedicat. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6375,7 +6402,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "Devine OBLIGATORIE_DOC_ACHIZITIE dacă DA îl cere expres.",
+  "note": "Devine OBLIGATORIE_DOC_ACHIZITIE dacă DA îl cere expres. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6399,7 +6427,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6445,7 +6474,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6469,7 +6499,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6492,7 +6523,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6513,7 +6545,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT. Ediție confirmată în catalogul ASRO; conținutul rămâne licențiat.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6536,7 +6569,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "Devine OBLIGATORIE_DOC_ACHIZITIE numai dacă DA/specificația OSD invocată îl cere.",
+  "note": "Devine OBLIGATORIE_DOC_ACHIZITIE numai dacă DA/specificația OSD invocată îl cere. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -6559,7 +6593,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -7185,7 +7220,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Înlocuirea I 6 de NTPEE-2008 e confirmată doar din surse secundare; actul formal de abrogare nu a fost citit.",
+  "note": "Înlocuirea I 6 de NTPEE-2008 e confirmată doar din surse secundare; actul formal de abrogare nu a fost citit. [Confirmare 02.10: IMPOSIBIL] Actul de abrogare/înlocuire al I 6-98 nu a fost găsit pe sursă primară (legislatie.just.ro inaccesibil). Logica de aplicabilitate (domeniu reglementat de ANRE prin NTPEE-2018) rămâne plauzibilă dar neverificată.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -7212,9 +7248,9 @@
  {
   "requirement_id": "REQ-TG-142",
   "source_id": "SRC-i9-2022",
-  "editie": "I 9-2022 (Ordin MDLPA 2960/15.11.2022, MO 1167/06.12.2022) — sursă secundară",
-  "locator": "—",
-  "cerinta": "Normativul I 9 privește instalațiile sanitare din clădiri (nu gazele); ediția curentă I 9-2022 a abrogat I 9-2015. Nu se aplică rețelelor exterioare de apă-canal (NP 133-2022).",
+  "editie": "I9-2022 (Ordin MDLPA 2960/15.11.2022, MO 1167/06.12.2022)",
+  "locator": "Ordin 2960/2022 art. 2, 4; anexa pct. 1.1, 1.3",
+  "cerinta": "I9-2022 reglementează instalațiile sanitare din clădiri și rețelele exterioare de apă-canal din incinte/ansambluri de clădiri (între branșament și clădiri); nu se aplică sistemelor publice de alimentare cu apă și canalizare ale localităților (NP 133-2022) și nici gazelor; a abrogat I9-2015.",
   "conditii_aplicabilitate": "Licitații apă care cer I 9 pentru rețele stradale.",
   "temei_tip": "GHID_INTERPRETARE",
   "obligatoriu_de_ce": "Domeniul normativului (clădiri).",
@@ -7224,10 +7260,11 @@
   "tip_consum": null,
   "domeniu": "apa_canal",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CORECTAT",
   "tema": "tehnic"
  },
  {
@@ -7772,7 +7809,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT. Ediție din catalogul ASRO.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
@@ -7795,14 +7833,15 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT. Ediție corectată din catalogul ASRO.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "tehnic"
  },
  {
   "requirement_id": "REQ-TG-166",
   "source_id": "SRC-legea-241-2006",
-  "editie": "Legea 241/2006 republicată — versiune 2026 neverificată",
-  "locator": "—",
+  "editie": "Legea 241/2006 rep., formă consolidată ANRSC (01/2025)",
+  "locator": "art. 26 alin. (1)–(2)",
   "cerinta": "Licența ANRSC privește operatorii serviciului de apă-canal; executantul de lucrări nu are nevoie de ea.",
   "conditii_aplicabilitate": "Licitații de execuție apă-canal.",
   "temei_tip": "GHID_INTERPRETARE",
@@ -7813,10 +7852,11 @@
   "tip_consum": null,
   "domeniu": "apa_canal",
   "faza": "ofertare",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "medie",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "tehnic"
  },
  {
@@ -8106,9 +8146,9 @@
  {
   "requirement_id": "REQ-TG-179",
   "source_id": "SRC-brml-ord-204-2024",
-  "editie": "Ordin BRML 204/17.10.2024 — text NECITIT",
-  "locator": "—",
-  "cerinta": "L.O.-2022 a fost modificată și completată prin Ordinul BRML 204/2024; conținutul modificărilor (eventuale sortimente noi relevante pentru probe) nu a fost verificat.",
+  "editie": "Ordin BRML 204/17.10.2024",
+  "locator": "art. I pct. 1–2 (nota 10) și nota 26) la art. 1 din L.O.-2022)",
+  "cerinta": "Ord. BRML 204/2024 modifică L.O.-2022 doar pentru contoarele de gaz (include contoarele termomasice; regim tranzitoriu pentru verificarea periodică a acestora); nu introduce sortimente noi pentru manometre sau alte aparate folosite la probe.",
   "conditii_aplicabilitate": "Toată analiza metrologică.",
   "temei_tip": "GHID_INTERPRETARE",
   "obligatoriu_de_ce": "OG 20/1992 art. 15 → L.O.-2022 → Ordin 204/2024",
@@ -8118,10 +8158,11 @@
   "tip_consum": null,
   "domeniu": "metrologie",
   "faza": "executie",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "medie",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CORECTAT",
   "tema": "tehnic"
  },
  {
@@ -8605,8 +8646,8 @@
   "requirement_id": "REQ-SC-020",
   "source_id": "SRC-hg-300-2006",
   "editie": "HG 300/2006 (MO 252/21.03.2006), formă actualizată la 12.07.2007 (modif. HG 601/2007)",
-  "locator": "anexa nr. 4 partea B pct. 10.1 lit. a) — pragul de 1,5 m NU există în text",
-  "cerinta": "Sprijinirea pereților tranșeelor peste circa 1,5 m adâncime este o regulă de practică preluată din normele specifice vechi și din fișele tehnologice. Obligația legală este cea generală, din anexa 4 pct. 10.1.",
+  "locator": "anexa nr. 4 partea B pct. 10.1 lit. a), 10.3, 10.4",
+  "cerinta": "HG 300/2006 cere măsuri corespunzătoare contra surpării la excavații (sprijiniri, taluzare sau alte mijloace), căi sigure de acces și depozitarea pământului/materialelor la distanță de marginea săpăturii; nu stabilește un prag de adâncime. Pragul de ~1,5 m e doar practică din normele vechi/fișe tehnologice.",
   "conditii_aplicabilitate": "Tranșee cu adâncime > 1,5 m (tipic la canalizare, rar la gaze).",
   "temei_tip": "VOLUNTAR_BUNA_PRACTICA",
   "obligatoriu_de_ce": "Nu am găsit un act în vigoare cu pragul 1,5 m. Obligația generală e HG 300 anexa 4 pct. 10.1 lit. a). Pragul se poate impune prin PT/caietul de sarcini (devine OBLIGATORIE_DOC_ACHIZITIE).",
@@ -8614,18 +8655,15 @@
    "Fișa tehnologică de săpătură"
   ],
   "verificare": "Ofertare: dacă PT/CS indică adâncimi > 1,5 m fără sprijiniri în F3, ceri clarificare.",
-  "prag": {
-   "valoare": "1,5",
-   "unitate": "m adâncime",
-   "operator": ">"
-  },
+  "prag": null,
   "tip_consum": null,
   "domeniu": "ssm",
   "faza": "ofertare",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Sursele web (ssmatic, NSPM) nu sunt acte în vigoare. Mai bine lipsă decât fals: nu o folosi ca „normă obligatorie” în clarificări.",
+  "confirmare_0210": "CORECTAT",
   "tema": "santier_conex"
  },
  {
@@ -9089,8 +9127,8 @@
  {
   "requirement_id": "REQ-SC-039",
   "source_id": "SRC-salariu-minim-constructii-2026",
-  "editie": "OUG 114/2018 art. 71 + OUG 156/2024 art. LXIX (valori 2026 din surse secundare)",
-  "locator": "OUG 156/2024 art. LXIX (modifică OUG 114/2018 art. 71)",
+  "editie": "OUG 156/2024 art. LXIX, de la 01.01.2025 (text din act compus Codul muncii, 09.10.2025)",
+  "locator": "OUG 156/2024 art. LXIX alin. (1)–(2)",
   "cerinta": "În 2026, salariul de bază minim brut garantat în domeniul construcțiilor este de 4.582 lei pe lună (circa 27,71 lei/oră), fără sporuri.",
   "conditii_aplicabilitate": "Angajatori din domeniul construcțiilor în sensul Codului fiscal (CAEN 41, 42, 43, 71.12, cu condițiile de cifră de afaceri — neverificate pe text).",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -9109,9 +9147,10 @@
   "domeniu": "deviz",
   "faza": "ofertare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Confirmat în mai multe surse secundare (keez, calculvenituri, cardiff — 2026); textul OUG 156/2024 nu a fost citit pe sursă oficială. Salariul minim general: 4.325 lei din 01.07.2026 (HG 146/2026, după runda 1).",
+  "confirmare_0210": "CORECTAT",
   "tema": "santier_conex"
  },
  {
@@ -9766,7 +9805,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "Nu am citit standardul; nu am inventat clauze.",
+  "note": "Nu am citit standardul; nu am inventat clauze. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT. Câmpul editie («Ordin MTI 1668/2023») pare greșit atribuit acestui STAS — de revizuit.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "santier_conex"
  },
  {
@@ -10041,8 +10081,8 @@
  {
   "requirement_id": "REQ-SC-078",
   "source_id": "SRC-mdlpa-clarificari-catuc-2026-09",
-  "editie": "Clarificări MDLPA privind aplicarea Legii 169/2026 (22.09.2026 după verificatori.ro; 23.09.2026 în runda 1)",
-  "locator": "răspunsul despre branșamente (trimite la Legea 169/2026 art. 267 alin. (1))",
+  "editie": "Clarificări MDLPA, PDF creat 22.09.2026 (modificat 23.09.2026)",
+  "locator": "pct. 15",
   "cerinta": "Branșamentele construcțiilor existente la rețelele de pe domeniul public se fac pe baza acordului sau autorizației administratorului drumului, fără autorizație de construire distinctă.",
   "conditii_aplicabilitate": "Branșamente pentru construcții existente; nu acoperă extinderile de rețea.",
   "temei_tip": "GHID_INTERPRETARE",
@@ -10055,18 +10095,19 @@
   "tip_consum": null,
   "domeniu": "drumuri",
   "faza": "ofertare",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Citit doar în rezumatul verificatori.ro; PDF-ul MDLPA (primariacristian.ro) nu s-a putut descărca. Data apare 22.09.2026 în rezumat și 23.09.2026 în runda 1. Leagă de deviz_legi_conexe.md, șablonul nr. 6.",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "santier_conex"
  },
  {
   "requirement_id": "REQ-SC-079",
   "source_id": "SRC-legea-169-2026-catuc",
   "editie": "Legea 169/2026 (MO 661/10.08.2026), în vigoare 25.08.2026",
-  "locator": "art. 267 alin. (1) (după clarificarea MDLPA)",
-  "cerinta": "Branșarea la utilități pe domeniul public pentru construcții existente se face pe baza acordului/autorizației administratorului drumului; regimul pentru rețele noi de distribuție rămâne cel de autorizare din CATUC.",
+  "locator": "art. 267 alin. (1); art. 299 alin. (2) lit. b) pct. 3",
+  "cerinta": "Pentru lucrările care privesc exclusiv branșarea/racordarea la rețelele existente, acordul/autorizația administratorului drumului se emite de APL la cererea beneficiarului (art. 267 alin. (1)); branșamentele în limitele proprietății nu cer nicio formalitate (art. 299 alin. (2) lit. b) pct. 3).",
   "conditii_aplicabilitate": "Contracte care includ branșamente la consumatori existenți.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "Legea 169/2026 art. 267 alin. (1) + OG 43/1997 art. 46.",
@@ -10078,10 +10119,11 @@
   "tip_consum": null,
   "domeniu": "drumuri",
   "faza": "ofertare",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Textul art. 267 nu a fost citit direct; locatorul vine din clarificarea MDLPA.",
+  "confirmare_0210": "CORECTAT",
   "tema": "santier_conex"
  },
  {
@@ -10616,7 +10658,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Textul nu a fost citit în această rundă.",
+  "note": "Textul nu a fost citit în această rundă. [Confirmare 02.10: IMPOSIBIL] Textul HG 856/2002 nu a fost citit; secundar indică anexa 1 ca model de evidență și obligația din OUG 92/2021 de a păstra evidența min. 3 ani. Câmpul editie (OUG 92/2021) e al altei surse — de corectat la recitire.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "santier_conex"
  },
  {
@@ -15001,7 +15044,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Buletinul INS nu a putut fi descărcat (insse.ro: reset/503). Existența unor indici separați pentru manoperă/utilaj/transport în tabelul 15 rămâne NEVERIFICATĂ pe buletin.",
+  "note": "Buletinul INS nu a putut fi descărcat (insse.ro: reset/503). Existența unor indici separați pentru manoperă/utilaj/transport în tabelul 15 rămâne NEVERIFICATĂ pe buletin. [Confirmare 02.10: IMPOSIBIL] Buletinul inaccesibil. TEMPO CNS107D confirmă defalcarea ICC pe elemente de structură (construcții noi, reparații capitale, întreținere și reparații curente) și tipuri (clădiri rezidențiale, nerezidențiale, construcții inginerești) și faptul că ICC agregă indici pentru materiale, utilaje, transport, cheltuieli indirecte și manoperă (câștig salarial) — deci indici separați pe elemente de cost există la nivel de calcul; publicarea lor separată în tabelul 15/15.B rămâne neverificată.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p1"
  },
  {
@@ -15035,8 +15079,8 @@
   "requirement_id": "REQ-P1-063",
   "source_id": "SRC-ins-buletin-statistic-preturi",
   "editie": "idem",
-  "locator": "HG 1/2018 Anexa 1 cl. 48.5 (valoarea ICC ian. 2017 = 113,8)",
-  "cerinta": "Valoarea de bază 113,8 (ian. 2017) din cl. 48.5 trebuie verificată față de baza curentă a seriei INS (surse secundare indică o bază 2021 = 100); raportul In/Io trebuie calculat pe aceeași bază.",
+  "locator": "INS TEMPO CNS107D (definiție, an de bază 2021); HG 1/2018 Anexa 1 cl. 48.5",
+  "cerinta": "Seria INS a indicilor de cost în construcții are an de bază 2021 (TEMPO CNS107D); valoarea de bază 113,8 (ian. 2017) din cl. 48.5 HG 1/2018 aparține altei baze, deci raportul In/Io trebuie calculat cu ambii indici pe aceeași bază (rebazare dacă e cazul).",
   "conditii_aplicabilitate": "Contracte HG 1/2018 cu ajustare implicită cl. 48.5",
   "temei_tip": "GHID_INTERPRETARE",
   "obligatoriu_de_ce": "HG 1/2018 cl. 48.5 + metodologia INS (NEVERIFICATĂ)",
@@ -15048,10 +15092,11 @@
   "tip_consum": null,
   "domeniu": "deviz",
   "faza": "contract",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "medie",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Baza 2021=100 apare doar în rezumatul unui rezultat de căutare (raport de calitate INS, inaccesibil).",
+  "confirmare_0210": "CORECTAT",
   "tema": "p1"
  },
  {
@@ -15270,8 +15315,8 @@
  {
   "requirement_id": "REQ-P1-073",
   "source_id": "SRC-legea-123-2012-gaze",
-  "editie": "Legea 123/2012 — art. 160 alin. (1) (citit în runda tehnică, REQ-TG-006)",
-  "locator": "art. 160 alin. (1) (via REQ-TG-006); Ord. ANRE 133/2021 (regulament atestare verificatori gaze)",
+  "editie": "Legea 123/2012, formă sintetică 07.01.2019",
+  "locator": "art. 160 alin. (1)–(2)",
   "cerinta": "Pentru obiectivele din sectorul gazelor naturale, verificarea proiectelor o fac verificatori atestați de ANRE (regim special), separat de verificatorii MDLPA pe cerințe fundamentale.",
   "conditii_aplicabilitate": "Rețele/branșamente de distribuție gaze",
   "temei_tip": "GHID_INTERPRETARE",
@@ -15286,9 +15331,10 @@
   "domeniu": "gaze",
   "faza": "ofertare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Ord. ANRE 133/2021 = ofertare_normative id 24; starea actuală și domeniile (ex. Ig MDLPA pentru instalații de utilizare) NEVERIFICATE pe sursă primară.",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "p1"
  },
  {
@@ -16012,9 +16058,9 @@
  {
   "requirement_id": "REQ-P2-003",
   "source_id": "SRC-og-39-1998",
-  "editie": "OG 39/1998 cu modificările ulterioare — forma curentă NECITITĂ (cdep.ro/lege5 inaccesibile la 01.10.2026)",
-  "locator": "art. 6 alin. (1) (după rezultatul căutării web, nu după text primar)",
-  "cerinta": "Aplicarea unui standard național are caracter voluntar; devine obligatorie numai prin trimiterea dintr-o reglementare tehnică sau prin contract (DA/caiet de sarcini).",
+  "editie": "OG 39/1998, forma MO 43/1998 (forma consolidată necitită)",
+  "locator": "art. 6 alin. (1)–(2)",
+  "cerinta": "Aplicarea unui standard național are caracter voluntar; devine obligatorie, total sau parțial, numai printr-o reglementare tehnică adoptată de o autoritate.",
   "conditii_aplicabilitate": "Toate standardele SR/SR EN/SR EN ISO.",
   "temei_tip": "OBLIGATORIE_LEGE",
   "obligatoriu_de_ce": "OG 39/1998 art. 6 alin. (1) (neverificat pe text primar).",
@@ -16026,10 +16072,11 @@
   "tip_consum": null,
   "domeniu": "calitate",
   "faza": "ofertare",
-  "incredere": "scazuta",
-  "verificat_pe_sursa": false,
+  "incredere": "medie",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
-  "note": "De confirmat pe forma consolidată (cdep.ro / monitoruloficial.ro). Numărul articolului provine din fragmentul căutării, nu din textul citit.",
+  "note": "De confirmat pe forma consolidată (cdep.ro / monitoruloficial.ro). Numărul articolului provine din fragmentul căutării, nu din textul citit. [Confirmare 02.10] Obligativitatea prin DA/caiet de sarcini e efect contractual (OBLIGATORIE_DOC_ACHIZITIE), nu prevedere a OG 39/1998.",
+  "confirmare_0210": "CORECTAT",
   "tema": "p2_deviz"
  },
  {
@@ -17020,7 +17067,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "Nu afirmăm echivalența cu EN 12068.",
+  "note": "Nu afirmăm echivalența cu EN 12068. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -17158,7 +17206,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -17204,7 +17253,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT. Statutul «retras» și echivalența cu EN ISO 3183 neverificate pe catalogul ASRO/CEN.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -17549,7 +17599,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Lista capitolelor GA-GF provine din rezumatele căutării (okazii.ro, intocmire-devize.ro) — paginile nu au putut fi deschise direct. Emitentul original 1981 (ICCPDC conform anunțului de anticariat) NECONFIRMAT.",
+  "note": "Lista capitolelor GA-GF provine din rezumatele căutării (okazii.ro, intocmire-devize.ro) — paginile nu au putut fi deschise direct. Emitentul original 1981 (ICCPDC conform anunțului de anticariat) NECONFIRMAT. [Confirmare 02.10: IMPOSIBIL] Indicatorul G nu e disponibil public; consumurile normate necesită exemplarul licențiat (COCC/editor). Rămâne neverificat.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -17595,7 +17646,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Vezi REQ-AD-132 pentru reperele SOFTEH-VALROM.",
+  "note": "Vezi REQ-AD-132 pentru reperele SOFTEH-VALROM. [Confirmare 02.10: IMPOSIBIL] Indicatorul G nu e disponibil public; consumurile normate necesită exemplarul licențiat (COCC/editor). Rămâne neverificat.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -17901,7 +17953,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Date interne — nu au fost interogate (BRIEF: fără Supabase).",
+  "note": "Date interne — nu au fost interogate (BRIEF: fără Supabase). [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -17924,7 +17977,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18000,7 +18054,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18023,7 +18078,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18099,7 +18155,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18122,7 +18179,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18174,7 +18232,8 @@
   "incredere": "medie",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "Codul GD01C1 = Dn 100 apare în devizul public x-dev.ro.",
+  "note": "Codul GD01C1 = Dn 100 apare în devizul public x-dev.ro. [Confirmare 02.10: IMPOSIBIL] Indicatorul G nu e disponibil public; consumurile normate necesită exemplarul licențiat (COCC/editor). Rămâne neverificat.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18198,7 +18257,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18221,7 +18281,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18292,7 +18353,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18315,7 +18377,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18415,7 +18478,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18438,7 +18502,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": false,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] Sursă internă; BRIEF interzice interogarea Supabase. Nu e cerință normativă: rămâne neverificat (productivitate_istorica / estimare_interna) până la agregarea datelor din ERP.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "p2_deviz"
  },
  {
@@ -18624,8 +18689,8 @@
  {
   "requirement_id": "REQ-AC-009",
   "source_id": "SRC-legea-51-2006-anrsc",
-  "editie": "Legea 51/2006 republicată — text necitit integral în această rundă",
-  "locator": "— (trimitere din Legea 241/2006 art. 26 alin. (2))",
+  "editie": "Legea 51/2006 rep., formă consolidată ANRSC (01/2025)",
+  "locator": "art. 1; art. 2 lit. f); art. 37 alin. (4)",
   "cerinta": "Legea 51/2006 reglementează serviciile comunitare și licențierea operatorilor; nu stabilește cerințe de execuție pentru constructor → EXCLUSĂ din graful de execuție.",
   "conditii_aplicabilitate": "Licitații apă-canal.",
   "temei_tip": "GHID_INTERPRETARE",
@@ -18637,9 +18702,10 @@
   "domeniu": "apa_canal",
   "faza": "calificare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Excludere documentată; text L51 necitit — dacă o DA invocă L51 pentru executant, verifică articolul.",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "apa_canal"
  },
  {
@@ -20560,7 +20626,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "Proba de presiune SR EN 805 e deja în REQ-TG-164.",
+  "note": "Proba de presiune SR EN 805 e deja în REQ-TG-164. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT. Ediție din catalogul ASRO; DA care citează 805:2000 → clarificare privind ediția aplicabilă.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20581,7 +20648,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20602,7 +20670,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20623,7 +20692,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "NP 133 folosește două indicative pentru același standard; ediția în vigoare trebuie confirmată la ASRO.",
+  "note": "NP 133 folosește două indicative pentru același standard; ediția în vigoare trebuie confirmată la ASRO. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20644,7 +20714,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20665,7 +20736,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20686,7 +20758,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "Valoarea pentru Prahova nu se dă din memorie.",
+  "note": "Valoarea pentru Prahova nu se dă din memorie. [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20707,7 +20780,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20728,7 +20802,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20749,7 +20824,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20770,7 +20846,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20791,7 +20868,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20812,7 +20890,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20833,7 +20912,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20854,7 +20934,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20875,7 +20956,8 @@
   "incredere": "scazuta",
   "verificat_pe_sursa": false,
   "necesita_standard_licentiat": true,
-  "note": "",
+  "note": " [Confirmare 02.10: IMPOSIBIL] NECESITĂ ACCES LA STANDARDUL LICENȚIAT.",
+  "confirmare_0210": "IMPOSIBIL",
   "tema": "apa_canal"
  },
  {
@@ -20968,7 +21050,7 @@
   "requirement_id": "REQ-AC-107",
   "source_id": "SRC-legea-169-2026-catuc",
   "editie": "Legea 169/2026 (vezi surse_update_p1)",
-  "locator": "NP 133-2022 vol. I 7.3.1 alin. (4) (trimite la Legea 10/1995)",
+  "locator": "L169/2026 art. 576 alin. (3) lit. c); art. 583 alin. (3); art. de intrare în vigoare (15 zile); NP 133-2022 vol. I 7.3.1 alin. (4)",
   "cerinta": "NP 133 trimite la Legea 10/1995 pentru sistemul calității; după 25.08.2026 Legea 10/1995 rămâne în vigoare doar la art. 10 și 41, deci trimiterea se citește spre Legea 169/2026. NP 133 rămâne în vigoare (emis în baza art. 10).",
   "conditii_aplicabilitate": "Toate lucrările.",
   "temei_tip": "GHID_INTERPRETARE",
@@ -20979,10 +21061,11 @@
   "tip_consum": null,
   "domeniu": "apa_canal",
   "faza": "contract",
-  "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "incredere": "ridicata",
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "apa_canal"
  },
  {
@@ -21705,7 +21788,7 @@
   "requirement_id": "REQ-SL-029",
   "source_id": "SRC-ord-anre-65-2023",
   "editie": "Document informativ ANRE „Informații generale privind autorizarea instalatorilor” (anre.ro, 10/2024) care aplică Regulamentul aprobat prin Ord. ANRE 65/2023; textul ordinului NU a fost citit.",
-  "locator": "secțiunea IV „Vizarea periodică”",
+  "locator": "Regulament Ord. ANRE 65/2023 art. 11; ghid ANRE secț. IV",
   "cerinta": "Calitatea de instalator autorizat ANRE este valabilă doar cu vizarea certificatului la 5 ani de la emitere sau de la ultima vizare; fără vizare, activitatea poate continua doar după prelungire.",
   "conditii_aplicabilitate": "Personal autorizat ANRE (EGD, PGD etc.) propus în ofertă.",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -21723,16 +21806,17 @@
   "domeniu": "gaze",
   "faza": "calificare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "Sursa citită este ghidul ANRE, nu textul ordinului — verificat_pe_sursa=false pentru ordin.",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "surse_lipsa"
  },
  {
   "requirement_id": "REQ-SL-030",
   "source_id": "SRC-ord-anre-65-2023",
   "editie": "Document informativ ANRE „Informații generale privind autorizarea instalatorilor” (anre.ro, 10/2024) care aplică Regulamentul aprobat prin Ord. ANRE 65/2023; textul ordinului NU a fost citit.",
-  "locator": "secțiunea IV, lit. a)–c)",
+  "locator": "Regulament Ord. ANRE 65/2023 art. 11; ghid ANRE secț. IV lit. a)–c)",
   "cerinta": "Cererea de prelungire se depune pe portalul ANRE cu cel puțin 30 de zile înainte de expirare, cu dovada unui curs de pregătire teoretică absolvit în ultimele 12 luni.",
   "conditii_aplicabilitate": "Instalatori autorizați ANRE.",
   "temei_tip": "OBLIGATORIE_LEGE",
@@ -21751,9 +21835,10 @@
   "domeniu": "gaze",
   "faza": "calificare",
   "incredere": "medie",
-  "verificat_pe_sursa": false,
+  "verificat_pe_sursa": true,
   "necesita_standard_licentiat": false,
   "note": "",
+  "confirmare_0210": "CONFIRMAT",
   "tema": "surse_lipsa"
  },
  {
