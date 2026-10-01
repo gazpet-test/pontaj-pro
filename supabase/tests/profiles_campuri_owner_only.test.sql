@@ -137,10 +137,29 @@ WITH u AS (UPDATE public.profiles SET department = 'HR', employee_id = :'emp', e
   SELECT teste.assert(count(*) = 1, 'S5 owner-ul acordă department/employee_id/flaguri altcuiva') FROM u;
 WITH u AS (UPDATE public.profiles SET department = 'Conducere' WHERE id = auth.uid() RETURNING 1)
   SELECT teste.assert(count(*) = 1, 'S5 owner-ul își schimbă propriul department') FROM u;
+-- 01.10.2026 (SEC F2 r4, live): service_role trece DOAR pe conexiunea PostgREST (session_user = authenticator) cu rolul SQL
+-- efectiv service_role; claims service_role puse pe o sesiune postgres NU mai ajung.
 SELECT teste.ca_service_role();
-SELECT teste.assert(auth.role() = 'service_role' AND auth.uid() IS NULL, 'S5 actor: service_role prin JWT (edge functions)');
+SELECT teste.assert(auth.role() = 'service_role' AND auth.uid() IS NULL, 'S5 actor: claims service_role pe login postgres (NU PostgREST)');
+SELECT teste.asteapta_eroare(format('UPDATE public.profiles SET department = %L WHERE id = %L', 'Logistică', :'u_ion'),
+  'S5 F2: claims service_role fără login authenticator → refuz', '42501', NULL);
+SELECT teste.ca_admin();
+DO $do$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticator') THEN
+    CREATE ROLE authenticator LOGIN NOINHERIT;                     -- login-ul PostgREST (local, anulat la ROLLBACK)
+  END IF;
+END $do$;
+GRANT service_role TO authenticator;
+GRANT USAGE ON SCHEMA teste TO authenticator;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO authenticator;
+SET SESSION AUTHORIZATION authenticator;
+SELECT teste.ca_service_role();
+SELECT teste.assert(session_user = 'authenticator' AND current_setting('role') = 'service_role' AND auth.role() = 'service_role',
+  'S5 actor: service_role prin PostgREST (login authenticator + SET ROLE service_role, ca edge functions)');
 WITH u AS (UPDATE public.profiles SET department = 'Logistică', can_manage_stoc = false WHERE id = :'u_ion' RETURNING 1)
-  SELECT teste.assert(count(*) = 1, 'S5 service_role trece') FROM u;
+  SELECT teste.assert(count(*) = 1, 'S5 service_role (PostgREST) trece') FROM u;
+RESET ROLE;
+RESET SESSION AUTHORIZATION;
 SELECT teste.ca_admin();
 SELECT teste.assert(session_user = 'postgres' AND auth.role() IS NULL AND auth.uid() IS NULL,
   'S5 actor: login postgres, fără context de cerere (ca migrările MCP și pg_cron — cron.job.username = postgres)');
@@ -157,9 +176,11 @@ SELECT teste.ca_admin();
 SELECT teste.ca_anon();
 SELECT teste.assert(auth.role() = 'anon' AND auth.uid() IS NULL, 'S11 actor: anon (JWT fără sub)');
 SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
-  'S11 anon prin RPC SECURITY DEFINER NU schimbă department (lipsa UID nu deschide excepția)', '42501', 'department');
-SELECT teste.assert(public.sa_test_rpc(:'u_alt', NULL, 'Alt SA anon') = 1,
-  'S13 același RPC anon, doar câmp nesensibil (name): trece — autorizarea strictă doar la schimbare protejată');
+  'S11 anon prin RPC SECURITY DEFINER NU schimbă department (lipsa UID nu deschide excepția)', '42501', NULL);  -- F2: prevent_role_escalation refuză primul (tot 42501)
+-- 01.10.2026: sub SEC F2 (live) prevent_role_escalation refuză ORICE UPDATE pe profiles fără UID în afara contextului de
+-- sistem — deci și câmpul nesensibil (înainte de F2, S-A singur îl lăsa să treacă).
+SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, NULL, %L)', :'u_alt', 'Alt SA anon'),
+  'S13 același RPC anon, doar câmp nesensibil (name): refuzat de F2 (prevent_role_escalation)', '42501', 'prevent_role_escalation');
 SELECT teste.ca_admin();
 
 -- ---------------------------------------------------------------- S12 contexte fără identitate autorizată
@@ -185,14 +206,14 @@ SELECT teste.ca_admin();
 -- claims prezente, dar incomplete / străine
 SELECT set_config('request.jwt.claims', '{"role":"authenticated"}', false), set_config('request.jwt.claim.role', 'authenticated', false);
 SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
-  'S12 claims authenticated FĂRĂ sub → refuz', '42501', 'department');
+  'S12 claims authenticated FĂRĂ sub → refuz', '42501', NULL);  -- F2: prevent_role_escalation refuză primul (tot 42501)
 SELECT set_config('request.jwt.claims', json_build_object('role','authenticated','sub', gen_random_uuid())::text, false),
        set_config('request.jwt.claim.sub', '', false);
 SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
   'S12 claims authenticated cu sub fără profil → refuz', '42501', 'department');
 SELECT set_config('request.jwt.claims', '{"role":"postgres"}', false), set_config('request.jwt.claim.role', 'postgres', false);
 SELECT teste.asteapta_eroare(format('SELECT public.sa_test_rpc(%L, %L)', :'u_alt', 'HR'),
-  'S12 claims cu rol străin („postgres”) → refuz (doar service_role / owner trec pe calea JWT)', '42501', 'department');
+  'S12 claims cu rol străin („postgres”) → refuz (doar service_role / owner trec pe calea JWT)', '42501', NULL);  -- F2: prevent_role_escalation refuză primul (tot 42501)
 SELECT teste.ca_admin();
 SELECT teste.assert((SELECT department = 'Execuție' FROM public.profiles WHERE id = :'u_alt'),
   'S11/S12 rândul țintă (u_alt) are department neschimbat după toate tentativele');
