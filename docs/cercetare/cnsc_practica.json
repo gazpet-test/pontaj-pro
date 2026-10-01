@@ -69,6 +69,69 @@
   "temei_tip": "PRACTICA_CNSC"
  },
  {
+  "id": "CNSC-BO2026_13",
+  "nr_decizie": "13/C?/... (anonimizat, BO2026_13)",
+  "buletin_oficial": "BO2026_13",
+  "data": null,
+  "an": 2026,
+  "autoritate": "UAT comună (jud. Mureș — anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Extindere rețea de canalizare menajeră în localitățile Călușeri, Icland și Săcăreni",
+  "tema": [
+   "experienta_similara",
+   "altele"
+  ],
+  "problema": "CNSC dispusese reevaluarea experienței similare a unui ofertant respins; AC l-a desemnat câștigător, dar ulterior Curtea de Apel a admis plângerea fostului câștigător și a respins contestația inițială; AC nu a revenit la rezultatul inițial.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Prin admiterea plângerii, hotărârea definitivă a înlăturat decizia CNSC și a repus părțile în situația anterioară (restitutio in integrum); respingerea ofertei devine definitivă, iar rezultatul inițial se restabilește de drept. Raportul emis în executarea deciziei anulate trebuie anulat.",
+  "regula": "Când instanța admite plângerea împotriva unei decizii CNSC, actele AC emise în executarea acelei decizii cad, iar rezultatul inițial al procedurii se restabilește de drept.",
+  "temei_legal": [
+   "Legea 101/2016 art. 3 alin. (3)",
+   "Legea 101/2016 art. 8 alin. (1)",
+   "Legea 101/2016 art. 17 alin. (3)",
+   "Legea 101/2016 art. 26 alin. (2), (5)",
+   "Legea 101/2016 art. 29"
+  ],
+  "cum_ne_ajuta": "Strategie: dacă pierdem locul 1 printr-o decizie CNSC, formulăm ÎN PARALEL plângere la Curtea de Apel și contestație împotriva noului rezultat (termen 7/10 zile). ERP: alertă termene plângere/contestație pe fiecare decizie.",
+  "ofertare_normative_ids": [
+   10
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "execuție lucrări (extindere canalizare menajeră)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "fost câștigător care a obținut admiterea plângerii la Curtea de Apel",
+  "etapa": "reevaluare după decizie CNSC",
+  "fapte_relevante": "Prima evaluare: oferta concurentă respinsă la verificarea documentelor DUAE (experiență similară). Decizie CNSC de reevaluare; nou raport cu inversarea clasamentului; plângere admisă de Curtea de Apel Târgu Mureș (definitivă), care a respins contestația inițială.",
+  "concluzie_cnsc": "Admite contestația; respinge intervenția; anulează actele emise în executarea deciziei CNSC desființate, inclusiv raportul procedurii.",
+  "control_judiciar": "Hotărârea Curții de Apel (Mureș) privește decizia CNSC anterioară din aceeași procedură — admisă plângerea, contestația inițială respinsă.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare menajeră comunală, preț cel mai scăzut — profil direct.",
+   "mai_putin_comparabila": "Pur procedurală.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "rezultatul procedurii de atribuire stabilit inițial de autoritatea contractantă a fost restabilit de drept, ca efect al hotărârii judecătorești",
+    "loc": "p. 15 (din 16)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ODI4MTVmNjUtYzgzMC00MDRhLThlZTktNWNkMjNkYTUxMDhk&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI2XzEzLnBkZg%3D%3D&action=aW5saW5l",
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "8086c64e2ce096e35f130ee7ae567f695501cd17464d4f795a1b7157ec01dbbe",
+  "snapshot_bytes": 236774,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
   "id": "CNSC-BO2026_182",
   "nr_decizie": "182/C8/4870",
   "buletin_oficial": "BO2026_182",
@@ -267,6 +330,141 @@
   "temei_tip": "PRACTICA_CNSC"
  },
  {
+  "id": "CNSC-BO2026_362",
+  "nr_decizie": "362/C?/... (anonimizat, BO2026_362)",
+  "buletin_oficial": "BO2026_362",
+  "data": null,
+  "an": 2026,
+  "autoritate": "Entitate contractantă sectorială (operator regional apă-canal — anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "CL2 — Extinderea sistemului de apă și de canalizare în aglomerările ... (licitație deschisă, anunț 10.11.2023)",
+  "tema": [
+   "clarificari_oferta",
+   "duae",
+   "documente_calificare"
+  ],
+  "problema": "Entitatea a emis o a doua cerere de clarificări (18.12.2025) cu puncte vagi (pct. 1 și 4) și cu solicitarea de dovezi de „self-cleaning” (art. 184 alin. (3) L99) fără caz de excludere; a reproșat și lipsa ștampilării „conform cu originalul” a documentelor suport DUAE.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Cererea de clarificări trebuie să fie clară și să definească explicit și detaliat ce se solicită (art. 140 alin. (3) HG 394/2016) — pct. 1 și 4 anulate. DA cerea doar scanare după original + semnătură electronică extinsă, nu ștampilare individuală (art. 150 CPC nu se aplică); Legea 214/2024 privind semnătura electronică. Pct. 3 — entitatea a achiesat (infracțiunea invocată nu era în art. 177 L99). Onorariu 3.025 lei acordat.",
+  "regula": "Cererea de clarificări vagă sau fără temei (nu precizează ce document/informație se cere) poate fi atacată și anulată; documentele suport DUAE se prezintă în forma cerută de DA (semnătură electronică), fără formalități suplimentare neprevăzute.",
+  "temei_legal": [
+   "HG 394/2016 art. 140 alin. (3)",
+   "Legea 99/2016 art. 177, art. 184 alin. (3)",
+   "Legea 214/2024 art. 2 lit. b)",
+   "Regulamentul (UE) 910/2014 art. 26",
+   "Cod procedură civilă art. 150, 453",
+   "Legea 101/2016 art. 26 alin. (2), (5), art. 28"
+  ],
+  "cum_ne_ajuta": "Modul Clarificări primite: verificăm dacă cererea AC e clară/explicită/cu temei; dacă nu, o contestăm în termen (precedent: L99 art. 140(3) HG 394 / L98 art. 134(4) HG 395). Documente suport DUAE: scan după original + semnătură electronică extinsă — fără ștampile „conform cu originalul” dacă DA nu cere.",
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": 220748402.04,
+  "sub_prag": false,
+  "tip_contract": "execuție lucrări (extindere sistem apă și canalizare, CL2)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant (asociere) aflat în evaluare, care atacă cererea de clarificări",
+  "etapa": "evaluare (clarificări)",
+  "fapte_relevante": "Cerere de clarificări 1266SAA/25.11.2025, răspuns 1777/05.12.2025; a doua cerere 1421SAA/18.12.2025 atacată la pct. 1, 3, 4. Scrisoare bancară (Banca Transilvania) prezentată la clarificări; entitatea o verifica direct cu banca.",
+  "concluzie_cnsc": "Admite contestația; elimină pct. 1, 3 și 4 din cererea de clarificări; obligă la continuarea procedurii în 15 zile; cheltuieli 3.025 lei.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Contract regional apă-canal (L99) — exact tipul la care Gazpet poate participa în asociere; regula privind claritatea cererilor de clarificări e transpozabilă la L98.",
+   "mai_putin_comparabila": "Valoare foarte mare (220,7 mil. lei), licitație deschisă.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu rezultă obligația ofertanților de a prezenta documentele suport DUAE ștampilate individual, conform cu originalul",
+    "loc": "p. 10 (din 15)"
+   },
+   {
+    "text": "Constatând că explicația entității contractante reprezintă în fapt o achiesare la critică",
+    "loc": "p. 12 (din 15)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MWZhZGRlMDAtYTgzYS00NzYzLWE3MTgtN2Y1YjU4NDM4YWFh&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI2XzM2Mi5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "cb7258b55907c87b67bf3db2282aea6b9dedbebc18317c3e42a1cdd4f32d9717",
+  "snapshot_bytes": 501774,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2026_76",
+  "nr_decizie": "76/C?/... (anonimizat, BO2026_76)",
+  "buletin_oficial": "BO2026_76",
+  "data": null,
+  "an": 2026,
+  "autoritate": "UAT comună (Primăria — anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare și execuție — Modernizare și extindere rețea de alimentare cu apă potabilă (finanțare program național de investiții, procedură cu clauză suspensivă)",
+  "tema": [
+   "altele"
+  ],
+  "problema": "AC a anulat procedura (după trei decizii CNSC anterioare în aceeași procedură) invocând OUG 41/2025 — interdicția de a încheia angajamente legale pentru proiecte nou-finanțate din programele naționale — ca imposibilitate de încheiere a contractului.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Clauza suspensivă din fișa de date permitea anularea doar cumulativ: după notificarea autorității de management privind neacordarea finanțării și dacă nu există altă sursă. OUG 41/2025 prevede excepții (memorandum), deci nu impune automat anularea; AC nu a dovedit nici refuzul finanțării, nici lipsa altei surse. Onorariul de avocat a fost redus (cauză frecventă).",
+  "regula": "OUG 41/2025 nu justifică singură anularea unei proceduri apă-canal finanțate din programe naționale; AC trebuie să dovedească îndeplinirea condițiilor clauzei suspensive (notificare de neacordare a finanțării + lipsa altei surse).",
+  "temei_legal": [
+   "Legea 98/2016 art. 211, art. 212 alin. (1) lit. c)",
+   "OUG 41/2025 art. 1, 3, 9",
+   "HG 395/2016 art. 146",
+   "Legea 101/2016 art. 26 alin. (2), (5)",
+   "Cod procedură civilă art. 451 alin. (2), 453"
+  ],
+  "cum_ne_ajuta": "Pentru licitațiile Anghel Saligny/PNDL în curs: dacă AC anulează invocând OUG 41/2025 fără notificare de la finanțator → contestăm. În ERP: câmp „clauză suspensivă — condiții de anulare” extras din fișa de date.",
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (rețea apă potabilă)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "lider asociere (ofertant) cu trei decizii CNSC favorabile anterioare",
+  "etapa": "anulare procedură",
+  "fapte_relevante": "Procedură inițiată cu clauză suspensivă (contractul se încheie doar după contractul de finanțare cu AM — ministerul de resort). Contestatoarea invoca o altă procedură cu aceeași finanțare aflată în reevaluare.",
+  "concluzie_cnsc": "Admite contestația; anulează decizia de anulare; obligă la continuarea procedurii în 15 zile; acordă onorariu avocat redus.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea apă potabilă comunală, finanțare națională — exact segmentul afectat de OUG 41/2025.",
+   "mai_putin_comparabila": "Contextul bugetar 2025; soluția depinde de formularea clauzei suspensive din fișa de date.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "autoritatea contractantă nu poate decide să procedeze automat la anularea procedurii, fără a fi îndeplinite condiţiile cumulative anterior precizate",
+    "loc": "p. 10 (din 18)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZDhhYTA4YjctNjE2OC00ZDk1LThiNGYtOWVhN2Y4MDM4NjI4&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI2Xzc2LnBkZg%3D%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "50c9a53acaa0c22c8a6612af0850bc155f72cdac5e240043210358a9f5ce5963",
+  "snapshot_bytes": 304566,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
   "id": "CNSC-Decizie_271",
   "nr_decizie": "271/C1/5029",
   "buletin_oficial": "Decizie_271",
@@ -390,6 +588,81 @@
   "snapshot_sha256": "38f96278a13006870017ba93470103254ee45b7dfec37c77c60249cdae2618be",
   "snapshot_bytes": 167242,
   "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2025_1138",
+  "nr_decizie": "1138/C?/... (anonimizat, BO2025_1138)",
+  "buletin_oficial": "BO2025_1138",
+  "data": null,
+  "an": 2025,
+  "autoritate": "UAT Comuna Turt (numită în considerente)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare și execuție lucrări de canalizare ape uzate (cu componente de alimentare cu apă), CPV 45232400-6",
+  "tema": [
+   "experienta_similara",
+   "pret_neobisnuit_scazut",
+   "clarificari_oferta",
+   "eroare_aritmetica",
+   "deviz_consumuri"
+  ],
+  "problema": "(1) O asociere respinsă pentru experiență similară de proiectare insuficientă — AC nu luase în calcul studiile de teren (topo, geotehnic) din contractele de SF. (2) Altă asociere respinsă la justificarea prețului: a modificat prin clarificări valorile pe asociați/subcontractanți, a invocat caracterul „estimativ” al prețului la P+E și a justificat mixtura AB 31,5 la 76,20 lei/t deși ofertase 110 lei/t în C6/F3.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "(1) Studiile de teren fac parte din faza SF (HG 907/2016), deci valoarea integrală a contractelor de SF se ia în calcul la experiența similară de proiectare → reevaluare. (2) La P+E prețul nu e estimativ; modificarea valorilor din anexa la formularul de ofertă prin clarificări nu e eroare aritmetică/viciu de formă; prețurile furnizorilor trebuie să justifice exact prețurile ofertate; profitul de 2% e cuantificat separat → răspuns neconcludent, ofertă inacceptabilă și neconformă (art. 134 alin. (5), art. 137 alin. (3) lit. c) HG 395/2016).",
+  "regula": "Studiile de teren aferente SF intră în experiența similară de proiectare; la justificarea prețului, documentele trebuie să susțină exact prețurile unitare din C6/F3 — nu se pot corecta prin clarificări valori din propunerea financiară decât pentru erori aritmetice.",
+  "temei_legal": [
+   "Legea 98/2016 art. 209 alin. (2)",
+   "Legea 98/2016 art. 210 alin. (1)",
+   "HG 395/2016 art. 127 alin. (1) lit. h)",
+   "HG 395/2016 art. 134 alin. (2), (5)",
+   "HG 395/2016 art. 137 alin. (1), (3) lit. c)",
+   "HG 907/2016 (conținut SF)",
+   "Legea 101/2016 art. 26 alin. (2), (5), (6)"
+  ],
+  "cum_ne_ajuta": "Justificare PNS în ERP: pentru fiecare material principal, ofertă furnizor/analiză de preț cu prețul IDENTIC celui din C6/F3 (alertă la diferență); anexa „valori pe asociați/subcontractanți” sumă = total ofertă (validare automată). Experiență similară proiectare: includem studiile topo/geo din contractele de SF ale partenerilor de proiectare.",
+  "ofertare_normative_ids": [
+   5,
+   6,
+   9,
+   10
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 18890000.0,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (canalizare ape uzate)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "două asocieri respinse (una la calificare, una la justificarea prețului)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț simplificat 06.03.2024 (termen oferte 22.03.2024); raport procedură 1720/17.03.2025; clarificări 7480/10.12.2024, răspuns 899/13.12.2024; diferență 391.628,49 lei între anexa valorilor pe asociați și totalul ofertei; diferențe 228–1.399 lei centralizator vs. anexă la subcontractanți. CNSC citează o hotărâre de Curte de Apel care a reținut că modificarea cotei de profit prin clarificări e nelegală.",
+  "concluzie_cnsc": "Admite contestația privind experiența similară de proiectare (reevaluare în 15 zile); respinge contestația privind justificarea prețului.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare P+E la UAT, simplificată; justificarea prețului pe materiale (mixtură asfaltică pentru refaceri) e aceeași la gaze.",
+   "mai_putin_comparabila": "Decizie lungă cu două contestații distincte; data exactă anonimizată.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "prețurile unitare ale furnizorilor nu sunt elemente pur formale ale ofertei",
+    "loc": "p. 97 (din 103)"
+   },
+   {
+    "text": "prin luarea în considerare a valorii integrale a contractelor prezentate, inclusiv a studiilor de teren aferente fazei SF",
+    "loc": "p. 69 (din 103)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZDYyZDA5ZTEtNDkwMy00ZDNjLTkxNjgtYjE4ZDQyMDZlNDMx&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI1XzExMzgucGRm&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b2692edf9784c974081f3fe228dbb00e086a47d8e7352844b2c37e7f3d9792a5",
+  "snapshot_bytes": 1191919,
+  "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC"
  },
  {
@@ -650,6 +923,144 @@
   "snapshot_sha256": "920bda46f80ca1c0e1fa0305916bcb776b7227b0490af4912170417a3f1af3c0",
   "snapshot_bytes": 470368,
   "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2025_286",
+  "nr_decizie": "286/C11/31",
+  "buletin_oficial": "BO2025_286",
+  "data": "2025-02-07",
+  "an": 2025,
+  "autoritate": "UAT comună (anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare și execuție — Înființare sistem de canalizare pluvială în comuna ..., cu localitățile aparținătoare (4 luni proiectare + 18 luni execuție)",
+  "tema": [
+   "clarificari_documentatie",
+   "cerinte_restrictive",
+   "termen_executie"
+  ],
+  "problema": "Procedură publicată 24.12.2024 cu termen de depunere 08.01.2025: întrebările de clarificare trebuiau trimise până la 27.12.2024 (o singură zi lucrătoare, între Crăciun și Anul Nou), iar AC avea 2 zile lucrătoare să răspundă; s-a depus o singură ofertă.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Termenele reale (1 zi lucrătoare pentru studiu + întrebări, 2 zile pentru răspuns, 4-5 zile pentru ofertă) sunt arbitrare, insuficiente pentru un contract de 14,1 mil. lei și restrâng artificial concurența, fără urgență justificată; încalcă art. 160-161 L98 și principiile proporționalității și asumării răspunderii. Cum termenul de depunere trecuse, remedierea (prelungirea) nu mai era posibilă → anularea procedurii.",
+  "regula": "Termenele de clarificare/depunere stabilite peste sărbători, care lasă efectiv 1-2 zile lucrătoare pentru întrebări și răspunsuri, sunt nelegale; dacă termenul de depunere a trecut, sancțiunea este anularea procedurii.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2 alin. (2)",
+   "Legea 98/2016 art. 113 alin. (3)",
+   "Legea 98/2016 art. 160 alin. (1)-(3)",
+   "Legea 98/2016 art. 161 alin. (1)-(2)",
+   "Legea 101/2016 art. 26 alin. (2), (7)",
+   "HG 1307/2023 (27.12.2024 zi liberă)"
+  ],
+  "cum_ne_ajuta": "Calculator automat de termene în Ofertare: zile LUCRĂTOARE efective pentru întrebări și pentru răspunsul AC (excluzând sărbători legale); alertă dacă < 3 zile lucrătoare → contestăm DA imediat (7/10 zile) cu cerere de prelungire; altfel anulare.",
+  "ofertare_normative_ids": [
+   5,
+   10
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 14147061.62,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (canalizare pluvială)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "operator economic interesat, înainte de depunerea ofertelor",
+  "etapa": "documentație de atribuire",
+  "fapte_relevante": "Anunț publicat 24.12.2024 ora 18:11; FDA: răspuns la clarificări cu 6 zile înainte de termen pentru întrebări primite cu 12 zile înainte; termen oferte 08.01.2025 ora 15:00; PV 56/09.01.2025 — o singură ofertă (asociere); suspendarea a fost respinsă (încheierea 51/C11/31/13.01.2025); contestație 31.12.2024.",
+  "concluzie_cnsc": "Admite capătul privind anularea și anulează procedura; respinge ca rămas fără obiect capătul privind remedierea DA.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de canalizare (pluvială) subterană P+E la UAT — profil apropiat; regula termenelor e generală.",
+   "mai_putin_comparabila": "Situație extremă (sărbători); la termene normale CNSC de regulă dispune doar prelungire.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "termene de 1 zi lucrătoare pentru studiu al documentației de atribuire și înaintare solicitări de clarificări",
+    "loc": "p. 59 (din 60)"
+   },
+   {
+    "text": "singura măsură ce poate fi adoptata ca remediu la încălcările legale constatate este anularea întregii proceduri de atribuire",
+    "loc": "p. 60 (din 60)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NGRjMzRjNDQtNmY4Ny00YzJiLWFkZDQtZWVkMDE2ZjZhZjVk&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI1XzI4Ni5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "12b8bd3a5eaa5b320913d1d64f27ffe5ef29ffff8ad7045ee572c0b28bb24a01",
+  "snapshot_bytes": 607848,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2025_833",
+  "nr_decizie": "833/C?/... (anonimizat, BO2025_833)",
+  "buletin_oficial": "BO2025_833",
+  "data": null,
+  "an": 2025,
+  "autoritate": "UAT Comuna Nenciulești, jud. Teleorman (din obiect)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare, AT și execuție — Înființare sistem integrat de alimentare cu apă și canalizare menajeră în comuna Nenciulești, jud. Teleorman (2 foraje, rezervor 300 mc, 13,2 km rețea apă, 570 branșamente, 12,5 km canalizare, 8 SPAU, SE 171,6 mc/zi), CPV 45332000-3",
+  "tema": [
+   "personal_cheie",
+   "cerinte_restrictive",
+   "clarificari_documentatie"
+  ],
+  "problema": "Contestare DA: cerințe de personal (manager proiect, șef șantier, RTE, CQ, SSM, mediu, proiectanți), asigurări RC profesionale, backstopping, Revisal/declarații disponibilitate, dovada utilajelor, grafic Gantt detaliat, liste cantități/F5 la ofertare, experiență similară.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "AC a adoptat măsuri de remediere (art. 9 L101) pe majoritatea criticilor → rămase fără obiect. Cerința reformulată privind personalul (descrierea în propunerea tehnică a accesului la specialiști atestați — proprii sau externalizați, Instr. ANAP 1/2017 art. 3) este legală; nu e „clauză nescrisă” doar pentru că nu apare în anunț ca criteriu de calificare.",
+  "regula": "AC poate cere în propunerea tehnică descrierea modului de asigurare a specialiștilor atestați (RTE, CQ, SSM) fără a-i transforma în criteriu de calificare; Revisal, declarații de disponibilitate, backstopping, RC profesională și dovada utilajelor la ofertare sunt cerințe pe care AC le-a eliminat la contestare.",
+  "temei_legal": [
+   "Legea 101/2016 art. 9 alin. (1)",
+   "Legea 98/2016 art. 179 lit. i), j)",
+   "HG 395/2016 art. 30 alin. (4), (6)",
+   "Instrucțiunea ANAP 1/2017 art. 3 alin. (3)-(4)",
+   "Legea 10/1995 art. 31",
+   "Legea 101/2016 art. 26 alin. (6)"
+  ],
+  "cum_ne_ajuta": "Bibliotecă de măsuri de remediere acceptate de AC = șabloane de clarificări: eliminare Revisal/declarații disponibilitate, backstopping, RC profesională, dovada utilajelor (înlocuită cu declarația art. 179 lit. j), liste cantități/F5 la P+E, Gantt detaliat. Propunerea tehnică: secțiune standard „acces la specialiști atestați”.",
+  "ofertare_normative_ids": [
+   4,
+   5,
+   9,
+   10
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare, AT și execuție (sistem integrat apă + canalizare)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "operator economic interesat, înainte de depunerea ofertelor",
+  "etapa": "documentație de atribuire",
+  "fapte_relevante": "Măsuri de remediere adresa 540/27.02.2025; răspunsuri la clarificări 28.02 și 01.03.2025; experiență similară relaxată la 18.600.000 lei (execuție, max. 3 contracte) și 850.000 lei (proiectare); termen minim punctat 18 luni (2 proiectare + 16 execuție). Procedură suspendată până la soluționare.",
+  "concluzie_cnsc": "Respinge ca nefondată (pct. 1.7, 1.8, 8, 13) și ca rămasă fără obiect restul criticilor.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Sistem integrat apă + canalizare comunal P+E — profil direct; lista de remedieri e reutilizabilă.",
+   "mai_putin_comparabila": "Majoritatea criticilor au fost rezolvate de AC, nu tranșate de CNSC.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliul achiesează la precizările achizitoarei, respectivele informații privind personalul respectă dispozițiile legale incidente",
+    "loc": "p. 24 (din 32)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MjFjYzhiNjQtYTJhMi00YjU1LTk2NzQtZTQ5MzMyNTgyZDk3&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI1XzgzMy5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "b6bda16876b85252f8f6d74bb578d49b6c5ef983ccd878acdd8d977177f660c5",
+  "snapshot_bytes": 437129,
+  "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC"
  },
  {
@@ -973,6 +1384,72 @@
   "snapshot_sha256": "1cc8ccd3c6bce692ff5aedee7a2b7be273899dc5cd1e68c2732040f8e7edf3a9",
   "snapshot_bytes": 560858,
   "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2024_203",
+  "nr_decizie": "203/C1/3275, 3286, 3291, 3648",
+  "buletin_oficial": "BO2024_203",
+  "data": "2024-01-25",
+  "an": 2024,
+  "autoritate": "UAT oraș (anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare și execuție — Reabilitare rețele apă potabilă pe străzile din zona centrală, Program Național de Investiții Anghel Saligny, CPV 45332000-3",
+  "tema": [
+   "neconformitate_tehnica",
+   "cerinte_restrictive",
+   "altele"
+  ],
+  "problema": "Trei ofertanți (locurile 2-4) au contestat oferta câștigătoare: plan de lucru/grafic, proceduri tehnice, relocare utilități (fără autorizații), PCCVI, perioadă remediere defecte, structura metodologiei; plus critici reciproce între locurile 2-4.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Criticile cereau cerințe pe care DA nu le impunea (PCCVI, termen de intervenție, autorizații pentru relocare utilități — executată de operatorii de rețea), transformând procedura simplificată într-una exagerat de restrictivă; contestatorul a avut acces integral la oferte și nu a identificat abateri concrete. Criticile față de ofertele de pe locurile 2-4 sunt lipsite de interes cât timp câștigătorul rămâne.",
+  "regula": "Evaluarea se face strict față de cerințele DA; nu se pot impune la evaluare documente/planuri nesolicitate. Cine nu poate înlătura oferta câștigătoare nu are interes să atace ofertele clasate după el.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2 alin. (2) lit. b)",
+   "Legea 101/2016 art. 3 alin. (1) lit. f) și alin. (3)",
+   "Legea 101/2016 art. 8 alin. (1)",
+   "Legea 101/2016 art. 26 alin. (6), (9)",
+   "Cod procedură civilă art. 61, 453"
+  ],
+  "cum_ne_ajuta": "La contestare: concentrăm criticile pe oferta câștigătoare și pe cerințe EXPRESE din DA (citate cu locator); criticile față de ofertele din spate sunt inutile. Relocarea rețelelor de utilități (gaze, electric) e a operatorului de rețea — nu ne poate fi cerută la ofertare.",
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "tip_procedura": "procedură simplificată online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 22976644.43,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (reabilitare rețele apă potabilă)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertanți clasați pe locurile 3 și 4 (și o contestație ulterioară studiului dosarului)",
+  "etapa": "rezultat",
+  "fapte_relevante": "Raport procedură 36463/13.11.2023; patru oferte admisibile; patru contestații conexate (3275, 3286, 3291, 3648/2023). AC: relocarea rețelelor se realizează numai de operatorul de rețea; DA nu cerea PCCVI ci metodologie; montaj contoare 16-26.03.2026, cămine 2025.",
+  "concluzie_cnsc": "Respinge contestațiile (fond + lipsă de interes pentru locurile 2-4); admite intervențiile; respinge cheltuielile intervenienților accesorii ca inadmisibile.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă potabilă urbane, Anghel Saligny, procedură simplificată — profil direct.",
+   "mai_putin_comparabila": "Soluție centrată pe interes procesual și caracterul generic al criticilor.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "transformând procedura simplificată, a cărei principală caracteristică este formalismul redus comparativ cu licitația deschisă, într-o procedură exagerat de restrictivă",
+    "loc": "p. 91 (din 95)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZTljNjlmNTAtZDE0OS00ZTk5LWJhYTMtM2NjODU0ZDZhNjIw&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI0XzIwMy5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "e050f59ec8a6b7f59f085d47d4f9fc785837bb18d3eb1022b42bbeff5bfc8f0b",
+  "snapshot_bytes": 811298,
+  "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC"
  },
  {
@@ -1365,6 +1842,79 @@
   "temei_tip": "PRACTICA_CNSC"
  },
  {
+  "id": "CNSC-BO2024_3631",
+  "nr_decizie": "3631/C?/... (anonimizat, BO2024_3631)",
+  "buletin_oficial": "BO2024_3631",
+  "data": "2024-12-20",
+  "an": 2024,
+  "autoritate": "UAT comună (anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Modernizare, reabilitare, digitalizare rețea apă comuna ..., CPV 45232150-8 (proiectare + execuție)",
+  "tema": [
+   "deviz_consumuri",
+   "altele",
+   "pret_neobisnuit_scazut"
+  ],
+  "problema": "După evaluarea DUAE și a propunerilor tehnice, AC a anulat procedura (art. 212 alin. (1) lit. c) L98) pe motiv că valoarea estimată includea „Diverse și neprevăzute” (1.720.931,23 lei), invocând HG 907/2016, Instrucțiunea ANAP 1/2021 și ghidul ANAP; ignorase raportul expertului cooptat privind propunerea financiară.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Ghidurile/notificările ANAP sunt orientative; AC nu a indicat nicio normă care să facă imposibilă evaluarea sau încheierea contractului. Anularea e o măsură extremă, doar pentru erori/omisiuni care nu pot fi corectate fără încălcarea principiilor. Comisia nu a emis note individuale care să infirme documentat raportul expertului cooptat (art. 128 alin. (6) HG 395/2016), deci concluziile acestuia trebuie luate în considerare. AC a creat circumstanțe artificiale de anulare (art. 145, 146 alin. (2) HG 395/2016).",
+  "regula": "Includerea „Diverselor și neprevăzutelor” în valoarea estimată nu justifică singură anularea procedurii; comisia care se abate de la raportul expertului cooptat trebuie să motiveze documentat, în note individuale.",
+  "temei_legal": [
+   "Legea 98/2016 art. 12",
+   "Legea 98/2016 art. 212 alin. (1) lit. c) și alin. (2)",
+   "HG 395/2016 art. 128 alin. (3), (5), (6)",
+   "HG 395/2016 art. 145",
+   "HG 395/2016 art. 146 alin. (2)",
+   "HG 907/2016 (deviz general cap. 5.3)",
+   "Legea 101/2016 art. 3 alin. (1) lit. f), art. 26 alin. (2), (5)"
+  ],
+  "cum_ne_ajuta": "Când ofertăm „Diverse și neprevăzute” impuse ca procent: verificăm în Ofertare că procentul e exact cel cerut și separat de OS; dacă AC anulează procedura invocând doar ghiduri ANAP → contestăm (precedent favorabil). Cerem acces la raportul expertului cooptat când propunerea noastră financiară e analizată.",
+  "ofertare_normative_ids": [
+   5,
+   6,
+   9,
+   10
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 20004118.98,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (rețea apă)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "lider asociere, singura propunere tehnică declarată conformă",
+  "etapa": "anulare procedură",
+  "fapte_relevante": "Anunț simplificat 31.05.2024; VE 20.004.118,98 lei din care C+M 17.209.312,26, OS 395.814,18, diverse și neprevăzute 1.720.931,23, proiectare 419.921,63, AT 258.139,68 lei. Decizie de anulare 15/31763/02.10.2024; raport expert cooptat 124/27.09.2024; contestație 09.10.2024.",
+  "concluzie_cnsc": "Admite contestația; anulează decizia de anulare și raportul; obligă la reluare cu analiza propunerii financiare a contestatoarei ținând cont de raportul expertului cooptat, în 15 zile.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de apă la UAT, P+E — tipic; structura VE cu „Diverse și neprevăzute” apare des în DA apă-canal și gaze.",
+   "mai_putin_comparabila": "Contestatorul era singurul ofertant cu propunere tehnică conformă.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliul ține seama de faptul că acestea au caracter orientativ și nu unul obligatoriu",
+    "loc": "p. 27 (din 29)"
+   },
+   {
+    "text": "nu există nici un element care să determină situația statuată de dispozițiile art. 212 alin. (1) lit. c)",
+    "loc": "p. 27 (din 29)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NTAyODg4OGEtMmExNi00OWU0LWI4NDAtYjExY2E4ZTg1ZDEz&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI0XzM2MzEucGRm&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "097a39271bdd658d5e3cc7682f973504d7c1c98a092a6f4d32b5d93a82173522",
+  "snapshot_bytes": 323456,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
   "id": "CNSC-BO2024_3657",
   "nr_decizie": "3657/C1/4067, 4182",
   "buletin_oficial": "BO2024_3657",
@@ -1434,6 +1984,76 @@
   "temei_tip": "PRACTICA_CNSC"
  },
  {
+  "id": "CNSC-BO2024_632",
+  "nr_decizie": "632/C5/252",
+  "buletin_oficial": "BO2024_632",
+  "data": "2024-03-13",
+  "an": 2024,
+  "autoritate": "UAT Comuna Pârscov, jud. Buzău (identificată în obiect)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare și execuție — Înființare sistem de canalizare în comuna Pârscov, județul Buzău",
+  "tema": [
+   "neconformitate_tehnica",
+   "clarificari_oferta"
+  ],
+  "problema": "Oferta respinsă ca inacceptabilă și neconformă: lipseau rapoartele de inspecție pentru stațiile de sortare-concasare/mixturi asfaltice (cerute în strategia de aprovizionare), procedurile tehnice personalizate pentru stații de epurare și subtraversări prin foraj orizontal dirijat, plus elemente din memoriul de organizare de șantier; ofertantul a susținut că acestea se stabilesc în faza de proiectare.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Cerințele din fișa de date erau exprese și necontestate. Răspunsul la clarificări nu a inclus documentele (nici măcar încărcate în SEAP); procedura generică „rețele de canalizare – cămine” nu acoperă stațiile de epurare și FOD. AC nu putea accepta completarea ofertei prin clarificări și nici repeta clarificările pe aceleași aspecte (CJUE C-336/12 Manova, C-599/10 SAG ELV, C-131/16).",
+  "regula": "Clarificările pot fi doar formale sau de confirmare; documentele/procedurile cerute expres în fișa de date (rapoarte de inspecție stații, proceduri personalizate pe fiecare categorie de lucrări) trebuie să existe în oferta inițială — la P+E nu se pot amâna pentru faza de proiectare.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2 alin. (2) lit. b)",
+   "Legea 98/2016 art. 209",
+   "HG 395/2016 art. 134 alin. (5)",
+   "HG 395/2016 art. 137 alin. (3) lit. a)",
+   "CJUE C-336/12 Manova",
+   "CJUE C-599/10 SAG ELV Slovensko",
+   "CJUE C-131/16"
+  ],
+  "cum_ne_ajuta": "Checklist propunere tehnică apă-canal: generator de proceduri tehnice pe FIECARE categorie listată în FDA (rețele, SPAU, epurare, PEHD electrofuziune, cămine, FOD, probe presiune); anexe furnizori: certificate CPF + rapoarte de inspecție stații betoane/asfalt. Verificare post-upload: tot ce e în răspunsul la clarificări chiar e încărcat în SEAP.",
+  "ofertare_normative_ids": [
+   5,
+   9
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 22198061.54,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (sistem canalizare)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant (asociere) respins la evaluarea propunerii tehnice",
+  "etapa": "evaluare propunere tehnică",
+  "fapte_relevante": "Comunicare intermediară 22.01.2024; contestație 30.01.2024; răspuns la clarificări nr. 1901/19.01.2024 (ofertantul recunoaște că documentele „nu au fost încărcate în SEAP”). Furnizorul indicat avea doar autorizație de mediu și certificate CPF, fără raport de inspecție.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Sistem de canalizare comunal P+E, procedură simplificată — profil direct; cerințele privind FOD și PEHD se regăsesc și la gaze.",
+   "mai_putin_comparabila": "Cerințe de detaliu ridicate specifice acestei AC.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "nu putea accepta în urma clarificărilor solicitate completarea de către contestator a ofertei",
+    "loc": "p. 36 (din 38)"
+   },
+   {
+    "text": "aceste solicitări pot fi doar de natură formală sau de confirmare",
+    "loc": "p. 37 (din 38)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=OWM1MzhhNmUtODNiNy00MmMxLWI4ZTAtZTNmZTQ2M2JmOTcy&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI0XzYzMi5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "7e75f6edd8758d717a7715a2051a254ac64b44a2f4db997a0b94e60a06380fbe",
+  "snapshot_bytes": 386157,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
   "id": "CNSC-BO2024_656",
   "nr_decizie": "656/C?/... (anonimizat, BO2024_656)",
   "buletin_oficial": "BO2024_656",
@@ -1496,6 +2116,152 @@
   "snapshot_sha256": "30cd893ca5f0eacb9d5db30e1bf6ef9b18bfb3bf12f3c200853487a416a5c336",
   "snapshot_bytes": 573719,
   "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2024_942",
+  "nr_decizie": "942/C?/... (anonimizat, BO2024_942)",
+  "buletin_oficial": "BO2024_942",
+  "data": null,
+  "an": 2024,
+  "autoritate": "UAT (anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "PT, DE și execuție: Sisteme de canalizare și epurare apă — Rețea de canalizare în ... Etapa 1, CPV 45232400-6",
+  "tema": [
+   "tert_sustinator_subcontractant",
+   "duae",
+   "experienta_similara",
+   "neconformitate_tehnica",
+   "clarificari_oferta"
+  ],
+  "problema": "(1) Oferta contestatoarei respinsă: proceduri tehnice generice, fără denumirea obiectivului, resurse pe activitate și certificate/proveniență materiale; răspuns neconcludent. (2) Terțul susținător al câștigătorului (pentru proiectare) omisese din DUAE un document constatator negativ (reziliere contract Tulcea). (3) Experiența similară a câștigătorului dovedită cu PV de recepție parțială.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Respingerea contestatoarei e legală: DA interzicea expres procedurile generale și cerea certificate de conformitate ca anexe — nu se amână la contractare. Pentru terțul susținător care se încadrează la un motiv de excludere (omisiune în DUAE), AC trebuie să ceară o singură dată înlocuirea lui (art. 183 alin. (2) L98), nu să-l ignore. PV de recepție parțială pe obiecte cu funcționalitate independentă (stație epurare + conducte, 15,14 mil. lei) = lucrări duse la bun sfârșit (Instr. ANAP 2/2017 art. 11, L50/1991 art. 37).",
+  "regula": "Terțul susținător cu problemă de excludere (inclusiv document constatator nedeclarat) se înlocuiește o singură dată la cererea AC; recepția parțială pe obiecte funcționale independent probează experiența similară.",
+  "temei_legal": [
+   "Legea 98/2016 art. 167 alin. (1) lit. g), h) și alin. (8)",
+   "Legea 98/2016 art. 183 alin. (2)",
+   "HG 395/2016 art. 134 alin. (5)",
+   "HG 395/2016 art. 166 alin. (8)",
+   "Instrucțiunea ANAP 2/2017 art. 11 alin. (2)-(3)",
+   "Legea 50/1991 art. 37",
+   "Legea 101/2016 art. 21 alin. (3), art. 26"
+  ],
+  "cum_ne_ajuta": "DUAE Gazpet și al terților: rubrica documente constatatoare negative completată integral (risc de excludere); experiență similară: putem folosi PV de recepție parțială pe obiecte. Propunere tehnică: proceduri cu numele obiectivului + resurse pe activitate + anexe certificate materiale.",
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10,
+   20
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (rețea canalizare)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "ofertant respins ca inacceptabil, care atacă și oferta câștigătoare",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț simplificat 03.08.2023; raport procedură 7803/02.02.2024; comunicare 7826/06.02.2024; contestație 14.02.2024. Cerință experiență similară ≥ 18.475.305,81 lei fără TVA în max. 2 contracte; câștigătorul: contract 3880/2018 (4,34 mil.) + 8228/2018 (15,14 mil., PV recepție parțială 10536/15.05.2023 — racordurile nefinalizate erau în alt contract). Cheltuieli 2.000 din 8.330 lei.",
+  "concluzie_cnsc": "Admite în parte: anulează desemnarea câștigătorului și obligă la reevaluare cu aplicarea art. 183 alin. (2) privind terțul susținător (10 zile); respinge criticile privind propria ofertă.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de canalizare P+E, procedură simplificată — profil direct.",
+   "mai_putin_comparabila": "Discuția privind documentul constatator vizează terțul pentru proiectare.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "trebuie să facă aplicarea dispozițiilor legale ale art.183 alin.(2) din Legea nr. 98/2016",
+    "loc": "p. 141 (din 144)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MjA0OTJjN2QtNmY4NC00NGViLWI0N2QtMjk5MGFlNmEwMzA1&pdfa1=ZmFsc2U%3D&filename=Qk8yMDI0Xzk0Mi5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "0526746e93a0b7b6322d16613e1dc540cf2119de4cb6cb698acaa0a1896d6fae",
+  "snapshot_bytes": 1221973,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2023_1128",
+  "nr_decizie": ".../C4/... (anonimizat, BO2023_1128)",
+  "buletin_oficial": "BO2023_1128",
+  "data": null,
+  "an": 2023,
+  "autoritate": "UAT comună (anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare și execuție — Extindere sistem de canalizare menajeră în satul ..., licitație deschisă",
+  "tema": [
+   "clarificari_documentatie",
+   "cerinte_restrictive",
+   "termen_executie",
+   "factor_evaluare",
+   "personal_cheie"
+  ],
+  "problema": "Contestare documentație și răspunsuri la clarificări: lipsa model de contract, termene predare amplasament/ordin de începere, lipsa perioadei estimate pentru autorizația de construire, pondere excesivă factor „experiența experților”, termen insuficient de răspuns la clarificări, cifră de afaceri cerută ca pondere în domeniu, PV vizitare amplasament obligatoriu.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "AC trebuie să prevadă o perioadă estimată de obținere a AC raportată la predarea DTAC; ponderea factorului „experiența experților” redusă la max. 10–15% (diferența la preț); după reluare, erată cu nou termen de depunere și termen de răspuns la clarificări conform art. 161 alin. (2) L98 (6 zile la simplificată lucrări); cifra de afaceri nu poate fi cerută ca pondere din cifra globală și se dovedește conform art. 177, nu prin contracte; PV de vizitare devine opțional. Criticile față de modelul de contract postate ulterior = contestație nouă.",
+  "regula": "Documentația P+E trebuie să includă perioada estimată pentru autorizația de construire; vizitarea amplasamentului nu poate fi condiție de conformitate; după suspendare/remediere AC publică erată cu nou termen de depunere și termen legal de răspuns la clarificări.",
+  "temei_legal": [
+   "Legea 98/2016 art. 161 alin. (2)",
+   "Legea 98/2016 art. 175, 177",
+   "Legea 98/2016 art. 155-156",
+   "HG 907/2016 art. 12 alin. (7), Anexa 11",
+   "Legea 50/1991",
+   "HG 1/2018 Condiții generale clauza 19.3",
+   "Legea 101/2016 art. 26 alin. (2), (5)"
+  ],
+  "cum_ne_ajuta": "Șabloane de clarificări/contestare DA pentru P+E apă-canal: (a) cerem perioada estimată pentru AC; (b) PV vizită amplasament obligatoriu → cerem să fie opțional; (c) cifră de afaceri „în domeniu ca procent” → restrictivă; (d) pondere experiență experți > 15% → atacabilă. Verificare automată: termen răspuns clarificări ≥ 6 zile (simplificată lucrări) / 10 zile (deschisă) înainte de depunere.",
+  "ofertare_normative_ids": [
+   5,
+   6,
+   10,
+   20
+  ],
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "proiectare și execuție (extindere canalizare menajeră)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț",
+  "contestator_rol": "operator economic interesat, înainte de depunerea ofertelor",
+  "etapa": "documentație de atribuire",
+  "fapte_relevante": "Contestații 125/27.03.2023 (DA) și 145/03.04.2023 (răspuns la clarificări și model contract publicate 31.03.2023); procedură suspendată prin încheierea 1007/C4/06.04.2023; termen inițial oferte 10.04.2023; plăți condiționate de sumele alocate de MDRAPFE (critică respinsă).",
+  "concluzie_cnsc": "Admite în parte ambele contestații (pct. 3, 9, 10, 13, 14 și pct. 2 din a doua); dispune remedierea DA; respinge celelalte critici.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Canalizare menajeră P+E finanțată național — cerințele de DA contestate apar frecvent și la gaze.",
+   "mai_putin_comparabila": "Licitație deschisă; termenele din art. 161 diferă față de simplificată.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliul consideră că o măsură echitabilă în această situație este ca vizitarea amplasamentului să devină opțională",
+    "loc": "p. 42 (din 49)"
+   },
+   {
+    "text": "autoritatea contractantă ar trebui să prevadă în documentația de atribuire o perioadă estimată de obținere a autorizației de construire",
+    "loc": "p. 24 (din 49)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=YzZlNzdjZDQtNTYxYi00NzkzLTk0ZjItN2E0OTczNjU0Nzdi&pdfa1=ZmFsc2U%3D&filename=Qk8yMDIzXzExMjgucGRm&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "cc6b41b947f69082183e82e7df130f0c6b7b94afcf5d789acfa3348b3fad92c5",
+  "snapshot_bytes": 541254,
+  "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC"
  },
  {
@@ -1821,6 +2587,71 @@
   "temei_tip": "PRACTICA_CNSC"
  },
  {
+  "id": "CNSC-BO2023_2185",
+  "nr_decizie": "2185/C8/2263, 2288",
+  "buletin_oficial": "BO2023_2185",
+  "data": "2023-09-18",
+  "an": 2023,
+  "autoritate": "UAT (anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Extindere rețea de alimentare cu apă (acord-cadru lucrări), CPV 45232150-8",
+  "tema": [
+   "altele",
+   "clarificari_oferta"
+  ],
+  "problema": "La reevaluarea dispusă de CNSC (decizia 1367/C8/2023, menținută de CA Timișoara) doar pentru două oferte, AC a reevaluat și o ofertă declarată anterior neconformă (decizie necontestată) și a desemnat-o câștigătoare.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "Excluderea necontestată devine definitivă (art. 3 alin. (3) L101/2016). Reevaluarea se face strict în limitele deciziei CNSC; extinderea la alte oferte echivalează cu revocarea unui act intrat în circuitul civil, contrar securității juridice (ÎCCJ 66/2018). Critici reluate dintr-o intervenție anterioară respinsă definitiv sunt tardive.",
+  "regula": "O ofertă respinsă prin decizie necontestată nu mai poate fi „reabilitată” la o reevaluare dispusă de CNSC pentru alte oferte; AC respectă strict limitele reevaluării.",
+  "temei_legal": [
+   "Legea 101/2016 art. 3 alin. (1) lit. f) și alin. (3)",
+   "Legea 101/2016 art. 8 alin. (1)",
+   "Legea 101/2016 art. 26 alin. (2), (5)",
+   "HG 395/2016 art. 65 alin. (2), art. 133",
+   "ÎCCJ Decizia 66/2018"
+  ],
+  "cum_ne_ajuta": "Regulă de flux: orice respingere a ofertei Gazpet se contestă în termen dacă vrem să rămânem în competiție — altfel excluderea devine definitivă. Dacă AC reevaluează peste limitele deciziei CNSC în favoarea altuia → contestăm.",
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "tip_procedura": "procedură simplificată",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 14194564.6,
+  "sub_prag": true,
+  "tip_contract": "execuție lucrări (acord-cadru extindere rețea apă)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "ofertanți care atacă reevaluarea favorabilă unei oferte respinse anterior",
+  "etapa": "reevaluare după decizie CNSC",
+  "fapte_relevante": "Anunț SCN1118264/13.12.2022; raport inițial 1951/11.04.2023; decizia CNSC 1367/C8/1053,1070,1072 din 16.06.2023; CA Timișoara 707/13.07.2023; notă justificativă prelungire evaluare 3758/21.07.2023; raport 4045/08.08.2023. Cheltuieli 7.000 lei fără TVA.",
+  "concluzie_cnsc": "Admite contestațiile; anulează desemnarea câștigătorului; obligă la reevaluare cu respectarea deciziei 1367/2023 în 10 zile; respinge ca tardive criticile față de locul 2.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Extindere rețea apă, simplificată, preț cel mai scăzut — tipic.",
+   "mai_putin_comparabila": "Speță procedurală (limitele reevaluării), nu tehnică.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Consiliu nu a obligat autoritatea contractantă să reevalueze toate ofertele respinse, astfel că aceasta nu putea extinde limitele reevaluării",
+    "loc": "p. 16 (din 26)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZTFhOGUwZmMtZGQ3OS00OGI0LTkwNTQtNWZmOGMzODYxMjNk&pdfa1=ZmFsc2U%3D&filename=Qk8yMDIzXzIxODUucGRm&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "cca43ddb5aed27e986ff27bd329c3e54c7b612600f34bfd8bb9cd1c36c407c42",
+  "snapshot_bytes": 311141,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
   "id": "CNSC-BO2023_2237",
   "nr_decizie": "2237/C?/... (anonimizat, BO2023_2237)",
   "buletin_oficial": "BO2023_2237",
@@ -1885,6 +2716,76 @@
   "snapshot_sha256": "b4f535dd6ee9b3d67b33192a5ab4b51ff4c057ca9ba9310337441ff63dccca2b",
   "snapshot_bytes": 490918,
   "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2023_246",
+  "nr_decizie": "246/C7/6",
+  "buletin_oficial": "BO2023_246",
+  "data": "2023-02-01",
+  "an": 2023,
+  "autoritate": "Entitate contractantă sectorială (operator regional apă-canal — anonimizat, SA)",
+  "domeniu": "apa_canal",
+  "obiect": "CS1 — Asistență tehnică pentru managementul proiectului și supervizarea lucrărilor din Proiectul regional de dezvoltare a infrastructurii de apă și apă uzată în județele Sibiu și Brașov 2014-2020 (CPV 71356200-0)",
+  "tema": [
+   "tert_sustinator_subcontractant",
+   "clarificari_oferta",
+   "documente_calificare"
+  ],
+  "problema": "Ofertantul a depus acorduri de subcontractare cu subcontractanți care erau și terți susținători, fără formularele 4 și 5 (angajament ferm) și fără indicarea resurselor puse la dispoziție; nu a răspuns la obiect solicitării de clarificări (necontestate). A criticat și lipsa codurilor CAEN ale câștigătorului pentru activități secundare (livrare drone, pluviometre, debitmetre).",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Solicitarea de clarificări necontestată în termen trebuia respectată întocmai; răspunsul care nu acoperă cerințele exprese este neconcludent → ofertă inacceptabilă (art. 140 alin. (4) HG 394/2016). Acordul de subcontractare poate valora angajament ferm, dar nu scutește de probarea resurselor terților. Documentația nu cerea corespondența CPV–CAEN; a pretinde coduri CAEN pentru activități secundare nesemnificative ar restrânge concurența (CJUE C-403/21).",
+  "regula": "O cerere de clarificări pe care nu o contești devine obligatorie: răspunsul trebuie să acopere exact ce s-a cerut. Codurile CAEN se verifică doar pentru activitatea principală, dacă DA nu cere altfel.",
+  "temei_legal": [
+   "HG 394/2016 art. 140 alin. (4)",
+   "HG 394/2016 art. 55 alin. (1)",
+   "Legea 99/2016 art. 221",
+   "Legea 101/2016 art. 26 alin. (6)",
+   "CJUE C-403/21 pct. 60-62"
+  ],
+  "cum_ne_ajuta": "Regulă de flux în modulul Clarificări: dacă o cerere de clarificări ni se pare nelegală → contestăm în termen (7/10 zile); altfel răspundem punctual la fiecare cerință. La terți susținători/subcontractanți: angajament ferm (form. 5) + listă concretă resurse puse la dispoziție, depuse odată cu DUAE.",
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "servicii asistență tehnică și supervizare lucrări apă-apă uzată",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant respins ca inacceptabil, care atacă și oferta câștigătoare",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț CN1039030/05.02.2022; solicitare de clarificări nr. 25068/04.10.2022 (necontestată) cerea formularele 4 și 5 sau acorduri de subcontractare modificate cu resursele terților și răspundere solidară; raport procedură 33107/16.12.2022; contestație 30.12.2022.",
+  "concluzie_cnsc": "Respinge contestația ca nefondată; admite intervenția câștigătorului.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Proiect regional apă-uzată la operator regional (L99); regula privind clarificările necontestate și terții susținători se aplică identic la lucrări.",
+   "mai_putin_comparabila": "Contract de servicii (supervizare), nu de execuție lucrări.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Dacă solicitarea exceda dispozițiilor legii, ofertanta avea la îndemână contestarea acesteia, în caz contrar revenindu-i obligația de complianță.",
+    "loc": "p. 23 (din 30)"
+   },
+   {
+    "text": "a pretinde coduri CAEN pentru toate aceste activități (unele insignifiante ca pondere și/sau valoric) ar duce la o sarcină exorbitantă",
+    "loc": "p. 28 (din 30)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MDNiYzQ2ZTItOTJlYi00YWJiLWJmMmMtYzAwMTVjNzM0ZWVl&pdfa1=ZmFsc2U%3D&filename=Qk8yMDIzXzI0Ni5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "cd47239713bd347a102b7a4032d951e49cbfe5d5e90fe6acf8325b9cdc9237bc",
+  "snapshot_bytes": 331119,
+  "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC"
  },
  {
@@ -2074,6 +2975,142 @@
   "snapshot_sha256": "c11da4a9ed057a7a6953fb13316c74be56734dc227ec0f5a5dba52f60accef5a",
   "snapshot_bytes": 511222,
   "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2023_427",
+  "nr_decizie": "427/C?/... (anonimizat, BO2023_427)",
+  "buletin_oficial": "BO2023_427",
+  "data": null,
+  "an": 2023,
+  "autoritate": "UAT comună (jud. Vaslui — anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare, verificare tehnică, asistență tehnică și execuție — Înființare rețea de alimentare cu apă în 5 sate, Comuna Puiești, jud. Vaslui",
+  "tema": [
+   "clarificari_documentatie",
+   "altele"
+  ],
+  "problema": "AC a anulat procedura după depunerea ofertelor deoarece valoarea estimată din anunț (10.386.552,12 lei fără TVA) era necorelată cu devizul din SF (24.521.687,25 lei), cu efect asupra garanției de participare, GBE și experienței similare; ofertantul (al cărui asociat întocmise SF) a contestat anularea.",
+  "solutie": "respinsa",
+  "rationament_cnsc": "Existența a două valori diferite ale devizului în documentație este o eroare evidentă care, chiar unică, justifică anularea; HCL-ul cu indicatorii nu poate îndrepta erorile documentației; documentația nu mai poate fi corectată după depunerea ofertelor, deci art. 212 alin. (1) lit. c) și alin. (2) L98 se aplică corect.",
+  "regula": "Contradicția majoră dintre valoarea estimată din anunț și devizul din SF, care afectează cerințele de calificare, justifică anularea procedurii după depunerea ofertelor.",
+  "temei_legal": [
+   "Legea 98/2016 art. 212 alin. (1) lit. c) și alin. (2)",
+   "Legea 101/2016 art. 26 alin. (6)"
+  ],
+  "cum_ne_ajuta": "Verificare automată la importul DA: VE din anunț vs. total C+M din devizul general/SF; diferență > 10–20% → întrebare de clarificare imediat (înainte de ofertare), nu după — altfel riscăm anularea procedurii după ce am investit în ofertă.",
+  "ofertare_normative_ids": [
+   5,
+   6,
+   10
+  ],
+  "tip_procedura": "procedură simplificată online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 10386552.12,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (rețea alimentare cu apă)",
+  "criteriu_atribuire": null,
+  "contestator_rol": "ofertant (lider asociere) care atacă decizia de anulare",
+  "etapa": "anulare procedură",
+  "fapte_relevante": "SF (pag. 73-79) — deviz 24.521.687,25 lei fără TVA (2016); anunț — 10.386.552,12 lei fără TVA (actualizare 2021); HCL 19/09.02.2022 cu valoarea din anunț. Contestație înregistrată 25.01.2023. Obiectiv Anghel Saligny (menționat în DA).",
+  "concluzie_cnsc": "Respinge contestația ca nefondată; anularea procedurii rămâne valabilă.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea de alimentare cu apă la UAT rural, P+E — tipul frecvent de licitație Anghel Saligny.",
+   "mai_putin_comparabila": "Contestatorul era chiar autorul SF; soluția se bazează pe o diferență de peste 2 ori.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "Această eroare, chiar dacă ar fi unică, ar conduce la anularea procedurii de atribuire.",
+    "loc": "p. 10 (din 11)"
+   },
+   {
+    "text": "nefiind posibilă corectarea documentației de atribuire după depunerea ofertelor",
+    "loc": "p. 11 (din 11)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NTI1MTY4YmUtYjBlMy00ZmIyLWE1YTAtMGJlNzZhOTg5NTY1&pdfa1=ZmFsc2U%3D&filename=Qk8yMDIzXzQyNy5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "a40c5db587e38afdd052d98313c742f28f4074743e8569ca18cea06bbe05289b",
+  "snapshot_bytes": 266924,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2023_562",
+  "nr_decizie": "562/C?/... (anonimizat, BO2023_562)",
+  "buletin_oficial": "BO2023_562",
+  "data": "2023-03-14",
+  "an": 2023,
+  "autoritate": "UAT Comuna Fântânele, jud. Arad (adresă în text)",
+  "domeniu": "apa_canal",
+  "obiect": "Proiectare, AT și execuție — Extindere rețea de apă și canalizare și înființare rețea de apă și canalizare, CPV 45231300-8",
+  "tema": [
+   "clarificari_oferta",
+   "personal_cheie",
+   "asociere",
+   "documente_calificare"
+  ],
+  "problema": "(1) Oferta unei asocieri respinsă pentru că certificatele de „manager de proiect” ale șefilor de șantier au fost depuse doar la clarificări (considerat modificare a PT). (2) Oferta altei asocieri respinsă pentru că răspunsul la clarificări (acordul de asociere cu procentele atribuite) nu era semnat electronic extins.",
+  "solutie": "admisa_partial",
+  "rationament_cnsc": "(1) Reevaluare prin solicitarea de clarificări privind cele două certificate, cu respectarea proporționalității (art. 2 alin. (2) lit. e) L98). (2) Oferta, inclusiv acordul de asociere, fusese semnată electronic la depunere; lipsa semnăturii pe răspuns se putea remedia prin retransmitere — confirmare a informațiilor deja existente, fără avantaj; respingerea = formalism excesiv (Tideland Signal T-211/02). AC crease circumstanțe artificiale de anulare (art. 146 alin. (2) HG 395).",
+  "regula": "Lipsa semnăturii electronice pe un răspuns la clarificări care doar confirmă documente deja semnate în ofertă se remediază printr-o nouă clarificare, nu prin respingere; documentele de personal pot fi clarificate proporțional.",
+  "temei_legal": [
+   "Legea 98/2016 art. 2 alin. (2) lit. e)",
+   "Legea 98/2016 art. 209 alin. (1)",
+   "HG 395/2016 art. 134 alin. (1)",
+   "HG 395/2016 art. 135 alin. (3)",
+   "HG 395/2016 art. 137 alin. (2) lit. j)",
+   "HG 395/2016 art. 146 alin. (2)",
+   "Instrucțiunea ANAP 1/2017 art. 5 alin. (1), art. 7 alin. (3)",
+   "TPI T-211/02 Tideland Signal"
+  ],
+  "cum_ne_ajuta": "Procedură internă: orice răspuns la clarificări se semnează electronic extins (verificare automată .p7s înainte de upload). Dacă suntem respinși pentru vicii formale pe documente deja existente în ofertă → contestăm (formalism excesiv). Certificatele de personal se atașează la ofertă, nu la clarificări.",
+  "ofertare_normative_ids": [
+   5,
+   9,
+   10
+  ],
+  "tip_procedura": "procedură simplificată online",
+  "lege_aplicabila": "L98",
+  "valoare_estimata": 12412613.0,
+  "sub_prag": true,
+  "tip_contract": "proiectare și execuție (rețele apă și canalizare)",
+  "criteriu_atribuire": "prețul cel mai scăzut",
+  "contestator_rol": "două asocieri respinse, fiecare intervenind împotriva celeilalte",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț simplificat 28.11.2022; clarificare 7599/21.12.2022 (acord asociere — procente 98,93% / 1,07% fără nume asociat), răspuns 263/22.12.2022 semnat doar olograf; clarificare 306/18.01.2023 și răspuns 89/25.01.2023 cu certificate MET 001/002; raport 667/02.02.2023.",
+  "concluzie_cnsc": "Admite în parte ambele contestații; anulează raportul; obligă la reevaluare prin clarificări (certificatele de manager de proiect, respectiv retransmiterea acordului semnat electronic), în 15 zile.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețele apă și canalizare P+E la comună — profil direct; regula semnăturii electronice e universală.",
+   "mai_putin_comparabila": "Partea cu certificatele de manager de proiect depinde de cerința specifică din caietul de sarcini.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "autoritatea contractantă, prin respingerea ofertei contestatoarei, a dat dovadă de un formalism excesiv",
+    "loc": "p. 39 (din 43)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=MDdmNjcxYjYtYTA1ZS00Y2FkLTk3NDYtMjEwM2YxZjczNTY0&pdfa1=ZmFsc2U%3D&filename=Qk8yMDIzXzU2Mi5wZGY%3D&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "2940840c66e856daa6f2dc3996ad292dd7bbe1207ba7b553eb8008936e9b9142",
+  "snapshot_bytes": 432870,
+  "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC"
  },
  {
@@ -2978,6 +4015,77 @@
   "temei_tip": "PRACTICA_CNSC"
  },
  {
+  "id": "CNSC-BO2021_1117",
+  "nr_decizie": "1117/C?/... (anonimizat, BO2021_1117)",
+  "buletin_oficial": "BO2021_1117",
+  "data": null,
+  "an": 2021,
+  "autoritate": "Entitate contractantă sectorială (operator regional apă-canal Constanța — anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Rețele de apă Mangalia și stațiuni. Reabilitare și extindere colectoare și rețele de canalizare — Lot 1 Rețele de apă și canalizare Mangalia (CL16)",
+  "tema": [
+   "neconformitate_tehnica",
+   "clarificari_oferta",
+   "tert_sustinator_subcontractant",
+   "duae",
+   "factor_evaluare",
+   "termen_executie"
+  ],
+  "problema": "Ofertantul clasat admisibil nu a prezentat planșe/diagrame pentru menținerea serviciilor în timpul lucrărilor; graficul nu arăta intrarea subcontractanților (SCADA, racord electric ANRE executat de echipe proprii neautorizate); DUAE declara 0,5% subcontractare deși subtraversările valorau 1,15%; fișele tehnice nu respectau modelul (cod catalog, referințe, certificări); punctaj tehnic maxim justificat generic.",
+  "solutie": "admisa",
+  "rationament_cnsc": "Comisia trebuie să verifice realitatea și sustenabilitatea tuturor informațiilor din ofertă; cerințele exprese (planșe/diagrame, intrări subantreprenori în grafic) trebuie aplicate așa cum au fost scrise, iar neconcordanțele (procent subcontractare DUAE vs. valori din ofertă, activități ANRE alocate echipelor neautorizate) se clarifică. Lipsa consemnării analizei fișelor tehnice și justificarea generică a punctajului tehnic impun reevaluarea.",
+  "regula": "Neconcordanțele dintre DUAE (procent subcontractare), graficul de execuție (cine execută lucrările autorizate ANRE/SCADA) și fișele tehnice trebuie clarificate de comisie; punctajul tehnic trebuie motivat concret, nu prin preluarea grilei.",
+  "temei_legal": [
+   "Legea 99/2016 (achiziții sectoriale)",
+   "HG 394/2016 (norme sectoriale) — evaluarea propunerilor tehnice",
+   "Legea 101/2016 art. 26 alin. (2), (5)"
+  ],
+  "cum_ne_ajuta": "Verificare internă înainte de depunere: procentul de subcontractare din DUAE = suma valorilor activităților subcontractanților din F3/grafic; activitățile ANRE (racord electric, BMPT) alocate doar echipelor autorizate; fișe tehnice completate pe modelul DA (cod catalog, certificări, aviz sanitar). La contestare: cerem motivarea concretă a punctajului tehnic.",
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "tip_procedura": "licitație deschisă",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": 59620270.0,
+  "sub_prag": false,
+  "tip_contract": "execuție lucrări rețele apă și canalizare (lot 1; VE = total contract, 59.620.270 lei fără TVA)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (componentă tehnică 30 puncte — grafic de realizare)",
+  "contestator_rol": "ofertant declarat admisibil dar necâștigător, care atacă ofertele de pe locurile 1 și 2",
+  "etapa": "rezultat",
+  "fapte_relevante": "Anunț de participare 08.09.2020; raport procedură 34550/20.04.2021; contestație înregistrată 04.05.2021. Formularul 10 cerea diagrama momentelor critice cu intrările asociaților și subantreprenorilor; poziția 874 (integrare SCADA) fără echipă; pozițiile 826-871 (racord electric până la BMPT) alocate formațiilor F16-F17 neautorizate ANRE. Reevaluare în 10 zile.",
+  "concluzie_cnsc": "Admite contestația; anulează în parte raportul pentru Lotul 1 și obligă la reevaluarea celor două oferte în 10 zile.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Lucrări de rețele apă-canal la operator regional (L99) — profil direct Gazpet; interfața cu lucrări ANRE (racorduri electrice) e relevantă pentru firma noastră atestată ANRE gaze.",
+   "mai_putin_comparabila": "Licitație de mare valoare, cu componentă tehnică punctată; la proceduri simplificate cu preț cel mai scăzut evaluarea graficului e mai puțin strictă.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "elementele ofertelor prezentate nu sunt elemente prezumate a fi valabile și admise indiferente de întinderea lor",
+    "loc": "p. 61 (din 64)"
+   },
+   {
+    "text": "justificarea punctajului acordat este generic precizată, preluându-se informațiile standard din cuprinsul anexei",
+    "loc": "p. 63 (din 64)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=N2VhNGUwYmEtMDA1Zi00ZDhkLThhYTUtZjUxNTQzMmI0NzVl&pdfa1=ZmFsc2U%3D&filename=Qk8yMDIxXzExMTcucGRm&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "e06773561cfbeb0e43ee9ba379e2547eb58e359667f691841b04fc4a23a0b37e",
+  "snapshot_bytes": 657044,
+  "snapshot_data": "2026-10-02",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
   "id": "CNSC-BO2021_1317",
   "nr_decizie": "1317/C6/1161",
   "buletin_oficial": "BO2021_1317",
@@ -3427,6 +4535,78 @@
   "snapshot_sha256": "ff5e93ec0044eb317b10d2c11262afa8f5756b02a54f5b5d695d398ba48da81a",
   "snapshot_bytes": 263128,
   "snapshot_data": "2026-10-01",
+  "temei_tip": "PRACTICA_CNSC"
+ },
+ {
+  "id": "CNSC-BO2020_2191",
+  "nr_decizie": "2191/C?/... (anonimizat, BO2020_2191)",
+  "buletin_oficial": "BO2020_2191",
+  "data": null,
+  "an": 2020,
+  "autoritate": "Entitate contractantă sectorială (operator regional apă-canal, SA — anonimizat)",
+  "domeniu": "apa_canal",
+  "obiect": "Extinderea sistemului de canalizare din două aglomerări (rețea menajeră PVC, conducte de refulare, 4 stații de pompare ape uzate), CPV 45231300-8",
+  "tema": [
+   "documente_calificare",
+   "tert_sustinator_subcontractant",
+   "clarificari_oferta",
+   "neconformitate_tehnica"
+  ],
+  "problema": "Câștigătorul și ofertantul de pe locul 2 nu dețineau (nici ei, nici subcontractanții) autorizația AFER pentru subtraversările de cale ferată prevăzute în caietul de sarcini; ofertantul de pe locul 2 și-a completat prin răspunsul la clarificări propunerea tehnică (metodologie, proceduri, organigramă, impact mediu).",
+  "solutie": "admisa",
+  "rationament_cnsc": "Din 5 critici, CNSC a reținut ca fondată doar lipsa autorizației AFER: fișa de date cerea dovada capacității profesionale de a realiza activitățile din obiect, iar caietul de sarcini includea expres traversări de cale ferată; entitatea nu poate invoca ulterior că AFER nu era cerută sau că se pot nominaliza subcontractanți în execuție. Experiența similară (17 km rețele în max. 3 contracte, finalizate în ultimii 5 ani) era dovedită cu 49,5 km. Completarea propunerii tehnice prin clarificări nu e viciu de formă, ci modificare sancționată cu inacceptabilitatea (art. 140 alin. (5) HG 394/2016).",
+  "regula": "Dacă documentația include lucrări care cer o autorizare specifică (ex. AFER pentru subtraversări CF) și fișa de date cere dovada capacității de a realiza toate activitățile, ofertantul trebuie să o dețină sau să aibă subcontractant autorizat declarat la ofertare; completarea propunerii tehnice prin clarificări face oferta inacceptabilă.",
+  "temei_legal": [
+   "Legea 99/2016 art. 68 alin. (1)-(2)",
+   "Legea 99/2016 art. 3 alin. (1) lit. zz)",
+   "Legea 99/2016 art. 202 alin. (3)",
+   "HG 394/2016 art. 129 alin. (1)",
+   "HG 394/2016 art. 140 alin. (5)-(6)",
+   "Legea 101/2016 art. 26 alin. (2), (5), (9)"
+  ],
+  "cum_ne_ajuta": "Checklist Ofertare: scanează caietul de sarcini după subtraversări CF/drumuri naționale/cursuri de apă → autorizare AFER / avize speciale; dacă Gazpet nu o are, subcontractant autorizat declarat în DUAE + acord de subcontractare de la depunere. Propunerea tehnică trebuie completă la depunere — clarificările nu pot aduce capitole noi.",
+  "ofertare_normative_ids": [
+   7,
+   8,
+   10
+  ],
+  "tip_procedura": "licitație deschisă online",
+  "lege_aplicabila": "L99",
+  "valoare_estimata": null,
+  "sub_prag": false,
+  "tip_contract": "execuție lucrări (extindere canalizare + SPAU)",
+  "criteriu_atribuire": "cel mai bun raport calitate-preț (preț 90% + durată execuție 10%)",
+  "contestator_rol": "ofertant clasat pe locul 3 care atacă ofertele de pe locurile 1 și 2",
+  "etapa": "rezultat",
+  "fapte_relevante": "Raport procedură AP453/27.10.2020; punctaje 95,36 / 92,76 / 92,55. Caietul de sarcini (seria E) cerea articole separate pentru traversări de râuri, drumuri și cale ferată și racorduri prin subtraversare. Locul 2 a menționat activitatea de autorizare subtraversări CF doar la clarificări (30 zile în execuție) și a transmis la clarificări părți întregi din propunerea tehnică. Reevaluare dispusă în 15 zile; cheltuieli 4.500 lei.",
+  "concluzie_cnsc": "Admite contestația; anulează raportul în privința ofertelor de pe locurile 1 și 2 și obligă la reevaluare în 15 zile.",
+  "comparabilitate": {
+   "de_ce_comparabila": "Rețea canalizare + stații de pompare la operator regional (L99), exact profilul apă-canal în care Gazpet ofertează; subtraversările (foraj orizontal) sunt frecvente și la gaze.",
+   "mai_putin_comparabila": "Cerința de capacitate profesională era formulată generic; în alte DA autorizarea AFER poate fi lăsată explicit pe execuție.",
+   "nota": "Decizie CNSC — nu e precedent obligatoriu; CNSC nu e legat de soluțiile anterioare."
+  },
+  "citate_cheie": [
+   {
+    "text": "singura fondată este cea referitoare la autorizația A.F.E.R., necesară executării subtraversărilor de cale ferată",
+    "loc": "p. 23 (din 25)"
+   },
+   {
+    "text": "documentele transmise de către asocierea respectivă nu se circumscriu condițiilor limitativ prevăzute la art. 140 alin. (6)",
+    "loc": "p. 24 (din 25)"
+   }
+  ],
+  "curte_apel": null,
+  "verificat": true,
+  "nota_verificare": null,
+  "sursa_cercetare": "cnsc_noi_apa",
+  "link_sursa": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NTU5YWVjNTItYzY2Zi00Yzg3LWI1NDMtYzAxM2MwOTliN2Nj&pdfa1=ZmFsc2U%3D&filename=Qk8yMDIwXzIxOTEucGRm&action=aW5saW5l",
+  "control_judiciar": null,
+  "control_judiciar_cautat": false,
+  "regula_verificata": true,
+  "corectie_regula": null,
+  "snapshot_sha256": "a2183fa1483c764d4ade58bedc439ad80dc5e716b3ba7cff8147c0d6642cca2e",
+  "snapshot_bytes": 301823,
+  "snapshot_data": "2026-10-02",
   "temei_tip": "PRACTICA_CNSC"
  }
 ]
