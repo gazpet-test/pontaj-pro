@@ -918,8 +918,10 @@ mkdir -p "$MUT/real_vslab"; cp "$LIVRARE" "$MUT/real_vslab/livrare_migrare.sh"; 
 ST="$(stare_atac "$MUT/real_vslab/livrare_migrare.sh")"
 [ "$ST" = "10|f" ] || { cat "$ERR_R" >&2; esec "6.12 d: runnerul real (validator slăbit), conexiune scs=off: '$ST', așteptat 10|f"; }
 ok6 "6.12 d: validator slăbit + conexiune scs=off ⇒ runnerul real: NEAPLICAT (10), t_atac absent — prologul aliniază serverul cu validatorul"
-mutant_py fara_scs "SET LOCAL standard_conforming_strings = on;
-" ""
+mutant_py fara_scs "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+SET LOCAL standard_conforming_strings = on;
+" "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+"   # tranzacția livrării, nu prologul gate-ului 0e
 A="  IF current_setting('standard_conforming_strings') IS DISTINCT FROM 'on' THEN RAISE EXCEPTION 'Livrare \$NUME: standard_conforming_strings nu e on'; END IF;
 " python3 - "$MUT/fara_scs/livrare_migrare.sh" <<'PY'
 import os, sys
@@ -1004,7 +1006,9 @@ open(sys.argv[1], "w").write(s.replace(a, ""))
 PY
 if izolare_principala "$MUT/fara_rc_princ/livrare_migrare.sh"; then esec "6.13 mutant fără READ COMMITTED în tranzacția principală: NEPRINS"; fi
 ok6 "6.13 mutant fără READ COMMITTED în tranzacția principală ⇒ prins (dublare sub RR)"
-mutant_py fara_rc_reconc "SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;" "SET TRANSACTION READ ONLY;"
+mutant_py fara_rc_reconc "SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;
+SET LOCAL lock_timeout" "SET TRANSACTION READ ONLY;
+SET LOCAL lock_timeout"   # reconcilierea, nu gate-ul 0e
 if izolare_reconciliere "$MUT/fara_rc_reconc/livrare_migrare.sh"; then esec "6.13 mutant fără READ COMMITTED în reconciliere: NEPRINS"; fi
 ok6 "6.13 mutant fără READ COMMITTED în reconciliere ⇒ prins (clasificare greșită sub RR)"
 mutant_py lock_in_select "SELECT pg_advisory_xact_lock(\$CHEIE);
