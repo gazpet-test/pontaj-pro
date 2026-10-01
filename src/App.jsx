@@ -6453,10 +6453,13 @@ function AdminPage() {
     verificat_decont: 'Mirela Popescu',
     sef_compartiment: 'Udrea Natalia',
   })
+  // Tichete — responsabil default per departament (tichete_default_responsabili, PK departament)
+  const [tichDefaults, setTichDefaults] = useState({})   // { departament: profile_id }
+  const [savingTichDefaults, setSavingTichDefaults] = useState(false)
   useEffect(()=>{ loadAll() },[tab])
   const loadAll=async()=>{
     setLoad(true)
-    const [s,p,e,c,st,ps,fs,os,dep]=await Promise.all([
+    const [s,p,e,c,st,ps,fs,os,dep,tdr]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
       supabase.from('employees').select('*,sites(name)').order('name'),
@@ -6466,8 +6469,10 @@ function AdminPage() {
       supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
       supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
       supabase.from('logistica_depozite').select('*,sites(name)').order('name'),
+      supabase.from('tichete_default_responsabili').select('departament,profile_id'),
     ])
     setSites(s.data||[])
+    const tdm={}; (tdr.data||[]).forEach(x=>{tdm[x.departament]=x.profile_id}); setTichDefaults(tdm)
     setDepozite(dep.data||[])
     // Attach site_ids to each manager
     const mgrs=(p.data||[]).map(m=>({...m,site_ids:(ps.data||[]).filter(x=>x.profile_id===m.id).map(x=>x.site_id)}))
@@ -6497,6 +6502,30 @@ function AdminPage() {
     }).eq('id', 1)
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
     showToast('✓ Semnatari salvați — folosiți la generarea ordinelor de deplasare')
+  }
+
+  // Tichete — departamentele (aceeași listă ca în Tichete.jsx DEPARTAMENTE / flag-urile receive_tichete_*)
+  const TICHETE_DEP = [
+    { cod:'logistica',     label:'🚜 Logistica',     color:G.orange },
+    { cod:'hr',            label:'👥 HR',            color:'#F778BA' },
+    { cod:'administrativ', label:'🏢 Administrativ', color:G.blue   },
+    { cod:'it',            label:'💻 IT',            color:G.purple },
+    { cod:'comercial',     label:'🛒 Comercial',     color:G.green  },
+    { cod:'financiar',     label:'💰 Financiar',     color:G.yellow },
+  ]
+  // Save responsabili default tichete (upsert pe PK departament; RLS = doar owner)
+  const saveTichDefaults = async () => {
+    const rows = TICHETE_DEP.filter(d => tichDefaults[d.cod]).map(d => ({
+      departament: d.cod, profile_id: tichDefaults[d.cod], set_by: profile?.id || null, updated_at: new Date().toISOString(),
+    }))
+    if (!rows.length) { showToast('Alege cel puțin un responsabil', 'warn'); return }
+    setSavingTichDefaults(true)
+    // Doar departamentele cu responsabil ales se scriu; „— fără default —” lasă rândul din BD neatins (nu se șterge nimic de aici)
+    const { error } = await supabase.from('tichete_default_responsabili').upsert(rows, { onConflict: 'departament' })
+    setSavingTichDefaults(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✓ Responsabili default salvați — se preselectează la tichetele noi')
+    loadAll()
   }
 
   const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
@@ -7916,16 +7945,21 @@ function AdminPage() {
             ].map(([key, label, placeholder]) => (
               <div key={key} style={{marginBottom:12}}>
                 <Lbl>{label}</Lbl>
-                <input 
-                  style={S.input} 
-                  type="text" 
-                  value={ordSetari[key] || ''} 
-                  onChange={e => setOrdSetari(prev => ({...prev, [key]: e.target.value}))} 
+                <input
+                  style={S.input}
+                  type="text"
+                  list="ord-semnatari-angajati"
+                  value={ordSetari[key] || ''}
+                  onChange={e => setOrdSetari(prev => ({...prev, [key]: e.target.value}))}
                   placeholder={placeholder}
                 />
               </div>
             ))}
-            
+            {/* Dropdown cu numele angajaților activi (text liber rămâne permis — lookup-ul semnăturii e fuzzy pe tokens) */}
+            <datalist id="ord-semnatari-angajati">
+              {employees.filter(e => e.active).map(e => <option key={e.id} value={e.name} />)}
+            </datalist>
+
             <button 
               onClick={saveOrdSetari} 
               style={{...S.btnP, background: G.orange, width:'100%', marginTop:8}}
@@ -7934,6 +7968,35 @@ function AdminPage() {
             <div style={{padding:10,background:G.orange+'15',borderRadius:8,border:`1px solid ${G.orange}33`,fontSize:11,color:G.orange,marginTop:12,lineHeight:1.5}}>
               💡 <strong>Cum se folosesc:</strong> În <strong>Rapoarte → Istoric Plăți Diurne</strong>, butonul „📄 Generează Ordine Deplasare" creează câte un xlsx per angajat cu aceste 4 nume preumplute.
             </div>
+          </div>
+
+          {/* === TICHETE — RESPONSABIL DEFAULT PER DEPARTAMENT === */}
+          <div style={{...S.card,padding:22,marginBottom:16,borderLeft:`4px solid ${G.purple}`}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:6,color:G.text}}>🎫 Tichete — Responsabil default per departament</div>
+            <div style={{fontSize:11,color:G.muted,marginBottom:18,lineHeight:1.5}}>
+              Persoana preselectată ca responsabil la deschiderea unui tichet nou pe fiecare departament.
+              Lista conține doar utilizatorii cu flag-ul <code>receive_tichete_*</code> al departamentului (setat din <strong>Editează Manager</strong>) sau owner.
+            </div>
+            {TICHETE_DEP.map(d => {
+              const flag = `receive_tichete_${d.cod}`
+              const optiuni = managers.filter(m => m.is_owner || m[flag])
+              const curent = tichDefaults[d.cod]
+              const curentValid = !curent || optiuni.some(m => m.id === curent)
+              return (
+                <div key={d.cod} style={{marginBottom:12}}>
+                  <Lbl><span style={{color:d.color}}>{d.label}</span></Lbl>
+                  <select style={S.input} value={curent || ''} onChange={e => setTichDefaults(prev => ({...prev, [d.cod]: e.target.value || null}))}>
+                    <option value="">— fără default —</option>
+                    {!curentValid && <option value={curent}>⚠️ Utilizator fără flag {flag} (setat prin SQL)</option>}
+                    {optiuni.map(m => <option key={m.id} value={m.id}>{m.name || m.email}{m.is_owner ? ' (owner)' : ''}</option>)}
+                  </select>
+                  {optiuni.length === 0 && <div style={{fontSize:11,color:G.red,marginTop:4}}>Niciun utilizator cu flag {flag} — bifează-l întâi în Editează Manager.</div>}
+                </div>
+              )
+            })}
+            <button onClick={saveTichDefaults} disabled={savingTichDefaults} style={{...S.btnP, background:G.purple, width:'100%', marginTop:8, opacity:savingTichDefaults?.6:1}}>
+              {savingTichDefaults ? '⏳ Se salvează…' : '💾 Salvează responsabili default'}
+            </button>
           </div>
         </div>
       )}
