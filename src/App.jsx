@@ -6534,7 +6534,7 @@ function AdminPage() {
     const {data,error}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:true})
     if(error){showToast('Eroare: '+error.message,'error');setLegare(false);return}
     // R1: potrivirea e pe emailul de LOGARE; la înscriere legarea nu se face singură, owner-ul o confirmă aici.
-    const MOTIVE={fara_candidat:'niciun candidat',ambiguu:'ambiguu (mai mulți candidați sau mai multe conturi pe aceeași fișă)',candidat_ocupat:'fișa are deja cont',email_diferit:'emailul din profil diferă de cel de logare — verifică manual',email_neconfirmat:'emailul de logare nu e confirmat — leagă manual după confirmare',neconfirmat:'nu era în previzualizarea confirmată',schimbat:'potrivirea s-a schimbat de la previzualizare',eroare:'eroare'}
+    const MOTIVE={fara_candidat:'niciun candidat',ambiguu:'ambiguu (mai mulți candidați sau mai multe conturi pe aceeași fișă)',candidat_ocupat:'fișa are deja cont',email_diferit:'emailul din profil diferă de cel de logare — verifică manual',email_neconfirmat:'emailul de logare nu e confirmat — leagă manual după confirmare',neconfirmat:'nu era în previzualizarea confirmată',schimbat:'potrivirea s-a schimbat de la previzualizare',tip_cont_exceptat:'contul a fost marcat extern/test/sistem între timp',legatura_existenta:'contul a fost legat între timp',eroare:'eroare'}
     const deLegat=(data||[]).filter(r=>r.rezultat==='de_legat'), rest=(data||[]).filter(r=>r.rezultat!=='de_legat')
     const restTxt=rest.length?`\n\nRămân nelegate (${rest.length}):\n${rest.map(r=>`• ${r.email} — ${MOTIVE[r.rezultat]||r.rezultat}${r.employee_name?' ('+r.employee_name+')':''}`).join('\n')}`:''
     if(!deLegat.length){window.alert(`Nimic de legat automat.${restTxt}`);setLegare(false);return}

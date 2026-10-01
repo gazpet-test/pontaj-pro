@@ -425,31 +425,55 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
 -- legătura încă liberă, tipul contului, emailul profilului = emailul de logare, candidatul UNIC și liber.
 -- Întoarce: legat | legatura_existenta | fara_marcaj_incredere | email_neconfirmat | tip_cont_exceptat | email_diferit |
 --           fara_candidat | ambiguu | candidat_ocupat | inexistent | eroare.
--- r6 (C-RACE-LINK-1): revalidarea candidatului SUB LOCK, comună celor două căi de legare. Apelantul ține deja profilul
--- (FOR UPDATE); aici se blochează fișa candidată și se recalculează potrivirea (instrucțiuni noi ⇒ văd ce s-a comis între
--- timp, ex. încheierea contractului). NULL = se poate lega; altfel rezultatul de întors, fără legare.
-CREATE OR REPLACE FUNCTION public.fn_cont_revalideaza_candidat(p_email text, p_emp integer)
+-- r6 (C-RACE-LINK-1) + r7 (P1-C, Jakarinos pe 0456f3b): revalidarea COMPLETĂ sub lock, comună celor două căi de legare.
+-- Apelantul a calculat candidatul (p_emp) pe un instantaneu NEblocat. Aici, în ORDINEA COMUNĂ a pachetului (fișa employees
+-- FOR UPDATE → profilul FOR UPDATE, aceeași ca UPDATE-ul HR / sweep: fișă → advisory → profil), se recitesc AMBELE jumătăți
+-- (instrucțiuni noi ⇒ văd ce s-a comis între timp):
+--   * fișa: încă activă, fără încetare trecută;
+--   * profilul: încă nelegat, tip_cont angajat, profiles.email = emailul de LOGARE (auth.users, recitit), email confirmat;
+--   * potrivirea recalculată pe emailul de logare RECITIT: un singur candidat, același, neocupat.
+-- r6 revalida doar jumătatea employees: un profil trecut între timp pe tip_cont = 'extern' sau cu emailul schimbat (T1 comis
+-- cât timp legarea aștepta profilul) se lega totuși. NULL = se poate lega; altfel rezultatul de întors, fără legare.
+-- Lock-ul pe fișă e luat ÎNAINTEA profilului chiar dacă apelantul ținea deja profilul (reentrant) — vezi apelanții: niciunul
+-- nu mai ține profilul înainte de apel, ca ordinea fișă → profil să fie reală.
+DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(text, integer);
+CREATE OR REPLACE FUNCTION public.fn_cont_revalideaza_candidat(p_profile_id uuid, p_emp integer)
 RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
+  v_p      public.profiles%ROWTYPE;
+  v_email  text;
+  v_conf   boolean;
   v_n      integer;
   v_emp    integer;
   v_ocupat boolean;
 BEGIN
-  PERFORM 1 FROM public.employees e WHERE e.id = p_emp FOR UPDATE;
+  IF p_emp IS NULL OR p_profile_id IS NULL THEN RETURN 'fara_candidat'; END IF;
+  PERFORM 1 FROM public.employees e WHERE e.id = p_emp FOR UPDATE;                 -- 1) fișa
+  SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;       -- 2) profilul (recitit SUB lock)
+  IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+  SELECT u.email::text, u.email_confirmed_at IS NOT NULL INTO v_email, v_conf
+    FROM auth.users u WHERE u.id = p_profile_id;                                   -- emailul de logare, recitit
+  IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+  IF v_p.employee_id IS NOT NULL THEN RETURN 'legatura_existenta'; END IF;
+  IF COALESCE(v_p.tip_cont, 'angajat') <> 'angajat' THEN RETURN 'tip_cont_exceptat'; END IF;
+  IF NULLIF(lower(btrim(COALESCE(v_email, ''))), '') IS NULL
+     OR lower(btrim(COALESCE(v_p.email, ''))) <> lower(btrim(v_email)) THEN RETURN 'email_diferit'; END IF;
+  IF NOT v_conf THEN RETURN 'email_neconfirmat'; END IF;
   IF NOT EXISTS (SELECT 1 FROM public.employees e
                   WHERE e.id = p_emp AND e.active IS TRUE AND (e.termination_date IS NULL OR e.termination_date > CURRENT_DATE)) THEN
     RETURN 'fara_candidat';
   END IF;
   SELECT count(*), min(c.employee_id), COALESCE(bool_or(c.profil_legat IS NOT NULL), false)
     INTO v_n, v_emp, v_ocupat
-    FROM public.fn_cont_candidati_angajat(p_email) c;
+    FROM public.fn_cont_candidati_angajat(v_email) c;
   IF v_n = 0 THEN RETURN 'fara_candidat'; END IF;
-  IF v_n <> 1 OR v_emp IS DISTINCT FROM p_emp OR v_ocupat THEN RETURN 'schimbat'; END IF;
+  IF v_n <> 1 OR v_emp IS DISTINCT FROM p_emp THEN RETURN 'schimbat'; END IF;
+  IF v_ocupat THEN RETURN 'candidat_ocupat'; END IF;
   RETURN NULL;
 END $fn$;
-REVOKE ALL ON FUNCTION public.fn_cont_revalideaza_candidat(text, integer) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public.fn_cont_revalideaza_candidat(uuid, integer) FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.fn_cont_leaga_la_creare(p_profile_id uuid)
 RETURNS text
@@ -471,7 +495,10 @@ BEGIN
   IF v_ident IS NULL OR v_ident NOT IN ('service_role', 'owner') THEN
     RAISE EXCEPTION 'Legarea la creare o face doar funcția cont-nou (service_role) sau owner-ul' USING ERRCODE = '42501';
   END IF;
-  SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;
+  -- r7 (P2 / ordinea lock-urilor): citirile de aici sunt FĂRĂ lock (filtru rapid); decizia reală se ia în
+  -- fn_cont_revalideaza_candidat, sub lock, în ordinea comună fișă → profil. Așa RPC-ul nu mai ține profilul înaintea fișei
+  -- (inversul fluxului HR / sweep): un ciclu nu mai e posibil nici ca deadlock detectat.
+  SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id;
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
   SELECT u.email::text, COALESCE(u.raw_app_meta_data ->> 'gazpet_legare_automata', '') = 'true', u.email_confirmed_at IS NOT NULL
     INTO v_email, v_incr, v_conf
@@ -488,14 +515,16 @@ BEGIN
   IF v_n = 0 THEN RETURN 'fara_candidat'; END IF;
   IF v_n > 1 THEN RETURN 'ambiguu'; END IF;
   IF v_ocupat THEN RETURN 'candidat_ocupat'; END IF;
-  -- r6 (C-RACE-LINK-1): fișa candidată blocată (după profil, deja blocat sus) + revalidare sub lock: încă activă, fără
-  -- încetare trecută, potrivirea recalculată identică (un singur candidat, același, neocupat) ⇒ altfel fără legare.
-  v_rez := public.fn_cont_revalideaza_candidat(v_email, v_emp);
-  IF v_rez IS NOT NULL THEN RETURN v_rez; END IF;
   BEGIN
-    UPDATE public.profiles SET employee_id = v_emp
-     WHERE id = p_profile_id AND employee_id IS NULL;             -- nu suprascrie niciodată
-    v_rez := CASE WHEN FOUND THEN 'legat' ELSE 'legatura_existenta' END;
+    -- r6 (C-RACE-LINK-1) + r7 (P1-C, P2): lock fișă → profil și revalidarea AMBELOR jumătăți (fișă activă; profil încă
+    -- nelegat, tip angajat, email profil = email de logare recitit, confirmat; potrivirea recalculată identică) — ÎN blocul
+    -- de excepții: un lock_timeout / 40P01 din așteptarea lock-urilor devine 'eroare' + notificare owner, nu scapă din RPC.
+    v_rez := public.fn_cont_revalideaza_candidat(p_profile_id, v_emp);
+    IF v_rez IS NULL THEN
+      UPDATE public.profiles SET employee_id = v_emp
+       WHERE id = p_profile_id AND employee_id IS NULL;           -- nu suprascrie niciodată
+      v_rez := CASE WHEN FOUND THEN 'legat' ELSE 'legatura_existenta' END;
+    END IF;
   EXCEPTION
     WHEN unique_violation THEN v_rez := 'candidat_ocupat';
     WHEN OTHERS THEN
@@ -644,10 +673,11 @@ BEGIN
         rezultat := 'schimbat';                           -- potrivirea s-a schimbat de la previzualizare
       ELSE
         BEGIN
-          -- r6 (C-RACE-LINK-1): profilul, apoi fișa candidată, blocate; revalidare sub lock (activă, fără încetare trecută,
-          -- potrivire recalculată identică). Altfel „schimbat” / „fara_candidat”, fără legare.
-          PERFORM 1 FROM public.profiles pr WHERE pr.id = r.pid FOR UPDATE;
-          rezultat := public.fn_cont_revalideaza_candidat(r.uemail, r.emp);
+          -- r6 (C-RACE-LINK-1) + r7 (P1-C): lock fișă → profil (ordinea comună a pachetului) și revalidarea AMBELOR jumătăți
+          -- sub lock (fișă activă; profil încă nelegat, tip angajat, email profil = email de logare recitit, confirmat;
+          -- potrivire recalculată identică). Altfel rezultatul revalidării (schimbat / fara_candidat / tip_cont_exceptat /
+          -- email_diferit / email_neconfirmat / legatura_existenta / candidat_ocupat), fără legare.
+          rezultat := public.fn_cont_revalideaza_candidat(r.pid, r.emp);
           IF rezultat IS NULL THEN
             UPDATE public.profiles pr SET employee_id = r.emp
              WHERE pr.id = r.pid AND pr.employee_id IS NULL;

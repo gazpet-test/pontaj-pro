@@ -22,6 +22,8 @@
 --       valabil) nu mai scrie fișe de angajat și date personale (runda 3, X10 / P1e-f)
 --   * fn_conturi_inchideri_sweep — procesarea cozii, rulată de pg_cron ca postgres (identitate explicită db_login)
 --   ORDINEA LOCK-URILOR (uniformă, runda 3; r3: fișa employees FOR UPDATE întâi, ca la UPDATE-ul HR): [employees] → persoană (advisory) → profil (FOR UPDATE) → coadă / jurnal.
+--   r7: și legarea cont ↔ fișă (c) ia acum fișa ÎNAINTEA profilului (fn_cont_revalideaza_candidat) — ordine comună în tot pachetul;
+--       triggerul de închidere blochează profilul ÎNAINTEA deciziei și reverifică legătura / tipul / restaurarea sub lock (P1-D).
 --   * fn_pgrst_pre_request     — hook PostgREST pentru revocarea EFECTIVĂ a JWT-urilor deja emise;
 --                                CREAT, dar NEACTIVAT (activarea = ALTER ROLE authenticator, cu acordul lui Răzvan)
 --   * fn_cont_restaureaza      — revenire din jurnal, EXCLUSIV owner, cu previzualizare (p_simulare)
@@ -441,17 +443,32 @@ CREATE TRIGGER trg_employees_persoana_lock BEFORE INSERT OR UPDATE OF cnp, activ
 
 -- Același lock la scrierea CNP-ului în datele personale (INSERT / UPDATE OF cnp, employee_id / DELETE): un CNP care apare,
 -- dispare sau se mută pe altă fișă în timpul unei închideri așteaptă garda (runda 3, X1).
+-- r7 (P1-D, Jakarinos pe 0456f3b): o scriere aici schimbă și ELIGIBILITATEA fișei la potrivirea pe nume / email din
+-- fn_cont_posibil_aceeasi_persoana (o fișă activă contează acolo DOAR cât timp n-are niciun CNP cunoscut). Golirea / ștergerea
+-- / mutarea CNP-ului unei fișe B (activă, același nume de familie ca A) nu lua nicio cheie comună cu garda lui A (care ține
+-- CNP-ul X al lui A, cuvintele numelui lui A, emailul lui A, emp:A) ⇒ garda spunea „se poate închide” pe un instantaneu
+-- în care B avea încă CNP, iar după COMMIT B rămânea fără CNP = exact cazul posibil_alt_contract, neverificat. Acum se iau
+-- și cheile nume / email ale fișelor atinse (OLD.employee_id și NEW.employee_id, citite din employees): garda lui A ține
+-- 'gazpet.persoana.nume:<familia lui A>', iar o potrivire pe nume cere ca familia lui A să fie printre cuvintele lui B
+-- (și invers) ⇒ cheie comună ⇒ serializare; la fel pe email. Toate într-un singur apel (fn_cont_lock_chei: sortate după hash).
 CREATE OR REPLACE FUNCTION public.fn_hr_employees_private_persoana_lock()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
+DECLARE v_chei text[];
 BEGIN
-  PERFORM public.fn_cont_lock_chei(public.fn_cont_persoana_chei(
+  v_chei := public.fn_cont_persoana_chei(
     ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN public.fn_cont_cnp_normalizat(NEW.cnp) END,
           CASE WHEN TG_OP <> 'INSERT' THEN public.fn_cont_cnp_normalizat(OLD.cnp) END], NULL, NULL)
     -- r6 (D-RACE-CNP-NULL): cheia stabilă a fișei (veche / nouă), aceeași ca în fn_cont_garda_persoana
     || ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN 'gazpet.persoana.emp:' || NEW.employee_id END,
-             CASE WHEN TG_OP <> 'INSERT' THEN 'gazpet.persoana.emp:' || OLD.employee_id END]);
+             CASE WHEN TG_OP <> 'INSERT' THEN 'gazpet.persoana.emp:' || OLD.employee_id END];
+  -- r7 (P1-D): cheile nume / email ale fișelor atinse (eligibilitatea la potrivirea pe nume / email se schimbă cu CNP-ul)
+  SELECT v_chei || COALESCE(array_agg(k), '{}'::text[]) INTO v_chei
+    FROM public.employees e
+    CROSS JOIN LATERAL unnest(public.fn_cont_persoana_chei(NULL, e.name, e.email)) k
+   WHERE e.id IN (CASE WHEN TG_OP <> 'DELETE' THEN NEW.employee_id END, CASE WHEN TG_OP <> 'INSERT' THEN OLD.employee_id END);
+  PERFORM public.fn_cont_lock_chei(v_chei);
   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_hr_employees_private_persoana_lock() FROM PUBLIC, anon, authenticated, service_role;
@@ -527,6 +544,19 @@ DECLARE
 BEGIN
   SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;   -- serializează pe profil
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
+
+  -- r7 (P1-D, Jakarinos pe 0456f3b): pe căile AUTOMATE (trigger / coadă) decizia s-a luat pe un instantaneu dinaintea
+  -- lock-ului. Aici, SUB lock, legătura trebuie să fie încă cea pe care s-a decis (profilul mutat de owner pe altă fișă
+  -- cât timp se aștepta ⇒ nu se închide) și contul să nu fi devenit între timp excepție marcată (tip_cont). Apărare în
+  -- adâncime: apelanții automați verifică la fel (fn_employees_ciclu_cont / sweep), aici e ultimul punct comun.
+  IF p_sursa IN ('trigger_contract_incheiat', 'coada_contract_incheiat') THEN
+    IF p_employee_id IS NULL OR v_p.employee_id::integer IS DISTINCT FROM p_employee_id THEN
+      RETURN 'legatura_schimbata';
+    END IF;
+    IF COALESCE(v_p.tip_cont, 'angajat') <> 'angajat' THEN
+      RETURN 'tip_cont_exceptat';
+    END IF;
+  END IF;
 
   IF v_p.is_owner IS TRUE THEN                        -- SIGURANȚĂ: owner-ul nu se închide niciodată automat
     BEGIN                                             -- notificarea e best-effort (nu blochează nimic)
@@ -653,6 +683,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
   r        record;
+  r0       record;                                   -- r7: candidatul de la selecție (înaintea lock-ului pe profil)
   v_rez    text;
   v_err    text;
   v_cnp    text[];
@@ -672,14 +703,51 @@ BEGIN
       v_garda := 'eroare_garda: ' || SQLERRM;
     END;
     v_cnp := public.fn_cont_persoana_cnp(NEW.id);
-    FOR r IN SELECT p.id, p.email, p.is_owner, p.tip_cont, p.employee_id::integer AS emp
-               FROM public.profiles p
-              WHERE p.employee_id = NEW.id
-                 OR (cardinality(v_cnp) > 0 AND p.employee_id IN (
-                      SELECT e.id FROM public.employees e
-                       WHERE e.id <> NEW.id AND public.fn_cont_persoana_cnp(e.id) && v_cnp
-                         AND e.active IS NOT TRUE AND e.termination_date IS NOT NULL AND e.termination_date <= CURRENT_DATE))
-              ORDER BY p.id LOOP
+    FOR r0 IN SELECT p.id, p.employee_id::integer AS emp
+                FROM public.profiles p
+               WHERE p.employee_id = NEW.id
+                  OR (cardinality(v_cnp) > 0 AND p.employee_id IN (
+                       SELECT e.id FROM public.employees e
+                        WHERE e.id <> NEW.id AND public.fn_cont_persoana_cnp(e.id) && v_cnp
+                          AND e.active IS NOT TRUE AND e.termination_date IS NOT NULL AND e.termination_date <= CURRENT_DATE))
+               ORDER BY p.id LOOP
+      -- r7 (P1-D, Jakarinos pe 0456f3b): candidații de mai sus vin dintr-un instantaneu NEblocat. Profilul se blochează
+      -- ÎNAINTEA deciziei (ordinea pachetului: fișa — deja ținută de UPDATE-ul HR — → persoană (advisory, garda) → profil) și
+      -- se recitește SUB lock: legătura, tipul contului, owner, restaurarea. Dacă legătura nu mai e cea de la selecție
+      -- (owner-ul a mutat contul pe altă fișă cât timp se aștepta) → abandon, doar notificare. Un tip_cont devenit
+      -- „extern” între timp e văzut tot aici (nu pe instantaneul vechi). Lock-ul rămâne până la COMMIT (sub-blocurile de
+      -- mai jos nu-l eliberează la succes); o eroare în lock e tratată ca o eroare de închidere (coadă + notificare).
+      BEGIN
+        SELECT p.id, p.email, p.is_owner, p.tip_cont, p.employee_id::integer AS emp INTO r
+          FROM public.profiles p WHERE p.id = r0.id FOR UPDATE;
+      EXCEPTION WHEN OTHERS THEN
+        v_err := SQLERRM;
+        BEGIN
+          PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, 'reincercare',
+            format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
+            CURRENT_DATE, v_err);
+          PERFORM public.fn_cont_notifica_owneri('cont_inchidere_esuata', '❌ Închiderea automată a contului a eșuat',
+            format('%s (fișa #%s %s): %s · se reîncearcă automat din coadă', r0.id, NEW.id, NEW.name, v_err),
+            '/admin?tab=managers&cont=' || r0.id::text);
+        EXCEPTION WHEN OTHERS THEN
+          RAISE WARNING 'fn_employees_ciclu_cont lock profil (%): % [%] · eroarea inițială: %', r0.id, SQLERRM, SQLSTATE, v_err;
+        END;
+        CONTINUE;
+      END;
+      IF NOT FOUND THEN
+        CONTINUE;                                     -- profilul a dispărut între timp
+      END IF;
+      IF r.emp IS DISTINCT FROM r0.emp THEN
+        BEGIN
+          PERFORM public.fn_cont_notifica_owneri('cont_inchidere_suspendata', '⏸ Contract încheiat — contul NU s-a închis automat',
+            format('%s (fișa #%s %s): legătura contului s-a schimbat în timpul procesării (era fișa #%s, acum %s) — nu s-a închis automat. Verifică din Admin → Manageri.',
+                   r.email, NEW.id, NEW.name, r0.emp, COALESCE('fișa #' || r.emp::text, 'nelegat')),
+            '/admin?tab=managers&cont=' || r.id::text);
+        EXCEPTION WHEN OTHERS THEN
+          RAISE WARNING 'fn_employees_ciclu_cont notificare (%): % [%]', r.email, SQLERRM, SQLSTATE;
+        END;
+        CONTINUE;
+      END IF;
       v_rest := CASE WHEN NOT v_plecare THEN public.fn_cont_restaurare_activa(r.id) END;
       v_motiv := CASE
         WHEN r.is_owner IS TRUE THEN NULL             -- fn_cont_inchide întoarce sarit_owner și anunță

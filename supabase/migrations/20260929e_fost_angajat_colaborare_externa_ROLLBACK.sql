@@ -6,7 +6,9 @@
 --    legăturile hr_personal_extern.fost_angajat_employee_id în claude_context, cu confirmarea lui Răzvan.
 
 DROP TRIGGER IF EXISTS trg_employees_zz_colab_ext ON public.employees;
+DROP TRIGGER IF EXISTS trg_employees_zz_colab_ext_ins ON public.employees;      -- r7
 DROP TRIGGER IF EXISTS trg_employees_colab_ext_lock ON public.employees;
+DROP TRIGGER IF EXISTS trg_employees_colab_ext_lock_ins ON public.employees;    -- r7
 DROP FUNCTION IF EXISTS public.fn_employees_colab_ext_lock();
 DROP TRIGGER IF EXISTS trg_employees_colab_ext_protectie_ins ON public.employees;
 DROP TRIGGER IF EXISTS trg_employees_colab_ext_protectie_upd ON public.employees;

@@ -289,14 +289,19 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_colab_ext_lock(integer[], text[], text[]) FROM PUBLIC, anon, authenticated, service_role;
 
+-- r7 (P1-E, Jakarinos pe 0456f3b): și la INSERT-ul unei fișe INACTIVE (fără OLD) — politica C rulează și acolo (vezi C.5).
 CREATE OR REPLACE FUNCTION public.fn_employees_colab_ext_lock()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 BEGIN
-  PERFORM public.fn_colab_ext_lock(ARRAY[NEW.id],
-                                   ARRAY[public.fn_nume_familie(OLD.name), public.fn_nume_familie(NEW.name)],
-                                   ARRAY[OLD.email, NEW.email]);
+  IF TG_OP = 'INSERT' THEN
+    PERFORM public.fn_colab_ext_lock(ARRAY[NEW.id], ARRAY[public.fn_nume_familie(NEW.name)], ARRAY[NEW.email]);
+  ELSE
+    PERFORM public.fn_colab_ext_lock(ARRAY[NEW.id],
+                                     ARRAY[public.fn_nume_familie(OLD.name), public.fn_nume_familie(NEW.name)],
+                                     ARRAY[OLD.email, NEW.email]);
+  END IF;
   RETURN NEW;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_employees_colab_ext_lock() FROM PUBLIC, anon, authenticated, service_role;
@@ -304,6 +309,9 @@ DROP TRIGGER IF EXISTS trg_employees_colab_ext_lock ON public.employees;
 CREATE TRIGGER trg_employees_colab_ext_lock BEFORE UPDATE OF active, termination_date, name, email,
     colaborare_externa_status, colaborare_externa_nota, colaborare_externa_document ON public.employees
   FOR EACH ROW EXECUTE FUNCTION public.fn_employees_colab_ext_lock();
+DROP TRIGGER IF EXISTS trg_employees_colab_ext_lock_ins ON public.employees;
+CREATE TRIGGER trg_employees_colab_ext_lock_ins BEFORE INSERT ON public.employees
+  FOR EACH ROW WHEN (NEW.active IS NOT TRUE) EXECUTE FUNCTION public.fn_employees_colab_ext_lock();
 
 -- Protecție: politicile INSERT/UPDATE de pe tabelă permit ORICĂRUI logat să scrie → poarta e aici.
 --   (1) legarea / dezlegarea: doar owner / HR; ținta = fost angajat; dezlegarea face colaborarea inactivă;
@@ -395,25 +403,37 @@ CREATE TRIGGER trg_hr_personal_extern_fost_angajat BEFORE INSERT OR UPDATE ON pu
   FOR EACH ROW EXECUTE FUNCTION public.fn_hr_personal_extern_fost_angajat();
 
 -- C.5 Sincronizarea: jurnal + dezactivarea externului (activarea NU se face niciodată automat)
+-- r7 (P1-E, Jakarinos pe 0456f3b): regula emailului EXACT (E-LIFECYCLE-2B) se aplica doar la trecerea activ → inactiv; HR
+-- putea apoi schimba emailul unei fișe deja INACTIVE (sau insera o fișă direct inactivă) pe emailul unui extern nelegat activ —
+-- triggerul AFTER nu rula, externul rămânea activ cu emailul exact al fișei inactive. Acum politica rulează și:
+--   * la INSERT-ul unei fișe inactive (trigger AFTER INSERT separat, fără OLD) — politica întreagă (email ⇒ dezactivare,
+--     nume ⇒ notificare), ca la o plecare;
+--   * la schimbarea emailului unei fișe care rămâne inactivă — DOAR regula emailului exact (numele nu s-a schimbat).
+-- Serializarea e comună: trg_employees_colab_ext_lock (UPDATE OF email) / trg_employees_colab_ext_lock_ins (INSERT inactiv)
+-- iau cheile nume / email ÎNAINTEA citirii, aceleași pe care le ia triggerul externului.
 CREATE OR REPLACE FUNCTION public.fn_employees_colab_ext_after()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
 DECLARE
-  v_reset boolean := (OLD.active IS NOT TRUE AND NEW.active IS TRUE)
-                     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS DISTINCT FROM OLD.termination_date);
+  v_ins   boolean := TG_OP = 'INSERT';
+  v_reset boolean := NOT v_ins AND ((OLD.active IS NOT TRUE AND NEW.active IS TRUE)
+                     OR (OLD.termination_date IS NOT NULL AND NEW.termination_date IS DISTINCT FROM OLD.termination_date));
   -- r4 (varianta C) + r5 (varianta A, decizia lui Răzvan, E-LIFECYCLE-2): politica C se aplică din momentul în care fișa
   -- trece din activă în inactivă, INDIFERENT de termination_date (și o dată de încetare viitoare: la scadență nu mai vine
-  -- niciun UPDATE, deci verificarea se face anticipat, la programare).
-  v_devine_fost boolean := OLD.active IS TRUE AND NEW.active IS NOT TRUE;
+  -- niciun UPDATE, deci verificarea se face anticipat, la programare). r7: și la INSERT-ul unei fișe inactive.
+  v_devine_fost boolean := (v_ins AND NEW.active IS NOT TRUE) OR (NOT v_ins AND OLD.active IS TRUE AND NEW.active IS NOT TRUE);
+  -- r7 (P1-E): emailul unei fișe inactive schimbat ⇒ doar regula emailului exact
+  v_email_nou boolean := NOT v_ins AND NEW.active IS NOT TRUE AND OLD.active IS NOT TRUE
+                         AND lower(btrim(COALESCE(NEW.email, ''))) IS DISTINCT FROM lower(btrim(COALESCE(OLD.email, '')));
   v_em    text := lower(btrim(COALESCE(NEW.email, '')));
   v_cuv   text[] := public.fn_nume_cuvinte(NEW.name);
   v_fam   text := public.fn_nume_familie(NEW.name);
   x       record;
 BEGIN
-  IF OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
+  IF NOT v_ins AND (OLD.colaborare_externa_status   IS DISTINCT FROM NEW.colaborare_externa_status
      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
-     OR OLD.colaborare_externa_document IS DISTINCT FROM NEW.colaborare_externa_document THEN
+     OR OLD.colaborare_externa_document IS DISTINCT FROM NEW.colaborare_externa_document) THEN
     INSERT INTO public.hr_colaborare_externa_jurnal (employee_id, status_vechi, status_nou, nota, document, facut_de,
                                                      facut_de_identitate, sursa)
     VALUES (NEW.id, OLD.colaborare_externa_status, NEW.colaborare_externa_status,
@@ -427,23 +447,24 @@ BEGIN
             NEW.colaborare_externa_document, public.fn_identitate_om(), public.fn_identitate_eticheta(),
             CASE WHEN v_reset THEN 'reset_automat' ELSE 'manual' END);
   END IF;
-  IF (OLD.colaborare_externa_status = 'accepta' AND NEW.colaborare_externa_status IS DISTINCT FROM 'accepta')
-     OR (OLD.active IS NOT TRUE AND NEW.active IS TRUE) THEN
+  IF NOT v_ins AND ((OLD.colaborare_externa_status = 'accepta' AND NEW.colaborare_externa_status IS DISTINCT FROM 'accepta')
+     OR (OLD.active IS NOT TRUE AND NEW.active IS TRUE)) THEN
     UPDATE public.hr_personal_extern SET activ = false, updated_at = now()
      WHERE fost_angajat_employee_id = NEW.id AND activ;
   END IF;
   -- r4 (E-LIFECYCLE, varianta C): externii ACTIVI NELEGAȚI care existau deja cu identitatea omului care tocmai a fost
-  -- dezactivat (r5: la dezactivare, chiar dacă data încetării e în viitor).
+  -- dezactivat (r5: la dezactivare, chiar dacă data încetării e în viitor; r7: și la INSERT inactiv / email schimbat pe o
+  -- fișă inactivă — atunci doar pe email).
   --   * email identic  → dezactivare automată (direcția sigură; activarea o face din nou un om) + notificare owner;
   --   * doar pe nume   → notificare owner, FĂRĂ dezactivare (poate fi altă persoană cu același nume).
-  -- Lock-urile advisory pe identitate sunt deja ținute (trg_employees_colab_ext_lock) ⇒ fără cursă cu un extern nou.
-  IF v_devine_fost THEN
+  -- Lock-urile advisory pe identitate sunt deja ținute (trg_employees_colab_ext_lock / _ins) ⇒ fără cursă cu un extern nou.
+  IF v_devine_fost OR v_email_nou THEN
     FOR x IN
       SELECT h.id, h.nume, (v_em <> '' AND lower(btrim(COALESCE(h.email, ''))) = v_em) AS pe_email
         FROM public.hr_personal_extern h
        WHERE h.fost_angajat_employee_id IS NULL AND h.activ IS TRUE
          AND ((v_em <> '' AND lower(btrim(COALESCE(h.email, ''))) = v_em)
-              OR (cardinality(v_cuv) >= 2 AND cardinality(public.fn_nume_cuvinte(h.nume)) >= 2 AND v_fam = ANY (public.fn_nume_cuvinte(h.nume))
+              OR (v_devine_fost AND cardinality(v_cuv) >= 2 AND cardinality(public.fn_nume_cuvinte(h.nume)) >= 2 AND v_fam = ANY (public.fn_nume_cuvinte(h.nume))
                   AND (public.fn_nume_cuvinte(h.nume) <@ v_cuv OR v_cuv <@ public.fn_nume_cuvinte(h.nume))))
        ORDER BY h.id
     LOOP
@@ -470,7 +491,13 @@ CREATE TRIGGER trg_employees_zz_colab_ext AFTER UPDATE ON public.employees FOR E
      OR OLD.colaborare_externa_nota     IS DISTINCT FROM NEW.colaborare_externa_nota
      OR OLD.colaborare_externa_document IS DISTINCT FROM NEW.colaborare_externa_document
      OR OLD.active IS DISTINCT FROM NEW.active
-     OR OLD.termination_date IS DISTINCT FROM NEW.termination_date)
+     OR OLD.termination_date IS DISTINCT FROM NEW.termination_date
+     OR OLD.email IS DISTINCT FROM NEW.email)                    -- r7 (P1-E): emailul unei fișe inactive
+  EXECUTE FUNCTION public.fn_employees_colab_ext_after();
+-- r7 (P1-E): o fișă inserată direct INACTIVĂ e tratată ca o plecare (politica C), fără OLD.
+DROP TRIGGER IF EXISTS trg_employees_zz_colab_ext_ins ON public.employees;
+CREATE TRIGGER trg_employees_zz_colab_ext_ins AFTER INSERT ON public.employees FOR EACH ROW
+  WHEN (NEW.active IS NOT TRUE)
   EXECUTE FUNCTION public.fn_employees_colab_ext_after();
 
 -- C.6 Funcțiile apelabile din UI (poartă: owner sau can_modify_employees, în cod) ----
@@ -603,7 +630,7 @@ BEGIN
       OR has_table_privilege('anon', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: tabele fără RLS sau cu drepturi pentru anon: %', v_lipsa; END IF;
   -- triggerele cerute există și sunt active
-  SELECT array_agg(t.r || '.' || t.n) INTO v_lipsa FROM (VALUES ('employees','trg_employees_colab_ext_lock'),('employees','trg_employees_colab_ext_protectie_ins'),('employees','trg_employees_colab_ext_protectie_upd'),('employees','trg_employees_zz_colab_ext'),('hr_colaborare_externa_jurnal','trg_hr_colab_ext_jurnal_imuabil'),('hr_personal_extern','trg_hr_personal_extern_fost_angajat')) AS t(r, n)
+  SELECT array_agg(t.r || '.' || t.n) INTO v_lipsa FROM (VALUES ('employees','trg_employees_colab_ext_lock'),('employees','trg_employees_colab_ext_lock_ins'),('employees','trg_employees_colab_ext_protectie_ins'),('employees','trg_employees_colab_ext_protectie_upd'),('employees','trg_employees_zz_colab_ext'),('employees','trg_employees_zz_colab_ext_ins'),('hr_colaborare_externa_jurnal','trg_hr_colab_ext_jurnal_imuabil'),('hr_personal_extern','trg_hr_personal_extern_fost_angajat')) AS t(r, n)
    WHERE NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = to_regclass('public.' || t.r) AND g.tgname = t.n AND g.tgenabled <> 'D');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: triggere lipsă/dezactivate: %', v_lipsa; END IF;
   v_n := 0;
