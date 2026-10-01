@@ -1,3 +1,13 @@
+-- ⚠ APLICAT PE LIVE 30.09.2026 (apply_migration MCP, înainte de regula runner-ului): schema_migrations.version =
+--   '20260930191935', name = 'ctc_carti_tehnice_f1' (conținut identic, fără comentarii). Verificat read-only 01.10.2026:
+--   4 tabele + view + bucket ctc-documente + 4 policies storage + 16 policies public; seed 1 template / 58 poziții.
+--   NU se relivrează (nici prin scripts/livrare_migrare.sh): fișierul rămâne doar ca sursă de adevăr în repo.
+--   Garda de mai jos face orice rulare accidentală (psql -f / MCP) să eșueze fail-closed.
+DO $deja_aplicat$
+BEGIN
+  RAISE EXCEPTION '20260930h_ctc_carti_tehnice_f1: deja aplicat pe live (20260930191935) — nu se rulează din nou';
+END $deja_aplicat$;
+
 -- [CTC] F1 — Cărți Tehnice ale Construcției (spec: claude_docs.spec_modul_ctc_carti_tehnice, claude_context #653).
 -- Decizii Răzvan 30.09.2026: Q1 A+C (schelet Transgaz generic acum, pozițiile reale extrase ulterior din cărțile
 -- de pe NAS) · Q2 B (O SINGURĂ carte pe proiect) · Q3 B (poziție atașabilă din arhiva comenzilor furnizor, prin
