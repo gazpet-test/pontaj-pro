@@ -98,6 +98,15 @@ Migrarea forward NU se rulează așa: ea trece doar prin `scripts/livrare_migrar
 
 O armare din altă tranzacție (SET de sesiune, `set_config(…, false)`, o tranzacție eșuată, o conexiune refolosită) are alt txid și e refuzată. Armarea persistentă (`ALTER DATABASE/ROLE … SET`) e refuzată. Fiecare fișier verifică înainte de COMMIT că starea rezultată e exact cea țintă; altfel se anulează tot. Detalii: `docs/SECURITATE_PATCH_OFERTARE.md` §7 și §11.
 
+## 20261006b — IBAN garanții (`20261006b_sec_garantii_iban_ROLLBACK.sql`, NEAPLICAT)
+Readuce starea live din 01.10 (SELECT pe tot tabelul `garantii`, view/RPC cu `g.iban` direct, fără `fn_garantie_iban`) și **redeschide expunerea IBAN**. Fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261006b', 'REDESCHIDE_IBAN_GARANTII:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Testat în `scripts/test_sec_garantii_iban.sh` pasul 5.
 ## 20261005b — RLS garanții (`20261005b_rls_garantii_scriere_ROLLBACK.sql`)
 Redeschide scrierea pentru orice cont logat pe `garantii`, `gbe_polite`, `gbe_restituiri`, `contracte_terti` (politicile din 01.10) și șterge `fn_poate_scrie_garantii()`. Același statut: fără GO de execuție.
 ```sql
