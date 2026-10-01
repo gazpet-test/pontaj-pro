@@ -1,8 +1,14 @@
 # retea-mon — sonda de rețea pe Terra
 
-Sondează dispozitivele din rețea (ping + temperaturi QNAP prin SSH) și trimite un lot de citiri la
+Sondează dispozitivele din rețea (ping + date QNAP prin SSH) și trimite un lot de citiri la
 edge function `iot-retea`, care le scrie pe dispozitivele `sursa='retea'` din `iot_dispozitive`.
-Apare în ERP la Clădire → „🌐 Rețea & Servere".
+Apare în ERP la Clădire → „🌐 Rețea & Servere" (majoritatea dispozitivelor) și „🗄️ Server QNAP"
+(card dedicat, ca la Terra).
+
+QNAP (tip `qnap`): temperatură CPU + temperatură maximă disc (`getsysinfo`), plus disc % ocupat
+pe volumul principal, RAM % ocupat și starea RAID (`df`/`free`/`/proc/mdstat` prin SSH — un singur
+SSH suplimentar pentru toate trei). Uptime-ul NU e colectat (formatul `uptime` variază prea mult
+ca să fie parsat sigur în POSIX sh).
 
 ## Fișiere (pe Terra, toate ale userului uid 0)
 - `/root/retea-mon/sonda.sh` (700) — scriptul.
