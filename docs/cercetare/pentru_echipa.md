@@ -26,7 +26,7 @@ EN 13067, EN 1555, EN 12954 sunt voluntare, cu excepția cazului în care le cer
 **Întrebare:** e corectă distincția? Ce ediție se aplică legal când NTPEE citează o ediție mai veche decât cea curentă (ex. 15609-1:2005 vs :2020)?
 
 ## Q5. HG 1/2018 cl. 48.2 vs Legea 98/2016 art. 222^2
-**Constatare:** L98 art. 222^2 alin. (9) (introdus prin Legea 208/2022, modificat prin OUG 52/2024) obligă AC să includă clauze de ajustare a prețului la contractele de lucrări cu durată mai mare de 6 luni. Modelul HG 1/2018 cl. 48.2 tratează prețurile ca ferme timp de 365 de zile. Concluzie: la un contract de 6–12 luni, clauza-model contravine legii, deci e o sursă de clarificare. În plus, indicele ICCplr nu se mai publică din 03.2022 (BO2023_406), iar o formulă din documentație bazată pe el e inaplicabilă.
+**Constatare:** L98 art. 222^2 alin. (9) (introdus prin Legea 208/2022, modificat prin OUG 52/2024) obligă AC să includă clauze de ajustare a prețului la contractele de lucrări cu durată mai mare de 6 luni. Modelul HG 1/2018 cl. 48.2 tratează prețurile ca ferme timp de 365 de zile. Concluzie: la un contract de 6–12 luni, clauza-model contravine legii, deci e o sursă de clarificare. În plus, ICCplr e un indice prognozat din Anexa 4 a OUG 64/2022, nepublicat de INS (răspunsul INS citat în BO2023_406); CNSC a anulat procedura pentru că formula OUG 64/2022 e destinată contractelor în derulare.
 **Întrebare:** confirmați ierarhia (legea prevalează asupra modelului HG) și formularea unei clarificări neutre?
 
 ## Q6. Legea 169/2026 (Codul amenajării teritoriului, urbanismului și construcțiilor): tranziția
