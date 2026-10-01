@@ -32,6 +32,31 @@
 -- session_user = login-ul conexiunii (nu se schimbă în SECURITY DEFINER / SET ROLE); current_user într-o funcție
 -- SECURITY DEFINER e proprietarul funcției, NU apelantul → nu se folosește pentru decizii.
 -- Triggerul S-A rămâne neatins (trecerea lui pe aceste funcții = GO separat).
+-- ── Garda de livrare (start): DOAR prin scripts/livrare_migrare.sh (psql --single-transaction, marcaj legat de txid).
+--    Fișierul NU conține BEGIN/COMMIT; psql -f simplu, apply_migration / execute_sql MCP nu îl pot aplica.
+DO $livrare_start$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260929c_conturi_legare_automata:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260929c: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  END IF;
+END $livrare_start$;
+
+-- ── Precondiții fail-closed (adăugate 01.10.2026 pentru runner) ──────────────────────────
+DO $pre_livrare$
+DECLARE v_lipsa text[];
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Precondiție: migrarea rulează ca postgres (current_user = %)', current_user;
+  END IF;
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY[]::text[]) f
+   WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Precondiție: lipsesc funcțiile migrării anterioare: %', v_lipsa; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.profiles'::regclass AND tgname = 'trg_profiles_campuri_owner_only' AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Precondiție: S-A (trg_profiles_campuri_owner_only pe profiles) nu e live — se reanalizează';
+  END IF;
+  IF to_regprocedure('extensions.unaccent(text)') IS NULL THEN RAISE EXCEPTION 'Precondiție: extensions.unaccent(text) lipsește'; END IF;
+END $pre_livrare$;
+
 CREATE OR REPLACE FUNCTION public.fn_identitate_claims(OUT rol text, OUT sub text)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
@@ -605,3 +630,33 @@ REVOKE ALL ON public.v_admin_conturi_alerte FROM PUBLIC, anon, authenticated, se
 GRANT SELECT ON public.v_admin_conturi_alerte TO authenticated;
 COMMENT ON VIEW public.v_admin_conturi_alerte IS
   'Alerte de administrare „Conturi platformă” (doar owner; poarta e în fn_admin_conturi_alerte). Numai citire.';
+
+-- ── Postcondiții (adăugate 01.10.2026 pentru runner) — orice abatere anulează tot ──────────
+DO $post_livrare$
+DECLARE v_n integer; v_lipsa text[];
+BEGIN
+  -- funcțiile migrării există; cele SECURITY DEFINER au search_path fixat; niciuna executabilă de anon (excepții explicite)
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) f
+   WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
+  SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) AND p.prosecdef
+     AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
+  SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[])
+     AND p.proname <> ALL(ARRAY[]::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
+  -- triggerele cerute există și sunt active
+  SELECT array_agg(t.r || '.' || t.n) INTO v_lipsa FROM (VALUES ('profiles','trg_profiles_protectie_legatura'),('profiles','trg_profiles_campuri_owner_only')) AS t(r, n)
+   WHERE NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = to_regclass('public.' || t.r) AND g.tgname = t.n AND g.tgenabled <> 'D');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: triggere lipsă/dezactivate: %', v_lipsa; END IF;
+  v_n := 0;
+END $post_livrare$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260929c_conturi_legare_automata:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260929c: garda de livrare (final) — marcajul s-a pierdut în timpul migrării; se anulează tot';
+  END IF;
+END $livrare_final$;

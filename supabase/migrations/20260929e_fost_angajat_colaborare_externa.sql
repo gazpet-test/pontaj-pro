@@ -26,6 +26,28 @@
 -- ============================================================================
 
 -- C.1 Coloane noi pe employees ----------------------------------------------------
+-- ── Garda de livrare (start): DOAR prin scripts/livrare_migrare.sh (psql --single-transaction, marcaj legat de txid).
+--    Fișierul NU conține BEGIN/COMMIT; psql -f simplu, apply_migration / execute_sql MCP nu îl pot aplica.
+DO $livrare_start$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260929e_fost_angajat_colaborare_externa:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260929e: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  END IF;
+END $livrare_start$;
+
+-- ── Precondiții fail-closed (adăugate 01.10.2026 pentru runner) ──────────────────────────
+DO $pre_livrare$
+DECLARE v_lipsa text[];
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Precondiție: migrarea rulează ca postgres (current_user = %)', current_user;
+  END IF;
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_identitate_om','fn_identitate_eticheta']::text[]) f
+   WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Precondiție: lipsesc funcțiile migrării anterioare: %', v_lipsa; END IF;
+  IF to_regclass('public.hr_personal_extern') IS NULL THEN RAISE EXCEPTION 'Precondiție: public.hr_personal_extern lipsește'; END IF;
+END $pre_livrare$;
+
 ALTER TABLE public.employees
   ADD COLUMN IF NOT EXISTS colaborare_externa_status text NOT NULL DEFAULT 'necunoscut',
   ADD COLUMN IF NOT EXISTS colaborare_externa_confirmat_de uuid,          -- fără FK: nu blocăm ștergerea unui cont
@@ -427,3 +449,39 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_fost_angajat_leaga_extern(integer, bigint) TO authenticated;
+
+-- ── Postcondiții (adăugate 01.10.2026 pentru runner) — orice abatere anulează tot ──────────
+DO $post_livrare$
+DECLARE v_n integer; v_lipsa text[];
+BEGIN
+  -- funcțiile migrării există; cele SECURITY DEFINER au search_path fixat; niciuna executabilă de anon (excepții explicite)
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[]) f
+   WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
+  SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[]) AND p.prosecdef
+     AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
+  SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[])
+     AND p.proname <> ALL(ARRAY[]::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
+  -- tabelele noi: RLS activ, anon fără niciun drept
+  SELECT array_agg(t) INTO v_lipsa FROM unnest(ARRAY['hr_colaborare_externa_jurnal']::text[]) t
+   WHERE to_regclass('public.' || t) IS NULL
+      OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public.' || t))
+      OR has_table_privilege('anon', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: tabele fără RLS sau cu drepturi pentru anon: %', v_lipsa; END IF;
+  -- triggerele cerute există și sunt active
+  SELECT array_agg(t.r || '.' || t.n) INTO v_lipsa FROM (VALUES ('employees','trg_employees_colab_ext_protectie_ins'),('employees','trg_employees_colab_ext_protectie_upd'),('employees','trg_employees_zz_colab_ext'),('hr_colaborare_externa_jurnal','trg_hr_colab_ext_jurnal_imuabil'),('hr_personal_extern','trg_hr_personal_extern_fost_angajat')) AS t(r, n)
+   WHERE NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = to_regclass('public.' || t.r) AND g.tgname = t.n AND g.tgenabled <> 'D');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: triggere lipsă/dezactivate: %', v_lipsa; END IF;
+  v_n := 0;
+END $post_livrare$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260929e_fost_angajat_colaborare_externa:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260929e: garda de livrare (final) — marcajul s-a pierdut în timpul migrării; se anulează tot';
+  END IF;
+END $livrare_final$;

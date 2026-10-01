@@ -239,11 +239,13 @@ SELECT teste.assert((SELECT NOT active FROM public.employees WHERE id = :emp_cro
 -- ---------------------------------------------------------------- BAZĂ: precondiția live S-A (20260929g)
 -- md5 canonic al variantei LIVE (2 coloane) = c06d7ce0…; rularea de verificare cu S-A EXTINS (20260930a, NEAPLICAT în
 -- producție, pus ca a doua precondiție doar din scratchpad) are f4871f5a… — ambele sunt acceptate, variantă afișată.
+-- 01.10.2026: producția are acum varianta SEC F2 r4 (20260930j, live 01.10) — md5 9acc36a4… (citit read-only de pe live).
 SELECT CASE md5(prosrc) WHEN 'c06d7ce0f212c7bba2093c50614a88fc' THEN 'live_20260929g'
+                        WHEN '9acc36a4067eddbdf29956220023ea92' THEN 'live_f2_20260930j'
                         WHEN 'f4871f5a99d6d880cc62a80c3fe65c01' THEN 'extins_20260930a' END AS sa_varianta
   FROM pg_proc WHERE oid = 'public.fn_profiles_campuri_owner_only()'::regprocedure \gset
 \echo '   S-A varianta:' :sa_varianta
-SELECT teste.assert(:'sa_varianta' IN ('live_20260929g', 'extins_20260930a')
+SELECT teste.assert(:'sa_varianta' IN ('live_20260929g', 'live_f2_20260930j', 'extins_20260930a')
     AND (SELECT tgenabled = 'O' FROM pg_trigger WHERE tgname = 'trg_profiles_campuri_owner_only' AND tgrelid = 'public.profiles'::regclass),
   'SA-01 S-A: trg_profiles_campuri_owner_only activ, md5(prosrc) = c06d7ce0f212c7bba2093c50614a88fc (= producția) sau varianta extinsă verificată');
 -- decizia unui UPDATE făcut printr-un RPC SECURITY DEFINER (ajunge la rând ocolind RLS): 'trece' sau SQLSTATE;

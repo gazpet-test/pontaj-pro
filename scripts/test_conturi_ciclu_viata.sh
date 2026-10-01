@@ -84,7 +84,8 @@ if [ ! -f "$DATE_DIR/PG_VERSION" ]; then
   ca_postgres "$PG_BIN/initdb" -D "$DATE_DIR" -U postgres --auth=trust --encoding=UTF8 \
     --locale-provider=icu --icu-locale=en-US --locale=C.UTF-8 >/dev/null || mediu "initdb a eșuat"
 fi
-[ "$(cat "$DATE_DIR/PG_VERSION")" = 16 ] || mediu "$DATE_DIR nu este un cluster PostgreSQL 16"
+PGVER_TEST="${PGVER_TEST:-16}"; [[ "$PGVER_TEST" =~ ^1[67]$ ]] || mediu "PGVER_TEST: doar 16 sau 17"
+[ "$(cat "$DATE_DIR/PG_VERSION")" = "$PGVER_TEST" ] || mediu "$DATE_DIR nu este un cluster PostgreSQL $PGVER_TEST"
 
 if ! "$PG_BIN/pg_isready" -q -h 127.0.0.1 -p "$PORT" -t 2; then
   echo "→ pornesc PostgreSQL pe 127.0.0.1:$PORT ($DATE_DIR, jurnal $JURNAL_PG)"
@@ -97,7 +98,7 @@ fi
 DIR_SERVER="$("${PSQL[@]}" -d postgres -Atc 'SHOW data_directory')" || mediu "nu mă pot conecta la 127.0.0.1:$PORT"
 [ "$(realpath "$DIR_SERVER")" = "$(realpath "$DATE_DIR")" ] || mediu "pe portul $PORT rulează alt cluster ($DIR_SERVER), nu $DATE_DIR"
 VER="$("${PSQL[@]}" -d postgres -Atc 'SHOW server_version_num')"
-[ "${VER:0:2}" = 16 ] || mediu "server_version_num=$VER, se cere 16"
+[ "${VER:0:2}" = "$PGVER_TEST" ] || mediu "server_version_num=$VER, se cere $PGVER_TEST"
 
 # --- 2. bază nouă + schelet ----------------------------------------------------
 echo "→ recreez baza $BAZA"
@@ -129,6 +130,10 @@ aplica_fisier() {  # ca apply_migration: o singură tranzacție, cu excepția fi
   local f; f="$(cale_abs "$1")"
   local opt=(--single-transaction)
   grep -qiE '^[[:space:]]*(BEGIN|COMMIT)[[:space:]]*;' "$f" && opt=()
+  # 01.10.2026: migrările cu garda runner-ului cer marcajul scripts/livrare_migrare.sh în aceeași tranzacție (simulat local)
+  if grep -q "gazpet.livrare_migrare" "$f"; then
+    opt=(--single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$(basename "$f" .sql):' || txid_current(), true)")
+  fi
   echo "→ aplic ${f#$RADACINA/}"
   "${PSQL[@]}" -d "$BAZA" ${opt[@]+"${opt[@]}"} -f "$f" || esec "migrarea ${f#$RADACINA/} a eșuat"
 }

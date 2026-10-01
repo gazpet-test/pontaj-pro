@@ -34,6 +34,31 @@
 -- ============================================================================
 
 -- B.2 Jurnalul append-only -------------------------------------------------------
+-- ── Garda de livrare (start): DOAR prin scripts/livrare_migrare.sh (psql --single-transaction, marcaj legat de txid).
+--    Fișierul NU conține BEGIN/COMMIT; psql -f simplu, apply_migration / execute_sql MCP nu îl pot aplica.
+DO $livrare_start$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260929d_conturi_inchidere_la_incetare:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260929d: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  END IF;
+END $livrare_start$;
+
+-- ── Precondiții fail-closed (adăugate 01.10.2026 pentru runner) ──────────────────────────
+DO $pre_livrare$
+DECLARE v_lipsa text[];
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Precondiție: migrarea rulează ca postgres (current_user = %)', current_user;
+  END IF;
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_identitate_om','fn_identitate_privilegiata','fn_nume_familie','fn_cont_notifica_owneri']::text[]) f
+   WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Precondiție: lipsesc funcțiile migrării anterioare: %', v_lipsa; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.profiles'::regclass AND tgname = 'trg_profiles_campuri_owner_only' AND NOT tgisinternal) THEN
+    RAISE EXCEPTION 'Precondiție: S-A (trg_profiles_campuri_owner_only pe profiles) nu e live — se reanalizează';
+  END IF;
+  IF to_regclass('public.hr_employees_private') IS NULL THEN RAISE EXCEPTION 'Precondiție: public.hr_employees_private lipsește'; END IF;
+END $pre_livrare$;
+
 CREATE TABLE IF NOT EXISTS public.conturi_inchideri_jurnal (
   id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   profile_id      uuid NOT NULL,          -- fără FK: jurnalul supraviețuiește ștergerii contului
@@ -1222,3 +1247,47 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_admin_conturi_alerte() FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_admin_conturi_alerte() TO authenticated;
+
+-- ── Postcondiții (adăugate 01.10.2026 pentru runner) — orice abatere anulează tot ──────────
+DO $post_livrare$
+DECLARE v_n integer; v_lipsa text[];
+BEGIN
+  -- funcțiile migrării există; cele SECURITY DEFINER au search_path fixat; niciuna executabilă de anon (excepții explicite)
+  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_alt_contract_activ','fn_cont_cnp_normalizat','fn_cont_coada_pune','fn_cont_flaguri','fn_cont_garda_persoana','fn_cont_inchide','fn_cont_inchide_owner','fn_cont_lock_chei','fn_cont_lock_persoana','fn_cont_motiv_garda','fn_cont_persoana_chei','fn_cont_persoana_cnp','fn_cont_posibil_aceeasi_persoana','fn_cont_restaurare_activa','fn_cont_restaureaza','fn_cont_revocat_nu_scrie','fn_cont_stare_angajati','fn_conturi_inchideri_append_only','fn_conturi_inchideri_sweep','fn_employees_ciclu_cont','fn_employees_persoana_lock','fn_hr_employees_private_persoana_lock','fn_pgrst_pre_request']::text[]) f
+   WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
+  SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_alt_contract_activ','fn_cont_cnp_normalizat','fn_cont_coada_pune','fn_cont_flaguri','fn_cont_garda_persoana','fn_cont_inchide','fn_cont_inchide_owner','fn_cont_lock_chei','fn_cont_lock_persoana','fn_cont_motiv_garda','fn_cont_persoana_chei','fn_cont_persoana_cnp','fn_cont_posibil_aceeasi_persoana','fn_cont_restaurare_activa','fn_cont_restaureaza','fn_cont_revocat_nu_scrie','fn_cont_stare_angajati','fn_conturi_inchideri_append_only','fn_conturi_inchideri_sweep','fn_employees_ciclu_cont','fn_employees_persoana_lock','fn_hr_employees_private_persoana_lock','fn_pgrst_pre_request']::text[]) AND p.prosecdef
+     AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
+  SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_alt_contract_activ','fn_cont_cnp_normalizat','fn_cont_coada_pune','fn_cont_flaguri','fn_cont_garda_persoana','fn_cont_inchide','fn_cont_inchide_owner','fn_cont_lock_chei','fn_cont_lock_persoana','fn_cont_motiv_garda','fn_cont_persoana_chei','fn_cont_persoana_cnp','fn_cont_posibil_aceeasi_persoana','fn_cont_restaurare_activa','fn_cont_restaureaza','fn_cont_revocat_nu_scrie','fn_cont_stare_angajati','fn_conturi_inchideri_append_only','fn_conturi_inchideri_sweep','fn_employees_ciclu_cont','fn_employees_persoana_lock','fn_hr_employees_private_persoana_lock','fn_pgrst_pre_request']::text[])
+     AND p.proname <> ALL(ARRAY['fn_pgrst_pre_request']::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
+  -- tabelele noi: RLS activ, anon fără niciun drept
+  SELECT array_agg(t) INTO v_lipsa FROM unnest(ARRAY['conturi_inchideri_jurnal','conturi_inchideri_coada']::text[]) t
+   WHERE to_regclass('public.' || t) IS NULL
+      OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public.' || t))
+      OR has_table_privilege('anon', 'public.' || t, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: tabele fără RLS sau cu drepturi pentru anon: %', v_lipsa; END IF;
+  -- triggerele cerute există și sunt active
+  SELECT array_agg(t.r || '.' || t.n) INTO v_lipsa FROM (VALUES ('conturi_inchideri_jurnal','trg_conturi_inchideri_append_only'),('conturi_inchideri_jurnal','trg_conturi_inchideri_fara_truncate'),('employees','trg_employees_persoana_lock'),('employees','trg_employees_00_cont_revocat'),('employees','trg_employees_zz_ciclu_cont'),('hr_employees_private','trg_hr_employees_private_persoana_lock'),('hr_employees_private','trg_hr_employees_private_00_cont_revocat')) AS t(r, n)
+   WHERE NOT EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = to_regclass('public.' || t.r) AND g.tgname = t.n AND g.tgenabled <> 'D');
+  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: triggere lipsă/dezactivate: %', v_lipsa; END IF;
+  -- hook-ul pre-request e CREAT, dar NU activat (activarea = ALTER ROLE authenticator, acord separat al lui Răzvan)
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE c LIKE 'pgrst.db_pre_request=%') THEN
+    RAISE EXCEPTION 'Postcondiție: pgrst.db_pre_request e setat — migrarea nu are voie să activeze hook-ul';
+  END IF;
+  IF to_regnamespace('cron') IS NOT NULL AND to_regprocedure('cron.schedule(text,text,text)') IS NOT NULL THEN
+    EXECUTE 'SELECT count(*) FROM cron.job WHERE jobname = ''conturi_inchideri_coada''' INTO v_n;
+    IF v_n IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'Postcondiție: jobul cron conturi_inchideri_coada lipsește (% joburi)', v_n; END IF;
+  END IF;
+  v_n := 0;
+END $post_livrare$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20260929d_conturi_inchidere_la_incetare:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20260929d: garda de livrare (final) — marcajul s-a pierdut în timpul migrării; se anulează tot';
+  END IF;
+END $livrare_final$;
