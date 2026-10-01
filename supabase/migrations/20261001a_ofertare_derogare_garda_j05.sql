@@ -26,6 +26,12 @@
 --     authenticated, PUBLIC pe gardă și pe funcțiile de trigger ale porții);
 --   • NICIO listă albă nu se actualizează automat după apply.
 --
+-- Rebazare 01.10 (după F1, F2, #537, #552, #558 și J02b r6 = v20261001140000, toate aplicate live): amprentele
+--   s-au recitit read-only din live. Diferențe față de 30.09: fn_gate_depunere md5(prosrc) 4bddf68c… → 04102c5e…
+--   (J02b r6: comutator j02b_activ + confirmare umană „nu se aplică”; ramurile de derogare și auditul neschimbate) și
+--   două triggere J02b noi pe ofertare_licitatii (trg_ofertare_j02b_sens_unic, trg_ofertare_responsabil_setat_de,
+--   BEFORE INSERT OR UPDATE, type=23). Garda rămâne PRIMA (a00_ofertare_derogare_garda_j05 < a00_… < trg_…, ordine C).
+--   Restul amprentelor (RPC, a00, acces, owner, imuabil, CHECK, coloane) = neschimbate. Detalii: J05_DELTA_COPILOT.md.
 -- Ce NU face (docs/AUDIT_OFERTARE_V2/J05_GARDA_PATCH.md): nu atinge date, poarta, RPC-ul, auditul;
 -- GOL: retragerea / schimbarea motivului de către OWNER prin UPDATE direct nu lasă audit; INSERT neacoperit;
 -- înghețul e legat de status='depusa'.
@@ -58,7 +64,7 @@ DECLARE
   -- Aceeași interogare de amprente în migrare, în postcondiție și în rollback (harness-ul verifică identitatea textului).
   v_q CONSTANT text := $amprente$
 WITH ams(fn, sig, asteptat) AS (VALUES
-  ('gate',     'public.fn_gate_depunere()',                              'src=4bddf68cfe53107a622d210f4ef3ec51 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
+  ('gate',     'public.fn_gate_depunere()',                              'src=04102c5e44af4f5fc2062c1a58737bdd secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
   ('rpc',      'public.ofertare_derogare_depunere(bigint,text,boolean)', 'src=50656c3c958e3a822c9ea1c3f70ae7d9 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=(p_licitatie_id bigint, p_motiv text, p_acorda boolean DEFAULT true) rez=void acl={authenticated=X/postgres,postgres=X/postgres}'),
   ('a00',      'public.fn_ofertare_licitatii_scriere()',                 'src=7d7591ef2bd5143ace505b85b1010977 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
   ('acces',    'public.fn_are_acces_ofertare()',                         'src=429d28e2a61fb24c8009d67050c16c85 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=sql vol=s strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=boolean acl={authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
@@ -112,9 +118,9 @@ BEGIN
       USING ERRCODE = '55000', DETAIL = coalesce(r.fn_dif, '-');
   END IF;
   -- 2. Stare COMPLETĂ cunoscută: live (fără gardă) sau patch (reaplicare). Stările mixte se refuză.
-  IF NOT ((NOT v_garda_exista AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=')
+  IF NOT ((NOT v_garda_exista AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=;trg_ofertare_j02b_sens_unic:public.fn_ofertare_j02b_sens_unic type=23 en=O qual_null=t attr=;trg_ofertare_responsabil_setat_de:public.fn_ofertare_responsabil_setat_de type=23 en=O qual_null=t attr=')
        OR (v_garda_exista AND (r.fn_ok ->> 'garda') IS NOT DISTINCT FROM 'true'
-           AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=')) THEN
+           AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=;trg_ofertare_j02b_sens_unic:public.fn_ofertare_j02b_sens_unic type=23 en=O qual_null=t attr=;trg_ofertare_responsabil_setat_de:public.fn_ofertare_responsabil_setat_de type=23 en=O qual_null=t attr=')) THEN
     RAISE EXCEPTION 'Precondiție 20261001a: starea nu e nici live 30.09, nici patch-ul (gardă prezentă=%, triggere=%). Nu suprascriu o stare necunoscută.', v_garda_exista, coalesce(r.trg_licitatii, 'NULL')
       USING ERRCODE = '55000', DETAIL = coalesce(r.fn_dif, '-');
   END IF;
@@ -193,7 +199,7 @@ DECLARE
   -- Aceeași interogare de amprente în migrare, în postcondiție și în rollback (harness-ul verifică identitatea textului).
   v_q CONSTANT text := $amprente$
 WITH ams(fn, sig, asteptat) AS (VALUES
-  ('gate',     'public.fn_gate_depunere()',                              'src=4bddf68cfe53107a622d210f4ef3ec51 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
+  ('gate',     'public.fn_gate_depunere()',                              'src=04102c5e44af4f5fc2062c1a58737bdd secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
   ('rpc',      'public.ofertare_derogare_depunere(bigint,text,boolean)', 'src=50656c3c958e3a822c9ea1c3f70ae7d9 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=(p_licitatie_id bigint, p_motiv text, p_acorda boolean DEFAULT true) rez=void acl={authenticated=X/postgres,postgres=X/postgres}'),
   ('a00',      'public.fn_ofertare_licitatii_scriere()',                 'src=7d7591ef2bd5143ace505b85b1010977 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
   ('acces',    'public.fn_are_acces_ofertare()',                         'src=429d28e2a61fb24c8009d67050c16c85 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=sql vol=s strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=boolean acl={authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
@@ -242,7 +248,7 @@ BEGIN
   -- Postcondiție ÎNAINTE de înregistrare / COMMIT-ul runnerului: dacă pică, se anulează tot (inclusiv garda).
   IF (SELECT bool_and(v::boolean) FROM jsonb_each_text(r.fn_ok) AS e(k, v)) IS DISTINCT FROM true
      OR (SELECT count(*) FROM jsonb_object_keys(r.fn_ok)) IS DISTINCT FROM 7::bigint
-     OR r.trg_licitatii IS DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr='
+     OR r.trg_licitatii IS DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=;trg_ofertare_j02b_sens_unic:public.fn_ofertare_j02b_sens_unic type=23 en=O qual_null=t attr=;trg_ofertare_responsabil_setat_de:public.fn_ofertare_responsabil_setat_de type=23 en=O qual_null=t attr='
      OR r.trg_audit IS DISTINCT FROM 'trg_ofertare_derogari_audit_imuabil:public.fn_ofertare_derogari_audit_imuabil type=58 en=O qual_null=t attr='
      OR r.chk IS DISTINCT FROM 'c|{3}|ccb3f643d993ae9d68284aca20a58366' THEN
     RAISE EXCEPTION 'Postcondiție 20261001a: starea rezultată nu e exact patch-ul (triggere=%).', coalesce(r.trg_licitatii, 'NULL')

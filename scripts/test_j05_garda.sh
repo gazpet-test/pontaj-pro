@@ -287,7 +287,7 @@ CAZURI_PRE=(
   "ALTER FUNCTION public.fn_gate_depunere_derogare_owner() RENAME TO fn_x_j05|Precondiție 20261001a: funcțiile|funcție lipsă (amprentă NULL)"
   "CREATE FUNCTION public.fn_gate_depunere_derogare_owner(int) RETURNS boolean LANGUAGE sql AS 'SELECT true'|Precondiție 20261001a: funcțiile|supraîncărcare nouă a helperului"
   "CREATE TRIGGER zz_j05_extra BEFORE UPDATE ON public.ofertare_licitatii FOR EACH ROW EXECUTE FUNCTION public.fn_gate_depunere()|nici live 30.09, nici patch|un trigger nou"
-  "DROP TRIGGER a00_ofertare_licitatii_scriere ON public.ofertare_licitatii; DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii|nici live 30.09, nici patch|niciun trigger (amprentă NULL)"
+  "DROP TRIGGER a00_ofertare_licitatii_scriere ON public.ofertare_licitatii; DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; DROP TRIGGER trg_ofertare_j02b_sens_unic ON public.ofertare_licitatii; DROP TRIGGER trg_ofertare_responsabil_setat_de ON public.ofertare_licitatii|nici live 30.09, nici patch|niciun trigger (amprentă NULL)"
   "ALTER TABLE public.ofertare_licitatii DISABLE TRIGGER a00_ofertare_licitatii_scriere|nici live 30.09, nici patch|a00 dezactivat"
   "DROP TRIGGER trg_gate_depunere ON public.ofertare_licitatii; CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON public.ofertare_licitatii FOR EACH ROW WHEN (true) EXECUTE FUNCTION public.fn_gate_depunere()|nici live 30.09, nici patch|poarta cu clauză WHEN"
   "ALTER TABLE public.ofertare_derogari_audit DISABLE TRIGGER trg_ofertare_derogari_audit_imuabil|auditul|auditul fără append-only"

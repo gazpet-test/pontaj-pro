@@ -24,7 +24,7 @@ DO $rollback$
 DECLARE
   v_q CONSTANT text := $amprente$
 WITH ams(fn, sig, asteptat) AS (VALUES
-  ('gate',     'public.fn_gate_depunere()',                              'src=4bddf68cfe53107a622d210f4ef3ec51 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
+  ('gate',     'public.fn_gate_depunere()',                              'src=04102c5e44af4f5fc2062c1a58737bdd secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
   ('rpc',      'public.ofertare_derogare_depunere(bigint,text,boolean)', 'src=50656c3c958e3a822c9ea1c3f70ae7d9 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=(p_licitatie_id bigint, p_motiv text, p_acorda boolean DEFAULT true) rez=void acl={authenticated=X/postgres,postgres=X/postgres}'),
   ('a00',      'public.fn_ofertare_licitatii_scriere()',                 'src=7d7591ef2bd5143ace505b85b1010977 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=plpgsql vol=v strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=trigger acl={postgres=X/postgres,service_role=X/postgres}'),
   ('acces',    'public.fn_are_acces_ofertare()',                         'src=429d28e2a61fb24c8009d67050c16c85 secdef=t cfg={"search_path=public, pg_temp"} owner=postgres lang=sql vol=s strict=f leak=f par=u cost=100 rows=0 n=1 args=() rez=boolean acl={authenticated=X/postgres,postgres=X/postgres,service_role=X/postgres}'),
@@ -84,13 +84,13 @@ BEGIN
   -- 3. Precondiție: stare completă cunoscută (patch, sau live ⇒ nimic de retras).
   v_garda_exista := to_regprocedure('public.fn_ofertare_derogare_garda_j05()') IS NOT NULL;
   EXECUTE v_q INTO r;
-  IF NOT v_garda_exista AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=' THEN
+  IF NOT v_garda_exista AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=;trg_ofertare_j02b_sens_unic:public.fn_ofertare_j02b_sens_unic type=23 en=O qual_null=t attr=;trg_ofertare_responsabil_setat_de:public.fn_ofertare_responsabil_setat_de type=23 en=O qual_null=t attr=' THEN
     PERFORM set_config('gazpet.rollback_20261001a', '', false);
     RAISE NOTICE 'ROLLBACK 20261001a: starea e deja live (fără gardă); nimic de retras.';
     RETURN;
   END IF;
   IF NOT (v_garda_exista AND (r.fn_ok ->> 'garda') IS NOT DISTINCT FROM 'true'
-          AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=') THEN
+          AND r.trg_licitatii IS NOT DISTINCT FROM 'a00_ofertare_derogare_garda_j05:public.fn_ofertare_derogare_garda_j05 type=19 en=O qual_null=t attr=;a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=;trg_ofertare_j02b_sens_unic:public.fn_ofertare_j02b_sens_unic type=23 en=O qual_null=t attr=;trg_ofertare_responsabil_setat_de:public.fn_ofertare_responsabil_setat_de type=23 en=O qual_null=t attr=') THEN
     RAISE EXCEPTION 'ROLLBACK 20261001a refuzat: garda / triggerele nu sunt exact versiunea patch-ului (triggere=%). Nu retrag o versiune neauditată.', coalesce(r.trg_licitatii, 'NULL')
       USING ERRCODE = '42501', DETAIL = coalesce(r.fn_dif, '-');
   END IF;
@@ -101,7 +101,7 @@ BEGIN
   -- 4. Postcondiție înainte de COMMIT: exact starea live (funcțiile porții neatinse, triggerele live).
   EXECUTE v_q INTO r;
   IF to_regprocedure('public.fn_ofertare_derogare_garda_j05()') IS NOT NULL
-     OR r.trg_licitatii IS DISTINCT FROM 'a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr='
+     OR r.trg_licitatii IS DISTINCT FROM 'a00_ofertare_licitatii_scriere:public.fn_ofertare_licitatii_scriere type=19 en=O qual_null=t attr=;trg_gate_depunere:public.fn_gate_depunere type=23 en=O qual_null=t attr=;trg_ofertare_j02b_sens_unic:public.fn_ofertare_j02b_sens_unic type=23 en=O qual_null=t attr=;trg_ofertare_responsabil_setat_de:public.fn_ofertare_responsabil_setat_de type=23 en=O qual_null=t attr='
      OR (SELECT bool_and(v::boolean) FROM jsonb_each_text(r.fn_ok - 'garda') AS e(k, v)) IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'Postcondiție ROLLBACK 20261001a: starea rezultată nu e exact live 30.09. Nimic nu se comite.'
       USING DETAIL = coalesce(r.fn_dif, '-');

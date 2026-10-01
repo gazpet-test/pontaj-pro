@@ -532,7 +532,7 @@ Validatorul acceptă migrarea (`python3 scripts/livrare_validator.py supabase/mi
 
 ```bash
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20261001a_ofertare_derogare_garda_j05.sql \
-  --sha256 66105ecd71c7ec571e3df4825e7e0aa5fb3627e716869572972cdf750c65d6c5 \
+  --sha256 4ca385e1485914efd393c7fee1000d9f2c4de894e15d1051b12942668cd147a6 \
   --versiune <AAAALLZZHHMMSS> --tinta-db <baza> --tinta-sistem <system_identifier> \
   --tinta-host <host_scriere_aprobat> --tinta-port <port> [--tinta-proiect <marcaj>] [--user <operator>]
 ```

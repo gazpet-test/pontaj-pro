@@ -130,7 +130,7 @@ CREATE TABLE public.user_module_access (
   granted_by uuid REFERENCES public.profiles(id),
   UNIQUE (profile_id, module));
 CREATE TABLE public.contracte_terti (id bigint PRIMARY KEY);
--- ofertare_licitatii: toate cele 34 de coloane live, în ordinea live (a00 compară rândul întreg prin to_jsonb).
+-- ofertare_licitatii: toate cele 36 de coloane live (J02b r6, 01.10: + j02b_activ, responsabil_setat_de), în ordinea live (a00 compară rândul întreg prin to_jsonb).
 CREATE TABLE public.ofertare_licitatii (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   nr_anunt text NOT NULL UNIQUE,
@@ -168,7 +168,9 @@ CREATE TABLE public.ofertare_licitatii (
   derogare_depunere boolean NOT NULL DEFAULT false,
   responsabil_id uuid REFERENCES public.profiles(id),
   contract_id bigint REFERENCES public.contracte_terti(id) ON DELETE SET NULL,
-  derogare_motiv text);
+  derogare_motiv text,
+  j02b_activ boolean NOT NULL DEFAULT true,
+  responsabil_setat_de uuid);
 -- Dependențele porții (doar coloanele citite).
 CREATE TABLE public.ofertare_pt_pachet (
   id bigint PRIMARY KEY, licitatie_id bigint NOT NULL REFERENCES public.ofertare_licitatii(id),
@@ -198,6 +200,18 @@ CREATE FUNCTION public.ofertare_totaluri_control(p_licitatie_id bigint) RETURNS 
   LANGUAGE sql STABLE AS $$ SELECT '[]'::jsonb $$;
 CREATE FUNCTION public.ofertare_clasa_unitate(p_um text) RETURNS jsonb
   LANGUAGE sql IMMUTABLE AS $$ SELECT jsonb_build_object('tip', 'ok') $$;
+-- J02b r6 (live 01.10, v20261001140000): dependențele porții noi și ale triggerelor J02b.
+-- ofertare_j02b_activari: coloanele live. ofertare_cerinte_na_confirmari + fn_ofertare_cerinta_na_confirmata: CIOT
+-- (live: confirmare validă după amprenta sursei; aici: existența unei confirmări nerevocate). Nu intră în md5_live.
+CREATE TABLE public.ofertare_j02b_activari (
+  id bigserial PRIMARY KEY, licitatie_id bigint, actor uuid, rol_actor text, n_redeschise integer,
+  activat_la timestamptz DEFAULT now(), txid bigint);
+CREATE TABLE public.ofertare_cerinte_na_confirmari (
+  id bigserial PRIMARY KEY, cerinta_id bigint, tip text, revocata_la timestamptz);
+CREATE FUNCTION public.fn_ofertare_cerinta_na_confirmata(p_cerinta_id bigint, p_tip text) RETURNS boolean
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+  AS $$ SELECT EXISTS (SELECT 1 FROM public.ofertare_cerinte_na_confirmari k
+                       WHERE k.cerinta_id = p_cerinta_id AND k.tip = p_tip AND k.revocata_la IS NULL) $$;
 -- Auditul J05, exact ca live.
 CREATE TABLE public.ofertare_derogari_audit (
   id bigserial PRIMARY KEY,
@@ -334,8 +348,10 @@ CREATE OR REPLACE FUNCTION public.fn_gate_depunere()
  SET search_path TO 'public', 'pg_temp'
 AS $function$
 DECLARE
-  n_active int; n_neconfirmate int; n_neacoperite int; n_rosii int; n_reverif int; msg text; v_r5 text;
+  n_active int; n_neconfirmate int; n_neacoperite int; n_rosii int; n_reverif int; n_na_ai int; msg text; v_r5 text; v_j02b boolean;
 BEGIN
+  -- J02b r5: comutatorul licitației (OLD inclus: o cerere care ar încerca să-l stingă odată cu depunerea rămâne pe regula nouă)
+  v_j02b := COALESCE(NEW.j02b_activ, true) OR (TG_OP = 'UPDATE' AND COALESCE(OLD.j02b_activ, true));
   IF COALESCE(NEW.derogare_depunere, false) AND (TG_OP = 'INSERT' OR NOT COALESCE(OLD.derogare_depunere, false))
      AND NOT public.fn_gate_depunere_derogare_owner() THEN
     RAISE EXCEPTION 'Derogarea de la poarta de depunere o poate da doar ownerul (Razvan).' USING ERRCODE = '42501';
@@ -351,11 +367,27 @@ BEGIN
     END IF;
     SELECT count(*) INTO n_neconfirmate FROM ofertare_cerinte c
       WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL AND c.confirmata_de IS NULL;
+    IF v_j02b THEN
+    -- J02b: „nu se aplică” acoperă DOAR prin confirmare umană validă (amprenta sursei curente), nu prin a.status AI.
+    SELECT count(*) INTO n_neacoperite FROM ofertare_cerinte c
+      WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
+      AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
+            AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))
+      AND NOT public.fn_ofertare_cerinta_na_confirmata(c.id, 'nu_se_aplica');
+    SELECT count(*) INTO n_na_ai FROM ofertare_cerinte c
+      WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
+      AND EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id AND a.status = 'nu_se_aplica')
+      AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
+            AND a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))
+      AND NOT public.fn_ofertare_cerinta_na_confirmata(c.id, 'nu_se_aplica');
+    ELSE
+      -- J02b oprit pe licitație: exact regula live (nu_se_aplica AI acoperă)
     SELECT count(*) INTO n_neacoperite FROM ofertare_cerinte c
       WHERE c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       AND NOT EXISTS (SELECT 1 FROM ofertare_acoperire a WHERE a.cerinta_id = c.id
             AND (a.status = 'nu_se_aplica'
                  OR (a.status IN ('acoperit','acoperit_partener') AND a.verificat_pe_scan AND NOT COALESCE(a.reverificare_ceruta, false))));
+    END IF;
     SELECT count(*) INTO n_rosii FROM ofertare_acoperire a
       JOIN ofertare_cerinte c ON c.id = a.cerinta_id AND c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       JOIN documente_firma d ON d.id = a.doc_firma_id
@@ -366,7 +398,11 @@ BEGIN
       JOIN ofertare_cerinte c ON c.id = a.cerinta_id AND c.licitatie_id = NEW.id AND c.inlocuita_de IS NULL AND c.duplicat_al IS NULL
       WHERE a.status IN ('acoperit','acoperit_partener') AND COALESCE(a.reverificare_ceruta, false);
     IF n_neconfirmate > 0 OR n_neacoperite > 0 OR n_rosii > 0 OR n_reverif > 0 THEN
-      msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire VERIFICATĂ de om (propunerea AI nu e dovadă), %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii), %s dovezi cu reverificare cerută. Rezolvă-le sau derogare_depunere=true (o poate pune doar ownerul).', n_neconfirmate, n_neacoperite, n_rosii, n_reverif);
+      IF v_j02b THEN
+        msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire VERIFICATĂ de om (propunerea AI nu e dovadă; din ele %s au doar „nu se aplică” propus de AI — cer confirmare umană cu motiv pe versiunea curentă a sursei), %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii), %s dovezi cu reverificare cerută. Rezolvă-le sau derogare_depunere=true (o poate pune doar ownerul).', n_neconfirmate, n_neacoperite, n_na_ai, n_rosii, n_reverif);
+      ELSE
+        msg := format('BLOCAT LA DEPUNERE: %s cerințe neconfirmate de om, %s cerințe fără acoperire VERIFICATĂ de om (propunerea AI nu e dovadă), %s dovezi roșii (expirate/expiră <90 zile după termen/neutilizabile; certificatele de 30 zile trebuie valabile în ziua depunerii), %s dovezi cu reverificare cerută. Rezolvă-le sau derogare_depunere=true (o poate pune doar ownerul).', n_neconfirmate, n_neacoperite, n_rosii, n_reverif);
+      END IF;
       RAISE EXCEPTION '%', msg;
     END IF;
   END IF;
@@ -430,6 +466,44 @@ BEGIN
   END IF;
 END $function$
 ;
+CREATE OR REPLACE FUNCTION public.fn_ofertare_j02b_sens_unic()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT COALESCE(NEW.j02b_activ, false) THEN
+      RAISE EXCEPTION 'J02b: o licitație nouă pornește cu J02b activ (j02b_activ=false refuzat la INSERT)' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF OLD.j02b_activ AND NOT COALESCE(NEW.j02b_activ, false) THEN
+    RAISE EXCEPTION 'J02b: odată pornit pe licitația %, J02b nu se mai poate opri', OLD.id USING ERRCODE = '42501';
+  END IF;
+  IF NOT OLD.j02b_activ AND COALESCE(NEW.j02b_activ, false)
+     AND NOT EXISTS (SELECT 1 FROM public.ofertare_j02b_activari a WHERE a.licitatie_id = NEW.id AND a.txid = txid_current()) THEN
+    RAISE EXCEPTION 'J02b: pornirea se face doar prin fn_ofertare_j02b_activeaza (owner sau responsabilul licitației)' USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $function$
+;
+CREATE OR REPLACE FUNCTION public.fn_ofertare_responsabil_setat_de()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW.responsabil_setat_de := CASE WHEN NEW.responsabil_id IS NULL THEN NULL ELSE auth.uid() END;
+  ELSIF NEW.responsabil_id IS DISTINCT FROM OLD.responsabil_id THEN
+    NEW.responsabil_setat_de := auth.uid();
+  ELSE
+    NEW.responsabil_setat_de := OLD.responsabil_setat_de;
+  END IF;
+  RETURN NEW;
+END $function$
+;
 CREATE OR REPLACE FUNCTION public.fn_ofertare_derogari_audit_imuabil()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -443,7 +517,8 @@ END $function$
 -- ACL-urile LIVE din 30.09 (pg_proc.proacl); privilegiile implicite de mai sus se anulează explicit.
 REVOKE ALL ON FUNCTION public.fn_is_app_owner(uuid), public.fn_are_acces_ofertare(), public.fn_gate_depunere_derogare_owner(),
   public.fn_ofertare_licitatii_scriere(), public.ofertare_r5_blocaj_sursa(bigint), public.fn_gate_depunere(),
-  public.ofertare_derogare_depunere(bigint, text, boolean), public.fn_ofertare_derogari_audit_imuabil()
+  public.ofertare_derogare_depunere(bigint, text, boolean), public.fn_ofertare_derogari_audit_imuabil(),
+  public.fn_ofertare_j02b_sens_unic(), public.fn_ofertare_responsabil_setat_de()
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_is_app_owner(uuid), public.fn_are_acces_ofertare() TO service_role, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_gate_depunere_derogare_owner(), public.fn_ofertare_licitatii_scriere(),
@@ -476,6 +551,10 @@ CREATE TRIGGER a00_ofertare_licitatii_scriere BEFORE UPDATE ON public.ofertare_l
   FOR EACH ROW EXECUTE FUNCTION fn_ofertare_licitatii_scriere();
 CREATE TRIGGER trg_gate_depunere BEFORE INSERT OR UPDATE ON public.ofertare_licitatii
   FOR EACH ROW EXECUTE FUNCTION fn_gate_depunere();
+CREATE TRIGGER trg_ofertare_j02b_sens_unic BEFORE INSERT OR UPDATE ON public.ofertare_licitatii
+  FOR EACH ROW EXECUTE FUNCTION fn_ofertare_j02b_sens_unic();
+CREATE TRIGGER trg_ofertare_responsabil_setat_de BEFORE INSERT OR UPDATE ON public.ofertare_licitatii
+  FOR EACH ROW EXECUTE FUNCTION fn_ofertare_responsabil_setat_de();
 CREATE TRIGGER trg_ofertare_derogari_audit_imuabil BEFORE DELETE OR UPDATE OR TRUNCATE ON public.ofertare_derogari_audit
   FOR EACH STATEMENT EXECUTE FUNCTION fn_ofertare_derogari_audit_imuabil();
 
@@ -494,12 +573,16 @@ INSERT INTO t.md5_live VALUES
   ('public.fn_are_acces_ofertare()',                        'f', '6991b618d5fabbefdbd14684d335db48'),
   ('public.fn_gate_depunere_derogare_owner()',              'f', 'adc668e7c06429c70e69a9d1a62ad094'),
   ('public.fn_ofertare_licitatii_scriere()',                'f', '081cd829e8400001e1c31ea6e6506a8f'),
-  ('public.fn_gate_depunere()',                             'f', 'b62acc0fef2b0da29e48de6d303fcf5e'),
+  ('public.fn_gate_depunere()',                             'f', 'e1768c8302dde7e8231e592f87f555ab'),
   ('public.ofertare_derogare_depunere(bigint,text,boolean)','f', '6047e5c3e4d159d5a7a85a7194041eca'),
   ('public.fn_ofertare_derogari_audit_imuabil()',           'f', '6b8c51a4aa01852998015d8d3a325551'),
   ('public.ofertare_r5_blocaj_sursa(bigint)',               'f', '1854c19c60be93f6848136a4a05f876a'),
   ('a00_ofertare_licitatii_scriere',                        't', '35bfc3734ba733dcc678918a5fae2e9c'),
   ('trg_gate_depunere',                                     't', 'acaab0c9559992529c18cb9af23511fb'),
+  ('public.fn_ofertare_j02b_sens_unic()',                   'f', '0ec72b0321939f62aa3960872a8ca1b5'),
+  ('public.fn_ofertare_responsabil_setat_de()',             'f', 'bebd4ffcf9d39c1e3a5da9d67b43811c'),
+  ('trg_ofertare_j02b_sens_unic',                           't', 'c690b5831c1aba8977552ee461956d2e'),
+  ('trg_ofertare_responsabil_setat_de',                     't', '7ef72c249c6e5d967c3c5c7401ef63d9'),
   ('trg_ofertare_derogari_audit_imuabil',                   't', '104048dda78640864201ad853fc2df9d'),
   ('ofertare_derogari_audit_actiune_check',                 'c', 'ccb3f643d993ae9d68284aca20a58366'),
   ('ofertare_derogari_audit_licitatie_id_fkey',             'c', '5d7a55a7ffb6f27375309665934dd04b'),
@@ -519,7 +602,9 @@ INSERT INTO t.acl_live VALUES
   ('public.fn_gate_depunere()',                             '{postgres=X/postgres,service_role=X/postgres}'),
   ('public.ofertare_r5_blocaj_sursa(bigint)',               '{postgres=X/postgres,service_role=X/postgres}'),
   ('public.ofertare_derogare_depunere(bigint,text,boolean)','{postgres=X/postgres,authenticated=X/postgres}'),
-  ('public.fn_ofertare_derogari_audit_imuabil()',           '{postgres=X/postgres}');
+  ('public.fn_ofertare_derogari_audit_imuabil()',           '{postgres=X/postgres}'),
+  ('public.fn_ofertare_j02b_sens_unic()',                   '{postgres=X/postgres}'),
+  ('public.fn_ofertare_responsabil_setat_de()',             '{postgres=X/postgres}');
 -- Orice diferență față de live (md5 / ACL). Gol = copia e fidelă.
 CREATE FUNCTION t.diferente_live() RETURNS TABLE(obiect text, asteptat text, gasit text) LANGUAGE sql STABLE AS $f$
   SELECT l.obiect, l.md5, x.m FROM t.md5_live l
@@ -535,10 +620,10 @@ CREATE FUNCTION t.diferente_live() RETURNS TABLE(obiect text, asteptat text, gas
   FROM t.acl_live a
   WHERE (SELECT p.proacl::text FROM pg_proc p WHERE p.oid = to_regprocedure(a.obiect)) IS DISTINCT FROM a.acl
   UNION ALL
-  SELECT 'triggere pe ofertare_licitatii', 'a00_ofertare_licitatii_scriere,trg_gate_depunere',
+  SELECT 'triggere pe ofertare_licitatii', 'a00_ofertare_licitatii_scriere,trg_gate_depunere,trg_ofertare_j02b_sens_unic,trg_ofertare_responsabil_setat_de',
          (SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND NOT tgisinternal)
   WHERE (SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND NOT tgisinternal)
-        IS DISTINCT FROM 'a00_ofertare_licitatii_scriere,trg_gate_depunere'
+        IS DISTINCT FROM 'a00_ofertare_licitatii_scriere,trg_gate_depunere,trg_ofertare_j02b_sens_unic,trg_ofertare_responsabil_setat_de'
 $f$;
 
 -- Raportare: o linie NOTICE per aserțiune; nu oprește scriptul.
@@ -803,7 +888,7 @@ SELECT t.ok('K04', 'K', (SELECT tgname FROM pg_trigger WHERE tgrelid = 'public.o
   'garda e PRIMUL trigger BEFORE UPDATE (înaintea lui a00_ofertare_licitatii_scriere și a porții)');
 SELECT t.ok('K05', 'K', (SELECT count(*) FROM t.diferente_live() WHERE obiect <> 'triggere pe ofertare_licitatii') = 0
                     AND (SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'public.ofertare_licitatii'::regclass AND NOT tgisinternal)
-                        = 'a00_ofertare_derogare_garda_j05,a00_ofertare_licitatii_scriere,trg_gate_depunere',
+                        = 'a00_ofertare_derogare_garda_j05,a00_ofertare_licitatii_scriere,trg_gate_depunere,trg_ofertare_j02b_sens_unic,trg_ofertare_responsabil_setat_de',
   'migrarea n-a atins nimic live: aceleași md5/ACL pentru funcții, triggere, constrângeri, politici; doar garda în plus');
 \endif
 
