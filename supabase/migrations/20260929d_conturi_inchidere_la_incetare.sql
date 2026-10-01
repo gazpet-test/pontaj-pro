@@ -33,6 +33,13 @@
 --       Neblocant, notat: contenția repetată pe același element amână nelimitat, fără contor / alertă (coloană nouă — nu în r9).
 --   r9 (P1-d): fișele istorice cu CNP comun nu se mai închid din triggerul fișei care se încheie (garda era a ei), ci intră în coadă
 --       ca elemente proprii, fiecare cu garda ei (sweep). Primitivele fn_cont_persoana_chei / fn_cont_lock_chei sunt definite în c (P1-c).
+--   r10 (Copilot + Jakarinos pe 3ab1cb5): (blocant d) rândul din auth.users se ia FOR NO KEY UPDATE NOWAIT ÎNTOTDEAUNA, imediat după
+--       profil — fn_cont_inchide (sweep la primul element, trigger HR, manual) și fn_cont_restaureaza; rând ținut ⇒ 55P03 cu DETAIL
+--       'auth_ocupat' ⇒ sweep amanat_lock (și cu v_tine = false), trigger ⇒ coadă reincercare + notificare, manual ⇒ 'auth_ocupat'
+--       (fără ciclu cu ștergerea GoTrue + cascada FK pe profiles). (P1, regresie r9) fișele istorice intră în coadă cu tipul nou
+--       'reevaluare_istorica': sweep-ul respectă restaurarea owner-ului INDIFERENT de creat_la (nu e o plecare nouă). (Jakarinos
+--       d:826-827) înscrierea lor în coadă NU mai e best-effort: eșecul anulează UPDATE-ul (RAISE). (P2) fn_cont_notifica_owneri (c)
+--       ia destinatarii FOR KEY SHARE NOWAIT — handlerul sweep-ului nu mai poate aștepta la notificare (md5 nou în precondiție).
 --   * fn_pgrst_pre_request     — hook PostgREST pentru revocarea EFECTIVĂ a JWT-urilor deja emise;
 --                                CREAT, dar NEACTIVAT (activarea = ALTER ROLE authenticator, cu acordul lui Răzvan)
 --   * fn_cont_restaureaza      — revenire din jurnal, EXCLUSIV owner, cu previzualizare (p_simulare)
@@ -91,7 +98,7 @@ BEGIN
                  ('fn_identitate_eticheta', 'fn_identitate_eticheta()', '876a28f98d4f4aee76a0580dab4ecc51'),
                  ('fn_nume_familie', 'fn_nume_familie(text)', 'd45994c4bc8aaf51da653578c1cf86cf'),
                  ('fn_nume_cuvinte', 'fn_nume_cuvinte(text)', '8ec2a2ee5b6313ab55ba9ff1a1c6c998'),
-                 ('fn_cont_notifica_owneri', 'fn_cont_notifica_owneri(text,text,text,text)', 'ecfb5fa1d44c93c57df39aed1f5c9a5e'),
+                 ('fn_cont_notifica_owneri', 'fn_cont_notifica_owneri(text,text,text,text)', '0bbbf41d3097840c16a97a263ff4cd5f'),
                  -- r9 (P1-c): primitivele de serializare sunt ale lui c; d le reafirmă cu text identic (md5 verificat aici)
                  ('fn_cont_persoana_chei', 'fn_cont_persoana_chei(text[],text,text)', '2687f39893a8ad113719facaffc67f6d'),
                  ('fn_cont_lock_chei', 'fn_cont_lock_chei(text[])', 'db9b9899dbbece0ea56d6f0a71361aff')) AS w(f, sig, m)
@@ -181,11 +188,14 @@ CREATE TRIGGER trg_conturi_inchideri_fara_truncate BEFORE TRUNCATE ON public.con
 -- se oprește (abandonat_la) — intrarea rămâne DESCHISĂ (alerta o arată, rollback-ul d o vede), iar owner-ul primește
 -- o singură notificare la primul eșec (notificat_la; nu una la 5 minute după ce o citește) și una la abandonare.
 -- Un eveniment nou pe aceeași intrare (HR salvează din nou fișa, altă eroare din trigger) pornește un ciclu nou.
+-- r10 (P1 Jakarinos pe 3ab1cb5, regresie r9): tip nou 'reevaluare_istorica' = fișă ISTORICĂ (deja inactivă) a aceleiași persoane
+-- (CNP comun), pusă în coadă de triggerul fișei care se încheie (P1-d). NU e o plecare nouă a acelei fișe ⇒ sweep-ul respectă o
+-- restaurare a owner-ului INDIFERENT de creat_la (o intrare 'programata' mai nouă decât restaurat_la ar fi reînchis contul restaurat).
 CREATE TABLE IF NOT EXISTS public.conturi_inchideri_coada (
   id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   profile_id          uuid NOT NULL,
   employee_id         integer,
-  tip                 text NOT NULL CHECK (tip IN ('flaguri','reincercare','programata')),
+  tip                 text NOT NULL CONSTRAINT conturi_inchideri_coada_tip_check CHECK (tip IN ('flaguri','reincercare','programata','reevaluare_istorica')),
   motiv               text NOT NULL,
   scadent_la          date NOT NULL DEFAULT CURRENT_DATE,
   incercari           integer NOT NULL DEFAULT 0,
@@ -199,6 +209,16 @@ CREATE TABLE IF NOT EXISTS public.conturi_inchideri_coada (
   notificat_la        timestamptz,            -- owner-ul a fost anunțat de eșecul intrării (o singură dată pe ciclu)
   CONSTRAINT conturi_inchideri_coada_rezolvare_chk CHECK ((rezolvat_la IS NULL) = (rezultat IS NULL))
 );
+-- r10: dacă tabela există dintr-o aplicare anterioară (fără tipul nou), constrângerea se înlocuiește; altfel e no-op.
+DO $tip$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conrelid = 'public.conturi_inchideri_coada'::regclass AND c.conname = 'conturi_inchideri_coada_tip_check'
+                AND pg_get_constraintdef(c.oid) NOT LIKE '%reevaluare_istorica%') THEN
+    ALTER TABLE public.conturi_inchideri_coada DROP CONSTRAINT conturi_inchideri_coada_tip_check;
+    ALTER TABLE public.conturi_inchideri_coada ADD CONSTRAINT conturi_inchideri_coada_tip_check
+      CHECK (tip IN ('flaguri','reincercare','programata','reevaluare_istorica'));
+  END IF;
+END $tip$;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_conturi_inchideri_coada_deschisa
   ON public.conturi_inchideri_coada(profile_id, tip) WHERE rezolvat_la IS NULL;
 COMMENT ON TABLE public.conturi_inchideri_coada IS
@@ -635,10 +655,21 @@ BEGIN
     SELECT * INTO v_p FROM public.profiles WHERE id = p_profile_id FOR UPDATE;          -- serializează pe profil
   END IF;
   IF NOT FOUND THEN RETURN 'inexistent'; END IF;
-  IF v_nowait THEN
-    -- r9: preblocare NOWAIT a tot ce scrie închiderea (profilul e deja ținut): rândul de logare, drepturile pe module /
-    -- șantiere, refresh tokens, sesiuni, intrările deschise din coadă ale contului. Un rând ținut de altă tranzacție ⇒ 55P03.
+  -- r10 (blocant d, Copilot + Jakarinos pe 3ab1cb5): rândul din auth.users se ia FĂRĂ așteptare ÎNTOTDEAUNA (nu doar cu GUC-ul on),
+  -- imediat după profil — pe primul element al sweep-ului (v_tine = false), pe calea triggerului HR și la închiderea manuală fluxul
+  -- era profil FOR UPDATE → UPDATE auth.users cu AȘTEPTARE ⇒ același ciclu cu ștergerea GoTrue (DELETE ține rândul, cascada FK
+  -- profiles → auth.users așteaptă profilul ținut aici). Rând ocupat ⇒ 55P03 cu DETAIL 'auth_ocupat' (retragere): sweep ⇒ amanat_lock
+  -- (subtranzacția elementului abandonată: profilul se eliberează, cascada trece); trigger HR ⇒ coadă 'reincercare' + notificare
+  -- (handlerul existent); manual ⇒ fn_cont_inchide_owner întoarce 'auth_ocupat' (UI: reîncearcă). Nimic nu e scris înainte de acest pas.
+  BEGIN
     PERFORM 1 FROM auth.users u WHERE u.id = p_profile_id FOR NO KEY UPDATE NOWAIT;
+  EXCEPTION WHEN lock_not_available THEN
+    RAISE EXCEPTION 'auth_ocupat: contul de logare % e ținut de altă tranzacție (GoTrue: ștergere / modificare în curs) — închiderea se retrage fără așteptare, de reîncercat', p_profile_id
+      USING ERRCODE = '55P03', DETAIL = 'auth_ocupat';
+  END;
+  IF v_nowait THEN
+    -- r9: preblocare NOWAIT a tot ce scrie închiderea (profilul și rândul de logare sunt deja ținute): drepturile pe module /
+    -- șantiere, refresh tokens, sesiuni, intrările deschise din coadă ale contului. Un rând ținut de altă tranzacție ⇒ 55P03.
     PERFORM 1 FROM public.user_module_access m WHERE m.profile_id = p_profile_id FOR UPDATE NOWAIT;
     PERFORM 1 FROM public.profile_sites s WHERE s.profile_id = p_profile_id FOR UPDATE NOWAIT;
     PERFORM 1 FROM auth.refresh_tokens rt WHERE rt.user_id = p_profile_id::text FOR UPDATE NOWAIT;
@@ -726,9 +757,9 @@ BEGIN
   DELETE FROM auth.refresh_tokens WHERE user_id = p_profile_id::text;
   DELETE FROM auth.sessions WHERE user_id = p_profile_id;
 
-  -- Intrările deschise de reîncercare / programare pentru acest cont sunt rezolvate de închiderea de acum.
+  -- Intrările deschise de reîncercare / programare / reevaluare istorică (r10) pentru acest cont sunt rezolvate de închiderea de acum.
   UPDATE public.conturi_inchideri_coada SET rezolvat_la = now(), rezultat = v_rez
-   WHERE profile_id = p_profile_id AND tip IN ('reincercare', 'programata') AND rezolvat_la IS NULL;
+   WHERE profile_id = p_profile_id AND tip IN ('reincercare', 'programata', 'reevaluare_istorica') AND rezolvat_la IS NULL;
 
   IF v_rez = 'inchis' THEN
     BEGIN                                             -- best-effort: închiderea rămâne făcută și dacă notificarea pică
@@ -749,7 +780,7 @@ CREATE OR REPLACE FUNCTION public.fn_cont_inchide_owner(p_profile_id uuid, p_mot
 RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $fn$
-DECLARE v_emp integer;
+DECLARE v_emp integer; v_detail text;
 BEGIN
   IF public.fn_identitate_privilegiata() IS DISTINCT FROM 'owner' THEN
     RAISE EXCEPTION 'Doar owner poate închide manual un cont' USING ERRCODE = '42501';
@@ -758,7 +789,14 @@ BEGIN
     RAISE EXCEPTION 'Motivul închiderii e obligatoriu (minim 5 caractere)' USING ERRCODE = '22023';
   END IF;
   SELECT employee_id::integer INTO v_emp FROM public.profiles WHERE id = p_profile_id;
-  RETURN public.fn_cont_inchide(p_profile_id, btrim(p_motiv), 'manual_owner', v_emp);
+  BEGIN
+    RETURN public.fn_cont_inchide(p_profile_id, btrim(p_motiv), 'manual_owner', v_emp);
+  EXCEPTION WHEN lock_not_available THEN
+    -- r10: rândul de logare ținut de GoTrue ⇒ rezultat explicit de reîncercare (UI), nimic scris; alt 55P03 se propagă
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    IF v_detail = 'auth_ocupat' THEN RETURN 'auth_ocupat'; END IF;
+    RAISE;
+  END;
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_inchide_owner(uuid, text) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_cont_inchide_owner(uuid, text) TO authenticated;
@@ -818,14 +856,15 @@ BEGIN
       -- ordinea lock-urilor (fișa B nu e ținută). Fix: fișele istorice ale persoanei se pun în COADĂ, fiecare element propriu
       -- (sweep: fișa r.emp FOR UPDATE → garda(r.emp) → profil → intrare), decizia se ia cu garda LOR.
       IF r0.emp IS DISTINCT FROM NEW.id THEN
-        BEGIN
-          PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, 'programata',
-            format('Contract încheiat la %s (fișa #%s %s) · fișă istorică #%s a aceleiași persoane (CNP comun): se verifică cu garda ei, din coadă',
-                   to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name, r0.emp),
-            CURRENT_DATE);
-        EXCEPTION WHEN OTHERS THEN
-          RAISE WARNING 'fn_employees_ciclu_cont coadă fișă istorică (%): % [%]', r0.id, SQLERRM, SQLSTATE;
-        END;
+        -- r10 (P1 Jakarinos, regresie r9): tipul 'reevaluare_istorica' (nu 'programata') — intrarea păstrează distincția „reevaluare a
+        -- unei fișe istorice” vs „plecare nouă”: sweep-ul respectă o restaurare a owner-ului indiferent de creat_la (altfel corecția
+        -- datei pe A reînchidea contul restaurat al lui B, deși nimeni nu l-a reactivat / încheiat).
+        -- r10 (Jakarinos, d:826-827): înscrierea în coadă NU mai e best-effort — un eșec aici anulează tranzacția (RAISE): fără intrare
+        -- nu există nicio garanție de reluare (contul lui B ar rămâne deschis fără urmă). HR vede eroarea și salvează din nou.
+        PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, 'reevaluare_istorica',
+          format('Contract încheiat la %s (fișa #%s %s) · fișă istorică #%s a aceleiași persoane (CNP comun): se verifică cu garda ei, din coadă',
+                 to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name, r0.emp),
+          CURRENT_DATE);
         CONTINUE;
       END IF;
       -- r7 (P1-D, Jakarinos pe 0456f3b): candidații de mai sus vin dintr-un instantaneu NEblocat. Profilul se blochează
@@ -967,7 +1006,7 @@ BEGIN
     -- Reactivarea NU redă nimic automat; doar anunță owner-ul. Programările / reîncercările se anulează.
     BEGIN
       UPDATE public.conturi_inchideri_coada c SET rezolvat_la = now(), rezultat = 'anulat_reactivat'
-       WHERE c.rezolvat_la IS NULL AND c.tip IN ('reincercare', 'programata') AND c.employee_id = NEW.id;
+       WHERE c.rezolvat_la IS NULL AND c.tip IN ('reincercare', 'programata', 'reevaluare_istorica') AND c.employee_id = NEW.id;
     EXCEPTION WHEN OTHERS THEN
       RAISE WARNING 'fn_employees_ciclu_cont coadă (fișa #%): % [%]', NEW.id, SQLERRM, SQLSTATE;
     END;
@@ -1032,6 +1071,7 @@ DECLARE
   -- schimbarea jobului cron; cea cu „toate cheile sortate înainte” nu se poate (cheile persoanei se află abia sub lock-ul fișei).
   v_tine   boolean := false;
   v_amanat boolean;
+  v_detail text;
 BEGIN
   IF public.fn_identitate_privilegiata() IS NULL THEN
     RAISE EXCEPTION 'Coada închiderilor o procesează doar pg_cron (login postgres) sau o identitate privilegiată explicită'
@@ -1110,8 +1150,12 @@ BEGIN
                         AND (p.is_owner IS TRUE OR COALESCE(p.tip_cont, 'angajat') <> 'angajat')) THEN
           v_rezult := 'suspendat_owner_sau_tip_cont';
         ELSIF EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal j
-                       WHERE j.id = public.fn_cont_restaurare_activa(x.profile_id) AND j.restaurat_la >= x.creat_la) THEN
-          v_rezult := 'anulat_restaurat';                -- restaurare mai nouă decât intrarea: decizia owner-ului rămâne
+                       WHERE j.id = public.fn_cont_restaurare_activa(x.profile_id)
+                         AND (j.restaurat_la >= x.creat_la OR x.tip = 'reevaluare_istorica')) THEN
+          -- restaurare mai nouă decât intrarea: decizia owner-ului rămâne. r10: pentru o REEVALUARE ISTORICĂ (fișa B deja inactivă,
+          -- pusă în coadă de evenimentul pe altă fișă A a persoanei) restaurarea se respectă INDIFERENT de creat_la — nu e o plecare
+          -- nouă a lui B; doar o plecare nouă ('programata' din triggerul lui B) sau închiderea manuală ridică blocajul.
+          v_rezult := 'anulat_restaurat';
         ELSIF v_garda IS NOT NULL THEN
           v_rezult := 'suspendat_' || split_part(v_garda, ':', 1);
           PERFORM public.fn_cont_notifica_owneri('cont_inchidere_suspendata', '⏸ Contract încheiat — contul NU s-a închis automat',
@@ -1121,7 +1165,9 @@ BEGIN
         ELSE
           v_rez := public.fn_cont_inchide(x.profile_id,
                      format('Contract încheiat la %s (fișa #%s %s) · %s', to_char(e.termination_date, 'DD.MM.YYYY'), e.id, e.name,
-                            CASE x.tip WHEN 'programata' THEN 'închidere programată' ELSE 'reîncercare după eșec' END),
+                            CASE x.tip WHEN 'programata' THEN 'închidere programată'
+                                       WHEN 'reevaluare_istorica' THEN 'fișă istorică a aceleiași persoane (CNP comun), judecată cu garda ei'
+                                       ELSE 'reîncercare după eșec' END),
                      'coada_contract_incheiat', e.id);
           v_rezult := v_rez;                                -- fn_cont_inchide a rezolvat deja intrarea
         END IF;
@@ -1137,7 +1183,11 @@ BEGIN
       -- r8 (P2): 55P03 primit cât timp sweep-ul ținea lock-uri de la alt element = contenție, nu eșec: intrarea rămâne
       -- neatinsă (fără incercari / backoff / notificare), se reia la rularea următoare. (55P03 la PRIMUL element ținut —
       -- doar cu un lock_timeout pus din afară, sweep-ul nu-l pune — rămâne eroare, ca până acum.)
-      IF SQLSTATE = '55P03' AND v_tine THEN
+      -- r10 (blocant d): rândul din auth.users ținut de GoTrue (fn_cont_inchide: 55P03 cu DETAIL 'auth_ocupat') = retragere și pe
+      -- PRIMUL element (v_tine = false): subtranzacția abandonată a eliberat fișa / cheile / profilul ⇒ cascada ștergerii GoTrue trece;
+      -- elementul se reia la rularea următoare (amanat_lock), nu intră în backoff.
+      GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+      IF SQLSTATE = '55P03' AND (v_tine OR v_detail = 'auth_ocupat') THEN
         v_amanat := true;
         v_n := jsonb_set(v_n, ARRAY['amanat_lock'], to_jsonb(COALESCE((v_n ->> 'amanat_lock')::int, 0) + 1));
       END IF;
@@ -1309,6 +1359,17 @@ BEGIN
   PERFORM 1 FROM public.profiles WHERE id = v_pid FOR UPDATE;                  -- 1) profilul
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Profilul % nu mai există; nu am ce restaura', v_pid USING ERRCODE = 'P0002';
+  END IF;
+  -- r10 (blocant d): rândul de logare se ia FĂRĂ așteptare imediat după profil (aceeași poziție ca în fn_cont_inchide / legare):
+  -- profil FOR UPDATE → UPDATE auth.users cu așteptare era același ciclu cu ștergerea GoTrue (cascada FK așteaptă profilul).
+  -- Rând ocupat ⇒ 55P03 explicit (owner-ul reîncearcă din UI), nimic scris; profilul se eliberează odată cu eroarea.
+  IF NOT v_sim THEN
+    BEGIN
+      PERFORM 1 FROM auth.users u WHERE u.id = v_pid FOR NO KEY UPDATE NOWAIT;    -- 1b) rândul de logare, fără așteptare
+    EXCEPTION WHEN lock_not_available THEN
+      RAISE EXCEPTION 'auth_ocupat: contul de logare % e ținut de altă tranzacție (GoTrue: ștergere / modificare în curs) — restaurarea se retrage fără așteptare, reîncearcă', v_pid
+        USING ERRCODE = '55P03', DETAIL = 'auth_ocupat';
+    END;
   END IF;
   SELECT * INTO v_j FROM public.conturi_inchideri_jurnal WHERE id = p_jurnal_id FOR UPDATE;   -- 2) jurnalul
   IF v_j.restaurat_la IS NOT NULL THEN
@@ -1505,7 +1566,7 @@ BEGIN
       LEFT JOIN LATERAL (SELECT public.fn_cont_alt_contract_activ(pr.eid, pr.ecnp) AS id) alt ON true
       LEFT JOIN LATERAL (SELECT public.fn_cont_posibil_aceeasi_persoana(pr.eid) AS id) pos ON true
       LEFT JOIN LATERAL (SELECT q.* FROM public.conturi_inchideri_coada q
-                          WHERE q.profile_id = pr.pid AND q.rezolvat_la IS NULL AND q.tip IN ('reincercare', 'programata')
+                          WHERE q.profile_id = pr.pid AND q.rezolvat_la IS NULL AND q.tip IN ('reincercare', 'programata', 'reevaluare_istorica')
                           ORDER BY q.id LIMIT 1) cq ON true
       LEFT JOIN LATERAL (SELECT j2.id, j2.restaurat_la FROM public.conturi_inchideri_jurnal j2
                           WHERE j2.id = public.fn_cont_restaurare_activa(pr.pid)) rest ON true

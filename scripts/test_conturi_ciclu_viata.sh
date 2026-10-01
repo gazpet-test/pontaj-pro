@@ -237,6 +237,38 @@ if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
       fi
       rm -f "$SNAP_RB" "$SNAP_RB.diff"
     fi
+    # Gardă fereastră c→d (r10): după rollback-ul lui X, dacă migrarea rămasă dinaintea lui declară garda (marcaj „Gardă fereastră c→d
+    # (harness)”), legarea trebuie să REFUZE explicit (triggerele de serializare ale scriitorilor au dispărut odată cu X).
+    if [ "$i" -gt 0 ] && grep -q 'Gardă fereastră c→d (harness)' "$(cale_abs "${MIGRARI[$((i - 1))]}")"; then
+      SQL_FW="$(mktemp)"
+      cat > "$SQL_FW" <<'EOF_FW'
+\set ON_ERROR_STOP on
+BEGIN;
+SELECT teste.assert(to_regprocedure('public.fn_cont_serializare_activa()') IS NOT NULL AND NOT public.fn_cont_serializare_activa(),
+  'Gardă fereastră c→d: după rollback-ul lui d, fn_cont_serializare_activa() = false (triggerele de lock lipsesc)');
+INSERT INTO auth.users (id, aud, role, email, raw_app_meta_data, created_at, updated_at, email_confirmed_at)
+VALUES ('00000000-0000-4000-8000-00000000f0cd', 'authenticated', 'authenticated', 'fereastra.cd@gazpet.ro',
+        '{"provider":"email","gazpet_legare_automata":true}', now(), now(), now());
+INSERT INTO public.employees (name, department, email, active) VALUES ('FEREASTRESCU CD', 'Test', 'fereastra.cd@gazpet.ro', true);
+SELECT teste.ca_service_role();
+SELECT teste.assert(public.fn_cont_leaga_la_creare('00000000-0000-4000-8000-00000000f0cd') = 'serializare_indisponibila',
+  'Gardă fereastră c→d: calea de încredere (service_role) refuză legarea cu serializare_indisponibila cât timp d lipsește');
+SELECT teste.ca_admin();
+SELECT teste.assert((SELECT employee_id IS NULL FROM public.profiles WHERE id = '00000000-0000-4000-8000-00000000f0cd'),
+  'Gardă fereastră c→d: profilul rămâne nelegat');
+ROLLBACK;
+EOF_FW
+      IES_FW="$(mktemp)"
+      set +e
+      "${PSQL[@]}" -d "$BAZA" -o /dev/null -f "$SQL_FW" 2>&1 | tee "$IES_FW" | sed 's/^psql:[^ ]* NOTICE:  /  /'
+      st_fw=${PIPESTATUS[0]}
+      set -e
+      n_fw="$(grep -c 'NOTICE:  OK ' "$IES_FW" || true)"
+      rm -f "$SQL_FW" "$IES_FW"
+      [ "$st_fw" = 0 ] || esec "gardă fereastră c→d: după ${rb##*/} legarea NU a refuzat (psql a ieșit cu $st_fw)"
+      TOTAL_OK=$((TOTAL_OK + n_fw))
+      echo "   gardă fereastră c→d: după ${rb##*/} legarea refuză explicit (serializare_indisponibila) — $n_fw aserțiuni OK"
+    fi
   done
   rm -f ${SNAP_PAS[@]+"${SNAP_PAS[@]}"}
   SNAP_DUPA="$(mktemp)"; schema_snapshot > "$SNAP_DUPA"
