@@ -9,7 +9,7 @@
 --   -- <conținutul exact al fișierului>
 --   COMMIT;
 --
--- Readuce EXACT lista live din 01.10 (477 relații, amprenta 41e9610b…): 436 cu MAINTAIN pentru anon+authenticated,
+-- Readuce EXACT lista live din 01.10 (474 relații, amprenta dd222470…, recitită după #540/#541): 433 cu MAINTAIN pentru anon+authenticated,
 -- 41 doar pentru authenticated; relațiile din listă care între timp au dispărut se sar (NOTICE). Setarea implicită a
 -- lui postgres pe public primește înapoi MAINTAIN pentru anon/authenticated. Relațiile create după 01.10 NU primesc MAINTAIN.
 -- ============================================================================
@@ -43,7 +43,7 @@ DECLARE
     'executie_ture', 'facturi_emise', 'facturi_serii_counter', 'firma_profil', 'garantii', 'garantii_alerte_amprenta',
     'gbe_polite', 'gbe_restituiri', 'grafic_activitati', 'grafic_parametri', 'grafic_versiuni', 'hr_adeverinte_legator',
     'hr_aprobatori', 'hr_autorizatii', 'hr_autorizatii_propuneri', 'hr_autorizatii_rsvti_confirmari', 'hr_autorizatii_tipuri', 'hr_cereri_concediu',
-    'hr_ci_extrase', 'hr_concediu_rute', 'hr_concediu_tokens', 'hr_documente_personale', 'hr_documente_personale_tipuri', 'hr_employees_audit',
+    'hr_ci_extrase', 'hr_concediu_rute', 'hr_documente_personale', 'hr_documente_personale_tipuri', 'hr_employees_audit',
     'hr_employees_private', 'hr_personal_extern', 'hr_recomandari', 'hr_recrutare_candidati', 'hr_recrutare_interactiuni', 'hr_recrutare_oferte_trimise',
     'hr_recrutare_pozitii', 'hr_recrutare_retentie_expirata', 'hr_salarii_audit', 'hr_semnaturi_electronice', 'internal_chats', 'iot_citiri',
     'iot_dispozitive', 'iot_integrari', 'iot_privat_acces', 'isc_rte_domenii', 'locatii_cheltuieli', 'locatii_furnizori',
@@ -77,7 +77,7 @@ DECLARE
     'sedinte_rsvp', 'service_import_ai_log', 'service_import_ai_mappings', 'setari_ordin_deplasare', 'setari_recycle_bin', 'settings',
     'sites', 'stocuri', 'stocuri_miscari', 'storage_rls_errors', 'supliment_hrana_istoric', 'talon_extract_staging',
     'tichete', 'tichete_asignati', 'tichete_comentarii', 'tichete_default_responsabili', 'tichete_istoric', 'tichete_subcategorii',
-    'transferuri_interne', 'transferuri_linii', 'trezorerie_conturi', 'trezorerie_extras_linii', 'upa_achizitii', 'user_module_access',
+    'transferuri_interne', 'transferuri_linii', 'upa_achizitii', 'user_module_access',
     'v_acte_aditionale_toate', 'v_active_date_lipsa', 'v_active_disponibile', 'v_active_fara_norma_cu_alimentari', 'v_active_km_ore', 'v_active_santier_recent',
     'v_activitate_hr_zilnica', 'v_activitate_logistica_zilnica', 'v_ai_cost_luna_curenta', 'v_alerte_act_aditional', 'v_alerte_contracte', 'v_alim_fara_telemetrie',
     'v_alimentari_dubluri_oscar', 'v_alimentari_fara_santier', 'v_alimentari_kpi', 'v_alimentari_ocr_revizuire', 'v_alimentari_pt_ocr', 'v_alimentari_suspecte',

@@ -8,8 +8,8 @@
 --   * PG17 a introdus privilegiul MAINTAIN (bitul „m”): VACUUM, ANALYZE, CLUSTER, REINDEX, REFRESH MATERIALIZED VIEW
 --     și LOCK TABLE. F1 a scos doar TRUNCATE (D). NOTĂ: LOCK TABLE … ACCESS EXCLUSIVE rămâne posibil și după F1b pe
 --     tabelele unde rolul are UPDATE/DELETE (regula PG: MAINTAIN, UPDATE, DELETE sau TRUNCATE) — nu se închide aici.
---   * 518 relații în public (381 tabele); 477 au MAINTAIN pentru anon sau authenticated: 348 tabele + 129 view-uri
---     (anon 312 tabele, authenticated 348). Amprenta listei: md5 = 41e9610b39f6609d9f34a21d302360d2 (vezi 0d).
+--   * 518 relații în public (381 tabele); 474 au MAINTAIN pentru anon sau authenticated: 345 tabele + 129 view-uri
+--     (anon 309 tabele, authenticated 345; recitit după #540/#541). Amprenta listei: md5 = dd22247052979de6b3cd0f9bd5b88978 (vezi 0d).
 --   * Cauza: pg_default_acl pe public — postgres dă arwdxtm (F1 a scos D, „m” a rămas), supabase_admin dă arwdDxtm.
 --   * PUBLIC nu are MAINTAIN; niciun grant WITH GRANT OPTION; toate relațiile din public sunt ale lui postgres;
 --     pg_maintain nu are membri. PostgREST/pg_graphql nu pot emite VACUUM/LOCK ⇒ risc latent (apărare în profunzime).
@@ -76,10 +76,10 @@ BEGIN
             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f')) x
    WHERE x.a OR x.u;
-  RAISE NOTICE 'SEC F1b înainte: % relații cu MAINTAIN (tabele: anon=% authenticated=%), amprenta % (live 01.10: 477 / 312 / 348, 41e9610b…)',
+  RAISE NOTICE 'SEC F1b înainte: % relații cu MAINTAIN (tabele: anon=% authenticated=%), amprenta % (live 01.10: 474 / 309 / 345, dd222470…)',
     v_n, v_anon, v_auth, coalesce(v_fp, '<gol>');
-  IF v_n IS DISTINCT FROM 0 AND v_fp IS DISTINCT FROM '41e9610b39f6609d9f34a21d302360d2' THEN
-    RAISE EXCEPTION 'Precondiție 0d: lista relațiilor cu MAINTAIN pentru anon/authenticated s-a schimbat față de 01.10 (% relații, md5 % ≠ 41e9610b…) — se recitește lista și se reface amprenta', v_n, v_fp;
+  IF v_n IS DISTINCT FROM 0 AND v_fp IS DISTINCT FROM 'dd22247052979de6b3cd0f9bd5b88978' THEN
+    RAISE EXCEPTION 'Precondiție 0d: lista relațiilor cu MAINTAIN pentru anon/authenticated s-a schimbat față de 01.10 (% relații, md5 % ≠ dd222470…) — se recitește lista și se reface amprenta', v_n, v_fp;
   END IF;
   IF v_n = 0 THEN RAISE NOTICE 'SEC F1b: nicio relație cu MAINTAIN — reaplicare; REVOKE-ul e idempotent'; END IF;
   -- 0e. service_role: numărul EXACT de dinainte (postcondiția 3c)

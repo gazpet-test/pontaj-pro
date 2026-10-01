@@ -1,11 +1,11 @@
 # SEC F1b (20261006a) — MAINTAIN — delta pentru Copilot — cerere GO/NO-GO
 
 **context_version:** 01.10.2026, branch `claude/f1b-maintain` (din origin/main 613d2fc)
-**Artefact:** `supabase/migrations/20261006a_sec_f1b_maintain_revoke.sql` · **sha256:** `961db6bec0a2ee8ce8e6cba9513fcef4483bee73c90389c6131a250e78a5c1a6`
+**Artefact:** `supabase/migrations/20261006a_sec_f1b_maintain_revoke.sql` · **sha256:** `cbc95f5b7d7f2ff64811a47b050cbf2be72f8c53906a3d8794e7f9820a125930` (r2)
 **Tipar:** identic cu F1 (`20260930i_sec_f1_truncate_revoke.sql`, aplicată) — doar privilegiul MAINTAIN (PG17).
 
 ## Starea live (read-only, 01.10, PG 17.6)
-- 518 relații în public; **477** cu MAINTAIN pentru anon sau authenticated (348 tabele + 129 view-uri; tabele: anon 312, authenticated 348). Amprenta listei: `41e9610b39f6609d9f34a21d302360d2`.
+- 518 relații în public; **474** cu MAINTAIN pentru anon sau authenticated (345 tabele + 129 view-uri; tabele: anon 309, authenticated 345). Amprenta listei: `dd22247052979de6b3cd0f9bd5b88978` (r2, după #540/#541).
 - PUBLIC fără MAINTAIN; niciun WITH GRANT OPTION; toate relațiile sunt ale lui postgres; `pg_maintain` fără membri.
 - Default ACL pe public: postgres → `arwdxtm` (F1 a scos D, „m” a rămas); supabase_admin → `arwdDxtm` (postgres NU e membru ⇒ nu se poate schimba, ca la F1).
 - Nicio funcție din public cu vacuum/analyze/cluster/reindex/refresh/lock table. Și `storage`, `net` au MAINTAIN — în afara domeniului.
@@ -20,11 +20,15 @@ Precondiții (amprenta exactă SAU 0 la reaplicare) → `REVOKE MAINTAIN ON ALL 
 - Regresie funcțională: niciuna așteptată (nimic din aplicație nu rulează VACUUM/ANALYZE ca authenticated).
 
 ## Verificare
-- `scripts/test_sec_f1b_maintain.sh`: **PASS** — fixture = lista live (477, md5 identic); refuz fără runner; refuz la relație nouă; runner cod 0 + gate 0e = 0; 0 MAINTAIN, REINDEX/VACUUM refuzate ca authenticated, tabel nou fără MAINTAIN (SELECT păstrat), service_role neatins; reaplicare idempotentă; revenire nearmată refuz, armată → exact lista din 01.10.
+- `scripts/test_sec_f1b_maintain.sh`: **PASS** — fixture = lista live (474, md5 identic); refuz fără runner; refuz la relație nouă; runner cod 0 + gate 0e = 0; 0 MAINTAIN, REINDEX/VACUUM refuzate ca authenticated, tabel nou fără MAINTAIN (SELECT păstrat), service_role neatins; reaplicare idempotentă; revenire nearmată refuz, armată → exact lista din 01.10.
 - vitest 1082/1082, `npx vite build` OK.
 
 ## Cerere
 **GO / NO-GO** pentru livrarea `20261006a_sec_f1b_maintain_revoke.sql` (sha256 de mai sus) prin `scripts/livrare_migrare.sh`. Înainte de livrare se recitește amprenta pe live. Aplicarea o face Răzvan.
+
+## Delta r2 (după GO + refuzul runnerului la 0d)
+Runnerul a refuzat la precondiția 0d, fără să comită nimic: între timp, #540/#541 au scos MAINTAIN de pe `hr_concediu_tokens`, `trezorerie_conturi` și `trezorerie_extras_linii`. Am recitit lista pe live, doar cu SELECT: **474** relații (anon 309, authenticated 345), md5 `dd22247052979de6b3cd0f9bd5b88978`. Exact cele 3 tabele au ieșit din listă; nimic altceva nu s-a schimbat.
+**S-au schimbat doar** amprenta și numerele din precondiție și din comentarii. Logica a rămas aceeași. Fixture-ul de test și lista de revenire (cele 3 tabele scoase, 433+41) au fost aduse la lista nouă. Branch-ul conține merge cu origin/main. Harness-ul trece (PASS), sha256 nou `cbc95f5b7d7f2ff64811a47b050cbf2be72f8c53906a3d8794e7f9820a125930`.
 
 ## Migrarea completă
 ```sql
@@ -38,8 +42,8 @@ Precondiții (amprenta exactă SAU 0 la reaplicare) → `REVOKE MAINTAIN ON ALL 
 --   * PG17 a introdus privilegiul MAINTAIN (bitul „m”): VACUUM, ANALYZE, CLUSTER, REINDEX, REFRESH MATERIALIZED VIEW
 --     și LOCK TABLE. F1 a scos doar TRUNCATE (D). NOTĂ: LOCK TABLE … ACCESS EXCLUSIVE rămâne posibil și după F1b pe
 --     tabelele unde rolul are UPDATE/DELETE (regula PG: MAINTAIN, UPDATE, DELETE sau TRUNCATE) — nu se închide aici.
---   * 518 relații în public (381 tabele); 477 au MAINTAIN pentru anon sau authenticated: 348 tabele + 129 view-uri
---     (anon 312 tabele, authenticated 348). Amprenta listei: md5 = 41e9610b39f6609d9f34a21d302360d2 (vezi 0d).
+--   * 518 relații în public (381 tabele); 474 au MAINTAIN pentru anon sau authenticated: 345 tabele + 129 view-uri
+--     (anon 309 tabele, authenticated 345; recitit după #540/#541). Amprenta listei: md5 = dd22247052979de6b3cd0f9bd5b88978 (vezi 0d).
 --   * Cauza: pg_default_acl pe public — postgres dă arwdxtm (F1 a scos D, „m” a rămas), supabase_admin dă arwdDxtm.
 --   * PUBLIC nu are MAINTAIN; niciun grant WITH GRANT OPTION; toate relațiile din public sunt ale lui postgres;
 --     pg_maintain nu are membri. PostgREST/pg_graphql nu pot emite VACUUM/LOCK ⇒ risc latent (apărare în profunzime).
@@ -106,10 +110,10 @@ BEGIN
             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','f')) x
    WHERE x.a OR x.u;
-  RAISE NOTICE 'SEC F1b înainte: % relații cu MAINTAIN (tabele: anon=% authenticated=%), amprenta % (live 01.10: 477 / 312 / 348, 41e9610b…)',
+  RAISE NOTICE 'SEC F1b înainte: % relații cu MAINTAIN (tabele: anon=% authenticated=%), amprenta % (live 01.10: 474 / 309 / 345, dd222470…)',
     v_n, v_anon, v_auth, coalesce(v_fp, '<gol>');
-  IF v_n IS DISTINCT FROM 0 AND v_fp IS DISTINCT FROM '41e9610b39f6609d9f34a21d302360d2' THEN
-    RAISE EXCEPTION 'Precondiție 0d: lista relațiilor cu MAINTAIN pentru anon/authenticated s-a schimbat față de 01.10 (% relații, md5 % ≠ 41e9610b…) — se recitește lista și se reface amprenta', v_n, v_fp;
+  IF v_n IS DISTINCT FROM 0 AND v_fp IS DISTINCT FROM 'dd22247052979de6b3cd0f9bd5b88978' THEN
+    RAISE EXCEPTION 'Precondiție 0d: lista relațiilor cu MAINTAIN pentru anon/authenticated s-a schimbat față de 01.10 (% relații, md5 % ≠ dd222470…) — se recitește lista și se reface amprenta', v_n, v_fp;
   END IF;
   IF v_n = 0 THEN RAISE NOTICE 'SEC F1b: nicio relație cu MAINTAIN — reaplicare; REVOKE-ul e idempotent'; END IF;
   -- 0e. service_role: numărul EXACT de dinainte (postcondiția 3c)

@@ -1,5 +1,5 @@
--- Fixture LOCAL pentru scripts/test_sec_f1b_maintain.sh: reproduce lista LIVE (01.10.2026) a relațiilor din public
--- cu MAINTAIN pentru anon/authenticated (477; amprenta 41e9610b39f6609d9f34a21d302360d2) + câteva fără. NU e migrare.
+-- Fixture LOCAL pentru scripts/test_sec_f1b_maintain.sh: reproduce lista LIVE (01.10.2026, recitită după #540/#541) a relațiilor din public
+-- cu MAINTAIN pentru anon/authenticated (474; amprenta dd22247052979de6b3cd0f9bd5b88978) + câteva fără. NU e migrare.
 DO $r$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
@@ -538,3 +538,6 @@ REVOKE ALL ON public.ofertare_derogari_audit FROM anon, authenticated;
 REVOKE ALL ON public.storage_egress_config FROM anon, authenticated;
 REVOKE ALL ON public.v_claude_context_start FROM anon, authenticated;
 REVOKE ALL ON public.v_ofertare_clarificari_baza FROM anon, authenticated;
+REVOKE MAINTAIN ON public.hr_concediu_tokens FROM anon, authenticated;  -- #540/#541
+REVOKE MAINTAIN ON public.trezorerie_conturi FROM anon, authenticated;  -- #540/#541
+REVOKE MAINTAIN ON public.trezorerie_extras_linii FROM anon, authenticated;  -- #540/#541

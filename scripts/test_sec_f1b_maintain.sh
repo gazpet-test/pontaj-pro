@@ -2,14 +2,14 @@
 # ============================================================================
 # Harness SQL local — 20261006a_sec_f1b_maintain_revoke. EXCLUSIV pe un PostgreSQL 17 local dedicat
 # (implicit /tmp/pg_sec_f1b, 127.0.0.1:5973). Nu atinge producția.
-#   0. fixture (supabase/tests/sec_f1b_maintain_fixture.sql) = lista live 01.10 (477 relații, md5 41e9610b…); REINDEX ca
+#   0. fixture (supabase/tests/sec_f1b_maintain_fixture.sql) = lista live 01.10 (474 relații, md5 dd222470…); REINDEX ca
 #      authenticated reușește (gaura)
 #   1. fișierul fără runner → garda refuză, nimic schimbat
 #   2. relație nouă cu MAINTAIN (lista s-a schimbat) → precondiția 0d refuză
 #   3. livrare prin scripts/livrare_migrare.sh (sha256 + gate 0e) → cod 0; 0 relații cu MAINTAIN; REINDEX/VACUUM refuzate; LOCK rămâne prin UPDATE/DELETE;
 #      tabel nou fără MAINTAIN; service_role neatins
 #   4. reaplicare directă cu marcaj → trece (idempotent)
-#   5. revenire: nearmată → refuz; armată → exact lista din 01.10 (md5 41e9610b…)
+#   5. revenire: nearmată → refuz; armată → exact lista din 01.10 (md5 dd222470…)
 # Utilizare: bash scripts/test_sec_f1b_maintain.sh [--opreste]   Ieșire: 0 PASS · 1 eșec · 2 mediu
 # ============================================================================
 set -Eeuo pipefail
@@ -37,7 +37,7 @@ ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -l /tmp/pg_sec_f1b.log -w -t 30 star
 trap '[ $OPRESTE = 1 ] && ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null 2>&1; true' EXIT
 q() { "${PSQL[@]}" -d "$BAZA" -Atc "$1"; }
 FP="SELECT count(*) || '/' || coalesce(md5(string_agg(x.k||':'||x.relname||':'||x.a::text||':'||x.u::text, ',' ORDER BY x.relname)),'-') FROM (SELECT c.relkind::text k, c.relname::text relname, has_table_privilege('anon',c.oid,'MAINTAIN') a, has_table_privilege('authenticated',c.oid,'MAINTAIN') u FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f')) x WHERE x.a OR x.u"
-LIVE=477/41e9610b39f6609d9f34a21d302360d2
+LIVE=474/dd22247052979de6b3cd0f9bd5b88978
 SR="SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f') AND has_table_privilege('service_role',c.oid,'MAINTAIN')"
 ca_auth() { "${PSQL[@]}" -d "$BAZA" -Atc "BEGIN; SET LOCAL ROLE authenticated; $1; ROLLBACK;" >/dev/null 2>&1 && echo da || echo nu; }
 marcaj() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE"; }
