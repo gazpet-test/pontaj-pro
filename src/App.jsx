@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
@@ -59,16 +59,19 @@ const useAuth = () => useContext(AuthContext)
 function AuthProvider({ children }) {
   const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(null)
+  // false cât timp profilul se încarcă după sesiune — ProtectedRoute așteaptă, nu redirecționează (fix refresh → meniu)
+  const [profileReady, setProfileReady] = useState(false)
   // Anti N+1: previne multiple fetchProfile simultane (GoTrueClient poate emite onAuthStateChange de 5x)
   const fetchingRef = useRef(null)
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); if (session) fetchProfile(session.user.id) })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => { setSession(session); if (session) fetchProfile(session.user.id); else setProfile(null) })
+    supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); if (session) fetchProfile(session.user.id); else setProfileReady(true) })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => { setSession(session); if (session) fetchProfile(session.user.id); else { setProfile(null); setProfileReady(true) } })
     return () => subscription.unsubscribe()
   }, [])
   const fetchProfile = async (userId) => {
     if (fetchingRef.current === userId) return
     fetchingRef.current = userId
+    setProfileReady(false)
     try {
       const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
       if (data) {
@@ -79,7 +82,7 @@ function AuthProvider({ children }) {
         const { data: ma } = await supabase.from('user_module_access').select('module, access_level').eq('profile_id', userId)
         data.module_access = (ma || []).map(x => x.module)
         data.module_access_levels = Object.fromEntries((ma || []).map(x => [x.module, x.access_level]))
-        setProfile(data)
+        setProfile(data); setProfileReady(true)
       } else {
         setTimeout(async () => {
           const { data: d2 } = await supabase.from('profiles').select('*').eq('id', userId).single()
@@ -91,14 +94,15 @@ function AuthProvider({ children }) {
             d2.module_access_levels = Object.fromEntries((ma2 || []).map(x => [x.module, x.access_level]))
             setProfile(d2)
           }
+          setProfileReady(true)
         }, 1000)
       }
-    } catch (e) { console.error(e) }
+    } catch (e) { console.error(e); setProfileReady(true) }
     finally { if (fetchingRef.current === userId) fetchingRef.current = null }
   }
   const signIn = (email, password) => supabase.auth.signInWithPassword({ email, password })
   const signOut = () => supabase.auth.signOut()
-  return <AuthContext.Provider value={{ session, profile, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={{ session, profile, profileReady, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
 }
 
 // ─── Module access helper ───────────────────────────────────────────────────
@@ -114,9 +118,13 @@ function hasModuleAccess(profile, moduleName) {
 }
 
 function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, requireModule = null }) {
-  const { session, profile } = useAuth()
+  const { session, profile, profileReady } = useAuth()
+  const location = useLocation()
   if (session === undefined) return <LoadingScreen />
-  if (!session) return <Navigate to="/login" replace />
+  if (!session) return <Navigate to="/login" replace state={{ from: location }} />
+  // Fix refresh: la reload sesiunea vine înaintea profilului; fără profil, verificările de drepturi
+  // de mai jos picau și trimiteau la '/'. Așteptăm profilul înainte de orice decizie.
+  if (!profile && !profileReady) return <LoadingScreen />
   // 25.05.2026: AdminPage acces permisiv granular - is_owner SAU can_modify_employees (Natalia HR)
   // Filtrarea tab-urilor sensibile (Setări) e făcută în interiorul AdminPage
   if (adminOnly && !(profile?.is_owner || profile?.can_modify_employees)) return <Navigate to="/" replace />
@@ -1137,8 +1145,9 @@ function InstallPwaBanner() {
 // ─── Login ────────────────────────────────────────────────────────────────────
 function LoginPage() {
   const { signIn, session } = useAuth()
+  const loginLoc = useLocation()
   const [email,setEmail]=useState(''); const [pass,setPass]=useState(''); const [load,setLoad]=useState(false); const [err,setErr]=useState('')
-  if (session) return <Navigate to="/" replace/>
+  if (session) { const f = loginLoc.state?.from; return <Navigate to={f ? (f.pathname||'/') + (f.search||'') + (f.hash||'') : '/'} replace/> }
   const go = async e => { e.preventDefault(); setLoad(true); setErr(''); const {error}=await signIn(email,pass); if(error) setErr('Email sau parolă incorectă'); setLoad(false) }
   return (
     <div style={{...S.page,display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}><style>{css}</style>
@@ -6394,7 +6403,10 @@ function AdminPage() {
   const isSuperAdmin = profile?.is_owner === true
   const isAdmin = isSuperAdmin
   const canEditIban = isSuperAdmin || profile?.can_modify_employees === true
-  const [tab,setTab]=useState('sites')
+  // Tab-ul stă în URL (?tab=) ca să supraviețuiască refresh-ului
+  const [searchParams,setSearchParams]=useSearchParams()
+  const tab=searchParams.get('tab')||'sites'
+  const setTab=v=>setSearchParams(prev=>{const n=new URLSearchParams(prev);n.set('tab',v);return n},{replace:true})
   const [sites,setSites]=useState([]); const [managers,setManagers]=useState([]); const [employees,setEmployees]=useState([])
   const [depozite,setDepozite]=useState([]); const [savingDep,setSavingDep]=useState(false)
   const [depForm,setDepForm]=useState({name:'',cod_3litere:'',site_id:'',adresa:''})
@@ -6779,14 +6791,31 @@ function AdminPage() {
           </span>
         )}
       </div>
-      <div style={{display:'flex',gap:6,marginBottom:20,borderBottom:`1px solid ${G.border}`,paddingBottom:10}}>
+      <style>{`@media (max-width:700px){
+        .adm-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}
+        .adm-tabs button{flex:0 0 auto;white-space:nowrap}
+        .adm-grid{grid-template-columns:1fr !important}
+        .adm-tw{overflow-x:auto !important}
+        .adm-ov{align-items:flex-start !important;padding:10px;overflow-y:auto}
+        .adm-mod{width:100% !important;max-width:100%;padding:16px !important;max-height:calc(100dvh - 20px) !important;overflow-y:auto !important;box-sizing:border-box}
+        .adm-cards thead{display:none}
+        .adm-cards,.adm-cards tbody{display:block;width:100%}
+        .adm-cards tr{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:10px 12px;border-bottom:1px solid ${G.border}}
+        .adm-cards td{display:block;border:none !important;padding:0 !important}
+        .adm-cards td:first-child{flex:1 1 auto;order:0;font-size:14px}
+        .adm-cards td:last-child{order:1}
+        .adm-cards td:last-child button{padding:8px 14px !important;font-size:13px !important}
+        .adm-cards td:not(:first-child):not(:last-child){order:2;flex:1 1 100%;word-break:break-all}
+        .adm-stick th:last-child,.adm-stick td:last-child{position:sticky;right:0;background:${G.surface};box-shadow:-6px 0 8px -6px rgba(0,0,0,.6);z-index:1}
+      }`}</style>
+      <div className="adm-tabs" style={{display:'flex',gap:6,marginBottom:20,borderBottom:`1px solid ${G.border}`,paddingBottom:10}}>
         {tabs.map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{...S.btnS,background:tab===v?'#21262D':G.bg,color:tab===v?G.text:G.muted,fontSize:12}}>{l}</button>)}
       </div>
 
       {/* Edit site name modal */}
       {editSiteItem&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:380}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:380}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Redenumește Șantier</div>
             <div style={{marginBottom:18}}><Lbl>Nume nou</Lbl><input style={S.input} value={editSiteName} onChange={e=>setEditSiteName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&saveSiteName()} autoFocus/></div>
             <div style={{display:'flex',gap:10}}>
@@ -6797,8 +6826,8 @@ function AdminPage() {
         </div>
       )}
       {deletingSite&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:380,textAlign:'center'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:380,textAlign:'center'}}>
             <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
             <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Ștergi șantierul?</div>
             <div style={{fontSize:13,color:G.muted,marginBottom:22}}>„{deletingSite.name}" va fi șters permanent. Această acțiune nu poate fi anulată.</div>
@@ -6812,8 +6841,8 @@ function AdminPage() {
 
       {/* Edit employee modal */}
       {editEmp&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:520,maxHeight:'90vh',overflowY:'auto'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:520,maxHeight:'90vh',overflowY:'auto'}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Angajat</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet *</Lbl><input style={S.input} value={editEmp.name||''} onChange={e=>setEditEmp({...editEmp,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Funcție</Lbl><input style={S.input} value={editEmp.position||''} onChange={e=>setEditEmp({...editEmp,position:e.target.value})}/></div>
@@ -6915,8 +6944,8 @@ function AdminPage() {
 
       {/* Delete employee modal */}
       {deleteEmpItem&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:380,textAlign:'center'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:380,textAlign:'center'}}>
             <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
             <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Ștergi angajatul?</div>
             <div style={{fontSize:13,color:G.muted,marginBottom:8}}>„{deleteEmpItem.name}"</div>
@@ -6932,8 +6961,8 @@ function AdminPage() {
         </div>
       )}
       {editMgr&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:440,maxHeight:'90vh',overflowY:'auto'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:440,maxHeight:'90vh',overflowY:'auto'}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Manager</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet</Lbl><input style={S.input} value={editMgr.name||''} onChange={e=>setEditMgr({...editMgr,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Email</Lbl>
@@ -7349,8 +7378,8 @@ function AdminPage() {
 
       {tab==='sites'&&(
         <>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
-          <div style={{...S.card,overflow:'hidden'}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
+          <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
               <table><thead><tr style={{background:G.bg}}><th>Șantier / Sediu</th><th>Status</th><th>Acțiuni</th></tr></thead>
               <tbody>{sites.map(s=>(
@@ -7377,8 +7406,8 @@ function AdminPage() {
             🏭 Depozite materiale
             <span style={{fontSize:10,color:G.muted,fontWeight:500}}>— locații fizice de stocare (legate la șantier, generează seria avizului)</span>
           </div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
-            <div style={{...S.card,overflow:'hidden'}}>
+          <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
+            <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
               <table><thead><tr style={{background:G.bg}}>
                 <th>Depozit</th><th>Serie aviz</th><th>Șantier</th><th>Adresă</th><th>Status</th><th></th>
               </tr></thead>
@@ -7444,10 +7473,10 @@ function AdminPage() {
       )}
 
       {tab==='managers'&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
-          <div style={{...S.card,overflow:'hidden'}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
+          <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier / Departament</th><th></th></tr></thead>
+              <table className="adm-cards"><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier / Departament</th><th></th></tr></thead>
               <tbody>{managers.map(m=>(
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
@@ -7497,7 +7526,7 @@ function AdminPage() {
       )}
 
       {tab==='employees'&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
           <div>
             {/* Filters row */}
             <div style={{display:'flex',gap:7,marginBottom:10,alignItems:'center',flexWrap:'wrap'}}>
@@ -7529,9 +7558,9 @@ function AdminPage() {
                 }).length} angajați
               </span>
             </div>
-            <div style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
+            <div className="adm-tw" style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
               {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-                <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Angajat</th><th>Încetat</th><th>Status</th><th>Acțiuni</th></tr></thead>
+                <table className="adm-stick"><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Angajat</th><th>Încetat</th><th>Status</th><th>Acțiuni</th></tr></thead>
                 <tbody>{employees.filter(e=>{
                   const s=empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active
                   const q=empSearch.trim().toLowerCase()
@@ -7613,8 +7642,8 @@ function AdminPage() {
       )}
 
       {tab==='calendar'&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
-          <div style={{...S.card,overflow:'hidden'}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
+          <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
             <div style={{padding:'12px 14px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between'}}>
               <span style={{fontSize:13,fontWeight:700}}>Zile Speciale</span>
               <span style={{fontSize:11,color:G.muted}}>{calDays.length} zile înregistrate</span>
