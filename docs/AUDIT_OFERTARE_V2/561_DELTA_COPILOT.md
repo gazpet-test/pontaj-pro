@@ -1,3 +1,34 @@
+# PR #561 — delta pentru Copilot (RLS scriere garanții) — cerere GO/NO-GO
+
+**context_version:** 01.10.2026, branch `claude/garantii-rls` (după merge origin/main cu #532, #542, #543)
+**Artefact:** `supabase/migrations/20261005b_rls_garantii_scriere.sql`
+**sha256:** `97def36dd999dae905bdfc242a8fb95b12067d0d7fcf3e866b3ed513bc625acb` (versiunea anterioară: `aa461f4f…`, înlocuită)
+
+## Ce s-a schimbat față de prima versiune
+1. **Decizia lui Răzvan (1) A:** rolul `admin_logistica` intră în `fn_poate_scrie_garantii()`. Motivul: fluxul GBE din Ofertare (`GbeLicitatie`) îi arată deja butoanele de editare.
+   - md5(prosrc) al helper-ului: `c2e552ca…` → `e8ee20a08440f3c93c763e4bff0670cf`.
+   - md5-ul politicilor după patch nu se schimbă: `baf4acedb64d79573a83804196d6b156`.
+2. **Decizia lui Răzvan (2) B:** `contracte_terti_update_garantii` rămâne UPDATE pe tot rândul. Riscul e acceptat: cine poate scrie garanții poate modifica orice coloană a contractului.
+3. **Precondiția reverificată pe live azi, doar cu SELECT:** md5-ul politicilor pe cele 4 tabele e tot `62f69c5942960f9e30c0a3c3c04d5e26`, iar helper-ul nu există.
+4. **Merge cu origin/main fără conflicte.** Fișierul de migrare și revenirea nu sunt atinse de #532, #542 sau #543.
+5. **Câte profiluri pot scrie garanții pe live după patch:** 14 (owner, superadmin, contabilitate, admin_logistica, financiar / financiar.garantii admin/editor). Dintre ele, 4 au rolul admin_logistica.
+
+## Verificare
+- `scripts/test_rls_garantii.sh`: **PASS**.
+  - Scheletul reproduce md5-ul live.
+  - Refuz fără runner, refuz cu politică în plus.
+  - Runner cod 0 + gate 0e = 0.
+  - Matricea de acces: 9 identități × 12 operații + citire. admin_logistica: DA pe garantii, gbe_polite și gbe_restituiri (insert, update, delete) și pe UPDATE contracte_terti; NU pe insert/delete contracte_terti.
+  - Refuz la reaplicare.
+  - Revenire: refuz nearmată, armată → starea live.
+- `livrare_validator.py`: OK. `npx vite build`: OK. vitest: 16964/16964.
+- Revenirea (`supabase/revenire/20261005b_rls_garantii_scriere_ROLLBACK.sql`) nu se schimbă: compară doar md5-ul politicilor și șterge helper-ul indiferent de corpul lui.
+
+## Cerere
+**GO / NO-GO** pentru livrarea `20261005b_rls_garantii_scriere.sql` (sha256 de mai sus) prin `scripts/livrare_migrare.sh`. Aplicarea o face Răzvan, după verdict și cu acordul lui.
+
+## Migrarea completă
+```sql
 -- ════════════════════════════════════════════════════════════════════════════
 -- 20261005b_rls_garantii_scriere — DRAFT, NEAPLICAT. Închide scrierea liberă pe tabelele de garanții.
 -- Gaura (citită read-only pe live 01.10.2026): politici PERMISSIVE „ALL … auth.uid() IS NOT NULL” ⇒ orice cont logat
@@ -118,3 +149,4 @@ BEGIN
     RAISE EXCEPTION 'REFUZ: 20261005b_rls_garantii_scriere se livrează doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare, final)' USING ERRCODE = '42501';
   END IF;
 END $post$;
+```

@@ -72,9 +72,9 @@ matrice() {
       a="$(poate "$u" "$sql")"
       if [ "$mod" = gaura ]; then e=da; else
         case "$tab" in
-          garantii|gbe_polite|gbe_restituiri) case $u in 1|2|3|4|5) e=da ;; *) e=nu ;; esac ;;
+          garantii|gbe_polite|gbe_restituiri) case $u in 1|2|3|4|5|9) e=da ;; *) e=nu ;; esac ;;
           ct_ins) case $u in 1|7) e=da ;; *) e=nu ;; esac ;;
-          ct_upd) case $u in 1|2|3|4|5|7) e=da ;; *) e=nu ;; esac ;;
+          ct_upd) case $u in 1|2|3|4|5|7|9) e=da ;; *) e=nu ;; esac ;;
           ct_del) case $u in 1) e=da ;; *) e=nu ;; esac ;;
         esac
       fi
