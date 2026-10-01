@@ -1,8 +1,8 @@
 # PR #529 (Conturi c/d/e) — delta pentru Copilot, 01.10.2026 seara
 
-**context_version (curent, r5):** branch `claude/erp-continuare-x4p5a7`, cod la commit `4e0c49e`. Documentul e în commitul imediat următor.
+**context_version (curent, r6):** branch `claude/erp-continuare-x4p5a7`, cod la commit `ca4816d`. Documentul e în commitul imediat următor.
 **Istoric:** r1 = `0407bf7` (secțiunile 1–7, păstrate ca istoric) · r2 = `dad549b` · r3 = `a1dddd5` (delta `dac4bda`) · r4 = `187542a` + E varianta C `f411d9e`
-**Versiunile valabile sunt cele din r5: 20261001210000 / 211500 / 213000** (secțiunile 5 / r2 / r3 / r4 au versiuni depășite). r5 = `4e0c49e`.
+**Versiunile valabile: 20261001210000 / 211500 / 213000** (live la 20261001201500). **Sha-urile valabile sunt cele din r6** (secțiunile anterioare sunt istoric). r5 = `4e0c49e` · r6 = `ca4816d`.
 **Stare:** NEAPLICAT pe live. Nimic nu s-a scris în producție; verificările live au fost doar SELECT.
 
 ## 1. Ce s-a schimbat față de pack-ul anterior (7e3f5e1)
@@ -1263,6 +1263,398 @@ index dcea6fa..9136044 100644
 +UPDATE public.employees SET active = false WHERE id = :el3;
 +SELECT teste.assert((SELECT activ IS FALSE FROM public.hr_personal_extern WHERE id = :xl3_em),
 +  'E-LIFECYCLE-2 dezactivare fără termination_date → aceeași politică (extern pe email dezactivat)');
++
+ \endif
+ 
+ ROLLBACK;
+```
+
+---
+
+## ACTUALIZARE r6 (01.10.2026, după NO-GO-ul Copilot pe r5 `d0dad52`)
+
+**context_version:** cod la `ca4816d`. Commitul include merge-ul cu origin/main `3228174` (#561, #540, #541; niciuna nu atinge obiectele c/d/e). NEAPLICAT pe live.
+
+Tot ce era în r5 (D-RACE-2, D-ERR-IDENTITY, varianta A) a rămas neschimbat. Am reparat cele 3 invariante și am adăugat hardening-ul cerut.
+
+### 1. C-RACE-LINK-1 (c)
+Am adăugat helperul intern `fn_cont_revalideaza_candidat(email, emp)`: SECURITY DEFINER, `search_path` fixat, fără EXECUTE pentru API. Îl cheamă ambele căi de legare după ce profilul e blocat:
+1. `employees FOR UPDATE` pe fișa candidată;
+2. fișa e încă `active = true` și `termination_date` e NULL sau > azi; altfel → `fara_candidat`;
+3. potrivirea recalculată (`fn_cont_candidati_angajat`): 0 candidați → `fara_candidat`; mai mulți, alt candidat sau candidat ocupat → `schimbat`;
+4. abia apoi `UPDATE profiles SET employee_id`.
+
+`fn_cont_leaga_automat` blochează acum explicit profilul (`FOR UPDATE`) înaintea fișei. `fn_cont_leaga_la_creare` îl bloca deja la început. Postcondițiile c și ROLLBACK-ul c includ funcția nouă.
+
+**Ordinea lock-urilor:** legarea ia profil → fișă, iar fluxul HR/sweep ia fișă → profil. Un ciclu e posibil doar ca deadlock DETECTAT (40P01). În `fn_cont_leaga_automat` eroarea e prinsă (`rezultat = eroare`), iar în `fn_cont_leaga_la_creare` duce la `eroare` + notificare owner. Nu rezultă niciodată o legare greșită.
+
+**Test C-RACE-LINK-1** (3 conexiuni, date comise, owner comis):
+1. conexiunea A ține profilul `FOR UPDATE`;
+2. owner-ul aplică `fn_cont_leaga_automat(false, [{profile_id, employee_id}])` și stă la profil, cu candidatul deja calculat;
+3. conexiunea C încheie contractul fișei (`active = false`, încetare azi) și comite;
+4. A eliberează profilul.
+
+Rezultat: **`fara_candidat`**, iar profilul rămâne nelegat. **Mutație:** fără revalidare, testul pică (se leagă).
+
+### 2. D-RACE-CNP-NULL (d)
+Am adăugat cheia advisory stabilă `gazpet.persoana.emp:<employee_id>`. O iau:
+- `fn_cont_garda_persoana`, la prima trecere, împreună cu cheile CNP/nume/email; CNP-urile se recalculează după lock, ca înainte;
+- `trg_hr_employees_private_persoana_lock`, pentru employee_id vechi și nou, împreună cu cheile CNP.
+
+Ambele trec prin `fn_cont_lock_chei`: aceeași sortare globală după hash.
+
+**Test D-RACE-CNP-NULL** (2 conexiuni, ambele ordini):
+- **Ordinea 1:** garda pe fișa fără CNP întoarce `cnp_lipsa` și ține lock-urile. INSERT-ul în `hr_employees_private` (NULL → X) AȘTEAPTĂ.
+- **Ordinea 2:** INSERT-ul necomis cu CNP-ul X face garda să AȘTEPTE. După COMMIT, garda vede CNP-ul (rezultat `NULL` = se poate închide, nu `cnp_lipsa`).
+
+**Mutație:** fără cheia fișei în triggerul de pe datele personale, testul pică.
+
+### 3. E-LIFECYCLE-2B (e)
+În `fn_hr_personal_extern_fost_angajat`: un extern NELEGAT care devine sau rămâne activ e refuzat cu **23514**, indiferent de `termination_date` și **și pentru owner**, dacă are emailul EXACT (lower/trim, nevid) al unei fișe `active = false`. Verificarea rulează la INSERT, la trecerea activ false → true, la schimbarea emailului și la dezlegare. Excepția owner-ului rămâne doar pentru potrivirea pe nume, cu fostul angajat. Mesajul păstrează „fost angajat Gazpet”, iar HINT-ul trimite la HR → Foști angajați.
+
+**E-LIFECYCLE-2B** (secvențial):
+- dezactivare cu încetare peste 30 de zile, apoi reactivarea externului → 23514;
+- fără `termination_date` → 23514;
+- owner reactivează un extern cu email exact → 23514;
+- owner adaugă un extern NOU cu email exact (cu altă scriere a literelor) → 23514;
+- owner cu potrivire DOAR pe nume cu un fost angajat → permis.
+
+**Mutație:** fără regula nouă, testul pică.
+
+### 4. Hardening
+- **d, postcondiții:** amprentă exactă pentru `fn_identitate_sesiune()` (md5 `7b9a4321…`) și `fn_cont_restaureaza_flaguri(uuid,jsonb)` (md5 `71545de9…`). Se verifică: o singură funcție cu numele respectiv, semnătura, md5 prosrc, SECURITY DEFINER, `proconfig = {"search_path=public, pg_temp"}`, owner postgres și ACL `{postgres=X/postgres}`.
+- **e, postcondiții:** `fn_colab_ext_lock` și `fn_employees_colab_ext_lock` sunt incluse acum și în verificările „SECURITY DEFINER fără search_path” și „executabile de anon”, nu doar în „există”.
+
+### Preflight live read-only (01.10.2026, după 20261001201500)
+| Verificare | Rezultat |
+|---|---|
+| ultima versiune | `20261001201500` (20261003e_sec_trezorerie); înainte: 200000 concediu_tokens, 195000 rls_garantii_scriere, 184500 monitor_egress_fix |
+| md5 `fn_profiles_campuri_owner_only` | `1114af39…` (precondiția c/d) · trigger S-A: tgtype 19, O, funcția S-A |
+| md5 `handle_new_user` | `94e5c5d3…` (precondiția c) |
+| default ACL postgres/public | tabele: anon/authenticated fără TRUNCATE; funcții: `postgres=X, service_role=X` (după REVOKE → `{postgres=X/postgres}`) |
+| TRUNCATE anon/authenticated | 0 |
+| obiecte c/d/e (funcții inclusiv cele noi din r6, tabele, coloane, triggere, cron) | niciunul |
+| triggere existente | employees: 0_protectie, audit_del/ins, termination_notify · hr_employees_private: touch · hr_personal_extern: niciunul |
+| `pgrst.db_pre_request` | nesetat |
+| gate 0e | **0 rânduri** |
+
+### sha256 și versiuni (r6)
+Live e la 20261001201500, deci versiunile rămân cele acceptate.
+| Pas | Fișier | Versiune | sha256 |
+|---|---|---|---|
+| 1 | 20260929c_conturi_legare_automata.sql | `20261001210000` | `286e1afb1f15cc316b1565d048e2a282f81d956b27851786e4e6326ae1490eb7` |
+| 2 | 20260929d_conturi_inchidere_la_incetare.sql | `20261001211500` | `ddc04baaa48cff28f69ae009f8276b891d935b94aec79571cc7cae410ded52e7` |
+| 3 | 20260929e_fost_angajat_colaborare_externa.sql | `20261001213000` | `870fdb3f8252e64e4e0ff136a21e2ba431da3e9aee8657448875e47c6745bd59` |
+| — | c ROLLBACK | — | `be29df2cf6c1261af75e57d8bd54f3d0b8ebd69b9e39331805debba4200c1592` (nou: DROP `fn_cont_revalideaza_candidat`) |
+| — | d / e ROLLBACK | — | `c2e41e0e…` / `5db7153f…` (neschimbate) |
+
+**Atenție:** c s-a schimbat (avea GO în r5), deci verdictul pe c trebuie reînnoit. Amprentele helperilor din c verificate în precondițiile d/e sunt neschimbate; funcțiile respective nu s-au atins.
+
+### Teste r6
+- Harness PG17 `--rollback`: **968 aserțiuni PASS**. Sunt incluse C-RACE-LINK-1, D-RACE-CNP-NULL și E-LIFECYCLE-2B, plus toate testele din r1–r5.
+- **Mutații** (fix-ul scos, testul pică): C → C-RACE-LINK-1 · D → D-RACE-CNP-NULL · E → E-LIFECYCLE-2B.
+- Gate 0e pe bază locală după fiecare migrare: c = 0, c+d = 0, c+d+e = 0.
+- Validator: c OK (50), d OK (96), e OK (54).
+- vitest: 1129 PASS. Build: OK.
+
+### Diff r6 (migrări + teste)
+```diff
+diff --git a/supabase/migrations/20260929c_conturi_legare_automata.sql b/supabase/migrations/20260929c_conturi_legare_automata.sql
+index 6219e4a..933090d 100644
+--- a/supabase/migrations/20260929c_conturi_legare_automata.sql
++++ b/supabase/migrations/20260929c_conturi_legare_automata.sql
+@@ -425,6 +425,32 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authentic
+ -- legătura încă liberă, tipul contului, emailul profilului = emailul de logare, candidatul UNIC și liber.
+ -- Întoarce: legat | legatura_existenta | fara_marcaj_incredere | email_neconfirmat | tip_cont_exceptat | email_diferit |
+ --           fara_candidat | ambiguu | candidat_ocupat | inexistent | eroare.
++-- r6 (C-RACE-LINK-1): revalidarea candidatului SUB LOCK, comună celor două căi de legare. Apelantul ține deja profilul
++-- (FOR UPDATE); aici se blochează fișa candidată și se recalculează potrivirea (instrucțiuni noi ⇒ văd ce s-a comis între
++-- timp, ex. încheierea contractului). NULL = se poate lega; altfel rezultatul de întors, fără legare.
++CREATE OR REPLACE FUNCTION public.fn_cont_revalideaza_candidat(p_email text, p_emp integer)
++RETURNS text
++LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
++AS $fn$
++DECLARE
++  v_n      integer;
++  v_emp    integer;
++  v_ocupat boolean;
++BEGIN
++  PERFORM 1 FROM public.employees e WHERE e.id = p_emp FOR UPDATE;
++  IF NOT EXISTS (SELECT 1 FROM public.employees e
++                  WHERE e.id = p_emp AND e.active IS TRUE AND (e.termination_date IS NULL OR e.termination_date > CURRENT_DATE)) THEN
++    RETURN 'fara_candidat';
++  END IF;
++  SELECT count(*), min(c.employee_id), COALESCE(bool_or(c.profil_legat IS NOT NULL), false)
++    INTO v_n, v_emp, v_ocupat
++    FROM public.fn_cont_candidati_angajat(p_email) c;
++  IF v_n = 0 THEN RETURN 'fara_candidat'; END IF;
++  IF v_n <> 1 OR v_emp IS DISTINCT FROM p_emp OR v_ocupat THEN RETURN 'schimbat'; END IF;
++  RETURN NULL;
++END $fn$;
++REVOKE ALL ON FUNCTION public.fn_cont_revalideaza_candidat(text, integer) FROM PUBLIC, anon, authenticated, service_role;
++
+ CREATE OR REPLACE FUNCTION public.fn_cont_leaga_la_creare(p_profile_id uuid)
+ RETURNS text
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+@@ -462,6 +488,10 @@ BEGIN
+   IF v_n = 0 THEN RETURN 'fara_candidat'; END IF;
+   IF v_n > 1 THEN RETURN 'ambiguu'; END IF;
+   IF v_ocupat THEN RETURN 'candidat_ocupat'; END IF;
++  -- r6 (C-RACE-LINK-1): fișa candidată blocată (după profil, deja blocat sus) + revalidare sub lock: încă activă, fără
++  -- încetare trecută, potrivirea recalculată identică (un singur candidat, același, neocupat) ⇒ altfel fără legare.
++  v_rez := public.fn_cont_revalideaza_candidat(v_email, v_emp);
++  IF v_rez IS NOT NULL THEN RETURN v_rez; END IF;
+   BEGIN
+     UPDATE public.profiles SET employee_id = v_emp
+      WHERE id = p_profile_id AND employee_id IS NULL;             -- nu suprascrie niciodată
+@@ -614,9 +644,15 @@ BEGIN
+         rezultat := 'schimbat';                           -- potrivirea s-a schimbat de la previzualizare
+       ELSE
+         BEGIN
+-          UPDATE public.profiles pr SET employee_id = r.emp
+-           WHERE pr.id = r.pid AND pr.employee_id IS NULL;
+-          rezultat := CASE WHEN FOUND THEN 'legat' ELSE 'candidat_ocupat' END;
++          -- r6 (C-RACE-LINK-1): profilul, apoi fișa candidată, blocate; revalidare sub lock (activă, fără încetare trecută,
++          -- potrivire recalculată identică). Altfel „schimbat” / „fara_candidat”, fără legare.
++          PERFORM 1 FROM public.profiles pr WHERE pr.id = r.pid FOR UPDATE;
++          rezultat := public.fn_cont_revalideaza_candidat(r.uemail, r.emp);
++          IF rezultat IS NULL THEN
++            UPDATE public.profiles pr SET employee_id = r.emp
++             WHERE pr.id = r.pid AND pr.employee_id IS NULL;
++            rezultat := CASE WHEN FOUND THEN 'legat' ELSE 'candidat_ocupat' END;
++          END IF;
+         EXCEPTION
+           WHEN unique_violation THEN rezultat := 'candidat_ocupat';
+           WHEN OTHERS THEN
+@@ -679,15 +715,15 @@ DO $post_livrare$
+ DECLARE v_n integer; v_lipsa text[];
+ BEGIN
+   -- funcțiile migrării există; cele SECURITY DEFINER au search_path fixat; niciuna executabilă de anon (excepții explicite)
+-  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) f
++  SELECT array_agg(f) INTO v_lipsa FROM unnest(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) f
+    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
+   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) AND p.prosecdef
++   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[]) AND p.prosecdef
+      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
+   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
+   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[])
++   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_candidati_angajat','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_leaga_la_creare','fn_cont_notifica_owneri','fn_identitate_claims','fn_identitate_eticheta','fn_identitate_om','fn_identitate_privilegiata','fn_identitate_revocata','fn_identitate_uid','fn_nume_cuvinte','fn_nume_familie','fn_profiles_protectie_legatura','handle_new_user']::text[])
+      AND p.proname <> ALL(ARRAY[]::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
+   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
+   -- triggerele cerute există și sunt active
+diff --git a/supabase/migrations/20260929c_conturi_legare_automata_ROLLBACK.sql b/supabase/migrations/20260929c_conturi_legare_automata_ROLLBACK.sql
+index 9240714..24d534f 100644
+--- a/supabase/migrations/20260929c_conturi_legare_automata_ROLLBACK.sql
++++ b/supabase/migrations/20260929c_conturi_legare_automata_ROLLBACK.sql
+@@ -48,6 +48,7 @@ DROP FUNCTION IF EXISTS public.fn_admin_conturi_alerte();
+ DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean);
+ DROP FUNCTION IF EXISTS public.fn_cont_leaga_automat(boolean, jsonb);
+ DROP FUNCTION IF EXISTS public.fn_cont_leaga_la_creare(uuid);
++DROP FUNCTION IF EXISTS public.fn_cont_revalideaza_candidat(text, integer);
+ DROP FUNCTION IF EXISTS public.fn_cont_candidati_angajat(text);
+ DROP FUNCTION IF EXISTS public.fn_cont_notifica_owneri(text, text, text, text);
+ DROP FUNCTION IF EXISTS public.fn_nume_familie(text);
+diff --git a/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql b/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
+index e3cdc4b..7200aee 100644
+--- a/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
++++ b/supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
+@@ -364,7 +364,11 @@ BEGIN
+   -- 1) lock pe persoană; cheile se recalculează după lock (o scriere concurentă tocmai confirmată poate aduce un CNP /
+   --    nume nou) — cel mult 3 treceri, fiecare citire e o instrucțiune nouă (instantaneu nou)
+   FOR i IN 1..3 LOOP
+-    SELECT public.fn_cont_persoana_chei(public.fn_cont_persoana_cnp(e.id), e.name, e.email) INTO v_chei
++    -- r6 (D-RACE-CNP-NULL): + cheia stabilă a fișei (gazpet.persoana.emp:<id>), luată și de triggerul pe
++    -- hr_employees_private ⇒ un CNP care apare (NULL → X) în datele personale se serializează cu garda, chiar dacă fișa
++    -- n-avea încă nicio cheie de CNP. Aceeași sortare globală (fn_cont_lock_chei: după hash).
++    SELECT public.fn_cont_persoana_chei(public.fn_cont_persoana_cnp(e.id), e.name, e.email) || ('gazpet.persoana.emp:' || p_employee_id)
++      INTO v_chei
+       FROM public.employees e WHERE e.id = p_employee_id;
+     EXIT WHEN v_chei IS NULL OR v_chei <@ v_blocate;
+     PERFORM public.fn_cont_lock_chei(v_chei);
+@@ -444,7 +448,10 @@ AS $fn$
+ BEGIN
+   PERFORM public.fn_cont_lock_chei(public.fn_cont_persoana_chei(
+     ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN public.fn_cont_cnp_normalizat(NEW.cnp) END,
+-          CASE WHEN TG_OP <> 'INSERT' THEN public.fn_cont_cnp_normalizat(OLD.cnp) END], NULL, NULL));
++          CASE WHEN TG_OP <> 'INSERT' THEN public.fn_cont_cnp_normalizat(OLD.cnp) END], NULL, NULL)
++    -- r6 (D-RACE-CNP-NULL): cheia stabilă a fișei (veche / nouă), aceeași ca în fn_cont_garda_persoana
++    || ARRAY[CASE WHEN TG_OP <> 'DELETE' THEN 'gazpet.persoana.emp:' || NEW.employee_id END,
++             CASE WHEN TG_OP <> 'INSERT' THEN 'gazpet.persoana.emp:' || OLD.employee_id END]);
+   RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+ END $fn$;
+ REVOKE ALL ON FUNCTION public.fn_hr_employees_private_persoana_lock() FROM PUBLIC, anon, authenticated, service_role;
+@@ -1333,6 +1340,17 @@ BEGIN
+    WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_admin_conturi_alerte','fn_cont_alt_contract_activ','fn_cont_cnp_normalizat','fn_cont_coada_pune','fn_cont_flaguri','fn_cont_garda_persoana','fn_cont_inchide','fn_cont_inchide_owner','fn_cont_lock_chei','fn_cont_lock_persoana','fn_cont_motiv_garda','fn_cont_persoana_chei','fn_cont_persoana_cnp','fn_cont_posibil_aceeasi_persoana','fn_cont_restaurare_activa','fn_cont_restaureaza','fn_cont_revocat_nu_scrie','fn_cont_stare_angajati','fn_conturi_inchideri_append_only','fn_conturi_inchideri_sweep','fn_employees_ciclu_cont','fn_employees_persoana_lock','fn_hr_employees_private_persoana_lock','fn_pgrst_pre_request']::text[])
+      AND p.proname <> ALL(ARRAY['fn_pgrst_pre_request']::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
+   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
++  -- r6 (hardening): amprenta EXACTĂ a celor două funcții interne sensibile (identitatea sesiunii, restaurarea flagurilor)
++  SELECT array_agg(w.sig ORDER BY w.sig) INTO v_lipsa
++    FROM (VALUES ('fn_identitate_sesiune', 'fn_identitate_sesiune()', '7b9a4321560cf3127c9f10df594ea302'),
++                 ('fn_cont_restaureaza_flaguri', 'fn_cont_restaureaza_flaguri(uuid,jsonb)', '71545de9629f5eb2925c4a259477cf42')) AS w(f, sig, m)
++   WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
++      OR NOT EXISTS (SELECT 1 FROM pg_proc p
++                      WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m AND p.prosecdef
++                        AND p.proconfig::text = '{"search_path=public, pg_temp"}'
++                        AND pg_get_userbyid(p.proowner)::text = 'postgres'
++                        AND p.proacl::text = '{postgres=X/postgres}');
++  IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: amprentă diferită (semnătură/md5/secdef/proconfig/owner/ACL): %', v_lipsa; END IF;
+   -- tabelele noi: RLS activ, anon fără niciun drept
+   SELECT array_agg(t) INTO v_lipsa FROM unnest(ARRAY['conturi_inchideri_jurnal','conturi_inchideri_coada']::text[]) t
+    WHERE to_regclass('public.' || t) IS NULL
+diff --git a/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql b/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
+index 0e75f3e..6c3acd6 100644
+--- a/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
++++ b/supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
+@@ -357,6 +357,23 @@ BEGIN
+         USING ERRCODE = '23514';
+     END IF;
+   END IF;
++  -- r6 (E-LIFECYCLE-2B): un extern NELEGAT care devine / rămâne activ cu emailul EXACT al unei fișe INACTIVE e refuzat
++  -- (23514) indiferent de termination_date și CHIAR pentru owner: e același om ⇒ trece prin HR → Foști angajați, cu acord.
++  -- Excepția owner-ului rămâne doar pentru potrivirea ambiguă pe nume (mai jos).
++  IF NEW.fost_angajat_employee_id IS NULL AND NEW.activ IS TRUE AND NULLIF(lower(btrim(COALESCE(NEW.email, ''))), '') IS NOT NULL
++     AND (TG_OP = 'INSERT' OR OLD.activ IS NOT TRUE OR NEW.email IS DISTINCT FROM OLD.email
++          OR OLD.fost_angajat_employee_id IS NOT NULL) THEN
++    SELECT e.id, e.name INTO v_pot FROM public.employees e
++     WHERE e.active IS NOT TRUE AND lower(btrim(COALESCE(e.email, ''))) = lower(btrim(NEW.email))
++     ORDER BY e.id LIMIT 1;
++    IF FOUND THEN
++      RAISE EXCEPTION 'E fost angajat Gazpet (fișa inactivă #% %, același email): colaborarea se trece prin HR → Foști angajați, cu acordul lui',
++        v_pot.id, v_pot.name
++        USING ERRCODE = '23514',
++              HINT = format('Folosește HR → Foști angajați → „Trece ca extern” (fișa #%s %s). Potrivirea pe email nu are excepție, nici pentru owner.',
++                            v_pot.id, v_pot.name);
++    END IF;
++  END IF;
+   IF NEW.fost_angajat_employee_id IS NULL AND NEW.activ IS TRUE AND NOT v_owner
+      AND (TG_OP = 'INSERT' OR NEW.nume IS DISTINCT FROM OLD.nume OR NEW.email IS DISTINCT FROM OLD.email
+           OR NEW.activ IS DISTINCT FROM OLD.activ) THEN
+@@ -572,11 +589,11 @@ BEGIN
+    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = f);
+   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții lipsă după migrare: %', v_lipsa; END IF;
+   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[]) AND p.prosecdef
++   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colab_ext_lock','fn_employees_colab_ext_lock','fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[]) AND p.prosecdef
+      AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) c WHERE c LIKE 'search_path=%');
+   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: SECURITY DEFINER fără search_path: %', v_lipsa; END IF;
+   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
+-   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[])
++   WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY(ARRAY['fn_colab_ext_lock','fn_employees_colab_ext_lock','fn_colaborare_externa_seteaza','fn_employees_colab_ext_after','fn_employees_colab_ext_protectie','fn_extern_fost_angajat_potrivire','fn_fost_angajat_leaga_extern','fn_hr_colab_ext_jurnal_imuabil','fn_hr_personal_extern_fost_angajat']::text[])
+      AND p.proname <> ALL(ARRAY[]::text[]) AND has_function_privilege('anon', p.oid, 'EXECUTE');
+   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
+   -- tabelele noi: RLS activ, anon fără niciun drept
+diff --git a/supabase/tests/conturi_ciclu_viata.test.sql b/supabase/tests/conturi_ciclu_viata.test.sql
+index 9136044..b0b1b7a 100644
+--- a/supabase/tests/conturi_ciclu_viata.test.sql
++++ b/supabase/tests/conturi_ciclu_viata.test.sql
+@@ -262,6 +262,85 @@ SELECT teste.assert((SELECT count(*) = 1 FROM public.conturi_inchideri_coada
+ SELECT teste.dblink_disconnect('c_tine4');
+ SELECT teste.dblink_disconnect('c_dsw');
+ 
++-- C-RACE-LINK-1 (r6): legarea cont ↔ fișă (owner, fn_cont_leaga_automat aplicare) e blocată la profil (ținut de altă
++-- tranzacție) DUPĂ ce a calculat candidatul; între timp altă conexiune încheie contractul fișei și comite. După eliberarea
++-- profilului legarea blochează fișa, revalidează sub lock și NU leagă („schimbat” / „fara_candidat”).
++SELECT gen_random_uuid() AS u_own, gen_random_uuid() AS u_lk \gset
++SELECT teste.dblink_exec(:'conn_lock', format($q$
++  INSERT INTO auth.users (id, aud, role, email, raw_app_meta_data, created_at, updated_at, email_confirmed_at)
++  VALUES (%1$L, 'authenticated', 'authenticated', 'owner.race@gazpet.ro', '{"provider":"email"}', now(), now(), now()),
++         (%2$L, 'authenticated', 'authenticated', 'link.race@gazpet.ro', '{"provider":"email"}', now(), now(), now());
++  UPDATE public.profiles SET is_owner = true WHERE id = %1$L;
++  INSERT INTO public.employees (name, department, email, active) VALUES ('LINKESCU RACE', 'Test', 'link.race@gazpet.ro', true);
++  INSERT INTO public.employees (name, department, email, active) VALUES ('CNPESCU UNU', 'Test', 'cnp.unu@exemplu.ro', true),
++                                                                        ('CNPESCU DOI', 'Test', 'cnp.doi@exemplu.ro', true);
++$q$, :'u_own', :'u_lk'));
++SELECT max(id) FILTER (WHERE name = 'LINKESCU RACE') AS e_lk, max(id) FILTER (WHERE name = 'CNPESCU UNU') AS e_cn1,
++       max(id) FILTER (WHERE name = 'CNPESCU DOI') AS e_cn2
++  FROM public.employees WHERE name IN ('LINKESCU RACE', 'CNPESCU UNU', 'CNPESCU DOI') \gset
++SELECT teste.dblink_connect('c_own', :'conn_lock');
++SELECT * FROM teste.dblink('c_own', format('SELECT teste.ca_utilizator(%L)::text', :'u_own')) AS t(x text);
++SELECT pid AS pid_own FROM teste.dblink('c_own', 'SELECT pg_backend_pid()') AS t(pid integer) \gset
++SELECT teste.dblink_connect('c_tine5', :'conn_lock');
++SELECT teste.dblink_exec('c_tine5', 'BEGIN');
++SELECT * FROM teste.dblink('c_tine5', format('SELECT id::text FROM public.profiles WHERE id = %L FOR UPDATE', :'u_lk')) AS t(id text);
++SELECT teste.dblink_send_query('c_own', format($q$SELECT COALESCE((SELECT string_agg(rezultat, ',') FROM public.fn_cont_leaga_automat(false, %L::jsonb) WHERE profile_id = %L), '<nimic>')$q$,
++  jsonb_build_array(jsonb_build_object('profile_id', :'u_lk', 'employee_id', :e_lk))::text, :'u_lk'));
++SELECT teste.assert(teste.asteapta_lock(:pid_own), 'C-RACE-LINK-1 legarea (owner) stă la profilul ținut de altă tranzacție, cu candidatul deja calculat');
++SELECT teste.dblink_exec('c_pg', format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id = %s', :e_lk));
++SELECT teste.dblink_exec('c_tine5', 'ROLLBACK');
++SELECT res AS lk_rez FROM teste.dblink_get_result('c_own') AS t(res text) \gset
++SELECT count(*) AS rest_lk FROM teste.dblink_get_result('c_own') AS t(res text) \gset
++\echo '   C-RACE-LINK-1 rezultat:' :lk_rez
++SELECT teste.assert(:'lk_rez' IN ('schimbat', 'fara_candidat')
++    AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_lk'),
++  'C-RACE-LINK-1 contractul încheiat între timp ⇒ revalidarea sub lock refuză legarea (schimbat / fara_candidat), profilul rămâne nelegat');
++SELECT teste.dblink_disconnect('c_tine5');
++SELECT teste.dblink_disconnect('c_own');
++
++-- D-RACE-CNP-NULL (r6): fișa fără CNP (nicio cheie de CNP); CNP-ul apare (NULL → X) în hr_employees_private în timp ce garda
++-- rulează ⇒ cheia stabilă gazpet.persoana.emp:<id> le serializează, în ambele ordini.
++SELECT teste.dblink_connect('c_g', :'conn_lock');
++SELECT teste.dblink_connect('c_h', :'conn_lock');
++SELECT pid AS pid_g FROM teste.dblink('c_g', 'SELECT pg_backend_pid()') AS t(pid integer) \gset
++SELECT pid AS pid_h FROM teste.dblink('c_h', 'SELECT pg_backend_pid()') AS t(pid integer) \gset
++-- ordinea 1: garda întâi (ține lock-urile), apoi CNP-ul apare în datele personale → așteaptă
++SELECT teste.dblink_exec('c_g', 'BEGIN');
++SELECT res AS g1 FROM teste.dblink('c_g', format('SELECT COALESCE(public.fn_cont_garda_persoana(%s), ''NULL'')', :e_cn1)) AS t(res text) \gset
++SELECT teste.dblink_send_query('c_h', format($q$INSERT INTO public.hr_employees_private (employee_id, cnp) VALUES (%s, '1900303000131')$q$, :e_cn1));
++SELECT teste.assert(:'g1' = 'cnp_lipsa' AND teste.asteapta_lock(:pid_h),
++  'D-RACE-CNP-NULL (1) garda a văzut „cnp_lipsa” și ține cheia fișei: CNP-ul nou în datele personale AȘTEAPTĂ');
++SELECT teste.dblink_exec('c_g', 'COMMIT');
++SELECT res AS h1 FROM teste.dblink_get_result('c_h') AS t(res text) \gset
++SELECT count(*) AS rest_h1 FROM teste.dblink_get_result('c_h') AS t(res text) \gset
++-- ordinea 2: CNP-ul apare întâi (necomis), apoi garda → așteaptă și, după COMMIT, vede CNP-ul
++SELECT teste.dblink_exec('c_h', 'BEGIN');
++SELECT teste.dblink_exec('c_h', format($q$INSERT INTO public.hr_employees_private (employee_id, cnp) VALUES (%s, '1900303000140')$q$, :e_cn2));
++SELECT teste.dblink_send_query('c_g', format('SELECT COALESCE(public.fn_cont_garda_persoana(%s), ''NULL'')', :e_cn2));
++SELECT teste.assert(teste.asteapta_lock(:pid_g), 'D-RACE-CNP-NULL (2) garda AȘTEAPTĂ CNP-ul necomis din datele personale (cheia fișei)');
++SELECT teste.dblink_exec('c_h', 'COMMIT');
++SELECT res AS g2 FROM teste.dblink_get_result('c_g') AS t(res text) \gset
++SELECT count(*) AS rest_g2 FROM teste.dblink_get_result('c_g') AS t(res text) \gset
++\echo '   D-RACE-CNP-NULL garda după COMMIT:' :g2
++SELECT teste.assert(:'g2' <> 'cnp_lipsa', 'D-RACE-CNP-NULL (2) după COMMIT garda vede CNP-ul nou (nu mai e „cnp_lipsa”): rulările sunt serializate');
++SELECT teste.dblink_disconnect('c_g');
++SELECT teste.dblink_disconnect('c_h');
++SELECT teste.dblink_exec(:'conn_lock', format($q$
++  SET session_replication_role = replica;
++  DELETE FROM public.hr_employees_private WHERE employee_id IN (%3$s, %4$s, %5$s);
++  DELETE FROM public.hr_colaborare_externa_jurnal WHERE employee_id IN (%3$s, %4$s, %5$s);
++  DELETE FROM public.hr_employees_audit WHERE employee_id IN (%3$s, %4$s, %5$s);
++  UPDATE public.profiles SET employee_id = NULL WHERE id IN (%1$L, %2$L);
++  DELETE FROM public.employees WHERE id IN (%3$s, %4$s, %5$s);
++  SET session_replication_role = origin;
++  DELETE FROM auth.users WHERE id IN (%1$L, %2$L);
++$q$, :'u_own', :'u_lk', :e_lk, :e_cn1, :e_cn2));
++SELECT teste.assert(NOT EXISTS (SELECT 1 FROM auth.users WHERE id IN (:'u_own', :'u_lk'))
++    AND NOT EXISTS (SELECT 1 FROM public.profiles WHERE id IN (:'u_own', :'u_lk'))
++    AND NOT EXISTS (SELECT 1 FROM public.employees WHERE id IN (:e_lk, :e_cn1, :e_cn2))
++    AND NOT EXISTS (SELECT 1 FROM public.hr_employees_private WHERE employee_id IN (:e_lk, :e_cn1, :e_cn2)),
++  'C-RACE-LINK-1 / D-RACE-CNP-NULL curățenie: datele comise au fost șterse');
++
+ -- E-RACE-1: activarea externului (necomisă) ↔ acordul trece accepta → refuza.
+ SELECT teste.dblink_exec('c_hr1', 'BEGIN');
+ SELECT teste.dblink_exec('c_hr1', format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :x1));
+@@ -2725,6 +2804,22 @@ UPDATE public.employees SET active = false WHERE id = :el3;
+ SELECT teste.assert((SELECT activ IS FALSE FROM public.hr_personal_extern WHERE id = :xl3_em),
+   'E-LIFECYCLE-2 dezactivare fără termination_date → aceeași politică (extern pe email dezactivat)');
+ 
++-- E-LIFECYCLE-2B (r6): reactivarea unui extern NELEGAT cu emailul EXACT al unei fișe INACTIVE → refuz 23514, indiferent de
++-- termination_date și CHIAR pentru owner (excepția owner-ului rămâne doar la potrivirea ambiguă pe nume).
++SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :xl2_em),
++  'E-LIFECYCLE-2B dezactivare cu încetare +30 zile, apoi reactivarea externului pe email → refuz', '23514', 'același email');
++SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :xl3_em),
++  'E-LIFECYCLE-2B fără termination_date: reactivarea externului pe email → refuz', '23514', 'același email');
++SELECT teste.ca_utilizator(:'owner');
++SELECT teste.asteapta_eroare(format('UPDATE public.hr_personal_extern SET activ = true WHERE id = %s', :xl2_em),
++  'E-LIFECYCLE-2B owner: reactivarea externului cu emailul exact al fișei inactive → refuz (fără excepție de owner)', '23514', 'același email');
++SELECT teste.asteapta_eroare($$INSERT INTO public.hr_personal_extern (nume, email, activ) VALUES ('Alt Extern Owner', 'VIITORU.CARMEN@exemplu.ro', true)$$,
++  'E-LIFECYCLE-2B owner: extern NOU activ cu emailul exact al fișei inactive → refuz', '23514', 'același email');
++INSERT INTO public.hr_personal_extern (nume, activ) VALUES ('Lifecu Bogdan Ionut', true) RETURNING id AS xl2_owner_nume \gset
++SELECT teste.assert((SELECT activ FROM public.hr_personal_extern WHERE id = :xl2_owner_nume),
++  'E-LIFECYCLE-2B owner: potrivirea DOAR pe nume cu un fost angajat (LIFECU BOGDAN) rămâne decizia owner-ului (permis)');
++SELECT teste.ca_admin();
 +
  \endif
  
