@@ -1478,6 +1478,17 @@ grep -qF "GATE 0e: gadget(uri) expus(e): public.gadget_0e(text)" "$ERR_R" && gre
 [ "$(inregistrata)" = 1 ] && [ "$(stare_patch)" = "$MD5_PATCH" ] || esec "6.24 gadget: migrarea trebuia să rămână comisă (gate de „livrat”, nu rollback)"
 grep -qF "APLICAT + ÎNREGISTRAT confirmat" "$OUT_R" || esec "6.24 gadget: lipsește confirmarea aplicării înaintea gate-ului"
 ok6 "6.24 gadget INVOKER expus (EXECUTE authenticated, set_config) ⇒ cod 30, mesaj GATE 0e, migrarea rămâne comisă (fără rollback)"
+aux_nou
+"${PSQL[@]}" -d "$BAZA_AUX" -c "CREATE FUNCTION public.gadget_0e_xml(q text) RETURNS xml LANGUAGE sql SECURITY INVOKER AS \$g\$ SELECT query_to_xml(q, true, false, '') \$g\$;
+  REVOKE ALL ON FUNCTION public.gadget_0e_xml(text) FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.gadget_0e_xml(text) TO authenticated;" >/dev/null
+livreaza "$MIGRARE" 20261003000000
+[ $RC = 30 ] && grep -qF "public.gadget_0e_xml(text)" "$ERR_R" && grep -qF "interpretor SQL" "$ERR_R" \
+  || { cat "$ERR_R" >&2; esec "6.25 interpretor SQL expus: cod $RC, așteptat 30 cu motivul „interpretor SQL”"; }
+ok6 "6.25 r8: interpretor SQL expus (query_to_xml, EXECUTE authenticated) ⇒ cod 30, motiv „interpretor SQL”"
+# 6.26 r8: fără fals pozitiv pe RSVTI — fn_poate_scrie_hr_autorizatii (antet SET search_path + p.role în corp) e livrată la 6.24 cu GATE curat
+"${PSQL[@]}" -d "$BAZA_AUX" -Atc "SELECT count(*) FROM pg_proc WHERE proname = 'fn_poate_scrie_hr_autorizatii'" | grep -qx 1 \
+  || esec "6.26 fn_poate_scrie_hr_autorizatii lipsește din migrarea testată — testul de fals pozitiv nu acoperă RSVTI"
+ok6 "6.26 r8: fn_poate_scrie_hr_autorizatii (SET search_path în antet + p.role) NU e semnalată de 0e (6.24 curat)"
 
 rm -f "$SNAP_E" "$ERR_R" "$OUT_R"
 

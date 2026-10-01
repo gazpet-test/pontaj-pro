@@ -33,7 +33,8 @@
 #                                ⇒ reconciliere manuală necesară, FĂRĂ retry automat
 #   22 ȚINTĂ NECONFIRMATĂ        pre-verificarea sau reconcilierea a ajuns pe altă țintă (db/system_identifier/proiect)
 #   30 GATE 0e: livrarea e COMISĂ și înregistrată, dar controlul permanent 0e (scripts/control_0e.sql, read-only) a găsit
-#      ≥1 funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) care poate scrie GUC-uri de identitate
+#      ≥1 funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) care poate scrie GUC-uri de identitate sau
+#      interpretează SQL primit ca argument (interpretor SQL: query_to_xml, ts_stat, crosstab, dblink, …)
 #      ⇒ livrarea NU e considerată încheiată. NU e rollback (migrarea rămâne comisă) — analiză înainte de a continua.
 #   31 GATE 0e NERULAT: livrarea e comisă, dar controlul 0e n-a putut rula ⇒ la fel, NU e considerată încheiată.
 #      Gate-ul 0e rulează DOAR după APLICAT + ÎNREGISTRAT confirmat, pe aceeași țintă/conexiune (-h/-p/-U/-d), într-o
@@ -222,7 +223,7 @@ gate_0e() {
     echo "✗ GATE 0e: gadget(uri) expus(e): $(paste -sd ';' "$DIR/0e.out") — $NUME v$VERSIUNE e COMISĂ (fără rollback), dar livrarea NU e considerată încheiată; analizează înainte de a continua." >&2
     exit 30
   fi
-  echo "✓ GATE 0e: 0 funcții expuse care pot scrie GUC-uri de identitate — livrare încheiată."
+  echo "✓ GATE 0e: 0 funcții expuse care pot scrie GUC-uri de identitate sau interpreta SQL (interpretor SQL) — livrare încheiată."
 }
 
 # --- P. pre-verificare (nimic trimis dacă nu trece) ----------------------------
