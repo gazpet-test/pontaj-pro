@@ -1,6 +1,6 @@
 # Practica CNSC 2020–2026 — sinteză pe teme pentru Gazpet
 
-**Baza:** 182 de decizii CNSC (95 apă-canal, 48 gaze, 18 distribuție, 21 lucrări generale), dintre care 71 de contestații admise, 45 admise parțial și 66 respinse. 141 de decizii sunt pe Legea 98/2016 (achiziții clasice) și 41 pe Legea 99/2016 (achiziții sectoriale). Sursa este `docs/cercetare/cnsc_practica.json`. Unde există o regulă corectată, s-a folosit forma corectată.
+**Baza:** 203 decizii CNSC (96 apă-canal, 50 gaze, 36 distribuție, 21 lucrări generale; lotul 7 — 21 de decizii — e sintetizat separat, mai jos) — cifrele de mai jos pe soluții și legi privesc primele 182, dintre care 71 de contestații admise, 45 admise parțial și 66 respinse. 141 de decizii sunt pe Legea 98/2016 (achiziții clasice) și 41 pe Legea 99/2016 (achiziții sectoriale). Sursa este `docs/cercetare/cnsc_practica.json`. Unde există o regulă corectată, s-a folosit forma corectată.
 
 **Ce e nou față de versiunea anterioară (154 de decizii):** s-au integrat cele 28 de decizii din lotul 6 de cercetare (26 apă-canal, 2 gaze; 16 pe L98, 12 pe L99; 8 admise, 4 admise parțial, 16 respinse), toate din 2020–2022. Ele aduc reguli noi despre recepția pe obiecte ca dovadă a ES (BO2020_2156), pragurile multiple de ES (BO2020_2204), ES în asociere și ca antreprenor general (BO2020_2261), factorul de evaluare pe „calitatea graficului” în sectorial (BO2020_2246, BO2022_166), consecvența Gantt–C7 (BO2020_2083), listele de cantități impuse „fără modificări” (BO2020_2335), erorile aritmetice corectabile (BO2021_348), termenul de contestare de la rezultatul intermediar postat în SICAP (BO2020_2327) și cauțiunea la acordurile-cadru pe loturi (BO2020_2352). Tipar nou de clarificări: PAT-CAL-21 (catalog v1.3).
 
@@ -487,6 +487,17 @@ Din 37 de decizii-cheie căutate, 13 au fost atacate la curtea de apel: **9 men�
 **(c) Numărul de decizii:** 41 pe Legea 99/2016 (20 admise, 7 admise parțial, 14 respinse), din care 2 din lotul 5 și 12 din lotul 6.
 
 ---
+
+## Lotul 7 — distribuție gaze (02.10, 04–05 RO, 21 de decizii noi)
+
+Cele 21 de decizii sunt din 2022–2026: 18 pe distribuție gaze, 2 pe transport gaze și 1 pe apă-canal. Toate au fost citite integral. Rezultatul: 11 contestații respinse, 6 admise și 4 admise parțial. Pe temele principale nu au fost încă integrate în secțiunile 1–15; de făcut la runda următoare. Constatările noi:
+
+1. **Transportul gaze poate conta ca experiență similară pentru distribuție** („similar” ≠ „identic”). Respingerea trebuie motivată concret, după verificarea efectivă a documentelor (BO2026_3952, distinctă de Decizia 3952/2025).
+2. **Formularul-declarație lipsă e viciu de formă** dacă propunerea tehnică are deja angajamentele respective. Elementele care servesc doar la punctaj (justificarea garanției extinse, Gantt) duc cel mult la depunctare, nu la respingere (BO2026_633).
+3. **Anulare legală vs nelegală:** relocarea SRM-ului sau un aviz tehnic de racordare Transgaz diferit de avizul de principiu justifică anularea unei proceduri de proiectare + execuție (BO2026_3118). Anularea invocată generic după o decizie CNSC de reevaluare e nelegală, iar AC nu își poate invoca propria culpă (BO2025_2073).
+4. **Completările de la clarificări — practică divergentă:** diagramele și explicațiile pentru drumul critic au fost acceptate (BO2025_1492, BO2026_3120), dar un deviz de proiectare completat ulterior a fost tratat ca modificare a ofertei (BO2026_2159).
+5. **Cauțiunea și subcontractantul comun:** contestația pe documentație e respinsă fără analiza fondului dacă cauțiunea nu se constituie în 5 zile de la sesizare, chiar și după o erată a AC (BO2026_975). Folosirea aceluiași subcontractant de mai mulți ofertanți nu justifică excluderea fără o analiză de tip concurențial (BO2025_2875).
+6. **Control judiciar:** BO2026_421 și BO2026_3120 menționează decizia CA 309/2026 (plângere respinsă). Hotărârea nu a fost citită (NEVERIFICAT). La celelalte decizii din lot, controlul judiciar nu a fost căutat.
 
 ## Top 10 reguli CNSC pentru Gazpet
 

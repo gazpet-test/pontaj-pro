@@ -120,6 +120,21 @@ Cam 300 de credite. Cele mai scumpe: L99 ANAP (103) și BSP 02/2024 (95, nerelev
   - 1703/C2/1597 din 26.05.2026 (Pișcolt).
 - Rapoartele de activitate CNSC 2024–2025 (statistici) și Ghidul de bune practici CNSC (portal.cnsc.ro/ghiddebunepractici.pdf), încă necitite.
 
+## Goluri noi semnalate la tiparele v1.4 (02.10, 05 RO) — NEVERIFICAT
+
+| Sursă lipsă | Folosită de | Notă |
+|---|---|---|
+| Legea 7/1996 (cadastru) + regulamentul OCPI pentru PAD/intabulare | PAT-GAZ-08 | nici sursă, nici REQ |
+| Legea 123/2012 — dreptul de uz/servitute pentru traseele prin terenuri private | PAT-GAZ-08 | sursa există (Titlul II), dar articolele despre dreptul de uz nu au REQ |
+| Ord. ANRE 156/2020 (instalații de utilizare) | PAT-GAZ-15 | în registru_surse, fără REQ extras |
+| Regulamentul de racordare la rețeaua electrică (ATR electric) | SRM, PAT-APA-03 | lipsă |
+| Tarifele OSD pentru cuplări/prestații | PAT-GAZ-05 | lipsă |
+| NTPEE — inertizare/purjare la punerea în funcțiune | PAT-GAZ-06 | cerință dedicată neextrasă |
+| Specificațiile GIS/as-built ale OSD-urilor (Delgaz, Distrigaz) | PAT-GAZ-07 | documente ale operatorilor, de cerut |
+| C 16-84 (execuția pe timp friguros) | PAT-TRM-06, PAT-APA-04 | deja semnalat |
+| Ord. ANRE 17/2026 art. 39 — ce se întâmplă dacă nu se dovedește la termen | PAT-GAZ-09 | de citit integral / de întrebat ANRE |
+| Hotărârea CA 309/2026 (menționată în BO2026_421, BO2026_3120) | CNSC lotul 7 | necitită |
+
 ## Unelte
 
 - **Firecrawl: contul a rămas aproape fără credite** în timpul acestei cercetări (au urmat erori 429). PDF-urile CNSC s-au descărcat direct, fără cost. **Pentru o rundă următoare trebuie reîncărcate creditele.**

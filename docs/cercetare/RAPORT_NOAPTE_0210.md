@@ -7,9 +7,9 @@
 
 | # | Pas din coadă | Livrat | Fișiere |
 |---|---|---|---|
-| 1 | Practica CNSC (țintă ≥ 60) | **182 de decizii** citite integral, sinteză pe **15 teme** + Top 10 reguli | `cnsc_practica.md/.json`, `cnsc_teme.md` |
+| 1 | Practica CNSC (țintă ≥ 60) | **203 decizii** citite integral (lotul 7, +21 distribuție gaze, la 04–05 RO), sinteză pe **15 teme** + Top 10 reguli | `cnsc_practica.md/.json`, `cnsc_teme.md` |
 | 2 | Registrul surselor + cerințe atomice P0 | **370 de surse**, **919 cerințe atomice**, **313 relații** în graful de aplicabilitate | `registru_surse.json`, `registru_cerinte.json`, `graf_aplicabilitate.json`, `registre_evidenta.md` |
-| 3 | Catalog de clarificări v1 (țintă ≥ 30 de tipare) | **97 de tipare (v1.3)**: întrebare neutră, impact intern separat, review juridic marcat | `clarificari_tipare.md/.json`, `clarificari_matrice_model.md` |
+| 3 | Catalog de clarificări v1 (țintă ≥ 30 de tipare) | **119 tipare (v1.4)**: întrebare neutră, impact intern separat, review juridic marcat | `clarificari_tipare.md/.json`, `clarificari_matrice_model.md` |
 | 4 | P1: HG 1/2018, OG 15/2021 + INS, HG 925, L10, HG 273, L50 | 101 cerințe P1, cu Legea 169/2026 citită pe textul din MO 661/2026 | idem registre (REQ-P1-*) |
 | 5 | P2: sudură / NDT / izolare / PE | 105 cerințe P2 + 179 tehnice: încorporare prin referință vs DA; 77 marcate „NECESITĂ STANDARD LICENȚIAT” | REQ-P2-*, REQ-TG-* |
 | 6 | Norme de deviz pentru gaze | indicatoarele G, Ts (TsA/TsC), Iz, C, D, I + 4 tipuri de consum | REQ-P2-*, `registre_evidenta.md` |
@@ -34,7 +34,7 @@
   - PRACTICA_CNSC: 41
 
   Din ele, **864 sunt verificate pe sursă**; restul sunt standarde licențiate, indicatoare sau date interne.
-- **Tipare — 97:** 64 cu încredere ridicată, 31 medie, 2 scăzută; 35 cer review juridic. Toate cele 182 de decizii sunt citate în cel puțin un tipar.
+- **Tipare — 119 (v1.4):** 72 cu încredere ridicată, 45 medie, 2 scăzută; 40 cer review juridic. Cele 22 noi (PAT-GAZ-01…15, PAT-APA-01…07) acoperă presiunea redusă/medie, branșamentele, forajul orizontal dirijat, cuplarea sub presiune, probele și punerea în funcțiune, as-built/GIS, topo/PAD, SRM/PRM, cămine NP 133, stațiile de pompare și epuismentele. Cele 182 de decizii din runda de bază sunt citate în cel puțin un tipar; lotul 7 nu e încă legat de tipare.
 
 ## Top 10 constatări pentru ofertare și clarificări
 
@@ -111,6 +111,12 @@ Recomand **varianta B**: registrele importate în Supabase ca tabele separate. D
    - calculator de termene (10/7 zile, cauțiune);
    - calculator pentru probe de presiune (gaze: NTPEE tabel 8¹; apă/canal: NP 133).
 6. **Matricea per licitație** (`clarificari_matrice_model.md`): document → cerință → `requirement_id` → status → tipar → draft → review → hash.
+
+## Completare 04–05 RO (după raport)
+
+- **CNSC lotul 7 — 21 de decizii noi pe distribuție gaze** (total 203), cu sinteza în `cnsc_teme.md` („Lotul 7”). Cele mai utile: transportul gaze contează ca experiență similară pentru distribuție (BO2026_3952); formularul-declarație lipsă e viciu de formă (BO2026_633); anularea e legală la relocarea SRM sau la un ATR Transgaz diferit (BO2026_3118); practica pe completările de la clarificări e divergentă (BO2025_1492 vs BO2026_2159).
+- **Tipare v1.4 — +22** (PAT-GAZ-01…15, PAT-APA-01…07). Unul singur e doar verificare internă: **PAT-GAZ-09 — autorizațiile ANRE emise pe Ord. 132/2021 (ale noastre, ale asociaților, ale subcontractanților) trebuiau dovedite la ANRE până la 26.08.2026 (Ord. 17/2026 art. 39)**. De verificat azi.
+- **Goluri noi** în `surse_lipsa.md` (Legea 7/1996 și PAD, Legea 123/2012 drept de uz, Ord. ANRE 156/2020, ATR electric, tarifele OSD, inertizare/purjare, specificațiile GIS ale OSD-urilor, C 16-84, sancțiunea pentru nedovedirea din art. 39).
 
 ## Pentru dimineață
 
