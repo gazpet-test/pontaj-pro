@@ -4156,5 +4156,892 @@
   "confidence": "ridicata",
   "requires_human_legal_review": false,
   "note": "v1.2 (nou): Nu se trimite la AC (intrebare_propusa = null). Îndrumarea ANAP 2023 (REQ-SL-031…035) și L98 art. 210 / HG 395 art. 136 (REQ-AD-066…070, REQ-P0-052/053), verificate. Pragul de 80 % nu duce la respingere automată (BO2025_104 — ~65 % din VE, justificare analizată pe fond); peste 80 % AC poate verifica elemente de preț (BO2023_2695 — OS la 3,74 %; BO2024_3130) dar criticile fără probe nu o obligă (BO2025_1699, BO2022_2747 — sectorial); în sectorial, aprecierea pe obiecte/capitole, nu pe fiecare articol (BO2020_2251). Cererea comisiei trebuie să indice punctual elementele și reperele (BO2024_656, BO2021_448) — altfel se contestă. Manopera minimă: metoda corectă de calcul (BO2020_2124, REQ-AD-141). OS ca poziție: PAT-CNT-07. v1.3: Ofensiv: BO2022_184 (sectorial) — critica PANS pe articole se judecă după preambul și răspunsurile consolidate; o singură ofertă de preț nu dovedește; poziția cotată 0 cere clarificări. BO2022_119 — „preț nesustenabil” fără calcul nu motivează contestația. BO2021_2699 — diferența de ~2% între oferte nu declanșează verificarea. Intern: nicio poziție F3 cotată 0."
+ },
+ {
+  "pattern_id": "PAT-GAZ-01",
+  "cod_vechi": [],
+  "tip_problema": "contradictie",
+  "titlu": "Treapta de presiune (redusă / medie) diferită între memoriu, caiet de sarcini, ATR, planșe și F3",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "planse",
+    "F3"
+   ],
+   "semnal": "memoriul/CS indică presiune redusă (≤ 2 bar), iar planșele, avizul tehnic de racordare sau articolele de probe din F3 indică presiune medie (2–6 bar) — sau invers | SAU: treapta de presiune de proiectare/regim lipsește din toate documentele, deși determină presiunile de probă și echiparea branșamentelor",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Memoriu tehnic / caiet de sarcini",
+   "Planșe (plan de situație, schema rețelei)",
+   "Aviz tehnic de racordare (ATR)",
+   "F3 — articole de probe și branșamente"
+  ],
+  "normative_refs": [
+   "REQ-TG-053",
+   "REQ-TG-084",
+   "REQ-TG-088",
+   "REQ-TG-028",
+   "REQ-TG-055",
+   "REQ-TG-056"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_665",
+   "SRC-CNSC-BO2020_2046"
+  ],
+  "intrebare_propusa": "Memoriul tehnic / caietul de sarcini ([cap. …], pag. […]) indică pentru rețeaua de distribuție regimul de presiune [redusă / … bar], iar [planșa … / avizul tehnic de racordare / lista de cantități, poz. …] indică [presiune medie / … bar]. Vă rugăm să precizați treapta de presiune de proiectare și de regim pentru fiecare tronson, în sensul NTPEE, art. 19 alin. (1), precum și presiunile probelor de rezistență și de etanșeitate avute în vedere pentru conducte și branșamente.",
+  "impact_intern": {
+   "tehnic": "Treapta schimbă presiunile de probă (NTPEE Tabel 8: PM 9/6 bar vs PR 4/2 bar), echiparea branșamentelor (regulator/PRM), robinetele și, la > 4 bar, exclude PE 80.",
+   "cost": "Regulatoare/PRM pe branșamente, durata probelor, eventual alt SDR/material.",
+   "risc_respingere": "Mediu: oferta construită pe varianta neconfirmată poate fi contestată ca neconformă; contradicția DA nu se întoarce contra ofertantului (BO2023_665), dar se închide înainte de depunere."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Complementar PAT-STD-02 (material/SDR incompatibil cu presiunea) — aici e contradicția privind treapta însăși. Pentru > 6 bar vezi PAT-GAZ-10 / PAT-CAL-01."
+ },
+ {
+  "pattern_id": "PAT-GAZ-02",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Piese de îmbinare, robinete de secționare, răsuflători, cutii și plăcuțe indicatoare — cantitățile din F3 necorelate cu nodurile din planșe",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "planse"
+   ],
+   "semnal": "numărul de teuri/reducții/robinete/răsuflători/plăcuțe din F3 diferă de nodurile, ramificațiile și traversările din planșe | SAU: F3 conține doar „conductă PE Dn …” fără piese de îmbinare și fără precizare că sunt incluse | SAU: procedeul de îmbinare din F3 (cap la cap) e indicat pentru diametre sub 75 mm",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Plan de situație / schema rețelei",
+   "F3 — montaj conductă și armături",
+   "Preambulul listelor de cantități"
+  ],
+  "normative_refs": [
+   "REQ-TG-075",
+   "REQ-TG-076",
+   "REQ-SC-082",
+   "REQ-AD-123",
+   "REQ-AD-131"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2026_3104",
+   "SRC-CNSC-BO2025_1542",
+   "SRC-CNSC-BO2020_2335"
+  ],
+  "intrebare_propusa": "Planșa [plan de situație …] prezintă [N] ramificații/noduri, [M] robinete de secționare și [K] traversări, iar lista de cantități pentru [obiect] cuprinde [n] teuri/reducții, [m] robinete și [k] răsuflători [sau nu cuprinde articole pentru piese de îmbinare]. Vă rugăm să precizați dacă piesele de îmbinare, robinetele (inclusiv cutiile de protecție), răsuflătorile și plăcuțele indicatoare sunt cuprinse în articolele de montaj al conductei sau în articole distincte și, după caz, să publicați lista de cantități completată.",
+  "impact_intern": {
+   "tehnic": "Fără piese numărate, metodologia și graficul nu acoperă montajul nodurilor; procedeul (EF vs cap la cap) depinde de diametru (NTPEE art. 240).",
+   "cost": "Fitingurile EF și robinetele pot depăși 10–20 % din valoarea materialelor la rețele cu multe ramificații.",
+   "risc_respingere": "Mediu: cantitățile publicate sunt obligatorii (BO2026_3104); o cotare care omite piese neprecizate poate fi tratată ca neconformă sau ca preț neobișnuit pe element."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Detecția e numărare manuală pe planșă (încredere medie). Fir trasor și bandă de avertizare: PAT-CNT-02. Proceduri pentru lucrări minore (răsuflători, subtraversări): BO2025_1542."
+ },
+ {
+  "pattern_id": "PAT-GAZ-03",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Branșamente de gaze: număr, lungime medie, traversarea străzii, post de reglare/firidă și contor — neprecizate",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "F3 cuantifică branșamentele „buc.” fără lungime medie, diametru sau distincție între branșament scurt/traversare | SAU: nu rezultă dacă articolul include regulatorul/PRM, firida/cutia, robinetul de branșament și contorul și cine le furnizează | SAU: numărul diferă între CS, F3 și lista consumatorilor",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "F3 — branșamente",
+   "Caiet de sarcini",
+   "Listă consumatori / cereri de racordare",
+   "Planșe tip branșament"
+  ],
+  "normative_refs": [
+   "REQ-TG-059",
+   "REQ-SC-059",
+   "REQ-P0-077",
+   "REQ-P1-100",
+   "REQ-TG-084"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2026_3104",
+   "SRC-CNSC-BO2022_184"
+  ],
+  "intrebare_propusa": "Lista de cantități prevede [N] branșamente [buc.] pentru [obiect]. Vă rugăm să precizați: (a) lungimea (medie sau pe fiecare branșament) și diametrul avute în vedere, inclusiv porțiunile de traversare a drumului; (b) dacă articolul cuprinde regulatorul sau postul de reglare, firida/cutia de protecție, robinetul de branșament și contorul și, în caz afirmativ, cine le furnizează; (c) punctul în care se termină lucrarea (limita de proprietate, fațada clădirii etc.); (d) dacă numărul de branșamente este ferm sau estimat și modul de plată în cazul unui număr diferit.",
+  "impact_intern": {
+   "tehnic": "Traversările cer tub de protecție și foraj; capătul branșamentului poate avea 0,5 m acoperire (NTPEE art. 75); PIF branșament + PRM de către OSD.",
+   "cost": "Diferența între branșament de 3 m și unul cu traversare de 12 m poate dubla prețul unitar; contorul/regulatorul pot fi furnizați de OSD.",
+   "risc_respingere": "Mediu: preț unitar pe „buc.” nefundamentat → risc de justificare a prețului pe element."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Varianta de racordare și convenția tehnică cu OSD: PAT-INF-13; tarifele OSD și cuplarea: PAT-INF-06. Analog apă-canal: PAT-APA-02 / PAT-INF-16."
+ },
+ {
+  "pattern_id": "PAT-GAZ-04",
+  "cod_vechi": [],
+  "tip_problema": "ambiguu",
+  "titlu": "Foraj orizontal dirijat vs săpătură deschisă pe tronsoane de stradă — lungimi, gropi de lansare/primire, tub de protecție",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3",
+    "planse"
+   ],
+   "semnal": "CS admite „foraj orizontal dirijat sau săpătură deschisă” fără lungimi | SAU: F3 are doar săpătură, dar memoriul/avizul administratorului drumului impune foraj (ex. pozare în carosabil DN) | SAU: F3 are „foraj” în ml fără gropi de lansare/primire, fără diametru de alezare și fără precizarea tubului de protecție",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Memoriu tehnic",
+   "F3 — terasamente și foraj",
+   "Avizele administratorilor de drum",
+   "Planșe (plan de situație, profile)"
+  ],
+  "normative_refs": [
+   "REQ-SC-085",
+   "REQ-SC-060",
+   "REQ-SC-064",
+   "REQ-TG-010",
+   "REQ-AC-104"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2021_2829",
+   "SRC-CNSC-BO2026_804",
+   "SRC-CNSC-BO2025_434"
+  ],
+  "intrebare_propusa": "Memoriul tehnic / caietul de sarcini prevede pozarea conductei pe [străzile/tronsoanele …] [prin foraj orizontal dirijat sau în săpătură deschisă], iar lista de cantități cuprinde [x] m de foraj și [y] m de săpătură. Vă rugăm să precizați: (a) tronsoanele și lungimile pe care se execută foraj orizontal dirijat; (b) numărul și dimensiunile gropilor de lansare/primire și articolele în care sunt cuprinse; (c) dacă pe tronsoanele forate conducta se pozează în tub de protecție; (d) dacă alegerea metodei aparține ofertantului sau este impusă prin avizele administratorilor drumurilor.",
+  "impact_intern": {
+   "tehnic": "Forajul schimbă utilajele, gropile, refacerile (mult mai mici) și graficul; la DN Ord. MT 1668/2023 preferă forajul în lung.",
+   "cost": "Foraj vs șanț + refacere asfalt: diferență semnificativă pe ml, în ambele sensuri.",
+   "risc_respingere": "Mediu: metodologia trebuie să acopere lucrările din listă (BO2025_434); dacă metoda e lăsată ofertantului, prețul rămâne comparabil doar cu cantitățile fixate."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Subtraversările punctuale (DN/CF/curs de apă) rămân în PAT-CNT-03; aici e forajul ca metodă de pozare în lung. SR EN 12889 e voluntar (REQ-AC-104) — nu se citează. Dotarea cu foreză poate fi asigurată prin închiriere (BO2021_2829)."
+ },
+ {
+  "pattern_id": "PAT-GAZ-05",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Cuplarea la conducta de gaze existentă în funcțiune: lucru sub presiune sau cu întrerupere, program de lucru/foaie de manevră, articole în F3",
+  "trigger": {
+   "unde_cauti": [
+    "planse",
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "planșele arată legături la rețeaua existentă, iar F3 nu are articol de cuplare (piese de branșare sub presiune, obturare, golire/reumplere) | SAU: CS nu spune dacă se lucrează cu întreruperea alimentării, cine întocmește foaia de manevră și cine anunță consumatorii",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Planșe — noduri de legătură",
+   "F3",
+   "Caiet de sarcini",
+   "Aviz/condițiile OSD"
+  ],
+  "normative_refs": [
+   "REQ-TG-094",
+   "REQ-SC-107",
+   "REQ-SC-108",
+   "REQ-SC-113",
+   "REQ-SC-110"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_657",
+   "SRC-CNSC-BO2026_328"
+  ],
+  "intrebare_propusa": "Planșa [...] prevede [N] legături la conducta de distribuție existentă [Dn …, presiune …]. Vă rugăm să precizați: (a) dacă legăturile se execută sub presiune sau cu întreruperea alimentării cu gaze și, în acest caz, durata admisă a întreruperii; (b) cine întocmește programul de lucru/foaia de manevră și cine anunță consumatorii afectați; (c) articolele din listele de cantități în care sunt cuprinse piesele și operațiile de cuplare (piese de branșare, obturare, golirea și reumplerea tronsonului); (d) modul de verificare a îmbinărilor de cuplare executate după proba de presiune, avut în vedere în raport cu NTPEE, art. 291.",
+  "impact_intern": {
+   "tehnic": "Lucrul sub presiune cere echipament de obturare/branșare sub presiune și personal instruit; cu întrerupere — planificare cu OSD și permis de lucru cu foc.",
+   "cost": "Echipamente de cuplare sub presiune, ore suplimentare, eventual tarife OSD.",
+   "risc_respingere": "Scăzut-mediu: risc mai ales de execuție (întârzieri, costuri necotate)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Cine execută cuplarea și tarifele OSD: PAT-INF-06 (complementar — aici tehnologia și cuantificarea). Gol registru: tarifele de prestații ale OSD pentru cuplări nu au cerință în registru."
+ },
+ {
+  "pattern_id": "PAT-GAZ-06",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Probe de presiune: număr de tronsoane, verificări pe parcurs, probele branșamentelor și punerea în gaz — fără cuantificare în F3",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "F3 are „probă de presiune” ca articol global (sau lipsește) pentru o rețea de mulți km | SAU: nu rezultă numărul de tronsoane, verificările pe parcurs (tronsoane ≤ 500 m), probele branșamentelor | SAU: nu e clar cine face punerea în gaz și cine asigură gazul/agentul de inertizare",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "F3 — probe",
+   "Caiet de sarcini (probe, PIF)",
+   "Memoriu tehnic (lungimi, volume pe tronsoane)"
+  ],
+  "normative_refs": [
+   "REQ-TG-083",
+   "REQ-TG-084",
+   "REQ-TG-086",
+   "REQ-TG-087",
+   "REQ-TG-088",
+   "REQ-TG-173",
+   "REQ-TG-175",
+   "REQ-TG-132"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2025_434",
+   "SRC-CNSC-BO2022_184"
+  ],
+  "intrebare_propusa": "Lista de cantități prevede pentru probele de presiune [articolul …, cantitatea …, UM …], pentru o rețea de [L] m și [N] branșamente. Vă rugăm să precizați: (a) dacă articolul cuprinde verificările pe parcurs, proba de rezistență și proba de etanșeitate prevăzute de NTPEE, art. 272 lit. a) și art. 273, precum și probele branșamentelor; (b) unitatea de măsură și modul de cuantificare a probelor (pe tronson, pe metru, pe branșament); (c) dacă punerea în gaz (inclusiv eventuala inertizare/purjare) este în sarcina executantului și cine asigură gazul sau agentul de inertizare.",
+  "impact_intern": {
+   "tehnic": "Durata probei de etanșeitate crește cu volumul (1 h la 0,1 m³ … 24 h la ≥ 4 m³); înregistratoare cu verificare metrologică; compresor cu recipient sub regim ISCIR.",
+   "cost": "Zile de echipă + aparatură pe zeci de tronsoane; azot/gaz pentru punere în funcțiune.",
+   "risc_respingere": "Scăzut: risc în special de cost și termen."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Proba „24 h pentru orice tronson”: PAT-STD-01; tarife OSD la probe: PAT-INF-06; metrologie: PAT-STD-10. Gol registru: inertizarea/purjarea la punerea în funcțiune (NTPEE, procedura de PIF) nu are cerință dedicată — nu se citează."
+ },
+ {
+  "pattern_id": "PAT-GAZ-07",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Cartea tehnică, planul as-built cu poziția sudurilor și datele GIS pentru OSD — format, conținut și cine le întocmește",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "CS cere „documentație as-built / GIS conform cerințelor operatorului” fără format (sistem de coordonate, tip fișiere) și fără articol în F3 | SAU: nu precizează ce documente din cartea tehnică întocmește executantul",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini (recepție, documentație finală)",
+   "Specificația GIS a OSD (dacă e anexată)",
+   "F3"
+  ],
+  "normative_refs": [
+   "REQ-TG-098",
+   "REQ-TG-099",
+   "REQ-TG-129",
+   "REQ-P0-083",
+   "REQ-P0-089",
+   "REQ-P1-078",
+   "REQ-P1-090"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) solicită predarea [documentației as-built / datelor GIS] „conform cerințelor operatorului”. Vă rugăm să precizați: (a) formatul cerut (sistemul de coordonate, tipul fișierelor, specificația operatorului de distribuție aplicabilă) și, dacă este cazul, să publicați această specificație; (b) dacă ridicarea topografică și planul cotat cu poziția sudurilor de poziție, prevăzute de NTPEE, art. 286 lit. b) și art. 298 lit. a), sunt în sarcina executantului și în ce articol se cuprind; (c) ce documente din cartea tehnică a construcției întocmește executantul și ce documente revin beneficiarului sau proiectantului.",
+  "impact_intern": {
+   "tehnic": "Fără format, livrabilul poate fi refuzat la recepție/PIF; planul cotat cere măsurare înainte de acoperire.",
+   "cost": "Topograf pe toată durata execuției + prelucrare GIS.",
+   "risc_respingere": "Scăzut la ofertare; ridicat la recepție (suspendare pentru lipsa documentelor, HG 273/1994 art. 17)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Echivalentul apă-canal (ridicare topografică înainte de umplutură, GIS al operatorului) e în PAT-CNT-02. Gol registru: specificațiile GIS ale OSD (Delgaz/Distrigaz) nu sunt în registru."
+ },
+ {
+  "pattern_id": "PAT-GAZ-08",
+  "cod_vechi": [],
+  "tip_problema": "ambiguu",
+  "titlu": "Ridicări topografice vizate OCPI, documentații cadastrale, planuri de amplasament și delimitare, intabularea rețelei — în sarcina cui",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "contract"
+   ],
+   "semnal": "CS (mai ales la P+E) cere „ridicare topografică vizată OCPI”, „documentație cadastrală”, „intabularea rețelei” sau „PAD” fără a preciza cine le plătește, pe ce suprafețe și în ce etapă | SAU: răspunsurile la clarificări trimit la „faza PT” fără demersuri precizate",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini / tema de proiectare",
+   "Model de contract (obligațiile părților)",
+   "Certificatul de urbanism (lista avizelor)"
+  ],
+  "normative_refs": [
+   "REQ-AD-010",
+   "REQ-P1-078"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2025_2820",
+   "SRC-CNSC-BO2022_2885"
+  ],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) include în obligațiile ofertantului [ridicarea topografică vizată de OCPI / documentația cadastrală / intabularea rețelei / planurile de amplasament și delimitare]. Vă rugăm să precizați: (a) care dintre aceste documentații sunt în sarcina executantului și dacă tarifele OCPI se suportă de acesta; (b) dacă există o ridicare topografică realizată anterior care poate fi pusă la dispoziție și, în caz afirmativ, data și formatul ei; (c) în ce poziție a propunerii financiare se cuprind aceste servicii.",
+  "impact_intern": {
+   "tehnic": "Necesită topograf autorizat; durata recepției OCPI influențează graficul.",
+   "cost": "Tarife OCPI și ore de topograf, proporționale cu lungimea traseului.",
+   "risc_respingere": "Scăzut-mediu."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "v1.4 (nou). Acordurile proprietarilor și despăgubirile: PAT-INF-03 (nu se dublează). Adaptarea traseului la opoziția punctuală a unui proprietar ține de proiectare (BO2025_2820). Goluri registru: Legea 7/1996 (cadastru) și regulamentul OCPI; dreptul de uz și servitute din Legea 123/2012 — fără cerințe în registru; interpretarea „intabulare rețea” cere analiză juridică."
+ },
+ {
+  "pattern_id": "PAT-GAZ-09",
+  "cod_vechi": [],
+  "tip_problema": "calificare",
+  "titlu": "VERIFICARE INTERNĂ: autorizațiile ANRE emise pe Ord. 132/2021 (proprii, ale asociaților, subcontractanților) — dovada structurii minime și a dotării transmisă ANRE până la 26.08.2026",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date"
+   ],
+   "semnal": "oferta folosește o autorizație ANRE (EDSB/PDSB/ET/PT/EDIB) emisă înainte de 26.05.2026 — a Gazpet, a unui asociat sau a unui subcontractant pentru gaze; nu există dovada transmiterii la ANRE, în termenul de 3 luni, a structurii minime de personal și a dotării; starea autorizației pe site-ul ANRE nu a fost verificată la data ofertei",
+   "tip_detectie": "judecata_umana"
+  },
+  "documente_de_verificat": [
+   "Autorizațiile ANRE (Gazpet, asociați, subcontractanți)",
+   "Dovada depunerii la ANRE (art. 39 Ord. 17/2026)",
+   "Lista publică ANRE a autorizațiilor",
+   "Data de expirare/vizare la 5 ani"
+  ],
+  "normative_refs": [
+   "REQ-TG-020",
+   "REQ-P0-096",
+   "REQ-TG-027",
+   "REQ-SL-059",
+   "REQ-TG-013",
+   "REQ-TG-014",
+   "REQ-TG-021"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2022_1615",
+   "SRC-CNSC-BO2024_3232"
+  ],
+  "intrebare_propusa": null,
+  "impact_intern": {
+   "tehnic": "O autorizație neconformă cu art. 39 sau nevizată poate fi contestată de concurenți; execuția fără autorizația corespunzătoare e interzisă (art. 31).",
+   "cost": "Înlocuirea partenerului sau a subcontractantului după depunere e limitată.",
+   "risc_respingere": "Ridicat dacă autorizația e invocată pentru calificare și starea ei e contestată."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "v1.4 (nou). Nu se trimite la AC (intrebare_propusa = null). Consecința nedovedirii în termen a cerințelor art. 39 nu e explicitată în cerințele din registru — de verificat juridic (suspendare/retragere?). De rulat pentru fiecare ofertă cu gaze, inclusiv pentru partenerii din asociere. Complementar PAT-CAL-01/02/12."
+ },
+ {
+  "pattern_id": "PAT-GAZ-10",
+  "cod_vechi": [],
+  "tip_problema": "calificare",
+  "titlu": "Obiect mixt: racord de presiune înaltă / racord la SNT și SRM + rețea de distribuție PR/PM — tipurile de autorizare ANRE cerute și repartizarea lor",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "caiet_sarcini",
+    "planse"
+   ],
+   "semnal": "obiectul cuprinde racord din conductă de transport sau de presiune > 6 bar și SRM, plus rețea de presiune redusă/medie, dar FD cere un singur tip (doar EDSB/PDSB sau doar ET/PT) | SAU: FD nu precizează cine trebuie să dețină fiecare tip în asociere/subcontractare",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Fișa de date — cerințe de calificare",
+   "Memoriu tehnic (presiuni pe obiecte)",
+   "Planșe (racord, SRM)",
+   "DUAE / acord de asociere"
+  ],
+  "normative_refs": [
+   "REQ-TG-008",
+   "REQ-TG-028",
+   "REQ-TG-041",
+   "REQ-TG-044",
+   "REQ-TG-046",
+   "REQ-TG-051",
+   "REQ-TG-143",
+   "REQ-P0-066",
+   "REQ-TG-016"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2024_3155",
+   "SRC-CNSC-BO2025_2118",
+   "SRC-CNSC-BO2026_2006",
+   "SRC-CNSC-BO2024_3232",
+   "SRC-CNSC-BO2023_1336"
+  ],
+  "intrebare_propusa": "Obiectul contractului cuprinde [racordul de presiune înaltă / racordul la sistemul de transport și stația de reglare-măsurare] și [rețeaua de distribuție de presiune redusă/medie], iar fișa de date solicită autorizația ANRE de tip [EDSB]. Vă rugăm să precizați, raportat la tabelul de la art. 1 alin. (4) din Regulamentul aprobat prin Ordinul ANRE nr. 17/2026, ce tipuri de autorizare (proiectare și execuție) se solicită pentru fiecare componentă a obiectivului și dacă acestea pot fi deținute de membri diferiți ai asocierii sau de subcontractanți, potrivit repartizării lucrărilor din ofertă.",
+  "impact_intern": {
+   "tehnic": "Partea > 6 bar cere ET/PT (ori NT transport > 10 bar), sudori OL și CND extins.",
+   "cost": "Partener sau subcontractant ET dacă Gazpet nu deține tipul.",
+   "risc_respingere": "Ridicat: cerințele restrictive se contestă în termen de la publicarea DA (BO2024_3155); după depunere, tipul lipsă duce la respingere."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "v1.4 (nou). Generalitățile (tip neprecizat, Ord. 132 citat) rămân în PAT-CAL-01; îndeplinirea prin asociat/subcontractant în PAT-CAL-02 (divergență BO2024_3288 vs BO2024_3232 — review juridic). Aici: obiectele mixte cu două regimuri de presiune."
+ },
+ {
+  "pattern_id": "PAT-GAZ-11",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Stația / postul de reglare-măsurare (SRM/PRM): parametri, odorizare, telemetrie, alimentare electrică, furnizor și probe — neprecizate",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "F3 are SRM/PRM ca „buc.” fără debit, presiuni de intrare/ieșire, linii, odorizare, telemetrie/SCADA, alimentare electrică, fundație și împrejmuire | SAU: CS trimite la „specificația tehnică a operatorului” nepublicată | SAU: nu rezultă cine furnizează stația",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "F3 / F4 — SRM/PRM",
+   "Fișa tehnică F5",
+   "Caiet de sarcini",
+   "Specificația OSD",
+   "ATR"
+  ],
+  "normative_refs": [
+   "REQ-TG-092",
+   "REQ-P0-077",
+   "REQ-TG-057",
+   "REQ-TG-005",
+   "REQ-TG-082"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_985",
+   "SRC-CNSC-BO2026_1837",
+   "SRC-CNSC-BO2026_2669"
+  ],
+  "intrebare_propusa": "Lista de cantități / fișa tehnică pentru [SRM/PRM …] nu precizează [debitul nominal, presiunile de intrare și ieșire, numărul de linii, odorizarea, sistemul de telemetrie, alimentarea cu energie electrică, fundația și împrejmuirea]. Vă rugăm să precizați acești parametri sau să publicați specificația tehnică aplicabilă, precum și: (a) dacă stația se furnizează de executant sau de beneficiar/operator; (b) dacă alimentarea cu energie electrică a stației (inclusiv racordarea la rețeaua electrică și avizele aferente) face parte din obiectul contractului; (c) dacă documentația de însoțire a producătorului trebuie să cuprindă rezultatele probelor de rezistență și etanșeitate, potrivit NTPEE, art. 281 alin. (2).",
+  "impact_intern": {
+   "tehnic": "Parametrii determină echipamentul ofertat (F5 cu valori concrete, nu „conform” — BO2026_1837); echipamentele trebuie acceptate de OSD (L123 art. 158).",
+   "cost": "SRM-ul poate fi cel mai mare element de preț al unui obiectiv mic; racordul electric și telemetria pot fi omise.",
+   "risc_respingere": "Mediu-ridicat: F5 incomplet sau echipament neacceptat de OSD → ofertă neconformă."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Atestatele ANRE pentru partea electrică a SRM cerute doar în normele OSD sunt condiții de execuție, nu de calificare (BO2023_985). În localități concesionate, suprapunerea cu obligațiile concesionarului: PAT-INF-07 / BO2026_2669. Gol registru: regulamentul de racordare la rețeaua electrică (ATR electric) nu e în registru."
+ },
+ {
+  "pattern_id": "PAT-GAZ-12",
+  "cod_vechi": [],
+  "tip_problema": "termen",
+  "titlu": "Contract P+E: durata nu delimitează proiectarea, avizele/autorizația de construire, execuția și punerea în funcțiune de către OSD",
+  "trigger": {
+   "unde_cauti": [
+    "fisa_de_date",
+    "contract"
+   ],
+   "semnal": "FD dă o durată totală (ex. 12 luni) fără repartizare pe etape | SAU: nu precizează dacă timpul de emitere a avizelor, a autorizației de construire și PIF de către OSD se includ în termen sau îl suspendă | SAU: penalitățile se raportează la durata totală",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Fișa de date (durata)",
+   "Acord contractual (durata de execuție, penalități)",
+   "Caiet de sarcini / tema de proiectare"
+  ],
+  "normative_refs": [
+   "REQ-P0-071",
+   "REQ-P0-080",
+   "REQ-P0-078",
+   "REQ-AD-096",
+   "REQ-AD-010"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2023_1128",
+   "SRC-CNSC-BO2024_494"
+  ],
+  "intrebare_propusa": "Fișa de date stabilește durata contractului la [N] luni, fără repartizare între [proiectare, obținerea avizelor și a autorizației de construire] și execuție. Vă rugăm să precizați: (a) durata alocată fiecărei etape; (b) dacă perioadele de emitere a avizelor, acordurilor și autorizației de construire de către terți se includ în termenul contractual sau suspendă curgerea acestuia; (c) dacă punerea în funcțiune de către operatorul de distribuție se include în durata de execuție.",
+  "impact_intern": {
+   "tehnic": "Avizele (drumuri, ape, CF, OSD) și AC au termene necontrolabile de executant; desemnarea dirigintelui OSD cere ≥ 7 zile lucrătoare.",
+   "cost": "Penalitate implicită = Preț/Durată pe zi (cl. 36.4), plafon 15 %.",
+   "risc_respingere": "Mediu: un Gantt care nu respectă structura cerută poate face oferta neconformă; riscul principal e contractual (penalități)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). La P+E, perioada estimată pentru AC trebuie inclusă în DA (BO2023_1128, deja în nota PAT-INF-01). Verificarea proiectului: PAT-INF-05; Gantt general: PAT-TRM-01; perioada de îngheț: PAT-TRM-06."
+ },
+ {
+  "pattern_id": "PAT-GAZ-13",
+  "cod_vechi": [],
+  "tip_problema": "garantie",
+  "titlu": "Garanția echipamentelor și materialelor (SRM/PRM, regulatoare, contoare) cerută distinct sau cu alt moment de start decât garanția lucrărilor",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "contract"
+   ],
+   "semnal": "CS cere „garanție X luni de la livrare/PIF” pentru echipamente, iar contractul are garanția lucrărilor de la recepția la terminare | SAU: se cer la ofertă certificate de garanție ale producătorilor cu durate ≥ garanția lucrărilor | SAU: perioada de garanție e factor de evaluare fără precizarea componentei la care se aplică",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini (garanții)",
+   "Model de contract (perioada de garanție)",
+   "Fișa de date (factori de evaluare)"
+  ],
+  "normative_refs": [
+   "REQ-TG-023",
+   "REQ-P0-091",
+   "REQ-AD-142",
+   "REQ-AD-144",
+   "REQ-P1-080"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2025_2114",
+   "SRC-CNSC-BO2026_621"
+  ],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) solicită pentru [echipamente/materiale …] o garanție de [X] luni [de la livrare / de la punerea în funcțiune], iar modelul de contract prevede pentru lucrări o perioadă de garanție de [Y] luni de la recepția la terminarea lucrărilor. Vă rugăm să precizați: (a) dacă garanția echipamentelor este distinctă de garanția lucrărilor și de la ce dată curge fiecare; (b) dacă se solicită la ofertă certificate de garanție ale producătorilor și pentru ce durată; (c) modul de corelare a acestor perioade cu garanția minimă de 2 ani de la punerea în funcțiune prevăzută de anexa 8 pct. 12 din Regulamentul aprobat prin Ordinul ANRE nr. 17/2026.",
+  "impact_intern": {
+   "tehnic": "Garanțiile producătorilor curg de obicei de la livrare — rămâne o perioadă descoperită până la recepție.",
+   "cost": "Extinderi de garanție la furnizori sau risc asumat de Gazpet.",
+   "risc_respingere": "Scăzut-mediu: garanția ofertată pentru lucrări nu poate fi contestată doar pentru că producătorii dau garanții mai scurte (BO2025_2114)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "v1.4 (nou). Perioada de garanție a lucrărilor și clasa de consecințe: PAT-GAR-03. Interacțiunea dintre start la PIF (ANRE) și start la recepția la terminare (L169/2026 art. 531 alin. (9)) cere analiză juridică."
+ },
+ {
+  "pattern_id": "PAT-GAZ-14",
+  "cod_vechi": [],
+  "tip_problema": "ambiguu",
+  "titlu": "Contract doar de execuție, dar CS cere executantului actualizarea proiectului, detalii de execuție sau reobținerea avizelor — fără poziție în F3",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "contract",
+    "F3"
+   ],
+   "semnal": "CS/contract: „executantul va reactualiza proiectul tehnic”, „va elabora detaliile de execuție”, „va reobține avizele expirate”, fără articol în F3 și fără precizarea verificării | SAU: PT elaborat pe ATR/avize expirate",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini",
+   "Model de contract",
+   "F3 / centralizator",
+   "Lista avizelor și data lor de valabilitate"
+  ],
+  "normative_refs": [
+   "REQ-AD-123",
+   "REQ-TG-024",
+   "REQ-TG-006",
+   "REQ-SL-011",
+   "REQ-P1-070",
+   "REQ-P1-067"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2022_2473",
+   "SRC-CNSC-BO2026_1149"
+  ],
+  "intrebare_propusa": "Obiectul contractului este execuția lucrărilor pe baza proiectului tehnic [nr. …], iar caietul de sarcini ([cap. …]) prevede că executantul [actualizează proiectul / elaborează detaliile de execuție / reobține avizele expirate]. Vă rugăm să precizați: (a) ce documentații de proiectare revin executantului și dacă acestea trebuie elaborate de un operator economic autorizat ANRE pentru proiectare; (b) cine asigură verificarea lor de către verificatori atestați, având în vedere art. 160 alin. (1) din Legea nr. 123/2012; (c) în ce poziție a propunerii financiare se cuprind aceste servicii.",
+  "impact_intern": {
+   "tehnic": "Fără PDSB propriu, proiectarea cere subcontractant; execuția se face doar pe proiecte verificate (anexa 8 pct. 18 Ord. 17/2026).",
+   "cost": "Onorarii proiectare + verificare + taxe avize, necuprinse în F3.",
+   "risc_respingere": "Mediu: ATR/avize expirate sunt critici ale DA și se contestă în termen de la publicare (BO2026_1149)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). La P+E: PAT-AMB-01/13 și PAT-INF-05. ATR lipsă/expirat: PAT-INF-15 — aici e transferul de proiectare către executant într-un contract de execuție."
+ },
+ {
+  "pattern_id": "PAT-GAZ-15",
+  "cod_vechi": [],
+  "tip_problema": "ambiguu",
+  "titlu": "Instalațiile de utilizare ale consumatorilor — incluse sau nu în obiect; limita branșament / instalație de utilizare și autorizarea EDIB",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "fisa_de_date",
+    "F3"
+   ],
+   "semnal": "CS vorbește de „racordarea consumatorilor”, „montaj contor și instalație”, „instalații interioare” fără limită clară, iar FD cere doar EDSB/PDSB | SAU: F3 are articole de țeavă oțel/cupru aparentă, robinete de aparat sau încercări IU",
+   "tip_detectie": "cuvant_cheie"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini (obiect, limite)",
+   "F3",
+   "Fișa de date — autorizări"
+  ],
+  "normative_refs": [
+   "REQ-TG-036",
+   "REQ-TG-101",
+   "REQ-P0-074",
+   "REQ-P0-085",
+   "REQ-TG-019",
+   "REQ-TG-028"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2021_973",
+   "SRC-CNSC-BO2022_235"
+  ],
+  "intrebare_propusa": "Caietul de sarcini ([cap. …]) prevede [racordarea consumatorilor / montarea contoarelor / instalațiile de utilizare]. Vă rugăm să precizați: (a) dacă obiectul contractului cuprinde și instalațiile de utilizare ale consumatorilor sau se oprește la [robinetul de branșament / regulator / contor]; (b) în caz afirmativ, numărul și caracteristicile instalațiilor de utilizare și articolele din listele de cantități; (c) dacă pentru aceste lucrări se solicită autorizația ANRE de tip EDIB, prevăzută în tabelul de la art. 1 alin. (4) din Regulamentul aprobat prin Ordinul ANRE nr. 17/2026, și de la cine.",
+  "impact_intern": {
+   "tehnic": "IU urmează altă procedură de probe/recepție/PIF (Ord. ANRE 156/2020) și altă autorizare (EDIB).",
+   "cost": "Instalații interioare, verificări, documentații IU per consumator.",
+   "risc_respingere": "Mediu: criteriile de calificare apărute doar în CS sunt clauze nescrise (BO2022_235); EDIB poate fi asigurată prin contract cu firmă autorizată dacă DA o permite (BO2021_973)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": true,
+  "note": "v1.4 (nou). Gol registru: Ord. ANRE 156/2020 (procedura IU) apare în registru_surse, dar fără cerințe REQ extrase — nu se citează în întrebare."
+ },
+ {
+  "pattern_id": "PAT-APA-01",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Cămine (vizitare, vane, golire, aerisire, branșament/racord) — numărul din F3 necorelat cu planșele și cu distanțele maxime din NP 133-2022",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "planse"
+   ],
+   "semnal": "număr cămine din F3 ≠ număr din profile/plan de situație | SAU: lungimea colectorului / numărul căminelor de vizitare dă distanțe > 80 m pe aliniament (DN ≤ 1500) | SAU: rețeaua de apă nu are vane de izolare la ≤ 500 m sau cămine de golire",
+   "tip_detectie": "calcul"
+  },
+  "documente_de_verificat": [
+   "Profile longitudinale",
+   "Plan de situație",
+   "F3 — cămine",
+   "Memoriu tehnic"
+  ],
+  "normative_refs": [
+   "REQ-AC-069",
+   "REQ-AC-068",
+   "REQ-AC-056",
+   "REQ-AC-054"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2020_2335",
+   "SRC-CNSC-BO2020_2363"
+  ],
+  "intrebare_propusa": "Lista de cantități pentru [obiect] cuprinde [N] cămine de [vizitare/vane/…] pentru [L] m de [colector/conductă], iar [planșa / profilul longitudinal …] prezintă [M] cămine. Vă rugăm să confirmați numărul, tipul (vizitare, vane, golire, aerisire, branșament/racord), diametrul și adâncimea căminelor, având în vedere și distanța maximă dintre căminele de vizitare pe aliniament prevăzută de NP 133-2022 vol. II, pct. 3.4.3.5.1.1 alin. (1) lit. b), și, după caz, să publicați lista de cantități corectată.",
+  "impact_intern": {
+   "tehnic": "Căminele adânci (≥ 2 m) au alte cerințe constructive; numărul lor influențează graficul și probele pe tronsoane.",
+   "cost": "Căminul e un element de preț important (prefabricat, capac clasă trafic, montaj).",
+   "risc_respingere": "Mediu: AC poate răspunde că listele se respectă „fără modificări” (BO2020_2335) — atunci prețul trebuie construit strict pe listă."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). SR EN 752 / STAS 2448 / SR EN 1917 (amplasare și concepție cămine): NECESITĂ ACCES LA STANDARDUL LICENȚIAT (REQ-AC-100/101) — nu se citează. Variantă generală F3 vs planșe: PAT-CTR-02."
+ },
+ {
+  "pattern_id": "PAT-APA-02",
+  "cod_vechi": [],
+  "tip_problema": "cantitate",
+  "titlu": "Racorduri de canalizare și branșamente de apă: lungime medie, diametru, căminul de racord și piesa de racordare la colector — neprecizate",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "F3 cuantifică racordurile/branșamentele „buc.” fără lungime medie, DN, tip de piesă de racordare (șa, colier, teu), cămin sau refacere | SAU: numărul diferă între memoriu, F3 și lista de imobile",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "F3 — racorduri/branșamente",
+   "Caiet de sarcini",
+   "Planșe tip racord/branșament",
+   "Lista imobilelor"
+  ],
+  "normative_refs": [
+   "REQ-AC-070",
+   "REQ-AC-071",
+   "REQ-AC-072",
+   "REQ-AC-051",
+   "REQ-AC-052",
+   "REQ-AC-053"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2022_184",
+   "SRC-CNSC-BO2025_434"
+  ],
+  "intrebare_propusa": "Lista de cantități prevede [N] racorduri de canalizare și [M] branșamente de apă, cuantificate [buc.]. Vă rugăm să precizați, pentru fiecare categorie: (a) lungimea medie și diametrul avute în vedere, inclusiv traversarea străzii, în raport și cu NP 133-2022 vol. II, pct. 3.4.3.5.5 alin. (4) lit. b) pentru racorduri; (b) dacă articolul cuprinde căminul de racord/branșament, piesa de racordare la colector sau la conductă (șa, colier, teu) și refacerea aferentă; (c) dacă numărul este ferm sau estimat și modul de plată a diferențelor.",
+  "impact_intern": {
+   "tehnic": "Racordul DN ≥ 150, rectiliniu, cu piesă certificată; căminul de branșament la limita de proprietate, protejat la îngheț.",
+   "cost": "Prețul unitar al racordului variază mult cu lungimea (traversare) și cu piesa de racord.",
+   "risc_respingere": "Mediu: ce include fiecare articol se judecă după preambulul listelor și răspunsurile la clarificări (BO2022_184)."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Limita lucrărilor, avizul operatorului și contorul: PAT-INF-16 (complementar). Analog gaze: PAT-GAZ-03."
+ },
+ {
+  "pattern_id": "PAT-APA-03",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Stații de pompare (apă / ape uzate): parametri, echipare electrică și racordarea la rețeaua electrică, telemetrie și probele tehnologice de 72 h",
+  "trigger": {
+   "unde_cauti": [
+    "F3",
+    "caiet_sarcini"
+   ],
+   "semnal": "F3 are stația de pompare ca „buc./ansamblu” fără debit, înălțime de pompare, număr de pompe active/rezervă, tablou electric, telemetrie | SAU: nu rezultă cine obține racordul electric și cine plătește apa/energia la probe | SAU: integrarea în dispeceratul operatorului nu e precizată",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "F3 / F4 — stații de pompare",
+   "Fișe tehnice F5",
+   "Caiet de sarcini (echipamente, probe)",
+   "Schema electrică"
+  ],
+  "normative_refs": [
+   "REQ-AC-058",
+   "REQ-AC-057",
+   "REQ-AC-082",
+   "REQ-AC-083",
+   "REQ-AC-084",
+   "REQ-TG-139"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2021_2781",
+   "SRC-CNSC-BO2024_3215",
+   "SRC-CNSC-BO2025_1704"
+  ],
+  "intrebare_propusa": "Pentru stația de pompare [SP …], lista de cantități / fișa tehnică nu precizează [debitul, înălțimea de pompare, numărul de pompe active și de rezervă, echiparea electrică și sistemul de automatizare/telemetrie]. Vă rugăm să precizați acești parametri și: (a) dacă racordarea stației la rețeaua electrică (documentație, aviz și lucrări de racordare) face parte din obiectul contractului; (b) cine asigură apa și energia electrică pe durata probelor tehnologice, pentru care NP 133-2022 vol. I, pct. 6.3 alin. (16)–(21) prevede o durată de minimum 72 de ore; (c) dacă integrarea în sistemul de telemetrie/dispecerat al operatorului este inclusă.",
+  "impact_intern": {
+   "tehnic": "Documentele producătorului trebuie să confirme soluția impusă (BO2021_2781); probe 72 h cu înregistrare orară.",
+   "cost": "Racord electric (poate fi de ordinul zecilor de mii de lei), telemetrie, energie la probe.",
+   "risc_respingere": "Mediu-ridicat: fișă tehnică incompletă sau echipament neconfirmat de producător → neconformitate."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). La P+E, schema electrică și planșele cerute ca cerințe minime nu se amână la PT (BO2025_1704). Gol registru: regulamentul de racordare la rețeaua electrică (ATR electric) nu are cerințe în registru."
+ },
+ {
+  "pattern_id": "PAT-APA-04",
+  "cod_vechi": [],
+  "tip_problema": "standard",
+  "titlu": "Adâncimea de pozare din profile sub adâncimea de îngheț sau sub acoperirea minimă a colectorului (0,80 m)",
+  "trigger": {
+   "unde_cauti": [
+    "planse",
+    "caiet_sarcini"
+   ],
+   "semnal": "profilul longitudinal arată acoperire < adâncimea de îngheț din memoriu/studiul geotehnic sau, la canalizare, < 0,80 m | SAU: memoriul nu indică adâncimea de îngheț și nici măsuri de protecție pe tronsoanele cu acoperire redusă",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Profile longitudinale",
+   "Memoriu tehnic",
+   "Studiu geotehnic"
+  ],
+  "normative_refs": [
+   "REQ-AC-014",
+   "REQ-AC-062",
+   "REQ-AC-063",
+   "REQ-AC-093"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Profilul longitudinal [planșa …] indică pe tronsoanele [...] o acoperire de [x] m peste generatoarea conductei, iar [memoriul tehnic / studiul geotehnic] indică adâncimea de îngheț de [y] m. Vă rugăm să precizați adâncimea de pozare care trebuie ofertată și, dacă acoperirea mai mică se menține, măsurile de protecție la îngheț prevăzute și articolele din listele de cantități în care se cuprind, având în vedere NP 133-2022 vol. I, pct. 7.2.1 alin. (2) lit. f) și vol. II, pct. 3.4.3.1.4 alin. (1).",
+  "impact_intern": {
+   "tehnic": "Pozarea sub cota de îngheț schimbă volumele de săpătură și, eventual, sprijinirile.",
+   "cost": "Mc săpătură/umplutură suplimentari sau termoizolație.",
+   "risc_respingere": "Scăzut la ofertare; risc de execuție/recepție dacă se pozează după profil neconform."
+  },
+  "confidence": "ridicata",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Valoarea adâncimii de îngheț pe zone (STAS 6054, REQ-AC-093): NECESITĂ ACCES LA STANDARDUL LICENȚIAT — nu se citează. Pentru gaze (0,9 m): PAT-STD-03."
+ },
+ {
+  "pattern_id": "PAT-APA-05",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Nivelul apei subterane și epuismentele: studiu geotehnic nepublicat sau epuismente fără cuantificare în F3",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "studiul geotehnic indică nivelul apei subterane deasupra cotei de pozare, iar F3 nu are epuismente | SAU: F3 are „epuismente” fără tronsoane, metodă și durată | SAU: studiul geotehnic nu e publicat",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Studiu geotehnic",
+   "F3 — terasamente, epuismente, sprijiniri",
+   "Memoriu tehnic"
+  ],
+  "normative_refs": [
+   "REQ-AC-014",
+   "REQ-AC-060",
+   "REQ-AC-025"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2025_434",
+   "SRC-CNSC-BO2022_184"
+  ],
+  "intrebare_propusa": "Vă rugăm să publicați studiul geotehnic pentru [obiect] sau să precizați nivelul apei subterane pe traseu. Lista de cantități [nu cuprinde / cuprinde la poz. … „epuismente”, cu cantitatea …]; vă rugăm să precizați tronsoanele pe care sunt necesare epuismente, metoda avută în vedere, durata sau cantitatea estimată și articolele din listele de cantități în care se cuprind, inclusiv sprijinirile pe aceste tronsoane.",
+  "impact_intern": {
+   "tehnic": "Apa subterană impune epuismente și sprijiniri; afectează compactarea patului și probele.",
+   "cost": "Pompe, ore de funcționare, energie; pot depăși costul săpăturii pe tronsoanele afectate.",
+   "risc_respingere": "Mediu: lucrările cu articol în listă trebuie acoperite de metodologie (BO2025_434)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Categoria de teren, ponderea manual/mecanizat și sprijinirile generale: PAT-CNT-06 (complementar)."
+ },
+ {
+  "pattern_id": "PAT-APA-06",
+  "cod_vechi": [],
+  "tip_problema": "informatie_lipsa",
+  "titlu": "Legarea la rețelele de apă / canalizare existente în exploatare: cine execută, întreruperi, piese de legătură, deviere provizorie, succesiunea cu spălarea-dezinfecția",
+  "trigger": {
+   "unde_cauti": [
+    "planse",
+    "caiet_sarcini",
+    "F3"
+   ],
+   "semnal": "planșele arată noduri de legătură la rețeaua existentă a operatorului, iar CS/F3 nu precizează cine execută legătura, durata întreruperilor, piesele și eventuala deviere provizorie a apelor uzate",
+   "tip_detectie": "camp_lipsa"
+  },
+  "documente_de_verificat": [
+   "Planșe — noduri de legătură",
+   "Caiet de sarcini",
+   "F3",
+   "Avizul operatorului"
+  ],
+  "normative_refs": [
+   "REQ-AC-072",
+   "REQ-AC-073",
+   "REQ-AC-039",
+   "REQ-AC-050",
+   "REQ-AC-081",
+   "REQ-AC-053"
+  ],
+  "precedente_cnsc": [],
+  "intrebare_propusa": "Planșele prevăd [N] legături la rețeaua de [apă / canalizare] existentă, în exploatarea [operatorului …]. Vă rugăm să precizați: (a) dacă legăturile se execută de executant sau de operator și, în al doilea caz, dacă tarifele operatorului sunt în sarcina executantului; (b) durata admisă a întreruperii serviciului și cine anunță utilizatorii; (c) piesele și lucrările de legătură (inclusiv eventuala deviere provizorie a apelor uzate) și articolele din listele de cantități în care se cuprind; (d) succesiunea dintre spălarea-dezinfecția tronsonului nou și conectarea la sistemul existent, având în vedere NP 133-2022 vol. I, pct. 7.3.7 alin. (5).",
+  "impact_intern": {
+   "tehnic": "Dezinfecția precede conectarea; PIF o face personalul operatorului.",
+   "cost": "Piese speciale, lucru de noapte/weekend, by-pass pentru ape uzate.",
+   "risc_respingere": "Scăzut: în principal risc de execuție."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Analog gaze: PAT-GAZ-05 / PAT-INF-06."
+ },
+ {
+  "pattern_id": "PAT-APA-07",
+  "cod_vechi": [],
+  "tip_problema": "standard",
+  "titlu": "Clasa de presiune (PN/SDR) a conductelor de apă necorelată cu regimul rețelei și cu presiunea de probă",
+  "trigger": {
+   "unde_cauti": [
+    "caiet_sarcini",
+    "F3",
+    "planse"
+   ],
+   "semnal": "CS/F3/planșele indică PN/SDR diferite pentru aceeași conductă | SAU: conductele din rețeaua de distribuție au o clasă la care presiunea de probă din standardul de produs ar fi sub 10 bar | SAU: regimul > 6 bar fără presiunea de probă pe tronsoane indicată în proiect",
+   "tip_detectie": "comparatie_documente"
+  },
+  "documente_de_verificat": [
+   "Caiet de sarcini (materiale)",
+   "F3 — conducte",
+   "Planșe / profile (presiuni)",
+   "Fișe tehnice"
+  ],
+  "normative_refs": [
+   "REQ-TG-154",
+   "REQ-TG-152",
+   "REQ-TG-153",
+   "REQ-AC-031",
+   "REQ-AC-034"
+  ],
+  "precedente_cnsc": [
+   "SRC-CNSC-BO2020_2335",
+   "SRC-CNSC-BO2024_3215"
+  ],
+  "intrebare_propusa": "Caietul de sarcini prevede pentru rețeaua de distribuție a apei țevi [PE 100, PN …/SDR …], iar [lista de cantități, poz. … / planșa …] indică [PN …/SDR …]. Vă rugăm să precizați clasa de presiune a conductelor care trebuie ofertată, presiunea de regim a rețelei și presiunea de probă pe tronsoane, având în vedere NP 133-2022 vol. I, cap. 9 alin. (9) lit. c) și lit. f).",
+  "impact_intern": {
+   "tehnic": "Clasa conductei determină grosimea peretelui, fitingurile și presiunea de probă (1,5 × PN, max. 10 bar la ≤ 6 bar).",
+   "cost": "Diferența de preț PN10 vs PN16 la PE 100 e semnificativă pe kilometri.",
+   "risc_respingere": "Mediu: dacă AC răspunde că listele se respectă „fără modificări”, ofertantul nu poate corecta diametrul/clasa din proprie inițiativă (BO2020_2335)."
+  },
+  "confidence": "medie",
+  "requires_human_legal_review": false,
+  "note": "v1.4 (nou). Corespondența PN ↔ SDR ↔ presiunea de probă din standardul de produs (SR EN 12201): NECESITĂ ACCES LA STANDARDUL LICENȚIAT — nu se citează. Presiunea de încercare și pierderea admisibilă lipsă: PAT-INF-08; analog gaze: PAT-STD-02."
  }
 ]
