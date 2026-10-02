@@ -1054,8 +1054,8 @@ Migrare NOUĂ, aditivă: `supabase/migrations/20261002b_conturi_p2_followup.sql`
 
 | Fișier | sha256 |
 |---|---|
-| `20261002b_conturi_p2_followup.sql` | `61798922725de46f17e5828eb7235c9f43e29fc7dea887d8668621166af327dc` (r3; r2 era `408acee5…` — NO-GO static Copilot pe P2-4B; r1 `0ae0c0da…`) |
-| `supabase/revenire/20261002b_conturi_p2_followup_ROLLBACK.sql` | `0d7b516e400f9f98a0c0472bdeeacd4594e91b37fb06abec17be2d7221d5de88` (r3 — doar md5-ul sweep-ului în precondiție; r2 era `42f27506…`) |
+| `20261002b_conturi_p2_followup.sql` | `6e0a1fb0408cd368a1de0ad867f55096d9ac600b71cbedfbfe5805dfaa6751fb` (r4 — doar comentarii/COMMENT ON; r3 `61798922…` = GO static Copilot; r2 `408acee5…`; r1 `0ae0c0da…`) |
+| `supabase/revenire/20261002b_conturi_p2_followup_ROLLBACK.sql` | `3b20a51f1dbd65b22d1e6de9ce81335f99619295642004b0e5cd886703210997` (r4 — text „6 funcții” + md5 sweep; r3 `0d7b516e…`) |
 
 **Funcții înlocuite (precondiția cere md5-ul LIVE r11, calculat pe harness din fișierele cu sha256 identic cu tabelul r11 de mai sus; la reaplicare md5-ul propriu):**
 
@@ -1066,7 +1066,7 @@ Migrare NOUĂ, aditivă: `supabase/migrations/20261002b_conturi_p2_followup.sql`
 | `fn_cont_revalideaza_candidat(uuid,integer,boolean)` (c) | `7bb0d97ed57bfef1c4555fbf94629071` | `ecbbd64ceffd6ed13ed91a04f6f14419` |
 | `fn_cont_leaga_automat(boolean,jsonb)` (c) | `349f540203eeb73639c4cfa4316a8cd6` | `a32cb851d317d273feee8e975eba66a4` |
 | `fn_cont_coada_pune(uuid,integer,text,text,date,text)` (d, **r2**) | `890a0025f513ca02ac9276cd4a360afb` | `b1c2b93cbe3b9560bcb38d460c717fce` |
-| `fn_conturi_inchideri_sweep()` (d) | `7bc5ddf2f4097525e6c24f499a8fb5e7` | `ee5015604d7a6dc0ab46d4ca4e5a8741` (r3; r2 era `c65d27e1…`, r1 `9e203157…`) |
+| `fn_conturi_inchideri_sweep()` (d) | `7bc5ddf2f4097525e6c24f499a8fb5e7` | `facbcd2b4059a16b24f95674b0986ad2` (r4, doar comentarii în corp; r3 `ee501560…`, r2 `c65d27e1…`, r1 `9e203157…`) |
 
 Semnături, ACL-uri, SECURITY DEFINER + `search_path` neschimbate. Coloane noi (ADD COLUMN aditiv, `integer NOT NULL DEFAULT 0`): `conturi_inchideri_coada.amanari` și (r2) `conturi_inchideri_coada.ultima_amanare_alertata`. **Notă:** precondițiile lui d / e verifică md5-ul lui `fn_cont_notifica_owneri` (`0bbbf41d…`) — după follow-up o REAPLICARE a lui d / e pe live ar fi refuzată (corect: starea de pornire s-a schimbat); harness-ul reaplică c → d → e → 20261002b în ordine.
 
@@ -1092,7 +1092,7 @@ Semnături, ACL-uri, SECURITY DEFINER + `search_path` neschimbate. Coloane noi (
 - **P2-4-ALERTA-ANULATA-LA-RECUPERARE** (3, r3): ANULESCU UNU — amânări 1–5 (GoTrue ține `auth.users`), la a 6-a toți ownerii ținuți ⇒ `amanari = 6`, marker 0, `amanari_alerta_neacoperita = 1`, 0 `cont_inchidere_amanata`; înainte de a 7-a contenția DISPARE și ownerii sunt liberi ⇒ elementul se procesează normal (`inchis = 1`): `amanari = 0`, marker 0, `amanari_alerta_anulata = 1`, NICIO `cont_inchidere_amanata` (anulare documentată), anunțul normal `cont_inchis_automat` există.
 - **Teste existente adaptate (r2):** D-RACE-TRIGGER-AUTH (fără condiție pe `notificat_la`), R2-41 (`notificat_la` NULL după trigger; 2 anunțuri `cont_inchidere_esuata` — trigger + prima reîncercare — apoi niciunul).
 - Harness: rollback-ul se caută și în `supabase/revenire/` și se armează după antetul `-- harness-armare: <guc> <token>`; `--rollback` compară schema de după revenire cu cea de după `20260929e` (pas cu pas).
-- Rezultate: harness PG16 `--reaplica --rollback`: **1990 aserțiuni PASS** (după migrare: 652, după reaplicare: 652, după rollback, doar BAZĂ: 26, după rollback + reaplicare: 652; + gărzile de ordine / coadă / fereastră c→d, rollback pas cu pas inclusiv revenirea 20261002b = schema de după 20260929e, schema finală = cea dinainte). r2: 1981; r1: 1966; baseline r11: 620.
+- Rezultate (r4): harness PG16 `--reaplica --rollback`: **1990 aserțiuni PASS** (după migrare: 652, după reaplicare: 652, după rollback, doar BAZĂ: 26, după rollback + reaplicare: 652; rollback pas cu pas inclusiv revenirea = schema de după 20260929e, schema finală = cea dinainte). r3: 1990, r2: 1981, r1: 1966, baseline r11: 620. Mutanții (6) rămân cei din r3 — r4 nu schimbă logica.
 
 ### H.3 Mutații (fix-ul scos, harness pe al doilea cluster PG16 local, port 5435, fișierul mutat cu numele original, lista cu precondițiile live; postcondiția md5 dezarmată în mutant)
 - **M-a** (c, `fn_cont_leaga_automat`: GUC-ul rămâne `off` (lotul nu trece niciodată pe NOWAIT)) ⇒ harness-ul cade exact la „P2-1-LOT-NOWAIT lotul [A, B] se TERMINĂ (≤ 3 s) cât timp HR ține fișa B: după legarea lui A nu mai așteaptă fișa B (r11 rămânea blocat ținând cheia LOTESCU)”.

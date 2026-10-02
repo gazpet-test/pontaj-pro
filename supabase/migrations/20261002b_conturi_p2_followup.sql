@@ -39,7 +39,7 @@
 --   (d, P2-4A) alerta de prag folosea doar amanari % 6 = 0 și ignora acoperirea ⇒ la amânarea 6 cu toți ownerii ținuți alerta se pierdea
 --       definitiv. Fix: marker durabil conturi_inchideri_coada.ultima_amanare_alertata integer NOT NULL DEFAULT 0 (coloană nouă, aditivă):
 --       bucket-ul (6, 12, …) = amanari − amanari % 6; cât timp CONTENȚIA CONTINUĂ alerta se încearcă la fiecare amânare (bucket > marker)
---       și se marchează DOAR după acoperire > 0 (rulările 7, 8… continuă să încerce bucket-ul 6).
+--       și se marchează DOAR după acoperire > 0 (amânările 7, 8… continuă să încerce bucket-ul 6 cât timp contenția continuă).
 --   r3 (P2-4B, politică operațională simplă — decizia sesiunii principale): alerta de amânări e relevantă DOAR cât timp contenția
 --       continuă; dacă următoarea rulare procesează elementul normal, o alertă încă neacoperită se ANULEAZĂ explicit (reset contor +
 --       marker, rezultat amanari_alerta_anulata) — NU „se reîncearcă până ajunge”. Pe calea de eroare (backoff) resetul e tăcut
@@ -91,7 +91,7 @@ BEGIN
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', '7bb0d97ed57bfef1c4555fbf94629071', 'ecbbd64ceffd6ed13ed91a04f6f14419'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',           '349f540203eeb73639c4cfa4316a8cd6', 'a32cb851d317d273feee8e975eba66a4'),
                  ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', '890a0025f513ca02ac9276cd4a360afb', 'b1c2b93cbe3b9560bcb38d460c717fce'),
-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', 'ee5015604d7a6dc0ab46d4ca4e5a8741')) AS w(f, sig, m_live, m_nou)
+                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', 'facbcd2b4059a16b24f95674b0986ad2')) AS w(f, sig, m_live, m_nou)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) IN (w.m_live, w.m_nou) AND p.prosecdef
@@ -135,7 +135,7 @@ ALTER TABLE public.conturi_inchideri_coada ADD COLUMN IF NOT EXISTS ultima_amana
 COMMENT ON COLUMN public.conturi_inchideri_coada.amanari IS
   'P2-4 (20261002b): de câte ori LA RÂND (consecutiv) sweep-ul a amânat intrarea din contenție (amanat_lock). Se resetează la orice procesare non-amanat_lock și la ciclu nou (fn_cont_coada_pune). Owner-ul e anunțat (cont_inchidere_amanata) la pragurile 6, 12, … (ultima_amanare_alertata).';
 COMMENT ON COLUMN public.conturi_inchideri_coada.ultima_amanare_alertata IS
-  'P2-4A (20261002b r2): ultimul prag de amânări (6, 12, …) pentru care alerta cont_inchidere_amanata a ACOPERIT ≥ 1 owner; cât timp pragul curent > marker, sweep-ul reîncearcă alerta la fiecare rulare. Se resetează odată cu amanari.';
+  'P2-4A (20261002b r2): ultimul prag de amânări (6, 12, …) pentru care alerta cont_inchidere_amanata a ACOPERIT ≥ 1 owner; cât timp contenția continuă și pragul curent > marker, alerta se reîncearcă la fiecare amânare; la procesare normală, alerta pending se anulează și seria se resetează (r3). Se resetează odată cu amanari.';
 
 -- (d, P2-3A) B.2b fn_cont_coada_pune — ultima_eroare separată semantic de notificat_la --------------------------------------------
 -- r11: notificat_la = now() când p_eroare nu era NULL („apelantul tocmai a anunțat owner-ul”) — dar anunțul triggerului e best-effort
@@ -593,8 +593,9 @@ BEGIN
              AND (profile_id, employee_id, tip) IS NOT DISTINCT FROM (q.profile_id, q.employee_id, q.tip)   -- (r5: doar intrarea pe care a lucrat)
           RETURNING * INTO x;
           v_tine := true;
-          -- r2 (P2-4A): pragul curent = amanari − amanari % 6 (6, 12, …); alerta se încearcă la FIECARE rulare cât timp pragul > marker
-          -- (ultima_amanare_alertata) și se marchează DOAR dacă notificatorul a acoperit ≥ 1 owner — o alertă neacoperită nu se pierde.
+          -- r2 (P2-4A): pragul curent = amanari − amanari % 6 (6, 12, …); alerta se încearcă la fiecare AMÂNARE cât timp contenția continuă
+          -- și pragul > marker (ultima_amanare_alertata) și se marchează DOAR dacă notificatorul a acoperit ≥ 1 owner; r3 (P2-4B): dacă
+          -- elementul se procesează normal între timp, alerta neacoperită se anulează explicit (calea normală, amanari_alerta_anulata).
           IF FOUND AND x.amanari - x.amanari % c_prag_amanari > x.ultima_amanare_alertata THEN
             v_email := (SELECT p.email FROM public.profiles p WHERE p.id = q.profile_id);
             v_k := public.fn_cont_notifica_owneri('cont_inchidere_amanata', '⏳ Închiderea automată a contului e amânată repetat',
@@ -709,7 +710,7 @@ BEGIN
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', 'ecbbd64ceffd6ed13ed91a04f6f14419', '{postgres=X/postgres}'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',               'a32cb851d317d273feee8e975eba66a4',       '{postgres=X/postgres,authenticated=X/postgres}'),
                  ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', 'b1c2b93cbe3b9560bcb38d460c717fce',       '{postgres=X/postgres}'),
-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'ee5015604d7a6dc0ab46d4ca4e5a8741',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
+                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'facbcd2b4059a16b24f95674b0986ad2',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m AND p.prosecdef

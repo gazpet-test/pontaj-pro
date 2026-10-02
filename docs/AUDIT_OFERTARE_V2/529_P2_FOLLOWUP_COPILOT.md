@@ -81,7 +81,7 @@ Neatinse față de r1: P2-1 (`fn_cont_leaga_automat` / `fn_cont_revalideaza_cand
 
 # r3 (02.10.2026) — după NO-GO-ul STATIC Copilot pe r2 `408acee5…` (un singur blocant: P2-4B; P2-1, P2-2, P2-3A, P2-4A, alegerile 1–3: închise / GO)
 
-**context_version:** branch `claude/529-p2-followup`, PR #576, commit r3 `5a58f86` (părinte r2 `5a58f86`, r1 `b126b50`); generated_at 2026-10-02. **Pe live NIMIC.**
+**context_version:** branch `claude/529-p2-followup`, PR #576, commit r3 `2666d04` (părinte r2 `5a58f86`, r1 `b126b50`); generated_at 2026-10-02. **Pe live NIMIC.**
 
 ## Verdictul r2 (rezumat)
 - **P2-4B — spec ≠ cod**: docs/delta spuneau „alerta se încearcă la fiecare rulare cât timp prag > marker”, dar codul o încearcă DOAR în ramura `v_amanat`. Contraexemplu: `amanari = 5`, marker 0; rularea 6 ⇒ amanat_lock, `amanari = 6`, ownerii ținuți ⇒ 0 acoperiți (marker rămâne 0 — corect); înainte de rularea 7 contenția dispare ⇒ elementul se procesează normal ⇒ nicio verificare prag > marker pe calea normală ⇒ `amanari = 0, marker = 0` ⇒ alerta pragului 6 uitată definitiv. P2-4-ALERTA-RETRY nu o vedea (menținea contenția și la 7).
@@ -1022,4 +1022,125 @@ BEGIN
   PERFORM set_config('gazpet.rollback_tehnic_20261002b', '', true);
 END $post$;
 
+```
+
+
+# r4 (02.10.2026) — după GO STATIC Copilot pe r3 `61798922…` (P2-4B închis, fără blocant funcțional): DOAR corecturi editoriale
+
+**context_version:** branch `claude/529-p2-followup`, PR #576, commit r4 = commit-ul care conține această secțiune (următorul după `2666d04` pe branch) (părinte r3 `2666d04`); generated_at 2026-10-02. **Pe live NIMIC** (doar preflight read-only, mai jos). **Nicio schimbare de logică**: diff-ul r3→r4 pe `supabase/` conține exclusiv comentarii, `COMMENT ON COLUMN` și constantele md5 ale sweep-ului (schimbat de comentariul din corpul funcției).
+
+| Corectură cerută | Făcută |
+|---|---|
+| `COMMENT ON COLUMN … ultima_amanare_alertata` („reîncearcă la fiecare rulare”) | → „cât timp contenția continuă și pragul curent > marker, alerta se reîncearcă la fiecare amânare; la procesare normală, alerta pending se anulează și seria se resetează (r3)” |
+| comentariul intern din sweep („la FIECARE rulare cât timp pragul > marker”) | → „la fiecare AMÂNARE cât timp contenția continuă și pragul > marker … r3: la procesare normală alerta neacoperită se anulează explicit”; + antetul migrării („amânările 7, 8… cât timp contenția continuă”). md5 sweep `ee501560…` → **`facbcd2b4059a16b24f95674b0986ad2`** (precondiție m_nou / postcondiție / revenire / docs actualizate) |
+| revenire: „cele 5 funcții” | → „cele 6 funcții … (r2: + fn_cont_coada_pune)”, „coloanele amanari / ultima_amanare_alertata” |
+| antet delta r3 | → `commit r3 2666d04 (părinte r2 5a58f86, r1 b126b50)` |
+
+## Fișiere (r4)
+| Fișier | sha256 |
+|---|---|
+| `supabase/migrations/20261002b_conturi_p2_followup.sql` | `6e0a1fb0408cd368a1de0ad867f55096d9ac600b71cbedfbfe5805dfaa6751fb` |
+| `supabase/revenire/20261002b_conturi_p2_followup_ROLLBACK.sql` | `3b20a51f1dbd65b22d1e6de9ce81335f99619295642004b0e5cd886703210997` |
+
+## Verificări (r4)
+- harness PG16 `--reaplica --rollback`: **1990 aserțiuni PASS** (după migrare: 652, după reaplicare: 652, după rollback, doar BAZĂ: 26, după rollback + reaplicare: 652; rollback pas cu pas inclusiv revenirea = schema de după 20260929e, schema finală = cea dinainte).
+- Validator `scripts/livrare_validator.py`: OK. `npx vite build`: OK. Mutanții (6) nu au fost rerulați: r4 nu schimbă logica (diff-ul de mai jos).
+
+## Preflight READ-ONLY pe live (02.10.2026, MCP execute_sql, doar SELECT)
+| Control | Rezultat live | Așteptat |
+|---|---|---|
+| md5 `fn_cont_coada_pune` | `890a0025f513ca02ac9276cd4a360afb` | = r11 ✔ |
+| md5 `fn_conturi_inchideri_sweep` | `7bc5ddf2f4097525e6c24f499a8fb5e7` | = r11 ✔ |
+| md5 `fn_cont_notifica_owneri` | `0bbbf41d3097840c16a97a263ff4cd5f` | = r11 ✔ |
+| md5 `fn_cont_serializare_activa` | `8327108ddc25b66c312b7ba82e3a83b2` | = r11 ✔ |
+| md5 `fn_cont_revalideaza_candidat` | `7bb0d97ed57bfef1c4555fbf94629071` | = r11 ✔ |
+| md5 `fn_cont_leaga_automat` | `349f540203eeb73639c4cfa4316a8cd6` | = r11 ✔ |
+| `fn_cont_serializare_activa()` | `true` | true ✔ |
+| coloane `amanari` / `ultima_amanare_alertata` pe `conturi_inchideri_coada` | absente (NULL) | absente ✔ |
+| coada: intrări deschise / abandonate | 0 / 0 | — |
+| ultima versiune `schema_migrations` | `20261002090000` | versiunea follow-up-ului trebuie să fie > 20261002090000 |
+
+## Diff r3 → r4 pe `supabase/` (doar comentarii / COMMENT ON / md5)
+```diff
+diff --git a/supabase/migrations/20261002b_conturi_p2_followup.sql b/supabase/migrations/20261002b_conturi_p2_followup.sql
+index 62abb11..6ccdd6c 100644
+--- a/supabase/migrations/20261002b_conturi_p2_followup.sql
++++ b/supabase/migrations/20261002b_conturi_p2_followup.sql
+@@ -39,7 +39,7 @@
+ --   (d, P2-4A) alerta de prag folosea doar amanari % 6 = 0 și ignora acoperirea ⇒ la amânarea 6 cu toți ownerii ținuți alerta se pierdea
+ --       definitiv. Fix: marker durabil conturi_inchideri_coada.ultima_amanare_alertata integer NOT NULL DEFAULT 0 (coloană nouă, aditivă):
+ --       bucket-ul (6, 12, …) = amanari − amanari % 6; cât timp CONTENȚIA CONTINUĂ alerta se încearcă la fiecare amânare (bucket > marker)
+---       și se marchează DOAR după acoperire > 0 (rulările 7, 8… continuă să încerce bucket-ul 6).
++--       și se marchează DOAR după acoperire > 0 (amânările 7, 8… continuă să încerce bucket-ul 6 cât timp contenția continuă).
+ --   r3 (P2-4B, politică operațională simplă — decizia sesiunii principale): alerta de amânări e relevantă DOAR cât timp contenția
+ --       continuă; dacă următoarea rulare procesează elementul normal, o alertă încă neacoperită se ANULEAZĂ explicit (reset contor +
+ --       marker, rezultat amanari_alerta_anulata) — NU „se reîncearcă până ajunge”. Pe calea de eroare (backoff) resetul e tăcut
+@@ -91,7 +91,7 @@ BEGIN
+                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', '7bb0d97ed57bfef1c4555fbf94629071', 'ecbbd64ceffd6ed13ed91a04f6f14419'),
+                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',           '349f540203eeb73639c4cfa4316a8cd6', 'a32cb851d317d273feee8e975eba66a4'),
+                  ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', '890a0025f513ca02ac9276cd4a360afb', 'b1c2b93cbe3b9560bcb38d460c717fce'),
+-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', 'ee5015604d7a6dc0ab46d4ca4e5a8741')) AS w(f, sig, m_live, m_nou)
++                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', 'facbcd2b4059a16b24f95674b0986ad2')) AS w(f, sig, m_live, m_nou)
+    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
+       OR NOT EXISTS (SELECT 1 FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) IN (w.m_live, w.m_nou) AND p.prosecdef
+@@ -135,7 +135,7 @@ ALTER TABLE public.conturi_inchideri_coada ADD COLUMN IF NOT EXISTS ultima_amana
+ COMMENT ON COLUMN public.conturi_inchideri_coada.amanari IS
+   'P2-4 (20261002b): de câte ori LA RÂND (consecutiv) sweep-ul a amânat intrarea din contenție (amanat_lock). Se resetează la orice procesare non-amanat_lock și la ciclu nou (fn_cont_coada_pune). Owner-ul e anunțat (cont_inchidere_amanata) la pragurile 6, 12, … (ultima_amanare_alertata).';
+ COMMENT ON COLUMN public.conturi_inchideri_coada.ultima_amanare_alertata IS
+-  'P2-4A (20261002b r2): ultimul prag de amânări (6, 12, …) pentru care alerta cont_inchidere_amanata a ACOPERIT ≥ 1 owner; cât timp pragul curent > marker, sweep-ul reîncearcă alerta la fiecare rulare. Se resetează odată cu amanari.';
++  'P2-4A (20261002b r2): ultimul prag de amânări (6, 12, …) pentru care alerta cont_inchidere_amanata a ACOPERIT ≥ 1 owner; cât timp contenția continuă și pragul curent > marker, alerta se reîncearcă la fiecare amânare; la procesare normală, alerta pending se anulează și seria se resetează (r3). Se resetează odată cu amanari.';
+ 
+ -- (d, P2-3A) B.2b fn_cont_coada_pune — ultima_eroare separată semantic de notificat_la --------------------------------------------
+ -- r11: notificat_la = now() când p_eroare nu era NULL („apelantul tocmai a anunțat owner-ul”) — dar anunțul triggerului e best-effort
+@@ -593,8 +593,9 @@ BEGIN
+              AND (profile_id, employee_id, tip) IS NOT DISTINCT FROM (q.profile_id, q.employee_id, q.tip)   -- (r5: doar intrarea pe care a lucrat)
+           RETURNING * INTO x;
+           v_tine := true;
+-          -- r2 (P2-4A): pragul curent = amanari − amanari % 6 (6, 12, …); alerta se încearcă la FIECARE rulare cât timp pragul > marker
+-          -- (ultima_amanare_alertata) și se marchează DOAR dacă notificatorul a acoperit ≥ 1 owner — o alertă neacoperită nu se pierde.
++          -- r2 (P2-4A): pragul curent = amanari − amanari % 6 (6, 12, …); alerta se încearcă la fiecare AMÂNARE cât timp contenția continuă
++          -- și pragul > marker (ultima_amanare_alertata) și se marchează DOAR dacă notificatorul a acoperit ≥ 1 owner; r3 (P2-4B): dacă
++          -- elementul se procesează normal între timp, alerta neacoperită se anulează explicit (calea normală, amanari_alerta_anulata).
+           IF FOUND AND x.amanari - x.amanari % c_prag_amanari > x.ultima_amanare_alertata THEN
+             v_email := (SELECT p.email FROM public.profiles p WHERE p.id = q.profile_id);
+             v_k := public.fn_cont_notifica_owneri('cont_inchidere_amanata', '⏳ Închiderea automată a contului e amânată repetat',
+@@ -709,7 +710,7 @@ BEGIN
+                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', 'ecbbd64ceffd6ed13ed91a04f6f14419', '{postgres=X/postgres}'),
+                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',               'a32cb851d317d273feee8e975eba66a4',       '{postgres=X/postgres,authenticated=X/postgres}'),
+                  ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', 'b1c2b93cbe3b9560bcb38d460c717fce',       '{postgres=X/postgres}'),
+-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'ee5015604d7a6dc0ab46d4ca4e5a8741',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
++                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'facbcd2b4059a16b24f95674b0986ad2',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
+    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
+       OR NOT EXISTS (SELECT 1 FROM pg_proc p
+                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m AND p.prosecdef
+diff --git a/supabase/revenire/20261002b_conturi_p2_followup_ROLLBACK.sql b/supabase/revenire/20261002b_conturi_p2_followup_ROLLBACK.sql
+index b315298..636c356 100644
+--- a/supabase/revenire/20261002b_conturi_p2_followup_ROLLBACK.sql
++++ b/supabase/revenire/20261002b_conturi_p2_followup_ROLLBACK.sql
+@@ -1,6 +1,6 @@
+ -- ════════════════════════════════════════════════════════════════════════════
+ -- 20261002b_conturi_p2_followup_ROLLBACK — NU e migrare (niciun runner nu parcurge supabase/revenire/). Readuce EXACT starea
+--- LIVE r11 a pachetului Conturi (c v20261001230000 / d v20261001231500): cele 5 funcții înlocuite de 20261002b revin VERBATIM la
++-- LIVE r11 a pachetului Conturi (c v20261001230000 / d v20261001231500): cele 6 funcții înlocuite de 20261002b (r2: + fn_cont_coada_pune) revin VERBATIM la
+ -- corpurile din 20260929c / 20260929d (md5 prosrc: fn_cont_notifica_owneri 0bbbf41d…, fn_cont_serializare_activa 8327108d…,
+ -- fn_cont_revalideaza_candidat 7bb0d97e…, fn_cont_leaga_automat 349f5402…, fn_cont_coada_pune 890a0025…, fn_conturi_inchideri_sweep
+ -- 7bc5ddf2…) și coloanele conturi_inchideri_coada.amanari / ultima_amanare_alertata dispar (contorul de amânări se pierde — doar diagnostic). REDESCHIDE cele 4 P2 (risc documentat
+@@ -24,14 +24,14 @@ BEGIN
+   IF current_user IS DISTINCT FROM 'postgres' THEN
+     RAISE EXCEPTION 'Revenire 20261002b: rulează ca postgres (current_user = %)', current_user;
+   END IF;
+-  -- precondiție: starea e EXACT cea a lui 20261002b (md5 propriu pe toate cele 5 funcții + coloana amanari)
++  -- precondiție: starea e EXACT cea a lui 20261002b (md5 propriu pe toate cele 6 funcții + coloanele amanari / ultima_amanare_alertata)
+   SELECT array_agg(w.f ORDER BY w.f) INTO v_lipsa
+     FROM (VALUES ('fn_cont_notifica_owneri',      'fn_cont_notifica_owneri(text,text,text,text)',       'f969f77614176d63341f69e1909c11f1'),
+                  ('fn_cont_serializare_activa',   'fn_cont_serializare_activa()',                       '526b9a2c30d4d70df3d94928e597de17'),
+                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', 'ecbbd64ceffd6ed13ed91a04f6f14419'),
+                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',               'a32cb851d317d273feee8e975eba66a4'),
+                  ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', 'b1c2b93cbe3b9560bcb38d460c717fce'),
+-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'ee5015604d7a6dc0ab46d4ca4e5a8741')) AS w(f, sig, m)
++                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'facbcd2b4059a16b24f95674b0986ad2')) AS w(f, sig, m)
+    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m);
+   IF v_lipsa IS NOT NULL THEN
+     RAISE EXCEPTION 'Revenire 20261002b: precondiție — funcțiile nu sunt varianta 20261002b (md5): %', v_lipsa;
 ```
