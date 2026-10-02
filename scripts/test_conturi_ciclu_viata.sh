@@ -134,8 +134,19 @@ aplica_fisier() {  # ca apply_migration: o singură tranzacție, cu excepția fi
   if grep -q "gazpet.livrare_migrare" "$f"; then
     opt=(--single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$(basename "$f" .sql):' || txid_current(), true)")
   fi
+  # 02.10.2026: revenirile din supabase/revenire/ se armează cu un GUC legat de txid (antet „-- harness-armare: <guc> <token>”)
+  local arm; arm="$(grep -m1 -oE '^-- harness-armare: [a-z0-9_.]+ [A-Z0-9_]+' "$f" | sed 's/^-- harness-armare: //' || true)"
+  if [ -n "$arm" ]; then
+    opt=(--single-transaction -c "SELECT set_config('${arm%% *}', '${arm##* }:' || txid_current(), true)")
+  fi
   echo "→ aplic ${f#$RADACINA/}"
   "${PSQL[@]}" -d "$BAZA" ${opt[@]+"${opt[@]}"} -f "$f" || esec "migrarea ${f#$RADACINA/} a eșuat"
+}
+rollback_pentru() {  # X.sql → X_ROLLBACK.sql de lângă migrare sau, 02.10.2026, din supabase/revenire/ (reveniri tehnice, armate)
+  local m="$1" rb
+  rb="$(cale_abs "${m%.sql}_ROLLBACK.sql")"
+  [ -f "$rb" ] || rb="$RADACINA/supabase/revenire/$(basename "${m%.sql}")_ROLLBACK.sql"
+  echo "$rb"
 }
 schema_snapshot() {  # schema fără date, cu ACL-uri, ca să prindă GRANT-uri/obiecte rămase după rollback
   "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" --schema-only --no-owner \
@@ -191,7 +202,7 @@ fi
 if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
   # Gardă de ordine: rollback-ul PRIMEI migrări rulat înaintea celorlalte trebuie refuzat și fără efect
   # (doar dacă fișierul are o gardă declarată: „Gardă de ordine”).
-  RB0="$(cale_abs "${MIGRARI[0]%.sql}_ROLLBACK.sql")"
+  RB0="$(rollback_pentru "${MIGRARI[0]}")"
   if [ ${#MIGRARI[@]} -gt 1 ] && [ -f "$RB0" ] && grep -q 'Gardă de ordine' "$RB0"; then
     SNAP_G="$(mktemp)"; schema_snapshot > "$SNAP_G"
     if "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$RB0" >/dev/null 2>&1; then
@@ -205,7 +216,7 @@ if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
   # Gardă coadă flaguri (runda 3, P9c): cu o intrare „flaguri” deschisă în coadă (cont închis pe calea HR cu flagurile
   # încă TRUE), rollback-ul care o declară trebuie refuzat (55000) și fără efect; intrarea de test se șterge apoi.
   for (( i=0; i<${#MIGRARI[@]}; i++ )); do
-    RBQ="$(cale_abs "${MIGRARI[$i]%.sql}_ROLLBACK.sql")"
+    RBQ="$(rollback_pentru "${MIGRARI[$i]}")"
     if [ -f "$RBQ" ] && grep -q 'Gardă coadă flaguri' "$RBQ"; then
       "${PSQL[@]}" -d "$BAZA" -c "INSERT INTO public.conturi_inchideri_coada (profile_id, tip, motiv) VALUES (gen_random_uuid(), 'flaguri', 'harness: gardă rollback coadă')" >/dev/null \
         || esec "nu pot pune intrarea de test în coadă"
@@ -222,8 +233,8 @@ if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
     fi
   done
   for (( i=${#MIGRARI[@]}-1; i>=0; i-- )); do
-    rb="${MIGRARI[$i]%.sql}_ROLLBACK.sql"
-    [ -f "$(cale_abs "$rb")" ] || esec "lipsește rollback-ul pentru ${MIGRARI[$i]}"
+    rb="$(rollback_pentru "${MIGRARI[$i]}")"
+    [ -f "$rb" ] || esec "lipsește rollback-ul pentru ${MIGRARI[$i]} (nici lângă migrare, nici în supabase/revenire/)"
     aplica_fisier "$rb"
     if [ "$i" -gt 0 ] && [ -n "${SNAP_PAS[$((i - 1))]:-}" ]; then
       SNAP_RB="$(mktemp)"; schema_snapshot > "$SNAP_RB"

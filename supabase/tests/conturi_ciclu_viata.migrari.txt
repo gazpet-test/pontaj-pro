@@ -20,3 +20,5 @@ live: supabase/migrations/20260930a_profiles_campuri_owner_only_extins.sql
 supabase/migrations/20260929c_conturi_legare_automata.sql
 supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
 supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql
+# 02.10.2026 (decizia 16A): follow-up aditiv pentru cele 4 P2 acceptate pe #529 (r11); revenirea stă în supabase/revenire/.
+supabase/migrations/20261002b_conturi_p2_followup.sql
