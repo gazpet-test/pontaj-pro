@@ -157,6 +157,26 @@ SELECT set_config('gazpet.rollback_tehnic_20261002c', 'REVINE_0E_NOWAIT:' || txi
 COMMIT;
 ```
 Precondiție = md5 propriu 20261002c (`b07f3800…` / `0477bce8…`), ACL-uri, unicitate, niciun alt apelant al lui `fn_cont_lot_nowait`; postcondiție = md5 live r4 pe `fn_cont_leaga_automat` + `fn_cont_revalideaza_candidat` (`ecbbd64c…`) + `fn_cont_lock_chei` (`db9b9899…`), ACL-uri neschimbate, funcția nouă absentă; dezarmare la final. Testat în `scripts/test_conturi_ciclu_viata.sh --rollback` (armare după antetul `-- harness-armare:`; schema de după revenire = schema de după `20261002b`).
+
+## 20261002e — tip nou de garanție „car” (`20261002e_garantii_tip_car_ROLLBACK.sql`, NEAPLICAT)
+Readuce `garantii_tip_check` la cele 4 valori din 02.10 și scoate `fn_garantii_tipuri()`. Nu redeschide o gaură de securitate, dar **refuză dacă există rânduri cu `tip = 'car'`** (datele nu se ating de aici — decizie separată). Același statut: fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261002e', 'SCOATE_TIP_CAR:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+
+## 20261003a — bilete la ordin pe polițe (`20261003a_garantii_bilete_ordin_ROLLBACK.sql`, NEAPLICAT)
+Scoate tabela `garantii_bilete_ordin` (cu secvența, indecșii, politicile, triggerul ei), amprentele `bo_scadent`/`bo_expirat` din `garantii_alerte_amprenta` și readuce `garantii_alerte()` la corpul live din 02.10 (md5 `fd35c645…`, inclus verbatim în fișier; ACL-ul rămâne neatins). **Revenirea reintroduce cele două buguri reparate de 20261003a** în blocul vechi al `garantii_alerte()` — `modul = 'financiar'` (respins de `notifications_modul_check`) și `ON CONFLICT (garantie_id, fel)` ambiguu cu coloanele OUT — pentru că readuce corpul vechi exact (e revenire, nu reparație): după revenire, prima garanție care intră pe o ramură veche oprește din nou toată execuția cronului. Nu redeschide o gaură de securitate, dar **refuză dacă tabela are rânduri** (evidența biletelor nu se șterge de aici — decizie separată). Notificările deja trimise rămân. Același statut: fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261003a', 'SCOATE_BILETE_ORDIN:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = tabela există și e goală + md5-ul propriu 20261003a pe `garantii_alerte()` (`bd170a0f…`); postcondiție = starea live (fără tabelă/secvență, md5 `fd35c645…`, ACL neatins, fără amprente `bo_*`); dezarmare la final. Testat în `scripts/test_garantii_bilete_ordin.sh` pasul 6 (schelet: `supabase/tests/garantii_bilete_ordin_schelet.sql`). Migrarea: sha256 `a115d367…` (vezi PR), validator OK.
+
 ## 20261002d — SEC IBAN GBE contracte (`20261002d_sec_gbe_iban_ROLLBACK.sql`, NEAPLICAT)
 Readaugă coloana `contracte_terti.gbe_cont_iban` (la FINALUL listei — PostgreSQL nu păstrează poziția), copiază valorile înapoi din `contracte_terti_gbe_cont`, readuce `v_gbe_per_contract` cu `c.gbe_cont_iban` direct (md5 live `b9861ba0…`) și șterge funcțiile `fn_gbe_cont_iban` / `fn_gbe_cont_iban_set` și tabela nouă. **Redeschide** expunerea IBAN pentru orice cont logat. Fără GO de execuție.
 ```sql
