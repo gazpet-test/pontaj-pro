@@ -10506,33 +10506,6 @@
   "motiv_aplicabilitate": "Practică CNSC — interpretare, nu normă; vezi câmpul comparabilitate în cnsc_practica.json"
  },
  {
-  "source_id": "SRC-CNSC-BO2026_271",
-  "tip": "decizie_cnsc",
-  "cod": null,
-  "titlu": "„Extindere rețea de gaze naturale în localitățile ... și ...” — modificare presiune la SRM-P, rețea de distribuție stradală PE SDR11 (47 tronsoane), racorduri individuale, senzori de presiune cu teletransmisie pe capete de rețea, drum de acces, subtraversări prin foraj orizontal dirijat; procedură simplificată, factori tehnici incl. „Planificarea adecvată a resurselor umane” (30% din componenta tehnică)",
-  "emitent": "CNSC",
-  "editie": null,
-  "data_publicarii": null,
-  "effective_from": null,
-  "effective_to": null,
-  "status": "publicata",
-  "inlocuit_de": null,
-  "url_oficial": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=ZjhjNTE5YTYtOGZjOS00Mzc0LWI3ZDAtMWI4ODk1OTg4NmY3&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzI3MS5wZGY=&action=aW5saW5l",
-  "urluri_secundare": null,
-  "acces": "public",
-  "domenii": [
-   "distributie"
-  ],
-  "ultima_verificare": "2026-10-02",
-  "verificat_pe_sursa_primara": true,
-  "ofertare_normative_id": null,
-  "baza_normativa_id": null,
-  "snapshot_sha256": "be20c2ee79fdc926e2e5dfbe52b4ad4fc28e4923553e83a81992ada04b7c2322",
-  "snapshot_data": "2026-10-01",
-  "aplicabilitate_gazpet": "doar_referinta",
-  "motiv_aplicabilitate": "Practică CNSC — interpretare, nu normă; vezi câmpul comparabilitate în cnsc_practica.json"
- },
- {
   "source_id": "SRC-CNSC-BO2026_2913",
   "tip": "decizie_cnsc",
   "cod": null,
@@ -10745,33 +10718,6 @@
   "baza_normativa_id": null,
   "snapshot_sha256": "cb7258b55907c87b67bf3db2282aea6b9dedbebc18317c3e42a1cdd4f32d9717",
   "snapshot_data": "2026-10-02",
-  "aplicabilitate_gazpet": "doar_referinta",
-  "motiv_aplicabilitate": "Practică CNSC — interpretare, nu normă; vezi câmpul comparabilitate în cnsc_practica.json"
- },
- {
-  "source_id": "SRC-CNSC-BO2026_3952",
-  "tip": "decizie_cnsc",
-  "cod": null,
-  "titlu": "„Extinderea sistemului de distribuție gaze naturale ..., orașul ...” — procedură simplificată, prețul cel mai scăzut; lucrări de distribuție cu branșamente, categoria de importanță min. C; durata execuției 10 luni",
-  "emitent": "CNSC",
-  "editie": null,
-  "data_publicarii": null,
-  "effective_from": null,
-  "effective_to": null,
-  "status": "publicata",
-  "inlocuit_de": null,
-  "url_oficial": "http://portal.cnsc.ro/sivadoc/download.aspx?docUID=NmRkNjNlNDItZWU1Ni00NTZmLWJhOGUtNzVmNjkwYmNlMmI4&pdfa1=ZmFsc2U=&filename=Qk8yMDI2XzM5NTIucGRm&action=aW5saW5l",
-  "urluri_secundare": null,
-  "acces": "public",
-  "domenii": [
-   "distributie"
-  ],
-  "ultima_verificare": "2026-10-02",
-  "verificat_pe_sursa_primara": true,
-  "ofertare_normative_id": null,
-  "baza_normativa_id": null,
-  "snapshot_sha256": "2f65db9cec1dfb858e2c5df00f7be8923680852d4d34b53d066dd7b5c3c20d2a",
-  "snapshot_data": "2026-10-01",
   "aplicabilitate_gazpet": "doar_referinta",
   "motiv_aplicabilitate": "Practică CNSC — interpretare, nu normă; vezi câmpul comparabilitate în cnsc_practica.json"
  },
