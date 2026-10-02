@@ -40,6 +40,13 @@
 --       'reevaluare_istorica': sweep-ul respectă restaurarea owner-ului INDIFERENT de creat_la (nu e o plecare nouă). (Jakarinos
 --       d:826-827) înscrierea lor în coadă NU mai e best-effort: eșecul anulează UPDATE-ul (RAISE). (P2) fn_cont_notifica_owneri (c)
 --       ia destinatarii FOR KEY SHARE NOWAIT — handlerul sweep-ului nu mai poate aștepta la notificare (md5 nou în precondiție).
+--   r11 (Jakarinos pe bc2ba28, 2 P1 în d): (1) natura evenimentului se păstrează la fișele istorice ale persoanei: 'programata' când
+--       fișa care se încheie trece ACUM din activă în inactivă (v_plecare — plecare nouă: contul se închide după dispariția ultimului
+--       contract activ, restaurarea de dinaintea evenimentului nu-l mai protejează), 'reevaluare_istorica' DOAR la corecția de dată
+--       pe o fișă deja inactivă (restaurarea respectată indiferent de creat_la); sweep-ul judecă tot cu garda fișei istorice.
+--       (2) intrarea OBLIGATORIE de reîncercare / programare nu mai e best-effort: dacă fn_cont_coada_pune eșuează, eroarea se
+--       propagă (UPDATE-ul HR e anulat — aceeași regulă ca F pentru fișele istorice); altfel contractul era încheiat, contul neînchis,
+--       fără intrare, cu notificare falsă „se reîncearcă din coadă”. Notificarea rămâne best-effort.
 --   * fn_pgrst_pre_request     — hook PostgREST pentru revocarea EFECTIVĂ a JWT-urilor deja emise;
 --                                CREAT, dar NEACTIVAT (activarea = ALTER ROLE authenticator, cu acordul lui Răzvan)
 --   * fn_cont_restaureaza      — revenire din jurnal, EXCLUSIV owner, cu previzualizare (p_simulare)
@@ -813,7 +820,8 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_inchide_owner(uuid, text) TO authentica
 --   * tip_cont extern/test/sistem → nu se închide automat (doar alertă) (audit B #5-iv);
 --   * garda „aceeași persoană” (ATOMICĂ, lock pe persoană): CNP lipsă / alt contract activ / posibil alt contract
 --     activ (fișă activă fără CNP, același nume de familie sau email) → nu se închide (doar alertă);
---   * altfel fn_cont_inchide; o eroare → notificare + coadă 'reincercare' (nu blochează NICIODATĂ UPDATE-ul).
+--   * altfel fn_cont_inchide; o eroare → coadă 'reincercare' (OBLIGATORIE, r11: dacă nici intrarea nu se poate salva, eroarea
+--     se propagă și UPDATE-ul e anulat) + notificare (best-effort).
 -- Dezactivare cu dată în VIITOR → coadă 'programata' (închiderea se face când data ajunge), cu aceeași excepție pentru
 -- conturile restaurate fără plecare nouă.
 CREATE OR REPLACE FUNCTION public.fn_employees_ciclu_cont()
@@ -861,9 +869,15 @@ BEGIN
         -- datei pe A reînchidea contul restaurat al lui B, deși nimeni nu l-a reactivat / încheiat).
         -- r10 (Jakarinos, d:826-827): înscrierea în coadă NU mai e best-effort — un eșec aici anulează tranzacția (RAISE): fără intrare
         -- nu există nicio garanție de reluare (contul lui B ar rămâne deschis fără urmă). HR vede eroarea și salvează din nou.
-        PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, 'reevaluare_istorica',
-          format('Contract încheiat la %s (fișa #%s %s) · fișă istorică #%s a aceleiași persoane (CNP comun): se verifică cu garda ei, din coadă',
-                 to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name, r0.emp),
+        -- r11 (P1 Jakarinos pe bc2ba28, d:864): tipul NU se mai decide doar prin r0.emp <> NEW.id — natura evenimentului se păstrează:
+        -- v_plecare (fișa NEW trece ACUM din activă în inactivă) = plecare NOUĂ ⇒ 'programata' (sweep: restaurarea de dinaintea intrării
+        -- nu mai protejează contul — altfel, cu contul lui B restaurat cândva, încetarea ultimului contract activ A lăsa contul deschis:
+        -- anulat_restaurat); doar corecția de dată pe o fișă deja inactivă ⇒ 'reevaluare_istorica' (restaurarea respectată indiferent
+        -- de creat_la — D-REEVAL-RESTAURAT). În ambele cazuri sweep-ul judecă fișa istorică cu garda EI.
+        PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, CASE WHEN v_plecare THEN 'programata' ELSE 'reevaluare_istorica' END,
+          format('Contract încheiat la %s (fișa #%s %s) · fișă istorică #%s a aceleiași persoane (CNP comun): se verifică cu garda ei, din coadă%s',
+                 to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name, r0.emp,
+                 CASE WHEN v_plecare THEN ' · plecare nouă' ELSE ' · corecție de dată' END),
           CURRENT_DATE);
         CONTINUE;
       END IF;
@@ -878,15 +892,17 @@ BEGIN
           FROM public.profiles p WHERE p.id = r0.id FOR UPDATE;
       EXCEPTION WHEN OTHERS THEN
         v_err := SQLERRM;
+        -- r11 (P1 Jakarinos pe bc2ba28): intrarea de reîncercare e OBLIGATORIE — fără bloc protector: dacă nu se poate salva,
+        -- eroarea se propagă și UPDATE-ul HR e anulat (nu „contract încheiat, cont neînchis, nicio intrare”). Notificarea: best-effort.
+        PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, 'reincercare',
+          format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
+          CURRENT_DATE, v_err);
         BEGIN
-          PERFORM public.fn_cont_coada_pune(r0.id, r0.emp, 'reincercare',
-            format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
-            CURRENT_DATE, v_err);
           PERFORM public.fn_cont_notifica_owneri('cont_inchidere_esuata', '❌ Închiderea automată a contului a eșuat',
             format('%s (fișa #%s %s): %s · se reîncearcă automat din coadă', r0.id, NEW.id, NEW.name, v_err),
             '/admin?tab=managers&cont=' || r0.id::text);
         EXCEPTION WHEN OTHERS THEN
-          RAISE WARNING 'fn_employees_ciclu_cont lock profil (%): % [%] · eroarea inițială: %', r0.id, SQLERRM, SQLSTATE, v_err;
+          RAISE WARNING 'fn_employees_ciclu_cont lock profil (%): notificarea a eșuat: % [%] · eroarea inițială: %', r0.id, SQLERRM, SQLSTATE, v_err;
         END;
         CONTINUE;
       END;
@@ -930,15 +946,15 @@ BEGIN
                    format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
                    'trigger_contract_incheiat', r.emp);
       EXCEPTION WHEN OTHERS THEN
-        -- Nu blocăm NICIODATĂ UPDATE-ul din HR sau lotul cron-ului; închiderea se reîncearcă din coadă.
+        -- Nu blocăm UPDATE-ul din HR sau lotul cron-ului pentru o închidere eșuată; închiderea se reîncearcă din coadă.
+        -- r11 (P1 Jakarinos pe bc2ba28, d:936-940): intrarea 'reincercare' e garanția de reluare ⇒ OBLIGATORIE: dacă nici ea nu se
+        -- poate salva, eroarea se propagă (UPDATE-ul HR e anulat; HR vede eroarea și salvează din nou) — același tratament ca F
+        -- pentru fișele istorice. Înainte: WARNING + UPDATE comis ⇒ contract încheiat, cont neînchis, nicio intrare, notificare
+        -- falsă „se reîncearcă din coadă” (ex. auth_ocupat + coada indisponibilă). Notificarea rămâne best-effort.
         v_err := SQLERRM;
-        BEGIN
-          PERFORM public.fn_cont_coada_pune(r.id, r.emp, 'reincercare',
-            format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
-            CURRENT_DATE, v_err);
-        EXCEPTION WHEN OTHERS THEN
-          RAISE WARNING 'fn_employees_ciclu_cont coadă (%): % [%]', r.email, SQLERRM, SQLSTATE;
-        END;
+        PERFORM public.fn_cont_coada_pune(r.id, r.emp, 'reincercare',
+          format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
+          CURRENT_DATE, v_err);
         BEGIN
           PERFORM public.fn_cont_notifica_owneri('cont_inchidere_esuata', '❌ Închiderea automată a contului a eșuat',
             format('%s (fișa #%s %s): %s · se reîncearcă automat din coadă', r.email, NEW.id, NEW.name, v_err),
@@ -969,13 +985,11 @@ BEGIN
       v_rest := CASE WHEN NOT v_plecare THEN public.fn_cont_restaurare_activa(r.id) END;
       IF NEW.termination_date IS NOT NULL AND NEW.termination_date > CURRENT_DATE AND r.is_owner IS NOT TRUE THEN
         IF v_rest IS NULL THEN
-          BEGIN                                       -- dezactivat înainte de dată: închiderea se programează
-            PERFORM public.fn_cont_coada_pune(r.id, r.emp, 'programata',
-              format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
-              NEW.termination_date);
-          EXCEPTION WHEN OTHERS THEN
-            RAISE WARNING 'fn_employees_ciclu_cont coadă (%): % [%]', r.email, SQLERRM, SQLSTATE;
-          END;
+          -- dezactivat înainte de dată: închiderea se programează. r11 (P1 Jakarinos pe bc2ba28, d:973-977): intrarea 'programata'
+          -- e singura garanție că închiderea se va face la dată ⇒ OBLIGATORIE: un eșec se propagă (UPDATE-ul HR e anulat), nu WARNING.
+          PERFORM public.fn_cont_coada_pune(r.id, r.emp, 'programata',
+            format('Contract încheiat la %s (fișa #%s %s)', to_char(NEW.termination_date, 'DD.MM.YYYY'), NEW.id, NEW.name),
+            NEW.termination_date);
         ELSE
           BEGIN                                       -- cont restaurat de owner, fără plecare nouă: nu se programează
             PERFORM public.fn_cont_notifica_owneri('cont_inchidere_suspendata', '⏸ Contract încheiat — contul NU s-a închis automat',

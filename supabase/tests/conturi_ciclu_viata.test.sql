@@ -1095,9 +1095,9 @@ SELECT teste.assert((:'sd_rez'::jsonb ->> 'inchis')::int = 1 AND NOT (:'sd_rez':
 -- sweep-ul îl judecă cu garda LUI ⇒ suspendat (owner anunțat), contul rămâne deschis.
 SELECT teste.dblink_exec(:'conn_lock', format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id = %s', :e_ta));
 SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_tb')
-    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_tb' AND employee_id = :e_tb AND tip = 'reevaluare_istorica'
-          AND rezolvat_la IS NULL AND scadent_la = CURRENT_DATE AND motiv LIKE '%fișă istorică%'),
-  'D-GARDA-TRANSITIVA-CNP evenimentul pe A NU închide profilul lui B (fișă istorică cu CNP comun): B intră în coadă ca element propriu');
+    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_tb' AND employee_id = :e_tb AND tip = 'programata'
+          AND rezolvat_la IS NULL AND scadent_la = CURRENT_DATE AND motiv LIKE '%fișă istorică%plecare nouă%'),
+  'D-GARDA-TRANSITIVA-CNP evenimentul pe A NU închide profilul lui B (fișă istorică cu CNP comun): B intră în coadă ca element propriu (r11: A trece activ → inactiv ⇒ „programata”)');
 SELECT res AS tz_rez FROM teste.dblink('c_sw9', 'SELECT public.fn_conturi_inchideri_sweep()::text') AS t(res text) \gset
 \echo '   D-GARDA-TRANSITIVA-CNP sweep:' :tz_rez
 SELECT teste.assert((:'tz_rez'::jsonb ->> 'suspendat_alt_contract_activ')::int = 1
@@ -1501,6 +1501,184 @@ SELECT teste.assert(NOT EXISTS (SELECT 1 FROM auth.users WHERE id IN (:'u_fa', :
     AND NOT EXISTS (SELECT 1 FROM public.employees WHERE id IN (:e_fa, :e_ra, :e_ha, :e_nd, :e_nd2, :e_nd3, :e_ppa, :e_ppb, :e_se, :e_cba, :e_cbb, :e_fba, :e_fbb))
     AND (SELECT tgenabled = 'D' FROM pg_trigger WHERE tgname = 'zz_r10_pica_coada'),
   'r10 (c/d) curățenie: datele comise au fost șterse');
+
+-- ============================================================ r11 (verdict pe r10 bc2ba28: c NO-GO Copilot — tokeni ne-alfanumerici;
+-- d NO-GO Jakarinos — reevaluare_istorica suprimă o plecare nouă; retragerea la auth_ocupat fără reîncercare garantată).
+-- Toate pe date COMISE (conn_lock), concurente unde e cazul (dblink). Owner-ul activ: u_own2; HR: u_ehr.
+SELECT gen_random_uuid() AS u_na, gen_random_uuid() AS u_mx, gen_random_uuid() AS u_pn, gen_random_uuid() AS u_ao, gen_random_uuid() AS u_ao2 \gset
+SELECT teste.dblink_exec(:'conn_lock', format($q$
+  INSERT INTO auth.users (id, aud, role, email, raw_app_meta_data, created_at, updated_at, email_confirmed_at)
+  VALUES (%1$L, 'authenticated', 'authenticated', '!$.%%&@gazpet.ro', '{"provider":"email","gazpet_legare_automata":true}', now(), now(), now()),
+         (%2$L, 'authenticated', 'authenticated', 'o''neil2.smith@gazpet.ro', '{"provider":"email","gazpet_legare_automata":true}', now(), now(), now()),
+         (%3$L, 'authenticated', 'authenticated', 'plecare.noua@exemplu.ro', '{"provider":"email"}', now(), now(), now()),
+         (%4$L, 'authenticated', 'authenticated', 'auth.ocupat@exemplu.ro', '{"provider":"email"}', now(), now(), now()),
+         (%5$L, 'authenticated', 'authenticated', 'prog.pica@exemplu.ro', '{"provider":"email"}', now(), now(), now());
+  INSERT INTO public.employees (name, department, email, active, cnp, termination_date) VALUES
+    ('!$ %%&', 'Test', NULL, true, NULL, NULL),
+    ('O''NEIL2 SMITH', 'Test', NULL, true, NULL, NULL),
+    ('ALTCINEVA NEIL', 'Test', NULL, true, NULL, NULL),
+    ('PLECARESCU ALFA', 'Test', NULL, true, '1900303000425', NULL),
+    ('PLECARESCU BETA', 'Test', 'plecare.noua@exemplu.ro', false, '1900303000425', CURRENT_DATE - 10),
+    ('AUTHOCUPESCU UNU', 'Test', 'auth.ocupat@exemplu.ro', true, '1900303000433', NULL),
+    ('PROGPICESCU UNU', 'Test', 'prog.pica@exemplu.ro', true, '1900303000441', NULL);
+  UPDATE public.profiles SET employee_id = (SELECT id FROM public.employees WHERE name = 'PLECARESCU BETA') WHERE id = %3$L;
+  UPDATE public.profiles SET employee_id = (SELECT id FROM public.employees WHERE name = 'AUTHOCUPESCU UNU') WHERE id = %4$L;
+  UPDATE public.profiles SET employee_id = (SELECT id FROM public.employees WHERE name = 'PROGPICESCU UNU') WHERE id = %5$L;
+$q$, :'u_na', :'u_mx', :'u_pn', :'u_ao', :'u_ao2'));
+SELECT max(id) FILTER (WHERE name = '!$ %&') AS e_na, max(id) FILTER (WHERE name = 'O''NEIL2 SMITH') AS e_mxa,
+       max(id) FILTER (WHERE name = 'ALTCINEVA NEIL') AS e_mxb, max(id) FILTER (WHERE name = 'PLECARESCU ALFA') AS e_pna,
+       max(id) FILTER (WHERE name = 'PLECARESCU BETA') AS e_pnb, max(id) FILTER (WHERE name = 'AUTHOCUPESCU UNU') AS e_ao,
+       max(id) FILTER (WHERE name = 'PROGPICESCU UNU') AS e_ao2
+  FROM public.employees WHERE name IN ('!$ %&', 'O''NEIL2 SMITH', 'ALTCINEVA NEIL', 'PLECARESCU ALFA', 'PLECARESCU BETA', 'AUTHOCUPESCU UNU', 'PROGPICESCU UNU') \gset
+SELECT teste.assert(:e_na IS NOT NULL AND :e_mxa IS NOT NULL AND :e_mxb IS NOT NULL AND :e_pna IS NOT NULL AND :e_pnb IS NOT NULL AND :e_ao IS NOT NULL AND :e_ao2 IS NOT NULL
+    AND (SELECT employee_id = :e_pnb FROM public.profiles WHERE id = :'u_pn')
+    AND (SELECT count(*) = 0 FROM public.conturi_inchideri_coada WHERE rezolvat_la IS NULL AND abandonat_la IS NULL AND scadent_la <= CURRENT_DATE
+          AND (urmatoarea_incercare_la IS NULL OR urmatoarea_incercare_la <= now())),
+  'r11 pregătire: date comise (fișa „!$ %&” activă, O''NEIL2 SMITH unic, B istorică PLECARESCU BETA cu cont, A activă cu același CNP; coada fără scadențe)');
+SELECT teste.dblink_connect('c_t11', :'conn_lock');
+SELECT teste.dblink_connect('c_sw11', :'conn_lock');
+SELECT teste.dblink_connect('c_sr11', :'conn_lock');
+SELECT * FROM teste.dblink('c_sr11', 'SELECT teste.ca_service_role()::text') AS t(x text);
+SELECT pid AS pid_sr11 FROM teste.dblink('c_sr11', 'SELECT pg_backend_pid()') AS t(pid integer) \gset
+SELECT teste.dblink_connect('c_own11', :'conn_lock');
+SELECT * FROM teste.dblink('c_own11', format('SELECT teste.ca_utilizator(%L)::text', :'u_own2')) AS t(x text);
+SELECT teste.dblink_connect('c_hr11', :'conn_lock');
+SELECT * FROM teste.dblink('c_hr11', format('SELECT teste.ca_utilizator(%L)::text', :'u_ehr')) AS t(x text);
+
+-- C-RACE-CANDIDAT-PHANTOM-NONALNUM (r11, blocant c Copilot pe bc2ba28): r10 despărțea loginul cu [._-]+ și numele cu [[:space:]-]+ și accepta
+-- tokeni formați DOAR din semne ⇒ pentru '!$.%&@gazpet.ro' și fișa '!$ %&' matcher-ul vedea un candidat, dar fn_cont_chei_potrivire
+-- (fn_nume_cuvinte) lua doar cheia emailului și un writer care redenumea B în '!$ %&' nu lua nicio cheie de nume ⇒ fără cheie comună ⇒
+-- candidat-fantomă. Acum matcher-ul folosește EXACT fn_nume_cuvinte pe ambele părți ⇒ universul candidaților ⊆ universul cheilor.
+SELECT teste.assert((SELECT count(*) = 0 FROM public.fn_cont_candidati_angajat('!$.%&@gazpet.ro'))
+    AND public.fn_nume_cuvinte('!$.%&') = '{}'::text[]
+    AND public.fn_cont_chei_potrivire('!$.%&@gazpet.ro') = ARRAY['gazpet.persoana.email:!$.%&@gazpet.ro']
+    AND EXISTS (SELECT 1 FROM public.employees WHERE id = :e_na AND active IS TRUE AND name = '!$ %&'),
+  'C-RACE-CANDIDAT-PHANTOM-NONALNUM loginul „!$.%&@gazpet.ro” NU are candidat pe fișa „!$ %&” (tokenii ne-alfanumerici se ignoră; fără token alfanumeric ⇒ fără potrivire) — nicio cheie de nume ⇒ niciun candidat');
+SELECT res AS na_rez FROM teste.dblink('c_sr11', format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_na')) AS t(res text) \gset
+SELECT teste.assert(:'na_rez' = 'fara_candidat' AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_na'),
+  'C-RACE-CANDIDAT-PHANTOM-NONALNUM legarea la creare: fara_candidat, profilul rămâne nelegat (același univers ca cheile luate)');
+-- token mixt „o'neil2”: fn_nume_cuvinte dă {NEIL2, O, SMITH} pe ambele părți ⇒ candidat unic ȘI chei de nume comune cu scriitorul (fn_cont_persoana_chei)
+SELECT teste.assert((SELECT count(*) = 1 FROM public.fn_cont_candidati_angajat('o''neil2.smith@gazpet.ro') WHERE employee_id = :e_mxa AND metoda = 'nume')
+    AND public.fn_nume_cuvinte('o''neil2.smith') = ARRAY['NEIL2', 'O', 'SMITH']
+    AND (SELECT COALESCE(array_agg(k ORDER BY k), '{}') FROM unnest(public.fn_cont_chei_potrivire('o''neil2.smith@gazpet.ro')) k WHERE k LIKE 'gazpet.persoana.nume:%')
+      = ARRAY['gazpet.persoana.nume:NEIL2', 'gazpet.persoana.nume:O', 'gazpet.persoana.nume:SMITH']
+    AND public.fn_cont_persoana_chei(NULL, 'O''NEIL2 SMITH', NULL) @> ARRAY['gazpet.persoana.nume:NEIL2', 'gazpet.persoana.nume:O', 'gazpet.persoana.nume:SMITH'],
+  'C-RACE-CANDIDAT-PHANTOM-NONALNUM token mixt „o''neil2”: candidat unic pe nume ȘI cheile de nume ale emailului ⊆ cheile fișei (cheie comună garantată)');
+-- invariantul „candidați ⊆ chei”: pentru ORICE candidat pe nume, cheile de nume ale emailului sunt incluse în cheile persoanei (fișei)
+SELECT teste.assert(NOT EXISTS (
+    SELECT 1 FROM (VALUES ('o''neil2.smith@gazpet.ro'), ('d''angelo.o''neil@gazpet.ro'), ('ion.popescu@gazpet.ro'), ('!$.%&@gazpet.ro'), ('a-b.c_d@gazpet.ro')) v(em)
+    CROSS JOIN LATERAL public.fn_cont_candidati_angajat(v.em) c
+    JOIN public.employees e ON e.id = c.employee_id
+    WHERE c.metoda = 'nume'
+      AND NOT (public.fn_cont_persoana_chei(NULL, e.name, NULL) @> (SELECT COALESCE(array_agg(k), '{}') FROM unnest(public.fn_cont_chei_potrivire(v.em)) k WHERE k LIKE 'gazpet.persoana.nume:%'))),
+  'C-RACE-CANDIDAT-PHANTOM-NONALNUM invariant: orice candidat pe nume are TOATE cheile de nume ale emailului printre cheile fișei (universul candidaților ⊆ universul cheilor)');
+-- cursa (ca în -PUNCT): T2 redenumește B în „O'NEIL2 SMITH” (necomis) ⇒ legarea AȘTEAPTĂ pe cheile comune; după COMMIT: 2 candidați ⇒ schimbat
+SELECT teste.dblink_exec('c_t11', 'BEGIN');
+SELECT teste.dblink_exec('c_t11', format('UPDATE public.employees SET name = ''O''''NEIL2 SMITH'' WHERE id = %s', :e_mxb));
+SELECT teste.dblink_send_query('c_sr11', format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_mx'));
+SELECT teste.assert(teste.asteapta_lock(:pid_sr11),
+  'C-RACE-CANDIDAT-PHANTOM-NONALNUM legarea AȘTEAPTĂ redenumirea necomisă a lui B în „O''NEIL2 SMITH” (cheia nume:NEIL2 / O / SMITH e comună)');
+SELECT teste.dblink_exec('c_t11', 'COMMIT');
+SELECT res AS mx_rez FROM teste.dblink_get_result('c_sr11') AS t(res text) \gset
+SELECT count(*) AS rest_mx FROM teste.dblink_get_result('c_sr11') AS t(res text) \gset
+\echo '   C-RACE-CANDIDAT-PHANTOM-NONALNUM rezultat:' :mx_rez
+SELECT teste.assert(:'mx_rez' = 'schimbat' AND (SELECT employee_id IS NULL FROM public.profiles WHERE id = :'u_mx')
+    AND (SELECT count(*) = 2 FROM public.fn_cont_candidati_angajat('o''neil2.smith@gazpet.ro')),
+  'C-RACE-CANDIDAT-PHANTOM-NONALNUM după COMMIT universul recalculat SUB chei are 2 candidați ⇒ schimbat, profilul rămâne nelegat');
+SELECT teste.dblink_exec(:'conn_lock', format('UPDATE public.employees SET name = ''ALTCINEVA NEIL'' WHERE id = %s', :e_mxb));
+SELECT res AS mx_ok FROM teste.dblink('c_sr11', format('SELECT public.fn_cont_leaga_la_creare(%L)', :'u_mx')) AS t(res text) \gset
+SELECT teste.assert(:'mx_ok' = 'legat' AND (SELECT employee_id = :e_mxa FROM public.profiles WHERE id = :'u_mx'),
+  'C-RACE-CANDIDAT-PHANTOM-NONALNUM control: cu universul stabil (B redenumit înapoi, comis) același apel leagă pe O''NEIL2 SMITH');
+
+-- D-REEVAL-PLECARE-NOUA (r11, P1 Jakarinos pe bc2ba28, d:864 / 1152-1158): scenariul complet. B (PLECARESCU BETA) istorică cu cont; owner-ul
+-- închide manual și RESTAUREAZĂ; B e reactivată; A (PLECARESCU ALFA) activă, același CNP; B se încheie din nou ⇒ garda găsește A activă ⇒
+-- suspendat (fără închidere, fără intrare); apoi se încheie și A (plecare NOUĂ: activ → inactiv) ⇒ B intră în coadă ca 'programata'
+-- (r10: 'reevaluare_istorica' ⇒ sweep-ul găsea restaurarea VECHE ⇒ anulat_restaurat ⇒ cont deschis după încetarea AMBELOR contracte).
+SELECT res AS pn_inchis FROM teste.dblink('c_own11', format('SELECT public.fn_cont_inchide_owner(%L, %L)', :'u_pn', 'închidere manuală de test r11 (plecare nouă)')) AS t(res text) \gset
+SELECT id AS j_pn FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_pn' AND restaurat_la IS NULL \gset
+SELECT res AS pn_rest FROM teste.dblink('c_own11', format('SELECT (public.fn_cont_restaureaza(%s, %L) ->> ''simulare'')', :j_pn, 'restaurare de test r11 (omul revine)')) AS t(res text) \gset
+SELECT teste.assert(:'pn_inchis' = 'inchis' AND :'pn_rest' = 'false' AND (SELECT restaurat_la IS NOT NULL FROM public.conturi_inchideri_jurnal WHERE id = :j_pn),
+  'D-REEVAL-PLECARE-NOUA pregătire: contul lui B închis manual și RESTAURAT de owner');
+SELECT teste.dblink_exec(:'conn_lock', format('UPDATE public.employees SET active = true, termination_date = NULL WHERE id = %s', :e_pnb));
+SELECT teste.dblink_exec(:'conn_lock', format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id = %s', :e_pnb));
+SELECT teste.assert((SELECT active IS FALSE AND termination_date = CURRENT_DATE FROM public.employees WHERE id = :e_pnb)
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_pn' AND restaurat_la IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_pn' AND rezolvat_la IS NULL)
+    AND EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'u_own2' AND type = 'cont_inchidere_suspendata'
+                 AND message LIKE 'plecare.noua@exemplu.ro (fișa #' || :e_pnb || ' PLECARESCU BETA)%alt contract ACTIV (fișa #' || :e_pna || ')%'),
+  'D-REEVAL-PLECARE-NOUA B reactivată și încheiată din nou cât timp A e activă ⇒ garda suspendă (owner anunțat), fără închidere și fără intrare în coadă');
+SELECT teste.dblink_exec(:'conn_lock', format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id = %s', :e_pna));
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_pn' AND restaurat_la IS NULL)
+    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_pn' AND employee_id = :e_pnb AND tip = 'programata'
+          AND rezolvat_la IS NULL AND scadent_la = CURRENT_DATE AND motiv LIKE '%fișă istorică #' || :e_pnb || '%plecare nouă%'
+          AND creat_la > (SELECT restaurat_la FROM public.conturi_inchideri_jurnal WHERE id = :j_pn)),
+  'D-REEVAL-PLECARE-NOUA încetarea lui A (activ → inactiv = plecare NOUĂ) pune B în coadă ca „programata” (nu „reevaluare_istorica”), fără închidere din triggerul lui A');
+SELECT res AS pn_sw FROM teste.dblink('c_sw11', 'SELECT public.fn_conturi_inchideri_sweep()::text') AS t(res text) \gset
+\echo '   D-REEVAL-PLECARE-NOUA sweep:' :pn_sw
+SELECT teste.assert((:'pn_sw'::jsonb ->> 'inchis')::int = 1 AND NOT (:'pn_sw'::jsonb ? 'anulat_restaurat')
+    AND EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_pn' AND restaurat_la IS NULL AND employee_id = :e_pnb AND sursa = 'coada_contract_incheiat')
+    AND (SELECT rezultat = 'inchis' FROM public.conturi_inchideri_coada WHERE profile_id = :'u_pn' AND tip = 'programata')
+    AND (SELECT banned_until IS NOT NULL FROM auth.users WHERE id = :'u_pn'),
+  'D-REEVAL-PLECARE-NOUA controlul pozitiv: plecare nouă ⇒ sweep-ul închide contul lui B după dispariția ultimului contract activ (restaurarea VECHE nu-l mai protejează; garda lui B: nicio fișă activă)');
+
+-- D-AUTH-OCUPAT-COADA-RAISE (r11, P1 Jakarinos pe bc2ba28, d:936-940 / 973-977): auth.users ținut de GoTrue ⇒ fn_cont_inchide se retrage (55P03
+-- auth_ocupat); intrarea 'reincercare' e garanția de reluare ⇒ dacă nici ea nu se poate salva, eroarea se propagă și UPDATE-ul HR e ANULAT
+-- (r10: WARNING + UPDATE comis ⇒ contract încheiat, cont neînchis, nicio intrare, notificare falsă „se reîncearcă din coadă”). La fel 'programata'.
+SELECT teste.dblink_exec(:'conn_lock', format($q$
+  CREATE OR REPLACE FUNCTION teste.fn_r11_pica_coada() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RAISE EXCEPTION 'test r11: coada pică' USING ERRCODE = 'P0T11'; END $f$;
+  CREATE OR REPLACE TRIGGER zz_r11_pica_coada BEFORE INSERT ON public.conturi_inchideri_coada FOR EACH ROW WHEN (NEW.profile_id IN (%L, %L)) EXECUTE FUNCTION teste.fn_r11_pica_coada();
+$q$, :'u_ao', :'u_ao2'));
+SELECT teste.dblink_exec('c_t11', 'BEGIN');
+SELECT teste.dblink_exec('c_t11', format('UPDATE auth.users SET updated_at = now() WHERE id = %L', :'u_ao'));
+SELECT res AS ao_err FROM teste.dblink('c_hr11', format($q$SELECT COALESCE(teste.eroare(%L)::text, 'OK')$q$,
+  format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id = %s', :e_ao))) AS t(res text) \gset
+\echo '   D-AUTH-OCUPAT-COADA-RAISE eroare:' :ao_err
+SELECT teste.assert(:'ao_err' ~ '"state": "P0T11"'
+    AND (SELECT active IS TRUE AND termination_date IS NULL FROM public.employees WHERE id = :e_ao)
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_ao')
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_ao')
+    AND NOT EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'u_own2' AND type = 'cont_inchidere_esuata' AND message LIKE '%auth.ocupat@exemplu.ro%'),
+  'D-AUTH-OCUPAT-COADA-RAISE auth ocupat + înscrierea „reincercare” eșuează ⇒ UPDATE-ul HR e ANULAT (eroarea se propagă), fișa neschimbată, fără intrare / jurnal / notificare falsă');
+SELECT res AS ao2_err FROM teste.dblink('c_hr11', format($q$SELECT COALESCE(teste.eroare(%L)::text, 'OK')$q$,
+  format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE + 30 WHERE id = %s', :e_ao2))) AS t(res text) \gset
+SELECT teste.assert(:'ao2_err' ~ '"state": "P0T11"'
+    AND (SELECT active IS TRUE AND termination_date IS NULL FROM public.employees WHERE id = :e_ao2)
+    AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_ao2'),
+  'D-AUTH-OCUPAT-COADA-RAISE dezactivare cu dată viitoare + înscrierea „programata” eșuează ⇒ UPDATE-ul HR e ANULAT (aceeași regulă), fișa neschimbată');
+SELECT teste.dblink_exec(:'conn_lock', 'ALTER TABLE public.conturi_inchideri_coada DISABLE TRIGGER zz_r11_pica_coada');
+SELECT res AS ao_ok FROM teste.dblink('c_hr11', format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE WHERE id = %s', :e_ao)) AS t(res text) \gset
+SELECT teste.assert(:'ao_ok' = 'UPDATE 1' AND NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_ao')
+    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_ao' AND tip = 'reincercare' AND rezolvat_la IS NULL AND ultima_eroare LIKE 'auth_ocupat:%')
+    AND EXISTS (SELECT 1 FROM public.notifications WHERE profile_id = :'u_own2' AND type = 'cont_inchidere_esuata' AND message LIKE '%auth.ocupat@exemplu.ro%auth_ocupat%'),
+  'D-AUTH-OCUPAT-COADA-RAISE control: înscrierea reușește ⇒ UPDATE-ul e comis, intrarea „reincercare” (auth_ocupat) există, owner anunțat');
+SELECT res AS ao2_ok FROM teste.dblink('c_hr11', format('UPDATE public.employees SET active = false, termination_date = CURRENT_DATE + 30 WHERE id = %s', :e_ao2)) AS t(res text) \gset
+SELECT teste.assert(:'ao2_ok' = 'UPDATE 1'
+    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_ao2' AND tip = 'programata' AND rezolvat_la IS NULL AND scadent_la = CURRENT_DATE + 30),
+  'D-AUTH-OCUPAT-COADA-RAISE control: înscrierea „programata” reușește ⇒ UPDATE-ul e comis, închiderea e programată la dată');
+SELECT teste.dblink_exec('c_t11', 'ROLLBACK');
+
+SELECT teste.dblink_disconnect('c_t11');
+SELECT teste.dblink_disconnect('c_sw11');
+SELECT teste.dblink_disconnect('c_sr11');
+SELECT teste.dblink_disconnect('c_own11');
+SELECT teste.dblink_disconnect('c_hr11');
+SELECT teste.dblink_exec(:'conn_lock', format($q$
+  SET session_replication_role = replica;
+  DELETE FROM public.hr_employees_private WHERE employee_id IN (%6$s, %7$s, %8$s, %9$s, %10$s, %11$s, %12$s);
+  DELETE FROM public.hr_colaborare_externa_jurnal WHERE employee_id IN (%6$s, %7$s, %8$s, %9$s, %10$s, %11$s, %12$s);
+  DELETE FROM public.hr_employees_audit WHERE employee_id IN (%6$s, %7$s, %8$s, %9$s, %10$s, %11$s, %12$s);
+  DELETE FROM public.conturi_inchideri_coada WHERE profile_id IN (%1$L, %2$L, %3$L, %4$L, %5$L);
+  DELETE FROM public.conturi_inchideri_jurnal WHERE profile_id IN (%1$L, %2$L, %3$L, %4$L, %5$L);
+  UPDATE public.profiles SET employee_id = NULL WHERE id IN (%1$L, %2$L, %3$L, %4$L, %5$L);
+  DELETE FROM public.employees WHERE id IN (%6$s, %7$s, %8$s, %9$s, %10$s, %11$s, %12$s);
+  SET session_replication_role = origin;
+  DELETE FROM auth.users WHERE id IN (%1$L, %2$L, %3$L, %4$L, %5$L);
+$q$, :'u_na', :'u_mx', :'u_pn', :'u_ao', :'u_ao2', :e_na, :e_mxa, :e_mxb, :e_pna, :e_pnb, :e_ao, :e_ao2));
+SELECT teste.assert(NOT EXISTS (SELECT 1 FROM auth.users WHERE id IN (:'u_na', :'u_mx', :'u_pn', :'u_ao', :'u_ao2'))
+    AND NOT EXISTS (SELECT 1 FROM public.profiles WHERE id IN (:'u_na', :'u_mx', :'u_pn', :'u_ao', :'u_ao2'))
+    AND NOT EXISTS (SELECT 1 FROM public.employees WHERE id IN (:e_na, :e_mxa, :e_mxb, :e_pna, :e_pnb, :e_ao, :e_ao2))
+    AND (SELECT tgenabled = 'D' FROM pg_trigger WHERE tgname = 'zz_r11_pica_coada'),
+  'r11 (c/d) curățenie: datele comise au fost șterse');
 
 -- E-LIFECYCLE-2C (r7, P1-E): regula emailului EXACT și la schimbarea emailului unei fișe INACTIVE și la INSERT-ul unei fișe inactive.
 -- Date comise (conn_lock, autocommit — un INSERT în tranzacția testului ar ține cheile advisory ale numelui până la final și
@@ -3164,12 +3342,12 @@ UPDATE public.employees SET termination_date = CURRENT_DATE WHERE id = :e_db;
 SELECT teste.ca_admin();
 -- r9 (P1-d): triggerul fișei B NU închide contul fișei istorice A cu garda lui B — îl pune în coadă ca element propriu (garda lui A)
 SELECT teste.assert(NOT EXISTS (SELECT 1 FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2p1')
-    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2p1' AND employee_id = :e_da AND tip = 'reevaluare_istorica'
-          AND rezolvat_la IS NULL AND scadent_la = CURRENT_DATE AND motiv LIKE '%fișă istorică #' || :e_da || '%'),
+    AND (SELECT count(*) = 1 FROM public.conturi_inchideri_coada WHERE profile_id = :'u_r2p1' AND employee_id = :e_da AND tip = 'programata'
+          AND rezolvat_la IS NULL AND scadent_la = CURRENT_DATE AND motiv LIKE '%fișă istorică #' || :e_da || '%plecare nouă%'),
   'R2-28b (r9 P1-d) contractul B încheiat → contul fișei istorice A intră în coadă ca element propriu (nu se închide din triggerul lui B)');
 SELECT public.fn_conturi_inchideri_sweep();
 SELECT teste.assert(teste.inchis_complet(:'u_r2p1')
-    AND (SELECT employee_id = :e_da AND sursa = 'coada_contract_incheiat' AND motiv LIKE '%(fișa #' || :e_da || ' PERSOANA DUBLA)%fișă istorică a aceleiași persoane%'
+    AND (SELECT employee_id = :e_da AND sursa = 'coada_contract_incheiat' AND motiv LIKE '%(fișa #' || :e_da || ' PERSOANA DUBLA)%închidere programată%'
            FROM public.conturi_inchideri_jurnal WHERE profile_id = :'u_r2p1'),
   'R2-28b ultimul contract al persoanei încheiat → sweep-ul închide contul legat de fișa A cu garda lui A (găsit prin CNP)');
 -- R2-28c: fișă fără CNP = situație incompletă → fără închidere automată, doar alertă
@@ -4078,4 +4256,6 @@ ROLLBACK;
 -- abia aici, după ROLLBACK (DROP TRIGGER cere ACCESS EXCLUSIVE); la rularea BAZĂ tabela nu există ⇒ NOTICE, nimic de făcut.
 DROP TRIGGER IF EXISTS zz_r10_pica_coada ON public.conturi_inchideri_coada;
 DROP FUNCTION IF EXISTS teste.fn_r10_pica_coada();
+DROP TRIGGER IF EXISTS zz_r11_pica_coada ON public.conturi_inchideri_coada;
+DROP FUNCTION IF EXISTS teste.fn_r11_pica_coada();
 \echo 'PASS conturi_ciclu_viata.test.sql: toate aserțiunile au trecut'

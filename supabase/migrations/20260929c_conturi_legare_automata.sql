@@ -25,6 +25,10 @@
 --                                         employees; apostroful nu mai desparte cheile); fereastra c→d ÎNCHISĂ în cod:
 --                                         fn_cont_serializare_activa() — legarea refuză ('serializare_indisponibila') cât timp
 --                                         triggerele de lock ale lui d nu sunt instalate și active (md5 exact)
+--   * fn_cont_candidati_angajat           r11 (c, Copilot pe bc2ba28): potrivirea pe nume folosește EXACT fn_nume_cuvinte pe AMBELE
+--                                         părți (partea locală a loginului și employees.name) — tokenii doar alfanumerici, cei goi
+--                                         ignorați ⇒ universul candidaților ⊆ universul cheilor (fn_cont_chei_potrivire); un login
+--                                         din semne ('!$.%&@gazpet.ro') nu mai are candidat fără cheie (fără cursă)
 --   * fn_cont_notifica_owneri             r10: destinatarii se iau FOR KEY SHARE NOWAIT (lock-ul implicit al FK-ului) — un owner
 --                                         ținut FOR UPDATE de altă tranzacție e sărit, niciun apelant nu mai așteaptă aici
 --   * trg_profiles_protectie_legatura   — employee_id / tip_cont / email / is_owner / role se schimbă doar de o
@@ -371,6 +375,13 @@ COMMENT ON COLUMN public.profiles.tip_cont IS
 -- (primul cuvânt din employees.name = „NUME_FAMILIE PRENUME...”) e obligatoriu printre tokeni
 -- (altfel „ana.maria@” s-ar lega de singura IONESCU ANA MARIA activă). Apelantul trimite emailul de
 -- LOGARE (auth.users.email), niciodată profiles.email.
+-- r11 (c, Copilot pe bc2ba28 — „candidat-fantomă” cu tokeni ne-alfanumerici): r10 despărțea partea locală cu [._-]+ și numele cu
+-- [[:space:]-]+ și accepta tokeni formați doar din semne ('!$', '%&'), pe care fn_nume_cuvinte ([^[:alnum:]]+) îi ELIMINĂ: pentru
+-- loginul '!$.%&@gazpet.ro' și fișa '!$ %&' matcher-ul vedea un candidat, dar fn_cont_chei_potrivire lua doar cheia emailului, iar
+-- un writer care redenumea o fișă în '!$ %&' nu lua nicio cheie de nume ⇒ fără cheie comună ⇒ aceeași cursă ca în r9. Acum AMBELE
+-- părți trec prin EXACT fn_nume_cuvinte (tokenii = doar alfanumerici, cei goi ignorați, distincți, sortați; ≥ 2 ⇒ cel puțin un
+-- token alfanumeric): tokenii emailului ⊆ cuvintele numelui ⇒ fn_cont_chei_potrivire(email) ⊇ chei de nume comune cu
+-- fn_cont_persoana_chei(fișa) pentru ORICE fișă candidată ⇒ universul candidaților ⊆ universul cheilor.
 CREATE OR REPLACE FUNCTION public.fn_cont_candidati_angajat(p_email text)
 RETURNS TABLE(employee_id integer, employee_name text, metoda text, profil_legat uuid)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -378,8 +389,7 @@ AS $fn$
   WITH intrare AS (
     SELECT lower(btrim(p_email)) AS em,
            split_part(lower(btrim(p_email)), '@', 2) AS domeniu,
-           array_remove(regexp_split_to_array(
-             upper(extensions.unaccent(split_part(lower(btrim(p_email)), '@', 1))), '[._-]+'), '') AS tokeni
+           public.fn_nume_cuvinte(split_part(lower(btrim(p_email)), '@', 1)) AS tokeni   -- r11: aceeași normalizare ca numele
   ),
   univers AS (
     SELECT e.id, e.name, e.email
@@ -398,9 +408,9 @@ AS $fn$
       FROM univers u, intrare i
      WHERE NOT EXISTS (SELECT 1 FROM pe_email)
        AND i.domeniu = 'gazpet.ro'
-       AND (SELECT count(DISTINCT t) FROM unnest(i.tokeni) t) >= 2
-       AND regexp_split_to_array(upper(extensions.unaccent(btrim(u.name))), '[[:space:]-]+') @> i.tokeni
-       AND (regexp_split_to_array(upper(extensions.unaccent(btrim(u.name))), '[[:space:]-]+'))[1] = ANY (i.tokeni)
+       AND cardinality(i.tokeni) >= 2                                   -- tokeni distincți, nevizi, alfanumerici (fn_nume_cuvinte)
+       AND public.fn_nume_cuvinte(u.name) @> i.tokeni
+       AND public.fn_nume_familie(u.name) = ANY (i.tokeni)
   ),
   toate AS (SELECT * FROM pe_email UNION ALL SELECT * FROM pe_nume)
   SELECT t.id, t.name, t.metoda,
