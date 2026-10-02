@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | `norme_surse` | `registru_surse.json` | 432 | `source_id` (text, PK) | opțional `ofertare_normative_id` → `ofertare_normative.id` |
 | `norme_cerinte` | `registru_cerinte.json` | 919 | `requirement_id` (text, PK) | `source_id` → `norme_surse` (FK) |
-| `norme_graf` | `graf_aplicabilitate.json` | 313 | `id` bigserial; unic pe (`from_source_id`, `to_source_id`, `relatie`, `locator`) | ambele capete → `norme_surse` (FK) |
+| `norme_graf` | `graf_aplicabilitate.json` | 313 (312 unice: o dublură care diferă doar prin `tema`) | `id` bigserial; unic pe (`from_source_id`, `to_source_id`, `relatie`, `locator`) | ambele capete → `norme_surse` (FK) |
 | `cnsc_decizii` | `cnsc_practica.json` | 216 | `id` (text, ex. `CNSC-BO2024_11`, PK) | sursa ei e `norme_surse.source_id = 'SRC-' \|\| id` |
 | `clarificari_tipare` | `clarificari_tipare.json` | 119 | `pattern_id` (text, PK) | `normative_refs[]` → `norme_cerinte`; `precedente_cnsc[]` → `norme_surse` (FK-uri logice, verificate la import) |
 
@@ -42,7 +42,7 @@ Recomandare: o coloană `versiune_import` (ex. `cercetare-2026-10-02`) pe fiecar
    - toate `source_id` din cerințe și graf există în surse (azi: 0 orfane);
    - toate `normative_refs` / `precedente_cnsc` din tipare există (azi: 0 lipsă).
 3. **Preview pentru Razvan**: COUNT pe fiecare tabelă + 3 rânduri-exemplu → confirmare → import (cu `RETURNING`, pentru rollback).
-4. **Verificare**: COUNT-urile = 432 / 919 / 313 / 216 / 119; zero FK orfane.
+4. **Verificare**: COUNT-urile = 432 / 919 / 312 / 216 / 119; zero FK orfane.
 5. **(P1, separat)** UI read-only în Ofertare: căutare în cerințe + tipare, plus filtrul „verificat_pe_sursa” → abia apoi generatorul `ofertare-clarificari-propune` primește doar tiparele declanșate și cerințele verificate.
 
 ## Ce NU face sesiunea de programare
