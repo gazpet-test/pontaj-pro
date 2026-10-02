@@ -6,11 +6,15 @@
 //   Evidența GBE pe contract (reținut/restituit) rămâne în GbeEvidenta.jsx — aici e sursa banilor blocați.
 //   02.10.2026 (#1519): „📨 Cere ofertă” — cererea de ofertă poliță către broker pentru GBE / avans / CAR
 //   (GarantiiCerereOferta.jsx); CAR apare doar dacă BD-ul permite tipul (migrarea 20261002e).
+//   03.10.2026 (#1544, decizia „1B”): „🧾 BO (n)” pe polițe — biletele la ordin date ca GARANȚIE la poliță (nu plata
+//   primei), urmărite până la restituire (GarantiiBileteOrdin.jsx; tabela garantii_bilete_ordin, migrarea 20261003a).
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import CerereOfertaPanel, { useTipuriGarantii } from './GarantiiCerereOferta.jsx'
 import { TIPURI_CERERE } from './garantiiCerereOferta.js'
+import BiletePanel from './GarantiiBileteOrdin.jsx'
+import { rezumatBOPeGarantie } from './garantiiBileteOrdin.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -100,7 +104,16 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
   const [loading, setLoading] = useState(true)
   const [adresa, setAdresa]   = useState(null)
   const [doarActive, setDoarActive] = useState(true)
+  const [bilete, setBilete]   = useState(null)   // panoul 🧾 BO: rândul poliței
+  const [boRezumat, setBoRezumat] = useState({}) // {garantie_id: {total, emise, scadente, depasite}} — un singur select, fără N+1
 
+  // BO-urile tuturor polițelor din registru, într-un singur select; fără tabelă (migrarea 20261003a neaplicată) ⇒ {}
+  const incarcaBo = useCallback(async (lista) => {
+    const ids = (lista || []).filter(r => r.forma === 'polita_asigurare').map(r => r.id)
+    if (!ids.length) { setBoRezumat({}); return }
+    const { data } = await supabase.from('garantii_bilete_ordin').select('garantie_id, stare, data_scadenta').in('garantie_id', ids).order('garantie_id')
+    setBoRezumat(rezumatBOPeGarantie(data || []))
+  }, [])
   const load = useCallback(async () => {
     setLoading(true)
     const [{ data: g }, { data: p }] = await Promise.all([
@@ -108,7 +121,8 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
       supabase.from('v_garantii_plafon_emitent').select('*'),
     ])
     setRanduri(g || []); setPlafon(p || []); setLoading(false)
-  }, [])
+    incarcaBo(g)
+  }, [incarcaBo])
   useEffect(() => { load() }, [load])
 
   const marcheazaReceptie = async (r) => {
@@ -223,6 +237,10 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
                   {r.blocat_litigiu && (
                     <div title={r.litigiu_detalii || 'Litigiu în curs'} style={{fontSize:10.5,color:G.red,marginTop:3,fontWeight:700}}>⛔ litigiu</div>
                   )}
+                  {boRezumat[r.id]?.scadente > 0 && (
+                    <div title={`${boRezumat[r.id].scadente} bilet(e) la ordin emis(e) cu scadența în ≤ 14 zile${boRezumat[r.id].depasite ? `, ${boRezumat[r.id].depasite} cu scadența depășită` : ''}`}
+                      style={{fontSize:10.5,color:boRezumat[r.id].depasite ? G.red : G.orange,marginTop:3,fontWeight:700}}>🧾 BO scadent</div>
+                  )}
                   {r.lucrare_receptionata ? (
                     <div style={{fontSize:10.5,color:G.green,marginTop:3,fontWeight:600}}>✓ recepționată</div>
                   ) : r.data_receptie ? (
@@ -240,6 +258,16 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
                   )}
                   {canEdit && r.stare === 'activa' && TIPURI_CERERE[r.tip] && (
                     <button onClick={() => setCerere(r)} style={{...S.btnS,marginRight:5}} title={`Cere brokerului ofertă de poliță — ${TIPURI_CERERE[r.tip].eticheta}`}>📨 Cere ofertă</button>
+                  )}
+                  {r.forma === 'polita_asigurare' && (
+                    <button onClick={() => setBilete(r)}
+                      title="Bilete la ordin date ca garanție la această poliță (nu plata primei) — urmărite până la restituire"
+                      style={{...S.btnS, marginRight:5,
+                        background: boRezumat[r.id]?.emise ? G.yellow+'18' : G.surface,
+                        color: boRezumat[r.id]?.emise ? G.yellow : G.text,
+                        border:`1px solid ${boRezumat[r.id]?.emise ? G.yellow+'55' : G.border2}`}}>
+                      🧾 BO ({boRezumat[r.id]?.total || 0})
+                    </button>
                   )}
                   <button onClick={() => setAdresa(r)} disabled={r.blocat_litigiu}
                     title={r.blocat_litigiu ? 'Blocată de litigiu — nu se cere eliberarea' : 'Generează adresa către emitent'}
@@ -264,10 +292,12 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
         Expirarea unei polițe nu înseamnă automat eliberarea garanției — de regulă e nevoie de procesul-verbal de recepție
         de la beneficiar. De aceea butonul „Adresă" te avertizează dacă recepția nu e bifată.
         Evidența GBE pe contract (cât s-a reținut, cât s-a restituit) rămâne în tabul 🔐 Garanții GBE.
+        Biletele la ordin date ca garanție la polițe (🧾 BO) nu sunt plata primei — se urmăresc până le restituie asigurătorul.
       </div>
 
       {adresa && <AdresaPanel garantie={adresa} onClose={() => setAdresa(null)} showToast={showToast} />}
       {cerere && <CerereOfertaPanel initial={cerere.id ? cerere : null} tipuriPermise={tipuriPermise} profile={profile} showToast={showToast} onClose={() => setCerere(null)} onDone={load} />}
+      {bilete && <BiletePanel garantie={bilete} canEdit={canEdit} showToast={showToast} onClose={() => setBilete(null)} onChanged={() => incarcaBo(randuri)} />}
     </div>
   )
 }
