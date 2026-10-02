@@ -4,6 +4,10 @@
 //   actualizare  → brokerului: perioada nouă de valabilitate după decalarea termenului de depunere
 //   plata        → Marilena Tudorache + Mirela Popescu (cc responsabil): draft poliță + decont primă → de plătit
 //   achitata     → responsabilului licitației: polița e achitată (OP atașat) → poate cere originalul
+//   cerere_registru (02.10.2026, #1519) → brokerului: cererea de ofertă pentru poliță GBE / avans / CAR din Financiar →
+//                  Registru garanții (body: broker_id, tip, subiect, text, garantie_id?). Fără atașamente, fără scriere în BD
+//                  (urma o scrie UI-ul în garantii.observatii). POARTĂ DE ROL: fn_poate_scrie_garantii() prin clientul
+//                  utilizatorului — cheia anon / un cont fără financiar.garantii primește 403 (regula 7d, PR #318).
 // Auth: JWT de utilizator (UI). verify_jwt=false pentru că validăm noi tokenul (getUser).
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -18,6 +22,19 @@ const OFFICE = 'office@gazpet.ro';
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 const fmtZi = (d?: string | null) => d ? new Date(d).toLocaleDateString('ro-RO') : '—';
 const fmtLei = (v?: number | null, m = 'RON') => v == null ? '—' : `${Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${m}`;
+// variantele „simple” (fără licitație) folosite de cerere_registru — același expeditor, reply_to și semnătură ca restul
+const trimiteSimplu = async (key: string, to: string[], cc: string[], replyTo: string, subject: string, html: string) => {
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: 'PontajPRO <rapoarte@gazpet.ro>', to, cc: cc.length ? cc : undefined, reply_to: replyTo, subject, html }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Resend ${r.status}: ${JSON.stringify(j).slice(0, 300)}`);
+  return j?.id || null;
+};
+const wrapSimplu = (inner: string, meMail: string) => `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:720px">${inner}` +
+  `<p style="color:#8a99a8;font-size:12px;margin-top:18px">Mesaj generat din platforma Gazpet ERP · răspunsurile ajung la ${esc(meMail)}</p></div>`;
+const semnaturaPentru = (meNume: string) => `<p style="margin-top:14px">Cu stimă,<br><b>${esc(meNume)}</b><br>SC GAZPET INSTAL SRL · Ploiești, str. Fluturilor nr. 34 · Tel/Fax 0244 435005 · ${esc(OFFICE)}</p>`;
 const b64 = (buf: ArrayBuffer) => { const u = new Uint8Array(buf); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); };
 
 Deno.serve(async (req: Request) => {
@@ -39,6 +56,33 @@ Deno.serve(async (req: Request) => {
 
   let body: any = {}; try { body = await req.json(); } catch { /* gol */ }
   const actiune = String(body.actiune || '');
+
+  // ── cererea din registrul de garanții (GBE / avans / CAR): nu depinde de ofertare_garantii / licitație
+  if (actiune === 'cerere_registru') {
+    const { data: poate, error: ep } = await uc.rpc('fn_poate_scrie_garantii');
+    if (ep || poate !== true) return json({ error: 'nu ai drept de scriere pe garanții (financiar.garantii)' }, 403);
+    const TIPURI = ['buna_executie', 'avans', 'car'];
+    const tip = String(body.tip || '');
+    if (!TIPURI.includes(tip)) return json({ error: `tip de garanție necunoscut: ${tip}` }, 400);
+    const bid = Number(body.broker_id);
+    const subiect = String(body.subiect || '').trim().slice(0, 300);
+    const text = String(body.text || '').trim();
+    if (!bid || !subiect || !text) return json({ error: 'broker_id, subiect și text sunt obligatorii' }, 400);
+    // review Copilot 02.10: golurile se refuză și pe SUBIECT (generatorul pune [DE COMPLETAT] și în el; UI-ul poate fi ocolit
+    // printr-un apel direct), iar subiectul nu are voie să conțină CR/LF (fără antete injectate, chiar dacă Resend ia JSON)
+    if (/\[DE COMPLETAT/i.test(subiect) || /\[DE COMPLETAT/i.test(text)) return json({ error: 'subiectul sau textul mai conține „[DE COMPLETAT…]”' }, 400);
+    if (/[\r\n]/.test(subiect)) return json({ error: 'subiectul nu poate avea mai multe rânduri' }, 400);
+    const { data: br } = await db.from('ofertare_brokeri').select('id, nume, email, activ').eq('id', bid).maybeSingle();
+    if (!br?.email || br.activ !== true) return json({ error: 'brokerul nu există, e inactiv sau nu are e-mail' }, 400);
+    try {
+      const html = wrapSimplu(`<div style="white-space:pre-wrap">${esc(text)}</div>${semnaturaPentru(meNume)}`, meMail);
+      const id = await trimiteSimplu(key, [br.email], [OFFICE, meMail].filter((x, i, a) => a.indexOf(x) === i), meMail, subiect, html);
+      return json({ ok: true, id, catre: br.email, garantie_id: body.garantie_id ?? null });
+    } catch (e) {
+      return json({ error: (e as Error)?.message || String(e) }, 502);
+    }
+  }
+
   const gid = Number(body.garantie_id);
   if (!gid) return json({ error: 'garantie_id lipsă' }, 400);
 
