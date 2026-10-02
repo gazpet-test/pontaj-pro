@@ -4571,9 +4571,15 @@ function ReportsPage() {
       // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat, după ORE SUPL (4 coloane)
       const NORME_TOTAL  = ['CO','CM','CFP','O']
       const NORME_C0     = FIXED + days + 3    // prima coloană de norme
-      const WD_LABEL_C   = FIXED + days + 3 + NORME_TOTAL.length    // etichetă „Zile lucr. lună:"
+      // TKT-2026-0314 (var. A): orele de normă plătite (8h/zi pe CO, CM, BO, BP, AM, M, O — CFP, N, LL = 0 ore)
+      // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME. ORE SUPLIMENTARE rămâne pe orele lucrate.
+      const NORME_ORE    = ['CO','CM','BO','BP','AM','M','O']
+      const ORE_NORME_C  = NORME_C0 + NORME_TOTAL.length           // ORE NORME (8h/zi)
+      const TOTAL_LUNA_C = ORE_NORME_C + 1                          // TOTAL ORE LUNĂ
+      const WD_LABEL_C   = TOTAL_LUNA_C + 1                         // etichetă „Zile lucr. lună:"
       const WD_VALUE_C   = WD_LABEL_C + 1                            // valoarea numerică (folosită în formulă)
       const totalOreColLetter = XLSX.utils.encode_col(TOTAL_ORE_C)
+      const oreNormeColLetter = XLSX.utils.encode_col(ORE_NORME_C)
       const wdValueColLetter  = XLSX.utils.encode_col(WD_VALUE_C)
 
       // ── Build rows ──
@@ -4590,10 +4596,10 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header row (idx 5)
-      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`)]
+      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`),'ORE NORME (8h/zi)','TOTAL ORE LUNĂ']
       R.push(HDR)
       // Day names row (idx 6)
-      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n)]
+      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n),`8h × zile ${NORME_ORE.join('/')}`,'ORE + ORE NORME']
       R.push(DNR)
 
       // Tracking metadata pentru istoric BD
@@ -4612,6 +4618,7 @@ function ReportsPage() {
         const rOL=['','','Ore Lucrate']
         let tz=0, to=0
         const normeCnt=Object.fromEntries(NORME_TOTAL.map(n=>[n,0]))
+        let zileNormeOre=0   // zile cu normă plătită 8h (NORME_ORE)
 
         for(let d=1;d<=days;d++){
           const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
@@ -4619,6 +4626,7 @@ function ReportsPage() {
           const rec=emp.records?.find(r=>r.date===ds)
           if(rec?.norma){
             if(normeCnt[rec.norma]!==undefined) normeCnt[rec.norma]++
+            if(NORME_ORE.includes(rec.norma)) zileNormeOre++
             rCI.push(rec.norma); rCO.push(''); rPM.push(''); rOL.push('')
           } else if(rec?.check_in){
             const hp=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
@@ -4643,8 +4651,11 @@ function ReportsPage() {
         rCI.push({ f: `MAX(0, ${totalOreColLetter}${excelRow} - ${wdValueColLetter}$4*8)`, t: 'n' })
         // Zile CO / CM / CFP / O (TKT-2026-0311) — 0 explicit când nu există, ca să se poată însuma
         NORME_TOTAL.forEach(n=>rCI.push(normeCnt[n]))
+        // ORE NORME (8h/zi) + TOTAL ORE LUNĂ (formula = TOTAL ORE + ORE NORME, pe același rând)
+        rCI.push(zileNormeOre*8)
+        rCI.push({ f: `${totalOreColLetter}${excelRow}+${oreNormeColLetter}${excelRow}`, t: 'n' })
 
-        const gol=['','','',...NORME_TOTAL.map(()=>'')]
+        const gol=['','','',...NORME_TOTAL.map(()=>''),'','']
         rCO.push(...gol); rPM.push(...gol); rOL.push(...gol)
         R.push(rCI,rCO,rPM,rOL,[])
       })
@@ -4658,6 +4669,8 @@ function ReportsPage() {
         {wch:11},                  // TOTAL ORE
         {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
         ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
+        {wch:16},                  // ORE NORME (8h/zi)
+        {wch:15},                  // TOTAL ORE LUNĂ
         {wch:18},                  // 'Zile lucr. lună:' label
         {wch:11}                   // valoare zile lucr.
       ]
@@ -4690,7 +4703,7 @@ function ReportsPage() {
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C = FIXED + days + 3 + NORME_TOTAL.length  // include ORE SUPL + zile CO/CM/CFP/O
+          const TOTAL_C = TOTAL_LUNA_C + 1  // include ORE SUPL + zile CO/CM/CFP/O + ORE NORME + TOTAL ORE LUNĂ
           for(let c=0;c<TOTAL_C;c++){
             let s={}
             if(c===0){
@@ -4723,6 +4736,16 @@ function ReportsPage() {
               // ZILE CO/CM/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
               s = ro===0
                 ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
+                : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
+            } else if(c===ORE_NORME_C) {
+              // ORE NORME — același stil ca zilele de normă
+              s = ro===0
+                ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
+                : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
+            } else if(c===TOTAL_LUNA_C) {
+              // TOTAL ORE LUNĂ — același stil ca ORE SUPLIMENTARE (rând principal bold albastru)
+              s = ro===0
+                ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
             } else {
               s={fill:{fgColor:{rgb:ro===0?'D9E1F2':'F5F5F5'}},font:ro===0?{bold:true}:{sz:9},border:bd,alignment:alC}
@@ -4889,6 +4912,7 @@ function ReportsPage() {
       const faraZile=diurnaReala===0&&incetatInLuna
       return {nume:p[0],prenume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,
               diurnaMax:faraZile?0:diurnaMax,
+              sumaDiurnaPlata:(faraZile?0:diurnaMax)*diurnaAmt, sumaLaSalariu:pesteLimita*diurnaAmt,
               normeCumulate:C,zilePlatiteAnterior:B,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata,
               deVerificat,diferentaPlatit,difNedeterminat,
               incetatLa:incetatInLuna?emp.termination_date:null}
@@ -4904,7 +4928,9 @@ function ReportsPage() {
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
     const HFILL='1F497D'; const TFILL='D9E1F2'; const GFILL='1F497D'; const WFILL='FFF2CC'
     const wb=XLSX.utils.book_new()
-    const hdrCols=['Nr.','Nume','Prenume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită','De verificat (CO + diurnă)','Diferență față de plătit (RON)']
+    // TKT-2026-0312 (var. B): sumele explicite în lei — „Diurnă de plată" = zile în plafon × lei/zi, „La salariu" = zile peste plafon × lei/zi
+    // (aceleași valori din alocarea comună diurneAlocare.js ca la „Diurnă Max. Admisă" / „Diurnă Peste Limită")
+    const hdrCols=['Nr.','Nume','Prenume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită','Diurnă de plată (RON)','La salariu (RON)','De verificat (CO + diurnă)','Diferență față de plătit (RON)']
     const NC=hdrCols.length
     const fmtVerif=e=>e.deVerificat?.length?`CO+diurnă: ${e.deVerificat.map(d=>d.slice(8,10)+'.'+d.slice(5,7)).join(', ')}`:''
 
@@ -4938,6 +4964,8 @@ function ReportsPage() {
           site.val,
           si===0?emp.diurnaMax:'',
           si===0?(emp.pesteLimita>0?emp.pesteLimita:(emp.incetatLa?0:'')):'',
+          si===0?emp.sumaDiurnaPlata:'',
+          si===0?emp.sumaLaSalariu:'',
           si===0?fmtVerif(emp):'',
           si===0?(emp.difNedeterminat||(emp.diferentaPlatit!==0?emp.diferentaPlatit:'')):''
         ])
@@ -4945,7 +4973,7 @@ function ReportsPage() {
         rowIdx++
       })
       // Total per angajat
-      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}${emp.incetatLa?` (încetat ${fmtInc(emp.incetatLa)})`:''}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0,fmtVerif(emp),emp.difNedeterminat||(emp.diferentaPlatit!==0?emp.diferentaPlatit:'')])
+      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}${emp.incetatLa?` (încetat ${fmtInc(emp.incetatLa)})`:''}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0,emp.sumaDiurnaPlata,emp.sumaLaSalariu,fmtVerif(emp),emp.difNedeterminat||(emp.diferentaPlatit!==0?emp.diferentaPlatit:'')])
       totalRowIdxs.push({row:rowIdx,hasPeste:emp.pesteLimita>0})
       empRanges.push({start:startRow,end:rowIdx-1,rows:emp.sites.length})
       rowIdx++; nr++
@@ -4955,16 +4983,18 @@ function ReportsPage() {
     const totalGenZile=empStats.reduce((s,e)=>s+e.totalZile,0)
     const totalGenVal=empStats.reduce((s,e)=>s+e.totalVal,0)
     const totalPeste=empStats.reduce((s,e)=>s+e.pesteLimita,0)
+    const totalSumaDiurnaPlata=empStats.reduce((s,e)=>s+e.sumaDiurnaPlata,0)
+    const totalSumaLaSalariu=empStats.reduce((s,e)=>s+e.sumaLaSalariu,0)
     const totalDeVerificat=empStats.filter(e=>e.deVerificat?.length).length
     // Totalul diferenței = doar angajații cu reconciliere determinată; cei nedeterminați se numără separat
     const totalDiferenta=empStats.reduce((s,e)=>s+(e.difNedeterminat?0:e.diferentaPlatit),0)
     const totalNedeterminat=empStats.filter(e=>e.difNedeterminat).length
     const txtDiferenta=(totalDiferenta!==0?String(totalDiferenta):'')+(totalNedeterminat>0?`${totalDiferenta!==0?' ':''}(+${totalNedeterminat} nedeterminat)`:'')
-    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0,totalDeVerificat>0?`${totalDeVerificat} angajați`:'',txtDiferenta])
+    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0,totalSumaDiurnaPlata,totalSumaLaSalariu,totalDeVerificat>0?`${totalDeVerificat} angajați`:'',txtDiferenta])
     const totalGenRow=rowIdx+1
 
     const ws=XLSX.utils.aoa_to_sheet(wsData)
-    ws['!cols']=[{wch:5},{wch:30,wpx:225},{wch:24,wpx:180},{wch:30,wpx:225},{wch:12},{wch:14},{wch:12},{wch:18},{wch:18},{wch:26},{wch:20}]
+    ws['!cols']=[{wch:5},{wch:30,wpx:225},{wch:24,wpx:180},{wch:30,wpx:225},{wch:12},{wch:14},{wch:12},{wch:18},{wch:18},{wch:20},{wch:18},{wch:26},{wch:20}]
 
     const sc=(r,c,s)=>{ const a=XLSX.utils.encode_cell({r,c}); if(!ws[a]) ws[a]={v:'',t:'s'}; ws[a].s=s }
 
@@ -5006,7 +5036,7 @@ function ReportsPage() {
     ws['!merges'].push({s:{r:1,c:0},e:{r:1,c:1}})
     empRanges.forEach(({start,end,rows})=>{
       if(rows>1){
-        [0,1,2,7,8,9,10].forEach(c=>{
+        [0,1,2,7,8,9,10,11,12].forEach(c=>{
           ws['!merges'].push({s:{r:start,c},e:{r:end,c}})
         })
       }
