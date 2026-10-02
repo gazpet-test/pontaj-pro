@@ -7,7 +7,8 @@
 #   S. static: interogarea 0e din migrare = scripts/control_0e.sql (identic, normalizat); niciun workflow nu referă supabase/revenire/
 #   0. gaura: toate cele 9 identități citesc IBAN-ul din tabel și din view
 #   1. fișierul fără runner → refuz
-#   2. precondiții negative: coloană nouă în contracte_terti (0c) → refuz; IBAN cu spațiu la margine (0i) → refuz
+#   2. precondiții negative: coloană nouă în contracte_terti (0c) → refuz; index pe coloană (0g2, r2) → refuz; IBAN cu spațiu la margine (0i) → refuz
+#   2c. concurență (r2): UPDATE în zbor pe gbe_cont_iban e așteptat și mutat; UPDATE întârziat e refuzat; mutantul fără LOCK → anulare fail-closed
 #   3. runner (sha256 + gate 0e) → cod 0; matricea IBAN pe 9 identități × tabel/view/RPC/tabela nouă; fluxurile UI
 #      (select * pe tabel și view, UPDATE câmpuri GBE, set/ștergere IBAN, contract inexistent, cascade la ștergerea contractului)
 #   4. reaplicare → refuz
@@ -130,14 +131,54 @@ ok "1 fără runner → refuz"
 q "ALTER TABLE public.contracte_terti ADD COLUMN extra text" >/dev/null
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >/dev/null 2>&1 && esec "2a precondiție 0c negativă a trecut"
 q "ALTER TABLE public.contracte_terti DROP COLUMN extra" >/dev/null
+q "CREATE INDEX contracte_terti_iban_test_idx ON public.contracte_terti (gbe_cont_iban)" >/dev/null
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >"$TMP/0g2.out" 2>&1 && esec "2a2 precondiție 0g2 (index pe coloană) a trecut"
+grep -q "Precondiție 0g" "$TMP/0g2.out" || { cat "$TMP/0g2.out" >&2; esec "2a2 refuzul nu vine din 0g"; }
+q "DROP INDEX public.contracte_terti_iban_test_idx" >/dev/null
 q "UPDATE public.contracte_terti SET gbe_cont_iban = gbe_cont_iban || ' ' WHERE id = 3" >/dev/null
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >/dev/null 2>&1 && esec "2b precondiție 0i negativă a trecut"
 q "UPDATE public.contracte_terti SET gbe_cont_iban = btrim(gbe_cont_iban) WHERE id = 3" >/dev/null
 [ "$(q "SELECT gbe_cont_iban FROM public.contracte_terti WHERE id = 3")" = "$IBAN3" ] || esec "2b restaurare"
-ok "2 coloană nouă (0c) / IBAN cu spațiu la margine (0i) → precondițiile refuză; nimic schimbat"
+ok "2 coloană nouă (0c) / index pe coloană (0g2) / IBAN cu spațiu la margine (0i) → precondițiile refuză; nimic schimbat"
+
+# 2c (r2, Copilot 02.10 P1) — CONCURENȚĂ: niciun UPDATE comis pe gbe_cont_iban nu se pierde la mutare.
+#   Pe o copie a bazei: T2 ține un UPDATE necomis pe C1 → runner-ul pornește și TREBUIE să aștepte (LOCK SHARE ROW EXCLUSIVE în $pre$)
+#   → T3 vine după runner și se pune la coadă → T2 comite → runner-ul mută valoarea LUI T2 → T3 nu mai găsește coloana (eroare, nimic pierdut).
+#   Mutantul (migrarea fără LOCK) NU pierde valoarea (FK-ul blochează scrierile după snapshot), dar postcondiția 5 anulează livrarea.
+concurenta() {  # <fisier-migrare> <db> <versiune> → ecou: iban_final|rc_runner|t3_rc|t3_err
+  local mig="$1" db="$2" ver="$3" sha p2 pr p3 i
+  "${PSQL[@]}" -d postgres -c "CREATE DATABASE $db TEMPLATE $BAZA" >/dev/null
+  sha="$(sha256sum "$mig" | cut -d' ' -f1)"
+  "${PSQL[@]}" -d "$db" -c "BEGIN; UPDATE public.contracte_terti SET gbe_cont_iban = 'RO77T2CONC000000000000001' WHERE id = 1; SELECT pg_sleep(4); COMMIT;" >/dev/null 2>&1 & p2=$!
+  for i in $(seq 1 50); do [ "$("${PSQL[@]}" -d "$db" -Atc "SELECT count(*) FROM pg_locks WHERE relation = 'public.contracte_terti'::regclass AND mode = 'RowExclusiveLock' AND granted")" -ge 1 ] && break; sleep 0.1; done
+  PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migrare "$mig" --sha256 "$sha" --versiune "$ver" \
+    --tinta-db "$db" --tinta-sistem "$SIS" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >"$TMP/runner_$db.out" 2>&1 & pr=$!
+  for i in $(seq 1 50); do [ "$("${PSQL[@]}" -d "$db" -Atc "SELECT count(*) FROM pg_locks WHERE relation = 'public.contracte_terti'::regclass AND NOT granted")" -ge 1 ] && break; sleep 0.1; done
+  "${PSQL[@]}" -d "$db" -c "UPDATE public.contracte_terti SET gbe_cont_iban = 'RO88T3TARZIU0000000000001' WHERE id = 1" >"$TMP/t3_$db.out" 2>&1 & p3=$!
+  sleep 0.5
+  wait $p2 || true
+  local rcr=0 rc3=0; wait $pr || rcr=$?; wait $p3 || rc3=$?
+  local fin; fin="$("${PSQL[@]}" -d "$db" -Atc "SELECT coalesce((SELECT iban FROM public.contracte_terti_gbe_cont WHERE contract_id = 1), 'LIPSA')" 2>/dev/null || echo ERR)"
+  local err3=ok; grep -q 'gbe_cont_iban' "$TMP/t3_$db.out" && grep -qi 'does not exist\|nu există' "$TMP/t3_$db.out" && err3=coloana_disparuta
+  local motiv=-; grep -q "Postcondi.* 5" "$TMP/runner_$db.out" && motiv=postconditia5
+  local col; col="$("${PSQL[@]}" -d "$db" -Atc "SELECT coalesce((SELECT gbe_cont_iban FROM public.contracte_terti WHERE id = 1), 'NULL')" 2>/dev/null || echo FARA_COLOANA)"
+  "${PSQL[@]}" -d postgres -c "DROP DATABASE $db" >/dev/null
+  echo "$fin|$rcr|$rc3|$err3|$motiv|$col"
+}
+SIS="$(q "SELECT system_identifier FROM pg_control_system()")"
+r="$(concurenta "$MIGRARE" gbe_conc 20261002000005)"
+[ "$r" = "RO77T2CONC000000000000001|0|1|coloana_disparuta|-|FARA_COLOANA" ] || { cat "$TMP/runner_gbe_conc.out" >&2; esec "2c concurență: așteptat valoarea lui T2 mutată + runner 0 + T3 refuzat (coloana dispărută), obținut: $r"; }
+mkdir -p "$TMP/mutant"   # același nume de fișier (runner-ul validează numele și garda de livrare e legată de el)
+grep -v 'LOCK TABLE public.contracte_terti IN SHARE ROW EXCLUSIVE MODE;' "$MIGRARE" > "$TMP/mutant/$NUME.sql"
+[ "$(grep -c 'LOCK TABLE public.contracte_terti' "$TMP/mutant/$NUME.sql" || true)" = 0 ] || esec "2c mutant: LOCK-ul n-a fost scos"
+rm="$(concurenta "$TMP/mutant/$NUME.sql" gbe_conc_mutant 20261002000006)"
+# mutantul (fără LOCK): FK-ul tabelei noi ia oricum SHARE ROW EXCLUSIVE pe contracte_terti la CREATE TABLE, DUPĂ snapshot ⇒ valoarea lui T2
+#   intră în copiere, dar nu și în snapshot ⇒ postcondiția 5 anulează TOT (fail-closed, nimic pierdut, dar livrarea cade). Cu LOCK-ul din
+#   0a2 snapshot-ul se face pe starea înghețată ⇒ livrarea reușește. Ambele: niciodată un UPDATE comis pierdut.
+[ "$rm" = "ERR|10|0|ok|postconditia5|RO88T3TARZIU0000000000001" ] || esec "2c mutant fără LOCK: așteptat anulare fail-closed pe postcondiția 5 (fără pierdere), obținut: $rm"
+ok "2c concurență: UPDATE în zbor → runner-ul îl așteaptă și îl mută ($r); UPDATE întârziat → refuzat; mutantul fără LOCK → anulare fail-closed pe postcondiția 5, nimic pierdut ($rm)"
 
 SHA="$(sha256sum "$MIGRARE" | cut -d' ' -f1)"
-SIS="$(q "SELECT system_identifier FROM pg_control_system()")"
 RC=0; PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migrare "$MIGRARE" --sha256 "$SHA" --versiune 20261002000004 \
   --tinta-db "$BAZA" --tinta-sistem "$SIS" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >"$TMP/runner.out" 2>&1 || RC=$?
 [ "$RC" = 0 ] || { cat "$TMP/runner.out" >&2; esec "3 runner cod $RC"; }

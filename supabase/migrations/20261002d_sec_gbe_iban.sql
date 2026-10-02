@@ -47,6 +47,10 @@ DO $pre$
 DECLARE v_n integer; v_s text;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Precondiție 0a: rulează ca postgres (current_user = %)', current_user; END IF;
+  -- 0a2 (r2, Copilot 02.10 P1 lost update): îngheață scrierile pe contracte_terti ÎNAINTE de amprente, verificarea datelor și snapshot.
+  --   SHARE ROW EXCLUSIVE permite citirile, blochează INSERT/UPDATE/DELETE până la COMMIT (un UPDATE în zbor e așteptat și intră
+  --   în snapshot; unul care vine după așteaptă și apoi nu mai găsește coloana). DROP COLUMN urcă apoi la ACCESS EXCLUSIVE.
+  LOCK TABLE public.contracte_terti IN SHARE ROW EXCLUSIVE MODE;
   -- 0b. helperul din 20261005b, exact
   SELECT count(*) INTO v_n FROM pg_proc p WHERE p.proname = 'fn_poate_scrie_garantii';
   IF v_n <> 1 OR to_regprocedure('public.fn_poate_scrie_garantii()') IS NULL THEN
@@ -100,6 +104,14 @@ BEGIN
      AND d.refobjsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.contracte_terti'::regclass AND attname = 'gbe_cont_iban')
      AND r.ev_class <> 'public.v_gbe_per_contract'::regclass;
   IF v_n <> 0 THEN RAISE EXCEPTION 'Precondiție 0g: % view-uri noi depind de contracte_terti.gbe_cont_iban — se reanalizează', v_n; END IF;
+  -- 0g2 (r2, Copilot 02.10 neblocant): NICIUN alt obiect (index, constrângere, trigger pe coloană, politică, statistică extinsă) nu depinde de
+  --   coloană — DROP COLUMN le-ar șterge implicit. Singura dependență admisă = regula view-ului v_gbe_per_contract (live 02.10: exact una).
+  SELECT count(*) INTO v_n FROM pg_depend d
+   WHERE d.refclassid = 'pg_class'::regclass AND d.refobjid = 'public.contracte_terti'::regclass
+     AND d.refobjsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.contracte_terti'::regclass AND attname = 'gbe_cont_iban')
+     AND d.classid <> 'pg_attrdef'::regclass
+     AND NOT (d.classid = 'pg_rewrite'::regclass AND d.objid IN (SELECT oid FROM pg_rewrite WHERE ev_class = 'public.v_gbe_per_contract'::regclass));
+  IF v_n <> 0 THEN RAISE EXCEPTION 'Precondiție 0g: % obiecte (index / constrângere / trigger / politică / statistică) depind de contracte_terti.gbe_cont_iban — DROP COLUMN le-ar șterge implicit; se reanalizează', v_n; END IF;
   SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.prosrc ILIKE '%gbe_cont_iban%';
   IF v_n <> 0 THEN RAISE EXCEPTION 'Precondiție 0g: % funcții din public citesc gbe_cont_iban — se reanalizează', v_n; END IF;
   -- 0h. obiectele noi nu există (reaplicare = refuz)

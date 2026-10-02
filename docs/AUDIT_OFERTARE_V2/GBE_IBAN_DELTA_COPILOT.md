@@ -2,7 +2,7 @@
 
 **context_version:** 02.10.2026, branch `claude/sec-gbe-iban` (din origin/main c37ba57)
 **Decizie:** docs/RAPORT_0210.md, decizia 10 → **A** (Răzvan, 02.10). Model: 20261006b (IBAN garanții), adaptat.
-**Artefact:** `supabase/migrations/20261002d_sec_gbe_iban.sql` · **sha256:** `d563b48a04c56b798538f7c21675fc2869e0dcb0654849071810364886cde58f`
+**Artefact (r2):** `supabase/migrations/20261002d_sec_gbe_iban.sql` · **sha256:** `d00759c34566f2bc55f79dce2480939db440f4ed134faf29b20cadcd5e69bdb2` (r1 era `d563b48a…`, NO-GO Copilot 02.10 seara)
 **Revenire:** `supabase/revenire/20261002d_sec_gbe_iban_ROLLBACK.sql` · **sha256:** `bcdce7c40a61badb2f7ef402e34b1160f91162e48adbd5a3882c3a2a95cd942e`
 **Depinde de:** 20261005b (#561, pe live) — helperul `fn_poate_scrie_garantii()` (md5 `e8ee20a0…`) și politica `contracte_terti_update_garantii`. Precondițiile 0b/0e refuză fără ele.
 **Independent de** 20261006b (garantii.iban) — altă tabelă; se pot livra în orice ordine.
@@ -512,3 +512,27 @@ BEGIN
   PERFORM set_config('gazpet.rollback_tehnic_20261002d', '', true);
 END $post$;
 ```
+
+
+## r2 — 02.10.2026 seara, după NO-GO Copilot pe r1 (head r1 1af06d5)
+
+**Verdictul r1:** NO-GO merge + NO-GO apply. P1 „lost update” la mutarea IBAN-ului (T2 comite un UPDATE între copiere și DROP COLUMN). Neblocante: 0g să acopere orice dependență de coloană prin pg_depend, N+1 de RPC-uri în UI (P2), versiunea de livrare > ultima versiune live.
+
+**Ce s-a schimbat (doar migrarea și harness-ul; revenirea și UI-ul sunt neatinse):**
+1. `0a2` — `LOCK TABLE public.contracte_terti IN SHARE ROW EXCLUSIVE MODE;` imediat după 0a, înaintea amprentelor, a verificării datelor (0i) și a snapshot-ului. Permite citiri și blochează INSERT/UPDATE/DELETE până la COMMIT.
+2. `0g2` — `pg_depend` pe coloana `gbe_cont_iban`: orice obiect care nu e regula `v_gbe_per_contract` (index, constrângere, trigger pe coloană, politică, statistică extinsă; `pg_attrdef` exclus) → refuz. Live 02.10: exact o dependență (regula view-ului).
+3. Harness `scripts/test_sec_gbe_iban.sh`:
+   - **2a2:** un index pe coloană → refuz din 0g.
+   - **2c concurență, pe o copie a bazei:**
+     - T2 ține un UPDATE necomis pe C1, iar runner-ul îl **așteaptă**.
+     - T3 vine după runner și se pune la coadă.
+     - T2 comite, iar runner-ul mută **valoarea lui T2** (cod 0).
+     - T3 primește „column gbe_cont_iban does not exist”.
+   - **Mutantul fără LOCK, rulat prin runner cu același nume de fișier:** codul 10 (NEAPLICAT), anulare pe **postcondiția 5**, coloana rămâne cu valoarea comisă (T3).
+
+**Precizare la P1 (măsurat, nu presupus):** pe r1 scenariul NU pierde valoarea tăcut. `CREATE TABLE … REFERENCES public.contracte_terti` ia oricum SHARE ROW EXCLUSIVE pe tabela referită (triggerele FK), după snapshot și înaintea copierii. Un UPDATE în zbor e deci așteptat și intră în copiere, dar nu și în snapshot, iar postcondiția 5 anulează tot (fail-closed). Mutantul arată exact asta. Fixul rămâne util: invariantul devine explicit (nu mai depinde de efectul secundar al FK-ului), iar livrarea reușește sub concurență, în loc să cadă.
+
+**Neschimbat / de reținut:**
+- N+1 RPC în `GbeEvidenta` = P2 acceptat, aceeași listă scurtă (87 de contracte, 1 cu IBAN).
+- Versiunea de livrare: strict peste ultima înregistrată live (v20261002191500). Propunere: `20261002200000`.
+- Rezultat harness r2 pe PostgreSQL 17: **PASS**, sha256 `d00759c34566f2bc55f79dce2480939db440f4ed134faf29b20cadcd5e69bdb2`. Precondițiile citite live 02.10 ~22:45 RO: toate true, iar 0g2 = 0 obiecte în plus.
