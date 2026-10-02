@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, createContext, useContext, useRef, lazy, Suspense } from 'react'
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
+import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
+import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
+import { zileOrdinDeplasare } from './diurneOrdin.js'
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -52,22 +55,26 @@ import Integrari from './Integrari.jsx'
 import Cladire from './Cladire.jsx'
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
+const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
 function AuthProvider({ children }) {
   const [session, setSession] = useState(undefined)
   const [profile, setProfile] = useState(null)
+  // false cât timp profilul se încarcă după sesiune — ProtectedRoute așteaptă, nu redirecționează (fix refresh → meniu)
+  const [profileReady, setProfileReady] = useState(false)
   // Anti N+1: previne multiple fetchProfile simultane (GoTrueClient poate emite onAuthStateChange de 5x)
   const fetchingRef = useRef(null)
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); if (session) fetchProfile(session.user.id) })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => { setSession(session); if (session) fetchProfile(session.user.id); else setProfile(null) })
+    supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); if (session) fetchProfile(session.user.id); else setProfileReady(true) })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => { setSession(session); if (session) fetchProfile(session.user.id); else { setProfile(null); setProfileReady(true) } })
     return () => subscription.unsubscribe()
   }, [])
   const fetchProfile = async (userId) => {
     if (fetchingRef.current === userId) return
     fetchingRef.current = userId
+    setProfileReady(false)
     try {
       const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
       if (data) {
@@ -78,7 +85,7 @@ function AuthProvider({ children }) {
         const { data: ma } = await supabase.from('user_module_access').select('module, access_level').eq('profile_id', userId)
         data.module_access = (ma || []).map(x => x.module)
         data.module_access_levels = Object.fromEntries((ma || []).map(x => [x.module, x.access_level]))
-        setProfile(data)
+        setProfile(data); setProfileReady(true)
       } else {
         setTimeout(async () => {
           const { data: d2 } = await supabase.from('profiles').select('*').eq('id', userId).single()
@@ -90,14 +97,15 @@ function AuthProvider({ children }) {
             d2.module_access_levels = Object.fromEntries((ma2 || []).map(x => [x.module, x.access_level]))
             setProfile(d2)
           }
+          setProfileReady(true)
         }, 1000)
       }
-    } catch (e) { console.error(e) }
+    } catch (e) { console.error(e); setProfileReady(true) }
     finally { if (fetchingRef.current === userId) fetchingRef.current = null }
   }
   const signIn = (email, password) => supabase.auth.signInWithPassword({ email, password })
   const signOut = () => supabase.auth.signOut()
-  return <AuthContext.Provider value={{ session, profile, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={{ session, profile, profileReady, signIn, signOut, fetchProfile }}>{children}</AuthContext.Provider>
 }
 
 // ─── Module access helper ───────────────────────────────────────────────────
@@ -113,9 +121,13 @@ function hasModuleAccess(profile, moduleName) {
 }
 
 function ProtectedRoute({ children, adminOnly = false, salaryAccess = false, requireModule = null }) {
-  const { session, profile } = useAuth()
+  const { session, profile, profileReady } = useAuth()
+  const location = useLocation()
   if (session === undefined) return <LoadingScreen />
-  if (!session) return <Navigate to="/login" replace />
+  if (!session) return <Navigate to="/login" replace state={{ from: location }} />
+  // Fix refresh: la reload sesiunea vine înaintea profilului; fără profil, verificările de drepturi
+  // de mai jos picau și trimiteau la '/'. Așteptăm profilul înainte de orice decizie.
+  if (!profile && !profileReady) return <LoadingScreen />
   // 25.05.2026: AdminPage acces permisiv granular - is_owner SAU can_modify_employees (Natalia HR)
   // Filtrarea tab-urilor sensibile (Setări) e făcută în interiorul AdminPage
   if (adminOnly && !(profile?.is_owner || profile?.can_modify_employees)) return <Navigate to="/" replace />
@@ -735,8 +747,9 @@ function Layout({ children }) {
       const [r1, r2, r3] = await Promise.all([
         supabase.from('tichete').select('id', { count:'exact', head:true })
           .eq('deschis_de', profile.id).in('status', ACTIVE),
+        // TKT-2026-0304: rezolvate de mine = în Arhivă, nu mai sunt „asignate mie” (așteaptă confirmarea creatorului)
         supabase.from('tichete').select('id', { count:'exact', head:true })
-          .eq('persoana_responsabila', profile.id).in('status', ACTIVE),
+          .eq('persoana_responsabila', profile.id).in('status', ACTIVE.filter(s => !DE_CONFIRMAT.includes(s))),
         supabase.from('tichete').select('id', { count:'exact', head:true })
           .eq('deschis_de', profile.id).in('status', DE_CONFIRMAT),
       ])
@@ -1080,6 +1093,8 @@ function HomeDashboard() {
       {/* Corp home: salut + module (cifre live) + SCADA (todo #693) — componentă separată */}
       <HomeScada profile={profile} modules={modules} onOpen={p => nav(p)} />
 
+      {isSuperAdmin && <Suspense fallback={null}><MonitorEgress profile={profile} /></Suspense>}
+
       <div style={{textAlign:'center',padding:'16px',fontSize:11,color:'#E53935',fontWeight:700,borderTop:'1px solid #21262D',marginTop:'auto',letterSpacing:'.3px'}}>
         Made by Trusu Razvan - Administrator Gazpet Instal
       </div>
@@ -1135,8 +1150,9 @@ function InstallPwaBanner() {
 // ─── Login ────────────────────────────────────────────────────────────────────
 function LoginPage() {
   const { signIn, session } = useAuth()
+  const loginLoc = useLocation()
   const [email,setEmail]=useState(''); const [pass,setPass]=useState(''); const [load,setLoad]=useState(false); const [err,setErr]=useState('')
-  if (session) return <Navigate to="/" replace/>
+  if (session) { const f = loginLoc.state?.from; return <Navigate to={f ? (f.pathname||'/') + (f.search||'') + (f.hash||'') : '/'} replace/> }
   const go = async e => { e.preventDefault(); setLoad(true); setErr(''); const {error}=await signIn(email,pass); if(error) setErr('Email sau parolă incorectă'); setLoad(false) }
   return (
     <div style={{...S.page,display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh'}}><style>{css}</style>
@@ -2144,6 +2160,8 @@ function ReportsPage() {
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
   const hasPontajBrutAccess = profile?.is_owner === true || profile?.can_access_pontaj_brut === true
+  // Diurne r6: scrierea în diurna_payments e permisă de RLS doar owner / can_access_salarii — butonul urmează aceeași poartă
+  const canSaveDiurnaPayment = profile?.is_owner === true || profile?.can_access_salarii === true
   
   // Lock-screen Istoric: reset timer la fiecare interactiune (mouse, keyboard, scroll, touch)
   useEffect(() => {
@@ -2441,8 +2459,11 @@ function ReportsPage() {
       // Plus etichetă AK4/AL4 (Razvan a zis să le păstrăm ca info informativă)
       const TOTAL_ZILE_C = FIXED + days       // col index al „Total Zile"
       const TOTAL_ORE_C  = FIXED + days + 1   // col index al „Total Ore"
-      const WD_LABEL_C   = FIXED + days + 2   // col index al etichetei „Zile lucr. lună:"
-      const WD_VALUE_C   = FIXED + days + 3   // col index al valorii
+      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat (formule COUNTIF pe rândul Ora Intrare)
+      const NORME_TOTAL  = ['CO','CM','CFP','O']
+      const NORME_C0     = FIXED + days + 2
+      const WD_LABEL_C   = NORME_C0 + NORME_TOTAL.length   // col index al etichetei „Zile lucr. lună:"
+      const WD_VALUE_C   = WD_LABEL_C + 1                  // col index al valorii
       
       const R = []
       R.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
@@ -2456,10 +2477,10 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header rând 6
-      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, 'TOTAL ZILE','TOTAL ORE']
+      const HDR = ['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU', ...dayNums, 'TOTAL ZILE','TOTAL ORE', ...NORME_TOTAL.map(n=>`ZILE ${n}`)]
       R.push(HDR)
       // Day abbr rând 7
-      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), '', '']
+      const DNR = ['','','', ...dayNums.map(d => dayAbbr[new Date(y, m-1, d).getDay()]), '', '', ...NORME_TOTAL.map(n=>NORME_LABELS[n]||n)]
       R.push(DNR)
       
       // Salariați
@@ -2479,9 +2500,12 @@ function ReportsPage() {
         // COUNTIF / SUM pe rândul Ore Lucrate (r+3)
         rCI.push({ f: `COUNTIF(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3},">0")`, t: 'n' })
         rCI.push({ f: `SUM(D${excelRow+3}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow+3})`, t: 'n' })
-        rCO.push('', '')
-        rPM.push('', '')
-        rOL.push('', '')
+        // Zile CO/CM/CFP/O (TKT-2026-0311): COUNTIF pe codurile de normă de pe rândul Ora Intrare (r)
+        NORME_TOTAL.forEach(n => rCI.push({ f: `COUNTIF(D${excelRow}:${XLSX.utils.encode_col(DATA_COL_END)}${excelRow},"${n}")`, t: 'n' }))
+        const gol = ['', '', ...NORME_TOTAL.map(() => '')]
+        rCO.push(...gol)
+        rPM.push(...gol)
+        rOL.push(...gol)
         R.push(rCI, rCO, rPM, rOL, [])
       })
       
@@ -2490,6 +2514,7 @@ function ReportsPage() {
         {wch:26},{wch:16},{wch:22},
         ...dayNums.map(()=>({wch:5.5})),
         {wch:11}, {wch:11},
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
         {wch:18}, {wch:11}
       ]
       
@@ -2525,7 +2550,7 @@ function ReportsPage() {
       let ri = 7  // 0-indexed (Excel rând 8)
       employees.forEach(emp => {
         for (let ro = 0; ro < 4; ro++) {
-          const TOTAL_C = FIXED + days + 2  // FĂRĂ ORE SUPL
+          const TOTAL_C = FIXED + days + 2 + NORME_TOTAL.length  // FĂRĂ ORE SUPL, cu zile CO/CM/CFP/O
           for (let c = 0; c < TOTAL_C; c++) {
             let s = {}
             if (c === 0) {
@@ -2911,82 +2936,43 @@ function ReportsPage() {
   }
 
   const savePayment=async()=>{
+    if(!canSaveDiurnaPayment){showToast('Salvarea plății de diurne e permisă doar owner / acces Salarii','error');return}
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setSavingPayment(true)
     try{
     // Check for overlap
     const {data:existing}=await supabase.from('diurna_payments').select('*').lte('period_from',dt).gte('period_to',df)
     
-    // Detect dacă perioada e o LUNĂ ÎNTREAGĂ (ziua 1 → ultima zi a aceleiași luni)
-    // Plățile lunare au scop diferit: generarea ordinelor de deplasare pentru toată luna.
-    // Trebuie să poată coexista cu plățile săptămânale (cash flow).
-    const isFullMonthPeriod = (() => {
-      const f = new Date(df + 'T12:00'); const t = new Date(dt + 'T12:00')
-      if (f.getDate() !== 1) return false
-      const lastDay = new Date(f.getFullYear(), f.getMonth() + 1, 0).getDate()
-      if (t.getDate() !== lastDay) return false
-      if (f.getMonth() !== t.getMonth() || f.getFullYear() !== t.getFullYear()) return false
-      return true
-    })()
-    
+    // Orice suprapunere cu o plată existentă e refuzată uniform (decizia 4B, RAPORT_0210):
+    // fostul bypass „plată lunară în paralel" (scop: ordine de deplasare) e acoperit de #557.
     if(existing?.length>0){
-      if (isFullMonthPeriod) {
-        // Bypass cu confirmation pentru plata lunară
-        const lunaName = new Date(df + 'T12:00').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })
-        const listaSupra = existing.slice(0, 5).map(p => 
-          `  • ${new Date(p.period_from).toLocaleDateString('ro-RO')} – ${new Date(p.period_to).toLocaleDateString('ro-RO')} (${p.total_employees} ang.)`
-        ).join('\n')
-        const ok = window.confirm(
-          `📅 Perioada selectată acoperă luna ÎNTREAGĂ: ${lunaName}\n\n` +
-          `Există deja ${existing.length} ${existing.length===1?'plată săptămânală':'plăți săptămânale'} în această lună:\n` +
-          `${listaSupra}\n` +
-          (existing.length > 5 ? `  • ... și încă ${existing.length - 5}\n` : '') +
-          `\nGENEREZI DIURNELE PENTRU ORDINELE DE DEPLASARE?\n\n` +
-          `(Plata lunară se salvează în PARALEL cu cele săptămânale, fără să le afecteze. ` +
-          `Vei putea apoi genera ordinele de deplasare pentru întreaga lună.)`
-        )
-        if (!ok) { setSavingPayment(false); return }
-        // Continuă - skip overlap check
-      } else {
-        showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
-        setSavingPayment(false); return
-      }
+      showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
+      setSavingPayment(false); return
     }
 
-    // Calculeaza bugetul lunar din Admin→Calendar (type='work')
-    const d0=new Date(df)
-    const monthStart=`${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}-01`
-    const mE=new Date(monthStart);mE.setMonth(mE.getMonth()+1);mE.setDate(0)
-    const monthEnd=mE.toISOString().split('T')[0]
+    // Alocare pe plafonul LUNAR per angajat — aceeași funcție ca în exportDiurne și exportBancaDiurne
+    // (diurneAlocare.js): C = zile lucr. − CO pe zile lucr., TOATE bifele consumă (și weekend), surplus → salariu.
+    // Se salvează zile_diurnă / sumă_diurnă din alocare; ce e peste plafon nu intră aici.
+    const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)   // lunile atinse de tranșă
     const {data:calDat}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
     const legalSetSave=new Set((calDat||[]).filter(d=>d.type==='legal').map(d=>d.date))
-    let bugetZileSave=0
-    const bwS=new Date(monthStart),bwE=new Date(monthEnd)
-    while(bwS<=bwE){const s=bwS.toISOString().split('T')[0];if(bwS.getDay()!==0&&bwS.getDay()!==6&&!legalSetSave.has(s))bugetZileSave++;bwS.setDate(bwS.getDate()+1)}
-    const bugetLunar=bugetZileSave*diurnaAmt
 
-    // Transe anterioare din aceeasi luna (pentru rest buget per angajat)
-    const {data:prevPay}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
-
-    // Get diurna data
-    let eq=supabase.from('employees').select('*').eq('active',true)
+    // Eligibili: activii + cei cu încetare de la începutul lunii încolo (au zile bifate înainte de plecare
+    // și trebuie plătiți; cu active=true dispăreau din plată — Băiesu Darius, Tudurachi, Ioan Sorin, sept 2026)
+    let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
-    // Paginare manuală
+    // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
     let recs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    const alocare=alocaDiurneTransa({recsLuna:recs,df,dt,legalSet:legalSetSave,diurnaAmt})
 
     const empStats=(emps||[]).map(emp=>{
-      const er=(recs||[]).filter(r=>r.employee_id===emp.id)
-      if(!er.length) return null
-      const sumaExport=er.length*diurnaAmt
-      // Suma platita anterior din aceeasi luna pentru acest angajat
-      const platitAnt=(prevPay||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?d.amount:0)},0)
-      const restBuget=Math.max(0,bugetLunar-platitAnt)
-      // Salvam DOAR suma confirmata (in limita bugetului) — surplusul merge in salariu
-      const sumaConfirmata=Math.min(sumaExport,restBuget)
-      return {id:emp.id,name:emp.name,days:er.length,amount:sumaConfirmata}
-    }).filter(Boolean).filter(e=>e.days>0)  // includem toti cu diurne, chiar daca suma confirmata=0 (tot merge in salariu)
+      const a=alocare.get(emp.id)
+      if(!a||a.N===0) return null
+      // includem toti cu diurne bifate, chiar daca zilele in plafon = 0 (tot merge in salariu)
+      return {id:emp.id,name:emp.name,days:a.zileDiurna,amount:a.sumaDiurna}
+    }).filter(Boolean)
 
     if(!empStats.length){showToast('Nu există diurne în perioadă','warn');setSavingPayment(false);return}
     const uid=(await supabase.auth.getUser()).data.user?.id
@@ -2996,7 +2982,8 @@ function ReportsPage() {
       total_amount:empStats.reduce((s,e)=>s+e.amount,0),created_by:uid
     }).select().single()
     if(!error&&payment){
-      await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
+      const {error:detErr}=await supabase.from('diurna_payment_details').insert(empStats.map(e=>({payment_id:payment.id,employee_id:e.id,employee_name:e.name,days:e.days,amount:e.amount})))
+      if(detErr){console.error('diurna_payment_details insert:',detErr);showToast(`⚠ Plata #${payment.id} s-a salvat FĂRĂ detalii angajați (${detErr.message||'eroare'}) — anunță owner-ul înainte de export BT`,'error');return}
       playBeep(920,0.1); setTimeout(()=>playBeep(1100,0.1),130); showToast(`✅ Plată salvată: ${empStats.length} angajați · ${empStats.reduce((s,e)=>s+e.amount,0)} RON`)
     } else showToast('Eroare la salvare','error')
   }catch(e){showToast('Eroare la salvare','error')}finally{setSavingPayment(false)}
@@ -3057,8 +3044,10 @@ function ReportsPage() {
       const monthEnd = mE.toISOString().split('T')[0]
 
       // Calendar legal days
+      // Până la sfârșitul ultimei luni atinse de tranșă (alocaDiurneTransa are nevoie de lunile întregi)
+      const rangeEnd = sfarsitLuna(periodTo) > monthEnd ? sfarsitLuna(periodTo) : monthEnd
       const { data: calData } = await supabase.from('calendar_days')
-        .select('date,type,description').gte('date', monthStart).lte('date', monthEnd)
+        .select('date,type,description').gte('date', monthStart).lte('date', rangeEnd)
       const legalSet = new Set((calData || []).filter(x => x.type === 'legal').map(x => x.date))
       const legalNameMap = new Map((calData || []).filter(x => x.type === 'legal').map(x => [x.date, x.description || '']))
 
@@ -3092,9 +3081,9 @@ function ReportsPage() {
       while (true) {
         const { data: page } = await supabase.from('pontaj_records')
           .select('*, sites(name)')
-          .gte('date', monthStart).lte('date', monthEnd)
+          .gte('date', monthStart).lte('date', rangeEnd)
           .in('employee_id', empIds)
-          .range(off, off + 999)
+          .order('employee_id').order('date').range(off, off + 999)
         if (!page || page.length === 0) break
         allRecs.push(...page)
         if (page.length < 1000) break
@@ -3107,6 +3096,8 @@ function ReportsPage() {
       // (WE/sărbătoare lucrate sunt mutate în locul LL-urilor de pe zile lucrătoare)
       const NORME_LIST = ['BO','BP','AM','CO','CFP','CM','M','O','N','PRM','PRB','LL']
       const sortedWorkDays = [...workDaySet].sort()
+      // Alocare comună (diurneAlocare.js) — aceeași ca exportDiurne / savePayment / exportBancaDiurne
+      const alocare = alocaDiurneTransa({ recsLuna: allRecs, df: periodFrom, dt: periodTo, legalSet, diurnaAmt: 0 })
       const empData = details.map(d => {
         const empRecs = allRecs.filter(r => r.employee_id === d.employee_id)
         const recsInPeriod = empRecs
@@ -3147,11 +3138,8 @@ function ReportsPage() {
         }
 
         // diurnaMax = plafonată la buget lunar (consistent cu savePayment) și la zilele NET
-        const zilePlatiteAnterior = empRecs.filter(r =>
-          r.diurna === true && r.date < periodFrom && workDaySet.has(r.date)
-        ).length
-        const bugetLunarRamasZile = Math.max(0, workDaySet.size - zilePlatiteAnterior)
-        const diurnaMax = Math.min(bugetLunarRamasZile, netDays.length)
+        // 3A (01.10.2026): min(zileDiurna alocare comună, zile NET) — scade CO, numără weekendul, tranșe multiple
+        const diurnaMax = zileOrdinDeplasare(alocare.get(d.employee_id), netDays.length)
 
         // Distribuția = primele diurnaMax din netDays (cronologic)
         const distribution = netDays.slice(0, diurnaMax)
@@ -4350,7 +4338,7 @@ function ReportsPage() {
     let recs = []
     let off = 0
     while (true) {
-      const { data: page } = await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).range(off, off+999)
+      const { data: page } = await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).order('employee_id').order('date').range(off, off+999)
       if (!page || page.length === 0) break
       recs.push(...page)
       if (page.length < 1000) break
@@ -4551,9 +4539,18 @@ function ReportsPage() {
       const TOTAL_ZILE_C = FIXED + days        // ex Apr(30): col 33=AH; Mai(31): col 34=AI
       const TOTAL_ORE_C  = FIXED + days + 1    // ex Apr: col 34=AI; Mai: col 35=AJ
       const ORE_SUPL_C   = FIXED + days + 2    // ex Apr: col 35=AJ; Mai: col 36=AK
-      const WD_LABEL_C   = FIXED + days + 3    // etichetă „Zile lucr. lună:"
-      const WD_VALUE_C   = FIXED + days + 4    // valoarea numerică (folosită în formulă)
+      // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat, după ORE SUPL (4 coloane)
+      const NORME_TOTAL  = ['CO','CM','CFP','O']
+      const NORME_C0     = FIXED + days + 3    // prima coloană de norme
+      // TKT-2026-0314 (var. A): orele de normă plătite (8h/zi pe CO, CM, BO, BP, AM, M, O — CFP, N, LL = 0 ore)
+      // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME. ORE SUPLIMENTARE rămâne pe orele lucrate.
+      const NORME_ORE    = ['CO','CM','BO','BP','AM','M','O']
+      const ORE_NORME_C  = NORME_C0 + NORME_TOTAL.length           // ORE NORME (8h/zi)
+      const TOTAL_LUNA_C = ORE_NORME_C + 1                          // TOTAL ORE LUNĂ
+      const WD_LABEL_C   = TOTAL_LUNA_C + 1                         // etichetă „Zile lucr. lună:"
+      const WD_VALUE_C   = WD_LABEL_C + 1                            // valoarea numerică (folosită în formulă)
       const totalOreColLetter = XLSX.utils.encode_col(TOTAL_ORE_C)
+      const oreNormeColLetter = XLSX.utils.encode_col(ORE_NORME_C)
       const wdValueColLetter  = XLSX.utils.encode_col(WD_VALUE_C)
 
       // ── Build rows ──
@@ -4570,10 +4567,10 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header row (idx 5)
-      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE']
+      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`),'ORE NORME (8h/zi)','TOTAL ORE LUNĂ']
       R.push(HDR)
       // Day names row (idx 6)
-      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','']
+      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n),`8h × zile ${NORME_ORE.join('/')}`,'ORE + ORE NORME']
       R.push(DNR)
 
       // Tracking metadata pentru istoric BD
@@ -4591,12 +4588,16 @@ function ReportsPage() {
         const rPM=['','','Pauza de Masă (ore)']
         const rOL=['','','Ore Lucrate']
         let tz=0, to=0
+        const normeCnt=Object.fromEntries(NORME_TOTAL.map(n=>[n,0]))
+        let zileNormeOre=0   // zile cu normă plătită 8h (NORME_ORE)
 
         for(let d=1;d<=days;d++){
           const ds=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`
           const {we,leg}=isOff(d)
           const rec=emp.records?.find(r=>r.date===ds)
           if(rec?.norma){
+            if(normeCnt[rec.norma]!==undefined) normeCnt[rec.norma]++
+            if(NORME_ORE.includes(rec.norma)) zileNormeOre++
             rCI.push(rec.norma); rCO.push(''); rPM.push(''); rOL.push('')
           } else if(rec?.check_in){
             const hp=spansLunch(rec.check_in,rec.check_out)&&rec.lunch_break!==false
@@ -4619,8 +4620,14 @@ function ReportsPage() {
         // ORE SUPLIMENTARE — formula Excel pe primul rând (Ora Intrare)
         // = MAX(0, TotalOre{row} - WdValue$4 * 8) — referință absolută pe rând 4 pentru zile lucr.
         rCI.push({ f: `MAX(0, ${totalOreColLetter}${excelRow} - ${wdValueColLetter}$4*8)`, t: 'n' })
+        // Zile CO / CM / CFP / O (TKT-2026-0311) — 0 explicit când nu există, ca să se poată însuma
+        NORME_TOTAL.forEach(n=>rCI.push(normeCnt[n]))
+        // ORE NORME (8h/zi) + TOTAL ORE LUNĂ (formula = TOTAL ORE + ORE NORME, pe același rând)
+        rCI.push(zileNormeOre*8)
+        rCI.push({ f: `${totalOreColLetter}${excelRow}+${oreNormeColLetter}${excelRow}`, t: 'n' })
 
-        rCO.push('','',''); rPM.push('','',''); rOL.push('','','')
+        const gol=['','','',...NORME_TOTAL.map(()=>''),'','']
+        rCO.push(...gol); rPM.push(...gol); rOL.push(...gol)
         R.push(rCI,rCO,rPM,rOL,[])
       })
 
@@ -4632,6 +4639,9 @@ function ReportsPage() {
         {wch:11},                  // TOTAL ZILE
         {wch:11},                  // TOTAL ORE
         {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
+        ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
+        {wch:16},                  // ORE NORME (8h/zi)
+        {wch:15},                  // TOTAL ORE LUNĂ
         {wch:18},                  // 'Zile lucr. lună:' label
         {wch:11}                   // valoare zile lucr.
       ]
@@ -4664,7 +4674,7 @@ function ReportsPage() {
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C = FIXED + days + 3  // include ORE SUPL
+          const TOTAL_C = TOTAL_LUNA_C + 1  // include ORE SUPL + zile CO/CM/CFP/O + ORE NORME + TOTAL ORE LUNĂ
           for(let c=0;c<TOTAL_C;c++){
             let s={}
             if(c===0){
@@ -4690,6 +4700,21 @@ function ReportsPage() {
               // ORE SUPLIMENTARE — stil per specs Razvan
               // ro=0 (Ora Intrare = rândul principal): bold #D9E1F2 centrat font 11
               // ro=1-3 (sub-rânduri): #F5F5F5 font 9 centrat
+              s = ro===0
+                ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
+                : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
+            } else if(c>=NORME_C0 && c<NORME_C0+NORME_TOTAL.length) {
+              // ZILE CO/CM/CFP/O — galben pal pe rândul principal (aceeași culoare ca zilele cu normă)
+              s = ro===0
+                ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
+                : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
+            } else if(c===ORE_NORME_C) {
+              // ORE NORME — același stil ca zilele de normă
+              s = ro===0
+                ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
+                : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
+            } else if(c===TOTAL_LUNA_C) {
+              // TOTAL ORE LUNĂ — același stil ca ORE SUPLIMENTARE (rând principal bold albastru)
               s = ro===0
                 ? {fill:{fgColor:{rgb:'D9E1F2'}}, font:{bold:true,sz:11,color:{rgb:'1F497D'}}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
@@ -4772,125 +4797,77 @@ function ReportsPage() {
     if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
     const {data:emps}=await eq
 
-    // Determine month range
-    const endDate=new Date(dt)
-    const monthStart=`${endDate.getFullYear()}-${String(endDate.getMonth()+1).padStart(2,'0')}-01`
-    // monthEnd = ultimă zi reală a lunii (nu dt!)
-    const mEnd=new Date(monthStart);mEnd.setMonth(mEnd.getMonth()+1);mEnd.setDate(0)
-    const monthEnd=mEnd.toISOString().split('T')[0]
+    // Lunile atinse de tranșă (o tranșă peste 1 ale lunii se alocă pe segmente lunare, în diurneAlocare.js)
+    const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)
 
-    // Get working days from calendar for FULL month (not just to dt)
+    // Sărbători legale din calendar (zile lucrătoare = Luni-Vineri minus acestea; calendarul stochează doar non-lucrătoarele)
     const {data:calData}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
     const legalSet=new Set((calData||[]).filter(d=>d.type==='legal').map(d=>d.date))
+    // Zile lucrătoare de la 1 ale lunii lui dt până la dt — doar informativ (antet + toast)
+    const calWorkDays=zileLucratoareLuna(dt,legalSet).filter(d=>d<=dt).length
 
-    // Zile lucrătoare TOATĂ luna = Luni-Vineri minus sărbători legale (din calendar)
-    // Nu folosim type='work' — calendarul stochează doar zilele non-lucrătoare
-    let totalMonthWorkDays=0
-    const mWd=new Date(monthStart)
-    while(mWd<=mEnd){
-      const s=mWd.toISOString().split('T')[0]
-      if(mWd.getDay()!==0&&mWd.getDay()!==6&&!legalSet.has(s)) totalMonthWorkDays++
-      mWd.setDate(mWd.getDate()+1)
-    }
-
-    // workDaySet pentru filtrarea normelor (Bug 2 fix)
-    const workDaySet=new Set()
-    const mWd2=new Date(monthStart)
-    while(mWd2<=mEnd){
-      const s=mWd2.toISOString().split('T')[0]
-      if(mWd2.getDay()!==0&&mWd2.getDay()!==6&&!legalSet.has(s)) workDaySet.add(s)
-      mWd2.setDate(mWd2.getDate()+1)
-    }
-
-    // Count working days from 1st to end of export period (dt) — pentru diurnaMax per perioadă
-    let calWorkDays=0
-    const d=new Date(monthStart)
-    while(d<=endDate){
-      const ds=d.toISOString().split('T')[0]
-      if(d.getDay()!==0&&d.getDay()!==6&&!legalSet.has(ds)) calWorkDays++
-      d.setDate(d.getDate()+1)
-    }
-
-    // Calculate working days ONLY within the export window df→dt (Bug 1 fix)
-    let workDaysInPeriod=0
-    const pd=new Date(df)
-    const periodEnd=new Date(dt)
-    while(pd<=periodEnd){const pds=pd.toISOString().split('T')[0];if(pd.getDay()!==0&&pd.getDay()!==6&&!legalSet.has(pds))workDaysInPeriod++;pd.setDate(pd.getDate()+1)}
-
-    // Get all pontaj records from start of month to end of period (for norme cumulate)
+    // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
     // Paginare manuală
     let allRecs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; allRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; allRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
 
-    // Transe anterioare din aceeași lună — pentru calculul surplusului deja plătit
-    // Luăm toate plățile cu period_from în aceeași lună ȘI period_to < df (perioadele deja finalizate)
+    // Tranșele deja salvate din aceeași lună (period_to < df) — DOAR pentru reconciliere („Diferență față de plătit"):
+    // ce s-a plătit efectiv vs ce ar fi trebuit conform alocării; nu se absoarbe în tranșa curentă
     const {data:prevPaymentsInMonth}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
+    // r6 (constatarea r5 „export/defalcare"): o plată care a început în luna ANTERIOARĂ și s-a terminat în luna
+    // curentă (ex. 26.09–02.10) are suma pe două luni, iar diurna_payment_details nu păstrează defalcarea pe luni.
+    // Pentru angajații din ea reconcilierea e NEDETERMINATĂ — se spune explicit, nu se afișează o diferență falsă.
+    const {data:platiPesteLuna}=await supabase.from('diurna_payments').select('id,period_from,period_to,diurna_payment_details(employee_id)').lt('period_from',monthStart).gte('period_to',monthStart).lt('period_to',df)
+    const nedeterminatPlata=new Map()   // employee_id → id-urile plăților peste 1 ale lunii în care apare
+    for(const p of platiPesteLuna||[]) for(const d of p.diurna_payment_details||[]){ if(!nedeterminatPlata.has(d.employee_id)) nedeterminatPlata.set(d.employee_id,[]); nedeterminatPlata.get(d.employee_id).push(p.id) }
 
-    // Get diurna records for the export period only
-    // Paginare manuală
-    let diurnaRecs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; diurnaRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    // Diurnele bifate în tranșă (pentru împărțirea pe șantiere)
+    const diurnaRecs=allRecs.filter(r=>r.diurna===true&&r.date>=df&&r.date<=dt)
+
+    // Alocare comună pe plafonul lunar (diurneAlocare.js) — aceeași ca în savePayment și exportBancaDiurne:
+    // C = zile lucr. − CO pe zile lucr. (LL nu scade), B = bife dinaintea tranșei (și weekend), N = bife în tranșă,
+    // zile diurnă = min(C,B+N) − min(C,B), restul → salariu. Fără plafon separat pe zilele lucrătoare ale tranșei.
+    const alocare=alocaDiurneTransa({recsLuna:allRecs,df,dt,legalSet,diurnaAmt})
 
     // Build per-employee stats
     const empStats=(emps||[]).map(emp=>{
       const er=(diurnaRecs||[]).filter(r=>r.employee_id===emp.id)
+      const a=alocare.get(emp.id)
       // Angajatul cu încetare în luna exportată rămâne în listă chiar dacă în
       // tranșa asta are zero zile — apare cu 0, ca să poată fi întocmit ordinul
       // de deplasare și împărțită diurna pe lucrări până la închiderea lunii.
       const incetatInLuna=!emp.active && emp.termination_date && emp.termination_date>=monthStart
-      if(!er.length && !incetatInLuna) return null
+      // r6: angajatul fără bife în tranșă dar cu diferență față de ce s-a plătit anterior în lună (exclus atunci /
+      // bife modificate după salvare) NU dispare — rămâne cu 0 zile și diferența la vedere
+      const platitEfectivPre=(prevPaymentsInMonth||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?Number(d.amount)||0:0)},0)
+      const areDiferenta=Math.abs(platitEfectivPre-(a?a.sumaDiurnaAnterior:0))>0.005 || nedeterminatPlata.has(emp.id)
+      if(!er.length && !incetatInLuna && !areDiferenta) return null
 
-      // Norme cumulate: DOAR pe zile lucrătoare (exclude weekend/sărbători)
-      const normeRecs=(allRecs||[]).filter(r=>r.employee_id===emp.id&&r.norma&&NORME.includes(r.norma)&&workDaySet.has(r.date))
-      const normeCumulate=normeRecs.length
+      const C=a?a.C:0, B=a?a.B:0, N=a?a.N:0
+      // Zile distincte cu diurnă în tranșă (o zi pe două șantiere = o zi)
+      const diurnaReala=N
+      // „Diurnă Max. Admisă" = zilele din tranșă care intră în plafonul lunar; „Peste limită" = ce merge la salariu
+      const diurnaMax=a?a.zileDiurna:0
+      const pesteLimita=a?a.zileSalariu:0
 
-      // FIX CASCADĂ: numărăm diurne legitime ÎNAINTE de df direct din allRecs,
-      // DOAR pe zile lucrătoare (workDaySet). Astfel, zilele "peste limită" din
-      // perioadele anterioare NU mai consumă din capacitatea lunară a perioadelor următoare.
-      const zilePlatiteAnterior=(allRecs||[]).filter(r=>
-        r.employee_id===emp.id&&r.diurna===true&&r.date<df&&workDaySet.has(r.date)
-      ).length
-
-      // diurnaMax = min(capacitate lunară rămasă, capacitate reală a perioadei df→dt)
-      const monthlyRemaining=Math.max(0,calWorkDays-normeCumulate-zilePlatiteAnterior)
-      const normeInPeriod=(normeRecs||[]).filter(r=>r.date>=df&&r.date<=dt).length
-      const periodCapacity=Math.max(0,workDaysInPeriod-normeInPeriod)
-      const diurnaMax=Math.min(monthlyRemaining,periodCapacity)
-
-      // Diurna reala = zile cu bifa diurna in perioada exportata (TOATE zilele, inclusiv weekend)
-      const diurnaReala=er.length
-
-      // Peste limita (per perioadă - folosit în tabelul principal)
-      const pesteLimita=Math.max(0,diurnaReala-diurnaMax)
-
-      // ── BUGET LUNAR & SURPLUS ────────────────────────────────────────────
-      // Buget lunar = zile lucratoare din luna × diurna/zi (ex: 20 × 50 = 1000 RON)
-      const bugetLunar=totalMonthWorkDays*diurnaAmt
-
-      // Diurne bifate ÎNAINTE de această perioadă (din allRecs, indiferent dacă au fost salvate)
-      // Folosim allRecs, NU diurna_payments — astfel funcționează corect chiar dacă
-      // o perioadă anterioară nu a fost salvată (ex: export fără "Salvează Plată")
-      const totalDiurneBefore=(allRecs||[]).filter(r=>
-        r.employee_id===emp.id&&r.diurna===true&&r.date<df
-      ).length
-      // Plafonam la bugetLunar ca sa nu ajungem la rest negativ
-      const platitAnteriorSuma=Math.min(bugetLunar,totalDiurneBefore*diurnaAmt)
-
-      // Rest buget disponibil pentru această tranșă
+      // ── BUGET LUNAR & SURPLUS (derivate din aceeași alocare) ─────────────
+      const bugetLunar=C*diurnaAmt                              // plafonul personal al lunii (zile lucr. − CO) × lei/zi
+      const platitAnteriorSuma=a?a.sumaDiurnaAnterior:0          // Σ min(C,B) × lei/zi — cât ar fi trebuit plătit ca diurnă înainte de tranșă
       const restBuget=Math.max(0,bugetLunar-platitAnteriorSuma)
-
-      // Suma acestui export pentru angajat
-      const sumaAcestExport=diurnaReala*diurnaAmt
-
-      // Depășire = cât din această tranșă depășește bugetul rămas
-      const pesteBuget=Math.max(0,sumaAcestExport-restBuget)
-
-      // Flag: există depășire de buget în această tranșă
+      const sumaAcestExport=N*diurnaAmt
+      const pesteBuget=a?a.sumaSalariu:0
       const depasesteLunar=pesteBuget>0
-
-      // Alias pentru compatibilitate cu tabelul nota
       const pesteCumulat=pesteBuget
       const restDePlata=pesteBuget
+
+      // Reconciliere: ce s-a salvat efectiv în tranșele anterioare ale lunii vs alocarea recalculată.
+      // Diferență ≠ 0 = istoric lipsă (tranșă nesalvată / angajat exclus atunci) sau bife modificate după salvare.
+      const platitEfectiv=(prevPaymentsInMonth||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?Number(d.amount)||0:0)},0)
+      const diferentaPlatit=platitEfectiv-platitAnteriorSuma
+      // Plată peste 1 ale lunii pentru acest angajat → diferența nu se poate determina fără defalcare pe luni
+      const difNedeterminat=nedeterminatPlata.has(emp.id)?`nedeterminat (plată #${nedeterminatPlata.get(emp.id).join(', #')} peste 1 ale lunii)`:''
+      // Zile cu CO ȘI diurnă bifată simultan — nu se rezolvă automat, se semnalează
+      const deVerificat=a?a.deVerificat:[]
       // ─────────────────────────────────────────────────────────────────────
 
       // Group by site
@@ -4906,7 +4883,9 @@ function ReportsPage() {
       const faraZile=diurnaReala===0&&incetatInLuna
       return {nume:p[0],prenume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,
               diurnaMax:faraZile?0:diurnaMax,
-              normeCumulate,zilePlatiteAnterior,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata,
+              sumaDiurnaPlata:(faraZile?0:diurnaMax)*diurnaAmt, sumaLaSalariu:pesteLimita*diurnaAmt,
+              normeCumulate:C,zilePlatiteAnterior:B,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata,
+              deVerificat,diferentaPlatit,difNedeterminat,
               incetatLa:incetatInLuna?emp.termination_date:null}
     }).filter(Boolean).sort((a,b)=>{
       const n=(a.nume||'').localeCompare((b.nume||''),'ro')
@@ -4920,7 +4899,11 @@ function ReportsPage() {
     const bd={top:{style:'thin',color:{rgb:'000000'}},bottom:{style:'thin',color:{rgb:'000000'}},left:{style:'thin',color:{rgb:'000000'}},right:{style:'thin',color:{rgb:'000000'}}}
     const HFILL='1F497D'; const TFILL='D9E1F2'; const GFILL='1F497D'; const WFILL='FFF2CC'
     const wb=XLSX.utils.book_new()
-    const hdrCols=['Nr.','Nume','Prenume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită']
+    // TKT-2026-0312 (var. B): sumele explicite în lei — „Diurnă de plată" = zile în plafon × lei/zi, „La salariu" = zile peste plafon × lei/zi
+    // (aceleași valori din alocarea comună diurneAlocare.js ca la „Diurnă Max. Admisă" / „Diurnă Peste Limită")
+    const hdrCols=['Nr.','Nume','Prenume','Șantier','Zile Diurnă','Diurnă/zi (RON)','TOTAL RON','Diurnă Max. Admisă','Diurnă Peste Limită','Diurnă de plată (RON)','La salariu (RON)','De verificat (CO + diurnă)','Diferență față de plătit (RON)']
+    const NC=hdrCols.length
+    const fmtVerif=e=>e.deVerificat?.length?`CO+diurnă: ${e.deVerificat.map(d=>d.slice(8,10)+'.'+d.slice(5,7)).join(', ')}`:''
 
     const wsData=[]
     wsData.push(['S.C. GAZPET INSTAL S.R.L.','','','Str. Fluturilor, nr.34, Loc.Ploiesti, Jud.Prahova'])
@@ -4951,13 +4934,17 @@ function ReportsPage() {
           diurnaAmt,
           site.val,
           si===0?emp.diurnaMax:'',
-          si===0?(emp.pesteLimita>0?emp.pesteLimita:(emp.incetatLa?0:'')):''
+          si===0?(emp.pesteLimita>0?emp.pesteLimita:(emp.incetatLa?0:'')):'',
+          si===0?emp.sumaDiurnaPlata:'',
+          si===0?emp.sumaLaSalariu:'',
+          si===0?fmtVerif(emp):'',
+          si===0?(emp.difNedeterminat||(emp.diferentaPlatit!==0?emp.diferentaPlatit:'')):''
         ])
         siteRowIdxs.push({row:rowIdx,isAlt:si%2===1,hasPeste:si===0&&emp.pesteLimita>0})
         rowIdx++
       })
       // Total per angajat
-      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}${emp.incetatLa?` (încetat ${fmtInc(emp.incetatLa)})`:''}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0])
+      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}${emp.incetatLa?` (încetat ${fmtInc(emp.incetatLa)})`:''}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0,emp.sumaDiurnaPlata,emp.sumaLaSalariu,fmtVerif(emp),emp.difNedeterminat||(emp.diferentaPlatit!==0?emp.diferentaPlatit:'')])
       totalRowIdxs.push({row:rowIdx,hasPeste:emp.pesteLimita>0})
       empRanges.push({start:startRow,end:rowIdx-1,rows:emp.sites.length})
       rowIdx++; nr++
@@ -4967,11 +4954,18 @@ function ReportsPage() {
     const totalGenZile=empStats.reduce((s,e)=>s+e.totalZile,0)
     const totalGenVal=empStats.reduce((s,e)=>s+e.totalVal,0)
     const totalPeste=empStats.reduce((s,e)=>s+e.pesteLimita,0)
-    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0])
+    const totalSumaDiurnaPlata=empStats.reduce((s,e)=>s+e.sumaDiurnaPlata,0)
+    const totalSumaLaSalariu=empStats.reduce((s,e)=>s+e.sumaLaSalariu,0)
+    const totalDeVerificat=empStats.filter(e=>e.deVerificat?.length).length
+    // Totalul diferenței = doar angajații cu reconciliere determinată; cei nedeterminați se numără separat
+    const totalDiferenta=empStats.reduce((s,e)=>s+(e.difNedeterminat?0:e.diferentaPlatit),0)
+    const totalNedeterminat=empStats.filter(e=>e.difNedeterminat).length
+    const txtDiferenta=(totalDiferenta!==0?String(totalDiferenta):'')+(totalNedeterminat>0?`${totalDiferenta!==0?' ':''}(+${totalNedeterminat} nedeterminat)`:'')
+    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0,totalSumaDiurnaPlata,totalSumaLaSalariu,totalDeVerificat>0?`${totalDeVerificat} angajați`:'',txtDiferenta])
     const totalGenRow=rowIdx+1
 
     const ws=XLSX.utils.aoa_to_sheet(wsData)
-    ws['!cols']=[{wch:5},{wch:30,wpx:225},{wch:24,wpx:180},{wch:30,wpx:225},{wch:12},{wch:14},{wch:12},{wch:18},{wch:18}]
+    ws['!cols']=[{wch:5},{wch:30,wpx:225},{wch:24,wpx:180},{wch:30,wpx:225},{wch:12},{wch:14},{wch:12},{wch:18},{wch:18},{wch:20},{wch:18},{wch:26},{wch:20}]
 
     const sc=(r,c,s)=>{ const a=XLSX.utils.encode_cell({r,c}); if(!ws[a]) ws[a]={v:'',t:'s'}; ws[a].s=s }
 
@@ -4985,7 +4979,7 @@ function ReportsPage() {
 
     // Site rows
     siteRowIdxs.forEach(({row,isAlt,hasPeste})=>{
-      for(let c=0;c<9;c++){
+      for(let c=0;c<NC;c++){
         const isWarnCol=c>=7
         let fill=isAlt?'F5F5F5':'FFFFFF'
         if(isWarnCol&&hasPeste) fill='FFF2CC'
@@ -4995,14 +4989,14 @@ function ReportsPage() {
 
     // Total per angajat rows
     totalRowIdxs.forEach(({row,hasPeste})=>{
-      for(let c=0;c<9;c++){
+      for(let c=0;c<NC;c++){
         const isWarnCol=c>=7
         sc(row,c,{fill:{fgColor:{rgb:isWarnCol&&hasPeste?'FFE699':TFILL}},font:{bold:true,sz:10,color:{rgb:isWarnCol&&hasPeste?'7F6000':'1F497D'}},border:bd,alignment:{horizontal:c===0||c>=4?'center':'left',vertical:'center'}})
       }
     })
 
     // Total general row
-    for(let c=0;c<9;c++){
+    for(let c=0;c<NC;c++){
       sc(totalGenRow,c,{fill:{fgColor:{rgb:c>=7&&totalPeste>0?'FF0000':GFILL}},font:{bold:true,sz:10,color:{rgb:'FFFFFF'}},border:bd,alignment:{horizontal:'center',vertical:'center'}})
     }
 
@@ -5013,7 +5007,7 @@ function ReportsPage() {
     ws['!merges'].push({s:{r:1,c:0},e:{r:1,c:1}})
     empRanges.forEach(({start,end,rows})=>{
       if(rows>1){
-        [0,1,2,7,8].forEach(c=>{
+        [0,1,2,7,8,9,10,11,12].forEach(c=>{
           ws['!merges'].push({s:{r:start,c},e:{r:end,c}})
         })
       }
@@ -5077,7 +5071,7 @@ function ReportsPage() {
       // Extinde !ref ca SheetJS sa includa randurile noi in export
       const rng=XLSX.utils.decode_range(ws['!ref']||'A1')
       rng.e.r=Math.max(rng.e.r,nr2)
-      rng.e.c=Math.max(rng.e.c,8)
+      rng.e.c=Math.max(rng.e.c,NC-1)
       ws['!ref']=XLSX.utils.encode_range(rng)
     }
     // ────────────────────────────────────────────────────────────────────────
@@ -5085,7 +5079,9 @@ function ReportsPage() {
     XLSX.utils.book_append_sheet(wb,ws,'Diurne')
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
-    playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}`)
+    const msgVerif=totalDeVerificat>0?` · ⚠ ${totalDeVerificat} de verificat (CO+diurnă)`:''
+    const msgDif=(totalDiferenta!==0?` · ⚠ diferență față de plătit ${totalDiferenta} RON`:'')+(totalNedeterminat>0?` · ${totalNedeterminat} nedeterminat (plată peste 1 ale lunii)`:'')
+    playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}${msgVerif}${msgDif}`)
     }catch(e){showToast('Eroare la export diurne','error')}finally{setExpD(false)}
   }
 
@@ -5095,16 +5091,15 @@ function ReportsPage() {
     if(!df||!dt){showToast('Selectează perioada pentru diurne','warn');return}
     setExpBT(true)
     try{
-      const d0=new Date(df); const monthStart=`${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}-01`
-      const d1=new Date(monthStart); d1.setMonth(d1.getMonth()+1); d1.setDate(0)
-      const monthEnd=d1.toISOString().split('T')[0]
+      const monthStart=inceputLuna(df), monthEnd=sfarsitLuna(dt)   // lunile atinse de tranșă
 
-      let eq=supabase.from('employees').select('*').eq('active',true)
+      // Eligibili: activii + cei cu încetare de la începutul lunii încolo (ca în savePayment)
+      let eq=supabase.from('employees').select('*').or(`active.eq.true,termination_date.gte.${monthStart}`)
       if(!isAdmin){const siteIds=profile?.site_ids||[];if(siteIds.length>0)eq=eq.in('site_id',siteIds)}
       const {data:emps}=await eq
-      // Paginare manuală
+      // TOATE înregistrările lunii/lunilor — pentru plafon (CO) și bifele dinaintea tranșei
       let recs = []
-      { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('diurna',true).gte('date',df).lte('date',dt).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+      { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
       const {data:st}=await supabase.from('settings').select('*')
       const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
       const diurnaAmt=Number(getSetting('diurna_amount',50))
@@ -5112,14 +5107,8 @@ function ReportsPage() {
       const {data:calData2}=await supabase.from('calendar_days').select('date,type').gte('date',monthStart).lte('date',monthEnd)
       const legalSet=new Set((calData2||[]).filter(d=>d.type==='legal').map(d=>d.date))
 
-      // Buget lunar = Luni-Vineri minus sărbători legale, toată luna
-      let bugetZile=0
-      const bWd=new Date(monthStart),bEnd=new Date(monthEnd)
-      while(bWd<=bEnd){const s=bWd.toISOString().split('T')[0];if(bWd.getDay()!==0&&bWd.getDay()!==6&&!legalSet.has(s))bugetZile++;bWd.setDate(bWd.getDate()+1)}
-      const bugetLunar=bugetZile*diurnaAmt
-
-      // Transe anterioare platite in aceeasi luna
-      const {data:prevPay}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
+      // Alocare comună pe plafonul lunar (diurneAlocare.js) — identică cu savePayment și exportDiurne
+      const alocare=alocaDiurneTransa({recsLuna:recs,df,dt,legalSet,diurnaAmt})
 
       // BIC lookup
       const BIC_MAP={BTRL:'BTRLRO22XXX',INGB:'INGBROBUXX',RNCB:'RNCBROBUXX',BRDE:'BRDEROBUXX',BACX:'BACXROBUXX',RZBR:'RZBRROBUXX',CECE:'CECEROBUXX',BRMA:'BRMAROBUXX',UGBI:'UGBIROBUXX',OTPV:'OTPVROBUXX',TCCL:'TCCLGB3L'}
@@ -5133,14 +5122,10 @@ function ReportsPage() {
       const faraIBAN=[]
 
       ;(emps||[]).forEach(emp=>{
-        const diurneReale=(recs||[]).filter(r=>r.employee_id===emp.id).length
-        if(!diurneReale) return
-        const sumaExport=diurneReale*diurnaAmt
-        // Suma platita anterior din aceeasi luna pentru acest angajat
-        const platitAnt=(prevPay||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?d.amount:0)},0)
-        const restBuget=Math.max(0,bugetLunar-platitAnt)
-        // Suma confirmata = doar ce incape in buget
-        const sumaConfirmata=Math.min(sumaExport,restBuget)
+        const a=alocare.get(emp.id)
+        if(!a||a.N===0) return
+        // Suma confirmata = doar zilele din plafonul lunar (zile_diurnă × lei/zi)
+        const sumaConfirmata=a.sumaDiurna
         if(sumaConfirmata<=0) return  // tot surplusul — nu apare in BT diurne
 
         if(!emp.iban) faraIBAN.push(emp.name)
@@ -5171,7 +5156,7 @@ function ReportsPage() {
     const {data:emps}=await eq
     // Paginare manuală
     let recs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
     const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*suplAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
     if(!empStats.length){showToast('Nu există suplimente în perioadă','warn');setExpS(false);return}
     const from=new Date(sf).toLocaleDateString('ro-RO'),to=new Date(st2).toLocaleDateString('ro-RO')
@@ -6332,7 +6317,7 @@ function ReportsPage() {
           <span style={{fontSize:11,color:G.muted}}>Până la:</span>
           <input type="date" value={dt} onChange={e=>setDt(e.target.value)} style={{...S.input,width:'auto',padding:'5px 9px',fontSize:12}}/>
           <button onClick={()=>requireUnlockThen('diurne')} disabled={expD} style={{...S.btnP,background:'#5A3A00',fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Export Diurne (necesită parolă)">{expD?<><div className="sp"/>...</>:'⬇ Excel'}</button>
-          <button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>
+          {canSaveDiurnaPayment&&<button onClick={savePayment} disabled={savingPayment} style={{...S.btnP,background:'#1A4A1A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{savingPayment?<><div className="sp"/>...</>:'💾 Salvează Plată'}</button>}
           <button onClick={exportBancaDiurne} disabled={expBT} style={{...S.btnP,background:'#0A3A6A',fontSize:12,display:'flex',alignItems:'center',gap:5}}>{expBT?<><div className="sp"/>...</>:'🏦 Export Bancă'}</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnP,background:G.orange,fontSize:12,display:'flex',alignItems:'center',gap:5}} title="Generează ordine de deplasare (xlsx + PDF cu semnături) — deschide Istoric Plăți Diurne, alegi luna, apoi generezi">📄 Ordine Deplasare</button>
           <button onClick={()=>setShowIstoric(true)} style={{...S.btnS,fontSize:12}}>📋 Istoric</button>
@@ -6444,7 +6429,10 @@ function AdminPage() {
   const isSuperAdmin = profile?.is_owner === true
   const isAdmin = isSuperAdmin
   const canEditIban = isSuperAdmin || profile?.can_modify_employees === true
-  const [tab,setTab]=useState('sites')
+  // Tab-ul stă în URL (?tab=) ca să supraviețuiască refresh-ului
+  const [searchParams,setSearchParams]=useSearchParams()
+  const tab=searchParams.get('tab')||'sites'
+  const setTab=v=>setSearchParams(prev=>{const n=new URLSearchParams(prev);n.set('tab',v);return n},{replace:true})
   const [sites,setSites]=useState([]); const [managers,setManagers]=useState([]); const [employees,setEmployees]=useState([])
   const [depozite,setDepozite]=useState([]); const [savingDep,setSavingDep]=useState(false)
   const [depForm,setDepForm]=useState({name:'',cod_3litere:'',site_id:'',adresa:''})
@@ -6467,6 +6455,10 @@ function AdminPage() {
   const [editEmp,setEditEmp]=useState(null)
   const [deleteEmpItem,setDeleteEmpItem]=useState(null)
   const [impPrev,setImpPrev]=useState(null); const [importing,setImporting]=useState(false)
+  // 29.09.2026 R1/R2: jurnalul închiderilor de conturi (RLS: doar owner) + legarea automată la cerere
+  const [inchideri,setInchideri]=useState([])
+  const [stareConturi,setStareConturi]=useState([])   // fn_cont_stare_angajati: owner = toate conturile, HR = cele legate
+  const [legare,setLegare]=useState(false)
 
   const [calYear,setCalYear]=useState(new Date().getFullYear())
   // Date Identificare Firmă (din logistica_setari) — folosite pentru aviz, contracte HR, contracte comercial
@@ -6478,10 +6470,13 @@ function AdminPage() {
     verificat_decont: 'Mirela Popescu',
     sef_compartiment: 'Udrea Natalia',
   })
+  // Tichete — responsabil default per departament (tichete_default_responsabili, PK departament)
+  const [tichDefaults, setTichDefaults] = useState({})   // { departament: profile_id }
+  const [savingTichDefaults, setSavingTichDefaults] = useState(false)
   useEffect(()=>{ loadAll() },[tab])
   const loadAll=async()=>{
     setLoad(true)
-    const [s,p,e,c,st,ps,fs,os,dep]=await Promise.all([
+    const [s,p,e,c,st,ps,fs,os,dep,jr,sc,tdr]=await Promise.all([
       supabase.from('sites').select('*').order('name'),
       supabase.from('profiles').select('*').order('name'),
       supabase.from('employees').select('*,sites(name)').order('name'),
@@ -6491,8 +6486,18 @@ function AdminPage() {
       supabase.from('logistica_setari').select('key,value').like('key', 'firma%'),
       supabase.from('setari_ordin_deplasare').select('*').eq('id', 1).maybeSingle(),
       supabase.from('logistica_depozite').select('*,sites(name)').order('name'),
+      // R2: jurnalul închiderilor (RLS doar owner; pentru ceilalți nici nu cerem)
+      isSuperAdmin
+        ? supabase.from('conturi_inchideri_jurnal').select('id,profile_id,email,employee_id,motiv,sursa,facut_de,facut_la,restaurat_de,restaurat_la,restaurare_nota').order('facut_la',{ascending:false})
+        : Promise.resolve({ data: [] }),
+      // R2: starea conturilor (RPC cu poartă: owner / HR / date personale; ceilalți primesc 0 rânduri)
+      supabase.rpc('fn_cont_stare_angajati'),
+      supabase.from('tichete_default_responsabili').select('departament,profile_id'),
     ])
     setSites(s.data||[])
+    setInchideri(jr?.error ? [] : (jr?.data||[]))
+    setStareConturi(sc?.error ? [] : (sc?.data||[]))
+    const tdm={}; (tdr.data||[]).forEach(x=>{tdm[x.departament]=x.profile_id}); setTichDefaults(tdm)
     setDepozite(dep.data||[])
     // Attach site_ids to each manager
     const mgrs=(p.data||[]).map(m=>({...m,site_ids:(ps.data||[]).filter(x=>x.profile_id===m.id).map(x=>x.site_id)}))
@@ -6504,6 +6509,62 @@ function AdminPage() {
     setLoad(false)
   }
   
+  // ════ 29.09.2026 R1/R2: ciclul de viață al conturilor (doar owner; poarta e și în BD) ════
+  const inchidereDeschisa = (pid) => inchideri.find(j => j.profile_id === pid && !j.restaurat_la) || null
+  const stareCont = (pid) => stareConturi.find(r => r.profile_id === pid) || null
+  const numeProfil = (id) => id ? (managers.find(m => m.id === id)?.name || 'utilizator necunoscut') : 'sistem (cron)'
+  const contPentruAngajat = (empId) => managers.find(m => m.employee_id === empId) || null
+  const openEditMgr=async(m)=>{
+    setEditMgr({...m,original_email:m.email,original_employee_id:m.employee_id??null,original_tip_cont:m.tip_cont??null})
+    const{data:ma}=await supabase.from('user_module_access').select('module, access_level').eq('profile_id',m.id)
+    const mods={};const levels={};(ma||[]).forEach(x=>{mods[x.module]=true;levels[x.module]=x.access_level||'editor'})
+    setEditMgrModules(mods);setEditMgrModuleLevels(levels)
+  }
+  const inchideContAcum=async()=>{
+    if(!editMgr) return
+    // Pe un cont deja închis = „Reaplică închiderea” (alertele inchis_dar_deblocat / inchis_cu_acces_rest):
+    // scoate din nou accesul redat între timp și re-blochează logarea; primul snapshot din jurnal NU se schimbă.
+    const reaplic=!!inchidereDeschisa(editMgr.id)
+    const motiv=window.prompt(reaplic?`Reaplici închiderea contului ${editMgr.email}. Motivul (minim 5 caractere):`:`Motivul închiderii contului ${editMgr.email} (minim 5 caractere):`,reaplic?'Reaplicare închidere (acces redat / logare deblocată)':'')
+    if(motiv===null) return
+    if(motiv.trim().length<5){showToast('Motivul trebuie să aibă minim 5 caractere','warn');return}
+    if(!window.confirm(`${reaplic?'Reaplici':'Închizi ACUM'} ${reaplic?'închiderea contului':'contul'} ${editMgr.email}?\n\n• drepturile pe module și șantiere se scot\n• flagurile de acces devin false\n• logarea se blochează și sesiunile se revocă\n\nRevenirea se face doar din „Restaurează din jurnal”.`)) return
+    const {data,error}=await supabase.rpc('fn_cont_inchide_owner',{p_profile_id:editMgr.id,p_motiv:motiv.trim()})
+    if(error){showToast('Eroare la închidere: '+error.message,'error');return}
+    const txt={inchis:'🔒 Cont închis (ce avea contul e salvat în jurnal)',deja_inchis:'Contul era deja închis — accesul rămas a fost scos din nou',sarit_owner:'Cont OWNER: nu se închide',inexistent:'Profilul nu există',auth_ocupat:'Contul de logare era în curs de modificare / ștergere (GoTrue) — reîncearcă'}[data]||String(data)
+    showToast(txt,data==='inchis'||data==='deja_inchis'?'success':'warn')
+    setEditMgr(null);loadAll()
+  }
+  const restaureazaCont=async(j)=>{
+    const nota=window.prompt(`Restaurezi accesul contului ${j.email} din jurnalul #${j.id}?\nScrie motivul (minim 5 caractere):`,'')
+    if(nota===null) return
+    if(nota.trim().length<5){showToast('Nota trebuie să aibă minim 5 caractere','warn');return}
+    if(!window.confirm(`ATENȚIE: restaurarea redă TOT accesul — doar dacă omul revine în firmă.\n\nModulele, șantierele, flagurile și logarea revin la starea de dinainte de ${formatDataRo(j.facut_la,{cuOra:true})}. Sesiunile nu se refac (omul se loghează din nou).\n\nPentru un acces redat din greșeală sau o logare deblocată folosește „🔒 Reaplică închiderea”, NU restaurarea.\n\nConfirmi restaurarea?`)) return
+    const {data,error}=await supabase.rpc('fn_cont_restaureaza',{p_jurnal_id:j.id,p_nota:nota.trim()})
+    if(error){showToast('Eroare la restaurare: '+error.message,'error');return}
+    const sarite=[...(data?.module_sarite||[]),...(data?.santiere_sarite||[]).map(x=>'șantier #'+x)]
+    showToast(`↩ Cont restaurat: ${(data?.module_refacute||[]).length} module, ${(data?.santiere||[]).length} șantiere${sarite.length?` · sărite (nu mai există): ${sarite.join(', ')}`:''}`,sarite.length?'warn':'success')
+    setEditMgr(null);loadAll()
+  }
+  const legaAutomat=async()=>{
+    setLegare(true)
+    const {data,error}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:true})
+    if(error){showToast('Eroare: '+error.message,'error');setLegare(false);return}
+    // R1: potrivirea e pe emailul de LOGARE; la înscriere legarea nu se face singură, owner-ul o confirmă aici.
+    const MOTIVE={fara_candidat:'niciun candidat',ambiguu:'ambiguu (mai mulți candidați sau mai multe conturi pe aceeași fișă)',candidat_ocupat:'fișa are deja cont',email_diferit:'emailul din profil diferă de cel de logare — verifică manual',email_neconfirmat:'emailul de logare nu e confirmat — leagă manual după confirmare',neconfirmat:'nu era în previzualizarea confirmată',schimbat:'potrivirea s-a schimbat de la previzualizare',tip_cont_exceptat:'contul a fost marcat extern/test/sistem între timp',legatura_existenta:'contul a fost legat între timp',auth_ocupat:'contul de logare era în curs de modificare / ștergere (GoTrue) — reia „Leagă automat”',amanat_lock:'fișa / contul era ținut de altă operație în timpul lotului (nu s-a așteptat, fără blocaj) — reia „Leagă automat” pentru acest cont',serializare_indisponibila:'serializarea scriitorilor pe fișe (migrarea d) nu e instalată sau activă — livrează / reactivează d, apoi reia',eroare:'eroare'}
+    const deLegat=(data||[]).filter(r=>r.rezultat==='de_legat'), rest=(data||[]).filter(r=>r.rezultat!=='de_legat')
+    const restTxt=rest.length?`\n\nRămân nelegate (${rest.length}):\n${rest.map(r=>`• ${r.email} — ${MOTIVE[r.rezultat]||r.rezultat}${r.employee_name?' ('+r.employee_name+')':''}`).join('\n')}`:''
+    if(!deLegat.length){window.alert(`Nimic de legat automat.${restTxt}`);setLegare(false);return}
+    if(!window.confirm(`Previzualizare — se leagă ${deLegat.length} cont(uri):\n${deLegat.map(r=>`• ${r.email} → ${r.employee_name} (#${r.employee_id}, prin ${r.metoda||'?'}) · cont creat ${formatDataRo(r.cont_creat_la,{cuOra:true})||'?'}${r.cont_incredere?' prin cont-nou':' prin înscriere / Dashboard (neverificat)'}`).join('\n')}${restTxt}\n\n⚠️ Leagă doar conturile pe care le recunoști (create de tine). Un cont necunoscut ar primi acces la semnătura electronică a omului.\n\nContinui?`)){setLegare(false);return}
+    // R1 (30.09): se leagă DOAR perechile confirmate aici; un cont apărut între timp iese „neconfirmat” (fără TOCTOU).
+    const {data:rez,error:e2}=await supabase.rpc('fn_cont_leaga_automat',{p_simulare:false,p_confirmate:deLegat.map(r=>({profile_id:r.profile_id,employee_id:r.employee_id}))})
+    setLegare(false)
+    if(e2){showToast('Eroare: '+e2.message,'error');return}
+    const nelegate=(rez||[]).filter(r=>r.rezultat==='neconfirmat'||r.rezultat==='schimbat')
+    showToast(`🔗 ${(rez||[]).filter(r=>r.rezultat==='legat').length} cont(uri) legate${nelegate.length?` · ${nelegate.length} sărite (${nelegate.map(r=>`${r.email}: ${MOTIVE[r.rezultat]}`).join('; ')})`:''}`,nelegate.length?'warn':'success')
+    loadAll()
+  }
+
   // Save date firmă (în logistica_setari)
   const saveFirmaSetting = async (k, v) => {
     const { error } = await supabase.from('logistica_setari').upsert({ key: k, value: v, updated_at: new Date().toISOString() }, { onConflict: 'key' })
@@ -6524,6 +6585,30 @@ function AdminPage() {
     showToast('✓ Semnatari salvați — folosiți la generarea ordinelor de deplasare')
   }
 
+  // Tichete — departamentele (aceeași listă ca în Tichete.jsx DEPARTAMENTE / flag-urile receive_tichete_*)
+  const TICHETE_DEP = [
+    { cod:'logistica',     label:'🚜 Logistica',     color:G.orange },
+    { cod:'hr',            label:'👥 HR',            color:'#F778BA' },
+    { cod:'administrativ', label:'🏢 Administrativ', color:G.blue   },
+    { cod:'it',            label:'💻 IT',            color:G.purple },
+    { cod:'comercial',     label:'🛒 Comercial',     color:G.green  },
+    { cod:'financiar',     label:'💰 Financiar',     color:G.yellow },
+  ]
+  // Save responsabili default tichete (upsert pe PK departament; RLS = doar owner)
+  const saveTichDefaults = async () => {
+    const rows = TICHETE_DEP.filter(d => tichDefaults[d.cod]).map(d => ({
+      departament: d.cod, profile_id: tichDefaults[d.cod], set_by: profile?.id || null, updated_at: new Date().toISOString(),
+    }))
+    if (!rows.length) { showToast('Alege cel puțin un responsabil', 'warn'); return }
+    setSavingTichDefaults(true)
+    // Doar departamentele cu responsabil ales se scriu; „— fără default —” lasă rândul din BD neatins (nu se șterge nimic de aici)
+    const { error } = await supabase.from('tichete_default_responsabili').upsert(rows, { onConflict: 'departament' })
+    setSavingTichDefaults(false)
+    if (error) { showToast('Eroare: ' + error.message, 'error'); return }
+    showToast('✓ Responsabili default salvați — se preselectează la tichetele noi')
+    loadAll()
+  }
+
   const addSite=async()=>{ if(!siteName.trim()){showToast('Introduceți numele','warn');return}; setAddingSite(true); const {error}=await supabase.from('sites').insert({name:siteName.trim(),active:true}); if(!error){showToast(`✓ ${siteName}`);setSiteName('');loadAll()} else showToast('Eroare','error'); setAddingSite(false) }
   const toggleSite=async(s)=>{ await supabase.from('sites').update({active:!s.active}).eq('id',s.id); setSites(prev=>prev.map(x=>x.id===s.id?{...x,active:!x.active}:x)) }
   const saveSiteName=async()=>{ if(!editSiteItem||!editSiteName.trim()) return; const {error}=await supabase.from('sites').update({name:editSiteName.trim()}).eq('id',editSiteItem.id); if(!error){showToast(`✓ Redenumit: ${editSiteName}`);setEditSiteItem(null);loadAll()} else showToast('Eroare','error') }
@@ -6536,6 +6621,10 @@ function AdminPage() {
   }
   const saveEditMgr=async()=>{
     if(!editMgr) return
+    // R2: pe un cont închis, salvarea NU ridică blocarea logării; bifarea de module cere confirmare explicită
+    const inchEdit=inchidereDeschisa(editMgr.id)
+    if(inchEdit && profile?.is_owner===true && Object.values(editMgrModules).some(Boolean)
+       && !window.confirm(`Contul ${editMgr.email} e ÎNCHIS (jurnal #${inchEdit.id}). Bifezi module pe un cont închis: logarea rămâne blocată, iar alerta „acces rămas” va apărea. Pentru revenire folosește „Restaurează din jurnal”.\n\nContinui salvarea?`)) return
     const updates = {
       name: editMgr.name,
       role: editMgr.role,
@@ -6583,6 +6672,13 @@ function AdminPage() {
       }
     })
     // WhatsApp: phone + enabled poate fi editat de orice owner; tier DOAR de owner (trigger BD verifică)
+    // R1: legătura cu fișa de angajat și tipul contului — doar owner (triggerul BD refuză pe oricine altcineva)
+    if (profile?.is_owner === true && (editMgr.employee_id ?? null) !== (editMgr.original_employee_id ?? null)) {
+      updates.employee_id = editMgr.employee_id || null
+    }
+    if (profile?.is_owner === true && (editMgr.tip_cont ?? null) !== (editMgr.original_tip_cont ?? null)) {
+      updates.tip_cont = editMgr.tip_cont || null
+    }
     if (editMgr.phone_whatsapp !== undefined) {
       updates.phone_whatsapp = editMgr.phone_whatsapp?.trim() || null
     }
@@ -6639,7 +6735,7 @@ function AdminPage() {
         showToast(`Profilul lui ${editMgr.name} s-a salvat, DAR: ${problemeSalvare.join(' · ')}`, 'error')
         loadAll()
       } else { showToast(`✓ Manager actualizat: ${editMgr.name}`);setEditMgr(null);loadAll() }
-    } else showToast('Eroare: '+error.message,'error')
+    } else showToast(error.code==='23505'&&/employee_id/.test(error.message)?'Fișa aleasă are deja cont — alege altă fișă':'Eroare: '+error.message,'error')
   }
   const saveSetting=async(k,v)=>{ await supabase.from('settings').upsert({key:k,value:v,updated_at:new Date().toISOString()},{onConflict:'key'}); setSettings(prev=>({...prev,[k]:v})); showToast('✓ Salvat') }
 
@@ -6647,17 +6743,68 @@ function AdminPage() {
     if(!nEmail||!nPwd||!nName){showToast('Completați toate câmpurile','warn');return}
     setCreating(true)
     const {data:au,error:ae}=await supabase.auth.signUp({email:nEmail,password:nPwd})
-    if(ae){showToast(ae.message,'error');setCreating(false);return}
+    if(ae){
+      // D1-B: cu „Allow new users to sign up” = OFF, conturile se creează din Supabase Dashboard → Auth → Add user
+      showToast(/signup|sign up|not allowed/i.test(ae.message)?'Înscrierea publică e oprită: creează contul din Supabase Dashboard → Auth → Add user, apoi „🔗 Leagă automat”':ae.message,'error')
+      setCreating(false);return
+    }
     if(au.user){
-      await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,department:nDept||null})
+      const {error:ue}=await supabase.from('profiles').upsert({id:au.user.id,email:nEmail,name:nName,role:nRole,department:nDept||null})
+      if(ue){showToast('Contul s-a creat, dar profilul nu s-a salvat: '+ue.message,'error');setCreating(false);loadAll();return}
       if(ROLES_WITH_SITES.includes(nRole) && nSite) await supabase.from('profile_sites').insert({profile_id:au.user.id,site_id:Number(nSite)})
-      showToast(`✓ ${nName}`); setNEmail('');setNName('');setNPwd('');loadAll()
+      // R1: la înscriere (signUp) contul NU se leagă singur (securitate); legătura o confirmă owner-ul
+      // cu „🔗 Leagă automat” (candidatul unic) sau o alege din Edit → Fișă angajat.
+      const {data:pr}=await supabase.from('profiles').select('employee_id').eq('id',au.user.id).maybeSingle()
+      const emp=pr?.employee_id?employees.find(e=>e.id===pr.employee_id):null
+      showToast(pr?.employee_id?`✓ ${nName} · Legat de ${emp?.name||'fișa #'+pr.employee_id}`:`✓ ${nName} · Confirmă legarea de fișă: „🔗 Leagă automat conturile nelegate” (sau Edit → Fișă angajat)`,pr?.employee_id?'success':'warn')
+      setNEmail('');setNName('');setNPwd('');loadAll()
     }
     setCreating(false)
   }
 
   const addEmployee=async()=>{ if(!eName.trim()){showToast('Introduceți numele','warn');return}; setAddingE(true); const {error}=await supabase.from('employees').insert({name:eName.trim(),department:eDept,position:ePos||null,site_id:eSite?Number(eSite):null,active:true,hire_date:eHireDate||null}); if(!error){showToast(`✓ ${eName}`);setEName('');setEPos('');setEHireDate('');loadAll()} else showToast('Eroare','error'); setAddingE(false) }
-  const toggleEmp=async(emp)=>{ const updates={active:!emp.active}; if(emp.active&&!emp.termination_date) updates.termination_date=new Date().toISOString().split('T')[0]; await supabase.from('employees').update(updates).eq('id',emp.id); setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,...updates}:e)); showToast(emp.active?`${emp.name} dezactivat`:`${emp.name} reactivat`,emp.active?'warn':'success') }
+  const toggleEmp=async(emp)=>{
+    // 29.09.2026 R2: dezactivarea cu contract încheiat închide automat contul legat (trigger BD);
+    // reactivarea NU redă accesul (doar owner-ul restaurează din jurnal) și șterge data încetării (D4),
+    // altfel cron-ul hr_auto_deactivate_terminated ar dezactiva fișa din nou a doua zi.
+    // Data implicită = ziua BD (UTC, ca CURRENT_DATE din trigger și cron): cu ziua RO, între 00:00 și ~03:00
+    // data ar fi „mâine” pentru BD și contul NU s-ar închide (review 29.09).
+    const azi=ziBaza(), cont=contPentruAngajat(emp.id)
+    let updates
+    if(emp.active){
+      updates={active:false}
+      if(!emp.termination_date) updates.termination_date=azi
+      const dataInc=updates.termination_date||emp.termination_date
+      if(cont && !window.confirm(dataInc<=azi
+        ?`Contul ${cont.email} va fi închis automat (drepturi scoase, logare blocată). Continui?`
+        :`Data încetării e în viitor (${formatDataRo(dataInc)}): contul ${cont.email} NU se închide acum și apare în alerte. Continui?`)) return
+    } else {
+      if(!window.confirm(`Reactivezi ${emp.name}?${emp.termination_date?` Data încetării (${formatDataRo(emp.termination_date)}) se șterge (rămâne notată în observațiile HR).`:''}\n\nAcordul de colaborare externă (dacă exista) revine la „Necunoscut”: la o nouă plecare se reconfirmă.${cont?`\n\nAccesul contului ${cont.email} NU se redă automat — restaurarea o face owner-ul din Manageri.`:''}`)) return
+      updates={active:true,termination_date:null}
+      // D4: data încetării nu se pierde fără urmă (hr_employees_audit ține doar INSERT/DELETE)
+      if(emp.termination_date) updates.observatii_hr=[emp.observatii_hr,`Reactivat la ${formatDataRo(new Date().toISOString())}; încetarea anterioară: ${formatDataRo(emp.termination_date)}.`].filter(Boolean).join('\n')
+    }
+    const {error}=await supabase.from('employees').update(updates).eq('id',emp.id)
+    if(error){showToast('Eroare: '+error.message,'error');return}
+    setEmployees(prev=>prev.map(e=>e.id===emp.id?{...e,...updates}:e))
+    showToast(emp.active?`${emp.name} dezactivat${cont?' · contul se închide automat dacă a încetat contractul':''}`:`${emp.name} reactivat${cont?' · Accesul NU se redă automat':''}`,emp.active?'warn':'success')
+    if(cont) loadAll()
+  }
+  const openEditEmp=async(emp)=>{
+    const editObj={...emp}
+    // Pre-fetch date personale GDPR din hr_employees_private (RLS filtreaza automat)
+    const {data:pData}=await supabase.from('hr_employees_private').select('*').eq('employee_id',emp.id).maybeSingle()
+    if(pData){
+      editObj.cnp=pData.cnp||''
+      editObj.data_nastere=pData.data_nastere||''
+      editObj.adresa_strada=pData.adresa_strada||''
+      editObj.adresa_oras=pData.adresa_oras||''
+      editObj.adresa_judet=pData.adresa_judet||''
+      editObj.adresa_cod_postal=pData.adresa_cod_postal||''
+      editObj.adresa_tara=pData.adresa_tara||'România'
+    }
+    setEditEmp(editObj)
+  }
   const saveEditEmp=async()=>{
     if(!editEmp) return
     // Validare CNP (daca a fost completat)
@@ -6814,6 +6961,18 @@ function AdminPage() {
     if (!isSuperAdmin && !['employees','semnaturi'].includes(tab)) setTab('employees')
   }, [isSuperAdmin, tab])
 
+  // 29.09.2026: link-uri directe din alerte — /admin?tab=managers&cont=<profile_id> deschide contul,
+  // /admin?tab=employees&angajat=<id> deschide „Editează Angajat”. Se citesc după loadAll, apoi se șterg din URL.
+  useEffect(() => {
+    // tab-ul vine deja din URL (?tab=, de pe main); aici se consumă doar cont/angajat, iar tab-ul rămâne în URL
+    const cont = searchParams.get('cont'), angajat = searchParams.get('angajat')
+    if (!cont && !angajat) return
+    if (load) return
+    if (cont && isSuperAdmin) { const m = managers.find(x => x.id === cont); if (m) openEditMgr(m); else showToast('Contul din link nu (mai) există', 'warn') }
+    if (angajat) { const e = employees.find(x => String(x.id) === angajat); if (e) openEditEmp(e); else showToast('Fișa din link nu (mai) există', 'warn') }
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('cont'); p.delete('angajat'); return p }, { replace: true })
+  }, [searchParams, load, tab]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <Layout>
       <Toast toast={toast}/>
@@ -6829,14 +6988,31 @@ function AdminPage() {
           </span>
         )}
       </div>
-      <div style={{display:'flex',gap:6,marginBottom:20,borderBottom:`1px solid ${G.border}`,paddingBottom:10}}>
+      <style>{`@media (max-width:700px){
+        .adm-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}
+        .adm-tabs button{flex:0 0 auto;white-space:nowrap}
+        .adm-grid{grid-template-columns:1fr !important}
+        .adm-tw{overflow-x:auto !important}
+        .adm-ov{align-items:flex-start !important;padding:10px;overflow-y:auto}
+        .adm-mod{width:100% !important;max-width:100%;padding:16px !important;max-height:calc(100dvh - 20px) !important;overflow-y:auto !important;box-sizing:border-box}
+        .adm-cards thead{display:none}
+        .adm-cards,.adm-cards tbody{display:block;width:100%}
+        .adm-cards tr{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:10px 12px;border-bottom:1px solid ${G.border}}
+        .adm-cards td{display:block;border:none !important;padding:0 !important}
+        .adm-cards td:first-child{flex:1 1 auto;order:0;font-size:14px}
+        .adm-cards td:last-child{order:1}
+        .adm-cards td:last-child button{padding:8px 14px !important;font-size:13px !important}
+        .adm-cards td:not(:first-child):not(:last-child){order:2;flex:1 1 100%;word-break:break-all}
+        .adm-stick th:last-child,.adm-stick td:last-child{position:sticky;right:0;background:${G.surface};box-shadow:-6px 0 8px -6px rgba(0,0,0,.6);z-index:1}
+      }`}</style>
+      <div className="adm-tabs" style={{display:'flex',gap:6,marginBottom:20,borderBottom:`1px solid ${G.border}`,paddingBottom:10}}>
         {tabs.map(([v,l])=><button key={v} onClick={()=>setTab(v)} style={{...S.btnS,background:tab===v?'#21262D':G.bg,color:tab===v?G.text:G.muted,fontSize:12}}>{l}</button>)}
       </div>
 
       {/* Edit site name modal */}
       {editSiteItem&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:380}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:380}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Redenumește Șantier</div>
             <div style={{marginBottom:18}}><Lbl>Nume nou</Lbl><input style={S.input} value={editSiteName} onChange={e=>setEditSiteName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&saveSiteName()} autoFocus/></div>
             <div style={{display:'flex',gap:10}}>
@@ -6847,8 +7023,8 @@ function AdminPage() {
         </div>
       )}
       {deletingSite&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:380,textAlign:'center'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:380,textAlign:'center'}}>
             <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
             <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Ștergi șantierul?</div>
             <div style={{fontSize:13,color:G.muted,marginBottom:22}}>„{deletingSite.name}" va fi șters permanent. Această acțiune nu poate fi anulată.</div>
@@ -6862,8 +7038,8 @@ function AdminPage() {
 
       {/* Edit employee modal */}
       {editEmp&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:520,maxHeight:'90vh',overflowY:'auto'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:520,maxHeight:'90vh',overflowY:'auto'}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Angajat</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet *</Lbl><input style={S.input} value={editEmp.name||''} onChange={e=>setEditEmp({...editEmp,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Funcție</Lbl><input style={S.input} value={editEmp.position||''} onChange={e=>setEditEmp({...editEmp,position:e.target.value})}/></div>
@@ -6884,6 +7060,19 @@ function AdminPage() {
               <div style={{flex:1}}><Lbl>🔴 Data încetării ctr.</Lbl><input type="date" style={S.input} value={editEmp.termination_date||''} onChange={e=>setEditEmp({...editEmp,termination_date:e.target.value||null})}/></div>
             </div>
             {editEmp.termination_date&&<div style={{background:G.redDim,border:`1px solid ${G.red}33`,borderRadius:8,padding:'8px 12px',marginBottom:14,fontSize:11,color:G.red}}>⚠️ Contract încetat pe {new Date(editEmp.termination_date).toLocaleDateString('ro-RO')} — angajatul va fi vizibil în pontaj până la finalul lunii respective.</div>}
+            {editEmp.termination_date&&(()=>{
+              // R2: ce se întâmplă cu contul platformei legat de fișă
+              const cont=contPentruAngajat(editEmp.id); if(!cont) return null
+              // starea vine din fn_cont_stare_angajati (vizibilă și HR); jurnalul complet e doar al owner-ului
+              const st=stareCont(cont.id), inch=inchidereDeschisa(cont.id), azi=ziBaza(), orig=employees.find(e=>e.id===editEmp.id)
+              const cineInchide=profile?.is_owner===true?'închide-l din Manageri (Edit → „🔒 Închide contul acum”)':'anunță owner-ul (Răzvan) să-l închidă din Manageri'
+              const txt=(inch||st?.stare==='inchis')?`🔒 Contul platformei ${cont.email} e deja închis${inch?` (jurnal #${inch.id})`:st?.jurnal_id?` (jurnal #${st.jurnal_id})`:''}.`
+                : st?.stare==='blocat' ? `🔒 Logarea contului ${cont.email} e blocată (fără jurnal de închidere).`
+                : orig && orig.active===false ? `Contul platformei ${cont.email} NU se închide automat (fișa era deja inactivă) — ${cineInchide}.`
+                : editEmp.termination_date<=azi ? `🔒 Contul platformei ${cont.email} va fi închis automat la salvare (drepturi scoase, logare blocată).`
+                : `Contul platformei ${cont.email} va fi închis automat în dimineața zilei ${formatDataRo(editEmp.termination_date)}.`
+              return <div style={{background:G.bg,border:`1px solid ${G.orange}55`,borderRadius:8,padding:'8px 12px',marginTop:-6,marginBottom:14,fontSize:11,color:G.orange}}>{txt}</div>
+            })()}
 
             {/* === SECTIUNE: Date Contract === */}
             <div style={{marginTop:18,marginBottom:14,padding:'8px 12px',background:G.bg,borderRadius:8,borderLeft:`3px solid ${G.blue}`}}>
@@ -6965,8 +7154,8 @@ function AdminPage() {
 
       {/* Delete employee modal */}
       {deleteEmpItem&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:380,textAlign:'center'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:380,textAlign:'center'}}>
             <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
             <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>Ștergi angajatul?</div>
             <div style={{fontSize:13,color:G.muted,marginBottom:8}}>„{deleteEmpItem.name}"</div>
@@ -6982,8 +7171,8 @@ function AdminPage() {
         </div>
       )}
       {editMgr&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{...S.card,padding:28,width:440,maxHeight:'90vh',overflowY:'auto'}}>
+        <div className="adm-ov" style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div className="adm-mod" style={{...S.card,padding:28,width:440,maxHeight:'90vh',overflowY:'auto'}}>
             <div style={{fontSize:15,fontWeight:700,marginBottom:18}}>✏️ Editează Manager</div>
             <div style={{marginBottom:12}}><Lbl>Nume complet</Lbl><input style={S.input} value={editMgr.name||''} onChange={e=>setEditMgr({...editMgr,name:e.target.value})}/></div>
             <div style={{marginBottom:12}}><Lbl>Email</Lbl>
@@ -7019,6 +7208,44 @@ function AdminPage() {
               </select>
               <div style={{fontSize:10,color:G.muted,marginTop:3}}>Pe viitor: drepturile pot fi legate de departament</div>
             </div>
+            {profile?.is_owner === true && (()=>{
+              // 29.09.2026 R1/R2: legătura cu fișa, tipul contului, închiderea și restaurarea (doar owner)
+              const inch=inchidereDeschisa(editMgr.id)
+              const libere=employees.filter(e=>e.id===editMgr.employee_id||(e.active&&!managers.some(m=>m.employee_id===e.id)))
+              return (
+                <div style={{marginBottom:14,padding:12,background:G.bg,borderRadius:8,border:`1px solid ${inch?G.red+'88':G.border}`}}>
+                  <div style={{fontSize:11,fontWeight:700,color:G.blue,marginBottom:8,letterSpacing:.3}}>🔗 FIȘA DE ANGAJAT · TIPUL CONTULUI</div>
+                  <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                    <div style={{flex:'2 1 220px'}}><Lbl>Fișă angajat</Lbl>
+                      <select value={editMgr.employee_id||''} onChange={e=>setEditMgr({...editMgr,employee_id:e.target.value?Number(e.target.value):null})} style={{width:'100%'}}>
+                        <option value="">— nelegat —</option>
+                        {libere.map(e=><option key={e.id} value={e.id}>{e.name}{e.active?'':' (inactiv)'}</option>)}
+                      </select>
+                    </div>
+                    <div style={{flex:'1 1 140px'}}><Lbl>Tip cont</Lbl>
+                      <select value={editMgr.tip_cont||''} onChange={e=>setEditMgr({...editMgr,tip_cont:e.target.value||null})} style={{width:'100%'}}>
+                        <option value="">—</option>
+                        {TIPURI_CONT.map(t=><option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{fontSize:10,color:G.muted,marginTop:5}}>Doar fișele active fără cont. extern / test / sistem = excepție marcată o dată: contul iese din alerta „fără angajat”.</div>
+                  {inch ? (
+                    <div style={{marginTop:10,padding:'8px 10px',background:G.redDim,border:`1px solid ${G.red}66`,borderRadius:6,fontSize:11,color:G.red,lineHeight:1.5}}>
+                      🔒 Cont închis automat la {formatDataRo(inch.facut_la,{cuOra:true})} (jurnal #{inch.id}). Salvarea NU redă accesul și nu deblochează logarea.
+                      <div style={{color:G.muted,marginTop:3}}>Motiv: {inch.motiv}</div>
+                      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginTop:8}}>
+                        <button onClick={inchideContAcum} title="Scoate din nou accesul redat între timp și re-blochează logarea (alertele „acces rămas” / „logare deblocată”)" style={{...S.btnS,padding:'5px 10px',fontSize:11,color:G.red,borderColor:G.red+'88'}}>🔒 Reaplică închiderea</button>
+                        <button onClick={()=>restaureazaCont(inch)} title="Redă TOT accesul de dinainte — doar dacă omul revine în firmă" style={{...S.btnS,padding:'5px 10px',fontSize:11,color:G.green,borderColor:G.green+'88'}}>↩ Restaurează din jurnal</button>
+                      </div>
+                      <div style={{color:G.muted,marginTop:4}}>„Restaurează” redă TOT accesul: doar dacă omul revine în firmă.</div>
+                    </div>
+                  ) : editMgr.id !== profile?.id && !editMgr.is_owner && (
+                    <button onClick={inchideContAcum} style={{...S.btnS,marginTop:10,padding:'5px 10px',fontSize:11,color:G.red,borderColor:G.red+'88'}}>🔒 Închide contul acum</button>
+                  )}
+                </div>
+              )
+            })()}
             {profile?.is_owner === true && editMgr.id !== profile?.id && (
               <div style={{marginBottom:14,padding:12,background:editMgr.can_access_salarii?'#2A1A2A':'#1A1A1F',borderRadius:8,border:`1px solid ${editMgr.can_access_salarii?G.red:G.border}66`}}>
                 <label style={{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}}>
@@ -7399,8 +7626,8 @@ function AdminPage() {
 
       {tab==='sites'&&(
         <>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
-          <div style={{...S.card,overflow:'hidden'}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
+          <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
               <table><thead><tr style={{background:G.bg}}><th>Șantier / Sediu</th><th>Status</th><th>Acțiuni</th></tr></thead>
               <tbody>{sites.map(s=>(
@@ -7427,8 +7654,8 @@ function AdminPage() {
             🏭 Depozite materiale
             <span style={{fontSize:10,color:G.muted,fontWeight:500}}>— locații fizice de stocare (legate la șantier, generează seria avizului)</span>
           </div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
-            <div style={{...S.card,overflow:'hidden'}}>
+          <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
+            <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
               <table><thead><tr style={{background:G.bg}}>
                 <th>Depozit</th><th>Serie aviz</th><th>Șantier</th><th>Adresă</th><th>Status</th><th></th>
               </tr></thead>
@@ -7494,10 +7721,16 @@ function AdminPage() {
       )}
 
       {tab==='managers'&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
-          <div style={{...S.card,overflow:'hidden'}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:18}}>
+          <div style={{minWidth:0}}>
+          {isSuperAdmin&&(
+            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:10}}>
+              <button onClick={legaAutomat} disabled={legare} style={{...S.btnS,fontSize:12,opacity:legare?.6:1}}>{legare?'Se verifică…':'🔗 Leagă automat conturile nelegate'}</button>
+            </div>
+          )}
+          <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
             {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-              <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier / Departament</th><th></th></tr></thead>
+              <table className="adm-cards"><thead><tr style={{background:G.bg}}><th>Nume</th><th>Email</th><th>Rol</th><th>Șantier / Departament</th><th>Fișă angajat</th><th>Stare</th><th></th></tr></thead>
               <tbody>{managers.map(m=>(
                 <tr key={m.id}><td style={{fontWeight:600}}>{m.name||<span style={{color:G.red}}>— fără nume —</span>}</td>
                 <td style={{color:G.muted,fontSize:12}}>{m.email}</td>
@@ -7507,9 +7740,31 @@ function AdminPage() {
                   {m.department && <div style={{color:G.blue,marginTop:2,fontSize:10,fontWeight:600}}>🏢 {m.department}</div>}
                   {!m.department && (m.site_ids||[]).length===0 && <span style={{color:G.dim}}>—</span>}
                 </td>
-                <td><button onClick={async()=>{setEditMgr({...m,original_email:m.email});const{data:ma}=await supabase.from('user_module_access').select('module, access_level').eq('profile_id',m.id);const mods={};const levels={};(ma||[]).forEach(x=>{mods[x.module]=true;levels[x.module]=x.access_level||'editor'});setEditMgrModules(mods);setEditMgrModuleLevels(levels)}} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
+                <td style={{fontSize:11}}>{m.employee_id?(employees.find(e=>e.id===m.employee_id)?.name||`fișa #${m.employee_id}`):<span style={{color:G.dim}}>— nelegat</span>}</td>
+                <td style={{fontSize:11,fontWeight:600}}>{(()=>{const st=stareContProfil(m,inchidereDeschisa(m.id),stareCont(m.id));return <span style={{color:st.ton==='inchis'?G.red:st.ton==='marcat'?G.purple:G.green}}>{st.text}</span>})()}</td>
+                <td><button onClick={()=>openEditMgr(m)} style={{...S.btnS,padding:'3px 9px',fontSize:11}}>✏️ Edit</button></td></tr>
               ))}</tbody></table>
             )}
+          </div>
+          {isSuperAdmin&&(
+            <div style={{...S.card,marginTop:14,padding:16,overflowX:'auto'}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>🗂 Jurnal închideri conturi</div>
+              <div style={{fontSize:11,color:G.muted,marginBottom:10}}>Append-only: ce avea contul înainte de închidere. Restaurarea se face din „Edit” pe cont, doar de owner.</div>
+              {inchideri.length===0?<div style={{fontSize:12,color:G.dim}}>Nicio închidere înregistrată.</div>:(
+                <table><thead><tr style={{background:G.bg}}><th>Data</th><th>Cont</th><th>Motiv</th><th>Sursă</th><th>Făcut de</th><th>Restaurat</th></tr></thead>
+                <tbody>{inchideri.map(j=>(
+                  <tr key={j.id}>
+                    <td style={{fontSize:11,whiteSpace:'nowrap'}}>{formatDataRo(j.facut_la,{cuOra:true})}<div style={{color:G.dim,fontSize:10}}>#{j.id}</div></td>
+                    <td style={{fontSize:11}}>{j.email}</td>
+                    <td style={{fontSize:11,color:G.muted}}>{j.motiv}</td>
+                    <td style={{fontSize:10}}>{{trigger_contract_incheiat:'contract încheiat',manual_owner:'manual (owner)',import_manual:'import manual'}[j.sursa]||j.sursa}</td>
+                    <td style={{fontSize:11}}>{numeProfil(j.facut_de)}</td>
+                    <td style={{fontSize:11}}>{j.restaurat_la?<span style={{color:G.green}}>↩ {formatDataRo(j.restaurat_la)} · {numeProfil(j.restaurat_de)}{j.restaurare_nota?<div style={{color:G.muted}}>{j.restaurare_nota}</div>:null}</span>:<span style={{color:G.red}}>nu</span>}</td>
+                  </tr>
+                ))}</tbody></table>
+              )}
+            </div>
+          )}
           </div>
           <div style={{...S.card,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>Adaugă Manager</div>
@@ -7547,7 +7802,7 @@ function AdminPage() {
       )}
 
       {tab==='employees'&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:18}}>
           <div>
             {/* Filters row */}
             <div style={{display:'flex',gap:7,marginBottom:10,alignItems:'center',flexWrap:'wrap'}}>
@@ -7579,9 +7834,9 @@ function AdminPage() {
                 }).length} angajați
               </span>
             </div>
-            <div style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
+            <div className="adm-tw" style={{...S.card,overflow:'hidden',marginBottom:impPrev?14:0}}>
               {load?<div style={{padding:40,textAlign:'center'}}><div className="sp" style={{margin:'0 auto'}}/></div>:(
-                <table><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Angajat</th><th>Încetat</th><th>Status</th><th>Acțiuni</th></tr></thead>
+                <table className="adm-stick"><thead><tr style={{background:G.bg}}><th>Nume</th><th>Dept.</th><th>Funcție</th><th>Șantier</th><th>Angajat</th><th>Încetat</th><th>Status</th><th>Acțiuni</th></tr></thead>
                 <tbody>{employees.filter(e=>{
                   const s=empStatusFilter==='all'?true:empStatusFilter==='active'?e.active:!e.active
                   const q=empSearch.trim().toLowerCase()
@@ -7599,21 +7854,7 @@ function AdminPage() {
                     <td style={{fontSize:11,color:emp.termination_date?G.red:G.dim}}>{emp.termination_date?new Date(emp.termination_date).toLocaleDateString('ro-RO'):'—'}</td>
                     <td><span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:emp.active?G.greenDim:G.redDim,color:emp.active?G.green:G.red,border:`1px solid ${emp.active?G.green:G.red}44`}}>{emp.active?'●Activ':'○Inactiv'}</span></td>
                     <td><div style={{display:'flex',gap:5}}>
-                      <button onClick={async()=>{
-                        const editObj={...emp}
-                        // Pre-fetch date personale GDPR din hr_employees_private (RLS filtreaza automat)
-                        const {data:pData}=await supabase.from('hr_employees_private').select('*').eq('employee_id',emp.id).maybeSingle()
-                        if(pData){
-                          editObj.cnp=pData.cnp||''
-                          editObj.data_nastere=pData.data_nastere||''
-                          editObj.adresa_strada=pData.adresa_strada||''
-                          editObj.adresa_oras=pData.adresa_oras||''
-                          editObj.adresa_judet=pData.adresa_judet||''
-                          editObj.adresa_cod_postal=pData.adresa_cod_postal||''
-                          editObj.adresa_tara=pData.adresa_tara||'România'
-                        }
-                        setEditEmp(editObj)
-                      }} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
+                      <button onClick={()=>openEditEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>✏️</button>
                       <button onClick={()=>toggleEmp(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10}}>{emp.active?'Dezact.':'Activ.'}</button>
                       {!emp.active&&<button onClick={()=>setDeleteEmpItem(emp)} style={{...S.btnS,padding:'2px 7px',fontSize:10,color:G.red,borderColor:G.red+'44'}}>🗑️</button>}
                     </div></td>
@@ -7663,8 +7904,8 @@ function AdminPage() {
       )}
 
       {tab==='calendar'&&(
-        <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
-          <div style={{...S.card,overflow:'hidden'}}>
+        <div className="adm-grid" style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:18}}>
+          <div className="adm-tw" style={{...S.card,overflow:'hidden'}}>
             <div style={{padding:'12px 14px',borderBottom:`1px solid ${G.border}`,display:'flex',justifyContent:'space-between'}}>
               <span style={{fontSize:13,fontWeight:700}}>Zile Speciale</span>
               <span style={{fontSize:11,color:G.muted}}>{calDays.length} zile înregistrate</span>
@@ -7924,16 +8165,21 @@ function AdminPage() {
             ].map(([key, label, placeholder]) => (
               <div key={key} style={{marginBottom:12}}>
                 <Lbl>{label}</Lbl>
-                <input 
-                  style={S.input} 
-                  type="text" 
-                  value={ordSetari[key] || ''} 
-                  onChange={e => setOrdSetari(prev => ({...prev, [key]: e.target.value}))} 
+                <input
+                  style={S.input}
+                  type="text"
+                  list="ord-semnatari-angajati"
+                  value={ordSetari[key] || ''}
+                  onChange={e => setOrdSetari(prev => ({...prev, [key]: e.target.value}))}
                   placeholder={placeholder}
                 />
               </div>
             ))}
-            
+            {/* Dropdown cu numele angajaților activi (text liber rămâne permis — lookup-ul semnăturii e fuzzy pe tokens) */}
+            <datalist id="ord-semnatari-angajati">
+              {employees.filter(e => e.active).map(e => <option key={e.id} value={e.name} />)}
+            </datalist>
+
             <button 
               onClick={saveOrdSetari} 
               style={{...S.btnP, background: G.orange, width:'100%', marginTop:8}}
@@ -7942,6 +8188,35 @@ function AdminPage() {
             <div style={{padding:10,background:G.orange+'15',borderRadius:8,border:`1px solid ${G.orange}33`,fontSize:11,color:G.orange,marginTop:12,lineHeight:1.5}}>
               💡 <strong>Cum se folosesc:</strong> În <strong>Rapoarte → Istoric Plăți Diurne</strong>, butonul „📄 Generează Ordine Deplasare" creează câte un xlsx per angajat cu aceste 4 nume preumplute.
             </div>
+          </div>
+
+          {/* === TICHETE — RESPONSABIL DEFAULT PER DEPARTAMENT === */}
+          <div style={{...S.card,padding:22,marginBottom:16,borderLeft:`4px solid ${G.purple}`}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:6,color:G.text}}>🎫 Tichete — Responsabil default per departament</div>
+            <div style={{fontSize:11,color:G.muted,marginBottom:18,lineHeight:1.5}}>
+              Persoana preselectată ca responsabil la deschiderea unui tichet nou pe fiecare departament.
+              Lista conține doar utilizatorii cu flag-ul <code>receive_tichete_*</code> al departamentului (setat din <strong>Editează Manager</strong>) sau owner.
+            </div>
+            {TICHETE_DEP.map(d => {
+              const flag = `receive_tichete_${d.cod}`
+              const optiuni = managers.filter(m => m.is_owner || m[flag])
+              const curent = tichDefaults[d.cod]
+              const curentValid = !curent || optiuni.some(m => m.id === curent)
+              return (
+                <div key={d.cod} style={{marginBottom:12}}>
+                  <Lbl><span style={{color:d.color}}>{d.label}</span></Lbl>
+                  <select style={S.input} value={curent || ''} onChange={e => setTichDefaults(prev => ({...prev, [d.cod]: e.target.value || null}))}>
+                    <option value="">— fără default —</option>
+                    {!curentValid && <option value={curent}>⚠️ Utilizator fără flag {flag} (setat prin SQL)</option>}
+                    {optiuni.map(m => <option key={m.id} value={m.id}>{m.name || m.email}{m.is_owner ? ' (owner)' : ''}</option>)}
+                  </select>
+                  {optiuni.length === 0 && <div style={{fontSize:11,color:G.red,marginTop:4}}>Niciun utilizator cu flag {flag} — bifează-l întâi în Editează Manager.</div>}
+                </div>
+              )
+            })}
+            <button onClick={saveTichDefaults} disabled={savingTichDefaults} style={{...S.btnP, background:G.purple, width:'100%', marginTop:8, opacity:savingTichDefaults?.6:1}}>
+              {savingTichDefaults ? '⏳ Se salvează…' : '💾 Salvează responsabili default'}
+            </button>
           </div>
         </div>
       )}

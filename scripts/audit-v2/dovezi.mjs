@@ -15,6 +15,7 @@ export function mascheaza(value) {
 export async function salveazaJson(dir, name, value) {
   await mkdir(dir, { recursive: true })
   const bytes = Buffer.from(JSON.stringify(mascheaza(value), null, 2))
+  await writeFile(join(dir, `${name}.sha256`), createHash('sha256').update(bytes).digest('hex'))
   if (bytes.length <= MAX) { await writeFile(join(dir, `${name}.json`), bytes); return }
   const parts = []
   for (let i = 0; i < bytes.length; i += MAX) {
@@ -25,8 +26,14 @@ export async function salveazaJson(dir, name, value) {
     bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }, null, 2))
 }
 export async function incarcaJson(dir, name) {
-  try { return JSON.parse(await readFile(join(dir, `${name}.json`), 'utf8')) }
+  let small
+  try { small = await readFile(join(dir, `${name}.json`)) }
   catch (e) { if (e.code !== 'ENOENT') throw e }
+  if (small) {
+    const expected = await readFile(join(dir, `${name}.sha256`), 'utf8')
+    if (createHash('sha256').update(small).digest('hex') !== expected.trim()) throw new Error('artifact: hash dovezi diferit')
+    return JSON.parse(small.toString('utf8'))
+  }
   const index = JSON.parse(await readFile(join(dir, `${name}.index.json`), 'utf8'))
   if (index.concatenate_bytes.some(p => /[\\/]/.test(p))) throw new Error('Index de dovezi invalid')
   const bytes = Buffer.concat(await Promise.all(index.concatenate_bytes.map(p => readFile(join(dir, p)))))

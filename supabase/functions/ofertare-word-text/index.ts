@@ -24,6 +24,8 @@ import { Buffer } from 'node:buffer'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import JSZip from 'npm:jszip@3.10.1'
 import WordExtractor from 'npm:word-extractor@1.0.4'
+import { gardaIncearca, incercareGarda } from '../_shared/gardaIngest.ts'   // #553 r3 (J4): garda citirii
+import { plasaExactOnce } from '../_shared/gardaIngestLogica.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -100,6 +102,8 @@ Deno.serve(async (req: Request) => {
     const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
     const { data: u } = await uc.auth.getUser()
     if (!u?.user) return json({ error: 'token invalid' }, 401)
+    const { data: acces, error: eA } = await uc.rpc('fn_are_acces_ofertare')
+    if (eA || acces !== true) return json({ error: 'nu ai acces la modulul Ofertare' }, 403)
   }
 
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
@@ -125,8 +129,22 @@ Deno.serve(async (req: Request) => {
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'fără fisier_path' })
       continue
     }
+    // #553 runda 3 (J4): documentele deja încheiate NU se mai descarcă; restul trec prin garda citirii (token + lease +
+    // plafon de descărcări), iar textul se scrie de server atomic cu tokenul. Refuzul gărzii = fără descărcare.
+    if (r.status_procesare === 'procesat' && vechi > 0) {
+      rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'sarit', nota: 'deja procesat — fără descărcare' })
+      continue
+    }
+    const garda = await gardaIncearca(db, r.id, null, 'edge:ofertare-word-text')
+    if (garda.actiune !== 'continua') {
+      rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'garda', nota: `${garda.actiune}: ${garda.motiv}` })
+      continue
+    }
+    const inc = incercareGarda(db, r.id, garda.token!)
+    try {
     const { data: blob, error: dlErr } = await db.storage.from(BUCKET).download(r.fisier_path)
     if (dlErr || !blob) {
+      await inc.inchide({ rezultat: 'esec', eroare: 'download: ' + (dlErr?.message || 'lipsă') })
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'download: ' + (dlErr?.message || 'lipsă') })
       continue
     }
@@ -138,29 +156,33 @@ Deno.serve(async (req: Request) => {
         : await textDinDoc(octeti)
       text = out.text; parti = out.parti
     } catch (e) {
+      await inc.inchide({ rezultat: 'esec', eroare: 'despachetare: ' + String(e) })
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'despachetare: ' + String(e) })
       continue
     }
     if (text.length < 50) {
+      await inc.inchide({ rezultat: 'esec', eroare: `doar ${text.length} caractere` })
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'gol',
         nota: `doar ${text.length} caractere — probabil document scanat pus într-un Word` })
       continue
     }
     if (dryRun) {
+      await inc.inchide({ rezultat: 'predat', eroare: 'dry_run' })
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'ar_scrie', caractere: text.length, parti,
         inceput: text.slice(0, 300) })
       continue
     }
-    const { error: upErr } = await db.from('ofertare_documente_atribuire').update({
+    await inc.inchide({ rezultat: 'succes', doc: {
       text_extras: text,
       status_procesare: 'procesat',
       // pagini rămâne NULL intenționat: .docx n-are paginație fixă, n-o inventăm
       pagini_procesate: 0,
       procesat_la: new Date().toISOString(),
       eroare: `text extras din ${/\.docx$/i.test(r.nume_original) ? '.docx' : '.doc'} în platformă (${parti} părți, ${text.length} caractere) — fără paginație fixă${r.tip === 'model_contract' ? ' · model de contract: pentru etapa clauze contractuale, nu cerințe tehnice' : ''}`,
-    }).eq('id', r.id)
-    if (upErr) { rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'update: ' + upErr.message }); continue }
+    } })
+    if (inc.raspuns?.acceptat !== true) { rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'eroare', nota: 'garda: rezultat respins — nimic scris' }); continue }
     rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'scris', caractere: text.length, parti, inainte: vechi })
+    } finally { await plasaExactOnce(inc) }
   }
 
   const n = (s: string) => rezultate.filter(x => x.stare === s).length

@@ -1,0 +1,2506 @@
+[
+ {
+  "from_source_id": "SRC-hg-395-2016",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "aplica",
+  "locator": "titlu HG 395/2016; art. 27 alin. (1)–(2) trimit la art. 160 L98",
+  "nota": "Norme metodologice ale L98",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-98-2016",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "trimite_la",
+  "locator": "art. 154 alin. (5); art. 160 alin. (2)",
+  "nota": "Garanții și termene de clarificare reglementate în norme",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-394-2016",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "aplica",
+  "locator": "titlu HG 394/2016",
+  "nota": "Norme metodologice sectoriale; text necitit",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-101-2016",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "aplica",
+  "locator": "art. 8 (contestarea actelor AC din procedurile L98/L99)",
+  "nota": "Remedii",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-101-2016",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "aplica",
+  "locator": "art. 8 alin. (1) („achiziție sectorială”)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-praguri-ue-2026-2027",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "modifica",
+  "locator": "L98 art. 7 alin. (1) lit. a) (valoarea pragului lucrări)",
+  "nota": "Regulament UE direct aplicabil; prag 26.960.556 lei din 01.01.2026",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-101-2016",
+  "to_source_id": "SRC-praguri-ue-2026-2027",
+  "relatie": "trimite_la",
+  "locator": "art. 8 alin. (1) lit. a)–b) (pragurile JOUE)",
+  "nota": "Determină 10 vs 7 zile",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "aplica",
+  "locator": "preambul (L98 art. 235 alin. (4)); art. 1–2 (prag art. 7 alin. (1) lit. a))",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "Anexa 1 cl. 48.5 (ICC total, tabel 15)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "trimite_la",
+  "locator": "Anexa 1 cl. 61.6 (categorii de importanță „în sensul Legii”)",
+  "nota": "Legea 10/1995 abrogată în mare parte din 25.08.2026 — trimitere de clarificat",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-336-2023",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "abroga",
+  "locator": "HG 336/2023 art. II pct. 48 → HG 395 art. 164 (19.04.2023)",
+  "nota": "Ajustarea s-a mutat în L98 art. 222^2",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-208-2022",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "modifica",
+  "locator": "art. 154–154^2, art. 222^2 (introduse/modificate 10.09.2022)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-oug-47-2022",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "modifica",
+  "locator": "notă CTCE la L98 (regim tranzitoriu ajustare contracte în derulare)",
+  "nota": "OUG 47/2022 nu modifică textul L98, dar e reprodusă în forma consolidată — relație de complementaritate",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-oug-47-2022",
+  "to_source_id": "SRC-og-15-2021",
+  "relatie": "inlocuieste",
+  "locator": "OUG 47/2022 art. 4 alin. (4) (formula OG 15 înlocuită prin act adițional)",
+  "nota": "Din runda 1; nereverificat",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-oug-64-2022",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "art. 17 alin. (8) lit. a1) (tabel 15 ICC total; tabel 15A %cpm)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-og-15-2021",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "art. 2 (ICCM, tabel 15) — după surse secundare",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-instr-anap-2-2017",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "titlu: art. 178, art. 179 lit. a) și b)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-instr-anap-2-2017",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "interpreteaza",
+  "locator": "titlu: art. 191, art. 192 lit. a) și b)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-instr-anap-1-2017",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "titlu: art. 179 lit. g), art. 187 alin. (8) lit. a)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-anap-notificare-art160-2018",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 160 alin. (2)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-anap-notificare-art160-2018",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 172 alin. (2)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-anap-ghid-clarificari-2020",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 160 (răspunsuri clare și complete)",
+  "nota": "Propunere 2020; adoptare neconfirmată",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-907-2016",
+  "to_source_id": "SRC-ordin-863-2008",
+  "relatie": "abroga",
+  "locator": "art. 18 alin. (2) lit. b)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicatoare-norme-deviz-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3 (indicatoare ca reper orientativ)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-ordin-1014-874-2001-formulare-c",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.4 (extrase de resurse)",
+  "nota": "Legătură presupusă prin conținutul extraselor C6–C9; neverificată",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-98-2016",
+  "to_source_id": "SRC-salariu-minim-constructii-2026",
+  "relatie": "trimite_la",
+  "locator": "art. 51 alin. (1) + art. 210 alin. (2) lit. d), alin. (4) (obligații din relațiile de muncă)",
+  "nota": "Salariul minim e obligație de muncă de respectat în ofertă",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-395-2016",
+  "to_source_id": "SRC-legea-53-2003-codul-muncii",
+  "relatie": "trimite_la",
+  "locator": "art. 136 alin. (2) (nivelul de salarizare ca dovadă)",
+  "nota": "Legătură funcțională, nu trimitere nominală",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-salariu-minim-constructii-2026",
+  "to_source_id": "SRC-legea-53-2003-codul-muncii",
+  "relatie": "aplica",
+  "locator": "OUG 114/2018 art. 71 / OUG 156/2024 art. LXIX (salariu minim sectorial peste minimul din Codul muncii)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-50-1991",
+  "relatie": "abroga",
+  "locator": "dispoziții finale (art. 576 sau 584 — CONFLICT între surse)",
+  "nota": "Surse secundare",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "abroga",
+  "locator": "dispoziții finale (rămân art. 10 și 41)",
+  "nota": "Surse secundare",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "dispoziții tranzitorii (menținere acte de aplicare)",
+  "nota": "Neconfirmat pe MO",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-925-1995",
+  "relatie": "trimite_la",
+  "locator": "dispoziții tranzitorii (menținere acte de aplicare)",
+  "nota": "Neconfirmat pe MO",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-273-1994-receptie",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "aplica",
+  "locator": "PV de recepție la terminare/finală — declanșează L98 art. 154^2 alin. (5) și HG 395 art. 166",
+  "nota": "Legătură funcțională",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-instr-anap-2-2017",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "art. 10, art. 11 alin. (3) (PV de recepție conform actelor care reglementează recepția)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_2938",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 160",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_665",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 134–135",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2022_1952",
+  "to_source_id": "SRC-hg-394-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 41, 138",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2021_2420",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 36 alin. (4), art. 132 alin. (3)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2022_2170",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 35–36",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2021_1317",
+  "to_source_id": "SRC-hg-394-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 45–48",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_3288",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 172",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2022_1615",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 209 alin. (2)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_1706",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 137",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_2717",
+  "to_source_id": "SRC-instr-anap-2-2017",
+  "relatie": "interpreteaza",
+  "locator": "art. 5",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-Decizie_3952",
+  "to_source_id": "SRC-instr-anap-2-2017",
+  "relatie": "interpreteaza",
+  "locator": "art. 5 alin. (1)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_1489",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 192",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2026_182",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 196",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2026_182",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 8 alin. (1) lit. b)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_140",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 196, 209",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_2237",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 197 alin. (2)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_2636",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 196, 209",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_159",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 134 alin. (9)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2021_1060",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 134 alin. (10)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2022_1028",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 209",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2025_647",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 136 alin. (4)",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_1788",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 210",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_3130",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 136",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2026_3104",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 210",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2025_2344",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 222",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_406",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 222^2",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2025_2863",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 61^1",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2025_1837",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 187, 189",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_3657",
+  "to_source_id": "SRC-hg-907-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 12",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2018_6476",
+  "to_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "relatie": "interpreteaza",
+  "locator": "pct. 1.4, 2.2.3, 3.3.1.4",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2022_1923",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 209–210",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2020_2124",
+  "to_source_id": "SRC-legea-53-2003-codul-muncii",
+  "relatie": "interpreteaza",
+  "locator": "art. 112, 145",
+  "nota": "",
+  "tema": "achizitii_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-ord-anre-17-2026",
+  "relatie": "aplica",
+  "locator": "art. 119 pct. 1, art. 121 alin. (1)",
+  "nota": "Temei citat în preambulul Ord. 17/2026.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-ord-anre-65-2023",
+  "relatie": "aplica",
+  "locator": "art. 121 alin. (3)",
+  "nota": "Temei citat în preambulul Ord. 85/2024.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "aplica",
+  "locator": "art. 117, art. 162 (preambul Ord. 89/2018); art. 194 pct. 3, 4, 34 (sancțiuni)",
+  "nota": "NTPEE obligatorie pentru executanți autorizați.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-nt-amonte-2025",
+  "relatie": "aplica",
+  "locator": "art. 119 pct. 1 lit. a)",
+  "nota": "Condiționat (amonte).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-nt-transport-118-2013",
+  "relatie": "aplica",
+  "locator": "art. 119 pct. 1 lit. b)",
+  "nota": "Condiționat (transport / > 10 bar).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "aplica",
+  "locator": "Titlul II (racordare)",
+  "nota": "Lanț nevalidat pe articol în această rundă.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-dgsr-st-tgphd",
+  "relatie": "interpreteaza",
+  "locator": "art. 158 alin. (1)",
+  "nota": "Acceptul OSD pentru produse — ancora legală a specificațiilor de produs; obligatorii pentru ofertant doar dacă DA le invocă.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-delgaz-st-505",
+  "relatie": "interpreteaza",
+  "locator": "art. 158 alin. (1)",
+  "nota": "Idem.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-2-2023",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "modifica",
+  "locator": "art. I pct. 1-101",
+  "nota": "Tab. 8^1 etanșeitate, art. 254, 268-274, anexa 2.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-ord-anre-5-2009",
+  "relatie": "abroga",
+  "locator": "Ord. 89/2018 art. 3",
+  "nota": "NTPEE-2008 abrogat la 05.06.2018.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-5-2009",
+  "to_source_id": "SRC-i6-98",
+  "relatie": "inlocuieste",
+  "locator": "—",
+  "nota": "Înlocuire confirmată doar din surse secundare.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-17-2026",
+  "to_source_id": "SRC-ord-anre-132-2021",
+  "relatie": "abroga",
+  "locator": "Ord. 17/2026 art. 2",
+  "nota": "Autorizațiile vechi rămân valabile (art. 39).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-65-2023",
+  "to_source_id": "SRC-ord-anre-182-2020",
+  "relatie": "inlocuieste",
+  "locator": "Ord. 65/2023",
+  "nota": "Din runda 1.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-ord-anre-17-2026",
+  "relatie": "trimite_la",
+  "locator": "art. 1^1 lit. c), art. 7 alin. (1)",
+  "nota": "NTPEE nota ^1 încă trimite la Ord. 132/2021 (abrogat) — trimiterea se citește către Ord. 17/2026.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-ord-anre-65-2023",
+  "relatie": "trimite_la",
+  "locator": "art. 1^1 lit. f)",
+  "nota": "Nota ^5 trimite la Ord. 182/2020 (înlocuit).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-nt-transport-118-2013",
+  "relatie": "trimite_la",
+  "locator": "art. 20 alin. (1), art. 21 alin. (1)",
+  "nota": "> 10 bar.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-ord-anre-156-2020",
+  "relatie": "trimite_la",
+  "locator": "art. 268 alin. (2), art. 284 alin. (1), art. 289 alin. (1)",
+  "nota": "IU.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "trimite_la",
+  "locator": "art. 7 alin. (4); anexa 2 poz. 13",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-hg-925-1995",
+  "relatie": "trimite_la",
+  "locator": "art. 254^1 alin. (2), art. 285 alin. (3)",
+  "nota": "RTE / diriginte.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-ordin-1895-2016-rte",
+  "relatie": "trimite_la",
+  "locator": "art. 285 alin. (3) lit. b)",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12732",
+  "relatie": "incorporeaza",
+  "locator": "art. 235 alin. (4) → anexa 2 poz. 37",
+  "nota": "NTPEE citează +A1:2014.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-15609-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) → anexa 2 poz. 29-36",
+  "nota": "NTPEE citează 15609-1:2005 (curent 2020).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12007",
+  "relatie": "incorporeaza",
+  "locator": "art. 50^1",
+  "nota": "SR EN 12007-2:2012 pentru calculul PE PI (proiectare).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-13067",
+  "relatie": "trimite_la",
+  "locator": "anexa 2 poz. 51",
+  "nota": "Doar recomandare (art. 6 alin. 2); citat 2013, curent 2020.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-1555",
+  "relatie": "trimite_la",
+  "locator": "anexa 2 poz. 52-55",
+  "nota": "Recomandare; citat 2011/2013, curent 2025.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-13100",
+  "relatie": "trimite_la",
+  "locator": "anexa 2 poz. 57-59; art. 245",
+  "nota": "Obligatoriu doar dacă proiectul cere CND pe PE.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12954",
+  "relatie": "trimite_la",
+  "locator": "anexa 2 poz. 49",
+  "nota": "Recomandare; citat 2002, curent EN 2019.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-837",
+  "relatie": "trimite_la",
+  "locator": "anexa 2 poz. 98-100",
+  "nota": "Recomandare.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-pt-cr-9-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 236 alin. (1), art. 239 alin. (5) („sudori autorizați de organisme abilitate”)",
+  "nota": "Trimitere implicită; anexa 2 poz. 45 citează încă PT CR 9-2013 (abrogat 07.08.2026).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-pt-cr-7-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 236 alin. (3) („procedee certificate”)",
+  "nota": "Trimitere implicită.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-pt-cr-6-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 238 alin. (4)-(5), art. 286 lit. d)",
+  "nota": "„Laborator autorizat” — implicit; PT CR 6 acoperă formal doar instalații ISCIR.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-og-20-1992",
+  "relatie": "trimite_la",
+  "locator": "art. 274 alin. (1)",
+  "nota": "„Verificare metrologică în termen” — vezi L.O.-2022.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-hg-668-2017",
+  "relatie": "trimite_la",
+  "locator": "art. 173 alin. (1), (3)",
+  "nota": "Documente de conformitate produse.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-hg-123-2015",
+  "relatie": "trimite_la",
+  "locator": "art. 173 alin. (3) lit. d)",
+  "nota": "Echipamente sub presiune (PED).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-17-2026",
+  "to_source_id": "SRC-pt-cr-9-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 12-18 („sudori autorizați … conform reglementărilor în vigoare”)",
+  "nota": "Implicit.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-17-2026",
+  "to_source_id": "SRC-og-20-1992",
+  "relatie": "trimite_la",
+  "locator": "anexa 3, declarația pct. 3",
+  "nota": "Aparate supuse controlului metrologic legal.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-nt-amonte-2025",
+  "to_source_id": "SRC-ord-anre-17-2026",
+  "relatie": "trimite_la",
+  "locator": "art. 321 alin. (1)",
+  "nota": "Autorizații ANRE specifice (EPI).",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-64-2008",
+  "to_source_id": "SRC-pt-cr-9-2025",
+  "relatie": "aplica",
+  "locator": "art. 4 alin. (2) lit. b), art. 5 lit. n), art. 8 alin. (1) (preambul Ord. MEDAT 1172/2026)",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-64-2008",
+  "to_source_id": "SRC-pt-cr-6-2025",
+  "relatie": "aplica",
+  "locator": "idem",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-64-2008",
+  "to_source_id": "SRC-pt-cr-7-2025",
+  "relatie": "aplica",
+  "locator": "idem",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-legea-64-2008",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "interpreteaza",
+  "locator": "art. 1 alin. (2) + anexa 1 pct. 3",
+  "nota": "Exclude SD/IU de gaze din regimul ISCIR → domeniul ANRE.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-pt-cr-7-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 3-4",
+  "nota": "Proceduri de sudare aprobate — premisă.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-og-20-1992",
+  "to_source_id": "SRC-brml-lo-2022",
+  "relatie": "aplica",
+  "locator": "art. 15 alin. 2",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-brml-ord-204-2024",
+  "to_source_id": "SRC-brml-lo-2022",
+  "relatie": "modifica",
+  "locator": "anexa",
+  "nota": "Conținut necitit.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-np-133-2013",
+  "relatie": "inlocuieste",
+  "locator": "Ordin MDLPA 15/2023",
+  "nota": "Tranzitoriu art. 3.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-en-805",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (1); cap. 9 alin. (9)",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-4163",
+  "relatie": "incorporeaza",
+  "locator": "cap. 9 alin. (9)",
+  "nota": "SR 4163-3.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-6819",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (1); cap. 9 alin. (9)",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-1610",
+  "relatie": "incorporeaza",
+  "locator": "3.6.1 alin. (10)",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-legea-64-2008",
+  "relatie": "trimite_la",
+  "locator": "5.2.13.3.1-5.2.13.3.2 alin. (5)",
+  "nota": "Instalații gaze sub presiune în stații de tratare → ISCIR.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-i9-2022",
+  "to_source_id": "SRC-np-133-2022-vol1",
+  "relatie": "interpreteaza",
+  "locator": "domeniu",
+  "nota": "I 9 = instalații sanitare în clădiri; rețelele exterioare → NP 133.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-delgaz-st-505",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "aplica",
+  "locator": "ST 505 — agrement (NTPEE art. 239 alin. 2)",
+  "nota": "",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-iso-21809-1",
+  "relatie": "incorporeaza",
+  "locator": "ST-TOLNP",
+  "nota": "Izolație 3LPE B2/B3.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tgphd",
+  "to_source_id": "SRC-sr-en-1555",
+  "relatie": "incorporeaza",
+  "locator": "ST-TGPHD",
+  "nota": "PE100 SDR11.",
+  "tema": "tehnic"
+ },
+ {
+  "from_source_id": "SRC-hg-300-2006",
+  "to_source_id": "SRC-legea-319-2006",
+  "relatie": "trimite_la",
+  "locator": "art. 3 (forma HG 601/2007)",
+  "nota": "HG 300 se aplică fără a aduce atingere Legii 319/2006.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-hg-601-2007",
+  "to_source_id": "SRC-hg-300-2006",
+  "relatie": "modifica",
+  "locator": "art. III pct. 1–10",
+  "nota": "Introduce art. 70^1 (sancțiuni), modifică anexele 2 și 4 și art. 47 („oameni-zi”).",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-hg-1425-2006",
+  "to_source_id": "SRC-legea-319-2006",
+  "relatie": "aplica",
+  "locator": "articol unic + anexă",
+  "nota": "Norme metodologice.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-og-43-1997",
+  "to_source_id": "SRC-ordin-mi-mt-1112-411-2000",
+  "relatie": "trimite_la",
+  "locator": "art. 44 alin. (1)",
+  "nota": "Restricțiile de circulație se instituie după normele aprobate prin ordin comun.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-mi-mt-1112-411-2000",
+  "to_source_id": "SRC-og-43-1997",
+  "relatie": "aplica",
+  "locator": "Partea I pct. (1)",
+  "nota": "",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-mt-1294-2017",
+  "to_source_id": "SRC-og-43-1997",
+  "relatie": "aplica",
+  "locator": "Preambul; anexă pct. 1.1–1.3",
+  "nota": "Emis în temeiul L 198/2015 art. VII.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-mt-1668-2023",
+  "to_source_id": "SRC-og-43-1997",
+  "relatie": "aplica",
+  "locator": "Anexă pct. 1.1",
+  "nota": "Art. 46 alin. (2) lit. a) și art. 57 din OG 43/1997.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-og-43-1997",
+  "to_source_id": "SRC-ordin-mt-1668-2023",
+  "relatie": "trimite_la",
+  "locator": "art. 46 alin. (2) lit. a)",
+  "nota": "Normele pentru drumuri naționale se aprobă prin ordin MT.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-mt-1668-2023",
+  "to_source_id": "SRC-stas-9312-87",
+  "relatie": "incorporeaza",
+  "locator": "Anexă pct. 3.4.4 alin. (3)",
+  "nota": "Trimitere expresă: conductele se amplasează conform STAS 9312.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-mt-1668-2023",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "trimite_la",
+  "locator": "Anexă pct. 3.4.1 alin. (6); pct. 3.4.5 alin. (3)",
+  "nota": "Trimitere la un act abrogat în mare parte de Legea 169/2026 (de interpretat prin CATUC).",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-mt-1170-2018",
+  "to_source_id": "SRC-ordin-mt-1835-2017",
+  "relatie": "abroga",
+  "locator": "integral",
+  "nota": "Ordinul 1835/2017 abrogat de la 26.07.2018 (după lege5); nu mai e în vigoare.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-stas-9312-87",
+  "relatie": "trimite_la",
+  "locator": "anexa nr. 2 poz. 64 (art. 6 alin. (2))",
+  "nota": "Listă de referințe; NTPEE art. 85 trimite la avizele specifice.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-hg-525-1996-rgu",
+  "relatie": "trimite_la",
+  "locator": "art. 83 alin. (2)",
+  "nota": "Canale subterane comune — art. 28 alin. (9) RGU.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-nt-transport-118-2013",
+  "relatie": "trimite_la",
+  "locator": "art. 25^1; art. 30^1",
+  "nota": "Zone pentru presiune > 6 bar.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-legea-123-2012-gaze",
+  "relatie": "aplica",
+  "locator": "art. 6 alin. (1); art. 25–30",
+  "nota": "Zone de protecție/siguranță — Legea 123/2012 art. 15 alin. (2).",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-239-2019",
+  "to_source_id": "SRC-legea-123-2012-gaze",
+  "relatie": "aplica",
+  "locator": "preambul; art. 21–23",
+  "nota": "Legea 123/2012 art. 15 alin. (2).",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-hg-525-1996-rgu",
+  "to_source_id": "SRC-oug-12-1998-cfr",
+  "relatie": "interpreteaza",
+  "locator": "art. 20 alin. (3)",
+  "nota": "RGU: 100 m de la limita zonei cadastrale CFR; OUG 12/1998: max. 100 m de la axă (diferență de reper).",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-828-2019-aviz-ape",
+  "to_source_id": "SRC-legea-107-1996-ape",
+  "relatie": "aplica",
+  "locator": "preambul (art. 110 lit. a), b), f) L107)",
+  "nota": "",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-oug-92-2021",
+  "to_source_id": "SRC-legea-50-1991",
+  "relatie": "trimite_la",
+  "locator": "art. 17 alin. (7); art. 23 alin. (2)",
+  "nota": "Trimitere la act abrogat de Legea 169/2026; de citit ca trimitere la AC din CATUC.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-ordin-mai-163-2007",
+  "to_source_id": "SRC-legea-307-2006",
+  "relatie": "aplica",
+  "locator": "preambul (art. 17 alin. (2) L307)",
+  "nota": "",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-hg-571-2016",
+  "to_source_id": "SRC-legea-307-2006",
+  "relatie": "aplica",
+  "locator": "preambul (art. 30 alin. (4), art. 47 L307)",
+  "nota": "",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-mdlpa-clarificari-catuc-2026-09",
+  "to_source_id": "SRC-legea-169-2026-catuc",
+  "relatie": "interpreteaza",
+  "locator": "răspuns branșamente → art. 267 alin. (1)",
+  "nota": "Nu e act normativ.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-mdlpa-clarificari-catuc-2026-09",
+  "to_source_id": "SRC-og-43-1997",
+  "relatie": "trimite_la",
+  "locator": "răspuns branșamente",
+  "nota": "Acordul/autorizația administratorului drumului e cea din OG 43/1997 art. 46.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-legea-53-2003-codul-muncii",
+  "to_source_id": "SRC-salariu-minim-constructii-2026",
+  "relatie": "trimite_la",
+  "locator": "art. 164 alin. (1)",
+  "nota": "Salariul minim se stabilește prin acte ale Guvernului; regimul construcțiilor e în OUG 114/2018.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-legea-98-2016",
+  "to_source_id": "SRC-legea-53-2003-codul-muncii",
+  "relatie": "trimite_la",
+  "locator": "art. 51 alin. (1)",
+  "nota": "Obligațiile în domeniul mediului, social și al relațiilor de muncă — trimitere generică.",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-legea-98-2016",
+  "to_source_id": "SRC-legea-319-2006",
+  "relatie": "trimite_la",
+  "locator": "art. 51 alin. (1)",
+  "nota": "Idem (trimitere generică).",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-legea-98-2016",
+  "to_source_id": "SRC-oug-92-2021",
+  "relatie": "trimite_la",
+  "locator": "art. 51 alin. (1)",
+  "nota": "Idem (trimitere generică).",
+  "tema": "santier_conex"
+ },
+ {
+  "from_source_id": "SRC-legea-283-2024",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "modifica",
+  "locator": "art. VIII pct. 1–2",
+  "nota": "introduce art. 187 alin. (5) lit. d) și art. 223 alin. (1) lit. c)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-283-2024",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "trimite_la",
+  "locator": "art. XI alin. (1)–(7)",
+  "nota": "norme autonome de excludere/clauze în procedurile L98",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-118-2025",
+  "to_source_id": "SRC-oug-52-2024",
+  "relatie": "modifica",
+  "locator": "articol unic",
+  "nota": "aprobă OUG 52/2024 (fără modificări textuale identificate)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-52-2024",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "modifica",
+  "locator": "art. I",
+  "nota": "inclus în forma CTCE 13.06.2024",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-52-2024",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "modifica",
+  "locator": "art. VIII",
+  "nota": "abrogări în HG 395 (art. 32 alin. (7), art. 93 alin. (4))",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-7-2026",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "abroga",
+  "locator": "art. XXVII alin. (2)",
+  "nota": "abrogă art. 2 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-45-2018",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "abroga",
+  "locator": "art. IV pct. 3",
+  "nota": "abrogă cap. II (notificarea prealabilă)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-oug-45-2018",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "modifica",
+  "locator": "art. IV",
+  "nota": "introduce art. 61^1 (cauțiunea)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_3004",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "aplica",
+  "locator": "motivare",
+  "nota": "citează textul în vigoare al art. 61^1 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-iccj-hp-66-2018",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "dispozitiv",
+  "nota": "art. 65, 104 alin. (3), 133, 134 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-iccj-hp-66-2018",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "interpreteaza",
+  "locator": "dispozitiv",
+  "nota": "art. 28 alin. (1)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-iccj-ril-23-2025",
+  "to_source_id": "SRC-legea-101-2016",
+  "relatie": "interpreteaza",
+  "locator": "dispozitiv",
+  "nota": "art. 3 alin. (1) lit. a), art. 8, art. 17 alin. (3)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-101-2016",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "trimite_la",
+  "locator": "art. 61^1 alin. (1); art. 49 alin. (2)",
+  "nota": "pragurile art. 7 alin. (1); achiziția directă art. 68",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-123-2012-gaze",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "trimite_la",
+  "locator": "art. 138 alin. (1) lit. d^1), art. 160 alin. (1), art. 162 alin. (1)",
+  "nota": "dreptul de a alege executantul; verificarea proiectelor; recepția",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-136-2022",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "modifica",
+  "locator": "—",
+  "nota": "forma consolidată 07.12.2022",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "trimite_la",
+  "locator": "art. 38 alin. (1)–(2), art. 39 alin. (1), (5); art. 46 alin. (2) lit. j); anexa 5 art. 14 lit. e), u)",
+  "nota": "recepție/PIF după NT, PV anexele 10–11, materiale art. 173",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "art. 38 alin. (3)",
+  "nota": "recepția la terminarea lucrărilor — art. 10",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-ord-anre-17-2026",
+  "relatie": "trimite_la",
+  "locator": "art. 5 alin. (3)–(4) (note de subsol)",
+  "nota": "trimiterea originară e la Ord. 132/2021, abrogat prin Ord. 17/2026 — tipurile PT/ET/PDSB/EDSB se citesc prin Ord. 17/2026",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-ord-anre-156-2020",
+  "relatie": "trimite_la",
+  "locator": "art. 39 alin. (3)",
+  "nota": "PIF instalații de utilizare — art. 25 alin. (1) lit. a)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-7-2022",
+  "to_source_id": "SRC-legea-319-2006",
+  "relatie": "trimite_la",
+  "locator": "anexa 5 art. 19",
+  "nota": "SSM în convenția tehnică",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-17-2026",
+  "to_source_id": "SRC-legea-24-2000",
+  "relatie": "aplica",
+  "locator": "art. 2–3 (fără dată proprie de intrare în vigoare)",
+  "nota": "intrare în vigoare la publicare — Legea 24/2000 art. 12 alin. (3)",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-anre-proiect-completare-racordare-2023",
+  "to_source_id": "SRC-ord-anre-7-2022",
+  "relatie": "modifica",
+  "locator": "proiect",
+  "nota": "adoptare neconfirmată",
+  "tema": "p0"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-50-1991",
+  "relatie": "abroga",
+  "locator": "art. 576 alin. (3) lit. b)",
+  "nota": "din 25.08.2026; și Ord. 839/2009 (lit. e))",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "abroga",
+  "locator": "art. 576 alin. (3) lit. c)",
+  "nota": "parțial: rămân art. 10 și 41",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "art. 577 alin. (6); art. 528 alin. (5)",
+  "nota": "menține regulamentul de recepție până la modificare",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-925-1995",
+  "relatie": "trimite_la",
+  "locator": "art. 577 alin. (5)",
+  "nota": "menținut, aplicabil cât nu contravine codului (art. 583 alin. (2))",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-766-1997",
+  "relatie": "trimite_la",
+  "locator": "art. 577 alin. (3)",
+  "nota": "anexele 1–5 menținute (inclusiv categoria de importanță)",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-hg-907-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 577 alin. (1)–(2)",
+  "nota": "proiectele HG 907 pornite înainte de 25.08.2026 rămân pe regimul vechi",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-123-2012-gaze",
+  "relatie": "interpreteaza",
+  "locator": "art. 267 alin. (1) (drepturile operatorului de rețea)",
+  "nota": "branșare la rețele existente",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-273-1994-receptie",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "trimite_la",
+  "locator": "art. 2 alin. (2); art. 11 alin. (5); art. 17 alin. (1) lit. c)",
+  "nota": "trimiteri la articole abrogate → se citesc la L169 (art. 583 alin. (3))",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "aplica",
+  "locator": "temei: art. 235 alin. (4) L98; art. 4 (L98 prioritară)",
+  "nota": "",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "Anexa 1 și 2, cl. 48.5",
+  "nota": "ICC total, tabelul 15",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-hg-273-1994-receptie",
+  "relatie": "trimite_la",
+  "locator": "Anexa 1, cl. 60.5, 62.2 („proces-verbal conform Legii”)",
+  "nota": "comisia și PV de recepție după regulament",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-1-2018",
+  "to_source_id": "SRC-legea-169-2026-catuc",
+  "relatie": "interpreteaza",
+  "locator": "Anexa 1, cl. 61.6 (categorii de importanță) ↔ L169 art. 370 alin. (5), art. 531 alin. (6)",
+  "nota": "valorile implicite coincid cu minimele pe CC",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-legea-98-2016",
+  "to_source_id": "SRC-hg-1-2018",
+  "relatie": "modifica",
+  "locator": "art. 222^2 alin. (9) (forma OUG 52/2024) vs cl. 48.2",
+  "nota": "obligație de ajustare > 6 luni prevalează asupra pragului de 365 zile (interpretare)",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-og-15-2021",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "art. 2 alin. (2), (5)",
+  "nota": "ICCM tabel 15; ponderi",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-oug-64-2022",
+  "to_source_id": "SRC-ins-buletin-statistic-preturi",
+  "relatie": "trimite_la",
+  "locator": "art. 17 alin. (8) (tabel 15, 15A)",
+  "nota": "ICCplr NU e INS (Anexa 4, CNSP)",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-metodologie-ajustare-oug-64-2022",
+  "to_source_id": "SRC-oug-64-2022",
+  "relatie": "aplica",
+  "locator": "întreg documentul",
+  "nota": "tabel 15.B pentru cap. VI",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2023_406",
+  "to_source_id": "SRC-oug-64-2022",
+  "relatie": "interpreteaza",
+  "locator": "motivare p. 8–9",
+  "nota": "formula e pentru contracte în derulare",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-hg-925-1995",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "aplica",
+  "locator": "temei art. 41 L10/1995",
+  "nota": "temeiul rămâne în vigoare (art. 41)",
+  "tema": "p1"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12732",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 37",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-15609-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 30",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-15607",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 29",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-15609-2",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 31",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-9692-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 33",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-6520-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 228 alin. (3), art. 235 alin. (4) + anexa 2 poz. 35",
+  "nota": "Trimitere datată (ediția din anexa 2).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12007",
+  "relatie": "incorporeaza",
+  "locator": "art. 50^1 alin. (2)",
+  "nota": "SR EN 12007-2:2012, doar calcul PE > 6 bar.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-13067",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 51",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-1555",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 52-55",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12954",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 49",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-stas-7335",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 38-46",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-stas-2484-sr-8050",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 50, 87",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-stas-8804",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 88-96",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-iso-1167-1",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 56",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-12007",
+  "relatie": "trimite_la",
+  "locator": "art. 6 alin. (2) + anexa 2 poz. 1, 4-6",
+  "nota": "Recomandare, nu încorporare.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-sr-en-13100",
+  "relatie": "trimite_la",
+  "locator": "art. 245 + anexa 2 poz. 57-59",
+  "nota": "Obligatoriu doar dacă proiectul prevede NDT pe PE.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-pt-cr-7-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 236 alin. (3) («procedee certificate conform reglementărilor în vigoare»)",
+  "nota": "Calea RO: WPQR aprobat ISCIR.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ntpee-2018",
+  "to_source_id": "SRC-pt-cr-9-2025",
+  "relatie": "trimite_la",
+  "locator": "art. 236 alin. (1), art. 239 alin. (5) («sudori autorizați de organisme abilitate»)",
+  "nota": "Organismul nu e numit; ISCIR = calea identificată.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-7-2025",
+  "to_source_id": "SRC-sr-en-iso-15614-1",
+  "relatie": "incorporeaza",
+  "locator": "încercări de tip pentru WPQR oțel (runda 1)",
+  "nota": "Locator exact de reconfirmat.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-7-2025",
+  "to_source_id": "SRC-sr-en-12814",
+  "relatie": "incorporeaza",
+  "locator": "încercări WPQR PEHD (runda 1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-5817",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17635",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17637",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17636",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-10675-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-17640-11666",
+  "relatie": "incorporeaza",
+  "locator": "art. 30 alin. (5)-(6) + art. 76/anexa 16",
+  "nota": "Doar pentru examenul de autorizare a sudorilor (nivel B); exemplificativ.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-iso-9606-1",
+  "relatie": "incorporeaza",
+  "locator": "art. 25 alin. (1) lit. b) + anexa 16",
+  "nota": "Cale de acces la examen, nu obligație unică.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-16296",
+  "relatie": "incorporeaza",
+  "locator": "art. 43 + anexa 16",
+  "nota": "Examen PEHD.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-12814",
+  "relatie": "incorporeaza",
+  "locator": "art. 44-45 + anexa 16",
+  "nota": "Examen PEHD.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-9-2025",
+  "to_source_id": "SRC-sr-en-10216-10217",
+  "relatie": "trimite_la",
+  "locator": "anexa 16",
+  "nota": "Material pentru probe.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-pt-cr-6-2025",
+  "to_source_id": "SRC-sr-en-iso-9712",
+  "relatie": "incorporeaza",
+  "locator": "art. 12 alin. (1) lit. b) + art. 96/anexa 24",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-iso-21809-1",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-iso-8501-1",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-iso-3183",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tolnp",
+  "to_source_id": "SRC-sr-en-10204",
+  "relatie": "trimite_la",
+  "locator": "ST-TOLNP (2023)",
+  "nota": "Obligatoriu doar când DA invocă ST-TOLNP.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tgphd",
+  "to_source_id": "SRC-sr-en-1555",
+  "relatie": "trimite_la",
+  "locator": "ST-TGPHD (2023)",
+  "nota": "Citează SR EN 1555:2021 — depășit de 2025.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-dgsr-st-tgphd",
+  "to_source_id": "SRC-sr-en-10204",
+  "relatie": "trimite_la",
+  "locator": "ST-TGPHD (2023)",
+  "nota": "Citează SR EN 1555:2021 — depășit de 2025.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-delgaz-st-505",
+  "to_source_id": "SRC-iso-12176",
+  "relatie": "aplica",
+  "locator": "ST 505 (cerințe aparat EF: cod de bare, memorie, protocoale)",
+  "nota": "Trimiterea explicită la ISO 12176 neconfirmată — relație de conținut.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-og-39-1998",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "interpreteaza",
+  "locator": "art. 6 alin. (1)",
+  "nota": "Standardele devin obligatorii doar prin reglementare/contract.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-sr-en-10208-2",
+  "to_source_id": "SRC-sr-en-iso-3183",
+  "relatie": "inlocuieste",
+  "locator": "—",
+  "nota": "Informație de specialitate, neverificată pe ASRO; direcția: 3183 înlocuiește 10208-2.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-sr-en-iso-15589-1",
+  "to_source_id": "SRC-sr-en-12954",
+  "relatie": "aplica",
+  "locator": "—",
+  "nota": "15589-1 = aplicația specifică la conducte a principiilor din 12954.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-g-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-i-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-iz-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-c-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-d-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "to_source_id": "SRC-indicator-rpg",
+  "relatie": "trimite_la",
+  "locator": "pct. 2.2.3",
+  "nota": "Reper orientativ (seria 1981 + revizuite după 1998).",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ordin-1014-874-2001-formulare-c",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "trimite_la",
+  "locator": "pct. C.7.1 lit. c) (citat pe coperta Ts ed. 2003)",
+  "nota": "«pot fi folosite în mod orientativ».",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-indicator-iz-1981",
+  "to_source_id": "SRC-stas-7335",
+  "relatie": "trimite_la",
+  "locator": "cap. IZL generalități pct. 1.1 (STAS 7335/3-76)",
+  "nota": "Partea /3 nu e în anexa 2 NTPEE.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-indicator-iz-1981",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "aplica",
+  "locator": "cap. IZL ↔ NTPEE art. 259 alin. (3)",
+  "nota": "Același sistem bitum «întărită/foarte întărită».",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-indicator-iz-1981",
+  "to_source_id": "SRC-indicator-c-1981",
+  "relatie": "trimite_la",
+  "locator": "note cap. IZF/IZG (mortare în «C», cap. Z)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-utcn-224ci-2018",
+  "to_source_id": "SRC-indicator-d-1981",
+  "relatie": "interpreteaza",
+  "locator": "cap. 1.2-1.3",
+  "nota": "Normele de timp ale utilajelor din D 1981 sunt depășite.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_696",
+  "to_source_id": "SRC-ordin-mlptl-1568-2002-p91",
+  "relatie": "aplica",
+  "locator": "motivare pag. 33-34",
+  "nota": "Articole asimilate admise dacă DA nu le interzice.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-CNSC-BO2024_696",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "aplica",
+  "locator": "răspuns la clarificări pct. 4 (TSC02A1, UM 100 mc)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-cocc-lista-indicatoare",
+  "to_source_id": "SRC-indicator-rpg",
+  "relatie": "trimite_la",
+  "locator": "catalog",
+  "nota": "Confirmă existența RpG/RpD/Iz.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-ccc-md-lista-indicatoare",
+  "to_source_id": "SRC-indicator-g-1981",
+  "relatie": "trimite_la",
+  "locator": "poz. 10-11",
+  "nota": "Ediții 1996 și 2002.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-g-1981",
+  "relatie": "aplica",
+  "locator": "deviz branșament art. 4-12",
+  "nota": "Coduri GD/GE/GF.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-iz-1981",
+  "relatie": "aplica",
+  "locator": "art. 13 (IZL06C1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-d-1981",
+  "relatie": "aplica",
+  "locator": "art. 15-16 (DI10A1, DG05A1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-xdev-model-deviz-gaze",
+  "to_source_id": "SRC-indicator-rpg",
+  "relatie": "aplica",
+  "locator": "deviz IU art. 12-13 (RPGD13A1, RPGD14A1)",
+  "nota": "",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-hg-907-2016",
+  "to_source_id": "SRC-indicator-ts-1981",
+  "relatie": "aplica",
+  "locator": "F3 col. 1-3 (UM și cantitate impuse de proiectant)",
+  "nota": "UM-ul din F3 primează față de UM-ul din indicator.",
+  "tema": "p2_deviz"
+ },
+ {
+  "from_source_id": "SRC-legea-10-1995",
+  "to_source_id": "SRC-np-133-2022-vol1",
+  "relatie": "aplica",
+  "locator": "art. 10 (preambul Ordin MDLPA 15/2023)",
+  "nota": "Art. 10 rămas în vigoare după L169/2026.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-10-1995",
+  "to_source_id": "SRC-np-133-2022-vol2",
+  "relatie": "aplica",
+  "locator": "art. 10 (preambul Ordin MDLPA 14/2023)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-10-1995",
+  "to_source_id": "SRC-np-133-2022-vol3",
+  "relatie": "aplica",
+  "locator": "art. 10 (preambul Ordin MDLPA 19/2023)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-np-133-2013",
+  "relatie": "abroga",
+  "locator": "Ordin MDLPA 15/2023 art. 4",
+  "nota": "Abrogă NP 133/1-2013.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-np-133-2013",
+  "relatie": "abroga",
+  "locator": "Ordin MDLPA 14/2023 art. 4",
+  "nota": "Abrogă NP 133/2-2013.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-241-2006",
+  "to_source_id": "SRC-np-133-2022-vol1",
+  "relatie": "interpreteaza",
+  "locator": "art. 3 lit. d), i)",
+  "nota": "Definiția sistemului public = domeniul NP 133 vol. I 1.4.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-241-2006",
+  "to_source_id": "SRC-np-133-2022-vol2",
+  "relatie": "interpreteaza",
+  "locator": "art. 3 lit. e), l)",
+  "nota": "Racord + cămin de racord = rețea publică.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-241-2006",
+  "to_source_id": "SRC-legea-51-2006-anrsc",
+  "relatie": "trimite_la",
+  "locator": "art. 1 alin. (3), art. 26 alin. (1)–(2)",
+  "nota": "Doar definire serviciu și licențiere operatori → neaplicabil executantului.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-51-2006-anrsc",
+  "to_source_id": "SRC-ord-anrsc-100-2023",
+  "relatie": "aplica",
+  "locator": "art. 20 alin. (1) lit. b), art. 21 alin. (2) (preambul Ord. 100/2023)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-legea-169-2026-catuc",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "abroga",
+  "locator": "art. 576 alin. (3) lit. c) (abrogare parțială; rămân art. 10 și 41)",
+  "nota": "Din runda p1.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-en-805",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (1); 7.3.7 alin. (3); cap. 9 alin. (9)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-6819",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (1); cap. 9 alin. (9); tabel 1.1 poz. 13 («SR 6819»)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-4163",
+  "relatie": "incorporeaza",
+  "locator": "cap. 9 alin. (9), (18); 9.2.1.1 alin. (5); 9.2.7.1 alin. (4); 9.2.7.2 alin. (1), (4), (12)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-8591",
+  "relatie": "incorporeaza",
+  "locator": "7.3.4.1 alin. (3); 9.1.2 alin. (2)–(3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-9312-87",
+  "relatie": "incorporeaza",
+  "locator": "7.2.5.5 alin. (2); 9.2.7.5 alin. (1)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-6054",
+  "relatie": "incorporeaza",
+  "locator": "7.2.1 alin. (2) lit. f) + tabel 1.1 poz. 57",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-9824-5",
+  "relatie": "incorporeaza",
+  "locator": "7.3.3 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-9570-1",
+  "relatie": "incorporeaza",
+  "locator": "7.3.6 alin. (6) lit. h); cap. 9 alin. (14) lit. h)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-stas-1913-13",
+  "relatie": "incorporeaza",
+  "locator": "7.3.5 alin. (13); 7.3.8 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-en-124",
+  "relatie": "incorporeaza",
+  "locator": "9.2.7.1 alin. (4) lit. a); 9.2.7.2 alin. (1) lit. d)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-en-16907",
+  "relatie": "incorporeaza",
+  "locator": "7.3.1 alin. (9)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-hg-668-2017",
+  "relatie": "trimite_la",
+  "locator": "7.1.3 alin. (2) lit. a)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-oms-275-2012",
+  "relatie": "trimite_la",
+  "locator": "7.1.3 alin. (2) lit. b); tabel 1.2 poz. 7",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-hg-930-2005",
+  "relatie": "trimite_la",
+  "locator": "7.2.7 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "trimite_la",
+  "locator": "7.3.1 alin. (4)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-sr-1343-1",
+  "relatie": "trimite_la",
+  "locator": "tabel 1.1 poz. 2",
+  "nota": "Doar proiectare.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-np-133-2022-vol3",
+  "relatie": "trimite_la",
+  "locator": "6.3 alin. (3) (pereți bazine aspirație)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-1610",
+  "relatie": "incorporeaza",
+  "locator": "3.6.1 alin. (10)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-805",
+  "relatie": "incorporeaza",
+  "locator": "3.4.5 alin. (4) lit. e) («SR EN 805:2000»)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-8591",
+  "relatie": "incorporeaza",
+  "locator": "3.4.1 alin. (8)–(9); 3.4.3.1.4 alin. (1) lit. b) («STAS 8591»)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-9312-87",
+  "relatie": "incorporeaza",
+  "locator": "3.4.6 alin. (2)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-6054",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.1.4 alin. (1) lit. a)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-9570-1",
+  "relatie": "incorporeaza",
+  "locator": "3.6.1 alin. (12) lit. h)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-12050-1",
+  "relatie": "incorporeaza",
+  "locator": "3.6.2 alin. (14)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-16907",
+  "relatie": "incorporeaza",
+  "locator": "3.6.2 alin. (16)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-124",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.5.1 alin. (3) lit. d); 3.4.3.5.5 alin. (4) lit. a) pct. v)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-sr-en-752",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.5.1 alin. (3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-stas-2448-sr-en-1917",
+  "relatie": "incorporeaza",
+  "locator": "3.4.3.5.1 alin. (3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-np-133-2022-vol1",
+  "relatie": "trimite_la",
+  "locator": "3.6 alin. (1) (execuție conform vol. I cap. 7.3); 3.4.10 alin. (1) (materiale, vol. I 7.1.3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-hg-668-2017",
+  "relatie": "trimite_la",
+  "locator": "3.4.10 alin. (3)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol2",
+  "to_source_id": "SRC-legea-107-1996-ape",
+  "relatie": "trimite_la",
+  "locator": "tabel 1.2 poz. 2; 3.4.6 alin. (4) (aviz administrator curs de apă)",
+  "nota": "Aviz gospodărire ape: deja în REQ-SC-087…094 — nu se duplică.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-legea-107-1996-ape",
+  "relatie": "trimite_la",
+  "locator": "tabel 1.2 poz. 1; 7.2.5.5 alin. (4)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol3",
+  "to_source_id": "SRC-stas-4165",
+  "relatie": "incorporeaza",
+  "locator": "5.1.13 alin. (6)",
+  "nota": "",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-np-133-2022-vol1",
+  "to_source_id": "SRC-ntpee-2018",
+  "relatie": "interpreteaza",
+  "locator": "— (fără trimitere directă)",
+  "nota": "Distanțe apă/canal–gaze: SR 8591 prin NP 133 + NTPEE art. 29–30 (REQ-SC-114), cumulativ.",
+  "tema": "apa_canal"
+ },
+ {
+  "from_source_id": "SRC-oug-44-2023",
+  "to_source_id": "SRC-oug-64-2022",
+  "relatie": "modifica",
+  "locator": "art. II pct. 1–6 (art. 1, 3, 8, 11, 12, 17 alin. (8))",
+  "nota": "citit",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-legea-243-2022",
+  "to_source_id": "SRC-oug-64-2022",
+  "relatie": "modifica",
+  "locator": "lege de aprobare cu modificări",
+  "nota": "din preambulul OUG 44/2023",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-oug-64-2022",
+  "to_source_id": "SRC-ins-bsp",
+  "relatie": "trimite_la",
+  "locator": "art. 17 alin. (4), (8) — ICCmr, ICCr tabel 15, %cpm tabel 15A",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-og-15-2021",
+  "to_source_id": "SRC-ins-bsp",
+  "relatie": "trimite_la",
+  "locator": "art. 2 alin. (2)–(4) — ICCM tabel 15, ponderi",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-og-15-2021",
+  "to_source_id": "SRC-hg-1-2018",
+  "relatie": "trimite_la",
+  "locator": "art. 2 alin. (8) — formula polinomială subcl. 48.4",
+  "nota": "fonduri europene",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-hg-925-1995",
+  "to_source_id": "SRC-legea-10-1995",
+  "relatie": "aplica",
+  "locator": "Regulament art. 1",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-nt-transport-118-2013",
+  "to_source_id": "SRC-sr-en-iso-5817",
+  "relatie": "trimite_la",
+  "locator": "Anexa art. 132 alin. (3)",
+  "nota": "recomandări pentru criterii de acceptare",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-nt-transport-118-2013",
+  "to_source_id": "SRC-sr-en-1594",
+  "relatie": "trimite_la",
+  "locator": "Anexa art. 134 alin. (3)",
+  "nota": "recomandări pph și durată",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-standard-performanta-distributie-gaze",
+  "to_source_id": "SRC-ord-anre-162-2015",
+  "relatie": "abroga",
+  "locator": "Ord. 131/2022 art. 3",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-standard-performanta-distributie-gaze",
+  "to_source_id": "SRC-legea-123-2012-gaze",
+  "relatie": "aplica",
+  "locator": "preambul — art. 134 alin. (2), art. 145 alin. (4) lit. n)",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-ord-anre-17-2026",
+  "to_source_id": "SRC-ord-anre-132-2021",
+  "relatie": "abroga",
+  "locator": "art. 2",
+  "nota": "de la 26.05.2026",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-legea-208-2022",
+  "to_source_id": "SRC-legea-99-2016",
+  "relatie": "modifica",
+  "locator": "art. II pct. 1–2 (art. 12 alin. (2), (4), (5))",
+  "nota": "în vigoare 10.09.2022",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-instr-anap-1-2021",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 221–222",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-instr-anap-1-2017",
+  "to_source_id": "SRC-legea-98-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 179 lit. g), art. 187 alin. (8) lit. a)",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-instr-anap-1-2017",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 32 alin. (3)–(6)",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-anap-indrumare-pret-neobisnuit-2023",
+  "to_source_id": "SRC-hg-395-2016",
+  "relatie": "interpreteaza",
+  "locator": "art. 136 alin. (1), (4)",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-anap-indrumare-liste-preturi-2023",
+  "to_source_id": "SRC-hg-1-2018",
+  "relatie": "interpreteaza",
+  "locator": "anexa 2, subcl. 37.5, 49.1, 49.2",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-anap-indrumare-liste-preturi-2023",
+  "to_source_id": "SRC-hg-907-2016",
+  "relatie": "interpreteaza",
+  "locator": "anexa 10, formular F5",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-ord-brml-204-2024",
+  "to_source_id": "SRC-brml-lo-2022",
+  "relatie": "modifica",
+  "locator": "art. I pct. 1–2 (notele 10, 26)",
+  "nota": "",
+  "tema": "surse_lipsa"
+ },
+ {
+  "from_source_id": "SRC-nt-transport-118-2013",
+  "to_source_id": "SRC-brml-lo-2022",
+  "relatie": "trimite_la",
+  "locator": "Anexa art. 136 alin. (2) „verificate metrologic”",
+  "nota": "trimitere implicită — L.O. nu listează manometrele de probă",
+  "tema": "surse_lipsa"
+ }
+]

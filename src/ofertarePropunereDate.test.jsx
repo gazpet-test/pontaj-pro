@@ -131,6 +131,8 @@ describe('QW0 — încărcare completă, erori cu sursă', () => {
       : q.sursa === 'ofertare_acoperire' ? { data: [acoperire({ verificat_pe_scan: false })] } : undefined)
     const r = await citesteDatePT(db, 93, async () => ({}))
     expect(db.cereri.find(q => q.sursa === 'ofertare_pt_legaturi').coloane).toContain('constatare')
+    // J02b (stareExceptarePT): exceptarea propusă de AI se recunoaște după legaturi.sursa === 'ai' — fără coloană ar arăta ca una umană.
+    expect(db.cereri.find(q => q.sursa === 'ofertare_pt_legaturi').coloane.split(',').map(c => c.trim())).toContain('sursa')
     expect(db.cereri.find(q => q.sursa === 'ofertare_acoperire').coloane).toBe('cerinta_id, status, verificat_pe_scan, reverificare_ceruta')
     expect(r.rest.ofertare_pt_legaturi[0].constatare).toBe('Lipsește proba')
     expect(r.dovedite.size).toBe(0)

@@ -11,6 +11,7 @@
 // ===========================================================================
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
+import { accesFinanciar, TABURI_GARANTII } from './financiarAcces.js'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { GbeTabel } from './GbeEvidenta.jsx'
@@ -1280,6 +1281,7 @@ export default function FinanciarPage() {
     const t = new URLSearchParams(window.location.search).get('tab')
     if (t && ['emise','furnizori','consumuri','contab','gbe','garantii'].includes(t)) setTab(t)
   }, [])
+  const [moduleAcces, setModuleAcces] = useState([])  // user_module_access (sub-modul 'financiar.garantii')
   const { show: showToast, Toast }  = useToast()
 
   const loadAll = useCallback(async () => {
@@ -1287,8 +1289,13 @@ export default function FinanciarPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-        const { data: prof } = await supabase.from('profiles').select('id,is_owner,role,can_access_salarii').eq('id',user.id).single()
+        const { data: prof } = await supabase.from('profiles').select('id,is_owner,role,can_access_salarii,name,email').eq('id',user.id).single()
         setProfile(prof)
+        const { data: uma } = await supabase.from('user_module_access').select('module').eq('profile_id', user.id)
+        const mods = (uma || []).map(m => m.module)
+        setModuleAcces(mods)
+        // doar „poate emite garanții”: nu încărcăm facturi/SL, deschidem direct GBE
+        if (accesFinanciar(prof, mods).doarGarantii) { setTab(t => TABURI_GARANTII.includes(t) ? t : 'gbe'); return }
       }
       const q = supabase.from('facturi_emise').select('*').order('an','desc').order('nr','desc')
       const { data } = await q
@@ -1310,7 +1317,8 @@ export default function FinanciarPage() {
   useEffect(() => { loadAll() }, [loadAll])
 
   const isOwner = profile?.is_owner === true
-  const canWrite = isOwner || ['superadmin','contabilitate'].includes(profile?.role)
+  // canWrite = facturi/contabilitate (neschimbat); canWriteGarantii include sub-modulul 'financiar.garantii'
+  const { canWrite, canWriteGarantii, doarGarantii, taburi } = accesFinanciar(profile, moduleAcces)
 
   // Lucrarea/contractul facturii: proiectul de execuție are prioritate, apoi contractul
   const lucrareTxt = useCallback(f =>
@@ -1395,7 +1403,7 @@ export default function FinanciarPage() {
           <div style={{width:30,height:30,background:`linear-gradient(135deg,${G.financiar},#2DD4BF)`,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>💰</div>
           <div style={{fontSize:14,fontWeight:700}}>Financiar</div>
           <div style={{marginLeft:10,display:'flex',gap:6}}>
-            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori'],['consumuri','📋 Consumuri'],['contab','📊 Contabilitate'],['gbe','🔐 Garanții GBE'],['garantii','🏛 Registru garanții']].map(([k,l]) => (
+            {[['emise','📤 Facturi emise'],['furnizori','🧾 Facturi furnizori'],['consumuri','📋 Consumuri'],['contab','📊 Contabilitate'],['gbe','🔐 Garanții GBE'],['garantii','🏛 Registru garanții']].filter(([k]) => taburi.includes(k)).map(([k,l]) => (
               <button key={k} onClick={()=>setTab(k)} style={{
                 padding:'6px 14px',fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:8,
                 background: tab===k ? G.financiar+'22' : 'transparent',
@@ -1411,7 +1419,7 @@ export default function FinanciarPage() {
               📥 Citește Orice
             </button>
           )}
-          {slAlert.length > 0 && (
+          {!doarGarantii && slAlert.length > 0 && (
             <div style={{marginLeft: canWrite ? 8 : 'auto',background:G.orange+'22',border:`1px solid ${G.orange}55`,borderRadius:20,padding:'4px 12px',fontSize:12,color:G.orange,fontWeight:700,display:'flex',alignItems:'center',gap:6}}>
               ⚡ {slAlert.length} SL fără factură
             </div>
@@ -1421,17 +1429,17 @@ export default function FinanciarPage() {
 
       <div style={{padding:'24px 28px',maxWidth:1400,margin:'0 auto'}}>
 
-        {tab === 'furnizori' && <FacturiFurnizoriTab />}
+        {!doarGarantii && tab === 'furnizori' && <FacturiFurnizoriTab />}
 
-        {tab === 'contab' && <ContabilitateWMTab />}
+        {!doarGarantii && tab === 'contab' && <ContabilitateWMTab />}
 
         {/* GBE — garanțiile de bună execuție pe toate contractele (09.09.2026): bani blocați, termene de eliberare, alerte */}
-        {tab === 'gbe' && <GbeTabel accent={G.financiar} canEdit={canWrite} />}
-        {tab === 'garantii' && <GarantiiRegistru canEdit={canWrite} showToast={showToast} />}
+        {tab === 'gbe' && <GbeTabel accent={G.financiar} canEdit={canWriteGarantii} />}
+        {tab === 'garantii' && <GarantiiRegistru canEdit={canWriteGarantii} showToast={showToast} profile={profile} />}
 
-        {tab === 'consumuri' && <ConsumuriBonuriTab mode="financiar" />}
+        {!doarGarantii && tab === 'consumuri' && <ConsumuriBonuriTab mode="financiar" />}
 
-        {tab === 'emise' && (<>
+        {!doarGarantii && tab === 'emise' && (<>
         {/* ── ALERTĂ SL fără factură ── */}
         {slAlert.length > 0 && (
           <div style={{background:G.orange+'0E',border:`1px solid ${G.orange}44`,borderRadius:10,padding:'14px 18px',marginBottom:20}}>

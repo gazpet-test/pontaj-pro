@@ -918,8 +918,8 @@ export function ModalSemnaturaMea({ profile, onClose, showToast }) {
             <div style={{textAlign:'center', padding:30, color:G.muted, fontSize:13}}>Se încarcă…</div>
           ) : !employee ? (
             <div style={{padding:14, background:G.orangeDim, borderLeft:`3px solid ${G.orange}`, borderRadius:6, fontSize:12, lineHeight:1.6, color:'#FFC494'}}>
-              Contul tău nu e legat de o fișă de angajat, deci nu pot ști a cui e semnătura.
-              Cere-i Nataliei sau Oanei să facă legătura din HR, apoi revino aici.
+              {/* 29.09.2026 R1: legătura cont↔fișă o face doar owner-ul (triggerul BD refuză auto-legarea) */}
+              Contul tău nu e legat de fișa de angajat. Cere-i lui Răzvan să facă legătura (Admin → Manageri → Editează).
             </div>
           ) : (
             <>

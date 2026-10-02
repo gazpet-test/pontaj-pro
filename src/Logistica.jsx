@@ -11796,20 +11796,51 @@ export default function LogisticaPage() {
     if (!importPreview?.rows?.length) return
     const { data: { user } } = await supabase.auth.getUser()
     
-    const payload = importPreview.rows.map(r => {
+    // Anti re-import: dacă există deja un rând cu același activ + dată + litri, îl sar (același fișier
+    // importat de 2 ori = dubluri în BD). Exclud doar QR-urile șoferilor (qr_status NOT NULL — flux Rompetrol/benzinărie).
+    // NU filtrez pe rezervor_id (rândurile din template pentru Oscar îl au setat) și nici pe whatsapp_autor
+    // (WhatsApp face UPDATE pe rânduri existente, inclusiv cele importate din template — ar scăpa dublurile).
+    const keyAlim = (a) => `${a.active_id}|${a.data_alimentare}|${Number(a.cantitate_litri).toFixed(2)}`
+    const datele = importPreview.rows.map(r => r.data_alimentare).filter(Boolean).sort()
+    let existSet = new Set()
+    if (datele.length) {
+      const { data: ex, error: exErr } = await supabase.from('logistica_alimentari')
+        .select('active_id, data_alimentare, cantitate_litri')
+        .is('qr_status', null)
+        .gte('data_alimentare', datele[0]).lte('data_alimentare', datele[datele.length - 1])
+      if (exErr) { showToast(`Eroare verificare duplicate: ${exErr.message}`, 'error'); return }
+      existSet = new Set((ex || []).map(keyAlim))
+    }
+    const vazute = new Set()  // dubluri și în interiorul aceluiași fișier
+    const sarite = []
+    const deInserat = importPreview.rows.filter(r => {
+      const k = keyAlim(r)
+      if (existSet.has(k) || vazute.has(k)) { sarite.push(r); return false }
+      vazute.add(k); return true
+    })
+    
+    const payload = deInserat.map(r => {
       const { activ_label, site_label, ...rest } = r  // strip label-uri UI-only
       return { ...rest, pret_per_litru: r.pret_total && r.cantitate_litri ? Number((r.pret_total / r.cantitate_litri).toFixed(4)) : null, created_by: user?.id }
     })
     
-    const { error } = await supabase.from('logistica_alimentari').insert(payload)
-    if (error) { showToast(`Eroare import: ${error.message}`, 'error'); return }
+    if (payload.length) {
+      const { error } = await supabase.from('logistica_alimentari').insert(payload)
+      if (error) { showToast(`Eroare import: ${error.message}`, 'error'); return }
+    }
     
     const cuSantier = payload.filter(p => p.site_id).length
     const faraSantier = payload.length - cuSantier
-    const msg = faraSantier > 0 
-      ? `✓ Import reușit: ${payload.length} alimentări (${cuSantier} cu șantier, ${faraSantier} fără)`
-      : `✓ Import reușit: ${payload.length} alimentări cu șantier asociat`
-    showToast(msg, 'success')
+    let msg = payload.length === 0
+      ? `Nimic de importat: toate cele ${sarite.length} rânduri există deja`
+      : faraSantier > 0 
+        ? `✓ Import reușit: ${payload.length} alimentări (${cuSantier} cu șantier, ${faraSantier} fără)`
+        : `✓ Import reușit: ${payload.length} alimentări cu șantier asociat`
+    if (sarite.length && payload.length) {
+      const lista = sarite.slice(0, 5).map(r => `${r.data_alimentare} · ${r.activ_label} · ${r.cantitate_litri} L`).join('; ')
+      msg += ` · ${sarite.length} rânduri sărite ca duplicate (${lista}${sarite.length > 5 ? ` … +${sarite.length - 5}` : ''})`
+    }
+    showToast(msg, payload.length === 0 ? 'info' : 'success')
     setImportPreview(null)
     loadAll()
   }

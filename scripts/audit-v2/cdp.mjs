@@ -2,6 +2,8 @@
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { verificaCerere } from './garda-p2.mjs'
+import { incident } from './politica-p2.js'
 
 export function urlSigur(raw) {
   try {
@@ -46,6 +48,11 @@ export class CDP {
     })
   }
   event(method, p) {
+    if (method === 'Fetch.requestPaused') {
+      // Intercepție ÎNAINTE de trimitere, nu analiză retrospectivă a jurnalului.
+      this.proceseazaCerere(p).catch(() => { this.guardError ||= new Error('endpoint: intercepția CDP a eșuat') })
+      return
+    }
     if (method === 'Page.javascriptDialogOpening') this.raspundeDialog(p)
     if (method === 'Page.javascriptDialogClosed') this.dialog = null
     if (method === 'Network.requestWillBeSent' && ['Fetch', 'XHR'].includes(p.type)) {
@@ -59,6 +66,35 @@ export class CDP {
     if (method === 'Network.responseReceived' && this.requests.has(p.requestId)) this.requests.get(p.requestId).status = p.response.status
     if (method === 'Network.loadingFinished') this.finalize(p.requestId, p.timestamp)
     if (method === 'Network.loadingFailed') this.finalize(p.requestId, p.timestamp, 0)
+  }
+  async proceseazaCerere(p) {
+    try {
+      if (!this.guard || this.guardError) throw this.guardError || new Error('endpoint: gardă neinițializată')
+      verificaCerere(p.request, this.guard)
+      await this.send('Fetch.continueRequest', { requestId: p.requestId })
+    } catch (e) {
+      this.guardError ||= e
+      await this.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' })
+    }
+  }
+  async instaleazaGarda(options) {
+    if (!options.apiUrl || !options.accessToken) throw new Error('endpoint: garda cere originea API și JWT-ul fix')
+    this.guard = options
+    await this.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] })
+    return true
+  }
+  verificaGarda() { if (this.guardError) throw this.guardError }
+  async verificaActor(actorId) {
+    // Nu returnăm și nu jurnalizăm tokenul din sesiunea browserului.
+    const valid = await this.evalueaza(`(() => {
+      const sessions = Object.keys(localStorage).filter(k => /^sb-.*-auth-token$/.test(k)).map(k => {
+        try { return JSON.parse(localStorage.getItem(k)) } catch { return null }
+      }).filter(Boolean);
+      return sessions.length === 1 && sessions[0].user?.id === ${JSON.stringify(actorId)}
+        && sessions[0].access_token === ${JSON.stringify(this.guard?.accessToken)};
+    })()`)
+    if (!valid) throw incident('BYPASS', 'permisiune: sesiunea UI diferă de JWT-ul non-owner fix')
+    this.verificaGarda()
   }
   raspundeDialog(p) {
     this.dialog = { type: p.type, message: p.message }

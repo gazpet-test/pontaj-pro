@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js'
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
 import { incarcaLantProbator } from '../../src/ofertareLantProbatorDate.js'
 import { compuneNouaVerigi, tabelText } from './lant.js'
 import { pathToFileURL } from 'node:url'
@@ -9,6 +10,7 @@ export function clientDinEnv(env = process.env) {
   let payload
   try { payload = JSON.parse(Buffer.from(env.AUDIT_ACCESS_TOKEN.split('.')[1], 'base64url').toString()) } catch { throw new Error('JWT invalid') }
   if (payload.role !== 'authenticated') throw new Error('Verificatorul cere JWT authenticated')
+  const { createClient } = require('@supabase/supabase-js')
   return createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false },
     global: { headers: { Authorization: `Bearer ${env.AUDIT_ACCESS_TOKEN}` } } })
 }

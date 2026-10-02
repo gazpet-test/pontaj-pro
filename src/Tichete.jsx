@@ -70,6 +70,8 @@ const fmtRelative = (d)=>{
 const getDep = (cod) => DEPARTAMENTE.find(d=>d.cod===cod) || DEPARTAMENTE[0]
 const getUrg = (cod) => URGENTE.find(u=>u.cod===cod) || URGENTE[1]
 const getSt = (cod) => STATUS_INFO[cod] || STATUS_INFO.deschis
+// TKT-2026-0304: statusurile care nu mai cer acțiune de la cel care a rezolvat
+const STATUS_ARHIVA = ['rezolvat','reparat','confirmat','inchis','respins']
 
 // ─────────────────────── Toast ────────────────────────────
 function useToast(){
@@ -267,6 +269,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
   }
 
   // Tichete filtrate
+  const rezolvatDeAltii = (x) => ['rezolvat','reparat'].includes(x.status) && x.deschis_de !== profile?.id
   const tichetFilt = useMemo(()=>{
     let t = tichete
     const amMembru = (x) => (asignatiMap[x.id] || []).includes(profile?.id)
@@ -277,7 +280,10 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
       else t = t.filter(x => x.persoana_responsabila === profile.id || x.deschis_de === profile.id || amMembru(x))
     }
     if(activeDep) t = t.filter(x=>x.departament===activeDep)
-    if(filtruStatus === 'active') t = t.filter(x=>!['inchis','confirmat','respins'].includes(x.status))
+    // TKT-2026-0304: la „Ale mele", un tichet rezolvat de mine (dar deschis de altcineva) nu mai e treaba mea —
+    // trece în 🗄 Arhivă; cele deschise de mine rămân active până le confirm.
+    if(filtruStatus === 'active') t = t.filter(x=>!['inchis','confirmat','respins'].includes(x.status) && !(filterMine && rezolvatDeAltii(x)))
+    else if(filtruStatus === 'arhiva') t = t.filter(x=>STATUS_ARHIVA.includes(x.status))
     else if(filtruStatus !== 'toate') t = t.filter(x=>x.status===filtruStatus)
     if(filtruUrgenta) t = t.filter(x=>x.urgenta===filtruUrgenta)
     if(searchText){
@@ -291,6 +297,10 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
     }
     return t
   },[tichete, filterMine, filterMineType, profile?.id, activeDep, filtruStatus, filtruUrgenta, searchText, asignatiMap])
+  // TKT-2026-0304: câte tichete rezolvate de mine au trecut în Arhivă (doar ca informare sub filtre)
+  const nRezolvateDeMine = useMemo(()=> (filterMine && filtruStatus === 'active' && profile?.id)
+    ? tichete.filter(x => rezolvatDeAltii(x) && (x.persoana_responsabila === profile.id || (asignatiMap[x.id] || []).includes(profile.id))).length : 0,
+  [tichete, filterMine, filtruStatus, profile?.id, asignatiMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalUrgenteActive = useMemo(()=>tichete.filter(t=>t.urgenta==='urgent' && !['inchis','confirmat','respins'].includes(t.status)).length,[tichete])
 
@@ -456,6 +466,7 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
           <select value={filtruStatus} onChange={e=>setFiltruStatus(e.target.value)} style={{padding:'10px 12px',background:G.surface,border:`1px solid ${G.border2}`,borderRadius:8,color:G.text,fontSize:13}}>
             <option value="active">⚡ Active (deschise, în lucru)</option>
             <option value="toate">📋 Toate</option>
+            <option value="arhiva">🗄 Arhivă (rezolvate, confirmate, închise)</option>
             <option value="deschis">🆕 Deschis</option>
             <optgroup label="Workflow Logistica">
               <option value="in_analiza">🔍 În analiză</option>
@@ -479,6 +490,13 @@ export default function Tichete({ profile: propProfile, filterDepartament = null
             </button>
           ))}
         </div>
+
+        {nRezolvateDeMine > 0 && (
+          <div style={{fontSize:12,color:G.muted,margin:'0 0 10px'}}>
+            🗄 {nRezolvateDeMine} {nRezolvateDeMine === 1 ? 'tichet rezolvat de tine a trecut' : 'tichete rezolvate de tine au trecut'} în Arhivă (mai așteaptă doar confirmarea celui care l-a deschis) —{' '}
+            <button onClick={()=>setFiltruStatus('arhiva')} style={{background:'none',border:0,color:G.blue,cursor:'pointer',fontSize:12,padding:0,textDecoration:'underline'}}>vezi Arhiva</button>
+          </div>
+        )}
 
         {/* Lista */}
         {tichetFilt.length === 0 ? (

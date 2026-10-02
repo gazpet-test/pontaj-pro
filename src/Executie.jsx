@@ -53,8 +53,13 @@ const fmtM = v => {
 }
 const fmtLei = v => {
   if (!v) return '—'
-  return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON', maximumFractionDigits: 0 }).format(v)
+  // TKT-2026-0306: valorile de contract au bani (ex. 28.313.417,15 lei) — se afișează cu 2 zecimale
+  return new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)
 }
+// Valoarea proiectului (Răzvan 02.10.2026, varianta A): peste tot se afișează valoarea ACTUALIZATĂ cu actele adiționale
+// (v_executie_dashboard.valoare_lei = v_contract_efecte_acte.valoare_actuala_calc); valoarea INIȚIALĂ stă în
+// executie_proiecte.valoare_lei și apare doar ca „inițial …” când diferă. Tabelul nu se suprascrie cu valoarea calculată.
+const valoriDiferite = (a, b) => a != null && b != null && a !== '' && b !== '' && Math.abs(Number(a) - Number(b)) >= 0.01
 const fmtDate = v => {
   if (!v) return '—'
   return new Date(v).toLocaleDateString('ro-RO', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -369,9 +374,15 @@ function DashboardProiectePage({ onSelectProiect }) {
         const { data: prof } = await supabase.from('profiles').select('id,is_owner,role,can_manage_contracts').eq('id', user.id).single()
         setProfile(prof)
       }
-      const { data, error } = await supabase.from('v_executie_dashboard').select('*').order('id')
+      const [{ data, error }, { data: brute }] = await Promise.all([
+        supabase.from('v_executie_dashboard').select('*').order('id'),
+        // valorile inițiale din tabel (view-ul dă valoarea/termenul ACTUALIZATE cu actele adiționale)
+        supabase.from('executie_proiecte').select('id, valoare_lei').order('id'),
+      ])
       if (error) throw error
-      setProiecte(data || [])
+      const initiale = {}
+      ;(brute || []).forEach(r => { initiale[r.id] = r.valoare_lei })
+      setProiecte((data || []).map(p => ({ ...p, valoare_initiala_lei: initiale[p.id] ?? null })))
     } catch(e) {
       showToast('Eroare la încărcare: ' + e.message, 'error')
     } finally {
@@ -387,6 +398,14 @@ function DashboardProiectePage({ onSelectProiect }) {
   const [cautaProiect, setCautaProiect] = useState('')
   // TKT-2026-0200: proiectele inactive stau în „Arhivă", nu amestecate cu cele active
   const [vedereArhiva, setVedereArhiva] = useState(false)
+
+  // „Editează” pornește din rândul BRUT din executie_proiecte, nu din view: view-ul dă valoarea, EUR-ul și termenul
+  // calculate cu actele adiționale, iar salvarea formularului le-ar fi scris peste valorile inițiale (02.10.2026).
+  async function deschideEditare(p) {
+    const { data: brut, error } = await supabase.from('executie_proiecte').select('*').eq('id', p.id).maybeSingle()
+    if (error || !brut) { showToast('Nu am putut încărca proiectul pentru editare: ' + (error?.message || 'negăsit'), 'error'); return }
+    setEditProiect({ ...p, ...brut, _valoare_actualizata: p.valoare_lei, _termen_actualizat: p.data_termen })
+  }
 
   // TKT-2026-0200: bifă rapidă activ/inactiv direct de pe card (aceeași coloană ca în „Editează")
   async function comutaActiv(p) {
@@ -477,7 +496,7 @@ function DashboardProiectePage({ onSelectProiect }) {
   }
   const CAMP_LABEL = {
     rte_employee_id: 'RTE', rts_employee_id: 'RTS', mp_employee_id: 'Manager proiect', coordonator_transgaz: 'Coordonator beneficiar',
-    garantie_buna_exec_pct: 'Garanție bună execuție (%)', penalitati_zi_pct: 'Penalități/zi (%)', valoare_lei: 'Valoare contract (lei)',
+    garantie_buna_exec_pct: 'Garanție bună execuție (%)', penalitati_zi_pct: 'Penalități/zi (%)', valoare_lei: 'Valoare inițială contract (lei)',
     valoare_eur: 'Valoare contract (EUR)', data_start: 'Data start', data_termen: 'Termen finalizare', durata_contract_luni: 'Durată (luni)',
     nr_contract: 'Nr. contract', data_contract: 'Data contract', beneficiar_final: 'Beneficiar final', lungime_proiect_m: 'Lungime (m)',
   }
@@ -848,7 +867,7 @@ function DashboardProiectePage({ onSelectProiect }) {
               canEdit={canEdit}
               onOpen={(tab) => onSelectProiect(p.id, tab)}
               onDetail={() => setSelectedProiect(p)}
-              onEdit={() => setEditProiect(p)}
+              onEdit={() => deschideEditare(p)}
               onToggleActiv={() => comutaActiv(p)}
               onRefresh={loadAll}
               showToast={showToast}
@@ -864,7 +883,7 @@ function DashboardProiectePage({ onSelectProiect }) {
           isOwner={isOwner}
           canEdit={canEdit}
           onClose={() => setSelectedProiect(null)}
-          onEdit={() => { setEditProiect(selectedProiect); setSelectedProiect(null) }}
+          onEdit={() => { deschideEditare(selectedProiect); setSelectedProiect(null) }}
           onOpen={(tab) => { setSelectedProiect(null); onSelectProiect(selectedProiect.id, tab) }}
         />
       )}
@@ -985,7 +1004,8 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
           { label: 'Tronsoane', value: p.nr_tronsoane ?? '—', icon: '📏' },
           { label: 'Pachete', value: p.nr_pachete ?? '—', icon: '📦' },
           { label: 'Lungime', value: fmtM(p.lungime_totala_m), icon: '📐' },
-          { label: 'Valoare', value: p.valoare_lei ? fmtLei(p.valoare_lei) : p.oferta_valoare ? fmtLei(p.oferta_valoare) : '—', icon: '💰' },
+          { label: 'Valoare', value: p.valoare_lei ? fmtLei(p.valoare_lei) : p.oferta_valoare ? fmtLei(p.oferta_valoare) : '—', icon: '💰',
+            sub: valoriDiferite(p.valoare_initiala_lei, p.valoare_lei) ? `inițial ${fmtLei(p.valoare_initiala_lei)}` : null },
         ].map((k, i) => (
           <div key={i} style={{
             padding: '12px 0', textAlign: 'center',
@@ -994,6 +1014,7 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
             <div style={{ fontSize: 16, marginBottom: 2 }}>{k.icon}</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: G.text }}>{k.value}</div>
             <div style={{ fontSize: 10, color: G.muted, marginTop: 1 }}>{k.label}</div>
+            {k.sub && <div style={{ fontSize: 9.5, color: G.dim, marginTop: 1 }} title="Valoarea din contractul semnat, înainte de actele adiționale">{k.sub}</div>}
           </div>
         ))}
       </div>
@@ -1217,7 +1238,8 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
               { label: 'Termen finalizare', value: p.este_sistat
                   ? `⏸ Sistat (${p.data_ultima_sistare ? fmtDate(p.data_ultima_sistare) : 'manual'})`
                   : fmtDate(p.data_termen) + (p.prelungire_totala_luni > 0 ? ` +${p.prelungire_totala_luni} luni AA` : '') },
-              { label: 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
+              { label: valoriDiferite(p.valoare_initiala_lei, p.valoare_lei) ? 'Valoare contract (actualizată cu acte)' : 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
+              ...(valoriDiferite(p.valoare_initiala_lei, p.valoare_lei) ? [{ label: 'Valoare inițială contract', value: fmtLei(p.valoare_initiala_lei) }] : []),
               { label: 'Valoare ofertă', value: p.oferta_valoare ? fmtLei(p.oferta_valoare) : '—' },
               { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—' },
               { label: 'Data semnare', value: fmtDate(p.data_contract || p.contract_data_semnare) },
@@ -2204,8 +2226,13 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
                 </div>
               </div>
               <div>
-                <label style={labelStyle}>Termen finalizare</label>
+                <label style={labelStyle}>Termen finalizare (inițial, din contract)</label>
                 <input type="date" value={form.data_termen} onChange={e => set('data_termen', e.target.value)} style={fieldStyle} />
+                {proiect._termen_actualizat && proiect._termen_actualizat !== (proiect.data_termen || null) && (
+                  <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
+                    Termen actualizat cu actele adiționale: <b style={{ color: G.muted }}>{fmtDate(proiect._termen_actualizat)}</b> — se modifică din Contracte → acte adiționale, nu de aici.
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -2213,12 +2240,17 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
           {/* ── Valori ──────────────────────────────────────────────────── */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
-              <label style={labelStyle}>Valoare contract (RON)</label>
-              <input type="number" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)} style={fieldStyle} placeholder="0" min="0" step="1000" />
+              <label style={labelStyle}>Valoare inițială contract (RON)</label>
+              <input type="number" value={form.valoare_lei} onChange={e => set('valoare_lei', e.target.value)} style={fieldStyle} placeholder="0,00" min="0" step="0.01" />
+              {valoriDiferite(proiect._valoare_actualizata, proiect.valoare_lei) && (
+                <div style={{ fontSize: 11, color: G.dim, marginTop: 4 }}>
+                  Valoare actualizată cu actele adiționale: <b style={{ color: G.muted }}>{fmtLei(proiect._valoare_actualizata)}</b> — se modifică din Contracte → acte adiționale, nu de aici.
+                </div>
+              )}
             </div>
             <div>
               <label style={labelStyle}>Valoare contract (EUR)</label>
-              <input type="number" value={form.valoare_eur} onChange={e => set('valoare_eur', e.target.value)} style={fieldStyle} placeholder="0" min="0" step="1000" />
+              <input type="number" value={form.valoare_eur} onChange={e => set('valoare_eur', e.target.value)} style={fieldStyle} placeholder="0,00" min="0" step="0.01" />
             </div>
           </div>
 
@@ -2934,7 +2966,7 @@ function TabProiectDashboard({ proiectId }) {
       const [{ data: v }, { data: e }] = await Promise.all([
         supabase.from('v_executie_dashboard').select('*').eq('id', proiectId).maybeSingle(),
         supabase.from('executie_proiecte')
-          .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, doc_itp_pccvi_path, isc_faza_determinanta, lungime_proiect_m')
+          .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, doc_itp_pccvi_path, isc_faza_determinanta, lungime_proiect_m, valoare_initiala_lei:valoare_lei')
           .eq('id', proiectId).maybeSingle(),
       ])
       if (!live) return
@@ -2999,7 +3031,8 @@ function TabProiectDashboard({ proiectId }) {
         : (p.data_termen ? fmtDate(p.data_termen) + (p.prelungire_totala_luni > 0 ? ` +${p.prelungire_totala_luni}l AA` : '') : '—'),
       warn: p.zile_pana_termen != null && p.zile_pana_termen < 30 && !p.este_sistat },
     { label: 'Zile până la termen', value: p.zile_pana_termen != null ? `${p.zile_pana_termen} zile` : '—', warn: p.zile_pana_termen != null && p.zile_pana_termen < 30 },
-    { label: 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
+    { label: valoriDiferite(extra.valoare_initiala_lei, p.valoare_lei) ? 'Valoare contract (actualizată cu acte)' : 'Valoare contract', value: p.valoare_lei ? fmtLei(p.valoare_lei) : '—' },
+    ...(valoriDiferite(extra.valoare_initiala_lei, p.valoare_lei) ? [{ label: 'Valoare inițială contract', value: fmtLei(extra.valoare_initiala_lei) }] : []),
     { label: 'Nr. contract', value: p.nr_contract || p.numar_contract || '—' },
     { label: 'Acte adiționale', value: p.nr_acte_aditionale > 0 ? `${p.nr_acte_aditionale} acte` : '—' },
   ]

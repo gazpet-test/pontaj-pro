@@ -8,6 +8,8 @@ export const SURSE_ADMIN = [
   { id: 'gbe', label: 'Garanții GBE', module: 'financiar', path: '/financiar?tab=gbe' },
   { id: 'comenzi', label: 'Aprobări comenzi', module: 'achizitii', path: '/achizitii', approval: true },
   { id: 'transport', label: 'Aprobări transport', module: 'logistica', path: '/logistica?tab=transporturi', approval: true },
+  // 29.09.2026 (R1/R2): administrarea conturilor e doar a owner-ului — și în BD (poarta din fn_admin_conturi_alerte).
+  { id: 'conturi', label: 'Conturi platformă', module: 'admin_alerte', ownerOnly: true, path: '/admin?tab=managers' },
 ]
 
 // Cheia transversală este explicită inclusiv pentru owner. Nu moștenește dreptul HR.
@@ -17,6 +19,7 @@ export function areAccesAdministrator(profile) {
 
 export function areAccesSursa(profile, source) {
   if (!areAccesAdministrator(profile)) return false
+  if (source.ownerOnly) return profile.is_owner === true
   if (profile.is_owner === true) return true
   const modules = profile.module_access || []
   return modules.includes(source.module) || (!!source.submodule && modules.includes(source.submodule))
@@ -144,6 +147,121 @@ export function alerteGbeAdmin(balances, policies, contracts, today) {
   return rows
 }
 
+// ---- Conturi platformă (R1 legare cont↔fișă, R2 cont închis la încetare) --------------------
+// Prioritățile din docs/CONTURI_CICLU_VIATA.md B.8. Acțiunile (legare, închidere, restaurare)
+// se fac DOAR din Admin → Manageri; aici numai citire.
+const CONTURI = {
+  fara_angajat:            { priority: 'attention', title: 'Cont fără fișă de angajat' },
+  cont_activ_fost_angajat: { priority: 'critical',  title: 'Cont activ pentru un angajat inactiv' },
+  inchis_dar_deblocat:     { priority: 'critical',  title: 'Cont închis, dar logarea e deblocată' },
+  inchis_cu_acces_rest:    { priority: 'critical',  title: 'Cont închis cu acces rămas' },
+  reactivat_acces_neredat: { priority: 'week',      title: 'Angajat reactivat, contul rămâne închis' },
+  alocari_ramase:          { priority: 'attention', title: 'Alocări rămase pe un cont închis' },
+  inactiv_fara_data:       { priority: 'missing',   title: 'Fișă inactivă fără dată de încetare' },
+}
+export const PRIORITATE_CONTURI = Object.fromEntries(Object.entries(CONTURI).map(([cod, c]) => [cod, c.priority]))
+
+export function descriereCandidati(candidati) {
+  const list = Array.isArray(candidati) ? candidati : []
+  if (!list.length) return 'niciun candidat'
+  if (list.length === 1) return `1 candidat: ${list[0].employee_name || `fișa #${list[0].employee_id}`}${list[0].profil_legat ? ', are deja cont' : ''}`
+  return `${list.length} candidați: ${list.map(c => c.employee_name || `fișa #${c.employee_id}`).join(', ')}`
+}
+
+// Unde se reasignează fiecare alocare rămasă (tabelele din fn_admin_conturi_alerte → ecranul real).
+// path null = nu există ecran de editare: modificarea se face în BD (cu Claude, preview → confirmare).
+export const ALOCARI_CONTURI = {
+  comenzi_aprobatori:           { label: 'Achiziții → tab Aprobatori (aprobator comenzi)', path: '/achizitii' },
+  hr_recrutare_pozitii:         { label: 'HR → Recrutare (responsabil poziție)', path: '/hr?tab=recrutare' },
+  necesar_responsabili:         { label: 'Consumabile → responsabil necesar (fără ecran de editare: în BD, cu Claude)', path: null },
+  hr_aprobatori:                { label: 'HR → aprobator concedii (fără ecran de editare: în BD, cu Claude)', path: null },
+  hr_concediu_rute:             { label: 'HR → Concedii → rută de aprobare (fără ecran de editare: în BD, cu Claude)', path: null },
+  marketing_aprobatori:         { label: 'Marketing → aprobator postări (fără ecran de editare: în BD, cu Claude)', path: null },
+  tichete_default_responsabili: { label: 'Tichete → responsabil implicit departament (fără ecran de editare: în BD, cu Claude)', path: null },
+}
+function descriereAlocari(alocari) {
+  const entries = Object.entries(alocari || {}).filter(([, n]) => Number(n) > 0)
+  return entries.length ? entries.map(([tabel, n]) => `${ALOCARI_CONTURI[tabel]?.label || tabel} (${n})`).join('; ') : 'nicio alocare'
+}
+function caleAlocari(alocari) {
+  const tabel = Object.keys(ALOCARI_CONTURI).find(t => Number(alocari?.[t]) > 0 && ALOCARI_CONTURI[t].path)
+  return tabel ? ALOCARI_CONTURI[tabel].path : null
+}
+
+// Runda 3: motivul calculat în BD (fn_admin_conturi_alerte → alocari.motiv_neinchis) pentru care un cont al unui
+// angajat inactiv NU s-a închis automat. Fără motiv (rânduri vechi) se păstrează explicația după dată.
+export function motivNeinchis(row, today) {
+  const a = row?.alocari || {}
+  const alt = a.alt_contract ? `fișa #${a.alt_contract}` : 'altă fișă'
+  const q = a.coada || {}
+  switch (a.motiv_neinchis) {
+    case 'owner': return 'OWNER: nu se închide automat, decide manual.'
+    case 'tip_cont': return `Contul e marcat „${row.tip_cont || '?'}”: nu se închide automat.`
+    case 'fara_data': return 'Fișa e inactivă fără dată de încetare.'
+    case 'data_viitoare': return `Dezactivat înainte de data încetării (${row.termination_date}); închiderea e programată pentru data încetării.`
+    case 'cnp_lipsa': return 'CNP lipsă (nici în datele personale, nici pe fișă): nu se poate verifica dacă omul are alt contract activ. Completează CNP-ul (Admin → Angajați → date personale) sau închide manual.'
+    case 'alt_contract_activ': return `Are alt contract ACTIV (${alt}, același CNP): contul rămâne deschis cât timp lucrează pe celălalt contract.`
+    case 'posibil_alt_contract': return `Posibil alt contract ACTIV (${alt}: același nume de familie sau email, fără CNP). Completează CNP-ul acelei fișe sau închide manual dacă e altă persoană.`
+    case 'in_coada': return `Închiderea e în coadă (${q.tip || '?'}; încercări: ${q.incercari ?? 0}${q.ultima_eroare ? `; ultima eroare: ${q.ultima_eroare}` : ''}).`
+    case 'esuat_abandonat': return `Închiderea automată a eșuat de ${q.incercari ?? '?'} ori și coada s-a oprit (ultima eroare: ${q.ultima_eroare || '?'}). Elimină cauza și închide contul acum.`
+    case 'restaurat': return `Restaurat de owner (jurnal #${a.restaurat?.jurnal_id ?? '?'}): nu se re-închide automat la corecții ale fișei; se închide la o nouă plecare sau manual.`
+    case 'esuat_sau_neprins': return 'Contul NU s-a închis automat: fișa a fost dezactivată înainte de data încetării (triggerul prinde doar trecerea activ → inactiv) sau închiderea a eșuat (vezi notificarea „închidere eșuată”).'
+    default: {
+      const zile = zileRamase(row.termination_date, today)
+      return !row.termination_date ? 'Fișa e inactivă fără dată de încetare.'
+        : zile > 0 ? `Dezactivat înainte de data încetării (${row.termination_date}).`
+        : 'Contul NU s-a închis automat: fișa a fost dezactivată înainte de data încetării (triggerul prinde doar trecerea activ → inactiv) sau închiderea a eșuat (vezi notificarea „închidere eșuată”).'
+    }
+  }
+}
+
+// Runda 3 (P12b): marcajele de identitate ale unui cont nelegat (emailul de logare ≠ profil / neconfirmat).
+export function marcajeIdentitate(alocari) {
+  const m = []
+  if (alocari?.email_diferit) m.push(`⚠️ Emailul de logare diferă de cel din profil (${alocari.email_profil || 'gol'}): verifică identitatea; „Leagă automat” îl sare.`)
+  if (alocari?.email_neconfirmat) m.push('⚠️ Emailul de logare e neconfirmat: „Leagă automat” îl sare până la confirmare.')
+  return m.join(' ')
+}
+
+export function alerteConturi(rows, today) {
+  return rows.flatMap(row => {
+    const meta = CONTURI[row.cod]
+    if (!meta) return []
+    const cod = row.cod
+    const date = row.termination_date || (row.inchis_la ? ziBucuresti(new Date(row.inchis_la)) : null)
+    const angajat = cod === 'inactiv_fara_data'
+    let impact
+    let priority = meta.priority
+    if (cod === 'fara_angajat') {
+      const marcaje = marcajeIdentitate(row.alocari)
+      impact = `${marcaje ? marcaje + ' ' : ''}Leagă fișa (Editează → Fișă angajat) sau marchează tipul (extern/test/sistem). Potrivire: ${descriereCandidati(row.candidati)}.`
+    }
+    if (cod === 'cont_activ_fost_angajat') {
+      if (row.is_owner) impact = 'OWNER: nu se închide automat, decide manual.'
+      else impact = `Închide contul acum sau corectează fișa. ${motivNeinchis(row, today)}`
+      // decizia conștientă a owner-ului (restaurare) nu e o urgență: amintire săptămânală, nu alertă critică
+      if (row.alocari?.motiv_neinchis === 'restaurat') priority = 'week'
+    }
+    if (cod === 'inchis_dar_deblocat' || cod === 'inchis_cu_acces_rest') impact = `Reaplică închiderea (Admin → Manageri → Edit → „🔒 Reaplică închiderea”; jurnal #${row.jurnal_id}). NU folosi „Restaurează”: redă TOT accesul — doar dacă omul revine în firmă.`
+    if (cod === 'inchis_cu_acces_rest' && row.alocari?.flaguri_abandonate) impact += ' Resetarea automată a flagurilor s-a oprit după eșecuri repetate.'
+    else if (cod === 'inchis_cu_acces_rest' && row.alocari?.flaguri_in_coada) impact += ' Flagurile de acces sunt în coadă (se pun pe false la următoarea rulare, ≤ 5 min).'
+    if (cod === 'reactivat_acces_neredat') impact = `Dacă revine în firmă: Restaurează din jurnal #${row.jurnal_id}. Altfel verifică reactivarea.`
+    if (cod === 'alocari_ramase') impact = `Reasignează: ${descriereAlocari(row.alocari)}.`
+    const caleAloc = cod === 'alocari_ramase' ? caleAlocari(row.alocari) : null
+    if (cod === 'inactiv_fara_data') impact = 'Completează data încetării sau șterge fișa demo.'
+    return [alerta('conturi', row.id, {
+      title: meta.title,
+      reference: [row.email || (row.profile_id ? 'cont fără email' : 'fără cont'), row.employee_name ? `${row.employee_name} (#${row.employee_id})` : null].filter(Boolean).join(' · '),
+      priority, date,
+      owner: angajat ? 'HR · Admin → Angajați' : 'Owner · Admin → Manageri',
+      path: angajat ? `/admin?tab=employees&angajat=${row.employee_id}` : caleAloc || `/admin?tab=managers&cont=${row.profile_id}`,
+      impact,
+      reason: 'Diagnostic calculat din conturi, fișele de angajat și jurnalul închiderilor. Dreptul de logare și accesul nu se modifică de aici; acțiunile se fac doar din Admin, de owner.',
+      locator: `v_admin_conturi_alerte · ${cod}`,
+    })]
+  })
+}
+
 export function statusuriTransport(profile) {
   const name = (profile?.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   return [...(profile?.is_owner || name.includes('mitrache') ? ['submitata'] : []), ...(profile?.is_owner || name.includes('puscasu') ? ['aprobata_mitrache'] : [])]
@@ -181,6 +299,7 @@ export const SELECT_ADMIN = {
   contracte_terti: 'id,numar_contract,status',
   comenzi_furnizor_aprobari: 'id,comanda:comenzi_furnizor(id,numar_comanda,moneda,status,linii:comenzi_furnizor_linii(cantitate,pret_unitar))',
   logistica_comenzi_transport: 'id,numar_comanda,data_transport,status',
+  v_admin_conturi_alerte: 'id,cod,profile_id,email,tip_cont,is_owner,employee_id,employee_name,employee_active,termination_date,banned_until,jurnal_id,inchis_la,candidati,alocari',
 }
 
 export async function incarcaSursaAdmin(client, source, profile, { signal, now = new Date() } = {}) {
@@ -191,6 +310,7 @@ export async function incarcaSursaAdmin(client, source, profile, { signal, now =
     let rows = []
     if (source.id === 'ofertare') rows = alerteOfertare(await read('ofertare_licitatii', q => q.in('status', ['identificata', 'analiza', 'go', 'in_lucru'])), now)
     if (source.id === 'hr') rows = alerteHr(await read('v_hr_autorizatii_status'), today)
+    if (source.id === 'conturi') rows = alerteConturi(await read('v_admin_conturi_alerte'), today)
     if (source.id === 'firma') rows = alerteFirma(await read('documente_firma', q => q.eq('activ', true)), today)
     if (source.id === 'flota') {
       const [docs, assets, types] = await Promise.all([read('logistica_documente'), read('logistica_active'), read('logistica_tipuri_documente')])

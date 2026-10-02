@@ -88,7 +88,7 @@ export async function citesteDatePT(supabase, id, citesteGrafic) {
     ofertare_pt_capitole_versiuni: () => capIds.length ? supabase.from('ofertare_pt_capitole_versiuni')
       .select('*').in('capitol_id', capIds).order('versiune', { ascending: false }).limit(2000) : { data: [] },
     ofertare_pt_legaturi: () => ids.length ? supabase.from('ofertare_pt_legaturi')
-      .select('id, cerinta_id, capitol_id, fel, motiv, stare, locator_raspuns, constatare, verificat_la_versiunea, confirmat_la').in('cerinta_id', ids).limit(10000) : { data: [] },
+      .select('id, cerinta_id, capitol_id, fel, motiv, sursa, stare, locator_raspuns, constatare, verificat_la_versiunea, confirmat_la').in('cerinta_id', ids).limit(10000) : { data: [] },
     ofertare_acoperire: () => ids.length ? supabase.from('ofertare_acoperire')
       .select('cerinta_id, status, verificat_pe_scan, reverificare_ceruta').in('cerinta_id', ids).in('status', ['acoperit','acoperit_partener']).limit(10000) : { data: [] },
     v_ofertare_pt_echipa: () => supabase.from('v_ofertare_pt_echipa').select('*').eq('licitatie_id', id).order('ordine', { nullsFirst: false }).order('nume').limit(500),
