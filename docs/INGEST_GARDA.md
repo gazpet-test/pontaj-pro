@@ -1,5 +1,7 @@
 # Garda citirii automate Ofertare (`ofertare-ingest-doc` + worker NAS)
 
+> **Actualizare 02.10.2026:** rândul „DRAFT runda 4 — nimic deployat, nimic aplicat” de mai jos e **depășit la 02.10**: #553 e merged în `main`, `ofertare-ingest-doc` **v13 LIVE** (versiunea Supabase 25, secret `OFERTARE_INGEST_SECRET` setat), `ofertare-word-text` **v9 LIVE** cu poartă de rol (JAK-V2-05 închis, #575). Coada rămâne oprită. Starea curentă, probele rulate și restanțele: `docs/INGEST_GARDA_RUNBOOK.md` (§0.2, §3, §5.1, §8). Restul documentului rămâne istoricul de design (rundele 1–4).
+
 **Stare: DRAFT runda 4 — nimic deployat, nimic aplicat. GO pe MECANISM ≠ reluarea ingestului (vezi „Livrare separată”).** Închide condițiile de reluare a citirii automate după incidentul de
 egress din 24–25.09.2026 (`docs/INCIDENT_EGRESS_2026-09-25.md`, verdictul `docs/INCIDENT_EGRESS_VERDICT_COPILOT_2026-09-30.md`,
 `docs/MONITOR_EGRESS.md`, PR #478). Runda 2 răspunde la NO-GO Copilot r1 (secțiunea [Runda 2](#runda-2-no-go-copilot-r1)).
