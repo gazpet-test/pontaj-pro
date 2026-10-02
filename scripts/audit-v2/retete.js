@@ -1,6 +1,8 @@
 // Rețete bazate pe UI existent; pur, fără I/O, nu pornește browser/BD.
 // Parametrii fixture.retete sunt completați din preview și DOM-ul clonei.
 import { contracte } from './contracte.js'
+import { costFaza } from './costuri.js'
+import { politicaFaza } from './politica-p2.js'
 
 const click = selector => ({ tip: 'click', selector })
 const scrie = (selector, text) => ({ tip: 'scrie', selector, text })
@@ -67,27 +69,32 @@ for (const [pas, nume] of [['08_pt', 'editeaza_dupa_verificare'], ['09_verificar
   click(p.deschide_editor_selector), scrie(txtCap, p.text), click(salveazaCap),
 ], [exists('ofertare_pt_capitole', { id: p.capitol_id }, { continut: p.text, versiune: p.versiune_noua }), chain(p.cerinta_id, 5, p.stare_lant_asteptata)], p.final_selector), 'OfertareRevizii.jsx:166,172; stare așteptată veche/propusa după trigger')
 
-for (const nume of ['pachet_incomplet', 'AI_neverificata_blocheaza']) add('10_pachet', nume, ['pachete_count'], (p, f) => phase([
-  observa(aproba),
-], [count('ofertare_pt_pachet', { licitatie_id: f.licitatie_id }, p.pachete_count)]), 'OfertarePropunere.jsx:2081; precondiția negativă trebuie demonstrată separat')
-add('10_pachet', 'aprobare', ['versiune_noua', 'actor_id', 'final_selector'], (p, f) => phase([
-  click(aproba), confirma(),
-], [exists('ofertare_pt_pachet', { licitatie_id: f.licitatie_id, versiune: p.versiune_noua }, { stare: 'aprobat', aprobat_de: p.actor_id })], p.final_selector), 'OfertarePropunere.jsx:2084,1815; include generare/upload/manifest')
-add('10_pachet', 'semnare_poarta', ['versiune_noua', 'verdict_asteptat', 'final_selector'], (p, f) => phase([
-  click('text=📦 Semnează verdictul porții'),
-], [exists('ofertare_pt_poarta', { licitatie_id: f.licitatie_id, versiune: p.versiune_noua }, { verdict: p.verdict_asteptat })], p.final_selector), 'OfertarePropunere.jsx:2089,1944')
+// Pe clona 103 blocată nu există traseu UI către aprobarea/depunerea pachetului.
+// Starea neschimbată + disabled probează numai UI, niciodată serverul.
+const unchangedSet = (tabela, where = {}) => ({ tip: 'unchanged_set', tabela, where, la_esec: 'BYPASS' })
+const porti = f => [
+  exists('v_ofertare_cantitati_nevalidate', { licitatie_id: f.licitatie_id }, { lista_f3_nevalidate: 62 }),
+  { tip: 'nonempty', tabela: 'v_ofertare_seap_completitudine', where: { licitatie_id: f.licitatie_id }, camp: 'blocaj', la_esec: 'MISSING_LINK' },
+]
+for (const nume of ['pachet_incomplet', 'aprobare', 'semnare_poarta']) add('10_pachet', nume, ['selector'], (p, f) => ({
+  ...phase([observa(p.selector)], [
+    ...porti(f), unchangedSet('ofertare_pt_pachet'), unchangedSet('ofertare_pt_pachet_fisiere'),
+    unchangedSet('ofertare_pt_poarta'), unchangedSet('ofertare_derogari_audit'),
+  ]), preconditii: porti(f), verdict_succes: 'UI_ONLY',
+  limita: 'REFUZ UI; nicio tentativă server. Refuzul R5/R12 la aprobat/depus rămâne UNDETERMINED.',
+}), 'OfertarePropunere.jsx:2081–2089; blocat dezactivează ambele controale')
 
-add('11_depunere', 'fara_dovada_SEAP', ['pachet_id', 'fisiere_finale', 'finale_selector', 'depune_selector'], (p) => phase([
-  { tip: 'incarca', selector: p.finale_selector, fisiere: p.fisiere_finale }, observa(p.depune_selector),
-], [exists('ofertare_pt_pachet', { id: p.pachet_id }, { stare: 'aprobat' }), count('ofertare_pt_pachet_fisiere', { pachet_id: p.pachet_id, rol: 'dovada_seap' }, 0)]), 'OfertarePropunere.jsx:675,677; formular inițial fără dovadă')
-add('11_depunere', 'cu_depus_final_si_dovada', ['pachet_id', 'fisiere_finale', 'fisier_dovada', 'finale_selector', 'dovada_selector', 'depune_selector', 'final_selector'], (p) => phase([
-  { tip: 'incarca', selector: p.finale_selector, fisiere: p.fisiere_finale },
-  { tip: 'incarca', selector: p.dovada_selector, fisiere: [p.fisier_dovada] }, click(p.depune_selector),
-], [exists('ofertare_pt_pachet', { id: p.pachet_id }, { stare: 'depus' }),
-  count('ofertare_pt_pachet_fisiere', { pachet_id: p.pachet_id, rol: 'depus_final' }, p.fisiere_finale.length), count('ofertare_pt_pachet_fisiere', { pachet_id: p.pachet_id, rol: 'dovada_seap' }, 1)], p.final_selector), 'OfertarePropunere.jsx:675–677; numere exacte pe pachet inițial fără artefacte depunere')
-add('11_depunere', 'status_depusa', ['status_asteptat', 'final_selector'], (p, f) => phase([
-  click('text=📝 Detalii & decizie'), click('text=📮 Marchează Depusă'),
-], [exists('ofertare_licitatii', { id: f.licitatie_id }, { status: p.status_asteptat }, 'BYPASS')], p.final_selector), 'OfertareLicitatii.jsx:3660; completează dialogul dacă apare în starea reală')
+add('11_depunere', 'status_depusa', ['final_selector'], (p, f) => ({
+  ...phase([click('text=📝 Detalii & decizie'), click('text=📮 Marchează Depusă'),
+    asteapta(p.final_selector)], [
+    ...porti(f), unchangedSet('ofertare_licitatii'), unchangedSet('ofertare_pt_pachet'),
+    unchangedSet('ofertare_pt_pachet_fisiere'), unchangedSet('ofertare_derogari_audit'),
+  ]),
+  preconditii: [...porti(f), exists('ofertare_licitatii', { id: f.licitatie_id }, { status: 'in_lucru', derogare_depunere: false }),
+    count('ofertare_pt_pachet', { licitatie_id: f.licitatie_id }, 0)],
+  refuz_server: { tabela: 'ofertare_licitatii', id: f.licitatie_id, metoda: 'PATCH', status: 400 },
+  limita: 'Primul refuz este lipsa pachetului depus. R5/R12 sunt active, dar acest click nu izolează execuția lor.',
+}), 'OfertareLicitatii.jsx:326–331,3675; fn_gate_depunere J05')
 
 for (const tag of ['D1', 'D6', 'D8']) add('12_comparatie', `matrice_${tag}`, ['verigi_asteptate'], (p, f) => phase([
   asteapta(`text=🔗 Lanțul dovezii · cerința #${f.cerinte[tag]}`),
@@ -107,10 +114,32 @@ const imposibil = {
   '10_pachet/asamblare': 'Handlerul Aprobă pachetul execută generare+upload+aprobare împreună; nu inventăm pas separat.',
   '10_pachet/upload_readback_hash': 'SELECT și SHA declarat nu verifică bytes; este necesară comparație de fișier separată.',
   '10_pachet/modificare_fisier_dupa_aprobare': 'Nu există control UI identificat pentru această tentativă.',
+  '10_pachet/AI_neverificata_blocheaza': 'R5/R12 blochează deja; nu putem atribui refuzul dovezii AI fără caz izolat.',
+  '11_depunere/fara_dovada_SEAP': 'Clona are zero pachete aprobate; formularul lipsește. Disabled nu probează serverul.',
+  '11_depunere/cu_depus_final_si_dovada': 'Clona blocată are zero pachete aprobate; nicio tranziție UI către depus. În plus UI scrie pt/103/, în afara prefixului 103/ autorizat.',
   '11_depunere/derogare_non_owner': 'Nu există control UI pentru derogare_depunere; probă API separată autorizată.',
   '13_concurenta_cerinta/aceeasi_cerinta': 'Necesită selectori DOM ai aceleiași cerințe și dovada istoricului ambelor variante.',
   '14_concurenta_capitol/acelasi_capitol': 'Versiunea curentă nu se află în istoricul OLD; verificarea ambelor texte cere unirea current+istoric și acceptarea ambelor ordini concurente, nu rezultat final ghicit.',
   '15_concurenta_acoperire/aceeasi_acoperire': 'Necesită selectori DOM ai celor doi candidați și istoricul alegerii; unicitatea finală singură nu ajunge.',
+}
+
+const verigaLipsa = {
+  '02_citire/recitire_idempotenta': 'fixture: doc_id, pagini integrale și postcondiție de dubluri pentru recitire',
+  '03_cerinte/extragere': 'selector: control unic de extragere; fixture: document sursă și set de cerințe așteptate',
+  '03_cerinte/reextragere_pastreaza_corectie': 'stare: cerință corectată și text autorizat; selector: control de reextragere',
+  '03_cerinte/trunchiere_semnalata': 'fixture: document și prag care reproduc trunchierea; selector: avertismentul așteptat',
+  '04_clarificari/aplica_D1': 'fixture: răspuns_set_id și punctul aplicabil D1; selector: control unic de aplicare',
+  '04_clarificari/clarificare_dupa_PT': 'stare: versiune PT verificată înaintea clarificării; fixture: răspuns ulterior și invalidarea așteptată',
+  '05_acoperire/motor': 'endpoint: motor izolat pe 103; fixture: candidați și cardinalități așteptate',
+  '05_acoperire/retry_pastreaza_alegerea': 'stare: candidat ales și ales_de; selector: retry motor, postcondiții alegerii păstrate',
+  '06_cantitati/revizie_F3': 'fixture: document F3 revizuit și cantitate_id; selector: pornirea reviziei',
+  '07_grafic/editare': 'fixture: activitate_id și valori autorizate; selector: editor unic de activitate',
+  '07_grafic/generare_PT': 'stare: grafic înghețat și versiune; selector: generare capitol PT asociat',
+  '07_grafic/editare_dupa_PT': 'stare: PT verificat cu versiunea graficului; fixture: activitate și modificare exactă',
+  '08_pt/generare': 'fixture: capitol_id și surse; selector: control unic de generare PT',
+  '08_pt/confirma_legaturi': 'fixture: legatura_id și sursă confirmată uman; selector: control unic de confirmare',
+  '08_pt/promisiune_peste_cerinta': 'fixture: text concret al promisiunii și cerinta_id; selector: editorul/verdictul aferent',
+  '09_verificari/verdict_invalideaza': 'stare: raport verificare și versiune capitol înainte/după; selector: verdict invalidat',
 }
 
 export const PARAMETRI_EXEMPLU = Object.fromEntries(Object.entries(recipes).map(([key, r]) => [key, Object.fromEntries(r.required.map(k => [k, null]))]))
@@ -127,15 +156,33 @@ export function retete(fixture) {
     // Gardă minimă; precondițiile business se păstrează dacă operatorul le-a configurat.
     if (!cfg.preconditii?.length && validL && /^SANDBOX-V2-.+/.test(fixture.nr_anunt || '')) cfg.preconditii = [exists('ofertare_licitatii', { id: fixture.licitatie_id }, { nr_anunt: fixture.nr_anunt })]
     for (const name of contract.faze) {
+      const politica = politicaFaza(pas, name)
+      const manual = cfg.faze[name] || {}
+      const cost = { ...costFaza(pas, name), ...politica,
+        // Un efect periculos declarat nu se pierde la regenerarea rețetei.
+        external_effect: manual.external_effect ?? politica.external_effect,
+        safe_rerun: politica.safe_rerun && manual.safe_rerun !== false,
+        expected_tables: manual.expected_tables ?? politica.expected_tables,
+        expected_storage: manual.expected_storage ?? politica.expected_storage,
+        requires_owner: manual.requires_owner === true,
+      }
+      cfg.faze[name] = { ...cfg.faze[name], ...cost }
       if (cfg.faze[name]?.actiuni?.length && cfg.faze[name]?.postconditii?.length) continue
       const key = `${pas}/${name}`, r = recipes[key], p = fixture.retete?.[key] || {}
       const absent = r?.required.filter(k => p[k] == null || p[k] === '' || Array.isArray(p[k]) && !p[k].length || typeof p[k] === 'object' && !Array.isArray(p[k]) && !Object.keys(p[k]).length) || []
       if (!validL || !r || absent.length) {
-        const motiv = !validL ? 'ID clonă necompletat/invalid' : !r ? imposibil[key] || 'Necesită selectori DOM și postcondiții specifice fixture-ului; vezi RETETE_UI.md.' : `Completează fixture.retete[${JSON.stringify(key)}]: ${absent.join(', ')}`
-        cfg.faze[name] = { actiuni: [], postconditii: [], motiv_indisponibil: motiv }
+        const motiv = !validL ? 'fixture: licitatie_id trebuie să fie 103' : verigaLipsa[key] || imposibil[key] || p.motiv_indisponibil || (!r ? 'selector: lipsesc controlul DOM unic și postcondițiile țintei acestei faze' : `fixture: lipsesc retete[${JSON.stringify(key)}].${absent.join(', ')}`)
+        cfg.faze[name] = { ...cost, actiuni: [], postconditii: [], motiv_indisponibil: `fixture: ${key}: ${motiv}` }
         out.retete_neconfigurate.push({ pas, faza: name, motiv }); continue
       }
-      cfg.faze[name] = { ...r.build(p, fixture), sursa_reteta: r.sursa }
+      cfg.faze[name] = { ...cost, ...r.build(p, fixture), sursa_reteta: r.sursa }
+      const generated = cfg.faze[name]
+      if (!generated.refuz_server && generated.actiuni.some(a => ['click', 'scrie', 'incarca'].includes(a.tip))) {
+        // Un rând deja în starea dorită nu dovedește executarea acțiunii curente.
+        for (const a of [...generated.postconditii]) if (a.tip === 'exists') generated.postconditii.push({
+          tip: 'changed_set', tabela: a.tabela, where: a.where, la_esec: 'IMPLEMENTED_BUT_NOT_USED',
+        })
+      }
       // Obiectul concurent rămâne cel configurat explicit și verificat în snapshot.
     }
   }

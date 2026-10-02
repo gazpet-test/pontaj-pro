@@ -10,8 +10,11 @@ export function verificaIds(fixture, cerinte) {
   if (ids.some(id => !cerinte.some(c => c.id === id && c.licitatie_id === fixture.licitatie_id))) throw new Error('Cerința nu aparține clonei')
   return ids
 }
-export function caleSandbox(path) {
-  if (typeof path !== 'string' || !path.startsWith('103/') || !path.slice(4) || path.split('/').some(p => !p)
+export function caleSandbox(path, fixture = { licitatie_id: 103 }) {
+  const id = fixture?.licitatie_id
+  if (id !== 103) throw new Error('REFUZ: destinație fără clona autorizată')
+  const prefix = `${id}/`
+  if (typeof path !== 'string' || !path.startsWith(prefix) || !path.slice(prefix.length) || path.split('/').some(p => !p)
     || /\\|%|[?#\x00-\x1f]|(^|\/)\.\.?($|\/)/.test(path)) throw new Error('Destinație Storage în afara clonei 103/')
   return path
 }

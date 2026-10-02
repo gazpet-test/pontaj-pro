@@ -1,5 +1,9 @@
 # Rețete UI pentru Audit V2
 
+**J06b:** rețetele sunt pregătite, nu autorizate pentru live. Runnerul cere T0 complet și supraveghere/gardă server activă, încă fără endpoint implementat aici. Fiecare fază are `external_effect`, `safe_rerun`, comportament de rerulare și liste de scrieri comise permise. Cele patru probe negative permit zero scrieri; lipsa providerului, a accesului brut la Storage sau a unei verigi concrete produce UNDETERMINED, fără workaround. Vezi [contractul actual](../../docs/AUDIT_OFERTARE_V2/P2_PLAN_RULARE.md).
+
+**Actualizare J06, 29.09.2026:** configurația operabilă pentru clona 103 este în [P2_PLAN_RULARE.md](../../docs/AUDIT_OFERTARE_V2/P2_PLAN_RULARE.md). Are patru faze configurate și 47 UNDETERMINED. Exemplele de mai jos pentru aprobare/depunere reușită descriu fluxul istoric și NU se execută pe clona cu R5/R12 active. Rețetele 10 observă blocarea cu verdict UI_ONLY; 11/status_depusa cere PATCH respins, toast exact, seturi BD neschimbate și audit J05 neschimbat. Fazele AI sunt excluse implicit, inclusiv la `--faza`. TXT-ul ground truth nu este JSON. Testele actuale sunt `node --test scripts/audit-v2/*.test.*` (în sandbox Windows: `--test-isolation=none`).
+
 28.09.2026. Ghid pentru completarea `fixture.scenarii[pas]`, nu scenarii pretins executate. Sursele citate sunt cele locale. ID-urile clonei și mapările 289/290/333 → documentele clonei vin din rezultatul clonării; **289/290/333 și licitația 5 nu sunt ținte de scriere**.
 
 `text=` este potrivire exactă după normalizarea spațiilor în driver, nu căutare parțială. `css=` folosește atribute existente. Textele dinamice se completează cu numărul efectiv afișat. Un selector trebuie să aibă exact un rezultat în panoul deschis; `key={id}` din React NU creează atribut HTML. În lipsa unui identificator de rând, se înregistrează selectorul observat în DOM după filtrare, nu se ghicește `data-id` și nu se folosește arbitrar primul buton „✓”.

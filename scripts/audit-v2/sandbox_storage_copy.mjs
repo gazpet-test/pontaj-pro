@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { clientDinEnv } from './verifica_lant.mjs'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, basename } from 'node:path'
@@ -7,20 +7,20 @@ import { caleSandbox, verificaSandbox } from './siguranta.js'
 import { citesteLicitatia } from './verifica_lant.mjs'
 import { salveazaJson } from './dovezi.mjs'
 
-export function verificaPerechi(pairs) {
+export function verificaPerechi(pairs, fixture = { licitatie_id: 103 }) {
   if (!Array.isArray(pairs) || !pairs.length) throw new Error('Lista de perechi este goală')
   const paths = new Set()
   for (const p of pairs) {
-    caleSandbox(p.cale_noua)
+    caleSandbox(p.cale_noua, fixture)
     if (typeof p.cale_veche !== 'string' || !p.cale_veche.startsWith('5/') || /\\|%|[?#]|(^|\/)\.\.?($|\/)/.test(p.cale_veche)
-      || p.cale_noua !== `103/${p.cale_veche.slice(2)}`) throw new Error('Pereche invalidă: doar 5/... → 103/...')
+      || p.cale_noua !== `${fixture.licitatie_id}/${p.cale_veche.slice(2)}`) throw new Error('Pereche invalidă: doar 5/... → 103/...')
     if (paths.has(p.cale_noua)) throw new Error('Destinație duplicată')
     paths.add(p.cale_noua)
   }
 }
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
 export async function copiazaStorage(db, pairs, fixture, save) {
-  verificaPerechi(pairs)
+  verificaPerechi(pairs, fixture)
   verificaSandbox(await citesteLicitatia(db, fixture.licitatie_id), fixture)
   const bucket = db.storage.from('ofertare'); const manifest = []
   for (const p of pairs) {
