@@ -2,7 +2,7 @@
 -- 20261003a_garantii_bilete_ordin — DRAFT, NEAPLICAT (decizia lui Răzvan 02.10.2026 „1B”; claude_context #1544; cererea
 --   Marilenei Tudorache). Biletele la ordin (BO) date de Gazpet ca GARANȚIE la polițele de asigurare (nu plata primei),
 --   urmărite până la restituire. UI: Financiar → 🏛 Registru garanții → „🧾 BO (n)” (GarantiiBileteOrdin.jsx).
--- Ce face (3 lucruri, nimic altceva):
+-- Ce face (4 lucruri, nimic altceva):
 --   1. tabela public.garantii_bilete_ordin, legată de rândul poliței din public.garantii (FK ON DELETE RESTRICT):
 --      serie, număr, sumă (> 0), monedă (RON/EUR), emitere, scadență (≥ emitere), stare emis/restituit/executat,
 --      restituit_la (obligatorie DOAR la „restituit”), document_path (scan în bucketul privat documente-firma), observații.
@@ -11,17 +11,21 @@
 --   2. RLS: SELECT pentru orice cont logat (ca garantii_rls_sel); INSERT/UPDATE/DELETE cu aceeași poartă ca garantii
 --      (public.fn_poate_scrie_garantii(), 20261005b — live). ACL exact: authenticated/service_role S/I/U/D (secvența:
 --      USAGE/SELECT); anon și PUBLIC nimic; fără TRUNCATE/REFERENCES/TRIGGER/MAINTAIN (în linie cu F1/F1b, 20261006a).
---   3. public.garantii_alerte() (cronul garantii_alerte_0645): CORPUL LIVE NESCHIMBAT (md5 fd35c645…, citit read-only
---      02.10.2026) + un bloc nou la coadă, după bucla existentă: bo_scadent (emis, scadența în 0..14 zile) și bo_expirat
---      (emis, scadența depășită). Amprente în garantii_alerte_amprenta (PK garantie_id, fel). ACL-ul, SECDEF, search_path,
---      semnătura: neschimbate (CREATE OR REPLACE). Modul notificări: 'Financiar' — valoarea permisă de
---      notifications_modul_check. ATENȚIE (preexistent, NEATINS aici): blocul vechi inserează modul = 'financiar', care
---      PICĂ pe notifications_modul_check; azi nu se vede (0 rânduri), dar în ziua în care o garanție intră pe o ramură
---      veche, toată execuția garantii_alerte() (inclusiv alertele BO) eșuează. Al doilea bug latent, tot în blocul vechi:
---      ON CONFLICT (garantie_id, fel) ⇒ „column reference garantie_id is ambiguous” (coliziune cu coloanele OUT ale
---      funcției; verificat local). Blocul nou folosește ON CONFLICT ON CONSTRAINT. Reparația blocului vechi = decizie separată.
+--   3. public.garantii_alerte() (cronul garantii_alerte_0645): corpul live (md5 fd35c645…, citit read-only 02.10.2026)
+--      + un bloc nou la coadă, după bucla existentă: bo_scadent (emis, scadența în 0..14 zile) și bo_expirat (emis,
+--      scadența depășită). Amprente în garantii_alerte_amprenta (garantii_alerte_amprenta_pkey = garantie_id, fel).
+--      ACL-ul, SECDEF, search_path, semnătura: neschimbate (CREATE OR REPLACE). Modul notificări: 'Financiar'.
+--   4. REPARAȚIE în blocul vechi (varianta A aleasă de Răzvan, 02.10.2026) — 2 buguri latente PREEXISTENTE care opreau
+--      TOATĂ execuția garantii_alerte() (deci și alertele BO) în ziua în care o garanție intra pe o ramură veche:
+--      a) modul = 'financiar' → 'Financiar' (notifications_modul_check acceptă doar 'Financiar');
+--      b) ON CONFLICT (garantie_id, fel) → ON CONFLICT ON CONSTRAINT garantii_alerte_amprenta_pkey (lista de coloane se
+--         ciocnea cu coloanele OUT ale funcției ⇒ „column reference garantie_id is ambiguous”).
+--      Nimic altceva din blocul vechi nu se schimbă — postcondiția 3 o dovedește în BD: inversând exact cele 2 înlocuiri pe
+--      partea veche a corpului nou se obține corpul vechi (md5 9ccb8ff8… = corpul fd35c645… fără „END;” final).
+--      Efect la livrare (citit read-only pe live 02.10.2026): 0 garanții active pe ramurile vechi ⇒ nicio notificare
+--      „în rafală”; ramurile vechi încep să notifice abia când o garanție intră pe ele (recepție bifată / expirare ≤ 60 z).
 -- Fișa de securitate a alertei: (a) nu citește conținut extern (doar tabele interne); (b) scrie doar notifications (către
---   owneri) și garantii_alerte_amprenta; nu trimite mail, nu atinge bani/drepturi; (c) SECURITY DEFINER (owner postgres),
+--   owneri; după reparație și pentru ramurile vechi) și garantii_alerte_amprenta; nu trimite mail, nu atinge bani/drepturi; (c) SECURITY DEFINER (owner postgres),
 --   rulată de cron ca postgres; (d) EXECUTE doar postgres/service_role (neschimbat) — pornită doar de cronul
 --   garantii_alerte_0645; (e) fără confirmare (doar notificări interne, idempotent prin amprente).
 -- Precondiții (fail-closed): postgres; tabela nu există; garantii (coloane md5 0cd06900…), fn_poate_scrie_garantii
@@ -29,8 +33,10 @@
 --   SECDEF, search_path, ACL postgres+service_role; PK amprentelor = (garantie_id, fel); 'Financiar' permis de CHECK.
 -- Postcondiții: tabela cu RLS, exact 4 politici, anon/PUBLIC fără drepturi (tabelă + secvență), ACL exact (authenticated și
 --   service_role: tabela S/I/U/D, secvența USAGE/SELECT — fără TRUNCATE/REFERENCES/TRIGGER/MAINTAIN);
---   garantii_alerte() cu md5-ul nou, prefixul = corpul vechi, ACL și atribute neschimbate.
--- Revenire (NU e migrare): supabase/revenire/20261003a_garantii_bilete_ordin_ROLLBACK.sql (refuză dacă tabela are rânduri).
+--   garantii_alerte() cu md5-ul nou; partea veche = corpul vechi + EXACT cele 2 reparații (verificat prin inversare);
+--   tiparele vechi ('financiar', ON CONFLICT pe coloane) absente; ACL și atribute neschimbate.
+-- Revenire (NU e migrare): supabase/revenire/20261003a_garantii_bilete_ordin_ROLLBACK.sql (refuză dacă tabela are rânduri;
+--   readuce corpul vechi EXACT — deci reintroduce și cele 2 buguri; e revenire, nu reparație).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid); fără BEGIN/COMMIT.
 -- Test local: bash scripts/test_garantii_bilete_ordin.sh
 -- ════════════════════════════════════════════════════════════════════════════
@@ -138,7 +144,8 @@ CREATE POLICY garantii_bo_rls_ins ON public.garantii_bilete_ordin AS PERMISSIVE 
 CREATE POLICY garantii_bo_rls_upd ON public.garantii_bilete_ordin AS PERMISSIVE FOR UPDATE TO authenticated USING ((SELECT public.fn_poate_scrie_garantii())) WITH CHECK ((SELECT public.fn_poate_scrie_garantii()));
 CREATE POLICY garantii_bo_rls_del ON public.garantii_bilete_ordin AS PERMISSIVE FOR DELETE TO authenticated USING ((SELECT public.fn_poate_scrie_garantii()));
 
--- 3. garantii_alerte(): corpul live NESCHIMBAT (până la „END LOOP;”) + blocul 4 (bilete la ordin) la coadă
+-- 3+4. garantii_alerte(): corpul live cu EXACT 2 reparații (modul 'Financiar'; ON CONFLICT ON CONSTRAINT) + blocul 4
+--      (bilete la ordin) la coadă
 CREATE OR REPLACE FUNCTION public.garantii_alerte()
 RETURNS TABLE(fel text, garantie_id bigint, mesaj text)
 LANGUAGE plpgsql
@@ -196,12 +203,12 @@ BEGIN
     END IF;
 
     INSERT INTO public.notifications (profile_id, type, modul, title, message, link_to)
-    SELECT p.id, 'warning', 'financiar', v_titlu, v_mesaj, '/financiar/garantii'
+    SELECT p.id, 'warning', 'Financiar', v_titlu, v_mesaj, '/financiar/garantii'  -- 20261003a: era 'financiar', respins de notifications_modul_check
     FROM public.profiles p WHERE p.is_owner = true;
 
     INSERT INTO public.garantii_alerte_amprenta (garantie_id, fel, amprenta)
     VALUES (r.id, v_fel, v_amprenta)
-    ON CONFLICT (garantie_id, fel) DO UPDATE SET amprenta = EXCLUDED.amprenta, trimis_la = now();
+    ON CONFLICT ON CONSTRAINT garantii_alerte_amprenta_pkey DO UPDATE SET amprenta = EXCLUDED.amprenta, trimis_la = now();  -- 20261003a: era ON CONFLICT pe coloane, ambiguu cu coloanele OUT
 
     fel := v_fel; garantie_id := r.id; mesaj := v_mesaj;
     RETURN NEXT;
@@ -312,14 +319,25 @@ BEGIN
   IF pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = 'public.garantii_bilete_ordin'::regclass)) IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION 'Postcondiție 2: garantii_bilete_ordin nu e a lui postgres';
   END IF;
-  -- 3. garantii_alerte(): md5 nou, prefix = corpul vechi, atribute + ACL neschimbate, unică
+  -- 3. garantii_alerte(): md5 nou; partea veche = corpul vechi + exact cele 2 reparații; tiparele vechi absente; atribute + ACL
+  --    neschimbate; unică
   IF (SELECT count(*) FROM pg_proc WHERE proname = 'garantii_alerte') <> 1 THEN
     RAISE EXCEPTION 'Postcondiție 3: garantii_alerte nu mai e unică';
   END IF;
   SELECT md5(prosrc) INTO v_s FROM pg_proc WHERE oid = 'public.garantii_alerte()'::regprocedure;
-  IF v_s IS DISTINCT FROM '9bcd5ab40afa2d82580be4858e852721'
-     OR (SELECT md5(left(prosrc, 2873)) FROM pg_proc WHERE oid = 'public.garantii_alerte()'::regprocedure) IS DISTINCT FROM '9ccb8ff8064c8f4c2374a0a5d41b16bc' THEN
-    RAISE EXCEPTION 'Postcondiție 3: corpul garantii_alerte() (md5 %) ≠ cel livrat sau prefixul ≠ corpul live vechi', v_s;
+  IF v_s IS DISTINCT FROM 'bd170a0f935e7123d85e4000467dd7fd' THEN
+    RAISE EXCEPTION 'Postcondiție 3: corpul garantii_alerte() (md5 %) ≠ cel livrat (bd170a0f…)', v_s;
+  END IF;
+  -- inversând exact cele 2 reparații pe primele 3035 caractere (partea veche) se obține corpul vechi fără „END;” final
+  IF (SELECT md5(replace(replace(left(prosrc, 3035),
+              'SELECT p.id, ''warning'', ''Financiar'', v_titlu, v_mesaj, ''/financiar/garantii''  -- 20261003a: era ''financiar'', respins de notifications_modul_check',
+              'SELECT p.id, ''warning'', ''financiar'', v_titlu, v_mesaj, ''/financiar/garantii'''),
+              'ON CONFLICT ON CONSTRAINT garantii_alerte_amprenta_pkey DO UPDATE SET amprenta = EXCLUDED.amprenta, trimis_la = now();  -- 20261003a: era ON CONFLICT pe coloane, ambiguu cu coloanele OUT',
+              'ON CONFLICT (garantie_id, fel) DO UPDATE SET amprenta = EXCLUDED.amprenta, trimis_la = now();'))
+        FROM pg_proc WHERE oid = 'public.garantii_alerte()'::regprocedure) IS DISTINCT FROM '9ccb8ff8064c8f4c2374a0a5d41b16bc'
+     OR (SELECT position('''warning'', ''financiar''' IN prosrc) + position('ON CONFLICT (garantie_id, fel) DO' IN prosrc)
+           FROM pg_proc WHERE oid = 'public.garantii_alerte()'::regprocedure) <> 0 THEN
+    RAISE EXCEPTION 'Postcondiție 3: partea veche ≠ corpul vechi + exact cele 2 reparații, sau a rămas un tipar vechi (modul financiar / ON CONFLICT pe coloane)';
   END IF;
   IF NOT (SELECT p.prosecdef AND pg_get_userbyid(p.proowner) = 'postgres' AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
             FROM pg_proc p WHERE p.oid = 'public.garantii_alerte()'::regprocedure)

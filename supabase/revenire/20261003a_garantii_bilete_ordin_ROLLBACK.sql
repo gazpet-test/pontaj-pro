@@ -2,7 +2,9 @@
 -- 20261003a_garantii_bilete_ordin_ROLLBACK — NU e migrare (niciun runner nu parcurge supabase/revenire/). Readuce EXACT
 -- starea live din 02.10: fără tabela garantii_bilete_ordin (secvență, indecși, politici, trigger — pleacă odată cu ea),
 -- fără amprentele bo_scadent/bo_expirat, garantii_alerte() cu corpul live vechi (md5 fd35c645…, inclus verbatim mai jos;
--- ACL/SECDEF/search_path rămân — CREATE OR REPLACE). NU e gaură de securitate, dar scoate evidența biletelor:
+-- ACL/SECDEF/search_path rămân — CREATE OR REPLACE). ATENȚIE: corpul vechi e readus EXACT, deci revenirea REINTRODUCE și
+-- cele 2 buguri reparate de 20261003a (modul 'financiar' respins de notifications_modul_check; ON CONFLICT (garantie_id,
+-- fel) ambiguu) — e revenire, nu reparație. NU e gaură de securitate, dar scoate evidența biletelor:
 -- REFUZĂ dacă tabela are rânduri (nu se șterg date de aici — decizie separată, pct. 3). Notificările deja trimise rămân.
 -- Fără GO de execuție: doar la cererea explicită a lui Răzvan, după decizie + review. Armarea nu e autorizare.
 -- Procedura (un singur string; fișierul nu conține BEGIN/COMMIT):
@@ -22,9 +24,9 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261003a: rulează ca postgres (current_user = %)', current_user; END IF;
   IF to_regclass('public.garantii_bilete_ordin') IS NULL
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.garantii_alerte()')) IS DISTINCT FROM '9bcd5ab40afa2d82580be4858e852721'
+     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.garantii_alerte()')) IS DISTINCT FROM 'bd170a0f935e7123d85e4000467dd7fd'
      OR (SELECT count(*) FROM pg_proc WHERE proname = 'garantii_alerte') <> 1 THEN
-    RAISE EXCEPTION 'Revenire 20261003a: precondiție — starea nu e cea a patch-ului (tabela lipsește sau garantii_alerte() ≠ md5 9bcd5ab40afa2d82580be4858e852721)';
+    RAISE EXCEPTION 'Revenire 20261003a: precondiție — starea nu e cea a patch-ului (tabela lipsește sau garantii_alerte() ≠ md5 bd170a0f935e7123d85e4000467dd7fd)';
   END IF;
   SELECT count(*) INTO v_n FROM public.garantii_bilete_ordin;
   IF v_n <> 0 THEN

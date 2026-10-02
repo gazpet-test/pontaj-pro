@@ -4,15 +4,20 @@
 # dedicat (implicit /tmp/pg_garantii_bo, 127.0.0.1:5974). Nu atinge producția.
 #   0. schelet (supabase/tests/garantii_bilete_ordin_schelet.sql) = starea live din 02.10 (md5-uri: garantii 0cd06900…,
 #      fn_poate_scrie_garantii e8ee20a0…, set_updated_at 1c4318be…, garantii_alerte fd35c645…)
+#   0b. PICĂ pe corpul VECHI (fd35c645…) — scenariul „ramuri vechi”: RV1 recepționată (de_eliberat) + RV2 expiră în 10 zile
+#      (expira_30) ⇒ garantii_alerte() pică pe notifications_modul_check (modul 'financiar'); fără CHECK ⇒ ON CONFLICT
+#      (garantie_id, fel) ambiguu (coloanele OUT). Tranzacție anulată.
 #   1. fișierul fără runner → garda refuză, nimic schimbat
 #   2. precondiție negativă (supraîncărcare garantii_alerte) → refuz
 #   3. livrare prin scripts/livrare_migrare.sh (sha256 + validator + gate 0e) → cod 0; tabela, politicile, ACL-ul, md5 nou
+#   3b. TRECE pe corpul NOU — același scenariul + un BO scadent pe polița 1, în ACEEAȘI rulare ⇒ de_eliberat + expira_30 +
+#      bo_scadent, 3 notificări cu modul 'Financiar'; a doua rulare nu retrimite; amprentă schimbată ⇒ calea
+#      ON CONFLICT ON CONSTRAINT … DO UPDATE. Tranzacție anulată.
 #   4. matricea de acces RLS (owner/contabilitate scriu; viewer/oarecine doar citesc; anon nimic) + constrângerile + trigger
 #   5. alertele BO: bo_scadent / bo_expirat o singură dată per set, modul = Financiar, amprente; restituirea oprește alerta
 #   6. reaplicare cu marcaj → refuz; revenire: nearmată → refuz; cu rânduri → refuz; armată, fără rânduri → starea live
-#   7. (informativ) bugurile latente preexistente din blocul vechi: modul = 'financiar' ⇒ pică pe notifications_modul_check,
-#      identic ÎNAINTE și DUPĂ migrare; iar fără CHECK, ON CONFLICT (garantie_id, fel) e ambiguu (coloane OUT) — nu sunt
-#      introduse de 20261003a; reparația = decizie separată
+#   7. revenirea readuce corpul vechi EXACT ⇒ reintroduce cele 2 buguri (scenariul pică din nou: CHECK / ON CONFLICT ambiguu);
+#      reaplicarea migrării ⇒ scenariul trece din nou
 # Utilizare: bash scripts/test_garantii_bilete_ordin.sh [--opreste]   Ieșire: 0 PASS · 1 eșec · 2 mediu
 # ============================================================================
 set -Eeuo pipefail
@@ -56,6 +61,45 @@ SQL
 )" || rc=$?
   if [ $rc -ne 0 ]; then echo "EROARE:$(echo "$out" | grep -m1 'ERROR' | sed 's/^.*ERROR:  //')"; else echo "$out"; fi
 }
+# ramuri_vechi <cu_bo 0|1> <fara_check 0|1> → rularea garantii_alerte() cu 2 garanții pe ramurile VECHI (RV1 recepționată ⇒
+#   de_eliberat; RV2 expiră în 10 zile ⇒ expira_30) [+ un BO scadent în 3 zile pe polița 1], într-o tranzacție ANULATĂ.
+#   Ieșire: liniile F= / N= / F1= / F2= / A= / N2= sau „EROARE:<mesaj>”. N/N2 numără doar notificările din tranzacție.
+ramuri_vechi() {
+  local bo="" chk="" out rc=0
+  [ "$1" = 1 ] && bo="INSERT INTO public.garantii_bilete_ordin (garantie_id, serie, numar, suma, data_emitere, data_scadenta) VALUES (1, 'RV', 'BO-3', 5000, current_date - 30, current_date + 3);"
+  [ "$2" = 1 ] && chk="ALTER TABLE public.notifications DROP CONSTRAINT notifications_modul_check;"
+  out="$("${PSQL[@]}" -d "$BAZA" -At 2>&1 <<SQL
+BEGIN;
+$chk
+INSERT INTO public.garantii (forma, tip, beneficiar, lucrare, emitent, valoare, moneda, stare, lucrare_receptionata)
+  VALUES ('scrisoare_bancara', 'buna_executie', 'RV1', 'Lucrare RV1', 'Banca X', 1000, 'RON', 'activa', true);
+INSERT INTO public.garantii (forma, tip, beneficiar, lucrare, emitent, numar_document, valoare, moneda, stare, lucrare_receptionata, data_expirare)
+  VALUES ('polita_asigurare', 'buna_executie', 'RV2', 'Lucrare RV2', 'Asigurătorul Y', 'POL-RV2', 2000, 'RON', 'activa', false, current_date + 10);
+$bo
+SELECT 'F=' || string_agg(r.fel || ':' || g.beneficiar, ',' ORDER BY r.fel) FROM public.garantii_alerte() r JOIN public.garantii g ON g.id = r.garantie_id;
+SELECT 'N=' || count(*) || '/' || coalesce(string_agg(DISTINCT n.modul, ','), '-') FROM public.notifications n WHERE n.created_at = now();
+SELECT 'F1=' || count(*) FROM public.garantii_alerte();
+UPDATE public.garantii SET data_expirare = current_date + 20 WHERE beneficiar = 'RV2';
+SELECT 'F2=' || coalesce(string_agg(r.fel || ':' || g.beneficiar, ','), '') FROM public.garantii_alerte() r JOIN public.garantii g ON g.id = r.garantie_id;
+SELECT 'A=' || count(*) FROM public.garantii_alerte_amprenta a JOIN public.garantii g ON g.id = a.garantie_id
+ WHERE g.beneficiar = 'RV2' AND a.fel = 'expira_30' AND a.amprenta LIKE 'expira_30|' || (current_date + 20)::text || '|%';
+SELECT 'N2=' || count(*) || '/' || coalesce(string_agg(DISTINCT n.modul, ','), '-') FROM public.notifications n WHERE n.created_at = now();
+ROLLBACK;
+SQL
+)" || rc=$?
+  if [ $rc -ne 0 ]; then echo "EROARE:$(echo "$out" | grep -m1 'ERROR' | sed 's/^.*ERROR:  //')"; else echo "$out"; fi
+}
+# rezultatul așteptat al scenariului pe corpul NOU (owner unic în schelet ⇒ 1 notificare per alertă)
+ASTEPTAT="$(printf 'F=bo_scadent:Beneficiar 1,de_eliberat:RV1,expira_30:RV2\nN=3/Financiar\nF1=0\nF2=expira_30:RV2\nA=1\nN2=4/Financiar')"
+# pica_vechi <pas> → scenariul pică pe corpul vechi: cu CHECK pe notifications_modul_check, fără CHECK pe ON CONFLICT ambiguu
+pica_vechi() {
+  local r0 r1
+  r0="$(ramuri_vechi 0 0)"; [[ "$r0" == EROARE:*notifications_modul_check* ]] || esec "$1 corpul vechi trebuia să pice pe notifications_modul_check: $r0"
+  r1="$(ramuri_vechi 0 1)"; [[ "$r1" == *'column reference "garantie_id" is ambiguous'* ]] || esec "$1 fără CHECK, corpul vechi trebuia să pice pe ON CONFLICT ambiguu: $r1"
+  [ "$(q "SELECT count(*) FROM public.garantii WHERE beneficiar LIKE 'RV%'")" = 0 ] || esec "$1 tranzacția scenariului nu s-a anulat"
+  echo "      ↳ cu CHECK: ${r0#EROARE:}"
+  echo "      ↳ fără CHECK: ${r1#EROARE:}"
+}
 # poate <uid> <sql cu RETURNING> → da/nu (≥1 rând afectat)
 poate() { local o; o="$(ca_user "$1" "WITH x AS ($2 RETURNING 1) SELECT 'R' || count(*) FROM x")"; case "$o" in *R[1-9]*) echo da ;; *) echo nu ;; esac; }
 
@@ -68,6 +112,9 @@ poate() { local o; o="$(ca_user "$1" "WITH x AS ($2 RETURNING 1) SELECT 'R' || c
 [ "$(md5_alerte)" = "$MD5_VECHI" ] || esec "0 garantii_alerte ≠ md5 live"
 [ "$(q "SELECT has_function_privilege('authenticated', 'public.garantii_alerte()', 'EXECUTE')")" = f ] || esec "0 ACL garantii_alerte"
 ok "0 schelet = starea live (md5-uri: garantii, fn_poate_scrie_garantii, set_updated_at, garantii_alerte)"
+
+pica_vechi 0b
+ok "0b PICĂ pe corpul vechi ($MD5_VECHI): garanții pe ramurile vechi (de_eliberat, expira_30) ⇒ eroare (ambele buguri reproduse)"
 
 "${PSQL[@]}" -d "$BAZA" -f "$MIGRARE" >/dev/null 2>&1 && esec "1 fără runner a trecut"
 [ "$(exista_tabela)" = false ] && [ "$(md5_alerte)" = "$MD5_VECHI" ] || esec "1 stare schimbată"
@@ -93,6 +140,11 @@ MD5_NOU="$(md5_alerte)"
 [ "$(q "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = '$NUME'")" = 1 ] || esec "3 neînregistrată"
 ok "3 runner: APLICAT + ÎNREGISTRAT + gate 0e (cod 0), sha256 $SHA, garantii_alerte md5 $MD5_NOU"
 gate_0e patch
+
+R="$(ramuri_vechi 1 0)"
+[ "$R" = "$ASTEPTAT" ] || esec "3b scenariul ramuri vechi + BO pe corpul nou: $(echo "$R" | tr '\n' ' ')"
+[ "$(q "SELECT count(*) FROM public.garantii WHERE beneficiar LIKE 'RV%'")" = 0 ] && [ "$(q "SELECT count(*) FROM public.notifications")" = 0 ] || esec "3b tranzacția scenariului nu s-a anulat"
+ok "3b TRECE pe corpul nou ($MD5_NOU): de_eliberat + expira_30 + bo_scadent în aceeași rulare, 3 notificări modul Financiar; fără retrimitere; ON CONFLICT ON CONSTRAINT … DO UPDATE ok"
 
 # 4. matricea RLS: 1 owner, 3 contabilitate → scriu; 6 viewer, 8 oarecine → doar citesc; anon → nimic
 INS="INSERT INTO public.garantii_bilete_ordin (garantie_id, serie, numar, suma, data_emitere, data_scadenta) VALUES (1, 'BO', 'M-' || clock_timestamp()::text, 1000, current_date, current_date + 30)"
@@ -168,14 +220,11 @@ q "DELETE FROM public.garantii_bilete_ordin" >/dev/null   # date de test
 gate_0e "după revenire"
 ok "6 revenire: nearmată refuz; cu rânduri refuz; armată → starea live (md5 $MD5_VECHI, fără tabelă, fără amprente bo_*)"
 
-# 7. informativ — bugul latent preexistent (modul = 'financiar' în blocul vechi), identic înainte și după migrare
-q "INSERT INTO public.garantii (forma, tip, beneficiar, lucrare, stare, lucrare_receptionata, valoare, moneda) VALUES ('depozit_bancar', 'buna_executie', 'B7', 'L7', 'activa', true, 100, 'RON')" >/dev/null
-A="$(q "SELECT count(*) FROM public.garantii_alerte()" 2>&1 || true)"
-echo "$A" | grep -q notifications_modul_check || esec "7 blocul vechi (ÎNAINTE de migrare) nu pică pe CHECK: $A"
-"${PSQL[@]}" -d "$BAZA" --single-transaction -c "DELETE FROM supabase_migrations.schema_migrations WHERE name = '$NUME'; SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >/dev/null 2>&1 || esec "7 reaplicare pentru test"
-A="$(q "SELECT count(*) FROM public.garantii_alerte()" 2>&1 || true)"
-echo "$A" | grep -q notifications_modul_check || esec "7 blocul vechi (DUPĂ migrare) nu pică pe CHECK: $A"
-A="$("${PSQL[@]}" -d "$BAZA" -At 2>&1 -c "BEGIN; ALTER TABLE public.notifications DROP CONSTRAINT notifications_modul_check; SELECT count(*) FROM public.garantii_alerte(); ROLLBACK;" || true)"
-echo "$A" | grep -q 'column reference "garantie_id" is ambiguous' || esec "7 al doilea bug latent (ON CONFLICT ambiguu în blocul vechi) nu s-a reprodus: $A"
-ok "7 (informativ) bug latent PREEXISTENT: garanție cu lucrare recepționată ⇒ blocul vechi pică pe notifications_modul_check (modul 'financiar'), identic înainte și după 20261003a; fără CHECK ar pica pe ON CONFLICT (garantie_id, fel) ambiguu"
+# 7. revenirea (pasul 6) a readus corpul vechi EXACT ⇒ cele 2 buguri revin; reaplicarea migrării le repară din nou
+pica_vechi 7
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "DELETE FROM supabase_migrations.schema_migrations WHERE name = '$NUME'; SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >/dev/null 2>&1 || esec "7 reaplicare"
+[ "$(md5_alerte)" = "$MD5_NOU" ] || esec "7 md5 după reaplicare"
+R="$(ramuri_vechi 1 0)"
+[ "$R" = "$ASTEPTAT" ] || esec "7 după reaplicare, scenariul trebuia să treacă: $(echo "$R" | tr '\n' ' ')"
+ok "7 revenirea reintroduce cele 2 buguri (scenariul pică din nou); reaplicarea ⇒ trece din nou (md5 $MD5_NOU)"
 echo "PASS test_garantii_bilete_ordin (sha256 $SHA, garantii_alerte md5 nou $MD5_NOU)"

@@ -168,11 +168,11 @@ COMMIT;
 ```
 
 ## 20261003a — bilete la ordin pe polițe (`20261003a_garantii_bilete_ordin_ROLLBACK.sql`, NEAPLICAT)
-Scoate tabela `garantii_bilete_ordin` (cu secvența, indecșii, politicile, triggerul ei), amprentele `bo_scadent`/`bo_expirat` din `garantii_alerte_amprenta` și readuce `garantii_alerte()` la corpul live din 02.10 (md5 `fd35c645…`, inclus verbatim în fișier; ACL-ul rămâne neatins). Nu redeschide o gaură de securitate, dar **refuză dacă tabela are rânduri** (evidența biletelor nu se șterge de aici — decizie separată). Notificările deja trimise rămân. Același statut: fără GO de execuție.
+Scoate tabela `garantii_bilete_ordin` (cu secvența, indecșii, politicile, triggerul ei), amprentele `bo_scadent`/`bo_expirat` din `garantii_alerte_amprenta` și readuce `garantii_alerte()` la corpul live din 02.10 (md5 `fd35c645…`, inclus verbatim în fișier; ACL-ul rămâne neatins). **Revenirea reintroduce cele două buguri reparate de 20261003a** în blocul vechi al `garantii_alerte()` — `modul = 'financiar'` (respins de `notifications_modul_check`) și `ON CONFLICT (garantie_id, fel)` ambiguu cu coloanele OUT — pentru că readuce corpul vechi exact (e revenire, nu reparație): după revenire, prima garanție care intră pe o ramură veche oprește din nou toată execuția cronului. Nu redeschide o gaură de securitate, dar **refuză dacă tabela are rânduri** (evidența biletelor nu se șterge de aici — decizie separată). Notificările deja trimise rămân. Același statut: fără GO de execuție.
 ```sql
 BEGIN;
 SELECT set_config('gazpet.rollback_tehnic_20261003a', 'SCOATE_BILETE_ORDIN:' || txid_current(), true);
 -- <conținutul exact al fișierului>
 COMMIT;
 ```
-Precondiție = tabela există și e goală + md5-ul propriu 20261003a pe `garantii_alerte()` (`9bcd5ab4…`); postcondiție = starea live (fără tabelă/secvență, md5 `fd35c645…`, ACL neatins, fără amprente `bo_*`); dezarmare la final. Testat în `scripts/test_garantii_bilete_ordin.sh` pasul 6 (schelet: `supabase/tests/garantii_bilete_ordin_schelet.sql`). Migrarea: sha256 `0e85b1d2…` (vezi PR), validator OK.
+Precondiție = tabela există și e goală + md5-ul propriu 20261003a pe `garantii_alerte()` (`bd170a0f…`); postcondiție = starea live (fără tabelă/secvență, md5 `fd35c645…`, ACL neatins, fără amprente `bo_*`); dezarmare la final. Testat în `scripts/test_garantii_bilete_ordin.sh` pasul 6 (schelet: `supabase/tests/garantii_bilete_ordin_schelet.sql`). Migrarea: sha256 `a115d367…` (vezi PR), validator OK.
