@@ -1,0 +1,22 @@
+# Migrările aplicate de scripts/test_conturi_ciclu_viata.sh peste schelet, în ordine.
+# Câte o cale pe rând, relativă la rădăcina repo-ului; liniile goale și cele cu # se ignoră.
+# Pentru fiecare X.sql, dacă există X_ROLLBACK.sql, modul --rollback îl folosește automat (ordine inversă).
+#
+# „live: <cale>” = PRECONDIȚIE: migrare deja aplicată în producție, parte din starea de pornire.
+# S-A (trg_profiles_campuri_owner_only, 2 coloane: department + employee_id) e LIVE din 29.09 23:21 RO.
+# Fișierul e copiat EXACT de pe branch-ul S-A (md5(prosrc) = c06d7ce0f212c7bba2093c50614a88fc, verificat
+# de testul SA-01). Se aplică înaintea lui c/d/e, intră în instantaneul de schemă „dinainte” și NU se face
+# rollback la el: rollback-ul pachetului Conturi nu atinge triggerul S-A.
+live: supabase/migrations/20260929g_profiles_campuri_owner_only.sql
+# SEC F1 (20260930i, live din 01.10.2026, v20261001123000): TRUNCATE retras de la anon/authenticated + setarea implicită
+# a lui postgres corectată — c/d/e o cer ca precondiție (tabelele noi din d/e nu primesc TRUNCATE).
+live: supabase/migrations/20260930i_sec_f1_truncate_revoke.sql
+# SEC F2 (20260930j, live din 01.10.2026 12:45 UTC) a rescris fn_profiles_campuri_owner_only (rol JWT contradictoriu ⇒ refuz,
+# service_role legat de session_user = authenticator + role = service_role) — e starea reală a producției.
+live: supabase/migrations/20260930j_sec_f2_profiles_uid_null.sql
+# S-A extins 30a (#532, live din 01.10.2026, v20261001178000): fn_profiles_campuri_owner_only extinsă peste F2 r4
+# (md5 prosrc 1114af39…) — c/d o cer ca precondiție.
+live: supabase/migrations/20260930a_profiles_campuri_owner_only_extins.sql
+supabase/migrations/20260929c_conturi_legare_automata.sql
+supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql
+supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql

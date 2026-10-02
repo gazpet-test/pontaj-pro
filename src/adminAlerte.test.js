@@ -4,6 +4,8 @@ import {
   SURSE_ADMIN, areAccesAdministrator, areAccesSursa, ziBucuresti, zileRamase,
   alerteOfertare, alerteHr, alerteFirma, alerteFlota, alerteGbeAdmin,
   citesteToate, incarcaSursaAdmin, statusuriTransport,
+  alerteConturi, descriereCandidati, PRIORITATE_CONTURI, sorteazaAlerte, SELECT_ADMIN, ALOCARI_CONTURI,
+  motivNeinchis, marcajeIdentitate,
 } from './adminAlerte.js'
 
 const today = '2026-09-22'
@@ -125,5 +127,148 @@ describe('Citire completă și erori reale', () => {
     const builder = { select: () => builder, in: () => builder, order: () => builder, ...query({ data: null, error: { code: 'PGRST200' } }) }
     const result = await incarcaSursaAdmin({ from: () => builder }, source('ofertare'), owner, { now })
     expect(result.state).toBe('error'); expect(result.rows).toEqual([]); expect(result.evaluatedAt).toBeUndefined()
+  })
+})
+
+describe('Conturi platformă (R1/R2): doar owner, numai citire', () => {
+  const conturi = source('conturi')
+  it('sursa e doar pentru owner cu cheia admin_alerte', () => {
+    expect(conturi).toMatchObject({ module: 'admin_alerte', ownerOnly: true, path: '/admin?tab=managers' })
+    expect(areAccesSursa(owner, conturi)).toBe(true)
+    expect(areAccesSursa({ id: 'o', is_owner: true, module_access: [] }, conturi)).toBe(false)
+    expect(areAccesSursa({ id: 'x', is_owner: false, can_modify_employees: true, module_access: ['admin_alerte', 'hr', 'administrativ'] }, conturi)).toBe(false)
+    expect(areAccesSursa({ id: 'x', module_access: ['admin_alerte'] }, conturi)).toBe(false)
+  })
+  it('refuzul nu face nicio citire', async () => {
+    const client = { from: vi.fn() }
+    const result = await incarcaSursaAdmin(client, conturi, { id: 'x', can_modify_employees: true, module_access: ['admin_alerte', 'hr'] })
+    expect(result.state).toBe('denied'); expect(client.from).not.toHaveBeenCalled()
+  })
+  it('owner-ul citește view-ul cu proiecție explicită, count exact și ordonare după id (fără rpc)', async () => {
+    const calls = []
+    const builder = {
+      select: (cols, opts) => { calls.push(['select', cols, opts]); return builder },
+      order: col => { calls.push(['order', col]); return builder },
+      range: () => ({ abortSignal: async () => ({ data: [{ id: 'fara_angajat:p1', cod: 'fara_angajat', profile_id: 'p1', email: 'test.ofertare@gazpet.ro', candidati: [] }], count: 1 }) }),
+    }
+    const from = vi.fn(() => builder)
+    const result = await incarcaSursaAdmin({ from }, conturi, owner, { now })
+    expect(from).toHaveBeenCalledWith('v_admin_conturi_alerte')
+    expect(calls[0]).toEqual(['select', SELECT_ADMIN.v_admin_conturi_alerte, { count: 'exact' }])
+    expect(calls[1]).toEqual(['order', 'id'])
+    expect(SELECT_ADMIN.v_admin_conturi_alerte).toBe('id,cod,profile_id,email,tip_cont,is_owner,employee_id,employee_name,employee_active,termination_date,banned_until,jurnal_id,inchis_la,candidati,alocari')
+    expect(result.state).toBe('ok'); expect(result.rows[0].id).toBe('conturi:fara_angajat:p1')
+  })
+  it('un refuz 42501 din BD devine „denied”, nu eroare', async () => {
+    const builder = { select: () => builder, order: () => builder, range: () => ({ abortSignal: async () => ({ data: null, error: { code: '42501' } }) }) }
+    const result = await incarcaSursaAdmin({ from: () => builder }, conturi, owner, { now })
+    expect(result.state).toBe('denied')
+  })
+
+  const base = { profile_id: 'p1', email: 'x@gazpet.ro', is_owner: false, employee_id: 57, employee_name: 'IOAN SORIN', jurnal_id: null, inchis_la: null, candidati: null, alocari: null }
+  const row = (cod, extra = {}) => ({ ...base, id: `${cod}:${extra.profile_id ?? base.profile_id}`, cod, ...extra })
+
+  it('prioritățile din specificație pentru fiecare cod', () => {
+    expect(PRIORITATE_CONTURI).toEqual({
+      fara_angajat: 'attention', cont_activ_fost_angajat: 'critical', inchis_dar_deblocat: 'critical', inchis_cu_acces_rest: 'critical',
+      reactivat_acces_neredat: 'week', alocari_ramase: 'attention', inactiv_fara_data: 'missing',
+    })
+    const rows = alerteConturi(Object.keys(PRIORITATE_CONTURI).map(cod => row(cod, { jurnal_id: 3 })), today)
+    expect(rows.map(r => r.priority)).toEqual(Object.values(PRIORITATE_CONTURI))
+    expect(rows.every(r => r.source === 'conturi' && r.id.startsWith('conturi:'))).toBe(true)
+    expect(rows.every(r => r.locator.startsWith('v_admin_conturi_alerte · '))).toBe(true)
+    expect(alerteConturi([row('cod_nou_necunoscut')], today)).toEqual([])
+  })
+  it('link direct pe fiecare rând: contul sau fișa de angajat', () => {
+    const [cont] = alerteConturi([row('cont_activ_fost_angajat')], today)
+    expect(cont.path).toBe('/admin?tab=managers&cont=p1'); expect(cont.owner).toBe('Owner · Admin → Manageri')
+    const [fisa] = alerteConturi([row('inactiv_fara_data', { profile_id: null, email: null, id: 'inactiv_fara_data:e57' })], today)
+    expect(fisa.path).toBe('/admin?tab=employees&angajat=57'); expect(fisa.owner).toBe('HR · Admin → Angajați')
+    expect(fisa.impact).toBe('Completează data încetării sau șterge fișa demo.')
+    expect(fisa.reference).toContain('fără cont')
+  })
+  it('candidații: 0 / 1 ocupat / 2 descriși corect', () => {
+    expect(descriereCandidati([])).toBe('niciun candidat')
+    expect(descriereCandidati(null)).toBe('niciun candidat')
+    expect(descriereCandidati([{ employee_id: 9, employee_name: 'OCUPAT GELU', profil_legat: 'p9' }])).toBe('1 candidat: OCUPAT GELU, are deja cont')
+    expect(descriereCandidati([{ employee_id: 9, employee_name: 'LIBER ION', profil_legat: null }])).toBe('1 candidat: LIBER ION')
+    expect(descriereCandidati([{ employee_id: 1, employee_name: 'POPESCU MIHAI' }, { employee_id: 2, employee_name: 'POPESCU MIHAI' }])).toBe('2 candidați: POPESCU MIHAI, POPESCU MIHAI')
+    const [r] = alerteConturi([row('fara_angajat', { employee_id: null, employee_name: null, candidati: [] })], today)
+    expect(r.impact).toContain('Leagă fișa (Editează → Fișă angajat) sau marchează tipul (extern/test/sistem)')
+    expect(r.impact).toContain('niciun candidat')
+  })
+  it('owner-ul e marcat „nu se închide automat”; motivul dezactivării e explicat', () => {
+    expect(alerteConturi([row('cont_activ_fost_angajat', { is_owner: true, termination_date: '2026-09-20' })], today)[0].impact).toBe('OWNER: nu se închide automat, decide manual.')
+    expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: null })], today)[0].impact).toContain('fără dată de încetare')
+    expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-10-05' })], today)[0].impact).toContain('înainte de data încetării (2026-10-05)')
+    expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-09-20' })], today)[0].impact).toContain('Închide contul acum sau corectează fișa')
+    // review: data trecută = fișa dezactivată înainte de dată (fără notificare „închidere eșuată”) sau închidere eșuată
+    const trecut = alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-09-20' })], today)[0].impact
+    expect(trecut).toContain('dezactivată înainte de data încetării')
+    expect(trecut).toContain('NU s-a închis automat')
+  })
+  it('acțiunile pentru conturile închise și alocările rămase', () => {
+    // review (major): acțiunea recomandată există în UI („Reaplică închiderea”); restaurarea NU e recomandată
+    for (const cod of ['inchis_dar_deblocat', 'inchis_cu_acces_rest']) {
+      const [r] = alerteConturi([row(cod, { jurnal_id: 12 })], today)
+      expect(r.impact).toContain('Reaplică închiderea (Admin → Manageri → Edit → „🔒 Reaplică închiderea”; jurnal #12)')
+      expect(r.impact).toContain('NU folosi „Restaurează”')
+      expect(r.impact).not.toMatch(/restaurează formal/)
+      expect(r.path).toBe('/admin?tab=managers&cont=p1')
+    }
+    expect(alerteConturi([row('reactivat_acces_neredat', { jurnal_id: 12 })], today)[0].impact).toContain('Restaurează din jurnal #12')
+  })
+  it('alocările rămase: etichete și locul real de reasignare (nu nume de tabele)', () => {
+    const [r] = alerteConturi([row('alocari_ramase', { jurnal_id: 3, alocari: { comenzi_aprobatori: 1, hr_concediu_rute: 2 } })], today)
+    expect(r.impact).toBe('Reasignează: Achiziții → tab Aprobatori (aprobator comenzi) (1); HR → Concedii → rută de aprobare (fără ecran de editare: în BD, cu Claude) (2).')
+    expect(r.impact).not.toMatch(/comenzi_aprobatori|hr_concediu_rute/)
+    expect(r.path).toBe('/achizitii')
+    const [rec] = alerteConturi([row('alocari_ramase', { jurnal_id: 3, alocari: { hr_aprobatori: 1, hr_recrutare_pozitii: 1 } })], today)
+    expect(rec.path).toBe('/hr?tab=recrutare')
+    const [faraEcran] = alerteConturi([row('alocari_ramase', { jurnal_id: 3, alocari: { marketing_aprobatori: 1 } })], today)
+    expect(faraEcran.path).toBe('/admin?tab=managers&cont=p1')
+    expect(Object.keys(ALOCARI_CONTURI).sort()).toEqual(['comenzi_aprobatori', 'hr_aprobatori', 'hr_concediu_rute', 'hr_recrutare_pozitii',
+      'marketing_aprobatori', 'necesar_responsabili', 'tichete_default_responsabili'])
+  })
+  it('data alertei: data încetării sau ziua închiderii (România)', () => {
+    expect(alerteConturi([row('cont_activ_fost_angajat', { termination_date: '2026-09-25' })], today)[0].date).toBe('2026-09-25')
+    expect(alerteConturi([row('inchis_dar_deblocat', { termination_date: null, inchis_la: '2026-09-21T22:30:00Z' })], today)[0].date).toBe('2026-09-22')
+  })
+  // Runda 3 (30.09): motivul din BD (alocari.motiv_neinchis) și marcajele de identitate ajung în textul alertei
+  it('motivul pentru care contul NU s-a închis vine din BD (runda 3)', () => {
+    const cu = (motiv, extra = {}) => row('cont_activ_fost_angajat', { termination_date: '2026-09-20', alocari: { motiv_neinchis: motiv, ...extra } })
+    expect(alerteConturi([cu('cnp_lipsa')], today)[0].impact).toContain('CNP lipsă (nici în datele personale, nici pe fișă)')
+    expect(alerteConturi([cu('alt_contract_activ', { alt_contract: 91 })], today)[0].impact).toContain('Are alt contract ACTIV (fișa #91, același CNP)')
+    const pos = alerteConturi([cu('posibil_alt_contract', { alt_contract: 92 })], today)[0].impact
+    expect(pos).toContain('Posibil alt contract ACTIV (fișa #92: același nume de familie sau email, fără CNP)')
+    expect(pos).toContain('Completează CNP-ul')
+    const ab = alerteConturi([cu('esuat_abandonat', { coada: { tip: 'reincercare', incercari: 8, ultima_eroare: 'x' } })], today)[0]
+    expect(ab.impact).toContain('a eșuat de 8 ori și coada s-a oprit'); expect(ab.priority).toBe('critical')
+    expect(alerteConturi([cu('in_coada', { coada: { tip: 'programata', incercari: 0 } })], today)[0].impact).toContain('Închiderea e în coadă (programata')
+    // X3: un cont restaurat de owner NU mai e „închidere eșuată” și nu e urgență critică
+    const rest = alerteConturi([cu('restaurat', { restaurat: { jurnal_id: 17 } })], today)[0]
+    expect(rest.impact).toContain('Restaurat de owner (jurnal #17)')
+    expect(rest.impact).not.toMatch(/eșuat|NU s-a închis automat/)
+    expect(rest.priority).toBe('week')
+    expect(alerteConturi([cu('esuat_sau_neprins')], today)[0].impact).toContain('NU s-a închis automat')
+    expect(motivNeinchis({ termination_date: null, alocari: null }, today)).toBe('Fișa e inactivă fără dată de încetare.')
+  })
+  it('fara_angajat: marcajele de identitate (email de logare ≠ profil / neconfirmat) — P12b', () => {
+    expect(marcajeIdentitate(null)).toBe('')
+    const [r] = alerteConturi([row('fara_angajat', { employee_id: null, employee_name: null, candidati: [{ employee_id: 5, employee_name: 'TINTA X' }],
+      alocari: { email_diferit: true, email_profil: 'p12.personal@gmail.com', email_neconfirmat: true } })], today)
+    expect(r.impact).toContain('Emailul de logare diferă de cel din profil (p12.personal@gmail.com)')
+    expect(r.impact).toContain('Emailul de logare e neconfirmat')
+    expect(r.impact).toContain('1 candidat: TINTA X')
+    const [f] = alerteConturi([row('fara_angajat', { employee_id: null, employee_name: null, candidati: [] })], today)
+    expect(f.impact).not.toContain('⚠️')
+  })
+  it('inchis_cu_acces_rest: flagurile în coadă / coada oprită', () => {
+    expect(alerteConturi([row('inchis_cu_acces_rest', { jurnal_id: 4, alocari: { flaguri_in_coada: true } })], today)[0].impact).toContain('Flagurile de acces sunt în coadă')
+    expect(alerteConturi([row('inchis_cu_acces_rest', { jurnal_id: 4, alocari: { flaguri_in_coada: true, flaguri_abandonate: true } })], today)[0].impact).toContain('s-a oprit după eșecuri repetate')
+  })
+  it('sorteazaAlerte funcționează pe rezultat (critice primele)', () => {
+    const rows = alerteConturi([row('inactiv_fara_data', { profile_id: 'a' }), row('fara_angajat', { profile_id: 'b' }), row('inchis_cu_acces_rest', { profile_id: 'c', jurnal_id: 1 })], today)
+    expect(sorteazaAlerte(rows).map(r => r.priority)).toEqual(['critical', 'attention', 'missing'])
   })
 })

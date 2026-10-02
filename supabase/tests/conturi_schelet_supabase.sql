@@ -10,6 +10,12 @@
 --
 -- Fidelitate păstrată intenționat:
 --   * auth.uid()/auth.role()/auth.jwt() = definițiile Supabase (claim.sub SAU claims->>'sub');
+--   * IDENTITATEA DE LOGIN (corecția 30.09, audit A #7): teste.ca_utilizator/ca_anon/ca_service_role intră cu
+--     SET SESSION AUTHORIZATION authenticator + SET ROLE (session_user = authenticator, ca PostgREST) și pun
+--     DOAR request.jwt.claims (PostgREST v12 nu mai pune GUC-urile vechi claim.sub/claim.role);
+--     teste.creeaza_cont intră cu SET SESSION AUTHORIZATION supabase_auth_admin (login-ul GoTrue, fără claims);
+--     teste.ca_admin() = login postgres fără claims (ca pg_cron și migrările). Cu SET ROLE simplu session_user
+--     rămânea postgres și triggerul S-A (care decide pe session_user) lăsa să treacă ce în producție refuză;
 --   * rolurile anon/authenticated/service_role(BYPASSRLS)/supabase_auth_admin;
 --   * GRANT-urile implicite Supabase: orice tabel/funcție NOU(Ă) din public primește
 --     ALL/EXECUTE pentru anon+authenticated+service_role (ALTER DEFAULT PRIVILEGES) —
@@ -18,7 +24,9 @@
 --     un trigger pe auth.users care nu e SECURITY DEFINER pică la crearea contului;
 --   * triggerele existente pe profiles/employees/notifications/auth.users, copiate verbatim;
 --   * politicile RLS din producție pe profiles/employees/user_module_access/
---     hr_personal_extern/notifications, copiate verbatim.
+--     hr_personal_extern/notifications/hr_employees_private, copiate verbatim;
+--   * hr_employees_private (runda 3): sursa CNP-ului în aplicație (UNIQUE pe cnp) — DDL, politici, trigger touch
+--     citite din catalogul de producție la 30.09 (doar definiții, nicio dată).
 -- Simplificări (documentate):
 --   * auth.sessions / auth.refresh_tokens / hr_autorizatii au doar coloanele relevante;
 --   * FK-urile spre tabele absente sunt omise: hr_personal_extern.partener_id →
@@ -58,7 +66,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN NOINHERIT; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN NOINHERIT BYPASSRLS; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='supabase_auth_admin') THEN CREATE ROLE supabase_auth_admin NOLOGIN NOINHERIT; END IF;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname IN ('anon','authenticated','supabase_auth_admin') AND (rolsuper OR rolbypassrls))
+  -- authenticator = login-ul PostgREST (producție, SELECT 30.09: LOGIN NOINHERIT, membru în anon/authenticated/service_role).
+  -- Testele intră pe el cu SET SESSION AUTHORIZATION, ca session_user să fie cel real (nu postgres).
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticator') THEN CREATE ROLE authenticator LOGIN NOINHERIT; END IF;
+  GRANT anon, authenticated, service_role TO authenticator;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname IN ('anon','authenticated','supabase_auth_admin','authenticator') AND (rolsuper OR rolbypassrls))
+     OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticator' AND rolinherit)
      OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role' AND (rolsuper OR NOT rolbypassrls)) THEN
     RAISE EXCEPTION 'Rolurile API au atribute greșite (SUPERUSER/BYPASSRLS)';
   END IF;
@@ -346,6 +359,27 @@ CREATE TABLE public.hr_autorizatii (            -- subset de coloane
   CONSTRAINT hr_autorizatii_titular_unic CHECK ((employee_id IS NOT NULL) <> (extern_id IS NOT NULL))
 );
 
+-- Datele personale GDPR (sursa CNP-ului în aplicație: App.jsx Admin → Angajați → Editează, AdeverinteLegator).
+-- Producție (SELECT pe catalog 30.09): coloane, CHECK, UNIQUE(cnp), FK-uri, RLS + 4 politici, trigger touch — verbatim.
+CREATE TABLE public.hr_employees_private (
+  employee_id integer NOT NULL,
+  cnp text,
+  data_nastere date,
+  adresa_strada text,
+  adresa_oras text,
+  adresa_judet text,
+  adresa_cod_postal text,
+  adresa_tara text DEFAULT 'România'::text,
+  observatii_private text,
+  modificat_la timestamptz NOT NULL DEFAULT now(),
+  modificat_de uuid,
+  CONSTRAINT hr_employees_private_pkey PRIMARY KEY (employee_id),
+  CONSTRAINT hr_employees_private_cnp_chk CHECK (((cnp IS NULL) OR (cnp ~ '^[0-9]{13}$'::text))),
+  CONSTRAINT hr_employees_private_cnp_key UNIQUE (cnp),
+  CONSTRAINT hr_employees_private_employee_id_fkey FOREIGN KEY (employee_id) REFERENCES public.employees(id) ON DELETE CASCADE,
+  CONSTRAINT hr_employees_private_modificat_de_fkey FOREIGN KEY (modificat_de) REFERENCES auth.users(id)
+);
+
 CREATE TABLE public.hr_employees_audit (
   id bigserial PRIMARY KEY,
   actiune text NOT NULL CHECK (actiune = ANY (ARRAY['INSERT','DELETE'])),
@@ -457,6 +491,7 @@ ALTER TABLE public.user_module_access  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_personal_extern  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_autorizatii      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.hr_employees_audit  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.hr_employees_private ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profile_sites       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.comenzi_aprobatori  ENABLE ROW LEVEL SECURITY;
@@ -501,6 +536,17 @@ CREATE POLICY employees_select_all_authenticated ON public.employees FOR SELECT 
 CREATE POLICY employees_update_authorized ON public.employees FOR UPDATE TO authenticated
   USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.is_owner = true OR profiles.can_modify_employees = true)))
   WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.is_owner = true OR profiles.can_modify_employees = true)));
+
+-- hr_employees_private: verbatim din producție (30.09)
+CREATE POLICY hr_employees_private_delete ON public.hr_employees_private FOR DELETE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.is_owner = true));
+CREATE POLICY hr_employees_private_insert ON public.hr_employees_private FOR INSERT TO authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)));
+CREATE POLICY hr_employees_private_select ON public.hr_employees_private FOR SELECT TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)));
+CREATE POLICY hr_employees_private_update ON public.hr_employees_private FOR UPDATE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)))
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND (profiles.can_access_personal_data = true OR profiles.is_owner = true)));
 
 CREATE POLICY hr_personal_extern_insert ON public.hr_personal_extern FOR INSERT TO authenticated WITH CHECK (auth.uid() IS NOT NULL);
 CREATE POLICY hr_personal_extern_select ON public.hr_personal_extern FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
@@ -759,6 +805,20 @@ $function$;
 -- NEW.active pus de acesta trebuie să fie AFTER UPDATE sau să aibă nume > 'trg_employees_termination_notify'.
 CREATE TRIGGER trg_employees_termination_notify BEFORE UPDATE ON public.employees FOR EACH ROW EXECUTE FUNCTION public.fn_employees_termination_notify();
 
+-- hr_employees_private: triggerul existent (verbatim, 30.09; SECURITY INVOKER, auth.uid() al apelantului).
+CREATE OR REPLACE FUNCTION public.tg_hr_employees_private_touch()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  NEW.modificat_la = NOW();
+  NEW.modificat_de = auth.uid();
+  RETURN NEW;
+END;
+$function$;
+CREATE TRIGGER trg_hr_employees_private_touch BEFORE INSERT OR UPDATE ON public.hr_employees_private FOR EACH ROW EXECUTE FUNCTION public.tg_hr_employees_private_touch();
+
 -- Copie de fidelitate (trigger existent pe notifications); nu se modifică.
 CREATE OR REPLACE FUNCTION public.fn_notificari_ruteaza_ofertare()
  RETURNS trigger
@@ -778,7 +838,7 @@ CREATE TRIGGER trg_notificari_ruteaza_ofertare BEFORE INSERT ON public.notificat
 -- Schema teste: utilitare DOAR pentru harness (nu există în producție)
 -- ---------------------------------------------------------------------------
 CREATE SCHEMA teste;
-GRANT USAGE ON SCHEMA teste TO anon, authenticated, service_role, supabase_auth_admin;
+GRANT USAGE ON SCHEMA teste TO anon, authenticated, service_role, supabase_auth_admin, authenticator;
 
 -- Aserțiune: eșecul oprește fișierul (ON_ERROR_STOP) → exit ≠ 0.
 CREATE FUNCTION teste.assert(p_ok boolean, p_mesaj text) RETURNS void LANGUAGE plpgsql AS $fn$
@@ -824,82 +884,110 @@ BEGIN
   RETURN NULL;
 END $fn$;
 
--- Identitate PostgREST: claims JWT + SET ROLE authenticated (session_user rămâne postgres).
+-- Identitate PostgREST: login authenticator + claims JWT (doar request.jwt.claims, ca PostgREST v12) + SET ROLE.
+-- Claims se pun ÎNAINTE de schimbarea login-ului; GUC-urile vechi claim.sub/claim.role se golesc.
+CREATE FUNCTION teste.ca_login_api(p_claims jsonb, p_rol text) RETURNS void LANGUAGE plpgsql AS $fn$
+BEGIN
+  PERFORM set_config('request.jwt.claims', COALESCE(p_claims::text, ''), false);
+  PERFORM set_config('request.jwt.claim.sub', '', false);
+  PERFORM set_config('request.jwt.claim.role', '', false);
+  PERFORM set_config('request.jwt.claim', '', false);
+  EXECUTE 'SET SESSION AUTHORIZATION authenticator';
+  IF p_rol IS NOT NULL THEN
+    EXECUTE format('SET ROLE %I', p_rol);
+  END IF;
+END $fn$;
+
 CREATE FUNCTION teste.ca_utilizator(p_uid uuid) RETURNS void LANGUAGE plpgsql AS $fn$
 BEGIN
-  PERFORM set_config('request.jwt.claims', json_build_object('sub', p_uid, 'role', 'authenticated')::text, false);
-  PERFORM set_config('request.jwt.claim.sub', p_uid::text, false);
-  PERFORM set_config('request.jwt.claim.role', 'authenticated', false);
-  EXECUTE 'SET ROLE authenticated';
+  PERFORM teste.ca_login_api(jsonb_build_object('sub', p_uid, 'role', 'authenticated'), 'authenticated');
 END $fn$;
 
 -- Cheia anon (JWT valid, fără sub) — pentru a verifica porțile de rol (CLAUDE.md pct. 7d).
 CREATE FUNCTION teste.ca_anon() RETURNS void LANGUAGE plpgsql AS $fn$
 BEGIN
-  PERFORM set_config('request.jwt.claims', '{"role":"anon"}', false);
-  PERFORM set_config('request.jwt.claim.sub', '', false);
-  PERFORM set_config('request.jwt.claim.role', 'anon', false);
-  EXECUTE 'SET ROLE anon';
+  PERFORM teste.ca_login_api('{"role":"anon"}'::jsonb, 'anon');
 END $fn$;
 
--- service_role: BYPASSRLS, auth.uid() NULL (ca edge functions cu cheia service).
+-- service_role: BYPASSRLS, auth.uid() NULL (ca edge functions cu cheia service, prin PostgREST).
 CREATE FUNCTION teste.ca_service_role() RETURNS void LANGUAGE plpgsql AS $fn$
 BEGIN
-  PERFORM set_config('request.jwt.claims', '{"role":"service_role"}', false);
-  PERFORM set_config('request.jwt.claim.sub', '', false);
-  PERFORM set_config('request.jwt.claim.role', 'service_role', false);
-  EXECUTE 'SET ROLE service_role';
+  PERFORM teste.ca_login_api('{"role":"service_role"}'::jsonb, 'service_role');
 END $fn$;
 
--- Înapoi la admin (postgres, auth.uid() NULL) — ca migrările / pg_cron.
-CREATE FUNCTION teste.ca_admin() RETURNS void LANGUAGE plpgsql AS $fn$
+-- Un login oarecare FĂRĂ claims (ex. authenticator după golirea claims, supabase_auth_admin = GoTrue).
+-- Nu trece pe un rol API: rămâne current_user = login-ul.
+CREATE FUNCTION teste.ca_login(p_login text) RETURNS void LANGUAGE plpgsql AS $fn$
 BEGIN
-  EXECUTE 'RESET ROLE';
   PERFORM set_config('request.jwt.claims', '', false);
   PERFORM set_config('request.jwt.claim.sub', '', false);
   PERFORM set_config('request.jwt.claim.role', '', false);
+  PERFORM set_config('request.jwt.claim', '', false);
+  EXECUTE format('SET SESSION AUTHORIZATION %I', p_login);
 END $fn$;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO anon, authenticated, service_role, supabase_auth_admin;
 
--- Simulează crearea unui cont de către GoTrue: INSERT în auth.users ca supabase_auth_admin
--- cu search_path=auth (ca pe conexiunea reală) → declanșează on_auth_user_created.
--- Adaugă și o sesiune + un refresh token nerevocat (pentru testele de revocare R2).
--- Se apelează ca admin. p_app_meta se adaugă la raw_app_meta_data (în GoTrue îl poate pune DOAR API-ul admin,
--- cu service_role — ex. {"gazpet_legare_automata": true} = calea de încredere R1; signUp public nu-l poate seta).
+-- Înapoi la admin (login postgres, fără claims) — ca migrările / pg_cron.
+CREATE FUNCTION teste.ca_admin() RETURNS void LANGUAGE plpgsql AS $fn$
+BEGIN
+  EXECUTE 'RESET ROLE';
+  EXECUTE 'RESET SESSION AUTHORIZATION';
+  PERFORM set_config('request.jwt.claims', '', false);
+  PERFORM set_config('request.jwt.claim.sub', '', false);
+  PERFORM set_config('request.jwt.claim.role', '', false);
+  PERFORM set_config('request.jwt.claim', '', false);
+END $fn$;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO anon, authenticated, service_role, supabase_auth_admin, authenticator;
+
+-- Simulează crearea unui cont de către GoTrue: INSERT în auth.users pe LOGIN-UL supabase_auth_admin
+-- (SET SESSION AUTHORIZATION → session_user = supabase_auth_admin, fără claims, search_path=auth, ca pe
+-- conexiunea reală) → declanșează on_auth_user_created. Adaugă și o sesiune + un refresh token nerevocat
+-- (pentru testele de revocare R2). Se apelează ca admin. p_app_meta se adaugă la raw_app_meta_data (în GoTrue
+-- îl poate pune DOAR API-ul admin, cu service_role — ex. {"gazpet_legare_automata": true} = calea de încredere R1;
+-- signUp public nu-l poate seta).
 CREATE FUNCTION teste.creeaza_cont(p_email text, p_uid uuid DEFAULT gen_random_uuid(), p_meta jsonb DEFAULT '{}'::jsonb,
                                    p_app_meta jsonb DEFAULT '{}'::jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $fn$
 DECLARE v_sp text := current_setting('search_path'); v_sesiune uuid := gen_random_uuid();
 BEGIN
-  IF current_user <> session_user THEN
-    RAISE EXCEPTION 'teste.creeaza_cont se apelează ca admin (acum current_user=%)', current_user;
+  IF current_user <> session_user OR session_user <> 'postgres' THEN
+    RAISE EXCEPTION 'teste.creeaza_cont se apelează ca admin (acum session_user=%, current_user=%)', session_user, current_user;
   END IF;
   PERFORM set_config('search_path', 'auth', false);
-  EXECUTE 'SET ROLE supabase_auth_admin';
+  EXECUTE 'SET SESSION AUTHORIZATION supabase_auth_admin';
   INSERT INTO auth.users (id, aud, role, email, raw_user_meta_data, raw_app_meta_data, created_at, updated_at, email_confirmed_at)
   VALUES (p_uid, 'authenticated', 'authenticated', p_email, p_meta, '{"provider":"email"}'::jsonb || p_app_meta, now(), now(), now());
   INSERT INTO auth.sessions (id, user_id, created_at, updated_at) VALUES (v_sesiune, p_uid, now(), now());
   INSERT INTO auth.refresh_tokens (token, user_id, revoked, created_at, updated_at, session_id)
   VALUES (replace(gen_random_uuid()::text, '-', ''), p_uid::text, false, now(), now(), v_sesiune);
-  EXECUTE 'RESET ROLE';
+  EXECUTE 'RESET SESSION AUTHORIZATION';
   PERFORM set_config('search_path', v_sp, false);
   RETURN p_uid;
 END $fn$;
-REVOKE EXECUTE ON FUNCTION teste.creeaza_cont(text, uuid, jsonb, jsonb) FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
--- Calea de încredere R1 (contul creat de owner prin API-ul admin): legare automată la creare.
+REVOKE EXECUTE ON FUNCTION teste.creeaza_cont(text, uuid, jsonb, jsonb) FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin, authenticator;
+-- Calea de încredere R1 = funcția edge „cont-nou” (poartă owner): auth.admin.createUser cu
+-- app_metadata.gazpet_legare_automata = true (GoTrue, login supabase_auth_admin), apoi RPC-ul
+-- fn_cont_leaga_la_creare cu cheia service (PostgREST: login authenticator, claims role=service_role).
+-- Dacă RPC-ul nu există încă (rulare BAZĂ după rollback), doar creează contul.
 CREATE FUNCTION teste.creeaza_cont_owner(p_email text, p_uid uuid DEFAULT gen_random_uuid())
-RETURNS uuid LANGUAGE sql AS $fn$
-  SELECT teste.creeaza_cont(p_email, p_uid, '{}'::jsonb, '{"gazpet_legare_automata": true}'::jsonb)
-$fn$;
-REVOKE EXECUTE ON FUNCTION teste.creeaza_cont_owner(text, uuid) FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
+RETURNS uuid LANGUAGE plpgsql AS $fn$
+BEGIN
+  PERFORM teste.creeaza_cont(p_email, p_uid, '{}'::jsonb, '{"gazpet_legare_automata": true}'::jsonb);
+  IF to_regprocedure('public.fn_cont_leaga_la_creare(uuid)') IS NOT NULL THEN
+    PERFORM teste.ca_service_role();
+    EXECUTE 'SELECT public.fn_cont_leaga_la_creare($1)' USING p_uid;
+    PERFORM teste.ca_admin();
+  END IF;
+  RETURN p_uid;
+END $fn$;
+REVOKE EXECUTE ON FUNCTION teste.creeaza_cont_owner(text, uuid) FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin, authenticator;
 
 -- Copie EXACTĂ a comenzii pg_cron „hr_auto_deactivate_terminated” (cron.job 13, zilnic 04:00 UTC).
 -- Rulează ca admin (auth.uid() NULL), ca pg_cron în producție.
 CREATE FUNCTION teste.cron_hr_auto_deactivate_terminated() RETURNS integer LANGUAGE plpgsql AS $fn$
 DECLARE v_n integer;
 BEGIN
-  IF current_user <> session_user OR auth.uid() IS NOT NULL THEN
-    RAISE EXCEPTION 'cron-ul rulează ca admin fără JWT; apelează întâi teste.ca_admin()';
+  IF current_user <> session_user OR session_user <> 'postgres' OR nullif(current_setting('request.jwt.claims', true), '') IS NOT NULL THEN
+    RAISE EXCEPTION 'cron-ul rulează ca login postgres fără claims (pg_cron); apelează întâi teste.ca_admin()';
   END IF;
         UPDATE public.employees
         SET active = false
@@ -909,7 +997,7 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN v_n;
 END $fn$;
-REVOKE EXECUTE ON FUNCTION teste.cron_hr_auto_deactivate_terminated() FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin;
+REVOKE EXECUTE ON FUNCTION teste.cron_hr_auto_deactivate_terminated() FROM PUBLIC, anon, authenticated, service_role, supabase_auth_admin, authenticator;
 
 -- GRANT-uri pe obiectele create înainte de ALTER DEFAULT PRIVILEGES (ca în Supabase)
 GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
@@ -922,4 +1010,4 @@ REVOKE EXECUTE ON FUNCTION public.handle_new_user(), public.prevent_role_escalat
   public.fn_employees_termination_notify() FROM PUBLIC, anon, authenticated;
 
 RESET client_min_messages;
-\echo 'SCHELET OK: auth + public (profiles/employees/user_module_access/profile_sites/hr_personal_extern/notifications/alocări) + teste.*'
+\echo 'SCHELET OK: auth + public (profiles/employees/hr_employees_private/user_module_access/profile_sites/hr_personal_extern/notifications/alocări) + teste.*'
