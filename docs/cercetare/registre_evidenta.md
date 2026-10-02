@@ -1,7 +1,7 @@
 # Registre de evidență — surse, cerințe atomice, graf de aplicabilitate
 
 > Runda 2 · 01.10.2026 · mandat completat după review Copilot + Gemini (aprobat de Razvan „pornim cu ce avem”).
-> Fișiere: `registru_surse.json` (417 surse) · `registru_cerinte.json` (919 cerințe atomice) · `graf_aplicabilitate.json` (313 relații) · catalogul de tipare `clarificari_tipare.json` + `clarificari_matrice_model.md`.
+> Fișiere: `registru_surse.json` (432 surse) · `registru_cerinte.json` (919 cerințe atomice) · `graf_aplicabilitate.json` (313 relații) · catalogul de tipare `clarificari_tipare.json` + `clarificari_matrice_model.md`.
 
 ## Principiul: evidence-first
 
@@ -13,7 +13,7 @@ Pornire: legislația obligatorie (Legea 123/2012, L98/L99/L101, Legea 169/2026, 
 
 | Aplicabilitate Gazpet | Surse |
 |---|---|
-| `doar_referinta` | 267 |
+| `doar_referinta` | 282 |
 | `conditionata` | 83 |
 | `directa` | 57 |
 | `neaplicabil` | 10 |
