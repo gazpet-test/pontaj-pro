@@ -102,6 +102,8 @@ Deno.serve(async (req: Request) => {
     const uc = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: `Bearer ${jwt}` } } })
     const { data: u } = await uc.auth.getUser()
     if (!u?.user) return json({ error: 'token invalid' }, 401)
+    const { data: acces, error: eA } = await uc.rpc('fn_are_acces_ofertare')
+    if (eA || acces !== true) return json({ error: 'nu ai acces la modulul Ofertare' }, 403)
   }
 
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
