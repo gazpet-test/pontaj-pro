@@ -1289,7 +1289,7 @@ export default function FinanciarPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-        const { data: prof } = await supabase.from('profiles').select('id,is_owner,role,can_access_salarii').eq('id',user.id).single()
+        const { data: prof } = await supabase.from('profiles').select('id,is_owner,role,can_access_salarii,name,email').eq('id',user.id).single()
         setProfile(prof)
         const { data: uma } = await supabase.from('user_module_access').select('module').eq('profile_id', user.id)
         const mods = (uma || []).map(m => m.module)
@@ -1435,7 +1435,7 @@ export default function FinanciarPage() {
 
         {/* GBE — garanțiile de bună execuție pe toate contractele (09.09.2026): bani blocați, termene de eliberare, alerte */}
         {tab === 'gbe' && <GbeTabel accent={G.financiar} canEdit={canWriteGarantii} />}
-        {tab === 'garantii' && <GarantiiRegistru canEdit={canWriteGarantii} showToast={showToast} />}
+        {tab === 'garantii' && <GarantiiRegistru canEdit={canWriteGarantii} showToast={showToast} profile={profile} />}
 
         {!doarGarantii && tab === 'consumuri' && <ConsumuriBonuriTab mode="financiar" />}
 

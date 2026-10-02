@@ -157,3 +157,12 @@ SELECT set_config('gazpet.rollback_tehnic_20261002c', 'REVINE_0E_NOWAIT:' || txi
 COMMIT;
 ```
 Precondiție = md5 propriu 20261002c (`b07f3800…` / `0477bce8…`), ACL-uri, unicitate, niciun alt apelant al lui `fn_cont_lot_nowait`; postcondiție = md5 live r4 pe `fn_cont_leaga_automat` + `fn_cont_revalideaza_candidat` (`ecbbd64c…`) + `fn_cont_lock_chei` (`db9b9899…`), ACL-uri neschimbate, funcția nouă absentă; dezarmare la final. Testat în `scripts/test_conturi_ciclu_viata.sh --rollback` (armare după antetul `-- harness-armare:`; schema de după revenire = schema de după `20261002b`).
+
+## 20261002e — tip nou de garanție „car” (`20261002e_garantii_tip_car_ROLLBACK.sql`, NEAPLICAT)
+Readuce `garantii_tip_check` la cele 4 valori din 02.10 și scoate `fn_garantii_tipuri()`. Nu redeschide o gaură de securitate, dar **refuză dacă există rânduri cu `tip = 'car'`** (datele nu se ating de aici — decizie separată). Același statut: fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261002e', 'SCOATE_TIP_CAR:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```

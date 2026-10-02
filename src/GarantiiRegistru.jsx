@@ -4,9 +4,13 @@
 //   Acoperă și lucrările vechi care nu au rând în contracte_terti.
 //   Rostul: să vezi ce mănâncă din plafonul de la asigurător și ce se poate elibera.
 //   Evidența GBE pe contract (reținut/restituit) rămâne în GbeEvidenta.jsx — aici e sursa banilor blocați.
+//   02.10.2026 (#1519): „📨 Cere ofertă” — cererea de ofertă poliță către broker pentru GBE / avans / CAR
+//   (GarantiiCerereOferta.jsx); CAR apare doar dacă BD-ul permite tipul (migrarea 20261002e).
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
+import CerereOfertaPanel, { useTipuriGarantii } from './GarantiiCerereOferta.jsx'
+import { TIPURI_CERERE } from './garantiiCerereOferta.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
   text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -88,8 +92,10 @@ function AdresaPanel({ garantie, onClose, showToast }) {
   )
 }
 
-export default function GarantiiRegistru({ canEdit = false, showToast }) {
+export default function GarantiiRegistru({ canEdit = false, showToast, profile }) {
   const [randuri, setRanduri] = useState([])
+  const [cerere, setCerere]   = useState(null)   // panoul de cerere ofertă: {} (gol) sau rândul din registru
+  const tipuriPermise = useTipuriGarantii()
   const [plafon, setPlafon]   = useState([])
   const [loading, setLoading] = useState(true)
   const [adresa, setAdresa]   = useState(null)
@@ -167,10 +173,16 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
         </div>
       )}
 
-      <label style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:12.5,color:G.muted,marginBottom:10,cursor:'pointer'}}>
-        <input type="checkbox" checked={doarActive} onChange={e => setDoarActive(e.target.checked)} />
-        doar garanțiile active
-      </label>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:10,flexWrap:'wrap'}}>
+        <label style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:12.5,color:G.muted,cursor:'pointer'}}>
+          <input type="checkbox" checked={doarActive} onChange={e => setDoarActive(e.target.checked)} />
+          doar garanțiile active
+        </label>
+        {canEdit && (
+          <button onClick={() => setCerere({})} style={{...S.btnS, marginLeft:'auto', background:G.blue+'18', color:G.blue, border:`1px solid ${G.blue}55`}}
+            title="Cerere de ofertă către broker pentru poliță de bună execuție / returnare avans / CAR">📨 Cere ofertă poliță (GBE / avans{tipuriPermise.includes('car') ? ' / CAR' : ''})</button>
+        )}
+      </div>
 
       <div style={{background:G.card,border:`1px solid ${G.border2}`,borderRadius:10,overflow:'hidden'}}>
         <table style={{width:'100%',borderCollapse:'collapse',fontSize:12.5}}>
@@ -226,6 +238,9 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
                   {canEdit && !r.lucrare_receptionata && (
                     <button onClick={() => marcheazaReceptie(r)} style={{...S.btnS,marginRight:5}} title="Marchează lucrarea ca recepționată (PVR)">✓ Recepție</button>
                   )}
+                  {canEdit && r.stare === 'activa' && TIPURI_CERERE[r.tip] && (
+                    <button onClick={() => setCerere(r)} style={{...S.btnS,marginRight:5}} title={`Cere brokerului ofertă de poliță — ${TIPURI_CERERE[r.tip].eticheta}`}>📨 Cere ofertă</button>
+                  )}
                   <button onClick={() => setAdresa(r)} disabled={r.blocat_litigiu}
                     title={r.blocat_litigiu ? 'Blocată de litigiu — nu se cere eliberarea' : 'Generează adresa către emitent'}
                     style={{...S.btnS,
@@ -252,6 +267,7 @@ export default function GarantiiRegistru({ canEdit = false, showToast }) {
       </div>
 
       {adresa && <AdresaPanel garantie={adresa} onClose={() => setAdresa(null)} showToast={showToast} />}
+      {cerere && <CerereOfertaPanel initial={cerere.id ? cerere : null} tipuriPermise={tipuriPermise} profile={profile} showToast={showToast} onClose={() => setCerere(null)} onDone={load} />}
     </div>
   )
 }
