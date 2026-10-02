@@ -4820,6 +4820,12 @@ function ReportsPage() {
     // Tranșele deja salvate din aceeași lună (period_to < df) — DOAR pentru reconciliere („Diferență față de plătit"):
     // ce s-a plătit efectiv vs ce ar fi trebuit conform alocării; nu se absoarbe în tranșa curentă
     const {data:prevPaymentsInMonth}=await supabase.from('diurna_payments').select('*,diurna_payment_details(employee_id,amount)').gte('period_from',monthStart).lt('period_to',df).order('period_from',{ascending:true})
+    // r6 (constatarea r5 „export/defalcare"): o plată care a început în luna ANTERIOARĂ și s-a terminat în luna
+    // curentă (ex. 26.09–02.10) are suma pe două luni, iar diurna_payment_details nu păstrează defalcarea pe luni.
+    // Pentru angajații din ea reconcilierea e NEDETERMINATĂ — se spune explicit, nu se afișează o diferență falsă.
+    const {data:platiPesteLuna}=await supabase.from('diurna_payments').select('id,period_from,period_to,diurna_payment_details(employee_id)').lt('period_from',monthStart).gte('period_to',monthStart).lt('period_to',df)
+    const nedeterminatPlata=new Map()   // employee_id → id-urile plăților peste 1 ale lunii în care apare
+    for(const p of platiPesteLuna||[]) for(const d of p.diurna_payment_details||[]){ if(!nedeterminatPlata.has(d.employee_id)) nedeterminatPlata.set(d.employee_id,[]); nedeterminatPlata.get(d.employee_id).push(p.id) }
 
     // Diurnele bifate în tranșă (pentru împărțirea pe șantiere)
     const diurnaRecs=allRecs.filter(r=>r.diurna===true&&r.date>=df&&r.date<=dt)
@@ -4840,7 +4846,7 @@ function ReportsPage() {
       // r6: angajatul fără bife în tranșă dar cu diferență față de ce s-a plătit anterior în lună (exclus atunci /
       // bife modificate după salvare) NU dispare — rămâne cu 0 zile și diferența la vedere
       const platitEfectivPre=(prevPaymentsInMonth||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?Number(d.amount)||0:0)},0)
-      const areDiferenta=Math.abs(platitEfectivPre-(a?a.sumaDiurnaAnterior:0))>0.005
+      const areDiferenta=Math.abs(platitEfectivPre-(a?a.sumaDiurnaAnterior:0))>0.005 || nedeterminatPlata.has(emp.id)
       if(!er.length && !incetatInLuna && !areDiferenta) return null
 
       const C=a?a.C:0, B=a?a.B:0, N=a?a.N:0
@@ -4864,6 +4870,8 @@ function ReportsPage() {
       // Diferență ≠ 0 = istoric lipsă (tranșă nesalvată / angajat exclus atunci) sau bife modificate după salvare.
       const platitEfectiv=(prevPaymentsInMonth||[]).reduce((s,p)=>{const d=(p.diurna_payment_details||[]).find(x=>x.employee_id===emp.id);return s+(d?Number(d.amount)||0:0)},0)
       const diferentaPlatit=platitEfectiv-platitAnteriorSuma
+      // Plată peste 1 ale lunii pentru acest angajat → diferența nu se poate determina fără defalcare pe luni
+      const difNedeterminat=nedeterminatPlata.has(emp.id)?`nedeterminat (plată #${nedeterminatPlata.get(emp.id).join(', #')} peste 1 ale lunii)`:''
       // Zile cu CO ȘI diurnă bifată simultan — nu se rezolvă automat, se semnalează
       const deVerificat=a?a.deVerificat:[]
       // ─────────────────────────────────────────────────────────────────────
@@ -4882,7 +4890,7 @@ function ReportsPage() {
       return {nume:p[0],prenume:p.slice(1).join(' '),sites,totalZile:diurnaReala,totalVal:diurnaReala*diurnaAmt,
               diurnaMax:faraZile?0:diurnaMax,
               normeCumulate:C,zilePlatiteAnterior:B,pesteLimita,pesteCumulat,depasesteLunar,bugetLunar,platitAnteriorSuma,sumaAcestExport,restBuget,restDePlata,
-              deVerificat,diferentaPlatit,
+              deVerificat,diferentaPlatit,difNedeterminat,
               incetatLa:incetatInLuna?emp.termination_date:null}
     }).filter(Boolean).sort((a,b)=>{
       const n=(a.nume||'').localeCompare((b.nume||''),'ro')
@@ -4931,13 +4939,13 @@ function ReportsPage() {
           si===0?emp.diurnaMax:'',
           si===0?(emp.pesteLimita>0?emp.pesteLimita:(emp.incetatLa?0:'')):'',
           si===0?fmtVerif(emp):'',
-          si===0?(emp.diferentaPlatit!==0?emp.diferentaPlatit:''):''
+          si===0?(emp.difNedeterminat||(emp.diferentaPlatit!==0?emp.diferentaPlatit:'')):''
         ])
         siteRowIdxs.push({row:rowIdx,isAlt:si%2===1,hasPeste:si===0&&emp.pesteLimita>0})
         rowIdx++
       })
       // Total per angajat
-      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}${emp.incetatLa?` (încetat ${fmtInc(emp.incetatLa)})`:''}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0,fmtVerif(emp),emp.diferentaPlatit!==0?emp.diferentaPlatit:''])
+      wsData.push(['','',`Total ${emp.nume} ${emp.prenume}${emp.incetatLa?` (încetat ${fmtInc(emp.incetatLa)})`:''}`,'',emp.totalZile,'',emp.totalVal,emp.diurnaMax,emp.pesteLimita>0?emp.pesteLimita:0,fmtVerif(emp),emp.difNedeterminat||(emp.diferentaPlatit!==0?emp.diferentaPlatit:'')])
       totalRowIdxs.push({row:rowIdx,hasPeste:emp.pesteLimita>0})
       empRanges.push({start:startRow,end:rowIdx-1,rows:emp.sites.length})
       rowIdx++; nr++
@@ -4948,8 +4956,11 @@ function ReportsPage() {
     const totalGenVal=empStats.reduce((s,e)=>s+e.totalVal,0)
     const totalPeste=empStats.reduce((s,e)=>s+e.pesteLimita,0)
     const totalDeVerificat=empStats.filter(e=>e.deVerificat?.length).length
-    const totalDiferenta=empStats.reduce((s,e)=>s+e.diferentaPlatit,0)
-    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0,totalDeVerificat>0?`${totalDeVerificat} angajați`:'',totalDiferenta!==0?totalDiferenta:''])
+    // Totalul diferenței = doar angajații cu reconciliere determinată; cei nedeterminați se numără separat
+    const totalDiferenta=empStats.reduce((s,e)=>s+(e.difNedeterminat?0:e.diferentaPlatit),0)
+    const totalNedeterminat=empStats.filter(e=>e.difNedeterminat).length
+    const txtDiferenta=(totalDiferenta!==0?String(totalDiferenta):'')+(totalNedeterminat>0?`${totalDiferenta!==0?' ':''}(+${totalNedeterminat} nedeterminat)`:'')
+    wsData.push(['','','','TOTAL GENERAL',totalGenZile,diurnaAmt,totalGenVal,'',totalPeste>0?totalPeste:0,totalDeVerificat>0?`${totalDeVerificat} angajați`:'',txtDiferenta])
     const totalGenRow=rowIdx+1
 
     const ws=XLSX.utils.aoa_to_sheet(wsData)
@@ -5068,7 +5079,7 @@ function ReportsPage() {
     XLSX.writeFile(wb,`Diurne_${from.replace(/\//g,'-')}.xlsx`)
     const msgPeste=totalPeste>0?` · ⚠ ${totalPeste} zile in salariu!`:''
     const msgVerif=totalDeVerificat>0?` · ⚠ ${totalDeVerificat} de verificat (CO+diurnă)`:''
-    const msgDif=totalDiferenta!==0?` · ⚠ diferență față de plătit ${totalDiferenta} RON`:''
+    const msgDif=(totalDiferenta!==0?` · ⚠ diferență față de plătit ${totalDiferenta} RON`:'')+(totalNedeterminat>0?` · ${totalNedeterminat} nedeterminat (plată peste 1 ale lunii)`:'')
     playBeep(); showToast(`✓ ${empStats.length} angajati · ${calWorkDays} zile lucr. cumulate${msgPeste}${msgVerif}${msgDif}`)
     }catch(e){showToast('Eroare la export diurne','error')}finally{setExpD(false)}
   }
