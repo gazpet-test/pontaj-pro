@@ -100,7 +100,7 @@ q "INSERT INTO public.garantii_bilete_ordin (garantie_id, serie, numar, suma, da
 for u in 1 3; do [ "$(poate $u "UPDATE public.garantii_bilete_ordin SET observatii = 'x'")" = da ] || esec "4 user $u nu poate modifica"; done
 for u in 6 8; do [ "$(poate $u "UPDATE public.garantii_bilete_ordin SET observatii = 'x'")" = nu ] || esec "4 user $u poate modifica"; done
 for u in 6 8; do [ "$(poate $u "DELETE FROM public.garantii_bilete_ordin")" = nu ] || esec "4 user $u poate șterge"; done
-for u in 1 3 6 8; do [ "$(ca_user $u "SELECT count(*) FROM public.garantii_bilete_ordin" | grep -m1 .)" = 1 ] || esec "4 user $u nu citește"; done
+for u in 1 3 6 8; do [ "$(ca_user $u "SELECT count(*) FROM public.garantii_bilete_ordin" | tail -n1)" = 1 ] || esec "4 user $u nu citește"; done
 A="$("${PSQL[@]}" -d "$BAZA" -At 2>&1 -c "BEGIN; SET LOCAL ROLE anon; SELECT count(*) FROM public.garantii_bilete_ordin; ROLLBACK;" || true)"
 echo "$A" | grep -q "permission denied" || esec "4 anon poate citi: $A"
 A="$("${PSQL[@]}" -d "$BAZA" -At 2>&1 -c "BEGIN; SET LOCAL ROLE anon; SELECT nextval('public.garantii_bilete_ordin_id_seq'); ROLLBACK;" || true)"
@@ -117,7 +117,7 @@ for c in "suma, '0 → refuz'|INSERT INTO public.garantii_bilete_ordin (garantie
 done
 [ "$(poate 1 "INSERT INTO public.garantii_bilete_ordin (garantie_id, numar, suma, data_emitere) VALUES (1, 'M-1', 1, current_date)")" = da ] || esec "4 serie NULL + număr existent trebuie permis (serie diferită)"
 [ "$(poate 1 "INSERT INTO public.garantii_bilete_ordin (garantie_id, numar, suma, data_emitere, stare, restituit_la) VALUES (1, 'C6', 1, current_date, 'restituit', current_date)")" = da ] || esec "4 restituit cu dată trebuie permis"
-A="$(ca_user 1 "SELECT (delete from public.garantii where id = 1 returning 1) IS NOT NULL" 2>/dev/null || true)"; [[ "$A" == EROARE:* ]] || esec "4 ștergerea garanției cu BO trebuie refuzată (ON DELETE RESTRICT)"
+A="$(ca_user 1 "WITH d AS (DELETE FROM public.garantii WHERE id = 1 RETURNING 1) SELECT count(*) FROM d" 2>/dev/null || true)"; [[ "$A" == EROARE:* ]] || esec "4 ștergerea garanției cu BO trebuie refuzată (ON DELETE RESTRICT)"
 # trigger updated_at
 T0="$(q "SELECT updated_at FROM public.garantii_bilete_ordin WHERE numar = 'M-1'")"; sleep 1
 q "UPDATE public.garantii_bilete_ordin SET observatii = 'y' WHERE numar = 'M-1'" >/dev/null

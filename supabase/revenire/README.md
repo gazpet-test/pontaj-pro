@@ -175,4 +175,4 @@ SELECT set_config('gazpet.rollback_tehnic_20261003a', 'SCOATE_BILETE_ORDIN:' || 
 -- <conținutul exact al fișierului>
 COMMIT;
 ```
-Precondiție = tabela există și e goală + md5-ul propriu 20261003a pe `garantii_alerte()`; postcondiție = starea live (fără tabelă/secvență, md5 `fd35c645…`, ACL neatins, fără amprente `bo_*`); dezarmare la final. Testat în `scripts/test_garantii_bilete_ordin.sh` pasul 6.
+Precondiție = tabela există și e goală + md5-ul propriu 20261003a pe `garantii_alerte()` (`9bcd5ab4…`); postcondiție = starea live (fără tabelă/secvență, md5 `fd35c645…`, ACL neatins, fără amprente `bo_*`); dezarmare la final. Testat în `scripts/test_garantii_bilete_ordin.sh` pasul 6 (schelet: `supabase/tests/garantii_bilete_ordin_schelet.sql`). Migrarea: sha256 `9373980e…` (vezi PR), validator OK.
