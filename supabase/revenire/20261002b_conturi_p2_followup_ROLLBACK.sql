@@ -2,8 +2,8 @@
 -- 20261002b_conturi_p2_followup_ROLLBACK — NU e migrare (niciun runner nu parcurge supabase/revenire/). Readuce EXACT starea
 -- LIVE r11 a pachetului Conturi (c v20261001230000 / d v20261001231500): cele 5 funcții înlocuite de 20261002b revin VERBATIM la
 -- corpurile din 20260929c / 20260929d (md5 prosrc: fn_cont_notifica_owneri 0bbbf41d…, fn_cont_serializare_activa 8327108d…,
--- fn_cont_revalideaza_candidat 7bb0d97e…, fn_cont_leaga_automat 349f5402…, fn_conturi_inchideri_sweep 7bc5ddf2…) și coloana
--- conturi_inchideri_coada.amanari dispare (contorul de amânări se pierde — doar diagnostic). REDESCHIDE cele 4 P2 (risc documentat
+-- fn_cont_revalideaza_candidat 7bb0d97e…, fn_cont_leaga_automat 349f5402…, fn_cont_coada_pune 890a0025…, fn_conturi_inchideri_sweep
+-- 7bc5ddf2…) și coloanele conturi_inchideri_coada.amanari / ultima_amanare_alertata dispar (contorul de amânări se pierde — doar diagnostic). REDESCHIDE cele 4 P2 (risc documentat
 -- pe #529, r11). Fără GO de execuție: doar la cererea explicită a lui Răzvan, după decizie + review Copilot. Armarea nu e autorizare.
 -- Procedura (un singur string; fișierul nu conține BEGIN/COMMIT):
 --   BEGIN;
@@ -30,13 +30,14 @@ BEGIN
                  ('fn_cont_serializare_activa',   'fn_cont_serializare_activa()',                       '526b9a2c30d4d70df3d94928e597de17'),
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', 'ecbbd64ceffd6ed13ed91a04f6f14419'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',               'a32cb851d317d273feee8e975eba66a4'),
-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       '9e203157af28de6961876d2ce06ee678')) AS w(f, sig, m)
+                 ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', 'b1c2b93cbe3b9560bcb38d460c717fce'),
+                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'c65d27e17297056cc3a5a752248b6591')) AS w(f, sig, m)
    WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m);
   IF v_lipsa IS NOT NULL THEN
     RAISE EXCEPTION 'Revenire 20261002b: precondiție — funcțiile nu sunt varianta 20261002b (md5): %', v_lipsa;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.conturi_inchideri_coada'::regclass AND attname = 'amanari' AND NOT attisdropped) THEN
-    RAISE EXCEPTION 'Revenire 20261002b: precondiție — coloana conturi_inchideri_coada.amanari lipsește';
+  IF (SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.conturi_inchideri_coada'::regclass AND attname IN ('amanari', 'ultima_amanare_alertata') AND NOT attisdropped) <> 2 THEN
+    RAISE EXCEPTION 'Revenire 20261002b: precondiție — coloanele conturi_inchideri_coada.amanari / ultima_amanare_alertata lipsesc';
   END IF;
 END $arm$;
 
@@ -251,6 +252,24 @@ END $fn$;
 REVOKE ALL ON FUNCTION public.fn_cont_leaga_automat(boolean, jsonb) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.fn_cont_leaga_automat(boolean, jsonb) TO authenticated;
 
+-- ── d, B.2b: fn_cont_coada_pune — VERBATIM din 20260929d (liniile 245-260) ──
+CREATE OR REPLACE FUNCTION public.fn_cont_coada_pune(p_profile_id uuid, p_employee_id integer, p_tip text, p_motiv text,
+                                                     p_scadent date DEFAULT CURRENT_DATE, p_eroare text DEFAULT NULL)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  INSERT INTO public.conturi_inchideri_coada (profile_id, employee_id, tip, motiv, scadent_la, ultima_eroare, creat_de_identitate,
+                                              notificat_la)
+  VALUES (p_profile_id, p_employee_id, p_tip, p_motiv, COALESCE(p_scadent, CURRENT_DATE), p_eroare, public.fn_identitate_eticheta(),
+          CASE WHEN p_eroare IS NOT NULL THEN now() END)
+  ON CONFLICT (profile_id, tip) WHERE rezolvat_la IS NULL
+  DO UPDATE SET scadent_la = EXCLUDED.scadent_la, employee_id = EXCLUDED.employee_id, motiv = EXCLUDED.motiv,
+                ultima_eroare = COALESCE(EXCLUDED.ultima_eroare, public.conturi_inchideri_coada.ultima_eroare),
+                incercari = 0, urmatoarea_incercare_la = NULL, abandonat_la = NULL, notificat_la = EXCLUDED.notificat_la;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_coada_pune(uuid, integer, text, text, date, text) FROM PUBLIC, anon, authenticated, service_role;
+
 -- ── d, B.5b: fn_conturi_inchideri_sweep — VERBATIM din 20260929d (liniile 1061-1259) ──
 CREATE OR REPLACE FUNCTION public.fn_conturi_inchideri_sweep()
 RETURNS jsonb
@@ -452,8 +471,9 @@ BEGIN
 END $fn$;
 REVOKE ALL ON FUNCTION public.fn_conturi_inchideri_sweep() FROM PUBLIC, anon, authenticated, service_role;
 
--- ── d (coloana aditivă): contorul de amânări dispare; intrările deschise rămân neatinse ──
+-- ── d (coloanele aditive): contorul de amânări și markerul de alertă dispar; intrările deschise rămân neatinse ──
 ALTER TABLE public.conturi_inchideri_coada DROP COLUMN IF EXISTS amanari;
+ALTER TABLE public.conturi_inchideri_coada DROP COLUMN IF EXISTS ultima_amanare_alertata;
 
 -- ── Postcondiție: EXACT starea live r11 (md5 c/d, ACL-uri neschimbate), fără coloană; apoi dezarmare ──
 DO $post$
@@ -464,6 +484,7 @@ BEGIN
                  ('fn_cont_serializare_activa',   'fn_cont_serializare_activa()',                       '8327108ddc25b66c312b7ba82e3a83b2', '{postgres=X/postgres}'),
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', '7bb0d97ed57bfef1c4555fbf94629071', '{postgres=X/postgres}'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',               '349f540203eeb73639c4cfa4316a8cd6', '{postgres=X/postgres,authenticated=X/postgres}'),
+                 ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', '890a0025f513ca02ac9276cd4a360afb', '{postgres=X/postgres}'),
                  ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       '7bc5ddf2f4097525e6c24f499a8fb5e7', '{postgres=X/postgres}')) AS w(f, sig, m, acl)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
@@ -471,8 +492,8 @@ BEGIN
                         AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                         AND pg_get_userbyid(p.proowner)::text = 'postgres' AND p.proacl::text = w.acl);
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Revenire 20261002b: postcondiție — amprenta nu e cea live r11: %', v_lipsa; END IF;
-  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.conturi_inchideri_coada'::regclass AND attname = 'amanari' AND NOT attisdropped) THEN
-    RAISE EXCEPTION 'Revenire 20261002b: postcondiție — coloana amanari a rămas';
+  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.conturi_inchideri_coada'::regclass AND attname IN ('amanari', 'ultima_amanare_alertata') AND NOT attisdropped) THEN
+    RAISE EXCEPTION 'Revenire 20261002b: postcondiție — coloanele amanari / ultima_amanare_alertata au rămas';
   END IF;
   PERFORM set_config('gazpet.rollback_tehnic_20261002b', '', true);
 END $post$;

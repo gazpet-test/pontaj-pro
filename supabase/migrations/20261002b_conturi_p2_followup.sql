@@ -30,9 +30,24 @@
 --       (cont_inchidere_amanata). Semantica amanat_lock e NEschimbată: intrarea rămâne fără incercari / backoff / abandon, se reia la
 --       rularea următoare; contorul se resetează când elementul e procesat normal și rămâne deschis (ex. scadența mutată).
 --
+--   r2 (NO-GO static Copilot pe r1 0ae0c0da…; P2-1 / P2-2 GO static, neatinse):
+--   (c, P2-3A) calea triggerului: fn_employees_ciclu_cont → fn_cont_coada_pune(…, p_eroare) punea notificat_la = now() DOAR pentru că
+--       exista o eroare, înaintea notificării best-effort a triggerului ⇒ cu toți ownerii ținuți (0 acoperiți) intrarea rămânea „anunțată”
+--       și sweep-ul nu mai reîncerca anunțul. Fix: fn_cont_coada_pune separă ultima_eroare de notificat_la — p_eroare se scrie în
+--       ultima_eroare, notificat_la rămâne / revine NULL (ciclu nou). Marcajul „anunțat” îl pune DOAR sweep-ul, pe baza acoperirii
+--       (≥ 1 owner). Anunțul din trigger rămâne best-effort (de curtoazie; poate fi urmat de anunțul primei reîncercări din sweep).
+--   (d, P2-4A) alerta de prag folosea doar amanari % 6 = 0 și ignora acoperirea ⇒ la amânarea 6 cu toți ownerii ținuți alerta se pierdea
+--       definitiv. Fix: marker durabil conturi_inchideri_coada.ultima_amanare_alertata integer NOT NULL DEFAULT 0 (coloană nouă, aditivă):
+--       bucket-ul (6, 12, …) = amanari − amanari % 6; alerta se încearcă la fiecare rulare cât timp bucket > marker și se marchează
+--       DOAR după acoperire > 0 (rulările 7, 8… continuă să încerce bucket-ul 6).
+--   (alegeri cerute de Copilot) amanari = amânări CONSECUTIVE: reset la 0 (și marker 0) la orice procesare non-amanat_lock (succes,
+--       rezolvare, eroare cu backoff) și la ciclu nou (fn_cont_coada_pune). Reziduu declarat: contenția persistentă pe însuși rândul cozii
+--       ⇒ amanat_lock repetat FĂRĂ incrementare (contorul nu se poate persista fără lock-ul rândului) — risc acceptat, telemetrie separată
+--       ca follow-up. Semantica notificatorului „≥ 1 owner acoperit” rămâne (SLA: minim un owner află).
+--
 -- Funcții înlocuite (precondiție = md5 LIVE r11, calculat pe harness din fișierele cu sha256 identic cu docs/CONTURI_CICLU_VIATA.md r11;
 -- la reaplicare = md5 propriu): fn_cont_notifica_owneri (c), fn_cont_serializare_activa (c), fn_cont_revalideaza_candidat (c),
--- fn_cont_leaga_automat (c), fn_conturi_inchideri_sweep (d). Semnături, ACL-uri, SECURITY DEFINER + search_path: neschimbate.
+-- fn_cont_leaga_automat (c), fn_cont_coada_pune (d, r2), fn_conturi_inchideri_sweep (d). Semnături, ACL-uri, SECURITY DEFINER + search_path: neschimbate.
 -- NOTĂ: precondițiile lui d / e verifică md5-ul lui fn_cont_notifica_owneri (0bbbf41d…) — după acest follow-up o REAPLICARE a lui d / e
 -- pe live ar fi refuzată de ele (corect: starea de pornire s-a schimbat); harness-ul reaplică c → d → e → 20261002b în ordine.
 -- Idempotentă. Nu atinge datele (coloana nouă pornește pe 0).
@@ -71,7 +86,8 @@ BEGIN
                  ('fn_cont_serializare_activa',   'fn_cont_serializare_activa()',                   '8327108ddc25b66c312b7ba82e3a83b2', '526b9a2c30d4d70df3d94928e597de17'),
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', '7bb0d97ed57bfef1c4555fbf94629071', 'ecbbd64ceffd6ed13ed91a04f6f14419'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',           '349f540203eeb73639c4cfa4316a8cd6', 'a32cb851d317d273feee8e975eba66a4'),
-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', '9e203157af28de6961876d2ce06ee678')) AS w(f, sig, m_live, m_nou)
+                 ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', '890a0025f513ca02ac9276cd4a360afb', 'b1c2b93cbe3b9560bcb38d460c717fce'),
+                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', 'c65d27e17297056cc3a5a752248b6591')) AS w(f, sig, m_live, m_nou)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) IN (w.m_live, w.m_nou) AND p.prosecdef
@@ -81,7 +97,8 @@ BEGIN
   -- (a) ACL-urile de pornire (păstrate de CREATE OR REPLACE): fn_cont_leaga_automat = owner + authenticated; celelalte doar postgres
   IF (SELECT p.proacl::text FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_cont_leaga_automat(boolean,jsonb)')) IS DISTINCT FROM '{postgres=X/postgres,authenticated=X/postgres}'
      OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid IN (to_regprocedure('public.fn_cont_notifica_owneri(text,text,text,text)'), to_regprocedure('public.fn_cont_serializare_activa()'),
-                                                        to_regprocedure('public.fn_cont_revalideaza_candidat(uuid,integer,boolean)'), to_regprocedure('public.fn_conturi_inchideri_sweep()'))
+                                                        to_regprocedure('public.fn_cont_revalideaza_candidat(uuid,integer,boolean)'), to_regprocedure('public.fn_conturi_inchideri_sweep()'),
+                                                        to_regprocedure('public.fn_cont_coada_pune(uuid,integer,text,text,date,text)'))
                    AND p.proacl::text IS DISTINCT FROM '{postgres=X/postgres}') THEN
     RAISE EXCEPTION 'Precondiție: ACL-urile funcțiilor înlocuite diferă de cele livrate de c/d — se reanalizează';
   END IF;
@@ -97,20 +114,48 @@ BEGIN
                        = ARRAY['cnp','employee_id']) THEN
     RAISE EXCEPTION 'Precondiție: triggerele de lock ale lui d nu au forma livrată (WHEN / UPDATE OF) — se reanalizează';
   END IF;
-  -- (d) coloana nouă: absentă (prima aplicare) sau exact integer NOT NULL DEFAULT 0 (reaplicare)
-  SELECT format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END || ' default ' || COALESCE(pg_get_expr(d.adbin, d.adrelid), '-')
-    INTO v_tip
-    FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-   WHERE a.attrelid = 'public.conturi_inchideri_coada'::regclass AND a.attname = 'amanari' AND NOT a.attisdropped;
-  IF v_tip IS NOT NULL AND v_tip IS DISTINCT FROM 'integer not null default 0' THEN
-    RAISE EXCEPTION 'Precondiție: conturi_inchideri_coada.amanari există cu altă definiție (%) — se reanalizează', v_tip;
-  END IF;
+  -- (d) coloanele noi: absente (prima aplicare) sau exact integer NOT NULL DEFAULT 0 (reaplicare)
+  FOR v_tip IN SELECT c || ': ' || COALESCE((SELECT format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END || ' default ' || COALESCE(pg_get_expr(d.adbin, d.adrelid), '-')
+                                               FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                                              WHERE a.attrelid = 'public.conturi_inchideri_coada'::regclass AND a.attname = c AND NOT a.attisdropped), 'absent')
+                 FROM unnest(ARRAY['amanari', 'ultima_amanare_alertata']) c LOOP
+    IF split_part(v_tip, ': ', 2) NOT IN ('absent', 'integer not null default 0') THEN
+      RAISE EXCEPTION 'Precondiție: conturi_inchideri_coada.% există cu altă definiție — se reanalizează', v_tip;
+    END IF;
+  END LOOP;
 END $pre_livrare$;
 
--- (d) coloana contorului de amânări — aditivă, cu valoare implicită; intrările existente pornesc de la 0 -------------------------
+-- (d) coloanele contorului de amânări — aditive, cu valoare implicită; intrările existente pornesc de la 0 -----------------------
 ALTER TABLE public.conturi_inchideri_coada ADD COLUMN IF NOT EXISTS amanari integer NOT NULL DEFAULT 0;
+ALTER TABLE public.conturi_inchideri_coada ADD COLUMN IF NOT EXISTS ultima_amanare_alertata integer NOT NULL DEFAULT 0;
 COMMENT ON COLUMN public.conturi_inchideri_coada.amanari IS
-  'P2-4 (20261002b): de câte ori LA RÂND sweep-ul a amânat intrarea din contenție (amanat_lock). Se resetează când elementul e procesat normal și rămâne deschis. Owner-ul e anunțat (cont_inchidere_amanata) la fiecare 6 amânări (~30 min).';
+  'P2-4 (20261002b): de câte ori LA RÂND (consecutiv) sweep-ul a amânat intrarea din contenție (amanat_lock). Se resetează la orice procesare non-amanat_lock și la ciclu nou (fn_cont_coada_pune). Owner-ul e anunțat (cont_inchidere_amanata) la pragurile 6, 12, … (ultima_amanare_alertata).';
+COMMENT ON COLUMN public.conturi_inchideri_coada.ultima_amanare_alertata IS
+  'P2-4A (20261002b r2): ultimul prag de amânări (6, 12, …) pentru care alerta cont_inchidere_amanata a ACOPERIT ≥ 1 owner; cât timp pragul curent > marker, sweep-ul reîncearcă alerta la fiecare rulare. Se resetează odată cu amanari.';
+
+-- (d, P2-3A) B.2b fn_cont_coada_pune — ultima_eroare separată semantic de notificat_la --------------------------------------------
+-- r11: notificat_la = now() când p_eroare nu era NULL („apelantul tocmai a anunțat owner-ul”) — dar anunțul triggerului e best-effort
+-- și vine DUPĂ; cu toți ownerii ținuți (FOR KEY SHARE NOWAIT ⇒ 0 acoperiți) intrarea rămânea marcată „anunțată” și sweep-ul
+-- (ELSIF x.notificat_la IS NULL) nu mai anunța niciodată. 20261002b r2: p_eroare ⇒ DOAR ultima_eroare; notificat_la rămâne NULL la
+-- INSERT și revine NULL la ciclu nou (ON CONFLICT) — marcajul îl pune DOAR sweep-ul, când notificatorul acoperă ≥ 1 owner.
+-- (P2-4, alegerea 1) ciclu nou ⇒ amanari = 0, ultima_amanare_alertata = 0 (contorul e al amânărilor CONSECUTIVE).
+CREATE OR REPLACE FUNCTION public.fn_cont_coada_pune(p_profile_id uuid, p_employee_id integer, p_tip text, p_motiv text,
+                                                     p_scadent date DEFAULT CURRENT_DATE, p_eroare text DEFAULT NULL)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  INSERT INTO public.conturi_inchideri_coada (profile_id, employee_id, tip, motiv, scadent_la, ultima_eroare, creat_de_identitate,
+                                              notificat_la)
+  VALUES (p_profile_id, p_employee_id, p_tip, p_motiv, COALESCE(p_scadent, CURRENT_DATE), p_eroare, public.fn_identitate_eticheta(),
+          NULL)
+  ON CONFLICT (profile_id, tip) WHERE rezolvat_la IS NULL
+  DO UPDATE SET scadent_la = EXCLUDED.scadent_la, employee_id = EXCLUDED.employee_id, motiv = EXCLUDED.motiv,
+                ultima_eroare = COALESCE(EXCLUDED.ultima_eroare, public.conturi_inchideri_coada.ultima_eroare),
+                incercari = 0, urmatoarea_incercare_la = NULL, abandonat_la = NULL, notificat_la = NULL,
+                amanari = 0, ultima_amanare_alertata = 0;
+END $fn$;
+REVOKE ALL ON FUNCTION public.fn_cont_coada_pune(uuid, integer, text, text, date, text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- (c) A.3 Notificări pentru owneri (c) — întoarce numărul de owneri ACOPERIȚI ---------------------------------------------------
 -- r10: destinatarii se iau FOR KEY SHARE NOWAIT (owner ținut ⇒ sărit cu WARNING, fără așteptare) — neschimbat.
@@ -381,9 +426,12 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_leaga_automat(boolean, jsonb) TO authen
 --       ⇒ notificat_la = NULL; pasul final „reluare notificări” re-trimite anunțul de abandonare pentru intrările deschise, abandonate,
 --       cu notificat_la NULL (intrarea luată FOR UPDATE, NOWAIT dacă sweep-ul ține deja lock-uri) — la fiecare rulare, până ajunge.
 --   (d) la fiecare amânare (amanat_lock) contorul amanari += 1 pe intrare (FOR UPDATE NOWAIT în subtranzacție proprie: intrarea ținută
---       de altcineva ⇒ WARNING, fără așteptare, fără incrementare); după prag (6, apoi la fiecare multiplu de 6) owner-ul e anunțat
---       (cont_inchidere_amanata); elementul procesat normal și rămas deschis (scadența mutată) își resetează contorul.
---       Rezultatul sweep-ului capătă cheile 'amanari_alerta' și 'notificare_reluata' (contoare, ca celelalte).
+--       de altcineva ⇒ WARNING, fără așteptare, fără incrementare — reziduu declarat: contenție persistentă pe însuși rândul cozii ⇒
+--       amanat_lock repetat fără incrementare); r2 (P2-4A): la prag (amanari − amanari % 6 > ultima_amanare_alertata) owner-ul e anunțat
+--       (cont_inchidere_amanata) și markerul se avansează DOAR după acoperire > 0 (altfel se reîncearcă la fiecare rulare);
+--       r2 (alegerea 1): amanari = amânări CONSECUTIVE — orice procesare non-amanat_lock (succes, rezolvare, eroare cu backoff) pune
+--       amanari = 0 și ultima_amanare_alertata = 0; fn_cont_coada_pune le resetează la ciclu nou.
+--       Rezultatul sweep-ului capătă cheile 'amanari_alerta', 'amanari_alerta_neacoperita' și 'notificare_reluata' (contoare).
 CREATE OR REPLACE FUNCTION public.fn_conturi_inchideri_sweep()
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
@@ -509,8 +557,10 @@ BEGIN
            SET rezolvat_la = COALESCE(rezolvat_la, now()), rezultat = COALESCE(rezultat, v_rezult), incercari = incercari + 1
          WHERE id = x.id;
         v_n := jsonb_set(v_n, ARRAY[v_rezult], to_jsonb(COALESCE((v_n ->> v_rezult)::int, 0) + 1));
-      ELSIF x.amanari > 0 THEN
-        UPDATE public.conturi_inchideri_coada SET amanari = 0 WHERE id = x.id;   -- 20261002b (P2-4): procesat normal, rămâne deschis ⇒ contenția s-a încheiat
+      END IF;
+      IF x.amanari > 0 OR x.ultima_amanare_alertata > 0 THEN
+        -- 20261002b (P2-4, r2: amânări CONSECUTIVE): orice procesare non-amanat_lock (rezolvare sau rămas deschis) închide seria
+        UPDATE public.conturi_inchideri_coada SET amanari = 0, ultima_amanare_alertata = 0 WHERE id = x.id;
       END IF;
       v_tine := true;
     EXCEPTION WHEN OTHERS THEN
@@ -533,13 +583,20 @@ BEGIN
              AND (profile_id, employee_id, tip) IS NOT DISTINCT FROM (q.profile_id, q.employee_id, q.tip)   -- (r5: doar intrarea pe care a lucrat)
           RETURNING * INTO x;
           v_tine := true;
-          IF FOUND AND x.amanari >= c_prag_amanari AND x.amanari % c_prag_amanari = 0 THEN
+          -- r2 (P2-4A): pragul curent = amanari − amanari % 6 (6, 12, …); alerta se încearcă la FIECARE rulare cât timp pragul > marker
+          -- (ultima_amanare_alertata) și se marchează DOAR dacă notificatorul a acoperit ≥ 1 owner — o alertă neacoperită nu se pierde.
+          IF FOUND AND x.amanari - x.amanari % c_prag_amanari > x.ultima_amanare_alertata THEN
             v_email := (SELECT p.email FROM public.profiles p WHERE p.id = q.profile_id);
-            PERFORM public.fn_cont_notifica_owneri('cont_inchidere_amanata', '⏳ Închiderea automată a contului e amânată repetat',
+            v_k := public.fn_cont_notifica_owneri('cont_inchidere_amanata', '⏳ Închiderea automată a contului e amânată repetat',
               format('%s (coada #%s, %s): amânată de %s ori la rând (~%s min) — altă operație ținea fișa, contul de logare sau cheile persoanei de fiecare dată; coada reîncearcă la fiecare rulare. Verifică dacă există o tranzacție blocată (HR / GoTrue) sau închide contul manual (Admin → Manageri).',
                      v_email, x.id, x.tip, x.amanari, x.amanari * 5),
               '/admin?tab=managers&cont=' || q.profile_id::text);
-            v_n := jsonb_set(v_n, ARRAY['amanari_alerta'], to_jsonb(COALESCE((v_n ->> 'amanari_alerta')::int, 0) + 1));
+            IF v_k > 0 THEN
+              UPDATE public.conturi_inchideri_coada SET ultima_amanare_alertata = x.amanari - x.amanari % c_prag_amanari WHERE id = q.id;
+              v_n := jsonb_set(v_n, ARRAY['amanari_alerta'], to_jsonb(COALESCE((v_n ->> 'amanari_alerta')::int, 0) + 1));
+            ELSE
+              v_n := jsonb_set(v_n, ARRAY['amanari_alerta_neacoperita'], to_jsonb(COALESCE((v_n ->> 'amanari_alerta_neacoperita')::int, 0) + 1));
+            END IF;
           END IF;
         EXCEPTION WHEN lock_not_available THEN
           RAISE WARNING 'fn_conturi_inchideri_sweep (coada #%): intrarea e ținută de altă tranzacție — contorul de amânări nu se incrementează la rularea asta', q.id;
@@ -562,7 +619,8 @@ BEGIN
         UPDATE public.conturi_inchideri_coada
            SET incercari = incercari + 1, ultima_eroare = v_err,
                urmatoarea_incercare_la = now() + least(interval '5 minutes' * power(2, incercari), interval '6 hours'),
-               abandonat_la = CASE WHEN incercari + 1 >= c_max_incercari THEN now() END
+               abandonat_la = CASE WHEN incercari + 1 >= c_max_incercari THEN now() END,
+               amanari = 0, ultima_amanare_alertata = 0   -- 20261002b r2: eroarea (procesare non-amanat_lock) închide seria de amânări
          WHERE id = q.id AND rezolvat_la IS NULL
            -- r5 (D-ERR-IDENTITY): backoff / abandon / notificare DOAR pe intrarea pe care a lucrat sweep-ul; una retargetată
            -- între timp (fn_cont_coada_pune: employee_id A→B) nu primește eroarea altei fișe ⇒ NOT FOUND, nimic de făcut
@@ -640,7 +698,8 @@ BEGIN
                  ('fn_cont_serializare_activa',   'fn_cont_serializare_activa()',                       '526b9a2c30d4d70df3d94928e597de17', '{postgres=X/postgres}'),
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', 'ecbbd64ceffd6ed13ed91a04f6f14419', '{postgres=X/postgres}'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',               'a32cb851d317d273feee8e975eba66a4',       '{postgres=X/postgres,authenticated=X/postgres}'),
-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       '9e203157af28de6961876d2ce06ee678',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
+                 ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', 'b1c2b93cbe3b9560bcb38d460c717fce',       '{postgres=X/postgres}'),
+                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'c65d27e17297056cc3a5a752248b6591',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m AND p.prosecdef
@@ -650,21 +709,22 @@ BEGIN
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: amprentă diferită (semnătură/md5/secdef/proconfig/owner/ACL): %', v_lipsa; END IF;
   SELECT array_agg(p.proname::text) INTO v_lipsa FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace
-     AND p.proname = ANY(ARRAY['fn_cont_notifica_owneri','fn_cont_serializare_activa','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_conturi_inchideri_sweep']::text[])
+     AND p.proname = ANY(ARRAY['fn_cont_notifica_owneri','fn_cont_serializare_activa','fn_cont_revalideaza_candidat','fn_cont_leaga_automat','fn_cont_coada_pune','fn_conturi_inchideri_sweep']::text[])
      AND has_function_privilege('anon', p.oid, 'EXECUTE');
   IF v_lipsa IS NOT NULL THEN RAISE EXCEPTION 'Postcondiție: funcții executabile de anon: %', v_lipsa; END IF;
   -- (b) garda nouă trece pe triggerele live ale lui d (altfel legarea ar refuza cu serializare_indisponibila după livrare)
   IF NOT public.fn_cont_serializare_activa() THEN
     RAISE EXCEPTION 'Postcondiție: fn_cont_serializare_activa() = false după înlocuire — triggerele lui d nu au forma așteptată';
   END IF;
-  -- (d) coloana contorului
-  SELECT format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END || ' default ' || COALESCE(pg_get_expr(d.adbin, d.adrelid), '-')
-    INTO v_tip
-    FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-   WHERE a.attrelid = 'public.conturi_inchideri_coada'::regclass AND a.attname = 'amanari' AND NOT a.attisdropped;
-  IF v_tip IS DISTINCT FROM 'integer not null default 0' THEN
-    RAISE EXCEPTION 'Postcondiție: conturi_inchideri_coada.amanari lipsește sau are altă definiție (%)', v_tip;
-  END IF;
+  -- (d) coloanele contorului și ale markerului de alertă
+  FOR v_tip IN SELECT c || ': ' || COALESCE((SELECT format_type(a.atttypid, a.atttypmod) || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END || ' default ' || COALESCE(pg_get_expr(d.adbin, d.adrelid), '-')
+                                               FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                                              WHERE a.attrelid = 'public.conturi_inchideri_coada'::regclass AND a.attname = c AND NOT a.attisdropped), 'absent')
+                 FROM unnest(ARRAY['amanari', 'ultima_amanare_alertata']) c LOOP
+    IF split_part(v_tip, ': ', 2) IS DISTINCT FROM 'integer not null default 0' THEN
+      RAISE EXCEPTION 'Postcondiție: conturi_inchideri_coada.% lipsește sau are altă definiție', v_tip;
+    END IF;
+  END LOOP;
   -- tabela cozii rămâne cu RLS și fără drepturi pentru anon (coloana nouă nu schimbă nimic, dar se verifică)
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.conturi_inchideri_coada'::regclass)
      OR has_table_privilege('anon', 'public.conturi_inchideri_coada', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') THEN

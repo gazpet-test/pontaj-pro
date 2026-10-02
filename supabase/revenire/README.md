@@ -139,11 +139,11 @@ COMMIT;
 Precondiție = md5 politici `baf4aced…` (patch); postcondiție = `62f69c59…` (live 01.10). Testat în `scripts/test_rls_garantii.sh` pasul 5.
 
 ## 20261002b — Conturi, follow-up P2 (`20261002b_conturi_p2_followup_ROLLBACK.sql`, NEAPLICAT)
-Readuce EXACT starea live r11 a pachetului Conturi (c v20261001230000 / d v20261001231500): cele 5 funcții înlocuite de `20261002b` revin verbatim la corpurile din `20260929c` / `20260929d` (md5 r11) și coloana `conturi_inchideri_coada.amanari` dispare. **Redeschide cele 4 P2** acceptate ca risc documentat pe #529 (deadlock la legarea pe loturi, garda fără tgqual/tgattr, notificări pierdute fără reluare, amânare nelimitată la contenție). Fără GO de execuție.
+Readuce EXACT starea live r11 a pachetului Conturi (c v20261001230000 / d v20261001231500): cele 6 funcții înlocuite de `20261002b` (r2: + `fn_cont_coada_pune`) revin verbatim la corpurile din `20260929c` / `20260929d` (md5 r11) și coloanele `conturi_inchideri_coada.amanari` / `ultima_amanare_alertata` dispar. **Redeschide cele 4 P2** acceptate ca risc documentat pe #529 (deadlock la legarea pe loturi, garda fără tgqual/tgattr, notificări pierdute fără reluare, amânare nelimitată la contenție). Fără GO de execuție.
 ```sql
 BEGIN;
 SELECT set_config('gazpet.rollback_tehnic_20261002b', 'REVINE_P2_FOLLOWUP:' || txid_current(), true);
 -- <conținutul exact al fișierului>
 COMMIT;
 ```
-Precondiție = md5 propriu 20261002b pe toate cele 5 funcții + coloana prezentă; postcondiție = md5 live r11 + ACL-uri neschimbate + coloana absentă; dezarmare la final. Testat în `scripts/test_conturi_ciclu_viata.sh --rollback` (harness-ul citește rollback-ul din `supabase/revenire/` și îl armează după antetul `-- harness-armare: <guc> <token>`; schema de după rollback = schema de după `20260929e`).
+Precondiție = md5 propriu 20261002b pe toate cele 6 funcții + coloanele prezente; postcondiție = md5 live r11 + ACL-uri neschimbate + coloanele absente; dezarmare la final. Testat în `scripts/test_conturi_ciclu_viata.sh --rollback` (harness-ul citește rollback-ul din `supabase/revenire/` și îl armează după antetul `-- harness-armare: <guc> <token>`; schema de după rollback = schema de după `20260929e`).
