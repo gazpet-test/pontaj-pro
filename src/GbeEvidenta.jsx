@@ -3,6 +3,8 @@
 //   Sursa unică: contracte_terti (câmpuri gbe_*) + v_gbe_per_contract (reținut/restituit/rămas) + gbe_restituiri + gbe_polite
 //   — aceeași evidență ca „🔐 Evidență GBE” din Administrativ → Contracte comerciale.
 //   Pentru contractele fără situații de plată în platformă (ex. Conpet) reținutul se ține în contracte_terti.gbe_retinut_manual.
+//   Contul de garanție (IBAN, bancă) NU mai e coloană pe contracte_terti (20261002d, SEC): se citește prin RPC fn_gbe_cont_iban
+//   (NULL pentru cine nu poate scrie GBE) și se scrie prin RPC fn_gbe_cont_iban_set (poartă fn_poate_scrie_garantii în corp).
 //   Exporturi: GbeCard (un contract), GbeTabel (toate, pentru Financiar), GbeLicitatie (pe fișa licitației, leagă licitația de contract)
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
@@ -51,18 +53,20 @@ const culoare = n => n === 'critic' ? G.red : n === 'warn' ? G.yellow : G.blue
 // ── încărcare completă pentru o listă de contracte
 async function incarca(ids) {
   if (!ids?.length) return { contracte: [], view: {}, polite: {}, rest: {} }
-  const [{ data: cc }, { data: vv }, { data: pp }, { data: rr }] = await Promise.all([
+  const [{ data: cc }, { data: vv }, { data: pp }, { data: rr }, ib] = await Promise.all([
     supabase.from('contracte_terti').select('*, beneficiar:beneficiari(nume)').in('id', ids),
     supabase.from('v_gbe_per_contract').select('*').in('contract_id', ids),
     supabase.from('gbe_polite').select('*').in('contract_id', ids).eq('activ', true),
     supabase.from('gbe_restituiri').select('*').in('contract_id', ids).order('data_restituire', { ascending: false }),
+    // IBAN-ul doar prin RPC (SECDEF): NULL pentru cine nu poate scrie GBE — nu vine din contracte_terti (coloana nu mai există)
+    Promise.all(ids.map(id => supabase.rpc('fn_gbe_cont_iban', { p_contract_id: id }).then(r => [id, r.error ? null : (r.data || null)]))),
   ])
   const grp = (arr, k) => (arr || []).reduce((m, x) => { (m[x[k]] = m[x[k]] || []).push(x); return m }, {})
-  return { contracte: cc || [], view: Object.fromEntries((vv || []).map(x => [x.contract_id, x])), polite: grp(pp, 'contract_id'), rest: grp(rr, 'contract_id') }
+  return { contracte: cc || [], view: Object.fromEntries((vv || []).map(x => [x.contract_id, x])), polite: grp(pp, 'contract_id'), rest: grp(rr, 'contract_id'), iban: Object.fromEntries(ib) }
 }
 
 // ── cardul unui contract
-export function GbeCard({ c, v, polite = [], restituiri = [], accent = G.green, canEdit, onChanged, compact }) {
+export function GbeCard({ c, v, polite = [], restituiri = [], iban = null, accent = G.green, canEdit, onChanged, compact }) {
   const [edit, setEdit] = useState(false)
   const [f, setF] = useState({})
   const [nr, setNr] = useState(null) // formular restituire nouă
@@ -70,13 +74,18 @@ export function GbeCard({ c, v, polite = [], restituiri = [], accent = G.green, 
   const [err, setErr] = useState(null)
   const ramas = Number(v?.gbe_ramas ?? 0), retinut = Number(v?.gbe_retinut ?? 0), restituit = Number(v?.gbe_restituit ?? 0)
   const al = alerteGbe(c, v, polite, restituiri)
-  const pornesteEdit = () => { setF({ gbe_retinut_manual: c.gbe_retinut_manual ?? '', gbe_data_receptie_terminare: c.gbe_data_receptie_terminare || '', gbe_data_receptie_finala: c.gbe_data_receptie_finala || '', gbe_data_estimata_recuperare: c.gbe_data_estimata_recuperare || '', gbe_cont_iban: c.gbe_cont_iban || '', gbe_cont_valabil_pana: c.gbe_cont_valabil_pana || '', garantie_buna_executie_pct: c.garantie_buna_executie_pct ?? '', gbe_observatii: c.gbe_observatii || '' }); setEdit(true) }
+  const pornesteEdit = () => { setF({ gbe_retinut_manual: c.gbe_retinut_manual ?? '', gbe_data_receptie_terminare: c.gbe_data_receptie_terminare || '', gbe_data_receptie_finala: c.gbe_data_receptie_finala || '', gbe_data_estimata_recuperare: c.gbe_data_estimata_recuperare || '', gbe_cont_iban: iban || '', gbe_cont_valabil_pana: c.gbe_cont_valabil_pana || '', garantie_buna_executie_pct: c.garantie_buna_executie_pct ?? '', gbe_observatii: c.gbe_observatii || '' }); setEdit(true) }
   const salveaza = async () => {
     setBusy(true); setErr(null)
-    const p = { ...f }; for (const k of Object.keys(p)) if (p[k] === '') p[k] = null
+    const { gbe_cont_iban, ...p } = f; for (const k of Object.keys(p)) if (p[k] === '') p[k] = null
     const { error } = await supabase.from('contracte_terti').update({ ...p, updated_at: new Date().toISOString() }).eq('id', c.id)
-    setBusy(false); if (error) { setErr(error.message); return }
-    setEdit(false); onChanged?.()
+    if (error) { setBusy(false); setErr(error.message); return }
+    // IBAN-ul se scrie separat, doar dacă s-a schimbat (RPC SECDEF cu poartă de rol; gol = ștergere)
+    if ((gbe_cont_iban || '') !== (iban || '')) {
+      const { error: e2 } = await supabase.rpc('fn_gbe_cont_iban_set', { p_contract_id: c.id, p_iban: gbe_cont_iban || null })
+      if (e2) { setBusy(false); setErr(e2.message); return }
+    }
+    setBusy(false); setEdit(false); onChanged?.()
   }
   const salveazaRest = async () => {
     if (!nr.valoare_lei || !nr.data_restituire) { setErr('Data și valoarea sunt obligatorii'); return }
@@ -108,7 +117,7 @@ export function GbeCard({ c, v, polite = [], restituiri = [], accent = G.green, 
           <span>Recepție la terminare: <b style={{ color:G.text }}>{fmtZi(c.gbe_data_receptie_terminare)}</b></span>
           <span>Recepție finală: <b style={{ color:G.text }}>{fmtZi(c.gbe_data_receptie_finala)}</b></span>
           <span>Recuperare estimată: <b style={{ color:G.text }}>{fmtZi(c.gbe_data_estimata_recuperare)}</b></span>
-          {c.gbe_cont_iban && <span>Cont: <b style={{ color:G.text }}>{c.gbe_cont_iban}</b>{c.gbe_cont_valabil_pana ? ` (până ${fmtZi(c.gbe_cont_valabil_pana)})` : ''}</span>}
+          {iban && <span>Cont: <b style={{ color:G.text }}>{iban}</b>{c.gbe_cont_valabil_pana ? ` (până ${fmtZi(c.gbe_cont_valabil_pana)})` : ''}</span>}
         </div>
       )}
       {al.length > 0 && (
@@ -191,7 +200,7 @@ export function GbeTabel({ accent = G.green, canEdit }) {
       <div style={{ fontSize:11.5, color:G.dim, marginBottom:10 }}>Aceeași evidență ca „Evidență GBE” din Administrativ → Contracte comerciale. Reținerile vin din situațiile de plată din platformă; unde nu există, se trec manual pe contract (✎).</div>
       {rows.length === 0 && <div style={{ color:G.muted, fontSize:12.5 }}>Nimic de arătat.</div>}
       <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-        {rows.map(r => <GbeCard key={r.c.id} c={r.c} v={r.v} polite={r.polite} restituiri={r.rest} accent={accent} canEdit={canEdit} onChanged={load} />)}
+        {rows.map(r => <GbeCard key={r.c.id} c={r.c} v={r.v} polite={r.polite} restituiri={r.rest} iban={d.iban[r.c.id]} accent={accent} canEdit={canEdit} onChanged={load} />)}
       </div>
     </div>
   )
@@ -235,7 +244,7 @@ export function GbeLicitatie({ licitatie: l, profile, accent = G.green, onChange
       )}
       {!d ? <div style={{ color:G.muted, fontSize:12 }}>Se încarcă…</div>
         : !c ? <div style={{ color:G.dim, fontSize:12.5 }}>Nicio legătură încă. Contractul se adaugă în Administrativ → Contracte comerciale (cu rubrica GBE), apoi se leagă aici.</div>
-        : <GbeCard c={c} v={d.view[c.id]} polite={d.polite[c.id] || []} restituiri={d.rest[c.id] || []} accent={accent} canEdit={canEdit} onChanged={load} />}
+        : <GbeCard c={c} v={d.view[c.id]} polite={d.polite[c.id] || []} restituiri={d.rest[c.id] || []} iban={d.iban[c.id]} accent={accent} canEdit={canEdit} onChanged={load} />}
     </div>
   )
 }

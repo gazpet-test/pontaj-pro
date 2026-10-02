@@ -157,3 +157,12 @@ SELECT set_config('gazpet.rollback_tehnic_20261002c', 'REVINE_0E_NOWAIT:' || txi
 COMMIT;
 ```
 Precondiție = md5 propriu 20261002c (`b07f3800…` / `0477bce8…`), ACL-uri, unicitate, niciun alt apelant al lui `fn_cont_lot_nowait`; postcondiție = md5 live r4 pe `fn_cont_leaga_automat` + `fn_cont_revalideaza_candidat` (`ecbbd64c…`) + `fn_cont_lock_chei` (`db9b9899…`), ACL-uri neschimbate, funcția nouă absentă; dezarmare la final. Testat în `scripts/test_conturi_ciclu_viata.sh --rollback` (armare după antetul `-- harness-armare:`; schema de după revenire = schema de după `20261002b`).
+## 20261002d — SEC IBAN GBE contracte (`20261002d_sec_gbe_iban_ROLLBACK.sql`, NEAPLICAT)
+Readaugă coloana `contracte_terti.gbe_cont_iban` (la FINALUL listei — PostgreSQL nu păstrează poziția), copiază valorile înapoi din `contracte_terti_gbe_cont`, readuce `v_gbe_per_contract` cu `c.gbe_cont_iban` direct (md5 live `b9861ba0…`) și șterge funcțiile `fn_gbe_cont_iban` / `fn_gbe_cont_iban_set` și tabela nouă. **Redeschide** expunerea IBAN pentru orice cont logat. Fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261002d', 'REDESCHIDE_IBAN_GBE:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiții = exact starea patch-ului (tabela + funcțiile există, coloana lipsește, view-ul trece prin funcție); postcondiții = starea live din 02.10 (valorile înapoi 1:1, 55 de coloane cu `gbe_cont_iban text`, SELECT pe tabel, fără funcții/tabelă nouă). După revenire, migrarea NU se mai poate reaplica fără re-amprentare (precondiția 0c cere ordinea live a coloanelor). UI-ul (`GbeEvidenta.jsx`) de pe `main` citește IBAN-ul prin RPC: după revenire, fișa GBE nu mai arată contul până se revine și codul. Testat în `scripts/test_sec_gbe_iban.sh` pasul 5.
