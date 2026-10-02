@@ -54,3 +54,10 @@ Recomandare: o coloană `versiune_import` (ex. `cercetare-2026-10-02`) pe fiecar
 ## Fișiere de referință
 
 `docs/cercetare/propuneri_platforma.md` (decizia A/B/C + P0–P2), `registre_evidenta.md` (regula evidence-first), `clarificari_matrice_model.md` (tabela per licitație `ofertare_matrice_cerinte`, pasul următor după import).
+
+## ✅ Aplicat 02.10.2026 (decizia Razvan: „confirm, A, sari peste Copilot”)
+
+- Migrarea `norme_registre_cercetare` (= `supabase/migrations/20261007a_norme_registre_cercetare.sql`) aplicată prin `apply_migration`; `get_advisors` (security): 0 constatări pe cele 5 tabele.
+- Import: JSON-urile aduse în BD cu `pg_net` de la commit-ul fixat `05c0da2` (repo public), verificate sha256 față de git, apoi `scripts/import_registre_cercetare_pgnet.sql` (aceeași mapare ca generatorul Python; testat pe PGlite, inclusiv refuzul la sha diferit).
+- Rezultat: 432 surse · 919 cerințe · 312 graf · 216 decizii CNSC (0 fără sursă) · 119 tipare (40 cu review juridic) · 51 surse legate de `ofertare_normative`. `versiune_import = cercetare-2026-10-02`.
+- Rollback: `DROP TABLE public.clarificari_tipare, public.cnsc_decizii, public.norme_graf, public.norme_cerinte, public.norme_surse;` (nicio altă tabelă nu depinde de ele).
