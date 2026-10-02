@@ -11796,15 +11796,17 @@ export default function LogisticaPage() {
     if (!importPreview?.rows?.length) return
     const { data: { user } } = await supabase.auth.getUser()
     
-    // Anti re-import: rândurile din template n-au rezervor_id / qr_status (ambele NULL) — dacă există deja
-    // un rând cu același activ + dată + litri, îl sar (același fișier importat de 2 ori = dubluri în BD)
+    // Anti re-import: dacă există deja un rând cu același activ + dată + litri, îl sar (același fișier
+    // importat de 2 ori = dubluri în BD). Exclud doar QR-urile șoferilor (qr_status NOT NULL — flux Rompetrol/benzinărie).
+    // NU filtrez pe rezervor_id (rândurile din template pentru Oscar îl au setat) și nici pe whatsapp_autor
+    // (WhatsApp face UPDATE pe rânduri existente, inclusiv cele importate din template — ar scăpa dublurile).
     const keyAlim = (a) => `${a.active_id}|${a.data_alimentare}|${Number(a.cantitate_litri).toFixed(2)}`
     const datele = importPreview.rows.map(r => r.data_alimentare).filter(Boolean).sort()
     let existSet = new Set()
     if (datele.length) {
       const { data: ex, error: exErr } = await supabase.from('logistica_alimentari')
         .select('active_id, data_alimentare, cantitate_litri')
-        .is('rezervor_id', null).is('qr_status', null)
+        .is('qr_status', null)
         .gte('data_alimentare', datele[0]).lte('data_alimentare', datele[datele.length - 1])
       if (exErr) { showToast(`Eroare verificare duplicate: ${exErr.message}`, 'error'); return }
       existSet = new Set((ex || []).map(keyAlim))
