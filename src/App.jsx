@@ -2943,40 +2943,11 @@ function ReportsPage() {
     // Check for overlap
     const {data:existing}=await supabase.from('diurna_payments').select('*').lte('period_from',dt).gte('period_to',df)
     
-    // Detect dacă perioada e o LUNĂ ÎNTREAGĂ (ziua 1 → ultima zi a aceleiași luni)
-    // Plățile lunare au scop diferit: generarea ordinelor de deplasare pentru toată luna.
-    // Trebuie să poată coexista cu plățile săptămânale (cash flow).
-    const isFullMonthPeriod = (() => {
-      const f = new Date(df + 'T12:00'); const t = new Date(dt + 'T12:00')
-      if (f.getDate() !== 1) return false
-      const lastDay = new Date(f.getFullYear(), f.getMonth() + 1, 0).getDate()
-      if (t.getDate() !== lastDay) return false
-      if (f.getMonth() !== t.getMonth() || f.getFullYear() !== t.getFullYear()) return false
-      return true
-    })()
-    
+    // Orice suprapunere cu o plată existentă e refuzată uniform (decizia 4B, RAPORT_0210):
+    // fostul bypass „plată lunară în paralel" (scop: ordine de deplasare) e acoperit de #557.
     if(existing?.length>0){
-      if (isFullMonthPeriod) {
-        // Bypass cu confirmation pentru plata lunară
-        const lunaName = new Date(df + 'T12:00').toLocaleDateString('ro-RO', { month: 'long', year: 'numeric' })
-        const listaSupra = existing.slice(0, 5).map(p => 
-          `  • ${new Date(p.period_from).toLocaleDateString('ro-RO')} – ${new Date(p.period_to).toLocaleDateString('ro-RO')} (${p.total_employees} ang.)`
-        ).join('\n')
-        const ok = window.confirm(
-          `📅 Perioada selectată acoperă luna ÎNTREAGĂ: ${lunaName}\n\n` +
-          `Există deja ${existing.length} ${existing.length===1?'plată săptămânală':'plăți săptămânale'} în această lună:\n` +
-          `${listaSupra}\n` +
-          (existing.length > 5 ? `  • ... și încă ${existing.length - 5}\n` : '') +
-          `\nGENEREZI DIURNELE PENTRU ORDINELE DE DEPLASARE?\n\n` +
-          `(Plata lunară se salvează în PARALEL cu cele săptămânale, fără să le afecteze. ` +
-          `Vei putea apoi genera ordinele de deplasare pentru întreaga lună.)`
-        )
-        if (!ok) { setSavingPayment(false); return }
-        // Continuă - skip overlap check
-      } else {
-        showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
-        setSavingPayment(false); return
-      }
+      showToast(`⚠ Suprapunere cu plata din ${new Date(existing[0].period_from).toLocaleDateString('ro-RO')} — ${new Date(existing[0].period_to).toLocaleDateString('ro-RO')}!`,'error')
+      setSavingPayment(false); return
     }
 
     // Alocare pe plafonul LUNAR per angajat — aceeași funcție ca în exportDiurne și exportBancaDiurne
