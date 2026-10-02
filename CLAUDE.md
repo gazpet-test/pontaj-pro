@@ -16,6 +16,7 @@ ERP intern pentru Gazpet Instal SRL (Ploiești, construcții conducte gaz, 127+ 
 Apoi, prin Supabase MCP, rulează:
 ```sql
 SELECT content_md FROM public.claude_docs WHERE slug = 'handoff_activ';
+SELECT content_md FROM public.claude_docs WHERE slug = 'registru_automatizari';  -- (02.10.2026, cerere Răzvan) ce rulează automat, canale, secrete (nume), rutine — obligatoriu la fiecare sesiune/container nou
 SELECT id, category, title, content, lungime_detalii, priority, todo_section, todo_completed
 FROM public.v_claude_context_start
 ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, category, created_at DESC;
