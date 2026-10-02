@@ -38,8 +38,12 @@
 --       (≥ 1 owner). Anunțul din trigger rămâne best-effort (de curtoazie; poate fi urmat de anunțul primei reîncercări din sweep).
 --   (d, P2-4A) alerta de prag folosea doar amanari % 6 = 0 și ignora acoperirea ⇒ la amânarea 6 cu toți ownerii ținuți alerta se pierdea
 --       definitiv. Fix: marker durabil conturi_inchideri_coada.ultima_amanare_alertata integer NOT NULL DEFAULT 0 (coloană nouă, aditivă):
---       bucket-ul (6, 12, …) = amanari − amanari % 6; alerta se încearcă la fiecare rulare cât timp bucket > marker și se marchează
---       DOAR după acoperire > 0 (rulările 7, 8… continuă să încerce bucket-ul 6).
+--       bucket-ul (6, 12, …) = amanari − amanari % 6; cât timp CONTENȚIA CONTINUĂ alerta se încearcă la fiecare amânare (bucket > marker)
+--       și se marchează DOAR după acoperire > 0 (rulările 7, 8… continuă să încerce bucket-ul 6).
+--   r3 (P2-4B, politică operațională simplă — decizia sesiunii principale): alerta de amânări e relevantă DOAR cât timp contenția
+--       continuă; dacă următoarea rulare procesează elementul normal, o alertă încă neacoperită se ANULEAZĂ explicit (reset contor +
+--       marker, rezultat amanari_alerta_anulata) — NU „se reîncearcă până ajunge”. Pe calea de eroare (backoff) resetul e tăcut
+--       (owner-ul primește oricum anunțul de eșec / abandonare).
 --   (alegeri cerute de Copilot) amanari = amânări CONSECUTIVE: reset la 0 (și marker 0) la orice procesare non-amanat_lock (succes,
 --       rezolvare, eroare cu backoff) și la ciclu nou (fn_cont_coada_pune). Reziduu declarat: contenția persistentă pe însuși rândul cozii
 --       ⇒ amanat_lock repetat FĂRĂ incrementare (contorul nu se poate persista fără lock-ul rândului) — risc acceptat, telemetrie separată
@@ -87,7 +91,7 @@ BEGIN
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', '7bb0d97ed57bfef1c4555fbf94629071', 'ecbbd64ceffd6ed13ed91a04f6f14419'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',           '349f540203eeb73639c4cfa4316a8cd6', 'a32cb851d317d273feee8e975eba66a4'),
                  ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', '890a0025f513ca02ac9276cd4a360afb', 'b1c2b93cbe3b9560bcb38d460c717fce'),
-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', 'c65d27e17297056cc3a5a752248b6591')) AS w(f, sig, m_live, m_nou)
+                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                   '7bc5ddf2f4097525e6c24f499a8fb5e7', 'ee5015604d7a6dc0ab46d4ca4e5a8741')) AS w(f, sig, m_live, m_nou)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) IN (w.m_live, w.m_nou) AND p.prosecdef
@@ -428,7 +432,8 @@ GRANT EXECUTE ON FUNCTION public.fn_cont_leaga_automat(boolean, jsonb) TO authen
 --   (d) la fiecare amânare (amanat_lock) contorul amanari += 1 pe intrare (FOR UPDATE NOWAIT în subtranzacție proprie: intrarea ținută
 --       de altcineva ⇒ WARNING, fără așteptare, fără incrementare — reziduu declarat: contenție persistentă pe însuși rândul cozii ⇒
 --       amanat_lock repetat fără incrementare); r2 (P2-4A): la prag (amanari − amanari % 6 > ultima_amanare_alertata) owner-ul e anunțat
---       (cont_inchidere_amanata) și markerul se avansează DOAR după acoperire > 0 (altfel se reîncearcă la fiecare rulare);
+--       (cont_inchidere_amanata) și markerul se avansează DOAR după acoperire > 0 (altfel se reîncearcă la următoarea AMÂNARE; r3 — P2-4B:
+--       dacă elementul se procesează normal între timp, alerta neacoperită se anulează explicit, amanari_alerta_anulata);
 --       r2 (alegerea 1): amanari = amânări CONSECUTIVE — orice procesare non-amanat_lock (succes, rezolvare, eroare cu backoff) pune
 --       amanari = 0 și ultima_amanare_alertata = 0; fn_cont_coada_pune le resetează la ciclu nou.
 --       Rezultatul sweep-ului capătă cheile 'amanari_alerta', 'amanari_alerta_neacoperita' și 'notificare_reluata' (contoare).
@@ -559,7 +564,12 @@ BEGIN
         v_n := jsonb_set(v_n, ARRAY[v_rezult], to_jsonb(COALESCE((v_n ->> v_rezult)::int, 0) + 1));
       END IF;
       IF x.amanari > 0 OR x.ultima_amanare_alertata > 0 THEN
-        -- 20261002b (P2-4, r2: amânări CONSECUTIVE): orice procesare non-amanat_lock (rezolvare sau rămas deschis) închide seria
+        -- 20261002b (P2-4, r2: amânări CONSECUTIVE): orice procesare non-amanat_lock (rezolvare sau rămas deschis) închide seria.
+        -- r3 (P2-4B, politică operațională): o alertă de prag încă neacoperită (prag > marker) se ANULEAZĂ explicit aici — alerta e
+        -- relevantă doar cât timp contenția continuă; elementul tocmai s-a procesat normal (contorizat: amanari_alerta_anulata).
+        IF x.amanari - x.amanari % c_prag_amanari > x.ultima_amanare_alertata THEN
+          v_n := jsonb_set(v_n, ARRAY['amanari_alerta_anulata'], to_jsonb(COALESCE((v_n ->> 'amanari_alerta_anulata')::int, 0) + 1));
+        END IF;
         UPDATE public.conturi_inchideri_coada SET amanari = 0, ultima_amanare_alertata = 0 WHERE id = x.id;
       END IF;
       v_tine := true;
@@ -699,7 +709,7 @@ BEGIN
                  ('fn_cont_revalideaza_candidat', 'fn_cont_revalideaza_candidat(uuid,integer,boolean)', 'ecbbd64ceffd6ed13ed91a04f6f14419', '{postgres=X/postgres}'),
                  ('fn_cont_leaga_automat',        'fn_cont_leaga_automat(boolean,jsonb)',               'a32cb851d317d273feee8e975eba66a4',       '{postgres=X/postgres,authenticated=X/postgres}'),
                  ('fn_cont_coada_pune',           'fn_cont_coada_pune(uuid,integer,text,text,date,text)', 'b1c2b93cbe3b9560bcb38d460c717fce',       '{postgres=X/postgres}'),
-                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'c65d27e17297056cc3a5a752248b6591',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
+                 ('fn_conturi_inchideri_sweep',   'fn_conturi_inchideri_sweep()',                       'ee5015604d7a6dc0ab46d4ca4e5a8741',       '{postgres=X/postgres}')) AS w(f, sig, m, acl)
    WHERE (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = w.f) IS DISTINCT FROM 1
       OR NOT EXISTS (SELECT 1 FROM pg_proc p
                       WHERE p.oid = to_regprocedure('public.' || w.sig) AND md5(p.prosrc) = w.m AND p.prosecdef
