@@ -1,5 +1,9 @@
 # Harness audit V2
 
+**J06b — NO-RUN live:** T0 persistent cu SHA256, actor fix non-owner, `external_effect`, `safe_rerun`/`--confirm-rerun`, gardă CDP înainte de cereri, diff T0/precedent și oprire persistentă (exit 20/21/22/23). Planul P2.01–P2.12 și contractul providerului read-only de supraveghere sunt în [plan](../../docs/AUDIT_OFERTARE_V2/P2_PLAN_RULARE.md). Providerul complet și garda server pentru efecte indirecte NU sunt implementate pe un endpoint live în această sarcină: CLI-ul refuză apply înainte de acțiuni; testele injectează numai simulări. Nici GO, nici `--confirm-rerun` nu ocolesc această lipsă. R5 funcție SQL are slot separat Claude admin read-only; R5 view/R12/J05 sunt SELECT brute cu JWT-ul non-owner.
+
+**P2 / J06:** urmează [planul clonei 103](../../docs/AUDIT_OFERTARE_V2/P2_PLAN_RULARE.md). `--faza <nume>` selectează o singură probă. Implicit se selectează numai `cost_ai:false`; `--allow-ai` cere GO separat de buget și nu completează rețetele lipsă. UI_ONLY nu este MATCH pentru server. Helperul Storage cere acum același JWT `authenticated` ca verificatorul, fără `SUPABASE_KEY`/service_role. SDK-ul se încarcă numai la construirea clientului real, după validarea mediului; preview și testele mock rămân complet offline. Pentru toate testele Node din acest director este necesar Node 24 (aserțiuni native și opțiunea de izolare).
+
 Instrumente locale, fără dependențe noi. Node ≥22 (testat Node 24). Nu modifică aplicația, schema sau drepturile. Nicio rulare de aici nu acordă GO pentru clonare/live/cost AI.
 
 ## Ordinea de lucru pentru Claude

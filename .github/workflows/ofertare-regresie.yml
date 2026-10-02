@@ -9,6 +9,12 @@ on:
       - 'supabase/functions/ofertare-**'
       - 'supabase/functions/_shared/**'
       - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
+      - 'supabase/migrations/20260930a_ofertare_pachet_hash_server_jakv202*.sql'
+      - 'supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3*.sql'
+      - 'test-fixtures/jakv2p3/**'
+      - 'scripts/test-jakv2p3.mjs'
+      - 'scripts/test-jakv202-hash-server.mjs'
+      - 'scripts/test-j04-j07-integrare.mjs'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -19,6 +25,8 @@ on:
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
       - 'worker/ofertare/plansa*.ts'
       - 'scripts/pg/**'
+      - 'supabase/tests/j04xj07/**'
+      - 'scripts/test_j04xj07.sh'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
   push:
@@ -30,6 +38,12 @@ on:
       - 'supabase/functions/ofertare-**'
       - 'supabase/functions/_shared/**'
       - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
+      - 'supabase/migrations/20260930a_ofertare_pachet_hash_server_jakv202*.sql'
+      - 'supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3*.sql'
+      - 'test-fixtures/jakv2p3/**'
+      - 'scripts/test-jakv2p3.mjs'
+      - 'scripts/test-jakv202-hash-server.mjs'
+      - 'scripts/test-j04-j07-integrare.mjs'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -40,6 +54,8 @@ on:
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
       - 'worker/ofertare/plansa*.ts'
       - 'scripts/pg/**'
+      - 'supabase/tests/j04xj07/**'
+      - 'scripts/test_j04xj07.sh'
       - 'scripts/test-r5-r9b.mjs'
       - '.github/workflows/ofertare-regresie.yml'
   workflow_dispatch:
@@ -63,6 +79,10 @@ jobs:
         run: npx vitest run src/ofertare src/grafic src/Ofertare api/_poartaOfertare.test.js
       - name: Regresie R5-R9b fara dependente
         run: node --test scripts/test-r5-r9b.mjs
+      - name: Poarta J07 - paritate UI si Edge
+        run: node --test scripts/test-jakv2p3.mjs
+      - name: J04 x J07 - UI cere ambele verificari inainte de depus; ordinea migrarilor
+        run: node --test scripts/test-j04-j07-integrare.mjs
 
   deno:
     runs-on: ubuntu-latest
@@ -83,11 +103,15 @@ jobs:
           supabase/functions/ofertare-plansa-citeste
           supabase/functions/ofertare-clarificari-propune
           supabase/functions/ofertare-document-nou-citeste
+          supabase/functions/ofertare-poarta-text
           worker/ofertare/plansa_test.ts
+      # J04: testul node:test importă handler-ul .ts, deci rulează sub Deno (Node 20 nu elimină tipurile).
+      - name: Hash pe server J04 - logica edge, poarta si paritatea rolurilor
+        run: deno test -A --node-modules-dir=none scripts/test-jakv202-hash-server.mjs
 
   postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:16
@@ -104,9 +128,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Node 22 (>= 22.18): suita J04 x J07 importa handler-ele .ts REALE ale edge-urilor (type stripping implicit).
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Instaleaza clientul PostgreSQL
         run: |
           sudo apt-get update
@@ -158,3 +183,46 @@ jobs:
           PGURI: postgres://postgres@localhost:5432/jakv205_test_ci
           PGPASSWORD: postgres
         run: node scripts/pg/test_jakv205_derogare_audit.mjs
+      - name: Creeaza baza goala pt J07 P3
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv2p3_test_ci;'
+      - name: Poarta server J07 - controale, invalidare si regresii
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv2p3_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv2p3_poarta_server.mjs
+      - name: Creeaza baza goala pt J04
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv202_test_ci;'
+      - name: Hash pe server J04 - dovezi append-only si tranzitia depus
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv202_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_jakv202_hash_server.mjs
+      - name: Creeaza baza goala pt integrarea J04 x J07
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE jakv0407_test_ci;'
+      - name: Integrare J04 x J07 - ambele porti impuse la aprobat->depus, migrari J04->J07
+        env:
+          PGURI: postgres://postgres@localhost:5432/jakv0407_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_j04_j07_integrare.mjs
+      # Suita extinsa J04 x J07 (COPILOT_REVIEW_PLAN_A §2): teste SQL cu ASSERT (supabase/tests/j04xj07), fiecare in
+      # BEGIN...ROLLBACK; runner-ul isi creeaza si isi sterge singur bazele (jakv0407_test_jx + clona pentru 2 sesiuni).
+      - name: J04 x J07 extins - suita SQL JX-* (simetric, 12 controale, concurenta, parser, API, append-only, A-B)
+        env:
+          PGURI_ADMIN: postgres://postgres@localhost:5432/postgres
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_j04xj07.mjs
+      # Verificarea prin mutatii: fiecare implementare stricata din catalog (SQL + edge, M1...M19 + X*) trebuie UCISA de
+      # cel putin un test functional; controlul negativ M00_noop trebuie sa SUPRAVIETUIASCA. Cate o baza per mutant.
+      - name: J04 x J07 extins - mutanti (fiecare implementare stricata trebuie prinsa de un test)
+        env:
+          PGURI_ADMIN: postgres://postgres@localhost:5432/postgres
+          PGPASSWORD: postgres
+          JX_PARALEL: '3'
+          JX_JURNALE: mutanti_j04xj07
+        run: node scripts/pg/test_j04xj07_mutanti.mjs

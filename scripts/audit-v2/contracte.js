@@ -17,3 +17,5 @@ export const contracte = {
   '15_concurenta_acoperire': { verigi: [3], tabele: ['ofertare_cerinte'], faze: ['aceeasi_acoperire'], concurenta: true, obiect: 'ofertare_acoperire' },
   '16_restart_worker': { verigi: [1], tabele: ['ofertare_documente_atribuire', 'ofertare_ingest_coada'], faze: ['porneste_citire', 'dupa_restart', 'retry_idempotent'], restart: true },
 }
+
+for (const pas of ['10_pachet', '11_depunere']) contracte[pas].tabele.push('ofertare_derogari_audit', 'v_ofertare_cantitati_nevalidate', 'v_ofertare_seap_completitudine')
