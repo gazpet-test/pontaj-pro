@@ -20,6 +20,8 @@ import HrRecrutare from './HrRecrutare.jsx'
 import { compressFileBeforeUpload } from './utils/compressFile'
 import DomeniiPicker from './HrDomeniiPicker.jsx'
 import HrPersonalExtern from './HrPersonalExtern.jsx'
+import HrFostiAngajati, { BadgeFostAngajat } from './HrFostiAngajati.jsx'  // 29.09.2026 R3
+import { esteFostAngajat, mesajStareCont } from './conturiCicluViata.js'
 import HrRecomandari from './HrRecomandari.jsx'
 import HrAutorizatiiCitire from './HrAutorizatiiCitire.jsx'
 import HrTipuriAutorizatii from './HrTipuriAutorizatii.jsx'
@@ -218,6 +220,7 @@ export default function HRPage() {
     { key: 'autorizatii', icon: '📋', label: 'Autorizații' },
     { key: 'formare',     icon: '🎓', label: 'Formare (2 ani)' },   // TKT-2026-0198
     { key: 'extern',      icon: '🤝', label: 'Personal extern' },
+    { key: 'fosti',       icon: '🗂️', label: 'Foști angajați' },   // 29.09.2026 R3: acord colaborare externă
     { key: 'alerte',      icon: '🔔', label: 'Alerte', badge: stats.expirat + stats.expira_7z + stats.viza_expirat },
     { key: 'chuck',       icon: '🥋', label: 'Chuck Norris', badge: chuckCount, chuckColor: true },
     { key: 'documente',   icon: '📁', label: 'Documente personale' },
@@ -307,7 +310,13 @@ export default function HRPage() {
       {!load && tab === 'formare' && <HrFormareProfesionala employees={employees} autorizatii={autorizatii} tipuri={tipuri} profile={profile} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'alerte' && <TabAlerte autorizatii={autorizatii} stats={stats} onClickAut={(a) => setEditEmp(employees.find(e => e.id === a.employee_id))} onEditViza={(a) => setEditAut({ ...a, _focusViza: true })} />}
       {!load && tab === 'chuck' && <SugestiiChuckTab profile={profile} employees={employees} autorizatii={autorizatii} showToast={showToast} onReload={loadAll} openEmployee={(empId) => { const e = employees.find(x => x.id === empId); if (e) setEditEmp(e); else showToast('Angajatul nu se găsește (poate inactiv)', 'warning') }} />}
-      {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} />}
+      {!load && tab === 'extern' && <HrPersonalExtern tipuri={tipuri} showToast={showToast} canEdit={isAdmin} poateLega={profile?.is_owner === true || profile?.can_modify_employees === true} esteOwner={profile?.is_owner === true} />}
+      {!load && tab === 'fosti' && <HrFostiAngajati profile={profile} showToast={showToast} onDeschideFisa={async (id) => {
+        // fișa unui fost angajat nu e în lista HR (doar activi) → o citim după id și deschidem același modal
+        const { data, error } = await supabase.from('employees').select('*').eq('id', id).maybeSingle()
+        if (error || !data) { showToast('Nu pot deschide fișa: ' + (error?.message || 'nu există'), 'error'); return }
+        setEditEmp(data)
+      }} />}
       {!load && tab === 'documente' && <TabDocumentePersonale employees={employees} canAccessPersonal={canAccessPersonal} showToast={showToast} />}
       {!load && tab === 'recomandari' && <HrRecomandari profile={profile} employees={employees} canEdit={canAccessPersonal || isAdmin || canUseScanner} showToast={showToast} />}
       {!load && tab === 'citire_aut' && canAccessPersonal && <HrAutorizatiiCitire profile={profile} canEdit={canAccessPersonal || isAdmin} showToast={showToast} />}
@@ -1513,6 +1522,17 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
   const [uploadingId, setUploadingId] = useState(null)
   const uploadRef = useRef(null)
   const uploadTarget = useRef(null)
+  // 29.09.2026 R2: starea contului de platformă (RPC cu poartă: owner / HR / date personale; altfel 0 rânduri → ascuns)
+  const [stareCont, setStareCont] = useState(undefined)
+  useEffect(() => {
+    let viu = true
+    supabase.rpc('fn_cont_stare_angajati').then(({ data, error }) => {
+      if (!viu) return
+      if (error || !data?.length) { setStareCont(undefined); return }
+      setStareCont(data.find(r => r.employee_id === employee.id) || null)
+    })
+    return () => { viu = false }
+  }, [employee.id])
 
   // Dovada poate sta în două locuri: urcată direct pe autorizație (bucket `autorizatii`)
   // sau deja în dosarul personal, adusă automat din Drive (bucket `documente-personal`).
@@ -1602,10 +1622,17 @@ function ModalProfilAngajat({ employee, autorizatii, tipuri, isAdmin, onClose, o
         {/* Header */}
         <div style={{padding:'18px 24px', background:G.surface, borderBottom:`1px solid ${G.border}`, display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
           <div>
-            <div style={{fontSize:20, fontWeight:800, color:G.text}}>{employee.name}</div>
+            <div style={{fontSize:20, fontWeight:800, color:G.text, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+              {employee.name}{esteFostAngajat(employee) && <BadgeFostAngajat />}
+            </div>
             <div style={{fontSize:12, color:G.muted, marginTop:4}}>
               {employee.functie} · {employee.departament_hr || '—'} {employee.telefon && `· 📞 ${employee.telefon}`}
             </div>
+            {stareCont !== undefined && (
+              <div style={{fontSize:12, marginTop:4, color: stareCont?.stare === 'activ' && !employee.active ? G.yellow : G.muted}}>
+                Cont platformă: {stareCont ? `${stareCont.email || '—'} · ${stareCont.stare === 'activ' ? 'activ' : (mesajStareCont(stareCont)?.text || stareCont.stare).replace(/^🔒 Cont /, '')}` : 'fără cont'}
+              </div>
+            )}
           </div>
           <button onClick={onClose} style={{...S.btnS, padding:'4px 10px'}}>✕</button>
         </div>
@@ -2461,6 +2488,7 @@ function TabArhivaAutorizatii({ arhiva, showToast }) {
                     {g.functie || '—'}{g.departament_hr ? ' · ' + g.departament_hr : ''}
                   </div>
                 </div>
+                <BadgeFostAngajat style={{marginLeft:'auto'}} />
                 <div style={{
                   background: G.red+'22', border:`1px solid ${G.red}55`,
                   padding:'5px 11px', borderRadius:8,
