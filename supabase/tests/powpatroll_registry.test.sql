@@ -1,5 +1,5 @@
 -- ============================================================================
--- Teste SQL — PowPatroll Context Registry, faza 1a (migrarea 20261005a).
+-- Teste SQL — PowPatroll Context Registry, faza 1a (migrarea 20261008a).
 -- Rulare: scripts/test_powpatroll_registry.sh (fazele A și B).
 -- ============================================================================
 -- Convenții (ca supabase/tests/conturi_ciclu_viata.test.sql):

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Teste „prod-like” — PowPatroll registry (migrarea 20261005a) cu adminul simulat al producției.
+-- Teste „prod-like” — PowPatroll registry (migrarea 20261008a) cu adminul simulat al producției.
 -- Rulare: scripts/test_powpatroll_registry.sh (faza A), cu SET SESSION AUTHORIZATION pp_sim_postgres:
 -- rol NOSUPERUSER + CREATEROLE + BYPASSRLS, proprietarul bazei — ca postgres din Supabase (citit read-only
 -- din producție la 29.09: rolsuper=false, rolcreaterole=true, rolbypassrls=true, createrole_self_grant='').

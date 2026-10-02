@@ -15,8 +15,8 @@ Propunerea aprobată: `docs/POWPATROLL/PROPUNERE_CONTEXT_REGISTRY.md`. Deciziile
 
 | Fișier | Ce e |
 |---|---|
-| `supabase/migrations/20261005a_powpatroll_registry.sql` | migrarea (idempotentă, o singură tranzacție) |
-| `supabase/migrations/20261005a_powpatroll_registry_ROLLBACK.sql` | rollback-ul: refuzat dacă registry-ul are versiuni peste v1 |
+| `supabase/migrations/20261008a_powpatroll_registry.sql` | migrarea (idempotentă, o singură tranzacție) |
+| `supabase/migrations/20261008a_powpatroll_registry_ROLLBACK.sql` | rollback-ul: refuzat dacă registry-ul are versiuni peste v1 |
 | `scripts/test_powpatroll_registry.sh` | harness-ul: PG16 dedicat, `/tmp/pg_registry`, port 5437, doar 127.0.0.1, baze `*_test` cu gardă |
 | `supabase/tests/powpatroll_registry.test.sql` | testele complete (T0–T16) |
 | `supabase/tests/powpatroll_registry.prodlike.test.sql` | testele „prod-like” (P0–P4), rulate ca rol NOSUPERUSER + CREATEROLE + BYPASSRLS, ca `postgres` din Supabase |
@@ -132,7 +132,7 @@ Comanda, rulată din rădăcina worktree-ului: `bash scripts/test_powpatroll_reg
 ## 3. Abateri față de propunere
 
 1. **Harness-ul e în bash + SQL, nu în `scripts/pg/test_powpatroll_registry.mjs` (§5).** Așa a cerut sarcina, după modelul `test_conturi_ciclu_viata.sh`. Am adăugat o fază prod-like, care simulează `postgres` din Supabase: NOSUPERUSER, CREATEROLE, BYPASSRLS, proprietarul bazei, `createrole_self_grant` gol. Motivul: local, `postgres` e superuser și ar fi ascuns problemele de ownership.
-2. **Prefixul e `20261005a`** (redenumit 30.09 din `20261003a`, care se ciocnea cu J07 `20261003a_ofertare_poarta_server_jakv2p3`; J04 e `20260930a`, patch-urile de securitate `20261003b`/`20261003c`). Notă: `apply_migration` din MCP își dă propria versiune (timestamp), deci prefixul e doar etichetă de ordine în repo — dar trebuie să fie unic.
+2. **Prefixul e `20261008a`** (redenumit 02.10 din `20261005a`, care se ciocnea cu `20261005a_sec_rsvti_p1b_jurnal_insert`; inițial 30.09 redenumit din `20261003a`, care se ciocnea cu J07 `20261003a_ofertare_poarta_server_jakv2p3`; J04 e `20260930a`, patch-urile de securitate `20261003b`/`20261003c`). Notă: `apply_migration` din MCP își dă propria versiune (timestamp), deci prefixul e doar etichetă de ordine în repo — dar trebuie să fie unic.
 3. **Proprietarul și drepturile temporare.** `CREATE ROLE powpatroll_owner` a mers și ca rol non-superuser. Pe durata migrării, adminul primește `WITH INHERIT TRUE, SET TRUE`, necesar ca rerularea să poată recrea funcții și politici, iar `powpatroll_owner` primește `CREATE ON SCHEMA public`, cerut de `ALTER … OWNER`. Ambele se revocă la final, iar adminului îi rămâne doar ADMIN (P1). Sintaxa cere PG ≥ 16; producția are 17.6.
 4. **Adminul migrării are și SELECT** pe tabele și pe view, pentru SELECT-urile de control din §7 („SELECT de control”). Propunerea spunea „doar EXECUTE pe RPC”. Scrierea directă rămâne imposibilă (P3).
 5. **Reguli în plus față de §2, toate în trigger:**
@@ -179,7 +179,7 @@ Doar după 02.10 12:00 și cu GO-ul tău explicit pe schemă:
 1. **Apply-ul:**
    - delta către Copilot înainte de GO/NO-GO (pct. 11);
    - GO-ul tău pe schemă, cu decizia A/B de la §4.1;
-   - `apply_migration` (`20261005a_powpatroll_registry`), apoi `get_advisors` (security + performance);
+   - `apply_migration` (`20261008a_powpatroll_registry`), apoi `get_advisors` (security + performance);
    - SELECT de control: owner și ACL, `pg_auth_members` pentru `postgres` (se așteaptă doar ADMIN), `powpatroll_render('line')` = v0.
 2. **Seed-ul (§7):**
    - reconciliere cu gh, git și `schema_migrations`;
@@ -275,4 +275,4 @@ Doi verificatori independenți (securitate + principii) au reprodus harness-ul p
 
    Formatul `delta` nefiltrat include rânduri interne. Alte scurgeri minore în antetul pack-ului: proiectele rândurilor interne, U+2028, „END<ZWSP>PACK”. Mai sunt parole literale în `test.sql:230-232`.
 
-Rapoartele complete ale verificatorilor sunt în jurnalul workflow-ului `wf_41d28b07-bf6` (sesiunea Claude din 29–30.09). Probele sunt în `registry_adv_securitate.sql` / `registry_adv_principii.sql`. Prefixul migrării e acum **`20261005a`** (vezi §3 pct. 2); harness-ul a fost re-rulat după redenumire: PASS, 730/730.
+Rapoartele complete ale verificatorilor sunt în jurnalul workflow-ului `wf_41d28b07-bf6` (sesiunea Claude din 29–30.09). Probele sunt în `registry_adv_securitate.sql` / `registry_adv_principii.sql`. Prefixul migrării e acum **`20261008a`** (vezi §3 pct. 2); harness-ul a fost re-rulat după redenumire: PASS, 730/730.

@@ -3,7 +3,7 @@
 -- Se încarcă DUPĂ supabase/tests/conturi_schelet_supabase.sql (neschimbat), doar de
 -- scripts/test_powpatroll_registry.sh, într-o bază locală efemeră *_test.
 --
--- Conține obiectele de PRODUCȚIE de care depinde migrarea 20261005a și care lipsesc din scheletul comun:
+-- Conține obiectele de PRODUCȚIE de care depinde migrarea 20261008a și care lipsesc din scheletul comun:
 --   * public.fn_is_app_owner(uuid) — definiția și ACL-ul citite READ-ONLY din producție la 29.09.2026
 --     (pg_get_functiondef + proacl): SQL STABLE SECURITY DEFINER, search_path public, pg_temp;
 --     proacl = {postgres=X, service_role=X, authenticated=X} (fără PUBLIC, fără anon).

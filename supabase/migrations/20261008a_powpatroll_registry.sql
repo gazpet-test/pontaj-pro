@@ -1,5 +1,5 @@
 -- ============================================================================
--- 20261005a — PowPatroll Context Registry, faza 1a: schemă + reguli + RPC + render
+-- 20261008a — PowPatroll Context Registry, faza 1a: schemă + reguli + RPC + render
 -- ============================================================================
 -- STARE: implementată și testată DOAR LOCAL (PG16: scripts/test_powpatroll_registry.sh).
 -- NU se aplică în producție înainte de 02.10.2026 12:00 și fără GO-ul explicit al lui Răzvan pe schemă
@@ -21,7 +21,7 @@
 --   * Registry = MEMORIE, NU autorizare: nimic din el nu înlocuiește confirmarea lui Răzvan în chat.
 --   * „decision” = DOAR actor='razvan' + attrs.citat + dată în source; actorii externi (copilot, jakarinos,
 --     miloi) scriu doar go_no_go/note; conținutul marcat extern nu devine niciodată decizie.
--- Idempotentă (rulare de 2 ori = aceeași stare). Rollback: 20261005a_powpatroll_registry_ROLLBACK.sql
+-- Idempotentă (rulare de 2 ori = aceeași stare). Rollback: 20261008a_powpatroll_registry_ROLLBACK.sql
 -- (refuzat dacă registry-ul are versiuni peste v1).
 -- ============================================================================
 

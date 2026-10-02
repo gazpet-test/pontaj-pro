@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Harness SQL local — PowPatroll Context Registry, faza 1a (migrarea 20261005a).
+# Harness SQL local — PowPatroll Context Registry, faza 1a (migrarea 20261008a).
 #
 # Rulează EXCLUSIV pe un PostgreSQL 16 local dedicat testelor (implicit /tmp/pg_registry, port 5437,
 # doar 127.0.0.1). Nu citește .env, nu folosește chei Supabase, nu atinge producția.

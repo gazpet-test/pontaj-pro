@@ -1,5 +1,5 @@
 -- ============================================================================
--- ROLLBACK 20261005a — PowPatroll Context Registry
+-- ROLLBACK 20261008a — PowPatroll Context Registry
 -- ============================================================================
 -- Șterge obiectele DOAR cât timp registry-ul nu are istoric real: refuză atomic dacă există versiuni
 -- peste v1 (v1 = seed-ul, reproductibil din surse). Istoricul append-only nu se șterge niciodată pe ascuns.
