@@ -25,10 +25,10 @@ Migrări (fiecare cu `_ROLLBACK.sql` pereche):
 **Livrare (r10; versiunile neschimbate: 230000 / 231500 / 233000).** **Fereastra c→d (P1-c) — închisă în cod (r10):** runner-ul comite fiecare migrare separat și gate-ul 0e poate opri după c (intervalul nu e „minute”); după un rollback al lui d triggerele de serializare dispar, dar RPC-urile din c rămân. De aceea legarea (`fn_cont_revalideaza_candidat`, comună cont-nou / „Leagă automat” / aplicare) refuză cu `serializare_indisponibila` (+ notificare owner) cât timp `trg_employees_persoana_lock` și `trg_hr_employees_private_persoana_lock` nu sunt instalate ȘI active (`tgenabled IN (O, A)`, BEFORE ROW cu evenimentele livrate, funcțiile atașate la md5-ul exact din d — `fn_cont_serializare_activa()`). Harness: cu d ⇒ merge; trigger dezactivat ⇒ refuz; după rollback-ul lui d ⇒ refuz (garda din script). O schimbare a funcțiilor de lock din d cere actualizarea constantelor md5 din c (testul C-WINDOW-SERIALIZARE o prinde). Ordinea e strictă c → d → e, iar versiunile sunt > ultima versiune live (`20261001224000`, F1b) și strict crescătoare. După fiecare pas, runner-ul rulează gate-ul 0e (cod 30/31 = stop).
 ```
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929c_conturi_legare_automata.sql \
-  --sha256 a8d2c84fc25c32c06cda7f8af3f18448a7b226fbce3538513d03b075fe36f6bf --versiune 20261001230000 \
+  --sha256 a5256cc15419e4999a36b8271d8e395b6be08c0f3b8400bdb3df18d5d4735115 --versiune 20261001230000 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929d_conturi_inchidere_la_incetare.sql \
-  --sha256 d581b10c354a6911ae320d09205ee652d991ea42021be2bbeb89eed608427da9 --versiune 20261001231500 \
+  --sha256 c3ac7a75ee76083b0bdef10b2458b38748f7473aa6c22397a807004c4f675f71 --versiune 20261001231500 \
   --tinta-db <baza> --tinta-sistem <system_identifier> --tinta-host <H> --tinta-port <P>
 bash scripts/livrare_migrare.sh --migrare supabase/migrations/20260929e_fost_angajat_colaborare_externa.sql \
   --sha256 3cc5065c8a4457b67eb82cf5f16626e27fe0470b1073c1b492ba285113ad9a53 --versiune 20261001233000 \
