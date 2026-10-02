@@ -26,6 +26,7 @@ import { EditorCapitol, IstoricCapitol, Observatii, INSIGNA_SURSA } from './Ofer
 import { construiestePropunere, construiesteBorderou, construiesteF23, construiesteF9, numeFisier, descarcaDocx, blobDocx } from './OfertareExport.js'
 import { sha256Hex, sursaVersiuneCapitole, construiesteManifest, pachetDepasit } from './ofertarePachet.js'
 import { evalueazaPoarta, verdictSemnatura } from './ofertarePoarta.js'
+import { citestePoartaServer } from './ofertarePoartaServer.js'
 // R5 (Copilot 25.09.2026): H2 nu ia F3 drept referință aprobată cât are rânduri de rețea nevalidate (view separat, ca neconfirmatele).
 import { campuriCantitatiNevalidate, marcheazaInvalidate, reverificareGraficInghetat } from './ofertareCantitatiAprobare.js'
 import { COLOANE_GRAFIC_REVERIFICARE } from './ofertareGraficReverificare.js'
@@ -675,7 +676,7 @@ function CuprinsCapitole({ capitole, numarPeCapitol, obsPeCapitol, versiuniPeCap
 // REZUMATUL din fișa licitației (tab)
 // ─────────────────────────────────────────────────────────────────
 // Audit R11: formularul de înregistrare a depunerii pe un pachet aprobat.
-function DepunerePachet({ p, busy, onInregistreaza }) {
+function DepunerePachet({ p, busy, onInregistreaza, refuzuri = [] }) {
   const [finale, setFinale] = useState([])
   const [dovada, setDovada] = useState(null)
   return (
@@ -684,6 +685,9 @@ function DepunerePachet({ p, busy, onInregistreaza }) {
       <label style={{ color:G.muted }}>Fișierele urcate în SEAP: <input type="file" multiple onChange={e => setFinale([...(e.target.files || [])])} /></label>
       <label style={{ color:G.muted }}>Dovada SEAP: <input type="file" onChange={e => setDovada(e.target.files?.[0] || null)} /></label>
       <button style={{ ...S.btnS, fontSize:11 }} disabled={busy || !finale.length || !dovada} onClick={() => onInregistreaza(p, finale, dovada)}>Înregistrează depunerea</button>
+      {refuzuri.length > 0 && <div role="alert" style={{ width:'100%', color:G.red }}>
+        {refuzuri.map((v, i) => <div key={v.pachet_fisier_id || i}>{v.nume}: {v.motiv}</div>)}
+      </div>}
     </div>
   )
 }
@@ -1241,6 +1245,7 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
   const [echipamente, setEchipamente] = useState([])
   const [documente, setDocumente] = useState([])
   const [pachete, setPachete] = useState([])
+  const [refuzuriDepunere, setRefuzuriDepunere] = useState({})
   const [observatii, setObservatii] = useState([])
   const [versiuni, setVersiuni] = useState([])
   const [garantie, setGarantie] = useState(null)
@@ -1302,7 +1307,8 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
     const rCompl = await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', id).maybeSingle()
     const rNev = await supabase.from('v_ofertare_cantitati_nevalidate').select('*').eq('licitatie_id', id).maybeSingle()
     const grRev = rSt.data?.grafic_versiune ? await campuriGraficReverificare(id) : {}
-    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl), ...campuriCantitatiNevalidate(rNev), ...grRev } : null); setCapitole(rCap.data || []); setCerinte(cer)
+    const server = await citestePoartaServer(supabase, id, { recalculeazaText: true })
+    setSt(rSt.data ? { ...rSt.data, ...(!rNc.error && rNc.data ? rNc.data : {}), ...campuriDocumentatie(rCompl), ...campuriCantitatiNevalidate(rNev), ...grRev, ...server } : null); setCapitole(rCap.data || []); setCerinte(cer)
     setAfirmatii(rAfi.data || []); setTipuriAut(rTip.data || []); setAutExterne(rExt.data || [])
     // B (Domnesti 14.09): regula „o persoana nu poate cumula functii" se vede AICI, inainte sa existe vreo
     // persoana incarcata — nu doar in verdictul per afirmatie, care e gol cat timp propunerea nu e citita.
@@ -1865,6 +1871,9 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
       // 3. manifestul
       const { error: e2 } = await supabase.from('ofertare_pt_pachet_fisiere').insert(manifest.map(m => ({ ...m, pachet_id: p.id })))
       if (e2) throw new Error('manifest: ' + e2.message)
+      const verificare = await citestePoartaServer(supabase, licId, { recalculeazaText: true })
+      if (verificare.poarta_server?.stare !== 'ok') throw new Error(verificare.poarta_server_eroare
+        || `Poarta server blochează: ${(verificare.poarta_server?.blocaje || []).join(', ')}`)
       // 4. aprobarea — dupa asta RLS nu mai lasa nicio modificare pe fisiere
       const { data: u } = await supabase.auth.getUser()
       const { error: e3 } = await supabase.from('ofertare_pt_pachet')
@@ -1886,6 +1895,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
   const inregistreazaDepunere = async (p, finale, dovada) => {
     if (!finale?.length || !dovada) { showToast?.('Alege fișierele depuse în SEAP ȘI dovada depunerii.', 'err'); return }
     setBusy(true)
+    setRefuzuriDepunere(prev => ({ ...prev, [p.id]: [] }))
     try {
       const rows = []
       const urca = async (f, rol) => {
@@ -1903,10 +1913,37 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
       }
       for (const f of finale) await urca(f, 'depus_final')
       await urca(dovada, 'dovada_seap')
-      const { error: e1 } = await supabase.from('ofertare_pt_pachet_fisiere').insert(rows)
-      if (e1) throw new Error('manifest depunere: ' + e1.message)
-      const { error: e2 } = await supabase.from('ofertare_pt_pachet').update({ stare: 'depus' }).eq('id', p.id)
+      // Reluarea după un REFUZ nu rescrie manifestul append-only și nu dublează rândurile.
+      for (const row of rows) {
+        const { data: existent, error: eCit } = await supabase.from('ofertare_pt_pachet_fisiere')
+          .select('id,sha256,fisier_path').eq('pachet_id', p.id).eq('rol', row.rol).eq('nume', row.nume).maybeSingle()
+        if (eCit) throw new Error('citire manifest: ' + eCit.message)
+        if (existent) {
+          if (existent.sha256 !== row.sha256 || existent.fisier_path !== row.fisier_path) throw new Error(`${row.nume}: manifestul existent diferă; este necesar un pachet nou`)
+        } else {
+          const { error: e1 } = await supabase.from('ofertare_pt_pachet_fisiere').insert(row)
+          if (e1) throw new Error('manifest depunere: ' + e1.message)
+        }
+      }
+      // J04×J07 (plan §2 J07): AMBELE verificări rulează după scrierea manifestului și ÎNAINTE de stare='depus'.
+      // Serverul le impune oricum pe amândouă la tranziție (trg_ofertare_pt_pachet_poarta_documentatie → J07,
+      // trg_pt_pachet_depus_verifica → J04); aici doar le cerem și afișăm verdictul. Rulăm ambele chiar dacă
+      // prima refuză, ca omul să vadă toate motivele deodată; orice eroare/răspuns invalid = BLOCK.
+      // 1) J04: SHA-256 calculat pe server pentru fiecare fișier din manifest (PASS/REFUZ persistat).
+      const { data: verificare, error: eVer } = await supabase.functions.invoke('ofertare-pachet-verifica', { body: { pachet_id: p.id } })
+      const refuzuri = (verificare?.verificari || []).filter(v => v.rezultat !== 'PASS')
+      setRefuzuriDepunere(prev => ({ ...prev, [p.id]: refuzuri }))
+      // 2) J07: textul se recalculează DUPĂ manifest (hash-ul sursei include pachet_fisiere), apoi poarta agregată.
+      const poarta = await citestePoartaServer(supabase, licId, { recalculeazaText: true })
+      const motive = []
+      if (eVer || verificare?.ok !== true) motive.push(verificare?.error || (refuzuri.length
+        ? 'Serverul a refuzat fișierele enumerate mai jos.' : eVer?.message || 'Verificarea serverului nu a confirmat pachetul.'))
+      if (poarta.poarta_server?.stare !== 'ok') motive.push(poarta.poarta_server_eroare
+        || `Poarta server blochează: ${(poarta.poarta_server?.blocaje || []).join(', ')}`)
+      if (motive.length) throw new Error(motive.join(' · '))
+      const { data: depus, error: e2 } = await supabase.from('ofertare_pt_pachet').update({ stare: 'depus' }).eq('id', p.id).select('id').single()
       if (e2) throw new Error('marcare depus: ' + e2.message)
+      if (!depus) throw new Error('marcare depus: pachetul nu a fost actualizat')
       showToast?.(`Pachet v${p.versiune} marcat DEPUS: ${finale.length} fișiere finale + dovada SEAP, cu SHA-256.`, 'ok')
       await load(licId)
     } catch (e) { showToast?.('Înregistrarea depunerii a eșuat: ' + (e?.message || e), 'err') }
@@ -1971,6 +2008,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
     Object.assign(proaspat, campuriDocumentatie(await supabase.from('v_ofertare_seap_completitudine').select('blocaj, esentiale').eq('licitatie_id', licId).maybeSingle()))
     Object.assign(proaspat, campuriCantitatiNevalidate(await supabase.from('v_ofertare_cantitati_nevalidate').select('*').eq('licitatie_id', licId).maybeSingle()))
     if (proaspat.grafic_versiune) Object.assign(proaspat, await campuriGraficReverificare(licId))
+    Object.assign(proaspat, await citestePoartaServer(supabase, licId, { recalculeazaText: true }))
     // Acelasi evaluator ca butonul si cardul. Daca cele trei ar diverge, butonul ar fi activ
     // dar semnarea ar cadea — sau invers, mai rau.
     const ev = evalueazaPoarta(proaspat)
@@ -2165,7 +2203,7 @@ Generezi TOTUȘI? Ele vor fi marcate „NECONFIRMATĂ" în prompt, iar pe capito
                   )}
                 </div>
                 {p.nota && <div style={{ color:G.orange, marginTop:2 }}>{p.nota}</div>}
-                {p.stare === 'aprobat' && <DepunerePachet p={p} busy={busy} onInregistreaza={inregistreazaDepunere} />}
+                {p.stare === 'aprobat' && <DepunerePachet p={p} busy={busy} onInregistreaza={inregistreazaDepunere} refuzuri={refuzuriDepunere[p.id]} />}
                 {p.stare === 'depus' && p.depus_la && <div style={{ color:G.green, marginTop:2 }}>📤 depus {new Date(p.depus_la).toLocaleString('ro-RO')} — fișierele finale și dovada SEAP sunt în manifest</div>}
                 {(p.fisiere || []).map(f => (
                   <div key={f.rol + f.nume} style={{ color:G.dim, fontFamily:'ui-monospace, monospace', fontSize:11, marginTop:2 }}>

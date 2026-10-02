@@ -3562,8 +3562,15 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   // Starea propunerii tehnice: un rand per licitatie, mereu (si pentru cele fara nicio cerinta).
   // Nu intra showToast/load in deps — lectia casei cu loop-ul infinit.
   useEffect(() => {
-    supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', l.id).maybeSingle()
-      .then(({ data }) => setPtSt(data || null))
+    let activ = true
+    Promise.all([
+      supabase.from('v_ofertare_pt_stare').select('*').eq('licitatie_id', l.id).maybeSingle(),
+      supabase.rpc('ofertare_poarta_server', { p_licitatie_id: l.id }),
+    ]).then(([{ data }, server]) => {
+      if (activ) setPtSt(data ? { ...data, poarta_server: server.error ? null : server.data,
+        poarta_server_eroare: server.error?.message } : null)
+    })
+    return () => { activ = false }
   }, [l.id])
   // R7 propagare: semnalul garanției pe termenul CURENT (aceeași evaluare ca în tab-ul 🛡) — KPI-ul nu mai e verde
   // doar pentru că status = 'original' când termenul s-a mutat sau polița nu acoperă cerința recalculată
