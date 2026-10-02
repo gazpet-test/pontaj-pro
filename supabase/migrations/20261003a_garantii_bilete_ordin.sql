@@ -9,15 +9,17 @@
 --      Unic pe (coalesce(serie,''), numar) — garantii_bo_serie_numar_uidx (UI-ul traduce eroarea 23505 după acest nume).
 --      Trigger updated_at cu helper-ul existent public.set_updated_at().
 --   2. RLS: SELECT pentru orice cont logat (ca garantii_rls_sel); INSERT/UPDATE/DELETE cu aceeași poartă ca garantii
---      (public.fn_poate_scrie_garantii(), 20261005b — live). ACL: authenticated/service_role S/I/U/D; anon și PUBLIC nimic
---      (tabela și secvența de identitate).
+--      (public.fn_poate_scrie_garantii(), 20261005b — live). ACL exact: authenticated/service_role S/I/U/D (secvența:
+--      USAGE/SELECT); anon și PUBLIC nimic; fără TRUNCATE/REFERENCES/TRIGGER/MAINTAIN (în linie cu F1/F1b, 20261006a).
 --   3. public.garantii_alerte() (cronul garantii_alerte_0645): CORPUL LIVE NESCHIMBAT (md5 fd35c645…, citit read-only
 --      02.10.2026) + un bloc nou la coadă, după bucla existentă: bo_scadent (emis, scadența în 0..14 zile) și bo_expirat
 --      (emis, scadența depășită). Amprente în garantii_alerte_amprenta (PK garantie_id, fel). ACL-ul, SECDEF, search_path,
 --      semnătura: neschimbate (CREATE OR REPLACE). Modul notificări: 'Financiar' — valoarea permisă de
 --      notifications_modul_check. ATENȚIE (preexistent, NEATINS aici): blocul vechi inserează modul = 'financiar', care
 --      PICĂ pe notifications_modul_check; azi nu se vede (0 rânduri), dar în ziua în care o garanție intră pe o ramură
---      veche, toată execuția garantii_alerte() (inclusiv alertele BO) eșuează. Reparația e o decizie separată.
+--      veche, toată execuția garantii_alerte() (inclusiv alertele BO) eșuează. Al doilea bug latent, tot în blocul vechi:
+--      ON CONFLICT (garantie_id, fel) ⇒ „column reference garantie_id is ambiguous” (coliziune cu coloanele OUT ale
+--      funcției; verificat local). Blocul nou folosește ON CONFLICT ON CONSTRAINT. Reparația blocului vechi = decizie separată.
 -- Fișa de securitate a alertei: (a) nu citește conținut extern (doar tabele interne); (b) scrie doar notifications (către
 --   owneri) și garantii_alerte_amprenta; nu trimite mail, nu atinge bani/drepturi; (c) SECURITY DEFINER (owner postgres),
 --   rulată de cron ca postgres; (d) EXECUTE doar postgres/service_role (neschimbat) — pornită doar de cronul
@@ -25,7 +27,8 @@
 -- Precondiții (fail-closed): postgres; tabela nu există; garantii (coloane md5 0cd06900…), fn_poate_scrie_garantii
 --   (md5 e8ee20a0…, SECDEF), set_updated_at (md5 1c4318be…) — ca pe live; garantii_alerte() unică, corp md5 fd35c645…,
 --   SECDEF, search_path, ACL postgres+service_role; PK amprentelor = (garantie_id, fel); 'Financiar' permis de CHECK.
--- Postcondiții: tabela cu RLS, exact 4 politici, anon/PUBLIC fără drepturi (tabelă + secvență), authenticated S/I/U/D;
+-- Postcondiții: tabela cu RLS, exact 4 politici, anon/PUBLIC fără drepturi (tabelă + secvență), ACL exact (authenticated și
+--   service_role: tabela S/I/U/D, secvența USAGE/SELECT — fără TRUNCATE/REFERENCES/TRIGGER/MAINTAIN);
 --   garantii_alerte() cu md5-ul nou, prefixul = corpul vechi, ACL și atribute neschimbate.
 -- Revenire (NU e migrare): supabase/revenire/20261003a_garantii_bilete_ordin_ROLLBACK.sql (refuză dacă tabela are rânduri).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid); fără BEGIN/COMMIT.
@@ -123,8 +126,10 @@ CREATE TRIGGER garantii_bo_set_updated_at BEFORE UPDATE ON public.garantii_bilet
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 -- 2. ACL + RLS (scrierea: aceeași poartă ca garantii, 20261005b)
-REVOKE ALL ON TABLE public.garantii_bilete_ordin FROM PUBLIC, anon;
-REVOKE ALL ON SEQUENCE public.garantii_bilete_ordin_id_seq FROM PUBLIC, anon;
+-- Setarea implicită a lui postgres pe public dă anon/authenticated arwdxt (tabele) și rwU (secvențe) ⇒ se retrage TOT și se
+-- acordă exact: tabela S/I/U/D, secvența USAGE/SELECT (fără TRUNCATE/REFERENCES/TRIGGER/MAINTAIN, fără setval).
+REVOKE ALL ON TABLE public.garantii_bilete_ordin FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON SEQUENCE public.garantii_bilete_ordin_id_seq FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.garantii_bilete_ordin TO authenticated, service_role;
 GRANT USAGE, SELECT ON SEQUENCE public.garantii_bilete_ordin_id_seq TO authenticated, service_role;
 ALTER TABLE public.garantii_bilete_ordin ENABLE ROW LEVEL SECURITY;
@@ -294,9 +299,18 @@ BEGIN
      OR EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid IN ('public.garantii_bilete_ordin'::regclass, 'public.garantii_bilete_ordin_id_seq'::regclass) AND x.grantee = 0) THEN
     RAISE EXCEPTION 'Postcondiție 2: anon/PUBLIC au drepturi pe garantii_bilete_ordin sau pe secvență';
   END IF;
-  IF NOT (has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'SELECT') AND has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'INSERT')
-          AND has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'UPDATE') AND has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'DELETE')) THEN
-    RAISE EXCEPTION 'Postcondiție 2: authenticated fără SELECT/INSERT/UPDATE/DELETE';
+  SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type, ',' ORDER BY x.grantee::regrole::text, x.privilege_type) INTO v_s
+    FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.garantii_bilete_ordin'::regclass AND x.grantee <> 'postgres'::regrole;
+  IF v_s IS DISTINCT FROM 'authenticated:DELETE,authenticated:INSERT,authenticated:SELECT,authenticated:UPDATE,service_role:DELETE,service_role:INSERT,service_role:SELECT,service_role:UPDATE' THEN
+    RAISE EXCEPTION 'Postcondiție 2: ACL-ul tabelei ≠ exact S/I/U/D pentru authenticated și service_role (%)', v_s;
+  END IF;
+  SELECT string_agg(x.grantee::regrole::text || ':' || x.privilege_type, ',' ORDER BY x.grantee::regrole::text, x.privilege_type) INTO v_s
+    FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.garantii_bilete_ordin_id_seq'::regclass AND x.grantee <> 'postgres'::regrole;
+  IF v_s IS DISTINCT FROM 'authenticated:SELECT,authenticated:USAGE,service_role:SELECT,service_role:USAGE' THEN
+    RAISE EXCEPTION 'Postcondiție 2: ACL-ul secvenței ≠ exact USAGE/SELECT pentru authenticated și service_role (%)', v_s;
+  END IF;
+  IF pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = 'public.garantii_bilete_ordin'::regclass)) IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Postcondiție 2: garantii_bilete_ordin nu e a lui postgres';
   END IF;
   -- 3. garantii_alerte(): md5 nou, prefix = corpul vechi, atribute + ACL neschimbate, unică
   IF (SELECT count(*) FROM pg_proc WHERE proname = 'garantii_alerte') <> 1 THEN

@@ -10,8 +10,9 @@
 #   4. matricea de acces RLS (owner/contabilitate scriu; viewer/oarecine doar citesc; anon nimic) + constrângerile + trigger
 #   5. alertele BO: bo_scadent / bo_expirat o singură dată per set, modul = Financiar, amprente; restituirea oprește alerta
 #   6. reaplicare cu marcaj → refuz; revenire: nearmată → refuz; cu rânduri → refuz; armată, fără rânduri → starea live
-#   7. (informativ) bugul latent preexistent: blocul vechi inserează modul = 'financiar' ⇒ pică pe notifications_modul_check,
-#      identic ÎNAINTE și DUPĂ migrare (nu e introdus de 20261003a; decizie separată)
+#   7. (informativ) bugurile latente preexistente din blocul vechi: modul = 'financiar' ⇒ pică pe notifications_modul_check,
+#      identic ÎNAINTE și DUPĂ migrare; iar fără CHECK, ON CONFLICT (garantie_id, fel) e ambiguu (coloane OUT) — nu sunt
+#      introduse de 20261003a; reparația = decizie separată
 # Utilizare: bash scripts/test_garantii_bilete_ordin.sh [--opreste]   Ieșire: 0 PASS · 1 eșec · 2 mediu
 # ============================================================================
 set -Eeuo pipefail
@@ -88,6 +89,7 @@ MD5_NOU="$(md5_alerte)"
 [ "$(q "SELECT count(*) FROM pg_policies WHERE tablename = 'garantii_bilete_ordin'")" = 4 ] || esec "3 politici"
 [ "$(q "SELECT has_table_privilege('anon', 'public.garantii_bilete_ordin', 'SELECT')")" = f ] || esec "3 anon are SELECT"
 [ "$(q "SELECT has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'INSERT')")" = t ] || esec "3 authenticated fără INSERT"
+[ "$(q "SELECT has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'TRUNCATE') OR has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'TRIGGER') OR has_table_privilege('authenticated', 'public.garantii_bilete_ordin', 'REFERENCES') OR has_sequence_privilege('authenticated', 'public.garantii_bilete_ordin_id_seq', 'UPDATE')")" = f ] || esec "3 authenticated are drepturi peste S/I/U/D (TRUNCATE/TRIGGER/REFERENCES/setval)"
 [ "$(q "SELECT count(*) FROM supabase_migrations.schema_migrations WHERE name = '$NUME'")" = 1 ] || esec "3 neînregistrată"
 ok "3 runner: APLICAT + ÎNREGISTRAT + gate 0e (cod 0), sha256 $SHA, garantii_alerte md5 $MD5_NOU"
 gate_0e patch
@@ -173,5 +175,7 @@ echo "$A" | grep -q notifications_modul_check || esec "7 blocul vechi (ÎNAINTE 
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "DELETE FROM supabase_migrations.schema_migrations WHERE name = '$NUME'; SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >/dev/null 2>&1 || esec "7 reaplicare pentru test"
 A="$(q "SELECT count(*) FROM public.garantii_alerte()" 2>&1 || true)"
 echo "$A" | grep -q notifications_modul_check || esec "7 blocul vechi (DUPĂ migrare) nu pică pe CHECK: $A"
-ok "7 (informativ) bug latent PREEXISTENT: garanție cu lucrare recepționată ⇒ blocul vechi pică pe notifications_modul_check (modul 'financiar'), identic înainte și după 20261003a"
+A="$("${PSQL[@]}" -d "$BAZA" -At 2>&1 -c "BEGIN; ALTER TABLE public.notifications DROP CONSTRAINT notifications_modul_check; SELECT count(*) FROM public.garantii_alerte(); ROLLBACK;" || true)"
+echo "$A" | grep -q 'column reference "garantie_id" is ambiguous' || esec "7 al doilea bug latent (ON CONFLICT ambiguu în blocul vechi) nu s-a reprodus: $A"
+ok "7 (informativ) bug latent PREEXISTENT: garanție cu lucrare recepționată ⇒ blocul vechi pică pe notifications_modul_check (modul 'financiar'), identic înainte și după 20261003a; fără CHECK ar pica pe ON CONFLICT (garantie_id, fel) ambiguu"
 echo "PASS test_garantii_bilete_ordin (sha256 $SHA, garantii_alerte md5 nou $MD5_NOU)"
