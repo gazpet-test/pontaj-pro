@@ -1,0 +1,435 @@
+[
+ {
+  "requirement_id": "REQ-AD-008",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 13-15), dar locatorul invocă HG 395 art. 21, care nu apare în motivare. CNSC se întemeiază pe L98 art. 160 și art. 154 alin. (1) + L101 art. 26 alin. (2) și (5). CNSC a obligat AC la răspunsuri clare, concrete și la decalarea termenului; nu s-a pronunțat asupra admiterii modificărilor de clauze cerute.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 6 și 12-15 (L98 art. 160 și art. 154 alin. (1); L101 art. 26 alin. (2) și (5)); dispozitiv pag. 15-16",
+   "note": "CNSC a obligat AC să analizeze punctual fiecare solicitare și să publice un nou răspuns consolidat, cu decalarea termenului. Nu a obligat AC să accepte modificarea clauzelor (ex. termen de plată). Cheltuieli de judecată acordate: 5.000 lei."
+  },
+  "citat": "Consiliul va admite criticile și va dispune analiza punctuală a fiecărei solicitări de clarificări și publicarea în SEAP a unor răspunsuri clare, concrete"
+ },
+ {
+  "requirement_id": "REQ-AD-009",
+  "verdict": "NUANȚĂ",
+  "problema": "Ideea e susținută (p. 52-58): DA contradictorie, cerință inexistentă în CS, vina principală e a AC. Problema 1: contractul e de SERVICII de proiectare (PT, DTAC, DE), nu lucrări sau P+E. Problema 2: CNSC a calificat contradicțiile DA mai degrabă drept motiv de ANULARE a procedurii (L98 art. 212 alin. (1) lit. b), c)), nu doar ca motiv de admitere a ofertei. Problema 3: HG 395 art. 135 nu apare în motivarea CNSC. CNSC a reținut L98 art. 209 alin. (1) ca obligație a AC de a cere completări, în locul declarării răspunsului drept neconcludent.",
+  "corectura_propusa": {
+   "cerinta": "Neclaritățile sau contradicțiile DA nu pot fi imputate ofertantului: nu se respinge oferta pe o cerință care nu există în DA ori e contrazisă de CS sau de clarificări. Dacă un răspuns e insuficient, AC trebuie să ceară completări sau precizări (L98 art. 209 alin. (1)), nu să-l declare direct neconcludent. Contradicțiile esențiale din DA pot constitui motiv de anulare a procedurii (L98 art. 212 alin. (1) lit. b), c)).",
+   "locator": "motivare, pag. 45-58 (L98 art. 209 alin. (1), art. 212 alin. (1) lit. b), c) și alin. (2)); dispozitiv pag. 61-62",
+   "conditii_aplicabilitate": "Ofertă respinsă pentru răspunsuri „neconcludente” la aspecte neclare, contradictorii sau nedefinite în DA.",
+   "note": "Speța: servicii de proiectare PT, DTAC și DE pentru o rețea de distribuție gaze (inclusiv racord IP DN250 și SRMP). Nu e un contract de lucrări. Contestația a fost admisă în parte, cu reevaluare. Criticile la oferta câștigătoare au fost respinse ca tardive."
+  },
+  "citat": "faptul că un ofertant nu înțelege unele prevederi/noțiuni ale documentației de atribuire nu este doar vina acestuia, ci vina principală este a autorității contractante"
+ },
+ {
+  "requirement_id": "REQ-AD-017",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 46-47) și locatorul e corect. Problema 1: comparabilitatea e greșită. Speța e P+E pentru modernizarea liniei feroviare Caransebeș–Timișoara–Arad (entitate sectorială feroviară, HG 394), nu o procedură de apă. Problema 2: condiția e formulată prea larg. În speță, polițele fuseseră depuse fizic la registratura entității pe 23.02.2022, până la termen, iar comisia le avea la accesarea ofertelor (PV din 24.02.2022). Doar în această situație CNSC a calificat neîncărcarea în SEAP drept neconcordanță remediabilă (art. 138 alin. (3)).",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 45-47 (HG 394/2016 art. 41 alin. (1), art. 138 alin. (3); L101 art. 26 alin. (2)); echivalent clasic HG 395 art. 35 alin. (1), art. 132 alin. (3)",
+   "conditii_aplicabilitate": "Garanție de participare emisă și depusă efectiv la AC (ex. la registratură) până la data-limită, aflată în posesia comisiei la accesarea ofertelor, dar neîncărcată în SEAP.",
+   "note": "Speța: CFR SA, P+E modernizare linie feroviară (lotul 1/2), poliță de 10.000.000 lei, depusă la registratură fără dovada plății primei. CNSC: abordarea entității e „formalistă și disproporționată”. Nu e o procedură de apă."
+  },
+  "citat": "Depunerea documentului fizic la registratură, în locul aceluiași document, dar în format electronic, constituie un aspect formal, remediabil."
+ },
+ {
+  "requirement_id": "REQ-AD-018",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 9-10) și e corectă: mesajul SWIFT nu e instrument de garantare, iar înlocuirea la clarificări cu altă scrisoare (alt număr) nu e viciu de formă. Comparabilitatea e greșită: speța privește SERVICII de asistență tehnică și supervizare pentru reabilitarea termoficării, nu lucrări de apă-canal. Locatorul trebuie completat cu HG 395 art. 64 alin. (3) și art. 134 alin. (5).",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 9-10 (HG 395 art. 36 alin. (4), art. 64 alin. (3), art. 132 alin. (3), art. 134 alin. (5); L98 art. 212 alin. (1) lit. a)); contestație respinsă",
+   "note": "Speța: servicii de supervizare pentru reabilitarea termoficării (o singură ofertă, procedură anulată). S-a depus mesaj SWIFT netradus. La clarificări a apărut altă scrisoare, emisă în ziua termenului, cu alt număr, iar traducerea cerută nu a fost depusă."
+  },
+  "citat": "Legislația achizițiilor publice prevede corectarea viciilor formale, ori înlocuirea garanției de participare nu este un viciu formal."
+ },
+ {
+  "requirement_id": "REQ-AD-019",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 8-10). Condiția e însă mai largă decât speța. Garanția a fost constituită prin VIRAMENT în contul AC, de subcontractant, cu mențiunea explicită „în numele ofertantului”. CNSC subliniază că nu era o scrisoare de garanție bancară, care ar putea ridica probleme de executare. Mai trebuie spus că respingerea fără clarificări e nelegală prin HG 395 art. 132 alin. (3). Comparabilitatea „lucrări apă-canal” nu reiese din text: e un contract de SERVICII anonimizat, cu garanție de 1.300 lei.",
+  "corectura_propusa": {
+   "cerinta": "Garanția de participare virată în contul AC de un terț (în speță subcontractantul), cu mențiunea explicită a procedurii și a ofertantului în numele căruia se plătește, își atinge scopul (HG 395 art. 35 alin. (1)). Respingerea ofertei fără clarificări (art. 132 alin. (3)) e nelegală.",
+   "locator": "motivare, pag. 7-10 (HG 395 art. 35 alin. (1), art. 36, art. 37 alin. (1), art. 132 alin. (3), art. 64 alin. (3); Cod civil art. 1472)",
+   "conditii_aplicabilitate": "Garanție constituită prin virament bancar în contul AC de o altă entitate decât ofertantul, cu destinația menționată în OP. Nu acoperă automat instrumentele de garantare emise pe numele unui terț.",
+   "note": "Contract de servicii (obiect anonimizat), procedură simplificată, garanție de 1.300 lei. CNSC a respins ca irelevantă consilierea ANAP contrară."
+  },
+  "citat": "autoritatea contractantă este în aceeași măsură protejată ca în situația în care viramentul s-ar fi realizat de însuși ofertantul"
+ },
+ {
+  "requirement_id": "REQ-AD-020",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula de proporționalitate e a CNSC (p. 19-20), dar e formulată prea larg. Problema 1: CNSC a analizat DOAR condițiile garanției de BUNĂ EXECUȚIE (pct. iv-viii din propunerea de contract), nu și pe cele ale GP. Problema 2: le-a apreciat disproporționate față de un contract de furnizare piese de schimb de ~93.000 euro și nejustificate în referatul de necesitate și în strategie. Problema 3: L99 art. 164 e invocat de părți, nu de CNSC; temeiul CNSC e HG 394 art. 45-48 + L99 art. 2 alin. (2). Problema 4: comparabilitatea e greșită. Entitatea e Societatea Națională Nuclearelectrica (furnizare „ansamblu cap cilindri telescopici”), nu o entitate de apă.",
+  "corectura_propusa": {
+   "cerinta": "Condițiile suplimentare impuse emitentului garanției de bună execuție (rating extern minim, rating doar de la Fitch/S&P/Moody's, reasigurare cu rating AA etc.) trebuie justificate și proporționale cu valoarea și complexitatea contractului. Altfel se elimină din DA. CNSC: impunerea unui rating de la agențiile internaționale „nu este permis[ă]”, ofertantul având dreptul să aleagă asigurătorul.",
+   "locator": "motivare, pag. 15-20 (HG 394/2016 art. 45-48; L99 art. 2 alin. (2); HG 394 art. 62 alin. (1) pentru erată); dispozitiv pag. 21",
+   "conditii_aplicabilitate": "Fișa de date sau modelul de contract impun condiții de rating ori reasigurare emitentului GBE, nejustificate în referatul de necesitate sau în strategia de contractare și disproporționate față de valoarea și obiectul contractului.",
+   "note": "Speța: SN Nuclearelectrica, furnizare piese de schimb, VE ≈ 457.000 lei (~93.000 euro). Contestația a fost admisă, iar pct. iv-viii din modelul de contract au fost eliminate. Cheltuieli de judecată: 2.380 lei. Pentru GP, regula clasică e HG 395 art. 36 alin. (5) (nu se poate impune un anumit emitent), dar decizia nu a analizat GP."
+  },
+  "citat": "impune existența unui rating al unor societăți internaționale Fitch, Standard & Poor’s sau Moody’s, aspect care nu este permis în legislația achizițiilor publice"
+ },
+ {
+  "requirement_id": "REQ-AD-030",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 10-13): contestația a fost respinsă. CNSC a reținut L98 art. 172 + L123/2012 + NTPEE și a considerat legală cerința ANRE (proiectare + EDSB) pentru fiecare asociat, terț susținător tehnico-profesional și subcontractant, pentru partea de proiectare sau execuție care îi revine. Ord. ANRE 132/2021 apare doar în textul cerinței AC. Se mai poate menționa HG 395 art. 31.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 10-13 (L98 art. 172; HG 395 art. 31; Legea 123/2012; NTPEE); Ord. ANRE 132/2021 doar în textul cerinței din fișa de date"
+  },
+  "citat": "cerința potrivit căreia „Această cerință se solicită și eventualilor subcontractanți” este legală, necesară și nerestrictivă"
+ },
+ {
+  "requirement_id": "REQ-AD-031",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 16-19). Problema 1: lipsesc două elemente ale motivării. (a) Instalatorul autorizat poate proiecta doar ca angajat al unui operator autorizat sau ca PFA autorizat ANRE. (b) AC are obligația să verifice autorizarea chiar dacă DA nu o cere expres. Tot CNSC: completarea ulterioară cu un subcontractant contravine L98 art. 209 alin. (2). Problema 2: comparabilitatea e prea largă. Speța e o restaurare de monument (casă memorială), P+E, iar componenta litigioasă e proiectarea instalației de gaze.",
+  "corectura_propusa": {
+   "cerinta": "Autorizația ANRE trebuie deținută de societatea care proiectează sau execută partea de gaze (ori de un asociat, subcontractant sau terț declarat în ofertă). Un instalator autorizat persoană fizică, colaborator neangajat, nu acoperă lipsa: el poate proiecta doar ca angajat al unui operator autorizat sau ca PFA autorizat ANRE. AC trebuie să verifice autorizarea chiar dacă DA nu o cere expres. Nominalizarea ulterioară a unui subcontractant autorizat nu e permisă (L98 art. 209 alin. (2)).",
+   "locator": "motivare, pag. 15-21 (L98 art. 3 alin. (1) lit. jj), art. 209 alin. (2); NTPEE (Ord. ANRE 89/2018) art. 7 alin. (1), art. 12; Reg. aprobat prin Ord. ANRE 132/2021)",
+   "note": "Speța: P+E pentru restaurarea unei case memoriale (monument istoric) cu instalații de gaze. Contestația a fost admisă, iar oferta câștigătoare a fost anulată și supusă reevaluării."
+  },
+  "citat": "Nici autoritatea contractantă și nici ofertanții nu se pot prevala de lipsa unor mențiuni exprese ale documentației de atribuire"
+ },
+ {
+  "requirement_id": "REQ-AD-032",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 45-51) și e corectă. Problema 1: locatorul pune L98 art. 215 / HG 395 art. 137 ca temei, dar acestea sunt temeiurile de respingere ale AC. CNSC se întemeiază pe L98 art. 154 alin. (1), HG 395 art. 133 și art. 212 L98: dacă AC considera DA neclară, alternativa era anularea, nu adăugarea de cerințe la evaluare. Problema 2: comparabilitatea e greșită. Speța e „Îmbunătățirea infrastructurii rutiere și agricole” (drumuri de exploatare agricole, jud. Bihor), nu apă-canal. Branșamentele de OS (ANRE, RTE 9.1 și 6.1) au fost cerute de AC abia la evaluare.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 41-51 (L98 art. 154 alin. (1), art. 212 alin. (1) lit. c) și alin. (2); HG 395 art. 133; L101 art. 8 pentru caracterul tardiv al criticilor la DA); dispozitiv pag. 52-53",
+   "note": "Speța: lucrări de infrastructură rutieră și agricolă. Două contestații conexate, ambele admise. Motivele respingerii: specialiști atestați ANRE/RTE pentru branșamente de OS necerute în DA, grafic Gantt fără detaliile pretinse la evaluare, normativ C16/84 neindicat în DA. CNSC: și ofertanții sunt ținuți strict de DA necontestată."
+  },
+  "citat": "aceste cerințe minime trebuiau să fie impuse prin documentația de atribuire, pentru a fi cunoscute de toți operatorii economici interesați anterior depunerii ofertelor"
+ },
+ {
+  "requirement_id": "REQ-AD-042",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 11-13), dar condițiile sunt mai largi decât speța. Problema 1: decizia privește ES de PROIECTARE într-un contract P+E de alimentare cu gaze. Cerința era formulată general („proiectare lucrări construire... rețele de alimentare cu gaze”), iar racordurile reprezentau ~36% din valoarea proiectării și erau parte din obiect. Doar în acest context CNSC a admis proiectarea de branșamente (Delgaz Grid) ca ES. Problema 2: Instr. 2/2017 nu e citată de CNSC; temeiul e HG 395 art. 29 alin. (1) și L98 art. 196. CNSC a mai reținut că cele 2 contracte se pot cumula când DA nu interzice și că AC trebuia să ceară documentele justificative.",
+  "corectura_propusa": {
+   "cerinta": "Când cerința de ES e formulată general („construire/extindere rețele de alimentare cu gaze”), iar obiectul include racorduri (branșamente), proiectarea și execuția de branșamente în SD gaze se încadrează în ES. AC nu poate respinge pe baza simplei denumiri a contractului din DUAE: trebuie să verifice serviciile prestate efectiv și să ceară documentele justificative. Contractele se pot cumula dacă DA nu interzice.",
+   "locator": "motivare, pag. 9-13 (HG 395 art. 29 alin. (1); L98 art. 196; L101 art. 26 alin. (2) și (5)); dispozitiv pag. 13-14",
+   "conditii_aplicabilitate": "ES definită general pentru rețele de gaze, iar obiectul contractului include branșamente. Nu se aplică dacă DA limitează expres ES la rețele stradale sau cere un anumit parametru (DN, presiune, lungime).",
+   "note": "Speța: P+E alimentare cu gaze (VE 18,9 mil. lei), cerința de proiectare de 900.000 lei din max. 2 contracte. Contracte Delgaz: branșamente 819.000 lei + extinderi 206.060 lei."
+  },
+  "citat": "realizarea racordurilor încadrându-se în această categorie de construire"
+ },
+ {
+  "requirement_id": "REQ-AD-043",
+  "verdict": "NUANȚĂ",
+  "problema": "Ambele reguli sunt ale CNSC (p. 11-18), dar condiția despre conductele de transport e mai largă decât speța. (1) CNSC a acceptat lucrările Transgaz la conducta de transport pentru că aveau caracteristici superioare (diametru, presiune, debit). Obiectul includea conducte de distribuție și branșamente. Câștigătorul avea și un contract identic de distribuție (1,41 mil. lei), iar lucrările de transport au servit „doar pentru completarea” valorii cerute (4,85 mil. lei). (2) Motivarea concretă: L98 art. 215 alin. (1) și (2) lit. b), art. 216 alin. (1^1), art. 196 alin. (1) și (3); HG 395 art. 29, 65-66. HG 395 art. 137 alin. (2) lit. b) e temeiul invocat generic de AC, iar L98 art. 215-216 nu sunt „art. 215–216” ca regulă de ES.",
+  "corectura_propusa": {
+   "cerinta": "Lucrările la conducte de transport gaze cu caracteristici tehnice superioare (diametru, presiune, debit) pot fi luate în calcul ca ES pentru lucrări de distribuție gaze (similar ≠ identic; Instr. ANAP 2/2017 art. 5 alin. (1)). Respingerea pentru ES trebuie să indice motivul concret (L98 art. 215 alin. (2) lit. b)) și să se bazeze pe verificarea efectivă a tuturor documentelor justificative, nu pe o simplă inventariere a clarificărilor (HG 395 art. 65-66).",
+   "locator": "motivare, pag. 11-18 (L98 art. 196 alin. (1) și (3), art. 215 alin. (1) și (2) lit. b), art. 216 alin. (1^1); HG 395 art. 29, 65-66; Instr. ANAP 2/2017 art. 5 alin. (1)); dispozitiv pag. 20-21",
+   "conditii_aplicabilitate": "ES de distribuție gaze dovedită (și) cu lucrări de transport având parametri superiori; DA care nu cere lucrări identice.",
+   "note": "Speța: Șomcuța Mare (MM), extindere SD gaze. Contestație admisă în parte: respingerea GETMAR (peste 2.000 de pagini de dovezi verificate superficial) a fost anulată. Critica privind ES a câștigătorului a fost respinsă. În speță, ES din transport a completat un contract identic de distribuție. Cheltuieli de judecată reduse de la 12.100 la 4.000 lei."
+  },
+  "citat": "caracteristicile tehnice și constructive ale respectivei conducte, executată anterior, sunt mult superioare celei care urmează a fi executată"
+ },
+ {
+  "requirement_id": "REQ-AD-044",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 4-10). CNSC: cerința „rețele apă/canalizare” la un contract de rețele apă-canal (VE 114,4 mil. lei, Buzău) echivalează cu o experiență IDENTICĂ, deci restrictivă. CNSC a reținut ca pertinente dovezile că alte entități din sectorul apă au acceptat rețelele de fluide. A dispus remedierea DA, cu nou termen. Locatorul poate fi completat cu L99 art. 185, 191 și HG 394 art. 35, 37.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 4-10 (L99 art. 185 alin. (1), (3), (5), art. 191, art. 192 lit. a); HG 394/2016 art. 35 alin. (1), art. 37 alin. (1); Instr. ANAP 2/2017 art. 5 alin. (1)-(2)); dispozitiv pag. 10",
+   "note": "CNSC a obligat entitatea să elimine caracterul restrictiv al cerinței, nu a impus o formulare anume. Contestatorul a cerut includerea „rețelelor de fluide/gaze sub presiune”."
+  },
+  "citat": "ceea ce solicită, în realitate, entitatea contractantă este probarea unei experienţe identice, iar nu a unei experienţe similare"
+ },
+ {
+  "requirement_id": "REQ-AD-045",
+  "verdict": "NUANȚĂ",
+  "problema": "Conținutul reformulat la 02.10 corespunde textului (p. 13-16). Problema 1: locatorul e imprecis. Analiza PV de stadiu fizic e la p. 13-15, iar regula „documente existente la data-limită” e la p. 15-16. L98 art. 196 NU apare în decizie; temeiul e L98 art. 2 alin. (2) + HG 343/2017 art. 19 + L10/1995. Problema 2: regula privind documentele emise după termen a fost aplicată unei fișe de date care cerea expres documente de recepție emise ANTERIOR termenului. Problema 3: decizia e intern contradictorie la critica C.1. Spune că PV-ul e semnat de diriginte, apoi că e „semnat de beneficiar și executant” și că AC a procedat corect, dar concluzionează „critica... este admisă și autoritate va clarifica”. Regula C.1 trebuie folosită cu prudență.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 13-16 (critica C.1: PV de stadiu fizic 98-99%, L10/1995, HG 343/2017 art. 19; critica C.2: PV de recepție din 18.08.2025, emis după termenul de 14.08.2025, L98 art. 2 alin. (2)); dispozitiv pag. 19",
+   "conditii_aplicabilitate": "Contracte în curs de recepție la data ofertării; DA care cere dovada lucrărilor finalizate și recepționate până la termenul-limită.",
+   "note": "Corectat 02.10: formularea anterioară („PV de stadiu fizic nu dovedește”) era prea strictă față de textul deciziei. Atenție: motivarea pentru C.1 e contradictorie (PV-ul e acceptat, dar critica e declarată admisă cu obligația de clarificare). Regula fermă e cea de la C.2: PV-ul de recepție emis după termen nu poate fi luat în calcul, chiar dacă lucrarea era finalizată de fapt."
+  },
+  "citat": "experiența similară trebuie să fie dovedită prin documente existente la data-limită de depunere a ofertelor, iar nu prin documente emise ulterior"
+ },
+ {
+  "requirement_id": "REQ-AD-046",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 31-34 și 45-47). CNSC: acordul-cadru nu e contract de achiziție. Contează doar subsecventele, iar când DA limitează numărul de contracte, fiecare subsecvent se numără separat. Verificarea se face exclusiv pe contractele indicate în DUAE; alte contracte aduse ulterior ar crea un avantaj (L98 art. 209 alin. (2)). Procedurile tehnice de execuție cerute expres („NU SE VOR ACCEPTA PROCEDURI GENERALE”), lipsă din PT, nu pot fi depuse la clarificări (HG 395 art. 134 alin. (6)). Locatorul poate fi precizat.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 31-34 (acord-cadru/subsecvente: L98 art. 3 alin. (1) lit. c), art. 196, art. 209 alin. (2); HG 395 art. 137 alin. (2) lit. b)) și pag. 45-47 (proceduri tehnice: HG 395 art. 134 alin. (6); L98 art. 209 alin. (2))",
+   "note": "În speță, DA permitea maxim 5 contracte. Cele 10 subsecvente ale acordului-cadru depășeau numărul permis, iar ofertantul n-a indicat care 2 subsecvente acoperă valoarea. Contract de P+E pentru un SD gaze (CPV 45231221-0)."
+  },
+  "citat": "întrucât acordul-cadru nu este un contract de achiziție publică, acesta nu poate fi avut în vedere ca atare în dovedirea experineței similare"
+ },
+ {
+  "requirement_id": "REQ-AD-050",
+  "verdict": "NUANȚĂ",
+  "problema": "Prima parte e a CNSC: art. 197 alin. (2) din L99 e o normă imperativă. Entitatea TREBUIE să ceară o singură dată înlocuirea terțului necorespunzător, iar cererea nu e o clarificare în sensul art. 221. A doua parte nu e raționamentul CNSC, ci al Curții de Apel Cluj, în hotărârea definitivă pe care CNSC o pune în aplicare: ES parțial în afara perioadei de referință, cuantificată proporțional (~46% / ~22% din durată), se clarifică. CNSC mai precizează că noul terț trebuie, la rândul lui, verificat (capacitate + excludere) și că înlocuirea nu face oferta automat admisibilă.",
+  "corectura_propusa": {
+   "cerinta": "Dacă terțul susținător nu îndeplinește criteriile de capacitate, AC/entitatea e OBLIGATĂ să ceară o singură dată înlocuirea lui (L99 art. 197 alin. (2) / L98 art. 183 alin. (2)), nu să respingă direct oferta. Cererea de înlocuire nu e o clarificare. Noul terț se verifică integral (capacitate + motive de excludere). Notă: analiza proporțională a ES parțial în afara perioadei de referință provine din hotărârea Curții de Apel Cluj pusă în aplicare, nu din motivarea proprie a CNSC.",
+   "locator": "motivare, partea finală (L99 art. 197 alin. (1)-(2), art. 221 alin. (1); punerea în aplicare a hotărârii Curții de Apel Cluj); dispozitiv: admitere lot 2, reevaluare în 15 zile",
+   "note": "Speța: entitate sectorială apă, CL 3 Lotul 2 (extindere apă și canalizare, comunele Lechința, Miceștii de Câmpie, Sânmihaiu de Câmpie, Budești). Procentele 46% și 22% sunt ale Curții de Apel Cluj."
+  },
+  "citat": "articolul de lege reprezintă o normă imperativă, creând în sarcina entității contractante obligația de a solicita, o singură dată, înlocuirea terțului susținător"
+ },
+ {
+  "requirement_id": "REQ-AD-054",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 3-5), dar locatorul e greșit. CNSC NU invocă L98 art. 196, 209 sau HG 395 art. 134. Se întemeiază pe CJUE Manova C-336/12 (pct. 39-42), pe principiul proporționalității (T-211/02 Tideland) și pe L101 art. 26 alin. (2). Condiția e incompletă. În speță, fișa de date cerea atestatele doar de la ofertantul clasat pe locul I, la solicitare. Excepția Manova (pct. 40) exclude completarea dacă DA impunea documentul la depunere sub sancțiunea excluderii.",
+  "corectura_propusa": {
+   "cerinta": "Un document de calificare preexistent (atestat ANRE, certificat), emis înainte de termenul-limită, omis din ofertă, poate și trebuie acceptat la clarificări dacă anterioritatea lui se poate verifica obiectiv: nu modifică oferta și nu dă un avantaj. Aceeași regulă se aplică documentelor terțului susținător sau subcontractantului. Excepție (Manova pct. 40): DA impunea depunerea lui odată cu oferta sub sancțiunea excluderii.",
+   "locator": "motivare, pag. 3-5 (CJUE C-336/12 Manova pct. 39-42; T-211/02 Tideland Signal; L101 art. 26 alin. (2)); dispozitiv pag. 6-7",
+   "conditii_aplicabilitate": "Document de calificare existent la data depunerii, dar neatașat; DA care nu impune prezentarea lui la depunere sub sancțiunea excluderii (ex. „se prezintă la solicitare de ofertantul de pe locul I”).",
+   "note": "Speța: Orașul Pogoanele, SD gaze, VE 64,13 mil. lei, cauțiune 1.282.658 lei. Cheltuieli de judecată acordate: 7.140 lei. CNSC a reținut și că lipsa unei comunicări semnate a rezultatului e o problemă de sine stătătoare."
+  },
+  "citat": "atestatul furnizat de ... SRL fiind emis cu mult timp înainte de solicitarea de clarificări ... el trebuia luat în considerare de autoritate"
+ },
+ {
+  "requirement_id": "REQ-AD-061",
+  "verdict": "NUANȚĂ",
+  "problema": "Versiunea actuală (după auditul anterior) e în mare corectă, dar cifra de 1,14% e încă atribuită imprecis. 35.688,18 lei (33.639,54 + 3% CI + 3% profit) cuantifică STRICT abaterile I-III: ușa de aluminiu omisă (12.750 lei), cantitatea de carton bitumat și cantitatea de membrană bituminoasă (diferențe în plus și în minus). Modificările de PREȚ UNITAR (ex. folia barieră de vapori 14,12 → 16,11 lei în C6) sunt un motiv DISTINCT de inacceptabilitate (art. 134 alin. (6)) și nu intră în 1,14%. Comparabilitatea e greșită: CPV 45321000-3, lucrări de izolare termică, VE 3,46 mil. lei, nu apă-canal.",
+  "corectura_propusa": {
+   "cerinta": "La clarificări, propunerea financiară se poate corecta doar pentru erori aritmetice (HG 395 art. 134 alin. (10)) sau abateri tehnice minore. O abatere/omisiune nu e minoră dacă cuantificarea ei depășește 1% din prețul total (art. 134 alin. (9) lit. a)). În speță, articolul omis adăugat și cantitățile modificate au cumulat ≈1,14% (35.688,18 lei cu CI și profit) → nu sunt abateri minore. Separat, modificarea unor prețuri unitare la clarificări e o modificare a PF (art. 134 alin. (6)). Oferta a fost corect respinsă ca inacceptabilă (art. 134 alin. (5)-(6)).",
+   "locator": "motivare, pag. 8-22 (HG 395 art. 134 alin. (5), (6), (9) lit. a), (10), art. 137 alin. (1)); dispozitiv pag. 22",
+   "note": "Speța: lucrări de izolare termică (CPV 45321000-3), VE 3.457.008,76 lei, preț ofertat 3.117.086,75 lei, revizuit la clarificări la 3.133.427,66 lei. Contestație respinsă."
+  },
+  "citat": "modificările operate de ofertant ... nu se încadrează în categoria erorilor aritmetice, ci reprezintă abateri/omisiuni"
+ },
+ {
+  "requirement_id": "REQ-AD-062",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 44-48). Liste de cantități depuse abia la justificarea prețului. AC le-a „corectat” ca erori aritmetice, cu majorarea ofertei cu 504.465 lei (+0,97% total, +21,47% la poz. 7 Instalații sanitare). CNSC: nu sunt erori aritmetice, ci modificare a PF (HG 395 art. 134 alin. (6)), iar justificarea insuficientă a prețului încalcă art. 136 alin. (3) / 137 alin. (3) lit. g). L98 art. 209 alin. (2) nu e citat explicit. Temeiul e HG 395 art. 134 alin. (6), (10) + principiul tratamentului egal.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 44-48 (HG 395 art. 134 alin. (6), (10), art. 136 alin. (3), art. 137 alin. (3) lit. g); L98 art. 2 alin. (2), art. 210)",
+   "note": "Speța: P+E modernizare și eficiență energetică corp C1 al unui spital județean (51,78 → 52,28 mil. lei)."
+  },
+  "citat": "modificările operate de ofertant nu sunt simple erori aritmetice din moment ce au legătură cu oferta inițială și nu sunt susținute de aceasta"
+ },
+ {
+  "requirement_id": "REQ-AD-063",
+  "verdict": "NUANȚĂ",
+  "problema": "Ambele reguli sunt ale CNSC (p. 27-29). Problema 1: locatorul e greșit. CNSC nu citează L98 art. 209 alin. (1) și nici HG 395 art. 134 alin. (1), (4); singurul temei invocat e L101 art. 26 alin. (2) lit. a), b) și alin. (5). Problema 2: comparabilitatea e greșită. Speța e reabilitarea și extinderea CPU dintr-un spital municipal (CPV 45453000-7), nu apă-canal. CNSC a calificat solicitarea („unde se regăsesc în PT…”, pe baza unei fraze generale din memoriu) drept „solicitare pretext”. A calificat PT-ul copiat cuvânt cu cuvânt din CS și memorii, inclusiv cu instrucțiuni adresate executantului, drept „nu reprezintă o ofertă tehnică în sine”.",
+  "corectura_propusa": {
+   "cerinta": "Clarificările nu pot fi folosite ca pretext de respingere. Un răspuns concret la o solicitare generică, nepertinentă față de cerințele DA, nu poate fi declarat neconcludent. O propunere tehnică copiată cuvânt cu cuvânt din caietul de sarcini sau din memoriile tehnice, fără soluții proprii, nu reprezintă o ofertă tehnică, iar declararea ei conformă e nelegală.",
+   "locator": "motivare, pag. 27-29 (L101 art. 26 alin. (2) lit. a), b) și alin. (5)); dispozitiv pag. 29-30",
+   "note": "Speța: reabilitare și extindere CPU la un spital municipal, preț câștigător 1.277.852,30 lei. Contestație admisă: s-au anulat atât respingerea ofertei contestatoarei, cât și admiterea ofertei câștigătoare."
+  },
+  "citat": "oferta tehnică depusă ... nu reprezintă o ofertă tehnică în sine, nefiind concretă, personalizată, întocmită de către ofertant"
+ },
+ {
+  "requirement_id": "REQ-AD-071",
+  "verdict": "NEVERIFICAT",
+  "problema": "Textul deciziei BO2025_647 nu există local: lipsește din cnsc_pdf/ și din lucru/gaze_pdf, lot3-5. Nu am putut verifica sursa CNSC a regulii, cifra de 48,27% și locatorul. Atenție: formularea „trebuie să ceară clarificări... înainte de orice decizie” reflectă L98 art. 210 alin. (1) + HG 395 art. 136 alin. (4) ca normă. Trebuie confirmat că este raționamentul CNSC, nu argumentul contestatorului.",
+  "corectura_propusa": {
+   "note": "De descărcat decizia BO2025_647 și de verificat pe partea „Consiliul reține/constată”: dispozitivul, procentul de 48,27% și articolele pe care se întemeiază CNSC. Până atunci: verificat_pe_sursa=false."
+  },
+  "citat": ""
+ },
+ {
+  "requirement_id": "REQ-AD-072",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 15-21): ofertă la 49% din VE (849.000 lei). Răspunsul a constat în tabele și afirmații fără niciun document (oferte de furnizori, salarizare, stocuri). Ofertantul a modificat la justificare CI de la 5% la 20% și profitul de la 5% la 30%. CNSC: răspunsul e neconcludent (HG 395 art. 136 alin. (3)), iar o nouă clarificare ar crea un avantaj (L98 art. 209 alin. (2)). Locatorul poate fi completat.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 15-21 (L98 art. 210, art. 209 alin. (2); HG 395 art. 136 alin. (2)-(3), art. 127 alin. (1) lit. h); Dir. 2014/24 cons. 103 și art. 69; CJUE C-198/16)",
+   "note": "Decizia conține erori de redactare (referiri la „echipamente medicale” și la HG 394), dar raționamentul se aplică P+E pentru distribuție gaze (CPV 45231221-0)."
+  },
+  "citat": "simpla menționare a costuri, fără prezentarea unor documente care să demonstreze prețul ofertat nu echivalează cu fundamentarea economică"
+ },
+ {
+  "requirement_id": "REQ-AD-073",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC (p. 17-20). Oferta reprezenta 84,21% din VE. Justificarea a fost cerută pentru 142 de articole, cu termen de 24 de ore; ofertantul a răspuns „aleatoriu” la 9 → neconcludent (HG 395 art. 134 alin. (5)), contestație respinsă. Comparabilitatea e greșită: CPV 45453000-7 (reparații generale și renovare, cu un capitol de stație electrică), VE 1.504.097,97 lei, nu apă-canal. Locatorul trebuie completat cu art. 134 alin. (5) și art. 127 alin. (1) lit. h) HG 395.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 17-20 (L98 art. 210; HG 395 art. 134 alin. (5), art. 136, art. 137 alin. (3) lit. g), art. 127 alin. (1) lit. h)); dispozitiv pag. 21",
+   "conditii_aplicabilitate": "Solicitare de justificare pe articole (142 în speță), chiar dacă prețul total e peste 80% din VE. CNSC a reținut că ofertantul putea cere prelungirea termenului de 24 de ore, nu să răspundă parțial.",
+   "note": "Speța: lucrări de reparații generale și renovare (CPV 45453000-7). Lecție: la termen scurt se cere în scris prelungirea; răspunsul trebuie să acopere TOATE articolele."
+  },
+  "citat": "Legislaţia în vigoare nu interzice autorităților contractante să solicite lămuriri asupra unor elemente de preț din cadrul ofertelor financiare"
+ },
+ {
+  "requirement_id": "REQ-AD-074",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e formulată mai larg și mai categoric decât motivarea (p. 12-14). CNSC NU a statuat că „cantitățile din liste sunt obligatorii” și nici că oferta trebuie respinsă. A reținut că reducerea cantităților, corelată cu o ofertă la ~55% din VE, e un INDICIU care impune verificarea. Nu a găsit justificare pentru lungimea mai mică de conductă și pentru reducerea cu 25% a transportului prin „asimilarea normelor”, și a dispus REEVALUAREA, nu respingerea. La orele de utilaj, CNSC a acceptat parțial reducerile justificate prin productivitate și a respins mai multe critici (motorină, chirie, consumabile, precontract, CI 10%). Locatorul e greșit: L98 art. 210 și HG 395 art. 137 sunt invocate de contestatoare; temeiul CNSC e L101 art. 26 alin. (2).",
+  "corectura_propusa": {
+   "cerinta": "Diminuarea în ofertă a cantităților din listele publicate (lungime de conductă, cantitate transportată) nu se poate justifica prin consumuri proprii sau articole asimilate. Corelată cu un preț mult sub VE (~55%), ea obligă AC să verifice conformitatea PT/PF cu listele de cantități (în speță: reevaluare dispusă). Reducerile de ore de utilaj argumentate prin productivitate și susținute de documente pot fi acceptate. PT trebuie particularizată la rețele de gaze: un PT asamblat din documente-tip (cu erori „Find & Replace”, lucrări de drumuri) impune reverificarea integrală.",
+   "locator": "motivare, pag. 10-14 (L101 art. 26 alin. (2), art. 21 alin. (3)); dispozitiv pag. 15",
+   "conditii_aplicabilitate": "Ofertă la ~55% din VE cu cantități de conductă sau transport reduse față de listele DA.",
+   "note": "Contrapondere: REQ-P2-080 (articolele asimilate sunt permise dacă DA nu le interzice, cu păstrarea conținutului, UM și cantității). CNSC nu a constatat avantajarea ofertantului care elaborase PT."
+  },
+  "citat": "nu regăsește vreo justificare referitoare la cantitatea mai redusă de conductă, neputându-se explica ce normă asimilată poate conduce la reducerea lungimii acesteia"
+ },
+ {
+  "requirement_id": "REQ-AD-075",
+  "verdict": "NUANȚĂ",
+  "problema": "Ambele reguli sunt ale CNSC (p. 37-44), dar contextul e redat imprecis. (1) Regula de 80%: entitatea ceruse justificare DOAR ofertei de pe locul I (70,51%). CNSC a obligat-o să ceară justificare și ofertei de pe locul II (76,63%), deci obligația vizează orice ofertă sub 80% considerată pentru atribuire, nu doar câștigătoarea. (2) Subcontractantul: operatorul de refacere a carosabilului apărea doar într-un contract depus la justificarea prețului, nenominalizat în DUAE sau ofertă. CNSC: răspunsul nu putea fi socotit concludent (HG 394 art. 140 alin. (4)), subcontractanții trebuie cunoscuți înainte de semnare, iar nominalizarea ulterioară nu e permisă. Locatorul citează L98 art. 210 / HG 395 art. 136, care nu apar în motivare; e o entitate sectorială.",
+  "corectura_propusa": {
+   "cerinta": "Entitatea trebuie să ceară justificarea prețului oricărei oferte sub 80% din VE care poate deveni câștigătoare, nu doar celei de pe locul I (L99 art. 222 alin. (1); HG 394 art. 142 alin. (4)). Operatorul care execută efectiv o parte din contract (ex. refacerea sistemului rutier) trebuie declarat subcontractant în DUAE și în ofertă. Prezentarea lui abia la justificarea prețului face răspunsul neconcludent și oferta inacceptabilă (HG 394 art. 140 alin. (4)).",
+   "locator": "motivare, pag. 37-44 (L99 art. 3 alin. (1) lit. zz), art. 202 alin. (3), art. 222 alin. (1); HG 394/2016 art. 140 alin. (4), art. 142 alin. (4)); echivalent clasic: L98 art. 210, HG 395 art. 134 alin. (5), art. 136",
+   "note": "Speța: entitate sectorială, P+E extindere canalizare și racorduri (CPV 45232400-6). Locul I la 70,51% din VE, locul II la 76,63%."
+  },
+  "citat": "nu declarând că societatea ... este subcontractant, fiind nominalizat doar prin clarificări"
+ },
+ {
+  "requirement_id": "REQ-AD-081",
+  "verdict": "GREȘIT",
+  "problema": "Regula atribuie CNSC argumentul autorității contractante. Ideea că „indicele nu se mai publică din martie 2022” e motivarea AC din raportul procedurii. CNSC precizează expres că decizia de anulare e întemeiată „indiferent de modul în care comisia... a ales să se exprime”. Raționamentul CNSC (p. 7-10): formula din OUG 64/2022 art. 17 alin. (8) lit. a1) e concepută EXCLUSIV pentru contractele aflate în derulare la intrarea ordonanței în vigoare. Preluată într-o procedură nouă (luna de referință decembrie 2022), e o eroare care nu se mai putea corecta după deschiderea ofertelor → anulare (L98 art. 212 alin. (1) lit. c) și alin. (2)). În plus, ICCplr nu e un indice INS, ci prognoza Comisiei Naționale de Strategie și Prognoză. Comparabilitatea („apă-canal, fonduri UE”) nu reiese din text: lucrarea e de reparații capitale la clădiri nerezidențiale/amenajare mal Dunăre, iar ordonanța nu era incidentă „de drept”.",
+  "corectura_propusa": {
+   "cerinta": "Formula de ajustare din OUG 64/2022 (art. 17 alin. (8) lit. a1), cu ICCplr din Anexa 4) e destinată exclusiv contractelor aflate în derulare la intrarea în vigoare a ordonanței. Preluată într-o DA nouă, e o eroare care afectează posibilitatea de ajustare și, după deschiderea ofertelor, nu mai poate fi corectată fără încălcarea principiilor. Anularea procedurii a fost confirmată (L98 art. 212 alin. (1) lit. c) și alin. (2)). Indicii din clauza de ajustare trebuie să fie aplicabili procedurii (ICC/ICCm INS, cu luna de referință a procedurii).",
+   "locator": "motivare, pag. 6-10 (OUG 64/2022 art. 1 alin. (3), art. 3 alin. (1), art. 17 alin. (1) și (8) lit. a1), Anexa 4; L98 art. 2 alin. (2), art. 212 alin. (1) lit. c) și alin. (2)); dispozitiv pag. 11",
+   "conditii_aplicabilitate": "DA nouă care preia formula de ajustare din OUG 64/2022 (cu ICCplr).",
+   "note": "Contestație respinsă, anularea a fost menținută. „Nepublicarea din martie 2022” e motivul AC, nu temeiul CNSC. Se suprapune cu REQ-P1-064, cu care se poate comasa."
+  },
+  "citat": "formula de calcul ... este una reglementată în mod expres de legiuitor pentru contracte aflate în derulare, iar nu pentru implementarea unor contracte viitoare"
+ },
+ {
+  "requirement_id": "REQ-AD-084",
+  "verdict": "NUANȚĂ",
+  "problema": "Cifrele sunt corecte (acces efectiv 04.12.2025, termen până la 11.12.2025, contestație transmisă prin e-mail la 09.12.2025, înregistrată la 10.12.2025). Regula e a CNSC (p. 7-9). Condiția e însă mai largă decât speța. Accesul la dosar fusese refuzat nelegal, constatat prin Decizia CNSC 3409/C8/4018 din 12.11.2025. AC a republicat comunicarea pe 28.11.2025 fără să dea acces, iar accesul efectiv a venit doar după o nouă cerere. O simplă cerere de acces formulată de ofertant nu amână, în sine, termenul. În plus, locatorul „pct. I” nu corespunde structurii deciziei.",
+  "corectura_propusa": {
+   "cerinta": "Când AC refuză sau amână nelegal accesul la dosarul achiziției, termenul de contestare (7 zile sub prag, L101 art. 8 alin. (1) lit. b)) curge de la data accesului efectiv la documentele care fundamentează rezultatul (în speță 04.12.2025 → 11.12.2025), nu de la republicarea comunicării. Data relevantă e sesizarea CNSC și a AC (transmitere prin e-mail), nu înregistrarea la destinatar.",
+   "locator": "motivare, pag. 7-9 („Cu privire la excepția tardivității contestației”; L101 art. 8 alin. (1) lit. b); trimitere la Decizia CNSC 3409/C8/4018 din 12.11.2025); dispozitiv pag. 19",
+   "conditii_aplicabilitate": "Contestarea rezultatului când accesul la dosar a fost refuzat sau întârziat nelegal (în speță refuz constatat anterior de CNSC). Prudență: nu se va conta pe acest start de termen dacă accesul a fost doar cerut, fără refuz nelegal. Contestația se depune preventiv în 7/10 zile de la comunicare.",
+   "note": "Speța: Municipiul Bistrița, P+E (PT+CS+DE + execuție), rețele și branșamente gaze. Excepția tardivității a fost respinsă."
+  },
+  "citat": "simpla publicare în SEAP a unei comunicări a rezultatului procedurii nu echivalează cu luarea la cunoștință a actelor considerate nelegale"
+ },
+ {
+  "requirement_id": "REQ-AD-086",
+  "verdict": "NEVERIFICAT",
+  "problema": "Textul deciziei 2863/C4/3581/25.09.2025 (BO2025_2863) nu există local. Am găsit doar o mențiune secundară în r1.txt, privind plafoanele de cauțiune. Nu am putut verifica faptul (3 zile întârziere), calificarea termenului ca „de decădere” și temeiul (L101 art. 61^1). Condiția „Orice contestație” e probabil prea largă: cauțiunea sub prag și peste prag și momentul constituirii diferă.",
+  "corectura_propusa": {
+   "note": "De descărcat decizia BO2025_2863 și de verificat pe partea „Consiliul reține”: termenul aplicat, natura sancțiunii (respingere vs. anulare, art. 61^1 alin. (3)) și cifra de 3 zile. Până atunci: verificat_pe_sursa=false."
+  },
+  "citat": ""
+ },
+ {
+  "requirement_id": "REQ-AD-121",
+  "verdict": "OK",
+  "problema": "Confirmat după corectura anterioară a locatorului (p. 51-54). Factorul de evaluare cerea alocarea resurselor „pe fiecare tronson specificat în schema de calcul aferentă proiectului tehnic”, deși la P+E PT-ul nu există, iar SF-ul nu definește „tronsonul”. Remedierea nu mai era posibilă după termenul de depunere, deci procedura a fost anulată (L101 art. 26 alin. (2) și (7)). CNSC citează și CJUE C-42/13. Se poate adăuga pagina.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 51-54 (L98 art. 154 alin. (1), art. 2 alin. (2); L101 art. 26 alin. (2) și (7); CJUE C-42/13 pct. 42-44); art. 187/189 L98 doar în argumentele contestatorului"
+  },
+  "citat": "în lipsa unui definiții clare a noțiunii de „tronson” din cadrul documentației de atribuire ... ofertanții sunt în imposibilitatea"
+ },
+ {
+  "requirement_id": "REQ-AD-122",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 24-28). Factorii „incluziune socială” (angajați din comună), „achiziții responsabile social” (training SSM, asigurări facultative) și „achiziții ecologice” (vehicule electrice) au fost eliminați: nu reflectă un avantaj pentru AC, direcționează contractul către firme locale și nu pot fi verificați fără PT. Cerințele de liste de cantități, extrase de resurse, plan de amplasament, documente pentru agregate și starea utilajelor sunt elemente din PT/execuție (HG 907 art. 12, anexa 10), nu din ofertă. Locatorul trebuie completat cu HG 395 art. 32 alin. (8)-(9).",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 24-28 (L98 art. 187 alin. (4), (5) lit. a), art. 189 alin. (1)-(3); HG 395 art. 32 alin. (8)-(9); HG 907/2016 art. 12 și anexa 10; Instr. ANAP 1/2017)",
+   "note": "Contestația unui alt operator a fost respinsă ca inadmisibilă. Cerințele privind dreptul de exploatare a agregatelor și ITP-ul utilajelor pot fi cel mult cerințe de executare, pentru câștigător."
+  },
+  "citat": "niciunul din cei 3 factori de evaluare ... nu reflectă vreun avantaj pe care autoritatea contractantă îl poate obține"
+ },
+ {
+  "requirement_id": "REQ-AD-130",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e a CNSC și e corectă (p. 9-11). Problema 1: locatorul repetă tiparul de la REQ-AD-121. Pct. 1.4, 2.2.3 și 3.3.1.4 din P91/1-02 apar în textul întrebării de clarificare și în argumentele contestatorului, reproduse de CNSC. Motivarea proprie a CNSC se întemeiază pe Ord. MLPTL 1568/2002 (aplicare „nu... facultativă”), Dir. 2014/24/UE cons. 74, L98 art. 160 (răspunsuri clare și complete) și art. 212 alin. (1) lit. c), alin. (2). Problema 2: contextul lipsește. Contestația a vizat RĂSPUNSURILE la clarificări (contradictorii), iar anularea s-a dispus pentru că ofertele fuseseră deja deschise. Lucrarea: modernizare carosabil pe două străzi, Dobroești (VE 1,30 mil. lei).",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 9-11 (Ord. MLPTL 1568/2002 – P91/1-02; Dir. 2014/24/UE cons. 74; L98 art. 160 alin. (1)-(2), art. 212 alin. (1) lit. c) și alin. (2)); pct. 1.4, 2.2.3, 3.3.1.4 din P91/1-02 doar în întrebarea de clarificare și în argumentele contestatorului",
+   "note": "Numărul deciziei e anonimizat în PDF; identificată după numele fișierului BO2018_6476. Speța: răspunsuri contradictorii (acceptă „propriile consumuri” în principiu, le refuză în concret; distanță de transport impusă de 5 km)."
+  },
+  "citat": "A impune aceleași consumuri înseamnă, implicit, a defavoriza pe respectivii ofertanți, care pot veni cu produse mai noi, mai competitive"
+ },
+ {
+  "requirement_id": "REQ-AD-135",
+  "verdict": "NUANȚĂ",
+  "problema": "Regula e prea largă și locatorul e greșit. Problema 1: CNSC (p. 11-13) a aplicat o interdicție EXPRESĂ din fișa de date („Nu se acceptă prețuri unitare diferite pentru același tip de operațiune/resursă”). Problema 2: CNSC a admis o excepție. Articolele cu înălțimi diferite ale camerei de lucru (art. 18-20 ACD04B1) NU intră sub interdicție: „operațiune” și „resursă” se referă la elemente simple, iar un cămin e un cumul de resurse. Problema 3: respingerea s-a bazat pe lipsa răspunsului pentru articolele cu descriere identică (25, 14, 07), deci răspuns parțial (HG 395 art. 134 alin. (5)); diferența de doar 209,23 lei a fost irelevantă. L98 art. 209-210 și HG 395 art. 136-137 sunt invocate de AC, nu de CNSC.",
+  "corectura_propusa": {
+   "cerinta": "Când DA interzice expres prețuri unitare diferite pentru același tip de operațiune/resursă, articolele cu descriere și rețetă identice trebuie ofertate la același preț în toate devizele. La solicitarea de clarificare, diferențele trebuie justificate pentru TOATE pozițiile vizate: răspunsul parțial duce la inacceptabilitate (HG 395 art. 134 alin. (5)), indiferent de valoarea mică a diferenței. Articolele distincte (ex. cămine cu înălțimi diferite) nu intră sub interdicție.",
+   "locator": "motivare, pag. 11-13 (HG 395 art. 134 alin. (5); fișa de date pct. IV.4.2); dispozitiv pag. 14",
+   "conditii_aplicabilitate": "DA cu interdicție expresă de prețuri unitare diferite; oferte cu mai multe devize/obiecte.",
+   "note": "Speța: alimentare cu apă și canalizare (rest de executat), VE 3,87 mil. lei. Verificator ERP: același simbol + aceeași descriere/rețetă = același preț; semnalare, nu blocare, pentru variante distincte."
+  },
+  "citat": "elementele de cămin reprezintă un cumul de resurse, dintre care nu toate sunt identice"
+ },
+ {
+  "requirement_id": "REQ-AD-141",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 13-15). CNSC a validat metoda AC: 3.000 lei × 12 / 2.007,99 ore = 17,928 lei/oră. Concediul de odihnă (20 de zile = 160 ore) e inclus în cele 2.007,99 ore, nu se scade din ele. Calculul de 19,48 lei/oră al contestatorului e greșit; câștigătorii ofertaseră 18 lei/oră, cu concediul inclus în manopera directă. Valorile sunt specifice anului 2020 (HG 935/2019, OUG 114/2017 art. 71 modificat de OUG 43/2019) și trebuie actualizate pentru anul ofertei.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 13-15 (HG 935/2019 art. 1; OUG 114/2017 art. 71 mod. prin OUG 43/2019; Codul muncii art. 144, 145, 150; art. 112 în argumentele AC însușite de CNSC); dispozitiv pag. 16",
+   "note": "CNSC reconfirmă că tariful trebuie să includă costul concediului (Deciziile CNSC 101/C1/3487/2019 și 978/C9/903/2018), dar acesta e deja acoperit în salariul anual raportat la orele normate. Salariul minim în construcții din anul ofertei trebuie parametrizat în ERP."
+  },
+  "citat": "Consiliul apreciază că formula corectă de calcul este cea redată de achizitoare ... Tarif orar: 36000 lei/ 2007,99 ore = 17,928 lei/ora"
+ },
+ {
+  "requirement_id": "REQ-P1-064",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 7-10). CNSC: formula din OUG 64/2022 art. 17 alin. (8) lit. a1) e reglementată pentru contractele în derulare. Preluată într-o procedură nouă, e o eroare care nu poate fi corectată după deschiderea ofertelor, iar anularea e întemeiată (L98 art. 212 alin. (1) lit. c), alin. (2)). Locatorul poate fi extins la p. 7-10.",
+  "corectura_propusa": {
+   "locator": "motivare, pag. 7-10 (OUG 64/2022 art. 3 alin. (1), art. 17 alin. (1) și (8) lit. a1); L98 art. 212 alin. (1) lit. c) și alin. (2))",
+   "note": "Completează REQ-AD-081 (corectat, cu care poate fi comasat). CNSC a respins și remedierea propusă de contestator (raport = 1 „prin voința părților”), pentru încălcarea transparenței."
+  },
+  "citat": "o formulă de calcul concepută expres pentru contracte aflate deja în derulare"
+ },
+ {
+  "requirement_id": "REQ-P1-065",
+  "verdict": "NUANȚĂ",
+  "problema": "Problema 1: locatorul include p. 2, care e argumentul contestatorului. Constatarea CNSC e la p. 9 (Anexa 4 calculată cu luna de referință februarie 2022, inclusiv pentru 2023) și p. 10 (răspunsul INS: nu poate furniza ICC prognozat). Problema 2: afirmația că ICCplr „se găsește doar în Anexa 4” e prea absolută. Contestatorul a susținut că CNSP i-a comunicat că indicele e calculat pentru tot anul 2022 și poate fi pus la dispoziție la cerere, iar CNSC nu a infirmat acest lucru. Și-a întemeiat soluția pe destinația formulei, nu pe nedisponibilitatea indicelui.",
+  "corectura_propusa": {
+   "cerinta": "ICCplr e un indice PROGNOZAT de Comisia Națională de Strategie și Prognoză, tabelat în Anexa 4 a OUG 64/2022 cu ultima lună de referință februarie 2022 (inclusiv pentru 2023). INS nu îl publică și nu îl poate furniza: publică doar ICC realizat (Buletinul Statistic de Prețuri, tab. 15).",
+   "locator": "motivare, pag. 9 (Anexa 4, luna de referință februarie 2022) și pag. 10 (răspunsul INS); pag. 2 = argumentele contestatorului",
+   "note": "Pentru o procedură nouă, problema principală nu e disponibilitatea indicelui, ci faptul că formula nu e destinată contractelor viitoare (vezi REQ-P1-064)."
+  },
+  "citat": "INS nu poate furniza valoarea ICC prognozat, ci doar valorile obținute conform metodologiei de elaborare a acestui indicator"
+ },
+ {
+  "requirement_id": "REQ-P1-066",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 9). CNSC citește OUG 64/2022 art. 1 alin. (3): valorile estimate ale procedurilor neîncepute sau reluate „se pot actualiza” cu ICC total lunar publicat de INS la data actualizării devizului general. De aici reține că legiuitorul nu a prevăzut aplicarea formulelor de ajustare la procedurile viitoare. Formularea „permite doar” e o inferență a CNSC, redată corect. Data de 09.05.2022 din condiții nu apare în decizie și trebuie verificată pe MO.",
+  "corectura_propusa": {
+   "conditii_aplicabilitate": "Proceduri neîncepute sau reluate la data intrării în vigoare a OUG 64/2022 (data se verifică în MO; nu e menționată în decizie)."
+  },
+  "citat": "nici măcar legiuitorul nu a prevăzut ca procedurilor viitoare să li se aplice formulele de ajustare indicate în actul normativ"
+ },
+ {
+  "requirement_id": "REQ-P2-066",
+  "verdict": "OK",
+  "problema": "Textul corespunde (p. 13, poz. 132.2.1.4, capitolul „Stație electrică”) din lista articolelor din solicitarea de clarificări a AC, reprodusă în decizie. Descrierea omite doar „la fundații, canale, drumuri” și „în pământ cu umiditate naturală”. Nu e o regulă CNSC, ci un exemplu documentar, deci temei_tip PRACTICA_CNSC e impropriu (sursa e doar purtătoare).",
+  "corectura_propusa": {
+   "locator": "decizie pag. 13, poz. 132.2.1.4 (lista articolelor din solicitarea AC de justificare a prețului)",
+   "note": "Exemplu documentar de nomenclator (simbol din normele de deviz), nu regulă CNSC. Text integral: „...executată cu sprijiniri, cu evacuare manuală, la fundații, canale, drumuri etc în pământ cu umiditate naturală adâncimea săpăturii 0-1,5 m teren foarte tare”."
+  },
+  "citat": "TSA04D1 Săpătură manuală de pământ în spații limitate, având sub 1 m lățime și maximum 4.50 m adâncime, executată cu sprijiniri"
+ },
+ {
+  "requirement_id": "REQ-P2-078",
+  "verdict": "NUANȚĂ",
+  "problema": "Pozițiile 135-138 (p. 13) există, dar descrierile sunt trunchiate tocmai la elementele care definesc varianta (sufixul A1/D1). DA06A1: „...funcția de rezistență, filtrantă, izolatoare, antigelivă și anticapilară, CU AȘTERNERE MANUALĂ”. DB02D1: „...executată cu EMULSIE CATIONICĂ CU RUPERE RAPIDĂ”. DE10A1 are fundație din beton de 30×15 cm. Articolele sunt din capitolul „Stație electrică” al unei lucrări de renovare, nu dintr-un dosar de rețele. E un exemplu documentar, nu o regulă CNSC.",
+  "corectura_propusa": {
+   "cerinta": "Coduri D citate într-un dosar CNSC: DA06A1 strat de agregate naturale cilindrate (rezistență, filtrant, izolator, antigeliv, anticapilar), cu așternere manuală; DA14A1 fundație din beton de ciment la străzi, alei și platforme carosabile; DE10A1 borduri prefabricate din beton pentru trotuare 20×25 cm pe fundație din beton 30×15 cm; DB02D1 amorsarea suprafețelor straturilor de bază sau a îmbrăcăminților existente, înainte de stratul de uzură din mixtură asfaltică, cu emulsie cationică cu rupere rapidă.",
+   "locator": "decizie pag. 13, poz. 135-138 (2.1.9, 2.1.12, 2.1.13, 2.1.14) din lista articolelor din solicitarea AC",
+   "note": "Exemplu documentar de nomenclator, nu regulă CNSC. Litera și cifra finală (A1, D1) codifică varianta tehnologică, care trebuie păstrată."
+  },
+  "citat": "DB02 D1 Amorsarea suprafețelor straturilor de bază sau a îmbrăcăminților existente ... executată cu: emulsie cationică cu rupere rapidă"
+ },
+ {
+  "requirement_id": "REQ-P2-080",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 33-34). CNSC: AC nu interzisese articolele asimilate. Contestatorul nu a dovedit că asimilarea încalcă PT, CS sau reglementările tehnice. „Simpla nerespectare a simbolurilor” nu determină neconformitatea PF. Merită precizat că regula a fost reținută și în lipsa probelor contestatorului (sarcina probei). Speța: renovare energetică a unei clădiri publice (colegiu), PNRR.",
+  "corectura_propusa": {
+   "conditii_aplicabilitate": "Oferte cu articole „asimilate” în locul simbolurilor din F3, când DA nu le interzice și asimilarea nu afectează conținutul tehnic din PT/CS. Cine contestă trebuie să dovedească încălcarea.",
+   "note": "Contrapondere: REQ-AD-074 (cantitățile F3 nu se reduc prin asimilare). În aceeași decizie, clarificările AC au vizat diferențe de cantitate și UM la articole asimilate, tratate separat."
+  },
+  "citat": "Simpla nerespectare a simbolurilor noemelor de deviz puse la dispoziție de autoritatea contractantă nu determină neconformitatea propunerii financiare"
+ },
+ {
+  "requirement_id": "REQ-SL-056",
+  "verdict": "OK",
+  "problema": "Cifrele sunt confirmate în cnsc_raport2025.txt. Lucrările: 1.971 de contestații (38,06%) din 5.178 (p. 21). Admiteri: 1.724 decizii (43,5%), respingeri: 2.234 contestații (56,5%). Din admiteri: 1.630 (94,6%) remediere, 92 (5,4%) anulare (p. 58). Procentele se raportează la cele 3.958 de soluționări, nu la cele 5.178 de contestații înregistrate. E date statistice, nu jurisprudență.",
+  "corectura_propusa": {
+   "locator": "Raport CNSC 2025, p. 21 (obiect: lucrări 1.971/5.178) și p. 58 (soluții: 43,5% / 56,5%; 94,6% / 5,4%)",
+   "note": "Baza procentelor: 3.958 de soluționări (1.724 + 2.234), nu 5.178 de contestații înregistrate. Temei mai potrivit: statistică oficială CNSC."
+  },
+  "citat": "intermediul a 1.724 de decizii admiterea contestaţiilor formulate de operatorii economici (43,5%), în vreme ce în cazul a 2.234 de contestaţii (56,5%)"
+ },
+ {
+  "requirement_id": "REQ-SL-057",
+  "verdict": "OK",
+  "problema": "Confirmat (p. 64-65, conform auditului anterior): 3.958 de decizii, 1.130 atacate, 82 desființate/modificate în tot, 173 în parte, 6,4%, 118 nesoluționate. Date statistice, nu jurisprudență.",
+  "corectura_propusa": {
+   "locator": "Raport CNSC 2025, p. 64-65 (plângeri la curțile de apel)"
+  },
+  "citat": "un număr de 1130 au fost atacate cu plângere"
+ },
+ {
+  "requirement_id": "REQ-SL-058",
+  "verdict": "OK",
+  "problema": "Cifrele sunt confirmate în cnsc_raport2024.txt. Lucrările: 1.651 (36,45%) din 4.529 (p. 23). Admiteri: 1.569 (42,6%), respingeri: 2.113 (57,37%). Din admiteri: 59 (3,76%) anulare, 1.510 (96,24%) remediere (p. 50). Date statistice, nu jurisprudență.",
+  "corectura_propusa": {
+   "locator": "Raport CNSC 2024, p. 23 (obiect: lucrări 1.651/4.529) și p. 50 (soluții: 42,6% / 57,37%; 3,76% / 96,24%)"
+  },
+  "citat": "în cazul a 2.113 de contestaţii (57,37%) a dispus respingerea"
+ }
+]
