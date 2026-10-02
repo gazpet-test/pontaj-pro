@@ -2993,7 +2993,7 @@ function ReportsPage() {
     const {data:emps}=await eq
     // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
     let recs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
     const alocare=alocaDiurneTransa({recsLuna:recs,df,dt,legalSet:legalSetSave,diurnaAmt})
 
     const empStats=(emps||[]).map(emp=>{
@@ -3112,7 +3112,7 @@ function ReportsPage() {
           .select('*, sites(name)')
           .gte('date', monthStart).lte('date', rangeEnd)
           .in('employee_id', empIds)
-          .range(off, off + 999)
+          .order('employee_id').order('date').range(off, off + 999)
         if (!page || page.length === 0) break
         allRecs.push(...page)
         if (page.length < 1000) break
@@ -4367,7 +4367,7 @@ function ReportsPage() {
     let recs = []
     let off = 0
     while (true) {
-      const { data: page } = await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).range(off, off+999)
+      const { data: page } = await supabase.from('pontaj_records').select('*').gte('date',from).lte('date',to).order('employee_id').order('date').range(off, off+999)
       if (!page || page.length === 0) break
       recs.push(...page)
       if (page.length < 1000) break
@@ -4838,7 +4838,7 @@ function ReportsPage() {
     // TOATE înregistrările lunii/lunilor (nu doar df→dt, nu doar diurna): din ele ies CO-ul (plafon) și bifele dinaintea tranșei
     // Paginare manuală
     let allRecs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; allRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*,sites(name)').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; allRecs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
 
     // Tranșele deja salvate din aceeași lună (period_to < df) — DOAR pentru reconciliere („Diferență față de plătit"):
     // ce s-a plătit efectiv vs ce ar fi trebuit conform alocării; nu se absoarbe în tranșa curentă
@@ -5128,7 +5128,7 @@ function ReportsPage() {
       const {data:emps}=await eq
       // TOATE înregistrările lunii/lunilor — pentru plafon (CO) și bifele dinaintea tranșei
       let recs = []
-      { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+      { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('employee_id,date,diurna,norma').gte('date',monthStart).lte('date',monthEnd).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
       const {data:st}=await supabase.from('settings').select('*')
       const getSetting=(k,def)=>{const f=st?.find(x=>x.key===k);return f?f.value:def}
       const diurnaAmt=Number(getSetting('diurna_amount',50))
@@ -5185,7 +5185,7 @@ function ReportsPage() {
     const {data:emps}=await eq
     // Paginare manuală
     let recs = []
-    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id)).range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
+    { let off=0; while(true){ const {data:p}=await supabase.from('pontaj_records').select('*').eq('meal_supplement',true).gte('date',sf).lte('date',st2).in('employee_id',(emps||[]).map(e=>e.id)).order('employee_id').order('date').range(off,off+999); if(!p||p.length===0)break; recs.push(...p); if(p.length<1000)break; off+=1000; if(off>200000)break } }
     const empStats=(emps||[]).map(emp=>{const er=(recs||[]).filter(r=>r.employee_id===emp.id);return {...emp,zile:er.length,val:er.length*suplAmt}}).filter(e=>e.zile>0).sort((a,b)=>a.name.localeCompare(b.name))
     if(!empStats.length){showToast('Nu există suplimente în perioadă','warn');setExpS(false);return}
     const from=new Date(sf).toLocaleDateString('ro-RO'),to=new Date(st2).toLocaleDateString('ro-RO')
