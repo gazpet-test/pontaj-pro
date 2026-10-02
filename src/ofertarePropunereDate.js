@@ -13,8 +13,12 @@ export function clasificaDoveziPT(acoperiri) {
   return { dovedite, propuse }
 }
 
-export const inchisaCuDovadaPT = (id, legaturi, dovedite) => dovedite.has(id)
-  && !legaturi.some(l => l.fel === 'capitol' || l.fel === 'exceptat')
+// J02b (paritate cu v_ofertare_pt_stare: fara_capitol = NOT are_capitol AND NOT exceptata AND NOT dovedita):
+//   o exceptare scoate cerința din „închise cu dovadă” DOAR dacă e ÎNCHISĂ — confirmată de om, sau J02b oprit pe
+//   licitație (legacy). Al 4-lea argument = stareExceptarePT(...).inchisa. Fără el: regula legacy (orice 'exceptat').
+//   Altfel, o propunere AI neconfirmată + dovadă R06 ar dispărea din AMBELE filtre („fără capitol” și „cu dovadă”).
+export const inchisaCuDovadaPT = (id, legaturi, dovedite, exceptataInchisa = legaturi.some(l => l.fel === 'exceptat')) =>
+  dovedite.has(id) && !legaturi.some(l => l.fel === 'capitol') && !exceptataInchisa
 
 // Nici eroarea PostgREST, nici o promisiune respinsă nu devin liste goale.
 export async function citesteSursePT(surse) {

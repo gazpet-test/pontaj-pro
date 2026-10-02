@@ -6,6 +6,7 @@ import { estDovadaVerificataPT, clasificaDoveziPT, inchisaCuDovadaPT,
   citesteSursePT, citesteDatePT, creeazaGardaIncarcarePT } from './ofertarePropunereDate.js'
 import { MatriceCerinte } from './OfertarePropunere.jsx'
 import { evalueazaPoarta } from './ofertarePoarta.js'
+import { indexConfirmari, TIP_EXCEPTAT_PT } from './ofertareNeaplicabil.js'
 
 vi.mock('./lib/supabase.js', () => ({ supabase: {} }))
 
@@ -59,8 +60,24 @@ describe('QW0 — dovadă R06 și matrice', () => {
     expect(matrice(dovezi)).toContain('✓ dovadă în registru')
   })
 
-  it.each(['capitol', 'exceptat'])('legătura %s exclude cerința din contorul închise cu dovadă', fel => {
-    expect(matrice([acoperire({})], { filtru: 'dovada', legaturi: [{ cerinta_id: 1, fel }] })).toContain('0 cerințe')
+  it('legătura capitol exclude cerința din contorul închise cu dovadă', () => {
+    expect(matrice([acoperire({})], { filtru: 'dovada', legaturi: [{ cerinta_id: 1, fel: 'capitol' }] })).toContain('0 cerințe')
+  })
+
+  // J02b × QW0 (Jakarinos, discuția qw0_merge.md, Round 1): paritate cu v_ofertare_pt_stare — o exceptare scoate
+  // dovada R06 din „închise cu dovadă” doar când e ÎNCHISĂ (confirmată / J02b oprit). Neconfirmată ⇒ rămâne cu dovadă.
+  const exc = [{ cerinta_id: 1, fel: 'exceptat', sursa: 'ai' }]
+  const confirmata = valida => indexConfirmari([{ cerinta_id: 1, tip: TIP_EXCEPTAT_PT, valida }])
+  it.each([
+    ['J02b oprit (legacy): orice exceptare închide', { j02b: false }, '0 cerințe', '0 cerințe'],
+    ['J02b activ + confirmare validă: exceptată, nu „cu dovadă”', { j02b: true, naIdx: confirmata(true) }, '0 cerințe', '0 cerințe'],
+    ['J02b activ + propunere AI neconfirmată: rămâne cu dovadă R06', { j02b: true, naIdx: indexConfirmari([]) }, '1 cerințe', '0 cerințe'],
+    ['J02b activ + confirmare invalidată: rămâne cu dovadă R06', { j02b: true, naIdx: confirmata(false) }, '1 cerințe', '0 cerințe'],
+  ])('%s', (_, props, cuDovada, faraCapitol) => {
+    expect(matrice([acoperire({})], { filtru: 'dovada', legaturi: exc, ...props })).toContain(cuDovada)
+    // niciun rând nu dispare din ambele filtre: dacă nu e „cu dovadă” e exceptat închis, nu „fără capitol”
+    expect(matrice([acoperire({})], { filtru: 'fara', legaturi: exc, ...props })).toContain(faraCapitol)
+    expect(matrice([acoperire({})], { legaturi: exc, ...props }).includes('✓ dovadă în registru')).toBe(cuDovada === '1 cerințe')
   })
 
   it('gata include atribuirea blocată, dar eticheta nu pretinde verificarea; constatarea rămâne vizibilă', () => {

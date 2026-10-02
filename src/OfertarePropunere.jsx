@@ -335,7 +335,7 @@ export function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, 
     if (filtru === 'fara')    return !areCap && !exceptat && !cuDovada
     if (filtru === 'capcane') return RX_CAPCANA.test(c.text_cerinta || '') && !areCap && !exceptat
     if (filtru === 'forma')   return c.tip === 'forma'
-    if (filtru === 'dovada')  return inchisaCuDovadaPT(c.id, ls, dovedite)
+    if (filtru === 'dovada')  return inchisaCuDovadaPT(c.id, ls, dovedite, exceptat)
     if (filtru === 'gata')    return areCap || exceptat
     // P0c: are capitol, dar nu e confirmată de om în registru (E2) — rândul de poartă „neconfirmate”.
     if (filtru === 'neconfirmate') return areCap && !c.confirmata_de
@@ -426,7 +426,7 @@ export function MatriceCerinte({ licId, profiluri, cerinte, legaturi, capitole, 
                   <span style={{ fontSize:11, color: c.tip === 'forma' ? G.purple : G.blue }}>{c.tip}</span>
                   {c.sursa_sectiune && <span style={{ fontSize:11, color:G.dim }}>{c.sursa_sectiune}{c.sursa_pagina ? ` p.${c.sursa_pagina}` : ''}</span>}
                   {capcana && <span style={{ fontSize:11, color:G.red, fontWeight:700 }}>🚫 CAPCANĂ</span>}
-                  {inchisaCuDovadaPT(c.id, ls, dovedite) && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
+                  {inchisaCuDovadaPT(c.id, ls, dovedite, excSt.inchisa) && <span style={{ fontSize:11, color:G.teal }}>✓ dovadă în registru</span>}
                   {propuse.has(c.id) && <span style={{ fontSize:11, color:G.orange }}>dovadă propusă — neverificată pe scan</span>}
                   {capNr && <span style={{ fontSize:11, color:G.green, fontWeight:600 }}>→ {capNr.eticheta || `cap. ${capNr.nr}`}</span>}
                   {exc && excSt.inchisa && <span style={{ fontSize:11, color: j02b ? G.dim : G.orange }} title={exc.motiv}>{excSt.eticheta}</span>}
@@ -1289,10 +1289,13 @@ export default function PropunerePanel({ licitatii = [], showToast, initialLicId
       // J02b: lipsă view (migrare neaplicată) / eroare ⇒ index gol ⇒ nicio exceptare nu e verde (fail-closed).
       //   Citit separat, NU prin citesteSursePT: o eroare aici închide exceptările, nu ascunde tot ecranul.
       const idsCer = (r.ofertare_cerinte || []).map(c => c.id)
-      const rNa = idsCer.length
-        ? await supabase.from('v_ofertare_cerinte_na_stare').select('cerinta_id, tip, valida, revocata_la, motiv, confirmat_la')
+      let rNa = { data: [] }
+      if (idsCer.length) {
+        try {
+          rNa = await supabase.from('v_ofertare_cerinte_na_stare').select('cerinta_id, tip, valida, revocata_la, motiv, confirmat_la')
             .in('cerinta_id', idsCer).limit(10000)
-        : { data: [] }
+        } catch (e) { rNa = { data: [], error: e } }   // și o promisiune respinsă ⇒ index gol, nu panou căzut
+      }
       // J07: poarta verificată pe server — nu aruncă; eroarea devine BLOCK în rândul „server” al porții.
       const server = await citestePoartaServer(supabase, id, { recalculeazaText: true })
       if (!garda.current.actual(token)) return
