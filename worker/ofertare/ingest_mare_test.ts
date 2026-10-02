@@ -106,7 +106,12 @@ function bd(tabele: Record<string, any[]>, fisiere: Record<string, Uint8Array>) 
     }
     return b
   }
-  const rpc = (nume: string, a: any) => Promise.resolve({ data: nume === 'ofertare_doc_de_citit' ? (/\.pdf *\d*$/i.test(a.p_nume) && a.p_tip !== 'plansa') : null, error: null })
+  // GARDA (docs/INGEST_GARDA.md): aici garda lasă mereu să treacă (cu token de încercare, runda 2) — logica ei e testată în
+  // src/ingestGarda.test.js, SQL-ul în scripts/test_ingest_garda.mjs, exact-once pe worker în ingest_garda_test.ts
+  const rpc = (nume: string, a: any) => Promise.resolve({ data: nume === 'ofertare_doc_de_citit' ? (/\.pdf *\d*$/i.test(a.p_nume) && a.p_tip !== 'plansa')
+    : nume === 'ofertare_ingest_garda_incearca' ? { actiune: 'continua', token: crypto.randomUUID(), descarcari: 1, incercari_esuate: 0 }
+    // runda 3: serverul acceptă tokenul și scrie p_doc (J2) — aici fără concurență
+    : nume === 'ofertare_ingest_garda_rezultat' ? (a.p_doc && Object.assign(tabele.ofertare_documente_atribuire.find((r: any) => r.id === a.p_doc_id) ?? {}, structuredClone(a.p_doc)), { acceptat: true }) : null, error: null })
   const storage = { from: () => ({
     download: (p: string) => Promise.resolve(fisiere[p] ? { data: new Blob([fisiere[p] as BlobPart]), error: null } : { data: null, error: { message: 'Object not found' } }),
     createSignedUrl: (p: string) => Promise.resolve(fisiere[p] ? { data: { signedUrl: 'data:application/pdf;base64,' + btoa(String.fromCharCode(...fisiere[p])) }, error: null } : { data: null, error: { message: 'Object not found' } }),
@@ -155,7 +160,9 @@ Deno.test({ name: 'proceseazaIngest: 770 (ignorat pe mărime) citit pe felii; do
   // (2) 900: răspunsul 546 fără `error` e EROARE cu motivul real (3 apeluri: 1 + 2 reîncercări), nu „citit” — înainte:
   //     „gata (?/? pagini, AI)”, citite++ și buclă; motivul scris era „revine în coadă…”, nu cauza
   assertEquals(apeluri.peDoc[900], 3)
-  assertEquals(d(900).status_procesare, 'eroare'); assertEquals(d(900).eroare, 'eroare: WORKER_LIMIT: Memory limit exceeded (HTTP 546)')
+  // #553 r4: după predarea către edge, workerul NU mai scrie pe document (ownership la gardă/edge; invocarea moartă
+  // se contabilizează ca abandonată de gardă); înainte: 'eroare' scris direct de worker
+  assertEquals(d(900).status_procesare, 'neprocesat')
   // (3) 901: ok:true dar rămâne candidat → a doua trecere e oprită de plasă (fără al doilea apel la edge)
   assertEquals(apeluri.peDoc[901], 1); assertEquals(apeluri.edge - edge0, 4)
   assertEquals(d(901).status_procesare, 'eroare'); assertMatch(d(901).eroare, /revine în coadă după o trecere în aceeași tură/)

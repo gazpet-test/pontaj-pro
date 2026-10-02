@@ -29,6 +29,17 @@ COMMIT;
 - Precondițiile cer starea exactă a patch-ului. Postcondițiile cer starea exactă din 29.09.
 - La final, fișierul dezarmează și sesiunea.
 
+## 20260930k — garda citirii automate Ofertare (`20260930k_ofertare_ingest_garda_ROLLBACK.sql`, PR #553)
+Scoate tabelul `ofertare_ingest_garda` și cele 4 funcții. Cu edge-ul `ofertare-ingest-doc` v13 deployat, citirea automată se oprește complet (fail-closed). Revenirea la v12 e o decizie separată.
+
+**Procedura (doar după decizie + review).** Un singur string:
+```sql
+BEGIN;
+SELECT set_config('gazpet.revenire_20260930k', 'SCOATE_GARDA_INGEST:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Siguranțele (armare legată de txid, refuz la armare persistentă, precondiție pe amprenta exactă, DROP fără CASCADE) sunt descrise în antetul fișierului.
 ## 20261003d — SEC HR tokenuri concediu (NEAPLICAT)
 
 Fișierele de aici **nu sunt migrări** și **nu le parcurge niciun runner** (Supabase CLI/MCP citesc doar
