@@ -126,6 +126,30 @@ elif [ -f "$LISTA" ]; then
 fi
 for m in ${PRECONDITII[@]+"${PRECONDITII[@]}"} ${MIGRARI[@]+"${MIGRARI[@]}"}; do [ -f "$(cale_abs "$m")" ] || mediu "migrare lipsă: $m"; done
 
+# 02.10.2026 (gate 0e, 20261002c): orice migrare din listă sau fișier de teste care poartă interogarea de control 0e (marcajul
+# „-- SEC F2 0e (r8)” … „ORDER BY 1”) trebuie să o aibă IDENTICĂ cu scripts/control_0e.sql (normalizat linie cu linie, ca în
+# scripts/test_sec_f1_f2.sh) — altfel postcondiția / testul ar dovedi altceva decât gate-ul permanent al runner-ului.
+verifica_0e_identic() {
+  local ctrl="$RADACINA/scripts/control_0e.sql" f n
+  [ -f "$ctrl" ] || return 0
+  for f in "$TESTE" ${MIGRARI[@]+"${MIGRARI[@]}"}; do
+    f="$(cale_abs "$f")"
+    grep -q -- '-- SEC F2 0e (r8)' "$f" || continue
+    n="$(python3 - "$f" "$ctrl" <<'PY'
+import re, sys
+def qs(p):
+    return ["\n".join(l.strip() for l in m.split("\n")) for m in re.findall(r"(-- SEC F2 0e \(r8\).*?ORDER BY 1)[;\n]", open(p, encoding="utf-8").read(), re.S)]
+a, c = qs(sys.argv[1]), qs(sys.argv[2])
+if len(c) != 1 or not a or len(set(a + c)) != 1:
+    print("diferă/lipsesc: fișier %d, control %d, distincte %d" % (len(a), len(c), len(set(a + c)))); sys.exit(1)
+print(len(a))
+PY
+)" || esec "interogarea 0e din ${f#$RADACINA/} nu e identică cu scripts/control_0e.sql ($n)"
+    echo "   gate 0e: ${f#$RADACINA/} poartă interogarea scripts/control_0e.sql identic (×$n)"
+    TOTAL_OK=$((TOTAL_OK + 1))
+  done
+}
+
 aplica_fisier() {  # ca apply_migration: o singură tranzacție, cu excepția fișierelor cu BEGIN/COMMIT proprii
   local f; f="$(cale_abs "$1")"
   local opt=(--single-transaction)
@@ -134,8 +158,19 @@ aplica_fisier() {  # ca apply_migration: o singură tranzacție, cu excepția fi
   if grep -q "gazpet.livrare_migrare" "$f"; then
     opt=(--single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$(basename "$f" .sql):' || txid_current(), true)")
   fi
+  # 02.10.2026: revenirile din supabase/revenire/ se armează cu un GUC legat de txid (antet „-- harness-armare: <guc> <token>”)
+  local arm; arm="$(grep -m1 -oE '^-- harness-armare: [a-z0-9_.]+ [A-Z0-9_]+' "$f" | sed 's/^-- harness-armare: //' || true)"
+  if [ -n "$arm" ]; then
+    opt=(--single-transaction -c "SELECT set_config('${arm%% *}', '${arm##* }:' || txid_current(), true)")
+  fi
   echo "→ aplic ${f#$RADACINA/}"
   "${PSQL[@]}" -d "$BAZA" ${opt[@]+"${opt[@]}"} -f "$f" || esec "migrarea ${f#$RADACINA/} a eșuat"
+}
+rollback_pentru() {  # X.sql → X_ROLLBACK.sql de lângă migrare sau, 02.10.2026, din supabase/revenire/ (reveniri tehnice, armate)
+  local m="$1" rb
+  rb="$(cale_abs "${m%.sql}_ROLLBACK.sql")"
+  [ -f "$rb" ] || rb="$RADACINA/supabase/revenire/$(basename "${m%.sql}")_ROLLBACK.sql"
+  echo "$rb"
 }
 schema_snapshot() {  # schema fără date, cu ACL-uri, ca să prindă GRANT-uri/obiecte rămase după rollback
   "$PG_BIN/pg_dump" -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" --schema-only --no-owner \
@@ -155,6 +190,7 @@ aplica_migrari() {
 }
 
 TOTAL_OK=0
+verifica_0e_identic
 ruleaza_teste() {  # $1 = eticheta, $2 = doar_baza (true/false)
   local iesire; iesire="$(mktemp)"
   echo "→ teste [$1]: ${TESTE#$RADACINA/}"
@@ -191,7 +227,7 @@ fi
 if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
   # Gardă de ordine: rollback-ul PRIMEI migrări rulat înaintea celorlalte trebuie refuzat și fără efect
   # (doar dacă fișierul are o gardă declarată: „Gardă de ordine”).
-  RB0="$(cale_abs "${MIGRARI[0]%.sql}_ROLLBACK.sql")"
+  RB0="$(rollback_pentru "${MIGRARI[0]}")"
   if [ ${#MIGRARI[@]} -gt 1 ] && [ -f "$RB0" ] && grep -q 'Gardă de ordine' "$RB0"; then
     SNAP_G="$(mktemp)"; schema_snapshot > "$SNAP_G"
     if "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$RB0" >/dev/null 2>&1; then
@@ -205,7 +241,7 @@ if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
   # Gardă coadă flaguri (runda 3, P9c): cu o intrare „flaguri” deschisă în coadă (cont închis pe calea HR cu flagurile
   # încă TRUE), rollback-ul care o declară trebuie refuzat (55000) și fără efect; intrarea de test se șterge apoi.
   for (( i=0; i<${#MIGRARI[@]}; i++ )); do
-    RBQ="$(cale_abs "${MIGRARI[$i]%.sql}_ROLLBACK.sql")"
+    RBQ="$(rollback_pentru "${MIGRARI[$i]}")"
     if [ -f "$RBQ" ] && grep -q 'Gardă coadă flaguri' "$RBQ"; then
       "${PSQL[@]}" -d "$BAZA" -c "INSERT INTO public.conturi_inchideri_coada (profile_id, tip, motiv) VALUES (gen_random_uuid(), 'flaguri', 'harness: gardă rollback coadă')" >/dev/null \
         || esec "nu pot pune intrarea de test în coadă"
@@ -222,8 +258,8 @@ if [ "$ROLLBACK" = 1 ] && [ ${#MIGRARI[@]} -gt 0 ]; then
     fi
   done
   for (( i=${#MIGRARI[@]}-1; i>=0; i-- )); do
-    rb="${MIGRARI[$i]%.sql}_ROLLBACK.sql"
-    [ -f "$(cale_abs "$rb")" ] || esec "lipsește rollback-ul pentru ${MIGRARI[$i]}"
+    rb="$(rollback_pentru "${MIGRARI[$i]}")"
+    [ -f "$rb" ] || esec "lipsește rollback-ul pentru ${MIGRARI[$i]} (nici lângă migrare, nici în supabase/revenire/)"
     aplica_fisier "$rb"
     if [ "$i" -gt 0 ] && [ -n "${SNAP_PAS[$((i - 1))]:-}" ]; then
       SNAP_RB="$(mktemp)"; schema_snapshot > "$SNAP_RB"

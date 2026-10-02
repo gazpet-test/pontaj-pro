@@ -137,3 +137,23 @@ SELECT set_config('gazpet.revenire_20261005b', 'REDESCHIDE_GARANTII:' || txid_cu
 COMMIT;
 ```
 Precondiție = md5 politici `baf4aced…` (patch); postcondiție = `62f69c59…` (live 01.10). Testat în `scripts/test_rls_garantii.sh` pasul 5.
+
+## 20261002b — Conturi, follow-up P2 (`20261002b_conturi_p2_followup_ROLLBACK.sql`, NEAPLICAT)
+Readuce EXACT starea live r11 a pachetului Conturi (c v20261001230000 / d v20261001231500): cele 6 funcții înlocuite de `20261002b` (r2: + `fn_cont_coada_pune`) revin verbatim la corpurile din `20260929c` / `20260929d` (md5 r11) și coloanele `conturi_inchideri_coada.amanari` / `ultima_amanare_alertata` dispar. **Redeschide cele 4 P2** acceptate ca risc documentat pe #529 (deadlock la legarea pe loturi, garda fără tgqual/tgattr, notificări pierdute fără reluare, amânare nelimitată la contenție). Fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261002b', 'REVINE_P2_FOLLOWUP:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = md5 propriu 20261002b pe toate cele 6 funcții + coloanele prezente; postcondiție = md5 live r11 + ACL-uri neschimbate + coloanele absente; dezarmare la final. Testat în `scripts/test_conturi_ciclu_viata.sh --rollback` (harness-ul citește rollback-ul din `supabase/revenire/` și îl armează după antetul `-- harness-armare: <guc> <token>`; schema de după rollback = schema de după `20260929e`).
+
+## 20261002c — Conturi, corecție gate 0e (`20261002c_conturi_0e_nowait_param_ROLLBACK.sql`, NEAPLICAT)
+Readuce EXACT starea live r4 a lui `20261002b` (v20261002124500): `fn_cont_leaga_automat` revine verbatim la corpul din `20261002b` (md5 `a32cb851…`, cu cele două `PERFORM set_config(...)`) și `fn_cont_lot_nowait(boolean)` dispare. **Redeschide incidentul gate 0e** (`scripts/control_0e.sql` ⇒ 1 rând: `fn_cont_leaga_automat [set_config]`) — nu e o altă rezolvare. Fără GO de execuție. Ordine: ÎNAINTEA revenirii `20261002b` (care cere md5 `a32cb851…`).
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261002c', 'REVINE_0E_NOWAIT:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = md5 propriu 20261002c (`b07f3800…` / `0477bce8…`), ACL-uri, unicitate, niciun alt apelant al lui `fn_cont_lot_nowait`; postcondiție = md5 live r4 pe `fn_cont_leaga_automat` + `fn_cont_revalideaza_candidat` (`ecbbd64c…`) + `fn_cont_lock_chei` (`db9b9899…`), ACL-uri neschimbate, funcția nouă absentă; dezarmare la final. Testat în `scripts/test_conturi_ciclu_viata.sh --rollback` (armare după antetul `-- harness-armare:`; schema de după revenire = schema de după `20261002b`).
