@@ -1786,6 +1786,168 @@ SELECT teste.assert(:'lot_c' = 'legat' AND (SELECT employee_id = :e_lc FROM publ
     AND (SELECT res IN ('', 'off') FROM teste.dblink('c_own12', 'SELECT COALESCE(current_setting(''gazpet.cont_lock_nowait'', true), '''')') AS t(res text)),
   'P2-1-LOT-NOWAIT după eliberarea fișei C lotul leagă C; gazpet.cont_lock_nowait nu rămâne pe on după lot (setare locală tranzacției, readusă pe off)');
 
+-- GATE-0E (20261002c; incident: livrarea lui 20261002b a ieșit cu cod 30 — gate-ul permanent 0e, scripts/control_0e.sql, a găsit
+-- set_config în fn_cont_leaga_automat, funcție EXPUSĂ pentru authenticated). Fix: scrierea GUC-ului gazpet.cont_lock_nowait s-a mutat
+-- în fn_cont_lot_nowait(boolean), NEEXPUSĂ, apelată doar din lot; semantica P2-1 de mai sus e neschimbată (aceleași aserțiuni).
+-- Interogarea de mai jos e EXACT scripts/control_0e.sql (harness-ul verifică egalitatea textului, normalizat linie cu linie, și cu
+-- postcondiția migrării). Secțiunea rulează doar dacă 20261002c e aplicat (fn_cont_lot_nowait există).
+SELECT CASE WHEN to_regprocedure('public.fn_cont_lot_nowait(boolean)') IS NOT NULL THEN 'true' ELSE 'false' END AS are_0e \gset
+\if :are_0e
+SELECT count(*) AS n_0e, COALESCE(string_agg(q.functie || ' [' || q.motive || ']', '; ' ORDER BY q.functie), '') AS gadget_0e FROM (
+  -- SEC F2 0e (r8) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate și nu interpretează SQL primit ca argument
+  WITH f AS (
+    SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
+           EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
+           CASE WHEN p.prosqlbody IS NULL THEN p.prosrc ELSE pg_get_function_sqlbody(p.oid) END
+             || E'\n ; ' || pg_get_function_arguments(p.oid) AS def
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
+       AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+  ), t AS (
+    SELECT f.*,
+           lower(replace(regexp_replace(regexp_replace(regexp_replace(f.def, '/\*.*?\*/', ' ', 'g'), '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'), '"', ''))
+             || ' ; ' || lower(replace(f.def, '"', '')) AS txt
+      FROM f
+  ), m AS (
+    SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+             CASE WHEN t.def IS NULL THEN 'corp necitibil' END,
+             CASE WHEN t.cfg THEN 'proconfig' END,
+             CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
+             CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
+             CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
+             CASE WHEN t.txt ~ '(^|;|>>|\m(begin|then|else|loop|atomic)\M)(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+             CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
+             CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+             CASE WHEN t.txt ~ '\m(query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|ts_stat|ts_rewrite|crosstab|crosstab2|crosstab3|crosstab4|connectby|dblink|dblink_exec|dblink_open|dblink_send_query|xpath_table)\M' THEN 'interpretor SQL' END,
+             CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
+                    SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
+                     WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
+           ], NULL) AS motive
+      FROM t
+  )
+  SELECT m.functie, m.prosecdef, array_to_string(m.motive, ',') AS motive
+    FROM m
+   WHERE cardinality(m.motive) > 0
+   ORDER BY 1
+) AS q \gset
+SELECT teste.assert(:n_0e = 0,
+  format('GATE-0E-1 scripts/control_0e.sql după 20261002c ⇒ 0 rânduri: nicio funcție expusă (public/graphql_public, EXECUTE anon/authenticated) cu set_config / GUC-uri de identitate / interpretor SQL (găsite: %s)', NULLIF(:'gadget_0e', '')));
+SELECT teste.assert((SELECT p.prosrc !~* 'set_config|current_setting' AND md5(p.prosrc) = 'b07f3800bebe399057d47336582b26c6' AND p.prosecdef
+                        AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                        AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+                       FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_cont_leaga_automat(boolean,jsonb)'))
+    AND (SELECT md5(p.prosrc) = '0477bce8444e8265d3a469f8f14c3a54' AND p.prosecdef AND p.proconfig::text = '{"search_path=public, pg_temp"}'
+                AND p.prosrc ~ 'set_config' AND p.prosrc ~ 'gazpet\.cont_lock_nowait'
+                AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+           FROM pg_proc p WHERE p.oid = to_regprocedure('public.fn_cont_lot_nowait(boolean)'))
+    AND (SELECT count(*) = 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'fn_cont_lot_nowait')
+    AND (SELECT count(*) = 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'fn_cont_leaga_automat')
+    AND (SELECT md5(prosrc) = 'ecbbd64ceffd6ed13ed91a04f6f14419' FROM pg_proc WHERE oid = to_regprocedure('public.fn_cont_revalideaza_candidat(uuid,integer,boolean)'))
+    AND (SELECT md5(prosrc) = 'db9b9899dbbece0ea56d6f0a71361aff' FROM pg_proc WHERE oid = to_regprocedure('public.fn_cont_lock_chei(text[])')),
+  'GATE-0E-2 fn_cont_leaga_automat (md5 b07f3800…, expusă doar pentru authenticated) nu mai conține set_config / current_setting; fn_cont_lot_nowait (md5 0477bce8…, unică, SECURITY DEFINER, search_path fix) e singura care scrie gazpet.cont_lock_nowait și NU e executabilă de anon / authenticated / service_role; fn_cont_revalideaza_candidat și fn_cont_lock_chei au rămas r4 (ecbbd64c… / db9b9899…)');
+-- apel direct refuzat pentru orice identitate API (inclusiv owner-ul, prin PostgREST): GUC-ul se comută DOAR prin lot
+SELECT teste.ca_utilizator(:'u_own2');
+SELECT teste.asteapta_eroare('SELECT public.fn_cont_lot_nowait(true)',
+  'GATE-0E-3 owner-ul (authenticated, prin PostgREST) NU poate apela direct fn_cont_lot_nowait (42501) — modul fără așteptare se comută doar din fn_cont_leaga_automat', '42501');
+SELECT teste.ca_service_role();
+SELECT teste.asteapta_eroare('SELECT public.fn_cont_lot_nowait(false)',
+  'GATE-0E-3 service_role NU poate apela direct fn_cont_lot_nowait (42501)', '42501');
+SELECT teste.ca_admin();
+-- mutant în SAVEPOINT (anulat): set_config readus în corpul funcției expuse ⇒ EXACT un rând în control_0e: fn_cont_leaga_automat [set_config]
+SAVEPOINT sp_0e;
+CREATE OR REPLACE FUNCTION public.fn_cont_leaga_automat(p_simulare boolean DEFAULT true, p_confirmate jsonb DEFAULT NULL)
+RETURNS TABLE(profile_id uuid, email text, rezultat text, employee_id integer, employee_name text,
+              metoda text, cont_creat_la timestamptz, cont_provider text, cont_incredere boolean)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  PERFORM set_config('gazpet.cont_lock_nowait', 'off', true);   -- MUTANT (harness): varianta r4 scria GUC-ul direct din funcția expusă
+  RETURN;
+END $fn$;
+SELECT count(*) AS n_0e_m, COALESCE(string_agg(q.functie || ' [' || q.motive || ']', '; ' ORDER BY q.functie), '') AS gadget_0e_m FROM (
+  -- SEC F2 0e (r8) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate și nu interpretează SQL primit ca argument
+  WITH f AS (
+    SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
+           EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
+           CASE WHEN p.prosqlbody IS NULL THEN p.prosrc ELSE pg_get_function_sqlbody(p.oid) END
+             || E'\n ; ' || pg_get_function_arguments(p.oid) AS def
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
+       AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+  ), t AS (
+    SELECT f.*,
+           lower(replace(regexp_replace(regexp_replace(regexp_replace(f.def, '/\*.*?\*/', ' ', 'g'), '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'), '"', ''))
+             || ' ; ' || lower(replace(f.def, '"', '')) AS txt
+      FROM f
+  ), m AS (
+    SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+             CASE WHEN t.def IS NULL THEN 'corp necitibil' END,
+             CASE WHEN t.cfg THEN 'proconfig' END,
+             CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
+             CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
+             CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
+             CASE WHEN t.txt ~ '(^|;|>>|\m(begin|then|else|loop|atomic)\M)(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+             CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
+             CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+             CASE WHEN t.txt ~ '\m(query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|ts_stat|ts_rewrite|crosstab|crosstab2|crosstab3|crosstab4|connectby|dblink|dblink_exec|dblink_open|dblink_send_query|xpath_table)\M' THEN 'interpretor SQL' END,
+             CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
+                    SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
+                     WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
+           ], NULL) AS motive
+      FROM t
+  )
+  SELECT m.functie, m.prosecdef, array_to_string(m.motive, ',') AS motive
+    FROM m
+   WHERE cardinality(m.motive) > 0
+   ORDER BY 1
+) AS q \gset
+SELECT teste.assert(:n_0e_m = 1 AND :'gadget_0e_m' = 'fn_cont_leaga_automat(boolean,jsonb) [set_config]'
+    AND has_function_privilege('authenticated', 'public.fn_cont_leaga_automat(boolean,jsonb)', 'EXECUTE'),
+  format('GATE-0E-4 mutant (set_config readus în fn_cont_leaga_automat, expusă) ⇒ control_0e.sql întoarce EXACT un rând: fn_cont_leaga_automat(boolean,jsonb) [set_config] (găsit: %s)', :'gadget_0e_m'));
+ROLLBACK TO SAVEPOINT sp_0e;
+SELECT count(*) AS n_0e_r FROM (
+  -- SEC F2 0e (r8) — invariant de catalog: nicio funcție expusă (public/graphql_public, EXECUTE pentru anon/authenticated) nu poate scrie GUC-urile de identitate și nu interpretează SQL primit ca argument
+  WITH f AS (
+    SELECT p.oid, p.oid::regprocedure::text AS functie, p.prosecdef, md5(p.prosrc) AS md5_src,
+           EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c ~* '^(role|session_authorization|request\.jwt[^=]*)=') AS cfg,
+           CASE WHEN p.prosqlbody IS NULL THEN p.prosrc ELSE pg_get_function_sqlbody(p.oid) END
+             || E'\n ; ' || pg_get_function_arguments(p.oid) AS def
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname IN ('public', 'graphql_public') AND p.prokind IN ('f', 'p', 'w')
+       AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))
+  ), t AS (
+    SELECT f.*,
+           lower(replace(regexp_replace(regexp_replace(regexp_replace(f.def, '/\*.*?\*/', ' ', 'g'), '/\*.*?\*/', ' ', 'g'), '--[^\n]*', ' ', 'g'), '"', ''))
+             || ' ; ' || lower(replace(f.def, '"', '')) AS txt
+      FROM f
+  ), m AS (
+    SELECT t.functie, t.prosecdef, array_remove(ARRAY[
+             CASE WHEN t.def IS NULL THEN 'corp necitibil' END,
+             CASE WHEN t.cfg THEN 'proconfig' END,
+             CASE WHEN t.txt ~ 'set_config' THEN 'set_config' END,
+             CASE WHEN t.txt ~ 'request(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*\.(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*jwt' THEN 'request.jwt' END,
+             CASE WHEN t.txt ~ 'session(_|\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)+authorization' THEN 'session_authorization' END,
+             CASE WHEN t.txt ~ '(^|;|>>|\m(begin|then|else|loop|atomic)\M)(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*(set|reset)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*((session|local)\M(\s|/\*([^*]|\*+[^*/])*\*+/|--[^\n]*\n)*)?role\M' THEN 'set/reset role' END,
+             CASE WHEN t.txt ~ '\mu&' THEN 'u&' END,
+             CASE WHEN t.txt ~ '/\*([^*]|\*+[^*/])*/\*' THEN 'comentariu imbricat' END,
+             CASE WHEN t.txt ~ '\m(query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|ts_stat|ts_rewrite|crosstab|crosstab2|crosstab3|crosstab4|connectby|dblink|dblink_exec|dblink_open|dblink_send_query|xpath_table)\M' THEN 'interpretor SQL' END,
+             CASE WHEN t.txt ~ '\mexecute\M' AND NOT EXISTS (
+                    SELECT 1 FROM (VALUES ('public.fn_completare_aplica(bigint,boolean)', '47a7542895c0ce71cb0e44d2c26d0609')) AS w(semnatura, md5_prosrc)
+                     WHERE t.prosecdef AND t.oid = to_regprocedure(w.semnatura) AND t.md5_src = w.md5_prosrc) THEN 'execute' END
+           ], NULL) AS motive
+      FROM t
+  )
+  SELECT m.functie, m.prosecdef, array_to_string(m.motive, ',') AS motive
+    FROM m
+   WHERE cardinality(m.motive) > 0
+   ORDER BY 1
+) AS q \gset
+SELECT teste.assert(:n_0e_r = 0
+    AND (SELECT md5(prosrc) = 'b07f3800bebe399057d47336582b26c6' FROM pg_proc WHERE oid = to_regprocedure('public.fn_cont_leaga_automat(boolean,jsonb)')),
+  'GATE-0E-5 după ROLLBACK TO SAVEPOINT corpul 20261002c e înapoi (md5 b07f3800…) și control_0e.sql ⇒ 0 rânduri');
+\endif
+
 -- P2-2-GARDA-TGQUAL (c, fn_cont_serializare_activa): r11 verifica nume, tgenabled, tgtype, funcția și md5-ul; un trigger cu WHEN (…) sau
 -- cu UPDATE OF restrâns trecea garda. Acum garda cere tgqual IS NULL și lista exactă a coloanelor (pe nume). DDL-ul e în SAVEPOINT (anulat).
 SAVEPOINT sp_p2b;

@@ -126,6 +126,30 @@ elif [ -f "$LISTA" ]; then
 fi
 for m in ${PRECONDITII[@]+"${PRECONDITII[@]}"} ${MIGRARI[@]+"${MIGRARI[@]}"}; do [ -f "$(cale_abs "$m")" ] || mediu "migrare lipsă: $m"; done
 
+# 02.10.2026 (gate 0e, 20261002c): orice migrare din listă sau fișier de teste care poartă interogarea de control 0e (marcajul
+# „-- SEC F2 0e (r8)” … „ORDER BY 1”) trebuie să o aibă IDENTICĂ cu scripts/control_0e.sql (normalizat linie cu linie, ca în
+# scripts/test_sec_f1_f2.sh) — altfel postcondiția / testul ar dovedi altceva decât gate-ul permanent al runner-ului.
+verifica_0e_identic() {
+  local ctrl="$RADACINA/scripts/control_0e.sql" f n
+  [ -f "$ctrl" ] || return 0
+  for f in "$TESTE" ${MIGRARI[@]+"${MIGRARI[@]}"}; do
+    f="$(cale_abs "$f")"
+    grep -q -- '-- SEC F2 0e (r8)' "$f" || continue
+    n="$(python3 - "$f" "$ctrl" <<'PY'
+import re, sys
+def qs(p):
+    return ["\n".join(l.strip() for l in m.split("\n")) for m in re.findall(r"(-- SEC F2 0e \(r8\).*?ORDER BY 1)[;\n]", open(p, encoding="utf-8").read(), re.S)]
+a, c = qs(sys.argv[1]), qs(sys.argv[2])
+if len(c) != 1 or not a or len(set(a + c)) != 1:
+    print("diferă/lipsesc: fișier %d, control %d, distincte %d" % (len(a), len(c), len(set(a + c)))); sys.exit(1)
+print(len(a))
+PY
+)" || esec "interogarea 0e din ${f#$RADACINA/} nu e identică cu scripts/control_0e.sql ($n)"
+    echo "   gate 0e: ${f#$RADACINA/} poartă interogarea scripts/control_0e.sql identic (×$n)"
+    TOTAL_OK=$((TOTAL_OK + 1))
+  done
+}
+
 aplica_fisier() {  # ca apply_migration: o singură tranzacție, cu excepția fișierelor cu BEGIN/COMMIT proprii
   local f; f="$(cale_abs "$1")"
   local opt=(--single-transaction)
@@ -166,6 +190,7 @@ aplica_migrari() {
 }
 
 TOTAL_OK=0
+verifica_0e_identic
 ruleaza_teste() {  # $1 = eticheta, $2 = doar_baza (true/false)
   local iesire; iesire="$(mktemp)"
   echo "→ teste [$1]: ${TESTE#$RADACINA/}"
