@@ -107,16 +107,22 @@ export default function CerereOfertaPanel({ initial, tipuriPermise, profile, sho
     if (areGoluri(corp)) return setMsg({ tip:'err', text:'Textul mai are „[DE COMPLETAT…]” — completează câmpurile sau corectează textul.' })
     if (!confirm(`Trimit cererea la ${broker.nume} <${broker.email}> de pe rapoarte@gazpet.ro (răspunsul vine la tine)?`)) return
     setBusy('Se trimite cererea…'); setMsg(null)
+    // mailul și urma din registru NU sunt atomice (review Copilot 02.10): dacă mailul a plecat și doar urma a picat,
+    // spunem exact asta și NU îndemnăm la retrimitere — altfel brokerul primește cererea de două ori
+    let plecat = false
     try {
       const { data, error } = await supabase.functions.invoke('ofertare-garantie-mail', { body: {
         actiune: 'cerere_registru', broker_id: broker.id, tip: f.tip, subiect: gen.subiect, text: corp, garantie_id: f.garantie_id || null,
       } })
       if (error || data?.error) throw new Error(data?.error || error?.message || 'eroare necunoscută')
+      plecat = true
       await scrieUrma()
       showToast?.('✓ Cererea a plecat la broker', 'ok')
       onDone?.(); onClose?.()
     } catch (e) {
-      setMsg({ tip:'err', text:`Mailul nu a plecat din platformă: ${e.message}. Poți copia textul sau îl deschizi în clientul de mail (butoanele de mai jos).` })
+      setMsg(plecat
+        ? { tip:'err', text:`Mailul A PLECAT la ${broker.nume}, dar urma din registru nu s-a salvat (${e.message}). NU retrimite — notează manual în registru.` }
+        : { tip:'err', text:`Mailul nu a plecat din platformă: ${e.message}. Poți copia textul sau îl deschizi în clientul de mail (butoanele de mai jos).` })
     }
     setBusy(null)
   }

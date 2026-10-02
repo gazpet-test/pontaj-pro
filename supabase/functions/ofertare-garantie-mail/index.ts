@@ -68,9 +68,12 @@ Deno.serve(async (req: Request) => {
     const subiect = String(body.subiect || '').trim().slice(0, 300);
     const text = String(body.text || '').trim();
     if (!bid || !subiect || !text) return json({ error: 'broker_id, subiect și text sunt obligatorii' }, 400);
-    if (/\[DE COMPLETAT/.test(text)) return json({ error: 'textul mai conține „[DE COMPLETAT…]”' }, 400);
+    // review Copilot 02.10: golurile se refuză și pe SUBIECT (generatorul pune [DE COMPLETAT] și în el; UI-ul poate fi ocolit
+    // printr-un apel direct), iar subiectul nu are voie să conțină CR/LF (fără antete injectate, chiar dacă Resend ia JSON)
+    if (/\[DE COMPLETAT/i.test(subiect) || /\[DE COMPLETAT/i.test(text)) return json({ error: 'subiectul sau textul mai conține „[DE COMPLETAT…]”' }, 400);
+    if (/[\r\n]/.test(subiect)) return json({ error: 'subiectul nu poate avea mai multe rânduri' }, 400);
     const { data: br } = await db.from('ofertare_brokeri').select('id, nume, email, activ').eq('id', bid).maybeSingle();
-    if (!br?.email || br.activ === false) return json({ error: 'brokerul nu există, e inactiv sau nu are e-mail' }, 400);
+    if (!br?.email || br.activ !== true) return json({ error: 'brokerul nu există, e inactiv sau nu are e-mail' }, 400);
     try {
       const html = wrapSimplu(`<div style="white-space:pre-wrap">${esc(text)}</div>${semnaturaPentru(meNume)}`, meMail);
       const id = await trimiteSimplu(key, [br.email], [OFFICE, meMail].filter((x, i, a) => a.indexOf(x) === i), meMail, subiect, html);
