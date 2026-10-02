@@ -1,6 +1,13 @@
 # Runbook livrare — garda citirii automate Ofertare (PR #553)
 
-Stare la **02.10.2026 (branch sincronizat cu `main` @ cf4c438, fără rebase)**: **garda NU e aplicată, edge v13 NU e deployat, workerul NAS nu rulează codul gărzii.** Fiecare pas de mai jos cere acordul lui Răzvan, în ordine. Copilot: GO pe mecanism (r4/r5), cu condiția: **nu se reia ingestul** până când #543 nu e live + **verificat** ȘI finding-ul de autorizare `ofertare-word-text` (JAK-V2-05 / S10-01) nu e închis.
+Stare la **02.10.2026, seara (după merge #553 + #575)**:
+- `ofertare-ingest-doc` **v13 LIVE** (versiunea Supabase 25, `verify_jwt=true`, gardă activă); secretul `OFERTARE_INGEST_SECRET` e setat în Edge Secrets și în `.env`-ul workerului de pe Terra (doar numele aici).
+- `ofertare-word-text` **v9 LIVE**: gardă + poartă de rol `fn_are_acces_ofertare` → 403 (PR #575 merged) — finding-ul **JAK-V2-05 / S10-01 ÎNCHIS**.
+- Probele §5 rulate: OPTIONS → 200, fără auth → 401, anon → 401 „sesiune invalidă”, secret greșit → 401 „secret de serviciu invalid”. **Nerulate**: `service_role` fără secret, 403 cu user fără modul (cer PC-ul de birou / cont de test).
+- Verificarea #543 („un document mic prin worker → rând în `storage_descarcari_jurnal`”) — **restanță**, cere activarea unei cozi de Răzvan.
+- **Coada rămâne oprită.** Restanțele sunt strânse în §8. Fiecare pas rămas cere acordul lui Răzvan, în ordine.
+
+> _Depășit la 02.10 (dimineață, branch sincronizat cu `main` @ cf4c438):_ „garda NU e aplicată, edge v13 NU e deployat, workerul NAS nu rulează codul gărzii.” Copilot: GO pe mecanism (r4/r5), cu condiția: nu se reia ingestul până când #543 nu e live + **verificat** ȘI finding-ul de autorizare `ofertare-word-text` (JAK-V2-05 / S10-01) nu e închis — a doua condiție e închisă azi (#575), prima rămâne la „verificat”.
 
 Ordinea: **merge → secret → migrare → edge → worker → probe → coadă**.
 
@@ -25,8 +32,8 @@ Runner-ul `scripts/livrare_migrare.sh` (runda 9, verdict Copilot R9) e **singuru
 
 | Verificare | Rezultat live | OK? |
 |---|---|---|
-| Obiecte noi (`ofertare_ingest_garda` + 4 funcții) | 0 | da (migrarea refuză dacă există) |
-| `schema_migrations` cu `ingest_garda` | 0 | da |
+| Obiecte noi (`ofertare_ingest_garda` + 4 funcții) | 0 _(stare 01.10)_ → _02.10_: **create** de migrarea aplicată (§2) | da (migrarea refuză dacă există) |
+| `schema_migrations` cu `ingest_garda` | 0 _(stare 01.10)_ → _02.10_: **1 rând**, `20260930k_ofertare_ingest_garda` = versiunea **20261002090000** (§2) | da |
 | `fn_are_acces_ofertare()` — md5 `prosrc` / overload-uri | `429d28e2a61fb24c8009d67050c16c85` / 1 | da (= amprenta cerută; neschimbată de F1/F1b/F2) |
 | `ofertare_documente_atribuire` (`id bigint`, `status_procesare text`), `profiles.is_owner` | prezente | da |
 | Setări persistente `gazpet.livrare*` în `pg_db_role_setting` | 0 | da |
@@ -34,10 +41,10 @@ Runner-ul `scripts/livrare_migrare.sh` (runda 9, verdict Copilot R9) e **singuru
 | Coada `ofertare_ingest_coada` active | 0 / 10 | da (ingest oprit) |
 | Documente: neprocesat 40, in_lucru 2, partial 19, eroare 1, procesat 970, ignorat 139 | neschimbat față de 01.10 | `in_lucru` 2 de verificat (agățate?) |
 | pg_cron `ofertare_ingest_worker` (`SELECT ofertare_ingest_tick()`, fiecare minut) | **activ** | inert cât workerul NAS bate (heartbeat); după deploy v13 apelurile lui anon → 401 (decizia A) |
-| Heartbeat `ofertare-worker` | viu (01.10 20:33 UTC), `detalii.sha = cf4c438`, `branch = main` | workerul NAS rulează **main-ul curent** (instrumentarea egress din #543 e în el; garda din #553 NU) |
-| Edge `ofertare-ingest-doc` | ACTIVE, versiunea Supabase 22, `verify_jwt=true` (cod v12) | de înlocuit cu v13 |
-| Edge `ofertare-word-text` | ACTIVE, versiunea 5, **`verify_jwt=false`**, finding deschis | NU se redeployează până la închiderea finding-ului |
-| Vault: secret cu `ingest` în nume | 0 | normal (secretul stă în env-ul edge + `.env` NAS, nu în Vault) |
+| Heartbeat `ofertare-worker` | viu (01.10 20:33 UTC), `detalii.sha = cf4c438`, `branch = main` | _depășit la 02.10_: #553 e în `main` (e136756); `.env` pe Terra are secretul (proba ENV_OK după recreare — §4). Heartbeat 02.10 07:04–07:26 UTC: `sha = 11d18de`, `branch = main` — 11d18de (merge #573) **conține** e136756 (#553; `git merge-base --is-ancestor` OK) ⇒ workerul rulează codul gărzii și trimite `x-ingest-secret` |
+| Edge `ofertare-ingest-doc` | ~~ACTIVE, versiunea Supabase 22, `verify_jwt=true` (cod v12)~~ _depășit la 02.10_ → **v13 LIVE, versiunea Supabase 25, `verify_jwt=true`**, gardă + secret `OFERTARE_INGEST_SECRET` | **DONE 02.10** |
+| Edge `ofertare-word-text` | ~~ACTIVE, versiunea 5, `verify_jwt=false`, finding deschis~~ _depășit la 02.10_ → **v9 LIVE**: gardă + poartă de rol `fn_are_acces_ofertare` → 403 (PR #575) | **DONE 02.10 — JAK-V2-05 ÎNCHIS** |
+| Vault: secret cu `ingest` în nume | 0 | normal (secretul stă în env-ul edge + `.env` NAS, nu în Vault). _02.10_: `OFERTARE_INGEST_SECRET` **setat** în Edge Secrets + `.env` worker Terra (doar numele; valoarea nu intră în chat/repo) |
 
 ### 0.3 #543 monitor egress — live, dar încă NEVERIFICAT cu trafic real
 
@@ -69,7 +76,13 @@ Verificat după merge: `npx vite build` OK; `npx vitest run src/ingestGarda.test
 - Cine îl folosește: workerul NAS → header `x-ingest-secret` → `ofertare-ingest-doc` (comparat în timp constant).
 - Se actualizează `registru_automatizari` (doar numele).
 
+**Stare 02.10: SETAT.** `OFERTARE_INGEST_SECRET` există în Edge Function secrets (îl citește `ofertare-ingest-doc` v13) și în `.env`-ul workerului de pe Terra (îl trimite ca `x-ingest-secret`); proba ENV_OK din §4 confirmă că containerul îl vede. Valoarea nu apare nicăieri în repo/chat. Înregistrarea în `registru_automatizari` (claude_docs, doar numele + unde stă + cine-l folosește) se face prin BD, în afara acestui PR — restanță în §8 dacă nu e deja făcută.
+
 ## 2. Migrarea — doar prin runner, de pe PC-ul de birou
+
+> _Stare 02.10:_ **APLICATĂ live, 02.10 dimineață**, prin runner (`scripts/livrare_migrare.sh`, wrapper `run553.sh` pe PC-ul de birou), versiunea **`20261002090000`**, sha256 `793074ca5ac9ab202ef8e329bbc14e430ca592479766db9f164f1b2f7d4a697f`, **cod 0** (aplicat + înregistrat). Verificare read-only: `SELECT version, name FROM supabase_migrations.schema_migrations WHERE name = '20260930k_ofertare_ingest_garda'` → `20261002090000`. Probele 401 din §5 nu depind de ea (refuzul vine înainte de RPC).
+>
+> _Depășit la 02.10 (seara, prima actualizare):_ „aplicarea migrării nu e consemnată în această actualizare — de verificat read-only”.
 
 Fișier: `supabase/migrations/20260930k_ofertare_ingest_garda.sql`
 **sha256 aprobat: `793074ca5ac9ab202ef8e329bbc14e430ca592479766db9f164f1b2f7d4a697f`** (neschimbat de la GO: identic în d5fd961, b9364f5, după merge-ul main din 01.10 și după merge-ul din 02.10). Garda `gazpet.livrare_migrare` (start + final) e deja în fișier; `livrare_validator.py` → OK 22 instrucțiuni.
@@ -91,8 +104,10 @@ După: `get_advisors` (security) + verificare read-only: tabelul există, `anon`
 
 | Funcție | Ce | `verify_jwt` | Când |
 |---|---|---|---|
-| `ofertare-ingest-doc` | v13 (garda; fără cale anon; secret sau user cu modul Ofertare + poarta pe cheltuială) | **true** (ca acum; autorizarea reală e în cod) | după migrare |
-| `ofertare-word-text` | trece prin gardă (`edge:ofertare-word-text`) | **false** (ca acum, autentificare proprie) | **NU** în acest pas — doar după închiderea finding-ului JAK-V2-05 (verificare de modul după `getUser`). Până atunci rămâne versiunea 5 deployată. |
+| `ofertare-ingest-doc` | v13 (garda; fără cale anon; secret sau user cu modul Ofertare + poarta pe cheltuială) | **true** (autorizarea reală e în cod) | **LIVE 02.10** — versiunea Supabase 25 |
+| `ofertare-word-text` | trece prin gardă (`edge:ofertare-word-text`) + **poartă de rol** `fn_are_acces_ofertare` după `getUser` → 403 (PR #575) | **false** (autentificare proprie în cod) | **LIVE 02.10 — v9**; finding JAK-V2-05 **ÎNCHIS** |
+
+> _Depășit la 02.10:_ „`ofertare-word-text` NU în acest pas — doar după închiderea finding-ului JAK-V2-05 (verificare de modul după `getUser`); până atunci rămâne versiunea 5 deployată.” Verificarea de modul a intrat prin #575 (două linii după `getUser`: `rpc('fn_are_acces_ofertare')` → altfel 403) și v9 e deployat.
 
 Deploy: `supabase functions deploy ofertare-ingest-doc --project-ref dxczwkbciseqniprspcu` (include `_shared/gardaIngest*.ts`). Notă #543: cablarea egress în edge (`_shared/egress.ts`) NU e în acest PR; v13 descarcă prin gardă (plafon 80/document), dar nu scrie în `storage_descarcari_jurnal` — pe calea edge jurnalul rămâne limită inferioară până la un PR separat (amânat în #543).
 
@@ -105,6 +120,12 @@ Rulează pe NAS, proiect compose `gazpet-ofertare-worker` (`worker/ofertare/READ
 
 Ordinea edge → worker evită ca workerul nou să trimită secretul unui edge vechi (care l-ar ignora). Cât coada e inactivă, workerul nu citește nimic, indiferent de versiune.
 
+**Notă operațională (verificată 02.10, proba ENV_OK):** după o modificare în `.env` pe Terra, `docker restart gazpet-ofertare-worker` **NU recitește `env_file`** — containerul păstrează mediul de la creare. E nevoie de **recreare**: `docker-compose -p gazpet-ofertare-worker up -d` (fără `--build` dacă imaginea nu s-a schimbat; cu `--build` după actualizarea fișierelor din `main`). Verificare: `docker exec gazpet-ofertare-worker sh -c 'test -n "$OFERTARE_INGEST_SECRET" && echo ENV_OK'` (tipărește doar ENV_OK, niciodată valoarea).
+
+_Stare 02.10:_ pasul 1 (secret în `.env`) **făcut**; pasul 2 **făcut** — containerul a fost **recreat** azi cu secretul în `.env` (proba ENV_OK); pasul 3 **făcut** — heartbeat 02.10 07:04–07:26 UTC `sha = 11d18de`, `branch = main`, iar 11d18de (merge #573) conține e136756 (#553) ⇒ codul gărzii rulează. _Notă:_ sha-ul din heartbeat **după** recreare nu a fost recitit (de confirmat la R5/R6 că e tot ≥ 11d18de).
+
+> _Depășit la 02.10 (seara, prima actualizare):_ „pasul 2 și pasul 3 — neconsemnate aici”.
+
 ## 5. Probe (după 3 + 4, coada încă oprită)
 
 - apel `ofertare-ingest-doc` cu cheia anon → **401**; secret greșit → **401**; `service_role` ca Bearer fără secret → **401/403**;
@@ -114,12 +135,30 @@ Ordinea edge → worker evită ca workerul nou să trimită secretul unui edge v
 - tick-ul pg_cron: apelul lui primește 401 (fallback inert, decizia A din `INGEST_GARDA.md`);
 - **verificarea #543 (condiția „verificat”)**: pe UN document mic ales de Răzvan, citit prin worker → un rând nou în `storage_descarcari_jurnal` (`sursa = 'nas:ingest'`, `doc_id`, `bytes` = mărimea reală) și apare în widgetul owner; apoi (opțional, pe același obiect, sub supraveghere) > 20 descărcări/oră → `storage_obiecte_blocate` + `notifications.type='egress_alerta'` la owneri + `egress_obiect_blocat()` = true + workerul refuză cu `MESAJ_BLOCAT`; deblocare din widget → poarta = false. Dacă nu se vrea proba de blocare pe live, rămâne dovada din harness (`scripts/test_monitor_egress_fix.sh`, A–D) + rândul din jurnal.
 
+### 5.1 Rezultate 02.10 (`ofertare-ingest-doc` v13, versiunea Supabase 25)
+
+| Probă | Așteptat | Rezultat 02.10 |
+|---|---|---|
+| `OPTIONS` (preflight CORS) | 200 | **200** ✅ |
+| fără `Authorization` și fără secret | 401 | **401** ✅ |
+| cheia anon ca Bearer | 401 | **401** „sesiune invalidă” ✅ |
+| `x-ingest-secret` greșit | 401 | **401** „secret de serviciu invalid” ✅ |
+| `service_role` ca Bearer, fără secret | 401/403 | **NERULATĂ** — cere PC-ul de birou (cheia nu intră în chat) → §8 |
+| user autentificat fără modul Ofertare | 403 | **NERULATĂ** — cere cont de test → §8 |
+| user cu modul, nu owner/responsabil (poarta pe cheltuială) | 403 | **NERULATĂ** → §8 |
+| două apeluri simultane pe același document | unul `in_curs`, o descărcare | **NERULATĂ** (cere migrarea + coadă/document) → §8 |
+| worker + edge concurent pe același document | o descărcare | **NERULATĂ** → §8 |
+| tick-ul pg_cron `ofertare_ingest_tick` | 401 (inert, decizia A) | **neconsemnat** (de citit în `cron.job_run_details` / logurile edge) → §8 |
+| verificarea #543: document mic prin worker → rând în `storage_descarcari_jurnal` | 1 rând `nas:ingest` | **RESTANȚĂ** — cere activarea unei cozi (decizia lui Răzvan) → §8 |
+
+Probele 401 confirmă că **nu mai există cale anonimă** (fosta cale „coada activă” a tick-ului e închisă). Ele nu dovedesc migrarea (refuzul vine înainte de orice RPC) — vezi nota din §2.
+
 ## 6. Criterii de reluare a cozii (`ofertare_ingest_coada.activ = true`)
 
 Toate, simultan:
 1. ~~#543 aplicat~~ **DONE 01.10** (20260930e v20261001175000 + fix 20261002a v20261001184500, cron activ, worker instrumentat) — rămâne **verificarea** din §5 (rând în jurnal; blocare + notificare, live sau harness).
-2. Finding-ul `ofertare-word-text` (JAK-V2-05) închis — fix livrat și verificat sau funcția dezactivată.
-3. Pașii 1–5 de mai sus trecuți, cu rezultat consemnat.
+2. ~~Finding-ul `ofertare-word-text` (JAK-V2-05) închis — fix livrat și verificat sau funcția dezactivată.~~ **DONE 02.10** — PR #575 merged, v9 LIVE (poartă de rol `fn_are_acces_ofertare` → 403).
+3. Pașii 1–5 de mai sus trecuți, cu rezultat consemnat. _Stare 02.10:_ 1 (secret) ✅, 2 (migrare, v20261002090000, cod 0) ✅, 3 (edge) ✅, 4 (worker, sha 11d18de + recreat cu secret) ✅, 5 (probe) parțial — vezi §5.1 și §8.
 4. Verdict Copilot pe delta (stare după livrare) + acordul explicit al lui Răzvan.
 5. Pornire pe O licitație, cu urmărirea egress-ului în prima oră (widget + `storage_descarcari_jurnal`).
 
@@ -138,3 +177,19 @@ Toate, simultan:
   Pierzi contoarele gărzii. Rândul din `schema_migrations` se tratează separat (reconciliere manuală).
 - **Secret:** se șterge din edge + `.env` după rollback complet.
 - **#543 nu se atinge** la rollback-ul gărzii (e independent; rollback-ul lui are propriul fișier `20261002a_monitor_egress_fix_ROLLBACK.sql` + `20260930e_monitor_egress_ROLLBACK.sql`).
+
+## 8. Restanțe la 02.10 (seara) — în ordinea în care se închid
+
+| # | Ce | Cine / de unde | Blochează |
+|---|---|---|---|
+| R1 | ~~Confirmare read-only că migrarea `20260930k` e aplicată; dacă nu — aplicare prin runner~~ **DONE 02.10 dimineață**: aplicată prin runner (`run553.sh`), versiune `20261002090000`, sha256 `793074ca…697f`, cod 0; `schema_migrations` → `20260930k_ofertare_ingest_garda` = 20261002090000 (§2) | — | — |
+| R2 | Proba `service_role` ca Bearer fără secret → 401/403 | PC-ul de birou (cheia nu intră în chat) | §5.1 |
+| R3 | Proba 403: user fără modul Ofertare; user cu modul dar nu owner/responsabil | cont de test (de creat/ales de Răzvan) | §5.1 |
+| R4 | ~~Worker Terra: fișierele din `main` cu #553 + recreare; heartbeat cu sha-ul de merge~~ **DONE 02.10**: heartbeat 07:04–07:26 UTC `sha = 11d18de` (merge #573, conține #553 e136756 — `merge-base --is-ancestor` OK), `branch = main`; container recreat azi cu secretul în `.env` (ENV_OK). _Rămâne:_ sha-ul de după recreare nu a fost recitit — se confirmă odată cu R5/R6, împreună cu logurile fără `garda:` neașteptat | — | — |
+| R5 | Tick pg_cron `ofertare_ingest_tick`: confirmare 401 (inert) în loguri | read-only Supabase | §5.1 |
+| R6 | Verificarea #543: UN document mic prin worker → rând `nas:ingest` în `storage_descarcari_jurnal` + widget owner (blocarea: live sub supraveghere sau harness A–D) | **cere activarea unei cozi — decizia lui Răzvan** | §6 pct. 1 („verificat”) |
+| R7 | `registru_automatizari`: rând `OFERTARE_INGEST_SECRET` (nume, Edge Secrets + `.env` Terra, folosit de `ofertare-ingest-doc` v13 ↔ worker `x-ingest-secret`) + fișa de securitate pentru v13/v9 — dacă nu e deja scris | BD (claude_docs), în afara acestui PR | pct. 7 din CLAUDE.md |
+| R8 | Verdict Copilot pe delta „stare după livrare” + acordul explicit al lui Răzvan | chat | §6 pct. 4 |
+| R9 | Pornire pe O licitație, cu urmărirea egress-ului în prima oră | Răzvan | §6 pct. 5 |
+
+Coada (`ofertare_ingest_coada.activ`) rămâne **false** până la R2–R3, R5–R8 (R1 și R4 închise 02.10).
