@@ -18,6 +18,8 @@ Excepții deja restrânse (nu se ating): `logistica_cesiuni_subcontractor` (DELE
 
 Interfața: `canEdit = admin || editor` (viewer = doar citire). Aprobarea transporturilor și importurile folosesc însă și **rolul** (`superadmin`, `admin_logistica`): de ex. Titi Jeno are rolul `admin_logistica`, dar modulul doar `viewer`.
 
+**Actualizat 03.10.2026 seara, după deciziile lui Răzvan (§6), APLICAT cu confirmare:** 7 editori din alte departamente au trecut pe viewer (Cristina Dumitrescu, Kostas T, Madalina Tanase, Mioara Olaru, Mirela Rosu, Oana Nica, Silviu Stanescu), iar Titi Jeno a trecut din viewer în editor. Stare nouă: **admin 3** (Cristiana, Daniel Oancea, Mitrache Alexandru) · **editor 2** (Apostol Andrut, Titi Jeno) · **viewer 11**. Rollback și id-uri: claude_context #1580.
+
 ## 3. Cine scrie din AFARA modulului (scanare cod pe main 79a5f09)
 | Tabel | Scrie din | Ce face |
 |---|---|---|
@@ -52,12 +54,21 @@ Două funcții noi, ca `fn_are_acces_ofertare` (SECURITY DEFINER, `search_path =
 
 Livrare (ca la #595/#596): migrare `2026101xa_logistica_rls_modul.sql` cu snapshot-ul politicilor vechi + rollback complet, harness pe pg local (utilizator fără acces / viewer / editor / admin / owner / manager de șantier / service_role × INSERT/UPDATE/DELETE pe fiecare grup, plus triggerele de stoc), GO Copilot pe SQL, apoi runner-ul la „aplica”. Înainte de aplicare, lista de la §2 se recitește din BD (poate s-a schimbat).
 
+**Note după scanarea suplimentară:**
+- Butonul global „Cere transport” e afișat pentru modulul separat `comanda_transport` (de ex. Kostas, Titi) și deschide formularul din Logistică. Deci INSERT-ul pe `logistica_transporturi` / `_continut` trebuie să rămână deschis cererilor, cum e în tabel.
+- Aprobarea transporturilor în UI se face pe rol (`superadmin`, `admin_logistica` — `isAprobatorTransport`). Cu Q1 = „doar modulul”, regula de UPDATE pe transporturi păstrează **explicit** excepția pentru aprobatori ca să nu rupă fluxul de azi, sau UI-ul se aliniază la modul. **De confirmat cu Răzvan la review-ul SQL.**
+
 ## 5. Riscuri
 - Cine scrie azi fără drept în modul va primi eroare (ex. un viewer care importa ceva). Lista de la §2 + Q1/Q2 decid asta explicit.
 - Ecranele din afara Logisticii nelistate la §3 (dacă scanarea a ratat ceva) ar primi erori RLS — harness-ul și o săptămână de urmărire a erorilor 42501 în Sentry după aplicare.
 - Mesajele de eroare RLS în UI sunt tehnice; se pot traduce ulterior.
 
-## 6. Întrebări pentru Răzvan (decizii de acces — nu le iau eu)
+## 6. Decizii Răzvan (03.10.2026) — RĂSPUNSE
+- **Q1 → A**: doar modulul (admin/editor) + owner. Rolul `admin_logistica` nu e suficient.
+- **Q2 → A**: ștergere doar admin modul + owner.
+- **Q3 → B**: editorii din alte departamente trec pe viewer (aplicat, vezi §2), plus Titi Jeno trece pe editor.
+
+Întrebările inițiale:
 - **Q1** Rolul `admin_logistica` (Titi Jeno: rol admin_logistica, modul viewer) dă drept de scriere? A) nu, doar modulul (Titi trece pe editor dacă trebuie să scrie) · B) da, rolul contează ca editor.
 - **Q2** Ștergerea în tabelele Logistică: A) doar admin-ii modulului + owner (Cristiana, Daniel, Mitrache) · B) și editorii.
 - **Q3** Editorii din alte departamente (Cristina Dumitrescu, Kostas, Madalina, Mioara, Mirela Rosu, Oana Nica, Silviu Stanescu) rămân editori pe Logistică? A) da, nu schimb nimic · B) îi trec pe viewer (cer listă de la tine).
