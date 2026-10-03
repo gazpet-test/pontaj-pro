@@ -48,14 +48,16 @@ const S = {
   btnS: { background:G.surface, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:'7px 14px', fontFamily:'inherit', fontSize:13, fontWeight:600, cursor:'pointer' },
 }
 
-const STARI = ['Functional', 'Nefunctional', 'In_service']
+// 03.10.2026 (audit Logistică V1): CHECK logistica_active_stare_check permite „In service” (cu spațiu), nu „In_service”
+// — cu valoarea veche nimeni n-a putut salva vreodată un utilaj în service (0 rânduri în BD).
+const STARI = ['Functional', 'Nefunctional', 'In service']
 const TIPURI_CARBURANT = [
   { value: '', label: '— niciunul —' },
   { value: 'motorina', label: '⛽ Motorină' },
   { value: 'benzina', label: '⛽ Benzină' },
   { value: 'electric', label: '⚡ Electric' },
   { value: 'gpl', label: '🔥 GPL' },
-  { value: 'mixt', label: '🔋 Mixt (hibrid)' },
+  { value: 'hibrid', label: '🔋 Hibrid' },  // CHECK logistica_active_tip_carburant_check: „hibrid”, nu „mixt” (audit V1)
 ]
 const FIRME = ['Gazpet Instal', 'Gazpet Invest', 'Alt proprietar']
 const UNITATI_NORMA = ['l/h', 'l/100km', 'kWh/h', 'kWh/100km']
@@ -176,6 +178,7 @@ function StareBadge({ stare, deepSleep }) {
   const cfg = {
     'Functional': { bg: G.green+'22', color: G.green, label: '✓ Funcțional' },
     'Nefunctional': { bg: G.red+'22', color: G.red, label: '✗ Nefuncțional' },
+    'In service': { bg: G.yellow+'22', color: G.yellow, label: '🔧 În service' },
     'In_service': { bg: G.yellow+'22', color: G.yellow, label: '🔧 În service' },
     'Service': { bg: G.yellow+'22', color: G.yellow, label: '🔧 În service' },
   }
@@ -930,11 +933,13 @@ function SetariMotorinaModal({ pret, dataActualizat, onClose, onSaved, showToast
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
     const today = new Date().toISOString().split('T')[0]
-    await supabase.from('logistica_setari').upsert([
+    const { error } = await supabase.from('logistica_setari').upsert([
       { key: 'pret_motorina_ron', value: String(val), updated_at: new Date().toISOString(), updated_by: user?.id },
       { key: 'pret_motorina_actualizat', value: today, updated_at: new Date().toISOString(), updated_by: user?.id },
     ])
     setSaving(false)
+    // 03.10.2026 (audit J19): eroarea upsert-ului era ignorată — se anunța prețul nou deși în BD rămânea cel vechi
+    if (error) { showToast('Prețul NU a fost salvat: ' + error.message, 'error'); return }
     showToast(`✓ Preț actualizat: ${val} RON/L`, 'success')
     onSaved()
   }
@@ -4601,13 +4606,23 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
     
     // 26.05.2026: Persist continut multiplu - DELETE all + INSERT batch
     if (!error && useMultiContinut && transportId) {
-      // Șterg conținutul vechi (la edit) și insert nou (mai simplu decât diff)
+      // Șterg conținutul vechi (la edit) și insert nou (mai simplu decât diff).
+      // 03.10.2026 (audit V5): fără tranzacție pe server, așa că (1) un DELETE eșuat OPREȘTE salvarea (înainte se
+      // continua cu INSERT și rămâneau pozițiile vechi + cele noi), (2) la un INSERT eșuat se pun la loc pozițiile
+      // vechi, citite înainte de ștergere (înainte se pierdeau). Varianta corectă rămâne un RPC tranzacțional (lot C).
+      let continutVechi = []
+      if (isEdit) {
+        const { data: vechi, error: citErr } = await supabase
+          .from('logistica_transporturi_continut').select('*').eq('transport_id', transportId)
+        if (citErr) { setSaving(false); showToast('Eroare la citirea conținutului actual: ' + citErr.message, 'error'); return }
+        continutVechi = vechi || []
+      }
       const { error: delErr } = await supabase
         .from('logistica_transporturi_continut')
         .delete()
         .eq('transport_id', transportId)
-      if (delErr) console.warn('Delete continut vechi:', delErr)
-      
+      if (delErr) { setSaving(false); showToast('Conținutul NU a fost modificat (ștergere eșuată): ' + delErr.message, 'error'); return }
+
       const inserts = continutItems.map((it, idx) => ({
         transport_id: transportId,
         tip: it.tip,
@@ -4626,6 +4641,10 @@ function ComandaTransportModal({ active, sites, profile, initialTransport, onClo
       if (insErr) {
         error = insErr
         console.error('Insert continut nou:', insErr)
+        if (continutVechi.length > 0) {
+          const { error: restErr } = await supabase.from('logistica_transporturi_continut').insert(continutVechi)
+          error = { message: insErr.message + (restErr ? ` — ATENȚIE: conținutul vechi NU a putut fi refăcut (${restErr.message})` : ' — conținutul vechi a fost pus la loc') }
+        }
       }
     }
     
@@ -10823,7 +10842,10 @@ function CesiuneModal({ cesiune, subcontractori, sites, rezervoare, pretMotorina
     cantitate_litri: cesiune?.cantitate_litri || '',
     pret_per_litru: cesiune?.pret_per_litru || (pretMotorina ? Number(pretMotorina).toFixed(4) : ''),
     pret_total: cesiune?.pret_total || '',
-    rezervor_id: cesiune?.rezervor_id || (rezervoare?.[0]?.id || ''),
+    // 03.10.2026 (audit V2): primul rezervor e implicit DOAR la creare. La editare păstrăm null-ul (ex. cesiunile din
+    // WhatsApp au rezervor_id null prin design) — altfel trg_cesiune_stoc_update scădea stocul primului rezervor
+    // doar pentru că cineva deschidea cesiunea ca să completeze factura.
+    rezervor_id: cesiune ? (cesiune.rezervor_id ?? '') : (rezervoare?.[0]?.id || ''),
     site_id: cesiune?.site_id || '',
     factura_compensare_nr: cesiune?.factura_compensare_nr || '',
     factura_compensare_data: cesiune?.factura_compensare_data || '',
@@ -11332,7 +11354,7 @@ export default function LogisticaPage() {
         cat?.tip || '',
         cat?.subcategorie || '',
         a.an_fabricatie || '',
-        a.stare === 'Functional' ? 'Funcțional' : a.stare === 'Nefunctional' ? 'Nefuncțional' : a.stare === 'In_service' || a.stare === 'Service' ? 'În service' : (a.stare || ''),
+        a.stare === 'Functional' ? 'Funcțional' : a.stare === 'Nefunctional' ? 'Nefuncțional' : a.stare === 'In service' || a.stare === 'In_service' || a.stare === 'Service' ? 'În service' : (a.stare || ''),
         a.tip_carburant || '',
         a.norma_consum || '',
         a.unitate_norma || '',
@@ -12576,7 +12598,7 @@ export default function LogisticaPage() {
             <option value="Toate">Toate stările</option>
             <option value="Functional">Funcțional</option>
             <option value="Nefunctional">Nefuncțional</option>
-            <option value="In_service">În service</option>
+            <option value="In service">În service</option>
           </select>
           {/* 27.05.2026: Filtru tip proprietate (firmă/comodat/închiriat) */}
           <select value={proprietateF} onChange={e => setProprietateF(e.target.value)} title="Filtrare după tip proprietate">

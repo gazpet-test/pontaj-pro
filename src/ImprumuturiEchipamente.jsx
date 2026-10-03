@@ -109,10 +109,13 @@ export default function ImprumuturiEchipamente({ active = [], canEdit, showToast
     setBusy(true)
     try {
       const poze = await urcaPoze(r.files, r.row.active_id, 'retur')
-      const { error } = await supabase.from('logistica_imprumuturi').update({
+      const { data, error } = await supabase.from('logistica_imprumuturi').update({
         data_retur:r.data_retur || isoAzi(), stare_retur:r.stare_retur.trim() || null, poze_retur:poze,
-      }).eq('id', r.row.id).is('data_retur', null)
+      }).eq('id', r.row.id).is('data_retur', null).select('id')
       if (error) throw error
+      // 03.10.2026 (audit J21): UPDATE-ul pe 0 rânduri (returul fusese deja înregistrat de altcineva) nu dă eroare —
+      // înainte se afișa „Retur înregistrat” deși nu se salvase nimic
+      if (!data || data.length === 0) throw new Error('Returul fusese deja înregistrat de altcineva — reîncarcă lista')
       showToast?.('✅ Retur înregistrat', 'success'); setRetur(null); incarca()
     } catch (e) { showToast?.('Eroare: ' + (e.message || e), 'error') } finally { setBusy(false) }
   }

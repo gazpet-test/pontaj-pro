@@ -17,7 +17,7 @@
 //   5. Summary final: 6 categorii + listă cu buton Accept/Respinge inline
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 
 const G = {
@@ -73,6 +73,9 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
   })
   const [totalCost, setTotalCost] = useState(0)
   const [shouldStop, setShouldStop] = useState(false)
+  // 03.10.2026 (audit V3): bucla din runOCR vedea doar valoarea shouldStop de la pornire (closure), deci „Oprește”
+  // nu oprea nimic și toate loturile (apeluri AI plătite) rulau până la capăt. Ref-ul e citit la fiecare lot.
+  const stopRef = useRef(false)
   const [error, setError] = useState(null)
   // 25.05.2026 v2: tracking accept/respinge manual (set de id-uri deja decise)
   const [decidedIds, setDecidedIds] = useState({}) // { [id]: 'accepted_manual' | 'rejected_manual' }
@@ -101,6 +104,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
   const runOCR = useCallback(async () => {
     if (alimentari.length === 0) return
     setPhase('running')
+    stopRef.current = false
     setShouldStop(false)
     setProgress({ done: 0, total: alimentari.length, current: alimentari[0]?.id || null })
     
@@ -111,7 +115,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
     
     try {
       for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-        if (shouldStop) break
+        if (stopRef.current) break
         
         const batch = ids.slice(i, i + BATCH_SIZE)
         setProgress({ done: i, total: ids.length, current: batch[0] })
@@ -182,7 +186,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
       setError(e.message)
       setPhase('done')
     }
-  }, [alimentari, shouldStop, showToast])
+  }, [alimentari, showToast])
   
   // ──────────────────── 3. DECIZIE MANUALĂ (Accept / Respinge) ────────────────────
   // 25.05.2026 v2: 1-click fără motiv per cerere Razvan
@@ -675,7 +679,7 @@ export default function OCRValidateBulkModal({ profile, showToast, onClose, onFi
             </>
           )}
           {phase === 'running' && (
-            <button onClick={() => setShouldStop(true)} style={{
+            <button onClick={() => { stopRef.current = true; setShouldStop(true) }} style={{
               padding:'10px 22px', background:G.red, color:'#fff',
               border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer'
             }}>
