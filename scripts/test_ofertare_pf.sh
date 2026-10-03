@@ -176,6 +176,28 @@ q "CREATE ROLE authenticator NOLOGIN NOINHERIT; GRANT anon, authenticated, servi
 ca 1 'SET LOCAL SESSION AUTHORIZATION authenticator; SET LOCAL ROLE authenticated' ROLLBACK >/dev/null || fail 'control pozitiv authenticator -> authenticated'
 deny 'authenticated nu poate deveni executor' 1 'SET LOCAL SESSION AUTHORIZATION authenticator; SET LOCAL ROLE authenticated; SET LOCAL ROLE ofertare_pf_executor' 'permission denied to set role "ofertare_pf_executor"'
 deny 'TRUNCATE interzis rolului API' 1 'TRUNCATE public.ofertare_pf_valori' 'permission denied for table ofertare_pf_valori'
+
+# P0.1 (Copilot, e3bd3f4): registrul Ofertare cere acces general la Ofertare pentru APELANT, oriunde e folosit.
+EXT='{"cheie":"e","denumire":"Extern","provenienta":"fixture"}'
+PX="$(ca 1 "INSERT INTO public.ofertare_pf_pachete(licitatie_id,versiune,eticheta,rol_oferta,instrument,documente_selectate) VALUES(1,1,'P0.1','lider_asociere','excel','[$EXT]') RETURNING id")"
+deny 'PF fără Ofertare: draft nou cu registru_id refuzat' 2 "INSERT INTO public.ofertare_pf_pachete(licitatie_id,versiune,eticheta,rol_oferta,instrument,documente_selectate) VALUES(1,1,'x','subcontractant','excel','[{\"registru_id\":1}]')" 'PF: documentele din registru cer acces la Ofertare'
+deny 'PF fără Ofertare: selecție cu registru_id refuzată' 2 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[{\"registru_id\":1},$EXT]' WHERE id=$PX" 'PF: documentele din registru cer acces la Ofertare'
+deny 'PF fără Ofertare: sursă din registru (id existent) refuzată' 2 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare) VALUES($PX,'total_oferta','gazpet',1,1,'p1')" 'PF: documentele din registru cer acces la Ofertare'
+cp "$TMP/deny.log" "$TMP/oracol-existent.log"
+deny 'PF fără Ofertare: sursă din registru (id inexistent) refuzată la fel' 2 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare) VALUES($PX,'total_oferta','gazpet',1,987654,'p1')" 'PF: documentele din registru cer acces la Ofertare'
+eq 'fără oracol: același mesaj pentru id existent și inexistent (înaintea FK)' "$(grep -m1 ERROR "$TMP/oracol-existent.log")" "$(grep -m1 ERROR "$TMP/deny.log")"
+eq 'politica executorului pe registru: apelant PF fără Ofertare = 0 rânduri, PF+Ofertare = 2' '0|2' "$(ca_exec claim.sub "00000000-0000-0000-0000-000000000002" 'SELECT count(*) FROM public.ofertare_formulare_registru')|$(ca_exec claim.sub "00000000-0000-0000-0000-000000000006" 'SELECT count(*) FROM public.ofertare_formulare_registru')"
+ca 6 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[{\"registru_id\":1},$EXT]' WHERE id=$PX" >/dev/null
+pass 'PF + Ofertare: selecție cu registru_id din aceeași licitație'
+VX="$(ca 6 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare,confirmat_de,confirmat_la) VALUES($PX,'total_oferta','gazpet',3,1,'p1',auth.uid(),now()) RETURNING id")"
+pass 'PF + Ofertare: sursă din registrul aceleiași licitații'
+deny 'PF + Ofertare: registru din altă licitație în selecție' 6 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[{\"registru_id\":2}]' WHERE id=$PX" 'PF: document din altă licitație sau absent'
+deny 'PF + Ofertare: registru din altă licitație ca sursă' 6 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare) VALUES($PX,'platibil','gazpet',1,2,'p1')" 'PF: document din altă licitație sau absent'
+deny 'PF + Ofertare: registru inexistent ca sursă' 6 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare) VALUES($PX,'platibil','gazpet',1,987654,'p1')" 'PF: document din altă licitație sau absent'
+deny 'PF fără Ofertare nu editează o valoare cu sursă din registru' 2 "UPDATE public.ofertare_pf_valori SET valoare=4 WHERE id=$VX" 'PF: documentele din registru cer acces la Ofertare'
+deny 'PF fără Ofertare nu închide un draft cu registru (poarta defensivă din RPC)' 2 "SELECT public.fn_ofertare_pf_inchide($PX)" 'PF: documentele din registru cer acces la Ofertare'
+deny 'dosar pe proiect: documente din registru refuzate' 1 "INSERT INTO public.ofertare_pf_pachete(proiect_id,versiune,eticheta,rol_oferta,instrument,documente_selectate) VALUES(2,1,'x','lider_asociere','excel','[{\"registru_id\":1}]')" 'PF: documentele din registru sunt permise doar pe dosarul unei licitații'
+eq 'PF + Ofertare închide draftul cu registru; manifestul are metadatele registrului' "$PX|F1" "$(ca 6 "SELECT public.fn_ofertare_pf_inchide($PX)")|$(q "SELECT manifest->0->>'cod' FROM public.ofertare_pf_pachete WHERE id=$PX")"
 eq 'grafic: licitație fără activități = false (informativ)' t "$(ca 2 "SELECT bool_and(grafic_are_activitati IS FALSE) FROM public.v_ofertare_pf_control WHERE pachet_id=$P")"
 
 V="$(ca 1 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare) VALUES($P,'total_oferta','gazpet',100.01,1,'p1') RETURNING id")"
@@ -183,8 +205,7 @@ deny 'valori neconfirmate' 1 "SELECT public.fn_ofertare_pf_inchide($P)" 'toate v
 ca 1 "UPDATE public.ofertare_pf_valori SET confirmat_de=auth.uid(),confirmat_la=now() WHERE id=$V" >/dev/null
 ca 1 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[]' WHERE id=$P" >/dev/null
 deny 'sursă în afara manifestului' 1 "SELECT public.fn_ofertare_pf_inchide($P)" 'PF: valoare cu sursă în afara manifestului'
-ca 1 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[{\"registru_id\":2}]' WHERE id=$P" >/dev/null
-deny 'document din altă licitație' 1 "SELECT public.fn_ofertare_pf_inchide($P)" 'PF: document din altă licitație sau absent'
+deny 'document din altă licitație refuzat la selecție (owner)' 1 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[{\"registru_id\":2}]' WHERE id=$P" 'PF: document din altă licitație sau absent'
 ca 1 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[{\"registru_id\":1},{\"registru_id\":1}]' WHERE id=$P" >/dev/null
 deny 'selecție duplicată' 1 "SELECT public.fn_ofertare_pf_inchide($P)" 'PF: document duplicat'
 ca 1 "UPDATE public.ofertare_pf_pachete SET documente_selectate='[{\"registru_id\":1,\"cod\":\"FALS\",\"fisier_path\":\"fals\"},{\"cheie\":\"seap\",\"denumire\":\"SEAP sintetic\",\"provenienta\":\"fixture\"}]' WHERE id=$P" >/dev/null
@@ -223,8 +244,9 @@ q "DROP INDEX public.pf_lic_draft; CREATE UNIQUE INDEX pf_lic_draft ON public.of
 if ca 1 "SELECT public.fn_ofertare_pf_versiune_noua($P,'mutant')" ROLLBACK >"$TMP/mutant2.log" 2>&1; then fail 'mutant index <> inlocuit supraviețuiește'; fi
 grep -q 'pf_lic_draft' "$TMP/mutant2.log" || fail 'mutant index a eșuat din alt motiv'
 q "DROP INDEX public.pf_lic_draft; CREATE UNIQUE INDEX pf_lic_draft ON public.ofertare_pf_pachete(licitatie_id,rol_oferta) WHERE stare = 'lucru'"
-P2="$(ca 2 "SELECT public.fn_ofertare_pf_versiune_noua($P,'V2 sintetic')")"
-eq 'versiune nouă: created_by/updated_by = apelantul (trigger ca executor, prin wrapper)' "00000000-0000-0000-0000-000000000002|00000000-0000-0000-0000-000000000002" "$(q "SELECT created_by || '|' || updated_by FROM public.ofertare_pf_pachete WHERE id=$P2")"
+deny 'PF fără Ofertare nu clonează un dosar cu documente din registru' 2 "SELECT public.fn_ofertare_pf_versiune_noua($P,'V2 fără Ofertare')" 'PF: documentele din registru cer acces la Ofertare'
+P2="$(ca 6 "SELECT public.fn_ofertare_pf_versiune_noua($P,'V2 sintetic')")"
+eq 'versiune nouă: created_by/updated_by = apelantul (trigger ca executor, prin wrapper)' "00000000-0000-0000-0000-000000000006|00000000-0000-0000-0000-000000000006" "$(q "SELECT created_by || '|' || updated_by FROM public.ofertare_pf_pachete WHERE id=$P2")"
 pass 'mutant 2 ucis: indexul corect permite draft lângă curent'
 eq 'curentul V1 rămâne închis în timpul draftului' inchis "$(q "SELECT stare FROM public.ofertare_pf_pachete WHERE id=$P")"
 eq 'clonare cu confirmările șterse' t "$(q "SELECT count(*)=3 AND bool_and(confirmat_de IS NULL AND confirmat_la IS NULL) FROM public.ofertare_pf_valori WHERE pachet_id=$P2")"
@@ -260,8 +282,9 @@ done
 deny 'concurență: închiderea vede modificarea confirmărilor' 1 "SELECT public.fn_ofertare_pf_inchide($P2)" 'toate valorile confirmate'
 wait "$WRITER" || fail 'writer concurent'
 ca 1 "UPDATE public.ofertare_pf_valori SET confirmat_de=auth.uid(),confirmat_la=now() WHERE pachet_id=$P2" >/dev/null
-eq 'închidere V2' "$P2" "$(ca 2 "SELECT public.fn_ofertare_pf_inchide($P2)")"
-eq 'V2 închis de apelantul V2 (alt user decât V1)' "00000000-0000-0000-0000-000000000002" "$(q "SELECT inchis_de FROM public.ofertare_pf_pachete WHERE id=$P2")"
+deny 'PF fără Ofertare nu închide un dosar cu documente din registru' 2 "SELECT public.fn_ofertare_pf_inchide($P2)" 'PF: documentele din registru cer acces la Ofertare'
+eq 'închidere V2' "$P2" "$(ca 6 "SELECT public.fn_ofertare_pf_inchide($P2)")"
+eq 'V2 închis de apelantul V2 (alt user decât V1)' "00000000-0000-0000-0000-000000000006" "$(q "SELECT inchis_de FROM public.ofertare_pf_pachete WHERE id=$P2")"
 eq 'tranziție atomică V1 înlocuit V2 închis' 'inlocuit,inchis' "$(q "SELECT string_agg(stare,',' ORDER BY versiune) FROM public.ofertare_pf_pachete WHERE id IN ($P,$P2)")"
 eq 'manifest_hash stabil independent de ordinea selecției' t "$(q "SELECT a.manifest_hash=b.manifest_hash FROM public.ofertare_pf_pachete a, public.ofertare_pf_pachete b WHERE a.id=$P AND b.id=$P2")"
 deny 'UPDATE înlocuit' 1 "UPDATE public.ofertare_pf_pachete SET eticheta='alterat' WHERE id=$P" 'PF: versiunea înghețată este imuabilă'
@@ -459,15 +482,18 @@ SQL
   # P3. Smoke prin identitatea PostgREST (session_user = authenticator).
   PP="$(api 1 "INSERT INTO public.ofertare_pf_pachete(licitatie_id,versiune,eticheta,rol_oferta,instrument,documente_selectate) VALUES(1,1,'prod-like','ofertant_unic','excel','[{\"registru_id\":1}]') RETURNING id")"
   pass 'prod-like: owner creează draft'
-  api 2 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare,confirmat_de,confirmat_la) VALUES($PP,'total_oferta','gazpet',100,1,'p1',auth.uid(),now())" >/dev/null
-  pass 'prod-like: PF editor scrie valoare confirmată'
+  pl_deny 'PF fără Ofertare: sursă din registru refuzată' 2 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare) VALUES($PP,'total_oferta','gazpet',100,1,'p1')" 'PF: documentele din registru cer acces la Ofertare'
+  pl_deny 'PF fără Ofertare: id de registru inexistent, același mesaj' 2 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare) VALUES($PP,'total_oferta','gazpet',100,987654,'p1')" 'PF: documentele din registru cer acces la Ofertare'
+  api 6 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,sursa_registru_id,localizare,confirmat_de,confirmat_la) VALUES($PP,'total_oferta','gazpet',100,1,'p1',auth.uid(),now())" >/dev/null
+  pass 'prod-like: PF editor cu Ofertare scrie valoare confirmată cu sursă din registru'
+  pl_deny 'PF fără Ofertare nu închide dosarul cu registru' 2 "SELECT public.fn_ofertare_pf_inchide($PP)" 'PF: documentele din registru cer acces la Ofertare'
   pl_deny 'PF viewer nu scrie valori' 5 "INSERT INTO public.ofertare_pf_valori(pachet_id,rol_valoare,domeniu_valoric,valoare,localizare) VALUES($PP,'platibil','gazpet',1,'p1')" 'PF: pachet inexistent sau fără drept de scriere PF'
   pl_deny 'anon nu citește' anon 'SELECT count(*) FROM public.ofertare_pf_pachete' 'permission denied for table ofertare_pf_pachete'
   pl_deny 'service_role nu citește valorile' service_role 'SELECT count(*) FROM public.ofertare_pf_valori' 'permission denied for table ofertare_pf_valori'
   pl_deny 'authenticated nu consumă secvența' 1 "SELECT nextval('public.ofertare_pf_valori_id_seq')" 'permission denied for sequence ofertare_pf_valori_id_seq'
   pl_deny 'authenticated nu poate deveni executor' 1 'SET LOCAL ROLE ofertare_pf_executor' 'permission denied to set role "ofertare_pf_executor"'
-  eq 'prod-like: închidere prin RPC (executor: wrapper uid + digest)' "$PP" "$(api 2 "SELECT public.fn_ofertare_pf_inchide($PP)")"
-  eq 'prod-like: inchis_de = sub-ul din request.jwt.claims al apelantului (nu ownerul)' "00000000-0000-0000-0000-000000000002" "$(plq "SELECT inchis_de FROM public.ofertare_pf_pachete WHERE id=$PP")"
+  eq 'prod-like: închidere prin RPC (executor: wrapper uid + digest + registru)' "$PP" "$(api 6 "SELECT public.fn_ofertare_pf_inchide($PP)")"
+  eq 'prod-like: inchis_de = sub-ul din request.jwt.claims al apelantului (nu ownerul)' "00000000-0000-0000-0000-000000000006" "$(plq "SELECT inchis_de FROM public.ofertare_pf_pachete WHERE id=$PP")"
   eq 'prod-like: manifest_hash SHA-256 server' t "$(plq "SELECT manifest_hash ~ '^[0-9a-f]{64}\$' AND manifest_hash=encode(extensions.digest(manifest::text,'sha256'),'hex') FROM public.ofertare_pf_pachete WHERE id=$PP")"
   PP2="$(api 1 "SELECT public.fn_ofertare_pf_versiune_noua($PP,'prod-like v2')")"
   eq 'prod-like: versiune nouă cu filiație' "$PP" "$(plq "SELECT inlocuieste_id FROM public.ofertare_pf_pachete WHERE id=$PP2")"

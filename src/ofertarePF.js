@@ -63,8 +63,9 @@ export async function hashFisierClient(file) {
 
 // Poarta UI a PF (decizie 03.10): re-verificare DOAR când se schimbă utilizatorul. Evenimentele de sesiune pentru
 // același utilizator (SIGNED_IN la revenirea în tab, TOKEN_REFRESHED, USER_UPDATED) întorc ACEEAȘI stare ⇒ React nu
-// re-randează și DosarPF nu se demontează. Cât se re-verifică pentru alt utilizator se păstrează ultimul răspuns
-// (dosarul e cheiat pe uid, deci datele celui vechi nu rămân). Deconectarea închide imediat (fără RPC).
+// re-randează și DosarPF nu se demontează. La o schimbare REALĂ de utilizator accesul se închide imediat
+// (poateCiti/poateScrie = false, „Se verifică…”) până vine răspunsul pentru noul uid (Copilot P1.1, 03.10); dosarul e
+// oricum cheiat pe uid. Deconectarea închide imediat (fără RPC).
 // PGRST202 (funcția lipsește: migrarea încă neaplicată) ascunde PF fără banner. RLS/RPC rămân autoritatea de acces.
 export const ACCES_PF_INITIAL = Object.freeze({ uid:undefined, deVerificat:null, poateCiti:false, poateScrie:false, incarcare:true, verificare:false, eroareAcces:null })
 export function reduceAccesPF(stare, ev) {
@@ -72,7 +73,7 @@ export function reduceAccesPF(stare, ev) {
     const uid = ev.uid ?? null
     if (uid === stare.uid) return stare
     if (uid === null) return { uid:null, deVerificat:null, poateCiti:false, poateScrie:false, incarcare:false, verificare:false, eroareAcces:null }
-    return { ...stare, uid, deVerificat:uid, verificare:true }
+    return { ...stare, uid, deVerificat:uid, poateCiti:false, poateScrie:false, incarcare:true, verificare:true, eroareAcces:null }
   }
   if (!ev || ev.uid == null || ev.uid !== stare.uid || ev.uid !== stare.deVerificat) return stare
   if (ev.tip === 'rezultat') {

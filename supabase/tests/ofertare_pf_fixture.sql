@@ -102,10 +102,12 @@ GRANT USAGE ON SEQUENCE public.grafic_activitati_id_seq TO authenticated;
 INSERT INTO public.profiles(id,is_owner) VALUES
  ('00000000-0000-0000-0000-000000000001',true), ('00000000-0000-0000-0000-000000000002',false),
  ('00000000-0000-0000-0000-000000000003',false), ('00000000-0000-0000-0000-000000000004',false),
- ('00000000-0000-0000-0000-000000000005',false);
--- 2 = PF editor, 3 = doar Ofertare general, 4 = nimic, 5 = PF viewer (citește, nu scrie).
+ ('00000000-0000-0000-0000-000000000005',false), ('00000000-0000-0000-0000-000000000006',false);
+-- 2 = PF editor FĂRĂ Ofertare general, 3 = doar Ofertare general, 4 = nimic, 5 = PF viewer (citește, nu scrie),
+-- 6 = PF editor CU Ofertare general (singurul non-owner care poate folosi registrul Ofertare în PF).
 INSERT INTO public.user_module_access(profile_id,module,access_level) VALUES ('00000000-0000-0000-0000-000000000002','ofertare_pf','editor'),
- ('00000000-0000-0000-0000-000000000003','ofertare','editor'),('00000000-0000-0000-0000-000000000005','ofertare_pf','viewer');
+ ('00000000-0000-0000-0000-000000000003','ofertare','editor'),('00000000-0000-0000-0000-000000000005','ofertare_pf','viewer'),
+ ('00000000-0000-0000-0000-000000000006','ofertare_pf','editor'),('00000000-0000-0000-0000-000000000006','ofertare','editor');
 INSERT INTO public.ofertare_licitatii DEFAULT VALUES;
 INSERT INTO public.ofertare_licitatii DEFAULT VALUES;
 INSERT INTO public.executie_proiecte(valoare_lei) VALUES (123.45),(678.90);

@@ -14,6 +14,11 @@
 --   rulează ca executor și auth.uid() altfel; coloanele created_by/updated_by nu mai au DEFAULT auth.uid() (le scrie
 --   triggerul). Precondiții noi: auth.uid() exact cel live (md5), coloanele și politica grafic_act_sel pe
 --   grafic_activitati, fără politici PUBLIC pe registru. View-ul calculează informativ grafic_are_activitati.
+-- r4 (03.10.2026, Copilot NO-GO mic pe e3bd3f4, P0.1 „confused deputy” pe registru): regula din UI devine invariant pe
+--   server — orice folosire a unui registru_id (selecție, sursă de valoare, închidere, citirea de către executor) cere
+--   acces general la Ofertare pentru APELANT (public.fn_ofertare_pf_acces_ofertare(), SECDEF peste fn_are_acces_ofertare)
+--   și ca registrul să fie al licitației pachetului. Refuzul vine din trigger BEFORE, înaintea FK, cu un mesaj unic
+--   pentru id existent sau inexistent (fără oracol). Dosarele pe proiect nu primesc documente din registru.
 DO $livrare_start$
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261012a_ofertare_pf_pachete:' || txid_current() THEN
@@ -25,7 +30,7 @@ DO $pre$
 DECLARE r record;
 BEGIN
   IF current_user <> 'postgres' THEN RAISE EXCEPTION 'REFUZ: owner așteptat postgres'; END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = ANY(ARRAY['fn_poate_citi_pf','fn_poate_scrie_pf','fn_ofertare_pf_pachet_garda','fn_ofertare_pf_valoare_garda','fn_ofertare_pf_inchide','fn_ofertare_pf_versiune_noua','fn_ofertare_pf_uid']))
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = ANY(ARRAY['fn_poate_citi_pf','fn_poate_scrie_pf','fn_ofertare_pf_pachet_garda','fn_ofertare_pf_valoare_garda','fn_ofertare_pf_inchide','fn_ofertare_pf_versiune_noua','fn_ofertare_pf_uid','fn_ofertare_pf_acces_ofertare']))
      OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ofertare_pf_executor')
      OR EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = ANY(ARRAY['ofertare_pf_pachete','ofertare_pf_valori','v_ofertare_pf_control','ofertare_pf_pachete_id_seq','ofertare_pf_valori_id_seq'])) THEN
     RAISE EXCEPTION 'REFUZ: obiect PF sau rol executor deja existent';
@@ -161,6 +166,16 @@ AS $fn$
   SELECT auth.uid();
 $fn$;
 
+-- Acces general la Ofertare al APELANTULUI (Copilot P0.1): restrânge registrul Ofertare la cine îl poate citi direct.
+-- SECDEF al lui postgres peste fn_are_acces_ofertare() (SECDEF, auth.uid() ⇒ identitatea din JWT-ul sesiunii).
+-- EXECUTE: ofertare_pf_executor (închiderea și politica pf_executor_registru_sel) și authenticated (triggerele PF rulează
+-- ca apelantul API). Nu lărgește nimic: fn_are_acces_ofertare() e deja executabilă de authenticated și întoarce același răspuns.
+CREATE FUNCTION public.fn_ofertare_pf_acces_ofertare() RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+  SELECT public.fn_are_acces_ofertare();
+$fn$;
+
 -- SECURITY INVOKER este esențial: observă identitatea RPC-ului, nu owner-ul triggerului.
 CREATE FUNCTION public.fn_ofertare_pf_pachet_garda() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
@@ -202,6 +217,19 @@ BEGIN
     IF NOT FOUND OR NOT (v.stare = 'inchis' OR current_user = 'ofertare_pf_executor' AND NEW.stare = 'inchis' AND v.stare = 'inlocuit') OR (v.licitatie_id, v.proiect_id, v.rol_oferta) IS DISTINCT FROM (NEW.licitatie_id, NEW.proiect_id, NEW.rol_oferta)
        OR NEW.versiune <= v.versiune THEN RAISE EXCEPTION 'PF: versiunea sursă nu este curentul aceluiași scope'; END IF;
   END IF;
+  -- Registrul Ofertare: orice registru_id din selecție cere acces general la Ofertare pentru apelant și aparține licitației
+  -- pachetului. Mesaj unic înaintea oricărei citiri din registru (nu dezvăluie dacă id-ul există).
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(NEW.documente_selectate) x WHERE nullif(x->>'registru_id','') IS NOT NULL) THEN
+    IF NOT public.fn_ofertare_pf_acces_ofertare() THEN
+      RAISE EXCEPTION 'PF: documentele din registru cer acces la Ofertare' USING ERRCODE = '42501';
+    END IF;
+    IF NEW.licitatie_id IS NULL THEN RAISE EXCEPTION 'PF: documentele din registru sunt permise doar pe dosarul unei licitații'; END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_array_elements(NEW.documente_selectate) x WHERE nullif(x->>'registru_id','') IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM public.ofertare_formulare_registru r
+                                WHERE r.id = (x->>'registru_id')::bigint AND r.licitatie_id = NEW.licitatie_id)) THEN
+      RAISE EXCEPTION 'PF: document din altă licitație sau absent';
+    END IF;
+  END IF;
   IF TG_OP = 'UPDATE' THEN anterioare := OLD.documente_selectate;
   ELSIF current_user = 'ofertare_pf_executor' AND NEW.inlocuieste_id IS NOT NULL THEN anterioare := v.documente_selectate;
   END IF;
@@ -225,14 +253,14 @@ FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_pf_pachet_garda();
 CREATE FUNCTION public.fn_ofertare_pf_valoare_garda() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = public, pg_temp
 AS $fn$
-DECLARE v_stare text; v_id bigint; v_uid uuid;
+DECLARE v_stare text; v_id bigint; v_uid uuid; v_lic bigint;
 BEGIN
   IF TG_OP = 'UPDATE' AND (NEW.id, NEW.pachet_id) IS DISTINCT FROM (OLD.id, OLD.pachet_id) THEN
     RAISE EXCEPTION 'PF: valoarea nu se mută între versiuni';
   END IF;
   v_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.pachet_id ELSE NEW.pachet_id END;
   -- Serializează orice editare a valorilor cu închiderea pachetului.
-  SELECT stare INTO v_stare FROM public.ofertare_pf_pachete WHERE id = v_id FOR UPDATE;
+  SELECT stare, licitatie_id INTO v_stare, v_lic FROM public.ofertare_pf_pachete WHERE id = v_id FOR UPDATE;
   IF NOT FOUND THEN
     -- DELETE în cascadă: pachetul tocmai a fost șters. Altfel RLS ascunde pachetul: lipsă sau fără drept de scriere PF.
     IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
@@ -240,6 +268,16 @@ BEGIN
   END IF;
   IF v_stare IS DISTINCT FROM 'lucru' THEN RAISE EXCEPTION 'PF: valorile versiunii înghețate sunt imuabile'; END IF;
   IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  -- Sursa din registrul Ofertare: acces general la Ofertare pentru apelant, verificat ÎNAINTEA FK-ului (trigger BEFORE) și
+  -- cu un mesaj unic pentru id existent sau inexistent (fără oracol); apoi registrul trebuie să fie al licitației pachetului.
+  IF NEW.sursa_registru_id IS NOT NULL THEN
+    IF NOT public.fn_ofertare_pf_acces_ofertare() THEN
+      RAISE EXCEPTION 'PF: documentele din registru cer acces la Ofertare' USING ERRCODE = '42501';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.ofertare_formulare_registru r WHERE r.id = NEW.sursa_registru_id AND r.licitatie_id = v_lic) THEN
+      RAISE EXCEPTION 'PF: document din altă licitație sau absent';
+    END IF;
+  END IF;
   IF TG_OP = 'UPDATE' AND (pg_catalog.to_jsonb(NEW) - 'confirmat_de' - 'confirmat_la') IS DISTINCT FROM (pg_catalog.to_jsonb(OLD) - 'confirmat_de' - 'confirmat_la')
      AND (NEW.confirmat_de,NEW.confirmat_la) IS NOT DISTINCT FROM (OLD.confirmat_de,OLD.confirmat_la) THEN
     NEW.confirmat_de := NULL; NEW.confirmat_la := NULL;
@@ -288,6 +326,10 @@ BEGIN
       RAISE EXCEPTION 'PF: metadate hash fără hash';
     END IF;
     IF rid IS NOT NULL THEN
+      -- Defensiv (P0.1): executorul citește registrul doar pentru un apelant cu acces general la Ofertare.
+      IF NOT public.fn_ofertare_pf_acces_ofertare() THEN
+        RAISE EXCEPTION 'PF: documentele din registru cer acces la Ofertare' USING ERRCODE = '42501';
+      END IF;
       SELECT * INTO r FROM public.ofertare_formulare_registru WHERE id = rid;
       IF NOT FOUND OR p.licitatie_id IS NULL OR r.licitatie_id IS DISTINCT FROM p.licitatie_id THEN
         RAISE EXCEPTION 'PF: document din altă licitație sau absent';
@@ -366,11 +408,11 @@ GRANT CREATE ON SCHEMA public TO ofertare_pf_executor;
 ALTER FUNCTION public.fn_ofertare_pf_inchide(bigint) OWNER TO ofertare_pf_executor;
 ALTER FUNCTION public.fn_ofertare_pf_versiune_noua(bigint,text) OWNER TO ofertare_pf_executor;
 REVOKE CREATE ON SCHEMA public FROM ofertare_pf_executor;
-REVOKE ALL ON FUNCTION public.fn_poate_citi_pf(), public.fn_poate_scrie_pf(), public.fn_ofertare_pf_pachet_garda(), public.fn_ofertare_pf_uid(),
+REVOKE ALL ON FUNCTION public.fn_poate_citi_pf(), public.fn_poate_scrie_pf(), public.fn_ofertare_pf_pachet_garda(), public.fn_ofertare_pf_uid(), public.fn_ofertare_pf_acces_ofertare(),
   public.fn_ofertare_pf_valoare_garda(), public.fn_ofertare_pf_inchide(bigint), public.fn_ofertare_pf_versiune_noua(bigint,text) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.fn_poate_citi_pf(), public.fn_poate_scrie_pf(), public.fn_ofertare_pf_inchide(bigint),
+GRANT EXECUTE ON FUNCTION public.fn_poate_citi_pf(), public.fn_poate_scrie_pf(), public.fn_ofertare_pf_acces_ofertare(), public.fn_ofertare_pf_inchide(bigint),
   public.fn_ofertare_pf_versiune_noua(bigint,text) TO authenticated; -- fără service_role (BYPASSRLS), ca în 20261010a r2
-GRANT EXECUTE ON FUNCTION public.fn_poate_citi_pf(), public.fn_poate_scrie_pf(), public.fn_ofertare_pf_uid() TO ofertare_pf_executor;
+GRANT EXECUTE ON FUNCTION public.fn_poate_citi_pf(), public.fn_poate_scrie_pf(), public.fn_ofertare_pf_uid(), public.fn_ofertare_pf_acces_ofertare() TO ofertare_pf_executor;
 -- Fără nimic pe schema auth (live: postgres nu are GRANT OPTION acolo); identitatea vine prin fn_ofertare_pf_uid().
 GRANT USAGE ON SCHEMA public, extensions TO ofertare_pf_executor;
 GRANT EXECUTE ON FUNCTION extensions.digest(text,text) TO ofertare_pf_executor;
@@ -387,7 +429,9 @@ BEGIN
   END IF;
 END $pf_executor_acces$;
 GRANT SELECT ON public.ofertare_formulare_registru TO ofertare_pf_executor;
-CREATE POLICY pf_executor_registru_sel ON public.ofertare_formulare_registru FOR SELECT TO ofertare_pf_executor USING ((SELECT public.fn_poate_citi_pf()));
+-- Executorul citește registrul doar pentru un apelant cu drept PF ȘI acces general la Ofertare (P0.1).
+CREATE POLICY pf_executor_registru_sel ON public.ofertare_formulare_registru FOR SELECT TO ofertare_pf_executor
+  USING ((SELECT public.fn_poate_citi_pf()) AND (SELECT public.fn_ofertare_pf_acces_ofertare()));
 
 ALTER TABLE public.ofertare_pf_pachete ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ofertare_pf_valori ENABLE ROW LEVEL SECURITY;
@@ -480,11 +524,12 @@ BEGIN
   END IF;
   FOR r IN SELECT * FROM (VALUES
     ('fn_poate_citi_pf()','postgres','sql',true,'s','boolean','1b62664126fcee2a0c36cf5df18710b2'),
+    ('fn_ofertare_pf_acces_ofertare()','postgres','sql',true,'s','boolean','b551a0fa932e0677b5657325f77ad77e'),
     ('fn_ofertare_pf_uid()','postgres','sql',true,'s','uuid','412eea584efb77d7e81af77a14220051'),
     ('fn_poate_scrie_pf()','postgres','sql',true,'s','boolean','eefc0d2bb6faf04f00144bfa388a2417'),
-    ('fn_ofertare_pf_pachet_garda()','postgres','plpgsql',false,'v','trigger','1ebfffb431ed34fa992c2a7cdd71a9b3'),
-    ('fn_ofertare_pf_valoare_garda()','postgres','plpgsql',false,'v','trigger','18203fd347d6ba10803e3765e34e58d3'),
-    ('fn_ofertare_pf_inchide(bigint)','ofertare_pf_executor','plpgsql',true,'v','bigint','2873c6b1eda70661e662108f4eb6d891'),
+    ('fn_ofertare_pf_pachet_garda()','postgres','plpgsql',false,'v','trigger','07598c3dcd8c542c8172ba0de31832e7'),
+    ('fn_ofertare_pf_valoare_garda()','postgres','plpgsql',false,'v','trigger','3a0c1b863a021dc393f7f9297284207e'),
+    ('fn_ofertare_pf_inchide(bigint)','ofertare_pf_executor','plpgsql',true,'v','bigint','3489c8e9c8fc59a02c960aabddaf0aca'),
     ('fn_ofertare_pf_versiune_noua(bigint,text)','ofertare_pf_executor','plpgsql',true,'v','bigint','041bf050c522858e061006e00da27a20')
   ) AS t(signature,owner_name,lang,secdef,vol,ret,hash) LOOP
     SELECT p.*, l.lanname INTO f FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('public.' || r.signature);
@@ -552,6 +597,8 @@ BEGIN
   FOR r IN SELECT * FROM pg_policy WHERE polrelid IN ('public.ofertare_pf_pachete'::regclass,'public.ofertare_pf_valori'::regclass)
       OR polrelid = 'public.ofertare_formulare_registru'::regclass AND polname = 'pf_executor_registru_sel' LOOP
     expected := CASE WHEN r.polcmd = 'r' THEN 'fn_poate_citi_pf' ELSE 'fn_poate_scrie_pf' END;
+    expected := 'SELECT' || expected || 'AS' || expected
+      || CASE WHEN r.polname = 'pf_executor_registru_sel' THEN 'ANDSELECTfn_ofertare_pf_acces_ofertareASfn_ofertare_pf_acces_ofertare' ELSE '' END;
     IF NOT r.polpermissive OR r.polcmd NOT IN ('r','a','w','d')
       OR r.polroles @> ARRAY[0::oid] OR NOT ('ofertare_pf_executor'::regrole::oid = ANY(r.polroles))
       OR (r.polname <> 'pf_executor_registru_sel' AND (cardinality(r.polroles) <> 2 OR NOT ('authenticated'::regrole::oid = ANY(r.polroles))))
@@ -561,7 +608,7 @@ BEGIN
     END IF;
     FOR actual IN SELECT x FROM unnest(ARRAY[pg_get_expr(r.polqual,r.polrelid),pg_get_expr(r.polwithcheck,r.polrelid)]) x WHERE x IS NOT NULL LOOP
       actual := replace(regexp_replace(actual,'[[:space:]()]','','g'),'public.','');
-      IF actual <> 'SELECT' || expected || 'AS' || expected THEN RAISE EXCEPTION 'POST: expresie politică % diferă (%)',r.polname,actual; END IF;
+      IF actual <> expected THEN RAISE EXCEPTION 'POST: expresie politică % diferă (%)',r.polname,actual; END IF;
     END LOOP;
   END LOOP;
   IF (SELECT count(*) FROM pg_trigger WHERE tgrelid IN ('public.ofertare_pf_pachete'::regclass,'public.ofertare_pf_valori'::regclass) AND NOT tgisinternal

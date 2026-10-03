@@ -48,18 +48,23 @@ describe('PF › poarta de acces (useAccesPF)', () => {
     expect(m.stare).toBe(dupaVerificare)           // după dezabonare nu mai ascultă
   })
 
-  it('schimbarea utilizatorului re-verifică, păstrează ultimul răspuns în timpul verificării și recheiază dosarul', () => {
+  it('schimbarea reală a utilizatorului închide imediat accesul, re-verifică și recheiază dosarul', () => {
     let s = reduceAccesPF(ACCES_PF_INITIAL, { tip: 'auth', uid: A })
     expect(s.incarcare).toBe(true)
     s = reduceAccesPF(s, { tip: 'rezultat', uid: A, citire: true, scriere: true })
     const cheieA = cheieDosarPF(s, 7, null)
     s = reduceAccesPF(s, { tip: 'auth', uid: B })
-    expect(s).toMatchObject({ uid: B, deVerificat: B, verificare: true, poateCiti: true, incarcare: false })
-    expect(html(s)).toContain('aria-label="Propunere financiară"')   // fără ecranul „Se verifică…” în timpul re-verificării
+    expect(s).toMatchObject({ uid: B, deVerificat: B, verificare: true, poateCiti: false, poateScrie: false, incarcare: true })
+    expect(html(s)).not.toContain('aria-label="Propunere financiară"') // dosarul lui A nu mai e randat pentru B
+    expect(html(s)).toContain('Se verifică accesul PF')
     expect(cheieDosarPF(s, 7, null)).not.toBe(cheieA)                 // datele lui A nu rămân în dosarul lui B
-    expect(reduceAccesPF(s, { tip: 'rezultat', uid: A, citire: true, scriere: true })).toBe(s) // răspuns întârziat pentru A: ignorat
-    s = reduceAccesPF(s, { tip: 'rezultat', uid: B, citire: false, scriere: false })
-    expect(s).toMatchObject({ poateCiti: false, poateScrie: false, verificare: false })
+    s = reduceAccesPF(s, { tip: 'rezultat', uid: B, citire: true, scriere: false })
+    expect(s).toMatchObject({ poateCiti: true, poateScrie: false, incarcare: false, verificare: false })
+    expect(html(s)).toContain('aria-label="Propunere financiară"')
+    s = reduceAccesPF(s, { tip: 'auth', uid: A })
+    expect(reduceAccesPF(s, { tip: 'rezultat', uid: B, citire: true, scriere: true })).toBe(s) // răspuns întârziat pentru B: ignorat
+    s = reduceAccesPF(s, { tip: 'rezultat', uid: A, citire: false, scriere: false })
+    expect(s).toMatchObject({ poateCiti: false, poateScrie: false, verificare: false, incarcare: false })
     expect(html(s)).toContain('Nu ai drept de acces')
   })
 
