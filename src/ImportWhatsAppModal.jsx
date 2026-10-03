@@ -363,6 +363,8 @@ export default function ImportWhatsAppModal({
   // 25.05.2026: stats pentru poze (Etapa 4 OCR prerequisite)
   const [backfillStats, setBackfillStats] = useState({ checked: 0, uploaded: 0, skipped: 0, errors: 0 })
   const [backfillErrors, setBackfillErrors] = useState([])  // 25.05.2026: detalii erori backfill (vizibile Step 3)
+  // 03.10.2026 (audit V7): analiza doar CAUTĂ alimentările fără poză; urcarea + resetarea OCR se fac la „Aplică”
+  const [backfillDeFacut, setBackfillDeFacut] = useState([])  // [{ alim_id, plac, msg }]
   const [pozeUploadedNew, setPozeUploadedNew] = useState(0)  // poze uploadate pe match-uri noi
   // 25.05.2026: errori detaliate pentru debugging upload (vizibile în Step 4)
   const [uploadErrors, setUploadErrors] = useState([])
@@ -549,42 +551,33 @@ export default function ImportWhatsAppModal({
       // 25.05.2026 — DUAL MODE: Backfill poze pentru alimentări deja procesate WhatsApp fără poză
       // Scanez TOATE mesajele (inclusiv cele dedup-uite) cu imageFile, caut alimentare matched
       // anterior cu (autor + msg_dt) DAR fără whatsapp_poza_path → upload poza retroactiv.
-      setProgress('📷 Backfill poze pentru alimentări procesate anterior...')
+      // 03.10.2026 (audit V7): aici DOAR se caută candidații (citire). Înainte, analiza urca pozele și reseta
+      // ocr_status/ocr_data pe loc — modificări reale înainte de „Aplică”, care rămâneau și dacă se anula importul.
+      setProgress('📷 Caut alimentări procesate anterior fără poză...')
       const messagesWithImages = analyzed.filter(m => m.imageFile)
-      const bfStats = { checked: 0, uploaded: 0, skipped: 0, errors: 0 }
-      const bfErrList = []  // 25.05.2026: erori detaliate backfill
+      const bfStats = { checked: 0, uploaded: 0, skipped: 0, errors: 0, deFacut: 0 }
+      const bfCandidati = []
       
       for (const msg of messagesWithImages) {
         bfStats.checked++
         // Caut alimentare deja matched cu acest mesaj DAR fără poză
         const { data: existingAlim } = await supabase
           .from('logistica_alimentari')
-          .select('id, whatsapp_poza_path, active_id, logistica_active(nr_inmatriculare)')
+          .select('id, whatsapp_poza_path, active_id, ocr_status, logistica_active(nr_inmatriculare)')
           .eq('whatsapp_autor', msg.author)
           .eq('whatsapp_msg_dt', msg.dt.toISOString())
           .is('whatsapp_poza_path', null)
           .maybeSingle()
         
         if (!existingAlim) { bfStats.skipped++; continue }
-        
-        const result = await uploadPozaForAlim(zip, existingAlim.id, msg)
-        if (result.ok) bfStats.uploaded++
-        else { 
-          bfStats.errors++ 
-          console.warn(`Backfill failed pentru alim #${existingAlim.id}:`, result)
-          bfErrList.push({
-            alim_id: existingAlim.id,
-            plac: existingAlim.logistica_active?.nr_inmatriculare || '?',
-            imageFile: msg.imageFile,
-            reason: result.reason,
-            detail: result.error || '',
-            autor: msg.author,
-            data: msg.dt.toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
-          })
-        }
+        // decizia OCR luată manual nu se resetează prin backfill
+        if (['accepted_manual', 'rejected_manual'].includes(existingAlim.ocr_status)) { bfStats.skipped++; continue }
+        bfCandidati.push({ alim_id: existingAlim.id, plac: existingAlim.logistica_active?.nr_inmatriculare || '?', msg })
       }
+      bfStats.deFacut = bfCandidati.length
+      setBackfillDeFacut(bfCandidati)
       setBackfillStats(bfStats)
-      setBackfillErrors(bfErrList)
+      setBackfillErrors([])
       
       setStep(3)
       setProgress('')
@@ -607,6 +600,9 @@ export default function ImportWhatsAppModal({
       let updated = 0
       let pozeNew = 0  // 25.05.2026: count poze uploadate pe match-uri noi
       let errors = []
+      // 03.10.2026 (audit V4): mesajele a căror scriere a eșuat NU se marchează procesate — altfel dedup-ul de la
+      // importul următor le excludea pentru totdeauna (hash-ul era salvat „matched” doar pe baza bifei).
+      const hashuriDeReincercat = new Set()
       const uploadErrList = []  // 25.05.2026: erori detaliate upload poze (vizibile în Step 4)
       
       // 25.05.2026: Verificare critică zipInstance înainte de loop
@@ -633,7 +629,7 @@ export default function ImportWhatsAppModal({
           })
           .eq('id', m.alim.id)
         
-        if (error) errors.push(`#${m.alim.id}: ${error.message}`)
+        if (error) { errors.push(`#${m.alim.id}: ${error.message}`); hashuriDeReincercat.add(m.msg.hash) }
         else {
           updated++
           // 25.05.2026: Upload poza bonului dacă mesajul are imageFile
@@ -736,6 +732,29 @@ export default function ImportWhatsAppModal({
           : null,
       })
       
+      // 03.10.2026 (audit V7): backfill-ul de poze găsit la analiză se aplică abia acum, la confirmare
+      if (backfillDeFacut.length > 0 && zipInstance) {
+        setProgress('📷 Backfill poze pe alimentări procesate anterior...')
+        let bfOk = 0, bfErr = 0
+        const bfErrList = []
+        for (const c of backfillDeFacut) {
+          const result = await uploadPozaForAlim(zipInstance, c.alim_id, c.msg)
+          if (result.ok) bfOk++
+          else {
+            bfErr++
+            console.warn(`Backfill failed pentru alim #${c.alim_id}:`, result)
+            bfErrList.push({
+              alim_id: c.alim_id, plac: c.plac, imageFile: c.msg.imageFile, reason: result.reason, detail: result.error || '',
+              autor: c.msg.author,
+              data: c.msg.dt.toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })
+            })
+          }
+        }
+        setBackfillStats(prev => ({ ...prev, uploaded: bfOk, errors: bfErr }))
+        setBackfillErrors(bfErrList)
+        setBackfillDeFacut([])  // un al doilea „Aplică” nu le mai urcă încă o dată
+      }
+      
       // 03.10.2026: cesiunile subcontractor se creează AICI, la confirmare, doar cele bifate. Înainte blocul stătea în
       // analiză, iar cesiuniCreated / cesiuniHashesSaved nu existau aici → ReferenceError la fiecare „Aplică” din 27.05
       // (alimentările se actualizau, dar hash-urile nu se mai salvau și cesiunile nu se creau deloc).
@@ -757,6 +776,7 @@ export default function ImportWhatsAppModal({
             creator_id: profile?.id,
           })))
         if (cesErr) {
+          cesiuniDeCreat.forEach(c => hashuriDeReincercat.add(c.msg.hash))
           console.error('Eroare INSERT cesiuni:', cesErr)
           showToast('⚠️ Cesiuni nu s-au putut crea: ' + cesErr.message, 'warn')
         } else {
@@ -768,7 +788,7 @@ export default function ImportWhatsAppModal({
       
       // Salvez hash-urile mesajelor procesate (anti-dedup viitor)
       // 26.05.2026 FIX B: Includ și mesajele orfane cu photo_path + status='pending_plate_detection'
-      const toSaveHashes = parsedMessages.map(m => {
+      const toSaveHashes = parsedMessages.filter(m => !hashuriDeReincercat.has(m.hash)).map(m => {
         const matchInfo = matches.find(x => x.msg === m)
         const isConfirmedMatch = matchInfo && confirmed.has(matchInfo.alim.id)
         const orphanPath = orphanUploads.get(m.hash)
@@ -829,7 +849,7 @@ export default function ImportWhatsAppModal({
     } finally {
       setProcessing(false)
     }
-  }, [matches, confirmed, profile, zipFile, zipInstance, parsedMessages, alimentariFaraSantier, dateRangeFilter, onImported, showToast, cesiuniDetectate, confirmedCesiuni])
+  }, [matches, confirmed, profile, zipFile, zipInstance, parsedMessages, alimentariFaraSantier, dateRangeFilter, onImported, showToast, cesiuniDetectate, confirmedCesiuni, backfillDeFacut])
   
   // 26.05.2026 FIX B: Procesare AI Vision pe pozele orfane (apel Edge Function detect_plate_orphan_msgs)
   const processOrphansWithAI = useCallback(async () => {
@@ -1229,7 +1249,9 @@ export default function ImportWhatsAppModal({
                 }}>
                   <span style={{fontSize:18}}>📷</span>
                   <span style={{fontSize:12, color:G.text, fontWeight:700}}>Backfill poze pe alimentări procesate anterior:</span>
-                  <span style={{fontSize:12, color:G.green, fontWeight:800}}>✅ {backfillStats.uploaded} uploaded</span>
+                  {backfillDeFacut.length > 0
+                    ? <span style={{fontSize:12, color:G.green, fontWeight:800}}>📌 {backfillDeFacut.length} de adăugat la „Aplică”</span>
+                    : <span style={{fontSize:12, color:G.green, fontWeight:800}}>✅ {backfillStats.uploaded} uploaded</span>}
                   {backfillStats.skipped > 0 && <span style={{fontSize:11, color:G.muted}}>· {backfillStats.skipped} skip (deja au poza sau nu matchează BD)</span>}
                   {backfillStats.errors > 0 && <span style={{fontSize:11, color:G.red, fontWeight:700}}>· {backfillStats.errors} erori</span>}
                   <span style={{fontSize:10, color:G.muted, marginLeft:'auto'}}>pregătit pentru OCR ✨</span>

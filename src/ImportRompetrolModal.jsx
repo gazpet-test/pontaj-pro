@@ -489,20 +489,22 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
       for (const q of qrMatched) {
         if (q.is_bon_comun) {
           // Bon comun: actualizez TOATE alimentarile cu bon_comun_id + pret per litru
+          // 03.10.2026 (audit V6): înainte, pret_total se golea pe tot bonul și apoi se rescria rând cu rând fără
+          // verificarea erorilor (SELECT sau UPDATE eșuat = totaluri lipsă, dar import raportat ca reușit).
+          // Acum: citesc rândurile întâi și scriu prețul complet (per litru + total) într-un singur UPDATE per rând.
           const pretL = q.pret_per_litru
-          const { error } = await supabase.from('logistica_alimentari').update({
-            pret_per_litru: pretL,
-            pret_total: pretL ? null : null,  // se calculează per rând mai jos
-            statie_combustibil: 'Rompetrol',
-            card_combustibil: q.card || null,
-          }).eq('bon_comun_id', q.bon_comun_id)
-          if (error) throw error
-          // Update pret_total individual: cantitate * pretL per fiecare rand
-          const { data: bonRows } = await supabase.from('logistica_alimentari')
+          const { data: bonRows, error: selErr } = await supabase.from('logistica_alimentari')
             .select('id, cantitate_litri').eq('bon_comun_id', q.bon_comun_id)
+          if (selErr) throw selErr
           for (const br of (bonRows || [])) {
             const ptRow = pretL ? Number((Number(br.cantitate_litri) * pretL).toFixed(2)) : null
-            await supabase.from('logistica_alimentari').update({ pret_total: ptRow }).eq('id', br.id)
+            const { error: updErr } = await supabase.from('logistica_alimentari').update({
+              pret_per_litru: pretL,
+              pret_total: ptRow,
+              statie_combustibil: 'Rompetrol',
+              card_combustibil: q.card || null,
+            }).eq('id', br.id)
+            if (updErr) throw updErr
           }
           totalQr++
           continue
