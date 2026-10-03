@@ -45,7 +45,10 @@ INITIAL=$'f726b68fc75833429780a546a4d4f654\n4e1dd9f786eafc208bb33e9437a72e2b\n0b
 "${PSQL[@]}" -d "$BAZA" -c "CREATE SCHEMA supabase_migrations; CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, statements text[], name text, created_by text, idempotency_key text, rollback text[]);" >/dev/null
 [ "$(q "$STARE")" = "$INITIAL" ] || esec "0 scheletul nu reproduce amprentele live: $(q "$STARE" | tr '\n' ' ')"
 [ "$(q "SELECT md5(prosrc) FROM pg_proc WHERE proname='fn_verifica_secret'")" = dbd1439c7c2102841c7c457f4a7e95f9 ] || esec "0 fn_verifica_secret diferă"
-ok "0 schelet = amprentele live (detect f726b68f, inbox 4e1dd9f7, cron 0bd8aadf, verificator dbd1439c)"
+ACL_TRIG="SELECT string_agg(proacl::text, ' ' ORDER BY proname) FROM pg_proc WHERE proname IN ('fn_detect_ordine_trigger','fn_ai_inbox_trigger_clasificare')"
+ACL_LIVE="{postgres=X/postgres,service_role=X/postgres} {postgres=X/postgres,service_role=X/postgres}"
+[ "$(q "$ACL_TRIG")" = "$ACL_LIVE" ] || esec "0 ACL-ul funcțiilor trigger diferă de live: $(q "$ACL_TRIG")"
+ok "0 schelet = amprentele live (detect f726b68f, inbox 4e1dd9f7, cron 0bd8aadf, verificator dbd1439c, ACL trigger {postgres,service_role})"
 
 "${PSQL[@]}" -d "$BAZA" -f "$MIGRARE" >/dev/null 2>&1 && esec "1 fără runner a trecut"
 [ "$(q "$STARE")" = "$INITIAL" ] || esec "1 stare schimbată"
@@ -58,8 +61,12 @@ q "DELETE FROM vault.secrets WHERE name='INTERN_EDGE_SECRET'" >/dev/null
 q "UPDATE vault.secrets SET secret='eyJalta.cheie.anon' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
 aplica_manual && esec "2b cheie anon diferită a trecut"
 q "UPDATE vault.secrets SET secret='eyJfals.cheie.anon' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
+q "GRANT EXECUTE ON FUNCTION public.fn_detect_ordine_trigger() TO anon" >/dev/null
+aplica_manual && esec "2c ACL trigger diferit a trecut"
+q "REVOKE EXECUTE ON FUNCTION public.fn_detect_ordine_trigger() FROM anon" >/dev/null
 [ "$(q "$STARE")" = "$INITIAL" ] || esec "2 stare schimbată"
-ok "2 secret existent → refuz · cheie anon ≠ Vault → refuz"
+[ "$(q "$ACL_TRIG")" = "$ACL_LIVE" ] || esec "2 ACL nerefăcut după 2c"
+ok "2 secret existent → refuz · cheie anon ≠ Vault → refuz · ACL trigger ≠ live → refuz"
 
 SHA="$(sha256sum "$MIGRARE" | cut -d' ' -f1)"
 SIS="$(q "SELECT system_identifier FROM pg_control_system()")"
@@ -84,7 +91,8 @@ q "DO \$x\$ BEGIN EXECUTE (SELECT command FROM cron.job WHERE jobname='recycle_b
 [ "$(q "SET ROLE service_role; SELECT public.fn_verifica_secret('INTERN_EDGE_SECRET', 'gresit')")" = f ] || esec "4 verificator acceptă secret greșit"
 [ "$(q "SET ROLE service_role; SELECT public.fn_verifica_secret('INTERN_EDGE_SECRET', NULL)")" = f ] || esec "4 verificator acceptă NULL"
 [ "$(q "SELECT count(*) FROM pg_proc WHERE proname='fn_ai_inbox_trigger_clasificare' AND prosrc ~ 'eyJ'")" = 0 ] || esec "4 JWT literal rămas în inbox"
-ok "4 triggere + cron trimit x-intern-secret = Vault (64 hex) · inbox anon din Vault · verificator ok/greșit/NULL · nepotrivitele nu pornesc nimic"
+[ "$(q "$ACL_TRIG")" = "$ACL_LIVE" ] || esec "4 ACL trigger schimbat de migrare"
+ok "4 triggere + cron trimit x-intern-secret = Vault (64 hex) · inbox anon din Vault · verificator ok/greșit/NULL · nepotrivitele nu pornesc nimic · ACL neschimbat"
 
 aplica_manual && esec "5 reaplicare a trecut"
 ok "5 reaplicare → refuz"
@@ -95,5 +103,6 @@ ok "5 reaplicare → refuz"
 [ "$(q "SELECT md5(command) FROM cron.job WHERE jobname='recycle_bin_cleanup_zilnic'")" = 0bd8aadf5dbb6966ec074bfda39a59a7 ] || esec "6 cron nu e exact cel vechi"
 q "TRUNCATE net._apeluri; INSERT INTO public.ai_documente_inbox (status) VALUES ('in_asteptare')" >/dev/null
 [ "$(q "SELECT (headers ? 'x-intern-secret') FROM net._apeluri WHERE url LIKE '%citeste-orice'")" = f ] || esec "6 inbox încă trimite antetul"
+[ "$(q "$ACL_TRIG")" = "$ACL_LIVE" ] || esec "6 ACL trigger schimbat de revenire"
 ok "6 revenire: nearmată refuz · armată → detect + cron exact ca înainte (md5), inbox fără antet"
 echo "PASS test_sec_edge_poarta (sha256 $SHA)"

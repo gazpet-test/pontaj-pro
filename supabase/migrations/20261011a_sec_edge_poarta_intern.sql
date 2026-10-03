@@ -17,7 +17,8 @@
 -- Edge-urile verifică antetul prin public.fn_verifica_secret('INTERN_EDGE_SECRET', antet) (SECDEF, doar service_role).
 -- Compatibil înainte/după: edge-urile vechi ignoră antetul în plus; ordinea e migrare → deploy edge.
 -- Precondiții (fail-closed): postgres; fn_verifica_secret exactă (md5 dbd1439c…); cele 2 funcții trigger exacte
---   (detect md5 f726b68f…; inbox md5 normalizat 4e1dd9f7… și literalul JWT = Vault SUPABASE_ANON_JWT); jobul cron exact
+--   (detect md5 f726b68f…; inbox md5 normalizat 4e1dd9f7… și literalul JWT = Vault SUPABASE_ANON_JWT; ACL exact
+--   {postgres=X/postgres,service_role=X/postgres} pe ambele, păstrat și după); jobul cron exact
 --   (md5 0bd8aadf…, '0 7 * * *', postgres, activ); INTERN_EDGE_SECRET nu există; SUPABASE_ANON_JWT există o dată.
 -- Revenire (NU e migrare): supabase/revenire/20261011a_sec_edge_poarta_intern_ROLLBACK.sql — doar ÎMPREUNĂ cu
 --   redeploy-ul edge-urilor fără poartă, altfel triggerele/cronul fără antet ar fi refuzate.
@@ -55,6 +56,10 @@ BEGIN
      OR NOT (SELECT prosecdef AND proconfig = ARRAY['search_path=public, net, pg_temp'] AND pg_get_userbyid(proowner) = 'postgres'
              FROM pg_proc WHERE oid = 'public.fn_ai_inbox_trigger_clasificare()'::regprocedure) THEN
     RAISE EXCEPTION 'Precondiție 0c: fn_ai_inbox_trigger_clasificare() diferă de cea live';
+  END IF;
+  IF (SELECT proacl::text FROM pg_proc WHERE oid = 'public.fn_detect_ordine_trigger()'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}'
+     OR (SELECT proacl::text FROM pg_proc WHERE oid = 'public.fn_ai_inbox_trigger_clasificare()'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
+    RAISE EXCEPTION 'Precondiție 0c: ACL-ul funcțiilor trigger diferă de cel live ({postgres=X/postgres,service_role=X/postgres})';
   END IF;
   IF (SELECT count(DISTINCT m[1]) FROM pg_proc p, regexp_matches(p.prosrc, '(eyJ[A-Za-z0-9_\-\.]+)', 'g') m
        WHERE p.oid = 'public.fn_ai_inbox_trigger_clasificare()'::regprocedure) <> 1
@@ -162,14 +167,13 @@ END $cron$;
 DO $post$
 BEGIN
   IF (SELECT count(*) FROM vault.decrypted_secrets WHERE name = 'INTERN_EDGE_SECRET') <> 1
-     OR (SELECT length(decrypted_secret) FROM vault.decrypted_secrets WHERE name = 'INTERN_EDGE_SECRET') <> 64 THEN
-    RAISE EXCEPTION 'Postcondiție 1: INTERN_EDGE_SECRET lipsește sau nu are 64 de caractere hex';
+     OR (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'INTERN_EDGE_SECRET') !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'Postcondiție 1: INTERN_EDGE_SECRET lipsește sau nu e exact 64 hex minuscule (formatul cerut de _shared/poartaIntern.ts)';
   END IF;
   IF (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_detect_ordine_trigger()'::regprocedure) !~ 'x-intern-secret.*INTERN_EDGE_SECRET'
      OR NOT (SELECT prosecdef AND proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(proowner) = 'postgres'
              FROM pg_proc WHERE oid = 'public.fn_detect_ordine_trigger()'::regprocedure)
-     OR has_function_privilege('anon', 'public.fn_detect_ordine_trigger()', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public.fn_detect_ordine_trigger()', 'EXECUTE') THEN
+     OR (SELECT proacl::text FROM pg_proc WHERE oid = 'public.fn_detect_ordine_trigger()'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
     RAISE EXCEPTION 'Postcondiție 2: fn_detect_ordine_trigger nu are antetul sau atributele/ACL s-au schimbat';
   END IF;
   IF (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_ai_inbox_trigger_clasificare()'::regprocedure) ~ 'eyJ'
@@ -177,8 +181,7 @@ BEGIN
      OR (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_ai_inbox_trigger_clasificare()'::regprocedure) !~ 'x-intern-secret.*INTERN_EDGE_SECRET'
      OR NOT (SELECT prosecdef AND proconfig = ARRAY['search_path=public, net, pg_temp'] AND pg_get_userbyid(proowner) = 'postgres'
              FROM pg_proc WHERE oid = 'public.fn_ai_inbox_trigger_clasificare()'::regprocedure)
-     OR has_function_privilege('anon', 'public.fn_ai_inbox_trigger_clasificare()', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public.fn_ai_inbox_trigger_clasificare()', 'EXECUTE') THEN
+     OR (SELECT proacl::text FROM pg_proc WHERE oid = 'public.fn_ai_inbox_trigger_clasificare()'::regprocedure) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
     RAISE EXCEPTION 'Postcondiție 3: fn_ai_inbox_trigger_clasificare încă are JWT literal, n-are antetul sau atributele/ACL s-au schimbat';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'recycle_bin_cleanup_zilnic' AND command ~ 'x-intern-secret.*INTERN_EDGE_SECRET'

@@ -92,5 +92,7 @@ BEGIN
 END $function$;
 REVOKE ALL ON FUNCTION public.fn_detect_ordine_trigger() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.fn_ai_inbox_trigger_clasificare() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.fn_detect_ordine_trigger() TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_ai_inbox_trigger_clasificare() TO service_role;
 CREATE TRIGGER trg_detect_ordine AFTER INSERT ON public.documente_proiect FOR EACH ROW EXECUTE FUNCTION public.fn_detect_ordine_trigger();
 CREATE TRIGGER trg_ai_inbox_clasificare AFTER INSERT ON public.ai_documente_inbox FOR EACH ROW EXECUTE FUNCTION public.fn_ai_inbox_trigger_clasificare();
