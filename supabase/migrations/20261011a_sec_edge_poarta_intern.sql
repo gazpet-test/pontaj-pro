@@ -19,7 +19,9 @@
 -- Precondiții (fail-closed): postgres; fn_verifica_secret exactă (md5 dbd1439c…); cele 2 funcții trigger exacte
 --   (detect md5 f726b68f…; inbox md5 normalizat 4e1dd9f7… și literalul JWT = Vault SUPABASE_ANON_JWT; ACL exact
 --   {postgres=X/postgres,service_role=X/postgres} pe ambele, păstrat și după); jobul cron exact
---   (md5 0bd8aadf…, '0 7 * * *', postgres, activ); INTERN_EDGE_SECRET nu există; SUPABASE_ANON_JWT există o dată.
+--   (md5 0bd8aadf…, '0 7 * * *', postgres, activ); nici INTERN_EDGE_SECRET, nici _VECHI nu există; SUPABASE_ANON_JWT există o
+--   dată; niciun obiect accesibil anon/authenticated nu citește coada pg_net. Runda 2 (Copilot NO-GO pe ddbf54b): P0 _VECHI,
+--   P1.1 fn_verifica_secret pinuită complet, P1.2 garda pe coada pg_net.
 -- Revenire (NU e migrare): supabase/revenire/20261011a_sec_edge_poarta_intern_ROLLBACK.sql — doar ÎMPREUNĂ cu
 --   redeploy-ul edge-urilor fără poartă, altfel triggerele/cronul fără antet ar fi refuzate.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid); fără BEGIN/COMMIT. Gate 0e = 0.
@@ -35,14 +37,15 @@ DO $pre$
 DECLARE v_n integer;
 BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Precondiție 0a: rulează ca postgres (current_user = %)', current_user; END IF;
-  -- 0b. verificatorul de secret din Vault, exact (folosit deja de ofertare-seap-veghe)
+  -- 0b. verificatorul de secret din Vault, pinuit complet (folosit deja de ofertare-seap-veghe; Copilot P1.1 pe #595)
   IF to_regprocedure('public.fn_verifica_secret(text,text)') IS NULL
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.fn_verifica_secret(text,text)'::regprocedure) IS DISTINCT FROM 'dbd1439c7c2102841c7c457f4a7e95f9'
-     OR NOT (SELECT prosecdef FROM pg_proc WHERE oid = 'public.fn_verifica_secret(text,text)'::regprocedure)
-     OR has_function_privilege('anon', 'public.fn_verifica_secret(text,text)', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public.fn_verifica_secret(text,text)', 'EXECUTE')
-     OR NOT has_function_privilege('service_role', 'public.fn_verifica_secret(text,text)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'Precondiție 0b: public.fn_verifica_secret(text,text) lipsește sau diferă de cea live (md5/SECDEF/ACL)';
+     OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_verifica_secret') <> 1
+     OR NOT (SELECT md5(p.prosrc) = 'dbd1439c7c2102841c7c457f4a7e95f9' AND l.lanname = 'sql' AND p.provolatile = 'v' AND p.prosecdef
+                    AND NOT p.proisstrict AND NOT p.proleakproof AND p.proparallel = 'u' AND p.prorettype = 'boolean'::regtype
+                    AND pg_get_userbyid(p.proowner) = 'postgres' AND p.proconfig = ARRAY['search_path=public, vault, pg_temp']
+                    AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}'
+             FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = 'public.fn_verifica_secret(text,text)'::regprocedure) THEN
+    RAISE EXCEPTION 'Precondiție 0b: public.fn_verifica_secret diferă de cea live (unică, md5, sql, VOLATILE, SECDEF, owner postgres, search_path, ACL exact)';
   END IF;
   -- 0c. funcțiile trigger, exact ca pe live (inbox: literalul JWT normalizat, apoi comparat cu Vault)
   IF to_regprocedure('public.fn_detect_ordine_trigger()') IS NULL
@@ -74,12 +77,25 @@ BEGIN
                              AND schedule = '0 7 * * *' AND username = 'postgres' AND active) THEN
     RAISE EXCEPTION 'Precondiție 0e: jobul recycle_bin_cleanup_zilnic diferă de cel live (n=%)', v_n;
   END IF;
-  -- 0f. secretul nou nu există; generatorul există
-  IF EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'INTERN_EDGE_SECRET') THEN
-    RAISE EXCEPTION 'Precondiție 0f: INTERN_EDGE_SECRET există deja în Vault — nimic aplicat';
+  -- 0f. nici secretul nou, nici o variantă _VECHI nu există (fn_verifica_secret acceptă ȘI _VECHI: un rest de acolo ar
+  --     deschide poarta din prima secundă — Copilot P0 pe #595). La introducerea porții nu suntem într-o rotație.
+  IF EXISTS (SELECT 1 FROM vault.secrets WHERE name IN ('INTERN_EDGE_SECRET', 'INTERN_EDGE_SECRET_VECHI')) THEN
+    RAISE EXCEPTION 'Precondiție 0f: INTERN_EDGE_SECRET sau INTERN_EDGE_SECRET_VECHI există deja în Vault — nimic aplicat';
   END IF;
   IF to_regprocedure('extensions.gen_random_bytes(integer)') IS NULL OR to_regprocedure('vault.create_secret(text,text,text,uuid)') IS NULL THEN
     RAISE EXCEPTION 'Precondiție 0f: extensions.gen_random_bytes sau vault.create_secret lipsesc';
+  END IF;
+  -- 0g. antetul trece prin coada pg_net (net.http_request_queue; ACL-ul extensiei dă PUBLIC pe ea). Schema net NU e expusă
+  --     de PostgREST (probă 03.10: PGRST106 „Invalid schema: net”), deci rămâne doar calea prin obiecte din alte scheme:
+  --     nicio funcție executabilă și niciun view citibil de anon/authenticated nu au voie să atingă coada sau răspunsurile.
+  IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname NOT IN ('net', 'pg_catalog', 'information_schema') AND p.prosrc ~ '(http_request_queue|_http_response)'
+               AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE')))
+     OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relkind IN ('v', 'm') AND n.nspname NOT IN ('net', 'pg_catalog', 'information_schema')
+               AND pg_get_viewdef(c.oid) ~ '(http_request_queue|_http_response)'
+               AND (has_table_privilege('anon', c.oid, 'SELECT') OR has_table_privilege('authenticated', c.oid, 'SELECT'))) THEN
+    RAISE EXCEPTION 'Precondiție 0g: un obiect accesibil anon/authenticated citește coada pg_net — secretul ar putea fi văzut';
   END IF;
 END $pre$;
 
@@ -167,8 +183,9 @@ END $cron$;
 DO $post$
 BEGIN
   IF (SELECT count(*) FROM vault.decrypted_secrets WHERE name = 'INTERN_EDGE_SECRET') <> 1
+     OR (SELECT count(*) FROM vault.secrets WHERE name = 'INTERN_EDGE_SECRET_VECHI') <> 0
      OR (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'INTERN_EDGE_SECRET') !~ '^[0-9a-f]{64}$' THEN
-    RAISE EXCEPTION 'Postcondiție 1: INTERN_EDGE_SECRET lipsește sau nu e exact 64 hex minuscule (formatul cerut de _shared/poartaIntern.ts)';
+    RAISE EXCEPTION 'Postcondiție 1: INTERN_EDGE_SECRET nu e exact unul de 64 hex minuscule (formatul cerut de _shared/poartaIntern.ts) sau există _VECHI';
   END IF;
   IF (SELECT prosrc FROM pg_proc WHERE oid = 'public.fn_detect_ordine_trigger()'::regprocedure) !~ 'x-intern-secret.*INTERN_EDGE_SECRET'
      OR NOT (SELECT prosecdef AND proconfig = ARRAY['search_path=public, pg_temp'] AND pg_get_userbyid(proowner) = 'postgres'

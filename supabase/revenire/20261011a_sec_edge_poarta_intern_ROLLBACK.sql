@@ -3,6 +3,8 @@
 -- Scoate antetul x-intern-secret din cele 2 triggere și din jobul cron (cronul revine la comanda exactă de dinainte,
 -- md5 0bd8aadf…; triggerul inbox păstrează cheia anon citită din Vault — aceeași valoare, fără literal în cod).
 -- Secretul INTERN_EDGE_SECRET rămâne în Vault (inofensiv; se șterge separat, doar la cerere).
+-- Revenire TEHNIC PARȚIALĂ (Copilot P2 pe #595): cât timp secretul e în Vault, migrarea 20261011a NU se poate reaplica
+--   (precondiția 0f). O reaplicare cere o decizie separată: ștergerea sau rotația secretului — niciodată automat de aici.
 -- ⚠️ REDESCHIDE cele 3 endpointuri doar dacă edge-urile sunt redeployate FĂRĂ poartă; altfel, cu edge-urile cu poartă,
 --    triggerele/cronul fără antet vor fi refuzate (detect-ordine, citeste-orice, cleanup-recycle-bin nu mai rulează).
 -- Fără GO de execuție: doar la cererea explicită a lui Răzvan. Armarea nu e autorizare.

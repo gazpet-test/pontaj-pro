@@ -26,6 +26,10 @@ INSERT INTO vault.secrets (name, secret) VALUES ('SUPABASE_ANON_JWT', 'eyJfals.c
 -- net (machetă: înregistrează apelurile)
 CREATE SCHEMA net;
 CREATE TABLE net._apeluri (id bigserial PRIMARY KEY, url text, body jsonb, headers jsonb);
+-- coada reală pg_net, cu ACL-ul de pe live (PUBLIC = toate drepturile, fără RLS; USAGE pe schemă pentru anon/authenticated)
+CREATE TABLE net.http_request_queue (id bigserial PRIMARY KEY, method text, url text, headers jsonb, body bytea, timeout_milliseconds integer);
+GRANT ALL ON net.http_request_queue TO PUBLIC;
+GRANT USAGE ON SCHEMA net TO anon, authenticated, service_role;
 CREATE FUNCTION net.http_post(url text, body jsonb DEFAULT '{}'::jsonb, params jsonb DEFAULT '{}'::jsonb,
   headers jsonb DEFAULT '{"Content-Type": "application/json"}'::jsonb, timeout_milliseconds integer DEFAULT 5000)
   RETURNS bigint LANGUAGE sql AS $$ INSERT INTO net._apeluri (url, body, headers) VALUES (url, body, headers) RETURNING id $$;

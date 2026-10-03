@@ -55,18 +55,37 @@ ok "0 schelet = amprentele live (detect f726b68f, inbox 4e1dd9f7, cron 0bd8aadf,
 ok "1 fără runner → refuz"
 
 aplica_manual() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >/dev/null 2>&1; }
+# refuza_cu <etichetă> <motiv așteptat>: aplicarea trebuie să cadă, și exact pe precondiția așteptată (nu pe orice eroare)
+refuza_cu() { local out; if out="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" 2>&1)"; then esec "$1 a trecut"; fi
+  grep -q "$2" <<<"$out" || esec "$1 refuzat din alt motiv: $(grep -m1 ERROR <<<"$out")"; }
 q "SELECT vault.create_secret('x', 'INTERN_EDGE_SECRET')" >/dev/null
-aplica_manual && esec "2a secret existent a trecut"
+refuza_cu "2a secret existent" "Precondiție 0f"
 q "DELETE FROM vault.secrets WHERE name='INTERN_EDGE_SECRET'" >/dev/null
 q "UPDATE vault.secrets SET secret='eyJalta.cheie.anon' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
-aplica_manual && esec "2b cheie anon diferită a trecut"
+refuza_cu "2b cheie anon diferită" "Precondiție 0d"
 q "UPDATE vault.secrets SET secret='eyJfals.cheie.anon' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
 q "GRANT EXECUTE ON FUNCTION public.fn_detect_ordine_trigger() TO anon" >/dev/null
-aplica_manual && esec "2c ACL trigger diferit a trecut"
+refuza_cu "2c ACL trigger diferit" "Precondiție 0c: ACL"
 q "REVOKE EXECUTE ON FUNCTION public.fn_detect_ordine_trigger() FROM anon" >/dev/null
+q "SELECT vault.create_secret('$(printf 'b%.0s' $(seq 64))', 'INTERN_EDGE_SECRET_VECHI')" >/dev/null
+refuza_cu "2d _VECHI existent (Copilot P0)" "Precondiție 0f"
+q "DELETE FROM vault.secrets WHERE name='INTERN_EDGE_SECRET_VECHI'" >/dev/null
+q "GRANT EXECUTE ON FUNCTION public.fn_verifica_secret(text,text) TO authenticated" >/dev/null
+refuza_cu "2e fn_verifica_secret cu ACL lărgit (Copilot P1.1)" "Precondiție 0b"
+q "REVOKE EXECUTE ON FUNCTION public.fn_verifica_secret(text,text) FROM authenticated" >/dev/null
+q "ALTER FUNCTION public.fn_verifica_secret(text,text) STABLE" >/dev/null
+refuza_cu "2e' fn_verifica_secret cu altă volatilitate" "Precondiție 0b"
+q "ALTER FUNCTION public.fn_verifica_secret(text,text) VOLATILE" >/dev/null
+q "CREATE FUNCTION public.f_scurgere_coada() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM net.http_request_queue'; REVOKE ALL ON FUNCTION public.f_scurgere_coada() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.f_scurgere_coada() TO authenticated" >/dev/null
+refuza_cu "2f funcție authenticated pe coada pg_net (Copilot P1.2)" "Precondiție 0g"
+q "REVOKE EXECUTE ON FUNCTION public.f_scurgere_coada() FROM authenticated" >/dev/null
+q "CREATE VIEW public.v_scurgere_coada AS SELECT id FROM net.http_request_queue; GRANT SELECT ON public.v_scurgere_coada TO anon" >/dev/null
+refuza_cu "2f' view anon pe coada pg_net" "Precondiție 0g"
+q "DROP VIEW public.v_scurgere_coada; DROP FUNCTION public.f_scurgere_coada()" >/dev/null
 [ "$(q "$STARE")" = "$INITIAL" ] || esec "2 stare schimbată"
 [ "$(q "$ACL_TRIG")" = "$ACL_LIVE" ] || esec "2 ACL nerefăcut după 2c"
-ok "2 secret existent → refuz · cheie anon ≠ Vault → refuz · ACL trigger ≠ live → refuz"
+[ "$(q "SELECT proacl::text || '|' || provolatile::text FROM pg_proc WHERE proname='fn_verifica_secret'")" = "{postgres=X/postgres,service_role=X/postgres}|v" ] || esec "2 fn_verifica_secret nerefăcută"
+ok "2 refuz la: secret existent · _VECHI existent · cheie anon ≠ Vault · ACL trigger ≠ live · fn_verifica_secret ACL/volatilitate ≠ live · funcție/view anon|authenticated pe coada pg_net"
 
 SHA="$(sha256sum "$MIGRARE" | cut -d' ' -f1)"
 SIS="$(q "SELECT system_identifier FROM pg_control_system()")"
@@ -92,9 +111,10 @@ q "DO \$x\$ BEGIN EXECUTE (SELECT command FROM cron.job WHERE jobname='recycle_b
 [ "$(q "SET ROLE service_role; SELECT public.fn_verifica_secret('INTERN_EDGE_SECRET', NULL)")" = f ] || esec "4 verificator acceptă NULL"
 [ "$(q "SELECT count(*) FROM pg_proc WHERE proname='fn_ai_inbox_trigger_clasificare' AND prosrc ~ 'eyJ'")" = 0 ] || esec "4 JWT literal rămas în inbox"
 [ "$(q "$ACL_TRIG")" = "$ACL_LIVE" ] || esec "4 ACL trigger schimbat de migrare"
+[ "$(q "SELECT count(*) FROM vault.secrets WHERE name='INTERN_EDGE_SECRET_VECHI'")" = 0 ] || esec "4 _VECHI apărut"
 ok "4 triggere + cron trimit x-intern-secret = Vault (64 hex) · inbox anon din Vault · verificator ok/greșit/NULL · nepotrivitele nu pornesc nimic · ACL neschimbat"
 
-aplica_manual && esec "5 reaplicare a trecut"
+refuza_cu "5 reaplicare" "Precondiție 0c"
 ok "5 reaplicare → refuz"
 
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" >/dev/null 2>&1 && esec "6 revenire nearmată a trecut"
