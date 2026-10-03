@@ -91,7 +91,7 @@ Livrare (ca la #595/#596): migrare `2026101xa_logistica_rls_modul.sql` cu snapsh
 - Triggerele invoker (alimentari→rezervoare, achizitii_vrac→rezervoare, bonuri_carburant→alerte_consum) rămân acoperite: aceiași scriitori au W pe țintă. Restul triggerelor/funcțiilor care scriu sunt SECDEF.
 
 **De întrebat la review-ul SQL:**
-- **Q4 — aprobarea transporturilor pe rol.** Azi aprobă din UI rolurile superadmin + admin_logistica. 6 superadmini nu au scriere în Logistică: Nica Oana, Pantea, Dumitrescu Cristina, Tănase Mădălina, Kostas, Udrea. Propunere: (A) excepția pe rol rămâne în fn_logistica_transport_poate_edita și fluxul nu se schimbă — **recomandat** · (B) doar modulul, iar UI-ul se aliniază.
+- **Q4 — DECIS A (Răzvan, 03.10): excepția pe rol rămâne în fn_logistica_transport_poate_edita, fluxul de azi nu se schimbă.** Contextul întrebării: Azi aprobă din UI rolurile superadmin + admin_logistica. 6 superadmini nu au scriere în Logistică: Nica Oana, Pantea, Dumitrescu Cristina, Tănase Mădălina, Kostas, Udrea. Propunere: (A) excepția pe rol rămâne în fn_logistica_transport_poate_edita și fluxul nu se schimbă — **recomandat** · (B) doar modulul, iar UI-ul se aliniază.
 - Natalia (can_modify_employees, intră în /admin) nu va mai putea schimba datele firmei și depozitele. Rămân la owner + Logistică + Administrativ.
 
 **De făcut în UI înainte de aplicare (PR mic):** ștergerile din avize_arhiva, documente și amc șterg PDF-ul din Storage ÎNAINTE de rândul din BD. Când RLS refuză (editor, nu admin), rămâne rândul fără PDF. Ordinea trebuie inversată (BD, apoi Storage), iar butonul de ștergere ascuns pentru non-admin. Și lista de transporturi afișează ✏️/🗑 oricui vede tabul.
