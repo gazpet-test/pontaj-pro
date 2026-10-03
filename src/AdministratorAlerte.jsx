@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { ADMIN_ALERTE_KEY, SURSE_ADMIN, areAccesAdministrator, incarcaSursaAdmin, sorteazaAlerte } from './adminAlerte.js'
 
@@ -15,6 +15,7 @@ const STARI = { idle: 'Neevaluată', loading: 'Se evaluează', ok: 'Evaluată', 
 const initial = () => Object.fromEntries(SURSE_ADMIN.map(s => [s.id, { state: 'idle', rows: [] }]))
 const SOURCE_LINK_LABELS = { ofertare: 'licitația', hr: 'autorizația', flota: 'vehiculul', firma: 'documentul', gbe: 'garanția', conturi: 'contul' }
 const sourceById = Object.fromEntries(SURSE_ADMIN.map(s => [s.id, s]))
+const AdministratorAutomatizari = lazy(() => import('./AdministratorAutomatizari.jsx'))
 const fmtDate = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('ro-RO') : 'Necunoscut'
 const fmtTime = value => value ? new Date(value).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Bucharest' }) : '—'
 const money = row => Number.isFinite(row.amount) ? `${row.amount.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${row.currency || 'monedă neprecizată'}` : 'Valoare necunoscută'
@@ -54,6 +55,10 @@ function RandAlerta({ item, evaluatedAt, openSource }) {
 
 export default function AdministratorAlerte({ profile }) {
   const nav = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  // ⚙️ Automatizări (03.10.2026): tab owner-only; restul modulului rămâne neschimbat.
+  const tab = searchParams.get('tab') === 'automatizari' && profile?.is_owner === true ? 'automatizari' : 'alerte'
+  const alegeTab = t => setSearchParams(t === 'alerte' ? {} : { tab: t }, { replace: true })
   const [sources, setSources] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [accessMessage, setAccessMessage] = useState('')
@@ -137,6 +142,10 @@ export default function AdministratorAlerte({ profile }) {
       <div><div style={{ ...S.small, textTransform: 'uppercase', letterSpacing: '.5px' }}>{new Date().toLocaleDateString('ro-RO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Bucharest' })}</div><h1 style={{ fontSize: 26, margin: '6px 0' }}>Modulul Administratorului</h1><p style={S.small}>Priorități, termene și aprobări · numai citire</p></div>
 
     </header>
+    {profile?.is_owner === true && <nav aria-label="Secțiuni" style={{ ...S.row, marginBottom: 18 }}>
+      {[['alerte', '🔔 Alerte și aprobări'], ['automatizari', '⚙️ Automatizări']].map(([key, label]) => <button key={key} type="button" aria-pressed={tab === key} onClick={() => alegeTab(key)} style={{ ...S.button, fontWeight: 600, color: tab === key ? G.blue : G.muted, borderColor: tab === key ? G.blue : G.border }}>{label}</button>)}
+    </nav>}
+    {tab === 'automatizari' ? <Suspense fallback={<p style={S.small}>Se încarcă…</p>}><AdministratorAutomatizari profile={profile} /></Suspense> : <>
     {accessMessage && <div role="alert" style={{ ...S.panel, color: G.yellow, marginBottom: 18 }}>{accessMessage}</div>}
     <section aria-label="Situații din sursele evaluate" className="admin-metrics" style={{ marginBottom: 14 }}>
       {[
@@ -176,5 +185,6 @@ export default function AdministratorAlerte({ profile }) {
       const result = sources[source.id]
       return <div key={source.id}><strong style={{ fontSize: 13 }}>{source.label}</strong><div style={{ ...S.small, color: result.state === 'error' ? G.red : result.state === 'denied' ? G.yellow : G.muted }}>{STARI[result.state]} · {fmtTime(result.evaluatedAt)}</div>{result.message && <p style={S.small}>{result.message}</p>}</div>
     })}</div><p style={{ ...S.small, marginTop: 14 }}>Evaluarea descrie datele citite acum, nu confirmă că evidența sursă este completă sau actualizată. Dispariția unei alerte nu este înregistrată ca rezolvare.</p></section>}
+    </>}
   </main>
 }
