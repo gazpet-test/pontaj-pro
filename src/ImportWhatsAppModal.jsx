@@ -527,47 +527,25 @@ export default function ImportWhatsAppModal({
           litri: m.parsed.litri,
           data_cesiune: m.dt.toISOString().slice(0, 10),
         }))
-      setCesiuniDetectate(cesiuni)
-      // Pre-confirm cesiunile detectate (default checked)
-      setConfirmedCesiuni(new Set(cesiuni.map((_, idx) => idx)))
-      
-      // 27.05.2026: INSERT cesiuni subcontractor confirmate
-      // Mesajele detectate cu subcontractor + litri → INSERT direct în logistica_cesiuni_subcontractor
-      let cesiuniCreated = 0
-      const cesiuniHashesSaved = new Set()  // pentru a marca mesajele ca procesate
-      
-      if (cesiuniDetectate.length > 0 && confirmedCesiuni.size > 0) {
-        setProgress('🤝 Creez cesiuni subcontractor...')
-        const cesiuniPayload = []
-        for (let idx = 0; idx < cesiuniDetectate.length; idx++) {
-          if (!confirmedCesiuni.has(idx)) continue
-          const c = cesiuniDetectate[idx]
-          cesiuniPayload.push({
-            subcontractor_id: c.subcontractor.id,
-            data_cesiune: c.data_cesiune,
-            cantitate_litri: c.litri,
-            site_id: c.site?.id || null,
-            rezervor_id: null,  // detectat din WhatsApp - nu știm rezervorul sursă
-            status_compensare: 'pending',
-            observatii: `Detectat WhatsApp ${c.msg.author}: "${(c.msg.caption || '').slice(0, 150)}"`,
-            creator_id: profile?.id,
-          })
-          cesiuniHashesSaved.add(c.msg.hash)
-        }
-        
-        if (cesiuniPayload.length > 0) {
-          const { error: cesErr } = await supabase
-            .from('logistica_cesiuni_subcontractor')
-            .insert(cesiuniPayload)
-          if (cesErr) {
-            console.error('Eroare INSERT cesiuni:', cesErr)
-            showToast('⚠️ Cesiuni nu s-au putut crea: ' + cesErr.message, 'warn')
-          } else {
-            cesiuniCreated = cesiuniPayload.length
-          }
+      // 03.10.2026 (Răzvan, varianta A): cesiunile pornesc NEBIFATE și se creează abia la „Aplică”, doar cele bifate.
+      // INSERT-ul stătea aici, pe state vechi (useCallback fără cesiuniDetectate în deps) → nu s-a creat niciodată nimic.
+      // Pentru că hash-urile nu s-au mai salvat din 27.05, primul import după fix reia mesajele de la data de start:
+      // ce seamănă cu o cesiune deja în ERP (subcontractor + dată + litri) se marchează „posibil duplicat”.
+      if (cesiuni.length > 0) {
+        const zile = cesiuni.map(c => c.data_cesiune).sort()
+        const { data: existente, error: exErr } = await supabase
+          .from('logistica_cesiuni_subcontractor')
+          .select('subcontractor_id, data_cesiune, cantitate_litri')
+          .gte('data_cesiune', zile[0]).lte('data_cesiune', zile[zile.length - 1])
+        if (exErr) console.warn('Verificare dubluri cesiuni:', exErr)
+        for (const c of cesiuni) {
+          c.posibilDuplicat = (existente || []).some(e =>
+            Number(e.subcontractor_id) === Number(c.subcontractor.id) && e.data_cesiune === c.data_cesiune
+            && Math.abs(Number(e.cantitate_litri) - Number(c.litri)) < 0.5)
         }
       }
-      
+      setCesiuniDetectate(cesiuni)
+      setConfirmedCesiuni(new Set())
       // 25.05.2026 — DUAL MODE: Backfill poze pentru alimentări deja procesate WhatsApp fără poză
       // Scanez TOATE mesajele (inclusiv cele dedup-uite) cu imageFile, caut alimentare matched
       // anterior cu (autor + msg_dt) DAR fără whatsapp_poza_path → upload poza retroactiv.
@@ -758,6 +736,36 @@ export default function ImportWhatsAppModal({
           : null,
       })
       
+      // 03.10.2026: cesiunile subcontractor se creează AICI, la confirmare, doar cele bifate. Înainte blocul stătea în
+      // analiză, iar cesiuniCreated / cesiuniHashesSaved nu existau aici → ReferenceError la fiecare „Aplică” din 27.05
+      // (alimentările se actualizau, dar hash-urile nu se mai salvau și cesiunile nu se creau deloc).
+      let cesiuniCreated = 0
+      const cesiuniHashesSaved = new Set()
+      const cesiuniDeCreat = cesiuniDetectate.filter((_, idx) => confirmedCesiuni.has(idx))
+      if (cesiuniDeCreat.length > 0) {
+        setProgress('🤝 Creez cesiuni subcontractor...')
+        const { error: cesErr } = await supabase
+          .from('logistica_cesiuni_subcontractor')
+          .insert(cesiuniDeCreat.map(c => ({
+            subcontractor_id: c.subcontractor.id,
+            data_cesiune: c.data_cesiune,
+            cantitate_litri: c.litri,
+            site_id: c.site?.id || null,
+            rezervor_id: null,  // detectat din WhatsApp - nu știm rezervorul sursă
+            status_compensare: 'pending',
+            observatii: `Detectat WhatsApp ${c.msg.author}: "${(c.msg.caption || '').slice(0, 150)}"`,
+            creator_id: profile?.id,
+          })))
+        if (cesErr) {
+          console.error('Eroare INSERT cesiuni:', cesErr)
+          showToast('⚠️ Cesiuni nu s-au putut crea: ' + cesErr.message, 'warn')
+        } else {
+          cesiuniCreated = cesiuniDeCreat.length
+          cesiuniDeCreat.forEach(c => cesiuniHashesSaved.add(c.msg.hash))
+          setConfirmedCesiuni(new Set())  // un al doilea „Aplică” nu le mai creează încă o dată
+        }
+      }
+      
       // Salvez hash-urile mesajelor procesate (anti-dedup viitor)
       // 26.05.2026 FIX B: Includ și mesajele orfane cu photo_path + status='pending_plate_detection'
       const toSaveHashes = parsedMessages.map(m => {
@@ -769,7 +777,9 @@ export default function ImportWhatsAppModal({
         if (isConfirmedMatch) {
           status = 'matched'
         } else if (cesiuniHashesSaved.has(m.hash)) {
-          status = 'cesiune_subcontractor'  // 27.05.2026: marcare specială pentru cesiuni
+          // 03.10.2026: 'skipped' = procesat ca cesiune. CHECK-ul whatsapp_messages_processed_status_check nu are
+          // 'cesiune_subcontractor' → tot lotul de 100 era respins tăcut și cesiunile reapăreau (dubluri) la importul următor
+          status = 'skipped'
         } else if (matchInfo) {
           status = 'ambig'
         } else if (orphanPath) {
@@ -791,10 +801,11 @@ export default function ImportWhatsAppModal({
       
       // Upsert hashes (în batches de 100)
       for (let i = 0; i < toSaveHashes.length; i += 100) {
-        await supabase.from('whatsapp_messages_processed').upsert(
+        const { error: hashErr } = await supabase.from('whatsapp_messages_processed').upsert(
           toSaveHashes.slice(i, i + 100),
           { onConflict: 'msg_hash', ignoreDuplicates: true }
         )
+        if (hashErr) errors.push(`hash-uri mesaje (lot ${i / 100 + 1}): ${hashErr.message}`)  // altfel dedup-ul se strică tăcut
       }
       
       if (errors.length === 0) {
@@ -1073,6 +1084,7 @@ export default function ImportWhatsAppModal({
                       </div>
                       <div style={{fontSize: 11, color: G.muted}}>
                         Mesajele de mai jos menționează un subcontractor (ex: ARA). Vor crea rânduri NOI în <strong style={{color: G.text}}>logistica_cesiuni_subcontractor</strong> (NU alimentări vehicule).
+                        {' '}Pornesc <strong style={{color: G.text}}>nebifate</strong> — bifează doar ce nu e deja trecut în Cesiuni.
                       </div>
                     </div>
                     <div style={{display: 'flex', gap: 6}}>
@@ -1120,6 +1132,12 @@ export default function ImportWhatsAppModal({
                               <td style={{padding: '8px 8px', fontSize: 11, fontWeight: 700, color: '#A78BFA'}}>
                                 {c.subcontractor.nume_scurt}
                                 <div style={{fontSize: 9, color: G.muted, marginTop: 1, fontWeight: 400}}>{c.subcontractor.denumire_legala}</div>
+                                {c.posibilDuplicat && (
+                                  <div title="Există deja o cesiune cu același subcontractor, aceeași dată și aceeași cantitate"
+                                    style={{display: 'inline-block', marginTop: 3, padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 800, color: G.orange, background: G.orange + '22', border: `1px solid ${G.orange}55`}}>
+                                    ⚠ posibil duplicat
+                                  </div>
+                                )}
                               </td>
                               <td style={{padding: '8px 8px', textAlign: 'right', fontSize: 12, fontWeight: 700, color: G.orange}}>{c.litri}L</td>
                               <td style={{padding: '8px 8px', fontSize: 11, color: c.site ? G.text : G.dim}}>
@@ -1136,7 +1154,7 @@ export default function ImportWhatsAppModal({
                   </div>
                   
                   <div style={{marginTop: 10, fontSize: 11, color: G.muted, textAlign: 'center'}}>
-                    💡 <strong style={{color: '#A78BFA'}}>{confirmedCesiuni.size}</strong> cesiuni vor fi create la confirmare · status default: <code style={{background: G.bg, padding: '1px 6px', borderRadius: 4}}>pending</code> compensare
+                    💡 <strong style={{color: '#A78BFA'}}>{confirmedCesiuni.size}</strong> cesiuni vor fi create la confirmare{cesiuniDetectate.some(x => x.posibilDuplicat) && <> · <strong style={{color: G.orange}}>{cesiuniDetectate.filter(x => x.posibilDuplicat).length}</strong> posibile duplicate</>} · status default: <code style={{background: G.bg, padding: '1px 6px', borderRadius: 4}}>pending</code> compensare
                   </div>
                 </div>
               )}
