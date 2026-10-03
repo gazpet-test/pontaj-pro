@@ -29,6 +29,7 @@ import ActivitatiProiectPanel from './ActivitatiProiectPanel.jsx'
 import MaterialeProiectPanel from './MaterialeProiectPanel.jsx'
 import UnitatiProiectPanel from './UnitatiProiectPanel.jsx'
 import ProiectNouWizard from './ProiectNouWizard.jsx'
+import OfertarePF, { useAccesPF } from './OfertarePF.jsx'
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
@@ -2951,6 +2952,7 @@ function ProbePresiune({ proiect }) {
 // unui proiect: date contract, echipă (MP/RTE/RTS/Transgaz), faze ISC, stadiu.
 // ══════════════════════════════════════════════════════════════════════════
 function TabProiectDashboard({ proiectId }) {
+  const accesPF = useAccesPF()   // un singur hook; OfertarePF primește rezultatul ca prop
   const [p, setP] = useState(null)
   const [extra, setExtra] = useState(null)
   const [personnel, setPersonnel] = useState({})
@@ -3117,6 +3119,12 @@ function TabProiectDashboard({ proiectId }) {
           </div>
         )}
       </div>
+
+      {/* Secțiunea PF (inclusiv eroarea ei) apare doar când PF e accesibil sau verificarea a eșuat; PGRST202 e ignorat. */}
+      {(accesPF.poateCiti || accesPF.eroareAcces) && <section style={{ marginTop:14 }}>
+        <h3>Propunere financiară (istoric)</h3>
+        <OfertarePF key={proiectId} proiectId={proiectId} acces={accesPF} />
+      </section>}
 
       {/* Faze determinante ISC — checklist complet (extract AI din PCCVI) */}
       <FazeDeterminanteISC proiect={pz} />

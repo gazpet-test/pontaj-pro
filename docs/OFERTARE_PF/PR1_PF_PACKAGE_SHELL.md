@@ -1,4 +1,4 @@
-# PR1 — „PF Package Shell”: dosarul propunerii financiare, versionat (specificație v2)
+# PR1 — „PF Package Shell”: dosarul propunerii financiare, versionat (specificație v3)
 
 Stare: **v2 = v1 + condițiile Copilot din 03.10.2026, ~10:20** (GO cu condiții). Nimic aplicat.
 Sursă: verdictul Copilot pe designul PF (03.10, ~03:07, GO cu condiții P0.1–P0.3), deciziile lui Răzvan din 03.10, verdictul Copilot pe spec v1 (03.10, ~10:20).
@@ -26,7 +26,7 @@ Prețurile și coeficienții proiectelor NU intră în repo. Ele stau în `claud
 - Nu creează un registru nou de fișiere. Documentele rămân în `ofertare_formulare_registru`.
 - **Nu dă verdict automat pe grafic** (vezi §5).
 
-## 3. Schema (migrare `20261009a_ofertare_pf_pachete.sql` + `_ROLLBACK`, aplicată doar prin runner)
+## 3. Schema (migrare `20261012a_ofertare_pf_pachete.sql` + `_ROLLBACK`, aplicată doar prin runner — redenumită din 20261009a, vezi §8)
 
 ### 3.0 Precondiții fail-closed (în stilul migrărilor existente)
 
@@ -194,3 +194,21 @@ Până atunci rezultatul e „neverificat”, nu „neconform”. Comparația au
   - helper RLS dedicat.
 - **P2:** data_depunere timestamptz, updated_by, verificarea inlocuieste_id, pin pe helperi, NULL în loc de 0 în control.
 - **Grafic:** direcția Răzvan e GO. Verdictul automat pe suma graficului e amânat până la semantica rândurilor însumabile și a domeniului.
+
+## 8. v3 — ce s-a schimbat după validarea livrării lui Jakarinos și preflight-ul pe live (03.10.2026)
+
+Validarea (harness + simulare prod-like) a găsit 2 blocante (build `OfertarePF.jsx:194`; `GRANT … WITH ADMIN OPTION` care pică pe un `postgres` nesuperuser) și repetarea NO-GO-ului de la 20261010a (drepturi pentru `service_role`, secvențe deschise). Preflight-ul read-only pe live a mai găsit unul: **`postgres` nu are USAGE WITH GRANT OPTION pe schema `auth`** (owner `supabase_admin`), deci executorul PF nu poate primi drept pe `auth`. Decizii (Răzvan, 03.10: „tot ce e testat”):
+
+- **Migrarea** devine `20261012a_ofertare_pf_pachete.sql` (sortează după 20261011a, ultima aplicată). Livrare: migrarea ÎNAINTE de merge.
+- **Identitatea în rolul executor**: wrapper `public.fn_ofertare_pf_uid()` (SQL, STABLE, SECURITY DEFINER, owner `postgres`, `SELECT auth.uid()`), EXECUTE doar pentru `ofertare_pf_executor`; precondiție pe md5-ul `auth.uid()` de pe live. Executorul nu primește nimic pe `auth`. Testat: wrapper-ul întoarce sub-ul apelantului, nu al ownerului.
+- **Drepturi**: `service_role` nu primește nimic (tabele, view, RPC-uri); secvențele identity fără drepturi; ACL verificat EXACT (aclexplode). `GRANT ofertare_pf_executor TO postgres WITH INHERIT TRUE, SET TRUE` (fără ADMIN OPTION). Postcondiție fail-closed că executorul poate folosi efectiv `extensions.digest` și wrapper-ul.
+- **Scriere PF**: doar owner sau `user_module_access.access_level IN ('admin','editor')` pe `ofertare_pf` (precedentul 20261005b); `viewer` doar citește.
+- **Filiație**: închiderea cere ca `inlocuieste_id` să fie exact versiunea închisă curentă a scope-ului (sau NULL dacă nu există).
+- **Hash legacy din registru** (Q1, „necunoscutele din registru” din NOTE.md-ul lui Jakarinos): `fisier_hash` e text liber, introdus manual — se compară normalizat (`lower(btrim())`) și doar când arată ca `^[0-9a-f]{64}$`; algoritm/sursă/mărime rămân NULL („proveniență necunoscută”). Fără coloane noi în registru în PR1.
+- **Graficul** (Q2/Q5, „marcajul PDF grafic” din NOTE.md): `grafic_are_activitati` = EXISTS pe `grafic_activitati.licitatie_id` / `proiect_id` (politica live `grafic_act_sel` = `auth.uid() IS NOT NULL`, pinuită în precondiții); `grafic_pdf_in_manifest` rămâne NULL / „neverificat” până la un `rol_document` explicit (spec ulterior). Fără verdict pe sumă.
+- **Semne pe valori** (Q3): fără CHECK în PR1; regula pe roluri (≥ 0 pentru total/plătibil/contract/grafic, orice semn pentru act adițional/ajustări, cota 0–100) rămâne de decis.
+- **UI**: accesul PF se re-verifică doar la schimbarea userului (evenimentele de sesiune ale aceluiași user nu mai demontează dosarul); eroarea PF apare doar în tab-ul PF; lipsa migrării (PGRST202) ascunde PF fără banner.
+- **Revenire**: a doua armare separată dacă există drafturi; refuz mereu dacă există versiuni închise/înlocuite.
+- **Teste**: harness PG17 + PG16 + etapă prod-like (postgres nesuperuser, default privileges și ACL-ul `auth` ca pe live, sesiuni prin `authenticator`), fiecare refuz verificat pe mesajul exact, gate 0e în harness, 13 mutanți prinși (inclusiv r2 pe configurația live).
+- **r4 (după NO-GO-ul Copilot pe e3bd3f4, P0 „confused deputy”)**: orice folosire a unui document din registru (`documente_selectate.registru_id`, `sursa_registru_id`, închiderea) cere pe server ȘI acces general la Ofertare pentru apelant — helper `fn_ofertare_pf_acces_ofertare()` (SECDEF peste `fn_are_acces_ofertare()`, EXECUTE pentru `authenticated` și executor); registrul trebuie să fie al aceleiași licitații ca dosarul; dosarele pe proiect nu pot folosi registrul (doar documente externe); refuzul vine înaintea FK-ului, cu același mesaj pentru id existent sau inexistent (fără oracol); politica executorului pe registru cere și helper-ul. Consecință asumată: un editor PF fără Ofertare lucrează doar cu dosare cu documente externe. După închiderea de către cineva cu Ofertare, metadatele registrului din manifest (cod, denumire, cale, hash, stare) sunt vizibile oricărui cititor PF — manifestul face parte din dosar. La schimbarea userului drepturile PF devin imediat „fără acces” până la re-verificare.
+- **Dependență de păstrat (Copilot P2, 03.10)**: `fn_ofertare_pf_acces_ofertare()` → `fn_are_acces_ofertare()`. Migrarea pinuiește funcția de bază (apply fail-closed); dacă semantica accesului general Ofertare se schimbă ulterior, PF o moștenește deliberat — orice schimbare a lui `fn_are_acces_ofertare` trebuie revăzută și din perspectiva PF.
