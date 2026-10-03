@@ -10,6 +10,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
+import OfertarePF, { useAccesPF } from './OfertarePF.jsx'
 import { mesajInvoke } from './lib/mesajInvoke.js'
 import { grupeazaAcoperiri, scorNumeric } from './ofertareOrdine.js'
 import { grupeazaPeSubiect, esteDeVerificat } from './ofertareSubiecte.js'
@@ -3517,6 +3518,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
   intrareDocument = null, onIntrareConsumata = null, showToast = null }) {
   // Redesign #40 (macheta redesign_fisa, GO Răzvan 07.09.2026): antet + KPI + tab-uri + „Pe scurt” în lateral.
   // Secțiunile E1–E3 și verificarea finală rămân componentele existente, doar montate pe tab-uri.
+  const accesPF = useAccesPF()   // un singur hook; OfertarePF primește rezultatul ca prop
   const [motivare, setMotivare] = useState(l.decizie_motivare || '')
   const [regim, setRegim] = useState(l.regim_achizitie || '')
   const [resp, setResp] = useState(l.responsabil_id || '')
@@ -3614,6 +3616,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     ['perechi', '🔗 Cerință ↔ dovadă'],
     ['propunere', `📑 Propunere tehnică${ptSt ? ` (${ptSt.cu_capitol}/${ptSt.de_raspuns})` : ''}`],
     ['formulare', '🗂 Formulare de depus'],
+    ...(accesPF.poateCiti || accesPF.eroareAcces ? [['pf', '💰 Propunere financiară']] : []),
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
     ['garantie', `🛡 Garanție${indG.tab}`],
@@ -3681,6 +3684,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             {tab === 'perechi' && <CerinteAcoperirePerechi licitatie={l} />}
             {tab === 'triere' && <OfertareTriere licitatie={l} profile={profile} showToast={showToast} onChanged={onChanged} onProceseaza={() => setTab('documente')} />}
             {tab === 'triere' && <ClauzeContractSection licitatie={l} profile={profile} showToast={showToast} />}
+            {/* Eroarea PF apare DOAR în tab-ul PF; PGRST202 (migrare lipsă) e ignorat de hook. */}
+            {tab === 'pf' && <OfertarePF key={l.id} licitatieId={l.id} acces={accesPF} />}
             {tab === 'formulare' && <FormulareRegistruSection licitatie={l} profile={profile} showToast={showToast} />}
             {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
               intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} />}
