@@ -76,7 +76,7 @@ RC=0; PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migr
 ok "3 runner: APLICAT + ÎNREGISTRAT + gate 0e (cod 0), sha256 $SHA"
 gate_0e dupa
 
-q "INSERT INTO public.automatizari (cod, nume, tip, unde, ce_face) VALUES ('test_unu','Test unu','cron_bd','Supabase pg_cron','x'), ('test_doi','Test doi','script_pc','PC','y')" >/dev/null
+q "INSERT INTO public.automatizari (cod, nume, tip, unde, ce_face, secrete_nume) VALUES ('test_unu','Test unu','cron_bd','Supabase pg_cron','x','X_SECRET'), ('test_doi','Test doi','script_pc','PC','y',NULL)" >/dev/null
 [ "$(ca authenticated 1 "SELECT count(*) FROM public.automatizari")" = 2 ] || esec "4 ownerul nu vede 2 rânduri"
 [ "$(ca authenticated 2 "SELECT count(*) FROM public.automatizari")" = 0 ] || esec "4 colegul vede rânduri"
 [ "$(ca authenticated - "SELECT count(*) FROM public.automatizari")" = 0 ] || esec "4 fără uid vede rânduri"
@@ -86,21 +86,30 @@ for s in "INSERT INTO public.automatizari (cod, nume, tip, unde, ce_face) VALUES
   [ "$(ca authenticated 1 "$s")" = ERR ] || esec "4 ownerul poate scrie din API: $s"
   [ "$(ca anon - "$s")" = ERR ] || esec "4 anon poate scrie: $s"
 done
-[ "$(ca service_role - "INSERT INTO public.automatizari (cod, nume, tip, unde, ce_face) VALUES ('svc_ok','Svc','extern','x','x') RETURNING 'ins'")" = ins ] || esec "4 service_role nu poate scrie"
+for s in "SELECT count(*) FROM public.automatizari" "INSERT INTO public.automatizari (cod, nume, tip, unde, ce_face) VALUES ('svc_x','Svc','extern','x','x')" \
+         "UPDATE public.automatizari SET nume='Svc'" "DELETE FROM public.automatizari" "TRUNCATE public.automatizari" \
+         "SELECT nextval(pg_get_serial_sequence('public.automatizari','id'))"; do
+  [ "$(ca service_role - "$s")" = ERR ] || esec "4 service_role are acces: $s"
+done
+[ "$(ca authenticated 1 "SELECT nextval(pg_get_serial_sequence('public.automatizari','id'))")" = ERR ] || esec "4 authenticated poate folosi secvența"
+[ "$(q "SELECT count(*) FROM pg_class c, aclexplode(c.relacl) a WHERE c.oid = pg_get_serial_sequence('public.automatizari','id')::regclass AND a.grantee <> c.relowner")" = 0 ] || esec "4 secvența are drepturi în afara ownerului"
+[ "$(q "SELECT string_agg(coalesce(pg_get_userbyid(nullif(a.grantee,0)),'PUBLIC')||'='||a.privilege_type, ',') FROM pg_class c, aclexplode(c.relacl) a WHERE c.oid = 'public.automatizari'::regclass AND a.grantee <> c.relowner")" = authenticated=SELECT ] || esec "4 ACL tabel nu e exact authenticated=SELECT"
 [ "$(ca authenticated 1 "SELECT count(*) FROM public.automatizari WHERE tip='altceva'")" = 0 ] || esec "4 filtru"
 q "INSERT INTO public.automatizari (cod, nume, tip, unde, ce_face) VALUES ('Rau cod','x','cron_bd','x','x')" >/dev/null 2>&1 && esec "4 CHECK cod a trecut"
 q "INSERT INTO public.automatizari (cod, nume, tip, unde, ce_face) VALUES ('tip_rau','xyz','altceva','x','x')" >/dev/null 2>&1 && esec "4 CHECK tip a trecut"
 q "UPDATE public.automatizari SET updated_at = now() - interval '1 day' WHERE cod='test_unu'" >/dev/null
 q "UPDATE public.automatizari SET stare='oprit' WHERE cod='test_unu'" >/dev/null
 [ "$(q "SELECT updated_at > now() - interval '1 minute' FROM public.automatizari WHERE cod='test_unu'")" = t ] || esec "4 updated_at nu s-a atins"
-ok "4 acces: owner 2/coleg 0/anon refuz · scriere din API refuzată · service_role scrie · CHECK-uri · updated_at"
+ok "4 acces: owner 2/coleg 0/anon refuz · scriere din API refuzată · service_role fără niciun drept · secvență închisă · ACL exact · CHECK-uri · updated_at"
 
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" >/dev/null 2>&1 && esec "5 reaplicare a trecut"
 ok "5 reaplicare → refuz"
 
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" >/dev/null 2>&1 && esec "6 revenire nearmată a trecut"
 [ -n "$(q "SELECT to_regclass('public.automatizari')")" ] || esec "6 nearmată a șters tabelul"
-"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261010a', 'STERGE_AUTOMATIZARI:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null || esec "6 revenire armată"
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261010a', 'STERGE_AUTOMATIZARI:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null 2>&1 && esec "6 armată fără armarea datelor a trecut cu rânduri în tabel"
+[ "$(q "SELECT count(*) FROM public.automatizari")" = 2 ] || esec "6 rândurile s-au pierdut"
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261010a', 'STERGE_AUTOMATIZARI:' || txid_current(), true); SELECT set_config('gazpet.revenire_20261010a_date', 'STERGE_SI_RANDURILE:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null || esec "6 revenire armată + date"
 [ -z "$(q "SELECT to_regclass('public.automatizari')")" ] || esec "6 tabelul a rămas"
-ok "6 revenire: nearmată refuz; armată → tabelul dispare"
+ok "6 revenire: nearmată refuz · armată cu rânduri fără armarea datelor refuz · dublu armată → tabelul dispare"
 echo "PASS test_admin_automatizari (sha256 $SHA)"

@@ -60,7 +60,7 @@ function RandAutomatizare({ r }) {
     <button type="button" style={{ ...S.button, color: G.blue, border: 'none', background: 'transparent', padding: '8px 0' }} aria-expanded={deschis} onClick={() => setDeschis(v => !v)}>{deschis ? 'Închide fișa' : 'Fișa de securitate și detalii'}</button>
     {deschis && <div style={{ marginTop: 8, padding: 12, borderRadius: 7, background: G.bg, fontSize: 13, lineHeight: 1.7 }}>
       {FISA.map(([k, label]) => <p key={k} style={{ margin: '0 0 6px' }}><strong>{label}:</strong> {r[k] || <span style={{ color: G.yellow }}>necompletat</span>}</p>)}
-      {r.secrete && <p style={{ margin: '0 0 6px' }}><strong>Secrete (doar nume):</strong> {r.secrete}</p>}
+      {r.secrete_nume && <p style={{ margin: '0 0 6px' }}><strong>Secrete (doar nume):</strong> {r.secrete_nume}</p>}
       {r.referinta && <p style={{ ...S.small, margin: '6px 0 0' }}>Referință tehnică: <code>{r.referinta}</code></p>}
       {(r.decis_de || r.decis_la) && <p style={{ ...S.small, margin: 0 }}>Decis: {[r.decis_de, fmtZi(r.decis_la)].filter(Boolean).join(', ')}</p>}
       {r.registru_sectiune && <p style={{ ...S.small, margin: 0 }}>Registru: {r.registru_sectiune}</p>}
