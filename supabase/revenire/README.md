@@ -176,3 +176,13 @@ SELECT set_config('gazpet.rollback_tehnic_20261003a', 'SCOATE_BILETE_ORDIN:' || 
 COMMIT;
 ```
 Precondiție = tabela există și e goală + md5-ul propriu 20261003a pe `garantii_alerte()` (`bd170a0f…`); postcondiție = starea live (fără tabelă/secvență, md5 `fd35c645…`, ACL neatins, fără amprente `bo_*`); dezarmare la final. Testat în `scripts/test_garantii_bilete_ordin.sh` pasul 6 (schelet: `supabase/tests/garantii_bilete_ordin_schelet.sql`). Migrarea: sha256 `a115d367…` (vezi PR), validator OK.
+
+## 20261002d — SEC IBAN GBE contracte (`20261002d_sec_gbe_iban_ROLLBACK.sql`, NEAPLICAT)
+Readaugă coloana `contracte_terti.gbe_cont_iban` (la FINALUL listei — PostgreSQL nu păstrează poziția), copiază valorile înapoi din `contracte_terti_gbe_cont`, readuce `v_gbe_per_contract` cu `c.gbe_cont_iban` direct (md5 live `b9861ba0…`) și șterge funcțiile `fn_gbe_cont_iban` / `fn_gbe_cont_iban_set` și tabela nouă. **Redeschide** expunerea IBAN pentru orice cont logat. Fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261002d', 'REDESCHIDE_IBAN_GBE:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiții = exact starea patch-ului (tabela + funcțiile există, coloana lipsește, view-ul trece prin funcție); postcondiții = starea live din 02.10 (valorile înapoi 1:1, 55 de coloane cu `gbe_cont_iban text`, SELECT pe tabel, fără funcții/tabelă nouă). După revenire, migrarea NU se mai poate reaplica fără re-amprentare (precondiția 0c cere ordinea live a coloanelor). UI-ul (`GbeEvidenta.jsx`) de pe `main` citește IBAN-ul prin RPC: după revenire, fișa GBE nu mai arată contul până se revine și codul. Testat în `scripts/test_sec_gbe_iban.sh` pasul 5.
