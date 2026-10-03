@@ -2851,6 +2851,8 @@ function ProbePresiune({ proiect }) {
   const [dataEf, setDataEf] = useState('')
   const [msg, setMsg] = useState(null)
   const flash = (m, err) => { setMsg({ m, err }); setTimeout(() => setMsg(null), 4000) }
+  // input întunecat, ca restul formularelor din fișă (S nu există în fișierul ăsta)
+  const inp = { width: '100%', boxSizing: 'border-box', background: G.bg, border: `1px solid ${G.border}`, borderRadius: 8, padding: '7px 10px', color: G.text, outline: 'none' }
 
   const load = useCallback(async () => {
     const { data } = await supabase.from('executie_probe_presiune')
@@ -2906,8 +2908,8 @@ function ProbePresiune({ proiect }) {
       {adding && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
           <input value={denumire} onChange={e => setDenumire(e.target.value)} placeholder="denumire probă (ex. probă presiune tronson km 3+200)"
-            style={{ ...S.inp, fontSize: 12.5, maxWidth: 280 }} />
-          <input type="date" value={dataEf} onChange={e => setDataEf(e.target.value)} style={{ ...S.inp, fontSize: 12.5, maxWidth: 150 }} />
+            style={{ ...inp, fontSize: 12.5, maxWidth: 280 }} />
+          <input type="date" value={dataEf} onChange={e => setDataEf(e.target.value)} style={{ ...inp, fontSize: 12.5, maxWidth: 150 }} />
           <label style={{ padding: '7px 12px', fontSize: 12, fontWeight: 700, background: 'transparent', color: '#58A6FF', border: '1px solid #58A6FF66', borderRadius: 8, cursor: uploading ? 'wait' : 'pointer', opacity: uploading ? .6 : 1 }}>
             {uploading ? '⏳ Se salvează...' : '📎 Salvează + atașează fișier'}
             <input type="file" style={{ display: 'none' }} disabled={uploading}
