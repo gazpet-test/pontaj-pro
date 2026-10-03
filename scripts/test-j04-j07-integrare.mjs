@@ -74,9 +74,22 @@ test('ordinea migrărilor: J04 (20260930a) înaintea J07 (20261003a); fără col
   const i04 = toate.indexOf('20260930a_ofertare_pachet_hash_server_jakv202.sql')
   const i07 = toate.indexOf('20261003a_ofertare_poarta_server_jakv2p3.sql')
   assert.ok(i04 >= 0 && i07 > i04)
+  // Excepții cunoscute (03.10.2026): migrări care au luat același prefix DUPĂ J04/J07 și sunt deja APLICATE în producție
+  // prin runner, cu versiune explicită (supabase_migrations.schema_migrations) — nu se mai pot redenumi. Runner-ul
+  // ordonează după versiunea de 14 cifre, nu după prefixul fișierului, deci nu concurează cu J04/J07 la livrare.
+  // Orice coliziune NOUĂ pe aceste prefixe pică în continuare testul.
+  const aplicateCuAcelasiPrefix = new Map([
+    ['20260930a_profiles_campuri_owner_only_extins.sql', '20261001178000'],
+    ['20260930a_profiles_campuri_owner_only_extins_ROLLBACK.sql', null],
+    ['20261003a_garantii_bilete_ordin.sql', '20261002191500'],
+  ])
   for (const prefix of ['20260930a_', '20261003a_']) {
-    const alte = toate.filter(f => f.startsWith(prefix) && !/jakv202|jakv2p3/.test(f))
+    const alte = toate.filter(f => f.startsWith(prefix) && !/jakv202|jakv2p3/.test(f) && !aplicateCuAcelasiPrefix.has(f))
     assert.deepEqual(alte, [], `prefixul ${prefix} e folosit și de alte migrări`)
+  }
+  for (const f of aplicateCuAcelasiPrefix.keys()) {
+    if (!toate.includes(f)) continue
+    assert.doesNotMatch(read(`supabase/migrations/${f}`), /fn_pt_pachet_depus_verifica|fn_ofertare_pt_pachet_poarta_documentatie|fn_gate_depunere/, `${f} atinge funcțiile J04/J07`)
   }
   const j04 = read('supabase/migrations/20260930a_ofertare_pachet_hash_server_jakv202.sql')
   const j07 = read('supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3.sql')
