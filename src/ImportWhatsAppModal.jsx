@@ -285,6 +285,9 @@ function parseCaptionMessage(caption, sites, vehicles, subcontractori = []) {
 // 25.05.2026 — Etapa 4 OCR prerequisite: upload poza bon WhatsApp în bucket
 // Path strategy: {YYYY-MM}/{alim_id}_{msg_hash[:8]}.{ext}
 // Returnează { ok, path, reason, error }
+// deciziile OCR luate de un om nu se suprascriu niciodată din import (audit V7)
+const OCR_DECIZII_MANUALE = ['accepted_manual', 'rejected_manual']
+
 async function uploadPozaForAlim(zip, alimId, msg) {
   if (!msg.imageFile) return { ok: false, reason: 'no_image' }
   if (!zip) return { ok: false, reason: 'no_zip' }
@@ -299,6 +302,16 @@ async function uploadPozaForAlim(zip, alimId, msg) {
     })
   }
   if (!file) return { ok: false, reason: 'not_in_zip' }
+  
+  // 1b. 03.10.2026 (audit V7, NO-GO Copilot pe cursa analiză → aplică): starea se reverifică ACUM, nu cea de la
+  // analiză. Dacă alimentarea a primit între timp poză sau o decizie OCR manuală, nu urcăm și nu resetăm nimic.
+  const { data: acum, error: selErr } = await supabase
+    .from('logistica_alimentari').select('whatsapp_poza_path, ocr_status').eq('id', alimId).maybeSingle()
+  if (selErr) return { ok: false, reason: 'select_error', error: selErr.message }
+  if (!acum) return { ok: false, reason: 'alimentare_lipsa' }
+  if (acum.whatsapp_poza_path || OCR_DECIZII_MANUALE.includes(acum.ocr_status)) {
+    return { ok: false, reason: 'stare_schimbata', error: 'are deja poză sau decizie OCR manuală — nu s-a modificat nimic' }
+  }
   
   // 2. Path & content type
   const extMatch = msg.imageFile.match(/\.(jpg|jpeg|png|webp)$/i)
@@ -320,7 +333,10 @@ async function uploadPozaForAlim(zip, alimId, msg) {
   if (upErr) return { ok: false, reason: 'upload_error', error: upErr.message }
   
   // 4. Update alimentare cu path-ul + reset ocr_status la 'pending' ca să intre în următorul OCR bulk
-  const { error: updErr } = await supabase
+  // Garanția finală e UPDATE-ul condiționat: nu atinge rândul dacă între SELECT-ul de mai sus și acum a apărut
+  // o poză sau o decizie OCR manuală (0 rânduri = stare schimbată, NU succes). Fișierul urcat nu se șterge aici:
+  // un import concurent al aceluiași mesaj poate folosi exact aceeași cale.
+  const { data: actualizat, error: updErr } = await supabase
     .from('logistica_alimentari')
     .update({ 
       whatsapp_poza_path: path,
@@ -329,7 +345,13 @@ async function uploadPozaForAlim(zip, alimId, msg) {
       ocr_validated_at: null,
     })
     .eq('id', alimId)
+    .is('whatsapp_poza_path', null)
+    .or(`ocr_status.is.null,ocr_status.not.in.(${OCR_DECIZII_MANUALE.join(',')})`)
+    .select('id')
   if (updErr) return { ok: false, reason: 'update_error', error: updErr.message }
+  if (!actualizat || actualizat.length === 0) {
+    return { ok: false, reason: 'stare_schimbata', error: 'a primit între timp poză sau decizie OCR manuală — nu s-a modificat nimic' }
+  }
   
   return { ok: true, path }
 }
@@ -571,7 +593,7 @@ export default function ImportWhatsAppModal({
         
         if (!existingAlim) { bfStats.skipped++; continue }
         // decizia OCR luată manual nu se resetează prin backfill
-        if (['accepted_manual', 'rejected_manual'].includes(existingAlim.ocr_status)) { bfStats.skipped++; continue }
+        if (OCR_DECIZII_MANUALE.includes(existingAlim.ocr_status)) { bfStats.skipped++; continue }
         bfCandidati.push({ alim_id: existingAlim.id, plac: existingAlim.logistica_active?.nr_inmatriculare || '?', msg })
       }
       bfStats.deFacut = bfCandidati.length
