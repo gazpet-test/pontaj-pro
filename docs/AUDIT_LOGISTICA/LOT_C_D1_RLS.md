@@ -72,3 +72,28 @@ Livrare (ca la #595/#596): migrare `2026101xa_logistica_rls_modul.sql` cu snapsh
 - **Q1** Rolul `admin_logistica` (Titi Jeno: rol admin_logistica, modul viewer) dă drept de scriere? A) nu, doar modulul (Titi trece pe editor dacă trebuie să scrie) · B) da, rolul contează ca editor.
 - **Q2** Ștergerea în tabelele Logistică: A) doar admin-ii modulului + owner (Cristiana, Daniel, Mitrache) · B) și editorii.
 - **Q3** Editorii din alte departamente (Cristina Dumitrescu, Kostas, Madalina, Mioara, Mirela Rosu, Oana Nica, Silviu Stanescu) rămân editori pe Logistică? A) da, nu schimb nimic · B) îi trec pe viewer (cer listă de la tine).
+
+## 7. Design final după analiza din 03.10 seara (de aici se scrie migrarea — NIMIC scris/aplicat încă)
+**Instantaneu live (read-only, 03.10):** 46 de tabele în domeniu, 172 de politici, din care 122 de scriere deschise (`auth.uid() IS NOT NULL`); md5 politici (formula din 20261005b, pe cele 46 de tabele) = `0bbc8a8b9ed7f45c0b5008519ab47666` → precondiția migrării. Rămân în afara domeniului (deja pe rol): service_parteneri, telemetrie_zilnica, whatsapp_imports_log, whatsapp_messages_processed. Nume propus: `20261013a_logistica_rls_modul` (de verificat prefixul față de schema_migrations la scriere).
+
+**Helperi** (SECDEF, sql, STABLE, `search_path = public, pg_temp`, EXECUTE doar authenticated/service_role): `fn_logistica_poate_scrie()` (owner ∨ modul logistica admin/editor), `fn_logistica_poate_sterge()` (owner ∨ modul logistica admin), `fn_acces_modul_scriere(text)` (owner ∨ modulul dat admin/editor — pentru executie/administrativ), `fn_logistica_rol_in(text[])`, `fn_logistica_transport_poate_edita(integer)` (poate_scrie ∨ rol aprobator ∨ solicitant/manager plecare/manager destinație pe transportul dat).
+
+**Reguli** (W = poate_scrie, D = poate_sterge; SELECT neschimbat; unde era politică `ALL` se pune un SELECT identic cu citirea de azi):
+- G1 (W/W/D): achizitii_vrac, active_poze, alerte_consum, alimentari, alimentari_card, amc, amc_tipuri, audit_log, avize_arhiva, bonuri_carburant, bonuri_comune, categorii, comenzi_transport(_itemi), costuri, curse_gps, declaratii, imprumuturi, mentenanta_istoric/plan, oscar_dispense, piese_catalog/istoric/poze, rezervoare, service_fise(_documente), service_intrari, service_itemi_preset, supape, tipuri_documente. Doar INSERT: active_km_ore_ajustari, importuri_rompetrol, qr_submit_log. INSERT+UPDATE: cesiuni_subcontractor, subcontractori (DELETE-urile lor pe rol rămân neatinse).
+- active: INSERT W · UPDATE USING W ∨ rol manager_santier, CHECK W ∨ (manager_santier ∧ stare='Nefunctional') (raportul din /m; cei 10 manageri cu profile_sites au toți rolul ăsta) · DELETE D.
+- alocari: W ∨ modul executie (TabSantiere), la toate trei.
+- probleme, probleme_jurnal: INSERT/UPDATE W ∨ created_by = eu (AppMobilManageri trimite created_by) · DELETE D.
+- documente: INSERT/UPDATE W ∨ created_by = eu (CitesteOrice/DocumentScanner trimit created_by) · DELETE D.
+- furnizori: INSERT rămâne deschis (politica actuală NU se atinge — registru comun) · UPDATE W ∨ administrativ · DELETE D.
+- setari, depozite: INSERT/UPDATE W ∨ administrativ · DELETE D.
+- transporturi: INSERT W ∨ (solicitant_id = eu ∧ status='cerut') · UPDATE fn_logistica_transport_poate_edita(id) · DELETE D ∨ (solicitant = eu ∧ status='cerut').
+- transporturi_continut: toate trei prin fn_logistica_transport_poate_edita(transport_id) (editarea transportului șterge și reface pozițiile — nu e „ștergere” de utilizator).
+- Triggerele invoker (alimentari→rezervoare, achizitii_vrac→rezervoare, bonuri_carburant→alerte_consum) rămân acoperite: aceiași scriitori au W pe țintă. Restul triggerelor/funcțiilor care scriu sunt SECDEF.
+
+**De întrebat la review-ul SQL:**
+- **Q4 — aprobarea transporturilor pe rol.** Azi aprobă din UI rolurile superadmin + admin_logistica. 6 superadmini nu au scriere în Logistică: Nica Oana, Pantea, Dumitrescu Cristina, Tănase Mădălina, Kostas, Udrea. Propunere: (A) excepția pe rol rămâne în fn_logistica_transport_poate_edita și fluxul nu se schimbă — **recomandat** · (B) doar modulul, iar UI-ul se aliniază.
+- Natalia (can_modify_employees, intră în /admin) nu va mai putea schimba datele firmei și depozitele. Rămân la owner + Logistică + Administrativ.
+
+**De făcut în UI înainte de aplicare (PR mic):** ștergerile din avize_arhiva, documente și amc șterg PDF-ul din Storage ÎNAINTE de rândul din BD. Când RLS refuză (editor, nu admin), rămâne rândul fără PDF. Ordinea trebuie inversată (BD, apoi Storage), iar butonul de ștergere ascuns pentru non-admin. Și lista de transporturi afișează ✏️/🗑 oricui vede tabul.
+
+**Pașii rămași:** schelet `supabase/tests/rls_logistica_schelet.sql` (cele 172 de politici, verificat cu md5 0bbc8a8b…) → migrare + `supabase/revenire/…_ROLLBACK.sql` → `scripts/test_rls_logistica.sh` (pe modelul test_rls_garantii.sh; identități: fără acces, viewer, editor, admin, owner, manager_santier, comanda_transport, executie, administrativ, superadmin; plus triggerele de stoc) → Copilot → „aplica”.
