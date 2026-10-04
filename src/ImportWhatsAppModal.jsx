@@ -10,6 +10,7 @@
 //   - Salvează în whatsapp_messages_processed cu status='pending_plate_detection'
 //   - Plate detection se face ulterior cu Vision OCR (Edge Function separată)
 
+import { matchWhatsAppUnic, rezultatPoza } from './lib/logisticaPrB.js'
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import JSZip from 'jszip'
@@ -387,6 +388,7 @@ export default function ImportWhatsAppModal({
   const [backfillErrors, setBackfillErrors] = useState([])  // 25.05.2026: detalii erori backfill (vizibile Step 3)
   // 03.10.2026 (audit V7): analiza doar CAUTĂ alimentările fără poză; urcarea + resetarea OCR se fac la „Aplică”
   const [backfillDeFacut, setBackfillDeFacut] = useState([])  // [{ alim_id, plac, msg }]
+  const [pozeSkippedNew, setPozeSkippedNew] = useState(0) // 04.10.2026 Nit
   const [pozeUploadedNew, setPozeUploadedNew] = useState(0)  // poze uploadate pe match-uri noi
   // 25.05.2026: errori detaliate pentru debugging upload (vizibile în Step 4)
   const [uploadErrors, setUploadErrors] = useState([])
@@ -496,41 +498,8 @@ export default function ImportWhatsAppModal({
         a.statie_combustibil && a.statie_combustibil.toLowerCase().includes('rompetrol')
       )
       
-      const matches = []
-      for (const alim of rompetrolFaraSantier) {
-        const alimDt = new Date(alim.data_alimentare)
-        const alimPlac = normalizePlacuta(alim.nr_inmatriculare || '')
-        
-        // Caut mesajele din ±36h care menționează plăcuța
-        let best = null
-        for (const msg of newMessages) {
-          const diffH = Math.abs((msg.dt - alimDt) / 3600000)
-          // Window 96h (25.05.2026): șoferii postează uneori cu întârziere semnificativă
-          // (cap tractor MAN PH 24 FAO, vehicule cu cursă lungă, weekend, concedii).
-          // Tradeoff: mai multe match-uri legitime pentru istoric vs risc mic de false-positives
-          // (filtrul vehicle.id strict pe plăcuța previne 99% din false matches).
-          if (diffH > 96) continue
-          
-          if (!msg.parsed) continue
-          // Match cu plăcuța vehiculului
-          if (msg.parsed.vehicle && msg.parsed.vehicle.id === alim.active_id) {
-            if (!best || diffH < best.diffH) {
-              best = { msg, diffH }
-            }
-          }
-        }
-        
-        if (best && best.msg.parsed?.site) {
-          matches.push({
-            alim,
-            msg: best.msg,
-            site: best.msg.parsed.site,
-            diffH: best.diffH,
-            confidence: best.msg.parsed.score >= 0.9 ? 'high' : 'medium',
-            autoConfirm: best.msg.parsed.formatStrict && best.msg.parsed.score >= 0.95,
-          })
-        }
-      }
+      // 04.10.2026 J8: fiecare mesaj acoperă numai alimentarea disponibilă cea mai apropiată.
+      const matches = matchWhatsAppUnic(rompetrolFaraSantier, newMessages)
       
       // Pre-confirm cei high confidence
       const autoConfirmed = new Set(
@@ -620,6 +589,7 @@ export default function ImportWhatsAppModal({
     try {
       const toUpdate = matches.filter(m => confirmed.has(m.alim.id))
       let updated = 0
+      let pozeSkipped = 0
       let pozeNew = 0  // 25.05.2026: count poze uploadate pe match-uri noi
       let errors = []
       // 03.10.2026 (audit V4): mesajele a căror scriere a eșuat NU se marchează procesate — altfel dedup-ul de la
@@ -657,7 +627,8 @@ export default function ImportWhatsAppModal({
           // 25.05.2026: Upload poza bonului dacă mesajul are imageFile
           if (m.msg.imageFile && zipInstance) {
             const result = await uploadPozaForAlim(zipInstance, m.alim.id, m.msg)
-            if (result.ok) pozeNew++
+            if (rezultatPoza(result) === 'uploaded') pozeNew++
+            else if (rezultatPoza(result) === 'skipped') pozeSkipped++
             else {
               console.warn(`Poza upload failed pentru alim #${m.alim.id}:`, result)
               uploadErrList.push({
@@ -686,6 +657,7 @@ export default function ImportWhatsAppModal({
           }
         }
       }
+      setPozeSkippedNew(pozeSkipped)
       setPozeUploadedNew(pozeNew)
       setUploadErrors(uploadErrList)
       
@@ -757,11 +729,12 @@ export default function ImportWhatsAppModal({
       // 03.10.2026 (audit V7): backfill-ul de poze găsit la analiză se aplică abia acum, la confirmare
       if (backfillDeFacut.length > 0 && zipInstance) {
         setProgress('📷 Backfill poze pe alimentări procesate anterior...')
-        let bfOk = 0, bfErr = 0
+        let bfOk = 0, bfErr = 0, bfSkipped = 0
         const bfErrList = []
         for (const c of backfillDeFacut) {
           const result = await uploadPozaForAlim(zipInstance, c.alim_id, c.msg)
-          if (result.ok) bfOk++
+          if (rezultatPoza(result) === 'uploaded') bfOk++
+          else if (rezultatPoza(result) === 'skipped') bfSkipped++
           else {
             bfErr++
             console.warn(`Backfill failed pentru alim #${c.alim_id}:`, result)
@@ -772,7 +745,7 @@ export default function ImportWhatsAppModal({
             })
           }
         }
-        setBackfillStats(prev => ({ ...prev, uploaded: bfOk, errors: bfErr }))
+        setBackfillStats(prev => ({ ...prev, uploaded: bfOk, errors: bfErr, skipped: prev.skipped + bfSkipped }))
         setBackfillErrors(bfErrList)
         setBackfillDeFacut([])  // un al doilea „Aplică” nu le mai urcă încă o dată
       }
@@ -1485,7 +1458,7 @@ export default function ImportWhatsAppModal({
               </div>
               
               {/* 25.05.2026: Stats poze upload */}
-              {(pozeUploadedNew > 0 || backfillStats.uploaded > 0) && (
+              {(pozeUploadedNew > 0 || backfillStats.uploaded > 0 || pozeSkippedNew > 0 || backfillStats.skipped > 0) && (
                 <div style={{
                   background:'#25D36622', border:`1px solid #25D36655`, borderRadius:10,
                   padding:'14px 18px', marginBottom:24, display:'inline-block', textAlign:'left',
@@ -1493,6 +1466,7 @@ export default function ImportWhatsAppModal({
                 }}>
                   <div style={{fontSize:13, color:G.text, fontWeight:700, marginBottom:8}}>📷 Poze bonuri uploadate:</div>
                   <div style={{fontSize:12, color:G.muted, lineHeight:1.7}}>
+                    {pozeSkippedNew + backfillStats.skipped > 0 && <div>↪ {pozeSkippedNew + backfillStats.skipped} poze sărite (stare schimbată, decizie manuală sau fără potrivire)</div>}
                     {pozeUploadedNew > 0 && <div>✅ <strong style={{color:'#25D366'}}>{pozeUploadedNew} poze noi</strong> (pe match-urile alocate acum)</div>}
                     {backfillStats.uploaded > 0 && <div>♻️ <strong style={{color:'#25D366'}}>{backfillStats.uploaded} poze backfill</strong> (pe alimentări procesate anterior)</div>}
                     <div style={{marginTop:6, fontSize:11, color:G.dim}}>

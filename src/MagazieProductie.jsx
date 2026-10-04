@@ -486,7 +486,7 @@ function LotModal({ ctx, materiale = [], onClose, onSaved, onError }) {
         const { data: bucata, error: eB } = await supabase.from('magazie_bucati').insert({
           tip_material_id: MAGAZIE_TIP_PRODUS_PRODUCTIE, serie,
           dimensiune: [prodRow?.dimensiune, prodRow?.clasa].filter(Boolean).join(' ') || null,
-          cantitate: 1, um: 'buc', provenienta: 'Producție internă',
+          cantitate: 1, um: 'buc', provenienta: 'gazpet',  // 04.10.2026: CHECK magazie_bucati.provenienta = gazpet|beneficiar ('Producție internă' era respins → lot finalizat fără stoc)
           furnizor: 'Gazpet Instal (producție proprie)', producator: 'Gazpet Instal + Adrom Evolution',
           stare: 'sosit', locatie_tip: 'sediu', data_receptie: azi,
           observatii: `${prodRow?.denumire || ''} — ${f.cod_lot || 'lot #' + lot.id} · valoare inventar ${fmt(inventarBuc)} lei/buc (cost + 3% pierderi tehnologice)`,

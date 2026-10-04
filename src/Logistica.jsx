@@ -2,6 +2,8 @@
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
 
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
+import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -460,41 +462,33 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
   
   // Fetch preț mediu ponderat Gazpet (din achiziții vrac) — pentru rezervorul activ
   useEffect(() => {
+    // 04.10.2026 J18: ignoram raspunsul rezervorului anterior.
+    let curent = true
+    setPretMediuGazpet(null)
     if (!rezervorActiv?.id) { setPretMediuGazpet(null); return }
     supabase.from('logistica_achizitii_vrac')
       .select('cantitate_litri, pret_per_litru')
       .eq('rezervor_id', rezervorActiv.id)
       .not('pret_per_litru', 'is', null)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (!curent) return
+        if (error) { setPretMediuGazpet(null); return }
         if (!data?.length) { setPretMediuGazpet(null); return }
         const totalLitri = data.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
         const totalCost = data.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
         if (totalLitri > 0) setPretMediuGazpet((totalCost / totalLitri).toFixed(4))
       })
+    return () => { curent = false }
   }, [rezervorActiv?.id])
   
   // Pretul de bază folosit la auto-fill (Gazpet → mediu ponderat, altă stație → preț pompă)
   const pretBaza = isGazpet ? (pretMediuGazpet || pretMotorina) : pretMotorina
   
-  // Sincronizare bidirecțională cost ↔ preț/litru când se schimbă cantitatea
+  // 04.10.2026 J18: recalcul inclusiv la pret nou, fara bucla intre campuri.
   useEffect(() => {
-    if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) return
-    
-    if (lastEdited === 'total' && form.pret_total) {
-      // User a editat costul total → recalculez preț/litru
-      const ppl = (Number(form.pret_total) / Number(form.cantitate_litri)).toFixed(4)
-      setField('pret_per_litru', ppl)
-    } else if (lastEdited === 'pret' && form.pret_per_litru) {
-      // User a editat preț/litru → recalculez cost total
-      const total = (Number(form.pret_per_litru) * Number(form.cantitate_litri)).toFixed(2)
-      setField('pret_total', total)
-    } else if (!lastEdited && pretBaza) {
-      // Prima dată, prefill din preț de bază
-      setField('pret_per_litru', Number(pretBaza).toFixed(2))
-      setField('pret_total', (Number(form.cantitate_litri) * Number(pretBaza)).toFixed(2))
-    }
-  }, [form.cantitate_litri])
-  
+    setForm(p => recalculeazaPret(p, lastEdited, pretBaza))
+  }, [form.cantitate_litri, form.pret_total, form.pret_per_litru, lastEdited, pretBaza])
+
   // Handler pentru cost total (user editează)
   const handleTotalChange = (v) => {
     setField('pret_total', v)
@@ -1201,7 +1195,7 @@ function MentenantaFacutaModal({ activ, plan, onClose, onSaved, showToast }) {
 }
 
 // ─── Modal Form (View / Edit / Create) ───────────────────────────────────────
-function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast, rezervoare, sites, pretMotorina, prefilComodat }) {
+function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onSaved, accessLevel, showToast, rezervoare, sites, pretMotorina, prefilComodat }) {
   const [mode, setMode] = useState(initialMode)
   const [saving, setSaving] = useState(false)
   
@@ -1607,7 +1601,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
     if (!confirmed) return
     
     setSaving(true)
-    const { error } = await supabase.from('logistica_active').delete().eq('id', activ.id)
+    const { error } = await supabase.from('logistica_active').delete().eq('id', activ.id).select('id').single()
     setSaving(false)
     
     if (error) {
@@ -1668,7 +1662,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
                 <button onClick={() => setMode('edit')} style={{...S.btnS, fontSize: 12, color: G.logistica, borderColor: G.logistica + '55'}}>
                   ✏️ Editează
                 </button>
-                {accessLevel === 'admin' && (
+                {canDelete && (
                   <button onClick={handleDelete} disabled={saving} style={{
                     ...S.btnS, fontSize: 12, color: G.red, borderColor: G.red + '55',
                     opacity: saving ? .5 : 1
@@ -2238,7 +2232,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         <div style={{marginBottom: 14}}>
           <div style={{fontSize: 11, color: G.logistica, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 8}}>📎 Documente</div>
           {activ?.id ? (
-            <DocumenteUtilajList
+            <DocumenteUtilajList canDelete={canDelete}
               activId={activ.id}
               canEdit={accessLevel === 'admin' || accessLevel === 'editor'}
               showToast={showToast}
@@ -2255,7 +2249,7 @@ function ActivFormModal({ activ, initialMode, categorii, onClose, onSaved, acces
         )}
 
         {activ?.id && (
-          <SupapeDeclaratiiSection
+          <SupapeDeclaratiiSection canDelete={canDelete}
             activ={activ}
             canEdit={accessLevel === 'admin' || accessLevel === 'editor'}
             showToast={showToast}
@@ -2673,7 +2667,7 @@ function PlaceholderTab({ label, desc, emoji }) {
 
 // ─── Pagina Alimentări — input bulk per zi ──────────────────────────────────
 // ─── Modal Editare Alimentare existentă ─────────────────────────────────────
-function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, onSaved, showToast }) {
+function EditAlimentareModal({ canDelete, alim, sites, rezervoare, pretMotorina, onClose, onSaved, showToast }) {
   const [form, setForm] = useState({
     data_alimentare: alim.data_alimentare,
     cantitate_litri: alim.cantitate_litri || '',
@@ -2769,6 +2763,11 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
   }
 
   const handleLeagaBon = async () => {
+    // 04.10.2026 J10: Oscar nu este o sursa permisa pentru bon comun.
+    if (!sursaBonComunValida(alim.qr_sursa)) {
+      showToast(`Bonul comun accepta doar Rompetrol sau benzinarie. Sursa "${alim.qr_sursa}" nu este acceptata.`, 'error')
+      return
+    }
     const tot = Number(totalBonInput)
     if (!(tot > 0)) { showToast('Introdu totalul de litri de pe bonul fizic', 'error'); return }
     if (tot < Number(alim.cantitate_litri || 0)) {
@@ -2869,7 +2868,7 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
   const handleDelete = async () => {
     if (!window.confirm(`Ștergi alimentarea de ${alim.cantitate_litri} L de pe ${fmtDate(alim.data_alimentare)}?\n\nStocul rezervorului va fi ajustat automat.`)) return
     setDeleting(true)
-    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id)
+    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id).select('id').single()
     setDeleting(false)
     if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
     showToast(`✓ Alimentare ștearsă`, 'success')
@@ -3005,9 +3004,9 @@ function EditAlimentareModal({ alim, sites, rezervoare, pretMotorina, onClose, o
         </div>
 
         <div style={{display:'flex', justifyContent:'space-between', gap: 8, paddingTop: 14, borderTop: `1px solid ${G.border}`}}>
-          <button onClick={handleDelete} disabled={deleting || saving} style={{...S.btnS, fontSize: 12, color: G.red, borderColor: G.red + '55', opacity: (deleting || saving) ? .5 : 1}}>
+          {canDelete && <button onClick={handleDelete} disabled={deleting || saving} style={{...S.btnS, fontSize: 12, color: G.red, borderColor: G.red + '55', opacity: (deleting || saving) ? .5 : 1}}>
             {deleting ? '⏳' : '🗑️ Șterge'}
-          </button>
+          </button>}
           <div style={{display:'flex', gap: 8}}>
             <button onClick={handleClose} style={{...S.btnS, fontSize: 13, color: G.muted}} disabled={saving || deleting}>Anulează</button>
             <button onClick={handleSave} disabled={saving || deleting} style={{...S.btnP, background: G.logistica, color: '#000', opacity: (saving || deleting) ? .6 : 1}}>
@@ -3236,7 +3235,7 @@ function IstoricImporturiWhatsAppExpand() {
   )
 }
 
-function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, onImportRompetrol, onImportWhatsApp, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
+function AlimentariBulkPage({ canDelete, active, ultimeAlim, sites, rezervoare, pretMotorina, dataAlim, setDataAlim, canEdit, showToast, onSaved, onImportEvoGPS, onImportRompetrol, onImportWhatsApp, ultimaTelemetrieData, istoricImporturi, profile, accessLevel }) {
   const [filterText, setFilterText] = useState('')
   const [filterTip, setFilterTip] = useState('Toate')
   const [filterSub, setFilterSub] = useState('Toate')
@@ -4060,7 +4059,7 @@ function AlimentariBulkPage({ active, ultimeAlim, sites, rezervoare, pretMotorin
       
       {/* Modal edit alimentare */}
       {editAlim && (
-        <EditAlimentareModal 
+        <EditAlimentareModal canDelete={canDelete} 
           alim={editAlim}
           sites={sites}
           rezervoare={rezervoare}
@@ -5294,6 +5293,7 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const [actionLoading, setActionLoading] = useState(false)
   const [dataTransportEdit, setDataTransportEdit] = useState(T?.data_transport || '')  // editabilă la aprobare
   const [showAviz, setShowAviz] = useState(false)  // PAS 5F: deschide modal aviz
+  const [avizDupaTranzit, setAvizDupaTranzit] = useState(false) // 04.10.2026 J15
   const [autoAviz, setAutoAviz] = useState(false)   // 12.06 FIX Sentry: auto-arhivare aviz la trecerea in tranzit
   // 27.05.2026: Iterația 2 - load lista conținut multiplu (dacă există)
   const [continutItems, setContinutItems] = useState([])
@@ -5414,20 +5414,21 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
     const labels = { programat: 'Programat', in_tranzit: 'In tranzit', livrat: 'Livrat' }
     if (!confirm('Schimbi status la "' + (labels[nou] || nou) + '"?')) return
 
-    // AUTO-GENERARE AVIZ la trecerea in tranzit (daca nu e deja generat)
-    // 12.06 FIX Sentry (ReferenceError handleArhivare): functia traieste in AvizInsotireMarfaModal,
-    // nu aici — deschidem modalul cu autoArhiveaza=true si el isi ruleaza singur arhivarea.
-    if (nou === 'in_tranzit' && !T.aviz_generat) {
-      showToast('Se genereaza avizul automat...', 'info')
-      setAutoAviz(true)
-      setShowAviz(true)
-    }
+    // 04.10.2026 J15: aviz dupa salvare; parintele ramane montat.
+    const genereazaAviz = nou === 'in_tranzit' && !T.aviz_generat
 
     setActionLoading(true)
     const { error } = await supabase.from('logistica_transporturi').update({ status: nou }).eq('id', T.id)
     setActionLoading(false)
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
-    showToast('Status schimbat: ' + (labels[nou] || nou) + (nou === 'in_tranzit' && !T.aviz_generat ? ' + aviz generat automat!' : ''))
+    showToast('Status schimbat: ' + (labels[nou] || nou))
+    if (genereazaAviz) {
+      showToast('Se genereaza avizul automat...', 'info')
+      setAvizDupaTranzit(true)
+      setAutoAviz(true)
+      setShowAviz(true)
+      return
+    }
     onChanged?.()
     onClose()
   }
@@ -5894,11 +5895,14 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
         <AvizInsotireMarfaModal 
           transport={T} 
           profile={profile} 
-          onClose={() => { setShowAviz(false); setAutoAviz(false) }} 
+          onClose={() => { if (autoAviz) return; setShowAviz(false); if (avizDupaTranzit) { onChanged?.(); onClose() } }} 
           showToast={showToast}
-          onTrimisEmail={() => { onChanged?.() }}
+          onTrimisEmail={() => { if (!avizDupaTranzit) onChanged?.() }}
           autoArhiveaza={autoAviz}
-          onAutoArhivat={() => { setAutoAviz(false); setShowAviz(false); onChanged?.() }}
+          onAutoArhivat={ok => {
+            setAutoAviz(false)
+            if (ok) { setShowAviz(false); onChanged?.(); onClose() }
+          }}
         />
       )}
     </div>
@@ -6211,7 +6215,7 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     const nowSof = rol === 'sofer' ? true : !!semnSofData
     const nowDest = rol === 'destinatar' ? true : !!semnDestData
     
-    if (nowExp && nowSof && nowDest) {
+    if (!autoArhiveaza && nowExp && nowSof && nowDest) {
       // Verifică direct în arhivă (NU pe aviz_generat care e stricat de mailto)
       const { count } = await supabase
         .from('logistica_avize_arhiva')
@@ -6259,7 +6263,7 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         setSemnDestLa(data.semnatura_destinatar_la || null)
         
         // RECOVERY: dacă avem 3/3 semnături dar NU există în arhivă → trigger arhivare
-        if (data.semnatura_expeditor_data && data.semnatura_sofer_data && data.semnatura_destinatar_data) {
+        if (!autoArhiveaza && data.semnatura_expeditor_data && data.semnatura_sofer_data && data.semnatura_destinatar_data) {
           const { count } = await supabase
             .from('logistica_avize_arhiva')
             .select('id', { count: 'exact', head: true })
@@ -6277,8 +6281,8 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     if (!autoArhiveaza) return
     // Asteptam randarea completa a avizului (HTML -> canvas) inainte de captura
     const t = setTimeout(async () => {
-      try { await handleArhivare(true) } catch (e) { showToast('Eroare arhivare automata: ' + (e?.message || e), 'error') }
-      onAutoArhivat && onAutoArhivat()
+      const ok = await handleArhivare(true)
+      onAutoArhivat?.(ok === true)
     }, 1000)
     return () => clearTimeout(t)
   }, [autoArhiveaza])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -6297,14 +6301,26 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     try {
       // 0. FRESH FETCH din DB pentru a fi sigur că avem cele mai recente semnături
       // (state-urile pot fi stale din cauza React batch-ing dacă vine din auto-recovery)
-      const { data: fresh } = await supabase
+      const { data: fresh, error: freshError } = await supabase
         .from('logistica_transporturi')
         .select('semnatura_expeditor_data, semnatura_sofer_data, semnatura_destinatar_data, aviz_generat')
         .eq('id', T.id)
         .single()
+      if (freshError) throw freshError
       const finalSemnExp = !!fresh?.semnatura_expeditor_data
       const finalSemnSof = !!fresh?.semnatura_sofer_data
       const finalSemnDest = !!fresh?.semnatura_destinatar_data
+      // 04.10.2026 J15 (Copilot): la arhivarea automată nu generăm al doilea aviz dacă există deja unul pentru transport.
+      if (auto) {
+        const { count: dejaArhivate, error: cntErr } = await supabase.from('logistica_avize_arhiva')
+          .select('id', { count: 'exact', head: true }).eq('transport_id', T.id)
+        if (cntErr) throw cntErr
+        if (dejaArhivate > 0) {
+          showToast('Avizul era deja în arhivă — nu am generat altul.', 'info')
+          onTrimisEmail?.()
+          return true
+        }
+      }
       
       // 1. Selectează zona aviz
       const aviz = document.querySelector('.aviz-content')
@@ -6381,7 +6397,13 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       if (insErr) throw insErr
       
       // 7. Update aviz_generat în transport (locked după arhivare)
-      await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
+      // 04.10.2026 J15 (Copilot): arhiva e deja salvată — eșecul marcajului NU trebuie să ducă la o nouă generare.
+      const { error: avizError } = await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
+      if (avizError) {
+        showToast(`Aviz ${numarAviz} arhivat, dar marcajul pe transport nu s-a actualizat (${avizError.message}). NU regenera avizul — reîncarcă pagina.`, 'warn')
+        onTrimisEmail?.()
+        return true
+      }
       
       // 8. Download local DOAR dacă NU e auto (pentru flow manual la sediu)
       if (!auto) {
@@ -6393,13 +6415,15 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         URL.revokeObjectURL(blobUrl)
         showToast(`📂 Aviz arhivat (${(pdfSize/1024).toFixed(0)} KB) + descărcat`)
       } else {
-        showToast(`✅ Aviz arhivat AUTOMAT după 3 semnături (${(pdfSize/1024).toFixed(0)} KB)`)
+        showToast(`✅ Aviz arhivat AUTOMAT (${(pdfSize/1024).toFixed(0)} KB)`)
       }
       
       onTrimisEmail?.()
+      return true // 04.10.2026 J15: inchidem numai dupa succes real.
     } catch (e) {
       showToast('Eroare arhivare: ' + (e.message || e), 'error')
       console.error(e)
+      return false
     } finally {
       setArhivareLoading(false)
     }
@@ -6914,7 +6938,9 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
 }
 
 // ----- Pagina Transporturi -----
-function TransporturiPage({ active, sites, profile, accessLevel, showToast, initialFocus, onFocusConsumed }) {
+function TransporturiPage({ canDelete, active, sites, profile, accessLevel, showToast, initialFocus, onFocusConsumed }) {
+  // 04.10.2026 D1 prep: editare pentru participanți; ștergere solicitant doar în cerut.
+  const canEdit = accessLevel === 'admin' || accessLevel === 'editor'
   const loc = useLocation()
   const nav = useNavigate()
   const [allInPeriod, setAllInPeriod] = useState([])  // TOATE din perioadă (pentru KPI corect)
@@ -7312,23 +7338,23 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast, init
                     </td>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e => e.stopPropagation()}>
                       <div style={{display:'flex', gap:4, justifyContent:'flex-end'}}>
-                        {/* Edit — activ pe toate statusurile, nu doar 'cerut' */}
-                        <button
+                        {/* 04.10.2026 D1 prep: verificare pe transportul curent. */}
+                        {(canEdit || isAprobatorTransport(profile) || (profile?.id && [t.solicitant_id, t.manager_plecare_id, t.manager_destinatie_id].includes(profile.id))) && <button
                           onClick={() => setEditTransport(t)}
                           title="Editează transportul"
                           style={{...S.btnS, padding:'4px 8px', fontSize:11, color:G.logistica, borderColor:G.logistica+'88'}}
-                        >✏️</button>
+                        >✏️</button>}
                         {/* Ștergere — cu confirmare */}
-                        <button
+                        {(canDelete || (profile?.id && profile.id === t.solicitant_id && t.status === 'cerut')) && <button
                           onClick={async () => {
                             if (!window.confirm(`Ștergi transportul ${t.numar_transport}?\n"${t.tip}" · status: ${t.status}\n\nAcțiune IREVERSIBILĂ!`)) return
-                            const { error } = await supabase.from('logistica_transporturi').delete().eq('id', t.id)
+                            const { error } = await supabase.from('logistica_transporturi').delete().eq('id', t.id).select('id').single()
                             if (error) showToast('Eroare: ' + error.message, 'err')
                             else { showToast('✓ Transport șters'); fetchAll() }
                           }}
                           title="Șterge transportul"
                           style={{...S.btnS, padding:'4px 8px', fontSize:11, color:G.red, borderColor:G.red+'88'}}
-                        >🗑️</button>
+                        >🗑️</button>}
                       </div>
                     </td>
                   </tr>
@@ -7375,7 +7401,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast, init
           onChanged={async () => {
             await fetchAll()
             // Refresh și transportul deschis în detalii (pentru că state-ul lui pierdea schimbările)
-            const { data: fresh } = await supabase
+            const { data: fresh, error: freshError } = await supabase
               .from('logistica_transporturi')
               .select(`*,
                 activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
@@ -7393,6 +7419,7 @@ function TransporturiPage({ active, sites, profile, accessLevel, showToast, init
               `)
               .eq('id', detaliiTransport.id)
               .single()
+            if (freshError) { showToast('Detaliile transportului nu s-au reîmprospătat: ' + freshError.message, 'warn'); return }
             if (fresh) setDetaliiTransport(fresh)
           }}
           onEdit={(t) => setEditTransport(t)}
@@ -7409,7 +7436,7 @@ const tdStyle = { padding:'10px 12px', verticalAlign:'top' }
 // ===========================================================================
 // GESTIUNE UTILAJE PE ȘANTIER — locația curentă fiecare activ
 // ===========================================================================
-function ArhivaAvizePage({ profile, showToast }) {
+function ArhivaAvizePage({ canDelete, profile, showToast }) {
   const [arhiva, setArhiva] = useState([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
@@ -7417,22 +7444,18 @@ function ArhivaAvizePage({ profile, showToast }) {
   const [downloadingId, setDownloadingId] = useState(null)
   const [showDeleteLuna, setShowDeleteLuna] = useState(false)  // modal bulk delete pe lună
   
-  const isAdmin = ['superadmin', 'admin_logistica'].includes(profile?.role)
   
   // Delete individual aviz (admin only)
   const handleDelete = async (arhAviz) => {
-    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    if (!canDelete) { showToast('Doar admin poate șterge', 'error'); return }
     if (!confirm(`Sigur vrei să ștergi ${arhAviz.numar_aviz}?\n\n• PDF din Storage\n• Înregistrarea din arhivă\n\nAceastă acțiune e ireversibilă!`)) return
     
     setDownloadingId(arhAviz.id)
     try {
-      // 1. Delete PDF din Storage
-      const { error: stErr } = await supabase.storage.from('avize').remove([arhAviz.pdf_path])
-      if (stErr) console.warn('Storage delete warning:', stErr.message)
-      
-      // 2. Delete row din DB
-      const { error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().eq('id', arhAviz.id)
+      // 04.10.2026 D1 prep: confirmăm ștergerea în BD înainte de Storage.
+      const { error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().eq('id', arhAviz.id).select('id').single()
       if (dbErr) throw dbErr
+      await removeLogisticaFiles(supabase, 'avize', [arhAviz.pdf_path])
       
       showToast(`✓ ${arhAviz.numar_aviz} șters`)
       loadArhiva()
@@ -7445,7 +7468,7 @@ function ArhivaAvizePage({ profile, showToast }) {
   
   // Delete bulk pe lună (admin only — pentru curățenie după 12 luni)
   const handleDeleteLuna = async (yearMonth) => {
-    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    if (!canDelete) { showToast('Doar admin poate șterge', 'error'); return }
     
     // Verifică câte avize sunt în luna respectivă
     const startDate = `${yearMonth}-01`
@@ -7467,17 +7490,12 @@ function ArhivaAvizePage({ profile, showToast }) {
     if (!confirm(`Vei șterge ${avizeLuna.length} avize din luna ${yearMonth}!\n\n• Toate PDF-urile din Storage\n• Toate înregistrările din arhivă\n\nAceastă acțiune e IREVERSIBILĂ. Continui?`)) return
     
     try {
-      // Delete PDF-uri din Storage (batch)
-      const paths = avizeLuna.map(a => a.pdf_path).filter(Boolean)
-      if (paths.length > 0) {
-        const { error: stErr } = await supabase.storage.from('avize').remove(paths)
-        if (stErr) console.warn('Storage delete warning:', stErr.message)
-      }
-      
-      // Delete rows din DB
+      // 04.10.2026 D1 prep: curățăm numai PDF-urile rândurilor returnate de DELETE.
       const ids = avizeLuna.map(a => a.id)
-      const { error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().in('id', ids)
+      const { data: deleted, error: dbErr } = await supabase.from('logistica_avize_arhiva').delete().in('id', ids).select('id, pdf_path')
       if (dbErr) throw dbErr
+      await removeLogisticaFiles(supabase, 'avize', (deleted || []).map(a => a.pdf_path))
+      if (deleted?.length !== ids.length) throw new Error(`Au fost șterse ${deleted?.length || 0} din ${ids.length} avize. Verifică drepturile și reîncarcă arhiva.`)
       
       showToast(`✓ ${avizeLuna.length} avize șterse pentru ${yearMonth}`)
       setShowDeleteLuna(false)
@@ -7602,7 +7620,7 @@ function ArhivaAvizePage({ profile, showToast }) {
           ))}
         </div>
         <button onClick={loadArhiva} style={S.btnS}>🔄 Reîncarcă</button>
-        {isAdmin && luniCuAvize.length > 0 && (
+        {canDelete && luniCuAvize.length > 0 && (
           <button onClick={() => setShowDeleteLuna(true)} style={{...S.btnS, color: G.red, borderColor: G.red+'88'}}>
             🗑️ Șterge lună
           </button>
@@ -7683,7 +7701,7 @@ function ArhivaAvizePage({ profile, showToast }) {
                         >
                           {downloadingId === a.id ? '...' : '⬇️ Descarcă'}
                         </button>
-                        {isAdmin && (
+                        {canDelete && (
                           <button 
                             onClick={() => handleDelete(a)} 
                             disabled={downloadingId === a.id}
@@ -7708,7 +7726,7 @@ function ArhivaAvizePage({ profile, showToast }) {
       </div>
       
       {/* Modal Bulk Delete pe Lună */}
-      {showDeleteLuna && (
+      {showDeleteLuna && canDelete && (
         <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:1100, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
           <div style={{...S.card, width:'100%', maxWidth:560, padding:24, maxHeight:'85vh', overflowY:'auto'}}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${G.border}`}}>
@@ -7790,7 +7808,7 @@ function ArhivaAvizePage({ profile, showToast }) {
 // ============================================================
 // ARHIVĂ ALIMENTĂRI — consultare istoric extins
 // ============================================================
-function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showToast }) {
+function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotorina, showToast }) {
   const [arhiva, setArhiva] = useState([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
@@ -8074,12 +8092,12 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
   
   // Delete individual (admin only)
   const handleDelete = async (alim) => {
-    if (!isAdmin) { showToast('Doar admin poate șterge', 'error'); return }
+    if (!canDelete) { showToast('Doar admin poate șterge', 'error'); return }
     const av = alim.logistica_active
     const desc = `${av?.marca || ''} ${av?.model || ''} · ${alim.cantitate_litri}L · ${fmtDate(alim.data_alimentare)}`
     if (!confirm(`Sigur vrei să ștergi alimentarea:\n${desc}?\n\nAceastă acțiune e ireversibilă!`)) return
     
-    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id)
+    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id).select('id').single()
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
     showToast(`✓ Alimentare ștearsă`)
     loadArhiva()
@@ -8537,6 +8555,10 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
                             <button onClick={() => setEditAlim(a)} style={{...S.btnS, padding: '4px 8px', fontSize: 11, color: G.logistica, borderColor: G.logistica + '55'}} title="Editează">
                               ✏️
                             </button>
+                          </>
+                        )}
+                        {canDelete && (
+                          <>
                             <button onClick={() => handleDelete(a)} style={{...S.btnS, padding: '4px 8px', fontSize: 11, color: G.red, borderColor: G.red + '55'}} title="Șterge">
                               🗑️
                             </button>
@@ -8554,7 +8576,7 @@ function ArhivaAlimentariPage({ profile, sites, rezervoare, pretMotorina, showTo
       
       {/* Modal edit (reutilizat din AlimentariBulkPage) */}
       {editAlim && (
-        <EditAlimentareModal 
+        <EditAlimentareModal canDelete={canDelete} 
           alim={editAlim}
           sites={sites}
           rezervoare={rezervoare}
@@ -10405,7 +10427,7 @@ function ContracteComodatSection({ active, employeesComodat, onEditActiv, onCrea
 
 
 // ─── 27.05.2026: Secțiune Subcontractori + Cesiuni Motorină ──────────────────
-function SubcontractoriSection({ sites, rezervoare, pretMotorina, canEdit, profile, showToast, onRefreshRezervoare }) {
+function SubcontractoriSection({ canDelete, sites, rezervoare, pretMotorina, canEdit, profile, showToast, onRefreshRezervoare }) {
   const [subcontractori, setSubcontractori] = useState([])
   const [cesiuni, setCesiuni] = useState([])
   const [load, setLoad] = useState(true)
@@ -10479,7 +10501,7 @@ function SubcontractoriSection({ sites, rezervoare, pretMotorina, canEdit, profi
   
   const handleDelete = async (cesiune) => {
     if (!confirm(`Șterge cesiunea de ${cesiune.cantitate_litri}L din ${cesiune.data_cesiune}?\n\nATENȚIE: Stocul rezervorului va fi restabilit cu ${cesiune.cantitate_litri}L.`)) return
-    const { error } = await supabase.from('logistica_cesiuni_subcontractor').delete().eq('id', cesiune.id)
+    const { error } = await supabase.from('logistica_cesiuni_subcontractor').delete().eq('id', cesiune.id).select('id').single()
     if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
     showToast?.('Cesiune ștearsă · stoc rezervor restabilit', 'success')
     loadData()
@@ -10632,7 +10654,7 @@ function SubcontractoriSection({ sites, rezervoare, pretMotorina, canEdit, profi
                         </td>
                         {canEdit && (
                           <td style={{padding: '10px 8px', textAlign: 'center'}}>
-                            <button onClick={e => { e.stopPropagation(); handleDelete(c) }} style={{background: 'transparent', border: 'none', color: G.red, fontSize: 14, cursor: 'pointer', padding: '4px 8px'}} title="Șterge cesiune">🗑</button>
+                            {canDelete && <button onClick={e => { e.stopPropagation(); handleDelete(c) }} style={{background: 'transparent', border: 'none', color: G.red, fontSize: 14, cursor: 'pointer', padding: '4px 8px'}} title="Șterge cesiune">🗑</button>}
                           </td>
                         )}
                       </tr>
@@ -11136,7 +11158,9 @@ export default function LogisticaPage() {
         supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'logistica').maybeSingle()
       ])
       setProfile(prof)
-      if (prof?.role === 'superadmin') setAccessLevel('admin')
+      // 04.10.2026 D1 prep: owner = admin; restul după user_module_access (superadmin nu mai e promovat —
+      // serverul D1 dă scriere doar pe modul). Aprobarea transporturilor rămâne pe rol (isAprobatorTransport, Q4).
+      if (prof?.is_owner) setAccessLevel('admin')
       else setAccessLevel(access?.access_level || null)
     }
     init()
@@ -11951,6 +11975,8 @@ export default function LogisticaPage() {
   )
   
   const canEdit = accessLevel === 'admin' || accessLevel === 'editor'
+  // 04.10.2026 D1 prep: editorul păstrează editarea, fără ștergere.
+  const canDelete = accessLevel === 'admin' || !!profile?.is_owner
   
   return (
     <>
@@ -11989,7 +12015,7 @@ export default function LogisticaPage() {
       
       {/* TAB: Alimentări (input bulk per zi) */}
       {tab === 'alimentari' && (
-        <AlimentariBulkPage 
+        <AlimentariBulkPage canDelete={canDelete} 
           active={active}
           ultimeAlim={ultimeAlim}
           sites={sites}
@@ -12012,7 +12038,7 @@ export default function LogisticaPage() {
       
       {/* 26.05.2026 ETAPA 4.6: TAB Confirmare AI — alimentări create de Vision din poze WhatsApp orfane */}
       {tab === 'confirmare_ai' && (
-        <ConfirmareAITab
+        <ConfirmareAITab canDelete={canDelete}
           G={G} S={S}
           supabase={supabase}
           profile={profile}
@@ -12039,7 +12065,7 @@ export default function LogisticaPage() {
       )}
       
       {/* TAB: Service (placeholder) */}
-      {tab === 'service' && <ServiceTab active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
+      {tab === 'service' && <ServiceTab canDelete={canDelete} active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
 
       {tab === 'imprumuturi' && <ImprumuturiEchipamente active={active} canEdit={accessLevel === 'admin' || accessLevel === 'editor'} showToast={showToast} />}
 
@@ -12077,7 +12103,7 @@ export default function LogisticaPage() {
       
       {/* TAB: Transporturi */}
       {tab === 'transporturi' && (
-        <TransporturiPage
+        <TransporturiPage canDelete={canDelete}
           active={active}
           sites={sites}
           profile={profile}
@@ -12091,12 +12117,12 @@ export default function LogisticaPage() {
       
       {/* TAB: Arhivă Avize */}
       {tab === 'arhiva' && (
-        <ArhivaAvizePage profile={profile} showToast={showToast} />
+        <ArhivaAvizePage canDelete={canDelete} profile={profile} showToast={showToast} />
       )}
       
       {/* TAB: Arhivă Alimentări */}
       {tab === 'arhiva_alimentari' && (
-        <ArhivaAlimentariPage 
+        <ArhivaAlimentariPage canDelete={canDelete} 
           profile={profile} 
           sites={sites} 
           rezervoare={rezervoare}
@@ -12181,7 +12207,7 @@ export default function LogisticaPage() {
           showToast={showToast}
         />
       ) : activeSubTab === 'subcontractori' ? (
-        <SubcontractoriSection 
+        <SubcontractoriSection canDelete={canDelete} 
           sites={sites}
           rezervoare={rezervoare}
           pretMotorina={pretMotorina}
@@ -12743,7 +12769,7 @@ export default function LogisticaPage() {
       </>)}
       
       {modal && (
-        <ActivFormModal 
+        <ActivFormModal canDelete={canDelete} 
           activ={modal.activ}
           initialMode={modal.mode}
           categorii={categorii}

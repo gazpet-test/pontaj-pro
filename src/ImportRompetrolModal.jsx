@@ -5,6 +5,7 @@
 // Match: nr_inmatriculare normalizat (fără spații)
 // Carduri GAZPET1-21 = SKIP (atribuire ulterioară prin QR)
 // ===========================================================================
+import { identitateBonComun } from './lib/logisticaPrB.js'
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
@@ -200,11 +201,13 @@ function findQrMatch(qrList, reserved, litri, data, strictActiveId, oraRompetrol
 }
 
 // Match bon comun: cauta un bon comun cu total_litri_bon ±0.5L și data ±2 zile
-function findBonComunMatch(bonList, bonReserved, litri, data) {
+function findBonComunMatch(bonList, bonReserved, litri, data, activId, card) {
   const dLista = new Date(data + 'T00:00:00').getTime()
   let best = null, bestScore = -1
   for (const bc of bonList) {
     if (bonReserved.has(bc.bon_comun_id)) continue
+    // 04.10.2026 J11: identitatea disponibilă trebuie să corespundă.
+    if (identitateBonComun(bc, activId, card) === 'exclus') continue
     const dLitri = Math.abs(bc.total_litri_bon - litri)
     if (dLitri > 0.5) continue
     const dBc = new Date(bc.data_min + 'T00:00:00').getTime()
@@ -297,23 +300,26 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
         qrPending = qr || []
 
         // Bonuri comune rompetrol: grupez alimentarile cu bon_comun_id pe total
-        const { data: bcRows } = await supabase.from('logistica_alimentari')
-          .select('bon_comun_id, data_alimentare, cantitate_litri, logistica_bonuri_comune!inner(id, cod_bon, total_litri_bon, qr_sursa)')
-          .eq('qr_sursa', 'rompetrol')
+        const { data: bcRows, error: bcError } = await supabase.from('logistica_alimentari')
+          .select('bon_comun_id, active_id, data_alimentare, cantitate_litri, logistica_bonuri_comune!inner(id, cod_bon, total_litri_bon, qr_sursa, card_combustibil)')
           .eq('logistica_bonuri_comune.qr_sursa', 'rompetrol')
           .not('bon_comun_id', 'is', null)
           .gte('data_alimentare', dMin.toISOString().slice(0, 10))
           .lte('data_alimentare', dMax.toISOString().slice(0, 10))
+        if (bcError) throw bcError
         // Grupez pe bon_comun_id → total litri + data minima
         const bcMap = {}
         for (const r of (bcRows || [])) {
           const bid = r.bon_comun_id
           if (!bcMap[bid]) bcMap[bid] = {
             bon_comun_id: bid,
+            active_ids: [],
+            card_combustibil: r.logistica_bonuri_comune?.card_combustibil,
             cod_bon: r.logistica_bonuri_comune?.cod_bon,
             total_litri_bon: Number(r.logistica_bonuri_comune?.total_litri_bon || 0),
             data_min: r.data_alimentare,
           }
+          if (r.active_id != null && !bcMap[bid].active_ids.includes(r.active_id)) bcMap[bid].active_ids.push(r.active_id)
           if (r.data_alimentare < bcMap[bid].data_min) bcMap[bid].data_min = r.data_alimentare
         }
         bonuriComune = Object.values(bcMap)
@@ -369,7 +375,7 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
           }
 
           // 1b) Caut BON COMUN potrivit: total ±0.5L + data ±2 zile
-          const bc = findBonComunMatch(bonuriComune, bonComunReserved, a.cantitate_litri, a.data_alimentare)
+          const bc = findBonComunMatch(bonuriComune, bonComunReserved, a.cantitate_litri, a.data_alimentare, activ?.id, esteCard ? sec.vehicul : null)
           if (bc) {
             bonComunReserved.add(bc.bon_comun_id)
             qrMatched.push({
@@ -384,6 +390,7 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
               pret_total: a.pret_total,
               pret_per_litru: pretL,
               is_bon_comun: true,
+              necesita_confirmare: identitateBonComun(bc, activ?.id, esteCard ? sec.vehicul : null) === 'confirmare',
             })
             continue
           }
@@ -451,6 +458,10 @@ export default function ImportRompetrolModal({ active, profile, showToast, onClo
     if (!matched.length && !qrMatched.length && !carduriFaraQR.length) {
       showToast?.('Nimic de importat', 'warning')
       return
+    }
+    // 04.10.2026 J11: nicio scriere înaintea confirmării asocierilor fără identitate.
+    for (const q of qrMatched.filter(q => q.is_bon_comun && q.necesita_confirmare)) {
+      if (!window.confirm(`Asociere neconfirmată prin vehicul/card: ${q.sursa_linie}, ${q.data}, ${q.litri} L → bon ${q.cod_bon}. Potrivirea este doar pe litri și dată; stația exactă nu există în lista importată. Confirmi explicit că este același bon?`)) return
     }
     setImporting(true)
     try {
