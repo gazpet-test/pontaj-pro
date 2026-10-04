@@ -605,6 +605,7 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
     setSaving(true)
     try {
       let comandaId = comanda?.id
+      let liniiVechi = []
       const header = {
         proiect_id: form.proiect_id || null,
         furnizor_id: form.furnizor_id || null,
@@ -631,6 +632,10 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
       } else {
         const { error: eUpd } = await supabase.from('comenzi_furnizor').update(header).eq('id', comandaId)
         if (eUpd) throw eUpd
+        // 04.10.2026 (audit Achiziții #5): citim reperele vechi înainte de ștergere, ca să le putem pune la loc
+        const { data: vechi, error: eCit } = await supabase.from('comenzi_furnizor_linii').select('*').eq('comanda_furnizor_id', comandaId)
+        if (eCit) throw eCit
+        liniiVechi = vechi || []
         const { error: eDel } = await supabase.from('comenzi_furnizor_linii').delete().eq('comanda_furnizor_id', comandaId)
         if (eDel) throw eDel
       }
@@ -645,7 +650,13 @@ function ComandaFormModal({ comanda, proiecte, furnizoriList, onFurnizorNou, sit
         display_order: i,
       }))
       const { error: eLin } = await supabase.from('comenzi_furnizor_linii').insert(rows)
-      if (eLin) throw eLin
+      if (eLin) {
+        if (liniiVechi.length) {
+          const { error: eRefac } = await supabase.from('comenzi_furnizor_linii').insert(liniiVechi)
+          throw new Error(eLin.message + (eRefac ? ` — ATENȚIE: reperele vechi NU au putut fi refăcute (${eRefac.message})` : ' — reperele vechi au fost puse la loc'))
+        }
+        throw eLin
+      }
       showToast(editMode ? 'Comandă actualizată.' : 'Comandă salvată ca draft.')
       onSaved(comandaId, apoiTrimite)
     } catch (e) {
@@ -1750,7 +1761,8 @@ export default function AchizitiiPage() {
           const activi = aprobatori.filter(a => a.activ)
           if (!activi.length) { showToast('Nu există aprobatori activi configurați (tab Aprobatori).', 'error'); return }
           const rows = activi.map(a => ({ comanda_furnizor_id: c.id, profile_id: a.profile_id, employee_id: a.employee_id, rol_afisat: a.rol_afisat, status: 'in_asteptare' }))
-          const { error: e1 } = await supabase.from('comenzi_furnizor_aprobari').insert(rows)
+          // 04.10.2026 (audit Achiziții #9): după un eșec parțial, reîncercarea nu mai pică pe UNIQUE (comandă, aprobator)
+          const { error: e1 } = await supabase.from('comenzi_furnizor_aprobari').upsert(rows, { onConflict: 'comanda_furnizor_id,profile_id', ignoreDuplicates: true })
           if (e1) throw e1
           const { error: e2 } = await supabase.from('comenzi_furnizor').update({ status: 'in_aprobare', updated_at: new Date().toISOString() }).eq('id', c.id)
           if (e2) throw e2
@@ -1768,17 +1780,21 @@ export default function AchizitiiPage() {
           .eq('id', aprobare.id)
         if (error) throw error
         if (decizie === 'respins') {
-          await supabase.from('comenzi_furnizor').update({ status: 'respinsa', updated_at: new Date().toISOString() }).eq('id', c.id)
+          const { error: eResp } = await supabase.from('comenzi_furnizor').update({ status: 'respinsa', updated_at: new Date().toISOString() }).eq('id', c.id)
+          if (eResp) throw eResp
           showToast(`❌ Ai respins ${c.numar_comanda}.`, 'warn')
         } else {
           // Verifică dacă toate aprobările sunt acum complete
-          const { data: rest } = await supabase.from('comenzi_furnizor_aprobari')
+          // 04.10.2026 (audit Achiziții #4): o eroare de citire sau o listă goală NU înseamnă „toate aprobate”
+          const { data: rest, error: eRest } = await supabase.from('comenzi_furnizor_aprobari')
             .select('id, status').eq('comanda_furnizor_id', c.id)
-          const toateOk = (rest || []).every(r => r.status === 'aprobat')
+          if (eRest) throw eRest
+          const toateOk = (rest || []).length > 0 && rest.every(r => r.status === 'aprobat')
           if (toateOk) {
             showToast('⏳ Toate aprobările complete — se generează PDF-ul comenzii. NU închide pagina...', 'warn')
-            const { data: cFresh } = await supabase.from('comenzi_furnizor')
+            const { data: cFresh, error: eFresh } = await supabase.from('comenzi_furnizor')
               .select('*, linii:comenzi_furnizor_linii(*), aprobari:comenzi_furnizor_aprobari(*)').eq('id', c.id).single()
+            if (eFresh) throw eFresh
             await emiteComanda(cFresh)
             showToast(`✅ Toate aprobările complete — ${c.numar_comanda} EMISĂ, PDF cu semnături generat.`)
           } else {
@@ -1875,10 +1891,14 @@ export default function AchizitiiPage() {
       if (!window.confirm(`Confirmare finală: ștergere definitivă ${c.numar_comanda}?`)) return
       setBusy(true)
       try {
+        // 04.10.2026 (audit Achiziții #8): întâi comanda din BD (cu confirmarea rândului), abia apoi fișierele
         const paths = [c.pdf_comanda_path, c.pv_receptie_path, c.pv_predare_path, c.poza_depozitare_path].filter(Boolean)
-        if (paths.length) await supabase.storage.from(BUCKET).remove(paths)
-        const { error } = await supabase.from('comenzi_furnizor').delete().eq('id', c.id)
+        const { error } = await supabase.from('comenzi_furnizor').delete().eq('id', c.id).select('id').single()
         if (error) throw error
+        if (paths.length) {
+          const { error: eSt } = await supabase.storage.from(BUCKET).remove(paths)
+          if (eSt) console.warn('Storage delete warning:', eSt.message)
+        }
         showToast(`🗑 ${c.numar_comanda} ștearsă definitiv.`, 'warn')
         setSelectedId(null)
         await loadAll()
