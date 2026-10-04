@@ -1,3 +1,4 @@
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — Tab AMC (Aparate de Măsură și Control)
 // ════════════════════════════════════════════════════════════════════════════
@@ -162,7 +163,7 @@ function PdfViewerModal({ doc, url, onClose, showToast }) {
 // MODAL: Add / Edit Echipament AMC
 // ════════════════════════════════════════════════════════════════════════════
 
-function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpenViewer }) {
+function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, canDelete, showToast, onOpenViewer }) {
   const isEdit = !!doc
 
   const [form, setForm] = useState({
@@ -220,6 +221,7 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpe
     if (!form.data_expirare)   { showToast('Completează data expirării', 'error'); return }
 
     setSaving(true)
+    let uploadedPath = null
     try {
       const { data: { user } } = await supabase.auth.getUser()
       let pdfPath = doc?.pdf_url ?? null
@@ -232,12 +234,9 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpe
         const { error: upErr } = await supabase.storage.from(BUCKET)
           .upload(fileName, compressedPdf, { contentType: 'application/pdf', upsert: false })
         if (upErr) throw new Error('Upload PDF eșuat: ' + upErr.message)
-        if (doc?.pdf_url) {
-          await supabase.storage.from(BUCKET).remove([doc.pdf_url])
-        }
+        uploadedPath = fileName
         pdfPath = fileName
       } else if (removeExistingPdf && doc?.pdf_url) {
-        await supabase.storage.from(BUCKET).remove([doc.pdf_url])
         pdfPath = null
       }
 
@@ -263,10 +262,16 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpe
         : supabase.from('logistica_amc').insert(payload).select().single()
       const { error: dbErr } = await op
       if (dbErr) throw dbErr
+      // 04.10.2026 D1 prep: noul PDF este legat în BD înainte de curățarea celui vechi.
+      uploadedPath = null
+      if (doc?.pdf_url && doc.pdf_url !== pdfPath) {
+        await removeLogisticaFiles(supabase, BUCKET, [doc.pdf_url])
+      }
 
       showToast(isEdit ? '✓ Echipament actualizat' : '✓ Echipament adăugat', 'success')
       onSaved()
     } catch (e) {
+      if (uploadedPath) await removeLogisticaFiles(supabase, BUCKET, [uploadedPath])
       showToast('Eroare: ' + (e.message || e), 'error')
     } finally {
       setSaving(false)
@@ -274,14 +279,12 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpe
   }
 
   const handleDelete = async () => {
-    if (!isEdit) return
+    if (!isEdit || !canDelete) return
     setDeleting(true)
     try {
-      if (doc.pdf_url) {
-        await supabase.storage.from(BUCKET).remove([doc.pdf_url])
-      }
-      const { error } = await supabase.from('logistica_amc').delete().eq('id', doc.id)
+      const { error } = await supabase.from('logistica_amc').delete().eq('id', doc.id).select('id').single()
       if (error) throw error
+      await removeLogisticaFiles(supabase, BUCKET, [doc.pdf_url])
       showToast('✓ Echipament șters', 'success')
       onSaved()
     } catch (e) {
@@ -398,7 +401,7 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpe
                 <div style={{fontSize:10, color:G.muted, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{doc.pdf_url}</div>
               </div>
               <button onClick={() => onOpenViewer(doc)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue}}>👁 Vezi</button>
-              {canEdit && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
+              {canDelete && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
             </div>
           )}
 
@@ -430,7 +433,7 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpe
 
         <div style={{display:'flex', justifyContent:'space-between', gap:8, paddingTop:14, borderTop:`1px solid ${G.border}`}}>
           <div>
-            {isEdit && canEdit && (
+            {isEdit && canDelete && (
               !confirmDel ? (
                 <button onClick={() => setConfirmDel(true)} disabled={saving || deleting} style={{...S.btnS, color:G.red, borderColor:G.red+'44', fontSize:13}}>🗑 Șterge</button>
               ) : (
@@ -469,7 +472,7 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, showToast, onOpe
 // MODAL: Gestionare tipuri AMC (admin only)
 // ════════════════════════════════════════════════════════════════════════════
 
-function TipuriAmcManager({ tipuri, onClose, onSaved, showToast }) {
+function TipuriAmcManager({ canDelete, tipuri, onClose, onSaved, showToast }) {
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState({ nume:'', descriere:'', perioada_default_zile:365, activ:true })
   const [saving, setSaving] = useState(false)
@@ -593,11 +596,11 @@ function TipuriAmcManager({ tipuri, onClose, onSaved, showToast }) {
                       {!isConfirmDel ? (
                         <>
                           <button onClick={() => startEdit(t)} style={{...S.btnS, padding:'3px 8px', fontSize:11}}>✏️</button>
-                          <button onClick={() => setConfirmDelId(t.id)} style={{...S.btnS, padding:'3px 8px', fontSize:11, color:G.red}}>🗑</button>
+                          {canDelete && <button onClick={() => setConfirmDelId(t.id)} style={{...S.btnS, padding:'3px 8px', fontSize:11, color:G.red}}>🗑</button>}
                         </>
                       ) : (
                         <>
-                          <button onClick={() => del(t.id)} disabled={saving} style={{...S.btnP, background:G.red, padding:'3px 8px', fontSize:11}}>{saving ? '⏳' : 'Da'}</button>
+                          {canDelete && <button onClick={() => del(t.id)} disabled={saving} style={{...S.btnP, background:G.red, padding:'3px 8px', fontSize:11}}>{saving ? '⏳' : 'Da'}</button>}
                           <button onClick={cancel} disabled={saving} style={{...S.btnS, padding:'3px 8px', fontSize:11}}>Nu</button>
                         </>
                       )}
@@ -656,6 +659,8 @@ export default function AmcSection({ accessLevel, showToast, profile }) {
   const [page, setPage]     = useState(1)
 
   const canEdit = accessLevel === 'admin' || accessLevel === 'editor'
+  // 04.10.2026 D1 prep: ștergerea este rezervată adminului de modul și owner-ului.
+  const canDelete = accessLevel === 'admin' || !!profile?.is_owner
 
   // Deschide previewul. Semnăm URL-ul o singură dată și îl ținem în state —
   // acelaşi token serveşte şi iframe-ul, şi butonul de download.
@@ -894,7 +899,7 @@ export default function AmcSection({ accessLevel, showToast, profile }) {
       </div>
 
       {modal && (
-        <AmcFormModal
+        <AmcFormModal canDelete={canDelete}
           doc={modal.mode === 'edit' ? modal.doc : null}
           tipuri={tipuri}
           canEdit={canEdit}
@@ -915,7 +920,7 @@ export default function AmcSection({ accessLevel, showToast, profile }) {
       )}
 
       {showTipuri && (
-        <TipuriAmcManager
+        <TipuriAmcManager canDelete={canDelete}
           tipuri={tipuri}
           showToast={showToast}
           onClose={() => setShowTipuri(false)}

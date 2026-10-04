@@ -12,7 +12,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 
 // Reutilizez G/S din scope-ul părinte (se vor pasa ca prop)
-export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, sites, showToast, onSaved, onEdit }) {
+export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, canDelete, sites, showToast, onSaved, onEdit }) {
   const [alim, setAlim] = useState([])
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(null)  // id-ul în curs de procesare
@@ -139,6 +139,8 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
   // Respinge alimentare (DELETE)
   const respingeAlim = async (id, doStetge = false) => {
     if (!canEdit) { showToast('Nu ai permisiune', 'warn'); return }
+    // 04.10.2026 D1 prep: respingerea nu acordă drept de DELETE.
+    if (doStetge && !canDelete) { showToast('Nu ai permisiune de ștergere', 'warn'); return }
     const motiv = doStetge 
       ? `Sigur ștergi alimentarea #${id}? IREVERSIBIL.`
       : `Marchezi alimentarea #${id} ca respinsă (rămâne în BD ca audit)?`
@@ -246,6 +248,7 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
             onEdit={() => onEdit && onEdit(a)}
             processing={processing === a.id}
             canEdit={canEdit}
+            canDelete={canDelete}
           />
         ))}
       </div>
@@ -286,7 +289,7 @@ function StatCard({ label, val, color, icon }) {
   )
 }
 
-function AlimCard({ alim, G, S, sites, editingSiteId, setEditingSiteId, onShowPoza, onConfirm, onRespinge, onEdit, processing, canEdit }) {
+function AlimCard({ alim, G, S, sites, editingSiteId, setEditingSiteId, onShowPoza, onConfirm, onRespinge, onEdit, processing, canEdit, canDelete }) {
   const v = alim.active || {}
   const isExternal = alim.sursa_alocare_santier === 'whatsapp_external_pending'
   const isCardSwap = !!alim.is_card_swap
@@ -468,11 +471,11 @@ function AlimCard({ alim, G, S, sites, editingSiteId, setEditingSiteId, onShowPo
               cursor: processing ? 'wait' : 'pointer',
             }}>❌ Respinge</button>
             
-            <button onClick={() => onRespinge(true)} disabled={processing} style={{
+            {canDelete && <button onClick={() => onRespinge(true)} disabled={processing} style={{
               padding: '8px 12px', background: G.surface, color: G.red,
               border: `1px solid ${G.red}44`, borderRadius: 7, fontSize: 11, fontWeight: 600,
               cursor: processing ? 'wait' : 'pointer',
-            }}>🗑️ Șterge</button>
+            }}>🗑️ Șterge</button>}
           </>
         )}
       </div>

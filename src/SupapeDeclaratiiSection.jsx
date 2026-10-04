@@ -1,3 +1,4 @@
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ═══════════════════════════════════════════════════════════════════════════
 // SupapeDeclaratiiSection.jsx — v1 (29.06.2026)
 // Gestiune supape de siguranță per utilaj + Declarație conformitate tehnică.
@@ -142,7 +143,7 @@ function parseBuletinText(raw) {
   return out
 }
 
-export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
+export default function SupapeDeclaratiiSection({ activ, canEdit, canDelete, showToast }) {
   const [nrSupape, setNrSupape] = useState(activ?.nr_supape ?? 1)
   const [supape, setSupape] = useState([])
   const [declaratii, setDeclaratii] = useState([])
@@ -196,6 +197,7 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
   const saveSupapa = async (f, file) => {
     if (!f.serie?.trim()) { showToast?.('Seria supapei e obligatorie', 'error'); return }
     setBusy(true)
+    let uploadedPath = null
     try {
       let pdf_path = f.pdf_path || null, pdf_nume = f.pdf_nume || null
       if (file) {
@@ -204,6 +206,7 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
         const path = `${activ.id}/supape/${f.serie.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}.${ext}`
         const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, compressed, { contentType: compressed.type || 'application/pdf', upsert: false })
         if (upErr) throw upErr
+        uploadedPath = path
         pdf_path = path; pdf_nume = file.name
       }
       const payload = {
@@ -223,26 +226,30 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
         updated_at: new Date().toISOString(),
       }
       if (f.id) {
-        const { error } = await supabase.from('logistica_supape').update(payload).eq('id', f.id)
+        const { error } = await supabase.from('logistica_supape').update(payload).eq('id', f.id).select('id').single()
         if (error) throw error
       } else {
         const { data: { user } } = await supabase.auth.getUser()
         const { error } = await supabase.from('logistica_supape').insert({ ...payload, created_by: user?.id || null })
         if (error) throw error
       }
+      // 04.10.2026 D1 prep: curățarea PDF-ului vechi numai după salvare.
+      uploadedPath = null
+      if (f.pdf_path && f.pdf_path !== pdf_path) await removeLogisticaFiles(supabase, BUCKET, [f.pdf_path])
       showToast?.('Supapă salvată', 'success')
       setEditSupapa(null)
       await load()
     } catch (e) {
+      if (uploadedPath) await removeLogisticaFiles(supabase, BUCKET, [uploadedPath])
       showToast?.('Eroare: ' + (e.message || e), 'error')
     } finally { setBusy(false) }
   }
 
   const stergeSupapa = async (s) => {
-    if (!window.confirm(`Ștergi supapa serie ${s.serie}?`)) return
-    if (s.pdf_path) { try { await supabase.storage.from(BUCKET).remove([s.pdf_path]) } catch {} }
-    const { error } = await supabase.from('logistica_supape').delete().eq('id', s.id)
+    if (!canDelete || !window.confirm(`Ștergi supapa serie ${s.serie}?`)) return
+    const { error } = await supabase.from('logistica_supape').delete().eq('id', s.id).select('id').single()
     if (error) { showToast?.('Eroare la ștergere', 'error'); return }
+    await removeLogisticaFiles(supabase, BUCKET, [s.pdf_path])
     showToast?.('Supapă ștearsă', 'success')
     await load()
   }
@@ -436,7 +443,7 @@ export default function SupapeDeclaratiiSection({ activ, canEdit, showToast }) {
               <div style={{ display: 'flex', gap: 6 }}>
                 {s.pdf_path && <button onClick={() => veziPDF(s.pdf_path)} title="Vezi buletin" style={{ ...S.btnS, padding: '5px 10px', fontSize: 12 }}>📄</button>}
                 {canEdit && <button onClick={() => setEditSupapa({ ...s })} style={{ ...S.btnS, padding: '5px 10px', fontSize: 12 }}>✏️</button>}
-                {canEdit && <button onClick={() => stergeSupapa(s)} style={{ ...S.btnS, padding: '5px 10px', fontSize: 12, color: G.red, borderColor: G.red + '44' }}>🗑</button>}
+                {canDelete && <button onClick={() => stergeSupapa(s)} style={{ ...S.btnS, padding: '5px 10px', fontSize: 12, color: G.red, borderColor: G.red + '44' }}>🗑</button>}
               </div>
             </div>
           )

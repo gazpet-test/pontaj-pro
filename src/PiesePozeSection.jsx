@@ -1,3 +1,4 @@
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ============================================================
 // PiesePozeSection.jsx — Piese schimbate pe un activ: denumire, cod, SERIE + POZE
 // (08.09.2026). Se afișează în Logistică → Service → 📜 Istoric Service (per activ).
@@ -38,7 +39,7 @@ async function compressImage(file, maxSide = 1600, quality = 0.8) {
   } catch { return file } finally { URL.revokeObjectURL(url) }
 }
 
-export default function PiesePozeSection({ activ, canEdit, showToast }) {
+export default function PiesePozeSection({ activ, canEdit, canDelete, showToast }) {
   const [piese, setPiese] = useState([])
   const [poze, setPoze] = useState({})       // piesa_id → [ {id, storage_path, url} ]
   const [loading, setLoading] = useState(true)
@@ -76,26 +77,33 @@ export default function PiesePozeSection({ activ, canEdit, showToast }) {
     setBusy(piesaId)
     let ok = 0
     for (const file of Array.from(files)) {
+      let uploadedPath = null
       try {
         const blob = await compressImage(file)
         const path = `activ-${activ.id}/piese/${piesaId}-${Date.now()}-${Math.random().toString(36).slice(2,6)}.jpg`
         const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, blob, { contentType:'image/jpeg', upsert:false })
         if (upErr) throw upErr
+        uploadedPath = path
         const { data: { user } } = await supabase.auth.getUser()
         const { error: insErr } = await supabase.from('logistica_piese_poze').insert({ piesa_id: piesaId, active_id: activ.id, storage_path: path, mime:'image/jpeg', size_bytes: blob.size, sursa:'manual', created_by: user?.id || null })
         if (insErr) throw insErr
         ok++
-      } catch (e) { showToast?.(`Poza nu s-a urcat: ${e.message}`, 'error') }
+      } catch (e) {
+        if (uploadedPath) await removeLogisticaFiles(supabase, BUCKET, [uploadedPath])
+        showToast?.(`Poza nu s-a urcat: ${e.message}`, 'error')
+      }
     }
     setBusy(null)
     if (ok) { showToast?.(`${ok} ${ok === 1 ? 'poză urcată' : 'poze urcate'}`, 'success'); load() }
   }
 
   const stergePoza = async (p) => {
-    if (!window.confirm('Ștergi poza?')) return
-    await supabase.storage.from(BUCKET).remove([p.storage_path])
-    const { error } = await supabase.from('logistica_piese_poze').delete().eq('id', p.id)
-    if (error) showToast?.(error.message, 'error'); else load()
+    if (!canDelete || !window.confirm('Ștergi poza?')) return
+    // 04.10.2026 D1 prep: fișierele rămân intacte dacă BD refuză ștergerea.
+    const { error } = await supabase.from('logistica_piese_poze').delete().eq('id', p.id).select('id').single()
+    if (error) { showToast?.(error.message, 'error'); return }
+    await removeLogisticaFiles(supabase, BUCKET, [p.storage_path])
+    load()
   }
 
   const salveazaSerie = async (piesaId) => {
@@ -120,10 +128,12 @@ export default function PiesePozeSection({ activ, canEdit, showToast }) {
 
   const stergePiesa = async (p) => {
     const n = (poze[p.id] || []).length
-    if (!window.confirm(`Ștergi piesa „${p.denumire}"${n ? ` și cele ${n} poze` : ''}?`)) return
-    if (n) await supabase.storage.from(BUCKET).remove(poze[p.id].map(x => x.storage_path))
-    const { error } = await supabase.from('logistica_piese_istoric').delete().eq('id', p.id)
-    if (error) showToast?.(error.message, 'error'); else load()
+    if (!canDelete || !window.confirm(`Ștergi piesa „${p.denumire}"${n ? ` și cele ${n} poze` : ''}?`)) return
+    // 04.10.2026 D1 prep: fișierele rămân intacte dacă BD refuză ștergerea.
+    const { error } = await supabase.from('logistica_piese_istoric').delete().eq('id', p.id).select('id').single()
+    if (error) { showToast?.(error.message, 'error'); return }
+    await removeLogisticaFiles(supabase, BUCKET, (poze[p.id] || []).map(x => x.storage_path))
+    load()
   }
 
   const totalPoze = Object.values(poze).reduce((s, a) => s + a.length, 0)
@@ -199,7 +209,7 @@ export default function PiesePozeSection({ activ, canEdit, showToast }) {
                                onChange={e => { uploadPoze(p.id, e.target.files); e.target.value = '' }} />
                       </label>
                     )}
-                    {canEdit && <button onClick={() => stergePiesa(p)} style={{ ...S.btnS, padding:'4px 9px', color:G.red }} title="Șterge piesa">🗑</button>}
+                    {canDelete && <button onClick={() => stergePiesa(p)} style={{ ...S.btnS, padding:'4px 9px', color:G.red }} title="Șterge piesa">🗑</button>}
                   </div>
                 </div>
                 {pz.length > 0 && (
@@ -208,7 +218,7 @@ export default function PiesePozeSection({ activ, canEdit, showToast }) {
                       <div key={x.id} style={{ position:'relative' }}>
                         <img src={x.url} alt="" loading="lazy" onClick={() => setLightbox(x)}
                              style={{ width:72, height:72, objectFit:'cover', borderRadius:6, border:`1px solid ${G.border2}`, cursor:'zoom-in', background:G.bg }} />
-                        {canEdit && <button onClick={() => stergePoza(x)} title="Șterge poza"
+                        {canDelete && <button onClick={() => stergePoza(x)} title="Șterge poza"
                                  style={{ position:'absolute', top:-6, right:-6, width:18, height:18, borderRadius:9, border:'none', background:G.red, color:'white', fontSize:11, cursor:'pointer', lineHeight:'18px', padding:0 }}>×</button>}
                       </div>
                     ))}

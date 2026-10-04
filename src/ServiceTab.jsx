@@ -801,7 +801,8 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
 // MODAL: DETALIU FIȘĂ
 // ════════════════════════════════════════════════════════════════════════════
 
-function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
+// 04.10.2026 D1 prep: canDelete controlează numai butoanele de ștergere.
+function DetailFisaModal({ canDelete, fisaId, canEdit, onClose, onSaved, showToast }) {
   const [fisa, setFisa] = useState(null)
   const [intrari, setIntrari] = useState([])
   const [kmOre, setKmOre] = useState(null) // ← Pachet C: km/ore live din v_active_km_ore
@@ -1366,7 +1367,7 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
                     <th style={{padding:'6px 8px', textAlign:'left', color:G.muted, fontSize:10, textTransform:'uppercase', borderBottom:`1px solid ${G.border}`}}>Denumire</th>
                     <th style={{padding:'6px 8px', textAlign:'left', color:G.muted, fontSize:10, textTransform:'uppercase', borderBottom:`1px solid ${G.border}`, width:140}}>Cod piesă</th>
                     <th style={{padding:'6px 8px', textAlign:'left', color:G.muted, fontSize:10, textTransform:'uppercase', borderBottom:`1px solid ${G.border}`, width:90}}>Cantitate</th>
-                    {canEdit && <th style={{width:30, padding:'6px 8px', borderBottom:`1px solid ${G.border}`}}></th>}
+                    {canDelete && <th style={{width:30, padding:'6px 8px', borderBottom:`1px solid ${G.border}`}}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1401,7 +1402,7 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
                             placeholder="—" />
                         ) : (it.cantitate || '—')}
                       </td>
-                      {canEdit && (
+                      {canDelete && (
                         <td style={{padding:'6px 4px', textAlign:'center'}}>
                           <button onClick={() => deleteIntrare(it.id)} style={{background:'transparent', border:'none', color:G.red, cursor:'pointer', fontSize:14}}>×</button>
                         </td>
@@ -1481,7 +1482,7 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
                     >
                       📥 Vezi
                     </button>
-                    {canEdit && (
+                    {canDelete && (
                       <button 
                         onClick={() => handleDeleteAtasament(atas)}
                         style={{...S.btnS, padding: '5px 8px', fontSize: 12, color: G.red, borderColor: G.red + '44'}}
@@ -1506,7 +1507,7 @@ function DetailFisaModal({ fisaId, canEdit, onClose, onSaved, showToast }) {
               title="Export PDF cu semnături">
               📄 Export PDF
             </button>
-            {canEdit && editMode && (
+            {canDelete && editMode && (
               <button onClick={handleDeleteFisa} style={{...S.btnS, fontSize:12, color:G.red, borderColor:G.red + '55'}}>🗑 Șterge fișă</button>
             )}
           </div>
@@ -1888,7 +1889,7 @@ async function generateServicePDF(fisa, intrari, activ, showToast) {
 // Listă cronologică toate fișele service pentru un utilaj. Date deja există în BD.
 // Util pentru a vedea evoluția mentenanței + tendințe + total cheltuieli per utilaj.
 
-function IstoricServiceModal({ activ, canEdit, onClose, onOpenFisa, showToast }) {
+function IstoricServiceModal({ canDelete, activ, canEdit, onClose, onOpenFisa, showToast }) {
   const [fise, setFise] = useState([])
   const [loading, setLoading] = useState(true)
   
@@ -2019,13 +2020,13 @@ function IstoricServiceModal({ activ, canEdit, onClose, onOpenFisa, showToast })
         )}
 
         {/* 08.09.2026: piese schimbate cu serie + poze (compresate în browser) */}
-        <PiesePozeSection activ={activ} canEdit={canEdit} showToast={showToast} />
+        <PiesePozeSection canDelete={canDelete} activ={activ} canEdit={canEdit} showToast={showToast} />
       </div>
     </div>
   )
 }
 
-export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
+export default function ServiceTab({ canDelete, active: activeProp, canEdit, showToast }) {
   const [fise, setFise] = useState([])
   const [activeFull, setActiveFull] = useState([])
   const [presetItems, setPresetItems] = useState([])
@@ -2527,7 +2528,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
                           }} 
                           title="Export PDF" 
                           style={{...S.btnS, padding:'8px 10px', fontSize:14, color:G.red, borderColor:G.red + '44', marginRight:3}}>📄</button>
-                        {canEdit && <button onClick={() => handleQuickDeleteFisa(f)} title="Șterge fișa" style={{...S.btnS, padding:'8px 10px', fontSize:14, color:G.red, borderColor:G.red + '44'}}>🗑</button>}
+                        {canDelete && <button onClick={() => handleQuickDeleteFisa(f)} title="Șterge fișa" style={{...S.btnS, padding:'8px 10px', fontSize:14, color:G.red, borderColor:G.red + '44'}}>🗑</button>}
                       </td>
                     </tr>
                   )
@@ -2551,7 +2552,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
         />
       )}
       {detailModal && (
-        <DetailFisaModal
+        <DetailFisaModal canDelete={canDelete}
           fisaId={detailModal}
           canEdit={canEdit}
           onClose={() => setDetailModal(null)}
@@ -2571,7 +2572,7 @@ export default function ServiceTab({ active: activeProp, canEdit, showToast }) {
       
       {/* ETAPA 8.7: Modal istoric service per utilaj */}
       {istoricModal && (
-        <IstoricServiceModal
+        <IstoricServiceModal canDelete={canDelete}
           activ={istoricModal.activ}
           canEdit={canEdit}
           onClose={() => setIstoricModal(null)}

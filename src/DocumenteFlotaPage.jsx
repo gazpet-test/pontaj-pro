@@ -1,3 +1,4 @@
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — Documente Flotă (Etapa 1 + 2)
 // ════════════════════════════════════════════════════════════════════════════
@@ -289,7 +290,7 @@ function PlaceholderSubTab({ emoji, titlu, descriere }) {
 // MODAL: Add / Edit Document
 // ════════════════════════════════════════════════════════════════════════════
 
-export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, onSaved, canEdit, showToast }) {
+export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, onSaved, canEdit, canDelete, showToast }) {
   const isEdit = !!doc
   const utilajLocked = !!activId && !isEdit
 
@@ -341,6 +342,7 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
     if (!form.fara_expirare && !form.data_expirare) { showToast('Completează data expirării (sau bifează „Fără expirare")', 'error'); return }
 
     setSaving(true)
+    let uploadedPath = null
     try {
       const { data: { user } } = await supabase.auth.getUser()
       let pdfPath = doc?.pdf_url ?? null
@@ -353,12 +355,9 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
         const { error: upErr } = await supabase.storage.from(BUCKET)
           .upload(fileName, compressedPdf, { contentType: 'application/pdf', upsert: false })
         if (upErr) throw new Error('Upload PDF eșuat: ' + upErr.message)
-        if (doc?.pdf_url) {
-          await supabase.storage.from(BUCKET).remove([doc.pdf_url])
-        }
+        uploadedPath = fileName
         pdfPath = fileName
       } else if (removeExistingPdf && doc?.pdf_url) {
-        await supabase.storage.from(BUCKET).remove([doc.pdf_url])
         pdfPath = null
       }
 
@@ -383,10 +382,16 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
         : supabase.from('logistica_documente').insert(payload).select().single()
       const { error: dbErr } = await op
       if (dbErr) throw dbErr
+      // 04.10.2026 D1 prep: noul PDF este legat în BD înainte de curățarea celui vechi.
+      uploadedPath = null
+      if (doc?.pdf_url && doc.pdf_url !== pdfPath) {
+        await removeLogisticaFiles(supabase, BUCKET, [doc.pdf_url])
+      }
 
       showToast(isEdit ? '✓ Document actualizat' : '✓ Document adăugat', 'success')
       onSaved()
     } catch (e) {
+      if (uploadedPath) await removeLogisticaFiles(supabase, BUCKET, [uploadedPath])
       showToast('Eroare: ' + (e.message || e), 'error')
     } finally {
       setSaving(false)
@@ -394,14 +399,12 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
   }
 
   const handleDelete = async () => {
-    if (!isEdit) return
+    if (!isEdit || !canDelete) return
     setDeleting(true)
     try {
-      if (doc.pdf_url) {
-        await supabase.storage.from(BUCKET).remove([doc.pdf_url])
-      }
-      const { error } = await supabase.from('logistica_documente').delete().eq('id', doc.id)
+      const { error } = await supabase.from('logistica_documente').delete().eq('id', doc.id).select('id').single()
       if (error) throw error
+      await removeLogisticaFiles(supabase, BUCKET, [doc.pdf_url])
       showToast('✓ Document șters', 'success')
       onSaved()
     } catch (e) {
@@ -537,7 +540,7 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
                 <div style={{fontSize:10, color:G.muted, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{doc.pdf_url}</div>
               </div>
               <button onClick={() => openPdfFromBucket(doc.pdf_url, showToast)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue}}>👁 Vezi</button>
-              {canEdit && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
+              {canDelete && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
             </div>
           )}
 
@@ -569,7 +572,7 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
 
         <div style={{display:'flex', justifyContent:'space-between', gap:8, paddingTop:14, borderTop:`1px solid ${G.border}`}}>
           <div>
-            {isEdit && canEdit && (
+            {isEdit && canDelete && (
               !confirmDel ? (
                 <button onClick={() => setConfirmDel(true)} disabled={saving || deleting} style={{...S.btnS, color:G.red, borderColor:G.red+'44', fontSize:13}}>🗑 Șterge</button>
               ) : (
@@ -608,7 +611,7 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
 // LISTA COMPACTĂ — pentru integrare în ActivFormModal (pagina utilajului)
 // ════════════════════════════════════════════════════════════════════════════
 
-export function DocumenteUtilajList({ activId, canEdit, showToast }) {
+export function DocumenteUtilajList({ activId, canEdit, canDelete, showToast }) {
   const [docs, setDocs] = useState([])
   const [tipuri, setTipuri] = useState([])
   const [load, setLoad] = useState(true)
@@ -712,7 +715,7 @@ export function DocumenteUtilajList({ activId, canEdit, showToast }) {
       )}
 
       {modal && (
-        <DocumentFormModal
+        <DocumentFormModal canDelete={canDelete}
           doc={modal.mode === 'edit' ? modal.doc : null}
           activId={activId}
           activList={null}
@@ -754,6 +757,8 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
   const [page, setPage]       = useState(1)
 
   const canEdit = accessLevel === 'admin' || accessLevel === 'editor'
+  // 04.10.2026 D1 prep: ștergerea este rezervată adminului de modul și owner-ului.
+  const canDelete = accessLevel === 'admin' || !!profile?.is_owner
 
   // Sincronizez subTab cu URL la schimbare externă (ex: navigare directă)
   useEffect(() => {
@@ -1035,7 +1040,7 @@ export default function DocumenteFlotaPage({ active, accessLevel, profile, showT
       )}
 
       {editModal && (
-        <DocumentFormModal
+        <DocumentFormModal canDelete={canDelete}
           doc={editModal.doc}
           activId={editModal.doc.entitate_id ?? editModal.doc.active_id}
           activList={active}
