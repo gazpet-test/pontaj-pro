@@ -1,3 +1,4 @@
+import { salveazaIntrariService } from './lib/logisticaPrB.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — Tab Service v2 (refactor major)
 // ════════════════════════════════════════════════════════════════════════════
@@ -644,18 +645,17 @@ function NewFisaModal({ activPreset, active, onClose, onSaved, showToast, preset
         })
       }
 
-      if (intrari.length > 0) {
-        const { error: iErr } = await supabase.from('logistica_service_intrari').insert(intrari)
-        if (iErr) throw iErr
-      }
+      // 04.10.2026 J14: eroarea intrarilor compenseaza fisa si ramane vizibila.
+      if (intrari.length > 0) await salveazaIntrariService(supabase, fisa.id, intrari)
 
-      await supabase
+      const { error: notificationError } = await supabase
         .from('notifications')
         .update({ action_taken: true, read_at: new Date().toISOString() })
         .eq('type', 'logistica_lipsa_fisa_service')
         .eq('link_to', `/logistica?tab=service&activ_id=${activId}`)
 
-      showToast(`✓ Fișă creată cu ${intrari.length} intrări`, 'success')
+      if (notificationError) showToast(`Fisa salvata, dar notificarea nu a fost actualizata: ${notificationError.message}`, 'warn')
+      else showToast(`✓ Fișă creată cu ${intrari.length} intrări`, 'success')
       onSaved()
     } catch (err) {
       showToast(`Eroare: ${err.message}`, 'error')

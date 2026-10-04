@@ -1,3 +1,4 @@
+import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
@@ -461,41 +462,33 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
   
   // Fetch preț mediu ponderat Gazpet (din achiziții vrac) — pentru rezervorul activ
   useEffect(() => {
+    // 04.10.2026 J18: ignoram raspunsul rezervorului anterior.
+    let activ = true
+    setPretMediuGazpet(null)
     if (!rezervorActiv?.id) { setPretMediuGazpet(null); return }
     supabase.from('logistica_achizitii_vrac')
       .select('cantitate_litri, pret_per_litru')
       .eq('rezervor_id', rezervorActiv.id)
       .not('pret_per_litru', 'is', null)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (!activ) return
+        if (error) { setPretMediuGazpet(null); return }
         if (!data?.length) { setPretMediuGazpet(null); return }
         const totalLitri = data.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
         const totalCost = data.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
         if (totalLitri > 0) setPretMediuGazpet((totalCost / totalLitri).toFixed(4))
       })
+    return () => { activ = false }
   }, [rezervorActiv?.id])
   
   // Pretul de bază folosit la auto-fill (Gazpet → mediu ponderat, altă stație → preț pompă)
   const pretBaza = isGazpet ? (pretMediuGazpet || pretMotorina) : pretMotorina
   
-  // Sincronizare bidirecțională cost ↔ preț/litru când se schimbă cantitatea
+  // 04.10.2026 J18: recalcul inclusiv la pret nou, fara bucla intre campuri.
   useEffect(() => {
-    if (!form.cantitate_litri || Number(form.cantitate_litri) <= 0) return
-    
-    if (lastEdited === 'total' && form.pret_total) {
-      // User a editat costul total → recalculez preț/litru
-      const ppl = (Number(form.pret_total) / Number(form.cantitate_litri)).toFixed(4)
-      setField('pret_per_litru', ppl)
-    } else if (lastEdited === 'pret' && form.pret_per_litru) {
-      // User a editat preț/litru → recalculez cost total
-      const total = (Number(form.pret_per_litru) * Number(form.cantitate_litri)).toFixed(2)
-      setField('pret_total', total)
-    } else if (!lastEdited && pretBaza) {
-      // Prima dată, prefill din preț de bază
-      setField('pret_per_litru', Number(pretBaza).toFixed(2))
-      setField('pret_total', (Number(form.cantitate_litri) * Number(pretBaza)).toFixed(2))
-    }
-  }, [form.cantitate_litri])
-  
+    setForm(p => recalculeazaPret(p, lastEdited, pretBaza))
+  }, [form.cantitate_litri, form.pret_total, form.pret_per_litru, lastEdited, pretBaza])
+
   // Handler pentru cost total (user editează)
   const handleTotalChange = (v) => {
     setField('pret_total', v)
@@ -2770,6 +2763,11 @@ function EditAlimentareModal({ canDelete, alim, sites, rezervoare, pretMotorina,
   }
 
   const handleLeagaBon = async () => {
+    // 04.10.2026 J10: Oscar nu este o sursa permisa pentru bon comun.
+    if (!sursaBonComunValida(alim.qr_sursa)) {
+      showToast(`Bonul comun accepta doar Rompetrol sau benzinarie. Sursa "${alim.qr_sursa}" nu este acceptata.`, 'error')
+      return
+    }
     const tot = Number(totalBonInput)
     if (!(tot > 0)) { showToast('Introdu totalul de litri de pe bonul fizic', 'error'); return }
     if (tot < Number(alim.cantitate_litri || 0)) {
@@ -5295,6 +5293,7 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
   const [actionLoading, setActionLoading] = useState(false)
   const [dataTransportEdit, setDataTransportEdit] = useState(T?.data_transport || '')  // editabilă la aprobare
   const [showAviz, setShowAviz] = useState(false)  // PAS 5F: deschide modal aviz
+  const [avizDupaTranzit, setAvizDupaTranzit] = useState(false) // 04.10.2026 J15
   const [autoAviz, setAutoAviz] = useState(false)   // 12.06 FIX Sentry: auto-arhivare aviz la trecerea in tranzit
   // 27.05.2026: Iterația 2 - load lista conținut multiplu (dacă există)
   const [continutItems, setContinutItems] = useState([])
@@ -5415,20 +5414,21 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
     const labels = { programat: 'Programat', in_tranzit: 'In tranzit', livrat: 'Livrat' }
     if (!confirm('Schimbi status la "' + (labels[nou] || nou) + '"?')) return
 
-    // AUTO-GENERARE AVIZ la trecerea in tranzit (daca nu e deja generat)
-    // 12.06 FIX Sentry (ReferenceError handleArhivare): functia traieste in AvizInsotireMarfaModal,
-    // nu aici — deschidem modalul cu autoArhiveaza=true si el isi ruleaza singur arhivarea.
-    if (nou === 'in_tranzit' && !T.aviz_generat) {
-      showToast('Se genereaza avizul automat...', 'info')
-      setAutoAviz(true)
-      setShowAviz(true)
-    }
+    // 04.10.2026 J15: aviz dupa salvare; parintele ramane montat.
+    const genereazaAviz = nou === 'in_tranzit' && !T.aviz_generat
 
     setActionLoading(true)
     const { error } = await supabase.from('logistica_transporturi').update({ status: nou }).eq('id', T.id)
     setActionLoading(false)
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
-    showToast('Status schimbat: ' + (labels[nou] || nou) + (nou === 'in_tranzit' && !T.aviz_generat ? ' + aviz generat automat!' : ''))
+    showToast('Status schimbat: ' + (labels[nou] || nou))
+    if (genereazaAviz) {
+      showToast('Se genereaza avizul automat...', 'info')
+      setAvizDupaTranzit(true)
+      setAutoAviz(true)
+      setShowAviz(true)
+      return
+    }
     onChanged?.()
     onClose()
   }
@@ -5895,11 +5895,14 @@ function DetaliiTransportModal({ transport: T, profile, onClose, onChanged, onEd
         <AvizInsotireMarfaModal 
           transport={T} 
           profile={profile} 
-          onClose={() => { setShowAviz(false); setAutoAviz(false) }} 
+          onClose={() => { if (autoAviz) return; setShowAviz(false); if (avizDupaTranzit) { onChanged?.(); onClose() } }} 
           showToast={showToast}
-          onTrimisEmail={() => { onChanged?.() }}
+          onTrimisEmail={() => { if (!avizDupaTranzit) onChanged?.() }}
           autoArhiveaza={autoAviz}
-          onAutoArhivat={() => { setAutoAviz(false); setShowAviz(false); onChanged?.() }}
+          onAutoArhivat={ok => {
+            setAutoAviz(false)
+            if (ok) { setShowAviz(false); onChanged?.(); onClose() }
+          }}
         />
       )}
     </div>
@@ -6212,7 +6215,7 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     const nowSof = rol === 'sofer' ? true : !!semnSofData
     const nowDest = rol === 'destinatar' ? true : !!semnDestData
     
-    if (nowExp && nowSof && nowDest) {
+    if (!autoArhiveaza && nowExp && nowSof && nowDest) {
       // Verifică direct în arhivă (NU pe aviz_generat care e stricat de mailto)
       const { count } = await supabase
         .from('logistica_avize_arhiva')
@@ -6260,7 +6263,7 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         setSemnDestLa(data.semnatura_destinatar_la || null)
         
         // RECOVERY: dacă avem 3/3 semnături dar NU există în arhivă → trigger arhivare
-        if (data.semnatura_expeditor_data && data.semnatura_sofer_data && data.semnatura_destinatar_data) {
+        if (!autoArhiveaza && data.semnatura_expeditor_data && data.semnatura_sofer_data && data.semnatura_destinatar_data) {
           const { count } = await supabase
             .from('logistica_avize_arhiva')
             .select('id', { count: 'exact', head: true })
@@ -6278,8 +6281,8 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     if (!autoArhiveaza) return
     // Asteptam randarea completa a avizului (HTML -> canvas) inainte de captura
     const t = setTimeout(async () => {
-      try { await handleArhivare(true) } catch (e) { showToast('Eroare arhivare automata: ' + (e?.message || e), 'error') }
-      onAutoArhivat && onAutoArhivat()
+      const ok = await handleArhivare(true)
+      onAutoArhivat?.(ok === true)
     }, 1000)
     return () => clearTimeout(t)
   }, [autoArhiveaza])  // eslint-disable-line react-hooks/exhaustive-deps
@@ -6298,11 +6301,12 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
     try {
       // 0. FRESH FETCH din DB pentru a fi sigur că avem cele mai recente semnături
       // (state-urile pot fi stale din cauza React batch-ing dacă vine din auto-recovery)
-      const { data: fresh } = await supabase
+      const { data: fresh, error: freshError } = await supabase
         .from('logistica_transporturi')
         .select('semnatura_expeditor_data, semnatura_sofer_data, semnatura_destinatar_data, aviz_generat')
         .eq('id', T.id)
         .single()
+      if (freshError) throw freshError
       const finalSemnExp = !!fresh?.semnatura_expeditor_data
       const finalSemnSof = !!fresh?.semnatura_sofer_data
       const finalSemnDest = !!fresh?.semnatura_destinatar_data
@@ -6382,7 +6386,8 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       if (insErr) throw insErr
       
       // 7. Update aviz_generat în transport (locked după arhivare)
-      await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
+      const { error: avizError } = await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
+      if (avizError) throw avizError
       
       // 8. Download local DOAR dacă NU e auto (pentru flow manual la sediu)
       if (!auto) {
@@ -6394,13 +6399,15 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
         URL.revokeObjectURL(blobUrl)
         showToast(`📂 Aviz arhivat (${(pdfSize/1024).toFixed(0)} KB) + descărcat`)
       } else {
-        showToast(`✅ Aviz arhivat AUTOMAT după 3 semnături (${(pdfSize/1024).toFixed(0)} KB)`)
+        showToast(`✅ Aviz arhivat AUTOMAT (${(pdfSize/1024).toFixed(0)} KB)`)
       }
       
       onTrimisEmail?.()
+      return true // 04.10.2026 J15: inchidem numai dupa succes real.
     } catch (e) {
       showToast('Eroare arhivare: ' + (e.message || e), 'error')
       console.error(e)
+      return false
     } finally {
       setArhivareLoading(false)
     }
@@ -7378,7 +7385,7 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
           onChanged={async () => {
             await fetchAll()
             // Refresh și transportul deschis în detalii (pentru că state-ul lui pierdea schimbările)
-            const { data: fresh } = await supabase
+            const { data: fresh, error: freshError } = await supabase
               .from('logistica_transporturi')
               .select(`*,
                 activ_transportat:logistica_active!activ_transportat_id(id, cod_intern, nr_inventar, marca, model, nr_inmatriculare, serie_sasiu, regim_transport_special),
