@@ -1,4 +1,3 @@
-import { identitateBonComun } from './lib/logisticaPrB.js'
 // ===========================================================================
 // ImportRompetrolModal.jsx — Import alimentări din Excel Rompetrol
 // v1 — 24.05.2026
@@ -6,6 +5,7 @@ import { identitateBonComun } from './lib/logisticaPrB.js'
 // Match: nr_inmatriculare normalizat (fără spații)
 // Carduri GAZPET1-21 = SKIP (atribuire ulterioară prin QR)
 // ===========================================================================
+import { identitateBonComun } from './lib/logisticaPrB.js'
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'

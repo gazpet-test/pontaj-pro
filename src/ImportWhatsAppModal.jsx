@@ -1,4 +1,3 @@
-import { matchWhatsAppUnic, rezultatPoza } from './lib/logisticaPrB.js'
 // ImportWhatsAppModal.jsx v3
 // 25.05.2026 - Import .zip WhatsApp grup motorină + match Rompetrol
 // 26.05.2026 - FIX B: Suport pentru mesaje orfane (poze fără caption text)
@@ -11,6 +10,7 @@ import { matchWhatsAppUnic, rezultatPoza } from './lib/logisticaPrB.js'
 //   - Salvează în whatsapp_messages_processed cu status='pending_plate_detection'
 //   - Plate detection se face ulterior cu Vision OCR (Edge Function separată)
 
+import { matchWhatsAppUnic, rezultatPoza } from './lib/logisticaPrB.js'
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
 import JSZip from 'jszip'

@@ -1,9 +1,9 @@
-import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
 
 import { removeLogisticaFiles } from './utils/logisticaStorage.js'
+import { recalculeazaPret, sursaBonComunValida } from './lib/logisticaPrB.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -463,7 +463,7 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
   // Fetch preț mediu ponderat Gazpet (din achiziții vrac) — pentru rezervorul activ
   useEffect(() => {
     // 04.10.2026 J18: ignoram raspunsul rezervorului anterior.
-    let activ = true
+    let curent = true
     setPretMediuGazpet(null)
     if (!rezervorActiv?.id) { setPretMediuGazpet(null); return }
     supabase.from('logistica_achizitii_vrac')
@@ -471,14 +471,14 @@ function AlimentareModal({ activ, onClose, onSaved, showToast, rezervoare, sites
       .eq('rezervor_id', rezervorActiv.id)
       .not('pret_per_litru', 'is', null)
       .then(({ data, error }) => {
-        if (!activ) return
+        if (!curent) return
         if (error) { setPretMediuGazpet(null); return }
         if (!data?.length) { setPretMediuGazpet(null); return }
         const totalLitri = data.reduce((s, a) => s + Number(a.cantitate_litri || 0), 0)
         const totalCost = data.reduce((s, a) => s + Number(a.cantitate_litri || 0) * Number(a.pret_per_litru || 0), 0)
         if (totalLitri > 0) setPretMediuGazpet((totalCost / totalLitri).toFixed(4))
       })
-    return () => { activ = false }
+    return () => { curent = false }
   }, [rezervorActiv?.id])
   
   // Pretul de bază folosit la auto-fill (Gazpet → mediu ponderat, altă stație → preț pompă)
@@ -6310,6 +6310,17 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       const finalSemnExp = !!fresh?.semnatura_expeditor_data
       const finalSemnSof = !!fresh?.semnatura_sofer_data
       const finalSemnDest = !!fresh?.semnatura_destinatar_data
+      // 04.10.2026 J15 (Copilot): la arhivarea automată nu generăm al doilea aviz dacă există deja unul pentru transport.
+      if (auto) {
+        const { count: dejaArhivate, error: cntErr } = await supabase.from('logistica_avize_arhiva')
+          .select('id', { count: 'exact', head: true }).eq('transport_id', T.id)
+        if (cntErr) throw cntErr
+        if (dejaArhivate > 0) {
+          showToast('Avizul era deja în arhivă — nu am generat altul.', 'info')
+          onTrimisEmail?.()
+          return true
+        }
+      }
       
       // 1. Selectează zona aviz
       const aviz = document.querySelector('.aviz-content')
@@ -6386,8 +6397,13 @@ function AvizInsotireMarfaModal({ transport: T, profile, onClose, showToast, onT
       if (insErr) throw insErr
       
       // 7. Update aviz_generat în transport (locked după arhivare)
+      // 04.10.2026 J15 (Copilot): arhiva e deja salvată — eșecul marcajului NU trebuie să ducă la o nouă generare.
       const { error: avizError } = await supabase.from('logistica_transporturi').update({ aviz_generat: true, aviz_data: new Date().toISOString() }).eq('id', T.id)
-      if (avizError) throw avizError
+      if (avizError) {
+        showToast(`Aviz ${numarAviz} arhivat, dar marcajul pe transport nu s-a actualizat (${avizError.message}). NU regenera avizul — reîncarcă pagina.`, 'warn')
+        onTrimisEmail?.()
+        return true
+      }
       
       // 8. Download local DOAR dacă NU e auto (pentru flow manual la sediu)
       if (!auto) {
@@ -7403,6 +7419,7 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
               `)
               .eq('id', detaliiTransport.id)
               .single()
+            if (freshError) { showToast('Detaliile transportului nu s-au reîmprospătat: ' + freshError.message, 'warn'); return }
             if (fresh) setDetaliiTransport(fresh)
           }}
           onEdit={(t) => setEditTransport(t)}

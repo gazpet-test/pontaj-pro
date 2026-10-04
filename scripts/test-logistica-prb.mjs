@@ -135,8 +135,10 @@ test('J15: arhivarea raporteaza succes numai dupa upload, insert si update reusi
       jsPDF: class { addImage() {} output() { return new Blob(['pdf']) } },
       compressFileBeforeUpload: async file => file, formatLocatie: () => 'locatie', onTrimisEmail: () => events.push('refresh'),
     })
-    assert.equal(await fn(true), fail === null)
-    assert.equal(events.includes('refresh'), fail === null)
+    const salvata = fail === null || fail === 'update'
+    assert.equal(await fn(true), salvata)
+    assert.equal(events.includes('refresh'), salvata)
+    if (fail === 'update') assert.ok(events.some(e => typeof e === 'string' && e.includes('NU regenera')))
     assert.equal(events.some(e => e.includes('Aviz arhivat AUTOMAT')), fail === null)
   }
 })

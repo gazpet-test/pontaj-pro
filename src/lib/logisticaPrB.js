@@ -38,7 +38,7 @@ export function recalculeazaPret(form, lastEdited, pretBaza) {
   let pret = form.pret_per_litru, total = form.pret_total
   if (lastEdited === 'total') pret = total === '' ? '' : (Number(total) / litri).toFixed(4)
   else if (lastEdited === 'pret') total = pret === '' ? '' : (Number(pret) * litri).toFixed(2)
-  else if (pretBaza) { pret = Number(pretBaza).toFixed(4); total = (litri * Number(pretBaza)).toFixed(2) }
+  else if (pretBaza) { pret = Number(pretBaza).toFixed(2); total = (litri * Number(pretBaza)).toFixed(2) }
   return pret === form.pret_per_litru && total === form.pret_total ? form : { ...form, pret_per_litru: pret, pret_total: total }
 }
 

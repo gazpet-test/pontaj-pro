@@ -1,4 +1,3 @@
-import { salveazaIntrariService } from './lib/logisticaPrB.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — Tab Service v2 (refactor major)
 // ════════════════════════════════════════════════════════════════════════════
@@ -15,6 +14,7 @@ import { salveazaIntrariService } from './lib/logisticaPrB.js'
 // în src/lib/service.js pentru reutilizare (Acasă, etc.).
 // ════════════════════════════════════════════════════════════════════════════
 
+import { salveazaIntrariService } from './lib/logisticaPrB.js'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import * as XLSX from 'xlsx-js-style'
