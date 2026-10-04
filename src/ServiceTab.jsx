@@ -960,6 +960,7 @@ function DetailFisaModal({ canDelete, fisaId, canEdit, onClose, onSaved, showToa
         .from('logistica_service_fise_documente')
         .delete()
         .eq('id', atas.id)
+        .select('id').single()
       if (delErr) throw delErr
       
       // 2. Delete Storage (best-effort; nu eșuăm dacă fails)
@@ -1106,7 +1107,7 @@ function DetailFisaModal({ canDelete, fisaId, canEdit, onClose, onSaved, showToa
   const handleDeleteFisa = async () => {
     if (!confirm(`Ștergi fișa "${fisa.titlu || `#${fisa.id}`}" și toate cele ${intrari.length} intrări?\n\nAcțiunea NU poate fi anulată.`)) return
     setSaving(true)
-    const { error } = await supabase.from('logistica_service_fise').delete().eq('id', fisaId)
+    const { error } = await supabase.from('logistica_service_fise').delete().eq('id', fisaId).select('id').single()
     setSaving(false)
     if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
     showToast('✓ Fișă ștearsă', 'success')
@@ -1121,7 +1122,7 @@ function DetailFisaModal({ canDelete, fisaId, canEdit, onClose, onSaved, showToa
   }
   const deleteIntrare = async (id) => {
     if (!confirm('Ștergi această intrare?')) return
-    const { error } = await supabase.from('logistica_service_intrari').delete().eq('id', id)
+    const { error } = await supabase.from('logistica_service_intrari').delete().eq('id', id).select('id').single()
     if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
     setIntrari(p => p.filter(i => i.id !== id))
     showToast('✓ Intrare ștearsă', 'success')
@@ -2078,7 +2079,7 @@ export default function ServiceTab({ canDelete, active: activeProp, canEdit, sho
     const nrIntrari = (fisa.logistica_service_intrari || []).length
     const titlu = fisa.titlu || `Fișă #${fisa.id}`
     if (!confirm(`Ștergi fișa "${titlu}" și toate cele ${nrIntrari} intrări?\n\nAcțiunea NU poate fi anulată.`)) return
-    const { error } = await supabase.from('logistica_service_fise').delete().eq('id', fisa.id)
+    const { error } = await supabase.from('logistica_service_fise').delete().eq('id', fisa.id).select('id').single()
     if (error) { showToast(`Eroare la ștergere: ${error.message}`, 'error'); return }
     showToast(`✓ Fișa "${titlu}" ștearsă`, 'success')
     setFise(p => p.filter(f => f.id !== fisa.id))

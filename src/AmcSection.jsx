@@ -1,4 +1,3 @@
-import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — Tab AMC (Aparate de Măsură și Control)
 // ════════════════════════════════════════════════════════════════════════════
@@ -9,6 +8,7 @@ import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // Bucket Storage: documente-amc
 // ════════════════════════════════════════════════════════════════════════════
 
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import ScannerAmcButton from './ScannerAmcButton.jsx'
@@ -401,7 +401,7 @@ function AmcFormModal({ doc, tipuri, onClose, onSaved, canEdit, canDelete, showT
                 <div style={{fontSize:10, color:G.muted, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{doc.pdf_url}</div>
               </div>
               <button onClick={() => onOpenViewer(doc)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue}}>👁 Vezi</button>
-              {canDelete && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
+              {canEdit && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
             </div>
           )}
 
@@ -523,7 +523,7 @@ function TipuriAmcManager({ canDelete, tipuri, onClose, onSaved, showToast }) {
         setConfirmDelId(null)
         return
       }
-      const { error } = await supabase.from('logistica_amc_tipuri').delete().eq('id', id)
+      const { error } = await supabase.from('logistica_amc_tipuri').delete().eq('id', id).select('id').single()
       if (error) throw error
       showToast('✓ Tip șters', 'success')
       setConfirmDelId(null)

@@ -1,4 +1,3 @@
-import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ============================================================
 // PiesePozeSection.jsx — Piese schimbate pe un activ: denumire, cod, SERIE + POZE
 // (08.09.2026). Se afișează în Logistică → Service → 📜 Istoric Service (per activ).
@@ -7,6 +6,7 @@ import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 //   - pozele se COMPRIMĂ în browser înainte de upload (max 1600px, JPEG 0.8) — ~200–300 KB/poză
 //   - pozele vechi importate de pe serverul vechi au sursa='server_vechi'
 // ============================================================
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 

@@ -149,7 +149,7 @@ export default function ConfirmareAITab({ G, S, supabase, profile, accessLevel, 
     setProcessing(id)
     try {
       if (doStetge) {
-        const { error } = await supabase.from('logistica_alimentari').delete().eq('id', id)
+        const { error } = await supabase.from('logistica_alimentari').delete().eq('id', id).select('id').single()
         if (error) throw error
         showToast(`🗑️ Alimentare #${id} ștearsă`, 'success')
       } else {

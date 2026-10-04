@@ -1,8 +1,8 @@
-import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — v2.0 (Pasul B: Edit + Create)
 // ════════════════════════════════════════════════════════════════════════════
 
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -1608,7 +1608,7 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
     if (!confirmed) return
     
     setSaving(true)
-    const { error } = await supabase.from('logistica_active').delete().eq('id', activ.id)
+    const { error } = await supabase.from('logistica_active').delete().eq('id', activ.id).select('id').single()
     setSaving(false)
     
     if (error) {
@@ -1864,7 +1864,7 @@ function ActivFormModal({ canDelete, activ, initialMode, categorii, onClose, onS
                     <button type="button" onClick={handlePreviewContract}
                       style={{padding: '8px 14px', background: G.surface, color: G.text, border: `1px solid ${G.border}`, borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600}}
                     >👁 Preview</button>
-                    {!isReadOnly && canDelete && (
+                    {!isReadOnly && (
                       <button type="button" onClick={() => setField('comodat_contract_path', '')}
                         style={{padding: '8px 12px', background: G.red + '22', color: G.red, border: `1px solid ${G.red}44`, borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600}}
                       >🗑 Șterge</button>
@@ -2870,7 +2870,7 @@ function EditAlimentareModal({ canDelete, alim, sites, rezervoare, pretMotorina,
   const handleDelete = async () => {
     if (!window.confirm(`Ștergi alimentarea de ${alim.cantitate_litri} L de pe ${fmtDate(alim.data_alimentare)}?\n\nStocul rezervorului va fi ajustat automat.`)) return
     setDeleting(true)
-    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id)
+    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id).select('id').single()
     setDeleting(false)
     if (error) { showToast(`Eroare: ${error.message}`, 'error'); return }
     showToast(`✓ Alimentare ștearsă`, 'success')
@@ -7325,7 +7325,7 @@ function TransporturiPage({ canDelete, active, sites, profile, accessLevel, show
                         {(canDelete || (profile?.id && profile.id === t.solicitant_id && t.status === 'cerut')) && <button
                           onClick={async () => {
                             if (!window.confirm(`Ștergi transportul ${t.numar_transport}?\n"${t.tip}" · status: ${t.status}\n\nAcțiune IREVERSIBILĂ!`)) return
-                            const { error } = await supabase.from('logistica_transporturi').delete().eq('id', t.id)
+                            const { error } = await supabase.from('logistica_transporturi').delete().eq('id', t.id).select('id').single()
                             if (error) showToast('Eroare: ' + error.message, 'err')
                             else { showToast('✓ Transport șters'); fetchAll() }
                           }}
@@ -8073,7 +8073,7 @@ function ArhivaAlimentariPage({ canDelete, profile, sites, rezervoare, pretMotor
     const desc = `${av?.marca || ''} ${av?.model || ''} · ${alim.cantitate_litri}L · ${fmtDate(alim.data_alimentare)}`
     if (!confirm(`Sigur vrei să ștergi alimentarea:\n${desc}?\n\nAceastă acțiune e ireversibilă!`)) return
     
-    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id)
+    const { error } = await supabase.from('logistica_alimentari').delete().eq('id', alim.id).select('id').single()
     if (error) { showToast('Eroare: ' + error.message, 'error'); return }
     showToast(`✓ Alimentare ștearsă`)
     loadArhiva()
@@ -10477,7 +10477,7 @@ function SubcontractoriSection({ canDelete, sites, rezervoare, pretMotorina, can
   
   const handleDelete = async (cesiune) => {
     if (!confirm(`Șterge cesiunea de ${cesiune.cantitate_litri}L din ${cesiune.data_cesiune}?\n\nATENȚIE: Stocul rezervorului va fi restabilit cu ${cesiune.cantitate_litri}L.`)) return
-    const { error } = await supabase.from('logistica_cesiuni_subcontractor').delete().eq('id', cesiune.id)
+    const { error } = await supabase.from('logistica_cesiuni_subcontractor').delete().eq('id', cesiune.id).select('id').single()
     if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
     showToast?.('Cesiune ștearsă · stoc rezervor restabilit', 'success')
     loadData()
@@ -11134,8 +11134,9 @@ export default function LogisticaPage() {
         supabase.from('user_module_access').select('access_level').eq('profile_id', user.id).eq('module', 'logistica').maybeSingle()
       ])
       setProfile(prof)
-      // 04.10.2026 D1 prep: owner-ul are acces și fără intrare în user_module_access.
-      if (prof?.is_owner || prof?.role === 'superadmin') setAccessLevel('admin')
+      // 04.10.2026 D1 prep: owner = admin; restul după user_module_access (superadmin nu mai e promovat —
+      // serverul D1 dă scriere doar pe modul). Aprobarea transporturilor rămâne pe rol (isAprobatorTransport, Q4).
+      if (prof?.is_owner) setAccessLevel('admin')
       else setAccessLevel(access?.access_level || null)
     }
     init()

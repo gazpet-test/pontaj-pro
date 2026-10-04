@@ -1,4 +1,3 @@
-import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ════════════════════════════════════════════════════════════════════════════
 // MODULUL LOGISTICĂ — Documente Flotă (Etapa 1 + 2)
 // ════════════════════════════════════════════════════════════════════════════
@@ -11,6 +10,7 @@ import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // View pentru alerte: v_logistica_alerte
 // ════════════════════════════════════════════════════════════════════════════
 
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
@@ -540,7 +540,7 @@ export function DocumentFormModal({ doc, activId, activList, tipuri, onClose, on
                 <div style={{fontSize:10, color:G.muted, fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{doc.pdf_url}</div>
               </div>
               <button onClick={() => openPdfFromBucket(doc.pdf_url, showToast)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.blue}}>👁 Vezi</button>
-              {canDelete && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
+              {canEdit && <button onClick={() => setRemoveExistingPdf(true)} style={{...S.btnS, padding:'5px 10px', fontSize:12, color:G.red}}>🗑 Șterge</button>}
             </div>
           )}
 

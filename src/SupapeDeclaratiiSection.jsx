@@ -1,4 +1,3 @@
-import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 // ═══════════════════════════════════════════════════════════════════════════
 // SupapeDeclaratiiSection.jsx — v1 (29.06.2026)
 // Gestiune supape de siguranță per utilaj + Declarație conformitate tehnică.
@@ -15,6 +14,7 @@ import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 //    în hr_semnaturi_electronice; altfel rămâne linie pentru semnat manual.
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { removeLogisticaFiles } from './utils/logisticaStorage.js'
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
 import jsPDF from 'jspdf'
