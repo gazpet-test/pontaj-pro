@@ -18,6 +18,7 @@ import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } fro
 import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereCurenta, TIP_NSA, stareComutatorJ02b, poatePorniJ02b } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
+import OfertareTermene from './OfertareTermene.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem, ARHIVA_DOC_RE, MESAJ_ARHIVA } from './OfertareClarificari.jsx'
@@ -3495,6 +3496,8 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
               {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
+                  {/* Lecția Mânăstirea 05.10.2026: un „citat” luat din rezumat a ajuns într-o clarificare oficială și a trebuit înlocuit după verificarea pe PDF. */}
+                  <div style={{ fontSize:10.5, color:G.dim, marginBottom:4 }} title="Rezumatul e interpretarea AI a documentului. Orice cifră sau frază pe care o citezi într-o clarificare, ofertă sau contestație se verifică în „Text original”.">🤖 rezumat AI — interpretare, nu citat · pentru citate folosește „Text original”</div>
                   <div style={{ whiteSpace:'pre-wrap', color:G.text }}>{c.rezumat || '(fără rezumat)'}</div>
                   {Array.isArray(c.modificari) && c.modificari.length > 0 && (
                     <details style={{ marginTop:6 }}>
@@ -3736,6 +3739,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
                 <Row k="Loturi" v={Array.isArray(l.loturi) && l.loturi.length ? `${l.loturi.length}` : null} />
                 <Row k="Motivare decizie" v={l.decizie_motivare} />
                 <Row k="Observații" v={l.observatii} last />
+                <OfertareTermene licitatie={l} />
 
                 {l.status === 'analiza' && profile?.is_owner && (
                   <div style={{ marginTop:16, padding:14, borderRadius:10, border:`1px solid ${G.teal}55`, background:G.teal + '0D' }}>
