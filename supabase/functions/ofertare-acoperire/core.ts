@@ -2,6 +2,7 @@
 // Aceeași funcție rulează în edge function (index.ts = auth + Response) și în workerul de pe NAS
 // (worker/ofertare/acoperire.ts), unde nu există limita de 150 s a gateway-ului. Istoricul versiunilor: index.ts.
 import { turtesteCandidati, marcheazaSudoriNepotriviti, aplicaInsemexPrinPartener } from './candidati.ts'
+import { termenRO } from '../_shared/oraRO.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODEL = 'claude-opus-5'
@@ -256,7 +257,7 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
     const faraData = personal.filter((p: any) => !p.din).length
 
     const stabil = `NOMENCLATOR ISC RTE (${nomenclator.length} domenii, Procedura ISC 2016; codurile din domenii_isc trimit aici):\n${JSON.stringify(nomenclator)}\n\nPERSONAL PROPRIU — funcții și vechime (${personal.length}; „din" = data angajării, lipsă la ${faraData} persoane — vezi R14b pasul 3):\n${JSON.stringify(personal)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}\n\nRECOMANDARI — experienta PERSOANELOR pe roluri (${catalogRec.length}, id-uri cu prefix R):\n${JSON.stringify(catalogRec)}\n\nSTUDII — diplome si calificari ale persoanelor (${catalogStudii.length}, id-uri cu prefix D):\n${JSON.stringify(catalogStudii)}\n\nVECHIME — dovezi de la angajatori anteriori (${catalogVechime.length}, id-uri cu prefix V):\n${JSON.stringify(catalogVechime)}`
-    const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
+    const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${termenRO(lic.termen_depunere) || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',

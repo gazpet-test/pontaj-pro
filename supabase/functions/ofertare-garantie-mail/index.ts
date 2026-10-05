@@ -20,7 +20,7 @@ const APP = 'https://pontaj-pro-sooty.vercel.app';
 const PLATA_TO = ['marilena.tudorache@gazpet.ro', 'mirela.popescu@gazpet.ro'];
 const OFFICE = 'office@gazpet.ro';
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
-const fmtZi = (d?: string | null) => d ? new Date(d).toLocaleDateString('ro-RO') : '—';
+const fmtZi = (d?: string | null) => d ? new Date(d).toLocaleDateString('ro-RO', { timeZone: 'Europe/Bucharest' }) : '—';
 const fmtLei = (v?: number | null, m = 'RON') => v == null ? '—' : `${Number(v).toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${m}`;
 // variantele „simple” (fără licitație) folosite de cerere_registru — același expeditor, reply_to și semnătură ca restul
 const trimiteSimplu = async (key: string, to: string[], cc: string[], replyTo: string, subject: string, html: string) => {

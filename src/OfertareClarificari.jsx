@@ -447,7 +447,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                     ? <span style={{ fontSize:11.5, color:G.yellow }} title={d.eroare || ''}>⚠ neadus automat — urcă-l din fișă → Documente</span>
                     : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschideDoc(d)}>📎 Deschide documentul original</button>}
                   <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1 }}
-                    disabled={ph || !!citindDoc || !!busy} onClick={() => citesteDoc(d)} title={c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): rezumat, modificări, întrebări răspunse'}>
+                    disabled={ph || ARHIVA_DOC_RE.test(d.nume_original || '') || !!citindDoc || !!busy} onClick={() => citesteDoc(d)} title={ARHIVA_DOC_RE.test(d.nume_original || '') ? MESAJ_ARHIVA : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): rezumat, modificări, întrebări răspunse'}>
                     {citindDoc === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 citește cu AI'}
                   </button>
                   {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtData(c.citit_la)}</span>}
@@ -455,7 +455,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                   {c && !inLegare && <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color:G.green, borderColor:G.green + '66' }} disabled={!!busy} onClick={() => deschideLegare(d.id, d)}>🔗 La ce întrebări răspunde?</button>}
                   {legate.length > 0 && <span style={{ fontSize:11, color:G.muted }} title={legate.map(q => `${q.nr}. ${(q.intrebare || '').slice(0, 80)}`).join('\n')}>🔗 legat de întrebările: {legate.map(q => q.nr).join(', ')}</span>}
                 </div>
-                {!ph && <TextOriginalToggle docId={d.id} />}
+                {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
                 {c && (
                   <details style={{ marginTop:8, fontSize:12.5 }}>
                     <summary style={{ cursor:'pointer', fontWeight:700, color:G.muted }}>🤖 Rezumatul citirii{Array.isArray(c.intrebari_raspunse) && c.intrebari_raspunse.length ? ` · ${c.intrebari_raspunse.length} întrebări răspunse` : ''}{Array.isArray(c.modificari) && c.modificari.length ? ` · ${c.modificari.length} modificări` : ''}</summary>
@@ -674,12 +674,18 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 
 // Răzvan 25.09.2026: colegii vor să citească și TEXTUL ORIGINAL al documentului primit, nu doar
 // interpretarea AI. text_extras se încarcă leneș, doar la deschiderea toggle-ului.
-export function TextOriginalToggle({ docId }) {
+// 05.10.2026 (Mânăstirea, CN1095546/00058): o arhivă .rar de 60 MB adusă din SEAP a stat „neprocesat”, iar aici
+// apărea „poate e scanat”. Arhivele nu se despachetează din răspunsurile SEAP: se dezarhivează local și se urcă conținutul.
+export const ARHIVA_DOC_RE = /\.(7z|rar|zip)$|\.part\d+\.rar$/i
+export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): platforma nu o despachetează aici. Dezarhiveaz-o local și urcă fișierele din ea la licitație (Documente → 📁 Urcă folder), apoi citește-le cu AI.'
+
+export function TextOriginalToggle({ docId, nume }) {
   const [open, setOpen] = useState(false)
   const [txt, setTxt] = useState(undefined)   // undefined = neîncărcat, null = eroare
+  const arhiva = ARHIVA_DOC_RE.test(nume || '')
   const toggle = async () => {
     const nou = !open; setOpen(nou)
-    if (nou && txt === undefined) {
+    if (nou && txt === undefined && !arhiva) {
       const { data, error } = await supabase.from('ofertare_documente_atribuire').select('text_extras').eq('id', docId).maybeSingle()
       setTxt(error ? null : (data?.text_extras || ''))
     }
@@ -690,7 +696,8 @@ export function TextOriginalToggle({ docId }) {
       {open && (
         <div style={{ marginTop:6 }}>
           <div style={{ fontSize:11, color:G.dim, marginBottom:4 }}>text extras automat din PDF — pentru document oficial apăsați «deschide» (📎 Deschide documentul original)</div>
-          {txt === undefined ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă…</div>
+          {arhiva ? <div style={{ fontSize:12, color:G.yellow }}>📦 {MESAJ_ARHIVA}</div>
+            : txt === undefined ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă…</div>
             : txt === null ? <div style={{ fontSize:12, color:G.red }}>Nu am putut încărca textul.</div>
             : !txt.trim() ? <div style={{ fontSize:12, color:G.dim }}>Nu există text extras pentru acest document (poate e scanat) — deschide documentul original.</div>
             : <pre style={{ margin:0, maxHeight:400, overflow:'auto', whiteSpace:'pre-wrap', wordBreak:'break-word', fontFamily:'ui-monospace, Menlo, Consolas, monospace', fontWeight:300, fontSize:12, lineHeight:1.45, color:G.text, background:G.bg, border:`1px solid ${G.border2}`, borderRadius:8, padding:'8px 10px' }}>{txt}</pre>}

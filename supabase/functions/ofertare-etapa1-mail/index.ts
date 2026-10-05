@@ -24,7 +24,7 @@ const CORS: Record<string, string> = {
 const APP = 'https://pontaj-pro-sooty.vercel.app';
 const OFFICE = 'office@gazpet.ro';
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
-const fmtZi = (d?: string | null) => d ? new Date(d).toLocaleDateString('ro-RO') : '—';
+const fmtZi = (d?: string | null) => d ? new Date(d).toLocaleDateString('ro-RO', { timeZone: 'Europe/Bucharest' }) : '—';
 const zileDeLa = (d?: string | null) => d ? Math.ceil((new Date(d).getTime() - Date.now()) / 86400000) : null;
 
 Deno.serve(async (req: Request) => {

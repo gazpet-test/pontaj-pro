@@ -147,7 +147,7 @@ Vă rugăm să ne transmiteți oferta dvs. pentru Polița de asigurare de garan�
 - Autoritatea contractantă: ${l.autoritate}
 - Valoarea garanției de participare: ${fmtLei(fm.valoare, fm.moneda)}
 - Perioada de valabilitate a garanției: ${perioada}
-- Termen de depunere a ofertei: ${l.termen_depunere ? new Date(l.termen_depunere).toLocaleString('ro-RO', { dateStyle: 'short', timeStyle: 'short' }) : '—'}
+- Termen de depunere a ofertei: ${l.termen_depunere ? new Date(l.termen_depunere).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest', dateStyle: 'short', timeStyle: 'short' }) + ' (ora României)' : '—'}
 - Garanția va fi constituită în numele GAZPET INSTAL SRL.
 - Atașat: fișa de date a achiziției${fm.docs.length > 1 ? ' și documentele aferente' : ''}.
 - Instrumentul de garantare va fi emis conform cerințelor din Fișa de date a achiziției (secțiunea „Garanția de participare”).

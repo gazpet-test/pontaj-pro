@@ -20,7 +20,7 @@ import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
-import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem } from './OfertareClarificari.jsx'
+import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem, ARHIVA_DOC_RE, MESAJ_ARHIVA } from './OfertareClarificari.jsx'
 import GarantieSection, { useSemnalGarantie } from './OfertareGarantie.jsx'
 import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.js'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
@@ -98,7 +98,8 @@ export const detectSegment = (autoritate = '', obiect = '') => {
 }
 
 const fmtVal = v => (v || v === 0) ? new Intl.NumberFormat('ro-RO', { maximumFractionDigits: 0 }).format(v) : '—'
-const fmtTermen = t => t ? new Date(t).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
+// Ora României explicit (05.10.2026): termenele sunt timestamptz în UTC; fără timeZone, un browser setat pe alt fus arăta 12:00 în loc de 15:00
+const fmtTermen = t => t ? new Date(t).toLocaleString('ro-RO', { timeZone:'Europe/Bucharest', day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
 // timestamptz → valoare pentru <input type="datetime-local"> (ora locală, nu UTC)
 const toLocalInput = t => { if (!t) return ''; const d = new Date(t); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16) }
 
@@ -290,7 +291,7 @@ export default function OfertareLicitatiiTab() {
       if (candidati.length) {
         const lista = candidati.slice(0, 3).map(l =>
           `• ${l.nr_anunt} — ${(l.obiect || '').slice(0, 70)}${(l.obiect || '').length > 70 ? '…' : ''}` +
-          ` (${l.status}${l.termen_depunere ? ', termen ' + new Date(l.termen_depunere).toLocaleDateString('ro-RO') : ''})`).join('\n')
+          ` (${l.status}${l.termen_depunere ? ', termen ' + new Date(l.termen_depunere).toLocaleDateString('ro-RO', { timeZone:'Europe/Bucharest' }) : ''})`).join('\n')
         if (!window.confirm(
           `Există deja ${candidati.length === 1 ? 'o licitație' : candidati.length + ' licitații'} pe aceeași autoritate, cu obiect asemănător:\n\n${lista}\n\n` +
           `Aceeași procedură are și număr SCN, și număr DF — s-ar putea să fie aceeași.\n\n` +
@@ -1469,7 +1470,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       Documentele citite înainte de 15.09.2026 au NULL — de aceea eticheta cade pe eroare/gol. */}
                   <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }}
                     title={d.pornit?.name ? `Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}` : (d.eroare || '')}>
-                    {spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : st.label}
+                    {spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : (d.status_procesare || 'neprocesat') === 'neprocesat' && ARHIVA_DOC_RE.test(d.nume_original || '') ? <span title={MESAJ_ARHIVA}>📦 arhivă</span> : st.label}
                   </span>
                   <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.eroare || d.nume_original}>
                     {d.nume_original}
@@ -3475,7 +3476,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                     title="E deja citit în Documentație — recitește-l aici doar dacă vrei rezumatul de document nou">{busy === d.id ? '⏳ citesc…' : 'recitește'}</button>
                 ) :
                 <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1, cursor: ph || busy ? 'default' : 'pointer' }}
-                  disabled={ph || !!busy} onClick={() => citeste(d)} title={ph ? 'Fișierul nu e în platformă — urcă-l întâi din Documente' : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): tip, rezumat, modificări, întrebări răspunse'}>
+                  disabled={ph || ARHIVA_DOC_RE.test(d.nume_original || '') || !!busy} onClick={() => citeste(d)} title={ph ? 'Fișierul nu e în platformă — urcă-l întâi din Documente' : ARHIVA_DOC_RE.test(d.nume_original || '') ? MESAJ_ARHIVA : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): tip, rezumat, modificări, întrebări răspunse'}>
                   {busy === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 Citește cu AI'}
                 </button>}
                 {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtDataScurt(c.citit_la)}</span>}
@@ -3486,7 +3487,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                   ⚠️ Ai deja {sc.fam} citit în Documentație, dar acesta e alt fișier — e indicat să-l citești și pe acesta (poate aduce modificări).
                 </div>
               )}
-              {!ph && <TextOriginalToggle docId={d.id} />}
+              {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
                   <div style={{ whiteSpace:'pre-wrap', color:G.text }}>{c.rezumat || '(fără rezumat)'}</div>

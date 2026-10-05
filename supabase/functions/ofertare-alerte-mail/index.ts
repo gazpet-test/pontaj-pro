@@ -23,7 +23,7 @@ const TO = ['razvan.trusu@gazpet.ro', 'office@gazpet.ro']
 const PRAG = 50
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { 'Content-Type': 'application/json' } })
 const fmt = (n: unknown) => n == null ? '—' : Number(n).toLocaleString('ro-RO', { maximumFractionDigits: 0 })
-const fmtD = (d: string | null) => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
+const fmtD = (d: string | null) => d ? new Date(d).toLocaleDateString('ro-RO', { timeZone: 'Europe/Bucharest' }) : '—'
 const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 Deno.serve(async (req) => {
