@@ -13,7 +13,7 @@
 #      interogarea din fn_temei_citat_verifica merg · funcția: owner 2 rânduri ordonate, coleg / fără JWT 0, anon refuzat ·
 #      service_role citește tot · owner mai poate scrie (UPDATE), colegul nu
 #   5. reaplicare → refuz
-#   6. revenire: nearmată / armare persistentă / deviere (drept pe impact_intern, corp funcție) → refuz, nimic schimbat;
+#   6. revenire: nearmată / armare persistentă / deviere (drept pe impact_intern, corp, search_path, volatilitate) → refuz;
 #      armată → drepturile exact ca în 20261007a, funcția scoasă, colegul citește din nou (starea de dinainte)
 # Utilizare: bash scripts/test_tipare_impact_owner.sh [--opreste]   Ieșire: 0 PASS · 1 eșec · 2 mediu
 # ============================================================================
@@ -171,6 +171,12 @@ q "REVOKE SELECT (impact_intern) ON public.clarificari_tipare FROM authenticated
 q "CREATE OR REPLACE FUNCTION public.fn_tipare_impact_intern() RETURNS TABLE (pattern_id text, impact_intern jsonb) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS \$fn\$ SELECT t.pattern_id, t.impact_intern FROM public.clarificari_tipare t \$fn\$" >/dev/null
 refuza_rev "6d corpul funcției schimbat" "IMPACT_INTERN_PENTRU_TOTI:" "fn_tipare_impact_intern nu e exact"
 "${PSQL[@]}" -d "$BAZA" -c "$(sed -n '/^CREATE FUNCTION public.fn_tipare_impact_intern/,/^\$fn\$;/p' "$MIGRARE" | sed 's/^CREATE FUNCTION/CREATE OR REPLACE FUNCTION/')" >/dev/null
+q "ALTER FUNCTION public.fn_tipare_impact_intern() SET search_path = public" >/dev/null
+refuza_rev "6d2 search_path schimbat (Copilot P2 pe #620)" "IMPACT_INTERN_PENTRU_TOTI:" "fn_tipare_impact_intern nu e exact"
+q "ALTER FUNCTION public.fn_tipare_impact_intern() SET search_path = public, pg_temp" >/dev/null
+q "ALTER FUNCTION public.fn_tipare_impact_intern() VOLATILE" >/dev/null
+refuza_rev "6d3 volatilitate schimbată (Copilot P2 pe #620)" "IMPACT_INTERN_PENTRU_TOTI:" "fn_tipare_impact_intern nu e exact"
+q "ALTER FUNCTION public.fn_tipare_impact_intern() STABLE" >/dev/null
 q "CREATE VIEW public.v_dep AS SELECT * FROM public.fn_tipare_impact_intern()" >/dev/null
 refuza_rev "6e funcția are dependențe" "IMPACT_INTERN_PENTRU_TOTI:" "fn_tipare_impact_intern nu e exact"
 q "DROP VIEW public.v_dep" >/dev/null
@@ -178,5 +184,5 @@ OUT="$(REV "IMPACT_INTERN_PENTRU_TOTI:")" || { echo "$OUT" >&2; esec "6f revenir
 [ "$(q "$STARE")" = "$STARE_INITIALA" ] || esec "6f starea după revenire ≠ 20261007a: $(q "$STARE")"
 [ "$(ca_rol authenticated "$COLEG" "SELECT count(impact_intern) FROM public.clarificari_tipare")" = 2 ] || esec "6f colegul nu citește din nou (revenire incompletă)"
 gate_0e "dupa revenire"
-ok "6 revenire: nearmată / persistentă / drept pe impact_intern / corp schimbat / dependență → refuz, nimic schimbat · armată → drepturile exact ca 20261007a, funcția scoasă"
+ok "6 revenire: nearmată / persistentă / drept pe impact_intern / corp / search_path / volatilitate schimbate / dependență → refuz, nimic schimbat · armată → drepturile exact ca 20261007a, funcția scoasă"
 echo "PASS  $NUME  sha256 $(sha256sum "$MIGRARE" | cut -d' ' -f1)  md5 corp fn: $(DB=tipare_impact_b_test q "SELECT md5(prosrc) FROM pg_proc WHERE proname = 'fn_tipare_impact_intern'")"

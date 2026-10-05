@@ -41,10 +41,13 @@ BEGIN
      OR (SELECT count(*) FROM pg_proc WHERE proname = 'fn_tipare_impact_intern' AND pronamespace = 'public'::regnamespace) <> 1
      OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = v_fn) IS DISTINCT FROM 'abe51117016b6ca18e6bfb48589ef1c8'
      OR (SELECT prosecdef FROM pg_proc WHERE oid = v_fn) IS NOT TRUE
+     OR (SELECT provolatile FROM pg_proc WHERE oid = v_fn) IS DISTINCT FROM 's'
+     OR (SELECT proconfig FROM pg_proc WHERE oid = v_fn) IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+     OR (SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE oid = v_fn) IS DISTINCT FROM 'postgres'
      OR (SELECT string_agg(a::text, ' ' ORDER BY a::text) FROM pg_proc p, unnest(p.proacl) a WHERE p.oid = v_fn)
         IS DISTINCT FROM 'authenticated=X/postgres postgres=X/postgres service_role=X/postgres'
      OR EXISTS (SELECT 1 FROM pg_depend WHERE refobjid = v_fn AND deptype = 'n') THEN
-    RAISE EXCEPTION 'Revenire 20261015a: precondiție — fn_tipare_impact_intern nu e exact cea a patch-ului (unică, md5 corp, SECDEF, ACL) sau are dependențe';
+    RAISE EXCEPTION 'Revenire 20261015a: precondiție — fn_tipare_impact_intern nu e exact cea a patch-ului (unică, md5 corp, SECDEF, STABLE, search_path, owner postgres, ACL) sau are dependențe';
   END IF;
 END $arm$;
 
