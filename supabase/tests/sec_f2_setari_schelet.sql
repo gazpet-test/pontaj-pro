@@ -11,6 +11,9 @@ DO $roluri$ BEGIN
 END $roluri$;
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
+-- ca pe Supabase: orice funcție nouă din public primește EXECUTE pentru anon/authenticated/service_role (de aceea migrarea revocă explicit)
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
 
 CREATE SCHEMA auth;
 GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
@@ -67,6 +70,8 @@ CREATE TABLE public.profiles (id uuid PRIMARY KEY, name text, is_owner boolean D
 CREATE TABLE public.user_module_access (id serial PRIMARY KEY, profile_id uuid, module text, access_level text);
 CREATE TABLE public.logistica_setari (key text PRIMARY KEY, value text, updated_at timestamptz, updated_by uuid);
 CREATE TABLE public.necesar_setari (cheie text PRIMARY KEY, valoare text, descriere text, updated_at timestamptz, updated_by uuid);
+CREATE TABLE public.rag_qr_log (id bigserial PRIMARY KEY, active_id integer NOT NULL, question text NOT NULL, answered boolean NOT NULL DEFAULT true, created_at timestamptz DEFAULT now());
+ALTER TABLE public.rag_qr_log ENABLE ROW LEVEL SECURITY;
 CREATE TABLE public.mai_gov_redirect_log (id bigserial PRIMARY KEY, gmail_msg_id text UNIQUE NOT NULL, tip text, cod text, status text DEFAULT 'in_lucru' NOT NULL);
 ALTER TABLE public.logistica_setari ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.necesar_setari ENABLE ROW LEVEL SECURITY;

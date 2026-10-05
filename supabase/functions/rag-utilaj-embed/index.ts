@@ -40,7 +40,7 @@ Deno.serve(async (req: Request) => {
         isOwner = prof?.is_owner === true;
       }
     }
-    const dec = decideAcces({ intern, user, isOwner, areLogistica: false, action: 'process_pending' });
+    const dec = decideAcces({ intern, user, isOwner, nivelLogistica: null, action: 'process_pending' });
     if (!dec.ok) return json(dec.status, { error: dec.error });
 
     const { data: pending, error } = await supabase

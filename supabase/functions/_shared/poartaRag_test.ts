@@ -1,47 +1,49 @@
 import { strict as assert } from 'node:assert'
-import { decideAcces, pesteLimita } from './poartaRag.ts'
+import { decideAcces, nivelMaxim } from './poartaRag.ts'
 
-const baza = { intern: false, user: true, isOwner: false, areLogistica: false }
+const baza = { intern: false, user: true, isOwner: false, nivelLogistica: null as 'admin' | 'editor' | 'viewer' | null }
+const status = (d: ReturnType<typeof decideAcces>) => (d.ok ? 200 : d.status)
 
 Deno.test('cronul (secret intern valid) trece pe orice acțiune', () => {
   for (const action of ['process_queue', 'process_pending', 'ask', 'x']) {
-    assert.deepEqual(decideAcces({ ...baza, user: false, intern: true, action }), { ok: true })
+    assert.equal(status(decideAcces({ ...baza, user: false, intern: true, action, ai: true })), 200)
   }
 })
 
 Deno.test('fără utilizator (cheia anon, JWT invalid): 401', () => {
-  const d = decideAcces({ ...baza, user: false, action: 'ask' })
-  assert.equal(d.ok, false); assert.equal((d as { status: number }).status, 401)
+  assert.equal(status(decideAcces({ ...baza, user: false, action: 'ask' })), 401)
 })
 
-Deno.test('cont logat fără modul: 403 pe ask, 403 pe procesare', () => {
-  for (const action of ['ask', 'process_queue', 'process_pending']) {
-    const d = decideAcces({ ...baza, action })
-    assert.equal(d.ok, false, action); assert.equal((d as { status: number }).status, 403, action)
+Deno.test('cont logat fără modul: 403 pe ask (cu și fără AI) și pe procesare', () => {
+  for (const [action, ai] of [['ask', false], ['ask', true], ['process_queue', false], ['process_pending', false]] as const) {
+    assert.equal(status(decideAcces({ ...baza, action, ai })), 403, `${action} ai=${ai}`)
   }
 })
 
-Deno.test('modul logistica: ask da, procesarea plătită NU', () => {
-  assert.deepEqual(decideAcces({ ...baza, areLogistica: true, action: 'ask' }), { ok: true })
-  for (const action of ['process_queue', 'process_pending']) {
-    assert.equal(decideAcces({ ...baza, areLogistica: true, action }).ok, false, action)
+Deno.test('logistica viewer: căutare da, AI NU, procesare NU', () => {
+  const v = { ...baza, nivelLogistica: 'viewer' as const }
+  assert.equal(status(decideAcces({ ...v, action: 'ask', ai: false })), 200)
+  assert.equal(status(decideAcces({ ...v, action: 'ask', ai: true })), 403)
+  assert.equal(status(decideAcces({ ...v, action: 'process_queue' })), 403)
+})
+
+Deno.test('logistica editor/admin: AI da (cota e în BD), procesarea plătită NU', () => {
+  for (const n of ['editor', 'admin'] as const) {
+    assert.equal(status(decideAcces({ ...baza, nivelLogistica: n, action: 'ask', ai: true })), 200, n)
+    assert.equal(status(decideAcces({ ...baza, nivelLogistica: n, action: 'process_pending' })), 403, n)
   }
 })
 
 Deno.test('owner: tot', () => {
   for (const action of ['ask', 'process_queue', 'process_pending']) {
-    assert.deepEqual(decideAcces({ ...baza, isOwner: true, action }), { ok: true })
+    assert.equal(status(decideAcces({ ...baza, isOwner: true, action, ai: true })), 200, action)
   }
 })
 
-Deno.test('limita QR: numărul include cererea curentă (30 = ultima permisă, 31 = refuz)', () => {
-  assert.equal(pesteLimita(30, 100, 30, 200), false)
-  assert.equal(pesteLimita(31, 100, 30, 200), true)
-  assert.equal(pesteLimita(1, 200, 30, 200), false)
-  assert.equal(pesteLimita(1, 201, 30, 200), true)
-})
-
-Deno.test('limita QR: numărătoare eșuată (null) = refuz, fail closed', () => {
-  assert.equal(pesteLimita(null, 1, 30, 200), true)
-  assert.equal(pesteLimita(1, null, 30, 200), true)
+Deno.test('nivelMaxim alege cel mai înalt nivel, null fără rânduri', () => {
+  assert.equal(nivelMaxim(['viewer', 'admin']), 'admin')
+  assert.equal(nivelMaxim(['viewer', 'editor']), 'editor')
+  assert.equal(nivelMaxim(['viewer']), 'viewer')
+  assert.equal(nivelMaxim([]), null)
+  assert.equal(nivelMaxim(['ceva']), null)
 })

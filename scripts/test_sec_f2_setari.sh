@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Harness SQL local — 20261015a_sec_f2_setari_rag_maigov. EXCLUSIV pe un PostgreSQL local dedicat
+# Harness SQL local — 20261015b_sec_f2_setari_rag_maigov. EXCLUSIV pe un PostgreSQL local dedicat
 # (implicit PG16, /tmp/pg_sec_f2, 127.0.0.1:5977). Nu atinge producția.
 #   0. schelet (supabase/tests/sec_f2_setari_schelet.sql) = politicile + joburile live (comenzi mascate, md5 normalizat egal)
 #   1. fișierul fără runner → garda refuză, nimic schimbat
@@ -20,7 +20,7 @@ PG_BIN="${PG_BIN:-/usr/lib/postgresql/16/bin}"
 DATE_DIR="${PGDATA_TEST:-/tmp/pg_sec_f2}"
 PORT="${PGPORT_TEST:-5977}"
 BAZA=sec_f2_test
-NUME=20261015a_sec_f2_setari_rag_maigov
+NUME=20261015b_sec_f2_setari_rag_maigov
 MIGRARE="$RADACINA/supabase/migrations/$NUME.sql"
 ROLLBACK="$RADACINA/supabase/revenire/${NUME}_ROLLBACK.sql"
 SCHELET="$RADACINA/supabase/tests/sec_f2_setari_schelet.sql"
@@ -50,7 +50,11 @@ ca() { { q "BEGIN; SELECT set_config('request.jwt.claim.sub', '$1', true) IS NUL
 # scrie <uid> <cheie>: UPDATE pe cheie → 1 dacă a trecut, 0 dacă RLS l-a filtrat
 scrie() { ca "$1" "WITH x AS (UPDATE public.logistica_setari SET value = value WHERE key = '$2' RETURNING 1) SELECT count(*) FROM x"; }
 # insereaza <uid> <cheie>: INSERT → ok / RLS
-insereaza() { local out; out="$(ca "$1" "INSERT INTO public.logistica_setari (key, value) VALUES ('$2', 'v') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value RETURNING 1")"; grep -q "row-level security" <<<"$out" && echo RLS || echo ok; }
+insereaza() { local out; out="$(ca "$1" "INSERT INTO public.logistica_setari (key, value) VALUES ('$2', 'v') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value RETURNING 1")"
+  if [ "$out" = 1 ]; then echo ok; elif grep -q "row-level security" <<<"$out"; then echo RLS; else echo "ALTCEVA: $out"; fi; }
+# ca_anon <sql>: rulează ca anon (fără auth.uid)
+ca_anon() { { q "BEGIN; SET LOCAL ROLE anon; $1; COMMIT;" 2>&1 || true; } | tail -n 1; }
+ca_srv() { { q "BEGIN; SET LOCAL ROLE service_role; $1; COMMIT;" 2>&1 || true; } | tail -n 1; }
 POLITICI="SELECT string_agg(c.relname || '.' || p.polname, ',' ORDER BY c.relname, p.polname) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid WHERE c.relname IN ('logistica_setari','necesar_setari','mai_gov_redirect_log')"
 JOBURI="SELECT string_agg(md5(command), ',' ORDER BY jobid) FROM cron.job"
 
@@ -85,11 +89,22 @@ q "UPDATE cron.job SET command=replace(command, 'polls=9', 'polls=8') WHERE jobi
 q "UPDATE vault.secrets SET secret='eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.alta' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
 refuza_cu "2f JWT din job ≠ Vault" "Precondiție 0c"
 q "UPDATE vault.secrets SET secret='eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.test-semnatura' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
+q "UPDATE vault.secrets SET secret='eyJ' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
+refuza_cu "2f2 JWT din Vault = prefix (eyJ)" "Precondiție 0b"
+q "UPDATE vault.secrets SET secret='' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
+refuza_cu "2f3 JWT din Vault gol" "Precondiție 0b"
+q "UPDATE vault.secrets SET secret='eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiJ9.test-semnatura' WHERE name='SUPABASE_ANON_JWT'" >/dev/null
+q "CREATE TABLE public.rag_ask_log (id int)" >/dev/null
+refuza_cu "2h rag_ask_log există" "Precondiție 0f"
+q "DROP TABLE public.rag_ask_log" >/dev/null
+q "CREATE POLICY in_plus_public ON public.logistica_setari FOR UPDATE TO PUBLIC USING (true)" >/dev/null
+refuza_cu "2i politică în plus TO PUBLIC" "Precondiție 0d"
+q "DROP POLICY in_plus_public ON public.logistica_setari" >/dev/null
 q "CREATE POLICY in_plus ON public.logistica_setari FOR UPDATE TO authenticated USING (true)" >/dev/null
 refuza_cu "2g politică în plus" "Precondiție 0d"
 q "DROP POLICY in_plus ON public.logistica_setari" >/dev/null
 [ "$(q "$POLITICI")" = "$POL0" ] && [ "$(q "$JOBURI")" = "$JOB0" ] || esec "2 starea nerefăcută"
-ok "2 refuz la: secret intern lipsă / alt format · anon JWT lipsă · job cu alt program / altă comandă · JWT din job ≠ Vault · politică în plus"
+ok "2 refuz la: secret intern lipsă / alt format · anon JWT lipsă / prefix / gol · job cu alt program / altă comandă · JWT din job ≠ Vault · rag_ask_log existent · politică în plus (authenticated și TO PUBLIC)"
 
 # înainte: gaura există (coleg fără modul scrie destinatarii)
 [ "$(scrie $COLEG upa_alerta_emails)" = 1 ] || esec "0b gaura nu se reproduce pe schelet"
@@ -134,6 +149,36 @@ ok "4h necesar_setari: toți citesc, doar owner scrie"
 [ "$(ca $OWNER "SELECT count(*) FROM public.mai_gov_redirect_log")" = 1 ] || esec "4i owner nu citește jurnalul MAI"
 [ "$(ca $COLEG "SELECT count(*) FROM public.logistica_setari")" -ge 7 ] || esec "4j citirea setărilor s-a schimbat"
 ok "4i jurnalul MAI doar owner · 4j citirea setărilor neschimbată"
+[ "$(ca_anon "UPDATE public.logistica_setari SET value = 'x' WHERE key = 'upa_alerta_emails'")" != "UPDATE 1" ] || esec "4k anon scrie setări"
+[ "$(q "SELECT value FROM public.logistica_setari WHERE key = 'upa_alerta_emails'")" != x ] || esec "4k anon a schimbat destinatarii"
+ok "4k anon nu scrie setări"
+
+# E. cota RAG atomică
+grep -q "permission denied" <<<"$(ca_anon "SELECT public.fn_rag_qr_rezerva(1, 'x')")" || esec "4l anon cheamă fn_rag_qr_rezerva"
+grep -q "permission denied" <<<"$(ca $COLEG "SELECT public.fn_rag_ask_rezerva('$COLEG')")" || esec "4l authenticated cheamă fn_rag_ask_rezerva"
+for i in $(seq 1 30); do [ -n "$(ca_srv "SELECT public.fn_rag_qr_rezerva(1, 'q$i')")" ] || esec "4m rezervarea $i pe utilajul 1"; done
+[ "$(ca_srv "SELECT public.fn_rag_qr_rezerva(1, 'q31') IS NULL")" = t ] || esec "4m a 31-a pe utilaj trece"
+for i in $(seq 1 50); do ca_srv "SELECT public.fn_rag_qr_rezerva(1, 'peste')" >/dev/null; done
+[ "$(q "SELECT count(*) FROM public.rag_qr_log WHERE active_id = 1")" = 30 ] || esec "4m cererile peste limită au scris în jurnal"
+ok "4l funcțiile de cotă: doar service_role · 4m 30/utilaj, cererile refuzate NU scriu (zero DML peste limită)"
+q "INSERT INTO public.rag_qr_log (active_id, question, answered) SELECT 100 + g, 'umplut', true FROM generate_series(1, 169) g" >/dev/null
+[ "$(ca_srv "SELECT public.fn_rag_qr_rezerva(2, 'ultimul') IS NOT NULL")" = t ] || esec "4n a 200-a globală refuzată"
+[ "$(ca_srv "SELECT public.fn_rag_qr_rezerva(3, 'peste global') IS NULL")" = t ] || esec "4n a 201-a globală trece"
+[ "$(ca_srv "SELECT public.fn_rag_qr_rezerva(4, '   ') IS NULL")" = t ] || esec "4n întrebare goală acceptată"
+ok "4n plafon global 200/zi, întrebare goală refuzată"
+for i in $(seq 1 50); do [ "$(ca_srv "SELECT public.fn_rag_ask_rezerva('$LOG_ED')")" = t ] || esec "4o AI $i"; done
+[ "$(ca_srv "SELECT public.fn_rag_ask_rezerva('$LOG_ED')")" = f ] || esec "4o al 51-lea răspuns AI trece"
+[ "$(ca_srv "SELECT public.fn_rag_ask_rezerva('$LOG_ADM')")" = t ] || esec "4o cota e per utilizator"
+[ "$(q "SELECT count(*) FROM public.rag_ask_log WHERE profile_id = '$LOG_ED'")" = 50 ] || esec "4o refuzul AI a scris în jurnal"
+[ "$(ca $COLEG "SELECT count(*) FROM public.rag_ask_log")" = 0 ] && [ "$(ca $OWNER "SELECT count(*) FROM public.rag_ask_log")" = 51 ] || esec "4o rag_ask_log citit de coleg / necitit de owner"
+ok "4o AI 50/zi per utilizator, refuzul nu scrie, jurnalul AI citit doar de owner"
+# concurență: 40 de rezervări paralele pe un utilaj nou → exact 30 trec
+for i in $(seq 1 40); do ( ca_srv "SELECT public.fn_rag_qr_rezerva(5, 'p$i')" >/dev/null ) & done; wait
+[ "$(q "SELECT count(*) FROM public.rag_qr_log WHERE active_id = 5")" = 0 ] || esec "4p plafonul global era atins — paralelele trebuiau refuzate"
+q "DELETE FROM public.rag_qr_log WHERE active_id > 100" >/dev/null
+for i in $(seq 1 40); do ( ca_srv "SELECT public.fn_rag_qr_rezerva(6, 'p$i')" >/dev/null ) & done; wait
+[ "$(q "SELECT count(*) FROM public.rag_qr_log WHERE active_id = 6")" = 30 ] || esec "4p paralel: $(q "SELECT count(*) FROM public.rag_qr_log WHERE active_id = 6") în loc de 30"
+ok "4p 40 de cereri paralele pe același utilaj → exact 30 rezervate"
 
 # 5. joburile
 [ "$(q "SELECT count(*) FROM cron.job WHERE command ~ 'eyJ|secret-vechi|x-internal-secret|x-ingest-secret'")" = 0 ] || esec "5 a rămas ceva în clar"
@@ -149,9 +194,15 @@ RC=0; PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migr
 [ "$RC" = 11 ] || esec "6 reaplicarea a dat cod $RC (aștept 11)"
 ok "6 reaplicare → 11 (deja înregistrat)"
 
-# 7. revenire
+# 7. revenire — md5-ul definițiilor complete ale politicilor patch-ului trebuie să fie cel pinuit în fișier
+MD5_POL="$(q "SELECT md5(string_agg(format('%s|%s|%s|%s|%s|%s', c.relname, p.polname, p.polcmd, p.polpermissive, coalesce(pg_get_expr(p.polqual, p.polrelid), '-'), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')) || '|' || (SELECT string_agg(coalesce(r.rolname, 'PUBLIC'), ',' ORDER BY coalesce(r.rolname, 'PUBLIC')) FROM unnest(p.polroles) AS o(oid) LEFT JOIN pg_roles r ON r.oid = o.oid), ' ; ' ORDER BY c.relname, p.polname)) FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid WHERE c.oid IN ('public.logistica_setari'::regclass, 'public.necesar_setari'::regclass, 'public.mai_gov_redirect_log'::regclass)")"
+grep -q "'$MD5_POL'" "$ROLLBACK" || esec "7 md5-ul politicilor ($MD5_POL) nu e cel pinuit în revenire"
+q "ALTER POLICY logistica_setari_delete_owner ON public.logistica_setari USING (true)" >/dev/null
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261015b', 'REDESCHIDE_SETARI_SEC_F2:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null 2>&1 && esec "7 revenirea a trecut peste o politică schimbată cu ALTER POLICY"
+q "ALTER POLICY logistica_setari_delete_owner ON public.logistica_setari USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner = true))" >/dev/null
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" >/dev/null 2>&1 && esec "7a revenirea nearmată a trecut"
-"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261015a', 'REDESCHIDE_SETARI_SEC_F2:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null || esec "7b revenirea armată a eșuat"
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261015b', 'REDESCHIDE_SETARI_SEC_F2:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null || esec "7b revenirea armată a eșuat"
 [ "$(q "$POLITICI")" = "$POL0" ] || esec "7b politicile nu sunt cele din 05.10: $(q "$POLITICI")"
-ok "7 revenire: nearmată → refuz; armată → politicile din 05.10 (joburile rămân pe Vault, intenționat)"
+[ "$(q "SELECT to_regprocedure('public.fn_rag_qr_rezerva(integer,text)') IS NULL AND to_regclass('public.rag_ask_log') IS NULL")" = t ] || esec "7b obiectele cotei au rămas"
+ok "7 revenire: nearmată → refuz; politică schimbată (ALTER POLICY) → refuz; armată → politicile din 05.10, cota scoasă (joburile rămân pe Vault)"
 echo "PASS"

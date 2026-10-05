@@ -196,9 +196,11 @@ export default function UnitatiProtejate({ profile }) {
     const v = Number(plafonNou)
     if (!v || v <= 0) { setMesaj({ tip:'warn', text:'Plafonul trebuie să fie mai mare ca zero.' }); return }
     try {
-      const { error } = await supabase.from('logistica_setari')
-        .update({ value: String(v) }).eq('key', 'upa_plafon_lunar')
+      // #17 F2: RLS filtrează tăcut un UPDATE nepermis (0 rânduri, fără eroare) — confirmăm că s-a salvat exact un rând.
+      const { data: salvat, error } = await supabase.from('logistica_setari')
+        .update({ value: String(v) }).eq('key', 'upa_plafon_lunar').select('key')
       if (error) throw error
+      if ((salvat || []).length !== 1) throw new Error('nu ai drept de modificare a plafonului (cere acces Administrativ › UPA editor)')
       setSetari(p => ({ ...p, upa_plafon_lunar: String(v) }))
       setEditPlafon(false)
       setMesaj({ tip:'success', text:`Plafon lunar setat: ${lei(v)} lei` })

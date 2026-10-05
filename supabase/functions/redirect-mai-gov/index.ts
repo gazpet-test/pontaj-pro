@@ -18,8 +18,8 @@
 // v9 (#17 F2, claude_context #1602):
 //   - poarta: cronul cu x-intern-secret din Vault (INTERN_EDGE_SECRET) sau owner-ul logat — nu mai INGEST_SECRET,
 //     care stă și în Apps Script-ul Gmail;
-//   - răspunsul HTTP NU mai conține codul, subiectul, destinatarii sau textul (pg_net îl păstrează în
-//     net._http_response) — vezi raport.ts;
+//   - răspunsul HTTP NU mai conține codul, subiectul, destinatarii sau vreun text de eroare extern (pg_net îl păstrează
+//     în net._http_response) — doar stări din lista fixă, vezi raport.ts; eroarea Resend rămâne în jurnal (owner);
 //   - codul NU se mai scrie în mai_gov_redirect_log (expiră în 2 minute, nu are valoare de audit);
 //   - dry=1 respectă comutatorul mai_gov_redirect_activ (înainte îl ocolea).
 //
@@ -207,7 +207,7 @@ Deno.serve(async (req) => {
               subiect, tip, cod: null, destinatari: emails, status: 'in_lucru',
             }, { onConflict: 'gmail_msg_id', ignoreDuplicates: true })
             .select('id')
-          if (rezErr) { raport.push({ msg_id: m.id, status: 'eroare_db', detaliu: rezErr.message }); continue }
+          if (rezErr) { raport.push({ msg_id: m.id, status: 'eroare_db' }); continue }
           if (!rez || !rez.length) { raport.push({ msg_id: m.id, status: 'deja_trimis' }); continue }
 
           const res = await fetch('https://api.resend.com/emails', {
@@ -219,7 +219,7 @@ Deno.serve(async (req) => {
           if (!res.ok) {
             const detaliu = (await res.text()).slice(0, 500)
             await sb.from('mai_gov_redirect_log').update({ status: 'eroare', eroare: detaliu }).eq('id', rez[0].id)
-            raport.push({ msg_id: m.id, status: 'eroare_resend', detaliu })
+            raport.push({ msg_id: m.id, status: 'eroare_resend' })
           } else {
             await sb.from('mai_gov_redirect_log')
               .update({ status: 'trimis', trimis_la: new Date().toISOString() }).eq('id', rez[0].id)
@@ -228,11 +228,13 @@ Deno.serve(async (req) => {
         } catch (e) {
           // Erorile de business se scriu și se raportează, NU se aruncă
           // (throw în try + update în catch omoară worker-ul intermitent).
-          raport.push({ msg_id: m.id, status: 'eroare', detaliu: String((e as Error).message || e) })
+          raport.push({ msg_id: m.id, status: 'eroare' })
+          console.error('redirect-mai-gov mesaj:', String((e as Error).message || e).slice(0, 300))
         }
       }
     } catch (e) {
-      raport.push({ pass, status: 'eroare_listare', detaliu: String((e as Error).message || e) })
+      raport.push({ pass, status: 'eroare_listare' })
+      console.error('redirect-mai-gov listare:', String((e as Error).message || e).slice(0, 300))
     }
   }
 

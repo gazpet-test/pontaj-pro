@@ -1,11 +1,11 @@
 // rag-utilaj v6 — 05.10.2026 (#17 faza 2: adus în repo de pe live v14; poarta din _shared/poartaRag.ts — secretul intern din Vault
-//  prin x-intern-secret, rol pe ramura JWT, limita QR „întâi notez, apoi număr”). v5 (19.07.2026): ask_qr — acces public
+//  prin x-intern-secret, rol pe ramura JWT; r2: cotele QR și AI rezervate atomic în BD — fn_rag_qr_rezerva / fn_rag_ask_rezerva). v5 (19.07.2026): ask_qr — acces public
 //  pagina QR /q/:id, răspuns în ROMÂNĂ, 30/zi/utilaj + 200/zi global via rag_qr_log; v4: pdf-lib lazy.
-// Actions: process_queue / process_pending (cron sau owner) / ask (owner sau modul logistica) / ask_qr (public, activ valid + limită)
+// Actions: process_queue / process_pending (cron sau owner) / ask (owner sau modul logistica; ai=true doar editor/admin, 50/zi) / ask_qr (public, activ valid + cotă atomică)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { esteApelIntern } from '../_shared/poartaIntern.ts';
-import { decideAcces, pesteLimita } from '../_shared/poartaRag.ts';
+import { decideAcces, nivelMaxim, type NivelModul } from '../_shared/poartaRag.ts';
 
 // Globalul runtime-ului Supabase Edge (Supabase.ai.Session) — nu are tipuri publicate pentru deno check.
 // deno-lint-ignore no-explicit-any
@@ -19,8 +19,6 @@ const MAX_BATCHES_PER_RUN = 4;
 const CHUNK_SIZE = 1400;
 const CHUNK_OVERLAP = 200;
 const EMBED_BATCH = 20;
-const QR_LIMIT_PER_ACTIV_ZI = 30;
-const QR_LIMIT_GLOBAL_ZI = 200;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -149,43 +147,45 @@ Deno.serve(async (req: Request) => {
         .select('id, marca, model, vandut').eq('id', activeId).maybeSingle();
       if (!activ || activ.vandut) return json(404, { error: 'Utilaj inexistent' });
 
-      // #17 F2: întâi notez cererea, apoi număr (cu ea inclusă) — două cereri simultane nu mai trec amândouă de limită.
-      const { data: logRow, error: logErr } = await supabase.from('rag_qr_log')
-        .insert({ active_id: activeId, question, answered: false }).select('id').single();
-      if (logErr || !logRow) return json(500, { error: 'Nu am putut înregistra cererea' });
-      const azi = new Date().toISOString().slice(0, 10);
-      const [{ count: cntActiv }, { count: cntGlobal }] = await Promise.all([
-        supabase.from('rag_qr_log').select('id', { count: 'exact', head: true }).eq('active_id', activeId).gte('created_at', azi),
-        supabase.from('rag_qr_log').select('id', { count: 'exact', head: true }).gte('created_at', azi),
-      ]);
-      if (pesteLimita(cntActiv, cntGlobal, QR_LIMIT_PER_ACTIV_ZI, QR_LIMIT_GLOBAL_ZI)) {
+      // #17 F2 r2: cota (30/zi pe utilaj, 200/zi global, ziua RO) se rezervă ATOMIC în BD — peste limită nu se scrie nimic.
+      const { data: logId, error: cotaErr } = await supabase.rpc('fn_rag_qr_rezerva', { p_active_id: activeId, p_question: question });
+      if (cotaErr) return json(500, { error: 'Nu am putut verifica limita zilnică' });
+      if (logId === null || logId === undefined) {
         return json(429, { error: 'Limita zilnică de întrebări a fost atinsă. Încearcă mâine sau întreabă biroul.' });
       }
 
       const modelKey = slugKey(`${activ.marca || ''} ${activ.model || ''}`) || `ACTIV-${activeId}`;
       const result = await searchAndAnswer(supabase, question, modelKey, true); // AI mereu — răspuns în română
-      await supabase.from('rag_qr_log').update({ answered: result.sources.length > 0 }).eq('id', logRow.id);
+      await supabase.from('rag_qr_log').update({ answered: result.sources.length > 0 }).eq('id', logId);
       return json(200, { success: true, ...result });
     }
 
     // ═══ Poarta (#17 F2): cronul cu secretul din Vault, altfel JWT de utilizator + rol ═══
     const intern = await esteApelIntern(req, supabase);
-    let user = false, isOwner = false, areLogistica = false;
+    let user = false, isOwner = false, nivelLogistica: NivelModul = null, userId: string | null = null;
     if (!intern) {
       const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
       const { data: u } = jwt ? await supabase.auth.getUser(jwt) : { data: { user: null } };
       if (u?.user) {
         user = true;
+        userId = u.user.id;
         const [{ data: prof }, { data: acc }] = await Promise.all([
           supabase.from('profiles').select('is_owner').eq('id', u.user.id).maybeSingle(),
-          supabase.from('user_module_access').select('id').eq('profile_id', u.user.id).eq('module', 'logistica').limit(1),
+          supabase.from('user_module_access').select('access_level').eq('profile_id', u.user.id).eq('module', 'logistica'),
         ]);
         isOwner = prof?.is_owner === true;
-        areLogistica = (acc || []).length > 0;
+        nivelLogistica = nivelMaxim((acc || []).map((r: { access_level: string | null }) => r.access_level));
       }
     }
-    const dec = decideAcces({ intern, user, isOwner, areLogistica, action: String(action || '') });
+    const cuAi = action === 'ask' && !!body.ai;
+    const dec = decideAcces({ intern, user, isOwner, nivelLogistica, action: String(action || ''), ai: cuAi });
     if (!dec.ok) return json(dec.status, { error: dec.error });
+    // Cota AI per utilizator (50/zi, atomic în BD) — și pentru owner, ca plasă de siguranță la cost.
+    if (cuAi && userId) {
+      const { data: liber, error: cotaErr } = await supabase.rpc('fn_rag_ask_rezerva', { p_profile_id: userId });
+      if (cotaErr) return json(500, { error: 'Nu am putut verifica limita zilnică AI' });
+      if (liber !== true) return json(429, { error: 'Ai atins limita zilnică de răspunsuri AI (50). Căutarea în pasaje merge în continuare.' });
+    }
 
     // ═══ process_queue ═══
     if (action === 'process_queue') {
@@ -292,7 +292,7 @@ Deno.serve(async (req: Request) => {
       return json(200, { success: true, processed });
     }
 
-    // ═══ ask (fișa utilajului din Logistică — owner sau modul logistica) ═══
+    // ═══ ask (fișa utilajului din Logistică — owner sau modul logistica; AI doar editor/admin + cotă) ═══
     if (action === 'ask') {
       const { question, model_key, ai } = body;
       if (!question) return json(400, { error: 'question necesară' });
