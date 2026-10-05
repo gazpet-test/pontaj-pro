@@ -32,6 +32,7 @@ Ești o instanță Claude Code dedicată modulului **[MODUL]** din ERP-ul Gazpet
 
 ## 4. Memorie și comunicare între instanțe
 - Lecțiile/deciziile durabile: `INSERT INTO claude_context (category, title, content, priority)` cu titlul prefixat `[[MODUL]] …`.
+- Mesaje către/de la alte sesiuni (principală, programare, alte instanțe): DOAR prin „poke” (`CLAUDE.md` pct. 8b: create_trigger cu persistent_session_id → fire → delete, în ambele sensuri — dacă atingi branch-ul sau tema altei sesiuni, îi trimiți poke înapoi în aceeași tură și notezi în handoff). Conflictele nu se rezolvă între sesiuni, se pun lui Răzvan.
 - Handoff propriu: `UPDATE claude_docs … WHERE slug = 'handoff_[modul]'` la final de sesiune (✅ LIVE / ⏳ Pending / ⚠️ Atenționări / 🎯 Următoarele). Sesiunea principală îl citește în rutina de dimineață și îi face lui Răzvan un singur raport pentru toate instanțele.
 - Nu scrii în `handoff_activ` (al sesiunii principale) și nu modifici rândurile `claude_context` ale altor module.
 - Dacă descoperi o problemă în alt modul: o notezi în `claude_context` cu prefixul `[Transfer→<modul>]` și i-o spui lui Răzvan; nu o repari tu.
