@@ -13,6 +13,8 @@ import { supabase } from './lib/supabase.js'
 import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import PuncteClarificare from './OfertareClarificariPuncte.jsx'
+import TemeiuriClarificare from './OfertareTemeiuri.jsx'
+import { formatCitare } from './ofertareTemeiuri.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 
@@ -220,6 +222,22 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     if (eExport || !Array.isArray(deTrimis)) { showToast('Export blocat: ' + (eExport?.message || 'verificare indisponibilă'), 'err'); return }
     const excluse = 0
     if (!deTrimis.length) { showToast('Nicio întrebare aprobată de exportat.', 'warn'); return }
+    // Pasul B: practica CNSC invocată — DOAR temeiurile confirmate și bifate „include în adresă”, cu pagină și link (formatul unic §4).
+    // Tabelul poate lipsi până la aplicarea migrării 20261014a → secțiunea pur și simplu nu apare.
+    const nrExport = new Set(deTrimis.map(q => q.nr))
+    const practica = []
+    {
+      const { data: tem } = await supabase.from('ofertare_clarificari_temeiuri')
+        .select('citat_idx, citat_text, citat_loc, clarificare:ofertare_clarificari!inner(nr, licitatie_id), decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat, citate_cheie), tipar:clarificari_tipare(requires_human_legal_review)')
+        .eq('clarificare.licitatie_id', licId).eq('include_in_adresa', true).eq('confirmat', true).not('cnsc_decizie_id', 'is', null).order('id')
+      for (const t of tem || []) {
+        if (!nrExport.has(t.clarificare?.nr) || !t.decizie) continue
+        const cj = t.decizie.control_judiciar?.rezultat
+        if (t.decizie.verificat === false || cj === 'modificata' || cj === 'desfiintata') continue   // regulă de cod, nu de bun-simț
+        const f = formatCitare(t.decizie, t.citat_idx == null ? null : { loc: t.citat_loc, text: t.citat_text })
+        if (f) practica.push({ nr: t.clarificare.nr, ...f })
+      }
+    }
     setBusy('PDF...')
     try {
       // HTML pe antet → html2canvas → A4 (fontul standard jsPDF nu are diacritice)
@@ -246,6 +264,14 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
               <td style="vertical-align:top;width:34px;font-weight:800;font-size:13.5px;padding-top:1px">${q.nr}.</td>
               <td style="text-align:justify">${esc(q.intrebare.trim())}</td>
             </tr></table>`).join('')}
+          ${practica.length ? `
+          <div style="margin-top:22px;font-size:13px;font-weight:800">Practica CNSC invocată</div>
+          <div style="font-size:11px;color:#444;margin:2px 0 8px">Deciziile CNSC sunt invocate ca practică de interpretare a legislației achizițiilor publice, nu ca normă obligatorie.</div>
+          ${practica.map((t, i) => `
+            <table style="width:100%;border-collapse:collapse;margin-bottom:8px;font-size:12px"><tr>
+              <td style="vertical-align:top;width:34px;font-weight:700;padding-top:1px">${i + 1}.</td>
+              <td style="text-align:justify">(la întrebarea ${t.nr}) ${esc(t.referinta)}${t.citat ? `: „${esc(t.citat)}”` : ''}</td>
+            </tr></table>`).join('')}` : ''}
           <p style="text-align:justify;margin:20px 0 0">Vă mulțumim și așteptăm răspunsul dumneavoastră în termenul legal, prin intermediul SEAP.</p>
           <table style="width:100%;border-collapse:collapse;margin-top:44px"><tr>
             <td style="width:55%"></td>
@@ -599,6 +625,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                       )
                     })()}
                     {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }}>🤖 {q.citita_rezumat}</div>}
+                    {/* Pasul B (MAPARE_CNSC_IN_ERP.md): temeiurile întrebării — decizii CNSC cu citat înghețat, cerințe normative, tipar. Textul întrebării nu se atinge. */}
+                    <TemeiuriClarificare tinta={{ clarificare_id: q.id }} licitatie={lic} showToast={showToast} profile={profile} />
                     {/* Câmpul de răspuns apare de la „trimisă" încolo. Înainte era legat de status='raspunsa',
                         deci nimeni nu putea completa răspunsul fără să bifeze întâi că a primit unul. */}
                     {(q.status === 'trimisa' || q.status === 'raspunsa' || q.raspuns) && (
@@ -606,7 +634,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         <textarea style={{ ...S.input, minHeight:40, resize:'vertical', marginTop:6, borderColor:G.green + '55' }} value={q.raspuns || ''} placeholder="Răspunsul autorității..."
                           onChange={e => setQ(q.id, 'raspuns', e.target.value)} onBlur={() => saveQ(q)} />
                         {/* Audit R05: răspuns ≠ rezoluție — punctele întrebării, fiecare cu rezoluția și documentul care a rezolvat-o */}
-                        <PuncteClarificare clarificareId={q.id} documente={docRasp} showToast={showToast} />
+                        <PuncteClarificare clarificareId={q.id} documente={docRasp} showToast={showToast} licitatie={lic} profile={profile} />
                         {/* Răspunsurile vin din SEAP ca PDF-uri. Legarea lor aici e ce lipsea:
                             fără ea, PDF-ul era citit ca document oarecare și producea cerințe paralele,
                             neversionate, lângă cerințele pe care de fapt le modifica. */}

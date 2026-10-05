@@ -18,6 +18,7 @@ import { titularVizat, titularEfectiv, ordoneazaPeTitular, permiteAlegerea } fro
 import { indexConfirmari, statisticiAcoperire, badgeNsa, j02bActivPe, propunereCurenta, TIP_NSA, stareComutatorJ02b, poatePorniJ02b } from './ofertareNeaplicabil.js'
 import { NotificationBell } from './App.jsx'
 import RFQPanel from './OfertareRFQ.jsx'
+import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem, ARHIVA_DOC_RE, MESAJ_ARHIVA } from './OfertareClarificari.jsx'
@@ -3693,8 +3694,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             {/* Eroarea PF apare DOAR în tab-ul PF; PGRST202 (migrare lipsă) e ignorat de hook. */}
             {tab === 'pf' && <OfertarePF key={l.id} licitatieId={l.id} acces={accesPF} />}
             {tab === 'formulare' && <FormulareRegistruSection licitatie={l} profile={profile} showToast={showToast} />}
-            {tab === 'documente' && <DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
-              intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} />}
+            {tab === 'documente' && <><OfertareTipareDeclansate licitatie={l} showToast={showToast} onCreat={() => setTab('clarificari')} /><DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
+              intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} /></>}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}

@@ -9,6 +9,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase.js'
+import TemeiuriClarificare from './OfertareTemeiuri.jsx'
 
 const G = { bg:'#0D1117', surface:'#161B22', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   green:'#3FB950', orange:'#F0883E', yellow:'#E3B341', red:'#F85149', blue:'#58A6FF' }
@@ -25,7 +26,7 @@ export function rezumatPuncte(puncte = []) {
   return { n, rezolvate: rez, deschise, nerezolvate: nerez, inchisa: n > 0 && deschise === 0 }
 }
 
-export default function PuncteClarificare({ clarificareId, documente = [], showToast }) {
+export default function PuncteClarificare({ clarificareId, documente = [], showToast, licitatie = null, profile = null }) {
   const [puncte, setPuncte] = useState([])
   const [nou, setNou] = useState('')
   const [busy, setBusy] = useState(false)
@@ -76,6 +77,7 @@ export default function PuncteClarificare({ clarificareId, documente = [], showT
             {documente.map(d => <option key={d.id} value={d.id}>{d.nume_original}</option>)}
           </select>
           <span style={{ color: REZOLUTII[p.rezolutie]?.[1] || G.dim }}>{p.rezolvat_la ? new Date(p.rezolvat_la).toLocaleDateString('ro-RO') : ''}</span>
+          <TemeiuriClarificare tinta={{ punct_id: p.id }} licitatie={licitatie} showToast={showToast} profile={profile} compact />
         </div>
       ))}
       <div style={{ display:'flex', gap:6, marginTop:4 }}>
