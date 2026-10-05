@@ -111,7 +111,7 @@ describe('runda 3 (Copilot r2 P1 + Jakarinos r2): tabel lipsă doar după cod, e
     expect(tabelLipsa({ message: 'ofertare_clarificari_temeiuri does not exist' })).toBe(false)
     expect(tabelLipsa(null)).toBe(false)
   })
-  it('motivNeexportabil: doar decizia verificată, menținută, cu citat + pagină + link iese în adresă', () => {
+  it('motivNeexportabil: doar o decizie verificată, nemodificată/nedesființată în instanță, cu citat + pagină + link iese în adresă', () => {
     const d = { id: 'CNSC-BO2022_2473', nr_decizie: '1500/C4/1234', data: '2022-09-15', link_sursa: 'https://x/y.pdf', verificat: true, control_judiciar: { rezultat: 'mentinuta' } }
     expect(motivNeexportabil({ decizie: d, citat_idx: 0, citat_loc: 'pag. 12', citat_text: 'text înghețat' })).toBeNull()
     expect(motivNeexportabil({ decizie: d, citat_idx: null, citat_loc: null, citat_text: null })).toMatch(/doar referință/)

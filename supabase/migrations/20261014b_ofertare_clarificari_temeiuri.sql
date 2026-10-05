@@ -88,7 +88,8 @@ CREATE INDEX ofertare_clarificari_temeiuri_punct_idx ON public.ofertare_clarific
 -- Garanțiile de BACKEND (nu doar de UI — review Jakarinos r1, B1/B2):
 --  1. citatul e EXACT cel din corpus: citat_text verificat, citat_loc rescris din citate_cheie[citat_idx] la orice insert/update
 --  2. starea „ținta are tipar cu review juridic (temei SAU proveniență, pe oricare rând) + un temei inclus în adresă”
---     o poate produce doar un owner — evaluată pe starea rezultată a țintei, la insert și la orice schimbare de include/tipar/proveniență/țintă
+--     o poate produce doar un owner — evaluată pe starea rezultată a țintei, doar pentru operațiile care ADAUGĂ (retragerile trec),
+--     cu lock tranzacțional pe țintă (serializare între scrieri concurente)
 -- Nu e SECURITY DEFINER: rulează cu drepturile celui care scrie (are SELECT pe corpus și pe tabel).
 CREATE OR REPLACE FUNCTION public.fn_temei_citat_verifica()
 RETURNS trigger
@@ -99,20 +100,30 @@ DECLARE
   v_citat  jsonb;
   v_inclus boolean;
   v_review boolean;
-  v_atinge boolean;
+  v_adauga boolean;
 BEGIN
-  -- Poarta „doar owner” se judecă pe STAREA REZULTATĂ a întregii ținte (Copilot r2, P0), nu pe rândul curent:
-  -- dacă după operație ținta are (a) orice temei/proveniență cu review juridic ȘI (b) orice temei include_in_adresa,
-  -- operația care produce starea asta cere owner. Se verifică doar când rândul curent contribuie la (a) sau (b)
-  -- și doar când operația atinge coloanele relevante (include, tipar, proveniență, țintă) — o notă schimbată de un
-  -- non-owner pe un rând deja inclus nu e blocată, scoaterea din adresă / a tiparului nici atât.
-  v_atinge := TG_OP = 'INSERT'
-    OR NEW.include_in_adresa IS DISTINCT FROM OLD.include_in_adresa
-    OR NEW.pattern_id IS DISTINCT FROM OLD.pattern_id
-    OR NEW.pattern_id_origine IS DISTINCT FROM OLD.pattern_id_origine
-    OR NEW.clarificare_id IS DISTINCT FROM OLD.clarificare_id
-    OR NEW.punct_id IS DISTINCT FROM OLD.punct_id;
-  IF v_atinge AND (NEW.include_in_adresa OR NEW.pattern_id IS NOT NULL OR NEW.pattern_id_origine IS NOT NULL) THEN
+  -- Poarta „doar owner” (Copilot r2/r3, Jakarinos r2/r3) se judecă pe STAREA REZULTATĂ a întregii ținte, nu pe rândul curent:
+  -- starea interzisă = ținta are (a) orice temei/proveniență cu review juridic ȘI (b) orice temei include_in_adresa.
+  -- Cere owner DOAR operația care ADAUGĂ ceva în starea asta (v_adauga): o includere nouă, conținut nou/schimbat pe un rând
+  -- inclus (altă decizie / alt citat / altă cerință / alt tipar — aprobarea owner-ului a fost pe conținutul vechi), un tipar
+  -- sau o proveniență nouă/schimbată, mutarea pe altă țintă. RETRAGERILE trec pentru oricine cu acces: debifarea, scoaterea
+  -- tiparului/provenienței, nota, confirmarea (R3-1 Jakarinos). Concurența: lock tranzacțional pe țintă înainte de evaluare
+  -- (Copilot r3) — două scrieri simultane pe aceeași țintă se serializează, a doua vede ce a comis prima.
+  v_adauga := CASE WHEN TG_OP = 'INSERT'
+    THEN NEW.include_in_adresa OR NEW.pattern_id IS NOT NULL OR NEW.pattern_id_origine IS NOT NULL
+    ELSE (NEW.include_in_adresa AND (NOT OLD.include_in_adresa
+            OR NEW.clarificare_id IS DISTINCT FROM OLD.clarificare_id OR NEW.punct_id IS DISTINCT FROM OLD.punct_id
+            OR NEW.cnsc_decizie_id IS DISTINCT FROM OLD.cnsc_decizie_id OR NEW.citat_idx IS DISTINCT FROM OLD.citat_idx
+            OR NEW.citat_text IS DISTINCT FROM OLD.citat_text OR NEW.requirement_id IS DISTINCT FROM OLD.requirement_id
+            OR NEW.pattern_id IS DISTINCT FROM OLD.pattern_id))
+      OR (NEW.pattern_id IS NOT NULL AND NEW.pattern_id IS DISTINCT FROM OLD.pattern_id)
+      OR (NEW.pattern_id_origine IS NOT NULL AND NEW.pattern_id_origine IS DISTINCT FROM OLD.pattern_id_origine)
+      OR ((NEW.pattern_id IS NOT NULL OR NEW.pattern_id_origine IS NOT NULL)
+          AND (NEW.clarificare_id IS DISTINCT FROM OLD.clarificare_id OR NEW.punct_id IS DISTINCT FROM OLD.punct_id))
+    END;
+  IF v_adauga THEN
+    PERFORM pg_advisory_xact_lock(hashtext('ofertare_clarificari_temeiuri'),
+                                  hashtext(coalesce('c' || NEW.clarificare_id::text, 'p' || NEW.punct_id::text)));
     SELECT bool_or(t.include_in_adresa),
            bool_or(EXISTS (SELECT 1 FROM public.clarificari_tipare c
                            WHERE c.requires_human_legal_review AND c.pattern_id IN (t.pattern_id, t.pattern_id_origine)))

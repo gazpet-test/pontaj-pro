@@ -229,7 +229,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     {
       // temeiurile de pe întrebări + cele de pe PUNCTELE întrebărilor (punct → întrebare) — B4 Jakarinos
       const SEL = 'citat_idx, citat_text, citat_loc, decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat)'
-      const baza = sel => sel.eq('include_in_adresa', true).eq('confirmat', true).not('cnsc_decizie_id', 'is', null).order('id')
+      // fără filtru pe tip: un tipar/o cerință bifată prin API trebuie să BLOCHEZE exportul (motivNeexportabil), nu să dispară — Jakarinos r3
+      const baza = sel => sel.eq('include_in_adresa', true).eq('confirmat', true).order('id')
       const [rQ, rP] = await Promise.all([
         baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', clarificare:ofertare_clarificari!inner(nr, licitatie_id)').eq('clarificare.licitatie_id', licId)),
         baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', punct:ofertare_clarificari_puncte!inner(nr, clarificare:ofertare_clarificari!inner(nr, licitatie_id))').eq('punct.clarificare.licitatie_id', licId)),
