@@ -55,6 +55,19 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
         if (op === 'select') data = t.filter(r => potriveste(r, filtre)).slice(0, limita)
         else if (op === 'update') { data = t.filter(r => potriveste(r, filtre)); data.forEach(r => Object.assign(r, patch)) }
         else { const noi = (Array.isArray(patch) ? patch : [patch]).map(p => ({ id: nextId++, ...p })); t.push(...noi); data = noi }
+        // indexul unic live ofertare_doc_seap_cod_unic: (licitatie_id, seap_cod) WHERE seap_cod IS NOT NULL
+        if (tabel === 'ofertare_documente_atribuire' && op !== 'select') {
+          const vazute = new Set<string>()
+          for (const r of t) {
+            if (r.seap_cod == null) continue
+            const k = `${r.licitatie_id}|${r.seap_cod}`
+            if (vazute.has(k)) {
+              if (op === 'insert') t.splice(t.length - data.length, data.length)   // insertul e atomic: se anulează
+              return Promise.resolve({ data: null, error: { message: 'duplicate key value violates unique constraint "ofertare_doc_seap_cod_unic"' } }).then(res, rej)
+            }
+            vazute.add(k)
+          }
+        }
         return Promise.resolve({ data: op === 'select' || sel ? data.map(r => ({ ...r })) : null, error: null }).then(res, rej)
       },
     }
@@ -79,7 +92,9 @@ function pornesteExtractor(root: string, opt: { cale_rea?: boolean } = {}) {
   let viu = true
   const bucla = (async () => {
     while (viu) {
-      for await (const job of Deno.readDir(root)) {
+      // workerul creează și șterge directoarele de job în paralel cu bucla: orice fișier/director dispărut sau
+      // încă nescris (NotFound) = se reia la tura următoare, ca la extractorul real (nu e o eroare de test)
+      try { for await (const job of Deno.readDir(root)) {
         if (!job.isDirectory) continue
         for await (const sub of Deno.readDir(`${root}/${job.name}`)) {
           const dir = `${root}/${job.name}/${sub.name}`
@@ -100,7 +115,7 @@ function pornesteExtractor(root: string, opt: { cale_rea?: boolean } = {}) {
             await Deno.writeTextFile(`${dir}/rasp/rezultat`, `${o.code}\n`)
           }
         }
-      }
+      } } catch (e) { if (!(e instanceof Deno.errors.NotFound)) throw e }
       await new Promise(r => setTimeout(r, 100))
     }
   })()
@@ -169,10 +184,11 @@ Deno.test('arhive: zip din veghe → documente separate cu prefix, arhiva marcat
       const noi = docs.filter(d => String(d.nume_original).startsWith('DOC_F1_F6_C1_C9 (#1305)/')).sort((a, b) => a.nume_original.localeCompare(b.nume_original))
       eq(noi.map(d => d.nume_original), ['DOC_F1_F6_C1_C9 (#1305)/C5_lista_cantitati_1.pdf', 'DOC_F1_F6_C1_C9 (#1305)/F3_lista_1.pdf', 'DOC_F1_F6_C1_C9 (#1305)/sub/Anexa.docx'], 'fără junk, cu prefix — F3 NU e confundat cu originalul id 10')
       eq(noi.map(d => [d.tip, d.status_procesare, d.seap_cod, d.aparut_ulterior, d.sursa]), [
-        ['lista_cantitati', 'neprocesat', 'CN1095546/00058', true, 'seap'],
-        ['lista_cantitati', 'neprocesat', 'CN1095546/00058', true, 'seap'],
-        ['raspuns_clarificare', 'ignorat', 'CN1095546/00058', true, 'seap'],
-      ], 'tip după numele propriu (altfel al arhivei), PDF-urile de citit, docx rămâne fișier')
+        ['lista_cantitati', 'neprocesat', undefined, true, 'seap'],
+        ['lista_cantitati', 'neprocesat', undefined, true, 'seap'],
+        ['raspuns_clarificare', 'ignorat', undefined, true, 'seap'],
+      ], 'tip după numele propriu (altfel al arhivei), PDF-urile de citit, docx rămâne fișier, seap_cod rămâne doar pe arhivă (index unic)')
+      eq(arh.seap_cod, 'CN1095546/00058', 'arhiva își păstrează codul SEAP')
       ok(noi.every(d => fisiere.has(d.fisier_path)), 'fiecare document are fișierul în Storage')
       eq(tab.notifications.length, 1, 'responsabilul licitației e anunțat')
       eq(tab.egress_jurnal.map(j => [j.p_bucket, j.p_obiect, j.p_sursa, j.p_doc_id]), [['ofertare', '3/atribuire/raspunsuri/CN_00058_DOC.zip', 'nas:arhive', 1305]], 'descărcarea din Storage e în jurnalul de egress')

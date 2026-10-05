@@ -610,8 +610,10 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
       const fb = await Deno.readFile(f.cale)
       const tipPropriu = ghicesteTip(f.rel.split('/').pop() || f.rel)
       const r = await urca(supa, licId, numeFinal, fb, new Map(), {
+        // seap_cod NU se moștenește: e unic pe (licitație, cod) — e codul documentului SEAP, adică al arhivei
+        // (05.10, 1305: 159 de fișiere respinse de ofertare_doc_seap_cod_unic). Legătura cu arhiva e în nume: „(#id)”.
         tip: tipPropriu === 'alta' && d.tip ? d.tip : tipPropriu,
-        seap_cod: d.seap_cod ?? null, aparut_ulterior: d.aparut_ulterior ?? null,
+        aparut_ulterior: d.aparut_ulterior ?? null,
       })
       if (typeof r === 'string') erori.push(`${f.rel}: ${r}`)
       else { extrase++; urcate.add(cheieNume(numeFinal)) }
