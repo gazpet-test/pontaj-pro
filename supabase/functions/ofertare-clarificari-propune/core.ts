@@ -6,6 +6,7 @@
 // Scrie DOAR propuneri (status propunere, origine platforma) — omul le citește, le ajustează, le trimite.
 // Rulează identic în edge function (index.ts) și pe workerul NAS (worker/ofertare/clarificari.ts).
 import { CATEGORII_RESTANTE, infoRestanta, NOTA_LUNGIMI, restantePeTip } from './restante.js'
+import { termenRO } from '../_shared/oraRO.ts'
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
 const MODEL_IMPLICIT = 'claude-sonnet-5'
@@ -138,7 +139,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       .eq('status', 'raspunsa').not('raspuns', 'is', null).neq('licitatie_id', licId).order('raspuns_la', { ascending: false }).limit(40)
     const raspunsuri = (rasp || []).sort((a: any, b: any) => (norm(b.lic?.autoritate).includes(norm(autor)) ? 1 : 0) - (norm(a.lic?.autoritate).includes(norm(autor)) ? 1 : 0)).slice(0, 25)
 
-    const termen = lic.termen_depunere ? String(lic.termen_depunere).slice(0, 16) : null
+    const termen = termenRO(lic.termen_depunere)
     const golMap = new Map<any, any>(goluri.map((g: any) => [g.cerinta_id, g]))
     const registru = (cerinte || []).map((c: any) => ({
       id: c.id, tip: c.tip, sectiune: c.sursa_sectiune || undefined, pagina: c.sursa_pagina || undefined, lot: c.lot || undefined,

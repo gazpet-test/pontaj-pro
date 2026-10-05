@@ -40,6 +40,7 @@
 // plauzibilă. Diferența asta e tot ce separă un ajutor de o declarație falsă către autoritate.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
+import { termenRO } from '../_shared/oraRO.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
@@ -296,7 +297,7 @@ Deno.serve(async (req: Request) => {
       `LICITAȚIA: ${lic?.obiect || '(fără obiect)'}`,
       lic?.autoritate ? `AUTORITATEA CONTRACTANTĂ: ${lic.autoritate}` : '',
       lic?.nr_anunt ? `ANUNȚ: ${lic.nr_anunt}` : '',
-      lic?.termen_depunere ? `TERMEN DE DEPUNERE: ${lic.termen_depunere}` : '',
+      lic?.termen_depunere ? `TERMEN DE DEPUNERE: ${termenRO(lic.termen_depunere)}` : '',
       lic?.valoare_estimata ? `VALOARE ESTIMATĂ: ${lic.valoare_estimata} lei fără TVA` : '',
       '',
       `CAPITOLUL DE SCRIS: ${[cap.sectiune, cap.eticheta].filter(Boolean).join(' · ')} ${cap.titlu}`,

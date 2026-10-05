@@ -18,6 +18,7 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { normalizeazaSpecOrganigrama } from './core.ts'
+import { termenRO } from '../_shared/oraRO.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -119,7 +120,7 @@ Deno.serve(async (req: Request) => {
   if (!cerinte.length && !ferestre.length)
     return json({ error: 'Nu am găsit nicio cerință sau pasaj despre organigramă / echipa propusă în documentele acestei licitații. Verifică că documentele sunt citite (text extras).' })
 
-  const variabil = `LICITAȚIA: ${lic.nr_anunt || '?'} · ${lic.autoritate || '?'} · TERMEN DE DEPUNERE: ${lic.termen_depunere || 'necunoscut'}
+  const variabil = `LICITAȚIA: ${lic.nr_anunt || '?'} · ${lic.autoritate || '?'} · TERMEN DE DEPUNERE: ${termenRO(lic.termen_depunere) || 'necunoscut'}
 OBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}
 
 CERINȚE EXTRASE (${cerinte.length}):

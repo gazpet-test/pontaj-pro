@@ -17,6 +17,7 @@
 // obligatie omisa la extragere nu exista in documente. Verdictul "verde" inseamna deci
 // "nimic in neregula in CE AM EXTRAS", nu "depunere sigura". De corectat separat.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { termenRO } from '../_shared/oraRO.ts'
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type, x-radar-secret' }
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } })
@@ -103,7 +104,7 @@ Deno.serve(async (req) => {
     confirmata: !!c.confirmata_de,
     acoperita: (c.ofertare_acoperire || []).some((a: { status: string }) => a.status === 'acoperit' || a.status === 'acoperit_partener'),
   }))
-  const meta = `LICITATIE: ${lic.nr_anunt || licId} - ${lic.obiect || ''}\nAutoritate: ${lic.autoritate || '?'} | Valoare estimata: ${lic.valoare_estimata || '?'} ${lic.moneda || 'RON'} | Termen depunere: ${lic.termen_depunere || '?'} (${zileRamase ?? '?'} zile) | Criteriu: ${lic.criteriu || '?'} | Garantie participare: ${lic.garantie_participare || 'NEDEFINITA'} | Loturi: ${lic.loturi || '?'} | Rol Gazpet: ${lic.rol_gazpet || '?'}`
+  const meta = `LICITATIE: ${lic.nr_anunt || licId} - ${lic.obiect || ''}\nAutoritate: ${lic.autoritate || '?'} | Valoare estimata: ${lic.valoare_estimata || '?'} ${lic.moneda || 'RON'} | Termen depunere: ${termenRO(lic.termen_depunere) || '?'} (${zileRamase ?? '?'} zile) | Criteriu: ${lic.criteriu || '?'} | Garantie participare: ${lic.garantie_participare || 'NEDEFINITA'} | Loturi: ${lic.loturi || '?'} | Rol Gazpet: ${lic.rol_gazpet || '?'}`
 
   // --- Trecerea B: adversarial (sonnet-5) ---
   const b1 = await claude('claude-sonnet-5',
