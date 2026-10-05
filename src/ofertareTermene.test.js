@@ -56,6 +56,13 @@ describe('extrageZileDinFisa', () => {
     expect(extrageZileDinFisa('AC va raspunde solicitarilor primite cu 18 zile inainte de depunere. Vizita amplasamentului se organizeaza cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
     expect(extrageZileDinFisa('AC va raspunde solicitarilor primite' + ' '.repeat(41) + 'cu 9 zile inainte').zileRaspuns).toBeNull()
   })
+  it('Copilot pe #610: un număr urmat de punct ÎNCHEIE propoziția („art. 161.”, „nr. 98/2016.”, „pct. 3.1.2.”); „S.R.L. Vizita” la fel', () => {
+    expect(extrageZileDinFisa('AC va raspunde conform art. 161. Vizita amplasamentului se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde conform Legii nr. 98/2016. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde conform pct. 3.1.2. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde solicitarilor S.C. GAZPET INSTAL S.R.L. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde conform art. 161 cu 11 zile inainte de depunere. Vizita se face cu 5 zile inainte.').zileRaspuns).toBe(11)
+  })
   it('review Jakarinos r4: abrevierea „S.C.” nu încheie propoziția → 11; „Vizita” după „ofertelor.” tot nu e răspuns', () => {
     expect(extrageZileDinFisa('AC va raspunde solicitarilor S.C. GAZPET cu 11 zile inainte de depunere.').zileRaspuns).toBe(11)
     expect(extrageZileDinFisa('AC va raspunde conform art. 161 si pct. I.3. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
@@ -78,25 +85,25 @@ describe('extrageZileDinFisa', () => {
 })
 
 describe('acteContestabile', () => {
-  it('grupează pe ziua publicării; tipul dominant: erată > răspuns > document nou; data = data_document din citire, altfel created_at', () => {
+  it('grupează pe ziua publicării; tipul dominant: erată > răspuns > document nou; ziua = publicarea din SEAP, altfel importul (data AI doar informativă)', () => {
     const acte = acteContestabile([
       { id: 1, tip: 'fisa_date', created_at: '2026-08-25T08:00:00Z' },
       { id: 126, tip: 'alta', aparut_ulterior: true, nume_original: 'ATR.pdf', created_at: '2026-08-29T05:24:50Z' },
       { id: 130, tip: 'plansa', aparut_ulterior: true, nume_original: 'plan.pdf', created_at: '2026-08-29T05:25:02Z' },
       { id: 317, tip: 'raspuns_clarificare', nume_original: 'Clarificare_Oficiu_Automata.pdf', created_at: '2026-09-16T08:27:44Z', citire: { tip: 'erata', data_document: '2026-09-14' } },
-      { id: 1305, tip: 'raspuns_clarificare', nume_original: 'DOC_F1_F6_C1_C9.rar', aparut_ulterior: true, created_at: '2026-10-02T12:50:00Z' },
+      { id: 1305, tip: 'raspuns_clarificare', nume_original: 'DOC_F1_F6_C1_C9.rar', aparut_ulterior: true, created_at: '2026-10-02T12:50:00Z', seap_meta: { publicat: '2026-10-02T15:34:36+03:00' } },
     ])
-    expect(acte.map(a => [a.zi, a.tip, a.docs.length, a.areRaspuns, a.sursaZi])).toEqual([['2026-08-29', 'document_nou', 2, false, 'import'], ['2026-09-14', 'erata', 1, true, 'citire'], ['2026-10-02', 'raspuns_clarificare', 1, true, 'import']])
+    expect(acte.map(a => [a.zi, a.tip, a.docs.length, a.areRaspuns, a.sursaZi, a.dataDocAi])).toEqual([['2026-08-29', 'document_nou', 2, false, 'import', null], ['2026-09-16', 'erata', 1, true, 'import', '2026-09-14'], ['2026-10-02', 'raspuns_clarificare', 1, true, 'seap', null]])
   })
   it('o erată fără tip răspuns NU e răspuns (areRaspuns=false) și nu stinge alerta de întârziere; data AI imposibilă → ziua importului', () => {
     const acte = acteContestabile([{ id: 5, tip: 'alta', nume_original: 'erata.pdf', created_at: '2026-10-02T09:00:00Z', citire: { tip: 'erata', data_document: '2026-02-31' } }])
-    expect(acte).toEqual([{ zi: '2026-10-02', tip: 'erata', docs: [{ id: 5, nume: 'erata.pdf' }], areRaspuns: false, sursaZi: 'import' }])
+    expect(acte).toEqual([{ zi: '2026-10-02', tip: 'erata', docs: [{ id: 5, nume: 'erata.pdf' }], areRaspuns: false, sursaZi: 'import', dataDocAi: null }])
     const mixt = acteContestabile([
-      { id: 6, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T09:00:00Z', citire: { data_document: '2026-10-02' } },
+      { id: 6, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T09:00:00Z', seap_meta: { publicat: '2026-10-02T11:00:00+03:00' } },
       { id: 7, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T10:00:00Z' },
     ])
     expect(mixt[0].sursaZi).toBe('mixt')
-    expect(acteContestabile([mixt && { id: 7, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T10:00:00Z' }, { id: 6, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T09:00:00Z', citire: { data_document: '2026-10-02' } }])[0].sursaZi).toBe('mixt')
+    expect(acteContestabile([mixt && { id: 7, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T10:00:00Z' }, { id: 6, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T09:00:00Z', seap_meta: { publicat: '2026-10-02T11:00:00+03:00' } }])[0].sursaZi).toBe('mixt')
     const r = calculeazaTermene({ termenDepunere: '2026-10-14T12:00:00Z', zileIntrebari: 18, zileRaspuns: 11, canal: 'seap_cn', acum: new Date('2026-10-05T10:00:00Z'),
       docs: [{ id: 5, tip: 'alta', created_at: '2026-10-02T09:00:00Z', citire: { tip: 'erata' } }] })
     expect(r.intarziereAC).toBe(true); expect(r.ultimRaspuns).toBeNull()
@@ -134,7 +141,7 @@ describe('calculeazaTermene — Mânăstirea pe 05.10.2026', () => {
   const docs = [
     { id: 126, tip: 'alta', aparut_ulterior: true, nume_original: 'ATR.pdf', created_at: '2026-08-29T05:24:50Z' },
     { id: 317, tip: 'raspuns_clarificare', nume_original: 'erata.pdf', created_at: '2026-09-16T08:27:44Z', citire: { tip: 'erata', data_document: '2026-09-14' } },
-    { id: 1305, tip: 'raspuns_clarificare', nume_original: 'DOC_F1_F6_C1_C9.rar', aparut_ulterior: true, created_at: '2026-10-02T12:50:00Z' },
+    { id: 1305, tip: 'raspuns_clarificare', nume_original: 'DOC_F1_F6_C1_C9.rar', aparut_ulterior: true, created_at: '2026-10-02T12:50:00Z', seap_meta: { publicat: '2026-10-02T15:34:36+03:00' } },
   ]
   const r = calculeazaTermene({ termenDepunere: TERMEN, ...extrageZileDinFisa(FISA), canal: 'seap_cn', valoareEstimata: 29264199.92, docs, acum: new Date('2026-10-05T10:00:00Z') })
 
@@ -144,9 +151,21 @@ describe('calculeazaTermene — Mânăstirea pe 05.10.2026', () => {
     expect(byKey.raspuns.zi).toBe('2026-10-03'); expect(byKey.raspuns.stare).toBe('trecut'); expect(byKey.raspuns.sursa).toMatch(/fișa de date: 11/)
     expect(byKey.depunere.zi).toBe('2026-10-14'); expect(byKey.depunere.zile).toBe(9); expect(byKey.depunere.ora).toBe('15:00')
   })
-  it('peste prag → contestație 10 zile: RAR din 02.10 → 12.10 (viitor), erata din 14.09 → 24.09 (trecut), lotul din 29.08 → 08.09; cele mai recente primele', () => {
+  it('peste prag → contestație 10 zile: RAR publicat în SEAP 02.10 → 12.10 (cert), erata importată 16.09 → ≈26.09 (estimat; datată 14.09 → 24.09 doar informativ), lotul 29.08 → ≈08.09', () => {
     expect(r.prag).toEqual({ lei: PRAG_LUCRARI_LEI, peste: true, zile: 10 })
-    expect(r.contestatii.map(c => [c.zi, c.tip, c.pana_la, c.stare])).toEqual([['2026-10-02', 'raspuns_clarificare', '2026-10-12', 'viitor'], ['2026-09-14', 'erata', '2026-09-24', 'trecut'], ['2026-08-29', 'document_nou', '2026-09-08', 'trecut']])
+    expect(r.contestatii.map(c => [c.zi, c.tip, c.pana_la, c.stare, c.estimat, c.pana_la_dupa_data_doc])).toEqual([
+      ['2026-10-02', 'raspuns_clarificare', '2026-10-12', 'viitor', false, null],
+      ['2026-09-16', 'erata', '2026-09-26', 'trecut', true, '2026-09-24'],
+      ['2026-08-29', 'document_nou', '2026-09-08', 'trecut', true, null]])
+  })
+  it('Copilot pe #610: data scrisă pe document (citire AI) nu e niciodată baza termenului — nici când e singura dată', () => {
+    const x = calculeazaTermene({ termenDepunere: TERMEN, zileIntrebari: 18, zileRaspuns: 11, canal: 'seap_cn', valoareEstimata: 29264199.92, acum: new Date('2026-10-05T10:00:00Z'),
+      docs: [{ id: 9, tip: 'raspuns_clarificare', nume_original: 'r.pdf', created_at: '2026-09-30T08:00:00Z', citire: { data_document: '2026-09-20' } }] })
+    expect(x.contestatii.map(c => [c.zi, c.pana_la, c.estimat, c.pana_la_dupa_data_doc])).toEqual([['2026-09-30', '2026-10-10', true, '2026-09-30']])
+    // cu data publicării din SEAP: baza e publicarea, termenul e cert, varianta informativă dispare
+    const y = calculeazaTermene({ termenDepunere: TERMEN, zileIntrebari: 18, zileRaspuns: 11, canal: 'seap_cn', valoareEstimata: 29264199.92, acum: new Date('2026-10-05T10:00:00Z'),
+      docs: [{ id: 9, tip: 'raspuns_clarificare', nume_original: 'r.pdf', created_at: '2026-09-30T08:00:00Z', citire: { data_document: '2026-09-20' }, seap_meta: { publicat: '2026-09-29T23:30:00+03:00' } }] })
+    expect(y.contestatii.map(c => [c.zi, c.pana_la, c.estimat, c.pana_la_dupa_data_doc])).toEqual([['2026-09-29', '2026-10-09', false, null]])
   })
   it('cu RAR-ul din 02.10 (tip răspuns) nu mai e întârziere formală, dar ultimRaspuns spune ce trebuie verificat', () => {
     expect(r.intarziereAC).toBe(false)
@@ -155,7 +174,7 @@ describe('calculeazaTermene — Mânăstirea pe 05.10.2026', () => {
   it('AC în întârziere: termenul de răspuns a trecut și singurul „răspuns” e erata dinaintea termenului de întrebări', () => {
     const r2 = calculeazaTermene({ termenDepunere: TERMEN, ...extrageZileDinFisa(FISA), canal: 'seap_cn', valoareEstimata: 29264199.92, acum: new Date('2026-10-05T10:00:00Z'), docs: docs.filter(d => d.id !== 1305) })
     expect(r2.intarziereAC).toBe(true)
-    expect(r2.ultimRaspuns).toBe('2026-09-14')
+    expect(r2.ultimRaspuns).toBe('2026-09-16')
   })
   it('înainte de termenul de răspuns nu e întârziere, oricât de goală ar fi lista', () => {
     const r3 = calculeazaTermene({ termenDepunere: TERMEN, zileIntrebari: 18, zileRaspuns: 11, canal: 'seap_cn', docs: [], acum: new Date('2026-10-01T10:00:00Z') })

@@ -40,13 +40,13 @@ export default function OfertareTermene({ licitatie: l }) {
     // Actele: ultimele LIMITA_ACTE după dată (cele recente contează pentru contestație); includem și eratele marcate de citirea AI
     // pe documente care nu sunt nici „apărute ulterior”, nici răspunsuri. Fișa: cifrele vin din TEXTUL EXTRAS, nu din rezumatul AI.
     supabase.from('ofertare_documente_atribuire')
-      .select('id, nume_original, tip, aparut_ulterior, created_at, citire:analiza->citire_noi')
+      .select('id, nume_original, tip, aparut_ulterior, created_at, seap_meta, citire:analiza->citire_noi')
       .eq('licitatie_id', l.id).or('aparut_ulterior.eq.true,tip.eq.raspuns_clarificare,analiza->citire_noi->>tip.eq.erata')
       .not('nume_original', 'like', '% (#%)/%')   // fișierele despachetate din arhive nu sunt acte și nu ocupă limita (acteContestabile le sare oricum)
       .order('created_at', { ascending: false }).limit(LIMITA_ACTE)
       .then(({ data, error }) => { if (!viu) return; setEroare(e => ({ ...e, acte: error ? error.message : null })); setDocs(error ? [] : (data || [])) })
     supabase.from('ofertare_documente_atribuire')
-      .select('id, text_extras').eq('licitatie_id', l.id).eq('tip', 'fisa_date').not('text_extras', 'is', null).order('id').limit(3)
+      .select('id, text_extras').eq('licitatie_id', l.id).eq('tip', 'fisa_date').not('text_extras', 'is', null).order('id', { ascending: false }).limit(3)   // cea mai nouă fișă întâi
       .then(({ data, error }) => {
         if (!viu) return
         setEroare(e => ({ ...e, fisa: error ? error.message : null }))
@@ -125,17 +125,17 @@ export default function OfertareTermene({ licitatie: l }) {
         : calc.contestatii.length === 0 ? <div style={{ fontSize:12, color:G.dim, marginTop:4 }}>{eroare.acte ? 'Actele nu s-au putut încărca — nu știm dacă există.' : calc.prag.zile ? 'Niciun act publicat după anunț (răspunsuri, erate, documente noi).' : ''}</div>
         : calc.contestatii.slice(0, 8).map(c => (
           <div key={c.zi} style={{ display:'grid', gridTemplateColumns:'220px 110px 1fr', gap:10, alignItems:'center', padding:'5px 0', borderBottom:`1px solid ${G.border2}`, fontSize:12.5 }}>
-            <span style={{ color:G.muted }} title={c.sursaZi === 'citire' ? 'data documentului, din citirea AI' : c.sursaZi === 'mixt' ? 'unele documente au data din citirea AI, altele ziua importului' : 'ziua în care a apărut în platformă (import) — data reală a publicării în SEAP poate fi anterioară'}>{TIP_ACT[c.tip]} din {fmtZi(c.zi)}{c.sursaZi !== 'citire' ? ' *' : ''}</span>
-            <b style={{ color:CUL_STARE[c.stare] }}>{fmtZi(c.pana_la)}</b>
+            <span style={{ color:G.muted }} title={c.sursaZi === 'seap' ? 'data publicării în SEAP (adusă de veghe)' : c.sursaZi === 'mixt' ? 'unele documente au data publicării din SEAP, altele doar ziua importului — termenul real poate fi mai devreme' : 'ziua în care a apărut în platformă (import) — publicarea în SEAP poate fi anterioară, deci termenul real poate fi MAI DEVREME; verifică data în SEAP'}>{TIP_ACT[c.tip]} din {fmtZi(c.zi)}{c.estimat ? ' *' : ''}</span>
+            <b style={{ color:CUL_STARE[c.stare] }} title={c.estimat ? 'termen ESTIMAT din ziua importului — nu e termenul legal cert' : 'calculat din data publicării în SEAP'}>{c.estimat ? '≈ ' : ''}{fmtZi(c.pana_la)}</b>
             <span style={{ color:G.dim, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={c.docs.map(d => d.nume).join('\n')}>
-              {c.stare === 'trecut' ? 'expirat' : c.stare === 'azi' ? 'AZI' : `${c.zile} zile`} · {c.docs.length === 1 ? c.docs[0].nume : `${c.docs.length} documente: ${c.docs.slice(0, 2).map(d => d.nume).join(', ')}…`}
+              {c.stare === 'trecut' ? 'expirat' : c.stare === 'azi' ? 'AZI' : `${c.zile} zile`}{c.pana_la_dupa_data_doc ? ` · document datat ${fmtZi(c.dataDocAi)} (citire AI) → dacă s-a publicat atunci: ${fmtZi(c.pana_la_dupa_data_doc)}` : ''} · {c.docs.length === 1 ? c.docs[0].nume : `${c.docs.length} documente: ${c.docs.slice(0, 2).map(d => d.nume).join(', ')}…`}
             </span>
           </div>
         ))}
       {calc.contestatii.length > 8 && <div style={{ fontSize:11.5, color:G.dim, marginTop:4 }}>+ încă {calc.contestatii.length - 8} acte mai vechi</div>}
       {trunchiat && <div style={{ fontSize:11.5, color:G.yellow, marginTop:4 }}>⚠️ Sunt cel puțin {LIMITA_ACTE} documente eligibile — lista e limitată la cele mai recente {LIMITA_ACTE}, deci poate fi incompletă; alerta „AC nu a răspuns” nu se afișează în acest caz.</div>}
       <div style={{ fontSize:11, color:G.dim, marginTop:8 }}>
-        Zilele de întrebări/răspuns vin din textul fișei de date (nu din rezumatul AI). Termenul de contestație curge de la luarea la cunoștință a actului; ziua afișată e ultima zi. * = ziua apariției în platformă (cel puțin pentru o parte din documente), nu neapărat ziua publicării în SEAP. Pragul pentru lucrări e cel din 2026 — se revizuiește din doi în doi ani.
+        Zilele de întrebări/răspuns vin din textul fișei de date (nu din rezumatul AI). Termenul de contestație curge de la luarea la cunoștință a actului; ziua afișată e ultima zi, calculată din data publicării în SEAP (adusă de veghe). * și ≈ = nu avem data publicării, ci doar ziua apariției în platformă: termenul e ESTIMAT și poate fi în realitate mai devreme — verifică data în SEAP. Data scrisă pe document (citită de AI) e doar informativă, nu bază de calcul. Pragul pentru lucrări e cel din 2026 — se revizuiește din doi în doi ani.
       </div>
     </div>
   )

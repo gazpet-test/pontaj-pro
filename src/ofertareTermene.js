@@ -67,13 +67,16 @@ export function extrageZileDinFisa(text) {
   let anc
   while (zileRaspuns == null && (anc = reAncora.exec(t))) {
     let zona = t.slice(anc.index, anc.index + 320)
-    // Sfârșit de propoziție = „. ” urmat de majusculă/liniuță sau paragraf nou — dar nu după o abreviere cu majusculă
-    // („S.C. GAZPET”, „I.3. Comunicare”), unde punctul nu încheie propoziția (review Jakarinos r4).
-    const reSfarsit = /([^\s])\.\s+(?=[A-ZĂÂÎȘȚ\-–•])|\n\s*\n/g
+    // Sfârșit de propoziție = „. ” urmat de majusculă/liniuță sau paragraf nou. Singura excepție: o abreviere din majuscule
+    // („S.C.”, „S.R.L.”) urmată de un cuvânt tot cu majuscule („GAZPET”) — numele unei firme, nu o propoziție nouă (Jakarinos r4).
+    // Orice altceva încheie propoziția, inclusiv un număr („art. 161. Vizita …”, „nr. 98/2016. Vizita …” — Copilot pe #610):
+    // în dubiu tăiem, pentru că o cifră ratată rămâne „necunoscut” (o completează omul), iar una luată greșit e un termen fals.
+    const reSfarsit = /(\S+)\.\s+(?=[A-ZĂÂÎȘȚ\-–•])|\n\s*\n/g
     let sf
     while ((sf = reSfarsit.exec(zona))) {
-      if (sf[1] && /[A-ZĂÂÎȘȚ0-9]/.test(sf[1])) continue
-      zona = zona.slice(0, sf.index + (sf[1] ? 1 : 0)); break
+      const firma = sf[1] && /^(?:[A-ZĂÂÎȘȚ]\.)*[A-ZĂÂÎȘȚ]$/.test(sf[1]) && /^[A-ZĂÂÎȘȚ]{2,}(?![a-zăâîșț])/.test(zona.slice(sf.index + sf[0].length))
+      if (firma) continue
+      zona = zona.slice(0, sf.index + (sf[1] ? sf[1].length + 1 : 0)); break
     }
     reCandidat.lastIndex = 0
     let m
@@ -86,7 +89,8 @@ export function extrageZileDinFisa(text) {
 }
 
 // O fișă de date poate fi spartă în mai multe documente (split): zilele de întrebări pot fi într-o parte, cele de răspuns în alta.
-// Se ia, pentru fiecare cifră, primul document care o are, cu proveniența ei (docIntrebari / docRaspuns).
+// Se ia, pentru fiecare cifră, primul document care o are, cu proveniența ei (docIntrebari / docRaspuns). Ecranul trimite fișele
+// de la cea mai NOUĂ la cea mai veche (id descrescător): o fișă republicată/corectată bate versiunea veche (Copilot pe #610).
 export function combinaFise(fise) {
   const r = { zileIntrebari: null, zileRaspuns: null, docIntrebari: null, docRaspuns: null }
   for (const f of fise || []) {
@@ -108,8 +112,11 @@ export function canalDinAnunt(nrAnunt, canal = null) {
 
 // Actele AC care pot fi atacate (L101 art. 8): răspunsuri la clarificări, erate, documente publicate după anunț.
 // `aparut_ulterior` marchează loturi întregi (lic. 3: 21 de documente pe 29.08), deci actul = ZIUA publicării, nu fișierul:
-// toate documentele apărute în aceeași zi sunt o singură luare la cunoștință. Data = data_document din citirea AI
-// (dacă există, „AAAA-LL-ZZ”), altfel ziua apariției în platformă (created_at, ora României).
+// toate documentele apărute în aceeași zi sunt o singură luare la cunoștință. Ziua de la care curge termenul =
+// data publicării în SEAP (seap_meta.publicat, adusă de veghe) → sursaZi 'seap'; altfel ziua apariției în platformă
+// (created_at, ora României) → sursaZi 'import', doar ESTIMARE (publicarea poate fi anterioară, deci termenul real mai devreme).
+// data_document din citirea AI NU e bază de calcul (Copilot pe #610: data scrisă pe document nu e luarea la cunoștință) —
+// se păstrează doar informativ (dataDocAi).
 const RANG_TIP = { erata: 3, raspuns_clarificare: 2, document_nou: 1 }
 // Fișierele despachetate din arhivele ajunse în platformă (workerul de pe Terra, #608) se numesc „<arhivă> (#<id>)/<cale>”
 // și moștenesc aparut_ulterior + tipul arhivei, dar apar în ziua despachetării. Nu sunt acte noi: actul e ARHIVA (rândul ei,
@@ -122,16 +129,17 @@ export function acteContestabile(docs) {
     if (!d) continue
     if (DIN_ARHIVA_RE.test(d.nume_original || '')) continue
     const tipCitire = String(d.citire?.tip || d.tip_citire || '').toLowerCase()
-    const dataDoc = d.citire?.data_document || d.data_document
     const eAct = d.tip === 'raspuns_clarificare' || d.aparut_ulterior === true || tipCitire === 'erata'
     if (!eAct) continue
-    const dinCitire = ziValida(dataDoc)
-    const zi = dinCitire || ziRo(d.created_at)
+    const publicat = ziRo(d.seap_meta?.publicat)
+    const zi = publicat || ziRo(d.created_at)
     if (!zi) continue
     const tip = tipCitire === 'erata' ? 'erata' : d.tip === 'raspuns_clarificare' ? 'raspuns_clarificare' : 'document_nou'
-    const sursa = dinCitire ? 'citire' : 'import'
-    const a = peZi.get(zi) || { zi, tip: 'document_nou', docs: [], areRaspuns: false, sursaZi: sursa }
-    if (a.sursaZi !== sursa) a.sursaZi = 'mixt'    // în aceeași zi, unele documente au data din citirea AI, altele ziua importului
+    const sursa = publicat ? 'seap' : 'import'
+    const dataDocAi = ziValida(d.citire?.data_document || d.data_document)
+    const a = peZi.get(zi) || { zi, tip: 'document_nou', docs: [], areRaspuns: false, sursaZi: sursa, dataDocAi: null }
+    if (a.sursaZi !== sursa) a.sursaZi = 'mixt'    // în aceeași zi, unele documente au data publicării din SEAP, altele doar ziua importului
+    if (dataDocAi && (!a.dataDocAi || dataDocAi < a.dataDocAi)) a.dataDocAi = dataDocAi
     if ((RANG_TIP[tip] || 0) > (RANG_TIP[a.tip] || 0)) a.tip = tip
     if (d.tip === 'raspuns_clarificare') a.areRaspuns = true     // calitatea de răspuns e separată de tipul dominant (o erată nu e răspuns)
     a.docs.push({ id: d.id, nume: d.nume_original || `doc ${d.id}` })
@@ -169,7 +177,11 @@ export function calculeazaTermene({ termenDepunere, zileIntrebari = null, zileRa
   const zileContestatie = peste == null ? null : peste ? 10 : 7
   const contestatii = zileContestatie == null ? [] : acteContestabile(docs).map(a => {
     const pana_la = plusZile(a.zi, zileContestatie)
-    return { ...a, pana_la, zile: zileIntre(azi, pana_la), stare: stare(pana_la) }
+    // Fără data publicării din SEAP termenul e ESTIMAT; dacă documentul e datat mai devreme (citirea AI), arătăm informativ și
+    // termenul calculat de la data aceea — e cel mai devreme posibil, nu cel legal.
+    const estimat = a.sursaZi !== 'seap'
+    const pana_la_dupa_data_doc = estimat && a.dataDocAi && a.dataDocAi < a.zi ? plusZile(a.dataDocAi, zileContestatie) : null
+    return { ...a, pana_la, zile: zileIntre(azi, pana_la), stare: stare(pana_la), estimat, pana_la_dupa_data_doc }
   }).reverse()   // cele mai recente primele
 
   // AC în întârziere: a trecut termenul de răspuns, oferta încă nu s-a depus, și nu există niciun răspuns la clarificări
