@@ -678,7 +678,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 // apărea „poate e scanat”. Arhivele nu se despachetează din răspunsurile SEAP: se dezarhivează local și se urcă conținutul.
 export const ARHIVA_DOC_RE = /\.(7z|rar|zip)$|\.part\d+\.rar$/i
 // Tot 05.10.2026 (regula permanentă, var. A): workerul de pe Terra despachetează singur orice arhivă ajunsă în platformă.
-export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): serverul (Terra) o despachetează singur în câteva minute, iar fișierele din ea apar ca documente separate, cu numele arhivei în față — pe acelea le citești cu AI. Dacă rămâne așa peste o oră, vezi motivul la document sau dezarhiveaz-o local și urcă fișierele.'
+export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): serverul (Terra) o despachetează singur în câteva minute, iar fișierele din ea apar ca documente separate, cu numele arhivei în față — pe acelea le citești cu AI. Arhivele în volume (.partN.rar) și cele cu eroare se dezarhivează local — motivul e scris la document.'
 
 export function TextOriginalToggle({ docId, nume }) {
   const [open, setOpen] = useState(false)

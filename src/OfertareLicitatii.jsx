@@ -654,10 +654,10 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
 // 41 au picat pe „PDF corupt" și se reluau la fiecare Procesează. Nu sunt documente: se sar la urcare și la procesare.
 const JUNK_RE = /(^|\/)~\$|\.log$|_Claude_|\.db$|\.tmp$|(^|\/)Thumbs\.db$|(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)desktop\.ini$/i
 const ARHIVA_RE = /\.(7z|rar|zip|z\d{2}|\d{3})$|\.part\d+\.rar$/i
-// 05.10.2026: .zip/.rar/.7z (și volumele .partN.rar) până la 200 MB se urcă direct — workerul de pe Terra le despachetează
-// cu extractorul izolat (seap.ts → despacheteazaArhiveDinPlatforma). Volumele .z01/.001 și arhivele mai mari rămân manuale.
+// 05.10.2026: .zip/.rar/.7z de până la 200 MB se urcă direct — workerul de pe Terra le despachetează cu extractorul izolat
+// (seap.ts → despacheteazaArhiveDinPlatforma). Volumele (.partN.rar, .z01, .001) și arhivele mai mari rămân manuale.
 const ARHIVA_SERVER_RE = /\.(zip|rar|7z)$/i
-const arhivaPentruServer = f => ARHIVA_SERVER_RE.test(f.name) && f.size <= 200e6
+const arhivaPentruServer = f => ARHIVA_SERVER_RE.test(f.name) && !/\.part\d+\.rar$/i.test(f.name) && f.size <= 200e6
 const DOC_STATUS = {
   neprocesat: { label:'neprocesat', color:G.muted },
   in_lucru:   { label:'în lucru',   color:G.yellow },
@@ -832,7 +832,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     if (!files.length) return
     const arhive = files.filter(f => ARHIVA_RE.test(f.name) && !arhivaPentruServer(f))
     const bune = files.filter(f => !JUNK_RE.test((f.webkitRelativePath || f.name)) && (!ARHIVA_RE.test(f.name) || arhivaPentruServer(f)))
-    setWarn(arhive.length ? `⚠️ ${arhive.length} arhive sărite (${arhive.slice(0, 3).map(f => f.name).join(', ')}${arhive.length > 3 ? '…' : ''}) — volume .z01/.001 sau peste 200 MB: dezarhivează-le local și urcă folderul rezultat.` : null)
+    setWarn(arhive.length ? `⚠️ ${arhive.length} arhive sărite (${arhive.slice(0, 3).map(f => f.name).join(', ')}${arhive.length > 3 ? '…' : ''}) — arhive în volume (.partN.rar, .z01, .001) sau peste 200 MB: dezarhivează-le local și urcă folderul rezultat.` : null)
     if (!bune.length) { setUpBusy(null); return }
     // Dedup pe (nume, mărime) DOAR față de fișierele urcate efectiv (regula 1 — dublă-ingestie).
     // Rândurile-placeholder (poziții de inventar cu cale marcată „neincarcat" — ex. planșele
