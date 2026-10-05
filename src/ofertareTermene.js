@@ -55,24 +55,33 @@ export function extrageZileDinFisa(text) {
   // Cerem și „inainte de data limita” între frază și cifră: altfel „se pot solicita clarificari conform art. 8” dădea 8 zile.
   const mi = t.match(/se\s+pot\s+solicita\s+clarific[aă]ri\s+[iî]nainte\s+de\s+data\s+limit[aă][^0-9]{0,80}?(\d{1,2})\b/i)
   // Formulări întâlnite în fișele reale: „cu 11 zile inainte”, „in a 6-a zi inainte”, „in a 7 a zi inainte”.
+  // Răspunsul: toți candidații „cu N zile înainte” / „în a N-a zi înainte” din cele ~300 de caractere de după „răspunde/Răspunsul”.
   // Fără `\b` înaintea lui „î” (în JS, \b nu vede diacriticele ca litere → „în a 6-a zi” nu se potrivea).
-  // Căutarea se oprește la „primite / transmise / depuse”: „…va raspunde… la solicitarile primite cu 9 zile inainte”
-  // e termenul de ÎNTREBĂRI, nu de răspuns — nu trebuie luat drept răspuns când cifra răspunsului lipsește.
-  const mr = t.match(/r[aă]spun(?:de|sul|surile)(?:(?!primite|transmise|depuse)[\s\S]){0,300}?(?:(?:^|[^a-zăâîșț])cu\s+(\d{1,2})\s+zile\s+[iî]nainte|(?:^|[^a-zăâîșț])[iî]n\s+a\s+(\d{1,2})\s*-?\s*a\s+zi\s+[iî]nainte)/i)
-  return {
-    zileIntrebari: mi ? Number(mi[1]) : null,
-    zileRaspuns: mr ? Number(mr[1] || mr[2]) : null,
+  // Un candidat precedat DIRECT de „primite/transmise/depuse/solicitate” („…solicitarile primite cu 9 zile inainte”) e termenul de
+  // ÎNTREBĂRI, nu de răspuns — se sare. „primite, cu 11 zile înainte” (cu virgulă) rămâne candidat (review Jakarinos r2, N3).
+  const mStart = t.match(/r[aă]spun(?:de|sul|surile)/i)
+  let zileRaspuns = null
+  if (mStart) {
+    const zona = t.slice(mStart.index, mStart.index + 320)
+    const re = /(?:^|[^a-zăâîșț])(?:cu\s+(\d{1,2})\s+zile\s+[iî]nainte|[iî]n\s+a\s+(\d{1,2})\s*-?\s*a\s+zi\s+[iî]nainte)/gi
+    let m
+    while ((m = re.exec(zona))) {
+      const inainte = zona.slice(Math.max(0, m.index - 40), m.index + 1)
+      if (/(primite|transmise|depuse|solicitate)\s*$/i.test(inainte)) continue
+      zileRaspuns = Number(m[1] || m[2]); break
+    }
   }
+  return { zileIntrebari: mi ? Number(mi[1]) : null, zileRaspuns }
 }
 
 // O fișă de date poate fi spartă în mai multe documente (split): zilele de întrebări pot fi într-o parte, cele de răspuns în alta.
-// Se ia, pentru fiecare cifră, primul document care o are; `docId` = documentul primei cifre găsite.
+// Se ia, pentru fiecare cifră, primul document care o are, cu proveniența ei (docIntrebari / docRaspuns).
 export function combinaFise(fise) {
-  const r = { zileIntrebari: null, zileRaspuns: null, docId: null }
+  const r = { zileIntrebari: null, zileRaspuns: null, docIntrebari: null, docRaspuns: null }
   for (const f of fise || []) {
     const z = extrageZileDinFisa(f.text_extras)
-    if (r.zileIntrebari == null && z.zileIntrebari != null) { r.zileIntrebari = z.zileIntrebari; r.docId ??= f.id }
-    if (r.zileRaspuns == null && z.zileRaspuns != null) { r.zileRaspuns = z.zileRaspuns; r.docId ??= f.id }
+    if (r.zileIntrebari == null && z.zileIntrebari != null) { r.zileIntrebari = z.zileIntrebari; r.docIntrebari = f.id }
+    if (r.zileRaspuns == null && z.zileRaspuns != null) { r.zileRaspuns = z.zileRaspuns; r.docRaspuns = f.id }
   }
   return r
 }
@@ -103,7 +112,9 @@ export function acteContestabile(docs) {
     const zi = dinCitire || ziRo(d.created_at)
     if (!zi) continue
     const tip = tipCitire === 'erata' ? 'erata' : d.tip === 'raspuns_clarificare' ? 'raspuns_clarificare' : 'document_nou'
-    const a = peZi.get(zi) || { zi, tip: 'document_nou', docs: [], areRaspuns: false, sursaZi: dinCitire ? 'citire' : 'import' }
+    const sursa = dinCitire ? 'citire' : 'import'
+    const a = peZi.get(zi) || { zi, tip: 'document_nou', docs: [], areRaspuns: false, sursaZi: sursa }
+    if (a.sursaZi !== sursa) a.sursaZi = 'mixt'    // în aceeași zi, unele documente au data din citirea AI, altele ziua importului
     if ((RANG_TIP[tip] || 0) > (RANG_TIP[a.tip] || 0)) a.tip = tip
     if (d.tip === 'raspuns_clarificare') a.areRaspuns = true     // calitatea de răspuns e separată de tipul dominant (o erată nu e răspuns)
     a.docs.push({ id: d.id, nume: d.nume_original || `doc ${d.id}` })

@@ -49,9 +49,12 @@ describe('extrageZileDinFisa', () => {
     expect(extrageZileDinFisa('Autoritatea va raspunde tuturor solicitarilor primite cu 18 zile inainte de depunere. Raspunsul consolidat se publica cu 11 zile inainte de depunere.').zileRaspuns).toBe(11)
     expect(extrageZileDinFisa('Numar zile pana la care se pot solicita clarificari inainte de data limita de depunere a ofertelor/candidaturilor\n18').zileIntrebari).toBe(18)
   })
+  it('review Jakarinos r2 N3: „solicitarilor primite, cu 11 zile inainte” (virgulă) e termen de răspuns → 11', () => {
+    expect(extrageZileDinFisa('Autoritatea va raspunde solicitarilor primite, cu 11 zile inainte de data limita.').zileRaspuns).toBe(11)
+  })
   it('combinaFise ia fiecare cifră din prima parte care o are (fișă spartă în două)', () => {
-    expect(combinaFise([{ id: 1, text_extras: 'se pot solicita clarificari inainte de data limita de depunere a ofertelor 18' }, { id: 2, text_extras: 'AC va raspunde cu 11 zile inainte' }])).toEqual({ zileIntrebari: 18, zileRaspuns: 11, docId: 1 })
-    expect(combinaFise([])).toEqual({ zileIntrebari: null, zileRaspuns: null, docId: null })
+    expect(combinaFise([{ id: 1, text_extras: 'se pot solicita clarificari inainte de data limita de depunere a ofertelor 18' }, { id: 2, text_extras: 'AC va raspunde cu 11 zile inainte' }])).toEqual({ zileIntrebari: 18, zileRaspuns: 11, docIntrebari: 1, docRaspuns: 2 })
+    expect(combinaFise([])).toEqual({ zileIntrebari: null, zileRaspuns: null, docIntrebari: null, docRaspuns: null })
   })
   it('ziValida respinge 2026-02-31', () => {
     expect(ziValida('2026-02-31')).toBeNull(); expect(ziValida('2026-10-14')).toBe('2026-10-14'); expect(ziValida('azi')).toBeNull()
@@ -76,6 +79,12 @@ describe('acteContestabile', () => {
   it('o erată fără tip răspuns NU e răspuns (areRaspuns=false) și nu stinge alerta de întârziere; data AI imposibilă → ziua importului', () => {
     const acte = acteContestabile([{ id: 5, tip: 'alta', nume_original: 'erata.pdf', created_at: '2026-10-02T09:00:00Z', citire: { tip: 'erata', data_document: '2026-02-31' } }])
     expect(acte).toEqual([{ zi: '2026-10-02', tip: 'erata', docs: [{ id: 5, nume: 'erata.pdf' }], areRaspuns: false, sursaZi: 'import' }])
+    const mixt = acteContestabile([
+      { id: 6, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T09:00:00Z', citire: { data_document: '2026-10-02' } },
+      { id: 7, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T10:00:00Z' },
+    ])
+    expect(mixt[0].sursaZi).toBe('mixt')
+    expect(acteContestabile([mixt && { id: 7, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T10:00:00Z' }, { id: 6, tip: 'alta', aparut_ulterior: true, created_at: '2026-10-02T09:00:00Z', citire: { data_document: '2026-10-02' } }])[0].sursaZi).toBe('mixt')
     const r = calculeazaTermene({ termenDepunere: '2026-10-14T12:00:00Z', zileIntrebari: 18, zileRaspuns: 11, canal: 'seap_cn', acum: new Date('2026-10-05T10:00:00Z'),
       docs: [{ id: 5, tip: 'alta', created_at: '2026-10-02T09:00:00Z', citire: { tip: 'erata' } }] })
     expect(r.intarziereAC).toBe(true); expect(r.ultimRaspuns).toBeNull()
