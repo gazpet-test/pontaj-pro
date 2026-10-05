@@ -1,6 +1,6 @@
-# Import WinMentor Expert (analiza descriptivă) — specificație v2
+# Import WinMentor Expert (analiza descriptivă) — specificație v3
 
-**Stare:** v2 după review Paw r1 (Copilot: GO cu condiții, 8 P0 · Jakarinos: de refăcut, 22 probleme). Pregătită în sesiunea de chat la cererea lui Răzvan (06.10.2026: „dacă tot creăm o automatizare nouă, s-o facem cum trebuie din prima”). **Implementarea: sesiunea „Module ERP — programare” (modulul Financiar).** Migrările doar prin `scripts/livrare_migrare.sh`, cu OK-ul lui Răzvan pe schemă.
+**Stare:** v3 după review Paw r2 (Copilot: NO-GO punctual, 5 corecții · Jakarinos: de refăcut punctual, N01–N15). v3 închide contractele cerute: staging serializat, destinație ⟂ clasificare cu funcție unică de rezolvare, snapshot imuabil + tentative noi, `validation_hash` canonic, derogări tipizate, date personale în tabel separat, final = lună întreagă, regim legacy conservat. Pregătită în sesiunea de chat la cererea lui Răzvan („dacă tot creăm o automatizare nouă, s-o facem cum trebuie din prima”). **Implementarea: sesiunea „Module ERP — programare” (modulul Financiar).** Migrările doar prin `scripts/livrare_migrare.sh`, cu OK-ul lui Răzvan pe schemă.
 
 ---
 
@@ -8,10 +8,12 @@
 
 Contabila (Mirela Popescu) exportă bilunar din WinMentor Expert „Analiza descriptivă holding” (XLSX, 12 coloane) — cheltuielile firmei pe contracte/șantiere. Azi: un singur import (iulie), făcut manual de Claude, cu o funcție care acceptă orice utilizator logat, scrie neatomic și suprascrie luna. **Aug final și sep intermediar stau neimportate.**
 
-Ținta v2: **fișierul intră în ERP prin upload, se validează strict, un om aprobă exact ce a văzut, iar activarea e atomică, serializată și auditabilă. Niciun cost nu „dispare” pentru că n-a fost mapat, nimic nu se rescrie retroactiv, și rezultatul afișat spune cinstit ce conține și ce nu.**
+Ținta: **fișierul intră în ERP prin upload, se validează strict, un om aprobă exact ce a văzut (hash), iar activarea e atomică, serializată și auditabilă. Fiecare leu din fișier ajunge în exact o categorie de raportare, nimic nu se rescrie retroactiv, iar indicatorul afișat spune cinstit ce conține și ce nu.**
 
-Faza 1 (acest document): upload + parser v1 + staging sigilat + activare + mapare tipizată + clasificare conturi + tab Contabilitate refăcut + reminder + migrare iulie + backfill aug/sep.
+Faza 1 (acest document): upload + parser v1 + staging sigilat + activare + mapare tipizată + clasificare conturi + derogări + tab Contabilitate refăcut + reminder + backfill aug/sep. Iulie rămâne neatinsă (legacy).
 Faza 2 (separat, doar dacă e nevoie reală): preluare din mail. **Ambii revieweri: NU în faza 1.**
+
+**Perimetru faza 1 (N15):** o singură entitate, **Gazpet Instal SRL, RON**. `facturi_emise` nu are coloană de societate sau monedă (verificat 06.10), deci comparația venit ERP ↔ Expert are sens doar pe o singură entitate. `societate` rămâne în cheie, dar e fixată prin CHECK (`= 'GAZPET'`); multi-societate = proiect separat (ar cere izolarea mapărilor, clasificărilor, drepturilor, filtrelor ERP și a cheilor de reminder). **D6**: contabilitatea confirmă că exportul „holding” conține doar Gazpet Instal (precondiție înainte de prima activare nouă).
 
 ---
 
@@ -65,38 +67,49 @@ Faza 2 (separat, doar dacă e nevoie reală): preluare din mail. **Ambii reviewe
 
 ## 2. Invarianți (nenegociabili — orice implementare îi respectă)
 
-1. **I1 — `propus` = import complet, sigilat, imuabil.** Niciun import parțial sau eșuat nu poate deveni activ. Liniile, raportul și totalurile unui import sigilat nu se mai modifică.
-2. **I2 — Activarea e serializată pe lună și revalidează server-side.** RPC-ul nu crede raportul din JSON; recalculează din BD condițiile financiare și verifică versiunile pe care le-a văzut omul.
-3. **I3 — Fiecare rând cu valoare are exact o destinație cunoscută** (proiect / parc auto / investiții / centru intern / finanțare / avans / exclus) — nu există „a dispărut pentru că n-a fost mapat”. `nealocat > 0` blochează activarea.
-4. **I4 — Istoria activă nu se rescrie.** Destinația și clasificarea se îngheață pe linie la sigilare. O schimbare de mapare afectează doar importurile viitoare; corectarea unei luni active = revizie nouă, aprobată, care o înlocuiește tranzacțional pe cea veche.
-5. **I5 — Un final nu poate activa încălcări care dublează sau omit costuri** (64x, 625 fără partener, venit ≠ 0, INVESTITII pe alt cont decât 213.x, contract necunoscut) decât cu **excepție owner-only, cu motiv**, auditată.
-6. **I6 — Sumele sunt `numeric`**, semnul se păstrează (storno rămâne negativ), totalurile se calculează în BD, rotunjirea e doar la afișare.
-7. **I7 — Capabilități separate**: a propune (upload) ≠ a activa ≠ a remapa/clasifica ≠ a vedea date personale. Automatizarea poate doar propune. Dreptul la date personale maschează numele, **nu ascunde valoarea**.
+1. **I1 — Candidatul sigilat e un snapshot imuabil.** După ce un import iese din `procesare`, nu mai intră, nu se modifică și nu se șterge nicio linie, iar metadatele lui (lună, societate, variantă, perioadă, regim, manifest, hash-uri, raport) nu se mai schimbă; se schimbă doar câmpurile de tranziție (`stare`, `activat_*`, `respins_*`, `revizie`), și doar prin RPC-urile din §7. Garanția e în BD (trigger + lock pe părinte, §4.2), deci ține și pe calea privilegiată folosită de Edge, nu doar prin RLS.
+2. **I2 — Activarea e serializată pe `(societate, luna)` și revalidează server-side.** RPC-ul nu crede nimic din payload: recalculează `validation_hash` din BD și îl compară cu cel văzut de om.
+3. **I3 — Fiecare linie cu valoare ajunge în exact o categorie de raportare**, prin funcția unică din §6.1. Criteriul de completitudine e **numărul** de linii cu valoare fără categorie = 0, nu soldul `nealocat` (−100 sau +100/−100 nu înseamnă alocare completă). Contract nemapat = blocant, **nederogabil**.
+4. **I4 — Istoria nu se rescrie (varianta A Copilot).** Maparea, clasificarea și categoria se îngheață pe linie la sigilare. O schimbare de configurare **nu invalidează** un candidat existent și nu atinge liniile lui; ca să aplici configurarea nouă, creezi o **tentativă nouă** (§3) din același fișier. Corectarea unei luni active = revizie nouă, aprobată, care o înlocuiește tranzacțional pe cea veche.
+5. **I5 — O abatere de la regulile convenite nu se poate activa pe final decât cu o derogare tipizată**, owner-only, cu motiv, care spune **cum intră suma** în categorii (exclusă / tratată ca cost / reclasificată) — nu un simplu „ignoră”. Structura, contractul nemapat și perioada incompletă nu se derogă niciodată.
+6. **I6 — Sume exacte.** `numeric`; semnul se păstrează (storno rămâne negativ); peste 4 zecimale sau peste limită → refuz explicit **înainte** de cast (fără rotunjire tăcută a BD); totalurile se calculează în BD; egalitățile de control sunt exacte; rotunjirea e doar la afișare.
+7. **I7 — Capabilități separate și date personale izolate.** A propune ≠ a activa ≠ a mapa/clasifica ≠ a deroga (owner) ≠ a vedea date personale. Numele persoanelor stau într-un tabel separat; tabelul financiar e complet vizibil celor cu drept de citire, deci totalurile nu pierd niciun rând.
 
 ---
 
-## 3. Fluxul
+## 3. Fluxul și automatul de stări
 
 ```
-Upload XLSX (Financiar → Contabilitate)          [om cu capabilitatea „propune”]
-   │ edge `contab-expert-propune` (poartă de rol în cod)
+Upload XLSX + (luna, varianta, perioada_pana) + cerere_id     [om cu „contab_propune”]
+   │ edge `contab-expert-propune`: urcă fișierul (service_role, doar storage), apoi
+   │ apelează RPC-urile CU JWT-ul utilizatorului (auth.uid() real; poarta e în SQL)
    ▼
-importuri.stare = 'procesare'  ── eșec ──► 'invalid' (raport + motiv, reluabil)
-   │ parser v1 → linii în batch (pe import_id; retry idempotent)
+contab_expert_creeaza(...)            → import 'procesare' (cerere_id UNIQUE ⇒ retry = același import)
+contab_expert_adauga_linii(id, batch) → linii (UNIQUE(import_id, rand_fizic) ⇒ retry fără dubluri)
+contab_expert_sigileaza(id, manifest) → 'propus'  sau  'invalid' (terminal, cu raport)
+   │ ecran „Import propus”: rezumat, categorii, blocante, avertismente, diff vs activ, hash
+   │ [owner] contab_expert_derogare(...) → hash nou, afișat din nou omului
    ▼
-RPC `contab_expert_sigileaza(import_id, nr_linii, sha_continut)`  (o tranzacție)
-   │ verifică: nr linii BD = manifest, totaluri recalculate, amprentă, clasificare + destinație pe fiecare linie
+contab_expert_activeaza(id, hash_vazut, activ_vazut_id, confirm_regresie_fata_de, motiv_revizie)
    ▼
-'propus'  (validat, sigilat; raport_validare + validation_hash + mapping_version + clasif_version)
-   │ ecran „Import propus”: rezumat, blocante, avertismente, diferențe vs activul lunii
-   ▼
-Om cu capabilitatea „activează” → RPC `contab_expert_activeaza(import_id, validation_hash_vazut, activ_vazut_id)`
-   │ advisory xact lock pe (societate, luna); revalidează; vechiul 'activ' → 'inlocuit'; noul → 'activ'; audit
-   ▼
-'activ'   (sau 'respins' cu motiv, de către același rol)
+'activ'  (vechiul activ → 'inlocuit')        sau   contab_expert_respinge(id, motiv) → 'respins'
+
+Configurare schimbată / contract mapat după sigilare:
+contab_expert_tentativa_noua(id_vechi) → import nou 'procesare' (precedent_id = id_vechi, același
+   obiect din storage, parser rerulat) ; candidatul vechi → 'depasit'
 ```
 
-Stări: `procesare` → `invalid` | `propus` → `activ` | `respins`; `activ` → `inlocuit` (doar prin activarea altuia). Nimic nu se șterge.
+| Din | În | Prin | Observație |
+|---|---|---|---|
+| — | `procesare` | `creeaza` | `cerere_id` UNIQUE: același `cerere_id` întoarce importul existent (retry al aceleiași cereri) |
+| `procesare` | `propus` | `sigileaza` | manifest complet + verificări §5.4/§6 trecute (blocantele de reguli nu împiedică sigilarea; împiedică activarea) |
+| `procesare` | `invalid` | `sigileaza` / edge | **terminal**: structură greșită, rând necunoscut, conversie eșuată, manifest incomplet. Retry = import nou |
+| `propus` | `activ` | `activeaza` | §7.3 |
+| `propus` | `respins` | `respinge` | terminal |
+| `propus` | `depasit` | `tentativa_noua` | terminal; înlocuit de tentativa care îl citează |
+| `activ` | `inlocuit` | `activeaza` (al altuia) | terminal; un `inlocuit` nu se reactivează — se reîncarcă |
+
+**Retry vs recertificare (N02):** același `cerere_id` = retry tehnic (idempotent). Același fișier (`sha256_fisier`) pe aceeași `(luna, varianta)` cu alt `cerere_id`, cât există deja un import ne-terminal sau activ cu acel fișier → refuz „fișier deja încărcat”, cu excepția `tentativa_noua` (explicită, cu `precedent_id`). `procesare` rămas agățat > 1 h → `invalid` („timeout”) printr-un job de curățenie; nimic nu e activabil din el.
 
 ---
 
@@ -104,42 +117,68 @@ Stări: `procesare` → `invalid` | `propus` → `activ` | `respins`; `activ` �
 
 ### 4.1 `contab_expert_importuri` (extinsă)
 - existente: `id, luna, fisier_nume, storage_path, gmail_message_id, nr_linii, total_venit, total_cheltuiala, importat_la, importat_de`
-- noi: `societate text not null default 'GAZPET'` (raport „holding” — perimetrul explicit, intră în cheie), `varianta` ('intermediar'|'final'|'legacy'), `revizie int` (finalul se poate corecta: final r1 → r2, cu `motiv_revizie`), `perioada_de date`, `perioada_pana date` (declarate la upload, validate: în luna `luna`), `stare` (enum/CHECK de mai sus), `sursa` ('upload'|'mail'|'legacy'), `sha256_fisier`, `sha_continut` (amprentă peste rândurile normalizate, multiset — diagnostic, nu cheie), `parser_versiune` ('wme_analiza_descriptiva_v1'), `raport_validare jsonb`, `validation_hash`, `nr_blocante int`, `mapping_version`, `clasif_version`, `sigilat_la`, `propus_de`, `activat_de`, `activat_la`, `respins_de/_la/_motiv`, `exceptii_owner jsonb` (I5), `regim_venit` ('expert_legacy'|'erp').
-- `luna` = prima zi a lunii (CHECK). Se renunță la `UNIQUE(luna)` → `UNIQUE (societate, luna) WHERE stare='activ'`.
-- **Iulie** devine `varianta='legacy', regim_venit='expert_legacy', sursa='legacy', stare='activ'`, fără confirmator/validare inventate (rămân NULL = necunoscut).
+- noi: `societate text not null default 'GAZPET' CHECK (societate='GAZPET')`, `moneda text not null default 'RON' CHECK (moneda='RON')`, `varianta` ('intermediar'|'final'|'legacy'), `perioada_de date`, `perioada_pana date`, `stare` ('procesare'|'invalid'|'propus'|'activ'|'respins'|'depasit'|'inlocuit'), `sursa` ('upload'|'legacy'), `cerere_id uuid UNIQUE`, `precedent_id` (FK, tentativa anterioară), `revizie int` (alocată **la activare**, §7.3), `motiv_revizie`, `sha256_fisier` (calculat de server), `sha_continut` (multiset normalizat — diagnostic), `parser_versiune`, `manifest jsonb` (§5.4), `raport_validare jsonb`, `nr_blocante_brute int`, `map_hash`, `clasif_hash`, `reguli_versiune`, `sigilat_la`, `propus_de`, `activat_de/_la`, `respins_de/_la/_motiv`, `regim_venit` ('erp'|'expert_legacy').
+- CHECK-uri: `luna` = prima zi; `perioada_de = luna`; `luna ≤ perioada_pana ≤ ultima_zi(luna)`; **`varianta='final' ⇒ perioada_pana = ultima_zi(luna)`** (N09/Copilot N2 — documentele individuale din afara perioadei rămân avertisment, ca iulie cu 15.06); `varianta='legacy' ⇔ regim_venit='expert_legacy' ⇔ sursa='legacy'` (RPC-urile refuză crearea `legacy`: e doar rezultatul migrării).
+- Unicitate: `UNIQUE (societate, luna) WHERE stare='activ'`; `UNIQUE (societate, luna, varianta, revizie) WHERE revizie IS NOT NULL`. Se renunță la `UNIQUE(luna)`.
+- Trigger `contab_expert_importuri_imuabil`: după `procesare`, orice UPDATE în afara câmpurilor de tranziție → excepție; tranzițiile permise doar conform tabelului din §3.
 
 ### 4.2 `contab_expert_linii` (extinsă)
-- noi: `rand_fizic int` (rândul din Excel — identitatea tehnică; **NU `nr_crt`**), `valoare_venit_sursa/valoare_chelt_sursa text` (celula originală), `venit/cheltuiala numeric(18,4)`, `destinatie_tip` + `destinatie_proiect_id` (înghețate la sigilare), `clasificare` (din §4.4, înghețată), `hash_linie`.
+- noi: `rand_fizic int not null` + **`UNIQUE (import_id, rand_fizic)`** (identitatea tehnică; **NU `nr_crt`**), `venit_sursa/chelt_sursa text` (celula originală), `venit/cheltuiala numeric(18,4)`, `contract_norm`, `destinatie_tip`, `destinatie_proiect_id`, `clasa`, `familie_regula` (dacă linia încalcă o regulă §6.2), `categorie_bruta` (rezultatul §6.1 la sigilare), `hash_linie`. **Fără `persoana_nume`** (mutat în §4.3).
 - `cont`, `document_nr` = **text** întotdeauna (8 conturi numerice în aug).
-- Fără UPDATE/DELETE după sigilare (trigger + RLS fără politici de scriere pentru utilizatori).
+- **Serializarea scrierilor cu sigilarea (N05 / Copilot N5):** trigger `BEFORE INSERT OR UPDATE OR DELETE` pe linii care face `SELECT stare FROM contab_expert_importuri WHERE id = import_id FOR SHARE` și refuză dacă `stare <> 'procesare'`. `sigileaza` ia `FOR UPDATE` pe același rând părinte → un batch întârziat fie intră înaintea sigilării (și e numărat în manifest), fie așteaptă și apoi vede `propus` și e refuzat. Trigger-ul ține și pentru `service_role`. Test cu două sesiuni (§13).
+- UPDATE pe linii: interzis complet (și în `procesare` — un batch greșit se reface ca import nou).
 
-### 4.3 `contab_contract_map` (înlocuiește `contab_santier_map`)
-- `contract_text` (normalizat: trim, spații multiple → 1, NBSP → spațiu, uppercase; păstrăm și forma brută), `tip` ('proiect'|'parc_auto'|'investitii'|'centru_intern'|'exclus'), `proiect_id` (obligatoriu ⇔ tip='proiect'), `valabil_de/pana`, `versiune`, `modificat_de/_la`, `motiv`.
-- Audit la orice schimbare (vechi → nou, cine, când, motiv).
-- Seed inițial: cele 24 existente; **PARC AUTO → tip `parc_auto`** (nu proiectul 24); SEDIU, ACHIZITII → `centru_intern`; INVESTITII → `investitii`; SANTIER (iulie) → `centru_intern` cu notă „legacy, nealocat contabil”; restul nemapate → le mapează Mirela/Marilena din UI înainte de activare (I3).
+### 4.3 `contab_expert_linii_persoane` (nou — date personale izolate, N07 / Copilot P0.8)
+`linie_id` (PK, FK → linii) · `persoana_nume`. RLS SELECT: owner sau `can_access_salarii`. Scriere doar prin `adauga_linii` (în `procesare`). Tabelul financiar `contab_expert_linii` nu mai conține nume → oricine are drept de citire vede toate rândurile și toate sumele; numele se obțin doar printr-un join pe care RLS îl permite numai celor cu drept. **Nu** se folosește view `security_invoker` peste o coloană accesibilă direct.
+- **Fișierul brut** (conține nume): URL semnat generat doar de RPC `contab_expert_fisier_url(id)` pentru owner sau (`contab_activeaza` **și** `can_access_salarii`). Bucket privat, fără politică de SELECT pentru `authenticated`.
+- **Gestiunea** (ex. „BC98BLK NEGRU JENICA” = auto + șofer): **D7** — propunere: rămâne vizibilă celor cu drept de citire Contabilitate (e dată operațională de flotă, aceiași oameni o văd în Logistica; mascarea ar face analiza flotei imposibilă). Dacă Răzvan decide altfel, gestiunea trece și ea în tabelul personal.
+- Rapoartele, diff-urile și erorile nu conțin nume de persoane (doar `rand_fizic`).
 
-### 4.4 `contab_cont_clasificare` (nou — matricea conturilor)
-Clasificare pe **prefix de cont** (cel mai lung prefix câștigă): `clasa` ∈ `cost` | `investitie` | `finantare` | `avans` | `stoc_consumat` | `exclus` | `de_clarificat`.
-**Seed propus (de confirmat o singură dată de contabilitate în UI — §11 D1):**
-| Prefix | Clasă propusă | De ce |
-|---|---|---|
-| 6 (fără 64, 625-fără-partener) | `cost` | cheltuieli |
-| 64 | `exclus` (regula 1: salariile vin din stat, nu de aici) — pe final = blocant I5 | |
-| 625 cu partener | `cost` (cazare) · 625 fără partener = diurnă → blocant pe final | |
-| 302, 303 | `stoc_consumat` (tratat ca cost de proiect) | materiale cumpărate direct pe șantier — **de confirmat** |
-| 213, 205 | `investitie` | imobilizări |
-| 167 | `finantare` | rate leasing — **NU** cost |
-| 471 | `avans` | cheltuieli în avans |
-| 7 | `exclus` (pe regim ERP venitul nu vine de aici) | |
-| orice alt prefix | `de_clarificat` → **blocant pe final**, avertisment pe intermediar | |
+### 4.4 `contab_contract_map` (înlocuiește `contab_santier_map`)
+- `contract_norm` **UNIQUE** (normalizat: trim, NBSP → spațiu, spații multiple → 1, uppercase; forma brută păstrată separat), `tip` ('proiect'|'parc_auto'|'investitii'|'centru_intern'|'exclus'), `proiect_id` (obligatoriu ⇔ `tip='proiect'`), `modificat_de/_la`, `motiv`.
+- **Fără intervale de valabilitate** (N10): maparea curentă se îngheață pe linie la sigilare; istoria e în linii, nu în dicționar → nu pot exista două destinații pentru același contract.
+- Scriere **doar prin RPC** `contab_mapare_seteaza(contract, tip, proiect_id, motiv)` (capabilitate `contab_mapare`), cu audit vechi → nou. Fără politici de INSERT/UPDATE/DELETE pentru `authenticated` (se elimină politica ALL veche).
+- Seed: cele 24 existente; **PARC AUTO → `parc_auto`** (nu proiectul 24); SEDIU, ACHIZITII → `centru_intern`; INVESTITII → `investitii`; restul nemapate → le mapează Marilena din UI înainte de activare.
 
-`clasif_version` se îngheață pe import (I4).
+### 4.5 `contab_cont_clasificare` (nou — matricea conturilor)
+Rânduri `(prefix, conditie, clasa, familie_regula)` cu `conditie` ∈ `oricare` | `cu_partener` | `fara_partener`; `UNIQUE (prefix, conditie)`. Rezolvare: **cel mai lung prefix** care se potrivește; la același prefix, rândul condițional care se potrivește bate `oricare`. Lipsă potrivire → `de_clarificat`. Scriere doar prin RPC (`contab_mapare`), cu audit.
 
-### 4.5 `contab_gestiune_activ` (nou, opțional în faza 1 — recomandat)
-Alias controlat `gestiune_text_normalizat → logistica_active.id`. Regex nr. auto / „EXCAVATOR|MOTOCOMPRESOR|…” doar **propune** aliasuri. Regula: gestiune = activ de flotă cunoscut **și** contract ≠ PARC AUTO → avertisment cu sumă (nu blocant: combustibilul unui utilaj pe șantier se poate aloca legitim lucrării — ex. „BC98BLK NEGRU JENICA” pe BILCIURESTI).
+**Seed propus (D1 — confirmat de contabilitate pe hash, §4.6):**
+| Prefix | Condiție | Clasă | Familie regulă (§6.2) |
+|---|---|---|---|
+| 6 | oricare | `cost` | — |
+| 64 | oricare | `exclus` (salariile vin din Salarii) | `cont_64` |
+| 625 | cu_partener | `cost` (cazare — eligibil, **nu** dovadă că e cazare) | — |
+| 625 | fara_partener | `exclus` (diurna vine din Diurne) | `625_fara_partener` |
+| 302, 303 | oricare | `stoc_consumat` (tratat ca cost de proiect) — **de confirmat** | — |
+| 213 | oricare | `investitie` | — |
+| 205 | oricare | `investitie` | — |
+| 167 | oricare | `finantare` (rate leasing — **nu** cost) | — |
+| 471 | oricare | `avans` | — |
+| 7 | oricare | `exclus` (pe regim ERP venitul nu vine de aici) | `venit_regim_erp` |
+| *(oricare alt prefix)* | — | `de_clarificat` | `cont_de_clarificat` |
 
-### 4.6 `contab_expert_audit` (nou)
-Append-only: `import_id, actiune (propune/sigileaza/invalideaza/activeaza/respinge/exceptie/remapare/clasificare), actor, la, detalii jsonb`.
+### 4.6 Versiuni de configurare și confirmarea D1 (N10 / Copilot N1)
+- `map_hash` = sha256 al serializării canonice (sortate) a întregului `contab_contract_map`; `clasif_hash` = idem pentru `contab_cont_clasificare`; `reguli_versiune` = constanta regulilor din §6.2 (ex. `r1`). Se calculează **în SQL** și se îngheață pe import la sigilare. Nu există contor pe rând.
+- `contab_clasif_confirmari (clasif_hash PK, confirmat_de, confirmat_la, nota)` — confirmarea contabilității se face **pe hash**. Orice modificare a matricei produce alt hash, deci cere o nouă confirmare. Doar Marilena (sau owner), prin RPC.
+- **Activarea unui `final` cere ca `clasif_hash`-ul înghețat al candidatului să fie confirmat.** Intermediarele se pot activa cu matrice neconfirmată, cu badge „clasificare provizorie”.
+- Un candidat sigilat cu o matrice neconfirmată, care apoi e confirmată fără modificări, are același hash → devine activabil fără tentativă nouă.
+
+### 4.7 `contab_expert_derogari` (nou — I5, N04 / Copilot N4)
+`id, import_id, familie_regula, tratament, clasa_noua, motiv, actor, la, nr_linii, suma`.
+- `tratament` ∈ `exclude_din_cost` (categoria liniilor familiei → `exclus`) | `trateaza_cost` (categoria → după destinație, ca un cost) | `reclasifica` (cu `clasa_noua` dintr-o listă permisă: `cost`, `stoc_consumat`, `investitie`, `finantare`, `avans`, `exclus`).
+- Familii derogabile: `venit_regim_erp`, `cont_64`, `625_fara_partener`, `investitii_cont`, `213_alt_contract`, `cont_de_clarificat`. **Nederogabile:** structură, rând necunoscut, contract nemapat, perioadă incompletă la final, intermediar peste final.
+- Se adaugă doar prin RPC `contab_expert_derogare(import_id, familie, tratament, clasa_noua, motiv)`: owner verificat în BD, candidat `propus`, același advisory lock lunar ca activarea, o derogare activă per familie. `nr_linii`/`suma` sunt calculate de server (nu primite din payload). Derogarea modifică `validation_hash` (§7.2) → omul vede noul rezumat înainte să activeze.
+- Liniile nu se modifică: categoria efectivă = `categorie_bruta` + derogarea familiei ei (funcția §6.1, deterministă).
+
+### 4.8 `contab_gestiune_activ` (nou, opțional în faza 1 — recomandat)
+Alias controlat `gestiune_norm → logistica_active.id`. Regex nr. auto / „EXCAVATOR|MOTOCOMPRESOR|…” doar **propune** aliasuri. Regula: gestiune = activ de flotă cunoscut **și** contract ≠ PARC AUTO → avertisment cu sumă (nu blocant: combustibilul unui utilaj pe șantier se poate aloca legitim lucrării).
+
+### 4.9 `contab_expert_audit` (nou)
+Append-only: `import_id, actiune (creeaza/adauga_linii/sigileaza/invalideaza/tentativa_noua/derogare/activeaza/respinge/mapare/clasificare/confirmare_clasif), actor, la, detalii jsonb` (fără nume de persoane).
+
+### 4.10 `contab_expert_obligatii` (nou — reminder, §10)
+`(societate, luna, tip 'intermediar'|'final', scadenta date, satisfacuta_de import_id, satisfacuta_la)`, `UNIQUE (societate, luna, tip)`.
 
 ---
 
@@ -159,149 +198,208 @@ Append-only: `import_id, actiune (propune/sigileaza/invalideaza/activeaza/respin
 | 8 | I | `drare` | `Chelt` | cheltuială |
 | 9 | J | `.TRONSON` | *(gol)* | tronson |
 | 10 | K | `.Plan conturi` | *(gol)* | cont (text) |
-| 11 | L | `.Personal` | *(gol)* | persoană |
+| 11 | L | `.Personal` | *(gol)* | persoană → tabelul §4.3 |
 
-Normalizare permisă doar pentru: spații la capete, NBSP, spații multiple. **Fără fuzzy matching.** Antet diferit → `invalid` cu „format necunoscut — parser v1 nu se aplică” + semnătura găsită (pentru un viitor parser v2). O singură foaie vizibilă cu această schemă; zero sau mai multe → blocant. Foi/rânduri/coloane ascunse, formule în coloanele importate, fișier criptat/corupt → blocant.
+Normalizare permisă doar pentru: spații la capete, NBSP, spații multiple. **Fără fuzzy matching.** Antet diferit → `invalid` cu „format necunoscut — parser v1 nu se aplică” + semnătura găsită. O singură foaie vizibilă cu această schemă; zero sau mai multe → `invalid`. Foi/rânduri/coloane ascunse, formule în coloanele importate, fișier criptat/corupt → `invalid`.
 
 ### 5.2 Clasificarea fiecărui rând fizic
-`antet` (primele 2) · `detaliu` (A = întreg pozitiv; text cu cifre acceptat prin conversie strictă) · `subtotal` (A începe cu `Total ` și B..G goale) · `total_general` (A normalizat fără spații = `TOTALGENERAL`) · `gol` (toate celulele goale — ignorat, numărat) · **orice alt rând nevid = `necunoscut` → blocant**. Toate rândurile fizice sunt numărate în raport.
+`antet` (primele 2) · `detaliu` (A = întreg pozitiv; text cu cifre acceptat prin conversie strictă) · `subtotal` (A începe cu `Total ` și B..G goale) · `total_general` (A normalizat fără spații = `TOTALGENERAL`) · `gol` (toate celulele goale — ignorat, numărat) · **orice alt rând nevid = `necunoscut` → `invalid`**. Toate rândurile fizice sunt numărate în manifest.
 
 ### 5.3 Conversii stricte
-- Sume: int/float finite, sau text în format explicit (`1234.56` sau `1.234,56` românesc); ambiguu, `NaN`, `#VALUE!`, text liber → **blocant pe rând** (nu zero implicit). Celulă goală ≠ 0 (pe detaliu: gol în ambele = avertisment).
-- Precizie: `numeric(18,4)`; sumele se adună în Decimal (în edge) și se recalculează în SQL la sigilare; comparațiile cu ±0,01 pe valori nerotunjite.
-- Date: `DD.MM.YYYY` cu validare calendaristică (31.02 → blocant); seriale Excel acceptate doar 1900-based, convertite fără fus.
-- Text: fără trunchiere tăcută — peste limită → blocant cu rândul; `... ...` și gol la `.Personal` = lipsă.
-- `nr_crt` repetat → blocant; goluri în secvență → avertisment.
+- Sume: int/float finite, sau text în format explicit (`1234.56` sau `1.234,56` românesc); ambiguu, `NaN`, `#VALUE!`, text liber → `invalid` cu rândul (nu zero implicit). Celulă goală ≠ 0 (pe detaliu: gol în ambele = avertisment).
+- **Precizie (N08):** valoarea se trimite către RPC ca **text zecimal canonic**; `adauga_linii` o acceptă doar dacă respectă `^-?\d{1,12}(\.\d{1,4})?$` și abia apoi face cast la `numeric(18,4)`. Peste 4 zecimale sau peste 12 cifre întregi → `invalid` (nu rotunjire). Totalurile se țin în `numeric` fără limită de scară (sau `numeric(22,4)`), deci nu pot depăși.
+- Date: `DD.MM.YYYY` cu validare calendaristică (31.02 → `invalid`); seriale Excel acceptate doar 1900-based, convertite fără fus.
+- Text: fără trunchiere tăcută — peste limita câmpului → `invalid` cu rândul; `... ...` și gol la `.Personal` = lipsă.
+- `nr_crt` repetat → `invalid`; goluri în secvență → avertisment.
 
-### 5.4 Controale
-- Total general **prezent** → Venit și Chelt verificate separat față de suma detaliilor (fără subtotaluri), toleranță 0,01 → altfel blocant. Repetat/contradictoriu → blocant.
-- Total general **lipsă** (aug/sep) → avertisment „fără sumă de control externă” — omul confirmă totalul afișat.
-- Zero rânduri de detaliu → blocant.
-- Limite: fișier ≤ 10 MB, ≤ 20.000 rânduri, ≤ 50 coloane, ≤ 30 s procesare.
+### 5.4 Manifestul și controalele
+- **Manifestul** (produs de edge, legat de `sha256_fisier` calculat de server, cerut complet de `sigileaza`; versiune necunoscută sau câmp lipsă → `invalid`): `parser_versiune`, `sha256_fisier`, nr. foi / foi vizibile, rânduri fizice pe clasă (antet/detaliu/subtotal/total_general/gol/necunoscut), formule = 0, ascunse = 0, total general găsit (valori text) sau absent, nr. linii trimise, suma venit/chelt calculată de parser (text).
+- `sigileaza` verifică în SQL: nr. linii în BD = manifest; sumele recalculate din linii = cele din manifest (exact); total general prezent → egal exact cu suma detaliilor pe venit și pe chelt separat (sursa are max. 3 zecimale, deci egalitatea e exactă, fără toleranță) → altfel `invalid`; total general repetat/contradictoriu → `invalid`.
+- Total general **lipsă** (aug/sep) → avertisment „fără sumă de control externă” — omul vede totalul și îl confirmă prin activare (intră în hash).
+- Zero rânduri de detaliu → `invalid` (o lună fără activitate e în afara fazei 1 — asumat).
+- **Limite (P18):** fișier ≤ 10 MB comprimat și ≤ 50 MB decomprimat (verificat pe intrările ZIP înainte de parsare), ≤ 3 foi, ≤ 20.000 rânduri, ≤ 50 coloane, ≤ 300.000 celule nevide, text ≤ 500 caractere/celulă, ≤ 30 s procesare. Depășire → `invalid`.
 
 ---
 
-## 6. Validarea la sigilare — blocante vs avertismente
+## 6. Categorii, reguli, blocante (anexă normativă — aceleași reguli în sigilare, activare și agregări)
 
-| Verificare | Intermediar | Final |
+### 6.1 Funcția unică `contab_expert_categorie(linie, derogare)` (N01 / Copilot N3)
+Două axe, stocate separat pe linie: **destinația** (din contract, §4.4) și **clasa** (din cont, §4.5). Categoria de raportare se obține cu **precedență fixă** — clasa contabilă bate destinația, pentru că spune dacă suma e cost al perioadei:
+
+| Pas | Condiție | Categorie |
 |---|---|---|
-| Structură / tipuri / date / total contradictoriu / rând necunoscut | **blocant** | **blocant** |
-| Contract fără destinație (I3) | **blocant** | **blocant** |
-| Cont `de_clarificat` | avertisment | **blocant** |
-| Venit ≠ 0 pe regim ERP | avertisment | **blocant** (excepție owner) |
-| 64x | avertisment | **blocant** (excepție owner) |
-| 625 fără partener | avertisment | **blocant** (excepție owner) |
-| INVESTITII pe cont ≠ 213/205 · 213 pe alt contract | avertisment | **blocant** (excepție owner) |
-| Activ de flotă cunoscut pe contract ≠ PARC AUTO | avertisment cu sumă | avertisment cu sumă |
-| Goluri `nr_crt`, storno, dubluri (multiset pe toate câmpurile), document în afara perioadei | avertisment | avertisment |
-| Niciun document în luna declarată | **blocant** (lună greșită) | **blocant** |
-| Intermediar peste un final activ | — | **blocant** (în SQL) |
-| Intermediar cu acoperire mai mică decât activul | avertisment + confirmare explicită | — |
-| Diferențe față de activul lunii | afișate: total, nr. linii, adăugări/eliminări pe multiset, **mutări între destinații** (un total egal poate ascunde mutări mari) | idem |
+| 0 | există derogare pe familia liniei | după `tratament` (§4.7), apoi se continuă de la pasul 1 cu clasa rezultată |
+| 1 | contract nemapat | `nealocat` → blocant nederogabil (I3) |
+| 2 | clasa `exclus` | `exclus` (subtip = familia: venit / salarii / diurnă / alt) |
+| 3 | clasa `finantare` | `finantare` |
+| 4 | clasa `avans` | `avans` |
+| 5 | clasa `investitie` | `investitii` |
+| 6 | clasa `de_clarificat` | `de_clarificat` (blocant pe final, vizibil separat pe intermediar) |
+| 7 | clasa `cost` / `stoc_consumat` și destinație `proiect` | `proiect:<id>` |
+| 8 | idem, destinație `parc_auto` / `centru_intern` / `exclus` | `parc_auto` / `centru_intern` / `exclus` |
+| 9 | idem, destinație `investitii` (cont de cost pe contract INVESTITII) | `investitii` + familia `investitii_cont` |
 
-Excepțiile owner-only se cer pe **familie de abatere**, cu motiv, și se salvează în `exceptii_owner` + audit.
+Exemple: 167 pe contract de proiect → `finantare` (nu cost de proiect); 205 pe SEDIU → `investitii`; 64 pe proiect → `exclus`; cont necunoscut → `de_clarificat`; 302 pe ORSOVA → `proiect:<ORSOVA>`.
+Venitul (col. H) pe regim ERP nu intră niciodată în marjă: liniile cu venit ≠ 0 sunt `exclus` (familia `venit_regim_erp`). (În fișiere nu există linii cu venit și cheltuială simultan ≠ 0 — verificat; dacă apar → `invalid`.)
+**Identitatea de control:** Σ pe categorii = totalul fișierului, **exact**, separat pentru venit și pentru cheltuială.
+
+### 6.2 Familii de reguli și efectul lor
+| Familie / verificare | Intermediar | Final | Derogabil |
+|---|---|---|---|
+| Structură / tipuri / date / total contradictoriu / rând necunoscut / manifest | `invalid` | `invalid` | nu |
+| Contract nemapat (`nealocat`) | **blocant** | **blocant** | nu |
+| Niciun document în luna declarată | **blocant** | **blocant** | nu |
+| `final` cu perioadă incompletă | — | imposibil (CHECK) | nu |
+| Intermediar peste un final activ | **blocant** | — | nu |
+| `cont_de_clarificat` | avertisment (categoria separată) | **blocant** | da |
+| `venit_regim_erp` (venit ≠ 0) | avertisment | **blocant** | da |
+| `cont_64` | avertisment | **blocant** | da |
+| `625_fara_partener` | avertisment | **blocant** | da |
+| `investitii_cont`: contract INVESTITII pe cont ≠ 213.x (regula convenită: INVESTITII = doar 213.x; 205 e investiție prin clasă, pe orice contract) | avertisment | **blocant** | da |
+| `213_alt_contract`: 213.x pe alt contract decât INVESTITII | avertisment | **blocant** | da |
+| Activ de flotă cunoscut pe contract ≠ PARC AUTO | avertisment cu sumă | avertisment cu sumă | — |
+| Goluri `nr_crt`, storno, dubluri (multiset pe toate câmpurile), document în afara perioadei | avertisment | avertisment | — |
+| Intermediar cu acoperire mai mică decât activul | confirmare explicită a regresiei (§7.3) | — | — |
+| Diferențe față de activul lunii | afișate: total, nr. linii, adăugări/eliminări pe multiset, **mutări între categorii** (agregat când împerecherea e ambiguă) | idem | — |
+
+Pe intermediar, regulile încălcate nu blochează, dar categoria lor e cea din §6.1 (ex. 625 fără partener intră la `exclus`, nu la cost) → nu se dublează nimic nici provizoriu.
+`nr_blocante_brute` se calculează la sigilare; **blocantele rămase** = brute minus familiile acoperite de o derogare; se recalculează în `activeaza`.
 
 ---
 
-## 7. Activarea — RPC `contab_expert_activeaza`
+## 7. RPC-uri
 
-`SECURITY DEFINER SET search_path = public, pg_temp`, `REVOKE EXECUTE FROM PUBLIC`, `GRANT` doar `authenticated`, proprietar cu privilegii minime. În ordine, într-o tranzacție:
-1. `auth.uid()` = om (nu contul de automatizare) cu capabilitatea „activează” **citită acum din BD** (nu din payload).
-2. `pg_advisory_xact_lock(hashtext('contab_expert'), hashtext(societate||luna))` — serializează inclusiv prima activare a lunii.
-3. Recitește importul: `stare='propus'`, sigilat, `nr_blocante=0` recalculat din linii (I2), `validation_hash` = cel văzut de om, `mapping_version`/`clasif_version` neschimbate de la sigilare (altfel: „validarea e învechită — revalidează”).
-4. Activul curent al lunii = cel văzut de om (`activ_vazut_id`); altfel refuz „între timp s-a schimbat activul — revezi comparația”.
-5. Ierarhie: intermediar peste final → refuz; final peste final = revizie (cere `motiv_revizie`).
-6. Vechiul activ → `inlocuit`; noul → `activ`; audit. Orice eroare → rollback total.
-7. Re-activarea unui import deja activ = idempotent (nu face nimic). Un `inlocuit` nu se reactivează niciodată (se reimportă ca revizie nouă).
+Toate: `SECURITY DEFINER SET search_path = public, pg_temp`, `REVOKE EXECUTE FROM PUBLIC`, `GRANT` doar `authenticated`, capabilitatea **citită din BD** pentru `auth.uid()` (niciodată din payload). Edge-ul le apelează cu JWT-ul utilizatorului.
 
-`contab_expert_respinge(import_id, motiv)` — aceeași poartă, fără lock de lună.
+### 7.1 Staging
+- `contab_expert_creeaza(cerere_id, luna, varianta, perioada_pana, storage_path_server, sha256_fisier)` — `contab_propune`; refuză `legacy`; idempotent pe `cerere_id`; refuză fișierul deja încărcat (§3).
+- `contab_expert_adauga_linii(import_id, batch jsonb)` — `contab_propune`, `propus_de = auth.uid()`, `FOR SHARE` pe părinte, `stare='procesare'`; valori ca text (§5.3); `ON CONFLICT (import_id, rand_fizic) DO NOTHING` doar dacă linia existentă e identică (altfel excepție).
+- `contab_expert_sigileaza(import_id, manifest)` — `FOR UPDATE` pe părinte; verificările §5.4; calculează destinație, clasă, familie, `categorie_bruta` pe fiecare linie cu configurarea curentă; îngheață `map_hash`, `clasif_hash`, `reguli_versiune`; scrie `raport_validare`, `nr_blocante_brute`; → `propus` sau `invalid`.
+- `contab_expert_tentativa_noua(import_id)` — `contab_propune`; sursa trebuie să fie `propus`; sub lock-ul lunar o trece în `depasit` și creează un import nou `procesare` cu `precedent_id`, același `storage_path`/`sha256_fisier`; edge-ul rerulează parserul.
+
+### 7.2 `validation_hash` — contract canonic (Copilot N3 / N05)
+Calculat **numai în SQL**, de funcția `contab_expert_validation_hash(import_id)`: sha256 peste serializarea canonică (JSON cu chei sortate, numere ca text zecimal canonic, linii sortate după `rand_fizic`) a:
+`societate, luna, varianta, perioada_de, perioada_pana, regim_venit, parser_versiune, sha256_fisier, manifest, map_hash, clasif_hash, reguli_versiune` · lista `(rand_fizic, hash_linie, destinatie_tip, destinatie_proiect_id, clasa, familie_regula, categorie_bruta)` · totalurile pe categorii **după derogări** · `raport_validare` · derogările active `(familie, tratament, clasa_noua, motiv, actor)` · `id`-ul activului curent al lunii și `validation_hash`-ul lui.
+Ecranul „Import propus” afișează hash-ul calculat de server; `activeaza` îl primește înapoi și îl recalculează. Orice diferență → „ce ai văzut nu mai e actual — reîncarcă ecranul”.
+
+### 7.3 `contab_expert_activeaza(import_id, hash_vazut, activ_vazut_id, confirm_regresie_fata_de, motiv_revizie)` — ordinea exactă (N06)
+1. Utilizator om, cu `contab_activeaza` (contul de automatizare e refuzat).
+2. `pg_advisory_xact_lock(hashtext('contab_expert'), hashtext(societate||luna))` — serializează și prima activare a lunii.
+3. **Reverifică dreptul după așteptarea lock-ului** (poate fi fost revocat între timp).
+4. **Ramura idempotentă:** dacă importul e deja `activ` → întoarce „deja activ”, fără efecte.
+5. `stare = 'propus'` (altfel refuz cu starea curentă).
+6. `contab_expert_validation_hash(import_id) = hash_vazut`.
+7. Blocante rămase = 0; dacă `final`: `clasif_hash` confirmat (§4.6), D6 confirmat (flag de configurare), perioada completă (CHECK).
+8. Activul curent al lunii = `activ_vazut_id` (NULL dacă nu există); altfel refuz „activul s-a schimbat — revezi comparația”.
+9. Ierarhie: intermediar peste final → refuz; final peste final → `motiv_revizie` obligatoriu; intermediar peste intermediar cu `perioada_pana` mai mică → `confirm_regresie_fata_de` trebuie să fie exact id-ul activului curent.
+10. `revizie` = max(revizie pe `(societate, luna, varianta)`) + 1, alocată aici (sub lock → fără „final r2” dublu).
+11. Vechiul activ → `inlocuit`; noul → `activ`; obligațiile §10 satisfăcute; audit. Orice eroare → rollback total.
+
+`contab_expert_respinge(import_id, motiv)` și `contab_expert_derogare(...)`: **același lock lunar** și aceeași reverificare a dreptului după lock → nu se pot intercala cu o activare. Schimbările de mapare/clasificare nu au nevoie de lock: candidatul e snapshot (I4), iar hash-ul lui nu depinde de configurarea curentă.
 
 ---
 
 ## 8. Securitate (fișa CLAUDE.md pct. 7)
 
-**Capabilități** (în `user_module_access`, sub-chei noi; se acordă DOAR cu acordul explicit al lui Răzvan):
+**Capabilități** (sub-chei noi în `user_module_access`; definite și testate cu identități de test în PR1, **acordate în producție DOAR cu acordul explicit al lui Răzvan**, exact cele cerute — D4):
 | Capabilitate | Cine (propunere) |
 |---|---|
-| `financiar.contab_propune` (upload) | Mirela, Marilena |
-| `financiar.contab_activeaza` | Marilena, owner |
-| `financiar.contab_mapare` (remapare contracte, clasificare conturi, aliasuri flotă) | Marilena, owner |
-| date personale (`persoana_nume`) | owner, `can_access_salarii` (ca azi) |
+| `financiar.contab_propune` (upload, tentativă nouă) | Mirela, Marilena |
+| `financiar.contab_activeaza` (activare, respingere) | Marilena, owner |
+| `financiar.contab_mapare` (contracte, matrice conturi, aliasuri flotă, confirmarea matricei) | Marilena, owner |
+| derogări (§4.7) | **doar owner** |
+| date personale (`contab_expert_linii_persoane`, fișier brut) | owner, `can_access_salarii` (+ `contab_activeaza` pentru fișierul brut) |
 | citire Contabilitate | owner + `financiar` (azi: orice autentificat — **se restrânge**) |
 | automatizare (faza 2) | doar `contab_propune` |
 
-- (a) Conținut extern: XLSX-ul (și în faza 2 mailul). Tratat ca date; textul din celule afișat ca text simplu (fără HTML), nu interpretat.
-- (b) Scrie: staging + linii (stare `procesare/propus/invalid`), storage. Activarea și remaparea doar prin RPC cu om. Nu trimite mail, nu atinge drepturi.
-- (c) Edge-ul folosește `service_role` doar pentru storage + insert în staging; **poarta de rol e în cod** (citește capabilitatea din BD pentru `auth.uid()` din JWT). `verify_jwt` rămâne activ.
-- (d) Cine pornește: doar utilizator cu `contab_propune`; calea veche `x-ingest-secret` se **închide**.
-- (e) Confirmare umană: activare, respingere, excepții, remapare, clasificare.
-- **Storage**: bucket privat dedicat `contabilitate` (nu `documente-proiect`), obiect creat de server la upload (`<societate>/<luna>/<uuid>.xlsx`), fără overwrite; edge-ul nu acceptă `storage_path` arbitrar de la client.
-- **RLS**: linii sigilate fără UPDATE/DELETE; `contab_contract_map` / `contab_cont_clasificare` scriere doar `contab_mapare` (se elimină politica ALL veche — politicile permisive se combină prin OR); `persoana_nume` **mascat** pentru cei fără drept (view `security_invoker` care întoarce `NULL` pe coloană), rândul și valoarea rămân vizibile — totalurile văzute de oricine cu drept de citire sunt complete (I7). Raport/diff/fișier brut: aceeași regulă de mascare; fișierul brut doar pentru `contab_activeaza`.
-- Rând în `public.automatizari` + secțiune în `registru_automatizari` (inclusiv cron-ul de reminder).
+- (a) Conținut extern: XLSX-ul. Tratat ca date; textul din celule se afișează ca text simplu (fără HTML) și nu e interpretat.
+- (b) Scrie: staging + linii (doar în `procesare`), storage. Activarea, respingerea, derogarea și maparea doar prin RPC cu om. Nu trimite mail, nu atinge drepturi.
+- (c) Edge-ul folosește `service_role` **doar pentru upload în storage**; toate scrierile în BD trec prin RPC-uri apelate cu JWT-ul utilizatorului → poarta de rol e în SQL. `verify_jwt` rămâne activ și, în plus, handler-ul verifică capabilitatea înainte de upload.
+- (d) Cine pornește: doar utilizator cu `contab_propune`; endpoint-ul vechi `contab-expert-import` și calea `x-ingest-secret` se **închid**.
+- (e) Confirmare umană: activare, respingere, derogare (owner), mapare, clasificare, confirmarea matricei.
+- **Storage:** bucket privat dedicat `contabilitate`, obiect creat de server (`<societate>/<luna>/<uuid>.xlsx`), fără overwrite, fără politică SELECT pentru `authenticated`; descărcare doar prin `contab_expert_fisier_url` (§4.3). Edge-ul nu acceptă `storage_path` de la client.
+- **RLS:** `contab_expert_importuri/_linii` SELECT pentru owner + `financiar`, fără politici de scriere pentru `authenticated`; dicționarele RPC-only; politica ALL veche pe `contab_santier_map` eliminată (politicile permisive se combină prin OR).
+- Rând în `public.automatizari` + secțiune în `registru_automatizari` (edge + cron reminder + job de curățenie).
 
 ---
 
 ## 9. Tab „Contabilitate” — ce afișează
 
-Doar importul **activ** al lunii (istoricul variantelor separat, pe un sub-tab). Antet: varianta, revizia, perioada, cine a activat, avertismentele acceptate.
+Doar importul **activ** al lunii (istoricul tentativelor și reviziilor pe un sub-tab). Antet: varianta, revizia, perioada, cine a activat, derogările și avertismentele acceptate, starea matricei (confirmată / provizorie).
 
 **Caseta de control lunar** (mereu vizibilă):
-- Venit ERP total = alocat proiectelor + **fără proiect** (anomalie vizibilă, nu blocantă) · data calculului (venitul ERP se poate schimba după activare).
-- Cheltuieli Expert total = proiecte + parc auto + investiții + centru intern + finanțare + avans + exclus — **închide la ban pe totalul fișierului**; `nealocat` = 0 (I3).
+- Venit ERP total = alocat proiectelor + **fără proiect** — afișat ca „reconciliere incompletă” când „fără proiect” ≠ 0 (nu blochează importul Expert: e o anomalie a ERP) · data calculului (venitul ERP se poate schimba după activare).
+- Cheltuieli Expert total = Σ categorii §6.1 (proiecte + parc auto + investiții + centru intern + finanțare + avans + exclus + de_clarificat) — egalitate **exactă** în `numeric`. Afișarea e la 2 zecimale; dacă suma valorilor rotunjite diferă de totalul rotunjit, se afișează explicit rândul „rotunjire afișare: x,xx” (N08).
 - Storno (sumă negativă) separat.
-- Iulie: badge „legacy — venit din contabilitate, include salarii; necomparabil cu lunile de după” + reconcilierea punctuală ERP 9.982.149,92 vs Expert 9.960.450,88 (Δ 21.699,04, de explicat pe documente).
-- Intermediar: badge „provizoriu, documente 01–17.09” și venitul ERP pe aceeași perioadă alături de cel pe toată luna.
 
-**Pe proiect**: venit ERP (statusuri `emisa`, `trimisa`; facturi negative incluse cu semn) − costuri Expert cu clasa `cost`/`stoc_consumat` = **„Marjă din export”** (nu „rezultat”). Sub ea, explicit: „nu include: salarii (Salarii), diurne (Diurne), costul utilajelor proprii (pontaj utilaje), cheltuieli centrale” (§11 D3). Parc auto, investiții, centru intern, finanțare — separate, nu intră în marja lucrărilor.
+**Venitul ERP (P03):** `facturi_emise.valoare_neta`, `status IN ('emisa','trimisa')`, facturi negative incluse cu semn, **`data` între `perioada_de` și `perioada_pana` ale importului activ** (pe intermediar: aceeași perioadă ca exportul; alături, informativ, venitul pe toată luna). RON (singura monedă în perimetrul fazei 1).
 
----
+**Pe proiect (regim `erp`):** venit ERP (regula de mai sus, pe `proiect_id`) − Σ linii cu categoria `proiect:<id>` = **„Marjă din export”** (nu „rezultat”). Sub ea, explicit: „nu include: salarii (Salarii), diurne (Diurne), costul utilajelor proprii (pontaj utilaje), cheltuieli centrale, finanțare, investiții”. Dacă importul are derogări, lista se completează automat cu efectul lor (ex. „include 625 fără partener tratat ca cost — derogare owner”).
 
-## 10. Reminder (pg_cron, Europe/Bucharest)
-
-Obligații pe `(luna, varianta)`: intermediar pentru 1–15 → **20** ale lunii; final pentru luna precedentă → **15**. Stări distincte în notificare: „fișierul lipsește” / „încărcat, dar nevalidat (invalid)” / „propus, așteaptă activare” / „activ ✓”. Notificare în platformă (`notifications`, fără mail automat) către Mirela + Marilena în ziua termenului; la **+2 zile calendaristice** fără `activ` → notificare către Răzvan. Cheie unică `(tip, luna, varianta, destinatar, etapa)` → idempotent la rerulări; monitorizare: rândul cron-ului în `automatizari` + ultima rulare.
+**Iulie (regim `expert_legacy`, N11):** se afișează **exact ca azi** (venit și cheltuieli din Expert, pe contract, fără reclasificare), cu badge „legacy — venit din contabilitate, include salarii și diurne; necomparabil cu lunile de după” și reconcilierea punctuală ERP 9.982.149,92 vs Expert 9.960.450,88 (Δ 21.699,04, de explicat pe documente). Formula de marjă nouă **nu** se aplică iuliei.
 
 ---
 
-## 11. Decizii de business (cer acordul lui Răzvan / al contabilității — implementarea pornește cu valorile propuse, editabile din UI)
+## 10. Reminder (pg_cron, Europe/Bucharest) — N13
 
-- **D1 — Matricea conturilor (§4.4)**: seed-ul propus e editabil; **Marilena îl confirmă o singură dată** în UI înainte de prima activare de final. Întrebarea cheie: 302/303 (materiale) = cost de proiect? 167 (leasing) și 471 (avans) în afara costului?
-- **D2 — Centrele interne (SEDIU, ACHIZITII, SANTIER-legacy)**: în faza 1 **nu se repartizează** pe proiecte, apar separat. O cheie de repartizare (pe venit / pe ore) e o decizie ulterioară.
-- **D3 — Numele indicatorului**: „Marjă din export” cu lista explicită a ce nu conține. Un P&L complet pe proiect (Expert + Salarii + Diurne + Utilaje) e alt proiect, după ce fiecare sursă are aceeași perioadă.
-- **D4 — Capabilitățile din §8** și cui se dau: **doar cu acordul explicit al lui Răzvan**, exact cele cerute.
-- **D5 — Calea mail (faza 2)**: amânată. Dacă Mirela nu adoptă upload-ul în 1–2 luni, se face un harvester determinist (expeditor permis, atașament `.xlsx`, message-id + attachment-id, limite), care doar **propune**.
+- Obligațiile (§4.10) se generează pentru fiecare lună: `intermediar` scadent pe **20** ale lunii, `final` pentru luna precedentă scadent pe **15**.
+- **Satisfacere durabilă:** o obligație se marchează `satisfacuta_de/_la` în momentul activării; un `final` activat satisface și obligația `intermediar` a aceleiași luni dacă era încă deschisă. Starea ulterioară a importului (ex. `inlocuit`) nu redeschide obligația.
+- Cron-ul zilnic tratează **toate** obligațiile scadente și nesatisfăcute (nu doar „azi = termen”) → o rulare ratată se recuperează la următoarea. Mesajul arată starea reală: „lipsește” / „încărcat, dar invalid” / „propus, așteaptă activare (și blocantele)” / „respins — reîncărcați”.
+- Notificare în platformă (`notifications`, fără mail automat) către Mirela + Marilena din ziua scadenței; la **+2 zile** → și către Răzvan. Cheie unică `(obligatie_id, destinatar, etapa)` → idempotent la rerulări. Monitorizare: rândul cron-ului în `automatizari` + ultima rulare.
 
 ---
 
-## 12. Migrare și cutover (o singură livrare coordonată, prin runner)
+## 11. Decizii (cine, când, ce blochează)
 
-1. **Înainte**: etalon iulie — `count`, sume pe contract, `sum(venit)`, `sum(cheltuiala)`, nr. linii cu persoană; inventar cititori (`Financiar.jsx` → `ContabilitateWMTab`, orice view/RPC care citește `contab_expert_*`).
-2. **Oprește calea veche**: `contab-expert-import` v12 → stub 410 (sau ștearsă) **în aceeași fereastră** cu migrarea (eliminarea `UNIQUE(luna)` rupe `upsert onConflict:'luna'`).
-3. Migrarea: coloane noi, stări, tabele noi, RLS, RPC-uri, seed mapare + clasificare, conversie iulie → `legacy/activ`, recalcul `destinatie_*`/`clasificare` pe liniile iulie și **compararea cu etalonul** (aceleași sume pe contract; diferențe = refuz în `$post$`).
-4. Frontend: tab-ul citește doar activul; ecranul de upload/propus/activare.
-5. Rollback planificat înainte de prima variantă nouă (după ce există 2 variante pe o lună, `UNIQUE(luna)` nu mai poate fi reintrodus).
-6. **Backfill**: aug final, apoi sep intermediar — **prin același flux uman** (upload de Marilena/Mirela sau de Răzvan, propus → activare), nu prin script. Aug intermediar nu se importă (înlocuit de final). Fișierele originale le are Răzvan în mail (thread-urile din 15.09 și 21.09).
+Implementarea pornește cu valorile propuse; asta **nu** înseamnă aprobarea schemei pentru APPLY, acordarea drepturilor sau validarea contabilă. Editările creează versiuni noi (hash nou), nu modifică liniile sigilate.
+
+| Decizie | Cine | Blochează PR1 (cod)? | Momentul obligatoriu |
+|---|---|---|---|
+| **D1** — matricea conturilor (302/303 = cost de proiect? 167 / 471 în afara costului?) | Marilena | nu (seed **neconfirmat**, confirmare pe hash implementată) | înainte de primul `final`; RPC-ul o impune |
+| **D2** — centrele interne (SEDIU, ACHIZITII) se afișează separat, fără repartizare pe proiecte | Răzvan | nu | o repartizare ulterioară = regulă nouă, versionată |
+| **D3** — indicatorul „Marjă din export” cu lista explicită a ce nu conține | Răzvan | nu | înainte de acceptarea UI |
+| **D4** — capabilitățile §8 și cui se dau | **Răzvan, explicit** | nu (identități de test) | înainte de acordarea în producție; activarea nu include automat accesul la date personale |
+| **D5** — calea mail (faza 2) amânată; harvester determinist doar dacă upload-ul nu e adoptat în 1–2 luni | Răzvan | nu | contract și review separate |
+| **D6** — exportul „holding” conține doar Gazpet Instal SRL, în RON | Marilena / Mirela | nu | înainte de prima activare nouă (flag în configurare) |
+| **D7** — gestiunea (auto + șofer) rămâne vizibilă celor cu drept de citire (propunere) sau trece în tabelul personal | Răzvan | **da** (schimbă schema §4.3) | înainte de schema PR1 |
+| **D8** — iulie: rămâne legacy (propunere) sau se reîncarcă ulterior prin fluxul nou, ca `final`, cu derogări owner pe venit/64/625 | Răzvan | nu (implicit: rămâne legacy) | oricând după livrare |
+
+---
+
+## 12. Migrare și cutover (N11–N12)
+
+1. **Înainte**: etalon iulie — `count`, sume pe contract, `sum(venit)`, `sum(cheltuiala)`, nr. linii cu persoană, plus ieșirea actuală a tab-ului (sumar pe șantier) salvată ca fixture; inventarul cititorilor (`Financiar.jsx` → `ContabilitateWMTab`, orice view/RPC care citește `contab_expert_*` sau `contab_santier_map`).
+2. **PR1a — aditiv și compatibil** (se poate aplica singur): tabele noi, coloane noi nullable, RPC-uri, trigger-e, seed mapare + clasificare, obligații. Tab-ul vechi continuă să funcționeze neschimbat.
+3. **PR1b — restrictiv**, aplicat **doar în aceeași fereastră cu deploy-ul PR3** (cititorii compatibili): mută `persoana_nume` în `contab_expert_linii_persoane` (iulie: 357 linii), restrânge RLS, elimină politica ALL și `UNIQUE(luna)`, marchează iulie `legacy/activ/expert_legacy` **fără a recalcula destinații sau clase** (rămân NULL; afișarea legacy folosește coloanele vechi), oprește `contab-expert-import` v12 (stub 410). `$post$`: etalonul iulie identic (sume, numărători, inclusiv numele mutate 1:1).
+4. **Rollback:** script în `supabase/revenire/` pentru fiecare migrare, armat înainte de APPLY; criteriu de oprire = etalon diferit sau tab-ul vechi/nou nu încarcă iulie. După ce o lună are 2 variante, `UNIQUE(luna)` nu mai poate fi reintrodus — rollback-ul PR1b e valabil doar până la primul backfill.
+5. **Backfill**: aug final, apoi sep intermediar — **prin același flux uman** (upload de Marilena/Mirela sau de Răzvan → propus → activare), nu prin script. Aug intermediar nu se importă (înlocuit de final). Sep final: 15.10, prin fluxul normal.
 
 ---
 
 ## 13. Teste minime (criteriu de acceptare)
 
-**Parser (unit, pe fixture-uri sintetice + cele 3 originale):** antet exact / B1 gol / „Inca”+„drare” / coloană mutată, lipsă, în plus / două foi candidate; clasificarea fiecărui rând (subtotaluri iulie, `T O T A L   G E N E R A L`, gol la final, rând necunoscut, `nr_crt` text/fracționar/repetat, goluri); sume int/float/3 zecimale/negative/text românesc/ambiguu/`#VALUE!`/gol; date 31.02, an bisect, serial Excel; document „F”, cont numeric 303 → text, `... ...`; total prezent corect / greșit cu 0,009 / 0,011 / repetat / lipsă; formule, foi ascunse, fișier corupt, peste limite. **Pe originale**: 1.684 / 1.199 / 517 rânduri, cele 20 goluri din aug, sumele exacte din §1.
+**Parser (unit, fixture-uri sintetice + cele 3 originale):** antet exact / B1 gol / „Inca”+„drare” / coloană mutată, lipsă, în plus / două foi candidate; clasificarea fiecărui rând (subtotaluri iulie cu celule îmbinate, `T O T A L   G E N E R A L`, gol la final, rând necunoscut, `nr_crt` text/fracționar/repetat, goluri); sume int/float/3 zecimale/**5 zecimale → invalid**/**13 cifre → invalid**/negative/text românesc/ambiguu/`#VALUE!`/gol; date 31.02, an bisect, serial Excel; document „F”, cont numeric 303 → text, `... ...`; total prezent corect / greșit / repetat / lipsă; formule, foi ascunse, fișier corupt, ZIP-bombă, peste limite. **Pe originale**: 1.684 / 1.199 / 517 rânduri, cele 20 goluri din aug, sumele exacte din §1.
 
 **SQL real (Postgres 17, rol non-superuser, RLS reală — modelul `scripts/pg/test_*.mjs` + pas în CI):**
-- staging: eșec la batch 2 → nimic activabil; retry fără duplicate; sigilare cu manifest greșit → refuz; UPDATE pe linie sigilată → refuz.
-- activare: propus valid / invalid / respins / înlocuit; intermediar peste final → refuz; final r2 cu motiv; idempotență pe activ; retry întârziat după înlocuire → refuz; eroare injectată după dezactivarea vechiului → rollback, vechiul rămâne activ.
-- concurență: două sesiuni activează pe aceeași lună (cu și fără activ anterior) — a doua așteaptă lock-ul (observat în `pg_locks`) și e refuzată ca „activul s-a schimbat”; luni diferite nu se blochează; remapare în timpul review-ului → validarea veche respinsă.
-- roluri: anon, autentificat fără financiar, `contab_propune`, `contab_activeaza`, `contab_mapare`, owner, cont de automatizare (doar propune), rol revocat înainte de activare, RPC apelat direct, DML direct pe mapări/stări/linii → refuz; `EXECUTE` revocat de la PUBLIC; politica ALL veche eliminată.
-- confidențialitate: utilizator fără drept salarial vede totalul complet și `persoana_nume` NULL; fișierul brut inaccesibil fără `contab_activeaza`; obiect din alt prefix inaccesibil.
-- migrare: etalonul iulie identic înainte/după.
+- **staging**: eșec la batch 2 → nimic activabil; retry cu același `cerere_id` și același batch → fără dubluri; batch modificat pe același `rand_fizic` → excepție; **INSERT după sigilare → refuz (inclusiv ca `service_role`)**; **batch concurent cu sigilarea (două sesiuni, așteptare observată în `pg_locks`) → batch-ul refuzat după commit-ul sigilării**; UPDATE pe metadatele unui import sigilat → refuz; manifest incomplet / versiune necunoscută → `invalid`.
+- **categorii (§6.1)**: 167/proiect → `finantare`; 205/SEDIU → `investitii`; 64/proiect → `exclus`; cont necunoscut → `de_clarificat`; nemapat cu sold negativ și cu sold zero (+100/−100) → blocant; Σ categorii = total exact; 0,004 + 0,004 vs total → rândul de rotunjire la afișare.
+- **reguli și derogări**: aceeași familie pe intermediar vs final, cu/fără derogare, verificând **categoria și suma rezultată**, nu doar avertismentul; derogare de non-owner → refuz; derogare pe familie nederogabilă → refuz; derogare din payload cu `nr_linii` fals → ignorat (recalculat); derogare pe alt candidat; derogare adăugată după ce omul a văzut hash-ul → activare refuzată.
+- **activare**: propus valid / invalid / respins / depășit / înlocuit; intermediar peste final → refuz; final cu perioadă parțială → imposibil; final cu matrice neconfirmată → refuz, apoi confirmare pe același hash → OK; final r2 cu motiv și revizie alocată corect; idempotență pe activ (pasul 4 înaintea pasului 5); regresie de intermediar fără / cu `confirm_regresie_fata_de` corect; eroare injectată după dezactivarea vechiului → rollback, vechiul rămâne activ.
+- **concurență (două sesiuni)**: două activări pe aceeași lună (cu și fără activ anterior) — a doua așteaptă lock-ul și e refuzată „activul s-a schimbat”; luni diferite nu se blochează; respinge vs activează; derogare vs activare; **drept revocat cât activarea așteaptă lock-ul → refuz**; remapare în timpul review-ului → candidatul neschimbat, hash neschimbat; tentativă nouă → candidat nou cu maparea nouă, cel vechi `depasit` și neatins.
+- **roluri**: anon, autentificat fără financiar, `contab_propune`, `contab_activeaza`, `contab_mapare`, owner, cont de automatizare (doar propune), RPC apelat direct, DML direct pe mapări/stări/linii → refuz; `EXECUTE` revocat de la PUBLIC; politica ALL veche eliminată.
+- **confidențialitate**: utilizator fără drept salarial vede toate rândurile și totalul complet, nu poate citi `contab_expert_linii_persoane` (SELECT direct → 0 rânduri), nu obține URL pentru fișierul brut; activator fără `can_access_salarii` → nu obține fișierul brut; raport/diff/audit fără nume.
+- **venit și marjă (N14)**: venit ERP fără proiect și facturi negative păstrate în casetă; marja intermediarului folosește aceeași perioadă; iulie legacy afișată identic cu etalonul; mutare între categorii cu total neschimbat apare în diff.
+- **reminder**: intermediar activat apoi înlocuit de final → obligația rămâne satisfăcută; cron ratat în ziua scadenței → recuperat a doua zi; rerulare → fără notificări duble.
+- **edge**: fără JWT / JWT fără `contab_propune` → 401/403 înainte de upload; `storage_path` din client ignorat; endpoint vechi → 410.
+- **migrare**: etalonul iulie identic înainte/după PR1a și PR1b; tab-ul vechi funcționează după PR1a.
 
 ---
 
-## 14. Ordinea de implementare recomandată (PR-uri mici)
+## 14. Ordinea de implementare (PR-uri mici; merge ≠ APPLY)
 
-1. **PR1 — Migrare + RPC-uri + teste SQL** (fără UI): schema, stări, mapare tipizată, clasificare, RLS, sigilare, activare, conversie iulie, oprirea v12. Review Jakarinos + Copilot GO MERGE / GO APPLY (SHA). Apply cu OK Răzvan pe schemă.
+1. **PR1 — Migrări (1a aditivă, 1b restrictivă) + RPC-uri + teste SQL** (fără UI). Review Jakarinos + Copilot GO MERGE / GO APPLY (SHA). APPLY 1a cu OK-ul lui Răzvan pe schemă; **1b doar împreună cu PR3**.
 2. **PR2 — Edge `contab-expert-propune` + parser v1 + teste unit** pe cele 3 originale.
-3. **PR3 — UI**: upload, ecran „Import propus” (blocante/avertismente/diff/excepții), activare, mapare contracte, matricea conturilor, caseta de control, tab refăcut.
+3. **PR3 — UI**: upload, ecran „Import propus” (categorii/blocante/avertismente/diff/derogări/hash), activare, mapare contracte, matricea conturilor + confirmare, caseta de control, tab refăcut (inclusiv afișarea legacy). Deploy coordonat cu APPLY 1b.
 4. **PR4 — Reminder cron** + rând `automatizari` + `registru_automatizari`.
 5. **Backfill** aug final + sep intermediar prin UI, cu Marilena. Sep final: 15.10 prin fluxul normal.
 
@@ -312,4 +410,6 @@ Obligații pe `(luna, varianta)`: intermediar pentru 1–15 → **20** ale lunii
 |---|---|---|---|
 | r1 (06.10, v1) | Copilot | GO cu condiții | 8 P0: staging atomic, activare serializată + revalidare, destinație obligatorie, mapare înghețată, reguli de dublare blocante pe final, sume decimale, venit fără proiect în control, RLS care nu ascunde valoarea |
 | r1 (06.10, v1) | Jakarinos | de refăcut | 22 probleme (11 blocante): definiția rezultatului, clasificarea conturilor, statusuri venit ERP, staging, concurență, capabilități, RLS persoană, mapare, antet 12 coloane, clasificare rânduri, conversii stricte, migrare/cutover; corecție cifre SANTIER sep |
-| r2 (v2) | — | în curs | |
+| r2 (06.10, v2) | Copilot | NO-GO punctual („foarte aproape”) | P0.2/P0.6/P0.7 închise; 5 corecții: lock comun insert/sigilare + UNIQUE(import_id, rand_fizic); destinație ⟂ clasificare cu precedență; snapshot imuabil vs versiuni (varianta A) + versiuni globale; `validation_hash` canonic + derogări tipizate; PII fără view `security_invoker`; final = lună întreagă; P1: revizie alocată server-side, `invalid` terminal |
+| r2 (06.10, v2) | Jakarinos | de refăcut punctual | P10/P11/P13/P17/P20/P22 închise; N01–N15: funcție unică de categorie, tentative noi pentru revalidare, reguli unice (INVESTITII 213, 625 condițional), derogări cu dovadă în hash, sigiliu complet + manifest, ordinea idempotenței + lock comun la respingere, PII + fișier brut + gestiune, precizie fără rotunjire tăcută, final parțial, confirmarea D1 pe versiune, iulie conservată, PR1 aditiv vs restrictiv, obligații durabile la reminder, teste financiare, perimetru o singură societate |
+| r3 (v3) | — | în curs | |
