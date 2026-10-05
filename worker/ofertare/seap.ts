@@ -224,7 +224,7 @@ export async function descarca(doc: DocSeap, cookie: string, tinta: string, semn
 const sha256 = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map(x => x.toString(16).padStart(2, '0')).join('')
 
 // -- Urcarea unui fișier + rândul în BD (aceleași reguli ca ofertare-seap-import) ---------------------------
-async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Array, placeholders: Map<string, number>): Promise<string | { id: number }> {
+async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Array, placeholders: Map<string, number>, extra: Record<string, unknown> = {}): Promise<string | { id: number }> {
   if (buf.length > MAX_FISIER_STORAGE) return `peste limita de stocare (${Math.round(buf.length / 2 ** 20)} MB > 200 MB)`
   const estePdf = /\.pdf$/i.test(numeFinal) || (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46)
   const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180)
@@ -236,6 +236,7 @@ async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Arra
     status_procesare: estePdf ? 'neprocesat' : 'ignorat',
     eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
     sursa: 'seap',
+    ...extra,
   }
   const idPh = placeholders.get(cheieNume(numeFinal))
   const { data, error } = idPh
@@ -485,5 +486,164 @@ export async function proceseazaSeap(supa: Supa, oprire: () => boolean, stare: (
       })
     }
   }
+  if (!oprire()) {
+    try { await despacheteazaArhiveDinPlatforma(supa, stare, oprire) } catch (e) { log('arhive din platformă:', (e as Error)?.message ?? e) }
+  }
   if (!oprire()) await verificarePeriodica(supa, stare)
+}
+
+// -- Arhivele ajunse în platformă (veghe SEAP sau urcate de om) — 05.10.2026, regula permanentă (Răzvan, var. A) --------
+// Veghea (edge) urcă răspunsurile și republicările din NoticeDocument/GetAll ca fișier ÎNTREG: nu poate despacheta.
+// Mânăstirea, 02.10: DOC_F1_F6_C1_C9.rar (60 MB) a stat „neprocesat”, iar reconcilierea de mai sus îl socotea „deja adus”
+// (același nume în BD). Aici: orice document cu nume de arhivă, nedespachetat, trece prin ACELAȘI extractor izolat și
+// aceleași controale (verificaListare, limitele extractorului). Fiecare fișier devine document separat, cu numele prefixat
+// de arhivă („DOC_F1_F6_C1_C9/F3_….pdf”): o republicare poate avea aceleași nume ca documentația inițială și nu le
+// amestecăm. Fără AI și fără cost: citirea rămâne pornită de om. Un grup (arhivă sau set de volume RAR) pe tură.
+export const ARHIVA_DOC_RE = /\.(zip|rar|7z)(\.p7s)?$/i
+export const MARCAJ_DESPACHETARE = 'Despachetare în curs (worker NAS)'
+const STARI_ARHIVA = ['neprocesat', 'ignorat', 'eroare']
+type DocArhiva = { id: number; licitatie_id: number; nume_original: string; fisier_path: string | null; status_procesare: string | null; eroare: string | null; tip: string | null; seap_cod: string | null; aparut_ulterior: boolean | null }
+
+/** Documentul e o arhivă urcată efectiv, încă nedespachetată (și nici respinsă / eșuată la o despachetare anterioară). */
+export function eArhivaDeDespachetat(d: Partial<DocArhiva>): boolean {
+  return ARHIVA_DOC_RE.test(d.nume_original || '') && !estePlaceholder(d as { fisier_path?: string | null })
+    && STARI_ARHIVA.includes(d.status_procesare || '') && !/^(📦 Arhivă despachetată|Despachetare)/.test(d.eroare || '')
+}
+/** „DOC_F1_F6_C1_C9.rar” → „DOC_F1_F6_C1_C9”; „X.part02.rar.p7s” → „X” (prefixul documentelor extrase). */
+export const prefixArhiva = (nume: string) => nume.replace(/\.p7s$/i, '').replace(/\.part\d+[^./\\]*\.rar$/i, '')
+  .replace(/\.(zip|rar|7z)$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva'
+/** Grupuri de despachetat: volumele RAR ale aceleiași arhive (aceeași licitație) împreună, restul câte unul. */
+export function grupeazaArhive(docs: DocArhiva[]): DocArhiva[][] {
+  const g = new Map<string, DocArhiva[]>()
+  for (const d of docs) {
+    const v = volumRar(d.nume_original.replace(/\.p7s$/i, ''))
+    const k = `${d.licitatie_id}|${v ? 'rar:' + v.baza.toLowerCase() : 'd:' + d.id}`
+    g.set(k, [...(g.get(k) || []), d])
+  }
+  return [...g.values()]
+}
+
+let arhiveCuratate = false
+let arhivePauzaPana = 0     // extractorul nu răspunde → nu-l mai întrebăm la fiecare tură
+export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: string) => void, oprire: () => boolean = () => false): Promise<void> {
+  if (!arhiveCuratate) {     // marcaj rămas dintr-o oprire bruscă: arhiva se reia (un singur worker)
+    arhiveCuratate = true
+    await supa.from('ofertare_documente_atribuire').update({ status_procesare: 'neprocesat', eroare: null })
+      .eq('status_procesare', 'in_lucru').eq('eroare', MARCAJ_DESPACHETARE)
+  }
+  if (Date.now() < arhivePauzaPana) return
+  const { data: cand, error } = await supa.from('ofertare_documente_atribuire')
+    .select('id, licitatie_id, nume_original, fisier_path, status_procesare, eroare, tip, seap_cod, aparut_ulterior')
+    .in('status_procesare', STARI_ARHIVA)
+    .or('nume_original.ilike.%.zip,nume_original.ilike.%.rar,nume_original.ilike.%.7z,nume_original.ilike.%.zip.p7s,nume_original.ilike.%.rar.p7s,nume_original.ilike.%.7z.p7s')
+    .order('id').limit(50)
+  if (error) { log(`arhive din platformă: ${error.message}`); return }
+  const deFacut = ((cand || []) as DocArhiva[]).filter(eArhivaDeDespachetat)
+  for (const grup of grupeazaArhive(deFacut)) {
+    if (oprire()) return
+    if (grup.length > 1 || volumRar(grup[0].nume_original.replace(/\.p7s$/i, ''))) {
+      const lipsa = verificaVolume(grup.map(d => volumRar(d.nume_original.replace(/\.p7s$/i, ''))?.nr ?? 0))
+      if (lipsa) { log(`#${grup[0].licitatie_id}: ${prefixArhiva(grup[0].nume_original)} — aștept: ${lipsa}`); continue }
+    }
+    await despacheteazaGrup(supa, grup, stare)
+    return     // un grup pe tură: nu ține bucla SEAP ocupată
+  }
+}
+
+async function despacheteazaGrup(supa: Supa, grup: DocArhiva[], stare: (s: string) => void): Promise<void> {
+  const licId = grup[0].licitatie_id, ids = grup.map(d => d.id)
+  // revendicare: doar dacă nimeni nu le-a schimbat între timp (Procesează / om)
+  const { data: luate } = await supa.from('ofertare_documente_atribuire').update({ status_procesare: 'in_lucru', eroare: MARCAJ_DESPACHETARE })
+    .in('id', ids).in('status_procesare', STARI_ARHIVA).select('id')
+  if ((luate || []).length !== ids.length) {
+    if (luate?.length) await supa.from('ofertare_documente_atribuire').update({ status_procesare: 'neprocesat', eroare: null })
+      .in('id', (luate as { id: number }[]).map(x => x.id)).eq('eroare', MARCAJ_DESPACHETARE)
+    return
+  }
+  const termina = (status: string, eroare: string | null) => supa.from('ofertare_documente_atribuire')
+    .update({ status_procesare: status, eroare: eroare === null ? null : eroare.slice(0, 500) }).in('id', ids).eq('eroare', MARCAJ_DESPACHETARE)
+  const prefix = prefixArhiva(grup[0].nume_original)
+  const eticheta = grup.length > 1 ? `${prefix} (${grup.length} volume)` : grup[0].nume_original
+  await Deno.mkdir(LUCRU, { recursive: true })
+  const tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_arh_${licId}_` })
+  await Deno.chmod(tmp, 0o755)
+  try {
+    const dir = `${tmp}/0`
+    await pregatesteJob(dir)
+    const cifre = Math.max(1, ...grup.map(d => d.nume_original.match(/\.part(\d+)/i)?.[1].length ?? 1))
+    grup.sort((a, b) => (volumRar(a.nume_original.replace(/\.p7s$/i, ''))?.nr ?? 0) - (volumRar(b.nume_original.replace(/\.p7s$/i, ''))?.nr ?? 0))
+    const locale: string[] = []
+    for (const d of grup) {
+      stare(`arhivă din platformă: descarc ${d.nume_original}`)
+      const { data: blob, error } = await supa.storage.from(BUCKET).download(d.fisier_path!)
+      if (error || !blob) { await termina('eroare', `Despachetare eșuată (descărcare din Storage ${d.nume_original}): ${error?.message ?? 'fișier gol'}`); return }
+      let buf = new Uint8Array(await blob.arrayBuffer())
+      let nume = d.nume_original
+      if (/\.p7s$/i.test(nume)) {
+        try { buf = continutP7s(buf) } catch (e) { await termina('eroare', `Despachetare eșuată (semnătura .p7s a ${d.nume_original}): ${(e as Error)?.message ?? e}`); return }
+        nume = nume.replace(/\.p7s$/i, '')
+      }
+      const vol = volumRar(nume)
+      const cale = `${dir}/in/${(vol ? numeVolum(vol, cifre) : nume).replace(/[\\/]/g, '_')}`
+      await Deno.writeFile(cale, buf)
+      locale.push(cale)
+    }
+    const lst = await listeazaIzolat(dir, locale[0].split('/').pop()!)
+    if (lst.code === -1) {   // extractorul oprit: nu e vina arhivei — o reluăm mai târziu
+      arhivePauzaPana = Date.now() + 30 * 60_000
+      log(`#${licId}: ${eticheta}: ${lst.err} — reiau peste 30 min`)
+      await termina('neprocesat', null)
+      return
+    }
+    const v = lst.code === 0 ? verificaListare(lst.out) : { ok: false as const, motiv: `7z l: ${(lst.err || lst.out).slice(-300)}` }
+    if (!v.ok) { await termina('eroare', `Despachetare ${lst.code === 0 ? 'RESPINSĂ de controalele de siguranță' : 'eșuată (listare)'}: ${v.motiv}`); return }
+    stare(`arhivă din platformă: despachetez ${eticheta} (${v.intrari} fișiere, ${Math.round(v.total / 2 ** 20)} MB)`)
+    const x = await extrageIzolat(dir)
+    if (x.code === -1) {
+      arhivePauzaPana = Date.now() + 30 * 60_000
+      log(`#${licId}: ${eticheta}: ${x.motiv} — reiau peste 30 min`)
+      await termina('neprocesat', null)
+      return
+    }
+    if (x.code !== 0) { await termina('eroare', `Despachetare ${/^(LIMITĂ|RESPINS)/.test(x.motiv) ? 'RESPINSĂ' : 'eșuată'} (extragere, cod ${x.code}): ${x.motiv.slice(0, 300)}`); return }
+    for (const c of locale) await Deno.remove(c).catch(() => {})
+    // o reluare (ex. după o urcare parțială) nu dublează: comparăm doar cu documentele care au deja prefixul arhivei
+    const { data: existente } = await supa.from('ofertare_documente_atribuire').select('id, nume_original').eq('licitatie_id', licId)
+    const urcate = new Set(((existente || []) as { nume_original: string }[]).filter(d => (d.nume_original || '').startsWith(`${prefix}/`)).map(d => cheieNume(d.nume_original)))
+    const parinte = grup[0]
+    let extrase = 0, deja = 0
+    const erori: string[] = []
+    for await (const f of fisiereDin(`${dir}/out`)) {
+      const numeFinal = `${prefix}/${f.rel}`
+      if (JUNK_RE.test(f.rel)) { await Deno.remove(f.cale); continue }
+      if (urcate.has(cheieNume(numeFinal))) { deja++; await Deno.remove(f.cale); continue }
+      stare(`arhivă din platformă: urc ${numeFinal}`)
+      const buf = await Deno.readFile(f.cale)
+      const tipPropriu = ghicesteTip(f.rel.split('/').pop() || f.rel)
+      const r = await urca(supa, licId, numeFinal, buf, new Map(), {
+        tip: tipPropriu === 'alta' && parinte.tip ? parinte.tip : tipPropriu,
+        seap_cod: parinte.seap_cod ?? null, aparut_ulterior: parinte.aparut_ulterior ?? null,
+      })
+      if (typeof r === 'string') erori.push(`${f.rel}: ${r}`)
+      else { extrase++; urcate.add(cheieNume(numeFinal)) }
+      await Deno.remove(f.cale)
+    }
+    if (erori.length && !extrase && !deja) { await termina('eroare', `Despachetare eșuată (urcare): ${erori.slice(0, 3).join(' | ')}`); return }
+    const nota = `📦 Arhivă despachetată pe Terra: ${extrase} fișiere noi în platformă, cu numele „${prefix}/…”${deja ? `, ${deja} existau deja` : ''}`
+      + `${erori.length ? ` — ${erori.length} neurcate: ${erori.slice(0, 3).join(' | ')}` : ''}. Arhiva rămâne ca fișier.`
+    await termina('ignorat', nota)
+    log(`#${licId}: ${eticheta}: despachetată — ${extrase} noi, ${deja} existau, ${erori.length} erori`)
+    // cine se ocupă de licitație află că are documente noi de citit (fără AI pornit automat)
+    const { data: lic } = await supa.from('ofertare_licitatii').select('responsabil_id, nr_anunt').eq('id', licId).maybeSingle()
+    if (extrase && lic?.responsabil_id) {
+      await supa.from('notifications').insert({
+        profile_id: lic.responsabil_id, type: erori.length ? 'warning' : 'info', modul: 'Ofertare',
+        title: `Ofertare: arhivă despachetată (${lic.nr_anunt || '#' + licId})`,
+        message: `${eticheta}: ${extrase} documente noi în platformă${erori.length ? `, ${erori.length} neurcate` : ''}. Citește-le cu AI doar pe cele de care ai nevoie.`,
+        link_to: '/ofertare',
+      })
+    }
+  } finally {
+    await Deno.remove(tmp, { recursive: true }).catch(() => {})
+  }
 }

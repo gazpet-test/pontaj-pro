@@ -105,6 +105,7 @@ jobs:
           supabase/functions/ofertare-document-nou-citeste
           supabase/functions/ofertare-poarta-text
           worker/ofertare/plansa_test.ts
+          worker/ofertare/arhive_platforma_test.ts
       # J04: testul node:test importă handler-ul .ts, deci rulează sub Deno (Node 20 nu elimină tipurile).
       - name: Hash pe server J04 - logica edge, poarta si paritatea rolurilor
         run: deno test -A --node-modules-dir=none scripts/test-jakv202-hash-server.mjs

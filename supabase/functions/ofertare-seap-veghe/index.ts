@@ -597,7 +597,7 @@ Deno.serve(async (req: Request) => {
           <p>Autoritatea a publicat <b>${raspunsuri.length} document(e)</b> care par raspuns la clarificari sau modificare a documentatiei.</p>
           <p><b>Licitatie:</b> ${esc(lic.nr_anunt || '')} — ${esc(lic.obiect || '')}<br>
              <b>Termen depunere:</b> ${termenRO(lic.termen_depunere) || '—'}</p>
-          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(n)}${urcate.has(cheieNume(n)) ? (/\.(rar|7z|zip)$/i.test(n) ? ' <i>(arhiva — platforma nu o despacheteaza: dezarhiveaz-o local si urca fisierele din ea)</i>' : '') : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
+          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(n)}${urcate.has(cheieNume(n)) ? (/\.(rar|7z|zip)$/i.test(n) ? ' <i>(arhiva — serverul o despacheteaza singur in cateva minute; fisierele apar ca documente separate, cu numele arhivei in fata)</i>' : '') : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
           ${raspunsuriAduse.length ? `<p><b>${raspunsuriAduse.length}</b> dintre ele sunt <b>raspunsuri publicate de autoritate</b>, aduse automat din SEAP. Se citesc din <b>Ofertare &rarr; &#10067; Clarificari</b>.</p>` : ''}
           ${neaduse.length ? '<p><b>Atentie:</b> nu toate au intrat automat in platforma.</p>' : '<p>Toate au fost aduse automat in platforma.</p>'}
           <p>Citeste-le si treci intrebarea si raspunsul in <b>Clarificari</b>. Daca raspunsul schimba o cerinta, actualizeaza cerinta din registru.</p>
