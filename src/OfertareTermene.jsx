@@ -21,7 +21,8 @@ const inputMic = { width:54, background:G.bg, border:`1px solid ${G.border2}`, b
 export default function OfertareTermene({ licitatie: l }) {
   const [docs, setDocs] = useState(null)                   // null = se încarcă; [] = nimic
   const [fisa, setFisa] = useState(null)                   // null = se încarcă; { zileIntrebari, zileRaspuns, docId, lipsa }
-  const [eroare, setEroare] = useState(null)
+  const [eroare, setEroare] = useState({ acte: null, fisa: null })   // separate: o eroare la fișă nu înseamnă că actele lipsesc
+  const idCurent = useRef(null)                            // resetul se face DOAR când se schimbă licitația, nu când apare/dispare termenul
   const [zile, setZile] = useState({ intrebari: '', raspuns: '' })   // override uman — doar în ecran
   const editat = useRef({ intrebari: false, raspuns: false })   // câmpurile atinse de om nu sunt suprascrise de încărcare (per câmp)
   const [tick, setTick] = useState(0)                      // „azi” se recalculează și dacă modalul stă deschis peste miezul nopții
@@ -30,8 +31,11 @@ export default function OfertareTermene({ licitatie: l }) {
   useEffect(() => {
     let viu = true
     // Licitație nouă în aceeași instanță: starea veche nu rămâne afișată lângă termenul/valoarea celei noi.
-    // Resetul NU se face la schimbarea termenului aceleiași licitații (ar pierde corecțiile omului — review Jakarinos r2, N1).
-    setDocs(null); setFisa(null); setEroare(null); setZile({ intrebari: '', raspuns: '' }); editat.current = { intrebari: false, raspuns: false }
+    // Resetul NU se face la schimbarea sau dispariția/reapariția termenului aceleiași licitații (ar pierde corecțiile omului — r2 N1, r3).
+    if (idCurent.current !== l.id) {
+      idCurent.current = l.id
+      setDocs(null); setFisa(null); setEroare({ acte: null, fisa: null }); setZile({ intrebari: '', raspuns: '' }); editat.current = { intrebari: false, raspuns: false }
+    }
     if (!areTermen) return
     // Actele: ultimele LIMITA_ACTE după dată (cele recente contează pentru contestație); includem și eratele marcate de citirea AI
     // pe documente care nu sunt nici „apărute ulterior”, nici răspunsuri. Fișa: cifrele vin din TEXTUL EXTRAS, nu din rezumatul AI.
@@ -39,12 +43,13 @@ export default function OfertareTermene({ licitatie: l }) {
       .select('id, nume_original, tip, aparut_ulterior, created_at, citire:analiza->citire_noi')
       .eq('licitatie_id', l.id).or('aparut_ulterior.eq.true,tip.eq.raspuns_clarificare,analiza->citire_noi->>tip.eq.erata')
       .order('created_at', { ascending: false }).limit(LIMITA_ACTE)
-      .then(({ data, error }) => { if (!viu) return; if (error) setEroare(e => (e ? e + ' · ' : '') + 'actele: ' + error.message); setDocs(error ? [] : (data || [])) })
+      .then(({ data, error }) => { if (!viu) return; setEroare(e => ({ ...e, acte: error ? error.message : null })); setDocs(error ? [] : (data || [])) })
     supabase.from('ofertare_documente_atribuire')
       .select('id, text_extras').eq('licitatie_id', l.id).eq('tip', 'fisa_date').not('text_extras', 'is', null).order('id').limit(3)
       .then(({ data, error }) => {
         if (!viu) return
-        if (error) { setEroare(e => (e ? e + ' · ' : '') + 'fișa: ' + error.message); setFisa({ zileIntrebari: null, zileRaspuns: null, lipsa: false, eroare: true }); return }
+        setEroare(e => ({ ...e, fisa: error ? error.message : null }))
+        if (error) { setFisa({ zileIntrebari: null, zileRaspuns: null, lipsa: false, eroare: true }); return }
         const f = combinaFise(data || [])
         setFisa({ ...f, lipsa: !(data || []).length })
         setZile(z => ({ intrebari: editat.current.intrebari ? z.intrebari : (f.zileIntrebari ?? ''), raspuns: editat.current.raspuns ? z.raspuns : (f.zileRaspuns ?? '') }))
@@ -57,6 +62,7 @@ export default function OfertareTermene({ licitatie: l }) {
   const nr = v => { if (v === '' || v == null) return null; const n = Number(v); return Number.isInteger(n) && n >= 0 && n <= 365 ? n : null }
   const invalid = v => v !== '' && v != null && nr(v) == null
   const incarcat = docs !== null && fisa !== null
+  const vreoEroare = !!(eroare.acte || eroare.fisa)
   const trunchiat = (docs?.length || 0) >= LIMITA_ACTE   // lista poate fi incompletă → nicio concluzie categorică
   const calc = useMemo(() => calculeazaTermene({
     termenDepunere: l.termen_depunere, zileIntrebari: nr(zile.intrebari), zileRaspuns: nr(zile.raspuns),
@@ -79,7 +85,7 @@ export default function OfertareTermene({ licitatie: l }) {
         <span style={{ fontSize:11, color:G.dim }}>orientativ — zile calendaristice, ora României; confirmarea juridică rămâne a omului</span>
         {canal && canal !== (l.canal || null) && <span style={{ fontSize:11, color:G.yellow, marginLeft:'auto' }} title={`Câmpul „canal” din ERP spune ${l.canal || '—'}, numărul anunțului ${l.nr_anunt} spune altceva. Calculul folosește anunțul.`}>⚠️ canal după nr. anunț: {canal.replace('seap_', 'SEAP ').toUpperCase()}</span>}
       </div>
-      {eroare && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>⚠️ Nu am putut încărca {eroare} — termenele de mai jos sunt incomplete.</div>}
+      {vreoEroare && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>⚠️ Nu am putut încărca {[eroare.acte && `actele: ${eroare.acte}`, eroare.fisa && `fișa de date: ${eroare.fisa}`].filter(Boolean).join(' · ')} — termenele de mai jos sunt incomplete.</div>}
       {fisa?.lipsa && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>⚠️ Nu există fișă de date citită (text extras) — completează zilele manual sau citește fișa în Documentație.</div>}
       {fisa && !fisa.lipsa && !fisa.eroare && fisa.zileIntrebari == null && fisa.zileRaspuns == null && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>⚠️ Fișa de date e citită, dar n-am găsit cifrele de zile în text — completează-le manual.</div>}
       {fisa === null && <div style={{ fontSize:11, color:G.dim, marginBottom:6 }}>se citește fișa de date…</div>}
@@ -99,12 +105,12 @@ export default function OfertareTermene({ licitatie: l }) {
       ))}
 
       {/* Alertele doar după ce s-au încărcat actele: altfel „niciun răspuns” ar apărea și cât timp lista e goală pentru că încă vine. */}
-      {incarcat && !eroare && !trunchiat && calc.intarziereAC && (
+      {incarcat && !vreoEroare && !trunchiat && calc.intarziereAC && (
         <div style={{ marginTop:10, padding:'8px 10px', borderRadius:8, background:G.red + '14', border:`1px solid ${G.red}55`, color:G.red, fontSize:12.5 }}>
           ⛔ AC nu a publicat niciun răspuns la clarificări după termenul de întrebări, iar termenul de răspuns a trecut — temei pentru solicitare de decalare (L98 art. 161 / L99 art. 173).
         </div>
       )}
-      {incarcat && !eroare && !calc.intarziereAC && calc.ultimRaspuns && calc.repere.find(r => r.cheie === 'raspuns')?.stare === 'trecut' && (
+      {incarcat && !vreoEroare && !calc.intarziereAC && calc.ultimRaspuns && calc.repere.find(r => r.cheie === 'raspuns')?.stare === 'trecut' && (
         <div style={{ marginTop:10, fontSize:12, color:G.yellow }}>
           ℹ️ Ultimul document de tip răspuns publicat de AC: {fmtZi(calc.ultimRaspuns)}. Verifică în Clarificări că e răspunsul <b>consolidat</b> (toate întrebările), nu doar liste sau planșe noi.
         </div>
@@ -115,7 +121,7 @@ export default function OfertareTermene({ licitatie: l }) {
         <span style={{ fontWeight:400, color:G.dim }}> · valoare estimată {fmtLei(l.valoare_estimata)} {calc.prag.peste == null ? '— completează valoarea' : calc.prag.peste ? '≥' : '<'} prag lucrări {fmtLei(PRAG_LUCRARI_LEI)}</span>
       </div>
       {docs == null ? <div style={{ fontSize:12, color:G.dim }}>se încarcă actele…</div>
-        : calc.contestatii.length === 0 ? <div style={{ fontSize:12, color:G.dim, marginTop:4 }}>{eroare ? 'Actele nu s-au putut încărca — nu știm dacă există.' : calc.prag.zile ? 'Niciun act publicat după anunț (răspunsuri, erate, documente noi).' : ''}</div>
+        : calc.contestatii.length === 0 ? <div style={{ fontSize:12, color:G.dim, marginTop:4 }}>{eroare.acte ? 'Actele nu s-au putut încărca — nu știm dacă există.' : calc.prag.zile ? 'Niciun act publicat după anunț (răspunsuri, erate, documente noi).' : ''}</div>
         : calc.contestatii.slice(0, 8).map(c => (
           <div key={c.zi} style={{ display:'grid', gridTemplateColumns:'220px 110px 1fr', gap:10, alignItems:'center', padding:'5px 0', borderBottom:`1px solid ${G.border2}`, fontSize:12.5 }}>
             <span style={{ color:G.muted }} title={c.sursaZi === 'citire' ? 'data documentului, din citirea AI' : c.sursaZi === 'mixt' ? 'unele documente au data din citirea AI, altele ziua importului' : 'ziua în care a apărut în platformă (import) — data reală a publicării în SEAP poate fi anterioară'}>{TIP_ACT[c.tip]} din {fmtZi(c.zi)}{c.sursaZi !== 'citire' ? ' *' : ''}</span>

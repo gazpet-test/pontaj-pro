@@ -52,6 +52,13 @@ describe('extrageZileDinFisa', () => {
   it('review Jakarinos r2 N3: „solicitarilor primite, cu 11 zile inainte” (virgulă) e termen de răspuns → 11', () => {
     expect(extrageZileDinFisa('Autoritatea va raspunde solicitarilor primite, cu 11 zile inainte de data limita.').zileRaspuns).toBe(11)
   })
+  it('review Jakarinos r3 B1/B2: cifra din propoziția vecină („Vizita … cu 5 zile”) nu e răspuns; „primite” + 41 de spații tot exclude', () => {
+    expect(extrageZileDinFisa('AC va raspunde solicitarilor primite cu 18 zile inainte de depunere. Vizita amplasamentului se organizeaza cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde solicitarilor primite' + ' '.repeat(41) + 'cu 9 zile inainte').zileRaspuns).toBeNull()
+  })
+  it('fișa reală lic. 103: răspunsul e în a doua propoziție („Raspunsurile … dupa cum urmeaza: - termen-limita … in a 6-a zi”)', () => {
+    expect(extrageZileDinFisa('In conformitate cu art. 161 din Legea 98/2016, ACstabileste unul sau doua termene limita in care va raspunde in mod clar si complet\ntuturor solicitarilor de clarificari/informatii suplimentare. Raspunsurile vor fi incarcate si publicate, in mod consolidat, in SEAP, dupa\ncum urmeaza:\n- termen-limita de raspuns este in a 6-a zi inainte de data limita de depunere a ofertelor.\nTermenul de raspuns la clarificari a fost stabilit astfel incat').zileRaspuns).toBe(6)
+  })
   it('combinaFise ia fiecare cifră din prima parte care o are (fișă spartă în două)', () => {
     expect(combinaFise([{ id: 1, text_extras: 'se pot solicita clarificari inainte de data limita de depunere a ofertelor 18' }, { id: 2, text_extras: 'AC va raspunde cu 11 zile inainte' }])).toEqual({ zileIntrebari: 18, zileRaspuns: 11, docIntrebari: 1, docRaspuns: 2 })
     expect(combinaFise([])).toEqual({ zileIntrebari: null, zileRaspuns: null, docIntrebari: null, docRaspuns: null })
