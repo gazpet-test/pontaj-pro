@@ -67,8 +67,14 @@ export function extrageZileDinFisa(text) {
   let anc
   while (zileRaspuns == null && (anc = reAncora.exec(t))) {
     let zona = t.slice(anc.index, anc.index + 320)
-    const sfarsit = zona.search(/\.\s+(?=[A-ZĂÂÎȘȚ\-–•])|\n\s*\n/)
-    if (sfarsit > 0) zona = zona.slice(0, sfarsit)
+    // Sfârșit de propoziție = „. ” urmat de majusculă/liniuță sau paragraf nou — dar nu după o abreviere cu majusculă
+    // („S.C. GAZPET”, „I.3. Comunicare”), unde punctul nu încheie propoziția (review Jakarinos r4).
+    const reSfarsit = /([^\s])\.\s+(?=[A-ZĂÂÎȘȚ\-–•])|\n\s*\n/g
+    let sf
+    while ((sf = reSfarsit.exec(zona))) {
+      if (sf[1] && /[A-ZĂÂÎȘȚ0-9]/.test(sf[1])) continue
+      zona = zona.slice(0, sf.index + (sf[1] ? 1 : 0)); break
+    }
     reCandidat.lastIndex = 0
     let m
     while ((m = reCandidat.exec(zona))) {

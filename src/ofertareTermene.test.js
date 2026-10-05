@@ -56,6 +56,11 @@ describe('extrageZileDinFisa', () => {
     expect(extrageZileDinFisa('AC va raspunde solicitarilor primite cu 18 zile inainte de depunere. Vizita amplasamentului se organizeaza cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
     expect(extrageZileDinFisa('AC va raspunde solicitarilor primite' + ' '.repeat(41) + 'cu 9 zile inainte').zileRaspuns).toBeNull()
   })
+  it('review Jakarinos r4: abrevierea „S.C.” nu încheie propoziția → 11; „Vizita” după „ofertelor.” tot nu e răspuns', () => {
+    expect(extrageZileDinFisa('AC va raspunde solicitarilor S.C. GAZPET cu 11 zile inainte de depunere.').zileRaspuns).toBe(11)
+    expect(extrageZileDinFisa('AC va raspunde conform art. 161 si pct. I.3. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde solicitarilor. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
+  })
   it('fișa reală lic. 103: răspunsul e în a doua propoziție („Raspunsurile … dupa cum urmeaza: - termen-limita … in a 6-a zi”)', () => {
     expect(extrageZileDinFisa('In conformitate cu art. 161 din Legea 98/2016, ACstabileste unul sau doua termene limita in care va raspunde in mod clar si complet\ntuturor solicitarilor de clarificari/informatii suplimentare. Raspunsurile vor fi incarcate si publicate, in mod consolidat, in SEAP, dupa\ncum urmeaza:\n- termen-limita de raspuns este in a 6-a zi inainte de data limita de depunere a ofertelor.\nTermenul de raspuns la clarificari a fost stabilit astfel incat').zileRaspuns).toBe(6)
   })
