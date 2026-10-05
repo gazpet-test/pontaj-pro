@@ -1,6 +1,7 @@
 // api-consum-extern/furnizori.ts — citirea consumului de la furnizorii cu API (logică pură, testată în furnizori_test.ts).
-// Fiecare furnizor întoarce un RÂND pentru public.api_consum_extern; erorile (cheie lipsă, HTTP ≠ 200, JSON neașteptat,
-// timeout) se întorc tot ca rând, cu `eroare` completată — nu se aruncă (anti-bug edge: throw = worker killed intermitent).
+// Fiecare furnizor întoarce un RÂND (RandConsum); erorile (cheie lipsă, HTTP ≠ 200, JSON neașteptat, timeout) se întorc tot
+// ca rând, cu `eroare` completată — nu se aruncă (anti-bug edge: throw = worker killed intermitent). payloadUpsert alege
+// coloanele care se scriu: citirea bună SAU eroarea, niciodată amândouă.
 // Valul 1 (05.10.2026): firecrawl. Valul 2 (anthropic, supabase, github_actions, resend, vercel, sentry, openai) se adaugă
 // aici, câte un handler, după ce fiecare endpoint e verificat pe documentația furnizorului.
 
@@ -69,6 +70,20 @@ export async function citesteFirecrawl(m: Mediu): Promise<RandConsum> {
     perioada_start: ziIso(d.billingPeriodStart),
     perioada_sfarsit: ziIso(d.billingPeriodEnd),
     raspuns_brut: j,
+  }
+}
+
+// Ce se scrie în public.api_consum_extern pentru rândul zilei (upsert pe furnizor+zi). PostgREST actualizează la conflict
+// DOAR coloanele din obiect, deci: succesul scrie numai citirea bună (citit_la, credite_*, perioada_*, raspuns_brut), iar
+// eroarea numai eroare + eroare_la — o eroare de după-amiază nu mai șterge citirea bună de dimineață și nici invers
+// (Copilot P0, #616 r1). Cheile lipsă din obiect nu sunt atinse la UPDATE.
+export function payloadUpsert(r: RandConsum, zi: string, acum: string): Record<string, unknown> {
+  const baza = { furnizor: r.furnizor, sursa: r.sursa, unitate: r.unitate, zi }
+  if (r.eroare) return { ...baza, eroare: r.eroare, eroare_la: acum }
+  return {
+    ...baza, citit_la: acum,
+    credite_plan: r.credite_plan, credite_ramase: r.credite_ramase, credite_consumate: r.credite_consumate,
+    perioada_start: r.perioada_start, perioada_sfarsit: r.perioada_sfarsit, raspuns_brut: r.raspuns_brut,
   }
 }
 

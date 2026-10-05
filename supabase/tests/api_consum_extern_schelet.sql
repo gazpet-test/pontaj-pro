@@ -2,6 +2,7 @@
 -- Reproduce ce citește 20261014a de pe live (05.10.2026): fn_is_app_owner (md5 8d335ed3…, SECDEF, STABLE, EXECUTE
 -- authenticated), INTERN_EDGE_SECRET în Vault (64 hex), privilegiile implicite Supabase pe schema public (ALL pentru
 -- anon/authenticated/service_role — ca REVOKE-urile migrării să fie testate de-adevăratelea) + machete vault/net/cron/auth.
+-- r2: cron.timezone = GMT la nivel de bază (ca pe live; precondiția 0f) și ACL-ul funcției în ordinea de pe live.
 \set ON_ERROR_STOP on
 SET client_min_messages = warning;
 DO $garda$ BEGIN IF current_database() !~ '^[a-z0-9_]+_test$' THEN RAISE EXCEPTION 'doar *_test'; END IF; END $garda$;
@@ -52,7 +53,10 @@ CREATE FUNCTION public.fn_is_app_owner(p_user_id uuid) RETURNS boolean LANGUAGE 
   SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = p_user_id AND is_owner = true);
 $function$;
 REVOKE ALL ON FUNCTION public.fn_is_app_owner(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.fn_is_app_owner(uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.fn_is_app_owner(uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.fn_is_app_owner(uuid) TO authenticated;
+-- pg_cron pe live rulează pe GMT (cron.timezone); sesiunile noi o citesc din setarea bazei
+DO $tz$ BEGIN EXECUTE format('ALTER DATABASE %I SET cron.timezone = %L', current_database(), 'GMT'); END $tz$;
 INSERT INTO public.profiles (id, name, is_owner) VALUES
   ('00000000-0000-0000-0000-0000000000a1', 'Owner', true),
   ('00000000-0000-0000-0000-0000000000b2', 'Coleg', false);

@@ -5,16 +5,17 @@
 // FIȘA DE SECURITATE (CLAUDE.md pct. 7):
 // (a) Conținut EXTERN citit: JSON-ul de uzaj al furnizorului (api.firecrawl.dev) — numere, păstrate în raspuns_brut
 //     ca DATE; nimic din el nu se execută și nu pornește acțiuni.
-// (b) Ce scrie: DOAR public.api_consum_extern (upsert pe furnizor + zi). Fără mail, bani, drepturi sau alte tabele.
+// (b) Ce scrie: DOAR public.api_consum_extern (upsert pe furnizor + zi, parțial: citirea bună SAU eroarea — vezi
+//     payloadUpsert). Fără mail, bani, drepturi sau alte tabele.
 // (c) Identitate: service_role, pentru că tabelul nu are INSERT/UPDATE pentru authenticated (doar SELECT owner) —
 //     suprafața = un singur tabel propriu. Cheile furnizorilor (FIRECRAWL_API_KEY) stau în Edge Secrets, nu în BD.
 // (d) Cine pornește: pg_cron (api_consum_extern_zilnic) cu x-intern-secret din Vault (_shared/poartaIntern.ts) SAU
 //     owner-ul din UI (Administrativ › Costuri AI › „Citește acum”), rol verificat în cod (verify_jwt nu ajunge).
 // (e) Nimic nu cere confirmare umană: read-only față de furnizori, write doar pe tabelul propriu.
-// Erori de business → rândul zilei cu `eroare` + 200 { ok:false }, nu throw.
+// Erori de business → eroare + eroare_la pe rândul zilei (citirea bună rămâne) + 200 { ok:false }, nu throw.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { esteApelIntern } from '../_shared/poartaIntern.ts'
-import { FURNIZORI, alegeFurnizori } from './furnizori.ts'
+import { FURNIZORI, alegeFurnizori, payloadUpsert } from './furnizori.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: CORS })
@@ -48,8 +49,9 @@ Deno.serve(async (req: Request) => {
   const rezultate: { furnizor: string; ok: boolean; eroare?: string }[] = []
   for (const f of lista) {
     const rand = await FURNIZORI[f]({ env: k => Deno.env.get(k), fetch })
+    // un singur obiect: la conflict PostgREST actualizează doar coloanele lui (citirea bună SAU eroarea zilei)
     const { error } = await db.from('api_consum_extern')
-      .upsert({ ...rand, zi, citit_la: new Date().toISOString() }, { onConflict: 'furnizor,zi' })
+      .upsert(payloadUpsert(rand, zi, new Date().toISOString()), { onConflict: 'furnizor,zi' })
     if (error) rezultate.push({ furnizor: f, ok: false, eroare: `scriere BD: ${error.message}` })
     else rezultate.push({ furnizor: f, ok: !rand.eroare, ...(rand.eroare ? { eroare: rand.eroare } : {}) })
   }

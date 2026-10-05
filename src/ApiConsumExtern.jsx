@@ -6,7 +6,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
-import { carduri, consumZilnic, procentRamas, epuizare, fmtZi, fmtOra, fmtNr, plusZile } from './apiConsum.js'
+import { carduri, consumZilnic, procentRamas, epuizare, fmtZi, fmtOra, fmtNr, plusZile, stareEroare } from './apiConsum.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681', border:'#30363D', border2:'#21262D',
   orange:'#F0883E', blue:'#1F6FEB', green:'#2EA043', yellow:'#D29922', red:'#F85149' }
@@ -24,7 +24,7 @@ export default function ApiConsumExtern() {
     const azi = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Bucharest' })
     const [{ data: v, error: eV }, { data: h, error: eH }] = await Promise.all([
       supabase.from('v_api_consum_curent').select('*'),
-      supabase.from('api_consum_extern').select('furnizor, zi, credite_plan, credite_ramase, credite_consumate, perioada_start, eroare, citit_la')
+      supabase.from('api_consum_extern').select('furnizor, zi, credite_plan, credite_ramase, credite_consumate, perioada_start, citit_la, eroare, eroare_la')
         .gte('zi', plusZile(azi, -30)).order('zi', { ascending: true }).limit(2000),
     ])
     const e = eV || eH
@@ -62,6 +62,7 @@ export default function ApiConsumExtern() {
             const zile = consumZilnic(istoric.filter(r => r.furnizor === furnizor)).slice(-7).reverse()
             const culoare = pct == null ? G.dim : pct < 15 ? G.red : pct < 35 ? G.orange : G.green
             const eRutina = (v?.sursa || (furnizor === 'desktop_commander' ? 'rutina_claude' : 'api')) === 'rutina_claude'
+            const err = stareEroare(v)
             return (
               <div key={furnizor} style={card}>
                 <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
@@ -72,7 +73,7 @@ export default function ApiConsumExtern() {
                 </div>
                 {!v || v.zi == null ? (
                   <div style={{ fontSize:12, color:G.muted }}>
-                    {v?.ultima_eroare ? <span style={{ color:G.red }}>⚠️ {v.ultima_eroare}</span>
+                    {err ? <span style={{ color:G.red }}>⚠️ {err.text}{err.la ? ` (${fmtOra(err.la)})` : ''}</span>
                       : eRutina ? 'Fără citiri încă — le scrie rutina zilnică a sesiunii Claude de programare.'
                       : 'Fără citiri încă — cheia FIRECRAWL_API_KEY lipsește din Edge Secrets sau cronul n-a rulat.'}
                   </div>
@@ -93,7 +94,9 @@ export default function ApiConsumExtern() {
                       {v.ritm_zilnic != null && <div>Ritm: ~{fmtNr(v.ritm_zilnic)} {v.unitate === 'procent' ? 'puncte' : v.unitate}/zi în perioadă</div>}
                       {ep && <div style={{ color: ep.inainteDeReset ? G.orange : G.muted }}>{ep.inainteDeReset ? '⚠️ La ritmul ăsta se termină pe ' : 'La ritmul ăsta ar ajunge până pe '}<b>{fmtZi(ep.data)}</b>{ep.inainteDeReset === false ? ' (după reset)' : ''}</div>}
                       <div>Citit {eRutina ? 'de rutina Claude' : ''} la {fmtOra(v.citit_la)}</div>
-                      {v.ultima_eroare && <div style={{ color:G.red }}>⚠️ Ultima încercare ({fmtOra(v.ultima_incercare_la)}): {v.ultima_eroare}</div>}
+                      {err && (err.curenta
+                        ? <div style={{ color:G.red }}>⚠️ Ultima încercare ({fmtOra(err.la)}) a eșuat: {err.text} — valorile de mai sus sunt de la ultima citire bună</div>
+                        : <div style={{ color:G.dim }}>Eroare mai veche ({fmtOra(err.la)}), după care citirea a reușit: {err.text}</div>)}
                     </div>
                     {zile.length > 1 && (
                       <div style={{ marginTop:8, borderTop:`1px solid ${G.border2}`, paddingTop:6, fontSize:11, color:G.dim }}>

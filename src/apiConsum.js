@@ -37,9 +37,10 @@ export function epuizare(v) {
 }
 
 // Consumul pe zi din citirile zilnice ale UNUI furnizor (credite rămase azi vs ieri, în aceeași perioadă de facturare).
-// Rămase în creștere sau perioadă nouă → 'reset' (nu consum negativ). Rândurile cu eroare nu intră în diferențe.
+// Rămase în creștere sau perioadă nouă → 'reset' (nu consum negativ). Contează doar citirea bună a zilei (credite_ramase);
+// o eroare din aceeași zi stă în coloanele ei (eroare, eroare_la) și nu anulează citirea (20261014a r2).
 export function consumZilnic(randuri) {
-  const bune = (randuri || []).filter(r => r && !r.eroare && r.credite_ramase != null)
+  const bune = (randuri || []).filter(r => r && r.credite_ramase != null)
     .slice().sort((a, b) => (a.zi < b.zi ? -1 : a.zi > b.zi ? 1 : 0))
   const out = []
   for (let i = 0; i < bune.length; i++) {
@@ -61,4 +62,10 @@ export function carduri(randuriView) {
   const peF = new Map((randuriView || []).map(v => [v.furnizor, v]))
   const nume = [...new Set([...FURNIZORI_ASTEPTATI, ...peF.keys()])]
   return nume.map(f => ({ furnizor: f, v: peF.get(f) || null, ui: FURNIZORI_UI[f] || { icon: '🔌', nume: f, unitate: '', descriere: '' } }))
+}
+
+// Ultima eroare a furnizorului, din rândul view-ului: `curenta` = e mai nouă decât ultima citire bună (ultima încercare a eșuat)
+export function stareEroare(v) {
+  if (!v || !v.ultima_eroare) return null
+  return { text: v.ultima_eroare, la: v.ultima_eroare_la || null, curenta: v.eroare_dupa_citire === true || v.citit_la == null }
 }

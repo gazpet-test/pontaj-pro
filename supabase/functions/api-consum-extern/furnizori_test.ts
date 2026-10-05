@@ -1,6 +1,6 @@
 // deno test supabase/functions/api-consum-extern — fără rețea: fetch simulat.
 import { assertEquals } from 'jsr:@std/assert@1'
-import { citesteFirecrawl, alegeFurnizori } from './furnizori.ts'
+import { citesteFirecrawl, alegeFurnizori, payloadUpsert } from './furnizori.ts'
 
 const URL_FC = 'https://api.firecrawl.dev/v2/team/credit-usage'
 type Apel = { url: string; auth: string | null }
@@ -63,4 +63,17 @@ Deno.test('alegeFurnizori: toate / nume (indiferent de majuscule) / necunoscut',
   assertEquals(alegeFurnizori('__proto__'), [])
   assertEquals(alegeFurnizori('constructor'), [])   // moștenite din Object.prototype: nu sunt furnizori (hasOwn)
   assertEquals(alegeFurnizori('toString'), [])
+})
+
+Deno.test('payloadUpsert: succesul scrie DOAR citirea bună, eroarea DOAR eroare + eroare_la (P0 #616 r1)', async () => {
+  const bun = await citesteFirecrawl(mediu(() => new Response(JSON.stringify({ success: true, data: { remainingCredits: 2400, planCredits: 3000, billingPeriodStart: '2026-10-01T00:00:00Z', billingPeriodEnd: '2026-10-31T23:59:59Z' } }), { status: 200 })).m)
+  const pb = payloadUpsert(bun, '2026-10-05', '2026-10-05T04:05:00.000Z')
+  assertEquals(Object.keys(pb).sort(), ['citit_la', 'credite_consumate', 'credite_plan', 'credite_ramase', 'furnizor', 'perioada_sfarsit', 'perioada_start', 'raspuns_brut', 'sursa', 'unitate', 'zi'])
+  assertEquals([pb.citit_la, pb.credite_ramase, pb.zi], ['2026-10-05T04:05:00.000Z', 2400, '2026-10-05'])
+  const rau = await citesteFirecrawl(mediu(() => new Response('{"success":false,"error":"x"}', { status: 500 })).m)
+  const pe = payloadUpsert(rau, '2026-10-05', '2026-10-05T13:00:00.000Z')
+  assertEquals(Object.keys(pe).sort(), ['eroare', 'eroare_la', 'furnizor', 'sursa', 'unitate', 'zi'])
+  assertEquals([pe.eroare, pe.eroare_la], ['HTTP 500: x', '2026-10-05T13:00:00.000Z'])
+  // nicio cheie a citirii bune în payload-ul de eroare → la conflict PostgREST nu le atinge
+  for (const k of ['citit_la', 'credite_plan', 'credite_ramase', 'credite_consumate', 'perioada_start', 'perioada_sfarsit', 'raspuns_brut']) assertEquals(k in pe, false)
 })
