@@ -6,6 +6,24 @@ const eq = (a: unknown, b: unknown, m = '') => { if (JSON.stringify(a) !== JSON.
 const ok = (c: unknown, m: string) => { if (!c) throw new Error(m) }
 
 type Rand = Record<string, any>
+// mini-interpretor pentru filtrele PostgREST folosite de worker: or(...), and(...), col.ilike.pat, col.not.ilike.pat, col.is.null
+// (NULL se comportă ca în SQL: „not ilike” pe NULL nu trece)
+function imparte(expr: string): string[] {
+  const out: string[] = []; let adanc = 0, cur = ''
+  for (const ch of expr) { if (ch === '(') adanc++; if (ch === ')') adanc--; if (ch === ',' && adanc === 0) { out.push(cur); cur = '' } else cur += ch }
+  if (cur) out.push(cur)
+  return out
+}
+const reLike = (p: string) => new RegExp('^' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 'is')
+function parseazaTermen(t: string): (r: Rand) => boolean {
+  if (t.startsWith('and(')) { const fs = imparte(t.slice(4, -1)).map(parseazaTermen); return r => fs.every(f => f(r)) }
+  if (t.startsWith('or(')) return parseazaOr(t.slice(3, -1))
+  let m = t.match(/^([a-z_]+)\.is\.null$/); if (m) { const c = m[1]; return r => r[c] == null }
+  m = t.match(/^([a-z_]+)\.not\.ilike\.(.*)$/s); if (m) { const c = m[1], re = reLike(m[2]); return r => r[c] != null && !re.test(r[c]) }
+  m = t.match(/^([a-z_]+)\.ilike\.(.*)$/s); if (m) { const c = m[1], re = reLike(m[2]); return r => r[c] != null && re.test(r[c]) }
+  throw new Error('filtru necunoscut în fake: ' + t)
+}
+function parseazaOr(expr: string): (r: Rand) => boolean { const fs = imparte(expr).map(parseazaTermen); return r => fs.some(f => f(r)) }
 function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Array>) {
   let nextId = 5000
   const potriveste = (r: Rand, f: ((r: Rand) => boolean)[]) => f.every(x => x(r))
@@ -18,11 +36,9 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
       insert(p: Rand | Rand[]) { op = 'insert'; patch = p; return b },
       eq(c: string, v: unknown) { filtre.push(r => r[c] === v); return b },
       in(c: string, v: unknown[]) { filtre.push(r => v.includes(r[c])); return b },
+      is(c: string, v: unknown) { filtre.push(r => (v === null ? r[c] == null : r[c] === v)); return b },
       ilike(c: string, p: string) { const re = new RegExp('^' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 'i'); filtre.push(r => re.test(r[c] ?? '')); return b },
-      or(expr: string) {
-        const alt = expr.split(',').map(t => { const [c, , p] = t.split('.ilike.').length === 2 ? [t.split('.ilike.')[0], 'ilike', t.split('.ilike.')[1]] : ['', '', '']; return { c, re: new RegExp('^' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 'i') } })
-        filtre.push(r => alt.some(a => a.re.test(r[a.c] ?? ''))); return b
-      },
+      or(expr: string) { const f = parseazaOr(expr); filtre.push(r => f(r)); return b },
       order() { return b },
       limit(n: number) { limita = n; return b },
       maybeSingle() { return b.then((x: any) => ({ data: x.data?.[0] ?? null, error: x.error })) },
@@ -111,7 +127,9 @@ async function cuMediu(fn: (root: string, seap: any) => Promise<void>) {
 Deno.test('arhive: selecție, spațiu de nume, volume', async () => {
   await cuMediu(async (_root, s) => {
     ok(s.eArhivaDeDespachetat({ nume_original: 'DOC_F1.rar', fisier_path: '3/x.rar', status_procesare: 'neprocesat', eroare: null }), 'rar neprocesat → da')
-    ok(s.eArhivaDeDespachetat({ nume_original: 'A.zip.p7s', fisier_path: '3/x', status_procesare: 'ignorat', eroare: 'doar PDF se proceseaza in M1' }), 'zip.p7s ignorat de ingest → da')
+    ok(s.eArhivaDeDespachetat({ nume_original: 'A.zip.p7s', fisier_path: '3/x', status_procesare: 'neprocesat', eroare: null }), 'zip.p7s neprocesat → da')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'PT.zip', fisier_path: '3/x', status_procesare: 'ignorat', eroare: 'non-PDF - ramane ca fisier' }), 'arhivă VECHE (ignorat, non-PDF) → nu se atinge automat')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'PT-semnat.zip', fisier_path: '3/x', status_procesare: 'ignorat', eroare: 'Arhivă adusă pe Terra: 41 fișiere în platformă.' }), 'deja despachetată pe drumul SEAP → nu')
     ok(!s.eArhivaDeDespachetat({ nume_original: 'DOC.rar', fisier_path: '3/x', status_procesare: 'ignorat', eroare: '📦 Arhivă despachetată pe Terra: 3' }), 'deja despachetată → nu')
     ok(!s.eArhivaDeDespachetat({ nume_original: 'DOC.rar', fisier_path: '3/x', status_procesare: 'eroare', eroare: 'Despachetare parțială: 2 urcate, 1 NEURCATE' }), 'parțială → nu (doar reluare manuală)')
     ok(!s.eArhivaDeDespachetat({ nume_original: 'DOC.rar', fisier_path: '3/neincarcat/x', status_procesare: 'neprocesat', eroare: null }), 'placeholder → nu')
@@ -237,6 +255,25 @@ Deno.test('arhive: urcare parțială → eroare vizibilă; reluarea manuală re�
       await s.despacheteazaArhiveDinPlatforma(supa, () => {})
       eq(tab.ofertare_documente_atribuire.length, 3, 'A și B nu se dublează (PICA pică din nou)')
       ok(/2 existau, 1 NEURCATE/.test(arh.eroare), arh.eroare)
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: 60 de arhive vechi/tratate (id mici) nu blochează o arhivă nouă și nu sunt atinse', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/nou.zip', await zipCu({ 'N.pdf': '%PDF n' })]])
+      const vechi: Rand[] = []
+      for (let i = 1; i <= 60; i++) vechi.push({ id: i, licitatie_id: 3, nume_original: `v${i}.${i % 3 ? 'zip' : 'rar'}`, fisier_path: `3/v${i}`,
+        status_procesare: ['ignorat', 'eroare', 'neprocesat', 'ignorat'][i % 4], eroare: ['📦 Arhivă despachetată pe Terra: 1', 'Despachetare RESPINSĂ de controale', 'Despachetare manuală necesară: volume', 'non-PDF - ramane ca fisier (legacy)'][i % 4] })
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [...vechi, { id: 2000, licitatie_id: 3, nume_original: 'Nou.zip', fisier_path: '3/nou.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const nou = tab.ofertare_documente_atribuire.find(x => x.id === 2000)!
+      ok(nou.eroare?.startsWith('📦 Arhivă despachetată pe Terra: 1 fișiere noi'), `arhiva nouă trebuia despachetată: ${nou.eroare}`)
+      ok(tab.ofertare_documente_atribuire.some(x => x.nume_original === 'Nou (#2000)/N.pdf'), 'fișierul extras există')
+      // filtrul e și el corect: o arhivă legacy (ignorată de ingest cu alt mesaj) încă se ia
+      eq(tab.ofertare_documente_atribuire.filter(x => x.id <= 60 && /\(#/.test(x.nume_original)).length, 0, 'arhivele vechi neatinse')
     } finally { await opreste() }
   })
 })

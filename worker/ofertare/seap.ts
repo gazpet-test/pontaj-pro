@@ -503,14 +503,20 @@ export async function proceseazaSeap(supa: Supa, oprire: () => boolean, stare: (
 // Volumele .partN.rar NU se despachetează aici (pot sosi pe rând — Copilot P1): se marchează „manual”, explicit.
 export const ARHIVA_DOC_RE = /\.(zip|rar|7z)(\.p7s)?$/i
 export const MARCAJ_DESPACHETARE = 'Despachetare în curs (worker NAS)'
-const STARI_ARHIVA = ['neprocesat', 'ignorat', 'eroare']
+// DOAR arhivele noi: status „neprocesat” și fără notă (veghea și urcarea din UI le pun așa). Cele ~35 de arhive vechi din
+// platformă (ignorat, „non-PDF…” / „Arhivă adusă pe Terra…”, unele deja despachetate pe drumul SEAP) NU se ating
+// automat — un om le poate trimite la despachetare punând status neprocesat și ștergând nota (05.10.2026, preflight live).
+const STARI_ARHIVA = ['neprocesat']
 type DocArhiva = { id: number; licitatie_id: number; nume_original: string; fisier_path: string | null; status_procesare: string | null; eroare: string | null; tip: string | null; seap_cod: string | null; aparut_ulterior: boolean | null }
 
 /** Documentul e o arhivă urcată efectiv, încă nedespachetată (și nici respinsă / eșuată / marcată manual anterior). */
 export function eArhivaDeDespachetat(d: Partial<DocArhiva>): boolean {
   return ARHIVA_DOC_RE.test(d.nume_original || '') && !estePlaceholder(d as { fisier_path?: string | null })
-    && STARI_ARHIVA.includes(d.status_procesare || '') && !/^(📦 Arhivă despachetată|Despachetare)/.test(d.eroare || '')
+    && d.status_procesare === 'neprocesat' && !d.eroare
 }
+// Filtrul pe nume (PostgREST `or`); statusul și „fără notă” se filtrează tot pe server, ÎNAINTE de limit — stările
+// finale (despachetată / parțială / respinsă / manuală) au toate notă, deci nu pot bloca coada (Copilot P0 r2 pe #608).
+export const FILTRU_NUME_ARHIVA = ['zip', 'rar', '7z', 'zip.p7s', 'rar.p7s', '7z.p7s'].map(x => `nume_original.ilike.%.${x}`).join(',')
 export const esteVolumRar = (nume: string) => !!volumRar(nume.replace(/\.p7s$/i, ''))
 /** Spațiul de nume al documentelor extrase: numele arhivei + id-ul rândului ei („DOC_F1_F6_C1_C9 (#1305)”). */
 export const spatiuArhiva = (d: { id: number; nume_original: string }) =>
@@ -527,8 +533,8 @@ export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: str
   if (Date.now() < arhivePauzaPana) return
   const { data: cand, error } = await supa.from('ofertare_documente_atribuire')
     .select('id, licitatie_id, nume_original, fisier_path, status_procesare, eroare, tip, seap_cod, aparut_ulterior')
-    .in('status_procesare', STARI_ARHIVA)
-    .or('nume_original.ilike.%.zip,nume_original.ilike.%.rar,nume_original.ilike.%.7z,nume_original.ilike.%.zip.p7s,nume_original.ilike.%.rar.p7s,nume_original.ilike.%.7z.p7s')
+    .eq('status_procesare', 'neprocesat').is('eroare', null)
+    .or(FILTRU_NUME_ARHIVA)
     .order('id').limit(50)
   if (error) { log(`arhive din platformă: ${error.message}`); return }
   for (const d of ((cand || []) as DocArhiva[]).filter(eArhivaDeDespachetat)) {
@@ -536,7 +542,7 @@ export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: str
     if (esteVolumRar(d.nume_original)) {   // stare finală, explicită: nu-l mai selectăm
       await supa.from('ofertare_documente_atribuire').update({
         eroare: 'Despachetare manuală necesară: arhivă în volume (.partN.rar) — volumele pot sosi pe rând, așa că nu se despachetează automat. Descarcă toate volumele, dezarhivează local și urcă fișierele.',
-      }).eq('id', d.id).in('status_procesare', STARI_ARHIVA)
+      }).eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null)
       continue
     }
     await despacheteazaArhiva(supa, d, stare)
@@ -548,7 +554,7 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
   const licId = d.licitatie_id
   // revendicare: doar dacă nimeni nu l-a schimbat între timp (Procesează / om)
   const { data: luate } = await supa.from('ofertare_documente_atribuire').update({ status_procesare: 'in_lucru', eroare: MARCAJ_DESPACHETARE })
-    .eq('id', d.id).in('status_procesare', STARI_ARHIVA).select('id')
+    .eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null).select('id')
   if ((luate || []).length !== 1) return
   const termina = (status: string, eroare: string | null) => supa.from('ofertare_documente_atribuire')
     .update({ status_procesare: status, eroare: eroare === null ? null : eroare.slice(0, 500) }).eq('id', d.id).eq('eroare', MARCAJ_DESPACHETARE)
