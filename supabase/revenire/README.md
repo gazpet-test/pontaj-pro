@@ -186,3 +186,6 @@ SELECT set_config('gazpet.rollback_tehnic_20261002d', 'REDESCHIDE_IBAN_GBE:' || 
 COMMIT;
 ```
 Precondiții = exact starea patch-ului (tabela + funcțiile există, coloana lipsește, view-ul trece prin funcție); postcondiții = starea live din 02.10 (valorile înapoi 1:1, 55 de coloane cu `gbe_cont_iban text`, SELECT pe tabel, fără funcții/tabelă nouă). După revenire, migrarea NU se mai poate reaplica fără re-amprentare (precondiția 0c cere ordinea live a coloanelor). UI-ul (`GbeEvidenta.jsx`) de pe `main` citește IBAN-ul prin RPC: după revenire, fișa GBE nu mai arată contul până se revine și codul. Testat în `scripts/test_sec_gbe_iban.sh` pasul 5.
+
+## 20260930h — CTC F1 cărți tehnice (`20260930h_ctc_carti_tehnice_f1_ROLLBACK.sql`, mutat din `supabase/migrations/` la 05.10.2026)
+Șterge cărțile, pozițiile și template-urile CTC + bucketul `ctc-documente` (după golirea lui din Storage). Migrarea F1 e aplicată pe live din 30.09.2026 (#548/#550). Fișierul nu are gardă de armare și e **distructiv**: stătea în `supabase/migrations/`, unde un `supabase db push` l-ar fi rulat ca migrare — de aceea a fost mutat aici (restanța task #6 din `handoff_ctc`). Fără GO de execuție; doar la cererea explicită a lui Răzvan, după preview pe datele CTC existente.
