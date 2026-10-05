@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ziRo, plusZile, zileIntre, extrageZileDinFisa, acteContestabile, canalDinAnunt, calculeazaTermene, PRAG_LUCRARI_LEI } from './ofertareTermene.js'
+import { ziRo, plusZile, zileIntre, ziValida, extrageZileDinFisa, combinaFise, acteContestabile, canalDinAnunt, calculeazaTermene, PRAG_LUCRARI_LEI } from './ofertareTermene.js'
 
 // Cazul real: Mânăstirea CN1095546 — termen 14.10.2026 15:00 RO (12:00 UTC), fișa: 18 zile întrebări / 11 zile răspuns,
 // RAR cu liste publicat 02.10.2026, erata de prelungire 14.09.2026, VE 29.264.199,92 lei (peste pragul lucrări 2026).
@@ -45,6 +45,17 @@ describe('extrageZileDinFisa', () => {
     expect(extrageZileDinFisa('AC va răspunde în mod clar și complet în a 6-a zi înainte de data limită').zileRaspuns).toBe(6)
     expect(extrageZileDinFisa('AC va raspunde in mod clar si complet la toate solicitarile de clarificari primite cu 9 zile inainte de termen').zileRaspuns).toBeNull()
   })
+  it('review Jakarinos r1: „solicitarilor primite cu 18 zile … Raspunsul consolidat se publica cu 11 zile” → 11; newline înainte de cifră e permis', () => {
+    expect(extrageZileDinFisa('Autoritatea va raspunde tuturor solicitarilor primite cu 18 zile inainte de depunere. Raspunsul consolidat se publica cu 11 zile inainte de depunere.').zileRaspuns).toBe(11)
+    expect(extrageZileDinFisa('Numar zile pana la care se pot solicita clarificari inainte de data limita de depunere a ofertelor/candidaturilor\n18').zileIntrebari).toBe(18)
+  })
+  it('combinaFise ia fiecare cifră din prima parte care o are (fișă spartă în două)', () => {
+    expect(combinaFise([{ id: 1, text_extras: 'se pot solicita clarificari inainte de data limita de depunere a ofertelor 18' }, { id: 2, text_extras: 'AC va raspunde cu 11 zile inainte' }])).toEqual({ zileIntrebari: 18, zileRaspuns: 11, docId: 1 })
+    expect(combinaFise([])).toEqual({ zileIntrebari: null, zileRaspuns: null, docId: null })
+  })
+  it('ziValida respinge 2026-02-31', () => {
+    expect(ziValida('2026-02-31')).toBeNull(); expect(ziValida('2026-10-14')).toBe('2026-10-14'); expect(ziValida('azi')).toBeNull()
+  })
   it('plusZile nu aruncă la valori absurde', () => {
     expect(plusZile('2026-10-14', 1e12)).toBeNull()
     expect(plusZile('2026-10-14', NaN)).toBeNull()
@@ -60,7 +71,14 @@ describe('acteContestabile', () => {
       { id: 317, tip: 'raspuns_clarificare', nume_original: 'Clarificare_Oficiu_Automata.pdf', created_at: '2026-09-16T08:27:44Z', citire: { tip: 'erata', data_document: '2026-09-14' } },
       { id: 1305, tip: 'raspuns_clarificare', nume_original: 'DOC_F1_F6_C1_C9.rar', aparut_ulterior: true, created_at: '2026-10-02T12:50:00Z' },
     ])
-    expect(acte.map(a => [a.zi, a.tip, a.docs.length])).toEqual([['2026-08-29', 'document_nou', 2], ['2026-09-14', 'erata', 1], ['2026-10-02', 'raspuns_clarificare', 1]])
+    expect(acte.map(a => [a.zi, a.tip, a.docs.length, a.areRaspuns, a.sursaZi])).toEqual([['2026-08-29', 'document_nou', 2, false, 'import'], ['2026-09-14', 'erata', 1, true, 'citire'], ['2026-10-02', 'raspuns_clarificare', 1, true, 'import']])
+  })
+  it('o erată fără tip răspuns NU e răspuns (areRaspuns=false) și nu stinge alerta de întârziere; data AI imposibilă → ziua importului', () => {
+    const acte = acteContestabile([{ id: 5, tip: 'alta', nume_original: 'erata.pdf', created_at: '2026-10-02T09:00:00Z', citire: { tip: 'erata', data_document: '2026-02-31' } }])
+    expect(acte).toEqual([{ zi: '2026-10-02', tip: 'erata', docs: [{ id: 5, nume: 'erata.pdf' }], areRaspuns: false, sursaZi: 'import' }])
+    const r = calculeazaTermene({ termenDepunere: '2026-10-14T12:00:00Z', zileIntrebari: 18, zileRaspuns: 11, canal: 'seap_cn', acum: new Date('2026-10-05T10:00:00Z'),
+      docs: [{ id: 5, tip: 'alta', created_at: '2026-10-02T09:00:00Z', citire: { tip: 'erata' } }] })
+    expect(r.intarziereAC).toBe(true); expect(r.ultimRaspuns).toBeNull()
   })
 })
 

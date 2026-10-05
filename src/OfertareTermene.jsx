@@ -5,48 +5,59 @@
 // Logica e în ofertareTermene.js (testată). Nimic nu se salvează: zilele editate de om rămân doar în ecran.
 // Toate termenele sunt ORIENTATIVE (zile calendaristice, ora României) — confirmarea juridică rămâne a omului.
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { calculeazaTermene, extrageZileDinFisa, canalDinAnunt, PRAG_LUCRARI_LEI } from './ofertareTermene.js'
+import { calculeazaTermene, combinaFise, canalDinAnunt, PRAG_LUCRARI_LEI } from './ofertareTermene.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   ofertare:'#3FB6E2', green:'#3FB950', blue:'#58A6FF', orange:'#F0883E', yellow:'#E3B341', red:'#F85149' }
 const CUL_STARE = { trecut: G.dim, azi: G.orange, viitor: G.green }
 const TIP_ACT = { erata: '🔴 erată', raspuns_clarificare: '🟠 răspuns clarificare', document_nou: '⚪ documente noi' }
+const LIMITA_ACTE = 500
 const fmtZi = zi => zi ? zi.split('-').reverse().join('.') : '—'
 const fmtLei = n => n == null ? '—' : Number(n).toLocaleString('ro-RO', { maximumFractionDigits: 0 }) + ' lei'
 const inputMic = { width:54, background:G.bg, border:`1px solid ${G.border2}`, borderRadius:5, padding:'2px 6px', color:G.text, fontSize:12, textAlign:'center' }
 
 export default function OfertareTermene({ licitatie: l }) {
-  const [docs, setDocs] = useState(null)
-  const [fisa, setFisa] = useState(null)                   // { zileIntrebari, zileRaspuns, docId } sau { lipsa:true }
+  const [docs, setDocs] = useState(null)                   // null = se încarcă; [] = nimic
+  const [fisa, setFisa] = useState(null)                   // null = se încarcă; { zileIntrebari, zileRaspuns, docId, lipsa }
+  const [eroare, setEroare] = useState(null)
   const [zile, setZile] = useState({ intrebari: '', raspuns: '' })   // override uman — doar în ecran
+  const editat = useRef(false)                             // omul a scris în câmpuri → încărcarea nu-i suprascrie valorile
+  const [tick, setTick] = useState(0)                      // „azi” se recalculează și dacă modalul stă deschis peste miezul nopții
+  useEffect(() => { const t = setInterval(() => setTick(x => x + 1), 60000); return () => clearInterval(t) }, [])
   useEffect(() => {
     let viu = true
-    const load = async () => {
-      const { data: acte } = await supabase.from('ofertare_documente_atribuire')
-        .select('id, nume_original, tip, aparut_ulterior, created_at, citire:analiza->citire_noi')
-        .eq('licitatie_id', l.id).or('aparut_ulterior.eq.true,tip.eq.raspuns_clarificare').order('created_at').limit(500)
-      // Fișa de date: cifrele se iau din TEXTUL EXTRAS (nu din rezumatul AI). Pot fi mai multe fișe (split) — prima care are cifre.
-      const { data: fise } = await supabase.from('ofertare_documente_atribuire')
-        .select('id, text_extras').eq('licitatie_id', l.id).eq('tip', 'fisa_date').not('text_extras', 'is', null).order('id').limit(3)
-      if (!viu) return
-      setDocs(acte || [])
-      const gasit = (fise || []).map(f => ({ docId: f.id, ...extrageZileDinFisa(f.text_extras) })).find(f => f.zileIntrebari != null || f.zileRaspuns != null)
-      setFisa(gasit || { lipsa: !(fise || []).length })
-      setZile({ intrebari: gasit?.zileIntrebari ?? '', raspuns: gasit?.zileRaspuns ?? '' })
-    }
-    load()
+    // Licitație nouă în aceeași instanță: starea veche nu rămâne afișată lângă termenul/valoarea celei noi.
+    setDocs(null); setFisa(null); setEroare(null); setZile({ intrebari: '', raspuns: '' }); editat.current = false
+    if (!l.termen_depunere) return
+    // Actele: ultimele LIMITA_ACTE după dată (cele recente contează pentru contestație); includem și eratele marcate de citirea AI
+    // pe documente care nu sunt nici „apărute ulterior”, nici răspunsuri. Fișa: cifrele vin din TEXTUL EXTRAS, nu din rezumatul AI.
+    supabase.from('ofertare_documente_atribuire')
+      .select('id, nume_original, tip, aparut_ulterior, created_at, citire:analiza->citire_noi')
+      .eq('licitatie_id', l.id).or('aparut_ulterior.eq.true,tip.eq.raspuns_clarificare,analiza->citire_noi->>tip.eq.erata')
+      .order('created_at', { ascending: false }).limit(LIMITA_ACTE)
+      .then(({ data, error }) => { if (!viu) return; if (error) setEroare('actele: ' + error.message); setDocs(error ? [] : (data || [])) })
+    supabase.from('ofertare_documente_atribuire')
+      .select('id, text_extras').eq('licitatie_id', l.id).eq('tip', 'fisa_date').not('text_extras', 'is', null).order('id').limit(3)
+      .then(({ data, error }) => {
+        if (!viu) return
+        if (error) { setEroare(e => (e ? e + ' · ' : '') + 'fișa: ' + error.message); setFisa({ zileIntrebari: null, zileRaspuns: null, lipsa: false, eroare: true }); return }
+        const f = combinaFise(data || [])
+        setFisa({ ...f, lipsa: !(data || []).length })
+        if (!editat.current) setZile({ intrebari: f.zileIntrebari ?? '', raspuns: f.zileRaspuns ?? '' })
+      })
     return () => { viu = false }
-  }, [l.id])
+  }, [l.id, l.termen_depunere])
 
   const canal = canalDinAnunt(l.nr_anunt, l.canal)
   // Zile: întreg între 0 și 365 — orice altceva (gol, text, 1e9 tastat din greșeală) = necunoscut, nu excepție la randare.
   const nr = v => { const n = Math.trunc(Number(v)); return (v === '' || v == null || !Number.isFinite(n) || n < 0 || n > 365) ? null : n }
+  const incarcat = docs !== null && fisa !== null
   const calc = useMemo(() => calculeazaTermene({
     termenDepunere: l.termen_depunere, zileIntrebari: nr(zile.intrebari), zileRaspuns: nr(zile.raspuns),
     canal, valoareEstimata: l.valoare_estimata, docs: docs || [],
-  }), [l.termen_depunere, l.valoare_estimata, canal, zile, docs])
+  }), [l.termen_depunere, l.valoare_estimata, canal, zile, docs, tick])   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!l.termen_depunere) return (
     <div style={{ marginTop:14, padding:'10px 12px', borderRadius:8, border:`1px dashed ${G.border}`, color:G.muted, fontSize:12.5 }}>
@@ -54,8 +65,8 @@ export default function OfertareTermene({ licitatie: l }) {
     </div>
   )
   const editabil = (cheie, val) => (
-    <input style={inputMic} type="number" min="0" max="60" value={val} placeholder="?" title="Zile înainte de termenul de depunere — se poate corecta aici, nu se salvează"
-      onChange={e => setZile(z => ({ ...z, [cheie]: e.target.value }))} />
+    <input style={inputMic} type="number" min="0" max="365" step="1" value={val} placeholder="?" title="Zile înainte de termenul de depunere (întreg, 0–365) — se poate corecta aici, nu se salvează"
+      onChange={e => { editat.current = true; setZile(z => ({ ...z, [cheie]: e.target.value })) }} />
   )
   return (
     <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.border}`, background:G.card }}>
@@ -64,8 +75,10 @@ export default function OfertareTermene({ licitatie: l }) {
         <span style={{ fontSize:11, color:G.dim }}>orientativ — zile calendaristice, ora României; confirmarea juridică rămâne a omului</span>
         {canal && canal !== (l.canal || null) && <span style={{ fontSize:11, color:G.yellow, marginLeft:'auto' }} title={`Câmpul „canal” din ERP spune ${l.canal || '—'}, numărul anunțului ${l.nr_anunt} spune altceva. Calculul folosește anunțul.`}>⚠️ canal după nr. anunț: {canal.replace('seap_', 'SEAP ').toUpperCase()}</span>}
       </div>
+      {eroare && <div style={{ fontSize:12, color:G.red, marginBottom:8 }}>⚠️ Nu am putut încărca {eroare} — termenele de mai jos sunt incomplete.</div>}
       {fisa?.lipsa && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>⚠️ Nu există fișă de date citită (text extras) — completează zilele manual sau citește fișa în Documentație.</div>}
-      {fisa && !fisa.lipsa && fisa.zileIntrebari == null && fisa.zileRaspuns == null && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>⚠️ Fișa de date e citită, dar n-am găsit cifrele de zile în text — completează-le manual.</div>}
+      {fisa && !fisa.lipsa && !fisa.eroare && fisa.zileIntrebari == null && fisa.zileRaspuns == null && <div style={{ fontSize:12, color:G.yellow, marginBottom:8 }}>⚠️ Fișa de date e citită, dar n-am găsit cifrele de zile în text — completează-le manual.</div>}
+      {fisa?.docId && <div style={{ fontSize:11, color:G.dim, marginBottom:6 }}>cifrele din fișă: documentul #{fisa.docId}{fisa.zileIntrebari != null ? ` · întrebări ${fisa.zileIntrebari}` : ''}{fisa.zileRaspuns != null ? ` · răspuns ${fisa.zileRaspuns}` : ''} zile</div>}
 
       {calc.repere.map(r => (
         <div key={r.cheie} style={{ display:'grid', gridTemplateColumns:'220px 110px 1fr', gap:10, alignItems:'center', padding:'6px 0', borderBottom:`1px solid ${G.border2}`, fontSize:12.5 }}>
@@ -79,14 +92,15 @@ export default function OfertareTermene({ licitatie: l }) {
         </div>
       ))}
 
-      {calc.intarziereAC && (
+      {/* Alertele doar după ce s-au încărcat actele: altfel „niciun răspuns” ar apărea și cât timp lista e goală pentru că încă vine. */}
+      {incarcat && !eroare && calc.intarziereAC && (
         <div style={{ marginTop:10, padding:'8px 10px', borderRadius:8, background:G.red + '14', border:`1px solid ${G.red}55`, color:G.red, fontSize:12.5 }}>
           ⛔ AC nu a publicat niciun răspuns la clarificări după termenul de întrebări, iar termenul de răspuns a trecut — temei pentru solicitare de decalare (L98 art. 161 / L99 art. 173).
         </div>
       )}
-      {!calc.intarziereAC && calc.ultimRaspuns && calc.repere.find(r => r.cheie === 'raspuns')?.stare === 'trecut' && (
+      {incarcat && !calc.intarziereAC && calc.ultimRaspuns && calc.repere.find(r => r.cheie === 'raspuns')?.stare === 'trecut' && (
         <div style={{ marginTop:10, fontSize:12, color:G.yellow }}>
-          ℹ️ Ultimul act al AC marcat ca răspuns: {fmtZi(calc.ultimRaspuns)}. Verifică în Clarificări că e răspunsul <b>consolidat</b> (toate întrebările), nu doar documente noi.
+          ℹ️ Ultimul document de tip răspuns publicat de AC: {fmtZi(calc.ultimRaspuns)}. Verifică în Clarificări că e răspunsul <b>consolidat</b> (toate întrebările), nu doar liste sau planșe noi.
         </div>
       )}
 
@@ -98,7 +112,7 @@ export default function OfertareTermene({ licitatie: l }) {
         : calc.contestatii.length === 0 ? <div style={{ fontSize:12, color:G.dim, marginTop:4 }}>{calc.prag.zile ? 'Niciun act publicat după anunț (răspunsuri, erate, documente noi).' : ''}</div>
         : calc.contestatii.slice(0, 8).map(c => (
           <div key={c.zi} style={{ display:'grid', gridTemplateColumns:'220px 110px 1fr', gap:10, alignItems:'center', padding:'5px 0', borderBottom:`1px solid ${G.border2}`, fontSize:12.5 }}>
-            <span style={{ color:G.muted }}>{TIP_ACT[c.tip]} din {fmtZi(c.zi)}</span>
+            <span style={{ color:G.muted }} title={c.sursaZi === 'citire' ? 'data documentului, din citirea AI' : 'ziua în care a apărut în platformă (import) — data reală a publicării în SEAP poate fi anterioară'}>{TIP_ACT[c.tip]} din {fmtZi(c.zi)}{c.sursaZi === 'import' ? ' *' : ''}</span>
             <b style={{ color:CUL_STARE[c.stare] }}>{fmtZi(c.pana_la)}</b>
             <span style={{ color:G.dim, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={c.docs.map(d => d.nume).join('\n')}>
               {c.stare === 'trecut' ? 'expirat' : c.stare === 'azi' ? 'AZI' : `${c.zile} zile`} · {c.docs.length === 1 ? c.docs[0].nume : `${c.docs.length} documente: ${c.docs.slice(0, 2).map(d => d.nume).join(', ')}…`}
@@ -106,8 +120,9 @@ export default function OfertareTermene({ licitatie: l }) {
           </div>
         ))}
       {calc.contestatii.length > 8 && <div style={{ fontSize:11.5, color:G.dim, marginTop:4 }}>+ încă {calc.contestatii.length - 8} acte mai vechi</div>}
+      {docs?.length >= LIMITA_ACTE && <div style={{ fontSize:11.5, color:G.yellow, marginTop:4 }}>⚠️ Sunt peste {LIMITA_ACTE} documente eligibile — se iau în calcul doar cele mai recente {LIMITA_ACTE}.</div>}
       <div style={{ fontSize:11, color:G.dim, marginTop:8 }}>
-        Zilele de întrebări/răspuns vin din textul fișei de date (nu din rezumatul AI). Termenul de contestație curge de la luarea la cunoștință a actului; ziua afișată e ultima zi. Pragul pentru lucrări e cel din 2026 — se revizuiește din doi în doi ani.
+        Zilele de întrebări/răspuns vin din textul fișei de date (nu din rezumatul AI). Termenul de contestație curge de la luarea la cunoștință a actului; ziua afișată e ultima zi. * = ziua apariției în platformă, nu neapărat ziua publicării în SEAP. Pragul pentru lucrări e cel din 2026 — se revizuiește din doi în doi ani.
       </div>
     </div>
   )

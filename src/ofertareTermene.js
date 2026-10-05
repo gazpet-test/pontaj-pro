@@ -32,6 +32,13 @@ export function plusZile(zi, n) {
   return new Date(t).toISOString().slice(0, 10)
 }
 
+// „AAAA-LL-ZZ” validă și calendaristic (2026-02-31 trece regex-ul, dar nu e o zi) — altfel null.
+export function ziValida(zi) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(zi || '')) return null
+  const d = new Date(zi + 'T00:00:00Z')
+  return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== zi ? null : zi
+}
+
 // Zile întregi între două zile „AAAA-LL-ZZ” (b − a).
 export function zileIntre(a, b) {
   if (!a || !b) return null
@@ -46,16 +53,28 @@ export function zileIntre(a, b) {
 export function extrageZileDinFisa(text) {
   const t = String(text || '')
   // Cerem și „inainte de data limita” între frază și cifră: altfel „se pot solicita clarificari conform art. 8” dădea 8 zile.
-  const mi = t.match(/se\s+pot\s+solicita\s+clarific[aă]ri\s+[iî]nainte\s+de\s+data\s+limit[aă][^0-9\n]{0,80}?(\d{1,2})\b/i)
+  const mi = t.match(/se\s+pot\s+solicita\s+clarific[aă]ri\s+[iî]nainte\s+de\s+data\s+limit[aă][^0-9]{0,80}?(\d{1,2})\b/i)
   // Formulări întâlnite în fișele reale: „cu 11 zile inainte”, „in a 6-a zi inainte”, „in a 7 a zi inainte”.
   // Fără `\b` înaintea lui „î” (în JS, \b nu vede diacriticele ca litere → „în a 6-a zi” nu se potrivea).
   // Căutarea se oprește la „primite / transmise / depuse”: „…va raspunde… la solicitarile primite cu 9 zile inainte”
   // e termenul de ÎNTREBĂRI, nu de răspuns — nu trebuie luat drept răspuns când cifra răspunsului lipsește.
-  const mr = t.match(/r[aă]spunde(?:(?!primite|transmise|depuse)[\s\S]){0,300}?(?:(?:^|[^a-zăâîșț])cu\s+(\d{1,2})\s+zile\s+[iî]nainte|(?:^|[^a-zăâîșț])[iî]n\s+a\s+(\d{1,2})\s*-?\s*a\s+zi\s+[iî]nainte)/i)
+  const mr = t.match(/r[aă]spun(?:de|sul|surile)(?:(?!primite|transmise|depuse)[\s\S]){0,300}?(?:(?:^|[^a-zăâîșț])cu\s+(\d{1,2})\s+zile\s+[iî]nainte|(?:^|[^a-zăâîșț])[iî]n\s+a\s+(\d{1,2})\s*-?\s*a\s+zi\s+[iî]nainte)/i)
   return {
     zileIntrebari: mi ? Number(mi[1]) : null,
     zileRaspuns: mr ? Number(mr[1] || mr[2]) : null,
   }
+}
+
+// O fișă de date poate fi spartă în mai multe documente (split): zilele de întrebări pot fi într-o parte, cele de răspuns în alta.
+// Se ia, pentru fiecare cifră, primul document care o are; `docId` = documentul primei cifre găsite.
+export function combinaFise(fise) {
+  const r = { zileIntrebari: null, zileRaspuns: null, docId: null }
+  for (const f of fise || []) {
+    const z = extrageZileDinFisa(f.text_extras)
+    if (r.zileIntrebari == null && z.zileIntrebari != null) { r.zileIntrebari = z.zileIntrebari; r.docId ??= f.id }
+    if (r.zileRaspuns == null && z.zileRaspuns != null) { r.zileRaspuns = z.zileRaspuns; r.docId ??= f.id }
+  }
+  return r
 }
 
 // Canalul real al procedurii: numărul anunțului spune adevărul (CN… = licitație deschisă, SCN… = simplificată),
@@ -80,11 +99,13 @@ export function acteContestabile(docs) {
     const dataDoc = d.citire?.data_document || d.data_document
     const eAct = d.tip === 'raspuns_clarificare' || d.aparut_ulterior === true || tipCitire === 'erata'
     if (!eAct) continue
-    const zi = /^\d{4}-\d{2}-\d{2}$/.test(dataDoc || '') ? dataDoc : ziRo(d.created_at)
+    const dinCitire = ziValida(dataDoc)
+    const zi = dinCitire || ziRo(d.created_at)
     if (!zi) continue
     const tip = tipCitire === 'erata' ? 'erata' : d.tip === 'raspuns_clarificare' ? 'raspuns_clarificare' : 'document_nou'
-    const a = peZi.get(zi) || { zi, tip: 'document_nou', docs: [] }
+    const a = peZi.get(zi) || { zi, tip: 'document_nou', docs: [], areRaspuns: false, sursaZi: dinCitire ? 'citire' : 'import' }
     if ((RANG_TIP[tip] || 0) > (RANG_TIP[a.tip] || 0)) a.tip = tip
+    if (d.tip === 'raspuns_clarificare') a.areRaspuns = true     // calitatea de răspuns e separată de tipul dominant (o erată nu e răspuns)
     a.docs.push({ id: d.id, nume: d.nume_original || `doc ${d.id}` })
     peZi.set(zi, a)
   }
@@ -128,7 +149,7 @@ export function calculeazaTermene({ termenDepunere, zileIntrebari = null, zileRa
   // avea liste noi, nu răspunsuri) — de aceea întoarcem și `ultimRaspuns`, iar ecranul cere verificarea omului.
   const rRasp = repere.find(r => r.cheie === 'raspuns')
   const rIntreb = repere.find(r => r.cheie === 'intrebari')
-  const raspunsuri = acteContestabile(docs).filter(a => a.tip !== 'document_nou')
+  const raspunsuri = acteContestabile(docs).filter(a => a.areRaspuns)
   const ultimRaspuns = raspunsuri.length ? raspunsuri[raspunsuri.length - 1].zi : null
   const dupaIntrebari = !!ultimRaspuns && (!rIntreb?.zi || ultimRaspuns >= rIntreb.zi)
   const intarziereAC = !!(rRasp?.zi && rRasp.stare === 'trecut' && depunere && zileIntre(azi, depunere) >= 0 && !dupaIntrebari)
