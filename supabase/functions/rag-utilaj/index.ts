@@ -160,6 +160,9 @@ Deno.serve(async (req: Request) => {
       return json(200, { success: true, ...result });
     }
 
+    // r3 (Jakarinos): întrebarea se validează ÎNAINTE de poartă și de cota AI — o cerere invalidă nu consumă cotă.
+    if (action === 'ask' && !String(body.question || '').trim()) return json(400, { error: 'question necesară' });
+
     // ═══ Poarta (#17 F2): cronul cu secretul din Vault, altfel JWT de utilizator + rol ═══
     const intern = await esteApelIntern(req, supabase);
     let user = false, isOwner = false, nivelLogistica: NivelModul = null, userId: string | null = null;

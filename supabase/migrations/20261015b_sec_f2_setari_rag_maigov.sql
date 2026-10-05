@@ -29,7 +29,8 @@
 -- ORDINEA DE LIVRARE: migrarea → IMEDIAT deploy edge rag-utilaj, rag-utilaj-embed, redirect-mai-gov (workflow
 --   deploy-edge-function, toate trei verify_jwt=true). Între cele două, cronul trimite antetul nou spre edge-urile vechi ⇒
 --   401 câteva minute (rag la 5 min, redirect-mai-gov la 1 min — fereastra trebuie ținută scurtă).
--- Revenire (NU e migrare): supabase/revenire/20261015b_sec_f2_setari_rag_maigov_ROLLBACK.sql — doar politicile (A–C).
+-- Revenire (NU e migrare): supabase/revenire/20261015b_sec_f2_setari_rag_maigov_ROLLBACK.sql — politicile (A–C) și cota (E),
+--   cu edge-urile retrase în aceeași fereastră (fără funcțiile de cotă, rag-utilaj întoarce 500 pe ask_qr / AI).
 --   Joburile NU se readuc la secretul în clar (valoarea nu e și nu va fi în repo); dacă edge-urile noi trebuie retrase,
 --   joburile se opresc (cron.alter_job active := false) până la o nouă livrare.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid); fără BEGIN/COMMIT.
@@ -119,6 +120,12 @@ BEGIN
      OR (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rag_qr_log'
           AND column_name IN ('id', 'active_id', 'question', 'answered', 'created_at')) <> 5 THEN
     RAISE EXCEPTION 'Precondiție 0f: fn_rag_qr_rezerva / fn_rag_ask_rezerva / rag_ask_log există deja sau rag_qr_log nu are coloanele așteptate';
+  END IF;
+  -- 0g (r3, Jakarinos): cota se bazează pe created_at = now() din aceeași tranzacție și pe un public neinscriptibil
+  IF (SELECT column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'rag_qr_log' AND column_name = 'created_at') IS DISTINCT FROM 'now()'
+     OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid = 'public.rag_qr_log'::regclass AND NOT tgisinternal)
+     OR has_schema_privilege('anon', 'public', 'CREATE') OR has_schema_privilege('authenticated', 'public', 'CREATE') THEN
+    RAISE EXCEPTION 'Precondiție 0g: rag_qr_log.created_at nu are DEFAULT now(), are triggere, sau anon/authenticated pot crea obiecte în public';
   END IF;
   -- 0e. coloanele folosite de politici
   IF to_regclass('public.user_module_access') IS NULL

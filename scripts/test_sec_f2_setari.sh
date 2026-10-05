@@ -38,7 +38,7 @@ ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -l /tmp/pg_sec_f2.log -w -t 30 start
   -o "-p $PORT -c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp" >/dev/null || mediu "pg_ctl start"
 trap '[ $OPRESTE = 1 ] && ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null 2>&1; true' EXIT
 q() { "${PSQL[@]}" -d "$BAZA" -Atc "$1"; }
-gate_0e() { local n; n="$("${PSQL[@]}" -d "$BAZA" -At -f "$RADACINA/scripts/control_0e.sql" | grep -c . || true)"; [ "$n" = 0 ] || esec "gate 0e: $n rânduri"; ok "gate 0e = 0 ($1)"; }
+gate_0e() { local o; o="$("${PSQL[@]}" -d "$BAZA" -At -f "$RADACINA/scripts/control_0e.sql")" || esec "gate 0e: psql a eșuat"; [ -z "$o" ] || esec "gate 0e: $(grep -c . <<<"$o") rânduri"; ok "gate 0e = 0 ($1)"; }
 OWNER=00000000-0000-0000-0000-0000000000a1
 COLEG=00000000-0000-0000-0000-0000000000b2
 LOG_ED=00000000-0000-0000-0000-0000000000c3

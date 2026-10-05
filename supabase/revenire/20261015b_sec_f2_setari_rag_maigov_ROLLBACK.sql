@@ -34,9 +34,15 @@ BEGIN
      IS DISTINCT FROM 'cd10f751d0753a101a55e5fa79cd78ad' THEN
     RAISE EXCEPTION 'Revenire 20261015b: precondiție — politicile nu sunt exact cele create de patch-ul 20261015b';
   END IF;
+  -- obiectele cotei, exact cum le-a creat patch-ul (corp md5, SECDEF, owner, search_path, ACL) — r3, Copilot P2
   IF to_regprocedure('public.fn_rag_qr_rezerva(integer,text)') IS NULL OR to_regprocedure('public.fn_rag_ask_rezerva(uuid)') IS NULL
-     OR to_regclass('public.rag_ask_log') IS NULL THEN
-    RAISE EXCEPTION 'Revenire 20261015b: precondiție — obiectele cotei RAG lipsesc';
+     OR to_regclass('public.rag_ask_log') IS NULL
+     OR (SELECT count(*) FROM pg_proc p
+          WHERE ((p.oid = 'public.fn_rag_qr_rezerva(integer,text)'::regprocedure AND md5(p.prosrc) = 'fc1ea1793d9284ec91e176f060968090')
+              OR (p.oid = 'public.fn_rag_ask_rezerva(uuid)'::regprocedure AND md5(p.prosrc) = '3555302be2f738cc076c73ad243efa04'))
+            AND p.prosecdef AND pg_get_userbyid(p.proowner) = 'postgres' AND p.proconfig = ARRAY['search_path=public, pg_temp']
+            AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') <> 2 THEN
+    RAISE EXCEPTION 'Revenire 20261015b: precondiție — obiectele cotei RAG lipsesc sau au fost modificate după patch';
   END IF;
 END $arm$;
 

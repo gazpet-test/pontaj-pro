@@ -4,9 +4,12 @@ import { decideAcces, nivelMaxim } from './poartaRag.ts'
 const baza = { intern: false, user: true, isOwner: false, nivelLogistica: null as 'admin' | 'editor' | 'viewer' | null }
 const status = (d: ReturnType<typeof decideAcces>) => (d.ok ? 200 : d.status)
 
-Deno.test('cronul (secret intern valid) trece pe orice acțiune', () => {
-  for (const action of ['process_queue', 'process_pending', 'ask', 'x']) {
-    assert.equal(status(decideAcces({ ...baza, user: false, intern: true, action, ai: true })), 200)
+Deno.test('cronul (secret intern valid): doar procesarea de fundal; ask (cu sau fără AI) → 403', () => {
+  for (const action of ['process_queue', 'process_pending']) {
+    assert.equal(status(decideAcces({ ...baza, user: false, intern: true, action })), 200, action)
+  }
+  for (const [action, ai] of [['ask', true], ['ask', false], ['x', false]] as const) {
+    assert.equal(status(decideAcces({ ...baza, user: false, intern: true, action, ai })), 403, `${action} ai=${ai}`)
   }
 })
 

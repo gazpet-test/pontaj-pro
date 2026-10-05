@@ -2,7 +2,7 @@
 // Înainte: secretul intern era scris direct în sursă, iar pe ramura JWT orice cont logat trecea (inclusiv pe
 // process_queue = transcriere Claude plătită, și pe ask cu ai=true fără limită). Acum:
 //   - cronul trimite x-intern-secret din Vault (INTERN_EDGE_SECRET, verificat de _shared/poartaIntern.ts);
-//   - process_queue / process_pending: doar cronul sau owner-ul;
+//   - process_queue / process_pending: doar cronul sau owner-ul; secretul intern NU deschide ask/AI (r3);
 //   - ask fără AI (căutare în pasaje): owner sau oricine are modulul logistica (orice nivel);
 //   - ask cu AI (cost Anthropic): owner sau logistica admin/editor — plus cota zilnică per utilizator în BD
 //     (fn_rag_ask_rezerva, 50/zi), verificată în edge DUPĂ poarta de aici;
@@ -21,7 +21,8 @@ export function nivelMaxim(niveluri: (string | null | undefined)[]): NivelModul 
 }
 
 export function decideAcces(p: { intern: boolean; user: boolean; isOwner: boolean; nivelLogistica: NivelModul; action: string; ai?: boolean }): Decizie {
-  if (p.intern) return { ok: true }
+  // r3 (Copilot P1): secretul intern e o credențială comună de automatizare — doar procesarea de fundal, nu ask/AI.
+  if (p.intern) return ACTIUNI_MASINA.has(p.action) ? { ok: true } : { ok: false, status: 403, error: 'Apelul intern e permis doar pentru procesarea de fundal' }
   if (!p.user) return { ok: false, status: 401, error: 'Neautorizat' }
   if (p.isOwner) return { ok: true }
   if (ACTIUNI_MASINA.has(p.action)) return { ok: false, status: 403, error: 'Doar cronul sau owner-ul pornesc procesarea cărților tehnice' }
