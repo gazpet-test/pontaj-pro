@@ -1,0 +1,309 @@
+// Teste pentru despachetarea arhivelor ajunse în platformă (seap.ts → despacheteazaArhiveDinPlatforma, 05.10.2026).
+// Supabase simulat în memorie + un extractor simulat care respectă protocolul pe fișiere al extractorului izolat
+// (listare „7z l -slt” → rasp/listare.*, extragere → out/ + rasp/rezultat), cu `unzip` în loc de 7zz.
+// Rulare: deno test -A --node-modules-dir=none worker/ofertare/arhive_platforma_test.ts
+const eq = (a: unknown, b: unknown, m = '') => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${m}\n  primit:   ${JSON.stringify(a)}\n  așteptat: ${JSON.stringify(b)}`) }
+const ok = (c: unknown, m: string) => { if (!c) throw new Error(m) }
+
+type Rand = Record<string, any>
+// mini-interpretor pentru filtrele PostgREST folosite de worker: or(...), and(...), col.ilike.pat, col.not.ilike.pat, col.is.null
+// (NULL se comportă ca în SQL: „not ilike” pe NULL nu trece)
+function imparte(expr: string): string[] {
+  const out: string[] = []; let adanc = 0, cur = ''
+  for (const ch of expr) { if (ch === '(') adanc++; if (ch === ')') adanc--; if (ch === ',' && adanc === 0) { out.push(cur); cur = '' } else cur += ch }
+  if (cur) out.push(cur)
+  return out
+}
+const reLike = (p: string) => new RegExp('^' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 'is')
+function parseazaTermen(t: string): (r: Rand) => boolean {
+  if (t.startsWith('and(')) { const fs = imparte(t.slice(4, -1)).map(parseazaTermen); return r => fs.every(f => f(r)) }
+  if (t.startsWith('or(')) return parseazaOr(t.slice(3, -1))
+  let m = t.match(/^([a-z_]+)\.is\.null$/); if (m) { const c = m[1]; return r => r[c] == null }
+  m = t.match(/^([a-z_]+)\.not\.ilike\.(.*)$/s); if (m) { const c = m[1], re = reLike(m[2]); return r => r[c] != null && !re.test(r[c]) }
+  m = t.match(/^([a-z_]+)\.ilike\.(.*)$/s); if (m) { const c = m[1], re = reLike(m[2]); return r => r[c] != null && re.test(r[c]) }
+  throw new Error('filtru necunoscut în fake: ' + t)
+}
+function parseazaOr(expr: string): (r: Rand) => boolean { const fs = imparte(expr).map(parseazaTermen); return r => fs.some(f => f(r)) }
+function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Array>) {
+  let nextId = 5000
+  const potriveste = (r: Rand, f: ((r: Rand) => boolean)[]) => f.every(x => x(r))
+  function builder(tabel: string) {
+    const filtre: ((r: Rand) => boolean)[] = []
+    let op: 'select' | 'update' | 'insert' = 'select', patch: Rand | Rand[] = {}, limita = Infinity, sel = false
+    const b: any = {
+      select() { sel = true; return b },
+      update(p: Rand) { op = 'update'; patch = p; return b },
+      insert(p: Rand | Rand[]) { op = 'insert'; patch = p; return b },
+      eq(c: string, v: unknown) { filtre.push(r => r[c] === v); return b },
+      in(c: string, v: unknown[]) { filtre.push(r => v.includes(r[c])); return b },
+      is(c: string, v: unknown) { filtre.push(r => (v === null ? r[c] == null : r[c] === v)); return b },
+      not(c: string, o: string, v: unknown) {   // semantica SQL: NULL nu trece niciun NOT
+        if (o === 'is' && v === null) filtre.push(r => r[c] != null)
+        else if (o === 'like') { const re = new RegExp('^' + String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$'); filtre.push(r => r[c] != null && !re.test(r[c])) }
+        else throw new Error(`fake: not ${o} neimplementat`)
+        return b
+      },
+      ilike(c: string, p: string) { const re = new RegExp('^' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 'i'); filtre.push(r => re.test(r[c] ?? '')); return b },
+      or(expr: string) { const f = parseazaOr(expr); filtre.push(r => f(r)); return b },
+      order() { return b },
+      limit(n: number) { limita = n; return b },
+      maybeSingle() { return b.then((x: any) => ({ data: x.data?.[0] ?? null, error: x.error })) },
+      single() { return b.then((x: any) => ({ data: x.data?.[0] ?? null, error: x.data?.length ? null : { message: 'niciun rând' } })) },
+      then(res: any, rej: any) {
+        const t = tabele[tabel] ??= []
+        let data: Rand[] = []
+        if (op === 'select') data = t.filter(r => potriveste(r, filtre)).slice(0, limita)
+        else if (op === 'update') { data = t.filter(r => potriveste(r, filtre)); data.forEach(r => Object.assign(r, patch)) }
+        else { const noi = (Array.isArray(patch) ? patch : [patch]).map(p => ({ id: nextId++, ...p })); t.push(...noi); data = noi }
+        return Promise.resolve({ data: op === 'select' || sel ? data.map(r => ({ ...r })) : null, error: null }).then(res, rej)
+      },
+    }
+    return b
+  }
+  return {
+    from: builder,
+    rpc: async (fn: string, args: Rand) => {   // monitorul de egress: poarta (niciodată blocat aici) + jurnalul
+      if (fn === 'egress_log_descarcare') (tabele.egress_jurnal ??= []).push(args)
+      return { data: false, error: null }
+    },
+    storage: { from: () => ({
+      download: async (p: string) => fisiere.has(p) ? { data: new Blob([fisiere.get(p)! as unknown as BlobPart]), error: null } : { data: null, error: { message: 'Object not found' } },
+      upload: async (p: string, buf: Uint8Array) => { if (p.includes('PICA')) return { error: { message: 'simulat: Storage 500' } }; fisiere.set(p, buf); return { error: null } },
+      remove: async (ps: string[]) => { ps.forEach(p => fisiere.delete(p)); return { error: null } },
+    }) },
+  }
+}
+
+// extractorul simulat: listare în formatul 7z -slt (din `unzip -Z -l`), extragere cu `unzip`; `cale_rea` = listare otrăvită
+function pornesteExtractor(root: string, opt: { cale_rea?: boolean } = {}) {
+  let viu = true
+  const bucla = (async () => {
+    while (viu) {
+      for await (const job of Deno.readDir(root)) {
+        if (!job.isDirectory) continue
+        for await (const sub of Deno.readDir(`${root}/${job.name}`)) {
+          const dir = `${root}/${job.name}/${sub.name}`
+          let cerere = ''
+          try { cerere = (await Deno.readTextFile(`${dir}/cerere`)).trim() } catch { continue }
+          const prima = (await Deno.readTextFile(`${dir}/prima`)).trim()
+          if (cerere === 'l' && !(await Deno.stat(`${dir}/rasp/listare.gata`).catch(() => null))) {
+            const o = await new Deno.Command('unzip', { args: ['-Z', '-l', `${dir}/in/${prima}`], stdout: 'piped' }).output()
+            const linii = new TextDecoder().decode(o.stdout).split('\n').filter(l => /^[-d]r/.test(l))
+            const blocuri = linii.filter(l => l.startsWith('-')).map(l => { const p = l.trim().split(/\s+/); return `Path = ${p.slice(9).join(' ')}\nSize = ${p[3]}\nAttributes = A -rw-r--r--` })
+            if (opt.cale_rea) blocuri.push('Path = ../../etc/evil\nSize = 1\nAttributes = A -rw-r--r--')
+            await Deno.writeTextFile(`${dir}/rasp/listare.txt`, `Path = ${prima}\nType = zip\n\n` + blocuri.join('\n\n') + '\n')
+            await Deno.writeTextFile(`${dir}/rasp/listare.cod`, '0')
+            await Deno.writeTextFile(`${dir}/rasp/listare.gata`, '')
+          }
+          if (cerere === 'x' && !(await Deno.stat(`${dir}/rasp/rezultat`).catch(() => null))) {
+            const o = await new Deno.Command('unzip', { args: ['-q', '-o', `${dir}/in/${prima}`, '-d', `${dir}/out`] }).output()
+            await Deno.writeTextFile(`${dir}/rasp/rezultat`, `${o.code}\n`)
+          }
+        }
+      }
+      await new Promise(r => setTimeout(r, 100))
+    }
+  })()
+  return async () => { viu = false; await bucla.catch(() => {}) }
+}
+
+async function zipCu(fisiere: Record<string, string>): Promise<Uint8Array> {
+  const d = await Deno.makeTempDir()
+  for (const [n, c] of Object.entries(fisiere)) { await Deno.mkdir(`${d}/${n}`.replace(/\/[^/]+$/, ''), { recursive: true }); await Deno.writeTextFile(`${d}/${n}`, c) }
+  const o = await new Deno.Command('zip', { args: ['-q', '-r', `${d}/a.zip`, ...Object.keys(fisiere)], cwd: d }).output()
+  ok(o.code === 0, 'zip a eșuat')
+  const buf = await Deno.readFile(`${d}/a.zip`)
+  await Deno.remove(d, { recursive: true })
+  return buf
+}
+
+async function cuMediu(fn: (root: string, seap: any) => Promise<void>) {
+  const root = await Deno.makeTempDir()
+  const vechi = Deno.env.get('SEAP_LUCRU')
+  Deno.env.set('SEAP_LUCRU', root)
+  try {
+    const seap = await import(new URL(`./seap.ts?arhive=${crypto.randomUUID()}`, import.meta.url).href)
+    await fn(root, seap)
+  } finally {
+    if (vechi === undefined) Deno.env.delete('SEAP_LUCRU'); else Deno.env.set('SEAP_LUCRU', vechi)
+    await Deno.remove(root, { recursive: true }).catch(() => {})
+  }
+}
+
+Deno.test('arhive: selecție, spațiu de nume, volume', async () => {
+  await cuMediu(async (_root, s) => {
+    ok(s.eArhivaDeDespachetat({ nume_original: 'DOC_F1.rar', fisier_path: '3/x.rar', status_procesare: 'neprocesat', eroare: null }), 'rar neprocesat → da')
+    ok(s.eArhivaDeDespachetat({ nume_original: 'A.zip.p7s', fisier_path: '3/x', status_procesare: 'neprocesat', eroare: null }), 'zip.p7s neprocesat → da')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'PT.zip', fisier_path: '3/x', status_procesare: 'ignorat', eroare: 'non-PDF - ramane ca fisier' }), 'arhivă VECHE (ignorat, non-PDF) → nu se atinge automat')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'PT-semnat.zip', fisier_path: '3/x', status_procesare: 'ignorat', eroare: 'Arhivă adusă pe Terra: 41 fișiere în platformă.' }), 'deja despachetată pe drumul SEAP → nu')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'DOC.rar', fisier_path: '3/x', status_procesare: 'ignorat', eroare: '📦 Arhivă despachetată pe Terra: 3' }), 'deja despachetată → nu')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'DOC.rar', fisier_path: '3/x', status_procesare: 'eroare', eroare: 'Despachetare parțială: 2 urcate, 1 NEURCATE' }), 'parțială → nu (doar reluare manuală)')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'DOC.rar', fisier_path: '3/neincarcat/x', status_procesare: 'neprocesat', eroare: null }), 'placeholder → nu')
+    ok(!s.eArhivaDeDespachetat({ nume_original: 'Plansa.pdf', fisier_path: '3/x', status_procesare: 'neprocesat', eroare: null }), 'pdf → nu')
+    eq(s.spatiuArhiva({ id: 1305, nume_original: 'DOC_F1_F6_C1_C9.rar' }), 'DOC_F1_F6_C1_C9 (#1305)')
+    eq(s.spatiuArhiva({ id: 7, nume_original: 'A/B.zip.p7s' }), 'A_B (#7)')
+    ok(s.esteVolumRar('PT.part03.rar.p7s') && !s.esteVolumRar('PT.rar'), 'detectarea volumelor')
+  })
+})
+
+Deno.test('arhive: zip din veghe → documente separate cu prefix, arhiva marcată, fără dubluri la reluare', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>()
+      fisiere.set('3/atribuire/raspunsuri/CN_00058_DOC.zip', await zipCu({ 'F3_lista_1.pdf': '%PDF-1.4 a', 'C5_lista_cantitati_1.pdf': '%PDF-1.4 b', 'sub/Anexa.docx': 'x', '__MACOSX/._F3_lista_1.pdf': 'junk' }))
+      const tab: Record<string, Rand[]> = {
+        ofertare_documente_atribuire: [
+          { id: 1305, licitatie_id: 3, nume_original: 'DOC_F1_F6_C1_C9.zip', fisier_path: '3/atribuire/raspunsuri/CN_00058_DOC.zip', status_procesare: 'neprocesat', eroare: null, tip: 'raspuns_clarificare', seap_cod: 'CN1095546/00058', aparut_ulterior: true },
+          { id: 10, licitatie_id: 3, nume_original: 'F3_lista_1.pdf', fisier_path: '3/atribuire/vechi.pdf', status_procesare: 'procesat', eroare: null },
+        ],
+        ofertare_licitatii: [{ id: 3, responsabil_id: 'u-1', nr_anunt: 'DF1278266' }],
+        notifications: [],
+      }
+      const supa = fakeSupa(tab, fisiere)
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      const docs = tab.ofertare_documente_atribuire
+      const arh = docs.find(d => d.id === 1305)!
+      eq(arh.status_procesare, 'ignorat', 'arhiva rămâne ca fișier, ignorată la citire')
+      ok(arh.eroare.startsWith('📦 Arhivă despachetată pe Terra: 3 fișiere noi'), `nota arhivei: ${arh.eroare}`)
+      const noi = docs.filter(d => String(d.nume_original).startsWith('DOC_F1_F6_C1_C9 (#1305)/')).sort((a, b) => a.nume_original.localeCompare(b.nume_original))
+      eq(noi.map(d => d.nume_original), ['DOC_F1_F6_C1_C9 (#1305)/C5_lista_cantitati_1.pdf', 'DOC_F1_F6_C1_C9 (#1305)/F3_lista_1.pdf', 'DOC_F1_F6_C1_C9 (#1305)/sub/Anexa.docx'], 'fără junk, cu prefix — F3 NU e confundat cu originalul id 10')
+      eq(noi.map(d => [d.tip, d.status_procesare, d.seap_cod, d.aparut_ulterior, d.sursa]), [
+        ['lista_cantitati', 'neprocesat', 'CN1095546/00058', true, 'seap'],
+        ['lista_cantitati', 'neprocesat', 'CN1095546/00058', true, 'seap'],
+        ['raspuns_clarificare', 'ignorat', 'CN1095546/00058', true, 'seap'],
+      ], 'tip după numele propriu (altfel al arhivei), PDF-urile de citit, docx rămâne fișier')
+      ok(noi.every(d => fisiere.has(d.fisier_path)), 'fiecare document are fișierul în Storage')
+      eq(tab.notifications.length, 1, 'responsabilul licitației e anunțat')
+      eq(tab.egress_jurnal.map(j => [j.p_bucket, j.p_obiect, j.p_sursa, j.p_doc_id]), [['ofertare', '3/atribuire/raspunsuri/CN_00058_DOC.zip', 'nas:arhive', 1305]], 'descărcarea din Storage e în jurnalul de egress')
+      eq(docs.find(d => d.id === 10)!.status_procesare, 'procesat', 'originalul neatins')
+      // reluarea: arhiva nu mai e selectată, nimic nou
+      const inainte = docs.length
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      eq(docs.length, inainte, 'fără dubluri la a doua tură')
+      // un om resetează arhiva (neprocesat, fără notă) → reluarea nu dublează documentele deja extrase
+      Object.assign(arh, { status_procesare: 'neprocesat', eroare: null })
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      eq(docs.length, inainte, 'reluare manuală: tot fără dubluri')
+      ok(arh.eroare.includes('3 existau deja'), `nota la reluare: ${arh.eroare}`)
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: listare cu cale nesigură → RESPINSĂ, nimic urcat, nu se reia', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root, { cale_rea: true })
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/a.zip', await zipCu({ 'a.pdf': '%PDF-1.4' })]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [{ id: 1, licitatie_id: 3, nume_original: 'a.zip', fisier_path: '3/a.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const d = tab.ofertare_documente_atribuire
+      eq(d.length, 1, 'nimic urcat')
+      eq(d[0].status_procesare, 'eroare')
+      ok(/^Despachetare RESPINSĂ de controalele de siguranță: cale nesigură/.test(d[0].eroare), d[0].eroare)
+      ok(!s.eArhivaDeDespachetat(d[0]), 'nu mai e selectată (fără buclă)')
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: fișier lipsă în Storage → eroare vizibilă, nu se reia singur', async () => {
+  await cuMediu(async (_root, s) => {
+    const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [{ id: 1, licitatie_id: 3, nume_original: 'a.zip', fisier_path: '3/lipsa.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [], notifications: [] }
+    await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, new Map()), () => {})
+    eq(tab.ofertare_documente_atribuire[0].status_procesare, 'eroare')
+    ok(/^Despachetare eșuată \(descărcare din Storage/.test(tab.ofertare_documente_atribuire[0].eroare), tab.ofertare_documente_atribuire[0].eroare)
+  })
+})
+
+Deno.test('arhive: două arhive cu același nume nu se amestecă; volumele .partN.rar → manual', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([
+        ['3/r1.zip', await zipCu({ 'F3.pdf': '%PDF-1.4 v1' })], ['3/r2.zip', await zipCu({ 'F3.pdf': '%PDF-1.4 v2 modificat' })],
+        ['3/v1.rar', new Uint8Array([1, 2, 3])],
+      ])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+        { id: 20, licitatie_id: 3, nume_original: 'Raspuns.zip', fisier_path: '3/r1.zip', status_procesare: 'neprocesat', eroare: null },
+        { id: 21, licitatie_id: 3, nume_original: 'Raspuns.zip', fisier_path: '3/r2.zip', status_procesare: 'neprocesat', eroare: null },
+        { id: 22, licitatie_id: 3, nume_original: 'PT.part1.rar', fisier_path: '3/v1.rar', status_procesare: 'neprocesat', eroare: null },
+      ], ofertare_licitatii: [], notifications: [] }
+      const supa = fakeSupa(tab, fisiere)
+      for (let i = 0; i < 4; i++) await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      const d = tab.ofertare_documente_atribuire
+      eq(d.filter(x => /\/F3\.pdf$/.test(x.nume_original)).map(x => x.nume_original).sort(), ['Raspuns (#20)/F3.pdf', 'Raspuns (#21)/F3.pdf'], 'a doua arhivă NU e sărită ca „deja existentă”')
+      const f3v2 = d.find(x => x.nume_original === 'Raspuns (#21)/F3.pdf')!
+      eq(new TextDecoder().decode(fisiere.get(f3v2.fisier_path)), '%PDF-1.4 v2 modificat', 'conținutul celei de-a doua arhive')
+      const vol = d.find(x => x.id === 22)!
+      ok(/^Despachetare manuală necesară: arhivă în volume/.test(vol.eroare), vol.eroare)
+      eq(vol.status_procesare, 'neprocesat', 'volumul nu e atins altfel')
+      ok(!s.eArhivaDeDespachetat(vol), 'volumul nu mai e reselectat')
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: urcare parțială → eroare vizibilă; reluarea manuală reîncearcă doar lipsurile', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/p.zip', await zipCu({ 'A.pdf': '%PDF a', 'B.pdf': '%PDF b', 'PICA.pdf': '%PDF c' })]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [{ id: 30, licitatie_id: 3, nume_original: 'P.zip', fisier_path: '3/p.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [{ id: 3, responsabil_id: 'u-1', nr_anunt: 'X' }], notifications: [] }
+      const supa = fakeSupa(tab, fisiere)
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      const arh = tab.ofertare_documente_atribuire.find(x => x.id === 30)!
+      eq(arh.status_procesare, 'eroare', 'parțial ≠ despachetat')
+      ok(/^Despachetare parțială: 2 fișiere noi urcate, 1 NEURCATE: PICA\.pdf/.test(arh.eroare), arh.eroare)
+      eq(tab.ofertare_documente_atribuire.length, 3, 'cele 2 reușite rămân')
+      eq(tab.notifications[0].type, 'warning', 'notificarea spune că lipsesc fișiere')
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      eq(tab.ofertare_documente_atribuire.length, 3, 'fără reluare automată')
+      Object.assign(arh, { status_procesare: 'neprocesat', eroare: null })   // reluarea manuală
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      eq(tab.ofertare_documente_atribuire.length, 3, 'A și B nu se dublează (PICA pică din nou)')
+      ok(/2 existau, 1 NEURCATE/.test(arh.eroare), arh.eroare)
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: 60 de arhive vechi/tratate (id mici) nu blochează o arhivă nouă și nu sunt atinse', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/nou.zip', await zipCu({ 'N.pdf': '%PDF n' })]])
+      const vechi: Rand[] = []
+      for (let i = 1; i <= 60; i++) vechi.push({ id: i, licitatie_id: 3, nume_original: `v${i}.${i % 3 ? 'zip' : 'rar'}`, fisier_path: `3/v${i}`,
+        status_procesare: ['ignorat', 'eroare', 'neprocesat', 'ignorat'][i % 4], eroare: ['📦 Arhivă despachetată pe Terra: 1', 'Despachetare RESPINSĂ de controale', 'Despachetare manuală necesară: volume', 'non-PDF - ramane ca fisier (legacy)'][i % 4] })
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [...vechi, { id: 2000, licitatie_id: 3, nume_original: 'Nou.zip', fisier_path: '3/nou.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const nou = tab.ofertare_documente_atribuire.find(x => x.id === 2000)!
+      ok(nou.eroare?.startsWith('📦 Arhivă despachetată pe Terra: 1 fișiere noi'), `arhiva nouă trebuia despachetată: ${nou.eroare}`)
+      ok(tab.ofertare_documente_atribuire.some(x => x.nume_original === 'Nou (#2000)/N.pdf'), 'fișierul extras există')
+      eq(tab.ofertare_documente_atribuire.filter(x => x.id <= 60 && /\(#/.test(x.nume_original)).length, 0, 'nimic extras din arhivele vechi')
+      for (const v of vechi) {
+        const r = tab.ofertare_documente_atribuire.find(x => x.id === v.id)!
+        ok(r.status_procesare === v.status_procesare && r.eroare === v.eroare, `arhiva veche #${v.id} schimbată: ${r.status_procesare} / ${r.eroare}`)
+      }
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: 60 de placeholder-e de arhivă (id mici) nu blochează o arhivă reală nouă (filtrate înainte de limit)', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/real.zip', await zipCu({ 'R.pdf': '%PDF r' })]])
+      const ph: Rand[] = []
+      for (let i = 1; i <= 60; i++) ph.push({ id: i, licitatie_id: 3, nume_original: `DOC${i}.rar`, fisier_path: i % 2 ? `3/neincarcat/DOC${i}.rar` : null,
+        status_procesare: 'neprocesat', eroare: null })
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [...ph.map(x => ({ ...x })), { id: 2000, licitatie_id: 3, nume_original: 'Real.zip', fisier_path: '3/real.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const real = tab.ofertare_documente_atribuire.find(x => x.id === 2000)!
+      ok(real.eroare?.startsWith('📦 Arhivă despachetată pe Terra: 1 fișiere noi'), `arhiva reală trebuia despachetată: ${real.eroare}`)
+      ok(tab.ofertare_documente_atribuire.some(x => x.nume_original === 'Real (#2000)/R.pdf'), 'fișierul extras există')
+      for (const p of ph) {
+        const r = tab.ofertare_documente_atribuire.find(x => x.id === p.id)!
+        ok(r.status_procesare === 'neprocesat' && r.eroare === null, `placeholder #${p.id} atins: ${r.status_procesare} / ${r.eroare}`)
+      }
+    } finally { await opreste() }
+  })
+})

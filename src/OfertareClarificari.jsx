@@ -677,7 +677,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 // 05.10.2026 (Mânăstirea, CN1095546/00058): o arhivă .rar de 60 MB adusă din SEAP a stat „neprocesat”, iar aici
 // apărea „poate e scanat”. Arhivele nu se despachetează din răspunsurile SEAP: se dezarhivează local și se urcă conținutul.
 export const ARHIVA_DOC_RE = /\.(7z|rar|zip)$|\.part\d+\.rar$/i
-export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): platforma nu o despachetează aici. Dezarhiveaz-o local și urcă fișierele din ea la licitație (Documente → 📁 Urcă folder), apoi citește-le cu AI.'
+// Tot 05.10.2026 (regula permanentă, var. A): workerul de pe Terra despachetează singur orice arhivă ajunsă în platformă.
+export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): serverul (Terra) o despachetează singur în câteva minute, iar fișierele din ea apar ca documente separate, cu numele arhivei în față — pe acelea le citești cu AI. Arhivele în volume (.partN.rar) și cele cu eroare se dezarhivează local — motivul e scris la document.'
 
 export function TextOriginalToggle({ docId, nume }) {
   const [open, setOpen] = useState(false)

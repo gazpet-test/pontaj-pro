@@ -641,7 +641,7 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
 // ════════════════════════════════════════════════════════════════
 // SECȚIUNE: DOCUMENTAȚIA DE ATRIBUIRE (E1 — ingestie)
 // Regulile din claude_docs/ofertare-structura-nas-licitatii (corpus v5):
-// - arhivele (7z/rar/zip/.001) NU se urcă din browser — se dezarhivează local
+// - arhivele .zip/.rar/.7z de până la 200 MB se urcă direct și le despachetează workerul de pe Terra (05.10.2026); volumele .z01/.001 și arhivele mai mari se dezarhivează local
 //   și se urcă FOLDERUL (regula 1); dedup pe (nume, mărime) la re-upload
 // - gunoaie excluse: ~$*, .log, _Claude_*, .db, .tmp (regulile 7/23)
 // - clasificarea din nume e doar INDICIU (regula 25 — „PALNSE"), omul o poate
@@ -654,6 +654,10 @@ function LicitatieFormModal({ licitatie, onClose, onSave }) {
 // 41 au picat pe „PDF corupt" și se reluau la fiecare Procesează. Nu sunt documente: se sar la urcare și la procesare.
 const JUNK_RE = /(^|\/)~\$|\.log$|_Claude_|\.db$|\.tmp$|(^|\/)Thumbs\.db$|(^|\/)__MACOSX(\/|$)|(^|\/)\.DS_Store$|(^|\/)\._[^/]*$|(^|\/)desktop\.ini$/i
 const ARHIVA_RE = /\.(7z|rar|zip|z\d{2}|\d{3})$|\.part\d+\.rar$/i
+// 05.10.2026: .zip/.rar/.7z de până la 200 MB se urcă direct — workerul de pe Terra le despachetează cu extractorul izolat
+// (seap.ts → despacheteazaArhiveDinPlatforma). Volumele (.partN.rar, .z01, .001) și arhivele mai mari rămân manuale.
+const ARHIVA_SERVER_RE = /\.(zip|rar|7z)$/i
+const arhivaPentruServer = f => ARHIVA_SERVER_RE.test(f.name) && !/\.part\d+\.rar$/i.test(f.name) && f.size <= 200e6
 const DOC_STATUS = {
   neprocesat: { label:'neprocesat', color:G.muted },
   in_lucru:   { label:'în lucru',   color:G.yellow },
@@ -826,9 +830,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const urca = async (fileList) => {
     const files = Array.from(fileList || [])
     if (!files.length) return
-    const arhive = files.filter(f => ARHIVA_RE.test(f.name))
-    const bune = files.filter(f => !JUNK_RE.test((f.webkitRelativePath || f.name)) && !ARHIVA_RE.test(f.name))
-    setWarn(arhive.length ? `⚠️ ${arhive.length} arhive sărite (${arhive.slice(0, 3).map(f => f.name).join(', ')}${arhive.length > 3 ? '…' : ''}) — dezarhivează-le local și urcă folderul rezultat.` : null)
+    const arhive = files.filter(f => ARHIVA_RE.test(f.name) && !arhivaPentruServer(f))
+    const bune = files.filter(f => !JUNK_RE.test((f.webkitRelativePath || f.name)) && (!ARHIVA_RE.test(f.name) || arhivaPentruServer(f)))
+    setWarn(arhive.length ? `⚠️ ${arhive.length} arhive sărite (${arhive.slice(0, 3).map(f => f.name).join(', ')}${arhive.length > 3 ? '…' : ''}) — arhive în volume (.partN.rar, .z01, .001) sau peste 200 MB: dezarhivează-le local și urcă folderul rezultat.` : null)
     if (!bune.length) { setUpBusy(null); return }
     // Dedup pe (nume, mărime) DOAR față de fișierele urcate efectiv (regula 1 — dublă-ingestie).
     // Rândurile-placeholder (poziții de inventar cu cale marcată „neincarcat" — ex. planșele
@@ -848,11 +852,12 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       const { error: eUp } = await supabase.storage.from('ofertare').upload(path, f)
       if (eUp) { setWarn(`Eroare la „${rel}": ${eUp.message}`); continue }
       const estePdf = await areSemnaturaPdf(f)
+      const eArhiva = arhivaPentruServer(f)   // o ia workerul de pe Terra și o despachetează
       const randNou = {
         licitatie_id: licitatie.id, fisier_path: path, nume_original: rel,
         tip: ghicesteTip(rel), size_bytes: f.size,
-        status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-        eroare: estePdf ? null : 'non-PDF — rămâne ca fișier (docx/xls/dwg se parsează în M2)',
+        status_procesare: estePdf || eArhiva ? 'neprocesat' : 'ignorat',
+        eroare: estePdf || eArhiva ? null : 'non-PDF — rămâne ca fișier (docx/xls/dwg se parsează în M2)',
       }
       // dacă exista un placeholder cu acest nume, îl COMPLETĂM (nu lăsăm rând dublu)
       const idPlaceholder = placeholders.get(rel)
@@ -1445,7 +1450,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       {docs === null ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă...</div> :
         !docs.length ? (
           <div style={{ fontSize:12, color:G.dim }}>
-            Niciun document încă. Dezarhivează local documentația din SEAP (7z/rar/zip nu se urcă direct) și trage folderul cu „📁 Urcă folder" — apoi „🤖 Procesează" extrage textul, antetele și reviziile.
+            Niciun document încă. Trage documentația cu „📁 Urcă folder" (arhivele .zip/.rar/.7z de până la 200 MB se urcă direct — serverul le despachetează singur în câteva minute) — apoi „🤖 Procesează" extrage textul, antetele și reviziile.
           </div>
         ) : (
           <div style={{ maxHeight:260, overflowY:'auto', display:'flex', flexDirection:'column', gap:3 }}>
@@ -1470,7 +1475,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       Documentele citite înainte de 15.09.2026 au NULL — de aceea eticheta cade pe eroare/gol. */}
                   <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }}
                     title={d.pornit?.name ? `Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}` : (d.eroare || '')}>
-                    {spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : (d.status_procesare || 'neprocesat') === 'neprocesat' && ARHIVA_DOC_RE.test(d.nume_original || '') ? <span title={MESAJ_ARHIVA}>📦 arhivă</span> : st.label}
+                    {spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : (d.status_procesare || 'neprocesat') === 'neprocesat' && ARHIVA_DOC_RE.test(d.nume_original || '') ? <span title={MESAJ_ARHIVA}>📦 arhivă — se despachetează</span> : st.label}
                   </span>
                   <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.eroare || d.nume_original}>
                     {d.nume_original}
