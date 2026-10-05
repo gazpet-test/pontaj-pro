@@ -3,11 +3,11 @@
 // Chip-urile cu temeiurile atașate + modalul cu 3 file: Tipar (precedentele tiparului, treapta 1 deterministă),
 // Decizii CNSC (căutare în corpus), Cerințe normative. Textul întrebării NU se modifică niciodată automat.
 // Citatul se copiază înghețat din citate_cheie (trigger-ul din BD îl verifică). Export în adresă doar cu bifa „include în adresă”.
-// Tabelul ofertare_clarificari_temeiuri vine din migrarea 20261014a — până e aplicată, componenta spune asta și nu crapă.
+// Tabelul ofertare_clarificari_temeiuri vine din migrarea 20261014b — până e aplicată, componenta spune asta și nu crapă.
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
-import { propuneriDinTipar, formatCitare, etichetaDecizie, rezultatCJ, esteExclusa, avertismente } from './ofertareTemeiuri.js'
+import { propuneriDinTipar, formatCitare, etichetaDecizie, rezultatCJ, esteExclusa, avertismente, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
   ofertare:'#3FB6E2', green:'#3FB950', blue:'#58A6FF', orange:'#F0883E', yellow:'#E3B341', red:'#F85149', purple:'#A371F7' }
@@ -19,7 +19,6 @@ const S = {
 const CUL_CJ = { mentinuta: G.green, neverificat: G.dim, necunoscut: G.yellow, modificata: G.red, desfiintata: G.red }
 const TXT_CJ = { mentinuta: 'menținută în instanță', neverificat: 'neverificată în instanță', necunoscut: 'control judiciar necunoscut', modificata: 'MODIFICATĂ în instanță', desfiintata: 'DESFIINȚATĂ în instanță' }
 const SEL_DECIZIE = 'id, nr_decizie, buletin_oficial, data, an, domeniu, tema, regula, lege_aplicabila, link_sursa, verificat, control_judiciar, avertisment_instanta, citate_cheie'
-const TABEL_LIPSA = e => /ofertare_clarificari_temeiuri/.test(e?.message || '') && /does not exist|schema cache|not find/i.test(e?.message || '')
 
 const Badge = ({ children, col = G.muted, title }) => <span title={title} style={{ fontSize:10.5, fontWeight:700, color:col, border:`1px solid ${col}55`, borderRadius:5, padding:'1px 6px', whiteSpace:'nowrap' }}>{children}</span>
 
@@ -91,9 +90,11 @@ function ModalTemei({ tinta, licitatie, patternId, existente, onInchide, onSchim
     return () => { viu = false }
   }, [patternId])
 
-  // Valoarea pentru un filtru PostgREST `or(col.ilike.*)`: între ghilimele (virgulele și parantezele devin literale),
-  // cu % _ * escapate ca să nu fie wildcard-uri — B11 Jakarinos (nr. „3657/C1/4067,4182” se caută exact).
-  const ilikeVal = t => `"%${t.replace(/["\\]/g, '').replace(/[%_*]/g, m => '\\' + m)}%"`
+  // Valoarea pentru un filtru PostgREST `or(col.ilike.*)`: între ghilimele (virgulele și parantezele devin literale) — B11 Jakarinos
+  // (nr. „3657/C1/4067,4182” se caută exact). Valoarea citată trece prin DOUĂ parsere (N4 Jakarinos r2): pQuotedValue din PostgREST
+  // consumă un backslash, apoi SQL ILIKE îl vrea pe al doilea ca escape → `%` și `_` primesc `\\`. `*` nu poate fi făcut literal
+  // (PostgREST îl transformă în `%` după citare), deci rămâne wildcard — acceptat pentru o căutare.
+  const ilikeVal = t => `"%${t.replace(/["\\]/g, '').replace(/[%_]/g, m => '\\\\' + m)}%"`
   const cauta = async () => {
     setBusy(true); setCautat(true)
     const t = q.trim()
@@ -241,7 +242,7 @@ export default function TemeiuriClarificare({ tinta, licitatie = null, showToast
       .select('id, cnsc_decizie_id, requirement_id, pattern_id, pattern_id_origine, citat_idx, citat_text, citat_loc, sursa, confirmat, include_in_adresa, decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat), cerinta:norme_cerinte(requirement_id, locator, cerinta), tipar:clarificari_tipare!ofertare_clarificari_temeiuri_pattern_id_fkey(pattern_id, titlu, requires_human_legal_review), origine:clarificari_tipare!ofertare_clarificari_temeiuri_pattern_id_origine_fkey(pattern_id, requires_human_legal_review)')
       .eq(cheie, tinta[cheie]).order('id')
     if (v !== versiune.current) return
-    if (error) { setEroare(TABEL_LIPSA(error) ? 'tabelul temeiurilor nu e încă aplicat (migrarea 20261014a)' : error.message); setRows([]); return }
+    if (error) { setEroare(tabelLipsa(error) ? 'tabelul temeiurilor nu e încă aplicat (migrarea 20261014b)' : error.message); setRows([]); return }
     setEroare(null); setRows(data || [])
   }
   useEffect(() => { load() }, [tinta.clarificare_id, tinta.punct_id])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -275,13 +276,14 @@ export default function TemeiuriClarificare({ tinta, licitatie = null, showToast
         const cj = d ? rezultatCJ(d) : null
         const eticheta = d ? `CNSC ${etichetaDecizie(d)}${r.citat_loc ? ` · ${r.citat_loc}` : ''}` : r.cerinta ? `${r.cerinta.requirement_id} · ${r.cerinta.locator || ''}` : r.tipar ? `tipar ${r.tipar.pattern_id}` : '?'
         const rosu = d && (cj === 'modificata' || cj === 'desfiintata' || d.verificat !== true)
+        const neexp = motivNeexportabil(r)   // bifa „adresă” se oferă doar dacă rândul chiar poate ieși în PDF; debifarea rămâne mereu posibilă
         return (
           <span key={r.id} style={{ display:'inline-flex', gap:5, alignItems:'center', fontSize:11, border:`1px solid ${rosu ? G.red : r.confirmat ? G.border : G.yellow}66`, borderRadius:6, padding:'2px 7px', background:G.surface, color:G.text }}
             title={[r.citat_text ? `„${r.citat_text}”` : null, r.cerinta?.cerinta, r.tipar?.titlu, r.sursa !== 'manual' ? `sursa: ${r.sursa}` : null, rosu ? '⚠️ ' + TXT_CJ[cj] : null].filter(Boolean).join('\n')}>
             {rosu && '⚠️ '}{eticheta}
             {!r.confirmat && <button style={{ ...S.btnS, padding:'0 5px', fontSize:10.5, color:G.green }} disabled={busy} onClick={() => patch(r, { confirmat: true })} title="propunere — confirmă">✓</button>}
-            <label style={{ display:'inline-flex', gap:3, alignItems:'center', color: r.include_in_adresa ? G.green : G.dim, cursor:'pointer' }} title="include în adresa către AC (secțiunea „Practica CNSC invocată”)">
-              <input type="checkbox" checked={!!r.include_in_adresa} disabled={busy || !r.confirmat || !d} onChange={e => patch(r, { include_in_adresa: e.target.checked })} />adresă
+            <label style={{ display:'inline-flex', gap:3, alignItems:'center', color: r.include_in_adresa ? G.green : G.dim, cursor:'pointer' }} title={neexp ? `nu poate ieși în adresă: ${neexp}` : 'include în adresa către AC (secțiunea „Practica CNSC invocată”)'}>
+              <input type="checkbox" checked={!!r.include_in_adresa} disabled={busy || !r.confirmat || (!!neexp && !r.include_in_adresa)} onChange={e => patch(r, { include_in_adresa: e.target.checked })} />adresă
             </label>
             <button style={{ background:'none', border:'none', color:G.dim, cursor:'pointer', padding:0, fontSize:12 }} disabled={busy} onClick={() => sterge(r)} title="scoate temeiul">✕</button>
           </span>

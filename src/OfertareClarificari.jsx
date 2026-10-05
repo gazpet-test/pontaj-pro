@@ -14,7 +14,7 @@ import { poatePorniProcesarea, MOTIV_POARTA } from './OfertareTriere.jsx'
 import { imageToPdf } from './CitesteOricePanel.jsx'
 import PuncteClarificare from './OfertareClarificariPuncte.jsx'
 import TemeiuriClarificare from './OfertareTemeiuri.jsx'
-import { formatCitare } from './ofertareTemeiuri.js'
+import { formatCitare, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 
@@ -223,7 +223,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const excluse = 0
     if (!deTrimis.length) { showToast('Nicio întrebare aprobată de exportat.', 'warn'); return }
     // Pasul B: practica CNSC invocată — DOAR temeiurile confirmate și bifate „include în adresă”, cu pagină și link (formatul unic §4).
-    // Tabelul poate lipsi până la aplicarea migrării 20261014a → secțiunea pur și simplu nu apare.
+    // Tabelul poate lipsi până la aplicarea migrării 20261014b → secțiunea pur și simplu nu apare.
     const nrExport = new Set(deTrimis.map(q => q.nr))
     const practica = []
     {
@@ -234,17 +234,17 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
         baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', clarificare:ofertare_clarificari!inner(nr, licitatie_id)').eq('clarificare.licitatie_id', licId)),
         baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', punct:ofertare_clarificari_puncte!inner(nr, clarificare:ofertare_clarificari!inner(nr, licitatie_id))').eq('punct.clarificare.licitatie_id', licId)),
       ])
-      const lipsaTabel = e => e && /ofertare_clarificari_temeiuri/.test(e.message || '') && /does not exist|schema cache|not find/i.test(e.message || '')
-      const err = [rQ.error, rP.error].find(e => e && !lipsaTabel(e))
+      const err = [rQ.error, rP.error].find(e => e && !tabelLipsa(e))   // doar 42P01 / PGRST205 = tabel neaplicat; o eroare de relație/coloană blochează
       // tabelul neaplicat = fără secțiune (ok); orice altă eroare = NU exportăm un PDF care pare complet (B7)
       if (err) { showToast('Export blocat: temeiurile nu s-au putut verifica (' + err.message + ')', 'err'); return }
       const randuri = [...(rQ.data || []).map(t => ({ ...t, nr: t.clarificare?.nr })), ...(rP.data || []).map(t => ({ ...t, nr: t.punct?.clarificare?.nr }))]
+      // Fail-closed (Copilot r2, P1): un temei bifat „adresă” pe o întrebare exportată care NU poate ieși în formatul unic
+      // (decizie neverificată/modificată, doar referință fără citat, fără pagină/link) BLOCHEAZĂ exportul — nu dispare tăcut din PDF.
       for (const t of randuri) {
-        if (!nrExport.has(t.nr) || !t.decizie) continue
-        const cj = t.decizie.control_judiciar?.rezultat
-        if (t.decizie.verificat !== true || cj === 'modificata' || cj === 'desfiintata') continue   // regulă de cod, nu de bun-simț (verificat NULL = neverificat)
-        const f = formatCitare(t.decizie, t.citat_idx == null ? null : { loc: t.citat_loc, text: t.citat_text })
-        if (f) practica.push({ nr: t.nr, ...f })
+        if (!nrExport.has(t.nr)) continue
+        const motiv = motivNeexportabil(t)
+        if (motiv) { showToast(`Export blocat: temeiul bifat „adresă” la întrebarea ${t.nr} nu poate ieși în adresă (${motiv}) — debifează-l sau corectează-l.`, 'err'); return }
+        practica.push({ nr: t.nr, ...formatCitare(t.decizie, { loc: t.citat_loc, text: t.citat_text }) })
       }
       practica.sort((a, b) => a.nr - b.nr)
     }

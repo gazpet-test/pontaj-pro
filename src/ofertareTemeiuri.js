@@ -81,6 +81,27 @@ export function formatCitare(d, citat) {
   return { referinta: `${cap} — ${d.link_sursa}`, citat: citat.text, nota: 'practică de interpretare, nu normă' }
 }
 
+// „Tabelul temeiurilor nu e încă aplicat” se recunoaște DOAR după codul de eroare (Jakarinos r2): 42P01 = undefined_table (Postgres),
+// PGRST205 = PostgREST nu găsește TABELUL în schema cache. O eroare de RELAȚIE (PGRST200, alias FK greșit) sau de coloană NU e „tabel lipsă” —
+// altfel exportul ar sări tăcut peste secțiune, iar componenta ar minți că migrarea nu e aplicată.
+export function tabelLipsa(e) {
+  if (!e) return false
+  if (e.code === '42P01') return /ofertare_clarificari_temeiuri/.test(e.message || '')
+  if (e.code === 'PGRST205') return /ofertare_clarificari_temeiuri/.test(e.message || '')
+  return false
+}
+
+// Un temei bifat „include în adresă” iese în PDF doar prin formatCitare (pagină + link + citat înghețat). Dacă nu poate ieși,
+// bifa nu are ce face în platformă → UI nu o oferă, iar exportul se blochează în loc să sară rândul (Copilot r2, P1).
+export function motivNeexportabil(t) {
+  const d = t?.decizie
+  if (!d) return 'nu e decizie CNSC'
+  if (esteExclusa(d)) return d.verificat !== true ? 'decizie neverificată' : `decizie ${rezultatCJ(d)} în instanță`
+  if (t.citat_idx == null) return 'doar referință, fără citat'
+  if (!formatCitare(d, { loc: t.citat_loc, text: t.citat_text })) return 'fără pagină sau link sursă'
+  return null
+}
+
 // ── Tipare declanșate (la citirea documentației) ──────────────────────────────────────────────────────────────
 // unde_cauti din trigger ↔ tipul documentului din ofertare_documente_atribuire
 export const UNDE_CAUTI_TIP = { caiet_sarcini: ['cs_volum'], contract: ['model_contract'], F3: ['lista_cantitati'], fisa_de_date: ['fisa_date'],

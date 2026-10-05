@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
--- 20261014a_ofertare_clarificari_temeiuri — pasul B din docs/juridic/MAPARE_CNSC_IN_ERP.md (sesiunea juridică, 05.10.2026)
+-- 20261014b_ofertare_clarificari_temeiuri — pasul B din docs/juridic/MAPARE_CNSC_IN_ERP.md (sesiunea juridică, 05.10.2026)
 -- Legătura dintre o întrebare de clarificare (sau un punct al ei) și temeiul ei: o decizie CNSC, o cerință normativă
 -- sau un tipar de clarificări. Citatul din decizie se copiază ÎNGHEȚAT (citat_text) și e verificat la insert/update că e
 -- identic cu cnsc_decizii.citate_cheie[citat_idx].text, iar citat_loc e rescris din corpus — platforma nu produce citate.
@@ -8,12 +8,12 @@
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid), fără BEGIN/COMMIT, ca
 --   postgres, cu acordul explicit al lui Răzvan pe schemă (CLAUDE.md pct. 3/6). Pregătită în sesiunea de chat (PR #615),
 --   review Jakarinos + Copilot. Gate 0e = 0 (fără constatări noi la get_advisors).
--- Revenire: supabase/revenire/20261014a_ofertare_clarificari_temeiuri_ROLLBACK.sql (șterge tabelul ȘI datele din el).
+-- Revenire: supabase/revenire/20261014b_ofertare_clarificari_temeiuri_ROLLBACK.sql (șterge tabelul ȘI datele din el).
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $livrare_start$
 BEGIN
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261014a_ofertare_clarificari_temeiuri:' || txid_current() THEN
-    RAISE EXCEPTION 'Livrare 20261014a: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261014b_ofertare_clarificari_temeiuri:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261014b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
   END IF;
 END
 $livrare_start$;
@@ -87,7 +87,8 @@ CREATE INDEX ofertare_clarificari_temeiuri_punct_idx ON public.ofertare_clarific
 
 -- Garanțiile de BACKEND (nu doar de UI — review Jakarinos r1, B1/B2):
 --  1. citatul e EXACT cel din corpus: citat_text verificat, citat_loc rescris din citate_cheie[citat_idx] la orice insert/update
---  2. „include în adresă” când ținta are un tipar cu review juridic (ca temei sau ca proveniență) → doar un owner
+--  2. starea „ținta are tipar cu review juridic (temei SAU proveniență, pe oricare rând) + un temei inclus în adresă”
+--     o poate produce doar un owner — evaluată pe starea rezultată a țintei, la insert și la orice schimbare de include/tipar/proveniență/țintă
 -- Nu e SECURITY DEFINER: rulează cu drepturile celui care scrie (are SELECT pe corpus și pe tabel).
 CREATE OR REPLACE FUNCTION public.fn_temei_citat_verifica()
 RETURNS trigger
@@ -95,21 +96,40 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_citat jsonb;
+  v_citat  jsonb;
+  v_inclus boolean;
   v_review boolean;
+  v_atinge boolean;
 BEGIN
-  IF NEW.include_in_adresa AND (TG_OP = 'INSERT' OR NOT OLD.include_in_adresa) THEN
-    SELECT EXISTS (
-      SELECT 1 FROM public.clarificari_tipare t
-      WHERE t.requires_human_legal_review
-        AND (t.pattern_id = NEW.pattern_id OR t.pattern_id = NEW.pattern_id_origine
-             OR t.pattern_id IN (SELECT x.pattern_id FROM public.ofertare_clarificari_temeiuri x
-                                 WHERE x.pattern_id IS NOT NULL
-                                   AND ((NEW.clarificare_id IS NOT NULL AND x.clarificare_id = NEW.clarificare_id)
-                                     OR (NEW.punct_id IS NOT NULL AND x.punct_id = NEW.punct_id))))
-    ) INTO v_review;
-    IF v_review AND NOT public.fn_is_app_owner(auth.uid()) THEN
-      RAISE EXCEPTION 'Tiparul cere review juridic: includerea în adresă o poate face doar un owner' USING ERRCODE = 'insufficient_privilege';
+  -- Poarta „doar owner” se judecă pe STAREA REZULTATĂ a întregii ținte (Copilot r2, P0), nu pe rândul curent:
+  -- dacă după operație ținta are (a) orice temei/proveniență cu review juridic ȘI (b) orice temei include_in_adresa,
+  -- operația care produce starea asta cere owner. Se verifică doar când rândul curent contribuie la (a) sau (b)
+  -- și doar când operația atinge coloanele relevante (include, tipar, proveniență, țintă) — o notă schimbată de un
+  -- non-owner pe un rând deja inclus nu e blocată, scoaterea din adresă / a tiparului nici atât.
+  v_atinge := TG_OP = 'INSERT'
+    OR NEW.include_in_adresa IS DISTINCT FROM OLD.include_in_adresa
+    OR NEW.pattern_id IS DISTINCT FROM OLD.pattern_id
+    OR NEW.pattern_id_origine IS DISTINCT FROM OLD.pattern_id_origine
+    OR NEW.clarificare_id IS DISTINCT FROM OLD.clarificare_id
+    OR NEW.punct_id IS DISTINCT FROM OLD.punct_id;
+  IF v_atinge AND (NEW.include_in_adresa OR NEW.pattern_id IS NOT NULL OR NEW.pattern_id_origine IS NOT NULL) THEN
+    SELECT bool_or(t.include_in_adresa),
+           bool_or(EXISTS (SELECT 1 FROM public.clarificari_tipare c
+                           WHERE c.requires_human_legal_review AND c.pattern_id IN (t.pattern_id, t.pattern_id_origine)))
+      INTO v_inclus, v_review
+      FROM (
+        SELECT x.pattern_id, x.pattern_id_origine, x.include_in_adresa
+          FROM public.ofertare_clarificari_temeiuri x
+         WHERE x.id <> NEW.id                               -- la UPDATE rândul vechi e înlocuit de NEW; la INSERT id-ul e deja alocat
+           AND ((NEW.clarificare_id IS NOT NULL AND x.clarificare_id = NEW.clarificare_id)
+             OR (NEW.punct_id IS NOT NULL AND x.punct_id = NEW.punct_id))
+        UNION ALL
+        SELECT NEW.pattern_id, NEW.pattern_id_origine, NEW.include_in_adresa
+      ) t;
+    -- contract explicit (Jakarinos r2): fără identitate (auth.uid() NULL — service_role, postgres) NU e owner → refuz, fail-closed
+    IF coalesce(v_inclus, false) AND coalesce(v_review, false) AND NOT coalesce(public.fn_is_app_owner(auth.uid()), false) THEN
+      RAISE EXCEPTION 'Ținta are un tipar cu review juridic și un temei inclus în adresă: starea asta o poate produce doar un owner'
+        USING ERRCODE = 'insufficient_privilege';
     END IF;
   END IF;
   IF NEW.citat_idx IS NULL THEN
@@ -181,8 +201,8 @@ $post$;
 
 DO $livrare_final$
 BEGIN
-  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261014a_ofertare_clarificari_temeiuri:' || txid_current() THEN
-    RAISE EXCEPTION 'Livrare 20261014a: garda de livrare (final) — tranzacție/runner invalid';
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261014b_ofertare_clarificari_temeiuri:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261014b: garda de livrare (final) — tranzacție/runner invalid';
   END IF;
 END
 $livrare_final$;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { idDecizieDinPrecedent, esteExclusa, domeniuLicitatie, legeLicitatie, avertismente, propuneriDinTipar, paginaDinLoc, formatCitare, frazeDinSemnal, contineFraza, tipareDeclansate, etichetaDecizie } from './ofertareTemeiuri.js'
+import { idDecizieDinPrecedent, esteExclusa, domeniuLicitatie, legeLicitatie, avertismente, propuneriDinTipar, paginaDinLoc, formatCitare, frazeDinSemnal, contineFraza, tipareDeclansate, etichetaDecizie, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.js'
 
 // Date reale din corpus (05.10.2026): PAT-GAZ-14 și decizia anonimizată BO2022_2473
 const D_BO = { id: 'CNSC-BO2022_2473', nr_decizie: 'BO2022_2473 (nr./data anonimizate în BO; contestația 2871/19.10.2022)', buletin_oficial: 'BO2022_2473', data: null, an: 2022, domeniu: 'gaze', lege_aplicabila: 'L98', verificat: true, control_judiciar: null,
@@ -99,5 +99,26 @@ describe('tipareDeclansate (cuvinte-cheie, doar fraze între ghilimele, doar în
   it('fără text sau fără potrivire → listă goală', () => {
     expect(tipareDeclansate([TIPAR], [{ id: 1, tip: 'cs_volum', text: null }])).toEqual([])
     expect(tipareDeclansate([TIPAR], [{ id: 1, tip: 'cs_volum', text: 'contract de executie clasic' }])).toEqual([])
+  })
+})
+
+describe('runda 3 (Copilot r2 P1 + Jakarinos r2): tabel lipsă doar după cod, export fail-closed', () => {
+  it('tabelLipsa: 42P01 / PGRST205 pe tabelul temeiurilor = neaplicat; eroarea de relație PGRST200 sau alt tabel NU', () => {
+    expect(tabelLipsa({ code: 'PGRST205', message: "Could not find the table 'public.ofertare_clarificari_temeiuri' in the schema cache" })).toBe(true)
+    expect(tabelLipsa({ code: '42P01', message: 'relation "public.ofertare_clarificari_temeiuri" does not exist' })).toBe(true)
+    expect(tabelLipsa({ code: 'PGRST200', message: "Could not find a relationship between 'ofertare_clarificari_temeiuri' and 'cnsc_decizii' in the schema cache" })).toBe(false)
+    expect(tabelLipsa({ code: 'PGRST205', message: "Could not find the table 'public.alt_tabel' in the schema cache" })).toBe(false)
+    expect(tabelLipsa({ message: 'ofertare_clarificari_temeiuri does not exist' })).toBe(false)
+    expect(tabelLipsa(null)).toBe(false)
+  })
+  it('motivNeexportabil: doar decizia verificată, menținută, cu citat + pagină + link iese în adresă', () => {
+    const d = { id: 'CNSC-BO2022_2473', nr_decizie: '1500/C4/1234', data: '2022-09-15', link_sursa: 'https://x/y.pdf', verificat: true, control_judiciar: { rezultat: 'mentinuta' } }
+    expect(motivNeexportabil({ decizie: d, citat_idx: 0, citat_loc: 'pag. 12', citat_text: 'text înghețat' })).toBeNull()
+    expect(motivNeexportabil({ decizie: d, citat_idx: null, citat_loc: null, citat_text: null })).toMatch(/doar referință/)
+    expect(motivNeexportabil({ decizie: d, citat_idx: 0, citat_loc: 'secțiunea 3', citat_text: 'text' })).toMatch(/pagină sau link/)
+    expect(motivNeexportabil({ decizie: { ...d, link_sursa: null }, citat_idx: 0, citat_loc: 'pag. 12', citat_text: 'text' })).toMatch(/pagină sau link/)
+    expect(motivNeexportabil({ decizie: { ...d, verificat: null }, citat_idx: 0, citat_loc: 'pag. 12', citat_text: 'text' })).toMatch(/neverificată/)
+    expect(motivNeexportabil({ decizie: { ...d, control_judiciar: { rezultat: 'modificata' } }, citat_idx: 0, citat_loc: 'pag. 12', citat_text: 'text' })).toMatch(/modificata/)
+    expect(motivNeexportabil({ decizie: null, requirement_id: 'REQ-1' })).toMatch(/nu e decizie/)
   })
 })
