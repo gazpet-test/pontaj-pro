@@ -74,3 +74,11 @@ BEGIN
   END IF;
 END
 $post$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261013b_ofertare_doc_are_bucati_invoker:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261013b: garda de livrare (final) — tranzacție/runner invalid';
+  END IF;
+END
+$livrare_final$;

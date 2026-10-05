@@ -18,9 +18,15 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261013b=%') THEN
     RAISE EXCEPTION 'Revenire 20261013b: armare persistentă (ALTER DATABASE/ROLE SET) — refuz';
   END IF;
-  IF (SELECT prosecdef FROM pg_proc WHERE oid = 'public.ofertare_doc_are_bucati(bigint,bigint,text)'::regprocedure) IS NOT FALSE
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.ofertare_doc_are_bucati(bigint,bigint,text)'::regprocedure) IS DISTINCT FROM '9d50c502093fdffb2485ce973a20abb9' THEN
-    RAISE EXCEPTION 'Revenire 20261013b: precondiție — starea nu e cea a patch-ului 20261013b';
+  -- Starea EXACTĂ a patch-ului (Copilot P1 pe #607): altfel un EXECUTE adăugat ulterior ar rămâne pe o funcție redevenită SECDEF
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+                  WHERE p.oid = 'public.ofertare_doc_are_bucati(bigint,bigint,text)'::regprocedure
+                    AND p.prosecdef IS FALSE AND p.provolatile = 's' AND l.lanname = 'sql'
+                    AND pg_get_userbyid(p.proowner) = 'postgres'
+                    AND md5(p.prosrc) = '9d50c502093fdffb2485ce973a20abb9'
+                    AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+                    AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}') THEN
+    RAISE EXCEPTION 'Revenire 20261013b: precondiție — starea nu e exact cea a patch-ului 20261013b (INVOKER, sql, STABLE, owner postgres, md5, search_path, ACL {postgres,service_role,authenticated})';
   END IF;
 END $arm$;
 
