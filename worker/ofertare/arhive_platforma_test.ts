@@ -37,6 +37,12 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
       eq(c: string, v: unknown) { filtre.push(r => r[c] === v); return b },
       in(c: string, v: unknown[]) { filtre.push(r => v.includes(r[c])); return b },
       is(c: string, v: unknown) { filtre.push(r => (v === null ? r[c] == null : r[c] === v)); return b },
+      not(c: string, o: string, v: unknown) {   // semantica SQL: NULL nu trece niciun NOT
+        if (o === 'is' && v === null) filtre.push(r => r[c] != null)
+        else if (o === 'like') { const re = new RegExp('^' + String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$'); filtre.push(r => r[c] != null && !re.test(r[c])) }
+        else throw new Error(`fake: not ${o} neimplementat`)
+        return b
+      },
       ilike(c: string, p: string) { const re = new RegExp('^' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 'i'); filtre.push(r => re.test(r[c] ?? '')); return b },
       or(expr: string) { const f = parseazaOr(expr); filtre.push(r => f(r)); return b },
       order() { return b },
@@ -272,8 +278,32 @@ Deno.test('arhive: 60 de arhive vechi/tratate (id mici) nu blochează o arhivă 
       const nou = tab.ofertare_documente_atribuire.find(x => x.id === 2000)!
       ok(nou.eroare?.startsWith('📦 Arhivă despachetată pe Terra: 1 fișiere noi'), `arhiva nouă trebuia despachetată: ${nou.eroare}`)
       ok(tab.ofertare_documente_atribuire.some(x => x.nume_original === 'Nou (#2000)/N.pdf'), 'fișierul extras există')
-      // filtrul e și el corect: o arhivă legacy (ignorată de ingest cu alt mesaj) încă se ia
-      eq(tab.ofertare_documente_atribuire.filter(x => x.id <= 60 && /\(#/.test(x.nume_original)).length, 0, 'arhivele vechi neatinse')
+      eq(tab.ofertare_documente_atribuire.filter(x => x.id <= 60 && /\(#/.test(x.nume_original)).length, 0, 'nimic extras din arhivele vechi')
+      for (const v of vechi) {
+        const r = tab.ofertare_documente_atribuire.find(x => x.id === v.id)!
+        ok(r.status_procesare === v.status_procesare && r.eroare === v.eroare, `arhiva veche #${v.id} schimbată: ${r.status_procesare} / ${r.eroare}`)
+      }
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: 60 de placeholder-e de arhivă (id mici) nu blochează o arhivă reală nouă (filtrate înainte de limit)', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/real.zip', await zipCu({ 'R.pdf': '%PDF r' })]])
+      const ph: Rand[] = []
+      for (let i = 1; i <= 60; i++) ph.push({ id: i, licitatie_id: 3, nume_original: `DOC${i}.rar`, fisier_path: i % 2 ? `3/neincarcat/DOC${i}.rar` : null,
+        status_procesare: 'neprocesat', eroare: null })
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [...ph.map(x => ({ ...x })), { id: 2000, licitatie_id: 3, nume_original: 'Real.zip', fisier_path: '3/real.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const real = tab.ofertare_documente_atribuire.find(x => x.id === 2000)!
+      ok(real.eroare?.startsWith('📦 Arhivă despachetată pe Terra: 1 fișiere noi'), `arhiva reală trebuia despachetată: ${real.eroare}`)
+      ok(tab.ofertare_documente_atribuire.some(x => x.nume_original === 'Real (#2000)/R.pdf'), 'fișierul extras există')
+      for (const p of ph) {
+        const r = tab.ofertare_documente_atribuire.find(x => x.id === p.id)!
+        ok(r.status_procesare === 'neprocesat' && r.eroare === null, `placeholder #${p.id} atins: ${r.status_procesare} / ${r.eroare}`)
+      }
     } finally { await opreste() }
   })
 })

@@ -514,8 +514,9 @@ export function eArhivaDeDespachetat(d: Partial<DocArhiva>): boolean {
   return ARHIVA_DOC_RE.test(d.nume_original || '') && !estePlaceholder(d as { fisier_path?: string | null })
     && d.status_procesare === 'neprocesat' && !d.eroare
 }
-// Filtrul pe nume (PostgREST `or`); statusul și „fără notă” se filtrează tot pe server, ÎNAINTE de limit — stările
-// finale (despachetată / parțială / respinsă / manuală) au toate notă, deci nu pot bloca coada (Copilot P0 r2 pe #608).
+// Filtrul pe nume (PostgREST `or`); statusul, „fără notă” și „nu e placeholder” se filtrează tot pe server, ÎNAINTE de
+// limit — stările finale (despachetată / parțială / respinsă / manuală) au toate notă, iar placeholder-ele n-au fișier,
+// deci niciunele nu pot ocupa cele 50 de locuri (Copilot P0 r2 + r3 pe #608). Filtrul JS rămâne a doua barieră.
 export const FILTRU_NUME_ARHIVA = ['zip', 'rar', '7z', 'zip.p7s', 'rar.p7s', '7z.p7s'].map(x => `nume_original.ilike.%.${x}`).join(',')
 export const esteVolumRar = (nume: string) => !!volumRar(nume.replace(/\.p7s$/i, ''))
 /** Spațiul de nume al documentelor extrase: numele arhivei + id-ul rândului ei („DOC_F1_F6_C1_C9 (#1305)”). */
@@ -534,6 +535,7 @@ export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: str
   const { data: cand, error } = await supa.from('ofertare_documente_atribuire')
     .select('id, licitatie_id, nume_original, fisier_path, status_procesare, eroare, tip, seap_cod, aparut_ulterior')
     .eq('status_procesare', 'neprocesat').is('eroare', null)
+    .not('fisier_path', 'is', null).not('fisier_path', 'like', '%/neincarcat/%')   // = !estePlaceholder, tot înainte de limit (Copilot P0 r3)
     .or(FILTRU_NUME_ARHIVA)
     .order('id').limit(50)
   if (error) { log(`arhive din platformă: ${error.message}`); return }
