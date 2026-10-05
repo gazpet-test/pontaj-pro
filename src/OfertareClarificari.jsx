@@ -624,7 +624,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         </div>
                       )
                     })()}
-                    {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }}>🤖 {q.citita_rezumat}</div>}
+                    {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }} title="Rezumatul e interpretarea AI a documentului citit — nu-l cita ca text oficial; pentru citate folosește „Text original” al documentului."><span style={{ fontSize:10.5, color:G.dim }}>🤖 rezumat AI — interpretare, nu citat</span><br />{q.citita_rezumat}</div>}
                     {/* Pasul B (MAPARE_CNSC_IN_ERP.md): temeiurile întrebării — decizii CNSC cu citat înghețat, cerințe normative, tipar. Textul întrebării nu se atinge. */}
                     <TemeiuriClarificare tinta={{ clarificare_id: q.id }} licitatie={lic} showToast={showToast} profile={profile} />
                     {/* Câmpul de răspuns apare de la „trimisă" încolo. Înainte era legat de status='raspunsa',
