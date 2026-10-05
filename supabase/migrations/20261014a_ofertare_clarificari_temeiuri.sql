@@ -68,12 +68,13 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.fn_temei_citat_verifica() FROM PUBLIC;
 
 CREATE TRIGGER trg_temei_citat_verifica
-  BEFORE INSERT OR UPDATE OF citat_idx, citat_text, cnsc_decizie_id ON public.ofertare_clarificari_temeiuri
+  BEFORE INSERT OR UPDATE ON public.ofertare_clarificari_temeiuri   -- la ORICE update: și citat_loc e rescris din corpus
   FOR EACH ROW EXECUTE FUNCTION public.fn_temei_citat_verifica();
 
--- RLS: citire pentru orice logat; scriere = aceeași regulă ca pe ofertare_clarificari (fn_are_acces_ofertare)
+-- RLS: citire ȘI scriere doar pentru cine are acces la modulul Ofertare (fn_are_acces_ofertare, ca la scrierea pe
+-- ofertare_clarificari). Citirea e mai strictă decât pe ofertare_clarificari pentru că `nota` e internă (review Jakarinos r1).
 ALTER TABLE public.ofertare_clarificari_temeiuri ENABLE ROW LEVEL SECURITY;
-CREATE POLICY temeiuri_sel ON public.ofertare_clarificari_temeiuri FOR SELECT TO authenticated USING (auth.uid() IS NOT NULL);
+CREATE POLICY temeiuri_sel ON public.ofertare_clarificari_temeiuri FOR SELECT TO authenticated USING ((SELECT public.fn_are_acces_ofertare()));
 CREATE POLICY temeiuri_ins ON public.ofertare_clarificari_temeiuri FOR INSERT TO authenticated WITH CHECK ((SELECT public.fn_are_acces_ofertare()));
 CREATE POLICY temeiuri_upd ON public.ofertare_clarificari_temeiuri FOR UPDATE TO authenticated USING ((SELECT public.fn_are_acces_ofertare())) WITH CHECK ((SELECT public.fn_are_acces_ofertare()));
 CREATE POLICY temeiuri_del ON public.ofertare_clarificari_temeiuri FOR DELETE TO authenticated USING ((SELECT public.fn_are_acces_ofertare()));

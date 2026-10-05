@@ -212,8 +212,11 @@ export default function TemeiuriClarificare({ tinta, licitatie = null, showToast
   }
   useEffect(() => { load() }, [tinta.clarificare_id, tinta.punct_id])   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Dacă ORICE temei al țintei e un tipar care cere review juridic, includerea în adresă (a oricărui temei al țintei,
+  // inclusiv deciziile propuse din tipar) o poate face doar un owner — review Jakarinos r1.
+  const reviewNecesar = (rows || []).some(x => x.tipar?.requires_human_legal_review)
   const patch = async (r, p) => {
-    if (p.include_in_adresa && r.tipar?.requires_human_legal_review && !profile?.is_owner) return anunta('Tiparul cere review juridic — doar un owner poate include temeiul în adresă.', 'warn')
+    if (p.include_in_adresa && (reviewNecesar || r.tipar?.requires_human_legal_review) && !profile?.is_owner) return anunta('Tiparul cere review juridic — doar un owner poate include temeiuri în adresă.', 'warn')
     setBusy(true)
     const { error } = await supabase.from('ofertare_clarificari_temeiuri').update(p).eq('id', r.id)
     setBusy(false)
