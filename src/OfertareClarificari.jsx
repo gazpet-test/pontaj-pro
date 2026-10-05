@@ -598,7 +598,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         </div>
                       )
                     })()}
-                    {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }}>🤖 {q.citita_rezumat}</div>}
+                    {q.origine === 'manual' && q.citita_rezumat && <div style={{ fontSize:11.5, color:G.muted, marginTop:4, padding:'5px 8px', background:G.surface, borderRadius:6, borderLeft:`2px solid ${G.green}` }} title="Rezumatul e interpretarea AI a documentului citit — nu-l cita ca text oficial; pentru citate folosește „Text original” al documentului."><span style={{ fontSize:10.5, color:G.dim }}>🤖 rezumat AI — interpretare, nu citat</span><br />{q.citita_rezumat}</div>}
                     {/* Câmpul de răspuns apare de la „trimisă" încolo. Înainte era legat de status='raspunsa',
                         deci nimeni nu putea completa răspunsul fără să bifeze întâi că a primit unul. */}
                     {(q.status === 'trimisa' || q.status === 'raspunsa' || q.raspuns) && (
