@@ -65,7 +65,9 @@ jobs:
           # O funcție nouă cu verify_jwt=false trebuie adăugată AICI, altfel pleacă cu true.
           # 03.10.2026 (#17): + cleanup-recycle-bin, detect-ordine (poarta x-intern-secret/Vault în cod) și
           # tmp-probe-url (stub 410). citeste-orice rămâne cu verify_jwt=true + aceeași poartă.
-          NO_JWT=" cleanup-recycle-bin detect-ordine dovezi-valabilitate-alerta hr-autorizatii-scan hr-digest-saptamanal hr-extrage-ci iot-retea iot-terra meta-publish meteo-sync nas-upload-url ofertare-alerte-mail ofertare-cantitati-extrage ofertare-document-nou-citeste ofertare-etapa1-mail ofertare-fisier-semnat ofertare-garantie-mail ofertare-participari-import ofertare-radar-scan ofertare-rfq-inbox ofertare-seap-veghe ofertare-verificare-finala ofertare-word-text olx-aplicari-sync recrutare-aplica salus tmp-probe-url tuya vercel-relay vicare "
+          # 05.10.2026 (#616): + api-consum-extern — cronul api_consum_extern_zilnic trimite DOAR x-intern-secret din Vault
+          # (fără JWT); poarta e în cod: esteApelIntern SAU JWT verificat cu auth.getUser + profiles.is_owner (401/403).
+          NO_JWT=" api-consum-extern cleanup-recycle-bin detect-ordine dovezi-valabilitate-alerta hr-autorizatii-scan hr-digest-saptamanal hr-extrage-ci iot-retea iot-terra meta-publish meteo-sync nas-upload-url ofertare-alerte-mail ofertare-cantitati-extrage ofertare-document-nou-citeste ofertare-etapa1-mail ofertare-fisier-semnat ofertare-garantie-mail ofertare-participari-import ofertare-radar-scan ofertare-rfq-inbox ofertare-seap-veghe ofertare-verificare-finala ofertare-word-text olx-aplicari-sync recrutare-aplica salus tmp-probe-url tuya vercel-relay vicare "
           for s in $LISTA; do
             extra=""
             if [[ "$NO_JWT" == *" $s "* ]]; then extra="--no-verify-jwt"; fi
