@@ -11,6 +11,8 @@ on:
       - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
       - 'supabase/migrations/20260930a_ofertare_pachet_hash_server_jakv202*.sql'
       - 'supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3*.sql'
+      - 'supabase/migrations/20261014b_ofertare_clarificari_temeiuri*.sql'
+      - 'supabase/revenire/20261014b_ofertare_clarificari_temeiuri*.sql'
       - 'test-fixtures/jakv2p3/**'
       - 'scripts/test-jakv2p3.mjs'
       - 'scripts/test-jakv202-hash-server.mjs'
@@ -46,6 +48,8 @@ on:
       - 'supabase/migrations/20260929b_ofertare_derogare_audit*.sql'
       - 'supabase/migrations/20260930a_ofertare_pachet_hash_server_jakv202*.sql'
       - 'supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3*.sql'
+      - 'supabase/migrations/20261014b_ofertare_clarificari_temeiuri*.sql'
+      - 'supabase/revenire/20261014b_ofertare_clarificari_temeiuri*.sql'
       - 'test-fixtures/jakv2p3/**'
       - 'scripts/test-jakv2p3.mjs'
       - 'scripts/test-jakv202-hash-server.mjs'
@@ -240,3 +244,12 @@ jobs:
           JX_PARALEL: '3'
           JX_JURNALE: mutanti_j04xj07
         run: node scripts/pg/test_j04xj07_mutanti.mjs
+      - name: Creeaza baza goala pt temeiuri (pasul B juridic)
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE temeiuri_test_ci;'
+      - name: Temeiuri CNSC (PR #615) - citat inghetat, poarta owner pe starea tintei, retrageri, 2 curse concurente
+        env:
+          PGURI: postgres://postgres@localhost:5432/temeiuri_test_ci
+          PGPASSWORD: postgres
+        run: node scripts/pg/test_temeiuri_owner_gate.mjs
