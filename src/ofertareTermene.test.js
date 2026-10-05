@@ -103,6 +103,24 @@ describe('acteContestabile', () => {
   })
 })
 
+describe('fișierele despachetate din arhive (#608) nu sunt acte noi', () => {
+  // Mânăstirea: RAR-ul 1305 publicat (adus) 02.10, despachetat de workerul de pe Terra pe 05.10 → 159 de fișiere
+  // „DOC_F1_F6_C1_C9 (#1305)/…” cu aparut_ulterior + tipul arhivei, created_at 05.10.
+  const copii = Array.from({ length: 3 }, (_, i) => ({ id: 2000 + i, tip: i ? 'raspuns_clarificare' : 'lista_cantitati', aparut_ulterior: true,
+    nume_original: `DOC_F1_F6_C1_C9 (#1305)/F3_${i}.pdf`, created_at: '2026-10-05T16:50:00Z' }))
+  const rar = { id: 1305, tip: 'raspuns_clarificare', nume_original: 'DOC_F1_F6_C1_C9.rar', aparut_ulterior: true, created_at: '2026-10-02T12:50:00Z' }
+  it('actul rămâne arhiva din 02.10 (contestație 12.10), fără act fals pe 05.10; ultimul răspuns AC rămâne 02.10', () => {
+    expect(acteContestabile([rar, ...copii]).map(a => [a.zi, a.docs.length])).toEqual([['2026-10-02', 1]])
+    const r = calculeazaTermene({ termenDepunere: TERMEN, zileIntrebari: 18, zileRaspuns: 11, canal: 'seap_cn', valoareEstimata: 29264199.92, docs: [rar, ...copii], acum: new Date('2026-10-05T18:00:00Z') })
+    expect(r.contestatii.map(c => [c.zi, c.pana_la])).toEqual([['2026-10-02', '2026-10-12']])
+    expect(r.ultimRaspuns).toBe('2026-10-02')
+  })
+  it('doar tiparul workerului („<nume> (#<cifre>)/”) e sărit — un nume obișnuit cu paranteze sau slash rămâne act', () => {
+    expect(acteContestabile([{ id: 9, tip: 'raspuns_clarificare', nume_original: 'Raspuns (#2) clarificari.pdf', created_at: '2026-10-03T08:00:00Z' }]).length).toBe(1)
+    expect(acteContestabile([{ id: 10, tip: 'raspuns_clarificare', nume_original: 'Anexa 1/2 (rev).pdf', created_at: '2026-10-03T08:00:00Z' }]).length).toBe(1)
+  })
+})
+
 describe('canalDinAnunt', () => {
   it('numărul anunțului bate câmpul canal (lic. 3: CN1095546 cu canal seap_scn)', () => {
     expect(canalDinAnunt('CN1095546', 'seap_scn')).toBe('seap_cn')

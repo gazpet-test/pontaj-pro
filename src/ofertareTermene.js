@@ -111,10 +111,16 @@ export function canalDinAnunt(nrAnunt, canal = null) {
 // toate documentele apărute în aceeași zi sunt o singură luare la cunoștință. Data = data_document din citirea AI
 // (dacă există, „AAAA-LL-ZZ”), altfel ziua apariției în platformă (created_at, ora României).
 const RANG_TIP = { erata: 3, raspuns_clarificare: 2, document_nou: 1 }
+// Fișierele despachetate din arhivele ajunse în platformă (workerul de pe Terra, #608) se numesc „<arhivă> (#<id>)/<cale>”
+// și moștenesc aparut_ulterior + tipul arhivei, dar apar în ziua despachetării. Nu sunt acte noi: actul e ARHIVA (rândul ei,
+// cu ziua ei). Altfel cele 159 de fișiere din RAR-ul Mânăstirea (publicat 02.10, despachetat 05.10) dădeau un act fals pe
+// 05.10, cu contestație până pe 15.10 în loc de 12.10, și „ultimul răspuns AC” 05.10 în loc de 02.10.
+export const DIN_ARHIVA_RE = / \(#\d+\)\//
 export function acteContestabile(docs) {
   const peZi = new Map()
   for (const d of docs || []) {
     if (!d) continue
+    if (DIN_ARHIVA_RE.test(d.nume_original || '')) continue
     const tipCitire = String(d.citire?.tip || d.tip_citire || '').toLowerCase()
     const dataDoc = d.citire?.data_document || d.data_document
     const eAct = d.tip === 'raspuns_clarificare' || d.aparut_ulterior === true || tipCitire === 'erata'

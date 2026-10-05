@@ -42,6 +42,7 @@ export default function OfertareTermene({ licitatie: l }) {
     supabase.from('ofertare_documente_atribuire')
       .select('id, nume_original, tip, aparut_ulterior, created_at, citire:analiza->citire_noi')
       .eq('licitatie_id', l.id).or('aparut_ulterior.eq.true,tip.eq.raspuns_clarificare,analiza->citire_noi->>tip.eq.erata')
+      .not('nume_original', 'like', '% (#%)/%')   // fișierele despachetate din arhive nu sunt acte și nu ocupă limita (acteContestabile le sare oricum)
       .order('created_at', { ascending: false }).limit(LIMITA_ACTE)
       .then(({ data, error }) => { if (!viu) return; setEroare(e => ({ ...e, acte: error ? error.message : null })); setDocs(error ? [] : (data || [])) })
     supabase.from('ofertare_documente_atribuire')
