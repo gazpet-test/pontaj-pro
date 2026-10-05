@@ -10,6 +10,7 @@
 //  - extragem într-un director temporar propriu, apoi citim doar fișierele obișnuite din el;
 //  - nu executăm nimic din arhivă și nu citim nimic cu AI aici (citirea rămâne pe coada separată „Procesează").
 import type { Supa } from './ingest.ts'
+import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md): descărcările din Storage intră în jurnal
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -575,7 +576,7 @@ async function despacheteazaGrup(supa: Supa, grup: DocArhiva[], stare: (s: strin
     const locale: string[] = []
     for (const d of grup) {
       stare(`arhivă din platformă: descarc ${d.nume_original}`)
-      const { data: blob, error } = await supa.storage.from(BUCKET).download(d.fisier_path!)
+      const { data: blob, error } = await descarcaCuJurnal(supa, BUCKET, d.fisier_path!, 'nas:arhive', d.id)
       if (error || !blob) { await termina('eroare', `Despachetare eșuată (descărcare din Storage ${d.nume_original}): ${error?.message ?? 'fișier gol'}`); return }
       let buf = new Uint8Array(await blob.arrayBuffer())
       let nume = d.nume_original

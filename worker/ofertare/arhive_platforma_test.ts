@@ -40,6 +40,10 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
   }
   return {
     from: builder,
+    rpc: async (fn: string, args: Rand) => {   // monitorul de egress: poarta (niciodată blocat aici) + jurnalul
+      if (fn === 'egress_log_descarcare') (tabele.egress_jurnal ??= []).push(args)
+      return { data: false, error: null }
+    },
     storage: { from: () => ({
       download: async (p: string) => fisiere.has(p) ? { data: new Blob([fisiere.get(p)! as unknown as BlobPart]), error: null } : { data: null, error: { message: 'Object not found' } },
       upload: async (p: string, buf: Uint8Array) => { fisiere.set(p, buf); return { error: null } },
@@ -151,6 +155,7 @@ Deno.test('arhive: zip din veghe → documente separate cu prefix, arhiva marcat
       ], 'tip după numele propriu (altfel al arhivei), PDF-urile de citit, docx rămâne fișier')
       ok(noi.every(d => fisiere.has(d.fisier_path)), 'fiecare document are fișierul în Storage')
       eq(tab.notifications.length, 1, 'responsabilul licitației e anunțat')
+      eq(tab.egress_jurnal.map(j => [j.p_bucket, j.p_obiect, j.p_sursa, j.p_doc_id]), [['ofertare', '3/atribuire/raspunsuri/CN_00058_DOC.zip', 'nas:arhive', 1305]], 'descărcarea din Storage e în jurnalul de egress')
       eq(docs.find(d => d.id === 10)!.status_procesare, 'procesat', 'originalul neatins')
       // reluarea: arhiva nu mai e selectată, nimic nou
       const inainte = docs.length
