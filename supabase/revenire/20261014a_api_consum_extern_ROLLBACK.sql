@@ -3,7 +3,8 @@
 -- Scoate jobul api_consum_extern_zilnic, view-ul v_api_consum_curent și tabelul api_consum_extern.
 -- Fără GO de execuție: doar la cererea explicită a lui Răzvan. Armarea nu e autorizare.
 -- r2 (Copilot NO-GO r1, P1): pinuită pe starea EXACTĂ a patch-ului — recalculează amprenta structurii (coloane, constrângeri,
---   indecși, triggere, proprietari, ACL tabel/secvență/view, RLS, opțiuni + definiția view-ului, politici, jobul cu md5 comandă)
+--   indecși, triggere, proprietari, ACL tabel/secvență/view, RLS, opțiuni + definiția view-ului, parametrii secvenței + OWNED BY,
+--   politici, jobul cu md5 comandă)
 --   și o compară cu cea scrisă de migrare la aplicare în comentariul tabelului; orice diferență → refuz, nimic șters.
 --   Istoricul citirilor (rânduri) cere o a doua armare, separată (modelul 20261010a r2); garda de armare se reverifică la final.
 --   Dacă vrei doar să oprești cronul și să păstrezi istoricul: SELECT cron.unschedule('api_consum_extern_zilnic') (tot la cererea lui Răzvan).
@@ -59,6 +60,10 @@ BEGIN
                               coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.api_consum_extern'::regclass, 'public.api_consum_extern_id_seq'::regclass, 'public.v_api_consum_curent'::regclass)),
     pg_get_viewdef('public.v_api_consum_curent'::regclass),
+    -- secvența: parametrii (pg_sequence) + legătura OWNED BY api_consum_extern.id (r3, Copilot P1)
+    (SELECT format('%s:%s:%s:%s:%s:%s:%s:%s', format_type(q.seqtypid, NULL), q.seqstart, q.seqincrement, q.seqmax, q.seqmin, q.seqcache, q.seqcycle,
+                   coalesce(pg_get_serial_sequence('public.api_consum_extern', 'id'), '-'))
+       FROM pg_sequence q WHERE q.seqrelid = 'public.api_consum_extern_id_seq'::regclass),
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', p.polname, p.polcmd, p.polpermissive,
                               (SELECT string_agg(n, ' ' ORDER BY n) FROM (SELECT CASE WHEN ro = 0 THEN 'public' ELSE pg_get_userbyid(ro) END AS n FROM unnest(p.polroles) ro) s),
                               coalesce(pg_get_expr(p.polqual, p.polrelid), '-'), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')), ';' ORDER BY p.polname)
@@ -89,8 +94,9 @@ DROP TABLE public.api_consum_extern;
 DO $post$
 BEGIN
   IF to_regclass('public.api_consum_extern') IS NOT NULL OR to_regclass('public.v_api_consum_curent') IS NOT NULL
+     OR to_regclass('public.api_consum_extern_id_seq') IS NOT NULL
      OR EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'api_consum_extern_zilnic') THEN
-    RAISE EXCEPTION 'Revenire 20261014a: postcondiție — tabelul, view-ul sau jobul încă există';
+    RAISE EXCEPTION 'Revenire 20261014a: postcondiție — tabelul, secvența, view-ul sau jobul încă există';
   END IF;
 END $post$;
 

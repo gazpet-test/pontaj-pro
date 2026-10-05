@@ -12,7 +12,7 @@
 #      o citire bună în aceeași zi nu o șterge și nici invers (P0 r1) · CHECK-uri · view: ultima citire bună + ultima
 #      eroare + eroare_dupa_citire + ritm + epuizare · cronul trimite x-intern-secret = Vault către api-consum-extern
 #   5. reaplicare → refuz
-#   6. revenire: nearmată / armare persistentă / istoric fără a doua armare / 6 tipuri de deviere de structură (amprenta)
+#   6. revenire: nearmată / armare persistentă / istoric fără a doua armare / 9 tipuri de deviere de structură (amprenta)
 #      → refuz, nimic șters; armată + istoric armat → tabel, view, job scoase
 # Utilizare: bash scripts/test_api_consum_extern.sh [--opreste]   Ieșire: 0 PASS · 1 eșec · 2 mediu
 # ============================================================================
@@ -195,11 +195,14 @@ deviere "security_invoker oprit" "ALTER VIEW public.v_api_consum_curent SET (sec
 deviere "coloană nouă" "ALTER TABLE public.api_consum_extern ADD COLUMN x int" "ALTER TABLE public.api_consum_extern DROP COLUMN x"
 deviere "politica slăbită" "ALTER POLICY api_consum_extern_select_owner ON public.api_consum_extern USING (true)" "ALTER POLICY api_consum_extern_select_owner ON public.api_consum_extern USING (public.fn_is_app_owner(auth.uid()))"
 deviere "a doua politică" "CREATE POLICY p2 ON public.api_consum_extern FOR SELECT TO anon USING (true)" "DROP POLICY p2 ON public.api_consum_extern"
+deviere "secvența INCREMENT BY 2" "ALTER SEQUENCE public.api_consum_extern_id_seq INCREMENT BY 2" "ALTER SEQUENCE public.api_consum_extern_id_seq INCREMENT BY 1"
+deviere "secvența OWNED BY NONE" "ALTER SEQUENCE public.api_consum_extern_id_seq OWNED BY NONE" "ALTER SEQUENCE public.api_consum_extern_id_seq OWNED BY public.api_consum_extern.id"
 q "COMMENT ON TABLE public.api_consum_extern IS 'fara amprenta'" >/dev/null
 refuz_rev "6e amprenta ștearsă din comentariu" "$ARM $ARM_DATE" "amprenta de la aplicare lipsește"
 q "COMMENT ON TABLE public.api_consum_extern IS \$c\$$COMENTARIU\$c\$" >/dev/null
 [ "$(q "SELECT count(*) FROM public.api_consum_extern")" = 4 ] || esec "6 istoricul a fost atins de refuzuri"
 revenire "$ARM $ARM_DATE" >/dev/null || esec "6f revenire armată + istoric armat: $(revenire "$ARM $ARM_DATE" | grep -m1 ERROR)"
 [ "$(q "$NIMIC")" = true ] || esec "6f obiectele încă există"
-ok "6 revenire: nearmată / armare persistentă / istoric fără a doua armare / 7 devieri (INSERT authenticated, program, comandă, security_invoker, coloană, politică slăbită, a doua politică) / amprentă ștearsă → refuz, nimic șters · armată + istoric armat → tabel, view, job scoase"
+[ "$(q "SELECT (to_regclass('public.api_consum_extern_id_seq') IS NULL)::text")" = true ] || esec "6f secvența a rămas"
+ok "6 revenire: nearmată / armare persistentă / istoric fără a doua armare / 9 devieri (INSERT authenticated, program, comandă, security_invoker, coloană, politică slăbită, a doua politică, secvența INCREMENT BY 2, secvența OWNED BY NONE) / amprentă ștearsă → refuz, nimic șters · armată + istoric armat → tabel, view, job scoase"
 echo "PASS test_api_consum_extern (sha256 $SHA)"

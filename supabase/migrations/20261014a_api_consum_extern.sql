@@ -19,6 +19,8 @@
 --   și nici invers; (P1) amprenta exactă a patch-ului se calculează la final și se scrie în comentariul tabelului —
 --   revenirea refuză dacă starea nu mai e exact aceea; (P1) precondiție explicită cron.timezone = GMT; 0e întărită
 --   (proprietar postgres, limbaj sql, ACL exact).
+-- r3 (Copilot NO-GO mic r2): amprenta prinde și secvența (pg_sequence: tip, start, pas, limite, cache, ciclu) + legătura
+--   OWNED BY api_consum_extern.id; postcondiție explicită pe OWNED BY.
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $livrare_start$
 BEGIN
@@ -178,6 +180,10 @@ BEGIN
                      AND username = 'postgres' AND active AND md5(command) = '308fba6229f57f26c20d6e26fddc1f94') THEN
     RAISE EXCEPTION 'Postcondiție 5: jobul api_consum_extern_zilnic nu e exact (GMT, program, utilizator, activ, md5 comandă)';
   END IF;
+  -- secvența id rămâne legată de coloană (OWNED BY): DROP TABLE din revenire o ia cu el
+  IF pg_get_serial_sequence('public.api_consum_extern', 'id') IS DISTINCT FROM 'public.api_consum_extern_id_seq' THEN
+    RAISE EXCEPTION 'Postcondiție 6b: api_consum_extern_id_seq nu e OWNED BY api_consum_extern.id';
+  END IF;
   -- citirea bună și eroarea zilei stau separat (P0 r1): exact cele 8 constrângeri ale patch-ului (PG17: NOT NULL nu e în pg_constraint)
   IF (SELECT array_agg(conname::text ORDER BY conname) FROM pg_constraint WHERE conrelid = v_tab)
      IS DISTINCT FROM ARRAY['api_consum_extern_are_eveniment', 'api_consum_extern_citire_completa', 'api_consum_extern_eroare_completa',
@@ -206,6 +212,10 @@ BEGIN
                               coalesce(array_to_string(r.reloptions, ' '), '-')), ';' ORDER BY r.relname)
        FROM pg_class r WHERE r.oid IN ('public.api_consum_extern'::regclass, 'public.api_consum_extern_id_seq'::regclass, 'public.v_api_consum_curent'::regclass)),
     pg_get_viewdef('public.v_api_consum_curent'::regclass),
+    -- secvența: parametrii (pg_sequence) + legătura OWNED BY api_consum_extern.id (r3, Copilot P1)
+    (SELECT format('%s:%s:%s:%s:%s:%s:%s:%s', format_type(q.seqtypid, NULL), q.seqstart, q.seqincrement, q.seqmax, q.seqmin, q.seqcache, q.seqcycle,
+                   coalesce(pg_get_serial_sequence('public.api_consum_extern', 'id'), '-'))
+       FROM pg_sequence q WHERE q.seqrelid = 'public.api_consum_extern_id_seq'::regclass),
     (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', p.polname, p.polcmd, p.polpermissive,
                               (SELECT string_agg(n, ' ' ORDER BY n) FROM (SELECT CASE WHEN ro = 0 THEN 'public' ELSE pg_get_userbyid(ro) END AS n FROM unnest(p.polroles) ro) s),
                               coalesce(pg_get_expr(p.polqual, p.polrelid), '-'), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '-')), ';' ORDER BY p.polname)
