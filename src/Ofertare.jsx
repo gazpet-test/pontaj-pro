@@ -12,6 +12,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI } from './utils/probeCalc.js'
 import OfertareLicitatiiTab from './OfertareLicitatii.jsx'
+import OfertareBiblioteca from './OfertareBiblioteca.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -58,6 +59,7 @@ export default function OfertarePage() {
               { k:'licitatii', l:'🏛 Licitații' },
               { k:'calitate', l:'🏅 Documente calitate' },
               { k:'probe',    l:'🔬 Oferte probe presiune' },
+              { k:'juridic',  l:'⚖️ Bibliotecă juridică' },
             ].map(t => (
               <button key={t.k} onClick={() => setTab(t.k)} style={{
                 padding:'7px 16px', border:'none', background: tab===t.k ? G.ofertare+'22' : 'transparent',
@@ -72,6 +74,7 @@ export default function OfertarePage() {
         {tab === 'licitatii' && <OfertareLicitatiiTab />}
         {tab === 'calitate' && <DocumenteCalitateTab />}
         {tab === 'probe' && <OferteProbeTab />}
+        {tab === 'juridic' && <OfertareBiblioteca />}
       </div>
     </div>
   )
