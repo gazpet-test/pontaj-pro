@@ -63,6 +63,16 @@ describe('extrageZileDinFisa', () => {
     expect(extrageZileDinFisa('AC va raspunde solicitarilor S.C. GAZPET INSTAL S.R.L. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()
     expect(extrageZileDinFisa('AC va raspunde conform art. 161 cu 11 zile inainte de depunere. Vizita se face cu 5 zile inainte.').zileRaspuns).toBe(11)
   })
+  it('Copilot r2 pe #610: punctul încheie propoziția indiferent de litera următoare sau de spațiu; „;” la fel', () => {
+    expect(extrageZileDinFisa('AC va raspunde conform art. 161. vizita se face cu 5 zile inainte.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde conform art. 161.Vizita se face cu 5 zile inainte.').zileRaspuns).toBeNull()
+    expect(extrageZileDinFisa('AC va raspunde in mod clar; vizita se face cu 5 zile inainte.').zileRaspuns).toBeNull()
+    // excepțiile explicite: punct urmat de cifră (dată, numerotare) și abreviere cunoscută + spațiu
+    expect(extrageZileDinFisa('AC va raspunde la data de 03.10.2026 cu 11 zile inainte de depunere.').zileRaspuns).toBe(11)
+    expect(extrageZileDinFisa('AC va raspunde conform art. 161 alin. (2) lit. a) cu 11 zile inainte de depunere.').zileRaspuns).toBe(11)
+    // prudent, asumat: inițiale urmate de cuvânt mic („H.G. nr.”) taie propoziția → necunoscut, nu o cifră ghicită
+    expect(extrageZileDinFisa('AC va raspunde conform H.G. nr. 907/2016 cu 11 zile inainte.').zileRaspuns).toBeNull()
+  })
   it('review Jakarinos r4: abrevierea „S.C.” nu încheie propoziția → 11; „Vizita” după „ofertelor.” tot nu e răspuns', () => {
     expect(extrageZileDinFisa('AC va raspunde solicitarilor S.C. GAZPET cu 11 zile inainte de depunere.').zileRaspuns).toBe(11)
     expect(extrageZileDinFisa('AC va raspunde conform art. 161 si pct. I.3. Vizita se face cu 5 zile inainte de depunere.').zileRaspuns).toBeNull()

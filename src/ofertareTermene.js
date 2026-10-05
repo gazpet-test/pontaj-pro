@@ -46,6 +46,27 @@ export function zileIntre(a, b) {
   return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000)
 }
 
+// Unde se termină propoziția care începe la ancoră. Orice „.” sau „;” o încheie — indiferent ce urmează după el, cu sau fără
+// spațiu, majusculă sau nu („art. 161. vizita …”, „art. 161.Vizita …” — Copilot r2 pe #610) — plus paragraful nou. Excepții
+// explicite, singurele: (a) punctul urmat de cifră („3.1”, „I.3”, „03.10.2026”); (b) o abreviere cunoscută urmată de spațiu
+// („art. 161”, „pct. I.3”, „nr. 98/2016”); (c) un șir de inițiale („S.C.”, „S.R.L.”) urmat de altă inițială sau de un cuvânt numai
+// cu majuscule („S.C. GAZPET”). În dubiu se taie: o cifră ratată rămâne „necunoscut” (o completează omul), una greșită ar fi falsă.
+const ABREVIERI = new Set(['art', 'alin', 'lit', 'pct', 'nr', 'cf', 'ex', 'resp', 'aprox', 'cca', 'str', 'jud', 'mun', 'pag', 'cap', 'sect'])
+export function capatPropozitie(zona) {
+  const re = /[.;]|\n\s*\n/g
+  let m
+  while ((m = re.exec(zona))) {
+    if (m[0] !== '.') return m[0] === ';' ? m.index + 1 : m.index
+    const dupa = zona.slice(m.index + 1)
+    if (/^\d/.test(dupa)) continue                                                         // (a)
+    const cuv = (zona.slice(0, m.index).match(/[A-Za-zĂÂÎȘȚăâîșț]+$/) || [''])[0]
+    if (cuv && ABREVIERI.has(cuv.toLowerCase()) && /^\s/.test(dupa)) continue                // (b)
+    if (/^[A-ZĂÂÎȘȚ]$/.test(cuv) && (/^[A-ZĂÂÎȘȚ]\./.test(dupa) || /^\s+[A-ZĂÂÎȘȚ]{2,}(?![a-zăâîșț])/.test(dupa))) continue   // (c)
+    return m.index + 1
+  }
+  return zona.length
+}
+
 // Citește din textul fișei de date (text extras, nu rezumat AI) cele două numere de zile din secțiunea I.3 / VI.3.
 // Formulările SEAP: „Numar zile pana la care se pot solicita clarificari inainte de data limita de depunere a ofertelor/candidaturilor 18”
 // și „Termenul limita in care autoritatea contractanta va raspunde in mod clar si complet ... este cu 11 zile inainte de data limita”.
@@ -67,17 +88,7 @@ export function extrageZileDinFisa(text) {
   let anc
   while (zileRaspuns == null && (anc = reAncora.exec(t))) {
     let zona = t.slice(anc.index, anc.index + 320)
-    // Sfârșit de propoziție = „. ” urmat de majusculă/liniuță sau paragraf nou. Singura excepție: o abreviere din majuscule
-    // („S.C.”, „S.R.L.”) urmată de un cuvânt tot cu majuscule („GAZPET”) — numele unei firme, nu o propoziție nouă (Jakarinos r4).
-    // Orice altceva încheie propoziția, inclusiv un număr („art. 161. Vizita …”, „nr. 98/2016. Vizita …” — Copilot pe #610):
-    // în dubiu tăiem, pentru că o cifră ratată rămâne „necunoscut” (o completează omul), iar una luată greșit e un termen fals.
-    const reSfarsit = /(\S+)\.\s+(?=[A-ZĂÂÎȘȚ\-–•])|\n\s*\n/g
-    let sf
-    while ((sf = reSfarsit.exec(zona))) {
-      const firma = sf[1] && /^(?:[A-ZĂÂÎȘȚ]\.)*[A-ZĂÂÎȘȚ]$/.test(sf[1]) && /^[A-ZĂÂÎȘȚ]{2,}(?![a-zăâîșț])/.test(zona.slice(sf.index + sf[0].length))
-      if (firma) continue
-      zona = zona.slice(0, sf.index + (sf[1] ? sf[1].length + 1 : 0)); break
-    }
+    zona = zona.slice(0, capatPropozitie(zona))
     reCandidat.lastIndex = 0
     let m
     while ((m = reCandidat.exec(zona))) {
