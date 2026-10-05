@@ -26,6 +26,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 import { GARDA, identificaApelant, dejaIngeratLaHash, sha256Hex, plasaExactOnce, type Incercare } from '../_shared/gardaIngestLogica.ts'
 import { metaObiect, gardaIncearca, incercareGarda } from '../_shared/gardaIngest.ts'
+import { descarcaCuJurnal } from '../_shared/egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md), fail-open — garda de mai sus rămâne fail-closed
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -234,7 +235,7 @@ Deno.serve(async (req: Request) => {
     const M = MODELE[(typeof model === 'string' && MODELE[model]) ? model : (TIPURI_CRITICE.includes(row.tip) ? 'sonnet' : 'haiku')]
     const MODEL = M.id, PRICE_IN = M.in, PRICE_OUT = M.out, PAGINI_PER_FELIE = M.felie
 
-    const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(row.fisier_path)
+    const { data: blob, error: dlErr } = await descarcaCuJurnal(supabase, BUCKET, row.fisier_path, 'edge:ofertare-ingest-doc', row.id ?? docId)
     if (dlErr || !blob) return await fail('download: ' + (dlErr?.message || 'lipsa'))
     const bytes = new Uint8Array(await blob.arrayBuffer())
     const hash = await sha256Hex(bytes)
