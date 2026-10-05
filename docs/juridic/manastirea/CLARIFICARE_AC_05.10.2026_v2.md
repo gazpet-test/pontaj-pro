@@ -1,4 +1,4 @@
-> ⚠️ **ÎNLOCUITĂ (05.10.2026) de `CLARIFICARE_AC_05.10.2026_v4.md`** — v4 e versiunea aprobată de Răzvan după review-urile Copilot și Jakarinos/Astra; v2 rămâne doar ca istoric al argumentației complete (toate temeiurile și cele 12 decizii CNSC). Nu se mai depune.
+> ⚠️ **ÎNLOCUITĂ (05.10.2026)** — întâi de v4, apoi de `CLARIFICARE_nr11_v5.md` / `CLARIFICARE_nr11_v6.md` (decizia finală între ele). v2 rămâne doar ca istoric al argumentației complete (toate temeiurile și cele 12 decizii CNSC). Nu se mai depune.
 >
 > **Versiunea 2 (05.10.2026)** a draftului `CLARIFICARE_AC_05.10.2026.md`, revizuită de sesiunea de cercetare juridic-normativă: temeiuri verificate pe textul consolidat (L98 la 18.02.2026, HG 395 la 18.08.2026), decizii CNSC citate cu număr/pagină din registrul `cnsc_decizii`. Ce s-a schimbat și de ce: `VERIFICARE_TEMEIURI_05.10.2026.md`. **Nu pleacă la AC fără aprobarea lui Răzvan.** Textele dintre [paranteze] se completează.
 
