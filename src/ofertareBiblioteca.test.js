@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizeaza, potrivesteCautare, fmtData, nrExact, paginaDinLoc, stareJudiciara, eAtacata, referintaScurta, formatCitare,
   filtreazaDecizii, ordoneazaDecizii, filtreazaCerinte, filtreazaTipare, indexDecizii, deciziiPentruTipar, tiparePentruDecizie, valoriDistincte,
+  ataseazaImpact,
 } from './ofertareBiblioteca.js'
 
 // Forme reale din cnsc_decizii (05.10.2026): 69 cu număr exact, restul anonimizate în BO; loc „p. N (din N)” sau descriptiv
@@ -140,5 +141,20 @@ describe('filtre și ordonare', () => {
   it('valoriDistincte: din liste și scalari, sortate, fără goluri', () => {
     expect(valoriDistincte([{ tema: ['b', 'a'] }, { tema: ['a', null] }, { tema: null }], d => d.tema)).toEqual(['a', 'b'])
     expect(valoriDistincte([{ an: 2024 }, { an: 2020 }, { an: '' }], d => d.an)).toEqual(['2020', '2024'])
+  })
+})
+
+describe('ataseazaImpact (impact_intern owner-only pe server, 20261015a)', () => {
+  const T = [{ pattern_id: 'PAT-1', titlu: 'a' }, { pattern_id: 'PAT-2', titlu: 'b' }]
+  it('lipește impactul după pattern_id, fără să atingă restul și fără să modifice intrarea', () => {
+    const r = ataseazaImpact(T, [{ pattern_id: 'PAT-2', impact_intern: { cost: 'mare' } }, { pattern_id: 'PAT-X', impact_intern: { cost: 'mic' } }])
+    expect(r).toEqual([{ pattern_id: 'PAT-1', titlu: 'a' }, { pattern_id: 'PAT-2', titlu: 'b', impact_intern: { cost: 'mare' } }])
+    expect(T[1].impact_intern).toBeUndefined()
+  })
+  it('non-owner / eroare (listă goală sau null) → tiparele rămân fără impact', () => {
+    expect(ataseazaImpact(T, [])).toEqual(T)
+    expect(ataseazaImpact(T, null)).toEqual(T)
+    expect(ataseazaImpact(null, [{ pattern_id: 'PAT-1', impact_intern: {} }])).toEqual([])
+    expect(ataseazaImpact(T, [{ pattern_id: 'PAT-1', impact_intern: null }, { impact_intern: { x: 1 } }])).toEqual(T)
   })
 })

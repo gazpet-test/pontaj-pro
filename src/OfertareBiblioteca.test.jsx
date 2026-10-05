@@ -74,4 +74,12 @@ describe('OfertareBiblioteca — randare', () => {
     expect(h).not.toContain('Impact intern')
     expect(renderToStaticMarkup(<BibliotecaVedere date={{ ...DATE, owner: true }} tabInitial="tipare" selInitial={{ tipare: 'PAT-GAZ-14' }} />)).toContain('Impact intern (doar owner)')
   })
+  it('owner + funcția impactului a eșuat → avertisment în fișă, fără impact afișat; non-owner nu vede avertismentul', () => {
+    const fara = { ...DATE, tipare: DATE.tipare.map(({ impact_intern, ...t }) => t) }
+    const hOwner = renderToStaticMarkup(<BibliotecaVedere date={{ ...fara, owner: true, impactEroare: 'function fn_tipare_impact_intern() does not exist' }} tabInitial="tipare" selInitial={{ tipare: 'PAT-GAZ-14' }} />)
+    expect(hOwner).toContain('Impactul intern nu s-a putut încărca')
+    expect(hOwner).not.toContain('Impact intern (doar owner)')
+    const hColeg = renderToStaticMarkup(<BibliotecaVedere date={{ ...fara, owner: false, impactEroare: 'x' }} tabInitial="tipare" selInitial={{ tipare: 'PAT-GAZ-14' }} />)
+    expect(hColeg).not.toContain('Impact')
+  })
 })
