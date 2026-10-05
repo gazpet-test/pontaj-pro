@@ -49,6 +49,8 @@ const CAT_INFO = {
   // TKT-2026-0077: aceeași listă alimentează formularul, filtrele și badge-urile.
   comodat:         { label:'Comodat',           icon:'🤝', color:G.teal },
   paza:            { label:'Pază',              icon:'🛡️', color:G.purple },
+  // TKT-2026-0327: contractele de împrumut (categorie = text liber în BD, fără CHECK — doar opțiunea din listă)
+  imprumut:        { label:'Împrumut',          icon:'💰', color:G.yellow },
   altele:          { label:'Altele',            icon:'📄', color:G.muted  },
 }
 
