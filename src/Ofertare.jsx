@@ -12,6 +12,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { calcProbe, pretPropusProba, PRAG_MINIM_PROBA_LEI } from './utils/probeCalc.js'
 import OfertareLicitatiiTab from './OfertareLicitatii.jsx'
+import OfertareBiblioteca from './OfertareBiblioteca.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', card2:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -58,6 +59,7 @@ export default function OfertarePage() {
               { k:'licitatii', l:'🏛 Licitații' },
               { k:'calitate', l:'🏅 Documente calitate' },
               { k:'probe',    l:'🔬 Oferte probe presiune' },
+              { k:'juridic',  l:'⚖️ Bibliotecă juridică' },
             ].map(t => (
               <button key={t.k} onClick={() => setTab(t.k)} style={{
                 padding:'7px 16px', border:'none', background: tab===t.k ? G.ofertare+'22' : 'transparent',
@@ -72,6 +74,7 @@ export default function OfertarePage() {
         {tab === 'licitatii' && <OfertareLicitatiiTab />}
         {tab === 'calitate' && <DocumenteCalitateTab />}
         {tab === 'probe' && <OferteProbeTab />}
+        {tab === 'juridic' && <OfertareBiblioteca />}
       </div>
     </div>
   )
@@ -550,6 +553,11 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
   }
 
   const exportData = () => ({ ...f, calc, totalFaraTva, tva, totalCuTva, discountProba, nr_oferta: f.nr_oferta||'PP-DRAFT', intocmit: profile?.name||'' })
+  // TKT-2026-0328: exportul cere calculul probei; fără el butoanele erau doar estompate, fără nicio explicație
+  const motivFaraCalc = calc ? null
+    : sursaCalc === 'salvat' ? 'Alege un calcul salvat ca să poți exporta.'
+    : `Completează calculul ca să poți exporta: ${[!ciDn && 'diametru', !ci.lungime && 'lungime', !ci.presiune && 'presiune',
+        !ciCfg && (ciConfigFiltrate.length ? 'configurație' : 'configurație (niciuna nu suportă fluidul/presiunea aleasă)')].filter(Boolean).join(', ')}.`
 
   const handleExcel = async () => { setExporting(true); try { await generateOfertaExcel(exportData()) } catch(e){ onError('Eroare Excel: '+e.message) } setExporting(false) }
   const handlePDF = async () => { setExporting(true); try { await generateOfertaPDF(exportData()) } catch(e){ onError('Eroare PDF: '+e.message) } setExporting(false) }
@@ -733,10 +741,11 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
           <div><label style={S.lbl}>Observații</label><input value={f.observatii} onChange={e=>setK('observatii',e.target.value)} style={S.input} /></div>
         </div>
 
-        <div style={{display:'flex', gap:8, marginBottom:14, flexWrap:'wrap'}}>
-          <button onClick={handleExcel} disabled={!calc||exporting} style={{...S.btnS, opacity:(!calc||exporting)?0.5:1, flex:1}}>📥 Export Excel</button>
-          <button onClick={handlePDF} disabled={!calc||exporting} style={{...S.btnS, opacity:(!calc||exporting)?0.5:1, flex:1}}>📄 Export PDF</button>
+        <div style={{display:'flex', gap:8, marginBottom: motivFaraCalc ? 6 : 14, flexWrap:'wrap'}}>
+          <button onClick={handleExcel} disabled={!calc||exporting} title={motivFaraCalc||''} style={{...S.btnS, opacity:(!calc||exporting)?0.5:1, flex:1, cursor:(!calc||exporting)?'not-allowed':'pointer'}}>📥 Export Excel</button>
+          <button onClick={handlePDF} disabled={!calc||exporting} title={motivFaraCalc||''} style={{...S.btnS, opacity:(!calc||exporting)?0.5:1, flex:1, cursor:(!calc||exporting)?'not-allowed':'pointer'}}>📄 Export PDF</button>
         </div>
+        {motivFaraCalc && <div style={{fontSize:11.5, color:G.orange, marginBottom:14}}>⚠️ {motivFaraCalc}</div>}
 
         <div style={{display:'flex', gap:10}}>
           <button onClick={onClose} style={{...S.btnS, flex:1}}>Anulează</button>
