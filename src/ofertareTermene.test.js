@@ -34,11 +34,20 @@ describe('extrageZileDinFisa', () => {
   it('nu inventează: text fără cifre → null', () => {
     expect(extrageZileDinFisa('')).toEqual({ zileIntrebari: null, zileRaspuns: null })
     expect(extrageZileDinFisa('se pot solicita clarificari conform legii')).toEqual({ zileIntrebari: null, zileRaspuns: null })
+    expect(extrageZileDinFisa('Se pot solicita clarificari conform art. 8 din documentatie.').zileIntrebari).toBeNull()
   })
   it('formulările reale din alte fișe: „in a 6-a zi inainte”, „in a 7 a zi inainte”, „cu 5 zile inainte … primite cu 9 zile”', () => {
     expect(extrageZileDinFisa('ACstabileste unul sau doua termene limita in care va raspunde in mod clar si complet\ntuturor solicitarilor. Raspunsurile vor fi publicate, dupa\ncum urmeaza:\n- termen-limita de raspuns este in a 6-a zi inainte de data limita').zileRaspuns).toBe(6)
     expect(extrageZileDinFisa('Autoritatea contractanta va raspunde in\nmod clar si complet tuturor solicitarilor de clarificari in a 7 a zi inainte de data limita').zileRaspuns).toBe(7)
     expect(extrageZileDinFisa('Autoritatea contractanta va raspunde in mod cIar si complet tuturor solicitarilor de clarificari/informatiiIor suplimentare cu 5 zile\ninainte de termenul stabilit pentru depunerea ofertelor, la toate solicitarile de clarificari primite cu 9 zile inainte').zileRaspuns).toBe(5)
+  })
+  it('review Jakarinos 05.10: „în a 6-a zi” cu diacritice e recunoscut; „primite cu 9 zile” fără cifra răspunsului NU devine răspuns', () => {
+    expect(extrageZileDinFisa('AC va răspunde în mod clar și complet în a 6-a zi înainte de data limită').zileRaspuns).toBe(6)
+    expect(extrageZileDinFisa('AC va raspunde in mod clar si complet la toate solicitarile de clarificari primite cu 9 zile inainte de termen').zileRaspuns).toBeNull()
+  })
+  it('plusZile nu aruncă la valori absurde', () => {
+    expect(plusZile('2026-10-14', 1e12)).toBeNull()
+    expect(plusZile('2026-10-14', NaN)).toBeNull()
   })
 })
 

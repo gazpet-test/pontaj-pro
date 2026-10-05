@@ -41,7 +41,8 @@ export default function OfertareTermene({ licitatie: l }) {
   }, [l.id])
 
   const canal = canalDinAnunt(l.nr_anunt, l.canal)
-  const nr = v => (v === '' || v == null || Number.isNaN(Number(v))) ? null : Number(v)
+  // Zile: întreg între 0 și 365 — orice altceva (gol, text, 1e9 tastat din greșeală) = necunoscut, nu excepție la randare.
+  const nr = v => { const n = Math.trunc(Number(v)); return (v === '' || v == null || !Number.isFinite(n) || n < 0 || n > 365) ? null : n }
   const calc = useMemo(() => calculeazaTermene({
     termenDepunere: l.termen_depunere, zileIntrebari: nr(zile.intrebari), zileRaspuns: nr(zile.raspuns),
     canal, valoareEstimata: l.valoare_estimata, docs: docs || [],

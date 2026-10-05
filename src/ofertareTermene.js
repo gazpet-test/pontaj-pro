@@ -27,7 +27,8 @@ export function ziRo(ts) {
 export function plusZile(zi, n) {
   if (!zi) return null
   const [y, m, d] = zi.split('-').map(Number)
-  const t = Date.UTC(y, m - 1, d) + n * 86400000
+  const t = Date.UTC(y, m - 1, d) + Number(n) * 86400000
+  if (!Number.isFinite(t) || Math.abs(t) > 8.64e15) return null   // n uriaș / NaN → nu aruncăm RangeError în randare
   return new Date(t).toISOString().slice(0, 10)
 }
 
@@ -44,9 +45,13 @@ export function zileIntre(a, b) {
 // Întoarce null unde nu găsește — NU inventează.
 export function extrageZileDinFisa(text) {
   const t = String(text || '')
-  const mi = t.match(/se\s+pot\s+solicita\s+clarific[aă]ri[^0-9\n]{0,160}?(\d{1,2})\b/i)
+  // Cerem și „inainte de data limita” între frază și cifră: altfel „se pot solicita clarificari conform art. 8” dădea 8 zile.
+  const mi = t.match(/se\s+pot\s+solicita\s+clarific[aă]ri\s+[iî]nainte\s+de\s+data\s+limit[aă][^0-9\n]{0,80}?(\d{1,2})\b/i)
   // Formulări întâlnite în fișele reale: „cu 11 zile inainte”, „in a 6-a zi inainte”, „in a 7 a zi inainte”.
-  const mr = t.match(/r[aă]spunde[\s\S]{0,300}?(?:\bcu\s+(\d{1,2})\s+zile\s+[iî]nainte|\b[iî]n\s+a\s+(\d{1,2})\s*-?\s*a\s+zi\s+[iî]nainte)/i)
+  // Fără `\b` înaintea lui „î” (în JS, \b nu vede diacriticele ca litere → „în a 6-a zi” nu se potrivea).
+  // Căutarea se oprește la „primite / transmise / depuse”: „…va raspunde… la solicitarile primite cu 9 zile inainte”
+  // e termenul de ÎNTREBĂRI, nu de răspuns — nu trebuie luat drept răspuns când cifra răspunsului lipsește.
+  const mr = t.match(/r[aă]spunde(?:(?!primite|transmise|depuse)[\s\S]){0,300}?(?:(?:^|[^a-zăâîșț])cu\s+(\d{1,2})\s+zile\s+[iî]nainte|(?:^|[^a-zăâîșț])[iî]n\s+a\s+(\d{1,2})\s*-?\s*a\s+zi\s+[iî]nainte)/i)
   return {
     zileIntrebari: mi ? Number(mi[1]) : null,
     zileRaspuns: mr ? Number(mr[1] || mr[2]) : null,
