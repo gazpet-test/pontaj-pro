@@ -18,6 +18,7 @@ import TabDocumenteFirma from './TabDocumenteFirma.jsx'
 import Consumabile from './Consumabile.jsx'
 import LocatiiInchiriate from './LocatiiInchiriate.jsx'
 import UnitatiProtejate from './UnitatiProtejate.jsx'
+import ApiConsumExtern from './ApiConsumExtern.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -268,6 +269,9 @@ function TabCosturiAI() {
               </div>
             </div>
           </div>
+
+          {/* 05.10.2026: abonamentele externe (Firecrawl, Desktop Commander, …) — consum zilnic, migrarea 20261014a */}
+          <ApiConsumExtern />
 
           {/* KPI Row */}
           <div style={{display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:24}}>
