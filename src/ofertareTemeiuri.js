@@ -10,7 +10,7 @@ export const idDecizieDinPrecedent = p => String(p || '').replace(/^SRC-/, '')
 // Rangul controlului judiciar pentru ordonare: menținută > neverificat (null) > necunoscut. Modificată/desființată = excluse.
 const RANG_CJ = { mentinuta: 0, neverificat: 1, necunoscut: 2 }
 export const rezultatCJ = d => (d?.control_judiciar?.rezultat || 'neverificat')
-export const esteExclusa = d => !d || d.verificat === false || ['modificata', 'desfiintata'].includes(rezultatCJ(d))
+export const esteExclusa = d => !d || d.verificat !== true || ['modificata', 'desfiintata'].includes(rezultatCJ(d))   // verificat NULL = neverificat (fail-closed)
 
 // Domeniul deciziei (gaze / distributie / apa_canal / lucrari_general) ↔ segmentul licitației din ERP.
 export function domeniuLicitatie(l) {
@@ -49,7 +49,7 @@ export function propuneriDinTipar(tipar, deciziiMap, licitatie, azi = new Date()
     if (!d) { lipsa.push(id); continue }
     if (esteExclusa(d)) {
       const cj = rezultatCJ(d)
-      excluse.push({ decizie: d, motiv: d.verificat === false ? 'neverificată pe sursă' : cj === 'desfiintata' ? 'desființată în instanță' : 'modificată în instanță',
+      excluse.push({ decizie: d, motiv: d.verificat !== true ? 'neverificată pe sursă' : cj === 'desfiintata' ? 'desființată în instanță' : 'modificată în instanță',
         hotarare: d.control_judiciar?.nr_hotarare || null, instanta: d.control_judiciar?.instanta || null })
       continue
     }
@@ -59,9 +59,9 @@ export function propuneriDinTipar(tipar, deciziiMap, licitatie, azi = new Date()
   return { propuse, excluse, lipsa }
 }
 
-// Pagina din „p. 19 (din 24)” → „p. 19”. Fără pagină → null.
+// Pagina din „p. 19 (din 24)” / „pag. 3” / „pagina 7” → „p. N”. „cap. 12” NU e pagină (B5 Jakarinos). Fără pagină → null.
 export function paginaDinLoc(loc) {
-  const m = String(loc || '').match(/p(?:ag)?\.?\s*(\d+)/i)
+  const m = String(loc || '').match(/(?:^|[^a-zăâîșț])p(?:ag(?:ina)?)?\.?\s*(\d+)/i)
   return m ? `p. ${m[1]}` : null
 }
 
@@ -72,12 +72,13 @@ export function formatCitare(d, citat) {
   if (!d || !citat) return null
   const pag = paginaDinLoc(citat.loc)
   if (!pag || !d.link_sursa) return null
+  if (typeof citat.text !== 'string' || !citat.text.trim()) return null   // fără citat gol — și fără trim pe textul înghețat (B12)
   const anonim = !d.nr_decizie || !d.data || /anonimiz/i.test(d.nr_decizie)
   const data = d.data ? String(d.data).slice(0, 10).split('-').reverse().join('.') : null
   const cap = anonim
     ? `Decizia CNSC publicată în BO nr. ${d.buletin_oficial || d.id} (nr./data anonimizate), ${pag}`
     : `Decizia CNSC nr. ${d.nr_decizie} din ${data}, ${pag}`
-  return { referinta: `${cap} — ${d.link_sursa}`, citat: String(citat.text || '').trim(), nota: 'practică de interpretare, nu normă' }
+  return { referinta: `${cap} — ${d.link_sursa}`, citat: citat.text, nota: 'practică de interpretare, nu normă' }
 }
 
 // ── Tipare declanșate (la citirea documentației) ──────────────────────────────────────────────────────────────
@@ -87,13 +88,24 @@ export const UNDE_CAUTI_TIP = { caiet_sarcini: ['cs_volum'], contract: ['model_c
 
 export const normalizeaza = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[„”“"']/g, '"').replace(/\s+/g, ' ').trim()
 
-// Frazele citabile dintr-un semnal: ce e între ghilimele „…”; dacă nu sunt ghilimele, nu avem frază verificabilă (→ nimic).
+// Frazele citabile dintr-un semnal: ce e între ghilimele „…”, după trim, cu cel puțin 2 cuvinte și 12 caractere —
+// un singur cuvânt („avizat”) ar declanșa pe „neavizat” (B8 Jakarinos). Fără ghilimele → nimic verificabil.
 export function frazeDinSemnal(semnal) {
   const out = []
-  const re = /[„“"]([^„”“"]{6,}?)[”“"]/g
+  const re = /[„“"]([^„”“"]*?)[”“"]/g
   let m
-  while ((m = re.exec(String(semnal || '')))) out.push(m[1].trim())
+  while ((m = re.exec(String(semnal || '')))) {
+    const f = m[1].trim()
+    if (f.length >= 12 && f.split(/\s+/).length >= 2) out.push(f)
+  }
   return out
+}
+
+// Potrivire pe limite de cuvânt în textul normalizat (nu subșir: „aviz” nu prinde „neavizat”).
+export function contineFraza(textN, frazaN) {
+  if (!frazaN) return false
+  const esc = frazaN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')
+  return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`).test(textN)
 }
 
 // Detectare deterministă: doar tiparele cu tip_detectie = cuvant_cheie, doar frazele dintre ghilimele, doar în documentele
@@ -107,10 +119,11 @@ export function tipareDeclansate(tipare, texteDocs) {
     const fraze = frazeDinSemnal(t.trigger.semnal)
     if (!fraze.length) continue
     const tipuri = (t.trigger.unde_cauti || []).flatMap(u => UNDE_CAUTI_TIP[u] || [])
+    if (!tipuri.length) continue   // unde_cauti lipsă sau nemapat → nu căutăm „peste tot” (B9 Jakarinos)
     const potriviri = []
     for (const d of docsN) {
-      if (tipuri.length && !tipuri.includes(d.tip)) continue
-      for (const f of fraze) if (d._n.includes(normalizeaza(f))) potriviri.push({ doc_id: d.id, doc: d.nume, fraza: f })
+      if (!tipuri.includes(d.tip)) continue
+      for (const f of fraze) if (contineFraza(d._n, normalizeaza(f))) potriviri.push({ doc_id: d.id, doc: d.nume, fraza: f })
     }
     if (potriviri.length) out.push({ pattern_id: t.pattern_id, titlu: t.titlu, confidence: t.confidence, review: !!t.requires_human_legal_review,
       nr_precedente: (t.precedente_cnsc || []).length, intrebare_propusa: t.intrebare_propusa || '', potriviri })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { idDecizieDinPrecedent, esteExclusa, domeniuLicitatie, legeLicitatie, avertismente, propuneriDinTipar, paginaDinLoc, formatCitare, frazeDinSemnal, tipareDeclansate, etichetaDecizie } from './ofertareTemeiuri.js'
+import { idDecizieDinPrecedent, esteExclusa, domeniuLicitatie, legeLicitatie, avertismente, propuneriDinTipar, paginaDinLoc, formatCitare, frazeDinSemnal, contineFraza, tipareDeclansate, etichetaDecizie } from './ofertareTemeiuri.js'
 
 // Date reale din corpus (05.10.2026): PAT-GAZ-14 și decizia anonimizată BO2022_2473
 const D_BO = { id: 'CNSC-BO2022_2473', nr_decizie: 'BO2022_2473 (nr./data anonimizate în BO; contestația 2871/19.10.2022)', buletin_oficial: 'BO2022_2473', data: null, an: 2022, domeniu: 'gaze', lege_aplicabila: 'L98', verificat: true, control_judiciar: null,
@@ -21,6 +21,7 @@ describe('id-uri și clasificări', () => {
   it('excluse: modificată, desființată, neverificată; menținută/necunoscut/null nu', () => {
     expect(esteExclusa(D_MOD)).toBe(true); expect(esteExclusa(D_NEV)).toBe(true); expect(esteExclusa({ ...D_NR, control_judiciar: { rezultat: 'desfiintata' } })).toBe(true)
     expect(esteExclusa(D_NR)).toBe(false); expect(esteExclusa(D_BO)).toBe(false); expect(esteExclusa(D_L99)).toBe(false); expect(esteExclusa(null)).toBe(true)
+    expect(esteExclusa({ ...D_NR, verificat: null })).toBe(true)   // Copilot r1: verificat NULL = neverificat, fail-closed
   })
   it('domeniul și legea licitației din segment / regim', () => {
     expect(domeniuLicitatie({ segment: 'transgaz' })).toBe('gaze'); expect(domeniuLicitatie({ segment: 'distributie' })).toBe('distributie'); expect(domeniuLicitatie({ segment: 'altele' })).toBeNull()
@@ -64,6 +65,9 @@ describe('formatCitare (formatul unic §4)', () => {
     expect(formatCitare({ ...D_NR, link_sursa: null }, D_NR.citate_cheie[0])).toBeNull()
     expect(formatCitare(D_NR, null)).toBeNull()
     expect(paginaDinLoc('pag. 3')).toBe('p. 3'); expect(paginaDinLoc('p.19 (din 24)')).toBe('p. 19'); expect(paginaDinLoc('')).toBeNull()
+    expect(paginaDinLoc('cap. 12')).toBeNull(); expect(paginaDinLoc('pagina 7')).toBe('p. 7'); expect(paginaDinLoc('considerente, p. 4')).toBe('p. 4')   // B5 Jakarinos
+    expect(formatCitare(D_NR, { loc: 'p. 28', text: '   ' })).toBeNull()                                   // B12: citat gol → nimic
+    expect(formatCitare(D_NR, { loc: 'p. 28', text: '  citat exact  ' }).citat).toBe('  citat exact  ')     // B12: textul înghețat nu se modifică
   })
   it('eticheta scurtă pentru chip-uri', () => { expect(etichetaDecizie(D_NR)).toBe('nr. 3657/C1/4067,4182 / 23.12.2024'); expect(etichetaDecizie(D_BO)).toBe('BO BO2022_2473') })
 })
@@ -83,6 +87,14 @@ describe('tipareDeclansate (cuvinte-cheie, doar fraze între ghilimele, doar în
     expect(r).toHaveLength(1)
     expect(r[0].pattern_id).toBe('PAT-GAZ-14'); expect(r[0].nr_precedente).toBe(6)
     expect(r[0].potriviri).toEqual([{ doc_id: 1, doc: 'CS.pdf', fraza: 'executantul va reactualiza proiectul tehnic' }, { doc_id: 1, doc: 'CS.pdf', fraza: 'va elabora detaliile de execuție' }])
+  })
+  it('B8/B9 Jakarinos: un singur cuvânt nu e frază, potrivirea e pe limite de cuvânt, unde_cauti nemapat nu caută peste tot', () => {
+    expect(frazeDinSemnal('„avizat” și „      ” și „aviz nou”')).toEqual([])
+    expect(frazeDinSemnal('„va reobține avizele expirate”')).toEqual(['va reobține avizele expirate'])
+    expect(contineFraza('document neavizat de proiectant', 'avizat')).toBe(false)
+    expect(contineFraza('executantul va reactualiza  proiectul tehnic.', 'va reactualiza proiectul tehnic')).toBe(true)
+    const t = { pattern_id: 'X', trigger: { tip_detectie: 'cuvant_cheie', semnal: '„proiectare si executie”', unde_cauti: ['necunoscut'] } }
+    expect(tipareDeclansate([t], [{ id: 1, tip: 'cs_volum', text: 'proiectare si executie' }])).toEqual([])
   })
   it('fără text sau fără potrivire → listă goală', () => {
     expect(tipareDeclansate([TIPAR], [{ id: 1, tip: 'cs_volum', text: null }])).toEqual([])

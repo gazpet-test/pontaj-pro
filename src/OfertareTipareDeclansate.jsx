@@ -43,7 +43,7 @@ export default function OfertareTipareDeclansate({ licitatie: l, showToast = nul
       licitatie_id: l.id, nr, intrebare: t.intrebare_propusa || '', status: 'de_trimis', origine: 'platforma', sursa: `tipar:${t.pattern_id}`, cheie: `tipar_${t.pattern_id}`,
     }).select('id').single()
     if (error) { setBusy(false); return anunta('Ciorna nu s-a creat: ' + error.message, 'err') }
-    const { error: eTem } = await supabase.from('ofertare_clarificari_temeiuri').insert({ clarificare_id: ins.id, pattern_id: t.pattern_id, sursa: 'propus_tipar', confirmat: true })
+    const { error: eTem } = await supabase.from('ofertare_clarificari_temeiuri').insert({ clarificare_id: ins.id, pattern_id: t.pattern_id, sursa: 'manual', confirmat: true })   // omul a apăsat explicit → confirmat
     setBusy(false)
     anunta(eTem ? `Ciorna #${nr} creată, dar tiparul nu s-a atașat ca temei (${/does not exist|schema cache/i.test(eTem.message) ? 'migrarea temeiurilor nu e aplicată' : eTem.message})` : `Ciorna #${nr} creată din ${t.pattern_id} — rescrie-o în Clarificări înainte de trimitere`, eTem ? 'warn' : 'ok')
     onCreat?.(ins.id)

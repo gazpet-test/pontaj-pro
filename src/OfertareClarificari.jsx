@@ -227,16 +227,26 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const nrExport = new Set(deTrimis.map(q => q.nr))
     const practica = []
     {
-      const { data: tem } = await supabase.from('ofertare_clarificari_temeiuri')
-        .select('citat_idx, citat_text, citat_loc, clarificare:ofertare_clarificari!inner(nr, licitatie_id), decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat, citate_cheie), tipar:clarificari_tipare(requires_human_legal_review)')
-        .eq('clarificare.licitatie_id', licId).eq('include_in_adresa', true).eq('confirmat', true).not('cnsc_decizie_id', 'is', null).order('id')
-      for (const t of tem || []) {
-        if (!nrExport.has(t.clarificare?.nr) || !t.decizie) continue
+      // temeiurile de pe întrebări + cele de pe PUNCTELE întrebărilor (punct → întrebare) — B4 Jakarinos
+      const SEL = 'citat_idx, citat_text, citat_loc, decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat)'
+      const baza = sel => sel.eq('include_in_adresa', true).eq('confirmat', true).not('cnsc_decizie_id', 'is', null).order('id')
+      const [rQ, rP] = await Promise.all([
+        baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', clarificare:ofertare_clarificari!inner(nr, licitatie_id)').eq('clarificare.licitatie_id', licId)),
+        baza(supabase.from('ofertare_clarificari_temeiuri').select(SEL + ', punct:ofertare_clarificari_puncte!inner(nr, clarificare:ofertare_clarificari!inner(nr, licitatie_id))').eq('punct.clarificare.licitatie_id', licId)),
+      ])
+      const lipsaTabel = e => e && /ofertare_clarificari_temeiuri/.test(e.message || '') && /does not exist|schema cache|not find/i.test(e.message || '')
+      const err = [rQ.error, rP.error].find(e => e && !lipsaTabel(e))
+      // tabelul neaplicat = fără secțiune (ok); orice altă eroare = NU exportăm un PDF care pare complet (B7)
+      if (err) { showToast('Export blocat: temeiurile nu s-au putut verifica (' + err.message + ')', 'err'); return }
+      const randuri = [...(rQ.data || []).map(t => ({ ...t, nr: t.clarificare?.nr })), ...(rP.data || []).map(t => ({ ...t, nr: t.punct?.clarificare?.nr }))]
+      for (const t of randuri) {
+        if (!nrExport.has(t.nr) || !t.decizie) continue
         const cj = t.decizie.control_judiciar?.rezultat
-        if (t.decizie.verificat === false || cj === 'modificata' || cj === 'desfiintata') continue   // regulă de cod, nu de bun-simț
+        if (t.decizie.verificat !== true || cj === 'modificata' || cj === 'desfiintata') continue   // regulă de cod, nu de bun-simț (verificat NULL = neverificat)
         const f = formatCitare(t.decizie, t.citat_idx == null ? null : { loc: t.citat_loc, text: t.citat_text })
-        if (f) practica.push({ nr: t.clarificare.nr, ...f })
+        if (f) practica.push({ nr: t.nr, ...f })
       }
+      practica.sort((a, b) => a.nr - b.nr)
     }
     setBusy('PDF...')
     try {

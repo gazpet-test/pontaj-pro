@@ -5,7 +5,7 @@
 // Citatul se copiază înghețat din citate_cheie (trigger-ul din BD îl verifică). Export în adresă doar cu bifa „include în adresă”.
 // Tabelul ofertare_clarificari_temeiuri vine din migrarea 20261014a — până e aplicată, componenta spune asta și nu crapă.
 // ════════════════════════════════════════════════════════════════
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { propuneriDinTipar, formatCitare, etichetaDecizie, rezultatCJ, esteExclusa, avertismente } from './ofertareTemeiuri.js'
 
@@ -66,6 +66,7 @@ function ModalTemei({ tinta, licitatie, patternId, existente, onInchide, onSchim
   const [tab, setTab] = useState(patternId ? 'tipar' : 'decizii')
   const [busy, setBusy] = useState(false)
   const [tipar, setTipar] = useState(null)
+  const [tipareGasite, setTipareGasite] = useState([])   // B6: fila Tipar are și căutare când ținta n-are încă un tipar
   const [decMap, setDecMap] = useState(new Map())
   const [q, setQ] = useState('')
   const [filtre, setFiltre] = useState({ domeniu: '', lege: '', neverificate: false })
@@ -90,6 +91,9 @@ function ModalTemei({ tinta, licitatie, patternId, existente, onInchide, onSchim
     return () => { viu = false }
   }, [patternId])
 
+  // Valoarea pentru un filtru PostgREST `or(col.ilike.*)`: între ghilimele (virgulele și parantezele devin literale),
+  // cu % _ * escapate ca să nu fie wildcard-uri — B11 Jakarinos (nr. „3657/C1/4067,4182” se caută exact).
+  const ilikeVal = t => `"%${t.replace(/["\\]/g, '').replace(/[%_*]/g, m => '\\' + m)}%"`
   const cauta = async () => {
     setBusy(true); setCautat(true)
     const t = q.trim()
@@ -97,20 +101,25 @@ function ModalTemei({ tinta, licitatie, patternId, existente, onInchide, onSchim
     if (!filtre.neverificate) sel = sel.eq('verificat', true)
     if (filtre.domeniu) sel = sel.eq('domeniu', filtre.domeniu)
     if (filtre.lege) sel = sel.eq('lege_aplicabila', filtre.lege)
-    if (t) sel = sel.or(`regula.ilike.%${t.replace(/[%,()]/g, ' ')}%,problema.ilike.%${t.replace(/[%,()]/g, ' ')}%,solutie.ilike.%${t.replace(/[%,()]/g, ' ')}%,nr_decizie.ilike.%${t.replace(/[%,()]/g, ' ')}%`)
+    if (t) sel = sel.or(['regula', 'problema', 'solutie', 'nr_decizie'].map(c => `${c}.ilike.${ilikeVal(t)}`).join(','))
     const { data: ds, error } = await sel
     if (error) anunta('Căutarea în decizii a eșuat: ' + error.message, 'err')
     setRezDec(ds || [])
     let selC = supabase.from('norme_cerinte').select('requirement_id, cerinta, locator, source_id, temei_tip, domeniu, verificat_pe_sursa').eq('verificat_pe_sursa', true).limit(40)
-    if (t) selC = selC.or(`cerinta.ilike.%${t.replace(/[%,()]/g, ' ')}%,locator.ilike.%${t.replace(/[%,()]/g, ' ')}%`)
+    if (t) selC = selC.or(['cerinta', 'locator'].map(c => `${c}.ilike.${ilikeVal(t)}`).join(','))
     const { data: cs } = await selC
     setRezCer(cs || [])
+    let selT = supabase.from('clarificari_tipare').select('pattern_id, titlu, tip_problema, confidence, requires_human_legal_review, precedente_cnsc').order('pattern_id').limit(40)
+    if (t) selT = selT.or(['titlu', 'pattern_id', 'tip_problema'].map(c => `${c}.ilike.${ilikeVal(t)}`).join(','))
+    const { data: ts } = await selT
+    setTipareGasite(ts || [])
     setBusy(false)
   }
 
   const adauga = async (campuri, sursa = 'manual') => {
     setBusy(true)
-    const rand = { ...tinta, ...campuri, sursa, confirmat: true, include_in_adresa: false }
+    // propunerile (propus_*) intră NEconfirmate — omul le confirmă cu ✓ pe chip (Copilot r1)
+    const rand = { ...tinta, ...campuri, sursa, confirmat: sursa === 'manual', include_in_adresa: false }
     const { error } = await supabase.from('ofertare_clarificari_temeiuri').insert(rand)
     setBusy(false)
     if (error) {
@@ -119,7 +128,11 @@ function ModalTemei({ tinta, licitatie, patternId, existente, onInchide, onSchim
     }
     anunta('⚖️ Temei atașat'); onSchimbat()
   }
-  const adaugaDecizie = (d, citatIdx) => adauga({ cnsc_decizie_id: d.id, citat_idx: citatIdx, citat_text: citatIdx == null ? null : d.citate_cheie?.[citatIdx]?.text ?? null }, patternId && tipar?.precedente_cnsc?.some(p => String(p).replace(/^SRC-/, '') === d.id) ? 'propus_tipar' : 'manual')
+  // B1: o decizie propusă din tipar poartă proveniența (pattern_id_origine) — backend-ul cere owner la „include” dacă tiparul cere review
+  const adaugaDecizie = (d, citatIdx) => {
+    const dinTipar = !!(patternId && tipar?.precedente_cnsc?.some(p => String(p).replace(/^SRC-/, '') === d.id))
+    return adauga({ cnsc_decizie_id: d.id, citat_idx: citatIdx, citat_text: citatIdx == null ? null : d.citate_cheie?.[citatIdx]?.text ?? null, pattern_id_origine: dinTipar ? patternId : null }, dinTipar ? 'propus_tipar' : 'manual')
+  }
   const areDeja = (campuri) => existente.some(e => (campuri.cnsc_decizie_id ? e.cnsc_decizie_id === campuri.cnsc_decizie_id && (e.citat_idx ?? null) === (campuri.citat_idx ?? null) : campuri.requirement_id ? e.requirement_id === campuri.requirement_id : e.pattern_id === campuri.pattern_id))
 
   const prop = tipar ? propuneriDinTipar(tipar, decMap, licitatie) : null
@@ -134,12 +147,30 @@ function ModalTemei({ tinta, licitatie, patternId, existente, onInchide, onSchim
           <button style={{ ...S.btnS, marginLeft:'auto' }} onClick={onInchide}>✕</button>
         </div>
         <div style={{ display:'flex', gap:6, marginBottom:10, flexWrap:'wrap' }}>
-          {patternId && <Tab k="tipar">📐 Tipar{prop ? ` (${prop.propuse.length} propuse)` : ''}</Tab>}
+          <Tab k="tipar">📐 Tipar{prop ? ` (${prop.propuse.length} propuse)` : ''}</Tab>
           <Tab k="decizii">⚖️ Decizii CNSC</Tab>
           <Tab k="cerinte">📜 Cerințe normative</Tab>
         </div>
 
-        {tab === 'tipar' && (
+        {tab === 'tipar' && !patternId && (
+          <div>
+            <div style={{ fontSize:12, color:G.muted, marginBottom:6 }}>Ținta nu are încă un tipar. Caută tiparul potrivit și atașează-l — după aceea apar precedentele lui ca propuneri.</div>
+            <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+              <input style={{ ...S.input, flex:1 }} placeholder="caută în titlu / cod (ex. PAT-GAZ-14, proiectare)…" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && cauta()} />
+              <button style={S.btnP} disabled={busy} onClick={cauta}>{busy ? '…' : 'Caută'}</button>
+            </div>
+            <div style={{ display:'grid', gap:6 }}>
+              {cautat && tipareGasite.length === 0 && <div style={{ fontSize:12, color:G.dim }}>Niciun tipar găsit.</div>}
+              {tipareGasite.map(t => (
+                <div key={t.pattern_id} style={{ padding:'7px 10px', borderRadius:8, border:`1px solid ${G.border2}`, background:G.bg, fontSize:12, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                  <b>{t.pattern_id}</b><span style={{ flex:'1 1 240px' }}>{t.titlu}</span><Badge col={G.muted}>încredere {t.confidence}</Badge>{t.requires_human_legal_review && <Badge col={G.purple}>⚖️ review</Badge>}<Badge col={G.dim}>{(t.precedente_cnsc || []).length} precedente</Badge>
+                  <button style={{ ...S.btnS, color:G.ofertare, borderColor:G.ofertare + '66' }} disabled={busy} onClick={() => adauga({ pattern_id: t.pattern_id }, 'manual')}>+ atașează tiparul</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {tab === 'tipar' && patternId && (
           !tipar ? <div style={{ color:G.dim, fontSize:12 }}>se încarcă tiparul…</div> : (
             <div>
               <div style={{ fontSize:12.5, marginBottom:6 }}><b>{tipar.pattern_id}</b> — {tipar.titlu} <Badge col={G.muted}>încredere {tipar.confidence}</Badge> {tipar.requires_human_legal_review && <Badge col={G.purple}>⚖️ cere review juridic</Badge>}</div>
@@ -173,7 +204,7 @@ function ModalTemei({ tinta, licitatie, patternId, existente, onInchide, onSchim
             {!cautat && <div style={{ fontSize:12, color:G.dim }}>Caută în cele ~216 decizii din corpus. Implicit doar cele verificate pe sursă.</div>}
             {cautat && rezDec.length === 0 && <div style={{ fontSize:12, color:G.dim }}>Nimic găsit.</div>}
             {rezDec.map(d => esteExclusa(d)
-              ? <DecizieRand key={d.id} d={d} licitatie={licitatie} motivExclus={d.verificat === false ? 'neverificată pe sursă' : TXT_CJ[rezultatCJ(d)]} onAdauga={() => {}} busy />
+              ? <DecizieRand key={d.id} d={d} licitatie={licitatie} motivExclus={d.verificat !== true ? 'neverificată pe sursă' : TXT_CJ[rezultatCJ(d)]} onAdauga={() => {}} busy />
               : <DecizieRand key={d.id} d={d} licitatie={licitatie} avert={avertismente(d, licitatie)} onAdauga={adaugaDecizie} busy={busy} />)}
           </div>
         )}
@@ -201,12 +232,15 @@ export default function TemeiuriClarificare({ tinta, licitatie = null, showToast
   const [eroare, setEroare] = useState(null)
   const [deschis, setDeschis] = useState(false)
   const [busy, setBusy] = useState(false)
+  const versiune = useRef(0)     // un răspuns întârziat al țintei vechi nu suprascrie ținta nouă (aceeași instanță, ținte succesive)
   const anunta = (t, tip = 'ok') => showToast ? showToast(t, tip) : console.log(tip, t)
   const cheie = tinta.punct_id ? 'punct_id' : 'clarificare_id'
   const load = async () => {
+    const v = ++versiune.current
     const { data, error } = await supabase.from('ofertare_clarificari_temeiuri')
-      .select('id, cnsc_decizie_id, requirement_id, pattern_id, citat_idx, citat_text, citat_loc, sursa, confirmat, include_in_adresa, decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat), cerinta:norme_cerinte(requirement_id, locator, cerinta), tipar:clarificari_tipare(pattern_id, titlu, requires_human_legal_review)')
+      .select('id, cnsc_decizie_id, requirement_id, pattern_id, pattern_id_origine, citat_idx, citat_text, citat_loc, sursa, confirmat, include_in_adresa, decizie:cnsc_decizii(id, nr_decizie, buletin_oficial, data, link_sursa, control_judiciar, verificat), cerinta:norme_cerinte(requirement_id, locator, cerinta), tipar:clarificari_tipare!ofertare_clarificari_temeiuri_pattern_id_fkey(pattern_id, titlu, requires_human_legal_review), origine:clarificari_tipare!ofertare_clarificari_temeiuri_pattern_id_origine_fkey(pattern_id, requires_human_legal_review)')
       .eq(cheie, tinta[cheie]).order('id')
+    if (v !== versiune.current) return
     if (error) { setEroare(TABEL_LIPSA(error) ? 'tabelul temeiurilor nu e încă aplicat (migrarea 20261014a)' : error.message); setRows([]); return }
     setEroare(null); setRows(data || [])
   }
@@ -214,9 +248,9 @@ export default function TemeiuriClarificare({ tinta, licitatie = null, showToast
 
   // Dacă ORICE temei al țintei e un tipar care cere review juridic, includerea în adresă (a oricărui temei al țintei,
   // inclusiv deciziile propuse din tipar) o poate face doar un owner — review Jakarinos r1.
-  const reviewNecesar = (rows || []).some(x => x.tipar?.requires_human_legal_review)
+  const reviewNecesar = (rows || []).some(x => x.tipar?.requires_human_legal_review || x.origine?.requires_human_legal_review)
   const patch = async (r, p) => {
-    if (p.include_in_adresa && (reviewNecesar || r.tipar?.requires_human_legal_review) && !profile?.is_owner) return anunta('Tiparul cere review juridic — doar un owner poate include temeiuri în adresă.', 'warn')
+    if (p.include_in_adresa && (reviewNecesar || r.tipar?.requires_human_legal_review || r.origine?.requires_human_legal_review) && !profile?.is_owner) return anunta('Tiparul cere review juridic — doar un owner poate include temeiuri în adresă.', 'warn')
     setBusy(true)
     const { error } = await supabase.from('ofertare_clarificari_temeiuri').update(p).eq('id', r.id)
     setBusy(false)
@@ -240,7 +274,7 @@ export default function TemeiuriClarificare({ tinta, licitatie = null, showToast
         const d = r.decizie
         const cj = d ? rezultatCJ(d) : null
         const eticheta = d ? `CNSC ${etichetaDecizie(d)}${r.citat_loc ? ` · ${r.citat_loc}` : ''}` : r.cerinta ? `${r.cerinta.requirement_id} · ${r.cerinta.locator || ''}` : r.tipar ? `tipar ${r.tipar.pattern_id}` : '?'
-        const rosu = d && (cj === 'modificata' || cj === 'desfiintata' || d.verificat === false)
+        const rosu = d && (cj === 'modificata' || cj === 'desfiintata' || d.verificat !== true)
         return (
           <span key={r.id} style={{ display:'inline-flex', gap:5, alignItems:'center', fontSize:11, border:`1px solid ${rosu ? G.red : r.confirmat ? G.border : G.yellow}66`, borderRadius:6, padding:'2px 7px', background:G.surface, color:G.text }}
             title={[r.citat_text ? `„${r.citat_text}”` : null, r.cerinta?.cerinta, r.tipar?.titlu, r.sursa !== 'manual' ? `sursa: ${r.sursa}` : null, rosu ? '⚠️ ' + TXT_CJ[cj] : null].filter(Boolean).join('\n')}>
