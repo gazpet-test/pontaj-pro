@@ -139,6 +139,21 @@ ${ok(`UPDATE ${T} SET nota = 'notă internă' WHERE clarificare_id = 1 AND cnsc_
 ${ok(`UPDATE ${T} SET confirmat = true WHERE clarificare_id = 1 AND cnsc_decizie_id = 'D1'`, 'non-owner confirmă propunerea A (neinclusă)')}
 ${ok(`DELETE FROM ${T} WHERE clarificare_id = 2 AND pattern_id = 'P-LIBER'`, 'non-owner șterge un chip')}
 
+-- S4b (Jakarinos R4-T2, contraexemplul exact R3-1): Q8 are A (origine-review) ȘI B, AMBELE incluse de owner;
+-- non-owner debifează A (cel care poartă proveniența) → trece; non-owner scoate proveniența de pe A încă inclus → trece;
+-- non-owner pune înapoi proveniența / reinclude → refuz (adăugare)
+${asUser('owner')}
+${ok(ins(Q(8), { ...citatD1, pattern_id_origine: 'P-REVIEW', include_in_adresa: true }), 'Q8 A: origine-review, inclus de owner')}
+${ok(ins(Q(8), { cnsc_decizie_id: 'D2', citat_idx: 0, citat_text: 'citat din a doua decizie', include_in_adresa: true }), 'Q8 B: inclus de owner')}
+${asUser('user')}
+${ok(`UPDATE ${T} SET include_in_adresa = false WHERE clarificare_id = 8 AND cnsc_decizie_id = 'D1'`, 'R3-1 exact: non-owner debifează A (cu proveniență) cât timp B rămâne inclus')}
+${refuz(`UPDATE ${T} SET include_in_adresa = true WHERE clarificare_id = 8 AND cnsc_decizie_id = 'D1'`, 'non-owner reinclude A lângă B inclus + proveniență-review')}
+${asUser('owner')}
+${ok(`UPDATE ${T} SET include_in_adresa = true WHERE clarificare_id = 8 AND cnsc_decizie_id = 'D1'`, 'owner reinclude A')}
+${asUser('user')}
+${ok(`UPDATE ${T} SET pattern_id_origine = NULL WHERE clarificare_id = 8 AND cnsc_decizie_id = 'D1'`, 'R3-1 exact: non-owner scoate proveniența de pe A INCLUS cât timp B e inclus')}
+${refuz(`UPDATE ${T} SET pattern_id_origine = 'P-REVIEW' WHERE clarificare_id = 8 AND cnsc_decizie_id = 'D1'`, 'non-owner pune proveniența înapoi pe A inclus')}
+
 -- S5 (Jakarinos N2 restanță): conținut nou pe un rând inclus pe o țintă cu review → refuz pentru non-owner
 ${ok(ins(Q(5), { ...citatD1, include_in_adresa: true }), 'Q5: citat inclus fără review (non-owner)')}
 ${ok(`UPDATE ${T} SET citat_idx = 1, citat_text = 'al doilea citat' WHERE clarificare_id = 5`, 'Q5 fără review: non-owner schimbă citatul inclus')}
@@ -195,18 +210,24 @@ function sesiune() {
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 // Proba de concurență (Copilot r3): A și B non-owneri, aceeași țintă. A deschide tranzacția și pune piesa 1 (ține lock-ul),
-// B pune piesa 2 → trebuie să AȘTEPTE (nu să treacă pe snapshot-ul vechi) și, după COMMIT-ul lui A, să fie REFUZAT.
+// B pune piesa 2 → trebuie să AȘTEPTE (observat în pg_locks: advisory neacordat), apoi, după COMMIT-ul lui A, să fie REFUZAT.
 async function concurenta(tinta, piesaA, piesaB, eticheta) {
   const A = sesiune(), B = sesiune()
+  // observator: B trebuie să apară în pg_locks cu un advisory lock NEACORDAT (așteaptă după A), înainte ca A să comită
+  const asteaptaAdvisory = `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`
+  const numar = sql => Number(psqlOnce(sql + "; SELECT 'OBS';", 'OBS').split('\n')[0])
+  const panaCand = async (cond, ms, mesaj) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > ms) throw new Error(mesaj); await sleep(50) } }
   try {
     A.trimite(asUser('user') + ' BEGIN; ' + piesaA + "; \\echo A_INSERAT")
     await A.asteapta('A_INSERAT', 10000)
     B.trimite(asUser('user2') + ' BEGIN; ' + piesaB + "; \\echo B_GATA")
-    await sleep(1500)
+    // determinist (Jakarinos R4-T1): fie B ajunge să aștepte lock-ul (corect), fie termină înainte de commit-ul lui A (BUG: n-a așteptat)
+    await panaCand(() => numar(asteaptaAdvisory) >= 1 || B.are('B_GATA') || /ERROR/.test(B.err()), 10000, eticheta + ': B nu a ajuns nici să aștepte lock-ul, nici să termine')
     assert.ok(!B.are('B_GATA') && !/ERROR/.test(B.err()), eticheta + ': B trebuia să aștepte lock-ul cât A ține tranzacția deschisă')
+    assert.ok(numar(asteaptaAdvisory) >= 1, eticheta + ': B trebuia să fie blocat pe un advisory lock neacordat')
     A.trimite("COMMIT; \\echo A_COMIS")
     await A.asteapta('A_COMIS', 10000)
-    await sleep(1500)
+    await panaCand(() => B.are('B_GATA') || /ERROR/.test(B.err()), 10000, eticheta + ': B nu s-a deblocat după commit-ul lui A')
     assert.ok(/insufficient_privilege|doar un owner/.test(B.err()), eticheta + ': B trebuia refuzat după commit-ul lui A, stderr=' + B.err().slice(0, 300))
     B.trimite("ROLLBACK; \\echo B_GATA")
     await B.asteapta('B_GATA', 10000)
