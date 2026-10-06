@@ -1,0 +1,64 @@
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+-- 20261017a_executie_sef_santier_ROLLBACK — NU e migrare (niciun runner nu parcurge supabase/revenire/).
+-- Scoate coloana executie_proiecte.sef_santier_employee_id și FK-ul ei (starea dinainte de 20261017a).
+-- ⚠️ Ireversibil pentru date: șefii de șantier completați pe proiecte se pierd. Dacă există valori, întâi export:
+--    SELECT id, cod_intern, sef_santier_employee_id FROM public.executie_proiecte WHERE sef_santier_employee_id IS NOT NULL;
+-- ⚠️ UI-ul (src/Executie.jsx) care cere coloana trebuie revenit ÎNAINTE (altfel fișa proiectului nu se mai salvează).
+-- Fără GO de execuție: doar la cererea explicită a lui Răzvan. Armarea nu e autorizare.
+-- Procedura (un singur string; fișierul nu conține BEGIN/COMMIT):
+--   BEGIN;
+--   SELECT set_config('gazpet.revenire_20261017a', 'SEF_SANTIER_DROP:' || txid_current(), true);
+--   -- doar dacă există valori (după export): SELECT set_config('gazpet.revenire_20261017a_cu_date', 'DA:' || txid_current(), true);
+--   -- <conținutul exact al fișierului>
+--   COMMIT;
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+SET LOCAL search_path = public, pg_temp;   -- deparse determinist pentru amprenta FK (pg_get_constraintdef)
+
+DO $arm$
+DECLARE
+  v_rel oid := to_regclass('public.executie_proiecte');
+  n bigint;
+BEGIN
+  IF current_setting('gazpet.revenire_20261017a', true) IS DISTINCT FROM 'SEF_SANTIER_DROP:' || txid_current() THEN
+    RAISE EXCEPTION 'Revenire 20261017a: nearmată (gazpet.revenire_20261017a legat de txid_current) — refuz';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261017a%') THEN
+    RAISE EXCEPTION 'Revenire 20261017a: armare persistentă (ALTER DATABASE/ROLE SET, oricare din cele două chei) — refuz';
+  END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Revenire 20261017a: rulează ca postgres (current_user = %)', current_user;
+  END IF;
+  -- starea EXACTĂ a patch-ului
+  IF (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = v_rel AND attname = 'sef_santier_employee_id' AND NOT attisdropped) IS DISTINCT FROM 'integer'
+     OR (SELECT pg_get_constraintdef(oid) || '|' || confdeltype::text || confupdtype::text
+           FROM pg_constraint WHERE conrelid = v_rel AND conname = 'executie_proiecte_sef_santier_employee_id_fkey')
+        IS DISTINCT FROM 'FOREIGN KEY (sef_santier_employee_id) REFERENCES employees(id)|aa' THEN
+    RAISE EXCEPTION 'Revenire 20261017a: precondiție — starea nu e cea a patch-ului 20261017a (coloană integer + FK NO ACTION)';
+  END IF;
+  -- nimic altceva nu depinde de coloană (view, index, altă constrângere) — DROP fără CASCADE oricum, dar refuzul e explicit
+  IF EXISTS (SELECT 1 FROM pg_depend d WHERE d.refobjid = v_rel
+                AND d.refobjsubid = (SELECT attnum FROM pg_attribute WHERE attrelid = v_rel AND attname = 'sef_santier_employee_id')
+                AND NOT (d.classid = 'pg_constraint'::regclass
+                         AND d.objid = (SELECT oid FROM pg_constraint WHERE conrelid = v_rel AND conname = 'executie_proiecte_sef_santier_employee_id_fkey'))) THEN
+    RAISE EXCEPTION 'Revenire 20261017a: alte obiecte depind de sef_santier_employee_id (view/index/constrângere) — reanalizează';
+  END IF;
+  SELECT count(*) INTO n FROM public.executie_proiecte WHERE sef_santier_employee_id IS NOT NULL;
+  IF n > 0 AND current_setting('gazpet.revenire_20261017a_cu_date', true) IS DISTINCT FROM 'DA:' || txid_current() THEN
+    RAISE EXCEPTION 'Revenire 20261017a: % proiecte au șef de șantier completat — exportă-le și armează și gazpet.revenire_20261017a_cu_date = DA:<txid_current()> în aceeași tranzacție', n;
+  END IF;
+END
+$arm$;
+
+ALTER TABLE public.executie_proiecte DROP CONSTRAINT executie_proiecte_sef_santier_employee_id_fkey;
+ALTER TABLE public.executie_proiecte DROP COLUMN sef_santier_employee_id;
+
+DO $post$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.executie_proiecte'::regclass AND attname = 'sef_santier_employee_id' AND NOT attisdropped)
+     OR EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.executie_proiecte'::regclass AND conname = 'executie_proiecte_sef_santier_employee_id_fkey') THEN
+    RAISE EXCEPTION 'Revenire 20261017a: postcondiție — coloana sau FK-ul încă există';
+  END IF;
+  PERFORM set_config('gazpet.revenire_20261017a', '', true);
+  PERFORM set_config('gazpet.revenire_20261017a_cu_date', '', true);
+END
+$post$;
