@@ -162,3 +162,13 @@ describe('avertismentCitire — citirea pe sursă incompletă nu se arată ca re
     expect(avertismentCitire(null)).toBeNull()
   })
 })
+
+describe('avertismentCitire — și plafonarea rezultatului AI (review ultracode r3)', () => {
+  it('lista plafonată / rezumat tăiat / răspuns AI tăiat → PARȚIALĂ, cu totalurile găsite', () => {
+    const c = { sursa_completa: true, citire_completa: false, motive_incomplet: ['lista_plafonata', 'rezumat_taiat', 'raspuns_ai_taiat'],
+      total_modificari: 120, total_intrebari: 5, modificari: new Array(100).fill({}), intrebari_raspunse: new Array(5).fill({}) }
+    const a = avertismentCitire(c)
+    expect(a).toMatch(/^Citire PARȚIALĂ/); expect(a).toMatch(/120 modificări/); expect(a).toMatch(/primele 100 \/ 5/)
+    expect(a).toMatch(/rezumatul a fost scurtat/); expect(a).toMatch(/limita de lungime/)
+  })
+})

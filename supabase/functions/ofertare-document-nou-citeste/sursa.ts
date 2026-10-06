@@ -60,6 +60,23 @@ export async function amprentaText(t: string | null | undefined): Promise<string
   const b = new TextEncoder().encode(String(t || '').trim())
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', b)), (x) => x.toString(16).padStart(2, '0')).join('')
 }
+// Plafoanele rezultatului AI (review ultracode r3, 06.10, P2): ce depășește NU se mai taie tăcut — motivele intră în proveniență,
+// iar citirea apare ca PARȚIALĂ (citire_completa = false). Plafoane ridicate 40/60 → 100/100.
+export const MAX_MODIFICARI = 100
+export const MAX_INTREBARI = 100
+export const MAX_REZUMAT = 4000
+export function plafoneazaRezultat(j: any, stopReason?: string | null) {
+  const mod = Array.isArray(j?.modificari) ? j.modificari : [], ir = Array.isArray(j?.intrebari_raspunse) ? j.intrebari_raspunse : []
+  const rez = String(j?.rezumat || '')
+  const motive: string[] = []
+  if (mod.length > MAX_MODIFICARI || ir.length > MAX_INTREBARI) motive.push('lista_plafonata')
+  if (rez.length > MAX_REZUMAT) motive.push('rezumat_taiat')
+  if (stopReason === 'max_tokens') motive.push('raspuns_ai_taiat')
+  return { rezumat: rez.slice(0, MAX_REZUMAT), modificari: mod.slice(0, MAX_MODIFICARI), intrebari_raspunse: ir.slice(0, MAX_INTREBARI),
+    total_modificari: mod.length, total_intrebari: ir.length, motive }
+}
+
+export const MESAJ_CITIT_INTRE_TIMP = 'Documentul a fost citit cu AI între timp (alt utilizator / altă fereastră) — reîncarcă pagina ca să vezi citirea; nu e nevoie să-l citești din nou.'
 export const MESAJ_FISIER_NEIDENTIFICAT = 'Nu pot identifica fișierul în Storage (sau s-a schimbat chiar în timpul descărcării) — reîncearcă; dacă se repetă, urcă-l din nou.'
 export const MESAJ_SURSA_SCHIMBATA = 'Documentul a fost recitit / reprocesat în timpul citirii cu AI — rezumatul vechi NU s-a salvat. Apasă din nou «Citește cu AI».'
 

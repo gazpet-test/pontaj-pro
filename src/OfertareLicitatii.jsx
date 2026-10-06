@@ -3422,6 +3422,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     setBusy(null)
     if (!r.ok) {
       setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
+      load()   // citirea pe felii poate fi reușit înainte de eșec: starea / textul se reîmprospătează
       return anunta(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err')
     }
     anunta(`🤖 Citit: ${d.nume_original}`)

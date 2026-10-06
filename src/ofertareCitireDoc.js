@@ -84,10 +84,13 @@ export async function corpEroare(error, data) {
 // nu ca rezultat complet — listele de modificări / întrebări pot lipsi. Citirile vechi (fără câmp) rămân fără avertisment.
 const fmtNr = n => Number(n || 0).toLocaleString('ro-RO')
 export function avertismentCitire(c) {
-  if (!c || c.sursa_completa !== false) return null
+  if (!c || (c.citire_completa !== false && c.sursa_completa !== false)) return null
   const m = Array.isArray(c.motive_incomplet) ? c.motive_incomplet : []
   const parti = []
   if (m.includes('trunchiat')) parti.push(`AI-ul a primit doar primele ${fmtNr(c.lungime_folosita)} din ${fmtNr(c.lungime_sursa)} de caractere`)
   if (m.includes('pagini_necitite')) parti.push('unele pagini nu au putut fi citite')
+  if (m.includes('lista_plafonata')) parti.push(`listele au fost plafonate (AI-ul a găsit ${fmtNr(c.total_modificari)} modificări și ${fmtNr(c.total_intrebari)} întrebări; s-au păstrat primele ${fmtNr((c.modificari || []).length)} / ${fmtNr((c.intrebari_raspunse || []).length)})`)
+  if (m.includes('rezumat_taiat')) parti.push('rezumatul a fost scurtat')
+  if (m.includes('raspuns_ai_taiat')) parti.push('răspunsul AI a atins limita de lungime')
   return `Citire PARȚIALĂ: ${parti.join('; ') || 'sursa incompletă'} — modificările / întrebările pot fi incomplete; verifică documentul original.`
 }

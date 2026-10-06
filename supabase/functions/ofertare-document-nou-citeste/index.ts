@@ -21,7 +21,7 @@
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { scrieCitireNoi } from './scriere.ts'
-import { alegeSursa, amprentaText, eTimeout, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
 import { aceeasiIdentitate, identitateObiect, shaOcteti, type IdentitateObiect } from './obiect.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
@@ -141,15 +141,19 @@ Deno.serve(async (req: Request) => {
   try { await db.from('ai_usage_log').insert({ function_name: 'ofertare-document-nou-citeste', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * PRICE_IN + tokOut * PRICE_OUT, ref_table: 'ofertare_documente_atribuire', ref_id: id }) } catch { /* ignorăm */ }
 
   const tipAi = TIPURI_AI.includes(j.tip) ? j.tip : 'altul'
+  const pl = plafoneazaRezultat(j, data.stop_reason)
+  const prov = provenanta(sursa, sha, obiect)
+  const motive = [...prov.motive_incomplet, ...pl.motive]
   const citire = {
     tip: tipAi,
-    rezumat: String(j.rezumat || '').slice(0, 4000),
-    modificari: Array.isArray(j.modificari) ? j.modificari.slice(0, 40) : [],
-    intrebari_raspunse: Array.isArray(j.intrebari_raspunse) ? j.intrebari_raspunse.slice(0, 60) : [],
+    rezumat: pl.rezumat,
+    modificari: pl.modificari,
+    intrebari_raspunse: pl.intrebari_raspunse,
     termen_nou: /^\d{4}-\d{2}-\d{2}$/.test(String(j.termen_nou || '')) ? j.termen_nou : null,
     data_document: /^\d{4}-\d{2}-\d{2}$/.test(String(j.data_document || '')) ? j.data_document : null,
     model: MODEL, citit_la: new Date().toISOString(), citit_de: cititDe, tokens_in: tokIn, tokens_out: tokOut,
-    ...provenanta(sursa, sha, obiect),
+    ...prov, motive_incomplet: motive, citire_completa: motive.length === 0,
+    total_modificari: pl.total_modificari, total_intrebari: pl.total_intrebari,
   }
   // 25.09.2026: dacă documentul nu era citit (neprocesat/eroare, fără text), citirea de aici îl face „procesat"
   // cu text_extras = rezumatul + modificările + Q&A, ca Rezumatul să nu-l mai numere la „rămase de citit".
@@ -158,11 +162,13 @@ Deno.serve(async (req: Request) => {
   // dispărea). Acum: se RECITEȘTE `analiza` chiar înainte de scriere, se înlocuiește DOAR cheia proprie (citire_noi) și se scrie
   // compare-and-set pe analiza->citire_ai->>rev (ca /api/plansa-felii și ofertare-plansa-citeste: orice scriere a cheilor serverului schimbă
   // rev-ul); la conflict se reface peste starea nouă (max. 3 încercări), apoi eroare explicită — nimic suprascris tăcut.
-  const { upErr, scris, stale } = await scrieCitireNoi(db, id, citire, row.nume_original,
-    { status: row.status_procesare ?? null, procesat_la: row.procesat_la ?? null, fisier_path: row.fisier_path,
+  const { upErr, scris, stale, motiv } = await scrieCitireNoi(db, id, citire, row.nume_original,
+    { status: row.status_procesare ?? null, procesat_la: row.procesat_la ?? null, fisier_path: row.fisier_path, inceput: new Date(t0).toISOString(),
       shaText: sursa.mod === 'text' ? sha : null,
       obiectNeschimbat: sursa.mod === 'pdf' ? async () => aceeasiIdentitate(obiect, await identitateObiect(db, 'ofertare', row.fisier_path)) : undefined })
-  if (stale) return json({ error: MESAJ_SURSA_SCHIMBATA, cod: 'sursa_schimbata' }, 409)
+  if (stale) return motiv === 'citit_intre_timp'
+    ? json({ error: MESAJ_CITIT_INTRE_TIMP, cod: 'citit_intre_timp' }, 409)
+    : json({ error: MESAJ_SURSA_SCHIMBATA, cod: 'sursa_schimbata' }, 409)
   if (upErr) return json({ error: 'update: ' + upErr.message })
   if (!scris) return json({ error: 'documentul e scris simultan din altă parte (citire de planșă / transfer) — reîncearcă; nimic nu s-a suprascris' }, 409)
 

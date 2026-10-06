@@ -333,7 +333,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     setCitindDoc(null)
     if (!r.ok) {
       setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
-      showToast(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err'); return null
+      showToast(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err')
+      load()   // citirea pe felii poate fi reușit înainte de eșec: starea / textul se reîmprospătează
+      return null
     }
     const data = r.data
     showToast(`🤖 Citit: ${d.nume_original}`)
@@ -397,11 +399,14 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const lista = Array.isArray(citire.intrebari_raspunse) ? citire.intrebari_raspunse : []
     let best = null, bestS = 0
     lista.forEach(x => { const s = scorPotrivire(q.intrebare, x.intrebare_scurt); if (s > bestS) { bestS = s; best = x } })
-    const propus = ((best && bestS >= 0.34 ? best.raspuns_scurt : (lista.length === 1 ? lista[0].raspuns_scurt : citire.rezumat)) || '').trim()
-    if (!propus) return showToast('AI-ul n-a găsit un răspuns clar în fișier — scrie-l manual.', 'warn')
+    // Citire PARȚIALĂ (sursă incompletă / liste plafonate): fără propuneri de rezervă (rezumat / singura pereche) și fără concluzia
+    // „n-a găsit” — răspunsul poate fi chiar în partea necitită (review ultracode r3, P2; lecția Mânăstirea pe textul oficial).
+    const partial = avertismentCitire(citire)
+    const propus = ((best && bestS >= 0.34 ? best.raspuns_scurt : partial ? '' : (lista.length === 1 ? lista[0].raspuns_scurt : citire.rezumat)) || '').trim()
+    if (!propus) return showToast(partial ? `${partial} Nu propun un răspuns automat — scrie-l după documentul original.` : 'AI-ul n-a găsit un răspuns clar în fișier — scrie-l manual.', 'warn')
     if ((q.raspuns || '').trim()) return showToast('Întrebarea avea deja răspuns scris — l-am păstrat. Propunerea AI e în „📥 Primite de la autoritate”.', 'warn')
     setQ(q.id, 'raspuns', propus.slice(0, 20000))
-    showToast('🤖 Am propus răspunsul din fișier — verifică-l în casetă; se salvează când ieși din ea.')
+    showToast(partial ? `🤖 Am propus răspunsul din fișier, DAR: ${partial}` : '🤖 Am propus răspunsul din fișier — verifică-l în casetă; se salvează când ieși din ea.', partial ? 'warn' : 'ok')
   }
   // Întrebările noastre care mai așteaptă răspuns — candidatele la legare
   const candidateLegare = () => (clar || []).filter(q => q.status === 'trimisa' || q.status === 'de_trimis')

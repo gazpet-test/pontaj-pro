@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none --no-lock -A supabase/functions/ofertare-document-nou-citeste/sursa_test.ts
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { alegeSursa, amprentaText, BUGET_MS, eRezumatAi, eTimeout, MESAJ_TIMEOUT, MESAJ_TIMEOUT_TEXT, mesajTimeout, MIN_AI_MS, notaSursa, poateCitiPdf, provenanta, TEXT_MAX, TEXT_MIN, TIMEOUT_MS, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, MAX_MODIFICARI, MAX_REZUMAT, plafoneazaRezultat, BUGET_MS, eRezumatAi, eTimeout, MESAJ_TIMEOUT, MESAJ_TIMEOUT_TEXT, mesajTimeout, MIN_AI_MS, notaSursa, poateCitiPdf, provenanta, TEXT_MAX, TEXT_MIN, TIMEOUT_MS, timpRamas } from './sursa.ts'
 import { scrieCitireNoi } from './scriere.ts'
 
 Deno.test('document procesat cu text real → citește textul, nu PDF-ul', () => {
@@ -125,4 +125,14 @@ Deno.test('proveniența: text complet = completă; partial = pagini_necitite; PD
   assertEquals([pp.sursa_completa, pp.motive_incomplet], [false, ['pagini_necitite']])
   assertEquals(provenanta({ mod: 'pdf' }, null).sursa, 'pdf')
   assertEquals(await amprentaText('  abc \n'), await amprentaText('abc'))
+})
+
+Deno.test('plafonarea rezultatului AI e DECLARATĂ: 120 modificări → păstrate 100 + lista_plafonata + total; sub plafon → fără motive', () => {
+  const mare = plafoneazaRezultat({ rezumat: 'r'.repeat(MAX_REZUMAT + 1), modificari: new Array(120).fill({ ce_se_schimba: 'x' }), intrebari_raspunse: [] }, 'max_tokens')
+  assertEquals(mare.modificari.length, MAX_MODIFICARI)
+  assertEquals([mare.total_modificari, mare.total_intrebari], [120, 0])
+  assertEquals(mare.motive, ['lista_plafonata', 'rezumat_taiat', 'raspuns_ai_taiat'])
+  const mic = plafoneazaRezultat({ rezumat: 'ok', modificari: new Array(52).fill({}), intrebari_raspunse: new Array(3).fill({}) }, 'end_turn')
+  assertEquals([mic.modificari.length, mic.motive.length], [52, 0])   // 52 > vechiul plafon 40: nu se mai pierde nimic
+  assertEquals(plafoneazaRezultat({}, null).motive, [])
 })
