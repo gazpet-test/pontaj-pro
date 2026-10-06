@@ -23,7 +23,7 @@ import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem, ARHIVA_DOC_RE, MESAJ_ARHIVA } from './OfertareClarificari.jsx'
-import { mesajEroareCitire } from './ofertareCitireDoc.js'
+import { mesajEroareCitire, citestePeFelii, trebuieCititPeFelii } from './ofertareCitireDoc.js'
 import GarantieSection, { useSemnalGarantie } from './OfertareGarantie.jsx'
 import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.js'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
@@ -3414,6 +3414,12 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   }
   const citeste = async d => {
     setBusy(d.id); setMsg(null); setEroareCitire(m => ({ ...m, [d.id]: null }))
+    // Regula documentației (06.10): necitit → întâi pe felii (ca „Procesează”), apoi rezumatul din text. Colegii fără
+    // drept de cheltuială (poarta owner/responsabil) rămân pe drumul vechi: PDF direct, cu limită de timp pe server.
+    if (trebuieCititPeFelii((toate.find(x => x.id === d.id) || d).status_procesare)) {
+      const r = await citestePeFelii((fn, o) => supabase.functions.invoke(fn, o), d.id)
+      if (!r.ok && !r.poarta) { setBusy(null); setEroareCitire(m => ({ ...m, [d.id]: r.eroare })); return anunta('Citirea a eșuat: ' + r.eroare, 'err') }
+    }
     const { data, error } = await supabase.functions.invoke('ofertare-document-nou-citeste', { body: { document_id: d.id } })
     setBusy(null)
     if (error || data?.error) {
