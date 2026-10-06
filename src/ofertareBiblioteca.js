@@ -135,3 +135,11 @@ export function valoriDistincte(randuri, din) {
   for (const r of randuri || []) { const v = din(r); for (const x of Array.isArray(v) ? v : [v]) if (x != null && x !== '') s.add(String(x)) }
   return [...s].sort((a, b) => a.localeCompare(b, 'ro'))
 }
+
+// impact_intern NU se mai citește din tabel (20261015a: SELECT pe coloană revocat pentru authenticated); owner-ul îl primește
+// separat, prin fn_tipare_impact_intern(), și se lipește aici pe tipare după pattern_id. Rândurile fără pereche rămân neatinse.
+export function ataseazaImpact(tipare, impact) {
+  const m = new Map()
+  for (const r of impact || []) if (r && r.pattern_id && r.impact_intern != null) m.set(r.pattern_id, r.impact_intern)
+  return (tipare || []).map(t => (m.has(t.pattern_id) ? { ...t, impact_intern: m.get(t.pattern_id) } : t))
+}

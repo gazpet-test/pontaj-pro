@@ -2,14 +2,15 @@
 // OfertareBiblioteca.jsx — Ofertare › „⚖️ Bibliotecă juridică” (pasul A, Răzvan 05.10.2026; claude_docs
 // tema_biblioteca_juridica_A, docs/juridic/MAPARE_CNSC_IN_ERP.md §5). READ-ONLY peste cnsc_decizii, norme_cerinte
 // (+ norme_surse) și clarificari_tipare — RLS existent (SELECT pentru authenticated, scrierea doar owner). Fără tabel nou,
-// fără RPC, fără AI. Copierea citării respectă §4 (formatCitare): fără decizie verificată + pagină + link nu se exportă.
-// impact_intern (strategie internă) se cere de la server DOAR pentru owner.
+// fără AI. Copierea citării respectă §4 (formatCitare): fără decizie verificată + pagină + link nu se exportă.
+// impact_intern (evaluare internă: cost, risc de respingere, tehnic) e owner-only PE SERVER (20261015a): coloana nu mai e
+// lizibilă pentru authenticated, owner-ul o primește prin fn_tipare_impact_intern() (0 rânduri pentru oricine altcineva).
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import {
   formatCitare, referintaScurta, stareJudiciara, eAtacata, ETICHETA_CJ, fmtData, filtreazaDecizii, ordoneazaDecizii,
-  filtreazaCerinte, filtreazaTipare, indexDecizii, deciziiPentruTipar, tiparePentruDecizie, valoriDistincte,
+  filtreazaCerinte, filtreazaTipare, indexDecizii, deciziiPentruTipar, tiparePentruDecizie, valoriDistincte, ataseazaImpact,
 } from './ofertareBiblioteca.js'
 
 const G = {
@@ -39,6 +40,17 @@ async function toateRandurile(tabel, coloane, cheie) {
     if (error) throw error
     out.push(...(data || []))
     if (!data || data.length < 1000) return out
+  }
+}
+// Doar pentru owner. O eroare aici nu blochează biblioteca: fișa tiparului spune că impactul nu s-a putut încărca
+// (fail-closed: fără impact, niciodată impact parțial).
+async function impactIntern() {
+  const out = []
+  for (let de = 0; ; de += 1000) {
+    const { data, error } = await supabase.rpc('fn_tipare_impact_intern').order('pattern_id').range(de, de + 999)
+    if (error) return { randuri: [], eroare: error.message || String(error) }
+    out.push(...(data || []))
+    if (!data || data.length < 1000) return { randuri: out, eroare: null }
   }
 }
 // Link-urile vin din BD (conținut importat): doar http(s), niciodată javascript: & co.
@@ -72,13 +84,14 @@ export default function OfertareBiblioteca() {
         const { data: { user } } = await supabase.auth.getUser()
         const { data: p } = user ? await supabase.from('profiles').select('is_owner').eq('id', user.id).maybeSingle() : { data: null }
         const owner = p?.is_owner === true
-        const [decizii, cerinte, surse, tipare] = await Promise.all([
+        const [decizii, cerinte, surse, tipare, impact] = await Promise.all([
           toateRandurile('cnsc_decizii', COL_DECIZII, 'id'),
           toateRandurile('norme_cerinte', COL_CERINTE, 'requirement_id'),
           toateRandurile('norme_surse', COL_SURSE, 'source_id'),
-          toateRandurile('clarificari_tipare', owner ? `${COL_TIPARE}, impact_intern` : COL_TIPARE, 'pattern_id'),
+          toateRandurile('clarificari_tipare', COL_TIPARE, 'pattern_id'),
+          owner ? impactIntern() : { randuri: [], eroare: null },
         ])
-        if (viu) setDate({ decizii: ordoneazaDecizii(decizii), cerinte, surse, tipare, owner })
+        if (viu) setDate({ decizii: ordoneazaDecizii(decizii), cerinte, surse, tipare: ataseazaImpact(tipare, impact.randuri), owner, impactEroare: impact.eroare })
       } catch (e) { if (viu) setEroare(e?.message || String(e)) }
     })()
     return () => { viu = false }
@@ -191,7 +204,7 @@ export function BibliotecaVedere({ date, tabInitial = 'decizii', selInitial = {}
             ? <FisaCerinta c={cerintePeId.get(sel.cerinte)} sursa={surseMap.get(cerintePeId.get(sel.cerinte).source_id)} />
             : <Gol text="Alege o cerință din listă." />)}
           {tab === 'tipare' && (sel.tipare && tiparePeId.get(sel.tipare)
-            ? <FisaTipar t={tiparePeId.get(sel.tipare)} idx={idx} cerintePeId={cerintePeId} owner={date.owner} copiaza={copiaza} copiat={copiat} deschide={deschide} />
+            ? <FisaTipar t={tiparePeId.get(sel.tipare)} idx={idx} cerintePeId={cerintePeId} owner={date.owner} impactEroare={date.impactEroare} copiaza={copiaza} copiat={copiat} deschide={deschide} />
             : <Gol text="Alege un tipar din listă." />)}
         </div>
       </div>
@@ -357,7 +370,7 @@ function FisaCerinta({ c, sursa }) {
   )
 }
 
-function FisaTipar({ t, idx, cerintePeId, owner, copiaza, copiat, deschide }) {
+function FisaTipar({ t, idx, cerintePeId, owner, impactEroare, copiaza, copiat, deschide }) {
   const tr = t.trigger && typeof t.trigger === 'object' ? t.trigger : null
   const precedente = deciziiPentruTipar(t, idx)
   const cheie = `${t.pattern_id}#q`
@@ -403,6 +416,7 @@ function FisaTipar({ t, idx, cerintePeId, owner, copiaza, copiat, deschide }) {
         </div>
       </>}
       {owner && t.impact_intern && <Camp eticheta="Impact intern (doar owner)">{typeof t.impact_intern === 'object' ? JSON.stringify(t.impact_intern, null, 2) : String(t.impact_intern)}</Camp>}
+      {owner && !t.impact_intern && impactEroare && <div style={{ fontSize:11.5, color:G.yellow, marginTop:10 }}>⚠️ Impactul intern nu s-a putut încărca: {impactEroare}</div>}
       <Camp eticheta="Note">{t.note}</Camp>
     </div>
   )
