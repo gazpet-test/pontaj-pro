@@ -45,9 +45,10 @@ export function notaSursa(s: Sursa): string {
   return n.length ? ' ' + n.join(' ') : ''
 }
 
-// Proveniența salvată lângă citire_noi: ce sursă, cât din ea, dacă e completă și de ce nu.
-export function provenanta(s: Sursa, sha256: string | null) {
-  if (s.mod !== 'text') return { sursa: 'pdf', sursa_completa: true, motive_incomplet: [] as string[], lungime_sursa: null, lungime_folosita: null, sursa_sha256: null }
+// Proveniența salvată lângă citire_noi: ce sursă, cât din ea, dacă e completă și de ce nu. Pe calea PDF: SHA-256 pe bytes-ii efectiv
+// citiți + identitatea obiectului din Storage (id, updated_at, eTag, mărime) — Copilot conv. 3, P1.
+export function provenanta(s: Sursa, sha256: string | null, obiect: unknown = null) {
+  if (s.mod !== 'text') return { sursa: 'pdf', sursa_completa: true, motive_incomplet: [] as string[], lungime_sursa: null, lungime_folosita: null, sursa_sha256: sha256, sursa_obiect: obiect }
   const motive: string[] = []
   if (s.partial) motive.push('pagini_necitite')
   if (s.trunchiat) motive.push('trunchiat')
@@ -59,6 +60,7 @@ export async function amprentaText(t: string | null | undefined): Promise<string
   const b = new TextEncoder().encode(String(t || '').trim())
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', b)), (x) => x.toString(16).padStart(2, '0')).join('')
 }
+export const MESAJ_FISIER_NEIDENTIFICAT = 'Nu pot identifica fișierul în Storage (sau s-a schimbat chiar în timpul descărcării) — reîncearcă; dacă se repetă, urcă-l din nou.'
 export const MESAJ_SURSA_SCHIMBATA = 'Documentul a fost recitit / reprocesat în timpul citirii cu AI — rezumatul vechi NU s-a salvat. Apasă din nou «Citește cu AI».'
 
 // Poarta pe cheltuială și pe server (review ultracode 06.10, P2: P1 era reparat doar în UI — un bundle vechi din cache sau un apel

@@ -21,7 +21,8 @@
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { scrieCitireNoi } from './scriere.ts'
-import { alegeSursa, amprentaText, eTimeout, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, eTimeout, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
+import { aceeasiIdentitate, identitateObiect, shaOcteti, type IdentitateObiect } from './obiect.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -93,15 +94,22 @@ Deno.serve(async (req: Request) => {
       return json({ error: MESAJ_POARTA_PDF, cod: 'poarta_cheltuiala' }, 403)
   }
   let continut: unknown[]
-  // amprenta sursei de dinainte de AI: scrierea refuză dacă documentul a fost recitit între timp (scriere.ts)
-  const sha = sursa.mod === 'text' ? await amprentaText(row.text_extras) : null
+  // amprenta sursei de dinainte de AI: scrierea refuză dacă documentul a fost recitit între timp (scriere.ts).
+  // Text: SHA-256 al text_extras. PDF: SHA-256 pe bytes-ii descărcați + identitatea obiectului din Storage (obiect.ts).
+  let sha: string | null = sursa.mod === 'text' ? await amprentaText(row.text_extras) : null
+  let obiect: IdentitateObiect | null = null
   if (sursa.mod === 'text') {
     continut = [{ type: 'text', text: `TEXTUL DOCUMENTULUI „${row.nume_original}” (extras automat, pe felii; poate conține erori de OCR).${notaSursa(sursa)}\n\n${sursa.text}` },
       { type: 'text', text: PROMPT }]
   } else {
+    obiect = await identitateObiect(db, 'ofertare', row.fisier_path)
     const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
     if (dlErr || !blob) return json({ error: 'download PDF: ' + (dlErr?.message || 'lipsă') })
     const bytes = new Uint8Array(await blob.arrayBuffer())
+    // instantaneu după descărcare: bytes-ii aparțin exact obiectului identificat înainte (altfel 409, fără apel AI)
+    if (!aceeasiIdentitate(obiect, await identitateObiect(db, 'ofertare', row.fisier_path)))
+      return json({ error: MESAJ_FISIER_NEIDENTIFICAT, cod: 'sursa_schimbata' }, 409)
+    sha = await shaOcteti(bytes)
     if (bytes.length > MAX_OCTETI) return json({ error: `Fișier prea mare (${(bytes.length / 1e6).toFixed(1)} MB > 20 MB)` })
     if (!arePdf(bytes)) return json({ error: 'Se citesc doar PDF-uri — acest fișier nu e PDF (docx/xls se citesc cu ofertare-word-text).' })
     continut = [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
@@ -141,7 +149,7 @@ Deno.serve(async (req: Request) => {
     termen_nou: /^\d{4}-\d{2}-\d{2}$/.test(String(j.termen_nou || '')) ? j.termen_nou : null,
     data_document: /^\d{4}-\d{2}-\d{2}$/.test(String(j.data_document || '')) ? j.data_document : null,
     model: MODEL, citit_la: new Date().toISOString(), citit_de: cititDe, tokens_in: tokIn, tokens_out: tokOut,
-    ...provenanta(sursa, sha),
+    ...provenanta(sursa, sha, obiect),
   }
   // 25.09.2026: dacă documentul nu era citit (neprocesat/eroare, fără text), citirea de aici îl face „procesat"
   // cu text_extras = rezumatul + modificările + Q&A, ca Rezumatul să nu-l mai numere la „rămase de citit".
@@ -151,7 +159,9 @@ Deno.serve(async (req: Request) => {
   // compare-and-set pe analiza->citire_ai->>rev (ca /api/plansa-felii și ofertare-plansa-citeste: orice scriere a cheilor serverului schimbă
   // rev-ul); la conflict se reface peste starea nouă (max. 3 încercări), apoi eroare explicită — nimic suprascris tăcut.
   const { upErr, scris, stale } = await scrieCitireNoi(db, id, citire, row.nume_original,
-    { status: row.status_procesare ?? null, procesat_la: row.procesat_la ?? null, sha256: sha, fisier_path: row.fisier_path })
+    { status: row.status_procesare ?? null, procesat_la: row.procesat_la ?? null, fisier_path: row.fisier_path,
+      shaText: sursa.mod === 'text' ? sha : null,
+      obiectNeschimbat: sursa.mod === 'pdf' ? async () => aceeasiIdentitate(obiect, await identitateObiect(db, 'ofertare', row.fisier_path)) : undefined })
   if (stale) return json({ error: MESAJ_SURSA_SCHIMBATA, cod: 'sursa_schimbata' }, 409)
   if (upErr) return json({ error: 'update: ' + upErr.message })
   if (!scris) return json({ error: 'documentul e scris simultan din altă parte (citire de planșă / transfer) — reîncearcă; nimic nu s-a suprascris' }, 409)
