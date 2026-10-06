@@ -15,11 +15,13 @@
 // (d) Cine pornește: user cu acces Ofertare (din UI) sau secretul intern x-radar-secret
 //     (fn_verifica_radar_secret, Vault) pentru rutine. verify_jwt singur NU ajunge.
 // (e) Nu cere confirmare umană: operația e idempotentă (recitirea suprascrie citire_noi) și
-//     costă doar apelul AI, pornit explicit de om cu butonul.
+//     costă doar apelul AI, pornit explicit de om cu butonul. 06.10: PDF-ul întreg (scump) — doar owner /
+//     responsabilul licitației / secretul intern (poarta pe cheltuială, ca ofertare-ingest-doc); rezumatul din
+//     textul deja extras — oricine trece poarta de modul.
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { scrieCitireNoi } from './scriere.ts'
-import { alegeSursa, eTimeout, MESAJ_TIMEOUT, timpRamas } from './sursa.ts'
+import { alegeSursa, eTimeout, MESAJ_POARTA_PDF, mesajTimeout, poateCitiPdf, timpRamas } from './sursa.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -82,9 +84,18 @@ Deno.serve(async (req: Request) => {
 
   // Răcari 06.10.2026: documentul citit deja pe felii („Procesează”) se citește din TEXT; altfel PDF, cu termen-limită (sursa.ts).
   const sursa = alegeSursa(row)
+  if (sursa.mod === 'pdf' && cititDe !== 'intern') {
+    const [{ data: prof }, { data: lic }] = await Promise.all([
+      db.from('profiles').select('is_owner').eq('id', cititDe).maybeSingle(),
+      db.from('ofertare_licitatii').select('responsabil_id').eq('id', row.licitatie_id).maybeSingle(),
+    ])
+    if (!poateCitiPdf({ intern: false, isOwner: prof?.is_owner, responsabilId: lic?.responsabil_id, uid: cititDe }))
+      return json({ error: MESAJ_POARTA_PDF, cod: 'poarta_cheltuiala' }, 403)
+  }
   let continut: unknown[]
   if (sursa.mod === 'text') {
-    continut = [{ type: 'text', text: `TEXTUL DOCUMENTULUI „${row.nume_original}” (extras automat, pe felii; poate conține erori de OCR):\n\n${sursa.text}` },
+    const nota = sursa.partial ? ' Unele pagini NU au putut fi citite (marcate „NECITITĂ”) — nu presupune conținutul lor.' : ''
+    continut = [{ type: 'text', text: `TEXTUL DOCUMENTULUI „${row.nume_original}” (extras automat, pe felii; poate conține erori de OCR).${nota}\n\n${sursa.text}` },
       { type: 'text', text: PROMPT }]
   } else {
     const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
@@ -97,7 +108,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const ramas = timpRamas(t0, Date.now())
-  if (!ramas) return json({ error: MESAJ_TIMEOUT, cod: 'timeout_citire', sursa: sursa.mod })
+  if (!ramas) return json({ error: mesajTimeout(sursa.mod), cod: 'timeout_citire', sursa: sursa.mod })
   let resp: Response, data: any
   try {
     resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -107,7 +118,7 @@ Deno.serve(async (req: Request) => {
     })
     data = await resp.json()
   } catch (e) {
-    if (eTimeout(e)) return json({ error: MESAJ_TIMEOUT, cod: 'timeout_citire', sursa: sursa.mod })
+    if (eTimeout(e)) return json({ error: mesajTimeout(sursa.mod), cod: 'timeout_citire', sursa: sursa.mod })
     return json({ error: 'Claude: ' + ((e as Error)?.message || 'eroare de rețea') })
   }
   if (!resp.ok) return json({ error: 'Claude: ' + (data.error?.message || resp.status) })

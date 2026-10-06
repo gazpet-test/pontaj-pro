@@ -127,3 +127,24 @@ describe('citesteCuAi — traseul butonului (Copilot P1 06.10: 403 = stop, făr�
     expect(r2).toEqual({ ok: false, eroare: MESAJ_TIMEOUT_UI })
   })
 })
+
+describe('citesteCuAi — poarta pe server și corpul erorilor non-2xx (review ultracode 06.10)', () => {
+  const fara = async () => {}
+  const raspunsNon2xx = (status, corp) => ({ data: null, error: { message: 'Edge Function returned a non-2xx status code',
+    context: { status, clone() { return this }, json: async () => corp } } })
+  it('edge-ul de rezumat refuză PDF-ul întreg (403, cod poarta_cheltuiala) → mesajul porții, ca la felii', async () => {
+    const invoke = async () => raspunsNon2xx(403, { error: 'x', cod: 'poarta_cheltuiala' })
+    const r = await citesteCuAi(invoke, 1, 'ignorat', { pauza: fara })
+    expect(r).toEqual({ ok: false, poarta: true, eroare: MESAJ_POARTA })
+  })
+  it('altă eroare non-2xx cu corp → mesajul de business din corp, nu „non-2xx status code”', async () => {
+    const invoke = async () => raspunsNon2xx(409, { error: 'documentul e scris simultan din altă parte' })
+    const r = await citesteCuAi(invoke, 1, 'procesat', { pauza: fara })
+    expect(r).toEqual({ ok: false, eroare: 'documentul e scris simultan din altă parte' })
+  })
+  it('corp ilizibil (504 HTML de la gateway) → mesajul de timeout', async () => {
+    const invoke = async () => ({ data: null, error: { message: 'x', context: { status: 504, json: async () => { throw new Error('nu e JSON') } } } })
+    const r = await citesteCuAi(invoke, 1, 'procesat', { pauza: fara })
+    expect(r).toEqual({ ok: false, eroare: MESAJ_TIMEOUT_UI })
+  })
+})

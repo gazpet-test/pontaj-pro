@@ -52,7 +52,8 @@ export async function citestePeFelii(invoke, docId, { pauza = ms => new Promise(
 
 // Copilot 06.10 (NO-GO P1 pe a44fa0c): refuzul porții pe cheltuială (403 la citirea pe felii) e TERMINAL pentru „Citește cu AI”.
 // Înainte UI-ul cădea pe calea veche (PDF întreg la ofertare-document-nou-citeste) — exact apelul costisitor / cu 504 pe care
-// poarta îl oprește. Acum: mesaj pe card, fără niciun apel AI. Rezumatul unui document deja citit (procesat) rămâne la îndemâna oricui.
+// poarta îl oprește. Acum: mesaj pe card, fără niciun apel AI. Rezumatul unui document deja citit (procesat / partial) rămâne la
+// îndemâna oricui; aceeași poartă e impusă și în edge pentru PDF-ul întreg (cod 'poarta_cheltuiala').
 export const MESAJ_POARTA = 'Documentul nu e citit încă, iar citirea lui costă: o pornește doar ownerul sau responsabilul licitației ' +
   '(«🤖 Citește cu AI» aici sau «Procesează» în Documentație). După ce e citit, rezumatul îl poate face oricine.'
 
@@ -64,6 +65,17 @@ export async function citesteCuAi(invoke, docId, status, opt = {}) {
     if (!r.ok) return { ok: false, eroare: r.eroare }
   }
   const { data, error } = await invoke('ofertare-document-nou-citeste', { body: { document_id: docId } })
-  if (error || data?.error) return { ok: false, eroare: mesajEroareCitire(error, data) }
+  if (error || data?.error) {
+    const corp = await corpEroare(error, data)
+    // poarta pe server (06.10): PDF-ul întreg fără text extras îl pornește doar owner / responsabil
+    if (corp?.cod === 'poarta_cheltuiala') return { ok: false, poarta: true, eroare: MESAJ_POARTA }
+    return { ok: false, eroare: mesajEroareCitire(error, corp) }
+  }
   return { ok: true, data }
+}
+
+// supabase-js întoarce data = null la un răspuns non-2xx; mesajul de business e în corpul Response-ului (error.context).
+export async function corpEroare(error, data) {
+  if (data || !error?.context || typeof error.context.json !== 'function') return data
+  try { return await (typeof error.context.clone === 'function' ? error.context.clone() : error.context).json() } catch { return data }
 }

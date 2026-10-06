@@ -17,17 +17,36 @@ export function timpRamas(t0: number, acum: number): number {
 export const TEXT_MIN = 500                       // sub atât, textul extras nu e o citire reală (antet, pagină goală)
 export const TEXT_MAX = 400_000                   // plafon de caractere trimise AI-ului din text_extras
 
-export type Sursa = { mod: 'text'; text: string } | { mod: 'pdf' }
+export type Sursa = { mod: 'text'; text: string; partial: boolean } | { mod: 'pdf' }
 
-// Textul se folosește doar dacă citirea pe felii s-a TERMINAT (procesat): „partial” = pagini lipsă, deci PDF-ul rămâne sursa.
+// Rezumatul AI scris de scrieCitireNoi în text_extras (25.09: documentul citit aici devine „procesat” cu rezumatul ca text) NU e
+// textul documentului — „recitește” pe el ar rezuma rezumatul (review ultracode 06.10, P2). Forma: „DOCUMENT: <nume>\nTip: <tip>…”.
+export const eRezumatAi = (t: string) => /^DOCUMENT: [^\n]*\nTip: /.test(t)
+
+// Textul se folosește doar dacă vine din citirea pe felii / extragere reală: „procesat” sau „partial” (paginile lipsă sunt marcate
+// în text cu NECITITĂ), cel puțin TEXT_MIN caractere și nu e rezumatul AI de mai sus. Altfel PDF-ul rămâne sursa.
 export function alegeSursa(row: { status_procesare?: string | null; text_extras?: string | null }): Sursa {
   const t = String(row?.text_extras || '').trim()
-  if (row?.status_procesare === 'procesat' && t.length >= TEXT_MIN) return { mod: 'text', text: t.slice(0, TEXT_MAX) }
+  const st = row?.status_procesare
+  if ((st === 'procesat' || st === 'partial') && t.length >= TEXT_MIN && !eRezumatAi(t)) return { mod: 'text', text: t.slice(0, TEXT_MAX), partial: st === 'partial' }
   return { mod: 'pdf' }
 }
 
+// Poarta pe cheltuială și pe server (review ultracode 06.10, P2: P1 era reparat doar în UI — un bundle vechi din cache sau un apel
+// direct trecea): PDF-ul întreg (apel AI scump, până la 130 s) îl pornește doar ownerul, responsabilul licitației sau rutina internă,
+// ca la ofertare-ingest-doc. Rezumatul din textul deja extras rămâne pentru oricine are acces Ofertare.
+export function poateCitiPdf(a: { intern: boolean; isOwner?: boolean | null; responsabilId?: string | null; uid?: string | null }): boolean {
+  return a.intern || a.isOwner === true || (!!a.responsabilId && a.responsabilId === a.uid)
+}
+export const MESAJ_POARTA_PDF = 'Documentul nu are încă text extras, iar citirea PDF-ului întreg costă: o pornește doar ownerul sau responsabilul licitației. ' +
+  'După ce e citit, rezumatul îl poate face oricine.'
+
 export const MESAJ_TIMEOUT = 'Citirea a depășit timpul (documentul e mare sau scanat). Deschide tab-ul Documentație și apasă ' +
   '«Procesează» pe acest document: îl citește pe felii, fără limită de timp. Apoi apasă din nou «Citește cu AI» — va citi textul extras.'
+// Timpul depășit pe TEXT (document foarte lung): „Procesează” n-ar ajuta (e deja citit), deci alt mesaj (review ultracode 06.10, P3).
+export const MESAJ_TIMEOUT_TEXT = 'Rezumatul din textul extras a depășit timpul (document foarte lung). Reîncearcă peste un minut; ' +
+  'dacă se repetă, deschide documentul original sau textul din Documentație.'
+export const mesajTimeout = (mod: Sursa['mod']) => (mod === 'text' ? MESAJ_TIMEOUT_TEXT : MESAJ_TIMEOUT)
 
 // Eroarea de rețea a fetch-ului cu AbortSignal.timeout: TimeoutError / AbortError (Deno), indiferent de mesaj.
 export const eTimeout = (e: unknown) => {
