@@ -7,7 +7,7 @@
 --    la fel funcțiile/edge-urile care scriu coloana (ex. fn_completare_aplica v2) — scriptul le refuză explicit.
 -- Fără GO de execuție: doar la cererea explicită a lui Răzvan. Armarea nu e autorizare.
 -- Procedura (un singur string; fișierul nu conține BEGIN/COMMIT):
---   BEGIN;
+--   BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu (altă izolare e refuzată)
 --   SELECT set_config('gazpet.revenire_20261017a', 'SEF_SANTIER_DROP:' || txid_current(), true);
 --   -- doar dacă există valori (după export): SELECT set_config('gazpet.revenire_20261017a_cu_date', 'DA:' || txid_current(), true);
 --   -- <conținutul exact al fișierului>
@@ -32,7 +32,11 @@ BEGIN
   END IF;
   -- lock exclusiv ÎNAINTE de verificări (Jakarinos 06.10): fără el, între count(*) și DROP COLUMN o scriere concurentă
   -- poate completa câmpul și s-ar pierde fără armarea _cu_date. Lock-ul ține până la COMMIT (READ COMMITTED: count-ul de
-  -- mai jos ia snapshot nou, după lock, deci vede tot ce s-a comis).
+  -- mai jos ia snapshot nou, după lock, deci vede tot ce s-a comis). În REPEATABLE READ/SERIALIZABLE snapshot-ul e cel
+  -- de la armare, de dinaintea lock-ului — de aceea refuz explicit (Jakarinos r2).
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION 'Revenire 20261017a: rulează în READ COMMITTED (acum: %) — BEGIN ISOLATION LEVEL READ COMMITTED', current_setting('transaction_isolation');
+  END IF;
   LOCK TABLE public.executie_proiecte IN ACCESS EXCLUSIVE MODE;
   -- starea EXACTĂ a patch-ului
   IF (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = v_rel AND attname = 'sef_santier_employee_id' AND NOT attisdropped) IS DISTINCT FROM 'integer'
