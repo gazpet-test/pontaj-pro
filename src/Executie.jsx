@@ -496,7 +496,7 @@ function DashboardProiectePage({ onSelectProiect }) {
     } catch (e) { showToast('Eroare: ' + e.message, 'error') }
   }
   const CAMP_LABEL = {
-    rte_employee_id: 'RTE', rts_employee_id: 'RTS', mp_employee_id: 'Manager proiect', coordonator_transgaz: 'Coordonator beneficiar',
+    rte_employee_id: 'RTE', rts_employee_id: 'RTS', sef_santier_employee_id: 'Șef de șantier', mp_employee_id: 'Manager proiect', coordonator_transgaz: 'Coordonator beneficiar',
     garantie_buna_exec_pct: 'Garanție bună execuție (%)', penalitati_zi_pct: 'Penalități/zi (%)', valoare_lei: 'Valoare inițială contract (lei)',
     valoare_eur: 'Valoare contract (EUR)', data_start: 'Data start', data_termen: 'Termen finalizare', durata_contract_luni: 'Durată (luni)',
     nr_contract: 'Nr. contract', data_contract: 'Data contract', beneficiar_final: 'Beneficiar final', lungime_proiect_m: 'Lungime (m)',
@@ -1201,11 +1201,11 @@ function ProiectCard({ proiect: p, isOwner, canEdit, onOpen, onDetail, onEdit, o
 function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onOpen }) {
   const [personnel, setPersonnel] = useState({})
   useEffect(() => {
-    const ids = [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id, p.responsabil_contracte_externe_id].filter(Boolean)
+    const ids = [p.mp_employee_id, p.rts_employee_id, p.sef_santier_employee_id, p.rte_employee_id, p.responsabil_contracte_externe_id].filter(Boolean)
     if (!ids.length) return
     supabase.from('employees').select('id, name, functie').in('id', ids)
       .then(({ data }) => { const m = {}; (data||[]).forEach(e => { m[e.id] = e }); setPersonnel(m) })
-  }, [p.mp_employee_id, p.rts_employee_id, p.rte_employee_id, p.responsabil_contracte_externe_id])
+  }, [p.mp_employee_id, p.rts_employee_id, p.sef_santier_employee_id, p.rte_employee_id, p.responsabil_contracte_externe_id])
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,.75)', zIndex: 1000,
@@ -1255,7 +1255,7 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
           </div>
 
           {/* Echipă proiect + ISC */}
-          {(p.mp_employee_id || p.rts_employee_id || p.rte_employee_id || p.coordonator_transgaz || p.responsabil_contracte_externe_id || p.isc_faza_determinanta) && (
+          {(p.mp_employee_id || p.rts_employee_id || p.sef_santier_employee_id || p.rte_employee_id || p.coordonator_transgaz || p.responsabil_contracte_externe_id || p.isc_faza_determinanta) && (
             <div style={{ background: G.bg, borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
               <div style={{ fontSize: 11, color: G.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: 10 }}>
                 👥 Echipă proiect
@@ -1265,6 +1265,7 @@ function ProiectDetailModal({ proiect: p, isOwner, canEdit, onClose, onEdit, onO
                   { label: 'Manager Proiect (MP)',          id: p.mp_employee_id },
                   { label: 'Resp. Tehnic Execuție (RTE)',   id: p.rte_employee_id },
                   { label: 'Resp. Tehnic Sudură (RTS)',     id: p.rts_employee_id },
+                  { label: 'Șef de șantier',                id: p.sef_santier_employee_id },
                   { label: 'Coordonator beneficiar',          val: p.coordonator_transgaz },
                   { label: 'Resp. contracte externe',       id: p.responsabil_contracte_externe_id },
                 ].filter(r => r.id || r.val).map((r, i) => (
@@ -1525,6 +1526,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
     // ─── Persoane cheie ─────────────────────────────────────────────────────
     mp_employee_id:       proiect.mp_employee_id        || '',
     rts_employee_id:      proiect.rts_employee_id       || '',
+    sef_santier_employee_id: proiect.sef_santier_employee_id || '',
     rte_employee_id:      proiect.rte_employee_id       || '',
     coordonator_transgaz: proiect.coordonator_transgaz  || '',
     responsabil_contracte_externe_id: proiect.responsabil_contracte_externe_id || '',
@@ -1575,13 +1577,14 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
   useEffect(() => {
     if (!proiect?.id) return
     supabase.from('executie_proiecte')
-      .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, responsabil_contracte_externe_id, isc_faza_determinanta, doc_caiet_sarcini_path, doc_propunere_tehnica_path, doc_propunere_financiara_path, doc_itp_pccvi_path, doc_itp_ai_faze_det, doc_itp_ai_confidence')
+      .select('mp_employee_id, rts_employee_id, sef_santier_employee_id, rte_employee_id, coordonator_transgaz, responsabil_contracte_externe_id, isc_faza_determinanta, doc_caiet_sarcini_path, doc_propunere_tehnica_path, doc_propunere_financiara_path, doc_itp_pccvi_path, doc_itp_ai_faze_det, doc_itp_ai_confidence')
       .eq('id', proiect.id).single()
       .then(({ data }) => {
         if (!data) return
         setForm(f => ({ ...f,
           mp_employee_id:       data.mp_employee_id       || '',
           rts_employee_id:      data.rts_employee_id      || '',
+          sef_santier_employee_id: data.sef_santier_employee_id || '',
           rte_employee_id:      data.rte_employee_id      || '',
           coordonator_transgaz: data.coordonator_transgaz || '',
           responsabil_contracte_externe_id: data.responsabil_contracte_externe_id || '',
@@ -1791,6 +1794,7 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
         // persoane cheie
         mp_employee_id:       form.mp_employee_id  ? parseInt(form.mp_employee_id)  : null,
         rts_employee_id:      form.rts_employee_id ? parseInt(form.rts_employee_id) : null,
+        sef_santier_employee_id: form.sef_santier_employee_id ? parseInt(form.sef_santier_employee_id) : null,
         rte_employee_id:      form.rte_employee_id ? parseInt(form.rte_employee_id) : null,
         coordonator_transgaz: form.coordonator_transgaz.trim() || null,
         responsabil_contracte_externe_id: form.responsabil_contracte_externe_id ? parseInt(form.responsabil_contracte_externe_id) : null,
@@ -2297,11 +2301,12 @@ function ProiectEditModal({ proiect, onClose, onSaved, showToast }) {
           {/* ── Persoane cheie + ISC ─────────────────────────────────────── */}
           <div style={{ borderTop:`1px solid ${G.border}`, paddingTop:14, marginBottom:4 }}>
             <div style={secTitle}><span>👥</span> Persoane cheie & ISC</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginTop:10 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginTop:10 }}>
               {[
                 { key:'mp_employee_id',  label:'MP — Manager Proiect',         emoji:'👤' },
                 { key:'rte_employee_id', label:'RTE — Resp. Tehnic Execuție',  emoji:'⚙️' },
                 { key:'rts_employee_id', label:'RTS — Resp. Tehnic Sudură',    emoji:'🔥' },
+                { key:'sef_santier_employee_id', label:'Șef de șantier',         emoji:'👷' },
               ].map(f => (
                 <div key={f.key}>
                   <label style={{ fontSize:10, color:G.muted, fontWeight:600, display:'block', marginBottom:4 }}>{f.emoji} {f.label}</label>
@@ -2951,7 +2956,7 @@ function ProbePresiune({ proiect }) {
 
 // ══════════════════════════════════════════════════════════════════════════
 // TAB PROIECT — DASHBOARD (11.06.2026): pagina de aterizare la deschiderea
-// unui proiect: date contract, echipă (MP/RTE/RTS/Transgaz), faze ISC, stadiu.
+// unui proiect: date contract, echipă (MP/RTE/RTS/Șef șantier/Transgaz), faze ISC, stadiu.
 // ══════════════════════════════════════════════════════════════════════════
 function TabProiectDashboard({ proiectId }) {
   const accesPF = useAccesPF()   // un singur hook; OfertarePF primește rezultatul ca prop
@@ -2970,12 +2975,12 @@ function TabProiectDashboard({ proiectId }) {
       const [{ data: v }, { data: e }] = await Promise.all([
         supabase.from('v_executie_dashboard').select('*').eq('id', proiectId).maybeSingle(),
         supabase.from('executie_proiecte')
-          .select('mp_employee_id, rts_employee_id, rte_employee_id, coordonator_transgaz, doc_itp_pccvi_path, isc_faza_determinanta, lungime_proiect_m, valoare_initiala_lei:valoare_lei')
+          .select('mp_employee_id, rts_employee_id, sef_santier_employee_id, rte_employee_id, coordonator_transgaz, doc_itp_pccvi_path, isc_faza_determinanta, lungime_proiect_m, valoare_initiala_lei:valoare_lei')
           .eq('id', proiectId).maybeSingle(),
       ])
       if (!live) return
       setP(v || null); setExtra(e || null)
-      const ids = [e?.mp_employee_id, e?.rts_employee_id, e?.rte_employee_id].filter(Boolean)
+      const ids = [e?.mp_employee_id, e?.rts_employee_id, e?.sef_santier_employee_id, e?.rte_employee_id].filter(Boolean)
       if (ids.length) {
         const { data } = await supabase.from('employees').select('id, name, functie').in('id', ids)
         if (!live) return
@@ -2988,13 +2993,16 @@ function TabProiectDashboard({ proiectId }) {
   // Editor echipă cheie (11.06): shortcut direct din dashboard, fără modalul mare
   const openEchipaEdit = async () => {
     if (!angajati.length) {
-      const { data } = await supabase.from('employees').select('id, name, functie').eq('activ', true).order('name')
+      // coloana e `active` (nu `activ`) — cu `activ` PostgREST dădea 42703 și listele rămâneau goale
+      const { data, error } = await supabase.from('employees').select('id, name, functie').eq('active', true).order('name')
+      if (error) alert('Eroare la încărcarea angajaților: ' + error.message)
       setAngajati(data || [])
     }
     setEchipaForm({
       mp_employee_id: extra.mp_employee_id || '',
       rte_employee_id: extra.rte_employee_id || '',
       rts_employee_id: extra.rts_employee_id || '',
+      sef_santier_employee_id: extra.sef_santier_employee_id || '',
       coordonator_transgaz: extra.coordonator_transgaz || '',
     })
     setEditEchipa(true)
@@ -3004,6 +3012,7 @@ function TabProiectDashboard({ proiectId }) {
       mp_employee_id: echipaForm.mp_employee_id ? Number(echipaForm.mp_employee_id) : null,
       rte_employee_id: echipaForm.rte_employee_id ? Number(echipaForm.rte_employee_id) : null,
       rts_employee_id: echipaForm.rts_employee_id ? Number(echipaForm.rts_employee_id) : null,
+      sef_santier_employee_id: echipaForm.sef_santier_employee_id ? Number(echipaForm.sef_santier_employee_id) : null,
       coordonator_transgaz: echipaForm.coordonator_transgaz || null,
     }).eq('id', proiectId)
     if (error) { alert('Eroare: ' + error.message); return }
@@ -3025,6 +3034,7 @@ function TabProiectDashboard({ proiectId }) {
     { label: 'Manager Proiect (MP)',        id: extra.mp_employee_id },
     { label: 'Resp. Tehnic Execuție (RTE)', id: extra.rte_employee_id },
     { label: 'Resp. Tehnic Sudură (RTS)',   id: extra.rts_employee_id },
+    { label: 'Șef de șantier',              id: extra.sef_santier_employee_id },
     { label: 'Coordonator beneficiar',        val: extra.coordonator_transgaz },
   ].filter(r => r.id || r.val)
 
@@ -3088,6 +3098,7 @@ function TabProiectDashboard({ proiectId }) {
               { k: 'mp_employee_id', label: 'Manager Proiect (MP)' },
               { k: 'rte_employee_id', label: 'Resp. Tehnic Execuție (RTE)' },
               { k: 'rts_employee_id', label: 'Resp. Tehnic Sudură (RTS)' },
+              { k: 'sef_santier_employee_id', label: 'Șef de șantier' },
             ].map(f => (
               <div key={f.k}>
                 <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', marginBottom: 3 }}>{f.label}</div>
@@ -3108,7 +3119,7 @@ function TabProiectDashboard({ proiectId }) {
             </div>
           </div>
         ) : echipa.length === 0 ? (
-          <div style={{ fontSize: 12, color: G.muted, fontStyle: 'italic' }}>Niciun responsabil setat — apasă „✏️ Editează echipa" și completează MP / RTE / RTS / coordonator beneficiar.</div>
+          <div style={{ fontSize: 12, color: G.muted, fontStyle: 'italic' }}>Niciun responsabil setat — apasă „✏️ Editează echipa" și completează MP / RTE / RTS / șef de șantier / coordonator beneficiar.</div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
             {echipa.map((r, i) => (
