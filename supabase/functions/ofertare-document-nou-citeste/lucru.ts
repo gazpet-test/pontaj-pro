@@ -1,16 +1,17 @@
 // deno-lint-ignore-file no-explicit-any
 // ofertare-document-nou-citeste/lucru.ts — starea rezumatului pe felii, păstrată pe server în analiza.citire_noi_lucru (06.10.2026).
-// { rev, sha (SHA-256 al textului-sursă), n (felii), inceput_la, citit_de, parti: { "<i>": Parte } }. Fiecare apel adaugă o felie;
-// la un text schimbat (alt sha / alt n) se reia de la zero. Scrierea e compare-and-set pe DOUĂ revizii: citire_ai.rev (cheile
+// { rev, sha (SHA-256 al textului-sursă), n (felii), la (pozițiile tăieturilor), inceput_la, citit_de, parti: { "<i>": Parte } }. Fiecare
+// apel adaugă o felie; la un text schimbat sau tăiat altfel (alt sha / n / la — ex. altă versiune a împărțirii) se reia de la zero. Scrierea e compare-and-set pe DOUĂ revizii: citire_ai.rev (cheile
 // serverului de planșe, ca la scrieCitireNoi) și citire_noi_lucru.rev (alt apel a avansat între timp → conflict, nimic suprascris).
 import type { Parte } from './felii.ts'
-export type Lucru = { rev: string; sha: string; n: number; inceput_la: string; citit_de: string | null; parti: Record<string, Parte> }
+export type Lucru = { rev: string; sha: string; n: number; la?: string; inceput_la: string; citit_de: string | null; parti: Record<string, Parte> }
 
 // Starea validă pentru textul curent, sau una nouă (fără parti) dacă lipsește / e pentru alt text.
-export function lucruPentru(existent: any, sha: string, n: number, inceputLa: string, cititDe: string | null): { lucru: Lucru; reluat: boolean } {
-  const ok = existent && typeof existent === 'object' && existent.sha === sha && existent.n === n && existent.parti && typeof existent.parti === 'object'
+export function lucruPentru(existent: any, sha: string, n: number, inceputLa: string, cititDe: string | null, la = ''): { lucru: Lucru; reluat: boolean } {
+  const ok = existent && typeof existent === 'object' && existent.sha === sha && existent.n === n && (existent.la ?? '') === la &&
+    existent.parti && typeof existent.parti === 'object'
   if (ok) return { lucru: existent as Lucru, reluat: true }
-  return { lucru: { rev: '', sha, n, inceput_la: inceputLa, citit_de: cititDe, parti: {} }, reluat: false }
+  return { lucru: { rev: '', sha, n, la, inceput_la: inceputLa, citit_de: cititDe, parti: {} }, reluat: false }
 }
 export const urmatoareaFelie = (l: Lucru) => { for (let i = 0; i < l.n; i++) if (!l.parti[String(i)]) return i; return -1 }
 

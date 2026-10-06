@@ -111,5 +111,11 @@ export function avertismentCitire(c) {
   if (m.includes('lista_plafonata')) parti.push(`listele au fost plafonate (AI-ul a găsit ${fmtNr(c.total_modificari)} modificări și ${fmtNr(c.total_intrebari)} întrebări; s-au păstrat primele ${fmtNr((c.modificari || []).length)} / ${fmtNr((c.intrebari_raspunse || []).length)})`)
   if (m.includes('rezumat_taiat')) parti.push('rezumatul a fost scurtat')
   if (m.includes('raspuns_ai_taiat')) parti.push('răspunsul AI a atins limita de lungime')
+  // Copilot conv. 3 (06.10, NO-GO pe d459447): tăietură între felii în afara unei întrebări / termene diferite în același document
+  if (m.includes('granita_nesigura')) parti.push(`documentul a fost citit pe ${fmtNr(c.felii)} felii și cel puțin o tăietură n-a căzut la începutul unei întrebări — o pereche întrebare–răspuns sau o modificare de la graniță poate fi ruptă`)
+  if (m.includes('conflict_termen')) parti.push(`documentul pomenește termene diferite (${listaTermene(c.termene)}) — AI-ul nu a ales unul; verifică în document care e cel valabil`)
+  if (m.length && m.every(x => x === 'conflict_termen')) return `De verificat: ${parti.join('; ')}.`
   return `Citire PARȚIALĂ: ${parti.join('; ') || 'sursa incompletă'} — modificările / întrebările pot fi incomplete; verifică documentul original.`
 }
+const fmtData = s => (/^\d{4}-\d{2}-\d{2}$/.test(String(s)) ? String(s).split('-').reverse().join('.') : String(s))
+const listaTermene = t => (Array.isArray(t) ? t : []).map(x => (x && typeof x === 'object' ? `${fmtData(x.data)}${x.felie ? ` — felia ${x.felie}` : ''}` : fmtData(x))).join(', ') || '—'

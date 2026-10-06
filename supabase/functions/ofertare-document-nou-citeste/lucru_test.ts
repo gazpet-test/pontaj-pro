@@ -34,6 +34,11 @@ Deno.test('lucruPentru: același text (sha + n) → se reia; alt text → stare 
   const b = lucruPentru(e, 'ALT', 3, 'T9', 'u')
   assert(!b.reluat); assertEquals([b.lucru.inceput_la, Object.keys(b.lucru.parti).length, urmatoareaFelie(b.lucru)], ['T9', 0, 0])
   assertEquals(lucruPentru(e, 'S', 4, 'T9', 'u').reluat, false)
+  // tăieturi diferite (altă versiune a împărțirii) pe același text → stare nouă; aceleași tăieturi → reluare
+  const cu = { ...e, la: '15000,29000' }
+  assertEquals([lucruPentru(cu, 'S', 3, 'T9', 'u', '15000,29000').reluat, lucruPentru(cu, 'S', 3, 'T9', 'u', '14000,29000').reluat], [true, false])
+  assertEquals(lucruPentru(e, 'S', 3, 'T9', 'u', '15000,29000').reluat, false)
+  assertEquals(lucruPentru(null, 'S', 3, 'T9', 'u', '1,2').lucru.la, '1,2')
   assertEquals(urmatoareaFelie({ ...e, parti: { '0': parte, '1': parte, '2': parte } } as Lucru), -1)
 })
 

@@ -173,6 +173,23 @@ describe('avertismentCitire — și plafonarea rezultatului AI (review ultracode
   })
 })
 
+describe('avertismentCitire — tăietură nesigură între felii / termene diferite (Copilot conv. 3, NO-GO pe d459447)', () => {
+  it('granita_nesigura → PARȚIALĂ, cu numărul de felii', () => {
+    const a = avertismentCitire({ sursa_completa: true, citire_completa: false, motive_incomplet: ['granita_nesigura'], felii: 5 })
+    expect(a).toMatch(/^Citire PARȚIALĂ/); expect(a).toMatch(/pe 5 felii/); expect(a).toMatch(/poate fi ruptă/)
+  })
+  it('doar conflict_termen → „De verificat”, cu termenele în ordinea documentului; nu alege unul', () => {
+    const a = avertismentCitire({ sursa_completa: true, citire_completa: false, motive_incomplet: ['conflict_termen'], termen_nou: null,
+      termene: [{ data: '2026-10-30', felie: 1 }, { data: '2026-10-25', felie: 3 }] })
+    expect(a).toMatch(/^De verificat:/); expect(a).toMatch(/30\.10\.2026 — felia 1, 25\.10\.2026 — felia 3/)
+    expect(a).not.toMatch(/PARȚIALĂ/)
+  })
+  it('conflict_termen împreună cu alt motiv → PARȚIALĂ (motivul cel mai grav decide eticheta)', () => {
+    const a = avertismentCitire({ citire_completa: false, motive_incomplet: ['granita_nesigura', 'conflict_termen'], felii: 3, termene: [{ data: '2026-10-30', felie: 1 }, { data: '2026-11-02', felie: 2 }] })
+    expect(a).toMatch(/^Citire PARȚIALĂ/); expect(a).toMatch(/termene diferite \(30\.10\.2026 — felia 1, 02\.11\.2026 — felia 2\)/)
+  })
+})
+
 import { rezumaPeFelii, textProgres } from './ofertareCitireDoc.js'
 describe('rezumaPeFelii — rezumatul pe felii (Răcari 06.10, varianta A)', () => {
   const fara = async () => {}
