@@ -19,6 +19,7 @@
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { scrieCitireNoi } from './scriere.ts'
+import { alegeSursa, eTimeout, MESAJ_TIMEOUT, TIMEOUT_MS } from './sursa.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -73,24 +74,39 @@ Deno.serve(async (req: Request) => {
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
   const id = Number(body.document_id)
   if (!id) return json({ error: 'document_id lipsă' }, 400)
-  const { data: row } = await db.from('ofertare_documente_atribuire').select('id, licitatie_id, nume_original, fisier_path, tip, analiza').eq('id', id).maybeSingle()
+  const { data: row } = await db.from('ofertare_documente_atribuire').select('id, licitatie_id, nume_original, fisier_path, tip, analiza, status_procesare, text_extras').eq('id', id).maybeSingle()
   if (!row) return json({ error: 'documentul nu există' }, 404)
   if (!row.fisier_path || String(row.fisier_path).includes('/neincarcat/'))
     return json({ error: 'Documentul nu a putut fi adus automat din SEAP — urcă-l din tab-ul Documente („Urcă fișiere”), apoi citește-l.' })
 
-  const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
-  if (dlErr || !blob) return json({ error: 'download PDF: ' + (dlErr?.message || 'lipsă') })
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  if (bytes.length > MAX_OCTETI) return json({ error: `Fișier prea mare (${(bytes.length / 1e6).toFixed(1)} MB > 20 MB)` })
-  if (!arePdf(bytes)) return json({ error: 'Se citesc doar PDF-uri — acest fișier nu e PDF (docx/xls se citesc cu ofertare-word-text).' })
+  // Răcari 06.10.2026: documentul citit deja pe felii („Procesează”) se citește din TEXT; altfel PDF, cu termen-limită (sursa.ts).
+  const sursa = alegeSursa(row)
+  let continut: unknown[]
+  if (sursa.mod === 'text') {
+    continut = [{ type: 'text', text: `TEXTUL DOCUMENTULUI „${row.nume_original}” (extras automat, pe felii; poate conține erori de OCR):\n\n${sursa.text}` },
+      { type: 'text', text: PROMPT }]
+  } else {
+    const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
+    if (dlErr || !blob) return json({ error: 'download PDF: ' + (dlErr?.message || 'lipsă') })
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    if (bytes.length > MAX_OCTETI) return json({ error: `Fișier prea mare (${(bytes.length / 1e6).toFixed(1)} MB > 20 MB)` })
+    if (!arePdf(bytes)) return json({ error: 'Se citesc doar PDF-uri — acest fișier nu e PDF (docx/xls se citesc cu ofertare-word-text).' })
+    continut = [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
+      { type: 'text', text: PROMPT }]
+  }
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: [
-      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
-      { type: 'text', text: PROMPT } ] }] }),
-  })
-  const data = await resp.json()
+  let resp: Response, data: any
+  try {
+    resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: continut }] }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+    data = await resp.json()
+  } catch (e) {
+    if (eTimeout(e)) return json({ error: MESAJ_TIMEOUT, cod: 'timeout_citire', sursa: sursa.mod })
+    return json({ error: 'Claude: ' + ((e as Error)?.message || 'eroare de rețea') })
+  }
   if (!resp.ok) return json({ error: 'Claude: ' + (data.error?.message || resp.status) })
   if (data.stop_reason === 'refusal') return json({ error: 'Claude a refuzat citirea documentului' })
   const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
@@ -110,6 +126,7 @@ Deno.serve(async (req: Request) => {
     termen_nou: /^\d{4}-\d{2}-\d{2}$/.test(String(j.termen_nou || '')) ? j.termen_nou : null,
     data_document: /^\d{4}-\d{2}-\d{2}$/.test(String(j.data_document || '')) ? j.data_document : null,
     model: MODEL, citit_la: new Date().toISOString(), citit_de: cititDe, tokens_in: tokIn, tokens_out: tokOut,
+    sursa: sursa.mod,
   }
   // 25.09.2026: dacă documentul nu era citit (neprocesat/eroare, fără text), citirea de aici îl face „procesat"
   // cu text_extras = rezumatul + modificările + Q&A, ca Rezumatul să nu-l mai numere la „rămase de citit".

@@ -23,6 +23,7 @@ import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem, ARHIVA_DOC_RE, MESAJ_ARHIVA } from './OfertareClarificari.jsx'
+import { mesajEroareCitire } from './ofertareCitireDoc.js'
 import GarantieSection, { useSemnalGarantie } from './OfertareGarantie.jsx'
 import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.js'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
@@ -3373,6 +3374,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const [docs, setDocs] = useState(null)
   const [toate, setToate] = useState([])      // toată Documentația licitației — ca să știm ce e deja citit
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
+  const [eroareCitire, setEroareCitire] = useState({}) // id → mesaj; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
   const [veghe, setVeghe] = useState(null)    // raportul ultimei verificări manuale
   const [verific, setVerific] = useState(false)
@@ -3411,10 +3413,13 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     window.open(data.signedUrl, '_blank')
   }
   const citeste = async d => {
-    setBusy(d.id); setMsg(null)
+    setBusy(d.id); setMsg(null); setEroareCitire(m => ({ ...m, [d.id]: null }))
     const { data, error } = await supabase.functions.invoke('ofertare-document-nou-citeste', { body: { document_id: d.id } })
     setBusy(null)
-    if (error || data?.error) return anunta('Citirea a eșuat: ' + (data?.error || error?.message), 'err')
+    if (error || data?.error) {
+      const mesaj = mesajEroareCitire(error, data)
+      setEroareCitire(m => ({ ...m, [d.id]: mesaj })); return anunta('Citirea a eșuat: ' + mesaj, 'err')
+    }
     anunta(`🤖 Citit: ${d.nume_original}`)
     load()
   }
@@ -3494,6 +3499,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                   ⚠️ Ai deja {sc.fam} citit în Documentație, dar acesta e alt fișier — e indicat să-l citești și pe acesta (poate aduce modificări).
                 </div>
               )}
+              {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color:G.red }}>⚠️ Citirea cu AI a eșuat: {eroareCitire[d.id]}</div>}
               {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
