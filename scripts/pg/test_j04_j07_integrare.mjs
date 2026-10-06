@@ -18,6 +18,8 @@
 // parser_version schimbat cu sursa neschimbată; A→B cu reverify refuzat până la un pachet nou; scriere directă prin API;
 // la refuz, starea și dovezile anterioare nu se suprascriu; rollback în ordine inversă + reaplicare.
 import assert from 'node:assert/strict'
+import { cuGarda } from './fixtures/livrare_garda.mjs'
+import { transplantJ02bJ05 } from './fixtures/j04xj07_schema.mjs'
 import { readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -53,8 +55,8 @@ const DEPUS = "UPDATE ofertare_pt_pachet SET stare='depus' WHERE id=1"
 const J04 = '20260930a_ofertare_pachet_hash_server_jakv202.sql'
 const J07 = '20261003a_ofertare_poarta_server_jakv2p3.sql'
 assert.ok([J04, J07].sort()[0] === J04, 'Ordinea lexicografică trebuie să fie J04 → J07')
-const j04 = migration(J04), j04Rollback = migration(J04.replace('.sql', '_ROLLBACK.sql'))
-const j07 = transactionBody(migration(J07)), j07Rollback = transactionBody(migration(J07.replace('.sql', '_ROLLBACK.sql')))
+const j04 = cuGarda(J04, migration(J04)), j04Rollback = migration(J04.replace('.sql', '_ROLLBACK.sql'))
+const j07 = cuGarda(J07, transactionBody(migration(J07))), j07Rollback = transactionBody(migration(J07.replace('.sql', '_ROLLBACK.sql')))
 assert.ok(!/fn_pt_pachet_depus_verifica/.test(j07), 'J07 nu atinge funcția J04')
 assert.ok(!/fn_ofertare_pt_pachet_poarta_documentatie|fn_gate_depunere/.test(j04), 'J04 nu atinge funcțiile patch-uite de J07')
 
@@ -115,6 +117,9 @@ CREATE TABLE storage.objects(id uuid PRIMARY KEY, bucket_id text NOT NULL, name 
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 GRANT SELECT,INSERT,UPDATE,DELETE ON storage.objects TO authenticated, service_role;
 ${storageGate}
+-- Starea LIVE din 06.10 pentru ce ating J04/J07 (J02b + garda J05, același transplant ca suita extinsă): precondițiile pinuite
+-- ale migrărilor (md5 pe funcțiile live) trebuie să treacă și aici.
+${transplantJ02bJ05()}
 CREATE TEMP TABLE before_functions AS SELECT oid,proname,pg_get_functiondef(oid) def,proacl FROM pg_proc
  WHERE pronamespace='public'::regnamespace AND proname = ANY(${q('{' + FUNCTII.join(',') + '}')}::text[]);
 CREATE TEMP TABLE before_policies AS SELECT oid,to_jsonb(p) def FROM pg_policy p;

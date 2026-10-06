@@ -2,6 +2,7 @@
 // PGURI=postgres://postgres@localhost:5432/jakv202_test_local node scripts/pg/test_jakv202_hash_server.mjs
 // Fixture tranzacțional + ROLLBACK, fără DROP DATABASE / modificarea vreunei baze existente.
 import assert from 'node:assert/strict'
+import { cuGarda } from './fixtures/livrare_garda.mjs'
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -9,7 +10,7 @@ import { createHash } from 'node:crypto'
 const read = path => readFileSync(new URL('../../' + path, import.meta.url), 'utf8').replaceAll('\r\n', '\n')
 const migration = name => read('supabase/migrations/' + name + '.sql')
 const newName = '20260930a_ofertare_pachet_hash_server_jakv202'
-const fix = migration(newName), rollback = migration(newName + '_ROLLBACK')
+const fix = cuGarda(newName, migration(newName)), rollback = migration(newName + '_ROLLBACK')
 const r5 = read('docs/R5_MIGRARE_3_review_copilot.sql')
 const r5Start = r5.indexOf('CREATE OR REPLACE FUNCTION public.fn_ofertare_pt_pachet_poarta_documentatie()')
 const r5End = r5.indexOf('END $function$;', r5Start)

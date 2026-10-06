@@ -1,6 +1,8 @@
 // PG16 real, bază LOCALĂ goală jakv2p3_test_*. Tot fixture-ul este tranzacțional; fără DROP DATABASE.
 // PGURI=postgres://postgres@localhost:5432/jakv2p3_test_local node scripts/pg/test_jakv2p3_poarta_server.mjs
 import assert from 'node:assert/strict'
+import { cuGarda } from './fixtures/livrare_garda.mjs'
+import { J04, transplantJ02bJ05 } from './fixtures/j04xj07_schema.mjs'
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { evalueazaTexte, PARSER_VERSION } from '../../supabase/functions/ofertare-poarta-text/evalueaza.mjs'
@@ -47,7 +49,7 @@ const r5 = ['R5_MIGRARE_PROPUSA_aprobare_istoric.sql', 'R5_MIGRARE_1b_prag_exact
 const copilot = migration('20260928m_r07_r12_copilot.sql')
 const helperStart = copilot.indexOf('CREATE OR REPLACE FUNCTION public.fn_gate_depunere_derogare_owner()')
 const helperEnd = copilot.indexOf('END $mig$;', helperStart) + 'END $mig$;'.length
-const j07 = transactionBody(migration('20261003a_ofertare_poarta_server_jakv2p3.sql'))
+const j07 = cuGarda('20261003a_ofertare_poarta_server_jakv2p3', transactionBody(migration('20261003a_ofertare_poarta_server_jakv2p3.sql')))
 const rollback = transactionBody(migration('20261003a_ofertare_poarta_server_jakv2p3_ROLLBACK.sql'))
 const setup = `BEGIN;
 SET LOCAL statement_timeout='20s';
@@ -82,6 +84,19 @@ ${migration('20260929b_ofertare_derogare_audit.sql')}
 ${migration('20260928h_ofertare_pachet_poarta_r12.sql')}
 ${migration('20260928k_ofertare_pachet_depus_r11.sql')}
 ${migration('20260928o_ofertare_pachet_tranzitie_jakv201.sql')}
+-- 06.10.2026: J07 cere J04 livrat întâi și funcțiile live exact (md5 pinuit) → Storage minimal + R12, transplantul J02b / J05
+-- (ca suita extinsă), apoi J04 livrat + revenit (rămâne tabelul de dovezi, triggerele J04 pleacă): harness-ul testează J07
+-- IZOLAT, ca înainte; combinația J04×J07 e în test_j04_j07_integrare.mjs și în suita extinsă.
+CREATE SCHEMA storage;
+GRANT USAGE ON SCHEMA storage TO authenticated, anon, service_role;
+CREATE TABLE storage.objects(id uuid PRIMARY KEY, bucket_id text NOT NULL, name text NOT NULL,
+  updated_at timestamptz NOT NULL, metadata jsonb, UNIQUE(bucket_id,name));
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+GRANT SELECT,INSERT,UPDATE,DELETE ON storage.objects TO authenticated, service_role;
+${copilot.slice(copilot.indexOf('CREATE OR REPLACE FUNCTION public.fn_ofertare_obiect_in_pachet_inghetat'))}
+${transplantJ02bJ05()}
+${cuGarda(J04, migration(J04))}
+${migration(J04.replace('.sql', '_ROLLBACK.sql'))}
 CREATE TEMP TABLE before_functions AS SELECT oid,pg_get_functiondef(oid) def,proacl,prosecdef,proconfig FROM pg_proc
  WHERE pronamespace='public'::regnamespace AND proname IN ('fn_gate_depunere','fn_ofertare_pt_pachet_poarta_documentatie',
  'fn_ofertare_pt_pachet_matrice','fn_gate_depunere_derogare_owner','ofertare_r5_blocaj_sursa','ofertare_derogare_depunere');
@@ -289,7 +304,7 @@ try {
     input: setup + matrix, encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024, windowsHide: true,
     env: { ...process.env, PGCLIENTENCODING: 'UTF8', PGCONNECT_TIMEOUT: '5' },
   })
-  if (result.error) throw Error('psql indisponibil: ' + result.error.code)
+  if (result.error) throw Error('psql indisponibil: ' + result.error.code + (result.stderr ? ' — ' + result.stderr.split('\n').filter(l => /ERROR|CONTEXT/.test(l)).join(' | ') : ''))
   if (result.status !== 0) throw Error(result.stderr || 'psql eșuat')
   assert.match(result.stdout, /PASS JAKV2P3/)
   const fixtures = result.stdout.split('\n').filter(s => s.startsWith('PARITY ')).map(s => JSON.parse(s.slice(7)))

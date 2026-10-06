@@ -3,6 +3,7 @@
 // apoi migrările reale J04 → J07, reaplicate o dată (idempotență). Nu conține BEGIN/COMMIT: runner-ul decide.
 // Tot SQL-ul de business vine din repo (supabase/migrations + docs/R5_*); aici doar îl ordonăm.
 import assert from 'node:assert/strict'
+import { cuGarda } from './livrare_garda.mjs'
 import { readFileSync } from 'node:fs'
 
 const read = p => readFileSync(new URL('../../../' + p, import.meta.url), 'utf8').replaceAll('\r\n', '\n')
@@ -18,10 +19,53 @@ export const DENIED = '00000000-0000-4000-8000-000000000099'
 export const FUNCTII = ['fn_gate_depunere', 'fn_ofertare_pt_pachet_poarta_documentatie', 'fn_pt_pachet_depus_verifica',
   'fn_ofertare_pt_pachet_matrice', 'fn_gate_depunere_derogare_owner', 'ofertare_r5_blocaj_sursa']
 
+// Amprentele LIVE (read-only, producție, 06.10.2026): md5(prosrc)|SECDEF|volatilitate|proconfig|ACL. Fixture-ul de mai jos
+// (R5 + lanț + transplantul J02b/J05 + j04xj07_live_0610.sql) trebuie să le reproducă EXACT; altfel setup-ul refuză.
+export const LIVE_0610 = {
+  fn_are_acces_ofertare: '429d28e2a61fb24c8009d67050c16c85|true|s|search_path=public, pg_temp|authenticated=X/postgres postgres=X/postgres service_role=X/postgres',
+  fn_gate_depunere: '04102c5e44af4f5fc2062c1a58737bdd|true|v|search_path=public, pg_temp|postgres=X/postgres service_role=X/postgres',
+  fn_gate_depunere_derogare_owner: 'e97f091143d6b492b6fdedf03dd283ea|true|s|search_path=public, pg_temp|postgres=X/postgres service_role=X/postgres',
+  fn_ofertare_obiect_in_pachet_inghetat: '7e5642bf7088820ac5c3410e6baac374|true|s|search_path=public, pg_temp|authenticated=X/postgres postgres=X/postgres service_role=X/postgres',
+  fn_ofertare_pt_pachet_matrice: '8e3f652c8bd2a918325713b22e1230cf|true|v|search_path=public, pg_temp|postgres=X/postgres service_role=X/postgres',
+  fn_ofertare_pt_pachet_poarta_documentatie: '68620a64bc87b3d9cbb80df629df8e93|true|v|search_path=public, pg_temp|postgres=X/postgres service_role=X/postgres',
+  fn_pt_pachet_depus_verifica: '2fdd91f228fd49410aa4c7f971037f1f|true|v|search_path=public, pg_temp|postgres=X/postgres service_role=X/postgres',
+  ofertare_derogare_depunere: '50656c3c958e3a822c9ea1c3f70ae7d9|true|v|search_path=public, pg_temp|authenticated=X/postgres postgres=X/postgres',
+  ofertare_r5_blocaj_sursa: '7db256eeeddd24916bdb1cc80c7b2e61|false|s|search_path=public, pg_temp|postgres=X/postgres service_role=X/postgres',
+}
+
+// Împarte un fișier SQL în instrucțiuni de nivel superior (respectă comentarii, '…', $tag$…$tag$).
+export function instructiuniSql(s) {
+  const out = []
+  let i = 0, start = 0
+  while (i < s.length) {
+    if (s.startsWith('--', i)) { const j = s.indexOf('\n', i); i = j < 0 ? s.length : j + 1; continue }
+    if (s.startsWith('/*', i)) { i = s.indexOf('*/', i + 2) + 2; continue }
+    const c = s[i]
+    if (c === "'") { let j = i + 1; for (;;) { const k = s.indexOf("'", j); if (s[k + 1] === "'") { j = k + 2; continue } i = k + 1; break } continue }
+    if (c === '$') { const m = /^\$[A-Za-z_0-9]*\$/.exec(s.slice(i)); if (m) { i = s.indexOf(m[0], i + m[0].length) + m[0].length; continue } }
+    if (c === ';') { out.push(s.slice(start, i + 1)); start = i + 1 }
+    i++
+  }
+  if (s.slice(start).trim()) out.push(s.slice(start))
+  return out
+}
+const corp = x => x.replace(/^(\s*--[^\n]*\n|\s+)+/, '')
+// Transplantul J02b (20261004a) + garda J05 (20261001a), aplicate pe live: aceleași instrucțiuni de schemă, fără gărzile de
+// livrare, fără blocurile DO de pre/post/verdict/view (pinuite pe starea live din 30.09) și fără tabelul de revenire J02b.
+export function transplantJ02bJ05() {
+  const scoate = [/^DO \$/, /^CREATE TEMP TABLE/, /^DROP TABLE pg_temp/, /ofertare_j02b_rollback_def/, /^SET LOCAL/]
+  const filtreaza = n => instructiuniSql(migration(n)).filter(x => !scoate.some(p => p.test(corp(x))))
+  const j02b = filtreaza('20261004a_ofertare_j02b_na_confirmare_umana.sql')
+  const j05 = filtreaza('20261001a_ofertare_derogare_garda_j05.sql')
+  assert.ok(j02b.some(x => /CREATE OR REPLACE FUNCTION public\.fn_gate_depunere\(\)/.test(x)), 'Transplant J02b: poarta lipsește')
+  assert.ok(j05.some(x => /fn_ofertare_derogare_garda_j05/.test(x)), 'Transplant J05: garda lipsește')
+  return [...j02b, ...j05].join('\n')
+}
+
 export function schemaJ04J07() {
   assert.ok([J04, J07].sort()[0] === J04, 'Ordinea lexicografică trebuie să fie J04 → J07')
-  const j04 = migration(J04)
-  const j07 = transactionBody(migration(J07))
+  const j04 = cuGarda(J04, migration(J04))
+  const j07 = cuGarda(J07, transactionBody(migration(J07)))
   assert.ok(!/fn_pt_pachet_depus_verifica/.test(j07), 'J07 nu atinge funcția J04')
   assert.ok(!/fn_ofertare_pt_pachet_poarta_documentatie|fn_gate_depunere/.test(j04), 'J04 nu atinge funcțiile patch-uite de J07')
 
@@ -67,6 +111,19 @@ CREATE TABLE storage.objects(id uuid PRIMARY KEY, bucket_id text NOT NULL, name 
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 GRANT SELECT,INSERT,UPDATE,DELETE ON storage.objects TO authenticated, service_role;
 ${storageGate}
+-- Starea LIVE din 06.10 pentru ce ating J04/J07: J02b + garda J05 (din repo), apoi textele/ACL-urile exacte din producție.
+${transplantJ02bJ05()}
+${read('scripts/pg/fixtures/j04xj07_live_0610.sql')}
+DO $live0610$ DECLARE r record; v text; asteptat jsonb := ${"'" + JSON.stringify(LIVE_0610) + "'"}::jsonb; BEGIN
+  FOR r IN SELECT key, value #>> '{}' AS amprenta FROM jsonb_each(asteptat) LOOP
+    SELECT md5(p.prosrc)||'|'||p.prosecdef||'|'||p.provolatile::text||'|'||coalesce(array_to_string(p.proconfig,','),'')||'|'||
+      coalesce((SELECT string_agg(a::text,' ' ORDER BY a::text) FROM unnest(p.proacl) a),'-') INTO v
+      FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.proname = r.key;
+    IF v IS DISTINCT FROM r.amprenta THEN
+      RAISE EXCEPTION 'Fixture J04×J07 ≠ live 06.10 la %: % (live: %)', r.key, v, r.amprenta;
+    END IF;
+  END LOOP;
+END $live0610$;
 CREATE TABLE jx.functii_inainte AS SELECT oid,proname,pg_get_functiondef(oid) def FROM pg_proc
  WHERE pronamespace='public'::regnamespace AND proname = ANY(${lista});
 CREATE TABLE jx.politici_inainte AS SELECT oid,to_jsonb(p) def FROM pg_policy p;

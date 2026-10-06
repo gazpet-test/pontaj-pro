@@ -1,49 +1,71 @@
--- JX-C2 / JX-C3 / JX-C4 · CONSTATĂRI (nu cerințe): comportamente actuale care NU contrazic cerințele §2 pe căile aplicației,
--- dar pe care Copilot / Răzvan trebuie să le decidă. Testele le FIXEAZĂ (pică dacă se schimbă, ca să fie reclasificate).
+-- JX-C2 / JX-C3 · CERINȚE (remediate 06.10.2026, JILAVA_DECIZII A.2): fostele constatări #4 și „manifest rescris de service_role”.
+-- JX-C4 rămâne CONSTATARE (acceptată și documentată pentru Jilava): testul o FIXEAZĂ (pică dacă se schimbă, ca să fie reclasificată).
 
 -- JX-C2 ──────────────────────────────────────────────────────────────────────────────────────────────
--- Constatarea #4: J04 acceptă ORICE PASS a cărui identitate se potrivește exact, chiar dacă o verificare ULTERIOARĂ a
--- aceleiași identități (id, updated_at, eTag, size) a dat REFUZ „SHA-256 diferit” (bytes schimbați sub metadate, ex.
--- scriere directă în stratul de stocare). J07, în schimb, ia doar ULTIMUL rezultat pe hash (vezi JX-05c).
+-- Un PASS vechi NU mai acoperă o verificare ULTERIOARĂ cu REFUZ pe aceeași identitate de obiect (bytes schimbați sub
+-- metadate): decide ultima verificare a fișierului, ca la J07 (ultimul rezultat pe hash). Reparația = bytes corecți + reverificare.
 BEGIN;
-SELECT jx.start('JX-C2', 'CONSTATARE #4: PASS vechi + REFUZ ulterior pe ACEEAȘI identitate de obiect (bytes schimbați sub metadate) → J04 lasă tranziția să treacă');
+SELECT jx.start('JX-C2', 'C2 remediat: PASS vechi + REFUZ ulterior pe ACEEAȘI identitate (bytes schimbați sub metadate) → ultima verificare decide → REFUZ J04; după reverificare PASS → depus');
 -- @edge j04 1
 -- @edge j07 1
 :admin
--- Aceeași lungime, alți bytes, metadate (id/updated_at/eTag/size) neatinse: doar stratul de bytes se schimbă.
 UPDATE jx.bucket SET continut = convert_to('FINAL v1', 'UTF8') WHERE name = 'pt/1/v1/depus/depus_final_Final.pdf';
 -- @edge j04 1
 SELECT jx.ok((SELECT rezultat = 'REFUZ' AND motiv = 'SHA-256 diferit de manifest' FROM ofertare_pt_pachet_verificari
   WHERE fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf' ORDER BY id DESC LIMIT 1), 'ultima verificare a Final.pdf: REFUZ, SHA diferit');
+SELECT jx.ok((SELECT count(*) >= 1 FROM ofertare_pt_pachet_verificari
+  WHERE fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf' AND rezultat = 'PASS'), 'PASS-ul mai vechi rămâne în istoric (append-only), dar nu mai decide');
+:editor
+SELECT jx.refuza($$UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1$$, 'P0001', 'Final.pdf: verificare PASS lipsă, SHA diferit sau verificare veche');
+:admin
+UPDATE jx.bucket SET continut = convert_to('final v1', 'UTF8') WHERE name = 'pt/1/v1/depus/depus_final_Final.pdf';
+-- @edge j04 1
 :editor
 UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1;
-SELECT jx.ok(jx.stare(1) = 'depus', 'tranziția a trecut pe PASS-ul mai vechi');
-SELECT jx.constatare('JX-C2', 'J04 folosește un PASS mai vechi deși ultima verificare a aceleiași identități e REFUZ (SHA diferit); J07 ar fi refuzat (ultimul rezultat câștigă)');
+SELECT jx.ok(jx.stare(1) = 'depus', 'bytes corecți + reverificare (ultimul rezultat = PASS) → depus');
 SELECT jx.trecut('JX-C2');
 ROLLBACK;
 SELECT jx.baza_intacta('JX-C2');
 
 -- JX-C3 ──────────────────────────────────────────────────────────────────────────────────────────────
--- Constatare nouă: manifestul e append-only DOAR pentru authenticated (GRANT); service_role (GRANT ALL, fără trigger)
--- îl poate rescrie. Un edge / script cu cheia de serviciu poate schimba SHA-ul declarat și apoi obține PASS pe alți bytes,
--- fără „pachet nou” (tranziția permisă cerută în §2 pentru A→B). Aplicația (authenticated) nu poate: vezi JX-09c.
+-- Manifestul e append-only pentru TOATE rolurile: cheia de serviciu nu mai poate rescrie sha256 A→B (nici șterge / adăuga rânduri
+-- în afara contractului R11) pe pachetul aprobat; A→B rămâne posibil doar prin pachet nou (JX-09). Doar identitatea de administrare
+-- (postgres / supabase_admin fără claims JWT, ca la garda J05) poate repara.
 BEGIN;
-SELECT jx.start('JX-C3', 'CONSTATARE: cheia de serviciu poate RESCRIE manifestul (sha256 A→B) și apoi depune B pe pachetul v1, fără versiune nouă');
+SELECT jx.start('JX-C3', 'C3 remediat: cheia de serviciu NU poate rescrie manifestul pachetului aprobat (UPDATE sha256 / DELETE / INSERT în afara R11) → 42501; depunerea pe B tot REFUZ');
 -- @edge j07 1
 :admin
 SELECT jx.inlocuieste('pt/1/v1/depus/depus_final_Final.pdf', 'FINAL B');
 :service
-UPDATE ofertare_pt_pachet_fisiere SET sha256 = jx.sha('FINAL B'), size_bytes = 7 WHERE fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf';
--- @edge j07 1
+SELECT jx.refuza($$UPDATE ofertare_pt_pachet_fisiere SET sha256 = jx.sha('FINAL B'), size_bytes = 7 WHERE fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf'$$, '42501', 'e append-only: UPDATE');
+SELECT jx.refuza($$DELETE FROM ofertare_pt_pachet_fisiere WHERE fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf'$$, '42501', 'e append-only: DELETE');
+SELECT jx.refuza($$SELECT jx.fisier(1, 'propunere_docx', 'Alta.docx', 'pt/1/v1/Alta.docx', 'alta')$$, '42501', 'Manifestul pachetului 1 e închis (stare aprobat)');
 -- @edge j04 1
-SELECT jx.egal(jx.ultim('j04')->'ok', 'true', 'PASS pe B după rescrierea manifestului');
+SELECT jx.egal(jx.ultim('j04')->'ok', 'false', 'verificarea pe manifestul neschimbat (A) vede bytes B → REFUZ');
 :editor
-UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1;
-SELECT jx.ok(jx.stare(1) = 'depus', 'depus cu manifestul rescris de service_role');
-SELECT jx.constatare('JX-C3', 'service_role poate UPDATE ofertare_pt_pachet_fisiere.sha256 (GRANT ALL, niciun trigger de imuabilitate) → A→B fără pachet nou');
+SELECT jx.refuza($$UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1$$, 'P0001', 'Final.pdf: verificare PASS lipsă, SHA diferit');
+:admin
+SELECT jx.ok(public.fn_pt_manifest_administrare(), 'postgres fără claims = identitatea de administrare (reparații documentate)');
 SELECT jx.trecut('JX-C3');
 ROLLBACK;
 SELECT jx.baza_intacta('JX-C3');
+
+-- JX-C3b ─────────────────────────────────────────────────────────────────────────────────────────────
+-- Ștergerea manifestului e permisă doar cât pachetul e „propus” (aplicația șterge pachetul propus la o aprobare eșuată, manifestul
+-- pleacă în cascadă); pe pachetul aprobat, refuzată și pentru cheia de serviciu.
+BEGIN;
+SELECT jx.start('JX-C3b', 'C3: pachet PROPUS (v2) cu manifest → DELETE pachet (cascadă) permis; pe pachetul aprobat v1 DELETE manifest refuzat');
+:admin
+INSERT INTO ofertare_pt_pachet(id, licitatie_id, versiune) VALUES (2, 1, 2);
+SELECT jx.urca('pt/1/v2/Propunere.docx', 'propunere v2');
+SELECT jx.fisier(2, 'propunere_docx', 'Propunere.docx', 'pt/1/v2/Propunere.docx', 'propunere v2');
+:service
+DELETE FROM ofertare_pt_pachet WHERE id = 2 AND stare = 'propus';
+SELECT jx.ok(NOT EXISTS (SELECT 1 FROM ofertare_pt_pachet_fisiere WHERE pachet_id = 2), 'cascada de la pachetul propus a trecut');
+SELECT jx.refuza($$DELETE FROM ofertare_pt_pachet_fisiere WHERE pachet_id = 1 AND rol = 'propunere_docx'$$, '42501', 'e append-only: DELETE');
+SELECT jx.trecut('JX-C3b');
+ROLLBACK;
+SELECT jx.baza_intacta('JX-C3b');
 
 -- JX-C4 ──────────────────────────────────────────────────────────────────────────────────────────────
 -- Constatarea #3 (comportament J02/J05 existent): derogarea ownerului ocolește J02, deci și cerința „pachet depus”

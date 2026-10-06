@@ -1,0 +1,2 @@
+-- Diferențe față de transplantul din repo (J02b 20261004a + garda J05 20261001a) ale funcțiilor urmărite, ca text copiat din
+-- producție. 06.10.2026: NICIUNA — transplantul reproduce exact amprentele live (LIVE_0610). Se completează doar dacă setup-ul refuză.
