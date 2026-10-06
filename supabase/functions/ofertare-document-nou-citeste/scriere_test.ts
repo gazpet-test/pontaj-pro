@@ -116,3 +116,27 @@ Deno.test('CAS epuizat pe rev, iar la a 3-a încercare sursa se schimbă exact �
   const res = await scrieCitireNoi(dbSim(), 9, CITIRE, 'a.pdf', am)
   assert(!res.scris && res.stale); assertEquals(res.motiv, 'sursa_schimbata'); assertEquals(n, 3)
 })
+
+// Copilot conv. 3 (r5, P1): două citiri pe aceeași sursă STABILĂ — a doua nu o mai suprascrie tăcut pe prima.
+const STABIL = () => ({ id: 9, status_procesare: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', text_extras: 'TEXT',
+  analiza: { citire_noi: { citit_la: '2026-10-06T14:00:00.000Z', rezumat: 'veche' } } })
+Deno.test('sursă neschimbată, dar o citire terminată după începutul apelului → stale citit_intre_timp, nimic suprascris', async () => {
+  const r: any = { ...STABIL(), analiza: { citire_noi: { citit_la: '2026-10-06T15:00:07.000Z', rezumat: 'prima' } } }
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT'), inceput: '2026-10-06T15:00:00.000Z' }
+  const res = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf', am)
+  assert(res.stale && !res.scris); assertEquals(res.motiv, 'citit_intre_timp')
+  assertEquals(r.analiza.citire_noi.rezumat, 'prima')
+})
+Deno.test('citire concurentă scrisă EXACT între recitire și UPDATE (sursă neschimbată) → CAS pe citit_la nu potrivește, apoi citit_intre_timp', async () => {
+  const r: any = STABIL()
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT'), inceput: '2026-10-06T15:00:00.000Z' }
+  const res = await scrieCitireNoi(db(r, () => { r.analiza = { citire_noi: { citit_la: '2026-10-06T15:00:09.000Z', rezumat: 'concurenta' } } }), 9, CITIRE, 'a.pdf', am)
+  assert(res.stale && !res.scris); assertEquals(res.motiv, 'citit_intre_timp')
+  assertEquals(r.analiza.citire_noi.rezumat, 'concurenta')
+})
+Deno.test('„recitește” deliberat (citirea veche terminată ÎNAINTE de începutul apelului) → scrie, înlocuiește citirea veche', async () => {
+  const r: any = STABIL()
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT'), inceput: '2026-10-06T15:00:00.000Z' }
+  const res = await scrieCitireNoi(db(r), 9, { ...CITIRE, rezumat: 'noua' }, 'a.pdf', am)
+  assert(res.scris && !res.stale); assertEquals(r.analiza.citire_noi.rezumat, 'noua')
+})

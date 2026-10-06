@@ -11,14 +11,16 @@ import { amprentaText } from './sursa.ts'
 // inceput = ISO-ul intrării în handler: o citire_noi mai nouă decât el pe rând = „citit între timp” (alt apel), nu sursă schimbată.
 export type AmprentaSursa = { status: string | null; procesat_la: string | null; shaText?: string | null; fisier_path?: string | null; obiectNeschimbat?: () => Promise<boolean>; inceput?: string }
 
+// Copilot conv. 3 (r5, P1): o citire terminată DUPĂ începutul acestui apel (alt apel concurent) câștigă — independent de sursă
+// (pe o sursă stabilă, a doua citire o suprascria tăcut). „Recitește” pornit după citirea anterioară are citit_la < inceput → trece.
 async function motivSchimbare(cur: any, sursa: AmprentaSursa): Promise<string | null> {
+  const cititLa = cur?.analiza?.citire_noi?.citit_la
+  if (sursa.inceput && typeof cititLa === 'string' && cititLa > sursa.inceput) return 'citit_intre_timp'
   const schimbat = (cur.status_procesare ?? null) !== sursa.status || (cur.procesat_la ?? null) !== sursa.procesat_la ||
     (sursa.fisier_path != null && cur.fisier_path !== sursa.fisier_path) ||
     (!!sursa.shaText && (await amprentaText(cur.text_extras)) !== sursa.shaText) ||
     (!!sursa.obiectNeschimbat && !(await sursa.obiectNeschimbat()))
-  if (!schimbat) return null
-  const cititLa = cur?.analiza?.citire_noi?.citit_la
-  return sursa.inceput && typeof cititLa === 'string' && cititLa > sursa.inceput ? 'citit_intre_timp' : 'sursa_schimbata'
+  return schimbat ? 'sursa_schimbata' : null
 }
 
 const SEL = 'analiza, status_procesare, text_extras, procesat_la, fisier_path'
@@ -46,6 +48,9 @@ export async function scrieCitireNoi(db: any, id: number, citire: any, numeOrigi
       q = sursa.procesat_la == null ? q.is('procesat_la', null) : q.eq('procesat_la', sursa.procesat_la)
       // Copilot conv. 3 (r4): și calea fișierului în CAS — un upload care schimbă doar fisier_path între recitire și UPDATE nu mai trece
       if (sursa.fisier_path != null) q = q.eq('fisier_path', sursa.fisier_path)
+      // r5: și citirea existentă în CAS — o citire concurentă scrisă între recitire și UPDATE nu mai e suprascrisă
+      const cititLaCur = baza?.citire_noi?.citit_la
+      q = typeof cititLaCur === 'string' ? q.eq('analiza->citire_noi->>citit_la', cititLaCur) : q.is('analiza->citire_noi->>citit_la', null)
     }
     const { data: w, error } = await q.select('id')
     if (error) { upErr = error; break }
