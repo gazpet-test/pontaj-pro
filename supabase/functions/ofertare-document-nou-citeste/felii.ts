@@ -100,15 +100,19 @@ export function termeneDinAi(j: any, sursa?: string | null): Termen[] {
   const lista: any[] = Array.isArray(j?.termene) ? [...j.termene] : []
   if (!lista.length && j?.termen_nou) lista.push({ data: j.termen_nou, citat: '' })   // răspuns vechi: un scalar fără citat → neverificat
   const sursaNorm = sursa ? normText(sursa) : null
-  return lista.filter((x) => x != null && String(x && typeof x === 'object' ? x.data ?? '' : x).trim() !== '').map((x) => {
-    const brut = String(x && typeof x === 'object' ? x.data ?? '' : x).trim()
-    const citatIntreg = String(x?.citat ?? '').trim()
+  const brutDe = (x: any) => String(x && typeof x === 'object' ? x.data ?? '' : x ?? '').trim()
+  const citatDe = (x: any) => String(x && typeof x === 'object' ? x.citat ?? '' : '').trim()
+  // Copilot conv. 3 (runda 4): se elimină DOAR elementele complet goale; o mențiune cu citat dar fără dată (ex. „se prelungește
+  // cu 30 de zile”) rămâne, cu data = null → termen_neinterpretabil.
+  return lista.filter((x) => brutDe(x) !== '' || citatDe(x) !== '').map((x) => {
+    const brut = brutDe(x)
+    const citatIntreg = citatDe(x)
     const data = normalizeazaData(brut)
     const cn = normText(citatIntreg)
     const trunchiat = citatIntreg.length > MAX_CITAT
     const verificat = !!data && !trunchiat && cn.length >= MIN_CITAT && !!sursaNorm && sursaNorm.includes(cn) && dateDinText(citatIntreg).includes(data)
     const t: Termen = { data, citat: citatIntreg.slice(0, MAX_CITAT), verificat }
-    if (!data) t.data_bruta = brut.slice(0, 100)
+    if (!data && brut) t.data_bruta = brut.slice(0, 100)
     if (trunchiat) { t.citat_trunchiat = true; t.lungime_citat = citatIntreg.length }
     return t
   })

@@ -178,7 +178,17 @@ Deno.test('normalizeazaData / dateDinText: ISO, zz.ll.aaaa, zz/ll/aaaa, „30 oc
   assertEquals(['2026-10-30', '30.10.2026', '30/10/2026', '3-1-2027', '30 Octombrie 2026', '31.02.2026', 'mâine', ''].map(normalizeazaData),
     ['2026-10-30', '2026-10-30', '2026-10-30', '2027-01-03', '2026-10-30', null, null, null])
   assertEquals(dateDinText('până la 30.10.2026, apoi 2026-11-02 și 5 decembrie 2026; nu 31.02.2026'), ['2026-11-02', '2026-10-30', '2026-12-05'])
-  assertEquals(termeneDinAi({ termene: [null, '', { data: '' }] }, 'x'), [])   // elemente goale: nimic de verificat, nimic pierdut
+  assertEquals(termeneDinAi({ termene: [null, '', { data: '' }, { data: null, citat: '  ' }] }, 'x'), [])   // DOAR elementele complet goale dispar
+})
+
+// Copilot conv. 3 (NO-GO runda 4, P1): mențiunea naturală „data: null + citat” nu mai e aruncată înainte de verificare.
+Deno.test('termen fără dată calendaristică (data null / lipsă) dar cu citat → rămâne, termen_neinterpretabil, citire necompletă', () => {
+  const citat = 'Termenul de depunere se prelungește cu 30 de zile de la publicare.'
+  for (const t of [{ data: null, citat }, { citat }, { data: '', citat }]) {
+    const r = rezultatFelii([parteDinAi({ termene: [t] }, 'end_turn', 1, 1, `Erata nr. 1\n${citat}\n`)], [], null)
+    assertEquals([r.termen_nou, r.motive, r.termene.length, r.termene[0].data, r.termene[0].citat, r.termene[0].verificat, 'data_bruta' in r.termene[0]],
+      [null, ['termen_neinterpretabil'], 1, null, citat, false, false], JSON.stringify(t))
+  }
 })
 
 // Copilot conv. 3 (runda 2, P2): sinteza tăiată la max_tokens, dar cu JSON parsabil, NU mai lasă citirea „completă”.

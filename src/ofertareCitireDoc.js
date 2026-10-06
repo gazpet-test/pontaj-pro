@@ -126,5 +126,5 @@ const fmtData = s => (/^\d{4}-\d{2}-\d{2}$/.test(String(s)) ? String(s).split('-
 const scurt = (s, n = 90) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t }
 const DE_VERIFICAT = ['conflict_termen', 'termen_neverificat', 'termen_neinterpretabil']   // motive care cer verificare, nu înseamnă text lipsă
 const listaTermene = (t, cuFelia) => (Array.isArray(t) ? t : []).map(x => (x && typeof x === 'object'
-  ? `${x.data ? fmtData(x.data) : `„${scurt(x.data_bruta, 40)}”`}${x.verificat === false && x.data ? ' (neverificat)' : ''}${cuFelia && x.felie ? ` — felia ${x.felie}` : ''}${x.citat ? ` «${scurt(x.citat)}»` : ''}`
+  ? `${x.data ? fmtData(x.data) : x.data_bruta ? `„${scurt(x.data_bruta, 40)}”` : 'fără dată'}${x.verificat === false && x.data ? ' (neverificat)' : ''}${cuFelia && x.felie ? ` — felia ${x.felie}` : ''}${x.citat ? ` «${scurt(x.citat)}»` : ''}`
   : fmtData(x))).join(', ') || '—'

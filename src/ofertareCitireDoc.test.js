@@ -195,6 +195,9 @@ describe('avertismentCitire — tăietură nesigură între felii / termene dife
       termene: [{ data: '2026-10-30', citat: '', verificat: false }, { data: null, data_bruta: 'în 30 de zile de la publicare', citat: 'Termenul se prelungește cu 30 de zile.', verificat: false }] })
     expect(a).toMatch(/^De verificat:/); expect(a).toMatch(/30\.10\.2026 \(neverificat\)\) nu are o dovadă verificabilă/)
     expect(a).toMatch(/nu l-am putut citi ca dată \(„în 30 de zile de la publicare” «Termenul se prelungește cu 30 de zile\.»\)/)
+    const b = avertismentCitire({ citire_completa: false, motive_incomplet: ['termen_neinterpretabil'], felii: 1,
+      termene: [{ data: null, citat: 'Termenul de depunere se prelungește cu 30 de zile de la publicare.', verificat: false }] })
+    expect(b).toMatch(/\(fără dată «Termenul de depunere se prelungește cu 30 de zile de la publicare\.»\)/)
   })
   it('conflict_termen împreună cu alt motiv → PARȚIALĂ (motivul cel mai grav decide eticheta)', () => {
     const a = avertismentCitire({ citire_completa: false, motive_incomplet: ['granita_nesigura', 'conflict_termen'], felii: 3, termene: [{ data: '2026-10-30', felie: 1 }, { data: '2026-11-02', felie: 2 }] })
