@@ -3,7 +3,8 @@
 -- Scoate coloana executie_proiecte.sef_santier_employee_id și FK-ul ei (starea dinainte de 20261017a).
 -- ⚠️ Ireversibil pentru date: șefii de șantier completați pe proiecte se pierd. Dacă există valori, întâi export:
 --    SELECT id, cod_intern, sef_santier_employee_id FROM public.executie_proiecte WHERE sef_santier_employee_id IS NOT NULL;
--- ⚠️ UI-ul (src/Executie.jsx) care cere coloana trebuie revenit ÎNAINTE (altfel fișa proiectului nu se mai salvează).
+-- ⚠️ UI-ul (src/Executie.jsx) care cere coloana trebuie revenit ÎNAINTE (altfel fișa proiectului nu se mai salvează)
+--    la fel funcțiile/edge-urile care scriu coloana (ex. fn_completare_aplica v2) — scriptul le refuză explicit.
 -- Fără GO de execuție: doar la cererea explicită a lui Răzvan. Armarea nu e autorizare.
 -- Procedura (un singur string; fișierul nu conține BEGIN/COMMIT):
 --   BEGIN;
@@ -41,6 +42,11 @@ BEGIN
                 AND NOT (d.classid = 'pg_constraint'::regclass
                          AND d.objid = (SELECT oid FROM pg_constraint WHERE conrelid = v_rel AND conname = 'executie_proiecte_sef_santier_employee_id_fkey'))) THEN
     RAISE EXCEPTION 'Revenire 20261017a: alte obiecte depind de sef_santier_employee_id (view/index/constrângere) — reanalizează';
+  END IF;
+  -- corpurile funcțiilor nu apar în pg_depend (ex. fn_completare_aplica v2 cu câmpul în whitelist) — refuz explicit
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+                AND prosrc LIKE '%sef_santier_employee_id%') THEN
+    RAISE EXCEPTION 'Revenire 20261017a: funcții care folosesc sef_santier_employee_id în corp — întâi revino-le';
   END IF;
   SELECT count(*) INTO n FROM public.executie_proiecte WHERE sef_santier_employee_id IS NOT NULL;
   IF n > 0 AND current_setting('gazpet.revenire_20261017a_cu_date', true) IS DISTINCT FROM 'DA:' || txid_current() THEN
