@@ -179,10 +179,16 @@ describe('avertismentCitire — tăietură nesigură între felii / termene dife
     expect(a).toMatch(/^Citire PARȚIALĂ/); expect(a).toMatch(/pe 5 felii/); expect(a).toMatch(/poate fi ruptă/)
   })
   it('doar conflict_termen → „De verificat”, cu termenele în ordinea documentului; nu alege unul', () => {
-    const a = avertismentCitire({ sursa_completa: true, citire_completa: false, motive_incomplet: ['conflict_termen'], termen_nou: null,
+    const a = avertismentCitire({ sursa_completa: true, citire_completa: false, motive_incomplet: ['conflict_termen'], termen_nou: null, felii: 3,
       termene: [{ data: '2026-10-30', felie: 1 }, { data: '2026-10-25', felie: 3 }] })
     expect(a).toMatch(/^De verificat:/); expect(a).toMatch(/30\.10\.2026 — felia 1, 25\.10\.2026 — felia 3/)
     expect(a).not.toMatch(/PARȚIALĂ/)
+  })
+  it('n = 1 (aceeași felie): fără „felia”, cu citatul scurt din document', () => {
+    const a = avertismentCitire({ citire_completa: false, motive_incomplet: ['conflict_termen'], felii: 1,
+      termene: [{ data: '2026-10-30', felie: 1, citat: 'Termenul se prelungește la 30.10.2026.' }, { data: '2026-10-25', felie: 1, citat: 'x'.repeat(200) }] })
+    expect(a).toMatch(/30\.10\.2026 «Termenul se prelungește la 30\.10\.2026\.», 25\.10\.2026 «x{89}…»/)
+    expect(a).not.toMatch(/felia/)
   })
   it('conflict_termen împreună cu alt motiv → PARȚIALĂ (motivul cel mai grav decide eticheta)', () => {
     const a = avertismentCitire({ citire_completa: false, motive_incomplet: ['granita_nesigura', 'conflict_termen'], felii: 3, termene: [{ data: '2026-10-30', felie: 1 }, { data: '2026-11-02', felie: 2 }] })

@@ -25,7 +25,7 @@ function db(rand: any, inainteDeUpdate?: () => void) {
   }
   return { from }
 }
-const parte = { tip: 'raspuns_clarificare', rezumat: 'r', modificari: [], intrebari_raspunse: [], termen_nou: null, data_document: null, motive: [], tokens_in: 1, tokens_out: 1 }
+const parte = { tip: 'raspuns_clarificare', rezumat: 'r', modificari: [], intrebari_raspunse: [], termene: [], data_document: null, motive: [], tokens_in: 1, tokens_out: 1 }
 
 Deno.test('lucruPentru: același text (sha + n) → se reia; alt text → stare nouă, fără părți', () => {
   const e = { rev: 'r1', sha: 'S', n: 3, inceput_la: 'T0', citit_de: 'u', parti: { '0': parte } }

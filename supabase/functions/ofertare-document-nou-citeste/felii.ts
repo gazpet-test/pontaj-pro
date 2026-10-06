@@ -53,11 +53,23 @@ export function imparteCuGranite(text: string, max = MAX_FELIE): { felii: string
 export const imparteInFelii = (text: string, max = MAX_FELIE): string[] => imparteCuGranite(text, max).felii
 
 const DATA = /^\d{4}-\d{2}-\d{2}$/
+export type Termen = { data: string; citat: string }
 export type Parte = {
   tip: string; rezumat: string; modificari: any[]; intrebari_raspunse: any[]
-  termen_nou: string | null; data_document: string | null; motive: string[]; tokens_in: number; tokens_out: number
+  termene: Termen[]; data_document: string | null; motive: string[]; tokens_in: number; tokens_out: number
 }
 const TIPURI = ['raspuns_clarificare', 'erata', 'document_nou', 'altul']
+
+// Termenele unei felii (Copilot conv. 3, NO-GO P1 runda 2): AI-ul întoarce LISTA mențiunilor unui termen de depunere stabilit / modificat
+// în fragment, în ordinea textului, cu citatul — nu un singur scalar, ca „30.10 apoi 25.10” în ACEEAȘI felie (sau la n = 1) să se vadă
+// drept conflict. Răspunsurile vechi (doar termen_nou) rămân citite ca listă de un element. Datele invalide se ignoră.
+export function termeneDinAi(j: any): Termen[] {
+  const lista = Array.isArray(j?.termene) ? j.termene : []
+  const t = lista.map((x: any) => ({ data: String(x && typeof x === 'object' ? x.data ?? '' : x ?? ''), citat: String(x?.citat ?? '').slice(0, 400) }))
+    .filter((x: Termen) => DATA.test(x.data))
+  if (!t.length && DATA.test(String(j?.termen_nou || ''))) t.push({ data: String(j.termen_nou), citat: '' })
+  return t
+}
 
 // Răspunsul AI pentru o felie → parte normalizată (liste, date valide, motivul „răspuns tăiat” dacă a atins max_tokens).
 export function parteDinAi(j: any, stopReason: string | null | undefined, tokIn: number, tokOut: number): Parte {
@@ -66,7 +78,7 @@ export function parteDinAi(j: any, stopReason: string | null | undefined, tokIn:
     rezumat: String(j?.rezumat_fragment ?? j?.rezumat ?? ''),   // plafonul (MAX_REZUMAT) și motivul „rezumat_taiat” le pune plafoneazaRezultat
     modificari: Array.isArray(j?.modificari) ? j.modificari : [],
     intrebari_raspunse: Array.isArray(j?.intrebari_raspunse) ? j.intrebari_raspunse : [],
-    termen_nou: DATA.test(String(j?.termen_nou || '')) ? j.termen_nou : null,
+    termene: termeneDinAi(j),
     data_document: DATA.test(String(j?.data_document || '')) ? j.data_document : null,
     motive: stopReason === 'max_tokens' ? ['raspuns_ai_taiat'] : [],
     tokens_in: tokIn, tokens_out: tokOut,
@@ -83,9 +95,10 @@ const plin = (x: unknown) => String(x ?? '').trim().length > 0
 
 // Combinarea feliilor (în ordine): liste concatenate, perechile duplicate unite (se păstrează cea cu răspuns, completată cu
 // întrebarea din cealaltă), tipul majoritar (fără „altul”), data primului fragment care o are, motivele de incompletitudine reunite.
-// Termenul (Copilot conv. 3, NO-GO P1 pe d459447): NU se mai alege maximul calendaristic — o prelungire la 30.10 urmată de o devansare
-// la 25.10 ar fi dat 30.10. Aparițiile rămân în ordinea documentului, cu felia (`termene`); un singur termen distinct → termen_nou;
-// mai multe → termen_nou = null + motivul „conflict_termen” (omul alege din document, AI-ul nu ghicește).
+// Termenul (Copilot conv. 3, NO-GO P1 pe d459447 + runda 2): NU se mai alege maximul calendaristic — o prelungire la 30.10 urmată de o
+// devansare la 25.10 ar fi dat 30.10. TOATE aparițiile (din toate feliile, inclusiv mai multe în aceeași felie / la n = 1) rămân în ordinea
+// documentului, cu felia și citatul (`termene`); un singur termen distinct → termen_nou; mai multe → termen_nou = null + „conflict_termen”
+// (omul alege din document, AI-ul nu ghicește).
 export function combinaFelii(parti: Parte[]) {
   const modificari: any[] = [], vazuteMod = new Set<string>()
   for (const p of parti) for (const m of p.modificari) {
@@ -104,7 +117,7 @@ export function combinaFelii(parti: Parte[]) {
   for (const p of parti) if (p.tip !== 'altul') voturi.set(p.tip, (voturi.get(p.tip) || 0) + 1)
   let tip = 'altul', max = 0
   for (const [k, v] of voturi) if (v > max) { tip = k; max = v }
-  const termene = parti.flatMap((p, k) => (p.termen_nou ? [{ data: p.termen_nou, felie: k + 1 }] : []))
+  const termene = parti.flatMap((p, k) => (p.termene || []).map((t) => ({ data: t.data, felie: k + 1, citat: t.citat })))
   const distincte = [...new Set(termene.map((x) => x.data))]
   const motive = [...new Set(parti.flatMap((p) => p.motive))]
   if (distincte.length > 1) motive.push('conflict_termen')
@@ -115,5 +128,26 @@ export function combinaFelii(parti: Parte[]) {
     motive,
     tokens_in: parti.reduce((s, p) => s + (p.tokens_in || 0), 0), tokens_out: parti.reduce((s, p) => s + (p.tokens_out || 0), 0),
     rezumate: parti.map((p) => p.rezumat),
+  }
+}
+
+// Rezultatul final pe calea text (o felie sau mai multe + sinteză) și pe calea PDF (o parte, fără sinteză) — testat separat de handler.
+// Copilot conv. 3 (runda 2, P2): stop_reason-ul SINTEZEI nu se mai pierde — o sinteză tăiată la max_tokens (chiar dacă JSON-ul a rămas
+// parsabil) face citirea „raspuns_ai_taiat”, deci necompletă. Tăieturile nesigure între felii → „granita_nesigura”.
+export type Sinteza = { j: any; stop: string | null; tokIn: number; tokOut: number }
+export function rezultatFelii(parti: Parte[], granite: Granita[], sinteza: Sinteza | null) {
+  const c = combinaFelii(parti)
+  let tip = c.tip, rezumat = parti[0]?.rezumat || '', tokIn = c.tokens_in, tokOut = c.tokens_out
+  if (sinteza) {
+    if (TIPURI.includes(sinteza.j?.tip)) tip = sinteza.j.tip
+    rezumat = String(sinteza.j?.rezumat || '').trim() || c.rezumate.filter(Boolean).join(' ')
+    tokIn += sinteza.tokIn; tokOut += sinteza.tokOut
+  } else if (TIPURI.includes(parti[0]?.tip)) tip = parti[0].tip
+  const motive = [...c.motive]
+  if (!graniteSigure(granite)) motive.push('granita_nesigura')
+  if (sinteza?.stop === 'max_tokens') motive.push('raspuns_ai_taiat')
+  return {
+    tip, rezumat, modificari: c.modificari, intrebari_raspunse: c.intrebari_raspunse, termen_nou: c.termen_nou, termene: c.termene,
+    data_document: c.data_document, motive: [...new Set(motive)], tokIn, tokOut, stop: sinteza?.stop ?? null, felii: parti.length, granite,
   }
 }
