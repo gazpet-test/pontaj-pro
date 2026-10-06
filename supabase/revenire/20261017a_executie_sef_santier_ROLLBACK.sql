@@ -13,6 +13,7 @@
 --   -- <conținutul exact al fișierului>
 --   COMMIT;
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+SET LOCAL lock_timeout = '5s';   -- nu așteaptă la nesfârșit după lock-ul exclusiv din $arm$
 SET LOCAL search_path = public, pg_temp;   -- deparse determinist pentru amprenta FK (pg_get_constraintdef)
 
 DO $arm$
@@ -29,6 +30,10 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION 'Revenire 20261017a: rulează ca postgres (current_user = %)', current_user;
   END IF;
+  -- lock exclusiv ÎNAINTE de verificări (Jakarinos 06.10): fără el, între count(*) și DROP COLUMN o scriere concurentă
+  -- poate completa câmpul și s-ar pierde fără armarea _cu_date. Lock-ul ține până la COMMIT (READ COMMITTED: count-ul de
+  -- mai jos ia snapshot nou, după lock, deci vede tot ce s-a comis).
+  LOCK TABLE public.executie_proiecte IN ACCESS EXCLUSIVE MODE;
   -- starea EXACTĂ a patch-ului
   IF (SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = v_rel AND attname = 'sef_santier_employee_id' AND NOT attisdropped) IS DISTINCT FROM 'integer'
      OR (SELECT pg_get_constraintdef(oid) || '|' || confdeltype::text || confupdtype::text
