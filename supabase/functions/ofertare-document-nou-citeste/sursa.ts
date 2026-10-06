@@ -92,8 +92,9 @@ export const MESAJ_POARTA_PDF = 'Documentul nu are încă text extras, iar citir
 export const MESAJ_TIMEOUT = 'Citirea a depășit timpul (documentul e mare sau scanat). Deschide tab-ul Documentație și apasă ' +
   '«Procesează» pe acest document: îl citește pe felii, fără limită de timp. Apoi apasă din nou «Citește cu AI» — va citi textul extras.'
 // Timpul depășit pe TEXT (document foarte lung): „Procesează” n-ar ajuta (e deja citit), deci alt mesaj (review ultracode 06.10, P3).
-export const MESAJ_TIMEOUT_TEXT = 'Rezumatul din textul extras a depășit timpul (document foarte lung). Reîncearcă peste un minut; ' +
-  'dacă se repetă, deschide documentul original sau textul din Documentație.'
+// 06.10 (rezumat pe felii): o felie care depășește timpul se reia — starea feliilor gata rămâne pe server.
+export const MESAJ_TIMEOUT_TEXT = 'O felie a rezumatului a depășit timpul. Apasă din nou «Citește cu AI» — continuă de unde a rămas ' +
+  '(feliile gata sunt păstrate). Dacă se repetă, deschide textul din «Text original».'
 export const mesajTimeout = (mod: Sursa['mod']) => (mod === 'text' ? MESAJ_TIMEOUT_TEXT : MESAJ_TIMEOUT)
 
 // Eroarea de rețea a fetch-ului cu AbortSignal.timeout: TimeoutError / AbortError (Deno), indiferent de mesaj.

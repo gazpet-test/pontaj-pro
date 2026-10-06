@@ -68,6 +68,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const [docRasp, setDocRasp] = useState([])    // documentele SEAP de tip raspuns_clarificare ale licitației
   const [busy, setBusy] = useState(null)
   const [citindDoc, setCitindDoc] = useState(null) // id document răspuns în curs de citire AI
+  const [progresCitire, setProgresCitire] = useState('') // eticheta butonului în timpul citirii / rezumatului pe felii
   const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [legare, setLegare] = useState(null)       // { docId, bife:{clarId:true}, propuneri:{clarId:'raspuns_scurt'} } — panoul „La ce întrebări răspunde?”
   // R5 runda 9: starea bazei cifrelor ciornelor automate (v_ofertare_clarificari_baza) — eroare / view lipsă = „nu putem verifica” (fail-closed)
@@ -329,8 +330,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     // Regula documentației (06.10): necitit → întâi pe felii, apoi rezumatul din text; fără drept de cheltuială → stop (citesteCuAi).
     // Starea se recitește acum (lista poate fi veche: alt coleg a citit documentul între timp).
     const { data: st } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('id', d.id).maybeSingle()
-    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? d.status_procesare)
-    setCitindDoc(null)
+    setProgresCitire('')
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? d.status_procesare, { onProgres: setProgresCitire })
+    setCitindDoc(null); setProgresCitire('')
     if (!r.ok) {
       setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
       showToast(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err')
@@ -501,7 +503,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                     : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschideDoc(d)}>📎 Deschide documentul original</button>}
                   <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1 }}
                     disabled={ph || ARHIVA_DOC_RE.test(d.nume_original || '') || !!citindDoc || !!busy} onClick={() => citesteDoc(d)} title={ARHIVA_DOC_RE.test(d.nume_original || '') ? MESAJ_ARHIVA : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): rezumat, modificări, întrebări răspunse'}>
-                    {citindDoc === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 citește cu AI'}
+                    {citindDoc === d.id ? (progresCitire || '⏳ citesc…') : c ? '🤖 recitește' : '🤖 citește cu AI'}
                   </button>
                   {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtData(c.citit_la)}</span>}
                   {c?.termen_nou && <span style={{ fontSize:11.5, fontWeight:800, color:G.red }}>⏰ termen nou: {c.termen_nou}</span>}

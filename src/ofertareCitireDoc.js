@@ -57,21 +57,40 @@ export async function citestePeFelii(invoke, docId, { pauza = ms => new Promise(
 export const MESAJ_POARTA = 'Documentul nu e citit încă, iar citirea lui costă: o pornește doar ownerul sau responsabilul licitației ' +
   '(«🤖 Citește cu AI» aici sau «Procesează» în Documentație). După ce e citit, rezumatul îl poate face oricine.'
 
-// Tot traseul butonului, testat cap-coadă: necitit → pe felii (poarta pe server) → rezumat din text. Întoarce {ok, data} sau {ok:false, eroare, poarta?}.
+// Tot traseul butonului, testat cap-coadă: necitit → pe felii (poarta pe server) → rezumat din text, tot pe felii. Întoarce {ok, data} sau
+// {ok:false, eroare, poarta?}. opt.onProgres(text) = eticheta butonului în timpul lucrului.
 export async function citesteCuAi(invoke, docId, status, opt = {}) {
   if (trebuieCititPeFelii(status)) {
-    const r = await citestePeFelii(invoke, docId, opt)
+    const r = await citestePeFelii(invoke, docId, { ...opt, onRunda: k => opt.onProgres?.(`⏳ citesc pe felii (${k})…`) })
     if (r.poarta) return { ok: false, poarta: true, eroare: MESAJ_POARTA }
     if (!r.ok) return { ok: false, eroare: r.eroare }
   }
-  const { data, error } = await invoke('ofertare-document-nou-citeste', { body: { document_id: docId } })
-  if (error || data?.error) {
-    const corp = await corpEroare(error, data)
-    // poarta pe server (06.10): PDF-ul întreg fără text extras îl pornește doar owner / responsabil
-    if (corp?.cod === 'poarta_cheltuiala') return { ok: false, poarta: true, eroare: MESAJ_POARTA }
-    return { ok: false, eroare: mesajEroareCitire(error, corp) }
+  return rezumaPeFelii(invoke, docId, { pauza: opt.pauza, maxRunde: opt.maxRundeRezumat, onRunda: d => opt.onProgres?.(textProgres(d)) })
+}
+
+// Rezumatul PE FELII (Răcari 06.10, varianta A aleasă de Răzvan): edge-ul citește câte o felie de text pe apel și întoarce
+// {continua, felie, din}; starea feliilor gata rămâne pe server, deci o eroare trecătoare (timp depășit, 504, rețea) se reia de
+// unde a rămas. Terminale: poarta pe cheltuială, sursă schimbată, citit între timp, 401 / 403 / 404.
+const TERMINAL = ['poarta_cheltuiala', 'sursa_schimbata', 'citit_intre_timp']
+export const textProgres = d => (d?.din && d?.felie ? (d.felie >= d.din ? `⏳ rezumat ${d.din}/${d.din} — sinteză…` : `⏳ rezumat felia ${d.felie + 1}/${d.din}…`) : '⏳ citesc…')
+export async function rezumaPeFelii(invoke, docId, { pauza = ms => new Promise(r => setTimeout(r, ms)), maxRunde = 80, onRunda } = {}) {
+  let esuate = 0
+  for (let runda = 0; runda < maxRunde; runda++) {
+    const { data, error } = await invoke('ofertare-document-nou-citeste', { body: { document_id: docId } })
+    if (error || data?.error) {
+      const corp = await corpEroare(error, data)
+      // poarta pe server (06.10): PDF-ul întreg fără text extras îl pornește doar owner / responsabil
+      if (corp?.cod === 'poarta_cheltuiala') return { ok: false, poarta: true, eroare: MESAJ_POARTA }
+      if (TERMINAL.includes(corp?.cod) || [401, 403, 404].includes(error?.context?.status)) return { ok: false, eroare: mesajEroareCitire(error, corp) }
+      if (++esuate > 2) return { ok: false, eroare: mesajEroareCitire(error, corp) }
+      await pauza(5000)
+      continue
+    }
+    esuate = 0
+    if (data?.continua) { onRunda?.(data); continue }
+    return { ok: true, data }
   }
-  return { ok: true, data }
+  return { ok: false, eroare: `Rezumatul pe felii nu s-a terminat după ${maxRunde} runde — apasă din nou «Citește cu AI» (continuă de unde a rămas).` }
 }
 
 // supabase-js întoarce data = null la un răspuns non-2xx; mesajul de business e în corpul Response-ului (error.context).
