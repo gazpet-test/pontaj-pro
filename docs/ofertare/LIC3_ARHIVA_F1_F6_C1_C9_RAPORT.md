@@ -30,3 +30,56 @@ Devizul general și F1 sunt **machete goale**, fără valori, generate cu eDeviz
 - Reclasificarea celor 116 fișiere: `raspuns_clarificare` → `formular` / `plansa` / `lista_cantitati`. Se face cu preview și OK.
 - Citirea cu AI pe felii a formularelor și planșelor-cheie se face doar prin poarta pe cheltuială (owner sau responsabil). Le recomand pe F3/C4/C5 și pe planșele 23–34.
 - Suport RAR/7z în importul SEAP (temă veche, #39): arhivele imbricate (`.rar` în `.rar`) au rămas ca fișier „ignorat”. Sesiunea Ofertare poate adăuga despachetarea recursivă.
+
+---
+
+## Actualizare 07.10.2026: reclasificare aplicată și citire cu abonamentul
+**Reclasificare (OK Răzvan, aplicată):** 117 rânduri, toate cu tipul vechi `raspuns_clarificare`.
+| Tip nou | Nr. | Fișiere |
+|---|---|---|
+| `plansa` | 31 | 1465–1504 (fără ATR, anexe, studiul geo, PV-uri) |
+| `formular` | 70 | 1512, 1533–1591, 1612–1622 |
+| `lista_cantitati` | 7 | 1592–1598 |
+| `alta` | 9 | 1490, 1492–1498, 1623 |
+
+Revenire: `UPDATE ofertare_documente_atribuire SET tip='raspuns_clarificare' WHERE id IN (<cele 117 id-uri de mai sus>)`. Statusurile de procesare au rămas neatinse.
+
+**Citire locală (pymupdf, pe PC, fără API plătit), cu imaginile scanate citite de Claude:**
+- **Grafic C1/F6:** execuție între **01.02.2027 și 31.05.2029** (28 de luni), structurat așa:
+  - Oltenița: 02–05.2027, apoi 03–05.2029;
+  - Ulmeni, Spanțov, Chiselet și Mânăstirea Dn250: 06–10.2027 + 11.2027–04.2029;
+  - Mânăstirea Dn180 și Dn160: 02–05.2029.
+- **ATR Distrigaz Sud Rețele nr. 13840091 din 14.10.2025, modificat 26.02.2026** (soluția nr. 362099 din 18.02.2026):
+  - extindere din DN315 MP Ulmeni cu PE **Dn250, L = 5.040 m**;
+  - racord PE Dn180, L = 5 m;
+  - **SRMP-SD automatizată AMR, 4.500 mc/h**, pe limita Oltenița–Ulmeni (teren NC 31159), regulator cu acționare directă, contor **turbină G400 DN150** plus **pistoane rotative G250 DN100**;
+  - presiune la livrare **3,72 bar** (ieșire 3,17 bar), cu platformă betonată, împrejmuire și schemă izometrică;
+  - DGSR urmărește execuția prin personal autorizat. Termenele de punere în funcțiune sunt cele din Regulamentul de racordare.
+- **Anexe + soluție (60 de pagini, scanat):** fișa tehnică SRMP (L2-III-1), schema izometrică DGSR, apoi specificațiile tehnice DGSR:
+  - robinete fluture și cu sferă, racorduri din oțel, filtre, regulatoare PM-PJ, supape de descărcare;
+  - fiecare cere declarație de conformitate, certificat CE (PED 2014/68/UE, ATEX 2014/34/UE), certificat de inspecție **3.1 (SR EN 10204)**, documente în română și **garanție de minim 36 de luni** de la livrare.
+  - **Implicație:** echipamentele SRMP se cumpără numai de la furnizori care livrează pachetul complet de documente DGSR. Prețul trebuie cerut cu această condiție.
+- **Planșele 1–31:** în cea mai mare parte sunt desene vectoriale fără text. Planul de situație (128k caractere) și subtraversările 30/31 au text. Citirea lor completă cere vizualizare pe imagine, pe felii.
+- Formularele F1–F6 și C1–C9 sunt confirmate goale, adică macheta eDevize de completat.
+
+## Ce schimbăm în motorul Ofertării ca să nu se mai repete (propunere pentru sesiunea Ofertare)
+1. **Clasificarea după conținut, nu după arhiva-mamă.** Azi toate fișierele dintr-o arhivă publicată ca „clarificare” moștenesc tipul `raspuns_clarificare`. Propunerea e un clasificator determinist pe numele fișierului, aplicat la despachetare:
+   - `^[CF][1-9]_`, `DG_`, `DO_`, `CM_` → `formular`;
+   - `lista_cantitati|antemasuratoare|EN_` → `lista_cantitati`;
+   - prefix numeric de planșă → `plansa`;
+   - `ATR|aviz|PV|studiu` → `alta`;
+   - restul rămâne pe tipul moștenit.
+
+   Rezultatul se arată în UI ca „tip propus”, editabil.
+2. **Despachetare recursivă RAR/7z/ZIP** în importul SEAP, cu limite de adâncime și volum. Azi un `.rar` din interiorul unei arhive rămâne `ignorat`, adică necitit în tăcere.
+3. **Triaj gratuit înaintea celui plătit.** La import, server-side, fără AI:
+   - se extrage textul;
+   - se numără paginile și caracterele pe pagină;
+   - fișierul se marchează `scanat` (sub ~50 de caractere/pagină) sau `text`.
+
+   Doar fișierele scanate sau planșele merg la poarta pe cheltuială. Fișierele cu text se analizează din `text_extras`.
+4. **Detector „formular gol”:** macheta eDevize fără valori numerice în coloanele de valoare primește `analiza = {macheta_goala: true}` și nu mai consumă citire AI.
+5. **Indicator „arhivă publicată ca clarificare, dar fără răspunsuri”:** dacă după clasificare zero fișiere rămân `raspuns_clarificare`, se pune un banner pe licitație. Așa nu mai credem că avem clarificări necitite.
+6. **Alarmă pe fișierele `ignorat` sau neprocesate mai vechi de 24 de ore** în panoul licitației.
+
+Ordinea recomandată: 1 + 2 + 3 (cele mai mari economii), apoi 4–6.
