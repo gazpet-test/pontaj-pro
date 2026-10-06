@@ -53,6 +53,7 @@ import GraficLucrare from './GraficLucrare.jsx'
 import { MeteoSediu } from './Meteo.jsx'
 import Integrari from './Integrari.jsx'
 import Cladire from './Cladire.jsx'
+import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOreSuplimentare.js'
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
@@ -4542,16 +4543,20 @@ function ReportsPage() {
       // TKT-2026-0311: totalul zilelor de CO / CM / CFP / O per angajat, după ORE SUPL (4 coloane)
       const NORME_TOTAL  = ['CO','CM','CFP','O']
       const NORME_C0     = FIXED + days + 3    // prima coloană de norme
-      // TKT-2026-0314 (var. A): orele de normă plătite (8h/zi pe CO, CM, BO, BP, AM, M, O — CFP, N, LL = 0 ore)
-      // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME. ORE SUPLIMENTARE rămâne pe orele lucrate.
+      // TKT-2026-0314 (var. A): orele de normă plătite (h normă/zi pe CO, CM, BO, BP, AM, M, O — CFP, N, LL = 0 ore)
+      // și totalul lunii = TOTAL ORE (lucrate) + ORE NORME.
+      // TKT-2026-0316: ORE SUPLIMENTARE = TOTAL ORE LUNĂ − ORE LUCRĂTOARE ale angajatului (normă redusă din procent_ocupare,
+      // lună incompletă din hire_date / termination_date) — vezi pontajOreSuplimentare.js. Ziua de normă = 8h × procent.
       const NORME_ORE    = ['CO','CM','BO','BP','AM','M','O']
-      const ORE_NORME_C  = NORME_C0 + NORME_TOTAL.length           // ORE NORME (8h/zi)
+      const ORE_NORME_C  = NORME_C0 + NORME_TOTAL.length           // ORE NORME (h normă/zi)
       const TOTAL_LUNA_C = ORE_NORME_C + 1                          // TOTAL ORE LUNĂ
-      const WD_LABEL_C   = TOTAL_LUNA_C + 1                         // etichetă „Zile lucr. lună:"
-      const WD_VALUE_C   = WD_LABEL_C + 1                            // valoarea numerică (folosită în formulă)
+      const ORE_LUCR_C   = TOTAL_LUNA_C + 1                         // ORE LUCRĂTOARE (normă × zile lucr. în contract)
+      const WD_LABEL_C   = ORE_LUCR_C + 1                           // etichetă „Zile lucr. lună:"
+      const WD_VALUE_C   = WD_LABEL_C + 1                            // valoarea numerică (informativ — ORE SUPL folosește ORE LUCRĂTOARE pe angajat)
       const totalOreColLetter = XLSX.utils.encode_col(TOTAL_ORE_C)
       const oreNormeColLetter = XLSX.utils.encode_col(ORE_NORME_C)
-      const wdValueColLetter  = XLSX.utils.encode_col(WD_VALUE_C)
+      const totalLunaColLetter = XLSX.utils.encode_col(TOTAL_LUNA_C)
+      const oreLucrColLetter  = XLSX.utils.encode_col(ORE_LUCR_C)
 
       // ── Build rows ──
       const R=[]
@@ -4567,10 +4572,10 @@ function ReportsPage() {
       R.push(titleRow)
       R.push([])
       // Header row (idx 5)
-      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`),'ORE NORME (8h/zi)','TOTAL ORE LUNĂ']
+      const HDR=['NUME ȘI PRENUME SALARIAT','FUNCȚIA','PROGRAM DE LUCRU',...dayNums,'TOTAL ZILE','TOTAL ORE','ORE SUPLIMENTARE',...NORME_TOTAL.map(n=>`ZILE ${n}`),'ORE NORME (h normă/zi)','TOTAL ORE LUNĂ','ORE LUCRĂTOARE']
       R.push(HDR)
       // Day names row (idx 6)
-      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n),`8h × zile ${NORME_ORE.join('/')}`,'ORE + ORE NORME']
+      const DNR=['','','',...dayNums.map(d=>dayAbbr[new Date(y,m-1,d).getDay()]),'','','',...NORME_TOTAL.map(n=>NORME_LABELS[n]||n),`h normă × zile ${NORME_ORE.join('/')}`,'ORE + ORE NORME','normă × zile în contract']
       R.push(DNR)
 
       // Tracking metadata pentru istoric BD
@@ -4612,21 +4617,24 @@ function ReportsPage() {
           }
         }
         const empOreLunar = +(to/60).toFixed(1)
-        const empOreSupl  = Math.max(0, empOreLunar - workDaysInMonth*8)
+        const empOreNorme = +(zileNormeOre*oreNormaPeZi(emp.procent_ocupare)).toFixed(2)
+        const empOreLucr  = oreLucratoareAngajat({ y, m, days, legalSet, emp })
+        const empOreSupl  = oreSuplimentare(empOreLunar + empOreNorme, empOreLucr)
         totalOreLunarSum += empOreLunar
         totalOreSuplSum  += empOreSupl
 
         rCI.push(tz, empOreLunar)
-        // ORE SUPLIMENTARE — formula Excel pe primul rând (Ora Intrare)
-        // = MAX(0, TotalOre{row} - WdValue$4 * 8) — referință absolută pe rând 4 pentru zile lucr.
-        rCI.push({ f: `MAX(0, ${totalOreColLetter}${excelRow} - ${wdValueColLetter}$4*8)`, t: 'n' })
+        // ORE SUPLIMENTARE (TKT-2026-0316) — formula Excel pe primul rând (Ora Intrare)
+        // = MAX(0, TOTAL ORE LUNĂ{row} - ORE LUCRĂTOARE{row})
+        rCI.push({ f: `MAX(0, ${totalLunaColLetter}${excelRow} - ${oreLucrColLetter}${excelRow})`, t: 'n' })
         // Zile CO / CM / CFP / O (TKT-2026-0311) — 0 explicit când nu există, ca să se poată însuma
         NORME_TOTAL.forEach(n=>rCI.push(normeCnt[n]))
-        // ORE NORME (8h/zi) + TOTAL ORE LUNĂ (formula = TOTAL ORE + ORE NORME, pe același rând)
-        rCI.push(zileNormeOre*8)
+        // ORE NORME (h normă/zi) + TOTAL ORE LUNĂ (formula = TOTAL ORE + ORE NORME, pe același rând) + ORE LUCRĂTOARE
+        rCI.push(empOreNorme)
         rCI.push({ f: `${totalOreColLetter}${excelRow}+${oreNormeColLetter}${excelRow}`, t: 'n' })
+        rCI.push(empOreLucr)
 
-        const gol=['','','',...NORME_TOTAL.map(()=>''),'','']
+        const gol=['','','',...NORME_TOTAL.map(()=>''),'','','']
         rCO.push(...gol); rPM.push(...gol); rOL.push(...gol)
         R.push(rCI,rCO,rPM,rOL,[])
       })
@@ -4640,8 +4648,9 @@ function ReportsPage() {
         {wch:11},                  // TOTAL ORE
         {wch:30},                  // ORE SUPLIMENTARE (216px ≈ 30 char)
         ...NORME_TOTAL.map(()=>({wch:9})),   // ZILE CO / CM / CFP / O
-        {wch:16},                  // ORE NORME (8h/zi)
+        {wch:16},                  // ORE NORME (h normă/zi)
         {wch:15},                  // TOTAL ORE LUNĂ
+        {wch:15},                  // ORE LUCRĂTOARE
         {wch:18},                  // 'Zile lucr. lună:' label
         {wch:11}                   // valoare zile lucr.
       ]
@@ -4674,7 +4683,7 @@ function ReportsPage() {
       let ri=7
       data.forEach(emp=>{
         for(let ro=0;ro<4;ro++){
-          const TOTAL_C = TOTAL_LUNA_C + 1  // include ORE SUPL + zile CO/CM/CFP/O + ORE NORME + TOTAL ORE LUNĂ
+          const TOTAL_C = ORE_LUCR_C + 1  // include ORE SUPL + zile CO/CM/CFP/O + ORE NORME + TOTAL ORE LUNĂ + ORE LUCRĂTOARE
           for(let c=0;c<TOTAL_C;c++){
             let s={}
             if(c===0){
@@ -4708,7 +4717,7 @@ function ReportsPage() {
               s = ro===0
                 ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
                 : {fill:{fgColor:{rgb:'F5F5F5'}}, font:{sz:9}, border:bd, alignment:alC}
-            } else if(c===ORE_NORME_C) {
+            } else if(c===ORE_NORME_C || c===ORE_LUCR_C) {
               // ORE NORME — același stil ca zilele de normă
               s = ro===0
                 ? {fill:{fgColor:{rgb:'FFF2CC'}}, font:{bold:true,sz:10}, border:bd, alignment:alC}
