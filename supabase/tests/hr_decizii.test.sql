@@ -376,6 +376,66 @@ SELECT teste.eroare('T65d baseline vechi', format($$SELECT public.fn_hr_decizie_
   :inl, gen_random_uuid(), :'sv', :'shv', :'is2', repeat('3',64)), 's-a schimbat');
 RESET ROLE;
 
+
+-- ═══ Regresii runda 5 (Jakarinos J5-*, Copilot P5-*) ═══
+SELECT teste.ca(:'NATALIA');
+SELECT teste.eroare('J5-1a rezerva cu confirmari [null]', $$SELECT public.fn_hr_decizie_rezerva(jsonb_build_object('cerere_id', gen_random_uuid(),
+  'tip_cod','MP','eticheta_functie','Manager Proiect','nivel','proiect','proiect_id',32,'employee_id',203,'titlu','D-na','data_emitere', public._hr_azi(),
+  'semnatar_id',(SELECT id FROM hr_decizii_semnatari WHERE employee_id = 125),'confirmari','[null]'::jsonb))$$, 'confirmari');
+SELECT teste.eroare('J5-1b emite cu ["INVENTAT",null]', format($$SELECT public.fn_hr_decizie_emite(%s, %L, gen_random_uuid(), 12, NULL, '["INVENTAT",null]')$$, :drs, repeat('a',64)), 'confirmari');
+INSERT INTO hr_decizii (tip_cod, eticheta_functie, nivel, employee_id, proiect_id, proiect_denumire, titlu, data_emitere, data_efect, semnatar_id)
+VALUES ('SEF_SANTIER','Sef Santier','proiect',201,32,'Sonda 16 Mironu','Dl.', public._hr_azi(), public._hr_azi(), (SELECT id FROM hr_decizii_semnatari WHERE employee_id = 121))
+RETURNING id AS j52 \gset
+SELECT teste.e('J5-2a tip fara atestat: fara R1/R2/G9', NOT EXISTS (SELECT 1 FROM jsonb_array_elements(public.fn_hr_decizie_previzualizeaza(:j52)->'avertismente') a
+  WHERE a->>'cod' IN ('R1','R2','R3','G9')));
+INSERT INTO hr_decizii (tip_cod, eticheta_functie, nivel, employee_id, proiect_id, proiect_denumire, domenii_isc, titlu, data_emitere, data_efect, semnatar_id)
+VALUES ('RTE','RTE','proiect',201,32,'Sonda 16 Mironu',ARRAY['8.4D'],'Dl.', public._hr_azi(), public._hr_azi(), (SELECT id FROM hr_decizii_semnatari WHERE employee_id = 121))
+RETURNING id AS j52b \gset
+SELECT public.fn_hr_decizie_previzualizeaza(:j52b) AS pj \gset
+SELECT teste.e('J5-2b/T66 RTE fara atestat: R1, fara R2/R3; text fara segmentul de autorizatie', (:'pj'::jsonb->'avertismente') @> '[{"cod":"R1"}]'
+  AND NOT (:'pj'::jsonb->'avertismente') @> '[{"cod":"R2"}]' AND NOT (:'pj'::jsonb->'avertismente') @> '[{"cod":"R3"}]'
+  AND (:'pj'::jsonb->'continut'->'articole'->0->>'text') LIKE '%RTE pentru domeniul 8.4 (D) – Retele de gaze naturale combustibile in cadrul proiectului%'
+  AND (:'pj'::jsonb->'continut'->'articole'->0->>'text') NOT LIKE '%Autorizatiei%');
+SELECT teste.e('J5-2c/T66 emitere cu R1 confirmat', (public.fn_hr_decizie_emite(:j52b, :'pj'::jsonb->>'hash_previzualizare', gen_random_uuid(), 12, NULL, '["R1"]')->>'numar') IS NOT NULL);
+SELECT (public.fn_hr_decizie_importa(jsonb_build_object('cerere_id', gen_random_uuid(), 'an',2026,'numar',778,'tip_cod','RTE','eticheta_functie','RTE',
+  'nivel','proiect','proiect_id',32,'employee_id',201,'titlu','Dl.','data_emitere', public._hr_azi(),'data_efect', public._hr_azi() - 10,
+  'data_efect_pana', public._hr_azi() - 1,'domenii_isc','["8.4 (D)"]'::jsonb,'propune_efect',true))->>'id')::bigint AS j53 \gset
+SELECT teste.e('J5-3/P5-1 import persista termenul si domeniile normalizate', (SELECT data_efect_pana = public._hr_azi() - 1 AND domenii_isc = ARRAY['8.4D'] FROM hr_decizii WHERE id = :j53));
+RESET ROLE;
+SELECT teste.e('J5-3b import expirat: nu e eligibil (nu e semnat inca, dar termenul e persistat)', public._hr_decizie_motiv_neeligibil(:j53) IS NOT NULL);
+-- J5-4: renumire cu efect viitor a persoanei deja în echipă → are propunere
+UPDATE executie_proiecte SET rts_employee_id = 201 WHERE id = 32;
+SELECT teste.ca(:'NATALIA');
+SELECT (public.fn_hr_decizie_importa(jsonb_build_object('cerere_id', gen_random_uuid(), 'an',2026,'numar',779,'tip_cod','RTS','eticheta_functie','Responsabil Tehnic cu Sudura',
+  'nivel','proiect','proiect_id',32,'employee_id',201,'titlu','Dl.','data_emitere', public._hr_azi(),'data_efect', public._hr_azi() + 1,'propune_efect',true))->>'id')::bigint AS j54 \gset
+SELECT 'HR/2026/' || :j54 || '/semnat_1.pdf' AS j54s \gset
+SELECT teste.urca(:'j54s');
+SELECT public.fn_hr_decizie_ataseaza_scan(:j54, :'j54s', repeat('4', 64),
+  '{"nr":true,"persoana":true,"semnatar":true,"semnatura":true,"stampila":true,"lizibil":true,"sursa":"pdf","pagini":1,"pagini_sursa":"detectat","generat":false}') IS NOT NULL AS ok \gset
+SELECT teste.e('J5-4 renumire viitoare a persoanei deja in echipa → propunere (confirmabila de la data efectului)',
+  EXISTS (SELECT 1 FROM executie_completari_propuse WHERE hr_decizie_id = :j54 AND status = 'propus'));
+RESET ROLE;
+SELECT teste.ca(:'RAZVAN');
+SELECT id AS pj54 FROM executie_completari_propuse WHERE hr_decizie_id = :j54 \gset
+SELECT teste.eroare('J5-4b confirmarea inainte de data efectului', format('SELECT public.fn_completare_aplica(%s, true)', :pj54), 'efect de la');
+RESET ROLE;
+-- fn_completare_aplica pe propuneri manuale: fiecare cast, câmp nepermis, respingere, eroare de cast (Jakarinos: regresie gate 0e)
+SELECT teste.ca(:'CMC');
+INSERT INTO executie_completari_propuse (proiect_id, camp, valoare, sursa) VALUES
+  (34,'data_start','2026-11-01','nas'), (34,'valoare_lei','1234.50','nas'), (34,'mp_employee_id','203','nas'), (34,'beneficiar_final','Romgaz','mail'),
+  (34,'nume','X','nas'), (34,'mp_employee_id','abc','nas'), (34,'rts_employee_id','201','nas');
+SELECT public.fn_completare_aplica(id, true) FROM executie_completari_propuse WHERE proiect_id = 34 AND camp IN ('data_start','valoare_lei','mp_employee_id','beneficiar_final') AND valoare <> 'abc' AND status = 'propus';
+SELECT teste.e('G0e casturi date/numeric/int/text aplicate', (SELECT data_start = '2026-11-01' AND valoare_lei = 1234.50 AND mp_employee_id = 203 AND beneficiar_final = 'Romgaz' FROM executie_proiecte WHERE id = 34));
+SELECT teste.eroare('G0e camp nepermis', format('SELECT public.fn_completare_aplica(%s, true)', (SELECT id FROM executie_completari_propuse WHERE camp = 'nume')), 'câmp nepermis');
+SELECT teste.eroare('G0e cast invalid', format('SELECT public.fn_completare_aplica(%s, true)', (SELECT id FROM executie_completari_propuse WHERE valoare = 'abc')), 'invalid input');
+SELECT public.fn_completare_aplica((SELECT id FROM executie_completari_propuse WHERE proiect_id = 34 AND camp = 'rts_employee_id'), false) IS NOT NULL AS ok \gset
+SELECT teste.e('G0e respingere: camp neschimbat, status respins', (SELECT rts_employee_id IS NULL FROM executie_proiecte WHERE id = 34)
+  AND (SELECT status FROM executie_completari_propuse WHERE proiect_id = 34 AND camp = 'rts_employee_id') = 'respins');
+RESET ROLE;
+SELECT teste.e('J5-6 view-ul nu e acordat lui service_role', NOT has_table_privilege('service_role', 'public.v_hr_decizii_curente', 'SELECT'));
+SELECT teste.e('P5-3 fn_completare_aplica: owner postgres, definer, ACL neschimbat', (SELECT pg_get_userbyid(proowner) = 'postgres' AND prosecdef
+  AND NOT has_function_privilege('anon', oid, 'EXECUTE') FROM pg_proc WHERE proname = 'fn_completare_aplica'));
+
 -- ═══ gate 0e e verificat de harness; T61 grep: randarea/avertismentele nu citesc tabele ═══
 SELECT teste.e('T61 _hr_decizie_randeaza / _avertismente / _acopera fara FROM pe tabele', NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname IN
   ('_hr_decizie_randeaza','_hr_decizie_avertismente','_hr_acopera_domeniu') AND prosrc ~* 'from[[:space:]]+public[.](hr_|executie|employees|profiles)'));

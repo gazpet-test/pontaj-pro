@@ -50,6 +50,17 @@ BEGIN
        IS DISTINCT FROM '47a7542895c0ce71cb0e44d2c26d0609' THEN
     RAISE EXCEPTION 'Precondiție 0c: fn_completare_aplica nu e versiunea revizuită 47a75428';
   END IF;
+  IF (SELECT pg_get_userbyid(proowner) || '|' || prosecdef || '|' || coalesce(array_to_string(proconfig, ';'), '') || '|'
+             || (SELECT string_agg(x.g, ',' ORDER BY x.g)
+                   FROM (SELECT coalesce(nullif(a.grantee::regrole::text, '-'), 'PUBLIC') || ':' || a.privilege_type AS g FROM aclexplode(proacl) a) x)
+        FROM pg_proc WHERE oid = to_regprocedure('public.fn_completare_aplica(bigint,boolean)'))
+     IS DISTINCT FROM 'postgres|true|search_path=public, pg_temp|authenticated:EXECUTE,postgres:EXECUTE,service_role:EXECUTE' THEN
+    RAISE EXCEPTION 'Precondiție 0c2: fn_completare_aplica are alt owner / SECURITY / search_path / ACL decât pe live (postgres, definer, authenticated+service_role)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+              AND (proname LIKE '\_hr\_%' OR proname LIKE 'fn\_hr\_decizi%' OR proname LIKE '\_completare\_%')) THEN
+    RAISE EXCEPTION 'Precondiție 0h: există deja funcții _hr_* / fn_hr_decizi* / _completare_* (prefixele acestei migrări)';
+  END IF;
   IF (SELECT pg_get_expr(polwithcheck, polrelid) FROM pg_policy
        WHERE polrelid = 'public.executie_completari_propuse'::regclass AND polname = 'completari_ins' AND polcmd = 'a')
      IS DISTINCT FROM E'(EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_manage_contracts))))' THEN
@@ -550,7 +561,7 @@ BEGIN
   SELECT coalesce(jsonb_object_agg(c.x, d.denumire), '{}'::jsonb) INTO v_dom
     FROM unnest(coalesce(p_r.domenii_isc, '{}')) c(x)
     JOIN public.isc_rte_domenii d ON d.cod = regexp_replace(c.x, '[DT]$', '');
-  RETURN jsonb_build_object(
+  RETURN jsonb_strip_nulls(jsonb_build_object(
     'decizie', jsonb_build_object('id', p_r.id, 'versiune', p_r.versiune, 'tip_cod', p_r.tip_cod, 'eticheta_functie', p_r.eticheta_functie,
        'nivel', p_r.nivel, 'employee_id', p_r.employee_id, 'persoana_nume', p_r.persoana_nume, 'proiect_id', p_r.proiect_id,
        'proiect_denumire', p_r.proiect_denumire, 'autorizatie_id', p_r.autorizatie_id, 'domenii_isc', to_jsonb(coalesce(p_r.domenii_isc, '{}')),
@@ -559,7 +570,7 @@ BEGIN
        'propune_efect', p_r.propune_efect, 'inlocuieste_id', p_r.inlocuieste_id, 'revoca_id', p_r.revoca_id,
        'descriere', p_r.descriere, 'origine', p_r.origine),
     'tip', v_tip, 'angajat', v_emp, 'atestat', v_at, 'proiect', v_pr, 'semnatar', v_sem, 'imputernicire', v_imp,
-    'tinta', v_tinta, 'domenii_den', v_dom);
+    'tinta', v_tinta, 'domenii_den', v_dom));
 END $f$;
 
 CREATE FUNCTION public._hr_decizie_intrari(p_id bigint, p_blocheaza boolean) RETURNS jsonb
@@ -585,6 +596,7 @@ BEGIN
    WHERE c.stare IN ('emisa','semnata') AND c.tip_cod = d->>'tip_cod' AND c.tip_cod NOT IN ('REVOCARE','ALTA_DECIZIE')
      AND ct.unic_activ AND c.id IS DISTINCT FROM (d->>'id')::bigint
      AND c.employee_id IS DISTINCT FROM (d->>'employee_id')::int
+     AND (c.data_efect IS NULL OR c.data_efect <= public._hr_azi())
      AND (c.data_efect_pana IS NULL OR c.data_efect_pana >= public._hr_azi())
      AND CASE WHEN d->>'nivel' = 'proiect'
               THEN c.nivel = 'proiect' AND c.proiect_id = (d->>'proiect_id')::bigint
@@ -593,7 +605,9 @@ BEGIN
   IF d->>'tip_cod' = 'RTE' AND d->>'nivel' = 'proiect' AND NOT coalesce((d->>'propune_efect')::boolean, true) THEN
     v_g7 := EXISTS (SELECT 1 FROM public.hr_decizii c
                      WHERE c.stare IN ('emisa','semnata') AND c.tip_cod = 'RTE' AND c.proiect_id = (d->>'proiect_id')::bigint
-                       AND c.id IS DISTINCT FROM (d->>'id')::bigint AND NOT (coalesce(c.domenii_isc, '{}') && coalesce(v_dom, '{}')));
+                       AND c.id IS DISTINCT FROM (d->>'id')::bigint AND NOT (coalesce(c.domenii_isc, '{}') && coalesce(v_dom, '{}'))
+                       AND (c.data_efect IS NULL OR c.data_efect <= public._hr_azi())
+                       AND (c.data_efect_pana IS NULL OR c.data_efect_pana >= public._hr_azi()));
   END IF;
   RETURN jsonb_build_object('g2', v_g2, 'g7', v_g7);
 END $f$;
@@ -911,6 +925,21 @@ BEGIN
   RETURN n;
 END $f$;
 
+-- Confirmările (J5-1): listă de coduri-șir, fără NULL/duplicate; altceva = eroare. Întoarce lista sortată.
+CREATE FUNCTION public._hr_confirmari(p jsonb) RETURNS text[]
+LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp
+AS $f$
+DECLARE v text[];
+BEGIN
+  IF p IS NULL OR p = 'null'::jsonb THEN RETURN '{}'; END IF;
+  IF jsonb_typeof(p) <> 'array' THEN RAISE EXCEPTION 'confirmarile trebuie sa fie o lista de coduri'; END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p) e WHERE jsonb_typeof(e) <> 'string' OR e #>> '{}' !~ '^[A-Za-z0-9_]{1,20}$') THEN
+    RAISE EXCEPTION 'confirmari: doar coduri-sir (ex. R4, R5)';
+  END IF;
+  SELECT coalesce(array_agg(DISTINCT c ORDER BY c), '{}') INTO v FROM jsonb_array_elements_text(p) c;
+  RETURN v;
+END $f$;
+
 -- ─── 4. Numerotare și contor (§3.7, §3.6) ───────────────────────────────────────────────────────────────
 CREATE FUNCTION public._hr_decizii_aloca(p_serie text, p_an int, p_numar int, p_numar_sufix text, p_confirm_salt boolean,
                                          p_origine text, p_data_emitere date)
@@ -1124,10 +1153,8 @@ BEGIN
   IF p_font_pt IS NULL OR p_font_pt NOT IN (11, 12) THEN RAISE EXCEPTION 'p_font_pt trebuie sa fie 11 sau 12'; END IF;
   IF p_cerere_id IS NULL THEN RAISE EXCEPTION 'cerere_id lipsa'; END IF;
   IF p_hash_previzualizare IS NULL OR p_hash_previzualizare !~ '^[0-9a-f]{64}$' THEN RAISE EXCEPTION 'previzualizeaza din nou (hash lipsa sau invalid)'; END IF;
-  IF jsonb_typeof(v_conf) <> 'array' THEN RAISE EXCEPTION 'p_confirmari trebuie sa fie lista de coduri'; END IF;
-  SELECT array_agg(DISTINCT c ORDER BY c) INTO v_coduri FROM jsonb_array_elements_text(v_conf) c;
-  v_hash_cerere := encode(sha256(convert_to(concat_ws('|', p_id, p_hash_previzualizare, coalesce(p_numar::text, ''),
-                     array_to_string(coalesce(v_coduri, '{}'), ','), v_salt_c, p_font_pt), 'UTF8')), 'hex');
+  v_coduri := public._hr_confirmari(v_conf);
+  v_hash_cerere := encode(sha256(convert_to(jsonb_build_array(p_id, p_hash_previzualizare, p_numar, to_jsonb(v_coduri), v_salt_c, p_font_pt)::text, 'UTF8')), 'hex');
   SELECT * INTO r FROM public.hr_decizii WHERE id = p_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'decizia % nu exista', p_id; END IF;
   -- retry (J10, Vf10, P2-5)
@@ -1151,7 +1178,7 @@ BEGIN
   SELECT jsonb_agg(x) INTO v_blocante FROM jsonb_array_elements(v_av) x WHERE x->>'nivel' = 'B';
   IF v_blocante IS NOT NULL THEN RAISE EXCEPTION 'blocante: %', (SELECT string_agg(x->>'cod' || ' ' || (x->>'mesaj'), '; ') FROM jsonb_array_elements(v_blocante) x); END IF;
   SELECT array_agg(x->>'cod') INTO v_rosii_neconf FROM jsonb_array_elements(v_av) x
-   WHERE x->>'nivel' = 'R' AND NOT (x->>'cod') = ANY (coalesce(v_coduri, '{}'));
+   WHERE x->>'nivel' = 'R' AND (x->>'cod' = ANY (v_coduri)) IS NOT TRUE;
   IF v_rosii_neconf IS NOT NULL THEN RAISE EXCEPTION 'confirmari necesare: %', array_to_string(v_rosii_neconf, ', '); END IF;
   v_an := extract(year FROM r.data_emitere);
   PERFORM public._hr_decizii_valideaza_numar('HR', v_an, p_numar, '', r.data_emitere, 'platforma');
@@ -1353,6 +1380,7 @@ BEGIN
   END IF;
   v_cur := public._hr_valoare_camp(d.proiect_id, tip.camp_efect);
   IF v_cur IS DISTINCT FROM d.employee_id::text
+     OR (d.data_efect IS NOT NULL AND d.data_efect > public._hr_azi())
      OR EXISTS (SELECT 1 FROM public.executie_completari_propuse p JOIN public.hr_decizii rv ON rv.id = p.hr_decizie_id
                  JOIN public.hr_decizii tg ON tg.id = rv.revoca_id
                  WHERE p.proiect_id = d.proiect_id AND p.camp = tip.camp_efect AND p.sursa = 'decizie_revocare' AND p.status = 'propus'
@@ -1451,6 +1479,16 @@ BEGIN
   r.temei := nullif(btrim(p->>'temei'), '');
   r.data_emitere := (p->>'data_emitere')::date;
   r.data_efect := (p->>'data_efect')::date;
+  r.data_efect_pana := (p->>'data_efect_pana')::date;
+  IF r.data_efect_pana IS NOT NULL AND r.data_efect IS NOT NULL AND r.data_efect_pana < r.data_efect THEN
+    RAISE EXCEPTION 'data_efect_pana e inaintea datei efectului';
+  END IF;
+  IF p ? 'domenii_isc' AND p->'domenii_isc' <> 'null'::jsonb THEN
+    IF jsonb_typeof(p->'domenii_isc') <> 'array' OR EXISTS (SELECT 1 FROM jsonb_array_elements(p->'domenii_isc') e WHERE jsonb_typeof(e) <> 'string') THEN
+      RAISE EXCEPTION 'domenii_isc trebuie sa fie o lista de coduri';
+    END IF;
+    r.domenii_isc := public._hr_norm_domenii_isc(ARRAY(SELECT jsonb_array_elements_text(p->'domenii_isc')));
+  END IF;
   r.semnatar_id := coalesce((p->>'semnatar_id')::bigint, CASE WHEN v_tip.cod <> 'ALTA_DECIZIE' OR p_origine = 'import' THEN v_tip.semnatar_implicit_id END);
   r.luare_la_cunostinta := false;
   r.propune_efect := coalesce((p->>'propune_efect')::boolean, p_origine <> 'import');
@@ -1500,8 +1538,8 @@ BEGIN
   IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_av) y WHERE y->>'nivel' = 'B') THEN
     RAISE EXCEPTION 'blocante: %', (SELECT string_agg(y->>'cod' || ' ' || (y->>'mesaj'), '; ') FROM jsonb_array_elements(v_av) y WHERE y->>'nivel' = 'B');
   END IF;
-  SELECT array_agg(DISTINCT c) INTO v_coduri FROM jsonb_array_elements_text(coalesce(p_payload->'confirmari', '[]')) c;
-  SELECT array_agg(y->>'cod') INTO v_rosii FROM jsonb_array_elements(v_av) y WHERE y->>'nivel' = 'R' AND NOT (y->>'cod') = ANY (coalesce(v_coduri, '{}'));
+  v_coduri := public._hr_confirmari(p_payload->'confirmari');
+  SELECT array_agg(y->>'cod') INTO v_rosii FROM jsonb_array_elements(v_av) y WHERE y->>'nivel' = 'R' AND (y->>'cod' = ANY (v_coduri)) IS NOT TRUE;
   IF v_rosii IS NOT NULL THEN RAISE EXCEPTION 'confirmari necesare: %', array_to_string(v_rosii, ', '); END IF;
   PERFORM public._hr_decizii_valideaza_numar('HR', v_an, v_numar, '', r.data_emitere, 'rezervare');
   SELECT a.numar, a.salt, a.g3 INTO v_n, v_salt, v_g3 FROM public._hr_decizii_aloca('HR', v_an, v_numar, '', (p_payload->>'confirm_salt')::boolean, 'rezervare', r.data_emitere) a;
@@ -1511,11 +1549,11 @@ BEGIN
   IF v_salt IS NOT NULL THEN v_final := v_final || v_salt; END IF;
   IF v_g3 IS NOT NULL THEN v_final := v_final || v_g3; END IF;
   INSERT INTO public.hr_decizii (serie, an, numar, numar_sufix, mod_numar, origine, tip_cod, eticheta_functie, descriere, nivel, employee_id,
-      persoana_nume, proiect_id, proiect_denumire, autorizatie_id, titlu, temei, data_emitere, data_efect, semnatar_id, propune_efect,
+      persoana_nume, proiect_id, proiect_denumire, autorizatie_id, titlu, temei, data_emitere, data_efect, data_efect_pana, domenii_isc, semnatar_id, propune_efect,
       cerere_id, cerere_hash, snapshot, avertismente, stare, creat_de, emis_de, emis_la)
   VALUES ('HR', v_an, v_n, '', CASE WHEN v_numar IS NULL THEN 'auto' ELSE 'manual' END, 'rezervare', r.tip_cod, r.eticheta_functie, r.descriere,
       r.nivel, r.employee_id, r.persoana_nume, r.proiect_id, r.proiect_denumire, r.autorizatie_id, r.titlu, r.temei, r.data_emitere, r.data_efect,
-      r.semnatar_id, r.propune_efect, v_cerere, v_hash, public._hr_snapshot_simplu(r, 'rezervare'), v_final, 'emisa', auth.uid(), auth.uid(), now())
+      r.data_efect_pana, r.domenii_isc, r.semnatar_id, r.propune_efect, v_cerere, v_hash, public._hr_snapshot_simplu(r, 'rezervare'), v_final, 'emisa', auth.uid(), auth.uid(), now())
   RETURNING id INTO v_id;
   PERFORM public._hr_ev(v_id, 'rezervare', NULL, 'emisa', jsonb_build_object('numar', v_n, 'an', v_an, 'cerere_id', v_cerere));
   IF v_salt IS NOT NULL THEN PERFORM public._hr_ev(v_id, 'salt_confirmat', NULL, NULL, v_salt, 'HR', v_an); END IF;
@@ -1553,10 +1591,10 @@ BEGIN
   SELECT a.numar, a.sufix INTO v_n, v_suf FROM public._hr_decizii_aloca(r.serie, v_an, v_numar, r.numar_sufix, false, 'import', r.data_emitere) a;
   BEGIN
     INSERT INTO public.hr_decizii (serie, an, numar, numar_sufix, mod_numar, origine, tip_cod, eticheta_functie, descriere, nivel, employee_id,
-        persoana_nume, proiect_id, proiect_denumire, autorizatie_id, titlu, temei, data_emitere, data_efect, semnatar_id, propune_efect,
+        persoana_nume, proiect_id, proiect_denumire, autorizatie_id, titlu, temei, data_emitere, data_efect, data_efect_pana, domenii_isc, semnatar_id, propune_efect,
         cerere_id, cerere_hash, snapshot, stare, creat_de, emis_de, emis_la)
     VALUES (r.serie, v_an, v_n, v_suf, 'manual', 'import', r.tip_cod, r.eticheta_functie, r.descriere, r.nivel, r.employee_id, r.persoana_nume,
-        r.proiect_id, r.proiect_denumire, r.autorizatie_id, r.titlu, r.temei, r.data_emitere, r.data_efect, r.semnatar_id, r.propune_efect,
+        r.proiect_id, r.proiect_denumire, r.autorizatie_id, r.titlu, r.temei, r.data_emitere, r.data_efect, r.data_efect_pana, r.domenii_isc, r.semnatar_id, r.propune_efect,
         v_cerere, v_hash, public._hr_snapshot_simplu(r, 'import'), 'emisa', auth.uid(), auth.uid(), now())
     RETURNING id INTO v_id;
   EXCEPTION WHEN unique_violation THEN
@@ -1612,6 +1650,9 @@ BEGIN
     PERFORM 1 FROM public.executie_completari_propuse p
       WHERE p.proiect_id = r.proiect_id AND p.camp = r.camp AND p.sursa = 'decizie_revocare' AND p.status = 'propus'
       ORDER BY p.id FOR UPDATE;
+    PERFORM 1 FROM public.executie_proiecte WHERE id = r.proiect_id FOR UPDATE;          -- (4) proiectul, apoi revalidare
+    v_motiv := public._hr_decizie_motiv_neeligibil(d.id);
+    IF v_motiv IS NOT NULL THEN RAISE EXCEPTION 'decizia nu mai e in vigoare (%)', v_motiv; END IF;
     PERFORM public._completare_scrie_camp(r.proiect_id, r.camp, r.valoare);
     FOR g IN SELECT p.id FROM public.executie_completari_propuse p
               WHERE p.proiect_id = r.proiect_id AND p.camp = r.camp AND p.sursa = 'decizie_revocare' AND p.status = 'propus' ORDER BY p.id LOOP
@@ -1826,7 +1867,7 @@ SELECT d.id, d.serie, d.an, d.numar, d.numar_sufix,
    AND (d.data_efect_pana IS NULL OR d.data_efect_pana >= public._hr_azi())
    AND (d.nivel = 'firma' OR coalesce(p.activ, false));
 REVOKE ALL ON public.v_hr_decizii_curente FROM PUBLIC, anon, authenticated, service_role;
-GRANT SELECT ON public.v_hr_decizii_curente TO authenticated, service_role;
+GRANT SELECT ON public.v_hr_decizii_curente TO authenticated;
 
 -- ─── 12. Bucket hr-decizii (§3.5): doar PDF, 20 MB, fără UPDATE/DELETE (VA19) ─────────────────────────
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -1837,13 +1878,67 @@ CREATE POLICY hr_decizii_storage_insert ON storage.objects FOR INSERT TO authent
   WITH CHECK (bucket_id = 'hr-decizii' AND public.fn_hr_decizii_storage_poate(name, 'insert'));
 
 -- ─── 13. Drepturi pe funcții (Vf3): totul retras, apoi EXECUTE doar pe cele publice ────────────────────
+-- Lista EXACTĂ a funcțiilor acestei migrări (P5-2): ACL-ul, postcondiția și revenirea lucrează doar pe ea, nu pe prefixe.
+CREATE FUNCTION pg_temp.hr_decizii_functii() RETURNS text[] LANGUAGE sql IMMUTABLE AS $l$ SELECT ARRAY[
+    'public._completare_goleste_camp(bigint,text,integer)',
+    'public._completare_scrie_camp(bigint,text,text)',
+    'public._hr_acopera_domeniu(text[],text[])',
+    'public._hr_azi()',
+    'public._hr_completare_aplica_decizie(bigint,boolean,bigint,text)',
+    'public._hr_confirmari(jsonb)',
+    'public._hr_contor_valideaza(integer,integer)',
+    'public._hr_decizie_avertismente(jsonb,jsonb,integer,text)',
+    'public._hr_decizie_context(jsonb)',
+    'public._hr_decizie_eligibila_efect(bigint)',
+    'public._hr_decizie_intrari(bigint,boolean)',
+    'public._hr_decizie_intrari_rand(hr_decizii,boolean)',
+    'public._hr_decizie_mod(text,text)',
+    'public._hr_decizie_motiv_neeligibil(bigint)',
+    'public._hr_decizie_randeaza(jsonb,integer,date)',
+    'public._hr_decizii_aloca(text,integer,integer,text,boolean,text,date)',
+    'public._hr_decizii_norm_sufix(text)',
+    'public._hr_decizii_termeni(uuid)',
+    'public._hr_decizii_valideaza_numar(text,integer,integer,text,date,text)',
+    'public._hr_ev(bigint,text,text,text,jsonb,text,integer)',
+    'public._hr_fisier_ok(hr_decizii,text,text)',
+    'public._hr_hash_prev(jsonb,jsonb)',
+    'public._hr_norm_domenii_isc(text[])',
+    'public._hr_nr_afisat(text,integer,integer,text,date)',
+    'public._hr_nume_afis(text)',
+    'public._hr_rand_din_payload(jsonb,text)',
+    'public._hr_sablon(text,jsonb)',
+    'public._hr_snapshot_simplu(hr_decizii,text)',
+    'public._hr_subst(text,jsonb,boolean)',
+    'public._hr_trg_imuabil()',
+    'public._hr_trg_jurnal()',
+    'public._hr_trg_jurnal_imuabil()',
+    'public._hr_trg_revocare()',
+    'public._hr_trg_versiune()',
+    'public._hr_valoare_camp(bigint,text)',
+    'public._hr_verificari_ok(hr_decizii,jsonb)',
+    'public.fn_hr_decizie_anuleaza(bigint,text)',
+    'public.fn_hr_decizie_ataseaza_scan(bigint,text,text,jsonb)',
+    'public.fn_hr_decizie_emite(bigint,text,uuid,integer,integer,jsonb,boolean)',
+    'public.fn_hr_decizie_importa(jsonb)',
+    'public.fn_hr_decizie_inlocuieste_scan(bigint,uuid,text,text,text,text,text,jsonb)',
+    'public.fn_hr_decizie_previzualizeaza(bigint,integer)',
+    'public.fn_hr_decizie_rezerva(jsonb)',
+    'public.fn_hr_decizie_seteaza_pdf(bigint,text,text)',
+    'public.fn_hr_decizii_contor_corecteaza(integer,integer,text)',
+    'public.fn_hr_decizii_contor_corecteaza_baza(integer,integer,text)',
+    'public.fn_hr_decizii_contor_initializeaza(integer,integer,text)',
+    'public.fn_hr_decizii_contor_opreste_auto(integer,text)',
+    'public.fn_hr_decizii_emitenti()',
+    'public.fn_hr_decizii_id_din_cale(text)',
+    'public.fn_hr_decizii_poate(text,bigint)',
+    'public.fn_hr_decizii_storage_poate(text,text)',
+    'public.fn_hr_decizii_urmatorul_numar(integer)'] $l$;
 DO $acl$
-DECLARE f record;
+DECLARE f text;
 BEGIN
-  FOR f IN SELECT p.oid::regprocedure AS sig, p.proname FROM pg_proc p
-            WHERE p.pronamespace = 'public'::regnamespace
-              AND (p.proname LIKE '\_hr\_%' OR p.proname LIKE 'fn\_hr\_decizi%' OR p.proname LIKE '\_completare\_%') LOOP
-    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated, service_role', f.sig);
+  FOREACH f IN ARRAY pg_temp.hr_decizii_functii() LOOP
+    IF to_regprocedure(f) IS NULL THEN RAISE EXCEPTION 'ACL: functia % lipseste', f; END IF;
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated, service_role', f);
   END LOOP;
 END $acl$;
 GRANT EXECUTE ON FUNCTION public._hr_azi() TO authenticated;
@@ -1966,6 +2061,19 @@ BEGIN
     RAISE EXCEPTION 'Postcondiție 6: anon/service_role au drept de scriere pe registru';
   END IF;
   IF EXISTS (SELECT 1 FROM public.app_modules WHERE key = 'hr.decizii') THEN RAISE EXCEPTION 'Postcondiție 7: hr.decizii in app_modules'; END IF;
+  IF (SELECT array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text) FROM pg_proc p
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND (p.proname LIKE '\_hr\_%' OR p.proname LIKE 'fn\_hr\_decizi%' OR p.proname LIKE '\_completare\_%'))
+     IS DISTINCT FROM (SELECT array_agg(substr(x, 8) ORDER BY substr(x, 8)) FROM unnest(pg_temp.hr_decizii_functii()) x) THEN
+    RAISE EXCEPTION 'Postcondiție 9: funcțiile create nu sunt exact lista migrării';
+  END IF;
+  IF (SELECT pg_get_userbyid(proowner) || '|' || prosecdef || '|' || coalesce(array_to_string(proconfig, ';'), '') || '|'
+             || (SELECT string_agg(x.g, ',' ORDER BY x.g)
+                   FROM (SELECT coalesce(nullif(a.grantee::regrole::text, '-'), 'PUBLIC') || ':' || a.privilege_type AS g FROM aclexplode(proacl) a) x)
+        FROM pg_proc WHERE oid = to_regprocedure('public.fn_completare_aplica(bigint,boolean)'))
+     IS DISTINCT FROM 'postgres|true|search_path=public, pg_temp|authenticated:EXECUTE,postgres:EXECUTE,service_role:EXECUTE' THEN
+    RAISE EXCEPTION 'Postcondiție 10: fn_completare_aplica și-a schimbat owner / SECURITY / search_path / ACL';
+  END IF;
   IF (SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.fn_completare_aplica(bigint,boolean)')) ~* 'execute' THEN
     RAISE EXCEPTION 'Postcondiție 8: fn_completare_aplica nu trebuie sa mai contina SQL dinamic (gate 0e)';
   END IF;
