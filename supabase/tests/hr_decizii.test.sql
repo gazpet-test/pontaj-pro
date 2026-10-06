@@ -325,6 +325,57 @@ SELECT teste.e('T32 variante de gen pe PSI firma (pe doamna/pe domnul)', public.
   = 'Numirea in functia de Responsabil PSI pe doamna Ionescu Maria incepand cu data de 01.10.2026, conform art. 12 din Legea 307/2006 si art. 13 din Legea 481/2004.');
 SELECT teste.eroare('T66 variabila obligatorie lipsa → eroare, nu text', $$SELECT public._hr_sablon('a {lipsa} b', '{}')$$, 'fara valoare');
 
+
+-- ═══ T17/T66/T48: înlocuire completă pe un RTE importat (fără titlu) + extern la scan ═══
+SELECT teste.ca(:'NATALIA');
+SELECT (public.fn_hr_decizie_importa(jsonb_build_object('cerere_id', gen_random_uuid(), 'an',2026,'numar',940,
+  'tip_cod','RTE','eticheta_functie','RTE','nivel','proiect','proiect_id',32,'employee_id',201,'data_emitere', public._hr_azi(),'propune_efect',false))->>'id')::bigint AS imp \gset
+SELECT 'HR/2026/' || :imp || '/semnat_5.pdf' AS ims \gset
+SELECT teste.urca(:'ims');
+SELECT public.fn_hr_decizie_ataseaza_scan(:imp, :'ims', repeat('e', 64),
+  '{"nr":true,"persoana":true,"semnatar":true,"semnatura":true,"stampila":false,"observatie":"originalul nu are stampila","lizibil":true,"sursa":"pdf","pagini":1,"pagini_sursa":"detectat","generat":false}') IS NOT NULL AS ok \gset
+SELECT teste.e('T38c import cu stampila=false + observatie → semnata', (SELECT stare FROM hr_decizii WHERE id = :imp) = 'semnata');
+INSERT INTO hr_decizii (tip_cod, eticheta_functie, nivel, employee_id, proiect_id, proiect_denumire, autorizatie_id, domenii_isc, titlu,
+                        data_emitere, data_efect, semnatar_id, inlocuieste_id)
+VALUES ('RTE','RTE','proiect',200,32,'Sonda 16 Mironu',1,ARRAY['1.1'],'Dl.', public._hr_azi(), public._hr_azi(),
+        (SELECT id FROM hr_decizii_semnatari WHERE employee_id = 121), :imp)
+RETURNING id AS inl \gset
+SELECT public.fn_hr_decizie_previzualizeaza(:inl) AS pin \gset
+SELECT teste.e('T66c inlocuire: R5 pe articolul de inlocuire + articol fara titlu tinta', (:'pin'::jsonb->'avertismente') @> '[{"cod":"R5"}]'
+  AND (:'pin'::jsonb->'continut'->'articole'->1->>'text') LIKE 'Prezenta decizie inlocuieste Decizia nr. 940/% privind numirea Popescu Ion in functia de RTE, care isi inceteaza efectele incepand cu data de %.');
+SELECT public.fn_hr_decizie_emite(:inl, :'pin'::jsonb->>'hash_previzualizare', gen_random_uuid(), 12, NULL, '["R5"]') IS NOT NULL AS ok \gset
+INSERT INTO hr_decizii (tip_cod, eticheta_functie, nivel, employee_id, proiect_id, proiect_denumire, autorizatie_id, domenii_isc, titlu,
+                        data_emitere, data_efect, semnatar_id, inlocuieste_id)
+VALUES ('RTE','RTE','proiect',200,32,'Sonda 16 Mironu',1,ARRAY['1.1'],'Dl.', public._hr_azi(), public._hr_azi(),
+        (SELECT id FROM hr_decizii_semnatari WHERE employee_id = 121), :imp)
+RETURNING id AS inl2 \gset
+SELECT teste.e('T17b a doua inlocuire pe aceeasi tinta → B9', (public.fn_hr_decizie_previzualizeaza(:inl2)->'avertismente') @> '[{"cod":"B9"}]');
+SELECT 'HR/2026/' || :inl || '/generat_7.pdf' AS ig, 'HR/2026/' || :inl || '/semnat_8.pdf' AS is2 \gset
+SELECT teste.urca(:'ig'); SELECT teste.urca(:'is2');
+SELECT public.fn_hr_decizie_seteaza_pdf(:inl, :'ig', repeat('f', 64)) IS NOT NULL AS ok \gset
+SELECT public.fn_hr_decizie_ataseaza_scan(:inl, :'is2', repeat('0', 64),
+  '{"nr":true,"persoana":true,"semnatura":true,"stampila":true,"cod":true,"lizibil":true,"sursa":"foto","pagini":1,"pagini_sursa":"detectat","generat":true}') IS NOT NULL AS ok \gset
+SELECT teste.e('T17 inlocuire semnata → tinta inlocuita, propunere noua', (SELECT stare FROM hr_decizii WHERE id = :imp) = 'inlocuita'
+  AND EXISTS (SELECT 1 FROM executie_completari_propuse WHERE hr_decizie_id = :inl AND sursa = 'decizie_numire' AND status = 'propus'));
+RESET ROLE;
+SELECT teste.ca(:'RAZVAN');
+SELECT 'HR/2026/' || :inl || '/semnat_9.pdf' AS is3, (SELECT scan_path FROM hr_decizii WHERE id = :inl) AS sv, (SELECT scan_sha256 FROM hr_decizii WHERE id = :inl) AS shv \gset
+SELECT teste.urca(:'is3');
+SELECT gen_random_uuid() AS cis \gset
+SELECT teste.eroare('T65a inlocuieste_scan cu un generat_*', format($$SELECT public.fn_hr_decizie_inlocuieste_scan(%s, %L, %L, %L, %L, %L, 'x', '{}')$$,
+  :inl, gen_random_uuid(), :'sv', :'shv', :'ig', repeat('1',64)), 'cale invalida');
+SELECT public.fn_hr_decizie_inlocuieste_scan(:inl, :'cis', :'sv', :'shv', :'is3', repeat('2', 64), 'pagina lipsa',
+  '{"nr":true,"persoana":true,"semnatura":true,"stampila":true,"cod":true,"lizibil":true,"sursa":"pdf","pagini":1,"pagini_sursa":"detectat","generat":true}') IS NOT NULL AS ok \gset
+SELECT teste.e('T65b retry identic = ok, fara eveniment nou', (public.fn_hr_decizie_inlocuieste_scan(:inl, :'cis', :'sv', :'shv', :'is3', repeat('2', 64), 'pagina lipsa',
+  '{"nr":true,"persoana":true,"semnatura":true,"stampila":true,"cod":true,"lizibil":true,"sursa":"pdf","pagini":1,"pagini_sursa":"detectat","generat":true}')->>'retry')::boolean);
+SELECT teste.e('T65c un singur scan_inlocuit, scanul curent nou, propunerea pe noua dovada',
+  (SELECT count(*) FROM hr_decizii_evenimente WHERE decizie_id = :inl AND eveniment = 'scan_inlocuit') = 1
+  AND (SELECT scan_path FROM hr_decizii WHERE id = :inl) = :'is3'
+  AND (SELECT dovada_path FROM executie_completari_propuse WHERE hr_decizie_id = :inl) = :'is3');
+SELECT teste.eroare('T65d baseline vechi', format($$SELECT public.fn_hr_decizie_inlocuieste_scan(%s, %L, %L, %L, %L, %L, 'x', '{}')$$,
+  :inl, gen_random_uuid(), :'sv', :'shv', :'is2', repeat('3',64)), 's-a schimbat');
+RESET ROLE;
+
 -- ═══ gate 0e e verificat de harness; T61 grep: randarea/avertismentele nu citesc tabele ═══
 SELECT teste.e('T61 _hr_decizie_randeaza / _avertismente / _acopera fara FROM pe tabele', NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname IN
   ('_hr_decizie_randeaza','_hr_decizie_avertismente','_hr_acopera_domeniu') AND prosrc ~* 'from[[:space:]]+public[.](hr_|executie|employees|profiles)'));

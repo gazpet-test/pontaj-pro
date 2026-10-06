@@ -84,6 +84,45 @@ OUT="$("${PSQL[@]}" -d "$BAZA" -f "$TESTE" 2>&1)" || { echo "$OUT" | grep -v 'NO
 N="$(grep -c 'NOTICE:  OK' <<<"$OUT")"
 grep -q 'TESTE SQL: TOATE OK' <<<"$OUT" || esec "4 testele nu au ajuns la final"
 ok "4 teste SQL: $N verificări OK"
+# 4b. concurență cu două sesiuni (pg_sleep între lock și COMMIT; ambele ordini acolo unde contează)
+NAT=00000000-0000-0000-0000-000000000126; RAZ=00000000-0000-0000-0000-000000000121
+sesiune() { "${PSQL[@]}" -d "$BAZA" -At -v ON_ERROR_STOP=1 -c "BEGIN" -c "SELECT teste.ca('$1')" -c "$2" -c "SELECT pg_sleep($3)" -c "COMMIT" 2>&1 | grep -v '^$' || true; }
+# C1 (Vf9/T49): același cerere_id, simultan → un singur rând, același număr
+C="$(q "SELECT gen_random_uuid()")"
+P1="SELECT public.fn_hr_decizie_rezerva(jsonb_build_object('cerere_id','$C','tip_cod','ALTA_DECIZIE','descriere','concurent','nivel','firma','data_emitere', public._hr_azi()))->>'numar'"
+sesiune $NAT "$P1" 2 >/tmp/hr_c1a.out & PA=$!; sleep 0.5; sesiune $NAT "$P1" 0 >/tmp/hr_c1b.out; wait $PA
+A="$(grep -E '^[0-9]+$' /tmp/hr_c1a.out | head -1)"; B="$(grep -E '^[0-9]+$' /tmp/hr_c1b.out | head -1)"
+[ -n "$A" ] && [ "$A" = "$B" ] && [ "$(q "SELECT count(*) FROM hr_decizii WHERE cerere_id = '$C'")" = 1 ] || esec "C1 rezervare concurentă: A=$A B=$B ($(cat /tmp/hr_c1b.out))"
+ok "C1 rezervare concurentă cu același cerere_id → un rând, numărul $A"
+# pregătire C2/C3: o numire RTE semnată (import + scan) pe proiectul 32, cu propunere de efect
+IMP="$("${PSQL[@]}" -d "$BAZA" -At -c "SELECT teste.ca('$NAT')" -c "SELECT (public.fn_hr_decizie_importa(jsonb_build_object('cerere_id', gen_random_uuid(), 'an',2026,'numar',960,'tip_cod','RTE','eticheta_functie','RTE','nivel','proiect','proiect_id',32,'employee_id',203,'titlu','D-na','data_emitere', public._hr_azi(),'propune_efect',true)))->>'id'" | tail -1)"
+"${PSQL[@]}" -d "$BAZA" -At -c "SELECT teste.ca('$NAT')" -c "SELECT teste.urca('HR/2026/$IMP/semnat_1.pdf')" \
+  -c "SELECT public.fn_hr_decizie_ataseaza_scan($IMP, 'HR/2026/$IMP/semnat_1.pdf', repeat('a',64), '{\"nr\":true,\"persoana\":true,\"semnatar\":true,\"semnatura\":true,\"stampila\":true,\"lizibil\":true,\"sursa\":\"pdf\",\"pagini\":1,\"pagini_sursa\":\"detectat\",\"generat\":false}')" >/dev/null
+PROP="$(q "SELECT id FROM executie_completari_propuse WHERE hr_decizie_id = $IMP AND status = 'propus'")"
+[ -n "$PROP" ] || esec "C pregătire: lipsește propunerea numirii $IMP"
+# C2 (T43): înlocuire vs revocare emise simultan pe aceeași țintă → exact una reușește
+mk() { "${PSQL[@]}" -d "$BAZA" -At -c "SELECT teste.ca('$NAT')" -c "$1" | tail -1; }
+SEMN="(SELECT id FROM hr_decizii_semnatari WHERE employee_id = 121)"
+DI="$(mk "INSERT INTO hr_decizii (tip_cod, eticheta_functie, nivel, employee_id, proiect_id, proiect_denumire, titlu, data_emitere, data_efect, semnatar_id, inlocuieste_id, autorizatie_id, domenii_isc) VALUES ('RTE','RTE','proiect',200,32,'Sonda',  'Dl.', public._hr_azi(), public._hr_azi(), $SEMN, $IMP, 1, ARRAY['1.1']) RETURNING id")"
+DR="$(mk "INSERT INTO hr_decizii (tip_cod, eticheta_functie, nivel, revoca_id, data_emitere, data_efect, semnatar_id) VALUES ('REVOCARE','Revocare','firma',$IMP, public._hr_azi(), public._hr_azi(), $SEMN) RETURNING id")"
+HI="$(mk "SELECT public.fn_hr_decizie_previzualizeaza($DI)->>'hash_previzualizare'")"; HR_="$(mk "SELECT public.fn_hr_decizie_previzualizeaza($DR)->>'hash_previzualizare'")"
+sesiune $NAT "SELECT public.fn_hr_decizie_emite($DI, '$HI', gen_random_uuid(), 12, NULL, '[\"R5\"]')->>'numar'" 2 >/tmp/hr_c2a.out & PA=$!; sleep 0.5
+sesiune $NAT "SELECT public.fn_hr_decizie_emite($DR, '$HR_', gen_random_uuid(), 12, NULL, '[\"R5\"]')->>'numar'" 0 >/tmp/hr_c2b.out; wait $PA
+grep -q ERROR /tmp/hr_c2a.out && esec "C2 prima emitere a eșuat: $(cat /tmp/hr_c2a.out)"
+grep -Eq 'B9|schimbat' /tmp/hr_c2b.out || esec "C2 a doua emitere nu a fost refuzată: $(cat /tmp/hr_c2b.out)"
+[ "$(q "SELECT count(*) FROM hr_decizii WHERE coalesce(inlocuieste_id, revoca_id) = $IMP AND stare = 'emisa'")" = 1 ] || esec "C2 nu e exact o relație vie"
+ok "C2 înlocuire vs revocare simultane → exact una emisă, cealaltă refuzată (B9 / draft schimbat)"
+# C3 (T64, ordinea A): confirmarea efectului ține lock-ul; scanul înlocuirii așteaptă; fără deadlock
+"${PSQL[@]}" -d "$BAZA" -At -c "SELECT teste.ca('$NAT')" -c "SELECT teste.urca('HR/2026/$DI/generat_1.pdf')" -c "SELECT teste.urca('HR/2026/$DI/semnat_2.pdf')" \
+  -c "SELECT public.fn_hr_decizie_seteaza_pdf($DI, 'HR/2026/$DI/generat_1.pdf', repeat('b',64))" >/dev/null
+sesiune $RAZ "SELECT public.fn_completare_aplica($PROP, true)" 2 >/tmp/hr_c3a.out & PA=$!; sleep 0.5
+sesiune $NAT "SELECT public.fn_hr_decizie_ataseaza_scan($DI, 'HR/2026/$DI/semnat_2.pdf', repeat('c',64), '{\"nr\":true,\"persoana\":true,\"semnatura\":true,\"stampila\":true,\"cod\":true,\"lizibil\":true,\"sursa\":\"foto\",\"pagini\":1,\"pagini_sursa\":\"detectat\",\"generat\":true}')" 0 >/tmp/hr_c3b.out; wait $PA
+grep -q -i deadlock /tmp/hr_c3a.out /tmp/hr_c3b.out && esec "C3 deadlock"
+grep -q ERROR /tmp/hr_c3a.out && esec "C3 confirmarea a eșuat: $(cat /tmp/hr_c3a.out)"
+grep -q ERROR /tmp/hr_c3b.out && esec "C3 scanul a eșuat: $(cat /tmp/hr_c3b.out)"
+[ "$(q "SELECT (SELECT status FROM executie_completari_propuse WHERE id = $PROP) || '|' || (SELECT stare FROM hr_decizii WHERE id = $IMP) || '|' || (SELECT rte_employee_id FROM executie_proiecte WHERE id = 32)")" = "confirmat|inlocuita|203" ] \
+  || esec "C3 stare finală: $(q "SELECT (SELECT status FROM executie_completari_propuse WHERE id = $PROP) || '|' || (SELECT stare FROM hr_decizii WHERE id = $IMP)")"
+ok "C3 confirmare vs scan de înlocuire (confirmarea prima): fără deadlock, propunerea confirmată, ținta înlocuită"
 gate_0e "dupa teste"
 
 RC=0; PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migrare "$MIGRARE" --sha256 "$SHA" --versiune 20261007090000 \
