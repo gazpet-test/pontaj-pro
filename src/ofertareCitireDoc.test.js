@@ -172,3 +172,98 @@ describe('avertismentCitire — și plafonarea rezultatului AI (review ultracode
     expect(a).toMatch(/rezumatul a fost scurtat/); expect(a).toMatch(/limita de lungime/)
   })
 })
+
+describe('avertismentCitire — tăietură nesigură între felii / termene diferite (Copilot conv. 3, NO-GO pe d459447)', () => {
+  it('granita_nesigura → PARȚIALĂ, cu numărul de felii', () => {
+    const a = avertismentCitire({ sursa_completa: true, citire_completa: false, motive_incomplet: ['granita_nesigura'], felii: 5 })
+    expect(a).toMatch(/^Citire PARȚIALĂ/); expect(a).toMatch(/pe 5 felii/); expect(a).toMatch(/poate fi ruptă/)
+  })
+  it('doar conflict_termen → „De verificat”, cu termenele în ordinea documentului; nu alege unul', () => {
+    const a = avertismentCitire({ sursa_completa: true, citire_completa: false, motive_incomplet: ['conflict_termen'], termen_nou: null, felii: 3,
+      termene: [{ data: '2026-10-30', felie: 1 }, { data: '2026-10-25', felie: 3 }] })
+    expect(a).toMatch(/^De verificat:/); expect(a).toMatch(/30\.10\.2026 — felia 1, 25\.10\.2026 — felia 3/)
+    expect(a).not.toMatch(/PARȚIALĂ/)
+  })
+  it('n = 1 (aceeași felie): fără „felia”, cu citatul scurt din document', () => {
+    const a = avertismentCitire({ citire_completa: false, motive_incomplet: ['conflict_termen'], felii: 1,
+      termene: [{ data: '2026-10-30', felie: 1, citat: 'Termenul se prelungește la 30.10.2026.' }, { data: '2026-10-25', felie: 1, citat: 'x'.repeat(200) }] })
+    expect(a).toMatch(/30\.10\.2026 «Termenul se prelungește la 30\.10\.2026\.», 25\.10\.2026 «x{89}…»/)
+    expect(a).not.toMatch(/felia/)
+  })
+  it('termen neverificat / neinterpretabil → „De verificat”, cu data, marcajul și forma brută', () => {
+    const a = avertismentCitire({ citire_completa: false, motive_incomplet: ['termen_neverificat', 'termen_neinterpretabil'], felii: 1, termen_nou: null,
+      termene: [{ data: '2026-10-30', citat: '', verificat: false }, { data: null, data_bruta: 'în 30 de zile de la publicare', citat: 'Termenul se prelungește cu 30 de zile.', verificat: false }] })
+    expect(a).toMatch(/^De verificat:/); expect(a).toMatch(/30\.10\.2026 \(neverificat\)\) nu are o dovadă verificabilă/)
+    expect(a).toMatch(/nu l-am putut citi ca dată \(„în 30 de zile de la publicare” «Termenul se prelungește cu 30 de zile\.»\)/)
+    const b = avertismentCitire({ citire_completa: false, motive_incomplet: ['termen_neinterpretabil'], felii: 1,
+      termene: [{ data: null, citat: 'Termenul de depunere se prelungește cu 30 de zile de la publicare.', verificat: false }] })
+    expect(b).toMatch(/\(fără dată «Termenul de depunere se prelungește cu 30 de zile de la publicare\.»\)/)
+  })
+  it('conflict_termen împreună cu alt motiv → PARȚIALĂ (motivul cel mai grav decide eticheta)', () => {
+    const a = avertismentCitire({ citire_completa: false, motive_incomplet: ['granita_nesigura', 'conflict_termen'], felii: 3, termene: [{ data: '2026-10-30', felie: 1 }, { data: '2026-11-02', felie: 2 }] })
+    expect(a).toMatch(/^Citire PARȚIALĂ/); expect(a).toMatch(/termene diferite \(30\.10\.2026 — felia 1, 02\.11\.2026 — felia 2\)/)
+  })
+})
+
+import { rezumaPeFelii, textProgres } from './ofertareCitireDoc.js'
+describe('rezumaPeFelii — rezumatul pe felii (Răcari 06.10, varianta A)', () => {
+  const fara = async () => {}
+  const seq = (raspunsuri) => { const apeluri = []; return { apeluri, invoke: async (fn, { body }) => { apeluri.push([fn, body.document_id]); return raspunsuri.shift() } } }
+  it('cheamă edge-ul cât timp întoarce continua=true, raportează progresul, apoi întoarce citirea finală', async () => {
+    const { apeluri, invoke } = seq([
+      { data: { ok: true, continua: true, felie: 1, din: 3 }, error: null },
+      { data: { ok: true, continua: true, felie: 2, din: 3 }, error: null },
+      { data: { ok: true, continua: true, felie: 3, din: 3 }, error: null },
+      { data: { ok: true, citire_noi: { rezumat: 'gata', felii: 3 } }, error: null },
+    ])
+    const progres = []
+    const r = await rezumaPeFelii(invoke, 1624, { pauza: fara, onRunda: d => progres.push(textProgres(d)) })
+    expect(r.ok).toBe(true); expect(r.data.citire_noi.rezumat).toBe('gata')
+    expect(apeluri.length).toBe(4); expect(apeluri.every(([fn, id]) => fn === 'ofertare-document-nou-citeste' && id === 1624)).toBe(true)
+    expect(progres).toEqual(['⏳ rezumat felia 2/3…', '⏳ rezumat felia 3/3…', '⏳ rezumat 3/3 — sinteză…'])
+  })
+  it('o felie care depășește timpul se reia (starea rămâne pe server), apoi continuă', async () => {
+    const { apeluri, invoke } = seq([
+      { data: { ok: true, continua: true, felie: 1, din: 2 }, error: null },
+      { data: { error: 'O felie a rezumatului a depășit timpul.', cod: 'timeout_citire' }, error: null },
+      { data: { ok: true, continua: true, felie: 2, din: 2 }, error: null },
+      { data: { ok: true, citire_noi: { rezumat: 'gata' } }, error: null },
+    ])
+    const r = await rezumaPeFelii(invoke, 1, { pauza: fara })
+    expect(r.ok).toBe(true); expect(apeluri.length).toBe(4)
+  })
+  it('trei erori la rând → se oprește cu mesajul ultimei erori', async () => {
+    let n = 0
+    const invoke = async () => { n++; return { data: { error: 'Claude: overloaded' }, error: null } }
+    const r = await rezumaPeFelii(invoke, 1, { pauza: fara })
+    expect(r).toEqual({ ok: false, eroare: 'Claude: overloaded' }); expect(n).toBe(3)
+  })
+  it('sursă schimbată / citit între timp / 403 → terminal, fără reîncercări', async () => {
+    for (const cod of ['sursa_schimbata', 'citit_intre_timp']) {
+      let n = 0
+      const invoke = async () => { n++; return { data: null, error: { message: 'x', context: { status: 409, clone() { return this }, json: async () => ({ error: 'm-' + cod, cod }) } } } }
+      const r = await rezumaPeFelii(invoke, 1, { pauza: fara })
+      expect(r).toEqual({ ok: false, eroare: 'm-' + cod }); expect(n).toBe(1)
+    }
+    let n = 0
+    const invoke = async () => { n++; return { data: null, error: { message: 'nu ai acces', context: { status: 403, json: async () => { throw new Error('x') } } } } }
+    const r = await rezumaPeFelii(invoke, 1, { pauza: fara })
+    expect(r.ok).toBe(false); expect(n).toBe(1)
+  })
+  it('plafonul de runde → mesaj care spune că apăsarea din nou continuă de unde a rămas', async () => {
+    const invoke = async () => ({ data: { ok: true, continua: true, felie: 1, din: 50 }, error: null })
+    const r = await rezumaPeFelii(invoke, 1, { pauza: fara, maxRunde: 3 })
+    expect(r.ok).toBe(false); expect(r.eroare).toMatch(/continuă de unde a rămas/)
+  })
+  it('citesteCuAi raportează progresul ambelor faze (citire pe felii, apoi rezumat pe felii)', async () => {
+    const raspunsuri = {
+      'ofertare-ingest-doc': [{ data: { continua: true }, error: null }, { data: { continua: false }, error: null }],
+      'ofertare-document-nou-citeste': [{ data: { ok: true, continua: true, felie: 1, din: 2 }, error: null }, { data: { ok: true, citire_noi: { rezumat: 'r' } }, error: null }],
+    }
+    const invoke = async (fn) => raspunsuri[fn].shift()
+    const progres = []
+    const r = await citesteCuAi(invoke, 1, 'neprocesat', { pauza: fara, onProgres: t => progres.push(t) })
+    expect(r.ok).toBe(true)
+    expect(progres).toEqual(['⏳ citesc pe felii (1)…', '⏳ citesc pe felii (2)…', '⏳ rezumat felia 2/2…'])
+  })
+})

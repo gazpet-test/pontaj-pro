@@ -57,21 +57,40 @@ export async function citestePeFelii(invoke, docId, { pauza = ms => new Promise(
 export const MESAJ_POARTA = 'Documentul nu e citit încă, iar citirea lui costă: o pornește doar ownerul sau responsabilul licitației ' +
   '(«🤖 Citește cu AI» aici sau «Procesează» în Documentație). După ce e citit, rezumatul îl poate face oricine.'
 
-// Tot traseul butonului, testat cap-coadă: necitit → pe felii (poarta pe server) → rezumat din text. Întoarce {ok, data} sau {ok:false, eroare, poarta?}.
+// Tot traseul butonului, testat cap-coadă: necitit → pe felii (poarta pe server) → rezumat din text, tot pe felii. Întoarce {ok, data} sau
+// {ok:false, eroare, poarta?}. opt.onProgres(text) = eticheta butonului în timpul lucrului.
 export async function citesteCuAi(invoke, docId, status, opt = {}) {
   if (trebuieCititPeFelii(status)) {
-    const r = await citestePeFelii(invoke, docId, opt)
+    const r = await citestePeFelii(invoke, docId, { ...opt, onRunda: k => opt.onProgres?.(`⏳ citesc pe felii (${k})…`) })
     if (r.poarta) return { ok: false, poarta: true, eroare: MESAJ_POARTA }
     if (!r.ok) return { ok: false, eroare: r.eroare }
   }
-  const { data, error } = await invoke('ofertare-document-nou-citeste', { body: { document_id: docId } })
-  if (error || data?.error) {
-    const corp = await corpEroare(error, data)
-    // poarta pe server (06.10): PDF-ul întreg fără text extras îl pornește doar owner / responsabil
-    if (corp?.cod === 'poarta_cheltuiala') return { ok: false, poarta: true, eroare: MESAJ_POARTA }
-    return { ok: false, eroare: mesajEroareCitire(error, corp) }
+  return rezumaPeFelii(invoke, docId, { pauza: opt.pauza, maxRunde: opt.maxRundeRezumat, onRunda: d => opt.onProgres?.(textProgres(d)) })
+}
+
+// Rezumatul PE FELII (Răcari 06.10, varianta A aleasă de Răzvan): edge-ul citește câte o felie de text pe apel și întoarce
+// {continua, felie, din}; starea feliilor gata rămâne pe server, deci o eroare trecătoare (timp depășit, 504, rețea) se reia de
+// unde a rămas. Terminale: poarta pe cheltuială, sursă schimbată, citit între timp, 401 / 403 / 404.
+const TERMINAL = ['poarta_cheltuiala', 'sursa_schimbata', 'citit_intre_timp']
+export const textProgres = d => (d?.din && d?.felie ? (d.felie >= d.din ? `⏳ rezumat ${d.din}/${d.din} — sinteză…` : `⏳ rezumat felia ${d.felie + 1}/${d.din}…`) : '⏳ citesc…')
+export async function rezumaPeFelii(invoke, docId, { pauza = ms => new Promise(r => setTimeout(r, ms)), maxRunde = 80, onRunda } = {}) {
+  let esuate = 0
+  for (let runda = 0; runda < maxRunde; runda++) {
+    const { data, error } = await invoke('ofertare-document-nou-citeste', { body: { document_id: docId } })
+    if (error || data?.error) {
+      const corp = await corpEroare(error, data)
+      // poarta pe server (06.10): PDF-ul întreg fără text extras îl pornește doar owner / responsabil
+      if (corp?.cod === 'poarta_cheltuiala') return { ok: false, poarta: true, eroare: MESAJ_POARTA }
+      if (TERMINAL.includes(corp?.cod) || [401, 403, 404].includes(error?.context?.status)) return { ok: false, eroare: mesajEroareCitire(error, corp) }
+      if (++esuate > 2) return { ok: false, eroare: mesajEroareCitire(error, corp) }
+      await pauza(5000)
+      continue
+    }
+    esuate = 0
+    if (data?.continua) { onRunda?.(data); continue }
+    return { ok: true, data }
   }
-  return { ok: true, data }
+  return { ok: false, eroare: `Rezumatul pe felii nu s-a terminat după ${maxRunde} runde — apasă din nou «Citește cu AI» (continuă de unde a rămas).` }
 }
 
 // supabase-js întoarce data = null la un răspuns non-2xx; mesajul de business e în corpul Response-ului (error.context).
@@ -92,5 +111,20 @@ export function avertismentCitire(c) {
   if (m.includes('lista_plafonata')) parti.push(`listele au fost plafonate (AI-ul a găsit ${fmtNr(c.total_modificari)} modificări și ${fmtNr(c.total_intrebari)} întrebări; s-au păstrat primele ${fmtNr((c.modificari || []).length)} / ${fmtNr((c.intrebari_raspunse || []).length)})`)
   if (m.includes('rezumat_taiat')) parti.push('rezumatul a fost scurtat')
   if (m.includes('raspuns_ai_taiat')) parti.push('răspunsul AI a atins limita de lungime')
+  // Copilot conv. 3 (06.10, NO-GO pe d459447): tăietură între felii în afara unei întrebări / termene diferite în același document
+  if (m.includes('granita_nesigura')) parti.push(`documentul a fost citit pe ${fmtNr(c.felii)} felii și cel puțin o tăietură n-a căzut la începutul unei întrebări — o pereche întrebare–răspuns sau o modificare de la graniță poate fi ruptă`)
+  if (m.includes('conflict_termen')) parti.push(`documentul pomenește termene diferite (${listaTermene(c.termene, c.felii > 1)}) — AI-ul nu a ales unul; verifică în document care e cel valabil`)
+  // Copilot conv. 3 (runda 3): termen fără dovadă mecanică (citatul nu e în text / nu conține data / lipsește / e tăiat) sau dată neinterpretabilă
+  const neverif = (c.termene || []).filter(x => x && typeof x === 'object' && x.data && x.verificat === false)
+  const brute = (c.termene || []).filter(x => x && typeof x === 'object' && !x.data)
+  if (m.includes('termen_neverificat') && !m.includes('conflict_termen')) parti.push(`termenul de depunere găsit de AI (${listaTermene(neverif, c.felii > 1)}) nu are o dovadă verificabilă în text — confirmă-l în document`)
+  if (m.includes('termen_neinterpretabil')) parti.push(`AI-ul a pomenit un termen pe care nu l-am putut citi ca dată (${listaTermene(brute, c.felii > 1)}) — verifică în document`)
+  if (m.length && m.every(x => DE_VERIFICAT.includes(x))) return `De verificat: ${parti.join('; ')}.`
   return `Citire PARȚIALĂ: ${parti.join('; ') || 'sursa incompletă'} — modificările / întrebările pot fi incomplete; verifică documentul original.`
 }
+const fmtData = s => (/^\d{4}-\d{2}-\d{2}$/.test(String(s)) ? String(s).split('-').reverse().join('.') : String(s))
+const scurt = (s, n = 90) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t }
+const DE_VERIFICAT = ['conflict_termen', 'termen_neverificat', 'termen_neinterpretabil']   // motive care cer verificare, nu înseamnă text lipsă
+const listaTermene = (t, cuFelia) => (Array.isArray(t) ? t : []).map(x => (x && typeof x === 'object'
+  ? `${x.data ? fmtData(x.data) : x.data_bruta ? `„${scurt(x.data_bruta, 40)}”` : 'fără dată'}${x.verificat === false && x.data ? ' (neverificat)' : ''}${cuFelia && x.felie ? ` — felia ${x.felie}` : ''}${x.citat ? ` «${scurt(x.citat)}»` : ''}`
+  : fmtData(x))).join(', ') || '—'

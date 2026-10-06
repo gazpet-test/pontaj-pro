@@ -3374,6 +3374,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const [docs, setDocs] = useState(null)
   const [toate, setToate] = useState([])      // toată Documentația licitației — ca să știm ce e deja citit
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
+  const [progres, setProgres] = useState('')  // eticheta butonului în timpul citirii / rezumatului pe felii
   const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
   const [veghe, setVeghe] = useState(null)    // raportul ultimei verificări manuale
@@ -3418,8 +3419,9 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     // drept de cheltuială (poarta owner/responsabil) primesc mesaj pe card, FĂRĂ apel AI (Copilot P1: nu mai cad pe PDF întreg).
     // Starea se recitește acum (lista încărcată poate fi veche: documentul poate fi fost citit între timp).
     const { data: st } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('id', d.id).maybeSingle()
-    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? (toate.find(x => x.id === d.id) || d).status_procesare)
-    setBusy(null)
+    setProgres('')
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? (toate.find(x => x.id === d.id) || d).status_procesare, { onProgres: setProgres })
+    setBusy(null); setProgres('')
     if (!r.ok) {
       setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
       load()   // citirea pe felii poate fi reușit înainte de eșec: starea / textul se reîmprospătează
@@ -3490,11 +3492,11 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                 {sc?.citit && <span style={{ fontSize:11.5, fontWeight:800, color:G.green, border:`1px solid ${G.green}55`, borderRadius:6, padding:'1px 7px' }}>✅ Deja citit în Documentație{sc.bucati ? ` (spart în ${sc.bucati} bucăți)` : ''}</span>}
                 {sc?.citit ? (
                   <button style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5, color:G.dim }} disabled={ph || !!busy} onClick={() => citeste(d)}
-                    title="E deja citit în Documentație — recitește-l aici doar dacă vrei rezumatul de document nou">{busy === d.id ? '⏳ citesc…' : 'recitește'}</button>
+                    title="E deja citit în Documentație — recitește-l aici doar dacă vrei rezumatul de document nou">{busy === d.id ? (progres || '⏳ citesc…') : 'recitește'}</button>
                 ) :
                 <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1, cursor: ph || busy ? 'default' : 'pointer' }}
                   disabled={ph || ARHIVA_DOC_RE.test(d.nume_original || '') || !!busy} onClick={() => citeste(d)} title={ph ? 'Fișierul nu e în platformă — urcă-l întâi din Documente' : ARHIVA_DOC_RE.test(d.nume_original || '') ? MESAJ_ARHIVA : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): tip, rezumat, modificări, întrebări răspunse'}>
-                  {busy === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 Citește cu AI'}
+                  {busy === d.id ? (progres || '⏳ citesc…') : c ? '🤖 recitește' : '🤖 Citește cu AI'}
                 </button>}
                 {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtDataScurt(c.citit_la)}</span>}
                 {c?.termen_nou && <span style={{ fontSize:11.5, fontWeight:800, color:G.red }}>⏰ termen nou: {fmtZi(c.termen_nou)}</span>}
