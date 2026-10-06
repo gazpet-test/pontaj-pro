@@ -17,7 +17,7 @@ export function timpRamas(t0: number, acum: number): number {
 export const TEXT_MIN = 500                       // sub atât, textul extras nu e o citire reală (antet, pagină goală)
 export const TEXT_MAX = 400_000                   // plafon de caractere trimise AI-ului din text_extras
 
-export type Sursa = { mod: 'text'; text: string; partial: boolean } | { mod: 'pdf' }
+export type Sursa = { mod: 'text'; text: string; partial: boolean; trunchiat: boolean; lungimeSursa: number } | { mod: 'pdf' }
 
 // Rezumatul AI scris de scrieCitireNoi în text_extras (25.09: documentul citit aici devine „procesat” cu rezumatul ca text) NU e
 // textul documentului — „recitește” pe el ar rezuma rezumatul (review ultracode 06.10, P2). Forma: „DOCUMENT: <nume>\nTip: <tip>…”.
@@ -25,12 +25,41 @@ export const eRezumatAi = (t: string) => /^DOCUMENT: [^\n]*\nTip: /.test(t)
 
 // Textul se folosește doar dacă vine din citirea pe felii / extragere reală: „procesat” sau „partial” (paginile lipsă sunt marcate
 // în text cu NECITITĂ), cel puțin TEXT_MIN caractere și nu e rezumatul AI de mai sus. Altfel PDF-ul rămâne sursa.
+// Copilot conv. 3 (06.10, P1): un text peste TEXT_MAX NU se mai taie tăcut — sursa poartă trunchiat + lungimeSursa, AI-ul e anunțat
+// în prompt (notaSursa), iar citirea se salvează cu sursa_completa = false (provenanta) și apare în UI ca citire PARȚIALĂ.
 export function alegeSursa(row: { status_procesare?: string | null; text_extras?: string | null }): Sursa {
   const t = String(row?.text_extras || '').trim()
   const st = row?.status_procesare
-  if ((st === 'procesat' || st === 'partial') && t.length >= TEXT_MIN && !eRezumatAi(t)) return { mod: 'text', text: t.slice(0, TEXT_MAX), partial: st === 'partial' }
+  if ((st === 'procesat' || st === 'partial') && t.length >= TEXT_MIN && !eRezumatAi(t))
+    return { mod: 'text', text: t.slice(0, TEXT_MAX), partial: st === 'partial', trunchiat: t.length > TEXT_MAX, lungimeSursa: t.length }
   return { mod: 'pdf' }
 }
+
+// Ce i se spune AI-ului despre sursă: incompletitudinea e declarată, nu ascunsă (lipsa dovezii nu devine concluzie negativă).
+export function notaSursa(s: Sursa): string {
+  if (s.mod !== 'text') return ''
+  const n: string[] = []
+  if (s.partial) n.push('Unele pagini NU au putut fi citite (marcate „NECITITĂ”) — nu presupune conținutul lor.')
+  if (s.trunchiat) n.push(`ATENȚIE: primești doar primele ${s.text.length} din ${s.lungimeSursa} de caractere ale documentului — restul NU ți-a fost trimis. ` +
+    'Nu concluziona că o modificare, o întrebare sau un termen lipsește din document; listele tale pot fi incomplete.')
+  return n.length ? ' ' + n.join(' ') : ''
+}
+
+// Proveniența salvată lângă citire_noi: ce sursă, cât din ea, dacă e completă și de ce nu.
+export function provenanta(s: Sursa, sha256: string | null) {
+  if (s.mod !== 'text') return { sursa: 'pdf', sursa_completa: true, motive_incomplet: [] as string[], lungime_sursa: null, lungime_folosita: null, sursa_sha256: null }
+  const motive: string[] = []
+  if (s.partial) motive.push('pagini_necitite')
+  if (s.trunchiat) motive.push('trunchiat')
+  return { sursa: 'text', sursa_completa: motive.length === 0, motive_incomplet: motive, lungime_sursa: s.lungimeSursa, lungime_folosita: s.text.length, sursa_sha256: sha256 }
+}
+
+// Amprenta textului-sursă (SHA-256 hex al text_extras, trim) — scrierea verifică că sursa n-a fost recitită în timpul apelului AI (P2).
+export async function amprentaText(t: string | null | undefined): Promise<string> {
+  const b = new TextEncoder().encode(String(t || '').trim())
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', b)), (x) => x.toString(16).padStart(2, '0')).join('')
+}
+export const MESAJ_SURSA_SCHIMBATA = 'Documentul a fost recitit / reprocesat în timpul citirii cu AI — rezumatul vechi NU s-a salvat. Apasă din nou «Citește cu AI».'
 
 // Poarta pe cheltuială și pe server (review ultracode 06.10, P2: P1 era reparat doar în UI — un bundle vechi din cache sau un apel
 // direct trecea): PDF-ul întreg (apel AI scump, până la 130 s) îl pornește doar ownerul, responsabilul licitației sau rutina internă,

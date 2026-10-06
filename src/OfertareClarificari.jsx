@@ -15,7 +15,7 @@ import { imageToPdf } from './CitesteOricePanel.jsx'
 import PuncteClarificare from './OfertareClarificariPuncte.jsx'
 import TemeiuriClarificare from './OfertareTemeiuri.jsx'
 import { formatCitare, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.js'
-import { mesajFaraText, citesteCuAi } from './ofertareCitireDoc.js'
+import { mesajFaraText, citesteCuAi, avertismentCitire } from './ofertareCitireDoc.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 
@@ -506,6 +506,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                 {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color: eroareCitire[d.id].poarta ? G.yellow : G.red }}>{eroareCitire[d.id].poarta ? '🔒 ' : '⚠️ Citirea cu AI a eșuat: '}{eroareCitire[d.id].t}</div>}
                 {/* key: după o citire (citit_la / stare noi) panoul se reîncarcă, altfel rămânea „Încă necitit” */}
                 {!ph && <TextOriginalToggle key={`${d.id}:${c?.citit_la || ''}:${d.status_procesare || ''}`} docId={d.id} nume={d.nume_original} />}
+                {avertismentCitire(c) && <div style={{ marginTop:7, fontSize:12, color:G.yellow }}>⚠️ {avertismentCitire(c)}</div>}
                 {c && (
                   <details style={{ marginTop:8, fontSize:12.5 }}>
                     <summary style={{ cursor:'pointer', fontWeight:700, color:G.muted }}>🤖 Rezumatul citirii{Array.isArray(c.intrebari_raspunse) && c.intrebari_raspunse.length ? ` · ${c.intrebari_raspunse.length} întrebări răspunse` : ''}{Array.isArray(c.modificari) && c.modificari.length ? ` · ${c.modificari.length} modificări` : ''}</summary>

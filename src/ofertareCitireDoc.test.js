@@ -148,3 +148,17 @@ describe('citesteCuAi — poarta pe server și corpul erorilor non-2xx (review u
     expect(r).toEqual({ ok: false, eroare: MESAJ_TIMEOUT_UI })
   })
 })
+
+import { avertismentCitire } from './ofertareCitireDoc.js'
+describe('avertismentCitire — citirea pe sursă incompletă nu se arată ca rezultat complet (Copilot conv. 3, P1)', () => {
+  it('trunchiat → PARȚIALĂ cu lungimile; pagini necitite → PARȚIALĂ', () => {
+    const a = avertismentCitire({ sursa_completa: false, motive_incomplet: ['trunchiat'], lungime_folosita: 400000, lungime_sursa: 900032 })
+    expect(a).toMatch(/^Citire PARȚIALĂ/); expect(a).toMatch(/400\.000 din 900\.032/)
+    expect(avertismentCitire({ sursa_completa: false, motive_incomplet: ['pagini_necitite'] })).toMatch(/pagini nu au putut fi citite/)
+  })
+  it('completă sau citire veche fără câmp → fără avertisment', () => {
+    expect(avertismentCitire({ sursa_completa: true, motive_incomplet: [] })).toBeNull()
+    expect(avertismentCitire({ rezumat: 'vechi' })).toBeNull()
+    expect(avertismentCitire(null)).toBeNull()
+  })
+})

@@ -23,7 +23,7 @@ import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem, ARHIVA_DOC_RE, MESAJ_ARHIVA } from './OfertareClarificari.jsx'
-import { citesteCuAi } from './ofertareCitireDoc.js'
+import { citesteCuAi, avertismentCitire } from './ofertareCitireDoc.js'
 import GarantieSection, { useSemnalGarantie } from './OfertareGarantie.jsx'
 import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.js'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
@@ -3504,7 +3504,9 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                 </div>
               )}
               {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color: eroareCitire[d.id].poarta ? G.yellow : G.red }}>{eroareCitire[d.id].poarta ? '🔒 ' : '⚠️ Citirea cu AI a eșuat: '}{eroareCitire[d.id].t}</div>}
-              {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
+              {/* key: după o citire (citit_la / stare noi) panoul se reîncarcă, altfel rămânea „Încă necitit” (Copilot conv. 3, P3) */}
+              {!ph && <TextOriginalToggle key={`${d.id}:${c?.citit_la || ''}:${(toate.find(x => x.id === d.id) || d).status_procesare || ''}`} docId={d.id} nume={d.nume_original} />}
+              {avertismentCitire(c) && <div style={{ marginTop:7, fontSize:12, color:G.yellow }}>⚠️ {avertismentCitire(c)}</div>}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
                   {/* Lecția Mânăstirea 05.10.2026: un „citat” luat din rezumat a ajuns într-o clarificare oficială și a trebuit înlocuit după verificarea pe PDF. */}

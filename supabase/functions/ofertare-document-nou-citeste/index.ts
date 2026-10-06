@@ -21,7 +21,7 @@
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { scrieCitireNoi } from './scriere.ts'
-import { alegeSursa, eTimeout, MESAJ_POARTA_PDF, mesajTimeout, poateCitiPdf, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, eTimeout, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -77,7 +77,7 @@ Deno.serve(async (req: Request) => {
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
   const id = Number(body.document_id)
   if (!id) return json({ error: 'document_id lipsă' }, 400)
-  const { data: row } = await db.from('ofertare_documente_atribuire').select('id, licitatie_id, nume_original, fisier_path, tip, analiza, status_procesare, text_extras').eq('id', id).maybeSingle()
+  const { data: row } = await db.from('ofertare_documente_atribuire').select('id, licitatie_id, nume_original, fisier_path, tip, analiza, status_procesare, text_extras, procesat_la').eq('id', id).maybeSingle()
   if (!row) return json({ error: 'documentul nu există' }, 404)
   if (!row.fisier_path || String(row.fisier_path).includes('/neincarcat/'))
     return json({ error: 'Documentul nu a putut fi adus automat din SEAP — urcă-l din tab-ul Documente („Urcă fișiere”), apoi citește-l.' })
@@ -93,9 +93,10 @@ Deno.serve(async (req: Request) => {
       return json({ error: MESAJ_POARTA_PDF, cod: 'poarta_cheltuiala' }, 403)
   }
   let continut: unknown[]
+  // amprenta sursei de dinainte de AI: scrierea refuză dacă documentul a fost recitit între timp (scriere.ts)
+  const sha = sursa.mod === 'text' ? await amprentaText(row.text_extras) : null
   if (sursa.mod === 'text') {
-    const nota = sursa.partial ? ' Unele pagini NU au putut fi citite (marcate „NECITITĂ”) — nu presupune conținutul lor.' : ''
-    continut = [{ type: 'text', text: `TEXTUL DOCUMENTULUI „${row.nume_original}” (extras automat, pe felii; poate conține erori de OCR).${nota}\n\n${sursa.text}` },
+    continut = [{ type: 'text', text: `TEXTUL DOCUMENTULUI „${row.nume_original}” (extras automat, pe felii; poate conține erori de OCR).${notaSursa(sursa)}\n\n${sursa.text}` },
       { type: 'text', text: PROMPT }]
   } else {
     const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
@@ -140,7 +141,7 @@ Deno.serve(async (req: Request) => {
     termen_nou: /^\d{4}-\d{2}-\d{2}$/.test(String(j.termen_nou || '')) ? j.termen_nou : null,
     data_document: /^\d{4}-\d{2}-\d{2}$/.test(String(j.data_document || '')) ? j.data_document : null,
     model: MODEL, citit_la: new Date().toISOString(), citit_de: cititDe, tokens_in: tokIn, tokens_out: tokOut,
-    sursa: sursa.mod,
+    ...provenanta(sursa, sha),
   }
   // 25.09.2026: dacă documentul nu era citit (neprocesat/eroare, fără text), citirea de aici îl face „procesat"
   // cu text_extras = rezumatul + modificările + Q&A, ca Rezumatul să nu-l mai numere la „rămase de citit".
@@ -149,7 +150,9 @@ Deno.serve(async (req: Request) => {
   // dispărea). Acum: se RECITEȘTE `analiza` chiar înainte de scriere, se înlocuiește DOAR cheia proprie (citire_noi) și se scrie
   // compare-and-set pe analiza->citire_ai->>rev (ca /api/plansa-felii și ofertare-plansa-citeste: orice scriere a cheilor serverului schimbă
   // rev-ul); la conflict se reface peste starea nouă (max. 3 încercări), apoi eroare explicită — nimic suprascris tăcut.
-  const { upErr, scris } = await scrieCitireNoi(db, id, citire, row.nume_original)
+  const { upErr, scris, stale } = await scrieCitireNoi(db, id, citire, row.nume_original,
+    { status: row.status_procesare ?? null, procesat_la: row.procesat_la ?? null, sha256: sha, fisier_path: row.fisier_path })
+  if (stale) return json({ error: MESAJ_SURSA_SCHIMBATA, cod: 'sursa_schimbata' }, 409)
   if (upErr) return json({ error: 'update: ' + upErr.message })
   if (!scris) return json({ error: 'documentul e scris simultan din altă parte (citire de planșă / transfer) — reîncearcă; nimic nu s-a suprascris' }, 409)
 

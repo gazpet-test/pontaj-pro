@@ -79,3 +79,15 @@ export async function corpEroare(error, data) {
   if (data || !error?.context || typeof error.context.json !== 'function') return data
   try { return await (typeof error.context.clone === 'function' ? error.context.clone() : error.context).json() } catch { return data }
 }
+
+// Copilot conv. 3 (06.10, P1): o citire făcută pe o sursă incompletă (text tăiat la plafon / pagini necitite) se arată ca PARȚIALĂ,
+// nu ca rezultat complet — listele de modificări / întrebări pot lipsi. Citirile vechi (fără câmp) rămân fără avertisment.
+const fmtNr = n => Number(n || 0).toLocaleString('ro-RO')
+export function avertismentCitire(c) {
+  if (!c || c.sursa_completa !== false) return null
+  const m = Array.isArray(c.motive_incomplet) ? c.motive_incomplet : []
+  const parti = []
+  if (m.includes('trunchiat')) parti.push(`AI-ul a primit doar primele ${fmtNr(c.lungime_folosita)} din ${fmtNr(c.lungime_sursa)} de caractere`)
+  if (m.includes('pagini_necitite')) parti.push('unele pagini nu au putut fi citite')
+  return `Citire PARȚIALĂ: ${parti.join('; ') || 'sursa incompletă'} — modificările / întrebările pot fi incomplete; verifică documentul original.`
+}

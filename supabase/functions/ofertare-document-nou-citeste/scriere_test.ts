@@ -3,6 +3,7 @@
 // CAS”): o citire de planșă / un transfer terminat între citirea documentului și scriere NU mai e suprascris (transfer_cantitati rămâne).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import { scrieCitireNoi } from './scriere.ts'
+import { amprentaText } from './sursa.ts'
 
 const cale = (r: any, c: string) => c.split(/->>?/).reduce((v: any, k) => (v == null ? undefined : v[k]), r)
 // client PostgREST simulat: select / update cu filtrele eq / is pe căi JSON; `inainteDeUpdate` = scrierea concurentă (o dată)
@@ -49,4 +50,29 @@ Deno.test('reparația rundei 1: document fără citire_ai (rev null) — scris o
   const r2 = await scrieCitireNoi(mereu, 2, CITIRE, 'X.pdf')
   assertFalse(r2.scris)
   assertEquals([b.analiza.citire_noi, b.analiza.transfer_cantitati], [undefined, { id: 'T' }])
+})
+
+// Copilot conv. 3 (06.10, P2): sursa recitită / reprocesată în timpul apelului AI → nimic scris (stale), nu rezumat vechi peste text nou.
+Deno.test('sursa neschimbată → scris; text schimbat între citire și scriere → stale, nimic scris', async () => {
+  const baza = () => ({ id: 9, status_procesare: 'procesat', procesat_la: '2026-10-06T10:00:00+00:00', fisier_path: 'L/a.pdf', text_extras: 'TEXT V1', analiza: {} })
+  const r1: any = baza()
+  const am = { status: 'procesat', procesat_la: '2026-10-06T10:00:00+00:00', sha256: await amprentaText('TEXT V1'), fisier_path: 'L/a.pdf' }
+  const ok = await scrieCitireNoi(db(r1), 9, CITIRE, 'a.pdf', am)
+  assert(ok.scris && !ok.stale)
+  const r2: any = { ...baza(), text_extras: 'TEXT V2 (recitit)' }
+  const st = await scrieCitireNoi(db(r2), 9, CITIRE, 'a.pdf', am)
+  assert(st.stale && !st.scris)
+  assertEquals(r2.analiza, {}, 'rezumatul vechi NU s-a scris')
+})
+Deno.test('reprocesare pornită exact între recitire și UPDATE (procesat_la / stare noi) → UPDATE-ul condiționat nu potrivește, apoi stale', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', text_extras: 'TEXT', analiza: {} }
+  const am = { status: 'procesat', procesat_la: 'T1', sha256: await amprentaText('TEXT'), fisier_path: 'L/a.pdf' }
+  const res = await scrieCitireNoi(db(r, () => { r.status_procesare = 'in_lucru'; r.procesat_la = 'T2' }), 9, CITIRE, 'a.pdf', am)
+  assert(!res.scris && res.stale)
+  assertEquals(r.analiza, {})
+})
+Deno.test('fără amprentă (apel vechi) → comportamentul de dinainte, neschimbat', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', text_extras: 'x', analiza: {} }
+  const res = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf')
+  assert(res.scris && !res.stale)
 })

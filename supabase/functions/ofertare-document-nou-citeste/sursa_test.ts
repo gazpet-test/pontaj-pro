@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none --no-lock -A supabase/functions/ofertare-document-nou-citeste/sursa_test.ts
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { alegeSursa, BUGET_MS, eRezumatAi, eTimeout, MESAJ_TIMEOUT, MESAJ_TIMEOUT_TEXT, mesajTimeout, MIN_AI_MS, poateCitiPdf, TEXT_MAX, TEXT_MIN, TIMEOUT_MS, timpRamas } from './sursa.ts'
+import { alegeSursa, amprentaText, BUGET_MS, eRezumatAi, eTimeout, MESAJ_TIMEOUT, MESAJ_TIMEOUT_TEXT, mesajTimeout, MIN_AI_MS, notaSursa, poateCitiPdf, provenanta, TEXT_MAX, TEXT_MIN, TIMEOUT_MS, timpRamas } from './sursa.ts'
 import { scrieCitireNoi } from './scriere.ts'
 
 Deno.test('document procesat cu text real → citește textul, nu PDF-ul', () => {
@@ -98,4 +98,31 @@ Deno.test('mesajul de timp depășit depinde de sursă: pe text nu trimite la «
   assertEquals(mesajTimeout('pdf'), MESAJ_TIMEOUT)
   assertEquals(mesajTimeout('text'), MESAJ_TIMEOUT_TEXT)
   assert(!MESAJ_TIMEOUT_TEXT.includes('Procesează'))
+})
+
+// Copilot conv. 3 (06.10, P1): o clarificare aflată DUPĂ TEXT_MAX nu poate dispărea într-o citire declarată completă.
+Deno.test('text peste TEXT_MAX: clarificarea de după plafon nu e trimisă, dar citirea e declarată PARȚIALĂ, iar AI-ul e anunțat', async () => {
+  const tarzie = 'CLARIFICARE-TARZIE: termenul de depunere se mută la 2026-11-30'
+  const text = '⟦PAGINA 1⟧\n' + 'a'.repeat(TEXT_MAX) + '\n⟦PAGINA 900⟧\n' + tarzie
+  const s = alegeSursa({ status_procesare: 'procesat', text_extras: text })
+  assert(s.mod === 'text')
+  assert(!s.text.includes(tarzie))                                  // textul trimis nu o conține…
+  assert(s.trunchiat && s.lungimeSursa === text.length)
+  const p = provenanta(s, await amprentaText(text))
+  assertEquals(p.sursa_completa, false)                             // …deci rezultatul NU e declarat complet
+  assertEquals(p.motive_incomplet, ['trunchiat'])
+  assertEquals([p.lungime_sursa, p.lungime_folosita], [text.length, TEXT_MAX])
+  assert(/^[0-9a-f]{64}$/.test(String(p.sursa_sha256)))
+  assert(notaSursa(s).includes(`primele ${TEXT_MAX} din ${text.length}`))
+})
+
+Deno.test('proveniența: text complet = completă; partial = pagini_necitite; PDF = sursa pdf', async () => {
+  const c = alegeSursa({ status_procesare: 'procesat', text_extras: 'x'.repeat(TEXT_MIN) })
+  const pc = provenanta(c, 'h')
+  assertEquals([pc.sursa, pc.sursa_completa, pc.motive_incomplet.length, pc.lungime_folosita], ['text', true, 0, TEXT_MIN])
+  assertEquals(notaSursa(c), '')
+  const pp = provenanta(alegeSursa({ status_procesare: 'partial', text_extras: 'y'.repeat(TEXT_MIN) }), 'h')
+  assertEquals([pp.sursa_completa, pp.motive_incomplet], [false, ['pagini_necitite']])
+  assertEquals(provenanta({ mod: 'pdf' }, null).sursa, 'pdf')
+  assertEquals(await amprentaText('  abc \n'), await amprentaText('abc'))
 })
