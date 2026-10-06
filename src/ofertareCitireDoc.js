@@ -114,10 +114,17 @@ export function avertismentCitire(c) {
   // Copilot conv. 3 (06.10, NO-GO pe d459447): tăietură între felii în afara unei întrebări / termene diferite în același document
   if (m.includes('granita_nesigura')) parti.push(`documentul a fost citit pe ${fmtNr(c.felii)} felii și cel puțin o tăietură n-a căzut la începutul unei întrebări — o pereche întrebare–răspuns sau o modificare de la graniță poate fi ruptă`)
   if (m.includes('conflict_termen')) parti.push(`documentul pomenește termene diferite (${listaTermene(c.termene, c.felii > 1)}) — AI-ul nu a ales unul; verifică în document care e cel valabil`)
-  if (m.length && m.every(x => x === 'conflict_termen')) return `De verificat: ${parti.join('; ')}.`
+  // Copilot conv. 3 (runda 3): termen fără dovadă mecanică (citatul nu e în text / nu conține data / lipsește / e tăiat) sau dată neinterpretabilă
+  const neverif = (c.termene || []).filter(x => x && typeof x === 'object' && x.data && x.verificat === false)
+  const brute = (c.termene || []).filter(x => x && typeof x === 'object' && !x.data)
+  if (m.includes('termen_neverificat') && !m.includes('conflict_termen')) parti.push(`termenul de depunere găsit de AI (${listaTermene(neverif, c.felii > 1)}) nu are o dovadă verificabilă în text — confirmă-l în document`)
+  if (m.includes('termen_neinterpretabil')) parti.push(`AI-ul a pomenit un termen pe care nu l-am putut citi ca dată (${listaTermene(brute, c.felii > 1)}) — verifică în document`)
+  if (m.length && m.every(x => DE_VERIFICAT.includes(x))) return `De verificat: ${parti.join('; ')}.`
   return `Citire PARȚIALĂ: ${parti.join('; ') || 'sursa incompletă'} — modificările / întrebările pot fi incomplete; verifică documentul original.`
 }
 const fmtData = s => (/^\d{4}-\d{2}-\d{2}$/.test(String(s)) ? String(s).split('-').reverse().join('.') : String(s))
 const scurt = (s, n = 90) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t }
+const DE_VERIFICAT = ['conflict_termen', 'termen_neverificat', 'termen_neinterpretabil']   // motive care cer verificare, nu înseamnă text lipsă
 const listaTermene = (t, cuFelia) => (Array.isArray(t) ? t : []).map(x => (x && typeof x === 'object'
-  ? `${fmtData(x.data)}${cuFelia && x.felie ? ` — felia ${x.felie}` : ''}${x.citat ? ` «${scurt(x.citat)}»` : ''}` : fmtData(x))).join(', ') || '—'
+  ? `${x.data ? fmtData(x.data) : `„${scurt(x.data_bruta, 40)}”`}${x.verificat === false && x.data ? ' (neverificat)' : ''}${cuFelia && x.felie ? ` — felia ${x.felie}` : ''}${x.citat ? ` «${scurt(x.citat)}»` : ''}`
+  : fmtData(x))).join(', ') || '—'

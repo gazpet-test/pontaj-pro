@@ -53,32 +53,75 @@ export function imparteCuGranite(text: string, max = MAX_FELIE): { felii: string
 export const imparteInFelii = (text: string, max = MAX_FELIE): string[] => imparteCuGranite(text, max).felii
 
 const DATA = /^\d{4}-\d{2}-\d{2}$/
-export type Termen = { data: string; citat: string }
+// Un termen: data (ISO sau null dacă n-am putut-o interpreta — atunci data_bruta păstrează ce a scris AI-ul), citatul, și dacă e VERIFICAT
+// mecanic. Copilot conv. 3 (NO-GO runda 3, P1 + P2): un termen critic nu devine „verde” pe cuvântul AI-ului — verificat = citatul există
+// (substring normalizat) în textul feliei citite ȘI conține chiar data respectivă ȘI n-a fost tăiat la stocare. Altfel rămâne în listă,
+// marcat neverificat, iar citirea primește „termen_neverificat” / „termen_neinterpretabil” (citire_completa = false, „De verificat” în UI).
+export type Termen = { data: string | null; citat: string; verificat: boolean; data_bruta?: string; citat_trunchiat?: boolean; lungime_citat?: number }
 export type Parte = {
   tip: string; rezumat: string; modificari: any[]; intrebari_raspunse: any[]
   termene: Termen[]; data_document: string | null; motive: string[]; tokens_in: number; tokens_out: number
 }
 const TIPURI = ['raspuns_clarificare', 'erata', 'document_nou', 'altul']
+export const MAX_CITAT = 1000
+const MIN_CITAT = 25          // un „citat” de câteva caractere (doar data) nu dovedește că e termenul de DEPUNERE
+const LUNI = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie']
+const faraDiacritice = (x: unknown) => String(x ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+const normText = (x: unknown) => faraDiacritice(x).replace(/[^a-z0-9]+/g, ' ').trim()
+function iso(an: number, luna: number, zi: number): string | null {
+  const d = new Date(Date.UTC(an, luna - 1, zi))
+  if (d.getUTCFullYear() !== an || d.getUTCMonth() !== luna - 1 || d.getUTCDate() !== zi) return null
+  return `${an}-${String(luna).padStart(2, '0')}-${String(zi).padStart(2, '0')}`
+}
+// Data scrisă de AI → ISO: 2026-10-30, 30.10.2026 / 30/10/2026 / 30-10-2026, „30 octombrie 2026”. Altceva → null (NU dispare: data_bruta).
+export function normalizeazaData(x: unknown): string | null {
+  const s = faraDiacritice(x).trim()
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (m) return iso(+m[1], +m[2], +m[3])
+  m = s.match(/^(\d{1,2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{4})$/)
+  if (m) return iso(+m[3], +m[2], +m[1])
+  m = s.match(/^(\d{1,2})\s+([a-z]+)\s+(\d{4})$/)
+  if (m && LUNI.includes(m[2])) return iso(+m[3], LUNI.indexOf(m[2]) + 1, +m[1])
+  return null
+}
+// Toate datele scrise explicit într-un text (pentru a verifica că citatul conține chiar data termenului).
+export function dateDinText(t: unknown): string[] {
+  const s = faraDiacritice(t), r: string[] = []
+  for (const m of s.matchAll(/(\d{4})-(\d{2})-(\d{2})/g)) { const d = iso(+m[1], +m[2], +m[3]); if (d) r.push(d) }
+  for (const m of s.matchAll(/(\d{1,2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{4})/g)) { const d = iso(+m[3], +m[2], +m[1]); if (d) r.push(d) }
+  for (const m of s.matchAll(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/g)) if (LUNI.includes(m[2])) { const d = iso(+m[3], LUNI.indexOf(m[2]) + 1, +m[1]); if (d) r.push(d) }
+  return r
+}
 
 // Termenele unei felii (Copilot conv. 3, NO-GO P1 runda 2): AI-ul întoarce LISTA mențiunilor unui termen de depunere stabilit / modificat
 // în fragment, în ordinea textului, cu citatul — nu un singur scalar, ca „30.10 apoi 25.10” în ACEEAȘI felie (sau la n = 1) să se vadă
-// drept conflict. Răspunsurile vechi (doar termen_nou) rămân citite ca listă de un element. Datele invalide se ignoră.
-export function termeneDinAi(j: any): Termen[] {
-  const lista = Array.isArray(j?.termene) ? j.termene : []
-  const t = lista.map((x: any) => ({ data: String(x && typeof x === 'object' ? x.data ?? '' : x ?? ''), citat: String(x?.citat ?? '').slice(0, 400) }))
-    .filter((x: Termen) => DATA.test(x.data))
-  if (!t.length && DATA.test(String(j?.termen_nou || ''))) t.push({ data: String(j.termen_nou), citat: '' })
-  return t
+// drept conflict. sursa = textul feliei citite (null pe calea PDF: nimic de comparat → neverificat). Nimic nu se aruncă tăcut.
+export function termeneDinAi(j: any, sursa?: string | null): Termen[] {
+  const lista: any[] = Array.isArray(j?.termene) ? [...j.termene] : []
+  if (!lista.length && j?.termen_nou) lista.push({ data: j.termen_nou, citat: '' })   // răspuns vechi: un scalar fără citat → neverificat
+  const sursaNorm = sursa ? normText(sursa) : null
+  return lista.filter((x) => x != null && String(x && typeof x === 'object' ? x.data ?? '' : x).trim() !== '').map((x) => {
+    const brut = String(x && typeof x === 'object' ? x.data ?? '' : x).trim()
+    const citatIntreg = String(x?.citat ?? '').trim()
+    const data = normalizeazaData(brut)
+    const cn = normText(citatIntreg)
+    const trunchiat = citatIntreg.length > MAX_CITAT
+    const verificat = !!data && !trunchiat && cn.length >= MIN_CITAT && !!sursaNorm && sursaNorm.includes(cn) && dateDinText(citatIntreg).includes(data)
+    const t: Termen = { data, citat: citatIntreg.slice(0, MAX_CITAT), verificat }
+    if (!data) t.data_bruta = brut.slice(0, 100)
+    if (trunchiat) { t.citat_trunchiat = true; t.lungime_citat = citatIntreg.length }
+    return t
+  })
 }
 
 // Răspunsul AI pentru o felie → parte normalizată (liste, date valide, motivul „răspuns tăiat” dacă a atins max_tokens).
-export function parteDinAi(j: any, stopReason: string | null | undefined, tokIn: number, tokOut: number): Parte {
+export function parteDinAi(j: any, stopReason: string | null | undefined, tokIn: number, tokOut: number, sursa?: string | null): Parte {
   return {
     tip: TIPURI.includes(j?.tip) ? j.tip : 'altul',
     rezumat: String(j?.rezumat_fragment ?? j?.rezumat ?? ''),   // plafonul (MAX_REZUMAT) și motivul „rezumat_taiat” le pune plafoneazaRezultat
     modificari: Array.isArray(j?.modificari) ? j.modificari : [],
     intrebari_raspunse: Array.isArray(j?.intrebari_raspunse) ? j.intrebari_raspunse : [],
-    termene: termeneDinAi(j),
+    termene: termeneDinAi(j, sursa),
     data_document: DATA.test(String(j?.data_document || '')) ? j.data_document : null,
     motive: stopReason === 'max_tokens' ? ['raspuns_ai_taiat'] : [],
     tokens_in: tokIn, tokens_out: tokOut,
@@ -117,13 +160,17 @@ export function combinaFelii(parti: Parte[]) {
   for (const p of parti) if (p.tip !== 'altul') voturi.set(p.tip, (voturi.get(p.tip) || 0) + 1)
   let tip = 'altul', max = 0
   for (const [k, v] of voturi) if (v > max) { tip = k; max = v }
-  const termene = parti.flatMap((p, k) => (p.termene || []).map((t) => ({ data: t.data, felie: k + 1, citat: t.citat })))
-  const distincte = [...new Set(termene.map((x) => x.data))]
+  const termene = parti.flatMap((p, k) => (p.termene || []).map((t) => ({ ...t, felie: k + 1 })))
+  const distincte = [...new Set(termene.filter((x) => x.data).map((x) => x.data as string))]
   const motive = [...new Set(parti.flatMap((p) => p.motive))]
   if (distincte.length > 1) motive.push('conflict_termen')
+  if (termene.some((x) => !x.data)) motive.push('termen_neinterpretabil')
+  if (termene.some((x) => x.data && !x.verificat)) motive.push('termen_neverificat')
+  // termen_nou doar dacă TOATE mențiunile sunt interpretate, verificate mecanic și indică aceeași dată
+  const termen_nou = distincte.length === 1 && termene.every((x) => x.data && x.verificat) ? distincte[0] : null
   return {
     tip, modificari, intrebari_raspunse: intrebari,
-    termen_nou: distincte.length === 1 ? distincte[0] : null, termene,
+    termen_nou, termene,
     data_document: parti.find((p) => p.data_document)?.data_document ?? null,
     motive,
     tokens_in: parti.reduce((s, p) => s + (p.tokens_in || 0), 0), tokens_out: parti.reduce((s, p) => s + (p.tokens_out || 0), 0),

@@ -1,7 +1,7 @@
 // deno test --node-modules-dir=none --no-lock -A supabase/functions/ofertare-document-nou-citeste/felii_test.ts
 // Rezumatul pe felii (Răcari, 06.10.2026): împărțire fără pierderi, la granița întrebărilor; combinarea feliilor.
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { cheieIntrebare, combinaFelii, graniteSigure, imparteCuGranite, imparteInFelii, MAX_FELIE, parteDinAi, type Parte, rezultatFelii, termeneDinAi } from './felii.ts'
+import { cheieIntrebare, combinaFelii, dateDinText, graniteSigure, imparteCuGranite, imparteInFelii, MAX_CITAT, MAX_FELIE, normalizeazaData, parteDinAi, type Parte, rezultatFelii, termeneDinAi } from './felii.ts'
 
 // Un „răspuns consolidat” ca la Răcari: 38 de perechi „Solicitarea nr. k” / „Răspuns solicitarea nr. k”, ~1.800 caractere fiecare.
 function racari(nr = 38) {
@@ -90,7 +90,7 @@ Deno.test('„Răspuns solicitarea nr. k” nu e punct de tăiere (rămâne lân
 })
 
 const P = (o: Partial<Parte>): Parte => ({ tip: 'altul', rezumat: '', modificari: [], intrebari_raspunse: [], termene: [], data_document: null, motive: [], tokens_in: 1, tokens_out: 2, ...o })
-const T = (...d: string[]) => d.map((data) => ({ data, citat: `termen ${data}` }))
+const T = (...d: string[]) => d.map((data) => ({ data, citat: `termen ${data}`, verificat: true }))   // mențiuni deja verificate mecanic
 Deno.test('combinaFelii: perechea ruptă la graniță se unește (rămâne cea cu răspuns), modificările dublate o dată, tip majoritar, termene diferite → conflict', () => {
   const q = 'Vă rugăm să ne puneți la dispoziție fișele tehnice pentru țeavă.'
   const c = combinaFelii([
@@ -104,7 +104,7 @@ Deno.test('combinaFelii: perechea ruptă la graniță se unește (rămâne cea c
   assertEquals(c.intrebari_raspunse[0].raspuns_original, 'Atașăm fișele tehnice.')
   assertEquals(c.modificari.length, 1)
   assertEquals([c.tip, c.termen_nou, c.termene, c.data_document],
-    ['raspuns_clarificare', null, [{ data: '2026-10-20', felie: 1, citat: 'termen 2026-10-20' }, { data: '2026-10-27', felie: 2, citat: 'termen 2026-10-27' }], '2026-10-06'])
+    ['raspuns_clarificare', null, [{ data: '2026-10-20', felie: 1, citat: 'termen 2026-10-20', verificat: true }, { data: '2026-10-27', felie: 2, citat: 'termen 2026-10-27', verificat: true }], '2026-10-06'])
   assertEquals(c.motive, ['raspuns_ai_taiat', 'conflict_termen'])
   assertEquals([c.tokens_in, c.tokens_out, c.rezumate], [3, 6, ['r1', 'r2', 'r3']])
 })
@@ -117,7 +117,8 @@ Deno.test('cheieIntrebare ignoră diacritice / majuscule / punctuație; întreb�
 
 Deno.test('parteDinAi: normalizează lista / datele / tipul și marchează răspunsul AI tăiat (max_tokens)', () => {
   const p = parteDinAi({ tip: 'ciudat', rezumat_fragment: 'x', modificari: 'nu-i listă', termen_nou: '20.10.2026', data_document: '2026-10-06' }, 'max_tokens', 10, 20)
-  assertEquals([p.tip, p.rezumat, p.modificari, p.termene, p.data_document, p.motive], ['altul', 'x', [], [], '2026-10-06', ['raspuns_ai_taiat']])
+  assertEquals([p.tip, p.rezumat, p.modificari, p.termene, p.data_document, p.motive],
+    ['altul', 'x', [], [{ data: '2026-10-20', citat: '', verificat: false }], '2026-10-06', ['raspuns_ai_taiat']])   // scalarul vechi: păstrat, neverificat
   assertEquals(parteDinAi({ rezumat: 'întreg' }, 'end_turn', 0, 0).rezumat, 'întreg')
 })
 
@@ -132,22 +133,52 @@ Deno.test('termene: prelungire 30.10 apoi devansare 25.10 → termen_nou null + 
 })
 
 // Copilot conv. 3 (NO-GO P1 runda 2): 30.10 și 25.10 în ACEEAȘI felie — și la n = 1 (un singur apel, fără felii) — trebuie să dea conflict.
-Deno.test('termene în aceeași felie / n = 1: AI-ul întoarce lista → 30.10 + 25.10 = conflict_termen, termen_nou null (și pe calea PDF)', () => {
-  const j = { tip: 'erata', rezumat: 'r', termene: [{ data: '2026-10-30', citat: 'Termenul se prelungește la 30.10.2026.' }, { data: '2026-10-25', citat: 'Prin prezenta erată, termenul devine 25.10.2026.' }] }
-  const unu = rezultatFelii([parteDinAi(j, 'end_turn', 5, 6)], [], null)   // n = 1 pe text sau calea PDF: aceeași funcție
-  assertEquals([unu.termen_nou, unu.motive, unu.termene.map((t) => [t.data, t.felie])], [null, ['conflict_termen'], [['2026-10-30', 1], ['2026-10-25', 1]]])
-  assertEquals(unu.termene[1].citat, 'Prin prezenta erată, termenul devine 25.10.2026.')
-  const multe = rezultatFelii([parteDinAi({ rezumat_fragment: 'a' }, 'end_turn', 1, 1), parteDinAi(j, 'end_turn', 1, 1)], ['intrebare'], { j: { tip: 'erata', rezumat: 'S' }, stop: 'end_turn', tokIn: 1, tokOut: 1 })
+const SURSA = 'Răspuns consolidat nr. 3\nTermenul limită de depunere a ofertelor se prelungește până la data de 30.10.2026, ora 15:00.\n' +
+  'Prin prezenta erată, termenul limită de depunere a ofertelor devine 25.10.2026.\nAlte precizări.'
+const M30 = { data: '2026-10-30', citat: 'Termenul limită de depunere a ofertelor se prelungește până la data de 30.10.2026, ora 15:00.' }
+const M25 = { data: '2026-10-25', citat: 'Prin prezenta erată, termenul limită de depunere a ofertelor devine 25.10.2026.' }
+Deno.test('termene în aceeași felie / n = 1: AI-ul întoarce lista → 30.10 + 25.10 = conflict_termen, termen_nou null', () => {
+  const j = { tip: 'erata', rezumat: 'r', termene: [M30, M25] }
+  const unu = rezultatFelii([parteDinAi(j, 'end_turn', 5, 6, SURSA)], [], null)
+  assertEquals([unu.termen_nou, unu.motive, unu.termene.map((t) => [t.data, t.felie, t.verificat])], [null, ['conflict_termen'], [['2026-10-30', 1, true], ['2026-10-25', 1, true]]])
+  assertEquals(unu.termene[1].citat, M25.citat)
+  const multe = rezultatFelii([parteDinAi({ rezumat_fragment: 'a' }, 'end_turn', 1, 1, 'x'), parteDinAi(j, 'end_turn', 1, 1, SURSA)], ['intrebare'], { j: { tip: 'erata', rezumat: 'S' }, stop: 'end_turn', tokIn: 1, tokOut: 1 })
   assertEquals([multe.termen_nou, multe.motive], [null, ['conflict_termen']])
-  const unic = rezultatFelii([parteDinAi({ termene: [{ data: '2026-10-30', citat: 'x' }, { data: '2026-10-30', citat: 'repetat' }] }, 'end_turn', 1, 1)], [], null)
-  assertEquals([unic.termen_nou, unic.motive], ['2026-10-30', []])
+  const unic = rezultatFelii([parteDinAi({ termene: [M30, { ...M30 }] }, 'end_turn', 1, 1, SURSA)], [], null)
+  assertEquals([unic.termen_nou, unic.motive], ['2026-10-30', []])   // același termen, verificat de două ori → ales
 })
 
-Deno.test('termeneDinAi: listă cu citat (plafonat 400), date invalide ignorate, răspunsul vechi doar cu termen_nou → listă de un element', () => {
-  assertEquals(termeneDinAi({ termene: [{ data: '2026-10-30', citat: 'c'.repeat(900) }, { data: '30.10.2026', citat: 'x' }, '2026-11-02', null] }).map((t) => [t.data, t.citat.length]),
-    [['2026-10-30', 400], ['2026-11-02', 0]])
-  assertEquals(termeneDinAi({ termen_nou: '2026-10-20' }), [{ data: '2026-10-20', citat: '' }])
-  assertEquals(termeneDinAi({ termene: [], termen_nou: 'nu' }), [])
+// Copilot conv. 3 (NO-GO runda 3, P1): un termen fără dovadă NU devine „verde”, iar o dată scrisă altfel NU dispare tăcut.
+Deno.test('termen fără dovadă mecanică → neverificat (termen_nou null + termen_neverificat); data necanonică normalizată sau păstrată brut', () => {
+  const r = (t: any, sursa: string | null = SURSA) => rezultatFelii([parteDinAi({ termene: [t] }, 'end_turn', 1, 1, sursa)], [], null)
+  const gol = r({ data: '2026-10-30', citat: '' })                                  // dată validă + citat gol
+  assertEquals([gol.termen_nou, gol.motive, gol.termene[0].verificat], [null, ['termen_neverificat'], false])
+  const necanonic = r({ data: '30.10.2026', citat: M30.citat })                     // dată necanonică + citat prezent → normalizată, verificată
+  assertEquals([necanonic.termen_nou, necanonic.motive, necanonic.termene[0].data], ['2026-10-30', [], '2026-10-30'])
+  const brut = r({ data: 'în 30 de zile de la publicare', citat: 'Termenul se prelungește cu 30 de zile de la publicare.' })
+  assertEquals([brut.termen_nou, brut.motive, brut.termene[0].data, brut.termene[0].data_bruta], [null, ['termen_neinterpretabil'], null, 'în 30 de zile de la publicare'])
+  assertEquals(r({ ...M30, citat: 'Termenul limită de depunere se prelungește până la 30.10.2026 (citat inventat).' }).motive, ['termen_neverificat'])   // nu e în sursă
+  assertEquals(r({ data: '2026-10-31', citat: M30.citat }).motive, ['termen_neverificat'])                                    // citatul nu conține data
+  assertEquals(r(M30, null).motive, ['termen_neverificat'])                                                                  // PDF: fără text de comparat
+  assertEquals(r({ data: '2026-10-30', citat: '30.10.2026' }).motive, ['termen_neverificat'])                                 // „citat” = doar data
+  const luna = 'Termenul limită de depunere a ofertelor este 30 octombrie 2026, ora 12.'
+  assertEquals(r({ data: '2026-10-30', citat: luna }, `Text.\n${luna}\n`).termen_nou, '2026-10-30')                          // luna în litere
+  const ocr = r({ data: '2026-10-30', citat: 'Termenul limita de depunere a ofertelor se prelungeste pana la data de 30.10.2026, ora 15:00' })
+  assertEquals(ocr.termen_nou, '2026-10-30')   // diacritice / punctuație diferite față de sursă: normalizarea le ignoră
+})
+
+// Copilot conv. 3 (runda 3, P2): citatul tăiat la stocare e marcat, iar termenul nu mai trece drept verificat.
+Deno.test(`citat peste ${MAX_CITAT} de caractere → citat_trunchiat + lungimea originală + neverificat`, () => {
+  const lung = 'Termenul limită de depunere a ofertelor se prelungește până la data de 30.10.2026. ' + 'Detalii. '.repeat(150)
+  const t = termeneDinAi({ termene: [{ data: '2026-10-30', citat: lung }] }, lung)[0]
+  assertEquals([t.citat.length, t.citat_trunchiat, t.lungime_citat, t.verificat], [MAX_CITAT, true, lung.trim().length, false])
+})
+
+Deno.test('normalizeazaData / dateDinText: ISO, zz.ll.aaaa, zz/ll/aaaa, „30 octombrie 2026”; date imposibile → null', () => {
+  assertEquals(['2026-10-30', '30.10.2026', '30/10/2026', '3-1-2027', '30 Octombrie 2026', '31.02.2026', 'mâine', ''].map(normalizeazaData),
+    ['2026-10-30', '2026-10-30', '2026-10-30', '2027-01-03', '2026-10-30', null, null, null])
+  assertEquals(dateDinText('până la 30.10.2026, apoi 2026-11-02 și 5 decembrie 2026; nu 31.02.2026'), ['2026-11-02', '2026-10-30', '2026-12-05'])
+  assertEquals(termeneDinAi({ termene: [null, '', { data: '' }] }, 'x'), [])   // elemente goale: nimic de verificat, nimic pierdut
 })
 
 // Copilot conv. 3 (runda 2, P2): sinteza tăiată la max_tokens, dar cu JSON parsabil, NU mai lasă citirea „completă”.
