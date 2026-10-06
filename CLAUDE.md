@@ -64,7 +64,7 @@ PIUSI = doar reconciliere (nu dublu-decrement stoc). TVA pe valoare brută lucr�
 
 ## Final de sesiune — obligatoriu
 0. **Repo curat + pushat**: `git status` fără modificări locale — tot ce s-a lucrat e commis și PUSHAT (branch/PR, sau main după merge). Nimic rămas doar pe laptopul curent.
-1. UPDATE `claude_docs` slug `handoff_activ` (secțiuni: ✅ LIVE / ⏳ Pending / ⚠️ Atenționări / 🎯 Următoarele candidate).
+1. UPDATE `claude_docs` slug `handoff_activ` (secțiuni: Sesiuni și rutine / ✅ LIVE / ⏳ Pending / ⚠️ Atenționări / 🎯 Următoarele candidate). **Regula A + D (Răzvan 06.10.2026, `claude_context` #1620)**: țintă 9k, **plafon 15k caractere**. ACTUALIZEZI rândul subiectului tău, NU adaugi blocuri datate. Subiectele închise le scoți (istoricul stă în `handoff_istoric_*` / handoff-ul de modul). Peste plafon → compactezi, nu tai orbește. Rescriere completă doar cu snapshot nou + `UPDATE … WHERE md5(content_md) = '<md5 citit>'` (altfel ștergi ce a scris altă sesiune între timp).
 1b. Dacă în sesiune s-a creat/schimbat/oprit o automatizare: rândul din `public.automatizari` + secțiunea din `registru_automatizari` sunt la zi (pct. 7).
 2. INSERT lecții durabile noi în `claude_context` (category: lesson/decision/anti_bug/todo).
 3. Recap scurt: ce s-a pushat, ce PR-uri așteaptă merge, ce e de testat LIVE.
