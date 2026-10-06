@@ -15,10 +15,14 @@
 // (d) Cine pornește: user cu acces Ofertare (din UI) sau secretul intern x-radar-secret
 //     (fn_verifica_radar_secret, Vault) pentru rutine. verify_jwt singur NU ajunge.
 // (e) Nu cere confirmare umană: operația e idempotentă (recitirea suprascrie citire_noi) și
-//     costă doar apelul AI, pornit explicit de om cu butonul.
+//     costă doar apelul AI, pornit explicit de om cu butonul. 06.10: PDF-ul întreg (scump) — doar owner /
+//     responsabilul licitației / secretul intern (poarta pe cheltuială, ca ofertare-ingest-doc); rezumatul din
+//     textul deja extras — oricine trece poarta de modul.
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { scrieCitireNoi } from './scriere.ts'
+import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
+import { aceeasiIdentitate, identitateObiect, shaOcteti, type IdentitateObiect } from './obiect.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -50,6 +54,7 @@ Reguli: listele pot fi goale; nu inventa modificări sau întrebări care nu sun
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const t0 = Date.now()   // termenul apelului AI se socotește de aici (sursa.ts, timpRamas)
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!
   const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
@@ -73,24 +78,58 @@ Deno.serve(async (req: Request) => {
   let body: any = {}; try { body = await req.json() } catch { /* gol */ }
   const id = Number(body.document_id)
   if (!id) return json({ error: 'document_id lipsă' }, 400)
-  const { data: row } = await db.from('ofertare_documente_atribuire').select('id, licitatie_id, nume_original, fisier_path, tip, analiza').eq('id', id).maybeSingle()
+  const { data: row } = await db.from('ofertare_documente_atribuire').select('id, licitatie_id, nume_original, fisier_path, tip, analiza, status_procesare, text_extras, procesat_la').eq('id', id).maybeSingle()
   if (!row) return json({ error: 'documentul nu există' }, 404)
   if (!row.fisier_path || String(row.fisier_path).includes('/neincarcat/'))
     return json({ error: 'Documentul nu a putut fi adus automat din SEAP — urcă-l din tab-ul Documente („Urcă fișiere”), apoi citește-l.' })
 
-  const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
-  if (dlErr || !blob) return json({ error: 'download PDF: ' + (dlErr?.message || 'lipsă') })
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  if (bytes.length > MAX_OCTETI) return json({ error: `Fișier prea mare (${(bytes.length / 1e6).toFixed(1)} MB > 20 MB)` })
-  if (!arePdf(bytes)) return json({ error: 'Se citesc doar PDF-uri — acest fișier nu e PDF (docx/xls se citesc cu ofertare-word-text).' })
+  // Răcari 06.10.2026: documentul citit deja pe felii („Procesează”) se citește din TEXT; altfel PDF, cu termen-limită (sursa.ts).
+  const sursa = alegeSursa(row)
+  if (sursa.mod === 'pdf' && cititDe !== 'intern') {
+    const [{ data: prof }, { data: lic }] = await Promise.all([
+      db.from('profiles').select('is_owner').eq('id', cititDe).maybeSingle(),
+      db.from('ofertare_licitatii').select('responsabil_id').eq('id', row.licitatie_id).maybeSingle(),
+    ])
+    if (!poateCitiPdf({ intern: false, isOwner: prof?.is_owner, responsabilId: lic?.responsabil_id, uid: cititDe }))
+      return json({ error: MESAJ_POARTA_PDF, cod: 'poarta_cheltuiala' }, 403)
+  }
+  let continut: unknown[]
+  // amprenta sursei de dinainte de AI: scrierea refuză dacă documentul a fost recitit între timp (scriere.ts).
+  // Text: SHA-256 al text_extras. PDF: SHA-256 pe bytes-ii descărcați + identitatea obiectului din Storage (obiect.ts).
+  let sha: string | null = sursa.mod === 'text' ? await amprentaText(row.text_extras) : null
+  let obiect: IdentitateObiect | null = null
+  if (sursa.mod === 'text') {
+    continut = [{ type: 'text', text: `TEXTUL DOCUMENTULUI „${row.nume_original}” (extras automat, pe felii; poate conține erori de OCR).${notaSursa(sursa)}\n\n${sursa.text}` },
+      { type: 'text', text: PROMPT }]
+  } else {
+    obiect = await identitateObiect(db, 'ofertare', row.fisier_path)
+    const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
+    if (dlErr || !blob) return json({ error: 'download PDF: ' + (dlErr?.message || 'lipsă') })
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    // instantaneu după descărcare: bytes-ii aparțin exact obiectului identificat înainte (altfel 409, fără apel AI)
+    if (!aceeasiIdentitate(obiect, await identitateObiect(db, 'ofertare', row.fisier_path)))
+      return json({ error: MESAJ_FISIER_NEIDENTIFICAT, cod: 'sursa_schimbata' }, 409)
+    sha = await shaOcteti(bytes)
+    if (bytes.length > MAX_OCTETI) return json({ error: `Fișier prea mare (${(bytes.length / 1e6).toFixed(1)} MB > 20 MB)` })
+    if (!arePdf(bytes)) return json({ error: 'Se citesc doar PDF-uri — acest fișier nu e PDF (docx/xls se citesc cu ofertare-word-text).' })
+    continut = [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
+      { type: 'text', text: PROMPT }]
+  }
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: [
-      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64(bytes) } },
-      { type: 'text', text: PROMPT } ] }] }),
-  })
-  const data = await resp.json()
+  const ramas = timpRamas(t0, Date.now())
+  if (!ramas) return json({ error: mesajTimeout(sursa.mod), cod: 'timeout_citire', sursa: sursa.mod })
+  let resp: Response, data: any
+  try {
+    resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: continut }] }),
+      signal: AbortSignal.timeout(ramas),
+    })
+    data = await resp.json()
+  } catch (e) {
+    if (eTimeout(e)) return json({ error: mesajTimeout(sursa.mod), cod: 'timeout_citire', sursa: sursa.mod })
+    return json({ error: 'Claude: ' + ((e as Error)?.message || 'eroare de rețea') })
+  }
   if (!resp.ok) return json({ error: 'Claude: ' + (data.error?.message || resp.status) })
   if (data.stop_reason === 'refusal') return json({ error: 'Claude a refuzat citirea documentului' })
   const txt = (data.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
@@ -102,14 +141,19 @@ Deno.serve(async (req: Request) => {
   try { await db.from('ai_usage_log').insert({ function_name: 'ofertare-document-nou-citeste', model: MODEL, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * PRICE_IN + tokOut * PRICE_OUT, ref_table: 'ofertare_documente_atribuire', ref_id: id }) } catch { /* ignorăm */ }
 
   const tipAi = TIPURI_AI.includes(j.tip) ? j.tip : 'altul'
+  const pl = plafoneazaRezultat(j, data.stop_reason)
+  const prov = provenanta(sursa, sha, obiect)
+  const motive = [...prov.motive_incomplet, ...pl.motive]
   const citire = {
     tip: tipAi,
-    rezumat: String(j.rezumat || '').slice(0, 4000),
-    modificari: Array.isArray(j.modificari) ? j.modificari.slice(0, 40) : [],
-    intrebari_raspunse: Array.isArray(j.intrebari_raspunse) ? j.intrebari_raspunse.slice(0, 60) : [],
+    rezumat: pl.rezumat,
+    modificari: pl.modificari,
+    intrebari_raspunse: pl.intrebari_raspunse,
     termen_nou: /^\d{4}-\d{2}-\d{2}$/.test(String(j.termen_nou || '')) ? j.termen_nou : null,
     data_document: /^\d{4}-\d{2}-\d{2}$/.test(String(j.data_document || '')) ? j.data_document : null,
     model: MODEL, citit_la: new Date().toISOString(), citit_de: cititDe, tokens_in: tokIn, tokens_out: tokOut,
+    ...prov, motive_incomplet: motive, citire_completa: motive.length === 0,
+    total_modificari: pl.total_modificari, total_intrebari: pl.total_intrebari,
   }
   // 25.09.2026: dacă documentul nu era citit (neprocesat/eroare, fără text), citirea de aici îl face „procesat"
   // cu text_extras = rezumatul + modificările + Q&A, ca Rezumatul să nu-l mai numere la „rămase de citit".
@@ -118,7 +162,13 @@ Deno.serve(async (req: Request) => {
   // dispărea). Acum: se RECITEȘTE `analiza` chiar înainte de scriere, se înlocuiește DOAR cheia proprie (citire_noi) și se scrie
   // compare-and-set pe analiza->citire_ai->>rev (ca /api/plansa-felii și ofertare-plansa-citeste: orice scriere a cheilor serverului schimbă
   // rev-ul); la conflict se reface peste starea nouă (max. 3 încercări), apoi eroare explicită — nimic suprascris tăcut.
-  const { upErr, scris } = await scrieCitireNoi(db, id, citire, row.nume_original)
+  const { upErr, scris, stale, motiv } = await scrieCitireNoi(db, id, citire, row.nume_original,
+    { status: row.status_procesare ?? null, procesat_la: row.procesat_la ?? null, fisier_path: row.fisier_path, inceput: new Date(t0).toISOString(),
+      shaText: sursa.mod === 'text' ? sha : null,
+      obiectNeschimbat: sursa.mod === 'pdf' ? async () => aceeasiIdentitate(obiect, await identitateObiect(db, 'ofertare', row.fisier_path)) : undefined })
+  if (stale) return motiv === 'citit_intre_timp'
+    ? json({ error: MESAJ_CITIT_INTRE_TIMP, cod: 'citit_intre_timp' }, 409)
+    : json({ error: MESAJ_SURSA_SCHIMBATA, cod: 'sursa_schimbata' }, 409)
   if (upErr) return json({ error: 'update: ' + upErr.message })
   if (!scris) return json({ error: 'documentul e scris simultan din altă parte (citire de planșă / transfer) — reîncearcă; nimic nu s-a suprascris' }, 409)
 

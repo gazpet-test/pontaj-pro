@@ -15,6 +15,7 @@ import { imageToPdf } from './CitesteOricePanel.jsx'
 import PuncteClarificare from './OfertareClarificariPuncte.jsx'
 import TemeiuriClarificare from './OfertareTemeiuri.jsx'
 import { formatCitare, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.js'
+import { mesajFaraText, citesteCuAi, avertismentCitire } from './ofertareCitireDoc.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 
@@ -67,6 +68,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const [docRasp, setDocRasp] = useState([])    // documentele SEAP de tip raspuns_clarificare ale licitației
   const [busy, setBusy] = useState(null)
   const [citindDoc, setCitindDoc] = useState(null) // id document răspuns în curs de citire AI
+  const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [legare, setLegare] = useState(null)       // { docId, bife:{clarId:true}, propuneri:{clarId:'raspuns_scurt'} } — panoul „La ce întrebări răspunde?”
   // R5 runda 9: starea bazei cifrelor ciornelor automate (v_ofertare_clarificari_baza) — eroare / view lipsă = „nu putem verifica” (fail-closed)
   const [baza, setBaza] = useState({ peId: new Map(), eroare: null })
@@ -323,10 +325,19 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   // Citirea AI (Sonnet) a documentului de răspuns — aceeași edge fn ca în „📂 Documente noi din SEAP” din fișă.
   // Returnează true la succes, ca uploadul să poată deschide direct panoul de legare.
   const citesteDoc = async (d) => {
-    setCitindDoc(d.id)
-    const { data, error } = await supabase.functions.invoke('ofertare-document-nou-citeste', { body: { document_id: d.id } })
+    setCitindDoc(d.id); setEroareCitire(m => ({ ...m, [d.id]: null }))
+    // Regula documentației (06.10): necitit → întâi pe felii, apoi rezumatul din text; fără drept de cheltuială → stop (citesteCuAi).
+    // Starea se recitește acum (lista poate fi veche: alt coleg a citit documentul între timp).
+    const { data: st } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('id', d.id).maybeSingle()
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? d.status_procesare)
     setCitindDoc(null)
-    if (error || data?.error) { showToast('Citirea a eșuat: ' + (data?.error || error?.message), 'err'); return null }
+    if (!r.ok) {
+      setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
+      showToast(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err')
+      load()   // citirea pe felii poate fi reușit înainte de eșec: starea / textul se reîmprospătează
+      return null
+    }
+    const data = r.data
     showToast(`🤖 Citit: ${d.nume_original}`)
     await load()
     return data?.citire_noi || null
@@ -347,6 +358,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       aparut_ulterior: true, status_procesare: 'neprocesat', size_bytes: file.size,
     }).select('id, nume_original').single()
     if (error) { setBusy(null); return showToast('Eroare la înregistrare: ' + error.message, 'err') }
+    // ca la urcaRaspunsIntrebare: fără drept de cheltuială, documentul rămâne urcat, citirea o pornește ownerul / responsabilul
+    if (!poatePorniProcesarea(profile, lic)) { setBusy(null); showToast('Răspuns urcat. Citirea AI o pornește ownerul / responsabilul licitației.', 'warn'); return load() }
     setBusy('🤖 Citesc răspunsul cu AI…')
     const citire = await citesteDoc(ins)
     setBusy(null)
@@ -386,11 +399,14 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     const lista = Array.isArray(citire.intrebari_raspunse) ? citire.intrebari_raspunse : []
     let best = null, bestS = 0
     lista.forEach(x => { const s = scorPotrivire(q.intrebare, x.intrebare_scurt); if (s > bestS) { bestS = s; best = x } })
-    const propus = ((best && bestS >= 0.34 ? best.raspuns_scurt : (lista.length === 1 ? lista[0].raspuns_scurt : citire.rezumat)) || '').trim()
-    if (!propus) return showToast('AI-ul n-a găsit un răspuns clar în fișier — scrie-l manual.', 'warn')
+    // Citire PARȚIALĂ (sursă incompletă / liste plafonate): fără propuneri de rezervă (rezumat / singura pereche) și fără concluzia
+    // „n-a găsit” — răspunsul poate fi chiar în partea necitită (review ultracode r3, P2; lecția Mânăstirea pe textul oficial).
+    const partial = avertismentCitire(citire)
+    const propus = ((best && bestS >= 0.34 ? best.raspuns_scurt : partial ? '' : (lista.length === 1 ? lista[0].raspuns_scurt : citire.rezumat)) || '').trim()
+    if (!propus) return showToast(partial ? `${partial} Nu propun un răspuns automat — scrie-l după documentul original.` : 'AI-ul n-a găsit un răspuns clar în fișier — scrie-l manual.', 'warn')
     if ((q.raspuns || '').trim()) return showToast('Întrebarea avea deja răspuns scris — l-am păstrat. Propunerea AI e în „📥 Primite de la autoritate”.', 'warn')
     setQ(q.id, 'raspuns', propus.slice(0, 20000))
-    showToast('🤖 Am propus răspunsul din fișier — verifică-l în casetă; se salvează când ieși din ea.')
+    showToast(partial ? `🤖 Am propus răspunsul din fișier, DAR: ${partial}` : '🤖 Am propus răspunsul din fișier — verifică-l în casetă; se salvează când ieși din ea.', partial ? 'warn' : 'ok')
   }
   // Întrebările noastre care mai așteaptă răspuns — candidatele la legare
   const candidateLegare = () => (clar || []).filter(q => q.status === 'trimisa' || q.status === 'de_trimis')
@@ -492,7 +508,10 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                   {c && !inLegare && <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color:G.green, borderColor:G.green + '66' }} disabled={!!busy} onClick={() => deschideLegare(d.id, d)}>🔗 La ce întrebări răspunde?</button>}
                   {legate.length > 0 && <span style={{ fontSize:11, color:G.muted }} title={legate.map(q => `${q.nr}. ${(q.intrebare || '').slice(0, 80)}`).join('\n')}>🔗 legat de întrebările: {legate.map(q => q.nr).join(', ')}</span>}
                 </div>
-                {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
+                {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color: eroareCitire[d.id].poarta ? G.yellow : G.red }}>{eroareCitire[d.id].poarta ? '🔒 ' : '⚠️ Citirea cu AI a eșuat: '}{eroareCitire[d.id].t}</div>}
+                {/* key: după o citire (citit_la / stare noi) panoul se reîncarcă, altfel rămânea „Încă necitit” */}
+                {!ph && <TextOriginalToggle key={`${d.id}:${c?.citit_la || ''}:${d.status_procesare || ''}`} docId={d.id} nume={d.nume_original} />}
+                {avertismentCitire(c) && <div style={{ marginTop:7, fontSize:12, color:G.yellow }}>⚠️ {avertismentCitire(c)}</div>}
                 {c && (
                   <details style={{ marginTop:8, fontSize:12.5 }}>
                     <summary style={{ cursor:'pointer', fontWeight:700, color:G.muted }}>🤖 Rezumatul citirii{Array.isArray(c.intrebari_raspunse) && c.intrebari_raspunse.length ? ` · ${c.intrebari_raspunse.length} întrebări răspunse` : ''}{Array.isArray(c.modificari) && c.modificari.length ? ` · ${c.modificari.length} modificări` : ''}</summary>
@@ -722,12 +741,13 @@ export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): serverul (Terra) o
 export function TextOriginalToggle({ docId, nume }) {
   const [open, setOpen] = useState(false)
   const [txt, setTxt] = useState(undefined)   // undefined = neîncărcat, null = eroare
+  const [stare, setStare] = useState(null)    // status_procesare: „Încă necitit” ≠ „poate e scanat” (Răcari, 06.10.2026)
   const arhiva = ARHIVA_DOC_RE.test(nume || '')
   const toggle = async () => {
     const nou = !open; setOpen(nou)
     if (nou && txt === undefined && !arhiva) {
-      const { data, error } = await supabase.from('ofertare_documente_atribuire').select('text_extras').eq('id', docId).maybeSingle()
-      setTxt(error ? null : (data?.text_extras || ''))
+      const { data, error } = await supabase.from('ofertare_documente_atribuire').select('text_extras, status_procesare').eq('id', docId).maybeSingle()
+      setTxt(error ? null : (data?.text_extras || '')); setStare(data?.status_procesare || null)
     }
   }
   return (
@@ -739,7 +759,7 @@ export function TextOriginalToggle({ docId, nume }) {
           {arhiva ? <div style={{ fontSize:12, color:G.yellow }}>📦 {MESAJ_ARHIVA}</div>
             : txt === undefined ? <div style={{ fontSize:12, color:G.muted }}>Se încarcă…</div>
             : txt === null ? <div style={{ fontSize:12, color:G.red }}>Nu am putut încărca textul.</div>
-            : !txt.trim() ? <div style={{ fontSize:12, color:G.dim }}>Nu există text extras pentru acest document (poate e scanat) — deschide documentul original.</div>
+            : !txt.trim() ? <div style={{ fontSize:12, color: !stare || stare === 'neprocesat' ? G.yellow : G.dim }}>{mesajFaraText(stare)}</div>
             : <pre style={{ margin:0, maxHeight:400, overflow:'auto', whiteSpace:'pre-wrap', wordBreak:'break-word', fontFamily:'ui-monospace, Menlo, Consolas, monospace', fontWeight:300, fontSize:12, lineHeight:1.45, color:G.text, background:G.bg, border:`1px solid ${G.border2}`, borderRadius:8, padding:'8px 10px' }}>{txt}</pre>}
         </div>
       )}

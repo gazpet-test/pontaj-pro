@@ -23,6 +23,7 @@ import OfertareTipareDeclansate from './OfertareTipareDeclansate.jsx'
 import OfertareNomenclatoare from './OfertareNomenclatoare.jsx'
 import CantitatiPanel from './OfertareCantitati.jsx'
 import ClarificariPanel, { TextOriginalToggle, IntrebareRaspunsItem, ARHIVA_DOC_RE, MESAJ_ARHIVA } from './OfertareClarificari.jsx'
+import { citesteCuAi, avertismentCitire } from './ofertareCitireDoc.js'
 import GarantieSection, { useSemnalGarantie } from './OfertareGarantie.jsx'
 import { termenMutat, indicatorGarantie } from './ofertareGarantieValabilitate.js'
 import PropunerePanel, { PropunereRezumat } from './OfertarePropunere.jsx'
@@ -3373,6 +3374,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const [docs, setDocs] = useState(null)
   const [toate, setToate] = useState([])      // toată Documentația licitației — ca să știm ce e deja citit
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
+  const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
   const [veghe, setVeghe] = useState(null)    // raportul ultimei verificări manuale
   const [verific, setVerific] = useState(false)
@@ -3411,10 +3413,18 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     window.open(data.signedUrl, '_blank')
   }
   const citeste = async d => {
-    setBusy(d.id); setMsg(null)
-    const { data, error } = await supabase.functions.invoke('ofertare-document-nou-citeste', { body: { document_id: d.id } })
+    setBusy(d.id); setMsg(null); setEroareCitire(m => ({ ...m, [d.id]: null }))
+    // Regula documentației (06.10): necitit → întâi pe felii (ca „Procesează”), apoi rezumatul din text. Colegii fără
+    // drept de cheltuială (poarta owner/responsabil) primesc mesaj pe card, FĂRĂ apel AI (Copilot P1: nu mai cad pe PDF întreg).
+    // Starea se recitește acum (lista încărcată poate fi veche: documentul poate fi fost citit între timp).
+    const { data: st } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('id', d.id).maybeSingle()
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? (toate.find(x => x.id === d.id) || d).status_procesare)
     setBusy(null)
-    if (error || data?.error) return anunta('Citirea a eșuat: ' + (data?.error || error?.message), 'err')
+    if (!r.ok) {
+      setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
+      load()   // citirea pe felii poate fi reușit înainte de eșec: starea / textul se reîmprospătează
+      return anunta(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err')
+    }
     anunta(`🤖 Citit: ${d.nume_original}`)
     load()
   }
@@ -3459,7 +3469,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
           </pre>
         </div>
       )}
-      {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : G.green, marginBottom:8 }}>{msg.t}</div>}
+      {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : msg.tip === 'warn' ? G.yellow : G.green, marginBottom:8 }}>{msg.t}</div>}
       {docs === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
         : !docs.length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
         : docs.map(d => {
@@ -3494,7 +3504,10 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                   ⚠️ Ai deja {sc.fam} citit în Documentație, dar acesta e alt fișier — e indicat să-l citești și pe acesta (poate aduce modificări).
                 </div>
               )}
-              {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
+              {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color: eroareCitire[d.id].poarta ? G.yellow : G.red }}>{eroareCitire[d.id].poarta ? '🔒 ' : '⚠️ Citirea cu AI a eșuat: '}{eroareCitire[d.id].t}</div>}
+              {/* key: după o citire (citit_la / stare noi) panoul se reîncarcă, altfel rămânea „Încă necitit” (Copilot conv. 3, P3) */}
+              {!ph && <TextOriginalToggle key={`${d.id}:${c?.citit_la || ''}:${(toate.find(x => x.id === d.id) || d).status_procesare || ''}`} docId={d.id} nume={d.nume_original} />}
+              {avertismentCitire(c) && <div style={{ marginTop:7, fontSize:12, color:G.yellow }}>⚠️ {avertismentCitire(c)}</div>}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>
                   {/* Lecția Mânăstirea 05.10.2026: un „citat” luat din rezumat a ajuns într-o clarificare oficială și a trebuit înlocuit după verificarea pe PDF. */}

@@ -3,6 +3,7 @@
 // CAS”): o citire de planșă / un transfer terminat între citirea documentului și scriere NU mai e suprascris (transfer_cantitati rămâne).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import { scrieCitireNoi } from './scriere.ts'
+import { amprentaText } from './sursa.ts'
 
 const cale = (r: any, c: string) => c.split(/->>?/).reduce((v: any, k) => (v == null ? undefined : v[k]), r)
 // client PostgREST simulat: select / update cu filtrele eq / is pe căi JSON; `inainteDeUpdate` = scrierea concurentă (o dată)
@@ -49,4 +50,93 @@ Deno.test('reparația rundei 1: document fără citire_ai (rev null) — scris o
   const r2 = await scrieCitireNoi(mereu, 2, CITIRE, 'X.pdf')
   assertFalse(r2.scris)
   assertEquals([b.analiza.citire_noi, b.analiza.transfer_cantitati], [undefined, { id: 'T' }])
+})
+
+// Copilot conv. 3 (06.10, P2): sursa recitită / reprocesată în timpul apelului AI → nimic scris (stale), nu rezumat vechi peste text nou.
+Deno.test('sursa neschimbată → scris; text schimbat între citire și scriere → stale, nimic scris', async () => {
+  const baza = () => ({ id: 9, status_procesare: 'procesat', procesat_la: '2026-10-06T10:00:00+00:00', fisier_path: 'L/a.pdf', text_extras: 'TEXT V1', analiza: {} })
+  const r1: any = baza()
+  const am = { status: 'procesat', procesat_la: '2026-10-06T10:00:00+00:00', shaText: await amprentaText('TEXT V1'), fisier_path: 'L/a.pdf' }
+  const ok = await scrieCitireNoi(db(r1), 9, CITIRE, 'a.pdf', am)
+  assert(ok.scris && !ok.stale)
+  const r2: any = { ...baza(), text_extras: 'TEXT V2 (recitit)' }
+  const st = await scrieCitireNoi(db(r2), 9, CITIRE, 'a.pdf', am)
+  assert(st.stale && !st.scris)
+  assertEquals(r2.analiza, {}, 'rezumatul vechi NU s-a scris')
+})
+Deno.test('reprocesare pornită exact între recitire și UPDATE (procesat_la / stare noi) → UPDATE-ul condiționat nu potrivește, apoi stale', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', text_extras: 'TEXT', analiza: {} }
+  const am = { status: 'procesat', procesat_la: 'T1', shaText: await amprentaText('TEXT'), fisier_path: 'L/a.pdf' }
+  const res = await scrieCitireNoi(db(r, () => { r.status_procesare = 'in_lucru'; r.procesat_la = 'T2' }), 9, CITIRE, 'a.pdf', am)
+  assert(!res.scris && res.stale)
+  assertEquals(r.analiza, {})
+})
+Deno.test('fără amprentă (apel vechi) → comportamentul de dinainte, neschimbat', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', text_extras: 'x', analiza: {} }
+  const res = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf')
+  assert(res.scris && !res.stale)
+})
+
+Deno.test('calea PDF: obiectul din Storage rescris la aceeași cale în timpul AI (rândul din BD neschimbat) → stale, nimic scris', async () => {
+  const r: any = { id: 9, status_procesare: 'neprocesat', procesat_la: null, fisier_path: 'L/a.pdf', text_extras: null, analiza: {} }
+  const am = { status: 'neprocesat', procesat_la: null, fisier_path: 'L/a.pdf', obiectNeschimbat: async () => false }
+  const res = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf', am)
+  assert(!res.scris && res.stale)
+  assertEquals([r.analiza, r.status_procesare, r.text_extras], [{}, 'neprocesat', null])
+  const ok = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf', { ...am, obiectNeschimbat: async () => true })
+  assert(ok.scris && r.status_procesare === 'procesat')
+})
+
+Deno.test('upload nou care schimbă DOAR fisier_path exact între recitire și UPDATE (stare, procesat_la, rev neschimbate) → stale, nimic scris', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', text_extras: 'TEXT', analiza: {} }
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT') }
+  const res = await scrieCitireNoi(db(r, () => { r.fisier_path = 'L/1759999999999_a.pdf' }), 9, CITIRE, 'a.pdf', am)
+  assert(!res.scris && res.stale)
+  assertEquals(r.analiza, {}, 'citirea PDF-ului vechi nu ajunge pe rândul care indică PDF-ul nou')
+})
+
+Deno.test('două citiri simultane pe calea PDF: a doua vede citirea primei (mai nouă decât începutul ei) → motiv citit_intre_timp, nimic scris', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', procesat_la: 'T9', fisier_path: 'L/a.pdf', text_extras: 'DOCUMENT: a.pdf\nTip: altul\n\nR',
+    analiza: { citire_noi: { citit_la: '2026-10-06T15:00:05.000Z', rezumat: 'prima' } } }
+  const am = { status: 'neprocesat', procesat_la: null, fisier_path: 'L/a.pdf', inceput: '2026-10-06T15:00:00.000Z' }
+  const res = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf', am)
+  assert(res.stale && !res.scris); assertEquals(res.motiv, 'citit_intre_timp')
+  assertEquals(r.analiza.citire_noi.rezumat, 'prima')
+  const vechi = await scrieCitireNoi(db({ ...r, analiza: { citire_noi: { citit_la: '2026-10-06T14:00:00.000Z' } } }), 9, CITIRE, 'a.pdf', am)
+  assertEquals(vechi.motiv, 'sursa_schimbata')
+})
+Deno.test('CAS epuizat pe rev, iar la a 3-a încercare sursa se schimbă exact înainte de UPDATE → raportat stale (sursa_schimbata), nu „scris simultan”', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', text_extras: 'TEXT', analiza: { citire_ai: { rev: 'r0' } } }
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT') }
+  let n = 0
+  // db() rulează inainteDeUpdate o singură dată → simulăm aici: rev schimbat de 2 ori, apoi reprocesare pornită
+  const dbSim = () => { const d = db(r); const from0 = d.from; return { from: () => { const b = from0(); const upd = b.update; b.update = (p: any) => {
+    n++; if (n <= 2) r.analiza = { citire_ai: { rev: 'r' + n } }; else { r.status_procesare = 'in_lucru'; r.procesat_la = 'T2' }
+    return upd(p) }; return b } } }
+  const res = await scrieCitireNoi(dbSim(), 9, CITIRE, 'a.pdf', am)
+  assert(!res.scris && res.stale); assertEquals(res.motiv, 'sursa_schimbata'); assertEquals(n, 3)
+})
+
+// Copilot conv. 3 (r5, P1): două citiri pe aceeași sursă STABILĂ — a doua nu o mai suprascrie tăcut pe prima.
+const STABIL = () => ({ id: 9, status_procesare: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', text_extras: 'TEXT',
+  analiza: { citire_noi: { citit_la: '2026-10-06T14:00:00.000Z', rezumat: 'veche' } } })
+Deno.test('sursă neschimbată, dar o citire terminată după începutul apelului → stale citit_intre_timp, nimic suprascris', async () => {
+  const r: any = { ...STABIL(), analiza: { citire_noi: { citit_la: '2026-10-06T15:00:07.000Z', rezumat: 'prima' } } }
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT'), inceput: '2026-10-06T15:00:00.000Z' }
+  const res = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf', am)
+  assert(res.stale && !res.scris); assertEquals(res.motiv, 'citit_intre_timp')
+  assertEquals(r.analiza.citire_noi.rezumat, 'prima')
+})
+Deno.test('citire concurentă scrisă EXACT între recitire și UPDATE (sursă neschimbată) → CAS pe citit_la nu potrivește, apoi citit_intre_timp', async () => {
+  const r: any = STABIL()
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT'), inceput: '2026-10-06T15:00:00.000Z' }
+  const res = await scrieCitireNoi(db(r, () => { r.analiza = { citire_noi: { citit_la: '2026-10-06T15:00:09.000Z', rezumat: 'concurenta' } } }), 9, CITIRE, 'a.pdf', am)
+  assert(res.stale && !res.scris); assertEquals(res.motiv, 'citit_intre_timp')
+  assertEquals(r.analiza.citire_noi.rezumat, 'concurenta')
+})
+Deno.test('„recitește” deliberat (citirea veche terminată ÎNAINTE de începutul apelului) → scrie, înlocuiește citirea veche', async () => {
+  const r: any = STABIL()
+  const am = { status: 'procesat', procesat_la: 'T1', fisier_path: 'L/a.pdf', shaText: await amprentaText('TEXT'), inceput: '2026-10-06T15:00:00.000Z' }
+  const res = await scrieCitireNoi(db(r), 9, { ...CITIRE, rezumat: 'noua' }, 'a.pdf', am)
+  assert(res.scris && !res.stale); assertEquals(r.analiza.citire_noi.rezumat, 'noua')
 })
