@@ -19,7 +19,7 @@
 // Erori de business → return json({error}), nu throw (worker killed intermitent la throw).
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { scrieCitireNoi } from './scriere.ts'
-import { alegeSursa, eTimeout, MESAJ_TIMEOUT, TIMEOUT_MS } from './sursa.ts'
+import { alegeSursa, eTimeout, MESAJ_TIMEOUT, timpRamas } from './sursa.ts'
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -51,6 +51,7 @@ Reguli: listele pot fi goale; nu inventa modificări sau întrebări care nu sun
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
+  const t0 = Date.now()   // termenul apelului AI se socotește de aici (sursa.ts, timpRamas)
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!
   const db = createClient(SUPA_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
@@ -95,12 +96,14 @@ Deno.serve(async (req: Request) => {
       { type: 'text', text: PROMPT }]
   }
 
+  const ramas = timpRamas(t0, Date.now())
+  if (!ramas) return json({ error: MESAJ_TIMEOUT, cod: 'timeout_citire', sursa: sursa.mod })
   let resp: Response, data: any
   try {
     resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers: { 'x-api-key': KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: continut }] }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(ramas),
     })
     data = await resp.json()
   } catch (e) {

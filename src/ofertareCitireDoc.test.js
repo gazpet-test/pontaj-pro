@@ -70,3 +70,60 @@ describe('citestePeFelii — regula documentației pentru „Citește cu AI”',
     expect(r.ok).toBe(false); expect(r.eroare).toMatch(/Procesează/)
   })
 })
+
+import { citesteCuAi, MESAJ_POARTA } from './ofertareCitireDoc.js'
+
+describe('citesteCuAi — traseul butonului (Copilot P1 06.10: 403 = stop, fără fallback PDF)', () => {
+  const fara = async () => {}
+  const inregistreaza = (raspunsuri) => {
+    const apeluri = []
+    const invoke = async (fn, { body }) => { apeluri.push(fn); return raspunsuri[fn](body) }
+    return { apeluri, invoke }
+  }
+  it('poarta pe cheltuială (403 la felii) → eroare pe card, NICIUN apel la ofertare-document-nou-citeste', async () => {
+    const { apeluri, invoke } = inregistreaza({
+      'ofertare-ingest-doc': () => ({ data: null, error: { message: 'Edge Function returned a non-2xx status code', context: { status: 403 } } }),
+      'ofertare-document-nou-citeste': () => ({ data: { ok: true }, error: null }),
+    })
+    const r = await citesteCuAi(invoke, 1624, 'neprocesat', { pauza: fara })
+    expect(r).toEqual({ ok: false, poarta: true, eroare: MESAJ_POARTA })
+    expect(apeluri).toEqual(['ofertare-ingest-doc'])
+    expect(MESAJ_POARTA).toMatch(/ownerul sau responsabilul/)
+  })
+  it('poarta recunoscută și după mesaj (corp 200 cu error) → la fel, fără rezumat', async () => {
+    const { apeluri, invoke } = inregistreaza({
+      'ofertare-ingest-doc': () => ({ data: { error: 'Citirea integrală o pornește doar ownerul sau responsabilul licitației (costă).' }, error: null }),
+      'ofertare-document-nou-citeste': () => ({ data: { ok: true }, error: null }),
+    })
+    const r = await citesteCuAi(invoke, 1, null, { pauza: fara })
+    expect(r.poarta).toBe(true); expect(apeluri).not.toContain('ofertare-document-nou-citeste')
+  })
+  it('necitit, cu drept → felii, apoi rezumatul', async () => {
+    const { apeluri, invoke } = inregistreaza({
+      'ofertare-ingest-doc': () => ({ data: { continua: false }, error: null }),
+      'ofertare-document-nou-citeste': () => ({ data: { ok: true, citire_noi: { rezumat: 'x' } }, error: null }),
+    })
+    const r = await citesteCuAi(invoke, 1, 'neprocesat', { pauza: fara })
+    expect(r.ok).toBe(true); expect(r.data.citire_noi.rezumat).toBe('x')
+    expect(apeluri).toEqual(['ofertare-ingest-doc', 'ofertare-document-nou-citeste'])
+  })
+  it('deja citit (procesat) → doar rezumatul, fără felii (oricine cu acces Ofertare)', async () => {
+    const { apeluri, invoke } = inregistreaza({
+      'ofertare-ingest-doc': () => { throw new Error('nu trebuia apelat') },
+      'ofertare-document-nou-citeste': () => ({ data: { ok: true }, error: null }),
+    })
+    const r = await citesteCuAi(invoke, 1, 'procesat', { pauza: fara })
+    expect(r.ok).toBe(true); expect(apeluri).toEqual(['ofertare-document-nou-citeste'])
+  })
+  it('felii eșuate (non-poartă) → eroarea feliilor, fără rezumat; rezumat eșuat → mesajEroareCitire (504 → timeout)', async () => {
+    const a = inregistreaza({
+      'ofertare-ingest-doc': () => ({ data: null, error: { message: 'x', context: { status: 500 } } }),
+      'ofertare-document-nou-citeste': () => ({ data: { ok: true }, error: null }),
+    })
+    const r1 = await citesteCuAi(a.invoke, 1, 'eroare', { pauza: fara })
+    expect(r1.ok).toBe(false); expect(r1.poarta).toBeUndefined(); expect(a.apeluri).not.toContain('ofertare-document-nou-citeste')
+    const b = inregistreaza({ 'ofertare-document-nou-citeste': () => ({ data: null, error: { message: 'x', context: { status: 504 } } }) })
+    const r2 = await citesteCuAi(b.invoke, 1, 'procesat', { pauza: fara })
+    expect(r2).toEqual({ ok: false, eroare: MESAJ_TIMEOUT_UI })
+  })
+})

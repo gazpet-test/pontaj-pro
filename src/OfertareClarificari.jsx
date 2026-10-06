@@ -15,7 +15,7 @@ import { imageToPdf } from './CitesteOricePanel.jsx'
 import PuncteClarificare from './OfertareClarificariPuncte.jsx'
 import TemeiuriClarificare from './OfertareTemeiuri.jsx'
 import { formatCitare, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.js'
-import { mesajEroareCitire, mesajFaraText, citestePeFelii, trebuieCititPeFelii } from './ofertareCitireDoc.js'
+import { mesajFaraText, citesteCuAi } from './ofertareCitireDoc.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
 
@@ -326,17 +326,11 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   // Returnează true la succes, ca uploadul să poată deschide direct panoul de legare.
   const citesteDoc = async (d) => {
     setCitindDoc(d.id); setEroareCitire(m => ({ ...m, [d.id]: null }))
-    // Regula documentației (06.10): necitit → întâi pe felii, apoi rezumatul din text; fără drept de cheltuială → drumul vechi.
-    if (trebuieCititPeFelii(d.status_procesare)) {
-      const r = await citestePeFelii((fn, o) => supabase.functions.invoke(fn, o), d.id)
-      if (!r.ok && !r.poarta) { setCitindDoc(null); setEroareCitire(m => ({ ...m, [d.id]: r.eroare })); showToast('Citirea a eșuat: ' + r.eroare, 'err'); return null }
-    }
-    const { data, error } = await supabase.functions.invoke('ofertare-document-nou-citeste', { body: { document_id: d.id } })
+    // Regula documentației (06.10): necitit → întâi pe felii, apoi rezumatul din text; fără drept de cheltuială → stop (citesteCuAi).
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, d.status_procesare)
     setCitindDoc(null)
-    if (error || data?.error) {
-      const mesaj = mesajEroareCitire(error, data)
-      setEroareCitire(m => ({ ...m, [d.id]: mesaj })); showToast('Citirea a eșuat: ' + mesaj, 'err'); return null
-    }
+    if (!r.ok) { setEroareCitire(m => ({ ...m, [d.id]: r.eroare })); showToast('Citirea a eșuat: ' + r.eroare, 'err'); return null }
+    const data = r.data
     showToast(`🤖 Citit: ${d.nume_original}`)
     await load()
     return data?.citire_noi || null

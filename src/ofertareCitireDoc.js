@@ -49,3 +49,21 @@ export async function citestePeFelii(invoke, docId, { pauza = ms => new Promise(
   }
   return continua ? { ok: false, eroare: `Citirea pe felii nu s-a terminat după ${maxRunde} runde — continuă din Documentație («Procesează»).` } : { ok: true, runde }
 }
+
+// Copilot 06.10 (NO-GO P1 pe a44fa0c): refuzul porții pe cheltuială (403 la citirea pe felii) e TERMINAL pentru „Citește cu AI”.
+// Înainte UI-ul cădea pe calea veche (PDF întreg la ofertare-document-nou-citeste) — exact apelul costisitor / cu 504 pe care
+// poarta îl oprește. Acum: mesaj pe card, fără niciun apel AI. Rezumatul unui document deja citit (procesat) rămâne la îndemâna oricui.
+export const MESAJ_POARTA = 'Documentul nu e citit încă, iar citirea lui costă: o pornește doar ownerul sau responsabilul licitației ' +
+  '(«🤖 Citește cu AI» aici sau «Procesează» în Documentație). După ce e citit, rezumatul îl poate face oricine.'
+
+// Tot traseul butonului, testat cap-coadă: necitit → pe felii (poarta pe server) → rezumat din text. Întoarce {ok, data} sau {ok:false, eroare, poarta?}.
+export async function citesteCuAi(invoke, docId, status, opt = {}) {
+  if (trebuieCititPeFelii(status)) {
+    const r = await citestePeFelii(invoke, docId, opt)
+    if (r.poarta) return { ok: false, poarta: true, eroare: MESAJ_POARTA }
+    if (!r.ok) return { ok: false, eroare: r.eroare }
+  }
+  const { data, error } = await invoke('ofertare-document-nou-citeste', { body: { document_id: docId } })
+  if (error || data?.error) return { ok: false, eroare: mesajEroareCitire(error, data) }
+  return { ok: true, data }
+}

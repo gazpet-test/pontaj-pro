@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none --no-lock -A supabase/functions/ofertare-document-nou-citeste/sursa_test.ts
 import { assert, assertEquals } from 'jsr:@std/assert@1'
-import { alegeSursa, eTimeout, TEXT_MAX, TEXT_MIN, TIMEOUT_MS } from './sursa.ts'
+import { alegeSursa, BUGET_MS, eTimeout, MIN_AI_MS, TEXT_MAX, TEXT_MIN, TIMEOUT_MS, timpRamas } from './sursa.ts'
 
 Deno.test('document procesat cu text real → citește textul, nu PDF-ul', () => {
   const s = alegeSursa({ status_procesare: 'procesat', text_extras: 'x'.repeat(TEXT_MIN) })
@@ -36,4 +36,16 @@ Deno.test('eTimeout recunoaște abortul prin AbortSignal.timeout, nu și alte er
   assert(eTimeout(new DOMException('aborted', 'AbortError')))
   assert(!eTimeout(new TypeError('fetch failed')))
   assert(!eTimeout(null))
+})
+
+Deno.test('termenul AI se socotește de la intrarea în handler (Copilot P2): pregătirea lungă scurtează apelul, nu îl împinge peste 150 s', () => {
+  assertEquals(timpRamas(0, 0), TIMEOUT_MS)                       // pornire imediată → plafonul întreg
+  assertEquals(timpRamas(0, 25_000), BUGET_MS - 25_000)           // 25 s de descărcare/base64 → AI-ul primește doar restul
+  assert(BUGET_MS < 150_000 - 5_000)                              // rămâne loc de scriere + răspuns sub gateway
+  for (const scurs of [0, 5_000, 10_000, 40_000, 100_000, 124_000]) {
+    const r = timpRamas(0, scurs)
+    assert(r === 0 || scurs + r <= BUGET_MS, `scurs ${scurs}`)
+  }
+  assertEquals(timpRamas(0, BUGET_MS - MIN_AI_MS + 1), 0)         // prea puțin timp → nu mai pornește apelul plătit
+  assertEquals(timpRamas(1_000, 1_000 + BUGET_MS - MIN_AI_MS), MIN_AI_MS)
 })
