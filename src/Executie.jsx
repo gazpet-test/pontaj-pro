@@ -2993,7 +2993,9 @@ function TabProiectDashboard({ proiectId }) {
   // Editor echipă cheie (11.06): shortcut direct din dashboard, fără modalul mare
   const openEchipaEdit = async () => {
     if (!angajati.length) {
-      const { data } = await supabase.from('employees').select('id, name, functie').eq('activ', true).order('name')
+      // coloana e `active` (nu `activ`) — cu `activ` PostgREST dădea 42703 și listele rămâneau goale
+      const { data, error } = await supabase.from('employees').select('id, name, functie').eq('active', true).order('name')
+      if (error) alert('Eroare la încărcarea angajaților: ' + error.message)
       setAngajati(data || [])
     }
     setEchipaForm({
