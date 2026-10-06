@@ -1,14 +1,16 @@
-# Specificație v1.2: Generator de decizii de numire (registru HR)
+# Specificație v1.3: Generator de decizii de numire (registru HR)
 
-Destinatar: sesiunea „Module ERP — programare” (`session_016DH8ri5jCZPoDHhfWL9Z5i`). Versiunea v1.1 e din 06.10.2026 și a fost scrisă de sesiunea de chat. Pornește de la v1 (trei cercetări: BD, cod, NAS), integrează critica internă adversarială (45 de puncte) și verificările proprii făcute în această tură. **Versiunea v1.2 (06.10.2026 seara) integrează răspunsurile lui Răzvan la D1–D7 (`claude_context` #1622) și reverificările de după merge-ul #629 (șef de șantier).** Tot în v1.2: verificarea adversarială pe 3 unghiuri (consistență, drepturi, telefon), cu 38 de constatări (VA1–VA38), reverificate și integrate în text.
+Destinatar: sesiunea „Module ERP — programare” (`session_016DH8ri5jCZPoDHhfWL9Z5i`). Versiunea v1.1 e din 06.10.2026 și a fost scrisă de sesiunea de chat. Pornește de la v1 (trei cercetări: BD, cod, NAS), integrează critica internă adversarială (45 de puncte) și verificările proprii făcute în această tură. **Versiunea v1.2 (06.10.2026 seara) integrează răspunsurile lui Răzvan la D1–D7 (`claude_context` #1622) și reverificările de după merge-ul #629 (șef de șantier).** Tot în v1.2: verificarea adversarială pe 3 unghiuri (consistență, drepturi, telefon), cu 38 de constatări (VA1–VA38), reverificate și integrate în text. **Versiunea v1.3 (06.10.2026 noaptea) integrează verdictele NO-GO de la Copilot (3×P0, 4×P1, 2×P2) și Jakarinos (J1–J23)**, verificate față de text și BD (doar SELECT); lista și locurile sunt în Anexa A, iar respingerile în „Critica respinsă”.
 
-Toate verificările s-au făcut doar în citire: SELECT-uri, git și cod. Nu s-a modificat nimic în BD sau în repo, cu excepția acestui fișier (branch `claude/erp-continuare-x4p5a7-generator-decizii`, PR draft #630; modificările v1.2 sunt necomise).
+Toate verificările s-au făcut doar în citire: SELECT-uri, git și cod. Nu s-a modificat nimic în BD sau în repo, cu excepția acestui fișier (branch `claude/erp-continuare-x4p5a7-generator-decizii`, PR draft #630; v1.2 e comisă în 6a21982; modificările v1.3 sunt necomise).
 
 **Legendă**
 - **[V]**: fapt reverificat în tura v1.1 sau v1.2 (06.10.2026).
 - **(Cn)**: corectură preluată din punctul n al criticii.
 - **(Dn)**: schimbare din răspunsul lui Răzvan la decizia Dn (v1.2).
 - **(VAn)**: corectură din verificarea adversarială v1.2, punctul n (lista și unde s-a aplicat: Anexa A).
+- **(Pn)**: corectură v1.3 din verdictul Copilot (P0-1…P0-3, P1-1…P1-4, P2-1, P2-2).
+- **(Jn)**: corectură v1.3 din verdictul Jakarinos, constatarea n (J1–J23).
 - Punctele din critică respinse sau preluate modificat sunt în anexa „Critica respinsă”.
 
 ---
@@ -80,6 +82,19 @@ La emitere alegi semnatarul dintre cei trei. **Semnatarul implicit e Trușu (121
 - Drepturile sunt scrise ca predicate exacte. Superadmin nu mai înseamnă HR (C23–C25). Scanul semnat îl văd mai puțini oameni (C30, C31).
 - Se adaugă importul pe serii (HR / carte tehnică), `ALTA_DECIZIE`, numele extern la import și data nulă la import (C16).
 - PDF-ul are înălțime fixă A4 și verificare de depășire înainte de emitere. Testul de text se face pe randare, nu pe PDF (C18).
+
+### Ce s-a schimbat în v1.3 (verdictele Copilot și Jakarinos, 06.10 noaptea)
+- **Scrierea directă în registru e închisă și pentru `service_role`** (P0-1, J16): fără INSERT/UPDATE/DELETE/TRUNCATE pe tabelele registrului; triggerul de imuabilitate acoperă și INSERT și tranzițiile din draft.
+- **O singură relație vie pe o țintă** (P0-2, J3): un rând nu poate fi și înlocuire și revocare; un singur UNIQUE pe ținta comună; ținta se blochează și se reverifică la emitere și la scan. Ținta poate fi doar o numire (J18). Înlocuirea și revocarea au efect imediat în v1 (J7).
+- **Alocatorul primește sufixul** (P0-3, J2) și un validator comun de număr/an/dată pentru toate originile (J12). Saltul mare (R7) se întoarce din alocare și se jurnalizează (J23).
+- **R3 se calculează pe server** (P1-1, J19); confirmările doar confirmă coduri calculate de server.
+- **Idempotență** la rezervare, import, emitere, PDF și înlocuirea scanului (P1-3, J10, J11).
+- **Împuternicirea e FK la decizia ei** (`imputernicire_decizie_id`, P1-4, D9 = A); semnatarii îi citesc doar owner-ii și HR (P1-2).
+- **Drafturile se pot șterge** (J1): jurnalul păstrează id-ul, fără FK.
+- **Propunerile pe echipă sunt protejate** (J5): clientul nu mai poate insera propuneri „de decizie”, iar `fn_completare_aplica` verifică legătura cu decizia. O singură regulă de eligibilitate pentru scan, backfill și confirmare (J6, J8, J9), cu „valabilă acum” pe ziua Europe/Bucharest (P2-2).
+- **Previzualizarea e legată de versiunea emisă** (J20); hash-ul fișierelor e „declarat de client”, nu verificat (P2-1, J21).
+- Mărunte: contorul păstrează baza primei inițializări (J13); combinatele au două upload-uri (J14); id-ul din cale are maxim 18 cifre (J15); TRUNCATE blocat pe jurnal (J17); `ALTA_DECIZIE` cu etichetă liberă la import (J22); revocarea are validări proprii (J4).
+- D8 = A, D9 = A (cu FK) și D10 = B: confirmate de Copilot, **de confirmat de tine** (§9).
 
 ### Ce s-a schimbat în v1.2 (răspunsurile tale, 06.10 seara)
 - **D1:** registrul platformei e registrul HR comun. Regula de tranziție din §4.F nu mai are condiție.
@@ -317,26 +332,30 @@ Numărul 762/2026 lipsește din serie.
 
 1. **Numărul e unic pe (serie, an, număr, sufix).**
    - Seria e `HR` (registrul) sau `carte_tehnica` (doar la import). Anul = anul din `data_emitere`, iar la importul fără dată, anul se dă explicit.
-   - Sufixul (de ex. „bis” pentru al doilea 912, sau „a”/„b” la deciziile combinate) e permis doar la import.
-2. **Numărul se alocă doar în BD, atomic, printr-o singură funcție internă, `_hr_decizii_aloca` (C3).** O folosesc emiterea, rezervarea și importul. Nu există numărătoare în client.
+   - Sufixul (de ex. „bis” pentru al doilea 912, sau „a”/„b” la deciziile combinate) e permis doar la import. Se normalizează într-un singur loc (`_hr_decizii_norm_sufix`: `lower(trim())`, gol sau `^[a-z]{1,6}$`) (P0-3, J2).
+   - **Validator comun pentru toate originile** (`_hr_decizii_valideaza_numar`, J12): `numar` între 1 și 99 999; `an` între 2000 și anul curent; când `data_emitere` există, `extract(year FROM data_emitere) = an` (și la import); `data_emitere` nu e în viitor. Singura excepție scrisă a importului: lipsa datei (carte tehnică) și lipsa R6/R7.
+2. **Numărul se alocă doar în BD, atomic, printr-o singură funcție internă, `_hr_decizii_aloca` (C3), care primește și sufixul (P0-3).** O folosesc emiterea, rezervarea și importul. Nu există numărătoare în client. La numărul automat, orice sufix existent ocupă numărul.
    - Un număr manual ocupat dă eroare cu trimitere la decizia care îl ocupă.
    - Un număr manual mai mare decât contorul îl împinge la acea valoare. Peste `ultimul + 20` e nevoie de confirmarea „salt mare” (C4).
    - Un număr manual liber, sub contor (de ex. 762), e acceptat, iar contorul rămâne neschimbat.
    - Numărul automat = `ultimul + 1`, sărind peste numerele deja ocupate.
 3. **Numărul automat există doar pe un an inițializat explicit (C1, C2).** Pentru fiecare an, HR sau owner-ul introduce „ultimul număr din registrul fizic” și abia apoi pornește numărul automat. Fără inițializare se lucrează doar manual.
-4. **Data emiterii nu e în viitor (C5).** Dacă anul emiterii diferă de anul curent, numărul e obligatoriu manual și emiterea cere confirmarea avertismentului roșu. Regula se verifică în RPC, nu într-un CHECK.
+4. **Data emiterii nu e în viitor (C5).** „Azi” e mereu ziua de business Europe/Bucharest, prin `_hr_azi()` = `(now() AT TIME ZONE 'Europe/Bucharest')::date`, niciodată `current_date` (P2-2); la fel anul curent, expirările și valabilitatea. Dacă anul emiterii diferă de anul curent, numărul e obligatoriu manual și emiterea cere confirmarea avertismentului roșu. Regula se verifică în RPC, nu într-un CHECK.
 5. **O decizie emisă e imuabilă.**
    - Textul e produs **doar de server**, din șabloane, și se îngheață la emitere în `continut`. Datele (persoană, proiect, contract, atestat, semnatar, firmă) se îngheață în `snapshot`.
    - Corectura NU se face prin editare: o decizie emisă și nesemnată se **anulează** (numărul rămâne ocupat, cu motiv); una semnată se **înlocuiește** sau se **revocă** printr-o decizie nouă.
-   - Nu există DELETE pe decizii emise. Se pot șterge doar draft-urile, care n-au număr.
+   - Nu există DELETE pe decizii emise. Se pot șterge doar draft-urile, care n-au număr. Ștergerea unui draft lasă în jurnal evenimentul `stergere_draft`, cu ultima stare a rândului; jurnalul ține id-ul deciziei fără FK, ca istoricul să supraviețuiască ștergerii (J1).
 6. **Clientul nu poate scrie coloanele serverului (C6, C33).**
    - Din client se pot crea și modifica doar draft-uri, și doar coloanele de redactare (GRANT pe coloane). Orice tranziție de stare trece printr-un RPC SECURITY DEFINER.
-   - Un trigger blochează orice UPDATE sau DELETE pe o decizie care nu e draft, dacă nu vine din RPC (`current_user` ≠ rolurile API).
+   - Un trigger blochează, dacă nu vine din RPC (`current_user` ∈ rolurile API): orice INSERT care nu e draft curat; orice UPDATE care schimbă starea sau coloanele serverului, inclusiv pornind de la un draft; orice UPDATE/DELETE pe o decizie care nu e draft (P0-1, J16).
+   - **`service_role` nu are drept de scriere directă** pe tabelele registrului (`hr_decizii`, `hr_decizii_evenimente`, `hr_decizii_contor`, `hr_decizii_semnatari`, `hr_decizii_tipuri`): doar SELECT. Orice scriere trece prin funcțiile SECURITY DEFINER (P0-1).
 7. **Istoricul e complet și nu se poate șterge.**
-   - Fiecare tranziție, inclusiv operațiile pe contor, scrie un rând în `hr_decizii_evenimente`. Tabelul e insert-only pentru toată lumea, owner-ul inclus.
-   - PDF-ul generat și scanul semnat au hash SHA-256 și stau într-un bucket **fără UPDATE și fără DELETE în v1**: nimic nu se șterge prin API, nici de owner. Un scan înlocuit rămâne ca dovadă (§3.5, VA19).
+   - Fiecare tranziție, inclusiv operațiile pe contor, scrie un rând în `hr_decizii_evenimente`. Tabelul e insert-only pentru toată lumea, owner-ul inclus: fără UPDATE, DELETE și **TRUNCATE** (REVOKE plus trigger BEFORE TRUNCATE, J17). Garanția privește rolurile API; rolul `postgres` (migrări) o poate schimba doar printr-o migrare vizibilă.
+   - PDF-ul generat și scanul semnat au hash SHA-256 **declarat de client** (calculat în browser, format validat, nerecalculat pe server, P2-1, J21) și stau într-un bucket **fără UPDATE și fără DELETE pentru utilizatorii autentificați în v1**: nimic nu se șterge prin API-ul de utilizator, nici de owner. Cheia `service_role` ocolește politicile de storage; riscul e delimitat în §8 (J17). Un scan înlocuit rămâne ca dovadă (§3.5, VA19).
 8. **Echipa proiectului se modifică doar la confirmare.**
    - O decizie semnată creează o *propunere* în `executie_completari_propuse`, legată de decizie prin `hr_decizie_id`.
+   - **Eligibilitatea efectului are o singură definiție** (`_hr_decizie_eligibila_efect(p_id)`, J6, J8, J9), folosită la scan, la backfill (PR5) și la confirmare: decizie `semnata`, de numire, `propune_efect = true`, `employee_id IS NOT NULL`, `tip.camp_efect` nenul și existent, proiect `activ`, `data_efect_pana` nulă sau ≥ azi, și B1 trecut (în afară de import). Data efectului din viitor nu împiedică propunerea, dar confirmarea ei e refuzată până la `data_efect`.
+   - Clientul nu poate insera propuneri legate de decizii; `fn_completare_aplica` reverifică legătura completă (J5).
    - Aplicarea o face owner-ul sau cineva cu `can_manage_contracts`, prin `fn_completare_aplica`, care există deja.
    - Când decizia e înlocuită sau revocată, propunerile ei încă neconfirmate trec în `expirat` (C9).
    - Generatorul NU face niciodată UPDATE direct pe `executie_proiecte`.
@@ -369,8 +388,9 @@ hr_decizii_semnatari (
   preambul_text text NOT NULL,               -- text LITERAL pe persoana (C17, VA3); singura variabila permisa: {imputernicire}
   bloc_semnatura text NOT NULL,              -- „Administrator,\nTrusu Razvan”; tot literal
   preambul_validat boolean NOT NULL DEFAULT false,   -- true doar dupa OK juridic (sau model NAS, pt 121)
-  imputernicire_nr text, imputernicire_data date,
-  imputernicire_path text,                   -- D9 = A: scan_path-ul deciziei ALTA_DECIZIE a imputernicirii (§3.4, VA4)
+  imputernicire_decizie_id bigint,           -- D9 = A (P1-4): decizia ALTA_DECIZIE a imputernicirii; nr./data/scan se DERIVA
+                                             -- din ea; FARA REFERENCES inline (hr_decizii nu exista inca): FK-ul vine DOAR din
+                                             -- ALTER TABLE de dupa CREATE hr_decizii (Vf4)
   activ boolean NOT NULL DEFAULT true, ordine int
   -- FARA CHECK pe imputernicire (C8): lipsa ei = avertisment rosu R4 la emitere
 )
@@ -426,6 +446,10 @@ hr_decizii (
   propune_efect boolean NOT NULL DEFAULT true,          -- C11 (generalizat)
   inlocuieste_id bigint REFERENCES hr_decizii(id),
   revoca_id bigint REFERENCES hr_decizii(id),
+  versiune int NOT NULL DEFAULT 1,            -- J20: crescuta de trigger la fiecare UPDATE pe draft
+  cerere_id uuid UNIQUE,                      -- J10/P1-3: cheie de idempotenta la rezervare/import (din client)
+  cerere_hash text,                           -- sha256 al payload-ului normalizat; retry cu alt payload = eroare
+  cerere_emitere uuid,                        -- J10: cheia apelului de emitere; retry identic intoarce rezultatul
   -- coloanele serverului (fara GRANT de scriere pentru client):
   snapshot jsonb NOT NULL DEFAULT '{}',
   continut jsonb,                             -- articolele randate de server, inghetate la emitere
@@ -453,11 +477,19 @@ hr_decizii (
   CHECK (employee_id IS NOT NULL OR persoana_nume IS NOT NULL OR tip_cod = 'ALTA_DECIZIE' OR stare = 'draft'),
   CHECK (origine <> 'platforma' OR stare = 'draft'
          OR (titlu IS NOT NULL AND data_efect IS NOT NULL AND semnatar_id IS NOT NULL AND continut IS NOT NULL)),
-  CHECK (data_efect_pana IS NULL OR data_efect IS NULL OR data_efect_pana >= data_efect)
+  CHECK (data_efect_pana IS NULL OR data_efect IS NULL OR data_efect_pana >= data_efect),
+  CHECK (inlocuieste_id IS NULL OR revoca_id IS NULL),                         -- P0-2, J3
+  CHECK (numar IS NULL OR numar BETWEEN 1 AND 99999),                          -- J12
+  CHECK (an IS NULL OR an >= 2000),                                            -- J12 (limita de sus: in RPC, _hr_azi)
+  CHECK (data_emitere IS NULL OR an IS NULL OR extract(year FROM data_emitere) = an),   -- J12, toate originile
+  CHECK (numar_sufix ~ '^([a-z]{1,6})?$'),                                     -- P0-3: forma normalizata
+  CHECK (pdf_sha256  IS NULL OR pdf_sha256  ~ '^[0-9a-f]{64}$'),               -- P2-1, J21: format, nu verificare
+  CHECK (scan_sha256 IS NULL OR scan_sha256 ~ '^[0-9a-f]{64}$')
 )
--- O singura inlocuire / revocare „vie” pe aceeasi tinta (C12)
-CREATE UNIQUE INDEX ON hr_decizii (inlocuieste_id) WHERE inlocuieste_id IS NOT NULL AND stare NOT IN ('draft','anulata');
-CREATE UNIQUE INDEX ON hr_decizii (revoca_id)      WHERE revoca_id      IS NOT NULL AND stare NOT IN ('draft','anulata');
+-- O singura relatie „vie” (inlocuire SAU revocare) pe aceeasi tinta (C12; P0-2, J3: un singur index pe tinta comuna)
+CREATE UNIQUE INDEX hr_decizii_tinta_vie ON hr_decizii ((coalesce(inlocuieste_id, revoca_id)))
+  WHERE coalesce(inlocuieste_id, revoca_id) IS NOT NULL AND stare NOT IN ('draft','anulata');
+ALTER TABLE hr_decizii_semnatari ADD FOREIGN KEY (imputernicire_decizie_id) REFERENCES hr_decizii(id);   -- singura declaratie (Vf4)
 -- + index pe employee_id, proiect_id, tip_cod, (serie, an)
 
 -- Contorul (doar seria HR)
@@ -465,7 +497,7 @@ hr_decizii_contor (
   serie text NOT NULL DEFAULT 'HR', an int NOT NULL,
   ultimul int NOT NULL DEFAULT 0,
   auto_permis boolean NOT NULL DEFAULT false,      -- C1/C2: false = doar numar manual
-  ultimul_initial int,                             -- valoarea de la initializare (baza pentru „goluri”)
+  ultimul_initial int,                             -- baza PRIMEI initializari (goluri); nu se rescrie la repornire (J13)
   initializat_de uuid, initializat_la timestamptz, initializat_sursa text,   -- „registrul fizic, verificat de …”
   PRIMARY KEY (serie, an)
 )
@@ -473,11 +505,13 @@ hr_decizii_contor (
 -- Jurnalul (insert-only pentru toata lumea)
 hr_decizii_evenimente (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  decizie_id bigint REFERENCES hr_decizii(id),     -- NULL pentru evenimente de contor
+  decizie_id bigint,                               -- FARA FK (J1): id istoric, supravietuieste stergerii draftului; NULL la contor
   serie text, an int,                              -- pentru evenimente de contor
   eveniment text NOT NULL,     -- creare, modificare_draft, emitere, pdf, scan, scan_inlocuit,
                                -- anulare, inlocuita, revocata, propunere_efect, propunere_expirata,
-                               -- contor_initializat, contor_auto_oprit, contor_corectat, import, rezervare
+                               -- contor_initializat, contor_auto_oprit, contor_corectat, import, rezervare,
+                               -- stergere_draft (J1, detalii = ultima stare a randului), salt_confirmat (J23),
+                               -- propunere_omisa (J8: extern / neeligibil, cu motiv)
   stare_veche text, stare_noua text,
   de uuid, la timestamptz NOT NULL DEFAULT now(),
   detalii jsonb
@@ -485,6 +519,8 @@ hr_decizii_evenimente (
 
 -- Legatura propunere → decizie (C9). Schimbare ADITIVA pe un tabel existent: intra in OK-ul pe PR1.
 ALTER TABLE executie_completari_propuse ADD COLUMN hr_decizie_id bigint REFERENCES hr_decizii(id);
+-- J5: politica existenta completari_ins (owner OR can_manage_contracts) se inlocuieste in PR1 cu aceeasi conditie
+--     PLUS `hr_decizie_id IS NULL AND sursa <> 'decizie_numire'`: propunerile generatorului le scrie doar RPC-ul.
 ```
 
 **Seed-ul semnatarilor (D2)**
@@ -492,7 +528,7 @@ ALTER TABLE executie_completari_propuse ADD COLUMN hr_decizie_id bigint REFERENC
 | `employee_id` | `calitate` | `este_reprezentant_legal` | `preambul_validat` | `imputernicire_*` | `ordine` |
 |---|---|---|---|---|---|
 | 121 (Trusu) | Administrator | true | true (model 916) | – | 1 |
-| 90 (Pantea) | Imputernicit | false | false (de validat juridic) | NULL până se înregistrează împuternicirea (D2b) → R4 (formula din §4.A.2) | 2 |
+| 90 (Pantea) | Imputernicit | false | false (de validat juridic) | `imputernicire_decizie_id` NULL până se înregistrează împuternicirea (D2b, P1-4) → R4 (formula din §4.A.2) | 2 |
 | 125 (Tudorache) | **Imputernicita** (VA3) | **false** (D2a) | false (de validat juridic) | idem | 3 |
 
 - `hr_decizii_tipuri.semnatar_implicit_id` = rândul lui 121, pe toate cele 15 tipuri (D2c). Seed-ul îl caută după `employee_id = 121`, nu după un id hardcodat.
@@ -504,7 +540,8 @@ ALTER TABLE executie_completari_propuse ADD COLUMN hr_decizie_id bigint REFERENC
 `v_hr_decizii_active WITH (security_invoker = on)` conține deciziile de numire valabile:
 - `stare IN ('emisa','semnata')` (cele `inlocuita` și `revocata` ies singure, prin stare);
 - `tip_cod NOT IN ('REVOCARE','ALTA_DECIZIE')`;
-- `data_efect_pana IS NULL OR data_efect_pana >= current_date`;
+- `data_efect IS NULL OR data_efect <= _hr_azi()` (J6; la import, data efectului necunoscută = în vigoare de la semnare);
+- `data_efect_pana IS NULL OR data_efect_pana >= _hr_azi()` (P2-2: ziua Europe/Bucharest, nu `current_date`);
 - pentru `nivel = 'proiect'`, doar proiectele cu `executie_proiecte.activ = true` (C13). Coloana există [V].
 
 Coloanele view-ului:
@@ -513,7 +550,7 @@ Coloanele view-ului:
 - `employee_id`, `nume` (din snapshot), `proiect_id`, `domenii_isc`, `data_efect`, `data_efect_pana`;
 - `stare` și `semnata` (boolean).
 
-UI-ul afișează deciziile `emisa` ca **„nesemnată”**, nu ca active (C13). Efectul pe echipă vine doar din `semnata`.
+UI-ul afișează deciziile `emisa` ca **„nesemnată”**, nu ca active (C13). Efectul pe echipă vine doar din `semnata`. Deciziile semnate cu `data_efect` viitoare apar în registru ca „în vigoare de la …”, nu în view (J6).
 
 Îl folosesc cardurile Echipă din Execuție și, mai târziu, CTC și Organigrama din Ofertare. CTC, SSM, PSI, Mediu și MEC pe proiect NU primesc coloane noi în `executie_proiecte`: echipa extinsă se citește din view. Fiind `security_invoker`, view-ul respectă RLS-ul de pe `hr_decizii`, deci un editor `executie` vede doar deciziile pe proiect.
 
@@ -538,6 +575,8 @@ confirm    := owner OR coalesce(p.can_manage_contracts, false)
 are_fisa   := p.employee_id IS NOT NULL                                     -- D10 (VA22)
 pe_proiect := decizia p_decizie_id exista, are nivel = 'proiect', stare <> 'draft'
               si tip_cod <> 'ALTA_DECIZIE'                                  -- VA7
+              (o REVOCARE poate tinti doar o numire, J18, deci nu poate scoate
+               la `exec` metadatele unei ALTA_DECIZIE)
 ```
 
 **Fail-closed (VA16).** Termenii și helper-ul nu întorc niciodată NULL: helper-ul întoarce `coalesce(<expresie>, false)`, deci false pentru profil lipsă, acțiune necunoscută sau `p_decizie_id` inexistent.
@@ -587,13 +626,21 @@ Apply-ul se face doar dacă emitenții sunt exact {121, 125, 126} și doar cu OK
 
 GRANT pe coloane (C6, C33):
 ```sql
-REVOKE ALL ON hr_decizii FROM anon, authenticated;
+-- Vf1 (P0-1, J16): pe Supabase default ACL-ul public da ALL lui anon/authenticated/service_role pe tabelele noi
+-- [V: pg_default_acl, postgres 'r' → service_role=arwdDxtm]. Deci REVOKE explicit pe TOATE cele 5 tabele, inclusiv service_role:
+REVOKE ALL ON hr_decizii, hr_decizii_evenimente, hr_decizii_contor, hr_decizii_semnatari, hr_decizii_tipuri
+  FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, DELETE ON hr_decizii TO authenticated;
 GRANT INSERT (tip_cod, eticheta_functie, nivel, employee_id, proiect_id, proiect_denumire, autorizatie_id,
               domenii_isc, titlu, temei, data_emitere, data_efect, data_efect_pana, semnatar_id,
               luare_la_cunostinta, propune_efect, inlocuieste_id, revoca_id) ON hr_decizii TO authenticated;
 GRANT UPDATE (<aceeasi lista>) ON hr_decizii TO authenticated;
-GRANT ALL ON hr_decizii TO service_role;   -- regula casei; triggerul de imuabilitate il opreste si pe el
+GRANT SELECT ON hr_decizii, hr_decizii_evenimente, hr_decizii_contor, hr_decizii_semnatari, hr_decizii_tipuri
+  TO service_role;                            -- P0-1, J16, Vf1: DOAR SELECT; abatere motivata de la „regula casei”
+GRANT SELECT ON hr_decizii_evenimente, hr_decizii_contor, hr_decizii_semnatari, hr_decizii_tipuri
+  TO authenticated;                           -- filtrat de RLS (semnatari: doar `citire`, P1-2); nicio scriere din client
+-- Nimic altceva. Test 42: has_table_privilege(r, t, p) = false pentru r in (anon, service_role),
+-- p in (INSERT, UPDATE, DELETE, TRUNCATE), pe toate 5; pentru authenticated doar coloanele de mai sus pe hr_decizii.
 ```
 
 Politici:
@@ -606,31 +653,38 @@ Politici:
 | DELETE | USING `stare = 'draft' AND fn_hr_decizii_poate('redactare') AND (creat_de = auth.uid() OR fn_hr_decizii_poate('owner'))` |
 
 Triggere:
-- **`trg_hr_decizii_imuabil`** (BEFORE UPDATE OR DELETE): dacă `OLD.stare <> 'draft'` și `current_user IN ('authenticated','anon','service_role')`, ridică eroare. În RPC-urile SECURITY DEFINER, `current_user` e owner-ul funcției, deci trec. Înlocuiește flag-ul `set_config` din v1 (C6).
+- **`trg_hr_decizii_imuabil`** (BEFORE INSERT OR UPDATE OR DELETE, P0-1, J16): dacă `current_user IN ('authenticated','anon','service_role')`:
+  - INSERT: refuz dacă nu e draft curat (`stare = 'draft'`, `origine = 'platforma'`, `numar`/`an` NULL, coloanele serverului la valorile implicite: `snapshot = '{}'`, `continut`, `cod_verificare`, `pdf_*`, `scan_*`, `emis_*`, `anulat_*`, `cerere_*` NULL);
+  - UPDATE: refuz dacă `OLD.stare <> 'draft'`, dacă `NEW.stare <> 'draft'` sau dacă se schimbă vreo coloană a serverului (`IS DISTINCT FROM`), inclusiv `creat_de`, `origine`, `versiune`;
+  - DELETE: refuz dacă `OLD.stare <> 'draft'`.
+  **Funcția triggerului e SECURITY INVOKER (implicit) — obligatoriu (Vf2).** Ca SECURITY DEFINER, `current_user` ar fi owner-ul ei și triggerul n-ar bloca nimic; regula intră în review-ul PR1 și în testul 42. **Ordinea:** triggerele BEFORE rulează alfabetic, deci numele se aleg ca imuabilitatea să ruleze prima: `trg_hr_decizii_a_imuabil`, apoi `trg_hr_decizii_b_revocare`, `trg_hr_decizii_c_versiune` (Vf2).
+  În RPC-urile SECURITY DEFINER, `current_user` e owner-ul funcției, deci trec. Înlocuiește flag-ul `set_config` din v1 (C6). Plasă dublă cu REVOKE-ul de mai sus: un `service_role` fără GRANT nu ajunge nici la trigger.
+- **`trg_hr_decizii_versiune`** (BEFORE UPDATE, `WHEN (OLD.stare = 'draft' AND NEW.stare = 'draft')`, Vf11): `NEW.versiune := OLD.versiune + 1` la orice schimbare de redactare (J20); tranziția draft → emisa nu mai incrementează.
   - **Regulă de review pe fiecare RPC:** scrie explicit doar coloanele tranziției lui.
-- **`trg_hr_decizii_revocare`** (BEFORE INSERT OR UPDATE, doar pe draft cu `tip_cod = 'REVOCARE'`): copiază din țintă `nivel`, `proiect_id`, `employee_id`, `persoana_nume`, `titlu` și `eticheta_functie` (C12).
-- **`trg_hr_decizii_jurnal`** (AFTER INSERT OR UPDATE OR DELETE pe draft): scrie în `hr_decizii_evenimente`. E **SECURITY DEFINER, cu `search_path` fix** (C33); altfel orice operație pe draft făcută din client ar pica, pentru că clientul nu are drept de scriere în jurnal.
+- **`trg_hr_decizii_revocare`** (BEFORE INSERT OR UPDATE, doar pe draft cu `tip_cod = 'REVOCARE'`): copiază din țintă `nivel`, `proiect_id`, `employee_id`, `persoana_nume` și `eticheta_functie` (C12), iar `titlu` ca `coalesce(tinta.titlu, NEW.titlu)` (Vf7): o numire importată fără titlu lasă redactorul să-l completeze, iar B10 îl cere. Ținta trebuie să fie o numire (`tip_cod NOT IN ('REVOCARE','ALTA_DECIZIE')`), altfel eroare (J18). Validările unei revocări sunt cele proprii din §4.A.2 (J4).
+- **`trg_hr_decizii_jurnal`** (AFTER INSERT OR UPDATE OR DELETE pe draft; la UPDATE cu `WHEN (OLD.stare = 'draft' AND NEW.stare = 'draft')`, Vf11 — tranzițiile le jurnalizează doar RPC-ul, un singur eveniment): scrie în `hr_decizii_evenimente`; la DELETE scrie `stergere_draft` cu `to_jsonb(OLD)` în `detalii` (J1). Funcționează pentru că `decizie_id` din jurnal nu are FK. E **SECURITY DEFINER, cu `search_path` fix** (C33); altfel orice operație pe draft făcută din client ar pica, pentru că clientul nu are drept de scriere în jurnal.
 
 **`hr_decizii_evenimente`**
 - RLS: SELECT pentru `fn_hr_decizii_poate('citire')`.
-- REVOKE INSERT / UPDATE / DELETE de la `anon`, `authenticated` și `service_role`. Doar triggerele și RPC-urile scriu.
-- Un trigger BEFORE UPDATE OR DELETE ridică eroare **mereu**, inclusiv pentru owner. Ca să schimbi asta e nevoie de o migrare vizibilă.
+- REVOKE INSERT / UPDATE / DELETE / TRUNCATE de la `anon`, `authenticated` și `service_role` (J17). Doar triggerele și RPC-urile scriu.
+- Un trigger BEFORE UPDATE OR DELETE (pe rând) și unul BEFORE TRUNCATE (pe instrucțiune) ridică eroare **mereu**, inclusiv pentru owner (J17). Ca să schimbi asta e nevoie de o migrare vizibilă.
 
 **`hr_decizii_contor`**
 - RLS: SELECT pentru `citire`.
 - Fără scriere din client: doar prin `_hr_decizii_aloca` și RPC-urile de contor.
 
 **`hr_decizii_tipuri`, `hr_decizii_semnatari`**
-- RLS: SELECT pentru `auth.uid() IS NOT NULL`.
+- RLS: `hr_decizii_tipuri` SELECT pentru `auth.uid() IS NOT NULL`. **`hr_decizii_semnatari` SELECT doar pentru `fn_hr_decizii_poate('citire')`** (owner și HR, P1-2): leagă semnatarii de împuterniciri, iar ceilalți cititori văd semnatarul din `snapshot`-ul deciziei.
 - Scrierea doar prin migrare. În v1 nu există ecran pentru semnatari.
 - Împuternicirile pentru 90 și 125 (D2b) se înregistrează, după semnare, printr-o migrare de date (preview → OK) (VA4).
-  - **Pe D9 = A** (recomandat; PR-urile pornesc pe el), împuternicirea e o decizie `ALTA_DECIZIE` din registru. Numărul vine din „Rezervă număr” (PR3) sau, dacă se semnează înainte, din import (PR4). Scanul trece prin modalul obișnuit, inclusiv din poze (§4.A.6, modul fără document generat). Migrarea copiază din rândul respectiv nr., data și `imputernicire_path` = `scan_path`. Bucket-ul n-are folder separat pentru semnatari, iar scanul îl văd doar `owner` și `hr`, ca pe orice `ALTA_DECIZIE` (§3.3).
+  - **Pe D9 = A** (recomandat, confirmat de Copilot; PR-urile pornesc pe el), împuternicirea e o decizie `ALTA_DECIZIE` din registru. Numărul vine din „Rezervă număr” (PR3) sau, dacă se semnează înainte, din import (PR4). Scanul trece prin modalul obișnuit, inclusiv din poze (§4.A.6, modul fără document generat). **Migrarea setează doar `imputernicire_decizie_id`** = id-ul acelei decizii (P1-4); nr., data și scanul se derivă la fiecare citire din decizie, deci un scan înlocuit ulterior e preluat automat. La emitere, `snapshot.semnatar.imputernicire` îngheață nr., data, `scan_path` și `scan_sha256` valabile atunci. Bucket-ul n-are folder separat pentru semnatari, iar scanul îl văd doar `owner` și `hr`, ca pe orice `ALTA_DECIZIE` (§3.3).
   - Pe D9 = B, vezi §9.
 - În aceeași migrare de date intră, după OK-ul juridic, textul final al preambulului și `preambul_validat = true` (VA2). R4 dispare doar când formula din §4.A.2 devine falsă.
 
-**`executie_completari_propuse`**
-- Neschimbat, în afară de coloana nouă.
-- Rândurile generatorului le inserează RPC-ul SECURITY DEFINER.
+**`executie_completari_propuse`** (J5; schimbare pe tabel și RPC existente, intră în OK-ul pe PR1, nu în PR5)
+- Coloana nouă `hr_decizie_id`.
+- Politica `completari_ins` primește `AND hr_decizie_id IS NULL AND sursa <> 'decizie_numire'` [V: azi WITH CHECK = owner OR `can_manage_contracts`]. Rândurile generatorului le inserează doar RPC-ul SECURITY DEFINER.
+- `fn_completare_aplica`: dacă `r.hr_decizie_id IS NOT NULL`, la acceptare reverifică legătura completă: decizia există și `_hr_decizie_eligibila_efect` e true; `r.proiect_id = decizie.proiect_id`; `r.camp = tip.camp_efect`; `r.valoare = decizie.employee_id::text`; `data_efect` nulă sau ≤ `_hr_azi()`. Altfel eroare („propunere necorelată cu decizia” / „decizia nu mai e în vigoare” / „efect de la …”). Restul corpului rămâne neschimbat [V: whitelist și `IF NOT COALESCE(v_ok,false)`].
 
 ### 3.5 Bucket `hr-decizii` (privat)
 
@@ -640,7 +694,7 @@ Triggere:
 
 **Calea în politici (VA23).** Id-ul se ia cu `fn_hr_decizii_id_din_cale(name) RETURNS bigint`:
 - e IMMUTABLE, nu citește date și are EXECUTE pentru authenticated, pentru că rulează în politici;
-- întoarce NULL dacă `name !~ '^(HR|carte_tehnica)/[0-9]{4}/[0-9]+/(generat|semnat)_[0-9]+\.pdf$'`, și face cast-ul doar după ce regex-ul a trecut.
+- întoarce NULL dacă `name !~ '^(HR|carte_tehnica)/[0-9]{4}/[1-9][0-9]{0,17}/(generat|semnat)_[0-9]{1,15}\.pdf$'`, și face cast-ul doar după ce regex-ul a trecut. **Id-ul are maxim 18 cifre** (< 9 223 372 036 854 775 807), deci cast-ul la `bigint` nu poate depăși intervalul (J15); un id de 19+ cifre întoarce NULL, nu eroare.
 
 Seria și anul din cale se compară cu ale deciziei ca text (`split_part`), fără cast. Nicio politică nu face cast direct pe `storage.foldername(name)`. Politicile de pe `storage.objects` se evaluează pe toate bucket-urile, iar Postgres nu garantează ordinea condițiilor, deci un cast care pică pe căile altui bucket ar putea strica citirea și acolo. Fiecare politică începe cu `bucket_id = 'hr-decizii' AND`.
 
@@ -654,26 +708,28 @@ Seria și anul din cale se compară cu ale deciziei ca text (`split_part`), făr
 **De ce fără DELETE (VA19).** Cu DELETE pentru owner și INSERT pe deciziile `semnata`, un owner putea șterge `semnat_X.pdf` și urca alt fișier sub același nume. Decizia ar fi trimis la aceeași cale, cu `scan_sha256` vechi, fără nicio urmă în jurnal: DELETE + INSERT ocoleau lipsa UPDATE-ului. Evenimentul `fisier_sters` din v1.1 nici nu putea fi scris: UI-ul n-are drept de scriere în jurnal (§3.4), iar ștergerea nu se poate muta într-un RPC (`protect_objects_delete`, §1) [V].
 - Un scan înlocuit rămâne ca dovadă, iar evenimentul `scan_inlocuit` trimite la un fișier care există.
 - Fișierele orfane (upload reușit, RPC eșuat) rămân private, sub decizia din cale. Dacă vreodată e nevoie, curățarea se face prin migrare vizibilă.
+- **Limita garanției (J17).** „Fără DELETE” ține pentru utilizatorii autentificați (inclusiv owner). Cheia `service_role` ocolește politicile de storage, iar Storage API o lasă să șteargă sau să suprascrie. În v1 nicio funcție, edge function sau script nu folosește bucket-ul cu cheia de serviciu; o ștergere privilegiată s-ar vedea ca discrepanță (fișier lipsă față de `scan_path` și hash-ul declarat). Riscul rezidual e în §8.
+- **Decizii combinate (J14).** Calea conține id-ul deciziei, deci 385a și 385b primesc **două upload-uri distincte cu aceiași octeți** (`…/<id_a>/semnat_<ts>.pdf` și `…/<id_b>/semnat_<ts>.pdf`), cu același `scan_sha256`. Ecranul de import urcă același File de două ori, în secvență. Nu există document comun în v1.
 
 ### 3.6 RPC-uri
 
-Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`, cu `REVOKE ALL FROM PUBLIC, anon` și verificare de drept în corp, scrisă fail-closed: `IF fn_hr_decizii_poate(...) IS NOT TRUE THEN RAISE ... USING ERRCODE = '42501'` (§3.3, VA16). Cele publice au și `GRANT EXECUTE TO authenticated`.
+Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`, cu `REVOKE ALL FROM PUBLIC, anon, authenticated, service_role` (Vf3: default ACL-ul pe funcții dă EXECUTE lui `service_role` [V]) și verificare de drept în corp, scrisă fail-closed: `IF fn_hr_decizii_poate(...) IS NOT TRUE THEN RAISE ... USING ERRCODE = '42501'` (§3.3, VA16). Cele publice au și `GRANT EXECUTE TO authenticated`.
 
 | Funcție | Drept | Ce face |
 |---|---|---|
-| `_hr_decizii_aloca(p_serie, p_an, p_numar int, p_confirm_salt bool, p_origine text)` | **internă**: REVOKE de la authenticated, apelată doar din RPC-uri | vezi §3.7 |
+| `_hr_decizii_aloca(p_serie, p_an, p_numar int, p_numar_sufix text, p_confirm_salt bool, p_origine text)` → `(numar int, sufix text, salt jsonb)` | **internă**: REVOKE ALL de la PUBLIC, anon, authenticated, service_role (Vf3), apelată doar din RPC-uri | vezi §3.7 (P0-3, J2; `salt` = avertismentul R7 cu contorul, numărul cerut și confirmarea, J23) |
 | `fn_hr_decizii_urmatorul_numar(p_an)` | `citire` | Numai informativ, fără lock: `{numar}` sau `{numar: null, motiv: 'an neinitializat'}`. |
-| `fn_hr_decizii_contor_initializeaza(p_an, p_ultimul_fizic int, p_sursa text)` | `contor` | Creează rândul anului dacă lipsește. `ultimul = GREATEST(ultimul, p_ultimul_fizic)`, `ultimul_initial = ultimul`, `auto_permis = true`, plus `initializat_*` și eveniment. Dacă anul e deja inițializat cu auto pornit, dă eroare și trimite la „corectează”. |
+| `fn_hr_decizii_contor_initializeaza(p_an, p_ultimul_fizic int, p_sursa text)` | `contor` | Creează rândul anului dacă lipsește. `ultimul = GREATEST(ultimul, p_ultimul_fizic)`, **`ultimul_initial = coalesce(ultimul_initial, ultimul)`** (baza primei inițializări nu se rescrie la repornire, deci golurile vechi rămân vizibile, J13), `auto_permis = true`, plus `initializat_*` și eveniment (cu baza veche și cea nouă). Dacă anul e deja inițializat cu auto pornit, dă eroare și trimite la „corectează”. |
 | `fn_hr_decizii_contor_opreste_auto(p_an, p_motiv)` | `contor` | `auto_permis = false` (de ex. dacă registrul de hârtie s-a reluat). Repornirea se face doar prin re-inițializare. |
 | `fn_hr_decizii_contor_corecteaza(p_an, p_ultimul, p_motiv)` | `owner` | Pentru numerele manuale tastate greșit. Valoarea nouă trebuie să fie `≥ max(numar)` al deciziilor din serie și an în alte stări decât `anulata`. Numărul unei decizii anulate rămâne ocupat, iar alocarea automată sare peste el. Motivul e obligatoriu și se scrie eveniment. |
-| `fn_hr_decizie_previzualizeaza(p_id)` | `redactare` | Pentru draft: întoarce `{continut, avertismente}`, calculate de aceleași funcții ca la emitere, fără alocare și fără scriere. Numărul apare ca „____”. |
-| `fn_hr_decizie_emite(p_id, p_numar int DEFAULT NULL, p_confirmari jsonb DEFAULT '[]', p_confirm_salt bool DEFAULT false)` | `emitere` | vezi §3.8 |
-| `fn_hr_decizie_seteaza_pdf(p_id, p_path, p_sha256)` | `emitere` | Stare `emisa`. Calea trebuie să fie `<serie>/<an>/<id>/generat_*.pdf`, cu seria, anul și id-ul deciziei, iar fișierul trece verificarea de mai jos (VA20). Dacă `pdf_path IS NULL`, setează. Dacă e deja setat **cu aceeași cale și același hash**, întoarce ok (idempotent, C19). Altfel dă eroare. PDF-ul e derivat: dacă upload-ul cade, se regenerează din `continut`, iar numărul nu se pierde. |
+| `fn_hr_decizie_previzualizeaza(p_id)` | `redactare` | Pentru draft: întoarce `{continut, avertismente, versiune, hash_previzualizare}`, calculate de aceleași funcții ca la emitere, fără alocare și fără scriere. Numărul apare ca rezervă de lățime maximă („99999-bis”, afișat „____”), ca numărul final să nu poată schimba încadrarea (J20). `hash_previzualizare` = sha256 peste `continut` + `versiune` + datele dependente citite (atestat, proiect, semnatar, împuternicire). |
+| `fn_hr_decizie_emite(p_id, p_hash_previzualizare text, p_cerere_id uuid, p_numar int DEFAULT NULL, p_confirmari jsonb DEFAULT '[]', p_confirm_salt bool DEFAULT false)` | `emitere` | vezi §3.8 (J10, J20) |
+| `fn_hr_decizie_seteaza_pdf(p_id, p_path, p_sha256)` | `emitere` | **Ia decizia `FOR UPDATE` înainte de orice verificare (J11).** Stare `emisa`. Calea trebuie să fie `<serie>/<an>/<id>/generat_*.pdf`, cu seria, anul și id-ul deciziei, iar fișierul trece verificarea de mai jos (VA20); `p_sha256` are formatul `^[0-9a-f]{64}$` (P2-1). Dacă `pdf_path IS NULL`, setează. Dacă e deja setat **cu aceeași cale și același hash**, întoarce ok (idempotent, C19). Altfel dă eroare („PDF deja atașat”): primul PDF rămâne. PDF-ul e derivat: dacă upload-ul cade, se regenerează din `continut`, iar numărul nu se pierde. |
 | `fn_hr_decizie_ataseaza_scan(p_id, p_path, p_sha256, p_verificari jsonb)` | `scan` | vezi §3.9 |
-| `fn_hr_decizie_inlocuieste_scan(p_id, p_path, p_sha256, p_motiv, p_verificari jsonb)` | `owner` | Stare `semnata`. Înlocuiește un scan urcat greșit (alt document, altă persoană, pagină nesemnată). Cere `p_path <> scan_path` și verificarea de fișier de mai jos (VA19, VA20). `p_verificari` se validează ca la §3.9, pasul 3 (`lizibil = true` obligatoriu, plus `sursa` și `pagini`) (VA6). Evenimentul `scan_inlocuit` păstrează calea și hash-ul vechi, plus verificările noului scan. Actualizează `dovada_path` pe propunerile `propus` ale deciziei. Fișierul vechi rămâne în bucket ca dovadă (C15c, modificat: VA19). |
+| `fn_hr_decizie_inlocuieste_scan(p_id, p_path, p_sha256, p_motiv, p_verificari jsonb)` | `owner` | Stare `semnata`. Înlocuiește un scan urcat greșit (alt document, altă persoană, pagină nesemnată). Ia decizia `FOR UPDATE`. **Retry (J10):** dacă ultimul eveniment `scan_inlocuit` al deciziei are deja `scan_path = p_path` și `scan_sha256 = p_sha256`, întoarce ok fără eveniment nou. Altfel cere `p_path <> scan_path` și verificarea de fișier de mai jos (VA19, VA20). `p_verificari` se validează ca la §3.9, pasul 3 (`lizibil = true` obligatoriu, plus `sursa` și `pagini`) (VA6). Evenimentul `scan_inlocuit` păstrează calea și hash-ul vechi, plus verificările noului scan. Actualizează `dovada_path` pe propunerile `propus` ale deciziei. Fișierul vechi rămâne în bucket ca dovadă (C15c, modificat: VA19). |
 | `fn_hr_decizie_anuleaza(p_id, p_motiv)` | `anulare` | Doar din starea `emisa`, pentru orice origine. O rezervare nefolosită se anulează cu motivul „număr nefolosit”. Numărul rămâne ocupat. Motivul e obligatoriu, iar `anulat_de` și `anulat_la` se completează. |
-| `fn_hr_decizie_rezerva(p_payload jsonb)` | `rezervare` | vezi §4.F (la numiri: B1 și R4, VA17) |
-| `fn_hr_decizie_importa(p_payload jsonb)` | `import` | vezi §4.E |
+| `fn_hr_decizie_rezerva(p_payload jsonb)` | `rezervare` | vezi §4.F (la numiri: B1 și R4, VA17). **`cerere_id` (uuid generat în client la deschiderea formularului) e obligatoriu** (P1-3, J10): dacă există deja un rând cu același `cerere_id` și același `cerere_hash`, întoarce rezultatul anterior (același număr), fără alocare nouă; cu alt hash → eroare „cerere refolosită cu alt conținut”. **Concurență (Vf9):** înainte de lookup, `pg_advisory_xact_lock(hashtext(cerere_id::text))`, astfel că al doilea apel simultan așteaptă și găsește rândul primului; plasă: `unique_violation` pe `cerere_id` → se reia lookup-ul și se întoarce rândul existent. La fel în `importa`. Validatorul comun de număr/an/dată se aplică (J12), inclusiv B3/R6 |
+| `fn_hr_decizie_importa(p_payload jsonb)` | `import` | vezi §4.E; aceeași cheie `cerere_id` ca la rezervare (J10) |
 | `fn_hr_decizii_emitenti()` | `citire` | Lista nominală a profilurilor care trec azi `emitere`, cu calea prin care trec (owner, `department = 'HR'`, `hr.decizii`). Se calculează cu `_hr_decizii_termeni` și apare în antetul tab-ului (§7) (VA21). |
 
 **Verificarea de fișier (VA20)**, în `seteaza_pdf`, `ataseaza_scan` și `inlocuieste_scan`. Fără ea, un upload întrerupt pe telefon, urmat de apelul RPC, ar lăsa decizia `semnata` fără fișier, iar propunerile pe echipă s-ar naște cu `dovada_path` mort.
@@ -684,9 +740,14 @@ Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`, cu `REVOKE ALL 
 
 `postgres`, owner-ul funcțiilor, are BYPASSRLS și SELECT pe `storage.objects` [V]. Dacă o condiție pică: eroare, fără tranziție.
 
-**Funcții interne** (REVOKE de la authenticated):
+**Funcții interne** (`REVOKE ALL ON FUNCTION _hr_* FROM PUBLIC, anon, authenticated, service_role`, Vf3; doar owner-ul RPC-urilor le execută):
 - `_hr_decizii_termeni(p_profile_id)` calculează termenii de drept din §3.3 (o singură copie);
-- `_hr_decizie_avertismente(p_id)` calculează lista de avertismente din §4.A.2;
+- `_hr_decizie_avertismente(p_id, p_numar int DEFAULT NULL, p_mod text DEFAULT 'emitere')` calculează lista de avertismente din §4.A.2 pentru draft/payload; primește numărul manual, deci poate decide ramura B3 „fără număr manual” (J23). `p_mod` ∈ `emitere`, `rezervare`, `import`, `revocare` selectează matricea de validări (J4). R7 nu se calculează aici, ci în alocare (`salt`), și se adaugă în aceeași listă persistată (J23);
+- `_hr_decizii_valideaza_numar(p_serie, p_an, p_numar, p_sufix, p_data_emitere, p_origine)`: validatorul comun din §2.1 (J12);
+- `_hr_decizii_norm_sufix(text)`: normalizarea sufixului (P0-3);
+- `_hr_acopera_domeniu(p_cerute text[], p_autorizatie_id bigint)`: port SQL al `acoperaDomeniul` din client, cu aceeași normalizare; vectorii de test sunt comuni (același tabel de cazuri în vitest și în testul SQL) (P1-1, J19);
+- `_hr_decizie_eligibila_efect(p_id)`: regula unică de eligibilitate a efectului (§2.8; J6, J8, J9);
+- `_hr_azi()`: ziua de business Europe/Bucharest (P2-2);
 - `_hr_decizie_randeaza(p_id, p_numar, p_data)` produce `continut` din șabloanele din §5.
 
 `fn_hr_decizii_id_din_cale(name)` (§3.5) nu e internă: rulează în politicile de storage, deci are EXECUTE pentru authenticated. E IMMUTABLE și nu citește date.
@@ -696,9 +757,12 @@ Toate sunt `SECURITY DEFINER SET search_path = public, pg_temp`, cu `REVOKE ALL 
 ### 3.7 Alocarea numărului (`_hr_decizii_aloca`)
 
 ```
+sufix := _hr_decizii_norm_sufix(p_numar_sufix)  -- P0-3, J2
+daca sufix <> '' AND p_origine <> 'import' → eroare „sufix permis doar la import”
 daca p_serie = 'carte_tehnica':                 -- doar import; fara contor
+    pg_advisory_xact_lock(hashtext('hr_decizii:carte_tehnica:' || p_an || ':' || p_numar))   -- J2: serializare fara contor
     verifica (serie, an, numar, sufix) liber → altfel eroare „nr X/an (carte tehnica) e folosit de #id”
-    return p_numar
+    return (p_numar, sufix, NULL)
 INSERT INTO hr_decizii_contor (serie, an) VALUES ('HR', p_an) ON CONFLICT DO NOTHING;
 SELECT * INTO c FROM hr_decizii_contor WHERE serie = 'HR' AND an = p_an FOR UPDATE;
 daca p_numar IS NULL:                           -- automat
@@ -706,31 +770,40 @@ daca p_numar IS NULL:                           -- automat
     n := c.ultimul + 1
     cat timp exista (HR, p_an, n, sufix oarecare) → n := n + 1      -- sare peste numere manuale/importate
 altfel:                                         -- manual
-    daca exista (HR, p_an, p_numar, sufixul cerut) → eroare „nr p_numar/p_an e folosit de decizia #id”
-    daca p_origine <> 'import' AND p_numar > c.ultimul + 20 AND NOT p_confirm_salt → eroare 'salt_mare' (R7)
+    daca sufix = '' AND exista (HR, p_an, p_numar, sufix oarecare) → eroare „nr p_numar/p_an e folosit de decizia #id”
+    daca sufix <> '' AND exista (HR, p_an, p_numar, sufix) → eroare idem (912-bis ≠ 912, 385a ≠ 385b)
+    daca p_origine <> 'import' AND p_numar > c.ultimul + 20:
+        daca NOT p_confirm_salt → eroare 'salt_mare' (R7)
+        salt := {cod:'R7', contor:c.ultimul, cerut:p_numar, confirmat_de:auth.uid(), confirmat_la:now()}   -- J23
     n := p_numar
 UPDATE hr_decizii_contor SET ultimul = GREATEST(ultimul, n) …;
-return n
+return (n, sufix, salt)
+-- Autoritatea finala ramane UNIQUE (serie, an, numar, numar_sufix): unique_violation → aceeasi eroare prietenoasa.
 ```
+
+Apelanții adaugă `salt` în `avertismente` și scriu evenimentul `salt_confirmat` (J23). Validatorul comun (`_hr_decizii_valideaza_numar`, J12) rulează înainte de alocare în toate cele trei origini.
 
 ### 3.8 Emiterea (`fn_hr_decizie_emite`)
 
-1. Verifică dreptul `emitere`. Ia decizia cu `SELECT … FOR UPDATE WHERE id = p_id AND stare = 'draft' AND origine = 'platforma'`.
-2. Calculează avertismentele cu `_hr_decizie_avertismente(p_id)` (lista din §4.A.2).
+1. Verifică dreptul `emitere`. Ia decizia cu `SELECT … FOR UPDATE WHERE id = p_id`.
+   - **Retry (J10):** dacă decizia are `stare <> 'draft'` și `cerere_emitere = p_cerere_id` (deci și dacă între timp a devenit `semnata` sau `anulata`, Vf10), întoarce rezultatul salvat (`{id, an, numar, nr_afisat, cod_verificare, avertismente}`), fără alocare și fără eveniment.
+   - Altfel trebuie `stare = 'draft'` și `origine = 'platforma'`.
+   - **Versiunea (J20):** recalculează `hash_previzualizare` ca în `previzualizeaza`; dacă diferă de `p_hash_previzualizare` → eroare „draftul s-a schimbat de la previzualizare; previzualizează din nou” (alt redactor, atestat schimbat etc.). Verificarea B7 (încadrarea) făcută de client e deci legată de exact versiunea emisă.
+   - **Ținta (P0-2, J3):** dacă `inlocuieste_id` sau `revoca_id` e setat, ia ținta `FOR UPDATE` (ordinea: întâi decizia nouă, apoi ținta, aceeași în toate RPC-urile) și reverifică B9 sub lock.
+2. Calculează avertismentele cu `_hr_decizie_avertismente(p_id, p_numar)` (lista din §4.A.2), **inclusiv R3, calculat pe server** cu `_hr_acopera_domeniu` (P1-1, J19).
    - Orice blocant (**B**) → eroare cu lista.
-   - Orice roșu (**R**) al cărui cod nu apare în `p_confirmari` → eroare cu lista; UI-ul îl afișează și cere confirmarea.
-   - R3 (acoperirea domeniului) vine doar din client, în `p_confirmari` (C43).
-3. Calculează `an = extract(year FROM data_emitere)`. Dacă `an ≠ an(current_date)`, `p_numar` e obligatoriu (B3/R6).
-4. Alocă numărul: `n := _hr_decizii_aloca('HR', an, p_numar, p_confirm_salt, 'platforma')`.
+   - Orice roșu (**R**) calculat de server al cărui cod nu apare în `p_confirmari` → eroare cu lista; UI-ul îl afișează și cere confirmarea. Codurile din `p_confirmari` pe care serverul nu le-a calculat se ignoră și nu se salvează: confirmările doar confirmă, nu adaugă și nu înlocuiesc (P1-1).
+3. Calculează `an = extract(year FROM data_emitere)` și rulează validatorul comun (J12). Dacă `an ≠ extract(year FROM _hr_azi())`, `p_numar` e obligatoriu (B3/R6).
+4. Alocă numărul: `(n, _, salt) := _hr_decizii_aloca('HR', an, p_numar, '', p_confirm_salt, 'platforma')`; `salt` se adaugă în avertismente (J23).
 5. Construiește `snapshot`, cu datele de acum:
    - persoana (nume, titlu și formele lui);
    - proiectul (`proiect_denumire`, `nr_contract`, `data_contract`, beneficiar, `data_termen`);
    - atestatul (tip, nr., dată, **emitent din `hr_autorizatii.emitent`** (C29), expirare, `verificat_pe_scan`, `uploadat_de`);
-   - semnatarul (nume, calitate, `preambul_text`, `bloc_semnatura`, împuternicire);
+   - semnatarul (nume, calitate, `preambul_text`, `bloc_semnatura`, împuternicire: **doar id-ul deciziei, nr. și data**, derivate din `imputernicire_decizie_id` (P1-4). Calea și hash-ul scanului **nu** intră în snapshot: rândul unei decizii pe proiect îl citesc profilurile `exec`, iar P1-2 le ascunde metadatele împuternicirii; se citesc la cerere, cu dreptul `citire` (Vf13));
    - `temei`.
 6. Randează: `continut := _hr_decizie_randeaza(…)`, care dă `{titlu, preambul, decide, articole[], bloc_semnatura, luare_la_cunostinta}`.
 7. Calculează `cod_verificare := 'D' || id || '-' || left(encode(sha256(convert_to(continut::text,'UTF8')),'hex'), 8)`.
-8. Face UPDATE strict pe coloanele tranziției: `stare = 'emisa'`, `an`, `numar`, `mod_numar`, `snapshot`, `continut`, `cod_verificare`, `avertismente` (toate, inclusiv cele galbene, plus confirmările `{cod, mesaj, confirmat_de, confirmat_la}`), `emis_de`, `emis_la`. Scrie evenimentul.
+8. Face UPDATE strict pe coloanele tranziției: `stare = 'emisa'`, `an`, `numar`, `mod_numar`, `snapshot`, `continut`, `cod_verificare`, `avertismente` (toate, inclusiv cele galbene, R7 din alocare, plus confirmările `{cod, mesaj, confirmat_de, confirmat_la}`), `cerere_emitere = p_cerere_id`, `emis_de`, `emis_la`. Scrie evenimentul (cu `versiune` și `hash_previzualizare`).
 9. Întoarce `{id, an, numar, nr_afisat, cod_verificare, avertismente}`.
 
 ### 3.9 Scanul semnat (`fn_hr_decizie_ataseaza_scan`)
@@ -738,6 +811,7 @@ return n
 1. Verifică dreptul `scan` (fail-closed, §3.3) și ia decizia FOR UPDATE.
    - **Retry (VA34):** dacă decizia e deja `semnata`, iar `scan_path` și `scan_sha256` sunt identice cu cele primite, întoarce ok fără eveniment nou. E cazul unui răspuns pierdut pe rețea instabilă.
    - Altfel, starea trebuie să fie `emisa`.
+   - **Ținta (P0-2, J3):** dacă decizia are `inlocuieste_id` / `revoca_id`, ia ținta `FOR UPDATE` și reverifică: ținta e încă `semnata` și nu există altă relație vie pe ea în afară de decizia curentă. Altfel eroare, fără tranziție (scanul rămâne în bucket, orfan).
 2. Verifică calea: `<serie>/<an>/<id>/semnat_*.pdf`, cu seria, anul și id-ul deciziei, plus verificarea de fișier din §3.6 (VA20).
 3. Verifică `p_verificari` (C15b), după modul ecranului (§4.A.6, VA5):
    - numiri cu document generat (origine `platforma`): `{nr, persoana, semnatura, stampila, cod}`, toate true. `cod` = „codul de pe hârtie e D{id}-xxxx afișat” (VA28); fără bifa asta, codul C15a ar fi doar decorativ;
@@ -745,13 +819,14 @@ return n
    - `ALTA_DECIZIE`: `{nr, semnatura}`;
    - pentru toate (D5): `lizibil` = true („toate paginile sunt complete și lizibile”), plus `sursa` (`'pdf'` sau `'foto'`), `pagini` (întreg ≥ 1, acceptat indiferent de sursă), `pagini_sursa` (`'detectat'` sau `'manual'`, VA29) și `generat` (true / false). Sunt obligatorii, dar doar informative;
    - lista intră în eveniment.
-4. Face UPDATE: `scan_path`, `scan_sha256`, `scan_de`, `scan_la`, `stare = 'semnata'`.
-5. Ținte:
+4. Face UPDATE: `scan_path`, `scan_sha256` (format `^[0-9a-f]{64}$`, valoare declarată de client, P2-1), `scan_de`, `scan_la`, `stare = 'semnata'`.
+5. Ținte (efect imediat în v1: B9 refuză la emitere o înlocuire/revocare cu `data_efect` > `data_emitere`, J7):
    - `inlocuieste_id` → `inlocuita`;
    - `revoca_id` → `revocata`;
    - în ambele cazuri, `UPDATE executie_completari_propuse SET status = 'expirat' WHERE hr_decizie_id = <tinta> AND status = 'propus'`, cu eveniment `propunere_expirata` (C9).
-6. Efect: dacă `tip.camp_efect IS NOT NULL`, `nivel = 'proiect'`, `propune_efect` e true **și coloana `camp_efect` există în `executie_proiecte`** (C40):
-   - pentru originile `platforma` și `rezervare`, reverifică B1 înainte de orice propunere (VA17). Dacă pică (împuternicit pe propria numire), scanul rămâne înregistrat, dar nu se naște nicio propunere, iar evenimentul notează motivul. La import, B1 nu se aplică (§4.E);
+6. Efect: dacă `_hr_decizie_eligibila_efect(p_id)` e true (§2.8; include `tip.camp_efect IS NOT NULL`, `nivel = 'proiect'`, `propune_efect`, **`employee_id IS NOT NULL`** (J8), proiect activ, decizie neexpirată (J6) **și coloana `camp_efect` există în `executie_proiecte`** (C40)):
+   - pentru originile `platforma` și `rezervare`, regula include B1 (VA17). Dacă pică (împuternicit pe propria numire), scanul rămâne înregistrat, dar nu se naște nicio propunere, iar evenimentul notează motivul. La import, B1 nu se aplică (§4.E);
+   - dacă regula pică din alt motiv (extern fără `employee_id`, proiect inactiv, decizie expirată), scanul se salvează oricum, fără propunere, cu eveniment `propunere_omisa` și motivul; tranzacția nu cade (J8);
    - citește valoarea curentă;
    - dacă e diferită de `employee_id`, inserează propunerea (tabelul din §4.A.7) și scrie eveniment;
    - numără celelalte rânduri `propus` pe același (proiect, câmp), pentru G8.
@@ -777,7 +852,7 @@ return n
 - bifele „luare la cunoștință” și „propune efect pe echipă”;
 - `propune_efect` e implicit true, dar devine **false implicit** când pe proiect există deja un RTE activ pe alt domeniu, caz în care UI-ul întreabă explicit (C11).
 
-**2. Avertismente.** Lista o calculează serverul (`_hr_decizie_avertismente`), la previzualizare și din nou la emitere. Clientul adaugă doar R3.
+**2. Avertismente.** Lista o calculează serverul (`_hr_decizie_avertismente`), la previzualizare și din nou la emitere, **inclusiv R3** (P1-1, J19). Clientul poate anticipa R3 cu `acoperaDomeniul`, dar nu-l poate omite: serverul îl impune.
 
 **Blocante (B)**: nu se pot trece cu confirmare.
 
@@ -785,14 +860,14 @@ return n
 |---|---|
 | B1 | Semnatarul **nu** e reprezentant legal și e chiar persoana numită (C7). Azi: Pantea sau Tudorache pe propria numire (D2a). Se calculează și la rezervarea unei numiri (§4.F, VA17) |
 | B2 | Angajatul e inactiv sau are `termination_date < data_efect` (C34) |
-| B3 | `data_emitere > current_date`; sau anul emiterii ≠ anul curent și nu s-a dat număr manual (C5) |
-| B4 | Nivelul nu e compatibil cu `tip.nivel` (C14); eticheta nu e în lista tipului |
+| B3 | `data_emitere > _hr_azi()`; sau anul emiterii ≠ anul curent și nu s-a dat număr manual (C5; numărul manual vine ca parametru în `_hr_decizie_avertismente`, J23). Se aplică la emitere și la rezervare (J12) |
+| B4 | Nivelul nu e compatibil cu `tip.nivel` (C14); eticheta nu e în lista tipului. **Excepții:** la `ALTA_DECIZIE` eticheta e liberă (rămân nivelul și `descriere` obligatorie, J22); la `REVOCARE` eticheta vine din țintă și nu se verifică în lista tipului (J4) |
 | B5 | Textul tipului conține `{contract}`, iar proiectul n-are `nr_contract` (C42) |
 | B6 | Atestatul ales nu e al angajatului, e șters (`deleted_at`), e înlocuit (`inlocuita_de_id`) sau n-are tipul cerut (C43) |
 | B7 | Previzualizarea depășește o pagină A4 și la 11pt. Se verifică în client, iar butonul „Emite” rămâne inactiv (C18) |
 | B8 | Numărul manual e ocupat (mesajul indică decizia care îl ocupă); numărul automat e cerut pe un an neinițializat |
-| B9 | La înlocuire sau revocare: ținta nu e `semnata`; are deja altă înlocuire sau revocare emisă; sau, la înlocuire, are alt tip, alt nivel ori alt proiect (C12) |
-| B10 | Câmpuri obligatorii lipsă: angajat, titlu, date, semnatar, iar la proiect și proiectul |
+| B9 | La înlocuire sau revocare: ținta nu e `semnata`; are deja altă înlocuire **sau** revocare vie (o singură relație vie pe țintă, P0-2, J3); ținta nu e o numire (`REVOCARE` / `ALTA_DECIZIE`, J18); `data_efect > data_emitere` (efectul viitor la înlocuire/revocare e v2, J7); sau, la înlocuire, are alt tip, alt nivel ori alt proiect (C12). Se verifică sub lock pe țintă, la emitere și din nou la scan |
+| B10 | Câmpuri obligatorii lipsă: angajat, titlu, date, semnatar, iar la proiect și proiectul. La `REVOCARE`, persoana (angajat **sau** `persoana_nume`) vine din țintă, deci revocarea numirii unui extern trece (J4) |
 
 **Roșii (R)**: emiterea merge doar cu confirmare explicită; confirmarea se salvează în `avertismente`, cu cine și când.
 
@@ -800,8 +875,8 @@ return n
 |---|---|
 | R1 | Atestat obligatoriu lipsă |
 | R2 | Atestatul e expirat la `data_efect` și nu are `fara_expirare` |
-| R3 | Domeniul cerut nu e acoperit (`acoperaDomeniul`, doar în client) |
-| R4 | Semnatarul nu e reprezentant legal, iar împuternicirea lui nu acoperă decizia (2B, C8). O singură formulă (VA2): `NOT este_reprezentant_legal AND (imputernicire_nr IS NULL OR imputernicire_data IS NULL OR imputernicire_path IS NULL OR imputernicire_data > data_emitere OR NOT preambul_validat)`. Azi: Pantea și Tudorache, până la împuternicire **și** validarea preambulului (D2b). Se calculează la emitere și la rezervarea unei numiri (§4.F) |
+| R3 | Domeniul cerut nu e acoperit (`_hr_acopera_domeniu` pe server, port al `acoperaDomeniul`, P1-1, J19) |
+| R4 | Semnatarul nu e reprezentant legal, iar împuternicirea lui nu acoperă decizia (2B, C8). O singură formulă (VA2, P1-4), cu `i` = decizia `imputernicire_decizie_id`: `NOT este_reprezentant_legal AND (i IS NULL OR i.tip_cod <> 'ALTA_DECIZIE' OR i.stare <> 'semnata' OR i.scan_path IS NULL OR i.data_emitere IS NULL OR i.data_emitere > data_emitere OR NOT preambul_validat)`. Retragerea unei împuterniciri **nu** trece prin registru (J18/B9 interzic `ALTA_DECIZIE` ca țintă, iar anularea merge doar din `emisa`): se face prin migrare de date `imputernicire_decizie_id = NULL` (preview → OK Răzvan), după care R4 revine (Vf5, varianta A; de confirmat, §9). Un scan înlocuit al împuternicirii nu schimbă R4. Azi: Pantea și Tudorache, până la împuternicire **și** validarea preambulului (D2b). Se calculează la emitere și la rezervarea unei numiri (§4.F) |
 | R5 | Temeiul tipului e `propunere`, nevalidat juridic (RSVTI, REVOCARE) (C28) |
 | R6 | Anul emiterii ≠ anul curent (retrodatare peste an) (C5) |
 | R7 | Număr manual peste `ultimul + 20` („salt mare”) (C4) |
@@ -820,12 +895,25 @@ return n
 | G8 | Există deja o propunere `propus` pe același câmp, din nas, mail sau altă decizie. Apare la scan (C10) |
 | G9 | Atestatul nu e `verificat_pe_scan` (atestatele le pot scrie și superadmin-ii, C23) |
 | G10 | Temeiul diferă de cel implicit al tipului, sau temeiul are sursa `model_nas` (nevalidat juridic, dar folosit în practică) |
+| G11 | La `REVOCARE`: semnatarul împuternicit revocă propria numire (informativ; B1 nu se aplică revocării, J4) |
+| G12 | La `REVOCARE`: persoana din țintă e acum inactivă sau externă (informativ; B2 nu se aplică, J4) |
 
-**3. Previzualizare.** Se cheamă `fn_hr_decizie_previzualizeaza`, iar `renderDecizieHtml` (§6) pune peste pagină „PROIECT — NEEMIS”, cu numărul „____”. Aici se verifică și B7.
+**Matricea pe moduri (J4, J12, J22).** `_hr_decizie_avertismente(…, p_mod)`:
+
+| Mod | Se aplică | Nu se aplică |
+|---|---|---|
+| `emitere` (numire) | B1–B10, R1–R7, G1–G10 | – |
+| `revocare` (`tip_cod = 'REVOCARE'`) | B3, B5 (dacă textul cere `{contract}`), B7, B8, B9, B10 (fără angajat; `titlu` obligatoriu, Vf7), **R4** (Vf6), R5, R6, R7, G11, G12 | B1, B2, B4 pe etichetă, B6, R1–R3, G1, G2, G5–G9 |
+| `rezervare` (numire) | B1, B3, B4, B8, B10 (persoană + semnatar), R4, R6, R7 | restul (nu există text generat) |
+| `rezervare` (`ALTA_DECIZIE`) | B3, B4 (doar nivel), B8, R6, R7 | restul |
+| `import` | B4 (cu excepția `ALTA_DECIZIE`), B8, validatorul comun de număr/an/dată | B1, B2, B3 pe an, avertismentele de atestat, R6, R7 |
+
+**3. Previzualizare.** Se cheamă `fn_hr_decizie_previzualizeaza`, iar `renderDecizieHtml` (§6) pune peste pagină „PROIECT — NEEMIS”, cu numărul „____” măsurat la lățimea maximă („99999-bis”). Aici se verifică și B7. Clientul păstrează `hash_previzualizare` și îl trimite la emitere (J20).
 
 **4. Emitere.**
-- Se cheamă `fn_hr_decizie_emite`, cu număr automat sau manual, confirmările roșii și, după caz, `p_confirm_salt`.
-- PDF-ul final se generează din `continut` și se urcă în `…/generat_<ts>.pdf`.
+- Se cheamă `fn_hr_decizie_emite`, cu `hash_previzualizare`, un `cerere_id` generat la apăsarea „Emite” (păstrat la retry), număr automat sau manual, confirmările roșii și, după caz, `p_confirm_salt`. Dacă draftul s-a schimbat între timp, emiterea e refuzată și UI-ul cere o nouă previzualizare (J20).
+- PDF-ul final se generează din `continut` și **se măsoară din nou** (`scrollHeight` ≤ 1123 px) înainte de upload. Dacă totuși depășește, PDF-ul nu se urcă și nu se înregistrează: decizia rămâne `emisa` fără PDF, apare în „De rezolvat” cu „PDF neînregistrat: depășește pagina”, iar HR o anulează și o refă. Un PDF decupat nu e niciodată rezultat valid (J20).
+- Altfel se urcă în `…/generat_<ts>.pdf`.
 - Calea și hash-ul se înregistrează cu `fn_hr_decizie_seteaza_pdf`.
 
 **5. Descărcare și print.** Se semnează și se ștampilează de mână, de semnatarul ales.
@@ -884,13 +972,14 @@ return n
 
 ### C. Înlocuire
 1. Pe o decizie semnată, „Înlocuiește” deschide un draft nou, precompletat (același tip, nivel, proiect, domeniu), cu `inlocuieste_id`.
-2. La emitere se verifică B9: poate exista o singură înlocuire vie pe aceeași țintă.
+2. La emitere se verifică B9 sub lock pe țintă: poate exista o singură relație vie (înlocuire **sau** revocare) pe aceeași țintă (P0-2, J3). În v1, `data_efect` a înlocuirii nu poate fi după `data_emitere` (J7).
 3. Când noul scan e semnat, cea veche trece în `inlocuita`, propunerile ei neconfirmate trec în `expirat`, iar efectul propune noua persoană.
 
 ### D. Revocare fără înlocuire
-1. Se creează o decizie de tip `REVOCARE`, cu `revoca_id`. Ținta trebuie să fie `semnata`.
-2. Triggerul copiază din țintă nivelul, proiectul, persoana, titlul și eticheta (C12).
-3. Art.1: „Incepand cu data de {data_efect}, se revoca Decizia nr. {nr_tinta}/{data_tinta} privind numirea {titlu} {nume} in functia de {functie_tinta}…”. Formularea e **de validat juridic**: `temei_sursa = 'propunere'`, deci R5.
+1. Se creează o decizie de tip `REVOCARE`, cu `revoca_id`. Ținta trebuie să fie o **numire** `semnata` (nu `REVOCARE`, nu `ALTA_DECIZIE`, J18) și să nu aibă altă relație vie (P0-2).
+2. Triggerul copiază din țintă nivelul, proiectul, persoana, titlul și eticheta (C12). Validările sunt cele din modul `revocare` (§4.A.2, J4): fără B1, B2 și lista de etichete; revocarea numirii unui angajat plecat sau a unui extern trece, cu G11/G12.
+2b. **Efect imediat în v1 (J7):** `data_efect` ≤ `data_emitere`. O revocare „de luna viitoare” se emite la data efectului; modelarea încetării la o dată viitoare e v2.
+3. Art.1: „Incepand cu data de {data_efect}, se revoca Decizia nr. {nr_tinta}[[/{data_tinta}]] privind numirea {titlu} {nume} in functia de {functie_tinta}…”. Formularea e **de validat juridic**: `temei_sursa = 'propunere'`, deci R5. `{nr_tinta}` = numărul afișat al țintei, cu sufix și serie („385a”, „391/carte tehnică”); `[[/{data_tinta}]]` e segment opțional, pentru țintele importate fără dată (Vf7).
 4. Când e semnată, ținta trece în `revocata`, iar propunerile ei neconfirmate trec în `expirat`.
 5. **Fără efect automat pe proiect:** `valoare` e NOT NULL și `fn_completare_aplica` nu știe să golească un câmp. Pe cardul din Echipă apare „⚠ decizie revocată, echipa îl are încă pe X”.
 
@@ -900,14 +989,16 @@ return n
 - `serie`: `HR` implicit, sau `carte_tehnica`;
 - `an` și `numar`, obligatorii; `numar_sufix`, opțional (de ex. „bis”);
 - `data_emitere`: **opțională la import** (C16a), pentru că deciziile din cartea tehnică n-au dată;
-- `tip_cod`: orice tip. `ALTA_DECIZIE` cu etichetă liberă acoperă tipurile din afara v1 (Pază, VT2, Gestionar);
+- `cerere_id` (uuid din client, obligatoriu): retry-ul cu același payload întoarce același rând (P1-3, J10);
+- `tip_cod`: orice tip. `ALTA_DECIZIE` cu etichetă liberă acoperă tipurile din afara v1 (Pază, VT2, Gestionar); validatorul de etichetă are excepția explicită pentru `ALTA_DECIZIE` (J22);
 - eticheta, nivelul, `employee_id` **sau** `persoana_nume` (extern), proiectul, atestatul (opțional);
 - `semnatar_id` (implicit 121), `titlu`, `descriere`;
-- `propune_efect`: implicit **false**.
+- `propune_efect`: implicit **false**;
+- **`inlocuieste_id` / `revoca_id`: refuzate în v1** (Vf12), ca la rezervare: altfel scanul importului ar trece ținta în `inlocuita`/`revocata` fără B9 la emitere.
 
 **Pașii:**
-1. Funcția validează doar B4, B8 (pe serie, an, număr, sufix) și coerența de nivel. B1, B2 și avertismentele de atestat nu se aplică trecutului.
-2. Alocă prin `_hr_decizii_aloca(serie, an, numar, …, 'import')`:
+1. Funcția validează B4 (cu excepția `ALTA_DECIZIE`, J22), B8 (pe serie, an, număr, sufix) și coerența de nivel, **plus validatorul comun de număr/an/dată** (J12): număr 1–99 999, an ≤ anul curent, `an = extract(year FROM data_emitere)` când data există, data nu în viitor. B1, B2 și avertismentele de atestat nu se aplică trecutului.
+2. Alocă prin `_hr_decizii_aloca(serie, an, numar, numar_sufix, false, 'import')` (P0-3):
    - seria HR împinge contorul anului cu GREATEST, dar **nu** pornește numărul automat;
    - seria `carte_tehnica` nu atinge contorul (C16b).
 3. Construiește `snapshot` din datele de azi, marcat `snapshot.sursa = 'import'`. `continut` rămâne NULL: documentul este scanul.
@@ -915,7 +1006,9 @@ return n
 5. Clientul urcă scanul și cheamă `fn_hr_decizie_ataseaza_scan` → `semnata`. Ecranul de scan e același ca la §4.A.6, în modul „fără document generat” (VA5), deci merge și din poze de pe telefon (D5); o decizie veche de 2 pagini devine un singur PDF.
    - **La numiri scanul e obligatoriu.** Un import fără scan apare în „De rezolvat” până se completează sau se anulează.
 
-**Decizii combinate** (de ex. MP / Șef șantier 385/2024): câte un rând pe funcție, același număr, sufix „a” / „b”, același fișier scanat.
+**Decizii combinate** (de ex. MP / Șef șantier 385/2024): câte un rând pe funcție, același număr, sufix „a” / „b”, **același fișier urcat de două ori**, câte o cale pe decizie, cu același hash (§3.5, J14).
+
+**Propunerea de efect la import** (J8): chiar cu `propune_efect = true`, un extern (`persoana_nume`, fără `employee_id`) nu primește propunere; scanul se salvează, iar evenimentul `propunere_omisa` notează „extern”.
 
 **Primul test e seria Mironu 28.09.2026:**
 - 911 CTC, 912 Coordonator SSM (Pantea), 912-bis Inspector SSM, 913 RTE MEC, 914 MP (Trusu, semnată de Trusu: importul trece), 915 Șef șantier, 916 RTE 1.1;
@@ -927,7 +1020,9 @@ return n
 - **Cât timp se mai fac decizii HR în Word, numărul lor îl dă platforma, niciodată invers.**
 - HR apasă „Rezervă număr” și completează tipul (implicit `ALTA_DECIZIE`), descrierea, data și, opțional, persoana și proiectul. O `ALTA_DECIZIE` legată de un proiect o văd tot doar owner-ii și HR (§3.3, VA7).
 - **La numiri** (tip ≠ `ALTA_DECIZIE`, de ex. o decizie RTE făcută încă în Word), persoana și semnatarul sunt obligatorii (VA17). `fn_hr_decizie_rezerva` calculează B1 (blocant) și R4 (confirmabil, cu `p_confirmari` în payload) cu aceeași `_hr_decizie_avertismente` ca la emitere și le salvează în `avertismente`. Fără asta, o numire din Word semnată de un împuternicit pe propria numire, sau fără împuternicire, ar intra ca `semnata` și ar propune schimbarea echipei fără niciun avertisment (D2, C7).
-- `fn_hr_decizie_rezerva` alocă numărul (automat dacă anul e inițializat, altfel manual) și creează rândul cu starea `emisa`, origine `rezervare` și `continut` NULL.
+- `fn_hr_decizie_rezerva` rulează validatorul comun și B3/R6 (J12), alocă numărul (automat dacă anul e inițializat, altfel manual; R7 din alocare intră în `avertismente`, J23) și creează rândul cu starea `emisa`, origine `rezervare` și `continut` NULL.
+- **Idempotență (P1-3, J10):** formularul generează `cerere_id` la deschidere; un retry după răspuns pierdut întoarce același număr, nu consumă altul.
+- Rezervarea nu poate purta `inlocuieste_id` / `revoca_id` în v1: înlocuirile și revocările se fac doar prin generator (J7, J18).
 - HR trece numărul în documentul Word. După semnare urcă scanul (`ataseaza_scan` → `semnata`; PDF sau poze de pe telefon, ca la §4.A.6, în modul „fără document generat”), sau anulează rezervarea dacă n-a folosit numărul.
 - La o numire, scanul produce propunerea de efect, ca la o decizie generată. B1 se reverifică înainte de propunere (§3.9, pasul 6).
 
@@ -942,7 +1037,7 @@ return n
    - Importă sau rezervă manual numerele găsite.
    - Apasă „Pornește numerotarea automată pentru {an}”, introduce ultimul număr fizic și sursa (cine a verificat și unde). Asta cheamă `fn_hr_decizii_contor_initializeaza`.
 2. **An nou.** Pe 1 ianuarie numărul automat e oprit pentru anul nou (nu are contor), până la inițializare. Inițializarea cu 0 înseamnă că registrul se resetează anual. Asta tratează C27 fără să presupună reguli.
-3. **Goluri.** Numerele din intervalul `(ultimul_initial, ultimul]` care nu au niciun rând apar în „De rezolvat → Goluri în registru”. Golurile de dinainte de inițializare țin de registrul de hârtie și nu se afișează.
+3. **Goluri.** Numerele din intervalul `(ultimul_initial, ultimul]` care nu au niciun rând apar în „De rezolvat → Goluri în registru”. Golurile de dinainte de inițializare țin de registrul de hârtie și nu se afișează. `ultimul_initial` e baza **primei** inițializări: oprirea și repornirea numărului automat nu o rescriu, deci golurile dintre baza veche și cea nouă rămân vizibile (J13).
 
 ---
 
@@ -991,7 +1086,7 @@ Varianta din v1.1 „Tudorache reprezentant legal, cu preambulul lui 121” a c�
 | `{aut_nr}`, `{aut_data}`, `{aut_emitent}`, `{aut_expirare}` | din snapshot; emitentul vine din `hr_autorizatii.emitent` (C29) |
 | `{temei}` | `hr_decizii.temei` |
 | `{nr_tinta}`, `{data_tinta}`, `{functie_tinta}` | doar la REVOCARE |
-| `{imputernicire}` | doar în preambulul semnatarului: „Imputernicirea nr. {imputernicire_nr}/{dd.mm.yyyy}”, din `snapshot.semnatar`. Formatul exact se validează juridic odată cu preambulul (VA3) |
+| `{imputernicire}` | doar în preambulul semnatarului: „Imputernicirea nr. {nr}/{dd.mm.yyyy}”, din `snapshot.semnatar.imputernicire` (derivat din `imputernicire_decizie_id`, P1-4). Formatul exact se validează juridic odată cu preambulul (VA3) |
 
 **Textul se păstrează fără diacritice, ca în modele,** ca prima decizie generată să aibă textul identic cu 916.
 
@@ -1038,7 +1133,8 @@ Textele marcate „transcris din …” se copiază literal din modelul NAS la P
 - HTML A4: 794px lățime, Times New Roman, antetul `LOGO_B64` din `src/logo.js` (antetul complet).
 - **Înălțimea e fixă: 1123px, raportul A4 exact (C18).**
   - Holder-ul are `height: 1123px; overflow: hidden`, ca `renderHtmlToPdfBlob` (`Achizitii.jsx:123`, imagine pusă pe 0,0,210,297) să nu deformeze.
-  - Înainte de emitere se măsoară `scrollHeight` pe conținut. Peste limită se încearcă la 11pt; dacă tot depășește, „Emite” rămâne blocat (B7). Formatul F1, cu 4 articole, încape pe o pagină.
+  - Înainte de emitere se măsoară `scrollHeight` pe conținut, cu numărul-rezervă de lățime maximă (J20). Peste limită se încearcă la 11pt; dacă tot depășește, „Emite” rămâne blocat (B7). **Mărimea aleasă (12 sau 11) se îngheață în `snapshot.font_pt` la emitere (Vf8)**; randarea finală o folosește pe aceea, fără să mai aleagă. Formatul F1, cu 4 articole, încape pe o pagină.
+  - După emitere, documentul final se măsoară din nou, la `snapshot.font_pt`; un document care depășește nu se urcă (§4.A.4, J20). Pentru că previzualizarea a folosit același font și numărul de lățime maximă, cazul rămâne teoretic (Vf8).
   - Paginarea pe mai multe pagini (`renderContractPdf`) rămâne pentru faza 2.
 - **Importul din `Achizitii.jsx`:** `renderHtmlToPdfBlob` se importă de acolo. Dacă la build se vede că importul trage tot modulul Achiziții în chunk-ul HR, se face o copie locală de 15 linii în `hrDeciziiDoc.js`.
 
@@ -1052,6 +1148,7 @@ Textele marcate „transcris din …” se copiază literal din modelul NAS la P
 
 **Hash**
 - SHA-256 se calculează în client cu `sha256Hex` din `src/ofertarePachet.js:16-22`, pe blob-ul urcat, atât pentru PDF-ul generat, cât și pentru scan, și se trimite la RPC (VA38). `ofertarePachet.js` e un modul pur, fără importuri [V].
+- **Ce garantează hash-ul (P2-1, J21):** e o sumă de control **declarată de cel care urcă**. Serverul validează formatul (64 hex) și verifică obiectul (existență, mime, mărime, uploader), dar nu recitește octeții. În UI și în documente se numește „amprentă declarată la încărcare”, nu „verificat de server”. La fel, `cod_verificare` leagă hârtia de `continut`, nu dovedește că PDF-ul urcat e randat din `continut`. O verificare server-side (edge function care citește obiectul) e candidat pentru v2, cu fișa din CLAUDE.md pct. 7.
 - `crypto.subtle` există doar în context securizat (HTTPS sau localhost), iar `sha256Hex` aruncă deja „SubtleCrypto indisponibil (pagina nu e servită pe HTTPS?)”. De aceea testul 37 se face pe deploy-ul Vercel, nu pe `vite --host` deschis de pe telefon prin IP.
 - La scanul din poze, hash-ul e al PDF-ului compus, adică al fișierului urcat, nu al pozelor (D5).
 - jsPDF pune la fiecare construcție un File ID aleator și data creării [V: `node_modules/jspdf/dist/jspdf.es.js:1349-1359`, `3572-3573`]. Același set de poze, compus de două ori, dă deci alt hash. Retry-ul nu recompune (§4.A.6, VA34).
@@ -1176,6 +1273,13 @@ Textele marcate „transcris din …” se copiază literal din modelul NAS la P
 - Dreptul de urcare rămâne `scan` (owner sau hr), atât în RPC, cât și în politica de storage pentru `semnat_*` (VA8). Telefonul nu deschide un drum nou: aceeași sesiune, aceleași RPC-uri, aceleași politici.
 - **Risc rezidual nou (D5), semnalat, neacoperit de D7 (VA13):** pot rămâne copii ale deciziilor semnate (semnătură, ștampilă, date personale) pe telefoanele emitenților și în backup-ul lor personal: pe calea „Din galerie” și, pe unele telefoane Android, și pe „Fă poză”. Platforma nu le urcă, dar nici nu le controlează. Atenuare: „Fă poză” e calea recomandată, ecranul cere ștergerea pozelor după salvare, iar testul 37 verifică ce rămâne în galerie.
 
+**Integritatea registrului (v1.3)**
+- **`service_role` fără scriere directă** pe cele cinci tabele ale registrului (P0-1, J16): doar SELECT. Abatere conștientă de la „regula casei” (GRANT `service_role` pe obiectele noi): un registru oficial nu trebuie să poată fi rescris de cheia de serviciu ocolind alocarea, emiterea și jurnalul. Dacă apare o automatizare care trebuie să scrie, primește EXECUTE pe un RPC dedicat, cu verificare de rol, nu drept pe tabel.
+- **TRUNCATE** e retras de la toate rolurile API, iar jurnalul are trigger BEFORE TRUNCATE (J17).
+- **Propunerile pe echipă** nu mai pot fi fabricate prin INSERT direct (J5): politica nouă exclude rândurile cu `hr_decizie_id`, iar `fn_completare_aplica` reverifică legătura. Schimbarea atinge un RPC existent, deci intră explicit în OK-ul pe PR1.
+- **Risc rezidual delimitat (J17):** cheia `service_role` poate șterge sau suprascrie obiecte din bucket-ul `hr-decizii` prin Storage API (politicile nu o opresc). Nimic din v1 nu folosește cheia pe acest bucket; cheia stă doar în secretele edge și în scripturile owner-ului (vezi `registru_automatizari`). Detectare: `scan_path` fără obiect sau amprentă diferită la o eventuală verificare v2.
+- **Hash-urile sunt declarate**, nu verificate de server (P2-1, J21; §6).
+
 **Igiena obiectelor noi**
 - Funcțiile sunt SECURITY DEFINER, cu `search_path` fix, REVOKE de la PUBLIC și anon și verificare de drept în cod, fail-closed (`IS NOT TRUE` → 42501, VA16). Funcțiile interne `_hr_*` nu au EXECUTE pentru authenticated. `fn_hr_decizii_id_din_cale` are EXECUTE, pentru că rulează în politici, dar e IMMUTABLE și nu citește date (§3.5).
 - Tabelele au RLS pe `auth.uid()` plus drept, nu `USING(true)`, și GRANT pe coloane la `hr_decizii`.
@@ -1263,20 +1367,26 @@ Răspunsurile din 06.10.2026 seara (`claude_context` #1622):
 
 Nicio decizie nu mai blochează PR1–PR5. Au apărut trei întrebări mici: două din răspunsuri, una din verificarea adversarială. Niciuna nu blochează; implementarea pornește pe recomandare.
 
-1. **D8. Cine urcă scanul semnat (de pe orice dispozitiv)** (din D3 + D5).
+**v1.3:** Copilot a confirmat recomandările pe D8, D9 și D10. Rămân **recomandări confirmate de Copilot, de confirmat de Răzvan**; PR-urile pornesc pe ele, iar schimbarea ulterioară e locală (predicat sau o coloană).
+
+1. **D8 = A (recomandat, confirmat de Copilot, de confirmat de Răzvan). Cine urcă scanul semnat (de pe orice dispozitiv)** (din D3 + D5). Copilot: „least privilege”; semnatarul nu primește drept de scriere în registru doar fiindcă semnează.
    - **A:** doar emitenții (Natalia, Marilena, tu), adică dreptul `scan` de azi.
    - **B:** și semnatarul care a semnat (de ex. Pantea), ca să fotografieze hârtia imediat după semnare.
    - **Recomand A.** Hârtia semnată ajunge oricum la HR pentru dosar, iar B ar da unui om din afara HR un drept de scriere în registrul oficial. PR3 se face pe A. Pe B se schimbă doar predicatul `scan`, pe care îl folosesc deja și RPC-ul, și politica de storage pentru `semnat_*` (VA8).
-2. **D9. Împuternicirile lui Pantea și Tudorache primesc număr în registrul HR?** (din D1 + D2b)
+2. **D9 = A, cu `imputernicire_decizie_id` FK și snapshot la emitere (recomandat, confirmat de Copilot, de confirmat de Răzvan). Împuternicirile lui Pantea și Tudorache primesc număr în registrul HR?** (din D1 + D2b). Copilot condiționează A de natura juridică: dacă sesiunea juridică confirmă că împuternicirea se emite ca decizie internă, A e varianta curată; altfel B.
    - **A:** da. Dacă împuternicirea se face ca decizie a administratorului, își ia numărul din platformă (`ALTA_DECIZIE`, „Rezervă număr”) după PR3, sau intră la import (PR4) dacă se semnează înainte.
    - **B:** nu, e act separat (mandat), fără număr în registrul HR.
-   - **Recomand A**, pentru că registrul e comun (D1). Pe A, scanul împuternicirii trece prin modalul obișnuit (inclusiv din poze), iar `imputernicire_path` devine `scan_path`-ul ei, deci bucket-ul n-are folder separat (§3.4). Pe B, PR3 primește în plus o intrare owner-only „Încarcă împuternicire” în același modal, cu calea `semnatari/<employee_id>/imputernicire_<ts>.pdf`, regex-ul din §3.5 extins și un test (VA4).
+   - **Recomand A**, pentru că registrul e comun (D1). Pe A, scanul împuternicirii trece prin modalul obișnuit (inclusiv din poze), iar semnatarul are **`imputernicire_decizie_id`** (FK la decizie, P1-4), nu o cale copiată: nr., data și scanul curent se derivă din decizie, iar `snapshot`-ul deciziei emise păstrează exact ce era valabil la emitere. Bucket-ul n-are folder separat (§3.4). Pe B, PR3 primește în plus o intrare owner-only „Încarcă împuternicire” în același modal, cu calea `semnatari/<employee_id>/imputernicire_<ts>.pdf`, regex-ul din §3.5 extins și un test (VA4).
    - În ambele variante, R4 dispare doar când formula din §4.A.2 devine falsă: împuternicire înregistrată (nr., dată, scan), datată cel târziu la data deciziei, plus preambul validat (VA2).
-3. **D10. Contul de serviciu „Claude” și scanurile semnate** (verificarea adversarială, VA22; CLAUDE.md pct. 3).
+3. **D10 = B (recomandat, confirmat de Copilot, de confirmat de Răzvan). Contul de serviciu „Claude” și scanurile semnate** (verificarea adversarială, VA22; CLAUDE.md pct. 3). Copilot: contul de serviciu n-are nevoie de specimenul de semnătură; `are_fisa` e o limitare fail-closed rezonabilă.
    - Contul „Claude” (IT, fără fișă de angajat, `can_manage_contracts`) [V] ar trece `confirm`, deci ar citi scanurile semnate ale deciziilor pe proiect (specimen de semnătură și ștampilă).
    - **A:** rămâne ca la contracte: vede și scanurile.
    - **B:** conturile fără fișă de angajat nu văd scanurile pe ramura `confirm` (condiția `are_fisa` din `citire_scan`). PDF-ul generat rămâne vizibil prin `exec`, iar confirmarea efectului prin `fn_completare_aplica` rămâne neschimbată.
    - **Recomand B.** Un cont de serviciu n-are nevoie de specimenul de semnătură, iar un drept nou se dă doar cu acordul tău explicit. PR1 se face pe B; A înseamnă doar scoaterea condiției `are_fisa`.
+
+4. **D11 (nou, Vf5). Cum se retrage o împuternicire?** J18 interzice revocarea/înlocuirea unei `ALTA_DECIZIE` prin registru.
+   - **A (recomandat, aplicat în spec):** migrare de date `imputernicire_decizie_id = NULL` (preview → OK Răzvan); R4 revine imediat. Fără excepție în reguli.
+   - **B:** excepție la J18 pentru `ALTA_DECIZIE` referită din `hr_decizii_semnatari`, revocabilă prin generator, vizibilă doar owner + HR. Mai multă logică, mai multe teste.
 
 ### De verificat (nu sunt decizii)
 - RTE MEC = `RTE_MONTAJ_IT`? Ord. 364/2010 e temeiul corect?
@@ -1287,6 +1397,7 @@ Nicio decizie nu mai blochează PR1–PR5. Au apărut trei întrebări mici: dou
 - Numerele date după 28.09.2026 în registrul fizic, înainte de inițializarea lui 2026.
 - Cu Natalia: se resetează registrul anual? Ce e seria din 2024 (298 în octombrie, după 368 în iulie)? Faptul că registrul e comun nu mai e întrebare (D1).
 - Scanul pe telefoanele reale ale emitenților (Android și iPhone): camera, HEIC, orientarea, mărimea PDF-ului, ce rămâne în galerie (D5, VA13).
+- Natura juridică a împuternicirilor (decizie internă sau mandat) — de ea depinde D9 (Copilot, v1.3).
 - Numirile pentru colaboratori externi: 14 din 20 de atestate RTE sunt pe externi. v1 generează doar pentru angajați; externii intră doar prin import sau rezervare.
 
 ---
@@ -1295,11 +1406,11 @@ Nicio decizie nu mai blochează PR1–PR5. Au apărut trei întrebări mici: dou
 
 | PR | Conținut | Dependențe |
 |---|---|---|
-| **PR1** | Migrare (nume la livrare, următorul prefix liber):<br>– 5 tabele noi și coloana `executie_completari_propuse.hr_decizie_id`;<br>– view, bucket `hr-decizii` cu politici, **doar PDF, max 20 MB** (D5), **fără UPDATE și fără DELETE** (VA19), `fn_hr_decizii_poate` (fail-closed, VA16), `_hr_decizii_termeni`, `fn_hr_decizii_id_din_cale` (VA23), `_hr_decizii_aloca`, `_hr_decizie_avertismente`, `_hr_decizie_randeaza` și RPC-urile din §3.6;<br>– triggere, RLS, GRANT pe coloane;<br>– seed: **15 tipuri** (13 numiri + `REVOCARE` + `ALTA_DECIZIE`; textele transcrise din modelele NAS; `semnatar_implicit_id` = 121 pe toate, D2c; `CTC_QC` fără atestat, D4; `SEF_SANTIER` cu `camp_efect` NULL [V]) și **3 semnatari** (121 reprezentant legal; 90 și 125 împuterniciți, cu preambul literal pe persoană, fără împuternicire înregistrată, D2, VA3).<br>PR1 **nu** inserează `hr.decizii` în `app_modules` (VA24).<br>Plus rollback și teste SQL în `supabase/tests/hr_decizii.test.sql`, după modelul `conturi_ciclu_viata.test.sql` | **Nu mai e blocat de decizii:** D1, D3 și D6 sunt răspunse (06.10 seara). Apply doar cu OK-ul tău pe cele patru liste de drept din preview (emitenți, așteptat 121, 125, 126; `citire`; `citire_doc` și `citire_scan` pe proiect; D3, VA1, VA22) și cu GO de la Copilot |
+| **PR1** | Migrare (nume la livrare, următorul prefix liber):<br>– 5 tabele noi și coloana `executie_completari_propuse.hr_decizie_id`;<br>– view, bucket `hr-decizii` cu politici, **doar PDF, max 20 MB** (D5), **fără UPDATE și fără DELETE** (VA19), `fn_hr_decizii_poate` (fail-closed, VA16), `_hr_decizii_termeni`, `fn_hr_decizii_id_din_cale` (VA23), `_hr_decizii_aloca`, `_hr_decizie_avertismente`, `_hr_decizie_randeaza` și RPC-urile din §3.6;<br>– triggere, RLS, GRANT pe coloane;<br>– seed: **15 tipuri** (13 numiri + `REVOCARE` + `ALTA_DECIZIE`; textele transcrise din modelele NAS; `semnatar_implicit_id` = 121 pe toate, D2c; `CTC_QC` fără atestat, D4; `SEF_SANTIER` cu `camp_efect` NULL [V]) și **3 semnatari** (121 reprezentant legal; 90 și 125 împuterniciți, cu preambul literal pe persoană, fără împuternicire înregistrată, D2, VA3).<br>PR1 **nu** inserează `hr.decizii` în `app_modules` (VA24).<br>**v1.3:** fără scriere `service_role` pe registru (P0-1); UNIQUE comun pe țintă + CHECK (P0-2); `_hr_decizii_aloca` cu sufix (P0-3); R3 pe server (`_hr_acopera_domeniu`, P1-1); `imputernicire_decizie_id` (P1-4); SELECT pe semnatari doar `citire` (P1-2); `cerere_id` (P1-3); `_hr_azi()` (P2-2); **schimbarea politicii `completari_ins` și a `fn_completare_aplica`** (J5, RPC existent: OK explicit)<br>Plus rollback și teste SQL în `supabase/tests/hr_decizii.test.sql`, după modelul `conturi_ciclu_viata.test.sql` | **Nu mai e blocat de decizii:** D1, D3 și D6 sunt răspunse (06.10 seara). Apply doar cu OK-ul tău pe cele patru liste de drept din preview (emitenți, așteptat 121, 125, 126; `citire`; `citire_doc` și `citire_scan` pe proiect; D3, VA1, VA22) și cu GO de la Copilot |
 | **PR2** | `src/hrDeciziiDoc.js`: `renderDecizieHtml`, paginare A4 fixă, verificarea de depășire, PDF cu `LOGO_B64`, subsol cu cod lizibil pe poză (≥ 9 pt, VA28), hash cu `sha256Hex` (VA38)<br>+ **`pregatestePagina` + `paginiToPdf`** (poze → un PDF, o pagină A4 pe imagine, în `mm`, max 2400 px, în ordine, fără EXIF; D5, VA27, VA28)<br>+ `src/hrDeciziiUtil.js`, modul pur cu `asezareA4` și testul vitest (VA33) | PR1 aplicat |
 | **PR3** | `src/HrDecizii.jsx` (registru, decizie nouă, emitere, scan cu verificare, anulare, înlocuire, revocare, **contor și inițializare, rezervare** cu B1/R4 la numiri, „De rezolvat”, emitenții în antet)<br>+ **modalul de scan funcțional pe telefon** (cameră, galerie, PDF; listă de pagini; două moduri, cu și fără document generat; fără randare de PDF pe telefon; 360 px; deep-link `?tab=decizii&scan=<id>` tratat în `HrDecizii.jsx`; D5, VA5, VA27, VA30)<br>+ tab-ul în `HR.jsx`, cu flag-ul de drept în filtru și în dependențele deep-link-ului (VA30)<br>+ cardurile Echipă (inclusiv Șef de șantier), legate pe `tip_cod` (VA9), și „Generează decizie” în `Executie.jsx`<br>+ panoul „Completări propuse” cu bucket-ul corect | PR2. **Merge-ul sef-santier e făcut** [V]: `origin/main` = d71da84 (#629). PR3 pornește din `origin/main` și recitește `Executie.jsx:3084-3134` (Echipă) și ~:706 (panoul) |
 | **PR4** | Ecranul „Înregistrează decizie existentă” (serii HR și carte tehnică, sufix, combinate, externi), cu același modal de scan (și de pe telefon)<br>+ importul seriei Mironu 911–916 (date reale: preview → OK → apply) | PR3 |
-| **PR5** | Activarea efectului pe `SEF_SANTIER`: `camp_efect = 'sef_santier_employee_id'` pe tip + extinderea whitelist-ului din `fn_completare_aplica`<br>+ **backfill** (date reale: preview → OK-ul tău → apply): propuneri pentru deciziile `SEF_SANTIER` semnate și active între PR3 și PR5, fără propunere, când echipa are altă persoană. Efectul se calculează doar la scan, deci altfel ar rămâne pentru totdeauna doar cu eticheta „⚠ echipa ≠ decizia activă” (VA9) | **`20261017a` e aplicată** [V] (v20261006141500), deci rămâne doar acordul tău (schimbare de RPC). După PR5, revenirea 20261017a refuză până se revine întâi PR5 (garda pe corpurile funcțiilor, `ROLLBACK.sql:58-61`) |
+| **PR5** | Activarea efectului pe `SEF_SANTIER`: `camp_efect = 'sef_santier_employee_id'` pe tip + extinderea whitelist-ului din `fn_completare_aplica`<br>+ **backfill** (date reale: preview → OK-ul tău → apply): propuneri pentru deciziile `SEF_SANTIER` pentru care `_hr_decizie_eligibila_efect` e true (deci și `propune_efect = true`, angajat nu extern, neexpirate, proiect activ, B1 trecut, J9), fără propunere, când echipa are altă persoană. Efectul se calculează doar la scan, deci altfel ar rămâne pentru totdeauna doar cu eticheta „⚠ echipa ≠ decizia activă” (VA9) | **`20261017a` e aplicată** [V] (v20261006141500), deci rămâne doar acordul tău (schimbare de RPC). După PR5, revenirea 20261017a refuză până se revine întâi PR5 (garda pe corpurile funcțiilor, `ROLLBACK.sql:58-61`) |
 
 ### Teste de acceptare
 
@@ -1318,7 +1429,7 @@ Nicio decizie nu mai blochează PR1–PR5. Au apărut trei întrebări mici: dou
    - INSERT cu `stare = 'semnata'` / `origine = 'import'` / `numar` / `creat_de` străin → refuz (GRANT pe coloane sau WITH CHECK);
    - UPDATE pe un draft către `stare = 'emisa'` → refuz;
    - UPDATE sau DELETE pe o decizie emisă → refuz, inclusiv ca `service_role`.
-9. Un draft se poate șterge de creator sau de owner, dar nu de alt redactor. Jurnalul nu se poate modifica sau șterge de nimeni din API.
+9. Un draft se creează, se modifică și apoi se șterge de creator (sau de owner), dar nu de alt redactor. După ștergere, jurnalul păstrează `creare`, `modificare_draft` și `stergere_draft` cu același `decizie_id` (J1). Jurnalul nu se poate modifica, șterge sau trunchia de nimeni din API (J17).
 
 **Semnatar** (C7, C8)
 
@@ -1386,7 +1497,7 @@ Nicio decizie nu mai blochează PR1–PR5. Au apărut trei întrebări mici: dou
     - Seed: 125 are `este_reprezentant_legal = false`, iar singurul reprezentant legal e 121.
     - Tudorache semnatar pe numirea altcuiva, fără împuternicire înregistrată → R4. Emiterea merge doar cu confirmare, iar preambulul din `continut` e cel de împuternicit, nu cel al lui 121.
     - Tudorache semnatar pe propria numire → B1, emitere blocată.
-    - Pe D9 = A, împuternicirea intră în registru ca `ALTA_DECIZIE` (rezervare sau import, apoi scan prin modal), iar migrarea de date copiază nr., data și `imputernicire_path` = `scan_path`-ul ei (VA4).
+    - Pe D9 = A, împuternicirea intră în registru ca `ALTA_DECIZIE` (rezervare sau import, apoi scan prin modal), iar migrarea de date setează doar `imputernicire_decizie_id` (VA4, P1-4); nr., data și scanul se derivă din decizie.
     - După înregistrarea împuternicirii și `preambul_validat = true`, R4 nu mai apare, iar segmentul „prin Imputernicirea nr. …” intră în text. Cu împuternicirea datată după `data_emitere`, sau cu `preambul_validat = false`, R4 rămâne (VA2).
     - Preambulul randat pentru 125 scrie „D-na TUDORACHE MARILENA CLAUDIA, imputernicita”, indiferent de genul persoanei numite (VA3).
 36. **Emitenții (D3).**
@@ -1425,19 +1536,41 @@ Nicio decizie nu mai blochează PR1–PR5. Au apărut trei întrebări mici: dou
 40. **Șef de șantier înainte și după PR5** [V].
     - Înainte de PR5, scanul semnat pe `SEF_SANTIER` nu creează nicio propunere (`camp_efect` NULL), iar cardul din Echipă arată totuși eticheta deciziei, pentru că se leagă pe `tip_cod` (VA9).
     - După PR5, același scenariu creează propunerea, iar `fn_completare_aplica` o aplică.
-    - Backfill-ul din PR5 creează propuneri doar pentru deciziile `SEF_SANTIER` semnate și active, fără propunere, unde echipa are altă persoană; preview-ul le listează înainte de OK (VA9).
+    - Backfill-ul din PR5 creează propuneri doar pentru deciziile `SEF_SANTIER` eligibile după `_hr_decizie_eligibila_efect`, fără propunere, unde echipa are altă persoană; preview-ul le listează înainte de OK (VA9). **Negativ (J9):** o decizie altfel eligibilă, dar cu `propune_efect = false`, nu primește propunere; la fel una pe extern.
     - Revenirea 20261017a refuză cât timp PR5 e aplicat.
 
 **Verificarea adversarială (v1.2)**
 
 41. **Fail-closed (VA16).** Un cont non-owner cu `department` NULL și fără chei (de ex. „Test Fara Modul” [V]) cheamă direct fiecare RPC public: `rezerva`, `importa`, `anuleaza`, `contor_*`, `seteaza_pdf`, `ataseaza_scan`, `inlocuieste_scan`, `previzualizeaza`, `emite`, `fn_hr_decizii_emitenti`. Toate refuză, cu 42501. `fn_hr_decizii_poate(x)` întoarce false, nu NULL, pentru fiecare acțiune, pentru o acțiune inventată și pentru un `p_decizie_id` inexistent.
 
+**Verdictele Copilot și Jakarinos (v1.3).** Testele concurente rulează cu două sesiuni (`dblink` sau două conexiuni în scriptul de test), cu `pg_sleep` între verificare și scriere pentru a forța intercalarea.
+
+42. **`service_role` și draftul (P0-1, J16).** Ca `service_role`: INSERT direct cu `stare = 'semnata'` → refuz (fără GRANT); UPDATE pe un draft către `stare = 'emisa'` sau cu `continut`/`numar` → refuz; TRUNCATE pe oricare tabel al registrului → refuz. Ca `authenticated`: UPDATE pe propriul draft care schimbă `snapshot`, `versiune` sau `creat_de` → refuz (trigger, rulat prin PostgREST). **Privilegii (Vf1, Vf3):** `has_table_privilege` pentru `anon` și `service_role` cu INSERT/UPDATE/DELETE/TRUNCATE = false pe toate 5 tabele; `has_function_privilege` EXECUTE = false pentru `anon`, `authenticated`, `service_role` pe toate `_hr_*` și false pentru `anon`/`service_role` pe RPC-uri; `prosecdef = false` pe funcția `trg_hr_decizii_a_imuabil` (Vf2).
+43. **Înlocuire vs. revocare concurente (P0-2, J3).** Sesiunea 1 emite o înlocuire, sesiunea 2 o revocare pe aceeași țintă, intercalat: exact una reușește; cealaltă primește B9. La fel cu scanurile atașate concurent. Un rând cu `inlocuieste_id` și `revoca_id` simultan → refuz (CHECK). `importa` cu `inlocuieste_id` sau `revoca_id` → refuz (Vf12). Ținta revocată între emiterea și scanul unei înlocuiri → `ataseaza_scan` refuză tranziția.
+44. **Sufixul (P0-3, J2).** Import 912 apoi 912-bis → ambele intră; al doilea 912-bis → refuz; „ BIS ” se normalizează la „bis”. 385a și 385b intră; 385 fără sufix după 385a → refuz. Sufix la emitere/rezervare → refuz. Număr automat cu 917a ocupat → sare la 918. Două importuri concurente 391/2025 în `carte_tehnica` → unul reușește, celălalt primește eroarea prietenoasă.
+45. **Revocarea (J4, J18).** Revocarea numirii unui angajat devenit inactiv → trece (G12). Revocarea propriei numiri de către Pantea → trece (G11, nu B1). Revocarea unei numiri de extern → trece. Revocare cu țintă `ALTA_DECIZIE` legată de proiect → refuz; un editor `exec` nu vede nimic nou (J18). Revocare cu `data_efect > data_emitere` → B9 (J7). Revocare semnată de Pantea/Tudorache fără împuternicire → R4 (Vf6). Revocarea unei numiri importate din cartea tehnică, fără titlu și fără dată → redactorul completează titlul, textul iese „Decizia nr. 391 privind…”, fără „/” (Vf7).
+46. **Propuneri falsificate (J5).** Un utilizator `can_manage_contracts` inserează direct o propunere cu `hr_decizie_id` sau `sursa = 'decizie_numire'` → refuz (politică). O propunere a generatorului modificată de migrare de test pe alt proiect/câmp/angajat → `fn_completare_aplica` refuză („necorelată”). Propunerile manuale existente (fără `hr_decizie_id`) merg ca înainte.
+47. **Valabilitatea (J6, P2-2).** Decizie semnată cu `data_efect` mâine: nu e în view; propunerea se naște, dar confirmarea e refuzată până la `data_efect`. Decizie cu `data_efect_pana` ieri: propunere neconfirmată → confirmarea e refuzată. Proiect devenit inactiv între scan și confirmare → refuz. `_hr_azi()` la 23:30 UTC (00:30 la București) dă ziua de București.
+48. **Extern la scan (J8).** Rezervare RTE pe extern cu `propune_efect = true`, apoi scan → `semnata`, fără propunere, cu `propunere_omisa`/„extern”; tranzacția nu cade. La fel la import.
+49. **Idempotență (P1-3, J10, J11).** `rezerva` repetat cu același `cerere_id` și payload → același număr, contorul crește o singură dată; cu alt payload → eroare. `emite` repetat după COMMIT cu același `cerere_id` → același rezultat, un singur eveniment (nici `modificare_draft`, nici `versiune` incrementată la tranziție, Vf11); repetat după ce decizia a devenit `semnata` → același rezultat (Vf10). Două sesiuni simultane `rezerva` cu același `cerere_id` → un singur rând, ambele primesc același număr (Vf9). `inlocuieste_scan` repetat → ok, un singur `scan_inlocuit`. Două `seteaza_pdf` concurente cu căi diferite → exact unul reușește, celălalt „PDF deja atașat”.
+50. **Validatorul comun (J12).** Pe `importa`, `rezerva` și `emite`: număr 0 sau negativ → refuz; `an = 2025` cu `data_emitere` în 2026 → refuz; an viitor → refuz; data viitoare → refuz. Import fără dată pe carte tehnică → ok.
+51. **Contorul după oprire (J13).** Inițializare la 916, rezervare manuală 930 (gol 917–929), oprire, re-inițializare la 930 → golul 917–929 apare în continuare în „De rezolvat”; `ultimul_initial` rămâne 916.
+52. **Combinate (J14).** 385a și 385b, același File urcat de două ori, căi diferite, același `scan_sha256`; ambele `semnata`.
+53. **Calea lungă (J15).** `fn_hr_decizii_id_din_cale` pe `HR/2026/9223372036854775808/semnat_1.pdf` și pe un id de 300 de cifre → NULL, fără eroare; listarea în alt bucket cu nume similar nu dă eroare.
+54. **Storage și owner/serviciu (J17).** DELETE ca owner autentificat → refuz. Ca `service_role` prin Storage API: documentat ca risc rezidual (§8); testul doar constată comportamentul, pe un obiect de test, și îl notează.
+55. **R3 pe server (P1-1, J19).** `emite` apelat direct, fără R3 în `p_confirmari`, pe un RTE al cărui atestat nu acoperă domeniul → refuz cu R3. Cu R3 confirmat → ok. Un cod inventat în `p_confirmari` nu apare în `avertismente`. Vectorii de `acoperaDomeniul` dau același rezultat în vitest și în SQL.
+56. **Previzualizare vs. emitere (J20).** Redactorul A previzualizează; redactorul B modifică draftul; A emite cu hash-ul vechi → refuz. Text la limita paginii cu numărul „99999-bis” → B7 în previzualizare. Documentul final care ar depăși → nu se urcă, apare în „De rezolvat”. Text care încape doar la 11pt → `snapshot.font_pt = 11`, PDF-ul final la 11pt se urcă (Vf8).
+57. **Hash (P2-1, J21).** `seteaza_pdf` / `ataseaza_scan` cu `p_sha256` care nu are 64 hex → refuz. UI-ul afișează „amprentă declarată”.
+58. **`ALTA_DECIZIE` la import (J22).** Import cu eticheta „Gestionar” (absentă din nomenclator) → ok; fără `descriere` → refuz.
+59. **R7 jurnalizat (J23).** Manual 9160 cu confirmare → `avertismente` conține R7 cu contorul, numărul cerut și cine a confirmat; evenimentul `salt_confirmat` există. B3 „fără număr manual” se decide corect când numărul manual e dat.
+60. **Semnatari și împuternicire (P1-2, P1-4).** Un editor `exec` face SELECT pe `hr_decizii_semnatari` → 0 rânduri. Împuternicirea lui Pantea înregistrată ca `ALTA_DECIZIE` semnată + `preambul_validat` → R4 dispare; scanul ei înlocuit → semnatarul vede noul scan fără migrare, iar o decizie emisă înainte păstrează în `snapshot` nr. și data împuternicirii, fără cale și hash (Vf13); un editor `exec` care citește o decizie de proiect nu vede `scan_path`/`scan_sha256` ai împuternicirii în `snapshot`. Retragerea prin migrare (`imputernicire_decizie_id = NULL`) → R4 revine; revocare sau înlocuire cu țintă `ALTA_DECIZIE` → refuz B9 (Vf5).
+
 ---
 
 **Note de proces**
 - Specificația e pentru sesiunea Module ERP: `HR.jsx` și `Executie.jsx` țin de ea, la fel și merge-ul.
 - Branch-ul `claude/erp-continuare-x4p5a7-sef-santier` e în main (d71da84, #629), iar `20261017a` e aplicată (v20261006141500) [V]. PR3 și PR5 nu mai așteaptă nimic de acolo.
-- Fișierul e pe branch-ul `claude/erp-continuare-x4p5a7-generator-decizii` (PR draft #630). Modificările v1.2 sunt necomise: commit-ul îl face sesiunea care le-a cerut.
+- Fișierul e pe branch-ul `claude/erp-continuare-x4p5a7-generator-decizii` (PR draft #630). Modificările v1.3 sunt necomise (bază: v1.2, commit 6a21982): commit-ul îl face sesiunea care le-a cerut.
 
 ---
 
@@ -1463,6 +1596,19 @@ Toate cele 45 de puncte au fost evaluate. Mai jos sunt doar cele respinse sau pr
 | C45 (`comunicat_la`) | Data comunicării către salariat | Amânată pentru v2, notat la „Ce NU face” | Nu blochează nimic în v1. Bifa „luare la cunoștință” acoperă cazul uzual |
 | C8 (semnatarul implicit) | `semnatar_implicit_id` per tip | Preluat, cu valoarea **121 peste tot**, confirmată de Razvan (D2c, 06.10 seara) | Repartiția pe tipuri e decizia lui Razvan, nu a specificației |
 
+**v1.3 — verdictele Copilot (P) și Jakarinos (J).** Nicio constatare respinsă integral: toate au fost verificate față de text (și J5 față de BD [V]: `completari_ins` WITH CHECK = owner OR `can_manage_contracts`, `valoare` NOT NULL, `fn_completare_aplica` fără verificarea legăturii) și sunt reale. Preluate în altă formă decât cea propusă:
+
+| Punct | Propunerea | Ce s-a făcut | Motiv |
+|---|---|---|---|
+| J7 | Fie efect imediat, fie încetare modelată la data efectului | **Efect imediat în v1** (B9: `data_efect ≤ data_emitere` la înlocuire/revocare) | Varianta cu încetare la dată cere stări intermediare și job pe dată; v1 nu are cron (§8). Revocarea „de luna viitoare” se emite la data efectului |
+| J14 | Două uploaduri sau document comun | **Două uploaduri** cu aceiași octeți | Păstrează regula „id-ul deciziei în cale” și politicile existente; documentul comun ar cere o tabelă și autorizare nouă |
+| J20 (încadrarea finală) | Verificare de încadrare și pe documentul final | Preluat, plus rezervă de lățime pentru număr; un document final care depășește **nu se urcă**, iar decizia se anulează și se reface | Emiterea nu se poate întoarce (numărul e alocat); refuzul upload-ului + „De rezolvat” e singura cale care nu înregistrează un PDF tăiat |
+| J21 / P2-1 | Hash calculat de o componentă de încredere sau declarat explicit | **Declarat explicit** (format validat, denumire „amprentă declarată”) | Verificarea server-side cere o edge function cu fișă de automatizare; candidat v2 |
+| P1-2 | Restrângere sau proiecție fără metadate | **Restrângere** la `citire` | Singurii care aleg semnatarul sunt emitenții (owner/HR); ceilalți văd semnatarul din `snapshot`. O proiecție ar fi un obiect în plus fără consumator |
+| J17 (storage) | Protecție suplimentară pentru operațiile privilegiate sau delimitarea garanției | **Delimitarea garanției** (§2.7, §3.5, §8) | Storage API cu cheia de serviciu nu se poate opri din politici; nimic din v1 nu folosește cheia pe bucket |
+| J4 (B1 la revocare) | Fără B1 | Fără B1, **cu G11 informativ** | Revocarea propriei numiri de către un împuternicit nu creează un drept nou, dar merită văzută |
+| J10 (crearea draftului) | Cheie de idempotență și la creare | Doar la rezervare, import, emitere, PDF și înlocuirea scanului | Un draft duplicat nu consumă număr și se șterge (J1); restul operațiilor sunt cele care alocă sau tranziționează |
+
 ---
 
 ## Anexa A — Jurnal
@@ -1473,6 +1619,49 @@ Toate cele 45 de puncte au fost evaluate. Mai jos sunt doar cele respinse sau pr
 | **critică internă** | 06.10.2026 | review adversarial (sesiunea de chat) | 45 de puncte: (A) contradicții și goluri 1–20, (B) afirmații nesusținute 21–29, (C) securitate și date personale 30–35, (D) funcții tratate greșit 36–40, (E) ce ar inventa implementatorul 41–45. Punctele critice: ocolirea RPC-urilor din client (C6), contorul gol la prima emitere (C1), 2B redeschisă (C8), cheia `hr` ≠ HR (C24) |
 | **v1.1** | 06.10.2026 | sesiunea de chat | Specificația completă cu critica integrată: 2B implementată cum a cerut Razvan, inițializarea contorului, alocare unică, GRANT pe coloane și imuabilitate pe `current_user`, randare doar pe server, preambul literal, propuneri legate de decizie și expirabile, drepturi exacte, serii la import, 15 tipuri (+ Deșeuri, + Lucrător desemnat SSM, + ALTA_DECIZIE), 33 de teste. Punctele respinse sau modificate sunt în anexa „Critica respinsă” |
 | **v1.2** | 06.10.2026 seara | sesiunea de chat | Răspunsurile lui Răzvan la D1–D7 (`claude_context` #1622), propagate în toate secțiunile și marcate (Dn): registrul HR comun (D1); doar 121 reprezentant legal, 90 și 125 împuterniciți, semnatar implicit 121 (D2); emitenți Natalia (prin `department = 'HR'`) și Marilena, fără rânduri noi de acces (D3); CTC-QC fără atestat (D4); fără semnătură electronică, plus **scanul de pe telefon din poze → un singur PDF** (`pregatestePagina` + `paginiToPdf`, bucket doar PDF, bifa `lizibil`) (D5); cele două funcții în seed, total tot 15 (D6); riscurile acceptate (D7). Fapte noi: sef-santier în main (d71da84), 20261017a aplicată, deci `SEF_SANTIER` intră cu `camp_efect` NULL până la PR5. PR1 nu mai e blocat. **Verificare adversarială pe 3 unghiuri (consistență, drepturi, telefon): 38 de constatări, 38 aplicate** (toate reverificate în fișier, cod și BD, doar în citire; dublurile dintre unghiuri comasate; câteva preluate în varianta minimă, vezi mai jos; 1 blocantă: predicatele NULL, VA16). Întrebări noi, neblocante: D8, D9 și D10. 41 de teste |
+| **v1.3** | 06.10.2026 noaptea | sesiunea de chat (computed task) | Verdictele NO-GO pe v1.2: **Copilot** (3×P0, 4×P1, 2×P2; D8 = A, D9 = A cu FK, D10 = B confirmate) și **Jakarinos** (J1–J23). Toate verificate față de text, J5 și în BD (doar SELECT [V]). **32 de constatări, 32 aplicate** (8 în formă modificată, vezi „Critica respinsă”), niciuna respinsă integral. D8–D10 închise ca recomandări confirmate de Copilot, de confirmat de Răzvan. Teste noi 42–60 (concurente și negative); testele 9 și 40 extinse. 60 de teste | **Reverificare (verificator, aceeași noapte):** 14 constatări (Vf1–Vf14), toate confirmate și aplicate; una regresie P0 (Vf1: REVOKE-ul nu închidea `service_role`, confirmat pe `pg_default_acl` [V]). Întrebare nouă D11 (Vf5). |
+
+**Trasabilitatea v1.3:**
+
+| Puncte | Ce s-a corectat | Unde |
+|---|---|---|
+| P0-1, J16 | `service_role` doar SELECT pe registru; trigger pe INSERT și pe tranzițiile din draft | §0, §2.6, §3.4, §8, teste 8, 42 |
+| P0-2, J3 | CHECK exclusiv; un UNIQUE pe ținta comună; lock + reverificare la emitere și scan | §0, §3.1, §3.8, §3.9, B9, §4.C–D, test 43 |
+| P0-3, J2 | `p_numar_sufix` + normalizare; lock consultativ pe carte tehnică | §2.1–2, §3.1, §3.6, §3.7, §4.E, test 44 |
+| P1-1, J19 | R3 pe server (`_hr_acopera_domeniu`); confirmările doar confirmă | §3.6, §3.8, §4.A.2, test 55 |
+| P1-2 | SELECT pe semnatari doar `citire` | §3.4, test 60 |
+| P1-3, J10 | `cerere_id`/`cerere_hash`, `cerere_emitere`; retry la `inlocuieste_scan` | §3.1, §3.6, §3.8, §4.A.4, §4.E–F, test 49 |
+| P1-4 | `imputernicire_decizie_id` FK; R4 derivat; snapshot la emitere | §3.1, §3.4, §3.8, R4, §9 D9, test 60 |
+| P2-1, J21 | hash declarat, format validat | §2.7, §3.1, §3.6, §3.9, §6, §8, test 57 |
+| P2-2 | `_hr_azi()` Europe/Bucharest peste tot | §2.4, §3.2, §3.6, B3, test 47 |
+| J1 | jurnal fără FK; `stergere_draft` | §2.5, §3.1, §3.4, test 9 |
+| J4, J18 | matrice de validări pe moduri; ținta doar numire; G11/G12 | §3.3, §3.4, §4.A.2, §4.D, test 45 |
+| J5 | politica `completari_ins` + `fn_completare_aplica` în PR1 | §2.8, §3.1, §3.4, §8, §10 PR1, test 46 |
+| J6, J8, J9 | `_hr_decizie_eligibila_efect` unică (scan, backfill, confirmare); `data_efect` în view | §2.8, §3.2, §3.4, §3.9, §4.E, §10 PR5, teste 40, 47, 48 |
+| J7 | efect imediat la înlocuire/revocare | §3.9, B9, §4.C–D, test 45 |
+| J11 | `FOR UPDATE` în `seteaza_pdf` | §3.6, test 49 |
+| J12 | validator comun număr/an/dată | §2.1, §3.1, §3.6, §4.E–F, test 50 |
+| J13 | `ultimul_initial` nu se rescrie | §3.1, §3.6, §4.G, test 51 |
+| J14 | combinate: două upload-uri | §3.5, §4.E, test 52 |
+| J15 | id în cale max. 18 cifre | §3.5, test 53 |
+| J17 | TRUNCATE; garanția bucket-ului delimitată | §2.7, §3.4, §3.5, §8, teste 9, 54 |
+| J20 | `versiune` + `hash_previzualizare`; rezervă de lățime; remăsurare finală | §3.1, §3.4, §3.6, §3.8, §4.A.3–4, §6, test 56 |
+| J22 | excepția `ALTA_DECIZIE` la etichetă | B4, §4.E, test 58 |
+| J23 | numărul manual în avertismente; R7 din alocare, jurnalizat | §3.6, §3.7, §3.8, B3, test 59 |
+| Vf1 (P0-1, J16) | REVOKE ALL explicit pe toate 5 tabele, inclusiv `service_role` [V: default ACL]; GRANT-uri scrise explicit | §3.4, test 42 |
+| Vf2 | triggerul de imuabilitate SECURITY INVOKER obligatoriu; ordinea BEFORE prin nume (`a_`/`b_`/`c_`) | §3.4, test 42 |
+| Vf3 | REVOKE EXECUTE pe `_hr_*` și RPC-uri și de la `service_role` [V] | §3.6, test 42 |
+| Vf4 | FK `imputernicire_decizie_id` doar prin ALTER | §3.1 |
+| Vf5 (J18 vs P1-4) | retragerea împuternicirii prin migrare de date (varianta A, de confirmat) | R4, test 60, §9 |
+| Vf6 (J4) | R4 și la `revocare` | §4.A.2, test 45 |
+| Vf7 (J4) | `coalesce` pe titlu; `{nr_tinta}` cu sufix/serie; `[[/{data_tinta}]]` opțional | §3.4, §4.A.2, §4.D, test 45 |
+| Vf8 (J20, B7) | `snapshot.font_pt` înghețat la emitere | §6, test 56 |
+| Vf9 (J10) | advisory lock pe `cerere_id` + reluare la `unique_violation` | §3.6, test 49 |
+| Vf10 (J10) | retry la emitere pe `stare <> 'draft'` | §3.8, test 49 |
+| Vf11 | `WHEN` draft→draft pe jurnal și versiune | §3.4, test 49 |
+| Vf12 (P0-2) | importul refuză `inlocuieste_id`/`revoca_id` | §4.E, test 43 |
+| Vf13 (P1-2, P1-4) | snapshot fără cale/hash ale împuternicirii | §3.8, test 60 |
+| Vf14 | rândul v1.3 reintrat în tabel; antet actualizat | Antet, Anexa A |
 
 **Reverificări făcute în tura v1.1** (doar SELECT, git și cod):
 - Coloanele `employees`, `profiles`, `firma_profil`, `hr_autorizatii`, `executie_completari_propuse` și `executie_proiecte` (inclusiv `activ`: 23 de proiecte active, 5 inactive; 1 din 28 fără `nr_contract`).
