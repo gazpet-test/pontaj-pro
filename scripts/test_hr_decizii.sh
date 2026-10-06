@@ -248,14 +248,16 @@ revenire_refuza "6b3 fn_completare_aplica schimbată ulterior" "fn_completare_ap
 POL_R2="$(q "SELECT pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polname = 'completari_ins'")"
 q "ALTER POLICY completari_ins ON public.executie_completari_propuse WITH CHECK (auth.uid() IS NOT NULL AND hr_decizie_id IS NULL)" >/dev/null
 revenire_refuza "6b4 completari_ins schimbată ulterior" "completari_ins nu e exact"
+[ "$(q "SELECT pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polname = 'completari_ins'")" = "((auth.uid() IS NOT NULL) AND (hr_decizie_id IS NULL))" ] || esec "6b4 politica modificată s-a pierdut"
 q "ALTER POLICY completari_ins ON public.executie_completari_propuse WITH CHECK ($POL_R2)" >/dev/null
 FN_X="$(q "SELECT pg_get_functiondef('public._hr_nume_afis(text)'::regprocedure)")"
 q "CREATE OR REPLACE FUNCTION public._hr_nume_afis(p text) RETURNS text LANGUAGE sql IMMUTABLE SET search_path = public, pg_temp AS 'SELECT upper(p)'" >/dev/null
 revenire_refuza "6b5 corp schimbat într-o funcție din listă" "nu sunt exact cele ale PR1"
+[ "$(q "SELECT prosrc ~ 'upper' FROM pg_proc WHERE proname = '_hr_nume_afis'")" = t ] || esec "6b5 corpul modificat s-a pierdut"
 "${PSQL[@]}" -d "$BAZA" -c "$FN_X" -c "REVOKE ALL ON FUNCTION public._hr_nume_afis(text) FROM PUBLIC, anon, authenticated, service_role" >/dev/null
 q "CREATE FUNCTION public._hr_ulterior() RETURNS int LANGUAGE sql AS 'SELECT 1'" >/dev/null
-"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261018a', 'STERGE_REGISTRU_HR:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null 2>&1 \
-  && esec "6b2 revenirea a trecut cu o funcție _hr_* în plus (P5-2)"
+revenire_refuza "6b2 funcție _hr_* în plus (P5-2)" "nu sunt exact cele ale PR1"
+[ "$(q "SELECT count(*) FROM pg_proc WHERE proname IN ('_hr_ulterior', 'fn_hr_decizie_emite', '_hr_azi')")" = 3 ] || esec "6b2 revenirea a șters ceva"
 q "DROP FUNCTION public._hr_ulterior()" >/dev/null
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261018a', 'STERGE_REGISTRU_HR:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null \
   || esec "6c revenirea armată a eșuat"

@@ -77,6 +77,8 @@ BEGIN
   END IF;
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261018a: rulează ca postgres'; END IF;
   IF to_regclass('public.hr_decizii') IS NULL THEN RAISE EXCEPTION 'Revenire 20261018a: registrul nu există'; END IF;
+  -- lock-ul ÎNAINTEA verificărilor de stare exactă (Copilot P7-1: fără fereastră între verificare și suprascriere)
+  LOCK TABLE public.hr_decizii, public.hr_decizii_evenimente, public.hr_decizii_contor, public.executie_completari_propuse IN ACCESS EXCLUSIVE MODE;
   -- exact starea PR1 (P5-2): aceleași 53 de funcții, cu aceleași corpuri; altfel nu șterg nimic
   IF (SELECT array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text) FROM pg_proc p
        WHERE p.pronamespace = 'public'::regnamespace
@@ -104,7 +106,6 @@ BEGIN
      IS DISTINCT FROM E'a|((EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_manage_contracts)))) AND (hr_decizie_id IS NULL) AND (sursa <> ALL (ARRAY[\'decizie_numire\'::text, \'decizie_revocare\'::text])))' THEN
     RAISE EXCEPTION 'Revenire 20261018a: politica completari_ins nu e exact cea lăsată de PR1 — o modificare ulterioară s-ar pierde; refuz';
   END IF;
-  LOCK TABLE public.hr_decizii, public.hr_decizii_evenimente, public.hr_decizii_contor, public.executie_completari_propuse IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM public.hr_decizii) OR EXISTS (SELECT 1 FROM public.hr_decizii_evenimente) OR EXISTS (SELECT 1 FROM public.hr_decizii_contor)
      OR EXISTS (SELECT 1 FROM public.executie_completari_propuse WHERE hr_decizie_id IS NOT NULL OR sursa IN ('decizie_numire','decizie_revocare'))
      OR EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'hr-decizii') THEN

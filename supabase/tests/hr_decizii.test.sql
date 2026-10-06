@@ -412,11 +412,23 @@ SELECT public.fn_hr_decizie_ataseaza_scan(:j53, :'j53s', repeat('5', 64),
 RESET ROLE;
 SELECT teste.e('70d import expirat semnat: fara propunere, propunere_omisa „decizie expirata”', NOT EXISTS (SELECT 1 FROM executie_completari_propuse WHERE hr_decizie_id = :j53)
   AND EXISTS (SELECT 1 FROM hr_decizii_evenimente WHERE decizie_id = :j53 AND eveniment = 'propunere_omisa' AND detalii->>'motiv' = 'decizie expirata'));
-SELECT teste.e('J5-7 G7 nu numara un RTE expirat pe alt domeniu', NOT coalesce((public._hr_decizie_context(jsonb_build_object('decizie',
-  jsonb_build_object('tip_cod','RTE','nivel','proiect','proiect_id',32,'propune_efect',false,'domenii_isc','["9.1"]'::jsonb),
-  'tip', jsonb_build_object('necesita_domeniu_isc', true)))->>'g7')::boolean, false)
-  OR EXISTS (SELECT 1 FROM hr_decizii c WHERE c.tip_cod = 'RTE' AND c.proiect_id = 32 AND c.stare IN ('emisa','semnata')
-               AND (c.data_efect_pana IS NULL OR c.data_efect_pana >= public._hr_azi()) AND NOT (coalesce(c.domenii_isc,'{}') && ARRAY['9.1'])));
+-- J5-7 / J7-1: proiect izolat 44 cu un singur RTE semnat pe 1.1; expirat → g7 false; curent → g7 true
+INSERT INTO executie_proiecte (id, nume, activ, nr_contract) VALUES (44, 'Proiect G7', true, '1');
+SELECT teste.ca(:'NATALIA');
+SELECT (public.fn_hr_decizie_importa(jsonb_build_object('cerere_id', gen_random_uuid(), 'an',2026,'numar',7777,'tip_cod','RTE','eticheta_functie','RTE',
+  'nivel','proiect','proiect_id',44,'employee_id',200,'titlu','Dl.','data_emitere', public._hr_azi(),'data_efect', public._hr_azi() - 10,
+  'data_efect_pana', public._hr_azi() - 1,'domenii_isc','["1.1"]'::jsonb)))->>'id' AS g7exp \gset
+RESET ROLE;
+SELECT teste.e('J7-1a G7 = false cand singurul RTE de pe proiect e expirat', NOT (public._hr_decizie_context(jsonb_build_object('decizie',
+  jsonb_build_object('tip_cod','RTE','nivel','proiect','proiect_id',44,'propune_efect',false,'domenii_isc','["9.1"]'::jsonb),
+  'tip', jsonb_build_object('necesita_domeniu_isc', true)))->>'g7')::boolean);
+SELECT teste.ca(:'NATALIA');
+SELECT (public.fn_hr_decizie_importa(jsonb_build_object('cerere_id', gen_random_uuid(), 'an',2026,'numar',7778,'tip_cod','RTE','eticheta_functie','RTE',
+  'nivel','proiect','proiect_id',44,'employee_id',201,'titlu','Dl.','data_emitere', public._hr_azi(),'domenii_isc','["1.1"]'::jsonb)))->>'id' AS g7cur \gset
+RESET ROLE;
+SELECT teste.e('J7-1b G7 = true cu un RTE curent pe alt domeniu', (public._hr_decizie_context(jsonb_build_object('decizie',
+  jsonb_build_object('tip_cod','RTE','nivel','proiect','proiect_id',44,'propune_efect',false,'domenii_isc','["9.1"]'::jsonb),
+  'tip', jsonb_build_object('necesita_domeniu_isc', true)))->>'g7')::boolean);
 -- J5-4: renumire cu efect viitor a persoanei deja în echipă → are propunere
 UPDATE executie_proiecte SET rts_employee_id = 201 WHERE id = 32;
 SELECT teste.ca(:'NATALIA');
