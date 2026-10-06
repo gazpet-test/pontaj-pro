@@ -1,15 +1,18 @@
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 -- 20261017a_executie_sef_santier_ROLLBACK — NU e migrare (niciun runner nu parcurge supabase/revenire/).
 -- Scoate coloana executie_proiecte.sef_santier_employee_id și FK-ul ei (starea dinainte de 20261017a).
--- ⚠️ Ireversibil pentru date: șefii de șantier completați pe proiecte se pierd. Dacă există valori, întâi export:
+-- ⚠️ Ireversibil pentru date: șefii de șantier completați pe proiecte se pierd. Exportul se face ÎN tranzacția de revenire, după lock (vezi procedura):
 --    SELECT id, cod_intern, sef_santier_employee_id FROM public.executie_proiecte WHERE sef_santier_employee_id IS NOT NULL;
 -- ⚠️ UI-ul (src/Executie.jsx) care cere coloana trebuie revenit ÎNAINTE (altfel fișa proiectului nu se mai salvează)
 --    la fel funcțiile/edge-urile care scriu coloana (ex. fn_completare_aplica v2) — scriptul le refuză explicit.
 -- Fără GO de execuție: doar la cererea explicită a lui Răzvan. Armarea nu e autorizare.
 -- Procedura (un singur string; fișierul nu conține BEGIN/COMMIT):
 --   BEGIN ISOLATION LEVEL READ COMMITTED;   -- obligatoriu (altă izolare e refuzată)
+--   LOCK TABLE public.executie_proiecte IN ACCESS EXCLUSIVE MODE;   -- ÎNAINTE de export (Copilot P2 06.10): exportul de mai jos
+--   SELECT id, cod_intern, sef_santier_employee_id FROM public.executie_proiecte WHERE sef_santier_employee_id IS NOT NULL;
+--   --   e atunci exact starea care se șterge (nimeni nu mai scrie până la COMMIT). Salvează rezultatul înainte să continui.
 --   SELECT set_config('gazpet.revenire_20261017a', 'SEF_SANTIER_DROP:' || txid_current(), true);
---   -- doar dacă există valori (după export): SELECT set_config('gazpet.revenire_20261017a_cu_date', 'DA:' || txid_current(), true);
+--   -- doar dacă exportul are rânduri: SELECT set_config('gazpet.revenire_20261017a_cu_date', 'DA:' || txid_current(), true);
 --   -- <conținutul exact al fișierului>
 --   COMMIT;
 -- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
