@@ -35,16 +35,26 @@ Deno.test('timeout-ul apelului AI lasă loc față de limita de 150 s a gateway-
   assert(TIMEOUT_MS <= 135_000 && TIMEOUT_MS >= 129_000)   // ≥ cea mai lungă citire reușită (129 s, 05.10), < 150 s gateway
 })
 
-Deno.test('eTimeout recunoaște abortul prin AbortSignal.timeout, nu și alte erori', async () => {
-  let prins: unknown = null
-  try { await fetch('http://127.0.0.1:9', { signal: AbortSignal.timeout(1) }) } catch (e) { prins = e }
-  // pe unele platforme conexiunea refuzată câștigă cursa — atunci verificăm direct forma erorii
-  if (prins && !eTimeout(prins)) prins = new DOMException('signal timed out', 'TimeoutError')
-  assert(eTimeout(prins))
+// Abort REAL (review ultracode 06.10, P3: testul vechi înlocuia eroarea cu una făcută de mână): un server local care nu răspunde
+// deloc (/antet) și unul care trimite antetul, apoi tace la corp (/corp, ca un resp.json() blocat) — AbortSignal.timeout taie ambele.
+Deno.test({ name: 'eTimeout recunoaște abortul real al fetch-ului ȘI al citirii corpului; nu și alte erori', sanitizeOps: false, sanitizeResources: false, async fn() {
+  const ac = new AbortController()
+  const srv = Deno.serve({ port: 0, hostname: '127.0.0.1', signal: ac.signal, onListen() {} }, (req) =>
+    new URL(req.url).pathname === '/corp'
+      ? new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"a":')) } }), { headers: { 'content-type': 'application/json' } })
+      : new Promise<Response>(() => {}))
+  const port = (srv.addr as Deno.NetAddr).port
+  try {
+    for (const cale of ['/antet', '/corp']) {
+      let prins: unknown = null
+      try { const r = await fetch(`http://127.0.0.1:${port}${cale}`, { signal: AbortSignal.timeout(200) }); await r.json() } catch (e) { prins = e }
+      assert(eTimeout(prins), `${cale}: ${String(prins)}`)
+    }
+  } finally { ac.abort() }
   assert(eTimeout(new DOMException('aborted', 'AbortError')))
   assert(!eTimeout(new TypeError('fetch failed')))
   assert(!eTimeout(null))
-})
+}})
 
 Deno.test('termenul AI se socotește de la intrarea în handler (Copilot P2): pregătirea lungă scurtează apelul, nu îl împinge peste 150 s', () => {
   assertEquals(timpRamas(0, 0), TIMEOUT_MS)                       // pornire imediată → plafonul întreg

@@ -3374,7 +3374,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const [docs, setDocs] = useState(null)
   const [toate, setToate] = useState([])      // toată Documentația licitației — ca să știm ce e deja citit
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
-  const [eroareCitire, setEroareCitire] = useState({}) // id → mesaj; rămâne pe card (Răcari 06.10: toast-ul dispărea)
+  const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
   const [veghe, setVeghe] = useState(null)    // raportul ultimei verificări manuale
   const [verific, setVerific] = useState(false)
@@ -3416,9 +3416,14 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     setBusy(d.id); setMsg(null); setEroareCitire(m => ({ ...m, [d.id]: null }))
     // Regula documentației (06.10): necitit → întâi pe felii (ca „Procesează”), apoi rezumatul din text. Colegii fără
     // drept de cheltuială (poarta owner/responsabil) primesc mesaj pe card, FĂRĂ apel AI (Copilot P1: nu mai cad pe PDF întreg).
-    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, (toate.find(x => x.id === d.id) || d).status_procesare)
+    // Starea se recitește acum (lista încărcată poate fi veche: documentul poate fi fost citit între timp).
+    const { data: st } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('id', d.id).maybeSingle()
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? (toate.find(x => x.id === d.id) || d).status_procesare)
     setBusy(null)
-    if (!r.ok) { setEroareCitire(m => ({ ...m, [d.id]: r.eroare })); return anunta('Citirea a eșuat: ' + r.eroare, 'err') }
+    if (!r.ok) {
+      setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
+      return anunta(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err')
+    }
     anunta(`🤖 Citit: ${d.nume_original}`)
     load()
   }
@@ -3463,7 +3468,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
           </pre>
         </div>
       )}
-      {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : G.green, marginBottom:8 }}>{msg.t}</div>}
+      {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : msg.tip === 'warn' ? G.yellow : G.green, marginBottom:8 }}>{msg.t}</div>}
       {docs === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
         : !docs.length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
         : docs.map(d => {
@@ -3498,7 +3503,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                   ⚠️ Ai deja {sc.fam} citit în Documentație, dar acesta e alt fișier — e indicat să-l citești și pe acesta (poate aduce modificări).
                 </div>
               )}
-              {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color:G.red }}>⚠️ Citirea cu AI a eșuat: {eroareCitire[d.id]}</div>}
+              {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color: eroareCitire[d.id].poarta ? G.yellow : G.red }}>{eroareCitire[d.id].poarta ? '🔒 ' : '⚠️ Citirea cu AI a eșuat: '}{eroareCitire[d.id].t}</div>}
               {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
               {c && (
                 <div style={{ marginTop:8, padding:'8px 10px', background:G.surface, borderRadius:8, borderLeft:`2px solid ${G.green}`, fontSize:12.5 }}>

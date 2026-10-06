@@ -68,7 +68,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const [docRasp, setDocRasp] = useState([])    // documentele SEAP de tip raspuns_clarificare ale licitației
   const [busy, setBusy] = useState(null)
   const [citindDoc, setCitindDoc] = useState(null) // id document răspuns în curs de citire AI
-  const [eroareCitire, setEroareCitire] = useState({}) // id → mesaj; rămâne pe card (Răcari 06.10: toast-ul dispărea)
+  const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [legare, setLegare] = useState(null)       // { docId, bife:{clarId:true}, propuneri:{clarId:'raspuns_scurt'} } — panoul „La ce întrebări răspunde?”
   // R5 runda 9: starea bazei cifrelor ciornelor automate (v_ofertare_clarificari_baza) — eroare / view lipsă = „nu putem verifica” (fail-closed)
   const [baza, setBaza] = useState({ peId: new Map(), eroare: null })
@@ -327,9 +327,14 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const citesteDoc = async (d) => {
     setCitindDoc(d.id); setEroareCitire(m => ({ ...m, [d.id]: null }))
     // Regula documentației (06.10): necitit → întâi pe felii, apoi rezumatul din text; fără drept de cheltuială → stop (citesteCuAi).
-    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, d.status_procesare)
+    // Starea se recitește acum (lista poate fi veche: alt coleg a citit documentul între timp).
+    const { data: st } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('id', d.id).maybeSingle()
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? d.status_procesare)
     setCitindDoc(null)
-    if (!r.ok) { setEroareCitire(m => ({ ...m, [d.id]: r.eroare })); showToast('Citirea a eșuat: ' + r.eroare, 'err'); return null }
+    if (!r.ok) {
+      setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
+      showToast(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err'); return null
+    }
     const data = r.data
     showToast(`🤖 Citit: ${d.nume_original}`)
     await load()
@@ -351,6 +356,8 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       aparut_ulterior: true, status_procesare: 'neprocesat', size_bytes: file.size,
     }).select('id, nume_original').single()
     if (error) { setBusy(null); return showToast('Eroare la înregistrare: ' + error.message, 'err') }
+    // ca la urcaRaspunsIntrebare: fără drept de cheltuială, documentul rămâne urcat, citirea o pornește ownerul / responsabilul
+    if (!poatePorniProcesarea(profile, lic)) { setBusy(null); showToast('Răspuns urcat. Citirea AI o pornește ownerul / responsabilul licitației.', 'warn'); return load() }
     setBusy('🤖 Citesc răspunsul cu AI…')
     const citire = await citesteDoc(ins)
     setBusy(null)
@@ -496,8 +503,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                   {c && !inLegare && <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color:G.green, borderColor:G.green + '66' }} disabled={!!busy} onClick={() => deschideLegare(d.id, d)}>🔗 La ce întrebări răspunde?</button>}
                   {legate.length > 0 && <span style={{ fontSize:11, color:G.muted }} title={legate.map(q => `${q.nr}. ${(q.intrebare || '').slice(0, 80)}`).join('\n')}>🔗 legat de întrebările: {legate.map(q => q.nr).join(', ')}</span>}
                 </div>
-                {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color:G.red }}>⚠️ Citirea cu AI a eșuat: {eroareCitire[d.id]}</div>}
-                {!ph && <TextOriginalToggle docId={d.id} nume={d.nume_original} />}
+                {eroareCitire[d.id] && <div style={{ marginTop:7, fontSize:12, color: eroareCitire[d.id].poarta ? G.yellow : G.red }}>{eroareCitire[d.id].poarta ? '🔒 ' : '⚠️ Citirea cu AI a eșuat: '}{eroareCitire[d.id].t}</div>}
+                {/* key: după o citire (citit_la / stare noi) panoul se reîncarcă, altfel rămânea „Încă necitit” */}
+                {!ph && <TextOriginalToggle key={`${d.id}:${c?.citit_la || ''}:${d.status_procesare || ''}`} docId={d.id} nume={d.nume_original} />}
                 {c && (
                   <details style={{ marginTop:8, fontSize:12.5 }}>
                     <summary style={{ cursor:'pointer', fontWeight:700, color:G.muted }}>🤖 Rezumatul citirii{Array.isArray(c.intrebari_raspunse) && c.intrebari_raspunse.length ? ` · ${c.intrebari_raspunse.length} întrebări răspunse` : ''}{Array.isArray(c.modificari) && c.modificari.length ? ` · ${c.modificari.length} modificări` : ''}</summary>
