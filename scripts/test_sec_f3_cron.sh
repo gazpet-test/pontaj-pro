@@ -29,9 +29,15 @@ ok()    { echo "OK   $*"; }
 ca_postgres() { if [ "$(id -u)" = 0 ]; then su postgres -s /bin/bash -c "$(printf '%q ' "$@")"; else "$@"; fi; }
 PSQL=("$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U postgres)
 [ -x "$PG_BIN/initdb" ] || mediu "PG lipsă ($PG_BIN)"
-if [ -f "$DATE_DIR/postmaster.pid" ]; then ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null || true; fi
-rm -rf "$DATE_DIR"
+# r2 (Jakarinos P1): directorul se șterge DOAR dacă e fixture-ul nostru (sub /tmp/pg_sec_f3*, marcat la creare) sau nu există.
+case "$DATE_DIR" in /tmp/pg_sec_f3*) ;; *) mediu "PGDATA_TEST trebuie să fie sub /tmp/pg_sec_f3* (primit: $DATE_DIR)";; esac
+if [ -e "$DATE_DIR" ]; then
+  [ -f "$DATE_DIR/.fixture_sec_f3" ] || mediu "$DATE_DIR există și nu e marcat ca fixture (.fixture_sec_f3) — nu îl șterg"
+  if [ -f "$DATE_DIR/postmaster.pid" ]; then ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null || mediu "nu pot opri clusterul din $DATE_DIR"; fi
+  rm -rf "$DATE_DIR"
+fi
 ca_postgres "$PG_BIN/initdb" -D "$DATE_DIR" -U postgres --auth=trust --encoding=UTF8 --locale=C.UTF-8 >/dev/null || mediu initdb
+touch "$DATE_DIR/.fixture_sec_f3"
 ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -l /tmp/pg_sec_f3.log -w -t 30 start \
   -o "-p $PORT -c listen_addresses=127.0.0.1 -c unix_socket_directories=/tmp" >/dev/null || mediu "pg_ctl start"
 trap '[ $OPRESTE = 1 ] && ca_postgres "$PG_BIN/pg_ctl" -D "$DATE_DIR" -m fast -w stop >/dev/null 2>&1; true' EXIT
@@ -113,8 +119,11 @@ ok "5 reaplicare → 11 (deja înregistrat); rularea a doua oară e refuzată ș
 # 6. revenire
 "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" >/dev/null 2>&1 && esec "6a revenirea nearmată a trecut"
 [ "$(q "SELECT count(*) FROM cron.job WHERE active")" = 7 ] || esec "6a nearmată a oprit ceva"
+q "UPDATE cron.job SET schedule='0 17 * * 1-6' WHERE jobid=28" >/dev/null
+"${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261016a', 'OPRESTE_JOBURI_SEC_F3:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null 2>&1 && esec "6a2 revenirea a trecut peste un job cu alt program"
+q "UPDATE cron.job SET schedule='0 16 * * 1-6' WHERE jobid=28" >/dev/null
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261016a', 'OPRESTE_JOBURI_SEC_F3:' || txid_current(), true);" -f "$ROLLBACK" >/dev/null || esec "6b revenirea armată a eșuat"
 [ "$(q "SELECT string_agg(jobid::text, ',' ORDER BY jobid) FROM cron.job WHERE active")" = 99 ] || esec "6b joburile active după revenire: $(q "SELECT string_agg(jobid::text, ',') FROM cron.job WHERE active")"
 [ "$(q "SELECT count(*) FROM cron.job WHERE command ~ 'x-ingest-secret|eyJ'")" = 0 ] || esec "6b revenirea a readus ceva în clar"
-ok "6 revenire: nearmată → refuz; armată → cele 6 joburi oprite (fără secret în clar), jobul străin activ"
+ok "6 revenire: nearmată → refuz; stare diferită (alt program) → refuz; armată → cele 6 joburi oprite (fără secret în clar), jobul străin activ"
 echo "PASS"
