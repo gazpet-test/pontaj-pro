@@ -82,10 +82,27 @@ BEGIN
        WHERE p.pronamespace = 'public'::regnamespace
          AND (p.proname LIKE '\_hr\_%' OR p.proname LIKE 'fn\_hr\_decizi%' OR p.proname LIKE '\_completare\_%'))
      IS DISTINCT FROM (SELECT array_agg(substr(x, 8) ORDER BY substr(x, 8)) FROM unnest(pg_temp.hr_decizii_functii()) x)
-     OR (SELECT md5(string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc), ',' ORDER BY p.oid::regprocedure::text))
+     OR (SELECT md5(string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || pg_get_userbyid(p.proowner) || ':' || p.prosecdef
+                                || ':' || coalesce(array_to_string(p.proconfig, ';'), '') || ':'
+                                || coalesce((SELECT string_agg(coalesce(nullif(a.grantee::regrole::text, '-'), 'PUBLIC') || '=' || a.privilege_type, ',' ORDER BY 1)
+                                               FROM (SELECT * FROM aclexplode(p.proacl)) a), ''),
+                                ',' ORDER BY p.oid::regprocedure::text))
            FROM pg_proc p WHERE p.oid IN (SELECT to_regprocedure(x) FROM unnest(pg_temp.hr_decizii_functii()) x))
-        IS DISTINCT FROM 'fbf0ca9b35d1936d4b7a15774addcfa3' THEN
+        IS DISTINCT FROM 'cca2af0f645d11282352ea535420cdc5' THEN
     RAISE EXCEPTION 'Revenire 20261018a: funcțiile nu sunt exact cele ale PR1 (listă sau corpuri schimbate) — refuz';
+  END IF;
+  -- obiectele EXISTENTE pe care revenirea le suprascrie trebuie să fie exact în starea lăsată de PR1 (Copilot P6-1, Jakarinos J6-1)
+  IF (SELECT md5(prosrc) || '|' || pg_get_userbyid(proowner) || '|' || prosecdef || '|' || coalesce(array_to_string(proconfig, ';'), '') || '|'
+             || (SELECT string_agg(x.g, ',' ORDER BY x.g)
+                   FROM (SELECT coalesce(nullif(a.grantee::regrole::text, '-'), 'PUBLIC') || ':' || a.privilege_type AS g FROM aclexplode(proacl) a) x)
+        FROM pg_proc WHERE oid = to_regprocedure('public.fn_completare_aplica(bigint,boolean)'))
+     IS DISTINCT FROM 'dc82ba4fea0071de3417f60a5c26e6cb|postgres|true|search_path=public, pg_temp|authenticated:EXECUTE,postgres:EXECUTE,service_role:EXECUTE' THEN
+    RAISE EXCEPTION 'Revenire 20261018a: fn_completare_aplica nu e exact cea lăsată de PR1 (corp/owner/SECURITY/search_path/ACL) — o modificare ulterioară s-ar pierde; refuz';
+  END IF;
+  IF (SELECT polcmd::text || '|' || replace(pg_get_expr(polwithcheck, polrelid), 'public.', '') FROM pg_policy
+       WHERE polrelid = 'public.executie_completari_propuse'::regclass AND polname = 'completari_ins')
+     IS DISTINCT FROM E'a|((EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_manage_contracts)))) AND (hr_decizie_id IS NULL) AND (sursa <> ALL (ARRAY[\'decizie_numire\'::text, \'decizie_revocare\'::text])))' THEN
+    RAISE EXCEPTION 'Revenire 20261018a: politica completari_ins nu e exact cea lăsată de PR1 — o modificare ulterioară s-ar pierde; refuz';
   END IF;
   LOCK TABLE public.hr_decizii, public.hr_decizii_evenimente, public.hr_decizii_contor, public.executie_completari_propuse IN ACCESS EXCLUSIVE MODE;
   IF EXISTS (SELECT 1 FROM public.hr_decizii) OR EXISTS (SELECT 1 FROM public.hr_decizii_evenimente) OR EXISTS (SELECT 1 FROM public.hr_decizii_contor)

@@ -403,6 +403,20 @@ SELECT (public.fn_hr_decizie_importa(jsonb_build_object('cerere_id', gen_random_
 SELECT teste.e('J5-3/P5-1 import persista termenul si domeniile normalizate', (SELECT data_efect_pana = public._hr_azi() - 1 AND domenii_isc = ARRAY['8.4D'] FROM hr_decizii WHERE id = :j53));
 RESET ROLE;
 SELECT teste.e('J5-3b import expirat: nu e eligibil (nu e semnat inca, dar termenul e persistat)', public._hr_decizie_motiv_neeligibil(:j53) IS NOT NULL);
+-- 70(d): importul expirat, semnat → fără propunere, eveniment propunere_omisa „decizie expirata”
+SELECT teste.ca(:'NATALIA');
+SELECT 'HR/2026/' || :j53 || '/semnat_1.pdf' AS j53s \gset
+SELECT teste.urca(:'j53s');
+SELECT public.fn_hr_decizie_ataseaza_scan(:j53, :'j53s', repeat('5', 64),
+  '{"nr":true,"persoana":true,"semnatar":true,"semnatura":true,"stampila":true,"lizibil":true,"sursa":"pdf","pagini":1,"pagini_sursa":"detectat","generat":false}') IS NOT NULL AS ok \gset
+RESET ROLE;
+SELECT teste.e('70d import expirat semnat: fara propunere, propunere_omisa „decizie expirata”', NOT EXISTS (SELECT 1 FROM executie_completari_propuse WHERE hr_decizie_id = :j53)
+  AND EXISTS (SELECT 1 FROM hr_decizii_evenimente WHERE decizie_id = :j53 AND eveniment = 'propunere_omisa' AND detalii->>'motiv' = 'decizie expirata'));
+SELECT teste.e('J5-7 G7 nu numara un RTE expirat pe alt domeniu', NOT coalesce((public._hr_decizie_context(jsonb_build_object('decizie',
+  jsonb_build_object('tip_cod','RTE','nivel','proiect','proiect_id',32,'propune_efect',false,'domenii_isc','["9.1"]'::jsonb),
+  'tip', jsonb_build_object('necesita_domeniu_isc', true)))->>'g7')::boolean, false)
+  OR EXISTS (SELECT 1 FROM hr_decizii c WHERE c.tip_cod = 'RTE' AND c.proiect_id = 32 AND c.stare IN ('emisa','semnata')
+               AND (c.data_efect_pana IS NULL OR c.data_efect_pana >= public._hr_azi()) AND NOT (coalesce(c.domenii_isc,'{}') && ARRAY['9.1'])));
 -- J5-4: renumire cu efect viitor a persoanei deja în echipă → are propunere
 UPDATE executie_proiecte SET rts_employee_id = 201 WHERE id = 32;
 SELECT teste.ca(:'NATALIA');
