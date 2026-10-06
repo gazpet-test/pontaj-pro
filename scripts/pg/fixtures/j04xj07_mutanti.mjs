@@ -89,6 +89,8 @@ export const MUTANTI = {
   XC2_orice_pass: rescrie('public.fn_pt_pachet_depus_verifica()', 'ORDER BY u\\.id DESC LIMIT 1', ''),
   // C3: manifestul se poate rescrie / șterge pe pachetul aprobat (JX-C3, JX-C3b).
   XC3_manifest_rescriibil: rescrie('public.fn_pt_fisier_imuabil()', '\nBEGIN\n', "\nBEGIN\n  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;\n"),
+  // C3: pachetul aprobat se poate șterge (manifestul pleacă în cascadă) — Copilot conv. 3, NO-GO r1 (JX-C3b).
+  XC3_pachet_aprobat_stergibil: rescrie('public.fn_pt_pachet_delete_garda()', '\nBEGIN\n', '\nBEGIN\n  RETURN OLD;\n'),
   // C3: cheia de serviciu tratată ca identitate de administrare (JX-C3).
   XC3_service_ca_administrare: rescrie('public.fn_pt_manifest_administrare()', '\nBEGIN\n', '\nBEGIN\n  RETURN true;\n'),
   // J04 cere dovadă doar pentru fișierele depus_final (propunerea, borderoul și dovada SEAP scapă).

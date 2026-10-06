@@ -66,7 +66,7 @@ export function schemaJ04J07() {
   assert.ok([J04, J07].sort()[0] === J04, 'Ordinea lexicografică trebuie să fie J04 → J07')
   const j04 = cuGarda(J04, migration(J04))
   const j07 = cuGarda(J07, transactionBody(migration(J07)))
-  assert.ok(!/fn_pt_pachet_depus_verifica/.test(j07), 'J07 nu atinge funcția J04')
+  assert.ok(!/(CREATE|ALTER|DROP)(\s+OR\s+REPLACE)?\s+FUNCTION\s+public\.fn_pt_pachet_depus_verifica/.test(j07), 'J07 nu atinge funcția J04 (doar o citește în precondiție)')
   assert.ok(!/fn_ofertare_pt_pachet_poarta_documentatie|fn_gate_depunere/.test(j04), 'J04 nu atinge funcțiile patch-uite de J07')
 
   const r5Harness = read('scripts/pg/test_r9b_probe23.mjs')

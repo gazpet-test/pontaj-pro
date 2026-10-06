@@ -94,7 +94,8 @@ test('ordinea migrărilor: J04 (20260930a) înaintea J07 (20261003a); fără col
   const j04 = read('supabase/migrations/20260930a_ofertare_pachet_hash_server_jakv202.sql')
   const j07 = read('supabase/migrations/20261003a_ofertare_poarta_server_jakv2p3.sql')
   assert.match(j04, /CREATE OR REPLACE FUNCTION public\.fn_pt_pachet_depus_verifica\(\)/)
-  assert.doesNotMatch(j07, /fn_pt_pachet_depus_verifica/)
+  // J07 doar CITEȘTE funcția J04 în precondiția „J04 activ” (Copilot conv. 3, NO-GO r1 pe d8cc2da); n-o creează / modifică / șterge
+  assert.doesNotMatch(j07, /(CREATE|ALTER|DROP)(\s+OR\s+REPLACE)?\s+FUNCTION\s+public\.fn_pt_pachet_depus_verifica/)
   assert.doesNotMatch(j04, /fn_ofertare_pt_pachet_poarta_documentatie|fn_gate_depunere/)
   assert.match(j07, /fn_ofertare_pt_pachet_poarta_documentatie\(\)/)
 })

@@ -157,6 +157,23 @@ DROP TRIGGER IF EXISTS trg_pt_fisier_imuabil ON public.ofertare_pt_pachet_fisier
 CREATE TRIGGER trg_pt_fisier_imuabil BEFORE UPDATE OR DELETE ON public.ofertare_pt_pachet_fisiere
   FOR EACH ROW EXECUTE FUNCTION public.fn_pt_fisier_imuabil();
 
+-- C3, partea a doua (Copilot conv. 3, NO-GO r1 pe d8cc2da): rândul „orfan” din fn_pt_fisier_imuabil e cascada ON DELETE de la
+-- pachet. Fără gardă pe pachet, service_role ar fi putut șterge direct un pachet APROBAT / DEPUS și manifestul ar fi plecat în
+-- cascadă. Acum doar un pachet „propus” se poate retrage (aplicația o face la o aprobare eșuată); aprobat / depus = dovadă
+-- păstrată, pentru toate rolurile în afară de identitatea de administrare. (TRUNCATE pe pachet / manifest cere CASCADE până la
+-- ofertare_pt_pachet_verificari, care e append-only și fără drept de TRUNCATE pentru service_role.)
+CREATE OR REPLACE FUNCTION public.fn_pt_pachet_delete_garda()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $f$
+BEGIN
+  IF OLD.stare = 'propus' OR public.fn_pt_manifest_administrare() THEN RETURN OLD; END IF;
+  RAISE EXCEPTION 'Pachetul % (stare %) nu se poate șterge: doar un pachet „propus” se retrage; aprobat / depus rămâne dovadă.', OLD.id, OLD.stare
+    USING ERRCODE = '42501';
+END $f$;
+REVOKE ALL ON FUNCTION public.fn_pt_pachet_delete_garda() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS trg_pt_pachet_delete_garda ON public.ofertare_pt_pachet;
+CREATE TRIGGER trg_pt_pachet_delete_garda BEFORE DELETE ON public.ofertare_pt_pachet
+  FOR EACH ROW EXECUTE FUNCTION public.fn_pt_pachet_delete_garda();
+
 -- storage nu este schemă PostgREST publică. Snapshot read-only, fără bucket/cale arbitrare.
 CREATE OR REPLACE FUNCTION public.ofertare_pt_fisier_snapshot(p_fisier_id bigint)
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $f$
@@ -227,7 +244,8 @@ DO $post$
 DECLARE f text; t text;
 BEGIN
   FOREACH f IN ARRAY ARRAY['fn_pt_pachet_depus_verifica()', 'fn_pt_fisier_insert_stare()', 'fn_pt_fisier_imuabil()',
-                           'fn_pt_manifest_administrare()', 'fn_pt_fisier_path_obligatoriu()', 'ofertare_pt_fisier_snapshot(bigint)'] LOOP
+                           'fn_pt_pachet_delete_garda()', 'fn_pt_manifest_administrare()', 'fn_pt_fisier_path_obligatoriu()',
+                           'ofertare_pt_fisier_snapshot(bigint)'] LOOP
     IF (SELECT prosecdef FROM pg_proc WHERE oid = ('public.' || f)::regprocedure) IS NOT TRUE
        OR (SELECT array_to_string(proconfig, ',') FROM pg_proc WHERE oid = ('public.' || f)::regprocedure) IS DISTINCT FROM 'search_path=public, pg_temp'
        OR has_function_privilege('authenticated', ('public.' || f)::regprocedure, 'EXECUTE')
@@ -241,6 +259,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'CREATE TRIGGER trg_pt_fisier_insert_stare BEFORE INSERT ON public.ofertare_pt_pachet_fisiere FOR EACH ROW EXECUTE FUNCTION fn_pt_fisier_insert_stare()',
     'CREATE TRIGGER trg_pt_fisier_imuabil BEFORE DELETE OR UPDATE ON public.ofertare_pt_pachet_fisiere FOR EACH ROW EXECUTE FUNCTION fn_pt_fisier_imuabil()',
+    'CREATE TRIGGER trg_pt_pachet_delete_garda BEFORE DELETE ON public.ofertare_pt_pachet FOR EACH ROW EXECUTE FUNCTION fn_pt_pachet_delete_garda()',
     'CREATE TRIGGER trg_pt_fisier_path_obligatoriu BEFORE INSERT ON public.ofertare_pt_pachet_fisiere FOR EACH ROW EXECUTE FUNCTION fn_pt_fisier_path_obligatoriu()',
     'CREATE TRIGGER trg_pt_verificari_imuabile BEFORE DELETE OR UPDATE OR TRUNCATE ON public.ofertare_pt_pachet_verificari FOR EACH STATEMENT EXECUTE FUNCTION fn_pt_verificari_imuabile()'] LOOP
     -- pg_get_triggerdef califică funcția cu schema doar dacă „public” nu e în search_path-ul sesiunii: comparăm fără prefix

@@ -120,7 +120,8 @@ CREATE TEMP TABLE before_functions AS SELECT oid,pg_get_functiondef(oid) definit
     'public.fn_ofertare_pt_pachet_matrice()'::regprocedure,'public.fn_ofertare_pt_pachet_poarta_documentatie()'::regprocedure);
 ${fix}
 ${fix}
-${check("(SELECT count(*)=3 AND bool_and(tgenabled='O') FROM pg_trigger WHERE tgrelid='public.ofertare_pt_pachet'::regclass AND NOT tgisinternal)", 'Toate cele trei triggere pachet active')}
+${check("(SELECT count(*)=3 AND bool_and(tgenabled='O') FROM pg_trigger WHERE tgrelid='public.ofertare_pt_pachet'::regclass AND NOT tgisinternal AND (tgtype & 16) <> 0)", 'Toate cele trei triggere de UPDATE pe pachet active')}
+${check("EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='public.ofertare_pt_pachet'::regclass AND tgname='trg_pt_pachet_delete_garda' AND tgenabled='O' AND (tgtype & 8) <> 0)", 'Garda de DELETE pe pachet (C3) activă')}
 ${check("(SELECT bool_and(pg_get_functiondef(p.oid)=b.definition AND p.proacl IS NOT DISTINCT FROM b.proacl) FROM pg_proc p JOIN before_functions b USING(oid) WHERE p.proname <> 'fn_pt_pachet_depus_verifica')", 'R5 și matricea neschimbate')}
 ${check("(SELECT fisier_path IS NULL FROM public.ofertare_pt_pachet_fisiere WHERE id=5)", 'Istoricul NULL păstrat')}
 `

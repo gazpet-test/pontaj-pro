@@ -54,7 +54,7 @@ SELECT jx.baza_intacta('JX-C3');
 -- Ștergerea manifestului e permisă doar cât pachetul e „propus” (aplicația șterge pachetul propus la o aprobare eșuată, manifestul
 -- pleacă în cascadă); pe pachetul aprobat, refuzată și pentru cheia de serviciu.
 BEGIN;
-SELECT jx.start('JX-C3b', 'C3: pachet PROPUS (v2) cu manifest → DELETE pachet (cascadă) permis; pe pachetul aprobat v1 DELETE manifest refuzat');
+SELECT jx.start('JX-C3b', 'C3: pachet PROPUS (v2) cu manifest → DELETE pachet (cascadă) permis; pe pachetul aprobat v1 DELETE manifest / DELETE pachet / TRUNCATE refuzate (și pentru cheia de serviciu)');
 :admin
 INSERT INTO ofertare_pt_pachet(id, licitatie_id, versiune) VALUES (2, 1, 2);
 SELECT jx.urca('pt/1/v2/Propunere.docx', 'propunere v2');
@@ -63,6 +63,15 @@ SELECT jx.fisier(2, 'propunere_docx', 'Propunere.docx', 'pt/1/v2/Propunere.docx'
 DELETE FROM ofertare_pt_pachet WHERE id = 2 AND stare = 'propus';
 SELECT jx.ok(NOT EXISTS (SELECT 1 FROM ofertare_pt_pachet_fisiere WHERE pachet_id = 2), 'cascada de la pachetul propus a trecut');
 SELECT jx.refuza($$DELETE FROM ofertare_pt_pachet_fisiere WHERE pachet_id = 1 AND rol = 'propunere_docx'$$, '42501', 'e append-only: DELETE');
+-- Copilot conv. 3 (NO-GO r1 pe d8cc2da): ocolirea prin ștergerea PĂRINTELUI aprobat (manifestul ar fi plecat în cascadă) e refuzată;
+-- TRUNCATE (manifest / pachet, CASCADE) e refuzat și el. jx.refuza verifică și că starea (manifest, dovezi) a rămas neschimbată.
+SELECT jx.refuza($$DELETE FROM ofertare_pt_pachet WHERE id = 1$$, '42501', 'nu se poate șterge');
+SELECT jx.refuza_oricare($$TRUNCATE ofertare_pt_pachet_fisiere CASCADE$$, ARRAY['42501']);
+SELECT jx.refuza_oricare($$TRUNCATE ofertare_pt_pachet CASCADE$$, ARRAY['42501']);
+:owner
+SELECT jx.refuza_oricare($$DELETE FROM ofertare_pt_pachet WHERE id = 1$$, ARRAY['42501']);   -- authenticated: fără drept de DELETE (garda e pentru service_role)
+:admin
+SELECT jx.ok((SELECT count(*) FROM ofertare_pt_pachet_fisiere WHERE pachet_id = 1) >= 5 AND jx.stare(1) = 'aprobat', 'pachetul aprobat și manifestul lui sunt intacte');
 SELECT jx.trecut('JX-C3b');
 ROLLBACK;
 SELECT jx.baza_intacta('JX-C3b');

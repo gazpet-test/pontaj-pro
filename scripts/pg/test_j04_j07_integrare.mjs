@@ -57,7 +57,7 @@ const J07 = '20261003a_ofertare_poarta_server_jakv2p3.sql'
 assert.ok([J04, J07].sort()[0] === J04, 'Ordinea lexicografică trebuie să fie J04 → J07')
 const j04 = cuGarda(J04, migration(J04)), j04Rollback = migration(J04.replace('.sql', '_ROLLBACK.sql'))
 const j07 = cuGarda(J07, transactionBody(migration(J07))), j07Rollback = transactionBody(migration(J07.replace('.sql', '_ROLLBACK.sql')))
-assert.ok(!/fn_pt_pachet_depus_verifica/.test(j07), 'J07 nu atinge funcția J04')
+assert.ok(!/(CREATE|ALTER|DROP)(\s+OR\s+REPLACE)?\s+FUNCTION\s+public\.fn_pt_pachet_depus_verifica/.test(j07), 'J07 nu atinge funcția J04 (doar o citește în precondiție)')
 assert.ok(!/fn_ofertare_pt_pachet_poarta_documentatie|fn_gate_depunere/.test(j04), 'J04 nu atinge funcțiile patch-uite de J07')
 
 // ── fixture: același lanț ca harness-ul J07 (R5 + R08 + R12 + R11 + J02 + J05 + matrice) + Storage R12 ──
@@ -133,7 +133,8 @@ ${j07}
 ${check(`NOT EXISTS(SELECT 1 FROM dupa_prima_aplicare a JOIN pg_proc p ON p.proname=a.proname AND p.pronamespace='public'::regnamespace
   WHERE pg_get_functiondef(p.oid)<>a.def)`, 'Reaplicarea J04→J07 este idempotentă')}
 ${check(`(SELECT array_agg(tgname::text ORDER BY tgname)=ARRAY['trg_ofertare_pt_pachet_matrice','trg_ofertare_pt_pachet_poarta_documentatie','trg_pt_pachet_depus_verifica']
-  AND bool_and(tgenabled='O') FROM pg_trigger WHERE tgrelid='ofertare_pt_pachet'::regclass AND NOT tgisinternal)`, 'Pachet: exact 3 triggere BEFORE active, în ordinea matrice → J07 → J04')}
+  AND bool_and(tgenabled='O') FROM pg_trigger WHERE tgrelid='ofertare_pt_pachet'::regclass AND NOT tgisinternal AND (tgtype & 16) <> 0)`, 'Pachet: exact 3 triggere BEFORE UPDATE active, în ordinea matrice → J07 → J04')}
+${check(`EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='ofertare_pt_pachet'::regclass AND tgname='trg_pt_pachet_delete_garda' AND tgenabled='O' AND (tgtype & 8) <> 0)`, 'Pachet: garda de DELETE (C3) activă')}
 ${check(`position('-- J07 BEGIN' in pg_get_functiondef('fn_ofertare_pt_pachet_poarta_documentatie()'::regprocedure))>0
   AND position('ofertare_r5_blocaj_sursa' in pg_get_functiondef('fn_ofertare_pt_pachet_poarta_documentatie()'::regprocedure))>0`, 'Tranziția cere J07 + R5 (trigger documentație)')}
 ${check(`position('ofertare_pt_pachet_verificari' in pg_get_functiondef('fn_pt_pachet_depus_verifica()'::regprocedure))>0
@@ -504,6 +505,8 @@ scenariu('rollback invers (J07, apoi J04): funcții restaurate exact, dovezile p
     ${check(`(SELECT count(*) FROM ofertare_pt_pachet_verificari)=${nV} AND (SELECT count(*) FROM ofertare_poarta_rezultate_text)=${nT}`, 'Dovezile J04 și J07 păstrate')}
     ${reject('TRUNCATE ofertare_pt_pachet_verificari', '42501', 'append-only')}
     ${reject('DELETE FROM ofertare_poarta_rezultate_text', '42501', 'append-only')}`)
+  // Copilot conv. 3 (NO-GO r1): după revenirea J04 (tabelul de dovezi rămâne), J07 NU se mai poate livra — cere J04 ACTIV.
+  await db.sql(`${admin} ${reject(j07, 'P0001', 'Precondiție 0b')}`)
   // CONSTATARE (nu cerință): după ambele rollback-uri, tranziția revine la R11/R5 — poarta hash/J07 e redeschisă.
   // Vezi COPILOT_REVIEW «Rollback-ul nu poate redeschide poarta»: decizia rămâne la Copilot + Răzvan.
   await db.sql(`${admin} SAVEPOINT redeschis; ${user()} ${DEPUS}; ${admin} ROLLBACK TO SAVEPOINT redeschis; RELEASE SAVEPOINT redeschis;`)

@@ -84,9 +84,10 @@ ${migration('20260929b_ofertare_derogare_audit.sql')}
 ${migration('20260928h_ofertare_pachet_poarta_r12.sql')}
 ${migration('20260928k_ofertare_pachet_depus_r11.sql')}
 ${migration('20260928o_ofertare_pachet_tranzitie_jakv201.sql')}
--- 06.10.2026: J07 cere J04 livrat întâi și funcțiile live exact (md5 pinuit) → Storage minimal + R12, transplantul J02b / J05
--- (ca suita extinsă), apoi J04 livrat + revenit (rămâne tabelul de dovezi, triggerele J04 pleacă): harness-ul testează J07
--- IZOLAT, ca înainte; combinația J04×J07 e în test_j04_j07_integrare.mjs și în suita extinsă.
+-- 06.10.2026: J07 cere J04 ACTIV întâi și funcțiile live exact (md5 pinuit) → Storage minimal + R12, transplantul J02b / J05
+-- (ca suita extinsă), J04 activ la livrarea J07; după verificările de livrare, J04 e revenit (triggerele J04 pleacă) ca restul
+-- harness-ului să testeze J07 IZOLAT, ca înainte; la reaplicarea finală J04 se relivrează. Combinația J04×J07 e în
+-- test_j04_j07_integrare.mjs și în suita extinsă.
 CREATE SCHEMA storage;
 GRANT USAGE ON SCHEMA storage TO authenticated, anon, service_role;
 CREATE TABLE storage.objects(id uuid PRIMARY KEY, bucket_id text NOT NULL, name text NOT NULL,
@@ -96,7 +97,6 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON storage.objects TO authenticated, service_r
 ${copilot.slice(copilot.indexOf('CREATE OR REPLACE FUNCTION public.fn_ofertare_obiect_in_pachet_inghetat'))}
 ${transplantJ02bJ05()}
 ${cuGarda(J04, migration(J04))}
-${migration(J04.replace('.sql', '_ROLLBACK.sql'))}
 CREATE TEMP TABLE before_functions AS SELECT oid,pg_get_functiondef(oid) def,proacl,prosecdef,proconfig FROM pg_proc
  WHERE pronamespace='public'::regnamespace AND proname IN ('fn_gate_depunere','fn_ofertare_pt_pachet_poarta_documentatie',
  'fn_ofertare_pt_pachet_matrice','fn_gate_depunere_derogare_owner','ofertare_r5_blocaj_sursa','ofertare_derogare_depunere');
@@ -108,6 +108,7 @@ ${check(`NOT EXISTS(SELECT 1 FROM before_triggers b LEFT JOIN pg_trigger t USING
 ${check(`NOT EXISTS(SELECT 1 FROM before_policies b LEFT JOIN pg_policy p USING(oid) WHERE p.oid IS NULL OR to_jsonb(p)<>b.def)`, 'R12: politicile existente nemodificate')}
 ${check(`NOT EXISTS(SELECT 1 FROM before_functions b JOIN pg_proc p USING(oid) WHERE p.proacl IS DISTINCT FROM b.proacl OR p.prosecdef IS DISTINCT FROM b.prosecdef OR p.proconfig IS DISTINCT FROM b.proconfig)`, 'ACL și securitate funcții existente intacte')}
 ${check(`NOT EXISTS(SELECT 1 FROM before_functions b JOIN pg_proc p USING(oid) WHERE p.proname NOT IN ('fn_gate_depunere','fn_ofertare_pt_pachet_poarta_documentatie') AND pg_get_functiondef(p.oid)<>b.def)`, 'R5/J02/J05 helpers nemodificați')}
+${migration(J04.replace('.sql', '_ROLLBACK.sql'))}
 ${user()}
 INSERT INTO ofertare_licitatii(id,responsabil_id) VALUES(1,'${EDITOR}');
 INSERT INTO ofertare_cantitati(id,licitatie_id,denumire,categorie,um,cantitate,status,tip_sursa,sursa,extras_de_ai)
@@ -286,6 +287,8 @@ ${rollback}
 ${rollback}
 ${check(`NOT EXISTS(SELECT 1 FROM before_functions b JOIN pg_proc p USING(oid) WHERE pg_get_functiondef(p.oid)<>b.def)`, 'Rollback exact al funcțiilor')}
 ${check(`(SELECT count(*) FROM ofertare_poarta_rezultate_text)=(SELECT n FROM count_before)`, 'Rollback păstrează auditul')}
+${reject(j07, 'P0001', 'Precondiție 0b')}
+${cuGarda(J04, migration(J04))}
 ${j07}
 ${check(`ofertare_poarta_server(1)->>'stare'='ok'`, 'Reaplicare cu istoric existent')}
 ROLLBACK;

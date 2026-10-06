@@ -21,10 +21,21 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN
     RAISE EXCEPTION 'Precondiție 0a: rulează ca postgres (current_user = %)', current_user;
   END IF;
-  -- ordinea de livrare (decizia A, 29.09): J04 livrat înaintea lui J07 — dovada e tabelul de verificări J04 (rămâne și după
-  -- revenirea J04, care păstrează dovezile; J07 nu depinde funcțional de triggerele J04).
-  IF to_regclass('public.ofertare_pt_pachet_verificari') IS NULL THEN
-    RAISE EXCEPTION 'Precondiție 0b: J04 (20260930a) trebuie livrat ÎNAINTEA lui J07';
+  -- ordinea de livrare (decizia A, 29.09): J04 ACTIV înaintea lui J07 (Copilot conv. 3, NO-GO r1: tabelul de dovezi singur nu
+  -- ajunge — revenirea J04 îl păstrează). Cerem semnătura pe care o verifică și postcondiția J04: cele 5 triggere active și
+  -- fn_pt_pachet_depus_verifica cu dovezile J04 + C2, SECDEF, search_path fix.
+  IF to_regclass('public.ofertare_pt_pachet_verificari') IS NULL
+     OR (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgenabled = 'O' AND (t.tgrelid, t.tgname) IN (
+           ('public.ofertare_pt_pachet_fisiere'::regclass, 'trg_pt_fisier_insert_stare'),
+           ('public.ofertare_pt_pachet_fisiere'::regclass, 'trg_pt_fisier_imuabil'),
+           ('public.ofertare_pt_pachet_fisiere'::regclass, 'trg_pt_fisier_path_obligatoriu'),
+           ('public.ofertare_pt_pachet'::regclass, 'trg_pt_pachet_delete_garda'),
+           ('public.ofertare_pt_pachet_verificari'::regclass, 'trg_pt_verificari_imuabile'))) <> 5
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.fn_pt_pachet_depus_verifica()'::regprocedure AND p.prosecdef
+                      AND array_to_string(p.proconfig, ',') = 'search_path=public, pg_temp'
+                      AND position('ofertare_pt_pachet_verificari' in p.prosrc) > 0
+                      AND position('ORDER BY u.id DESC LIMIT 1' in p.prosrc) > 0) THEN
+    RAISE EXCEPTION 'Precondiție 0b: J04 (20260930a, cu C1–C3) trebuie să fie ACTIV înaintea lui J07 (triggere + funcția de depunere J04)';
   END IF;
   FOR r IN SELECT p.proname, md5(p.prosrc) AS h, position('-- J07 BEGIN' in p.prosrc) > 0 AS patchuit, p.prosecdef,
                   array_to_string(p.proconfig, ',') AS cfg, (SELECT string_agg(a::text, ' ' ORDER BY a::text) FROM unnest(p.proacl) a) AS acl
