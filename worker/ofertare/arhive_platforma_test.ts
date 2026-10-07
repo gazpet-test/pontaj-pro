@@ -662,6 +662,23 @@ Deno.test('drumul SEAP: „Raspuns.zip” deja în platformă + „Raspuns.zip.p
   })
 })
 
+Deno.test('drumul SEAP: placeholder de veghe „Raspuns.zip.p7m” (documentația inițială, fără fișier) → arhiva adusă, desfăcută, placeholder-ul primește nota', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const restore = cuSeap({ 'Raspuns.zip.p7m': await semneazaCms(await zipCu({ 'R1.pdf': '%PDF-1.4 r1', 'R2.pdf': '%PDF-1.4 r2' })) })
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [   // exact ce scrie veghea pentru un document nou din documentația inițială
+        { id: 30, licitatie_id: 3, nume_original: 'Raspuns.zip.p7m', fisier_path: '3/atribuire/neincarcat/Raspuns.zip.p7m', tip: 'alta', status_procesare: 'ignorat', sursa: 'seap', aparut_ulterior: true,
+          eroare: 'Aparut nou in SEAP, dar nu a putut fi adus automat - urca-l din "Urca fisiere".' },
+      ] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq(rap.erori, [])
+      eq(tab.ofertare_documente_atribuire.filter(d => d.id >= 5000).map(d => d.nume_original).sort(), ['R1.pdf', 'R2.pdf'])
+      ok(/^Arhivă adusă pe Terra: 2 fișiere în platformă\.$/.test(tab.ofertare_documente_atribuire.find(d => d.id === 30)!.eroare), tab.ofertare_documente_atribuire.find(d => d.id === 30)!.eroare)
+    } finally { restore(); await opreste() }
+  })
+})
+
 Deno.test('drumul SEAP: „….zip.p7m” cu semnătură DETAȘATĂ → eroare la semnătură, nimic urcat', async () => {
   await cuMediu(async (root, s) => {
     const opreste = pornesteExtractor(root)
