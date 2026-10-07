@@ -16,7 +16,9 @@
 //     cuvânt de text (TEXT_RE) oprește regula de planșă;
 //   - „Solicitare de clarificări” (întrebarea ofertantului) nu e răspuns → alta;
 //   - folderul (încărcare pe folder din UI, ZIP desfăcut în edge) e doar indiciu când numele nu spune nimic, fără planșă;
-//   - din arhivă: regula proprie, apoi folderul, apoi tipul arhivei — fără raspuns_clarificare și fără planșă.
+//   - din arhivă: regula proprie, apoi folderul, apoi tipul arhivei — fără raspuns_clarificare și fără planșă;
+//   - review r2 (07.10): rândul unei ARHIVE e 'alta' (container), planșa „slabă” cedează în fața folderului / arhivei de
+//     caiet sau listă, „Răspuns” / „Erată” bat fișa de date și caietul, caietul cu liste e listă, TEXT_RE lărgit.
 
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/_/g, ' ')
 
@@ -24,34 +26,47 @@ const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,
 export const numeFisier = (nume) => String(nume ?? '').split(/[\\/]/).pop() || ''
 
 // cuvinte de document TEXT: oricât vocabular de desen ar avea numele, cu ele nu e planșă (se citește)
-const TEXT_RE = /procedur|breviar|specificat|tehnologi|program|calcul|instructiun|metodolog|raport|\bnota\b|\bgrafic|\bfis[ae]\b|\blist[ae]\b|descrier|conditii|cerint|\btema\b|masuri|\bssm\b|securitat|control|calitat|tabel|coordonat|borderou|cuprins|memoriu|justific|studiu|aviz|referat|expertiz|extras|deviz|evaluare|pccvi|solutie|garanti|\bordin|\bacord|centralizator|cantitat/
+const TEXT_RE = /procedur|breviar|specificat|tehnologi|program|calcul|instructiun|metodolog|raport|\bnota\b|\bgrafic|\bfis[ae]\b|\blist[ae]\b|descrier|conditii|cerint|\btema\b|masuri|\bssm\b|securitat|control|calitat|tabel|coordonat|borderou|cuprins|memoriu|justific|studiu|aviz|referat|expertiz|extras|deviz|evaluare|pccvi|solutie|garanti|\bordin|\bacord|centralizator|cantitat|autoriza|conventi|decizi|hotarar|notificar|prescripti|manual|verificar|\bprobe|agrement|permis|declarati|normativ|regulament|documentati|propunere|angajament/
+const LISTE_RE = /cantitat|antemasur|centralizator|explicitare[ .-]?norm|^f[1-3][ .-]|^c[2-5][ .-]|\bliste?\b[ .-]+(-[ .-]*)?fara[ .-]+(valori|preturi)/
+const DESEN_TARE_RE = /\bdwg\b|izometri|schema tehnologica/
+const VOCAB_DESEN = /schem|de[tl]aliu|profil|subtravers|sectiun|cofret|electrod|platforma|gauri|grile|montaj|monaj/
+const numeCurat = (nume) => norm(numeFisier(nume)).replace(/\.p7s$/, '')
 
-/** Tipul dat de o regulă explicită sau null când numele nu spune nimic (atunci decide apelantul: folder, arhivă, 'alta'). */
+/** Tipul dat de o regulă explicită („tare”) sau null când numele nu spune nimic — atunci decide apelantul: folderul,
+ *  arhiva, planșa „slabă” (număr de foaie + vocabular de desen), 'alta'. */
 export function tipExplicit(nume) {
-  const n = norm(numeFisier(nume)).replace(/\.p7s$/, '')
+  const n = numeCurat(nume)
+  if (/(solicitar|cerer|intrebar)[a-z]*[ .-]+(de[ .-]+)?clarificar/.test(n) && !/raspuns|\brasp\b|^clarificar/.test(n)) return 'alta'
+  if (/raspuns|\brasp\b|\berata\b/.test(n)) return 'raspuns_clarificare'
   if (/fisa[ .-]?(de[ .-]?)?date|instructiuni[ .-]?ofertanti/.test(n)) return 'fisa_date'
-  if (/(solicitar|cerer|intrebar)[a-z]*[ .-]+(de[ .-]+)?clarificar/.test(n) && !/raspuns/.test(n)) return 'alta'
-  if (/caiet|memoriu|parte[a]? scrisa/.test(n)) return 'cs_volum'
-  if (/raspuns|clarificar|erata/.test(n)) return 'raspuns_clarificare'
-  if (/cantitat|antemasur|centralizator|explicitare[ .-]?norm|^f[1-3][ .-]|^c[2-5][ .-]/.test(n)) return 'lista_cantitati'
-  if (/\bcs\b/.test(n)) return 'cs_volum'
+  if (/caiet|memoriu|parte[a]? scrisa/.test(n) && !LISTE_RE.test(n)) return 'cs_volum'
+  if (/clarificar/.test(n)) return 'raspuns_clarificare'
+  if (LISTE_RE.test(n)) return 'lista_cantitati'
+  if (/\bcs\b/.test(n) && !/desen|plans/.test(n)) return 'cs_volum'
   if (/formular|duae/.test(n)) return 'formular'
   if (/contract|conditii[ .-]?(generale|specifice)/.test(n)) return 'model_contract'
   if ((/volum/.test(n) && !/desen|plans/.test(n)) || /sectiunea/.test(n)) return 'cs_volum'
   if (/^(c\d{1,2}|f\d{1,2}|dg|do|cm)[ .-]/.test(n)) return 'formular'
-  if (/\batr\b|aviz|\bacord|anex[ae]|studiu|\bpv\b|proces[ .-]?verbal|ocpi|certificat|norme[ .-]?anre|\bgis\b/.test(n)) return 'alta'
-  if (/\.dwg$|\bdwg\b|izometri|schema tehnologica/.test(n)) return 'plansa'
+  if (/\batr\b|aviz|\bacord|anex[ae]|studiu|\bpv\b|proces[ .-]?verbal|ocpi|certificat|autoriza|norme[ .-]?anre|\bgis\b/.test(n)) return 'alta'
+  if (/\.dwg$/.test(n)) return 'plansa'
+  if (DESEN_TARE_RE.test(n) && !TEXT_RE.test(n.replace(/schema tehnologica|izometri[a-z]*|\bdwg\b/g, ' '))) return 'plansa'
   if (TEXT_RE.test(n)) return null
   if (/desen|plans|topo/.test(n)) return 'plansa'
   if (/\bplan(ul)?[ .-]+(de[ .-]+)?(situatie|amplas|sectiune)/.test(n)) return 'plansa'
-  if (/^\d{1,3}(\.\d{1,2})?\.?[ -]/.test(n)
-    && /schem|de[tl]aliu|profil|subtravers|sectiun|cofret|electrod|platforma|gauri|grile|montaj|monaj/.test(n)) return 'plansa'
   return null
 }
 
-// tipurile pe care le poate da un FOLDER (fără planșă: un text dintr-un folder „Planșe” s-ar pierde la citire);
-// raspuns_clarificare doar dintr-un folder de răspuns explicit (nu „02_clarificari” cu întrebările noastre)
-const DIN_FOLDER = new Set(['fisa_date', 'formular', 'model_contract', 'lista_cantitati', 'cs_volum'])
+/** Planșa „slabă”: număr de foaie + vocabular de desen („12. Detaliu montaj”), fără niciun cuvânt de text. Cedează în fața
+ *  folderului și a unei arhive de caiet / listă („Caiete de sarcini/05. Montaj conducte PE.pdf” e capitol de caiet). */
+export const plansaSlaba = (nume) => {
+  const n = numeCurat(nume)
+  return /^\d{1,3}(\.\d{1,2})?\.?[ -]/.test(n) && !TEXT_RE.test(n) && VOCAB_DESEN.test(n)
+}
+
+// tipurile pe care le poate da un FOLDER: fără planșă (un text dintr-un folder „Planșe” s-ar pierde la citire) și fără fișa
+// de date (un folder „01_fisa_date_formulare” ar face fișă din orice; fișa are mereu nume grăitor); raspuns_clarificare doar
+// dintr-un folder de răspuns explicit (nu „02_clarificari” cu întrebările noastre)
+const DIN_FOLDER = new Set(['formular', 'model_contract', 'lista_cantitati', 'cs_volum'])
 /** Tipul dat de cel mai apropiat folder grăitor din cale; spațiile de nume ale arhivelor „X (#id)” se sar. */
 export function tipDinFoldere(nume) {
   const seg = String(nume ?? '').split(/[\\/]/).slice(0, -1).reverse()
@@ -63,19 +78,23 @@ export function tipDinFoldere(nume) {
   return null
 }
 
-/** Tipul unui document urcat direct (fără arhivă-mamă). */
+/** Tipul unui document urcat direct (fără arhivă-mamă). O ARHIVĂ e 'alta': e un container (se despachetează, nu se citește),
+ *  iar un tip esențial pe ea ar bloca poarta de completitudine după despachetare (lic. 103, „LISTE CANTITATI…zip”). */
 export function ghicesteTip(nume) {
-  return tipExplicit(nume) ?? tipDinFoldere(nume) ?? 'alta'
+  if (esteArhiva(nume)) return 'alta'
+  return tipExplicit(nume) ?? tipDinFoldere(nume) ?? (plansaSlaba(nume) ? 'plansa' : 'alta')
 }
 
-/** Tipul unui fișier extras dintr-o arhivă: regula proprie, apoi folderul, apoi tipul arhivei — CU EXCEPȚIA lui
- *  raspuns_clarificare (un fișier fără nume grăitor dintr-o arhivă „clarificare” e de regulă documentație revizuită:
- *  Mânăstirea 182 rânduri, lic. 3 117 fișiere) și a planșei (un breviar / o notă dintr-o arhivă „Planșe” nu s-ar mai
- *  citi). O arhivă imbricată fără nume grăitor nu moștenește nimic (tip esențial pe o arhivă = poartă blocată). */
+/** Tipul unui fișier extras dintr-o arhivă. `tipArhiva` = indiciul mamei (workerul dă tipExplicit(numele arhivei) ?? tipul
+ *  rândului). Ordinea: regula proprie, folderul, contextul de caiet / listă al mamei, planșa slabă, apoi tipul mamei — CU
+ *  EXCEPȚIA lui raspuns_clarificare (un fișier fără nume grăitor dintr-o arhivă „clarificare” e de regulă documentație
+ *  revizuită: Mânăstirea 182 rânduri, lic. 3 117 fișiere) și a planșei (un breviar dintr-o arhivă „Planșe” nu s-ar mai citi). */
 export function tipInArhiva(nume, tipArhiva) {
+  if (esteArhiva(nume)) return 'alta'
   const t = tipExplicit(nume) ?? tipDinFoldere(nume)
   if (t) return t
-  if (esteArhiva(nume)) return 'alta'
+  if (tipArhiva === 'cs_volum' || tipArhiva === 'lista_cantitati') return tipArhiva
+  if (plansaSlaba(nume)) return 'plansa'
   return tipArhiva && tipArhiva !== 'raspuns_clarificare' && tipArhiva !== 'plansa' ? tipArhiva : 'alta'
 }
 

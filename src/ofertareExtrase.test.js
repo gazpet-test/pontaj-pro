@@ -32,6 +32,18 @@ describe('fișierele extrase din arhive în listele „primite”', () => {
     expect(rezumatExtrase(130, imb)).toBeNull()
     expect(primiteVizibile(imb).map(d => d.id)).toEqual([1])
   })
+  it('arhivele extrase rămase nedespachetate (volume / adâncime / respinse) rămân vizibile și sunt numărate', () => {
+    const cu = [D(900, 'Raspuns clarificari.zip', 'raspuns_clarificare'),
+      { ...D(901, 'Raspuns clarificari (#900)/PT revizuit.part1.rar', 'alta'), eroare: 'Despachetare manuală necesară: arhivă în volume' },
+      { ...D(902, 'Raspuns clarificari (#900)/Caiet revizuit.zip', 'alta'), eroare: 'Despachetare RESPINSĂ de controalele de siguranță' },
+      { ...D(903, 'Raspuns clarificari (#900)/Bun.zip', 'alta'), eroare: '📦 Arhivă despachetată pe Terra: 2 fișiere noi' },
+      D(904, 'Raspuns clarificari (#900)/In curs.zip', 'alta'),
+      D(905, 'Raspuns clarificari (#900)/Formular.pdf', 'formular')]
+    expect(primiteVizibile(cu).map(d => d.id)).toEqual([900, 901, 902])
+    const r = rezumatExtrase(900, cu)
+    expect(r.blocate).toBe(2)
+    expect(r.text).toContain('⚠ 2 arhive interioare de despachetat manual')
+  })
   it('esteExtras', () => {
     expect(esteExtras(D(1, 'A (#1)/x.pdf'))).toBe(true)
     expect(esteExtras(D(1, 'Raspuns (#1).pdf'))).toBe(false)

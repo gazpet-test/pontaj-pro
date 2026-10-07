@@ -80,7 +80,7 @@ describe('regulile, pe cazurile de margine', () => {
     expect(ghicesteTip('Erata 1.pdf')).toBe('raspuns_clarificare')
     expect(ghicesteTip('Raspuns consolidat la clarificari.pdf')).toBe('raspuns_clarificare')
     expect(ghicesteTip('Documentatie consolidata.pdf')).toBe('alta')   // documentație revizuită, nu răspuns
-    expect(ghicesteTip('Planse.zip')).toBe('plansa')
+    expect(ghicesteTip('Planse.zip')).toBe('alta')   // arhiva e container (se despachetează), nu se citește
     expect(ghicesteTip('traseu.dwg')).toBe('plansa')
     expect(ghicesteTip('ceva.pdf')).toBe('alta')
   })
@@ -117,7 +117,7 @@ describe('regulile, pe cazurile de margine', () => {
   })
   it('diacriticele și calea nu contează', () => {
     expect(ghicesteTip('Fișa de date.pdf')).toBe('fisa_date')
-    expect(ghicesteTip('Planșe.zip')).toBe('plansa')
+    expect(ghicesteTip('Planșe.pdf')).toBe('plansa')
     expect(ghicesteTip('Arhiva (#12)/sub/dir\\F3_lista.pdf')).toBe('lista_cantitati')
     expect(ghicesteTip('Clarificari (#9)/x.pdf')).toBe('alta')   // calea („Clarificari”) nu dă tipul, doar numele
     expect(numeFisier('a/b\\c.pdf')).toBe('c.pdf')
@@ -176,7 +176,7 @@ describe('review adversarial 07.10 (dry-run pe 1333 documente) — cazurile repa
     expect(ghicesteTip('MEMORIU.pdf')).toBe('cs_volum')
   })
   it('volumul de desene e planșă, volumul de memoriu e caiet', () => {
-    for (const n of ['VOLUM DESENE.pdf', 'Volumul II Planse.pdf', 'Volumul 3 - Planse.zip', 'Volum III - Plansa.pdf']) expect(ghicesteTip(n), n).toBe('plansa')
+    for (const n of ['VOLUM DESENE.pdf', 'Volumul II Planse.pdf', 'Volum III - Plansa.pdf', 'RGZ 2025_18_CS_Vol_I_Montaj_Desene.pdf', 'CS Vol II - Planse.pdf']) expect(ghicesteTip(n), n).toBe('plansa')
     expect(ghicesteTip('Volumul 2 - Memoriu tehnic.pdf')).toBe('cs_volum')
     expect(ghicesteTip('Volumul 1.pdf')).toBe('cs_volum')
   })
@@ -192,6 +192,51 @@ describe('review adversarial 07.10 (dry-run pe 1333 documente) — cazurile repa
     expect(ghicesteTip('Planse/Breviar.pdf')).toBe('alta')            // un text din „Planșe” rămâne de citit
     expect(ghicesteTip('LISTE CANTITATI FARA VALOR/C6 FARA VALORI.PDF')).toBe('formular')   // numele câștigă (calibrarea lic. 3)
     expect(ghicesteTip('Clarificari (#9)/sub/x.pdf')).toBe('alta')    // spațiul de nume al arhivei se sare
+  })
+})
+
+describe('review adversarial r2 (07.10) — cazurile reparate', () => {
+  it('o ARHIVĂ e „alta” (container): un tip esențial pe ea ar bloca poarta de completitudine (lic. 103)', () => {
+    for (const n of ['LISTE CANTITATI FARA VALORI.zip', 'Caiet de sarcini.rar', 'Fisa de date.zip.p7s', 'RGZ_18_CS_Vol_II.7z', 'Volumul 3 - Planse.zip'])
+      expect(ghicesteTip(n), n).toBe('alta')
+    expect(tipInArhiva('X (#5)/Caiet de sarcini.rar', 'cs_volum')).toBe('alta')
+  })
+  it('planșa „slabă” (număr + desen) cedează în fața folderului și a arhivei de caiet / listă', () => {
+    expect(ghicesteTip('Caiete de sarcini/05. Montaj conducte PE.pdf')).toBe('cs_volum')
+    expect(ghicesteTip('Liste cantitati/3. Subtraversari.pdf')).toBe('lista_cantitati')
+    expect(tipInArhiva('05. Montaj conducte PE.pdf', 'cs_volum')).toBe('cs_volum')
+    expect(tipInArhiva('3. Subtraversari.pdf', 'lista_cantitati')).toBe('lista_cantitati')
+    expect(tipInArhiva('Planse (#4)/7. Detaliu montaj.pdf', 'alta')).toBe('plansa')
+    expect(ghicesteTip('Planse/7. Detaliu montaj.pdf')).toBe('plansa')
+  })
+  it('garda de text acoperă actele administrative și tehnice uzuale', () => {
+    for (const n of ['4. Conventie CFR subtraversare CF 613.pdf', '5. Autorizatie de construire subtraversare DN29.pdf', '5. Decizie CNAIR subtraversare DN1.pdf',
+      '2. Prescriptii tehnice de montaj.pdf', '7. Verificari si probe la montaj.pdf', '3. Manual de montaj si exploatare SRM.pdf', '6. Agrement tehnic montaj teava PE.pdf',
+      '4. Permis de spargere subtraversare.pdf', 'Autorizatie de construire si plan de situatie vizat.pdf', '5. Declaratie montaj.pdf', '6. Normativ NTPEE montaj.pdf',
+      '3. Notificare subtraversare CF.pdf', '4. Documentatie subtraversare DN29.pdf', '8. Propunere tehnica montaj.pdf', '3. Hotarare CL plan de situatie.pdf'])
+      expect(ghicesteTip(n), n).not.toBe('plansa')
+  })
+  it('schema tehnologică / izometria / dwg cedează și ele în fața cuvintelor de text', () => {
+    for (const n of ['Descriere schema tehnologica SRM.pdf', 'Breviar de calcul schema tehnologica SRM.pdf', 'Lista echipamente schema tehnologica.pdf',
+      'Specificatie tehnica izometrie racord.pdf', 'Tabel coordonate izometrie.pdf', 'Breviar dwg.pdf'])
+      expect(ghicesteTip(n), n).not.toBe('plansa')
+    expect(ghicesteTip('Schema tehnologica SRM.pdf')).toBe('plansa')
+    expect(ghicesteTip('2. Schema Izometrica ADI.pdf')).toBe('plansa')
+  })
+  it('„Răspuns” / „Erată” bat fișa de date și caietul; caietul revizuit rămâne caiet (decizia 16.09)', () => {
+    for (const n of ['Raspuns la clarificari privind fisa de date.pdf', 'Erata nr 1 la Fisa de date.pdf', 'Raspuns la solicitarea de clarificari privind caietul de sarcini.pdf',
+      'Erata caiet de sarcini.pdf', 'Rasp. solicitare clarificari nr 3.pdf', 'Clarificare la solicitarea de clarificari nr 2.pdf', 'Clarificari la solicitarile de clarificare.pdf'])
+      expect(ghicesteTip(n), n).toBe('raspuns_clarificare')
+    expect(ghicesteTip('Caiet de sarcini revizuit dupa clarificari.pdf')).toBe('cs_volum')
+  })
+  it('caietul care conține liste e listă; „Liste fără valori” e listă', () => {
+    for (const n of ['Caiet de sarcini si liste de cantitati.pdf', 'Caiet de sarcini - Vol III - Liste de cantitati.pdf', 'Parte scrisa - liste de cantitati.pdf',
+      'Memoriu tehnic si antemasuratori.pdf', 'LISTE -FARA VALORI.pdf', 'Liste fara preturi.pdf'])
+      expect(ghicesteTip(n), n).toBe('lista_cantitati')
+  })
+  it('folderul „fișă de date + formulare” nu face fișă de date din orice', () => {
+    expect(ghicesteTip('01_fisa_date_formulare/Cerinte SUSSMPM.pdf')).toBe('alta')
+    expect(ghicesteTip('01_fisa_date_formulare/Instructiuni_ofertanti_FisaDate_DF1279352.pdf')).toBe('fisa_date')
   })
 })
 

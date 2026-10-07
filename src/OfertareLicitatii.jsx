@@ -3365,6 +3365,7 @@ const estePlaceholderDoc = d => !d.fisier_path || String(d.fisier_path).includes
 const fmtDataScurt = d => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'
 function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const [docs, setDocs] = useState(null)
+  const vizibile = docs ? primiteVizibile(docs) : null   // fără fișierele extrase din arhive (rămâne arhiva, cu rezumat)
   const [toate, setToate] = useState([])      // toată Documentația licitației — ca să știm ce e deja citit
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
   const [progres, setProgres] = useState('')  // eticheta butonului în timpul citirii / rezumatului pe felii
@@ -3377,7 +3378,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
       .select('id, nume_original, tip, fisier_path, created_at, analiza, analiza_la, eroare')
       .eq('licitatie_id', l.id).eq('aparut_ulterior', true).order('created_at', { ascending: false })
     const { data: tot } = await supabase.from('ofertare_documente_atribuire')
-      .select('id, nume_original, tip, fisier_path, size_bytes, status_procesare')
+      .select('id, nume_original, tip, fisier_path, size_bytes, status_procesare, eroare')
       .eq('licitatie_id', l.id).limit(5000)
     setToate(tot || [])
     setDocs(data || [])
@@ -3446,7 +3447,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   return (
     <div style={{ ...S.card, padding:16, background:G.surface, marginBottom:14 }}>
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
-        <div style={{ fontWeight:800, fontSize:14 }}>📂 Documente noi din SEAP ({docs?.length ?? '…'})</div>
+        <div style={{ fontWeight:800, fontSize:14 }}>📂 Documente noi din SEAP ({vizibile ? vizibile.length : '…'})</div>
         <span style={{ fontSize:11.5, color:G.dim }}>apărute după importul inițial — răspunsuri, erate, planșe noi</span>
         <button style={{ ...S.btnS, marginLeft:'auto', padding:'4px 11px', fontSize:12, color:G.ofertare, borderColor:G.ofertare+'66', cursor: verific ? 'default' : 'pointer', opacity: verific ? .6 : 1 }}
           disabled={verific} onClick={verificaAcum}
@@ -3466,8 +3467,8 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
       )}
       {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : msg.tip === 'warn' ? G.yellow : G.green, marginBottom:8 }}>{msg.t}</div>}
       {docs === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
-        : !primiteVizibile(docs).length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
-        : primiteVizibile(docs).map(d => {
+        : !vizibile.length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
+        : vizibile.map(d => {
           const ph = estePlaceholderDoc(d)
           const extrase = ARHIVA_DOC_RE.test(d.nume_original || '') ? rezumatExtrase(d.id, toate) : null
           const c = d.analiza?.citire_noi

@@ -21,7 +21,7 @@ import { poartaOfertare } from './_poartaOfertare.js'
 import { inflateRawSync } from 'node:zlib'
 import { continutSemnat } from './_p7s.js'
 import { randManifest, sha256Hex, dedupManifest, MANIFEST_CONFLICT, ARHIVA_SEAP } from './_manifest.js'
-import { ghicesteTip } from './_tipDocument.js'
+import { ghicesteTip, esteArhiva } from './_tipDocument.js'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR = {
@@ -223,10 +223,10 @@ export default async function handler(req, res) {
         const docId = await scrie({
           licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
           tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-          // intrările DownloadArchive sunt documente SEAP de prim nivel: o arhivă rămâne „ignorat” (o desface drumul SEAP
-          // al workerului NAS) — „neprocesat” ar trimite-o și la bucla de platformă, a doua oară (dubluri, review 07.10)
-          status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-          eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)',
+          // 07.10.2026: o arhivă intră „neprocesat”, fără notă — o despachetează bucla workerului NAS. Dacă drumul SEAP al
+          // workerului a desfăcut-o deja (evidență „ok” / manifest), bucla o închide cu notă, fără dublură (review #641 r2).
+          status_procesare: estePdf || esteArhiva(numeFinal) ? 'neprocesat' : 'ignorat',
+          eroare: estePdf || esteArhiva(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)',
           sursa: 'seap',
         }, numeFinal)
         noteazaManifest(numeFinal, buf, docId, docId ? null : 'rand BD nescris')

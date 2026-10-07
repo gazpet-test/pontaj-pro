@@ -11,7 +11,7 @@
 //  - nu executăm nimic din arhivă și nu citim nimic cu AI aici (citirea rămâne pe coada separată „Procesează").
 import type { Supa } from './ingest.ts'
 import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md): descărcările din Storage intră în jurnal
-import { ghicesteTip, tipInArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
+import { ghicesteTip, tipExplicit, tipInArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -516,6 +516,22 @@ export const esteVolumRar = (nume: string) => !!volumRar(nume.replace(/\.p7s$/i,
 export const spatiuArhiva = (d: { id: number; nume_original: string }) =>
   `${(d.nume_original.replace(/\.p7s$/i, '').replace(/\.(zip|rar|7z)$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva')} (#${d.id})`
 
+// 07.10.2026 (review #641 r2): edge / api urcă arhivele SEAP de prim nivel ÎNTREGI („neprocesat”), iar drumul SEAP al
+// workerului (aduLicitatie) poate să le fi desfăcut deja (evidență „ok” cu fișiere) — sau edge-ul a desfăcut un ZIP inline
+// (manifest cu fișiere pe cheia arhivei). Atunci bucla NU o mai desface: altfel aceleași fișiere apar a doua oară sub
+// „<arhivă> (#id)/…”. Doar pentru arhivele de prim nivel (cele extrase dintr-o arhivă n-au trecut pe drumul SEAP).
+export async function dejaDesfacutaPeSeap(supa: Supa, d: { licitatie_id: number; nume_original: string }): Promise<string | null> {
+  if (adancimeArhiva(d.nume_original) > 0) return null
+  const { data: ev } = await supa.from('ofertare_seap_fisiere').select('stare, fisiere_extrase')
+    .eq('licitatie_id', d.licitatie_id).eq('cheie', cheieNume(d.nume_original)).maybeSingle()
+  if ((ev as any)?.stare === 'ok' && Number((ev as any).fisiere_extrase) > 0) return `${(ev as any).fisiere_extrase} fișiere, evidența drumului SEAP`
+  const cheieManifest = String(d.nume_original ?? '').replace(/\.p7s$/i, '').toLowerCase()
+  const { data: man } = await supa.from('ofertare_seap_manifest').select('cale, arhiva_cheie')
+    .eq('licitatie_id', d.licitatie_id).in('arhiva_cheie', [cheieManifest, cheieNume(d.nume_original)]).limit(50)
+  const copii = ((man || []) as { cale: string; arhiva_cheie: string }[]).filter(m => String(m.cale ?? '').replace(/\.p7s$/i, '').toLowerCase() !== m.arhiva_cheie)
+  return copii.length ? `${copii.length}${copii.length === 50 ? '+' : ''} fișiere în manifestul importului` : null
+}
+
 let arhiveCuratate = false
 let arhivePauzaPana = 0     // extractorul nu răspunde → nu-l mai întrebăm la fiecare tură
 export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: string) => void, oprire: () => boolean = () => false): Promise<void> {
@@ -543,6 +559,13 @@ export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: str
     if (adancimeArhiva(d.nume_original) >= MAX_ADANCIME_ARHIVE) {   // stare finală, explicită: nu-l mai selectăm
       await supa.from('ofertare_documente_atribuire').update({
         eroare: `Despachetare manuală necesară: arhivă imbricată pe nivelul ${adancimeArhiva(d.nume_original)} (limita automată e ${MAX_ADANCIME_ARHIVE} niveluri). Descarc-o, dezarhivează local și urcă fișierele.`,
+      }).eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null)
+      continue
+    }
+    const deja = await dejaDesfacutaPeSeap(supa, d)
+    if (deja) {   // stare finală, explicită: aceeași arhivă nu se desface a doua oară (dubluri sub alt spațiu de nume)
+      await supa.from('ofertare_documente_atribuire').update({
+        status_procesare: 'ignorat', eroare: `📦 Arhivă deja despachetată pe drumul SEAP (${deja}) — nu se desface a doua oară; fișierele ei sunt deja în platformă.`,
       }).eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null)
       continue
     }
@@ -614,7 +637,7 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
         // (05.10, 1305: 159 de fișiere respinse de ofertare_doc_seap_cod_unic). Legătura cu arhiva e în nume: „(#id)”.
         // regula proprie câștigă, apoi folderul; altfel tipul arhivei — dar NU raspuns_clarificare (lic. 3: 117 formulare /
         // planșe în Clarificări) și NU planșa (un breviar dintr-o arhivă „Planșe” n-ar mai fi citit)
-        tip: tipInArhiva(f.rel, d.tip),
+        tip: tipInArhiva(f.rel, tipExplicit(d.nume_original) ?? d.tip),   // indiciul mamei: numele arhivei, apoi rândul ei
         aparut_ulterior: d.aparut_ulterior ?? null,
       })
       if (typeof r === 'string') erori.push(`${f.rel}: ${r}`)
