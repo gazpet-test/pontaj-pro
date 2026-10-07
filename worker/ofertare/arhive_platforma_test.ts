@@ -1042,3 +1042,30 @@ Deno.test('Jakarinos #5 pe #649: bucla de documente semnate nu e ținută pe loc
     ok(arhive.every(a => d(a.id).status_procesare === 'neprocesat' && d(a.id).eroare === null), 'arhivele rămân buclei de arhive')
   })
 })
+
+Deno.test('Copilot NO-GO r2 pe #649: T1 doar „Caiet.pdf.p7s” detașat, T2 doar „Caiet.pdf” real → la T2 documentul real e adus (evidența nu-l ascunde)', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const tab = licSeap()
+      const supa = fakeSupa(tab, new Map())
+      let restore = cuSeap({ 'Caiet.pdf.p7s': await semneazaCms(new TextEncoder().encode('%PDF-1.4 x'), true) })
+      const r1 = await s.aduLicitatie(supa, 3, () => {})
+      restore()
+      eq([r1.erori, r1.fisiere_urcate], [[], 1])
+      eq(tab.ofertare_seap_fisiere.map(e => [e.cheie, e.stare]), [['caiet.pdf.p7s', 'ok']], 'evidența semnăturii brute are cheie proprie')
+      restore = cuSeap({ 'Caiet.pdf': new TextEncoder().encode('%PDF-1.4 caietul real') })
+      const r2 = await s.aduLicitatie(supa, 3, () => {})
+      restore()
+      eq([r2.erori, r2.fisiere_urcate, r2.deja], [[], 1, 0])
+      eq(tab.ofertare_documente_atribuire.map(d => d.nume_original).sort(), ['Caiet.pdf', 'Caiet.pdf.p7s'])
+      // T3: ambele pe SEAP, nimic nou de adus (idempotent)
+      restore = cuSeap({ 'Caiet.pdf.p7s': await semneazaCms(new TextEncoder().encode('%PDF-1.4 x'), true), 'Caiet.pdf': new TextEncoder().encode('%PDF-1.4 caietul real') })
+      const r3 = await s.aduLicitatie(supa, 3, () => {})
+      restore()
+      eq([r3.fisiere_urcate, r3.deja], [0, 2])
+      // arhivele .p7s rămân pe cheia veche (dejaDesfacutaPeSeap, poarta 20261020a)
+      eq([s.cheieEvidenta('PT.zip.p7s'), s.cheieEvidenta('Caiet.pdf.p7s'), s.cheieEvidenta('Caiet.pdf')], ['pt.zip', 'caiet.pdf.p7s', 'caiet.pdf'])
+    } finally { await opreste() }
+  })
+})

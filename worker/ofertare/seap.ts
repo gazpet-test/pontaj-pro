@@ -39,6 +39,15 @@ const estePlaceholder = (d: { fisier_path?: string | null }) => !d.fisier_path |
 // SEAP încearcă toate cheile lui (cheiSeap): desfăcut, „X (semnat).pdf”, rândul brut.
 export const cheieRand = (n: unknown) => cheieRandCu(String(n ?? ''), cheieNume)
 export const cheiSeap = (n: unknown) => cheiSeapCu(String(n ?? ''), cheieNume)
+/** Cheia evidenței pe drumul SEAP (ofertare_seap_fisiere.cheie): ca cheieNume, dar un DOCUMENT .p7s își păstrează sufixul —
+ *  evidența „ok” a unei semnături detașate („Caiet.pdf.p7s” urcată brut) nu mai ascunde, la rularea următoare, documentul
+ *  real „Caiet.pdf” (Copilot NO-GO r2 pe #649). Un .p7s desfăcut cu succes rămâne idempotent prin dejaUrcat (cheiSeap).
+ *  Arhivele .p7s rămân pe cheia veche: pentru ele „ok” înseamnă desfăcut + extras (eșecul semnăturii e „eroare”), iar
+ *  dejaDesfacutaPeSeap și poarta de completitudine (20261020a) le caută tot pe cheieNume. */
+export const cheieEvidenta = (n: unknown) => {
+  const s = String(n ?? '')
+  return /\.p7s$/i.test(s) && !esteArhivaDoc(s) ? cheieRand(s) : cheieNume(s)
+}
 
 // Semnătura CMS (.p7s / .p7m): sursa unică în supabase/functions/_shared/semnaturaCms.mjs (aceeași regulă în edge, veghe, api).
 // Varianta B (Răzvan 07.10.2026 seara): „X.pdf.p7m” → conținutul desfăcut, numele „X (semnat).pdf”; „X.rar.p7m” → „X.rar”;
@@ -245,7 +254,7 @@ export const notaSemnatura = (nota: string | null, nume: string): Record<string,
   nota && !esteArhivaDoc(nume) ? { status_procesare: 'ignorat', eroare: nota } : {}
 
 async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'identificat' | 'ok' | 'eroare' | 'sarit'; etapa?: string; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }) {
-  const cheie = cheieNume(nume)
+  const cheie = cheieEvidenta(nume)
   const { data: vechi } = await supa.from('ofertare_seap_fisiere').select('id, incercari').eq('licitatie_id', licId).eq('cheie', cheie).maybeSingle()
   const rand = {
     licitatie_id: licId, nume_seap: nume, cheie, stare: rez.stare, etapa: rez.etapa ?? null, motiv: rez.motiv ?? null, marime: rez.marime ?? null,
@@ -277,7 +286,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
 
   // ce lipsește: nu e document urcat și nu e deja tratat cu succes (arhivele nu apar niciodată ca document)
   const lipsa = docs.filter(d => {
-    const k = cheieNume(d.nume)
+    const k = cheieEvidenta(d.nume)
     // var. B: „X.pdf.p7m” poate fi deja în platformă brut (înainte de B) sau desfăcut ca „X (semnat).pdf” — niciunul nu se re-aduce
     const dejaUrcat = cheiSeap(d.nume).some(c => urcate.has(c))
     if (dejaUrcat || evidenta.get(k)?.stare === 'ok' || evidenta.get(k)?.stare === 'sarit') { raport.deja++; return false }
@@ -303,7 +312,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   await Deno.mkdir(LUCRU, { recursive: true })
   // etapa 1: identificat — rămâne vizibil „în curs” dacă jobul moare înainte de rezultat (poarta: „încă în curs de aducere”)
   for (const g of grupuri.values()) for (const d of g) {
-    const k = cheieNume(d.nume)
+    const k = cheieEvidenta(d.nume)
     if (evidenta.get(k)?.stare !== 'eroare') await inregistreaza(supa, licId, d.nume, { stare: 'identificat', etapa: 'identificare' })
   }
   const tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_${licId}_` })
