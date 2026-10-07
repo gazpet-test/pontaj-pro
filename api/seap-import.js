@@ -12,14 +12,16 @@
 // - ZIP-ul SEAP tine dimensiunile in local file header (fara data descriptor), deci
 //   se poate parcurge streaming, sarind peste ce avem deja.
 // - cheile noi (sb_...) nu sunt JWT: uploadul reluabil le vrea prin apikey.
-// - fisierele .p7s au continutul FRAGMENTAT in ASN.1; se desface cu _p7s.js, nu
-//   prin decupare intre %PDF si %%EOF (vezi comentariul de acolo).
+// - fisierele .p7s / .p7m au continutul FRAGMENTAT in ASN.1; se desface cu _semnaturaCms.js (copia byte cu byte a
+//   supabase/functions/_shared/semnaturaCms.mjs — aceeasi regula ca workerul, edge-ul si veghea), nu prin decupare
+//   intre %PDF si %%EOF. Var. B (07.10.2026): „X.pdf.p7m” → „X (semnat).pdf”; desfacere esuata = numele ramane (#20).
 // - tip are CHECK in BD ('duae' nu e valoare valida), iar erorile de scriere se
 //   raporteaza — altfel fisierul ajunge in storage si documentul lipseste din lista.
 import { createClient } from '@supabase/supabase-js'
 import { poartaOfertare } from './_poartaOfertare.js'
 import { inflateRawSync } from 'node:zlib'
-import { continutSemnat } from './_p7s.js'
+// arhiva .p7m („X.rar.p7m”) ramane intreaga, cu numele SEAP: o desface workerul NAS (#644; Jakarinos #7 pe #649)
+import { desfaceFaraArhiveP7m as desface, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from './_semnaturaCms.js'
 import { randManifest, sha256Hex, dedupManifest, MANIFEST_CONFLICT, ARHIVA_SEAP } from './_manifest.js'
 import { ghicesteTip, esteArhiva } from './_tipDocument.js'
 
@@ -34,6 +36,13 @@ const FELIE = 6 * 1024 * 1024   // Storage cere felii de 6MB, ultima poate fi ma
 // segment ÎNTREG (ca în worker și edge): „__MACOSX_documentatie.pdf” nu e gunoi (audit Jakarinos 07.10, #18)
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i
 const estePlaceholder = (d) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
+// audit Jakarinos #16: ACEEASI cheie de nume ca edge-ul, veghea si workerul (COPIE a cheieNume de acolo). Inainte api-ul
+// compara numele exact: „Doc 1.pdf” (placeholder-ul veghei) si „Doc (1).pdf” (DownloadArchive) dadeau doua randuri, iar
+// placeholder-ul ramanea „neincarcat” desi fisierul era in platforma. Cheia e doar pentru comparatie; in BD merge numele real.
+const cheieNume = (n) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
+  .replace(/[,()]/g, '').replace(/\s+/g, '')
+// randul ramas cu semnatura bruta („X.pdf.p7s” detasata / nedesfacuta) nu e „X.pdf” (Copilot NO-GO r1 pe #649)
+const cheieRand = (n) => cheieRandCu(String(n ?? ''), cheieNume)
 
 // Tipul după nume și detectarea arhivelor: api/_tipDocument.js = copia byte cu byte a
 // supabase/functions/_shared/tipDocument.mjs (src/tipDocument.test.js le ține identice).
@@ -137,17 +146,28 @@ export default async function handler(req, res) {
   const raport = { adaugate: 0, completate: 0, sarite_existente: 0, erori: [], intrari: 0, manifest_randuri: 0, avertismente: [] }
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId)
-  const urcate = new Set((dejaAre || []).filter((d) => !estePlaceholder(d)).map((d) => d.nume_original))
-  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d) => [d.nume_original, d.id]))
+  const urcate = new Set((dejaAre || []).filter((d) => !estePlaceholder(d)).map((d) => cheieRand(d.nume_original)))
+  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d) => [cheieRand(d.nume_original), d.id]))
+  // var. B: „X.pdf.p7m” poate fi in platforma brut (inainte de B) sau desfacut ca „X (semnat).pdf” — niciunul nu se re-urca
+  const dejaUrcat = (numeSeap) => cheiSeapCu(numeSeap, cheieNume).some((k) => urcate.has(k))
 
-  const scrie = async (rand, nume) => {
-    const idPh = placeholders.get(nume)
-    const { data, error } = idPh
-      ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh).select('id').maybeSingle()
-      : await supa.from('ofertare_documente_atribuire').insert(rand).select('id').maybeSingle()
+  // placeholder-ul se completeaza O SINGURA DATA, doar daca e inca placeholder (ca ofertare-seap-import/placeholder.ts, audit #2);
+  // „X (semnat).pdf” completeaza placeholder-ul pus pe numele SEAP („X.pdf.p7m”)
+  const scrie = async (rand, nume, numeSeap = null) => {
+    const k = placeholders.has(cheieRand(nume)) || !numeSeap ? cheieRand(nume) : cheieRand(numeSeap)
+    const idPh = placeholders.get(k)
+    if (idPh) {
+      placeholders.delete(k)
+      const { data: compl, error: eC } = await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh)
+        .or('fisier_path.is.null,fisier_path.like.%/neincarcat/%').select('id')
+      if (eC) { raport.erori.push(`${nume}: scriere rand - ${eC.message}`); return null }
+      if ((compl || []).length === 1) { raport.completate++; return compl[0].id }
+      // completat intre timp de alt drum → rand nou, nu suprascriere
+    }
+    const { data, error } = await supa.from('ofertare_documente_atribuire').insert(rand).select('id').maybeSingle()
     if (error) { raport.erori.push(`${nume}: scriere rand - ${error.message}`); return null }
-    if (idPh) raport.completate++; else raport.adaugate++
-    return data?.id ?? idPh ?? null
+    raport.adaugate++
+    return data?.id ?? null
   }
 
   // R6: manifest de integritate (SHA-256 pe byte-ii urcati, dupa continutSemnat) — ca in edge.
@@ -197,8 +217,8 @@ export default async function handler(req, res) {
       raport.intrari++
 
       const numeCurat = nume.replace(/\.p7s$/i, '')
-      if (urcate.has(numeCurat) || JUNK_RE.test(nume)) {
-        if (urcate.has(numeCurat)) raport.sarite_existente++
+      if (dejaUrcat(nume) || JUNK_RE.test(nume)) {
+        if (dejaUrcat(nume)) raport.sarite_existente++
         if (!(await flux.sari(csize))) break
         continue
       }
@@ -207,7 +227,9 @@ export default async function handler(req, res) {
       if (!comprimat) { raport.erori.push(`${numeCurat}: flux intrerupt`); break }
       try {
         const brut = metoda === 0 ? comprimat : inflateRawSync(comprimat)
-        const { buf, nume: numeFinal } = continutSemnat(brut, nume)
+        const ds = desface(brut, nume)
+        const { buf, nume: numeFinal } = ds
+        const nota = ds.nota && !esteArhiva(numeFinal) ? ds.nota : null   // arhiva nedesfacuta: o incearca workerul NAS
         const estePdf = /\.pdf$/i.test(numeFinal)
         const ctype = estePdf ? 'application/pdf' : 'application/octet-stream'
         const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180)
@@ -226,12 +248,12 @@ export default async function handler(req, res) {
           tip: ghicesteTip(numeFinal), size_bytes: buf.length,
           // 07.10.2026: o arhivă intră „neprocesat”, fără notă — o despachetează bucla workerului NAS. Dacă drumul SEAP al
           // workerului a desfăcut-o deja (evidență „ok” / manifest), bucla o închide cu notă, fără dublură (review #641 r2).
-          status_procesare: estePdf || esteArhiva(numeFinal) ? 'neprocesat' : 'ignorat',
-          eroare: estePdf || esteArhiva(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)',
+          status_procesare: !nota && (estePdf || esteArhiva(numeFinal)) ? 'neprocesat' : 'ignorat',
+          eroare: !nota && (estePdf || esteArhiva(numeFinal)) ? null : (nota || 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)'),
           sursa: 'seap',
-        }, numeFinal)
+        }, numeFinal, nume)
         noteazaManifest(numeFinal, buf, docId, docId ? null : 'rand BD nescris')
-        urcate.add(numeFinal)
+        urcate.add(cheieRand(numeFinal))
       } catch (e) {
         raport.erori.push(`${numeCurat}: ${String(e?.message || e)}`)
       }

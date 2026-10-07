@@ -6,7 +6,7 @@ const ACUM = Date.parse('2026-10-07T18:00:00Z')
 const vechi = new Date(ACUM - VARSTA_MINIMA_ORFAN_MS - 60_000).toISOString()
 const proaspat = new Date(ACUM - 30_000).toISOString()
 
-type Opt = { obiecte: Record<string, unknown>[]; randuri: string[]; eroareSelect?: number; eroareLista?: boolean; fararDate?: boolean }
+type Opt = { obiecte: Record<string, unknown>[]; randuri: string[]; eroareSelect?: number; eroareLista?: boolean; fararDate?: boolean; semnate?: Record<string, string> }
 function fake(o: Opt) {
   const sterse: string[][] = [], pagini: [number, number][] = [], liste: [number, number][] = []
   const supa = {
@@ -24,7 +24,7 @@ function fake(o: Opt) {
         range: async (de: number, la: number) => {
           pagini.push([de, la])
           if (o.eroareSelect !== undefined && pagini.length - 1 === o.eroareSelect) return { data: null, error: { message: 'select' } }
-          return { data: o.randuri.slice(de, la + 1).map(fisier_path => ({ fisier_path })), error: null }
+          return { data: o.randuri.slice(de, la + 1).map(fisier_path => ({ fisier_path, seap_meta: o.semnate?.[fisier_path] ? { semnat: { path: o.semnate[fisier_path] } } : null })), error: null }
         },
       }
       return b
@@ -75,4 +75,13 @@ Deno.test('orfani (Copilot P2 r1 pe #646): Storage listat pe pagini; „atins re
   assert.deepEqual(f.liste, [[0, 1000], [1000, 1000]])
   const g = fake({ obiecte: [{ name: 'modificat.pdf', id: 'm', created_at: vechi, updated_at: proaspat }, ob('vechi.pdf')], randuri: [] })
   assert.deepEqual(await curataOrfani(g.supa, 7, ACUM), ['7/atribuire/vechi.pdf'], 'creat demult dar modificat acum = nu se șterge')
+})
+
+Deno.test('orfani (var. B): fișierul semnat original al unui document desfăcut pe loc (seap_meta.semnat.path) NU e orfan', async () => {
+  const f = fake({
+    obiecte: [ob('x_semnat.pdf'), ob('x.pdf.p7m'), ob('orfan.pdf')],
+    randuri: ['7/atribuire/x_semnat.pdf'],
+    semnate: { '7/atribuire/x_semnat.pdf': '7/atribuire/x.pdf.p7m' },
+  })
+  assert.deepEqual(await curataOrfani(f.supa, 7, ACUM), ['7/atribuire/orfan.pdf'])
 })

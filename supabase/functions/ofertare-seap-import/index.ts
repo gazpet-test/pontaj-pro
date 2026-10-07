@@ -18,7 +18,7 @@
 //      nu pastreaza cookie-uri la fetch -> se culeg din resp.headers.getSetCookie() (fallback
 //      pe get('set-cookie')), se pastreaza doar perechile nume=valoare si se dau ca antet
 //      Cookie. Linkul NU se salveaza NICIODATA in BD (expira).
-//   b) fisierele vin ca .p7s (container CMS) -> desfaSemnatura; iar ce iese poate fi la randul
+//   b) fisierele vin ca .p7s (container CMS) -> desface (../_shared/semnaturaCms.mjs); iar ce iese poate fi la randul
 //      lui un ZIP (semnatura PK\x03\x04), despachetat cu ACEEASI logica si aceleasi reguli de
 //      denumire ca la arhiva (nume cu prefix de folder) - altfel se rup legaturile si dedup-ul.
 // Implementare de referinta, functionala in productie: ofertare-seap-veghe (cookieDin,
@@ -43,7 +43,7 @@
 //    si pe 0,3MB - ramane Blob.
 // 3. Memoria worker-ului e CUMULATIVA pe rulare: de aceea o rulare urca cel mult
 //    BUGET_OCTETI si intoarce continua=true.
-// 4. Fisierele .p7s au continutul FRAGMENTAT in ASN.1 (vezi desfaSemnatura). Decuparea
+// 4. Fisierele .p7s au continutul FRAGMENTAT in ASN.1 (vezi ../_shared/semnaturaCms.mjs). Decuparea
 //    naiva intre %PDF si %%EOF lasa antetele fragmentelor in interiorul fisierului:
 //    pe documentatia Manastirea, TOATE cele 27 de fisiere semnate ieseau alterate.
 // 5. tip are CHECK in BD ('duae' nu e valoare valida), iar erorile de scriere se
@@ -56,6 +56,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shared/identitateFisier.mjs';
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
+import { desfaceFaraArhiveP7m as desface, eArhivaP7m, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../_shared/semnaturaCms.mjs';
 import { curataOrfani } from './orfani.ts';
 import { scrieDocument } from './placeholder.ts';
 import { autorizeaza } from './acces.ts';
@@ -104,69 +105,11 @@ async function secretOk(req: Request, db: any): Promise<boolean> {
 
 // Tipul după nume și detectarea arhivelor: sursa unică în ../_shared/tipDocument.mjs (aceleași reguli în worker, api, UI).
 
-// -- Desfacerea semnaturii electronice (.p7s / CMS) ------------------------------
-// Continutul semnat sta intr-un OCTET STRING ASN.1 care, la fisierele mari, e taiat
-// in bucati de ~64KB, fiecare cu propriul antet. Se parcurge structura si se lipesc
-// bucatile in ordine; altfel antetele raman in mijlocul fisierului si il strica.
-function antet(b: Uint8Array, i: number) {
-  const tip = b[i]; i += 1;
-  let lung = b[i]; i += 1;
-  if (lung === 0x80) return { tip, lung: null as number | null, start: i };
-  if (lung & 0x80) {
-    const n = lung & 0x7f;
-    lung = 0;
-    for (let k = 0; k < n; k++) lung = lung * 256 + b[i + k];
-    i += n;
-  }
-  return { tip, lung: lung as number | null, start: i };
-}
-
-function lipeste(b: Uint8Array, start: number, capat: number): Uint8Array {
-  const bucati: Uint8Array[] = [];
-  let i = start;
-  while (i < capat && i < b.length) {
-    const a = antet(b, i);
-    if (a.tip === 0x00) break;
-    if (a.lung === null) { bucati.push(lipeste(b, a.start, capat)); break; }
-    if (a.tip === 0x04) bucati.push(b.subarray(a.start, a.start + a.lung));
-    else if (a.tip === 0x24) bucati.push(lipeste(b, a.start, a.start + a.lung));
-    i = a.start + a.lung;
-  }
-  const total = bucati.reduce((s, x) => s + x.length, 0);
-  const out = new Uint8Array(total);
-  let p = 0;
-  for (const x of bucati) { out.set(x, p); p += x.length; }
-  return out;
-}
-
-const OID_DATA = new Uint8Array([0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01]);
-
-function cautaSecventa(hay: Uint8Array, ac: Uint8Array): number {
-  for (let i = 0; i <= hay.length - ac.length; i++) {
-    let ok = true;
-    for (let j = 0; j < ac.length; j++) if (hay[i + j] !== ac[j]) { ok = false; break; }
-    if (ok) return i;
-  }
-  return -1;
-}
-
-function desfaSemnatura(buf: Uint8Array, nume: string): { buf: Uint8Array; nume: string } {
-  if (!/\.p7s$/i.test(nume)) return { buf, nume };
-  const numeReal = nume.replace(/\.p7s$/i, '');
-  const poz = cautaSecventa(buf, OID_DATA);
-  if (poz < 0) return { buf, nume: numeReal };
-  const dupaOid = antet(buf, poz + OID_DATA.length);
-  if (dupaOid.tip !== 0xa0) return { buf, nume: numeReal };
-  const capat = dupaOid.lung === null ? buf.length : dupaOid.start + dupaOid.lung;
-  const c = antet(buf, dupaOid.start);
-  if (c.tip === 0x04 && c.lung !== null) return { buf: buf.subarray(c.start, c.start + c.lung), nume: numeReal };
-  if (c.tip === 0x24 || c.lung === null) {
-    const sfarsit = c.lung === null ? capat : c.start + c.lung;
-    const out = lipeste(buf, c.start, sfarsit);
-    if (out.length) return { buf: out, nume: numeReal };
-  }
-  return { buf, nume: numeReal };
-}
+// -- Desfacerea semnaturii electronice (.p7s / .p7m, CMS) ------------------------
+// Sursa unica: ../_shared/semnaturaCms.mjs (aceeasi regula in worker, veghe, api). Parcurge STRUCTURA CMS si lipeste
+// bucatile OCTET STRING in ordine (anti-bug 4). Var. B (Razvan 07.10.2026): „X.pdf.p7m” → „X (semnat).pdf”.
+// Audit Jakarinos #20: o desfacere ESUATA nu mai scoate sufixul — CMS-ul brut nu mai intra drept „X.pdf” valid.
+// O ARHIVA .p7m („X.rar.p7m”) ramane intreaga, cu numele SEAP: o desface workerul NAS (#644; Jakarinos #7 pe #649).
 
 // -- Citirea arhivei -------------------------------------------------------------
 class Flux {
@@ -247,8 +190,14 @@ const esteZip = (b: Uint8Array) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4
 // Cu decizia luata doar pe semnatura PK, un formular Word a fost "despachetat" in bucatile lui
 // interne si au intrat 24 de randuri gunoi (word/styles.xml, docProps/app.xml, [Content_Types].xml).
 // Se despacheteaza DOAR ce e arhiva adevarata dupa nume; formatele Office raman fisiere intregi.
+// `nume` = numele DUPA desfacerea semnaturii („X.zip.p7s” / „X.zip.p7m” → „X.zip”)
 const eArhivaAdevarata = (nume: string, b: Uint8Array) =>
-  esteZip(b) && /\.zip$/i.test(String(nume || '').replace(/\.p7s$/i, ''));
+  esteZip(b) && /\.zip$/i.test(String(nume || ''));
+// Inventarul randurilor existente: un rand ramas cu semnatura BRUTA („X.pdf.p7s” detasata / nedesfacuta) isi pastreaza
+// sufixul in cheie — nu e documentul „X.pdf” (Copilot NO-GO r1 pe #649). Cautarea dupa un nume SEAP incearca toate cheile
+// lui: desfacut, „X (semnat).pdf” (var. B), randul brut.
+const cheieRand = (n: unknown) => cheieRandCu(String(n ?? ''), cheieNume);
+const dejaSubUnNume = (urcate: Set<string>, numeSeap: string) => cheiSeapCu(numeSeap, cheieNume).some((k: string) => urcate.has(k));
 
 // Parcurgerea unui ZIP din flux, folosita si de arhiva mare si de ZIP-urile dinauntrul
 // fisierelor aduse per document -> garanteaza ACELEASI reguli de denumire (numele intrarii
@@ -330,18 +279,20 @@ Deno.serve(async (req: Request) => {
 
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
-  const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
+  const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
   // fișierele din ZIP-urile desfăcute aici (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643): înainte, o potrivire pe
   // cheieNume sărea în tăcere un fișier cu ALT conținut („Caiet de sarcini.pdf” din Lot1.zip și din Lot2.zip). Acum „deja”
   // doar cu sha256 DOVEDIT de manifest ('urcat') — aceeași regulă ca workerul: _shared/identitateFisier.mjs.
   const { data: manUrcat } = await supa.from('ofertare_seap_manifest')
     .select('document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null);
   const identitate = stareIdentitate((dejaAre || []).filter((d: any) => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume);
-  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieNume(d.nume_original), d.id]));
+  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieRand(d.nume_original), d.id]));
 
-  const scrie = async (rand: any, nume: string) => {
-    // placeholder-ul se completează o singură dată, doar dacă e încă placeholder (./placeholder.ts, audit #2)
-    const r = await scrieDocument(supa, rand, cheieNume(nume), placeholders);
+  const scrie = async (rand: any, nume: string, numeSeap: string | null = null) => {
+    // placeholder-ul se completează o singură dată, doar dacă e încă placeholder (./placeholder.ts, audit #2);
+    // var. B: „X (semnat).pdf” completează placeholder-ul veghei pus pe numele SEAP („X.pdf.p7m”)
+    const cheie = placeholders.has(cheieRand(nume)) || !numeSeap ? cheieRand(nume) : cheieRand(numeSeap);
+    const r = await scrieDocument(supa, rand, cheie, placeholders);
     if (r.eroare) { raport.erori.push(`${nume}: scriere rand - ${r.eroare}`); return null; }
     if (r.completat) raport.completate++; else raport.adaugate++;
     return r.id;
@@ -382,26 +333,31 @@ Deno.serve(async (req: Request) => {
   // in ambele cai: ghicesteTip, calea de storage, status_procesare, sursa:'seap', size_bytes.
   let urcatiOcteti = 0;
   // dinZip = numele ZIP-ului desfăcut aici: copiii lui se clasifică exact ca în worker (regula proprie, folderul, indiciul arhivei)
-  const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null, dinZip: string | null = null) => {
+  // nota = semnatura nedesfacuta / detasata (document, nu arhiva): „ignorat” cu nota, nu PDF fals (audit #20).
+  // numeSeap = numele de dinainte de desfacere (placeholder-ul veghei). caleManifest = calea din arhiva (audit #14: aceeasi
+  // semnificatie ca in worker — `cale` = intrarea sursa, nu numele final sub care s-a urcat).
+  const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null, dinZip: string | null = null,
+    nota: string | null = null, numeSeap: string | null = null, caleManifest: string | null = null) => {
     // numele SAU semnatura reala - vezi anti-bug 6
     const estePdf = /\.pdf$/i.test(numeFinal) || areSemnaturaPdf(buf);
     const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
     const path = `${licitatieId}/atribuire/${Date.now().toString(36)}_${safe}`;
     const { error: eUp } = await supa.storage.from('ofertare')
       .upload(path, buf, { contentType: estePdf ? 'application/pdf' : 'application/octet-stream' });
-    if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); await noteazaManifest(arhivaCheie, numeFinal, buf, null, eUp.message); return false; }
+    if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, null, eUp.message); return false; }
+    const deCitit = !nota && (estePdf || esteArhiva(numeFinal));
     const docId = await scrie({
       licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
       tip: dinZip ? tipInArhiva(numeFinal, indiciuArhiva(dinZip)) : ghicesteTip(numeFinal), size_bytes: buf.length,
       // 07.10.2026: o arhivă (rar / 7z, ZIP din rezerva DownloadArchive sau arhivă din ZIP) intră „neprocesat”, fără notă:
       // o despachetează bucla workerului NAS (extractor izolat, limite, adâncime maximă). Dacă drumul SEAP al workerului a
       // desfăcut-o deja (evidență „ok” / manifest), bucla o închide cu notă, fără a doua despachetare (review #641 r2).
-      status_procesare: estePdf || esteArhiva(numeFinal) ? 'neprocesat' : 'ignorat',
-      eroare: estePdf || esteArhiva(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
+      status_procesare: deCitit ? 'neprocesat' : 'ignorat',
+      eroare: deCitit ? null : (nota || 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)'),
       sursa: 'seap',
-    }, numeFinal);
-    await noteazaManifest(arhivaCheie, numeFinal, buf, docId, docId ? null : 'rand BD nescris');
-    urcate.add(cheieNume(numeFinal));
+    }, numeFinal, numeSeap);
+    await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, docId, docId ? null : 'rand BD nescris');
+    urcate.add(cheieRand(numeFinal));
     if (docId) adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
     urcatiOcteti += buf.length;
     return true;
@@ -444,9 +400,9 @@ Deno.serve(async (req: Request) => {
     let i = 0;
     for (const doc of documente) {
       if (i < deLaIndex) { i++; continue; }
-      const numeCurat = doc.nume.replace(/\.p7s$/i, '');
-      if (urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(doc.nume)) {
-        if (urcate.has(cheieNume(numeCurat))) raport.sarite_existente++;
+      const numeCurat = eArhivaP7m(doc.nume) ? doc.nume : numeDesfacut(doc.nume);
+      if (dejaSubUnNume(urcate, doc.nume) || JUNK_RE.test(doc.nume)) {
+        if (dejaSubUnNume(urcate, doc.nume)) raport.sarite_existente++;
         i++;
         continue;
       }
@@ -462,35 +418,37 @@ Deno.serve(async (req: Request) => {
           i++;
           continue;
         }
-        const brutP7s = new Uint8Array(await rd.arrayBuffer());
-        const { buf, nume: numeFinal } = desfaSemnatura(brutP7s, doc.nume);
-        if (!buf.length) { raport.erori.push(`${numeCurat}: fisier gol`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
+        const brut = new Uint8Array(await rd.arrayBuffer());
+        if (!brut.length) { raport.erori.push(`${numeCurat}: fisier gol`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
+        const ds = desface(brut, doc.nume);
+        const { buf, nume: numeFinal } = ds;
 
-        if (eArhivaAdevarata(doc.nume, buf)) {
+        if (eArhivaAdevarata(numeFinal, buf)) {
           // ZIP in interiorul documentului: ACEEASI despachetare si aceleasi nume ca la arhiva
           const ok = await parcurgeZip(
             fluxDinBuf(buf),
             (h) => {
-              const nc = h.nume.replace(/\.p7s$/i, '');
+              const nc = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
               if (JUNK_RE.test(h.nume)) return false;
               // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
               if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
               return true;
             },
-            async (h, brut) => {
-              const r = desfaSemnatura(brut, h.nume);
+            async (h, brutIntrare) => {
+              const r = desface(brutIntrare, h.nume);
               // același conținut dovedit → sărit; alt conținut sub un nume ocupat → prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
-              const prefix = doc.nume.replace(/\.p7s$/i, '').replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
+              const prefix = numeFinal.replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
               const alegere = alegeNume(identitate, r.nume, prefix, await sha256Hex(r.buf));
               if ('deja' in alegere) { raport.sarite_existente++; return 'continua'; }
-              await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume);
+              await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume, esteArhiva(r.nume) ? null : r.nota, h.nume, h.nume);
               return 'continua';
             },
             (n, m) => raport.erori.push(`${n}: ${m}`),
           );
           if (!ok) raport.erori.push(`${numeCurat}: ZIP interior incomplet`);
         } else {
-          await urcaFisier(numeFinal, buf);
+          // o arhiva nedesfacuta urca bruta, „neprocesat”: workerul NAS incearca desfacerea si scrie eroarea vizibil
+          await urcaFisier(numeFinal, buf, null, null, esteArhiva(numeFinal) ? null : ds.nota, doc.nume);
         }
       } catch (e) {
         raport.erori.push(`${numeCurat}: ${String((e as Error)?.message || e)}`);
@@ -524,12 +482,12 @@ Deno.serve(async (req: Request) => {
         const intreg = await parcurgeZip(
           flux,
           (h) => {
-            const numeCurat = h.nume.replace(/\.p7s$/i, '');
+            const numeCurat = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
             const preaMare = h.usize > PRAG_MARE;
-            const sarim = iArh < deLaIndexArhiva || urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(h.nume) || preaMare;
+            const sarim = iArh < deLaIndexArhiva || dejaSubUnNume(urcate, h.nume) || JUNK_RE.test(h.nume) || preaMare;
             if (sarim) {
               if (iArh >= deLaIndexArhiva) {
-                if (urcate.has(cheieNume(numeCurat))) raport.sarite_existente++;
+                if (dejaSubUnNume(urcate, h.nume)) raport.sarite_existente++;
                 else if (preaMare) raport.lasate_pentru_vercel.push(`${numeCurat} (${(h.usize / 1e6).toFixed(0)}MB)`);
               }
               iArh++;
@@ -538,13 +496,13 @@ Deno.serve(async (req: Request) => {
             return true;
           },
           async (h, brut) => {
-            const r = desfaSemnatura(brut, h.nume);
-            await urcaFisier(r.nume, r.buf, 'seap:downloadarchive');
+            const r = desface(brut, h.nume);
+            await urcaFisier(r.nume, r.buf, 'seap:downloadarchive', null, esteArhiva(r.nume) ? null : r.nota, h.nume);
             iArh++;
             if (bugetDepasit()) { continua = true; return 'stop'; }
             return 'continua';
           },
-          (n, m) => raport.erori.push(`${n.replace(/\.p7s$/i, '')}: ${m}`),
+          (n, m) => raport.erori.push(`${numeDesfacut(n)}: ${m}`),
         );
         if (!intreg) raport.erori.push('arhiva: flux intrerupt');
       } catch (e) {
