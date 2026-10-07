@@ -54,6 +54,7 @@
 //    inceput. Acum se verifica si semnatura reala: orice PDF incepe cu octetii %PDF-.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
+import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shared/identitateFisier.mjs';
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
@@ -353,24 +354,14 @@ Deno.serve(async (req: Request) => {
   const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[], manifest_randuri: 0, avertismente: [] as string[] };
 
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
-    .select('id, nume_original, fisier_path, size_bytes').eq('licitatie_id', licitatieId);
+    .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
   const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
-  // fișierele din ZIP-urile desfăcute aici: identitate pe NUMELE EXACT + mărime (07.10.2026, review PR #641) — înainte, o
-  // potrivire pe cheieNume („Caiet de sarcini.pdf” din Lot1.zip și din Lot2.zip, „Anexa (1)” / „Anexa 1”) sărea în tăcere
-  // un fișier cu ALT conținut. Mărimea pe nume exact și pe cheie (pentru „deja urcat”, inclusiv de mână).
-  const marimeExacta = new Map<string, number | null>((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => [d.nume_original, d.size_bytes ?? null]));
-  const marimiCheie = new Map<string, Set<number | null>>();
-  for (const d of (dejaAre || []) as any[]) {
-    if (estePlaceholder(d)) continue;
-    const k = cheieNume(d.nume_original);
-    marimiCheie.set(k, (marimiCheie.get(k) ?? new Set()).add(d.size_bytes ?? null));
-  }
-  const acelasiDeja = (nume: string, marime: number) => {   // același nume (exact sau pe cheie) ȘI aceeași mărime (sau mărime necunoscută)
-    const ex = marimeExacta.get(nume);
-    if (ex !== undefined) return ex == null || ex === marime;
-    const s = marimiCheie.get(cheieNume(nume));
-    return !!s && (s.has(null) || s.has(marime));
-  };
+  // fișierele din ZIP-urile desfăcute aici (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643): înainte, o potrivire pe
+  // cheieNume sărea în tăcere un fișier cu ALT conținut („Caiet de sarcini.pdf” din Lot1.zip și din Lot2.zip). Acum „deja”
+  // doar cu sha256 DOVEDIT de manifest ('urcat') — aceeași regulă ca workerul: _shared/identitateFisier.mjs.
+  const { data: manUrcat } = await supa.from('ofertare_seap_manifest')
+    .select('document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null);
+  const identitate = stareIdentitate((dejaAre || []).filter((d: any) => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume);
   const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieNume(d.nume_original), d.id]));
 
   const scrie = async (rand: any, nume: string) => {
@@ -438,8 +429,7 @@ Deno.serve(async (req: Request) => {
     }, numeFinal);
     await noteazaManifest(arhivaCheie, numeFinal, buf, docId, docId ? null : 'rand BD nescris');
     urcate.add(cheieNume(numeFinal));
-    marimeExacta.set(numeFinal, buf.length);
-    marimiCheie.set(cheieNume(numeFinal), (marimiCheie.get(cheieNume(numeFinal)) ?? new Set()).add(buf.length));
+    if (docId) adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
     urcatiOcteti += buf.length;
     return true;
   };
@@ -510,19 +500,17 @@ Deno.serve(async (req: Request) => {
             (h) => {
               const nc = h.nume.replace(/\.p7s$/i, '');
               if (JUNK_RE.test(h.nume)) return false;
-              // mărimea din antet e a fișierului semnat; pentru .p7s decizia finală se ia după desfacere (mai jos)
-              if (!/\.p7s$/i.test(h.nume) && acelasiDeja(nc, h.usize)) { raport.sarite_existente++; return false; }
+              // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
               if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
               return true;
             },
             async (h, brut) => {
               const r = desfaSemnatura(brut, h.nume);
-              if (acelasiDeja(r.nume, r.buf.length)) { raport.sarite_existente++; return 'continua'; }
-              // același nume exact, alt conținut: nu-l pierdem — se urcă cu prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
+              // același conținut dovedit → sărit; alt conținut sub un nume ocupat → prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
               const prefix = doc.nume.replace(/\.p7s$/i, '').replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
-              const nume = marimeExacta.has(r.nume) ? `${prefix}/${r.nume}` : r.nume;
-              if (nume !== r.nume && acelasiDeja(nume, r.buf.length)) { raport.sarite_existente++; return 'continua'; }
-              await urcaFisier(nume, r.buf, doc.nume, doc.nume);
+              const alegere = alegeNume(identitate, r.nume, prefix, await sha256Hex(r.buf));
+              if ('deja' in alegere) { raport.sarite_existente++; return 'continua'; }
+              await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume);
               return 'continua';
             },
             (n, m) => raport.erori.push(`${n}: ${m}`),
