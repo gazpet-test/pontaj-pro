@@ -1,0 +1,184 @@
+-- ════════════════════════════════════════════════════════════════════════════
+-- 20261018a_hr_decizii_registru_ROLLBACK — NU e migrare (niciun runner nu parcurge supabase/revenire/).
+-- Retrage registrul HR (PR1 generator decizii): tabelele, view-ul, funcțiile, bucket-ul hr-decizii cu politicile lui,
+-- coloana executie_completari_propuse.hr_decizie_id; readuce fn_completare_aplica la forma revizuită 47a75428
+-- (docs/sec_f2_whitelist) și politica completari_ins la condiția de dinainte.
+-- Refuză dacă registrul are ORICE date (decizii, evenimente, contor, propuneri legate, fișiere în bucket): un registru
+-- oficial nu se șterge prin revenire. Atunci se decide separat, cu Răzvan (export + migrare vizibilă).
+-- Fără GO de execuție: doar la cererea explicită a lui Răzvan. Armarea nu e autorizare.
+-- Procedura (un singur string; fișierul nu conține BEGIN/COMMIT):
+--   BEGIN;
+--   SELECT set_config('gazpet.revenire_20261018a', 'STERGE_REGISTRU_HR:' || txid_current(), true);
+--   -- <conținutul exact al fișierului>
+--   COMMIT;
+-- ════════════════════════════════════════════════════════════════════════════
+CREATE FUNCTION pg_temp.hr_decizii_functii() RETURNS text[] LANGUAGE sql IMMUTABLE AS $l$ SELECT ARRAY[
+    'public._completare_goleste_camp(bigint,text,integer)',
+    'public._completare_scrie_camp(bigint,text,text)',
+    'public._hr_acopera_domeniu(text[],text[])',
+    'public._hr_azi()',
+    'public._hr_completare_aplica_decizie(bigint,boolean,bigint,text)',
+    'public._hr_confirmari(jsonb)',
+    'public._hr_contor_valideaza(integer,integer)',
+    'public._hr_decizie_avertismente(jsonb,jsonb,integer,text)',
+    'public._hr_decizie_context(jsonb)',
+    'public._hr_decizie_eligibila_efect(bigint)',
+    'public._hr_decizie_intrari(bigint,boolean)',
+    'public._hr_decizie_intrari_rand(hr_decizii,boolean)',
+    'public._hr_decizie_mod(text,text)',
+    'public._hr_decizie_motiv_neeligibil(bigint)',
+    'public._hr_decizie_randeaza(jsonb,integer,date)',
+    'public._hr_decizii_aloca(text,integer,integer,text,boolean,text,date)',
+    'public._hr_decizii_norm_sufix(text)',
+    'public._hr_decizii_termeni(uuid)',
+    'public._hr_decizii_valideaza_numar(text,integer,integer,text,date,text)',
+    'public._hr_ev(bigint,text,text,text,jsonb,text,integer)',
+    'public._hr_fisier_ok(hr_decizii,text,text)',
+    'public._hr_hash_prev(jsonb,jsonb)',
+    'public._hr_norm_domenii_isc(text[])',
+    'public._hr_nr_afisat(text,integer,integer,text,date)',
+    'public._hr_nume_afis(text)',
+    'public._hr_rand_din_payload(jsonb,text)',
+    'public._hr_sablon(text,jsonb)',
+    'public._hr_snapshot_simplu(hr_decizii,text)',
+    'public._hr_subst(text,jsonb,boolean)',
+    'public._hr_trg_imuabil()',
+    'public._hr_trg_jurnal()',
+    'public._hr_trg_jurnal_imuabil()',
+    'public._hr_trg_revocare()',
+    'public._hr_trg_versiune()',
+    'public._hr_valoare_camp(bigint,text)',
+    'public._hr_verificari_ok(hr_decizii,jsonb)',
+    'public.fn_hr_decizie_anuleaza(bigint,text)',
+    'public.fn_hr_decizie_ataseaza_scan(bigint,text,text,jsonb)',
+    'public.fn_hr_decizie_emite(bigint,text,uuid,integer,integer,jsonb,boolean)',
+    'public.fn_hr_decizie_importa(jsonb)',
+    'public.fn_hr_decizie_inlocuieste_scan(bigint,uuid,text,text,text,text,text,jsonb)',
+    'public.fn_hr_decizie_previzualizeaza(bigint,integer)',
+    'public.fn_hr_decizie_rezerva(jsonb)',
+    'public.fn_hr_decizie_seteaza_pdf(bigint,text,text)',
+    'public.fn_hr_decizii_contor_corecteaza(integer,integer,text)',
+    'public.fn_hr_decizii_contor_corecteaza_baza(integer,integer,text)',
+    'public.fn_hr_decizii_contor_initializeaza(integer,integer,text)',
+    'public.fn_hr_decizii_contor_opreste_auto(integer,text)',
+    'public.fn_hr_decizii_emitenti()',
+    'public.fn_hr_decizii_id_din_cale(text)',
+    'public.fn_hr_decizii_poate(text,bigint)',
+    'public.fn_hr_decizii_storage_poate(text,text)',
+    'public.fn_hr_decizii_urmatorul_numar(integer)'] $l$;
+
+DO $arm$
+BEGIN
+  IF current_setting('gazpet.revenire_20261018a', true) IS DISTINCT FROM 'STERGE_REGISTRU_HR:' || txid_current() THEN
+    RAISE EXCEPTION 'Revenire 20261018a: nearmată (gazpet.revenire_20261018a legat de txid_current) — refuz';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261018a=%') THEN
+    RAISE EXCEPTION 'Revenire 20261018a: armare persistentă (ALTER DATABASE/ROLE SET) — refuz';
+  END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION 'Revenire 20261018a: rulează ca postgres'; END IF;
+  IF to_regclass('public.hr_decizii') IS NULL THEN RAISE EXCEPTION 'Revenire 20261018a: registrul nu există'; END IF;
+  -- lock-ul ÎNAINTEA verificărilor de stare exactă (Copilot P7-1: fără fereastră între verificare și suprascriere)
+  LOCK TABLE public.hr_decizii, public.hr_decizii_evenimente, public.hr_decizii_contor, public.executie_completari_propuse IN ACCESS EXCLUSIVE MODE;
+  -- exact starea PR1 (P5-2): aceleași 53 de funcții, cu aceleași corpuri; altfel nu șterg nimic
+  IF (SELECT array_agg(p.oid::regprocedure::text ORDER BY p.oid::regprocedure::text) FROM pg_proc p
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND (p.proname LIKE '\_hr\_%' OR p.proname LIKE 'fn\_hr\_decizi%' OR p.proname LIKE '\_completare\_%'))
+     IS DISTINCT FROM (SELECT array_agg(substr(x, 8) ORDER BY substr(x, 8)) FROM unnest(pg_temp.hr_decizii_functii()) x)
+     OR (SELECT md5(string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || pg_get_userbyid(p.proowner) || ':' || p.prosecdef
+                                || ':' || coalesce(array_to_string(p.proconfig, ';'), '') || ':'
+                                || coalesce((SELECT string_agg(coalesce(nullif(a.grantee::regrole::text, '-'), 'PUBLIC') || '=' || a.privilege_type, ',' ORDER BY 1)
+                                               FROM (SELECT * FROM aclexplode(p.proacl)) a), ''),
+                                ',' ORDER BY p.oid::regprocedure::text))
+           FROM pg_proc p WHERE p.oid IN (SELECT to_regprocedure(x) FROM unnest(pg_temp.hr_decizii_functii()) x))
+        IS DISTINCT FROM 'cca2af0f645d11282352ea535420cdc5' THEN
+    RAISE EXCEPTION 'Revenire 20261018a: funcțiile nu sunt exact cele ale PR1 (listă sau corpuri schimbate) — refuz';
+  END IF;
+  -- obiectele EXISTENTE pe care revenirea le suprascrie trebuie să fie exact în starea lăsată de PR1 (Copilot P6-1, Jakarinos J6-1)
+  IF (SELECT md5(prosrc) || '|' || pg_get_userbyid(proowner) || '|' || prosecdef || '|' || coalesce(array_to_string(proconfig, ';'), '') || '|'
+             || (SELECT string_agg(x.g, ',' ORDER BY x.g)
+                   FROM (SELECT coalesce(nullif(a.grantee::regrole::text, '-'), 'PUBLIC') || ':' || a.privilege_type AS g FROM aclexplode(proacl) a) x)
+        FROM pg_proc WHERE oid = to_regprocedure('public.fn_completare_aplica(bigint,boolean)'))
+     IS DISTINCT FROM 'dc82ba4fea0071de3417f60a5c26e6cb|postgres|true|search_path=public, pg_temp|authenticated:EXECUTE,postgres:EXECUTE,service_role:EXECUTE' THEN
+    RAISE EXCEPTION 'Revenire 20261018a: fn_completare_aplica nu e exact cea lăsată de PR1 (corp/owner/SECURITY/search_path/ACL) — o modificare ulterioară s-ar pierde; refuz';
+  END IF;
+  IF (SELECT polcmd::text || '|' || replace(pg_get_expr(polwithcheck, polrelid), 'public.', '') FROM pg_policy
+       WHERE polrelid = 'public.executie_completari_propuse'::regclass AND polname = 'completari_ins')
+     IS DISTINCT FROM E'a|((EXISTS ( SELECT 1\n   FROM profiles p\n  WHERE ((p.id = auth.uid()) AND (p.is_owner OR p.can_manage_contracts)))) AND (hr_decizie_id IS NULL) AND (sursa <> ALL (ARRAY[\'decizie_numire\'::text, \'decizie_revocare\'::text])))' THEN
+    RAISE EXCEPTION 'Revenire 20261018a: politica completari_ins nu e exact cea lăsată de PR1 — o modificare ulterioară s-ar pierde; refuz';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.hr_decizii) OR EXISTS (SELECT 1 FROM public.hr_decizii_evenimente) OR EXISTS (SELECT 1 FROM public.hr_decizii_contor)
+     OR EXISTS (SELECT 1 FROM public.executie_completari_propuse WHERE hr_decizie_id IS NOT NULL OR sursa IN ('decizie_numire','decizie_revocare'))
+     OR EXISTS (SELECT 1 FROM storage.objects WHERE bucket_id = 'hr-decizii') THEN
+    RAISE EXCEPTION 'Revenire 20261018a: registrul HR are date (decizii/evenimente/contor/propuneri/fișiere) — refuz';
+  END IF;
+END
+$arm$;
+
+DROP POLICY hr_decizii_storage_select ON storage.objects;
+DROP POLICY hr_decizii_storage_insert ON storage.objects;
+DELETE FROM storage.buckets WHERE id = 'hr-decizii';
+ALTER POLICY completari_ins ON public.executie_completari_propuse
+  WITH CHECK (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND (p.is_owner OR p.can_manage_contracts)));
+
+CREATE OR REPLACE FUNCTION public.fn_completare_aplica(p_id bigint, p_accepta boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE r public.executie_completari_propuse; v_ok boolean; v_sql text;
+BEGIN
+  SELECT (p.is_owner OR p.can_manage_contracts) INTO v_ok FROM public.profiles p WHERE p.id = auth.uid();
+  IF NOT COALESCE(v_ok, false) THEN RAISE EXCEPTION 'fără drepturi'; END IF;
+  SELECT * INTO r FROM public.executie_completari_propuse WHERE id = p_id AND status = 'propus' FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'propunerea nu există sau a fost deja decisă'; END IF;
+  IF p_accepta THEN
+    IF r.camp NOT IN ('rte_employee_id','rts_employee_id','mp_employee_id','coordonator_transgaz','garantie_buna_exec_pct','penalitati_zi_pct',
+                      'valoare_lei','valoare_eur','data_start','data_termen','durata_contract_luni','nr_contract','data_contract','beneficiar_final','lungime_proiect_m') THEN
+      RAISE EXCEPTION 'câmp nepermis: %', r.camp;
+    END IF;
+    v_sql := format('UPDATE public.executie_proiecte SET %I = $1::%s, updated_at = now() WHERE id = $2', r.camp,
+      CASE WHEN r.camp LIKE '%employee_id' OR r.camp = 'durata_contract_luni' THEN 'int'
+           WHEN r.camp LIKE 'data_%' THEN 'date'
+           WHEN r.camp IN ('garantie_buna_exec_pct','penalitati_zi_pct','valoare_lei','valoare_eur','lungime_proiect_m') THEN 'numeric'
+           ELSE 'text' END);
+    EXECUTE v_sql USING r.valoare, r.proiect_id;
+  END IF;
+  UPDATE public.executie_completari_propuse SET status = CASE WHEN p_accepta THEN 'confirmat' ELSE 'respins' END, decis_de = auth.uid(), decis_la = now() WHERE id = p_id;
+  RETURN jsonb_build_object('ok', true, 'camp', r.camp, 'aplicat', p_accepta);
+END $function$;
+
+DROP VIEW public.v_hr_decizii_curente;
+-- întâi funcțiile din listă care folosesc tipurile de rând ale registrului (altfel DROP TABLE refuză)
+DO $fn_tip$
+DECLARE f text;
+BEGIN
+  FOREACH f IN ARRAY pg_temp.hr_decizii_functii() LOOP
+    IF f ~ 'hr_decizii[,)]' OR pg_get_function_result(to_regprocedure(f)) ~ 'hr_decizii' THEN EXECUTE format('DROP FUNCTION %s', f); END IF;
+  END LOOP;
+END
+$fn_tip$;
+ALTER TABLE public.executie_completari_propuse DROP COLUMN hr_decizie_id;
+DROP TABLE public.hr_decizii_evenimente, public.hr_decizii_contor, public.hr_decizii_semnatari, public.hr_decizii, public.hr_decizii_tipuri;
+
+DO $fn$
+DECLARE f text;
+BEGIN
+  FOREACH f IN ARRAY pg_temp.hr_decizii_functii() LOOP
+    IF to_regprocedure(f) IS NOT NULL THEN EXECUTE format('DROP FUNCTION %s', f); END IF;
+  END LOOP;
+END
+$fn$;
+
+DO $post$
+BEGIN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.fn_completare_aplica(bigint,boolean)'))
+       IS DISTINCT FROM '47a7542895c0ce71cb0e44d2c26d0609' THEN
+    RAISE EXCEPTION 'Revenire 20261018a: fn_completare_aplica nu a revenit la forma 47a75428';
+  END IF;
+  IF to_regclass('public.hr_decizii') IS NOT NULL OR EXISTS (SELECT 1 FROM storage.buckets WHERE id = 'hr-decizii') THEN
+    RAISE EXCEPTION 'Revenire 20261018a: au rămas obiecte';
+  END IF;
+  RAISE NOTICE 'Revenire 20261018a: registrul HR retras, fn_completare_aplica și completari_ins la forma de dinainte';
+END
+$post$;
