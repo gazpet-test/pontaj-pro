@@ -21,6 +21,7 @@ import { poartaOfertare } from './_poartaOfertare.js'
 import { inflateRawSync } from 'node:zlib'
 import { continutSemnat } from './_p7s.js'
 import { randManifest, sha256Hex, dedupManifest, MANIFEST_CONFLICT, ARHIVA_SEAP } from './_manifest.js'
+import { ghicesteTip, esteArhiva } from './_tipDocument.js'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR = {
@@ -33,19 +34,8 @@ const FELIE = 6 * 1024 * 1024   // Storage cere felii de 6MB, ultima poate fi ma
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)/i
 const estePlaceholder = (d) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
 
-// aceleasi reguli ca ghicesteTip din OfertareLicitatii.jsx — valorile trebuie sa
-// existe in CHECK-ul coloanei tip
-function ghicesteTip(nume) {
-  const n = nume.toLowerCase()
-  if (/fisa[_ -]?date|instructiuni_ofertanti/.test(n)) return 'fisa_date'
-  if (/formular|duae/.test(n)) return 'formular'
-  if (/contract/.test(n)) return 'model_contract'
-  if (/cantitat|antemasur|^f[1-3][_ .-]|centralizator/.test(n)) return 'lista_cantitati'
-  if (/desene|plans|plansa|schema tehnologica|\.dwg|izometri|topo/.test(n)) return 'plansa'
-  if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum'
-  if (/raspuns|clarificar/.test(n)) return 'raspuns_clarificare'
-  return 'alta'
-}
+// Tipul după nume și detectarea arhivelor: api/_tipDocument.js = copia byte cu byte a
+// supabase/functions/_shared/tipDocument.mjs (src/tipDocument.test.js le ține identice).
 
 // Citeste fluxul arhivei pe bucati, cu o coada — fara concatenari repetate
 // (concatenarea la fiecare bucata a fost cauza unui "CPU Time exceeded" in Supabase).
@@ -233,8 +223,10 @@ export default async function handler(req, res) {
         const docId = await scrie({
           licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
           tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-          status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-          eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)',
+          // 07.10.2026: o arhivă intră „neprocesat”, fără notă — o despachetează bucla workerului NAS. Dacă drumul SEAP al
+          // workerului a desfăcut-o deja (evidență „ok” / manifest), bucla o închide cu notă, fără dublură (review #641 r2).
+          status_procesare: estePdf || esteArhiva(numeFinal) ? 'neprocesat' : 'ignorat',
+          eroare: estePdf || esteArhiva(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)',
           sursa: 'seap',
         }, numeFinal)
         noteazaManifest(numeFinal, buf, docId, docId ? null : 'rand BD nescris')

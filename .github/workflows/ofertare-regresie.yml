@@ -22,6 +22,8 @@ on:
       - 'api/pdf-sparge.js'
       - 'api/plansa-felii.js'
       - 'api/seap-import.js'
+      - 'api/_tipDocument.js'
+      - 'api/_seapImport*'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
@@ -59,6 +61,8 @@ on:
       - 'api/pdf-sparge.js'
       - 'api/plansa-felii.js'
       - 'api/seap-import.js'
+      - 'api/_tipDocument.js'
+      - 'api/_seapImport*'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
@@ -92,7 +96,7 @@ jobs:
           node-version: '20'
       - run: npm ci
       - name: Vitest - ofertare si grafic
-        run: npx vitest run src/ofertare src/grafic src/Ofertare src/apiConsum api/_poartaOfertare.test.js
+        run: npx vitest run src/ofertare src/grafic src/Ofertare src/apiConsum api/_poartaOfertare.test.js api/_seapImport.test.js
       - name: Regresie R5-R9b fara dependente
         run: node --test scripts/test-r5-r9b.mjs
       - name: Poarta J07 - paritate UI si Edge

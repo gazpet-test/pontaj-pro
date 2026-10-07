@@ -54,6 +54,7 @@
 //    inceput. Acum se verifica si semnatura reala: orice PDF incepe cu octetii %PDF-.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
+import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const CORS: Record<string, string> = {
@@ -96,19 +97,7 @@ async function secretOk(req: Request, db: any): Promise<boolean> {
   return !error && data === true;
 }
 
-// aceleasi reguli ca ghicesteTip din OfertareLicitatii.jsx - valorile trebuie sa
-// existe in CHECK-ul coloanei tip
-function ghicesteTip(nume: string): string {
-  const n = nume.toLowerCase();
-  if (/fisa[_ -]?date|instructiuni_ofertanti/.test(n)) return 'fisa_date';
-  if (/formular|duae/.test(n)) return 'formular';
-  if (/contract/.test(n)) return 'model_contract';
-  if (/cantitat|antemasur|^f[1-3][_ .-]|centralizator/.test(n)) return 'lista_cantitati';
-  if (/desene|plans|plansa|schema tehnologica|\.dwg|izometri|topo/.test(n)) return 'plansa';
-  if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum';
-  if (/raspuns|clarificar/.test(n)) return 'raspuns_clarificare';
-  return 'alta';
-}
+// Tipul după nume și detectarea arhivelor: sursa unică în ../_shared/tipDocument.mjs (aceleași reguli în worker, api, UI).
 
 // -- Desfacerea semnaturii electronice (.p7s / CMS) ------------------------------
 // Continutul semnat sta intr-un OCTET STRING ASN.1 care, la fisierele mari, e taiat
@@ -412,7 +401,8 @@ Deno.serve(async (req: Request) => {
   // Urcarea unui fisier (deja desfacut din semnatura) + randul in BD. Aceleasi reguli
   // in ambele cai: ghicesteTip, calea de storage, status_procesare, sursa:'seap', size_bytes.
   let urcatiOcteti = 0;
-  const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null) => {
+  // dinZip = numele ZIP-ului desfăcut aici: copiii lui se clasifică exact ca în worker (regula proprie, folderul, indiciul arhivei)
+  const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null, dinZip: string | null = null) => {
     // numele SAU semnatura reala - vezi anti-bug 6
     const estePdf = /\.pdf$/i.test(numeFinal) || areSemnaturaPdf(buf);
     const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
@@ -422,9 +412,12 @@ Deno.serve(async (req: Request) => {
     if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); await noteazaManifest(arhivaCheie, numeFinal, buf, null, eUp.message); return false; }
     const docId = await scrie({
       licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
-      tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-      status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-      eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
+      tip: dinZip ? tipInArhiva(numeFinal, indiciuArhiva(dinZip)) : ghicesteTip(numeFinal), size_bytes: buf.length,
+      // 07.10.2026: o arhivă (rar / 7z, ZIP din rezerva DownloadArchive sau arhivă din ZIP) intră „neprocesat”, fără notă:
+      // o despachetează bucla workerului NAS (extractor izolat, limite, adâncime maximă). Dacă drumul SEAP al workerului a
+      // desfăcut-o deja (evidență „ok” / manifest), bucla o închide cu notă, fără a doua despachetare (review #641 r2).
+      status_procesare: estePdf || esteArhiva(numeFinal) ? 'neprocesat' : 'ignorat',
+      eroare: estePdf || esteArhiva(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
       sursa: 'seap',
     }, numeFinal);
     await noteazaManifest(arhivaCheie, numeFinal, buf, docId, docId ? null : 'rand BD nescris');
@@ -505,7 +498,7 @@ Deno.serve(async (req: Request) => {
             },
             async (h, brut) => {
               const r = desfaSemnatura(brut, h.nume);
-              await urcaFisier(r.nume, r.buf, doc.nume);
+              await urcaFisier(r.nume, r.buf, doc.nume, doc.nume);
               return 'continua';
             },
             (n, m) => raport.erori.push(`${n}: ${m}`),
