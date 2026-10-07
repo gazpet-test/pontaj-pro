@@ -572,12 +572,12 @@ Deno.test('drumul SEAP: fișierele din arhivă primesc tipul cu indiciul arhivei
 })
 
 // -- .p7m (07.10.2026): același CMS atașat ca .p7s — lic. 92 avea răspunsuri „….rar.p7m” care stăteau „neprocesat” la nesfârșit
-async function semneazaCms(continut: Uint8Array): Promise<Uint8Array> {   // semnătură CMS ATAȘATĂ (conținutul în interior), cert de test
+async function semneazaCms(continut: Uint8Array, detasat = false): Promise<Uint8Array> {   // semnătură CMS (implicit ATAȘATĂ: conținutul în interior), cert de test
   const d = await Deno.makeTempDir()
   const run = async (args: string[]) => { const o = await new Deno.Command('openssl', { args, cwd: d, stdout: 'null', stderr: 'piped' }).output(); ok(o.code === 0, `openssl ${args[0]}: ${new TextDecoder().decode(o.stderr)}`) }
   await Deno.writeFile(`${d}/in.bin`, continut)
   await run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'k.pem', '-out', 'c.pem', '-days', '1', '-subj', '/CN=test'])
-  await run(['cms', '-sign', '-binary', '-nodetach', '-in', 'in.bin', '-signer', 'c.pem', '-inkey', 'k.pem', '-outform', 'DER', '-out', 'out.p7m'])
+  await run(['cms', '-sign', '-binary', ...(detasat ? [] : ['-nodetach']), '-in', 'in.bin', '-signer', 'c.pem', '-inkey', 'k.pem', '-outform', 'DER', '-out', 'out.p7m'])
   const buf = await Deno.readFile(`${d}/out.p7m`)
   await Deno.remove(d, { recursive: true })
   return buf
@@ -600,4 +600,24 @@ Deno.test('arhive: „….zip.p7m” (semnătură CMS atașată) e selectată, d
       eq(d.filter(x => x.id !== 520).map(x => x.nume_original).sort(), ['Raspuns consolidat (#520)/Anexa.docx', 'Raspuns consolidat (#520)/Raspuns.pdf'])
     } finally { await opreste() }
   })
+})
+
+Deno.test('drumul SEAP: „Caiet.pdf.p7m” DETAȘAT lângă „Caiet.pdf” real, în ambele ordini → PDF-ul real e urcat, semnătura nu-l ascunde', async () => {
+  const real = '%PDF-1.4 caietul real'
+  for (const ordine of ['p7m,pdf', 'pdf,p7m']) {
+    await cuMediu(async (root, s) => {
+      const opreste = pornesteExtractor(root)
+      const p7m = await semneazaCms(new TextEncoder().encode(real), true)
+      const docs: Record<string, Uint8Array> = ordine === 'p7m,pdf'
+        ? { 'Caiet.pdf.p7m': p7m, 'Caiet.pdf': new TextEncoder().encode(real) }
+        : { 'Caiet.pdf': new TextEncoder().encode(real), 'Caiet.pdf.p7m': p7m }
+      const restore = cuSeap(docs)
+      try {
+        const tab = licSeap()
+        const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+        eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.size_bytes]), [['Caiet.pdf', real.length]], `ordinea ${ordine}`)
+        if (ordine === 'p7m,pdf') ok(rap.erori.some((e: string) => /Caiet\.pdf\.p7m.*detaș/i.test(e)), `eroarea semnăturii detașate e vizibilă: ${JSON.stringify(rap.erori)}`)
+      } finally { restore(); await opreste() }
+    })
+  }
 })

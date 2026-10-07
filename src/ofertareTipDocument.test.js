@@ -337,3 +337,19 @@ describe('paritatea cu api/_tipDocument.js (funcțiile Vercel nu importă din af
     }
   })
 })
+
+describe('semnătura .p7m: edge-urile folosesc desfacerea comună și refuză .p7m fără conținut (Copilot conv. 3, NO-GO r1 pe #644)', () => {
+  const sursa = (cale) => readFileSync(new URL(cale, import.meta.url), 'utf8')
+  it('ofertare-seap-import: fără copie locală, refuz pe toate cele 3 drumuri (per fișier, ZIP inline, DownloadArchive)', () => {
+    const edge = sursa('../supabase/functions/ofertare-seap-import/index.ts')
+    expect(edge).toMatch(/import \{ desfaSemnatura, semnaturaFaraContinut \} from '\.\.\/_shared\/semnaturaCms\.ts'/)
+    expect(edge).not.toMatch(/function desfaSemnatura/)
+    expect(edge.match(/semnaturaFaraContinut\(/g)?.length).toBe(3)
+  })
+  it('ofertare-seap-veghe: fără copie locală, refuz la descărcarea răspunsurilor', () => {
+    const veghe = sursa('../supabase/functions/ofertare-seap-veghe/index.ts')
+    expect(veghe).toMatch(/import \{ desfaSemnatura, semnaturaFaraContinut \} from '\.\.\/_shared\/semnaturaCms\.ts'/)
+    expect(veghe).not.toMatch(/function desfaSemnatura/)
+    expect(veghe.match(/semnaturaFaraContinut\(/g)?.length).toBe(1)
+  })
+})

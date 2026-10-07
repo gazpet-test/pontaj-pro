@@ -132,6 +132,6 @@ test('repo-ul real: toate funcțiile au graf demonstrabil; seap-import → tipDo
   assert.ok(slugs.length > 50, `doar ${slugs.length} funcții?`)
   for (const s of slugs) assert.deepEqual((await grafFunctie(DIR, s)).probleme, [], s)
   const din = async (s) => (await grafFunctie(DIR, s)).intrari.filter(f => !f.startsWith(`${DIR}/${s}/`))
-  assert.deepEqual(await din('ofertare-seap-import'), [`${DIR}/_shared/identitateFisier.mjs`, `${DIR}/_shared/tipDocument.mjs`])
+  assert.deepEqual(await din('ofertare-seap-import'), [`${DIR}/_shared/identitateFisier.mjs`, `${DIR}/_shared/semnaturaCms.ts`, `${DIR}/_shared/tipDocument.mjs`])
   assert.ok((await din('ofertare-poarta-text')).includes(`${DIR}/_shared/ofertarePoartaText.mjs`))
 })

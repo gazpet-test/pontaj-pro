@@ -625,7 +625,7 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     let buf = new Uint8Array(await blob.arrayBuffer())
     let nume = d.nume_original
     if (/\.p7[ms]$/i.test(nume)) {
-      try { buf = continutP7s(buf) } catch (e) { await termina('eroare', `Despachetare eșuată (semnătura .p7s): ${(e as Error)?.message ?? e}`); return }
+      try { buf = continutP7s(buf) } catch (e) { await termina('eroare', `Despachetare eșuată (semnătura CMS .p7s/.p7m): ${(e as Error)?.message ?? e}`); return }
       nume = nume.replace(/\.p7[ms]$/i, '')
     }
     const prima = nume.replace(/[\\/]/g, '_')

@@ -68,6 +68,7 @@
 // corecta e 'Comercial'. Cu 'ofertare' insertul pica silentios.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { termenRO } from '../_shared/oraRO.ts'
+import { desfaSemnatura, semnaturaFaraContinut } from '../_shared/semnaturaCms.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const IMPORT_SECRET = Deno.env.get('SEAP_IMPORT_SECRET') || '';
@@ -144,65 +145,7 @@ const esc = (s: string) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&am
 // Continutul semnat sta intr-un OCTET STRING ASN.1 care, la fisierele mari, e taiat
 // in bucati de ~64KB, fiecare cu propriul antet. Se parcurge structura si se lipesc
 // bucatile in ordine; altfel antetele raman in mijlocul fisierului si il strica.
-function antet(b: Uint8Array, i: number) {
-  const tip = b[i]; i += 1;
-  let lung = b[i]; i += 1;
-  if (lung === 0x80) return { tip, lung: null as number | null, start: i };
-  if (lung & 0x80) {
-    const n = lung & 0x7f;
-    lung = 0;
-    for (let k = 0; k < n; k++) lung = lung * 256 + b[i + k];
-    i += n;
-  }
-  return { tip, lung: lung as number | null, start: i };
-}
-
-function lipeste(b: Uint8Array, start: number, capat: number): Uint8Array {
-  const bucati: Uint8Array[] = [];
-  let i = start;
-  while (i < capat && i < b.length) {
-    const a = antet(b, i);
-    if (a.tip === 0x00) break;
-    if (a.lung === null) { bucati.push(lipeste(b, a.start, capat)); break; }
-    if (a.tip === 0x04) bucati.push(b.subarray(a.start, a.start + a.lung));
-    else if (a.tip === 0x24) bucati.push(lipeste(b, a.start, a.start + a.lung));
-    i = a.start + a.lung;
-  }
-  const total = bucati.reduce((s, x) => s + x.length, 0);
-  const out = new Uint8Array(total);
-  let p = 0;
-  for (const x of bucati) { out.set(x, p); p += x.length; }
-  return out;
-}
-
-const OID_DATA = new Uint8Array([0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01]);
-
-function cautaSecventa(hay: Uint8Array, ac: Uint8Array): number {
-  for (let i = 0; i <= hay.length - ac.length; i++) {
-    let ok = true;
-    for (let j = 0; j < ac.length; j++) if (hay[i + j] !== ac[j]) { ok = false; break; }
-    if (ok) return i;
-  }
-  return -1;
-}
-
-function desfaSemnatura(buf: Uint8Array, nume: string): { buf: Uint8Array; nume: string } {
-  if (!/\.p7[ms]$/i.test(nume)) return { buf, nume };
-  const numeReal = nume.replace(/\.p7[ms]$/i, '');
-  const poz = cautaSecventa(buf, OID_DATA);
-  if (poz < 0) return { buf, nume: numeReal };
-  const dupaOid = antet(buf, poz + OID_DATA.length);
-  if (dupaOid.tip !== 0xa0) return { buf, nume: numeReal };
-  const capat = dupaOid.lung === null ? buf.length : dupaOid.start + dupaOid.lung;
-  const c = antet(buf, dupaOid.start);
-  if (c.tip === 0x04 && c.lung !== null) return { buf: buf.subarray(c.start, c.start + c.lung), nume: numeReal };
-  if (c.tip === 0x24 || c.lung === null) {
-    const sfarsit = c.lung === null ? capat : c.start + c.lung;
-    const out = lipeste(buf, c.start, sfarsit);
-    if (out.length) return { buf: out, nume: numeReal };
-  }
-  return { buf, nume: numeReal };
-}
+// antet / lipeste / desfaSemnatura: sursa unică în ../_shared/semnaturaCms.ts (07.10.2026, PR #644).
 
 const arePdf = (b: Uint8Array) => b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
 const faraDiacritice = (s: string) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -344,7 +287,10 @@ Deno.serve(async (req: Request) => {
         });
         if (!rd.ok) { erori.push(`${nume}: descarcare HTTP ${rd.status}`); continue; }
         const brut = new Uint8Array(await rd.arrayBuffer());
-        const { buf } = desfaSemnatura(brut, String(it?.documentName || nume));
+        const numeSursa = String(it?.documentName || nume);
+        const semnat = desfaSemnatura(brut, numeSursa);
+        if (semnaturaFaraContinut(numeSursa, semnat)) { erori.push(`${numeSursa}: semnătură .p7m fără conținut atașat (detașată) — nu se urcă, ca să nu ia locul documentului semnat`); continue; }
+        const { buf } = semnat;
         if (!buf.length) { erori.push(`${nume}: fisier gol`); continue; }
         const safe = nume.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
         // codul intra in cale: doua versiuni ale aceluiasi fisier nu se mai suprascriu
