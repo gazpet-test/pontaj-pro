@@ -100,3 +100,32 @@ export function alegeFont(inaltimiPeFont, limita = INALTIME_CORP) {
 
 /** Primii octeți ai unui PDF („%PDF-”), pentru fișiere cu `type` gol (VA32). */
 export const estePdf = bytes => bytes && bytes.length >= 5 && String.fromCharCode(...bytes.slice(0, 5)) === '%PDF-'
+
+// ─── Registru și Execuție (PR3) ────────────────────────────────
+
+const ddmmyyyy = d => d ? d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4) : ''
+/** Aceeași formă ca _hr_nr_afisat pe server: 916/28.09.2026, 385-a/2024, „ (seria carte tehnica)". */
+export const nrAfisat = d => d?.numar == null ? null
+  : `${d.numar}${d.numar_sufix ? '-' + d.numar_sufix : ''}/${d.data_emitere ? ddmmyyyy(d.data_emitere) : d.an}${d.serie === 'carte_tehnica' ? ' (seria carte tehnica)' : ''}`
+
+/**
+ * Eticheta cardului unui rol din Execuție → Echipă (spec §7, C10, VA9), legată pe tip_cod.
+ * decizii: rândurile proiectului (emisa / semnata / revocata); azi: 'YYYY-MM-DD'. null = nimic de afișat.
+ */
+export function stareRol(tipCod, idEchipa, decizii, nume = {}, azi) {
+  const ale = (decizii || []).filter(d => d.tip_cod === tipCod)
+  const inVigoare = d => !d.data_efect_pana || d.data_efect_pana >= azi
+  const pers = d => d.snapshot?.persoana?.nume || nume[d.employee_id] || d.persoana_nume || '?'
+  const id = idEchipa ? Number(idEchipa) : null
+  const semnata = ale.find(d => d.stare === 'semnata' && inVigoare(d))
+  if (semnata) {
+    if (id && semnata.employee_id && semnata.employee_id !== id) return { cod: 'diferit', t: `⚠ echipa ≠ decizia activă (nr ${nrAfisat(semnata)}: ${pers(semnata)})` }
+    return { cod: 'ok', t: `Decizia nr ${nrAfisat(semnata)}` }
+  }
+  const emisa = ale.find(d => d.stare === 'emisa')
+  if (emisa) return { cod: 'nesemnata', t: `nr ${nrAfisat(emisa)} · nesemnată` }
+  const rev = id && ale.find(d => d.stare === 'revocata' && d.employee_id === id)
+  if (rev) return { cod: 'revocata', t: `⚠ decizie revocată, echipa îl are încă pe ${pers(rev)}` }
+  if (id) return { cod: 'lipsa', t: '⚠ fără decizie' }
+  return null
+}

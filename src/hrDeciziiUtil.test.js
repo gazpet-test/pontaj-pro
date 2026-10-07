@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, CALE_FISIER_RE, PAGINA, INALTIME_CORP } from './hrDeciziiUtil.js'
+import { nrAfisat, stareRol, esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, CALE_FISIER_RE, PAGINA, INALTIME_CORP } from './hrDeciziiUtil.js'
 
 const CONT = {
   titlu: 'DECIZIA NR', nr: '916/28.09.2026', previzualizare: false,
@@ -148,4 +148,28 @@ describe('estePdf', () => {
     expect(estePdf(new TextEncoder().encode('GIF89a'))).toBe(false)
     expect(estePdf(new Uint8Array([]))).toBe(false)
   })
+})
+
+describe('nrAfisat (aceeași formă ca _hr_nr_afisat)', () => {
+  it('număr/dată, sufix, an fără dată, carte tehnică, draft', () => {
+    expect(nrAfisat({ numar: 916, data_emitere: '2026-09-28', an: 2026, serie: 'HR' })).toBe('916/28.09.2026')
+    expect(nrAfisat({ numar: 385, numar_sufix: 'a', an: 2024, serie: 'HR' })).toBe('385-a/2024')
+    expect(nrAfisat({ numar: 391, an: 2025, serie: 'carte_tehnica' })).toBe('391/2025 (seria carte tehnica)')
+    expect(nrAfisat({ numar: null })).toBe(null)
+  })
+})
+
+describe('stareRol (cardurile din Execuție, C10/VA9)', () => {
+  const AZI = '2026-10-07'
+  const sem = { id: 1, tip_cod: 'RTE', stare: 'semnata', employee_id: 5, numar: 916, data_emitere: '2026-09-28', snapshot: { persoana: { nume: 'Popescu Ion' } } }
+  it('decizia activă pe aceeași persoană', () => { expect(stareRol('RTE', 5, [sem], {}, AZI)).toMatchObject({ cod: 'ok', t: 'Decizia nr 916/28.09.2026' }) })
+  it('echipa are altă persoană decât decizia', () => { expect(stareRol('RTE', 7, [sem], {}, AZI).cod).toBe('diferit') })
+  it('doar emisă → nesemnată', () => { expect(stareRol('RTE', 5, [{ ...sem, stare: 'emisa' }], {}, AZI).cod).toBe('nesemnata') })
+  it('revocată, echipa îl are încă', () => { expect(stareRol('RTE', 5, [{ ...sem, stare: 'revocata' }], {}, AZI)).toMatchObject({ cod: 'revocata', t: '⚠ decizie revocată, echipa îl are încă pe Popescu Ion' }) })
+  it('fără decizie / fără nimic', () => {
+    expect(stareRol('RTE', 5, [], {}, AZI).cod).toBe('lipsa')
+    expect(stareRol('RTE', null, [], {}, AZI)).toBe(null)
+  })
+  it('legătura e pe tip_cod: o decizie MP nu etichetează cardul RTE', () => { expect(stareRol('RTE', 5, [{ ...sem, tip_cod: 'MP' }], {}, AZI).cod).toBe('lipsa') })
+  it('decizia expirată (data_efect_pana trecută) nu mai e activă', () => { expect(stareRol('RTE', 5, [{ ...sem, data_efect_pana: '2026-10-01' }], {}, AZI).cod).toBe('lipsa') })
 })

@@ -30,6 +30,7 @@ import MaterialeProiectPanel from './MaterialeProiectPanel.jsx'
 import UnitatiProiectPanel from './UnitatiProiectPanel.jsx'
 import ProiectNouWizard from './ProiectNouWizard.jsx'
 import OfertarePF, { useAccesPF } from './OfertarePF.jsx'
+import { useDeciziiProiect, EtichetaDecizie, EchipaExtinsa, GeneratorProiect } from './ExecutieDeciziiEchipa.jsx'   // registrul deciziilor HR (PR3)
 import { createClient } from '@supabase/supabase-js'
 
 import { instrumenteazaStorageRls } from './lib/storageRls.js'
@@ -699,11 +700,14 @@ function DashboardProiectePage({ onSelectProiect }) {
                     <span style={{ fontSize: 12, color: G.purple, fontWeight: 700, minWidth: 170 }}>{CAMP_LABEL[row.camp] || row.camp}</span>
                     <span style={{ fontSize: 13, color: G.text, fontWeight: 700 }}>{afisCompletare(row)}</span>
                     <span style={{ fontSize: 10, color: G.dim, flex: 1, minWidth: 160 }} title={row.motiv || ''}>
-                      {row.sursa === 'mail' ? '📧' : row.sursa === 'drive' ? '☁️' : '📁'} {(row.sursa_detaliu || '').slice(0, 60)}{(row.sursa_detaliu || '').length > 60 ? '…' : ''}
+                      {row.hr_decizie_id ? '📜' : row.sursa === 'mail' ? '📧' : row.sursa === 'drive' ? '☁️' : '📁'} {(row.sursa_detaliu || '').slice(0, 60)}{(row.sursa_detaliu || '').length > 60 ? '…' : ''}
                       {row.confidenta != null && ` · ${row.confidenta}%`}{row.motiv ? ` · ${row.motiv}` : ''}
                     </span>
+                    {row.hr_decizie_id && completari.filter(x => x.proiect_id === row.proiect_id && x.camp === row.camp).length > 1 && (
+                      <span style={{ fontSize: 10, fontWeight: 700, color: G.orange }} title="Mai multe propuneri pe același câmp (G8)">⚠ concurente</span>
+                    )}
                     {row.dovada_path && (
-                      <button onClick={async () => { const { data } = await supabase.storage.from('executie-contracte').createSignedUrl(row.dovada_path, 300); if (data?.signedUrl) window.open(data.signedUrl, '_blank') }}
+                      <button onClick={async () => { const { data } = await supabase.storage.from(row.hr_decizie_id ? 'hr-decizii' : 'executie-contracte').createSignedUrl(row.dovada_path, 300); if (data?.signedUrl) window.open(data.signedUrl, '_blank'); else showToast('Dovada nu se poate deschide (drept sau fișier lipsă)', 'error') }}
                         style={{ padding: '4px 8px', background: 'transparent', border: `1px solid ${G.border}`, borderRadius: 6, color: G.muted, fontSize: 11, cursor: 'pointer' }}>📎 dovada</button>
                     )}
                     {canEdit && (
@@ -2967,6 +2971,8 @@ function TabProiectDashboard({ proiectId }) {
   const [angajati, setAngajati] = useState([])
   const [echipaForm, setEchipaForm] = useState(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const deciziiPr = useDeciziiProiect(proiectId, reloadKey)
+  const [genDecizie, setGenDecizie] = useState(null)
 
   useEffect(() => {
     if (!proiectId) return
@@ -3030,13 +3036,14 @@ function TabProiectDashboard({ proiectId }) {
   if (!p || !extra) return <div style={{ padding: 40, textAlign: 'center', color: G.muted, fontSize: 13 }}>⏳ Se încarcă proiectul...</div>
 
   const pz = { ...p, ...extra }
+  // tip: legătura cu registrul deciziilor HR pe tip_cod (VA9); cardurile fără persoană apar doar dacă există o decizie
   const echipa = [
-    { label: 'Manager Proiect (MP)',        id: extra.mp_employee_id },
-    { label: 'Resp. Tehnic Execuție (RTE)', id: extra.rte_employee_id },
-    { label: 'Resp. Tehnic Sudură (RTS)',   id: extra.rts_employee_id },
-    { label: 'Șef de șantier',              id: extra.sef_santier_employee_id },
+    { label: 'Manager Proiect (MP)',        id: extra.mp_employee_id, tip: 'MP' },
+    { label: 'Resp. Tehnic Execuție (RTE)', id: extra.rte_employee_id, tip: 'RTE' },
+    { label: 'Resp. Tehnic Sudură (RTS)',   id: extra.rts_employee_id, tip: 'RTS' },
+    { label: 'Șef de șantier',              id: extra.sef_santier_employee_id, tip: 'SEF_SANTIER' },
     { label: 'Coordonator beneficiar',        val: extra.coordonator_transgaz },
-  ].filter(r => r.id || r.val)
+  ].filter(r => r.id || r.val || (r.tip && (deciziiPr.poateEmite || deciziiPr.decizii.some(d => d.tip_cod === r.tip))))
 
   const infoRows = [
     { label: 'Ordin de începere', value: p.data_start ? fmtDate(p.data_start) : '⚠️ nesetat', warn: !p.data_start },
@@ -3125,13 +3132,18 @@ function TabProiectDashboard({ proiectId }) {
             {echipa.map((r, i) => (
               <div key={i} style={{ background: G.card2 || G.surface, borderRadius: 7, padding: '10px 14px' }}>
                 <div style={{ fontSize: 9, color: G.muted, textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 2 }}>{r.label}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: G.text }}>{r.val || personnel[r.id]?.name || '⏳'}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: G.text }}>{r.val || (r.id ? personnel[r.id]?.name || '⏳' : '—')}</div>
                 {r.id && personnel[r.id]?.functie && <div style={{ fontSize: 10, color: G.muted }}>{personnel[r.id].functie}</div>}
+                {r.tip && <EtichetaDecizie tipCod={r.tip} idEchipa={r.id} decizii={deciziiPr.decizii} nume={deciziiPr.nume} poateEmite={deciziiPr.poateEmite}
+                  onGenereaza={(tip_cod, employee_id) => setGenDecizie({ proiect_id: proiectId, tip_cod, employee_id })} />}
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {!editEchipa && <div style={{ marginTop: -8, marginBottom: 14 }}><EchipaExtinsa decizii={deciziiPr.decizii} nume={deciziiPr.nume} /></div>}
+      <GeneratorProiect preset={genDecizie} onClose={() => { setGenDecizie(null); setReloadKey(k => k + 1) }} />
 
       {/* Secțiunea PF (inclusiv eroarea ei) apare doar când PF e accesibil sau verificarea a eșuat; PGRST202 e ignorat. */}
       {(accesPF.poateCiti || accesPF.eroareAcces) && <section style={{ marginTop:14 }}>

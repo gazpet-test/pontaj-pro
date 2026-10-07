@@ -18,7 +18,8 @@ export { sha256Hex }
 
 /** Pagina de decizie: `continut` de la server + snapshot (fontul înghețat) + {cod_verificare, previzualizare, fontPt}. */
 export function renderDecizieHtml(continut, snapshot, opts = {}) {
-  return renderPur(continut, { ...opts, logo: LOGO_B64, fontPt: opts.fontPt ?? snapshot?.font_pt })
+  // P9-1: la o decizie emisă afișarea folosește fontul înghețat; opts.fontPt contează doar fără snapshot (previzualizare)
+  return renderPur(continut, { ...opts, logo: LOGO_B64, fontPt: snapshot?.font_pt ?? opts.fontPt })
 }
 
 const dublaCadru = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
