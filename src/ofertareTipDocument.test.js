@@ -365,7 +365,9 @@ describe('edge seap-import: ZIP-ul întreg pleacă la NAS abia după dovezile di
     // Jakarinos r2: dovezi nescrise → rezerva DownloadArchive amânată, nu pornită
     expect(src).toMatch(/const doveziScrise = !nevoieDeArhiva \|\| await scrieManifest\(\);/)
     expect(src).toMatch(/if \(nevoieDeArhiva && doveziScrise\) \{\s*if \(!perFisierOk\)/)
-    expect(src).toMatch(/if \(!arhivaIncompleta && !nerecuperate\) await supa\.from\('ofertare_licitatii'\)/)
+    expect(src).toMatch(/if \(deLaIndex === 0 && !arhivaIncompleta && !nerecuperate\) await supa\.from\('ofertare_licitatii'\)/)
+    // Jakarinos r3: dovada „urcat” se păstrează doar dacă spune același lucru (document + sha), altfel legătura nouă o înlocuiește
+    expect(src).toMatch(/rr\.document_id === rand\.document_id && rr\.sha256 === rand\.sha256/)
     // Jakarinos r2: upload sau rând BD eșuat = nerecuperat (urcaFisier întoarce succesul real)
     expect(src).toMatch(/if \(eUp\) \{ nerecuperate\+\+;/)
     expect(src).toMatch(/else nerecuperate\+\+;[^\n]*\n\s*urcatiOcteti \+= buf\.length;\n\s*return !!docId;/)

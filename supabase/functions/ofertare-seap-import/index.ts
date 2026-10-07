@@ -366,11 +366,13 @@ Deno.serve(async (req: Request) => {
                 // Jakarinos pe PR-C: legatura (ACEASTA arhiva, cale) → documentul existent, cu acelasi sha. Fara ea, daca ZIP-ul
                 // ajunge intreg la NAS, fisiereDejaImportate nu gaseste dovada pentru arhiva curenta si dubleaza fisierul.
                 // Alta arhiva_cheie decat dovada 'urcat' a documentului → upsert-ul nu o atinge (#646, R6).
-                // Jakarinos r2: la o REluare peste ACEEASI arhiva, cheia (arhiva, cale) e chiar dovada 'urcat' din prima rulare —
-                // nu se suprascrie (altfel a treia rulare n-ar mai gasi sha-ul dovedit si ar urca o dublura).
+                // Jakarinos r2/r3: la o REluare peste ACEEASI arhiva, cheia (arhiva, cale) e chiar dovada 'urcat' din prima rulare —
+                // nu se suprascrie (altfel a treia rulare n-ar mai gasi sha-ul dovedit si ar urca o dublura). Doar daca dovada spune
+                // ACELASI lucru (acelasi document si acelasi sha); o dovada veche pentru alt continut (ZIP-ul s-a schimbat) se inlocuieste.
                 try {
                   const rand = randManifest({ licitatieId, arhivaCheie: doc.nume, cale: h.nume, marime: r.buf.length, sha256: await sha256Hex(r.buf), documentId: alegere.deja, stare: 'deja_in_platforma' });
-                  const areDovada = (rr: { stare?: string; arhiva_cheie?: string; cale?: string }) => rr.stare === 'urcat' && rr.arhiva_cheie === rand.arhiva_cheie && rr.cale === rand.cale;
+                  const areDovada = (rr: { stare?: string; arhiva_cheie?: string; cale?: string; document_id?: number | null; sha256?: string }) =>
+                    rr.stare === 'urcat' && rr.arhiva_cheie === rand.arhiva_cheie && rr.cale === rand.cale && rr.document_id === rand.document_id && rr.sha256 === rand.sha256;
                   if (!(manUrcat || []).some(areDovada) && !manifest.some(areDovada)) manifest.push(rand);
                 } catch (e) { raport.avertismente.push(`manifest ${h.nume}: ${String((e as Error)?.message || e)}`); }
                 return 'continua';
@@ -481,7 +483,9 @@ Deno.serve(async (req: Request) => {
 
   await scrieManifest();
   if (!continua) {
-    if (!arhivaIncompleta && !nerecuperate) await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
+    // „adusa” o declara doar o trecere COMPLETA (de la indexul 0, fara continuari) fara lipsuri — o continuare (de_la_index > 0)
+    // nu stie de esecurile apelurilor dinainte (Jakarinos r3 pe #651); o rulare ulterioara completa o seteaza cand nu mai lipseste nimic
+    if (deLaIndex === 0 && !arhivaIncompleta && !nerecuperate) await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
     raport.orfani_stersi = await curataOrfani(supa, licitatieId);
   }
   raport.index = index;
