@@ -46,8 +46,10 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
   const randuri: Rand[] = []
   const tally = { identice: 0, diferite: 0, lipsa: 0, ignorate: 0, erori: [] as string[] }
   const potrivite = new Set<number>()
-  // dovezile existente ('urcat') pe (arhiva_cheie, cale) + documentele după id: verificarea le confirmă sau le invalidează
-  const dovezi = new Map<string, { document_id: number | null; sha256: string }>()
+  // dovezile existente pe (arhiva_cheie, cale) + documentele după id: verificarea le confirmă sau le invalidează.
+  // 'urcat' = importul a urcat EXACT această intrare; 'deja_in_platforma' = importul a legat intrarea de un document existent
+  // cu același sha (edge, PR #651) — ambele identifică documentul de verificat, dar doar 'urcat' se confirmă ca 'urcat'
+  const dovezi = new Map<string, { document_id: number | null; sha256: string; stare: string }>()
   let dupaId = new Map<number, DocumentBd>()
   let faraScriere: string | null = null
 
@@ -80,7 +82,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     const shaStoc = await sha(stoc)
     if (shaStoc === rand.sha256) {
       tally.identice++
-      if (prec && prec.sha256 === rand.sha256 && prec.document_id === d.id) rand.stare = 'urcat'   // dovada confirmată, păstrată
+      if (prec && prec.stare === 'urcat' && prec.sha256 === rand.sha256 && prec.document_id === d.id) rand.stare = 'urcat'   // dovada confirmată, păstrată
     }
     else { tally.diferite++; rand.motiv = `DIFERIT de Storage: sha ${shaStoc.slice(0, 12)}… / ${stoc.length} B vs SEAP ${rand.sha256.slice(0, 12)}… / ${buf.length} B` }
     randuri.push(rand)
@@ -106,12 +108,12 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     inPlatforma = new Map((dinBd || []).filter(d => d.fisier_path && !String(d.fisier_path).includes('/neincarcat/'))
       .map(d => [cheieNume(d.nume_original), d]))
     dupaId = new Map(dinBd.map(d => [d.id, d]))
-    const { data: dateDovezi, error: eDovezi } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256')
-      .eq('licitatie_id', licId).eq('stare', 'urcat').abortSignal(semnal)
+    const { data: dateDovezi, error: eDovezi } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256, stare')
+      .eq('licitatie_id', licId).in('stare', ['urcat', 'deja_in_platforma']).not('document_id', 'is', null).abortSignal(semnal)
     semnal.throwIfAborted()
     // fără dovezile existente, o scriere le-ar putea suprascrie orbește → raportăm, dar nu scriem manifestul
     if (eDovezi) faraScriere = `manifest: dovezile existente nu s-au putut citi (${eDovezi.message}) — nu scriu nimic`
-    for (const r of (dateDovezi || []) as { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string }[]) dovezi.set(`${r.arhiva_cheie}\u0000${r.cale}`, r)
+    for (const r of (dateDovezi || []) as { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string; stare: string }[]) dovezi.set(`${r.arhiva_cheie}\u0000${r.cale}`, r)
 
     // volumele RAR ale aceleiași arhive se tratează împreună
     const grupuri = new Map<string, typeof docs>()

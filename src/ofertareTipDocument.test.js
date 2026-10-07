@@ -359,9 +359,16 @@ describe('edge seap-import: ZIP-ul întreg pleacă la NAS abia după dovezile di
   })
   it('intrarea sărită ca „deja” lasă legătura (arhiva curentă, cale) → document în manifest; rezerva scrie dovezile înainte; „adusă” doar fără nerecuperate', () => {
     const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
-    expect(src).toMatch(/if \('deja' in alegere\) \{[\s\S]{0,800}stare: 'deja_in_platforma'/)
-    expect(src).toMatch(/if \(nevoieDeArhiva\) \{[\s\S]{0,400}if \(await scrieManifest\(\)\) manifest\.length = 0;/)
+    expect(src).toMatch(/if \('deja' in alegere\) \{[\s\S]{0,1500}stare: 'deja_in_platforma'/)
+    // Jakarinos r2: legătura nu suprascrie dovada „urcat” a aceleiași chei (reluare peste aceeași arhivă)
+    expect(src).toMatch(/if \(!\(manUrcat \|\| \[\]\)\.some\(areDovada\) && !manifest\.some\(areDovada\)\) manifest\.push\(rand\)/)
+    // Jakarinos r2: dovezi nescrise → rezerva DownloadArchive amânată, nu pornită
+    expect(src).toMatch(/const doveziScrise = !nevoieDeArhiva \|\| await scrieManifest\(\);/)
+    expect(src).toMatch(/if \(nevoieDeArhiva && doveziScrise\) \{\s*if \(!perFisierOk\)/)
     expect(src).toMatch(/if \(!arhivaIncompleta && !nerecuperate\) await supa\.from\('ofertare_licitatii'\)/)
+    // Jakarinos r2: upload sau rând BD eșuat = nerecuperat (urcaFisier întoarce succesul real)
+    expect(src).toMatch(/if \(eUp\) \{ nerecuperate\+\+;/)
+    expect(src).toMatch(/else nerecuperate\+\+;[^\n]*\n\s*urcatiOcteti \+= buf\.length;\n\s*return !!docId;/)
   })
 })
 

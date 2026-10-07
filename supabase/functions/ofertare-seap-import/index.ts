@@ -196,7 +196,7 @@ Deno.serve(async (req: Request) => {
   // cheieNume sărea în tăcere un fișier cu ALT conținut („Caiet de sarcini.pdf” din Lot1.zip și din Lot2.zip). Acum „deja”
   // doar cu sha256 DOVEDIT de manifest ('urcat') — aceeași regulă ca workerul: _shared/identitateFisier.mjs.
   const { data: manUrcat, error: eMan } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_manifest')
-    .select('document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null).order('id').range(de, la));
+    .select('arhiva_cheie, cale, document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null).order('id').range(de, la));
   if (eMan) return json({ error: `manifestul nu s-a putut citi: ${eMan.message}` }, 500);
   const identitate = stareIdentitate((dejaAre || []).filter((d: any) => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume);
   const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieRand(d.nume_original), d.id]));
@@ -262,7 +262,7 @@ Deno.serve(async (req: Request) => {
     const path = `${licitatieId}/atribuire/${Date.now().toString(36)}_${safe}`;
     const { error: eUp } = await supa.storage.from('ofertare')
       .upload(path, buf, { contentType: estePdf ? 'application/pdf' : 'application/octet-stream' });
-    if (eUp) { raport.erori.push(`${numeFinal}: ${eUp.message}`); await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, null, eUp.message); return false; }
+    if (eUp) { nerecuperate++; raport.erori.push(`${numeFinal}: ${eUp.message}`); await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, null, eUp.message); return false; }
     const deCitit = !nota && (estePdf || esteArhiva(numeFinal));
     const docId = await scrie({
       licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
@@ -277,8 +277,9 @@ Deno.serve(async (req: Request) => {
     await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, docId, docId ? null : 'rand BD nescris');
     urcate.add(cheieRand(numeFinal));
     if (docId) adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
+    else nerecuperate++;   // fișier în Storage fără rând în BD = nu e în platformă (Jakarinos r2 pe #651)
     urcatiOcteti += buf.length;
-    return true;
+    return !!docId;
   };
 
   const bugetDepasit = () => urcatiOcteti > BUGET_OCTETI || Date.now() - t0 > BUGET_MS;
@@ -365,8 +366,12 @@ Deno.serve(async (req: Request) => {
                 // Jakarinos pe PR-C: legatura (ACEASTA arhiva, cale) → documentul existent, cu acelasi sha. Fara ea, daca ZIP-ul
                 // ajunge intreg la NAS, fisiereDejaImportate nu gaseste dovada pentru arhiva curenta si dubleaza fisierul.
                 // Alta arhiva_cheie decat dovada 'urcat' a documentului → upsert-ul nu o atinge (#646, R6).
+                // Jakarinos r2: la o REluare peste ACEEASI arhiva, cheia (arhiva, cale) e chiar dovada 'urcat' din prima rulare —
+                // nu se suprascrie (altfel a treia rulare n-ar mai gasi sha-ul dovedit si ar urca o dublura).
                 try {
-                  manifest.push(randManifest({ licitatieId, arhivaCheie: doc.nume, cale: h.nume, marime: r.buf.length, sha256: await sha256Hex(r.buf), documentId: alegere.deja, stare: 'deja_in_platforma' }));
+                  const rand = randManifest({ licitatieId, arhivaCheie: doc.nume, cale: h.nume, marime: r.buf.length, sha256: await sha256Hex(r.buf), documentId: alegere.deja, stare: 'deja_in_platforma' });
+                  const areDovada = (rr: { stare?: string; arhiva_cheie?: string; cale?: string }) => rr.stare === 'urcat' && rr.arhiva_cheie === rand.arhiva_cheie && rr.cale === rand.cale;
+                  if (!(manUrcat || []).some(areDovada) && !manifest.some(areDovada)) manifest.push(rand);
                 } catch (e) { raport.avertismente.push(`manifest ${h.nume}: ${String((e as Error)?.message || e)}`); }
                 return 'continua';
               }
@@ -411,10 +416,16 @@ Deno.serve(async (req: Request) => {
   // Se incearca doar daca lista a esuat / a venit goala / un document nu s-a putut aduce.
   const nevoieDeArhiva = !continua && (!perFisierOk || !!motivRezerva);
   let arhivaIncompleta = false;
-  if (nevoieDeArhiva) {
-    // dovezile ZIP-urilor desfacute inline se scriu INAINTE ca rezerva sa urce arhive intregi (bucla NAS le-ar putea revendica
-    // in timpul rularii, fara dovezi → dubluri); la esec raman in lista si se reincearca la final
-    if (await scrieManifest()) manifest.length = 0;
+  // dovezile ZIP-urilor desfacute inline se scriu INAINTE ca rezerva sa urce arhive intregi (bucla NAS le-ar putea revendica
+  // in timpul rularii, fara dovezi → dubluri). Dovezi nescrise → rezerva se AMANA (Jakarinos r2 pe #651): randurile raman in
+  // lista (se reincearca la final), rularea nu se declara „adusa”, iar rularea urmatoare reia rezerva.
+  const doveziScrise = !nevoieDeArhiva || await scrieManifest();
+  if (nevoieDeArhiva && doveziScrise) manifest.length = 0;
+  if (nevoieDeArhiva && !doveziScrise) {
+    nerecuperate++;
+    raport.erori.push('rezerva arhiva AMANATA: dovezile din manifest nu s-au putut scrie (arhivele intregi s-ar dubla la NAS) — se reia la rularea urmatoare');
+  }
+  if (nevoieDeArhiva && doveziScrise) {
     if (!perFisierOk) { raport.metoda = 'arhiva'; index = deLaIndex; }
     raport.rezerva_arhiva = true;
     raport.erori.push(`rezerva arhiva: ${motivRezerva || 'lista indisponibila'}`);
