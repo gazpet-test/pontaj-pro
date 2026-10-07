@@ -12,6 +12,7 @@
 import type { Supa } from './ingest.ts'
 import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md): descărcările din Storage intră în jurnal
 import { ghicesteTip, tipInArhiva, indiciuArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
+import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume, pastreazaUrcat } from '../../supabase/functions/_shared/identitateFisier.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -244,6 +245,16 @@ async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Arra
 type ManifestRand = { licitatie_id: number; arhiva_cheie: string; cale: string; marime: number; sha256: string; document_id: number | null; stare: 'urcat' | 'deja_in_platforma' | 'eroare_urcare' | 'ignorat'; motiv: string | null; verificat_la: string }
 type Raport = { seap: number; deja: number; adusi: number; fisiere_urcate: number; erori: string[]; sarite: number }
 
+// -- Identitatea unui fișier extras pe drumul SEAP (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643) -----------------
+// Înainte: „deja în platformă” = aceeași cheieNume, ORICARE ar fi conținutul („Caiet de sarcini.pdf” din Lot1.zip și din
+// Lot2.zip → unul singur; „X.PDF” / „x.pdf” → unul pierdut, marcat „deja_in_platforma” cu id-ul celuilalt). Acum regula din
+// _shared/identitateFisier.mjs, aceeași ca în ZIP-ul inline din edge: „deja” doar cu sha256 DOVEDIT (manifest 'urcat');
+// altfel numele exact dacă e liber, apoi prefixul arhivei („Lot2/Caiet….pdf”), apoi sha-ul în nume.
+export function prefixArhiva(numeArhiva: string): string {
+  const n = String(numeArhiva ?? '').replace(/\.p7s$/i, '')
+  return (volumRar(n)?.baza ?? n.replace(/\.(zip|rar|7z)$/i, '')).replace(/[\\/]+/g, '_').trim() || 'arhiva'
+}
+
 async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'identificat' | 'ok' | 'eroare' | 'sarit'; etapa?: string; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }) {
   const cheie = cheieNume(nume)
   const { data: vechi } = await supa.from('ofertare_seap_fisiere').select('id, incercari').eq('licitatie_id', licId).eq('cheie', cheie).maybeSingle()
@@ -268,6 +279,9 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   raport.seap = docs.length
   const { data: dinBd } = await supa.from('ofertare_documente_atribuire').select('id, nume_original, fisier_path').eq('licitatie_id', licId)
   const urcate = new Map((dinBd || []).filter(d => !estePlaceholder(d)).map(d => [cheieNume(d.nume_original), d.id as number]))
+  // fișierele extrase din arhive: „deja” doar cu sha256 dovedit de manifest ('urcat') — _shared/identitateFisier.mjs
+  const { data: manUrcat } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256, stare').eq('licitatie_id', licId).eq('stare', 'urcat').not('document_id', 'is', null)
+  const identitate = stareIdentitate((dinBd || []).filter(d => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume)
   const placeholders = new Map((dinBd || []).filter(estePlaceholder).map(d => [cheieNume(d.nume_original), d.id as number]))
   const { data: evid } = await supa.from('ofertare_seap_fisiere').select('cheie, stare, incercari').eq('licitatie_id', licId)
   const evidenta = new Map((evid || []).map(e => [e.cheie, e]))
@@ -365,13 +379,22 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         for await (const f of fisiereDin(out)) {
           const buf = await Deno.readFile(f.cale)
           const rand: ManifestRand = { licitatie_id: licId, arhiva_cheie: arhivaCheie, cale: f.rel, marime: buf.length, sha256: await sha256(buf), document_id: null, stare: 'urcat', motiv: null, verificat_la: new Date().toISOString() }
-          if (JUNK_RE.test(f.rel)) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)' }
-          else if (urcate.has(cheieNume(f.rel))) { extrase++; rand.stare = 'deja_in_platforma'; rand.document_id = urcate.get(cheieNume(f.rel)) ?? null }   // ex. urcat de mână
+          const alegere = JUNK_RE.test(f.rel) ? null : alegeNume(identitate, f.rel, prefixArhiva(locale[0].doc.nume), rand.sha256)
+          if (!alegere) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)' }
+          else if ('deja' in alegere) {   // același conținut dovedit; propria urcare anterioară își păstrează rândul 'urcat' (dovada)
+            extrase++; rand.document_id = alegere.deja
+            rand.stare = pastreazaUrcat(manUrcat || [], arhivaCheie, f.rel, alegere.deja) ? 'urcat' : 'deja_in_platforma'
+          }
           else {
-            stare(`urc ${f.rel}`)
-            const r = await urca(supa, licId, f.rel, buf, placeholders)
+            stare(`urc ${alegere.nume}`)
+            // tipul cu indiciul arhivei, ca în bucla de platformă și în ZIP-ul inline din edge (#641, aceeași regulă peste tot)
+            const r = await urca(supa, licId, alegere.nume, buf, placeholders, { tip: tipInArhiva(alegere.nume, indiciuArhiva(locale[0].doc.nume)) })
             if (typeof r === 'string') { eroriInterne.push(`${f.rel}: ${r}`); rand.stare = 'eroare_urcare'; rand.motiv = r }
-            else { extrase++; raport.fisiere_urcate++; urcate.set(cheieNume(f.rel), r.id); rand.document_id = r.id }
+            else {
+              extrase++; raport.fisiere_urcate++; rand.document_id = r.id
+              if (alegere.nume !== f.rel) rand.motiv = `nume diferit de altul cu alt conținut → urcat ca „${alegere.nume}”`
+              urcate.set(cheieNume(alegere.nume), r.id); adaugaDocument(identitate, alegere.nume, r.id, rand.sha256)
+            }
           }
           manifest.push(rand)
           await Deno.remove(f.cale)

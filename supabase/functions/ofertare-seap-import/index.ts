@@ -54,6 +54,7 @@
 //    inceput. Acum se verifica si semnatura reala: orice PDF incepe cu octetii %PDF-.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
+import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shared/identitateFisier.mjs';
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
@@ -355,6 +356,12 @@ Deno.serve(async (req: Request) => {
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
   const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
+  // fișierele din ZIP-urile desfăcute aici (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643): înainte, o potrivire pe
+  // cheieNume sărea în tăcere un fișier cu ALT conținut („Caiet de sarcini.pdf” din Lot1.zip și din Lot2.zip). Acum „deja”
+  // doar cu sha256 DOVEDIT de manifest ('urcat') — aceeași regulă ca workerul: _shared/identitateFisier.mjs.
+  const { data: manUrcat } = await supa.from('ofertare_seap_manifest')
+    .select('document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null);
+  const identitate = stareIdentitate((dejaAre || []).filter((d: any) => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume);
   const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieNume(d.nume_original), d.id]));
 
   const scrie = async (rand: any, nume: string) => {
@@ -422,6 +429,7 @@ Deno.serve(async (req: Request) => {
     }, numeFinal);
     await noteazaManifest(arhivaCheie, numeFinal, buf, docId, docId ? null : 'rand BD nescris');
     urcate.add(cheieNume(numeFinal));
+    if (docId) adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
     urcatiOcteti += buf.length;
     return true;
   };
@@ -492,13 +500,17 @@ Deno.serve(async (req: Request) => {
             (h) => {
               const nc = h.nume.replace(/\.p7s$/i, '');
               if (JUNK_RE.test(h.nume)) return false;
-              if (urcate.has(cheieNume(nc))) { raport.sarite_existente++; return false; }
+              // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
               if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
               return true;
             },
             async (h, brut) => {
               const r = desfaSemnatura(brut, h.nume);
-              await urcaFisier(r.nume, r.buf, doc.nume, doc.nume);
+              // același conținut dovedit → sărit; alt conținut sub un nume ocupat → prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
+              const prefix = doc.nume.replace(/\.p7s$/i, '').replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
+              const alegere = alegeNume(identitate, r.nume, prefix, await sha256Hex(r.buf));
+              if ('deja' in alegere) { raport.sarite_existente++; return 'continua'; }
+              await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume);
               return 'continua';
             },
             (n, m) => raport.erori.push(`${n}: ${m}`),
