@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { genereazaVoce, fisierMp3, poatePartaja, partajeaza, descarca } from './ttsFlux.js'
-import { textPentruVoce, nrCaractere, numeFisierMp3, MAX_CARACTERE, PLAFON_LUNAR, poateVoce } from './ttsUtil.js'
+import { textPentruVoce, nrCaractere, numeFisierMp3, lunaGoogle, MAX_CARACTERE, PLAFON_LUNAR, poateVoce } from './ttsUtil.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', text:'#E6EDF3', muted:'#8B949E', border:'#30363D', blue:'#1F6FEB', green:'#2EA043', yellow:'#D29922', red:'#F85149', voce:'#A371F7' }
 const S = {
@@ -31,8 +31,10 @@ export default function MesajVocal({ profile }) {
 
   async function incarcaCota() {
     if (!profile?.is_owner) return
-    const { data } = await supabase.from('tts_cota_lunara').select('luna, caractere').order('luna', { ascending: false }).limit(1)
-    setCota(data?.[0] || { luna: null, caractere: 0 })
+    // luna curentă exactă (ora Google); fără rând ⇒ 0 — nu luna trecută (J13-5/P12-3)
+    const luna = lunaGoogle()
+    const { data } = await supabase.from('tts_cota_lunara').select('luna, caractere').eq('luna', luna).maybeSingle()
+    setCota(data || { luna, caractere: 0 })
   }
   useEffect(() => { incarcaCota() }, [profile?.is_owner])   // eslint-disable-line react-hooks/exhaustive-deps
 

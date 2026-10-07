@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { poateVoce, textPentruVoce, nrCaractere, numeFisierMp3, MAX_CARACTERE, PLAFON_LUNAR } from './ttsUtil.js'
+import { poateVoce, textPentruVoce, nrCaractere, numeFisierMp3, lunaGoogle, MAX_CARACTERE, PLAFON_LUNAR } from './ttsUtil.js'
 
 describe('poateVoce', () => {
   it('owner da; modul mesaj_vocal da; altfel nu', () => {
@@ -29,4 +29,14 @@ describe('diverse', () => {
   it('caractere = code points', () => { expect(nrCaractere('ăîș')).toBe(3) })
   it('nume fișier', () => { expect(numeFisierMp3(new Date(2026, 9, 7, 15, 3))).toBe('mesaj_vocal_2026-10-07_1503.mp3') })
   it('constante aliniate cu serverul', () => { expect(MAX_CARACTERE).toBe(5000); expect(PLAFON_LUNAR).toBe(950000) })
+})
+
+describe('lunaGoogle (America/Los_Angeles, ca pe server)', () => {
+  it('la București 1 noiembrie 08:00 e încă octombrie la Google', () => {
+    expect(lunaGoogle(Date.parse('2026-11-01T06:00:00Z'))).toBe('2026-10-01')
+  })
+  it('după miezul nopții LA e luna nouă', () => {
+    expect(lunaGoogle(Date.parse('2026-11-01T07:30:00Z'))).toBe('2026-11-01')
+    expect(lunaGoogle(Date.parse('2027-01-01T08:00:00Z'))).toBe('2027-01-01')
+  })
 })

@@ -50,3 +50,39 @@ Deno.test('cheia de cache: hex 64, depinde de voce și text', async () => {
   assert.notEqual(a, await cheieCache('ro-RO-Chirp3-HD-Aoede', 'Salut!'))
   assert.equal(a, await cheieCache('ro-RO-Chirp3-HD-Aoede', 'Salut'))
 })
+
+Deno.test('bucăți: rezervare înaintea fiecărei bucăți, fără restituire la eșecul Google (J13-1/P12-1)', async () => {
+  const { genereazaPeBucati } = await import('./ttsLogica.ts')
+  let contor = 940000
+  const rezerva = (n: number) => Promise.resolve(contor + n <= 950000 ? (contor += n, 950000 - contor) : null)
+  let apel = 0
+  const sint = (_t: string) => { apel++; return apel === 2 ? Promise.reject(new Error('503')) : Promise.resolve(new Uint8Array([1, 2])) }
+  const r = await genereazaPeBucati(['a'.repeat(4500), 'b'.repeat(500)], rezerva, sint)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.motiv, 'google')
+  assert.equal(contor, 945000, 'ambele bucăți rămân numărate: prima a reușit, a doua a plecat spre Google')
+  // reîncercări repetate nu pot trece de plafon: contorul crește la fiecare încercare
+  for (let i = 0; i < 20; i++) { apel = 0; await genereazaPeBucati(['a'.repeat(4500), 'b'.repeat(500)], rezerva, sint) }
+  assert.ok(contor <= 950000)
+  const sintetizate = (contor - 940000)
+  assert.ok(sintetizate <= 10000, 'consumul trimis la Google e mereu acoperit de contor')
+})
+
+Deno.test('bucăți: plafon atins la mijloc ⇒ se oprește, fără apel Google pentru bucata refuzată', async () => {
+  const { genereazaPeBucati } = await import('./ttsLogica.ts')
+  let contor = 949000, apeluri = 0
+  const rezerva = (n: number) => Promise.resolve(contor + n <= 950000 ? (contor += n, 950000 - contor) : null)
+  const r = await genereazaPeBucati(['x'.repeat(800), 'y'.repeat(800)], rezerva, () => { apeluri++; return Promise.resolve(new Uint8Array([7])) })
+  assert.equal(r.ok === false && r.motiv, 'plafon')
+  assert.equal(apeluri, 1)
+  assert.equal(contor, 949800)
+})
+
+Deno.test('bucăți: succes ⇒ audio concatenat în ordine, rest = ultimul rest', async () => {
+  const { genereazaPeBucati } = await import('./ttsLogica.ts')
+  let contor = 0
+  const rezerva = (n: number) => Promise.resolve((contor += n, 950000 - contor))
+  const r = await genereazaPeBucati(['ab', 'cde'], rezerva, (t) => Promise.resolve(new TextEncoder().encode(t)))
+  assert.ok(r.ok)
+  if (r.ok) { assert.equal(new TextDecoder().decode(r.audio), 'abcde'); assert.equal(r.rest, 949995); assert.equal(r.rezervate, 5) }
+})

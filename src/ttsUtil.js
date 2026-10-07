@@ -35,6 +35,13 @@ export function textPentruVoce(t) {
     .trim()
 }
 
+/** Luna de facturare Google (America/Los_Angeles), ca 'YYYY-MM-01' — aceeași cheie ca tts_cota_lunara.luna. */
+export function lunaGoogle(ms = Date.now()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return `${p.year}-${p.month}-01`
+}
+
 /** Numărul de caractere ca pe server (code points). */
 export const nrCaractere = t => Array.from(String(t ?? '')).length
 

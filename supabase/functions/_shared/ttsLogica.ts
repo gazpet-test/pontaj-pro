@@ -63,3 +63,34 @@ export async function cheieCache(voce: string, text: string): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${voce}\n${text}`))
   return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
+
+export type RezultatBucati =
+  | { ok: true; audio: Uint8Array; rest: number; rezervate: number }
+  | { ok: false; motiv: 'plafon' | 'google'; rezervate: number; eroare?: string }
+
+/**
+ * Sinteza pe bucăți cu rezervare ÎNAINTEA FIECĂREI bucăți (r2, J13-1/J13-3/P12-1): fiecare bucată se numără în luna
+ * în care pleacă spre Google, iar nimic nu se restituie — o bucată trimisă rămâne numărată chiar dacă apelul eșuează
+ * sau răspunsul se pierde. La plafon atins în mijlocul mesajului, se oprește (bucățile deja trimise rămân numărate).
+ * rezerva(n) → rest (număr) sau null la plafon; o eroare de rezervare oprește tot ÎNAINTE de apelul Google.
+ */
+export async function genereazaPeBucati(
+  bucati: string[],
+  rezerva: (n: number) => Promise<number | null>,
+  sintetizeaza: (t: string) => Promise<Uint8Array>,
+): Promise<RezultatBucati> {
+  const parti: Uint8Array[] = []
+  let rezervate = 0, rest = 0
+  for (const b of bucati) {
+    const n = numarCaractere(b)
+    const r = await rezerva(n)
+    if (r === null) return { ok: false, motiv: 'plafon', rezervate }
+    rezervate += n
+    rest = r
+    try { parti.push(await sintetizeaza(b)) } catch (e) { return { ok: false, motiv: 'google', rezervate, eroare: (e as Error)?.message } }
+  }
+  const audio = new Uint8Array(parti.reduce((s, p) => s + p.length, 0))
+  let o = 0
+  for (const p of parti) { audio.set(p, o); o += p.length }
+  return { ok: true, audio, rest, rezervate }
+}
