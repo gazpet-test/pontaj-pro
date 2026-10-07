@@ -994,14 +994,15 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // finală (v_ofertare_seap_completitudine.ignorate_neverificate). Aceeași regulă ca în view: nu intră DUAE, jurnalele
   // .log, fișierele-lacăt Office și originalele sparte în bucăți.
   // 08.10 (audit #11, migrarea 20261020a — aceeași regulă ca view-ul, CTE-urile ign + arh): o ARHIVĂ intră doar dacă NU e
-  // rezolvată (despachetată „📦”, adusă pe Terra, cu evidență SEAP); o SEMNĂTURĂ (.p7s/.p7m) doar dacă nu s-a putut desface.
+  // rezolvată (despachetată „📦”, adusă pe Terra, cu evidență SEAP); un document SEMNAT (.p7s/.p7m) rămas nedesfăcut intră
+  // întotdeauna, mai puțin semnătura detașată („Doar semnătura electronică…”).
   const ARHIVA_UI = /\.(rar|zip|7z)(\.p7[sm])?\s*\d*$/i
   const cheieSeap = (n) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase().replace(/[,()]/g, '').replace(/\s+/g, '')
   const arhivaNerezolvata = (d) => ARHIVA_UI.test(d.nume_original || '') &&
     !(d.status_procesare === 'ignorat' && /^📦/.test(d.eroare || '')) && !/^Arhivă adusă pe Terra/.test(d.eroare || '') &&
     !evidSeap.has(cheieSeap(d.nume_original))
   const semnaturaNedesfacuta = (d) => /\.p7[sm]\s*\d*$/i.test(d.nume_original || '') && !ARHIVA_UI.test(d.nume_original || '') &&
-    /^Semnătura electronică nu s-a putut desface/.test(d.eroare || '')
+    !/^Doar semnătura electronică/.test(d.eroare || '')
   const ignoratTehnic = (d, toate) => ['ignorat', 'eroare'].includes(d.status_procesare) && (
     arhivaNerezolvata(d) || semnaturaNedesfacuta(d) || (
       !/\.(rar|zip|7z|p7s|p7m|xml|log)\s*\d*$/i.test(d.nume_original || '') &&

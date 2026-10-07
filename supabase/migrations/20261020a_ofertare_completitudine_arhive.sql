@@ -6,8 +6,9 @@
 --   ORICE nume de arhivă sau semnătură (…\.(rar|zip|7z|p7s|p7m|xml|log)$). O arhivă care NU a fost despachetată
 --   (eșec la extragere, respinsă de controale, „Despachetare manuală necesară”, placeholder neadus, sau urcată de
 --   edge/api înainte de 07.10 și rămasă „ignorat”) nu bloca depunerea, iar erorile buclei de platformă nu intrau în
---   ofertare_seap_fisiere (pe care o vede CTE-ul sf). La fel un document semnat a cărui semnătură nu s-a putut desface
---   (var. B, PR #649: „ignorat” + „Semnătura electronică nu s-a putut desface…”).
+--   ofertare_seap_fisiere (pe care o vede CTE-ul sf). La fel un document semnat (.p7s / .p7m) rămas nedesfăcut, din orice
+--   motiv: DER stricat (var. B, PR #649: „Semnătura electronică nu s-a putut desface…”), Storage căzut („Desfacerea
+--   semnăturii a eșuat…”), „X.p7m” fără extensie, rânduri vechi „non-PDF” dinainte de var. B.
 -- Acum:
 --   - CTE nou „arh”: o arhivă (zip/rar/7z, opțional .p7s/.p7m) NErezolvată și fără bifa unui om blochează. Rezolvată =
 --       • despachetată sau închisă de bucla workerului (status „ignorat” + nota „📦 …”), SAU
@@ -16,11 +17,15 @@
 --         identificat — eroarea și „în curs” sunt deja numărate de CTE-ul sf, deci nu se dublează.
 --     Orice altceva (neprocesat / in_lucru = în curs, eroare, „ignorat” cu altă notă, placeholder neadus) = blocaj, până
 --     la despachetare sau până la bifa unui om (fn_ofertare_doc_bifa_relevanta — excepția umană explicită).
---   - CTE „ign”: semnăturile (.p7s / .p7m) rămân excluse DOAR dacă nu poartă nota de desfacere eșuată; arhivele trec la „arh”.
+--   - CTE „ign”: un document semnat (.p7s / .p7m, nu arhivă) e exclus DOAR dacă e semnătură detașată, fără conținut
+--     (nota „Doar semnătura electronică…”) — orice altă stare „ignorat” / „eroare” fără text și fără bifă = necitit, blochează
+--     (Jakarinos r1 #1: fail-closed, nu o listă de note de eșec care se poate desincroniza). Arhivele trec la „arh”.
 --   - blocaj: mesaj nou după cele de enumerare SEAP, înaintea celor despre caiete / esențiale.
 --   - două coloane noi LA FINAL (CREATE OR REPLACE VIEW nu poate reordona): arhive_nerezolvate, arhive_lista.
 -- Impact măsurat pe producție (07.10 seara, read-only): arhive nerezolvate la lic. 3, 5, 87, 91, 94, 100, 103 — toate
 --   licitațiile active dintre ele (3, 94, 100, 103) aveau deja alt blocaj; niciuna nu trece din „fără blocaj” în blocat.
+--   Semnături nedesfăcute fără bifă: lic. 92 (9 — reparația var. B așteaptă OK-ul lui Răzvan) și lic. 1 (6, depusă) — ambele
+--   aveau deja alt blocaj.
 -- Nicio funcție, niciun drept nou: view-ul rămâne security_invoker = on, ACL-ul se păstrează (CREATE OR REPLACE).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid), fără BEGIN/COMMIT.
 -- Revenire: supabase/revenire/20261020a_ofertare_completitudine_arhive_ROLLBACK.sql. Harness: scripts/test_ofertare_completitudine_arhive.sh.
@@ -81,7 +86,7 @@ WITH ess AS (
     AND d.relevanta_verificata_la IS NULL
     AND d.nume_original !~* E'\\.(rar|zip|7z|xml|log)(\\s*\\d*)$'
     AND d.nume_original !~* E'\\.(rar|zip|7z)\\.p7[sm](\\s*\\d*)$'
-    AND NOT (d.nume_original ~* E'\\.p7[sm](\\s*\\d*)$' AND coalesce(d.eroare, '') NOT LIKE 'Semnătura electronică nu s-a putut desface%')
+    AND NOT (d.nume_original ~* E'\\.p7[sm](\\s*\\d*)$' AND coalesce(d.eroare, '') LIKE 'Doar semnătura electronică%')
     AND d.nume_original !~ E'(^|/)~\\$'
     AND NOT public.ofertare_doc_are_bucati(d.licitatie_id, d.id, d.nume_original)
   GROUP BY d.licitatie_id

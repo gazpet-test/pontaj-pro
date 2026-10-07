@@ -151,9 +151,9 @@ REVOKE ALL ON public.v_ofertare_seap_completitudine FROM PUBLIC, anon;
 GRANT SELECT ON public.v_ofertare_seap_completitudine TO authenticated, service_role;
 
 -- scenariile #11 (fiecare licitație are un caiet citit, ca blocajul să vină doar din ce testăm; 1 = fără SEAP → enumerare n/a)
-INSERT INTO public.ofertare_licitatii (id, c_notice_id) SELECT g, NULL FROM generate_series(1, 12) g;
+INSERT INTO public.ofertare_licitatii (id, c_notice_id) SELECT g, NULL FROM generate_series(1, 15) g;
 INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, tip, status_procesare, text_extras)
-  SELECT g, 'Caiet de sarcini.pdf', 'cs_volum', 'procesat', 'text' FROM generate_series(1, 12) g;
+  SELECT g, 'Caiet de sarcini.pdf', 'cs_volum', 'procesat', 'text' FROM generate_series(1, 15) g;
 INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, tip, status_procesare, eroare, relevanta_verificata_la) VALUES
   (1,  'PT.zip', 'alta', 'ignorat', 'non-PDF - ramane ca fisier (docx/xls/dwg se parseaza in M2)', NULL),           -- vechi, nedespachetat → blocaj
   (2,  'Raspuns.rar', 'alta', 'ignorat', '📦 Arhivă despachetată pe Terra: 3 fișiere noi în platformă', NULL),        -- rezolvat
@@ -166,7 +166,10 @@ INSERT INTO public.ofertare_documente_atribuire (licitatie_id, nume_original, ti
   (9,  'In curs.zip', 'alta', 'neprocesat', NULL, NULL),                                                             -- arh (în curs)
   (10, 'Anexa.docx', 'alta', 'ignorat', 'non-PDF', NULL),                                                            -- ign, ca înainte
   (11, 'Placeholder.rar', 'alta', 'ignorat', 'Aparut nou in SEAP, dar nu a putut fi adus automat - urca-l din "Urca fisiere".', NULL), -- arh
-  (12, 'Raspuns (#5)/inner.zip', 'alta', 'eroare', 'Despachetare manuală necesară: arhivă imbricată pe nivelul 3', NULL);           -- arh
+  (12, 'Raspuns (#5)/inner.zip', 'alta', 'eroare', 'Despachetare manuală necesară: arhivă imbricată pe nivelul 3', NULL),           -- arh
+  (13, 'Memoriu.pdf.p7m', 'alta', 'ignorat', 'Desfacerea semnăturii a eșuat (descărcare din Storage): timeout. Pentru reîncercare: status neprocesat, fără notă.', NULL), -- ign
+  (14, 'Oferta.p7m', 'alta', 'ignorat', 'Fișier semnat fără extensia documentului din interior (ex. „X.p7m”): nu se desface automat.', NULL), -- ign
+  (15, 'Vechi.pdf.p7s', 'alta', 'ignorat', 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)', NULL);      -- ign (rând dinainte de var. B)
 UPDATE public.ofertare_documente_atribuire SET fisier_path = licitatie_id || '/atribuire/neincarcat/x' WHERE nume_original = 'Placeholder.rar';
 INSERT INTO public.ofertare_seap_fisiere (licitatie_id, nume_seap, cheie, stare) VALUES (4, 'Liste cantitati (fara valori).zip', 'listecantitatifaravalori.zip', 'ok');
 CREATE SCHEMA supabase_migrations; CREATE TABLE supabase_migrations.schema_migrations (version text PRIMARY KEY, statements text[], name text, created_by text, idempotency_key text, rollback text[]);
@@ -199,6 +202,11 @@ case "$(b 1)" in "1 arhivă(e) nedespachetate"*"PT.zip [ignorat]"*) ok "2. lic 1
 for i in 2 3 4 5 7; do [ "$(b $i)" = - ] || esec "2. lic $i ar trebui fără blocaj: $(b $i)"; done
 ok "2. lic 2–5, 7: despachetată / adusă pe Terra / evidență SEAP ok / bifa omului / semnătură detașată → fără blocaj"
 case "$(b 6)" in "1 document(e) necitite automat"*"Caiet.pdf.p7s"*) ok "2. lic 6: semnătură nedesfăcută → blocaj (necitit, fără bifă)";; *) esec "2. lic 6: $(b 6)";; esac
+for p in "13 Memoriu.pdf.p7m" "14 Oferta.p7m" "15 Vechi.pdf.p7s"; do set -- $p
+  case "$(b $1)" in "1 document(e) necitite automat"*"$2"*) ;; *) esec "2. lic $1: $(b $1)";; esac
+  [ "$(n $1)" = 0/1 ] || esec "2. lic $1: numărat greșit ($(n $1))"
+done
+ok "2. lic 13–15: Storage căzut / .p7m fără extensie / rând vechi non-PDF → blocaj (fail-closed: exclusă doar semnătura detașată)"
 [ "$(n 8)" = 1/0 ] || esec "2. lic 8: arhivă semnată eșuată trebuie numărată o dată, la arhive ($(n 8))"
 for i in 8 9 11 12; do case "$(b $i)" in "1 arhivă(e) nedespachetate"*) ;; *) esec "2. lic $i: $(b $i)";; esac; done
 ok "2. lic 8, 9, 11, 12: semnătură CMS eșuată / în curs / placeholder neadus / manuală → blocaj la arhive (o singură dată)"
