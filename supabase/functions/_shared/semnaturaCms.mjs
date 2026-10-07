@@ -21,6 +21,12 @@ const RE_P7S = /\.p7s$/i
 const RE_ARHIVA_P7M = /\.(zip|rar|7z)\.p7m$/i
 const RE_DOC_P7M = /^(.+)\.([a-z0-9]{1,6})\.p7m$/i
 
+/** Arhivă semnată .p7m („X.rar.p7m”): o desface DOAR workerul NAS (drumul SEAP + bucla de arhive, #644). Edge-ul, veghea
+ *  și api-ul o urcă întreagă, „neprocesat”, cu numele SEAP — altfel „a intrat?” din veghe n-o mai găsește (Jakarinos #7
+ *  pe #649) și „X.rar.p7m” s-ar confunda cu un „X.rar” deja urcat (Copilot NO-GO r2 pe #644).
+ *  @param {string} nume */
+export const eArhivaP7m = (nume) => RE_ARHIVA_P7M.test(String(nume ?? ''))
+
 /** Numele cere desfacerea semnăturii: .p7s (orice), .p7m pe arhivă sau pe un document cu extensie („X.pdf.p7m”).
  *  @param {string} nume */
 export function eSemnat(nume) {
@@ -42,11 +48,35 @@ export function numeDesfacut(nume) {
  *  numele desfăcut („X (semnat).pdf”). Apelantul le trece prin cheia lui (cheieNume) — dedup-ul de dinainte de descărcare
  *  nu-l re-aduce. NU și pentru arhive: „X.rar.p7m” ≠ „X.rar” deja urcat (alt conținut posibil — Copilot NO-GO r2 pe #644);
  *  iar „.p7s” e deja tăiat de cheieNume (echivalența veche, neschimbată).
+ *  Aliasul e acceptat conștient (Jakarinos #3 pe #649): „X (semnat).pdf” e convenția NOASTRĂ pentru conținutul desfăcut al
+ *  lui „X.pdf.p7m” — un rând cu exact acest nume e, prin construcție, același document (urcat de drumurile de import sau de
+ *  un om care a urmat convenția). O dovadă de proveniență pe rând (seap_meta) ar costa o coloană citită pe toate drumurile.
  *  @param {string} nume @returns {string[]} */
 export function numeSeapEchivalente(nume) {
   const n = String(nume ?? '')
   if (RE_P7S.test(n) || RE_ARHIVA_P7M.test(n) || !RE_DOC_P7M.test(n)) return [n]
   return [n, numeDesfacut(n)]
+}
+
+/** Cheia unui RÂND existent din platformă, pentru inventarul „e deja / a intrat”: `cheieNume` a apelantului, dar un rând
+ *  rămas cu semnătura BRUTĂ („X.pdf.p7s” — detașată sau nedesfăcută) își păstrează sufixul: NU e documentul „X.pdf”.
+ *  Altfel o semnătură detașată ținea pe loc documentul real (Copilot conv. 3, NO-GO r1 pe #649). Un rând desfăcut cu
+ *  succes poartă deja numele fără sufix, deci cheia lui rămâne cea veche.
+ *  @param {string} nume @param {(n: string) => string} cheieNume @returns {string} */
+export function cheieRand(nume, cheieNume) {
+  const n = String(nume ?? '')
+  return RE_P7S.test(n) ? `${cheieNume(n)}.p7s` : cheieNume(n)
+}
+
+/** Cheile (în sensul cheieRand) sub care un nume SEAP poate exista deja ca rând: numele desfăcut sau echivalent
+ *  („X.pdf.p7s” → „x.pdf”; „X.pdf.p7m” → și „X (semnat).pdf”) și, pentru .p7s, rândul brut („x.pdf.p7s”). Un nume SEAP
+ *  nesemnat („X.pdf”) NU se potrivește cu un rând brut „X.pdf.p7s”.
+ *  @param {string} numeSeap @param {(n: string) => string} cheieNume @returns {string[]} */
+export function cheiSeap(numeSeap, cheieNume) {
+  const n = String(numeSeap ?? '')
+  const k = numeSeapEchivalente(n).map((x) => (RE_P7S.test(x) ? cheieNume(x) : cheieRand(x, cheieNume)))
+  if (RE_P7S.test(n)) k.push(cheieRand(n, cheieNume))
+  return [...new Set(k)]
 }
 
 function antet(b, p) {
@@ -99,6 +129,8 @@ function octeti(b, p, acc, adancime = 0) {
     acc.push(b.subarray(p + h.hl, p + h.hl + h.len))
     return
   }
+  // doar OCTET STRING „constructed” (0x24) se lipește din bucăți; orice altă structură = container malformat (Jakarinos #4)
+  if (h.tag !== 0x24) throw new Error('CMS: conținut construit care nu e OCTET STRING')
   for (const c of copii(b, p)) octeti(b, c, acc, adancime + 1)
 }
 
@@ -114,18 +146,21 @@ function eOid(b, p, oid) {
  *  @param {Uint8Array} b @returns {Uint8Array} */
 export function continutCms(b) {
   if (!b || b.length < 4 || b[0] !== 0x30) throw new Error('CMS: nu e o structură DER (SEQUENCE)')
+  // cardinalitatea fiecărui ambalaj e verificată: un container ostil cu DOUĂ conținuturi nu trece drept „desfăcut” cu primul
+  // (Jakarinos #4 pe #649); un ambalaj [0] prezent dar gol e o eroare, nu o semnătură detașată
   const ci = copii(b, 0)
-  if (ci.length < 2 || !eOid(b, ci[0], OID_SIGNED_DATA)) throw new Error('CMS: nu e SignedData')
-  const sd = copii(b, ci[1])[0]
-  if (sd === undefined) throw new Error('CMS: SignedData lipsă')
-  const sdc = copii(b, sd)
-  if (sdc.length < 3) throw new Error('CMS: SignedData incomplet')
+  if (ci.length !== 2 || !eOid(b, ci[0], OID_SIGNED_DATA) || antet(b, ci[1]).tag !== 0xa0) throw new Error('CMS: nu e SignedData')
+  const sdW = copii(b, ci[1])
+  if (sdW.length !== 1 || antet(b, sdW[0]).tag !== 0x30) throw new Error('CMS: SignedData lipsă sau multiplu')
+  const sdc = copii(b, sdW[0])
+  if (sdc.length < 3 || antet(b, sdc[2]).tag !== 0x30) throw new Error('CMS: SignedData incomplet')
   const eci = copii(b, sdc[2])
-  if (eci.length < 2) throw new Error('semnătură detașată (fără conținut)')
-  const interior = copii(b, eci[1])[0]
-  if (interior === undefined) throw new Error('semnătură detașată (fără conținut)')
+  if (eci.length === 1) throw new Error('semnătură detașată (fără conținut)')
+  if (eci.length !== 2 || antet(b, eci[0]).tag !== 0x06 || antet(b, eci[1]).tag !== 0xa0) throw new Error('CMS: encapContentInfo malformat')
+  const interior = copii(b, eci[1])
+  if (interior.length !== 1) throw new Error(interior.length ? 'CMS: mai multe conținuturi în același ambalaj' : 'CMS: ambalajul conținutului e gol')
   const acc = []
-  octeti(b, interior, acc)
+  octeti(b, interior[0], acc)
   const tot = acc.reduce((s, x) => s + x.length, 0)
   if (!tot) throw new Error('CMS: conținut gol')
   const out = new Uint8Array(tot)
@@ -174,4 +209,12 @@ export function desface(buf, nume) {
     }
     return { stare: 'esuat', buf, nume: n, motiv, nota: `${NOTA_DESFACERE_ESUATA} (${motiv}): fișierul a rămas ca atare, cu semnătura. Descarcă-l și deschide-l manual (ex. cu aplicația de semnătură), apoi bifează-l.` }
   }
+}
+
+/** desface(), dar o ARHIVĂ .p7m rămâne întreagă, cu numele SEAP („X.rar.p7m”) — o desface workerul NAS (vezi eArhivaP7m).
+ *  Pentru edge-ul de import, veghe și /api/seap-import.
+ *  @param {Uint8Array} buf @param {string} nume */
+export function desfaceFaraArhiveP7m(buf, nume) {
+  const n = String(nume ?? '')
+  return eArhivaP7m(n) ? { stare: 'nesemnat', buf, nume: n, motiv: null, nota: null } : desface(buf, n)
 }

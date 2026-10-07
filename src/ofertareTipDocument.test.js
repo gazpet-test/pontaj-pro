@@ -285,6 +285,13 @@ describe('.p7m: arhivele (var. A, #644) + documentele „X (semnat).ext” (var.
     expect(readFileSync(new URL('../api/seap-import.js', import.meta.url), 'utf8')).toMatch(/from '\.\/_semnaturaCms\.js'/)
     expect(readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')).toMatch(/from '\.\.\/\.\.\/supabase\/functions\/_shared\/semnaturaCms\.mjs'/)
   })
+  it('inventarul rândurilor existente folosește cheieRand pe TOATE drumurile (rândul brut „X.pdf.p7s” ≠ „X.pdf”, Copilot NO-GO r1 pe #649)', () => {
+    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts', '../api/seap-import.js', '../worker/ofertare/seap.ts']) {
+      const src = readFileSync(new URL(f, import.meta.url), 'utf8')
+      expect(src, f).not.toMatch(/(urcate|placeholders|cunoscute|urcateAcum|toateCunoscute|numeCunoscute)[^\n]*\.map\(\(?d[^)]*\)? => \[?cheieNume\(d\.nume_original\)/)
+      expect(src, f).toMatch(/cheieRand\(d\.nume_original\)/)
+    }
+  })
   it('veghea, canalul de clarificări: fișierul adus intră „neprocesat”, fără notă → „….rar.p7m” ajunge la bucla workerului (Copilot r3 pe #644); DOAR un document nedesfăcut intră „ignorat” cu nota (#20)', () => {
     const veghe = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
     const ins = veghe.match(/\.insert\(\{\s*licitatie_id: lic\.id, fisier_path: path,[\s\S]*?\}\);/)

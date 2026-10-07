@@ -44,6 +44,7 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
       not(c: string, o: string, v: unknown) {   // semantica SQL: NULL nu trece niciun NOT
         if (o === 'is' && v === null) filtre.push(r => r[c] != null)
         else if (o === 'like') { const re = new RegExp('^' + String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$'); filtre.push(r => r[c] != null && !re.test(r[c])) }
+        else if (o === 'ilike') { const re = reLike(String(v)); filtre.push(r => r[c] != null && !re.test(r[c])) }
         else throw new Error(`fake: not ${o} neimplementat`)
         return b
       },
@@ -964,5 +965,80 @@ Deno.test('#20 drumul SEAP: document semnat care nu se desface → urcat brut, s
       ok(/^Doar semnătura electronică/.test(d.find(x => x.nume_original === 'Doar semnatura.pdf.p7m')!.eroare), 'nota detașat')
       eq(tab.ofertare_seap_fisiere.map(e => e.stare), ['ok', 'ok'], 'evidența: adus, nu eroare de reîncercat la nesfârșit')
     } finally { restore(); await opreste() }
+  })
+})
+
+Deno.test('Copilot NO-GO r1 pe #649: un rând brut „Caiet.pdf.p7s” (semnătură detașată) NU ține pe loc documentul real „Caiet.pdf”', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const real = '%PDF-1.4 caietul real'
+    const restore = cuSeap({ 'Caiet.pdf': new TextEncoder().encode(real) })
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [
+        { id: 70, licitatie_id: 3, nume_original: 'Caiet.pdf.p7s', fisier_path: '3/c.p7s', status_procesare: 'ignorat', tip: 'alta', eroare: 'Doar semnătura electronică (detașată, fără conținut): documentul semnat e alt fișier. Rămâne ca fișier.' },
+        { id: 71, licitatie_id: 3, nume_original: 'Caiet.pdf', fisier_path: '3/atribuire/neincarcat/Caiet.pdf', status_procesare: 'ignorat', tip: 'alta', eroare: 'Aparut nou in SEAP...' },
+      ] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([rap.erori, rap.deja, rap.fisiere_urcate], [[], 0, 1])
+      const d = tab.ofertare_documente_atribuire.find(x => x.id === 71)!
+      eq([d.nume_original, d.size_bytes, d.status_procesare], ['Caiet.pdf', real.length, 'neprocesat'], 'placeholder-ul documentului real completat')
+    } finally { restore(); await opreste() }
+  })
+})
+
+Deno.test('Copilot NO-GO r1 pe #649: în aceeași rulare „X.pdf.p7s” detașat + „X.pdf” real → ambele urcate; semnătura nu ia placeholder-ul documentului', async () => {
+  for (const ordine of ['p7s,pdf', 'pdf,p7s']) {
+    await cuMediu(async (root, s) => {
+      const opreste = pornesteExtractor(root)
+      const real = '%PDF-1.4 real'
+      const det = await semneazaCms(new TextEncoder().encode(real), true)
+      const docs: Record<string, Uint8Array> = ordine === 'p7s,pdf' ? { 'X.pdf.p7s': det, 'X.pdf': new TextEncoder().encode(real) } : { 'X.pdf': new TextEncoder().encode(real), 'X.pdf.p7s': det }
+      const restore = cuSeap(docs)
+      try {
+        const tab = licSeap({ ofertare_documente_atribuire: [
+          { id: 80, licitatie_id: 3, nume_original: 'X.pdf', fisier_path: '3/atribuire/neincarcat/X.pdf', status_procesare: 'ignorat', tip: 'alta', eroare: 'Aparut nou in SEAP...' },
+        ] })
+        const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+        eq(rap.erori, [], ordine)
+        eq(tab.ofertare_documente_atribuire.map(x => [x.id === 80 ? 'ph' : 'nou', x.nume_original, x.status_procesare]).sort(),
+          [['nou', 'X.pdf.p7s', 'ignorat'], ['ph', 'X.pdf', 'neprocesat']], ordine)
+        ok(s.cheiSeap('X.pdf').every((k: string) => k !== s.cheieRand('X.pdf.p7s')), 'cheile nu se ating')
+      } finally { restore(); await opreste() }
+    })
+  }
+})
+
+Deno.test('Jakarinos #2 pe #649: bucla de platformă — „Anexa.pdf” și „Anexa.pdf.p7s” cu conținut diferit în aceeași arhivă → ambele urcate', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/a.zip', await zipCu({ 'Anexa.pdf': '%PDF-1.4 nesemnata', 'Anexa.pdf.p7s': await semneazaCms(new TextEncoder().encode('%PDF-1.4 semnata, alt continut')) })]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+        { id: 95, licitatie_id: 3, nume_original: 'R.zip', fisier_path: '3/a.zip', status_procesare: 'neprocesat', eroare: null, tip: 'alta' },
+      ], ofertare_seap_fisiere: [], ofertare_seap_manifest: [], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const d = tab.ofertare_documente_atribuire
+      ok(/^📦 Arhivă despachetată pe Terra: 2 fișiere noi/.test(d.find(x => x.id === 95)!.eroare), d.find(x => x.id === 95)!.eroare)
+      const copii = d.filter(x => x.id !== 95).map(x => x.nume_original).sort()
+      eq(copii.length, 2, JSON.stringify(copii))
+      ok(copii.includes('R (#95)/Anexa.pdf') && copii.some(n => /^R \(#95\)\/[0-9a-f]{8}_Anexa\.pdf$/.test(n)), JSON.stringify(copii))
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('Jakarinos #5 pe #649: bucla de documente semnate nu e ținută pe loc de arhive .p7m sau de „X.p7m” fără extensie', async () => {
+  await cuMediu(async (_root, s) => {
+    const fisiere = new Map<string, Uint8Array>([['3/c.p7m', await semneazaCms(new TextEncoder().encode('%PDF-1.4 c'))]])
+    const arhive = Array.from({ length: 25 }, (_, i) => ({ id: 100 + i, licitatie_id: 3, nume_original: `A${i}.rar.p7m`, fisier_path: `3/a${i}`, status_procesare: 'neprocesat', eroare: null }))
+    const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+      ...arhive,
+      { id: 200, licitatie_id: 3, nume_original: 'Fara extensie.p7m', fisier_path: '3/x', status_procesare: 'neprocesat', eroare: null },
+      { id: 201, licitatie_id: 3, nume_original: 'Caiet.pdf.p7m', fisier_path: '3/c.p7m', status_procesare: 'neprocesat', eroare: null, seap_meta: null },
+    ] }
+    await s.desfaSemnateDinPlatforma(fakeSupa(tab, fisiere), () => {})
+    const d = (id: number) => tab.ofertare_documente_atribuire.find(x => x.id === id)!
+    eq(d(201).nume_original, 'Caiet (semnat).pdf')
+    eq([d(200).status_procesare, d(200).eroare], ['ignorat', s.NOTA_FARA_EXTENSIE])
+    ok(arhive.every(a => d(a.id).status_procesare === 'neprocesat' && d(a.id).eroare === null), 'arhivele rămân buclei de arhive')
   })
 })

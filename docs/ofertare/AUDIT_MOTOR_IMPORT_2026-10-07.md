@@ -45,6 +45,9 @@
 - placeholder-ul veghei pus pe numele SEAP se completează cu numele desfăcut;
 - worker: bucla nouă „documente semnate din platformă” desface PE LOC (același id) orice `X.pdf.p7m` / `X.docx.p7s` „neprocesat” fără notă; originalul semnat rămâne în Storage, legat în `seap_meta.semnat` (curățenia orfanilor îl păstrează);
 - UI „Urcă fișiere”: un document semnat intră „neprocesat”, fără notă → îl desface workerul.
+- Inventarul rândurilor existente folosește `cheieRand`: un rând rămas cu semnătura brută (`X.pdf.p7s` detașată / nedesfăcută) NU e `X.pdf` (Copilot NO-GO r1 pe #649).
+- Arhivele `.p7m` rămân întregi pe edge / veghe / api (`desfaceFaraArhiveP7m`); le desface doar workerul, ca la #644 (Jakarinos #7 pe #649).
+- Review Jakarinos pe #649: #1 (poarta) se închide cu migrarea 20261020a (#11); #2, #4, #5, #7 reparate în #649; #3 (aliasul „(semnat)”) acceptat conștient; #6, #8 (P2: recuperarea revendicărilor blocate, token de revendicare) — ulterior.
 
 **Repararea celor 9 (preview, așteaptă OK-ul lui Răzvan):** 7 au fișier (319–324, 327) → `status_procesare='neprocesat', eroare=NULL` → bucla nouă le desface pe loc. 359 și 360 sunt placeholder-e (fișierul n-a fost adus niciodată) → „Adu din SEAP” pe lic. 92 (worker) le aduce și le completează. Lic. 92 are termenul trecut (05.10), deci nimic automat nu le atinge fără OK.
 

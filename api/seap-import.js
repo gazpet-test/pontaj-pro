@@ -20,7 +20,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { poartaOfertare } from './_poartaOfertare.js'
 import { inflateRawSync } from 'node:zlib'
-import { desface, numeSeapEchivalente } from './_semnaturaCms.js'
+// arhiva .p7m („X.rar.p7m”) ramane intreaga, cu numele SEAP: o desface workerul NAS (#644; Jakarinos #7 pe #649)
+import { desfaceFaraArhiveP7m as desface, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from './_semnaturaCms.js'
 import { randManifest, sha256Hex, dedupManifest, MANIFEST_CONFLICT, ARHIVA_SEAP } from './_manifest.js'
 import { ghicesteTip, esteArhiva } from './_tipDocument.js'
 
@@ -40,6 +41,8 @@ const estePlaceholder = (d) => !d.fisier_path || String(d.fisier_path).includes(
 // placeholder-ul ramanea „neincarcat” desi fisierul era in platforma. Cheia e doar pentru comparatie; in BD merge numele real.
 const cheieNume = (n) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
   .replace(/[,()]/g, '').replace(/\s+/g, '')
+// randul ramas cu semnatura bruta („X.pdf.p7s” detasata / nedesfacuta) nu e „X.pdf” (Copilot NO-GO r1 pe #649)
+const cheieRand = (n) => cheieRandCu(String(n ?? ''), cheieNume)
 
 // Tipul după nume și detectarea arhivelor: api/_tipDocument.js = copia byte cu byte a
 // supabase/functions/_shared/tipDocument.mjs (src/tipDocument.test.js le ține identice).
@@ -143,15 +146,15 @@ export default async function handler(req, res) {
   const raport = { adaugate: 0, completate: 0, sarite_existente: 0, erori: [], intrari: 0, manifest_randuri: 0, avertismente: [] }
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId)
-  const urcate = new Set((dejaAre || []).filter((d) => !estePlaceholder(d)).map((d) => cheieNume(d.nume_original)))
-  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d) => [cheieNume(d.nume_original), d.id]))
+  const urcate = new Set((dejaAre || []).filter((d) => !estePlaceholder(d)).map((d) => cheieRand(d.nume_original)))
+  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d) => [cheieRand(d.nume_original), d.id]))
   // var. B: „X.pdf.p7m” poate fi in platforma brut (inainte de B) sau desfacut ca „X (semnat).pdf” — niciunul nu se re-urca
-  const dejaUrcat = (numeSeap) => numeSeapEchivalente(numeSeap).some((n) => urcate.has(cheieNume(n)))
+  const dejaUrcat = (numeSeap) => cheiSeapCu(numeSeap, cheieNume).some((k) => urcate.has(k))
 
   // placeholder-ul se completeaza O SINGURA DATA, doar daca e inca placeholder (ca ofertare-seap-import/placeholder.ts, audit #2);
   // „X (semnat).pdf” completeaza placeholder-ul pus pe numele SEAP („X.pdf.p7m”)
   const scrie = async (rand, nume, numeSeap = null) => {
-    const k = placeholders.has(cheieNume(nume)) || !numeSeap ? cheieNume(nume) : cheieNume(numeSeap)
+    const k = placeholders.has(cheieRand(nume)) || !numeSeap ? cheieRand(nume) : cheieRand(numeSeap)
     const idPh = placeholders.get(k)
     if (idPh) {
       placeholders.delete(k)
@@ -250,7 +253,7 @@ export default async function handler(req, res) {
           sursa: 'seap',
         }, numeFinal, nume)
         noteazaManifest(numeFinal, buf, docId, docId ? null : 'rand BD nescris')
-        urcate.add(cheieNume(numeFinal))
+        urcate.add(cheieRand(numeFinal))
       } catch (e) {
         raport.erori.push(`${numeCurat}: ${String(e?.message || e)}`)
       }

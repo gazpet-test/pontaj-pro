@@ -168,3 +168,37 @@ describe('api/seap-import: aceeași cheie de nume ca celelalte drumuri (audit #1
     expect(res.body.sarite_existente).toBe(1)
   })
 })
+
+describe('api/seap-import: semnătura detașată nu ține pe loc documentul real (Copilot NO-GO r1 pe #649)', () => {
+  // semnătură detașată sintetică: SignedData fără eContent
+  function detasatSintetic() {
+    const der = (tag, ...parti) => { const corp = Buffer.concat(parti); return Buffer.concat([Buffer.from([tag, corp.length]), corp]) }
+    const oid = (h) => der(0x06, Buffer.from(h, 'hex'))
+    const sd = der(0x30, der(0x02, Buffer.from([1])), der(0x31), der(0x30, oid('2a864886f70d010701')), der(0x31))
+    return der(0x30, oid('2a864886f70d010702'), der(0xa0, sd))
+  }
+  it('în aceeași arhivă: „Caiet.pdf.p7s” detașat ÎNAINTEA lui „Caiet.pdf” → ambele urcate (semnătura brută, ignorat cu nota)', async () => {
+    const randuri = []
+    mocks.createClient.mockReturnValue(fakeSupa(randuri))
+    mocks.fetch.mockResolvedValue(new Response(zipStored({ 'Caiet.pdf.p7s': detasatSintetic(), 'Caiet.pdf': '%PDF-1.4 real' })))
+    const res = response()
+    await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
+    const pe = Object.fromEntries(randuri.map((r) => [r.nume_original, [r.status_procesare, String(r.eroare || '').slice(0, 28)]]))
+    expect(Object.keys(pe).sort()).toEqual(['Caiet.pdf', 'Caiet.pdf.p7s'])
+    expect(pe['Caiet.pdf']).toEqual(['neprocesat', ''])
+    expect(pe['Caiet.pdf.p7s'][0]).toBe('ignorat')
+    expect(pe['Caiet.pdf.p7s'][1]).toBe('Doar semnătura electronică (')
+  })
+})
+
+describe('api/seap-import: arhiva .p7m rămâne întreagă (Jakarinos #7 pe #649)', () => {
+  it('„Raspuns.zip.p7m” cu CMS valid → urcat întreg, sub numele SEAP, neprocesat fără notă (îl desface workerul)', async () => {
+    const randuri = []
+    mocks.createClient.mockReturnValue(fakeSupa(randuri))
+    const cms = cmsSintetic('PK\u0003\u0004 zip')
+    mocks.fetch.mockResolvedValue(new Response(zipStored({ 'Raspuns.zip.p7m': cms })))
+    const res = response()
+    await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
+    expect(randuri.map((r) => [r.nume_original, r.status_procesare, r.eroare, r.size_bytes])).toEqual([['Raspuns.zip.p7m', 'neprocesat', null, cms.length]])
+  })
+})

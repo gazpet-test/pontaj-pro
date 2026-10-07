@@ -68,7 +68,7 @@
 // corecta e 'Comercial'. Cu 'ofertare' insertul pica silentios.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { termenRO } from '../_shared/oraRO.ts'
-import { desface, numeDesfacut, numeSeapEchivalente } from '../_shared/semnaturaCms.mjs'
+import { desfaceFaraArhiveP7m as desface, eArhivaP7m, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../_shared/semnaturaCms.mjs'
 import { esteArhiva } from '../_shared/tipDocument.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
@@ -143,7 +143,13 @@ const esc = (s: string) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&am
 // -- Desfacerea semnaturii electronice: ../_shared/semnaturaCms.mjs ---------------
 // Un document SEAP („X.pdf.p7m”) poate sta in platforma sub numele SEAP (brut, inainte de var. B) sau desfacut
 // („X (semnat).pdf”): orice comparatie „e deja / a intrat” se face pe AMBELE nume, altfel veghea pune placeholder-e fantoma.
-const areNume = (chei: Set<string>, numeSeap: string) => numeSeapEchivalente(numeSeap).some((x) => chei.has(cheieNume(x)));
+// Randurile se cheiaza cu cheieRand: unul ramas cu semnatura BRUTA („X.pdf.p7s” detasata / nedesfacuta) nu e „X.pdf”
+// (Copilot NO-GO r1 pe #649); numele SEAP se cauta pe toate cheile lui (cheiSeap). Numele SEAP pastreaza aici sufixul .p7s.
+const cheieRand = (n: unknown) => cheieRandCu(String(n ?? ''), cheieNume);
+const cheiSeap = (n: unknown) => cheiSeapCu(String(n ?? ''), cheieNume) as string[];
+const areNume = (chei: Set<string> | Map<string, unknown>, numeSeap: string) => cheiSeap(numeSeap).some((k) => chei.has(k));
+// afisare / placeholder: fara .p7s (ca pana acum); „.p7m” ramane — e chiar numele fisierului din SEAP
+const afis = (n: string) => String(n ?? '').replace(/\.p7s$/i, '');
 
 const arePdf = (b: Uint8Array) => b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
 const faraDiacritice = (s: string) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -259,23 +265,24 @@ Deno.serve(async (req: Request) => {
       (aveamDeja || []).map((d: any) => d?.seap_cod).filter(Boolean).map(String),
     );
     const numeCunoscute = new Map<string, any>(
-      (aveamDeja || []).map((d: any) => [cheieNume(d.nume_original), d]),
+      (aveamDeja || []).map((d: any) => [cheieRand(d.nume_original), d]),
     );
     const erori: string[] = [];
 
     for (const it of lista) {
       const cod = String(it?.noticeDocumentCode || '');
       const brutNume = String(it?.documentName || it?.noticeDocumentName || '');
-      const fisier = numeDesfacut(brutNume);
+      // arhiva .p7m ramane intreaga, cu numele SEAP: o desface workerul NAS (#644; Jakarinos #7 pe #649)
+      const fisier = eArhivaP7m(brutNume) ? brutNume : numeDesfacut(brutNume);
       const titlu = String(it?.noticeDocumentName || '').trim();
       if (!fisier) continue;
       // idempotent (ruleaza de 2x/zi): codul e cheia. Fara cod, cadem pe vechea regula.
-      if (cod ? coduriCunoscute.has(cod) : numeSeapEchivalente(brutNume).some((x) => numeCunoscute.has(cheieNume(x)))) continue;
+      if (cod ? coduriCunoscute.has(cod) : areNume(numeCunoscute, brutNume)) continue;
       // Republicare: acelasi nume de fisier ca un document pe care deja il avem => e o
       // VERSIUNE NOUA a lui. Se aduce oricum, sub un nume care o deosebeste, si mosteneste
       // tipul documentului inlocuit (un caiet de sarcini revizuit ramane caiet de sarcini,
       // nu devine „raspuns la clarificari" - altfel iese din motorul de acoperire).
-      const inlocuit = numeCunoscute.get(cheieNume(fisier)) ?? numeCunoscute.get(cheieNume(brutNume));
+      const inlocuit = numeCunoscute.get(cheieRand(fisier)) ?? numeCunoscute.get(cheieRand(brutNume));
       let nume = inlocuit && titlu && titlu !== fisier ? `${titlu} — ${fisier}` : fisier;
       const url = String(it?.noticeDocumentUrl || '');
       if (!url) { erori.push(`${nume}: fara noticeDocumentUrl`); continue; }
@@ -315,7 +322,7 @@ Deno.serve(async (req: Request) => {
         });
         if (eIns) { erori.push(`${nume}: insert ${eIns.message}`); continue; }
         if (cod) coduriCunoscute.add(cod);
-        numeCunoscute.set(cheieNume(nume), { nume_original: nume, tip: inlocuit?.tip });
+        numeCunoscute.set(cheieRand(nume), { nume_original: nume, tip: inlocuit?.tip });
         adusi.push(inlocuit ? `${nume} (INLOCUIESTE versiunea veche)` : nume);
       } catch (e) {
         erori.push(`${nume}: ${String((e as Error)?.message || e)}`);
@@ -341,7 +348,7 @@ Deno.serve(async (req: Request) => {
       const d = await r.json();
       for (const cheie of ['dfNoticeDocs', 'duaeDocs', 'decisionDocs', 'contractingStrategyDocs', 'exAnteDocs']) {
         for (const f of (d?.[cheie] || [])) {
-          const n = String(f?.noticeDocumentName || '').replace(/\.p7s$/i, '');   // „.p7m” ramane: areNume cauta si „X (semnat).pdf”
+          const n = String(f?.noticeDocumentName || '');   // numele SEAP brut: areNume cauta desfacut, „X (semnat).pdf” si randul brut
           if (n) laSeap.push(n);
         }
       }
@@ -352,7 +359,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: aveam } = await supa.from('ofertare_documente_atribuire')
       .select('id, nume_original, fisier_path').eq('licitatie_id', lic.id);
-    const cunoscute = new Set((aveam || []).map((d: any) => cheieNume(d.nume_original)));
+    const cunoscute = new Set((aveam || []).map((d: any) => cheieRand(d.nume_original)));
     // `noi` pastreaza numele BRUTE din SEAP (se scriu ca nume_original la placeholdere),
     // dar atat deduplicarea cat si comparatia cu ce avem se fac pe cheie.
     const noi: string[] = [];
@@ -411,7 +418,7 @@ Deno.serve(async (req: Request) => {
     // treapta 2: ce a ramas trece prin Vercel, unde arhiva se parcurge integral
     const { data: dupaEdge } = await supa.from('ofertare_documente_atribuire')
       .select('nume_original, fisier_path').eq('licitatie_id', lic.id);
-    const urcateAcum = new Set((dupaEdge || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
+    const urcateAcum = new Set((dupaEdge || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
     let vercel: string | null = null;
     if (noi.some((n) => !areNume(urcateAcum, n))) {
       if (!IMPORT_SECRET) {
@@ -434,8 +441,8 @@ Deno.serve(async (req: Request) => {
     // Adevarul se citeste din BD: care dintre documentele NOI au acum fisier real
     const { data: acum } = await supa.from('ofertare_documente_atribuire')
       .select('nume_original, fisier_path').eq('licitatie_id', lic.id);
-    const urcate = new Set((acum || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
-    const toateCunoscute = new Set((acum || []).map((d: any) => cheieNume(d.nume_original)));
+    const urcate = new Set((acum || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
+    const toateCunoscute = new Set((acum || []).map((d: any) => cheieRand(d.nume_original)));
     const auIntrat = noi.filter((n) => areNume(urcate, n));
     const ramase = noi.filter((n) => !areNume(urcate, n));
 
@@ -443,9 +450,9 @@ Deno.serve(async (req: Request) => {
     // Filtrarea „ce e nou" e pe cheie, dar interogarea BD cere numele BRUTE asa cum stau in
     // nume_original - deci se iau din randurile din BD, nu din numele normalizate de SEAP.
     let marcate = 0;
-    const cheiNoi = new Set(noi.flatMap((n) => numeSeapEchivalente(n).map(cheieNume)));
+    const cheiNoi = new Set(noi.flatMap((n) => cheiSeap(n)));
     const numeDeMarcat = [...new Set(
-      (acum || []).filter((d: any) => cheiNoi.has(cheieNume(d.nume_original))).map((d: any) => d.nume_original as string),
+      (acum || []).filter((d: any) => cheiNoi.has(cheieRand(d.nume_original))).map((d: any) => d.nume_original as string),
     )];
     if (numeDeMarcat.length) {
       const { data: m, error: eM } = await supa.from('ofertare_documente_atribuire')
@@ -457,11 +464,11 @@ Deno.serve(async (req: Request) => {
 
     for (const n of ramase) {
       if (areNume(toateCunoscute, n)) continue;
-      const safe = n.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
+      const safe = afis(n).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
       await supa.from('ofertare_documente_atribuire').insert({
         licitatie_id: lic.id,
         fisier_path: `${lic.id}/atribuire/neincarcat/${safe}`,
-        nume_original: n, tip: 'alta', status_procesare: 'ignorat', sursa: 'seap', aparut_ulterior: true,
+        nume_original: afis(n), tip: 'alta', status_procesare: 'ignorat', sursa: 'seap', aparut_ulterior: true,
         eroare: 'Aparut nou in SEAP, dar nu a putut fi adus automat - urca-l din "Urca fisiere".',
       });
     }
@@ -470,10 +477,10 @@ Deno.serve(async (req: Request) => {
     const catre = new Set<string>((owners || []).map((o: any) => o.id));
     if (lic.created_by) catre.add(lic.created_by);
     if (lic.responsabil_id) catre.add(lic.responsabil_id);
-    const nume = (l: string[]) => l.slice(0, 4).join(', ') + (l.length > 4 ? ` (+${l.length - 4})` : '');
+    const nume = (l: string[]) => l.slice(0, 4).map(afis).join(', ') + (l.length > 4 ? ` (+${l.length - 4})` : '');
 
     // v2: raspunsurile autoritatii se anunta separat, ca sa nu se piarda printre planse.
-    const cheiRaspunsuriAduse = new Set(raspunsuriAduse.map(cheieNume));
+    const cheiRaspunsuriAduse = new Set(raspunsuriAduse.map(cheieRand));
     const raspunsuri: string[] = [];
     const vazuteR = new Set<string>();
     for (const n of [...noi.filter(esteRaspuns), ...raspunsuriAduse]) {
@@ -545,7 +552,7 @@ Deno.serve(async (req: Request) => {
           <p>Autoritatea a publicat <b>${raspunsuri.length} document(e)</b> care par raspuns la clarificari sau modificare a documentatiei.</p>
           <p><b>Licitatie:</b> ${esc(lic.nr_anunt || '')} — ${esc(lic.obiect || '')}<br>
              <b>Termen depunere:</b> ${termenRO(lic.termen_depunere) || '—'}</p>
-          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(n)}${areNume(urcate, n) ? (/\.(rar|7z|zip)(\.p7[sm])?$/i.test(n) ? ' <i>(arhiva — serverul o despacheteaza singur in cateva minute; fisierele apar ca documente separate, cu numele arhivei in fata)</i>' : '') : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
+          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(afis(n))}${areNume(urcate, n) ? (/\.(rar|7z|zip)(\.p7[sm])?$/i.test(n) ? ' <i>(arhiva — serverul o despacheteaza singur in cateva minute; fisierele apar ca documente separate, cu numele arhivei in fata)</i>' : '') : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
           ${raspunsuriAduse.length ? `<p><b>${raspunsuriAduse.length}</b> dintre ele sunt <b>raspunsuri publicate de autoritate</b>, aduse automat din SEAP. Se citesc din <b>Ofertare &rarr; &#10067; Clarificari</b>.</p>` : ''}
           ${neaduse.length ? '<p><b>Atentie:</b> nu toate au intrat automat in platforma.</p>' : '<p>Toate au fost aduse automat in platforma.</p>'}
           <p>Citeste-le si treci intrebarea si raspunsul in <b>Clarificari</b>. Daca raspunsul schimba o cerinta, actualizeaza cerinta din registru.</p>

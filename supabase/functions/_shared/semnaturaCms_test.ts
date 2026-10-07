@@ -1,7 +1,7 @@
 // deno test -A supabase/functions/_shared/semnaturaCms_test.ts — desfacerea semnăturii (var. B, Răzvan 07.10.2026; audit #8/#20)
 // Containerele reale se generează cu openssl (ca test-fixtures/seap_terra/run.sh); fără openssl, testele lor se sar.
 import { strict as assert } from 'node:assert'
-import { continutCms, desface, eSemnat, numeDesfacut, numeSeapEchivalente, NOTA_DESFACERE_ESUATA, NOTA_SEMNATURA_DETASATA } from './semnaturaCms.mjs'
+import { cheiSeap, cheieRand, continutCms, desface, eSemnat, numeDesfacut, numeSeapEchivalente, NOTA_DESFACERE_ESUATA, NOTA_SEMNATURA_DETASATA } from './semnaturaCms.mjs'
 
 const enc = (s: string) => new TextEncoder().encode(s)
 const eq = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
@@ -85,6 +85,28 @@ Deno.test('CMS sintetic: OCTET STRING „constructed” cu lungimi DEFINITE (buc
   // alt tip de container (nu SignedData) → refuzat, nu „desfăcut” la întâmplare
   const altul = der(0x30, oid([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x03]), der(0xa0, sd))
   assert.throws(() => continutCms(altul), /SignedData/)
+  // Jakarinos #4 pe #649: ambalajul [0] cu DOUĂ conținuturi → refuzat (nu „desfăcut” cu primul); ambalaj gol → eroare, nu „detașat”
+  const cuEci = (eciX: Uint8Array) => der(0x30, oid([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02]),
+    der(0xa0, der(0x30, der(0x02, new Uint8Array([1])), der(0x31), eciX, der(0x31))))
+  const idData = oid([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01])
+  assert.throws(() => continutCms(cuEci(der(0x30, idData, der(0xa0, der(0x04, new Uint8Array([1, 2])), der(0x04, new Uint8Array([3])))))), /mai multe conținuturi/)
+  assert.throws(() => continutCms(cuEci(der(0x30, idData, der(0xa0)))), /ambalajul conținutului e gol/)
+  assert.equal(desface(cuEci(der(0x30, idData, der(0xa0))), 'X.pdf.p7m').stare, 'esuat', 'gol ≠ detașat')
+  assert.equal(desface(cuEci(der(0x30, idData)), 'X.pdf.p7m').stare, 'detasat')
+  // structură construită care nu e OCTET STRING în conținut → refuzat
+  assert.throws(() => continutCms(cuEci(der(0x30, idData, der(0xa0, der(0x30, der(0x04, new Uint8Array([1]))))))), /nu e OCTET STRING/)
+})
+
+Deno.test('Jakarinos #7 pe #649: arhiva .p7m rămâne întreagă pe edge / veghe / api (o desface workerul)', async () => {
+  const { desfaceFaraArhiveP7m, eArhivaP7m } = await import('./semnaturaCms.mjs')
+  const a = await semneaza(enc('PK\u0003\u0004 zip'))
+  if (!a) return
+  assert.ok(eArhivaP7m('X.rar.p7m') && !eArhivaP7m('X.pdf.p7m') && !eArhivaP7m('X.zip.p7s'))
+  const r = desfaceFaraArhiveP7m(a, 'Raspuns.zip.p7m')
+  assert.deepEqual([r.stare, r.nume], ['nesemnat', 'Raspuns.zip.p7m'])
+  assert.ok(eq(r.buf, a))
+  assert.equal(desfaceFaraArhiveP7m(a, 'Raspuns.zip.p7s').nume, 'Raspuns.zip', '.p7s pe arhivă se desface ca înainte')
+  assert.equal(desfaceFaraArhiveP7m(a, 'Caiet.pdf.p7m').stare, 'desfacut')
 })
 
 Deno.test('#20: desfacere eșuată → numele rămâne cu sufixul, conținutul brut, nota explicită (nu PDF fals)', async () => {
@@ -129,4 +151,17 @@ Deno.test('copia din api/ e identică byte cu byte (funcțiile Vercel nu import�
   const sursa = await Deno.readFile(new URL('./semnaturaCms.mjs', import.meta.url))
   const copie = await Deno.readFile(new URL('../../../api/_semnaturaCms.js', import.meta.url))
   assert.ok(eq(sursa, copie))
+})
+
+Deno.test('cheieRand / cheiSeap (Copilot NO-GO r1 pe #649): rândul brut „X.pdf.p7s” (detașat / nedesfăcut) NU e „X.pdf”', () => {
+  const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase().replace(/[,()]/g, '').replace(/\s+/g, '')
+  assert.equal(cheieRand('Caiet.pdf.p7s', cheieNume), 'caiet.pdf.p7s')
+  assert.equal(cheieRand('Caiet.pdf', cheieNume), 'caiet.pdf')
+  assert.equal(cheieRand('Caiet (semnat).pdf', cheieNume), 'caietsemnat.pdf')
+  // un nume SEAP nesemnat nu găsește rândul brut → documentul real se descarcă
+  assert.ok(!cheiSeap('Caiet.pdf', cheieNume).includes(cheieRand('Caiet.pdf.p7s', cheieNume)))
+  // numele SEAP semnat găsește atât rândul desfăcut („Caiet.pdf”), cât și rândul brut (nu se re-descarcă la fiecare rulare)
+  assert.deepEqual(cheiSeap('Caiet.pdf.p7s', cheieNume), ['caiet.pdf', 'caiet.pdf.p7s'])
+  assert.deepEqual(cheiSeap('Caiet.pdf.p7m', cheieNume), ['caiet.pdf.p7m', 'caietsemnat.pdf'])
+  assert.deepEqual(cheiSeap('Raspuns.zip.p7m', cheieNume), ['raspuns.zip.p7m'])
 })

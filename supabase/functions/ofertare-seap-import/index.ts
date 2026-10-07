@@ -56,7 +56,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shared/identitateFisier.mjs';
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
-import { desface, numeDesfacut, numeSeapEchivalente } from '../_shared/semnaturaCms.mjs';
+import { desfaceFaraArhiveP7m as desface, eArhivaP7m, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../_shared/semnaturaCms.mjs';
 import { curataOrfani } from './orfani.ts';
 import { scrieDocument } from './placeholder.ts';
 import { autorizeaza } from './acces.ts';
@@ -109,6 +109,7 @@ async function secretOk(req: Request, db: any): Promise<boolean> {
 // Sursa unica: ../_shared/semnaturaCms.mjs (aceeasi regula in worker, veghe, api). Parcurge STRUCTURA CMS si lipeste
 // bucatile OCTET STRING in ordine (anti-bug 4). Var. B (Razvan 07.10.2026): „X.pdf.p7m” → „X (semnat).pdf”.
 // Audit Jakarinos #20: o desfacere ESUATA nu mai scoate sufixul — CMS-ul brut nu mai intra drept „X.pdf” valid.
+// O ARHIVA .p7m („X.rar.p7m”) ramane intreaga, cu numele SEAP: o desface workerul NAS (#644; Jakarinos #7 pe #649).
 
 // -- Citirea arhivei -------------------------------------------------------------
 class Flux {
@@ -192,8 +193,11 @@ const esteZip = (b: Uint8Array) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4
 // `nume` = numele DUPA desfacerea semnaturii („X.zip.p7s” / „X.zip.p7m” → „X.zip”)
 const eArhivaAdevarata = (nume: string, b: Uint8Array) =>
   esteZip(b) && /\.zip$/i.test(String(nume || ''));
-// numele SEAP („X.pdf.p7m”) sau cel desfacut („X (semnat).pdf”) deja in platforma → nu se re-descarca (var. B)
-const dejaSubUnNume = (urcate: Set<string>, numeSeap: string) => numeSeapEchivalente(numeSeap).some(n => urcate.has(cheieNume(n)));
+// Inventarul randurilor existente: un rand ramas cu semnatura BRUTA („X.pdf.p7s” detasata / nedesfacuta) isi pastreaza
+// sufixul in cheie — nu e documentul „X.pdf” (Copilot NO-GO r1 pe #649). Cautarea dupa un nume SEAP incearca toate cheile
+// lui: desfacut, „X (semnat).pdf” (var. B), randul brut.
+const cheieRand = (n: unknown) => cheieRandCu(String(n ?? ''), cheieNume);
+const dejaSubUnNume = (urcate: Set<string>, numeSeap: string) => cheiSeapCu(numeSeap, cheieNume).some((k: string) => urcate.has(k));
 
 // Parcurgerea unui ZIP din flux, folosita si de arhiva mare si de ZIP-urile dinauntrul
 // fisierelor aduse per document -> garanteaza ACELEASI reguli de denumire (numele intrarii
@@ -275,19 +279,19 @@ Deno.serve(async (req: Request) => {
 
   const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
     .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
-  const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieNume(d.nume_original)));
+  const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
   // fișierele din ZIP-urile desfăcute aici (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643): înainte, o potrivire pe
   // cheieNume sărea în tăcere un fișier cu ALT conținut („Caiet de sarcini.pdf” din Lot1.zip și din Lot2.zip). Acum „deja”
   // doar cu sha256 DOVEDIT de manifest ('urcat') — aceeași regulă ca workerul: _shared/identitateFisier.mjs.
   const { data: manUrcat } = await supa.from('ofertare_seap_manifest')
     .select('document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null);
   const identitate = stareIdentitate((dejaAre || []).filter((d: any) => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume);
-  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieNume(d.nume_original), d.id]));
+  const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieRand(d.nume_original), d.id]));
 
   const scrie = async (rand: any, nume: string, numeSeap: string | null = null) => {
     // placeholder-ul se completează o singură dată, doar dacă e încă placeholder (./placeholder.ts, audit #2);
     // var. B: „X (semnat).pdf” completează placeholder-ul veghei pus pe numele SEAP („X.pdf.p7m”)
-    const cheie = placeholders.has(cheieNume(nume)) || !numeSeap ? cheieNume(nume) : cheieNume(numeSeap);
+    const cheie = placeholders.has(cheieRand(nume)) || !numeSeap ? cheieRand(nume) : cheieRand(numeSeap);
     const r = await scrieDocument(supa, rand, cheie, placeholders);
     if (r.eroare) { raport.erori.push(`${nume}: scriere rand - ${r.eroare}`); return null; }
     if (r.completat) raport.completate++; else raport.adaugate++;
@@ -353,7 +357,7 @@ Deno.serve(async (req: Request) => {
       sursa: 'seap',
     }, numeFinal, numeSeap);
     await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, docId, docId ? null : 'rand BD nescris');
-    urcate.add(cheieNume(numeFinal));
+    urcate.add(cheieRand(numeFinal));
     if (docId) adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
     urcatiOcteti += buf.length;
     return true;
@@ -396,7 +400,7 @@ Deno.serve(async (req: Request) => {
     let i = 0;
     for (const doc of documente) {
       if (i < deLaIndex) { i++; continue; }
-      const numeCurat = numeDesfacut(doc.nume);
+      const numeCurat = eArhivaP7m(doc.nume) ? doc.nume : numeDesfacut(doc.nume);
       if (dejaSubUnNume(urcate, doc.nume) || JUNK_RE.test(doc.nume)) {
         if (dejaSubUnNume(urcate, doc.nume)) raport.sarite_existente++;
         i++;
@@ -424,7 +428,7 @@ Deno.serve(async (req: Request) => {
           const ok = await parcurgeZip(
             fluxDinBuf(buf),
             (h) => {
-              const nc = numeDesfacut(h.nume);
+              const nc = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
               if (JUNK_RE.test(h.nume)) return false;
               // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
               if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
@@ -478,7 +482,7 @@ Deno.serve(async (req: Request) => {
         const intreg = await parcurgeZip(
           flux,
           (h) => {
-            const numeCurat = numeDesfacut(h.nume);
+            const numeCurat = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
             const preaMare = h.usize > PRAG_MARE;
             const sarim = iArh < deLaIndexArhiva || dejaSubUnNume(urcate, h.nume) || JUNK_RE.test(h.nume) || preaMare;
             if (sarim) {
