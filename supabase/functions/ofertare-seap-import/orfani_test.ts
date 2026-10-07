@@ -8,10 +8,13 @@ const proaspat = new Date(ACUM - 30_000).toISOString()
 
 type Opt = { obiecte: Record<string, unknown>[]; randuri: string[]; eroareSelect?: number; eroareLista?: boolean; fararDate?: boolean }
 function fake(o: Opt) {
-  const sterse: string[][] = [], pagini: [number, number][] = []
+  const sterse: string[][] = [], pagini: [number, number][] = [], liste: [number, number][] = []
   const supa = {
     storage: { from: () => ({
-      list: async () => o.eroareLista ? { data: null, error: { message: 'lista' } } : { data: o.obiecte, error: null },
+      list: async (_p: string, opt: { limit: number; offset?: number }) => {
+        liste.push([opt.offset ?? 0, opt.limit])
+        return o.eroareLista ? { data: null, error: { message: 'lista' } } : { data: o.obiecte.slice(opt.offset ?? 0, (opt.offset ?? 0) + opt.limit), error: null }
+      },
       remove: async (c: string[]) => { sterse.push(c); return { error: null } },
     }) },
     from: (t: string) => {
@@ -27,7 +30,7 @@ function fake(o: Opt) {
       return b
     },
   }
-  return { supa, sterse, pagini }
+  return { supa, sterse, pagini, liste }
 }
 const ob = (name: string, created_at: string = vechi) => ({ name, id: `id-${name}`, created_at })
 
@@ -63,4 +66,13 @@ Deno.test('orfani: listarea Storage eșuează → nimic', async () => {
   const f = fake({ obiecte: [ob('x.pdf')], randuri: [], eroareLista: true })
   assert.deepEqual(await curataOrfani(f.supa, 7, ACUM), [])
   assert.deepEqual(f.pagini, [])
+})
+
+Deno.test('orfani (Copilot P2 r1 pe #646): Storage listat pe pagini; „atins recent” = cea mai recentă dintre created_at și updated_at', async () => {
+  const multe = Array.from({ length: 1200 }, (_, i) => ob(`f${i}.pdf`))
+  const f = fake({ obiecte: multe, randuri: multe.slice(0, 1199).map(o => `7/atribuire/${o.name}`) })
+  assert.deepEqual(await curataOrfani(f.supa, 7, ACUM), ['7/atribuire/f1199.pdf'], 'orfanul de pe a doua pagină Storage e găsit')
+  assert.deepEqual(f.liste, [[0, 1000], [1000, 1000]])
+  const g = fake({ obiecte: [{ name: 'modificat.pdf', id: 'm', created_at: vechi, updated_at: proaspat }, ob('vechi.pdf')], randuri: [] })
+  assert.deepEqual(await curataOrfani(g.supa, 7, ACUM), ['7/atribuire/vechi.pdf'], 'creat demult dar modificat acum = nu se șterge')
 })

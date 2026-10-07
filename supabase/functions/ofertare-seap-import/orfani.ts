@@ -7,16 +7,25 @@
 //   - orice eroare (listare, SELECT, pagină) = nu se șterge nimic;
 //   - inventarul din BD se citește pe pagini (plafonul de rânduri al PostgREST nu mai trunchiază tăcut lista);
 //   - se șterg doar obiectele mai vechi de VARSTA_MINIMA_ORFAN_MS (un upload în curs nu e niciodată „orfan”);
-//   - un obiect fără dată citibilă nu se șterge.
+//   - un obiect fără dată citibilă nu se șterge; contează data cea MAI RECENTĂ dintre created_at și updated_at;
+//   - listarea Storage e paginată (offset), plafonată la PAGINI_STORAGE × 1000 obiecte pe rulare (Copilot P2 r1 pe #646).
 export const VARSTA_MINIMA_ORFAN_MS = 60 * 60_000
 const PAGINA = 1000
+const PAGINI_STORAGE = 20
 
 // deno-lint-ignore no-explicit-any
 export async function curataOrfani(supa: any, licitatieId: number, acum: number = Date.now()): Promise<string[]> {
   try {
     const prefix = `${licitatieId}/atribuire`
-    const { data: obiecte, error: eLista } = await supa.storage.from('ofertare').list(prefix, { limit: 1000 })
-    if (eLista || !Array.isArray(obiecte) || !obiecte.length) return []
+    // deno-lint-ignore no-explicit-any
+    const obiecte: any[] = []
+    for (let p = 0; p < PAGINI_STORAGE; p++) {
+      const { data: lot, error: eLista } = await supa.storage.from('ofertare').list(prefix, { limit: PAGINA, offset: p * PAGINA })
+      if (eLista || !Array.isArray(lot)) return []
+      obiecte.push(...lot)
+      if (lot.length < PAGINA) break
+    }
+    if (!obiecte.length) return []
     const folosite = new Set<string>()
     for (let de = 0; ; de += PAGINA) {
       const { data: randuri, error } = await supa.from('ofertare_documente_atribuire')
@@ -29,8 +38,8 @@ export async function curataOrfani(supa: any, licitatieId: number, acum: number 
     const orfani = obiecte
       .filter((o: { name?: string; id?: string | null }) => o?.name && o?.id)   // id null = subfolder, nu fișier
       .filter((o: { created_at?: string; updated_at?: string }) => {
-        const t = Date.parse(o.created_at ?? o.updated_at ?? '')
-        return Number.isFinite(t) && t < prag
+        const t = [o.created_at, o.updated_at].map(x => Date.parse(x ?? '')).filter(Number.isFinite)
+        return t.length > 0 && Math.max(...t) < prag   // atins recent (creat SAU modificat) = nu e orfan
       })
       .map((o: { name: string }) => `${prefix}/${o.name}`)
       .filter((cale: string) => !folosite.has(cale))

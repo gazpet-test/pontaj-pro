@@ -366,6 +366,10 @@ Deno.test('arhive: arhivă de prim nivel urcată întreagă de edge / api — de
           { id: 72, licitatie_id: 3, nume_original: 'Par.zip', fisier_path: '3/par.zip', status_procesare: 'neprocesat', eroare: null },
           { id: 74, licitatie_id: 3, nume_original: 'Ev.zip', fisier_path: '3/ev.zip', status_procesare: 'neprocesat', eroare: null },
           { id: 73, licitatie_id: 3, nume_original: 'PT/Memoriu.pdf', fisier_path: '3/m.pdf', status_procesare: 'procesat', eroare: null },
+          // documentele dovedite de manifest există în platformă (fără ele, dovada nu mai sare nimic — Copilot r1 pe #646)
+          { id: 900, licitatie_id: 3, nume_original: 'DOC/F3.pdf', fisier_path: '3/f3.pdf', status_procesare: 'procesat', eroare: null },
+          { id: 901, licitatie_id: 3, nume_original: 'A.pdf', fisier_path: '3/a.pdf', status_procesare: 'procesat', eroare: null },
+          { id: 902, licitatie_id: 3, nume_original: 'X.pdf', fisier_path: '3/x.pdf', status_procesare: 'procesat', eroare: null },
         ],
         ofertare_seap_fisiere: [{ licitatie_id: 3, cheie: 'pt.rar', stare: 'ok', fisiere_extrase: 1, sha256: await shaOcteti(pt) }, { licitatie_id: 3, cheie: 'ev.zip', stare: 'eroare', fisiere_extrase: 1 }],
         ofertare_seap_manifest: [   // dovezi 'urcat' (sha-ul fișierului chiar urcat sub document_id) — #5: doar ele sar un fișier
@@ -724,7 +728,10 @@ Deno.test('arhive #5: un rând de manifest fără dovadă (deja_in_platforma vec
     try {
       const fisiere = new Map<string, Uint8Array>([['3/m.zip', await zipCu({ 'A.pdf': '%PDF-1.4 a', 'B.pdf': '%PDF-1.4 b nou', 'C.pdf': '%PDF-1.4 c' })]])
       const tab: Record<string, Rand[]> = {
-        ofertare_documente_atribuire: [{ id: 81, licitatie_id: 3, nume_original: 'M.zip', fisier_path: '3/m.zip', status_procesare: 'neprocesat', eroare: null }],
+        ofertare_documente_atribuire: [
+          { id: 81, licitatie_id: 3, nume_original: 'M.zip', fisier_path: '3/m.zip', status_procesare: 'neprocesat', eroare: null },
+          { id: 910, licitatie_id: 3, nume_original: 'A.pdf', fisier_path: '3/a910.pdf', status_procesare: 'procesat', eroare: null },
+        ],
         ofertare_seap_manifest: [
           { licitatie_id: 3, arhiva_cheie: 'm.zip', cale: 'A.pdf', document_id: 910, stare: 'urcat', sha256: await shaHex('%PDF-1.4 a') },              // dovedit, același → sărit
           { licitatie_id: 3, arhiva_cheie: 'm.zip', cale: 'B.pdf', document_id: 911, stare: 'urcat', sha256: await shaHex('%PDF-1.4 b vechi') },        // dovedit, ALT conținut → urcat
@@ -734,7 +741,7 @@ Deno.test('arhive #5: un rând de manifest fără dovadă (deja_in_platforma vec
       }
       await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
       const d = tab.ofertare_documente_atribuire
-      eq(d.filter(x => x.id !== 81).map(x => x.nume_original).sort(), ['M (#81)/B.pdf', 'M (#81)/C.pdf'])
+      eq(d.filter(x => x.id > 1000).map(x => x.nume_original).sort(), ['M (#81)/B.pdf', 'M (#81)/C.pdf'])
       ok(/2 fișiere noi.*1 existau deja/.test(d.find(x => x.id === 81)!.eroare), d.find(x => x.id === 81)!.eroare)
     } finally { await opreste() }
   })
@@ -802,4 +809,27 @@ Deno.test('arhive #7: excepție după revendicare → arhiva închisă „eroare
     eq(d.status_procesare, 'eroare')
     ok(/^Despachetare eșuată \(excepție\): simulat: conexiune ruptă/.test(d.eroare), d.eroare)
   })
+})
+
+Deno.test('arhive #5 (Copilot r1 pe #646): dovada sha a unui document ȘTERS sau rămas placeholder nu sare fișierul — se urcă', async () => {
+  for (const caz of ['sters', 'placeholder'] as const) {
+    await cuMediu(async (root, s) => {
+      const opreste = pornesteExtractor(root)
+      try {
+        const fisiere = new Map<string, Uint8Array>([['3/m.zip', await zipCu({ 'A.pdf': '%PDF-1.4 a' })]])
+        const tab: Record<string, Rand[]> = {
+          ofertare_documente_atribuire: [
+            { id: 81, licitatie_id: 3, nume_original: 'M.zip', fisier_path: '3/m.zip', status_procesare: 'neprocesat', eroare: null },
+            ...(caz === 'placeholder' ? [{ id: 910, licitatie_id: 3, nume_original: 'A.pdf', fisier_path: '3/atribuire/neincarcat/A.pdf', status_procesare: 'ignorat', eroare: 'Aparut nou in SEAP' }] : []),
+          ],
+          ofertare_seap_manifest: [{ licitatie_id: 3, arhiva_cheie: 'm.zip', cale: 'A.pdf', document_id: 910, stare: 'urcat', sha256: await shaHex('%PDF-1.4 a') }],
+          ofertare_seap_fisiere: [], ofertare_licitatii: [], notifications: [],
+        }
+        await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+        const d = tab.ofertare_documente_atribuire
+        eq(d.filter(x => x.id > 1000).map(x => x.nume_original), ['M (#81)/A.pdf'], `caz ${caz}`)
+        ok(/^📦 Arhivă despachetată pe Terra: 1 fișiere noi/.test(d.find(x => x.id === 81)!.eroare), d.find(x => x.id === 81)!.eroare)
+      } finally { await opreste() }
+    })
+  }
 })

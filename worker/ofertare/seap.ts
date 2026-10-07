@@ -594,10 +594,18 @@ export async function fisiereDejaImportate(supa: Supa, d: { licitatie_id: number
   const { data: urcate } = await supa.from('ofertare_seap_manifest').select('document_id, sha256, stare')
     .eq('licitatie_id', d.licitatie_id).eq('stare', 'urcat').not('document_id', 'is', null)
   const shaDoc = shaDovedit(urcate || [])
-  for (const m of (man || []) as { cale: string; document_id: number | null; sha256?: string }[]) {
-    if (m.document_id == null || !m.sha256 || shaDoc.get(m.document_id) !== m.sha256) continue
+  const candidati = ((man || []) as { cale: string; document_id: number | null; sha256?: string }[])
+    .filter(m => m.document_id != null && !!m.sha256 && shaDoc.get(m.document_id) === m.sha256)
+  if (!candidati.length) return dovedite
+  // dovada contează doar dacă documentul EXISTĂ ACUM, cu fișier real (Copilot conv. 3, NO-GO r1 pe #646): un rând șters sau
+  // rămas placeholder nu mai ține conținutul în platformă, deci fișierul din arhivă trebuie urcat, nu sărit ca „deja”
+  const { data: vii } = await supa.from('ofertare_documente_atribuire').select('id, fisier_path')
+    .eq('licitatie_id', d.licitatie_id).in('id', [...new Set(candidati.map(m => m.document_id as number))])
+  const existente = new Set(((vii || []) as { id: number; fisier_path: string | null }[]).filter(x => !estePlaceholder(x)).map(x => x.id))
+  for (const m of candidati) {
+    if (!existente.has(m.document_id as number)) continue
     const c = caleFaraP7s(m.cale)
-    dovedite.set(c, (dovedite.get(c) ?? new Set()).add(m.sha256))
+    dovedite.set(c, (dovedite.get(c) ?? new Set()).add(m.sha256 as string))
   }
   return dovedite
 }
