@@ -21,15 +21,18 @@ const escBr = v => esc(v).replace(/\r?\n/g, '<br/>')
 // Numărul-rezervă de la previzualizare („99999-bis”) păstrează lățimea maximă (J20), dar se afișează „____”.
 const REZERVA = /^99999-bis\//
 
-function titluHtml(nr, previzualizare) {
-  const s = String(nr ?? '')
+function titluHtml(titlu, nr, previzualizare) {
+  const s = String(nr ?? ''), t = esc(titlu)
   if (previzualizare && REZERVA.test(s)) {
     const rest = s.replace(REZERVA, '/')
-    return `DECIZIA NR <span style="position:relative;display:inline-block"><span style="visibility:hidden">99999-bis</span>`
+    return `${t} <span style="position:relative;display:inline-block"><span style="visibility:hidden">99999-bis</span>`
       + `<span style="position:absolute;left:0;right:0;text-align:center">____</span></span>${esc(rest)}`
   }
-  return `DECIZIA NR ${esc(s)}`
+  return `${t} ${esc(s)}`
 }
+
+// Blocurile de text rup șirurile lungi fără spații (J8-1/P8-4); măsurarea verifică și lățimea fiecărui bloc (.hrdec-t).
+const RUPERE = 'overflow-wrap:anywhere;word-break:break-word;'
 
 /**
  * HTML-ul unei pagini A4 de decizie, din `continut` (jsonb-ul de la server).
@@ -49,13 +52,13 @@ export function renderDecizieHtml(continut, opts = {}) {
   return `<div class="hrdec-pagina" style="position:relative;width:${PAGINA.w}px;height:${PAGINA.h}px;overflow:hidden;background:#fff;color:#000;font-family:'Times New Roman',Times,serif;font-size:${fontPt}pt;line-height:1.35;box-sizing:border-box">`
     + `<div class="hrdec-corp" style="padding:28px 72px 0 72px;box-sizing:border-box">`
     + `<div style="margin:0 -40px 22px -40px">${logo}</div>`
-    + `<div style="text-align:center;font-weight:bold;font-size:${fontPt + 2}pt;margin:18px 0 22px">${titluHtml(c.nr, prev)}</div>`
-    + `<p style="text-align:justify;text-indent:48px;margin:0 0 18px">${escBr(c.preambul)}</p>`
-    + `<div style="text-align:center;font-weight:bold;margin:0 0 16px">${esc(c.decide || 'DECIDE:')}</div>`
-    + art.map(a => `<p style="text-align:justify;margin:0 0 12px"><b>Art.${esc(a?.nr)}</b> ${escBr(a?.text)}</p>`).join('')
-    + `<table style="width:100%;margin-top:36px;border-collapse:collapse;font-size:inherit"><tr>`
-    + `<td style="width:50%;vertical-align:top;font-weight:bold">${escBr(c.bloc_semnatura)}</td>`
-    + `<td style="width:50%;vertical-align:top;text-align:right;font-weight:bold">${escBr(c.luare_la_cunostinta)}</td>`
+    + `<div class="hrdec-t" style="${RUPERE}text-align:center;font-weight:bold;font-size:${fontPt + 2}pt;margin:18px 0 22px">${titluHtml(c.titlu, c.nr, prev)}</div>`
+    + `<p class="hrdec-t" style="${RUPERE}text-align:justify;text-indent:48px;margin:0 0 18px">${escBr(c.preambul)}</p>`
+    + `<div class="hrdec-t" style="${RUPERE}text-align:center;font-weight:bold;margin:0 0 16px">${esc(c.decide)}</div>`
+    + art.map(a => `<p class="hrdec-t" style="${RUPERE}text-align:justify;margin:0 0 12px"><b>Art.${esc(a?.nr)}</b> ${escBr(a?.text)}</p>`).join('')
+    + `<table style="width:100%;table-layout:fixed;margin-top:36px;border-collapse:collapse;font-size:inherit"><tr>`
+    + `<td class="hrdec-t" style="${RUPERE}width:50%;vertical-align:top;font-weight:bold">${escBr(c.bloc_semnatura)}</td>`
+    + `<td class="hrdec-t" style="${RUPERE}width:50%;vertical-align:top;text-align:right;font-weight:bold">${escBr(c.luare_la_cunostinta)}</td>`
     + `</tr></table></div>`
     + `<div style="position:absolute;left:72px;right:72px;bottom:18px;text-align:center;font-family:'Courier New',Courier,monospace;font-size:9pt;color:#4a4a4a">${cod}</div>`
     + `</div>`
@@ -84,6 +87,10 @@ export function dimensiuniCanvas(w, h, rot = 0, max = MAX_LATURA_SCAN) {
   const s = Math.min(1, max / Math.max(iw, ih))
   return { cw: Math.max(1, Math.round(iw * s)), ch: Math.max(1, Math.round(ih * s)), s }
 }
+
+/** Numele scanului compus din poze: `semnat_<Date.now()>.pdf`, doar cifre — regex-ul căii din PR1 (§3.5, P8-1). */
+export const numeScan = (ms = Date.now()) => `semnat_${Math.trunc(ms)}.pdf`
+export const CALE_FISIER_RE = /^(generat|semnat)_[0-9]{1,15}\.pdf$/
 
 /** Fontul ales pentru emitere: primul din FONTURI la care corpul încape; null = nu încape (B7). */
 export function alegeFont(inaltimiPeFont, limita = INALTIME_CORP) {

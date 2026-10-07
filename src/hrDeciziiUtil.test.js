@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, PAGINA, INALTIME_CORP } from './hrDeciziiUtil.js'
+import { esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, CALE_FISIER_RE, PAGINA, INALTIME_CORP } from './hrDeciziiUtil.js'
 
 const CONT = {
   titlu: 'DECIZIA NR', nr: '916/28.09.2026', previzualizare: false,
@@ -68,6 +68,17 @@ describe('renderDecizieHtml', () => {
   it('continut gol nu aruncă', () => {
     expect(() => renderDecizieHtml(null)).not.toThrow()
   })
+  it('titlul și DECIDE vin doar din continut (P8-3), escapate', () => {
+    const h = renderDecizieHtml({ ...CONT, titlu: 'DECIZIA <NR>', decide: 'HOTARASTE:' })
+    expect(h).toContain('DECIZIA &lt;NR&gt; 916/28.09.2026')
+    expect(h).toContain('>HOTARASTE:</div>')
+    expect(h).not.toContain('DECIDE:')
+  })
+  it('blocurile de text rup șirurile lungi și sunt marcate pentru verificarea de lățime (J8-1)', () => {
+    const h = renderDecizieHtml({ ...CONT, articole: [{ nr: 1, text: 'Conform ' + 'W'.repeat(160) }] })
+    const blocuri = h.match(/class="hrdec-t" style="overflow-wrap:anywhere;word-break:break-word;/g) || []
+    expect(blocuri.length).toBe(6)              // titlu, preambul, DECIDE, 1 articol, 2 celule de semnătură
+  })
 })
 
 describe('asezareA4', () => {
@@ -120,6 +131,14 @@ describe('alegeFont (B7, Vf8)', () => {
     expect(alegeFont({ 12: INALTIME_CORP + 1, 11: INALTIME_CORP })).toBe(11)
     expect(alegeFont({ 12: INALTIME_CORP + 1, 11: INALTIME_CORP + 1 })).toBe(null)
     expect(alegeFont({ 12: Infinity })).toBe(null)
+  })
+})
+
+describe('numeScan (P8-1)', () => {
+  it('doar cifre după semnat_, potrivit regex-ului căii din PR1', () => {
+    expect(numeScan(1791355880749)).toBe('semnat_1791355880749.pdf')
+    expect(CALE_FISIER_RE.test(numeScan())).toBe(true)
+    expect(CALE_FISIER_RE.test('semnat_20261007_094900.pdf')).toBe(false)
   })
 })
 

@@ -12,7 +12,7 @@ import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas'
 import LOGO_B64 from './logo.js'
 import { sha256Hex } from './ofertarePachet.js'
-import { PAGINA, INALTIME_CORP, FONTURI, asezareA4, dimensiuniCanvas, alegeFont, estePdf, renderDecizieHtml as renderPur } from './hrDeciziiUtil.js'
+import { PAGINA, INALTIME_CORP, FONTURI, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, renderDecizieHtml as renderPur } from './hrDeciziiUtil.js'
 
 export { sha256Hex }
 
@@ -38,7 +38,15 @@ async function cuHolder(html, fn) {
   }
 }
 
-const inaltimeCorp = holder => holder.querySelector('.hrdec-corp')?.scrollHeight ?? Infinity
+// Înălțimea corpului; Infinity dacă vreun bloc de text depășește pe orizontală (text tăiat lateral = nu încape, J8-1/P8-4).
+// Antetul (margini negative) nu e .hrdec-t, deci nu dă fals pozitiv.
+const inaltimeCorp = holder => {
+  const corp = holder.querySelector('.hrdec-corp')
+  if (!corp) return Infinity
+  if (corp.scrollWidth > corp.clientWidth + 1) return Infinity
+  for (const el of corp.querySelectorAll('.hrdec-t')) if (el.scrollWidth > el.clientWidth + 1) return Infinity
+  return corp.scrollHeight
+}
 
 /**
  * Măsoară corpul la fiecare font permis. Întoarce { fontPt: 12|11|null, inaltimi: {12, 11}, limita }.
@@ -56,22 +64,29 @@ export async function masoaraDecizie(continut, opts = {}) {
 
 /**
  * PDF-ul final (sau previzualizarea) — o pagină A4 nedeformată, canvas 794:1123 (C18).
- * Fontul vine din snapshot.font_pt (înghețat la emitere) sau din opts.fontPt la previzualizare; nu se alege aici.
- * Un document care depășește pagina aruncă eroare și NU se urcă (§4.A.4, J20).
+ * Decizie emisă: fontul e EXCLUSIV snapshot.font_pt (înghețat la emitere, J2-3); un opts.fontPt diferit e refuzat (P8-2).
+ * Fără snapshot (previzualizare): opts.fontPt. Fontul nu se alege aici. Depășirea aruncă eroare și NU se urcă (§4.A.4, J20).
  */
 export async function renderDeciziePdf(continut, snapshot, opts = {}) {
-  const fontPt = opts.fontPt ?? snapshot?.font_pt
+  const inghetat = snapshot?.font_pt
+  if (inghetat != null && opts.fontPt != null && opts.fontPt !== inghetat)
+    throw new Error(`Fontul cerut (${opts.fontPt}pt) diferă de cel înghețat la emitere (${inghetat}pt)`)
+  const fontPt = inghetat ?? opts.fontPt
   if (!FONTURI.includes(fontPt)) throw new Error('Fontul deciziei lipsește (snapshot.font_pt trebuie să fie 12 sau 11)')
   const html = renderPur(continut, { ...opts, logo: LOGO_B64, fontPt })
   return cuHolder(html, async holder => {
     const h = inaltimeCorp(holder)
+    if (h === Infinity) throw new Error('Decizia are un rând prea lat pentru pagină (text tăiat lateral) — nu se urcă')
     if (h > INALTIME_CORP) throw new Error(`Decizia depășește o pagină A4 (${h}px > ${INALTIME_CORP}px la ${fontPt}pt) — nu se urcă`)
     const canvas = await html2canvas(holder, { scale: 2, width: PAGINA.w, height: PAGINA.h, backgroundColor: '#ffffff', logging: false })
-    if (canvas.width * PAGINA.h !== canvas.height * PAGINA.w) throw new Error(`Pagina randată nu are raport A4 (${canvas.width}×${canvas.height})`)
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true })
-    doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297, undefined, 'FAST')
-    canvas.width = canvas.height = 0
-    return doc.output('blob')
+    try {
+      if (canvas.width * PAGINA.h !== canvas.height * PAGINA.w) throw new Error(`Pagina randată nu are raport A4 (${canvas.width}×${canvas.height})`)
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true })
+      doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, 210, 297, undefined, 'FAST')
+      return doc.output('blob')
+    } finally {
+      canvas.width = canvas.height = 0          // eliberat și pe eroare (J8-2), relevant pe iOS
+    }
   })
 }
 
@@ -112,7 +127,7 @@ export async function pregatestePagina(file, rot = 0) {
 }
 
 /**
- * Paginile pregătite → UN singur File `semnat_<ts>.pdf`, o pagină A4 (mm, nu px) pe imagine, în ordinea primită,
+ * Paginile pregătite → UN singur File `semnat_<Date.now()>.pdf` (doar cifre: regex-ul căii din PR1, P8-1), o pagină A4 (mm, nu px) pe imagine, în ordinea primită,
  * imaginea centrată fără deformare (asezareA4). jsPDF pune un File ID aleator ⇒ același set dă alt hash: nu se recompune la retry.
  */
 export function paginiToPdf(pagini) {
@@ -125,8 +140,7 @@ export function paginiToPdf(pagini) {
     if (!/^data:image\/jpeg;base64,/.test(p.dataUrl || '')) throw new Error(`Pagina ${i + 1} nu e pregătită`)
     doc.addImage(p.dataUrl, 'JPEG', a.x, a.y, a.l, a.h, undefined, 'FAST')
   })
-  const ts = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_')
-  return new File([doc.output('blob')], `semnat_${ts}.pdf`, { type: 'application/pdf' })
+  return new File([doc.output('blob')], numeScan(), { type: 'application/pdf' })
 }
 
 /**
