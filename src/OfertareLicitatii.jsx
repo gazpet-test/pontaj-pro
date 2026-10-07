@@ -710,6 +710,8 @@ function Lucru({ icon, text, pct, detaliu }) {
   )
 }
 
+// arhivele (zip/rar/7z, opțional semnate .p7s/.p7m) — aceeași regulă ca CTE-ul arh din v_ofertare_seap_completitudine (20261020a)
+const ARHIVA_UI = /\.(rar|zip|7z)(\.p7[sm])?\s*\d*$/i
 function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = null, onIntrareConsumata = null, showToast = null, onGoClarificari = null }) {
   const [docs, setDocs] = useState(null)
   // 25.09.2026: ciorna de clarificare pregătită AUTOMAT de server pt planșe necitibile (nu se trimite singură)
@@ -754,12 +756,15 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // R4 #142 (27.09.2026): coada de citire a planșelor pe NAS. `null` = coada nu există încă (migrare neaplicată) sau
   // workerul nu dă semn de viață de >10 min — atunci rămâne doar bucla din browser (failover, ca la celelalte cozi).
   const [coadaPlanse, setCoadaPlanse] = useState(null)   // { peDoc: Map(doc_id → ultimul job), workerViu: bool }
-  // audit #11 (20261020a): o arhivă cu evidență pe drumul SEAP al workerului (ok / eroare / în curs) nu cere bifa aici —
-  // conținutul ei e adus (sau eroarea e deja numărată de poartă la „fișiere din SEAP nerecuperate”)
-  const [evidSeap, setEvidSeap] = useState(() => new Set())
+  // audit #11 (20261020a): o arhivă cu evidență pe drumul SEAP al workerului nu cere bifa aici — „eroare” / „în curs” sunt
+  // deja numărate de poartă la „fișiere din SEAP nerecuperate”; „ok” DOAR dacă manifestul leagă ACEST document de același
+  // sha256 cu cel adus din SEAP (Copilot NO-GO r1 pe #650: numele nu dovedește că e aceeași arhivă — o versiune nouă sub
+  // același nume nu se închide pe evidența celei vechi). evidSeap: cheie → { stare, sha256 }; shaArhive: document_id → Set(sha)
+  const [evidSeap, setEvidSeap] = useState(() => new Map())
+  const [shaArhive, setShaArhive] = useState(() => new Map())
   const load = async () => {
-    supabase.from('ofertare_seap_fisiere').select('cheie, stare').eq('licitatie_id', licitatie.id)
-      .then(r => setEvidSeap(new Set((r.data || []).filter(x => ['ok', 'eroare', 'identificat'].includes(x.stare)).map(x => x.cheie))), () => {})
+    supabase.from('ofertare_seap_fisiere').select('cheie, stare, sha256').eq('licitatie_id', licitatie.id)
+      .then(r => setEvidSeap(new Map((r.data || []).map(x => [x.cheie, x]))), () => {})
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
@@ -773,6 +778,15 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     // si nimeni nu afla de ce. Acum se vede, si intrarea din Clarificari stie ca n-are pe ce lucra.
     if (error) { setEroareDocs(error.message); setWarn('Nu pot incarca documentele: ' + error.message); setDocs([]) }
     else { setEroareDocs(null); setDocs(data || []) }
+    const idArhive = (data || []).filter(d => ARHIVA_UI.test(d.nume_original || '')).map(d => d.id)
+    if (idArhive.length) {
+      supabase.from('ofertare_seap_manifest').select('document_id, sha256').eq('licitatie_id', licitatie.id).eq('stare', 'urcat').in('document_id', idArhive)
+        .then(r => {
+          const m = new Map()
+          for (const x of r.data || []) if (x.sha256) m.set(x.document_id, (m.get(x.document_id) || new Set()).add(x.sha256))
+          setShaArhive(m)
+        }, () => {})
+    } else setShaArhive(new Map())
     setCoada(c || null)
     const [rJ, rHb] = await Promise.all([
       supabase.from('ofertare_plansa_coada').select('id, doc_id, mod, stare, runde, cost_usd, eroare, motiv_anulare, cerut_la, terminat_la')
@@ -994,13 +1008,18 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // finală (v_ofertare_seap_completitudine.ignorate_neverificate). Aceeași regulă ca în view: nu intră DUAE, jurnalele
   // .log, fișierele-lacăt Office și originalele sparte în bucăți.
   // 08.10 (audit #11, migrarea 20261020a — aceeași regulă ca view-ul, CTE-urile ign + arh): o ARHIVĂ intră doar dacă NU e
-  // rezolvată (despachetată „📦”, adusă pe Terra, cu evidență SEAP); un document SEMNAT (.p7s/.p7m) rămas nedesfăcut intră
-  // întotdeauna, mai puțin semnătura detașată („Doar semnătura electronică…”).
-  const ARHIVA_UI = /\.(rar|zip|7z)(\.p7[sm])?\s*\d*$/i
+  // rezolvată (despachetată „📦”, adusă pe Terra, evidență SEAP „eroare”/„în curs”, sau „ok” cu sha dovedit pe ACEST document);
+  // un document SEMNAT (.p7s/.p7m) rămas nedesfăcut intră întotdeauna, mai puțin semnătura detașată („Doar semnătura electronică…”).
   const cheieSeap = (n) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase().replace(/[,()]/g, '').replace(/\s+/g, '')
+  const rezolvataPeSeap = (d) => {
+    const e = evidSeap.get(cheieSeap(d.nume_original))
+    if (!e) return false
+    if (['eroare', 'identificat'].includes(e.stare)) return true
+    return e.stare === 'ok' && !!e.sha256 && !!shaArhive.get(d.id)?.has(e.sha256)
+  }
   const arhivaNerezolvata = (d) => ARHIVA_UI.test(d.nume_original || '') &&
     !(d.status_procesare === 'ignorat' && /^📦/.test(d.eroare || '')) && !/^Arhivă adusă pe Terra/.test(d.eroare || '') &&
-    !evidSeap.has(cheieSeap(d.nume_original))
+    !rezolvataPeSeap(d)
   const semnaturaNedesfacuta = (d) => /\.p7[sm]\s*\d*$/i.test(d.nume_original || '') && !ARHIVA_UI.test(d.nume_original || '') &&
     !/^Doar semnătura electronică/.test(d.eroare || '')
   const ignoratTehnic = (d, toate) => ['ignorat', 'eroare'].includes(d.status_procesare) && (

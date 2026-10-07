@@ -19,13 +19,23 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261020a=%') THEN
     RAISE EXCEPTION 'Revenire 20261020a: armare persistentă (ALTER DATABASE/ROLE SET) — refuz';
   END IF;
+  -- amprenta EXACTĂ a stării lăsate de 20261020a (Copilot P1-2 pe #650): o migrare ulterioară care schimbă view-ul (chiar
+  -- păstrând cele 17 coloane) face revenirea să refuze, în loc să-i suprascrie modificarea
+  IF md5(pg_get_viewdef('public.v_ofertare_seap_completitudine'::regclass, true)) IS DISTINCT FROM 'afc35ba096ad864abe1af37f4881f9da' THEN
+    RAISE EXCEPTION 'Revenire 20261020a: precondiție — view-ul nu e exact cel lăsat de 20261020a (md5 afc35ba0…); altă migrare l-a schimbat între timp';
+  END IF;
   IF (SELECT array_agg(attname::text ORDER BY attnum) FROM pg_attribute
        WHERE attrelid = 'public.v_ofertare_seap_completitudine'::regclass AND attnum > 0 AND NOT attisdropped)
      IS DISTINCT FROM ARRAY['licitatie_id','din_seap','enumerare','enumerare_la','seap_total','seap_erori','seap_in_curs','seap_erori_lista',
                             'esentiale','caiete','esentiale_necitite','necitite_total','blocaj','ignorate_neverificate','ignorate_lista',
-                            'arhive_nerezolvate','arhive_lista']::text[]
-     OR position('arhive_nerezolvate' IN pg_get_viewdef('public.v_ofertare_seap_completitudine'::regclass, true)) = 0 THEN
-    RAISE EXCEPTION 'Revenire 20261020a: precondiție — view-ul nu e în starea patch-ului 20261020a (17 coloane, CTE arh)';
+                            'arhive_nerezolvate','arhive_lista']::text[] THEN
+    RAISE EXCEPTION 'Revenire 20261020a: precondiție — coloanele view-ului nu sunt cele 17 ale patch-ului 20261020a';
+  END IF;
+  IF (SELECT reloptions FROM pg_class WHERE oid = 'public.v_ofertare_seap_completitudine'::regclass) IS DISTINCT FROM ARRAY['security_invoker=on']::text[]
+     OR has_table_privilege('anon', 'public.v_ofertare_seap_completitudine', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.v_ofertare_seap_completitudine', 'SELECT')
+     OR NOT has_table_privilege('service_role', 'public.v_ofertare_seap_completitudine', 'SELECT') THEN
+    RAISE EXCEPTION 'Revenire 20261020a: precondiție — security_invoker / drepturile view-ului diferă de starea 20261020a';
   END IF;
 END $arm$;
 

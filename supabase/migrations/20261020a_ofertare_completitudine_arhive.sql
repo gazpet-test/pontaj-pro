@@ -13,8 +13,12 @@
 --   - CTE nou „arh”: o arhivă (zip/rar/7z, opțional .p7s/.p7m) NErezolvată și fără bifa unui om blochează. Rezolvată =
 --       • despachetată sau închisă de bucla workerului (status „ignorat” + nota „📦 …”), SAU
 --       • adusă pe drumul SEAP al workerului (nota „Arhivă adusă pe Terra…” pe placeholder), SAU
---       • are evidență pe drumul SEAP (ofertare_seap_fisiere, aceeași cheie de nume ca workerul) în stare ok / eroare /
---         identificat — eroarea și „în curs” sunt deja numărate de CTE-ul sf, deci nu se dublează.
+--       • are evidență pe drumul SEAP (ofertare_seap_fisiere, aceeași cheie de nume ca workerul) în stare eroare /
+--         identificat — deja numărate de CTE-ul sf (blochează oricum), deci nu se dublează; SAU
+--       • evidență „ok” DOAR cu dovadă de conținut: manifestul are rândul „urcat” al ACESTUI document cu același sha256 ca
+--         arhiva adusă din SEAP (Copilot NO-GO r1 pe #650: numele nu dovedește că e aceeași arhivă — o versiune B urcată sub
+--         același nume nu se închide pe evidența „ok” a versiunii A; aceeași clasă ca #646/#3 în dejaDesfacutaPeSeap).
+--         Fără dovadă = blocaj (fail-closed), până la despachetarea din bucla workerului sau bifa unui om.
 --     Orice altceva (neprocesat / in_lucru = în curs, eroare, „ignorat” cu altă notă, placeholder neadus) = blocaj, până
 --     la despachetare sau până la bifa unui om (fn_ofertare_doc_bifa_relevanta — excepția umană explicită).
 --   - CTE „ign”: un document semnat (.p7s / .p7m, nu arhivă) e exclus DOAR dacă e semnătură detașată, fără conținut
@@ -22,8 +26,10 @@
 --     (Jakarinos r1 #1: fail-closed, nu o listă de note de eșec care se poate desincroniza). Arhivele trec la „arh”.
 --   - blocaj: mesaj nou după cele de enumerare SEAP, înaintea celor despre caiete / esențiale.
 --   - două coloane noi LA FINAL (CREATE OR REPLACE VIEW nu poate reordona): arhive_nerezolvate, arhive_lista.
--- Impact măsurat pe producție (07.10 seara, read-only): arhive nerezolvate la lic. 3, 5, 87, 91, 94, 100, 103 — toate
---   licitațiile active dintre ele (3, 94, 100, 103) aveau deja alt blocaj; niciuna nu trece din „fără blocaj” în blocat.
+-- Impact măsurat pe producție (07.10 seara, read-only): arhive nerezolvate la lic. 3, 5, 87, 91, 94, 100, 103, plus 101 și 102
+--   (9 volume .partN.rar fiecare, urcate de edge înainte de 07.10, cu evidență „ok” dar fără rând de manifest = fără dovadă de
+--   conținut) — toate licitațiile active dintre ele (3, 94, 100, 101, 102, 103) aveau deja alt blocaj; niciuna nu trece din
+--   „fără blocaj” în blocat.
 --   Semnături nedesfăcute fără bifă: lic. 92 (9 — reparația var. B așteaptă OK-ul lui Răzvan) și lic. 1 (6, depusă) — ambele
 --   aveau deja alt blocaj.
 -- Nicio funcție, niciun drept nou: view-ul rămâne security_invoker = on, ACL-ul se păstrează (CREATE OR REPLACE).
@@ -102,8 +108,12 @@ WITH ess AS (
     AND NOT EXISTS (
       SELECT 1 FROM public.ofertare_seap_fisiere f
        WHERE f.licitatie_id = d.licitatie_id
-         AND f.stare IN ('ok', 'eroare', 'identificat')
-         AND f.cheie = regexp_replace(regexp_replace(lower(regexp_replace(d.nume_original, E'\\.p7s$', '', 'i')), '[,()]', '', 'g'), E'\\s+', '', 'g'))
+         AND f.cheie = regexp_replace(regexp_replace(lower(regexp_replace(d.nume_original, E'\\.p7s$', '', 'i')), '[,()]', '', 'g'), E'\\s+', '', 'g')
+         AND (f.stare IN ('eroare', 'identificat')
+              OR (f.stare = 'ok' AND f.sha256 IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM public.ofertare_seap_manifest m
+                               WHERE m.licitatie_id = d.licitatie_id AND m.document_id = d.id
+                                 AND m.stare = 'urcat' AND m.sha256 = f.sha256))))
   GROUP BY d.licitatie_id
 )
 SELECT l.id AS licitatie_id,
@@ -166,6 +176,10 @@ BEGIN
      OR NOT has_table_privilege('authenticated', 'public.v_ofertare_seap_completitudine', 'SELECT')
      OR NOT has_table_privilege('service_role', 'public.v_ofertare_seap_completitudine', 'SELECT') THEN
     RAISE EXCEPTION 'Postcondiție 3: drepturile de citire s-au schimbat (anon nu, authenticated + service_role da)';
+  END IF;
+  -- amprenta exactă a definiției revizuite (harness PG17; aceeași pe care o cere revenirea ca precondiție)
+  IF md5(pg_get_viewdef('public.v_ofertare_seap_completitudine'::regclass, true)) IS DISTINCT FROM 'afc35ba096ad864abe1af37f4881f9da' THEN
+    RAISE EXCEPTION 'Postcondiție 4: definiția aplicată diferă de cea revizuită (md5 afc35ba0…)';
   END IF;
 END
 $post$;
