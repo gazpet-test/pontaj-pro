@@ -754,7 +754,12 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   // R4 #142 (27.09.2026): coada de citire a planșelor pe NAS. `null` = coada nu există încă (migrare neaplicată) sau
   // workerul nu dă semn de viață de >10 min — atunci rămâne doar bucla din browser (failover, ca la celelalte cozi).
   const [coadaPlanse, setCoadaPlanse] = useState(null)   // { peDoc: Map(doc_id → ultimul job), workerViu: bool }
+  // audit #11 (20261020a): o arhivă cu evidență pe drumul SEAP al workerului (ok / eroare / în curs) nu cere bifa aici —
+  // conținutul ei e adus (sau eroarea e deja numărată de poartă la „fișiere din SEAP nerecuperate”)
+  const [evidSeap, setEvidSeap] = useState(() => new Set())
   const load = async () => {
+    supabase.from('ofertare_seap_fisiere').select('cheie, stare').eq('licitatie_id', licitatie.id)
+      .then(r => setEvidSeap(new Set((r.data || []).filter(x => ['ok', 'eroare', 'identificat'].includes(x.stare)).map(x => x.cheie))), () => {})
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
       supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, status_procesare, pagini, pagini_procesate, pagini_necitite, ocr, revizie, size_bytes, eroare, fisier_path, analiza, procesat_la, procesat_de, pornit:procesat_de(name), relevanta_verificata_la, relevanta_nota, verificat:relevanta_verificata_de(name)')
@@ -986,11 +991,21 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       new RegExp('^' + baza.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' — p\\d+_pag[\\d-]+\\.pdf$', 'i').test(x.nume_original || ''))
   }
   // 24.09 (Copilot, bloc 4: „ignorat tehnic ≠ neaplicabil"): necitit automat și fără bifa unui om → blochează poarta
-  // finală (v_ofertare_seap_completitudine.ignorate_neverificate). Aceeași regulă ca în view: nu intră arhivele,
-  // semnăturile, DUAE, jurnalele .log, fișierele-lacăt Office și originalele sparte în bucăți.
-  const ignoratTehnic = (d, toate) => ['ignorat', 'eroare'].includes(d.status_procesare) &&
-    !/\.(rar|zip|7z|p7s|p7m|xml|log)\s*\d*$/i.test(d.nume_original || '') &&
-    !/(^|\/)~\$/.test(d.nume_original || '') && !areBucati(d, toate)
+  // finală (v_ofertare_seap_completitudine.ignorate_neverificate). Aceeași regulă ca în view: nu intră DUAE, jurnalele
+  // .log, fișierele-lacăt Office și originalele sparte în bucăți.
+  // 08.10 (audit #11, migrarea 20261020a — aceeași regulă ca view-ul, CTE-urile ign + arh): o ARHIVĂ intră doar dacă NU e
+  // rezolvată (despachetată „📦”, adusă pe Terra, cu evidență SEAP); o SEMNĂTURĂ (.p7s/.p7m) doar dacă nu s-a putut desface.
+  const ARHIVA_UI = /\.(rar|zip|7z)(\.p7[sm])?\s*\d*$/i
+  const cheieSeap = (n) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase().replace(/[,()]/g, '').replace(/\s+/g, '')
+  const arhivaNerezolvata = (d) => ARHIVA_UI.test(d.nume_original || '') &&
+    !(d.status_procesare === 'ignorat' && /^📦/.test(d.eroare || '')) && !/^Arhivă adusă pe Terra/.test(d.eroare || '') &&
+    !evidSeap.has(cheieSeap(d.nume_original))
+  const semnaturaNedesfacuta = (d) => /\.p7[sm]\s*\d*$/i.test(d.nume_original || '') && !ARHIVA_UI.test(d.nume_original || '') &&
+    /^Semnătura electronică nu s-a putut desface/.test(d.eroare || '')
+  const ignoratTehnic = (d, toate) => ['ignorat', 'eroare'].includes(d.status_procesare) && (
+    arhivaNerezolvata(d) || semnaturaNedesfacuta(d) || (
+      !/\.(rar|zip|7z|p7s|p7m|xml|log)\s*\d*$/i.test(d.nume_original || '') &&
+      !/(^|\/)~\$/.test(d.nume_original || '') && !areBucati(d, toate)))
   // Linia „Rezumat" (25.09.2026): citite = procesat/parțial (inclusiv bucățile); erori = eroare/ignorat tehnic fără
   // text și fără bifa omului; rămase = neprocesat/în lucru; restul = sărite intenționat (formular, doar fișier,
   // arhive, originale sparte în bucăți, bifate de om).
