@@ -1,0 +1,95 @@
+// ════════════════════════════════════════════════════════════════
+// Registrul deciziilor HR — partea PURĂ a generării (spec docs/HR/GENERATOR_DECIZII_SPEC.md §6, PR2).
+// Fără importuri: se testează cu vitest (hrDeciziiUtil.test.js) fără DOM și fără clientul Supabase (VA33).
+// `continut` vine gata randat de server (_hr_decizie_randeaza), ca text simplu; aici doar îl punem în pagină,
+// EXCLUSIV prin escapare (J3-8) — temeiul, proiectul și contractul sunt editabile de utilizatori.
+// ════════════════════════════════════════════════════════════════
+
+// A4 la 96 dpi: 794 × 1123 px (raportul 210:297, C18). Subsolul are zona lui, în afara corpului măsurat.
+export const PAGINA = { w: 794, h: 1123 }
+export const ZONA_SUBSOL = 56
+export const INALTIME_CORP = PAGINA.h - ZONA_SUBSOL
+export const FONTURI = [12, 11]              // p_font_pt permise de fn_hr_decizie_emite (Vf8, J2-3)
+export const A4_MM = { w: 210, h: 297 }
+export const MAX_LATURA_SCAN = 2400          // VA28: ~190 DPI pe A4, codul din subsol rămâne lizibil
+
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+/** Escapare HTML pentru text și atribute. null/undefined → ''. */
+export const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ESC[c])
+const escBr = v => esc(v).replace(/\r?\n/g, '<br/>')
+
+// Numărul-rezervă de la previzualizare („99999-bis”) păstrează lățimea maximă (J20), dar se afișează „____”.
+const REZERVA = /^99999-bis\//
+
+function titluHtml(nr, previzualizare) {
+  const s = String(nr ?? '')
+  if (previzualizare && REZERVA.test(s)) {
+    const rest = s.replace(REZERVA, '/')
+    return `DECIZIA NR <span style="position:relative;display:inline-block"><span style="visibility:hidden">99999-bis</span>`
+      + `<span style="position:absolute;left:0;right:0;text-align:center">____</span></span>${esc(rest)}`
+  }
+  return `DECIZIA NR ${esc(s)}`
+}
+
+/**
+ * HTML-ul unei pagini A4 de decizie, din `continut` (jsonb-ul de la server).
+ * opts: { logo (data URL al antetului), cod_verificare, previzualizare, fontPt (12|11) }.
+ * Toate valorile din `continut`/`opts` trec prin esc(); singurul markup e cel scris static aici.
+ */
+export function renderDecizieHtml(continut, opts = {}) {
+  const c = continut || {}
+  const fontPt = FONTURI.includes(opts.fontPt) ? opts.fontPt : 12
+  const prev = opts.previzualizare ?? !!c.previzualizare
+  const art = Array.isArray(c.articole) ? c.articole : []
+  const cod = opts.cod_verificare
+    ? `Cod verificare ${esc(opts.cod_verificare)} · generat din PontajPRO`
+    : (prev ? 'PREVIZUALIZARE · fără număr · nu se semnează' : '')
+  const logo = opts.logo && /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(opts.logo)
+    ? `<img src="${opts.logo}" style="display:block;width:100%;height:auto" alt=""/>` : ''
+  return `<div class="hrdec-pagina" style="position:relative;width:${PAGINA.w}px;height:${PAGINA.h}px;overflow:hidden;background:#fff;color:#000;font-family:'Times New Roman',Times,serif;font-size:${fontPt}pt;line-height:1.35;box-sizing:border-box">`
+    + `<div class="hrdec-corp" style="padding:28px 72px 0 72px;box-sizing:border-box">`
+    + `<div style="margin:0 -40px 22px -40px">${logo}</div>`
+    + `<div style="text-align:center;font-weight:bold;font-size:${fontPt + 2}pt;margin:18px 0 22px">${titluHtml(c.nr, prev)}</div>`
+    + `<p style="text-align:justify;text-indent:48px;margin:0 0 18px">${escBr(c.preambul)}</p>`
+    + `<div style="text-align:center;font-weight:bold;margin:0 0 16px">${esc(c.decide || 'DECIDE:')}</div>`
+    + art.map(a => `<p style="text-align:justify;margin:0 0 12px"><b>Art.${esc(a?.nr)}</b> ${escBr(a?.text)}</p>`).join('')
+    + `<table style="width:100%;margin-top:36px;border-collapse:collapse;font-size:inherit"><tr>`
+    + `<td style="width:50%;vertical-align:top;font-weight:bold">${escBr(c.bloc_semnatura)}</td>`
+    + `<td style="width:50%;vertical-align:top;text-align:right;font-weight:bold">${escBr(c.luare_la_cunostinta)}</td>`
+    + `</tr></table></div>`
+    + `<div style="position:absolute;left:72px;right:72px;bottom:18px;text-align:center;font-family:'Courier New',Courier,monospace;font-size:9pt;color:#4a4a4a">${cod}</div>`
+    + `</div>`
+}
+
+/**
+ * Așezarea unei imagini (w × h px, rotită cu rot ∈ {0,90,180,270}) pe o pagină A4, centrat, fără deformare.
+ * Pagina e portret sau peisaj după imaginea rotită. Întoarce mm: { orientare: 'p'|'l', pagW, pagH, x, y, l, h }.
+ */
+export function asezareA4(w, h, rot = 0) {
+  if (!(w > 0) || !(h > 0)) throw new Error('dimensiuni invalide')
+  const r = ((Number(rot) % 360) + 360) % 360
+  if (![0, 90, 180, 270].includes(r)) throw new Error('rotire invalidă: ' + rot)
+  const [iw, ih] = r === 90 || r === 270 ? [h, w] : [w, h]
+  const peisaj = iw > ih
+  const pagW = peisaj ? A4_MM.h : A4_MM.w, pagH = peisaj ? A4_MM.w : A4_MM.h
+  const s = Math.min(pagW / iw, pagH / ih)
+  const l = iw * s, hh = ih * s
+  return { orientare: peisaj ? 'l' : 'p', pagW, pagH, x: (pagW - l) / 2, y: (pagH - hh) / 2, l, h: hh }
+}
+
+/** Dimensiunile canvas-ului pentru o poză: după rotire, max `max` px pe latura lungă, fără mărire. */
+export function dimensiuniCanvas(w, h, rot = 0, max = MAX_LATURA_SCAN) {
+  const r = ((Number(rot) % 360) + 360) % 360
+  const [iw, ih] = r === 90 || r === 270 ? [h, w] : [w, h]
+  const s = Math.min(1, max / Math.max(iw, ih))
+  return { cw: Math.max(1, Math.round(iw * s)), ch: Math.max(1, Math.round(ih * s)), s }
+}
+
+/** Fontul ales pentru emitere: primul din FONTURI la care corpul încape; null = nu încape (B7). */
+export function alegeFont(inaltimiPeFont, limita = INALTIME_CORP) {
+  for (const f of FONTURI) if (inaltimiPeFont[f] != null && inaltimiPeFont[f] <= limita) return f
+  return null
+}
+
+/** Primii octeți ai unui PDF („%PDF-”), pentru fișiere cu `type` gol (VA32). */
+export const estePdf = bytes => bytes && bytes.length >= 5 && String.fromCharCode(...bytes.slice(0, 5)) === '%PDF-'
