@@ -24,7 +24,8 @@ async function motivSchimbare(cur: any, sursa: AmprentaSursa): Promise<string | 
 }
 
 const SEL = 'analiza, status_procesare, text_extras, procesat_la, fisier_path'
-export async function scrieCitireNoi(db: any, id: number, citire: any, numeOriginal: string, sursa?: AmprentaSursa): Promise<{ upErr: any; scris: boolean; stale?: boolean; motiv?: string }> {
+// fara = chei de scos din `analiza` odată cu scrierea (ex. citire_noi_lucru — starea rezumatului pe felii, 06.10.2026).
+export async function scrieCitireNoi(db: any, id: number, citire: any, numeOriginal: string, sursa?: AmprentaSursa, fara: string[] = []): Promise<{ upErr: any; scris: boolean; stale?: boolean; motiv?: string }> {
   let upErr: any = null, scris = false
   for (let incercare = 0; incercare < 3 && !scris; incercare++) {
     const { data: cur } = await db.from('ofertare_documente_atribuire').select(SEL).eq('id', id).maybeSingle()
@@ -33,7 +34,8 @@ export async function scrieCitireNoi(db: any, id: number, citire: any, numeOrigi
       if (motiv) return { upErr: null, scris: false, stale: true, motiv }
     }
     const baza = cur?.analiza && typeof cur.analiza === 'object' ? cur.analiza : {}
-    const upd: Record<string, unknown> = { analiza: { ...baza, citire_noi: citire }, analiza_la: new Date().toISOString() }
+    const pastrat = Object.fromEntries(Object.entries(baza).filter(([k]) => !fara.includes(k)))
+    const upd: Record<string, unknown> = { analiza: { ...pastrat, citire_noi: citire }, analiza_la: new Date().toISOString() }
     if (cur && !cur.text_extras && ['neprocesat', 'eroare', null].includes(cur.status_procesare)) {
       const L = [`DOCUMENT: ${numeOriginal}`, `Tip: ${citire.tip}`, '', citire.rezumat]
       if (citire.modificari.length) { L.push('', 'MODIFICĂRI:'); for (const m of citire.modificari) L.push('- ' + (typeof m === 'string' ? m : JSON.stringify(m))) }

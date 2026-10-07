@@ -22,6 +22,8 @@ on:
       - 'api/pdf-sparge.js'
       - 'api/plansa-felii.js'
       - 'api/seap-import.js'
+      - 'api/_tipDocument.js'
+      - 'api/_seapImport*'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
@@ -29,6 +31,7 @@ on:
       - 'worker/ofertare/seap.ts'
       - 'worker/ofertare/egress.ts'
       - 'worker/ofertare/arhive_platforma_test.ts'
+      - 'worker/ofertare/verifica_manifest*.ts'
       - 'supabase/functions/api-consum-extern/**'
       - 'src/apiConsum*'
       - 'src/ApiConsumExtern.jsx'
@@ -59,6 +62,8 @@ on:
       - 'api/pdf-sparge.js'
       - 'api/plansa-felii.js'
       - 'api/seap-import.js'
+      - 'api/_tipDocument.js'
+      - 'api/_seapImport*'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
       - 'docs/R4_MIGRARE_PROPUSA_ofertare_plansa_coada.sql'
@@ -66,6 +71,7 @@ on:
       - 'worker/ofertare/seap.ts'
       - 'worker/ofertare/egress.ts'
       - 'worker/ofertare/arhive_platforma_test.ts'
+      - 'worker/ofertare/verifica_manifest*.ts'
       - 'supabase/functions/api-consum-extern/**'
       - 'src/apiConsum*'
       - 'src/ApiConsumExtern.jsx'
@@ -92,7 +98,7 @@ jobs:
           node-version: '20'
       - run: npm ci
       - name: Vitest - ofertare si grafic
-        run: npx vitest run src/ofertare src/grafic src/Ofertare src/apiConsum api/_poartaOfertare.test.js
+        run: npx vitest run src/ofertare src/grafic src/Ofertare src/apiConsum api/_poartaOfertare.test.js api/_seapImport.test.js
       - name: Regresie R5-R9b fara dependente
         run: node --test scripts/test-r5-r9b.mjs
       - name: Poarta J07 - paritate UI si Edge
@@ -121,8 +127,13 @@ jobs:
           supabase/functions/ofertare-document-nou-citeste
           supabase/functions/ofertare-poarta-text
           supabase/functions/api-consum-extern
+          supabase/functions/ofertare-seap-import
           worker/ofertare/plansa_test.ts
           worker/ofertare/arhive_platforma_test.ts
+      # Verificarea R6 a manifestului (dovada sha 'urcat' nu se mai distruge — audit Jakarinos 07.10, #13). --no-check: tiparea
+      # supabase-js din bibliotecă are erori vechi de tip „never”, fără efect la rulare (același cod rulează pe NAS).
+      - name: Verificarea manifestului SEAP (R6) cu dependente simulate
+        run: deno test -A --no-check --node-modules-dir=none worker/ofertare/verifica_manifest_test.ts
       # J04: testul node:test importă handler-ul .ts, deci rulează sub Deno (Node 20 nu elimină tipurile).
       - name: Hash pe server J04 - logica edge, poarta si paritatea rolurilor
         run: deno test -A --node-modules-dir=none scripts/test-jakv202-hash-server.mjs

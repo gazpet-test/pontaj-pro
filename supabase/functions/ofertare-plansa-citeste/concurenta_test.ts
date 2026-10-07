@@ -1813,6 +1813,11 @@ Deno.test('runda 12: fail-safe-ul privește doar rândurile cu „total” NErec
 // Conflictele transferului care NU produc niciun rând ajung pe document (analiza.transfer_cantitati), legate de jurnal
 // (citire_ai.sumar.cantitati.inregistrare_id), și se închid DOAR prin recitire fără conflicte sau confirmare umană (SQL).
 import { deschis as tcDeschis } from './transfer_conflicte.ts'
+// Recitirile succesive ale aceluiași document trebuie să pornească într-o milisecundă NOUĂ: leaseTransferOcupat tratează un
+// transfer „făcut” cu de_la >= începutul rulării curente ca făcut de o rulare CONCURENTĂ și sare transferul (corect în producție,
+// unde rulările reale nu încap în aceeași ms). Pe un runner rapid apelurile simulate încăpeau uneori în aceeași ms → test instabil
+// în CI (#636, #641). Așteptăm ca ceasul să avanseze față de momentul în care s-a terminat rularea precedentă.
+const ceasNou = async () => { const t = Date.now(); while (Date.now() <= t) await new Promise((r) => setTimeout(r, 1)) }
 Deno.test('sarcina 2 (a) E2E: grup sigur AMBIGUU pe două poziții VALIDATE + rând fără identitate => nimic scris, 0 rânduri nevalidate, dar conflictul e PERSISTAT deschis pe document; o recitire GOLITĂ de Dn-ul problematic NU îl închide (reparația rundei 1, testul Copilot 3); recitirea care îl acoperă îl închide cu urmă', async () => {
   const { supa, n, tabele } = await lic3([
     { id: 31, denumire: 'Țeavă PE100 Dn110 — sat A', cantitate: 300, cantitate_plansa: 300, status: 'validat', diferenta_nota: 'VECHE A' },
@@ -1833,6 +1838,7 @@ Deno.test('sarcina 2 (a) E2E: grup sigur AMBIGUU pe două poziții VALIDATE + r�
   // Înainte (sarcina 2) asta ÎNCHIDEA conflictul „prin recitire”; acum rezultatul golit de rândul problematic NU îl rezolvă: ambiguitatea
   // pe Dn110 e purtată ('nerezolvat_la_recitire'); identitatea (zona z1_1, recitită complet, fără rânduri nesigure) se închide.
   const ai2 = aiFelii(n, { z1_1: { tronsoane: [trT('C', 160, 1740)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'C', '160', '1,74')] }] } })
+  await ceasNou()
   assertEquals((await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai2, supa))).status, 200)
   const tc2 = (await citesteDoc130(tabele)).analiza.transfer_cantitati
   assertEquals([tc2.stare, tc2.n, tcDeschis(tc2), 'inchis_prin' in tc2, tc2.inchise_la_recitire], ['conflicte', 1, true, false, 1])
@@ -1841,6 +1847,7 @@ Deno.test('sarcina 2 (a) E2E: grup sigur AMBIGUU pe două poziții VALIDATE + r�
   // F07: după corectarea #32, recitirea trebuie să vadă ambele identități, #31 și #32.
   await tabele.from('ofertare_cantitati').update({ denumire: 'Țeavă PE100 Dn125 — sat B' }).eq('id', 32)
   const ai3 = aiFelii(n, { z1_1: { tronsoane: [trT('A', 110, 500), trT('B', 125, 200)], tabele: [{ denumire: 'D', coloane: COLT, randuri: [rdT('1', 'A', '110', '0,5'), rdT('2', 'B', '125', '0,2')] }] } })
+  await ceasNou()
   assertEquals((await handler(cerereSvc({ doc_id: 130, de_la: 0 }), svc(n, ai3, supa))).status, 200)
   const tc3 = (await citesteDoc130(tabele)).analiza.transfer_cantitati
   assertEquals([tc3.stare, tc3.n, tcDeschis(tc3), tc3.inchis_prin, tc3.inchide], ['fara_conflicte', 0, false, 'recitire_fara_conflicte', tc2.id])

@@ -122,3 +122,30 @@ SELECT jx.ok(jx.stare(1) = 'depus', 'depus pe A reverificat');
 SELECT jx.trecut('JX-09e');
 ROLLBACK;
 SELECT jx.baza_intacta('JX-09e');
+
+-- JX-09f ─────────────────────────────────────────────────────────────────────────────────────────────
+-- C2 (ultima verificare decide) face ca în JX-09b REFUZ-ul real de după PASS-ul fabricat să decidă singur. Aici PASS-ul fabricat
+-- pentru B (cheia de serviciu, identitatea reală a obiectului B, calculat = declarat = B) e chiar ULTIMUL rând al fișierului: doar
+-- potrivirea SHA dovadă ↔ manifest (A) îl mai poate refuza.
+BEGIN;
+SELECT jx.start('JX-09f', 'PASS fabricat pentru B ca ULTIMĂ verificare (identitate reală, calculat=declarat=B), manifestul pe A → REFUZ J04 doar prin potrivirea SHA cu manifestul');
+-- @edge j07 1
+:admin
+SELECT jx.inlocuieste('pt/1/v1/depus/depus_final_Final.pdf', 'FINAL B');
+-- @edge j04 1
+SELECT jx.ok((SELECT rezultat = 'REFUZ' FROM ofertare_pt_pachet_verificari WHERE fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf' ORDER BY id DESC LIMIT 1)
+  AND (SELECT count(*) = 3 FROM ofertare_pt_pachet_verificari WHERE rezultat = 'PASS'), 'J04 real: 3 PASS, Final.pdf REFUZ (bytes B ≠ manifest A)');
+:service
+INSERT INTO ofertare_pt_pachet_verificari(pachet_fisier_id, bucket, fisier_path, obj_id, obj_updated_at, obj_etag, obj_size,
+  sha256_calculat, sha256_declarat, rezultat, verificat_de)
+SELECT f.id, 'ofertare', o.name, o.id, o.updated_at, o.metadata->>'eTag', (o.metadata->>'size')::bigint, jx.sha('FINAL B'), jx.sha('FINAL B'), 'PASS', :'uid_editor'
+FROM ofertare_pt_pachet_fisiere f JOIN storage.objects o ON o.bucket_id = 'ofertare' AND o.name = f.fisier_path
+WHERE f.fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf';
+:admin
+SELECT jx.ok((SELECT rezultat = 'PASS' AND sha256_calculat = jx.sha('FINAL B') FROM ofertare_pt_pachet_verificari
+  WHERE fisier_path = 'pt/1/v1/depus/depus_final_Final.pdf' ORDER BY id DESC LIMIT 1), 'ultimul rând al Final.pdf: PASS fabricat pe B');
+:editor
+SELECT jx.refuza($$UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1$$, 'P0001', 'Final.pdf: verificare PASS lipsă, SHA diferit');
+SELECT jx.trecut('JX-09f');
+ROLLBACK;
+SELECT jx.baza_intacta('JX-09f');

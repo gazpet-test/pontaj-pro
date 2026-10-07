@@ -94,10 +94,13 @@ SELECT jx.ok((SELECT provolatile = 's' AND prosecdef FROM pg_proc WHERE oid = 'p
   'singurul RPC J07 pentru UI: ofertare_poarta_server, STABLE (nu poate scrie), doar authenticated');
 -- Suprafața: funcții din public executabile de authenticated/anon, care nu sunt triggere, VOLATILE și SECURITY DEFINER
 -- (singurele care pot scrie ocolind RLS). Lista e fixată: o funcție nouă aici cere test explicit.
+-- 06.10.2026: fixture-ul are acum transplantul LIVE J02b (20261004a) → cele 3 RPC-uri J02b (activarea N/A pe licitație,
+-- confirmarea / revocarea N/A pe cerință) — live identice (SECDEF, VOLATILE, authenticated da, anon nu), testate în
+-- scripts/test_j02b_na_confirmare.mjs; nu ating pachetul PT sau dovezile J04/J07.
 SELECT jx.egal((SELECT jsonb_agg(p.proname ORDER BY p.proname) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
     AND p.prorettype <> 'trigger'::regtype AND p.provolatile = 'v' AND p.prosecdef
     AND (has_function_privilege('authenticated', p.oid, 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE'))),
-  '["ofertare_clarificare_exceptie_identitate","ofertare_clarificare_reconfirma","ofertare_clarificari_notifica","ofertare_derogare_depunere","ofertare_transfer_conflicte_confirma"]',
+  '["fn_ofertare_j02b_activeaza","ofertare_clarificare_exceptie_identitate","ofertare_clarificare_reconfirma","ofertare_clarificari_notifica","ofertare_confirma_neaplicabil","ofertare_derogare_depunere","ofertare_revoca_neaplicabil","ofertare_transfer_conflicte_confirma"]',
   'suprafața RPC care poate scrie e cea cunoscută');
 SELECT jx.egal((SELECT coalesce(jsonb_agg(p.proname ORDER BY p.proname), '[]') FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
     AND p.prorettype <> 'trigger'::regtype
@@ -192,8 +195,10 @@ UPDATE ofertare_pt_pachet SET stare = 'depus' WHERE id = 1;
 SELECT jx.fara_efect($$UPDATE ofertare_pt_pachet SET stare = 'aprobat' WHERE id = 1$$);
 SELECT jx.fara_efect($$UPDATE ofertare_pt_pachet SET nota = 'modificat după depunere' WHERE id = 1$$);
 SELECT jx.urca('pt/1/v1/depus/depus_final_Dupa.pdf', 'dupa depunere');
-SELECT jx.refuza($$SELECT jx.fisier(1, 'depus_final', 'Dupa.pdf', 'pt/1/v1/depus/depus_final_Dupa.pdf', 'dupa depunere')$$, '42501', 'row-level security');
+-- C1 (06.10): triggerul de manifest refuză înaintea RLS-ului, pentru orice rol (inclusiv cheia de serviciu, mai jos).
+SELECT jx.refuza($$SELECT jx.fisier(1, 'depus_final', 'Dupa.pdf', 'pt/1/v1/depus/depus_final_Dupa.pdf', 'dupa depunere')$$, '42501', 'Manifestul pachetului 1 e închis (stare depus)');
 :service
+SELECT jx.refuza($$SELECT jx.fisier(1, 'depus_final', 'Dupa.pdf', 'pt/1/v1/depus/depus_final_Dupa.pdf', 'dupa depunere')$$, '42501', 'Manifestul pachetului 1 e închis (stare depus)');
 SELECT jx.refuza($$UPDATE ofertare_pt_pachet SET stare = 'aprobat' WHERE id = 1$$, 'P0001', 'Pachetul depus este imuabil');
 SELECT jx.refuza($$UPDATE ofertare_pt_pachet SET depus_la = now() - interval '1 day' WHERE id = 1$$, 'P0001', 'Pachetul depus este imuabil');
 SELECT jx.trecut('JX-07j');

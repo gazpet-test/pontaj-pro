@@ -18,6 +18,7 @@ import { formatCitare, tabelLipsa, motivNeexportabil } from './ofertareTemeiuri.
 import { mesajFaraText, citesteCuAi, avertismentCitire } from './ofertareCitireDoc.js'
 // R5 runda 9: baza cifrelor ciornelor automate (amprenta de la generare vs acum) — afișare, reconfirmare, export verificat în backend
 import { eCiornaAutomata, stareBazaCiorna, textDiferente, poateAcceptaExceptieIdentitate } from './ofertareClarificariBaza.js'
+import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -66,8 +67,10 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
   const [profiles, setProfiles] = useState([])
   const [citind, setCitind] = useState(null)     // id clarificare în curs de citire AI
   const [docRasp, setDocRasp] = useState([])    // documentele SEAP de tip raspuns_clarificare ale licitației
+  const primite = primiteVizibile(docRasp)        // fără fișierele extrase din arhive (rămâne arhiva, cu rezumat)
   const [busy, setBusy] = useState(null)
   const [citindDoc, setCitindDoc] = useState(null) // id document răspuns în curs de citire AI
+  const [progresCitire, setProgresCitire] = useState('') // eticheta butonului în timpul citirii / rezumatului pe felii
   const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [legare, setLegare] = useState(null)       // { docId, bife:{clarId:true}, propuneri:{clarId:'raspuns_scurt'} } — panoul „La ce întrebări răspunde?”
   // R5 runda 9: starea bazei cifrelor ciornelor automate (v_ofertare_clarificari_baza) — eroare / view lipsă = „nu putem verifica” (fail-closed)
@@ -329,8 +332,9 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
     // Regula documentației (06.10): necitit → întâi pe felii, apoi rezumatul din text; fără drept de cheltuială → stop (citesteCuAi).
     // Starea se recitește acum (lista poate fi veche: alt coleg a citit documentul între timp).
     const { data: st } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('id', d.id).maybeSingle()
-    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? d.status_procesare)
-    setCitindDoc(null)
+    setProgresCitire('')
+    const r = await citesteCuAi((fn, o) => supabase.functions.invoke(fn, o), d.id, st?.status_procesare ?? d.status_procesare, { onProgres: setProgresCitire })
+    setCitindDoc(null); setProgresCitire('')
     if (!r.ok) {
       setEroareCitire(m => ({ ...m, [d.id]: { t: r.eroare, poarta: !!r.poarta } }))
       showToast(r.poarta ? r.eroare : 'Citirea a eșuat: ' + r.eroare, r.poarta ? 'warn' : 'err')
@@ -464,7 +468,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
       <div style={{ ...S.card, padding:14, marginBottom:12 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:8 }}>
           <div>
-            <div style={{ fontWeight:800, fontSize:13.5 }}>📥 Primite de la autoritate ({docRasp.length})</div>
+            <div style={{ fontWeight:800, fontSize:13.5 }}>📥 Primite de la autoritate ({primite.length})</div>
             <div style={{ fontSize:11.5, color:G.dim }}>tot ce a publicat autoritatea DUPĂ documentația inițială — răspunsuri, erate și documentație revizuită</div>
           </div>
           {/* răspunsul consolidat publicat în SEAP, pe care veghea nu-l vede — se urcă manual */}
@@ -473,10 +477,11 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
             <input type="file" accept=".pdf" style={{ display:'none' }} disabled={!!busy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; urcaRaspuns(f) }} />
           </label>
         </div>
-        {!docRasp.length && <div style={{ color:G.dim, fontSize:12.5, padding:'8px 0 4px', textAlign:'center' }}>Nimic nou de la autoritate încă. Când publică ceva în SEAP, veghea îl aduce singură; dacă nu, urcă PDF-ul aici.</div>}
+        {!primite.length && <div style={{ color:G.dim, fontSize:12.5, padding:'8px 0 4px', textAlign:'center' }}>Nimic nou de la autoritate încă. Când publică ceva în SEAP, veghea îl aduce singură; dacă nu, urcă PDF-ul aici.</div>}
         <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-          {docRasp.map(d => {
+          {primite.map(d => {
             const c = d.analiza?.citire_noi
+            const extrase = ARHIVA_DOC_RE.test(d.nume_original || '') ? rezumatExtrase(d.id, docRasp) : null
             const ph = !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
             const legate = (clar || []).filter(q => q.raspuns_document_id === d.id)
             const inLegare = legare?.docId === d.id
@@ -492,6 +497,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                         ♻ DOCUMENTAȚIE REVIZUITĂ
                       </span>
                     )}
+                    {extrase && <div style={{ fontSize:11.5, fontWeight:500, color:G.dim, marginTop:3 }}>{extrase.text}</div>}
                   </div>
                   <span style={{ fontSize:11.5, color:G.dim, whiteSpace:'nowrap' }} title="data apariției în platformă">📅 {fmtData(d.created_at)}</span>
                 </div>
@@ -501,7 +507,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
                     : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschideDoc(d)}>📎 Deschide documentul original</button>}
                   <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1 }}
                     disabled={ph || ARHIVA_DOC_RE.test(d.nume_original || '') || !!citindDoc || !!busy} onClick={() => citesteDoc(d)} title={ARHIVA_DOC_RE.test(d.nume_original || '') ? MESAJ_ARHIVA : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): rezumat, modificări, întrebări răspunse'}>
-                    {citindDoc === d.id ? '⏳ citesc…' : c ? '🤖 recitește' : '🤖 citește cu AI'}
+                    {citindDoc === d.id ? (progresCitire || '⏳ citesc…') : c ? '🤖 recitește' : '🤖 citește cu AI'}
                   </button>
                   {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtData(c.citit_la)}</span>}
                   {c?.termen_nou && <span style={{ fontSize:11.5, fontWeight:800, color:G.red }}>⏰ termen nou: {c.termen_nou}</span>}
@@ -734,7 +740,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 // interpretarea AI. text_extras se încarcă leneș, doar la deschiderea toggle-ului.
 // 05.10.2026 (Mânăstirea, CN1095546/00058): o arhivă .rar de 60 MB adusă din SEAP a stat „neprocesat”, iar aici
 // apărea „poate e scanat”. Arhivele nu se despachetează din răspunsurile SEAP: se dezarhivează local și se urcă conținutul.
-export const ARHIVA_DOC_RE = /\.(7z|rar|zip)$|\.part\d+\.rar$/i
+export const ARHIVA_DOC_RE = /\.(7z|rar|zip)(\.p7[ms])?$|\.part\d+\.rar$/i   // .p7s / .p7m: ca ARHIVA_RE din _shared/tipDocument.mjs
 // Tot 05.10.2026 (regula permanentă, var. A): workerul de pe Terra despachetează singur orice arhivă ajunsă în platformă.
 export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): serverul (Terra) o despachetează singur în câteva minute, iar fișierele din ea apar ca documente separate, cu numele arhivei în față — pe acelea le citești cu AI. Arhivele în volume (.partN.rar) și cele cu eroare se dezarhivează local — motivul e scris la document.'
 

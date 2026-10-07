@@ -140,3 +140,10 @@ Deno.test('„recitește” deliberat (citirea veche terminată ÎNAINTE de înc
   const res = await scrieCitireNoi(db(r), 9, { ...CITIRE, rezumat: 'noua' }, 'a.pdf', am)
   assert(res.scris && !res.stale); assertEquals(r.analiza.citire_noi.rezumat, 'noua')
 })
+
+Deno.test('fara: starea feliilor (citire_noi_lucru) se scoate odată cu scrierea citirii finale; celelalte chei rămân', async () => {
+  const r: any = { id: 9, status_procesare: 'procesat', text_extras: 'x', analiza: { citire_noi_lucru: { rev: 'L', parti: {} }, plansa: { ok: 1 } } }
+  const res = await scrieCitireNoi(db(r), 9, CITIRE, 'a.pdf', undefined, ['citire_noi_lucru'])
+  assert(res.scris)
+  assertEquals([r.analiza.citire_noi_lucru, r.analiza.plansa.ok, r.analiza.citire_noi.tip], [undefined, 1, 'raspuns_clarificare'])
+})

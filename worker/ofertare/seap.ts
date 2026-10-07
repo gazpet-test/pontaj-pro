@@ -11,6 +11,8 @@
 //  - nu executăm nimic din arhivă și nu citim nimic cu AI aici (citirea rămâne pe coada separată „Procesează").
 import type { Supa } from './ingest.ts'
 import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md): descărcările din Storage intră în jurnal
+import { ghicesteTip, tipInArhiva, indiciuArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
+import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume, pastreazaUrcat } from '../../supabase/functions/_shared/identitateFisier.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -32,18 +34,13 @@ export const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').
   .replace(/[,()]/g, '').replace(/\s+/g, '')
 const estePlaceholder = (d: { fisier_path?: string | null }) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
 
-// aceleași reguli ca ghicesteTip din ofertare-seap-import (valorile există în CHECK-ul coloanei tip)
-export function ghicesteTip(nume: string): string {
-  const n = nume.toLowerCase()
-  if (/fisa[_ -]?date|instructiuni_ofertanti/.test(n)) return 'fisa_date'
-  if (/formular|duae/.test(n)) return 'formular'
-  if (/contract/.test(n)) return 'model_contract'
-  if (/cantitat|antemasur|^f[1-3][_ .-]|centralizator/.test(n)) return 'lista_cantitati'
-  if (/desene|plans|plansa|schema tehnologica|\.dwg|izometri|topo/.test(n)) return 'plansa'
-  if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum'
-  if (/raspuns|clarificar/.test(n)) return 'raspuns_clarificare'
-  return 'alta'
-}
+// Semnătura CMS de desfăcut după descărcare: .p7s ca până acum; .p7m DOAR pe arhive (lic. 92, „….rar.p7m”; decizia Răzvan
+// 07.10.2026, var. A). Un document „….pdf.p7m” rămâne cum vine, iar cheia păstrează „.p7m”: „X.rar.p7m” nu se confundă cu
+// „X.rar” deja urcat (Copilot conv. 3, NO-GO r2 pe #644) — se descarcă, se desface, fișierele din el trec prin regula sha.
+export const semnaturaDeDesfacut = (nume: string) => /\.p7s$/i.test(nume) || /\.(zip|rar|7z)\.p7m$/i.test(nume)
+
+// Tipul după nume: sursa unică în supabase/functions/_shared/tipDocument.mjs (aceleași reguli în edge, api, UI).
+export { ghicesteTip }
 
 // -- Semnătura .p7s (CMS / PKCS#7, DER) ----------------------------------------------------------------
 // Parcurgem structura: ContentInfo → [0] SignedData → encapContentInfo → [0] OCTET STRING (poate fi „constructed",
@@ -234,15 +231,27 @@ async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Arra
   if (eUp) return `urcare: ${eUp.message}`
   const rand = {
     licitatie_id: licId, fisier_path: path, nume_original: numeFinal, tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-    status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-    eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
+    // 07.10.2026: o arhivă extrasă dintr-o arhivă intră „neprocesat”, fără notă → o despachetează bucla de mai jos
+    // (același extractor izolat, limite, MAX_ADANCIME_ARHIVE). Înainte rămânea „ignorat”: necitită, fără semnal.
+    status_procesare: estePdf || esteArhivaDoc(numeFinal) ? 'neprocesat' : 'ignorat',
+    eroare: estePdf || esteArhivaDoc(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
     sursa: 'seap',
     ...extra,
   }
-  const idPh = placeholders.get(cheieNume(numeFinal))
-  const { data, error } = idPh
-    ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh).select('id').single()
-    : await supa.from('ofertare_documente_atribuire').insert(rand).select('id').single()
+  // placeholder-ul (pus de veghe) se completează O SINGURĂ DATĂ: consumat la prima folosire și UPDATE doar dacă e încă
+  // placeholder (audit Jakarinos 07.10, #2). Altfel „Anexa (1).pdf” și „Anexa 1.pdf” (aceeași cheie, conținut diferit) scriau
+  // amândouă în același rând — al doilea îl înlocuia pe primul, iar obiectul primului rămânea orfan în Storage.
+  const k = cheieNume(numeFinal)
+  const idPh = placeholders.get(k)
+  if (idPh) {
+    placeholders.delete(k)
+    const { data: compl, error: eC } = await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh)
+      .or('fisier_path.is.null,fisier_path.like.%/neincarcat/%').select('id')
+    if (eC) { await supa.storage.from(BUCKET).remove([path]); return `rând BD: ${eC.message}` }
+    if ((compl || []).length === 1) return { id: (compl as any)[0].id as number }
+    // completat între timp de alt drum → rând nou, nu suprascriere
+  }
+  const { data, error } = await supa.from('ofertare_documente_atribuire').insert(rand).select('id').single()
   if (error) { await supa.storage.from(BUCKET).remove([path]); return `rând BD: ${error.message}` }
   return { id: (data as any).id as number }
 }
@@ -250,6 +259,16 @@ async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Arra
 // -- O licitație ------------------------------------------------------------------------------------
 type ManifestRand = { licitatie_id: number; arhiva_cheie: string; cale: string; marime: number; sha256: string; document_id: number | null; stare: 'urcat' | 'deja_in_platforma' | 'eroare_urcare' | 'ignorat'; motiv: string | null; verificat_la: string }
 type Raport = { seap: number; deja: number; adusi: number; fisiere_urcate: number; erori: string[]; sarite: number }
+
+// -- Identitatea unui fișier extras pe drumul SEAP (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643) -----------------
+// Înainte: „deja în platformă” = aceeași cheieNume, ORICARE ar fi conținutul („Caiet de sarcini.pdf” din Lot1.zip și din
+// Lot2.zip → unul singur; „X.PDF” / „x.pdf” → unul pierdut, marcat „deja_in_platforma” cu id-ul celuilalt). Acum regula din
+// _shared/identitateFisier.mjs, aceeași ca în ZIP-ul inline din edge: „deja” doar cu sha256 DOVEDIT (manifest 'urcat');
+// altfel numele exact dacă e liber, apoi prefixul arhivei („Lot2/Caiet….pdf”), apoi sha-ul în nume.
+export function prefixArhiva(numeArhiva: string): string {
+  const n = String(numeArhiva ?? '').replace(/\.p7[ms]$/i, '')
+  return (volumRar(n)?.baza ?? n.replace(/\.(zip|rar|7z)$/i, '')).replace(/[\\/]+/g, '_').trim() || 'arhiva'
+}
 
 async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'identificat' | 'ok' | 'eroare' | 'sarit'; etapa?: string; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }) {
   const cheie = cheieNume(nume)
@@ -275,6 +294,9 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   raport.seap = docs.length
   const { data: dinBd } = await supa.from('ofertare_documente_atribuire').select('id, nume_original, fisier_path').eq('licitatie_id', licId)
   const urcate = new Map((dinBd || []).filter(d => !estePlaceholder(d)).map(d => [cheieNume(d.nume_original), d.id as number]))
+  // fișierele extrase din arhive: „deja” doar cu sha256 dovedit de manifest ('urcat') — _shared/identitateFisier.mjs
+  const { data: manUrcat } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256, stare').eq('licitatie_id', licId).eq('stare', 'urcat').not('document_id', 'is', null)
+  const identitate = stareIdentitate((dinBd || []).filter(d => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume)
   const placeholders = new Map((dinBd || []).filter(estePlaceholder).map(d => [cheieNume(d.nume_original), d.id as number]))
   const { data: evid } = await supa.from('ofertare_seap_fisiere').select('cheie, stare, incercari').eq('licitatie_id', licId)
   const evidenta = new Map((evid || []).map(e => [e.cheie, e]))
@@ -291,14 +313,14 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   // volumele RAR ale aceleiași arhive se tratează împreună (toate sau nimic)
   const grupuri = new Map<string, DocSeap[]>()
   for (const d of lipsa) {
-    const v = volumRar(d.nume.replace(/\.p7s$/i, ''))
+    const v = volumRar(d.nume.replace(/\.p7[ms]$/i, ''))
     const cheieGrup = v ? `rar:${v.baza.toLowerCase()}` : `f:${d.nume}`
     grupuri.set(cheieGrup, [...(grupuri.get(cheieGrup) || []), d])
   }
   // un volum lipsă din grup (ex. partea 3 deja „ok"?) → luăm tot grupul din lista completă SEAP
   for (const [k, g] of grupuri) {
     if (!k.startsWith('rar:')) continue
-    const toate = docs.filter(d => { const v = volumRar(d.nume.replace(/\.p7s$/i, '')); return v && `rar:${v.baza.toLowerCase()}` === k })
+    const toate = docs.filter(d => { const v = volumRar(d.nume.replace(/\.p7[ms]$/i, '')); return v && `rar:${v.baza.toLowerCase()}` === k })
     grupuri.set(k, toate)
   }
 
@@ -312,7 +334,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   await Deno.chmod(tmp, 0o755)
   try {
     for (const [cheieGrup, grup] of grupuri) {
-      const eticheta = grup.length > 1 ? `${grup[0].nume.replace(/\.part\d+\.rar(\.p7s)?$/i, '')} (${grup.length} volume)` : grup[0].nume
+      const eticheta = grup.length > 1 ? `${grup[0].nume.replace(/\.part\d+\.rar(\.p7[ms])?$/i, '')} (${grup.length} volume)` : grup[0].nume
       stare(`aduc ${eticheta}`)
       const dir = `${tmp}/${raport.adusi++}`
       await pregatesteJob(dir)
@@ -320,14 +342,14 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       let esec: string | null = null, etapaEsec = 'descarcare'
       // cifrele numărului de volum din SEAP (part01 → 2) — numele canonic trebuie să le păstreze
       const cifre = Math.max(1, ...grup.map(d => d.nume.match(/\.part(\d+)/i)?.[1].length ?? 1))
-      grup.sort((a, b) => (volumRar(a.nume.replace(/\.p7s$/i, ''))?.nr ?? 0) - (volumRar(b.nume.replace(/\.p7s$/i, ''))?.nr ?? 0))
+      grup.sort((a, b) => (volumRar(a.nume.replace(/\.p7[ms]$/i, ''))?.nr ?? 0) - (volumRar(b.nume.replace(/\.p7[ms]$/i, ''))?.nr ?? 0))
       for (const doc of grup) {
         try {
           const brut = `${dir}/in/descarcat.bin`
           await descarca(doc, cookie, brut)
           let buf = await Deno.readFile(brut)
           let nume = doc.nume
-          if (/\.p7s$/i.test(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7s$/i, '') }
+          if (semnaturaDeDesfacut(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7[ms]$/i, '') }
           const vol = cheieGrup.startsWith('rar:') ? volumRar(nume) : null
           const cale = `${dir}/in/${(vol ? numeVolum(vol, cifre) : nume).replace(/[\\/]/g, '_')}`
           await Deno.writeFile(cale, buf)
@@ -372,13 +394,22 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         for await (const f of fisiereDin(out)) {
           const buf = await Deno.readFile(f.cale)
           const rand: ManifestRand = { licitatie_id: licId, arhiva_cheie: arhivaCheie, cale: f.rel, marime: buf.length, sha256: await sha256(buf), document_id: null, stare: 'urcat', motiv: null, verificat_la: new Date().toISOString() }
-          if (JUNK_RE.test(f.rel)) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)' }
-          else if (urcate.has(cheieNume(f.rel))) { extrase++; rand.stare = 'deja_in_platforma'; rand.document_id = urcate.get(cheieNume(f.rel)) ?? null }   // ex. urcat de mână
+          const alegere = JUNK_RE.test(f.rel) ? null : alegeNume(identitate, f.rel, prefixArhiva(locale[0].doc.nume), rand.sha256)
+          if (!alegere) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)' }
+          else if ('deja' in alegere) {   // același conținut dovedit; propria urcare anterioară își păstrează rândul 'urcat' (dovada)
+            extrase++; rand.document_id = alegere.deja
+            rand.stare = pastreazaUrcat(manUrcat || [], arhivaCheie, f.rel, alegere.deja) ? 'urcat' : 'deja_in_platforma'
+          }
           else {
-            stare(`urc ${f.rel}`)
-            const r = await urca(supa, licId, f.rel, buf, placeholders)
+            stare(`urc ${alegere.nume}`)
+            // tipul cu indiciul arhivei, ca în bucla de platformă și în ZIP-ul inline din edge (#641, aceeași regulă peste tot)
+            const r = await urca(supa, licId, alegere.nume, buf, placeholders, { tip: tipInArhiva(alegere.nume, indiciuArhiva(locale[0].doc.nume)) })
             if (typeof r === 'string') { eroriInterne.push(`${f.rel}: ${r}`); rand.stare = 'eroare_urcare'; rand.motiv = r }
-            else { extrase++; raport.fisiere_urcate++; urcate.set(cheieNume(f.rel), r.id); rand.document_id = r.id }
+            else {
+              extrase++; raport.fisiere_urcate++; rand.document_id = r.id
+              if (alegere.nume !== f.rel) rand.motiv = `nume diferit de altul cu alt conținut → urcat ca „${alegere.nume}”`
+              urcate.set(cheieNume(alegere.nume), r.id); adaugaDocument(identitate, alegere.nume, r.id, rand.sha256)
+            }
           }
           manifest.push(rand)
           await Deno.remove(f.cale)
@@ -461,10 +492,14 @@ export async function proceseazaSeap(supa: Supa, oprire: () => boolean, stare: (
       await supa.from('ofertare_seap_cereri').upsert({ licitatie_id: a.id, cerut_la: new Date().toISOString(), sursa: 'reconciliere' }, { onConflict: 'licitatie_id', ignoreDuplicates: false })
     }
   }
-  const { data: cereri } = await supa.from('ofertare_seap_cereri').select('licitatie_id, cerut_la, terminat_la, cerut_de, sursa').order('cerut_la').limit(20)
-  for (const c of cereri || []) {
+  // un rând per licitație (tabel mic): filtrul „restantă” se aplică ÎNAINTE de plafonul de 20 (audit Jakarinos 07.10, #6) —
+  // altfel 20 de cereri vechi, terminate, ale unor licitații inactive (cerut_la mic, nereîmprospătat) ocupau toate locurile
+  // și o cerere nouă nu mai era luată niciodată. PostgREST nu compară două coloane, deci filtrul rămâne în JS.
+  const { data: toateCererile } = await supa.from('ofertare_seap_cereri').select('licitatie_id, cerut_la, terminat_la, cerut_de, sursa').order('cerut_la').limit(1000)
+  type Cerere = { licitatie_id: number; cerut_la: string; terminat_la: string | null; cerut_de: string | null; sursa: string | null }
+  const cereri = ((toateCererile || []) as unknown as Cerere[]).filter(c => !(c.terminat_la && new Date(c.terminat_la) >= new Date(c.cerut_la))).slice(0, 20)
+  for (const c of cereri) {
     if (oprire()) return
-    if (c.terminat_la && new Date(c.terminat_la) >= new Date(c.cerut_la)) continue
     await supa.from('ofertare_seap_cereri').update({ preluat_la: new Date().toISOString() }).eq('licitatie_id', c.licitatie_id)
     let raport: Raport | { eroare: string }
     try {
@@ -474,7 +509,11 @@ export async function proceseazaSeap(supa: Supa, oprire: () => boolean, stare: (
       raport = { eroare: String((e as Error)?.message ?? e) }
       log(`#${c.licitatie_id}: eșec — ${raport.eroare}`)
     }
-    await supa.from('ofertare_seap_cereri').update({ terminat_la: new Date().toISOString(), raport }).eq('licitatie_id', c.licitatie_id)
+    // „terminat” doar pentru cererea PRELUATĂ: dacă între timp a venit una nouă (cerut_la schimbat), rămâne restantă și se
+    // reia la tura următoare — altfel terminat_la scris acum o acoperea fără să fi fost procesată (audit Jakarinos 07.10, #6)
+    const { data: inchisa } = await supa.from('ofertare_seap_cereri').update({ terminat_la: new Date().toISOString(), raport })
+      .eq('licitatie_id', c.licitatie_id).eq('cerut_la', c.cerut_la).select('licitatie_id')
+    if (!(inchisa || []).length) await supa.from('ofertare_seap_cereri').update({ raport }).eq('licitatie_id', c.licitatie_id)
     // cine a cerut de mână află rezultatul (reconcilierea orară nu trimite notificări, doar când urcă ceva nou)
     const r = raport as Raport
     const deSpus = c.sursa === 'om' || (r.fisiere_urcate ?? 0) > 0 || (r.erori?.length ?? 0) > 0
@@ -501,7 +540,7 @@ export async function proceseazaSeap(supa: Supa, oprire: () => boolean, stare: (
 // PROPRIU arhivei („DOC_F1_F6_C1_C9 (#1305)/F3_….pdf”): nici documentația inițială, nici o altă arhivă cu același nume
 // nu se amestecă (Copilot P1 pe #608). Fără AI și fără cost: citirea rămâne pornită de om. O arhivă pe tură.
 // Volumele .partN.rar NU se despachetează aici (pot sosi pe rând — Copilot P1): se marchează „manual”, explicit.
-export const ARHIVA_DOC_RE = /\.(zip|rar|7z)(\.p7s)?$/i
+export const ARHIVA_DOC_RE = /\.(zip|rar|7z)(\.p7[ms])?$/i
 export const MARCAJ_DESPACHETARE = 'Despachetare în curs (worker NAS)'
 // DOAR arhivele noi: status „neprocesat” și fără notă (veghea și urcarea din UI le pun așa). Cele ~35 de arhive vechi din
 // platformă (ignorat, „non-PDF…” / „Arhivă adusă pe Terra…”, unele deja despachetate pe drumul SEAP) NU se ating
@@ -517,11 +556,59 @@ export function eArhivaDeDespachetat(d: Partial<DocArhiva>): boolean {
 // Filtrul pe nume (PostgREST `or`); statusul, „fără notă” și „nu e placeholder” se filtrează tot pe server, ÎNAINTE de
 // limit — stările finale (despachetată / parțială / respinsă / manuală) au toate notă, iar placeholder-ele n-au fișier,
 // deci niciunele nu pot ocupa cele 50 de locuri (Copilot P0 r2 + r3 pe #608). Filtrul JS rămâne a doua barieră.
-export const FILTRU_NUME_ARHIVA = ['zip', 'rar', '7z', 'zip.p7s', 'rar.p7s', '7z.p7s'].map(x => `nume_original.ilike.%.${x}`).join(',')
-export const esteVolumRar = (nume: string) => !!volumRar(nume.replace(/\.p7s$/i, ''))
+export const FILTRU_NUME_ARHIVA = ['zip', 'rar', '7z', 'zip.p7s', 'rar.p7s', '7z.p7s', 'zip.p7m', 'rar.p7m', '7z.p7m'].map(x => `nume_original.ilike.%.${x}`).join(',')
+export const esteVolumRar = (nume: string) => !!volumRar(nume.replace(/\.p7[ms]$/i, ''))
 /** Spațiul de nume al documentelor extrase: numele arhivei + id-ul rândului ei („DOC_F1_F6_C1_C9 (#1305)”). */
 export const spatiuArhiva = (d: { id: number; nume_original: string }) =>
-  `${(d.nume_original.replace(/\.p7s$/i, '').replace(/\.(zip|rar|7z)$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva')} (#${d.id})`
+  `${(d.nume_original.replace(/\.p7[ms]$/i, '').replace(/\.(zip|rar|7z)$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva')} (#${d.id})`
+
+// 07.10.2026 (review #641 r2 + Copilot conv. 3): edge / api urcă arhivele SEAP de prim nivel ÎNTREGI („neprocesat”), iar
+// drumul SEAP al workerului (aduLicitatie) poate să le fi desfăcut deja. Garda închide arhiva DOAR pe evidența COMPLETĂ a
+// acelui drum (stare „ok” = zero fișiere neurcate, cu fișiere extrase) — altfel aceleași fișiere ar apărea a doua oară sub
+// „<arhivă> (#id)/…”. O despachetare PARȚIALĂ (evidență „eroare”, sau ZIP desfăcut inline de edge cu copii eșuați) NU
+// închide arhiva: bucla o desface și sare doar fișierele urcate deja cu succes (fisiereDejaImportate), deci lipsurile se
+// recuperează. Doar pentru arhivele de prim nivel (cele extrase dintr-o arhivă n-au trecut pe drumul SEAP).
+// Audit Jakarinos 07.10 (#3): ACEEAȘI arhivă, nu doar același nume — sha256-ul conținutului (după desfacerea semnăturii) trebuie
+// să fie cel din evidență. O republicare cu alt conținut sub același nume (veghea o aduce cu cod SEAP nou) se despachetează;
+// înainte era închisă cu nota falsă „fișierele ei sunt deja în platformă”. Evidență fără sha = nedovedit → se despachetează
+// (dublurile sunt sărite de fisiereDejaImportate doar cu conținut dovedit — o dublură e preferabilă unei pierderi).
+export async function dejaDesfacutaPeSeap(supa: Supa, d: { licitatie_id: number; nume_original: string }, sha: string): Promise<string | null> {
+  if (adancimeArhiva(d.nume_original) > 0) return null
+  const { data: ev } = await supa.from('ofertare_seap_fisiere').select('stare, fisiere_extrase, sha256')
+    .eq('licitatie_id', d.licitatie_id).eq('cheie', cheieNume(d.nume_original)).maybeSingle()
+  const e = ev as { stare?: string; fisiere_extrase?: number; sha256?: string | null } | null
+  return e?.stare === 'ok' && Number(e.fisiere_extrase) > 0 && !!e.sha256 && e.sha256 === sha ? `${e.fisiere_extrase} fișiere, evidența drumului SEAP` : null
+}
+const caleFaraP7s = (c: unknown) => String(c ?? '').replace(/\.p7s$/i, '')
+/** Ce a urcat deja un import anterior al ACESTEI arhive (manifestul drumului SEAP sau al ZIP-ului inline din edge), ca
+ *  cale → sha-uri DOVEDITE. Audit Jakarinos 07.10 (#5), aceeași regulă ca #643 (_shared/identitateFisier.mjs): un rând contează
+ *  doar dacă documentul lui are sha dovedit (manifest 'urcat') egal cu sha-ul rândului — un 'deja_in_platforma' vechi, scris
+ *  de bugul reparat în #643 (alt conținut, id-ul celuilalt), sau un rând eșuat (document_id NULL) nu mai sare nimic. Apelantul
+ *  sare un fișier doar dacă sha-ul LUI e printre cele dovedite pe aceeași cale. */
+export async function fisiereDejaImportate(supa: Supa, d: { licitatie_id: number; nume_original: string }): Promise<Map<string, Set<string>>> {
+  const dovedite = new Map<string, Set<string>>()
+  if (adancimeArhiva(d.nume_original) > 0) return dovedite
+  const cheieManifest = String(d.nume_original ?? '').replace(/\.p7s$/i, '').toLowerCase()
+  const { data: man } = await supa.from('ofertare_seap_manifest').select('cale, arhiva_cheie, document_id, sha256, stare')
+    .eq('licitatie_id', d.licitatie_id).in('arhiva_cheie', [cheieManifest, cheieNume(d.nume_original)])
+  const { data: urcate } = await supa.from('ofertare_seap_manifest').select('document_id, sha256, stare')
+    .eq('licitatie_id', d.licitatie_id).eq('stare', 'urcat').not('document_id', 'is', null)
+  const shaDoc = shaDovedit(urcate || [])
+  const candidati = ((man || []) as { cale: string; document_id: number | null; sha256?: string }[])
+    .filter(m => m.document_id != null && !!m.sha256 && shaDoc.get(m.document_id) === m.sha256)
+  if (!candidati.length) return dovedite
+  // dovada contează doar dacă documentul EXISTĂ ACUM, cu fișier real (Copilot conv. 3, NO-GO r1 pe #646): un rând șters sau
+  // rămas placeholder nu mai ține conținutul în platformă, deci fișierul din arhivă trebuie urcat, nu sărit ca „deja”
+  const { data: vii } = await supa.from('ofertare_documente_atribuire').select('id, fisier_path')
+    .eq('licitatie_id', d.licitatie_id).in('id', [...new Set(candidati.map(m => m.document_id as number))])
+  const existente = new Set(((vii || []) as { id: number; fisier_path: string | null }[]).filter(x => !estePlaceholder(x)).map(x => x.id))
+  for (const m of candidati) {
+    if (!existente.has(m.document_id as number)) continue
+    const c = caleFaraP7s(m.cale)
+    dovedite.set(c, (dovedite.get(c) ?? new Set()).add(m.sha256 as string))
+  }
+  return dovedite
+}
 
 let arhiveCuratate = false
 let arhivePauzaPana = 0     // extractorul nu răspunde → nu-l mai întrebăm la fiecare tură
@@ -547,7 +634,13 @@ export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: str
       }).eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null)
       continue
     }
-    await despacheteazaArhiva(supa, d, stare)
+    if (adancimeArhiva(d.nume_original) >= MAX_ADANCIME_ARHIVE) {   // stare finală, explicită: nu-l mai selectăm
+      await supa.from('ofertare_documente_atribuire').update({
+        eroare: `Despachetare manuală necesară: arhivă imbricată pe nivelul ${adancimeArhiva(d.nume_original)} (limita automată e ${MAX_ADANCIME_ARHIVE} niveluri). Descarc-o, dezarhivează local și urcă fișierele.`,
+      }).eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null)
+      continue
+    }
+    await despacheteazaArhiva(supa, d, stare)   // garda drumului SEAP (dejaDesfacutaPeSeap) e înăuntru: cere sha-ul arhivei
     return     // o arhivă pe tură: nu ține bucla SEAP ocupată
   }
 }
@@ -561,10 +654,11 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
   const termina = (status: string, eroare: string | null) => supa.from('ofertare_documente_atribuire')
     .update({ status_procesare: status, eroare: eroare === null ? null : eroare.slice(0, 500) }).eq('id', d.id).eq('eroare', MARCAJ_DESPACHETARE)
   const spatiu = spatiuArhiva(d)
-  await Deno.mkdir(LUCRU, { recursive: true })
-  const tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_arh_${licId}_` })
-  await Deno.chmod(tmp, 0o755)
+  let tmp: string | null = null
   try {
+    await Deno.mkdir(LUCRU, { recursive: true })
+    tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_arh_${licId}_` })
+    await Deno.chmod(tmp, 0o755)
     const dir = `${tmp}/0`
     await pregatesteJob(dir)
     stare(`arhivă din platformă: descarc ${d.nume_original}`)
@@ -572,9 +666,14 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     if (error || !blob) { await termina('eroare', `Despachetare eșuată (descărcare din Storage): ${error?.message ?? 'fișier gol'}`); return }
     let buf = new Uint8Array(await blob.arrayBuffer())
     let nume = d.nume_original
-    if (/\.p7s$/i.test(nume)) {
-      try { buf = continutP7s(buf) } catch (e) { await termina('eroare', `Despachetare eșuată (semnătura .p7s): ${(e as Error)?.message ?? e}`); return }
-      nume = nume.replace(/\.p7s$/i, '')
+    if (semnaturaDeDesfacut(nume)) {
+      try { buf = continutP7s(buf) } catch (e) { await termina('eroare', `Despachetare eșuată (semnătura CMS .p7s/.p7m): ${(e as Error)?.message ?? e}`); return }
+      nume = nume.replace(/\.p7[ms]$/i, '')
+    }
+    const dejaSeap = await dejaDesfacutaPeSeap(supa, d, await sha256(buf))
+    if (dejaSeap) {   // stare finală, explicită: ACEEAȘI arhivă nu se desface a doua oară (dubluri sub alt spațiu de nume)
+      await termina('ignorat', `📦 Arhivă deja despachetată pe drumul SEAP (${dejaSeap}) — nu se desface a doua oară; fișierele ei sunt deja în platformă.`)
+      return
     }
     const prima = nume.replace(/[\\/]/g, '_')
     await Deno.writeFile(`${dir}/in/${prima}`, buf)
@@ -597,26 +696,31 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     }
     if (x.code !== 0) { await termina('eroare', `Despachetare ${/^(LIMITĂ|RESPINS)/.test(x.motiv) ? 'RESPINSĂ' : 'eșuată'} (extragere, cod ${x.code}): ${x.motiv.slice(0, 300)}`); return }
     await Deno.remove(`${dir}/in/${prima}`).catch(() => {})
-    // o reluare (după o urcare parțială) nu dublează: comparăm DOAR cu spațiul de nume al acestei arhive
+    // o reluare (după o urcare parțială) nu dublează: comparăm DOAR cu spațiul de nume al acestei arhive, pe CALEA EXACTĂ.
+    // (07.10, review #641: cu cheieNume — fără .p7s / paranteze / spații / majuscule — „PT.zip” și „PT.zip.p7s” sau
+    // „Anexa (1).pdf” și „Anexa 1.pdf” din aceeași arhivă se confundau și unul se pierdea tăcut, numărat „existau deja”.)
     const { data: existente } = await supa.from('ofertare_documente_atribuire').select('id, nume_original').eq('licitatie_id', licId)
-    const urcate = new Set(((existente || []) as { nume_original: string }[]).filter(e => (e.nume_original || '').startsWith(`${spatiu}/`)).map(e => cheieNume(e.nume_original)))
+    const urcate = new Set(((existente || []) as { nume_original: string }[]).map(e => e.nume_original || '').filter(n => n.startsWith(`${spatiu}/`)))
+    const dinImport = await fisiereDejaImportate(supa, d)   // urcate deja cu succes de importul care a desfăcut-o parțial
     let extrase = 0, deja = 0
     const erori: string[] = []
     for await (const f of fisiereDin(`${dir}/out`)) {
       const numeFinal = `${spatiu}/${f.rel}`
       if (JUNK_RE.test(f.rel)) { await Deno.remove(f.cale); continue }
-      if (urcate.has(cheieNume(numeFinal))) { deja++; await Deno.remove(f.cale); continue }
-      stare(`arhivă din platformă: urc ${numeFinal}`)
+      if (urcate.has(numeFinal)) { deja++; await Deno.remove(f.cale); continue }
       const fb = await Deno.readFile(f.cale)
-      const tipPropriu = ghicesteTip(f.rel.split('/').pop() || f.rel)
+      if (dinImport.get(caleFaraP7s(f.rel))?.has(await sha256(fb))) { deja++; await Deno.remove(f.cale); continue }   // același conținut, dovedit
+      stare(`arhivă din platformă: urc ${numeFinal}`)
       const r = await urca(supa, licId, numeFinal, fb, new Map(), {
         // seap_cod NU se moștenește: e unic pe (licitație, cod) — e codul documentului SEAP, adică al arhivei
         // (05.10, 1305: 159 de fișiere respinse de ofertare_doc_seap_cod_unic). Legătura cu arhiva e în nume: „(#id)”.
-        tip: tipPropriu === 'alta' && d.tip ? d.tip : tipPropriu,
+        // regula proprie câștigă, apoi folderul; altfel tipul arhivei — dar NU raspuns_clarificare (lic. 3: 117 formulare /
+        // planșe în Clarificări) și NU planșa (un breviar dintr-o arhivă „Planșe” n-ar mai fi citit)
+        tip: tipInArhiva(f.rel, indiciuArhiva(d.nume_original, d.tip)),   // indiciul mamei: numele arhivei, apoi rândul ei
         aparut_ulterior: d.aparut_ulterior ?? null,
       })
       if (typeof r === 'string') erori.push(`${f.rel}: ${r}`)
-      else { extrase++; urcate.add(cheieNume(numeFinal)) }
+      else { extrase++; urcate.add(numeFinal) }
       await Deno.remove(f.cale)
     }
     // Copilot P0 pe #608: orice fișier neurcat ține arhiva în „eroare” (vizibil, cu lista) — cele reușite rămân;
@@ -638,7 +742,13 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
         link_to: '/ofertare',
       })
     }
+  } catch (e) {
+    // după revendicare orice excepție (disc, rețea, BD) închide rândul cu motivul scris (audit Jakarinos 07.10, #7): altfel
+    // rămânea „in_lucru” cu „Despachetare în curs”, exclus din selecții până la o repornire a workerului
+    const motiv = String((e as Error)?.message ?? e)
+    log(`#${licId}: ${d.nume_original}: excepție la despachetare — ${motiv}`)
+    try { await termina('eroare', `Despachetare eșuată (excepție): ${motiv}. Pentru reîncercare: status neprocesat, fără notă.`) } catch { /* BD indisponibilă: marcajul se recuperează la repornire */ }
   } finally {
-    await Deno.remove(tmp, { recursive: true }).catch(() => {})
+    if (tmp) await Deno.remove(tmp, { recursive: true }).catch(() => {})
   }
 }

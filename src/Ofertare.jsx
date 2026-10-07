@@ -360,12 +360,15 @@ function OfertaModal({ oferta, profile, onClose, onSaved, onError }) {
     (async () => {
       const [cRes, dRes, cfgRes, ttRes] = await Promise.all([
         supabase.from('probe_calcule')
-          .select('id, tip_fluid, lungime_m, presiune_bar, v_conducta_mc, durata_proba_h, durata_pistonare_h, durata_total_h, consum_motorina_l, proiect_id, config_id, probe_diametre(dn_label), probe_configuratii(denumire, tarif_lei_h, tarif_lei_mc, categorie_transport), executie_proiecte(cod_intern, nume)')
+          .select('id, tip_fluid, lungime_m, presiune_bar, v_conducta_mc, durata_proba_h, durata_pistonare_h, durata_total_h, consum_motorina_l, proiect_id, config_id, probe_diametre(dn_label), probe_configuratii!config_id(denumire, tarif_lei_h, tarif_lei_mc, categorie_transport), executie_proiecte(cod_intern, nume)')
           .order('created_at', { ascending: false }).limit(100),
         supabase.from('probe_diametre').select('*').eq('activ', true).order('ordine'),
         supabase.from('probe_configuratii').select('*').eq('activ', true).order('id'),
         supabase.from('probe_transport_tarife').select('*'),
       ])
+      // TKT-2026-0330: probe_calcule are două FK spre probe_configuratii (config_id + config_real_id) — fără !config_id
+      // embed-ul era ambiguu (PGRST201), lista venea goală tăcut și „Din calcul salvat” nu mai avea nimic de ales
+      if (cRes.error) onError('Calculele de probă nu s-au încărcat: ' + cRes.error.message)
       setCalcule(cRes.data || [])
       setDiametre(dRes.data || [])
       setConfigs(cfgRes.data || [])
