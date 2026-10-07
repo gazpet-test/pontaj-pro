@@ -45,9 +45,10 @@ async function scenariu(opt: Opt = {}) {
   const raspuns = (data: unknown) => ({
     abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve({ data, error: null }) },
   })
-  const raspunsDovezi = () => ({
-    abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve(opt.eroareDovezi ? { data: null, error: { message: 'simulat: manifest indisponibil' } } : { data: opt.dovezi ?? [], error: null }) },
-  })
+  // pe pagini (toatePaginile): .order('id').range(de, la).abortSignal(...) — intervalul respectat ca la PostgREST
+  const raspunsDovezi = () => ({ order: (c: string) => { eq(c, 'id'); return { range: (de: number, la: number) => ({
+    abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve(opt.eroareDovezi ? { data: null, error: { message: 'simulat: manifest indisponibil' } } : { data: (opt.dovezi ?? []).slice(de, la + 1), error: null }) },
+  }) } } })
   const supa = {
     from(t: string) {
       if (t === 'ofertare_seap_cereri' && opt.periodica) return {
@@ -75,7 +76,8 @@ async function scenariu(opt: Opt = {}) {
         eq([k, v], [t === 'ofertare_licitatii' ? 'id' : 'licitatie_id', 93])
         return t === 'ofertare_licitatii'
           ? { abortSignal: (signal: AbortSignal) => { assert(signal); return { single: async () => ({ data: { c_notice_id: 123, sys_notice_type_id: 2 }, error: null }) } } }
-          : raspuns(documente.map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d))
+          : { order: (c: string) => { eq(c, 'id'); return { range: (de: number, la: number) =>
+              raspuns(documente.map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d).slice(de, la + 1)) } } }
       } }) }
     },
     storage: { from() { throw new Error('SDK Storage interzis: descărcarea trebuie să fie anulabilă integral') } },
@@ -429,6 +431,14 @@ Deno.test('manifest (Jakarinos r2 pe #651): legătura „deja_in_platforma” a 
   const pe = Object.fromEntries(scrieri.map(r => [r.cale, [r.stare, r.document_id, r.motiv ? r.motiv.slice(0, 18) : null]]))
   eq(pe['b.pdf'], ['deja_in_platforma', 12, null], 'legătura confirmată rămâne „deja”, nu se promovează la „urcat”')
   eq(pe['c.pdf'], ['deja_in_platforma', 11, 'DIFERIT de Storage'], 'documentul verificat e cel din legătură (11), nu cel găsit după nume (13)')
+})
+
+Deno.test('manifest (Copilot NO-GO r1 pe #651): dovada „urcat” de după primul plafon de rânduri (pagina a doua) rămâne „urcat”', async () => {
+  const umplutura = Array.from({ length: 1000 }, (_, i) => ({ arhiva_cheie: 'alta.zip', cale: `f${i}.pdf`, document_id: 14, sha256: 'x'.repeat(64), stare: 'deja_in_platforma' }))
+  const dovezi = [...umplutura, { arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha'), stare: 'urcat' }]
+  const { scrieri } = await scenariu({ dovezi })
+  const pe = Object.fromEntries(scrieri.map(r => [r.cale, [r.stare, r.document_id]]))
+  eq(pe['a1.pdf'], ['urcat', 11], 'citită de pe pagina a doua, dovada confirmată se păstrează (nu se degradează la „deja”)')
 })
 
 Deno.test('manifest #13: dovezile existente necitibile → nu se scrie nimic, eroare în raport', async () => {

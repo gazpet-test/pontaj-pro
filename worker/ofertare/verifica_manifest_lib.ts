@@ -12,6 +12,7 @@
 // tratat de aceleași controale ca la import (listare + politică înainte de extragere).
 import { listaSeap, descarca, volumRar, numeVolum, verificaListare, verificaVolume, pregatesteJob, listeazaIzolat, extrageIzolat, cheieNume } from './seap.ts'
 import { desface, numeDesfacut } from '../../supabase/functions/_shared/semnaturaCms.mjs'
+import { toatePaginile } from '../../supabase/functions/_shared/paginat.mjs'
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
@@ -102,14 +103,19 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     if (eL || !lic?.c_notice_id) throw new Error('licitația nu are anunț SEAP legat')
     ;({ docs, cookie } = await listaSeap(lic.c_notice_id, lic.sys_notice_type_id, semnal))
     semnal.throwIfAborted()
-    const { data: dateBd } = await supa.from('ofertare_documente_atribuire').select('id, nume_original, fisier_path, size_bytes').eq('licitatie_id', licId).abortSignal(semnal)
+    // inventarele pe pagini, fail-closed (Copilot NO-GO r1 pe #651): peste plafonul PostgREST o listă trunchiată ar face din
+    // documentele / dovezile de după plafon „lipsă” și R6 ar degrada o dovadă „urcat” reală (clasa #13)
+    const { data: dateBd, error: eBd } = await toatePaginile((de: number, la: number) => supa.from('ofertare_documente_atribuire')
+      .select('id, nume_original, fisier_path, size_bytes').eq('licitatie_id', licId).order('id').range(de, la).abortSignal(semnal))
+    if (eBd) throw new Error(`inventarul documentelor nu s-a putut citi: ${eBd.message}`)
     semnal.throwIfAborted()
     dinBd = dateBd || []
     inPlatforma = new Map((dinBd || []).filter(d => d.fisier_path && !String(d.fisier_path).includes('/neincarcat/'))
       .map(d => [cheieNume(d.nume_original), d]))
     dupaId = new Map(dinBd.map(d => [d.id, d]))
-    const { data: dateDovezi, error: eDovezi } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256, stare')
-      .eq('licitatie_id', licId).in('stare', ['urcat', 'deja_in_platforma']).not('document_id', 'is', null).abortSignal(semnal)
+    const { data: dateDovezi, error: eDovezi } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_manifest')
+      .select('arhiva_cheie, cale, document_id, sha256, stare').eq('licitatie_id', licId).in('stare', ['urcat', 'deja_in_platforma'])
+      .not('document_id', 'is', null).order('id').range(de, la).abortSignal(semnal))
     semnal.throwIfAborted()
     // fără dovezile existente, o scriere le-ar putea suprascrie orbește → raportăm, dar nu scriem manifestul
     if (eDovezi) faraScriere = `manifest: dovezile existente nu s-au putut citi (${eDovezi.message}) — nu scriu nimic`
