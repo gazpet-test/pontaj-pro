@@ -6,14 +6,14 @@
 // ════════════════════════════════════════════════════════════════
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { supabase } from './lib/supabase.js'
-import { nrAfisat as nrAfis, stareRol as stareRolPur, inVigoare as inVigoarePur } from './hrDeciziiUtil.js'
+import { nrAfisat as nrAfis, stareRol as stareRolPur, inVigoare as inVigoarePur, aziBucuresti } from './hrDeciziiUtil.js'
 
 const HrDeciziiGenerator = lazy(() => import('./HrDeciziiGenerator.jsx'))
 
 export const TIP_ROL = { mp_employee_id: 'MP', rte_employee_id: 'RTE', rts_employee_id: 'RTS', sef_santier_employee_id: 'SEF_SANTIER' }
 const EXTINSA = { CTC_QC: 'CTC / CQ', INSPECTOR_SSM: 'Inspector SSM', COORDONATOR_SSM: 'Coordonator SSM', PSI: 'PSI / SU', MEDIU: 'Mediu', RESPONSABIL_DESEURI: 'Deșeuri', RTE_MEC: 'RTE MEC' }
 
-const azi = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+const azi = () => aziBucuresti()   // ziua de business, nu a dispozitivului (J11-2)
 const inVigoare = d => inVigoarePur(d, azi())
 
 /** Deciziile de numire ale proiectului (emise/semnate/revocate) + dreptul de emitere + numele persoanelor. */

@@ -108,6 +108,40 @@ const ddmmyyyy = d => d ? d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0
 export const nrAfisat = d => d?.numar == null ? null
   : `${d.numar}${d.numar_sufix ? '-' + d.numar_sufix : ''}/${d.data_emitere ? ddmmyyyy(d.data_emitere) : d.an}${d.serie === 'carte_tehnica' ? ' (seria carte tehnica)' : ''}`
 
+/**
+ * Ziua de business (Europe/Bucharest), ca _hr_azi() din SQL — nu ziua dispozitivului (J11-2, spec §2.4).
+ * ms: instantul (implicit acum); întoarce 'YYYY-MM-DD'.
+ */
+export function aziBucuresti(ms = Date.now()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return `${p.year}-${p.month}-${p.day}`
+}
+
+/**
+ * Toate rândurile, pe chei (keyset pe id crescător, J11-1/P11-2): se continuă până la o pagină GOALĂ, deci un plafon
+ * REST mai mic decât `pas` nu mai trunchiază, iar un rând inserat între pagini nu deplasează ferestrele (fără dubluri/goluri).
+ * cerePagina(ultimId|null, pas) → Promise<{ data, error }>, rânduri ordonate după id crescător, toate cu id > ultimId.
+ */
+export async function paginareKeyset(cerePagina, pas = 1000) {
+  const tot = []
+  for (let ultim = null; ;) {
+    const { data, error } = await cerePagina(ultim, pas)
+    if (error) throw error
+    if (!data || !data.length) return tot
+    tot.push(...data)
+    const u = data[data.length - 1].id
+    if (u == null || (ultim != null && !(u > ultim))) throw new Error('paginare: id lipsă sau neordonat')
+    ultim = u
+  }
+}
+
+/** Ordinea registrului: an desc, număr desc (null-urile — draft/rezervă fără număr — primele), apoi id desc. */
+export function ordineRegistru(a, b) {
+  const desc = (x, y) => x == null ? (y == null ? 0 : -1) : y == null ? 1 : y - x
+  return desc(a.an, b.an) || desc(a.numar, b.numar) || (b.id - a.id)
+}
+
 /** În vigoare azi: data efectului ≤ azi ≤ data_efect_pana (același predicat ca v_hr_decizii_curente; P10-1). */
 export const inVigoare = (d, azi) => (!d.data_efect || d.data_efect <= azi) && (!d.data_efect_pana || d.data_efect_pana >= azi)
 

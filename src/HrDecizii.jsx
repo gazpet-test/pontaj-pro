@@ -10,7 +10,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import HrDeciziiScan from './HrDeciziiScan.jsx'
 import HrDeciziiGenerator from './HrDeciziiGenerator.jsx'
-import { nrAfisat } from './hrDeciziiUtil.js'
+import { nrAfisat, ordineRegistru } from './hrDeciziiUtil.js'
 import { rpc, drepturi, deschidePdf, toateRandurile, inregistreazaPdfGenerat, uuid, fmtData, azi, numeAfis, mesajEroare, STARI } from './hrDeciziiFlux.js'
 
 const G = {
@@ -61,8 +61,8 @@ export default function HrDecizii({ profile, showToast }) {
       setDrept(d)
       if (!d.citire) { setLoad(false); return }
       const [rd, rt, rs, re, rp, rc, rem, rprop] = await Promise.all([
-        toateRandurile(() => supabase.from('hr_decizii').select('*').order('an', { ascending: false, nullsFirst: true }).order('numar', { ascending: false, nullsFirst: true }).order('id', { ascending: false }))
-          .then(data => ({ data }), error => ({ error })),
+        toateRandurile(() => supabase.from('hr_decizii').select('*'))
+          .then(data => ({ data: data.sort(ordineRegistru) }), error => ({ error })),
         supabase.from('hr_decizii_tipuri').select('*').order('ordine'),
         supabase.from('hr_decizii_semnatari').select('*').order('ordine'),
         supabase.from('employees').select('id, name, active, termination_date, position, functie').order('name'),

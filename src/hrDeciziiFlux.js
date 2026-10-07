@@ -5,7 +5,7 @@
 // ════════════════════════════════════════════════════════════════
 import { supabase } from './lib/supabase.js'
 import { renderDeciziePdf, fisierPdf, sha256Hex } from './hrDeciziiDoc.js'
-import { CALE_FISIER_RE } from './hrDeciziiUtil.js'
+import { CALE_FISIER_RE, paginareKeyset, aziBucuresti } from './hrDeciziiUtil.js'
 
 export const BUCKET = 'hr-decizii'
 
@@ -25,18 +25,14 @@ export async function drepturi(actiuni) {
 }
 
 /**
- * Toate rândurile unei interogări, pe pagini (plafonul REST al mediului nu mai trunchiază în tăcere, J10-5).
- * fabrica: () => supabase.from(...).select(...).order(...) — o interogare nouă pentru fiecare pagină.
+ * Toate rândurile unei interogări, pe chei (paginareKeyset, J11-1/P11-2): plafonul REST nu mai trunchiază în tăcere.
+ * fabrica: () => supabase.from(...).select(... cu id ...) plus filtre, FĂRĂ order — ordinea de afișare se face în client.
  */
-export async function toateRandurile(fabrica, pas = 1000) {
-  const tot = []
-  for (let de = 0; ; de += pas) {
-    const { data, error } = await fabrica().range(de, de + pas - 1)
-    if (error) throw new Error(mesajEroare(error))
-    tot.push(...(data || []))
-    if (!data || data.length < pas) return tot
-  }
-}
+export const toateRandurile = (fabrica, pas = 1000) => paginareKeyset((ultim, n) => {
+  let q = fabrica()
+  if (ultim != null) q = q.gt('id', ultim)
+  return q.order('id', { ascending: true }).limit(n).then(r => r.error ? { error: new Error(mesajEroare(r.error)) } : r)
+}, pas)
 
 export const caleFisier = (d, numeFisier) => {
   if (!CALE_FISIER_RE.test(numeFisier)) throw new Error('nume de fișier nepermis: ' + numeFisier)
@@ -90,7 +86,8 @@ export const uuid = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID()
   : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16) }))
 
 export const fmtData = d => d ? new Date(d + (String(d).length === 10 ? 'T00:00:00' : '')).toLocaleDateString('ro-RO') : '—'
-export const azi = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+/** Ziua de business, Europe/Bucharest (J11-2). */
+export const azi = () => aziBucuresti()
 
 /** „Nume Prenume" din „NUME PRENUME" (employees.name = familie + prenume). */
 export const numeAfis = n => String(n || '').toLowerCase().replace(/(^|[\s-])\S/g, s => s.toUpperCase())

@@ -59,7 +59,7 @@ export default function HrDeciziiGenerator({ initial, onClose, showToast }) {
         supabase.from('hr_decizii_semnatari').select('*').eq('activ', true).order('ordine'),
         supabase.from('employees').select('id, name, active, termination_date').order('name'),
         supabase.from('executie_proiecte').select('id, nume, activ, nr_contract, data_contract').order('nume'),
-        toateRandurile(() => supabase.from('hr_decizii').select('id, employee_id, titlu, tip_cod, proiect_id, stare, nivel, domenii_isc, data_efect, data_efect_pana').order('id', { ascending: false })).then(data => ({ data }), () => ({ data: [] })),
+        toateRandurile(() => supabase.from('hr_decizii').select('id, employee_id, titlu, tip_cod, proiect_id, stare, nivel, domenii_isc, data_efect, data_efect_pana')).then(data => ({ data: data.sort((a, b) => b.id - a.id) }), () => ({ data: [] })),
         supabase.from('isc_rte_domenii').select('cod, denumire, activ').order('cod'),
         supabase.from('hr_autorizatii_tipuri').select('id, cod, denumire'),
       ])

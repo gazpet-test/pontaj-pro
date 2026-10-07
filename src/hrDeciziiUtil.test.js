@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nrAfisat, stareRol, inVigoare, alteRteInVigoare, esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, CALE_FISIER_RE, PAGINA, INALTIME_CORP } from './hrDeciziiUtil.js'
+import { nrAfisat, stareRol, inVigoare, alteRteInVigoare, esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, CALE_FISIER_RE, PAGINA, INALTIME_CORP, paginareKeyset, aziBucuresti, ordineRegistru } from './hrDeciziiUtil.js'
 
 const CONT = {
   titlu: 'DECIZIA NR', nr: '916/28.09.2026', previzualizare: false,
@@ -199,5 +199,46 @@ describe('review PR3: efect viitor, RTE multipli, G7 (J10-2, J10-3, P10-1, P10-2
     expect(alteRteInVigoare([{ ...X, data_efect_pana: '2026-10-01' }], 1, 7, ['9.1'], AZI)).toBe(false)   // expirat
     expect(alteRteInVigoare([X], 1, 5, ['9.1'], AZI)).toBe(false)            // aceeași persoană
     expect(alteRteInVigoare([X], 2, 7, ['9.1'], AZI)).toBe(false)            // alt proiect
+  })
+})
+
+describe('J11/P11 — paginare keyset, ziua de business, ordinea registrului', () => {
+  const server = (rows, plafon) => (ultim, n) => {
+    const r = rows.filter(x => ultim == null || x.id > ultim).sort((a, b) => a.id - b.id).slice(0, Math.min(n, plafon))
+    return Promise.resolve({ data: r, error: null })
+  }
+  const rows = Array.from({ length: 1501 }, (_, i) => ({ id: i + 1 }))
+  it('plafon REST 500 < pas 1000: toate cele 1501 rânduri (J11-1)', async () => {
+    const tot = await paginareKeyset(server(rows, 500), 1000)
+    expect(tot.length).toBe(1501)
+    expect(new Set(tot.map(r => r.id)).size).toBe(1501)
+  })
+  it('plafon 1000: tot 1501', async () => {
+    expect((await paginareKeyset(server(rows, 1000), 1000)).length).toBe(1501)
+  })
+  it('insert între pagini: fără dubluri și fără goluri (P11-2)', async () => {
+    const db = rows.map(r => ({ ...r })); let k = 0
+    const f = (u, n) => { if (k++ === 1) db.push({ id: 5000 }); return server(db, 500)(u, n) }
+    const tot = await paginareKeyset(f, 1000)
+    expect(tot.length).toBe(1502)
+    expect(new Set(tot.map(r => r.id)).size).toBe(1502)
+  })
+  it('eroare propagată', async () => {
+    await expect(paginareKeyset(() => Promise.resolve({ data: null, error: new Error('x') }))).rejects.toThrow('x')
+  })
+  it('aziBucuresti: același instant, indiferent de fusul dispozitivului (J11-2)', () => {
+    expect(aziBucuresti(Date.parse('2026-10-07T21:30:00Z'))).toBe('2026-10-08')   // UTC+3 vara
+    expect(aziBucuresti(Date.parse('2026-10-07T20:59:59Z'))).toBe('2026-10-07')
+    expect(aziBucuresti(Date.parse('2026-12-31T22:00:00Z'))).toBe('2027-01-01')   // UTC+2 iarna
+    expect(aziBucuresti(Date.parse('2026-12-31T21:59:59Z'))).toBe('2026-12-31')
+  })
+  it('aziBucuresti + inVigoare: decizia cu efect 08.10 e în vigoare la 21:30Z pe 07.10', () => {
+    const azi = aziBucuresti(Date.parse('2026-10-07T21:30:00Z'))
+    expect(inVigoare({ data_efect: '2026-10-08' }, azi)).toBe(true)
+    expect(inVigoare({ data_efect_pana: '2026-10-07' }, azi)).toBe(false)
+  })
+  it('ordineRegistru: an/număr desc cu null primele, apoi id desc', () => {
+    const l = [{ id: 1, an: 2025, numar: 5 }, { id: 2, an: 2026, numar: 3 }, { id: 3, an: null, numar: null }, { id: 4, an: 2026, numar: null }, { id: 5, an: 2026, numar: 9 }]
+    expect(l.sort(ordineRegistru).map(x => x.id)).toEqual([3, 4, 5, 2, 1])
   })
 })

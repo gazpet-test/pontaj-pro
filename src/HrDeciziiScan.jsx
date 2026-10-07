@@ -175,7 +175,7 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
             <div style={{ flex:1, minWidth:0 }}>
               {inlocuire && (
                 <label style={{ display:'block', marginBottom:12, fontSize:14 }}>Motivul înlocuirii (obligatoriu)
-                  <textarea value={motiv} disabled={inghetat} onChange={e => setMotiv(e.target.value)} rows={2} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
+                  <textarea value={motiv} disabled={lucru || inghetat} onChange={e => setMotiv(e.target.value)} rows={2} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
                 </label>
               )}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
@@ -221,7 +221,7 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
                   </div>
                   {pdf.pagini == null && (
                     <label style={{ display:'block', marginTop:8, fontSize:14 }}>Câte pagini are scanul? (obligatoriu)
-                      <input type="number" min={1} max={MAX_PAGINI} value={paginiManual} disabled={inghetat} onChange={e => setPaginiManual(e.target.value)} style={{ width:90, marginLeft:8, background:G.card, color:G.text, border:`1px solid ${G.border}`, borderRadius:6, padding:6, fontSize:15 }} />
+                      <input type="number" min={1} max={MAX_PAGINI} value={paginiManual} disabled={lucru || inghetat} onChange={e => setPaginiManual(e.target.value)} style={{ width:90, marginLeft:8, background:G.card, color:G.text, border:`1px solid ${G.border}`, borderRadius:6, padding:6, fontSize:15 }} />
                     </label>
                   )}
                 </div>
@@ -234,13 +234,13 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
                   <div style={{ fontSize:13, color:G.muted, marginBottom:6 }}>Verificare (compară cu {cuGenerat ? 'documentul generat' : 'fișa din registru'}):</div>
                   {[...bifeLista, ['lizibil', 'Toate paginile sunt complete și lizibile']].map(([k, t]) => (
                     <label key={k} style={{ display:'flex', gap:10, alignItems:'center', padding:'10px 4px', fontSize:15, borderBottom:`1px solid ${G.border}`, cursor:'pointer' }}>
-                      <input type="checkbox" checked={!!bife[k]} disabled={inghetat} onChange={e => setBife(b => ({ ...b, [k]: e.target.checked }))} style={{ width:22, height:22, flexShrink:0 }} />
+                      <input type="checkbox" checked={!!bife[k]} disabled={lucru || inghetat} onChange={e => setBife(b => ({ ...b, [k]: e.target.checked }))} style={{ width:22, height:22, flexShrink:0 }} />
                       <span>{t}</span>
                     </label>
                   ))}
                   {d.origine === 'import' && !bife.stampila && (
                     <label style={{ display:'block', marginTop:8, fontSize:14 }}>Fără ștampilă? Notează de ce (ex. „originalul nu are ștampilă”):
-                      <input value={observatie} disabled={inghetat} onChange={e => setObservatie(e.target.value)} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
+                      <input value={observatie} disabled={lucru || inghetat} onChange={e => setObservatie(e.target.value)} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
                     </label>
                   )}
                 </div>
