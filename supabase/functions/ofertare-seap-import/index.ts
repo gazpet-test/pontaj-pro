@@ -54,6 +54,7 @@
 //    inceput. Acum se verifica si semnatura reala: orice PDF incepe cu octetii %PDF-.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
+import { ghicesteTip, esteArhiva } from '../_shared/tipDocument.mjs';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const CORS: Record<string, string> = {
@@ -96,19 +97,7 @@ async function secretOk(req: Request, db: any): Promise<boolean> {
   return !error && data === true;
 }
 
-// aceleasi reguli ca ghicesteTip din OfertareLicitatii.jsx - valorile trebuie sa
-// existe in CHECK-ul coloanei tip
-function ghicesteTip(nume: string): string {
-  const n = nume.toLowerCase();
-  if (/fisa[_ -]?date|instructiuni_ofertanti/.test(n)) return 'fisa_date';
-  if (/formular|duae/.test(n)) return 'formular';
-  if (/contract/.test(n)) return 'model_contract';
-  if (/cantitat|antemasur|^f[1-3][_ .-]|centralizator/.test(n)) return 'lista_cantitati';
-  if (/desene|plans|plansa|schema tehnologica|\.dwg|izometri|topo/.test(n)) return 'plansa';
-  if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum';
-  if (/raspuns|clarificar/.test(n)) return 'raspuns_clarificare';
-  return 'alta';
-}
+// Tipul după nume și detectarea arhivelor: sursa unică în ../_shared/tipDocument.mjs (aceleași reguli în worker, api, UI).
 
 // -- Desfacerea semnaturii electronice (.p7s / CMS) ------------------------------
 // Continutul semnat sta intr-un OCTET STRING ASN.1 care, la fisierele mari, e taiat
@@ -423,8 +412,10 @@ Deno.serve(async (req: Request) => {
     const docId = await scrie({
       licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
       tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-      status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-      eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
+      // 07.10.2026: o arhivă care nu e ZIP desfăcut aici (rar / 7z, sau arhivă din ZIP) intră „neprocesat”, fără notă,
+      // ca s-o despacheteze workerul NAS (extractor izolat, limite, adâncime maximă) — înainte rămânea „ignorat”
+      status_procesare: estePdf || esteArhiva(numeFinal) ? 'neprocesat' : 'ignorat',
+      eroare: estePdf || esteArhiva(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
       sursa: 'seap',
     }, numeFinal);
     await noteazaManifest(arhivaCheie, numeFinal, buf, docId, docId ? null : 'rand BD nescris');

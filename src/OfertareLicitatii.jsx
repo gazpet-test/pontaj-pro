@@ -38,6 +38,7 @@ import FormulareRegistruSection, { ClauzeContractSection } from './OfertareClauz
 import OfertareParteneri from './OfertareParteneri.jsx'
 import { raportTransferCantitati } from './ofertareTransferRaport.js'
 import { restantePeTip as restantePeTipDoc, textRestante } from './ofertareTransferRestante.js'
+import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   // aceleași reguli ca la import (worker, edge, api)
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -677,17 +678,6 @@ const reemisUrgent = (doc, termen) => {
   const zile = Math.ceil((new Date(termen) - Date.now()) / 86400000)
   const valabil = doc.data_valabilitate && new Date(doc.data_valabilitate) >= new Date(termen.slice(0, 10))
   return zile <= 10 && !valabil
-}
-const ghicesteTip = (nume) => {
-  const n = (nume || '').toLowerCase()
-  if (/fisadate|fisa.de.date|instructiuni.?ofertanti/.test(n)) return 'fisa_date'
-  if (/clarificare|raspuns.*consolidat|erata/.test(n)) return 'raspuns_clarificare'
-  if (/formular|duae/.test(n)) return 'formular'
-  if (/contract/.test(n)) return 'model_contract'
-  if (/cantitat|antemasur|^f[1-3][_ .-]/.test(n)) return 'lista_cantitati'
-  if (/desene|plans|palnse|\.dwg$|izometri/.test(n)) return 'plansa'
-  if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum'
-  return 'alta'
 }
 
 // Rând de inventar fără fișier real în storage. fisier_path e NOT NULL în BD,

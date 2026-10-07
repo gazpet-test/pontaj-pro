@@ -122,9 +122,12 @@ function pornesteExtractor(root: string, opt: { cale_rea?: boolean } = {}) {
   return async () => { viu = false; await bucla.catch(() => {}) }
 }
 
-async function zipCu(fisiere: Record<string, string>): Promise<Uint8Array> {
+async function zipCu(fisiere: Record<string, string | Uint8Array>): Promise<Uint8Array> {
   const d = await Deno.makeTempDir()
-  for (const [n, c] of Object.entries(fisiere)) { await Deno.mkdir(`${d}/${n}`.replace(/\/[^/]+$/, ''), { recursive: true }); await Deno.writeTextFile(`${d}/${n}`, c) }
+  for (const [n, c] of Object.entries(fisiere)) {
+    await Deno.mkdir(`${d}/${n}`.replace(/\/[^/]+$/, ''), { recursive: true })
+    if (typeof c === 'string') await Deno.writeTextFile(`${d}/${n}`, c); else await Deno.writeFile(`${d}/${n}`, c)   // Uint8Array = arhivă în arhivă
+  }
   const o = await new Deno.Command('zip', { args: ['-q', '-r', `${d}/a.zip`, ...Object.keys(fisiere)], cwd: d }).output()
   ok(o.code === 0, 'zip a eșuat')
   const buf = await Deno.readFile(`${d}/a.zip`)
@@ -186,8 +189,8 @@ Deno.test('arhive: zip din veghe → documente separate cu prefix, arhiva marcat
       eq(noi.map(d => [d.tip, d.status_procesare, d.seap_cod, d.aparut_ulterior, d.sursa]), [
         ['lista_cantitati', 'neprocesat', undefined, true, 'seap'],
         ['lista_cantitati', 'neprocesat', undefined, true, 'seap'],
-        ['raspuns_clarificare', 'ignorat', undefined, true, 'seap'],
-      ], 'tip după numele propriu (altfel al arhivei), PDF-urile de citit, docx rămâne fișier, seap_cod rămâne doar pe arhivă (index unic)')
+        ['alta', 'ignorat', undefined, true, 'seap'],
+      ], 'tip după numele propriu (anexa → alta, NU raspuns_clarificare-ul arhivei — lic. 3, 07.10), PDF-urile de citit, docx rămâne fișier, seap_cod rămâne doar pe arhivă (index unic)')
       eq(arh.seap_cod, 'CN1095546/00058', 'arhiva își păstrează codul SEAP')
       ok(noi.every(d => fisiere.has(d.fisier_path)), 'fiecare document are fișierul în Storage')
       eq(tab.notifications.length, 1, 'responsabilul licitației e anunțat')
@@ -254,6 +257,64 @@ Deno.test('arhive: două arhive cu același nume nu se amestecă; volumele .part
       ok(/^Despachetare manuală necesară: arhivă în volume/.test(vol.eroare), vol.eroare)
       eq(vol.status_procesare, 'neprocesat', 'volumul nu e atins altfel')
       ok(!s.eArhivaDeDespachetat(vol), 'volumul nu mai e reselectat')
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: arhivă în arhivă → despachetată pe tura următoare, cu tip propriu (nu raspuns_clarificare moștenit)', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const nivel2 = await zipCu({ 'Z.pdf': '%PDF-1.4 z' })
+      const nivel1 = await zipCu({ '7. Detaliu montaj.pdf': '%PDF-1.4 d', 'Ceva.pdf': '%PDF-1.4 c', 'adanc.zip': nivel2 })
+      const fisiere = new Map<string, Uint8Array>([['3/o.zip', await zipCu({ 'F3_lista.pdf': '%PDF-1.4 f', 'interior.zip': nivel1 })]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+        { id: 40, licitatie_id: 3, nume_original: 'Clarificari.zip', fisier_path: '3/o.zip', status_procesare: 'neprocesat', eroare: null, tip: 'raspuns_clarificare', aparut_ulterior: true },
+      ], ofertare_licitatii: [], notifications: [] }
+      const supa = fakeSupa(tab, fisiere)
+      const d = tab.ofertare_documente_atribuire
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      const interior = d.find(x => x.nume_original === 'Clarificari (#40)/interior.zip')!
+      ok(interior, 'arhiva interioară e un document')
+      eq([interior.status_procesare, interior.eroare, interior.tip], ['neprocesat', null, 'alta'], 'intră la despachetare, fără tipul „clarificare” al mamei')
+      ok(s.eArhivaDeDespachetat(interior), 'selectată de bucla de arhive')
+      eq(d.find(x => x.nume_original === 'Clarificari (#40)/F3_lista.pdf')!.tip, 'lista_cantitati')
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})   // tura 2: nivelul 1
+      ok(/^📦 Arhivă despachetată pe Terra: 3 fișiere noi/.test(interior.eroare), `nota arhivei interioare: ${interior.eroare}`)
+      const sp1 = `Clarificari (#40)_interior (#${interior.id})`
+      eq(d.filter(x => x.nume_original.startsWith(sp1 + '/')).map(x => [x.nume_original.slice(sp1.length + 1), x.tip, x.status_procesare]).sort(), [
+        ['7. Detaliu montaj.pdf', 'plansa', 'neprocesat'], ['Ceva.pdf', 'alta', 'neprocesat'], ['adanc.zip', 'alta', 'neprocesat'],
+      ], 'planșa după nume; fără regulă → tipul arhivei interioare (alta)')
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})   // tura 3: nivelul 2
+      const adanc = d.find(x => x.nume_original === `${sp1}/adanc.zip`)!
+      ok(/^📦 Arhivă despachetată pe Terra: 1 fișiere noi/.test(adanc.eroare), `nota: ${adanc.eroare}`)
+      ok(d.some(x => x.nume_original === `${sp1}_adanc (#${adanc.id})/Z.pdf`), 'Z.pdf extras pe nivelul 2')
+      const n = d.length
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      eq(d.length, n, 'nimic nou la o tură în plus')
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive: nivelul MAX_ADANCIME_ARHIVE → manual, cu motiv; nimic extras, nu se reia', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/d.zip', await zipCu({ 'X.pdf': '%PDF-1.4 x' })], ['3/e.zip', await zipCu({ 'Y.pdf': '%PDF-1.4 y' })]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+        { id: 50, licitatie_id: 3, nume_original: 'A (#1)_B (#2)_C (#3)/d.zip', fisier_path: '3/d.zip', status_procesare: 'neprocesat', eroare: null },
+        { id: 51, licitatie_id: 3, nume_original: 'A (#1)_B (#2)/e.zip', fisier_path: '3/e.zip', status_procesare: 'neprocesat', eroare: null },
+      ], ofertare_licitatii: [], notifications: [] }
+      const supa = fakeSupa(tab, fisiere)
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      const d = tab.ofertare_documente_atribuire
+      const prea = d.find(x => x.id === 50)!
+      ok(/^Despachetare manuală necesară: arhivă imbricată pe nivelul 3 \(limita automată e 3 niveluri\)/.test(prea.eroare), prea.eroare)
+      eq(prea.status_procesare, 'neprocesat', 'statusul nu se schimbă — doar nota')
+      ok(!s.eArhivaDeDespachetat(prea), 'nu mai e reselectată')
+      eq(d.filter(x => x.nume_original.includes('(#50)')).length, 0, 'nimic extras din ea')
+      ok(d.some(x => x.nume_original === 'A (#1)_B (#2)_e (#51)/Y.pdf'), 'nivelul 2 se despachetează în continuare')
     } finally { await opreste() }
   })
 })

@@ -11,6 +11,7 @@
 //  - nu executăm nimic din arhivă și nu citim nimic cu AI aici (citirea rămâne pe coada separată „Procesează").
 import type { Supa } from './ingest.ts'
 import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md): descărcările din Storage intră în jurnal
+import { ghicesteTip, tipInArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -32,18 +33,8 @@ export const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').
   .replace(/[,()]/g, '').replace(/\s+/g, '')
 const estePlaceholder = (d: { fisier_path?: string | null }) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
 
-// aceleași reguli ca ghicesteTip din ofertare-seap-import (valorile există în CHECK-ul coloanei tip)
-export function ghicesteTip(nume: string): string {
-  const n = nume.toLowerCase()
-  if (/fisa[_ -]?date|instructiuni_ofertanti/.test(n)) return 'fisa_date'
-  if (/formular|duae/.test(n)) return 'formular'
-  if (/contract/.test(n)) return 'model_contract'
-  if (/cantitat|antemasur|^f[1-3][_ .-]|centralizator/.test(n)) return 'lista_cantitati'
-  if (/desene|plans|plansa|schema tehnologica|\.dwg|izometri|topo/.test(n)) return 'plansa'
-  if (/volum|caiet|memoriu|\bcs\b|sectiunea/.test(n)) return 'cs_volum'
-  if (/raspuns|clarificar/.test(n)) return 'raspuns_clarificare'
-  return 'alta'
-}
+// Tipul după nume: sursa unică în supabase/functions/_shared/tipDocument.mjs (aceleași reguli în edge, api, UI).
+export { ghicesteTip }
 
 // -- Semnătura .p7s (CMS / PKCS#7, DER) ----------------------------------------------------------------
 // Parcurgem structura: ContentInfo → [0] SignedData → encapContentInfo → [0] OCTET STRING (poate fi „constructed",
@@ -234,8 +225,10 @@ async function urca(supa: Supa, licId: number, numeFinal: string, buf: Uint8Arra
   if (eUp) return `urcare: ${eUp.message}`
   const rand = {
     licitatie_id: licId, fisier_path: path, nume_original: numeFinal, tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-    status_procesare: estePdf ? 'neprocesat' : 'ignorat',
-    eroare: estePdf ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
+    // 07.10.2026: o arhivă extrasă dintr-o arhivă intră „neprocesat”, fără notă → o despachetează bucla de mai jos
+    // (același extractor izolat, limite, MAX_ADANCIME_ARHIVE). Înainte rămânea „ignorat”: necitită, fără semnal.
+    status_procesare: estePdf || esteArhivaDoc(numeFinal) ? 'neprocesat' : 'ignorat',
+    eroare: estePdf || esteArhivaDoc(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
     sursa: 'seap',
     ...extra,
   }
@@ -547,6 +540,12 @@ export async function despacheteazaArhiveDinPlatforma(supa: Supa, stare: (s: str
       }).eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null)
       continue
     }
+    if (adancimeArhiva(d.nume_original) >= MAX_ADANCIME_ARHIVE) {   // stare finală, explicită: nu-l mai selectăm
+      await supa.from('ofertare_documente_atribuire').update({
+        eroare: `Despachetare manuală necesară: arhivă imbricată pe nivelul ${adancimeArhiva(d.nume_original)} (limita automată e ${MAX_ADANCIME_ARHIVE} niveluri). Descarc-o, dezarhivează local și urcă fișierele.`,
+      }).eq('id', d.id).in('status_procesare', STARI_ARHIVA).is('eroare', null)
+      continue
+    }
     await despacheteazaArhiva(supa, d, stare)
     return     // o arhivă pe tură: nu ține bucla SEAP ocupată
   }
@@ -608,11 +607,11 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
       if (urcate.has(cheieNume(numeFinal))) { deja++; await Deno.remove(f.cale); continue }
       stare(`arhivă din platformă: urc ${numeFinal}`)
       const fb = await Deno.readFile(f.cale)
-      const tipPropriu = ghicesteTip(f.rel.split('/').pop() || f.rel)
       const r = await urca(supa, licId, numeFinal, fb, new Map(), {
         // seap_cod NU se moștenește: e unic pe (licitație, cod) — e codul documentului SEAP, adică al arhivei
         // (05.10, 1305: 159 de fișiere respinse de ofertare_doc_seap_cod_unic). Legătura cu arhiva e în nume: „(#id)”.
-        tip: tipPropriu === 'alta' && d.tip ? d.tip : tipPropriu,
+        // regula proprie câștigă; altfel tipul arhivei — dar NU raspuns_clarificare (lic. 3: 117 formulare/planșe în Clarificări)
+        tip: tipInArhiva(f.rel, d.tip),
         aparut_ulterior: d.aparut_ulterior ?? null,
       })
       if (typeof r === 'string') erori.push(`${f.rel}: ${r}`)
