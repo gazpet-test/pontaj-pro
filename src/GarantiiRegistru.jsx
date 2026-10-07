@@ -8,6 +8,8 @@
 //   (GarantiiCerereOferta.jsx); CAR apare doar dacă BD-ul permite tipul (migrarea 20261002e).
 //   03.10.2026 (#1544, decizia „1B”): „🧾 BO (n)” pe polițe — biletele la ordin date ca GARANȚIE la poliță (nu plata
 //   primei), urmărite până la restituire (GarantiiBileteOrdin.jsx; tabela garantii_bilete_ordin, migrarea 20261003a).
+//   07.10.2026 (TKT-2026-0331, varianta A): „＋ Poliță existentă” — o poliță deja emisă intră direct în registru
+//   (forma polita_asigurare, același drum de scriere: RLS fn_poate_scrie_garantii, canEdit), ca să i se poată trece BO-urile.
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
@@ -38,6 +40,70 @@ const STARE = {
   activa:{ c:'#3FB950', l:'Activă' }, de_eliberat:{ c:'#E3B341', l:'De eliberat' },
   eliberata:{ c:'#8B949E', l:'Eliberată' }, executata:{ c:'#F85149', l:'Executată' },
   expirata:{ c:'#F0883E', l:'Expirată' },
+}
+
+// ── TKT-2026-0331: o poliță DEJA emisă (nu prin „Cere ofertă”) se înregistrează direct, ca să i se poată atașa BO-urile.
+const TIP_POLITA = { buna_executie:'Bună execuție (GBE)', avans:'Returnare avans', participare:'Participare', mentenanta:'Mentenanță', car:'CAR' }
+function PolitaExistentaPanel({ tipuriPermise, onClose, onDone, showToast }) {
+  const [f, setF] = useState({ tip:'buna_executie', beneficiar:'', lucrare:'', contract_numar:'', contract_data:'', emitent:'', numar_document:'',
+    valoare:'', moneda:'RON', data_emitere:'', data_expirare:'', observatii:'' })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }))
+  const tipuri = Object.keys(TIP_POLITA).filter(t => t !== 'car' || tipuriPermise.includes('car'))
+  const lipsuri = [!f.beneficiar.trim() && 'beneficiarul', !f.emitent.trim() && 'asigurătorul', !f.numar_document.trim() && 'nr. poliței',
+    !(Number(f.valoare) > 0) && 'valoarea'].filter(Boolean)
+  const salveaza = async () => {
+    if (lipsuri.length) return setErr('Completează: ' + lipsuri.join(', ') + '.')
+    if (f.data_emitere && f.data_expirare && f.data_expirare < f.data_emitere) return setErr('Data expirării e înaintea datei emiterii.')
+    setBusy(true); setErr(null)
+    const { error } = await supabase.from('garantii').insert({
+      forma:'polita_asigurare', tip:f.tip, beneficiar:f.beneficiar.trim(), lucrare:f.lucrare.trim() || null,
+      contract_numar:f.contract_numar.trim() || null, contract_data:f.contract_data || null,
+      emitent:f.emitent.trim(), numar_document:f.numar_document.trim(), valoare:Number(f.valoare), moneda:f.moneda || 'RON',
+      data_emitere:f.data_emitere || null, data_expirare:f.data_expirare || null, stare:'activa', sursa_document:'manual',
+      observatii:f.observatii.trim() || null,
+    })
+    setBusy(false)
+    if (error) return setErr('Nu s-a salvat: ' + error.message)
+    showToast?.('✓ Polița e în registru — acum îi poți trece biletele la ordin (🧾 BO)', 'ok')
+    onDone?.(); onClose?.()
+  }
+  const camp = (k, l, props = {}) => (
+    <div><label style={S.lbl}>{l}</label><input value={f[k]} onChange={e => set(k, e.target.value)} style={S.input} {...props} /></div>
+  )
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'40px 12px'}}>
+      <div style={{background:G.card,border:`1px solid ${G.border}`,borderRadius:12,width:'100%',maxWidth:620,padding:18,color:G.text}}>
+        <div style={{display:'flex',alignItems:'center',marginBottom:6}}>
+          <div style={{fontWeight:700,fontSize:15}}>＋ Poliță existentă</div>
+          <button onClick={onClose} style={{...S.btnS,marginLeft:'auto'}}>✕</button>
+        </div>
+        <div style={{fontSize:12,color:G.muted,marginBottom:14}}>Pentru o poliță deja emisă (GBE, avans…). După salvare, pe rândul ei apare „🧾 BO” — acolo treci biletele la ordin date ca garanție.</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:10}}>
+          <div><label style={S.lbl}>Tip</label>
+            <select value={f.tip} onChange={e => set('tip', e.target.value)} style={S.input}>{tipuri.map(t => <option key={t} value={t}>{TIP_POLITA[t]}</option>)}</select></div>
+          {camp('beneficiar', 'Beneficiar *')}
+          {camp('lucrare', 'Lucrare')}
+          {camp('contract_numar', 'Nr. contract')}
+          {camp('contract_data', 'Data contract', { type:'date' })}
+          {camp('emitent', 'Asigurător *', { placeholder:'ex. Groupama, Euroins' })}
+          {camp('numar_document', 'Nr. poliță *')}
+          {camp('valoare', 'Valoare asigurată *', { inputMode:'decimal' })}
+          <div><label style={S.lbl}>Monedă</label><select value={f.moneda} onChange={e => set('moneda', e.target.value)} style={S.input}><option>RON</option><option>EUR</option></select></div>
+          {camp('data_emitere', 'Valabilă de la', { type:'date' })}
+          {camp('data_expirare', 'Valabilă până la', { type:'date' })}
+        </div>
+        <div style={{marginTop:10}}><label style={S.lbl}>Observații</label>
+          <textarea value={f.observatii} onChange={e => set('observatii', e.target.value)} rows={2} style={{...S.input,resize:'vertical'}} /></div>
+        {err && <div style={{marginTop:10,padding:'8px 10px',borderRadius:7,background:G.red+'22',color:G.red,fontSize:12.5}}>{err}</div>}
+        <div style={{display:'flex',gap:8,marginTop:14,justifyContent:'flex-end'}}>
+          <button onClick={onClose} style={S.btnS}>Renunță</button>
+          <button onClick={salveaza} disabled={busy} style={{...S.btnS,background:G.green+'22',color:G.green,border:`1px solid ${G.green}66`}}>{busy ? 'Se salvează…' : '✓ Salvează polița'}</button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ── panoul cu adresa generată. NU trimite nimic — doar text de copiat.
@@ -105,6 +171,7 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
   const [adresa, setAdresa]   = useState(null)
   const [doarActive, setDoarActive] = useState(true)
   const [bilete, setBilete]   = useState(null)   // panoul 🧾 BO: rândul poliței
+  const [politaNoua, setPolitaNoua] = useState(false)   // TKT-2026-0331
   const [boRezumat, setBoRezumat] = useState({}) // {garantie_id: {total, emise, scadente, depasite}} — un singur select, fără N+1
 
   // BO-urile tuturor polițelor din registru, într-un singur select; fără tabelă (migrarea 20261003a neaplicată) ⇒ {}
@@ -193,7 +260,11 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
           doar garanțiile active
         </label>
         {canEdit && (
-          <button onClick={() => setCerere({})} style={{...S.btnS, marginLeft:'auto', background:G.blue+'18', color:G.blue, border:`1px solid ${G.blue}55`}}
+          <button onClick={() => setPolitaNoua(true)} style={{...S.btnS, marginLeft:'auto'}}
+            title="Înregistrează o poliță deja emisă, ca să-i poți trece biletele la ordin (🧾 BO)">＋ Poliță existentă</button>
+        )}
+        {canEdit && (
+          <button onClick={() => setCerere({})} style={{...S.btnS, background:G.blue+'18', color:G.blue, border:`1px solid ${G.blue}55`}}
             title="Cerere de ofertă către broker pentru poliță de bună execuție / returnare avans / CAR">📨 Cere ofertă poliță (GBE / avans{tipuriPermise.includes('car') ? ' / CAR' : ''})</button>
         )}
       </div>
@@ -296,6 +367,7 @@ export default function GarantiiRegistru({ canEdit = false, showToast, profile }
       </div>
 
       {adresa && <AdresaPanel garantie={adresa} onClose={() => setAdresa(null)} showToast={showToast} />}
+      {politaNoua && <PolitaExistentaPanel tipuriPermise={tipuriPermise} showToast={showToast} onClose={() => setPolitaNoua(false)} onDone={load} />}
       {cerere && <CerereOfertaPanel initial={cerere.id ? cerere : null} tipuriPermise={tipuriPermise} profile={profile} showToast={showToast} onClose={() => setCerere(null)} onDone={load} />}
       {bilete && <BiletePanel garantie={bilete} canEdit={canEdit} showToast={showToast} onClose={() => setBilete(null)} onChanged={() => incarcaBo(randuri)} />}
     </div>

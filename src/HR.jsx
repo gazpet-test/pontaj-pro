@@ -27,6 +27,7 @@ import HrAutorizatiiCitire from './HrAutorizatiiCitire.jsx'
 import HrTipuriAutorizatii from './HrTipuriAutorizatii.jsx'
 import HrDiplomeCalificari from './HrDiplomeCalificari.jsx'
 import HrFormareProfesionala from './HrFormareProfesionala.jsx'
+import HrDecizii from './HrDecizii.jsx'   // 07.10.2026: registrul deciziilor HR (generator, PR3)
 
 // Theme
 const G = {
@@ -169,6 +170,12 @@ export default function HRPage() {
   const isSuperAdmin = profile?.role === 'superadmin'
   const canAccessPersonal = profile?.is_owner === true || profile?.can_access_personal_data === true
   const canUseScanner = profile?.is_owner === true || profile?.can_use_document_scanner === true
+  // Registrul deciziilor: dreptul îl dă DOAR serverul (fn_hr_decizii_poate('citire')), nu rolul/poarta HR (spec §7).
+  const [poateDecizii, setPoateDecizii] = useState(false)
+  useEffect(() => {
+    if (!profile?.id) return
+    supabase.rpc('fn_hr_decizii_poate', { p_actiune: 'citire' }).then(r => setPoateDecizii(r.data === true), () => setPoateDecizii(false))
+  }, [profile?.id])
   
   const loadAll = async () => {
     setLoad(true)
@@ -230,6 +237,7 @@ export default function HRPage() {
     { key: 'peste_cim',   icon: '📑', label: 'Calificare > CIM', pesteCimOnly: true },  // task #70
     { key: 'semnaturi',   icon: '🖋️', label: 'Semnături' },
     { key: 'adeverinte',  icon: '📄', label: 'Adeverințe legători', personalOnly: true },
+    { key: 'decizii',     icon: '📜', label: 'Decizii', deciziiOnly: true },
     { key: 'concedii',    icon: '🌴', label: 'Concedii' },
     { key: 'recrutare',   icon: '🧲', label: 'Recrutare', personalOnly: true },
     { key: 'arhiva',      icon: '📦', label: 'Arhivă', badge: arhiva.length, personalOnly: true },
@@ -241,6 +249,7 @@ export default function HRPage() {
     if (t.scannerOnly && !canUseScanner) return false
     if (t.personalOnly && !canAccessPersonal) return false
     if (t.pesteCimOnly && !(canAccessPersonal || isAdmin)) return false
+    if (t.deciziiOnly && !poateDecizii) return false
     return true
   })
 
@@ -251,7 +260,7 @@ export default function HRPage() {
   useEffect(() => {
     const t = new URLSearchParams(loc.search).get('tab')
     if (t && tabs.some(x => x.key === t)) setTab(t)
-  }, [loc.search, isSuperAdmin, canUseScanner, canAccessPersonal, isAdmin])
+  }, [loc.search, isSuperAdmin, canUseScanner, canAccessPersonal, isAdmin, poateDecizii])
   
   return (
     <div style={S.page}>
@@ -324,6 +333,7 @@ export default function HRPage() {
       {!load && tab === 'semnaturi' && <TabSemnaturi profile={profile} showToast={showToast} />}
       {!load && tab === 'peste_cim' && (canAccessPersonal || isAdmin) && <TabCalificarePesteCim showToast={showToast} onClickEmp={(id) => { const e = employees.find(x => x.id === id); if (e) setEditEmp(e) }} />}
       {!load && tab === 'adeverinte' && canAccessPersonal && <AdeverinteLegator profile={profile} showToast={showToast} />}
+      {tab === 'decizii' && poateDecizii && <HrDecizii profile={profile} showToast={showToast} />}
       {!load && tab === 'concedii' && <TabConcedii profile={profile} employees={employees} showToast={showToast} />}
       {!load && tab === 'recrutare' && canAccessPersonal && <HrRecrutare profile={profile} showToast={showToast} />}
       {!load && tab === 'arhiva' && canAccessPersonal && <TabArhivaAutorizatii arhiva={arhiva} showToast={showToast} />}

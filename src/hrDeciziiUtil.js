@@ -100,3 +100,84 @@ export function alegeFont(inaltimiPeFont, limita = INALTIME_CORP) {
 
 /** Primii octeți ai unui PDF („%PDF-”), pentru fișiere cu `type` gol (VA32). */
 export const estePdf = bytes => bytes && bytes.length >= 5 && String.fromCharCode(...bytes.slice(0, 5)) === '%PDF-'
+
+// ─── Registru și Execuție (PR3) ────────────────────────────────
+
+const ddmmyyyy = d => d ? d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4) : ''
+/** Aceeași formă ca _hr_nr_afisat pe server: 916/28.09.2026, 385-a/2024, „ (seria carte tehnica)". */
+export const nrAfisat = d => d?.numar == null ? null
+  : `${d.numar}${d.numar_sufix ? '-' + d.numar_sufix : ''}/${d.data_emitere ? ddmmyyyy(d.data_emitere) : d.an}${d.serie === 'carte_tehnica' ? ' (seria carte tehnica)' : ''}`
+
+/**
+ * Ziua de business (Europe/Bucharest), ca _hr_azi() din SQL — nu ziua dispozitivului (J11-2, spec §2.4).
+ * ms: instantul (implicit acum); întoarce 'YYYY-MM-DD'.
+ */
+export function aziBucuresti(ms = Date.now()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Bucharest', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]))
+  return `${p.year}-${p.month}-${p.day}`
+}
+
+/**
+ * Toate rândurile, pe chei (keyset pe id crescător, J11-1/P11-2): se continuă până la o pagină GOALĂ, deci un plafon
+ * REST mai mic decât `pas` nu mai trunchiază, iar un rând inserat între pagini nu deplasează ferestrele (fără dubluri/goluri).
+ * cerePagina(ultimId|null, pas) → Promise<{ data, error }>, rânduri ordonate după id crescător, toate cu id > ultimId.
+ */
+export async function paginareKeyset(cerePagina, pas = 1000) {
+  const tot = []
+  for (let ultim = null; ;) {
+    const { data, error } = await cerePagina(ultim, pas)
+    if (error) throw error
+    if (!data || !data.length) return tot
+    tot.push(...data)
+    const u = data[data.length - 1].id
+    if (u == null || (ultim != null && !(u > ultim))) throw new Error('paginare: id lipsă sau neordonat')
+    ultim = u
+  }
+}
+
+/** Ordinea registrului: an desc, număr desc (null-urile — draft/rezervă fără număr — primele), apoi id desc. */
+export function ordineRegistru(a, b) {
+  const desc = (x, y) => x == null ? (y == null ? 0 : -1) : y == null ? 1 : y - x
+  return desc(a.an, b.an) || desc(a.numar, b.numar) || (b.id - a.id)
+}
+
+/** În vigoare azi: data efectului ≤ azi ≤ data_efect_pana (același predicat ca v_hr_decizii_curente; P10-1). */
+export const inVigoare = (d, azi) => (!d.data_efect || d.data_efect <= azi) && (!d.data_efect_pana || d.data_efect_pana >= azi)
+
+/**
+ * Eticheta cardului unui rol din Execuție → Echipă (spec §7, C10, VA9), legată pe tip_cod.
+ * Între deciziile semnate în vigoare se caută ÎNTÂI cea a persoanei din echipă (pot exista mai mulți RTE pe domenii, J10-3);
+ * „echipa ≠ decizia” apare doar dacă nicio decizie în vigoare nu e a persoanei din echipă.
+ * decizii: rândurile proiectului (emisa / semnata / revocata), cu data_efect și data_efect_pana; azi: 'YYYY-MM-DD'.
+ */
+export function stareRol(tipCod, idEchipa, decizii, nume = {}, azi) {
+  const ale = (decizii || []).filter(d => d.tip_cod === tipCod)
+  const pers = d => d.snapshot?.persoana?.nume || nume[d.employee_id] || d.persoana_nume || '?'
+  const id = idEchipa ? Number(idEchipa) : null
+  const valide = ale.filter(d => d.stare === 'semnata' && inVigoare(d, azi))
+  const aPersoanei = id && valide.find(d => d.employee_id === id)
+  if (aPersoanei) return { cod: 'ok', t: `Decizia nr ${nrAfisat(aPersoanei)}` }
+  if (valide.length) {
+    if (id) return { cod: 'diferit', t: `⚠ echipa ≠ decizia activă (nr ${nrAfisat(valide[0])}: ${pers(valide[0])})` }
+    return { cod: 'ok', t: `Decizia nr ${nrAfisat(valide[0])}: ${pers(valide[0])}` }
+  }
+  const viitoare = ale.find(d => d.stare === 'semnata' && d.data_efect && d.data_efect > azi && (!id || d.employee_id === id))
+  if (viitoare) return { cod: 'viitor', t: `nr ${nrAfisat(viitoare)} · efect de la ${viitoare.data_efect.split('-').reverse().join('.')}` }
+  const emisa = ale.find(d => d.stare === 'emisa')
+  if (emisa) return { cod: 'nesemnata', t: `nr ${nrAfisat(emisa)} · nesemnată` }
+  const rev = id && ale.find(d => d.stare === 'revocata' && d.employee_id === id)
+  if (rev) return { cod: 'revocata', t: `⚠ decizie revocată, echipa îl are încă pe ${pers(rev)}` }
+  if (id) return { cod: 'lipsa', t: '⚠ fără decizie' }
+  return null
+}
+
+/**
+ * G7 în client, ca indicație (serverul decide G7): pe proiect există un RTE semnat ÎN VIGOARE, al altei persoane,
+ * pe domenii disjuncte de cele alese. Nu schimbă singur propune_efect (P10-2).
+ */
+export function alteRteInVigoare(decizii, proiectId, employeeId, domenii, azi) {
+  const ale = new Set((domenii || []).map(String))
+  return (decizii || []).some(d => d.tip_cod === 'RTE' && d.stare === 'semnata' && String(d.proiect_id) === String(proiectId)
+    && String(d.employee_id) !== String(employeeId) && inVigoare(d, azi) && !(d.domenii_isc || []).some(c => ale.has(String(c))))
+}
