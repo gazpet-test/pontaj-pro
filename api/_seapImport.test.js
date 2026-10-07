@@ -76,4 +76,15 @@ describe('api/seap-import: arhivele din DownloadArchive', () => {
     expect(pe['Anexa.docx'][1]).toBe('ignorat')
     expect(pe['Anexa.docx'][2]).toMatch(/^non-PDF/)
   })
+  it('.p7m doar pe arhive (lic. 92, var. A): „X.rar.p7m” urcat întreg (neprocesat, alta) → îl despachetează workerul; „Caiet.pdf.p7m” rămâne cum era', async () => {
+    const randuri = []
+    mocks.createClient.mockReturnValue(fakeSupa(randuri))
+    mocks.fetch.mockResolvedValue(new Response(zipStored({ 'Raspuns consolidat.rar.p7m': '0\u0082 cms', 'Caiet.pdf.p7m': '0\u0082 cms' })))
+    const res = response()
+    await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
+    const pe = Object.fromEntries(randuri.map((r) => [r.nume_original, [r.tip, r.status_procesare, r.eroare]]))
+    expect(pe['Raspuns consolidat.rar.p7m']).toEqual(['alta', 'neprocesat', null])
+    expect(pe['Caiet.pdf.p7m'][1]).toBe('ignorat')
+    expect(Object.keys(pe).sort()).toEqual(['Caiet.pdf.p7m', 'Raspuns consolidat.rar.p7m'])
+  })
 })

@@ -269,6 +269,28 @@ describe('ZIP desfăcut inline în edge = aceeași clasificare ca în worker (Co
   })
 })
 
+describe('.p7m doar pe arhive (lic. 92; decizia Răzvan 07.10.2026, var. A)', () => {
+  it('arhivele semnate .p7m sunt arhive (container → alta); documentele .p7m nu sunt', () => {
+    for (const n of ['Raspuns clarificari consolidat.rar.p7m', 'Raspuns consolidat la solicitarile de clarificari - 2.rar.p7m', 'PT.zip.p7m', 'X.7z.P7M', 'X.part1.rar.p7m'])
+      expect(esteArhiva(n), n).toBe(true)
+    for (const n of ['Caiet de sarcini.pdf.p7m', 'Formulare.docx.p7m', 'X.rar.pdf.p7m']) expect(esteArhiva(n), n).toBe(false)
+    expect(ghicesteTip('Raspuns clarificari consolidat.rar.p7m')).toBe('alta')
+  })
+  it('edge-urile nu desfac .p7m (bytes + nume intacte); desfacerea CMS + extragerea le face workerul', () => {
+    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts'])
+      expect(readFileSync(new URL(f, import.meta.url), 'utf8'), f).not.toMatch(/p7m/i)
+  })
+  it('veghea, canalul de clarificări: ORICE fișier adus intră „neprocesat”, fără notă → „….rar.p7m” ajunge la bucla workerului (Copilot r3 pe #644)', () => {
+    const veghe = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
+    const ins = veghe.match(/\.insert\(\{\s*licitatie_id: lic\.id, fisier_path: path,[\s\S]*?\}\);/)
+    expect(ins, 'insert-ul din canalul de clarificări').toBeTruthy()
+    expect(ins[0]).toMatch(/status_procesare: 'neprocesat'/)          // necondiționat, nu după extensie
+    expect(ins[0]).not.toMatch(/\beroare\s*:/)                       // fără notă (eArhivaDeDespachetat cere eroare goală)
+    // documentația inițială nu se descarcă în veghe: placeholder fără fișier → îl ia drumul SEAP (aduLicitatie)
+    expect(veghe).toMatch(/fisier_path: `\$\{lic\.id\}\/atribuire\/neincarcat\//)
+  })
+})
+
 describe('moștenirea din arhivă', () => {
   it('regula proprie câștigă', () => {
     expect(tipInArhiva('X (#1)/F3_lista.pdf', 'cs_volum')).toBe('lista_cantitati')

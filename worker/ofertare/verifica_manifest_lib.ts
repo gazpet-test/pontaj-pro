@@ -6,7 +6,7 @@
 //   3. scrie câte un rând în ofertare_seap_manifest (stare 'deja_in_platforma' | 'ignorat' | 'eroare_urcare' = lipsă).
 // NU urcă nimic, NU atinge ofertare_documente_atribuire, NU pornește citiri AI. Conținut SEAP = input ostil,
 // tratat de aceleași controale ca la import (listare + politică înainte de extragere).
-import { listaSeap, descarca, continutP7s, volumRar, numeVolum, verificaListare, verificaVolume, pregatesteJob, listeazaIzolat, extrageIzolat, cheieNume } from './seap.ts'
+import { listaSeap, descarca, continutP7s, volumRar, numeVolum, verificaListare, verificaVolume, pregatesteJob, listeazaIzolat, extrageIzolat, cheieNume, semnaturaDeDesfacut } from './seap.ts'
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
@@ -91,7 +91,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     // volumele RAR ale aceleiași arhive se tratează împreună
     const grupuri = new Map<string, typeof docs>()
     for (const d of docs) {
-      const v = volumRar(d.nume.replace(/\.p7s$/i, ''))
+      const v = volumRar(d.nume.replace(/\.p7[ms]$/i, ''))
       const k = v ? `rar:${v.baza.toLowerCase()}` : `f:${d.nume}`
       grupuri.set(k, [...(grupuri.get(k) || []), d])
     }
@@ -102,7 +102,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
       try {
         await pregatesteJob(dir)
         const cifre = Math.max(1, ...grup.map(d => d.nume.match(/\.part(\d+)/i)?.[1].length ?? 1))
-        grup.sort((a, b) => (volumRar(a.nume.replace(/\.p7s$/i, ''))?.nr ?? 0) - (volumRar(b.nume.replace(/\.p7s$/i, ''))?.nr ?? 0))
+        grup.sort((a, b) => (volumRar(a.nume.replace(/\.p7[ms]$/i, ''))?.nr ?? 0) - (volumRar(b.nume.replace(/\.p7[ms]$/i, ''))?.nr ?? 0))
         const locale: { nume: string; cale: string; buf: Uint8Array }[] = []
         for (const doc of grup) {
           semnal.throwIfAborted()
@@ -110,7 +110,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
           semnal.throwIfAborted()
           let buf: Uint8Array = await Deno.readFile(`${dir}/in/tmp.bin`)
           let nume = doc.nume
-          if (/\.p7s$/i.test(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7s$/i, '') }
+          if (semnaturaDeDesfacut(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7[ms]$/i, '') }
           const vol = k.startsWith('rar:') ? volumRar(nume) : null
           const cale = `${dir}/in/${(vol ? numeVolum(vol, cifre) : nume).replace(/[\\/]/g, '_')}`
           await Deno.writeFile(cale, buf); await Deno.remove(`${dir}/in/tmp.bin`)

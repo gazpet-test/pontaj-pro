@@ -102,8 +102,9 @@ export function tipInArhiva(nume, tipArhiva) {
  *  apoi tipul rândului ei. Același în worker (bucla de platformă) și în edge (ZIP desfăcut inline) — Copilot conv. 3, #641. */
 export const indiciuArhiva = (numeArhiva, tipRand = null) => tipExplicit(numeArhiva) ?? tipRand ?? null
 
-/** Arhivă pe care o despachetează workerul (zip / rar / 7z, opțional semnată .p7s). */
-export const ARHIVA_RE = /\.(zip|rar|7z)(\.p7s)?$/i
+/** Arhivă pe care o despachetează workerul (zip / rar / 7z, opțional semnată .p7s sau .p7m — același CMS atașat). .p7m e
+ *  recunoscut DOAR pe arhive (lic. 92, decizia Răzvan 07.10.2026, var. A): un document „….pdf.p7m” rămâne cum vine. */
+export const ARHIVA_RE = /\.(zip|rar|7z)(\.p7[ms])?$/i
 export const esteArhiva = (nume) => ARHIVA_RE.test(String(nume ?? ''))
 
 /** Adâncimea de imbricare a unui document extras: câte spații de nume „(#id)” are în nume. O arhivă de pe nivelul

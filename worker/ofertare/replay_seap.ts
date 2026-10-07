@@ -15,8 +15,8 @@ const crc32 = (b: Uint8Array) => { let c = 0xFFFFFFFF; for (let i = 0; i < b.len
 
 const { data: lic } = await supa.from('ofertare_licitatii').select('c_notice_id, sys_notice_type_id').eq('id', licId).single()
 const { docs, cookie } = await listaSeap(lic!.c_notice_id, lic!.sys_notice_type_id)
-const grup = docs.filter(d => volumRar(d.nume.replace(/\.p7s$/i, '')))
-const baza = volumRar(grup[0].nume.replace(/\.p7s$/i, ''))!.baza
+const grup = docs.filter(d => volumRar(d.nume.replace(/\.p7[ms]$/i, '')))
+const baza = volumRar(grup[0].nume.replace(/\.p7[ms]$/i, ''))!.baza
 console.log(`#${licId}: ${grup.length} volume RAR „${baza}"`)
 const cifre = Math.max(...grup.map(d => d.nume.match(/\.part(\d+)/i)![1].length))
 
@@ -29,7 +29,7 @@ let prima = ''
 for (const d of grup) {
   await descarca(d, cookie, `${dir}/in/tmp.bin`)
   const buf = continutP7s(await Deno.readFile(`${dir}/in/tmp.bin`)); await Deno.remove(`${dir}/in/tmp.bin`)
-  const v = volumRar(d.nume.replace(/\.p7s$/i, ''))!
+  const v = volumRar(d.nume.replace(/\.p7[ms]$/i, ''))!
   const nume = numeVolum(v, cifre); nr.push(v.nr); if (v.nr === 1) prima = nume
   await Deno.writeFile(`${dir}/in/${nume}`, buf)
 }
