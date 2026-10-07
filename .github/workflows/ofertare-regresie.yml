@@ -31,6 +31,7 @@ on:
       - 'worker/ofertare/seap.ts'
       - 'worker/ofertare/egress.ts'
       - 'worker/ofertare/arhive_platforma_test.ts'
+      - 'worker/ofertare/verifica_manifest*.ts'
       - 'supabase/functions/api-consum-extern/**'
       - 'src/apiConsum*'
       - 'src/ApiConsumExtern.jsx'
@@ -70,6 +71,7 @@ on:
       - 'worker/ofertare/seap.ts'
       - 'worker/ofertare/egress.ts'
       - 'worker/ofertare/arhive_platforma_test.ts'
+      - 'worker/ofertare/verifica_manifest*.ts'
       - 'supabase/functions/api-consum-extern/**'
       - 'src/apiConsum*'
       - 'src/ApiConsumExtern.jsx'
@@ -125,8 +127,13 @@ jobs:
           supabase/functions/ofertare-document-nou-citeste
           supabase/functions/ofertare-poarta-text
           supabase/functions/api-consum-extern
+          supabase/functions/ofertare-seap-import
           worker/ofertare/plansa_test.ts
           worker/ofertare/arhive_platforma_test.ts
+      # Verificarea R6 a manifestului (dovada sha 'urcat' nu se mai distruge — audit Jakarinos 07.10, #13). --no-check: tiparea
+      # supabase-js din bibliotecă are erori vechi de tip „never”, fără efect la rulare (același cod rulează pe NAS).
+      - name: Verificarea manifestului SEAP (R6) cu dependente simulate
+        run: deno test -A --no-check --node-modules-dir=none worker/ofertare/verifica_manifest_test.ts
       # J04: testul node:test importă handler-ul .ts, deci rulează sub Deno (Node 20 nu elimină tipurile).
       - name: Hash pe server J04 - logica edge, poarta si paritatea rolurilor
         run: deno test -A --node-modules-dir=none scripts/test-jakv202-hash-server.mjs

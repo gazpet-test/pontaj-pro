@@ -21,6 +21,7 @@ function parseazaTermen(t: string): (r: Rand) => boolean {
   let m = t.match(/^([a-z_]+)\.is\.null$/); if (m) { const c = m[1]; return r => r[c] == null }
   m = t.match(/^([a-z_]+)\.not\.ilike\.(.*)$/s); if (m) { const c = m[1], re = reLike(m[2]); return r => r[c] != null && !re.test(r[c]) }
   m = t.match(/^([a-z_]+)\.ilike\.(.*)$/s); if (m) { const c = m[1], re = reLike(m[2]); return r => r[c] != null && re.test(r[c]) }
+  m = t.match(/^([a-z_]+)\.like\.(.*)$/s); if (m) { const c = m[1], re = new RegExp('^' + m[2].replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*') + '$', 's'); return r => r[c] != null && re.test(r[c]) }
   throw new Error('filtru necunoscut în fake: ' + t)
 }
 function parseazaOr(expr: string): (r: Rand) => boolean { const fs = imparte(expr).map(parseazaTermen); return r => fs.some(f => f(r)) }
@@ -37,6 +38,7 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
       upsert(p: Rand | Rand[], o?: { onConflict?: string }) { op = 'upsert'; patch = p; conflict = (o?.onConflict ?? '').split(',').filter(Boolean); return b },   // ca în BD: înlocuiește pe cheia unică
       eq(c: string, v: unknown) { filtre.push(r => r[c] === v); return b },
       in(c: string, v: unknown[]) { filtre.push(r => v.includes(r[c])); return b },
+      gt(c: string, v: any) { filtre.push(r => r[c] != null && r[c] > v); return b },
       is(c: string, v: unknown) { filtre.push(r => (v === null ? r[c] == null : r[c] === v)); return b },
       not(c: string, o: string, v: unknown) {   // semantica SQL: NULL nu trece niciun NOT
         if (o === 'is' && v === null) filtre.push(r => r[c] != null)
@@ -350,8 +352,9 @@ Deno.test('arhive: arhivă de prim nivel urcată întreagă de edge / api — de
   await cuMediu(async (root, s) => {
     const opreste = pornesteExtractor(root)
     try {
+      const pt = await zipCu({ 'PT/Memoriu.pdf': '%PDF-1.4 m' })
       const fisiere = new Map<string, Uint8Array>([
-        ['3/pt.rar', await zipCu({ 'PT/Memoriu.pdf': '%PDF-1.4 m' })],                                    // drumul SEAP complet (evidență ok)
+        ['3/pt.rar', pt],                                                                                   // drumul SEAP complet (evidență ok, același sha)
         ['3/doc.zip', await zipCu({ 'DOC/F3.pdf': '%PDF-1.4 f' })],                                       // ZIP inline edge, complet (manifest ok)
         ['3/par.zip', await zipCu({ 'A.pdf': '%PDF-1.4 a', 'B.pdf': '%PDF-1.4 b', 'C.pdf': '%PDF-1.4 c' })],   // ZIP inline edge PARȚIAL
         ['3/ev.zip', await zipCu({ 'X.pdf': '%PDF-1.4 x', 'Y.pdf': '%PDF-1.4 y' })],                      // drumul SEAP cu eroare (evidență eroare)
@@ -363,13 +366,17 @@ Deno.test('arhive: arhivă de prim nivel urcată întreagă de edge / api — de
           { id: 72, licitatie_id: 3, nume_original: 'Par.zip', fisier_path: '3/par.zip', status_procesare: 'neprocesat', eroare: null },
           { id: 74, licitatie_id: 3, nume_original: 'Ev.zip', fisier_path: '3/ev.zip', status_procesare: 'neprocesat', eroare: null },
           { id: 73, licitatie_id: 3, nume_original: 'PT/Memoriu.pdf', fisier_path: '3/m.pdf', status_procesare: 'procesat', eroare: null },
+          // documentele dovedite de manifest există în platformă (fără ele, dovada nu mai sare nimic — Copilot r1 pe #646)
+          { id: 900, licitatie_id: 3, nume_original: 'DOC/F3.pdf', fisier_path: '3/f3.pdf', status_procesare: 'procesat', eroare: null },
+          { id: 901, licitatie_id: 3, nume_original: 'A.pdf', fisier_path: '3/a.pdf', status_procesare: 'procesat', eroare: null },
+          { id: 902, licitatie_id: 3, nume_original: 'X.pdf', fisier_path: '3/x.pdf', status_procesare: 'procesat', eroare: null },
         ],
-        ofertare_seap_fisiere: [{ licitatie_id: 3, cheie: 'pt.rar', stare: 'ok', fisiere_extrase: 1 }, { licitatie_id: 3, cheie: 'ev.zip', stare: 'eroare', fisiere_extrase: 1 }],
-        ofertare_seap_manifest: [
-          { licitatie_id: 3, arhiva_cheie: 'doc.zip', cale: 'DOC/F3.pdf', document_id: 900 },
-          { licitatie_id: 3, arhiva_cheie: 'par.zip', cale: 'A.pdf', document_id: 901 },
-          { licitatie_id: 3, arhiva_cheie: 'par.zip', cale: 'B.pdf', document_id: null, motiv: 'rand BD nescris' },   // copil eșuat
-          { licitatie_id: 3, arhiva_cheie: 'ev.zip', cale: 'X.pdf', document_id: 902 },
+        ofertare_seap_fisiere: [{ licitatie_id: 3, cheie: 'pt.rar', stare: 'ok', fisiere_extrase: 1, sha256: await shaOcteti(pt) }, { licitatie_id: 3, cheie: 'ev.zip', stare: 'eroare', fisiere_extrase: 1 }],
+        ofertare_seap_manifest: [   // dovezi 'urcat' (sha-ul fișierului chiar urcat sub document_id) — #5: doar ele sar un fișier
+          { licitatie_id: 3, arhiva_cheie: 'doc.zip', cale: 'DOC/F3.pdf', document_id: 900, stare: 'urcat', sha256: await shaHex('%PDF-1.4 f') },
+          { licitatie_id: 3, arhiva_cheie: 'par.zip', cale: 'A.pdf', document_id: 901, stare: 'urcat', sha256: await shaHex('%PDF-1.4 a') },
+          { licitatie_id: 3, arhiva_cheie: 'par.zip', cale: 'B.pdf', document_id: null, stare: 'eroare_urcare', sha256: await shaHex('%PDF-1.4 b'), motiv: 'rand BD nescris' },   // copil eșuat
+          { licitatie_id: 3, arhiva_cheie: 'ev.zip', cale: 'X.pdf', document_id: 902, stare: 'urcat', sha256: await shaHex('%PDF-1.4 x') },
         ],
         ofertare_licitatii: [], notifications: [],
       }
@@ -477,6 +484,7 @@ const licSeap = (extra: Partial<Record<string, Rand[]>> = {}): Record<string, Ra
 } as Record<string, Rand[]>)
 
 const shaHex = async (t: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)))].map(x => x.toString(16).padStart(2, '0')).join('')
+const shaOcteti = async (b: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b as Uint8Array<ArrayBuffer>))].map(x => x.toString(16).padStart(2, '0')).join('')
 
 Deno.test('drumul SEAP: două arhive cu „Caiet de sarcini.pdf” DIFERIT, de aceeași mărime → ambele urcate; 3 reluări nu dublează', async () => {
   await cuMediu(async (root, s) => {
@@ -690,4 +698,138 @@ Deno.test('drumul SEAP: „….zip.p7m” cu semnătură DETAȘATĂ → eroare l
       eq(tab.ofertare_seap_fisiere.map(e => [e.stare, e.etapa]), [['eroare', 'semnatura']], JSON.stringify(rap.erori))
     } finally { restore(); await opreste() }
   })
+})
+
+// -- audit Jakarinos 07.10: #3 garda pe sha-ul arhivei, #5 dovada sha pentru fișierele importate anterior, #2 placeholder, #6, #7 --
+Deno.test('arhive #3: republicare cu ALT conținut sub același nume (evidență „ok” veche) → despachetată, nu închisă cu notă falsă', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const vechi = await zipCu({ 'Caiet.pdf': '%PDF-1.4 v1' }), nou = await zipCu({ 'Caiet.pdf': '%PDF-1.4 v2 revizuit' })
+      const tab: Record<string, Rand[]> = {
+        ofertare_documente_atribuire: [{ id: 80, licitatie_id: 3, nume_original: 'Documentatie.zip', fisier_path: '3/nou.zip', status_procesare: 'neprocesat', eroare: null, tip: 'raspuns_clarificare', seap_cod: 'SCN1/00021' }],
+        ofertare_seap_fisiere: [{ licitatie_id: 3, cheie: 'documentatie.zip', stare: 'ok', fisiere_extrase: 1, sha256: await shaOcteti(vechi) }],
+        ofertare_seap_manifest: [], ofertare_licitatii: [], notifications: [],
+      }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, new Map([['3/nou.zip', nou]])), () => {})
+      const d = tab.ofertare_documente_atribuire
+      ok(/^📦 Arhivă despachetată pe Terra: 1 fișiere noi/.test(d.find(x => x.id === 80)!.eroare), d.find(x => x.id === 80)!.eroare)
+      eq(d.filter(x => x.id !== 80).map(x => x.nume_original), ['Documentatie (#80)/Caiet.pdf'])
+      eq(await s.dejaDesfacutaPeSeap(fakeSupa(tab, new Map()), { licitatie_id: 3, nume_original: 'Documentatie.zip' }, await shaOcteti(vechi)), '1 fișiere, evidența drumului SEAP', 'același conținut → închisă')
+      tab.ofertare_seap_fisiere[0].sha256 = null
+      eq(await s.dejaDesfacutaPeSeap(fakeSupa(tab, new Map()), { licitatie_id: 3, nume_original: 'Documentatie.zip' }, await shaOcteti(vechi)), null, 'evidență fără sha = nedovedit')
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('arhive #5: un rând de manifest fără dovadă (deja_in_platforma vechi) sau cu alt sha NU sare fișierul; dovada „urcat” cu același sha îl sare', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/m.zip', await zipCu({ 'A.pdf': '%PDF-1.4 a', 'B.pdf': '%PDF-1.4 b nou', 'C.pdf': '%PDF-1.4 c' })]])
+      const tab: Record<string, Rand[]> = {
+        ofertare_documente_atribuire: [
+          { id: 81, licitatie_id: 3, nume_original: 'M.zip', fisier_path: '3/m.zip', status_procesare: 'neprocesat', eroare: null },
+          { id: 910, licitatie_id: 3, nume_original: 'A.pdf', fisier_path: '3/a910.pdf', status_procesare: 'procesat', eroare: null },
+        ],
+        ofertare_seap_manifest: [
+          { licitatie_id: 3, arhiva_cheie: 'm.zip', cale: 'A.pdf', document_id: 910, stare: 'urcat', sha256: await shaHex('%PDF-1.4 a') },              // dovedit, același → sărit
+          { licitatie_id: 3, arhiva_cheie: 'm.zip', cale: 'B.pdf', document_id: 911, stare: 'urcat', sha256: await shaHex('%PDF-1.4 b vechi') },        // dovedit, ALT conținut → urcat
+          { licitatie_id: 3, arhiva_cheie: 'm.zip', cale: 'C.pdf', document_id: 912, stare: 'deja_in_platforma', sha256: await shaHex('%PDF-1.4 c') }, // scris de bugul vechi, 912 nedovedit → urcat
+        ],
+        ofertare_seap_fisiere: [], ofertare_licitatii: [], notifications: [],
+      }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const d = tab.ofertare_documente_atribuire
+      eq(d.filter(x => x.id > 1000).map(x => x.nume_original).sort(), ['M (#81)/B.pdf', 'M (#81)/C.pdf'])
+      ok(/2 fișiere noi.*1 existau deja/.test(d.find(x => x.id === 81)!.eroare), d.find(x => x.id === 81)!.eroare)
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('drumul SEAP #2: placeholder „Anexa 1.pdf” + în arhivă „Anexa (1).pdf” și „Anexa 1.pdf” (aceeași cheie, alt conținut) → două rânduri, placeholder-ul completat o singură dată', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const restore = cuSeap({ 'DOC.zip': await zipCu({ 'Anexa (1).pdf': '%PDF-1.4 unu', 'Anexa 1.pdf': '%PDF-1.4 doi' }) })
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [
+        { id: 40, licitatie_id: 3, nume_original: 'Anexa 1.pdf', fisier_path: '3/atribuire/neincarcat/Anexa_1.pdf', tip: 'alta', status_procesare: 'ignorat', eroare: 'Aparut nou in SEAP' },
+      ] })
+      const fis = new Map<string, Uint8Array>()
+      const rap = await s.aduLicitatie(fakeSupa(tab, fis), 3, () => {})
+      eq(rap.erori, [])
+      const d = tab.ofertare_documente_atribuire
+      eq(d.length, 2, JSON.stringify(d.map(x => [x.id, x.nume_original])))
+      eq(d.filter(x => !String(x.fisier_path).includes('/neincarcat/')).length, 2, 'ambele fișiere au obiect propriu')
+      eq(new Set(d.map(x => x.fisier_path)).size, 2, 'niciun rând nu a fost suprascris')
+      ok(d.some(x => x.id === 40), 'placeholder-ul a fost completat (nu dublat)')
+      for (const x of d) ok(fis.has(x.fisier_path), `obiectul ${x.fisier_path} există în Storage`)
+    } finally { restore(); await opreste() }
+  })
+})
+
+Deno.test('coada #6: 25 de cereri terminate mai vechi nu blochează o cerere nouă; cererea reînnoită în timpul procesării rămâne restantă', async () => {
+  await cuMediu(async (_root, s) => {
+    const vechi = Array.from({ length: 25 }, (_, i) => ({ licitatie_id: 100 + i, cerut_la: `2026-09-01T00:00:${String(i).padStart(2, '0')}Z`, terminat_la: '2026-09-02T00:00:00Z', sursa: 'reconciliere' }))
+    const tab: Record<string, Rand[]> = {
+      ofertare_seap_cereri: [...vechi, { licitatie_id: 7, cerut_la: '2026-10-07T10:00:00Z', terminat_la: null, sursa: 'om', cerut_de: null }],
+      ofertare_licitatii: [{ id: 7, c_notice_id: null, sys_notice_type_id: null }],   // fără anunț legat: aduLicitatie se oprește repede, cu eroare în raport
+      ofertare_documente_atribuire: [], notifications: [],
+    }
+    const supa = fakeSupa(tab, new Map())
+    await s.proceseazaSeap(supa, () => false, () => {})
+    const c7 = tab.ofertare_seap_cereri.find(c => c.licitatie_id === 7)!
+    ok(c7.terminat_la && c7.preluat_la, `cererea nouă a fost preluată și închisă: ${JSON.stringify(c7)}`)
+    ok(c7.raport?.erori?.[0]?.includes('anunț SEAP'), JSON.stringify(c7.raport))
+    // cerere reînnoită în timp ce se procesa (cerut_la schimbat) → terminat_la nu se scrie, rămâne restantă
+    Object.assign(c7, { terminat_la: null, cerut_la: '2026-10-07T11:00:00Z' })
+    const supa2 = fakeSupa(tab, new Map())
+    const fromVechi = supa2.from
+    supa2.from = (t: string) => {
+      const b = fromVechi(t)
+      if (t === 'ofertare_seap_cereri') { const upd = b.update; b.update = (p: Rand) => { if ('preluat_la' in p) c7.cerut_la = '2026-10-07T12:00:00Z'; return upd(p) } }
+      return b
+    }
+    await s.proceseazaSeap(supa2, () => false, () => {})
+    eq(c7.terminat_la, null, 'cererea venită în timpul procesării nu e acoperită de terminat_la')
+    ok(c7.raport, 'raportul rulării se păstrează')
+  })
+})
+
+Deno.test('arhive #7: excepție după revendicare → arhiva închisă „eroare” cu motiv, nu rămâne „in_lucru”', async () => {
+  await cuMediu(async (_root, s) => {
+    const tab: Record<string, Rand[]> = {
+      ofertare_documente_atribuire: [{ id: 82, licitatie_id: 3, nume_original: 'E.zip', fisier_path: '3/e.zip', status_procesare: 'neprocesat', eroare: null }],
+      ofertare_seap_manifest: [], ofertare_seap_fisiere: [], ofertare_licitatii: [], notifications: [],
+    }
+    const supa = fakeSupa(tab, new Map())
+    supa.storage.from = () => ({ download: async () => ({ data: { arrayBuffer: async () => { throw new Error('simulat: conexiune ruptă') } }, error: null }) }) as any
+    await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+    const d = tab.ofertare_documente_atribuire[0]
+    eq(d.status_procesare, 'eroare')
+    ok(/^Despachetare eșuată \(excepție\): simulat: conexiune ruptă/.test(d.eroare), d.eroare)
+  })
+})
+
+Deno.test('arhive #5 (Copilot r1 pe #646): dovada sha a unui document ȘTERS sau rămas placeholder nu sare fișierul — se urcă', async () => {
+  for (const caz of ['sters', 'placeholder'] as const) {
+    await cuMediu(async (root, s) => {
+      const opreste = pornesteExtractor(root)
+      try {
+        const fisiere = new Map<string, Uint8Array>([['3/m.zip', await zipCu({ 'A.pdf': '%PDF-1.4 a' })]])
+        const tab: Record<string, Rand[]> = {
+          ofertare_documente_atribuire: [
+            { id: 81, licitatie_id: 3, nume_original: 'M.zip', fisier_path: '3/m.zip', status_procesare: 'neprocesat', eroare: null },
+            ...(caz === 'placeholder' ? [{ id: 910, licitatie_id: 3, nume_original: 'A.pdf', fisier_path: '3/atribuire/neincarcat/A.pdf', status_procesare: 'ignorat', eroare: 'Aparut nou in SEAP' }] : []),
+          ],
+          ofertare_seap_manifest: [{ licitatie_id: 3, arhiva_cheie: 'm.zip', cale: 'A.pdf', document_id: 910, stare: 'urcat', sha256: await shaHex('%PDF-1.4 a') }],
+          ofertare_seap_fisiere: [], ofertare_licitatii: [], notifications: [],
+        }
+        await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+        const d = tab.ofertare_documente_atribuire
+        eq(d.filter(x => x.id > 1000).map(x => x.nume_original), ['M (#81)/A.pdf'], `caz ${caz}`)
+        ok(/^📦 Arhivă despachetată pe Terra: 1 fișiere noi/.test(d.find(x => x.id === 81)!.eroare), d.find(x => x.id === 81)!.eroare)
+      } finally { await opreste() }
+    })
+  }
 })

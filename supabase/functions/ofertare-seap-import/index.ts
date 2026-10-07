@@ -56,6 +56,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shared/identitateFisier.mjs';
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
+import { curataOrfani } from './orfani.ts';
+import { scrieDocument } from './placeholder.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const CORS: Record<string, string> = {
@@ -71,7 +73,8 @@ const SEAP_HDR: Record<string, string> = {
 const BUGET_MS = 240000;
 const BUGET_OCTETI = 12e6;
 const PRAG_MARE = 20e6;   // peste asta: lasam fisierul pe seama functiei de pe Vercel
-const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)/i;
+// segment ÎNTREG (ca în worker): „__MACOSX_documentatie.pdf” nu e gunoi (audit Jakarinos 07.10, #18)
+const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i;
 const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/');
 
 // ANTI-BUG 15.09.2026 (Clinceni): SEAP normalizeaza numele in API (scoate virgulele,
@@ -291,32 +294,9 @@ async function parcurgeZip(
 const fluxDinBuf = (b: Uint8Array) => new Flux(new Blob([b]).stream().getReader() as ReadableStreamDefaultReader<Uint8Array>);
 
 // -- Curatenie: obiecte ramase in bucket fara rand in BD --------------------------
-// Un import intrerupt, un rand sters ca duplicat sau un fisier explodat gresit lasa
-// in urma obiecte orfane care ocupa spatiu si nu se mai vad nicaieri in platforma.
-// Se sterg DOAR obiectele din prefixul licitatiei curente care nu sunt referite de
-// niciun rand din ofertare_documente_atribuire - deci nimic ce se vede in interfata.
-// Ruleaza doar la finalul unui import dus pana la capat (nu pe rulari partiale, unde
-// randurile inca nu sunt toate scrise si am sterge fisiere bune).
-async function curataOrfani(supa: any, licitatieId: number): Promise<string[]> {
-  try {
-    const prefix = `${licitatieId}/atribuire`;
-    const { data: obiecte, error: eLista } = await supa.storage.from('ofertare')
-      .list(prefix, { limit: 1000 });
-    if (eLista || !obiecte?.length) return [];
-    const { data: randuri } = await supa.from('ofertare_documente_atribuire')
-      .select('fisier_path').eq('licitatie_id', licitatieId);
-    const folosite = new Set((randuri || []).map((r: any) => String(r.fisier_path || '')));
-    const orfani = obiecte
-      .filter((o: any) => o?.name && o?.id)   // id null = subfolder, nu fisier
-      .map((o: any) => `${prefix}/${o.name}`)
-      .filter((cale: string) => !folosite.has(cale));
-    if (!orfani.length) return [];
-    const { error } = await supa.storage.from('ofertare').remove(orfani);
-    return error ? [] : orfani;
-  } catch (_) {
-    return [];   // curatenia nu are voie sa strice importul
-  }
-}
+// Un import intrerupt, un rand sters ca duplicat sau un fisier explodat gresit lasa in urma obiecte orfane. Regulile
+// (fail-closed, inventar paginat, doar obiecte mai vechi de o ora) sunt in ./orfani.ts. Ruleaza doar la finalul unui
+// import dus pana la capat (nu pe rulari partiale).
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
@@ -365,13 +345,11 @@ Deno.serve(async (req: Request) => {
   const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieNume(d.nume_original), d.id]));
 
   const scrie = async (rand: any, nume: string) => {
-    const idPh = placeholders.get(cheieNume(nume));
-    const { data, error } = idPh
-      ? await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh).select('id').maybeSingle()
-      : await supa.from('ofertare_documente_atribuire').insert(rand).select('id').maybeSingle();
-    if (error) { raport.erori.push(`${nume}: scriere rand - ${error.message}`); return null; }
-    if (idPh) raport.completate++; else raport.adaugate++;
-    return (data?.id ?? idPh ?? null) as number | null;
+    // placeholder-ul se completează o singură dată, doar dacă e încă placeholder (./placeholder.ts, audit #2)
+    const r = await scrieDocument(supa, rand, cheieNume(nume), placeholders);
+    if (r.eroare) { raport.erori.push(`${nume}: scriere rand - ${r.eroare}`); return null; }
+    if (r.completat) raport.completate++; else raport.adaugate++;
+    return r.id;
   };
 
   // R6: manifest de integritate (SHA-256 pe byte-ii urcati). Se strange in memorie si se scrie la final;

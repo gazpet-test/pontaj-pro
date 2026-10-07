@@ -87,4 +87,12 @@ describe('api/seap-import: arhivele din DownloadArchive', () => {
     expect(pe['Caiet.pdf.p7m'][1]).toBe('ignorat')
     expect(Object.keys(pe).sort()).toEqual(['Caiet.pdf.p7m', 'Raspuns consolidat.rar.p7m'])
   })
+  it('gunoi = segment întreg (audit #18): „__MACOSX/…” și „Thumbs.db” sărite, „__MACOSX_documentatie.pdf” urcat', async () => {
+    const randuri = []
+    mocks.createClient.mockReturnValue(fakeSupa(randuri))
+    mocks.fetch.mockResolvedValue(new Response(zipStored({ '__MACOSX/._Caiet.pdf': 'x', 'Thumbs.db': 'x', '__MACOSX_documentatie.pdf': '%PDF-1.4 d' })))
+    const res = response()
+    await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
+    expect(randuri.map((r) => r.nume_original)).toEqual(['__MACOSX_documentatie.pdf'])
+  })
 })
