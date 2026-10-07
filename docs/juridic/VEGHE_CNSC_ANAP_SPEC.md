@@ -35,6 +35,7 @@ Fără sursă nouă: tot din `cnsc_decizii` + SEAP (ofertanții din rapoartele p
 - Alertă: când un concurent urmărit apare cu o contestație nouă la o autoritate unde avem ofertă depusă sau în lucru (legătură cu `ofertare_licitatii` pe CUI autoritate) → rând în notificările ERP pentru responsabilul ofertei. Fără mail automat.
 
 ## 3. ANAP — notificări de interpretare
+- **Testat 07.10.2026:** prin Edge CDP 9333 trece (3 pagini în ~15 s). Primul run manual: 19 rânduri în `norme_surse`, `versiune_import = anap-veghe-2026-10-07`, rând `automatizari` #106. Scriptul: `C:/Users/Public/erp_review/anap/lista_anap.py`.
 - Nu se poate citi din cloud (Cloudflare). Rulează **pe PC-ul din birou**, în rutina de noapte sau lunar (1 a lunii), cu browser real (Playwright pe Edge-ul existent, ca la Copilot): deschide `anap.gov.ro/ro/` secțiunile Notificări / Ghiduri & documente utile / Comunicate, listează articolele noi față de ultima rulare (titlu + URL + dată), descarcă PDF-urile atașate.
 - Fiecare articol nou → rând în `norme_surse` cu `tip = 'notificare_anap'`, `verificat = false`, text extras. Rezumarea și legarea de `norme_cerinte` / `clarificari_tipare` se fac la cerere, cu AI, prin poarta pe cheltuială, apoi bifă umană.
 - Dacă într-o lună nu apare nimic, rutina scrie „0 noi” în jurnal, nu tace.
@@ -56,6 +57,9 @@ Fiecare PR: build, teste pe parser (fixture-uri HTML salvate din achizia.ro, ca 
 
 ## 6. Decizii Răzvan (07.10.2026)
 - **D1. Concurenți urmăriți (inițial):** INSPET, INGAZFORCONSTRUCT, CISGAZ, IRGC, HABAU (entitatea din RO, după CUI), INSTGAZ, INVEST GENERAL, TOTALGAZ. CUI-urile se completează la PR1 din achizia.ro și se confirmă în UI. Lista se extinde din UI.
-- **D2. Triaj:** Răzvan, Marilena și responsabilul Ofertare. „Verificat” și „Rezumă” vizibile doar pentru ei (drept explicit în `user_module_access`, acordat de Răzvan).
+- **D2. Triaj:** Răzvan, Marilena și responsabilul Ofertare văd lista și pot cere „Rezumă”. **Bifa „Verificat” o dă responsabilul de licitație** (decizie Răzvan 07.10). Drept explicit în `user_module_access`, acordat de Răzvan.
 - **D3. Frecvență:** săptămânal, luni 06:00.
 - **D4. Buget rezumare AI:** OK, sub 5 €/lună. Peste 30 de decizii/lună rezumarea se oprește și cere confirmare.
+
+## 7. Regulă de lucru (Răzvan 07.10)
+Chat-ul nu lucrează în paralel cu sesiunea Ofertare pe această temă: chat-ul a livrat spec-ul și primul run ANAP (date, nu cod). Orice cod (PR1–PR4), migrare sau UI e al sesiunii Ofertare. Chat-ul mai rulează scriptul ANAP doar la cererea lui Răzvan, până intră în rutina lunară.
