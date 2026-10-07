@@ -39,6 +39,7 @@ import OfertareParteneri from './OfertareParteneri.jsx'
 import { raportTransferCantitati } from './ofertareTransferRaport.js'
 import { restantePeTip as restantePeTipDoc, textRestante } from './ofertareTransferRestante.js'
 import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   // aceleași reguli ca la import (worker, edge, api)
+import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 
 const G = {
@@ -847,11 +848,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       if (eUp) { setWarn(`Eroare la „${rel}": ${eUp.message}`); continue }
       const estePdf = await areSemnaturaPdf(f)
       const eArhiva = arhivaPentruServer(f)   // o ia workerul de pe Terra și o despachetează
+      // var. B (07.10.2026): un document semnat („X.pdf.p7m”, „X.docx.p7s”) intră „neprocesat”, fără notă — workerul NAS
+      // desface semnătura pe loc („X (semnat).pdf”), iar fișierul semnat rămâne legat de rând (seap_meta.semnat)
+      const eSemnatDoc = !eArhiva && eSemnat(rel)
       const randNou = {
         licitatie_id: licitatie.id, fisier_path: path, nume_original: rel,
         tip: ghicesteTip(rel), size_bytes: f.size,
-        status_procesare: estePdf || eArhiva ? 'neprocesat' : 'ignorat',
-        eroare: estePdf || eArhiva ? null : 'non-PDF — rămâne ca fișier (docx/xls/dwg se parsează în M2)',
+        status_procesare: estePdf || eArhiva || eSemnatDoc ? 'neprocesat' : 'ignorat',
+        eroare: estePdf || eArhiva || eSemnatDoc ? null : 'non-PDF — rămâne ca fișier (docx/xls/dwg se parsează în M2)',
       }
       // dacă exista un placeholder cu acest nume, îl COMPLETĂM (nu lăsăm rând dublu)
       const idPlaceholder = placeholders.get(rel)

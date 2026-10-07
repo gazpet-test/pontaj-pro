@@ -263,29 +263,35 @@ describe('ZIP desfăcut inline în edge = aceeași clasificare ca în worker (Co
   it('edge-ul și workerul folosesc AMBELE tipInArhiva + indiciuArhiva pentru copiii unei arhive', () => {
     const edge = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
     expect(edge).toMatch(/tip: dinZip \? tipInArhiva\(numeFinal, indiciuArhiva\(dinZip\)\) : ghicesteTip\(numeFinal\)/)
-    expect(edge).toMatch(/await urcaFisier\(alegere\.nume, r\.buf, doc\.nume, doc\.nume\)/)   // ZIP-ul desfăcut inline transmite numele arhivei
+    expect(edge).toMatch(/await urcaFisier\(alegere\.nume, r\.buf, doc\.nume, doc\.nume,/)   // ZIP-ul desfăcut inline transmite numele arhivei
     const worker = readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')
-    expect(worker).toMatch(/tip: tipInArhiva\(f\.rel, indiciuArhiva\(d\.nume_original, d\.tip\)\)/)
+    expect(worker).toMatch(/tip: tipInArhiva\(ds\.nume, indiciuArhiva\(d\.nume_original, d\.tip\)\)/)   // numele după desfacerea semnăturii
   })
 })
 
-describe('.p7m doar pe arhive (lic. 92; decizia Răzvan 07.10.2026, var. A)', () => {
+describe('.p7m: arhivele (var. A, #644) + documentele „X (semnat).ext” (var. B, Răzvan 07.10.2026 seara)', () => {
   it('arhivele semnate .p7m sunt arhive (container → alta); documentele .p7m nu sunt', () => {
     for (const n of ['Raspuns clarificari consolidat.rar.p7m', 'Raspuns consolidat la solicitarile de clarificari - 2.rar.p7m', 'PT.zip.p7m', 'X.7z.P7M', 'X.part1.rar.p7m'])
       expect(esteArhiva(n), n).toBe(true)
     for (const n of ['Caiet de sarcini.pdf.p7m', 'Formulare.docx.p7m', 'X.rar.pdf.p7m']) expect(esteArhiva(n), n).toBe(false)
     expect(ghicesteTip('Raspuns clarificari consolidat.rar.p7m')).toBe('alta')
   })
-  it('edge-urile nu desfac .p7m (bytes + nume intacte); desfacerea CMS + extragerea le face workerul', () => {
-    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts'])
-      expect(readFileSync(new URL(f, import.meta.url), 'utf8'), f).not.toMatch(/p7m/i)
+  it('toate cele 4 drumuri desfac semnătura cu ACEEAȘI funcție (_shared/semnaturaCms.mjs); nicio copie locală a parserului', () => {
+    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts']) {
+      const src = readFileSync(new URL(f, import.meta.url), 'utf8')
+      expect(src, f).toMatch(/import \{[^}]*\bdesface\b[^}]*\} from '\.\.\/_shared\/semnaturaCms\.mjs'/)
+      expect(src, f).not.toMatch(/function desfaSemnatura|OID_DATA/)
+    }
+    expect(readFileSync(new URL('../api/seap-import.js', import.meta.url), 'utf8')).toMatch(/from '\.\/_semnaturaCms\.js'/)
+    expect(readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')).toMatch(/from '\.\.\/\.\.\/supabase\/functions\/_shared\/semnaturaCms\.mjs'/)
   })
-  it('veghea, canalul de clarificări: ORICE fișier adus intră „neprocesat”, fără notă → „….rar.p7m” ajunge la bucla workerului (Copilot r3 pe #644)', () => {
+  it('veghea, canalul de clarificări: fișierul adus intră „neprocesat”, fără notă → „….rar.p7m” ajunge la bucla workerului (Copilot r3 pe #644); DOAR un document nedesfăcut intră „ignorat” cu nota (#20)', () => {
     const veghe = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
     const ins = veghe.match(/\.insert\(\{\s*licitatie_id: lic\.id, fisier_path: path,[\s\S]*?\}\);/)
     expect(ins, 'insert-ul din canalul de clarificări').toBeTruthy()
-    expect(ins[0]).toMatch(/status_procesare: 'neprocesat'/)          // necondiționat, nu după extensie
-    expect(ins[0]).not.toMatch(/\beroare\s*:/)                       // fără notă (eArhivaDeDespachetat cere eroare goală)
+    expect(ins[0]).toMatch(/status_procesare: notaSemn \? 'ignorat' : 'neprocesat'/)
+    expect(ins[0]).toMatch(/\.\.\.\(notaSemn \? \{ eroare: notaSemn \} : \{\}\)/)   // altfel fără notă
+    expect(veghe).toMatch(/const notaSemn = ds\.nota && !esteArhiva\(ds\.nume\) \? ds\.nota : null/)   // arhiva: niciodată notă
     // documentația inițială nu se descarcă în veghe: placeholder fără fișier → îl ia drumul SEAP (aduLicitatie)
     expect(veghe).toMatch(/fisier_path: `\$\{lic\.id\}\/atribuire\/neincarcat\//)
   })

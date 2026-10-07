@@ -8,7 +8,9 @@
 //   - inventarul din BD se citește pe pagini (plafonul de rânduri al PostgREST nu mai trunchiază tăcut lista);
 //   - se șterg doar obiectele mai vechi de VARSTA_MINIMA_ORFAN_MS (un upload în curs nu e niciodată „orfan”);
 //   - un obiect fără dată citibilă nu se șterge; contează data cea MAI RECENTĂ dintre created_at și updated_at;
-//   - listarea Storage e paginată (offset), plafonată la PAGINI_STORAGE × 1000 obiecte pe rulare (Copilot P2 r1 pe #646).
+//   - listarea Storage e paginată (offset), plafonată la PAGINI_STORAGE × 1000 obiecte pe rulare (Copilot P2 r1 pe #646);
+//   - fișierul semnat original al unui document desfăcut pe loc (seap_meta.semnat.path, worker NAS, var. B 07.10.2026) e
+//     FOLOSIT: e dovada semnăturii, nu un orfan.
 export const VARSTA_MINIMA_ORFAN_MS = 60 * 60_000
 const PAGINA = 1000
 const PAGINI_STORAGE = 20
@@ -29,9 +31,13 @@ export async function curataOrfani(supa: any, licitatieId: number, acum: number 
     const folosite = new Set<string>()
     for (let de = 0; ; de += PAGINA) {
       const { data: randuri, error } = await supa.from('ofertare_documente_atribuire')
-        .select('fisier_path').eq('licitatie_id', licitatieId).order('id').range(de, de + PAGINA - 1)
+        .select('fisier_path, seap_meta').eq('licitatie_id', licitatieId).order('id').range(de, de + PAGINA - 1)
       if (error || !Array.isArray(randuri)) return []   // inventar necunoscut = nimic nu e „orfan”
-      for (const r of randuri) folosite.add(String(r?.fisier_path || ''))
+      for (const r of randuri) {
+        folosite.add(String(r?.fisier_path || ''))
+        const semnat = r?.seap_meta?.semnat?.path
+        if (typeof semnat === 'string' && semnat) folosite.add(semnat)
+      }
       if (randuri.length < PAGINA) break
     }
     const prag = acum - VARSTA_MINIMA_ORFAN_MS

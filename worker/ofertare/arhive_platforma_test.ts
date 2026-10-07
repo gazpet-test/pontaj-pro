@@ -37,6 +37,7 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
       insert(p: Rand | Rand[]) { op = 'insert'; patch = p; return b },
       upsert(p: Rand | Rand[], o?: { onConflict?: string }) { op = 'upsert'; patch = p; conflict = (o?.onConflict ?? '').split(',').filter(Boolean); return b },   // ca în BD: înlocuiește pe cheia unică
       eq(c: string, v: unknown) { filtre.push(r => r[c] === v); return b },
+      neq(c: string, v: unknown) { filtre.push(r => r[c] !== v); return b },
       in(c: string, v: unknown[]) { filtre.push(r => v.includes(r[c])); return b },
       gt(c: string, v: any) { filtre.push(r => r[c] != null && r[c] > v); return b },
       is(c: string, v: unknown) { filtre.push(r => (v === null ? r[c] == null : r[c] === v)); return b },
@@ -598,7 +599,7 @@ Deno.test('arhive: „….zip.p7m” (semnătură CMS atașată) e selectată, d
       ok(s.eArhivaDeDespachetat({ nume_original: 'Raspuns consolidat.zip.p7m', fisier_path: '92/x', status_procesare: 'neprocesat', eroare: null }), '.zip.p7m e arhivă de despachetat')
       ok(s.FILTRU_NUME_ARHIVA.includes('.rar.p7m'), 'filtrul de pe server include .rar.p7m')
       ok(s.semnaturaDeDesfacut('X.rar.p7m') && s.semnaturaDeDesfacut('X.part1.rar.P7M') && s.semnaturaDeDesfacut('Caiet.pdf.p7s'), '.p7s oricând, .p7m pe arhive')
-      ok(!s.semnaturaDeDesfacut('Caiet.pdf.p7m') && !s.semnaturaDeDesfacut('Formulare.docx.p7m'), 'documentele .p7m rămân cum vin (var. A)')
+      ok(s.semnaturaDeDesfacut('Caiet.pdf.p7m') && s.semnaturaDeDesfacut('Formulare.docx.p7m'), 'și documentele .p7m se desfac (var. B, 07.10.2026 seara)')
       ok(s.cheieNume('X.rar.p7m') !== s.cheieNume('X.rar'), 'cheia păstrează .p7m: „X.rar.p7m” nu se confundă cu „X.rar”')
       const fisiere = new Map<string, Uint8Array>([['92/r.p7m', await semneazaCms(await zipCu({ 'Raspuns.pdf': '%PDF-1.4 r', 'Anexa.docx': 'x' }))]])
       const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
@@ -626,8 +627,8 @@ Deno.test('arhive: „….zip.p7m” cu semnătură DETAȘATĂ (fără conținut
   })
 })
 
-// -- drumul SEAP, var. A (decizia Răzvan 07.10.2026): .p7m desfăcut DOAR pe arhive -------------------------------------
-Deno.test('drumul SEAP: „Caiet.pdf.p7m” lângă „Caiet.pdf” → ambele rămân cum vin (documentul .p7m nu e desfăcut, nu ia locul PDF-ului)', async () => {
+// -- drumul SEAP, var. B (decizia Răzvan 07.10.2026 seara): documentul .p7m se desface sub „X (semnat).ext” ----------------
+Deno.test('drumul SEAP: „Caiet.pdf.p7m” lângă „Caiet.pdf” → ambele rămân: .p7m desfăcut ca „Caiet (semnat).pdf”, nu ia locul PDF-ului', async () => {
   const real = '%PDF-1.4 caietul real'
   for (const ordine of ['p7m,pdf', 'pdf,p7m']) {
     await cuMediu(async (root, s) => {
@@ -640,7 +641,8 @@ Deno.test('drumul SEAP: „Caiet.pdf.p7m” lângă „Caiet.pdf” → ambele r
       try {
         const tab = licSeap()
         const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
-        eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.size_bytes]).sort(), [['Caiet.pdf', real.length], ['Caiet.pdf.p7m', p7m.length]], `ordinea ${ordine}`)
+        eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.size_bytes, d.status_procesare]).sort(), [['Caiet (semnat).pdf', real.length, 'neprocesat'], ['Caiet.pdf', real.length, 'neprocesat']], `ordinea ${ordine}`)
+        ok(p7m.length > real.length, 'conținutul desfăcut, nu containerul')
         eq(rap.erori, [], `ordinea ${ordine}`)
       } finally { restore(); await opreste() }
     })
@@ -832,4 +834,135 @@ Deno.test('arhive #5 (Copilot r1 pe #646): dovada sha a unui document ȘTERS sau
       } finally { await opreste() }
     })
   }
+})
+
+// -- var. B + audit Jakarinos #8 / #15 / #20 (07.10.2026 seara) ----------------------------------------------------------
+async function cmsStricat(): Promise<Uint8Array> { return new TextEncoder().encode('nu e CMS si nici PDF') }
+
+Deno.test('#8 drumul SEAP: copiii semnați din arhivă („Anexa.pdf.p7s”, „Caiet.pdf.p7m”) se desfac înainte de sha / nume / urcare', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const anexa = '%PDF-1.4 anexa semnata', caiet = '%PDF-1.4 caiet semnat'
+    const restore = cuSeap({ 'Doc.zip': await zipCu({
+      'Anexa.pdf.p7s': await semneazaCms(new TextEncoder().encode(anexa)),
+      'Caiet.pdf.p7m': await semneazaCms(new TextEncoder().encode(caiet)),
+      'Stricat.pdf.p7s': await cmsStricat(),
+    }) })
+    try {
+      const tab = licSeap()
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq(rap.erori, [])
+      const d = tab.ofertare_documente_atribuire
+      eq(d.map(x => [x.nume_original, x.size_bytes, x.status_procesare]).sort(), [
+        ['Anexa.pdf', anexa.length, 'neprocesat'], ['Caiet (semnat).pdf', caiet.length, 'neprocesat'], ['Stricat.pdf.p7s', 20, 'ignorat'],
+      ])
+      ok(/^Semnătura electronică nu s-a putut desface/.test(d.find(x => x.nume_original === 'Stricat.pdf.p7s')!.eroare), 'nota #20, nu PDF fals')
+      const m = tab.ofertare_seap_manifest.find(x => x.cale === 'Anexa.pdf.p7s')!
+      eq([m.sha256, m.stare], [await shaHex(anexa), 'urcat'], 'manifestul: calea din arhivă, sha-ul conținutului desfăcut')
+    } finally { restore(); await opreste() }
+  })
+})
+
+Deno.test('#8 bucla de platformă: copilul semnat se desface; reluarea recunoaște și numele vechi, brut', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const anexa = '%PDF-1.4 anexa'
+      const fisiere = new Map<string, Uint8Array>([['3/a.zip', await zipCu({ 'Anexa.pdf.p7s': await semneazaCms(new TextEncoder().encode(anexa)), 'B.pdf': '%PDF-1.4 b' })]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+        { id: 90, licitatie_id: 3, nume_original: 'Raspuns.zip', fisier_path: '3/a.zip', status_procesare: 'neprocesat', eroare: null, tip: 'raspuns_clarificare' },
+        { id: 91, licitatie_id: 3, nume_original: 'Raspuns (#90)/B.pdf', fisier_path: '3/b', status_procesare: 'neprocesat', eroare: null, tip: 'alta' },
+      ], ofertare_seap_fisiere: [], ofertare_seap_manifest: [], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const d = tab.ofertare_documente_atribuire
+      ok(/^📦 Arhivă despachetată pe Terra: 1 fișiere noi.*1 existau deja/.test(d.find(x => x.id === 90)!.eroare), d.find(x => x.id === 90)!.eroare)
+      const nou = d.find(x => x.nume_original === 'Raspuns (#90)/Anexa.pdf')!
+      ok(nou && nou.size_bytes === anexa.length, JSON.stringify(d.map(x => x.nume_original)))
+      // #15: dovada sha și pentru copiii buclei de platformă
+      eq(tab.ofertare_seap_manifest.map(m => [m.arhiva_cheie, m.cale, m.document_id, m.stare]), [['raspuns (#90)', 'Anexa.pdf.p7s', nou.id, 'urcat']])
+    } finally { await opreste() }
+  })
+})
+
+Deno.test('documente semnate din platformă: „X.pdf.p7m” neprocesat → desfăcut PE LOC (același id), originalul semnat păstrat și legat', async () => {
+  await cuMediu(async (_root, s) => {
+    const real = '%PDF-1.4 caietul semnat'
+    const fisiere = new Map<string, Uint8Array>([
+      ['92/atribuire/c.p7m', await semneazaCms(new TextEncoder().encode(real))],
+      ['92/atribuire/d.p7m', await semneazaCms(new TextEncoder().encode('%PDF-1.4 d'), true)],
+      ['92/atribuire/f.p7m', await semneazaCms(new TextEncoder().encode('PK\u0003\u0004 docx'))],
+    ])
+    const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+      { id: 327, licitatie_id: 92, nume_original: 'Caiet de sarcini.pdf.p7m', fisier_path: '92/atribuire/c.p7m', status_procesare: 'neprocesat', eroare: null, tip: 'cs_volum', seap_meta: null },
+      { id: 328, licitatie_id: 92, nume_original: 'Detasat.pdf.p7m', fisier_path: '92/atribuire/d.p7m', status_procesare: 'neprocesat', eroare: null, tip: 'alta', seap_meta: null },
+      { id: 323, licitatie_id: 92, nume_original: 'Formular.docx.p7m', fisier_path: '92/atribuire/f.p7m', status_procesare: 'neprocesat', eroare: null, tip: 'formular', seap_meta: { x: 1 } },
+      { id: 324, licitatie_id: 92, nume_original: 'Formulare.doc.p7m', fisier_path: '92/atribuire/g.p7m', status_procesare: 'ignorat', eroare: 'non-PDF - ramane ca fisier', tip: 'formular' },
+      { id: 400, licitatie_id: 92, nume_original: 'Arhiva.rar.p7m', fisier_path: '92/atribuire/r.p7m', status_procesare: 'neprocesat', eroare: null, tip: 'alta' },
+    ], egress_jurnal: [] }
+    ok(!s.eSemnatDeDesfacut(tab.ofertare_documente_atribuire[4]), 'arhivele semnate le ia bucla de arhive')
+    await s.desfaSemnateDinPlatforma(fakeSupa(tab, fisiere), () => {})
+    const d = (id: number) => tab.ofertare_documente_atribuire.find(x => x.id === id)!
+    eq([d(327).nume_original, d(327).status_procesare, d(327).eroare, d(327).size_bytes, d(327).tip], ['Caiet de sarcini (semnat).pdf', 'neprocesat', null, real.length, 'cs_volum'])
+    eq(d(327).seap_meta.semnat.path, '92/atribuire/c.p7m')
+    ok(fisiere.has('92/atribuire/c.p7m'), 'originalul semnat rămâne în Storage')
+    eq(new TextDecoder().decode(fisiere.get(d(327).fisier_path)), real)
+    eq([d(328).nume_original, d(328).status_procesare], ['Detasat.pdf.p7m', 'ignorat'])
+    ok(/^Doar semnătura electronică/.test(d(328).eroare), d(328).eroare)
+    eq([d(323).nume_original, d(323).status_procesare, d(323).seap_meta.x], ['Formular (semnat).docx', 'ignorat', 1])
+    eq([d(324).nume_original, d(324).status_procesare], ['Formulare.doc.p7m', 'ignorat'], 'cu notă → neatins (repararea cere OK-ul omului)')
+    eq(d(400).status_procesare, 'neprocesat')
+    eq(tab.egress_jurnal.map(j => j.p_sursa), ['nas:semnate', 'nas:semnate', 'nas:semnate'])
+  })
+})
+
+Deno.test('documente semnate: numele desfăcut ocupat de alt rând → „(#id)”, fără suprascriere', async () => {
+  await cuMediu(async (_root, s) => {
+    const fisiere = new Map<string, Uint8Array>([['3/c.p7m', await semneazaCms(new TextEncoder().encode('%PDF-1.4 a'))]])
+    const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+      { id: 50, licitatie_id: 3, nume_original: 'Caiet (semnat).pdf', fisier_path: '3/vechi.pdf', status_procesare: 'procesat', eroare: null },
+      { id: 51, licitatie_id: 3, nume_original: 'Caiet.pdf.p7m', fisier_path: '3/c.p7m', status_procesare: 'neprocesat', eroare: null, seap_meta: null },
+    ] }
+    await s.desfaSemnateDinPlatforma(fakeSupa(tab, fisiere), () => {})
+    eq(tab.ofertare_documente_atribuire.map(x => x.nume_original), ['Caiet (semnat).pdf', 'Caiet (semnat) (#51).pdf'])
+  })
+})
+
+Deno.test('var. B drumul SEAP: placeholder-ul veghei „X.pdf.p7m” se completează cu „X (semnat).pdf”; un „X.pdf.p7m” brut sau desfăcut nu se re-aduce', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const restore = cuSeap({
+      'Plansa.pdf.p7m': await semneazaCms(new TextEncoder().encode('%PDF-1.4 plansa')),
+      'Brut.pdf.p7m': await semneazaCms(new TextEncoder().encode('%PDF-1.4 brut')),
+      'Desfacut.pdf.p7m': await semneazaCms(new TextEncoder().encode('%PDF-1.4 desfacut')),
+    })
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [
+        { id: 359, licitatie_id: 3, nume_original: 'Plansa.pdf.p7m', fisier_path: '3/atribuire/neincarcat/Plansa.pdf.p7m', tip: 'alta', status_procesare: 'ignorat', sursa: 'seap', aparut_ulterior: true, eroare: 'Aparut nou in SEAP...' },
+        { id: 319, licitatie_id: 3, nume_original: 'Brut.pdf.p7m', fisier_path: '3/b.p7m', status_procesare: 'ignorat', tip: 'alta' },
+        { id: 320, licitatie_id: 3, nume_original: 'Desfacut (semnat).pdf', fisier_path: '3/d.pdf', status_procesare: 'procesat', tip: 'alta' },
+      ] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([rap.erori, rap.deja, rap.fisiere_urcate], [[], 2, 1])
+      eq(tab.ofertare_documente_atribuire.map(x => [x.id, x.nume_original]), [[359, 'Plansa (semnat).pdf'], [319, 'Brut.pdf.p7m'], [320, 'Desfacut (semnat).pdf']])
+      // #15: fișierul simplu lasă dovada sha
+      eq(tab.ofertare_seap_manifest.map(m => [m.cale, m.document_id, m.stare, m.sha256]), [['Plansa (semnat).pdf', 359, 'urcat', await shaHex('%PDF-1.4 plansa')]])
+    } finally { restore(); await opreste() }
+  })
+})
+
+Deno.test('#20 drumul SEAP: document semnat care nu se desface → urcat brut, sub numele lui, „ignorat” cu nota (nu PDF fals, nu eroare ciclică)', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const restore = cuSeap({ 'Caiet.pdf.p7s': await cmsStricat(), 'Doar semnatura.pdf.p7m': await semneazaCms(new TextEncoder().encode('%PDF-1.4 x'), true) })
+    try {
+      const tab = licSeap()
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq(rap.erori, [])
+      const d = tab.ofertare_documente_atribuire
+      eq(d.map(x => [x.nume_original, x.status_procesare]).sort(), [['Caiet.pdf.p7s', 'ignorat'], ['Doar semnatura.pdf.p7m', 'ignorat']])
+      ok(/^Semnătura electronică nu s-a putut desface/.test(d.find(x => x.nume_original === 'Caiet.pdf.p7s')!.eroare), 'nota eșec')
+      ok(/^Doar semnătura electronică/.test(d.find(x => x.nume_original === 'Doar semnatura.pdf.p7m')!.eroare), 'nota detașat')
+      eq(tab.ofertare_seap_fisiere.map(e => e.stare), ['ok', 'ok'], 'evidența: adus, nu eroare de reîncercat la nesfârșit')
+    } finally { restore(); await opreste() }
+  })
 })
