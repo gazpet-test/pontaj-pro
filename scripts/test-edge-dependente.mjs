@@ -53,7 +53,7 @@ test('dependențele _shared: tranzitive, cu cicluri, fără teste și fără fi�
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-test('data de referință = cea mai nouă dintre folderul funcției și _shared importat; `din` arată fișierul comun', async () => {
+test('data de referință = cea mai nouă dintre folderul funcției (fără teste) și _shared importat; `din` arată fișierul comun', async () => {
   const root = await arbore({
     'f/fn-a/index.ts': `import { a } from '../_shared/a.ts'\n`,
     'f/fn-b/index.ts': `export const x = 1\n`,
@@ -77,6 +77,13 @@ test('data de referință = cea mai nouă dintre folderul funcției și _shared 
     git(['commit', '-q', '-am', 'funcția'], '2026-03-01T00:00:00Z')
     const a2 = await ultimaModificare('f', 'fn-a', { cwd: root })
     assert.equal(a2.din, null, 'folderul propriu e mai nou: fără „prin _shared”')
+    await mkdir(join(root, 'f/fn-a/sub'), { recursive: true })
+    await writeFile(join(root, 'f/fn-a/index_test.ts'), 'Deno.test("x", () => {})\n')
+    await writeFile(join(root, 'f/fn-a/sub/logic.test.js'), 'test("y", () => {})\n')
+    git(['add', '.'], '2026-04-01T00:00:00Z')
+    git(['commit', '-q', '-m', 'doar teste'], '2026-04-01T00:00:00Z')
+    const a3 = await ultimaModificare('f', 'fn-a', { cwd: root })
+    assert.equal(new Date(a3.commit).toISOString(), '2026-03-01T00:00:00.000Z', 'un commit doar pe teste nu cere deploy')
     assert.equal(await ultimaModificare('f', 'fn-inexistenta', { cwd: root }), null)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

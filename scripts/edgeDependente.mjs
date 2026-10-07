@@ -6,7 +6,8 @@
 // iar raportul spunea „la zi”. Acum data de referință a unei funcții = cea mai nouă dintre folderul ei și fișierele
 // _shared pe care le importă (direct sau prin alte fișiere _shared), iar raportul spune care fișier a declanșat semnalul.
 //
-// Ce NU se numără: fișierele de test ale funcției (*_test.ts, *.test.ts…) — nu se publică; importurile npm:/jsr:/https:.
+// Ce NU se numără: fișierele de test (*_test.ts, *.test.ts…) — nu se publică, deci un commit doar pe ele nu cere deploy,
+// nici în folderul funcției (ofertare-plansa-citeste/concurenta_test.ts, 07.10); importurile npm:/jsr:/https:.
 import { readdir, readFile } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -58,9 +59,14 @@ export async function dependenteShared(radacina, slug, { citeste = (f) => readFi
   return [...rezultat].sort()
 }
 
-/** Data ultimului commit pe o cale (ms) sau null. NU ora fișierului de pe disc: în CI checkout-ul le pune pe toate la ora clonării. */
-export async function dataGit(cale, { cwd } = {}) {
-  const { stdout } = await execFileP('git', ['log', '-1', '--format=%cI', '--', cale], { maxBuffer: 1 << 20, cwd })
+// pathspec-uri git care scot testele din `git log` pe un folder (aceleași sufixe ca TEST_RE, orice extensie: și fixture-urile)
+const faraTesteIn = (cale) => ['_test', '.test', '_spec', '.spec'].map(s => `:(exclude,glob)${cale}/**/*${s}.*`)
+
+/** Data ultimului commit pe o cale (ms) sau null. NU ora fișierului de pe disc: în CI checkout-ul le pune pe toate la ora clonării.
+ *  `faraTeste` (pentru un folder): commit-urile care ating doar fișiere de test nu se numără. */
+export async function dataGit(cale, { cwd, faraTeste = false } = {}) {
+  const spec = faraTeste ? [cale, ...faraTesteIn(cale)] : [cale]
+  const { stdout } = await execFileP('git', ['log', '-1', '--format=%cI', '--', ...spec], { maxBuffer: 1 << 20, cwd })
   const t = Date.parse(stdout.trim())
   return Number.isFinite(t) ? t : null
 }
@@ -68,7 +74,7 @@ export async function dataGit(cale, { cwd } = {}) {
 /** Ultima modificare care privește funcția: { commit (ms), din: null | '<radacina>/_shared/…' } — `din` e fișierul _shared,
  *  când el e mai nou decât folderul funcției. null dacă folderul funcției n-are istoric git (clonă superficială). */
 export async function ultimaModificare(radacina, slug, { cwd, dependente } = {}) {
-  const proprie = await dataGit(posix.join(radacina, slug), { cwd })
+  const proprie = await dataGit(posix.join(radacina, slug), { cwd, faraTeste: true })
   if (proprie == null) return null
   let commit = proprie, din = null
   const dep = dependente ?? await dependenteShared(radacina, slug, cwd ? {
