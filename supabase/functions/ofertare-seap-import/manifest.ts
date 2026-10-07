@@ -19,10 +19,10 @@ export function randManifest(p: {
   licitatieId: number; arhivaCheie: string | null | undefined; cale: string; marime: number; sha256: string
   documentId?: number | null; stare?: StareManifest; motiv?: string | null; acum?: Date
 }): ManifestRand {
-  const cheie = (s: string) => String(s ?? '').replace(/\.p7s$/i, '').toLowerCase()
+  const cheie = (s: string) => String(s ?? '').replace(/\.p7[ms]$/i, '').toLowerCase()
   if (!/^[0-9a-f]{64}$/.test(p.sha256)) throw new Error('sha256 invalid')
   if (!Number.isFinite(p.marime) || p.marime < 0) throw new Error('marime invalida')
-  const cale = String(p.cale || '').replace(/\.p7s$/i, '')
+  const cale = String(p.cale || '').replace(/\.p7[ms]$/i, '')
   if (!cale) throw new Error('cale goala')
   return {
     licitatie_id: p.licitatieId,

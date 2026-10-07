@@ -132,7 +132,7 @@ const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).incl
 // Compararea pe nume exact producea placeholdere si duplicate ale aceluiasi fisier.
 // COPIE identica in ofertare-seap-import (edge functions nu pot importa cod una din alta).
 // Cheia e DOAR pentru comparatie - in BD se scrie tot numele real (nume_original).
-const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
+const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7[ms]$/i, '').toLowerCase()
   .replace(/[,()]/g, '').replace(/\s+/g, '');
 // Numele sub care autoritatile publica raspunsurile si modificarile documentatiei.
 const esteRaspuns = (n: string) => /clarific|r[aă]spuns|erat[aă]|errata|completare|modificare|revizuit|revizie|addendum|notificare/i.test(n);
@@ -187,8 +187,8 @@ function cautaSecventa(hay: Uint8Array, ac: Uint8Array): number {
 }
 
 function desfaSemnatura(buf: Uint8Array, nume: string): { buf: Uint8Array; nume: string } {
-  if (!/\.p7s$/i.test(nume)) return { buf, nume };
-  const numeReal = nume.replace(/\.p7s$/i, '');
+  if (!/\.p7[ms]$/i.test(nume)) return { buf, nume };
+  const numeReal = nume.replace(/\.p7[ms]$/i, '');
   const poz = cautaSecventa(buf, OID_DATA);
   if (poz < 0) return { buf, nume: numeReal };
   const dupaOid = antet(buf, poz + OID_DATA.length);
@@ -324,7 +324,7 @@ Deno.serve(async (req: Request) => {
 
     for (const it of lista) {
       const cod = String(it?.noticeDocumentCode || '');
-      const fisier = String(it?.documentName || it?.noticeDocumentName || '').replace(/\.p7s$/i, '');
+      const fisier = String(it?.documentName || it?.noticeDocumentName || '').replace(/\.p7[ms]$/i, '');
       const titlu = String(it?.noticeDocumentName || '').trim();
       if (!fisier) continue;
       // idempotent (ruleaza de 2x/zi): codul e cheia. Fara cod, cadem pe vechea regula.
@@ -393,7 +393,7 @@ Deno.serve(async (req: Request) => {
       const d = await r.json();
       for (const cheie of ['dfNoticeDocs', 'duaeDocs', 'decisionDocs', 'contractingStrategyDocs', 'exAnteDocs']) {
         for (const f of (d?.[cheie] || [])) {
-          const n = String(f?.noticeDocumentName || '').replace(/\.p7s$/i, '');
+          const n = String(f?.noticeDocumentName || '').replace(/\.p7[ms]$/i, '');
           if (n) laSeap.push(n);
         }
       }

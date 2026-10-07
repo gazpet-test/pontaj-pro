@@ -81,7 +81,7 @@ const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).incl
 // comprima - altfel "planse .pdf" si "planse.pdf" raman doua fisiere diferite.
 // COPIE identica in ofertare-seap-veghe (edge functions nu pot importa cod una din alta).
 // Cheia e DOAR pentru comparatie - in BD se scrie tot numele real (nume_original).
-const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
+const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7[ms]$/i, '').toLowerCase()
   .replace(/[,()]/g, '').replace(/\s+/g, '');
 
 // Semnatura reala a unui PDF: %PDF- la inceputul fisierului. Numele e doar un indiciu.
@@ -147,8 +147,8 @@ function cautaSecventa(hay: Uint8Array, ac: Uint8Array): number {
 }
 
 function desfaSemnatura(buf: Uint8Array, nume: string): { buf: Uint8Array; nume: string } {
-  if (!/\.p7s$/i.test(nume)) return { buf, nume };
-  const numeReal = nume.replace(/\.p7s$/i, '');
+  if (!/\.p7[ms]$/i.test(nume)) return { buf, nume };
+  const numeReal = nume.replace(/\.p7[ms]$/i, '');
   const poz = cautaSecventa(buf, OID_DATA);
   if (poz < 0) return { buf, nume: numeReal };
   const dupaOid = antet(buf, poz + OID_DATA.length);
@@ -244,7 +244,7 @@ const esteZip = (b: Uint8Array) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4
 // interne si au intrat 24 de randuri gunoi (word/styles.xml, docProps/app.xml, [Content_Types].xml).
 // Se despacheteaza DOAR ce e arhiva adevarata dupa nume; formatele Office raman fisiere intregi.
 const eArhivaAdevarata = (nume: string, b: Uint8Array) =>
-  esteZip(b) && /\.zip$/i.test(String(nume || '').replace(/\.p7s$/i, ''));
+  esteZip(b) && /\.zip$/i.test(String(nume || '').replace(/\.p7[ms]$/i, ''));
 
 // Parcurgerea unui ZIP din flux, folosita si de arhiva mare si de ZIP-urile dinauntrul
 // fisierelor aduse per document -> garanteaza ACELEASI reguli de denumire (numele intrarii
@@ -471,7 +471,7 @@ Deno.serve(async (req: Request) => {
     let i = 0;
     for (const doc of documente) {
       if (i < deLaIndex) { i++; continue; }
-      const numeCurat = doc.nume.replace(/\.p7s$/i, '');
+      const numeCurat = doc.nume.replace(/\.p7[ms]$/i, '');
       if (urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(doc.nume)) {
         if (urcate.has(cheieNume(numeCurat))) raport.sarite_existente++;
         i++;
@@ -498,7 +498,7 @@ Deno.serve(async (req: Request) => {
           const ok = await parcurgeZip(
             fluxDinBuf(buf),
             (h) => {
-              const nc = h.nume.replace(/\.p7s$/i, '');
+              const nc = h.nume.replace(/\.p7[ms]$/i, '');
               if (JUNK_RE.test(h.nume)) return false;
               // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
               if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
@@ -507,7 +507,7 @@ Deno.serve(async (req: Request) => {
             async (h, brut) => {
               const r = desfaSemnatura(brut, h.nume);
               // același conținut dovedit → sărit; alt conținut sub un nume ocupat → prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
-              const prefix = doc.nume.replace(/\.p7s$/i, '').replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
+              const prefix = doc.nume.replace(/\.p7[ms]$/i, '').replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
               const alegere = alegeNume(identitate, r.nume, prefix, await sha256Hex(r.buf));
               if ('deja' in alegere) { raport.sarite_existente++; return 'continua'; }
               await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume);
@@ -551,7 +551,7 @@ Deno.serve(async (req: Request) => {
         const intreg = await parcurgeZip(
           flux,
           (h) => {
-            const numeCurat = h.nume.replace(/\.p7s$/i, '');
+            const numeCurat = h.nume.replace(/\.p7[ms]$/i, '');
             const preaMare = h.usize > PRAG_MARE;
             const sarim = iArh < deLaIndexArhiva || urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(h.nume) || preaMare;
             if (sarim) {
@@ -571,7 +571,7 @@ Deno.serve(async (req: Request) => {
             if (bugetDepasit()) { continua = true; return 'stop'; }
             return 'continua';
           },
-          (n, m) => raport.erori.push(`${n.replace(/\.p7s$/i, '')}: ${m}`),
+          (n, m) => raport.erori.push(`${n.replace(/\.p7[ms]$/i, '')}: ${m}`),
         );
         if (!intreg) raport.erori.push('arhiva: flux intrerupt');
       } catch (e) {

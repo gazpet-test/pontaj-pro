@@ -195,7 +195,7 @@ export default async function handler(req, res) {
       if (el && !(await flux.sari(el))) break
       raport.intrari++
 
-      const numeCurat = nume.replace(/\.p7s$/i, '')
+      const numeCurat = nume.replace(/\.p7[ms]$/i, '')
       if (urcate.has(numeCurat) || JUNK_RE.test(nume)) {
         if (urcate.has(numeCurat)) raport.sarite_existente++
         if (!(await flux.sari(csize))) break

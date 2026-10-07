@@ -740,7 +740,7 @@ export default function ClarificariPanel({ licitatii, profile, showToast, initia
 // interpretarea AI. text_extras se încarcă leneș, doar la deschiderea toggle-ului.
 // 05.10.2026 (Mânăstirea, CN1095546/00058): o arhivă .rar de 60 MB adusă din SEAP a stat „neprocesat”, iar aici
 // apărea „poate e scanat”. Arhivele nu se despachetează din răspunsurile SEAP: se dezarhivează local și se urcă conținutul.
-export const ARHIVA_DOC_RE = /\.(7z|rar|zip)(\.p7s)?$|\.part\d+\.rar$/i   // .p7s: ca ARHIVA_RE din _shared/tipDocument.mjs
+export const ARHIVA_DOC_RE = /\.(7z|rar|zip)(\.p7[ms])?$|\.part\d+\.rar$/i   // .p7s: ca ARHIVA_RE din _shared/tipDocument.mjs
 // Tot 05.10.2026 (regula permanentă, var. A): workerul de pe Terra despachetează singur orice arhivă ajunsă în platformă.
 export const MESAJ_ARHIVA = 'E o arhivă (.rar / .7z / .zip): serverul (Terra) o despachetează singur în câteva minute, iar fișierele din ea apar ca documente separate, cu numele arhivei în față — pe acelea le citești cu AI. Arhivele în volume (.partN.rar) și cele cu eroare se dezarhivează local — motivul e scris la document.'
 

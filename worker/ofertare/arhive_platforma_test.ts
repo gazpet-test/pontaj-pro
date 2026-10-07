@@ -570,3 +570,34 @@ Deno.test('drumul SEAP: fișierele din arhivă primesc tipul cu indiciul arhivei
     } finally { restore(); await opreste() }
   })
 })
+
+// -- .p7m (07.10.2026): același CMS atașat ca .p7s — lic. 92 avea răspunsuri „….rar.p7m” care stăteau „neprocesat” la nesfârșit
+async function semneazaCms(continut: Uint8Array): Promise<Uint8Array> {   // semnătură CMS ATAȘATĂ (conținutul în interior), cert de test
+  const d = await Deno.makeTempDir()
+  const run = async (args: string[]) => { const o = await new Deno.Command('openssl', { args, cwd: d, stdout: 'null', stderr: 'piped' }).output(); ok(o.code === 0, `openssl ${args[0]}: ${new TextDecoder().decode(o.stderr)}`) }
+  await Deno.writeFile(`${d}/in.bin`, continut)
+  await run(['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'k.pem', '-out', 'c.pem', '-days', '1', '-subj', '/CN=test'])
+  await run(['cms', '-sign', '-binary', '-nodetach', '-in', 'in.bin', '-signer', 'c.pem', '-inkey', 'k.pem', '-outform', 'DER', '-out', 'out.p7m'])
+  const buf = await Deno.readFile(`${d}/out.p7m`)
+  await Deno.remove(d, { recursive: true })
+  return buf
+}
+
+Deno.test('arhive: „….zip.p7m” (semnătură CMS atașată) e selectată, desfăcută din semnătură și despachetată', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      ok(s.eArhivaDeDespachetat({ nume_original: 'Raspuns consolidat.zip.p7m', fisier_path: '92/x', status_procesare: 'neprocesat', eroare: null }), '.zip.p7m e arhivă de despachetat')
+      ok(s.FILTRU_NUME_ARHIVA.includes('.rar.p7m'), 'filtrul de pe server include .rar.p7m')
+      eq(s.cheieNume('Caiet de sarcini.pdf.p7m'), s.cheieNume('Caiet de sarcini.pdf.p7s'), 'aceeași cheie pentru .p7m și .p7s')
+      const fisiere = new Map<string, Uint8Array>([['92/r.p7m', await semneazaCms(await zipCu({ 'Raspuns.pdf': '%PDF-1.4 r', 'Anexa.docx': 'x' }))]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [
+        { id: 520, licitatie_id: 92, nume_original: 'Raspuns consolidat.zip.p7m', fisier_path: '92/r.p7m', status_procesare: 'neprocesat', eroare: null, tip: 'raspuns_clarificare', aparut_ulterior: true },
+      ], ofertare_licitatii: [], notifications: [] }
+      await s.despacheteazaArhiveDinPlatforma(fakeSupa(tab, fisiere), () => {})
+      const d = tab.ofertare_documente_atribuire
+      ok(/^📦 Arhivă despachetată pe Terra: 2 fișiere noi/.test(d.find(x => x.id === 520)!.eroare), d.find(x => x.id === 520)!.eroare)
+      eq(d.filter(x => x.id !== 520).map(x => x.nume_original).sort(), ['Raspuns consolidat (#520)/Anexa.docx', 'Raspuns consolidat (#520)/Raspuns.pdf'])
+    } finally { await opreste() }
+  })
+})

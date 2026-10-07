@@ -269,6 +269,17 @@ describe('ZIP desfăcut inline în edge = aceeași clasificare ca în worker (Co
   })
 })
 
+describe('.p7m = .p7s (același CMS atașat; lic. 92)', () => {
+  it('arhivele semnate .p7m sunt arhive; numele se ia fără semnătură', () => {
+    for (const n of ['Raspuns clarificari consolidat.rar.p7m', 'Raspuns consolidat la solicitarile de clarificari - 2.rar.p7m', 'PT.zip.p7m', 'X.7z.P7M'])
+      expect(esteArhiva(n), n).toBe(true)
+    expect(esteArhiva('Caiet de sarcini.pdf.p7m')).toBe(false)
+    expect(ghicesteTip('Caiet de sarcini.pdf.p7m')).toBe('cs_volum')
+    expect(ghicesteTip('Liste cantitati.pdf.p7m')).toBe('lista_cantitati')
+    expect(ghicesteTip('Raspuns clarificari consolidat.rar.p7m')).toBe('alta')   // arhivă = container
+  })
+})
+
 describe('moștenirea din arhivă', () => {
   it('regula proprie câștigă', () => {
     expect(tipInArhiva('X (#1)/F3_lista.pdf', 'cs_volum')).toBe('lista_cantitati')
