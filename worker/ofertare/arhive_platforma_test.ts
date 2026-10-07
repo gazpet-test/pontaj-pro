@@ -518,3 +518,16 @@ Deno.test('drumul SEAP: același conținut sub nume echivalent sau urcat de mân
     } finally { restore(); await opreste() }
   })
 })
+
+Deno.test('drumul SEAP: fișierele din arhivă primesc tipul cu indiciul arhivei (ca bucla de platformă și ZIP-ul inline din edge)', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const restore = cuSeap({ 'LISTE CANTITATI.zip': await zipCu({ '01. Obiect 1.pdf': '%PDF-1.4 o1', 'Plan de situatie.pdf': '%PDF-1.4 ps' }) })
+    try {
+      const tab = licSeap()
+      await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      const tip = Object.fromEntries(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.tip]).sort())
+      eq(tip, { '01. Obiect 1.pdf': 'lista_cantitati', 'Plan de situatie.pdf': 'plansa' }, 'fără nume grăitor → indiciul arhivei; regula proprie bate indiciul')
+    } finally { restore(); await opreste() }
+  })
+})

@@ -405,7 +405,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           else if ('deja' in alegere) { extrase++; rand.stare = 'deja_in_platforma'; rand.document_id = alegere.deja }   // același conținut (ex. urcat de mână)
           else {
             stare(`urc ${alegere.nume}`)
-            const r = await urca(supa, licId, alegere.nume, buf, placeholders)
+            // tipul cu indiciul arhivei, ca în bucla de platformă și în ZIP-ul inline din edge (#641, aceeași regulă peste tot)
+            const r = await urca(supa, licId, alegere.nume, buf, placeholders, { tip: tipInArhiva(alegere.nume, indiciuArhiva(locale[0].doc.nume)) })
             if (typeof r === 'string') { eroriInterne.push(`${f.rel}: ${r}`); rand.stare = 'eroare_urcare'; rand.motiv = r }
             else {
               extrase++; raport.fisiere_urcate++; rand.document_id = r.id
