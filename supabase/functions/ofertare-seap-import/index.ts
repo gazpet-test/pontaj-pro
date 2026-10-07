@@ -58,6 +58,7 @@ import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shar
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
 import { curataOrfani } from './orfani.ts';
 import { scrieDocument } from './placeholder.ts';
+import { autorizeaza } from './acces.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const CORS: Record<string, string> = {
@@ -307,15 +308,9 @@ Deno.serve(async (req: Request) => {
   const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supa = createClient(SUPA_URL, SERVICE);
 
-  if (!(await secretOk(req, supa))) {
-    const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
-    if (!jwt) return json({ error: 'unauthorized' }, 401);
-    if (jwt !== SERVICE) {
-      const anon = createClient(SUPA_URL, Deno.env.get('SUPABASE_ANON_KEY')!);
-      const { data: u } = await anon.auth.getUser(jwt);
-      if (!u?.user) return json({ error: 'unauthorized' }, 401);
-    }
-  }
+  // secretul rutinelor / cheia service (veghea) ca înainte; un JWT de utilizator cere acces la modulul Ofertare (./acces.ts, audit #19)
+  const refuz = await autorizeaza(req, () => secretOk(req, supa), SERVICE);
+  if (refuz) return refuz;
 
   let body: any = {};
   try { body = await req.json(); } catch (_) { /* gol */ }
