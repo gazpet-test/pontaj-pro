@@ -104,7 +104,8 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
 
   const nrPagini = din === 'foto' ? pagini.length : din === 'pdf' ? (pdf.pagini ?? (parseInt(paginiManual, 10) || null)) : null
   const toateBifele = bifeLista.every(([k]) => bife[k] || (k === 'stampila' && d.origine === 'import' && observatie.trim())) && bife.lizibil
-  const poateSalva = !lucru && din && nrPagini >= 1 && toateBifele && (!inlocuire || motiv.trim())
+  const inghetat = !!pending.current      // după o încercare eșuată, payload-ul rămâne exact cel trimis (J10-4)
+  const poateSalva = !lucru && din && (inghetat || (nrPagini >= 1 && nrPagini <= MAX_PAGINI && toateBifele && (!inlocuire || motiv.trim())))
 
   async function salveaza() {
     if (!poateSalva) return
@@ -118,14 +119,14 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
         const verificari = { ...Object.fromEntries(bifeLista.map(([k]) => [k, !!bife[k]])), lizibil: true, sursa: din,
           pagini: nrPagini, pagini_sursa: din === 'foto' || pdf.pagini != null ? 'detectat' : 'manual', generat: cuGenerat }
         if (d.origine === 'import' && !bife.stampila && observatie.trim()) verificari.observatie = observatie.trim()
-        pending.current = { file, path: caleFisier(d, file.name), sha: await sha256Hex(file), verificari }
+        pending.current = { file, path: caleFisier(d, file.name), sha: await sha256Hex(file), verificari, motiv: motiv.trim() }
       }
       const p = pending.current
       if (!inlocuire && d.origine === 'platforma' && !d.pdf_path) await inregistreazaPdfGenerat(d, pdfGen.current)   // J4-3: PDF-ul întâi
       await urcaPdf(p.path, p.file)
       const rez = inlocuire
         ? await rpc('fn_hr_decizie_inlocuieste_scan', { p_id: d.id, p_cerere_id: cerereId.current, p_scan_vechi_path: d.scan_path,
-            p_scan_vechi_sha256: d.scan_sha256, p_path: p.path, p_sha256: p.sha, p_motiv: motiv.trim(), p_verificari: p.verificari })
+            p_scan_vechi_sha256: d.scan_sha256, p_path: p.path, p_sha256: p.sha, p_motiv: p.motiv, p_verificari: p.verificari })
         : await rpc('fn_hr_decizie_ataseaza_scan', { p_id: d.id, p_path: p.path, p_sha256: p.sha, p_verificari: p.verificari })
       pending.current = null
       setOk({ rez, galerie: din === 'foto' })
@@ -174,7 +175,7 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
             <div style={{ flex:1, minWidth:0 }}>
               {inlocuire && (
                 <label style={{ display:'block', marginBottom:12, fontSize:14 }}>Motivul înlocuirii (obligatoriu)
-                  <textarea value={motiv} onChange={e => setMotiv(e.target.value)} rows={2} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
+                  <textarea value={motiv} disabled={inghetat} onChange={e => setMotiv(e.target.value)} rows={2} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
                 </label>
               )}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
@@ -220,7 +221,7 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
                   </div>
                   {pdf.pagini == null && (
                     <label style={{ display:'block', marginTop:8, fontSize:14 }}>Câte pagini are scanul? (obligatoriu)
-                      <input type="number" min={1} max={MAX_PAGINI} value={paginiManual} onChange={e => setPaginiManual(e.target.value)} style={{ width:90, marginLeft:8, background:G.card, color:G.text, border:`1px solid ${G.border}`, borderRadius:6, padding:6, fontSize:15 }} />
+                      <input type="number" min={1} max={MAX_PAGINI} value={paginiManual} disabled={inghetat} onChange={e => setPaginiManual(e.target.value)} style={{ width:90, marginLeft:8, background:G.card, color:G.text, border:`1px solid ${G.border}`, borderRadius:6, padding:6, fontSize:15 }} />
                     </label>
                   )}
                 </div>
@@ -233,13 +234,13 @@ export default function HrDeciziiScan({ decizie: d, inlocuire = false, onClose, 
                   <div style={{ fontSize:13, color:G.muted, marginBottom:6 }}>Verificare (compară cu {cuGenerat ? 'documentul generat' : 'fișa din registru'}):</div>
                   {[...bifeLista, ['lizibil', 'Toate paginile sunt complete și lizibile']].map(([k, t]) => (
                     <label key={k} style={{ display:'flex', gap:10, alignItems:'center', padding:'10px 4px', fontSize:15, borderBottom:`1px solid ${G.border}`, cursor:'pointer' }}>
-                      <input type="checkbox" checked={!!bife[k]} onChange={e => setBife(b => ({ ...b, [k]: e.target.checked }))} style={{ width:22, height:22, flexShrink:0 }} />
+                      <input type="checkbox" checked={!!bife[k]} disabled={inghetat} onChange={e => setBife(b => ({ ...b, [k]: e.target.checked }))} style={{ width:22, height:22, flexShrink:0 }} />
                       <span>{t}</span>
                     </label>
                   ))}
                   {d.origine === 'import' && !bife.stampila && (
                     <label style={{ display:'block', marginTop:8, fontSize:14 }}>Fără ștampilă? Notează de ce (ex. „originalul nu are ștampilă”):
-                      <input value={observatie} onChange={e => setObservatie(e.target.value)} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
+                      <input value={observatie} disabled={inghetat} onChange={e => setObservatie(e.target.value)} style={{ width:'100%', boxSizing:'border-box', marginTop:4, background:G.bg, color:G.text, border:`1px solid ${G.border}`, borderRadius:8, padding:10, fontSize:15 }} />
                     </label>
                   )}
                 </div>

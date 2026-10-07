@@ -24,6 +24,20 @@ export async function drepturi(actiuni) {
   return Object.fromEntries(actiuni.map((a, i) => [a, rez[i]]))
 }
 
+/**
+ * Toate rândurile unei interogări, pe pagini (plafonul REST al mediului nu mai trunchiază în tăcere, J10-5).
+ * fabrica: () => supabase.from(...).select(...).order(...) — o interogare nouă pentru fiecare pagină.
+ */
+export async function toateRandurile(fabrica, pas = 1000) {
+  const tot = []
+  for (let de = 0; ; de += pas) {
+    const { data, error } = await fabrica().range(de, de + pas - 1)
+    if (error) throw new Error(mesajEroare(error))
+    tot.push(...(data || []))
+    if (!data || data.length < pas) return tot
+  }
+}
+
 export const caleFisier = (d, numeFisier) => {
   if (!CALE_FISIER_RE.test(numeFisier)) throw new Error('nume de fișier nepermis: ' + numeFisier)
   return `${d.serie}/${d.an}/${d.id}/${numeFisier}`

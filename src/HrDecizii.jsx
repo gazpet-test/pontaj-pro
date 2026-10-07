@@ -11,7 +11,7 @@ import { supabase } from './lib/supabase.js'
 import HrDeciziiScan from './HrDeciziiScan.jsx'
 import HrDeciziiGenerator from './HrDeciziiGenerator.jsx'
 import { nrAfisat } from './hrDeciziiUtil.js'
-import { rpc, drepturi, deschidePdf, uuid, fmtData, azi, numeAfis, mesajEroare, STARI } from './hrDeciziiFlux.js'
+import { rpc, drepturi, deschidePdf, toateRandurile, inregistreazaPdfGenerat, uuid, fmtData, azi, numeAfis, mesajEroare, STARI } from './hrDeciziiFlux.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681', border:'#30363D',
@@ -61,7 +61,8 @@ export default function HrDecizii({ profile, showToast }) {
       setDrept(d)
       if (!d.citire) { setLoad(false); return }
       const [rd, rt, rs, re, rp, rc, rem, rprop] = await Promise.all([
-        supabase.from('hr_decizii').select('*').order('an', { ascending: false, nullsFirst: true }).order('numar', { ascending: false, nullsFirst: true }).order('id', { ascending: false }),
+        toateRandurile(() => supabase.from('hr_decizii').select('*').order('an', { ascending: false, nullsFirst: true }).order('numar', { ascending: false, nullsFirst: true }).order('id', { ascending: false }))
+          .then(data => ({ data }), error => ({ error })),
         supabase.from('hr_decizii_tipuri').select('*').order('ordine'),
         supabase.from('hr_decizii_semnatari').select('*').order('ordine'),
         supabase.from('employees').select('id, name, active, termination_date, position, functie').order('name'),
@@ -126,7 +127,14 @@ export default function HrDecizii({ profile, showToast }) {
     sp.delete('scan')
     nav({ pathname: loc.pathname, search: sp.toString() ? '?' + sp.toString() : '' }, { replace: true })
     const d = randuri.find(x => x.id === id)
-    if (!d) { setMesaj(`Decizia #${id} nu există sau nu ai acces la ea.`); return }
+    if (!d) {   // citire punctuală, sub RLS (J10-5): lista poate fi filtrată sau incompletă
+      supabase.from('hr_decizii').select('*').eq('id', id).maybeSingle().then(({ data }) => {
+        if (!data) setMesaj(`Decizia #${id} nu există sau nu ai acces la ea.`)
+        else if (data.stare === 'emisa' && drept.scan) setScan({ d: { ...data, nr_afisat: nrAfisat(data) }, inlocuire: false })
+        else setMesaj(`Decizia nr ${nrAfisat(data) || '#' + id} e ${STARI[data.stare]?.t || data.stare}.`)
+      })
+      return
+    }
     if (!drept.scan) { setMesaj('Nu ai drept de încărcare a scanului.'); return }
     if (d.stare === 'emisa') setScan({ d, inlocuire: false })
     else if (d.stare === 'semnata') setMesaj(`Decizia nr ${d.nr_afisat} e deja semnată (${fmtData(d.scan_la?.slice(0, 10))}).`)
@@ -143,6 +151,18 @@ export default function HrDecizii({ profile, showToast }) {
     if (!window.confirm('Ștergi draftul? (rămâne în jurnal)')) return
     const { error } = await supabase.from('hr_decizii').delete().eq('id', d.id)
     if (error) showToast?.(mesajEroare(error), 'error'); else { showToast?.('Draft șters'); incarca() }
+  }
+  // J10-1: decizia emisă din platformă fără PDF înregistrat (browser închis după emitere, upload căzut): se regenerează
+  // din continut la fontul înghețat, se urcă și se înregistrează — fără scan și fără o nouă emitere. Retry: aceeași stare.
+  const [pdfStari] = useState(() => ({}))
+  const [pdfLucru, setPdfLucru] = useState(null)
+  async function recupereazaPdf(d) {
+    setPdfLucru(d.id)
+    try {
+      const st = (pdfStari[d.id] ||= {})
+      const path = await inregistreazaPdfGenerat(d, st)
+      showToast?.('PDF înregistrat'); await incarca(); await deschidePdf(path)
+    } catch (e) { showToast?.('PDF-ul nu s-a înregistrat: ' + mesajEroare(e), 'error') } finally { setPdfLucru(null) }
   }
   const deschide = async path => { try { await deschidePdf(path) } catch (e) { showToast?.(mesajEroare(e), 'error') } }
 
@@ -196,7 +216,7 @@ export default function HrDecizii({ profile, showToast }) {
         <input placeholder="caută nr, persoană, proiect…" value={f.q} onChange={e => setF({ ...f, q: e.target.value })} style={{ ...S.input, width:220 }} />
       </div>
 
-      {deRez && <DeRezolvat r={rezolvat} decDe={decDe} proiectDe={proiectDe} drept={drept} onScan={d => setScan({ d: randuri.find(x => x.id === d.id), inlocuire: false })} />}
+      {deRez && <DeRezolvat r={rezolvat} decDe={decDe} proiectDe={proiectDe} drept={drept} onScan={d => setScan({ d: randuri.find(x => x.id === d.id), inlocuire: false })} onPdf={recupereazaPdf} />}
 
       <div style={{ ...S.card, overflowX:'auto' }}>
         <table style={{ width:'100%', borderCollapse:'collapse' }}>
@@ -216,7 +236,9 @@ export default function HrDecizii({ profile, showToast }) {
                   {d.origine !== 'platforma' && <div style={{ color:G.muted, fontSize:11 }}>{d.origine}</div>}</td>
                 <td style={td} title={d.mod_numar === 'manual' ? 'număr manual' : 'număr automat'}>{d.mod_numar === 'manual' ? 'M' : d.mod_numar === 'auto' ? 'A' : ''}</td>
                 <td style={td}>
-                  {d.pdf_path && <button style={S.btnMic} onClick={() => deschide(d.pdf_path)}>PDF</button>}{' '}
+                  {d.pdf_path && <button style={S.btnMic} onClick={() => deschide(d.pdf_path)}>PDF</button>}
+                  {!d.pdf_path && d.stare === 'emisa' && d.origine === 'platforma' && drept?.emitere && <button style={{ ...S.btnMic, borderColor:G.yellow }} disabled={pdfLucru === d.id}
+                    onClick={() => recupereazaPdf(d)}>{pdfLucru === d.id ? '…' : '⟳ PDF'}</button>}{' '}
                   {d.scan_path && <button style={{ ...S.btnMic, color:G.green }} onClick={() => deschide(d.scan_path)}>scan ✓</button>}
                 </td>
                 <td style={{ ...td, color:G.muted, fontSize:11.5 }}>{lant(d)}</td>
@@ -253,7 +275,7 @@ export default function HrDecizii({ profile, showToast }) {
 }
 
 // ─── De rezolvat (C45) ─────────────────────────────────────────────
-function DeRezolvat({ r, proiectDe, drept, onScan }) {
+function DeRezolvat({ r, proiectDe, drept, onScan, onPdf }) {
   const bloc = (titlu, items, render) => items.length ? (
     <div style={{ marginBottom:10 }}>
       <div style={{ fontWeight:700, fontSize:13, marginBottom:4 }}>{titlu} ({items.length})</div>
@@ -264,7 +286,7 @@ function DeRezolvat({ r, proiectDe, drept, onScan }) {
     <div style={{ ...S.card, padding:14, marginBottom:12, borderColor:G.yellow }}>
       {!r.total && <div style={{ color:G.muted }}>Nimic de rezolvat.</div>}
       {bloc('Emise nesemnate de peste 7 zile', r.nesemnate, d => chip(d.id, `${d.nr_afisat} · ${d.pers}`, drept?.scan ? () => onScan(d) : null))}
-      {bloc('PDF neînregistrat (regenerează din conținut la încărcarea scanului)', r.faraPdf, d => chip(d.id, d.nr_afisat, drept?.scan ? () => onScan(d) : null))}
+      {bloc('PDF neînregistrat (⟳ regenerează din conținut, fără scan și fără o nouă emitere)', r.faraPdf, d => chip(d.id, `⟳ ${d.nr_afisat}`, drept?.emitere ? () => onPdf(d) : null))}
       {bloc('Importuri fără scan', r.importuri, d => chip(d.id, `${d.nr_afisat} · ${d.pers}`, drept?.scan ? () => onScan(d) : null))}
       {bloc('Propuneri de efect neconfirmate (Execuție → Completări propuse)', r.propuneri, p => chip(p.id, `${proiectDe[p.proiect_id]?.nume || '#' + p.proiect_id}: ${p.camp} → ${p.valoare_afisata}`))}
       {bloc('Goluri în registru (după inițializare)', r.goluri.map((g, i) => ({ id: i, g })), x => chip(x.id, x.g))}

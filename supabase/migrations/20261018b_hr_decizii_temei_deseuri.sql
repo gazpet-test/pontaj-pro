@@ -32,9 +32,17 @@ BEGIN
 END
 $pre$;
 
-UPDATE public.hr_decizii_tipuri
-   SET art1_firma = 'Numirea in functia de {functie} {pe_titlu} {nume} incepand cu data de {data_efect}, conform art. 23 din OUG 92/2021'
- WHERE cod = 'RESPONSABIL_DESEURI';
+-- UPDATE legat atomic de starea PR1 (P10-4): condiția md5 e chiar în WHERE, iar exact un rând trebuie atins.
+DO $upd$
+DECLARE n int;
+BEGIN
+  UPDATE public.hr_decizii_tipuri
+     SET art1_firma = 'Numirea in functia de {functie} {pe_titlu} {nume} incepand cu data de {data_efect}, conform art. 23 din OUG 92/2021'
+   WHERE cod = 'RESPONSABIL_DESEURI' AND md5(art1_firma) = 'e232a2bcf079994a340c81ae3ffec6e6';
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n <> 1 THEN RAISE EXCEPTION 'UPDATE: % rânduri atinse (așteptat 1) — textul s-a schimbat între precondiție și scriere', n; END IF;
+END
+$upd$;
 
 DO $post$
 BEGIN

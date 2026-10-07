@@ -108,24 +108,42 @@ const ddmmyyyy = d => d ? d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0
 export const nrAfisat = d => d?.numar == null ? null
   : `${d.numar}${d.numar_sufix ? '-' + d.numar_sufix : ''}/${d.data_emitere ? ddmmyyyy(d.data_emitere) : d.an}${d.serie === 'carte_tehnica' ? ' (seria carte tehnica)' : ''}`
 
+/** În vigoare azi: data efectului ≤ azi ≤ data_efect_pana (același predicat ca v_hr_decizii_curente; P10-1). */
+export const inVigoare = (d, azi) => (!d.data_efect || d.data_efect <= azi) && (!d.data_efect_pana || d.data_efect_pana >= azi)
+
 /**
  * Eticheta cardului unui rol din Execuție → Echipă (spec §7, C10, VA9), legată pe tip_cod.
- * decizii: rândurile proiectului (emisa / semnata / revocata); azi: 'YYYY-MM-DD'. null = nimic de afișat.
+ * Între deciziile semnate în vigoare se caută ÎNTÂI cea a persoanei din echipă (pot exista mai mulți RTE pe domenii, J10-3);
+ * „echipa ≠ decizia” apare doar dacă nicio decizie în vigoare nu e a persoanei din echipă.
+ * decizii: rândurile proiectului (emisa / semnata / revocata), cu data_efect și data_efect_pana; azi: 'YYYY-MM-DD'.
  */
 export function stareRol(tipCod, idEchipa, decizii, nume = {}, azi) {
   const ale = (decizii || []).filter(d => d.tip_cod === tipCod)
-  const inVigoare = d => !d.data_efect_pana || d.data_efect_pana >= azi
   const pers = d => d.snapshot?.persoana?.nume || nume[d.employee_id] || d.persoana_nume || '?'
   const id = idEchipa ? Number(idEchipa) : null
-  const semnata = ale.find(d => d.stare === 'semnata' && inVigoare(d))
-  if (semnata) {
-    if (id && semnata.employee_id && semnata.employee_id !== id) return { cod: 'diferit', t: `⚠ echipa ≠ decizia activă (nr ${nrAfisat(semnata)}: ${pers(semnata)})` }
-    return { cod: 'ok', t: `Decizia nr ${nrAfisat(semnata)}` }
+  const valide = ale.filter(d => d.stare === 'semnata' && inVigoare(d, azi))
+  const aPersoanei = id && valide.find(d => d.employee_id === id)
+  if (aPersoanei) return { cod: 'ok', t: `Decizia nr ${nrAfisat(aPersoanei)}` }
+  if (valide.length) {
+    if (id) return { cod: 'diferit', t: `⚠ echipa ≠ decizia activă (nr ${nrAfisat(valide[0])}: ${pers(valide[0])})` }
+    return { cod: 'ok', t: `Decizia nr ${nrAfisat(valide[0])}: ${pers(valide[0])}` }
   }
+  const viitoare = ale.find(d => d.stare === 'semnata' && d.data_efect && d.data_efect > azi && (!id || d.employee_id === id))
+  if (viitoare) return { cod: 'viitor', t: `nr ${nrAfisat(viitoare)} · efect de la ${viitoare.data_efect.split('-').reverse().join('.')}` }
   const emisa = ale.find(d => d.stare === 'emisa')
   if (emisa) return { cod: 'nesemnata', t: `nr ${nrAfisat(emisa)} · nesemnată` }
   const rev = id && ale.find(d => d.stare === 'revocata' && d.employee_id === id)
   if (rev) return { cod: 'revocata', t: `⚠ decizie revocată, echipa îl are încă pe ${pers(rev)}` }
   if (id) return { cod: 'lipsa', t: '⚠ fără decizie' }
   return null
+}
+
+/**
+ * G7 în client, ca indicație (serverul decide G7): pe proiect există un RTE semnat ÎN VIGOARE, al altei persoane,
+ * pe domenii disjuncte de cele alese. Nu schimbă singur propune_efect (P10-2).
+ */
+export function alteRteInVigoare(decizii, proiectId, employeeId, domenii, azi) {
+  const ale = new Set((domenii || []).map(String))
+  return (decizii || []).some(d => d.tip_cod === 'RTE' && d.stare === 'semnata' && String(d.proiect_id) === String(proiectId)
+    && String(d.employee_id) !== String(employeeId) && inVigoare(d, azi) && !(d.domenii_isc || []).some(c => ale.has(String(c))))
 }

@@ -10,7 +10,8 @@ import { supabase } from './lib/supabase.js'
 import { masoaraDecizie, renderDecizieHtml } from './hrDeciziiDoc.js'
 import { normalizeazaDomeniiISC, acoperaDomeniul } from './iscRte.js'
 import HrDeciziiScan, { GeneratScalat } from './HrDeciziiScan.jsx'
-import { rpc, inregistreazaPdfGenerat, deschidePdf, uuid, azi, numeAfis, mesajEroare, fmtData } from './hrDeciziiFlux.js'
+import { alteRteInVigoare } from './hrDeciziiUtil.js'
+import { toateRandurile, rpc, inregistreazaPdfGenerat, deschidePdf, uuid, azi, numeAfis, mesajEroare, fmtData } from './hrDeciziiFlux.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', border:'#30363D',
@@ -58,7 +59,7 @@ export default function HrDeciziiGenerator({ initial, onClose, showToast }) {
         supabase.from('hr_decizii_semnatari').select('*').eq('activ', true).order('ordine'),
         supabase.from('employees').select('id, name, active, termination_date').order('name'),
         supabase.from('executie_proiecte').select('id, nume, activ, nr_contract, data_contract').order('nume'),
-        supabase.from('hr_decizii').select('id, employee_id, titlu, tip_cod, proiect_id, stare, nivel, domenii_isc').not('titlu', 'is', null).order('id', { ascending: false }).limit(2000),
+        toateRandurile(() => supabase.from('hr_decizii').select('id, employee_id, titlu, tip_cod, proiect_id, stare, nivel, domenii_isc, data_efect, data_efect_pana').order('id', { ascending: false })).then(data => ({ data }), () => ({ data: [] })),
         supabase.from('isc_rte_domenii').select('cod, denumire, activ').order('cod'),
         supabase.from('hr_autorizatii_tipuri').select('id, cod, denumire'),
       ])
@@ -112,8 +113,7 @@ export default function HrDeciziiGenerator({ initial, onClose, showToast }) {
   }
   function alegeProiect(id) {
     const p = liste.proiecte.find(x => String(x.id) === String(id))
-    const altRte = f.tip_cod === 'RTE' && liste.decizii.some(d => d.tip_cod === 'RTE' && d.stare === 'semnata' && String(d.proiect_id) === String(id) && String(d.employee_id) !== String(f.employee_id))
-    setF(x => ({ ...x, proiect_id: id, proiect_denumire: p?.nume || '', propune_efect: altRte ? false : x.propune_efect }))
+    setF(x => ({ ...x, proiect_id: id, proiect_denumire: p?.nume || '' }))
   }
 
   // Atestatele angajatului, filtrate pe tipurile cerute de decizie (neșterse, neînlocuite)
@@ -275,7 +275,7 @@ export default function HrDeciziiGenerator({ initial, onClose, showToast }) {
             <label style={{ display:'flex', gap:8, alignItems:'center', fontSize:13, marginBottom:6 }}><input type="checkbox" checked={!!f.propune_efect} onChange={e => set('propune_efect', e.target.checked)} />
               După semnare, propune schimbarea echipei proiectului (se confirmă în Execuție)</label>
           )}
-          {!revocare && f.tip_cod === 'RTE' && f.propune_efect === false && <div style={{ fontSize:12, color:G.yellow, marginBottom:6 }}>Pe proiect există deja un RTE pe alt domeniu: efectul pe echipă e oprit implicit. Bifează doar dacă noul RTE devine cel principal.</div>}
+          {!revocare && f.tip_cod === 'RTE' && f.proiect_id && alteRteInVigoare(liste.decizii, f.proiect_id, f.employee_id, f.domenii_isc, azi()) && <div style={{ fontSize:12, color:G.yellow, marginBottom:6 }}>Pe proiect există deja un RTE în vigoare pe alt domeniu (G7, C11): debifează efectul pe echipă dacă noul RTE NU devine cel principal.</div>}
           {err && <div style={{ padding:8, background:G.redDim, borderRadius:8, fontSize:13, margin:'8px 0' }}>{err}</div>}
           <div style={{ display:'flex', gap:8, marginTop:12, alignItems:'center', flexWrap:'wrap' }}>
             <button style={{ ...S.btnP, opacity: lipsaTxt.length || lucru ? .5 : 1 }} disabled={!!lipsaTxt.length || lucru} onClick={previzualizeaza}>{lucru ? 'Se lucrează…' : '👁 Salvează și previzualizează'}</button>

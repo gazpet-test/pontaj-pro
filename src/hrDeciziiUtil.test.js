@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nrAfisat, stareRol, esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, CALE_FISIER_RE, PAGINA, INALTIME_CORP } from './hrDeciziiUtil.js'
+import { nrAfisat, stareRol, inVigoare, alteRteInVigoare, esc, renderDecizieHtml, asezareA4, dimensiuniCanvas, alegeFont, estePdf, numeScan, CALE_FISIER_RE, PAGINA, INALTIME_CORP } from './hrDeciziiUtil.js'
 
 const CONT = {
   titlu: 'DECIZIA NR', nr: '916/28.09.2026', previzualizare: false,
@@ -172,4 +172,32 @@ describe('stareRol (cardurile din Execuție, C10/VA9)', () => {
   })
   it('legătura e pe tip_cod: o decizie MP nu etichetează cardul RTE', () => { expect(stareRol('RTE', 5, [{ ...sem, tip_cod: 'MP' }], {}, AZI).cod).toBe('lipsa') })
   it('decizia expirată (data_efect_pana trecută) nu mai e activă', () => { expect(stareRol('RTE', 5, [{ ...sem, data_efect_pana: '2026-10-01' }], {}, AZI).cod).toBe('lipsa') })
+})
+
+describe('review PR3: efect viitor, RTE multipli, G7 (J10-2, J10-3, P10-1, P10-2)', () => {
+  const AZI = '2026-10-07'
+  const X = { id: 1, tip_cod: 'RTE', stare: 'semnata', employee_id: 5, numar: 916, data_emitere: '2026-09-28', proiect_id: 1, domenii_isc: ['8.4D'] }
+  const Y = { id: 2, tip_cod: 'RTE', stare: 'semnata', employee_id: 7, numar: 920, data_emitere: '2026-10-01', proiect_id: 1, domenii_isc: ['9.1'] }
+  it('inVigoare: start ≤ azi ≤ final', () => {
+    expect(inVigoare({ data_efect: '2026-10-08' }, AZI)).toBe(false)
+    expect(inVigoare({ data_efect: '2026-10-07' }, AZI)).toBe(true)
+    expect(inVigoare({ data_efect_pana: '2026-10-06' }, AZI)).toBe(false)
+    expect(inVigoare({}, AZI)).toBe(true)
+  })
+  it('decizia cu efect de mâine nu e activă azi (P10-1)', () => {
+    expect(stareRol('RTE', 5, [{ ...X, data_efect: '2026-10-08' }], {}, AZI).cod).toBe('viitor')
+    expect(stareRol('RTE', 7, [{ ...X, data_efect: '2026-10-08' }], {}, AZI).cod).toBe('lipsa')
+  })
+  it('doi RTE valizi: decizia persoanei din echipă câștigă, în ambele ordini (J10-3)', () => {
+    expect(stareRol('RTE', 5, [Y, X], {}, AZI).cod).toBe('ok')
+    expect(stareRol('RTE', 5, [X, Y], {}, AZI).cod).toBe('ok')
+    expect(stareRol('RTE', 9, [Y, X], {}, AZI).cod).toBe('diferit')
+  })
+  it('G7 doar pe RTE în vigoare, altă persoană, domenii disjuncte (P10-2)', () => {
+    expect(alteRteInVigoare([X], 1, 7, ['9.1'], AZI)).toBe(true)
+    expect(alteRteInVigoare([X], 1, 7, ['8.4D'], AZI)).toBe(false)            // același domeniu
+    expect(alteRteInVigoare([{ ...X, data_efect_pana: '2026-10-01' }], 1, 7, ['9.1'], AZI)).toBe(false)   // expirat
+    expect(alteRteInVigoare([X], 1, 5, ['9.1'], AZI)).toBe(false)            // aceeași persoană
+    expect(alteRteInVigoare([X], 2, 7, ['9.1'], AZI)).toBe(false)            // alt proiect
+  })
 })

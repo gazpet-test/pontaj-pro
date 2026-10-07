@@ -6,7 +6,7 @@
 // ════════════════════════════════════════════════════════════════
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { supabase } from './lib/supabase.js'
-import { nrAfisat as nrAfis, stareRol as stareRolPur } from './hrDeciziiUtil.js'
+import { nrAfisat as nrAfis, stareRol as stareRolPur, inVigoare as inVigoarePur } from './hrDeciziiUtil.js'
 
 const HrDeciziiGenerator = lazy(() => import('./HrDeciziiGenerator.jsx'))
 
@@ -14,7 +14,7 @@ export const TIP_ROL = { mp_employee_id: 'MP', rte_employee_id: 'RTE', rts_emplo
 const EXTINSA = { CTC_QC: 'CTC / CQ', INSPECTOR_SSM: 'Inspector SSM', COORDONATOR_SSM: 'Coordonator SSM', PSI: 'PSI / SU', MEDIU: 'Mediu', RESPONSABIL_DESEURI: 'Deșeuri', RTE_MEC: 'RTE MEC' }
 
 const azi = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)
-const inVigoare = d => !d.data_efect_pana || d.data_efect_pana >= azi()
+const inVigoare = d => inVigoarePur(d, azi())
 
 /** Deciziile de numire ale proiectului (emise/semnate/revocate) + dreptul de emitere + numele persoanelor. */
 export function useDeciziiProiect(proiectId, reloadKey) {
@@ -24,7 +24,7 @@ export function useDeciziiProiect(proiectId, reloadKey) {
     let viu = true
     ;(async () => {
       const [rd, rp] = await Promise.all([
-        supabase.from('hr_decizii').select('id, tip_cod, employee_id, persoana_nume, stare, serie, an, numar, numar_sufix, data_emitere, data_efect_pana, eticheta_functie, snapshot')
+        supabase.from('hr_decizii').select('id, tip_cod, employee_id, persoana_nume, stare, serie, an, numar, numar_sufix, data_emitere, data_efect, data_efect_pana, eticheta_functie, snapshot')
           .eq('proiect_id', proiectId).in('stare', ['emisa', 'semnata', 'revocata']).order('id', { ascending: false }),
         supabase.rpc('fn_hr_decizii_poate', { p_actiune: 'emitere' }),
       ])
@@ -43,7 +43,7 @@ export function useDeciziiProiect(proiectId, reloadKey) {
   return st
 }
 
-const CULOARE = { ok: '#2EA043', diferit: '#F0883E', nesemnata: '#D29922', revocata: '#F85149', lipsa: '#F0883E' }
+const CULOARE = { viitor: '#58A6FF', ok: '#2EA043', diferit: '#F0883E', nesemnata: '#D29922', revocata: '#F85149', lipsa: '#F0883E' }
 export const stareRol = (tipCod, idEchipa, decizii, nume) => stareRolPur(tipCod, idEchipa, decizii, nume, azi())
 
 export function EtichetaDecizie({ tipCod, idEchipa, decizii, nume, poateEmite, onGenereaza }) {
