@@ -162,6 +162,10 @@ describe('review adversarial 07.10 (dry-run pe 1333 documente) — cazurile repa
       'Solicitare clarificari.pdf', 'Cerere de clarificare.pdf', 'Intrebari clarificari.pdf'])
       expect(ghicesteTip(n), n).toBe('alta')
     expect(ghicesteTip('Raspuns la solicitarea de clarificari nr 3.pdf')).toBe('raspuns_clarificare')
+    // Copilot conv. 3 (NO-GO r2, P1): numărul intercalat
+    for (const n of ['Solicitarea nr. 3 de clarificari.pdf', 'Cererea nr 2 de clarificari.pdf', 'Solicitarea numarul 4 de clarificari.pdf', 'Intrebarea nr. 1 clarificari.pdf'])
+      expect(ghicesteTip(n), n).toBe('alta')
+    expect(ghicesteTip('Raspuns la solicitarea nr. 3 de clarificari.pdf')).toBe('raspuns_clarificare')
   })
   it('caietul de sarcini câștigă în fața „condițiilor generale”; modelul de contract rămâne', () => {
     expect(ghicesteTip('Caiet de sarcini - Conditii generale.pdf')).toBe('cs_volum')
@@ -220,6 +224,9 @@ describe('review adversarial r2 (07.10) — cazurile reparate', () => {
     for (const n of ['Descriere schema tehnologica SRM.pdf', 'Breviar de calcul schema tehnologica SRM.pdf', 'Lista echipamente schema tehnologica.pdf',
       'Specificatie tehnica izometrie racord.pdf', 'Tabel coordonate izometrie.pdf', 'Breviar dwg.pdf'])
       expect(ghicesteTip(n), n).not.toBe('plansa')
+    // Copilot conv. 3 (NO-GO r2, P1): garda de text înaintea regulilor tari de desen; extensia .dwg rămâne planșă
+    for (const n of ['Raport schema tehnologica.pdf', 'Breviar schema tehnologica.pdf']) expect(ghicesteTip(n), n).toBe('alta')
+    expect(ghicesteTip('traseu.dwg')).toBe('plansa')
     expect(ghicesteTip('Schema tehnologica SRM.pdf')).toBe('plansa')
     expect(ghicesteTip('2. Schema Izometrica ADI.pdf')).toBe('plansa')
   })

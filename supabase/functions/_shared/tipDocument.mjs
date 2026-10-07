@@ -36,7 +36,7 @@ const numeCurat = (nume) => norm(numeFisier(nume)).replace(/\.p7s$/, '')
  *  arhiva, planșa „slabă” (număr de foaie + vocabular de desen), 'alta'. */
 export function tipExplicit(nume) {
   const n = numeCurat(nume)
-  if (/(solicitar|cerer|intrebar)[a-z]*[ .-]+(de[ .-]+)?clarificar/.test(n) && !/raspuns|\brasp\b|^clarificar/.test(n)) return 'alta'
+  if (/(solicitar|cerer|intrebar)[a-z]*[ .-]+((nr|numarul)[ .-]*\d+[ .-]+)?(de[ .-]+)?clarificar/.test(n) && !/raspuns|\brasp\b|^clarificar/.test(n)) return 'alta'
   if (/raspuns|\brasp\b|\berata\b/.test(n)) return 'raspuns_clarificare'
   if (/fisa[ .-]?(de[ .-]?)?date|instructiuni[ .-]?ofertanti/.test(n)) return 'fisa_date'
   if (/caiet|memoriu|parte[a]? scrisa/.test(n) && !LISTE_RE.test(n)) return 'cs_volum'
