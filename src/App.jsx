@@ -57,6 +57,7 @@ import { oreLucratoareAngajat, oreNormaPeZi, oreSuplimentare } from './pontajOre
 
 const AdministratorAlerte = lazy(() => import('./AdministratorAlerte.jsx'))
 const MonitorEgress = lazy(() => import('./MonitorEgress.jsx'))   // doar owner (docs/MONITOR_EGRESS.md)
+const MesajVocal = lazy(() => import('./MesajVocal.jsx'))   // 🎙 text → voce (Google TTS, vocea Aoede); owner sau modulul mesaj_vocal
 const AuthContext = createContext(null)
 const useAuth = () => useContext(AuthContext)
 
@@ -1024,6 +1025,7 @@ function HomeDashboard() {
     { path:'/sedinte',  icon:'🗓️', label:'Ședințe',      color:'#56D4DD', desc:'Progres · Acțiuni · Restanțe', active:true, rolesAllow:['manager_santier','sef_echipa','contabilitate','admin_logistica'], moduleKey:'sedinte' },
     { path:'/marketing', icon:'📣', label:'Marketing',   color:'#1877F2', desc:'Postări Facebook · din rapoartele de șantier', active:true, requireModule:'marketing' },
     { path:'/cladire',   icon:'🏢', label:'Clădire',     color:'#E4261E', desc:'Sediu · centrală · termostate · meteo · alerte', active:true, requireModule:'cladire' },
+    { path:'/mesaj-vocal', icon:'🎙', label:'Mesaj vocal', color:'#A371F7', desc:'Text → voce (Aoede) · MP3 pentru WhatsApp', active:true, requireModule:'mesaj_vocal' },
     // TEMPORAR (17.09.2026): se șterge cu tot cu rută când organigrama propriu-zisă e gata
     { path:'/organigrama-propuneri', icon:'🧩', label:'Organigramă (propuneri)', color:'#56D4DD', desc:'Departamente · funcții · rol la licitații · PROVIZORIU', active:true },
     // TEMPORAR (24.08.2026): se șterge împreună cu ruta + InventarCorectii.jsx la finalul proiectului de aliniere
@@ -8811,6 +8813,12 @@ export function SalariiPage({ noExport = false } = {}) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// 🎙 Mesaj vocal: profilul din AuthContext (useAuth e local în App.jsx)
+function MesajVocalRoute() {
+  const { profile } = useAuth()
+  return <Suspense fallback={<LoadingScreen />}><MesajVocal profile={profile} /></Suspense>
+}
+
 // CHATBOT GATE - afișează ChatbotWidget DOAR pentru useri logați (cu profile)
 // ════════════════════════════════════════════════════════════════════════════
 function ChatbotWidgetGate() {
@@ -8890,6 +8898,7 @@ export default function App() {
         <Route path="/sedinte" element={<ProtectedRoute><SedintePage/></ProtectedRoute>}/>
         <Route path="/marketing" element={<ProtectedRoute requireModule="marketing"><Marketing/></ProtectedRoute>}/>
         <Route path="/cladire" element={<ProtectedRoute requireModule="cladire"><Cladire/></ProtectedRoute>}/>
+        <Route path="/mesaj-vocal" element={<ProtectedRoute requireModule="mesaj_vocal"><MesajVocalRoute/></ProtectedRoute>}/>
         <Route path="/integrari/:tab" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="/integrari" element={<ProtectedRoute><Integrari/></ProtectedRoute>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
