@@ -348,10 +348,42 @@ describe('arhivele și adâncimea', () => {
   })
 })
 
+describe('edge seap-import: ZIP-ul întreg pleacă la NAS abia după dovezile din manifest (review PR-C P1)', () => {
+  it('scrieManifest() + golirea listei stau ÎNAINTEA urcării ZIP-ului întreg (bucla NAS l-ar revendica fără dovezi → dubluri)', () => {
+    const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    const bloc = src.slice(src.indexOf('if (!rz.complet || necititeDinZip)'), src.indexOf('} else {', src.indexOf('if (!rz.complet || necititeDinZip)')))
+    const iM = bloc.indexOf('await scrieManifest()'), iG = bloc.indexOf('manifest.length = 0'), iU = bloc.indexOf('await urcaFisier(numeFinal, buf')
+    expect([iM > 0, iG > iM, iU > iG]).toEqual([true, true, true])
+    // Jakarinos pe PR-C: ZIP-ul pleacă DOAR dacă dovezile s-au scris (altfel rămâne pentru rularea următoare)
+    expect(bloc).toMatch(/if \(await scrieManifest\(\)\) \{\s*manifest\.length = 0;\s*await urcaFisier\(numeFinal, buf/)
+  })
+  it('intrarea sărită ca „deja” lasă legătura (arhiva curentă, cale) → document în manifest; rezerva scrie dovezile înainte; „adusă” doar fără nerecuperate', () => {
+    const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/if \('deja' in alegere\) \{[\s\S]{0,1500}stare: 'deja_in_platforma'/)
+    // Jakarinos r2: legătura nu suprascrie dovada „urcat” a aceleiași chei (reluare peste aceeași arhivă)
+    expect(src).toMatch(/if \(!\(manUrcat \|\| \[\]\)\.some\(areDovada\) && !manifest\.some\(areDovada\)\) manifest\.push\(rand\)/)
+    // Jakarinos r2: dovezi nescrise → rezerva DownloadArchive amânată, nu pornită
+    expect(src).toMatch(/const doveziScrise = !nevoieDeArhiva \|\| await scrieManifest\(\);/)
+    expect(src).toMatch(/if \(nevoieDeArhiva && doveziScrise\) \{\s*if \(!perFisierOk\)/)
+    expect(src).toMatch(/if \(deLaIndex === 0 && !arhivaIncompleta && !nerecuperate\) await supa\.from\('ofertare_licitatii'\)/)
+    // Jakarinos r3: dovada „urcat” se păstrează doar dacă spune același lucru (document + sha), altfel legătura nouă o înlocuiește
+    expect(src).toMatch(/rr\.document_id === rand\.document_id && rr\.sha256 === rand\.sha256/)
+    // Jakarinos r2: upload sau rând BD eșuat = nerecuperat (urcaFisier întoarce succesul real)
+    expect(src).toMatch(/if \(eUp\) \{ nerecuperate\+\+;/)
+    expect(src).toMatch(/else nerecuperate\+\+;[^\n]*\n\s*urcatiOcteti \+= buf\.length;\n\s*return !!docId;/)
+  })
+})
+
 describe('paritatea cu api/_tipDocument.js (funcțiile Vercel nu importă din afara api/)', () => {
   it('copie byte cu byte', () => {
     const sursa = readFileSync(new URL('../supabase/functions/_shared/tipDocument.mjs', import.meta.url))
     const copie = readFileSync(new URL('../api/_tipDocument.js', import.meta.url))
+    expect(copie.equals(sursa)).toBe(true)
+  })
+  // 08.10.2026: aceeași regulă pentru celelalte copii din api/ (semnătura CMS #649, ZIP-ul și paginarea — audit #9/#21)
+  it.each([['semnaturaCms.mjs', '_semnaturaCms.js'], ['zipFlux.mjs', '_zipFlux.js'], ['paginat.mjs', '_paginat.js']])('_shared/%s = api/%s byte cu byte', (src, api) => {
+    const sursa = readFileSync(new URL(`../supabase/functions/_shared/${src}`, import.meta.url))
+    const copie = readFileSync(new URL(`../api/${api}`, import.meta.url))
     expect(copie.equals(sursa)).toBe(true)
   })
   it('nicio copie locală veche a regulilor rămasă în consumatori', () => {

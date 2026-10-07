@@ -20,7 +20,7 @@ type Opt = {
   ctl?: AbortController; stopDupaPrimul?: boolean; blocat?: 'lista' | 'document' | 'storage' | 'flux'
   arhiva?: boolean; blocatExtractor?: 'listare' | 'extragere'; uscat?: boolean; periodica?: boolean
   storageUrl?: string; statusStorage?: number; caleStorage?: string
-  dovezi?: { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string }[]; eroareDovezi?: boolean
+  dovezi?: { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string; stare: string }[]; eroareDovezi?: boolean
   inainte?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
   laStorage?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
 }
@@ -45,9 +45,10 @@ async function scenariu(opt: Opt = {}) {
   const raspuns = (data: unknown) => ({
     abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve({ data, error: null }) },
   })
-  const raspunsDovezi = () => ({
-    abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve(opt.eroareDovezi ? { data: null, error: { message: 'simulat: manifest indisponibil' } } : { data: opt.dovezi ?? [], error: null }) },
-  })
+  // pe pagini (toatePaginile): .order('id').range(de, la).abortSignal(...) — intervalul respectat ca la PostgREST
+  const raspunsDovezi = () => ({ order: (c: string) => { eq(c, 'id'); return { range: (de: number, la: number) => ({
+    abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve(opt.eroareDovezi ? { data: null, error: { message: 'simulat: manifest indisponibil' } } : { data: (opt.dovezi ?? []).slice(de, la + 1), error: null }) },
+  }) } } })
   const supa = {
     from(t: string) {
       if (t === 'ofertare_seap_cereri' && opt.periodica) return {
@@ -57,8 +58,11 @@ async function scenariu(opt: Opt = {}) {
       if (t === 'ofertare_seap_manifest') return {
         select: () => ({ eq: () => ({
           order: () => ({ limit: () => ({ maybeSingle: async () => ({ data: null }) }) }),
-          // dovezile existente: .eq('licitatie_id', 93).eq('stare', 'urcat').abortSignal(...)
-          eq: (k: string, v: string) => { eq([k, v], ['stare', 'urcat']); return raspunsDovezi() },
+          // dovezile existente: .eq('licitatie_id', 93).in('stare', ['urcat', 'deja_in_platforma']).not('document_id', 'is', null)
+          in: (k: string, v: string[]) => {
+            eq([k, v], ['stare', ['urcat', 'deja_in_platforma']])
+            return { not: (c: string, o: string, val: unknown) => { eq([c, o, val], ['document_id', 'is', null]); return raspunsDovezi() } }
+          },
         }) }),
         upsert(rows: any[], conf: unknown) {
         eq(conf, { onConflict: 'licitatie_id,arhiva_cheie,cale' })
@@ -72,7 +76,8 @@ async function scenariu(opt: Opt = {}) {
         eq([k, v], [t === 'ofertare_licitatii' ? 'id' : 'licitatie_id', 93])
         return t === 'ofertare_licitatii'
           ? { abortSignal: (signal: AbortSignal) => { assert(signal); return { single: async () => ({ data: { c_notice_id: 123, sys_notice_type_id: 2 }, error: null }) } } }
-          : raspuns(documente.map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d))
+          : { order: (c: string) => { eq(c, 'id'); return { range: (de: number, la: number) =>
+              raspuns(documente.map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d).slice(de, la + 1)) } } }
       } }) }
     },
     storage: { from() { throw new Error('SDK Storage interzis: descărcarea trebuie să fie anulabilă integral') } },
@@ -399,8 +404,8 @@ for (const oprire of ['normal', 'kill'] as const) Deno.test({
 // -- #13 (audit Jakarinos 07.10): verificarea nu mai distruge dovada sha a importului ('urcat') -------------------------
 Deno.test('manifest #13: dovada „urcat” confirmată de Storage rămâne „urcat”; contrazisă → invalidată cu motiv; fără dovadă → ca înainte', async () => {
   const dovezi = [
-    { arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha') },   // Storage 93/a = alpha → confirmată
-    { arhiva_cheie: 'c.pdf', cale: 'c.pdf', document_id: 13, sha256: await sha('gamma') },     // Storage 93/c = ALTFEL → contrazisă
+    { arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha'), stare: 'urcat' },   // Storage 93/a = alpha → confirmată
+    { arhiva_cheie: 'c.pdf', cale: 'c.pdf', document_id: 13, sha256: await sha('gamma'), stare: 'urcat' },     // Storage 93/c = ALTFEL → contrazisă
   ]
   const { raport, scrieri } = await scenariu({ dovezi })
   eq([raport.identice, raport.diferite, raport.lipsa_in_platforma, raport.erori], [2, 1, 1, []])
@@ -411,10 +416,29 @@ Deno.test('manifest #13: dovada „urcat” confirmată de Storage rămâne „u
 })
 
 Deno.test('manifest #13: Storage indisponibil → rândul „urcat” rămâne neatins (nu se scrie peste el)', async () => {
-  const dovezi = [{ arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha') }]
+  const dovezi = [{ arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha'), stare: 'urcat' }]
   const { scrieri, raport } = await scenariu({ dovezi, statusStorage: 503 })
   eq(scrieri.map(r => r.cale).sort(), ['b.pdf', 'c.pdf', 'lipsa.pdf'], 'a1.pdf (cu dovadă) nu e rescris')
   assert(raport.erori.some(e => /a1\.pdf: Storage indisponibil: HTTP 503/.test(e)), raport.erori.join(' | '))
+})
+
+Deno.test('manifest (Jakarinos r2 pe #651): legătura „deja_in_platforma” a importului alege documentul verificat, dar nu devine „urcat”', async () => {
+  const dovezi = [
+    { arhiva_cheie: 'b.pdf', cale: 'b.pdf', document_id: 12, sha256: await sha('beta'), stare: 'deja_in_platforma' },   // confirmată de Storage
+    { arhiva_cheie: 'c.pdf', cale: 'c.pdf', document_id: 11, sha256: await sha('gamma'), stare: 'deja_in_platforma' },  // legată de 11, nu de „c.pdf” (13)
+  ]
+  const { scrieri } = await scenariu({ dovezi })
+  const pe = Object.fromEntries(scrieri.map(r => [r.cale, [r.stare, r.document_id, r.motiv ? r.motiv.slice(0, 18) : null]]))
+  eq(pe['b.pdf'], ['deja_in_platforma', 12, null], 'legătura confirmată rămâne „deja”, nu se promovează la „urcat”')
+  eq(pe['c.pdf'], ['deja_in_platforma', 11, 'DIFERIT de Storage'], 'documentul verificat e cel din legătură (11), nu cel găsit după nume (13)')
+})
+
+Deno.test('manifest (Copilot NO-GO r1 pe #651): dovada „urcat” de după primul plafon de rânduri (pagina a doua) rămâne „urcat”', async () => {
+  const umplutura = Array.from({ length: 1000 }, (_, i) => ({ arhiva_cheie: 'alta.zip', cale: `f${i}.pdf`, document_id: 14, sha256: 'x'.repeat(64), stare: 'deja_in_platforma' }))
+  const dovezi = [...umplutura, { arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha'), stare: 'urcat' }]
+  const { scrieri } = await scenariu({ dovezi })
+  const pe = Object.fromEntries(scrieri.map(r => [r.cale, [r.stare, r.document_id]]))
+  eq(pe['a1.pdf'], ['urcat', 11], 'citită de pe pagina a doua, dovada confirmată se păstrează (nu se degradează la „deja”)')
 })
 
 Deno.test('manifest #13: dovezile existente necitibile → nu se scrie nimic, eroare în raport', async () => {

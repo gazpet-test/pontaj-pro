@@ -17,14 +17,19 @@ function zipStored(intrari) {
     h.writeUInt32LE(d.length, 18); h.writeUInt32LE(d.length, 22); h.writeUInt16LE(n.length, 26); h.writeUInt16LE(0, 28)
     parti.push(h, n, d)
   }
+  // directorul central + înregistrarea finală (conținutul lor nu e citit în flux, doar semnătura de început contează)
+  const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0)
+  const eocd = Buffer.alloc(22); eocd.writeUInt32LE(0x06054b50, 0)
+  parti.push(cd, eocd)
   return Buffer.concat(parti)
 }
 
 function fakeSupa(randuri) {
   const builder = (tabel) => {
-    let op = 'select', patch = null
+    let op = 'select', patch = null, de = 0, cate = Infinity
     const b = {
-      select() { return b }, eq() { return b }, order() { return b }, limit() { return b },
+      // range respectat ca la PostgREST: toatePaginile (_paginat.js) se oprește la prima pagină goală
+      select() { return b }, eq() { return b }, order() { return b }, limit() { return b }, range(a, z) { de = a; cate = z - a + 1; return b },
       insert(p) { op = 'insert'; patch = p; return b },
       update(p) { op = 'update'; patch = p; return b },
       upsert() { op = 'upsert'; return b },
@@ -33,6 +38,7 @@ function fakeSupa(randuri) {
       then(res, rej) {
         let data = []
         if (tabel === 'ofertare_documente_atribuire' && op === 'insert') { const r = { id: 100 + randuri.length, ...patch }; randuri.push(r); data = [r] }
+        if (op === 'select') data = data.slice(de, de + cate)
         return Promise.resolve({ data, error: null }).then(res, rej)
       },
     }
@@ -122,9 +128,9 @@ describe('api/seap-import: arhivele din DownloadArchive', () => {
 describe('api/seap-import: aceeași cheie de nume ca celelalte drumuri (audit #16) + placeholder consumat o dată (#2)', () => {
   function fakeCuExistente(existente, scrise) {
     const builder = (tabel) => {
-      let op = 'select', patch = null, idCerut = null, sel = false
+      let op = 'select', patch = null, idCerut = null, sel = false, de = 0, cate = Infinity
       const b = {
-        select() { sel = true; return b }, eq(c, v) { if (c === 'id') idCerut = v; return b }, order() { return b }, limit() { return b },
+        select() { sel = true; return b }, eq(c, v) { if (c === 'id') idCerut = v; return b }, order() { return b }, limit() { return b }, range(a, z) { de = a; cate = z - a + 1; return b },
         or() { return b }, in() { return b },
         insert(p) { op = 'insert'; patch = p; return b }, update(p) { op = 'update'; patch = p; return b }, upsert() { op = 'upsert'; return b },
         single() { return Promise.resolve({ data: { id: 7, nr_anunt: 'CN1', c_notice_id: 11, sys_notice_type_id: 2 }, error: null }) },
@@ -132,7 +138,7 @@ describe('api/seap-import: aceeași cheie de nume ca celelalte drumuri (audit #1
         then(res, rej) {
           let data = []
           if (tabel === 'ofertare_documente_atribuire') {
-            if (op === 'select') data = existente
+            if (op === 'select') data = existente.slice(de, de + cate)
             if (op === 'insert') { const r = { id: 900 + scrise.length, ...patch }; scrise.push(['insert', r]); data = [r] }
             if (op === 'update') {
               const r = existente.find((x) => x.id === idCerut)
@@ -200,5 +206,50 @@ describe('api/seap-import: arhiva .p7m rămâne întreagă (Jakarinos #7 pe #649
     const res = response()
     await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
     expect(randuri.map((r) => [r.nume_original, r.status_procesare, r.eroare, r.size_bytes])).toEqual([['Raspuns.zip.p7m', 'neprocesat', null, cms.length]])
+  })
+})
+
+describe('api/seap-import: ZIP necitit complet nu e „adus” (audit Jakarinos #9 / #10)', () => {
+  function cuUpdateuri(randuri, upd) {
+    const f = fakeSupa(randuri)
+    const from = f.from
+    f.from = (t) => { const b = from(t); const u = b.update; b.update = (p) => { if (t === 'ofertare_licitatii') upd.push(p); return u.call(b, p) }; return b }
+    return f
+  }
+  it('arhivă trunchiată (fără directorul central) → eroare „arhiva: …”, documentatie_adusa_la NEsetat', async () => {
+    const randuri = [], upd = []
+    mocks.createClient.mockReturnValue(cuUpdateuri(randuri, upd))
+    const z = zipStored({ 'A.pdf': '%PDF-1.4 a', 'B.pdf': '%PDF-1.4 b' })
+    mocks.fetch.mockResolvedValue(new Response(z.subarray(0, z.length - 68 - 5)))   // tăiat în a doua intrare
+    const res = response()
+    await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
+    expect(res.body.arhiva_completa).toBe(false)
+    expect(res.body.erori.some((e) => /^arhiva: arhivă trunchiată/.test(e))).toBe(true)
+    expect(upd.some((p) => 'documentatie_adusa_la' in p)).toBe(false)
+  })
+  it('arhivă completă → documentatie_adusa_la setat', async () => {
+    const randuri = [], upd = []
+    mocks.createClient.mockReturnValue(cuUpdateuri(randuri, upd))
+    mocks.fetch.mockResolvedValue(new Response(zipStored({ 'A.pdf': '%PDF-1.4 a' })))
+    const res = response()
+    await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
+    expect([res.body.arhiva_completa, res.body.erori]).toEqual([true, []])
+    expect(upd.some((p) => 'documentatie_adusa_la' in p)).toBe(true)
+  })
+})
+
+describe('api/seap-import: inventarul se citește pe pagini, fail-closed (audit Jakarinos #21)', () => {
+  it('eroare la citirea inventarului → 500, nimic urcat (nu „niciun document” → totul re-urcat)', async () => {
+    const randuri = []
+    const f = fakeSupa(randuri)
+    const from = f.from
+    f.from = (t) => { const b = from(t); if (t === 'ofertare_documente_atribuire') b.range = () => Promise.resolve({ data: null, error: { message: 'timeout' } }); return b }
+    mocks.createClient.mockReturnValue(f)
+    mocks.fetch.mockResolvedValue(new Response(zipStored({ 'A.pdf': '%PDF-1.4 a' })))
+    const res = response()
+    await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
+    expect(res.statusCode).toBe(500)
+    expect(res.body.error).toMatch(/inventarul documentelor nu s-a putut citi: timeout/)
+    expect(randuri).toEqual([])
   })
 })

@@ -14,6 +14,7 @@ import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR
 import { ghicesteTip, tipInArhiva, indiciuArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume, pastreazaUrcat } from '../../supabase/functions/_shared/identitateFisier.mjs'
 import { desface, eSemnat, continutCms, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../../supabase/functions/_shared/semnaturaCms.mjs'
+import { toatePaginile } from '../../supabase/functions/_shared/paginat.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -275,13 +276,20 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
 
   const { docs, cookie } = await listaSeap(lic.c_notice_id, lic.sys_notice_type_id)
   raport.seap = docs.length
-  const { data: dinBd } = await supa.from('ofertare_documente_atribuire').select('id, nume_original, fisier_path').eq('licitatie_id', licId)
+  // inventarele pe pagini, fail-closed (audit Jakarinos #21): o listă trunchiată sau o eroare de citire NU e „nimic în platformă”
+  const { data: dinBd, error: eBd } = await toatePaginile((de: number, la: number) => supa.from('ofertare_documente_atribuire')
+    .select('id, nume_original, fisier_path').eq('licitatie_id', licId).order('id').range(de, la))
+  if (eBd) { raport.erori.push(`inventarul documentelor nu s-a putut citi: ${eBd.message}`); return raport }
   const urcate = new Map((dinBd || []).filter(d => !estePlaceholder(d)).map(d => [cheieRand(d.nume_original), d.id as number]))
   // fișierele extrase din arhive: „deja” doar cu sha256 dovedit de manifest ('urcat') — _shared/identitateFisier.mjs
-  const { data: manUrcat } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256, stare').eq('licitatie_id', licId).eq('stare', 'urcat').not('document_id', 'is', null)
+  const { data: manUrcat, error: eMan } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_manifest')
+    .select('arhiva_cheie, cale, document_id, sha256, stare').eq('licitatie_id', licId).eq('stare', 'urcat').not('document_id', 'is', null).order('id').range(de, la))
+  if (eMan) { raport.erori.push(`manifestul nu s-a putut citi: ${eMan.message}`); return raport }
   const identitate = stareIdentitate((dinBd || []).filter(d => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume)
   const placeholders = new Map((dinBd || []).filter(estePlaceholder).map(d => [cheieRand(d.nume_original), d.id as number]))
-  const { data: evid } = await supa.from('ofertare_seap_fisiere').select('cheie, stare, incercari').eq('licitatie_id', licId)
+  const { data: evid, error: eEv } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_fisiere')
+    .select('cheie, stare, incercari').eq('licitatie_id', licId).order('id').range(de, la))
+  if (eEv) { raport.erori.push(`evidența SEAP nu s-a putut citi: ${eEv.message}`); return raport }
   const evidenta = new Map((evid || []).map(e => [e.cheie, e]))
 
   // ce lipsește: nu e document urcat și nu e deja tratat cu succes (arhivele nu apar niciodată ca document)
@@ -592,19 +600,26 @@ export async function fisiereDejaImportate(supa: Supa, d: { licitatie_id: number
   const dovedite = new Map<string, Set<string>>()
   if (adancimeArhiva(d.nume_original) > 0) return dovedite
   const cheieManifest = String(d.nume_original ?? '').replace(/\.p7s$/i, '').toLowerCase()
-  const { data: man } = await supa.from('ofertare_seap_manifest').select('cale, arhiva_cheie, document_id, sha256, stare')
-    .eq('licitatie_id', d.licitatie_id).in('arhiva_cheie', [cheieManifest, cheieNume(d.nume_original)])
-  const { data: urcate } = await supa.from('ofertare_seap_manifest').select('document_id, sha256, stare')
-    .eq('licitatie_id', d.licitatie_id).eq('stare', 'urcat').not('document_id', 'is', null)
+  // pe pagini; o eroare = nicio dovadă (se urcă tot — dublura e preferabilă pierderii), nu o listă parțială (#21)
+  const { data: man } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_manifest').select('cale, arhiva_cheie, document_id, sha256, stare')
+    .eq('licitatie_id', d.licitatie_id).in('arhiva_cheie', [cheieManifest, cheieNume(d.nume_original)]).order('id').range(de, la))
+  const { data: urcate } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_manifest').select('document_id, sha256, stare')
+    .eq('licitatie_id', d.licitatie_id).eq('stare', 'urcat').not('document_id', 'is', null).order('id').range(de, la))
   const shaDoc = shaDovedit(urcate || [])
   const candidati = ((man || []) as { cale: string; document_id: number | null; sha256?: string }[])
     .filter(m => m.document_id != null && !!m.sha256 && shaDoc.get(m.document_id) === m.sha256)
   if (!candidati.length) return dovedite
   // dovada contează doar dacă documentul EXISTĂ ACUM, cu fișier real (Copilot conv. 3, NO-GO r1 pe #646): un rând șters sau
   // rămas placeholder nu mai ține conținutul în platformă, deci fișierul din arhivă trebuie urcat, nu sărit ca „deja”
-  const { data: vii } = await supa.from('ofertare_documente_atribuire').select('id, fisier_path')
-    .eq('licitatie_id', d.licitatie_id).in('id', [...new Set(candidati.map(m => m.document_id as number))])
-  const existente = new Set(((vii || []) as { id: number; fisier_path: string | null }[]).filter(x => !estePlaceholder(x)).map(x => x.id))
+  // pe bucăți de 500 de id-uri (review PR-C): peste plafonul de rânduri al serverului, dovezile în plus s-ar fi pierdut tăcut
+  const idDovezi = [...new Set(candidati.map(m => m.document_id as number))]
+  const vii: { id: number; fisier_path: string | null }[] = []
+  for (let k = 0; k < idDovezi.length; k += 500) {
+    const { data } = await supa.from('ofertare_documente_atribuire').select('id, fisier_path')
+      .eq('licitatie_id', d.licitatie_id).in('id', idDovezi.slice(k, k + 500))
+    vii.push(...((data || []) as { id: number; fisier_path: string | null }[]))
+  }
+  const existente = new Set(vii.filter(x => !estePlaceholder(x)).map(x => x.id))
   for (const m of candidati) {
     if (!existente.has(m.document_id as number)) continue
     const c = caleFaraP7s(m.cale)
@@ -789,7 +804,9 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     // o reluare (după o urcare parțială) nu dublează: comparăm DOAR cu spațiul de nume al acestei arhive, pe CALEA EXACTĂ.
     // (07.10, review #641: cu cheieNume — fără .p7s / paranteze / spații / majuscule — „PT.zip” și „PT.zip.p7s” sau
     // „Anexa (1).pdf” și „Anexa 1.pdf” din aceeași arhivă se confundau și unul se pierdea tăcut, numărat „existau deja”.)
-    const { data: existente } = await supa.from('ofertare_documente_atribuire').select('id, nume_original').eq('licitatie_id', licId)
+    const { data: existente, error: eEx } = await toatePaginile((de: number, la: number) => supa.from('ofertare_documente_atribuire')
+      .select('id, nume_original').eq('licitatie_id', licId).order('id').range(de, la))
+    if (eEx) { await termina('neprocesat', null); log(`#${licId}: ${d.nume_original}: inventarul nu s-a putut citi (${eEx.message}) — reiau la tura următoare`); return }
     const urcate = new Set(((existente || []) as { nume_original: string }[]).map(e => e.nume_original || '').filter(n => n.startsWith(`${spatiu}/`)))
     const dinImport = await fisiereDejaImportate(supa, d)   // urcate deja cu succes de importul care a desfăcut-o parțial
     let extrase = 0, deja = 0

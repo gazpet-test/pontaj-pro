@@ -24,6 +24,8 @@ on:
       - 'api/seap-import.js'
       - 'api/_tipDocument.js'
       - 'api/_semnaturaCms.js'
+      - 'api/_zipFlux.js'
+      - 'api/_paginat.js'
       - 'api/_seapImport*'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
@@ -65,6 +67,8 @@ on:
       - 'api/seap-import.js'
       - 'api/_tipDocument.js'
       - 'api/_semnaturaCms.js'
+      - 'api/_zipFlux.js'
+      - 'api/_paginat.js'
       - 'api/_seapImport*'
       - 'docs/R5_*.sql'
       - 'docs/R5_MIGRARE_3*'
@@ -130,6 +134,7 @@ jobs:
           supabase/functions/ofertare-poarta-text
           supabase/functions/api-consum-extern
           supabase/functions/ofertare-seap-import
+          supabase/functions/ofertare-seap-veghe
           worker/ofertare/plansa_test.ts
           worker/ofertare/arhive_platforma_test.ts
       # Verificarea R6 a manifestului (dovada sha 'urcat' nu se mai distruge — audit Jakarinos 07.10, #13). --no-check: tiparea
