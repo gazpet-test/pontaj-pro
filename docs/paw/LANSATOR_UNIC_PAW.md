@@ -35,3 +35,14 @@ Context: Bitdefender ATC a pus în carantină de trei ori (02.10, 05.10, 07.10) 
 8. CLAUDE.md: regula „Paw doar prin `run_paw`; fără scripturi ad-hoc pe PC”. Rând `automatizari` + secțiune în `registru_automatizari` cu fișa a–e.
 
 Decizia lui Răzvan: A) v2 integral (necesită pașii lui de admin: folder ProgramData + ACL + excepție AV pe `bin`); B) v2 fără Miloi (jak/cop/gem/ollie acum, Miloi după diagnostic); C) se amână.
+
+## v2 LIVRATĂ (07.10.2026 seara, decizia Răzvan: **B, fără Miloi**)
+- Cod: `C:\ProgramData\Gazpet\Paw\bin\run_paw.cmd` + `run_paw.ps1` + copia `cgpt_pw.py`; ACL: Administrators/SYSTEM full, Users doar citire+execuție (owner-ul rămâne Răzvan: rezidual, poate schimba ACL fără elevare).
+- Date: `C:\Users\Public\paw-data\{brief, out, paw_runs.log, lock_cop_<conv>}`; fără excepție AV. Excepția Bitdefender se pune doar pe `bin` (Răzvan).
+- `cine` ∈ jak / cop / ollie; modele din liste închise; `cop` cere id-ul conversației (6abc000f chat, 6ac5006f Ofertare), lock per conversație, refuz dacă `stare` nu răspunde „genereaza: False”, verificare că 9333 ascultă doar pe 127.0.0.1.
+- Căi: `GetFullPath` + refuz UNC / ADS / reparse point pe fiecare segment / ieșire din rădăcini; brief doar `.md` sub `paw-data\brief` sau `erp_review`; ieșirea doar sub `paw-data\out`.
+- Fără shell: `ProcessStartInfo` cu argumente citate, `"` interzis în argumente; `node codex.js exec --sandbox read-only -C <repo>`; Ollama cu brief-ul pe stdin.
+- Timeout per unealtă (jak 1200 s, cop 1800 s, ollie 600 s) → `taskkill /T /F` pe arbore; marker `PAW_GATA <id-run>` / `PAW_EROARE <id-run> <motiv>` scris de lansator; stderr curățat de ANSI.
+- Teste 07.10: refuzuri (cine necunoscut, ieșire în afara rădăcinii, traversal `..`, ADS, model nepermis, țintă lipsă) → toate `PAW_EROARE`; ollie „PAW_OK Qwen” 6 s; jak „PAW_OK Codex” 17 s; cop test de canal pe conv. 2.
+- Neimplementat (conștient): `--scrie` pentru jak (toate rulările sunt read-only; scrierea se cere separat), `gem` (nu există unealtă Gemini pe PC), Miloi (după diagnostic fără bypass), hash-chain pe jurnal.
+- Regula în CLAUDE.md pct. 11; rând `automatizari` „run_paw”; lansatoarele vechi rezervă până pe 14.10.
