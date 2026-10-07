@@ -53,8 +53,10 @@ export default function MesajVocal({ profile }) {
       const r = await genereazaVoce(deCitit)
       setRez(r)
       setFisier(await fisierMp3(r.url, numeFisierMp3()))
-      incarcaCota()
-    } catch (e) { setErr(e.message) } finally { setLucru(false) }
+    } catch (e) { setErr(e.message) } finally {
+      setLucru(false)
+      incarcaCota().catch(() => {})   // și după eșec: bucățile plecate la Google rămân numărate (J14-2)
+    }
   }
 
   return (
