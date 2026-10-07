@@ -39,6 +39,7 @@ import OfertareParteneri from './OfertareParteneri.jsx'
 import { raportTransferCantitati } from './ofertareTransferRaport.js'
 import { restantePeTip as restantePeTipDoc, textRestante } from './ofertareTransferRestante.js'
 import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   // aceleași reguli ca la import (worker, edge, api)
+import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -1468,7 +1469,9 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       Documentele citite înainte de 15.09.2026 au NULL — de aceea eticheta cade pe eroare/gol. */}
                   <span style={{ color: spart ? G.ofertare : st.color, fontWeight:700, minWidth:86 }}
                     title={d.pornit?.name ? `Citire pornită de ${d.pornit.name}${d.procesat_la ? ` · ${new Date(d.procesat_la).toLocaleString('ro-RO')}` : ''}` : (d.eroare || '')}>
-                    {spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : (d.status_procesare || 'neprocesat') === 'neprocesat' && ARHIVA_DOC_RE.test(d.nume_original || '') ? <span title={MESAJ_ARHIVA}>📦 arhivă — se despachetează</span> : st.label}
+                    {spart ? `🔀 spart în ${spart[1]}` : formularXml ? '📎 formular' : (d.status_procesare || 'neprocesat') === 'neprocesat' && ARHIVA_DOC_RE.test(d.nume_original || '') ? (d.eroare
+                      ? <span title={d.eroare} style={{ color:G.yellow }}>⚠ arhivă — despachetare manuală</span>   // stare finală scrisă de worker (volume / adâncime)
+                      : <span title={MESAJ_ARHIVA}>📦 arhivă — se despachetează</span>) : st.label}
                   </span>
                   <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={d.eroare || d.nume_original}>
                     {d.nume_original}
@@ -3463,15 +3466,18 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
       )}
       {msg && <div style={{ fontSize:12.5, color: msg.tip === 'err' ? G.red : msg.tip === 'warn' ? G.yellow : G.green, marginBottom:8 }}>{msg.t}</div>}
       {docs === null ? <div style={{ color:G.muted, fontSize:13 }}>Se încarcă…</div>
-        : !docs.length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
-        : docs.map(d => {
+        : !primiteVizibile(docs).length ? <div style={{ color:G.dim, fontSize:13 }}>Nimic nou apărut în SEAP după importul inițial.</div>
+        : primiteVizibile(docs).map(d => {
           const ph = estePlaceholderDoc(d)
+          const extrase = ARHIVA_DOC_RE.test(d.nume_original || '') ? rezumatExtrase(d.id, toate) : null
           const c = d.analiza?.citire_noi
           const sc = stareCitire(d)
           return (
             <div key={d.id} style={{ padding:'11px 13px', borderRadius:11, marginBottom:8, background:'#1C2430', borderLeft:`3px solid ${(TIP_NOU[c?.tip || d.tip] || TIP_NOU.altul)[1]}` }}>
               <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
-                <div style={{ flex:1, minWidth:180, fontSize:13.5, fontWeight:600, wordBreak:'break-word' }}>{d.nume_original}</div>
+                <div style={{ flex:1, minWidth:180, fontSize:13.5, fontWeight:600, wordBreak:'break-word' }}>{d.nume_original}
+                  {extrase && <div style={{ fontSize:11.5, fontWeight:500, color:G.dim, marginTop:3 }}>{extrase.text}</div>}
+                </div>
                 {badgeTip(d)}
                 <span style={{ fontSize:11.5, color:G.dim, whiteSpace:'nowrap' }} title="data apariției în platformă">📅 {fmtDataScurt(d.created_at)}</span>
               </div>

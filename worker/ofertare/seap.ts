@@ -596,26 +596,29 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     }
     if (x.code !== 0) { await termina('eroare', `Despachetare ${/^(LIMITĂ|RESPINS)/.test(x.motiv) ? 'RESPINSĂ' : 'eșuată'} (extragere, cod ${x.code}): ${x.motiv.slice(0, 300)}`); return }
     await Deno.remove(`${dir}/in/${prima}`).catch(() => {})
-    // o reluare (după o urcare parțială) nu dublează: comparăm DOAR cu spațiul de nume al acestei arhive
+    // o reluare (după o urcare parțială) nu dublează: comparăm DOAR cu spațiul de nume al acestei arhive, pe CALEA EXACTĂ.
+    // (07.10, review #641: cu cheieNume — fără .p7s / paranteze / spații / majuscule — „PT.zip” și „PT.zip.p7s” sau
+    // „Anexa (1).pdf” și „Anexa 1.pdf” din aceeași arhivă se confundau și unul se pierdea tăcut, numărat „existau deja”.)
     const { data: existente } = await supa.from('ofertare_documente_atribuire').select('id, nume_original').eq('licitatie_id', licId)
-    const urcate = new Set(((existente || []) as { nume_original: string }[]).filter(e => (e.nume_original || '').startsWith(`${spatiu}/`)).map(e => cheieNume(e.nume_original)))
+    const urcate = new Set(((existente || []) as { nume_original: string }[]).map(e => e.nume_original || '').filter(n => n.startsWith(`${spatiu}/`)))
     let extrase = 0, deja = 0
     const erori: string[] = []
     for await (const f of fisiereDin(`${dir}/out`)) {
       const numeFinal = `${spatiu}/${f.rel}`
       if (JUNK_RE.test(f.rel)) { await Deno.remove(f.cale); continue }
-      if (urcate.has(cheieNume(numeFinal))) { deja++; await Deno.remove(f.cale); continue }
+      if (urcate.has(numeFinal)) { deja++; await Deno.remove(f.cale); continue }
       stare(`arhivă din platformă: urc ${numeFinal}`)
       const fb = await Deno.readFile(f.cale)
       const r = await urca(supa, licId, numeFinal, fb, new Map(), {
         // seap_cod NU se moștenește: e unic pe (licitație, cod) — e codul documentului SEAP, adică al arhivei
         // (05.10, 1305: 159 de fișiere respinse de ofertare_doc_seap_cod_unic). Legătura cu arhiva e în nume: „(#id)”.
-        // regula proprie câștigă; altfel tipul arhivei — dar NU raspuns_clarificare (lic. 3: 117 formulare/planșe în Clarificări)
+        // regula proprie câștigă, apoi folderul; altfel tipul arhivei — dar NU raspuns_clarificare (lic. 3: 117 formulare /
+        // planșe în Clarificări) și NU planșa (un breviar dintr-o arhivă „Planșe” n-ar mai fi citit)
         tip: tipInArhiva(f.rel, d.tip),
         aparut_ulterior: d.aparut_ulterior ?? null,
       })
       if (typeof r === 'string') erori.push(`${f.rel}: ${r}`)
-      else { extrase++; urcate.add(cheieNume(numeFinal)) }
+      else { extrase++; urcate.add(numeFinal) }
       await Deno.remove(f.cale)
     }
     // Copilot P0 pe #608: orice fișier neurcat ține arhiva în „eroare” (vizibil, cu lista) — cele reușite rămân;

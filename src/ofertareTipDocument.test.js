@@ -108,7 +108,10 @@ describe('regulile, pe cazurile de margine', () => {
     expect(ghicesteTip('F3 Lista.pdf')).toBe('lista_cantitati')
     expect(ghicesteTip('F4_ceva.pdf')).toBe('formular')
     expect(ghicesteTip('C12_ceva.pdf')).toBe('formular')
-    expect(ghicesteTip('C5_ceva.pdf')).toBe('formular')   // C2–C5 sunt liste doar când numele o spune (centralizator / lista_cantitati)
+    expect(ghicesteTip('C5_ceva.pdf')).toBe('lista_cantitati')   // eDevize: C2–C5 sunt liste / centralizatoare
+    expect(ghicesteTip('C5 FARA VALORI.pdf')).toBe('lista_cantitati')
+    expect(ghicesteTip('C4.pdf')).toBe('lista_cantitati')
+    expect(ghicesteTip('C6 FARA VALORI EXTINDERE.pdf')).toBe('formular')
     expect(ghicesteTip('do_ceva.pdf')).toBe('formular')
     expect(ghicesteTip('document.pdf')).toBe('alta')      // „do” doar ca prefix urmat de separator
   })
@@ -123,13 +126,91 @@ describe('regulile, pe cazurile de margine', () => {
   })
 })
 
+describe('review adversarial 07.10 (dry-run pe 1333 documente) — cazurile reparate', () => {
+  it('„_” e separator: \\bcs\\b / \\bnota\\b / \\batr\\b văd numele cu underscore', () => {
+    for (const n of ['CAIET SARCINI LOT 1/RGZ 2025_18_CS_Vol_II.pdf', 'RGZ 2025_18_CS_Vol_I_Constructii.pdf', 'RGZ 2025_18_CS_Vol_I_Electroenergetice.pdf'])
+      expect(ghicesteTip(n), n).toBe('cs_volum')
+    expect(ghicesteTip('12_Nota_justificativa_subtraversare.pdf')).toBe('alta')
+    expect(ghicesteTip('05_Nota_tehnica_montaj_conducte.pdf')).toBe('alta')
+    expect(ghicesteTip('3_ATR_Distrigaz.pdf')).toBe('alta')
+    expect(ghicesteTip('1_Plan_de_situatie.pdf')).toBe('plansa')
+  })
+  it('avize / acorduri / CU / studii / PV se decid ÎNAINTEA planșelor (altfel nu se mai citesc)', () => {
+    for (const n of ['07. Aviz CNAIR subtraversare DN29D.pdf', '5. Aviz Apele Romane subtraversare parau.pdf', '6. Acord ABA Arges-Vedea subtraversare canal.pdf',
+      '3. Aviz Distrigaz - schema de racordare.pdf', '4. Certificat de urbanism - plan de situatie.pdf', 'Certificat de urbanism si plan de situatie.pdf',
+      'Studiu topografic.pdf', 'PV receptie OCPI - documentatie topografica.pdf', 'Raport topo.pdf'])
+      expect(ghicesteTip(n), n).not.toBe('plansa')
+    expect(ghicesteTip('12. Detaliu racord.pdf')).toBe('plansa')   // „racord” nu e „acord”
+  })
+  it('garda de text: niciun text numerotat cu vocabular de desen nu devine planșă', () => {
+    for (const n of ['5. PCCVI montaj retea gaze.pdf', '5. Plan de control al calitatii - montaj conducte.pdf', '2. Tema de proiectare subtraversare DJ.pdf',
+      '4. Solutie tehnica subtraversare.pdf', '3. Conditii tehnice de montaj.pdf', '9. Masuri SSM la montajul conductelor.pdf', '4. Fisa tehnica robinet montaj ingropat.pdf',
+      '6. Expertiza tehnica platforma SRM.pdf', '12. Fise tehnice montaj robinet.pdf', '4. Lista utilaje montaj.pdf', '2. Descriere solutie subtraversare DN1.pdf',
+      '6. Conditii de montaj si executie subtraversare.pdf', '9. Plan de control calitate montaj.pdf', '5_Plan_ul de securitate montaj.pdf', '10. Masuri SSM la montaj.pdf',
+      '11. Cerinte tehnice montaj.pdf', '8. Tabel coordonate profil longitudinal.pdf', '2. Tema de proiectare profil.pdf', '1. Borderou piese desenate.pdf',
+      'Cuprins piese desenate.docx', 'Lista planse.pdf'])
+      expect(ghicesteTip(n), n).not.toBe('plansa')
+  })
+  it('răspunsurile la clarificări câștigă în fața planșei / listei / contractului (se citesc și apar în Termene)', () => {
+    for (const n of ['Erata planse.pdf', 'Clarificare nr 2 - planse revizuite.pdf', 'Raspuns clarificare privind plansele de subtraversare.pdf',
+      'Raspuns consolidat clarificari - desene.pdf', 'Clarificare liste de cantitati.pdf', 'Centralizator clarificari.pdf', 'Centralizator intrebari si raspunsuri.pdf',
+      'Raspuns clarificari studiu topografic.pdf'])
+      expect(ghicesteTip(n), n).toBe('raspuns_clarificare')
+  })
+  it('„Solicitare de clarificări” e întrebarea ofertantului, nu răspuns (Termene: altfel act fals + alarma AC stinsă)', () => {
+    for (const n of ['02_clarificari/clarificari/LOT2/Solicitare de clarificari 3_LOT2.docx', 'Solicitare de clarificari 3_LOT2.docx.p7s',
+      'Solicitare clarificari.pdf', 'Cerere de clarificare.pdf', 'Intrebari clarificari.pdf'])
+      expect(ghicesteTip(n), n).toBe('alta')
+    expect(ghicesteTip('Raspuns la solicitarea de clarificari nr 3.pdf')).toBe('raspuns_clarificare')
+  })
+  it('caietul de sarcini câștigă în fața „condițiilor generale”; modelul de contract rămâne', () => {
+    expect(ghicesteTip('Caiet de sarcini - Conditii generale.pdf')).toBe('cs_volum')
+    expect(ghicesteTip('CS 01 - Conditii generale de executie.pdf')).toBe('cs_volum')
+    expect(ghicesteTip('Caiet de sarcini conditii specifice montaj conducte PE.pdf')).toBe('cs_volum')
+    expect(ghicesteTip('5_3_Conditii_generale_HG1.pdf')).toBe('model_contract')
+  })
+  it('volumul de liste dintr-un caiet e listă; partea scrisă a PT e volum (dry-run lic. 1, 3, 9)', () => {
+    expect(ghicesteTip('CAIET SARCINI LOT 1/RGZ 2025_18_CS_Vol_III_liste cu cantitati de lucrari.pdf')).toBe('lista_cantitati')
+    expect(ghicesteTip('3.1 - PT - Partea scrisa 1.pdf')).toBe('cs_volum')
+    expect(ghicesteTip('A. Sf parte scrisa - extindere gaze -fara valori POTLOGI .pdf')).toBe('cs_volum')
+    expect(ghicesteTip('MEMORIU.pdf')).toBe('cs_volum')
+  })
+  it('volumul de desene e planșă, volumul de memoriu e caiet', () => {
+    for (const n of ['VOLUM DESENE.pdf', 'Volumul II Planse.pdf', 'Volumul 3 - Planse.zip', 'Volum III - Plansa.pdf']) expect(ghicesteTip(n), n).toBe('plansa')
+    expect(ghicesteTip('Volumul 2 - Memoriu tehnic.pdf')).toBe('cs_volum')
+    expect(ghicesteTip('Volumul 1.pdf')).toBe('cs_volum')
+  })
+  it('planșe prinse în plus (cost mic dacă greșește): dwg în nume, „desen” la singular', () => {
+    expect(ghicesteTip('CLJ-00-PL-DWG-001-Plan de situatie existent FILA 1.pdf')).toBe('plansa')
+    expect(ghicesteTip('B.1 SF DESEN-POTLOGI.pdf')).toBe('plansa')
+    expect(ghicesteTip('Parte desenata 1 din 4.pdf')).toBe('plansa')
+  })
+  it('folderul e indiciu doar când numele tace — fără planșă, răspuns doar din folder „răspuns”', () => {
+    expect(ghicesteTip('3.Raspuns consolidat_06.08.2026/Adresa 1234.pdf')).toBe('raspuns_clarificare')
+    expect(ghicesteTip('LISTE CANTITATI/Obiect 1.pdf')).toBe('lista_cantitati')
+    expect(ghicesteTip('02_clarificari/Adresa.pdf')).toBe('alta')     // folderul nostru de întrebări nu face răspuns
+    expect(ghicesteTip('Planse/Breviar.pdf')).toBe('alta')            // un text din „Planșe” rămâne de citit
+    expect(ghicesteTip('LISTE CANTITATI FARA VALOR/C6 FARA VALORI.PDF')).toBe('formular')   // numele câștigă (calibrarea lic. 3)
+    expect(ghicesteTip('Clarificari (#9)/sub/x.pdf')).toBe('alta')    // spațiul de nume al arhivei se sare
+  })
+})
+
 describe('moștenirea din arhivă', () => {
   it('regula proprie câștigă', () => {
     expect(tipInArhiva('X (#1)/F3_lista.pdf', 'cs_volum')).toBe('lista_cantitati')
   })
-  it('fără regulă proprie → tipul arhivei', () => {
+  it('fără regulă proprie → folderul, apoi tipul arhivei', () => {
     expect(tipInArhiva('X (#1)/ceva.pdf', 'cs_volum')).toBe('cs_volum')
-    expect(tipInArhiva('X (#1)/ceva.pdf', 'plansa')).toBe('plansa')
+    expect(tipInArhiva('X (#1)/Liste cantitati/ceva.pdf', 'cs_volum')).toBe('lista_cantitati')
+  })
+  it('NU moștenește planșa: un text dintr-o arhivă „Planșe” s-ar pierde la citire', () => {
+    for (const n of ['3. Breviar.pdf', 'Borderou.pdf', 'Nota de calcul.pdf', 'Specificatie tehnica conducta.pdf', 'ceva.pdf'])
+      expect(tipInArhiva(`Planse (#7)/${n}`, 'plansa'), n).toBe('alta')
+    expect(tipInArhiva('Planse (#7)/12. Detaliu montaj.pdf', 'plansa')).toBe('plansa')   // regula proprie rămâne
+  })
+  it('o arhivă imbricată fără nume grăitor nu moștenește (tip esențial pe o arhivă = poartă de completitudine blocată)', () => {
+    expect(tipInArhiva('Volum PT (#3)/x.zip', 'cs_volum')).toBe('alta')
+    expect(tipInArhiva('Volum PT (#3)/x.rar.p7s', 'lista_cantitati')).toBe('alta')
   })
   it('dar NU raspuns_clarificare și nici lipsa tipului', () => {
     expect(tipInArhiva('X (#1)/ceva.pdf', 'raspuns_clarificare')).toBe('alta')

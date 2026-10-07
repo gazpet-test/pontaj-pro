@@ -401,7 +401,8 @@ Deno.serve(async (req: Request) => {
   // Urcarea unui fisier (deja desfacut din semnatura) + randul in BD. Aceleasi reguli
   // in ambele cai: ghicesteTip, calea de storage, status_procesare, sursa:'seap', size_bytes.
   let urcatiOcteti = 0;
-  const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null) => {
+  // imbricata = fisierul vine din interiorul unui ZIP desfacut aici (nu e un document SEAP de prim nivel)
+  const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null, imbricata = false) => {
     // numele SAU semnatura reala - vezi anti-bug 6
     const estePdf = /\.pdf$/i.test(numeFinal) || areSemnaturaPdf(buf);
     const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
@@ -412,10 +413,11 @@ Deno.serve(async (req: Request) => {
     const docId = await scrie({
       licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
       tip: ghicesteTip(numeFinal), size_bytes: buf.length,
-      // 07.10.2026: o arhivă care nu e ZIP desfăcut aici (rar / 7z, sau arhivă din ZIP) intră „neprocesat”, fără notă,
-      // ca s-o despacheteze workerul NAS (extractor izolat, limite, adâncime maximă) — înainte rămânea „ignorat”
-      status_procesare: estePdf || esteArhiva(numeFinal) ? 'neprocesat' : 'ignorat',
-      eroare: estePdf || esteArhiva(numeFinal) ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
+      // 07.10.2026: DOAR o arhivă găsită ÎN ZIP-ul desfăcut aici intră „neprocesat”, fără notă, ca s-o despacheteze
+      // workerul NAS (extractor izolat, limite, adâncime maximă). O arhivă SEAP de prim nivel rămâne „ignorat”: pe ea o
+      // desface drumul SEAP al workerului (aduLicitatie) — altfel bucla de platformă ar despacheta-o a doua oară (dubluri).
+      status_procesare: estePdf || (imbricata && esteArhiva(numeFinal)) ? 'neprocesat' : 'ignorat',
+      eroare: estePdf || (imbricata && esteArhiva(numeFinal)) ? null : 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)',
       sursa: 'seap',
     }, numeFinal);
     await noteazaManifest(arhivaCheie, numeFinal, buf, docId, docId ? null : 'rand BD nescris');
@@ -496,7 +498,7 @@ Deno.serve(async (req: Request) => {
             },
             async (h, brut) => {
               const r = desfaSemnatura(brut, h.nume);
-              await urcaFisier(r.nume, r.buf, doc.nume);
+              await urcaFisier(r.nume, r.buf, doc.nume, true);
               return 'continua';
             },
             (n, m) => raport.erori.push(`${n}: ${m}`),

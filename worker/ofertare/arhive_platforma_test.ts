@@ -319,6 +319,25 @@ Deno.test('arhive: nivelul MAX_ADANCIME_ARHIVE → manual, cu motiv; nimic extra
   })
 })
 
+Deno.test('arhive: nume care diferă doar prin paranteze / majuscule / .p7s NU se confundă în aceeași arhivă', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    try {
+      const fisiere = new Map<string, Uint8Array>([['3/m.zip', await zipCu({ 'Anexa (1).pdf': '%PDF-1.4 a', 'Anexa 1.pdf': '%PDF-1.4 b', 'X.PDF': '%PDF-1.4 c', 'x.pdf': '%PDF-1.4 d' })]])
+      const tab: Record<string, Rand[]> = { ofertare_documente_atribuire: [{ id: 60, licitatie_id: 3, nume_original: 'Mama.zip', fisier_path: '3/m.zip', status_procesare: 'neprocesat', eroare: null }], ofertare_licitatii: [], notifications: [] }
+      const supa = fakeSupa(tab, fisiere)
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      const d = tab.ofertare_documente_atribuire
+      eq(d.filter(x => x.nume_original.startsWith('Mama (#60)/')).map(x => x.nume_original).sort(),
+        ['Mama (#60)/Anexa (1).pdf', 'Mama (#60)/Anexa 1.pdf', 'Mama (#60)/X.PDF', 'Mama (#60)/x.pdf'], 'toate patru urcate')
+      ok(/^📦 Arhivă despachetată pe Terra: 4 fișiere noi/.test(d.find(x => x.id === 60)!.eroare) && !/existau/.test(d.find(x => x.id === 60)!.eroare), d.find(x => x.id === 60)!.eroare)
+      Object.assign(d.find(x => x.id === 60)!, { status_procesare: 'neprocesat', eroare: null })   // reluarea manuală: tot fără dubluri
+      await s.despacheteazaArhiveDinPlatforma(supa, () => {})
+      eq(d.length, 5, 'reluarea nu dublează')
+    } finally { await opreste() }
+  })
+})
+
 Deno.test('arhive: urcare parțială → eroare vizibilă; reluarea manuală reîncearcă doar lipsurile', async () => {
   await cuMediu(async (root, s) => {
     const opreste = pornesteExtractor(root)
