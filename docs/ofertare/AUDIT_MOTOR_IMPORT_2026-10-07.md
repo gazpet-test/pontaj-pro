@@ -18,7 +18,7 @@
 | 1 | P0 | Curățenia orfanilor din edge ștergea tot din `<id>/atribuire/` la un SELECT eșuat și obiectele altui drum aflate între upload și INSERT. | **Reparat în #646**: fail-closed, inventar paginat, Storage paginat, doar obiecte neatinse de peste 1 oră. |
 | 2 | P1 | Placeholder-ul de veghe era completat de două fișiere cu aceeași cheie de nume. | **Reparat în #646** (worker + edge). |
 | 3 | P1 | Garda „deja desfăcută pe drumul SEAP” lucra doar pe nume, deci închidea fals republicările. | **Reparat în #646**: compară sha-ul arhivei. |
-| 4 | P1 | Dedup pe nume ÎNAINTE de descărcare, pentru documente (edge per fișier, DownloadArchive, api, `lipsa` din worker). | **Deschis — decizie.** Ține de costul re-descărcărilor din SEAP (vezi „Documente .p7m” mai jos). |
+| 4 | P1 | Dedup pe nume ÎNAINTE de descărcare, pentru documente (edge per fișier, DownloadArchive, api, `lipsa` din worker). | **Deschis — decizie (A/B/C mai jos, „#4 — variante”).** Ține de costul re-descărcărilor din SEAP. |
 | 5 | P1 | Fișierele „importate deja” se săreau pe orice `document_id` din manifest. | **Reparat în #646**: sha dovedit + documentul există acum, cu fișier real. |
 | 6 | P1 | Coada workerului: 20 de cereri vechi blocau cererile noi; `terminat_la` acoperea o cerere venită în timpul procesării. | **Reparat în #646**. |
 | 7 | P1 | O excepție după revendicare lăsa arhiva „in_lucru” blocată. | **Reparat în #646**. |
@@ -36,6 +36,14 @@
 | 19 | P1 | Edge-ul de import accepta orice cont logat (apoi service_role). | **Reparat în #647**: poarta comună Ofertare (`fn_are_acces_ofertare`). |
 | 20 | P1 | `.p7s` nedesfăcut în edge/veghe/api: numele pierde `.p7s`, dar conținutul rămâne CMS. | **Reparat în PR-ul var. B**: desfacere eșuată = numele rămâne, documentul intră „ignorat” cu nota „Semnătura electronică nu s-a putut desface…”; arhiva intră „neprocesat” și o încearcă workerul. |
 | 21 | P1 (ipoteză) | Inventare BD fără paginare (plafonul PostgREST). | **Reparat (PR-ul ZIP)**: `_shared/paginat.mjs` (copia `api/_paginat.js`) pe inventarele worker / edge / api / veghe; o eroare de citire oprește importul (fail-closed), nu mai devine „niciun document”. |
+
+## #4 — variante (de decis, Răzvan)
+
+Fapt nou (sondă SEAP 07.10 noaptea): `GetDfNoticeSectionFiles` dă pentru fiecare fișier și `noticeDocumentCode` (ex. `SCN1179941/00002`), nu doar numele — exact cheia pe care veghea o folosește deja pe canalul de clarificări (`seap_cod`, anti-bug Răcari 16.09). Azi drumurile per fișier (edge, worker `lipsa`, api) sar un fișier dacă NUMELE e deja în platformă, deci o republicare sub același nume, cu conținut nou, nu se mai aduce.
+
+- **A — status quo.** Dedup pe nume; republicările le prinde doar veghea pe GetAll (cod), iar cele din lista principală nu. Cost zero, risc: versiune nouă ratată tăcut.
+- **B (recomandat) — codul SEAP ca identitate.** Importul per fișier salvează `seap_cod` și pe documentele din lista principală; dedup-ul se face pe cod când există (același cod → sărit fără descărcare; același nume, cod nou → adus ca versiune nouă, tipul moștenit ca în veghe), pe nume doar pentru rândurile vechi fără cod. Cost mic (fără descărcări în plus), fără schemă nouă (`seap_cod` + indexul unic există).
+- **C — descarcă tot și compară sha.** Sigur, dar re-descarcă la fiecare rulare toată documentația (lic. 92: sute de fișiere), cost SEAP / egress mare.
 
 ## Documente `.pdf/.docx.p7m` (cele 9 de la lic. 92) — DECIS: B (Răzvan, 07.10.2026 seara)
 
