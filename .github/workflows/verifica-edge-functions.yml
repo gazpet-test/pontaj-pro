@@ -30,6 +30,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
 
       # Fără token nu se poate întreba API-ul Supabase. Nu picăm verificarea din lipsa
       # secretului — spunem clar ce lipsește și de unde se pune.
@@ -44,6 +45,11 @@ jobs:
           else
             echo "are_token=da" >> "$GITHUB_OUTPUT"
           fi
+
+      # esbuild (vine prin vite) construiește graful de module al fiecărei funcții — scripts/edgeDependente.mjs
+      - name: npm ci
+        if: steps.secret.outputs.are_token == 'da'
+        run: npm ci
 
       - name: Ce nu s-a publicat
         if: steps.secret.outputs.are_token == 'da'
@@ -62,9 +68,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
       - name: poarta.ts identică în ambele funcții
         run: node scripts/verifica-poarta-identica.mjs
-      # Dependențele _shared ale funcțiilor (07.10.2026): logica pe care se sprijină verificarea „repo vs producție”.
+      # Graful de module al funcțiilor (07.10.2026): logica pe care se sprijină verificarea „repo vs producție”.
+      # esbuild vine prin vite, deci npm ci; testul pe repo-ul real cere graf demonstrabil pentru TOATE funcțiile.
+      - run: npm ci
       - name: verificatorul vede _shared (test)
         run: node --test scripts/test-edge-dependente.mjs
       - uses: denoland/setup-deno@v2

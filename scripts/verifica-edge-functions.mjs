@@ -64,10 +64,11 @@ if (!TOKEN) {
 
 const data = t => new Date(t).toISOString().slice(0, 16).replace('T', ' ')
 
-// Data ultimei modificări care privește funcția = cea mai nouă dintre folderul ei și fișierele _shared pe care le importă
-// (direct sau tranzitiv) — vezi scripts/edgeDependente.mjs. Înainte de 07.10.2026 se citea doar folderul: o schimbare
-// făcută numai în _shared (ex. _shared/tipDocument.mjs pentru ofertare-seap-import) ajungea pe Vercel și pe worker,
-// iar funcția edge rămânea pe codul vechi fără niciun semnal.
+// Data ultimei modificări care privește funcția = cea mai nouă dintre folderul ei (fără teste) și fișierele din afara lui
+// care intră efectiv în bundle (_shared sau alt folder), după graful esbuild — vezi scripts/edgeDependente.mjs. Înainte de
+// 07.10.2026 se citea doar folderul: o schimbare făcută numai în _shared (ex. _shared/tipDocument.mjs pentru
+// ofertare-seap-import) ajungea pe Vercel și pe worker, iar funcția edge rămânea pe codul vechi fără niciun semnal.
+// O funcție al cărei graf nu se poate demonstra (alias fără hartă, import() calculat…) NU e „la zi”: pică verificarea.
 
 const r = await fetch(`https://api.supabase.com/v1/projects/${PROJECT_REF}/functions`, {
   headers: { Authorization: `Bearer ${TOKEN}` },
@@ -78,7 +79,8 @@ if (!r.ok) {
 }
 const publicate = new Map((await r.json()).map(f => [f.slug, f]))
 
-const nepublicate = [], laZi = [], niciodataPublicate = [], faraIstoric = []
+const nepublicate = [], laZi = [], niciodataPublicate = [], faraIstoric = [], nedemonstrabile = []
+const cache = new Map() // datele git ale fișierelor _shared se repetă de la o funcție la alta
 const inRepo = new Set()
 
 for (const d of (await readdir(DIR, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -87,8 +89,9 @@ for (const d of (await readdir(DIR, { withFileTypes: true })).sort((a, b) => a.n
   inRepo.add(slug)
   const meta = publicate.get(slug)
   if (!meta) { niciodataPublicate.push(slug); continue }
-  const um = await ultimaModificare(DIR, slug)
+  const um = await ultimaModificare(DIR, slug, { cache })
   if (!um) { faraIstoric.push(slug); continue }
+  if (um.probleme.length) { nedemonstrabile.push({ slug, probleme: um.probleme }); continue }
   const rec = { slug, v: meta.version, commit: um.commit, din: um.din, deploy: Number(meta.updated_at) }
   rec.intarziereMin = Math.round((rec.commit - rec.deploy) / 60000)
   ;(rec.intarziereMin > TOLERANTA_MIN ? nepublicate : laZi).push(rec)
@@ -104,12 +107,17 @@ console.log(`✅ publicate după ultima modificare: ${laZi.length}   (toleranț�
 if (nepublicate.length) {
   nepublicate.sort((a, b) => a.commit - b.commit)
   console.log(`\n❌ MODIFICATE ÎN REPO DUPĂ ULTIMUL DEPLOY (${nepublicate.length}) — producția rulează cod vechi:`)
-  console.log('   („← prin _shared/…” = s-a schimbat un fișier comun importat de funcție, nu folderul ei)')
+  console.log('   („← prin …” = s-a schimbat un fișier din afara folderului funcției care intră în bundle-ul ei: _shared sau alt folder)')
   nepublicate.forEach(x => console.log(linie(x)))
   console.log(`\n   Deploy:  supabase functions deploy <slug> --project-ref ${PROJECT_REF}`)
   console.log('   Dacă modificarea era doar un comentariu, un deploy o liniștește oricum.')
   console.log('   Verifică ÎNTÂI ce cere funcția: dacă versiunea din repo citește un secret nou')
   console.log('   din Edge Secrets, deployul fără secretul pus rupe apelantul (vezi ofertare-rfq-inbox).')
+}
+if (nedemonstrabile.length) {
+  console.log(`\n❓ DEPENDENȚE NEDEMONSTRABILE (${nedemonstrabile.length}) — nu se poate spune dacă producția e la zi:`)
+  nedemonstrabile.forEach(x => console.log(`  ${x.slug.padEnd(32)} ${x.probleme.slice(0, 3).join(' · ')}${x.probleme.length > 3 ? ` · (+${x.probleme.length - 3})` : ''}`))
+  console.log('   Importul se scrie cu cale relativă / literală, sau aliasul intră în deno.json / import_map.json — vezi scripts/edgeDependente.mjs.')
 }
 if (niciodataPublicate.length) {
   console.log(`\n⚠️  în repo dar nepublicate niciodată (${niciodataPublicate.length}): ${niciodataPublicate.join(', ')}`)
@@ -123,4 +131,4 @@ if (faraIstoric.length) {
 const doarLive = [...publicate.keys()].filter(s => !inRepo.has(s))
 if (doarLive.length) console.log(`\nℹ️  publicate dar lipsă din repo: ${doarLive.length} (experimente și unelte tmp vechi)`)
 
-process.exit(nepublicate.length ? 1 : 0)
+process.exit(nepublicate.length || nedemonstrabile.length ? 1 : 0)
