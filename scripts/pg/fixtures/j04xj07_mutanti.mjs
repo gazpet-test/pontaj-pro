@@ -80,6 +80,19 @@ export const MUTANTI = {
     'AND v\\.obj_id = o\\.id AND v\\.obj_updated_at = o\\.updated_at\\s*AND v\\.obj_etag IS NOT DISTINCT FROM \\(o\\.metadata->>\'eTag\'\\)\\s*AND v\\.obj_size > 0 AND v\\.obj_size = v_size', '', 's'),
   // J04 fără blocarea obiectelor până la COMMIT (FOR SHARE).
   j04_fara_lock: rescrie('public.fn_pt_pachet_depus_verifica()', 'FOR SHARE;', ';'),
+  // ── C1–C3 (06.10.2026, JILAVA_DECIZII A.2): remedierile fostelor constatări, fiecare stricată separat ──────────────────────
+  // C1: INSERT-ul în manifest nu mai blochează pachetul (FOR SHARE) → cursa cu tranziția revine (JX-C1).
+  XC1_manifest_fara_lock: rescrie('public.fn_pt_fisier_insert_stare()', 'FOR SHARE;', ';'),
+  // C1: starea comisă nu mai e verificată la INSERT (orice rol adaugă în manifestul aprobat / depus) (JX-C1, JX-C3, JX-07j).
+  XC1_manifest_orice_stare: rescrie('public.fn_pt_fisier_insert_stare()', '\nBEGIN\n', '\nBEGIN\n  RETURN NEW;\n'),
+  // C2: J04 acceptă din nou ORICE PASS, nu ultima verificare (JX-C2).
+  XC2_orice_pass: rescrie('public.fn_pt_pachet_depus_verifica()', 'ORDER BY u\\.id DESC LIMIT 1', ''),
+  // C3: manifestul se poate rescrie / șterge pe pachetul aprobat (JX-C3, JX-C3b).
+  XC3_manifest_rescriibil: rescrie('public.fn_pt_fisier_imuabil()', '\nBEGIN\n', "\nBEGIN\n  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;\n"),
+  // C3: pachetul aprobat se poate șterge (manifestul pleacă în cascadă) — Copilot conv. 3, NO-GO r1 (JX-C3b).
+  XC3_pachet_aprobat_stergibil: rescrie('public.fn_pt_pachet_delete_garda()', '\nBEGIN\n', '\nBEGIN\n  RETURN OLD;\n'),
+  // C3: cheia de serviciu tratată ca identitate de administrare (JX-C3).
+  XC3_service_ca_administrare: rescrie('public.fn_pt_manifest_administrare()', '\nBEGIN\n', '\nBEGIN\n  RETURN true;\n'),
   // J04 cere dovadă doar pentru fișierele depus_final (propunerea, borderoul și dovada SEAP scapă).
   j04_doar_depus_final: rescrie('public.fn_pt_fisier_cere_verificare(text)',
     "p_rol IN \\('propunere_docx','borderou_docx','depus_final','dovada_seap'\\)", "p_rol IN ('depus_final')"),
@@ -223,6 +236,10 @@ const evaluatorOk = cod => [{ fisier: EVAL, din: "stare: verdict.stare === 'bloc
   in_: `stare: (control_code === '${cod}' || verdict.stare !== 'block') ? 'ok' : 'block'` }]
 
 export const MUTANTI_EDGE = {
+  // XP (JILAVA_DECIZII L3): poarta de rol comună lasă pe oricine (fără JWT / fără modul) — JX-07k trebuie să-l prindă.
+  XP_poarta_oricine: [{ fisier: '_shared/poartaOfertare.ts',
+    din: 'export async function poartaOfertare(req: Request, deps: DepsPoartaOfertare = {}): Promise<Response | null> {\n',
+    in_: 'export async function poartaOfertare(req: Request, deps: DepsPoartaOfertare = {}): Promise<Response | null> {\n  if (Date.now() > 0) return null\n' }],
   // M16f: evaluatorul text transformă o excepție (sursă cu contract rupt) în ok.
   M16f_evaluator_eroare_ok: [{ fisier: EVAL, din: "return { control_code, stare: 'undetermined',", in_: "return { control_code, stare: 'ok'," }],
   // M17b: handler-ul J07 nu mai refuză (409) un parser diferit de server și etichetează rezultatele cu versiunea serverului.

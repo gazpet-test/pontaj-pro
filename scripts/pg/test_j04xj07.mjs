@@ -198,7 +198,8 @@ function clientRest(s, rol, dupaRpc = async () => undefined) {
 const depPoarta = (s, uid) => ({
   env: n => ({ SUPABASE_URL: 'http://jx.local', SUPABASE_ANON_KEY: 'jx-anon' })[n],
   createClient: () => ({
-    auth: { getUser: async () => ({ data: { user: { id: uid } }, error: null }) },
+    // ca=anon: JWT fără utilizator (cheia anonimă / token invalid) → poarta trebuie să dea 401 (JX-07k)
+    auth: { getUser: async () => (uid === 'anon' ? { data: { user: null }, error: { message: 'invalid JWT' } } : { data: { user: { id: uid } }, error: null }) },
     rpc: nume => clientRest(s, ca('authenticated', uid)).rpc(nume),
   }),
 })
@@ -376,7 +377,9 @@ if (MUTANT) {
   console.log(ucigasi.length ? `MUTANT ${MUTANT}: UCIS de ${ucigasi.join(', ')}` : `MUTANT ${MUTANT}: SUPRAVIEȚUIEȘTE — suita nu îl prinde`)
   process.exit(ucigasi.length ? 0 : 1)
 }
-const cerinte = rezultate.filter(r => !r.id.startsWith('JX-C'))
+// JX-C1…C3 au devenit cerințe după remediere (06.10.2026, JILAVA_DECIZII A.2); rămâne fixată doar constatarea acceptată C4.
+const CONSTATARI_FIXATE = new Set(['JX-C4'])
+const cerinte = rezultate.filter(r => !CONSTATARI_FIXATE.has(r.id))
 console.log(`\n${esecuri ? 'FAIL' : 'PASS'} J04×J07 extins: ${rezultate.filter(r => r.ok).length}/${rezultate.length} teste` +
   ` (${cerinte.filter(r => r.ok).length} cerințe + ${rezultate.length - cerinte.length} constatări fixate), ${constatari.length} constatări raportate.` +
   ` Funcții urmărite: ${FUNCTII.length}; parser edge: ${PARSER_VERSION}.`)

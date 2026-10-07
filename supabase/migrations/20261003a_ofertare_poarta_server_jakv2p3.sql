@@ -1,7 +1,57 @@
--- J07 / P3. PROPUSĂ, fără apply înainte de Jilava 02.10.2026.
--- Controalele J07 nu au derogare. R5/R12/J02/J05 rămân în funcțiile existente.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+-- 20261003a — J07 / P3: poarta pe server a propunerii tehnice (12 controale + agregator), impusă la aprobarea / depunerea
+-- pachetului și la licitația „depusă”. Controalele J07 nu au derogare. R5/R12/J02/J02b/J05 rămân în funcțiile existente:
+-- J07 se INSEREAZĂ chirurgical (bloc „-- J07 BEGIN/END” înaintea singurului „RETURN NEW;”), corpurile istorice nu se rescriu.
 -- Nicio modificare de date la instalare. Reaplicabilă. Rollback-ul păstrează istoricul.
-BEGIN;
+-- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid), fără BEGIN/COMMIT, DUPĂ J04 (20260930a).
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+DO $livrare_start$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003a_ofertare_poarta_server_jakv2p3:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003a: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  END IF;
+END
+$livrare_start$;
+
+-- Precondiții pinuite pe starea LIVE citită read-only pe 06.10.2026 (după J02b 20261004a și J05 20261001a): funcțiile în care
+-- J07 se inserează trebuie să fie EXACT cele de azi (md5(prosrc)) sau deja patch-uite de J07 (reaplicare); J04 întâi.
+DO $pre$
+DECLARE r record;
+BEGIN
+  IF current_user IS DISTINCT FROM 'postgres' THEN
+    RAISE EXCEPTION 'Precondiție 0a: rulează ca postgres (current_user = %)', current_user;
+  END IF;
+  -- ordinea de livrare (decizia A, 29.09): J04 ACTIV înaintea lui J07 (Copilot conv. 3, NO-GO r1: tabelul de dovezi singur nu
+  -- ajunge — revenirea J04 îl păstrează). Cerem semnătura pe care o verifică și postcondiția J04: cele 5 triggere active și
+  -- fn_pt_pachet_depus_verifica cu dovezile J04 + C2, SECDEF, search_path fix.
+  IF to_regclass('public.ofertare_pt_pachet_verificari') IS NULL
+     OR (SELECT count(*) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgenabled = 'O' AND (t.tgrelid, t.tgname) IN (
+           ('public.ofertare_pt_pachet_fisiere'::regclass, 'trg_pt_fisier_insert_stare'),
+           ('public.ofertare_pt_pachet_fisiere'::regclass, 'trg_pt_fisier_imuabil'),
+           ('public.ofertare_pt_pachet_fisiere'::regclass, 'trg_pt_fisier_path_obligatoriu'),
+           ('public.ofertare_pt_pachet'::regclass, 'trg_pt_pachet_delete_garda'),
+           ('public.ofertare_pt_pachet_verificari'::regclass, 'trg_pt_verificari_imuabile'))) <> 5
+     OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = 'public.fn_pt_pachet_depus_verifica()'::regprocedure AND p.prosecdef
+                      AND array_to_string(p.proconfig, ',') = 'search_path=public, pg_temp'
+                      AND position('ofertare_pt_pachet_verificari' in p.prosrc) > 0
+                      AND position('ORDER BY u.id DESC LIMIT 1' in p.prosrc) > 0) THEN
+    RAISE EXCEPTION 'Precondiție 0b: J04 (20260930a, cu C1–C3) trebuie să fie ACTIV înaintea lui J07 (triggere + funcția de depunere J04)';
+  END IF;
+  FOR r IN SELECT p.proname, md5(p.prosrc) AS h, position('-- J07 BEGIN' in p.prosrc) > 0 AS patchuit, p.prosecdef,
+                  array_to_string(p.proconfig, ',') AS cfg, (SELECT string_agg(a::text, ' ' ORDER BY a::text) FROM unnest(p.proacl) a) AS acl
+             FROM pg_proc p WHERE p.oid IN ('public.fn_gate_depunere()'::regprocedure, 'public.fn_ofertare_pt_pachet_poarta_documentatie()'::regprocedure) LOOP
+    IF NOT (r.patchuit OR r.h = CASE r.proname WHEN 'fn_gate_depunere' THEN '04102c5e44af4f5fc2062c1a58737bdd'
+                                               ELSE '68620a64bc87b3d9cbb80df629df8e93' END)
+       OR r.prosecdef IS NOT TRUE OR r.cfg IS DISTINCT FROM 'search_path=public, pg_temp'
+       OR r.acl IS DISTINCT FROM 'postgres=X/postgres service_role=X/postgres' THEN
+      RAISE EXCEPTION 'Precondiție 0c: % diferă de starea live din 06.10 (md5 %, acl %) — recitește înainte de livrare', r.proname, r.h, r.acl;
+    END IF;
+  END LOOP;
+  IF to_regprocedure('public.ofertare_r5_blocaj_sursa(bigint)') IS NULL AND NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'ofertare_r5_blocaj_sursa' AND pronamespace = 'public'::regnamespace) THEN
+    RAISE EXCEPTION 'Precondiție 0d: R5 (ofertare_r5_blocaj_sursa) lipsește';
+  END IF;
+END
+$pre$;
 
 CREATE TABLE IF NOT EXISTS public.ofertare_poarta_rezultate_text (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -281,4 +331,40 @@ DO $acl$ DECLARE f record; BEGIN
   END LOOP;
 END $acl$;
 GRANT EXECUTE ON FUNCTION public.ofertare_poarta_server(bigint) TO authenticated;
-COMMIT;
+
+-- Postcondiții: inserția J07 exact o dată în fiecare funcție, R5 / J05 păstrate, ACL-urile neschimbate; RPC-ul agregat e singurul
+-- apelabil din UI; rezultatele text append-only.
+DO $post$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT p.proname, p.prosrc, p.prosecdef, array_to_string(p.proconfig, ',') AS cfg,
+                  (SELECT string_agg(a::text, ' ' ORDER BY a::text) FROM unnest(p.proacl) a) AS acl
+             FROM pg_proc p WHERE p.oid IN ('public.fn_gate_depunere()'::regprocedure, 'public.fn_ofertare_pt_pachet_poarta_documentatie()'::regprocedure) LOOP
+    IF (length(r.prosrc) - length(replace(r.prosrc, '-- J07 BEGIN', ''))) / length('-- J07 BEGIN') <> 1
+       OR position('ofertare_r5_blocaj_sursa' in r.prosrc) = 0
+       OR (r.proname = 'fn_gate_depunere' AND position('ofertare_derogari_audit' in r.prosrc) = 0)
+       OR r.prosecdef IS NOT TRUE OR r.cfg IS DISTINCT FROM 'search_path=public, pg_temp'
+       OR r.acl IS DISTINCT FROM 'postgres=X/postgres service_role=X/postgres' THEN
+      RAISE EXCEPTION 'Postcondiție 1: % — J07 nu e inserat exact o dată sau R5 / J05 / SECDEF / search_path / ACL s-au schimbat', r.proname;
+    END IF;
+  END LOOP;
+  IF NOT has_function_privilege('authenticated', 'public.ofertare_poarta_server(bigint)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.ofertare_poarta_impune(bigint,bigint)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.ofertare_poarta_server(bigint)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'Postcondiție 2: doar ofertare_poarta_server e apelabil de authenticated (nu anon, nu impune)';
+  END IF;
+  IF (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.ofertare_poarta_rezultate_text'::regclass) IS NOT TRUE
+     OR has_table_privilege('authenticated', 'public.ofertare_poarta_rezultate_text', 'INSERT')
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_poarta_text_imuabil') THEN
+    RAISE EXCEPTION 'Postcondiție 3: ofertare_poarta_rezultate_text fără RLS / scriere pentru authenticated / fără append-only';
+  END IF;
+END
+$post$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261003a_ofertare_poarta_server_jakv2p3:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261003a: garda de livrare (final) — tranzacție/runner invalid';
+  END IF;
+END
+$livrare_final$;

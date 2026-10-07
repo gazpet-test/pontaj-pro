@@ -4,9 +4,14 @@ SELECT jx.start('JX-00', 'schema: J04→J07 aplicate și reaplicate fără difer
 :admin
 SELECT jx.ok(NOT EXISTS (SELECT 1 FROM jx.dupa_prima_aplicare a JOIN pg_proc p ON p.proname = a.proname
   AND p.pronamespace = 'public'::regnamespace WHERE pg_get_functiondef(p.oid) <> a.def), 'Reaplicarea J04→J07 este idempotentă');
-SELECT jx.egal((SELECT jsonb_agg(tgname::text ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'ofertare_pt_pachet'::regclass AND NOT tgisinternal AND tgenabled = 'O'),
+-- Triggerele de UPDATE (tranziția) — ordinea de execuție matrice → documentație/J07 → depus/J04; separat, garda de DELETE (C3, 06.10).
+SELECT jx.egal((SELECT jsonb_agg(tgname::text ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'ofertare_pt_pachet'::regclass AND NOT tgisinternal AND tgenabled = 'O'
+    AND (tgtype & 16) <> 0),
   '["trg_ofertare_pt_pachet_matrice","trg_ofertare_pt_pachet_poarta_documentatie","trg_pt_pachet_depus_verifica"]',
-  'Pachet: exact 3 triggere active, în ordinea de execuție matrice → documentație/J07 → depus/J04');
+  'Pachet: exact 3 triggere de UPDATE active, în ordinea de execuție matrice → documentație/J07 → depus/J04');
+SELECT jx.egal((SELECT jsonb_agg(tgname::text ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'ofertare_pt_pachet'::regclass AND NOT tgisinternal AND tgenabled = 'O'
+    AND (tgtype & 8) <> 0),
+  '["trg_pt_pachet_delete_garda"]', 'Pachet: garda de DELETE (C3) activă — doar pachetul propus se retrage');
 SELECT jx.ok(position('-- J07 BEGIN' IN pg_get_functiondef('fn_ofertare_pt_pachet_poarta_documentatie()'::regprocedure)) > 0
   AND position('ofertare_r5_blocaj_sursa' IN pg_get_functiondef('fn_ofertare_pt_pachet_poarta_documentatie()'::regprocedure)) > 0, 'J07 + R5 în triggerul de documentație');
 SELECT jx.ok(position('ofertare_pt_pachet_verificari' IN pg_get_functiondef('fn_pt_pachet_depus_verifica()'::regprocedure)) > 0

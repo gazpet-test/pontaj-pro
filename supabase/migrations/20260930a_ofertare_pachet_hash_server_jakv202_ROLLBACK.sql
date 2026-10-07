@@ -18,6 +18,9 @@ END $function$;
 REVOKE EXECUTE ON FUNCTION public.fn_pt_pachet_depus_verifica() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS trg_pt_fisier_path_obligatoriu ON public.ofertare_pt_pachet_fisiere;
+DROP TRIGGER IF EXISTS trg_pt_fisier_insert_stare ON public.ofertare_pt_pachet_fisiere;   -- C1
+DROP TRIGGER IF EXISTS trg_pt_fisier_imuabil ON public.ofertare_pt_pachet_fisiere;        -- C3
+DROP TRIGGER IF EXISTS trg_pt_pachet_delete_garda ON public.ofertare_pt_pachet;           -- C3 (pachet aprobat / depus)
 REVOKE INSERT ON public.ofertare_pt_pachet_verificari FROM service_role;
 REVOKE USAGE ON SEQUENCE public.ofertare_pt_pachet_verificari_id_seq FROM service_role;
 REVOKE EXECUTE ON FUNCTION public.ofertare_pt_fisier_snapshot(bigint) FROM service_role;
