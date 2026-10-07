@@ -7,12 +7,12 @@ name: Edge functions — repo vs producție
 on:
   push:
     branches: [main]
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   pull_request:
     # Și căile verificatorului, nu doar ale funcțiilor: altfel o modificare A VERIFICATORULUI
     # nu e rulată pe PR-ul care o aduce, ci abia după merge, direct pe main. Adică exact
     # unealta care există ca să prindă derive ajungea în producție neverificată (22.09.2026).
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   schedule:
     - cron: '0 5 * * 1'   # luni 08:00 RO — intră în Pulsul ERP
   workflow_dispatch:
@@ -64,6 +64,9 @@ jobs:
           node-version: '20'
       - name: poarta.ts identică în ambele funcții
         run: node scripts/verifica-poarta-identica.mjs
+      # Dependențele _shared ale funcțiilor (07.10.2026): logica pe care se sprijină verificarea „repo vs producție”.
+      - name: verificatorul vede _shared (test)
+        run: node --test scripts/test-edge-dependente.mjs
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
