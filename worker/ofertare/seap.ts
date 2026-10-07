@@ -11,7 +11,7 @@
 //  - nu executăm nimic din arhivă și nu citim nimic cu AI aici (citirea rămâne pe coada separată „Procesează").
 import type { Supa } from './ingest.ts'
 import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md): descărcările din Storage intră în jurnal
-import { ghicesteTip, tipExplicit, tipInArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
+import { ghicesteTip, tipInArhiva, indiciuArhiva, esteArhiva as esteArhivaDoc, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../../supabase/functions/_shared/tipDocument.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -516,20 +516,27 @@ export const esteVolumRar = (nume: string) => !!volumRar(nume.replace(/\.p7s$/i,
 export const spatiuArhiva = (d: { id: number; nume_original: string }) =>
   `${(d.nume_original.replace(/\.p7s$/i, '').replace(/\.(zip|rar|7z)$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva')} (#${d.id})`
 
-// 07.10.2026 (review #641 r2): edge / api urcă arhivele SEAP de prim nivel ÎNTREGI („neprocesat”), iar drumul SEAP al
-// workerului (aduLicitatie) poate să le fi desfăcut deja (evidență „ok” cu fișiere) — sau edge-ul a desfăcut un ZIP inline
-// (manifest cu fișiere pe cheia arhivei). Atunci bucla NU o mai desface: altfel aceleași fișiere apar a doua oară sub
-// „<arhivă> (#id)/…”. Doar pentru arhivele de prim nivel (cele extrase dintr-o arhivă n-au trecut pe drumul SEAP).
+// 07.10.2026 (review #641 r2 + Copilot conv. 3): edge / api urcă arhivele SEAP de prim nivel ÎNTREGI („neprocesat”), iar
+// drumul SEAP al workerului (aduLicitatie) poate să le fi desfăcut deja. Garda închide arhiva DOAR pe evidența COMPLETĂ a
+// acelui drum (stare „ok” = zero fișiere neurcate, cu fișiere extrase) — altfel aceleași fișiere ar apărea a doua oară sub
+// „<arhivă> (#id)/…”. O despachetare PARȚIALĂ (evidență „eroare”, sau ZIP desfăcut inline de edge cu copii eșuați) NU
+// închide arhiva: bucla o desface și sare doar fișierele urcate deja cu succes (fisiereDejaImportate), deci lipsurile se
+// recuperează. Doar pentru arhivele de prim nivel (cele extrase dintr-o arhivă n-au trecut pe drumul SEAP).
 export async function dejaDesfacutaPeSeap(supa: Supa, d: { licitatie_id: number; nume_original: string }): Promise<string | null> {
   if (adancimeArhiva(d.nume_original) > 0) return null
   const { data: ev } = await supa.from('ofertare_seap_fisiere').select('stare, fisiere_extrase')
     .eq('licitatie_id', d.licitatie_id).eq('cheie', cheieNume(d.nume_original)).maybeSingle()
-  if ((ev as any)?.stare === 'ok' && Number((ev as any).fisiere_extrase) > 0) return `${(ev as any).fisiere_extrase} fișiere, evidența drumului SEAP`
+  return (ev as any)?.stare === 'ok' && Number((ev as any).fisiere_extrase) > 0 ? `${(ev as any).fisiere_extrase} fișiere, evidența drumului SEAP` : null
+}
+/** Căile (din interiorul arhivei) urcate deja CU SUCCES de un import anterior al aceleiași arhive — manifestul edge (ZIP
+ *  inline) sau al drumului SEAP; rândurile cu document_id NULL (eșuate) nu contează, ca să fie reîncercate. */
+export async function fisiereDejaImportate(supa: Supa, d: { licitatie_id: number; nume_original: string }): Promise<Set<string>> {
+  if (adancimeArhiva(d.nume_original) > 0) return new Set()
   const cheieManifest = String(d.nume_original ?? '').replace(/\.p7s$/i, '').toLowerCase()
-  const { data: man } = await supa.from('ofertare_seap_manifest').select('cale, arhiva_cheie')
-    .eq('licitatie_id', d.licitatie_id).in('arhiva_cheie', [cheieManifest, cheieNume(d.nume_original)]).limit(50)
-  const copii = ((man || []) as { cale: string; arhiva_cheie: string }[]).filter(m => String(m.cale ?? '').replace(/\.p7s$/i, '').toLowerCase() !== m.arhiva_cheie)
-  return copii.length ? `${copii.length}${copii.length === 50 ? '+' : ''} fișiere în manifestul importului` : null
+  const { data: man } = await supa.from('ofertare_seap_manifest').select('cale, arhiva_cheie, document_id')
+    .eq('licitatie_id', d.licitatie_id).in('arhiva_cheie', [cheieManifest, cheieNume(d.nume_original)])
+  return new Set(((man || []) as { cale: string; document_id: number | null }[]).filter(m => m.document_id != null)
+    .map(m => String(m.cale ?? '').replace(/\.p7s$/i, '')))
 }
 
 let arhiveCuratate = false
@@ -624,12 +631,13 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     // „Anexa (1).pdf” și „Anexa 1.pdf” din aceeași arhivă se confundau și unul se pierdea tăcut, numărat „existau deja”.)
     const { data: existente } = await supa.from('ofertare_documente_atribuire').select('id, nume_original').eq('licitatie_id', licId)
     const urcate = new Set(((existente || []) as { nume_original: string }[]).map(e => e.nume_original || '').filter(n => n.startsWith(`${spatiu}/`)))
+    const dinImport = await fisiereDejaImportate(supa, d)   // urcate deja cu succes de importul care a desfăcut-o parțial
     let extrase = 0, deja = 0
     const erori: string[] = []
     for await (const f of fisiereDin(`${dir}/out`)) {
       const numeFinal = `${spatiu}/${f.rel}`
       if (JUNK_RE.test(f.rel)) { await Deno.remove(f.cale); continue }
-      if (urcate.has(numeFinal)) { deja++; await Deno.remove(f.cale); continue }
+      if (urcate.has(numeFinal) || dinImport.has(f.rel.replace(/\.p7s$/i, ''))) { deja++; await Deno.remove(f.cale); continue }
       stare(`arhivă din platformă: urc ${numeFinal}`)
       const fb = await Deno.readFile(f.cale)
       const r = await urca(supa, licId, numeFinal, fb, new Map(), {
@@ -637,7 +645,7 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
         // (05.10, 1305: 159 de fișiere respinse de ofertare_doc_seap_cod_unic). Legătura cu arhiva e în nume: „(#id)”.
         // regula proprie câștigă, apoi folderul; altfel tipul arhivei — dar NU raspuns_clarificare (lic. 3: 117 formulare /
         // planșe în Clarificări) și NU planșa (un breviar dintr-o arhivă „Planșe” n-ar mai fi citit)
-        tip: tipInArhiva(f.rel, tipExplicit(d.nume_original) ?? d.tip),   // indiciul mamei: numele arhivei, apoi rândul ei
+        tip: tipInArhiva(f.rel, indiciuArhiva(d.nume_original, d.tip)),   // indiciul mamei: numele arhivei, apoi rândul ei
         aparut_ulterior: d.aparut_ulterior ?? null,
       })
       if (typeof r === 'string') erori.push(`${f.rel}: ${r}`)

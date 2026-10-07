@@ -98,6 +98,10 @@ export function tipInArhiva(nume, tipArhiva) {
   return tipArhiva && tipArhiva !== 'raspuns_clarificare' && tipArhiva !== 'plansa' ? tipArhiva : 'alta'
 }
 
+/** Indiciul de tip al unei arhive pentru fișierele extrase din ea: întâi NUMELE arhivei („Caiet de sarcini.zip” → cs_volum),
+ *  apoi tipul rândului ei. Același în worker (bucla de platformă) și în edge (ZIP desfăcut inline) — Copilot conv. 3, #641. */
+export const indiciuArhiva = (numeArhiva, tipRand = null) => tipExplicit(numeArhiva) ?? tipRand ?? null
+
 /** Arhivă pe care o despachetează workerul (zip / rar / 7z, opțional semnată .p7s). */
 export const ARHIVA_RE = /\.(zip|rar|7z)(\.p7s)?$/i
 export const esteArhiva = (nume) => ARHIVA_RE.test(String(nume ?? ''))

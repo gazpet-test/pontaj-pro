@@ -3,7 +3,7 @@
 // ids 1460–1630), care moșteneau toate „raspuns_clarificare”. Plus: moștenirea din arhivă, adâncimea, paritatea cu api/.
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { tipExplicit, ghicesteTip, tipInArhiva, numeFisier, esteArhiva, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../supabase/functions/_shared/tipDocument.mjs'
+import { tipExplicit, ghicesteTip, tipInArhiva, indiciuArhiva, numeFisier, esteArhiva, adancimeArhiva, MAX_ADANCIME_ARHIVE } from '../supabase/functions/_shared/tipDocument.mjs'
 
 const T = ['Extindere_retea_distributie_gaze_naturale_UAT_Oltenițaptr_Distrigaz_Sud_Retele', 'Infiintare_sistem_distributie_gaze_naturale_UAT_Ulmeni',
   'Infiintare_sistem_distributie_gaze_naturale_UAT_Spanțov', 'Infiintare_sistem_distributie_gaze_naturale_UAT_Chiselet', 'Infiintare_sistem_distributie_gaze_naturale_UAT_Mînăstirea']
@@ -244,6 +244,28 @@ describe('review adversarial r2 (07.10) — cazurile reparate', () => {
   it('folderul „fișă de date + formulare” nu face fișă de date din orice', () => {
     expect(ghicesteTip('01_fisa_date_formulare/Cerinte SUSSMPM.pdf')).toBe('alta')
     expect(ghicesteTip('01_fisa_date_formulare/Instructiuni_ofertanti_FisaDate_DF1279352.pdf')).toBe('fisa_date')
+  })
+})
+
+describe('ZIP desfăcut inline în edge = aceeași clasificare ca în worker (Copilot conv. 3, NO-GO pe 004d9de, P1)', () => {
+  it('indiciul arhivei: numele, apoi tipul rândului', () => {
+    expect(indiciuArhiva('Caiet de sarcini.zip')).toBe('cs_volum')
+    expect(indiciuArhiva('Liste cantitati.zip.p7s')).toBe('lista_cantitati')
+    expect(indiciuArhiva('PT.zip', 'cs_volum')).toBe('cs_volum')
+    expect(indiciuArhiva('PT.zip')).toBeNull()
+  })
+  it('copiii cu nume generic primesc contextul arhivei', () => {
+    expect(tipInArhiva('Capitol 1.pdf', indiciuArhiva('Caiet de sarcini.zip'))).toBe('cs_volum')
+    expect(tipInArhiva('Obiect 1.pdf', indiciuArhiva('Liste cantitati.zip'))).toBe('lista_cantitati')
+    expect(tipInArhiva('05. Montaj conducte PE.pdf', indiciuArhiva('Caiet de sarcini.zip'))).toBe('cs_volum')
+    expect(tipInArhiva('Fisa de date.pdf', indiciuArhiva('Caiet de sarcini.zip'))).toBe('fisa_date')   // regula proprie câștigă
+  })
+  it('edge-ul și workerul folosesc AMBELE tipInArhiva + indiciuArhiva pentru copiii unei arhive', () => {
+    const edge = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    expect(edge).toMatch(/tip: dinZip \? tipInArhiva\(numeFinal, indiciuArhiva\(dinZip\)\) : ghicesteTip\(numeFinal\)/)
+    expect(edge).toMatch(/await urcaFisier\(r\.nume, r\.buf, doc\.nume, doc\.nume\)/)   // ZIP-ul desfăcut inline transmite numele arhivei
+    const worker = readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')
+    expect(worker).toMatch(/tip: tipInArhiva\(f\.rel, indiciuArhiva\(d\.nume_original, d\.tip\)\)/)
   })
 })
 
