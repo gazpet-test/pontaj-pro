@@ -354,6 +354,14 @@ describe('edge seap-import: ZIP-ul întreg pleacă la NAS abia după dovezile di
     const bloc = src.slice(src.indexOf('if (!rz.complet || necititeDinZip)'), src.indexOf('} else {', src.indexOf('if (!rz.complet || necititeDinZip)')))
     const iM = bloc.indexOf('await scrieManifest()'), iG = bloc.indexOf('manifest.length = 0'), iU = bloc.indexOf('await urcaFisier(numeFinal, buf')
     expect([iM > 0, iG > iM, iU > iG]).toEqual([true, true, true])
+    // Jakarinos pe PR-C: ZIP-ul pleacă DOAR dacă dovezile s-au scris (altfel rămâne pentru rularea următoare)
+    expect(bloc).toMatch(/if \(await scrieManifest\(\)\) \{\s*manifest\.length = 0;\s*await urcaFisier\(numeFinal, buf/)
+  })
+  it('intrarea sărită ca „deja” lasă legătura (arhiva curentă, cale) → document în manifest; rezerva scrie dovezile înainte; „adusă” doar fără nerecuperate', () => {
+    const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/if \('deja' in alegere\) \{[\s\S]{0,800}stare: 'deja_in_platforma'/)
+    expect(src).toMatch(/if \(nevoieDeArhiva\) \{[\s\S]{0,400}if \(await scrieManifest\(\)\) manifest\.length = 0;/)
+    expect(src).toMatch(/if \(!arhivaIncompleta && !nerecuperate\) await supa\.from\('ofertare_licitatii'\)/)
   })
 })
 

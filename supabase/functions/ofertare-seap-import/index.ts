@@ -219,8 +219,9 @@ Deno.serve(async (req: Request) => {
       manifest.push(randManifest({ licitatieId, arhivaCheie, cale, marime: buf.length, sha256: await sha256Hex(buf), documentId, motiv }));
     } catch (e) { raport.avertismente.push(`manifest ${cale}: ${String((e as Error)?.message || e)}`); }
   };
-  const scrieManifest = async () => {
-    if (!manifest.length) return;
+  // true = toate randurile s-au scris (Jakarinos pe PR-C: predarea unei arhive catre NAS cere dovezile PERSISTATE)
+  const scrieManifest = async (): Promise<boolean> => {
+    if (!manifest.length) return true;
     // aceeasi cheie de 2 ori in acelasi upsert => Postgres refuza TOT lotul ("cannot affect row a second time"); pastram ultimul
     const unice = [...new Map(manifest.map(r => [`${r.arhiva_cheie}\u0000${r.cale}`, r])).values()];
     const esuate: ManifestRand[] = [];
@@ -232,7 +233,7 @@ Deno.serve(async (req: Request) => {
     }
     // avertismentul ajunge si pe document, ca sa se vada in platforma (nu doar in raportul apelului)
     const ids = esuate.map(r => r.document_id).filter((x): x is number => !!x);
-    if (!ids.length) return;
+    if (!ids.length) return !esuate.length;
     try {
       const { data: meta } = await supa.from('ofertare_documente_atribuire').select('id, seap_meta').in('id', ids);
       for (const d of meta || []) {
@@ -240,11 +241,15 @@ Deno.serve(async (req: Request) => {
           .update({ seap_meta: { ...(d.seap_meta || {}), manifest_avertisment: `manifest nescris (${new Date().toISOString()})` } }).eq('id', d.id);
       }
     } catch (_) { /* avertismentul e deja in raport */ }
+    return false;
   };
 
   // Urcarea unui fisier (deja desfacut din semnatura) + randul in BD. Aceleasi reguli
   // in ambele cai: ghicesteTip, calea de storage, status_procesare, sursa:'seap', size_bytes.
   let urcatiOcteti = 0;
+  // intrari / arhive care NU au ajuns in platforma in aceasta rulare (Jakarinos pe PR-C): atingerea directorului central
+  // dovedeste ca parcurgerea s-a terminat, nu ca documentele s-au importat — cu ele, documentatie_adusa_la nu se seteaza
+  let nerecuperate = 0;
   // dinZip = numele ZIP-ului desfăcut aici: copiii lui se clasifică exact ca în worker (regula proprie, folderul, indiciul arhivei)
   // nota = semnatura nedesfacuta / detasata (document, nu arhiva): „ignorat” cu nota, nu PDF fals (audit #20).
   // numeSeap = numele de dinainte de desfacere (placeholder-ul veghei). caleManifest = calea din arhiva (audit #14: aceeasi
@@ -355,7 +360,16 @@ Deno.serve(async (req: Request) => {
               // același conținut dovedit → sărit; alt conținut sub un nume ocupat → prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
               const prefix = numeFinal.replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
               const alegere = alegeNume(identitate, r.nume, prefix, await sha256Hex(r.buf));
-              if ('deja' in alegere) { raport.sarite_existente++; return 'continua'; }
+              if ('deja' in alegere) {
+                raport.sarite_existente++;
+                // Jakarinos pe PR-C: legatura (ACEASTA arhiva, cale) → documentul existent, cu acelasi sha. Fara ea, daca ZIP-ul
+                // ajunge intreg la NAS, fisiereDejaImportate nu gaseste dovada pentru arhiva curenta si dubleaza fisierul.
+                // Alta arhiva_cheie decat dovada 'urcat' a documentului → upsert-ul nu o atinge (#646, R6).
+                try {
+                  manifest.push(randManifest({ licitatieId, arhivaCheie: doc.nume, cale: h.nume, marime: r.buf.length, sha256: await sha256Hex(r.buf), documentId: alegere.deja, stare: 'deja_in_platforma' }));
+                } catch (e) { raport.avertismente.push(`manifest ${h.nume}: ${String((e as Error)?.message || e)}`); }
+                return 'continua';
+              }
               await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume, esteArhiva(r.nume) ? null : r.nota, h.nume, h.nume);
               return 'continua';
             },
@@ -369,9 +383,15 @@ Deno.serve(async (req: Request) => {
           // fără manifest ar re-urca toate intrările sub „X.zip (#id)/…” (dubluri); la fel dacă rularea edge moare după upload.
           if (!rz.complet || necititeDinZip) {
             raport.erori.push(`${numeCurat}: ZIP interior ${rz.complet ? `cu ${necititeDinZip} intrări necitite aici` : `incomplet (${rz.motiv})`} — urcat întreg, îl despachetează serverul NAS`);
-            await scrieManifest();
-            manifest.length = 0;
-            await urcaFisier(numeFinal, buf, null, null, null, doc.nume);
+            if (await scrieManifest()) {
+              manifest.length = 0;
+              await urcaFisier(numeFinal, buf, null, null, null, doc.nume);
+            } else {
+              // dovezile nu s-au putut scrie: ZIP-ul NU pleaca la NAS (l-ar desface fara dovezi → dubluri). Randurile raman
+              // in lista (se reincearca la final), iar ZIP-ul se reia la rularea urmatoare (numele lui nu e in platforma).
+              nerecuperate++;
+              raport.erori.push(`${numeCurat}: dovezile din manifest nu s-au putut scrie — ZIP-ul intreg NU s-a urcat (s-ar dubla la NAS), se reia la rularea urmatoare`);
+            }
           }
         } else {
           // o arhiva nedesfacuta urca bruta, „neprocesat”: workerul NAS incearca desfacerea si scrie eroarea vizibil
@@ -392,6 +412,9 @@ Deno.serve(async (req: Request) => {
   const nevoieDeArhiva = !continua && (!perFisierOk || !!motivRezerva);
   let arhivaIncompleta = false;
   if (nevoieDeArhiva) {
+    // dovezile ZIP-urilor desfacute inline se scriu INAINTE ca rezerva sa urce arhive intregi (bucla NAS le-ar putea revendica
+    // in timpul rularii, fara dovezi → dubluri); la esec raman in lista si se reincearca la final
+    if (await scrieManifest()) manifest.length = 0;
     if (!perFisierOk) { raport.metoda = 'arhiva'; index = deLaIndex; }
     raport.rezerva_arhiva = true;
     raport.erori.push(`rezerva arhiva: ${motivRezerva || 'lista indisponibila'}`);
@@ -430,7 +453,7 @@ Deno.serve(async (req: Request) => {
             if (bugetDepasit()) { continua = true; return 'stop'; }
             return 'continua';
           },
-          (n: string, m: string) => raport.erori.push(`${numeDesfacut(n)}: ${m}`),
+          (n: string, m: string) => { nerecuperate++; raport.erori.push(`${numeDesfacut(n)}: ${m}`); },
           { maxIesire: PRAG_MARE },
         );
         // audit Jakarinos #9: arhiva necitită până la directorul central NU e „adusă” (documentele de după s-ar pierde tăcut)
@@ -447,7 +470,7 @@ Deno.serve(async (req: Request) => {
 
   await scrieManifest();
   if (!continua) {
-    if (!arhivaIncompleta) await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
+    if (!arhivaIncompleta && !nerecuperate) await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
     raport.orfani_stersi = await curataOrfani(supa, licitatieId);
   }
   raport.index = index;
