@@ -348,10 +348,25 @@ describe('arhivele și adâncimea', () => {
   })
 })
 
+describe('edge seap-import: ZIP-ul întreg pleacă la NAS abia după dovezile din manifest (review PR-C P1)', () => {
+  it('scrieManifest() + golirea listei stau ÎNAINTEA urcării ZIP-ului întreg (bucla NAS l-ar revendica fără dovezi → dubluri)', () => {
+    const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    const bloc = src.slice(src.indexOf('if (!rz.complet || necititeDinZip)'), src.indexOf('} else {', src.indexOf('if (!rz.complet || necititeDinZip)')))
+    const iM = bloc.indexOf('await scrieManifest()'), iG = bloc.indexOf('manifest.length = 0'), iU = bloc.indexOf('await urcaFisier(numeFinal, buf')
+    expect([iM > 0, iG > iM, iU > iG]).toEqual([true, true, true])
+  })
+})
+
 describe('paritatea cu api/_tipDocument.js (funcțiile Vercel nu importă din afara api/)', () => {
   it('copie byte cu byte', () => {
     const sursa = readFileSync(new URL('../supabase/functions/_shared/tipDocument.mjs', import.meta.url))
     const copie = readFileSync(new URL('../api/_tipDocument.js', import.meta.url))
+    expect(copie.equals(sursa)).toBe(true)
+  })
+  // 08.10.2026: aceeași regulă pentru celelalte copii din api/ (semnătura CMS #649, ZIP-ul și paginarea — audit #9/#21)
+  it.each([['semnaturaCms.mjs', '_semnaturaCms.js'], ['zipFlux.mjs', '_zipFlux.js'], ['paginat.mjs', '_paginat.js']])('_shared/%s = api/%s byte cu byte', (src, api) => {
+    const sursa = readFileSync(new URL(`../supabase/functions/_shared/${src}`, import.meta.url))
+    const copie = readFileSync(new URL(`../api/${api}`, import.meta.url))
     expect(copie.equals(sursa)).toBe(true)
   })
   it('nicio copie locală veche a regulilor rămasă în consumatori', () => {

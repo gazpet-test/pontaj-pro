@@ -70,6 +70,11 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { termenRO } from '../_shared/oraRO.ts'
 import { desfaceFaraArhiveP7m as desface, eArhivaP7m, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../_shared/semnaturaCms.mjs'
 import { esteArhiva } from '../_shared/tipDocument.mjs'
+import { toatePaginile } from '../_shared/paginat.mjs'
+import { tipRaspuns } from './tip.ts'
+// inventarul unei licitații pe pagini (audit Jakarinos #21) — o listă trunchiată ar face placeholder-e fantomă
+const inventar = (supa: any, licId: number, col: string) => toatePaginile((de: number, la: number) =>
+  supa.from('ofertare_documente_atribuire').select(col).eq('licitatie_id', licId).order('id').range(de, la));
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const IMPORT_SECRET = Deno.env.get('SEAP_IMPORT_SECRET') || '';
@@ -216,36 +221,64 @@ Deno.serve(async (req: Request) => {
   const raport: any[] = [];
 
   // v5: raspunsurile la clarificari, din NoticeDocument/GetAll (nu apar in GetDfNoticeSectionFiles).
-  // O SINGURA cerere pe licitatie pe rulare. Nu arunca niciodata: erorile se raporteaza.
+  // O cerere pe pagina de 50 (de regula una singura pe licitatie pe rulare). Nu arunca niciodata: erorile se raporteaza.
+  // Audit Jakarinos #17 (07.10.2026): se citea DOAR pagina 0 — un anunt cu peste 50 de documente pierdea tacut restul. Acum
+  // paginile se citesc pana la una incompleta (plafon PAGINI_GETALL); peste plafon = eroare vizibila, „enumerare incompleta”.
+  // Fiecare pagina are cookie-urile ei (tokenul de fisier e legat de sesiunea care l-a emis) — perechea ramane legata.
+  const PAGINA_GETALL = 50, PAGINI_GETALL = 10;
   async function raspunsuriNotice(lic: any): Promise<{ adusi: string[]; eroare: string | null }> {
     const adusi: string[] = [];
-    let lista: any[] = [];
-    let cookie = '';
+    const lista: { it: any; cookie: string }[] = [];
+    const chei = new Set<string>();
+    let total: number | null = null;
+    let incompleta: string | null = null;
     try {
-      const r = await fetchSeap(`${SEAP}/NoticeDocument/GetAll/`, {
-        method: 'POST',
-        headers: { ...SEAP_HDR, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sortProperty: 'transmissionDate', pageSize: 50, pageIndex: 0,
-          initNoticeId: String(lic.c_notice_id), sysNoticeTypeId: String(lic.sys_notice_type_id),
-          procedureId: null, sysNoticeDocumentState: null, sysNoticeDocumentType: null,
-          sysValidationDocType: null, noticeDocumentPostDateFrom: null, noticeDocumentPostDateTo: null,
-          sortProperties: null, sadId: null,
-        }),
-      });
-      if (!r.ok) return { adusi, eroare: `GetAll HTTP ${r.status}` };
-      cookie = cookieDin(r);
-      const txt = await r.text();
-      let d: any = null;
-      try { d = JSON.parse(txt); } catch (_) { return { adusi, eroare: 'GetAll: raspuns non-JSON' }; }
-      lista = Array.isArray(d?.items) ? d.items : [];
+      for (let pagina = 0; ; pagina++) {
+        if (pagina >= PAGINI_GETALL) { incompleta = `enumerare incompleta: peste ${PAGINI_GETALL * PAGINA_GETALL} documente in GetAll`; break; }
+        const r = await fetchSeap(`${SEAP}/NoticeDocument/GetAll/`, {
+          method: 'POST',
+          headers: { ...SEAP_HDR, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sortProperty: 'transmissionDate', pageSize: PAGINA_GETALL, pageIndex: pagina,
+            initNoticeId: String(lic.c_notice_id), sysNoticeTypeId: String(lic.sys_notice_type_id),
+            procedureId: null, sysNoticeDocumentState: null, sysNoticeDocumentType: null,
+            sysValidationDocType: null, noticeDocumentPostDateFrom: null, noticeDocumentPostDateTo: null,
+            sortProperties: null, sadId: null,
+          }),
+        });
+        if (!r.ok) {
+          if (!pagina) return { adusi, eroare: `GetAll HTTP ${r.status}` };
+          incompleta = `enumerare incompleta: GetAll pagina ${pagina} HTTP ${r.status}`; break;
+        }
+        const cookie = cookieDin(r);
+        const txt = await r.text();
+        let d: any = null;
+        try { d = JSON.parse(txt); } catch (_) {
+          if (!pagina) return { adusi, eroare: 'GetAll: raspuns non-JSON' };
+          incompleta = `enumerare incompleta: GetAll pagina ${pagina} non-JSON`; break;
+        }
+        const items = Array.isArray(d?.items) ? d.items : [];
+        // review PR-C P2: dublurile dintre pagini (sortare instabilă pe transmissionDate, publicări între cereri) nu umflă
+        // numărătoarea — un document se ține o dată, după cod (sau nume + url, fără cod)
+        for (const it of items) {
+          const k = String(it?.noticeDocumentCode || '') || `${it?.documentName || it?.noticeDocumentName || ''}|${it?.noticeDocumentUrl || ''}`;
+          if (chei.has(k)) continue;
+          chei.add(k);
+          lista.push({ it, cookie });
+        }
+        // `total` contează doar dacă e un număr pozitiv: Number(null) / Number('') = 0 ar opri citirea după prima pagină
+        if (d?.total != null && Number(d.total) > 0) total = Number(d.total);
+        if (items.length < PAGINA_GETALL || (total != null && lista.length >= total)) break;
+      }
+      if (!incompleta && total != null && lista.length < total) incompleta = `enumerare incompleta: ${lista.length} din ${total} documente in GetAll`;
     } catch (e) {
-      return { adusi, eroare: 'GetAll: ' + String((e as Error)?.message || e) };
+      if (!lista.length) return { adusi, eroare: 'GetAll: ' + String((e as Error)?.message || e) };
+      incompleta = 'enumerare incompleta: ' + String((e as Error)?.message || e);
     }
-    if (!lista.length) return { adusi, eroare: null };
+    if (!lista.length) return { adusi, eroare: incompleta };
 
-    const { data: aveamDeja } = await supa.from('ofertare_documente_atribuire')
-      .select('nume_original, tip, seap_cod').eq('licitatie_id', lic.id);
+    const { data: aveamDeja, error: eInv } = await inventar(supa, lic.id, 'nume_original, tip, seap_cod');
+    if (eInv) return { adusi, eroare: `inventarul documentelor nu s-a putut citi: ${eInv.message}` };
     // ANTI-BUG 16.09.2026 (tichet Oana, Racari SCN1179379): identitatea unui document din
     // canalul de clarificari e `noticeDocumentCode` (ex. SCN1179379/00020), NU numele
     // fisierului. Autoritatea republica documentatia revizuita sub ACELASI nume de fisier
@@ -269,7 +302,7 @@ Deno.serve(async (req: Request) => {
     );
     const erori: string[] = [];
 
-    for (const it of lista) {
+    for (const { it, cookie } of lista) {
       const cod = String(it?.noticeDocumentCode || '');
       const brutNume = String(it?.documentName || it?.noticeDocumentName || '');
       // arhiva .p7m ramane intreaga, cu numele SEAP: o desface workerul NAS (#644; Jakarinos #7 pe #649)
@@ -311,7 +344,7 @@ Deno.serve(async (req: Request) => {
         if (eUp) { erori.push(`${nume}: upload ${eUp.message}`); continue; }
         const { error: eIns } = await supa.from('ofertare_documente_atribuire').insert({
           licitatie_id: lic.id, fisier_path: path, nume_original: nume,
-          tip: inlocuit?.tip || (eRaspunsSeap(it) ? 'raspuns_clarificare' : 'alta'),
+          tip: tipRaspuns(ds.nume, inlocuit?.tip, eRaspunsSeap(it)),
           sursa: 'seap', aparut_ulterior: true, status_procesare: notaSemn ? 'ignorat' : 'neprocesat',
           ...(notaSemn ? { eroare: notaSemn } : {}),
           size_bytes: buf.length,
@@ -328,6 +361,7 @@ Deno.serve(async (req: Request) => {
         erori.push(`${nume}: ${String((e as Error)?.message || e)}`);
       }
     }
+    if (incompleta) erori.push(incompleta);
     return { adusi, eroare: erori.length ? erori.join(' | ') : null };
   }
 
@@ -357,8 +391,8 @@ Deno.serve(async (req: Request) => {
       continue;
     }
 
-    const { data: aveam } = await supa.from('ofertare_documente_atribuire')
-      .select('id, nume_original, fisier_path').eq('licitatie_id', lic.id);
+    const { data: aveam, error: eAveam } = await inventar(supa, lic.id, 'id, nume_original, fisier_path');
+    if (eAveam) { raport.push({ licitatie: lic.nr_anunt, eroare: `inventar: ${eAveam.message}` }); continue; }
     const cunoscute = new Set((aveam || []).map((d: any) => cheieRand(d.nume_original)));
     // `noi` pastreaza numele BRUTE din SEAP (se scriu ca nume_original la placeholdere),
     // dar atat deduplicarea cat si comparatia cu ce avem se fac pe cheie.
@@ -416,11 +450,13 @@ Deno.serve(async (req: Request) => {
     }
 
     // treapta 2: ce a ramas trece prin Vercel, unde arhiva se parcurge integral
-    const { data: dupaEdge } = await supa.from('ofertare_documente_atribuire')
-      .select('nume_original, fisier_path').eq('licitatie_id', lic.id);
+    // review PR-C P2: o eroare de inventar NU mai sare restul licitatiei — termenul si raspunsurile au fost deja scrise mai sus,
+    // iar la rularea urmatoare n-ar mai aparea ca noutati (notificarea s-ar pierde definitiv). Fara inventar sigur: fara
+    // treapta Vercel, fara placeholder-e si fara marcare; anunturile spun ca starea aducerii nu s-a putut verifica.
+    const { data: dupaEdge, error: eDupaEdge } = await inventar(supa, lic.id, 'nume_original, fisier_path');
     const urcateAcum = new Set((dupaEdge || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
-    let vercel: string | null = null;
-    if (noi.some((n) => !areNume(urcateAcum, n))) {
+    let vercel: string | null = eDupaEdge ? `sarit: inventar dupa edge indisponibil (${eDupaEdge.message})` : null;
+    if (!eDupaEdge && noi.some((n) => !areNume(urcateAcum, n))) {
       if (!IMPORT_SECRET) {
         vercel = 'sarit: lipseste SEAP_IMPORT_SECRET din variabilele de mediu';
       } else {
@@ -439,12 +475,15 @@ Deno.serve(async (req: Request) => {
     }
 
     // Adevarul se citeste din BD: care dintre documentele NOI au acum fisier real
-    const { data: acum } = await supa.from('ofertare_documente_atribuire')
-      .select('nume_original, fisier_path').eq('licitatie_id', lic.id);
+    const { data: acum, error: eAcum } = await inventar(supa, lic.id, 'nume_original, fisier_path');
+    // fără inventar sigur NU se pun placeholder-e (ar fi fantome), nu se marchează nimic și nu se spune „adus” / „lipsă”
+    const inventarOk = !eAcum;
+    if (eAcum) raport.push({ licitatie: lic.nr_anunt, eroare: `inventar dupa import: ${eAcum.message}` });
     const urcate = new Set((acum || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
     const toateCunoscute = new Set((acum || []).map((d: any) => cheieRand(d.nume_original)));
-    const auIntrat = noi.filter((n) => areNume(urcate, n));
-    const ramase = noi.filter((n) => !areNume(urcate, n));
+    const auIntrat = inventarOk ? noi.filter((n) => areNume(urcate, n)) : [];
+    const ramase = inventarOk ? noi.filter((n) => !areNume(urcate, n)) : [];
+    const NESTIUT = 'Starea aducerii nu s-a putut verifica (inventarul platformei nu s-a putut citi) — verifica in Ofertare.';
 
     // v4: tot ce e nou (urcat sau nu) se marcheaza ca aparut ulterior importului initial.
     // Filtrarea „ce e nou" e pe cheie, dar interogarea BD cere numele BRUTE asa cum stau in
@@ -504,7 +543,8 @@ Deno.serve(async (req: Request) => {
       const parti = [`Autoritatea a publicat ${raspunsuri.length} document(e) care par raspuns la clarificari sau modificare a documentatiei: ${nume(raspunsuri)}.`];
       if (raspunsuriAduse.length) parti.push(`Dintre ele, ${raspunsuriAduse.length} sunt raspunsuri publicate de autoritate, aduse automat din SEAP: ${nume(raspunsuriAduse)}. Se citesc din Ofertare -> Clarificari.`);
       const intrate = raspunsuri.filter((n) => areNume(urcate, n));
-      if (intrate.length < raspunsuri.length) parti.push('ATENTIE: nu toate au putut fi aduse automat - urca-le din "Urca fisiere".');
+      if (!inventarOk) parti.push(NESTIUT);
+      else if (intrate.length < raspunsuri.length) parti.push('ATENTIE: nu toate au putut fi aduse automat - urca-le din "Urca fisiere".');
       parti.push('Citeste-le si treci intrebarea si raspunsul in Clarificari. Daca raspunsul schimba o cerinta, cerinta din registru trebuie actualizata.');
       mesaje.push({
         type: 'warning',
@@ -516,8 +556,11 @@ Deno.serve(async (req: Request) => {
       const parti: string[] = [];
       const intrate = restul.filter((n) => areNume(urcate, n));
       const lipsa = restul.filter((n) => !areNume(urcate, n));
-      if (intrate.length) parti.push(`Aduse in platforma: ${nume(intrate)}.`);
-      if (lipsa.length) parti.push(`Raman de urcat manual: ${nume(lipsa)}.`);
+      if (!inventarOk) parti.push(`Detectate in SEAP: ${nume(restul)}. ${NESTIUT}`);
+      else {
+        if (intrate.length) parti.push(`Aduse in platforma: ${nume(intrate)}.`);
+        if (lipsa.length) parti.push(`Raman de urcat manual: ${nume(lipsa)}.`);
+      }
       mesaje.push({
         type: 'info',
         title: `SEAP: ${restul.length} document(e) nou(i) la ${lic.nr_anunt}`,
@@ -552,9 +595,9 @@ Deno.serve(async (req: Request) => {
           <p>Autoritatea a publicat <b>${raspunsuri.length} document(e)</b> care par raspuns la clarificari sau modificare a documentatiei.</p>
           <p><b>Licitatie:</b> ${esc(lic.nr_anunt || '')} — ${esc(lic.obiect || '')}<br>
              <b>Termen depunere:</b> ${termenRO(lic.termen_depunere) || '—'}</p>
-          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(afis(n))}${areNume(urcate, n) ? (/\.(rar|7z|zip)(\.p7[sm])?$/i.test(n) ? ' <i>(arhiva — serverul o despacheteaza singur in cateva minute; fisierele apar ca documente separate, cu numele arhivei in fata)</i>' : '') : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
+          <p><b>Documente:</b></p><ul>${raspunsuri.map((n) => `<li>${esc(afis(n))}${!inventarOk ? '' : areNume(urcate, n) ? (/\.(rar|7z|zip)(\.p7[sm])?$/i.test(n) ? ' <i>(arhiva — serverul o despacheteaza singur in cateva minute; fisierele apar ca documente separate, cu numele arhivei in fata)</i>' : '') : ' <i>(nu a putut fi adus automat — urca-l din „Urca fisiere”)</i>'}</li>`).join('')}</ul>
           ${raspunsuriAduse.length ? `<p><b>${raspunsuriAduse.length}</b> dintre ele sunt <b>raspunsuri publicate de autoritate</b>, aduse automat din SEAP. Se citesc din <b>Ofertare &rarr; &#10067; Clarificari</b>.</p>` : ''}
-          ${neaduse.length ? '<p><b>Atentie:</b> nu toate au intrat automat in platforma.</p>' : '<p>Toate au fost aduse automat in platforma.</p>'}
+          ${!inventarOk ? `<p><b>Atentie:</b> ${esc(NESTIUT)}</p>` : neaduse.length ? '<p><b>Atentie:</b> nu toate au intrat automat in platforma.</p>' : '<p>Toate au fost aduse automat in platforma.</p>'}
           <p>Citeste-le si treci intrebarea si raspunsul in <b>Clarificari</b>. Daca raspunsul schimba o cerinta, actualizeaza cerinta din registru.</p>
           <p><a href="https://pontaj-pro-sooty.vercel.app/ofertare">Deschide modulul Ofertare</a></p>`;
         try {

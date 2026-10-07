@@ -58,6 +58,8 @@ import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shar
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
 import { desfaceFaraArhiveP7m as desface, eArhivaP7m, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../_shared/semnaturaCms.mjs';
 import { curataOrfani } from './orfani.ts';
+import { Flux, fluxDinBuf, parcurgeZip } from '../_shared/zipFlux.mjs';
+import { toatePaginile } from '../_shared/paginat.mjs';
 import { scrieDocument } from './placeholder.ts';
 import { autorizeaza } from './acces.ts';
 
@@ -75,6 +77,10 @@ const SEAP_HDR: Record<string, string> = {
 const BUGET_MS = 240000;
 const BUGET_OCTETI = 12e6;
 const PRAG_MARE = 20e6;   // peste asta: lasam fisierul pe seama functiei de pe Vercel
+// plafonul TOTAL al unui ZIP desfacut inline (review PR-C, 08.10): plafonul pe intrare nu ajunge — un ZIP cu multe intrari
+// mari ar urca zeci de GB intr-un singur document, fiindca bugetul se verifica doar intre documente. Peste plafon (sau peste
+// bugetul de timp) intrarile ramase se sar, iar ZIP-ul intreg merge la extractorul izolat de pe NAS.
+const MAX_ZIP_INLINE = 3 * PRAG_MARE;
 // segment ÎNTREG (ca în worker): „__MACOSX_documentatie.pdf” nu e gunoi (audit Jakarinos 07.10, #18)
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i;
 const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/');
@@ -111,61 +117,9 @@ async function secretOk(req: Request, db: any): Promise<boolean> {
 // Audit Jakarinos #20: o desfacere ESUATA nu mai scoate sufixul — CMS-ul brut nu mai intra drept „X.pdf” valid.
 // O ARHIVA .p7m („X.rar.p7m”) ramane intreaga, cu numele SEAP: o desface workerul NAS (#644; Jakarinos #7 pe #649).
 
-// -- Citirea arhivei -------------------------------------------------------------
-class Flux {
-  private coada: Uint8Array[] = [];
-  private disponibil = 0;
-  private gata = false;
-  constructor(private rdr: ReadableStreamDefaultReader<Uint8Array>) {}
-  private async umple(n: number) {
-    while (this.disponibil < n && !this.gata) {
-      const { value, done } = await this.rdr.read();
-      if (done || !value) { this.gata = true; break; }
-      this.coada.push(value);
-      this.disponibil += value.length;
-    }
-  }
-  private scoate(n: number): Uint8Array {
-    const cat = Math.min(n, this.disponibil);
-    const out = new Uint8Array(cat);
-    let pus = 0;
-    while (pus < cat) {
-      const b = this.coada[0];
-      const iau = Math.min(b.length, cat - pus);
-      out.set(b.subarray(0, iau), pus);
-      pus += iau;
-      if (iau === b.length) this.coada.shift();
-      else this.coada[0] = b.subarray(iau);
-    }
-    this.disponibil -= cat;
-    return out;
-  }
-  async exact(n: number): Promise<Uint8Array | null> {
-    await this.umple(n);
-    return this.disponibil >= n ? this.scoate(n) : null;
-  }
-  async sari(n: number): Promise<boolean> {
-    let ramas = n;
-    while (ramas > 0) {
-      await this.umple(Math.min(ramas, 1 << 20));
-      if (this.disponibil === 0) return false;
-      ramas -= this.scoate(Math.min(ramas, this.disponibil)).length;
-    }
-    return true;
-  }
-}
-
-function dezumfla(comprimat: Uint8Array, metoda: number): Promise<Uint8Array> {
-  if (metoda === 0) return Promise.resolve(comprimat);
-  const ts = new TransformStream<Uint8Array, Uint8Array>();
-  const gata = new Response(ts.readable.pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
-  const w = ts.writable.getWriter();
-  return (async () => {
-    await w.write(comprimat);
-    await w.close();
-    return new Uint8Array(await gata);
-  })();
-}
+// -- Citirea arhivei ----------------------------------------------------------------
+// Parserul ZIP in flux e comun cu /api/seap-import: ../_shared/zipFlux.mjs (audit Jakarinos #9 / #10): sfarsit valid doar
+// la directorul central, refuz pentru data descriptor fara marimi / ZIP64 / antet necunoscut, plafon de iesire anti-bomba.
 
 // Cookie-urile de sesiune: COPIE 1:1 din ofertare-seap-veghe (edge functions nu impart cod).
 // Deno nu pastreaza cookie-uri intre fetch-uri; tokenul din noticeDocumentUrl e legat de
@@ -198,50 +152,6 @@ const eArhivaAdevarata = (nume: string, b: Uint8Array) =>
 // lui: desfacut, „X (semnat).pdf” (var. B), randul brut.
 const cheieRand = (n: unknown) => cheieRandCu(String(n ?? ''), cheieNume);
 const dejaSubUnNume = (urcate: Set<string>, numeSeap: string) => cheiSeapCu(numeSeap, cheieNume).some((k: string) => urcate.has(k));
-
-// Parcurgerea unui ZIP din flux, folosita si de arhiva mare si de ZIP-urile dinauntrul
-// fisierelor aduse per document -> garanteaza ACELEASI reguli de denumire (numele intrarii
-// cu tot cu prefixul de folder) si acelasi dedup in ambele cai.
-// vrea(h) decide daca intrarea se citeste; primeste(h, brut) intoarce 'stop' ca sa opreasca.
-// Intoarce false daca fluxul s-a intrerupt in mijlocul unei intrari.
-type IntrareZip = { nume: string; metoda: number; csize: number; usize: number };
-async function parcurgeZip(
-  flux: Flux,
-  vrea: (h: IntrareZip) => boolean,
-  primeste: (h: IntrareZip, brut: Uint8Array) => Promise<'stop' | 'continua'>,
-  eroare: (nume: string, msg: string) => void,
-): Promise<boolean> {
-  while (true) {
-    const head = await flux.exact(30);
-    if (!head) return true;
-    const dv = new DataView(head.buffer, head.byteOffset, 30);
-    if (dv.getUint32(0, true) !== 0x04034b50) return true;
-    // anti-bug 1: csize la 18, usize la 22 (de la 20 ies valori aberante)
-    const h: IntrareZip = { metoda: dv.getUint16(8, true), csize: dv.getUint32(18, true), usize: dv.getUint32(22, true), nume: '' };
-    const nl = dv.getUint16(26, true), el = dv.getUint16(28, true);
-    const numeBuf = await flux.exact(nl); if (!numeBuf) return false;
-    h.nume = new TextDecoder().decode(numeBuf);
-    if (el && !(await flux.sari(el))) return false;
-
-    if (!vrea(h)) {
-      if (!(await flux.sari(h.csize))) return false;
-      continue;
-    }
-    let brut: Uint8Array;
-    try {
-      const comprimat = await flux.exact(h.csize);
-      if (!comprimat) { eroare(h.nume, 'flux intrerupt'); return false; }
-      brut = await dezumfla(comprimat, h.metoda);
-    } catch (e) {
-      eroare(h.nume, String((e as Error)?.message || e));
-      continue;
-    }
-    if ((await primeste(h, brut)) === 'stop') return true;
-  }
-}
-
-// Flux peste un buffer deja in memorie (ZIP-ul dinauntrul unui document adus per fisier).
-const fluxDinBuf = (b: Uint8Array) => new Flux(new Blob([b]).stream().getReader() as ReadableStreamDefaultReader<Uint8Array>);
 
 // -- Curatenie: obiecte ramase in bucket fara rand in BD --------------------------
 // Un import intrerupt, un rand sters ca duplicat sau un fisier explodat gresit lasa in urma obiecte orfane. Regulile
@@ -277,14 +187,17 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
   const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[], manifest_randuri: 0, avertismente: [] as string[] };
 
-  const { data: dejaAre } = await supa.from('ofertare_documente_atribuire')
-    .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId);
+  // inventarele pe pagini, fail-closed (audit Jakarinos #21): o listă trunchiată / o eroare NU e „nimic în platformă”
+  const { data: dejaAre, error: eInv } = await toatePaginile((de: number, la: number) => supa.from('ofertare_documente_atribuire')
+    .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId).order('id').range(de, la));
+  if (eInv) return json({ error: `inventarul documentelor nu s-a putut citi: ${eInv.message}` }, 500);
   const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
   // fișierele din ZIP-urile desfăcute aici (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643): înainte, o potrivire pe
   // cheieNume sărea în tăcere un fișier cu ALT conținut („Caiet de sarcini.pdf” din Lot1.zip și din Lot2.zip). Acum „deja”
   // doar cu sha256 DOVEDIT de manifest ('urcat') — aceeași regulă ca workerul: _shared/identitateFisier.mjs.
-  const { data: manUrcat } = await supa.from('ofertare_seap_manifest')
-    .select('document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null);
+  const { data: manUrcat, error: eMan } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_manifest')
+    .select('document_id, sha256, stare').eq('licitatie_id', licitatieId).eq('stare', 'urcat').not('document_id', 'is', null).order('id').range(de, la));
+  if (eMan) return json({ error: `manifestul nu s-a putut citi: ${eMan.message}` }, 500);
   const identitate = stareIdentitate((dejaAre || []).filter((d: any) => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume);
   const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieRand(d.nume_original), d.id]));
 
@@ -425,16 +338,19 @@ Deno.serve(async (req: Request) => {
 
         if (eArhivaAdevarata(numeFinal, buf)) {
           // ZIP in interiorul documentului: ACEEASI despachetare si aceleasi nume ca la arhiva
-          const ok = await parcurgeZip(
+          let necititeDinZip = 0, octetiZip = 0;
+          const rz = await parcurgeZip(
             fluxDinBuf(buf),
-            (h) => {
+            (h: { nume: string; usize: number }) => {
               const nc = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
               if (JUNK_RE.test(h.nume)) return false;
               // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
-              if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
+              if (h.usize > PRAG_MARE) { necititeDinZip++; raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
+              if (octetiZip + h.usize > MAX_ZIP_INLINE || Date.now() - t0 > BUGET_MS) { necititeDinZip++; return false; }
+              octetiZip += h.usize;
               return true;
             },
-            async (h, brutIntrare) => {
+            async (h: { nume: string }, brutIntrare: Uint8Array) => {
               const r = desface(brutIntrare, h.nume);
               // același conținut dovedit → sărit; alt conținut sub un nume ocupat → prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
               const prefix = numeFinal.replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
@@ -443,9 +359,20 @@ Deno.serve(async (req: Request) => {
               await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume, esteArhiva(r.nume) ? null : r.nota, h.nume, h.nume);
               return 'continua';
             },
-            (n, m) => raport.erori.push(`${n}: ${m}`),
+            (n: string, m: string) => { necititeDinZip++; raport.erori.push(`${n}: ${m}`); },
+            { maxIesire: PRAG_MARE },
           );
-          if (!ok) raport.erori.push(`${numeCurat}: ZIP interior incomplet`);
+          // audit Jakarinos #9 / #10: ZIP necitit complet (trunchiat, data descriptor, bombă, criptat, intrare prea mare, peste
+          // plafonul total) → urcat ÎNTREG, „neprocesat”: îl despachetează extractorul izolat de pe NAS; fișierele urcate deja
+          // aici au dovada sha în manifest, deci bucla workerului le sare și aduce doar lipsurile.
+          // Review PR-C P1: dovezile se scriu ÎNAINTE de rândul ZIP-ului — bucla NAS (la 15 s) îl poate revendica imediat, iar
+          // fără manifest ar re-urca toate intrările sub „X.zip (#id)/…” (dubluri); la fel dacă rularea edge moare după upload.
+          if (!rz.complet || necititeDinZip) {
+            raport.erori.push(`${numeCurat}: ZIP interior ${rz.complet ? `cu ${necititeDinZip} intrări necitite aici` : `incomplet (${rz.motiv})`} — urcat întreg, îl despachetează serverul NAS`);
+            await scrieManifest();
+            manifest.length = 0;
+            await urcaFisier(numeFinal, buf, null, null, null, doc.nume);
+          }
         } else {
           // o arhiva nedesfacuta urca bruta, „neprocesat”: workerul NAS incearca desfacerea si scrie eroarea vizibil
           await urcaFisier(numeFinal, buf, null, null, esteArhiva(numeFinal) ? null : ds.nota, doc.nume);
@@ -463,6 +390,7 @@ Deno.serve(async (req: Request) => {
   // -- CALEA VECHE, REZERVA: arhiva intreaga (DownloadArchive) --------------------
   // Se incearca doar daca lista a esuat / a venit goala / un document nu s-a putut aduce.
   const nevoieDeArhiva = !continua && (!perFisierOk || !!motivRezerva);
+  let arhivaIncompleta = false;
   if (nevoieDeArhiva) {
     if (!perFisierOk) { raport.metoda = 'arhiva'; index = deLaIndex; }
     raport.rezerva_arhiva = true;
@@ -479,9 +407,9 @@ Deno.serve(async (req: Request) => {
       const flux = new Flux(res.body.getReader());
       let iArh = 0;
       try {
-        const intreg = await parcurgeZip(
+        const rz = await parcurgeZip(
           flux,
-          (h) => {
+          (h: { nume: string; usize: number }) => {
             const numeCurat = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
             const preaMare = h.usize > PRAG_MARE;
             const sarim = iArh < deLaIndexArhiva || dejaSubUnNume(urcate, h.nume) || JUNK_RE.test(h.nume) || preaMare;
@@ -495,17 +423,20 @@ Deno.serve(async (req: Request) => {
             }
             return true;
           },
-          async (h, brut) => {
+          async (h: { nume: string }, brut: Uint8Array) => {
             const r = desface(brut, h.nume);
             await urcaFisier(r.nume, r.buf, 'seap:downloadarchive', null, esteArhiva(r.nume) ? null : r.nota, h.nume);
             iArh++;
             if (bugetDepasit()) { continua = true; return 'stop'; }
             return 'continua';
           },
-          (n, m) => raport.erori.push(`${numeDesfacut(n)}: ${m}`),
+          (n: string, m: string) => raport.erori.push(`${numeDesfacut(n)}: ${m}`),
+          { maxIesire: PRAG_MARE },
         );
-        if (!intreg) raport.erori.push('arhiva: flux intrerupt');
+        // audit Jakarinos #9: arhiva necitită până la directorul central NU e „adusă” (documentele de după s-ar pierde tăcut)
+        if (!rz.complet) { arhivaIncompleta = true; raport.erori.push(`arhiva: ${rz.motiv}`); }
       } catch (e) {
+        arhivaIncompleta = true;
         raport.erori.push('flux: ' + String((e as Error)?.message || e));
       } finally {
         try { await res.body?.cancel(); } catch (_) { /* deja inchis */ }
@@ -516,7 +447,7 @@ Deno.serve(async (req: Request) => {
 
   await scrieManifest();
   if (!continua) {
-    await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
+    if (!arhivaIncompleta) await supa.from('ofertare_licitatii').update({ documentatie_adusa_la: new Date().toISOString() }).eq('id', licitatieId);
     raport.orfani_stersi = await curataOrfani(supa, licitatieId);
   }
   raport.index = index;

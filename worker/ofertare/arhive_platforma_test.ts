@@ -30,7 +30,7 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
   const potriveste = (r: Rand, f: ((r: Rand) => boolean)[]) => f.every(x => x(r))
   function builder(tabel: string) {
     const filtre: ((r: Rand) => boolean)[] = []
-    let op: 'select' | 'update' | 'insert' | 'upsert' = 'select', patch: Rand | Rand[] = {}, limita = Infinity, sel = false, conflict: string[] = []
+    let op: 'select' | 'update' | 'insert' | 'upsert' = 'select', patch: Rand | Rand[] = {}, limita = Infinity, inceput = 0, sel = false, conflict: string[] = []
     const b: any = {
       select() { sel = true; return b },
       update(p: Rand) { op = 'update'; patch = p; return b },
@@ -52,12 +52,13 @@ function fakeSupa(tabele: Record<string, Rand[]>, fisiere: Map<string, Uint8Arra
       or(expr: string) { const f = parseazaOr(expr); filtre.push(r => f(r)); return b },
       order() { return b },
       limit(n: number) { limita = n; return b },
+      range(de: number, la: number) { inceput = de; limita = la - de + 1; return b },
       maybeSingle() { return b.then((x: any) => ({ data: x.data?.[0] ?? null, error: x.error })) },
       single() { return b.then((x: any) => ({ data: x.data?.[0] ?? null, error: x.data?.length ? null : { message: 'niciun rând' } })) },
       then(res: any, rej: any) {
         const t = tabele[tabel] ??= []
         let data: Rand[] = []
-        if (op === 'select') data = t.filter(r => potriveste(r, filtre)).slice(0, limita)
+        if (op === 'select') data = t.filter(r => potriveste(r, filtre)).slice(inceput, inceput + limita)
         else if (op === 'update') { data = t.filter(r => potriveste(r, filtre)); data.forEach(r => Object.assign(r, patch)) }
         else if (op === 'upsert') {
           data = (Array.isArray(patch) ? patch : [patch]).map(p => {
@@ -1067,5 +1068,23 @@ Deno.test('Copilot NO-GO r2 pe #649: T1 doar „Caiet.pdf.p7s” detașat, T2 do
       // arhivele .p7s rămân pe cheia veche (dejaDesfacutaPeSeap, poarta 20261020a)
       eq([s.cheieEvidenta('PT.zip.p7s'), s.cheieEvidenta('Caiet.pdf.p7s'), s.cheieEvidenta('Caiet.pdf')], ['pt.zip', 'caiet.pdf.p7s', 'caiet.pdf'])
     } finally { await opreste() }
+  })
+})
+
+Deno.test('audit #21: inventarul documentelor se citește pe pagini (1500 de rânduri) și o eroare de citire oprește importul', async () => {
+  await cuMediu(async (root, s) => {
+    const opreste = pornesteExtractor(root)
+    const restore = cuSeap({ 'Doc 1499.pdf': new TextEncoder().encode('%PDF-1.4 x'), 'Nou.pdf': new TextEncoder().encode('%PDF-1.4 nou') })
+    try {
+      const multe = Array.from({ length: 1500 }, (_, i) => ({ id: i + 1, licitatie_id: 3, nume_original: `Doc ${i}.pdf`, fisier_path: `3/d${i}`, status_procesare: 'procesat' }))
+      const tab = licSeap({ ofertare_documente_atribuire: multe })
+      const supa = fakeSupa(tab, new Map())
+      const rap = await s.aduLicitatie(supa, 3, () => {})
+      eq([rap.erori, rap.deja, rap.fisiere_urcate], [[], 1, 1], 'Doc 1499 e pe pagina a doua — găsit, nu re-adus')
+      const rau = { ...supa, from: (t: string) => { const b = supa.from(t); if (t === 'ofertare_documente_atribuire') b.range = () => Promise.resolve({ data: null, error: { message: 'timeout' } }); return b } }
+      const r2 = await s.aduLicitatie(rau, 3, () => {})
+      eq([r2.fisiere_urcate, r2.erori.length], [0, 1])
+      ok(/inventarul documentelor nu s-a putut citi: timeout/.test(r2.erori[0]), r2.erori[0])
+    } finally { restore(); await opreste() }
   })
 })
