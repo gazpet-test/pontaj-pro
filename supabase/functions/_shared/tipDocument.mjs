@@ -30,7 +30,7 @@ const TEXT_RE = /procedur|breviar|specificat|tehnologi|program|calcul|instructiu
 const LISTE_RE = /cantitat|antemasur|centralizator|explicitare[ .-]?norm|^f[1-3][ .-]|^c[2-5][ .-]|\bliste?\b[ .-]+(-[ .-]*)?fara[ .-]+(valori|preturi)/
 const DESEN_TARE_RE = /\bdwg\b|izometri|schema tehnologica/
 const VOCAB_DESEN = /schem|de[tl]aliu|profil|subtravers|sectiun|cofret|electrod|platforma|gauri|grile|montaj|monaj/
-const numeCurat = (nume) => norm(numeFisier(nume)).replace(/\.p7[ms]$/, '')
+const numeCurat = (nume) => norm(numeFisier(nume)).replace(/\.p7s$/, '')
 
 /** Tipul dat de o regulă explicită („tare”) sau null când numele nu spune nimic — atunci decide apelantul: folderul,
  *  arhiva, planșa „slabă” (număr de foaie + vocabular de desen), 'alta'. */
@@ -102,7 +102,8 @@ export function tipInArhiva(nume, tipArhiva) {
  *  apoi tipul rândului ei. Același în worker (bucla de platformă) și în edge (ZIP desfăcut inline) — Copilot conv. 3, #641. */
 export const indiciuArhiva = (numeArhiva, tipRand = null) => tipExplicit(numeArhiva) ?? tipRand ?? null
 
-/** Arhivă pe care o despachetează workerul (zip / rar / 7z, opțional semnată .p7s / .p7m — același CMS atașat). */
+/** Arhivă pe care o despachetează workerul (zip / rar / 7z, opțional semnată .p7s sau .p7m — același CMS atașat). .p7m e
+ *  recunoscut DOAR pe arhive (lic. 92, decizia Răzvan 07.10.2026, var. A): un document „….pdf.p7m” rămâne cum vine. */
 export const ARHIVA_RE = /\.(zip|rar|7z)(\.p7[ms])?$/i
 export const esteArhiva = (nume) => ARHIVA_RE.test(String(nume ?? ''))
 

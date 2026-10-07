@@ -56,7 +56,6 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shared/identitateFisier.mjs';
 import { ghicesteTip, esteArhiva, tipInArhiva, indiciuArhiva } from '../_shared/tipDocument.mjs';
-import { desfaSemnatura, semnaturaFaraContinut } from '../_shared/semnaturaCms.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
 const CORS: Record<string, string> = {
@@ -82,7 +81,7 @@ const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).incl
 // comprima - altfel "planse .pdf" si "planse.pdf" raman doua fisiere diferite.
 // COPIE identica in ofertare-seap-veghe (edge functions nu pot importa cod una din alta).
 // Cheia e DOAR pentru comparatie - in BD se scrie tot numele real (nume_original).
-const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7[ms]$/i, '').toLowerCase()
+const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
   .replace(/[,()]/g, '').replace(/\s+/g, '');
 
 // Semnatura reala a unui PDF: %PDF- la inceputul fisierului. Numele e doar un indiciu.
@@ -105,7 +104,65 @@ async function secretOk(req: Request, db: any): Promise<boolean> {
 // Continutul semnat sta intr-un OCTET STRING ASN.1 care, la fisierele mari, e taiat
 // in bucati de ~64KB, fiecare cu propriul antet. Se parcurge structura si se lipesc
 // bucatile in ordine; altfel antetele raman in mijlocul fisierului si il strica.
-// antet / lipeste / desfaSemnatura: sursa unică în ../_shared/semnaturaCms.ts (07.10.2026, PR #644).
+function antet(b: Uint8Array, i: number) {
+  const tip = b[i]; i += 1;
+  let lung = b[i]; i += 1;
+  if (lung === 0x80) return { tip, lung: null as number | null, start: i };
+  if (lung & 0x80) {
+    const n = lung & 0x7f;
+    lung = 0;
+    for (let k = 0; k < n; k++) lung = lung * 256 + b[i + k];
+    i += n;
+  }
+  return { tip, lung: lung as number | null, start: i };
+}
+
+function lipeste(b: Uint8Array, start: number, capat: number): Uint8Array {
+  const bucati: Uint8Array[] = [];
+  let i = start;
+  while (i < capat && i < b.length) {
+    const a = antet(b, i);
+    if (a.tip === 0x00) break;
+    if (a.lung === null) { bucati.push(lipeste(b, a.start, capat)); break; }
+    if (a.tip === 0x04) bucati.push(b.subarray(a.start, a.start + a.lung));
+    else if (a.tip === 0x24) bucati.push(lipeste(b, a.start, a.start + a.lung));
+    i = a.start + a.lung;
+  }
+  const total = bucati.reduce((s, x) => s + x.length, 0);
+  const out = new Uint8Array(total);
+  let p = 0;
+  for (const x of bucati) { out.set(x, p); p += x.length; }
+  return out;
+}
+
+const OID_DATA = new Uint8Array([0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01]);
+
+function cautaSecventa(hay: Uint8Array, ac: Uint8Array): number {
+  for (let i = 0; i <= hay.length - ac.length; i++) {
+    let ok = true;
+    for (let j = 0; j < ac.length; j++) if (hay[i + j] !== ac[j]) { ok = false; break; }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+function desfaSemnatura(buf: Uint8Array, nume: string): { buf: Uint8Array; nume: string } {
+  if (!/\.p7s$/i.test(nume)) return { buf, nume };
+  const numeReal = nume.replace(/\.p7s$/i, '');
+  const poz = cautaSecventa(buf, OID_DATA);
+  if (poz < 0) return { buf, nume: numeReal };
+  const dupaOid = antet(buf, poz + OID_DATA.length);
+  if (dupaOid.tip !== 0xa0) return { buf, nume: numeReal };
+  const capat = dupaOid.lung === null ? buf.length : dupaOid.start + dupaOid.lung;
+  const c = antet(buf, dupaOid.start);
+  if (c.tip === 0x04 && c.lung !== null) return { buf: buf.subarray(c.start, c.start + c.lung), nume: numeReal };
+  if (c.tip === 0x24 || c.lung === null) {
+    const sfarsit = c.lung === null ? capat : c.start + c.lung;
+    const out = lipeste(buf, c.start, sfarsit);
+    if (out.length) return { buf: out, nume: numeReal };
+  }
+  return { buf, nume: numeReal };
+}
 
 // -- Citirea arhivei -------------------------------------------------------------
 class Flux {
@@ -187,7 +244,7 @@ const esteZip = (b: Uint8Array) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4
 // interne si au intrat 24 de randuri gunoi (word/styles.xml, docProps/app.xml, [Content_Types].xml).
 // Se despacheteaza DOAR ce e arhiva adevarata dupa nume; formatele Office raman fisiere intregi.
 const eArhivaAdevarata = (nume: string, b: Uint8Array) =>
-  esteZip(b) && /\.zip$/i.test(String(nume || '').replace(/\.p7[ms]$/i, ''));
+  esteZip(b) && /\.zip$/i.test(String(nume || '').replace(/\.p7s$/i, ''));
 
 // Parcurgerea unui ZIP din flux, folosita si de arhiva mare si de ZIP-urile dinauntrul
 // fisierelor aduse per document -> garanteaza ACELEASI reguli de denumire (numele intrarii
@@ -414,7 +471,7 @@ Deno.serve(async (req: Request) => {
     let i = 0;
     for (const doc of documente) {
       if (i < deLaIndex) { i++; continue; }
-      const numeCurat = doc.nume.replace(/\.p7[ms]$/i, '');
+      const numeCurat = doc.nume.replace(/\.p7s$/i, '');
       if (urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(doc.nume)) {
         if (urcate.has(cheieNume(numeCurat))) raport.sarite_existente++;
         i++;
@@ -433,9 +490,7 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         const brutP7s = new Uint8Array(await rd.arrayBuffer());
-        const semnat = desfaSemnatura(brutP7s, doc.nume);
-        if (semnaturaFaraContinut(doc.nume, semnat)) { raport.erori.push(`${doc.nume}: semnătură .p7m fără conținut atașat (detașată) — nu se urcă, ca să nu ia locul documentului semnat`); i++; continue; }
-        const { buf, nume: numeFinal } = semnat;
+        const { buf, nume: numeFinal } = desfaSemnatura(brutP7s, doc.nume);
         if (!buf.length) { raport.erori.push(`${numeCurat}: fisier gol`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
 
         if (eArhivaAdevarata(doc.nume, buf)) {
@@ -443,7 +498,7 @@ Deno.serve(async (req: Request) => {
           const ok = await parcurgeZip(
             fluxDinBuf(buf),
             (h) => {
-              const nc = h.nume.replace(/\.p7[ms]$/i, '');
+              const nc = h.nume.replace(/\.p7s$/i, '');
               if (JUNK_RE.test(h.nume)) return false;
               // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
               if (h.usize > PRAG_MARE) { raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
@@ -451,9 +506,8 @@ Deno.serve(async (req: Request) => {
             },
             async (h, brut) => {
               const r = desfaSemnatura(brut, h.nume);
-              if (semnaturaFaraContinut(h.nume, r)) { raport.erori.push(`${h.nume}: semnătură .p7m fără conținut atașat (detașată) — nu se urcă, ca să nu ia locul documentului semnat`); return 'continua'; }
               // același conținut dovedit → sărit; alt conținut sub un nume ocupat → prefixul ZIP-ului („Lot2/Caiet de sarcini.pdf”)
-              const prefix = doc.nume.replace(/\.p7[ms]$/i, '').replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
+              const prefix = doc.nume.replace(/\.p7s$/i, '').replace(/\.zip$/i, '').replace(/[\\/]+/g, '_').trim() || 'arhiva';
               const alegere = alegeNume(identitate, r.nume, prefix, await sha256Hex(r.buf));
               if ('deja' in alegere) { raport.sarite_existente++; return 'continua'; }
               await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume);
@@ -497,7 +551,7 @@ Deno.serve(async (req: Request) => {
         const intreg = await parcurgeZip(
           flux,
           (h) => {
-            const numeCurat = h.nume.replace(/\.p7[ms]$/i, '');
+            const numeCurat = h.nume.replace(/\.p7s$/i, '');
             const preaMare = h.usize > PRAG_MARE;
             const sarim = iArh < deLaIndexArhiva || urcate.has(cheieNume(numeCurat)) || JUNK_RE.test(h.nume) || preaMare;
             if (sarim) {
@@ -512,13 +566,12 @@ Deno.serve(async (req: Request) => {
           },
           async (h, brut) => {
             const r = desfaSemnatura(brut, h.nume);
-            if (semnaturaFaraContinut(h.nume, r)) { raport.erori.push(`${h.nume}: semnătură .p7m fără conținut atașat (detașată) — nu se urcă, ca să nu ia locul documentului semnat`); iArh++; return 'continua'; }
             await urcaFisier(r.nume, r.buf, 'seap:downloadarchive');
             iArh++;
             if (bugetDepasit()) { continua = true; return 'stop'; }
             return 'continua';
           },
-          (n, m) => raport.erori.push(`${n.replace(/\.p7[ms]$/i, '')}: ${m}`),
+          (n, m) => raport.erori.push(`${n.replace(/\.p7s$/i, '')}: ${m}`),
         );
         if (!intreg) raport.erori.push('arhiva: flux intrerupt');
       } catch (e) {

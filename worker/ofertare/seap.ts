@@ -30,9 +30,14 @@ const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), '[seap]', ...a)
 
 // COPIE identică cu cheieNume din ofertare-seap-import / ofertare-seap-veghe (comparația pe nume „normalizat").
-export const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7[ms]$/i, '').toLowerCase()
+export const cheieNume = (n: unknown) => String(n ?? '').replace(/\.p7s$/i, '').toLowerCase()
   .replace(/[,()]/g, '').replace(/\s+/g, '')
 const estePlaceholder = (d: { fisier_path?: string | null }) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
+
+// Semnătura CMS de desfăcut după descărcare: .p7s ca până acum; .p7m DOAR pe arhive (lic. 92, „….rar.p7m”; decizia Răzvan
+// 07.10.2026, var. A). Un document „….pdf.p7m” rămâne cum vine, iar cheia păstrează „.p7m”: „X.rar.p7m” nu se confundă cu
+// „X.rar” deja urcat (Copilot conv. 3, NO-GO r2 pe #644) — se descarcă, se desface, fișierele din el trec prin regula sha.
+export const semnaturaDeDesfacut = (nume: string) => /\.p7s$/i.test(nume) || /\.(zip|rar|7z)\.p7m$/i.test(nume)
 
 // Tipul după nume: sursa unică în supabase/functions/_shared/tipDocument.mjs (aceleași reguli în edge, api, UI).
 export { ghicesteTip }
@@ -334,7 +339,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           await descarca(doc, cookie, brut)
           let buf = await Deno.readFile(brut)
           let nume = doc.nume
-          if (/\.p7[ms]$/i.test(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7[ms]$/i, '') }
+          if (semnaturaDeDesfacut(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7[ms]$/i, '') }
           const vol = cheieGrup.startsWith('rar:') ? volumRar(nume) : null
           const cale = `${dir}/in/${(vol ? numeVolum(vol, cifre) : nume).replace(/[\\/]/g, '_')}`
           await Deno.writeFile(cale, buf)
@@ -555,11 +560,11 @@ export async function dejaDesfacutaPeSeap(supa: Supa, d: { licitatie_id: number;
  *  inline) sau al drumului SEAP; rândurile cu document_id NULL (eșuate) nu contează, ca să fie reîncercate. */
 export async function fisiereDejaImportate(supa: Supa, d: { licitatie_id: number; nume_original: string }): Promise<Set<string>> {
   if (adancimeArhiva(d.nume_original) > 0) return new Set()
-  const cheieManifest = String(d.nume_original ?? '').replace(/\.p7[ms]$/i, '').toLowerCase()
+  const cheieManifest = String(d.nume_original ?? '').replace(/\.p7s$/i, '').toLowerCase()
   const { data: man } = await supa.from('ofertare_seap_manifest').select('cale, arhiva_cheie, document_id')
     .eq('licitatie_id', d.licitatie_id).in('arhiva_cheie', [cheieManifest, cheieNume(d.nume_original)])
   return new Set(((man || []) as { cale: string; document_id: number | null }[]).filter(m => m.document_id != null)
-    .map(m => String(m.cale ?? '').replace(/\.p7[ms]$/i, '')))
+    .map(m => String(m.cale ?? '').replace(/\.p7s$/i, '')))
 }
 
 let arhiveCuratate = false
@@ -624,7 +629,7 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     if (error || !blob) { await termina('eroare', `Despachetare eșuată (descărcare din Storage): ${error?.message ?? 'fișier gol'}`); return }
     let buf = new Uint8Array(await blob.arrayBuffer())
     let nume = d.nume_original
-    if (/\.p7[ms]$/i.test(nume)) {
+    if (semnaturaDeDesfacut(nume)) {
       try { buf = continutP7s(buf) } catch (e) { await termina('eroare', `Despachetare eșuată (semnătura CMS .p7s/.p7m): ${(e as Error)?.message ?? e}`); return }
       nume = nume.replace(/\.p7[ms]$/i, '')
     }
@@ -660,7 +665,7 @@ async function despacheteazaArhiva(supa: Supa, d: DocArhiva, stare: (s: string) 
     for await (const f of fisiereDin(`${dir}/out`)) {
       const numeFinal = `${spatiu}/${f.rel}`
       if (JUNK_RE.test(f.rel)) { await Deno.remove(f.cale); continue }
-      if (urcate.has(numeFinal) || dinImport.has(f.rel.replace(/\.p7[ms]$/i, ''))) { deja++; await Deno.remove(f.cale); continue }
+      if (urcate.has(numeFinal) || dinImport.has(f.rel.replace(/\.p7s$/i, ''))) { deja++; await Deno.remove(f.cale); continue }
       stare(`arhivă din platformă: urc ${numeFinal}`)
       const fb = await Deno.readFile(f.cale)
       const r = await urca(supa, licId, numeFinal, fb, new Map(), {

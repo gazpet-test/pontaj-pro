@@ -269,14 +269,16 @@ describe('ZIP desfăcut inline în edge = aceeași clasificare ca în worker (Co
   })
 })
 
-describe('.p7m = .p7s (același CMS atașat; lic. 92)', () => {
-  it('arhivele semnate .p7m sunt arhive; numele se ia fără semnătură', () => {
-    for (const n of ['Raspuns clarificari consolidat.rar.p7m', 'Raspuns consolidat la solicitarile de clarificari - 2.rar.p7m', 'PT.zip.p7m', 'X.7z.P7M'])
+describe('.p7m doar pe arhive (lic. 92; decizia Răzvan 07.10.2026, var. A)', () => {
+  it('arhivele semnate .p7m sunt arhive (container → alta); documentele .p7m nu sunt', () => {
+    for (const n of ['Raspuns clarificari consolidat.rar.p7m', 'Raspuns consolidat la solicitarile de clarificari - 2.rar.p7m', 'PT.zip.p7m', 'X.7z.P7M', 'X.part1.rar.p7m'])
       expect(esteArhiva(n), n).toBe(true)
-    expect(esteArhiva('Caiet de sarcini.pdf.p7m')).toBe(false)
-    expect(ghicesteTip('Caiet de sarcini.pdf.p7m')).toBe('cs_volum')
-    expect(ghicesteTip('Liste cantitati.pdf.p7m')).toBe('lista_cantitati')
-    expect(ghicesteTip('Raspuns clarificari consolidat.rar.p7m')).toBe('alta')   // arhivă = container
+    for (const n of ['Caiet de sarcini.pdf.p7m', 'Formulare.docx.p7m', 'X.rar.pdf.p7m']) expect(esteArhiva(n), n).toBe(false)
+    expect(ghicesteTip('Raspuns clarificari consolidat.rar.p7m')).toBe('alta')
+  })
+  it('edge-urile nu desfac .p7m: arhiva semnată se urcă întreagă („neprocesat”) și o despachetează workerul', () => {
+    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts'])
+      expect(readFileSync(new URL(f, import.meta.url), 'utf8'), f).not.toMatch(/p7m/i)
   })
 })
 
@@ -335,21 +337,5 @@ describe('paritatea cu api/_tipDocument.js (funcțiile Vercel nu importă din af
       const src = readFileSync(new URL(f, import.meta.url), 'utf8')
       expect(src, f).not.toMatch(/function ghicesteTip\s*\(/)
     }
-  })
-})
-
-describe('semnătura .p7m: edge-urile folosesc desfacerea comună și refuză .p7m fără conținut (Copilot conv. 3, NO-GO r1 pe #644)', () => {
-  const sursa = (cale) => readFileSync(new URL(cale, import.meta.url), 'utf8')
-  it('ofertare-seap-import: fără copie locală, refuz pe toate cele 3 drumuri (per fișier, ZIP inline, DownloadArchive)', () => {
-    const edge = sursa('../supabase/functions/ofertare-seap-import/index.ts')
-    expect(edge).toMatch(/import \{ desfaSemnatura, semnaturaFaraContinut \} from '\.\.\/_shared\/semnaturaCms\.ts'/)
-    expect(edge).not.toMatch(/function desfaSemnatura/)
-    expect(edge.match(/semnaturaFaraContinut\(/g)?.length).toBe(3)
-  })
-  it('ofertare-seap-veghe: fără copie locală, refuz la descărcarea răspunsurilor', () => {
-    const veghe = sursa('../supabase/functions/ofertare-seap-veghe/index.ts')
-    expect(veghe).toMatch(/import \{ desfaSemnatura, semnaturaFaraContinut \} from '\.\.\/_shared\/semnaturaCms\.ts'/)
-    expect(veghe).not.toMatch(/function desfaSemnatura/)
-    expect(veghe.match(/semnaturaFaraContinut\(/g)?.length).toBe(1)
   })
 })

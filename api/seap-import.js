@@ -195,7 +195,7 @@ export default async function handler(req, res) {
       if (el && !(await flux.sari(el))) break
       raport.intrari++
 
-      const numeCurat = nume.replace(/\.p7[ms]$/i, '')
+      const numeCurat = nume.replace(/\.p7s$/i, '')
       if (urcate.has(numeCurat) || JUNK_RE.test(nume)) {
         if (urcate.has(numeCurat)) raport.sarite_existente++
         if (!(await flux.sari(csize))) break
@@ -206,10 +206,7 @@ export default async function handler(req, res) {
       if (!comprimat) { raport.erori.push(`${numeCurat}: flux intrerupt`); break }
       try {
         const brut = metoda === 0 ? comprimat : inflateRawSync(comprimat)
-        const semnat = continutSemnat(brut, nume)
-        // .p7m din care nu s-a scos conținut (detașată): nu se urcă — n-are voie să ia locul documentului semnat (#644)
-        if (/\.p7m$/i.test(nume) && !semnat.desfacut) { raport.erori.push(`${nume}: semnătură .p7m fără conținut atașat (detașată) — nu se urcă, ca să nu ia locul documentului semnat`); continue }
-        const { buf, nume: numeFinal } = semnat
+        const { buf, nume: numeFinal } = continutSemnat(brut, nume)
         const estePdf = /\.pdf$/i.test(numeFinal)
         const ctype = estePdf ? 'application/pdf' : 'application/octet-stream'
         const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180)

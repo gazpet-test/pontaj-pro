@@ -6,22 +6,6 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ createClient: vi.fn(), fetch: vi.fn() }))
 vi.mock('@supabase/supabase-js', () => ({ createClient: mocks.createClient }))
 import seap from './seap-import.js'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
-// semnătură CMS reală (openssl, cert de test); detasat = fără conținut în interior
-function semneaza(continut, detasat) {
-  const d = mkdtempSync(join(tmpdir(), 'cms-'))
-  try {
-    writeFileSync(join(d, 'in.bin'), continut)
-    const o = { cwd: d, stdio: 'ignore' }
-    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'k.pem', '-out', 'c.pem', '-days', '1', '-subj', '/CN=test'], o)
-    execFileSync('openssl', ['cms', '-sign', '-binary', ...(detasat ? [] : ['-nodetach']), '-in', 'in.bin', '-signer', 'c.pem', '-inkey', 'k.pem', '-outform', 'DER', '-out', 'out.bin'], o)
-    return readFileSync(join(d, 'out.bin'))
-  } finally { rmSync(d, { recursive: true, force: true }) }
-}
 
 // ZIP „stored” (fără compresie), cu dimensiunile în antetul local — exact ce citește fluxul handlerului
 function zipStored(intrari) {
@@ -92,29 +76,15 @@ describe('api/seap-import: arhivele din DownloadArchive', () => {
     expect(pe['Anexa.docx'][1]).toBe('ignorat')
     expect(pe['Anexa.docx'][2]).toMatch(/^non-PDF/)
   })
-})
-
-describe('api/seap-import: .p7m (Copilot conv. 3, NO-GO r1 pe #644)', () => {
-  for (const ordine of ['p7m,pdf', 'pdf,p7m']) {
-    it(`„Caiet.pdf.p7m” DETAȘAT lângă „Caiet.pdf” real (${ordine}) → doar PDF-ul real, cu eroare vizibilă pentru semnătură`, async () => {
-      const real = '%PDF-1.4 caietul real'
-      const p7m = semneaza(real, true)
-      const intrari = ordine === 'p7m,pdf' ? { 'Caiet.pdf.p7m': p7m, 'Caiet.pdf': real } : { 'Caiet.pdf': real, 'Caiet.pdf.p7m': p7m }
-      const randuri = []
-      mocks.createClient.mockReturnValue(fakeSupa(randuri))
-      mocks.fetch.mockResolvedValue(new Response(zipStored(intrari)))
-      const res = response()
-      await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
-      expect(randuri.map((r) => [r.nume_original, r.size_bytes])).toEqual([['Caiet.pdf', real.length]])
-      if (ordine === 'p7m,pdf') expect(res.body.erori.some((e) => /Caiet\.pdf\.p7m: semnătură \.p7m fără conținut atașat/.test(e))).toBe(true)
-    })
-  }
-  it('„Raspuns.pdf.p7m” cu conținut ATAȘAT → desfăcut, urcat ca „Raspuns.pdf”', async () => {
+  it('.p7m doar pe arhive (lic. 92, var. A): „X.rar.p7m” urcat întreg (neprocesat, alta) → îl despachetează workerul; „Caiet.pdf.p7m” rămâne cum era', async () => {
     const randuri = []
     mocks.createClient.mockReturnValue(fakeSupa(randuri))
-    mocks.fetch.mockResolvedValue(new Response(zipStored({ 'Raspuns.pdf.p7m': semneaza('%PDF-1.4 raspuns', false) })))
+    mocks.fetch.mockResolvedValue(new Response(zipStored({ 'Raspuns consolidat.rar.p7m': '0\u0082 cms', 'Caiet.pdf.p7m': '0\u0082 cms' })))
     const res = response()
     await seap({ method: 'POST', headers: { 'x-import-secret': 'internal-secret' }, body: { licitatie_id: 7 } }, res)
-    expect(randuri.map((r) => [r.nume_original, r.size_bytes])).toEqual([['Raspuns.pdf', '%PDF-1.4 raspuns'.length]])
+    const pe = Object.fromEntries(randuri.map((r) => [r.nume_original, [r.tip, r.status_procesare, r.eroare]]))
+    expect(pe['Raspuns consolidat.rar.p7m']).toEqual(['alta', 'neprocesat', null])
+    expect(pe['Caiet.pdf.p7m'][1]).toBe('ignorat')
+    expect(Object.keys(pe).sort()).toEqual(['Caiet.pdf.p7m', 'Raspuns consolidat.rar.p7m'])
   })
 })

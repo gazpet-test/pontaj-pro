@@ -81,8 +81,8 @@ export function desfaP7s(buf) {
  * cu antet in plus decat niciunul.
  */
 export function continutSemnat(buf, nume) {
-  if (!/\.p7[ms]$/i.test(nume)) return { buf, nume, desfacut: false }
+  if (!/\.p7s$/i.test(nume)) return { buf, nume, desfacut: false }
   const r = desfaP7s(buf)
-  if (!r || !r.continut.length) return { buf, nume: nume.replace(/\.p7[ms]$/i, ''), desfacut: false }
-  return { buf: r.continut, nume: nume.replace(/\.p7[ms]$/i, ''), desfacut: true, forma: r.forma }
+  if (!r || !r.continut.length) return { buf, nume: nume.replace(/\.p7s$/i, ''), desfacut: false }
+  return { buf: r.continut, nume: nume.replace(/\.p7s$/i, ''), desfacut: true, forma: r.forma }
 }

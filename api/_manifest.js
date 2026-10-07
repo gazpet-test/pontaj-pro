@@ -11,10 +11,10 @@ export const sha256Hex = (buf) => createHash('sha256').update(buf).digest('hex')
 
 // Pur: construieste randul (aceleasi reguli ca randManifest din manifest.ts).
 export function randManifest(p) {
-  const cheie = (s) => String(s ?? '').replace(/\.p7[ms]$/i, '').toLowerCase()
+  const cheie = (s) => String(s ?? '').replace(/\.p7s$/i, '').toLowerCase()
   if (!/^[0-9a-f]{64}$/.test(p.sha256)) throw new Error('sha256 invalid')
   if (!Number.isFinite(p.marime) || p.marime < 0) throw new Error('marime invalida')
-  const cale = String(p.cale || '').replace(/\.p7[ms]$/i, '')
+  const cale = String(p.cale || '').replace(/\.p7s$/i, '')
   if (!cale) throw new Error('cale goala')
   return {
     licitatie_id: p.licitatieId,
