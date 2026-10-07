@@ -31,7 +31,8 @@ const SEAP_HDR = {
 }
 const PRAG_RELUABIL = 45e6      // reper pentru mesaje; uploadul in felii e rezerva
 const FELIE = 6 * 1024 * 1024   // Storage cere felii de 6MB, ultima poate fi mai mica
-const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)/i
+// segment ÎNTREG (ca în worker și edge): „__MACOSX_documentatie.pdf” nu e gunoi (audit Jakarinos 07.10, #18)
+const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i
 const estePlaceholder = (d) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/')
 
 // Tipul după nume și detectarea arhivelor: api/_tipDocument.js = copia byte cu byte a

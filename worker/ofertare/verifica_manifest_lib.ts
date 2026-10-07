@@ -4,6 +4,10 @@
 //   2. pentru fiecare fișier rezultat caută documentul din platformă (aceeași cheie de nume ca importul),
 //      descarcă obiectul din Storage și compară SHA-256 + mărimea;
 //   3. scrie câte un rând în ofertare_seap_manifest (stare 'deja_in_platforma' | 'ignorat' | 'eroare_urcare' = lipsă).
+//      Un rând 'urcat' (dovada sha a importului, _shared/identitateFisier.mjs, #643) rămâne 'urcat' dacă Storage confirmă
+//      același conținut; diferit → 'deja_in_platforma' cu motiv (dovada se invalidează explicit); Storage indisponibil → nu
+//      se atinge. Audit Jakarinos 07.10 (#13): înainte, verificarea suprascria orice 'urcat' cu 'deja_in_platforma' — în
+//      producție nu mai rămăsese niciun rând 'urcat', deci importurile nu mai aveau nicio dovadă sha.
 // NU urcă nimic, NU atinge ofertare_documente_atribuire, NU pornește citiri AI. Conținut SEAP = input ostil,
 // tratat de aceleași controale ca la import (listare + politică înainte de extragere).
 import { listaSeap, descarca, continutP7s, volumRar, numeVolum, verificaListare, verificaVolume, pregatesteJob, listeazaIzolat, extrageIzolat, cheieNume, semnaturaDeDesfacut } from './seap.ts'
@@ -41,29 +45,41 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
   const randuri: Rand[] = []
   const tally = { identice: 0, diferite: 0, lipsa: 0, ignorate: 0, erori: [] as string[] }
   const potrivite = new Set<number>()
+  // dovezile existente ('urcat') pe (arhiva_cheie, cale) + documentele după id: verificarea le confirmă sau le invalidează
+  const dovezi = new Map<string, { document_id: number | null; sha256: string }>()
+  let dupaId = new Map<number, DocumentBd>()
+  let faraScriere: string | null = null
 
   async function compara(arhivaCheie: string, cale: string, buf: Uint8Array) {
     semnal.throwIfAborted()
     const rand: Rand = { licitatie_id: licId, arhiva_cheie: arhivaCheie, cale, marime: buf.length, sha256: await sha(buf), document_id: null, stare: 'deja_in_platforma', motiv: null, verificat_la: new Date().toISOString() }
     if (JUNK_RE.test(cale)) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)'; tally.ignorate++; randuri.push(rand); return }
-    const d = inPlatforma.get(cheieNume(cale.split('/').pop()!)) ?? inPlatforma.get(cheieNume(cale))
+    // documentul în care importul a urcat EXACT această intrare (dovada 'urcat') are prioritate față de potrivirea pe nume
+    const prec = dovezi.get(`${arhivaCheie}\u0000${cale}`)
+    const dPrec = prec?.document_id != null ? dupaId.get(prec.document_id) : undefined
+    const d = (dPrec && dPrec.fisier_path && !String(dPrec.fisier_path).includes('/neincarcat/') ? dPrec : undefined)
+      ?? inPlatforma.get(cheieNume(cale.split('/').pop()!)) ?? inPlatforma.get(cheieNume(cale))
     if (!d) { rand.stare = 'eroare_urcare'; rand.motiv = 'LIPSĂ în platformă (verificare R6)'; tally.lipsa++; randuri.push(rand); return }
     rand.document_id = d.id; potrivite.add(d.id)
     const url = opt.storage?.url ?? Deno.env.get('SUPABASE_URL')
     const cheie = opt.storage?.cheie ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
     semnal.throwIfAborted()
-    if (!url || !cheie) { rand.motiv = 'Storage indisponibil: configurație lipsă'; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return }
+    // Storage necitit = nimic dovedit în niciun sens: rândul 'urcat' existent rămâne neatins
+    if (!url || !cheie) { rand.motiv = 'Storage indisponibil: configurație lipsă'; tally.erori.push(`${cale}: ${rand.motiv}`); if (!prec) randuri.push(rand); return }
     const path = d.fisier_path.split('/').map(encodeURIComponent).join('/')
     const raspuns = await fetch(`${url.replace(/\/+$/, '')}/storage/v1/object/authenticated/ofertare/${path}`, {
       headers: { Authorization: `Bearer ${cheie}`, apikey: cheie }, signal: semnal,
     })
     if (raspuns.status !== 200) {
       await raspuns.body?.cancel()
-      rand.motiv = `Storage indisponibil: HTTP ${raspuns.status}`; tally.erori.push(`${cale}: ${rand.motiv}`); randuri.push(rand); return
+      rand.motiv = `Storage indisponibil: HTTP ${raspuns.status}`; tally.erori.push(`${cale}: ${rand.motiv}`); if (!prec) randuri.push(rand); return
     }
     const stoc = new Uint8Array(await raspuns.arrayBuffer())
     const shaStoc = await sha(stoc)
-    if (shaStoc === rand.sha256) tally.identice++
+    if (shaStoc === rand.sha256) {
+      tally.identice++
+      if (prec && prec.sha256 === rand.sha256 && prec.document_id === d.id) rand.stare = 'urcat'   // dovada confirmată, păstrată
+    }
     else { tally.diferite++; rand.motiv = `DIFERIT de Storage: sha ${shaStoc.slice(0, 12)}… / ${stoc.length} B vs SEAP ${rand.sha256.slice(0, 12)}… / ${buf.length} B` }
     randuri.push(rand)
   }
@@ -87,6 +103,13 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     dinBd = dateBd || []
     inPlatforma = new Map((dinBd || []).filter(d => d.fisier_path && !String(d.fisier_path).includes('/neincarcat/'))
       .map(d => [cheieNume(d.nume_original), d]))
+    dupaId = new Map(dinBd.map(d => [d.id, d]))
+    const { data: dateDovezi, error: eDovezi } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256')
+      .eq('licitatie_id', licId).eq('stare', 'urcat').abortSignal(semnal)
+    semnal.throwIfAborted()
+    // fără dovezile existente, o scriere le-ar putea suprascrie orbește → raportăm, dar nu scriem manifestul
+    if (eDovezi) faraScriere = `manifest: dovezile existente nu s-au putut citi (${eDovezi.message}) — nu scriu nimic`
+    for (const r of (dateDovezi || []) as { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string }[]) dovezi.set(`${r.arhiva_cheie}\u0000${r.cale}`, r)
 
     // volumele RAR ale aceleiași arhive se tratează împreună
     const grupuri = new Map<string, typeof docs>()
@@ -145,7 +168,8 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     }
     semnal.throwIfAborted()
     const unice = [...new Map(randuri.map(r => [`${r.arhiva_cheie}\u0000${r.cale}`, r])).values()]
-    if (!uscat) for (let i = 0; i < unice.length; i += 200) {
+    if (faraScriere) tally.erori.push(faraScriere)
+    if (!uscat && !faraScriere) for (let i = 0; i < unice.length; i += 200) {
       semnal.throwIfAborted()
       const { error } = await supa.from('ofertare_seap_manifest').upsert(unice.slice(i, i + 200), { onConflict: 'licitatie_id,arhiva_cheie,cale' }).abortSignal(semnal)
       semnal.throwIfAborted()

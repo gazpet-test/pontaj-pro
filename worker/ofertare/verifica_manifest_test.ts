@@ -20,6 +20,7 @@ type Opt = {
   ctl?: AbortController; stopDupaPrimul?: boolean; blocat?: 'lista' | 'document' | 'storage' | 'flux'
   arhiva?: boolean; blocatExtractor?: 'listare' | 'extragere'; uscat?: boolean; periodica?: boolean
   storageUrl?: string; statusStorage?: number; caleStorage?: string
+  dovezi?: { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string }[]; eroareDovezi?: boolean
   inainte?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
   laStorage?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
 }
@@ -44,6 +45,9 @@ async function scenariu(opt: Opt = {}) {
   const raspuns = (data: unknown) => ({
     abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve({ data, error: null }) },
   })
+  const raspunsDovezi = () => ({
+    abortSignal(signal: AbortSignal) { assert(signal); return Promise.resolve(opt.eroareDovezi ? { data: null, error: { message: 'simulat: manifest indisponibil' } } : { data: opt.dovezi ?? [], error: null }) },
+  })
   const supa = {
     from(t: string) {
       if (t === 'ofertare_seap_cereri' && opt.periodica) return {
@@ -51,7 +55,11 @@ async function scenariu(opt: Opt = {}) {
         select: () => ({ order: () => ({ limit: async () => ({ data: [] }) }) }),
       }
       if (t === 'ofertare_seap_manifest') return {
-        select: () => ({ eq: () => ({ order: () => ({ limit: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) }),
+        select: () => ({ eq: () => ({
+          order: () => ({ limit: () => ({ maybeSingle: async () => ({ data: null }) }) }),
+          // dovezile existente: .eq('licitatie_id', 93).eq('stare', 'urcat').abortSignal(...)
+          eq: (k: string, v: string) => { eq([k, v], ['stare', 'urcat']); return raspunsDovezi() },
+        }) }),
         upsert(rows: any[], conf: unknown) {
         eq(conf, { onConflict: 'licitatie_id,arhiva_cheie,cale' })
         scrieri.push(...rows)
@@ -386,4 +394,32 @@ for (const oprire of ['normal', 'kill'] as const) Deno.test({
       await Deno.remove(root, { recursive: true })
     }
   },
+})
+
+// -- #13 (audit Jakarinos 07.10): verificarea nu mai distruge dovada sha a importului ('urcat') -------------------------
+Deno.test('manifest #13: dovada „urcat” confirmată de Storage rămâne „urcat”; contrazisă → invalidată cu motiv; fără dovadă → ca înainte', async () => {
+  const dovezi = [
+    { arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha') },   // Storage 93/a = alpha → confirmată
+    { arhiva_cheie: 'c.pdf', cale: 'c.pdf', document_id: 13, sha256: await sha('gamma') },     // Storage 93/c = ALTFEL → contrazisă
+  ]
+  const { raport, scrieri } = await scenariu({ dovezi })
+  eq([raport.identice, raport.diferite, raport.lipsa_in_platforma, raport.erori], [2, 1, 1, []])
+  const pe = Object.fromEntries(scrieri.map(r => [r.cale, [r.stare, r.document_id, r.motiv ? r.motiv.slice(0, 18) : null]]))
+  eq(pe['a1.pdf'], ['urcat', 11, null], 'dovada confirmată se păstrează')
+  eq(pe['b.pdf'], ['deja_in_platforma', 12, null], 'fără dovadă: comportamentul de dinainte')
+  eq(pe['c.pdf'], ['deja_in_platforma', 13, 'DIFERIT de Storage'], 'dovada contrazisă se invalidează explicit')
+})
+
+Deno.test('manifest #13: Storage indisponibil → rândul „urcat” rămâne neatins (nu se scrie peste el)', async () => {
+  const dovezi = [{ arhiva_cheie: 'a1.pdf', cale: 'a1.pdf', document_id: 11, sha256: await sha('alpha') }]
+  const { scrieri, raport } = await scenariu({ dovezi, statusStorage: 503 })
+  eq(scrieri.map(r => r.cale).sort(), ['b.pdf', 'c.pdf', 'lipsa.pdf'], 'a1.pdf (cu dovadă) nu e rescris')
+  assert(raport.erori.some(e => /a1\.pdf: Storage indisponibil: HTTP 503/.test(e)), raport.erori.join(' | '))
+})
+
+Deno.test('manifest #13: dovezile existente necitibile → nu se scrie nimic, eroare în raport', async () => {
+  const { scrieri, raport } = await scenariu({ eroareDovezi: true })
+  eq(scrieri, [])
+  eq(raport.manifest_scrise, 0)
+  assert(raport.erori.some(e => /dovezile existente nu s-au putut citi/.test(e)), raport.erori.join(' | '))
 })
