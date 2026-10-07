@@ -54,8 +54,8 @@ Fără sursă nouă: tot din `cnsc_decizii` + SEAP (ofertanții din rapoartele p
 4. **PR4 (PC / tura de noapte):** scriptul ANAP + rândul în `norme_surse`.
 Fiecare PR: build, teste pe parser (fixture-uri HTML salvate din achizia.ro, ca să nu depindem de rețea în CI), review Jakarinos, PR draft, merge de Ofertare.
 
-## 6. Decizii cerute lui Răzvan înainte de PR1
-- D1. Lista inițială de concurenți urmăriți (nume + CUI): o propun eu din corpus, o confirmi tu.
-- D2. Cine triază: Răzvan + Marilena, sau și responsabilul Ofertare?
-- D3. Frecvența: săptămânal (propus) sau zilnic?
-- D4. Bugetul lunar pentru rezumare AI (estimare: 10–30 decizii/lună × ~0,15 € = sub 5 €/lună).
+## 6. Decizii Răzvan (07.10.2026)
+- **D1. Concurenți urmăriți (inițial):** INSPET, INGAZFORCONSTRUCT, CISGAZ, IRGC, HABAU (entitatea din RO, după CUI), INSTGAZ, INVEST GENERAL, TOTALGAZ. CUI-urile se completează la PR1 din achizia.ro și se confirmă în UI. Lista se extinde din UI.
+- **D2. Triaj:** Răzvan, Marilena și responsabilul Ofertare. „Verificat” și „Rezumă” vizibile doar pentru ei (drept explicit în `user_module_access`, acordat de Răzvan).
+- **D3. Frecvență:** săptămânal, luni 06:00.
+- **D4. Buget rezumare AI:** OK, sub 5 €/lună. Peste 30 de decizii/lună rezumarea se oprește și cere confirmare.
