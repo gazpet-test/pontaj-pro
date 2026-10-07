@@ -7,12 +7,12 @@ name: Edge functions — repo vs producție
 on:
   push:
     branches: [main]
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   pull_request:
     # Și căile verificatorului, nu doar ale funcțiilor: altfel o modificare A VERIFICATORULUI
     # nu e rulată pe PR-ul care o aduce, ci abia după merge, direct pe main. Adică exact
     # unealta care există ca să prindă derive ajungea în producție neverificată (22.09.2026).
-    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
+    paths: ['supabase/functions/**', 'scripts/verifica-edge-functions.mjs', 'scripts/edgeDependente.mjs', 'scripts/test-edge-dependente.mjs', 'scripts/verifica-poarta-identica.mjs', 'deno.lock', '.github/workflows/verifica-edge-functions.yml']
   schedule:
     - cron: '0 5 * * 1'   # luni 08:00 RO — intră în Pulsul ERP
   workflow_dispatch:
@@ -30,6 +30,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
 
       # Fără token nu se poate întreba API-ul Supabase. Nu picăm verificarea din lipsa
       # secretului — spunem clar ce lipsește și de unde se pune.
@@ -44,6 +45,11 @@ jobs:
           else
             echo "are_token=da" >> "$GITHUB_OUTPUT"
           fi
+
+      # esbuild (vine prin vite) construiește graful de module al fiecărei funcții — scripts/edgeDependente.mjs
+      - name: npm ci
+        if: steps.secret.outputs.are_token == 'da'
+        run: npm ci
 
       - name: Ce nu s-a publicat
         if: steps.secret.outputs.are_token == 'da'
@@ -62,8 +68,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
       - name: poarta.ts identică în ambele funcții
         run: node scripts/verifica-poarta-identica.mjs
+      # Graful de module al funcțiilor (07.10.2026): logica pe care se sprijină verificarea „repo vs producție”.
+      # esbuild vine prin vite, deci npm ci; testul pe repo-ul real cere graf demonstrabil pentru TOATE funcțiile.
+      - run: npm ci
+      - name: verificatorul vede _shared (test)
+        run: node --test scripts/test-edge-dependente.mjs
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
