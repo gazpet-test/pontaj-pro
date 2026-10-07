@@ -263,7 +263,7 @@ describe('ZIP desfăcut inline în edge = aceeași clasificare ca în worker (Co
   it('edge-ul și workerul folosesc AMBELE tipInArhiva + indiciuArhiva pentru copiii unei arhive', () => {
     const edge = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
     expect(edge).toMatch(/tip: dinZip \? tipInArhiva\(numeFinal, indiciuArhiva\(dinZip\)\) : ghicesteTip\(numeFinal\)/)
-    expect(edge).toMatch(/await urcaFisier\(r\.nume, r\.buf, doc\.nume, doc\.nume\)/)   // ZIP-ul desfăcut inline transmite numele arhivei
+    expect(edge).toMatch(/await urcaFisier\(nume, r\.buf, doc\.nume, doc\.nume\)/)   // ZIP-ul desfăcut inline transmite numele arhivei
     const worker = readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')
     expect(worker).toMatch(/tip: tipInArhiva\(f\.rel, indiciuArhiva\(d\.nume_original, d\.tip\)\)/)
   })
