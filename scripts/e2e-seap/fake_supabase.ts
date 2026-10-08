@@ -8,6 +8,8 @@ export const esecInsert: Record<string, string> = {}
 export const esecInsertProfil: { id?: string } = {}
 export const esecMaybe: Record<string, { mesaj: string, ori: number }> = {}
 export const esecSelect: Record<string, { mesaj: string, ori: number }> = {}
+// Jakarinos r5: un UPDATE ales de test „oprește procesul” ('crash' → aruncă, ca un worker oprit) sau întoarce o eroare (mesajul)
+export const laUpdate: { fn?: (t: string, patch: any, ids: any[]) => string | null } = {}
 let nextId = 10000
 const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const likeRe = (p: string, f = '') => new RegExp('^' + p.split('%').map(esc).join('.*') + '$', f)
@@ -71,6 +73,9 @@ class Q {
     }
     if (this.op === 'update') {
       const rows = potr()
+      const v = laUpdate.fn?.(this.t, this.patch, rows.map((r) => r.id))
+      if (v === 'crash') throw new Error('proces oprit (simulat)')
+      if (v) return { data: null, error: { message: v } }
       if (this.t === 'ofertare_documente_atribuire' && 'seap_cod' in this.patch) for (const r of rows) if (this.ocupat(r.licitatie_id, this.patch.seap_cod, r.id)) return { data: null, error: DUP }
       // filtrare + scriere în același pas sincron = un UPDATE condiționat atomic (ca o instrucțiune Postgres)
       for (const r of rows) Object.assign(r, structuredClone(this.patch))
