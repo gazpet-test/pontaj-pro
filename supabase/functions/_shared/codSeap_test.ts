@@ -483,16 +483,42 @@ Deno.test('candidatiMutare (R2, r4): fiecare înlocuit mutabil, în ordinea lui 
   const l = [{ nume: 'Anexa 1.pdf', cod: P(20) }]
   const d = decide(inv0([a, b, v]), l, l[0])
   assert.deepEqual([d.fel, d.inlocuit.id, d.inlocuiti.map((r: Any) => r.id)], ['versiune', v.id, [v.id, b.id, a.id]])
-  // versiunea cu nume de cod iese (linia versiunilor, D1); frații rămân, în ordine
-  assert.deepEqual(candidatiMutare(d, false).map((r: Any) => r.id), [b.id, a.id])
-  assert.deepEqual(candidatiMutare(d, false, new Set([b.id])).map((r: Any) => r.id), [a.id])   // ținta deja folosită în rulare
-  assert.deepEqual(candidatiMutare(d, false, new Set([a.id, b.id])), [])
-  assert.deepEqual(candidatiMutare(d, true), [])                                                   // placeholder pe N2: F1, nu mutare
+  // versiunea cu nume de cod iese (linia versiunilor, D1); E1 (r5): fiind MAI NOUĂ (/7) decât frații (/5, /6), nici ei nu mai sunt
+  // ținte — o republicare cu conținutul lor ar fi o revenire la un conținut vechi, anunțată ca versiune
+  assert.deepEqual(candidatiMutare(d, false), [])
+  // fără versiunea cu nume de cod: frații rămân, în ordine (R2)
+  const d0 = decide(inv0([a, b]), l, l[0])
+  assert.deepEqual(candidatiMutare(d0, false).map((r: Any) => r.id), [b.id, a.id])
+  assert.deepEqual(candidatiMutare(d0, false, new Set([b.id])).map((r: Any) => r.id), [a.id])   // ținta deja folosită în rulare
+  assert.deepEqual(candidatiMutare(d0, false, new Set([a.id, b.id])), [])
+  assert.deepEqual(candidatiMutare(d0, true), [])                                                   // placeholder pe N2: F1, nu mutare
   // altă decizie → nimic; forma veche (doar `inlocuit`) → el, dacă e mutabil
   assert.deepEqual(candidatiMutare({ fel: 'frate', rude: [a.id] }, false), [])
   assert.deepEqual(candidatiMutare(null, false), [])
   assert.deepEqual(candidatiMutare({ fel: 'versiune', inlocuit: a }, false), [a])
   assert.deepEqual(candidatiMutare({ fel: 'versiune', inlocuit: v }, false), [])
+})
+
+Deno.test('E1 (r5, Jakarinos P1): revenirea la un conținut MAI VECHI se anunță — originalul cu o versiune mai nouă cu nume de cod nu e țintă de mutare', () => {
+  // v1 „Caiet.pdf” /10 (conținut A), v2 „Caiet (CN…-00020).pdf” /20 (conținut B); SEAP republică /30 cu conținutul A
+  const v1 = rand('Caiet.pdf', P(10)), v2 = rand(numeVersiune('Caiet.pdf', P(20)), P(20))
+  const l = [{ nume: 'Caiet.pdf', cod: P(30) }]
+  const d = decide(inv0([v1, v2]), l, l[0])
+  assert.deepEqual([d.fel, d.inlocuit.id, d.inlocuiti.map((r: Any) => r.id)], ['versiune', v2.id, [v2.id, v1.id]])
+  // capul liniei e v2 (nume de cod, D1 îl ține pe codul lui); v1 are un cap mai nou → nicio țintă: versiune anunțată (de_anuntat)
+  assert.deepEqual(candidatiMutare(d, false), [])
+  assert.equal((campuriCod(P(30), d) as Any).seap_meta.de_anuntat, true)
+  // originalul FĂRĂ versiune mai nouă rămâne țintă (F5 neschimbat); la fel cu un cap mai VECHI decât el (număr mai mic)
+  const o = rand('Plan.pdf', P(10))
+  const dO = decide(inv0([o]), [{ nume: 'Plan.pdf', cod: P(30) }], { nume: 'Plan.pdf', cod: P(30) })
+  assert.deepEqual(candidatiMutare(dO, false).map((r: Any) => r.id), [o.id])
+  const vechi = rand(numeVersiune('Anexa.pdf', P(3)), P(3)), nou = rand('Anexa.pdf', P(12))
+  const dV = decide(inv0([vechi, nou]), [{ nume: 'Anexa.pdf', cod: P(30) }], { nume: 'Anexa.pdf', cod: P(30) })
+  assert.deepEqual(candidatiMutare(dV, false).map((r: Any) => r.id), [nou.id])
+  // lic. 100 (frați FĂRĂ nume de cod, republicați integral identic): toți rămân ținte, ca la R2
+  const f13 = rand('Doc.pdf', P(13)), f17 = rand('Doc.pdf', P(17))
+  const dF = decide(inv0([f13, f17]), [{ nume: 'Doc.pdf', cod: P(25) }], { nume: 'Doc.pdf', cod: P(25) })
+  assert.deepEqual(candidatiMutare(dF, false).map((r: Any) => r.id), [f17.id, f13.id])
 })
 
 Deno.test('R2 (r4): frați republicați integral IDENTIC — fiecare cod se mută pe rândul lui (nu pe înlocuit[0]), un rând = o singură țintă', async () => {

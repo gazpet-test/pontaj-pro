@@ -412,7 +412,9 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).not.toMatch(/if \(dejaSubUnNume\(urcate, doc\.nume\) \|\|/)
     expect(src).toMatch(/const dec: any = decideSeap\(inv, lista, doc0, cheiSeapCu\(doc0\.nume, cheieNume\), \{ adoptie: ADOPTIE \}\);/)
     expect(src).toMatch(/if \(dec\.fel === 'fara_cod' && dejaSubUnNume\(urcate, doc0\.nume\)\)/)
-    expect(src).toMatch(/const sarim = iArh < deLaIndexArhiva \|\| dejaSubUnNume\(urcate, h\.nume\)/)
+    // E5 (r5): arhiva se parcurge mereu de la prima intrare (un de_la_index primit e poziție în lista SEAP, nu în ZIP)
+    expect(src).toMatch(/const sarim = dejaSubUnNume\(urcate, h\.nume\) \|\| JUNK_RE\.test\(h\.nume\) \|\| preaMare;/)
+    expect(src).not.toMatch(/deLaIndexArhiva|index = deLaIndex; \}/)
     expect(src).toMatch(/await urcaFisier\(r\.nume, r\.buf, 'seap:downloadarchive', null, esteArhiva\(r\.nume\) \? null : r\.nota, h\.nume\);/)   // fără al 8-lea argument
     // semnătura unui document listat: sărită, dar nu „ambiguă”
     expect(src).toMatch(/else if \(dec\.motiv !== 'semnatura'\) raport\.coduri_ambigue\.push\(/)
@@ -452,7 +454,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(sr).toMatch(/if \(citit \+ marime > PLAFON_CANDIDATI\) \{ m\.set\(r\.id, null\); continue; \}/)
     expect(sr).toMatch(/if \(sha && shas\.has\(sha\)\) return m;/)                                          // prima potrivire ajunge
     // înainte de descărcare doar verificabil (pur, fără citiri); candidații se citesc DUPĂ descărcare și pragul de mărime
-    const iV = src.indexOf('if (!verificabil(dec, areDovada)) {'), iF = src.indexOf('const rd = await fetch(link'), iP = src.indexOf('if (cl > PRAG_MARE) {', iF)
+    const iV = src.indexOf('if (!verificabil(dec, areDovada)) {'), iF = src.indexOf('const rd = await fetchSeap(link'), iP = src.indexOf('if (cl > PRAG_MARE) {', iF)
     const iS = src.indexOf('decF = rezolvaVerificare(dec, shas, await shaRanduri(dec.candidati, new Set(shas), lungimi));')
     expect([iV > 0, iF > iV, iP > iF, iS > iP]).toEqual([true, true, true, true])
     expect(src).toMatch(/urcatiOcteti \+= brut\.length;   \/\/ anti-bug 3/)
@@ -482,22 +484,26 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, \(r: any\) => !!dovezi\.get\(r\.id\)\)\) continue;/)   // fără șanse = fără import degeaba
     // R1 (r4): versiunea NU intră în `noi`; grupa răspunsuri + mail le ia DOAR din rândurile importate cu de_anuntat
     expect(src).toMatch(/if \(dec\.fel === 'versiune'\) \{ versiuni\.add\(dec\.nume\); continue; \}/)
-    expect(src).toMatch(/const versiuniNoi = deAnuntat\.map\(\(d: any\) => d\.nume_original as string\);/)
-    expect(src).toMatch(/for \(const n of \[\.\.\.noi\.filter\(esteRaspuns\), \.\.\.versiuniNoi, \.\.\.raspunsuriAduse\]\)/)
+    // E2 (r5): listele de versiuni se fac PE CANAL (clopoțel / mail), fiecare cu grupa ei de răspunsuri
+    expect(src).toMatch(/const versiuniNotif = deAnuntat\.filter\(\(d: any\) => !d\.seap_meta\?\.notificat_la\)\.map\(\(d: any\) => d\.nume_original as string\);/)
+    expect(src).toMatch(/const versiuniMail = deAnuntat\.filter\(\(d: any\) => !d\.seap_meta\?\.mail_la\)\.map\(\(d: any\) => d\.nume_original as string\);/)
+    expect(src).toMatch(/for \(const n of \[\.\.\.noi\.filter\(esteRaspuns\), \.\.\.versiuniCanal, \.\.\.raspunsuriAduse\]\)/)
+    expect(src).toMatch(/const raspunsuri = grupa\(versiuniNotif\);[^\n]*\n\s*const raspunsuriMail = grupa\(versiuniMail\);/)
     expect(src).toMatch(/const restul = noi\.filter\(\(n\) => !esteRaspuns\(n\) && !areNume\(cheiRaspunsuriAduse, n\)\);/)
   })
   it('veghea (review PR-1, P1): importurile TĂCUTE rulează într-o a doua trecere, DUPĂ toate anunțurile și mailurile, cu buget de timp', () => {
     const src = veghe()
     // nimic de anunțat și nicio versiune → licitația intră în a doua trecere, fără import aici
-    expect(src).toMatch(/if \(!noi\.length && !versiuni\.size && !raspunsuriAduse\.length && !termen\?\.nou && !areDeAnuntat\) \{[\s\S]{0,300}?if \(deRezolvat\) tacute\.push\(\{ id: lic\.id, coduri \}\);[^\n]*\n\s*continue;/)
-    // în bucla licitațiilor importul se pornește DOAR pentru documente noi SAU versiuni (R1: adusă și anunțată în aceeași rulare)
-    expect(src).toMatch(/if \(noi\.length \|\| versiuni\.size\) \{\s*const erori: string\[\] = \[\];\s*coduri\.import = await importa\(lic\.id, false, erori\);\s*if \(erori\.length\) coduri\.import_erori = erori;\s*\}/)
+    expect(src).toMatch(/if \(!noi\.length && !versiuni\.size && !raspunsuriAduse\.length && !termen\?\.nou && !areDeAnuntat\) \{[\s\S]{0,300}?if \(deRezolvat\) tacute\.push\(\{ id: lic\.id, coduri, camp: 'import' \}\);[^\n]*\n\s*continue;/)
+    // în bucla licitațiilor importul se pornește DOAR pentru documente noi SAU versiuni (R1: adusă și anunțată în aceeași rulare);
+    // E6 (r5): pornit doar de versiuni → fara_rezerva_arhiva
+    expect(src).toMatch(/if \(noi\.length \|\| versiuni\.size\) \{\s*const erori: string\[\] = \[\];\s*optImport = noi\.length \? \{\} : \{ fara_rezerva_arhiva: true \};\s*coduri\.import = await importa\(lic\.id, false, erori, optImport\);\s*if \(erori\.length\) coduri\.import_erori = erori;\s*\}/)
     expect(src).not.toMatch(/noi\.length \|\| deRezolvat/)
-    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iDoi = src.indexOf('for (const t of tacute) t.coduri.import = await importa(t.id, true);')
+    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iDoi = src.indexOf('for (const t of tacute) t.coduri[t.camp] = await importa(t.id, true, null, t.optiuni ?? {}, t.runde ?? RUNDE_IMPORT);')
     expect([iMail > 0, iDoi > iMail]).toEqual([true, true])
     expect(src).toMatch(/if \(cuBuget && Date\.now\(\) - t0 > BUGET_TACUT_MS\) return/)
     // rundele își trec de_la_index (un document care nu converge nu mai oprește toate rundele în același loc)
-    expect(src).toMatch(/body: JSON\.stringify\(\{ licitatie_id: licId, de_la_index: de \}\),/)
+    expect(src).toMatch(/body: JSON\.stringify\(\{ licitatie_id: licId, de_la_index: de, \.\.\.optiuni \}\),/)
     expect(src).toMatch(/de = Number\(rez\.next_index\) \|\| 0;/)
   })
   it('veghea (review PR-1): un JWT de utilizator cere acces la modulul Ofertare (poarta comună), nu doar o sesiune validă', () => {
@@ -514,7 +520,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(bloc).toMatch(/aparut_ulterior: true/)
     expect(bloc).not.toMatch(/seap_cod/)
     // versiunea adusă de ORICINE (UI, NAS) se anunță o dată: flag-ul se stinge DUPĂ notificări și mail
-    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iF = src.indexOf('de_anuntat: false, anuntat_la:')
+    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iF = src.indexOf('meta.de_anuntat = false; meta.anuntat_la = cand;')
     expect([iMail > 0, iF > iMail]).toEqual([true, true])
     expect(src).toMatch(/const versiuneDeAnuntat = \(d: any\) => !estePlaceholder\(d\) && d\?\.seap_meta\?\.de_anuntat === true;/)
   })
@@ -559,7 +565,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(cs).toMatch(/export const mutaPeIdentic = \(inl, arePlaceholderN2\) => !arePlaceholderN2 && numeBaza\(inl\?\.nume_original, codRand\(inl\)\) === null/)
     // R2: decideSeap dă toți înlocuiții (inlocuit = primul, ca înainte); candidatiMutare îi filtrează cu mutaPeIdentic + țintele folosite
     expect(cs).toMatch(/\{ fel: 'versiune', nume: N2, inlocuit: inloc\[0\], inlocuiti: inloc \}/)
-    expect(cs).toMatch(/return toti\.filter\(\(r\) => mutaPeIdentic\(r, arePlaceholderN2\) && !\(r\?\.id != null && folosite\.has\(r\.id\)\)\)/)
+    expect(cs).toMatch(/return toti\.filter\(\(r\) => mutaPeIdentic\(r, arePlaceholderN2\) && !\(r\?\.id != null && folosite\.has\(r\.id\)\) && peLinie\(r\)\)/)
+    // E1 (r5): ținta doar capul liniei — niciun candidat cu nume de cod cu număr mai mare (revenirea la un conținut vechi se anunță)
+    expect(cs).toMatch(/const capete = toti\.filter\(\(r\) => numeBaza\(r\?\.nume_original, codRand\(r\)\) !== null\)\.map\(nr\)/)
+    expect(cs).toMatch(/const peLinie = \(r\) => !capete\.some\(\(c\) => nr\(r\) == null \|\| c > nr\(r\)\)/)
   })
   it('veghea (F2/F4 + D3 + R4, review PR-1): next_index trece mai departe doar de la o rundă per-fisier fără rezerva arhivă; o rundă terminată de la > 0 e urmată de O rundă de la 0 DOAR pe a doua trecere, apoi stop; importul dă next_index = 0 pe arhivă (R3)', () => {
     const src = veghe()
@@ -567,7 +576,8 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(bloc.length).toBeGreaterThan(300)
     expect(bloc).toMatch(/if \(rez\?\.metoda === 'per-fisier' && !rez\?\.rezerva_arhiva\) de = Number\(rez\.next_index\) \|\| 0;\s*else de = 0;/)
     // R4 (r4): runda finală de la 0 doar cu cuBuget (a doua trecere; bugetul îl verifică capul buclei) — pe drumul principal niciodată
-    expect(bloc).toMatch(/if \(!rez\?\.continua\) \{\s*const finala = de > 0 && i \+ 1 < RUNDE_IMPORT;\s*if \(finala && cuBuget\) \{ de = 0; reluare = true; continue; \}\s*return `\$\{i \+ 1\} runde\$\{finala \? ' \(fara runda finala de la 0: drumul principal\)' : ''\}`;/)
+    // E4 (r5): lanțul drumului principal oprit de la de > 0 e marcat pentru O rundă de la 0 pe a doua trecere
+    expect(bloc).toMatch(/if \(!rez\?\.continua\) \{\s*const finala = de > 0 && i \+ 1 < runde;\s*if \(finala && cuBuget\) \{ de = 0; reluare = true; continue; \}\s*if \(de > 0 && !cuBuget\) deLa0\.add\(licId\);[^\n]*\n\s*return `\$\{i \+ 1\} runde\$\{finala \? ' \(fara runda finala de la 0: drumul principal\)' : ''\}`;/)
     expect(bloc).not.toMatch(/Date\.now\(\) - t0 < BUGET_TACUT_MS/)
     expect(bloc).toMatch(/if \(cuBuget && Date\.now\(\) - t0 > BUGET_TACUT_MS\) return `amanat/)
     const iR = bloc.indexOf('if (reluare) return'), iC = bloc.indexOf('if (!rez?.continua) {')
@@ -583,10 +593,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
   })
   it('veghea (F3/F6, review PR-1): a doua trecere (tăcută) DOAR la rularea programată, fără licitatie_id; amânările de buget se văd în tacute_amanate', () => {
     const src = veghe()
-    expect(src).toMatch(/const programata = !body\?\.licitatie_id;\s*if \(programata\) \{[\s\S]{0,300}?for \(const t of tacute\) t\.coduri\.import = await importa\(t\.id, true\);\s*\} else for \(const t of tacute\) t\.coduri\.import = 'nepornit/)
+    expect(src).toMatch(/const programata = !body\?\.licitatie_id;\s*if \(programata\) \{[\s\S]{0,300}?for \(const t of tacute\) t\.coduri\[t\.camp\] = await importa\(t\.id, true, null, t\.optiuni \?\? \{\}, t\.runde \?\? RUNDE_IMPORT\);\s*\} else for \(const t of tacute\) t\.coduri\[t\.camp\] = 'nepornit/)
     expect(src).toMatch(/const BUGET_TACUT_MS = 150000;/)
     expect(src).toMatch(/return `amanat \(bugetul de timp al veghei\)/)
-    expect(src).toMatch(/const tacute_amanate = tacute\.filter\(\(t\) => String\(t\.coduri\.import \?\? ''\)\.startsWith\('amanat'\)\)/)
+    expect(src).toMatch(/const tacute_amanate = tacute\.filter\(\(t\) => String\(t\.coduri\[t\.camp\] \?\? ''\)\.startsWith\('amanat'\)\)/)
     expect(src).toMatch(/return json\(\{ verificate: \(licitatii \|\| \[\]\)\.length, raport, tacute_amanate \}\);/)
     expect(src).not.toMatch(/EdgeRuntime\.waitUntil/)   // fără fire-and-forget
     const doc = readFileSync(new URL('../docs/ofertare/AUDIT_MOTOR_IMPORT_2026-10-07.md', import.meta.url), 'utf8')
@@ -604,18 +614,65 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
       expect(src.includes(x), x).toBe(true)
     // anunțul: din inventarul de DUPĂ import (rânduri reale cu de_anuntat), înainte de notificări și mail; flag-ul se stinge după
     const iAcum = src.indexOf('const { data: acum, error: eAcum } = await inventar('), iDe = src.indexOf('const deAnuntat = inventarOk ? (acum || []).filter(versiuneDeAnuntat) : [];')
-    const iNot = src.indexOf("from('notifications').insert("), iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iF = src.indexOf('de_anuntat: false, anuntat_la:')
+    const iNot = src.indexOf("from('notifications').insert("), iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iF = src.indexOf('meta.de_anuntat = false; meta.anuntat_la = cand;')
     expect([iAcum > 0, iDe > iAcum, iNot > iDe, iMail > iNot, iF > iMail]).toEqual([true, true, true, true, true])
     // gol acceptat: versiunea neadusă rămâne în raport (coduri.versiuni + erorile importului) și se reia la rularea următoare
     expect(src).toMatch(/const coduri: any = \{ de_rezolvat: deRezolvat, versiuni: \[\.\.\.versiuni\], instabile, import: null \};/)
     const bloc = src.slice(src.indexOf('const importa = async'), src.indexOf('const tacute: {'))
     expect(bloc).toMatch(/if \(erori\) \{\s*for \(const e of \[\.\.\.\(Array\.isArray\(rez\?\.erori\) \? rez\.erori : \[\]\), \.\.\.\(rez\?\.error \? \[rez\.error\] : \[\]\)\]\.map\(String\)\) \{\s*if \(erori\.length < 20 && !erori\.includes\(e\)\) erori\.push\(e\);/)
     // importul a rulat deja în prima trecere când existau documente noi sau versiuni — nu încă o dată în a doua
-    expect(src).toMatch(/if \(coduri\.import == null && deRezolvat\) tacute\.push\(\{ id: lic\.id, coduri \}\);/)
+    expect(src).toMatch(/if \(coduri\.import == null && deRezolvat\) tacute\.push\(\{ id: lic\.id, coduri, camp: 'import' \}\);/)
     // importul păstrează plasa F1 (placeholder-e de dinainte de R1) și D1 (mutaPeIdentic, prin candidatiMutare)
     expect(edge()).toMatch(/const deCompletat = placeholders\.has\(cheie\) && rand\?\.seap_meta\?\.de_anuntat === true;/)
     const doc = readFileSync(new URL('../docs/ofertare/AUDIT_MOTOR_IMPORT_2026-10-07.md', import.meta.url), 'utf8')
     expect(doc).toMatch(/R1 — cauza rădăcină/)
     expect(doc).toMatch(/Gol acceptat/)
+  })
+  it('veghea (E2, r5 — Jakarinos P1): anunțul unei versiuni se confirmă PE CANAL; de_anuntat = false doar cu notificat_la ȘI mail_la', () => {
+    const src = veghe()
+    // clopoțelul: doar inserturile mesajului care poartă versiunile confirmă canalul
+    expect(src).toMatch(/if \(versiuniNotif\.length\) mesajVersiuni = m;/)
+    expect(src).toMatch(/let notifOk = true;\s*for \(const pid of catre\) \{/)
+    expect(src).toMatch(/if \(m === mesajVersiuni\) notifOk = false;/)
+    // mailul: plecat, sau nedatorat (nimic de trimis / Resend neconfigurat — ca înainte); eșuat → rămâne pentru rularea următoare
+    expect(src).toMatch(/let mailOk = !raspunsuriMail\.length;\s*if \(raspunsuriMail\.length\) \{/)
+    expect(src).toMatch(/mail = 'sarit: lipseste RESEND_API_KEY';\s*mailOk = true;/)
+    expect(src).toMatch(/mailOk = r\.ok;/)
+    expect(src).toMatch(/const neaduse = raspunsuriMail\.filter/)
+    // marcarea: fiecare canal reușit acum își pune data; flag-ul se stinge doar cu amândouă
+    const bloc = src.slice(src.indexOf('let versiuniAnuntate = 0;'), src.indexOf('raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length'))
+    expect(bloc).toMatch(/if \(!meta\.notificat_la && notifOk\) meta\.notificat_la = cand;/)
+    expect(bloc).toMatch(/if \(!meta\.mail_la && mailOk\) meta\.mail_la = cand;/)
+    expect(bloc).toMatch(/if \(meta\.notificat_la && meta\.mail_la\) \{ meta\.de_anuntat = false; meta\.anuntat_la = cand; \}/)
+    expect(bloc).not.toMatch(/de_anuntat: false/)
+  })
+  it('import (E3, r5): SEAP se reîncearcă ca în veghe (403/429/5xx, 4 încercări, 0,7/1,4/2,1 s), în bugetul de timp; cookie-urile din încercarea reușită', () => {
+    const src = edge()
+    expect(src).toMatch(/async function fetchSeap\(url: string, init: RequestInit, pesteBuget: \(pauzaMs: number\) => boolean, incercari = 4\): Promise<Response> \{/)
+    expect(src).toMatch(/const merita = r\.status === 403 \|\| r\.status === 429 \|\| r\.status >= 500;/)
+    expect(src).toMatch(/const pauza = 700 \* \(i \+ 1\);/)
+    expect(src).toMatch(/if \(!merita \|\| i === incercari - 1 \|\| pesteBuget\(pauza\)\) return r;/)
+    expect(src).toMatch(/const pesteBuget = \(pauzaMs: number\) => Date\.now\(\) - t0 \+ pauzaMs > BUGET_MS;/)
+    // lista: răspunsul întors de fetchSeap e cel reușit — cookie-urile LUI leagă linkurile de descărcare
+    expect(src).toMatch(/const rl = await fetchSeap\(`\$\{SEAP\}\/NoticeCommon\/GetDfNoticeSectionFiles\/\?\$\{qs\}`, \{ headers: SEAP_HDR \}, pesteBuget\);\s*if \(!rl\.ok\)[^\n]*\n\s*else \{\s*cookie = cookieDin\(rl\);/)
+    expect(src).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget\);/)
+    expect(src).toMatch(/res = await fetchSeap\(url, \{ headers: SEAP_HDR \}, pesteBuget\);/)
+    expect((src.match(/await fetch\(/g) || []).length).toBe(1)   // singurul fetch direct e în fetchSeap
+  })
+  it('veghea (E4, r5): lanțul drumului principal oprit de la de > 0 primește O rundă de la 0 pe a doua trecere (o singură dată, cu aceleași opțiuni)', () => {
+    const src = veghe()
+    expect(src).toMatch(/const deLa0 = new Set<number>\(\);/)
+    expect(src).toMatch(/else if \(deLa0\.has\(lic\.id\) && !tacute\.some\(\(t\) => t\.id === lic\.id\)\) tacute\.push\(\{ id: lic\.id, coduri, camp: 'import_de_la_0', runde: 1, optiuni: optImport \}\);/)
+    expect(src).toMatch(/return `\$\{runde\} runde, ramas de continuat`;/)
+  })
+  it('import (E6, r5): fara_rezerva_arhiva sare rezerva DownloadArchive și o spune; implicit neschimbat', () => {
+    const src = edge()
+    expect(src).toMatch(/const faraRezervaArhiva = body\?\.fara_rezerva_arhiva === true;/)
+    expect(src).toMatch(/const cerutaArhiva = !continua && \(!perFisierOk \|\| !!motivRezerva\);/)
+    expect(src).toMatch(/const nevoieDeArhiva = cerutaArhiva && !faraRezervaArhiva;/)
+    expect(src).toMatch(/if \(cerutaArhiva && faraRezervaArhiva\) \{\s*raport\.rezerva_arhiva_sarita = motivRezerva \|\| 'lista indisponibila';\s*nerecuperate\+\+;/)
+    expect(src).toMatch(/rezerva_arhiva_sarita: null as string \| null/)
+    const doc = readFileSync(new URL('../docs/ofertare/AUDIT_MOTOR_IMPORT_2026-10-07.md', import.meta.url), 'utf8')
+    expect(doc).toMatch(/Review PR-1, runda 5 \(E1–E7\)/)
   })
 })

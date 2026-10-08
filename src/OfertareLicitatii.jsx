@@ -41,6 +41,7 @@ import { restantePeTip as restantePeTipDoc, textRestante } from './ofertareTrans
 import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   // aceleași reguli ca la import (worker, edge, api)
 import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
+import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -3478,10 +3479,10 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     const { data, error } = await supabase.functions.invoke('ofertare-seap-veghe', { body: { licitatie_id: l.id } })
     setVerific(false)
     if (error || data?.error) return anunta('Verificarea a eșuat: ' + (data?.error || error?.message), 'err')
-    const r = Array.isArray(data?.raport) ? data.raport.find(x => x.licitatie === l.nr_anunt) || data.raport[0] : data
+    // E7 (review PR-1 r5): intrarea PRINCIPALĂ a licitației (cu `termen`), iar „Nimic nou” doar dacă nu s-a adus / anunțat nimic
+    const r = intrareVeghe(data, l.nr_anunt)
     setVeghe(r || { info: 'SEAP nu a întors nimic pentru anunțul ăsta.' })
-    const noi = (r?.adusi?.length || 0) + (r?.raspunsuri_aduse?.length || 0)
-    anunta(noi ? `📂 ${noi} document(e) noi aduse din SEAP` : 'Nimic nou în SEAP acum.')
+    anunta(rezumatVeghe(r).text)
     load()
   }
 

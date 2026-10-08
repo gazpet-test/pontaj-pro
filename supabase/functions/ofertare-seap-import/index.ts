@@ -146,6 +146,27 @@ function cookieDin(r: Response): string {
   return perechi.join('; ');
 }
 
+// E3 (review PR-1, r5): SEAP refuza INTERMITENT (403/429/5xx, masurat pe veghe 16.09: 403,403,200 pe GetDfNoticeSectionFiles).
+// Fara reincercare, un singur 403 pe lista trimitea importul pe rezerva DownloadArchive (minute, doar pe nume), iar unul pe un
+// document il pierdea pe rularea asta. COPIE a tiparului fetchSeap din ofertare-seap-veghe (edge functions nu impart cod):
+// 4 incercari, pauze 0,7 / 1,4 / 2,1 s, doar la 403/429/5xx. In plus aici: nicio reincercare noua daca pauza ar depasi bugetul
+// de timp al rularii (pesteBuget). Se intoarce raspunsul incercarii REUSITE — cookie-urile ei leaga linkurile de descarcare.
+const asteapta = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function fetchSeap(url: string, init: RequestInit, pesteBuget: (pauzaMs: number) => boolean, incercari = 4): Promise<Response> {
+  let ultim: Response | null = null;
+  for (let i = 0; i < incercari; i++) {
+    const r = await fetch(url, init);
+    if (r.ok) return r;
+    ultim = r;
+    const merita = r.status === 403 || r.status === 429 || r.status >= 500;
+    const pauza = 700 * (i + 1);   // 0,7s / 1,4s / 2,1s
+    if (!merita || i === incercari - 1 || pesteBuget(pauza)) return r;
+    try { await r.body?.cancel(); } catch (_) { /* deja inchis */ }
+    await asteapta(pauza);
+  }
+  return ultim!;
+}
+
 const esteZip = (b: Uint8Array) => b.length > 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
 // ANTI-BUG 15.09.2026, prins la prima rulare pe SCN1179776: .docx/.xlsx/.pptx SUNT arhive ZIP.
 // Cu decizia luata doar pe semnatura PK, un formular Word a fost "despachetat" in bucatile lui
@@ -182,6 +203,9 @@ Deno.serve(async (req: Request) => {
   try { body = await req.json(); } catch (_) { /* gol */ }
   const licitatieId = Number(body?.licitatie_id);
   const deLaIndex = Number(body?.de_la_index) || 0;
+  // E6 (review PR-1, r5): veghea pornește importul DOAR pentru versiuni → fără rezerva DownloadArchive (merge pe nume și nu poate
+  // aduce o versiune „N (COD).ext”; ar parcurge arhiva minute întregi degeaba). Implicit (UI, rutine, documente noi): ca înainte.
+  const faraRezervaArhiva = body?.fara_rezerva_arhiva === true;
   if (!licitatieId) return json({ error: 'licitatie_id lipsa' }, 400);
 
   const { data: lic, error: eLic } = await supa.from('ofertare_licitatii')
@@ -196,7 +220,9 @@ Deno.serve(async (req: Request) => {
     // audit #4 var. B: sarite pe cod, coduri adoptate pe randuri vechi, coduri mutate (versiune republicata identic, F5), versiuni / frati noi, ramase pe regula veche
     sarite_cod: 0, coduri_adoptate: [] as { id: number; cod: string }[], coduri_mutate: [] as { id: number; de: string; la: string }[], versiuni_noi: [] as string[], frati: [] as string[], coduri_ambigue: [] as string[], coduri_instabile: null as string | null,
     // intrarile peste 20 MB din ZIP-urile documentelor: ZIP-ul pleaca intreg la NAS, care le aduce (nu sunt „sarite”)
-    lasate_pentru_nas: [] as string[] };
+    lasate_pentru_nas: [] as string[],
+    // E6: motivul pentru care rezerva DownloadArchive ar fi pornit, dar a fost sarita la cerere (fara_rezerva_arhiva); altfel null
+    rezerva_arhiva_sarita: null as string | null };
 
   // inventarele pe pagini, fail-closed (audit Jakarinos #21): o listă trunchiată / o eroare NU e „nimic în platformă”
   const { data: dejaAre, error: eInv } = await toatePaginile((de: number, la: number) => supa.from('ofertare_documente_atribuire')
@@ -318,6 +344,8 @@ Deno.serve(async (req: Request) => {
   };
 
   const bugetDepasit = () => urcatiOcteti > BUGET_OCTETI || Date.now() - t0 > BUGET_MS;
+  // E3: o reincercare SEAP nu porneste daca pauza ei ar trece de bugetul de timp al rularii
+  const pesteBuget = (pauzaMs: number) => Date.now() - t0 + pauzaMs > BUGET_MS;
   let continua = false;
   let index = deLaIndex;
 
@@ -331,7 +359,8 @@ Deno.serve(async (req: Request) => {
   let motivRezerva = '';
 
   try {
-    const rl = await fetch(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?${qs}`, { headers: SEAP_HDR });
+    // E3: cu reincercari (403/429/5xx); cookie-urile vin din raspunsul incercarii REUSITE (fetchSeap il intoarce pe el)
+    const rl = await fetchSeap(`${SEAP}/NoticeCommon/GetDfNoticeSectionFiles/?${qs}`, { headers: SEAP_HDR }, pesteBuget);
     if (!rl.ok) motivRezerva = `GetDfNoticeSectionFiles HTTP ${rl.status}`;
     else {
       cookie = cookieDin(rl);   // tokenul din noticeDocumentUrl e legat de ACEASTA sesiune
@@ -456,7 +485,7 @@ Deno.serve(async (req: Request) => {
       }
       try {
         const link = doc.url.startsWith('http') ? doc.url : `https://e-licitatie.ro/${doc.url.replace(/^\/+/, '')}`;
-        const rd = await fetch(link, { headers: antetDesc });
+        const rd = await fetchSeap(link, { headers: antetDesc }, pesteBuget);   // E3: reincercari, in buget
         if (!rd.ok) { raport.erori.push(`${numeCurat}: descarcare HTTP ${rd.status}`); esec(); i++; continue; }
         const cl = Number(rd.headers.get('content-length') || 0);
         if (cl > PRAG_MARE) {
@@ -635,7 +664,15 @@ Deno.serve(async (req: Request) => {
 
   // -- CALEA VECHE, REZERVA: arhiva intreaga (DownloadArchive) --------------------
   // Se incearca doar daca lista a esuat / a venit goala / un document nu s-a putut aduce.
-  const nevoieDeArhiva = !continua && (!perFisierOk || !!motivRezerva);
+  const cerutaArhiva = !continua && (!perFisierOk || !!motivRezerva);
+  // E6 (r5): pornit doar pentru versiuni (fara_rezerva_arhiva) → rezerva NU porneste: o spune raportul, iar rularea nu se declara
+  // „adusa” (ce a cazut ramane lipsa); rularea programata urmatoare reia drumul per fisier
+  const nevoieDeArhiva = cerutaArhiva && !faraRezervaArhiva;
+  if (cerutaArhiva && faraRezervaArhiva) {
+    raport.rezerva_arhiva_sarita = motivRezerva || 'lista indisponibila';
+    nerecuperate++;
+    raport.erori.push(`rezerva arhiva SARITA (fara_rezerva_arhiva: import pornit doar pentru versiuni — DownloadArchive merge pe nume si nu poate aduce „N (COD).ext”): ${raport.rezerva_arhiva_sarita}`);
+  }
   let arhivaIncompleta = false;
   const lasateArhiva = new Set<string>();   // cheile intrarilor lasate pe seama /api/seap-import (peste PRAG_MARE)
   // dovezile ZIP-urilor desfacute inline se scriu INAINTE ca rezerva sa urce arhive intregi (bucla NAS le-ar putea revendica
@@ -647,15 +684,17 @@ Deno.serve(async (req: Request) => {
     nerecuperate++;
     raport.erori.push('rezerva arhiva AMANATA: dovezile din manifest nu s-au putut scrie (arhivele intregi s-ar dubla la NAS) — se reia la rularea urmatoare');
   }
+  // E5 (r5): arhiva se parcurge MEREU de la prima intrare — de la R3 un de_la_index primit e o pozitie in lista SEAP, niciodata
+  // in ZIP (next_index pe arhiva e 0); dedup-ul pe nume / sha sare ce e deja in platforma. `index` numara intrarile ZIP-ului.
   if (nevoieDeArhiva && doveziScrise) {
-    if (!perFisierOk) { raport.metoda = 'arhiva'; index = deLaIndex; }
+    if (!perFisierOk) { raport.metoda = 'arhiva'; index = 0; }
     raport.rezerva_arhiva = true;
     raport.erori.push(`rezerva arhiva: ${motivRezerva || 'lista indisponibila'}`);
-    const deLaIndexArhiva = perFisierOk ? 0 : deLaIndex;   // pe rezerva partiala parcurgem tot, dedup-ul taie ce avem
 
     const url = `${SEAP}/NoticeCommon/DownloadArchive/?${qs}`;
     let res: Response | null = null;
-    try { res = await fetch(url, { headers: SEAP_HDR }); } catch (e) { raport.erori.push('arhiva: ' + String((e as Error)?.message || e)); }
+    // E3: doar cererea initiala se reincearca (fluxul ZIP de dupa nu se reia)
+    try { res = await fetchSeap(url, { headers: SEAP_HDR }, pesteBuget); } catch (e) { raport.erori.push('arhiva: ' + String((e as Error)?.message || e)); }
     if (!res || !res.ok || !res.body) {
       if (!perFisierOk) return json({ ...raport, error: `SEAP HTTP ${res?.status ?? 'fetch esuat'}` }, 502);
       raport.erori.push(`arhiva: HTTP ${res?.status ?? 'fetch esuat'}`);
@@ -668,12 +707,10 @@ Deno.serve(async (req: Request) => {
           (h: { nume: string; usize: number }) => {
             const numeCurat = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
             const preaMare = h.usize > PRAG_MARE;
-            const sarim = iArh < deLaIndexArhiva || dejaSubUnNume(urcate, h.nume) || JUNK_RE.test(h.nume) || preaMare;
+            const sarim = dejaSubUnNume(urcate, h.nume) || JUNK_RE.test(h.nume) || preaMare;
             if (sarim) {
-              if (iArh >= deLaIndexArhiva) {
-                if (dejaSubUnNume(urcate, h.nume)) raport.sarite_existente++;
-                else if (preaMare) { raport.lasate_pentru_vercel.push(`${numeCurat} (${(h.usize / 1e6).toFixed(0)}MB)`); lasateArhiva.add(cheieRand(h.nume)).add(cheieNume(h.nume)); }
-              }
+              if (dejaSubUnNume(urcate, h.nume)) raport.sarite_existente++;
+              else if (preaMare) { raport.lasate_pentru_vercel.push(`${numeCurat} (${(h.usize / 1e6).toFixed(0)}MB)`); lasateArhiva.add(cheieRand(h.nume)).add(cheieNume(h.nume)); }
               iArh++;
               return false;
             }

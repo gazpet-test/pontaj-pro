@@ -33,6 +33,8 @@
 //     R2 (r4): cu mai mulți înlocuiți posibili (frați cu același nume, republicați integral identic), decideSeap îi dă pe toți
 //     (`inlocuiti`, numărul cel mai mare primul; `inlocuit` = primul, ca înainte) și importul caută conținutul identic pe FIECARE
 //     candidat mutabil (`candidatiMutare`): codul se mută pe primul identic, iar un rând e ținta unei singure mutări pe rulare.
+//     E1 (r5): ținta e doar capul liniei — un original cu o versiune / un frate cu nume de cod MAI NOU nu mai primește codul
+//     (revenirea la un conținut vechi se anunță ca versiune, nu se mută în tăcere).
 // Versiunea și fratele primesc numele `numeVersiune` („Caiet de sarcini (CN1095546-00036).pdf”, decizia N = A), hotărât pe
 // numele SEAP BRUT, înainte de desfacerea semnăturii: placeholder-ul veghei, calea din Storage, cheia de manifest, marcarea
 // după nume și desfacerea .p7m/.p7s dau același nume pe toate drumurile, fără gemeni cu numele vechi.
@@ -319,11 +321,18 @@ export const mutaPeIdentic = (inl, arePlaceholderN2) => !arePlaceholderN2 && num
  *  care trece mutaPeIdentic și NU a fost deja ținta unei mutări în rularea asta (`folosite` = id-urile ținute de apelant: un al
  *  doilea document nu se mută pe același rând). Dovada de conținut (sha) o face apelantul pe toți, oprită la prima potrivire;
  *  niciunul identic → versiune cu `inlocuit` (inloc[0]), ca înainte. Pură.
+ *  E1 (review PR-1, r5, Jakarinos P1): revenirea la un conținut MAI VECHI se anunță, nu se mută în tăcere — un candidat e țintă
+ *  doar dacă NICIUN candidat cu nume de cod („N (COD).ext”: versiune / frate) nu are număr mai mare decât el (capul liniei, sau
+ *  un original fără versiune mai nouă). Ex.: „Caiet.pdf” /10 (A), „Caiet (C-00020).pdf” /20 (B), SEAP republică /30 cu A →
+ *  versiune anunțată, nu mutare pe /10. Frații fără nume de cod (lic. 100) rămân toți ținte, ca la R2.
  *  @param {any} dec @param {boolean} arePlaceholderN2 @param {Set<number>} [folosite] @returns {Rand[]} */
 export function candidatiMutare(dec, arePlaceholderN2, folosite = new Set()) {
   if (dec?.fel !== 'versiune') return []
   const toti = Array.isArray(dec.inlocuiti) && dec.inlocuiti.length ? dec.inlocuiti : dec.inlocuit ? [dec.inlocuit] : []
-  return toti.filter((r) => mutaPeIdentic(r, arePlaceholderN2) && !(r?.id != null && folosite.has(r.id)))
+  const nr = (r) => ordineCod(codRand(r))?.nr ?? null
+  const capete = toti.filter((r) => numeBaza(r?.nume_original, codRand(r)) !== null).map(nr).filter((n) => n != null)
+  const peLinie = (r) => !capete.some((c) => nr(r) == null || c > nr(r))
+  return toti.filter((r) => mutaPeIdentic(r, arePlaceholderN2) && !(r?.id != null && folosite.has(r.id)) && peLinie(r))
 }
 
 /** Mutarea codului pe rândul ÎNLOCUIT, când „versiunea” are exact conținutul lui (review PR-1, F5: autoritatea republică
