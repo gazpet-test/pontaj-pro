@@ -19,6 +19,7 @@ import Consumabile from './Consumabile.jsx'
 import LocatiiInchiriate from './LocatiiInchiriate.jsx'
 import UnitatiProtejate from './UnitatiProtejate.jsx'
 import ApiConsumExtern from './ApiConsumExtern.jsx'
+import ConturiRegistru from './ConturiRegistru.jsx'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#161B22', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681',
@@ -817,6 +818,8 @@ export default function AdministrativPage() {
     { key: 'contracte',  icon: '📜', label: 'Contracte comerciale' },
     { key: 'subcontractori', icon: '🔗', label: 'Dashboard subcontractori' },
     { key: 'costuri_ai', icon: '💰', label: 'Costuri AI', ownerOnly: true },
+    // 08.10.2026 (spec_conturi_registru): registrul de conturi — doar owner, fără parole
+    { key: 'conturi',    icon: '🔐', label: 'Conturi', ownerOnly: true },
   ].filter(t => !t.ownerOnly || isOwner)
    // Acces granular: cheia 'administrativ' deschide tot modulul, iar
    // 'administrativ.<tab>' doar tab-ul respectiv (ruta acceptă deja sub-modulele).
@@ -851,7 +854,7 @@ export default function AdministrativPage() {
             <span style={{background: `linear-gradient(135deg, ${G.orange} 0%, ${G.purple} 100%)`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}}>Administrativ</span>
           </div>
           <div style={{fontSize:12, color:G.muted, marginTop:4}}>
-            Documente firmă · Furnizori · Ticketing · Contracte terți · Contracte{isOwner ? ' · Costuri AI' : ''}
+            Documente firmă · Furnizori · Ticketing · Contracte terți · Contracte{isOwner ? ' · Costuri AI · Conturi' : ''}
           </div>
         </div>
       </div>
@@ -885,6 +888,9 @@ export default function AdministrativPage() {
       {/* Tab Costuri AI (real, nu placeholder) */}
       {tab === 'costuri_ai' && isOwner && <TabCosturiAI />}
 
+      {/* 08.10.2026: registrul de conturi și accesuri (owner-only, RLS is_owner pe conturi_registru) */}
+      {tab === 'conturi' && isOwner && <ConturiRegistru profile={profile} />}
+
       {/* Etapa 14: Tab Ticketing activ (modul Tichete filtrat pe departament) */}
       {tab === 'ticketing' && <Tichete filterDepartament="administrativ" noLayout={true} />}
 
@@ -904,7 +910,7 @@ export default function AdministrativPage() {
       {tab === 'furnizori' && <FurnizoriTab />}
 
       {/* Placeholder pentru tab-urile încă neimplementate */}
-      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && tab !== 'locatii' && tab !== 'upa' && (
+      {tab !== 'costuri_ai' && tab !== 'ticketing' && tab !== 'contracte_terti' && tab !== 'contracte' && tab !== 'subcontractori' && tab !== 'documente' && tab !== 'furnizori' && tab !== 'consumabile' && tab !== 'locatii' && tab !== 'upa' && tab !== 'conturi' && (
         <div style={{...S.card, padding:50, textAlign:'center'}}>
           <div style={{fontSize:48, marginBottom:14}}>
             {tab === 'contracte' && '📜'}
