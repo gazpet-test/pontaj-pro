@@ -214,9 +214,13 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
             // frate urcat fără cod) se caută întâi; cu rivali pe nume (alt cod listat sau rândul găsit pe nume are alt cod) =
             // LIPSĂ raportată pe cheia proprie a codului; fără rivali (rând vechi fără cod, nume unic) = pe nume, ca înainte.
             const dN2 = inPlatforma.get(cheieNume(numeCod))
-            const peNume = inPlatforma.get(cheieNume(locale[0].nume.split('/').pop()!)) ?? inPlatforma.get(cheieNume(locale[0].nume))
+            // TOATE rândurile reale cu numele lui (nu doar ultimul păstrat de inPlatforma — Jakarinos r6 pe #659): rival = alt cod listat
+            // cu același nume sau un rând cu numele lui care poartă alt cod; ambiguu = rival sau mai multe rânduri cu același nume
+            const real = (x: DocumentBd) => !!x.fisier_path && !String(x.fisier_path).includes('/neincarcat/')
+            const peNumeToate = dinBd.filter(x => real(x) && (cheieNume(x.nume_original) === cheieNume(locale[0].nume) || cheieNume(x.nume_original) === cheieNume(grup[0].nume)))
             const rival = docs.some(x => x !== grup[0] && cheieNume(x.nume) === cheieNume(grup[0].nume) && String(x.cod ?? '').trim() && String(x.cod).trim() !== cod)
-              || !!(peNume && String(peNume.seap_cod ?? '').trim() && String(peNume.seap_cod).trim() !== cod)
+              || peNumeToate.some(x => String(x.seap_cod ?? '').trim() && String(x.seap_cod).trim() !== cod)
+            const ambiguu = rival || peNumeToate.length > 1
             if (dN2) { const [a, c] = cheiaPentru(dN2); await compara(a, c, locale[0].buf, dN2.nume_original, dN2) }
             else {
               // Jakarinos r3 pe #659 (P1): fratele cu conținut IDENTIC (deduplicat legitim de worker / edge, fără rând propriu) nu e
@@ -225,7 +229,6 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
               // propriu, cu sau fără rival listat (/3 rămas singur în listă, deduplicat pe „N (/2).pdf”).
               const c = fara(numeCod), shaDoc = await sha(locale[0].buf)
               const coduriRivale = docs.filter(x => x !== grup[0] && cheieNume(x.nume) === cheieNume(grup[0].nume)).map(x => String(x.cod ?? '').trim()).filter(Boolean)
-              const real = (x: DocumentBd) => !!x.fisier_path && !String(x.fisier_path).includes('/neincarcat/')
               // familia numelui: același nume, orice rând „N (COD).ext” (și codurile IEȘITE din listă — Jakarinos r4 pe #659: /3 deduplicat
               // pe „N (/2).pdf”, apoi /2 înlocuit de /4 → /3 nu redevine fals „LIPSĂ”), codurile rivale listate și documentul indicat de
               // dovada existentă pe cheia proprie a codului
@@ -234,8 +237,8 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
               const dinFamilie = (n: string) => tipare.some(([pre, post]) => n.length > pre.length + post.length && n.startsWith(pre) && n.endsWith(post)
                 && /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$/.test(n.slice(pre.length, n.length - post.length)))
               const precProprie = dovezi.get(`${c.toLowerCase()}\u0000${c}`)
-              const candidati = [...new Map([...dinBd.filter(x => real(x) && (cheieNume(x.nume_original) === cheieNume(locale[0].nume) || cheieNume(x.nume_original) === cheieNume(grup[0].nume)
-                  || dinFamilie(String(x.nume_original)) || (precProprie?.document_id != null && x.id === precProprie.document_id))),
+              const candidati = [...new Map([...peNumeToate, ...dinBd.filter(x => real(x) && (dinFamilie(String(x.nume_original))
+                  || (precProprie?.document_id != null && x.id === precProprie.document_id))),
                 ...coduriRivale.map(rc => peCod.get(rc)).filter((x): x is DocumentBd => !!x)].map(x => [x.id, x])).values()]
               let identic: DocumentBd | undefined, necitit = ''
               for (const x of candidati) {
@@ -245,19 +248,17 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
                 if (st.sha === shaDoc) { identic = x; break }
               }
               const rand = { licitatie_id: licId, arhiva_cheie: c.toLowerCase(), cale: c, marime: locale[0].buf.length, sha256: shaDoc, verificat_la: new Date().toISOString() }
-              const peNumeVechi = (x: DocumentBd) => !String(x.seap_cod ?? '').trim()
-                && (cheieNume(x.nume_original) === cheieNume(locale[0].nume) || cheieNume(x.nume_original) === cheieNume(grup[0].nume))
-              // fără rival, identic cu rândul VECHI fără cod de pe același nume (cod încă neadoptat): pe nume, ca înainte (îi confirmă dovada)
-              if (identic && !rival && peNumeVechi(identic)) await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)
-              else if (identic) {
+              // identic = legătura pe cheia proprie a codului, ÎNTOTDEAUNA (Jakarinos r6 pe #659: căderea pe nume abandona candidatul
+              // confirmat și compara cu documentul altei dovezi, pe care o retrograda)
+              if (identic) {
                 randuri.push({ ...rand, document_id: identic.id, stare: 'deja_in_platforma', motiv: `conținut identic cu #${identic.id} — codul SEAP ${cod} nu are rând propriu (frate deduplicat)` })
                 tally.identice++; potrivite.add(identic.id)
               } else if (necitit) tally.erori.push(`${grup[0].nume} (${cod}): Storage indisponibil (${necitit}) la verificarea fratelui — nimic scris`)
-              else if (rival) {
-                randuri.push({ ...rand, document_id: null, stare: 'eroare_urcare', motiv: `LIPSĂ în platformă (verificare R6): codul SEAP ${cod} nu e pe niciun document, iar numele are alt cod` })
+              else if (ambiguu) {
+                randuri.push({ ...rand, document_id: null, stare: 'eroare_urcare', motiv: `LIPSĂ în platformă (verificare R6): codul SEAP ${cod} nu e pe niciun document, iar numele are alt cod sau mai multe documente` })
                 tally.lipsa++
               }
-              else await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)   // fără rival și fără identic: pe nume, ca înainte
+              else await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)   // nume neambiguu, niciun identic: pe nume, ca înainte
             }
           }
         }

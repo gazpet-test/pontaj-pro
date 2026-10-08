@@ -260,6 +260,15 @@ Deno.test('manifest (PR-2): cod fără rând, fără rival, rândul vechi „N.p
   eq([raport.identice, raport.diferite, raport.lipsa_in_platforma], [0, 1, 0])
 })
 
+Deno.test('manifest (PR-2, Jakarinos r6): identic cu rândul vechi fără cod, alt rând cu același nume are dovadă → legat pe cheia codului, dovada celuilalt neatinsă', async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 22, nume_original: 'N.pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: null }]
+  const dovada = { arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 21, sha256: await sha('alpha'), stare: 'urcat' }
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi: [dovada], seapLista: [{ nume: 'N.pdf', cod: 'CN1/00003', text: 'beta' }] })
+  eq(scrieri.map(x => [x.cale, x.document_id, x.stare]), [['N (CN1-00003).pdf', 22, 'deja_in_platforma']], 'nicio scriere pe cheia lui #21')
+  eq([raport.identice, raport.diferite, raport.lipsa_in_platforma], [1, 0, 0])
+})
+
 Deno.test('manifest: uscat nu scrie manifestul', async () => {
   const { raport, scrieri } = await scenariu({ uscat: true })
   eq(scrieri, [])
