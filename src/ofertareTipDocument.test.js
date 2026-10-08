@@ -425,8 +425,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/const k = cheieEvidenta\(numeEv\(d\)\)/)
     // semnătura sărită lângă documentul ei își închide și evidența pe cod (Jakarinos r11 pe #659)
     expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, String\(d\.cod\)\), 'sarit'/)
-    // un cod dovedit prezent își închide și evidența de pe ALT nume care îl poartă (Jakarinos r12 pe #659)
-    expect(src).toMatch(/const c = prezente\.find\(c => numeBaza\(String\(e\.nume_seap \?\? ''\), c\) != null\)/)
+    // un cod dovedit prezent închide evidența perechii LISTATE (nume, cod), nu orice nume care conține „(COD)” (Jakarinos r12/r13, Copilot r7)
+    expect(src).toMatch(/for \(const d of docs\.filter\(prezentPeCod\)\) \{\s*\n\s*const c = String\(d\.cod\)\.trim\(\), n = numeVersiune\(d\.nume, c\), k = cheieEvidenta\(n\)/)
+    expect(src).toMatch(/if \(brute\.has\(k\) \|\| \(coduriPeCheie\.get\(k\)\?\.size \?\? 0\) > 1\) continue/)
+    expect(src).not.toMatch(/numeBaza\(String\(e\.nume_seap/)
     expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)
