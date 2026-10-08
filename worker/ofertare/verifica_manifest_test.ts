@@ -232,6 +232,19 @@ for (const ordine of ['/2,/1', '/1,/2']) Deno.test(`manifest (PR-2, Jakarinos r3
   eq([raport.identice, raport.diferite, raport.lipsa_in_platforma, scrieri.length], [2, 0, 0, 2])
 })
 
+Deno.test('manifest (PR-2, Jakarinos r4): fratele deduplicat pe „N (/2).pdf” rămâne legat după ce /2 iese din listă (înlocuit de /4) — nu redevine „LIPSĂ”', async () => {
+  // N.pdf /1 (alpha) pe #21; frate /2 urcat ca „N (CN1-00002).pdf” (beta) pe #22; /3 (beta) deduplicat pe #22; acum SEAP: /1, /3, /4 (gamma)
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 22, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: 'CN1/00002' }]
+  const dovezi = [{ arhiva_cheie: 'n (cn1-00003).pdf', cale: 'N (CN1-00003).pdf', document_id: 22, sha256: await sha('beta'), stare: 'deja_in_platforma' }]
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' },
+    { nume: 'N.pdf', cod: 'CN1/00003', text: 'beta' }, { nume: 'N.pdf', cod: 'CN1/00004', text: 'gamma' }] })
+  const r3 = scrieri.find(x => x.cale === 'N (CN1-00003).pdf'), r4 = scrieri.find(x => x.cale === 'N (CN1-00004).pdf')
+  eq([r3?.document_id, r3?.stare], [22, 'deja_in_platforma'], '/3 rămâne legat de #22')
+  eq([r4?.document_id, r4?.stare], [null, 'eroare_urcare'], '/4 (alt conținut, neadus) e lipsă')
+  eq([raport.identice, raport.lipsa_in_platforma], [2, 1])
+})
+
 Deno.test('manifest: uscat nu scrie manifestul', async () => {
   const { raport, scrieri } = await scenariu({ uscat: true })
   eq(scrieri, [])

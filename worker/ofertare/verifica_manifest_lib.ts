@@ -225,7 +225,16 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
               const c = fara(numeCod), shaDoc = await sha(locale[0].buf)
               const coduriRivale = docs.filter(x => x !== grup[0] && cheieNume(x.nume) === cheieNume(grup[0].nume)).map(x => String(x.cod ?? '').trim()).filter(Boolean)
               const real = (x: DocumentBd) => !!x.fisier_path && !String(x.fisier_path).includes('/neincarcat/')
-              const candidati = [...new Map([...dinBd.filter(x => real(x) && (cheieNume(x.nume_original) === cheieNume(locale[0].nume) || cheieNume(x.nume_original) === cheieNume(grup[0].nume))),
+              // familia numelui: același nume, orice rând „N (COD).ext” (și codurile IEȘITE din listă — Jakarinos r4 pe #659: /3 deduplicat
+              // pe „N (/2).pdf”, apoi /2 înlocuit de /4 → /3 nu redevine fals „LIPSĂ”), codurile rivale listate și documentul indicat de
+              // dovada existentă pe cheia proprie a codului
+              const Q = 'QQ0CODQQ'
+              const tipare = [numeVersiune(grup[0].nume, Q), numeDesfacut(numeVersiune(grup[0].nume, Q))].map(t => t.split(Q)).filter(t => t.length === 2)
+              const dinFamilie = (n: string) => tipare.some(([pre, post]) => n.length > pre.length + post.length && n.startsWith(pre) && n.endsWith(post)
+                && /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$/.test(n.slice(pre.length, n.length - post.length)))
+              const precProprie = dovezi.get(`${c.toLowerCase()}\u0000${c}`)
+              const candidati = [...new Map([...dinBd.filter(x => real(x) && (cheieNume(x.nume_original) === cheieNume(locale[0].nume) || cheieNume(x.nume_original) === cheieNume(grup[0].nume)
+                  || dinFamilie(String(x.nume_original)) || (precProprie?.document_id != null && x.id === precProprie.document_id))),
                 ...coduriRivale.map(rc => peCod.get(rc)).filter((x): x is DocumentBd => !!x)].map(x => [x.id, x])).values()]
               let identic: DocumentBd | undefined, necitit = ''
               for (const x of candidati) {
