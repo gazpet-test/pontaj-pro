@@ -303,7 +303,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   const identitate = stareIdentitate((dinBd || []).filter(d => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume)
   const placeholders = new Map((dinBd || []).filter(estePlaceholder).map(d => [cheieRand(d.nume_original), d.id as number]))
   const { data: evid, error: eEv } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_fisiere')
-    .select('cheie, nume_seap, stare, incercari, etapa').eq('licitatie_id', licId).order('id').range(de, la))
+    .select('cheie, nume_seap, stare, incercari, etapa, sha256').eq('licitatie_id', licId).order('id').range(de, la))
   if (eEv) { raport.erori.push(`evidența SEAP nu s-a putut citi: ${eEv.message}`); return raport }
   const evidenta = new Map((evid || []).map(e => [e.cheie, e]))
 
@@ -336,12 +336,17 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     const cod = String(d.cod ?? '').trim()
     if (cod) { rezolvate.add(cod); await inchideCheie(numeVersiune(d.nume, cod), 'ok', motiv) }
   }
+  // Copilot r1 pe #659 (P1): evidența ISTORICĂ nu e dovadă de prezență pentru un document cu cod fără rând propriu. „sarit” nu
+  // dovedește nimic (ex. cod ieșit din listă, apoi reapărut), iar „ok” doar dacă sha-ul ei e încă dovedit în platformă, pe un rând
+  // real (manifest „urcat”) — cazul fratelui identic fără rând propriu (P = A), revalidat la fiecare rulare, fără descărcare
+  const realeIds = new Set((dinBd || []).filter(d => !estePlaceholder(d)).map(d => d.id as number))
+  const shaDovediteAcum = new Set([...identitate.shaDoc].filter(([id, sha]) => sha && realeIds.has(id)).map(([, sha]) => sha as string))
+  const okDovedit = (ev: any) => ev?.stare === 'ok' && !!ev.sha256 && shaDovediteAcum.has(ev.sha256)
   const prezentPeCod = (d: DocSeap) => {
     const c = String(d.cod ?? '').trim()
     if (!c || esteArhiva(numeDesfacut(d.nume)) || volumRar(d.nume.replace(/\.p7[ms]$/i, ''))) return false
     if (rezolvate.has(c) || inv.coduri.get(c)?.id != null) return true
-    const ev = evidenta.get(cheieEvidenta(numeVersiune(d.nume, c)))
-    return ev?.stare === 'ok' || ev?.stare === 'sarit'
+    return okDovedit(evidenta.get(cheieEvidenta(numeVersiune(d.nume, c))))
   }
   // Jakarinos r1 pe #659 (P1): eroarea / „în curs” de pe NUMELE SEAP („N.pdf”) se închide doar când TOATE documentele listate cu
   // acest nume sunt dovedite în platformă pe cod — ex. primul „N.pdf” căzut la descărcare, recuperat apoi ca frate „N (COD).pdf”:
@@ -439,9 +444,10 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     const k = cheieEvidenta(d.nume)
     const ev = evidenta.get(k)
     if (d.dec) {
-      // decis pe cod: numele vechi nu mai e scurtătură (o versiune / un frate au alt cod sub același nume); evidența e pe ținta lor
-      if (ev?.stare === 'ok' || ev?.stare === 'sarit') { raport.deja++; return false }
-      if ((ev?.incercari ?? 0) >= MAX_INCERCARI && ev?.etapa !== 'identitate') { raport.sarite++; return false }
+      // decis pe cod (codul nu e pe niciun rând): numele vechi nu mai e scurtătură; evidența e pe ținta lui. „ok” ține deoparte doar
+      // dovedit pe conținutul de ACUM (okDovedit), „sarit” niciodată (Copilot r1 pe #659, P1: C10 căzut, ieșit din listă, reapărut)
+      if (okDovedit(ev)) { raport.deja++; return false }
+      if (ev?.stare === 'eroare' && (ev?.incercari ?? 0) >= MAX_INCERCARI && ev?.etapa !== 'identitate') { raport.sarite++; return false }
       return true
     }
     // var. B: „X.pdf.p7m” poate fi deja în platformă brut (înainte de B) sau desfăcut ca „X (semnat).pdf” — niciunul nu se re-aduce
@@ -505,11 +511,17 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     if (decF.fel === 'verifica') {
       decF = rezolvaVerificare(decF, shas, await shaRanduri(decF.candidati, new Set(shas), lungimi))
       if (decF.fel === 'adopta') {
-        raport.deja++
         const a = await adoptaCod(supa, licId, inv, decF.rand, cod)
-        if (a === 'adoptat') raport.coduri_adoptate++
-        else if (typeof a === 'object') raport.avertismente.push(`${dp.numeSeap}: codul SEAP ${cod} nu s-a putut înregistra pe #${decF.rand.id} — ${a.eroare}`)
-        return gata('ok', 'cod', `același conținut ca #${decF.rand.id} — fără document nou${a === 'adoptat' ? ', codul SEAP adoptat pe el' : ''}`)
+        if (a === 'adoptat' || a === 'duplicat') {
+          raport.deja++
+          if (a === 'adoptat') raport.coduri_adoptate++
+          return gata('ok', 'cod', `același conținut ca #${decF.rand.id} — fără document nou${a === 'adoptat' ? ', codul SEAP adoptat pe el' : ''}`)
+        }
+        // Copilot r1 pe #659 (P1): identitatea dovedită pe conținut, dar codul NEînregistrat (rând ocupat între timp / eroare) nu e
+        // „ok” definitiv — altfel rândul rămâne fără cod și un cod viitor l-ar putea adopta pe nume; „eroare”, se reia
+        const t = `${dp.numeSeap} (${cod}): același conținut ca #${decF.rand.id}, dar codul SEAP nu s-a putut înregistra — ${typeof a === 'object' ? a.eroare : 'rândul are între timp alt cod'}; se reia la rularea următoare`
+        raport.erori.push(t)
+        return gata('eroare', 'cod', t)
       }
       if (decF.fel === 'sari') {
         const t = `${dp.numeSeap} (${cod}): identitatea nu s-a putut verifica — conținutul unui candidat nu s-a putut citi`
