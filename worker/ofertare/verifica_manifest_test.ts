@@ -16,9 +16,14 @@ const documente = [
   { id: 15, nume_original: 'lipsa.pdf', fisier_path: '93/neincarcat/lipsa', size_bytes: 0 },
 ]
 const surse: Record<string, string> = { 'a1.pdf': 'alpha', 'b.pdf': 'beta', 'c.pdf': 'gamma', 'lipsa.pdf': 'delta' }
+// audit #4 var. B (PR-2): „b.pdf” republicat sub cod nou → versiunea „b (CN1-00002).pdf” (id 16) e rândul de verificat, nu b.pdf vechi
+const documenteCod = [...documente.map(d => d.id === 12 ? { ...d, seap_cod: 'CN1/00001' } : d),
+  { id: 16, nume_original: 'b (CN1-00002).pdf', fisier_path: '93/b2', size_bytes: 5, seap_cod: 'CN1/00002' }]
+const surseCod: Record<string, string> = { ...surse, 'b.pdf': 'beta2' }
+const coduriSeap: Record<string, string> = { 'b.pdf': 'CN1/00002' }
 type Opt = {
   ctl?: AbortController; stopDupaPrimul?: boolean; blocat?: 'lista' | 'document' | 'storage' | 'flux'
-  arhiva?: boolean; blocatExtractor?: 'listare' | 'extragere'; uscat?: boolean; periodica?: boolean
+  arhiva?: boolean; blocatExtractor?: 'listare' | 'extragere'; uscat?: boolean; periodica?: boolean; cuCod?: boolean
   storageUrl?: string; statusStorage?: number; caleStorage?: string
   dovezi?: { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string; stare: string }[]; eroareDovezi?: boolean
   inainte?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
@@ -77,7 +82,7 @@ async function scenariu(opt: Opt = {}) {
         return t === 'ofertare_licitatii'
           ? { abortSignal: (signal: AbortSignal) => { assert(signal); return { single: async () => ({ data: { c_notice_id: 123, sys_notice_type_id: 2 }, error: null }) } } }
           : { order: (c: string) => { eq(c, 'id'); return { range: (de: number, la: number) =>
-              raspuns(documente.map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d).slice(de, la + 1)) } } }
+              raspuns((opt.cuCod ? documenteCod : documente).map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d).slice(de, la + 1)) } } }
       } }) }
     },
     storage: { from() { throw new Error('SDK Storage interzis: descărcarea trebuie să fie anulabilă integral') } },
@@ -94,7 +99,7 @@ async function scenariu(opt: Opt = {}) {
       storage++
       if (storage === 1) await opt.laStorage?.(root, supa)
       const path = new URL(url).pathname.replace('/storage/v1/object/authenticated/ofertare/', '')
-      const text = ({ '93/a': 'alpha', '93/b': 'beta', '93/c': 'ALTFEL' } as Record<string, string>)[path]
+      const text = ({ '93/a': 'alpha', '93/b': 'beta', '93/c': 'ALTFEL', '93/b2': 'beta2' } as Record<string, string>)[path]
       assert(text !== undefined, `obiect Storage neașteptat: ${path}`)
       const raspuns = new Response(text, { status: opt.statusStorage ?? 200 })
       const arrayBuffer = raspuns.arrayBuffer.bind(raspuns)
@@ -107,7 +112,7 @@ async function scenariu(opt: Opt = {}) {
     if (url.includes('/GetDfNoticeSectionFiles/')) {
       if (opt.blocat === 'lista') return await blocheaza(init?.signal)
       const nume = opt.arhiva ? ['set.zip'] : Object.keys(surse)
-      return Response.json({ dfNoticeDocs: nume.map(n => ({ noticeDocumentName: n, noticeDocumentUrl: `https://seap.invalid/${n}` })) })
+      return Response.json({ dfNoticeDocs: nume.map(n => ({ noticeDocumentName: n, noticeDocumentUrl: `https://seap.invalid/${n}`, ...(opt.cuCod && coduriSeap[n] ? { noticeDocumentCode: coduriSeap[n] } : {}) })) })
     }
     assert(url.startsWith('https://seap.invalid/'), `fetch neașteptat: ${url}`)
     const nume = url.split('/').pop()!
@@ -131,7 +136,7 @@ async function scenariu(opt: Opt = {}) {
       if (opt.blocatExtractor !== 'extragere') await Deno.writeTextFile(`${dir}/rasp/rezultat`, '0\n')
     }
     if (opt.blocatExtractor) timer = setTimeout(() => opt.ctl!.abort(), 100)
-    return new Response(opt.arhiva ? 'zip simulat' : surse[nume])
+    return new Response(opt.arhiva ? 'zip simulat' : (opt.cuCod ? surseCod : surse)[nume])
   }
   try {
     await opt.inainte?.(root, supa)
@@ -177,6 +182,16 @@ Deno.test('manifest: 2 identice, 1 diferit, 1 lipsă; toate câmpurile și rând
     eq(r, { licitatie_id: 93, arhiva_cheie: nume, cale: nume, marime: continut.length, sha256: await sha(continut),
       document_id: i < 3 ? 11 + i : null, stare: i === 3 ? 'eroare_urcare' : 'deja_in_platforma', motiv, verificat_la: r.verificat_la })
   }
+})
+
+Deno.test('manifest (PR-2): documentul cu cod se verifică pe rândul care poartă codul (versiunea), cu cheia lui — fără „DIFERIT” fals pe rândul vechi', async () => {
+  const dovada = { arhiva_cheie: 'b (cn1-00002).pdf', cale: 'b (CN1-00002).pdf', document_id: 16, sha256: await sha('beta2'), stare: 'urcat' }
+  const { raport, scrieri } = await scenariu({ cuCod: true, dovezi: [dovada] })
+  eq([raport.identice, raport.diferite, raport.lipsa_in_platforma], [2, 1, 1])   // c.pdf rămâne diferit, lipsa.pdf lipsă
+  const r = scrieri.find(x => x.document_id === 16)
+  eq([r?.arhiva_cheie, r?.cale, r?.stare, r?.motiv], ['b (cn1-00002).pdf', 'b (CN1-00002).pdf', 'urcat', null], 'dovada versiunii confirmată pe cheia ei')
+  assert(!scrieri.some(x => x.document_id === 12), 'rândul vechi b.pdf nu e comparat cu versiunea nouă (nicio dovadă retrogradată)')
+  eq(raport.platforma_fara_seap, ['b.pdf', 'manual.pdf'], 'originalul înlocuit nu mai e în SEAP')
 })
 
 Deno.test('manifest: uscat nu scrie manifestul', async () => {

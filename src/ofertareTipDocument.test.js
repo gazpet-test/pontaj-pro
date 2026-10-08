@@ -407,6 +407,22 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/const lista = indexLista\(documente, \(n: string\) => cheiSeapCu\(n, cheieNume\)\);/)
     expect(src).toMatch(/inventarCod\(dejaAre \|\| \[\], \{ cheieRand, cheiSeap: \(n: string\) => cheiSeapCu\(n, cheieNume\),/)
   })
+  it('worker NAS (PR-2, varianta A): aceeași decizie din _shared/codSeap.mjs; numele decide doar fără cod și la arhive / volume', () => {
+    const src = readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/import \{[^}]*\bdecideSeap\b[^}]*\} from '\.\.\/\.\.\/supabase\/functions\/_shared\/codSeap\.mjs'/)
+    expect(src).not.toMatch(/function (decideSeap|numeVersiune|eDuplicatCod|campuriCod)\s*\(/)   // nicio copie locală a regulilor
+    expect(src).toMatch(/docs\.push\(\{ nume, url, cod: codDin\(f\) \}\)/)
+    expect(src).toMatch(/\.select\('id, nume_original, fisier_path, seap_cod, tip, size_bytes, seap_meta'\)\.eq\('licitatie_id', licId\)/)
+    expect(src).toMatch(/const lista = indexLista\(docs, cheiSeap\)/)
+    // arhivele și volumele RAR rămân pe regula după nume (extrase aici, n-au rând care să țină codul)
+    expect(src).toMatch(/const arhiva = esteArhiva\(numeDesfacut\(d\.nume\)\) \|\| !!volumRar\(/)
+    expect(src).toMatch(/if \(arhiva \|\| dec\.fel === 'fara_cod'\) \{/)
+    // decis pe cod: scurtătura pe nume (dejaUrcat) nu se aplică; evidența e pe ținta „N (COD).ext”
+    expect(src).toMatch(/if \(d\.dec\) \{\s*\n[^\n]*\n\s*if \(ev\?\.stare === 'ok' \|\| ev\?\.stare === 'sarit'\)/)
+    // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
+    expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)
+    expect(src).toMatch(/campuriCod\(l\.doc\.cod, decF, \{ esteArhiva: false \}\)/)
+  })
   it('edge: pe drumul per fișier numele decide DOAR fără cod; rezerva DownloadArchive rămâne pe nume, fără cod', () => {
     const src = edge()
     expect(src).not.toMatch(/if \(dejaSubUnNume\(urcate, doc\.nume\) \|\|/)
