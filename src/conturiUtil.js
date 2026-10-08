@@ -14,8 +14,10 @@ export const ORDINE_CATEGORII = ['utilitati', 'aplicatii', 'institutii', 'firma'
 // Limitele din CHECK-urile tabelului (20261021a) — validate și în UI, ca eroarea să fie clară înainte de server.
 export const LIMITE = { serviciu: 200, url: 500, utilizator: 200, titular: 200, cod_client: 100, observatii: 2000, locatii: 20 }
 
-// Doar http(s), fără spații — orice altceva (javascript:, data:, mailto:) nu devine link. Același tipar ca CHECK-ul din BD.
-export const urlSigur = (u) => typeof u === 'string' && /^https?:\/\/\S+$/i.test(u.trim()) && u.trim().length <= LIMITE.url
+// Strict https?://<gazdă>[/?#…]: gazda fără „@”, fără slash-uri în plus, fără backslash, fără spații — orice altceva
+// (javascript:, data:, https:////user:parola@…) nu devine link și nu se salvează. Același tipar ca CHECK-ul din BD (r2, J16-2).
+const URL_SIGUR = /^https?:\/\/[^/?#@\s\\]+(?:[/?#]\S*)?$/i
+export const urlSigur = (u) => typeof u === 'string' && URL_SIGUR.test(u.trim()) && !u.includes('\\') && u.trim().length <= LIMITE.url
 
 // Plasă de siguranță: textul pare să conțină o parolă („parola: …”, „parola contului: …”, „PIN-ul: …”, „pass=…”,
 // „?password=” într-un link). Nu e o garanție, doar o oprire pentru greșeala de a lipi parola din Excel în registrul fără
@@ -24,9 +26,10 @@ const TIPAR_PAROLA = /(?:^|[^\p{L}\p{N}])(?:parol\p{L}*|passw(?:or)?d|pass|psw|p
 export const pareParola = (...texte) => texte.some(t => typeof t === 'string' && TIPAR_PAROLA.test(t.normalize('NFC')))
 
 // Link cu utilizator (și eventual parolă) în el: https://admin:parola@router — refuzat, ca și în CHECK-ul din BD.
-export const urlCuCredentiale = (u) => typeof u === 'string' && /^https?:\/\/[^/?#\s]*@/i.test(u.trim())
+// (după oricâte slash-uri / backslash-uri: https:////admin:x@gazdă e tot un link cu credențiale)
+export const urlCuCredentiale = (u) => typeof u === 'string' && /^[a-z][a-z0-9+.-]*:[/\\]*[^/?#\s\\]*@/i.test(u.trim())
 
-const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 
 // Filtrele ecranului: categorie ('toate' | cheie), tip ('toate' | 'personal' | 'firma'), text liber, inactive ascunse implicit.
 export function filtreaza(randuri, { categorie = 'toate', tip = 'toate', text = '', inactive = false } = {}) {
@@ -63,9 +66,10 @@ export function grupeaza(randuri) {
   }))
 }
 
-// Formularul → rândul de scris. Întoarce { eroare } sau { rand }. Câmpurile goale devin NULL; locațiile doar id-uri
-// cunoscute (cele din locatii_inchiriate), fără dubluri.
-export function pregatesteRand(f, idLocatiiCunoscute = []) {
+// Formularul → rândul de scris. Întoarce { eroare } sau { rand }. Câmpurile goale devin NULL; locațiile: id-uri cunoscute
+// (din locatii_inchiriate) PLUS cele care erau deja pe rând (r2, J16-3: o locație ștearsă sau o listă incompletă nu mai șterge
+// pe tăcute legătura la editare — o scoate doar omul, explicit); fără dubluri.
+export function pregatesteRand(f, idLocatiiCunoscute = [], idLocatiiExistente = []) {
   const t = (v) => { const s = String(v ?? '').trim(); return s === '' ? null : s }
   const rand = {
     categorie: f.categorie,
@@ -83,12 +87,12 @@ export function pregatesteRand(f, idLocatiiCunoscute = []) {
   for (const k of ['serviciu', 'utilizator', 'titular', 'cod_client', 'observatii']) {
     if (rand[k] && rand[k].length > LIMITE[k]) return { eroare: `Câmpul „${k}” e prea lung (max. ${LIMITE[k]} caractere).` }
   }
-  if (rand.url && !urlSigur(rand.url)) return { eroare: 'Linkul trebuie să înceapă cu http:// sau https:// și să nu aibă spații.' }
   if (rand.url && urlCuCredentiale(rand.url)) return { eroare: 'Linkul conține utilizator/parolă (…@…) — scoate-le din link.' }
+  if (rand.url && !urlSigur(rand.url)) return { eroare: 'Linkul trebuie să fie de forma https://adresa… (fără spații, fără backslash).' }
   if (pareParola(rand.serviciu, rand.url, rand.utilizator, rand.observatii, rand.cod_client, rand.titular)) {
     return { eroare: 'Pare că ai scris o parolă. Parolele nu intră aici — stau în managerul de parole.' }
   }
-  const cunoscute = new Set(idLocatiiCunoscute.map(Number))
+  const cunoscute = new Set([...idLocatiiCunoscute, ...(idLocatiiExistente || [])].map(Number))
   const ids = [...new Set((f.locatie_ids || []).map(Number))].filter(id => Number.isInteger(id) && cunoscute.has(id))
   if (ids.length > LIMITE.locatii) return { eroare: `Cel mult ${LIMITE.locatii} locații legate.` }
   rand.locatie_ids = ids.length ? ids : null

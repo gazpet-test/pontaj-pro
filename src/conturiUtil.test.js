@@ -26,6 +26,12 @@ describe('urlSigur', () => {
     expect(urlSigur('data:text/html,x')).toBe(false)
     expect(urlSigur('https://a b')).toBe(false)
     expect(urlSigur('www.exemplu.ro')).toBe(false)
+    expect(urlSigur('https:////admin:abc123@example.com/')).toBe(false)
+    expect(urlSigur('https://admin@router.local')).toBe(false)
+    expect(urlSigur('https:///cale')).toBe(false)
+    expect(urlSigur('https://x.ro\\@evil.ro/')).toBe(false)
+    expect(urlSigur('https://x.ro/p?e=a@b.ro')).toBe(true)
+    expect(urlSigur('https://x.ro:8443/a#b')).toBe(true)
     expect(urlSigur(null)).toBe(false)
     expect(urlSigur('https://' + 'a'.repeat(LIMITE.url))).toBe(false)
   })
@@ -99,6 +105,8 @@ describe('pregatesteRand', () => {
     expect(pregatesteRand({ ...baza, serviciu: '—' }).eroare).toMatch(/obligatoriu/)
     expect(pregatesteRand({ ...baza, url: 'https://admin:Parola1@192.168.1.1/' }).eroare).toMatch(/utilizator\/parol/)
     expect(pregatesteRand({ ...baza, url: 'HTTPS://admin@router.local' }).eroare).toMatch(/utilizator\/parol/)
+    expect(pregatesteRand({ ...baza, url: 'https:////admin:abc123@example.com/' }).eroare).toMatch(/utilizator\/parol/)
+    expect(pregatesteRand({ ...baza, url: 'https://x.ro\\cale' }).eroare).toMatch(/backslash/)
     expect(pregatesteRand({ ...baza, url: 'https://x.ro/login?password=abc' }).eroare).toMatch(/parol/)
     expect(pregatesteRand({ ...baza, url: 'https://x.ro/p?e=a@b.ro' }).rand.url).toBe('https://x.ro/p?e=a@b.ro')
   })
@@ -113,6 +121,13 @@ describe('pregatesteRand', () => {
     expect(pregatesteRand({ ...baza, locatie_ids: [1, '1', 2, 99] }, [1, 2]).rand.locatie_ids).toEqual([1, 2])
     const multe = Array.from({ length: 21 }, (_, i) => i + 1)
     expect(pregatesteRand({ ...baza, locatie_ids: multe }, multe).eroare).toMatch(/20/)
+  })
+  it('editarea păstrează legăturile existente spre locații care nu mai sunt în listă (J16-3)', () => {
+    expect(pregatesteRand({ ...baza, locatie_ids: [1, 99] }, [1, 2], [1, 99]).rand.locatie_ids).toEqual([1, 99])
+    // scoasă explicit de om → dispare
+    expect(pregatesteRand({ ...baza, locatie_ids: [1] }, [1, 2], [1, 99]).rand.locatie_ids).toEqual([1])
+    // id-uri inventate care nu erau pe rând și nu sunt cunoscute → ignorate
+    expect(pregatesteRand({ ...baza, locatie_ids: [1, 77] }, [1, 2], [1, 99]).rand.locatie_ids).toEqual([1])
   })
   it('activ=false se păstrează (ștergere = dezactivare)', () => {
     expect(pregatesteRand({ ...baza, activ: false }).rand.activ).toBe(false)

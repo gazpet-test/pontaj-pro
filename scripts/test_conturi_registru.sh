@@ -56,7 +56,10 @@ ok "0 schelet (default privileges + set_updated_at ca pe live)"
 
 "${PSQL[@]}" -d "$BAZA" -f "$MIGRARE" >/dev/null 2>&1 && esec "1 fără runner a trecut"
 [ "$(q "SELECT count(*) FROM pg_class WHERE relname LIKE 'conturi_registru%'")" = 0 ] || esec "1 ceva s-a creat"
-ok "1 fără runner → refuz, nimic creat"
+# 1b (r2, J16-1): rulare GREȘITĂ cu psql -f simplu — autocommit, fără ON_ERROR_STOP, fără -1: nimic creat
+"$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -f "$MIGRARE" >/dev/null 2>&1 || true
+[ "$(q "SELECT count(*) FROM pg_class WHERE relname LIKE 'conturi_registru%'")" = 0 ] || esec "1b psql -f simplu a creat obiecte"
+ok "1 fără runner → refuz, nimic creat (și cu psql -f simplu, autocommit)"
 
 q "CREATE OR REPLACE FUNCTION public.set_updated_at() RETURNS trigger LANGUAGE plpgsql SET search_path TO 'public', 'pg_temp' AS \$f\$ begin return new; end; \$f\$" >/dev/null
 refuza_cu "2a set_updated_at alt corp" "Precondiție 0d"
@@ -91,12 +94,12 @@ OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" 2>&1)" && ese
 grep -q "nearmată" <<<"$OUT" || esec "6a refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
 OUT="$(revenire)" && esec "6b revenire cu rânduri a trecut"
 grep -q "date reale" <<<"$OUT" || esec "6b refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
-[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 4 ] || esec "6b rândurile au dispărut"
+[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 5 ] || esec "6b rândurile au dispărut"
 # 6f (review intern P1): rulare GREȘITĂ cu psql -f simplu — autocommit, fără ON_ERROR_STOP, fără -1, nearmată și armată
 #    pe sesiune (fără tranzacție): nimic nu se pierde, tabelul și rândurile rămân
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -f "$ROLLBACK" >/dev/null 2>&1 || true
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -c "SELECT set_config('gazpet.revenire_20261021a', 'CONTURI_REGISTRU_SCOATE:' || txid_current(), false)" -f "$ROLLBACK" >/dev/null 2>&1 || true
-[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 4 ] || esec "6f psql -f simplu a șters date"
+[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 5 ] || esec "6f psql -f simplu a șters date"
 q "CREATE VIEW public.v_conturi_test AS SELECT id FROM public.conturi_registru" >/dev/null
 q "DELETE FROM public.conturi_registru" >/dev/null
 OUT="$(revenire)" && esec "6c revenire cu view dependent a trecut"
@@ -104,11 +107,20 @@ grep -q "view-uri" <<<"$OUT" || esec "6c refuzat din alt motiv: $(grep -m1 ERROR
 q "DROP VIEW public.v_conturi_test" >/dev/null
 q "ALTER TABLE public.conturi_registru ADD COLUMN extra text" >/dev/null
 OUT="$(revenire)" && esec "6d revenire pe tabel modificat a trecut"
-grep -q "coloanele diferă" <<<"$OUT" || esec "6d refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+grep -q "amprenta tabelului diferă" <<<"$OUT" || esec "6d refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
 q "ALTER TABLE public.conturi_registru DROP COLUMN extra" >/dev/null
+# 6g (r2, P15-3/J16-4): aceleași nume, altă definiție → amprenta prinde (politică slăbită, default nou)
+q "ALTER POLICY conturi_registru_upd ON public.conturi_registru USING (true)" >/dev/null
+OUT="$(revenire)" && esec "6g revenire după ALTER POLICY a trecut"
+grep -q "amprenta tabelului diferă" <<<"$OUT" || esec "6g refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+q "ALTER POLICY conturi_registru_upd ON public.conturi_registru USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.is_owner))" >/dev/null
+q "ALTER TABLE public.conturi_registru ALTER COLUMN observatii SET DEFAULT 'x'" >/dev/null
+OUT="$(revenire)" && esec "6h revenire după default nou a trecut"
+grep -q "amprenta tabelului diferă" <<<"$OUT" || esec "6h refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+q "ALTER TABLE public.conturi_registru ALTER COLUMN observatii DROP DEFAULT" >/dev/null
 OUT="$(revenire)" || { echo "$OUT" >&2; esec "6e revenirea armată pe tabel gol a eșuat"; }
 [ "$(q "SELECT count(*) FROM pg_class WHERE relname LIKE 'conturi_registru%'")" = 0 ] || esec "6e obiecte rămase"
 [ "$(q "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.set_updated_at()'::regprocedure")" = $MD5_SUA ] || esec "6e set_updated_at atinsă"
-ok "6 revenire: nearmată → refuz · cu rânduri → refuz · psql -f simplu (autocommit) → nimic pierdut · cu view dependent → refuz · tabel modificat → refuz · goală + armată → scoasă, set_updated_at neatinsă"
+ok "6 revenire: nearmată → refuz · cu rânduri → refuz · psql -f simplu (autocommit) → nimic pierdut · cu view dependent → refuz · tabel modificat / politică slăbită / default nou (amprentă) → refuz · goală + armată → scoasă, set_updated_at neatinsă"
 gate_0e final
 echo "PASS test_conturi_registru"

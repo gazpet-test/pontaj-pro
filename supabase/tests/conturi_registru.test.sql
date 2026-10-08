@@ -15,17 +15,21 @@ SELECT teste.e('T1b anon: niciun drept pe tabel sau secvență', NOT EXISTS (
   AND NOT has_sequence_privilege('anon', 'public.conturi_registru_id_seq', 'USAGE')
   AND NOT has_sequence_privilege('anon', 'public.conturi_registru_id_seq', 'SELECT')
   AND NOT has_sequence_privilege('anon', 'public.conturi_registru_id_seq', 'UPDATE'));
-SELECT teste.e('T1c authenticated: exact SELECT/INSERT/UPDATE/DELETE',
+SELECT teste.e('T1c authenticated: exact SELECT/INSERT/UPDATE (fără DELETE), nimic pe secvență',
   has_table_privilege('authenticated', 'public.conturi_registru', 'SELECT') AND has_table_privilege('authenticated', 'public.conturi_registru', 'INSERT')
-  AND has_table_privilege('authenticated', 'public.conturi_registru', 'UPDATE') AND has_table_privilege('authenticated', 'public.conturi_registru', 'DELETE')
+  AND has_table_privilege('authenticated', 'public.conturi_registru', 'UPDATE') AND NOT has_table_privilege('authenticated', 'public.conturi_registru', 'DELETE')
   AND NOT has_table_privilege('authenticated', 'public.conturi_registru', 'TRUNCATE')
   AND NOT has_table_privilege('authenticated', 'public.conturi_registru', 'REFERENCES')
   AND NOT has_table_privilege('authenticated', 'public.conturi_registru', 'TRIGGER')
+  AND NOT has_sequence_privilege('authenticated', 'public.conturi_registru_id_seq', 'USAGE')
+  AND NOT has_sequence_privilege('authenticated', 'public.conturi_registru_id_seq', 'SELECT')
   AND NOT has_sequence_privilege('authenticated', 'public.conturi_registru_id_seq', 'UPDATE'));
-SELECT teste.e('T1d 4 politici, toate pe authenticated și cu is_owner',
-  (SELECT count(*) FROM pg_policies WHERE tablename = 'conturi_registru') = 4
+SELECT teste.e('T1d 3 politici (SELECT/INSERT/UPDATE, fără DELETE), toate pe authenticated și cu is_owner',
+  (SELECT array_agg(cmd ORDER BY cmd) FROM pg_policies WHERE tablename = 'conturi_registru') = ARRAY['INSERT','SELECT','UPDATE']::text[]
   AND NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'conturi_registru'
                    AND (roles <> '{authenticated}' OR coalesce(qual, '') || coalesce(with_check, '') NOT LIKE '%is_owner%')));
+SELECT teste.e('T1f id e IDENTITY ALWAYS', (SELECT attidentity FROM pg_attribute WHERE attrelid = 'public.conturi_registru'::regclass AND attname = 'id') = 'a');
+SELECT teste.e('T1g COMMENT-ul are amprenta', obj_description('public.conturi_registru'::regclass, 'pg_class') ~ 'amprenta=[0-9a-f]{32}$');
 SELECT teste.e('T1e nicio coloană de parolă', NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.conturi_registru'::regclass
   AND attnum > 0 AND NOT attisdropped AND (attname ILIKE '%parol%' OR attname ILIKE '%pass%' OR attname ILIKE '%secret%')));
 
@@ -39,6 +43,8 @@ SELECT teste.e('T2b created_by = auth.uid()', (SELECT bool_and(created_by = :'RA
 SELECT teste.e('T2c owner editează', teste.n($$UPDATE public.conturi_registru SET observatii = 'modificat' WHERE serviciu = 'MyElectrica'$$) = 1);
 SELECT teste.e('T2d ștergere = activ=false (1 rând)', teste.n($$UPDATE public.conturi_registru SET activ = false WHERE serviciu = 'licitatie-publica.ro'$$) = 1);
 SELECT teste.e('T2e rândul dezactivat rămâne vizibil, cu activ=false', (SELECT NOT activ FROM public.conturi_registru WHERE serviciu = 'licitatie-publica.ro'));
+SELECT teste.eroare('T2f owner: DELETE real refuzat (ștergere = dezactivare, impus în BD)', $$DELETE FROM public.conturi_registru WHERE serviciu = 'licitatie-publica.ro'$$, 'permission denied');
+SELECT teste.eroare('T2g owner: id explicit refuzat (IDENTITY ALWAYS)', $$INSERT INTO public.conturi_registru (id, categorie, serviciu) VALUES (999, 'altele', 'x')$$, 'non-DEFAULT');
 RESET ROLE;
 
 -- ═══ T3 al doilea owner (is_owner = true) vede registrul — comportamentul din spec („doar owner”) ═══
@@ -52,7 +58,9 @@ SELECT teste.e('T4a non-owner: SELECT = 0 rânduri', (SELECT count(*) FROM publi
 SELECT teste.eroare('T4b non-owner: INSERT refuzat de RLS',
   $$INSERT INTO public.conturi_registru (categorie, serviciu) VALUES ('altele', 'furt')$$, 'row-level security');
 SELECT teste.e('T4c non-owner: UPDATE atinge 0 rânduri', teste.n($$UPDATE public.conturi_registru SET observatii = 'x'$$) = 0);
-SELECT teste.e('T4d non-owner: DELETE atinge 0 rânduri', teste.n($$DELETE FROM public.conturi_registru$$) = 0);
+SELECT teste.eroare('T4d non-owner: DELETE refuzat', $$DELETE FROM public.conturi_registru$$, 'permission denied');
+SELECT teste.eroare('T4e2 non-owner: nextval pe secvență refuzat', $$SELECT nextval('public.conturi_registru_id_seq')$$, 'permission denied');
+SELECT teste.eroare('T4e3 non-owner: last_value pe secvență refuzat', $$SELECT last_value FROM public.conturi_registru_id_seq$$, 'permission denied');
 RESET ROLE;
 SELECT teste.e('T4e după non-owner: datele neatinse', (SELECT count(*) FROM public.conturi_registru) = 2
   AND (SELECT observatii FROM public.conturi_registru WHERE serviciu = 'MyElectrica') = 'modificat');
@@ -86,6 +94,14 @@ SELECT teste.eroare('T7e2 serviciu doar tab/newline', $$INSERT INTO public.contu
 SELECT teste.eroare('T7e3 serviciu doar NBSP', $$INSERT INTO public.conturi_registru (categorie, serviciu) VALUES ('altele', E'\u00a0')$$, 'check');
 SELECT teste.eroare('T7j url cu utilizator:parolă', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://admin:Parola1@192.168.1.1/')$$, 'check');
 SELECT teste.eroare('T7k url cu utilizator@', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'HTTPS://admin@router.local')$$, 'check');
+SELECT teste.eroare('T7m url cu slash-uri în plus și credențiale (J16-2)', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https:////admin:abc123@example.com/')$$, 'check');
+SELECT teste.eroare('T7n url cu backslash', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', E'https://x.ro\\@evil.ro/')$$, 'check');
+SELECT teste.eroare('T7o url fără gazdă', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https:///cale')$$, 'check');
+SELECT teste.eroare('T7p observații cu parolă', $$INSERT INTO public.conturi_registru (categorie, serviciu, observatii) VALUES ('altele', 'x', 'parola contului: Abc123')$$, 'conturi_registru_fara_parole');
+SELECT teste.eroare('T7q url cu ?password=', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://portal.ro/?password=Secret123')$$, 'conturi_registru_fara_parole');
+SELECT teste.eroare('T7r utilizator cu PIN-ul:', $$INSERT INTO public.conturi_registru (categorie, serviciu, utilizator) VALUES ('altele', 'x', 'PIN-ul: 1234')$$, 'conturi_registru_fara_parole');
+SELECT teste.e('T7s observații obișnuite acceptate (fără parolă aici, consum: …, = sediu)', teste.n($$INSERT INTO public.conturi_registru (categorie, serviciu, observatii, utilizator)
+  VALUES ('altele', 'ok3', 'Locație: X. SSID „test”; fără parolă aici. Locuri de consum: str. Y; cod 700 = sediu. Passport: 1. opinie: bună', '+40700000000')$$) = 1);
 SELECT teste.e('T7l url cu @ în query acceptat', teste.n($$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'ok2', 'https://x.ro/p?e=a@b.ro')$$) = 1);
 SELECT teste.eroare('T7h serviciu > 200', $$INSERT INTO public.conturi_registru (categorie, serviciu) VALUES ('altele', repeat('a', 201))$$, 'check');
 SELECT teste.e('T7i url HTTPS cu majuscule acceptat', teste.n($$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'ok', 'HTTPS://Exemplu.ro/x?a=1')$$) = 1);
@@ -100,7 +116,7 @@ SELECT teste.e('T8 updated_at actualizat de trigger', (SELECT updated_at > now()
 
 -- ═══ T9 service_role (edge) vede tot — BYPASSRLS, ca pe live ═══
 SET ROLE service_role;
-SELECT teste.e('T9 service_role vede toate rândurile', (SELECT count(*) FROM public.conturi_registru) = 4);
+SELECT teste.e('T9 service_role vede toate rândurile', (SELECT count(*) FROM public.conturi_registru) = 5);
 RESET ROLE;
 
 DO $f$ BEGIN RAISE NOTICE 'TESTE SQL: TOATE OK'; END $f$;

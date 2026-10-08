@@ -63,7 +63,7 @@ function FormCont({ cont, locatii, onSalvat, onClose, setMesaj }) {
   const comutaLocatie = (id) => set('locatie_ids', f.locatie_ids.includes(id) ? f.locatie_ids.filter(x => x !== id) : [...f.locatie_ids, id])
 
   const salveaza = async () => {
-    const { rand, eroare: e } = pregatesteRand(f, locatii.map(l => l.id))
+    const { rand, eroare: e } = pregatesteRand(f, locatii.map(l => l.id), cont?.locatie_ids || [])
     if (e) { setEroare(e); return }
     setLucrez(true)
     try {
@@ -127,6 +127,25 @@ function FormCont({ cont, locatii, onSalvat, onClose, setMesaj }) {
 
         <div style={{marginBottom:12}}>
           <label style={S.label}>Locații legate (opțional)</label>
+          {(() => {
+            // legături existente spre locații care nu mai sunt în listă (șterse): rămân până le scoate omul (J16-3)
+            const cunoscute = new Set(locatii.map(l => Number(l.id)))
+            const orfane = (cont?.locatie_ids || []).map(Number).filter(id => !cunoscute.has(id))
+            return orfane.length > 0 && (
+              <div style={{display:'flex', flexWrap:'wrap', gap:6, marginBottom:6}}>
+                {orfane.map(id => {
+                  const on = f.locatie_ids.includes(id)
+                  return (
+                    <button key={'o' + id} type="button" onClick={() => comutaLocatie(id)} title="Locația nu mai există în „Locații închiriate”. Click ca s-o scoți."
+                            style={{...S.btnS, padding:'4px 9px', fontSize:12, borderColor: on ? G.yellow : G.border,
+                                    background: on ? G.yellow+'22' : 'transparent', color: on ? G.yellow : G.dim, textDecoration: on ? 'none' : 'line-through'}}>
+                      {on ? '✓ ' : ''}#{id} (locație ștearsă)
+                    </button>
+                  )
+                })}
+              </div>
+            )
+          })()}
           {locatii.length === 0 ? (
             <div style={{fontSize:12, color:G.dim}}>Nu există locații în „Locații închiriate”. Poți scrie adresa în observații.</div>
           ) : (
