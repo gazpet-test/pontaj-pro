@@ -280,9 +280,10 @@ async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { sta
     // respinsă de controalele de securitate → nu se reîncearcă automat (rămâne vizibilă cu motivul, nu „ignorată");
     // identitatea neverificată ÎNAINTE de descărcare (etapa „identitate”, PR-2) nu consumă reîncercări: n-a descărcat nimic;
     // un „ok” resetează contorul — plafonul numără eșecurile CONSECUTIVE (Jakarinos r9 pe #659: 500 → ok → 500 → ok → 500 bloca
-    // definitiv un frate reverificat la fiecare rulare). Respingerile de securitate (faraReincercare) rămân definitive.
+    // definitiv un frate reverificat la fiecare rulare). Respingerile de securitate (faraReincercare) rămân definitive. Și „sarit”
+    // rupe seria (Copilot r9 pe #659: cod căzut de 3 ori, ieșit din listă, apoi reapărut — păstra 3 și primea o singură șansă)
     incercari: rez.faraReincercare ? MAX_INCERCARI : rez.stare === 'eroare' && rez.etapa !== 'identitate' ? (vechi?.incercari ?? 0) + 1
-      : rez.stare === 'identificat' || rez.stare === 'eroare' ? (vechi?.incercari ?? 0) : rez.stare === 'ok' ? 0 : (vechi?.incercari ?? 1),
+      : rez.stare === 'identificat' || rez.stare === 'eroare' ? (vechi?.incercari ?? 0) : rez.stare === 'ok' || rez.stare === 'sarit' ? 0 : (vechi?.incercari ?? 1),
   }
   const { error } = vechi
     ? await supa.from('ofertare_seap_fisiere').update(rand).eq('id', vechi.id)
@@ -393,6 +394,21 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       evidenta.set(cheie, { ...e, stare: 'sarit' })
     }
   }
+  // Jakarinos r15 pe #659 (P0): numele ȚINTĂ al unui document cu cod nu poate coincide cu alt document listat (ex. fratele
+  // „N (CN1-00002).pdf” al lui N.pdf/C2 și un document FĂRĂ cod numit literal așa; sau „nou” pe N.pdf lângă un N.pdf fără cod / o
+  // arhivă) și nici, sub un nume nou, cu un rând / o rezervare cu alt cod: același nume ar amesteca octeții (grup, fișier temporar,
+  // manifest) și ar pune codul pe conținutul greșit → fail-closed: eroare vizibilă, fără descărcare, fără reîncercări consumate.
+  // Doi frați CU cod pe același nume SEAP nu sunt conflict: rezervarea din planificare îl face pe al doilea „N (COD).ext”.
+  // La ADOPȚIE (L1 = A, rândul fără cod urcat sub „N (COD).ext”) contează doar documentele listate: un document FĂRĂ cod numit
+  // literal ca rândul e chiar documentul acelui rând, nu codul (altfel codul ajunge pe octeții lui).
+  const conflictNume = (d: DocSeap, idx: number, tinta: string, randuri = true): string | null => {
+    const k = cheieRand(tinta), propriu = tinta === d.nume
+    const alt = docs.find((x, j) => j !== idx && cheieRand(x.nume) === k
+      && (!propriu || !x.cod || esteArhiva(numeDesfacut(x.nume)) || !!volumRar(x.nume.replace(/\.p7[ms]$/i, ''))))
+    if (alt) return `numele țintă „${tinta}” coincide cu alt document listat („${alt.nume}”${alt.cod ? `, cod ${alt.cod}` : ', fără cod'})`
+    const rand = propriu || !randuri ? null : (inv.peCheie.get(k) ?? []).find((r: any) => cheieRand(r.nume_original) === k && String(r.seap_cod ?? '').trim() !== String(d.cod).trim())
+    return rand ? `numele țintă „${tinta}” e deja al rândului ${rand.id != null ? `#${rand.id}` : 'rezervat în rulare'}${rand.seap_cod ? ` (cod ${rand.seap_cod})` : ' (fără cod)'}` : null
+  }
   const deAdus: DocPlan[] = []
   const planuri = new Set<any>()
   for (const [idx, d] of docs.entries()) {
@@ -421,6 +437,13 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     }
     if (dec.fel === 'adopta') {
       // rând vechi fără cod, unic pe nume (L1 = A) sau urcat sub numele cu cod „N (COD).ext”: codul pe el, fără descărcare
+      const conflictA = conflictNume(d, idx, String(dec.rand.nume_original), false)
+      if (conflictA) {
+        const t = `${d.nume} (${d.cod}): nu se adoptă pe #${dec.rand.id} — ${conflictA} — verifică de mână`
+        raport.erori.push(t)
+        await inregistreaza(supa, licId, numeVersiune(d.nume, String(d.cod)), { stare: 'eroare', etapa: 'identitate', motiv: t }, cheieCod(d.cod))
+        continue
+      }
       raport.deja++
       const a = await adoptaCod(supa, licId, inv, dec.rand, String(d.cod))
       if (a === 'adoptat') raport.coduri_adoptate++
@@ -436,6 +459,13 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     if (dec.fel === 'verifica' && !verificabil(dec, areDovada)) {
       const t = `${d.nume} (${d.cod}): identitatea nu s-a putut verifica — niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)`
       raport.identitate_neverificata.push(t); raport.erori.push(t)
+      await inregistreaza(supa, licId, numeVersiune(d.nume, String(d.cod)), { stare: 'eroare', etapa: 'identitate', motiv: t }, cheieCod(d.cod))
+      continue
+    }
+    const conflict = conflictNume(d, idx, tinta)
+    if (conflict) {
+      const t = `${d.nume} (${d.cod}): ${conflict} — nu se aduce automat (verifică de mână)`
+      raport.erori.push(t)
       await inregistreaza(supa, licId, numeVersiune(d.nume, String(d.cod)), { stare: 'eroare', etapa: 'identitate', motiv: t }, cheieCod(d.cod))
       continue
     }
@@ -595,13 +625,18 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     }
     if (dec.fel === 'sari') return scrie('ok', 'cod', dec.motiv === 'cod' ? `prezent în platformă: codul SEAP ${cod} e pe #${dec.rand?.id}` : `sărit (${dec.motiv})`)
     if (dec.fel === 'adopta') {
+      const conflictA = conflictNume(orig, dp.idx ?? -1, String(dec.rand.nume_original), false)
+      if (conflictA) return scrie('eroare', 'identitate', `nu se adoptă pe #${dec.rand.id} — ${conflictA} — verifică de mână`)
       const a = await adoptaCod(supa, licId, inv, dec.rand, cod)
       if (a === 'adoptat') raport.coduri_adoptate++
       if (a === 'adoptat' || a === 'duplicat') return scrie('ok', 'cod', `prezent în platformă: codul SEAP ${cod} pe #${dec.rand.id}`)
       return scrie('eroare', 'cod', `codul SEAP nu s-a putut înregistra pe #${dec.rand.id} — ${typeof a === 'object' ? a.eroare : 'rândul are între timp alt cod'}; se reia la rularea următoare`)
     }
-    // ținta nouă (ex. planificat „nou”, acum frate): doar numele de urcare se schimbă; evidența rămâne pe „N (COD).ext”
+    // ținta nouă (ex. planificat „nou”, acum frate): doar numele de urcare se schimbă; evidența rămâne pe cheia codului
     dp.nume = dec.fel === 'nou' ? dp.nume : String(dec.nume)
+    // ținta recalculată nu poate lua numele altui document listat / al unui rând cu alt cod (Jakarinos r15, ca la planificare)
+    const conflict = conflictNume(orig, dp.idx ?? -1, dp.nume)
+    if (conflict) return scrie('eroare', 'identitate', `${conflict} — nu se aduce automat (verifică de mână)`)
     if (dec.fel === 'verifica' && !verificabil(dec, areDovada)) {
       const t = `${orig.nume} (${cod}): identitatea nu s-a putut verifica — niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)`
       raport.identitate_neverificata.push(t); raport.erori.push(t)
@@ -616,7 +651,9 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   const grupuri = new Map<string, DocPlan[]>()
   for (const d of lipsa) {
     const v = volumRar(d.nume.replace(/\.p7[ms]$/i, ''))
-    const cheieGrup = v ? `rar:${v.baza.toLowerCase()}` : `f:${d.nume}`
+    // un document decis pe cod e mereu grupul lui (identitatea = codul; Jakarinos r15): niciodată împreună cu alt document cu același
+    // nume țintă (fișier temporar comun, doar primul urcat). Fără cod: pe nume, ca înainte
+    const cheieGrup = v ? `rar:${v.baza.toLowerCase()}` : d.dec ? `c:${d.idx}` : `f:${d.nume}`
     grupuri.set(cheieGrup, [...(grupuri.get(cheieGrup) || []), d])
   }
   // un volum lipsă din grup (ex. partea 3 deja „ok"?) → luăm tot grupul din lista completă SEAP

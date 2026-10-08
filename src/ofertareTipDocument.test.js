@@ -434,6 +434,15 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // codul ieșit din listă: codul vine din CHEIE, nu din text (doar evidențele scrise pe drumul pe cod)
     expect(src).toMatch(/!cheie\.startsWith\(PREFIX_COD\)\) continue/)
     expect(src).not.toMatch(/QQ0CODQQ|coduriPeCheie/)
+    // „sarit” rupe seria de eșecuri (Copilot r9 pe #659)
+    expect(src).toMatch(/rez\.stare === 'ok' \|\| rez\.stare === 'sarit' \? 0/)
+    // numele țintă / rândul adoptat nu pot coincide cu alt document listat (Jakarinos r15 pe #659, P0): la planificare, la
+    // recalculare și la adopție — fail-closed; documentele cu cod se grupează individual
+    expect(src).toMatch(/const conflict = conflictNume\(d, idx, tinta\)/)
+    expect(src).toMatch(/const conflict = conflictNume\(orig, dp\.idx \?\? -1, dp\.nume\)/)
+    expect(src).toMatch(/const conflictA = conflictNume\(d, idx, String\(dec\.rand\.nume_original\), false\)/)
+    expect(src).toMatch(/const conflictA = conflictNume\(orig, dp\.idx \?\? -1, String\(dec\.rand\.nume_original\), false\)/)
+    expect(src).toMatch(/: d\.dec \? `c:\$\{d\.idx\}` : `f:\$\{d\.nume\}`/)
     expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)
