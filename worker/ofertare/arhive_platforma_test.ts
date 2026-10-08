@@ -925,6 +925,30 @@ Deno.test('cod SEAP (PR-2, Jakarinos r10): un cod nou („nou” pe N.pdf) care 
   })
 })
 
+Deno.test('cod SEAP (PR-2, Jakarinos r11): semnătura „X.pdf.p7s” căzută cât era singură, apoi listată lângă „X.pdf” → evidența ei pe cod se închide „sarit”', async () => {
+  await cuMediu(async (_root, s) => {
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'X.pdf.p7s', cod: 'CN1/00001', buf: null }]
+    const { restore } = cuSeapCod(lista)
+    try {
+      const tab = licSeap()
+      const supa = fakeSupa(tab, new Map())
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare]), [['X (CN1-00001).pdf.p7s', 'eroare']], 'singură: decisă „nou”, căzută')
+      lista.push({ nume: 'X.pdf', cod: 'CN1/00002', buf: '%PDF-1.4 X' })
+      const r2 = await s.aduLicitatie(supa, 3, () => {})
+      eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), [['X.pdf', 'CN1/00002']], JSON.stringify(r2.erori))
+      eq(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare]).sort(), [['X (CN1-00001).pdf.p7s', 'sarit'], ['X (CN1-00002).pdf', 'ok']])
+      // și din „în curs” (job mort după etapa 1)
+      const tab2 = licSeap({ ofertare_seap_fisiere: [{ id: 901, licitatie_id: 3, nume_seap: 'Y (CN1-00003).pdf.p7s', cheie: s.cheieEvidenta('Y (CN1-00003).pdf.p7s'), stare: 'identificat', incercari: 0 }] })
+      lista.length = 0
+      lista.push({ nume: 'Y.pdf.p7s', cod: 'CN1/00003', buf: null }, { nume: 'Y.pdf', cod: 'CN1/00004', buf: '%PDF-1.4 Y' })
+      await s.aduLicitatie(fakeSupa(tab2, new Map()), 3, () => {})
+      eq(tab2.ofertare_seap_fisiere.find(e => e.id === 901)?.stare, 'sarit')
+      ok(!tab2.ofertare_seap_fisiere.some(e => e.stare === 'eroare' || e.stare === 'identificat'), JSON.stringify(tab2.ofertare_seap_fisiere))
+    } finally { restore() }
+  })
+})
+
 Deno.test('cod SEAP (PR-2, varianta A): o arhivă rămâne pe regula după nume — evidența „ok” a despachetării o ține deoparte, oricare ar fi codul', async () => {
   await cuMediu(async (_root, s) => {
     const { descarcate, restore } = cuSeapCod([{ nume: 'PT.zip', cod: 'CN1/00030', buf: '%PDF-1.4 nu se cere' }])

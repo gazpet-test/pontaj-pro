@@ -423,6 +423,8 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // evidența unui document cu cod e mereu pe „N (COD).ext”, și pentru „nou” (Jakarinos r10 pe #659)
     expect(src).toMatch(/deAdus\.push\(\{ \.\.\.d, nume: tinta, dec, numeSeap: d\.nume, idx, ev: numeVersiune\(d\.nume, String\(d\.cod\)\) \}\)/)
     expect(src).toMatch(/const k = cheieEvidenta\(numeEv\(d\)\)/)
+    // semnătura sărită lângă documentul ei își închide și evidența pe cod (Jakarinos r11 pe #659)
+    expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, String\(d\.cod\)\), 'sarit'/)
     expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)

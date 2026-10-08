@@ -406,6 +406,9 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         // „X.pdf.p7s” cu „X.pdf” listat alături: doar semnătura lui; cheia evidenței ei e proprie (își păstrează sufixul)
         rezolvate.add(String(d.cod))
         if (docs.filter(x => cheieEvidenta(x.nume) === cheieEvidenta(d.nume)).length === 1) await inchideCheie(d.nume, 'sarit', 'semnătura unui document listat alături — nu e alt document')
+        // și evidența ei pe cod „X (COD).pdf.p7s” (Jakarinos r11 pe #659: căzută cât era singură în listă, decisă „nou”; apoi a apărut
+        // „X.pdf” alături) — altfel eroarea ține poarta la nesfârșit, deși semnătura e sărită intenționat
+        await inchideCheie(numeVersiune(d.nume, String(d.cod)), 'sarit', 'semnătura unui document listat alături — nu e alt document')
       }
       else if (dec.motiv !== 'dublu') raport.avertismente.push(`${d.nume} (${d.cod}): rămas pe regula veche (după nume)`)
       continue
