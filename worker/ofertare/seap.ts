@@ -15,7 +15,7 @@ import { ghicesteTip, tipInArhiva, indiciuArhiva, esteArhiva as esteArhivaDoc, a
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume, pastreazaUrcat } from '../../supabase/functions/_shared/identitateFisier.mjs'
 import { desface, eSemnat, continutCms, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../../supabase/functions/_shared/semnaturaCms.mjs'
 import { toatePaginile } from '../../supabase/functions/_shared/paginat.mjs'
-import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, mutaCod, candidatiMutare, copiiDinManifest, eDuplicatCod, numeVersiune, ADOPTIE, ALT_CONTINUT } from '../../supabase/functions/_shared/codSeap.mjs'
+import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, mutaCod, candidatiMutare, copiiDinManifest, eDuplicatCod, numeVersiune, numeBaza, ADOPTIE, ALT_CONTINUT } from '../../supabase/functions/_shared/codSeap.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -367,6 +367,21 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       await inregistreaza(supa, licId, g[0].nume, { stare: 'ok', etapa: 'cod',
         motiv: g.length > 1 ? `toate cele ${g.length} documente cu acest nume sunt în platformă (pe codul SEAP)` : 'documentul e în platformă (pe codul SEAP)' })
       evidenta.set(k, { ...e, stare: 'ok' })
+    }
+    // Jakarinos r12 pe #659 (P1): un cod dovedit prezent își închide și evidența rămasă pe ALT nume care poartă codul, „X (COD).ext”
+    // — ex. căzut ca „N.pdf”, listat apoi ca „M.pdf” deja în platformă („sari / cod” închide doar „M (COD).pdf”), sau cu ambele nume
+    // în listă, al doilea „sari / dublu”. Legătura e neechivocă: codul e în nume, între paranteze (numeBaza)
+    const prezente = [...new Set(docs.filter(prezentPeCod).map(d => String(d.cod).trim()))]
+    for (const e0 of evid || []) {
+      const e = evidenta.get(e0.cheie) ?? e0
+      if (e.stare !== 'eroare' && e.stare !== 'identificat') continue
+      const c = prezente.find(c => numeBaza(String(e.nume_seap ?? ''), c) != null)
+      if (!c) continue
+      const { data: acum } = await supa.from('ofertare_seap_fisiere').select('stare').eq('licitatie_id', licId).eq('cheie', e.cheie).maybeSingle()
+      const st = (acum as { stare?: string } | null)?.stare
+      if (st !== 'eroare' && st !== 'identificat') continue
+      await inregistreaza(supa, licId, String(e.nume_seap), { stare: 'ok', etapa: 'cod', motiv: `codul SEAP ${c} e în platformă (documentul a fost listat și sub alt nume)` })
+      evidenta.set(e.cheie, { ...e, stare: 'ok' })
     }
   }
   // evidența unei versiuni / unui frate („N (COD).ext”) al cărei cod a IEȘIT din listă, cu numele N listat acum sub alt cod

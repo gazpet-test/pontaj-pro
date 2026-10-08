@@ -425,6 +425,8 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/const k = cheieEvidenta\(numeEv\(d\)\)/)
     // semnătura sărită lângă documentul ei își închide și evidența pe cod (Jakarinos r11 pe #659)
     expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, String\(d\.cod\)\), 'sarit'/)
+    // un cod dovedit prezent își închide și evidența de pe ALT nume care îl poartă (Jakarinos r12 pe #659)
+    expect(src).toMatch(/const c = prezente\.find\(c => numeBaza\(String\(e\.nume_seap \?\? ''\), c\) != null\)/)
     expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)
