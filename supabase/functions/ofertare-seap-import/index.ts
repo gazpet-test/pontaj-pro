@@ -336,7 +336,8 @@ Deno.serve(async (req: Request) => {
     urcate.add(cheieRand(numeFinal));
     if (docId) {
       adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
-      adaugaRand(inv, { id: docId, nume_original: numeFinal, fisier_path: path, seap_cod: (seap?.seap_cod as string) ?? null, dinRulare: true });
+      adaugaRand(inv, { id: docId, nume_original: numeFinal, fisier_path: path, seap_cod: (seap?.seap_cod as string) ?? null, dinRulare: true,
+        inlocuieste_id: (seap?.seap_meta as any)?.inlocuieste_id ?? null, cod_anterior: (seap?.seap_meta as any)?.cod_anterior ?? null });
     }
     else nerecuperate++;   // fișier în Storage fără rând în BD = nu e în platformă (Jakarinos r2 pe #651)
     urcatiOcteti += buf.length;

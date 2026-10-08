@@ -715,3 +715,23 @@ Deno.test('veghe r6: la reluare clopoțelul cade din nou → grupul rămâne (ni
   assert.deepEqual([mailuri(), cheiMail.length], [0, 1], 'mailul nu se mai cere')
   assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat, docV(a).seap_meta.grup], [false, false, undefined])
 })
+
+Deno.test('veghe Jakarinos r7 (P1): livrat → oprire înainte de a nota „trimis” → la reluare verificarea clopoțelului cade → NICIUN insert (grupul rămâne); reluarea următoare îl găsește livrat', async () => {
+  reset()
+  const [a, b] = douaVersiuni()
+  // oprirea: scrierea lui „trimis” pe ancoră (după clopoțel și mail)
+  F.laUpdate.fn = (t, patch, ids) => (t === 'ofertare_documente_atribuire' && ids.includes(a) && patch?.seap_meta?.revendicare && patch?.seap_meta?.grup?.trimis?.notif ? 'crash' : null)
+  await ruleazaOprit()
+  assert.equal(notifVersiuni().length, 1); assert.equal(mailuri(), 1)
+  assert.deepEqual(docV(a).seap_meta.grup?.trimis, { notif: false, mail: false })
+  delete F.laUpdate.fn; deplasare = 11 * 60 * 1000; log = []
+  F.esecSelect.notifications = { mesaj: 'timeout', ori: 1 }
+  const { j } = await run()
+  assert.equal(notifVersiuni().length, 1, 'fără al doilea clopoțel'); assert.equal(mailuri(), 0, log.join(' | '))
+  assert.match(j.raport[0].reluari?.[0]?.clopotel ?? '', /verificarea clopotelului: timeout/)
+  assert.deepEqual([!!docV(a).seap_meta.grup, docV(a).seap_meta.grup?.trimis], [true, { notif: false, mail: true }])
+  log = []
+  await run()
+  assert.equal(notifVersiuni().length, 1); assert.equal(mailuri(), 0)
+  assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat, docV(a).seap_meta.grup], [false, false, undefined])
+})

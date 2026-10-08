@@ -47,9 +47,10 @@ export const INDEX_COD_UNIC = 'ofertare_doc_seap_cod_unic'
 export const ADOPTIE = 'nume'
 
 /** @typedef {{ id: number | null, nume_original: string, fisier_path?: string | null, seap_cod?: string | null, tip?: string | null,
- *    size_bytes?: number | null, getAll?: boolean, dinRulare?: boolean }} Rand
+ *    size_bytes?: number | null, getAll?: boolean, dinRulare?: boolean, inlocuieste_id?: number | null, cod_anterior?: string | null }} Rand
  *  @typedef {{ coduri: Map<string, Rand>, peCheie: Map<string, Rand[]>, peId: Map<number, Rand>, copii: Set<number>, decise: Set<string>,
- *    instabile: boolean, cheieRand: (nume: string) => string, cheiSeap: (nume: string) => string[] }} Inv
+ *    instabile: boolean, cheieRand: (nume: string) => string, cheiSeap: (nume: string) => string[],
+ *    inlocuite?: Set<number>, coduriInlocuite?: Set<string> }} Inv
  *  @typedef {{ toate: Set<string>, peCheie: Map<string, Set<string>>, simple: Set<string> }} Lista */
 
 /** Codul unei intrări SEAP („” = fără cod). @param {any} item */
@@ -121,6 +122,9 @@ export function adaugaRand(inv, rand) {
   for (const k of chei) inv.peCheie.set(k, [...(inv.peCheie.get(k) ?? []), rand])
   if (c && !inv.coduri.has(c)) inv.coduri.set(c, rand)
   if (rand.id != null) inv.peId.set(rand.id, rand)
+  // Jakarinos r7: rândul pe care l-a înlocuit această versiune nu mai e cap de linie (vezi decideSeap)
+  if (rand.inlocuieste_id != null) inv.inlocuite?.add(rand.inlocuieste_id)
+  if (rand.cod_anterior) inv.coduriInlocuite?.add(String(rand.cod_anterior).trim())
 }
 
 /** Inventarul pentru decizie: DOAR rândurile reale (cu fișier, fără placeholder-e — aceeași mulțime ca `urcate`).
@@ -128,11 +132,13 @@ export function adaugaRand(inv, rand) {
  *  @param {Array<Rand & { seap_meta?: any }> | null | undefined} randuri
  *  @param {{ cheieRand: (n: string) => string, cheiSeap?: (n: string) => string[], copii?: Set<number> }} o @returns {Inv} */
 export function inventarCod(randuri, { cheieRand, cheiSeap = (n) => [cheieRand(n)], copii = new Set() }) {
-  const inv = { coduri: new Map(), peCheie: new Map(), peId: new Map(), copii, decise: new Set(), instabile: false, cheieRand, cheiSeap }
+  const inv = { coduri: new Map(), peCheie: new Map(), peId: new Map(), copii, decise: new Set(), instabile: false, cheieRand, cheiSeap,
+    inlocuite: new Set(), coduriInlocuite: new Set() }
   for (const r of randuri ?? []) {
     if (!eReal(r)) continue
     adaugaRand(inv, { id: r.id, nume_original: r.nume_original, fisier_path: r.fisier_path, seap_cod: codRand(r) || null,
-      tip: r.tip ?? null, size_bytes: r.size_bytes ?? null, getAll: eGetAll(r) })
+      tip: r.tip ?? null, size_bytes: r.size_bytes ?? null, getAll: eGetAll(r),
+      inlocuieste_id: r.seap_meta?.inlocuieste_id ?? null, cod_anterior: r.seap_meta?.cod_anterior ?? null })
   }
   return inv
 }
@@ -207,12 +213,18 @@ export function decideSeap(inv, lista, doc, chei, { adoptie = ADOPTIE } = {}) {
   // „înlocuiesc” deloc: codurile lor nu sunt niciodată în lista principală, deci condiția „a ieșit din listă” nu spune nimic.
   // Linia versiunilor (adaugaRand): la a doua republicare, înlocuitul e ultima versiune (numărul cel mai mare).
   // R2 (r4): toți candidații rămân în `inlocuiti` (aceeași ordine) — F5 din import caută conținutul identic pe fiecare.
+  // Jakarinos r7 (P1): doar CAPETELE liniilor de versiuni pot fi înlocuite — un rând deja înlocuit de o versiune din platformă
+  // (seap_meta.inlocuieste_id / cod_anterior pe alt rând) nu mai justifică o înlocuire. „Caiet.pdf” /10 → „Caiet (…00020).pdf”
+  // /20 (încă listată) + /30 nou cu același nume = FRATE, nu versiune a lui /10.
+  // `linie` = toți candidații de dinainte de excludere: E1 (candidatiMutare) judecă pe ei capul liniei pentru mutarea tăcută.
+  const inlocuitDeja = (r) => (r.id != null && !!inv.inlocuite?.has(r.id)) || !!inv.coduriInlocuite?.has(codRand(r))
   const o = ordineCod(cod)
-  const inloc = o ? pot.filter((r) => {
+  const linie = o ? pot.filter((r) => {
     const c = codRand(r), or = c && !r.getAll && !lista.toate.has(c) ? ordineCod(c) : null
     return !!or && or.prefix === o.prefix && or.nr < o.nr
   }).sort((a, b) => ordineCod(codRand(b)).nr - ordineCod(codRand(a)).nr) : []
-  if (inloc.length) return volum ? { fel: 'sari', motiv: 'volum' } : { fel: 'versiune', nume: N2, inlocuit: inloc[0], inlocuiti: inloc }
+  const inloc = linie.filter((r) => !inlocuitDeja(r))
+  if (inloc.length) return volum ? { fel: 'sari', motiv: 'volum' } : { fel: 'versiune', nume: N2, inlocuit: inloc[0], inlocuiti: inloc, linie }
   const frate = volum ? { fel: 'sari', motiv: 'volum' } : { fel: 'frate', nume: N2, rude: pot.map((r) => r.id).filter((id) => id != null) }
   const libere = pot.filter((r) => !codRand(r) && !r.dinRulare && !inv.copii.has(r.id))
   if (libere.length) {
@@ -330,7 +342,8 @@ export function candidatiMutare(dec, arePlaceholderN2, folosite = new Set()) {
   if (dec?.fel !== 'versiune') return []
   const toti = Array.isArray(dec.inlocuiti) && dec.inlocuiti.length ? dec.inlocuiti : dec.inlocuit ? [dec.inlocuit] : []
   const nr = (r) => ordineCod(codRand(r))?.nr ?? null
-  const capete = toti.filter((r) => numeBaza(r?.nume_original, codRand(r)) !== null).map(nr).filter((n) => n != null)
+  // capetele: pe toată linia (inclusiv rândurile înlocuite deja — Jakarinos r7), nu doar pe candidații rămași
+  const capete = (Array.isArray(dec.linie) ? dec.linie : toti).filter((r) => numeBaza(r?.nume_original, codRand(r)) !== null).map(nr).filter((n) => n != null)
   const peLinie = (r) => !capete.some((c) => nr(r) == null || c > nr(r))
   return toti.filter((r) => mutaPeIdentic(r, arePlaceholderN2) && !(r?.id != null && folosite.has(r.id)) && peLinie(r))
 }

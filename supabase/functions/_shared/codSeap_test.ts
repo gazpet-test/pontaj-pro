@@ -578,3 +578,33 @@ Deno.test('inventarCod / indexLista: doar rândurile reale, coduri tăiate; list
   assert.deepEqual([...iv.peCheie.keys()].sort(), ['caiet.pdf', 'caietcn1095546-00036.pdf'])
   assert.equal(iv.peId.get(4242).seap_cod, P(36))
 })
+
+Deno.test('Jakarinos r7 (P1): doar CAPUL liniei poate fi înlocuit — original → versiune (încă listată) + cod nou cu același nume = FRATE, nu versiune a originalului', () => {
+  // „Caiet.pdf” /10 → „Caiet (…00020).pdf” /20 (versiunea lui, cu seap_meta ca la import); SEAP păstrează /20 și adaugă /30
+  const orig = rand('Caiet.pdf', P(10))
+  const v20 = rand(numeVersiune('Caiet.pdf', P(20)), P(20), { seap_meta: { cod_sursa: 'lista', cod: P(20), cod_anterior: P(10), inlocuieste: 'Caiet.pdf', inlocuieste_id: orig.id } })
+  const l = [{ nume: 'Caiet.pdf', cod: P(20) }, { nume: 'Caiet.pdf', cod: P(30) }]
+  const inv = inv0([orig, v20])
+  assert.equal(pas(inv, l, l[0]).motiv, 'cod')
+  const d = pas(inv, l, l[1])
+  assert.deepEqual([d.fel, d.nume], ['frate', 'Caiet (CN1095546-00030).pdf'])
+  assert.equal((campuriCod(P(30), d) as Any).seap_meta.de_anuntat, undefined)   // fără anunț de „versiune”
+  // capul /20 a ieșit din listă → versiune a CAPULUI (originalul înlocuit deja nu mai e candidat)
+  const l2 = [{ nume: 'Caiet.pdf', cod: P(30) }]
+  const d2 = decide(inv0([orig, v20]), l2, l2[0])
+  assert.deepEqual([d2.fel, d2.inlocuit.id, d2.inlocuiti.map((r: Any) => r.id)], ['versiune', v20.id, [v20.id]])
+  // doar cod_anterior (fără id) ajunge la fel
+  const v20b = rand(numeVersiune('Caiet.pdf', P(20)), P(20), { seap_meta: { cod_anterior: P(10) } })
+  assert.equal(decide(inv0([rand('Caiet.pdf', P(10)), v20b]), l, l[1]).fel, 'frate')
+  // o versiune adusă în ACEEAȘI rulare (adaugaRand din import) marchează și ea înlocuitul
+  const inv3 = inv0([orig])
+  adaugaRand(inv3, { id: 990, nume_original: numeVersiune('Caiet.pdf', P(20)), fisier_path: '3/atribuire/v', seap_cod: P(20), dinRulare: true, inlocuieste_id: orig.id, cod_anterior: P(10) })
+  assert.equal(decide(inv3, l, l[1]).fel, 'frate')
+  // lic. 100 (frați fără relație de înlocuire): /13 ieșit din listă → versiune a lui /13, ca înainte
+  const f13 = rand('Doc.pdf', P(13)), f17 = rand(numeVersiune('Doc.pdf', P(17)), P(17), { seap_meta: { cod_sursa: 'lista', cod: P(17), frate_cu: [f13.id] } })
+  const l4 = [{ nume: 'Doc.pdf', cod: P(17) }, { nume: 'Doc.pdf', cod: P(25) }]
+  const inv4 = inv0([f13, f17])
+  pas(inv4, l4, l4[0])
+  const d4 = pas(inv4, l4, l4[1])
+  assert.deepEqual([d4.fel, d4.inlocuit.id], ['versiune', f13.id])
+})

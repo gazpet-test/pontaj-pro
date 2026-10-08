@@ -569,10 +569,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     const cs = readFileSync(new URL('../supabase/functions/_shared/codSeap.mjs', import.meta.url), 'utf8')
     expect(cs).toMatch(/export const mutaPeIdentic = \(inl, arePlaceholderN2\) => !arePlaceholderN2 && numeBaza\(inl\?\.nume_original, codRand\(inl\)\) === null/)
     // R2: decideSeap dă toți înlocuiții (inlocuit = primul, ca înainte); candidatiMutare îi filtrează cu mutaPeIdentic + țintele folosite
-    expect(cs).toMatch(/\{ fel: 'versiune', nume: N2, inlocuit: inloc\[0\], inlocuiti: inloc \}/)
+    expect(cs).toMatch(/\{ fel: 'versiune', nume: N2, inlocuit: inloc\[0\], inlocuiti: inloc, linie \}/)
     expect(cs).toMatch(/return toti\.filter\(\(r\) => mutaPeIdentic\(r, arePlaceholderN2\) && !\(r\?\.id != null && folosite\.has\(r\.id\)\) && peLinie\(r\)\)/)
     // E1 (r5): ținta doar capul liniei — niciun candidat cu nume de cod cu număr mai mare (revenirea la un conținut vechi se anunță)
-    expect(cs).toMatch(/const capete = toti\.filter\(\(r\) => numeBaza\(r\?\.nume_original, codRand\(r\)\) !== null\)\.map\(nr\)/)
+    expect(cs).toMatch(/const capete = \(Array\.isArray\(dec\.linie\) \? dec\.linie : toti\)\.filter\(\(r\) => numeBaza\(r\?\.nume_original, codRand\(r\)\) !== null\)\.map\(nr\)/)
     expect(cs).toMatch(/const peLinie = \(r\) => !capete\.some\(\(c\) => nr\(r\) == null \|\| c > nr\(r\)\)/)
   })
   it('veghea (F2/F4 + D3 + R4, review PR-1): next_index trece mai departe doar de la o rundă per-fisier fără rezerva arhivă; o rundă terminată de la > 0 e urmată de O rundă de la 0 DOAR pe a doua trecere, apoi stop; importul dă next_index = 0 pe arhivă (R3)', () => {
@@ -741,6 +741,19 @@ describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea int
     expect(veg).toMatch(/const neplecat = !!grup && \(\(!!grup\.notif && !grup\.trimis\?\.notif\) \|\| \(!!grup\.mail && !grup\.trimis\?\.mail\)\);\s*const \[n, m\] = steag\(anc\);\s*await confirma\(anc, n, m, incomplet \|\| neplecat \? grup : null\);/)
     expect(veg).toMatch(/if \(grup\) meta\.grup = grup; else delete meta\.grup;/)
     expect(veg).not.toMatch(/PLIC_VALABIL_MS|scriePlic|ordineConfirmare/)
+    // Jakarinos r7: verificarea clopoțelului necitită = eroare, FĂRĂ insert (grupul rămâne, se reia identic)
+    expect(veg).toMatch(/if \(eD\) return `verificarea clopotelului: \$\{eD\.message\}`;/)
+    expect(veg).not.toMatch(/if \(!eD\) \{ const au = new Set/)
+  })
+  it('codSeap (Jakarinos r7): doar CAPUL liniei poate fi înlocuit — rândurile înlocuite deja (inlocuieste_id / cod_anterior) nu justifică o versiune; E1 judecă pe toată linia', () => {
+    const cod = readFileSync(new URL('../supabase/functions/_shared/codSeap.mjs', import.meta.url), 'utf8')
+    expect(cod).toMatch(/const inlocuitDeja = \(r\) => \(r\.id != null && !!inv\.inlocuite\?\.has\(r\.id\)\) \|\| !!inv\.coduriInlocuite\?\.has\(codRand\(r\)\)/)
+    expect(cod).toMatch(/const inloc = linie\.filter\(\(r\) => !inlocuitDeja\(r\)\)/)
+    expect(cod).toMatch(/inlocuit: inloc\[0\], inlocuiti: inloc, linie \}/)
+    expect(cod).toMatch(/inlocuieste_id: r\.seap_meta\?\.inlocuieste_id \?\? null, cod_anterior: r\.seap_meta\?\.cod_anterior \?\? null/)
+    expect(cod).toMatch(/const capete = \(Array\.isArray\(dec\.linie\) \? dec\.linie : toti\)/)
+    const imp = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    expect(imp).toMatch(/inlocuieste_id: \(seap\?\.seap_meta as any\)\?\.inlocuieste_id \?\? null, cod_anterior: \(seap\?\.seap_meta as any\)\?\.cod_anterior \?\? null/)
   })
   it('importul: după 3 descărcări per fișier căzute la rând, o singură încercare (bugetul rămâne pentru rezerva arhivă)', () => {
     expect(imp).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget, esecuriLaRand >= 3 \? 1 : 4\);/)

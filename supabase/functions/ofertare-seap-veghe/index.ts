@@ -190,13 +190,16 @@ async function scrieGrup(supa: any, d: any, token: string, grup: unknown): Promi
 }
 // clopotelul unui mesaj: un singur INSERT cu toti destinatarii (totul sau nimic — Jakarinos r2); cu `faraRepetare`, cei care au
 // deja ACELASI mesaj (titlu + text, ultimele 24 h) sunt sariti (r4: tabelul notifications n-are cheie de idempotenta — continutul
-// e identitatea; citirea esuata → lotul intreg, o dublura e preferabila unui anunt pierdut). Intoarce eroarea sau null.
+// e identitatea). Jakarinos r7 (P1): verificarea necitita = EROARE, fara INSERT — canalul ramane netrimis pe grup si se reia
+// identic (nimic pierdut), in loc sa trimita lotul intreg si sa dubleze clopotelul celor care il au. Intoarce eroarea sau null.
 async function clopotel(supa: any, catre: string[], m: { type: string; title: string; message: string }, faraRepetare: boolean): Promise<string | null> {
   let lot = [...catre];
   if (faraRepetare && lot.length) {
     const { data: deja, error: eD } = await supa.from('notifications').select('profile_id').in('profile_id', lot)
       .eq('title', m.title).eq('message', m.message).gte('created_at', new Date(Date.now() - 864e5).toISOString());
-    if (!eD) { const au = new Set((deja || []).map((x: any) => x.profile_id)); lot = lot.filter((pid) => !au.has(pid)); }
+    if (eD) return `verificarea clopotelului: ${eD.message}`;
+    const au = new Set((deja || []).map((x: any) => x.profile_id));
+    lot = lot.filter((pid) => !au.has(pid));
   }
   if (!lot.length) return null;
   const { error } = await supa.from('notifications').insert(lot.map((pid) => ({
