@@ -485,7 +485,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // R1 (r4): versiunea NU intră în `noi`; grupa răspunsuri + mail le ia DOAR din rândurile importate cu de_anuntat
     expect(src).toMatch(/if \(dec\.fel === 'versiune'\) \{ versiuni\.add\(dec\.nume\); continue; \}/)
     // E2 (r5): listele de versiuni se fac PE CANAL (clopoțel / mail), fiecare cu grupa ei de răspunsuri
-    expect(src).toMatch(/const versiuniNotif = deAnuntat\.filter\(\(d: any\) => !d\.seap_meta\?\.notificat_la\)\.map\(\(d: any\) => d\.nume_original as string\);/)
+    expect(src).toMatch(/const versiuniNotif = destinatariNecunoscuti \? \[\] : deAnuntat\.filter\(\(d: any\) => !d\.seap_meta\?\.notificat_la\)\.map\(\(d: any\) => d\.nume_original as string\);/)
     expect(src).toMatch(/const versiuniMail = deAnuntat\.filter\(\(d: any\) => !d\.seap_meta\?\.mail_la\)\.map\(\(d: any\) => d\.nume_original as string\);/)
     expect(src).toMatch(/for \(const n of \[\.\.\.noi\.filter\(esteRaspuns\), \.\.\.versiuniCanal, \.\.\.raspunsuriAduse\]\)/)
     expect(src).toMatch(/const raspunsuri = grupa\(versiuniNotif\);[^\n]*\n\s*const raspunsuriMail = grupa\(versiuniMail\);/)
@@ -685,6 +685,12 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
 
 describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea internă)', () => {
   const imp = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+  it('veghea: cu destinatari necunoscuți, clopoțelul versiunilor se amână întreg (Jakarinos r3)', () => {
+    const veg = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
+    expect(veg).toMatch(/const destinatariNecunoscuti = !!eOwners \|\| !!eValizi;\s*const versiuniNotif = destinatariNecunoscuti \? \[\] :/)
+    const iV = veg.indexOf('const destinatariNecunoscuti'), iO = veg.indexOf('let { data: owners, error: eOwners }'), iP = veg.indexOf("const { data: valizi, error } = await supa.from('profiles')")
+    expect(iO).toBeGreaterThan(0); expect(iP).toBeGreaterThan(iO); expect(iV).toBeGreaterThan(iP)
+  })
   it('importul: după 3 descărcări per fișier căzute la rând, o singură încercare (bugetul rămâne pentru rezerva arhivă)', () => {
     expect(imp).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget, esecuriLaRand >= 3 \? 1 : 4\);/)
     expect(imp).toMatch(/if \(!rd\.ok\) \{ esecuriLaRand\+\+;/)

@@ -658,7 +658,10 @@ Deno.serve(async (req: Request) => {
     // separat, doar cand canalul a reusit; de_anuntat = false abia cand le are pe amandoua. La rularea urmatoare, o versiune deja
     // notificata intra DOAR in mail (si invers): listele de versiuni se fac pe canal, fara a doua notificare / al doilea mail.
     const deAnuntat = inventarOk ? (acum || []).filter(versiuneDeAnuntat) : [];
-    const versiuniNotif = deAnuntat.filter((d: any) => !d.seap_meta?.notificat_la).map((d: any) => d.nume_original as string);
+    // Jakarinos r3 (P1): cu destinatari necunoscuti (owneri / profiluri necitite), clopotelul versiunilor se AMANA intreg — trimis
+    // doar unei parti, s-ar repeta la reluare pentru cei care l-au primit deja. Raspunsurile / termenul pleaca oricum (ca inainte).
+    const destinatariNecunoscuti = !!eOwners || !!eValizi;
+    const versiuniNotif = destinatariNecunoscuti ? [] : deAnuntat.filter((d: any) => !d.seap_meta?.notificat_la).map((d: any) => d.nume_original as string);
     const versiuniMail = deAnuntat.filter((d: any) => !d.seap_meta?.mail_la).map((d: any) => d.nume_original as string);
     const cheiRaspunsuriAduse = new Set(raspunsuriAduse.map(cheieRand));
     // grupa „raspuns / modificare a documentatiei” a unui canal: raspunsurile noi + versiunile canalului + raspunsurile GetAll

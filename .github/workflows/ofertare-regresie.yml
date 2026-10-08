@@ -17,6 +17,7 @@ on:
       - 'scripts/test-jakv2p3.mjs'
       - 'scripts/test-jakv202-hash-server.mjs'
       - 'scripts/test-j04-j07-integrare.mjs'
+      - 'scripts/e2e-seap/**'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -60,6 +61,7 @@ on:
       - 'scripts/test-jakv2p3.mjs'
       - 'scripts/test-jakv202-hash-server.mjs'
       - 'scripts/test-j04-j07-integrare.mjs'
+      - 'scripts/e2e-seap/**'
       - 'api/_poartaOfertare*'
       - 'api/cad-parse.js'
       - 'api/pdf-sparge.js'
@@ -144,6 +146,10 @@ jobs:
       # J04: testul node:test importă handler-ul .ts, deci rulează sub Deno (Node 20 nu elimină tipurile).
       - name: Hash pe server J04 - logica edge, poarta si paritatea rolurilor
         run: deno test -A --node-modules-dir=none scripts/test-jakv202-hash-server.mjs
+      # Audit #4 var. B (PR #652): handler-ele REALE import SEAP + veghe peste Supabase si SEAP simulate (map.json inlocuieste
+      # supabase-js cu fake_supabase.ts). --no-check: ca R6. Cere `zip` (Info-ZIP), prezent pe ubuntu-latest.
+      - name: Import SEAP + veghe cap-coada (cod SEAP ca identitate)
+        run: deno test -A --no-check --node-modules-dir=none --import-map=scripts/e2e-seap/map.json scripts/e2e-seap/import.e2e.ts scripts/e2e-seap/veghe.e2e.ts
 
   postgres:
     runs-on: ubuntu-latest
