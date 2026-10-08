@@ -1080,6 +1080,19 @@ Deno.test('cod SEAP (PR-2, Jakarinos r16): .p7m — fratele „N (CN1-00002).pdf
   })
 })
 
+Deno.test('cod SEAP (PR-2, Jakarinos r17): aceeași pereche „N.pdf.p7m”/C1 listată de două ori + rândul desfăcut „N (semnat).pdf” fără cod → adoptat, nu conflict', async () => {
+  await cuMediu(async (_root, s) => {
+    const buf = await semneazaCms(new TextEncoder().encode('%PDF-1.4 alpha'))
+    const { descarcate, restore } = cuSeapCod([{ nume: 'N.pdf.p7m', cod: 'CN1/00001', buf }, { nume: 'N.pdf.p7m', cod: 'CN1/00001', buf }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [{ id: 7, licitatie_id: 3, nume_original: 'N (semnat).pdf', fisier_path: '3/n.pdf', size_bytes: 14, status_procesare: 'procesat' }] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), descarcate, rap.erori], [[['N (semnat).pdf', 'CN1/00001']], [], []])
+      ok(!tab.ofertare_seap_fisiere.some(e => e.stare === 'eroare'), JSON.stringify(tab.ofertare_seap_fisiere))
+    } finally { restore() }
+  })
+})
+
 Deno.test('cod SEAP (PR-2, varianta A): o arhivă rămâne pe regula după nume — evidența „ok” a despachetării o ține deoparte, oricare ar fi codul', async () => {
   await cuMediu(async (_root, s) => {
     const { descarcate, restore } = cuSeapCod([{ nume: 'PT.zip', cod: 'CN1/00030', buf: '%PDF-1.4 nu se cere' }])

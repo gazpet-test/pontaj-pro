@@ -101,6 +101,7 @@ async function scenariu(opt: Opt = {}) {
       storage++
       if (storage === 1) await opt.laStorage?.(root, supa)
       const path = new URL(url).pathname.replace('/storage/v1/object/authenticated/ofertare/', '')
+      if (path === '93/503') return new Response('indisponibil', { status: 503 })   // candidat necitit (Jakarinos r17)
       const text = ({ '93/a': 'alpha', '93/b': 'beta', '93/c': 'ALTFEL', '93/b2': 'beta2' } as Record<string, string>)[path]
       assert(text !== undefined, `obiect Storage neașteptat: ${path}`)
       const raspuns = new Response(text, { status: opt.statusStorage ?? 200 })
@@ -548,5 +549,26 @@ Deno.test('manifest (PR-2, Jakarinos r16): un document FĂRĂ cod numit literal 
   for (const w of scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'))
     eq([w.document_id, w.sha256, w.stare], [23, await sha('beta'), 'urcat'], 'dovada documentului fără cod neatinsă')
   eq(raport.lipsa_in_platforma, 1, '/2 lipsă raportat')
+  assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
+})
+
+Deno.test('manifest (PR-2, Copilot r11): un rând ISTORIC fără cod „N (CN1-00002).pdf” (document nelistat azi) nu e /2 doar după nume — /2 lipsă, dovada rândului neatinsă', async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 23, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: null }]
+  const dovezi = [{ arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 21, sha256: await sha('alpha'), stare: 'urcat' },
+    { arhiva_cheie: 'n (cn1-00002).pdf', cale: 'N (CN1-00002).pdf', document_id: 23, sha256: await sha('beta'), stare: 'urcat' }]
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' }, { nume: 'N.pdf', cod: 'CN1/00002', text: 'omega' }] })
+  eq(scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'), [], 'nimic scris peste dovada rândului istoric')
+  eq(raport.lipsa_in_platforma, 1, '/2 lipsă raportat')
+})
+
+Deno.test('manifest (PR-2, Jakarinos r17): cheie ocupată — un candidat necitit urmat de unul identic NU scrie peste dovada ocupantului', async () => {
+  const docsBd = [{ id: 25, nume_original: 'N.pdf', fisier_path: '93/503', size_bytes: 5, seap_cod: null },
+    { id: 23, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: null },
+    { id: 24, nume_original: 'N (CN1-00007).pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: null }]
+  const dovezi = [{ arhiva_cheie: 'n (cn1-00002).pdf', cale: 'N (CN1-00002).pdf', document_id: 23, sha256: await sha('beta'), stare: 'urcat' }]
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00002', text: 'alpha' }, { nume: 'N (CN1-00002).pdf', text: 'beta' }] })
+  for (const w of scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'))
+    eq([w.document_id, w.sha256, w.stare], [23, await sha('beta'), 'urcat'], 'dovada ocupantului neatinsă')
   assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
 })

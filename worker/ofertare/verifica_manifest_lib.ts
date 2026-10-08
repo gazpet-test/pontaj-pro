@@ -210,14 +210,13 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
           else if (!cod) await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)
           else {
             // Jakarinos r2 pe #659 (P1): un cod care nu e pe niciun rând NU cade pe numele altui cod — „N.pdf” /1 (în platformă) și
-            // /2 (încă neadus) ar compara /2 cu documentul lui /1 și i-ar retrograda dovada. Numele cu cod „N (COD).ext” (versiune /
-            // frate urcat fără cod) se caută întâi; cu rivali pe nume (alt cod listat sau rândul găsit pe nume are alt cod) =
+            // /2 (încă neadus) ar compara /2 cu documentul lui /1 și i-ar retrograda dovada. Fără rând propriu, cu rivali pe nume (alt cod listat sau rândul găsit pe nume are alt cod) =
             // LIPSĂ raportată pe cheia proprie a codului; fără rivali (rând vechi fără cod, nume unic) = pe nume, ca înainte.
-            // Jakarinos r16 pe #659 (P1): un rând numit „N (COD).ext” e al codului doar dacă NU poartă alt cod și numele lui nu e al altui
-            // document listat (brut sau desfăcut) — un document FĂRĂ cod numit literal așa e acel document, nu fratele codului
-            const eAltDocListat = (n: string) => docs.some(x => x !== grup[0] && [x.nume, numeDesfacut(x.nume)].some(m => cheieNume(m) === cheieNume(n)))
-            const dN2brut = inPlatforma.get(cheieNume(numeCod))
-            const dN2 = dN2brut && !String(dN2brut.seap_cod ?? '').trim() && !eAltDocListat(dN2brut.nume_original) ? dN2brut : undefined
+            // Jakarinos r16 + Copilot r11 pe #659 (P1): un rând numit „N (COD).ext” FĂRĂ codul acesta nu e dovada codului doar după nume
+            // (poate fi un document numit literal așa, listat sau nu) — intră între candidații familiei, acceptat DOAR pe sha (mai jos).
+            // Documentele listate cu ACELAȘI cod (aceeași pereche de două ori) nu sunt „alt document”
+            const eAltDocListat = (n: string) => docs.some(x => x !== grup[0] && String(x.cod ?? '').trim() !== cod
+              && [x.nume, numeDesfacut(x.nume)].some(m => cheieNume(m) === cheieNume(n)))
             // TOATE rândurile reale cu numele lui (nu doar ultimul păstrat de inPlatforma — Jakarinos r6 pe #659): rival = alt cod listat
             // cu același nume sau un rând cu numele lui care poartă alt cod; ambiguu = rival sau mai multe rânduri cu același nume
             const real = (x: DocumentBd) => !!x.fisier_path && !String(x.fisier_path).includes('/neincarcat/')
@@ -225,8 +224,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
             const rival = docs.some(x => x !== grup[0] && cheieNume(x.nume) === cheieNume(grup[0].nume) && String(x.cod ?? '').trim() && String(x.cod).trim() !== cod)
               || peNumeToate.some(x => String(x.seap_cod ?? '').trim() && String(x.seap_cod).trim() !== cod)
             const ambiguu = rival || peNumeToate.length > 1
-            if (dN2) { const [a, c] = cheiaPentru(dN2); await compara(a, c, locale[0].buf, dN2.nume_original, dN2) }
-            else {
+            {
               // Jakarinos r3 pe #659 (P1): fratele cu conținut IDENTIC (deduplicat legitim de worker / edge, fără rând propriu) nu e
               // „LIPSĂ”: întâi sha-ul față de candidații numelui; la potrivire, legătura pe cheia proprie a codului, fără să atingă
               // dovada celuilalt. Candidat necitit = nimic scris. Jakarinos r5: căutarea rulează ÎNTOTDEAUNA pentru un cod fără rând
@@ -258,9 +256,11 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
               const ocupata = eAltDocListat(c) || (precProprie?.stare === 'urcat' && !!docPrec && String(docPrec.seap_cod ?? '').trim() !== cod)
               // identic = legătura pe cheia proprie a codului, ÎNTOTDEAUNA (Jakarinos r6 pe #659: căderea pe nume abandona candidatul
               // confirmat și compara cu documentul altei dovezi, pe care o retrograda)
-              if (ocupata && !necitit && (identic || ambiguu)) {
-                tally.erori.push(`${grup[0].nume} (${cod}): ${identic ? `conținut identic cu #${identic.id}` : 'LIPSĂ în platformă'} — cheia „${c}” e a altui document; nimic scris peste dovada lui`)
-                if (identic) { tally.identice++; potrivite.add(identic.id) } else tally.lipsa++
+              // cheie ocupată: NICIODATĂ scriere pe ea, oricum s-ar fi terminat căutarea (Jakarinos r17: un candidat necitit urmat de
+              // unul identic scria peste dovada ocupantului)
+              if (ocupata && (identic || ambiguu || necitit)) {
+                tally.erori.push(`${grup[0].nume} (${cod}): ${identic ? `conținut identic cu #${identic.id}` : necitit ? `Storage indisponibil (${necitit})` : 'LIPSĂ în platformă'} — cheia „${c}” e a altui document; nimic scris peste dovada lui`)
+                if (identic) { tally.identice++; potrivite.add(identic.id) } else if (!necitit) tally.lipsa++
               }
               else if (identic) {
                 randuri.push({ ...rand, document_id: identic.id, stare: 'deja_in_platforma', motiv: `conținut identic cu #${identic.id} — codul SEAP ${cod} nu are rând propriu (frate deduplicat)` })

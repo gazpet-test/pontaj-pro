@@ -406,7 +406,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   const conflictNume = (d: DocSeap, idx: number, tinta: string, randuri = true): string | null => {
     const kt = cheiFinale(tinta), propriu = tinta === d.nume
     const atinge = (n: string) => [...cheiFinale(n)].some(k => kt.has(k))
-    const alt = docs.find((x, j) => j !== idx && atinge(x.nume)
+    // aceeași identitate SEAP listată de două ori (același cod) nu e „alt document” (Jakarinos r17: blocaj fals la adopția unui .p7m)
+    const alt = docs.find((x, j) => j !== idx && String(x.cod ?? '').trim() !== String(d.cod).trim() && atinge(x.nume)
       && (!propriu || !x.cod || esteArhiva(numeDesfacut(x.nume)) || !!volumRar(x.nume.replace(/\.p7[ms]$/i, ''))))
     if (alt) return `numele țintă „${tinta}” coincide cu alt document listat („${alt.nume}”${alt.cod ? `, cod ${alt.cod}` : ', fără cod'})`
     const rand = propriu || !randuri ? null : [...kt].flatMap(k => inv.peCheie.get(k) ?? []).find((r: any) => kt.has(cheieRand(r.nume_original)) && String(r.seap_cod ?? '').trim() !== String(d.cod).trim())
