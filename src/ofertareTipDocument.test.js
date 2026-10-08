@@ -419,7 +419,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/if \(arhiva \|\| dec\.fel === 'fara_cod'\) \{/)
     // decis pe cod: nicio evidență (ok / sarit, pe nume sau pe „N (COD).ext”) nu e scurtătură — doar eroarea cu reîncercările
     // epuizate îl ține deoparte (Copilot r1 + r2, Jakarinos r8 pe #659)
-    expect(src).toMatch(/if \(d\.dec\) \{\s*\n(?:\s*\/\/[^\n]*\n)*\s*if \(d\.nume !== d\.numeSeap && ev\?\.stare === 'eroare' && \(ev\?\.incercari \?\? 0\) >= MAX_INCERCARI/)
+    expect(src).toMatch(/if \(d\.dec\) \{\s*\n(?:\s*\/\/[^\n]*\n)*\s*if \(ev\?\.stare === 'eroare' && \(ev\?\.incercari \?\? 0\) >= MAX_INCERCARI/)
+    // evidența unui document cu cod e mereu pe „N (COD).ext”, și pentru „nou” (Jakarinos r10 pe #659)
+    expect(src).toMatch(/deAdus\.push\(\{ \.\.\.d, nume: tinta, dec, numeSeap: d\.nume, idx, ev: numeVersiune\(d\.nume, String\(d\.cod\)\) \}\)/)
+    expect(src).toMatch(/const k = cheieEvidenta\(numeEv\(d\)\)/)
     expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)

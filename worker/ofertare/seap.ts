@@ -321,7 +321,11 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   if (instabil) { inv.instabile = true; raport.coduri_instabile = instabil; raport.erori.push(instabil) }
   const areDovada = (r: any) => !!(r?.id != null && identitate.shaDoc.get(r.id))
   // idx = poziția în lista SEAP (codurile de deasupra lui intră în `decise` la recalcularea deciziei, ca în edge)
-  type DocPlan = DocSeap & { dec?: any; numeSeap?: string; idx?: number }
+  // ev = numele EVIDENȚEI unui document cu cod: mereu „N (COD).ext”, legat neechivoc de codul curent — și pentru „nou”, care se urcă
+  // tot ca „N.pdf” (Jakarinos r10 pe #659: istoricul altui cod de pe „N.pdf” nu-l blochează, iar plafonul de reîncercări se aplică
+  // eșecurilor ACESTUI cod). Fără cod: evidența pe numele țintă, ca înainte.
+  type DocPlan = DocSeap & { dec?: any; numeSeap?: string; idx?: number; ev?: string }
+  const numeEv = (d: DocPlan) => d.ev ?? d.nume
   // codurile dovedite prezente în rularea asta (sărite pe cod, adoptate, mutate, identice, urcate) — vezi inchideNume
   const rezolvate = new Set<string>()
   // evidența rămasă „eroare” / „în curs” pe un nume anume se închide (altfel ține poarta de completitudine la nesfârșit)
@@ -423,14 +427,14 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     if (dec.fel === 'verifica' && !verificabil(dec, areDovada)) {
       const t = `${d.nume} (${d.cod}): identitatea nu s-a putut verifica — niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)`
       raport.identitate_neverificata.push(t); raport.erori.push(t)
-      await inregistreaza(supa, licId, tinta, { stare: 'eroare', etapa: 'identitate', motiv: t })
+      await inregistreaza(supa, licId, numeVersiune(d.nume, String(d.cod)), { stare: 'eroare', etapa: 'identitate', motiv: t })
       continue
     }
     // rândul PLANIFICAT (dinRulare) doar REZERVĂ numele: un al doilea document cu același nume, mai jos în listă, primește
     // ținta de frate „N (COD).ext”, nu tot „N” (Jakarinos r2 pe #659: fără înlocuiri — vezi recalculeaza)
     const plan = { id: null, nume_original: tinta, fisier_path: null, seap_cod: d.cod, dinRulare: true }
     adaugaRand(inv, plan); planuri.add(plan)
-    deAdus.push({ ...d, nume: tinta, dec, numeSeap: d.nume, idx })
+    deAdus.push({ ...d, nume: tinta, dec, numeSeap: d.nume, idx, ev: numeVersiune(d.nume, String(d.cod)) })
   }
   // rândurile planificate ies din inventar: de aici încolo inventarul e cel EFECTIV (rânduri reale, adopțiile de mai sus, apoi
   // urcările / mutările din rulare), pe care se recalculează decizia fiecărui document înainte de descărcare
@@ -439,14 +443,14 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
 
   // ce lipsește: nu e document urcat și nu e deja tratat cu succes (arhivele nu apar niciodată ca document)
   const lipsa = deAdus.filter(d => {
-    const k = cheieEvidenta(d.nume)
+    const k = cheieEvidenta(numeEv(d))
     const ev = evidenta.get(k)
     if (d.dec) {
       // decis pe cod (codul nu e pe niciun rând): nicio evidență nu e scurtătură — documentul se reverifică pe conținut la fiecare
-      // rulare (o descărcare SEAP; rudele întâi din manifest), ca în edge (P = A). Doar eroarea cu reîncercările epuizate îl ține deoparte,
-      // și doar pe numele cu cod „N (COD).ext” (legat neechivoc de codul curent) — istoricul de pe numele simplu „N.pdf” poate fi al
-      // altei identități (Copilot r3 pe #659: eroare veche pe N.pdf, cod nou decis „nou” pe N.pdf → nu se mai descărca)
-      if (d.nume !== d.numeSeap && ev?.stare === 'eroare' && (ev?.incercari ?? 0) >= MAX_INCERCARI && ev?.etapa !== 'identitate') { raport.sarite++; return false }
+      // rulare (o descărcare SEAP; rudele întâi din manifest), ca în edge (P = A). Doar eroarea cu reîncercările epuizate îl ține
+      // deoparte; evidența lui e mereu „N (COD).ext”, deci istoricul de pe numele simplu „N.pdf” (altă identitate) nu-l blochează
+      // (Copilot r3), iar eșecurile repetate ale ACESTUI cod se opresc la plafon (Jakarinos r10)
+      if (ev?.stare === 'eroare' && (ev?.incercari ?? 0) >= MAX_INCERCARI && ev?.etapa !== 'identitate') { raport.sarite++; return false }
       return true
     }
     // var. B: „X.pdf.p7m” poate fi deja în platformă brut (înainte de B) sau desfăcut ca „X (semnat).pdf” — niciunul nu se re-aduce
@@ -503,7 +507,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     const lungimi = [l.marime, ...(l.marimeBrut != null ? [l.marimeBrut] : [])]
     const gata = async (stareEv: 'ok' | 'eroare', etapa: string, motiv: string) => {
       if (stareEv === 'ok') rezolvate.add(cod)
-      await inregistreaza(supa, licId, dp.nume, { stare: stareEv, etapa, motiv, marime: l.marime, sha: l.sha })
+      await inregistreaza(supa, licId, numeEv(dp), { stare: stareEv, etapa, motiv, marime: l.marime, sha: l.sha })
       return null
     }
     let decF: any = dp.dec
@@ -577,7 +581,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     if (dec.fel === 'fara_cod') return true
     const scrie = async (stareEv: 'ok' | 'eroare', etapa: string, motiv: string) => {
       if (stareEv === 'ok') { rezolvate.add(cod); raport.deja++ } else raport.erori.push(`${orig.nume} (${cod}): ${motiv}`)
-      await inregistreaza(supa, licId, dp.nume, { stare: stareEv, etapa, motiv })
+      await inregistreaza(supa, licId, numeEv(dp), { stare: stareEv, etapa, motiv })
       return false
     }
     if (dec.fel === 'sari') return scrie('ok', 'cod', dec.motiv === 'cod' ? `prezent în platformă: codul SEAP ${cod} e pe #${dec.rand?.id}` : `sărit (${dec.motiv})`)
@@ -587,17 +591,12 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       if (a === 'adoptat' || a === 'duplicat') return scrie('ok', 'cod', `prezent în platformă: codul SEAP ${cod} pe #${dec.rand.id}`)
       return scrie('eroare', 'cod', `codul SEAP nu s-a putut înregistra pe #${dec.rand.id} — ${typeof a === 'object' ? a.eroare : 'rândul are între timp alt cod'}; se reia la rularea următoare`)
     }
-    // ținta nouă (ex. planificat „nou”, acum frate): evidența „în curs” de pe ținta veche se închide dacă era numele cu cod al
-    // ACESTUI document; numele SEAP comun îl închide inchideNume, la final
-    const tinta = dec.fel === 'nou' ? dp.nume : String(dec.nume)
-    if (tinta !== dp.nume) {
-      if (dp.nume !== dp.numeSeap) await inregistreaza(supa, licId, dp.nume, { stare: 'sarit', etapa: 'cod', motiv: `ținta recalculată la procesare: „${tinta}”` })
-      dp.nume = tinta
-    }
+    // ținta nouă (ex. planificat „nou”, acum frate): doar numele de urcare se schimbă; evidența rămâne pe „N (COD).ext”
+    dp.nume = dec.fel === 'nou' ? dp.nume : String(dec.nume)
     if (dec.fel === 'verifica' && !verificabil(dec, areDovada)) {
       const t = `${orig.nume} (${cod}): identitatea nu s-a putut verifica — niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)`
       raport.identitate_neverificata.push(t); raport.erori.push(t)
-      await inregistreaza(supa, licId, dp.nume, { stare: 'eroare', etapa: 'identitate', motiv: t })
+      await inregistreaza(supa, licId, numeEv(dp), { stare: 'eroare', etapa: 'identitate', motiv: t })
       return false
     }
     dp.dec = dec
@@ -621,8 +620,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   await Deno.mkdir(LUCRU, { recursive: true })
   // etapa 1: identificat — rămâne vizibil „în curs” dacă jobul moare înainte de rezultat (poarta: „încă în curs de aducere”)
   for (const g of grupuri.values()) for (const d of g) {
-    const k = cheieEvidenta(d.nume)
-    if (evidenta.get(k)?.stare !== 'eroare') await inregistreaza(supa, licId, d.nume, { stare: 'identificat', etapa: 'identificare' })
+    const k = cheieEvidenta(numeEv(d))
+    if (evidenta.get(k)?.stare !== 'eroare') await inregistreaza(supa, licId, numeEv(d), { stare: 'identificat', etapa: 'identificare' })
   }
   const tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_${licId}_` })
   await Deno.chmod(tmp, 0o755)
@@ -661,7 +660,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       if (!esec && cheieGrup.startsWith('rar:')) { esec = verificaVolume(locale.map(l => volumRar(l.nume)?.nr ?? 0)); etapaEsec = 'set_volume' }
       if (esec) {
         raport.erori.push(esec)
-        for (const doc of grup) await inregistreaza(supa, licId, doc.nume, { stare: 'eroare', etapa: etapaEsec, motiv: esec })
+        for (const doc of grup) await inregistreaza(supa, licId, numeEv(doc), { stare: 'eroare', etapa: etapaEsec, motiv: esec })
         continue
       }
 
@@ -743,13 +742,13 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         const buf = await Deno.readFile(l.cale)
         const r = await urca(supa, licId, l.nume, buf, placeholders, { ...notaSemnatura(l.nota, l.nume), ...campuri }, l.doc.nume)
         await Deno.remove(l.cale)
-        if (typeof r === 'string') { raport.erori.push(`${l.nume}: ${r}`); await inregistreaza(supa, licId, l.doc.nume, { stare: 'eroare', etapa: 'urcare', motiv: r, marime: l.marime, sha: l.sha }) }
+        if (typeof r === 'string') { raport.erori.push(`${l.nume}: ${r}`); await inregistreaza(supa, licId, numeEv(l.doc), { stare: 'eroare', etapa: 'urcare', motiv: r, marime: l.marime, sha: l.sha }) }
         else if (!('id' in r)) {
           // codul e deja pe alt rând (alt drum l-a adus între timp): prezent, nu eroare
           if (l.doc.cod) rezolvate.add(l.doc.cod)
           raport.deja++
           raport.avertismente.push(`${l.doc.numeSeap ?? l.nume} (${l.doc.cod}): codul SEAP e deja pe alt rând (adus între timp de alt drum) — sărit`)
-          await inregistreaza(supa, licId, l.doc.nume, { stare: 'ok', etapa: 'cod', motiv: 'codul SEAP e deja pe alt rând (adus între timp de alt drum)', marime: l.marime, sha: l.sha })
+          await inregistreaza(supa, licId, numeEv(l.doc), { stare: 'ok', etapa: 'cod', motiv: 'codul SEAP e deja pe alt rând (adus între timp de alt drum)', marime: l.marime, sha: l.sha })
         }
         else {
           raport.fisiere_urcate++; urcate.set(cheieRand(l.nume), r.id); adaugaDocument(identitate, l.nume, r.id, l.sha)
@@ -766,7 +765,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           const cale = l.nume.replace(/\.p7s$/i, '')
           const { error: eM } = await supa.from('ofertare_seap_manifest').upsert({ licitatie_id: licId, arhiva_cheie: cale.toLowerCase(), cale, marime: l.marime, sha256: l.sha, document_id: r.id, stare: 'urcat', motiv: null, verificat_la: new Date().toISOString() }, { onConflict: 'licitatie_id,arhiva_cheie,cale' })
           if (eM) log(`#${licId}: manifest ${l.nume}: ${eM.message}`)
-          await inregistreaza(supa, licId, l.doc.nume, { stare: 'ok', etapa: 'urcare', marime: l.marime, sha: l.sha, extrase: 1 })
+          await inregistreaza(supa, licId, numeEv(l.doc), { stare: 'ok', etapa: 'urcare', marime: l.marime, sha: l.sha, extrase: 1 })
         }
       }
       await Deno.remove(dir, { recursive: true }).catch(() => {})
