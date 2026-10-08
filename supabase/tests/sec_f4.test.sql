@@ -45,6 +45,11 @@ SELECT teste.e('T2c RLS rămâne pornit, 0 politici, owner postgres', NOT EXISTS
                    'public._eval_runda2_20260921'::regclass, 'public.olx_tokens'::regclass, 'public.piese_import_staging'::regclass,
                    'public.rag_qr_log'::regclass, 'public.storage_rls_errors'::regclass)
      AND (NOT c.relrowsecurity OR pg_get_userbyid(c.relowner) <> 'postgres' OR EXISTS (SELECT 1 FROM pg_policy po WHERE po.polrelid = c.oid))));
+SELECT teste.e('T2e cele 3 secvențe: ACL exact {postgres=rwU, service_role=rwU}; anon/authenticated/PUBLIC fără USAGE/SELECT/UPDATE', NOT EXISTS (
+  SELECT 1 FROM unnest(ARRAY['public.piese_import_staging_id_seq','public.rag_qr_log_id_seq','public.storage_rls_errors_id_seq']) s(n)
+   WHERE (SELECT c.relacl::text FROM pg_class c WHERE c.oid = s.n::regclass) IS DISTINCT FROM '{postgres=rwU/postgres,service_role=rwU/postgres}'
+      OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','public']) r(n), unnest(ARRAY['USAGE','SELECT','UPDATE']) p(n)
+                  WHERE has_sequence_privilege(r.n, s.n::regclass, p.n))));
 SELECT teste.e('T2d tabelele de context neatinse (profiles/notifications/procese_heartbeat/avize_serii_counter: anon arwdxt ca înainte)',
   has_table_privilege('anon', 'public.procese_heartbeat', 'SELECT') AND has_table_privilege('authenticated', 'public.avize_serii_counter', 'UPDATE')
   AND has_table_privilege('authenticated', 'public.notifications', 'INSERT'));
@@ -58,6 +63,7 @@ SELECT teste.eroare('T3d anon: SELECT olx_tokens refuzat', 'SELECT * FROM public
 SELECT teste.eroare('T3e anon: INSERT rag_qr_log refuzat', 'INSERT INTO public.rag_qr_log (active_id, question) VALUES (1, ''q'')', 'permission denied');
 SELECT teste.eroare('T3f anon: SELECT storage_rls_errors refuzat', 'SELECT * FROM public.storage_rls_errors', 'permission denied');
 SELECT teste.eroare('T3g anon: SELECT _eval_runda2 refuzat', 'SELECT * FROM public._eval_runda2_20260921', 'permission denied');
+SELECT teste.eroare('T3h anon: nextval pe rag_qr_log_id_seq refuzat', 'SELECT nextval(''public.rag_qr_log_id_seq'')', 'permission denied');
 RESET ROLE;
 
 -- ═══ T4 comportament: authenticated ═══
@@ -68,6 +74,7 @@ SELECT teste.eroare('T4c authenticated: fn_get_next_nr_aviz refuzat (nu mai cons
 SELECT teste.eroare('T4d authenticated: UPDATE olx_tokens refuzat', 'UPDATE public.olx_tokens SET scope = ''x''', 'permission denied');
 SELECT teste.eroare('T4e authenticated: DELETE piese_import_staging refuzat', 'DELETE FROM public.piese_import_staging', 'permission denied');
 SELECT teste.eroare('T4f authenticated: SELECT _backup_clar63 refuzat', 'SELECT * FROM public._backup_clar63_20260927', 'permission denied');
+SELECT teste.eroare('T4f2 authenticated: setval pe storage_rls_errors_id_seq refuzat (coliziuni de chei)', 'SELECT setval(''public.storage_rls_errors_id_seq'', 1)', 'permission denied');
 -- dependenții DEFINER merg ca înainte
 SELECT public.log_storage_upload_error('bucket-t', 'cale/t', 'mesaj t');
 SELECT teste.eroare('T4g fn_storage_rls_report (INVOKER) pentru authenticated: acum „permission denied” (înainte: totaluri 0, RLS fără politici)',
