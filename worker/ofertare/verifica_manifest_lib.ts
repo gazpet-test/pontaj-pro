@@ -79,27 +79,28 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
 
   // `numeCautat` = numele sub care importul a urcat fișierul (după desfacerea semnăturii, var. B); `cale` rămâne cheia manifestului.
   // `dCod` = rândul care poartă codul SEAP al documentului (PR-2): are prioritate față de orice potrivire pe nume
-  async function compara(arhivaCheie: string, cale: string, buf: Uint8Array, numeCautat: string = cale, dCod?: DocumentBd) {
+  // `scrie` = false: comparația se face (contoare, erori), dar nimic nu ajunge în manifest (cheia e a altui document — Jakarinos r18)
+  async function compara(arhivaCheie: string, cale: string, buf: Uint8Array, numeCautat: string = cale, dCod?: DocumentBd, scrie = true) {
     semnal.throwIfAborted()
     const rand: Rand = { licitatie_id: licId, arhiva_cheie: arhivaCheie, cale, marime: buf.length, sha256: await sha(buf), document_id: null, stare: 'deja_in_platforma', motiv: null, verificat_la: new Date().toISOString() }
-    if (JUNK_RE.test(cale)) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)'; tally.ignorate++; randuri.push(rand); return }
+    if (JUNK_RE.test(cale)) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)'; tally.ignorate++; { if (scrie) randuri.push(rand) }; return }
     // documentul în care importul a urcat EXACT această intrare (dovada 'urcat') are prioritate față de potrivirea pe nume
     const prec = dovezi.get(`${arhivaCheie}\u0000${cale}`)
     const dPrec = prec?.document_id != null ? dupaId.get(prec.document_id) : undefined
     const d = dCod ?? (dPrec && dPrec.fisier_path && !String(dPrec.fisier_path).includes('/neincarcat/') ? dPrec : undefined)
       ?? inPlatforma.get(cheieNume(numeCautat.split('/').pop()!)) ?? inPlatforma.get(cheieNume(numeCautat))
-    if (!d) { rand.stare = 'eroare_urcare'; rand.motiv = 'LIPSĂ în platformă (verificare R6)'; tally.lipsa++; randuri.push(rand); return }
+    if (!d) { rand.stare = 'eroare_urcare'; rand.motiv = 'LIPSĂ în platformă (verificare R6)'; tally.lipsa++; { if (scrie) randuri.push(rand) }; return }
     rand.document_id = d.id; potrivite.add(d.id)
     // Storage necitit = nimic dovedit în niciun sens: rândul 'urcat' existent rămâne neatins
     const st = await dinStorage(d)
-    if ('eroare' in st) { rand.motiv = `Storage indisponibil: ${st.eroare}`; tally.erori.push(`${cale}: ${rand.motiv}`); if (!prec) randuri.push(rand); return }
+    if ('eroare' in st) { rand.motiv = `Storage indisponibil: ${st.eroare}`; tally.erori.push(`${cale}: ${rand.motiv}`); if (!prec) { if (scrie) randuri.push(rand) }; return }
     const shaStoc = st.sha, stoc = { length: st.marime }
     if (shaStoc === rand.sha256) {
       tally.identice++
       if (prec && prec.stare === 'urcat' && prec.sha256 === rand.sha256 && prec.document_id === d.id) rand.stare = 'urcat'   // dovada confirmată, păstrată
     }
     else { tally.diferite++; rand.motiv = `DIFERIT de Storage: sha ${shaStoc.slice(0, 12)}… / ${stoc.length} B vs SEAP ${rand.sha256.slice(0, 12)}… / ${buf.length} B` }
-    randuri.push(rand)
+    if (scrie) randuri.push(rand)
   }
 
   try {
@@ -198,25 +199,38 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
           // Jakarinos r3 pe #659 (P1): cheia de manifest a unui document cu cod e a rândului lui (ca la urcare), DAR dacă o dovadă
           // existentă sau alt document din rularea asta o ține deja (două rânduri „N.pdf” cu /1 și /2), el ia cheia „N (COD).ext”
           // — fără „ultimul câștigă”: dovada fiecăruia rămâne pe documentul ei, în orice ordine a listei
-          const cheiaPentru = (d: DocumentBd): [string, string] => {
+          // un alt document listat cu numele n (brut sau desfăcut); aceeași pereche nume/cod de două ori nu e „alt document”
+          const eAltDocListat = (n: string) => docs.some(x => x !== grup[0] && String(x.cod ?? '').trim() !== cod
+            && [x.nume, numeDesfacut(x.nume)].some(m => cheieNume(m) === cheieNume(n)))
+          // cheia e a altui document: dovada lui pe ea, rezervată în rularea asta de altul, sau numele altui document listat
+          const aAltuia = (k: string, id: number) => {
+            const p = dovezi.get(`${k.toLowerCase()}\u0000${k}`), l = luate.get(`${k.toLowerCase()}\u0000${k}`)
+            return (p?.document_id != null && p.document_id !== id) || (l != null && l !== id)
+          }
+          const cheiaPentru = (d: DocumentBd): [string, string] | null => {
             const c = fara(String(d.nume_original))
-            const prec = dovezi.get(`${c.toLowerCase()}\u0000${c}`), luat = luate.get(`${c.toLowerCase()}\u0000${c}`)
-            const altul = (prec?.document_id != null && prec.document_id !== d.id) || (luat != null && luat !== d.id)
-            const k = altul && numeCod ? fara(numeCod) : c
+            const k = aAltuia(c, d.id) && numeCod ? fara(numeCod) : c
+            // Jakarinos r18 pe #659 (P1): și cheia ALTERNATIVĂ „N (COD).ext” poate fi a altui document (rând istoric numit literal așa,
+            // cu dovada lui pe ea) — atunci nicio scriere: comparația se raportează, dovada celuilalt rămâne
+            if (k !== c && (aAltuia(k, d.id) || eAltDocListat(k))) return null
             luate.set(`${k.toLowerCase()}\u0000${k}`, d.id)
             return [k.toLowerCase(), k]
           }
-          if (dCod) { const [a, c] = cheiaPentru(dCod); await compara(a, c, locale[0].buf, dCod.nume_original, dCod) }
+          if (dCod) {
+            const ch = cheiaPentru(dCod)
+            if (ch) await compara(ch[0], ch[1], locale[0].buf, dCod.nume_original, dCod)
+            else {
+              tally.erori.push(`${grup[0].nume} (${cod}): cheia de manifest a rândului #${dCod.id} e a altui document (și „${fara(numeCod)}”) — comparat fără scriere`)
+              await compara(fara(numeCod).toLowerCase(), fara(numeCod), locale[0].buf, dCod.nume_original, dCod, false)
+            }
+          }
           else if (!cod) await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)
           else {
             // Jakarinos r2 pe #659 (P1): un cod care nu e pe niciun rând NU cade pe numele altui cod — „N.pdf” /1 (în platformă) și
             // /2 (încă neadus) ar compara /2 cu documentul lui /1 și i-ar retrograda dovada. Fără rând propriu, cu rivali pe nume (alt cod listat sau rândul găsit pe nume are alt cod) =
             // LIPSĂ raportată pe cheia proprie a codului; fără rivali (rând vechi fără cod, nume unic) = pe nume, ca înainte.
             // Jakarinos r16 + Copilot r11 pe #659 (P1): un rând numit „N (COD).ext” FĂRĂ codul acesta nu e dovada codului doar după nume
-            // (poate fi un document numit literal așa, listat sau nu) — intră între candidații familiei, acceptat DOAR pe sha (mai jos).
-            // Documentele listate cu ACELAȘI cod (aceeași pereche de două ori) nu sunt „alt document”
-            const eAltDocListat = (n: string) => docs.some(x => x !== grup[0] && String(x.cod ?? '').trim() !== cod
-              && [x.nume, numeDesfacut(x.nume)].some(m => cheieNume(m) === cheieNume(n)))
+            // (poate fi un document numit literal așa, listat sau nu) — intră între candidații familiei, acceptat DOAR pe sha (mai jos)
             // TOATE rândurile reale cu numele lui (nu doar ultimul păstrat de inPlatforma — Jakarinos r6 pe #659): rival = alt cod listat
             // cu același nume sau un rând cu numele lui care poartă alt cod; ambiguu = rival sau mai multe rânduri cu același nume
             const real = (x: DocumentBd) => !!x.fisier_path && !String(x.fisier_path).includes('/neincarcat/')

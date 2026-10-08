@@ -572,3 +572,17 @@ Deno.test('manifest (PR-2, Jakarinos r17): cheie ocupată — un candidat neciti
     eq([w.document_id, w.sha256, w.stare], [23, await sha('beta'), 'urcat'], 'dovada ocupantului neatinsă')
   assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
 })
+
+for (const ordine of ['/1,/2', '/2,/1']) Deno.test(`manifest (PR-2, Jakarinos r18): rândul cu cod /2 nu ia cheia alternativă „N (CN1-00002).pdf” când e a unui rând istoric fără cod (${ordine})`, async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 22, nume_original: 'N.pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: 'CN1/00002' },
+    { id: 23, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/c', size_bytes: 6, seap_cod: null }]
+  const dovezi = [{ arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 21, sha256: await sha('alpha'), stare: 'urcat' },
+    { arhiva_cheie: 'n (cn1-00002).pdf', cale: 'N (CN1-00002).pdf', document_id: 23, sha256: await sha('ALTFEL'), stare: 'urcat' }]
+  const d1 = { nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' }, d2 = { nume: 'N.pdf', cod: 'CN1/00002', text: 'beta' }
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: ordine === '/2,/1' ? [d2, d1] : [d1, d2] })
+  eq(scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'), [], 'dovada rândului istoric neatinsă')
+  const r1 = scrieri.find(x => x.document_id === 21)
+  eq([r1?.arhiva_cheie, r1?.stare], ['n.pdf', 'urcat'], 'dovada lui /1 confirmată')
+  assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
+})
