@@ -273,9 +273,11 @@ async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { sta
     licitatie_id: licId, nume_seap: nume, cheie, stare: rez.stare, etapa: rez.etapa ?? null, motiv: rez.motiv ?? null, marime: rez.marime ?? null,
     sha256: rez.sha ?? null, fisiere_extrase: rez.extrase ?? null, procesat_la: new Date().toISOString(),
     // respinsă de controalele de securitate → nu se reîncearcă automat (rămâne vizibilă cu motivul, nu „ignorată");
-    // identitatea neverificată ÎNAINTE de descărcare (etapa „identitate”, PR-2) nu consumă reîncercări: n-a descărcat nimic
+    // identitatea neverificată ÎNAINTE de descărcare (etapa „identitate”, PR-2) nu consumă reîncercări: n-a descărcat nimic;
+    // un „ok” resetează contorul — plafonul numără eșecurile CONSECUTIVE (Jakarinos r9 pe #659: 500 → ok → 500 → ok → 500 bloca
+    // definitiv un frate reverificat la fiecare rulare). Respingerile de securitate (faraReincercare) rămân definitive.
     incercari: rez.faraReincercare ? MAX_INCERCARI : rez.stare === 'eroare' && rez.etapa !== 'identitate' ? (vechi?.incercari ?? 0) + 1
-      : rez.stare === 'identificat' || rez.stare === 'eroare' ? (vechi?.incercari ?? 0) : (vechi?.incercari ?? 1),
+      : rez.stare === 'identificat' || rez.stare === 'eroare' ? (vechi?.incercari ?? 0) : rez.stare === 'ok' ? 0 : (vechi?.incercari ?? 1),
   }
   const { error } = vechi
     ? await supa.from('ofertare_seap_fisiere').update(rand).eq('id', vechi.id)
@@ -441,8 +443,10 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     const ev = evidenta.get(k)
     if (d.dec) {
       // decis pe cod (codul nu e pe niciun rând): nicio evidență nu e scurtătură — documentul se reverifică pe conținut la fiecare
-      // rulare (o descărcare SEAP; rudele întâi din manifest), ca în edge (P = A). Doar eroarea cu reîncercările epuizate îl ține deoparte
-      if (ev?.stare === 'eroare' && (ev?.incercari ?? 0) >= MAX_INCERCARI && ev?.etapa !== 'identitate') { raport.sarite++; return false }
+      // rulare (o descărcare SEAP; rudele întâi din manifest), ca în edge (P = A). Doar eroarea cu reîncercările epuizate îl ține deoparte,
+      // și doar pe numele cu cod „N (COD).ext” (legat neechivoc de codul curent) — istoricul de pe numele simplu „N.pdf” poate fi al
+      // altei identități (Copilot r3 pe #659: eroare veche pe N.pdf, cod nou decis „nou” pe N.pdf → nu se mai descărca)
+      if (d.nume !== d.numeSeap && ev?.stare === 'eroare' && (ev?.incercari ?? 0) >= MAX_INCERCARI && ev?.etapa !== 'identitate') { raport.sarite++; return false }
       return true
     }
     // var. B: „X.pdf.p7m” poate fi deja în platformă brut (înainte de B) sau desfăcut ca „X (semnat).pdf” — niciunul nu se re-aduce

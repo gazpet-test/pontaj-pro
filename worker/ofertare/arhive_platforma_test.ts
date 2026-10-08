@@ -870,6 +870,40 @@ Deno.test('cod SEAP (PR-2, Jakarinos r8): evidența „ok” de pe numele simplu
   })
 })
 
+Deno.test('cod SEAP (PR-2, Copilot r3): eroare istorică cu reîncercări epuizate pe numele simplu „N.pdf” nu blochează codul nou decis „nou”', async () => {
+  await cuMediu(async (_root, s) => {
+    const { restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00020', buf: '%PDF-1.4 C20' }])
+    try {
+      const tab = licSeap({ ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'N.pdf', cheie: s.cheieEvidenta('N.pdf'), stare: 'eroare', etapa: 'descarcare', incercari: 3 }] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), rap.sarite], [[['N.pdf', 'CN1/00020']], 0])
+      eq([tab.ofertare_seap_fisiere[0].stare, tab.ofertare_seap_fisiere[0].incercari], ['ok', 0])
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r9): fratele identic reverificat — 500 → ok → 500 → ok → 500 nu epuizează reîncercările; la revenire se închide „ok”, fără upload', async () => {
+  await cuMediu(async (_root, s) => {
+    const X = '%PDF-1.4 continut X'
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'N.pdf', cod: 'CN1/00010', buf: X }, { nume: 'N.pdf', cod: 'CN1/00020', buf: null }]
+    const { restore } = cuSeapCod(lista)
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/n.pdf', size_bytes: X.length, seap_cod: 'CN1/00010', status_procesare: 'procesat' }],
+        ofertare_seap_manifest: [{ licitatie_id: 3, arhiva_cheie: 'n.pdf', cale: 'N.pdf', marime: X.length, sha256: await shaHex(X), document_id: 10, stare: 'urcat', motiv: null }],
+      })
+      const supa = fakeSupa(tab, new Map())
+      const ev = () => tab.ofertare_seap_fisiere.find(e => e.nume_seap === 'N (CN1-00020).pdf')
+      for (const [k, cade] of [true, false, true, false, true, false].entries()) {
+        lista[1].buf = cade ? null : X
+        await s.aduLicitatie(supa, 3, () => {})
+        eq(ev()?.stare, cade ? 'eroare' : 'ok', `rularea ${k + 1}`)
+      }
+      eq(tab.ofertare_documente_atribuire.length, 1, 'fratele identic nu se urcă niciodată')
+    } finally { restore() }
+  })
+})
+
 Deno.test('cod SEAP (PR-2, varianta A): o arhivă rămâne pe regula după nume — evidența „ok” a despachetării o ține deoparte, oricare ar fi codul', async () => {
   await cuMediu(async (_root, s) => {
     const { descarcate, restore } = cuSeapCod([{ nume: 'PT.zip', cod: 'CN1/00030', buf: '%PDF-1.4 nu se cere' }])
