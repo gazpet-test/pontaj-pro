@@ -74,6 +74,14 @@
 //   (3) o versiune adusa de ORICINE (UI, workerul NAS) poarta seap_meta.de_anuntat — veghea o anunta + mail si pune false
 //   (singura scriere noua a veghei); (4) un JWT de utilizator cere acces la modulul Ofertare (poarta comuna, ca importul):
 //   veghea citeste continut extern (SEAP) si scrie / trimite mail (CLAUDE.md pct. 7d).
+//   Review PR-1, runda 2 (08.10): (5) a doua trecere (importurile tacute) ruleaza DOAR la rularea programata (fara licitatie_id
+//   in body): „Verifica acum” din UI ramane rapida, iar „Adu din SEAP” face importul singur. Limita acceptata: intr-o rulare a
+//   carei bucla principala depaseste BUGET_TACUT_MS, treaba tacuta asteapta rularea urmatoare — licitatiile amanate apar in
+//   raspuns la `tacute_amanate` (azi 7 licitatii active); (6) rundele de import trec next_index mai departe doar de la o runda
+//   'per-fisier', iar o runda pornita de la de_la_index > 0 e urmata de O runda de la 0 (reincercari, rezerva arhiva,
+//   documentatie_adusa_la); (7) o versiune republicata IDENTIC (importul muta codul pe randul inlocuit, nimic sub „N (COD)”)
+//   iese din `noi` inainte de treapta Vercel: fara /api/seap-import, fara placeholder „nu a putut fi adus” si fara anunt.
+//   Runda 3 (D3/D4): next_index nici de la o runda cu rezerva_arhiva; runda finala de la 0 pe drumul principal doar in buget.
 //
 // notifications.modul are CHECK pe lista fixa de module - pentru ofertare valoarea
 // corecta e 'Comercial'. Cu 'ofertare' insertul pica silentios.
@@ -228,9 +236,18 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
   // importul rapid din Supabase; rundele isi trec de_la_index (review PR-1: altfel un document care nu converge — o verificare
   // fara potrivire, o versiune peste 20 MB — oprea toate cele 4 runde in acelasi loc, iar ce era dupa el nu se mai aducea).
+  // F2/F4 (review PR-1): next_index se trece mai departe DOAR de la o runda 'per-fisier' — pe rezerva 'arhiva' e pozitia in ZIP,
+  // nu in lista SEAP (de la 0). O runda pornita de la de_la_index > 0 nu stie de esecurile rundelor de dinainte: nu reincearca
+  // documentele cazute acolo, nu porneste rezerva DownloadArchive pentru ele si nu poate pune documentatie_adusa_la. De aceea,
+  // cand o astfel de runda termina (!continua), urmeaza O SINGURA runda de la 0, daca mai sunt runde — ieftina: codurile si
+  // numele cunoscute se sar inainte de descarcare — apoi stop (fara alt lant, oricum ar raspunde).
+  // D3 (r3): nici de la un raspuns 'per-fisier' cu rezerva_arhiva — next_index e atunci capatul listei per fisier (deja parcursa),
+  // iar continuarea e in ZIP: de acolo rezerva nu mai porneste (fara esecuri per fisier), continuarea s-ar pierde → de la 0.
+  // D4 (r3): pe drumul principal (cuBuget = false) runda finala de la 0 porneste doar in BUGET_TACUT_MS — ea poate porni rezerva
+  // DownloadArchive (minute) INAINTE de anunturile acestei licitatii; pe a doua trecere bugetul il verifica deja capul buclei.
   // cuBuget: importurile tacute (a doua trecere) nu pornesc dupa BUGET_TACUT_MS.
   const importa = async (licId: number, cuBuget: boolean): Promise<string> => {
-    let de = 0;
+    let de = 0, reluare = false;
     for (let i = 0; i < RUNDE_IMPORT; i++) {
       if (cuBuget && Date.now() - t0 > BUGET_TACUT_MS) return `amanat (bugetul de timp al veghei), dupa ${i} runde`;
       try {
@@ -240,8 +257,14 @@ Deno.serve(async (req: Request) => {
           body: JSON.stringify({ licitatie_id: licId, de_la_index: de }),
         });
         const rez = await r.json().catch(() => ({}));
-        if (!rez?.continua) return `${i + 1} runde`;
-        de = Number(rez.next_index) || 0;
+        if (reluare) return `${i + 1} runde (ultima de la 0${rez?.continua ? ', ramas de continuat' : ''})`;
+        if (!rez?.continua) {
+          const finala = de > 0 && i + 1 < RUNDE_IMPORT;
+          if (finala && (cuBuget || Date.now() - t0 < BUGET_TACUT_MS)) { de = 0; reluare = true; continue; }
+          return `${i + 1} runde${finala ? ' (fara runda finala de la 0: bugetul de timp)' : ''}`;
+        }
+        if (rez?.metoda === 'per-fisier' && !rez?.rezerva_arhiva) de = Number(rez.next_index) || 0;
+        else de = 0;
       } catch (e) { return 'eroare: ' + String((e as Error)?.message || e); }
     }
     return `${RUNDE_IMPORT} runde, ramas de continuat`;
@@ -450,6 +473,7 @@ Deno.serve(async (req: Request) => {
     const noi: string[] = [];
     const vazute = new Set<string>();
     const versiuni = new Set<string>();   // „N (COD).ext”: republicare sub acelasi nume, cod nou (codul vechi a iesit din lista)
+    const codVersiune = new Map<string, string>();   // N2 → codul ei (F5: republicata identic, importul muta codul, nimic sub N2)
     let deRezolvat = 0;                   // adoptii de cod / frati / verificari pe continut: importul le rezolva, fara anunt
     for (const d of laSeap) {
       let n = d.nume;
@@ -462,6 +486,7 @@ Deno.serve(async (req: Request) => {
       if (dec.fel === 'versiune') {
         n = dec.nume;
         versiuni.add(n);
+        codVersiune.set(n, d.cod);
         if (areNume(cunoscute, n)) { deRezolvat++; continue; }   // placeholder-ul unei incercari anterioare: se reincearca, fara anunt nou
       }
       const k = cheieNume(n);
@@ -513,8 +538,19 @@ Deno.serve(async (req: Request) => {
     // review PR-C P2: o eroare de inventar NU mai sare restul licitatiei — termenul si raspunsurile au fost deja scrise mai sus,
     // iar la rularea urmatoare n-ar mai aparea ca noutati (notificarea s-ar pierde definitiv). Fara inventar sigur: fara
     // treapta Vercel, fara placeholder-e si fara marcare; anunturile spun ca starea aducerii nu s-a putut verifica.
-    const { data: dupaEdge, error: eDupaEdge } = await inventar(supa, lic.id, 'nume_original, fisier_path');
+    // F5 (review PR-1): o „versiune” decisa INAINTE de import poate iesi identica cu randul inlocuit — importul i-a mutat codul pe
+    // acel rand si n-a urcat nimic sub N2. Nu e noua: fara /api/seap-import, fara placeholder „nu a putut fi adus”, fara anunt /
+    // mail. Se scoate din `noi` orice versiune N2 al carei cod sta acum pe un rand real (oricare nume) si niciun rand real nu
+    // poarta numele N2. D2 (r3): INAINTE de treapta Vercel (inventarul de dupa edge citeste si seap_cod); dupa ea, plasa de siguranta.
+    const scoateIdentice = (randuri: any[] | null, urcateR: Set<string>) => {
+      const coduriReale = new Set((randuri || []).filter((d: any) => !estePlaceholder(d) && d.seap_cod).map((d: any) => String(d.seap_cod).trim()));
+      const identice = noi.filter((n) => versiuni.has(n) && coduriReale.has(codVersiune.get(n) ?? '') && !areNume(urcateR, n));
+      for (const n of identice) noi.splice(noi.indexOf(n), 1);
+      if (identice.length) coduri.identice = [...(coduri.identice || []), ...identice];
+    };
+    const { data: dupaEdge, error: eDupaEdge } = await inventar(supa, lic.id, 'nume_original, fisier_path, seap_cod');
     const urcateAcum = new Set((dupaEdge || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
+    if (!eDupaEdge) scoateIdentice(dupaEdge, urcateAcum);
     let vercel: string | null = eDupaEdge ? `sarit: inventar dupa edge indisponibil (${eDupaEdge.message})` : null;
     if (!eDupaEdge && noi.some((n) => !areNume(urcateAcum, n))) {
       if (!IMPORT_SECRET) {
@@ -535,12 +571,14 @@ Deno.serve(async (req: Request) => {
     }
 
     // Adevarul se citeste din BD: care dintre documentele NOI au acum fisier real
-    const { data: acum, error: eAcum } = await inventar(supa, lic.id, 'id, nume_original, fisier_path, seap_meta');
+    const { data: acum, error: eAcum } = await inventar(supa, lic.id, 'id, nume_original, fisier_path, seap_meta, seap_cod');
     // fără inventar sigur NU se pun placeholder-e (ar fi fantome), nu se marchează nimic și nu se spune „adus” / „lipsă”
     const inventarOk = !eAcum;
     if (eAcum) raport.push({ licitatie: lic.nr_anunt, eroare: `inventar dupa import: ${eAcum.message}` });
     const urcate = new Set((acum || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
     const toateCunoscute = new Set((acum || []).map((d: any) => cheieRand(d.nume_original)));
+    // F5, plasa de siguranta (D2): aceeasi regula pe inventarul de dupa Vercel (ex. inventarul de dupa edge n-a putut fi citit)
+    if (inventarOk) scoateIdentice(acum, urcate);
     const auIntrat = inventarOk ? noi.filter((n) => areNume(urcate, n)) : [];
     const ramase = inventarOk ? noi.filter((n) => !areNume(urcate, n)) : [];
     const NESTIUT = 'Starea aducerii nu s-a putut verifica (inventarul platformei nu s-a putut citi) — verifica in Ofertare.';
@@ -693,13 +731,23 @@ Deno.serve(async (req: Request) => {
     }
 
     raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length, raspunsuri: raspunsuri.length, raspunsuri_aduse: raspunsuriAduse.length, raspunsuri_eroare: raspunsuriEroare, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, nume: noi.slice(0, 10), coduri });
-    if (!noi.length && deRezolvat) tacute.push({ id: lic.id, coduri });
+    // importul a rulat deja mai sus (coduri.import) cand existau documente noi — chiar daca F5 le-a scos apoi din `noi`
+    if (coduri.import == null && deRezolvat) tacute.push({ id: lic.id, coduri });
   }
 
   // A DOUA TRECERE: importurile tacute (adoptii de cod / frati / verificari / reincercari), dupa toate anunturile, cat tine
   // bugetul de timp. Ordinea se amesteca la fiecare rulare, ca o licitatie de la coada sa nu ramana mereu fara buget.
-  for (let k = tacute.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [tacute[k], tacute[j]] = [tacute[j], tacute[k]]; }
-  for (const t of tacute) t.coduri.import = await importa(t.id, true);
+  // F3/F6 (review PR-1): DOAR la rularea programata (fara body.licitatie_id). „Verifica acum” din UI trimite licitatie_id cu JWT
+  // de utilizator si trebuie sa raspunda repede (nu asteapta importuri tacute); „Adu din SEAP” din UI face importul singur.
+  // Limita acceptata: intr-o rulare a carei bucla principala depaseste bugetul, treaba tacuta asteapta rularea urmatoare —
+  // licitatiile amanate apar in `tacute_amanate` (vizibile, nu infometate in tacere). Fara fire-and-forget, fara cron nou.
+  const programata = !body?.licitatie_id;
+  if (programata) {
+    for (let k = tacute.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [tacute[k], tacute[j]] = [tacute[j], tacute[k]]; }
+    for (const t of tacute) t.coduri.import = await importa(t.id, true);
+  } else for (const t of tacute) t.coduri.import = 'nepornit: verificare din UI (importul il face „Adu din SEAP” sau rularea programata)';
+  const nrAnunt = new Map((licitatii || []).map((l: any) => [l.id, l.nr_anunt]));
+  const tacute_amanate = tacute.filter((t) => String(t.coduri.import ?? '').startsWith('amanat')).map((t) => nrAnunt.get(t.id));
 
-  return json({ verificate: (licitatii || []).length, raport });
+  return json({ verificate: (licitatii || []).length, raport, tacute_amanate });
 });

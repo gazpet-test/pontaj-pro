@@ -3,7 +3,7 @@
 import { strict as assert } from 'node:assert'
 import {
   INDEX_COD_UNIC, ADOPTIE, codDin, ordineCod, numeVersiune, numeBaza, eGetAll, esteVolumRar, copiiDinManifest, inventarCod, adaugaRand,
-  indexLista, coduriInstabile, decideSeap, verificabil, ALT_CONTINUT, rezolvaVerificare, tipMostenit, campuriCod, eDuplicatCod, adoptaCod,
+  indexLista, coduriInstabile, decideSeap, verificabil, ALT_CONTINUT, rezolvaVerificare, tipMostenit, campuriCod, eDuplicatCod, adoptaCod, mutaCod, mutaPeIdentic,
 } from './codSeap.mjs'
 import { cheieRand as cheieRandCu, cheiSeap as cheiSeapCu, numeDesfacut, eArhivaP7m } from './semnaturaCms.mjs'
 import { ghicesteTip, esteArhiva } from './tipDocument.mjs'
@@ -435,6 +435,42 @@ Deno.test('adoptaCod: UPDATE condiționat (id + licitație + încă fără cod);
   assert.deepEqual(await adoptaCod(fakeSupa({ data: null, error: { code: '57014', message: 'timeout' } }).supa, 3, inv2, ri2, P(2)), { eroare: 'timeout' })
   assert.deepEqual(await adoptaCod(fakeSupa(() => Promise.reject(new Error('rețea'))).supa, 3, inv2, ri2, P(2)), { eroare: 'rețea' })
   assert.equal(inv2.coduri.size, 0)
+})
+
+Deno.test('mutaCod (F5): republicat identic — UPDATE condiționat pe codul VECHI; mutat / ocupat / duplicat / eroare; nu aruncă', async () => {
+  // rândul înlocuit (versiunea) ține codul vechi; documentul listat are exact conținutul lui sub cod nou
+  const r = rand('Caiet.pdf', P(10)); const inv = inv0([r]); const ri = inv.coduri.get(P(10))
+  const { supa, apel } = fakeSupa({ data: [{ id: r.id }], error: null })
+  assert.equal(await mutaCod(supa, 3, inv, ri, P(10), ` ${P(36)} `), 'mutat')
+  assert.deepEqual([apel.tabel, apel.patch, apel.filtre, apel.select], ['ofertare_documente_atribuire', { seap_cod: P(36) }, [`eq id=${r.id}`, 'eq licitatie_id=3', `eq seap_cod=${P(10)}`], 'id'])
+  assert.equal(ri.seap_cod, P(36)); assert.equal(inv.coduri.get(P(36)), ri); assert.equal(inv.coduri.has(P(10)), false)
+  // după mutare, documentul listat (P36) e sărit pe cod, fără descărcare; codul vechi nu mai e al nimănui
+  assert.deepEqual(decide(inv, [{ nume: 'Caiet.pdf', cod: P(36) }], { nume: 'Caiet.pdf', cod: P(36) }), { fel: 'sari', motiv: 'cod', rand: ri })
+  // 0 rânduri: codul rândului s-a schimbat între timp (alt drum) → 'ocupat', inventarul neatins
+  const r2 = rand('B.pdf', P(20)); const inv2 = inv0([r2]); const ri2 = inv2.coduri.get(P(20))
+  assert.equal(await mutaCod(fakeSupa({ data: [], error: null }).supa, 3, inv2, ri2, P(20), P(21)), 'ocupat')
+  assert.deepEqual([ri2.seap_cod, [...inv2.coduri.keys()]], [P(20), [P(20)]])
+  assert.equal(await mutaCod(fakeSupa({ data: null, error: { code: '23505', message: `duplicate key value violates unique constraint "${INDEX_COD_UNIC}"` } }).supa, 3, inv2, ri2, P(20), P(21)), 'duplicat')
+  assert.deepEqual(await mutaCod(fakeSupa({ data: null, error: { code: '57014', message: 'timeout' } }).supa, 3, inv2, ri2, P(20), P(21)), { eroare: 'timeout' })
+  assert.deepEqual(await mutaCod(fakeSupa(() => Promise.reject(new Error('rețea'))).supa, 3, inv2, ri2, P(20), P(21)), { eroare: 'rețea' })
+  assert.deepEqual([ri2.seap_cod, [...inv2.coduri.keys()]], [P(20), [P(20)]])
+})
+
+Deno.test('mutaPeIdentic (D1, F5 îngustat): doar înlocuitul FĂRĂ nume de cod și fără placeholder pe N2; versiunea / fratele / adoptatul pe N2 rămân pe codul lor', () => {
+  // originalul (și adoptatul pe nume, L1 = A) → mutabil; cu placeholder pe N2 (veghea a anunțat deja) → nu (îl completează F1)
+  const o = rand('Caiet.pdf', P(10)); const inv = inv0([o])
+  const d = decide(inv, [{ nume: 'Caiet.pdf', cod: P(36) }], { nume: 'Caiet.pdf', cod: P(36) })
+  assert.deepEqual([d.fel, d.inlocuit.id], ['versiune', o.id])
+  assert.deepEqual([mutaPeIdentic(d.inlocuit, false), mutaPeIdentic(d.inlocuit, true)], [true, false])
+  // linia versiunilor: înlocuitul e ultima versiune „Caiet (CN…-00036).pdf” → NU (codul e în numele ei; mutat, linia s-ar rupe)
+  const v = rand('Caiet (CN1095546-00036).pdf', P(36)); const inv2 = inv0([rand('Caiet.pdf', P(10)), v])
+  const d2 = decide(inv2, [{ nume: 'Caiet.pdf', cod: P(50) }], { nume: 'Caiet.pdf', cod: P(50) })
+  assert.deepEqual([d2.fel, d2.inlocuit.id, mutaPeIdentic(d2.inlocuit, false)], ['versiune', v.id, false])
+  // nume cu cod după desfacere, frate, rând adoptat pe N2 (motiv nume_cod) → nu; nume vechi / „(semnat)” fără cod în nume → da
+  assert.equal(mutaPeIdentic(rand('X (CN1-00002) (semnat).pdf', 'CN1/00002'), false), false)
+  assert.equal(mutaPeIdentic(rand('Planse (CN1095546-00036).pdf', P(36)), false), false)
+  assert.equal(mutaPeIdentic(rand('Caiet (semnat).pdf', P(10)), false), true)
+  assert.equal(mutaPeIdentic(rand('Caiet (CN1095546-00036).pdf', ` ${P(36)} `), false), false)   // codul tăiat, ca în inventar
 })
 
 Deno.test('inventarCod / indexLista: doar rândurile reale, coduri tăiate; lista pe cheia de nume', () => {

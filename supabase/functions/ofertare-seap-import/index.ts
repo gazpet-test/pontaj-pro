@@ -64,7 +64,7 @@ import { curataOrfani } from './orfani.ts';
 import { Flux, fluxDinBuf, parcurgeZip } from '../_shared/zipFlux.mjs';
 import { toatePaginile } from '../_shared/paginat.mjs';
 import { scrieDocument } from './placeholder.ts';
-import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, copiiDinManifest, ADOPTIE, ALT_CONTINUT } from '../_shared/codSeap.mjs';
+import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, mutaCod, mutaPeIdentic, copiiDinManifest, ADOPTIE, ALT_CONTINUT } from '../_shared/codSeap.mjs';
 import { autorizeaza } from './acces.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
@@ -193,8 +193,8 @@ Deno.serve(async (req: Request) => {
 
   const t0 = Date.now();
   const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[], manifest_randuri: 0, avertismente: [] as string[],
-    // audit #4 var. B: sarite pe cod, coduri adoptate pe randuri vechi, versiuni / frati noi, ramase pe regula veche
-    sarite_cod: 0, coduri_adoptate: [] as { id: number; cod: string }[], versiuni_noi: [] as string[], frati: [] as string[], coduri_ambigue: [] as string[], coduri_instabile: null as string | null,
+    // audit #4 var. B: sarite pe cod, coduri adoptate pe randuri vechi, coduri mutate (versiune republicata identic, F5), versiuni / frati noi, ramase pe regula veche
+    sarite_cod: 0, coduri_adoptate: [] as { id: number; cod: string }[], coduri_mutate: [] as { id: number; de: string; la: string }[], versiuni_noi: [] as string[], frati: [] as string[], coduri_ambigue: [] as string[], coduri_instabile: null as string | null,
     // intrarile peste 20 MB din ZIP-urile documentelor: ZIP-ul pleaca intreg la NAS, care le aduce (nu sunt „sarite”)
     lasate_pentru_nas: [] as string[] };
 
@@ -218,6 +218,10 @@ Deno.serve(async (req: Request) => {
     // placeholder-ul se completează o singură dată, doar dacă e încă placeholder (./placeholder.ts, audit #2);
     // var. B: „X (semnat).pdf” completează placeholder-ul veghei pus pe numele SEAP („X.pdf.p7m”)
     const cheie = placeholders.has(cheieRand(nume)) || !numeSeap ? cheieRand(nume) : cheieRand(numeSeap);
+    // F1 (review PR-1): placeholder-ul unei VERSIUNI l-a pus veghea DUPĂ ce a anunțat-o (notificare + mail) — completarea lui
+    // nu o mai anunță a doua oară: de_anuntat = false chiar în scrierea care îl completează
+    const deCompletat = placeholders.has(cheie) && rand?.seap_meta?.de_anuntat === true;
+    if (deCompletat) rand = { ...rand, seap_meta: { ...rand.seap_meta, de_anuntat: false, anuntat_la: new Date().toISOString(), anuntat_prin: 'placeholder veghe' } };
     const r = await scrieDocument(supa, rand, cheie, placeholders);
     // audit #4: codul SEAP e deja pe alt rand (alt drum l-a adus intre timp) = prezent, nu eroare
     if (r.duplicat) {
@@ -471,7 +475,8 @@ Deno.serve(async (req: Request) => {
         // citesc DUPA descarcare si dupa pragul de marime (nimic citit degeaba), doar cei cu aceeasi marime (shaRanduri).
         let decF: any = dec;
         const lungimi = [buf.length, brut.length];
-        const shas = dec.fel === 'verifica' || dec.fel === 'frate' ? [await sha256Hex(buf), ...(brut !== buf ? [await sha256Hex(brut)] : [])] : [];
+        // F5: și la o versiune — republicată IDENTIC sub cod nou nu e versiune (mai jos)
+        const shas = dec.fel === 'verifica' || dec.fel === 'frate' || dec.fel === 'versiune' ? [await sha256Hex(buf), ...(brut !== buf ? [await sha256Hex(brut)] : [])] : [];
         if (dec.fel === 'verifica') {
           decF = rezolvaVerificare(dec, shas, await shaRanduri(dec.candidati, new Set(shas), lungimi));
           if (decF.fel === 'adopta' || decF.fel === 'sari') {
@@ -496,6 +501,31 @@ Deno.serve(async (req: Request) => {
           const identic = rude.find((r: any) => shas.includes(shaR.get(r.id) as string));
           if (identic) {
             raport.avertismente.push(`${doc0.nume} (${doc0.cod}): conținut identic cu #${identic.id} „${identic.nume_original}” — nu se dublează (codul nu are rând)`);
+            raport.sarite_existente++;
+            urcatiOcteti += brut.length;   // anti-bug 3
+            i++;
+            if (bugetDepasit() && i < documente.length) { continua = true; break; }
+            continue;
+          }
+        }
+        // F5 (review PR-1): „versiunea” cu EXACT continutul randului inlocuit (autoritatea a republicat documentul identic sub cod
+        // nou) nu e versiune: fara upload, fara de_anuntat (fara mail fals); codul nou se MUTA pe randul inlocuit (mutaCod), ca
+        // rularile urmatoare sa-l sara pe cod. Dovada ca la frate (shaRanduri: manifest, apoi Storage doar la aceeasi marime, cu
+        // plafon si octetii in buget). Sha-ul inlocuitului necunoscut (necitibil) → versiune, ca inainte (anuntata).
+        // D1 (review PR-1, r3): DOAR pe un inlocuit FARA nume de cod (original / adoptat / nume vechi) si fara placeholder pe N2
+        // (aceleasi chei ca scrie()); altfel versiunea de mai jos, fara citiri din Storage (cu placeholder: F1, de_anuntat = false)
+        const phN2 = placeholders.has(cheieRand(doc.nume)) || placeholders.has(cheieRand(numeFinal));
+        if (decF.fel === 'versiune' && mutaPeIdentic(decF.inlocuit, phN2)) {
+          const inl = decF.inlocuit;
+          const shaI = (await shaRanduri([inl], new Set(shas), lungimi)).get(inl.id);
+          if (shaI && shas.includes(shaI)) {
+            const codVechi = String(inl.seap_cod ?? '');
+            const m = await mutaCod(supa, licitatieId, inv, inl, codVechi, doc0.cod);
+            if (m === 'mutat') {
+              raport.coduri_mutate.push({ id: inl.id, de: codVechi, la: doc0.cod });
+              raport.avertismente.push(`${doc0.nume} (${doc0.cod}): republicat identic sub cod nou — codul mutat pe #${inl.id}, fără versiune`);
+            } else if (m === 'duplicat') raport.sarite_cod++;   // codul nou e deja pe alt rand (alt drum l-a adus intre timp)
+            else raport.avertismente.push(`${doc0.nume} (${doc0.cod}): republicat identic cu #${inl.id}, dar codul nu s-a putut muta — ${typeof m === 'object' ? m.eroare : 'codul rândului s-a schimbat între timp'}; se reia la rularea următoare`);
             raport.sarite_existente++;
             urcatiOcteti += brut.length;   // anti-bug 3
             i++;

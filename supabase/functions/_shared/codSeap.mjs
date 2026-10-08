@@ -26,7 +26,10 @@
 //     ultima versiune, iar republicarea unui frate e o versiune, nu alt frate tăcut;
 //   - rândurile canalului de clarificări (veghea GetAll: `seap_meta.publicat`) NU pot fi „înlocuite” de un document din lista
 //     principală (codurile lor nu sunt niciodată în ea) — altfel o versiune falsă + mail;
-//   - siguranța „coduri instabile” nu mai sare la o republicare integrală legitimă (același prefix, numere mai mari).
+//   - siguranța „coduri instabile” nu mai sare la o republicare integrală legitimă (același prefix, numere mai mari);
+//   - o „versiune” cu EXACT conținutul rândului înlocuit (republicat identic sub cod nou, F5) nu e versiune: importul mută codul
+//     pe rândul înlocuit (`mutaCod`), fără upload și fără anunț; sha-ul înlocuitului necunoscut → versiune, ca înainte.
+//     Îngustat (D1, `mutaPeIdentic`): doar pe un rând FĂRĂ nume de cod și fără placeholder pe N2 — altfel versiune, ca înainte.
 // Versiunea și fratele primesc numele `numeVersiune` („Caiet de sarcini (CN1095546-00036).pdf”, decizia N = A), hotărât pe
 // numele SEAP BRUT, înainte de desfacerea semnăturii: placeholder-ul veghei, calea din Storage, cheia de manifest, marcarea
 // după nume și desfacerea .p7m/.p7s dau același nume pe toate drumurile, fără gemeni cu numele vechi.
@@ -294,6 +297,36 @@ export async function adoptaCod(supa, licitatieId, inv, rand, cod) {
       rand.seap_cod = c
       if (!inv.coduri.has(c)) inv.coduri.set(c, rand)
       return 'adoptat'
+    }
+    return 'ocupat'
+  } catch (e) {
+    return { eroare: String(e?.message ?? e) }
+  }
+}
+
+/** F5 îngustat (review PR-1, D1): o versiune republicată IDENTIC își mută codul pe rândul înlocuit DOAR dacă (a) acesta NU e un
+ *  rând cu nume de cod („N (COD).ext”: versiune / frate — codul e în numele lui; mutat, linia versiunilor s-ar rupe), deci e
+ *  originalul / adoptat / cu nume vechi, și (b) NU există placeholder pe numele versiunii N2 (veghea a anunțat-o deja: îl
+ *  completează versiunea, F1, cu de_anuntat = false — altfel placeholder orfan). (c) Conținutul identic îl dovedește apelantul
+ *  (sha). Altfel: versiune, ca înainte. Pură. @param {Rand} inl @param {boolean} arePlaceholderN2 @returns {boolean} */
+export const mutaPeIdentic = (inl, arePlaceholderN2) => !arePlaceholderN2 && numeBaza(inl?.nume_original, codRand(inl)) === null
+
+/** Mutarea codului pe rândul ÎNLOCUIT, când „versiunea” are exact conținutul lui (review PR-1, F5: autoritatea republică
+ *  documentul identic sub cod nou — fără rând nou, fără upload, fără anunț). UPDATE condiționat (id + licitație + încă codul
+ *  vechi), sigur la curse. 'mutat' (inv: codul vechi scos, cel nou → rândul) | 'ocupat' (alt drum i-a schimbat codul între timp)
+ *  | 'duplicat' (codul nou e deja pe alt rând) | { eroare }. Nu aruncă.
+ *  @param {any} supa @param {number} licitatieId @param {Inv} inv @param {Rand} rand @param {string} codVechi @param {string} codNou */
+export async function mutaCod(supa, licitatieId, inv, rand, codVechi, codNou) {
+  const v = String(codVechi ?? '').trim(), n = String(codNou ?? '').trim()
+  try {
+    const { data, error } = await supa.from('ofertare_documente_atribuire').update({ seap_cod: n })
+      .eq('id', rand.id).eq('licitatie_id', licitatieId).eq('seap_cod', v).select('id')
+    if (error) return eDuplicatCod(error) ? 'duplicat' : { eroare: String(error.message ?? error) }
+    if (Array.isArray(data) && data.length === 1) {
+      if (inv.coduri.get(v) === rand) inv.coduri.delete(v)
+      inv.coduri.set(n, rand)
+      rand.seap_cod = n
+      return 'mutat'
     }
     return 'ocupat'
   } catch (e) {
