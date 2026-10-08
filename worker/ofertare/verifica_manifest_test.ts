@@ -210,6 +210,28 @@ Deno.test('manifest (PR-2, Jakarinos r2): un cod fără rând nu cade pe numele 
   eq([raport.identice, raport.diferite, raport.lipsa_in_platforma, scrieri.length], [1, 0, 1, 2])
 })
 
+Deno.test('manifest (PR-2, Jakarinos r3 #1): fratele cu conținut IDENTIC, deduplicat fără rând propriu, nu e „LIPSĂ” — legat de rândul existent pe cheia lui', async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' }]
+  const dovada = { arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 21, sha256: await sha('alpha'), stare: 'urcat' }
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi: [dovada],
+    seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' }, { nume: 'N.pdf', cod: 'CN1/00002', text: 'alpha' }] })
+  const r1 = scrieri.find(x => x.cale === 'N.pdf'), r2 = scrieri.find(x => x.cale === 'N (CN1-00002).pdf')
+  eq([r1?.document_id, r1?.stare], [21, 'urcat'], 'dovada lui /1 neatinsă')
+  eq([r2?.arhiva_cheie, r2?.document_id, r2?.stare], ['n (cn1-00002).pdf', 21, 'deja_in_platforma'], '/2 legat de #21 pe cheia lui')
+  eq([raport.identice, raport.lipsa_in_platforma, raport.diferite], [2, 0, 0])
+})
+
+for (const ordine of ['/2,/1', '/1,/2']) Deno.test(`manifest (PR-2, Jakarinos r3 #2): două rânduri „N.pdf” (/1, /2) nu-și suprascriu dovezile — ordinea ${ordine}`, async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 22, nume_original: 'N.pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: 'CN1/00002' }]
+  const dovada = { arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 22, sha256: await sha('beta'), stare: 'urcat' }
+  const d1 = { nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' }, d2 = { nume: 'N.pdf', cod: 'CN1/00002', text: 'beta' }
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi: [dovada], seapLista: ordine === '/2,/1' ? [d2, d1] : [d1, d2] })
+  const pe = Object.fromEntries(scrieri.map(x => [x.document_id, [x.arhiva_cheie, x.cale, x.stare]]))
+  eq(pe, { 21: ['n (cn1-00001).pdf', 'N (CN1-00001).pdf', 'deja_in_platforma'], 22: ['n.pdf', 'N.pdf', 'urcat'] }, JSON.stringify(scrieri))
+  eq([raport.identice, raport.diferite, raport.lipsa_in_platforma, scrieri.length], [2, 0, 0, 2])
+})
+
 Deno.test('manifest: uscat nu scrie manifestul', async () => {
   const { raport, scrieri } = await scenariu({ uscat: true })
   eq(scrieri, [])
