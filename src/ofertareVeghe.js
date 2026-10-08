@@ -12,14 +12,22 @@ export function intrareVeghe(data, nrAnunt) {
   return ale.find(principala) || ale[0] || data.raport.find(principala) || data.raport[0] || null
 }
 
-/** Ce a adus / anunțat veghea pentru licitație și textul notificării din UI. @param {any} r intrarea principală */
+/** Ce a adus / anunțat veghea pentru licitație și textul notificării din UI. „Nimic nou” DOAR când nu e nimic: nici document
+ *  nou (adus sau rămas de urcat), nici răspuns, nici versiune anunțată / decisă și neadusă încă, nici termen mutat, nici eroare
+ *  (review PR-1 r5: „Nimic nou” apărea și când autoritatea publicase ceva ce nu s-a putut aduce). @param {any} r intrarea principală */
 export function rezumatVeghe(r) {
   const n = v => Number(v) || 0
   const aduse = n(r?.aduse), raspunsuri = n(r?.raspunsuri_aduse), versiuni = n(r?.versiuni_anuntate)
+  const ramase = n(r?.ramase), versiuniNeaduse = Math.max(0, (r?.coduri?.versiuni?.length || 0) - versiuni)
+  const termen = r?.termen?.nou || null, eroare = r?.eroare || null
   const parti = []
   if (aduse) parti.push(`${aduse} document(e) noi aduse`)
+  if (ramase) parti.push(`${ramase} document(e) noi de urcat manual`)
   if (raspunsuri) parti.push(`${raspunsuri} răspuns(uri) de la autoritate`)
   if (versiuni) parti.push(`♻ ${versiuni} versiune(i) nouă(i) anunțată(e)`)
-  return { aduse, raspunsuri, versiuni, total: aduse + raspunsuri + versiuni,
-    text: parti.length ? `📂 Din SEAP: ${parti.join(', ')}` : 'Nimic nou în SEAP acum.' }
+  if (versiuniNeaduse) parti.push(`♻ ${versiuniNeaduse} versiune(i) nouă(i) încă neadusă(e)`)
+  if (termen) parti.push('termenul de depunere s-a schimbat')
+  const total = aduse + ramase + raspunsuri + versiuni + versiuniNeaduse + (termen ? 1 : 0)
+  const text = eroare ? `⚠️ Verificarea SEAP a dat eroare: ${eroare}` : parti.length ? `📂 Din SEAP: ${parti.join(', ')}` : 'Nimic nou în SEAP acum.'
+  return { aduse, raspunsuri, versiuni, ramase, versiuniNeaduse, termen, total, text }
 }

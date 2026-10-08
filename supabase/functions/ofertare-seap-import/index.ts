@@ -429,6 +429,7 @@ Deno.serve(async (req: Request) => {
   const areDovada = (r: any) => !!(r?.id != null && identitate.shaDoc.get(r.id));
   // documente fara cod / noi cazute pe drumul per fisier: dupa rezerva se verifica daca le-a adus ea (altfel = lipsa)
   const esuatePerFisier: string[] = [];
+  let esecuriLaRand = 0;   // descarcari per fisier cazute la rand (dupa reincercari) — vezi E3 mai jos
   // R2 (r4): randurile pe care s-a mutat deja un cod in rularea asta (F5) — un al doilea document nu se muta pe acelasi rand
   const tinteMutare = new Set<number>();
 
@@ -485,8 +486,11 @@ Deno.serve(async (req: Request) => {
       }
       try {
         const link = doc.url.startsWith('http') ? doc.url : `https://e-licitatie.ro/${doc.url.replace(/^\/+/, '')}`;
-        const rd = await fetchSeap(link, { headers: antetDesc }, pesteBuget);   // E3: reincercari, in buget
-        if (!rd.ok) { raport.erori.push(`${numeCurat}: descarcare HTTP ${rd.status}`); esec(); i++; continue; }
+        // E3: reincercari, in buget. Review PR-1 r5: dupa 3 descarcari la rand cazute (SEAP refuza per fisier), o singura
+        // incercare — altfel pauzele ar consuma bugetul inaintea rezervei DownloadArchive, care aduce restul dintr-o bucata
+        const rd = await fetchSeap(link, { headers: antetDesc }, pesteBuget, esecuriLaRand >= 3 ? 1 : 4);
+        if (!rd.ok) { esecuriLaRand++; raport.erori.push(`${numeCurat}: descarcare HTTP ${rd.status}`); esec(); i++; continue; }
+        esecuriLaRand = 0;
         const cl = Number(rd.headers.get('content-length') || 0);
         if (cl > PRAG_MARE) {
           if (dec.fel === 'verifica') raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): neverificat, mare (${(cl / 1e6).toFixed(0)}MB) — rămas pe regula veche`);

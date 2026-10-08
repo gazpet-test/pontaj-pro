@@ -630,10 +630,23 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { data: owners } = await supa.from('profiles').select('id').eq('is_owner', true);
+    // Jakarinos r2 (P1): o eroare la citirea destinatarilor NU confirma canalul versiunilor — lista ar fi incompleta
+    // (o reincercare imediata: o eroare trecatoare nu lasa canalul restant — reluarea ar dubla clopotelul celor deja notificati)
+    let { data: owners, error: eOwners } = await supa.from('profiles').select('id').eq('is_owner', true);
+    if (eOwners) ({ data: owners, error: eOwners } = await supa.from('profiles').select('id').eq('is_owner', true));
+    if (eOwners) raport.push({ licitatie: lic.nr_anunt, destinatari_necunoscuti: `owneri: ${eOwners.message}` });
     const catre = new Set<string>((owners || []).map((o: any) => o.id));
     if (lic.created_by) catre.add(lic.created_by);
     if (lic.responsabil_id) catre.add(lic.responsabil_id);
+    // review PR-1 r5: INSERT-ul e acum unul singur, cu toti destinatarii — un id fara profil (cont sters) l-ar pica pentru TOTI.
+    // Se pastreaza doar destinatarii cu profil; citirea esuata = destinatari necunoscuti (canalul versiunilor ramane restant).
+    let eValizi: any = null;
+    if (catre.size) {
+      const { data: valizi, error } = await supa.from('profiles').select('id').in('id', [...catre]);
+      eValizi = error;
+      if (error) raport.push({ licitatie: lic.nr_anunt, destinatari_necunoscuti: `profiluri: ${error.message}` });
+      else { const ok = new Set((valizi || []).map((x: any) => x.id)); for (const id of [...catre]) if (!ok.has(id)) catre.delete(id); }
+    }
     const nume = (l: string[]) => l.slice(0, 4).map(afis).join(', ') + (l.length > 4 ? ` (+${l.length - 4})` : '');
 
     // v2: raspunsurile autoritatii se anunta separat, ca sa nu se piarda printre planse.
@@ -706,18 +719,19 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // E2: clopotelul versiunilor e confirmat doar daca TOATE inserturile mesajului lor au reusit (fara destinatari = nimic de confirmat)
-    let notifOk = true;
-    for (const pid of catre) {
-      for (const m of mesaje) {
-        const { error: eN } = await supa.from('notifications').insert({
-          profile_id: pid, type: m.type, modul: 'Comercial',
-          title: m.title, message: m.message, link_to: '/ofertare',
-        });
-        if (eN) {
-          raport.push({ licitatie: lic.nr_anunt, notificare_esuata: eN.message });
-          if (m === mesajVersiuni) notifOk = false;
-        }
+    // E2: clopotelul versiunilor e confirmat doar daca mesajul lor a ajuns la TOTI destinatarii (fara destinatari = nimic de
+    // confirmat). Jakarinos r2 (P1): un singur INSERT per mesaj, cu toti destinatarii (o instructiune = totul sau nimic) — altfel un
+    // esec partial lasa canalul neconfirmat, iar reluarea il trimitea din nou si celor care il primisera deja.
+    let notifOk = !eOwners && !eValizi;
+    for (const m of mesaje) {
+      if (!catre.size) continue;
+      const { error: eN } = await supa.from('notifications').insert([...catre].map((pid) => ({
+        profile_id: pid, type: m.type, modul: 'Comercial',
+        title: m.title, message: m.message, link_to: '/ofertare',
+      })));
+      if (eN) {
+        raport.push({ licitatie: lic.nr_anunt, notificare_esuata: eN.message });
+        if (m === mesajVersiuni) notifOk = false;
       }
     }
 
@@ -732,9 +746,14 @@ Deno.serve(async (req: Request) => {
         mailOk = true;
       } else {
         const to = [OFFICE];
+        // Jakarinos r2 (P1): responsabilul necitit (eroare) = lista de mail incompleta → mailul pleaca (raspunsurile nu se pierd), dar
+        // canalul versiunilor ramane restant si se reia (o dublura la office e preferabila unui anunt pierdut pentru responsabil)
+        let destinatariOk = true;
         if (lic.responsabil_id) {
-          const { data: resp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle();
-          if (resp?.email && !to.includes(resp.email)) to.push(resp.email);
+          let { data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle();
+          if (eResp) ({ data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle());
+          if (eResp) { destinatariOk = false; raport.push({ licitatie: lic.nr_anunt, destinatari_necunoscuti: `responsabil: ${eResp.message}` }); }
+          else if (resp?.email && !to.includes(resp.email)) to.push(resp.email);
         }
         const neaduse = raspunsuriMail.filter((n) => !areNume(urcate, n));
         const html = `
@@ -757,7 +776,7 @@ Deno.serve(async (req: Request) => {
             }),
           });
           mail = r.ok ? `trimis catre ${to.join(', ')}` : `esuat HTTP ${r.status}`;
-          mailOk = r.ok;
+          mailOk = r.ok && destinatariOk;
         } catch (e) {
           mail = 'esuat: ' + String((e as Error)?.message || e);
         }

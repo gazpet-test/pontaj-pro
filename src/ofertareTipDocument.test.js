@@ -632,12 +632,18 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     const src = veghe()
     // clopoțelul: doar inserturile mesajului care poartă versiunile confirmă canalul
     expect(src).toMatch(/if \(versiuniNotif\.length\) mesajVersiuni = m;/)
-    expect(src).toMatch(/let notifOk = true;\s*for \(const pid of catre\) \{/)
+    // Jakarinos r2: un singur INSERT per mesaj (atomic, toti destinatarii); destinatarii necititi nu confirma canalul
+    expect(src).toMatch(/let notifOk = !eOwners && !eValizi;\s*for \(const m of mesaje\) \{\s*if \(!catre\.size\) continue;\s*const \{ error: eN \} = await supa\.from\('notifications'\)\.insert\(\[\.\.\.catre\]\.map\(/)
+    expect(src).not.toMatch(/for \(const pid of catre\)/)
+    expect(src).toMatch(/await supa\.from\('profiles'\)\.select\('id'\)\.in\('id', \[\.\.\.catre\]\)/)
+    expect(src).toMatch(/let \{ data: owners, error: eOwners \} = await supa\.from\('profiles'\)/)
+    expect(src).toMatch(/if \(eOwners\) \(\{ data: owners, error: eOwners \} = await supa\.from\('profiles'\)/)
     expect(src).toMatch(/if \(m === mesajVersiuni\) notifOk = false;/)
     // mailul: plecat, sau nedatorat (nimic de trimis / Resend neconfigurat — ca înainte); eșuat → rămâne pentru rularea următoare
     expect(src).toMatch(/let mailOk = !raspunsuriMail\.length;\s*if \(raspunsuriMail\.length\) \{/)
     expect(src).toMatch(/mail = 'sarit: lipseste RESEND_API_KEY';\s*mailOk = true;/)
-    expect(src).toMatch(/mailOk = r\.ok;/)
+    expect(src).toMatch(/mailOk = r\.ok && destinatariOk;/)
+    expect(src).toMatch(/if \(eResp\) \{ destinatariOk = false;/)
     expect(src).toMatch(/const neaduse = raspunsuriMail\.filter/)
     // marcarea: fiecare canal reușit acum își pune data; flag-ul se stinge doar cu amândouă
     const bloc = src.slice(src.indexOf('let versiuniAnuntate = 0;'), src.indexOf('raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length'))
@@ -655,7 +661,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/const pesteBuget = \(pauzaMs: number\) => Date\.now\(\) - t0 \+ pauzaMs > BUGET_MS;/)
     // lista: răspunsul întors de fetchSeap e cel reușit — cookie-urile LUI leagă linkurile de descărcare
     expect(src).toMatch(/const rl = await fetchSeap\(`\$\{SEAP\}\/NoticeCommon\/GetDfNoticeSectionFiles\/\?\$\{qs\}`, \{ headers: SEAP_HDR \}, pesteBuget\);\s*if \(!rl\.ok\)[^\n]*\n\s*else \{\s*cookie = cookieDin\(rl\);/)
-    expect(src).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget\);/)
+    expect(src).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget, esecuriLaRand >= 3 \? 1 : 4\);/)
     expect(src).toMatch(/res = await fetchSeap\(url, \{ headers: SEAP_HDR \}, pesteBuget\);/)
     expect((src.match(/await fetch\(/g) || []).length).toBe(1)   // singurul fetch direct e în fetchSeap
   })
@@ -676,3 +682,13 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(doc).toMatch(/Review PR-1, runda 5 \(E1–E7\)/)
   })
 })
+
+describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea internă)', () => {
+  const imp = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+  it('importul: după 3 descărcări per fișier căzute la rând, o singură încercare (bugetul rămâne pentru rezerva arhivă)', () => {
+    expect(imp).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget, esecuriLaRand >= 3 \? 1 : 4\);/)
+    expect(imp).toMatch(/if \(!rd\.ok\) \{ esecuriLaRand\+\+;/)
+    expect(imp).toMatch(/esecuriLaRand = 0;/)
+  })
+})
+

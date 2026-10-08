@@ -37,8 +37,10 @@ describe('rezumatVeghe: „Nimic nou” doar când nu s-a adus și nu s-a anunț
     expect(r.text).toMatch(/versiune/)
     expect(r.text).not.toMatch(/Nimic nou/)
   })
-  it('nimic adus / anunțat, intrare de eroare sau lipsă → „Nimic nou”', () => {
-    for (const r of [principala(), { licitatie: 'L1', eroare: 'SEAP HTTP 403' }, null, undefined]) expect(rezumatVeghe(r).text).toBe('Nimic nou în SEAP acum.')
+  it('nimic adus / anunțat sau intrare lipsă → „Nimic nou”; intrarea de eroare → eroarea', () => {
+    for (const r of [principala(), null, undefined]) expect(rezumatVeghe(r).text).toBe('Nimic nou în SEAP acum.')
+    // review r5: o intrare de eroare NU mai e „Nimic nou” — se spune eroarea
+    expect(rezumatVeghe({ licitatie: 'L1', eroare: 'SEAP HTTP 403' }).text).toMatch(/eroare: SEAP HTTP 403/)
   })
   it('UI: „Verifică SEAP acum” folosește intrarea principală și rezumatul (nu `.length` pe numere); veghea raportează versiuni_anuntate', () => {
     const ui = readFileSync(new URL('./OfertareLicitatii.jsx', import.meta.url), 'utf8')
@@ -48,5 +50,16 @@ describe('rezumatVeghe: „Nimic nou” doar când nu s-a adus și nu s-a anunț
     expect(bloc).not.toMatch(/adusi\?\.length|raspunsuri_aduse\?\.length/)
     const veghe = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
     expect(veghe).toMatch(/raport\.push\(\{ licitatie: lic\.nr_anunt, termen, noi: noi\.length,[^\n]*aduse: auIntrat\.length,[^\n]*versiuni_anuntate: versiuniAnuntate,/)
+  })
+})
+
+describe('rezumatVeghe: „Nimic nou” doar când chiar nu e nimic (review PR-1 r5)', () => {
+  it('document nou neadus, termen mutat, versiune decisă și neadusă, eroare → nu „Nimic nou”', () => {
+    expect(rezumatVeghe({ termen: null, noi: 1, aduse: 0, ramase: 1 }).text).toMatch(/1 document\(e\) noi de urcat manual/)
+    expect(rezumatVeghe({ termen: { nou: '2026-11-01T10:00:00Z' } }).text).toMatch(/termenul de depunere s-a schimbat/)
+    expect(rezumatVeghe({ termen: null, coduri: { versiuni: ['Caiet (C-00036).pdf'] }, versiuni_anuntate: 0 }).text).toMatch(/1 versiune\(i\) nouă\(i\) încă neadusă/)
+    expect(rezumatVeghe({ termen: null, coduri: { versiuni: ['V'] }, versiuni_anuntate: 1 }).text).not.toMatch(/neadus/)
+    expect(rezumatVeghe({ licitatie: 'L1', eroare: 'SEAP HTTP 403' }).text).toMatch(/eroare: SEAP HTTP 403/)
+    expect(rezumatVeghe({ termen: null, noi: 0, aduse: 0, ramase: 0 }).text).toBe('Nimic nou în SEAP acum.')
   })
 })
