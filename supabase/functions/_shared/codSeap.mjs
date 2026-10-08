@@ -30,6 +30,9 @@
 //   - o „versiune” cu EXACT conținutul rândului înlocuit (republicat identic sub cod nou, F5) nu e versiune: importul mută codul
 //     pe rândul înlocuit (`mutaCod`), fără upload și fără anunț; sha-ul înlocuitului necunoscut → versiune, ca înainte.
 //     Îngustat (D1, `mutaPeIdentic`): doar pe un rând FĂRĂ nume de cod și fără placeholder pe N2 — altfel versiune, ca înainte.
+//     R2 (r4): cu mai mulți înlocuiți posibili (frați cu același nume, republicați integral identic), decideSeap îi dă pe toți
+//     (`inlocuiti`, numărul cel mai mare primul; `inlocuit` = primul, ca înainte) și importul caută conținutul identic pe FIECARE
+//     candidat mutabil (`candidatiMutare`): codul se mută pe primul identic, iar un rând e ținta unei singure mutări pe rulare.
 // Versiunea și fratele primesc numele `numeVersiune` („Caiet de sarcini (CN1095546-00036).pdf”, decizia N = A), hotărât pe
 // numele SEAP BRUT, înainte de desfacerea semnăturii: placeholder-ul veghei, calea din Storage, cheia de manifest, marcarea
 // după nume și desfacerea .p7m/.p7s dau același nume pe toate drumurile, fără gemeni cu numele vechi.
@@ -175,7 +178,7 @@ export function coduriInstabile(inv, lista, docs, cheiSeap) {
 /** Decizia pentru un document din lista SEAP, ÎNAINTE de descărcare. Pură; apelantul face apoi inv.decise.add(cod).
  *  `chei` = cheiSeap(doc.nume) al apelantului (cheile rândurilor sub care documentul poate exista deja).
  *  Întoarce: { fel: 'fara_cod' } | { fel: 'sari', motiv: 'dublu' | 'cod' | 'semnatura' | 'volum' | 'nume', rand? } | { fel: 'nou', nume }
- *    | { fel: 'versiune', nume, inlocuit } | { fel: 'adopta', motiv?: 'nume_cod', rand } | { fel: 'frate', nume, rude }
+ *    | { fel: 'versiune', nume, inlocuit, inlocuiti } | { fel: 'adopta', motiv?: 'nume_cod', rand } | { fel: 'frate', nume, rude }
  *    | { fel: 'verifica', motiv: 'ambiguu' | 'sha' | 'copil', nume, candidati, dupa }.
  *  @param {Inv} inv @param {Lista} lista @param {{ nume: string, cod?: string }} doc @param {string[]} chei
  *  @param {{ adoptie?: string }} [o] */
@@ -201,12 +204,13 @@ export function decideSeap(inv, lista, doc, chei, { adoptie = ADOPTIE } = {}) {
   // de veghe din GetAll) nu face din originalul listat o „versiune nouă” (act contestabil fals). Rândurile GetAll nu se
   // „înlocuiesc” deloc: codurile lor nu sunt niciodată în lista principală, deci condiția „a ieșit din listă” nu spune nimic.
   // Linia versiunilor (adaugaRand): la a doua republicare, înlocuitul e ultima versiune (numărul cel mai mare).
+  // R2 (r4): toți candidații rămân în `inlocuiti` (aceeași ordine) — F5 din import caută conținutul identic pe fiecare.
   const o = ordineCod(cod)
   const inloc = o ? pot.filter((r) => {
     const c = codRand(r), or = c && !r.getAll && !lista.toate.has(c) ? ordineCod(c) : null
     return !!or && or.prefix === o.prefix && or.nr < o.nr
   }).sort((a, b) => ordineCod(codRand(b)).nr - ordineCod(codRand(a)).nr) : []
-  if (inloc.length) return volum ? { fel: 'sari', motiv: 'volum' } : { fel: 'versiune', nume: N2, inlocuit: inloc[0] }
+  if (inloc.length) return volum ? { fel: 'sari', motiv: 'volum' } : { fel: 'versiune', nume: N2, inlocuit: inloc[0], inlocuiti: inloc }
   const frate = volum ? { fel: 'sari', motiv: 'volum' } : { fel: 'frate', nume: N2, rude: pot.map((r) => r.id).filter((id) => id != null) }
   const libere = pot.filter((r) => !codRand(r) && !r.dinRulare && !inv.copii.has(r.id))
   if (libere.length) {
@@ -310,6 +314,17 @@ export async function adoptaCod(supa, licitatieId, inv, rand, cod) {
  *  completează versiunea, F1, cu de_anuntat = false — altfel placeholder orfan). (c) Conținutul identic îl dovedește apelantul
  *  (sha). Altfel: versiune, ca înainte. Pură. @param {Rand} inl @param {boolean} arePlaceholderN2 @returns {boolean} */
 export const mutaPeIdentic = (inl, arePlaceholderN2) => !arePlaceholderN2 && numeBaza(inl?.nume_original, codRand(inl)) === null
+
+/** R2 (review PR-1, r4): candidații F5 ai unei versiuni, în ordinea lui decideSeap (numărul cel mai mare primul): fiecare înlocuit
+ *  care trece mutaPeIdentic și NU a fost deja ținta unei mutări în rularea asta (`folosite` = id-urile ținute de apelant: un al
+ *  doilea document nu se mută pe același rând). Dovada de conținut (sha) o face apelantul pe toți, oprită la prima potrivire;
+ *  niciunul identic → versiune cu `inlocuit` (inloc[0]), ca înainte. Pură.
+ *  @param {any} dec @param {boolean} arePlaceholderN2 @param {Set<number>} [folosite] @returns {Rand[]} */
+export function candidatiMutare(dec, arePlaceholderN2, folosite = new Set()) {
+  if (dec?.fel !== 'versiune') return []
+  const toti = Array.isArray(dec.inlocuiti) && dec.inlocuiti.length ? dec.inlocuiti : dec.inlocuit ? [dec.inlocuit] : []
+  return toti.filter((r) => mutaPeIdentic(r, arePlaceholderN2) && !(r?.id != null && folosite.has(r.id)))
+}
 
 /** Mutarea codului pe rândul ÎNLOCUIT, când „versiunea” are exact conținutul lui (review PR-1, F5: autoritatea republică
  *  documentul identic sub cod nou — fără rând nou, fără upload, fără anunț). UPDATE condiționat (id + licitație + încă codul

@@ -64,7 +64,7 @@ import { curataOrfani } from './orfani.ts';
 import { Flux, fluxDinBuf, parcurgeZip } from '../_shared/zipFlux.mjs';
 import { toatePaginile } from '../_shared/paginat.mjs';
 import { scrieDocument } from './placeholder.ts';
-import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, mutaCod, mutaPeIdentic, copiiDinManifest, ADOPTIE, ALT_CONTINUT } from '../_shared/codSeap.mjs';
+import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, mutaCod, candidatiMutare, copiiDinManifest, ADOPTIE, ALT_CONTINUT } from '../_shared/codSeap.mjs';
 import { autorizeaza } from './acces.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
@@ -400,6 +400,8 @@ Deno.serve(async (req: Request) => {
   const areDovada = (r: any) => !!(r?.id != null && identitate.shaDoc.get(r.id));
   // documente fara cod / noi cazute pe drumul per fisier: dupa rezerva se verifica daca le-a adus ea (altfel = lipsa)
   const esuatePerFisier: string[] = [];
+  // R2 (r4): randurile pe care s-a mutat deja un cod in rularea asta (F5) — un al doilea document nu se muta pe acelasi rand
+  const tinteMutare = new Set<number>();
 
   if (documente.length) {
     perFisierOk = true;
@@ -514,11 +516,17 @@ Deno.serve(async (req: Request) => {
         // plafon si octetii in buget). Sha-ul inlocuitului necunoscut (necitibil) → versiune, ca inainte (anuntata).
         // D1 (review PR-1, r3): DOAR pe un inlocuit FARA nume de cod (original / adoptat / nume vechi) si fara placeholder pe N2
         // (aceleasi chei ca scrie()); altfel versiunea de mai jos, fara citiri din Storage (cu placeholder: F1, de_anuntat = false)
+        // R2 (r4): cu mai multi inlocuiti posibili (frati cu acelasi nume republicati integral identic) dovada se cauta pe FIECARE
+        // candidat mutabil (candidatiMutare: mutaPeIdentic + tintele deja folosite in rulare), intr-un singur shaRanduri (aceleasi
+        // limite: PLAFON_CANDIDATI pe document, octetii in buget), oprita la prima potrivire; codul se muta pe ACEL rand. Un rand e
+        // tinta unei singure mutari pe rulare (tinteMutare). Niciunul identic → versiune cu inlocuit = numarul cel mai mare, ca inainte.
         const phN2 = placeholders.has(cheieRand(doc.nume)) || placeholders.has(cheieRand(numeFinal));
-        if (decF.fel === 'versiune' && mutaPeIdentic(decF.inlocuit, phN2)) {
-          const inl = decF.inlocuit;
-          const shaI = (await shaRanduri([inl], new Set(shas), lungimi)).get(inl.id);
-          if (shaI && shas.includes(shaI)) {
+        const deMutat: any[] = candidatiMutare(decF, phN2, tinteMutare);
+        if (deMutat.length) {
+          const shaC = await shaRanduri(deMutat, new Set(shas), lungimi);
+          const inl = deMutat.find((r: any) => shas.includes(shaC.get(r.id) as string));
+          if (inl) {
+            tinteMutare.add(inl.id);
             const codVechi = String(inl.seap_cod ?? '');
             const m = await mutaCod(supa, licitatieId, inv, inl, codVechi, doc0.cod);
             if (m === 'mutat') {
@@ -711,5 +719,9 @@ Deno.serve(async (req: Request) => {
     raport.orfani_stersi = await curataOrfani(supa, licitatieId);
   }
   raport.index = index;
-  return json({ ...raport, continua, next_index: continua ? index : null });
+  // R3 (review PR-1, r4): pe rezerva arhiva (si pe metoda 'arhiva') pozitia de continuare numara intrarile ZIP-ului, nu lista SEAP —
+  // trimisa ca de_la_index, apelul urmator ar sari documente din lista per fisier (veghea si lantul „Adu din SEAP” din UI fac
+  // deLa = next_index). Continuarea porneste atunci de la 0: ce e deja in platforma se sare pe cod / nume.
+  const peArhiva = raport.rezerva_arhiva || raport.metoda === 'arhiva';
+  return json({ ...raport, continua, next_index: continua ? (peArhiva ? 0 : index) : null });
 });

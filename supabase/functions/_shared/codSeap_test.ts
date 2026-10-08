@@ -4,6 +4,7 @@ import { strict as assert } from 'node:assert'
 import {
   INDEX_COD_UNIC, ADOPTIE, codDin, ordineCod, numeVersiune, numeBaza, eGetAll, esteVolumRar, copiiDinManifest, inventarCod, adaugaRand,
   indexLista, coduriInstabile, decideSeap, verificabil, ALT_CONTINUT, rezolvaVerificare, tipMostenit, campuriCod, eDuplicatCod, adoptaCod, mutaCod, mutaPeIdentic,
+  candidatiMutare,
 } from './codSeap.mjs'
 import { cheieRand as cheieRandCu, cheiSeap as cheiSeapCu, numeDesfacut, eArhivaP7m } from './semnaturaCms.mjs'
 import { ghicesteTip, esteArhiva } from './tipDocument.mjs'
@@ -212,6 +213,9 @@ Deno.test('decideSeap: versiune (S = B) doar când codul vechi a ieșit din list
   assert.equal(d.fel, 'versiune')
   assert.equal(d.nume, 'Caiet (CN1095546-00036).pdf')
   assert.equal(d.inlocuit.id, v10.id)   // cel mai mare număr
+  // R2 (r4): toți candidații, în aceeași ordine (numărul cel mai mare primul); `inlocuit` rămâne primul
+  assert.deepEqual(d.inlocuiti.map((r: Any) => r.id), [v10.id, v5.id])
+  assert.equal(d.inlocuiti[0], d.inlocuit)
   // revizia veghei (GetAll /00058, număr MAI MARE) nu face din originalul listat /00010 o „versiune nouă” (bugul designului 1)
   const ga = rand('Caiet.pdf', P(58), { fisier_path: '3/atribuire/raspunsuri/CN_Caiet.pdf' })
   const g = inv0([ga])
@@ -471,6 +475,63 @@ Deno.test('mutaPeIdentic (D1, F5 îngustat): doar înlocuitul FĂRĂ nume de cod
   assert.equal(mutaPeIdentic(rand('Planse (CN1095546-00036).pdf', P(36)), false), false)
   assert.equal(mutaPeIdentic(rand('Caiet (semnat).pdf', P(10)), false), true)
   assert.equal(mutaPeIdentic(rand('Caiet (CN1095546-00036).pdf', ` ${P(36)} `), false), false)   // codul tăiat, ca în inventar
+})
+
+Deno.test('candidatiMutare (R2, r4): fiecare înlocuit mutabil, în ordinea lui decideSeap; fără nume de cod, fără placeholder pe N2, fără ținte deja folosite', () => {
+  // frați cu același nume, ambii FĂRĂ cod în nume (lic. 100: rânduri vechi adoptate prin dovadă de conținut), plus versiunea unuia
+  const a = rand('Anexa 1.pdf', P(5)), b = rand('Anexa (1).pdf', P(6)), v = rand(numeVersiune('Anexa 1.pdf', P(7)), P(7))
+  const l = [{ nume: 'Anexa 1.pdf', cod: P(20) }]
+  const d = decide(inv0([a, b, v]), l, l[0])
+  assert.deepEqual([d.fel, d.inlocuit.id, d.inlocuiti.map((r: Any) => r.id)], ['versiune', v.id, [v.id, b.id, a.id]])
+  // versiunea cu nume de cod iese (linia versiunilor, D1); frații rămân, în ordine
+  assert.deepEqual(candidatiMutare(d, false).map((r: Any) => r.id), [b.id, a.id])
+  assert.deepEqual(candidatiMutare(d, false, new Set([b.id])).map((r: Any) => r.id), [a.id])   // ținta deja folosită în rulare
+  assert.deepEqual(candidatiMutare(d, false, new Set([a.id, b.id])), [])
+  assert.deepEqual(candidatiMutare(d, true), [])                                                   // placeholder pe N2: F1, nu mutare
+  // altă decizie → nimic; forma veche (doar `inlocuit`) → el, dacă e mutabil
+  assert.deepEqual(candidatiMutare({ fel: 'frate', rude: [a.id] }, false), [])
+  assert.deepEqual(candidatiMutare(null, false), [])
+  assert.deepEqual(candidatiMutare({ fel: 'versiune', inlocuit: a }, false), [a])
+  assert.deepEqual(candidatiMutare({ fel: 'versiune', inlocuit: v }, false), [])
+})
+
+Deno.test('R2 (r4): frați republicați integral IDENTIC — fiecare cod se mută pe rândul lui (nu pe înlocuit[0]), un rând = o singură țintă', async () => {
+  // două rânduri cu același nume (#507 /00013 și #508 /00017, conținut diferit); SEAP le republică pe amândouă sub /00025 și /00026,
+  // în ordinea inversă numerelor: /00025 are conținutul lui /00013 (care e inlocuiti[1], nu [0])
+  const N = 'Documentatie modificare.pdf', C = (n: number) => `CN1096532/${String(n).padStart(5, '0')}`
+  const r13 = rand(N, C(13)), r17 = rand(N, C(17))
+  const continut = new Map<number, string>([[r13.id, A], [r17.id, B]])
+  const l = [{ nume: N, cod: C(25) }, { nume: N, cod: C(26) }]
+  const shaDoc = new Map<string, string>([[C(25), A], [C(26), B]])
+  const inv = inv0([r13, r17]), folosite = new Set<number>(), mutate: [number, string][] = []
+  for (const doc of l) {
+    const d = pas(inv, l, doc)
+    assert.equal(d.fel, 'versiune', doc.cod)
+    // ca importul: dovada pe FIECARE candidat mutabil, prima potrivire câștigă
+    const inl: Any = candidatiMutare(d, false, folosite).find((r: Any) => continut.get(r.id) === shaDoc.get(doc.cod))
+    assert.ok(inl, doc.cod)
+    folosite.add(inl.id)
+    const { supa } = fakeSupa({ data: [{ id: inl.id }], error: null })
+    assert.equal(await mutaCod(supa, 3, inv, inl, inl.seap_cod, doc.cod), 'mutat')
+    mutate.push([inl.id, doc.cod])
+  }
+  assert.deepEqual(mutate, [[r13.id, C(25)], [r17.id, C(26)]])
+  assert.deepEqual([inv.peId.get(r13.id).seap_cod, inv.peId.get(r17.id).seap_cod], [C(25), C(26)])
+  // a doua rulare (BD după mutări): ambele coduri sărite pe cod, fără descărcare
+  const inv2 = inv0([{ ...r13, seap_cod: C(25) }, { ...r17, seap_cod: C(26) }])
+  for (const doc of l) assert.equal(pas(inv2, l, doc).motiv, 'cod')
+  // fără R2 (doar înlocuit[0]): /00025 s-ar fi comparat doar cu /00017 → nepotrivire → versiune falsă + anunț
+  const d0 = decide(inv0([rand(N, C(13)), rand(N, C(17))]), l, l[0])
+  assert.equal(d0.inlocuit.seap_cod, C(17))
+  // o mutare eșuată ('ocupat': rândul păstrează codul vechi în inventar) nu lasă al doilea document pe același rând
+  const s13 = rand(N, C(13)), s17 = rand(N, C(17))
+  const inv3 = inv0([s13, s17]), f3 = new Set<number>()
+  const d1 = pas(inv3, l, l[0]), t1: Any = candidatiMutare(d1, false, f3).find((r: Any) => r.id === s13.id)
+  f3.add(t1.id)
+  assert.equal(await mutaCod(fakeSupa({ data: [], error: null }).supa, 3, inv3, t1, C(13), C(25)), 'ocupat')
+  const d2 = pas(inv3, l, l[1])
+  assert.deepEqual(d2.inlocuiti.map((r: Any) => r.id), [s17.id, s13.id])   // s13 e încă înlocuit posibil (cod vechi, ieșit din listă)
+  assert.deepEqual(candidatiMutare(d2, false, f3).map((r: Any) => r.id), [s17.id])
 })
 
 Deno.test('inventarCod / indexLista: doar rândurile reale, coduri tăiate; lista pe cheia de nume', () => {
