@@ -12,15 +12,22 @@ let nextId = 10000
 const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const likeRe = (p: string, f = '') => new RegExp('^' + p.split('%').map(esc).join('.*') + '$', f)
 const DUP = { code: '23505', message: 'duplicate key value violates unique constraint "ofertare_doc_seap_cod_unic"' }
+// Jakarinos r4: coloana poate fi o cale JSON „col->>cheie” (text, ca în PostgREST: null dacă lipsește)
+const val = (r: any, c: string) => {
+  const m = /^(\w+)->>(\w+)$/.exec(c)
+  if (!m) return r[c]
+  const v = r[m[1]]?.[m[2]]
+  return v == null ? null : typeof v === 'object' ? JSON.stringify(v) : String(v)
+}
 class Q {
   t: string; op = 'select'; f: ((r: any) => boolean)[] = []; patch: any = null; rows: any[] | null = null; sel: string | null = null
   rng: [number, number] | null = null; lim: number | null = null; oc: string | null = null; modus = ''
   constructor(t: string) { this.t = t }
   select(c?: string) { this.sel = c ?? '*'; return this }
-  eq(c: string, v: any) { this.f.push((r) => r[c] === v); return this }
-  neq(c: string, v: any) { this.f.push((r) => r[c] !== v); return this }
-  is(c: string, v: any) { this.f.push((r) => (r[c] ?? null) === v); return this }
-  gte(c: string, v: any) { this.f.push((r) => r[c] >= v); return this }
+  eq(c: string, v: any) { this.f.push((r) => val(r, c) === v); return this }
+  neq(c: string, v: any) { this.f.push((r) => val(r, c) !== v); return this }
+  is(c: string, v: any) { this.f.push((r) => (val(r, c) ?? null) === v); return this }
+  gte(c: string, v: any) { this.f.push((r) => val(r, c) >= v); return this }
   not(c: string, op: string, v: any) {
     if (op === 'is') this.f.push((r) => (r[c] ?? null) !== v)
     else if (op === 'like') this.f.push((r) => !likeRe(v).test(String(r[c] ?? '')))
@@ -31,7 +38,10 @@ class Q {
   in(c: string, vs: any[]) { this.f.push((r) => vs.includes(r[c])); return this }
   or(expr: string) {
     const parts = expr.split(',')
-    this.f.push((r) => parts.some((p) => { const [c, op, ...rest] = p.split('.'); const v = rest.join('.'); return op === 'is' ? (r[c] ?? null) === null : op === 'like' ? likeRe(v).test(String(r[c] ?? '')) : false }))
+    this.f.push((r) => parts.some((p) => {
+      const [c, op, ...rest] = p.split('.'); const v = rest.join('.'); const x = val(r, c)
+      return op === 'is' ? (x ?? null) === null : op === 'like' ? likeRe(v).test(String(x ?? '')) : op === 'eq' ? String(x) === v : op === 'lt' ? x != null && String(x) < v : false
+    }))
     return this
   }
   order() { return this }
@@ -62,6 +72,7 @@ class Q {
     if (this.op === 'update') {
       const rows = potr()
       if (this.t === 'ofertare_documente_atribuire' && 'seap_cod' in this.patch) for (const r of rows) if (this.ocupat(r.licitatie_id, this.patch.seap_cod, r.id)) return { data: null, error: DUP }
+      // filtrare + scriere în același pas sincron = un UPDATE condiționat atomic (ca o instrucțiune Postgres)
       for (const r of rows) Object.assign(r, structuredClone(this.patch))
       jurnal.push(`update ${this.t} ${rows.map((r) => r.id).join(',')} ${JSON.stringify(this.patch)}`)
       return { data: this.sel ? rows.map((r) => ({ id: r.id })) : null, error: null }
@@ -70,7 +81,7 @@ class Q {
       if (esecInsert[this.t]) return { data: null, error: { message: esecInsert[this.t] } }
       if (esecInsertProfil.id && this.rows!.some((r) => r.profile_id === esecInsertProfil.id)) return { data: null, error: { message: 'insert refuzat pentru ' + esecInsertProfil.id } }
       for (const r of this.rows!) if (this.t === 'ofertare_documente_atribuire' && this.ocupat(r.licitatie_id, r.seap_cod, null)) return { data: null, error: DUP }
-      const noi = this.rows!.map((r) => ({ id: nextId++, ...structuredClone(r) }))
+      const noi = this.rows!.map((r) => ({ id: nextId++, ...(this.t === 'notifications' ? { created_at: new Date(Date.now()).toISOString() } : {}), ...structuredClone(r) }))
       tab.push(...noi)
       jurnal.push(`insert ${this.t} ${noi.map((r) => r.nume_original ?? r.cale ?? r.id).join(',')}`)
       const data = noi.map((r) => ({ id: r.id }))

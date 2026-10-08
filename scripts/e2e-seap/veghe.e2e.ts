@@ -19,6 +19,10 @@ let hImport: any = null
 let mailStatus = 200
 let corpuriImport: any[] = []
 let apeluriLista = 0, esecListaDeLa = Infinity
+// Jakarinos r4: Resend cu Idempotency-Key — o cheie deja trimisă cu succes (24 h) întoarce același răspuns fără mail nou
+let cheiMail: string[] = []
+const cheiTrimise = new Set<string>()
+let laMail: (() => void) | null = null
 const stOrig = globalThis.setTimeout
 globalThis.setTimeout = ((fn: any, _ms?: number, ...a: any[]) => stOrig(fn, 0, ...a)) as any
 globalThis.fetch = (async (u: any, init?: any) => {
@@ -38,7 +42,15 @@ globalThis.fetch = (async (u: any, init?: any) => {
     if (importReal) return await hImport(new Request(url, init))
     return new Response(JSON.stringify(raspunsImport(b)))
   }
-  if (url.includes('api.resend.com')) { const b = JSON.parse(init.body); log.push('mail ' + b.subject + ' to=' + b.to.join(',')); return new Response('{}', { status: mailStatus }) }
+  if (url.includes('api.resend.com')) {
+    const b = JSON.parse(init.body), k = init.headers?.['Idempotency-Key'] ?? ''
+    cheiMail.push(k)
+    if (k && cheiTrimise.has(k)) { log.push('resend-idem ' + b.subject); return new Response('{}', { status: 200 }) }
+    log.push('mail ' + b.subject + ' to=' + b.to.join(','))
+    laMail?.()
+    if (mailStatus === 200 && k) cheiTrimise.add(k)
+    return new Response('{}', { status: mailStatus })
+  }
   if (url.includes('/api/seap-import')) { log.push('vercel ' + JSON.parse(init.body).licitatie_id); return new Response('{}') }
   return new Response('?', { status: 404 })
 }) as any
@@ -56,7 +68,7 @@ function reset() {
   deplasare = 0
   for (const k of Object.keys(F.db)) F.db[k].length = 0
   F.storage.clear(); F.jurnal.length = 0; liste = {}; getAll = {}; log = []; raspunsImport = () => ({ continua: false }); importReal = false; fis = {}
-  mailStatus = 200; corpuriImport = []; apeluriLista = 0; esecListaDeLa = Infinity; for (const k of Object.keys(F.esecInsert)) delete F.esecInsert[k]
+  mailStatus = 200; corpuriImport = []; apeluriLista = 0; esecListaDeLa = Infinity; cheiMail = []; cheiTrimise.clear(); laMail = null; for (const k of Object.keys(F.esecInsert)) delete F.esecInsert[k]
   delete F.esecInsertProfil.id; for (const k of Object.keys(F.esecMaybe)) delete F.esecMaybe[k]; for (const k of Object.keys(F.esecSelect)) delete F.esecSelect[k]
   F.db.profiles.push({ id: 'owner', is_owner: true, email: 'o@x' })
 }
@@ -514,4 +526,61 @@ Deno.test('veghe Jakarinos r3: ownerii necitiți (2 eșecuri) → clopoțelul ve
   const pe = (pid: string) => notifVersiuni().filter((x) => x.profile_id === pid).length
   assert.deepEqual([pe('owner'), pe('creator'), pe('resp')], [1, 1, 1])
   assert.equal(docV(v).seap_meta.de_anuntat, false)
+})
+
+Deno.test('veghe Jakarinos r4: cronul și „Verifică acum” SIMULTAN pe aceeași versiune → o singură notificare per destinatar și un singur mail', async () => {
+  reset()
+  const v = versiuneNeanuntata()
+  F.db.profiles.push({ id: 'resp', is_owner: false, email: 'r@x' })
+  F.db.ofertare_licitatii[0].responsabil_id = 'resp'
+  const [a, b] = await Promise.all([run(), run({ Authorization: 'Bearer SERVICE' }, { licitatie_id: 1 })])
+  const pe = (pid: string) => notifVersiuni().filter((x) => x.profile_id === pid).length
+  assert.deepEqual([pe('owner'), pe('resp')], [1, 1], 'o notificare per destinatar')
+  assert.equal(log.filter((l) => l.startsWith('mail')).length, 1, log.join(' | '))
+  const ra = a.j.raport[0], rb = b.j.raport[0]
+  assert.deepEqual([ra.versiuni_anuntate + rb.versiuni_anuntate, ra.versiuni_in_lucru + rb.versiuni_in_lucru], [1, 1])
+  const m = docV(v).seap_meta
+  assert.deepEqual([m.de_anuntat, typeof m.notificat_la, typeof m.mail_la, m.revendicare, m.revendicat_pana], [false, 'string', 'string', undefined, undefined])
+})
+
+Deno.test('veghe Jakarinos r4: revendicare vie a altei rulări → versiunea nu se anunță aici; revendicare expirată (rulare oprită) → se reia', async () => {
+  reset()
+  const v = versiuneNeanuntata({ revendicare: 'alta', revendicat_pana: Date.now() + 60000 })
+  const { j } = await run()
+  assert.equal(notifVersiuni().length, 0); assert.ok(!log.some((l) => l.startsWith('mail')), log.join(' | '))
+  assert.deepEqual([j.raport[0].versiuni_in_lucru, docV(v).seap_meta.revendicare, docV(v).seap_meta.de_anuntat], [1, 'alta', true])
+  // rularea care o revendicase s-a oprit: după expirare, următoarea o anunță și eliberează revendicarea
+  docV(v).seap_meta.revendicat_pana = Date.now() - 1
+  log = []
+  const { j: j2 } = await run()
+  assert.equal(notifVersiuni().length, 1); assert.equal(log.filter((l) => l.startsWith('mail')).length, 1)
+  assert.deepEqual([j2.raport[0].versiuni_anuntate, docV(v).seap_meta.de_anuntat, docV(v).seap_meta.revendicare], [1, false, undefined])
+})
+
+Deno.test('veghe Jakarinos r4: revendicarea pierdută între trimitere și confirmare (expirată, preluată de altă rulare) → confirmarea NU se scrie', async () => {
+  reset()
+  const v = versiuneNeanuntata()
+  laMail = () => { docV(v).seap_meta = { ...docV(v).seap_meta, revendicare: 'alta', revendicat_pana: Date.now() + 60000 } }
+  const { j } = await run()
+  assert.ok(j.raport.some((r: any) => /^#\d+: revendicarea a expirat/.test(r.anunt_versiune_nemarcat ?? '')), JSON.stringify(j.raport))
+  const m = docV(v).seap_meta
+  assert.deepEqual([m.revendicare, m.de_anuntat, m.notificat_la, m.mail_la], ['alta', true, undefined, undefined])
+})
+
+Deno.test('veghe Jakarinos r4: rulare oprită după trimitere, înainte de confirmare → reluarea NU dublează clopoțelul (același conținut) și trimite mailul cu aceeași cheie (Resend nu-l retrimite)', async () => {
+  reset()
+  const v = versiuneNeanuntata()
+  await run()
+  assert.equal(notifVersiuni().length, 1); assert.equal(log.filter((l) => l.startsWith('mail')).length, 1)
+  const cheie = cheiMail[0]
+  assert.match(cheie, /^seap-veghe\/1\/[0-9a-f]{64}$/)
+  // ca și cum confirmarea n-ar fi apucat să se scrie: versiunea restantă, revendicarea expirată
+  docV(v).seap_meta = { cod_sursa: 'lista', inlocuieste: 'Caiet.pdf', de_anuntat: true, revendicare: 'oprita', revendicat_pana: Date.now() - 1 }
+  log = []
+  const { j } = await run()
+  assert.equal(notifVersiuni().length, 1, 'fără a doua notificare')
+  assert.ok(!log.some((l) => l.startsWith('mail')), log.join(' | '))
+  assert.deepEqual([cheiMail.length, cheiMail[1]], [2, cheie])
+  assert.ok(log.some((l) => l.startsWith('resend-idem')))
+  assert.deepEqual([docV(v).seap_meta.de_anuntat, j.raport[0].versiuni_anuntate], [false, 1])
 })

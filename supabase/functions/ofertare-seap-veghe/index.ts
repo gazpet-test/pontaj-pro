@@ -94,6 +94,9 @@
 //   amandoua, iar rularea urmatoare reia doar canalul cazut. E4: un lant al drumului principal oprit de la de > 0 primeste O runda
 //   de la 0 pe a doua trecere (coduri.import_de_la_0). E6: importul pornit doar pentru versiuni merge cu fara_rezerva_arhiva.
 //   Raportul spune si versiuni_anuntate (butonul „Verifica SEAP acum” din UI, E7).
+//   Jakarinos r4: rulari simultane (cron + „Verifica acum”) — anuntul unei versiuni il da doar rularea care a revendicat-o atomic
+//   (seap_meta.revendicare / revendicat_pana, expira in 10 min), confirmarea trece doar cu revendicarea inca a ei; mailul poarta
+//   Idempotency-Key (amprenta continutului), clopotelul versiunilor nu se repeta cu acelasi continut in 24 h (versiuni_in_lucru).
 //
 // notifications.modul are CHECK pe lista fixa de module - pentru ofertare valoarea
 // corecta e 'Comercial'. Cu 'ofertare' insertul pica silentios.
@@ -128,6 +131,34 @@ const RUNDE_IMPORT = 4;
 // a doua trecere (importurile tacute): un apel de import poate tine pana la ~240 s, iar platforma opreste functia pe la ~400 s —
 // dupa acest prag nu se mai porneste niciunul (raman pentru rularea urmatoare; nimic de anuntat nu se pierde, anunturile s-au dat)
 const BUGET_TACUT_MS = 150000;
+
+// Jakarinos r4 (P1): cronul si „Verifica acum” pot rula SIMULTAN pe aceeasi licitatie — ambele vedeau aceeasi versiune restanta
+// si o anuntau amandoua (2 notificari + 2 mailuri). Acum anuntul unei versiuni il da DOAR rularea care a REVENDICAT-o: un UPDATE
+// conditionat pe rand (de_anuntat inca true, canalele exact cum le-a citit rularea, nicio revendicare vie) = o singura instructiune,
+// deci din doua rulari simultane castiga una. Revendicarea expira dupa REVENDICARE_MS (peste durata maxima a unei rulari, ~400 s):
+// o rulare oprita intre revendicare si confirmare nu blocheaza anuntul — il reia prima rulare de dupa expirare. Confirmarea
+// canalelor se scrie doar cat revendicarea e inca a acestei rulari si o elibereaza (si cand niciun canal n-a reusit).
+const REVENDICARE_MS = 10 * 60 * 1000;
+async function revendicaAnunt(supa: any, d: any, token: string): Promise<{ meta?: Record<string, unknown>; eroare?: string }> {
+  const m0 = d.seap_meta || {}, acum = Date.now();
+  const meta = { ...m0, revendicare: token, revendicat_pana: acum + REVENDICARE_MS };
+  let q = supa.from('ofertare_documente_atribuire').update({ seap_meta: meta }).eq('id', d.id).eq('seap_meta->>de_anuntat', 'true');
+  for (const c of ['notificat_la', 'mail_la']) q = m0[c] ? q.eq(`seap_meta->>${c}`, String(m0[c])) : q.is(`seap_meta->>${c}`, null);
+  // revendicat_pana = milisecunde (13 cifre): comparatia text a lui ->> are aceeasi ordine ca cea numerica
+  const { data, error } = await q.or(`seap_meta->>revendicat_pana.is.null,seap_meta->>revendicat_pana.lt.${acum}`).select('id');
+  if (error) return { eroare: error.message };
+  return Array.isArray(data) && data.length === 1 ? { meta } : {};
+}
+async function confirmaAnunt(supa: any, d: any, token: string, meta: Record<string, unknown>): Promise<string | null> {
+  const fin: Record<string, unknown> = { ...meta };
+  delete fin.revendicare; delete fin.revendicat_pana;
+  const { data, error } = await supa.from('ofertare_documente_atribuire').update({ seap_meta: fin })
+    .eq('id', d.id).eq('seap_meta->>revendicare', token).select('id');
+  if (error) return error.message;
+  return Array.isArray(data) && data.length === 1 ? null : 'revendicarea a expirat si a preluat-o alta rulare - canalele de acum nu s-au confirmat';
+}
+const sha256Hex = async (s: string) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 
 // ANTI-BUG 16.09.2026 (tichet TKT-2026-0258, Oana): SEAP intoarce 403 INTERMITENT,
 // pe acelasi URL, cu aceleasi anteturi, la o secunda distanta. Masurat: 403,403,200 pe
@@ -225,6 +256,8 @@ Deno.serve(async (req: Request) => {
   const SUPA_URL = Deno.env.get('SUPABASE_URL')!;
   const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supa = createClient(SUPA_URL, SERVICE);
+  // r4: identitatea rularii pentru revendicarea anunturilor de versiune (vezi revendicaAnunt)
+  const tokenRulare = crypto.randomUUID();
 
   const antet = req.headers.get('x-veghe-secret');
   let cuSecret = false;
@@ -657,7 +690,16 @@ Deno.serve(async (req: Request) => {
     // E2 (r5, Jakarinos P1): confirmarea e PE CANAL — seap_meta.notificat_la (clopotelul) si seap_meta.mail_la (mailul) se pun
     // separat, doar cand canalul a reusit; de_anuntat = false abia cand le are pe amandoua. La rularea urmatoare, o versiune deja
     // notificata intra DOAR in mail (si invers): listele de versiuni se fac pe canal, fara a doua notificare / al doilea mail.
-    const deAnuntat = inventarOk ? (acum || []).filter(versiuneDeAnuntat) : [];
+    // Jakarinos r4 (P1): se anunta DOAR versiunile revendicate de aceasta rulare (revendicaAnunt) — o versiune revendicata acum de
+    // alta rulare (cron / „Verifica acum”) e a ei: aici nu intra in niciun canal (versiuni_in_lucru in raport).
+    const deAnuntat: any[] = [];
+    let versiuniInLucru = 0;
+    if (inventarOk) for (const d of (acum || []).filter(versiuneDeAnuntat)) {
+      const rv = await revendicaAnunt(supa, d, tokenRulare);
+      if (rv.meta) deAnuntat.push({ ...d, seap_meta: rv.meta });
+      else if (rv.eroare) raport.push({ licitatie: lic.nr_anunt, anunt_versiune_nerevendicat: `#${d.id}: ${rv.eroare}` });
+      else versiuniInLucru++;
+    }
     // Jakarinos r3 (P1): cu destinatari necunoscuti (owneri / profiluri necitite), clopotelul versiunilor se AMANA intreg — trimis
     // doar unei parti, s-ar repeta la reluare pentru cei care l-au primit deja. Raspunsurile / termenul pleaca oricum (ca inainte).
     const destinatariNecunoscuti = !!eOwners || !!eValizi;
@@ -728,7 +770,17 @@ Deno.serve(async (req: Request) => {
     let notifOk = !eOwners && !eValizi;
     for (const m of mesaje) {
       if (!catre.size) continue;
-      const { error: eN } = await supa.from('notifications').insert([...catre].map((pid) => ({
+      // r4 (idempotenta clopotelului): dupa o rulare oprita intre INSERT si confirmare (revendicarea expira, versiunea se reia),
+      // acelasi mesaj al versiunilor (titlu + text identice, ultimele 24 h) nu mai pleaca la cei care l-au primit deja. Tabelul
+      // notifications n-are cheie de idempotenta — continutul e identitatea. Citirea esuata → lotul intreg (dublura > anunt pierdut).
+      let lot = [...catre];
+      if (m === mesajVersiuni) {
+        const { data: deja, error: eD } = await supa.from('notifications').select('profile_id').in('profile_id', lot)
+          .eq('title', m.title).eq('message', m.message).gte('created_at', new Date(Date.now() - 864e5).toISOString());
+        if (!eD) { const au = new Set((deja || []).map((x: any) => x.profile_id)); lot = lot.filter((pid) => !au.has(pid)); }
+        if (!lot.length) continue;
+      }
+      const { error: eN } = await supa.from('notifications').insert(lot.map((pid) => ({
         profile_id: pid, type: m.type, modul: 'Comercial',
         title: m.title, message: m.message, link_to: '/ofertare',
       })));
@@ -770,13 +822,16 @@ Deno.serve(async (req: Request) => {
           <p>Citeste-le si treci intrebarea si raspunsul in <b>Clarificari</b>. Daca raspunsul schimba o cerinta, actualizeaza cerinta din registru.</p>
           <p><a href="https://pontaj-pro-sooty.vercel.app/ofertare">Deschide modulul Ofertare</a></p>`;
         try {
+          const corp = JSON.stringify({
+            from: 'PontajPRO <rapoarte@gazpet.ro>', to,
+            subject: `SEAP — raspuns de la autoritate: ${lic.nr_anunt}`, html,
+          });
+          // r4 (idempotenta mailului): cheia = amprenta continutului — acelasi mail retrimis in 24 h (rulare reluata dupa o oprire
+          // intre trimitere si confirmare, sau doua rulari simultane cu acelasi continut) Resend il intoarce fara sa-l trimita iar
           const r = await fetch('https://api.resend.com/emails', {
             method: 'POST',
-            headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              from: 'PontajPRO <rapoarte@gazpet.ro>', to,
-              subject: `SEAP — raspuns de la autoritate: ${lic.nr_anunt}`, html,
-            }),
+            headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'Idempotency-Key': `seap-veghe/${lic.id}/${await sha256Hex(corp)}` },
+            body: corp,
           });
           mail = r.ok ? `trimis catre ${to.join(', ')}` : `esuat HTTP ${r.status}`;
           mailOk = r.ok && destinatariOk;
@@ -788,7 +843,8 @@ Deno.serve(async (req: Request) => {
 
     // E2: fiecare versiune primeste data canalului reusit acum (notificat_la / mail_la); de_anuntat = false (+ anuntat_la) doar
     // cand le are pe AMANDOUA. Un canal cazut ramane pentru rularea urmatoare, singur (fara sa repete canalul reusit). O eroare
-    // de scriere aici = canalul se repeta la rularea urmatoare. versiuni_anuntate = versiunile anuntate acum pe macar un canal.
+    // de scriere aici = canalul se repeta dupa expirarea revendicarii (r4: mailul identic il opreste cheia Resend, clopotelul identic
+    // verificarea pe continut). versiuni_anuntate = versiunile anuntate acum pe macar un canal.
     let versiuniAnuntate = 0;
     for (const d of deAnuntat) {
       const m0 = d.seap_meta || {}, cand = new Date().toISOString();
@@ -797,14 +853,14 @@ Deno.serve(async (req: Request) => {
       if (!meta.mail_la && mailOk) meta.mail_la = cand;
       const nou = meta.notificat_la !== m0.notificat_la || meta.mail_la !== m0.mail_la;
       if (nou) versiuniAnuntate++;
-      // ambele canale confirmate (acum sau mai demult) → flag-ul se stinge; altfel, fara canal nou, ramane pentru rularea urmatoare
+      // ambele canale confirmate (acum sau mai demult) → flag-ul se stinge; altfel ramane pentru rularea urmatoare
       if (meta.notificat_la && meta.mail_la) { meta.de_anuntat = false; meta.anuntat_la = cand; }
-      else if (!nou) continue;
-      const { error: eF } = await supa.from('ofertare_documente_atribuire').update({ seap_meta: meta }).eq('id', d.id);
-      if (eF) raport.push({ licitatie: lic.nr_anunt, anunt_versiune_nemarcat: `#${d.id}: ${eF.message}` });
+      // r4: scrierea elibereaza MEREU revendicarea (si fara canal nou) si trece doar cat revendicarea e inca a acestei rulari
+      const eF = await confirmaAnunt(supa, d, tokenRulare, meta);
+      if (eF) raport.push({ licitatie: lic.nr_anunt, anunt_versiune_nemarcat: `#${d.id}: ${eF}` });
     }
 
-    raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length, raspunsuri: raspunsuri.length, raspunsuri_aduse: raspunsuriAduse.length, raspunsuri_eroare: raspunsuriEroare, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, versiuni_anuntate: versiuniAnuntate, nume: noi.slice(0, 10), coduri });
+    raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length, raspunsuri: raspunsuri.length, raspunsuri_aduse: raspunsuriAduse.length, raspunsuri_eroare: raspunsuriEroare, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, versiuni_anuntate: versiuniAnuntate, versiuni_in_lucru: versiuniInLucru, nume: noi.slice(0, 10), coduri });
     // importul a rulat deja mai sus (coduri.import) cand existau documente noi sau versiuni — nu inca o data in a doua trecere
     if (coduri.import == null && deRezolvat) tacute.push({ id: lic.id, coduri, camp: 'import' });
     // E4: lantul drumului principal s-a oprit de la de > 0 → O runda de la 0 pe a doua trecere (o singura data pe licitatie)

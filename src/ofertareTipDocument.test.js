@@ -613,7 +613,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     for (const x of ['if (!eDupaEdge && noi.some((n) => !areNume(urcateAcum, n))) {', 'const ramase = inventarOk ? noi.filter((n) => !areNume(urcate, n)) : [];', 'const cheiNoi = new Set(noi.flatMap((n) => cheiSeap(n)));', 'for (const n of ramase) {'])
       expect(src.includes(x), x).toBe(true)
     // anunțul: din inventarul de DUPĂ import (rânduri reale cu de_anuntat), înainte de notificări și mail; flag-ul se stinge după
-    const iAcum = src.indexOf('const { data: acum, error: eAcum } = await inventar('), iDe = src.indexOf('const deAnuntat = inventarOk ? (acum || []).filter(versiuneDeAnuntat) : [];')
+    const iAcum = src.indexOf('const { data: acum, error: eAcum } = await inventar('), iDe = src.indexOf('if (inventarOk) for (const d of (acum || []).filter(versiuneDeAnuntat)) {')   // r4: + revendicarea
     const iNot = src.indexOf("from('notifications').insert("), iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iF = src.indexOf('meta.de_anuntat = false; meta.anuntat_la = cand;')
     expect([iAcum > 0, iDe > iAcum, iNot > iDe, iMail > iNot, iF > iMail]).toEqual([true, true, true, true, true])
     // gol acceptat: versiunea neadusă rămâne în raport (coduri.versiuni + erorile importului) și se reia la rularea următoare
@@ -633,7 +633,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // clopoțelul: doar inserturile mesajului care poartă versiunile confirmă canalul
     expect(src).toMatch(/if \(versiuniNotif\.length\) mesajVersiuni = m;/)
     // Jakarinos r2: un singur INSERT per mesaj (atomic, toti destinatarii); destinatarii necititi nu confirma canalul
-    expect(src).toMatch(/let notifOk = !eOwners && !eValizi;\s*for \(const m of mesaje\) \{\s*if \(!catre\.size\) continue;\s*const \{ error: eN \} = await supa\.from\('notifications'\)\.insert\(\[\.\.\.catre\]\.map\(/)
+    expect(src).toMatch(/let notifOk = !eOwners && !eValizi;\s*for \(const m of mesaje\) \{\s*if \(!catre\.size\) continue;[\s\S]{0,900}?let lot = \[\.\.\.catre\];[\s\S]{0,900}?const \{ error: eN \} = await supa\.from\('notifications'\)\.insert\(lot\.map\(/)
     expect(src).not.toMatch(/for \(const pid of catre\)/)
     expect(src).toMatch(/await supa\.from\('profiles'\)\.select\('id'\)\.in\('id', \[\.\.\.catre\]\)/)
     expect(src).toMatch(/let \{ data: owners, error: eOwners \} = await supa\.from\('profiles'\)/)
@@ -690,6 +690,22 @@ describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea int
     expect(veg).toMatch(/const destinatariNecunoscuti = !!eOwners \|\| !!eValizi;\s*const versiuniNotif = destinatariNecunoscuti \? \[\] :/)
     const iV = veg.indexOf('const destinatariNecunoscuti'), iO = veg.indexOf('let { data: owners, error: eOwners }'), iP = veg.indexOf("const { data: valizi, error } = await supa.from('profiles')")
     expect(iO).toBeGreaterThan(0); expect(iP).toBeGreaterThan(iO); expect(iV).toBeGreaterThan(iP)
+  })
+  it('veghea (Jakarinos r4): rulări simultane — anunțul versiunii doar din revendicarea atomică a rândului; confirmare condiționată de revendicare; mail cu Idempotency-Key', () => {
+    const veg = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
+    // revendicarea: UPDATE condiționat (de_anuntat încă true, canalele cum au fost citite, nicio revendicare vie) — o instrucțiune
+    expect(veg).toMatch(/\.update\(\{ seap_meta: meta \}\)\.eq\('id', d\.id\)\.eq\('seap_meta->>de_anuntat', 'true'\);/)
+    expect(veg).toMatch(/q = m0\[c\] \? q\.eq\(`seap_meta->>\$\{c\}`, String\(m0\[c\]\)\) : q\.is\(`seap_meta->>\$\{c\}`, null\);/)
+    expect(veg).toMatch(/q\.or\(`seap_meta->>revendicat_pana\.is\.null,seap_meta->>revendicat_pana\.lt\.\$\{acum\}`\)\.select\('id'\)/)
+    expect(veg).toMatch(/const REVENDICARE_MS = 10 \* 60 \* 1000;/)
+    // doar versiunile revendicate de rularea asta intră în canale; confirmarea trece doar cu revendicarea încă a ei
+    expect(veg).toMatch(/if \(inventarOk\) for \(const d of \(acum \|\| \[\]\)\.filter\(versiuneDeAnuntat\)\) \{\s*const rv = await revendicaAnunt\(supa, d, tokenRulare\);\s*if \(rv\.meta\) deAnuntat\.push/)
+    expect(veg).toMatch(/\.eq\('id', d\.id\)\.eq\('seap_meta->>revendicare', token\)\.select\('id'\);/)
+    expect(veg).toMatch(/const eF = await confirmaAnunt\(supa, d, tokenRulare, meta\);/)
+    expect(veg).not.toMatch(/else if \(!nou\) continue;/)
+    // idempotența livrării: cheia Resend = amprenta conținutului; clopoțelul versiunilor fără repetare la același conținut (24 h)
+    expect(veg).toMatch(/'Idempotency-Key': `seap-veghe\/\$\{lic\.id\}\/\$\{await sha256Hex\(corp\)\}`/)
+    expect(veg).toMatch(/if \(m === mesajVersiuni\) \{\s*const \{ data: deja, error: eD \} = await supa\.from\('notifications'\)\.select\('profile_id'\)\.in\('profile_id', lot\)/)
   })
   it('importul: după 3 descărcări per fișier căzute la rând, o singură încercare (bugetul rămâne pentru rezerva arhivă)', () => {
     expect(imp).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget, esecuriLaRand >= 3 \? 1 : 4\);/)
