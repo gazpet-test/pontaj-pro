@@ -24,11 +24,13 @@ DECLARE
   v_n bigint;
   v_acum text;
   v_scrisa text;
-  -- amprente FIXATE (r3, Copilot P16-1): valoarea așteptată nu stă doar pe obiectul pe care îl protejează. Una e cea a
-  -- harness-ului PG16 local; cea de pe producție se adaugă după apply-ul 20261021a (citită read-only), în același PR,
-  -- înainte de merge. Până atunci, pe producție revenirea refuză (fail-closed).
+  -- amprente FIXATE (r3 Copilot P16-1, r4 Jakarinos J18-1): valoarea așteptată nu stă doar pe obiectul pe care îl
+  -- protejează. Amprenta e aceeași în harness pe PG16.14 și pe PG17 (producția = PG17.6). ÎNAINTE de apply se confirmă pe
+  -- producție printr-un dry-run (migrarea într-o tranzacție anulată, amprenta citită din COMMENT); dacă diferă, se adaugă
+  -- aici și perechea se re-revizuiește ÎNAINTE de apply. După apply: revenirea se probează pe producție tot în tranzacție
+  -- anulată (BEGIN … ROLLBACK), pe tabelul încă gol, înainte de seed.
   c_amprente text[] := ARRAY[
-    '8421b4a8b61b0b2bda8f3dbcd2a8fe96'  -- harness PG16 local (scripts/test_conturi_registru.sh)
+    'bab5804e11b95236844c090d90aabd1b'  -- harness local PG16.14 și PG17 (identică; scripts/test_conturi_registru.sh)
   ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres

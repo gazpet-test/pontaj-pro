@@ -105,6 +105,11 @@ SELECT teste.e('T7s observații obișnuite acceptate (fără parolă aici, consu
 SELECT teste.eroare('T7t url cu gazdă goală și „:” (J17-3)', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://:')$$, 'check');
 SELECT teste.eroare('T7u url cu port nenumeric (J17-3)', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://x.ro:abc')$$, 'check');
 SELECT teste.eroare('T7v url cu gazdă care începe cu punct', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://.x.ro/')$$, 'check');
+SELECT teste.eroare('T7x port 65536 (J18-2)', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://x.ro:65536')$$, 'check');
+SELECT teste.eroare('T7y port 0', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://x.ro:0/')$$, 'check');
+SELECT teste.eroare('T7z IPv4 invalid 999.999.999.999 (J18-2)', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://999.999.999.999')$$, 'check');
+SELECT teste.eroare('T7za IPv4 scurt 1.2.3', $$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'x', 'https://1.2.3/')$$, 'check');
+SELECT teste.e('T7zb IPv4 valid + port 65535 acceptat', teste.n($$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('retea', 'Router', 'HTTP://192.168.1.1:65535/admin')$$) = 1);
 SELECT teste.e('T7w per câmp, nu concatenat (J17-2): „Proton Pass” + „Contact: IT” acceptat', teste.n($$INSERT INTO public.conturi_registru (categorie, serviciu, observatii, url)
   VALUES ('aplicatii', 'Proton Pass', 'Contact: IT', 'https://x.ro:8443/a#b')$$) = 1);
 SELECT teste.e('T7l url cu @ în query acceptat', teste.n($$INSERT INTO public.conturi_registru (categorie, serviciu, url) VALUES ('altele', 'ok2', 'https://x.ro/p?e=a@b.ro')$$) = 1);
@@ -121,7 +126,7 @@ SELECT teste.e('T8 updated_at actualizat de trigger', (SELECT updated_at > now()
 
 -- ═══ T9 service_role (edge) vede tot — BYPASSRLS, ca pe live ═══
 SET ROLE service_role;
-SELECT teste.e('T9 service_role vede toate rândurile', (SELECT count(*) FROM public.conturi_registru) = 6);
+SELECT teste.e('T9 service_role vede toate rândurile', (SELECT count(*) FROM public.conturi_registru) = 7);
 RESET ROLE;
 
 DO $f$ BEGIN RAISE NOTICE 'TESTE SQL: TOATE OK'; END $f$;

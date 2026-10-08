@@ -15,7 +15,8 @@
 --     (filtrat de RLS), service_role tot.
 --   - updated_at prin funcția existentă public.set_updated_at() (amprentă verificată, nu o atingem).
 --   - CHECK-uri: categorie din listă; serviciu cu cel puțin o literă/cifră; url strict https?://<gazdă>[:port][/?#…] — gazda
---     doar litere/cifre/„.”/„-” (deci fără „@”, slash-uri în plus, backslash), portul doar cifre (r2 J16-2, r3 J17-3); lungimi;
+--     doar litere/cifre/„.”/„-” (deci fără „@”, slash-uri în plus, backslash), portul 1–65535, gazda numerică doar IPv4
+--     valid (r2 J16-2, r3 J17-3, r4 J18-2/P17-2); lungimi;
 --     locatie_ids fără NULL-uri și cel mult 20.
 --   - AMPRENTA tabelului (coloane+tipuri+default-uri+ACL pe coloane, constrângeri, politici, trigger-ul complet
 --     — pg_get_triggerdef, inclusiv WHEN —, indecși, drepturi pe tabel și secvență, proprietățile secvenței identity, owner,
@@ -67,7 +68,12 @@ BEGIN
     categorie   text NOT NULL CHECK (categorie IN ('utilitati','aplicatii','institutii','firma','retea','altele')),
     serviciu    text NOT NULL CHECK (serviciu ~ '[[:alnum:]]' AND char_length(serviciu) <= 200),
     url         text CHECK (url IS NULL OR (url ~* '^https?://[[:alnum:]]([[:alnum:].-]*[[:alnum:]])?(:[0-9]{1,5})?([/?#][^[:space:]]*)?$'
-                                             AND strpos(url, chr(92)) = 0 AND char_length(url) <= 500)),
+                                             AND strpos(url, chr(92)) = 0 AND char_length(url) <= 500
+                                             -- r4 (J18-2/P17-2): portul 1–65535; o gazdă numerică trebuie să fie IPv4 valid
+                                             AND coalesce(substring(lower(url) FROM '^https?://[^/?#:]+:([0-9]{1,5})')::int, 1) BETWEEN 1 AND 65535
+                                             AND (substring(lower(url) FROM '^https?://([^/?#:]+)') !~ '^[0-9.]+$'
+                                                  OR substring(lower(url) FROM '^https?://([^/?#:]+)')
+                                                     ~ '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$'))),
     utilizator  text CHECK (utilizator IS NULL OR char_length(utilizator) <= 200),
     titular     text CHECK (titular IS NULL OR char_length(titular) <= 200),
     cod_client  text CHECK (cod_client IS NULL OR char_length(cod_client) <= 100),

@@ -100,12 +100,12 @@ OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" 2>&1)" && ese
 grep -q "nearmată" <<<"$OUT" || esec "6a refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
 OUT="$(revenire)" && esec "6b revenire cu rânduri a trecut"
 grep -q "date reale" <<<"$OUT" || esec "6b refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
-[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 6 ] || esec "6b rândurile au dispărut"
+[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 7 ] || esec "6b rândurile au dispărut"
 # 6f (review intern P1): rulare GREȘITĂ cu psql -f simplu — autocommit, fără ON_ERROR_STOP, fără -1, nearmată și armată
 #    pe sesiune (fără tranzacție): nimic nu se pierde, tabelul și rândurile rămân
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -f "$ROLLBACK" >/dev/null 2>&1 || true
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -c "SELECT set_config('gazpet.revenire_20261021a', 'CONTURI_REGISTRU_SCOATE:' || txid_current(), false)" -f "$ROLLBACK" >/dev/null 2>&1 || true
-[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 6 ] || esec "6f psql -f simplu a șters date"
+[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 7 ] || esec "6f psql -f simplu a șters date"
 q "CREATE VIEW public.v_conturi_test AS SELECT id FROM public.conturi_registru" >/dev/null
 q "DELETE FROM public.conturi_registru" >/dev/null
 OUT="$(revenire)" && esec "6c revenire cu view dependent a trecut"

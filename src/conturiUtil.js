@@ -19,9 +19,18 @@ export const LIMITE = { serviciu: 200, url: 500, utilizator: 200, titular: 200, 
 // data:, https:////user:parola@…, https://:, https://x.ro:abc) nu devine link și nu se salvează. Același tipar ca CHECK-ul
 // din BD (r2 J16-2, r3 J17-3).
 const URL_SIGUR = /^https?:\/\/[\p{L}\p{N}](?:[\p{L}\p{N}.-]*[\p{L}\p{N}])?(?::\d{1,5})?(?:[/?#]\S*)?$/iu
+const IPV4 = /^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/
 const urlParsabil = (u) => { try { const x = new URL(u); return !x.username && !x.password && /^https?:$/.test(x.protocol) } catch { return false } }
+// aceleași reguli ca CHECK-ul din BD (r4, J18-2/P17-2): portul 1–65535 (new URL acceptă și 0), gazda numerică doar IPv4 valid
+// (new URL acceptă și forme scurte ca 1.2.3, pe care BD le refuză)
+const gazdaPortOk = (u) => {
+  const m = /^https?:\/\/([^/?#:]+)(?::(\d{1,5}))?/i.exec(u)
+  if (!m) return false
+  if (m[2] !== undefined && (Number(m[2]) < 1 || Number(m[2]) > 65535)) return false
+  return !/^[0-9.]+$/.test(m[1]) || IPV4.test(m[1])
+}
 export const urlSigur = (u) => typeof u === 'string' && URL_SIGUR.test(u.trim()) && !u.includes('\\')
-  && u.trim().length <= LIMITE.url && urlParsabil(u.trim())
+  && u.trim().length <= LIMITE.url && urlParsabil(u.trim()) && gazdaPortOk(u.trim())
 
 // Plasă de siguranță: textul pare să conțină o parolă („parola: …”, „parola contului: …”, „PIN-ul: …”, „pass=…”,
 // „?password=” într-un link). Nu e o garanție, doar o oprire pentru greșeala de a lipi parola din Excel în registrul fără
