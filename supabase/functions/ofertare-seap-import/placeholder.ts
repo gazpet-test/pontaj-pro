@@ -5,7 +5,11 @@
 // UPDATE-ul trece doar dacă rândul e ÎNCĂ placeholder (alt drum — workerul NAS — l-ar fi putut completa între timp). Înainte,
 // „Anexa (1).pdf” și „Anexa 1.pdf” dintr-un ZIP (aceeași cheie de nume, conținut diferit) scriau amândouă în același rând:
 // al doilea îl înlocuia pe primul, iar obiectul primului rămânea fără rând. Același tratament ca urca() din worker/ofertare/seap.ts.
-export type Scriere = { id: number | null; completat: boolean; eroare?: string }
+// Audit #4 var. B (08.10.2026): codul SEAP deja pe alt rând (indexul unic ofertare_doc_seap_cod_unic — alt drum l-a adus între
+// timp) = „deja prezent”, nu eroare: { duplicat: true }, iar apelantul șterge obiectul abia urcat. Placeholder-ul rămâne consumat.
+import { eDuplicatCod } from '../_shared/codSeap.mjs'
+
+export type Scriere = { id: number | null; completat: boolean; eroare?: string; duplicat?: true }
 
 // deno-lint-ignore no-explicit-any
 export async function scrieDocument(supa: any, rand: Record<string, unknown>, cheie: string, placeholders: Map<string, number>): Promise<Scriere> {
@@ -14,11 +18,11 @@ export async function scrieDocument(supa: any, rand: Record<string, unknown>, ch
     placeholders.delete(cheie)
     const { data, error } = await supa.from('ofertare_documente_atribuire').update(rand).eq('id', idPh)
       .or('fisier_path.is.null,fisier_path.like.%/neincarcat/%').select('id')
-    if (error) return { id: null, completat: false, eroare: error.message }
+    if (error) return eDuplicatCod(error) ? { id: null, completat: false, duplicat: true } : { id: null, completat: false, eroare: error.message }
     if (Array.isArray(data) && data.length === 1) return { id: data[0].id as number, completat: true }
     // completat între timp de alt drum → rând nou, nu suprascriere
   }
   const { data, error } = await supa.from('ofertare_documente_atribuire').insert(rand).select('id').maybeSingle()
-  if (error) return { id: null, completat: false, eroare: error.message }
+  if (error) return eDuplicatCod(error) ? { id: null, completat: false, duplicat: true } : { id: null, completat: false, eroare: error.message }
   return { id: (data?.id ?? null) as number | null, completat: false }
 }

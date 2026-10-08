@@ -52,6 +52,9 @@
 //    gresit tastat de cine l-a pus in SEAP) era catalogat non-PDF, sarit de la citire SI
 //    urcat cu contentType octet-stream. Formularul propunerii tehnice a zacut necitit de la
 //    inceput. Acum se verifica si semnatura reala: orice PDF incepe cu octetii %PDF-.
+// 7. NUMELE NU E IDENTITATE (audit #4 var. B, Razvan 08.10.2026; anti-bug Racari 16.09): o republicare sub ACELASI nume,
+//    cu alt continut, era sarita in tacere de dedup-ul pe nume. Acum decide codul SEAP (noticeDocumentCode) inainte de
+//    descarcare — regulile in ../_shared/codSeap.mjs; fara cod, regula pe nume de azi. Rezerva DownloadArchive ramane doar pe nume.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { randManifest, sha256Hex, MANIFEST_CONFLICT, type ManifestRand } from './manifest.ts';
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume } from '../_shared/identitateFisier.mjs';
@@ -61,6 +64,7 @@ import { curataOrfani } from './orfani.ts';
 import { Flux, fluxDinBuf, parcurgeZip } from '../_shared/zipFlux.mjs';
 import { toatePaginile } from '../_shared/paginat.mjs';
 import { scrieDocument } from './placeholder.ts';
+import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, copiiDinManifest, ADOPTIE, ALT_CONTINUT } from '../_shared/codSeap.mjs';
 import { autorizeaza } from './acces.ts';
 
 const SEAP = 'https://e-licitatie.ro/api-pub';
@@ -81,6 +85,9 @@ const PRAG_MARE = 20e6;   // peste asta: lasam fisierul pe seama functiei de pe 
 // mari ar urca zeci de GB intr-un singur document, fiindca bugetul se verifica doar intre documente. Peste plafon (sau peste
 // bugetul de timp) intrarile ramase se sar, iar ZIP-ul intreg merge la extractorul izolat de pe NAS.
 const MAX_ZIP_INLINE = 3 * PRAG_MARE;
+// audit #4 (review PR-1): octetii cititi din Storage pentru candidatii UNUI document la verificarea pe continut (anti-bug 3:
+// memoria e cumulativa pe rulare). Se citesc doar candidatii cu ACEEASI marime ca documentul; peste plafon = necunoscut.
+const PLAFON_CANDIDATI = PRAG_MARE;
 // segment ÎNTREG (ca în worker): „__MACOSX_documentatie.pdf” nu e gunoi (audit Jakarinos 07.10, #18)
 const JUNK_RE = /(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db|desktop\.ini)(\/|$)/i;
 const estePlaceholder = (d: any) => !d.fisier_path || String(d.fisier_path).includes('/neincarcat/');
@@ -185,11 +192,15 @@ Deno.serve(async (req: Request) => {
   }
 
   const t0 = Date.now();
-  const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[], manifest_randuri: 0, avertismente: [] as string[] };
+  const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[], manifest_randuri: 0, avertismente: [] as string[],
+    // audit #4 var. B: sarite pe cod, coduri adoptate pe randuri vechi, versiuni / frati noi, ramase pe regula veche
+    sarite_cod: 0, coduri_adoptate: [] as { id: number; cod: string }[], versiuni_noi: [] as string[], frati: [] as string[], coduri_ambigue: [] as string[], coduri_instabile: null as string | null,
+    // intrarile peste 20 MB din ZIP-urile documentelor: ZIP-ul pleaca intreg la NAS, care le aduce (nu sunt „sarite”)
+    lasate_pentru_nas: [] as string[] };
 
   // inventarele pe pagini, fail-closed (audit Jakarinos #21): o listă trunchiată / o eroare NU e „nimic în platformă”
   const { data: dejaAre, error: eInv } = await toatePaginile((de: number, la: number) => supa.from('ofertare_documente_atribuire')
-    .select('id, nume_original, fisier_path').eq('licitatie_id', licitatieId).order('id').range(de, la));
+    .select('id, nume_original, fisier_path, seap_cod, tip, size_bytes, seap_meta').eq('licitatie_id', licitatieId).order('id').range(de, la));
   if (eInv) return json({ error: `inventarul documentelor nu s-a putut citi: ${eInv.message}` }, 500);
   const urcate = new Set((dejaAre || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
   // fișierele din ZIP-urile desfăcute aici (07.10.2026, review PR #641 + Copilot NO-GO r1 pe #643): înainte, o potrivire pe
@@ -200,15 +211,23 @@ Deno.serve(async (req: Request) => {
   if (eMan) return json({ error: `manifestul nu s-a putut citi: ${eMan.message}` }, 500);
   const identitate = stareIdentitate((dejaAre || []).filter((d: any) => !estePlaceholder(d)), shaDovedit(manUrcat || []), cheieNume);
   const placeholders = new Map((dejaAre || []).filter(estePlaceholder).map((d: any) => [cheieRand(d.nume_original), d.id]));
+  // audit #4 var. B: inventarul pe cod (doar randuri reale); copiii de arhiva dovediti din manifest nu primesc cod pe nume
+  const inv = inventarCod(dejaAre || [], { cheieRand, cheiSeap: (n: string) => cheiSeapCu(n, cheieNume), copii: copiiDinManifest(manUrcat || [], dejaAre || []) });
 
-  const scrie = async (rand: any, nume: string, numeSeap: string | null = null) => {
+  const scrie = async (rand: any, nume: string, numeSeap: string | null = null): Promise<{ id: number | null; duplicat?: true }> => {
     // placeholder-ul se completează o singură dată, doar dacă e încă placeholder (./placeholder.ts, audit #2);
     // var. B: „X (semnat).pdf” completează placeholder-ul veghei pus pe numele SEAP („X.pdf.p7m”)
     const cheie = placeholders.has(cheieRand(nume)) || !numeSeap ? cheieRand(nume) : cheieRand(numeSeap);
     const r = await scrieDocument(supa, rand, cheie, placeholders);
-    if (r.eroare) { raport.erori.push(`${nume}: scriere rand - ${r.eroare}`); return null; }
+    // audit #4: codul SEAP e deja pe alt rand (alt drum l-a adus intre timp) = prezent, nu eroare
+    if (r.duplicat) {
+      raport.sarite_cod++; raport.sarite_existente++;
+      raport.avertismente.push(`${nume}: codul SEAP e deja pe alt rând (adus între timp de alt drum) — sărit`);
+      return { id: null, duplicat: true };
+    }
+    if (r.eroare) { raport.erori.push(`${nume}: scriere rand - ${r.eroare}`); return { id: null }; }
     if (r.completat) raport.completate++; else raport.adaugate++;
-    return r.id;
+    return { id: r.id };
   };
 
   // R6: manifest de integritate (SHA-256 pe byte-ii urcati). Se strange in memorie si se scrie la final;
@@ -254,8 +273,9 @@ Deno.serve(async (req: Request) => {
   // nota = semnatura nedesfacuta / detasata (document, nu arhiva): „ignorat” cu nota, nu PDF fals (audit #20).
   // numeSeap = numele de dinainte de desfacere (placeholder-ul veghei). caleManifest = calea din arhiva (audit #14: aceeasi
   // semnificatie ca in worker — `cale` = intrarea sursa, nu numele final sub care s-a urcat).
+  // seap = campurile de cod SEAP (audit #4: campuriCod pe nivelul de sus; la copiii unei versiuni doar aparut_ulterior, NICIODATA cod)
   const urcaFisier = async (numeFinal: string, buf: Uint8Array, arhivaCheie: string | null = null, dinZip: string | null = null,
-    nota: string | null = null, numeSeap: string | null = null, caleManifest: string | null = null) => {
+    nota: string | null = null, numeSeap: string | null = null, caleManifest: string | null = null, seap: Record<string, unknown> | null = null) => {
     // numele SAU semnatura reala - vezi anti-bug 6
     const estePdf = /\.pdf$/i.test(numeFinal) || areSemnaturaPdf(buf);
     const safe = numeFinal.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-180);
@@ -264,7 +284,7 @@ Deno.serve(async (req: Request) => {
       .upload(path, buf, { contentType: estePdf ? 'application/pdf' : 'application/octet-stream' });
     if (eUp) { nerecuperate++; raport.erori.push(`${numeFinal}: ${eUp.message}`); await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, null, eUp.message); return false; }
     const deCitit = !nota && (estePdf || esteArhiva(numeFinal));
-    const docId = await scrie({
+    const sc = await scrie({
       licitatie_id: licitatieId, fisier_path: path, nume_original: numeFinal,
       tip: dinZip ? tipInArhiva(numeFinal, indiciuArhiva(dinZip)) : ghicesteTip(numeFinal), size_bytes: buf.length,
       // 07.10.2026: o arhivă (rar / 7z, ZIP din rezerva DownloadArchive sau arhivă din ZIP) intră „neprocesat”, fără notă:
@@ -273,10 +293,21 @@ Deno.serve(async (req: Request) => {
       status_procesare: deCitit ? 'neprocesat' : 'ignorat',
       eroare: deCitit ? null : (nota || 'non-PDF - ramane ca fisier (docx/xls se citesc cu ofertare-word-text)'),
       sursa: 'seap',
+      ...(seap || {}),   // o versiune isi poate aduce tipul mostenit (codSeap.mjs, tipMostenit)
     }, numeFinal, numeSeap);
+    if (sc.duplicat) {
+      // codul e deja pe alt rand: obiectul abia urcat nu ramane orfan; fara manifest si fara „nerecuperat” (e prezent)
+      try { await supa.storage.from('ofertare').remove([path]); } catch (_) { /* il ia curatenia orfanilor dupa o ora */ }
+      urcatiOcteti += buf.length;
+      return true;
+    }
+    const docId = sc.id;
     await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, docId, docId ? null : 'rand BD nescris');
     urcate.add(cheieRand(numeFinal));
-    if (docId) adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
+    if (docId) {
+      adaugaDocument(identitate, numeFinal, docId, await sha256Hex(buf));
+      adaugaRand(inv, { id: docId, nume_original: numeFinal, fisier_path: path, seap_cod: (seap?.seap_cod as string) ?? null, dinRulare: true });
+    }
     else nerecuperate++;   // fișier în Storage fără rând în BD = nu e în platformă (Jakarinos r2 pe #651)
     urcatiOcteti += buf.length;
     return !!docId;
@@ -289,7 +320,8 @@ Deno.serve(async (req: Request) => {
   // -- CALEA PRINCIPALA: fisier cu fisier (15.09.2026) ----------------------------
   const qs = `initNoticeId=${lic.c_notice_id}&sysNoticeTypeId=${lic.sys_notice_type_id}`;
   const CHEI_LISTE = ['dfNoticeDocs', 'contractingStrategyDocs', 'duaeDocs', 'decisionDocs', 'exAnteDocs'];
-  let documente: { nume: string; url: string }[] = [];
+  // cod = noticeDocumentCode (audit #4 var. B). Fara dedup in lista: pozitia (next_index) inseamna acelasi lucru la fiecare apel
+  let documente: { nume: string; url: string; cod: string }[] = [];
   let cookie = '';
   let perFisierOk = false;
   let motivRezerva = '';
@@ -304,7 +336,7 @@ Deno.serve(async (req: Request) => {
         for (const f of (d?.[cheie] || [])) {
           const nume = String(f?.noticeDocumentName || '');
           const link = String(f?.noticeDocumentUrl || '');
-          if (nume && link) documente.push({ nume, url: link });
+          if (nume && link) documente.push({ nume, url: link, cod: codDin(f) });
         }
       }
       if (!documente.length) motivRezerva = 'lista de documente goala';
@@ -313,34 +345,171 @@ Deno.serve(async (req: Request) => {
     motivRezerva = 'GetDfNoticeSectionFiles: ' + String((e as Error)?.message || e);
   }
 
+  // audit #4 var. B: indexul listei COMPLETE a acestui apel (nu felia de la de_la_index) + siguranta pe coduri instabile
+  const lista = indexLista(documente, (n: string) => cheiSeapCu(n, cheieNume));
+  const instabil = coduriInstabile(inv, lista, documente, (n: string) => cheiSeapCu(n, cheieNume));
+  if (instabil) { inv.instabile = true; raport.coduri_instabile = instabil; raport.erori.push(instabil); nerecuperate++; }
+  // sha-ul unor randuri existente (verificarea pe continut, decizia 4 = A; fratele identic): intai dovada din manifest / urcarea
+  // din rularea asta (fara cost); apoi marimea — alta marime decat documentul (desfacut sau brut) = alt continut, fara citire;
+  // abia la ACEEASI marime obiectul din Storage, cu plafon pe document (PLAFON_CANDIDATI) si octetii in buget (anti-bug 3).
+  // Se opreste la prima potrivire. Nu arunca: necunoscut = null (atunci ramane regula pe nume, nu se ghiceste).
+  const shaStocat = new Map<number, string | null>();
+  const shaDinStorage = async (r: any): Promise<string | null> => {
+    if (shaStocat.has(r.id)) return shaStocat.get(r.id) ?? null;
+    let sha: string | null = null;
+    try {
+      const marime = Number(r.size_bytes);
+      if (r.fisier_path && Number.isFinite(marime) && marime > 0 && marime <= PRAG_MARE) {
+        const { data, error } = await supa.storage.from('ofertare').download(r.fisier_path);
+        if (!error && data && data.size <= PRAG_MARE) {
+          const b = new Uint8Array(await data.arrayBuffer());
+          urcatiOcteti += b.length;
+          sha = await sha256Hex(b);
+        }
+      }
+    } catch (_) { sha = null; }
+    shaStocat.set(r.id, sha);
+    return sha;
+  };
+  const shaRanduri = async (randuri: any[], shas: Set<string>, lungimi: number[]): Promise<Map<number, string | null>> => {
+    const m = new Map<number, string | null>();
+    for (const r of randuri) {
+      const d = r.id != null ? identitate.shaDoc.get(r.id) : null;
+      if (!d) continue;
+      m.set(r.id, d);
+      if (shas.has(d)) return m;
+    }
+    let citit = 0;
+    for (const r of randuri) {
+      if (m.has(r.id)) continue;
+      const marime = Number(r.size_bytes);
+      if (!(marime > 0)) { m.set(r.id, null); continue; }
+      if (!lungimi.includes(marime)) { m.set(r.id, ALT_CONTINUT); continue; }
+      if (citit + marime > PLAFON_CANDIDATI) { m.set(r.id, null); continue; }
+      citit += marime;
+      const sha = await shaDinStorage(r);
+      m.set(r.id, sha);
+      if (sha && shas.has(sha)) return m;
+    }
+    return m;
+  };
+  const areDovada = (r: any) => !!(r?.id != null && identitate.shaDoc.get(r.id));
+  // documente fara cod / noi cazute pe drumul per fisier: dupa rezerva se verifica daca le-a adus ea (altfel = lipsa)
+  const esuatePerFisier: string[] = [];
+
   if (documente.length) {
     perFisierOk = true;
     const antetDesc = cookie ? { ...SEAP_HDR, Cookie: cookie } : SEAP_HDR;
     let i = 0;
-    for (const doc of documente) {
+    for (const doc0 of documente) {
       if (i < deLaIndex) { i++; continue; }
-      const numeCurat = eArhivaP7m(doc.nume) ? doc.nume : numeDesfacut(doc.nume);
-      if (dejaSubUnNume(urcate, doc.nume) || JUNK_RE.test(doc.nume)) {
-        if (dejaSubUnNume(urcate, doc.nume)) raport.sarite_existente++;
+      if (JUNK_RE.test(doc0.nume)) {
+        if (dejaSubUnNume(urcate, doc0.nume)) raport.sarite_existente++;
         i++;
+        continue;
+      }
+      // audit #4 var. B: codul SEAP decide INAINTE de descarcare (../_shared/codSeap.mjs). Orice iesire timpurie face i++.
+      const dec: any = decideSeap(inv, lista, doc0, cheiSeapCu(doc0.nume, cheieNume), { adoptie: ADOPTIE });
+      if (doc0.cod) inv.decise.add(doc0.cod);
+      if (dec.fel === 'fara_cod' && dejaSubUnNume(urcate, doc0.nume)) {   // fara cod: regula pe nume de azi
+        raport.sarite_existente++;
+        i++;
+        continue;
+      }
+      if (dec.fel === 'sari') {
+        raport.sarite_existente++;
+        if (dec.motiv === 'cod' || dec.motiv === 'dublu') raport.sarite_cod++;
+        else if (dec.motiv !== 'semnatura') raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): ${dec.motiv === 'volum' ? 'volum RAR, nu se versionează' : 'rămas pe regula veche (după nume)'}`);
+        i++;
+        continue;
+      }
+      if (dec.fel === 'adopta') {
+        // rand vechi fara cod, unic pe nume (L1 = A) sau urcat sub numele cu cod „N (COD).ext”: codul pe el, fara descarcare
+        const a = await adoptaCod(supa, licitatieId, inv, dec.rand, doc0.cod);
+        if (a === 'adoptat') raport.coduri_adoptate.push({ id: dec.rand.id, cod: doc0.cod });
+        else if (typeof a === 'object') raport.avertismente.push(`${doc0.nume}: codul SEAP ${doc0.cod} nu s-a putut înregistra pe #${dec.rand.id} — ${a.eroare}`);
+        raport.sarite_existente++;
+        i++;
+        if (bugetDepasit() && i < documente.length) { continua = true; break; }
+        continue;
+      }
+      // versiune / frate / verificare: numele distinct „N (COD).ext” e hotarat pe numele SEAP brut, inainte de desfacere
+      const doc = dec.fel === 'versiune' || dec.fel === 'frate' || dec.fel === 'verifica' ? { ...doc0, nume: dec.nume as string } : doc0;
+      // rezerva DownloadArchive (doar pe nume) nu poate aduce un astfel de document: numele vechi e deja in platforma
+      const strict = doc !== doc0;
+      const numeCurat = eArhivaP7m(doc.nume) ? doc.nume : numeDesfacut(doc.nume);
+      const esec = () => { if (strict) nerecuperate++; else { esuatePerFisier.push(doc0.nume); motivRezerva ||= 'descarcari per fisier esuate'; } };
+      // verificare pe randuri vechi (4 = A): daca NICIUN candidat n-are dovada sau marime cunoscuta, rezultatul e sigur
+      // „ramane pe nume” — fara descarcarea din SEAP si fara citiri din Storage (altfel la fiecare rulare, degeaba)
+      if (!verificabil(dec, areDovada)) {
+        raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): conținutul candidaților nu se poate dovedi (fără dovadă, fără mărime) — rămas pe regula veche`);
+        raport.sarite_existente++;
+        i++;
+        if (bugetDepasit() && i < documente.length) { continua = true; break; }
         continue;
       }
       try {
         const link = doc.url.startsWith('http') ? doc.url : `https://e-licitatie.ro/${doc.url.replace(/^\/+/, '')}`;
         const rd = await fetch(link, { headers: antetDesc });
-        if (!rd.ok) { raport.erori.push(`${numeCurat}: descarcare HTTP ${rd.status}`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
+        if (!rd.ok) { raport.erori.push(`${numeCurat}: descarcare HTTP ${rd.status}`); esec(); i++; continue; }
         const cl = Number(rd.headers.get('content-length') || 0);
         if (cl > PRAG_MARE) {
+          if (dec.fel === 'verifica') raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): neverificat, mare (${(cl / 1e6).toFixed(0)}MB) — rămas pe regula veche`);
+          else if (strict) { nerecuperate++; raport.erori.push(`${numeCurat}: versiune/frate nouă peste 20 MB — /api/seap-import o sare după nume; o aduce workerul NAS (licitații GO) sau manual`); }
           // la fel ca la arhiva: fisierele mari le duce /api/seap-import (Vercel)
-          raport.lasate_pentru_vercel.push(`${numeCurat} (${(cl / 1e6).toFixed(0)}MB)`);
+          else raport.lasate_pentru_vercel.push(`${numeCurat} (${(cl / 1e6).toFixed(0)}MB)`);
           try { await rd.body?.cancel(); } catch (_) { /* deja inchis */ }
           i++;
           continue;
         }
         const brut = new Uint8Array(await rd.arrayBuffer());
-        if (!brut.length) { raport.erori.push(`${numeCurat}: fisier gol`); motivRezerva ||= 'descarcari per fisier esuate'; i++; continue; }
+        if (!brut.length) { raport.erori.push(`${numeCurat}: fisier gol`); esec(); i++; continue; }
         const ds = desface(brut, doc.nume);
         const { buf, nume: numeFinal } = ds;
+
+        // verificarea pe continut (decizia 4 = A / copii de arhiva): acelasi sha → codul pe ACEL rand, fara upload. Candidatii se
+        // citesc DUPA descarcare si dupa pragul de marime (nimic citit degeaba), doar cei cu aceeasi marime (shaRanduri).
+        let decF: any = dec;
+        const lungimi = [buf.length, brut.length];
+        const shas = dec.fel === 'verifica' || dec.fel === 'frate' ? [await sha256Hex(buf), ...(brut !== buf ? [await sha256Hex(brut)] : [])] : [];
+        if (dec.fel === 'verifica') {
+          decF = rezolvaVerificare(dec, shas, await shaRanduri(dec.candidati, new Set(shas), lungimi));
+          if (decF.fel === 'adopta' || decF.fel === 'sari') {
+            if (decF.fel === 'adopta') {
+              const a = await adoptaCod(supa, licitatieId, inv, decF.rand, doc0.cod);
+              if (a === 'adoptat') raport.coduri_adoptate.push({ id: decF.rand.id, cod: doc0.cod });
+              else if (typeof a === 'object') raport.avertismente.push(`${doc0.nume}: codul SEAP ${doc0.cod} nu s-a putut înregistra pe #${decF.rand.id} — ${a.eroare}`);
+            } else raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): ${decF.motiv === 'volum' ? 'volum RAR, nu se versionează' : 'conținutul unui candidat nu s-a putut citi — rămas pe regula veche'}`);
+            raport.sarite_existente++;
+            urcatiOcteti += brut.length;   // anti-bug 3: memoria e cumulativa pe rulare, si fara upload
+            i++;
+            if (bugetDepasit() && i < documente.length) { continua = true; break; }
+            continue;
+          }
+        }
+        // fratele cu ACELASI continut ca un rand existent (acelasi fisier listat de doua ori cu coduri diferite, un document GetAll pus si
+        // in lista principala): nu se dubleaza — ar fi un rand „neprocesat” de citit inca o data, care tine poarta. Codul lui nu are
+        // rand (P = A): se re-descarca la rularile urmatoare, cat timp e listat (raportat in avertismente).
+        if (decF.fel === 'frate') {
+          const rude = (decF.rude || []).map((id: number) => inv.peId.get(id)).filter(Boolean);
+          const shaR = await shaRanduri(rude, new Set(shas), lungimi);
+          const identic = rude.find((r: any) => shas.includes(shaR.get(r.id) as string));
+          if (identic) {
+            raport.avertismente.push(`${doc0.nume} (${doc0.cod}): conținut identic cu #${identic.id} „${identic.nume_original}” — nu se dublează (codul nu are rând)`);
+            raport.sarite_existente++;
+            urcatiOcteti += brut.length;   // anti-bug 3
+            i++;
+            if (bugetDepasit() && i < documente.length) { continua = true; break; }
+            continue;
+          }
+        }
+        // campurile de cod: doar pe randul documentului SEAP (nivelul de sus); copiii unei versiuni primesc doar aparut_ulterior
+        const campuri = doc0.cod && !inv.instabile ? campuriCod(doc0.cod, decF, { esteArhiva: esteArhiva(numeFinal) }) : null;
+        const planCopii = decF.fel === 'versiune' ? { aparut_ulterior: true } : null;
+        const nou = (ok: boolean) => {
+          if (ok && decF.fel === 'versiune') raport.versiuni_noi.push(numeFinal);
+          else if (ok && decF.fel === 'frate') raport.frati.push(numeFinal);
+        };
 
         if (eArhivaAdevarata(numeFinal, buf)) {
           // ZIP in interiorul documentului: ACEEASI despachetare si aceleasi nume ca la arhiva
@@ -351,7 +520,8 @@ Deno.serve(async (req: Request) => {
               const nc = eArhivaP7m(h.nume) ? h.nume : numeDesfacut(h.nume);
               if (JUNK_RE.test(h.nume)) return false;
               // „deja” se decide DUPĂ desfacere, pe sha256 (mai jos) — numele și mărimea din antet nu dovedesc conținutul
-              if (h.usize > PRAG_MARE) { necititeDinZip++; raport.lasate_pentru_vercel.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
+              // peste 20 MB: ZIP-ul pleaca intreg la NAS (mai jos), care aduce intrarea — nu e „sarita” (review PR-1)
+              if (h.usize > PRAG_MARE) { necititeDinZip++; raport.lasate_pentru_nas.push(`${nc} (${(h.usize / 1e6).toFixed(0)}MB)`); return false; }
               if (octetiZip + h.usize > MAX_ZIP_INLINE || Date.now() - t0 > BUGET_MS) { necititeDinZip++; return false; }
               octetiZip += h.usize;
               return true;
@@ -377,7 +547,7 @@ Deno.serve(async (req: Request) => {
                 } catch (e) { raport.avertismente.push(`manifest ${h.nume}: ${String((e as Error)?.message || e)}`); }
                 return 'continua';
               }
-              await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume, esteArhiva(r.nume) ? null : r.nota, h.nume, h.nume);
+              await urcaFisier(alegere.nume, r.buf, doc.nume, doc.nume, esteArhiva(r.nume) ? null : r.nota, h.nume, h.nume, planCopii);
               return 'continua';
             },
             (n: string, m: string) => { necititeDinZip++; raport.erori.push(`${n}: ${m}`); },
@@ -392,21 +562,32 @@ Deno.serve(async (req: Request) => {
             raport.erori.push(`${numeCurat}: ZIP interior ${rz.complet ? `cu ${necititeDinZip} intrări necitite aici` : `incomplet (${rz.motiv})`} — urcat întreg, îl despachetează serverul NAS`);
             if (await scrieManifest()) {
               manifest.length = 0;
-              await urcaFisier(numeFinal, buf, null, null, null, doc.nume);
+              await urcaFisier(numeFinal, buf, null, null, null, doc.nume, null, campuri).then(nou);
             } else {
               // dovezile nu s-au putut scrie: ZIP-ul NU pleaca la NAS (l-ar desface fara dovezi → dubluri). Randurile raman
               // in lista (se reincearca la final), iar ZIP-ul se reia la rularea urmatoare (numele lui nu e in platforma).
               nerecuperate++;
               raport.erori.push(`${numeCurat}: dovezile din manifest nu s-au putut scrie — ZIP-ul intreg NU s-a urcat (s-ar dubla la NAS), se reia la rularea urmatoare`);
             }
+          } else if (strict) {
+            // audit #4 var. B: ZIP-ul unei VERSIUNI / al unui FRATE, desfacut complet aici, se urca si INTREG, cu codul — altfel codul
+            // n-ar sta nicaieri (un ZIP desfacut n-are rand), versiunea s-ar re-descarca la fiecare rulare, iar veghea ar pune pe
+            // numele ei un placeholder fals „nu a putut fi adus”. Dovezile copiilor se scriu INAINTE (ca mai sus): bucla NAS ii sare.
+            if (await scrieManifest()) {
+              manifest.length = 0;
+              await urcaFisier(numeFinal, buf, null, null, null, doc.nume, null, campuri).then(nou);
+            } else {
+              nerecuperate++;
+              raport.erori.push(`${numeCurat}: dovezile din manifest nu s-au putut scrie — ZIP-ul versiunii NU s-a urcat întreg, se reia la rularea urmatoare`);
+            }
           }
         } else {
           // o arhiva nedesfacuta urca bruta, „neprocesat”: workerul NAS incearca desfacerea si scrie eroarea vizibil
-          await urcaFisier(numeFinal, buf, null, null, esteArhiva(numeFinal) ? null : ds.nota, doc.nume);
+          await urcaFisier(numeFinal, buf, null, null, esteArhiva(numeFinal) ? null : ds.nota, doc.nume, null, campuri).then(nou);
         }
       } catch (e) {
         raport.erori.push(`${numeCurat}: ${String((e as Error)?.message || e)}`);
-        motivRezerva ||= 'descarcari per fisier esuate';
+        esec();
       }
       i++;
       if (bugetDepasit() && i < documente.length) { continua = true; break; }
@@ -418,6 +599,7 @@ Deno.serve(async (req: Request) => {
   // Se incearca doar daca lista a esuat / a venit goala / un document nu s-a putut aduce.
   const nevoieDeArhiva = !continua && (!perFisierOk || !!motivRezerva);
   let arhivaIncompleta = false;
+  const lasateArhiva = new Set<string>();   // cheile intrarilor lasate pe seama /api/seap-import (peste PRAG_MARE)
   // dovezile ZIP-urilor desfacute inline se scriu INAINTE ca rezerva sa urce arhive intregi (bucla NAS le-ar putea revendica
   // in timpul rularii, fara dovezi → dubluri). Dovezi nescrise → rezerva se AMANA (Jakarinos r2 pe #651): randurile raman in
   // lista (se reincearca la final), rularea nu se declara „adusa”, iar rularea urmatoare reia rezerva.
@@ -452,7 +634,7 @@ Deno.serve(async (req: Request) => {
             if (sarim) {
               if (iArh >= deLaIndexArhiva) {
                 if (dejaSubUnNume(urcate, h.nume)) raport.sarite_existente++;
-                else if (preaMare) raport.lasate_pentru_vercel.push(`${numeCurat} (${(h.usize / 1e6).toFixed(0)}MB)`);
+                else if (preaMare) { raport.lasate_pentru_vercel.push(`${numeCurat} (${(h.usize / 1e6).toFixed(0)}MB)`); lasateArhiva.add(cheieRand(h.nume)).add(cheieNume(h.nume)); }
               }
               iArh++;
               return false;
@@ -478,6 +660,16 @@ Deno.serve(async (req: Request) => {
         try { await res.body?.cancel(); } catch (_) { /* deja inchis */ }
       }
       if (!perFisierOk) index = iArh;
+    }
+  }
+
+  // audit #4 (alaturat): un document fara cod / nou, cazut pe drumul per fisier si neadus nici de rezerva (arhiva indisponibila,
+  // amanata sau incompleta) lipseste — inainte se pierdea tacut, iar licitatia era declarata „adusa”
+  if (!continua) {
+    for (const n of esuatePerFisier) {
+      if (cheiSeapCu(n, cheieNume).some((k: string) => urcate.has(k) || lasateArhiva.has(k))) continue;
+      nerecuperate++;
+      raport.erori.push(`${numeDesfacut(n)}: căzut pe drumul per fișier și neadus nici de rezerva arhivă`);
     }
   }
 

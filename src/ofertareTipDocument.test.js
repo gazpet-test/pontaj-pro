@@ -393,3 +393,131 @@ describe('paritatea cu api/_tipDocument.js (funcțiile Vercel nu importă din af
     }
   })
 })
+
+describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 = A, N = A, M = A, S = B, P = A, 4 = A)', () => {
+  const edge = () => readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+  const veghe = () => readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
+  it('edge: decizia vine din _shared/codSeap.mjs, iar inventarul citește codul (și tipul / mărimea / seap_meta pentru versiuni, verificare, GetAll)', () => {
+    const src = edge()
+    expect(src).toMatch(/import \{[^}]*\bdecideSeap\b[^}]*\} from '\.\.\/_shared\/codSeap\.mjs'/)
+    expect(src).toMatch(/\.select\('id, nume_original, fisier_path, seap_cod, tip, size_bytes, seap_meta'\)\.eq\('licitatie_id', licitatieId\)/)
+    expect(src).toMatch(/documente\.push\(\{ nume, url: link, cod: codDin\(f\) \}\)/)
+    expect(src).not.toMatch(/function (decideSeap|numeVersiune|eDuplicatCod)\s*\(/)   // nicio copie locală a regulilor
+    // lista și inventarul pe cheile SEAP (echivalența .p7s ≡ document): rivalii se văd în ambele ordini (review PR-1, P1)
+    expect(src).toMatch(/const lista = indexLista\(documente, \(n: string\) => cheiSeapCu\(n, cheieNume\)\);/)
+    expect(src).toMatch(/inventarCod\(dejaAre \|\| \[\], \{ cheieRand, cheiSeap: \(n: string\) => cheiSeapCu\(n, cheieNume\),/)
+  })
+  it('edge: pe drumul per fișier numele decide DOAR fără cod; rezerva DownloadArchive rămâne pe nume, fără cod', () => {
+    const src = edge()
+    expect(src).not.toMatch(/if \(dejaSubUnNume\(urcate, doc\.nume\) \|\|/)
+    expect(src).toMatch(/const dec: any = decideSeap\(inv, lista, doc0, cheiSeapCu\(doc0\.nume, cheieNume\), \{ adoptie: ADOPTIE \}\);/)
+    expect(src).toMatch(/if \(dec\.fel === 'fara_cod' && dejaSubUnNume\(urcate, doc0\.nume\)\)/)
+    expect(src).toMatch(/const sarim = iArh < deLaIndexArhiva \|\| dejaSubUnNume\(urcate, h\.nume\)/)
+    expect(src).toMatch(/await urcaFisier\(r\.nume, r\.buf, 'seap:downloadarchive', null, esteArhiva\(r\.nume\) \? null : r\.nota, h\.nume\);/)   // fără al 8-lea argument
+    // semnătura unui document listat: sărită, dar nu „ambiguă”
+    expect(src).toMatch(/else if \(dec\.motiv !== 'semnatura'\) raport\.coduri_ambigue\.push\(/)
+  })
+  it('edge: codul NU ajunge pe copiii ZIP-ului desfăcut inline (doar aparut_ulterior la o versiune); doar nivelul de sus îl primește', () => {
+    const src = edge()
+    const copii = src.split('\n').filter((l) => l.includes('await urcaFisier(alegere.nume'))
+    expect(copii.length).toBe(1)
+    expect(copii[0]).not.toMatch(/campuri|seap_cod/)
+    expect(copii[0]).toMatch(/h\.nume, h\.nume, planCopii\);$/)
+    expect(src).toMatch(/const planCopii = decF\.fel === 'versiune' \? \{ aparut_ulterior: true \} : null;/)
+    expect(src).toMatch(/await urcaFisier\(numeFinal, buf, null, null, null, doc\.nume, null, campuri\)/)
+    expect(src).toMatch(/await urcaFisier\(numeFinal, buf, null, null, esteArhiva\(numeFinal\) \? null : ds\.nota, doc\.nume, null, campuri\)/)
+    expect(src).toMatch(/seap: Record<string, unknown> \| null = null\) => \{/)   // al 8-lea parametru, adăugat la coadă
+    // ZIP-ul unei versiuni / al unui frate, desfăcut complet inline, se urcă și întreg, cu codul — dovezile copiilor ÎNAINTE
+    expect(src).toMatch(/\} else if \(strict\) \{[\s\S]{0,900}?if \(await scrieManifest\(\)\) \{\s*manifest\.length = 0;\s*await urcaFisier\(numeFinal, buf, null, null, null, doc\.nume, null, campuri\)/)
+  })
+  it('edge: intrările peste 20 MB din ZIP-ul unui document merg la NAS (ZIP-ul întreg), nu la „Sărite (prea mari)” (review PR-1)', () => {
+    const src = edge()
+    expect(src).toMatch(/if \(h\.usize > PRAG_MARE\) \{ necititeDinZip\+\+; raport\.lasate_pentru_nas\.push\(/)
+    expect(src).toMatch(/lasate_pentru_nas: \[\] as string\[\]/)
+  })
+  it('edge: codul deja pe alt rând = prezent — obiectul abia urcat se șterge înainte de manifest și nu se numără „nerecuperat”', () => {
+    const src = edge()
+    const iD = src.indexOf('if (sc.duplicat) {'), iR = src.indexOf(".remove([path])", iD), iM = src.indexOf('await noteazaManifest(arhivaCheie, caleManifest ?? numeFinal, buf, docId')
+    expect([iD > 0, iR > iD, iM > iR]).toEqual([true, true, true])
+    expect(src.slice(iD, iM)).not.toMatch(/nerecuperate\+\+/)
+  })
+  it('edge: verificarea pe conținut — nimic citit înainte de descărcare; din Storage doar aceeași mărime, cu plafon pe document și octeții în buget (anti-bug 3)', () => {
+    const src = edge()
+    const bloc = src.slice(src.indexOf('const shaDinStorage = async'), src.indexOf('const shaRanduri = async'))
+    expect(bloc).toMatch(/marime <= PRAG_MARE/)
+    expect(bloc).toMatch(/urcatiOcteti \+= b\.length;/)
+    expect(bloc).toMatch(/\} catch \(_\) \{ sha = null; \}/)
+    const sr = src.slice(src.indexOf('const shaRanduri = async'), src.indexOf('const areDovada ='))
+    expect(sr).toMatch(/if \(!lungimi\.includes\(marime\)\) \{ m\.set\(r\.id, ALT_CONTINUT\); continue; \}/)   // altă mărime = alt conținut, fără citire
+    expect(sr).toMatch(/if \(citit \+ marime > PLAFON_CANDIDATI\) \{ m\.set\(r\.id, null\); continue; \}/)
+    expect(sr).toMatch(/if \(sha && shas\.has\(sha\)\) return m;/)                                          // prima potrivire ajunge
+    // înainte de descărcare doar verificabil (pur, fără citiri); candidații se citesc DUPĂ descărcare și pragul de mărime
+    const iV = src.indexOf('if (!verificabil(dec, areDovada)) {'), iF = src.indexOf('const rd = await fetch(link'), iP = src.indexOf('if (cl > PRAG_MARE) {', iF)
+    const iS = src.indexOf('decF = rezolvaVerificare(dec, shas, await shaRanduri(dec.candidati, new Set(shas), lungimi));')
+    expect([iV > 0, iF > iV, iP > iF, iS > iP]).toEqual([true, true, true, true])
+    expect(src).toMatch(/urcatiOcteti \+= brut\.length;   \/\/ anti-bug 3/)
+  })
+  it('edge: un frate cu ACELAȘI conținut ca un rând existent nu se dublează (fără rând „neprocesat” de citit din nou)', () => {
+    const src = edge()
+    const bloc = src.slice(src.indexOf("if (decF.fel === 'frate') {"), src.indexOf('const campuri = doc0.cod'))
+    expect(bloc).toMatch(/const shaR = await shaRanduri\(rude, new Set\(shas\), lungimi\);/)
+    expect(bloc).toMatch(/nu se dublează/)
+    expect(bloc).toMatch(/i\+\+;[\s\S]*continue;/)
+    expect(bloc).not.toMatch(/urcaFisier/)
+  })
+  it('edge: fiecare ieșire timpurie din bucla per fișier avansează poziția (i++) — next_index rămâne stabil', () => {
+    const src = edge()
+    const bucla = src.slice(src.indexOf('for (const doc0 of documente) {'), src.indexOf('    index = i;\n  }'))
+    expect(bucla.length).toBeGreaterThan(1000)
+    let prec = 0
+    for (const m of bucla.matchAll(/\bcontinue;/g)) {
+      expect(bucla.slice(prec, m.index), `continue la ${m.index}`).toMatch(/\bi\+\+/)
+      prec = m.index + 'continue;'.length
+    }
+  })
+  it('veghea: decide pe cod (aceeași funcție), pornește importul și pentru adopții / frați / verificări; versiunile intră la răspunsuri + mail (M = A)', () => {
+    const src = veghe()
+    expect(src).toMatch(/import \{[^}]*\bdecideSeap\b[^}]*\} from '\.\.\/_shared\/codSeap\.mjs'/)
+    expect(src).toMatch(/const dec: any = decideSeap\(inv, lista, d, cheiSeap\(d\.nume\), \{ adoptie: ADOPTIE \}\);/)
+    expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, \(r: any\) => !!dovezi\.get\(r\.id\)\)\) continue;/)   // fără șanse = fără import degeaba
+    expect(src).toMatch(/noi\.filter\(\(n\) => esteRaspuns\(n\) \|\| versiuni\.has\(n\)\), \.\.\.versiuniAduse, \.\.\.raspunsuriAduse\]/)
+    expect(src).toMatch(/const restul = noi\.filter\(\(n\) => !esteRaspuns\(n\) && !versiuni\.has\(n\)/)
+  })
+  it('veghea (review PR-1, P1): importurile TĂCUTE rulează într-o a doua trecere, DUPĂ toate anunțurile și mailurile, cu buget de timp', () => {
+    const src = veghe()
+    // nimic de anunțat → licitația intră în a doua trecere, fără import aici
+    expect(src).toMatch(/if \(!noi\.length && !raspunsuriAduse\.length && !termen\?\.nou && !areDeAnuntat\) \{[\s\S]{0,300}?if \(deRezolvat\) tacute\.push\(\{ id: lic\.id, coduri \}\);[^\n]*\n\s*continue;/)
+    // în bucla licitațiilor importul se pornește DOAR pentru documente noi
+    expect(src).toMatch(/if \(noi\.length\) coduri\.import = await importa\(lic\.id, false\);/)
+    expect(src).not.toMatch(/noi\.length \|\| deRezolvat/)
+    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iDoi = src.indexOf('for (const t of tacute) t.coduri.import = await importa(t.id, true);')
+    expect([iMail > 0, iDoi > iMail]).toEqual([true, true])
+    expect(src).toMatch(/if \(cuBuget && Date\.now\(\) - t0 > BUGET_TACUT_MS\) return/)
+    // rundele își trec de_la_index (un document care nu converge nu mai oprește toate rundele în același loc)
+    expect(src).toMatch(/body: JSON\.stringify\(\{ licitatie_id: licId, de_la_index: de \}\),/)
+    expect(src).toMatch(/de = Number\(rez\.next_index\) \|\| 0;/)
+  })
+  it('veghea (review PR-1): un JWT de utilizator cere acces la modulul Ofertare (poarta comună), nu doar o sesiune validă', () => {
+    const src = veghe()
+    expect(src).toMatch(/import \{ poartaOfertare \} from '\.\.\/_shared\/poartaOfertare\.ts'/)
+    expect(src).toMatch(/if \(jwt !== SERVICE\) \{\s*const refuz = await poartaOfertare\(req\);\s*if \(refuz\) return refuz;\s*\}/)
+    expect(src).not.toMatch(/anon\.auth\.getUser\(jwt\)/)
+  })
+  it('veghea: nu adoptă coduri (adopția e doar în import), placeholder-ul rămâne FĂRĂ cod; singura scriere nouă = de_anuntat pe versiunile anunțate', () => {
+    const src = veghe()
+    expect(src).not.toMatch(/adoptaCod/)
+    const i = src.indexOf('fisier_path: `${lic.id}/atribuire/neincarcat/')
+    const bloc = src.slice(src.lastIndexOf('.insert({', i), src.indexOf('});', i))
+    expect(bloc).toMatch(/aparut_ulterior: true/)
+    expect(bloc).not.toMatch(/seap_cod/)
+    // versiunea adusă de ORICINE (UI, NAS) se anunță o dată: flag-ul se stinge DUPĂ notificări și mail
+    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iF = src.indexOf('de_anuntat: false, anuntat_la:')
+    expect([iMail > 0, iF > iMail]).toEqual([true, true])
+    expect(src).toMatch(/const versiuneDeAnuntat = \(d: any\) => !estePlaceholder\(d\) && d\?\.seap_meta\?\.de_anuntat === true;/)
+  })
+  it('placeholder.ts: violarea indexului codului = „duplicat”, cu aceeași funcție comună', () => {
+    const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/placeholder.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/import \{ eDuplicatCod \} from '\.\.\/_shared\/codSeap\.mjs'/)
+    expect((src.match(/eDuplicatCod\(error\) \? \{ id: null, completat: false, duplicat: true \}/g) || []).length).toBe(2)
+  })
+})
