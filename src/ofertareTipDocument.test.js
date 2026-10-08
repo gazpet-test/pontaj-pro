@@ -417,10 +417,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // arhivele și volumele RAR rămân pe regula după nume (extrase aici, n-au rând care să țină codul)
     expect(src).toMatch(/const arhiva = esteArhiva\(numeDesfacut\(d\.nume\)\) \|\| !!volumRar\(/)
     expect(src).toMatch(/if \(arhiva \|\| dec\.fel === 'fara_cod'\) \{/)
-    // decis pe cod: scurtătura pe nume (dejaUrcat) nu se aplică; evidența e pe ținta „N (COD).ext”, iar „ok” ține deoparte doar
-    // dovedit pe conținutul de acum, „sarit” niciodată (Copilot r1 pe #659)
-    expect(src).toMatch(/if \(d\.dec\) \{\s*\n(?:\s*\/\/[^\n]*\n)*\s*if \(okDovedit\(ev\)\) \{ raport\.deja\+\+; return false \}/)
-    expect(src).toMatch(/const okDovedit = \(ev: any\) => ev\?\.stare === 'ok' && !!ev\.sha256 && shaDovediteAcum\.has\(ev\.sha256\)/)
+    // decis pe cod: nicio evidență (ok / sarit, pe nume sau pe „N (COD).ext”) nu e scurtătură — doar eroarea cu reîncercările
+    // epuizate îl ține deoparte (Copilot r1 + r2, Jakarinos r8 pe #659)
+    expect(src).toMatch(/if \(d\.dec\) \{\s*\n(?:\s*\/\/[^\n]*\n)*\s*if \(ev\?\.stare === 'eroare' && \(ev\?\.incercari \?\? 0\) >= MAX_INCERCARI/)
+    expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)
     expect(src).toMatch(/campuriCod\(l\.doc\.cod, decF, \{ esteArhiva: false \}\)/)

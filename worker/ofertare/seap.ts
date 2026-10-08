@@ -336,17 +336,13 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     const cod = String(d.cod ?? '').trim()
     if (cod) { rezolvate.add(cod); await inchideCheie(numeVersiune(d.nume, cod), 'ok', motiv) }
   }
-  // Copilot r1 pe #659 (P1): evidența ISTORICĂ nu e dovadă de prezență pentru un document cu cod fără rând propriu. „sarit” nu
-  // dovedește nimic (ex. cod ieșit din listă, apoi reapărut), iar „ok” doar dacă sha-ul ei e încă dovedit în platformă, pe un rând
-  // real (manifest „urcat”) — cazul fratelui identic fără rând propriu (P = A), revalidat la fiecare rulare, fără descărcare
-  const realeIds = new Set((dinBd || []).filter(d => !estePlaceholder(d)).map(d => d.id as number))
-  const shaDovediteAcum = new Set([...identitate.shaDoc].filter(([id, sha]) => sha && realeIds.has(id)).map(([, sha]) => sha as string))
-  const okDovedit = (ev: any) => ev?.stare === 'ok' && !!ev.sha256 && shaDovediteAcum.has(ev.sha256)
+  // Copilot r1 + r2, Jakarinos r8 pe #659 (P1): evidența ISTORICĂ nu e dovadă de prezență pentru un document cu cod fără rând
+  // propriu — nici „sarit” (cod ieșit din listă, apoi reapărut), nici „ok” (un sha egal pe alt document fără legătură, sau evidența
+  // numelui simplu rămasă de la un document redenumit). Prezent = cod pe un rând sau dovedit în rularea asta (rezolvate)
   const prezentPeCod = (d: DocSeap) => {
     const c = String(d.cod ?? '').trim()
     if (!c || esteArhiva(numeDesfacut(d.nume)) || volumRar(d.nume.replace(/\.p7[ms]$/i, ''))) return false
-    if (rezolvate.has(c) || inv.coduri.get(c)?.id != null) return true
-    return okDovedit(evidenta.get(cheieEvidenta(numeVersiune(d.nume, c))))
+    return rezolvate.has(c) || inv.coduri.get(c)?.id != null
   }
   // Jakarinos r1 pe #659 (P1): eroarea / „în curs” de pe NUMELE SEAP („N.pdf”) se închide doar când TOATE documentele listate cu
   // acest nume sunt dovedite în platformă pe cod — ex. primul „N.pdf” căzut la descărcare, recuperat apoi ca frate „N (COD).pdf”:
@@ -444,9 +440,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     const k = cheieEvidenta(d.nume)
     const ev = evidenta.get(k)
     if (d.dec) {
-      // decis pe cod (codul nu e pe niciun rând): numele vechi nu mai e scurtătură; evidența e pe ținta lui. „ok” ține deoparte doar
-      // dovedit pe conținutul de ACUM (okDovedit), „sarit” niciodată (Copilot r1 pe #659, P1: C10 căzut, ieșit din listă, reapărut)
-      if (okDovedit(ev)) { raport.deja++; return false }
+      // decis pe cod (codul nu e pe niciun rând): nicio evidență nu e scurtătură — documentul se reverifică pe conținut la fiecare
+      // rulare (o descărcare SEAP; rudele întâi din manifest), ca în edge (P = A). Doar eroarea cu reîncercările epuizate îl ține deoparte
       if (ev?.stare === 'eroare' && (ev?.incercari ?? 0) >= MAX_INCERCARI && ev?.etapa !== 'identitate') { raport.sarite++; return false }
       return true
     }
