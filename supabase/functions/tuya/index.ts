@@ -80,11 +80,14 @@ Deno.serve(async (req: Request) => {
     // ── LISTA DISPOZITIVE ── uid-urile conturilor legate (config.uids) sau uid-ul proiectului; fallback: dispozitivele proiectului
     let devs: any[] = [];
     const uids: string[] = Array.isArray(cfg.uids) && cfg.uids.length ? cfg.uids : (uid ? [uid] : []);
-    for (const u of uids) { try { const d = await call('GET', `/v1.0/users/${u}/devices`); devs.push(...(d || [])); } catch (e) { /* uid fara drepturi */ } }
+    // erorile per uid nu mai sunt inghitite in tacere (08.10.2026: sync-ul dadea n:0 fara niciun motiv vizibil) — le strangem si le scriem in iot_integrari.eroare
+    const erori: string[] = [];
+    for (const u of uids) { try { const d = await call('GET', `/v1.0/users/${u}/devices`); devs.push(...(d || [])); } catch (e) { erori.push(`uid ${u}: ${(e as Error)?.message || String(e)}`); } }
     if (!devs.length) {
-      try { const d = await call('GET', '/v1.3/iot-03/devices?page_size=100'); devs = d?.list || []; } catch { /* nimic */ }
+      try { const d = await call('GET', '/v1.3/iot-03/devices?page_size=100'); devs = d?.list || []; } catch (e) { erori.push(`iot-03: ${(e as Error)?.message || String(e)}`); }
     }
-    if (actiune === 'lista') return json({ ok: true, uid, n: devs.length, dispozitive: devs.map(d => ({ id: d.id, name: d.name, category: d.category, product_name: d.product_name, online: d.online })) });
+    const avertisment = erori.length ? erori.join(' | ').slice(0, 1000) : null;
+    if (actiune === 'lista') return json({ ok: true, uid, n: devs.length, avertisment, dispozitive: devs.map(d => ({ id: d.id, name: d.name, category: d.category, product_name: d.product_name, online: d.online })) });
 
     // ── STARE PER DISPOZITIV ──
     const out: any[] = [];
@@ -113,8 +116,9 @@ Deno.serve(async (req: Request) => {
       if (disp?.id) await db.from('iot_citiri').insert({ dispozitiv_id: disp.id, valori: { online: v.online, pornit: v.pornit, putere_w: v.putere_w, temp: v.temp, umiditate: v.umiditate, baterie_pct: v.baterie_pct } });
       out.push({ id: d.id, nume: d.name, tip, online: v.online });
     }
-    await setInteg({ stare: 'conectat', eroare: null, conectat_la: new Date().toISOString() });
-    return json({ ok: true, uid, n: out.length, dispozitive: out });
+    // 0 dispozitive + erori la listare = integrarea e „conectata” (token OK) dar listarea a esuat → pastram motivul in `eroare`
+    await setInteg({ stare: 'conectat', eroare: (!out.length && avertisment) ? avertisment : null, conectat_la: new Date().toISOString() });
+    return json({ ok: true, uid, n: out.length, avertisment, dispozitive: out });
   } catch (e) {
     const msg = (e as Error)?.message || String(e);
     await setInteg({ stare: 'eroare', eroare: msg });
