@@ -443,6 +443,8 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/const conflictA = conflictNume\(d, idx, String\(dec\.rand\.nume_original\), false\)/)
     expect(src).toMatch(/const conflictA = conflictNume\(orig, dp\.idx \?\? -1, String\(dec\.rand\.nume_original\), false\)/)
     expect(src).toMatch(/: d\.dec \? `c:\$\{d\.idx\}` : `f:\$\{d\.nume\}`/)
+    // numele comparate și după desfacerea semnăturii (Jakarinos r16 pe #659)
+    expect(src).toMatch(/const cheiFinale = \(n: string\) => new Set\(\[cheieRand\(n\), cheieRand\(numeDesfacut\(n\)\)\]\)/)
     expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)

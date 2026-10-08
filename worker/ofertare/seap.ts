@@ -401,12 +401,15 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   // Doi frați CU cod pe același nume SEAP nu sunt conflict: rezervarea din planificare îl face pe al doilea „N (COD).ext”.
   // La ADOPȚIE (L1 = A, rândul fără cod urcat sub „N (COD).ext”) contează doar documentele listate: un document FĂRĂ cod numit
   // literal ca rândul e chiar documentul acelui rând, nu codul (altfel codul ajunge pe octeții lui).
+  // Numele comparate și DUPĂ desfacerea semnăturii (Jakarinos r16: „N (C2).pdf.p7m” se urcă „N (C2) (semnat).pdf”)
+  const cheiFinale = (n: string) => new Set([cheieRand(n), cheieRand(numeDesfacut(n))])
   const conflictNume = (d: DocSeap, idx: number, tinta: string, randuri = true): string | null => {
-    const k = cheieRand(tinta), propriu = tinta === d.nume
-    const alt = docs.find((x, j) => j !== idx && cheieRand(x.nume) === k
+    const kt = cheiFinale(tinta), propriu = tinta === d.nume
+    const atinge = (n: string) => [...cheiFinale(n)].some(k => kt.has(k))
+    const alt = docs.find((x, j) => j !== idx && atinge(x.nume)
       && (!propriu || !x.cod || esteArhiva(numeDesfacut(x.nume)) || !!volumRar(x.nume.replace(/\.p7[ms]$/i, ''))))
     if (alt) return `numele țintă „${tinta}” coincide cu alt document listat („${alt.nume}”${alt.cod ? `, cod ${alt.cod}` : ', fără cod'})`
-    const rand = propriu || !randuri ? null : (inv.peCheie.get(k) ?? []).find((r: any) => cheieRand(r.nume_original) === k && String(r.seap_cod ?? '').trim() !== String(d.cod).trim())
+    const rand = propriu || !randuri ? null : [...kt].flatMap(k => inv.peCheie.get(k) ?? []).find((r: any) => kt.has(cheieRand(r.nume_original)) && String(r.seap_cod ?? '').trim() !== String(d.cod).trim())
     return rand ? `numele țintă „${tinta}” e deja al rândului ${rand.id != null ? `#${rand.id}` : 'rezervat în rulare'}${rand.seap_cod ? ` (cod ${rand.seap_cod})` : ' (fără cod)'}` : null
   }
   const deAdus: DocPlan[] = []

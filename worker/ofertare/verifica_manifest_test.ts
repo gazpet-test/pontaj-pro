@@ -537,3 +537,16 @@ Deno.test('manifest #13: dovezile existente necitibile → nu se scrie nimic, er
   eq(raport.manifest_scrise, 0)
   assert(raport.erori.some(e => /dovezile existente nu s-au putut citi/.test(e)), raport.erori.join(' | '))
 })
+
+Deno.test('manifest (PR-2, Jakarinos r16): un document FĂRĂ cod numit literal „N (CN1-00002).pdf” nu e fratele lui /2 — /2 lipsă raportat, dovada lui neatinsă', async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 23, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: null }]
+  const dovezi = [{ arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 21, sha256: await sha('alpha'), stare: 'urcat' },
+    { arhiva_cheie: 'n (cn1-00002).pdf', cale: 'N (CN1-00002).pdf', document_id: 23, sha256: await sha('beta'), stare: 'urcat' }]
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' },
+    { nume: 'N.pdf', cod: 'CN1/00002', text: 'omega' }, { nume: 'N (CN1-00002).pdf', text: 'beta' }] })
+  for (const w of scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'))
+    eq([w.document_id, w.sha256, w.stare], [23, await sha('beta'), 'urcat'], 'dovada documentului fără cod neatinsă')
+  eq(raport.lipsa_in_platforma, 1, '/2 lipsă raportat')
+  assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
+})

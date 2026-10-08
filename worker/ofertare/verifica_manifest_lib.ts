@@ -213,7 +213,11 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
             // /2 (încă neadus) ar compara /2 cu documentul lui /1 și i-ar retrograda dovada. Numele cu cod „N (COD).ext” (versiune /
             // frate urcat fără cod) se caută întâi; cu rivali pe nume (alt cod listat sau rândul găsit pe nume are alt cod) =
             // LIPSĂ raportată pe cheia proprie a codului; fără rivali (rând vechi fără cod, nume unic) = pe nume, ca înainte.
-            const dN2 = inPlatforma.get(cheieNume(numeCod))
+            // Jakarinos r16 pe #659 (P1): un rând numit „N (COD).ext” e al codului doar dacă NU poartă alt cod și numele lui nu e al altui
+            // document listat (brut sau desfăcut) — un document FĂRĂ cod numit literal așa e acel document, nu fratele codului
+            const eAltDocListat = (n: string) => docs.some(x => x !== grup[0] && [x.nume, numeDesfacut(x.nume)].some(m => cheieNume(m) === cheieNume(n)))
+            const dN2brut = inPlatforma.get(cheieNume(numeCod))
+            const dN2 = dN2brut && !String(dN2brut.seap_cod ?? '').trim() && !eAltDocListat(dN2brut.nume_original) ? dN2brut : undefined
             // TOATE rândurile reale cu numele lui (nu doar ultimul păstrat de inPlatforma — Jakarinos r6 pe #659): rival = alt cod listat
             // cu același nume sau un rând cu numele lui care poartă alt cod; ambiguu = rival sau mai multe rânduri cu același nume
             const real = (x: DocumentBd) => !!x.fisier_path && !String(x.fisier_path).includes('/neincarcat/')
@@ -248,9 +252,17 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
                 if (st.sha === shaDoc) { identic = x; break }
               }
               const rand = { licitatie_id: licId, arhiva_cheie: c.toLowerCase(), cale: c, marime: locale[0].buf.length, sha256: shaDoc, verificat_la: new Date().toISOString() }
+              // Jakarinos r16 pe #659 (P1): cheia proprie „N (COD).ext” poate fi a ALTUI document (listat cu acel nume, sau cu dovada lui
+              // „urcat” pe ea) — atunci nimic scris peste dovada lui; rezultatul codului se raportează separat
+              const docPrec = precProprie?.document_id != null ? dinBd.find(x => x.id === precProprie.document_id) : undefined
+              const ocupata = eAltDocListat(c) || (precProprie?.stare === 'urcat' && !!docPrec && String(docPrec.seap_cod ?? '').trim() !== cod)
               // identic = legătura pe cheia proprie a codului, ÎNTOTDEAUNA (Jakarinos r6 pe #659: căderea pe nume abandona candidatul
               // confirmat și compara cu documentul altei dovezi, pe care o retrograda)
-              if (identic) {
+              if (ocupata && !necitit && (identic || ambiguu)) {
+                tally.erori.push(`${grup[0].nume} (${cod}): ${identic ? `conținut identic cu #${identic.id}` : 'LIPSĂ în platformă'} — cheia „${c}” e a altui document; nimic scris peste dovada lui`)
+                if (identic) { tally.identice++; potrivite.add(identic.id) } else tally.lipsa++
+              }
+              else if (identic) {
                 randuri.push({ ...rand, document_id: identic.id, stare: 'deja_in_platforma', motiv: `conținut identic cu #${identic.id} — codul SEAP ${cod} nu are rând propriu (frate deduplicat)` })
                 tally.identice++; potrivite.add(identic.id)
               } else if (necitit) tally.erori.push(`${grup[0].nume} (${cod}): Storage indisponibil (${necitit}) la verificarea fratelui — nimic scris`)

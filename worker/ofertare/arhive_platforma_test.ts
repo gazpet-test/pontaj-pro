@@ -1055,6 +1055,31 @@ Deno.test('cod SEAP (PR-2, Jakarinos r15): fratele „N (CN1-00002).pdf” al lu
   })
 })
 
+Deno.test('cod SEAP (PR-2, Jakarinos r16): .p7m — fratele „N (CN1-00002).pdf.p7m” se urcă „N (CN1-00002) (semnat).pdf”, nume al unui document FĂRĂ cod listat → conflict pe numele DESFĂCUT, fără suprascrierea dovezii (ambele ordini)', async () => {
+  await cuMediu(async (_root, s) => {
+    const enc = (t: string) => new TextEncoder().encode(t)
+    const A = { nume: 'N.pdf.p7m', cod: 'CN1/00001', buf: await semneazaCms(enc('%PDF-1.4 alpha')) }
+    const C = { nume: 'N.pdf.p7m', cod: 'CN1/00002', buf: await semneazaCms(enc('%PDF-1.4 charlie')) }
+    const B = { nume: 'N (CN1-00002) (semnat).pdf', buf: enc('%PDF-1.4 BRAVO') }
+    for (const lista of [[A, C, B], [A, B, C]]) {
+      const { restore } = cuSeapCod(lista)
+      try {
+        const tab = licSeap(), fisiere = new Map<string, Uint8Array>()
+        const text = (d: any) => new TextDecoder().decode(fisiere.get(d.fisier_path))
+        const rap = await s.aduLicitatie(fakeSupa(tab, fisiere), 3, () => {})
+        eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod ?? null, text(d)]).sort(),
+          [['N (CN1-00002) (semnat).pdf', null, '%PDF-1.4 BRAVO'], ['N (semnat).pdf', 'CN1/00001', '%PDF-1.4 alpha']], lista.map(d => d.nume).join(' + '))
+        const ev2 = tab.ofertare_seap_fisiere.find(e => e.cheie === s.cheieCod('CN1/00002'))
+        eq([ev2?.stare, ev2?.etapa], ['eroare', 'identitate'], JSON.stringify(rap.erori))
+        for (const m of tab.ofertare_seap_manifest ?? []) {
+          const d = tab.ofertare_documente_atribuire.find(x => x.id === m.document_id)
+          if (d) eq(m.sha256, await shaHex(text(d)), `manifest ${m.cale}`)
+        }
+      } finally { restore() }
+    }
+  })
+})
+
 Deno.test('cod SEAP (PR-2, varianta A): o arhivă rămâne pe regula după nume — evidența „ok” a despachetării o ține deoparte, oricare ar fi codul', async () => {
   await cuMediu(async (_root, s) => {
     const { descarcate, restore } = cuSeapCod([{ nume: 'PT.zip', cod: 'CN1/00030', buf: '%PDF-1.4 nu se cere' }])
