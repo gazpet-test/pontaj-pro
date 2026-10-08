@@ -245,6 +245,21 @@ Deno.test('manifest (PR-2, Jakarinos r4): fratele deduplicat pe „N (/2).pdf”
   eq([raport.identice, raport.lipsa_in_platforma], [2, 1])
 })
 
+Deno.test('manifest (PR-2, Jakarinos r5): /3 rămas SINGUR în listă, deduplicat pe „N (/2).pdf”, fără „N.pdf” și fără rival → legat, nu „LIPSĂ”', async () => {
+  const docsBd = [{ id: 22, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: 'CN1/00002' }]
+  const dovezi = [{ arhiva_cheie: 'n (cn1-00003).pdf', cale: 'N (CN1-00003).pdf', document_id: 22, sha256: await sha('beta'), stare: 'deja_in_platforma' }]
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00003', text: 'beta' }] })
+  eq(scrieri.map(x => [x.cale, x.document_id, x.stare]), [['N (CN1-00003).pdf', 22, 'deja_in_platforma']])
+  eq([raport.identice, raport.lipsa_in_platforma], [1, 0])
+})
+
+Deno.test('manifest (PR-2): cod fără rând, fără rival, rândul vechi „N.pdf” fără cod are alt conținut → pe nume, ca înainte (DIFERIT)', async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: null }]
+  const { raport, scrieri } = await scenariu({ docsBd, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'omega' }] })
+  eq(scrieri.map(x => [x.cale, x.document_id, x.stare]), [['N.pdf', 21, 'deja_in_platforma']])
+  eq([raport.identice, raport.diferite, raport.lipsa_in_platforma], [0, 1, 0])
+})
+
 Deno.test('manifest: uscat nu scrie manifestul', async () => {
   const { raport, scrieri } = await scenariu({ uscat: true })
   eq(scrieri, [])
