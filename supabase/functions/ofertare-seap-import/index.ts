@@ -218,7 +218,7 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
   const raport = { metoda: 'per-fisier' as 'per-fisier' | 'arhiva', rezerva_arhiva: false, adaugate: 0, completate: 0, sarite_existente: 0, lasate_pentru_vercel: [] as string[], erori: [] as string[], index: deLaIndex, orfani_stersi: [] as string[], manifest_randuri: 0, avertismente: [] as string[],
     // audit #4 var. B: sarite pe cod, coduri adoptate pe randuri vechi, coduri mutate (versiune republicata identic, F5), versiuni / frati noi, ramase pe regula veche
-    sarite_cod: 0, coduri_adoptate: [] as { id: number; cod: string }[], coduri_mutate: [] as { id: number; de: string; la: string }[], versiuni_noi: [] as string[], frati: [] as string[], coduri_ambigue: [] as string[], coduri_instabile: null as string | null,
+    sarite_cod: 0, coduri_adoptate: [] as { id: number; cod: string }[], coduri_mutate: [] as { id: number; de: string; la: string }[], versiuni_noi: [] as string[], frati: [] as string[], coduri_ambigue: [] as string[], identitate_neverificata: [] as string[], coduri_instabile: null as string | null,
     // intrarile peste 20 MB din ZIP-urile documentelor: ZIP-ul pleaca intreg la NAS, care le aduce (nu sunt „sarite”)
     lasate_pentru_nas: [] as string[],
     // E6: motivul pentru care rezerva DownloadArchive ar fi pornit, dar a fost sarita la cerere (fara_rezerva_arhiva); altfel null
@@ -385,19 +385,25 @@ Deno.serve(async (req: Request) => {
   if (instabil) { inv.instabile = true; raport.coduri_instabile = instabil; raport.erori.push(instabil); nerecuperate++; }
   // sha-ul unor randuri existente (verificarea pe continut, decizia 4 = A; fratele identic): intai dovada din manifest / urcarea
   // din rularea asta (fara cost); apoi marimea — alta marime decat documentul (desfacut sau brut) = alt continut, fara citire;
-  // abia la ACEEASI marime obiectul din Storage, cu plafon pe document (PLAFON_CANDIDATI) si octetii in buget (anti-bug 3).
-  // Se opreste la prima potrivire. Nu arunca: necunoscut = null (atunci ramane regula pe nume, nu se ghiceste).
+  // abia la ACEEASI marime (sau marime NECUNOSCUTA — Copilot r1 pe #652: un rand vechi fara marime se dovedeste citindu-l)
+  // obiectul din Storage, cu plafon pe document (PLAFON_CANDIDATI) si octetii in buget (anti-bug 3).
+  // Se opreste la prima potrivire. Nu arunca: necunoscut = null (identitatea ramane neverificata — fail-closed, mai jos).
   const shaStocat = new Map<number, string | null>();
+  const cititStorage = new Map<number, number>();
   const shaDinStorage = async (r: any): Promise<string | null> => {
     if (shaStocat.has(r.id)) return shaStocat.get(r.id) ?? null;
     let sha: string | null = null;
     try {
       const marime = Number(r.size_bytes);
-      if (r.fisier_path && Number.isFinite(marime) && marime > 0 && marime <= PRAG_MARE) {
+      const necunoscuta = !(Number.isFinite(marime) && marime > 0);
+      // fara marime, o ARHIVA nu se citeste orbeste (poate avea sute de MB — memoria edge-ului): ramane neverificata (fail-closed).
+      // Masurat 08.10.2026: 2 randuri fara marime din 1342, nicio arhiva.
+      if (r.fisier_path && (necunoscuta ? !esteArhiva(r.nume_original) : marime <= PRAG_MARE)) {
         const { data, error } = await supa.storage.from('ofertare').download(r.fisier_path);
         if (!error && data && data.size <= PRAG_MARE) {
           const b = new Uint8Array(await data.arrayBuffer());
           urcatiOcteti += b.length;
+          cititStorage.set(r.id, b.length);
           sha = await sha256Hex(b);
         }
       }
@@ -417,7 +423,15 @@ Deno.serve(async (req: Request) => {
     for (const r of randuri) {
       if (m.has(r.id)) continue;
       const marime = Number(r.size_bytes);
-      if (!(marime > 0)) { m.set(r.id, null); continue; }
+      if (!(marime > 0)) {
+        // marime necunoscuta: se citeste (in plafon), altfel ramane necunoscut
+        if (citit >= PLAFON_CANDIDATI) { m.set(r.id, null); continue; }
+        const sha = await shaDinStorage(r);
+        citit += cititStorage.get(r.id) ?? 0;
+        m.set(r.id, sha);
+        if (sha && shas.has(sha)) return m;
+        continue;
+      }
       if (!lungimi.includes(marime)) { m.set(r.id, ALT_CONTINUT); continue; }
       if (citit + marime > PLAFON_CANDIDATI) { m.set(r.id, null); continue; }
       citit += marime;
@@ -476,11 +490,15 @@ Deno.serve(async (req: Request) => {
       const strict = doc !== doc0;
       const numeCurat = eArhivaP7m(doc.nume) ? doc.nume : numeDesfacut(doc.nume);
       const esec = () => { if (strict) nerecuperate++; else { esuatePerFisier.push(doc0.nume); motivRezerva ||= 'descarcari per fisier esuate'; } };
-      // verificare pe randuri vechi (4 = A): daca NICIUN candidat n-are dovada sau marime cunoscuta, rezultatul e sigur
-      // „ramane pe nume” — fara descarcarea din SEAP si fara citiri din Storage (altfel la fiecare rulare, degeaba)
+      // Copilot r1 pe #652 (P1): identitatea NEDOVEDITA nu e „exista deja” — fail-closed: raportata, numarata la nerecuperate
+      // (documentatia nu se declara adusa), reluata la rularea urmatoare. verificabil() e fals doar fara nicio cale de dovada
+      // (niciun candidat cu dovada, marime sau fisier in Storage).
+      const neverificat = (motiv: string) => {
+        const t = `${doc0.nume} (${doc0.cod}): identitatea nu s-a putut verifica — ${motiv}`;
+        raport.identitate_neverificata.push(t); raport.erori.push(t); nerecuperate++;
+      };
       if (!verificabil(dec, areDovada)) {
-        raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): conținutul candidaților nu se poate dovedi (fără dovadă, fără mărime) — rămas pe regula veche`);
-        raport.sarite_existente++;
+        neverificat('niciun candidat nu are dovadă, mărime sau fișier');
         i++;
         if (bugetDepasit() && i < documente.length) { continua = true; break; }
         continue;
@@ -494,7 +512,7 @@ Deno.serve(async (req: Request) => {
         esecuriLaRand = 0;
         const cl = Number(rd.headers.get('content-length') || 0);
         if (cl > PRAG_MARE) {
-          if (dec.fel === 'verifica') raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): neverificat, mare (${(cl / 1e6).toFixed(0)}MB) — rămas pe regula veche`);
+          if (dec.fel === 'verifica') neverificat(`peste 20 MB (${(cl / 1e6).toFixed(0)}MB) — o verifică workerul NAS sau omul`);
           else if (strict) { nerecuperate++; raport.erori.push(`${numeCurat}: versiune/frate nouă peste 20 MB — /api/seap-import o sare după nume; o aduce workerul NAS (licitații GO) sau manual`); }
           // la fel ca la arhiva: fisierele mari le duce /api/seap-import (Vercel)
           else raport.lasate_pentru_vercel.push(`${numeCurat} (${(cl / 1e6).toFixed(0)}MB)`);
@@ -520,8 +538,9 @@ Deno.serve(async (req: Request) => {
               const a = await adoptaCod(supa, licitatieId, inv, decF.rand, doc0.cod);
               if (a === 'adoptat') raport.coduri_adoptate.push({ id: decF.rand.id, cod: doc0.cod });
               else if (typeof a === 'object') raport.avertismente.push(`${doc0.nume}: codul SEAP ${doc0.cod} nu s-a putut înregistra pe #${decF.rand.id} — ${a.eroare}`);
-            } else raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): ${decF.motiv === 'volum' ? 'volum RAR, nu se versionează' : 'conținutul unui candidat nu s-a putut citi — rămas pe regula veche'}`);
-            raport.sarite_existente++;
+              raport.sarite_existente++;
+            } else if (decF.motiv === 'volum') { raport.coduri_ambigue.push(`${doc0.nume} (${doc0.cod}): volum RAR, nu se versionează`); raport.sarite_existente++; }
+            else neverificat('conținutul unui candidat nu s-a putut citi');
             urcatiOcteti += brut.length;   // anti-bug 3: memoria e cumulativa pe rulare, si fara upload
             i++;
             if (bugetDepasit() && i < documente.length) { continua = true; break; }

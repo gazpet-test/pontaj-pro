@@ -18,7 +18,12 @@ export function intrareVeghe(data, nrAnunt) {
 export function rezumatVeghe(r) {
   const n = v => Number(v) || 0
   const aduse = n(r?.aduse), raspunsuri = n(r?.raspunsuri_aduse), versiuni = n(r?.versiuni_anuntate)
-  const ramase = n(r?.ramase), versiuniNeaduse = Math.max(0, (r?.coduri?.versiuni?.length || 0) - versiuni)
+  // Copilot r1 pe #652 (P2): neaduse = din inventarul de DUPĂ import (coduri.versiuni_neaduse), nu decise minus anunțate — o
+  // republicare identică mutată pe rândul vechi nu mai apare ca „încă neadusă”; câmpul lipsă (veghe veche) → calculul vechi
+  const ramase = n(r?.ramase)
+  const versiuniNeaduse = Array.isArray(r?.coduri?.versiuni_neaduse) ? r.coduri.versiuni_neaduse.length : Math.max(0, (r?.coduri?.versiuni?.length || 0) - versiuni)
+  // Copilot r1 (P1): identitate neverificată (în veghe sau în import) = ceva de văzut, nu „Nimic nou”
+  const neverificate = (r?.coduri?.identitate_neverificata?.length || 0) + (r?.coduri?.import_erori || []).filter(e => /identitatea nu s-a putut verifica/.test(String(e))).length
   const termen = r?.termen?.nou || null, eroare = r?.eroare || null
   const parti = []
   if (aduse) parti.push(`${aduse} document(e) noi aduse`)
@@ -26,8 +31,9 @@ export function rezumatVeghe(r) {
   if (raspunsuri) parti.push(`${raspunsuri} răspuns(uri) de la autoritate`)
   if (versiuni) parti.push(`♻ ${versiuni} versiune(i) nouă(i) anunțată(e)`)
   if (versiuniNeaduse) parti.push(`♻ ${versiuniNeaduse} versiune(i) nouă(i) încă neadusă(e)`)
+  if (neverificate) parti.push(`⚠ ${neverificate} document(e) cu identitatea neverificată (vezi raportul)`)
   if (termen) parti.push('termenul de depunere s-a schimbat')
-  const total = aduse + ramase + raspunsuri + versiuni + versiuniNeaduse + (termen ? 1 : 0)
+  const total = aduse + ramase + raspunsuri + versiuni + versiuniNeaduse + neverificate + (termen ? 1 : 0)
   const text = eroare ? `⚠️ Verificarea SEAP a dat eroare: ${eroare}` : parti.length ? `📂 Din SEAP: ${parti.join(', ')}` : 'Nimic nou în SEAP acum.'
-  return { aduse, raspunsuri, versiuni, ramase, versiuniNeaduse, termen, total, text }
+  return { aduse, raspunsuri, versiuni, ramase, versiuniNeaduse, neverificate, termen, total, text }
 }

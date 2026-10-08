@@ -62,4 +62,12 @@ describe('rezumatVeghe: „Nimic nou” doar când chiar nu e nimic (review PR-1
     expect(rezumatVeghe({ licitatie: 'L1', eroare: 'SEAP HTTP 403' }).text).toMatch(/eroare: SEAP HTTP 403/)
     expect(rezumatVeghe({ termen: null, noi: 0, aduse: 0, ramase: 0 }).text).toBe('Nimic nou în SEAP acum.')
   })
+  it('Copilot r1: neaduse din inventarul de DUPĂ import (coduri.versiuni_neaduse); identitate neverificată (veghe sau import) → nu „Nimic nou”', () => {
+    // versiunea decisă, republicată identic (cod mutat): neaduse = [] → nimic de raportat
+    expect(rezumatVeghe({ termen: null, coduri: { versiuni: ['V'], versiuni_neaduse: [] }, versiuni_anuntate: 0 }).text).toBe('Nimic nou în SEAP acum.')
+    expect(rezumatVeghe({ termen: null, coduri: { versiuni: ['V'], versiuni_neaduse: ['V'] }, versiuni_anuntate: 0 }).text).toMatch(/1 versiune\(i\) nouă\(i\) încă neadusă/)
+    expect(rezumatVeghe({ termen: null, coduri: { identitate_neverificata: ['Anexa.pdf (C/1)'] } }).text).toMatch(/1 document\(e\) cu identitatea neverificată/)
+    const r = rezumatVeghe({ termen: null, coduri: { import_erori: ['Anexa.pdf (C/5): identitatea nu s-a putut verifica — conținutul unui candidat nu s-a putut citi', 'alta eroare'] } })
+    expect([r.neverificate, r.text]).toEqual([1, '📂 Din SEAP: ⚠ 1 document(e) cu identitatea neverificată (vezi raportul)'])
+  })
 })

@@ -481,9 +481,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     const src = veghe()
     expect(src).toMatch(/import \{[^}]*\bdecideSeap\b[^}]*\} from '\.\.\/_shared\/codSeap\.mjs'/)
     expect(src).toMatch(/const dec: any = decideSeap\(inv, lista, d, cheiSeap\(d\.nume\), \{ adoptie: ADOPTIE \}\);/)
-    expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, \(r: any\) => !!dovezi\.get\(r\.id\)\)\) continue;/)   // fără șanse = fără import degeaba
+    // Copilot r1: fără NICIO cale de dovadă → nu se pornește importul, dar se raportează (identitate_neverificata)
+    expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, \(r: any\) => !!dovezi\.get\(r\.id\)\)\) \{ neverificate\.push\(`\$\{d\.nume\} \(\$\{d\.cod\}\)`\); continue; \}/)
     // R1 (r4): versiunea NU intră în `noi`; grupa răspunsuri + mail le ia DOAR din rândurile importate cu de_anuntat
-    expect(src).toMatch(/if \(dec\.fel === 'versiune'\) \{ versiuni\.add\(dec\.nume\); continue; \}/)
+    expect(src).toMatch(/if \(dec\.fel === 'versiune'\) \{ versiuni\.add\(dec\.nume\); versiuniCod\.push\(\{ nume: dec\.nume, cod: d\.cod \}\); continue; \}/)
     // E2 (r5): listele de versiuni se fac PE CANAL (clopoțel / mail), fiecare cu grupa ei de răspunsuri
     // r6: listele se fac din grupul PROASPĂT (ancora + membrii revendicați), nu dintr-un grup de reluat
     expect(src).toMatch(/const grupNou = anc && !G \? \[anc, \.\.\.membriRev\] : \[\];/)
@@ -613,7 +614,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).not.toMatch(/scoateIdentice|codVersiune|coduri\.identice|cheiVersiuniNoi|versiuniAduse/)
     expect(src).not.toMatch(/numele EXACT/)                    // indicația de urcare a unei versiuni sub „N (COD)” (nu mai are placeholder)
     expect(src).not.toMatch(/versiuni\.has\(/)                // nicio versiune în `noi`, deci nimic de filtrat din el
-    expect(src).toMatch(/if \(dec\.fel === 'versiune'\) \{ versiuni\.add\(dec\.nume\); continue; \}/)
+    expect(src).toMatch(/if \(dec\.fel === 'versiune'\) \{ versiuni\.add\(dec\.nume\); versiuniCod\.push\(\{ nume: dec\.nume, cod: d\.cod \}\); continue; \}/)
     // treapta Vercel, placeholder-ele și marcarea pe nume lucrează doar pe `noi` (documente noi reale)
     for (const x of ['if (!eDupaEdge && noi.some((n) => !areNume(urcateAcum, n))) {', 'const ramase = inventarOk ? noi.filter((n) => !areNume(urcate, n)) : [];', 'const cheiNoi = new Set(noi.flatMap((n) => cheiSeap(n)));', 'for (const n of ramase) {'])
       expect(src.includes(x), x).toBe(true)
@@ -622,7 +623,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     const iNot = src.indexOf('const eN = await clopotel(supa, [...catre], m, m === mesajVersiuni);'), iMail = src.indexOf('const rm = await trimiteMail(planMail.corp, planMail.cheie);'), iF = src.indexOf('if (anc && !G) await incheie(')
     expect([iAcum > 0, iDe > iAcum, iNot > iDe, iMail > iNot, iF > iMail]).toEqual([true, true, true, true, true])
     // gol acceptat: versiunea neadusă rămâne în raport (coduri.versiuni + erorile importului) și se reia la rularea următoare
-    expect(src).toMatch(/const coduri: any = \{ de_rezolvat: deRezolvat, versiuni: \[\.\.\.versiuni\], instabile, import: null \};/)
+    expect(src).toMatch(/const coduri: any = \{ de_rezolvat: deRezolvat, versiuni: \[\.\.\.versiuni\], instabile, import: null, \.\.\.\(neverificate\.length \? \{ identitate_neverificata: neverificate \} : \{\}\) \};/)
     const bloc = src.slice(src.indexOf('const importa = async'), src.indexOf('const tacute: {'))
     expect(bloc).toMatch(/if \(erori\) \{\s*for \(const e of \[\.\.\.\(Array\.isArray\(rez\?\.erori\) \? rez\.erori : \[\]\), \.\.\.\(rez\?\.error \? \[rez\.error\] : \[\]\)\]\.map\(String\)\) \{\s*if \(erori\.length < 20 && !erori\.includes\(e\)\) erori\.push\(e\);/)
     // importul a rulat deja în prima trecere când existau documente noi sau versiuni — nu încă o dată în a doua
@@ -744,6 +745,20 @@ describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea int
     // Jakarinos r7: verificarea clopoțelului necitită = eroare, FĂRĂ insert (grupul rămâne, se reia identic)
     expect(veg).toMatch(/if \(eD\) return `verificarea clopotelului: \$\{eD\.message\}`;/)
     expect(veg).not.toMatch(/if \(!eD\) \{ const au = new Set/)
+  })
+  it('Copilot r1 pe #652: identitatea NEDOVEDITĂ nu e „există deja” — candidații fără mărime se citesc din Storage; ce rămâne neverificat e fail-closed (nerecuperate, raportat); „neaduse” din inventarul de după import', () => {
+    const imp = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    const cod = readFileSync(new URL('../supabase/functions/_shared/codSeap.mjs', import.meta.url), 'utf8')
+    const veg = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
+    expect(cod).toMatch(/return \(dec\.candidati \?\? \[\]\)\.some\(\(r\) => areDovada\(r\) \|\| Number\(r\.size_bytes\) > 0 \|\| !!r\.fisier_path\)/)
+    expect(imp).toMatch(/const necunoscuta = !\(Number\.isFinite\(marime\) && marime > 0\);[\s\S]{0,300}?if \(r\.fisier_path && \(necunoscuta \? !esteArhiva\(r\.nume_original\) : marime <= PRAG_MARE\)\) \{/)
+    expect(imp).toMatch(/raport\.identitate_neverificata\.push\(t\); raport\.erori\.push\(t\); nerecuperate\+\+;/)
+    expect(imp).toMatch(/else neverificat\('conținutul unui candidat nu s-a putut citi'\);/)
+    expect(imp).toMatch(/if \(dec\.fel === 'verifica'\) neverificat\(`peste 20 MB/)
+    expect(imp).not.toMatch(/rămas pe regula veche'\}`\);\s*raport\.sarite_existente\+\+;/)
+    expect(imp).toMatch(/if \(deLaIndex === 0 && !arhivaIncompleta && !nerecuperate\) await supa\.from\('ofertare_licitatii'\)\.update\(\{ documentatie_adusa_la/)
+    expect(veg).toMatch(/coduri\.versiuni_neaduse = versiuniCod\.filter\(\(v\) => !inventarOk \|\| !coduriAcum\.has\(v\.cod\)\)\.map\(\(v\) => v\.nume\);/)
+    expect(veg).toMatch(/inventar\(supa, lic\.id, 'id, nume_original, fisier_path, seap_cod, seap_meta'\)/)
   })
   it('codSeap (Jakarinos r7): doar CAPUL liniei poate fi înlocuit — rândurile înlocuite deja (inlocuieste_id / cod_anterior) nu justifică o versiune; E1 judecă pe toată linia', () => {
     const cod = readFileSync(new URL('../supabase/functions/_shared/codSeap.mjs', import.meta.url), 'utf8')

@@ -243,14 +243,14 @@ export function decideSeap(inv, lista, doc, chei, { adoptie = ADOPTIE } = {}) {
   return neadopt.length ? { fel: 'verifica', motiv: 'copil', nume: N2, candidati: neadopt, dupa: frate } : frate
 }
 
-/** Verificarea pe conținut are șanse, ÎNAINTE de descărcare: măcar un candidat are sha dovedit (`areDovada`) sau mărimea
- *  cunoscută (aceeași mărime → se citește din Storage; altă mărime = alt conținut, dovedit fără citire). La rânduri vechi
- *  ('ambiguu' / 'sha') fără niciuna, rezultatul e sigur „rămâne pe nume” → fără descărcare (și veghea nu mai pornește importul
- *  degeaba la fiecare rulare). La copii ('copil') nepotrivirea duce la frate, deci se descarcă oricum.
+/** Verificarea pe conținut are șanse, ÎNAINTE de descărcare: măcar un candidat are sha dovedit (`areDovada`), mărimea cunoscută
+ *  (altă mărime = alt conținut, dovedit fără citire) sau fișierul în Storage (se citește — Copilot r1 pe #652: un rând vechi fără
+ *  mărime se dovedește citindu-l, nu se presupune „există deja”). Fals doar fără nicio cale de dovadă; atunci apelantul raportează
+ *  identitatea neverificată (fail-closed), nu „rămâne pe nume”. La copii ('copil') nepotrivirea duce la frate, se descarcă oricum.
  *  @param {any} dec @param {(r: Rand) => boolean} areDovada @returns {boolean} */
 export function verificabil(dec, areDovada) {
   if (dec?.fel !== 'verifica' || dec.motiv === 'copil') return true
-  return (dec.candidati ?? []).some((r) => areDovada(r) || Number(r.size_bytes) > 0)
+  return (dec.candidati ?? []).some((r) => areDovada(r) || Number(r.size_bytes) > 0 || !!r.fisier_path)
 }
 
 /** Sha-ul „altă mărime” al unui candidat: octeții diferă dovedit (fără citire), dar nu e un sha256 — nu se potrivește niciodată. */

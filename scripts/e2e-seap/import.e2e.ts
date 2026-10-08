@@ -244,12 +244,19 @@ Deno.test('e2e D1: republicare IDENTICĂ cu placeholder pe N2 (veghea a anunțat
   assert.equal(randuri().length, 2)
 })
 
-Deno.test('e2e F5: sha-ul înlocuitului necunoscut (fără mărime, fără manifest) → versiune ca înainte; aceeași mărime, alt conținut → versiune', async () => {
+Deno.test('e2e F5 + Copilot r1: înlocuitul FĂRĂ mărime se citește din Storage — identic → cod mutat (fără versiune); obiect lipsă → versiune ca înainte; aceeași mărime, alt conținut → versiune', async () => {
   reset()
   const v0 = rand('Caiet.pdf', P(10), 'ACELASI', { size_bytes: null })
   item('Caiet.pdf', P(36), 'ACELASI')
   const r = await run()
-  assert.deepEqual([r.versiuni_noi, r.coduri_mutate, doc(v0).seap_cod], [['Caiet (CN1095546-00036).pdf'], [], P(10)])
+  assert.deepEqual([r.versiuni_noi, r.coduri_mutate, doc(v0).seap_cod], [[], [{ id: v0, de: P(10), la: P(36) }], P(36)])
+  // obiectul lipsește din Storage: sha necunoscut → versiune (anunțată), ca înainte — partea sigură
+  reset()
+  const v1 = rand('Caiet.pdf', P(10), 'ACELASI', { size_bytes: null })
+  F.storage.delete(doc(v1).fisier_path)
+  item('Caiet.pdf', P(36), 'ACELASI')
+  const r1 = await run()
+  assert.deepEqual([r1.versiuni_noi, r1.coduri_mutate, doc(v1).seap_cod], [['Caiet (CN1095546-00036).pdf'], [], P(10)])
   assert.equal(randuri().find((d) => d.seap_cod === P(36)).seap_meta.de_anuntat, true)
   reset()
   rand('Caiet.pdf', P(10), 'AAAAAAA')
@@ -443,4 +450,30 @@ Deno.test('e2e E3 (review r5): după 3 descărcări per fișier căzute la rând
   assert.deepEqual(['A.pdf', 'B.pdf', 'C.pdf', 'D.pdf', 'E.pdf'].map(nr), [4, 4, 4, 1, 1], descarcate.join(' '))
   assert.equal(apeluriArhiva, 1)
   assert.deepEqual(randuri().map((d) => d.nume_original).sort(), ['A.pdf', 'B.pdf', 'C.pdf', 'D.pdf', 'E.pdf'], JSON.stringify(r.erori))
+})
+
+Deno.test('e2e Copilot r1 (P1): două rânduri vechi cu același nume, FĂRĂ cod, mărime și dovadă + cod SEAP nou → se citesc din Storage: alt conținut → frate adus; același conținut → cod adoptat pe ACEL rând', async () => {
+  reset()
+  rand('Anexa.pdf', null, 'AAAA', { size_bytes: null }); rand('Anexa.pdf', null, 'BBBB', { size_bytes: null })
+  item('Anexa.pdf', P(5), 'CCCC')
+  const r = await run()
+  assert.deepEqual([r.identitate_neverificata, r.frati.length, r.coduri_adoptate], [[], 1, []], JSON.stringify(r))
+  assert.equal(randuri().length, 3)
+  assert.ok(F.db.ofertare_licitatii[0].documentatie_adusa_la, 'identitatea dovedită (alt conținut) → documentația adusă')
+  reset()
+  const a2 = rand('Anexa.pdf', null, 'AAAA', { size_bytes: null }); rand('Anexa.pdf', null, 'BBBB', { size_bytes: null })
+  item('Anexa.pdf', P(5), 'AAAA')
+  const r2 = await run()
+  assert.deepEqual([r2.coduri_adoptate, r2.identitate_neverificata], [[{ id: a2, cod: P(5) }], []])
+})
+
+Deno.test('e2e Copilot r1 (P1): un candidat ILIZIBIL (obiect lipsă din Storage) → identitate NEVERIFICATĂ, fail-closed: fără rând nou, fără „exista deja”, documentația NU se declară adusă', async () => {
+  reset()
+  const a = rand('Anexa.pdf', null, 'AAAA', { size_bytes: null }); rand('Anexa.pdf', null, 'BBBB', { size_bytes: null })
+  F.storage.delete(doc(a).fisier_path)
+  item('Anexa.pdf', P(5), 'CCCC')
+  const r = await run()
+  assert.equal(r.identitate_neverificata.length, 1); assert.match(r.identitate_neverificata[0], /nu s-a putut citi/)
+  assert.ok(r.erori.some((e: string) => /identitatea nu s-a putut verifica/.test(e)))
+  assert.deepEqual([r.sarite_existente, randuri().length, F.db.ofertare_licitatii[0].documentatie_adusa_la], [0, 2, undefined])
 })

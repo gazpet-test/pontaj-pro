@@ -122,13 +122,14 @@ Deno.test('veghe: o versiune adusă de ALT drum (seap_meta.de_anuntat) se anunț
   assert.ok(!log.some((l) => l.startsWith('mail'))); assert.equal(F.db.notifications.length, 0)
 })
 
-Deno.test('veghe: verificare fără dovadă și fără mărime nu pornește importul degeaba', async () => {
+Deno.test('veghe (Copilot r1): verificare fără dovadă și fără mărime → importul PORNEȘTE (candidații se citesc din Storage) — nu se mai presupune „există deja”', async () => {
   reset()
   lic(1)
   rand(1, 'Anexa 1.pdf', null, { size_bytes: null }); rand(1, 'Anexa (1).pdf', null, { size_bytes: null })
   liste[1] = [{ noticeDocumentName: 'Anexa 1.pdf', noticeDocumentCode: P(5), noticeDocumentUrl: 'u' }]
   const { j } = await run()
-  assert.equal(j.raport[0].coduri.de_rezolvat, 0); assert.ok(!log.some((l) => l.startsWith('import')))
+  assert.equal(j.raport[0].coduri.de_rezolvat, 1); assert.ok(log.some((l) => l.startsWith('import 1')), log.join(' | '))
+  assert.equal(j.raport[0].coduri.identitate_neverificata, undefined)
 })
 
 Deno.test('veghe: JWT de utilizator fără acces la Ofertare → refuzat; fără Authorization → 401', async () => {
@@ -734,4 +735,15 @@ Deno.test('veghe Jakarinos r7 (P1): livrat → oprire înainte de a nota „trim
   await run()
   assert.equal(notifVersiuni().length, 1); assert.equal(mailuri(), 0)
   assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat, docV(a).seap_meta.grup], [false, false, undefined])
+})
+
+Deno.test('veghe Copilot r1 (P2): o „versiune” decisă dar republicată IDENTIC (importul mută codul pe rândul vechi) NU apare ca „încă neadusă”', async () => {
+  reset(); importReal = true; lic(1)
+  randC(1, 'Caiet.pdf', P(10), 'ACELASI')
+  liste[1] = [{ noticeDocumentName: 'Caiet.pdf', noticeDocumentCode: P(36), noticeDocumentUrl: 'https://e-licitatie.ro/f/c36' }]
+  fis = { c36: 'ACELASI' }
+  const { j } = await run({ Authorization: 'Bearer SERVICE' }, { licitatie_id: 1 })
+  const r = j.raport.find((x: any) => 'termen' in x)
+  assert.deepEqual([r.coduri.versiuni, r.coduri.versiuni_neaduse, r.versiuni_anuntate], [['Caiet (CN1095546-00036).pdf'], [], 0], JSON.stringify(r))
+  assert.equal(F.db.notifications.length, 0)
 })

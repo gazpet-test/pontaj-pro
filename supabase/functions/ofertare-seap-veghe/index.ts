@@ -600,16 +600,19 @@ Deno.serve(async (req: Request) => {
     // R1 (r4): „N (COD).ext” — republicare sub acelasi nume, cod nou (codul vechi a iesit din lista). NU intra in `noi` si nu primeste
     // placeholder: o aduce importul pe drumul principal, iar anuntul vine doar din randul importat (seap_meta.de_anuntat). Aici: raport.
     const versiuni = new Set<string>();
+    const versiuniCod: { nume: string; cod: string }[] = [];   // Copilot r1 (P2): „neaduse” se judeca dupa import, pe cod
+    const neverificate: string[] = [];    // Copilot r1 (P1): identitate fara nicio cale de dovada — raportata, nu „exista deja”
     let deRezolvat = 0;                   // adoptii de cod / frati / verificari pe continut: importul le rezolva, fara anunt
     for (const d of laSeap) {
       const n = d.nume;
       const dec: any = decideSeap(inv, lista, d, cheiSeap(d.nume), { adoptie: ADOPTIE });
       if (d.cod) inv.decise.add(d.cod);
       if (dec.fel === 'sari') continue;
-      // o verificare fara nicio dovada / marime de candidat: importul o sare oricum fara descarcare — nu se porneste degeaba
-      if (dec.fel === 'verifica' && !verificabil(dec, (r: any) => !!dovezi.get(r.id))) continue;
+      // o verificare fara NICIO cale de dovada (fara dovada, marime sau fisier): importul n-o poate rezolva — nu se porneste
+      // degeaba, dar se RAPORTEAZA (identitate_neverificata), nu se tace ca si cum documentul ar exista deja
+      if (dec.fel === 'verifica' && !verificabil(dec, (r: any) => !!dovezi.get(r.id))) { neverificate.push(`${d.nume} (${d.cod})`); continue; }
       if (dec.fel === 'adopta' || dec.fel === 'verifica' || dec.fel === 'frate') { deRezolvat++; continue; }
-      if (dec.fel === 'versiune') { versiuni.add(dec.nume); continue; }
+      if (dec.fel === 'versiune') { versiuni.add(dec.nume); versiuniCod.push({ nume: dec.nume, cod: d.cod }); continue; }
       const k = cheieNume(n);
       if (vazute.has(k) || areNume(cunoscute, n)) continue;
       vazute.add(k);
@@ -642,7 +645,7 @@ Deno.serve(async (req: Request) => {
     // chiar daca lista de documente a anuntului nu s-a schimbat.
     const { adusi: raspunsuriAduse, eroare: raspunsuriEroare } = await raspunsuriNotice(lic);
 
-    const coduri: any = { de_rezolvat: deRezolvat, versiuni: [...versiuni], instabile, import: null };
+    const coduri: any = { de_rezolvat: deRezolvat, versiuni: [...versiuni], instabile, import: null, ...(neverificate.length ? { identitate_neverificata: neverificate } : {}) };
     // versiunile aduse de ORICINE (UI, workerul NAS, veghea) si inca neanuntate (seap_meta.de_anuntat, pus de campuriCod)
     const versiuneDeAnuntat = (d: any) => !estePlaceholder(d) && d?.seap_meta?.de_anuntat === true;
     const areDeAnuntat = (aveam || []).some(versiuneDeAnuntat);
@@ -692,9 +695,15 @@ Deno.serve(async (req: Request) => {
     }
 
     // Adevarul se citeste din BD: care dintre documentele NOI au acum fisier real
-    const { data: acum, error: eAcum } = await inventar(supa, lic.id, 'id, nume_original, fisier_path, seap_meta');
+    const { data: acum, error: eAcum } = await inventar(supa, lic.id, 'id, nume_original, fisier_path, seap_cod, seap_meta');
     // fără inventar sigur NU se pun placeholder-e (ar fi fantome), nu se marchează nimic și nu se spune „adus” / „lipsă”
     const inventarOk = !eAcum;
+    // Copilot r1 (P2): versiunile decise si inca NEADUSE = codul lor nu e pe niciun rand dupa import (o republicare identica mutata
+    // pe randul vechi, mutaCod, e adusa — nu „neadusa”). Fara inventar sigur: toate se socotesc neaduse.
+    if (versiuniCod.length) {
+      const coduriAcum = new Set((acum || []).map((d: any) => d.seap_cod).filter(Boolean));
+      coduri.versiuni_neaduse = versiuniCod.filter((v) => !inventarOk || !coduriAcum.has(v.cod)).map((v) => v.nume);
+    }
     if (eAcum) raport.push({ licitatie: lic.nr_anunt, eroare: `inventar dupa import: ${eAcum.message}` });
     const urcate = new Set((acum || []).filter((d: any) => !estePlaceholder(d)).map((d: any) => cheieRand(d.nume_original)));
     const toateCunoscute = new Set((acum || []).map((d: any) => cheieRand(d.nume_original)));
