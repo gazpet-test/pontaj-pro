@@ -263,29 +263,42 @@ describe('ZIP desfăcut inline în edge = aceeași clasificare ca în worker (Co
   it('edge-ul și workerul folosesc AMBELE tipInArhiva + indiciuArhiva pentru copiii unei arhive', () => {
     const edge = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
     expect(edge).toMatch(/tip: dinZip \? tipInArhiva\(numeFinal, indiciuArhiva\(dinZip\)\) : ghicesteTip\(numeFinal\)/)
-    expect(edge).toMatch(/await urcaFisier\(alegere\.nume, r\.buf, doc\.nume, doc\.nume\)/)   // ZIP-ul desfăcut inline transmite numele arhivei
+    expect(edge).toMatch(/await urcaFisier\(alegere\.nume, r\.buf, doc\.nume, doc\.nume,/)   // ZIP-ul desfăcut inline transmite numele arhivei
     const worker = readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')
-    expect(worker).toMatch(/tip: tipInArhiva\(f\.rel, indiciuArhiva\(d\.nume_original, d\.tip\)\)/)
+    expect(worker).toMatch(/tip: tipInArhiva\(ds\.nume, indiciuArhiva\(d\.nume_original, d\.tip\)\)/)   // numele după desfacerea semnăturii
   })
 })
 
-describe('.p7m doar pe arhive (lic. 92; decizia Răzvan 07.10.2026, var. A)', () => {
+describe('.p7m: arhivele (var. A, #644) + documentele „X (semnat).ext” (var. B, Răzvan 07.10.2026 seara)', () => {
   it('arhivele semnate .p7m sunt arhive (container → alta); documentele .p7m nu sunt', () => {
     for (const n of ['Raspuns clarificari consolidat.rar.p7m', 'Raspuns consolidat la solicitarile de clarificari - 2.rar.p7m', 'PT.zip.p7m', 'X.7z.P7M', 'X.part1.rar.p7m'])
       expect(esteArhiva(n), n).toBe(true)
     for (const n of ['Caiet de sarcini.pdf.p7m', 'Formulare.docx.p7m', 'X.rar.pdf.p7m']) expect(esteArhiva(n), n).toBe(false)
     expect(ghicesteTip('Raspuns clarificari consolidat.rar.p7m')).toBe('alta')
   })
-  it('edge-urile nu desfac .p7m (bytes + nume intacte); desfacerea CMS + extragerea le face workerul', () => {
-    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts'])
-      expect(readFileSync(new URL(f, import.meta.url), 'utf8'), f).not.toMatch(/p7m/i)
+  it('toate cele 4 drumuri desfac semnătura cu ACEEAȘI funcție (_shared/semnaturaCms.mjs); nicio copie locală a parserului', () => {
+    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts']) {
+      const src = readFileSync(new URL(f, import.meta.url), 'utf8')
+      expect(src, f).toMatch(/import \{[^}]*\bdesface\b[^}]*\} from '\.\.\/_shared\/semnaturaCms\.mjs'/)
+      expect(src, f).not.toMatch(/function desfaSemnatura|OID_DATA/)
+    }
+    expect(readFileSync(new URL('../api/seap-import.js', import.meta.url), 'utf8')).toMatch(/from '\.\/_semnaturaCms\.js'/)
+    expect(readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')).toMatch(/from '\.\.\/\.\.\/supabase\/functions\/_shared\/semnaturaCms\.mjs'/)
   })
-  it('veghea, canalul de clarificări: ORICE fișier adus intră „neprocesat”, fără notă → „….rar.p7m” ajunge la bucla workerului (Copilot r3 pe #644)', () => {
+  it('inventarul rândurilor existente folosește cheieRand pe TOATE drumurile (rândul brut „X.pdf.p7s” ≠ „X.pdf”, Copilot NO-GO r1 pe #649)', () => {
+    for (const f of ['../supabase/functions/ofertare-seap-import/index.ts', '../supabase/functions/ofertare-seap-veghe/index.ts', '../api/seap-import.js', '../worker/ofertare/seap.ts']) {
+      const src = readFileSync(new URL(f, import.meta.url), 'utf8')
+      expect(src, f).not.toMatch(/(urcate|placeholders|cunoscute|urcateAcum|toateCunoscute|numeCunoscute)[^\n]*\.map\(\(?d[^)]*\)? => \[?cheieNume\(d\.nume_original\)/)
+      expect(src, f).toMatch(/cheieRand\(d\.nume_original\)/)
+    }
+  })
+  it('veghea, canalul de clarificări: fișierul adus intră „neprocesat”, fără notă → „….rar.p7m” ajunge la bucla workerului (Copilot r3 pe #644); DOAR un document nedesfăcut intră „ignorat” cu nota (#20)', () => {
     const veghe = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
     const ins = veghe.match(/\.insert\(\{\s*licitatie_id: lic\.id, fisier_path: path,[\s\S]*?\}\);/)
     expect(ins, 'insert-ul din canalul de clarificări').toBeTruthy()
-    expect(ins[0]).toMatch(/status_procesare: 'neprocesat'/)          // necondiționat, nu după extensie
-    expect(ins[0]).not.toMatch(/\beroare\s*:/)                       // fără notă (eArhivaDeDespachetat cere eroare goală)
+    expect(ins[0]).toMatch(/status_procesare: notaSemn \? 'ignorat' : 'neprocesat'/)
+    expect(ins[0]).toMatch(/\.\.\.\(notaSemn \? \{ eroare: notaSemn \} : \{\}\)/)   // altfel fără notă
+    expect(veghe).toMatch(/const notaSemn = ds\.nota && !esteArhiva\(ds\.nume\) \? ds\.nota : null/)   // arhiva: niciodată notă
     // documentația inițială nu se descarcă în veghe: placeholder fără fișier → îl ia drumul SEAP (aduLicitatie)
     expect(veghe).toMatch(/fisier_path: `\$\{lic\.id\}\/atribuire\/neincarcat\//)
   })
@@ -335,10 +348,42 @@ describe('arhivele și adâncimea', () => {
   })
 })
 
+describe('edge seap-import: ZIP-ul întreg pleacă la NAS abia după dovezile din manifest (review PR-C P1)', () => {
+  it('scrieManifest() + golirea listei stau ÎNAINTEA urcării ZIP-ului întreg (bucla NAS l-ar revendica fără dovezi → dubluri)', () => {
+    const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    const bloc = src.slice(src.indexOf('if (!rz.complet || necititeDinZip)'), src.indexOf('} else {', src.indexOf('if (!rz.complet || necititeDinZip)')))
+    const iM = bloc.indexOf('await scrieManifest()'), iG = bloc.indexOf('manifest.length = 0'), iU = bloc.indexOf('await urcaFisier(numeFinal, buf')
+    expect([iM > 0, iG > iM, iU > iG]).toEqual([true, true, true])
+    // Jakarinos pe PR-C: ZIP-ul pleacă DOAR dacă dovezile s-au scris (altfel rămâne pentru rularea următoare)
+    expect(bloc).toMatch(/if \(await scrieManifest\(\)\) \{\s*manifest\.length = 0;\s*await urcaFisier\(numeFinal, buf/)
+  })
+  it('intrarea sărită ca „deja” lasă legătura (arhiva curentă, cale) → document în manifest; rezerva scrie dovezile înainte; „adusă” doar fără nerecuperate', () => {
+    const src = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/if \('deja' in alegere\) \{[\s\S]{0,1500}stare: 'deja_in_platforma'/)
+    // Jakarinos r2: legătura nu suprascrie dovada „urcat” a aceleiași chei (reluare peste aceeași arhivă)
+    expect(src).toMatch(/if \(!\(manUrcat \|\| \[\]\)\.some\(areDovada\) && !manifest\.some\(areDovada\)\) manifest\.push\(rand\)/)
+    // Jakarinos r2: dovezi nescrise → rezerva DownloadArchive amânată, nu pornită
+    expect(src).toMatch(/const doveziScrise = !nevoieDeArhiva \|\| await scrieManifest\(\);/)
+    expect(src).toMatch(/if \(nevoieDeArhiva && doveziScrise\) \{\s*if \(!perFisierOk\)/)
+    expect(src).toMatch(/if \(deLaIndex === 0 && !arhivaIncompleta && !nerecuperate\) await supa\.from\('ofertare_licitatii'\)/)
+    // Jakarinos r3: dovada „urcat” se păstrează doar dacă spune același lucru (document + sha), altfel legătura nouă o înlocuiește
+    expect(src).toMatch(/rr\.document_id === rand\.document_id && rr\.sha256 === rand\.sha256/)
+    // Jakarinos r2: upload sau rând BD eșuat = nerecuperat (urcaFisier întoarce succesul real)
+    expect(src).toMatch(/if \(eUp\) \{ nerecuperate\+\+;/)
+    expect(src).toMatch(/else nerecuperate\+\+;[^\n]*\n\s*urcatiOcteti \+= buf\.length;\n\s*return !!docId;/)
+  })
+})
+
 describe('paritatea cu api/_tipDocument.js (funcțiile Vercel nu importă din afara api/)', () => {
   it('copie byte cu byte', () => {
     const sursa = readFileSync(new URL('../supabase/functions/_shared/tipDocument.mjs', import.meta.url))
     const copie = readFileSync(new URL('../api/_tipDocument.js', import.meta.url))
+    expect(copie.equals(sursa)).toBe(true)
+  })
+  // 08.10.2026: aceeași regulă pentru celelalte copii din api/ (semnătura CMS #649, ZIP-ul și paginarea — audit #9/#21)
+  it.each([['semnaturaCms.mjs', '_semnaturaCms.js'], ['zipFlux.mjs', '_zipFlux.js'], ['paginat.mjs', '_paginat.js']])('_shared/%s = api/%s byte cu byte', (src, api) => {
+    const sursa = readFileSync(new URL(`../supabase/functions/_shared/${src}`, import.meta.url))
+    const copie = readFileSync(new URL(`../api/${api}`, import.meta.url))
     expect(copie.equals(sursa)).toBe(true)
   })
   it('nicio copie locală veche a regulilor rămasă în consumatori', () => {

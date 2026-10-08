@@ -10,7 +10,9 @@
 //      producție nu mai rămăsese niciun rând 'urcat', deci importurile nu mai aveau nicio dovadă sha.
 // NU urcă nimic, NU atinge ofertare_documente_atribuire, NU pornește citiri AI. Conținut SEAP = input ostil,
 // tratat de aceleași controale ca la import (listare + politică înainte de extragere).
-import { listaSeap, descarca, continutP7s, volumRar, numeVolum, verificaListare, verificaVolume, pregatesteJob, listeazaIzolat, extrageIzolat, cheieNume, semnaturaDeDesfacut } from './seap.ts'
+import { listaSeap, descarca, volumRar, numeVolum, verificaListare, verificaVolume, pregatesteJob, listeazaIzolat, extrageIzolat, cheieNume } from './seap.ts'
+import { desface, numeDesfacut } from '../../supabase/functions/_shared/semnaturaCms.mjs'
+import { toatePaginile } from '../../supabase/functions/_shared/paginat.mjs'
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
@@ -45,12 +47,15 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
   const randuri: Rand[] = []
   const tally = { identice: 0, diferite: 0, lipsa: 0, ignorate: 0, erori: [] as string[] }
   const potrivite = new Set<number>()
-  // dovezile existente ('urcat') pe (arhiva_cheie, cale) + documentele după id: verificarea le confirmă sau le invalidează
-  const dovezi = new Map<string, { document_id: number | null; sha256: string }>()
+  // dovezile existente pe (arhiva_cheie, cale) + documentele după id: verificarea le confirmă sau le invalidează.
+  // 'urcat' = importul a urcat EXACT această intrare; 'deja_in_platforma' = importul a legat intrarea de un document existent
+  // cu același sha (edge, PR #651) — ambele identifică documentul de verificat, dar doar 'urcat' se confirmă ca 'urcat'
+  const dovezi = new Map<string, { document_id: number | null; sha256: string; stare: string }>()
   let dupaId = new Map<number, DocumentBd>()
   let faraScriere: string | null = null
 
-  async function compara(arhivaCheie: string, cale: string, buf: Uint8Array) {
+  // `numeCautat` = numele sub care importul a urcat fișierul (după desfacerea semnăturii, var. B); `cale` rămâne cheia manifestului
+  async function compara(arhivaCheie: string, cale: string, buf: Uint8Array, numeCautat: string = cale) {
     semnal.throwIfAborted()
     const rand: Rand = { licitatie_id: licId, arhiva_cheie: arhivaCheie, cale, marime: buf.length, sha256: await sha(buf), document_id: null, stare: 'deja_in_platforma', motiv: null, verificat_la: new Date().toISOString() }
     if (JUNK_RE.test(cale)) { rand.stare = 'ignorat'; rand.motiv = 'fișier de sistem (junk)'; tally.ignorate++; randuri.push(rand); return }
@@ -58,7 +63,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     const prec = dovezi.get(`${arhivaCheie}\u0000${cale}`)
     const dPrec = prec?.document_id != null ? dupaId.get(prec.document_id) : undefined
     const d = (dPrec && dPrec.fisier_path && !String(dPrec.fisier_path).includes('/neincarcat/') ? dPrec : undefined)
-      ?? inPlatforma.get(cheieNume(cale.split('/').pop()!)) ?? inPlatforma.get(cheieNume(cale))
+      ?? inPlatforma.get(cheieNume(numeCautat.split('/').pop()!)) ?? inPlatforma.get(cheieNume(numeCautat))
     if (!d) { rand.stare = 'eroare_urcare'; rand.motiv = 'LIPSĂ în platformă (verificare R6)'; tally.lipsa++; randuri.push(rand); return }
     rand.document_id = d.id; potrivite.add(d.id)
     const url = opt.storage?.url ?? Deno.env.get('SUPABASE_URL')
@@ -78,7 +83,7 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     const shaStoc = await sha(stoc)
     if (shaStoc === rand.sha256) {
       tally.identice++
-      if (prec && prec.sha256 === rand.sha256 && prec.document_id === d.id) rand.stare = 'urcat'   // dovada confirmată, păstrată
+      if (prec && prec.stare === 'urcat' && prec.sha256 === rand.sha256 && prec.document_id === d.id) rand.stare = 'urcat'   // dovada confirmată, păstrată
     }
     else { tally.diferite++; rand.motiv = `DIFERIT de Storage: sha ${shaStoc.slice(0, 12)}… / ${stoc.length} B vs SEAP ${rand.sha256.slice(0, 12)}… / ${buf.length} B` }
     randuri.push(rand)
@@ -98,18 +103,23 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
     if (eL || !lic?.c_notice_id) throw new Error('licitația nu are anunț SEAP legat')
     ;({ docs, cookie } = await listaSeap(lic.c_notice_id, lic.sys_notice_type_id, semnal))
     semnal.throwIfAborted()
-    const { data: dateBd } = await supa.from('ofertare_documente_atribuire').select('id, nume_original, fisier_path, size_bytes').eq('licitatie_id', licId).abortSignal(semnal)
+    // inventarele pe pagini, fail-closed (Copilot NO-GO r1 pe #651): peste plafonul PostgREST o listă trunchiată ar face din
+    // documentele / dovezile de după plafon „lipsă” și R6 ar degrada o dovadă „urcat” reală (clasa #13)
+    const { data: dateBd, error: eBd } = await toatePaginile((de: number, la: number) => supa.from('ofertare_documente_atribuire')
+      .select('id, nume_original, fisier_path, size_bytes').eq('licitatie_id', licId).order('id').range(de, la).abortSignal(semnal))
+    if (eBd) throw new Error(`inventarul documentelor nu s-a putut citi: ${eBd.message}`)
     semnal.throwIfAborted()
     dinBd = dateBd || []
     inPlatforma = new Map((dinBd || []).filter(d => d.fisier_path && !String(d.fisier_path).includes('/neincarcat/'))
       .map(d => [cheieNume(d.nume_original), d]))
     dupaId = new Map(dinBd.map(d => [d.id, d]))
-    const { data: dateDovezi, error: eDovezi } = await supa.from('ofertare_seap_manifest').select('arhiva_cheie, cale, document_id, sha256')
-      .eq('licitatie_id', licId).eq('stare', 'urcat').abortSignal(semnal)
+    const { data: dateDovezi, error: eDovezi } = await toatePaginile((de: number, la: number) => supa.from('ofertare_seap_manifest')
+      .select('arhiva_cheie, cale, document_id, sha256, stare').eq('licitatie_id', licId).in('stare', ['urcat', 'deja_in_platforma'])
+      .not('document_id', 'is', null).order('id').range(de, la).abortSignal(semnal))
     semnal.throwIfAborted()
     // fără dovezile existente, o scriere le-ar putea suprascrie orbește → raportăm, dar nu scriem manifestul
     if (eDovezi) faraScriere = `manifest: dovezile existente nu s-au putut citi (${eDovezi.message}) — nu scriu nimic`
-    for (const r of (dateDovezi || []) as { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string }[]) dovezi.set(`${r.arhiva_cheie}\u0000${r.cale}`, r)
+    for (const r of (dateDovezi || []) as { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string; stare: string }[]) dovezi.set(`${r.arhiva_cheie}\u0000${r.cale}`, r)
 
     // volumele RAR ale aceleiași arhive se tratează împreună
     const grupuri = new Map<string, typeof docs>()
@@ -131,9 +141,11 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
           semnal.throwIfAborted()
           await descarca(doc, cookie, `${dir}/in/tmp.bin`, semnal)
           semnal.throwIfAborted()
-          let buf: Uint8Array = await Deno.readFile(`${dir}/in/tmp.bin`)
-          let nume = doc.nume
-          if (semnaturaDeDesfacut(nume)) { buf = continutP7s(buf); nume = nume.replace(/\.p7[ms]$/i, '') }
+          // aceeași desfacere ca importul (_shared/semnaturaCms.mjs): arhivă nedesfăcută = eroare; document nedesfăcut = brut
+          const ds = desface(await Deno.readFile(`${dir}/in/tmp.bin`), doc.nume)
+          if (ds.stare !== 'desfacut' && ds.stare !== 'nesemnat' && (k.startsWith('rar:') || ESTE_ARHIVA.test(numeDesfacut(doc.nume)))) throw new Error(`semnătura CMS: ${ds.motiv}`)
+          const buf: Uint8Array = ds.buf
+          const nume = ds.nume
           const vol = k.startsWith('rar:') ? volumRar(nume) : null
           const cale = `${dir}/in/${(vol ? numeVolum(vol, cifre) : nume).replace(/[\\/]/g, '_')}`
           await Deno.writeFile(cale, buf); await Deno.remove(`${dir}/in/tmp.bin`)
@@ -152,7 +164,10 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
               semnal.throwIfAborted()
               const r = rel ? `${rel}/${e.name}` : e.name
               if (e.isDirectory) await umbla(`${p}/${e.name}`, r)
-              else if (e.isFile) await compara(arhivaCheie, r, await Deno.readFile(`${p}/${e.name}`))
+              else if (e.isFile) {   // copiii semnați: desfăcuți ca la import (#8), căutați după numele desfăcut
+                const ds = desface(await Deno.readFile(`${p}/${e.name}`), r)
+                await compara(arhivaCheie, r, ds.buf, ds.nume)
+              }
             }
           }
           await umbla(`${dir}/out`, '')
