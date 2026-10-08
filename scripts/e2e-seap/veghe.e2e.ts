@@ -122,14 +122,14 @@ Deno.test('veghe: o versiune adusă de ALT drum (seap_meta.de_anuntat) se anunț
   assert.ok(!log.some((l) => l.startsWith('mail'))); assert.equal(F.db.notifications.length, 0)
 })
 
-Deno.test('veghe (Copilot r1): verificare fără dovadă și fără mărime → importul PORNEȘTE (candidații se citesc din Storage) — nu se mai presupune „există deja”', async () => {
+Deno.test('veghe (Copilot r1): verificare fără dovadă și fără mărime → importul nu pornește degeaba, dar identitatea neverificată e RAPORTATĂ (nu „Nimic nou”)', async () => {
   reset()
   lic(1)
   rand(1, 'Anexa 1.pdf', null, { size_bytes: null }); rand(1, 'Anexa (1).pdf', null, { size_bytes: null })
   liste[1] = [{ noticeDocumentName: 'Anexa 1.pdf', noticeDocumentCode: P(5), noticeDocumentUrl: 'u' }]
   const { j } = await run()
-  assert.equal(j.raport[0].coduri.de_rezolvat, 1); assert.ok(log.some((l) => l.startsWith('import 1')), log.join(' | '))
-  assert.equal(j.raport[0].coduri.identitate_neverificata, undefined)
+  assert.equal(j.raport[0].coduri.de_rezolvat, 0); assert.ok(!log.some((l) => l.startsWith('import')))
+  assert.deepEqual(j.raport[0].coduri.identitate_neverificata, [`Anexa 1.pdf (${P(5)})`])
 })
 
 Deno.test('veghe: JWT de utilizator fără acces la Ofertare → refuzat; fără Authorization → 401', async () => {
@@ -746,4 +746,17 @@ Deno.test('veghe Copilot r1 (P2): o „versiune” decisă dar republicată IDEN
   const r = j.raport.find((x: any) => 'termen' in x)
   assert.deepEqual([r.coduri.versiuni, r.coduri.versiuni_neaduse, r.versiuni_anuntate], [['Caiet (CN1095546-00036).pdf'], [], 0], JSON.stringify(r))
   assert.equal(F.db.notifications.length, 0)
+})
+
+Deno.test('veghe Jakarinos r9 (P1): erorile importului TĂCUT (a doua trecere) ajung în raport — un candidat ilizibil → identitate neverificată în coduri.import_erori', async () => {
+  reset(); importReal = true; lic(1)
+  const a = randC(1, 'Anexa.pdf', null, 'AAAA'); randC(1, 'Anexa.pdf', null, 'BBBB')
+  F.storage.delete(`1/atribuire/r${a}`)
+  liste[1] = [{ noticeDocumentName: 'Anexa.pdf', noticeDocumentCode: P(5), noticeDocumentUrl: 'https://e-licitatie.ro/f/a5' }]
+  fis = { a5: 'CCCC' }
+  const { j } = await run()
+  const r = j.raport.find((x: any) => x.licitatie === 'L1')
+  assert.equal(r.coduri.de_rezolvat, 1)
+  assert.ok((r.coduri.import_erori || []).some((e: string) => /identitatea nu s-a putut verifica/.test(e)), JSON.stringify(r.coduri))
+  assert.equal(F.db.ofertare_licitatii[0].documentatie_adusa_la, undefined)
 })

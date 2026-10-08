@@ -385,25 +385,22 @@ Deno.serve(async (req: Request) => {
   if (instabil) { inv.instabile = true; raport.coduri_instabile = instabil; raport.erori.push(instabil); nerecuperate++; }
   // sha-ul unor randuri existente (verificarea pe continut, decizia 4 = A; fratele identic): intai dovada din manifest / urcarea
   // din rularea asta (fara cost); apoi marimea — alta marime decat documentul (desfacut sau brut) = alt continut, fara citire;
-  // abia la ACEEASI marime (sau marime NECUNOSCUTA — Copilot r1 pe #652: un rand vechi fara marime se dovedeste citindu-l)
-  // obiectul din Storage, cu plafon pe document (PLAFON_CANDIDATI) si octetii in buget (anti-bug 3).
-  // Se opreste la prima potrivire. Nu arunca: necunoscut = null (identitatea ramane neverificata — fail-closed, mai jos).
+  // abia la ACEEASI marime obiectul din Storage, cu plafon pe document (PLAFON_CANDIDATI) si octetii in buget (anti-bug 3).
+  // Un candidat FARA marime nu se descarca deloc (Copilot r2 + Jakarinos r9 pe #652: download() aduce tot obiectul in memorie
+  // inainte de orice verificare de marime) — ramane necunoscut, deci identitatea ramane NEVERIFICATA (fail-closed, mai jos).
+  // Masurat 08.10.2026: 2 randuri fara marime din 1342.
+  // Se opreste la prima potrivire. Nu arunca: necunoscut = null.
   const shaStocat = new Map<number, string | null>();
-  const cititStorage = new Map<number, number>();
   const shaDinStorage = async (r: any): Promise<string | null> => {
     if (shaStocat.has(r.id)) return shaStocat.get(r.id) ?? null;
     let sha: string | null = null;
     try {
       const marime = Number(r.size_bytes);
-      const necunoscuta = !(Number.isFinite(marime) && marime > 0);
-      // fara marime, o ARHIVA nu se citeste orbeste (poate avea sute de MB — memoria edge-ului): ramane neverificata (fail-closed).
-      // Masurat 08.10.2026: 2 randuri fara marime din 1342, nicio arhiva.
-      if (r.fisier_path && (necunoscuta ? !esteArhiva(r.nume_original) : marime <= PRAG_MARE)) {
+      if (r.fisier_path && Number.isFinite(marime) && marime > 0 && marime <= PRAG_MARE) {
         const { data, error } = await supa.storage.from('ofertare').download(r.fisier_path);
         if (!error && data && data.size <= PRAG_MARE) {
           const b = new Uint8Array(await data.arrayBuffer());
           urcatiOcteti += b.length;
-          cititStorage.set(r.id, b.length);
           sha = await sha256Hex(b);
         }
       }
@@ -423,15 +420,7 @@ Deno.serve(async (req: Request) => {
     for (const r of randuri) {
       if (m.has(r.id)) continue;
       const marime = Number(r.size_bytes);
-      if (!(marime > 0)) {
-        // marime necunoscuta: se citeste (in plafon), altfel ramane necunoscut
-        if (citit >= PLAFON_CANDIDATI) { m.set(r.id, null); continue; }
-        const sha = await shaDinStorage(r);
-        citit += cititStorage.get(r.id) ?? 0;
-        m.set(r.id, sha);
-        if (sha && shas.has(sha)) return m;
-        continue;
-      }
+      if (!(marime > 0)) { m.set(r.id, null); continue; }   // fara marime: nu se descarca (vezi shaDinStorage)
       if (!lungimi.includes(marime)) { m.set(r.id, ALT_CONTINUT); continue; }
       if (citit + marime > PLAFON_CANDIDATI) { m.set(r.id, null); continue; }
       citit += marime;
@@ -491,14 +480,14 @@ Deno.serve(async (req: Request) => {
       const numeCurat = eArhivaP7m(doc.nume) ? doc.nume : numeDesfacut(doc.nume);
       const esec = () => { if (strict) nerecuperate++; else { esuatePerFisier.push(doc0.nume); motivRezerva ||= 'descarcari per fisier esuate'; } };
       // Copilot r1 pe #652 (P1): identitatea NEDOVEDITA nu e „exista deja” — fail-closed: raportata, numarata la nerecuperate
-      // (documentatia nu se declara adusa), reluata la rularea urmatoare. verificabil() e fals doar fara nicio cale de dovada
-      // (niciun candidat cu dovada, marime sau fisier in Storage).
+      // (documentatia nu se declara adusa), reluata la rularea urmatoare. verificabil() e fals cand niciun candidat n-are dovada
+      // sau marime (fara marime nu se descarca — memoria edge-ului).
       const neverificat = (motiv: string) => {
         const t = `${doc0.nume} (${doc0.cod}): identitatea nu s-a putut verifica — ${motiv}`;
         raport.identitate_neverificata.push(t); raport.erori.push(t); nerecuperate++;
       };
       if (!verificabil(dec, areDovada)) {
-        neverificat('niciun candidat nu are dovadă, mărime sau fișier');
+        neverificat('niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)');
         i++;
         if (bugetDepasit() && i < documente.length) { continua = true; break; }
         continue;

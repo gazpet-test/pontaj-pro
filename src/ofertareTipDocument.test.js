@@ -503,7 +503,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // E6 (r5): pornit doar de versiuni → fara_rezerva_arhiva
     expect(src).toMatch(/if \(noi\.length \|\| versiuni\.size\) \{\s*const erori: string\[\] = \[\];\s*optImport = noi\.length \? \{\} : \{ fara_rezerva_arhiva: true \};\s*coduri\.import = await importa\(lic\.id, false, erori, optImport\);\s*if \(erori\.length\) coduri\.import_erori = erori;\s*\}/)
     expect(src).not.toMatch(/noi\.length \|\| deRezolvat/)
-    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iDoi = src.indexOf('for (const t of tacute) t.coduri[t.camp] = await importa(t.id, true, null, t.optiuni ?? {}, t.runde ?? RUNDE_IMPORT);')
+    const iMail = src.lastIndexOf("subject: `SEAP — raspuns de la autoritate"), iDoi = src.indexOf('t.coduri[t.camp] = await importa(t.id, true, er, t.optiuni ?? {}, t.runde ?? RUNDE_IMPORT);')
     expect([iMail > 0, iDoi > iMail]).toEqual([true, true])
     expect(src).toMatch(/if \(cuBuget && Date\.now\(\) - t0 > BUGET_TACUT_MS\) return/)
     // rundele își trec de_la_index (un document care nu converge nu mai oprește toate rundele în același loc)
@@ -599,7 +599,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
   })
   it('veghea (F3/F6, review PR-1): a doua trecere (tăcută) DOAR la rularea programată, fără licitatie_id; amânările de buget se văd în tacute_amanate', () => {
     const src = veghe()
-    expect(src).toMatch(/const programata = !body\?\.licitatie_id;\s*if \(programata\) \{[\s\S]{0,300}?for \(const t of tacute\) t\.coduri\[t\.camp\] = await importa\(t\.id, true, null, t\.optiuni \?\? \{\}, t\.runde \?\? RUNDE_IMPORT\);\s*\} else for \(const t of tacute\) t\.coduri\[t\.camp\] = 'nepornit/)
+    expect(src).toMatch(/const programata = !body\?\.licitatie_id;\s*if \(programata\) \{[\s\S]{0,700}?t\.coduri\[t\.camp\] = await importa\(t\.id, true, er, t\.optiuni \?\? \{\}, t\.runde \?\? RUNDE_IMPORT\);\s*if \(er\.length\) t\.coduri\.import_erori = er;\s*\}\s*\} else for \(const t of tacute\) t\.coduri\[t\.camp\] = 'nepornit/)
     expect(src).toMatch(/const BUGET_TACUT_MS = 150000;/)
     expect(src).toMatch(/return `amanat \(bugetul de timp al veghei\)/)
     expect(src).toMatch(/const tacute_amanate = tacute\.filter\(\(t\) => String\(t\.coduri\[t\.camp\] \?\? ''\)\.startsWith\('amanat'\)\)/)
@@ -750,8 +750,13 @@ describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea int
     const imp = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
     const cod = readFileSync(new URL('../supabase/functions/_shared/codSeap.mjs', import.meta.url), 'utf8')
     const veg = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
-    expect(cod).toMatch(/return \(dec\.candidati \?\? \[\]\)\.some\(\(r\) => areDovada\(r\) \|\| Number\(r\.size_bytes\) > 0 \|\| !!r\.fisier_path\)/)
-    expect(imp).toMatch(/const necunoscuta = !\(Number\.isFinite\(marime\) && marime > 0\);[\s\S]{0,300}?if \(r\.fisier_path && \(necunoscuta \? !esteArhiva\(r\.nume_original\) : marime <= PRAG_MARE\)\) \{/)
+    // Copilot r2 + Jakarinos r9: un candidat FĂRĂ mărime nu se descarcă (download() aduce tot obiectul în memorie) → fail-closed
+    expect(cod).toMatch(/return \(dec\.candidati \?\? \[\]\)\.some\(\(r\) => areDovada\(r\) \|\| Number\(r\.size_bytes\) > 0\)/)
+    expect(imp).toMatch(/if \(r\.fisier_path && Number\.isFinite\(marime\) && marime > 0 && marime <= PRAG_MARE\) \{/)
+    expect(imp).toMatch(/if \(!\(marime > 0\)\) \{ m\.set\(r\.id, null\); continue; \}/)
+    expect(imp).not.toMatch(/necunoscuta|cititStorage/)
+    // Jakarinos r9: erorile importurilor tăcute ajung în raport
+    expect(veg).toMatch(/const er: string\[\] = Array\.isArray\(t\.coduri\.import_erori\) \? t\.coduri\.import_erori : \[\];\s*t\.coduri\[t\.camp\] = await importa\(t\.id, true, er,/)
     expect(imp).toMatch(/raport\.identitate_neverificata\.push\(t\); raport\.erori\.push\(t\); nerecuperate\+\+;/)
     expect(imp).toMatch(/else neverificat\('conținutul unui candidat nu s-a putut citi'\);/)
     expect(imp).toMatch(/if \(dec\.fel === 'verifica'\) neverificat\(`peste 20 MB/)

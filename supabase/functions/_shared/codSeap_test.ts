@@ -301,10 +301,9 @@ Deno.test('decideSeap: rândul real FĂRĂ cod sub numele cu cod (placeholder co
   assert.equal(decide(inv0([vechi, copil], [{ stare: 'urcat', document_id: copil.id, arhiva_cheie: 'planse.zip', cale: N2 }]), l, l[0]).fel, 'versiune')
 })
 
-Deno.test('verificabil (Copilot r1): fără dovadă și fără mărime, dar cu fișier în Storage → se verifică (citire); fără nicio cale de dovadă → fals (apelantul raportează identitatea neverificată)', () => {
+Deno.test('verificabil (Copilot r1/r2): fără dovadă și fără mărime la toți candidații vechi → fals (nu se descarcă; apelantul raportează identitatea NEVERIFICATĂ, fail-closed); copiii merg oricum la frate', () => {
   const x = rand('X.pdf', null, { size_bytes: null }), y = rand('X .pdf', null, { size_bytes: 0 })
-  assert.equal(verificabil({ fel: 'verifica', motiv: 'ambiguu', candidati: [x, y] }, () => false), true)
-  const xf = { ...x, fisier_path: null }, yf = { ...y, fisier_path: null }
+  const xf = x, yf = y
   const dec = { fel: 'verifica', motiv: 'ambiguu', candidati: [xf, yf] }
   assert.equal(verificabil(dec, () => false), false)
   assert.equal(verificabil(dec, (r: Any) => r.id === y.id), true)

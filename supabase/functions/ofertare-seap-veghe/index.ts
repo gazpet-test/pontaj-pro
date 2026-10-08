@@ -608,7 +608,7 @@ Deno.serve(async (req: Request) => {
       const dec: any = decideSeap(inv, lista, d, cheiSeap(d.nume), { adoptie: ADOPTIE });
       if (d.cod) inv.decise.add(d.cod);
       if (dec.fel === 'sari') continue;
-      // o verificare fara NICIO cale de dovada (fara dovada, marime sau fisier): importul n-o poate rezolva — nu se porneste
+      // o verificare fara nicio cale de dovada (niciun candidat cu dovada sau marime): importul n-o poate rezolva — nu se porneste
       // degeaba, dar se RAPORTEAZA (identitate_neverificata), nu se tace ca si cum documentul ar exista deja
       if (dec.fel === 'verifica' && !verificabil(dec, (r: any) => !!dovezi.get(r.id))) { neverificate.push(`${d.nume} (${d.cod})`); continue; }
       if (dec.fel === 'adopta' || dec.fel === 'verifica' || dec.fel === 'frate') { deRezolvat++; continue; }
@@ -1035,7 +1035,12 @@ Deno.serve(async (req: Request) => {
   const programata = !body?.licitatie_id;
   if (programata) {
     for (let k = tacute.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [tacute[k], tacute[j]] = [tacute[j], tacute[k]]; }
-    for (const t of tacute) t.coduri[t.camp] = await importa(t.id, true, null, t.optiuni ?? {}, t.runde ?? RUNDE_IMPORT);
+    // Jakarinos r9 (P1): si erorile importurilor tacute (ex. identitate neverificata) ajung in raport (coduri.import_erori)
+    for (const t of tacute) {
+      const er: string[] = Array.isArray(t.coduri.import_erori) ? t.coduri.import_erori : [];
+      t.coduri[t.camp] = await importa(t.id, true, er, t.optiuni ?? {}, t.runde ?? RUNDE_IMPORT);
+      if (er.length) t.coduri.import_erori = er;
+    }
   } else for (const t of tacute) t.coduri[t.camp] = 'nepornit: verificare din UI (importul il face „Adu din SEAP” sau rularea programata)';
   const nrAnunt = new Map((licitatii || []).map((l: any) => [l.id, l.nr_anunt]));
   const tacute_amanate = tacute.filter((t) => String(t.coduri[t.camp] ?? '').startsWith('amanat')).map((t) => nrAnunt.get(t.id));

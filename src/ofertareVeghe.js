@@ -24,6 +24,9 @@ export function rezumatVeghe(r) {
   const versiuniNeaduse = Array.isArray(r?.coduri?.versiuni_neaduse) ? r.coduri.versiuni_neaduse.length : Math.max(0, (r?.coduri?.versiuni?.length || 0) - versiuni)
   // Copilot r1 (P1): identitate neverificată (în veghe sau în import) = ceva de văzut, nu „Nimic nou”
   const neverificate = (r?.coduri?.identitate_neverificata?.length || 0) + (r?.coduri?.import_erori || []).filter(e => /identitatea nu s-a putut verifica/.test(String(e))).length
+  // Jakarinos r9: la „Verifică acum” importul tăcut nu pornește — documentele cu identitatea încă nerezolvată pe cod (adopții /
+  // frați / verificări) rămân de făcut, deci nu „Nimic nou”
+  const deRezolvat = /^nepornit/.test(String(r?.coduri?.import ?? '')) ? n(r?.coduri?.de_rezolvat) : 0
   const termen = r?.termen?.nou || null, eroare = r?.eroare || null
   const parti = []
   if (aduse) parti.push(`${aduse} document(e) noi aduse`)
@@ -32,8 +35,9 @@ export function rezumatVeghe(r) {
   if (versiuni) parti.push(`♻ ${versiuni} versiune(i) nouă(i) anunțată(e)`)
   if (versiuniNeaduse) parti.push(`♻ ${versiuniNeaduse} versiune(i) nouă(i) încă neadusă(e)`)
   if (neverificate) parti.push(`⚠ ${neverificate} document(e) cu identitatea neverificată (vezi raportul)`)
+  if (deRezolvat) parti.push(`${deRezolvat} document(e) de rezolvat pe codul SEAP — le face „Adu din SEAP” sau verificarea programată`)
   if (termen) parti.push('termenul de depunere s-a schimbat')
-  const total = aduse + ramase + raspunsuri + versiuni + versiuniNeaduse + neverificate + (termen ? 1 : 0)
+  const total = aduse + ramase + raspunsuri + versiuni + versiuniNeaduse + neverificate + deRezolvat + (termen ? 1 : 0)
   const text = eroare ? `⚠️ Verificarea SEAP a dat eroare: ${eroare}` : parti.length ? `📂 Din SEAP: ${parti.join(', ')}` : 'Nimic nou în SEAP acum.'
-  return { aduse, raspunsuri, versiuni, ramase, versiuniNeaduse, neverificate, termen, total, text }
+  return { aduse, raspunsuri, versiuni, ramase, versiuniNeaduse, neverificate, deRezolvat, termen, total, text }
 }

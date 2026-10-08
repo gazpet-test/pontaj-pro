@@ -70,4 +70,9 @@ describe('rezumatVeghe: „Nimic nou” doar când chiar nu e nimic (review PR-1
     const r = rezumatVeghe({ termen: null, coduri: { import_erori: ['Anexa.pdf (C/5): identitatea nu s-a putut verifica — conținutul unui candidat nu s-a putut citi', 'alta eroare'] } })
     expect([r.neverificate, r.text]).toEqual([1, '📂 Din SEAP: ⚠ 1 document(e) cu identitatea neverificată (vezi raportul)'])
   })
+  it('Jakarinos r9: la „Verifică acum” importul tăcut nu pornește — documentele de rezolvat pe cod NU dau „Nimic nou”; după import, nu se mai numără', () => {
+    const r = rezumatVeghe({ termen: null, coduri: { de_rezolvat: 2, import: 'nepornit: verificare din UI (importul il face „Adu din SEAP” sau rularea programata)' } })
+    expect([r.deRezolvat, r.text]).toEqual([2, '📂 Din SEAP: 2 document(e) de rezolvat pe codul SEAP — le face „Adu din SEAP” sau verificarea programată'])
+    expect(rezumatVeghe({ termen: null, coduri: { de_rezolvat: 2, import: '1 runde' } }).text).toBe('Nimic nou în SEAP acum.')
+  })
 })
