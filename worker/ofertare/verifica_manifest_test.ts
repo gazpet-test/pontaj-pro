@@ -586,3 +586,23 @@ for (const ordine of ['/1,/2', '/2,/1']) Deno.test(`manifest (PR-2, Jakarinos r1
   eq([r1?.arhiva_cheie, r1?.stare], ['n.pdf', 'urcat'], 'dovada lui /1 confirmată')
   assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
 })
+
+Deno.test('manifest (PR-2, Jakarinos r19 #1 + P2): rândul cu cod numit deja „N (CN1-00002).pdf” nu scrie peste dovada unui rând istoric cu același nume; comparația fără scriere intră în `fisiere`', async () => {
+  const docsBd = [{ id: 22, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/b', size_bytes: 4, seap_cod: 'CN1/00002' },
+    { id: 23, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/c', size_bytes: 6, seap_cod: null }]
+  const dovezi = [{ arhiva_cheie: 'n (cn1-00002).pdf', cale: 'N (CN1-00002).pdf', document_id: 23, sha256: await sha('ALTFEL'), stare: 'urcat' }]
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00002', text: 'beta' }] })
+  eq(scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'), [], 'dovada rândului istoric neatinsă')
+  eq([raport.fisiere, raport.identice], [1, 1], 'comparat (identic cu #22), fără scriere, dar numărat')
+  assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
+})
+
+Deno.test('manifest (PR-2, Jakarinos r19 #2): o dovadă „deja_in_platforma” PROPRIE a altui document (rând numit „N (CN1-00002).pdf”, cod /9) ține cheia — /2 fără rând e raportat lipsă fără s-o suprascrie', async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 23, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/c', size_bytes: 6, seap_cod: 'CN1/00009' }]
+  const dovezi = [{ arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 21, sha256: await sha('alpha'), stare: 'urcat' },
+    { arhiva_cheie: 'n (cn1-00002).pdf', cale: 'N (CN1-00002).pdf', document_id: 23, sha256: await sha('ALTFEL'), stare: 'deja_in_platforma' }]
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' }, { nume: 'N.pdf', cod: 'CN1/00002', text: 'omega' }] })
+  eq(scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'), [], 'dovada lui #23 neatinsă')
+  eq(raport.lipsa_in_platforma, 1, '/2 lipsă raportat')
+})
