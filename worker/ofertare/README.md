@@ -47,7 +47,7 @@ Teste: `bash test-fixtures/seap_terra/run.sh` (include `extractor_test.sh`, arhi
 
 **Identitatea documentelor (audit #4 var. B, PR-2, 08.10.2026):** `aduLicitatie` decide pe codul SEAP (`noticeDocumentCode`) cu
 `supabase/functions/_shared/codSeap.mjs`, aceleași reguli ca edge-ul de import — doar pentru documentele simple; arhivele și volumele
-RAR rămân pe regula după nume. Versiunea / fratele se urcă sub „N (COD).ext”, iar evidența lor stă pe acel nume. Detalii:
+RAR rămân pe regula după nume. Versiunea / fratele se urcă sub „N (COD).ext”. Evidența oricărui document decis pe cod (și „nou”, urcat ca „N.pdf”) stă pe cheia rezervată a codului, `(cod) <COD>` (`cheieCod`), cu numele afișat „N (COD).ext”: un nume SEAP nu poate produce cheia, deci nu se ciocnește cu evidența unui document numit literal așa. Detalii:
 `docs/ofertare/AUDIT_MOTOR_IMPORT_2026-10-07.md` (#4).
 
 ### Cum sunt impuse limitele (precizare cerută de Copilot)

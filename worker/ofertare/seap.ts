@@ -15,7 +15,7 @@ import { ghicesteTip, tipInArhiva, indiciuArhiva, esteArhiva as esteArhivaDoc, a
 import { shaDovedit, stareIdentitate, adaugaDocument, alegeNume, pastreazaUrcat } from '../../supabase/functions/_shared/identitateFisier.mjs'
 import { desface, eSemnat, continutCms, numeDesfacut, cheieRand as cheieRandCu, cheiSeap as cheiSeapCu } from '../../supabase/functions/_shared/semnaturaCms.mjs'
 import { toatePaginile } from '../../supabase/functions/_shared/paginat.mjs'
-import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, mutaCod, candidatiMutare, copiiDinManifest, eDuplicatCod, numeVersiune, ADOPTIE, ALT_CONTINUT } from '../../supabase/functions/_shared/codSeap.mjs'
+import { codDin, inventarCod, adaugaRand, indexLista, coduriInstabile, decideSeap, rezolvaVerificare, verificabil, campuriCod, adoptaCod, mutaCod, candidatiMutare, copiiDinManifest, eDuplicatCod, numeVersiune, numeBaza, ADOPTIE, ALT_CONTINUT } from '../../supabase/functions/_shared/codSeap.mjs'
 
 const SEAP = 'https://e-licitatie.ro/api-pub'
 const SEAP_HDR: Record<string, string> = {
@@ -51,6 +51,12 @@ export const cheieEvidenta = (n: unknown) => {
   const s = String(n ?? '')
   return /\.p7s$/i.test(s) && !esteArhivaDoc(s) ? cheieRand(s) : cheieNume(s)
 }
+/** Cheia evidenței unui document decis pe COD (PR-2, Copilot r8 + Jakarinos r14 pe #659): spațiu de chei REZERVAT, construit din cod —
+ *  „(cod) CN1095546/00036”. Un nume SEAP nu o poate produce (cheieNume scoate parantezele și spațiile), deci evidența unui cod nu se
+ *  mai poate ciocni cu evidența brută a unui document numit literal „N (CN1-00001).pdf”, iar apartenența ei la cod e dovedită de
+ *  cheie, nu dedusă din text. nume_seap rămâne numele afișat „N (COD).ext”. Poarta (20261020a) caută cheile doar pentru arhive. */
+export const PREFIX_COD = '(cod) '
+export const cheieCod = (cod: unknown) => PREFIX_COD + String(cod ?? '').trim()
 
 // Semnătura CMS (.p7s / .p7m): sursa unică în supabase/functions/_shared/semnaturaCms.mjs (aceeași regulă în edge, veghe, api).
 // Varianta B (Răzvan 07.10.2026 seara): „X.pdf.p7m” → conținutul desfăcut, numele „X (semnat).pdf”; „X.rar.p7m” → „X.rar”;
@@ -266,8 +272,7 @@ export function prefixArhiva(numeArhiva: string): string {
 export const notaSemnatura = (nota: string | null, nume: string): Record<string, unknown> =>
   nota && !esteArhivaDoc(nume) ? { status_procesare: 'ignorat', eroare: nota } : {}
 
-async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'identificat' | 'ok' | 'eroare' | 'sarit'; etapa?: string; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }) {
-  const cheie = cheieEvidenta(nume)
+async function inregistreaza(supa: Supa, licId: number, nume: string, rez: { stare: 'identificat' | 'ok' | 'eroare' | 'sarit'; etapa?: string; motiv?: string; marime?: number; sha?: string; extrase?: number; faraReincercare?: boolean }, cheie = cheieEvidenta(nume)) {
   const { data: vechi } = await supa.from('ofertare_seap_fisiere').select('id, incercari').eq('licitatie_id', licId).eq('cheie', cheie).maybeSingle()
   const rand = {
     licitatie_id: licId, nume_seap: nume, cheie, stare: rez.stare, etapa: rez.etapa ?? null, motiv: rez.motiv ?? null, marime: rez.marime ?? null,
@@ -321,26 +326,29 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   if (instabil) { inv.instabile = true; raport.coduri_instabile = instabil; raport.erori.push(instabil) }
   const areDovada = (r: any) => !!(r?.id != null && identitate.shaDoc.get(r.id))
   // idx = poziția în lista SEAP (codurile de deasupra lui intră în `decise` la recalcularea deciziei, ca în edge)
-  // ev = numele EVIDENȚEI unui document cu cod: mereu „N (COD).ext”, legat neechivoc de codul curent — și pentru „nou”, care se urcă
-  // tot ca „N.pdf” (Jakarinos r10 pe #659: istoricul altui cod de pe „N.pdf” nu-l blochează, iar plafonul de reîncercări se aplică
-  // eșecurilor ACESTUI cod). Fără cod: evidența pe numele țintă, ca înainte.
+  // ev = numele afișat al EVIDENȚEI unui document cu cod, „N (COD).ext”; cheia ei e cheieCod(cod) — legată de codul curent, și pentru
+  // „nou”, care se urcă tot ca „N.pdf” (Jakarinos r10 pe #659: istoricul altui cod de pe „N.pdf” nu-l blochează, iar plafonul de
+  // reîncercări se aplică eșecurilor ACESTUI cod). Fără cod: evidența pe numele țintă, ca înainte.
   type DocPlan = DocSeap & { dec?: any; numeSeap?: string; idx?: number; ev?: string }
   const numeEv = (d: DocPlan) => d.ev ?? d.nume
+  const cheieEv = (d: DocPlan) => d.ev ? cheieCod(d.cod) : cheieEvidenta(d.nume)
+  const scrieEv = (d: DocPlan, rez: Parameters<typeof inregistreaza>[3]) => inregistreaza(supa, licId, numeEv(d), rez, cheieEv(d))
   // codurile dovedite prezente în rularea asta (sărite pe cod, adoptate, mutate, identice, urcate) — vezi inchideNume
   const rezolvate = new Set<string>()
   // evidența rămasă „eroare” / „în curs” pe un nume anume se închide (altfel ține poarta de completitudine la nesfârșit)
-  const inchideCheie = async (nume: string, stareNoua: 'ok' | 'sarit', motiv: string) => {
-    const e = evidenta.get(cheieEvidenta(nume))
+  const inchideCheie = async (nume: string, stareNoua: 'ok' | 'sarit', motiv: string, cheie = cheieEvidenta(nume)) => {
+    const e = evidenta.get(cheie)
     if (e && (e.stare === 'eroare' || e.stare === 'identificat')) {
-      await inregistreaza(supa, licId, nume, { stare: stareNoua, etapa: 'cod', motiv })
-      evidenta.set(cheieEvidenta(nume), { ...e, stare: stareNoua })
+      await inregistreaza(supa, licId, nume, { stare: stareNoua, etapa: 'cod', motiv }, cheie)
+      evidenta.set(cheie, { ...e, stare: stareNoua })
     }
   }
-  // un document dovedit PREZENT prin cod își închide evidența de pe numele cu cod „N (COD).ext” (a lui, unică per cod); numele
-  // SEAP comun îl închide inchideNume, la final, doar când toate documentele cu acel nume sunt prezente
+  // un document dovedit PREZENT prin cod își închide evidența codului (cheieCod — una per cod, oricare ar fi numele sub care a
+  // căzut: redenumit în SEAP, „sari / dublu”); numele SEAP comun îl închide inchideNume, la final, doar când toate documentele cu
+  // acel nume sunt prezente
   const inchideEvidenta = async (d: DocSeap, motiv: string) => {
     const cod = String(d.cod ?? '').trim()
-    if (cod) { rezolvate.add(cod); await inchideCheie(numeVersiune(d.nume, cod), 'ok', motiv) }
+    if (cod) { rezolvate.add(cod); await inchideCheie(numeVersiune(d.nume, cod), 'ok', motiv, cheieCod(cod)) }
   }
   // Copilot r1 + r2, Jakarinos r8 pe #659 (P1): evidența ISTORICĂ nu e dovadă de prezență pentru un document cu cod fără rând
   // propriu — nici „sarit” (cod ieșit din listă, apoi reapărut), nici „ok” (un sha egal pe alt document fără legătură, sau evidența
@@ -368,45 +376,21 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         motiv: g.length > 1 ? `toate cele ${g.length} documente cu acest nume sunt în platformă (pe codul SEAP)` : 'documentul e în platformă (pe codul SEAP)' })
       evidenta.set(k, { ...e, stare: 'ok' })
     }
-    // Jakarinos r12 pe #659 (P1): un document listat al cărui cod e DOVEDIT prezent (ex. același cod listat și ca „M.pdf”, deja în
-    // platformă — „N.pdf” rămâne „sari / dublu”) își închide evidența „N (COD).ext”. Cheia e cea pe care workerul o scrie pentru
-    // EXACT acest nume listat și acest cod (numeVersiune), nu dedusă din text: un nume SEAP poate conține „(COD)” de la sine
-    // (Copilot r7 + Jakarinos r13). Nu se atinge dacă e și cheia brută a unui document listat, sau cheia altui cod listat. Evidența de
-    // pe un nume care NU mai e listat n-are proveniență dovedibilă fără o coloană de cod → rămâne vizibilă (fail-closed)
-    const brute = new Set(docs.map(d => cheieEvidenta(d.nume)))
-    const coduriPeCheie = new Map<string, Set<string>>()
-    for (const d of docs) if (d.cod) {
-      const k = cheieEvidenta(numeVersiune(d.nume, String(d.cod)))
-      coduriPeCheie.set(k, (coduriPeCheie.get(k) ?? new Set<string>()).add(String(d.cod).trim()))
-    }
-    for (const d of docs.filter(prezentPeCod)) {
-      const c = String(d.cod).trim(), n = numeVersiune(d.nume, c), k = cheieEvidenta(n)
-      if (brute.has(k) || (coduriPeCheie.get(k)?.size ?? 0) > 1) continue
-      const e = evidenta.get(k)
-      if (!e || (e.stare !== 'eroare' && e.stare !== 'identificat')) continue
-      const { data: acum } = await supa.from('ofertare_seap_fisiere').select('stare').eq('licitatie_id', licId).eq('cheie', k).maybeSingle()
-      const st = (acum as { stare?: string } | null)?.stare
-      if (st !== 'eroare' && st !== 'identificat') continue
-      await inregistreaza(supa, licId, n, { stare: 'ok', etapa: 'cod', motiv: `codul SEAP ${c} e în platformă (documentul e listat și sub alt nume)` })
-      evidenta.set(k, { ...e, stare: 'ok' })
-    }
   }
-  // evidența unei versiuni / unui frate („N (COD).ext”) al cărei cod a IEȘIT din listă, cu numele N listat acum sub alt cod
-  // (republicat din nou), nu mai e „nerecuperat din SEAP”: se închide „sarit”. Altfel o eroare veche (descărcare căzută, identitate
-  // neverificată) ar ține poarta la nesfârșit pentru un document care nu mai e în SEAP. Doar cu numele N listat (o listă parțială
-  // nu închide nimic) și cu coduri stabile.
+  // evidența unui cod care a IEȘIT din listă, cu numele lui N listat acum sub alt cod (republicat din nou), nu mai e „nerecuperat din
+  // SEAP”: se închide „sarit”. Altfel o eroare veche (descărcare căzută, identitate neverificată) ar ține poarta la nesfârșit pentru un
+  // document care nu mai e în SEAP. Codul vine din CHEIE (cheieCod — doar evidențele scrise pe drumul pe cod), numele N din nume_seap
+  // (numeBaza, inversul lui numeVersiune pe acel cod). Doar cu N listat (o listă parțială nu închide nimic) și cu coduri stabile.
   if (!inv.instabile) {
-    const vii = new Set(docs.flatMap(d => [cheieEvidenta(d.nume), ...(d.cod ? [cheieEvidenta(numeVersiune(d.nume, d.cod))] : [])]))
-    const Q = 'QQ0CODQQ'
-    const tipare = docs.filter(d => d.cod && !esteArhiva(numeDesfacut(d.nume))).map(d => numeVersiune(d.nume, Q).split(Q)).filter(t => t.length === 2)
+    const listate = new Set(docs.filter(d => d.cod).map(d => String(d.cod).trim()))
+    const numeCuCod = new Set(docs.filter(d => d.cod && !esteArhiva(numeDesfacut(d.nume))).map(d => cheieEvidenta(d.nume)))
     for (const e of evid || []) {
-      const n = String(e.nume_seap ?? '')
-      if ((e.stare !== 'eroare' && e.stare !== 'identificat') || vii.has(e.cheie)) continue
-      const iesit = tipare.some(([pre, post]) => n.length > pre.length + post.length && n.startsWith(pre) && n.endsWith(post)
-        && /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$/.test(n.slice(pre.length, n.length - post.length)))
-      if (!iesit) continue
-      await inregistreaza(supa, licId, n, { stare: 'sarit', etapa: 'cod', motiv: 'codul a ieșit din lista SEAP (documentul a fost republicat sub alt cod) — nu mai e de adus' })
-      evidenta.set(e.cheie, { ...e, stare: 'sarit' })
+      const cheie = String(e.cheie ?? '')
+      if ((e.stare !== 'eroare' && e.stare !== 'identificat') || !cheie.startsWith(PREFIX_COD)) continue
+      const c = cheie.slice(PREFIX_COD.length), baza = numeBaza(String(e.nume_seap ?? ''), c)
+      if (listate.has(c) || baza == null || !numeCuCod.has(cheieEvidenta(baza))) continue
+      await inregistreaza(supa, licId, String(e.nume_seap), { stare: 'sarit', etapa: 'cod', motiv: 'codul a ieșit din lista SEAP (documentul a fost republicat sub alt cod) — nu mai e de adus' }, cheie)
+      evidenta.set(cheie, { ...e, stare: 'sarit' })
     }
   }
   const deAdus: DocPlan[] = []
@@ -430,7 +414,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         if (docs.filter(x => cheieEvidenta(x.nume) === cheieEvidenta(d.nume)).length === 1) await inchideCheie(d.nume, 'sarit', 'semnătura unui document listat alături — nu e alt document')
         // și evidența ei pe cod „X (COD).pdf.p7s” (Jakarinos r11 pe #659: căzută cât era singură în listă, decisă „nou”; apoi a apărut
         // „X.pdf” alături) — altfel eroarea ține poarta la nesfârșit, deși semnătura e sărită intenționat
-        await inchideCheie(numeVersiune(d.nume, String(d.cod)), 'sarit', 'semnătura unui document listat alături — nu e alt document')
+        await inchideCheie(numeVersiune(d.nume, String(d.cod)), 'sarit', 'semnătura unui document listat alături — nu e alt document', cheieCod(d.cod))
       }
       else if (dec.motiv !== 'dublu') raport.avertismente.push(`${d.nume} (${d.cod}): rămas pe regula veche (după nume)`)
       continue
@@ -452,7 +436,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     if (dec.fel === 'verifica' && !verificabil(dec, areDovada)) {
       const t = `${d.nume} (${d.cod}): identitatea nu s-a putut verifica — niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)`
       raport.identitate_neverificata.push(t); raport.erori.push(t)
-      await inregistreaza(supa, licId, numeVersiune(d.nume, String(d.cod)), { stare: 'eroare', etapa: 'identitate', motiv: t })
+      await inregistreaza(supa, licId, numeVersiune(d.nume, String(d.cod)), { stare: 'eroare', etapa: 'identitate', motiv: t }, cheieCod(d.cod))
       continue
     }
     // rândul PLANIFICAT (dinRulare) doar REZERVĂ numele: un al doilea document cu același nume, mai jos în listă, primește
@@ -468,7 +452,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
 
   // ce lipsește: nu e document urcat și nu e deja tratat cu succes (arhivele nu apar niciodată ca document)
   const lipsa = deAdus.filter(d => {
-    const k = cheieEvidenta(numeEv(d))
+    const k = cheieEv(d)
     const ev = evidenta.get(k)
     if (d.dec) {
       // decis pe cod (codul nu e pe niciun rând): nicio evidență nu e scurtătură — documentul se reverifică pe conținut la fiecare
@@ -532,7 +516,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     const lungimi = [l.marime, ...(l.marimeBrut != null ? [l.marimeBrut] : [])]
     const gata = async (stareEv: 'ok' | 'eroare', etapa: string, motiv: string) => {
       if (stareEv === 'ok') rezolvate.add(cod)
-      await inregistreaza(supa, licId, numeEv(dp), { stare: stareEv, etapa, motiv, marime: l.marime, sha: l.sha })
+      await scrieEv(dp, { stare: stareEv, etapa, motiv, marime: l.marime, sha: l.sha })
       return null
     }
     let decF: any = dp.dec
@@ -606,7 +590,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     if (dec.fel === 'fara_cod') return true
     const scrie = async (stareEv: 'ok' | 'eroare', etapa: string, motiv: string) => {
       if (stareEv === 'ok') { rezolvate.add(cod); raport.deja++ } else raport.erori.push(`${orig.nume} (${cod}): ${motiv}`)
-      await inregistreaza(supa, licId, numeEv(dp), { stare: stareEv, etapa, motiv })
+      await scrieEv(dp, { stare: stareEv, etapa, motiv })
       return false
     }
     if (dec.fel === 'sari') return scrie('ok', 'cod', dec.motiv === 'cod' ? `prezent în platformă: codul SEAP ${cod} e pe #${dec.rand?.id}` : `sărit (${dec.motiv})`)
@@ -621,7 +605,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     if (dec.fel === 'verifica' && !verificabil(dec, areDovada)) {
       const t = `${orig.nume} (${cod}): identitatea nu s-a putut verifica — niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)`
       raport.identitate_neverificata.push(t); raport.erori.push(t)
-      await inregistreaza(supa, licId, numeEv(dp), { stare: 'eroare', etapa: 'identitate', motiv: t })
+      await scrieEv(dp, { stare: 'eroare', etapa: 'identitate', motiv: t })
       return false
     }
     dp.dec = dec
@@ -645,8 +629,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   await Deno.mkdir(LUCRU, { recursive: true })
   // etapa 1: identificat — rămâne vizibil „în curs” dacă jobul moare înainte de rezultat (poarta: „încă în curs de aducere”)
   for (const g of grupuri.values()) for (const d of g) {
-    const k = cheieEvidenta(numeEv(d))
-    if (evidenta.get(k)?.stare !== 'eroare') await inregistreaza(supa, licId, numeEv(d), { stare: 'identificat', etapa: 'identificare' })
+    if (evidenta.get(cheieEv(d))?.stare !== 'eroare') await scrieEv(d, { stare: 'identificat', etapa: 'identificare' })
   }
   const tmp = await Deno.makeTempDir({ dir: LUCRU, prefix: `seap_${licId}_` })
   await Deno.chmod(tmp, 0o755)
@@ -685,7 +668,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       if (!esec && cheieGrup.startsWith('rar:')) { esec = verificaVolume(locale.map(l => volumRar(l.nume)?.nr ?? 0)); etapaEsec = 'set_volume' }
       if (esec) {
         raport.erori.push(esec)
-        for (const doc of grup) await inregistreaza(supa, licId, numeEv(doc), { stare: 'eroare', etapa: etapaEsec, motiv: esec })
+        for (const doc of grup) await scrieEv(doc, { stare: 'eroare', etapa: etapaEsec, motiv: esec })
         continue
       }
 
@@ -767,13 +750,13 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
         const buf = await Deno.readFile(l.cale)
         const r = await urca(supa, licId, l.nume, buf, placeholders, { ...notaSemnatura(l.nota, l.nume), ...campuri }, l.doc.nume)
         await Deno.remove(l.cale)
-        if (typeof r === 'string') { raport.erori.push(`${l.nume}: ${r}`); await inregistreaza(supa, licId, numeEv(l.doc), { stare: 'eroare', etapa: 'urcare', motiv: r, marime: l.marime, sha: l.sha }) }
+        if (typeof r === 'string') { raport.erori.push(`${l.nume}: ${r}`); await scrieEv(l.doc, { stare: 'eroare', etapa: 'urcare', motiv: r, marime: l.marime, sha: l.sha }) }
         else if (!('id' in r)) {
           // codul e deja pe alt rând (alt drum l-a adus între timp): prezent, nu eroare
           if (l.doc.cod) rezolvate.add(l.doc.cod)
           raport.deja++
           raport.avertismente.push(`${l.doc.numeSeap ?? l.nume} (${l.doc.cod}): codul SEAP e deja pe alt rând (adus între timp de alt drum) — sărit`)
-          await inregistreaza(supa, licId, numeEv(l.doc), { stare: 'ok', etapa: 'cod', motiv: 'codul SEAP e deja pe alt rând (adus între timp de alt drum)', marime: l.marime, sha: l.sha })
+          await scrieEv(l.doc, { stare: 'ok', etapa: 'cod', motiv: 'codul SEAP e deja pe alt rând (adus între timp de alt drum)', marime: l.marime, sha: l.sha })
         }
         else {
           raport.fisiere_urcate++; urcate.set(cheieRand(l.nume), r.id); adaugaDocument(identitate, l.nume, r.id, l.sha)
@@ -790,7 +773,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           const cale = l.nume.replace(/\.p7s$/i, '')
           const { error: eM } = await supa.from('ofertare_seap_manifest').upsert({ licitatie_id: licId, arhiva_cheie: cale.toLowerCase(), cale, marime: l.marime, sha256: l.sha, document_id: r.id, stare: 'urcat', motiv: null, verificat_la: new Date().toISOString() }, { onConflict: 'licitatie_id,arhiva_cheie,cale' })
           if (eM) log(`#${licId}: manifest ${l.nume}: ${eM.message}`)
-          await inregistreaza(supa, licId, numeEv(l.doc), { stare: 'ok', etapa: 'urcare', marime: l.marime, sha: l.sha, extrase: 1 })
+          await scrieEv(l.doc, { stare: 'ok', etapa: 'urcare', marime: l.marime, sha: l.sha, extrase: 1 })
         }
       }
       await Deno.remove(dir, { recursive: true }).catch(() => {})

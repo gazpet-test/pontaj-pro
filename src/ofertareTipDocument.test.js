@@ -420,15 +420,20 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // decis pe cod: nicio evidență (ok / sarit, pe nume sau pe „N (COD).ext”) nu e scurtătură — doar eroarea cu reîncercările
     // epuizate îl ține deoparte (Copilot r1 + r2, Jakarinos r8 pe #659)
     expect(src).toMatch(/if \(d\.dec\) \{\s*\n(?:\s*\/\/[^\n]*\n)*\s*if \(ev\?\.stare === 'eroare' && \(ev\?\.incercari \?\? 0\) >= MAX_INCERCARI/)
-    // evidența unui document cu cod e mereu pe „N (COD).ext”, și pentru „nou” (Jakarinos r10 pe #659)
+    // evidența unui document cu cod: numele afișat „N (COD).ext”, și pentru „nou” (Jakarinos r10), pe cheia REZERVATĂ a codului —
+    // un nume SEAP n-o poate produce, deci nu se ciocnește cu evidența brută a unui document numit literal „N (COD).ext” (Copilot r7–r8,
+    // Jakarinos r12–r14 pe #659)
     expect(src).toMatch(/deAdus\.push\(\{ \.\.\.d, nume: tinta, dec, numeSeap: d\.nume, idx, ev: numeVersiune\(d\.nume, String\(d\.cod\)\) \}\)/)
-    expect(src).toMatch(/const k = cheieEvidenta\(numeEv\(d\)\)/)
-    // semnătura sărită lângă documentul ei își închide și evidența pe cod (Jakarinos r11 pe #659)
-    expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, String\(d\.cod\)\), 'sarit'/)
-    // un cod dovedit prezent închide evidența perechii LISTATE (nume, cod), nu orice nume care conține „(COD)” (Jakarinos r12/r13, Copilot r7)
-    expect(src).toMatch(/for \(const d of docs\.filter\(prezentPeCod\)\) \{\s*\n\s*const c = String\(d\.cod\)\.trim\(\), n = numeVersiune\(d\.nume, c\), k = cheieEvidenta\(n\)/)
-    expect(src).toMatch(/if \(brute\.has\(k\) \|\| \(coduriPeCheie\.get\(k\)\?\.size \?\? 0\) > 1\) continue/)
-    expect(src).not.toMatch(/numeBaza\(String\(e\.nume_seap/)
+    expect(src).toMatch(/export const PREFIX_COD = '\(cod\) '/)
+    expect(src).toMatch(/const cheieEv = \(d: DocPlan\) => d\.ev \? cheieCod\(d\.cod\) : cheieEvidenta\(d\.nume\)/)
+    expect(src).toMatch(/const k = cheieEv\(d\)/)
+    expect(src).not.toMatch(/await inregistreaza\(supa, licId, numeEv\(/)
+    expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, cod\), 'ok', motiv, cheieCod\(cod\)\)/)
+    // semnătura sărită lângă documentul ei își închide și evidența codului (Jakarinos r11 pe #659)
+    expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, String\(d\.cod\)\), 'sarit', '[^']*', cheieCod\(d\.cod\)\)/)
+    // codul ieșit din listă: codul vine din CHEIE, nu din text (doar evidențele scrise pe drumul pe cod)
+    expect(src).toMatch(/!cheie\.startsWith\(PREFIX_COD\)\) continue/)
+    expect(src).not.toMatch(/QQ0CODQQ|coduriPeCheie/)
     expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
     // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
     expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)
