@@ -14,10 +14,14 @@ export const ORDINE_CATEGORII = ['utilitati', 'aplicatii', 'institutii', 'firma'
 // Limitele din CHECK-urile tabelului (20261021a) — validate și în UI, ca eroarea să fie clară înainte de server.
 export const LIMITE = { serviciu: 200, url: 500, utilizator: 200, titular: 200, cod_client: 100, observatii: 2000, locatii: 20 }
 
-// Strict https?://<gazdă>[/?#…]: gazda fără „@”, fără slash-uri în plus, fără backslash, fără spații — orice altceva
-// (javascript:, data:, https:////user:parola@…) nu devine link și nu se salvează. Același tipar ca CHECK-ul din BD (r2, J16-2).
-const URL_SIGUR = /^https?:\/\/[^/?#@\s\\]+(?:[/?#]\S*)?$/i
-export const urlSigur = (u) => typeof u === 'string' && URL_SIGUR.test(u.trim()) && !u.includes('\\') && u.trim().length <= LIMITE.url
+// Strict https?://<gazdă>[:port][/?#…]: gazda doar litere/cifre/„.”/„-” (deci fără „@”, slash-uri în plus, backslash),
+// portul doar cifre, fără spații; în plus parserul URL al browserului trebuie să-l accepte. Orice altceva (javascript:,
+// data:, https:////user:parola@…, https://:, https://x.ro:abc) nu devine link și nu se salvează. Același tipar ca CHECK-ul
+// din BD (r2 J16-2, r3 J17-3).
+const URL_SIGUR = /^https?:\/\/[\p{L}\p{N}](?:[\p{L}\p{N}.-]*[\p{L}\p{N}])?(?::\d{1,5})?(?:[/?#]\S*)?$/iu
+const urlParsabil = (u) => { try { const x = new URL(u); return !x.username && !x.password && /^https?:$/.test(x.protocol) } catch { return false } }
+export const urlSigur = (u) => typeof u === 'string' && URL_SIGUR.test(u.trim()) && !u.includes('\\')
+  && u.trim().length <= LIMITE.url && urlParsabil(u.trim())
 
 // Plasă de siguranță: textul pare să conțină o parolă („parola: …”, „parola contului: …”, „PIN-ul: …”, „pass=…”,
 // „?password=” într-un link). Nu e o garanție, doar o oprire pentru greșeala de a lipi parola din Excel în registrul fără

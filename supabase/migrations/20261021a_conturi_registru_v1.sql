@@ -14,12 +14,13 @@
 --   - drepturi explicite: anon nimic (default privileges de pe live i-ar da arwdxt), authenticated SELECT/INSERT/UPDATE
 --     (filtrat de RLS), service_role tot.
 --   - updated_at prin funcția existentă public.set_updated_at() (amprentă verificată, nu o atingem).
---   - CHECK-uri: categorie din listă; serviciu cu cel puțin o literă/cifră; url strict https?://<gazdă>[/?#…] — gazda fără
---     „@”, fără slash-uri în plus și fără backslash (r2, Jakarinos J16-2: https:////admin:parola@… nu mai trece); lungimi;
+--   - CHECK-uri: categorie din listă; serviciu cu cel puțin o literă/cifră; url strict https?://<gazdă>[:port][/?#…] — gazda
+--     doar litere/cifre/„.”/„-” (deci fără „@”, slash-uri în plus, backslash), portul doar cifre (r2 J16-2, r3 J17-3); lungimi;
 --     locatie_ids fără NULL-uri și cel mult 20.
---   - AMPRENTA tabelului (coloane+tipuri+default-uri, constrângeri, politici, trigger, indecși, drepturi, owner, RLS) se
---     calculează la final și se scrie în COMMENT („amprenta=<md5>”); revenirea o recalculează și refuză la orice diferență
---     (r2, P15-3 / J16-4).
+--   - AMPRENTA tabelului (coloane+tipuri+default-uri+ACL pe coloane, constrângeri, politici, trigger-ul complet
+--     — pg_get_triggerdef, inclusiv WHEN —, indecși, drepturi pe tabel și secvență, proprietățile secvenței identity, owner,
+--     RLS) se calculează la final și se scrie în COMMENT („amprenta=<md5>”); revenirea o recalculează și cere ca ea să fie
+--     ȘI cea din COMMENT, ȘI una dintre amprentele fixate în fișierul de revenire (r2 P15-3/J16-4, r3 J17-1/P16-1/P16-2).
 --   - UN SINGUR bloc DO (r2, J16-1): garda, precondițiile, DDL-ul și postcondițiile sunt o singură instrucțiune — o rulare
 --     greșită cu `psql -f` simplu (autocommit, fără ON_ERROR_STOP) nu mai poate lăsa un tabel creat pe jumătate, cu
 --     drepturile implicite permisive.
@@ -65,7 +66,7 @@ BEGIN
     id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     categorie   text NOT NULL CHECK (categorie IN ('utilitati','aplicatii','institutii','firma','retea','altele')),
     serviciu    text NOT NULL CHECK (serviciu ~ '[[:alnum:]]' AND char_length(serviciu) <= 200),
-    url         text CHECK (url IS NULL OR (url ~* '^https?://[^/?#@[:space:]]+([/?#][^[:space:]]*)?$'
+    url         text CHECK (url IS NULL OR (url ~* '^https?://[[:alnum:]]([[:alnum:].-]*[[:alnum:]])?(:[0-9]{1,5})?([/?#][^[:space:]]*)?$'
                                              AND strpos(url, chr(92)) = 0 AND char_length(url) <= 500)),
     utilizator  text CHECK (utilizator IS NULL OR char_length(utilizator) <= 200),
     titular     text CHECK (titular IS NULL OR char_length(titular) <= 200),
@@ -77,10 +78,15 @@ BEGIN
     created_by  uuid DEFAULT auth.uid(),
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
-    -- aceeași plasă ca pareParola() din src/conturiUtil.js
-    CONSTRAINT conturi_registru_fara_parole CHECK (
-      concat_ws(' ', serviciu, url, utilizator, titular, cod_client, observatii)
-        !~* '(^|[^[:alnum:]])(parol[[:alpha:]]*|passw(or)?d|pass|psw|pwd|pin(-?ul)?)([[:space:]]+[[:alpha:]]+)?[[:space:]]*[:=：]')
+    -- aceeași plasă ca pareParola() din src/conturiUtil.js, PE FIECARE CÂMP (r3, J17-2: concatenarea fabrica tipare false,
+    -- ex. serviciu „Proton Pass” + observații „Contact: IT” → „Pass Contact:”)
+    CONSTRAINT conturi_registru_fara_parole CHECK (NOT (
+         coalesce(serviciu, '')   ~* '(^|[^[:alnum:]])(parol[[:alpha:]]*|passw(or)?d|pass|psw|pwd|pin(-?ul)?)([[:space:]]+[[:alpha:]]+)?[[:space:]]*[:=：]'
+      OR coalesce(url, '')        ~* '(^|[^[:alnum:]])(parol[[:alpha:]]*|passw(or)?d|pass|psw|pwd|pin(-?ul)?)([[:space:]]+[[:alpha:]]+)?[[:space:]]*[:=：]'
+      OR coalesce(utilizator, '') ~* '(^|[^[:alnum:]])(parol[[:alpha:]]*|passw(or)?d|pass|psw|pwd|pin(-?ul)?)([[:space:]]+[[:alpha:]]+)?[[:space:]]*[:=：]'
+      OR coalesce(titular, '')    ~* '(^|[^[:alnum:]])(parol[[:alpha:]]*|passw(or)?d|pass|psw|pwd|pin(-?ul)?)([[:space:]]+[[:alpha:]]+)?[[:space:]]*[:=：]'
+      OR coalesce(cod_client, '') ~* '(^|[^[:alnum:]])(parol[[:alpha:]]*|passw(or)?d|pass|psw|pwd|pin(-?ul)?)([[:space:]]+[[:alpha:]]+)?[[:space:]]*[:=：]'
+      OR coalesce(observatii, '') ~* '(^|[^[:alnum:]])(parol[[:alpha:]]*|passw(or)?d|pass|psw|pwd|pin(-?ul)?)([[:space:]]+[[:alpha:]]+)?[[:space:]]*[:=：]'))
   );
   COMMENT ON COLUMN public.conturi_registru.locatie_ids IS 'id-uri din locatii_inchiriate (legătură logică, validată în UI; fără FK pe array)';
   CREATE TRIGGER trg_conturi_registru_updated_at BEFORE UPDATE ON public.conturi_registru
@@ -143,9 +149,10 @@ BEGIN
   END IF;
 
   -- ── D. amprenta (aceeași expresie ca în revenire; COMMENT-ul nu intră în amprentă) ──────────────────────
+  -- <amprenta> (expresie IDENTICĂ în migrare și în revenire — verificată textual de scripts/test_conturi_registru.sh)
   SELECT md5(concat_ws(' | ',
-      (SELECT string_agg(format('%s:%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity,
-                                coalesce(pg_get_expr(d.adbin, d.adrelid), '')), ',' ORDER BY a.attnum)
+      (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity,
+                                coalesce(pg_get_expr(d.adbin, d.adrelid), ''), coalesce(a.attacl::text, '')), ',' ORDER BY a.attnum)
          FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
         WHERE a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped),
       (SELECT string_agg(format('%s:%s', c.conname, pg_get_constraintdef(c.oid)), ',' ORDER BY c.conname)
@@ -155,7 +162,7 @@ BEGIN
                                 coalesce(pg_get_expr(p.polqual, p.polrelid), ''), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')),
                          ',' ORDER BY p.polname)
          FROM pg_policy p WHERE p.polrelid = t.oid),
-      (SELECT string_agg(format('%s:%s:%s:%s', g.tgname, g.tgfoid::regprocedure, g.tgtype, g.tgenabled), ',' ORDER BY g.tgname)
+      (SELECT string_agg(format('%s:%s', pg_get_triggerdef(g.oid, false), g.tgenabled), ',' ORDER BY g.tgname)
          FROM pg_trigger g WHERE g.tgrelid = t.oid AND NOT g.tgisinternal),
       (SELECT string_agg(pg_get_indexdef(i.indexrelid), ',' ORDER BY pg_get_indexdef(i.indexrelid))
          FROM pg_index i WHERE i.indrelid = t.oid),
@@ -164,9 +171,13 @@ BEGIN
               unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p(n)),
       (SELECT string_agg(format('%s:%s:%s', r.n, p.n, has_sequence_privilege(r.n, 'public.conturi_registru_id_seq', p.n)), ',' ORDER BY r.n, p.n)
          FROM unnest(ARRAY['anon','authenticated','service_role']) r(n), unnest(ARRAY['USAGE','SELECT','UPDATE']) p(n)),
+      (SELECT format('%s:%s:%s:%s:%s:%s:%s:%s', s.seqtypid::regtype, s.seqstart, s.seqincrement, s.seqmax, s.seqmin, s.seqcache,
+                     s.seqcycle, pg_get_userbyid(sc.relowner))
+         FROM pg_sequence s JOIN pg_class sc ON sc.oid = s.seqrelid WHERE s.seqrelid = 'public.conturi_registru_id_seq'::regclass),
       pg_get_userbyid(t.relowner), t.relrowsecurity, t.relforcerowsecurity))
     INTO v_amprenta
     FROM pg_class t WHERE t.oid = 'public.conturi_registru'::regclass;
+  -- </amprenta>
   IF v_amprenta IS NULL OR v_amprenta !~ '^[0-9a-f]{32}$' THEN
     RAISE EXCEPTION 'Postcondiție 9: amprenta nu s-a putut calcula';
   END IF;

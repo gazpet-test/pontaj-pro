@@ -4,10 +4,11 @@
 -- REFUZĂ dacă tabelul are rânduri: registrul ține date reale ale lui Răzvan — se exportă întâi (SELECT * … ca CSV) și se
 --   golește explicit, cu acordul lui, într-o operație separată (DELETE cere service_role/postgres: authenticated nu are DELETE).
 --   Revenirea nu șterge niciodată date pe tăcute.
--- AMPRENTĂ COMPLETĂ (r2, Copilot P15-3 / Jakarinos J16-4): recalculează amprenta tabelului (coloane+tipuri+default-uri,
---   constrângeri, politici cu expresii, trigger cu funcția, indecși, drepturi pe tabel și secvență, owner, RLS) cu EXACT
---   expresia din migrare și o compară cu „amprenta=<md5>” scrisă de 20261021a în COMMENT. Orice schimbare ulterioară
---   (ALTER POLICY, CHECK, default, coloană, drept) ⇒ refuz, ca să nu șteargă o versiune mai nouă.
+-- AMPRENTĂ COMPLETĂ (r2 P15-3/J16-4, r3 J17-1/P16-1/P16-2): recalculează amprenta tabelului (coloane+tipuri+default-uri+ACL
+--   pe coloane, constrângeri, politici cu expresii, trigger-ul complet cu WHEN, indecși, drepturi pe tabel și secvență,
+--   proprietățile secvenței identity, owner, RLS) cu EXACT expresia din migrare (blocul <amprenta>, verificat textual de
+--   harness) și cere ca ea să fie ȘI cea scrisă de 20261021a în COMMENT, ȘI una dintre amprentele FIXATE mai jos. Orice
+--   schimbare ulterioară (ALTER POLICY, CHECK, default, coloană, drept, trigger, secvență) ⇒ refuz.
 -- UN SINGUR bloc DO: armarea, LOCK-ul, verificările, DROP-ul și postcondițiile sunt o singură instrucțiune — și la o rulare
 --   greșită cu `psql -f` simplu (autocommit, fără ON_ERROR_STOP) orice refuz anulează și DROP-ul.
 -- UI-ul (tab-ul 🔐 Conturi) se retrage ÎNAINTE (revert PR), altfel ecranul dă eroare la încărcare.
@@ -23,6 +24,12 @@ DECLARE
   v_n bigint;
   v_acum text;
   v_scrisa text;
+  -- amprente FIXATE (r3, Copilot P16-1): valoarea așteptată nu stă doar pe obiectul pe care îl protejează. Una e cea a
+  -- harness-ului PG16 local; cea de pe producție se adaugă după apply-ul 20261021a (citită read-only), în același PR,
+  -- înainte de merge. Până atunci, pe producție revenirea refuză (fail-closed).
+  c_amprente text[] := ARRAY[
+    '8421b4a8b61b0b2bda8f3dbcd2a8fe96'  -- harness PG16 local (scripts/test_conturi_registru.sh)
+  ];
 BEGIN
   -- 1. armare legată de tranzacția curentă; fără armare persistentă; doar postgres
   IF current_setting('gazpet.revenire_20261021a', true) IS DISTINCT FROM 'CONTURI_REGISTRU_SCOATE:' || txid_current() THEN
@@ -49,9 +56,10 @@ BEGIN
   END IF;
 
   -- 4. amprenta exactă a obiectului lăsat de 20261021a
+  -- <amprenta> (expresie IDENTICĂ în migrare și în revenire — verificată textual de scripts/test_conturi_registru.sh)
   SELECT md5(concat_ws(' | ',
-      (SELECT string_agg(format('%s:%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity,
-                                coalesce(pg_get_expr(d.adbin, d.adrelid), '')), ',' ORDER BY a.attnum)
+      (SELECT string_agg(format('%s:%s:%s:%s:%s:%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, a.attidentity,
+                                coalesce(pg_get_expr(d.adbin, d.adrelid), ''), coalesce(a.attacl::text, '')), ',' ORDER BY a.attnum)
          FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
         WHERE a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped),
       (SELECT string_agg(format('%s:%s', c.conname, pg_get_constraintdef(c.oid)), ',' ORDER BY c.conname)
@@ -61,7 +69,7 @@ BEGIN
                                 coalesce(pg_get_expr(p.polqual, p.polrelid), ''), coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')),
                          ',' ORDER BY p.polname)
          FROM pg_policy p WHERE p.polrelid = t.oid),
-      (SELECT string_agg(format('%s:%s:%s:%s', g.tgname, g.tgfoid::regprocedure, g.tgtype, g.tgenabled), ',' ORDER BY g.tgname)
+      (SELECT string_agg(format('%s:%s', pg_get_triggerdef(g.oid, false), g.tgenabled), ',' ORDER BY g.tgname)
          FROM pg_trigger g WHERE g.tgrelid = t.oid AND NOT g.tgisinternal),
       (SELECT string_agg(pg_get_indexdef(i.indexrelid), ',' ORDER BY pg_get_indexdef(i.indexrelid))
          FROM pg_index i WHERE i.indrelid = t.oid),
@@ -70,13 +78,17 @@ BEGIN
               unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p(n)),
       (SELECT string_agg(format('%s:%s:%s', r.n, p.n, has_sequence_privilege(r.n, 'public.conturi_registru_id_seq', p.n)), ',' ORDER BY r.n, p.n)
          FROM unnest(ARRAY['anon','authenticated','service_role']) r(n), unnest(ARRAY['USAGE','SELECT','UPDATE']) p(n)),
+      (SELECT format('%s:%s:%s:%s:%s:%s:%s:%s', s.seqtypid::regtype, s.seqstart, s.seqincrement, s.seqmax, s.seqmin, s.seqcache,
+                     s.seqcycle, pg_get_userbyid(sc.relowner))
+         FROM pg_sequence s JOIN pg_class sc ON sc.oid = s.seqrelid WHERE s.seqrelid = 'public.conturi_registru_id_seq'::regclass),
       pg_get_userbyid(t.relowner), t.relrowsecurity, t.relforcerowsecurity))
     INTO v_acum
     FROM pg_class t WHERE t.oid = 'public.conturi_registru'::regclass;
+  -- </amprenta>
   v_scrisa := substring(obj_description('public.conturi_registru'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})');
-  IF v_scrisa IS NULL OR v_acum IS DISTINCT FROM v_scrisa THEN
+  IF v_scrisa IS NULL OR v_acum IS DISTINCT FROM v_scrisa OR NOT (v_acum = ANY (c_amprente)) THEN
     RAISE EXCEPTION 'Revenire 20261021a: amprenta tabelului diferă de cea scrisă de 20261021a (acum %, scrisă %) — o migrare ulterioară l-a schimbat; refuz',
-      v_acum, coalesce(v_scrisa, 'lipsă');
+      v_acum, coalesce(v_scrisa, 'lipsă') USING HINT = 'amprente fixate: ' || array_to_string(c_amprente, ', ');
   END IF;
   IF EXISTS (SELECT 1 FROM pg_depend d WHERE d.refobjid = 'public.conturi_registru'::regclass AND d.deptype = 'n'
               AND d.classid = 'pg_rewrite'::regclass) THEN

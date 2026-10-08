@@ -53,6 +53,9 @@ revenire() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config(
 [ "$(q "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.set_updated_at()'::regprocedure")" = $MD5_SUA ] || esec "0 set_updated_at din schelet ≠ live ($MD5_SUA)"
 gate_0e inainte
 ok "0 schelet (default privileges + set_updated_at ca pe live)"
+bloc_amprenta() { sed -n '/-- <amprenta>/,/-- <\/amprenta>/p' "$1" | grep -v ' INTO v_'; }
+[ -n "$(bloc_amprenta "$MIGRARE")" ] && [ "$(bloc_amprenta "$MIGRARE")" = "$(bloc_amprenta "$ROLLBACK")" ] || esec "0b expresia <amprenta> diferă între migrare și revenire"
+ok "0b expresia de amprentă e identică textual în migrare și revenire"
 
 "${PSQL[@]}" -d "$BAZA" -f "$MIGRARE" >/dev/null 2>&1 && esec "1 fără runner a trecut"
 [ "$(q "SELECT count(*) FROM pg_class WHERE relname LIKE 'conturi_registru%'")" = 0 ] || esec "1 ceva s-a creat"
@@ -81,6 +84,9 @@ RC=0; PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migr
 [ "$RC" = 0 ] || { cat /tmp/conturi_runner.out >&2; esec "3 runner cod $RC"; }
 ok "3 runner: APLICAT + ÎNREGISTRAT + gate 0e (cod 0), sha256 $SHA"
 gate_0e dupa
+AMPR="$(q "SELECT substring(obj_description('public.conturi_registru'::regclass, 'pg_class') FROM 'amprenta=([0-9a-f]{32})')")"
+grep -q "'$AMPR'" "$ROLLBACK" || esec "3b amprenta harness-ului ($AMPR) nu e fixată în revenire (c_amprente)"
+ok "3b amprenta harness-ului $AMPR e fixată în revenire"
 
 OUT="$("${PSQL[@]}" -d "$BAZA" -f "$TESTE" 2>&1)" || { echo "$OUT" | grep -v 'NOTICE:  OK' | grep -E 'ERROR|TEST' >&2; esec "4 teste SQL"; }
 N="$(grep -c 'NOTICE:  OK' <<<"$OUT")"
@@ -94,12 +100,12 @@ OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" 2>&1)" && ese
 grep -q "nearmată" <<<"$OUT" || esec "6a refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
 OUT="$(revenire)" && esec "6b revenire cu rânduri a trecut"
 grep -q "date reale" <<<"$OUT" || esec "6b refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
-[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 5 ] || esec "6b rândurile au dispărut"
+[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 6 ] || esec "6b rândurile au dispărut"
 # 6f (review intern P1): rulare GREȘITĂ cu psql -f simplu — autocommit, fără ON_ERROR_STOP, fără -1, nearmată și armată
 #    pe sesiune (fără tranzacție): nimic nu se pierde, tabelul și rândurile rămân
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -f "$ROLLBACK" >/dev/null 2>&1 || true
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -c "SELECT set_config('gazpet.revenire_20261021a', 'CONTURI_REGISTRU_SCOATE:' || txid_current(), false)" -f "$ROLLBACK" >/dev/null 2>&1 || true
-[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 5 ] || esec "6f psql -f simplu a șters date"
+[ "$(q "SELECT count(*) FROM public.conturi_registru")" = 6 ] || esec "6f psql -f simplu a șters date"
 q "CREATE VIEW public.v_conturi_test AS SELECT id FROM public.conturi_registru" >/dev/null
 q "DELETE FROM public.conturi_registru" >/dev/null
 OUT="$(revenire)" && esec "6c revenire cu view dependent a trecut"
@@ -118,9 +124,24 @@ q "ALTER TABLE public.conturi_registru ALTER COLUMN observatii SET DEFAULT 'x'" 
 OUT="$(revenire)" && esec "6h revenire după default nou a trecut"
 grep -q "amprenta tabelului diferă" <<<"$OUT" || esec "6h refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
 q "ALTER TABLE public.conturi_registru ALTER COLUMN observatii DROP DEFAULT" >/dev/null
+# 6i (r3, J17-1): același trigger, cu WHEN nou → amprenta prinde
+q "DROP TRIGGER trg_conturi_registru_updated_at ON public.conturi_registru; CREATE TRIGGER trg_conturi_registru_updated_at BEFORE UPDATE ON public.conturi_registru FOR EACH ROW WHEN (NEW.activ) EXECUTE FUNCTION public.set_updated_at()" >/dev/null
+OUT="$(revenire)" && esec "6i revenire după trigger cu WHEN a trecut"
+grep -q "amprenta tabelului diferă" <<<"$OUT" || esec "6i refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+q "DROP TRIGGER trg_conturi_registru_updated_at ON public.conturi_registru; CREATE TRIGGER trg_conturi_registru_updated_at BEFORE UPDATE ON public.conturi_registru FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()" >/dev/null
+# 6j (r3, P16-2): proprietăți ale secvenței identity
+q "ALTER TABLE public.conturi_registru ALTER COLUMN id SET INCREMENT BY 2" >/dev/null
+OUT="$(revenire)" && esec "6j revenire după INCREMENT BY 2 a trecut"
+grep -q "amprenta tabelului diferă" <<<"$OUT" || esec "6j refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+q "ALTER TABLE public.conturi_registru ALTER COLUMN id SET INCREMENT BY 1" >/dev/null
+# 6k (r3, J17-1): drept pe o singură coloană
+q "GRANT SELECT (observatii) ON public.conturi_registru TO anon" >/dev/null
+OUT="$(revenire)" && esec "6k revenire după GRANT pe coloană a trecut"
+grep -q "amprenta tabelului diferă" <<<"$OUT" || esec "6k refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+q "REVOKE SELECT (observatii) ON public.conturi_registru FROM anon" >/dev/null
 OUT="$(revenire)" || { echo "$OUT" >&2; esec "6e revenirea armată pe tabel gol a eșuat"; }
 [ "$(q "SELECT count(*) FROM pg_class WHERE relname LIKE 'conturi_registru%'")" = 0 ] || esec "6e obiecte rămase"
 [ "$(q "SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.set_updated_at()'::regprocedure")" = $MD5_SUA ] || esec "6e set_updated_at atinsă"
-ok "6 revenire: nearmată → refuz · cu rânduri → refuz · psql -f simplu (autocommit) → nimic pierdut · cu view dependent → refuz · tabel modificat / politică slăbită / default nou (amprentă) → refuz · goală + armată → scoasă, set_updated_at neatinsă"
+ok "6 revenire: nearmată → refuz · cu rânduri → refuz · psql -f simplu (autocommit) → nimic pierdut · cu view dependent → refuz · tabel modificat / politică slăbită / default nou / trigger cu WHEN / secvență / drept pe coloană (amprentă) → refuz · goală + armată → scoasă, set_updated_at neatinsă"
 gate_0e final
 echo "PASS test_conturi_registru"
