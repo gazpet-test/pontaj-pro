@@ -762,6 +762,24 @@ Deno.test('cod SEAP (PR-2, Jakarinos r1 #2): „N.pdf” căzut la descărcare, 
   })
 })
 
+Deno.test('cod SEAP (PR-2, Jakarinos r2 #1): două rânduri „N.pdf” (/10, /11) republicate IDENTIC (/20, /21) → ambele coduri mutate, nicio versiune, niciun anunț', async () => {
+  await cuMediu(async (_root, s) => {
+    const a = '%PDF-1.4 cont A', b = '%PDF-1.4 cont B'   // aceeași mărime: dovada se citește din Storage
+    const { restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00020', buf: a }, { nume: 'N.pdf', cod: 'CN1/00021', buf: b }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [
+        { id: 10, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/a.pdf', size_bytes: a.length, seap_cod: 'CN1/00010', status_procesare: 'procesat' },
+        { id: 11, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/b.pdf', size_bytes: b.length, seap_cod: 'CN1/00011', status_procesare: 'procesat' },
+      ] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map([['3/a.pdf', octetiText(a)], ['3/b.pdf', octetiText(b)]])), 3, () => {})
+      eq(tab.ofertare_documente_atribuire.map(d => [d.id, d.seap_cod]), [[10, 'CN1/00020'], [11, 'CN1/00021']], JSON.stringify(rap))
+      eq([rap.coduri_mutate, rap.versiuni_noi], [2, []])
+      ok(!tab.ofertare_documente_atribuire.some(d => d.seap_meta?.de_anuntat), 'niciun anunț de versiune')
+      ok(tab.ofertare_seap_fisiere.every(e => e.stare === 'ok'), JSON.stringify(tab.ofertare_seap_fisiere))
+    } finally { restore() }
+  })
+})
+
 Deno.test('cod SEAP (PR-2, varianta A): o arhivă rămâne pe regula după nume — evidența „ok” a despachetării o ține deoparte, oricare ar fi codul', async () => {
   await cuMediu(async (_root, s) => {
     const { descarcate, restore } = cuSeapCod([{ nume: 'PT.zip', cod: 'CN1/00030', buf: '%PDF-1.4 nu se cere' }])

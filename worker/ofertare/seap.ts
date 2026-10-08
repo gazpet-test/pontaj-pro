@@ -318,8 +318,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   // coduri instabile = regula pe nume de azi pentru toată licitația (decideSeap → fara_cod), cu motivul în raport
   if (instabil) { inv.instabile = true; raport.coduri_instabile = instabil; raport.erori.push(instabil) }
   const areDovada = (r: any) => !!(r?.id != null && identitate.shaDoc.get(r.id))
-  // plan = rândul PLANIFICAT din inventar (dinRulare); primește id-ul real după urcare, ca documentele de mai jos din listă să-l vadă
-  type DocPlan = DocSeap & { dec?: any; numeSeap?: string; plan?: any }
+  // idx = poziția în lista SEAP (codurile de deasupra lui intră în `decise` la recalcularea deciziei, ca în edge)
+  type DocPlan = DocSeap & { dec?: any; numeSeap?: string; idx?: number }
   // codurile dovedite prezente în rularea asta (sărite pe cod, adoptate, mutate, identice, urcate) — vezi inchideNume
   const rezolvate = new Set<string>()
   // evidența rămasă „eroare” / „în curs” pe un nume anume se închide (altfel ține poarta de completitudine la nesfârșit)
@@ -381,7 +381,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     }
   }
   const deAdus: DocPlan[] = []
-  for (const d of docs) {
+  const planuri = new Set<any>()
+  for (const [idx, d] of docs.entries()) {
     const arhiva = esteArhiva(numeDesfacut(d.nume)) || !!volumRar(d.nume.replace(/\.p7[ms]$/i, ''))
     const dec: any = decideSeap(inv, lista, d, cheiSeap(d.nume), { adoptie: ADOPTIE })
     if (d.cod) inv.decise.add(d.cod)
@@ -422,12 +423,16 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
       await inregistreaza(supa, licId, tinta, { stare: 'eroare', etapa: 'identitate', motiv: t })
       continue
     }
-    // rândul PLANIFICAT (dinRulare): un al doilea document cu același nume, mai jos în listă, devine frate, nu tot „nou”
-    const plan = { id: null, nume_original: tinta, fisier_path: null, seap_cod: d.cod, dinRulare: true,
-      inlocuieste_id: dec.fel === 'versiune' ? dec.inlocuit?.id ?? null : null, cod_anterior: dec.fel === 'versiune' ? dec.inlocuit?.seap_cod ?? null : null }
-    adaugaRand(inv, plan)
-    deAdus.push({ ...d, nume: tinta, dec, numeSeap: d.nume, plan })
+    // rândul PLANIFICAT (dinRulare) doar REZERVĂ numele: un al doilea document cu același nume, mai jos în listă, primește
+    // ținta de frate „N (COD).ext”, nu tot „N” (Jakarinos r2 pe #659: fără înlocuiri — vezi recalculeaza)
+    const plan = { id: null, nume_original: tinta, fisier_path: null, seap_cod: d.cod, dinRulare: true }
+    adaugaRand(inv, plan); planuri.add(plan)
+    deAdus.push({ ...d, nume: tinta, dec, numeSeap: d.nume, idx })
   }
+  // rândurile planificate ies din inventar: de aici încolo inventarul e cel EFECTIV (rânduri reale, adopțiile de mai sus, apoi
+  // urcările / mutările din rulare), pe care se recalculează decizia fiecărui document înainte de descărcare
+  for (const [k, rs] of [...inv.peCheie]) { const f = rs.filter((r: any) => !planuri.has(r)); if (f.length) inv.peCheie.set(k, f); else inv.peCheie.delete(k) }
+  for (const [c, r] of [...inv.coduri]) if (planuri.has(r)) inv.coduri.delete(c)
 
   // ce lipsește: nu e document urcat și nu e deja tratat cu succes (arhivele nu apar niciodată ca document)
   const lipsa = deAdus.filter(d => {
@@ -515,11 +520,8 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     // fratele cu ACELAȘI conținut ca un rând existent (același fișier listat de două ori cu coduri diferite): nu se dublează —
     // evidența „ok” pe numele lui cu cod îl ține deoparte la rulările următoare (codul nu are rând, P = A)
     if (decF.fel === 'frate') {
-      // rudele: cele din decizie + rândurile urcate MAI SUS în aceeași rulare sub același nume (rândul planificat primește id-ul
-      // real la urcare) — ca în edge, unde decizia vine după urcarea primului (Jakarinos r1 pe #659, P1: dublură altfel)
-      const ids = new Set<number>(decF.rude || [])
-      for (const k of cheiSeap(String(dp.numeSeap))) for (const r of inv.peCheie.get(k) ?? []) if (r.id != null && r !== dp.plan) ids.add(r.id)
-      const rude = [...ids].map((id: number) => inv.peId.get(id)).filter(Boolean)
+      // rudele vin din decizia recalculată la procesare: includ și urcările de mai sus din aceeași rulare (Jakarinos r1 pe #659)
+      const rude = (decF.rude || []).map((id: number) => inv.peId.get(id)).filter(Boolean)
       const shaR = await shaRanduri(rude, new Set(shas), lungimi)
       const identic = rude.find((r: any) => shas.includes(shaR.get(r.id) as string))
       if (identic) {
@@ -551,6 +553,45 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
     }
     return decF
   }
+  /** Jakarinos r2 pe #659 (P1): decizia unui document cu cod se RECALCULEAZĂ chiar înainte de descărcare, pe inventarul efectiv
+   *  (rândurile reale + ce s-a urcat / adoptat / mutat mai sus în rulare) și cu codurile de DEASUPRA lui în listă — exact ce vede
+   *  edge-ul în același punct. O versiune planificată nu mai „consumă” rândul înlocuit înainte să se știe dacă a fost urcată sau
+   *  doar mutată (F5): două rânduri „N.pdf” (/10, /11) republicate identic (/20, /21) → ambele coduri mutate, nicio versiune.
+   *  Ținta planificată rămâne când decizia e tot „nou” (numele / evidența rezervate). false = tratat aici, fără descărcare. */
+  const recalculeaza = async (dp: DocPlan): Promise<boolean> => {
+    const cod = String(dp.cod ?? '').trim()
+    const orig = { nume: String(dp.numeSeap), url: dp.url, cod }
+    inv.decise = new Set(docs.slice(0, dp.idx ?? 0).map(x => String(x.cod ?? '').trim()).filter(Boolean))
+    const dec: any = decideSeap(inv, lista, orig, cheiSeap(orig.nume), { adoptie: ADOPTIE })
+    if (dec.fel === 'fara_cod') return true
+    const scrie = async (stareEv: 'ok' | 'eroare', etapa: string, motiv: string) => {
+      if (stareEv === 'ok') { rezolvate.add(cod); raport.deja++ } else raport.erori.push(`${orig.nume} (${cod}): ${motiv}`)
+      await inregistreaza(supa, licId, dp.nume, { stare: stareEv, etapa, motiv })
+      return false
+    }
+    if (dec.fel === 'sari') return scrie('ok', 'cod', dec.motiv === 'cod' ? `prezent în platformă: codul SEAP ${cod} e pe #${dec.rand?.id}` : `sărit (${dec.motiv})`)
+    if (dec.fel === 'adopta') {
+      const a = await adoptaCod(supa, licId, inv, dec.rand, cod)
+      if (a === 'adoptat') raport.coduri_adoptate++
+      if (a === 'adoptat' || a === 'duplicat') return scrie('ok', 'cod', `prezent în platformă: codul SEAP ${cod} pe #${dec.rand.id}`)
+      return scrie('eroare', 'cod', `codul SEAP nu s-a putut înregistra pe #${dec.rand.id} — ${typeof a === 'object' ? a.eroare : 'rândul are între timp alt cod'}; se reia la rularea următoare`)
+    }
+    // ținta nouă (ex. planificat „nou”, acum frate): evidența „în curs” de pe ținta veche se închide dacă era numele cu cod al
+    // ACESTUI document; numele SEAP comun îl închide inchideNume, la final
+    const tinta = dec.fel === 'nou' ? dp.nume : String(dec.nume)
+    if (tinta !== dp.nume) {
+      if (dp.nume !== dp.numeSeap) await inregistreaza(supa, licId, dp.nume, { stare: 'sarit', etapa: 'cod', motiv: `ținta recalculată la procesare: „${tinta}”` })
+      dp.nume = tinta
+    }
+    if (dec.fel === 'verifica' && !verificabil(dec, areDovada)) {
+      const t = `${orig.nume} (${cod}): identitatea nu s-a putut verifica — niciun candidat nu are dovadă sau mărime (urcă din nou documentul din platformă, sau verifică-l de mână)`
+      raport.identitate_neverificata.push(t); raport.erori.push(t)
+      await inregistreaza(supa, licId, dp.nume, { stare: 'eroare', etapa: 'identitate', motiv: t })
+      return false
+    }
+    dp.dec = dec
+    return true
+  }
 
   // volumele RAR ale aceleiași arhive se tratează împreună (toate sau nimic)
   const grupuri = new Map<string, DocPlan[]>()
@@ -576,6 +617,7 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
   await Deno.chmod(tmp, 0o755)
   try {
     for (const [cheieGrup, grup] of grupuri) {
+      if (grup.length === 1 && grup[0].dec && !(await recalculeaza(grup[0]))) continue
       const eticheta = grup.length > 1 ? `${grup[0].nume.replace(/\.part\d+\.rar(\.p7[ms])?$/i, '')} (${grup.length} volume)` : grup[0].nume
       stare(`aduc ${eticheta}`)
       const dir = `${tmp}/${raport.adusi++}`
@@ -702,8 +744,11 @@ export async function aduLicitatie(supa: Supa, licId: number, stare: (s: string)
           raport.fisiere_urcate++; urcate.set(cheieRand(l.nume), r.id); adaugaDocument(identitate, l.nume, r.id, l.sha)
           if (decF?.fel === 'versiune') raport.versiuni_noi.push(l.nume)
           else if (decF?.fel === 'frate') raport.frati.push(l.nume)
-          // rândul planificat devine cel real: documentele de mai jos din listă (frați) îl găsesc ca rudă, cu sha-ul dovedit
-          if (l.doc.plan) { l.doc.plan.id = r.id; l.doc.plan.size_bytes = l.marime; inv.peId.set(r.id, l.doc.plan) }
+          // rândul urcat intră în inventarul efectiv, ca în edge: documentele de mai jos din listă îl văd (frate, versiune
+          // din aceeași rulare — inlocuieste_id / cod_anterior), iar sha-ul lui e deja dovedit (adaugaDocument)
+          const meta = (campuri as any).seap_meta
+          if (l.doc.dec) adaugaRand(inv, { id: r.id, nume_original: l.nume, fisier_path: 'urcat', seap_cod: (campuri as any).seap_cod ?? null, size_bytes: l.marime,
+            dinRulare: true, inlocuieste_id: meta?.inlocuieste_id ?? null, cod_anterior: meta?.cod_anterior ?? null })
           if (l.doc.cod) rezolvate.add(l.doc.cod)
           // audit Jakarinos #15: și fișierul simplu lasă dovada sha ('urcat'), ca în edge (aceeași cheie: numele, fără .p7s) —
           // altfel același PDF găsit apoi într-o arhivă nu era recunoscut și se urca a doua oară, cu prefix

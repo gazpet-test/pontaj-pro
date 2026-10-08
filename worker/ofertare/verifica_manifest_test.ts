@@ -24,6 +24,8 @@ const coduriSeap: Record<string, string> = { 'b.pdf': 'CN1/00002' }
 type Opt = {
   ctl?: AbortController; stopDupaPrimul?: boolean; blocat?: 'lista' | 'document' | 'storage' | 'flux'
   arhiva?: boolean; blocatExtractor?: 'listare' | 'extragere'; uscat?: boolean; periodica?: boolean; cuCod?: boolean
+  // lista SEAP explicită (același nume poate apărea de două ori, cu coduri diferite) + inventarul platformei
+  seapLista?: { nume: string; cod?: string; text: string }[]; docsBd?: Record<string, unknown>[]
   storageUrl?: string; statusStorage?: number; caleStorage?: string
   dovezi?: { arhiva_cheie: string; cale: string; document_id: number | null; sha256: string; stare: string }[]; eroareDovezi?: boolean
   inainte?: (root: string, supa: Parameters<typeof verificaManifest>[0]) => Promise<void>
@@ -82,7 +84,7 @@ async function scenariu(opt: Opt = {}) {
         return t === 'ofertare_licitatii'
           ? { abortSignal: (signal: AbortSignal) => { assert(signal); return { single: async () => ({ data: { c_notice_id: 123, sys_notice_type_id: 2 }, error: null }) } } }
           : { order: (c: string) => { eq(c, 'id'); return { range: (de: number, la: number) =>
-              raspuns((opt.cuCod ? documenteCod : documente).map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d).slice(de, la + 1)) } } }
+              raspuns(((opt.docsBd ?? (opt.cuCod ? documenteCod : documente)) as typeof documente).map(d => d.id === 11 && opt.caleStorage ? { ...d, fisier_path: opt.caleStorage } : d).slice(de, la + 1)) } } }
       } }) }
     },
     storage: { from() { throw new Error('SDK Storage interzis: descărcarea trebuie să fie anulabilă integral') } },
@@ -111,6 +113,7 @@ async function scenariu(opt: Opt = {}) {
     }
     if (url.includes('/GetDfNoticeSectionFiles/')) {
       if (opt.blocat === 'lista') return await blocheaza(init?.signal)
+      if (opt.seapLista) return Response.json({ dfNoticeDocs: opt.seapLista.map((d, i) => ({ noticeDocumentName: d.nume, noticeDocumentUrl: `https://seap.invalid/L${i}`, ...(d.cod ? { noticeDocumentCode: d.cod } : {}) })) })
       const nume = opt.arhiva ? ['set.zip'] : Object.keys(surse)
       return Response.json({ dfNoticeDocs: nume.map(n => ({ noticeDocumentName: n, noticeDocumentUrl: `https://seap.invalid/${n}`, ...(opt.cuCod && coduriSeap[n] ? { noticeDocumentCode: coduriSeap[n] } : {}) })) })
     }
@@ -136,6 +139,7 @@ async function scenariu(opt: Opt = {}) {
       if (opt.blocatExtractor !== 'extragere') await Deno.writeTextFile(`${dir}/rasp/rezultat`, '0\n')
     }
     if (opt.blocatExtractor) timer = setTimeout(() => opt.ctl!.abort(), 100)
+    if (opt.seapLista && /^L\d+$/.test(nume)) return new Response(opt.seapLista[Number(nume.slice(1))].text)
     return new Response(opt.arhiva ? 'zip simulat' : (opt.cuCod ? surseCod : surse)[nume])
   }
   try {
@@ -192,6 +196,18 @@ Deno.test('manifest (PR-2): documentul cu cod se verifică pe rândul care poart
   eq([r?.arhiva_cheie, r?.cale, r?.stare, r?.motiv], ['b (cn1-00002).pdf', 'b (CN1-00002).pdf', 'urcat', null], 'dovada versiunii confirmată pe cheia ei')
   assert(!scrieri.some(x => x.document_id === 12), 'rândul vechi b.pdf nu e comparat cu versiunea nouă (nicio dovadă retrogradată)')
   eq(raport.platforma_fara_seap, ['b.pdf', 'manual.pdf'], 'originalul înlocuit nu mai e în SEAP')
+})
+
+Deno.test('manifest (PR-2, Jakarinos r2): un cod fără rând nu cade pe numele altui cod — dovada lui /1 rămâne, /2 e raportat lipsă pe cheia lui', async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' }]
+  const dovada = { arhiva_cheie: 'n.pdf', cale: 'N.pdf', document_id: 21, sha256: await sha('alpha'), stare: 'urcat' }
+  const { raport, scrieri } = await scenariu({ docsBd, dovezi: [dovada],
+    seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' }, { nume: 'N.pdf', cod: 'CN1/00002', text: 'omega' }] })
+  const r1 = scrieri.find(x => x.document_id === 21)
+  eq([r1?.arhiva_cheie, r1?.cale, r1?.stare, r1?.motiv], ['n.pdf', 'N.pdf', 'urcat', null], 'dovada lui /1 confirmată, nu retrogradată')
+  const r2 = scrieri.find(x => x.cale === 'N (CN1-00002).pdf')
+  eq([r2?.arhiva_cheie, r2?.stare, r2?.document_id], ['n (cn1-00002).pdf', 'eroare_urcare', null], '/2 raportat lipsă, pe cheia lui')
+  eq([raport.identice, raport.diferite, raport.lipsa_in_platforma, scrieri.length], [1, 0, 1, 2])
 })
 
 Deno.test('manifest: uscat nu scrie manifestul', async () => {

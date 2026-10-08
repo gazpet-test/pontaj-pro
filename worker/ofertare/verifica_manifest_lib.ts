@@ -17,6 +17,7 @@
 import { listaSeap, descarca, volumRar, numeVolum, verificaListare, verificaVolume, pregatesteJob, listeazaIzolat, extrageIzolat, cheieNume } from './seap.ts'
 import { desface, numeDesfacut } from '../../supabase/functions/_shared/semnaturaCms.mjs'
 import { toatePaginile } from '../../supabase/functions/_shared/paginat.mjs'
+import { numeVersiune } from '../../supabase/functions/_shared/codSeap.mjs'
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
@@ -182,10 +183,31 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
           await umbla(`${dir}/out`, '')
         } else {
           // PR-2: codul pe un rând → acel rând, cu cheia lui de manifest (ca la urcare: numele fără .p7s); altfel pe nume
-          const dCod = peCod.get(String(grup[0].cod ?? '').trim())
-          const c = dCod ? String(dCod.nume_original).replace(/\.p7s$/i, '') : ''
-          if (dCod) await compara(c.toLowerCase(), c, locale[0].buf, dCod.nume_original, dCod)
-          else await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)
+          const cod = String(grup[0].cod ?? '').trim()
+          const dCod = peCod.get(cod)
+          const cheiaRandului = (d: DocumentBd) => String(d.nume_original).replace(/\.p7s$/i, '')
+          if (dCod) { const c = cheiaRandului(dCod); await compara(c.toLowerCase(), c, locale[0].buf, dCod.nume_original, dCod) }
+          else if (!cod) await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)
+          else {
+            // Jakarinos r2 pe #659 (P1): un cod care nu e pe niciun rând NU cade pe numele altui cod — „N.pdf” /1 (în platformă) și
+            // /2 (încă neadus) ar compara /2 cu documentul lui /1 și i-ar retrograda dovada. Numele cu cod „N (COD).ext” (versiune /
+            // frate urcat fără cod) se caută întâi; cu rivali pe nume (alt cod listat sau rândul găsit pe nume are alt cod) =
+            // LIPSĂ raportată pe cheia proprie a codului; fără rivali (rând vechi fără cod, nume unic) = pe nume, ca înainte.
+            const n2 = numeVersiune(grup[0].nume, cod)
+            const numeCod = locale[0].nume === grup[0].nume ? n2 : numeDesfacut(n2)
+            const dN2 = inPlatforma.get(cheieNume(numeCod))
+            const peNume = inPlatforma.get(cheieNume(locale[0].nume.split('/').pop()!)) ?? inPlatforma.get(cheieNume(locale[0].nume))
+            const rival = docs.some(x => x !== grup[0] && cheieNume(x.nume) === cheieNume(grup[0].nume) && String(x.cod ?? '').trim() && String(x.cod).trim() !== cod)
+              || !!(peNume && String(peNume.seap_cod ?? '').trim() && String(peNume.seap_cod).trim() !== cod)
+            if (dN2) { const c = cheiaRandului(dN2); await compara(c.toLowerCase(), c, locale[0].buf, dN2.nume_original, dN2) }
+            else if (rival) {
+              const c = numeCod.replace(/\.p7s$/i, '')
+              randuri.push({ licitatie_id: licId, arhiva_cheie: c.toLowerCase(), cale: c, marime: locale[0].buf.length, sha256: await sha(locale[0].buf), document_id: null,
+                stare: 'eroare_urcare', motiv: `LIPSĂ în platformă (verificare R6): codul SEAP ${cod} nu e pe niciun document, iar numele are alt cod`, verificat_la: new Date().toISOString() })
+              tally.lipsa++
+            }
+            else await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)
+          }
         }
       } catch (e) {
         semnal.throwIfAborted()
