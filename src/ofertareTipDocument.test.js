@@ -485,9 +485,10 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // R1 (r4): versiunea NU intră în `noi`; grupa răspunsuri + mail le ia DOAR din rândurile importate cu de_anuntat
     expect(src).toMatch(/if \(dec\.fel === 'versiune'\) \{ versiuni\.add\(dec\.nume\); continue; \}/)
     // E2 (r5): listele de versiuni se fac PE CANAL (clopoțel / mail), fiecare cu grupa ei de răspunsuri
-    // r5: listele se fac din versiunile PROASPETE (cele fără plic de reluat)
-    expect(src).toMatch(/const vNotif = destinatariNecunoscuti \? \[\] : proaspete\.filter\(\(d: any\) => !d\.seap_meta\?\.notificat_la\);/)
-    expect(src).toMatch(/const vMail = proaspete\.filter\(\(d: any\) => !d\.seap_meta\?\.mail_la\);/)
+    // r6: listele se fac din grupul PROASPĂT (ancora + membrii revendicați), nu dintr-un grup de reluat
+    expect(src).toMatch(/const grupNou = anc && !G \? \[anc, \.\.\.membriRev\] : \[\];/)
+    expect(src).toMatch(/let vNotif = destinatariNecunoscuti \? \[\] : grupNou\.filter\(\(d: any\) => !d\.seap_meta\?\.notificat_la\);/)
+    expect(src).toMatch(/let vMail = grupNou\.filter\(\(d: any\) => !d\.seap_meta\?\.mail_la\);/)
     expect(src).toMatch(/const versiuniNotif = vNotif\.map\(\(d: any\) => d\.nume_original as string\);\s*const versiuniMail = vMail\.map\(\(d: any\) => d\.nume_original as string\);/)
     expect(src).toMatch(/for \(const n of \[\.\.\.noi\.filter\(esteRaspuns\), \.\.\.versiuniCanal, \.\.\.raspunsuriAduse\]\)/)
     expect(src).toMatch(/const raspunsuri = grupa\(versiuniNotif\);[^\n]*\n\s*const raspunsuriMail = grupa\(versiuniMail\);/)
@@ -523,7 +524,7 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(bloc).not.toMatch(/seap_cod/)
     // versiunea adusă de ORICINE (UI, NAS) se anunță o dată: flag-ul se stinge DUPĂ notificări și mail
     // r5: confirmarea (care stinge flag-ul) se face DUPĂ clopoțel și mail (funcția `confirma` e doar definită mai sus)
-    const iMail = src.indexOf('const rm = await trimiteMail(planMail.corp, planMail.cheie);'), iF = src.indexOf('for (const d of ordineConfirmare(proaspete)) await confirma(d, notifOk, mailOk);')
+    const iMail = src.indexOf('const rm = await trimiteMail(planMail.corp, planMail.cheie);'), iF = src.indexOf('if (anc && !G) await incheie(')
     expect([iMail > 0, iF > iMail]).toEqual([true, true])
     expect(src).toMatch(/if \(meta\.notificat_la && meta\.mail_la\) \{ meta\.de_anuntat = false; meta\.anuntat_la = cand; \}/)
     expect(src).toMatch(/const versiuneDeAnuntat = \(d: any\) => !estePlaceholder\(d\) && d\?\.seap_meta\?\.de_anuntat === true;/)
@@ -617,8 +618,8 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     for (const x of ['if (!eDupaEdge && noi.some((n) => !areNume(urcateAcum, n))) {', 'const ramase = inventarOk ? noi.filter((n) => !areNume(urcate, n)) : [];', 'const cheiNoi = new Set(noi.flatMap((n) => cheiSeap(n)));', 'for (const n of ramase) {'])
       expect(src.includes(x), x).toBe(true)
     // anunțul: din inventarul de DUPĂ import (rânduri reale cu de_anuntat), înainte de notificări și mail; flag-ul se stinge după
-    const iAcum = src.indexOf('const { data: acum, error: eAcum } = await inventar('), iDe = src.indexOf('if (inventarOk) for (const d of (acum || []).filter(versiuneDeAnuntat)) {')   // r4: + revendicarea
-    const iNot = src.indexOf('const eN = await clopotel(supa, [...catre], m, m === mesajVersiuni);'), iMail = src.indexOf('const rm = await trimiteMail(planMail.corp, planMail.cheie);'), iF = src.indexOf('for (const d of ordineConfirmare(proaspete)) await confirma(d, notifOk, mailOk);')
+    const iAcum = src.indexOf('const { data: acum, error: eAcum } = await inventar('), iDe = src.indexOf('const restante = inventarOk ? (acum || []).filter(versiuneDeAnuntat) : [];')   // r6: ancora + revendicarea
+    const iNot = src.indexOf('const eN = await clopotel(supa, [...catre], m, m === mesajVersiuni);'), iMail = src.indexOf('const rm = await trimiteMail(planMail.corp, planMail.cheie);'), iF = src.indexOf('if (anc && !G) await incheie(')
     expect([iAcum > 0, iDe > iAcum, iNot > iDe, iMail > iNot, iF > iMail]).toEqual([true, true, true, true, true])
     // gol acceptat: versiunea neadusă rămâne în raport (coduri.versiuni + erorile importului) și se reia la rularea următoare
     expect(src).toMatch(/const coduri: any = \{ de_rezolvat: deRezolvat, versiuni: \[\.\.\.versiuni\], instabile, import: null \};/)
@@ -648,14 +649,15 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     // mailul: plecat, sau nedatorat (nimic de trimis / Resend neconfigurat — ca înainte); eșuat → rămâne pentru rularea următoare
     expect(src).toMatch(/let mailOk = !raspunsuriMail\.length;\s*let planMail[^\n]*\n[\s\S]{0,400}?if \(raspunsuriMail\.length\) \{/)
     expect(src).toMatch(/mail = 'sarit: lipseste RESEND_API_KEY';\s*mailOk = true;/)
-    expect(src).toMatch(/mailOk = rm\.ok && destinatariOk;/)
+    expect(src).toMatch(/mailOk = rm\.ok && A\.destinatariOk;/)
     expect(src).toMatch(/if \(eResp\) \{ destinatariOk = false;/)
     expect(src).toMatch(/const neaduse = raspunsuriMail\.filter/)
     // marcarea: fiecare canal reușit acum își pune data; flag-ul se stinge doar cu amândouă
-    const bloc = src.slice(src.indexOf('let versiuniAnuntate = 0;'), src.indexOf('raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length'))
+    const bloc = src.slice(src.indexOf('let versiuniInLucru = 0, versiuniAnuntate = 0;'), src.indexOf('raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length'))
+    expect(bloc.length).toBeGreaterThan(1000)
     expect(bloc).toMatch(/if \(!meta\.notificat_la && notifAcum\) meta\.notificat_la = cand;/)
     expect(bloc).toMatch(/if \(!meta\.mail_la && mailAcum\) meta\.mail_la = cand;/)
-    expect(bloc).toMatch(/for \(const d of ordineConfirmare\(proaspete\)\) await confirma\(d, notifOk, mailOk\);/)
+    expect(bloc).toMatch(/\(\) => \(grupEsuat \? \[false, false\] : \[notifOk, mailOk\]\)\);/)
     expect(bloc).toMatch(/if \(meta\.notificat_la && meta\.mail_la\) \{ meta\.de_anuntat = false; meta\.anuntat_la = cand; \}/)
     expect(bloc).not.toMatch(/de_anuntat: false/)
   })
@@ -694,7 +696,7 @@ describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea int
   const imp = readFileSync(new URL('../supabase/functions/ofertare-seap-import/index.ts', import.meta.url), 'utf8')
   it('veghea: cu destinatari necunoscuți, clopoțelul versiunilor se amână întreg (Jakarinos r3)', () => {
     const veg = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
-    expect(veg).toMatch(/const destinatariNecunoscuti = !!eOwners \|\| !!eValizi;\s*const vNotif = destinatariNecunoscuti \? \[\] :/)
+    expect(veg).toMatch(/const destinatariNecunoscuti = !!eOwners \|\| !!eValizi;[\s\S]{0,15000}?let vNotif = destinatariNecunoscuti \? \[\] :/)
     const iV = veg.indexOf('const destinatariNecunoscuti'), iO = veg.indexOf('let { data: owners, error: eOwners }'), iP = veg.indexOf("const { data: valizi, error } = await supa.from('profiles')")
     expect(iO).toBeGreaterThan(0); expect(iP).toBeGreaterThan(iO); expect(iV).toBeGreaterThan(iP)
   })
@@ -706,7 +708,10 @@ describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea int
     expect(veg).toMatch(/q\.or\(`seap_meta->>revendicat_pana\.is\.null,seap_meta->>revendicat_pana\.lt\.\$\{acum\}`\)\.select\('id'\)/)
     expect(veg).toMatch(/const REVENDICARE_MS = 10 \* 60 \* 1000;/)
     // doar versiunile revendicate de rularea asta intră în canale; confirmarea trece doar cu revendicarea încă a ei
-    expect(veg).toMatch(/if \(inventarOk\) for \(const d of \(acum \|\| \[\]\)\.filter\(versiuneDeAnuntat\)\) \{\s*const rv = await revendicaAnunt\(supa, d, tokenRulare\);\s*if \(rv\.meta\) deAnuntat\.push/)
+    // r6: ANCORA livrării (grupul de reluat sau versiunea cu id-ul cel mai mic) se revendică întâi; membrii după ea
+    expect(veg).toMatch(/const ancoraCit = cuGrup\.length \? minId\(cuGrup\) : restante\.length \? minId\(restante\) : null;/)
+    expect(veg).toMatch(/const rv = cuGrup\.length \? await revendicaGrup\(supa, ancoraCit, tokenRulare\) : await revendicaAnunt\(supa, ancoraCit, tokenRulare\);/)
+    expect(veg).toMatch(/const r2 = await revendicaAnunt\(supa, d, tokenRulare\);\s*if \(r2\.meta\) membriRev\.push/)
     expect(veg).toMatch(/\.eq\('id', d\.id\)\.eq\('seap_meta->>revendicare', token\)\.select\('id'\);/)
     expect(veg).toMatch(/const eF = await confirmaAnunt\(supa, d, tokenRulare, meta\);/)
     expect(veg).not.toMatch(/else if \(!nou\) continue;/)
@@ -715,22 +720,27 @@ describe('audit #4 — review PR-1 după runda 5 (Jakarinos r2 + verificarea int
     expect(veg).toMatch(/'Idempotency-Key': cheie \},/)
     expect(veg).toMatch(/if \(faraRepetare && lot\.length\) \{\s*const \{ data: deja, error: eD \} = await supa\.from\('notifications'\)\.select\('profile_id'\)\.in\('profile_id', lot\)/)
   })
-  it('veghea (Jakarinos r5): plicul livrării scris pe fiecare versiune ÎNAINTE de trimitere; reluarea trimite același plic; confirmarea întâi a rândurilor fără plic', () => {
+  it('veghea (Jakarinos r5 + r6): grupul livrării — pe UN rând-ancoră, scris ÎNAINTE de trimitere; reluarea doar de cine revendică ancora; ancora confirmată ULTIMA, grupul șters doar cu toți membrii confirmați', () => {
     const veg = readFileSync(new URL('../supabase/functions/ofertare-seap-veghe/index.ts', import.meta.url), 'utf8')
-    expect(veg).toMatch(/const PLIC_VALABIL_MS = 20 \* 3600 \* 1000;/)
-    // plicul: scris condiționat de revendicare, înainte de clopoțel și mail
-    expect(veg).toMatch(/\.update\(\{ seap_meta: meta \}\)\s*\.eq\('id', d\.id\)\.eq\('seap_meta->>revendicare', token\)\.select\('id'\);/)
-    const iPlic = veg.indexOf('const eP = await scriePlic(supa, d, tokenRulare, plicNou);'), iClop = veg.indexOf('const eN = await clopotel(supa, [...catre], m, m === mesajVersiuni);'), iMail = veg.indexOf('const rm = await trimiteMail(planMail.corp, planMail.cheie);')
-    expect([iPlic > 0, iClop > iPlic, iMail > iClop]).toEqual([true, true, true])
-    expect(veg).toMatch(/notif: mesajVersiuni \? \{ \.\.\.mesajVersiuni, catre: \[\.\.\.catre\], ids: vNotif\.map\(\(d\) => d\.id\) \} : null,/)
-    expect(veg).toMatch(/mail: planMail && vMail\.length \? \{ corp: planMail\.corp, cheie: planMail\.cheie, complet: destinatariOk, ids: vMail\.map\(\(d\) => d\.id\) \} : null,/)
-    // reluarea: același clopoțel (fără repetare), același mail (corp + cheie din plic), membrii fără plic propriu acoperiți
-    expect(veg).toMatch(/const eN = await clopotel\(supa, \(pl\.notif\.catre \|\| \[\]\)\.filter\(\(pid: string\) => ok\.has\(pid\)\), pl\.notif, true\);/)
-    expect(veg).toMatch(/const rm = await trimiteMail\(pl\.mail\.corp, pl\.mail\.cheie\);\s*mOk = rm\.ok && pl\.mail\.complet === true;/)
-    expect(veg).toMatch(/for \(const pl of plicuri\.values\(\)\) for \(const id of \(pl\.membri \|\| \[\]\)\) if \(!plicDe\.has\(id\)/)
-    expect(veg).toMatch(/const proaspete = deAnuntat\.filter\(\(d\) => !plicDe\.has\(d\.id\)\);/)
-    expect(veg).toMatch(/const ordineConfirmare = \(l: any\[\]\) => \[\.\.\.l\.filter\(\(d\) => !plicValid\(d\.seap_meta\?\.livrare\)\), \.\.\.l\.filter\(\(d\) => plicValid\(d\.seap_meta\?\.livrare\)\)\];/)
-    expect(veg).toMatch(/delete fin\.revendicare; delete fin\.revendicat_pana; delete fin\.livrare;/)
+    expect(veg).toMatch(/const GRUP_VALABIL_MS = 20 \* 3600 \* 1000;/)
+    // revendicarea ancorei care poartă grupul: același grup + nicio revendicare vie
+    expect(veg).toMatch(/\.eq\('id', d\.id\)\.eq\('seap_meta->grup->>id', String\(m0\.grup\?\.id\)\)/)
+    // grupul: o singură scriere pe ancoră, înainte de clopoțel și mail
+    const iGrup = veg.indexOf('const eG = await scrieGrup(supa, anc, tokenRulare, grup);'), iClop = veg.indexOf('const eN = await clopotel(supa, [...catre], m, m === mesajVersiuni);'), iMail = veg.indexOf('const rm = await trimiteMail(planMail.corp, planMail.cheie);')
+    expect([iGrup > 0, iClop > iGrup, iMail > iClop]).toEqual([true, true, true])
+    expect(veg).toMatch(/notif: A\.mesajVersiuni \? \{ \.\.\.A\.mesajVersiuni, catre: \[\.\.\.catre\], ids: vNotif\.map\(\(d: any\) => d\.id\) \} : null,/)
+    expect(veg).toMatch(/mail: A\.planMail && vMail\.length \? \{ corp: A\.planMail\.corp, cheie: A\.planMail\.cheie, complet: A\.destinatariOk, ids: vMail\.map\(\(d: any\) => d\.id\) \} : null,/)
+    // grupul nescris → nimic despre versiuni nu pleacă acum, fără date de canal
+    expect(veg).toMatch(/grupEsuat = true; vNotif = \[\]; vMail = \[\];\s*A = await alcatuieste\(\[\], \[\]\);/)
+    // reluarea: doar canalele netrimise, IDENTIC (destinatarii și corpul + cheia din grup)
+    expect(veg).toMatch(/if \(G\.notif && !trimis\.notif\) \{/)
+    expect(veg).toMatch(/const eN = await clopotel\(supa, \(G\.notif\.catre \|\| \[\]\)\.filter\(\(pid: string\) => ok\.has\(pid\)\), G\.notif, true\);/)
+    expect(veg).toMatch(/if \(G\.mail && !trimis\.mail\) \{\s*const rm = await trimiteMail\(G\.mail\.corp, G\.mail\.cheie\);/)
+    // încheierea: „trimis” pe ancoră, membrii, ancora ULTIMA; grupul păstrat cât un membru e nerevendicat / neconfirmat
+    expect(veg).toMatch(/for \(const d of membriRev\) \{ const \[n, m\] = steag\(d\); if \(!\(await confirma\(d, n, m, null\)\)\) incomplet = true; \}/)
+    expect(veg).toMatch(/const neplecat = !!grup && \(\(!!grup\.notif && !grup\.trimis\?\.notif\) \|\| \(!!grup\.mail && !grup\.trimis\?\.mail\)\);\s*const \[n, m\] = steag\(anc\);\s*await confirma\(anc, n, m, incomplet \|\| neplecat \? grup : null\);/)
+    expect(veg).toMatch(/if \(grup\) meta\.grup = grup; else delete meta\.grup;/)
+    expect(veg).not.toMatch(/PLIC_VALABIL_MS|scriePlic|ordineConfirmare/)
   })
   it('importul: după 3 descărcări per fișier căzute la rând, o singură încercare (bugetul rămâne pentru rezerva arhivă)', () => {
     expect(imp).toMatch(/const rd = await fetchSeap\(link, \{ headers: antetDesc \}, pesteBuget, esecuriLaRand >= 3 \? 1 : 4\);/)

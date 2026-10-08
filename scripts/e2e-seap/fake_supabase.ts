@@ -14,11 +14,12 @@ let nextId = 10000
 const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const likeRe = (p: string, f = '') => new RegExp('^' + p.split('%').map(esc).join('.*') + '$', f)
 const DUP = { code: '23505', message: 'duplicate key value violates unique constraint "ofertare_doc_seap_cod_unic"' }
-// Jakarinos r4: coloana poate fi o cale JSON „col->>cheie” (text, ca în PostgREST: null dacă lipsește)
+// Jakarinos r4/r6: coloana poate fi o cale JSON „col->>cheie” / „col->a->>cheie” (text, ca în PostgREST: null dacă lipsește)
 const val = (r: any, c: string) => {
-  const m = /^(\w+)->>(\w+)$/.exec(c)
-  if (!m) return r[c]
-  const v = r[m[1]]?.[m[2]]
+  if (!c.includes('->')) return r[c]
+  const [col, ...chei] = c.split(/->>?/)
+  let v = r[col]
+  for (const k of chei) v = v?.[k]
   return v == null ? null : typeof v === 'object' ? JSON.stringify(v) : String(v)
 }
 class Q {

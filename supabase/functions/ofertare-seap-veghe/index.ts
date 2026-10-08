@@ -97,8 +97,10 @@
 //   Jakarinos r4: rulari simultane (cron + „Verifica acum”) — anuntul unei versiuni il da doar rularea care a revendicat-o atomic
 //   (seap_meta.revendicare / revendicat_pana, expira in 10 min), confirmarea trece doar cu revendicarea inca a ei; mailul poarta
 //   Idempotency-Key (amprenta continutului), clopotelul versiunilor nu se repeta cu acelasi continut in 24 h (versiuni_in_lucru).
-//   Jakarinos r5: plicul livrarii (seap_meta.livrare) se scrie pe fiecare versiune INAINTE de trimitere; o rulare oprita oriunde
-//   (intre trimiteri, intre confirmari) e reluata cu acelasi plic — acelasi clopotel, acelasi mail, aceeasi cheie (reluari in raport).
+//   Jakarinos r5 + r6: o livrare are UN rand-ancora (grupul de reluat, altfel versiunea cu id-ul cel mai mic); pe el stau
+//   revendicarea si seap_meta.grup (continutul exact + ce a plecat), scris INAINTE de trimitere. Reluarea o face doar cine
+//   revendica ancora, cu acelasi continut; ancora se confirma ultima si isi sterge grupul doar cand toate canalele au plecat si toti
+//   membrii sunt confirmati (reluari in raport).
 //
 // notifications.modul are CHECK pe lista fixa de module - pentru ofertare valoarea
 // corecta e 'Comercial'. Cu 'ofertare' insertul pica silentios.
@@ -153,18 +155,32 @@ async function revendicaAnunt(supa: any, d: any, token: string): Promise<{ meta?
 }
 async function confirmaAnunt(supa: any, d: any, token: string, meta: Record<string, unknown>): Promise<string | null> {
   const fin: Record<string, unknown> = { ...meta };
-  delete fin.revendicare; delete fin.revendicat_pana; delete fin.livrare;
+  delete fin.revendicare; delete fin.revendicat_pana;
   const { data, error } = await supa.from('ofertare_documente_atribuire').update({ seap_meta: fin })
     .eq('id', d.id).eq('seap_meta->>revendicare', token).select('id');
   if (error) return error.message;
   return Array.isArray(data) && data.length === 1 ? null : 'revendicarea a expirat si a preluat-o alta rulare - canalele de acum nu s-au confirmat';
 }
-// Jakarinos r5 (P1): plicul livrarii (seap_meta.livrare) — ce trimite rularea despre versiuni, scris pe fiecare versiune INAINTE de
-// trimitere, ca o reluare sa trimita exact acelasi continut (vezi anuntul, mai jos). 20 h < fereastra de 24 h a cheii Resend si a
-// verificarii clopotelului pe continut.
-const PLIC_VALABIL_MS = 20 * 3600 * 1000;
-async function scriePlic(supa: any, d: any, token: string, plic: unknown): Promise<string | null> {
-  const meta = { ...(d.seap_meta || {}), livrare: plic };
+// Jakarinos r5 + r6 (P1): GRUPUL livrarii. Un anunt de versiuni are UN SINGUR rand-ancora (versiunea cu id-ul cel mai mic, sau
+// randul care poarta deja un grup); pe el stau revendicarea si seap_meta.grup = { id, la, membri, notif (text + destinatari + ids),
+// mail (corp + cheie + complet + ids), trimis } — scris INAINTE de orice trimitere, intr-o singura scriere. Reluarea (dupa o oprire)
+// o poate face doar cine revendica ancora, si trimite ACELASI continut. 20 h < fereastra de 24 h a cheii Resend si a verificarii
+// clopotelului pe continut.
+const GRUP_VALABIL_MS = 20 * 3600 * 1000;
+const grupValid = (g: any, acumMs: number) => !!g && typeof g.id === 'string' && Array.isArray(g.membri) && Number(g.la) > acumMs - GRUP_VALABIL_MS;
+// revendicarea ancorei care poarta un grup: conditia = ACELASI grup + nicio revendicare vie (de_anuntat poate fi deja false)
+async function revendicaGrup(supa: any, d: any, token: string): Promise<{ meta?: Record<string, unknown>; eroare?: string }> {
+  const m0 = d.seap_meta || {}, acum = Date.now();
+  const meta = { ...m0, revendicare: token, revendicat_pana: acum + REVENDICARE_MS };
+  const { data, error } = await supa.from('ofertare_documente_atribuire').update({ seap_meta: meta })
+    .eq('id', d.id).eq('seap_meta->grup->>id', String(m0.grup?.id))
+    .or(`seap_meta->>revendicat_pana.is.null,seap_meta->>revendicat_pana.lt.${acum}`).select('id');
+  if (error) return { eroare: error.message };
+  return Array.isArray(data) && data.length === 1 ? { meta } : {};
+}
+// grupul (sau starea lui „trimis”) pe ancora, doar cat revendicarea e a acestei rulari
+async function scrieGrup(supa: any, d: any, token: string, grup: unknown): Promise<string | null> {
+  const meta = { ...(d.seap_meta || {}), grup };
   const { data, error } = await supa.from('ofertare_documente_atribuire').update({ seap_meta: meta })
     .eq('id', d.id).eq('seap_meta->>revendicare', token).select('id');
   if (error) return error.message;
@@ -737,36 +753,46 @@ Deno.serve(async (req: Request) => {
     // E2 (r5, Jakarinos P1): confirmarea e PE CANAL — seap_meta.notificat_la (clopotelul) si seap_meta.mail_la (mailul) se pun
     // separat, doar cand canalul a reusit; de_anuntat = false abia cand le are pe amandoua. La rularea urmatoare, o versiune deja
     // notificata intra DOAR in mail (si invers): listele de versiuni se fac pe canal, fara a doua notificare / al doilea mail.
-    // Jakarinos r4 (P1): se anunta DOAR versiunile revendicate de aceasta rulare (revendicaAnunt) — o versiune revendicata acum de
-    // alta rulare (cron / „Verifica acum”) e a ei: aici nu intra in niciun canal (versiuni_in_lucru in raport).
-    const deAnuntat: any[] = [];
-    let versiuniInLucru = 0;
-    if (inventarOk) for (const d of (acum || []).filter(versiuneDeAnuntat)) {
-      const rv = await revendicaAnunt(supa, d, tokenRulare);
-      if (rv.meta) deAnuntat.push({ ...d, seap_meta: rv.meta });
-      else if (rv.eroare) raport.push({ licitatie: lic.nr_anunt, anunt_versiune_nerevendicat: `#${d.id}: ${rv.eroare}` });
-      else versiuniInLucru++;
-    }
-    // Jakarinos r5 (P1): PLICUL. Inainte de a trimite ceva despre versiuni, rularea scrie pe FIECARE versiune revendicata exact ce
-    // trimite (seap_meta.livrare: textul clopotelului + destinatarii, corpul + cheia mailului, ce versiuni acopera fiecare canal,
-    // membrii). O rulare oprita oriunde dupa scriere (intre trimiteri, intre confirmari) e reluata — dupa expirarea revendicarii —
-    // cu ACELASI plic: clopotelul identic nu mai pleaca la cine l-a primit, mailul identic cu aceeasi cheie nu-l retrimite Resend.
-    // Identitatea livrarii nu se mai recalculeaza din grupul curent de versiuni restante (A + B livrate, doar A confirmata → B se
-    // reia cu plicul „A + B”, nu cu un mesaj nou „B”). Un plic mai vechi de PLIC_VALABIL_MS nu se mai reia (fereastra de 24 h a
-    // cheii Resend si a verificarii clopotelului) — versiunea lui se anunta din nou, ca proaspata.
+    // Jakarinos r4 (P1): rulari simultane (cron + „Verifica acum”) — anuntul versiunilor il da doar rularea care a revendicat atomic
+    // ANCORA livrarii (vezi revendicaAnunt / revendicaGrup); versiunile ei (membrii) se revendica si ele, ca nicio versiune sa nu intre
+    // in doua livrari. Jakarinos r5 + r6 (P1): grupul (continutul exact trimis) sta pe ancora si se scrie INAINTE de orice trimitere;
+    // o rulare oprita oriunde e reluata de cine revendica ancora, cu ACELASI continut (clopotelul identic sarit pentru cine il are,
+    // mailul identic oprit de cheia Resend, nimic retrimis daca grupul spune ca a plecat); ancora se confirma ULTIMA si isi sterge
+    // grupul doar cand toti membrii sunt confirmati. Versiunile restante din afara grupului de reluat asteapta rularea urmatoare.
     const acumMs = Date.now();
-    const plicValid = (l: any) => !!l && typeof l.id === 'string' && Number(l.la) > acumMs - PLIC_VALABIL_MS;
-    const plicuri = new Map<string, any>();
-    for (const d of deAnuntat) { const l = d.seap_meta?.livrare; if (plicValid(l) && !plicuri.has(l.id)) plicuri.set(l.id, l); }
-    const plicDe = new Map<number, any>();   // versiune revendicata → plicul care o acopera (al ei, sau al unui frate, ca membru)
-    for (const d of deAnuntat) { const l = d.seap_meta?.livrare; if (plicValid(l)) plicDe.set(d.id, plicuri.get(l.id)); }
-    for (const pl of plicuri.values()) for (const id of (pl.membri || [])) if (!plicDe.has(id) && deAnuntat.some((d) => d.id === id)) plicDe.set(id, pl);
-    const proaspete = deAnuntat.filter((d) => !plicDe.has(d.id));
-    // confirmarea: intai randurile FARA plic propriu, apoi cele care il poarta — o oprire intre confirmari lasa mereu un plic
-    // pentru versiunile neconfirmate inca
-    const ordineConfirmare = (l: any[]) => [...l.filter((d) => !plicValid(d.seap_meta?.livrare)), ...l.filter((d) => plicValid(d.seap_meta?.livrare))];
-    let versiuniAnuntate = 0;
-    const confirma = async (d: any, notifAcum: boolean, mailAcum: boolean) => {
+    const restante = inventarOk ? (acum || []).filter(versiuneDeAnuntat) : [];
+    const cuGrup = inventarOk ? (acum || []).filter((d: any) => grupValid(d.seap_meta?.grup, acumMs)) : [];
+    const minId = (l: any[]) => l.reduce((a: any, b: any) => (b.id < a.id ? b : a));
+    const ancoraCit = cuGrup.length ? minId(cuGrup) : restante.length ? minId(restante) : null;
+    let versiuniInLucru = 0, versiuniAnuntate = 0;
+    let anc: any = null;           // ancora revendicata de aceasta rulare
+    let G: any = null;             // grupul de RELUAT (gasit pe ancora)
+    const membriRev: any[] = [];   // celelalte versiuni ale livrarii, revendicate
+    let incomplet = false;         // un membru nerevendicat / neconfirmat → grupul ramane pe ancora (se reia)
+    if (ancoraCit) {
+      const rv = cuGrup.length ? await revendicaGrup(supa, ancoraCit, tokenRulare) : await revendicaAnunt(supa, ancoraCit, tokenRulare);
+      if (rv.eroare) raport.push({ licitatie: lic.nr_anunt, anunt_versiune_nerevendicat: `#${ancoraCit.id}: ${rv.eroare}` });
+      else if (!rv.meta) versiuniInLucru = Math.max(restante.length, 1);
+      else {
+        anc = { ...ancoraCit, seap_meta: rv.meta };
+        G = cuGrup.length ? (rv.meta as any).grup : null;
+        for (const id of (G ? G.membri : restante.map((d: any) => d.id))) {
+          if (id === anc.id) continue;
+          const d = (acum || []).find((x: any) => x.id === id);
+          if (!d || !versiuneDeAnuntat(d)) continue;     // confirmata deja (sau stearsa)
+          const r2 = await revendicaAnunt(supa, d, tokenRulare);
+          if (r2.meta) membriRev.push({ ...d, seap_meta: r2.meta });
+          else {
+            incomplet = true;
+            if (r2.eroare) raport.push({ licitatie: lic.nr_anunt, anunt_versiune_nerevendicat: `#${d.id}: ${r2.eroare}` });
+            else versiuniInLucru++;
+          }
+        }
+      }
+    }
+    // confirmarea unei versiuni: canalele reusite acum isi pun data; de_anuntat = false doar cu amandoua (E2); `grup` = grupul pastrat
+    // pe ancora (null = sters). Scrierea elibereaza revendicarea, doar cat e a acestei rulari (r4). Intoarce reusita.
+    const confirma = async (d: any, notifAcum: boolean, mailAcum: boolean, grup: any): Promise<boolean> => {
       const m0 = d.seap_meta || {}, cand = new Date().toISOString();
       const meta: Record<string, unknown> = { ...m0 };
       if (!meta.notificat_la && notifAcum) meta.notificat_la = cand;
@@ -774,124 +800,138 @@ Deno.serve(async (req: Request) => {
       if (meta.notificat_la !== m0.notificat_la || meta.mail_la !== m0.mail_la) versiuniAnuntate++;
       // ambele canale confirmate (acum sau mai demult) → flag-ul se stinge; altfel ramane pentru rularea urmatoare
       if (meta.notificat_la && meta.mail_la) { meta.de_anuntat = false; meta.anuntat_la = cand; }
-      // r4: scrierea elibereaza MEREU revendicarea si plicul (si fara canal nou), doar cat revendicarea e inca a acestei rulari
+      if (grup) meta.grup = grup; else delete meta.grup;
       const eF = await confirmaAnunt(supa, d, tokenRulare, meta);
       if (eF) raport.push({ licitatie: lic.nr_anunt, anunt_versiune_nemarcat: `#${d.id}: ${eF}` });
+      return !eF;
+    };
+    // incheierea unei livrari: ce a plecat → pe ancora (o scriere), apoi membrii, apoi ancora ULTIMA. Grupul se sterge doar cand
+    // TOATE canalele lui au plecat si toti membrii au fost revendicati si confirmati; altfel ramane (cu „trimis”) si se reia identic
+    // — un canal cazut nu se mai reface cu alt continut cat timp e posibil sa fi ajuns deja la cineva.
+    const incheie = async (grup: any, steag: (d: any) => [boolean, boolean]) => {
+      if (grup) { const eT = await scrieGrup(supa, anc, tokenRulare, grup); if (eT) raport.push({ licitatie: lic.nr_anunt, grup_trimis_nemarcat: `#${anc.id}: ${eT}` }); }
+      for (const d of membriRev) { const [n, m] = steag(d); if (!(await confirma(d, n, m, null))) incomplet = true; }
+      const neplecat = !!grup && ((!!grup.notif && !grup.trimis?.notif) || (!!grup.mail && !grup.trimis?.mail));
+      const [n, m] = steag(anc);
+      await confirma(anc, n, m, incomplet || neplecat ? grup : null);
     };
 
-    // RELUAREA plicurilor ramase de la o rulare oprita: acelasi clopotel (destinatarii din plic care mai au profil, fara cei care
-    // il au deja), acelasi mail (corp + cheie din plic); confirma doar versiunile acoperite de plic si revendicate acum.
+    // RELUAREA grupului gasit pe ancora: canalele care nu figureaza ca trimise pleaca din nou, IDENTIC (destinatarii din grup care
+    // mai au profil, fara cei care au deja mesajul; corpul + cheia mailului din grup); se confirma doar ce acopera grupul.
     const reluari: any[] = [];
-    for (const pl of plicuri.values()) {
-      const ale = deAnuntat.filter((d) => plicDe.get(d.id) === pl);
-      const st: any = { plic: pl.id, versiuni: ale.length };
-      let nOk = false, mOk = false;
-      if (pl.notif && ale.some((d) => pl.notif.ids?.includes(d.id))) {
-        const { data: vz, error: eVz } = await supa.from('profiles').select('id').in('id', pl.notif.catre || []);
+    if (anc && G) {
+      const trimis = { notif: !!G.trimis?.notif, mail: !!G.trimis?.mail };
+      const st: any = { grup: G.id, versiuni: 1 + membriRev.length };
+      if (G.notif && !trimis.notif) {
+        const { data: vz, error: eVz } = await supa.from('profiles').select('id').in('id', G.notif.catre || []);
         if (eVz) st.clopotel = `profiluri: ${eVz.message}`;
         else {
           const ok = new Set((vz || []).map((x: any) => x.id));
-          const eN = await clopotel(supa, (pl.notif.catre || []).filter((pid: string) => ok.has(pid)), pl.notif, true);
-          nOk = !eN; st.clopotel = eN || 'ok';
+          const eN = await clopotel(supa, (G.notif.catre || []).filter((pid: string) => ok.has(pid)), G.notif, true);
+          trimis.notif = !eN; st.clopotel = eN || 'ok';
         }
       }
-      if (pl.mail && ale.some((d) => pl.mail.ids?.includes(d.id))) {
-        const rm = await trimiteMail(pl.mail.corp, pl.mail.cheie);
-        mOk = rm.ok && pl.mail.complet === true; st.mail = rm.text;
+      if (G.mail && !trimis.mail) {
+        const rm = await trimiteMail(G.mail.corp, G.mail.cheie);
+        trimis.mail = rm.ok; st.mail = rm.text;
       }
-      for (const d of ordineConfirmare(ale)) await confirma(d, nOk && !!pl.notif?.ids?.includes(d.id), mOk && !!pl.mail?.ids?.includes(d.id));
+      await incheie({ ...G, trimis }, (d) => [
+        trimis.notif && !!G.notif?.ids?.includes(d.id),
+        trimis.mail && G.mail?.complet === true && !!G.mail?.ids?.includes(d.id),
+      ]);
       reluari.push(st);
     }
 
     // Jakarinos r3 (P1): cu destinatari necunoscuti (owneri / profiluri necitite), clopotelul versiunilor se AMANA intreg — trimis
     // doar unei parti, s-ar repeta la reluare pentru cei care l-au primit deja. Raspunsurile / termenul pleaca oricum (ca inainte).
     const destinatariNecunoscuti = !!eOwners || !!eValizi;
-    const vNotif = destinatariNecunoscuti ? [] : proaspete.filter((d: any) => !d.seap_meta?.notificat_la);
-    const vMail = proaspete.filter((d: any) => !d.seap_meta?.mail_la);
-    const versiuniNotif = vNotif.map((d: any) => d.nume_original as string);
-    const versiuniMail = vMail.map((d: any) => d.nume_original as string);
+    const grupNou = anc && !G ? [anc, ...membriRev] : [];
     const cheiRaspunsuriAduse = new Set(raspunsuriAduse.map(cheieRand));
-    // grupa „raspuns / modificare a documentatiei” a unui canal: raspunsurile noi + versiunile canalului + raspunsurile GetAll
-    const grupa = (versiuniCanal: string[]) => {
-      const out: string[] = [], vazuteR = new Set<string>();
-      for (const n of [...noi.filter(esteRaspuns), ...versiuniCanal, ...raspunsuriAduse]) {
-        const k = cheieNume(n);
-        if (vazuteR.has(k)) continue;
-        vazuteR.add(k);
-        out.push(n);
-      }
-      return out;
-    };
-    const raspunsuri = grupa(versiuniNotif);       // clopotelul
-    const raspunsuriMail = grupa(versiuniMail);    // mailul
     const restul = noi.filter((n) => !esteRaspuns(n) && !areNume(cheiRaspunsuriAduse, n));
-
-    const mesaje: { type: string; title: string; message: string }[] = [];
-    if (termen?.nou) {
-      const ro = (x: string) => new Date(x).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest' });
-      mesaje.push({
-        type: 'warning',
-        title: `SEAP: TERMEN MUTAT la ${lic.nr_anunt}`,
-        message: `Autoritatea a schimbat termenul de depunere: ${termen.vechi ? ro(termen.vechi) : '(nesetat)'} -> ${ro(termen.nou)}. Data din platforma a fost actualizata automat din anuntul SEAP. Verifica graficul de lucru si valabilitatea garantiei de participare.`,
-      });
-    }
-    // E2: mesajul care poarta versiunile — doar inserturile LUI confirma canalul clopotelului (notificat_la)
-    let mesajVersiuni: { type: string; title: string; message: string } | null = null;
-    if (raspunsuri.length) {
-      const parti = [`Autoritatea a publicat ${raspunsuri.length} document(e) care par raspuns la clarificari sau modificare a documentatiei: ${nume(raspunsuri)}.`];
-      if (raspunsuriAduse.length) parti.push(`Dintre ele, ${raspunsuriAduse.length} sunt raspunsuri publicate de autoritate, aduse automat din SEAP: ${nume(raspunsuriAduse)}. Se citesc din Ofertare -> Clarificari.`);
-      if (versiuniNotif.length) parti.push(`${versiuniNotif.length} sunt VERSIUNI NOI ale unor documente din documentatie (acelasi nume, cod SEAP nou — versiunea veche nu mai e cea in vigoare): ${nume(versiuniNotif)}.`);
-      const intrate = raspunsuri.filter((n) => areNume(urcate, n));
-      if (!inventarOk) parti.push(NESTIUT);
-      else if (intrate.length < raspunsuri.length) parti.push('ATENTIE: nu toate au putut fi aduse automat - urca-le din "Urca fisiere".');
-      parti.push('Citeste-le si treci intrebarea si raspunsul in Clarificari. Daca raspunsul schimba o cerinta, cerinta din registru trebuie actualizata.');
-      const m = {
-        type: 'warning',
-        title: `SEAP: RASPUNS de la autoritate la ${lic.nr_anunt}`,
-        message: parti.join(' '),
-      };
-      mesaje.push(m);
-      if (versiuniNotif.length) mesajVersiuni = m;
-    }
-    if (restul.length) {
-      const parti: string[] = [];
-      const intrate = restul.filter((n) => areNume(urcate, n));
-      const lipsa = restul.filter((n) => !areNume(urcate, n));
-      if (!inventarOk) parti.push(`Detectate in SEAP: ${nume(restul)}. ${NESTIUT}`);
-      else {
-        if (intrate.length) parti.push(`Aduse in platforma: ${nume(intrate)}.`);
-        if (lipsa.length) parti.push(`Raman de urcat manual: ${nume(lipsa)}.`);
-      }
-      mesaje.push({
-        type: 'info',
-        title: `SEAP: ${restul.length} document(e) nou(i) la ${lic.nr_anunt}`,
-        message: parti.join(' '),
-      });
-    }
-
-    // v3: MAIL doar pentru raspunsuri si erate. Restul ramane in clopotel. r5: mailul se COMPUNE inainte de orice trimitere (intra
-    // in plic); pleaca dupa clopotel, ca inainte.
-    // E2: mailOk = mailul a plecat, sau nu era datorat (nimic de trimis / Resend neconfigurat — ca inainte, nu tine anuntul pe loc)
-    let mail: string | null = null;
-    let mailOk = !raspunsuriMail.length;
-    let planMail: { corp: string; cheie: string; to: string[] } | null = null;
-    // Jakarinos r2 (P1): responsabilul necitit (eroare) = lista de mail incompleta → mailul pleaca (raspunsurile nu se pierd), dar
-    // canalul versiunilor ramane restant si se reia (o dublura la office e preferabila unui anunt pierdut pentru responsabil)
-    let destinatariOk = true;
-    if (raspunsuriMail.length) {
-      if (!Deno.env.get('RESEND_API_KEY')) {
-        mail = 'sarit: lipseste RESEND_API_KEY';
-        mailOk = true;
-      } else {
-        const to = [OFFICE];
-        if (lic.responsabil_id) {
-          let { data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle();
-          if (eResp) ({ data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle());
-          if (eResp) { destinatariOk = false; raport.push({ licitatie: lic.nr_anunt, destinatari_necunoscuti: `responsabil: ${eResp.message}` }); }
-          else if (resp?.email && !to.includes(resp.email)) to.push(resp.email);
+    // mesajele si mailul rularii, pentru versiunile date (o scriere de grup esuata → se refac FARA versiuni: nimic trimis fara grup)
+    const alcatuieste = async (vNotif: any[], vMail: any[]) => {
+      const versiuniNotif = vNotif.map((d: any) => d.nume_original as string);
+      const versiuniMail = vMail.map((d: any) => d.nume_original as string);
+      // grupa „raspuns / modificare a documentatiei” a unui canal: raspunsurile noi + versiunile canalului + raspunsurile GetAll
+      const grupa = (versiuniCanal: string[]) => {
+        const out: string[] = [], vazuteR = new Set<string>();
+        for (const n of [...noi.filter(esteRaspuns), ...versiuniCanal, ...raspunsuriAduse]) {
+          const k = cheieNume(n);
+          if (vazuteR.has(k)) continue;
+          vazuteR.add(k);
+          out.push(n);
         }
-        const neaduse = raspunsuriMail.filter((n) => !areNume(urcate, n));
-        const html = `
+        return out;
+      };
+      const raspunsuri = grupa(versiuniNotif);       // clopotelul
+      const raspunsuriMail = grupa(versiuniMail);    // mailul
+
+      const mesaje: { type: string; title: string; message: string }[] = [];
+      if (termen?.nou) {
+        const ro = (x: string) => new Date(x).toLocaleString('ro-RO', { timeZone: 'Europe/Bucharest' });
+        mesaje.push({
+          type: 'warning',
+          title: `SEAP: TERMEN MUTAT la ${lic.nr_anunt}`,
+          message: `Autoritatea a schimbat termenul de depunere: ${termen.vechi ? ro(termen.vechi) : '(nesetat)'} -> ${ro(termen.nou)}. Data din platforma a fost actualizata automat din anuntul SEAP. Verifica graficul de lucru si valabilitatea garantiei de participare.`,
+        });
+      }
+      // E2: mesajul care poarta versiunile — doar inserturile LUI confirma canalul clopotelului (notificat_la)
+      let mesajVersiuni: { type: string; title: string; message: string } | null = null;
+      if (raspunsuri.length) {
+        const parti = [`Autoritatea a publicat ${raspunsuri.length} document(e) care par raspuns la clarificari sau modificare a documentatiei: ${nume(raspunsuri)}.`];
+        if (raspunsuriAduse.length) parti.push(`Dintre ele, ${raspunsuriAduse.length} sunt raspunsuri publicate de autoritate, aduse automat din SEAP: ${nume(raspunsuriAduse)}. Se citesc din Ofertare -> Clarificari.`);
+        if (versiuniNotif.length) parti.push(`${versiuniNotif.length} sunt VERSIUNI NOI ale unor documente din documentatie (acelasi nume, cod SEAP nou — versiunea veche nu mai e cea in vigoare): ${nume(versiuniNotif)}.`);
+        const intrate = raspunsuri.filter((n) => areNume(urcate, n));
+        if (!inventarOk) parti.push(NESTIUT);
+        else if (intrate.length < raspunsuri.length) parti.push('ATENTIE: nu toate au putut fi aduse automat - urca-le din "Urca fisiere".');
+        parti.push('Citeste-le si treci intrebarea si raspunsul in Clarificari. Daca raspunsul schimba o cerinta, cerinta din registru trebuie actualizata.');
+        const m = {
+          type: 'warning',
+          title: `SEAP: RASPUNS de la autoritate la ${lic.nr_anunt}`,
+          message: parti.join(' '),
+        };
+        mesaje.push(m);
+        if (versiuniNotif.length) mesajVersiuni = m;
+      }
+      if (restul.length) {
+        const parti: string[] = [];
+        const intrate = restul.filter((n) => areNume(urcate, n));
+        const lipsa = restul.filter((n) => !areNume(urcate, n));
+        if (!inventarOk) parti.push(`Detectate in SEAP: ${nume(restul)}. ${NESTIUT}`);
+        else {
+          if (intrate.length) parti.push(`Aduse in platforma: ${nume(intrate)}.`);
+          if (lipsa.length) parti.push(`Raman de urcat manual: ${nume(lipsa)}.`);
+        }
+        mesaje.push({
+          type: 'info',
+          title: `SEAP: ${restul.length} document(e) nou(i) la ${lic.nr_anunt}`,
+          message: parti.join(' '),
+        });
+      }
+
+      // v3: MAIL doar pentru raspunsuri si erate. Restul ramane in clopotel. r5: mailul se COMPUNE inainte de orice trimitere (intra
+      // in grup); pleaca dupa clopotel, ca inainte.
+      // E2: mailOk = mailul a plecat, sau nu era datorat (nimic de trimis / Resend neconfigurat — ca inainte, nu tine anuntul pe loc)
+      let mail: string | null = null;
+      let mailOk = !raspunsuriMail.length;
+      let planMail: { corp: string; cheie: string; to: string[] } | null = null;
+      // Jakarinos r2 (P1): responsabilul necitit (eroare) = lista de mail incompleta → mailul pleaca (raspunsurile nu se pierd), dar
+      // canalul versiunilor ramane restant si se reia (o dublura la office e preferabila unui anunt pierdut pentru responsabil)
+      let destinatariOk = true;
+      if (raspunsuriMail.length) {
+        if (!Deno.env.get('RESEND_API_KEY')) {
+          mail = 'sarit: lipseste RESEND_API_KEY';
+          mailOk = true;
+        } else {
+          const to = [OFFICE];
+          if (lic.responsabil_id) {
+            let { data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle();
+            if (eResp) ({ data: resp, error: eResp } = await supa.from('profiles').select('email, name').eq('id', lic.responsabil_id).maybeSingle());
+            if (eResp) { destinatariOk = false; raport.push({ licitatie: lic.nr_anunt, destinatari_necunoscuti: `responsabil: ${eResp.message}` }); }
+            else if (resp?.email && !to.includes(resp.email)) to.push(resp.email);
+          }
+          const neaduse = raspunsuriMail.filter((n) => !areNume(urcate, n));
+          const html = `
           <p>Autoritatea a publicat <b>${raspunsuriMail.length} document(e)</b> care par raspuns la clarificari sau modificare a documentatiei.</p>
           <p><b>Licitatie:</b> ${esc(lic.nr_anunt || '')} — ${esc(lic.obiect || '')}<br>
              <b>Termen depunere:</b> ${termenRO(lic.termen_depunere) || '—'}</p>
@@ -901,27 +941,41 @@ Deno.serve(async (req: Request) => {
           ${!inventarOk ? `<p><b>Atentie:</b> ${esc(NESTIUT)}</p>` : neaduse.length ? '<p><b>Atentie:</b> nu toate au intrat automat in platforma.</p>' : '<p>Toate au fost aduse automat in platforma.</p>'}
           <p>Citeste-le si treci intrebarea si raspunsul in <b>Clarificari</b>. Daca raspunsul schimba o cerinta, actualizeaza cerinta din registru.</p>
           <p><a href="https://pontaj-pro-sooty.vercel.app/ofertare">Deschide modulul Ofertare</a></p>`;
-        const corp = JSON.stringify({
-          from: 'PontajPRO <rapoarte@gazpet.ro>', to,
-          subject: `SEAP — raspuns de la autoritate: ${lic.nr_anunt}`, html,
-        });
-        // r4 (idempotenta mailului): cheia = amprenta continutului — acelasi mail retrimis in 24 h (reluarea unui plic, sau doua
-        // rulari simultane cu acelasi continut) Resend il intoarce fara sa-l trimita iar
-        planMail = { corp, cheie: `seap-veghe/${lic.id}/${await sha256Hex(corp)}`, to };
+          const corp = JSON.stringify({
+            from: 'PontajPRO <rapoarte@gazpet.ro>', to,
+            subject: `SEAP — raspuns de la autoritate: ${lic.nr_anunt}`, html,
+          });
+          // r4 (idempotenta mailului): cheia = amprenta continutului — acelasi mail retrimis in 24 h (reluarea unui grup, sau doua
+          // rulari simultane cu acelasi continut) Resend il intoarce fara sa-l trimita iar
+          planMail = { corp, cheie: `seap-veghe/${lic.id}/${await sha256Hex(corp)}`, to };
+        }
+      }
+      return { raspunsuri, mesaje, mesajVersiuni, mail, mailOk, planMail, destinatariOk };
+    };
+
+    let vNotif = destinatariNecunoscuti ? [] : grupNou.filter((d: any) => !d.seap_meta?.notificat_la);
+    let vMail = grupNou.filter((d: any) => !d.seap_meta?.mail_la);
+    let A = await alcatuieste(vNotif, vMail);
+    // r5/r6: grupul livrarii proaspete — pe ancora, INAINTE de orice trimitere. Fara continut de versiune de trimis (doar canale deja
+    // confirmate) = fara grup. Scrierea esuata → versiunile nu se trimit acum (raman restante), mesajele se refac fara ele.
+    let grupScris: any = null, grupEsuat = false;
+    if (anc && !G && (A.mesajVersiuni || (A.planMail && vMail.length))) {
+      const grup = {
+        id: `${tokenRulare}/${lic.id}`, la: acumMs, membri: grupNou.map((d: any) => d.id),
+        notif: A.mesajVersiuni ? { ...A.mesajVersiuni, catre: [...catre], ids: vNotif.map((d: any) => d.id) } : null,
+        mail: A.planMail && vMail.length ? { corp: A.planMail.corp, cheie: A.planMail.cheie, complet: A.destinatariOk, ids: vMail.map((d: any) => d.id) } : null,
+        trimis: { notif: false, mail: false },
+      };
+      const eG = await scrieGrup(supa, anc, tokenRulare, grup);
+      if (!eG) grupScris = grup;
+      else {
+        raport.push({ licitatie: lic.nr_anunt, grup_nescris: `#${anc.id}: ${eG}` });
+        grupEsuat = true; vNotif = []; vMail = [];
+        A = await alcatuieste([], []);
       }
     }
-
-    // r5: plicul versiunilor proaspete — scris pe fiecare INAINTE de orice trimitere (o scriere esuata: versiunea e acoperita ca
-    // membru de plicul fratilor; raportat). Fara continut de versiune de trimis (doar canale deja confirmate) = fara plic.
-    const plicNou = (mesajVersiuni || (planMail && vMail.length)) ? {
-      id: `${tokenRulare}/${lic.id}`, la: acumMs, membri: proaspete.map((d) => d.id),
-      notif: mesajVersiuni ? { ...mesajVersiuni, catre: [...catre], ids: vNotif.map((d) => d.id) } : null,
-      mail: planMail && vMail.length ? { corp: planMail.corp, cheie: planMail.cheie, complet: destinatariOk, ids: vMail.map((d) => d.id) } : null,
-    } : null;
-    if (plicNou) for (const d of proaspete) {
-      const eP = await scriePlic(supa, d, tokenRulare, plicNou);
-      if (eP) raport.push({ licitatie: lic.nr_anunt, plic_nescris: `#${d.id}: ${eP}` });
-    }
+    const { raspunsuri, mesaje, mesajVersiuni, planMail } = A;
+    let { mail, mailOk } = A;
 
     // E2: clopotelul versiunilor e confirmat doar daca mesajul lor a ajuns la TOTI destinatarii (fara destinatari = nimic de
     // confirmat). Jakarinos r2 (P1): un singur INSERT per mesaj, cu toti destinatarii (o instructiune = totul sau nimic) — altfel un
@@ -936,17 +990,21 @@ Deno.serve(async (req: Request) => {
         if (m === mesajVersiuni) notifOk = false;
       }
     }
+    let mailPlecat = false;
     if (planMail) {
       const rm = await trimiteMail(planMail.corp, planMail.cheie);
       mail = rm.ok ? `trimis catre ${planMail.to.join(', ')}` : rm.text;
-      mailOk = rm.ok && destinatariOk;
+      mailOk = rm.ok && A.destinatariOk;
+      mailPlecat = rm.ok;
     }
 
     // E2: fiecare versiune primeste data canalului reusit acum (notificat_la / mail_la); de_anuntat = false (+ anuntat_la) doar
-    // cand le are pe AMANDOUA. Un canal cazut ramane pentru rularea urmatoare, singur (fara sa repete canalul reusit). O eroare
-    // de scriere sau o oprire aici = versiunea se reia cu plicul ei dupa expirarea revendicarii (r5). versiuni_anuntate = versiunile
-    // anuntate acum pe macar un canal (reluari incluse).
-    for (const d of ordineConfirmare(proaspete)) await confirma(d, notifOk, mailOk);
+    // cand le are pe AMANDOUA. Un canal cazut ramane pentru rularea urmatoare, singur (fara sa repete canalul reusit). r6: ce a
+    // plecat se noteaza intai pe grup; o eroare / oprire la confirmari = grupul ramane pe ancora si se reia (fara retrimitere).
+    // versiuni_anuntate = versiunile anuntate acum pe macar un canal (reluari incluse).
+    // grupul nescris → versiunile NU au plecat: nicio data de canal, doar eliberarea revendicarilor (raman restante)
+    if (anc && !G) await incheie(grupScris ? { ...grupScris, trimis: { notif: !!grupScris.notif && notifOk, mail: !!grupScris.mail && mailPlecat } } : null,
+      () => (grupEsuat ? [false, false] : [notifOk, mailOk]));
 
     raport.push({ licitatie: lic.nr_anunt, termen, noi: noi.length, raspunsuri: raspunsuri.length, raspunsuri_aduse: raspunsuriAduse.length, raspunsuri_eroare: raspunsuriEroare, aduse: auIntrat.length, ramase: ramase.length, marcate, vercel, mail, versiuni_anuntate: versiuniAnuntate, versiuni_in_lucru: versiuniInLucru, ...(reluari.length ? { reluari } : {}), nume: noi.slice(0, 10), coduri });
     // importul a rulat deja mai sus (coduri.import) cand existau documente noi sau versiuni — nu inca o data in a doua trecere

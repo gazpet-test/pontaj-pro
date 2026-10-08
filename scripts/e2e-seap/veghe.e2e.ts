@@ -585,7 +585,7 @@ Deno.test('veghe Jakarinos r4: rulare oprită după trimitere, înainte de confi
   assert.deepEqual([docV(v).seap_meta.de_anuntat, j.raport[0].versiuni_anuntate], [false, 1])
 })
 
-// două versiuni neanunțate (A = Caiet, B = Plan), aduse de alt drum
+// două versiuni neanunțate (A = Caiet, B = Plan), aduse de alt drum; A (id mai mic) e ancora livrării
 const douaVersiuni = () => {
   const a = versiuneNeanuntata()
   rand(1, 'Plan.pdf', P(11))
@@ -593,78 +593,125 @@ const douaVersiuni = () => {
   liste[1].push({ noticeDocumentName: 'Plan.pdf', noticeDocumentCode: P(37), noticeDocumentUrl: 'u' })
   return [a, b]
 }
-// confirmarea unei versiuni = UPDATE fără revendicare și fără plic
-const eConfirmare = (patch: any) => patch?.seap_meta && !('revendicare' in patch.seap_meta) && !('livrare' in patch.seap_meta)
-const ruleazaOprit = async () => { try { await run() } catch (e) { assert.match(String(e), /proces oprit/) } }
+// confirmarea unei versiuni = UPDATE fără revendicare; scrierea grupului = UPDATE cu revendicare + grup
+const eConfirmare = (patch: any) => patch?.seap_meta && !('revendicare' in patch.seap_meta)
+const eScriereGrup = (patch: any) => !!(patch?.seap_meta?.revendicare && patch?.seap_meta?.grup)
+const ruleazaOprit = async (h?: any, body?: any) => { try { await run(h, body) } catch (e) { assert.match(String(e), /proces oprit/) } }
+const mailuri = () => log.filter((l) => l.startsWith('mail')).length
+// „oprirea” la primul INSERT de notificare (după scrierea grupului, înainte de orice trimitere)
+const opresteLaPrimaNotificare = async () => {
+  let oprit = false
+  const insertVechi = F.db.notifications.push.bind(F.db.notifications)
+  F.db.notifications.push = ((...x: any[]) => { if (!oprit) { oprit = true; throw new Error('proces oprit (simulat)') } return insertVechi(...x) }) as any
+  try { await ruleazaOprit() } finally { F.db.notifications.push = insertVechi }
+}
 
-Deno.test('veghe Jakarinos r5: A + B livrate, procesul oprit după confirmarea lui A → reluarea lui B trimite ACELAȘI plic (fără a doua notificare, mailul cu aceeași cheie)', async () => {
+Deno.test('veghe Jakarinos r5: A + B livrate, procesul oprit la confirmarea ancorei (B confirmată) → reluarea NU retrimite nimic (grupul spune ce a plecat), confirmă ancora', async () => {
   reset()
   const [a, b] = douaVersiuni()
-  F.laUpdate.fn = (t, patch, ids) => (t === 'ofertare_documente_atribuire' && ids.includes(b) && eConfirmare(patch) ? 'crash' : null)
+  F.laUpdate.fn = (t, patch, ids) => (t === 'ofertare_documente_atribuire' && ids.includes(a) && eConfirmare(patch) ? 'crash' : null)
   await ruleazaOprit()
-  assert.equal(notifVersiuni().length, 1); assert.equal(log.filter((l) => l.startsWith('mail')).length, 1)
-  assert.equal(docV(a).seap_meta.de_anuntat, false)
-  const mb = docV(b).seap_meta
-  assert.deepEqual([mb.de_anuntat, mb.livrare?.membri?.length, typeof mb.revendicare], [true, 2, 'string'])
-  const cheie = cheiMail[0]
-  // revendicarea expiră; rularea următoare reia plicul lui B
+  assert.equal(notifVersiuni().length, 1); assert.equal(mailuri(), 1)
+  assert.equal(docV(b).seap_meta.de_anuntat, false)
+  const g = docV(a).seap_meta.grup
+  assert.deepEqual([docV(a).seap_meta.de_anuntat, g?.membri?.length, g?.trimis], [true, 2, { notif: true, mail: true }])
   delete F.laUpdate.fn; deplasare = 11 * 60 * 1000; log = []
   const { j } = await run()
-  assert.equal(notifVersiuni().length, 1, 'fără a doua notificare')
-  assert.ok(!log.some((l) => l.startsWith('mail')), log.join(' | '))
-  assert.deepEqual([cheiMail.length, cheiMail[1]], [2, cheie])
-  const m2 = docV(b).seap_meta
-  assert.deepEqual([m2.de_anuntat, m2.livrare, m2.revendicare], [false, undefined, undefined])
-  assert.deepEqual(j.raport[0].reluari?.map((r: any) => [r.versiuni, r.clopotel, r.mail]), [[1, 'ok', 'trimis']])
-  // rularea 3: nimic
+  assert.equal(notifVersiuni().length, 1, 'fără a doua notificare'); assert.deepEqual([mailuri(), cheiMail.length], [0, 1], 'nicio cerere nouă de mail')
+  assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(a).seap_meta.grup, docV(a).seap_meta.revendicare], [false, undefined, undefined])
+  assert.deepEqual(j.raport[0].reluari?.map((r: any) => r.versiuni), [1])
   log = []
   await run()
   assert.ok(!log.some((l) => l.startsWith('mail') || l.startsWith('resend-idem')), log.join(' | ')); assert.equal(notifVersiuni().length, 1)
 })
 
-Deno.test('veghe Jakarinos r5: procesul oprit după scrierea plicurilor, înainte de orice trimitere → reluarea trimite plicul O SINGURĂ DATĂ', async () => {
+Deno.test('veghe Jakarinos r5: procesul oprit după scrierea grupului, înainte de orice trimitere → reluarea trimite grupul O SINGURĂ DATĂ', async () => {
   reset()
   const [a, b] = douaVersiuni()
-  // „oprirea”: primul INSERT de notificare aruncă (după ce plicurile s-au scris)
-  let oprit = false
-  const insertVechi = F.db.notifications.push.bind(F.db.notifications)
-  F.db.notifications.push = ((...x: any[]) => { if (!oprit) { oprit = true; throw new Error('proces oprit (simulat)') } return insertVechi(...x) }) as any
-  try { await ruleazaOprit() } finally { F.db.notifications.push = insertVechi }
-  assert.equal(F.db.notifications.length, 0); assert.ok(!log.some((l) => l.startsWith('mail')), log.join(' | '))
-  assert.ok(docV(a).seap_meta.livrare && docV(b).seap_meta.livrare, 'plicurile scrise înainte de trimitere')
+  await opresteLaPrimaNotificare()
+  assert.equal(F.db.notifications.length, 0); assert.equal(mailuri(), 0)
+  assert.deepEqual([docV(a).seap_meta.grup?.membri, docV(a).seap_meta.grup?.trimis], [[a, b], { notif: false, mail: false }])
+  assert.equal(docV(b).seap_meta.grup, undefined, 'grupul stă doar pe ancoră')
   deplasare = 11 * 60 * 1000; log = []
   const { j } = await run()
-  const pe = (pid: string) => notifVersiuni().filter((x) => x.profile_id === pid).length
-  assert.equal(pe('owner'), 1)
+  assert.equal(notifVersiuni().filter((x) => x.profile_id === 'owner').length, 1)
   assert.match(notifVersiuni()[0].message, /2 sunt VERSIUNI NOI/)
-  assert.equal(log.filter((l) => l.startsWith('mail')).length, 1, log.join(' | '))
-  assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat], [false, false])
-  assert.equal(j.raport[0].reluari?.length, 1)
+  assert.equal(mailuri(), 1, log.join(' | '))
+  assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat, docV(a).seap_meta.grup], [false, false, undefined])
+  assert.deepEqual(j.raport[0].reluari?.map((r: any) => [r.versiuni, r.clopotel, r.mail]), [[2, 'ok', 'trimis']])
 })
 
-Deno.test('veghe Jakarinos r5: plicul nescris pe B (eroare) + proces oprit la confirmarea lui B → B e acoperită de plicul lui A (membru), fără dublură', async () => {
+Deno.test('veghe Jakarinos r6 #1: confirmarea membrului B întoarce EROARE (fără oprire) → grupul rămâne pe ancoră; reluarea confirmă B fără nicio retrimitere', async () => {
   reset()
   const [a, b] = douaVersiuni()
-  F.laUpdate.fn = (t, patch, ids) => {
-    if (t !== 'ofertare_documente_atribuire' || !ids.includes(b)) return null
-    if (patch?.seap_meta?.livrare) return 'scriere refuzata'
-    return eConfirmare(patch) ? 'crash' : null
-  }
-  await ruleazaOprit()
-  assert.equal(notifVersiuni().length, 1); assert.equal(log.filter((l) => l.startsWith('mail')).length, 1)
-  // B (fără plic) se confirmă ÎNAINTEA lui A → oprirea lasă A neconfirmată, cu plicul care o listează și pe B
-  assert.deepEqual([docV(a).seap_meta.de_anuntat, !!docV(a).seap_meta.livrare, docV(b).seap_meta.livrare], [true, true, undefined])
+  F.laUpdate.fn = (t, patch, ids) => (t === 'ofertare_documente_atribuire' && ids.includes(b) && eConfirmare(patch) ? 'scriere refuzata' : null)
+  const { j } = await run()
+  assert.equal(notifVersiuni().length, 1); assert.equal(mailuri(), 1)
+  assert.ok(j.raport.some((r: any) => /scriere refuzata/.test(r.anunt_versiune_nemarcat ?? '')), JSON.stringify(j.raport))
+  const ma = docV(a).seap_meta
+  assert.deepEqual([ma.de_anuntat, ma.grup?.trimis, ma.revendicare], [false, { notif: true, mail: true }, undefined], 'ancora confirmată, grupul păstrat')
+  assert.equal(docV(b).seap_meta.de_anuntat, true)
   delete F.laUpdate.fn; deplasare = 11 * 60 * 1000; log = []
   await run()
-  assert.equal(notifVersiuni().length, 1, 'fără a doua notificare')
-  assert.ok(!log.some((l) => l.startsWith('mail')), log.join(' | '))
+  assert.equal(notifVersiuni().length, 1, 'fără a doua notificare'); assert.deepEqual([mailuri(), cheiMail.length], [0, 1])
+  assert.deepEqual([docV(b).seap_meta.de_anuntat, docV(a).seap_meta.grup], [false, undefined])
+})
+
+Deno.test('veghe Jakarinos r6 #2: grup comun de reluat + cronul și „Verifică acum” SIMULTAN → doar cine revendică ancora reia; un singur clopoțel per destinatar, un singur mail', async () => {
+  reset()
+  const [a, b] = douaVersiuni()
+  F.db.profiles.push({ id: 'resp', is_owner: false, email: 'r@x' })
+  F.db.ofertare_licitatii[0].responsabil_id = 'resp'
+  await opresteLaPrimaNotificare()
+  assert.ok(docV(a).seap_meta.grup)
+  deplasare = 11 * 60 * 1000; log = []
+  const [r1, r2] = await Promise.all([run(), run({ Authorization: 'Bearer SERVICE' }, { licitatie_id: 1 })])
+  const pe = (pid: string) => notifVersiuni().filter((x) => x.profile_id === pid).length
+  assert.deepEqual([pe('owner'), pe('resp')], [1, 1])
+  assert.equal(mailuri(), 1, log.join(' | '))
+  const rl = [r1, r2].map((r) => r.j.raport[0])
+  assert.deepEqual(rl.map((r) => r.reluari?.length ?? 0).sort(), [0, 1])
+  assert.ok(rl.some((r) => r.versiuni_in_lucru >= 1))
+  assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat, docV(a).seap_meta.grup], [false, false, undefined])
+})
+
+Deno.test('veghe r6: grupul nu se poate scrie → versiunile NU pleacă acum (nicio dată de canal, revendicări eliberate); rularea următoare le anunță o dată', async () => {
+  reset()
+  const [a, b] = douaVersiuni()
+  F.laUpdate.fn = (t, patch) => (t === 'ofertare_documente_atribuire' && eScriereGrup(patch) ? 'scriere refuzata' : null)
+  const { j } = await run()
+  assert.equal(notifVersiuni().length, 0); assert.equal(mailuri(), 0)
+  assert.ok(j.raport.some((r: any) => /scriere refuzata/.test(r.grup_nescris ?? '')))
+  for (const id of [a, b]) {
+    const m = docV(id).seap_meta
+    assert.deepEqual([m.de_anuntat, m.notificat_la, m.mail_la, m.revendicare, m.grup], [true, undefined, undefined, undefined, undefined])
+  }
+  delete F.laUpdate.fn; log = []
+  await run()
+  assert.equal(notifVersiuni().length, 1); assert.equal(mailuri(), 1)
   assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat], [false, false])
 })
 
-Deno.test('veghe Jakarinos r5: un plic mai vechi de 20 h nu se mai reia — versiunea se anunță din nou, ca proaspătă (fereastra cheii Resend s-a închis)', async () => {
+Deno.test('veghe r6: un grup mai vechi de 20 h nu se mai reia — versiunea se anunță din nou, ca proaspătă (fereastra cheii Resend s-a închis)', async () => {
   reset()
-  const v = versiuneNeanuntata({ revendicare: 'veche', revendicat_pana: Date.now() - 1, livrare: { id: 'veche/1', la: Date.now() - 21 * 3600 * 1000, membri: [], notif: null, mail: null } })
+  const v = versiuneNeanuntata({ revendicare: 'veche', revendicat_pana: Date.now() - 1, grup: { id: 'veche/1', la: Date.now() - 21 * 3600 * 1000, membri: [], notif: null, mail: null, trimis: { notif: false, mail: false } } })
   const { j } = await run()
-  assert.equal(notifVersiuni().length, 1); assert.equal(log.filter((l) => l.startsWith('mail')).length, 1)
-  assert.deepEqual([docV(v).seap_meta.de_anuntat, j.raport[0].reluari], [false, undefined])
+  assert.equal(notifVersiuni().length, 1); assert.equal(mailuri(), 1)
+  assert.deepEqual([docV(v).seap_meta.de_anuntat, docV(v).seap_meta.grup, j.raport[0].reluari], [false, undefined, undefined])
+})
+
+Deno.test('veghe r6: la reluare clopoțelul cade din nou → grupul rămâne (nimic refăcut cu alt conținut); reluarea următoare îl trimite identic, o dată', async () => {
+  reset()
+  const [a, b] = douaVersiuni()
+  await opresteLaPrimaNotificare()
+  deplasare = 11 * 60 * 1000; log = []
+  F.esecInsert.notifications = 'insert refuzat'
+  await run()
+  assert.equal(F.db.notifications.length, 0); assert.equal(mailuri(), 1)
+  assert.deepEqual([docV(a).seap_meta.grup?.trimis, docV(b).seap_meta.notificat_la], [{ notif: false, mail: true }, undefined])
+  delete F.esecInsert.notifications; deplasare = 22 * 60 * 1000; log = []
+  await run()
+  assert.equal(notifVersiuni().length, 1); assert.match(notifVersiuni()[0].message, /2 sunt VERSIUNI NOI/)
+  assert.deepEqual([mailuri(), cheiMail.length], [0, 1], 'mailul nu se mai cere')
+  assert.deepEqual([docV(a).seap_meta.de_anuntat, docV(b).seap_meta.de_anuntat, docV(a).seap_meta.grup], [false, false, undefined])
 })
