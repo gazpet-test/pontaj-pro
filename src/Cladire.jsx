@@ -308,9 +308,11 @@ export default function Cladire() {
   const centrala = disp.find(x => x.sursa === 'vicare'), v = centrala?.ultima_citire || {}
   const termostate = disp.filter(x => x.sursa === 'salus' && !x.privat)
   const acasa = disp.filter(x => x.privat)
-  const retea = disp.filter(x => x.sursa === 'retea' && !x.privat && x.extern_id !== QNAP_EXTERN_ID)
+  // camerele din retea (Xiaomi/Imilab, doar cloud Mi Home — fara live) stau la „Camere”, nu la „Retea”
+  const retea = disp.filter(x => x.sursa === 'retea' && !x.privat && x.extern_id !== QNAP_EXTERN_ID && x.meta?.tip !== 'camera')
   const tuya = disp.filter(x => x.sursa === 'tuya' && !x.privat)
-  const camere = tuya.filter(x => x.meta?.tip === 'camera'), tuyaAlte = tuya.filter(x => x.meta?.tip !== 'camera')
+  const camereRetea = disp.filter(x => x.sursa === 'retea' && !x.privat && x.meta?.tip === 'camera')
+  const camere = [...tuya.filter(x => x.meta?.tip === 'camera'), ...camereRetea], tuyaAlte = tuya.filter(x => x.meta?.tip !== 'camera')
   // PIN pentru secțiunea privată: se compară SHA-256 în browser cu hash-ul din config; nu pleacă nicăieri
   const verificaPin = async () => {
     const pin = window.prompt('PIN pentru secțiunea privată:'); if (!pin) return
@@ -415,8 +417,8 @@ export default function Cladire() {
         {tuya.length > 0 && (
           <div style={S.card}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><div style={{ fontWeight:700 }}>📷 Camere & prize Tuya</div><span style={{ fontSize:11.5, color:G.dim }}>{camere.filter(c => c.ultima_citire?.online).length}/{camere.length} camere online</span></div>
-            {camere.map(c => { const on = !!c.ultima_citire?.online; return <div key={c.id} onClick={() => on && setCamLive(c)} title={on ? 'Vezi live' : ''} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33`, cursor: on ? 'pointer' : 'default' }}>
-              <span style={{ color: on ? G.text : G.muted }}>{c.nume}{on && <span style={{ fontSize:11, color:G.blue, marginLeft:6 }}>▶ live</span>}</span><b style={{ color: on ? G.green : G.red }}>{on ? '● online' : '○ offline'}</b></div> })}
+            {camere.map(c => { const on = !!c.ultima_citire?.online, live = on && c.sursa === 'tuya'; return <div key={c.id} onClick={() => live && setCamLive(c)} title={live ? 'Vezi live' : (c.sursa === 'retea' ? 'doar în aplicația Mi Home' : '')} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33`, cursor: live ? 'pointer' : 'default' }}>
+              <span style={{ color: on ? G.text : G.muted }}>{c.nume}{live && <span style={{ fontSize:11, color:G.blue, marginLeft:6 }}>▶ live</span>}{c.sursa === 'retea' && <span style={{ fontSize:10.5, color:G.dim, marginLeft:6 }}>Mi Home</span>}</span><b style={{ color: on ? G.green : G.red }}>{on ? '● online' : '○ offline'}</b></div> })}
             {tuyaAlte.map(c => { const r = c.ultima_citire || {}; const val = r.putere_w != null ? `${nr(r.putere_w)} W` : r.temp != null ? `${nr(r.temp)}°` : r.pornit != null ? (r.pornit ? 'pornit' : 'oprit') : ''
               return <div key={c.id} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
                 <span style={{ color:G.muted }}>{c.nume} <span style={{ fontSize:10.5, color:G.dim }}>{c.meta?.model || ''}</span></span><b style={{ color: r.online ? G.text : G.dim }}>{r.online ? (val || 'online') : 'offline'}</b></div> })}
