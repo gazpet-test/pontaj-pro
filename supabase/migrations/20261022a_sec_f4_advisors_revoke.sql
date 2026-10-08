@@ -40,6 +40,9 @@
 --   pg_depend refuză orice obiect care depinde de cele 3 funcții (default de coloană, CHECK, index, view, politică, trigger) și
 --   orice obiect al ALTEI relații care depinde de cele 9 tabele / 3 secvențe (view, politică, trigger, default, constrângere,
 --   funcție SQL standard). pg_depend nu vede SQL dinamic din plpgsql ⇒ rămâne și căutarea în corpuri.
+-- CONSUMATORII CUNOSCUȚI (Copilot r1 P19-1): fn_rag_qr_rezerva și log_storage_upload_error (DEFINER, owner postgres) și
+--   fn_storage_rls_report (INVOKER) sunt excluși din căutarea în corpuri DOAR dacă semnătura lor completă e cea de pe live (0g).
+--   Excluderea „funcția însăși” e după OID, nu după nume (Jakarinos r1 J20-1); cron-ul e verificat pe toate cele 15 obiecte (J20-2).
 -- UN SINGUR bloc DO: garda, precondițiile, REVOKE-urile și postcondițiile sunt o singură instrucțiune — și la o rulare greșită
 --   cu `psql -f` simplu (autocommit, fără ON_ERROR_STOP) orice refuz anulează tot.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid), fără BEGIN/COMMIT.
@@ -57,6 +60,12 @@ DECLARE
                                    'public._eval_runda2_20260921', 'public.olx_tokens', 'public.piese_import_staging',
                                    'public.rag_qr_log', 'public.storage_rls_errors'];
   c_seq   CONSTANT text[] := ARRAY['public.piese_import_staging_id_seq', 'public.rag_qr_log_id_seq', 'public.storage_rls_errors_id_seq'];
+  -- consumatorii cunoscuți ai tabelelor (excluși la 0f) și semnătura lor completă pe live 08.10 (read-only): corp, proconfig,
+  -- SECURITY DEFINER/INVOKER, owner, volatilitate, strict, limbaj, parallel, argumente, rezultat (Copilot P19-1)
+  c_semnaturi CONSTANT text[] := ARRAY[
+    'public.fn_rag_qr_rezerva(integer,text)|bf94c323d92d2753e7bdf92360e02abc',          -- DEFINER (rag-utilaj, service_role)
+    'public.log_storage_upload_error(text,text,text)|1835441b44af68de7a5b2ed4e1342d63',  -- DEFINER (UI, authenticated)
+    'public.fn_storage_rls_report(integer)|a6061ec783a438e3b33933f99bbc3042'];           -- INVOKER (postgres/service_role)
   v_fn  oid[];
   v_rel oid[];
 BEGIN
@@ -138,9 +147,10 @@ BEGIN
     RAISE EXCEPTION 'Precondiție 0d: obiecte care depind de funcțiile vizate (pg_depend): %', v_lista;
   END IF;
   SELECT string_agg(DISTINCT format('%s → %s', p.oid::regprocedure, f.n), ', ') INTO v_lista
-    FROM (VALUES ('heartbeat_alerta'), ('heartbeat_muti'), ('fn_get_next_nr_aviz')) AS f(n)
+    FROM (VALUES ('heartbeat_alerta', 'public.heartbeat_alerta()'), ('heartbeat_muti', 'public.heartbeat_muti()'),
+                 ('fn_get_next_nr_aviz', 'public.fn_get_next_nr_aviz(text)')) AS f(n, s)
     JOIN pg_proc p ON (CASE WHEN p.prosqlbody IS NULL THEN p.prosrc ELSE pg_get_function_sqlbody(p.oid) END) ~* ('\m' || f.n || '\M')
-                  AND p.proname <> f.n
+                  AND p.oid IS DISTINCT FROM to_regprocedure(f.s)  -- doar funcția însăși, după OID (J20-1: nu overload-uri / alte scheme)
     JOIN pg_namespace ns ON ns.oid = p.pronamespace
    WHERE ns.nspname NOT IN ('pg_catalog', 'information_schema')
      AND NOT (p.oid = to_regprocedure('public.heartbeat_alerta()') AND f.n = 'heartbeat_muti');
@@ -162,13 +172,14 @@ BEGIN
     RAISE EXCEPTION 'Precondiție 0d: politici care apelează funcțiile vizate: %', v_lista;
   END IF;
 
-  -- 0e. jobul cron care pornește heartbeat_alerta trebuie să ruleze ca postgres (altfel pierde dreptul)
+  -- 0e. orice job cron care atinge cele 15 obiecte (funcții, tabele, secvențe — J20-2) trebuie să ruleze ca postgres
   IF to_regclass('cron.job') IS NOT NULL THEN
     EXECUTE $q$SELECT string_agg(format('%s (%s)', jobname, username), ', ') FROM cron.job
-                WHERE command ~* '\m(heartbeat_alerta|heartbeat_muti|fn_get_next_nr_aviz)\M' AND username IS DISTINCT FROM 'postgres'$q$
+                WHERE command ~* '\m(heartbeat_alerta|heartbeat_muti|fn_get_next_nr_aviz|_backup_acoperire_racari_20260921|_backup_clar63_20260927|_eval_candidati_inainte_20260921|_eval_runda1_20260921|_eval_runda2_20260921|olx_tokens|piese_import_staging|rag_qr_log|storage_rls_errors|piese_import_staging_id_seq|rag_qr_log_id_seq|storage_rls_errors_id_seq)\M'
+                  AND username IS DISTINCT FROM 'postgres'$q$
       INTO v_lista;
     IF v_lista IS NOT NULL THEN
-      RAISE EXCEPTION 'Precondiție 0e: joburi cron care apelează funcțiile vizate și nu rulează ca postgres: %', v_lista;
+      RAISE EXCEPTION 'Precondiție 0e: joburi cron care ating obiectele vizate și nu rulează ca postgres: %', v_lista;
     END IF;
   ELSE
     RAISE NOTICE 'Precondiție 0e: cron.job lipsește (nu e pg_cron) — nimic de verificat';
@@ -208,6 +219,27 @@ BEGIN
      AND p.oid IS DISTINCT FROM to_regprocedure('public.fn_storage_rls_report(integer)');
   IF v_lista IS NOT NULL THEN
     RAISE EXCEPTION 'Precondiție 0f: funcții necunoscute folosesc tabelele/secvențele vizate: %', v_lista;
+  END IF;
+
+  -- 0g. consumatorii cunoscuți excluși la 0f (Copilot P19-1): siguranța lor ține de proprietăți (DEFINER ca postgres pentru
+  --     primele două, INVOKER pentru raport) — se cer EXACT cum au fost verificate pe live, altfel o funcție schimbată între
+  --     audit și apply ar pierde accesul fără să fie văzută. Plus dreptul de apel al apelantului legitim.
+  -- <semnatura> (expresie IDENTICĂ în migrare și în revenire — verificată textual de scripts/test_sec_f4_advisors.sh)
+  SELECT string_agg(split_part(x.e, '|', 1), ', ') INTO v_lista
+    FROM unnest(c_semnaturi) AS x(e)
+   WHERE (SELECT md5(format('%s|%s|%s|%s|%s|%s|%s|%s|%s|%s', md5(p.prosrc), coalesce(p.proconfig::text, ''), p.prosecdef,
+                            pg_get_userbyid(p.proowner), p.provolatile, p.proisstrict, l.lanname, p.proparallel,
+                            pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)))
+            FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+           WHERE p.oid = to_regprocedure(split_part(x.e, '|', 1)))
+         IS DISTINCT FROM split_part(x.e, '|', 2);
+  -- </semnatura>
+  IF v_lista IS NOT NULL THEN
+    RAISE EXCEPTION 'Precondiție 0g: consumatorii cunoscuți ai tabelelor s-au schimbat față de live 08.10 (%) — se reface analiza', v_lista;
+  END IF;
+  IF NOT has_function_privilege('authenticated', 'public.log_storage_upload_error(text,text,text)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.fn_rag_qr_rezerva(integer,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'Precondiție 0g: apelanții legitimi nu mai au EXECUTE (log_storage_upload_error/authenticated, fn_rag_qr_rezerva/service_role)';
   END IF;
 
   -- ── 1. funcțiile ─────────────────────────────────────────────────────────────────────────────────────

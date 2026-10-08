@@ -67,19 +67,26 @@ amprenta() { q "$AMPR_SQL"; }
 "${PSQL[@]}" -d postgres -c "CREATE DATABASE $BAZA" >/dev/null
 "${PSQL[@]}" -d "$BAZA" -f "$SCHELET" >/dev/null
 [ "$(amprenta)" = "$C_LIVE:15" ] || esec "0 amprenta scheletului $(amprenta) ≠ producția $C_LIVE:15 (scheletul nu reproduce live-ul)"
-for f in 'public.heartbeat_alerta()' 'public.heartbeat_muti()' 'public.fn_get_next_nr_aviz(text)'; do
-  ASTEPTAT="$(awk -v k="'$f|" -v q="'" '{i = index($0, k); if (i) { s = substr($0, i + length(k)); print substr(s, 1, index(s, q) - 1) }}' "$ROLLBACK")"
-  [ -n "$ASTEPTAT" ] || esec "0 $f lipsește din c_corpuri (revenire)"
-  [ "$(q "SELECT md5(prosrc) || '|' || coalesce(proconfig::text, '') FROM pg_proc WHERE oid = '$f'::regprocedure")" = "$ASTEPTAT" ] \
-    || esec "0 corpul/setările lui $f din schelet ≠ live ($ASTEPTAT)"
-done
+# semnăturile fixate (migrarea: consumatorii cunoscuți, 0g; revenirea: cele 3 funcții vizate) = scheletul (verbatim de pe live)
+semnatura() { q "SELECT md5(format('%s|%s|%s|%s|%s|%s|%s|%s|%s|%s', md5(p.prosrc), coalesce(p.proconfig::text, ''), p.prosecdef,
+  pg_get_userbyid(p.proowner), p.provolatile, p.proisstrict, l.lanname, p.proparallel, pg_get_function_arguments(p.oid),
+  pg_get_function_result(p.oid))) FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = to_regprocedure('$1')"; }
+N_SEMN=0
+while IFS='|' read -r f m; do
+  [ "$(semnatura "$f")" = "$m" ] || esec "0 semnătura lui $f din schelet ($(semnatura "$f")) ≠ fixată ($m)"
+  N_SEMN=$((N_SEMN + 1))
+done < <(grep -ho "'public\.[a-z_]*([a-z,]*)|[0-9a-f]\{32\}'" "$MIGRARE" "$ROLLBACK" | tr -d "'")
+[ "$N_SEMN" = 6 ] || esec "0 se așteptau 6 semnături fixate (3 în migrare, 3 în revenire), găsite $N_SEMN"
 gate_0e inainte
-ok "0 schelet = producția 08.10 (amprenta $C_LIVE:15; corpurile celor 3 funcții verbatim)"
+ok "0 schelet = producția 08.10 (amprenta $C_LIVE:15; cele 6 funcții cu semnătura fixată = verbatim)"
 [ "$(wc -l <<<"$AMPR_SQL")" -gt 20 ] || esec "0b blocul de amprentă nu a fost găsit"
 [ "$(bloc "$MIGRARE" 2)" = "$AMPR_SQL" ] && [ "$(bloc "$ROLLBACK" 1)" = "$AMPR_SQL" ] && [ "$(bloc "$ROLLBACK" 2)" = "$AMPR_SQL" ] \
   || esec "0b cele 4 copii ale expresiei de amprentă nu sunt identice"
 [ -z "$(bloc "$MIGRARE" 3)" ] && [ -z "$(bloc "$ROLLBACK" 3)" ] || esec "0b se așteptau exact 2 copii în migrare și 2 în revenire"
-ok "0b expresia de amprentă e identică textual în cele 4 locuri"
+SM="$(sed -n '/-- <semnatura>/,/-- <\/semnatura>/p' "$MIGRARE")"; SR="$(sed -n '/-- <semnatura>/,/-- <\/semnatura>/p' "$ROLLBACK")"
+[ "$(wc -l <<<"$SM")" -gt 8 ] && [ "$SM" = "$SR" ] || esec "0b expresia <semnatura> diferă între migrare și revenire"
+grep -q "pg_get_function_result(p.oid)))" <<<"$SM" || esec "0b expresia <semnatura> nu e cea așteptată"
+ok "0b expresia de amprentă e identică textual în cele 4 locuri; expresia de semnătură identică în migrare și revenire"
 
 "${PSQL[@]}" -d "$BAZA" -f "$MIGRARE" >/dev/null 2>&1 && esec "1 fără runner a trecut"
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -f "$MIGRARE" >/dev/null 2>&1 || true
@@ -152,10 +159,39 @@ q "REVOKE service_role FROM anon" >/dev/null
 q "GRANT pg_read_all_data TO authenticated" >/dev/null
 refuza_cu "2u authenticated membru în pg_read_all_data (moștenește SELECT)" "Postcondiție 3c"
 q "REVOKE pg_read_all_data FROM authenticated" >/dev/null
+# Jakarinos r1 J20-1: overload cu același nume / aceeași denumire în altă schemă care apelează funcția vizată
+q "CREATE FUNCTION public.fn_get_next_nr_aviz() RETURNS integer LANGUAGE plpgsql AS \$f\$ BEGIN RETURN public.fn_get_next_nr_aviz('X'::text); END \$f\$" >/dev/null
+refuza_cu "2v overload fn_get_next_nr_aviz() care apelează varianta (text)" "Precondiție 0d: alte funcții"
+q "DROP FUNCTION public.fn_get_next_nr_aviz()" >/dev/null
+q "CREATE SCHEMA alt_t; CREATE FUNCTION alt_t.heartbeat_muti() RETURNS bigint LANGUAGE plpgsql AS \$f\$ BEGIN RETURN (SELECT count(*) FROM public.heartbeat_muti()); END \$f\$" >/dev/null
+refuza_cu "2w alt_t.heartbeat_muti() care apelează public.heartbeat_muti()" "Precondiție 0d: alte funcții"
+q "SET client_min_messages = warning; DROP SCHEMA alt_t CASCADE" >/dev/null
+# J20-2: cron care atinge tabelele/secvențele ca alt rol decât postgres
+q "INSERT INTO cron.job (schedule, command, username, jobname) VALUES ('0 * * * *', 'SELECT count(*) FROM public.rag_qr_log', 'authenticated', 'job_t3')" >/dev/null
+refuza_cu "2x cron ca authenticated peste rag_qr_log" "Precondiție 0e"
+q "UPDATE cron.job SET command = 'SELECT nextval(''public.storage_rls_errors_id_seq'')' WHERE jobname = 'job_t3'" >/dev/null
+refuza_cu "2y cron ca authenticated cu nextval pe storage_rls_errors_id_seq" "Precondiție 0e"
+q "DELETE FROM cron.job WHERE jobname = 'job_t3'" >/dev/null
+# Copilot r1 P19-1: consumatorii cunoscuți schimbați între audit și apply
+q "ALTER FUNCTION public.log_storage_upload_error(text, text, text) SECURITY INVOKER" >/dev/null
+refuza_cu "2z log_storage_upload_error devenită INVOKER" "Precondiție 0g: consumatorii"
+q "ALTER FUNCTION public.log_storage_upload_error(text, text, text) SECURITY DEFINER" >/dev/null
+q "CREATE ROLE rol_t NOLOGIN; ALTER FUNCTION public.fn_rag_qr_rezerva(integer, text) OWNER TO rol_t" >/dev/null
+refuza_cu "2aa fn_rag_qr_rezerva cu alt owner" "Precondiție 0g: consumatorii"
+q "ALTER FUNCTION public.fn_rag_qr_rezerva(integer, text) OWNER TO postgres; DROP ROLE rol_t" >/dev/null
+q "ALTER FUNCTION public.fn_storage_rls_report(integer) SECURITY DEFINER" >/dev/null
+refuza_cu "2ab fn_storage_rls_report devenită DEFINER" "Precondiție 0g: consumatorii"
+q "ALTER FUNCTION public.fn_storage_rls_report(integer) SECURITY INVOKER" >/dev/null
+q "REVOKE EXECUTE ON FUNCTION public.log_storage_upload_error(text, text, text) FROM authenticated" >/dev/null
+refuza_cu "2ac UI-ul (authenticated) fără EXECUTE pe log_storage_upload_error" "Precondiție 0g: apelanții"
+q "GRANT EXECUTE ON FUNCTION public.log_storage_upload_error(text, text, text) TO authenticated" >/dev/null
+for f in 'public.fn_rag_qr_rezerva(integer,text)' 'public.log_storage_upload_error(text,text,text)' 'public.fn_storage_rls_report(integer)'; do
+  [ "$(semnatura "$f")" = "$(grep -o "'$f|[0-9a-f]*'" "$MIGRARE" | tr -d "'" | cut -d'|' -f2)" ] || esec "2 semnătura lui $f nu a revenit"
+done
 [ "$(amprenta)" = "$C_LIVE:15" ] || esec "2 starea nu mai e cea live după testele negative"
 [ "$(q "SELECT count(*) FROM pg_auth_members m WHERE m.member IN ('anon'::regrole, 'authenticated'::regrole, 'service_role'::regrole)")" = 0 ] \
   || esec "2 au rămas apartenențe de rol"
-ok "2 refuz la: GRANT/politică/coloană în plus (0c) · funcție/view/politică apelantă, BEGIN ATOMIC, majuscule, default de coloană (0d) · cron ≠ postgres, și cu majuscule (0e) · view/funcție/BEGIN ATOMIC/politică/default nextval peste tabele (0f) · funcție lipsă (0b) · alt utilizator (0a) · moștenire prin roluri (3a/3c)"
+ok "2 refuz la: GRANT/politică/coloană în plus (0c) · funcție/view/politică apelantă, BEGIN ATOMIC, majuscule, default de coloană (0d) · cron ≠ postgres, și cu majuscule (0e) · view/funcție/BEGIN ATOMIC/politică/default nextval peste tabele (0f) · funcție lipsă (0b) · alt utilizator (0a) · moștenire prin roluri (3a/3c) · overload/altă schemă (0d) · cron peste tabele/secvențe (0e) · consumatori cunoscuți schimbați sau fără EXECUTE (0g)"
 
 SHA="$(sha256sum "$MIGRARE" | cut -d' ' -f1)"
 SIS="$(q "SELECT system_identifier FROM pg_control_system()")"
@@ -192,18 +228,23 @@ grep -q "corpul sau setările funcțiilor" <<<"$OUT" || esec "6g refuzat din alt
 OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "ALTER FUNCTION public.heartbeat_alerta() RESET ALL" \
   -c "SELECT set_config('gazpet.revenire_20261022a', 'SEC_F4_REDESCHIDE:' || txid_current(), true);" -f "$ROLLBACK" 2>&1)" && esec "6h revenire după RESET search_path a trecut"
 grep -q "corpul sau setările funcțiilor" <<<"$OUT" || esec "6h refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
-[ "$(amprenta)" = "$C_TINTA:15" ] || esec "6g/6h starea s-a schimbat"
+OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "ALTER FUNCTION public.heartbeat_muti() VOLATILE" \
+  -c "SELECT set_config('gazpet.revenire_20261022a', 'SEC_F4_REDESCHIDE:' || txid_current(), true);" -f "$ROLLBACK" 2>&1)" && esec "6i revenire după VOLATILE a trecut"
+grep -q "corpul sau setările funcțiilor" <<<"$OUT" || esec "6i refuzat din alt motiv: $(grep -m1 ERROR <<<"$OUT")"
+[ "$(amprenta)" = "$C_TINTA:15" ] || esec "6g/6h/6i starea s-a schimbat"
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -f "$ROLLBACK" >/dev/null 2>&1 || true
 "$PG_BIN/psql" -X -q -h 127.0.0.1 -p "$PORT" -U postgres -d "$BAZA" -c "SELECT set_config('gazpet.revenire_20261022a', 'SEC_F4_REDESCHIDE:' || txid_current(), false)" -f "$ROLLBACK" >/dev/null 2>&1 || true
 [ "$(amprenta)" = "$C_TINTA:15" ] || esec "6c psql -f simplu a schimbat drepturile"
-OUT="$(revenire)" || { echo "$OUT" >&2; esec "6d revenirea armată a eșuat"; }
+OUT="$("${PSQL[@]}" -d "$BAZA" -At --single-transaction -c "SELECT set_config('gazpet.revenire_20261022a', 'SEC_F4_REDESCHIDE:' || txid_current(), true);" \
+  -f "$ROLLBACK" -c "SELECT 'ARMARE_DUPA=[' || coalesce(current_setting('gazpet.revenire_20261022a', true), '<null>') || ']'" 2>&1)" \
+  || { echo "$OUT" >&2; esec "6d revenirea armată a eșuat"; }
+grep -q '^ARMARE_DUPA=\[\]$' <<<"$OUT" || esec "6d armarea nu e golită în sesiunea revenirii (J20-3): $(grep ARMARE_DUPA <<<"$OUT")"
 [ "$(amprenta)" = "$C_LIVE:15" ] || esec "6d după revenire amprenta $(amprenta) ≠ c_live $C_LIVE:15"
 [ "$(q "SELECT has_function_privilege('anon', 'public.heartbeat_muti()', 'EXECUTE')")" = t ] || esec "6d anon fără EXECUTE după revenire"
-[ -z "$(q "SELECT current_setting('gazpet.revenire_20261022a', true)")" ] || esec "6d armarea a rămas în sesiune"
 q "DELETE FROM supabase_migrations.schema_migrations WHERE name = '$NUME'" >/dev/null
 OUT="$("${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" 2>&1)" \
   || { echo "$OUT" >&2; esec "6e reaplicarea după revenire a eșuat"; }
 [ "$(amprenta)" = "$C_TINTA:15" ] || esec "6e după reaplicare amprenta ≠ c_tinta"
-ok "6 revenire: nearmată → refuz · stare modificată → refuz · corp/setări de funcție schimbate → refuz · psql -f simplu → nimic schimbat · armată → EXACT starea live; dus-întors OK"
+ok "6 revenire: nearmată → refuz · stare modificată → refuz · corp/setări/atribute de funcție schimbate → refuz · psql -f simplu → nimic schimbat · armată → EXACT starea live, dezarmată în aceeași sesiune; dus-întors OK"
 gate_0e final
 echo "PASS test_sec_f4_advisors"
