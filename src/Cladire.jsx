@@ -20,8 +20,8 @@ export const nivelTerra = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa
   : valoare > TERRA_PRAGURI[cheie][1] ? 'error' : valoare > TERRA_PRAGURI[cheie][0] ? 'warning' : 'ok'
 export const terraFaraDate = (cititLa, acum) => !cititLa || !Number.isFinite(Date.parse(cititLa)) || acum - Date.parse(cititLa) > TERRA_TACERE_MS
 
-// Aceleași praguri ca iot_verifica_retea (QNAP): cpu_temp [70,85], hdd_max [50,60].
-export const RETEA_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60] }
+// Aceleași praguri ca iot_verifica_retea: cpu_temp [70,85], hdd_max [50,60]; gpu_temp > 80 și disk_pct > 90 doar warning (20261023c).
+export const RETEA_PRAGURI = { cpu_temp: [70, 85], hdd_max: [50, 60], gpu_temp: [80, Infinity], disk_pct: [90, Infinity] }
 export const nivelRetea = (cheie, valoare) => !Number.isFinite(valoare) ? 'lipsa'
   : valoare > RETEA_PRAGURI[cheie][1] ? 'error' : valoare > RETEA_PRAGURI[cheie][0] ? 'warning' : 'ok'
 
@@ -34,6 +34,36 @@ export const QNAP_TACERE_MS = 30 * 60e3
 
 // Camerele QNAP (ONVIF) primesc o poză nouă la ~2 min de la Terra; 10 min tăcere = semnal real de problemă.
 export const CAMERE_TACERE_MS = 10 * 60e3
+
+// Server AI (meta.tip='server'): rând GPU sub numele serverului + istoric 24h la cerere (iot_citiri). Cheile vin prin iot-retea.
+export const areGpu = (x) => x?.meta?.tip === 'server' && ['gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct'].some(k => Number.isFinite(x?.ultima_citire?.[k]))
+function ServerGpu({ dispozitiv }) {
+  const r = dispozitiv.ultima_citire || {}
+  const [deschis, setDeschis] = useState(false), [ist, setIst] = useState(null), [err, setErr] = useState('')
+  const comuta = async () => {
+    const nou = !deschis; setDeschis(nou)
+    if (!nou || ist) return
+    setErr('')
+    // cele mai recente 2000 din 24h (desc + reverse), ca graficul să nu piardă capătul recent (Copilot P26-1)
+    const { data, error } = await supabase.from('iot_citiri').select('la, valori').eq('dispozitiv_id', dispozitiv.id)
+      .gte('la', new Date(Date.now() - 24 * 3600e3).toISOString()).order('la', { ascending: false }).limit(2000)
+    if (error) { setErr(error.message); return }
+    setIst((data || []).slice().reverse().map(h => ({ la: h.la, t: h.valori?.gpu_temp, u: h.valori?.gpu_util, w: h.valori?.gpu_w, v: h.valori?.vram_pct })))
+  }
+  const culori = { lipsa: G.dim, ok: G.green, warning: G.yellow, error: G.red }
+  const val = (k, et, um, dec = 0) => Number.isFinite(r[k]) &&
+    <span key={k} style={{ marginLeft:8, color: RETEA_PRAGURI[k] ? culori[nivelRetea(k, r[k])] : G.dim }}>{et} {nr(r[k], dec)}{um}</span>
+  return <div style={{ fontSize:11, color:G.dim, padding:'2px 0 4px 12px' }}>
+    <span onClick={comuta} style={{ cursor:'pointer' }} title="Istoric 24h">🎮 GPU{val('gpu_temp', '', '°')}{val('gpu_w', '', ' W')}{val('gpu_util', 'util', '%')}{val('vram_pct', 'VRAM', '%')}{val('disk_pct', 'disc', '%')}
+      <span style={{ marginLeft:8, color:G.blue }}>{deschis ? '▲' : '▼ 24h'}</span></span>
+    {deschis && (err ? <div style={{ color:G.red }}>{err}</div> : !ist ? <div>Se încarcă...</div> : <div style={{ display:'grid', gap:6, marginTop:6 }}>
+      <Spark pts={ist} k="t" color={G.orange} um="°C" />
+      <Spark pts={ist} k="u" color={G.blue} min={0} max={100} um="% util" />
+      <Spark pts={ist} k="w" color={G.yellow} um="W" />
+      <Spark pts={ist} k="v" color={G.muted} min={0} max={100} um="% VRAM" />
+    </div>)}
+  </div>
+}
 
 // Mini-grafic comun pentru centrală și Terra; fiecare serie ignoră valorile lipsă.
 function Spark({ pts, k, color, min, max, um }) {
@@ -409,9 +439,12 @@ export default function Cladire() {
               if (!asteptat && !on) stare = <b style={{ color:G.dim }}>neconfigurat</b>
               else if (on) stare = <b style={{ color:G.green }}>● online{Number.isFinite(r.latency_ms) ? ` · ${nr(r.latency_ms)} ms` : ''}</b>
               else stare = <b style={{ color:G.red }}>○ offline</b>
-              return <div key={x.id} style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'center', fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
-                <span style={{ color: on ? G.text : G.muted }}>{x.nume}<Edit x={x} />{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}{load}</span>
-                {stare}
+              return <div key={x.id} style={{ borderBottom:`1px solid ${G.border}33` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'center', fontSize:13, padding:'4px 0' }}>
+                  <span style={{ color: on ? G.text : G.muted }}>{x.nume}<Edit x={x} />{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}{load}</span>
+                  {stare}
+                </div>
+                {areGpu(x) && <ServerGpu dispozitiv={x} />}
               </div>
             })}
           </div>

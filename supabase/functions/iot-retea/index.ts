@@ -38,6 +38,7 @@ Deno.serve(async (req: Request) => {
         online: c.online, latency_ms: c.latency_ms, cpu_temp: c.cpu_temp,
         hdd_max: c.hdd_max, cpu_load: c.cpu_load, uptime_s: c.uptime_s,
         disk_pct: c.disk_pct, ram_pct: c.ram_pct, raid_ok: c.raid_ok,
+        gpu_temp: c.gpu_temp, gpu_w: c.gpu_w, gpu_util: c.gpu_util, vram_pct: c.vram_pct,
       };
       // Filtre fixe pe (sursa='retea', extern_id): expeditorul nu poate alege/crea alt dispozitiv.
       const { data: disp, error: updateError } = await db.from('iot_dispozitive')
