@@ -407,6 +407,51 @@ describe('audit #4 var. B — codul SEAP ca identitate (Răzvan 08.10.2026: L1 =
     expect(src).toMatch(/const lista = indexLista\(documente, \(n: string\) => cheiSeapCu\(n, cheieNume\)\);/)
     expect(src).toMatch(/inventarCod\(dejaAre \|\| \[\], \{ cheieRand, cheiSeap: \(n: string\) => cheiSeapCu\(n, cheieNume\),/)
   })
+  it('worker NAS (PR-2, varianta A): aceeași decizie din _shared/codSeap.mjs; numele decide doar fără cod și la arhive / volume', () => {
+    const src = readFileSync(new URL('../worker/ofertare/seap.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/import \{[^}]*\bdecideSeap\b[^}]*\} from '\.\.\/\.\.\/supabase\/functions\/_shared\/codSeap\.mjs'/)
+    expect(src).not.toMatch(/function (decideSeap|numeVersiune|eDuplicatCod|campuriCod)\s*\(/)   // nicio copie locală a regulilor
+    expect(src).toMatch(/docs\.push\(\{ nume, url, cod: codDin\(f\) \}\)/)
+    expect(src).toMatch(/\.select\('id, nume_original, fisier_path, seap_cod, tip, size_bytes, seap_meta'\)\.eq\('licitatie_id', licId\)/)
+    expect(src).toMatch(/const lista = indexLista\(docs, cheiSeap\)/)
+    // arhivele și volumele RAR rămân pe regula după nume (extrase aici, n-au rând care să țină codul)
+    expect(src).toMatch(/const arhiva = esteArhiva\(numeDesfacut\(d\.nume\)\) \|\| !!volumRar\(/)
+    expect(src).toMatch(/if \(arhiva \|\| dec\.fel === 'fara_cod'\) \{/)
+    // decis pe cod: nicio evidență (ok / sarit, pe nume sau pe „N (COD).ext”) nu e scurtătură — doar eroarea cu reîncercările
+    // epuizate îl ține deoparte (Copilot r1 + r2, Jakarinos r8 pe #659)
+    expect(src).toMatch(/if \(d\.dec\) \{\s*\n(?:\s*\/\/[^\n]*\n)*\s*if \(ev\?\.stare === 'eroare' && \(ev\?\.incercari \?\? 0\) >= MAX_INCERCARI/)
+    // evidența unui document cu cod: numele afișat „N (COD).ext”, și pentru „nou” (Jakarinos r10), pe cheia REZERVATĂ a codului —
+    // un nume SEAP n-o poate produce, deci nu se ciocnește cu evidența brută a unui document numit literal „N (COD).ext” (Copilot r7–r8,
+    // Jakarinos r12–r14 pe #659)
+    expect(src).toMatch(/deAdus\.push\(\{ \.\.\.d, nume: tinta, dec, numeSeap: d\.nume, idx, ev: numeVersiune\(d\.nume, String\(d\.cod\)\) \}\)/)
+    expect(src).toMatch(/export const PREFIX_COD = '\(cod\) '/)
+    expect(src).toMatch(/const cheieEv = \(d: DocPlan\) => d\.ev \? cheieCod\(d\.cod\) : cheieEvidenta\(d\.nume\)/)
+    expect(src).toMatch(/const k = cheieEv\(d\)/)
+    expect(src).not.toMatch(/await inregistreaza\(supa, licId, numeEv\(/)
+    expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, cod\), 'ok', motiv, cheieCod\(cod\)\)/)
+    // semnătura sărită lângă documentul ei își închide și evidența codului (Jakarinos r11 pe #659)
+    expect(src).toMatch(/await inchideCheie\(numeVersiune\(d\.nume, String\(d\.cod\)\), 'sarit', '[^']*', cheieCod\(d\.cod\)\)/)
+    // codul ieșit din listă: codul vine din CHEIE, nu din text (doar evidențele scrise pe drumul pe cod)
+    expect(src).toMatch(/!cheie\.startsWith\(PREFIX_COD\)\) continue/)
+    expect(src).not.toMatch(/QQ0CODQQ|coduriPeCheie/)
+    // „sarit” rupe seria de eșecuri (Copilot r9 pe #659)
+    expect(src).toMatch(/rez\.stare === 'ok' \|\| rez\.stare === 'sarit' \? 0/)
+    // numele țintă / rândul adoptat nu pot coincide cu alt document listat (Jakarinos r15 pe #659, P0): la planificare, la
+    // recalculare și la adopție — fail-closed; documentele cu cod se grupează individual
+    expect(src).toMatch(/const conflict = conflictNume\(d, idx, tinta\)/)
+    expect(src).toMatch(/const conflict = conflictNume\(orig, dp\.idx \?\? -1, dp\.nume\)/)
+    expect(src).toMatch(/const conflictA = conflictNume\(d, idx, String\(dec\.rand\.nume_original\), false\)/)
+    expect(src).toMatch(/const conflictA = conflictNume\(orig, dp\.idx \?\? -1, String\(dec\.rand\.nume_original\), false\)/)
+    expect(src).toMatch(/: d\.dec \? `c:\$\{d\.idx\}` : `f:\$\{d\.nume\}`/)
+    // numele comparate și după desfacerea semnăturii (Jakarinos r16 pe #659)
+    expect(src).toMatch(/const cheiFinale = \(n: string\) => new Set\(\[cheieRand\(n\), cheieRand\(numeDesfacut\(n\)\)\]\)/)
+    // aceeași pereche nume/cod listată de două ori nu e conflict (Jakarinos r17 pe #659)
+    expect(src).toMatch(/j !== idx && String\(x\.cod \?\? ''\)\.trim\(\) !== String\(d\.cod\)\.trim\(\) && atinge\(x\.nume\)/)
+    expect(src).not.toMatch(/okDovedit|shaDovediteAcum/)
+    // identitatea nedovedită = eroare vizibilă, fără descărcare; codul doar pe nivelul de sus
+    expect(src).toMatch(/if \(dec\.fel === 'verifica' && !verificabil\(dec, areDovada\)\)/)
+    expect(src).toMatch(/campuriCod\(l\.doc\.cod, decF, \{ esteArhiva: false \}\)/)
+  })
   it('edge: pe drumul per fișier numele decide DOAR fără cod; rezerva DownloadArchive rămâne pe nume, fără cod', () => {
     const src = edge()
     expect(src).not.toMatch(/if \(dejaSubUnNume\(urcate, doc\.nume\) \|\|/)
