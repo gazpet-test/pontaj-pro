@@ -95,3 +95,32 @@ Deno.test('respinge reset ca text ISO sau în afara intervalului', () => {
   assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ai_gemini_reset_s: '2026-10-14T14:42:50Z' }] }).ok, false);
   assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ai_claude_reset_s: 5e9 }] }).ok, false);
 });
+Deno.test('chei AI noi: Codex + Anthropic (colector server, 10.10)', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true,
+    ai_codex_ramas_pct: 42, ai_codex_reset: '2026-10-12T07:00:00Z', ai_codex_masurat_la: '2026-10-09T20:58:11.123Z', ai_codex_plan: 'plus',
+    ai_anthropic_saptamana_ramas_pct: 0, ai_anthropic_saptamana_fable_ramas_pct: 35, ai_anthropic_sesiune_ramas_pct: 80,
+    ai_anthropic_saptamana_reset: 'Oct 12, 7:59am', ai_anthropic_saptamana_fable_reset: 'Oct 12, 7:59am', ai_anthropic_sesiune_reset: '1:00am' }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].ai_codex_ramas_pct, 42);
+  assertEquals(r.citiri[0].ai_anthropic_saptamana_ramas_pct, 0);
+  assertEquals(r.citiri[0].ai_anthropic_saptamana_reset, 'Oct 12, 7:59am');
+  assertEquals(r.citiri[0].ai_codex_reset, '2026-10-12T07:00:00Z');
+});
+Deno.test('chei AI noi lipsă rămân null', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].ai_codex_plan, null);
+  assertEquals(r.citiri[0].ai_anthropic_sesiune_ramas_pct, null);
+});
+Deno.test('respinge chei AI noi invalide', () => {
+  const rau = (x: Record<string, unknown>) => assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ...x }] }).ok, false);
+  rau({ ai_codex_ramas_pct: 101 });
+  rau({ ai_anthropic_saptamana_ramas_pct: '0' });
+  rau({ ai_codex_reset: 'Oct 12, 7:59am' });
+  rau({ ai_codex_masurat_la: '2026-10-09T23:00:00+03:00' });
+  rau({ ai_codex_reset: '2026-13-45T99:00:00Z' });
+  rau({ ai_anthropic_sesiune_reset: '<img src=x>' });
+  rau({ ai_codex_plan: 'x'.repeat(41) });
+  rau({ ai_anthropic_saptamana_reset: null });
+  rau({ ai_altceva_pct: 5 });
+});

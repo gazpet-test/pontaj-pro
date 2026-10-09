@@ -28,6 +28,8 @@ describe('Clădire — praguri rețea (aliniate cu iot_verifica_retea, 20261023c
     expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_gemini_ramas_pct: 68 } })).toBe(true)
     expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_gemini_reset_s: 1 } })).toBe(false)
     expect(areLimiteAi({ meta: { tip: 'nas' }, ultima_citire: { ai_claude_ramas_pct: 100 } })).toBe(false)
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_anthropic_saptamana_ramas_pct: 0 } })).toBe(true)
+    expect(areLimiteAi({ meta: { tip: 'server' }, ultima_citire: { ai_codex_plan: 'plus' } })).toBe(false)
   })
   it('textReset: ore sub o zi, zile peste, trecut', () => {
     const acum = Date.UTC(2026, 9, 9, 12)
