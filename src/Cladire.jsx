@@ -43,10 +43,12 @@ function ServerGpu({ dispozitiv }) {
   const comuta = async () => {
     const nou = !deschis; setDeschis(nou)
     if (!nou || ist) return
+    setErr('')
+    // cele mai recente 2000 din 24h (desc + reverse), ca graficul să nu piardă capătul recent (Copilot P26-1)
     const { data, error } = await supabase.from('iot_citiri').select('la, valori').eq('dispozitiv_id', dispozitiv.id)
-      .gte('la', new Date(Date.now() - 24 * 3600e3).toISOString()).order('la').limit(2000)
+      .gte('la', new Date(Date.now() - 24 * 3600e3).toISOString()).order('la', { ascending: false }).limit(2000)
     if (error) { setErr(error.message); return }
-    setIst((data || []).map(h => ({ la: h.la, t: h.valori?.gpu_temp, u: h.valori?.gpu_util, w: h.valori?.gpu_w, v: h.valori?.vram_pct })))
+    setIst((data || []).slice().reverse().map(h => ({ la: h.la, t: h.valori?.gpu_temp, u: h.valori?.gpu_util, w: h.valori?.gpu_w, v: h.valori?.vram_pct })))
   }
   const culori = { lipsa: G.dim, ok: G.green, warning: G.yellow, error: G.red }
   const val = (k, et, um, dec = 0) => Number.isFinite(r[k]) &&
