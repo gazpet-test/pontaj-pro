@@ -2,7 +2,8 @@
 -- 20261023b — Diurne: bifa „acces diurne” (profiles.can_access_diurne) primește și SCRIERE pe plățile de diurne
 -- (cerere Răzvan 09.10.2026, varianta A: Natalia salvează și reface plăți; NU primește acces la Salarii).
 -- Schimbă DOAR expresiile a 6 politici RLS existente (insert/update/delete pe diurna_payments și diurna_payment_details):
---   înainte: is_owner OR can_access_salarii (delete: doar is_owner) · după: + OR can_access_diurne.
+--   insert/update: is_owner OR can_access_salarii → + OR can_access_diurne · delete: is_owner → is_owner OR can_access_diurne
+--   (acces Salarii NU primește ștergere — Copilot P22-1).
 -- can_access_diurne se poate schimba doar de owner (trigger enforce_owner_only_salary_flags) ⇒ nu e auto-escaladabil.
 -- Fără obiecte noi, fără date, fără GRANT-uri. Pre/post: expresiile exacte ale politicilor; altfel refuz atomic.
 -- Revenire: supabase/revenire/20261023b_diurne_scriere_acces_diurne_ROLLBACK.sql.
@@ -18,6 +19,9 @@ DECLARE
   c_nou  CONSTANT text := '(EXISTS ( SELECT 1
    FROM profiles
   WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_access_salarii = true) OR (profiles.can_access_diurne = true)))))';
+  c_del  CONSTANT text := '(EXISTS ( SELECT 1
+   FROM profiles
+  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_access_diurne = true)))))';
   r record; v_q text; v_w text;
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true)
@@ -50,13 +54,13 @@ BEGIN
     ELSIF r.cmd = 'w' THEN
       EXECUTE format('ALTER POLICY %I ON public.%I USING %s WITH CHECK %s', r.pol, r.tab, c_nou, c_nou);
     ELSE
-      EXECUTE format('ALTER POLICY %I ON public.%I USING %s', r.pol, r.tab, c_nou);
+      EXECUTE format('ALTER POLICY %I ON public.%I USING %s', r.pol, r.tab, c_del);
     END IF;
     SELECT pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid) INTO v_q, v_w
       FROM pg_policy p WHERE p.polrelid = ('public.' || r.tab)::regclass AND p.polname = r.pol;
     IF (r.cmd = 'a' AND (v_q IS NOT NULL OR v_w IS DISTINCT FROM c_nou))
        OR (r.cmd = 'w' AND (v_q IS DISTINCT FROM c_nou OR v_w IS DISTINCT FROM c_nou))
-       OR (r.cmd = 'd' AND (v_q IS DISTINCT FROM c_nou OR v_w IS NOT NULL)) THEN
+       OR (r.cmd = 'd' AND (v_q IS DISTINCT FROM c_del OR v_w IS NOT NULL)) THEN
       RAISE EXCEPTION '20261023b: postconditie politica %.%', r.tab, r.pol;
     END IF;
   END LOOP;

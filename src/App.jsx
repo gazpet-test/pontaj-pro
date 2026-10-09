@@ -2166,6 +2166,8 @@ function ReportsPage() {
   // Diurne r6: scrierea în diurna_payments e permisă de RLS doar owner / can_access_salarii — butonul urmează aceeași poartă
   // Salvare / ștergere plăți diurne: owner, acces Salarii sau bifa „acces diurne” (09.10.2026, cerere Răzvan — RLS 20261023b)
   const canSaveDiurnaPayment = profile?.is_owner === true || profile?.can_access_salarii === true || profile?.can_access_diurne === true
+  // Ștergere (= refacere) plată diurne: owner sau acces diurne — acces Salarii NU (RLS 20261023b, Copilot P22-1)
+  const canDeleteDiurnaPayment = profile?.is_owner === true || profile?.can_access_diurne === true
   
   // Lock-screen Istoric: reset timer la fiecare interactiune (mouse, keyboard, scroll, touch)
   useEffect(() => {
@@ -5307,7 +5309,7 @@ function ReportsPage() {
                       </span>
                       <div style={{display:'flex',gap:6,alignItems:'center'}}>
                         <span style={{fontSize:11,color:G.muted}}>{new Date(p.payment_date).toLocaleDateString('ro-RO')}</span>
-                        {canSaveDiurnaPayment&&<button onClick={async(e)=>{
+                        {canDeleteDiurnaPayment&&<button onClick={async(e)=>{
                           e.stopPropagation()
                           if(!window.confirm(`Ștergi plata ${new Date(p.period_from).toLocaleDateString('ro-RO')} — ${new Date(p.period_to).toLocaleDateString('ro-RO')}?`)) return
                           // RLS refuză tăcut (0 rânduri) — verificăm ce s-a șters, nu doar eroarea

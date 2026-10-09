@@ -79,14 +79,26 @@ RC=0; PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migr
 P1="$(pol)"; M1="$(matrice)"; echo "$M1"
 grep -q '^d: ins=1 upd=1.1 del=1.1 sel=1.1' <<<"$M1" || esec "după: diurne nu scrie"; ok "după: diurne salvează / modifică / șterge pe ambele tabele"
 grep -q '^a: ins=1 upd=1.1 del=1.1' <<<"$M1" && grep -q '^f: ins=REFUZ upd=0.0 del=0.0 sel=0.0' <<<"$M1" || esec "owner/nimic: $M1"
-grep -q '^b: ins=1 upd=1.1 del=1.1' <<<"$M1" || esec "salarii: $M1"; ok "owner neschimbat · fără drept: tot refuz · acces Salarii: + ștergere (0 conturi live)"
+grep -q '^b: ins=1 upd=1.1 del=0.0' <<<"$M1" || esec "salarii: $M1"; ok "owner neschimbat · fără drept: tot refuz · acces Salarii: neschimbat (fără ștergere)"
 
+# traseul real din UI: DELETE doar pe plată, detaliile pleacă prin ON DELETE CASCADE
+for p in a d; do
+  v="$("${PSQL[@]}" -d "$BAZA" -At -c "BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('test.uid','00000000-0000-0000-0000-00000000000$p',true);" \
+    -c "WITH x AS (DELETE FROM public.diurna_payments RETURNING id) SELECT count(*) FROM x;" -c "RESET ROLE;" \
+    -c "SELECT 'rest='||(SELECT count(*) FROM public.diurna_payments)||'.'||(SELECT count(*) FROM public.diurna_payment_details);" -c "ROLLBACK;" | grep -v '^\(BEGIN\|SET\|RESET\|ROLLBACK\)$' | tr '\n' ' ')"
+  grep -q ' 1 rest=0.0' <<<"$v" || esec "cascadă $p: $v"
+done; ok "ștergere din UI (doar plata) ca owner și ca acces diurne: plata + detaliile dispar (cascadă)"
+v="$("${PSQL[@]}" -d "$BAZA" -At -c "BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('test.uid','00000000-0000-0000-0000-00000000000b',true);" \
+  -c "WITH x AS (DELETE FROM public.diurna_payments RETURNING id) SELECT count(*) FROM x;" -c "ROLLBACK;" | grep -v '^\(BEGIN\|SET\|ROLLBACK\)$' | tail -1)"
+[ "$v" = 0 ] || esec "salarii a șters $v"; ok "acces Salarii: ștergerea plății = 0 rânduri"
+q "SELECT 1" >/dev/null
 refuz "reaplicare" livreaza "preconditie politica" "$P1"
 refuz "revenire nearmată" "\"\${PSQL[@]}\" -d $BAZA -f \"$ROLLBACK\" 2>&1" "garda start invalida" "$P1"
 q "ALTER DATABASE $BAZA SET gazpet.revenire_20261023b = 'x'" >/dev/null
 refuz "armare persistentă" revenire "armare persistenta interzisa" "$P1"
 q "ALTER DATABASE $BAZA RESET gazpet.revenire_20261023b" >/dev/null
-revenire >/dev/null || esec "revenire armată"
+o="$("${PSQL[@]}" -d "$BAZA" -At --single-transaction -c "SELECT set_config('gazpet.revenire_20261023b', 'DIURNE_SCRIERE_REVENIRE:' || txid_current(), true);" -f "$ROLLBACK" -c "SELECT 'GUC=' || coalesce(current_setting('gazpet.revenire_20261023b', true), '');" 2>&1)" || esec "revenire armată"
+grep -q '^GUC=$' <<<"$o" || esec "revenirea nu dezarmează: $o"; ok "revenire dezarmată la succes"
 [ "$(pol)" = "$P0" ] && [ "$(matrice)" = "$M0" ] || esec "revenire ≠ inițial"; ok "revenire: politici + matrice = EXACT inițial"
 livreaza >/dev/null || esec "reaplicare după revenire"; [ "$(pol)" = "$P1" ] || esec "dus-întors"; ok "dus-întors"
 echo PASS

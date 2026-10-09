@@ -11,6 +11,9 @@ DECLARE
   c_nou  CONSTANT text := '(EXISTS ( SELECT 1
    FROM profiles
   WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_access_salarii = true) OR (profiles.can_access_diurne = true)))))';
+  c_del  CONSTANT text := '(EXISTS ( SELECT 1
+   FROM profiles
+  WHERE ((profiles.id = auth.uid()) AND ((profiles.is_owner = true) OR (profiles.can_access_diurne = true)))))';
   r record; v_q text; v_w text;
 BEGIN
   IF current_setting('gazpet.revenire_20261023b', true)
@@ -38,7 +41,7 @@ BEGIN
     IF NOT FOUND
        OR (r.cmd = 'a' AND (v_q IS NOT NULL OR v_w IS DISTINCT FROM c_nou))
        OR (r.cmd = 'w' AND (v_q IS DISTINCT FROM c_nou OR v_w IS DISTINCT FROM c_nou))
-       OR (r.cmd = 'd' AND (v_q IS DISTINCT FROM c_nou OR v_w IS NOT NULL)) THEN
+       OR (r.cmd = 'd' AND (v_q IS DISTINCT FROM c_del OR v_w IS NOT NULL)) THEN
       RAISE EXCEPTION '20261023b: preconditie politica %.%', r.tab, r.pol;
     END IF;
     IF r.cmd = 'a' THEN
@@ -60,4 +63,5 @@ BEGIN
        IS DISTINCT FROM 'DIURNE_SCRIERE_REVENIRE:' || txid_current() THEN
     RAISE EXCEPTION '20261023b: garda final invalida';
   END IF;
+  PERFORM set_config('gazpet.revenire_20261023b', '', true);  -- dezarmare la succes (Copilot P22-3)
 END $revenire$;
