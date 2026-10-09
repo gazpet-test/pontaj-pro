@@ -43,3 +43,31 @@ Deno.test('respinge peste 64 citiri', () => {
   const citiri = Array.from({ length: 65 }, (_, i) => ({ extern_id: `d-${i}`, online: true }));
   assertEquals(valideazaCitiri({ citiri }).ok, false);
 });
+Deno.test('server AI cu chei GPU', () => {
+  const r = valideazaCitiri({ citiri: [
+    { extern_id: '192.168.1.94', online: true, cpu_load: 8, ram_pct: 25, disk_pct: 8, uptime_s: 3600, gpu_temp: 45, gpu_w: 32.5, gpu_util: 3, vram_pct: 12 },
+  ] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].gpu_temp, 45);
+  assertEquals(r.citiri[0].gpu_w, 32.5);
+  assertEquals(r.citiri[0].gpu_util, 3);
+  assertEquals(r.citiri[0].vram_pct, 12);
+});
+Deno.test('fără chei GPU rămân null', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].gpu_temp, null);
+  assertEquals(r.citiri[0].vram_pct, null);
+});
+Deno.test('respinge gpu_temp absurd', () =>
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, gpu_temp: 200 }] }).ok, false));
+Deno.test('respinge gpu_w negativ sau > 1000', () => {
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, gpu_w: -1 }] }).ok, false);
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, gpu_w: 1001 }] }).ok, false);
+});
+Deno.test('respinge gpu_util / vram_pct > 100', () => {
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, gpu_util: 101 }] }).ok, false);
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, vram_pct: 101 }] }).ok, false);
+});
+Deno.test('respinge gpu_temp ca text', () =>
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, gpu_temp: '45' }] }).ok, false));

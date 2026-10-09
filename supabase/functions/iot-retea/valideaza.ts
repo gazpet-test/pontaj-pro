@@ -9,6 +9,10 @@ export type CitireRetea = {
   disk_pct: number | null;
   ram_pct: number | null;
   raid_ok: boolean | null;
+  gpu_temp: number | null;
+  gpu_w: number | null;
+  gpu_util: number | null;
+  vram_pct: number | null;
 };
 type Rezultat = { ok: true; citiri: CitireRetea[] } | { ok: false; error: string };
 
@@ -17,7 +21,8 @@ const obiect = (x: unknown): x is Record<string, unknown> =>
 const numarIn = (x: unknown, min: number, max: number): x is number =>
   typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max;
 
-const CHEI = ['extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok'];
+const CHEI = ['extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
+  'gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct'];
 
 // Validare strictă a unui lot de citiri de rețea. Senzorii lipsă sunt acceptați (null);
 // funcția SQL decide ce înseamnă offline/tăcut. Expeditorul nu poate crea dispozitive.
@@ -49,6 +54,11 @@ export function valideazaCitiri(body: unknown): Rezultat {
     if ('disk_pct' in c && !numarIn(c.disk_pct, 0, 100)) return { ok: false, error: 'disk_pct invalid' };
     if ('ram_pct' in c && !numarIn(c.ram_pct, 0, 100)) return { ok: false, error: 'ram_pct invalid' };
     if ('raid_ok' in c && typeof c.raid_ok !== 'boolean') return { ok: false, error: 'raid_ok invalid' };
+    // Server AI (09.10.2026): chei GPU opționale
+    if ('gpu_temp' in c && !numarIn(c.gpu_temp, -20, 120)) return { ok: false, error: 'gpu_temp invalid' };
+    if ('gpu_w' in c && !numarIn(c.gpu_w, 0, 1000)) return { ok: false, error: 'gpu_w invalid' };
+    if ('gpu_util' in c && !numarIn(c.gpu_util, 0, 100)) return { ok: false, error: 'gpu_util invalid' };
+    if ('vram_pct' in c && !numarIn(c.vram_pct, 0, 100)) return { ok: false, error: 'vram_pct invalid' };
     out.push({
       extern_id: c.extern_id,
       online: c.online,
@@ -60,6 +70,10 @@ export function valideazaCitiri(body: unknown): Rezultat {
       disk_pct: (c.disk_pct ?? null) as number | null,
       ram_pct: (c.ram_pct ?? null) as number | null,
       raid_ok: (c.raid_ok ?? null) as boolean | null,
+      gpu_temp: (c.gpu_temp ?? null) as number | null,
+      gpu_w: (c.gpu_w ?? null) as number | null,
+      gpu_util: (c.gpu_util ?? null) as number | null,
+      vram_pct: (c.vram_pct ?? null) as number | null,
     });
   }
   return { ok: true, citiri: out };
