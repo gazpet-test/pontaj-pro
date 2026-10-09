@@ -71,3 +71,27 @@ Deno.test('respinge gpu_util / vram_pct > 100', () => {
 });
 Deno.test('respinge gpu_temp ca text', () =>
   assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, gpu_temp: '45' }] }).ok, false));
+Deno.test('server AI cu limite Antigravity', () => {
+  const r = valideazaCitiri({ citiri: [
+    { extern_id: '192.168.1.94', online: true, ai_gemini_ramas_pct: 68, ai_claude_ramas_pct: 100, ai_gemini_reset_s: 1791996170, ai_claude_reset_s: 1792177424 },
+  ] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].ai_gemini_ramas_pct, 68);
+  assertEquals(r.citiri[0].ai_claude_ramas_pct, 100);
+  assertEquals(r.citiri[0].ai_gemini_reset_s, 1791996170);
+  assertEquals(r.citiri[0].ai_claude_reset_s, 1792177424);
+});
+Deno.test('fără limite AI rămân null', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].ai_gemini_ramas_pct, null);
+  assertEquals(r.citiri[0].ai_claude_reset_s, null);
+});
+Deno.test('respinge procent AI în afara 0..100', () => {
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ai_gemini_ramas_pct: 101 }] }).ok, false);
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ai_claude_ramas_pct: -1 }] }).ok, false);
+});
+Deno.test('respinge reset ca text ISO sau în afara intervalului', () => {
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ai_gemini_reset_s: '2026-10-14T14:42:50Z' }] }).ok, false);
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, ai_claude_reset_s: 5e9 }] }).ok, false);
+});

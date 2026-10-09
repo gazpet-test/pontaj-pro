@@ -13,6 +13,10 @@ export type CitireRetea = {
   gpu_w: number | null;
   gpu_util: number | null;
   vram_pct: number | null;
+  ai_gemini_ramas_pct: number | null;
+  ai_claude_ramas_pct: number | null;
+  ai_gemini_reset_s: number | null;
+  ai_claude_reset_s: number | null;
 };
 type Rezultat = { ok: true; citiri: CitireRetea[] } | { ok: false; error: string };
 
@@ -22,7 +26,8 @@ const numarIn = (x: unknown, min: number, max: number): x is number =>
   typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max;
 
 const CHEI = ['extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
-  'gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct'];
+  'gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct',
+  'ai_gemini_ramas_pct', 'ai_claude_ramas_pct', 'ai_gemini_reset_s', 'ai_claude_reset_s'];
 
 // Validare strictă a unui lot de citiri de rețea. Senzorii lipsă sunt acceptați (null);
 // funcția SQL decide ce înseamnă offline/tăcut. Expeditorul nu poate crea dispozitive.
@@ -59,6 +64,11 @@ export function valideazaCitiri(body: unknown): Rezultat {
     if ('gpu_w' in c && !numarIn(c.gpu_w, 0, 1000)) return { ok: false, error: 'gpu_w invalid' };
     if ('gpu_util' in c && !numarIn(c.gpu_util, 0, 100)) return { ok: false, error: 'gpu_util invalid' };
     if ('vram_pct' in c && !numarIn(c.vram_pct, 0, 100)) return { ok: false, error: 'vram_pct invalid' };
+    // Limite cont Antigravity (09.10.2026): procent rămas + reset ca epoch secunde, opționale
+    if ('ai_gemini_ramas_pct' in c && !numarIn(c.ai_gemini_ramas_pct, 0, 100)) return { ok: false, error: 'ai_gemini_ramas_pct invalid' };
+    if ('ai_claude_ramas_pct' in c && !numarIn(c.ai_claude_ramas_pct, 0, 100)) return { ok: false, error: 'ai_claude_ramas_pct invalid' };
+    if ('ai_gemini_reset_s' in c && !numarIn(c.ai_gemini_reset_s, 0, 4e9)) return { ok: false, error: 'ai_gemini_reset_s invalid' };
+    if ('ai_claude_reset_s' in c && !numarIn(c.ai_claude_reset_s, 0, 4e9)) return { ok: false, error: 'ai_claude_reset_s invalid' };
     out.push({
       extern_id: c.extern_id,
       online: c.online,
@@ -74,6 +84,10 @@ export function valideazaCitiri(body: unknown): Rezultat {
       gpu_w: (c.gpu_w ?? null) as number | null,
       gpu_util: (c.gpu_util ?? null) as number | null,
       vram_pct: (c.vram_pct ?? null) as number | null,
+      ai_gemini_ramas_pct: (c.ai_gemini_ramas_pct ?? null) as number | null,
+      ai_claude_ramas_pct: (c.ai_claude_ramas_pct ?? null) as number | null,
+      ai_gemini_reset_s: (c.ai_gemini_reset_s ?? null) as number | null,
+      ai_claude_reset_s: (c.ai_claude_reset_s ?? null) as number | null,
     });
   }
   return { ok: true, citiri: out };
