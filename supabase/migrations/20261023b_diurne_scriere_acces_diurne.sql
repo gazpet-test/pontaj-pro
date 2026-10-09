@@ -4,7 +4,8 @@
 -- Schimbă DOAR expresiile a 6 politici RLS existente (insert/update/delete pe diurna_payments și diurna_payment_details):
 --   insert/update: is_owner OR can_access_salarii → + OR can_access_diurne · delete: is_owner → is_owner OR can_access_diurne
 --   (acces Salarii NU primește ștergere — Copilot P22-1).
--- can_access_diurne se poate schimba doar de owner (trigger enforce_owner_only_salary_flags) ⇒ nu e auto-escaladabil.
+-- can_access_diurne se poate schimba doar de owner (trigger enforce_owner_only_salary_flags) ⇒ nu e auto-escaladabil;
+-- migrarea verifică bariera (RLS profiles, INSERT owner-only, trigger activ cu corpul live) și refuză altfel (Copilot P23-1).
 -- Fără obiecte noi, fără date, fără GRANT-uri. Pre/post: expresiile exacte ale politicilor; altfel refuz atomic.
 -- Revenire: supabase/revenire/20261023b_diurne_scriere_acces_diurne_ROLLBACK.sql.
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -32,6 +33,29 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
   IF (SELECT count(*) FROM pg_policy WHERE polrelid IN ('public.diurna_payments'::regclass, 'public.diurna_payment_details'::regclass)) <> 8 THEN
     RAISE EXCEPTION '20261023b: numar politici neasteptat';
+  END IF;
+  -- Copilot P23-1: noua autorizare se sprijină pe can_access_diurne = flag owner-only. Fail-closed dacă bariera nu e exact cea live:
+  -- RLS pornit pe profiles, INSERT doar profiles_insert_owner, triggerul BEFORE UPDATE activ pe funcția cu corpul live (md5).
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.profiles'::regclass) THEN
+    RAISE EXCEPTION '20261023b: RLS oprit pe profiles';
+  END IF;
+  IF (SELECT array_agg(polname::text ORDER BY polname) FROM pg_policy WHERE polrelid = 'public.profiles'::regclass AND polcmd IN ('a', '*'))
+       IS DISTINCT FROM ARRAY['profiles_insert_owner']
+     OR (SELECT pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polrelid = 'public.profiles'::regclass AND polname = 'profiles_insert_owner')
+       IS DISTINCT FROM '(EXISTS ( SELECT 1
+   FROM profiles p2
+  WHERE ((p2.id = auth.uid()) AND (p2.is_owner = true))))' THEN
+    RAISE EXCEPTION '20261023b: politica INSERT pe profiles nu e owner-only';
+  END IF;
+  IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+        WHERE t.tgrelid = 'public.profiles'::regclass AND t.tgname = 'trg_enforce_owner_only_salary_flags'
+          AND t.tgenabled IN ('O', 'A') AND t.tgtype = 19 AND NOT t.tgisinternal
+          AND p.oid = to_regprocedure('public.enforce_owner_only_salary_flags()')
+          AND md5(p.prosrc) = 'daaa561298c10c259944600e6c39467e' AND p.prosecdef
+          AND pg_get_userbyid(p.proowner) = 'postgres'
+          AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']) THEN
+    RAISE EXCEPTION '20261023b: bariera owner-only pe can_access_diurne (trigger enforce_owner_only_salary_flags) lipsa sau modificata';
   END IF;
   FOR r IN SELECT * FROM (VALUES
       ('diurna_payments', 'diurna_payments_insert_salarii', 'a'),

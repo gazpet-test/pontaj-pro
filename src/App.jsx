@@ -2163,8 +2163,7 @@ function ReportsPage() {
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
   const hasPontajBrutAccess = profile?.is_owner === true || profile?.can_access_pontaj_brut === true
-  // Diurne r6: scrierea în diurna_payments e permisă de RLS doar owner / can_access_salarii — butonul urmează aceeași poartă
-  // Salvare / ștergere plăți diurne: owner, acces Salarii sau bifa „acces diurne” (09.10.2026, cerere Răzvan — RLS 20261023b)
+  // Salvare plăți diurne (RLS 20261023b, 09.10.2026): owner, acces Salarii sau bifa „acces diurne” — butonul urmează aceeași poartă
   const canSaveDiurnaPayment = profile?.is_owner === true || profile?.can_access_salarii === true || profile?.can_access_diurne === true
   // Ștergere (= refacere) plată diurne: owner sau acces diurne — acces Salarii NU (RLS 20261023b, Copilot P22-1)
   const canDeleteDiurnaPayment = profile?.is_owner === true || profile?.can_access_diurne === true

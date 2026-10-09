@@ -72,6 +72,27 @@ refuz "politică modificată" livreaza "preconditie politica diurna_payments.diu
 q "ALTER POLICY diurna_payments_delete_owner ON public.diurna_payments USING ((EXISTS ( SELECT 1 FROM profiles WHERE ((profiles.id = auth.uid()) AND (profiles.is_owner = true)))))" >/dev/null
 [ "$(pol)" = "$P0" ] || esec "politică nerefăcută"
 
+
+# P23-1: bariera owner-only pe can_access_diurne — comportament + refuz dacă lipsește
+v="$("${PSQL[@]}" -d "$BAZA" -At -c "BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('test.uid','00000000-0000-0000-0000-00000000000f',true);" \
+  -c "UPDATE public.profiles SET can_access_diurne = true, can_access_salarii = true WHERE id = auth.uid();" -c "SELECT 'flag='||can_access_diurne||can_access_salarii FROM public.profiles WHERE id = auth.uid();" -c "ROLLBACK;" 2>&1 | grep '^flag=')"
+[ "$v" = "flag=falsefalse" ] || esec "non-owner și-a pus singur bifa: $v"; ok "non-owner nu-și poate pune singur bifa diurne/salarii (trigger)"
+v="$("${PSQL[@]}" -d "$BAZA" -At -c "BEGIN; SET LOCAL ROLE authenticated; SELECT set_config('test.uid','00000000-0000-0000-0000-00000000000f',true);" \
+  -c "INSERT INTO public.profiles(id, can_access_diurne) VALUES ('00000000-0000-0000-0000-0000000000ee', true);" -c "ROLLBACK;" 2>&1 | grep -c 'row-level security' || true)"
+[ "$v" = 1 ] || esec "non-owner a inserat profil"; ok "non-owner nu poate insera profil cu bifa"
+q "ALTER TABLE public.profiles DISABLE TRIGGER trg_enforce_owner_only_salary_flags" >/dev/null
+refuz "trigger dezactivat" livreaza "bariera owner-only" "$P0"
+q "ALTER TABLE public.profiles ENABLE TRIGGER trg_enforce_owner_only_salary_flags" >/dev/null
+q "CREATE POLICY profiles_insert_x ON public.profiles FOR INSERT WITH CHECK (true)" >/dev/null
+refuz "politică INSERT în plus pe profiles" livreaza "politica INSERT pe profiles" "$P0"
+q "DROP POLICY profiles_insert_x ON public.profiles" >/dev/null
+q "ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY" >/dev/null
+refuz "RLS oprit pe profiles" livreaza "RLS oprit pe profiles" "$P0"
+q "ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY" >/dev/null
+q "CREATE OR REPLACE FUNCTION public.enforce_owner_only_salary_flags() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS \$f\$ BEGIN RETURN NEW; END \$f\$" >/dev/null
+refuz "funcția trigger înlocuită" livreaza "bariera owner-only" "$P0"
+"${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/diurne_scriere_bariera.sql" >/dev/null || esec "bariera nerefăcută"
+[ "$(q "SELECT md5(prosrc) FROM pg_proc WHERE proname='enforce_owner_only_salary_flags'")" = daaa561298c10c259944600e6c39467e ] || esec "md5 barieră schelet ≠ live"; ok "bariera refăcută = corp live"
 SHA="$(sha256sum "$MIGRARE" | cut -d' ' -f1)"; SIS="$(q "SELECT system_identifier FROM pg_control_system()")"
 RC=0; PSQL_BIN="$PG_BIN/psql" bash "$RADACINA/scripts/livrare_migrare.sh" --migrare "$MIGRARE" --sha256 "$SHA" --versiune 20261009130000 \
   --tinta-db "$BAZA" --tinta-sistem "$SIS" --tinta-host 127.0.0.1 --tinta-port "$PORT" --user postgres >/tmp/diurne_runner.out 2>&1 || RC=$?
