@@ -2163,8 +2163,10 @@ function ReportsPage() {
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
   // Acces Pontaj Brut + Istoric: doar Owner sau utilizatori bifați (Razvan, Marilena, Natalia)
   const hasPontajBrutAccess = profile?.is_owner === true || profile?.can_access_pontaj_brut === true
-  // Diurne r6: scrierea în diurna_payments e permisă de RLS doar owner / can_access_salarii — butonul urmează aceeași poartă
-  const canSaveDiurnaPayment = profile?.is_owner === true || profile?.can_access_salarii === true
+  // Salvare plăți diurne (RLS 20261023b, 09.10.2026): owner, acces Salarii sau bifa „acces diurne” — butonul urmează aceeași poartă
+  const canSaveDiurnaPayment = profile?.is_owner === true || profile?.can_access_salarii === true || profile?.can_access_diurne === true
+  // Ștergere (= refacere) plată diurne: owner sau acces diurne — acces Salarii NU (RLS 20261023b, Copilot P22-1)
+  const canDeleteDiurnaPayment = profile?.is_owner === true || profile?.can_access_diurne === true
   
   // Lock-screen Istoric: reset timer la fiecare interactiune (mouse, keyboard, scroll, touch)
   useEffect(() => {
@@ -2939,7 +2941,7 @@ function ReportsPage() {
   }
 
   const savePayment=async()=>{
-    if(!canSaveDiurnaPayment){showToast('Salvarea plății de diurne e permisă doar owner / acces Salarii','error');return}
+    if(!canSaveDiurnaPayment){showToast('Salvarea plății de diurne e permisă doar owner / acces Salarii / acces diurne','error');return}
     if(!df||!dt){showToast('Selectează perioada','warn');return}
     setSavingPayment(true)
     try{
@@ -5306,14 +5308,16 @@ function ReportsPage() {
                       </span>
                       <div style={{display:'flex',gap:6,alignItems:'center'}}>
                         <span style={{fontSize:11,color:G.muted}}>{new Date(p.payment_date).toLocaleDateString('ro-RO')}</span>
-                        <button onClick={async(e)=>{
+                        {canDeleteDiurnaPayment&&<button onClick={async(e)=>{
                           e.stopPropagation()
                           if(!window.confirm(`Ștergi plata ${new Date(p.period_from).toLocaleDateString('ro-RO')} — ${new Date(p.period_to).toLocaleDateString('ro-RO')}?`)) return
-                          await supabase.from('diurna_payments').delete().eq('id',p.id)
+                          // RLS refuză tăcut (0 rânduri) — verificăm ce s-a șters, nu doar eroarea
+                          const {data:sters,error:errDel}=await supabase.from('diurna_payments').delete().eq('id',p.id).select('id')
+                          if(errDel||!sters?.length){showToast(`Plata nu s-a șters${errDel?': '+errDel.message:' (fără drept)'}`,'error');return}
                           if(selectedPayment?.id===p.id){setSelectedPayment(null);setPaymentDetails([])}
                           loadPayments()
                           showToast('✓ Plată ștearsă')
-                        }} style={{background:'none',border:`1px solid ${G.red}44`,borderRadius:6,padding:'2px 7px',cursor:'pointer',color:G.red,fontSize:11}}>🗑️</button>
+                        }} style={{background:'none',border:`1px solid ${G.red}44`,borderRadius:6,padding:'2px 7px',cursor:'pointer',color:G.red,fontSize:11}}>🗑️</button>}
                       </div>
                     </div>
                     <div style={{display:'flex',gap:12,fontSize:11}}>

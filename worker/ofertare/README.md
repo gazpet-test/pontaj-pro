@@ -45,6 +45,11 @@ Protocolul e pe fișiere (vezi antetul `extractor/extractor.sh`): workerul cere 
 `extractor.sh` e copiat în imagine → după o schimbare: `docker-compose -p gazpet-ofertare-worker up -d --build seap-extractor`.
 Teste: `bash test-fixtures/seap_terra/run.sh` (include `extractor_test.sh`, arhive malițioase).
 
+**Identitatea documentelor (audit #4 var. B, PR-2, 08.10.2026):** `aduLicitatie` decide pe codul SEAP (`noticeDocumentCode`) cu
+`supabase/functions/_shared/codSeap.mjs`, aceleași reguli ca edge-ul de import — doar pentru documentele simple; arhivele și volumele
+RAR rămân pe regula după nume. Versiunea / fratele se urcă sub „N (COD).ext”. Evidența oricărui document decis pe cod (și „nou”, urcat ca „N.pdf”) stă pe cheia rezervată a codului, `(cod) <COD>` (`cheieCod`), cu numele afișat „N (COD).ext”: un nume SEAP nu poate produce cheia, deci nu se ciocnește cu evidența unui document numit literal așa. Detalii:
+`docs/ofertare/AUDIT_MOTOR_IMPORT_2026-10-07.md` (#4).
+
 ### Cum sunt impuse limitele (precizare cerută de Copilot)
 - **Mărime pe fișier (2 GB)** și **listare (50 MB text)**: `ulimit -f` — plafon strict impus de kernel.
 - **CPU listare (120 s)**: `ulimit -t` — strict.

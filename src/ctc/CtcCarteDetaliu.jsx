@@ -6,6 +6,7 @@
 // ════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
+import CtcDeciziiProiect from './CtcDeciziiProiect.jsx'
 import { G, inputSt, btn, btnMic, Modal, Camp, STATUS_DOC_UI, STATUS_CARTE_UI, BaraProgres, fmtData, fmtMb, useToast } from './ctcUi.jsx'
 import {
   actualizeazaDoc, adaugaPozitie, stergePozitie, incarcaFisier, ataseazaDinArhiva, scoateFisier, urlSemnat,
@@ -179,7 +180,11 @@ function RandDoc({ d, busy, muta, onMuta, onUpload, onDeschide, onStatus, onVeri
   )
 }
 
-export default function CtcCarteDetaliu({ carteId, profile, onBack }) {
+export default function CtcCarteDetaliu(props) {
+  return <CtcCarteContinut key={`${props.carteId}:${props.profile?.id || ''}`} {...props} />
+}
+
+function CtcCarteContinut({ carteId, profile, onBack }) {
   const { showToast, ToastEl } = useToast()
   const [carte, setCarte] = useState(null)
   const [docs, setDocs] = useState([])
@@ -370,6 +375,10 @@ export default function CtcCarteDetaliu({ carteId, profile, onBack }) {
           </div>
         )}
       </div>
+
+      {carte.proiect_id != null && (
+        <CtcDeciziiProiect key={carte.proiect_id} proiectId={carte.proiect_id} />
+      )}
 
       {!docs.length && (
         <div style={{ background: G.card2, border: `1px dashed ${G.border}`, borderRadius: 12, padding: 28, textAlign: 'center', marginBottom: 14 }}>

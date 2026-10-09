@@ -582,6 +582,528 @@ Deno.test('drumul SEAP: fișierele din arhivă primesc tipul cu indiciul arhivei
   })
 })
 
+// -- audit #4 var. B, PR-2: workerul NAS decide pe codul SEAP (_shared/codSeap.mjs), ca edge-ul de import ----------------------
+// SEAP simulat CU coduri: lista poate avea ACELAȘI nume de două ori (lic. 100), deci URL-ul e pe poziție; `descarcate` = ce s-a cerut
+function cuSeapCod(lista: { nume: string; cod?: string; buf: string | Uint8Array | null }[]) {
+  const orig = globalThis.fetch
+  const descarcate: string[] = []
+  globalThis.fetch = (async (input: any) => {
+    const u = String(input?.url ?? input)
+    if (u.includes('GetDfNoticeSectionFiles')) {
+      return new Response(JSON.stringify({ dfNoticeDocs: lista.map((d, i) => ({ noticeDocumentName: d.nume, noticeDocumentCode: d.cod, noticeDocumentUrl: `https://e-licitatie.ro/f/${i}` })) }), { headers: { 'set-cookie': 'a=b' } })
+    }
+    const m = u.match(/\/f\/(\d+)$/)
+    if (m) { const d = lista[Number(m[1])]; descarcate.push(d.nume); if (d.buf == null) return new Response('căzut', { status: 500 }); return new Response((typeof d.buf === 'string' ? new TextEncoder().encode(d.buf) : d.buf) as unknown as BodyInit) }
+    return new Response('nu', { status: 404 })
+  }) as typeof fetch
+  return { descarcate, restore: () => { globalThis.fetch = orig } }
+}
+const octetiText = (t: string) => new TextEncoder().encode(t)
+
+Deno.test('cod SEAP (PR-2): republicare sub ACELAȘI nume, cod nou → versiune „N (COD).ext” anunțabilă; evidența „ok” pe numele vechi nu o mai ascunde', async () => {
+  await cuMediu(async (_root, s) => {
+    const { descarcate, restore } = cuSeapCod([{ nume: 'Caiet de sarcini.pdf', cod: 'CN1/00020', buf: '%PDF-1.4 revizuit' }])
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'Caiet de sarcini.pdf', fisier_path: '3/c.pdf', size_bytes: 14, seap_cod: 'CN1/00010', tip: 'cs_volum', status_procesare: 'procesat' }],
+        // înainte de PR-2 evidența „ok” pe numele SEAP (sau rândul cu același nume) sărea republicarea în tăcere
+        ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'Caiet de sarcini.pdf', cheie: s.cheieEvidenta('Caiet de sarcini.pdf'), stare: 'ok', incercari: 1 }],
+      })
+      const supa = fakeSupa(tab, new Map())
+      const rap = await s.aduLicitatie(supa, 3, () => {})
+      const v = tab.ofertare_documente_atribuire.find(d => d.id >= 5000)
+      eq(v?.nume_original, 'Caiet de sarcini (CN1-00020).pdf', JSON.stringify(rap))
+      eq([v?.seap_cod, v?.aparut_ulterior, v?.tip, v?.seap_meta?.de_anuntat, v?.seap_meta?.inlocuieste_id, v?.seap_meta?.cod_anterior, v?.sursa], ['CN1/00020', true, 'cs_volum', true, 10, 'CN1/00010', 'seap'])
+      eq(rap.versiuni_noi, ['Caiet de sarcini (CN1-00020).pdf'])
+      eq(tab.ofertare_seap_fisiere.find(e => e.cheie === s.cheieCod('CN1/00020'))?.nume_seap, 'Caiet de sarcini (CN1-00020).pdf')
+      eq(tab.ofertare_seap_fisiere.find(e => e.cheie === s.cheieCod('CN1/00020'))?.stare, 'ok', 'evidența versiunii stă pe cheia codului ei')
+      descarcate.length = 0
+      const r2 = await s.aduLicitatie(supa, 3, () => {})
+      eq([descarcate, tab.ofertare_documente_atribuire.length, r2.deja], [[], 2, 1], 'a doua rulare: codul e pe rând → sărit, fără descărcare')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, F5): republicat IDENTIC sub cod nou → codul se mută pe rândul vechi, fără document nou și fără anunț', async () => {
+  await cuMediu(async (_root, s) => {
+    const c = '%PDF-1.4 caiet'
+    const { restore } = cuSeapCod([{ nume: 'Caiet de sarcini.pdf', cod: 'CN1/00020', buf: c }])
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'Caiet de sarcini.pdf', fisier_path: '3/c.pdf', size_bytes: c.length, seap_cod: 'CN1/00010', status_procesare: 'procesat' }],
+        ofertare_seap_manifest: [{ licitatie_id: 3, arhiva_cheie: 'caiet de sarcini.pdf', cale: 'Caiet de sarcini.pdf', marime: c.length, sha256: await shaHex(c), document_id: 10, stare: 'urcat', motiv: null }],
+      })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([tab.ofertare_documente_atribuire.length, tab.ofertare_documente_atribuire[0].seap_cod, rap.coduri_mutate, rap.versiuni_noi], [1, 'CN1/00020', 1, []], JSON.stringify(rap))
+      eq(tab.ofertare_seap_fisiere.map(e => [e.stare, e.etapa]), [['ok', 'cod']])
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, lic. 100): două documente cu ACELAȘI nume și un singur rând vechi → codul pe rândul cu același conținut, celălalt urcat ca frate', async () => {
+  await cuMediu(async (_root, s) => {
+    const a = '%PDF-1.4 anexa A', b = '%PDF-1.4 anexa B'   // aceeași mărime: se citește obiectul din Storage
+    const { descarcate, restore } = cuSeapCod([{ nume: 'Anexa 1.pdf', cod: 'CN1/00001', buf: a }, { nume: 'Anexa 1.pdf', cod: 'CN1/00002', buf: b }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'Anexa 1.pdf', fisier_path: '3/a.pdf', size_bytes: a.length, status_procesare: 'procesat' }] })
+      const supa = fakeSupa(tab, new Map([['3/a.pdf', octetiText(a)]]))
+      const rap = await s.aduLicitatie(supa, 3, () => {})
+      const docs = tab.ofertare_documente_atribuire.map(d => [d.id >= 5000 ? 'nou' : d.id, d.nume_original, d.seap_cod])
+      eq(docs, [[10, 'Anexa 1.pdf', 'CN1/00001'], ['nou', 'Anexa 1 (CN1-00002).pdf', 'CN1/00002']], JSON.stringify(rap))
+      eq(tab.ofertare_documente_atribuire[1].seap_meta?.frate_cu, [10])
+      eq([rap.coduri_adoptate, rap.frati, rap.identitate_neverificata], [1, ['Anexa 1 (CN1-00002).pdf'], []])
+      ok((tab.egress_jurnal || []).some((j: Rand) => j.p_obiect === '3/a.pdf'), 'citirea candidatului din Storage trece prin monitorul de egress')
+      ok(tab.ofertare_seap_fisiere.every(e => e.stare === 'ok'), `evidența: ${JSON.stringify(tab.ofertare_seap_fisiere)}`)
+      descarcate.length = 0
+      await s.aduLicitatie(supa, 3, () => {})
+      eq([descarcate, tab.ofertare_documente_atribuire.length], [[], 2], 'reluarea nu descarcă și nu dublează')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2): identitate fără nicio cale de dovadă → „eroare” vizibilă (poarta), fără descărcare și fără reîncercări consumate; cu mărimea cunoscută se rezolvă', async () => {
+  await cuMediu(async (_root, s) => {
+    const a = '%PDF-1.4 anexa A', b = '%PDF-1.4 anexa B'
+    const { descarcate, restore } = cuSeapCod([{ nume: 'Anexa 1.pdf', cod: 'CN1/00001', buf: a }, { nume: 'Anexa 1.pdf', cod: 'CN1/00002', buf: b }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'Anexa 1.pdf', fisier_path: '3/a.pdf', size_bytes: null, status_procesare: 'procesat' }] })
+      const supa = fakeSupa(tab, new Map([['3/a.pdf', octetiText(a)]]))
+      for (let k = 1; k <= 4; k++) {   // de mai multe ori: rămâne „eroare”, nu ajunge „sărită” peste MAX_INCERCARI
+        const rap = await s.aduLicitatie(supa, 3, () => {})
+        eq([descarcate, rap.identitate_neverificata.length, tab.ofertare_documente_atribuire.length], [[], 2, 1], `rularea ${k}`)
+        eq(tab.ofertare_seap_fisiere.map(e => [e.stare, e.etapa, e.incercari]), [['eroare', 'identitate', 0], ['eroare', 'identitate', 0]], `rularea ${k}`)
+      }
+      tab.ofertare_documente_atribuire[0].size_bytes = a.length   // ex. urcat din nou din platformă
+      const rap = await s.aduLicitatie(supa, 3, () => {})
+      eq(tab.ofertare_documente_atribuire.map(d => d.seap_cod), ['CN1/00001', 'CN1/00002'], JSON.stringify(rap))
+      ok(tab.ofertare_seap_fisiere.every(e => e.stare === 'ok'), `evidența închisă: ${JSON.stringify(tab.ofertare_seap_fisiere)}`)
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, L1 = A): rând vechi fără cod, unic pe nume → codul adoptat fără descărcare; evidența veche „eroare” se închide', async () => {
+  await cuMediu(async (_root, s) => {
+    const { descarcate, restore } = cuSeapCod([{ nume: 'Fisa de date.pdf', cod: 'CN1/00003', buf: '%PDF-1.4 fisa' }])
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'Fisa de date.pdf', fisier_path: '3/f.pdf', size_bytes: 13, status_procesare: 'procesat' }],
+        ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'Fisa de date.pdf', cheie: s.cheieEvidenta('Fisa de date.pdf'), stare: 'eroare', etapa: 'descarcare', incercari: 3 }],
+      })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([descarcate, tab.ofertare_documente_atribuire[0].seap_cod, rap.coduri_adoptate, tab.ofertare_seap_fisiere[0].stare], [[], 'CN1/00003', 1, 'ok'])
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, F1): placeholder-ul veghei pe numele versiunii se completează, fără al doilea anunț (de_anuntat = false)', async () => {
+  await cuMediu(async (_root, s) => {
+    const { restore } = cuSeapCod([{ nume: 'Caiet de sarcini.pdf', cod: 'CN1/00020', buf: '%PDF-1.4 revizuit' }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [
+        { id: 10, licitatie_id: 3, nume_original: 'Caiet de sarcini.pdf', fisier_path: '3/c.pdf', size_bytes: 14, seap_cod: 'CN1/00010', status_procesare: 'procesat' },
+        { id: 11, licitatie_id: 3, nume_original: 'Caiet de sarcini (CN1-00020).pdf', fisier_path: '3/neincarcat/x', status_procesare: 'eroare' },
+      ] })
+      await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      const ph = tab.ofertare_documente_atribuire.find(d => d.id === 11)
+      eq([tab.ofertare_documente_atribuire.length, ph?.seap_cod, ph?.seap_meta?.de_anuntat, ph?.seap_meta?.anuntat_prin], [2, 'CN1/00020', false, 'placeholder veghe'])
+      ok(!String(ph?.fisier_path).includes('/neincarcat/'), 'placeholder completat cu fișierul')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2): evidența „eroare” a unei versiuni al cărei cod a IEȘIT din listă (republicat iar) se închide; altele rămân', async () => {
+  await cuMediu(async (_root, s) => {
+    const { restore } = cuSeapCod([{ nume: 'Caiet de sarcini.pdf', cod: 'CN1/00030', buf: '%PDF-1.4 a treia' }])
+    try {
+      let idEv = 900
+      const ev = (nume: string, cheie = s.cheieEvidenta(nume)) => ({ id: idEv++, licitatie_id: 3, nume_seap: nume, cheie, stare: 'eroare', etapa: 'descarcare', incercari: 3 })
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'Caiet de sarcini.pdf', fisier_path: '3/c.pdf', size_bytes: 14, seap_cod: 'CN1/00010', status_procesare: 'procesat' }],
+        // /20 n-a putut fi adusă, apoi autoritatea a republicat /30; „Anexa 2.pdf” (alt nume, nelistat) nu e treaba regulii
+        // evidența pe cod a lui /20 stă pe cheia codului; o evidență BRUTĂ cu același nume afișat (document numit literal așa, pe
+        // regula după nume) nu e a codului și rămâne (Copilot r8 + Jakarinos r14)
+        ofertare_seap_fisiere: [ev('Caiet de sarcini (CN1-00020).pdf', s.cheieCod('CN1/00020')), ev('Anexa 2.pdf'), ev('Anexa (1).pdf'), ev('Caiet de sarcini (CN1-00021).pdf')],
+      })
+      await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      const st = Object.fromEntries(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare]))
+      eq(st, { 'Caiet de sarcini (CN1-00020).pdf': 'sarit', 'Anexa 2.pdf': 'eroare', 'Anexa (1).pdf': 'eroare', 'Caiet de sarcini (CN1-00021).pdf': 'eroare', 'Caiet de sarcini (CN1-00030).pdf': 'ok' })
+      eq(tab.ofertare_documente_atribuire.find(d => d.id >= 5000)?.seap_cod, 'CN1/00030')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r1 #1): doi frați cu același nume și conținut IDENTIC, inventar gol → un singur document (ca în edge)', async () => {
+  await cuMediu(async (_root, s) => {
+    const c = '%PDF-1.4 anexa'
+    const { restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00001', buf: c }, { nume: 'N.pdf', cod: 'CN1/00002', buf: c }])
+    try {
+      const tab = licSeap()
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), [['N.pdf', 'CN1/00001']], JSON.stringify(rap))
+      // evidența fiecărui cod pe „N (COD).ext” (Jakarinos r10), chiar dacă primul s-a urcat ca „N.pdf”
+      eq(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare]), [['N (CN1-00001).pdf', 'ok'], ['N (CN1-00002).pdf', 'ok']])
+      ok(rap.avertismente.some((a: string) => a.includes('conținut identic')), JSON.stringify(rap.avertismente))
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r1 #2): „N.pdf” căzut la descărcare, recuperat apoi ca frate → eroarea veche de pe numele comun se închide când ambele sunt în platformă', async () => {
+  await cuMediu(async (_root, s) => {
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'N.pdf', cod: 'CN1/00001', buf: null }, { nume: 'N.pdf', cod: 'CN1/00002', buf: '%PDF-1.4 doi' }]
+    const { restore } = cuSeapCod(lista)
+    try {
+      // eroarea de pe „N.pdf” e din evidența pe nume de dinainte de PR-2 (drumul pe cod scrie acum doar pe „N (COD).ext”)
+      const tab = licSeap({ ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'N.pdf', cheie: s.cheieEvidenta('N.pdf'), stare: 'eroare', etapa: 'descarcare', incercari: 1 }] })
+      const supa = fakeSupa(tab, new Map())
+      const stari = () => Object.fromEntries(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare]))
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(stari(), { 'N.pdf': 'eroare', 'N (CN1-00001).pdf': 'eroare', 'N (CN1-00002).pdf': 'ok' }, 'rularea 1: primul căzut')
+      lista[0].buf = '%PDF-1.4 unu'
+      await s.aduLicitatie(supa, 3, () => {})   // primul revine ca frate „N (CN1-00001).pdf”; ambele prezente → „N.pdf” închis
+      eq(tab.ofertare_documente_atribuire.map(d => d.seap_cod).sort(), ['CN1/00001', 'CN1/00002'])
+      eq(stari(), { 'N.pdf': 'ok', 'N (CN1-00001).pdf': 'ok', 'N (CN1-00002).pdf': 'ok' }, 'rularea 2')
+      ok(!tab.ofertare_seap_fisiere.some(e => e.stare === 'eroare' || e.stare === 'identificat'), 'poarta nu mai are nimic de blocat')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r2 #1): două rânduri „N.pdf” (/10, /11) republicate IDENTIC (/20, /21) → ambele coduri mutate, nicio versiune, niciun anunț', async () => {
+  await cuMediu(async (_root, s) => {
+    const a = '%PDF-1.4 cont A', b = '%PDF-1.4 cont B'   // aceeași mărime: dovada se citește din Storage
+    const { restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00020', buf: a }, { nume: 'N.pdf', cod: 'CN1/00021', buf: b }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [
+        { id: 10, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/a.pdf', size_bytes: a.length, seap_cod: 'CN1/00010', status_procesare: 'procesat' },
+        { id: 11, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/b.pdf', size_bytes: b.length, seap_cod: 'CN1/00011', status_procesare: 'procesat' },
+      ] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map([['3/a.pdf', octetiText(a)], ['3/b.pdf', octetiText(b)]])), 3, () => {})
+      eq(tab.ofertare_documente_atribuire.map(d => [d.id, d.seap_cod]), [[10, 'CN1/00020'], [11, 'CN1/00021']], JSON.stringify(rap))
+      eq([rap.coduri_mutate, rap.versiuni_noi], [2, []])
+      ok(!tab.ofertare_documente_atribuire.some(d => d.seap_meta?.de_anuntat), 'niciun anunț de versiune')
+      ok(tab.ofertare_seap_fisiere.every(e => e.stare === 'ok'), JSON.stringify(tab.ofertare_seap_fisiere))
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Copilot r1 #1): ABA — C10 căzut, ieșit din listă („sarit”), apoi reapărut → se aduce, nu e „deja”', async () => {
+  await cuMediu(async (_root, s) => {
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'N.pdf', cod: 'CN1/00010', buf: null }]
+    const { restore } = cuSeapCod(lista)
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/n.pdf', size_bytes: 14, seap_cod: 'CN1/00005', status_procesare: 'procesat' }] })
+      const supa = fakeSupa(tab, new Map())
+      const st = () => tab.ofertare_seap_fisiere.find(e => e.nume_seap === 'N (CN1-00010).pdf')?.stare
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(st(), 'eroare', 'rularea 1: C10 căzut')
+      lista[0] = { nume: 'N.pdf', cod: 'CN1/00020', buf: null }
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(st(), 'sarit', 'rularea 2: C10 ieșit din listă')
+      lista[0] = { nume: 'N.pdf', cod: 'CN1/00010', buf: '%PDF-1.4 C10 revine' }
+      await s.aduLicitatie(supa, 3, () => {})
+      ok(tab.ofertare_documente_atribuire.some(d => d.seap_cod === 'CN1/00010'), `rularea 3: C10 adus (${JSON.stringify(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]))})`)
+      eq(st(), 'ok')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Copilot r1 #2): identitate dovedită pe sha, dar adopția codului cade → evidența „eroare” (nu „ok” definitiv), apoi se rezolvă', async () => {
+  await cuMediu(async (_root, s) => {
+    const a = '%PDF-1.4 anexa A', b = '%PDF-1.4 anexa B'
+    const { restore } = cuSeapCod([{ nume: 'Anexa 1.pdf', cod: 'CN1/00001', buf: a }, { nume: 'Anexa 1.pdf', cod: 'CN1/00002', buf: b }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'Anexa 1.pdf', fisier_path: '3/a.pdf', size_bytes: a.length, status_procesare: 'procesat' }] })
+      const baza = fakeSupa(tab, new Map([['3/a.pdf', octetiText(a)]]))
+      let cadeAdoptia = true
+      // UPDATE-ul de adopție (doar seap_cod) cade o dată, ca o eroare tranzitorie de BD
+      const supa = { ...baza, from: (t: string) => {
+        const b0 = baza.from(t)
+        if (t !== 'ofertare_documente_atribuire') return b0
+        const upd = b0.update.bind(b0)
+        b0.update = (p: Rand) => {
+          if (cadeAdoptia && p && Object.keys(p).length === 1 && 'seap_cod' in p) {
+            const err: any = { eq: () => err, is: () => err, select: () => err, then: (res: any, rej: any) => Promise.resolve({ data: null, error: { message: 'simulat: BD indisponibilă' } }).then(res, rej) }
+            return err
+          }
+          return upd(p)
+        }
+        return b0
+      } }
+      await s.aduLicitatie(supa, 3, () => {})
+      const ev1 = tab.ofertare_seap_fisiere.find(e => e.nume_seap === 'Anexa 1 (CN1-00001).pdf')
+      eq([ev1?.stare, ev1?.etapa, tab.ofertare_documente_atribuire[0].seap_cod], ['eroare', 'cod', undefined], JSON.stringify(tab.ofertare_seap_fisiere))
+      cadeAdoptia = false
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(tab.ofertare_documente_atribuire.find(d => d.id === 10)?.seap_cod, 'CN1/00001', 'reluarea adoptă codul')
+      ok(!tab.ofertare_seap_fisiere.some(e => e.stare === 'eroare' || e.stare === 'identificat'), JSON.stringify(tab.ofertare_seap_fisiere))
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Copilot r2): evidența „ok” a lui N (C10) cu sha egal pe un document FĂRĂ legătură (M.pdf) nu ține deoparte C10', async () => {
+  await cuMediu(async (_root, s) => {
+    const S = '%PDF-1.4 octeti S'
+    const { restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00010', buf: S }])
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [
+          { id: 10, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/n.pdf', size_bytes: 3, seap_cod: 'CN1/00005', status_procesare: 'procesat' },
+          { id: 11, licitatie_id: 3, nume_original: 'M.pdf', fisier_path: '3/m.pdf', size_bytes: S.length, status_procesare: 'procesat' },
+        ],
+        ofertare_seap_manifest: [{ licitatie_id: 3, arhiva_cheie: 'm.pdf', cale: 'M.pdf', marime: S.length, sha256: await shaHex(S), document_id: 11, stare: 'urcat', motiv: null }],
+        ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'N (CN1-00010).pdf', cheie: s.cheieEvidenta('N (CN1-00010).pdf'), stare: 'ok', sha256: await shaHex(S), incercari: 1 }],
+      })
+      await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      ok(tab.ofertare_documente_atribuire.some(d => d.seap_cod === 'CN1/00010'), JSON.stringify(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod])))
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r8): evidența „ok” de pe numele simplu „N.pdf” (documentul vechi redenumit M.pdf) nu ascunde codul nou /20', async () => {
+  await cuMediu(async (_root, s) => {
+    const A = '%PDF-1.4 vechi A', B = '%PDF-1.4 nou B'
+    const { restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00020', buf: B }])
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 11, licitatie_id: 3, nume_original: 'M.pdf', fisier_path: '3/m.pdf', size_bytes: A.length, seap_cod: 'CN1/00010', status_procesare: 'procesat' }],
+        ofertare_seap_manifest: [{ licitatie_id: 3, arhiva_cheie: 'n.pdf', cale: 'N.pdf', marime: A.length, sha256: await shaHex(A), document_id: 11, stare: 'urcat', motiv: null }],
+        ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'N.pdf', cheie: s.cheieEvidenta('N.pdf'), stare: 'ok', sha256: await shaHex(A), incercari: 1 }],
+      })
+      await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      const n = tab.ofertare_documente_atribuire.find(d => d.seap_cod === 'CN1/00020')
+      eq(n?.nume_original, 'N.pdf', JSON.stringify(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod])))
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Copilot r3): eroare istorică cu reîncercări epuizate pe numele simplu „N.pdf” nu blochează codul nou decis „nou”', async () => {
+  await cuMediu(async (_root, s) => {
+    const { restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00020', buf: '%PDF-1.4 C20' }])
+    try {
+      const tab = licSeap({ ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'N.pdf', cheie: s.cheieEvidenta('N.pdf'), stare: 'eroare', etapa: 'descarcare', incercari: 3 }] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), rap.sarite], [[['N.pdf', 'CN1/00020']], 0])
+      eq([tab.ofertare_seap_fisiere[0].stare, tab.ofertare_seap_fisiere[0].incercari], ['ok', 0])
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r9): fratele identic reverificat — 500 → ok → 500 → ok → 500 nu epuizează reîncercările; la revenire se închide „ok”, fără upload', async () => {
+  await cuMediu(async (_root, s) => {
+    const X = '%PDF-1.4 continut X'
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'N.pdf', cod: 'CN1/00010', buf: X }, { nume: 'N.pdf', cod: 'CN1/00020', buf: null }]
+    const { restore } = cuSeapCod(lista)
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 10, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/n.pdf', size_bytes: X.length, seap_cod: 'CN1/00010', status_procesare: 'procesat' }],
+        ofertare_seap_manifest: [{ licitatie_id: 3, arhiva_cheie: 'n.pdf', cale: 'N.pdf', marime: X.length, sha256: await shaHex(X), document_id: 10, stare: 'urcat', motiv: null }],
+      })
+      const supa = fakeSupa(tab, new Map())
+      const ev = () => tab.ofertare_seap_fisiere.find(e => e.nume_seap === 'N (CN1-00020).pdf')
+      for (const [k, cade] of [true, false, true, false, true, false].entries()) {
+        lista[1].buf = cade ? null : X
+        await s.aduLicitatie(supa, 3, () => {})
+        eq(ev()?.stare, cade ? 'eroare' : 'ok', `rularea ${k + 1}`)
+      }
+      eq(tab.ofertare_documente_atribuire.length, 1, 'fratele identic nu se urcă niciodată')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r10): un cod nou („nou” pe N.pdf) care cade mereu se oprește la plafon; un ALT cod pe același nume se reia', async () => {
+  await cuMediu(async (_root, s) => {
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'N.pdf', cod: 'CN1/00020', buf: null }]
+    const { descarcate, restore } = cuSeapCod(lista)
+    try {
+      const tab = licSeap()
+      const supa = fakeSupa(tab, new Map())
+      for (let k = 1; k <= 3; k++) await s.aduLicitatie(supa, 3, () => {})
+      eq(descarcate.length, 3, 'trei încercări')
+      const r4 = await s.aduLicitatie(supa, 3, () => {})
+      eq([descarcate.length, r4.sarite], [3, 1], 'a patra rulare: plafon atins, fără descărcare')
+      eq(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare, e.incercari]), [['N (CN1-00020).pdf', 'eroare', 3]])
+      lista[0] = { nume: 'N.pdf', cod: 'CN1/00030', buf: '%PDF-1.4 C30' }   // alt cod pe același nume: altă identitate, alt istoric
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), [['N.pdf', 'CN1/00030']])
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r11): semnătura „X.pdf.p7s” căzută cât era singură, apoi listată lângă „X.pdf” → evidența ei pe cod se închide „sarit”', async () => {
+  await cuMediu(async (_root, s) => {
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'X.pdf.p7s', cod: 'CN1/00001', buf: null }]
+    const { restore } = cuSeapCod(lista)
+    try {
+      const tab = licSeap()
+      const supa = fakeSupa(tab, new Map())
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare]), [['X (CN1-00001).pdf.p7s', 'eroare']], 'singură: decisă „nou”, căzută')
+      lista.push({ nume: 'X.pdf', cod: 'CN1/00002', buf: '%PDF-1.4 X' })
+      const r2 = await s.aduLicitatie(supa, 3, () => {})
+      eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), [['X.pdf', 'CN1/00002']], JSON.stringify(r2.erori))
+      eq(tab.ofertare_seap_fisiere.map(e => [e.nume_seap, e.stare]).sort(), [['X (CN1-00001).pdf.p7s', 'sarit'], ['X (CN1-00002).pdf', 'ok']])
+      // și din „în curs” (job mort după etapa 1)
+      const tab2 = licSeap({ ofertare_seap_fisiere: [{ id: 901, licitatie_id: 3, nume_seap: 'Y (CN1-00003).pdf.p7s', cheie: s.cheieCod('CN1/00003'), stare: 'identificat', incercari: 0 }] })
+      lista.length = 0
+      lista.push({ nume: 'Y.pdf.p7s', cod: 'CN1/00003', buf: null }, { nume: 'Y.pdf', cod: 'CN1/00004', buf: '%PDF-1.4 Y' })
+      await s.aduLicitatie(fakeSupa(tab2, new Map()), 3, () => {})
+      eq(tab2.ofertare_seap_fisiere.find(e => e.id === 901)?.stare, 'sarit')
+      ok(!tab2.ofertare_seap_fisiere.some(e => e.stare === 'eroare' || e.stare === 'identificat'), JSON.stringify(tab2.ofertare_seap_fisiere))
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r12–r14, Copilot r7–r8): evidența codului stă pe cheia CODULUI — se închide când codul e prezent sub orice nume; evidențele brute cu „(COD)” în nume nu sunt atinse', async () => {
+  await cuMediu(async (_root, s) => {
+    const M = { nume: 'M.pdf', cod: 'CN1/00001', buf: '%PDF-1.4 M' }
+    const cazuri: [{ nume: string; cod?: string; buf: string | null }[], string[]][] = [
+      // N „sari / dublu” lângă M (Jakarinos r12); evidența BRUTĂ „N (CN1-00001).pdf” (document fără cod, numit literal așa — Copilot r8
+      // ABA) nu e a codului → rămâne
+      [[M, { nume: 'N.pdf', cod: 'CN1/00001', buf: '%PDF-1.4 M' }], ['ok', 'eroare', 'eroare', 'eroare']],
+      // N nu mai e listat, codul e listat doar ca M (redenumit): cheia e a codului → se închide (Jakarinos r12, primul scenariu)
+      [[M], ['ok', 'eroare', 'eroare', 'eroare']],
+      // Jakarinos r13: document listat al cărui NUME conține „(CN1-00001)”, cu alt cod (/00002), căzut la plafon; Copilot r7: arhivă
+      // numită literal „Plan (CN1-00001).zip”, căzută — niciuna nu e evidența codului /00001
+      [[M, { nume: 'N (CN1-00001).pdf', cod: 'CN1/00002', buf: null }, { nume: 'Plan (CN1-00001).zip', buf: null }], ['ok', 'eroare', 'eroare', 'eroare']],
+    ]
+    for (const [lista, asteptat] of cazuri) {
+      const { descarcate, restore } = cuSeapCod(lista)
+      try {
+        const ev = (id: number, nume: string, cheie: string) => ({ id, licitatie_id: 3, nume_seap: nume, cheie, stare: 'eroare', incercari: 3, etapa: 'descarcare' })
+        const tab = licSeap({
+          ofertare_documente_atribuire: [{ id: 7, licitatie_id: 3, nume_original: 'M.pdf', fisier_path: '3/m.pdf', size_bytes: 10, seap_cod: 'CN1/00001', status_procesare: 'procesat' }],
+          ofertare_seap_fisiere: [ev(900, 'N (CN1-00001).pdf', s.cheieCod('CN1/00001')), ev(901, 'N (CN1-00001).pdf', s.cheieEvidenta('N (CN1-00001).pdf')),
+            ev(902, 'N (CN1-00001) (CN1-00002).pdf', s.cheieCod('CN1/00002')), ev(903, 'Plan (CN1-00001).zip', s.cheieEvidenta('Plan (CN1-00001).zip'))],
+        })
+        const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+        eq([descarcate, tab.ofertare_documente_atribuire.length], [[], 1], JSON.stringify(rap))
+        eq(tab.ofertare_seap_fisiere.filter(e => e.id >= 900 && e.id <= 903).map(e => e.stare), asteptat, lista.map(d => d.nume).join(' + '))
+      } finally { restore() }
+    }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r14): „N.pdf”/C1 deja în platformă și un document FĂRĂ cod numit literal „N (CN1-00001).pdf”, lipsă → al doilea se aduce (evidența lui brută nu e închisă de cod)', async () => {
+  await cuMediu(async (_root, s) => {
+    const { descarcate, restore } = cuSeapCod([{ nume: 'N.pdf', cod: 'CN1/00001', buf: '%PDF-1.4 N' }, { nume: 'N (CN1-00001).pdf', buf: '%PDF-1.4 alt document' }])
+    try {
+      const tab = licSeap({
+        ofertare_documente_atribuire: [{ id: 7, licitatie_id: 3, nume_original: 'N.pdf', fisier_path: '3/n.pdf', size_bytes: 10, seap_cod: 'CN1/00001', status_procesare: 'procesat' }],
+        ofertare_seap_fisiere: [{ id: 901, licitatie_id: 3, nume_seap: 'N (CN1-00001).pdf', cheie: s.cheieEvidenta('N (CN1-00001).pdf'), stare: 'eroare', incercari: 1, etapa: 'descarcare' }],
+      })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq(descarcate, ['N (CN1-00001).pdf'], JSON.stringify(rap))
+      eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod ?? null]), [['N.pdf', 'CN1/00001'], ['N (CN1-00001).pdf', null]])
+      eq(tab.ofertare_seap_fisiere.find(e => e.id === 901)?.stare, 'ok', 'închisă de urcarea documentului ei, nu de cod')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Copilot r9): C10 căzut de 3 ori, ieșit din listă („sarit”), reapărut → seria de eșecuri pornește de la 0 (un 500 după reapariție nu-l plafonează)', async () => {
+  await cuMediu(async (_root, s) => {
+    const lista: { nume: string; cod?: string; buf: string | null }[] = [{ nume: 'N.pdf', cod: 'CN1/00010', buf: null }]
+    const { descarcate, restore } = cuSeapCod(lista)
+    try {
+      const tab = licSeap()
+      const supa = fakeSupa(tab, new Map())
+      const ev = () => tab.ofertare_seap_fisiere.find(e => e.cheie === s.cheieCod('CN1/00010'))
+      for (let k = 1; k <= 3; k++) await s.aduLicitatie(supa, 3, () => {})
+      eq([ev()?.stare, ev()?.incercari], ['eroare', 3], 'trei eșecuri')
+      lista[0] = { nume: 'N.pdf', cod: 'CN1/00020', buf: '%PDF-1.4 C20' }
+      await s.aduLicitatie(supa, 3, () => {})
+      eq([ev()?.stare, ev()?.incercari], ['sarit', 0], 'C10 ieșit din listă: seria se rupe')
+      lista[0] = { nume: 'N.pdf', cod: 'CN1/00010', buf: null }   // reapare, prima încercare cade
+      await s.aduLicitatie(supa, 3, () => {})
+      eq([ev()?.stare, ev()?.incercari], ['eroare', 1])
+      lista[0] = { nume: 'N.pdf', cod: 'CN1/00010', buf: '%PDF-1.4 C10 revine' }
+      descarcate.length = 0
+      await s.aduLicitatie(supa, 3, () => {})
+      eq(descarcate, ['N.pdf'], 'încă eligibil (1 < 3)')
+      ok(tab.ofertare_documente_atribuire.some(d => d.seap_cod === 'CN1/00010'), JSON.stringify(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod])))
+      eq(ev()?.stare, 'ok')
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r15): fratele „N (CN1-00002).pdf” al lui N.pdf/C2 și un document FĂRĂ cod numit literal așa → fără amestec de octeți; fratele rămâne eroare vizibilă (ambele ordini, și la rerulare)', async () => {
+  await cuMediu(async (_root, s) => {
+    const N1 = { nume: 'N.pdf', cod: 'CN1/00001', buf: '%PDF-1.4 alpha' }, N2 = { nume: 'N.pdf', cod: 'CN1/00002', buf: '%PDF-1.4 charlie' }
+    const L = { nume: 'N (CN1-00002).pdf', buf: '%PDF-1.4 BRAVO' }
+    for (const lista of [[N1, N2, L], [N1, L, N2]]) {
+      const { descarcate, restore } = cuSeapCod(lista)
+      try {
+        const tab = licSeap(), fisiere = new Map<string, Uint8Array>()
+        const supa = fakeSupa(tab, fisiere)
+        const text = (d: any) => new TextDecoder().decode(fisiere.get(d.fisier_path))
+        const stareRanduri = () => tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod ?? null, text(d)]).sort()
+        const rap = await s.aduLicitatie(supa, 3, () => {})
+        const asteptat = [['N (CN1-00002).pdf', null, '%PDF-1.4 BRAVO'], ['N.pdf', 'CN1/00001', '%PDF-1.4 alpha']]
+        eq(stareRanduri(), asteptat, lista.map(d => d.nume).join(' + '))
+        ok(!descarcate.includes('N.pdf') || descarcate.filter(n => n === 'N.pdf').length === 1, `C2 nu se descarcă: ${JSON.stringify(descarcate)}`)
+        const ev2 = () => tab.ofertare_seap_fisiere.find(e => e.cheie === s.cheieCod('CN1/00002'))
+        eq([ev2()?.stare, ev2()?.etapa, ev2()?.incercari ?? 0], ['eroare', 'identitate', 0])
+        ok(rap.erori.some((e: string) => /CN1\/00002.*numele țintă „N \(CN1-00002\)\.pdf”/.test(e)), JSON.stringify(rap.erori))
+        // manifestul nu leagă numele comun de octeții altui document
+        for (const m of tab.ofertare_seap_manifest ?? []) {
+          const d = tab.ofertare_documente_atribuire.find(x => x.id === m.document_id)
+          if (d) eq(m.sha256, await shaHex(text(d)), `manifest ${m.cale}`)
+        }
+        descarcate.length = 0
+        await s.aduLicitatie(supa, 3, () => {})
+        eq([stareRanduri(), descarcate, ev2()?.stare], [asteptat, [], 'eroare'], 'rerulare: nimic nou, fratele tot eroare')
+      } finally { restore() }
+    }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r16): .p7m — fratele „N (CN1-00002).pdf.p7m” se urcă „N (CN1-00002) (semnat).pdf”, nume al unui document FĂRĂ cod listat → conflict pe numele DESFĂCUT, fără suprascrierea dovezii (ambele ordini)', async () => {
+  await cuMediu(async (_root, s) => {
+    const enc = (t: string) => new TextEncoder().encode(t)
+    const A = { nume: 'N.pdf.p7m', cod: 'CN1/00001', buf: await semneazaCms(enc('%PDF-1.4 alpha')) }
+    const C = { nume: 'N.pdf.p7m', cod: 'CN1/00002', buf: await semneazaCms(enc('%PDF-1.4 charlie')) }
+    const B = { nume: 'N (CN1-00002) (semnat).pdf', buf: enc('%PDF-1.4 BRAVO') }
+    for (const lista of [[A, C, B], [A, B, C]]) {
+      const { restore } = cuSeapCod(lista)
+      try {
+        const tab = licSeap(), fisiere = new Map<string, Uint8Array>()
+        const text = (d: any) => new TextDecoder().decode(fisiere.get(d.fisier_path))
+        const rap = await s.aduLicitatie(fakeSupa(tab, fisiere), 3, () => {})
+        eq(tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod ?? null, text(d)]).sort(),
+          [['N (CN1-00002) (semnat).pdf', null, '%PDF-1.4 BRAVO'], ['N (semnat).pdf', 'CN1/00001', '%PDF-1.4 alpha']], lista.map(d => d.nume).join(' + '))
+        const ev2 = tab.ofertare_seap_fisiere.find(e => e.cheie === s.cheieCod('CN1/00002'))
+        eq([ev2?.stare, ev2?.etapa], ['eroare', 'identitate'], JSON.stringify(rap.erori))
+        for (const m of tab.ofertare_seap_manifest ?? []) {
+          const d = tab.ofertare_documente_atribuire.find(x => x.id === m.document_id)
+          if (d) eq(m.sha256, await shaHex(text(d)), `manifest ${m.cale}`)
+        }
+      } finally { restore() }
+    }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, Jakarinos r17): aceeași pereche „N.pdf.p7m”/C1 listată de două ori + rândul desfăcut „N (semnat).pdf” fără cod → adoptat, nu conflict', async () => {
+  await cuMediu(async (_root, s) => {
+    const buf = await semneazaCms(new TextEncoder().encode('%PDF-1.4 alpha'))
+    const { descarcate, restore } = cuSeapCod([{ nume: 'N.pdf.p7m', cod: 'CN1/00001', buf }, { nume: 'N.pdf.p7m', cod: 'CN1/00001', buf }])
+    try {
+      const tab = licSeap({ ofertare_documente_atribuire: [{ id: 7, licitatie_id: 3, nume_original: 'N (semnat).pdf', fisier_path: '3/n.pdf', size_bytes: 14, status_procesare: 'procesat' }] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([tab.ofertare_documente_atribuire.map(d => [d.nume_original, d.seap_cod]), descarcate, rap.erori], [[['N (semnat).pdf', 'CN1/00001']], [], []])
+      ok(!tab.ofertare_seap_fisiere.some(e => e.stare === 'eroare'), JSON.stringify(tab.ofertare_seap_fisiere))
+    } finally { restore() }
+  })
+})
+
+Deno.test('cod SEAP (PR-2, varianta A): o arhivă rămâne pe regula după nume — evidența „ok” a despachetării o ține deoparte, oricare ar fi codul', async () => {
+  await cuMediu(async (_root, s) => {
+    const { descarcate, restore } = cuSeapCod([{ nume: 'PT.zip', cod: 'CN1/00030', buf: '%PDF-1.4 nu se cere' }])
+    try {
+      const tab = licSeap({ ofertare_seap_fisiere: [{ id: 900, licitatie_id: 3, nume_seap: 'PT.zip', cheie: s.cheieEvidenta('PT.zip'), stare: 'ok', fisiere_extrase: 4, incercari: 1 }] })
+      const rap = await s.aduLicitatie(fakeSupa(tab, new Map()), 3, () => {})
+      eq([descarcate, rap.deja, tab.ofertare_documente_atribuire.length], [[], 1, 0])
+    } finally { restore() }
+  })
+})
+
 // -- .p7m (07.10.2026): același CMS atașat ca .p7s — lic. 92 avea răspunsuri „….rar.p7m” care stăteau „neprocesat” la nesfârșit
 async function semneazaCms(continut: Uint8Array, detasat = false): Promise<Uint8Array> {   // semnătură CMS (implicit ATAȘATĂ: conținutul în interior), cert de test
   const d = await Deno.makeTempDir()

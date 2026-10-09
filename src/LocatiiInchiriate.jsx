@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { supabase } from './lib/supabase.js'
+import { conturiPeLocatie } from './conturiUtil.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#30363D', border2:'#21262D',
@@ -377,6 +378,17 @@ export default function LocatiiInchiriate({ profile }) {
 
   useEffect(() => { incarca() }, [incarca])
 
+  // 🔐 Conturi legate de locații (08.10.2026) — doar owner; RLS owner-only pe conturi_registru. Separat de incarca():
+  // o eroare aici (ex. tabelul încă neaplicat) nu strică ecranul de locații, doar nu apare linia.
+  const [conturi, setConturi] = useState([])
+  useEffect(() => {
+    if (profile?.is_owner !== true) { setConturi([]); return }
+    let anulat = false
+    supabase.from('conturi_registru').select('id, serviciu, locatie_ids, activ').eq('activ', true)
+      .then(({ data, error }) => { if (!anulat) setConturi(error ? [] : (data || [])) }, () => {})
+    return () => { anulat = true }
+  }, [profile?.is_owner])
+
   const selectata = useMemo(() => locatii.find(l => l.id === selId) || null, [locatii, selId])
 
   const cheltLocatie = useMemo(() => {
@@ -515,6 +527,12 @@ export default function LocatiiInchiriate({ profile }) {
                   {TIP_LOCATIE[l.tip] || l.tip}{l.oras ? ` · ${l.oras}` : ''}
                   {l.adresa && <div style={{color:G.dim, marginTop:2}}>{l.adresa}</div>}
                   {l.scop && <div style={{color:G.dim, marginTop:2, fontStyle:'italic'}}>{l.scop}</div>}
+                  {(() => {
+                    const cl = conturiPeLocatie(conturi, l.id)
+                    return cl.length > 0 && (
+                      <div style={{color:G.purple, marginTop:4}}>🔐 Conturi legate: {[...new Set(cl.map(c => c.serviciu))].join(', ')}</div>
+                    )
+                  })()}
                 </div>
                 <div style={{display:'flex', gap:16, fontSize:11, color:G.muted, borderTop:`1px solid ${G.border2}`, paddingTop:9}}>
                   <div>

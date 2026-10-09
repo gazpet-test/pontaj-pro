@@ -132,9 +132,12 @@ test('repo-ul real: toate funcțiile au graf demonstrabil; seap-import → tipDo
   assert.ok(slugs.length > 50, `doar ${slugs.length} funcții?`)
   for (const s of slugs) assert.deepEqual((await grafFunctie(DIR, s)).probleme, [], s)
   const din = async (s) => (await grafFunctie(DIR, s)).intrari.filter(f => !f.startsWith(`${DIR}/${s}/`))
-  assert.deepEqual(await din('ofertare-seap-import'), [`${DIR}/_shared/identitateFisier.mjs`, `${DIR}/_shared/paginat.mjs`, `${DIR}/_shared/poartaOfertare.ts`, `${DIR}/_shared/semnaturaCms.mjs`, `${DIR}/_shared/tipDocument.mjs`, `${DIR}/_shared/zipFlux.mjs`])
+  // audit #4 var. B (08.10.2026): codul SEAP ca identitate (_shared/codSeap.mjs) — import + veghe
+  assert.deepEqual(await din('ofertare-seap-import'), [`${DIR}/_shared/codSeap.mjs`, `${DIR}/_shared/identitateFisier.mjs`, `${DIR}/_shared/paginat.mjs`, `${DIR}/_shared/poartaOfertare.ts`, `${DIR}/_shared/semnaturaCms.mjs`, `${DIR}/_shared/tipDocument.mjs`, `${DIR}/_shared/zipFlux.mjs`])
   // var. B (07.10.2026): veghea desface semnătura cu aceeași regulă (o schimbare în semnaturaCms.mjs cere deploy și aici)
   // audit #21 (08.10.2026): inventarele se citesc pe pagini în ambele edge-uri (paginat.mjs)
-  assert.deepEqual(await din('ofertare-seap-veghe'), [`${DIR}/_shared/oraRO.ts`, `${DIR}/_shared/paginat.mjs`, `${DIR}/_shared/semnaturaCms.mjs`, `${DIR}/_shared/tipDocument.mjs`])
+  // review PR-1 (08.10.2026): veghea cere acces la Ofertare pentru un JWT de utilizator (poartaOfertare.ts, ca importul) și
+  // citește dovezile sha din manifest cu aceeași regulă ca importul (identitateFisier.mjs)
+  assert.deepEqual(await din('ofertare-seap-veghe'), [`${DIR}/_shared/codSeap.mjs`, `${DIR}/_shared/identitateFisier.mjs`, `${DIR}/_shared/oraRO.ts`, `${DIR}/_shared/paginat.mjs`, `${DIR}/_shared/poartaOfertare.ts`, `${DIR}/_shared/semnaturaCms.mjs`, `${DIR}/_shared/tipDocument.mjs`])
   assert.ok((await din('ofertare-poarta-text')).includes(`${DIR}/_shared/ofertarePoartaText.mjs`))
 })

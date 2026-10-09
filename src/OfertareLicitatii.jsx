@@ -41,6 +41,7 @@ import { restantePeTip as restantePeTipDoc, textRestante } from './ofertareTrans
 import { ghicesteTip } from '../supabase/functions/_shared/tipDocument.mjs'   // aceleași reguli ca la import (worker, edge, api)
 import { eSemnat } from '../supabase/functions/_shared/semnaturaCms.mjs'
 import { primiteVizibile, rezumatExtrase } from './ofertareExtrase.js'
+import { intrareVeghe, rezumatVeghe } from './ofertareVeghe.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', border2:'#21262D',
@@ -907,7 +908,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       }
     }
     setWarn(null); setSeapBusy('mă conectez la SEAP...')
-    let deLa = 0, runde = 0, adaugate = 0, completate = 0, mari = []
+    // audit #4 var. B (08.10.2026): contoarele codului SEAP se adună pe toate rundele (versiuni noi, coduri înregistrate, ambigue)
+    let deLa = 0, runde = 0, adaugate = 0, completate = 0, mari = [], laNas = [], versiuni = 0, adoptate = 0, ambigue = 0, neverificate = 0, instabile = null
     while (runde < 12) {
       setSeapBusy(`descarc din SEAP${runde ? ` (continuare ${runde + 1})` : ''} — poate dura, arhiva are sute de MB...`)
       const { data, error } = await supabase.functions.invoke('ofertare-seap-import', {
@@ -922,10 +924,17 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
         break
       }
       adaugate += data.adaugate || 0; completate += data.completate || 0
-      if (data.sarite_mari?.length) mari = [...mari, ...data.sarite_mari]
+      // edge-ul raportează „lasate_pentru_vercel” (sarite_mari nu mai există — fișierele mari nu apăreau deloc)
+      const lasate = data.lasate_pentru_vercel || data.sarite_mari
+      if (lasate?.length) mari = [...mari, ...lasate]
+      versiuni += data.versiuni_noi?.length || 0; adoptate += data.coduri_adoptate?.length || 0; ambigue += data.coduri_ambigue?.length || 0
+      neverificate += data.identitate_neverificata?.length || 0
+      // intrările mari din ZIP-ul unui document: ZIP-ul pleacă întreg la NAS, care le aduce — nu sunt „sărite” (review PR-1)
+      if (data.lasate_pentru_nas?.length) laNas = [...laNas, ...data.lasate_pentru_nas]
+      instabile = instabile || data.coduri_instabile || null
       await load()
       if (!data.continua) {
-        setWarn(`✅ Din SEAP: ${adaugate} documente noi${completate ? `, ${completate} completate` : ''}${data.sarite_existente ? `, ${data.sarite_existente} existau deja` : ''}.${mari.length ? ` Sărite (prea mari): ${mari.join(', ')}.` : ''}`)
+        setWarn(`✅ Din SEAP: ${adaugate} documente noi${completate ? `, ${completate} completate` : ''}${data.sarite_existente ? `, ${data.sarite_existente} existau deja` : ''}${versiuni ? `, ♻ ${versiuni} versiuni noi` : ''}${adoptate ? `, ${adoptate} coduri SEAP înregistrate` : ''}${ambigue ? `, ${ambigue} rămase pe regula veche (ambigue)` : ''}${neverificate ? `, ⚠ ${neverificate} cu identitatea neverificată — documentația nu se declară adusă` : ''}.${mari.length ? ` Sărite (prea mari): ${mari.join(', ')}.` : ''}${laNas.length ? ` Mari, din arhive — le aduce serverul NAS în câteva minute: ${laNas.join(', ')}.` : ''}${instabile ? ' ⚠️ Codurile SEAP par schimbate — s-a lucrat pe regula veche (după nume); documentația nu se declară adusă.' : ''}`)
         break
       }
       deLa = data.next_index; runde++
@@ -3471,10 +3480,10 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
     const { data, error } = await supabase.functions.invoke('ofertare-seap-veghe', { body: { licitatie_id: l.id } })
     setVerific(false)
     if (error || data?.error) return anunta('Verificarea a eșuat: ' + (data?.error || error?.message), 'err')
-    const r = Array.isArray(data?.raport) ? data.raport.find(x => x.licitatie === l.nr_anunt) || data.raport[0] : data
+    // E7 (review PR-1 r5): intrarea PRINCIPALĂ a licitației (cu `termen`), iar „Nimic nou” doar dacă nu s-a adus / anunțat nimic
+    const r = intrareVeghe(data, l.nr_anunt)
     setVeghe(r || { info: 'SEAP nu a întors nimic pentru anunțul ăsta.' })
-    const noi = (r?.adusi?.length || 0) + (r?.raspunsuri_aduse?.length || 0)
-    anunta(noi ? `📂 ${noi} document(e) noi aduse din SEAP` : 'Nimic nou în SEAP acum.')
+    anunta(rezumatVeghe(r).text)
     load()
   }
 
