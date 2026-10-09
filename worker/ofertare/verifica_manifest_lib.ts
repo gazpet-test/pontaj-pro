@@ -277,21 +277,28 @@ export async function verificaManifest(supa: SupabaseClient<any, any, any>, licI
               const rand = { licitatie_id: licId, arhiva_cheie: c.toLowerCase(), cale: c, marime: locale[0].buf.length, sha256: shaDoc, verificat_la: new Date().toISOString() }
               // Jakarinos r16 pe #659 (P1): cheia proprie „N (COD).ext” poate fi a ALTUI document (listat cu acel nume, sau cu dovada lui
               // „urcat” pe ea) — atunci nimic scris peste dovada lui; rezultatul codului se raportează separat
-              const ocupata = eAltDocListat(c) || dovadaAltuia(c, null)
+              // Jakarinos r20 pe #659 (P1): ocupată și dacă e numele PROPRIU al unui rând existent fără acest cod (cu sau fără dovadă încă),
+              // ori dacă alt document a rezervat-o deja în rularea asta (luate) — un cod fără rând nu ia niciodată numele altui document
+              const kc = `${c.toLowerCase()}\u0000${c}`
+              const numeleAltuia = dinBd.some(x => real(x) && fara(String(x.nume_original)).toLowerCase() === c.toLowerCase() && String(x.seap_cod ?? '').trim() !== cod)
+              const ocupata = eAltDocListat(c) || dovadaAltuia(c, null) || numeleAltuia || luate.has(kc)
               // identic = legătura pe cheia proprie a codului, ÎNTOTDEAUNA (Jakarinos r6 pe #659: căderea pe nume abandona candidatul
               // confirmat și compara cu documentul altei dovezi, pe care o retrograda)
               // cheie ocupată: NICIODATĂ scriere pe ea, oricum s-ar fi terminat căutarea (Jakarinos r17: un candidat necitit urmat de
               // unul identic scria peste dovada ocupantului)
               if (ocupata && (identic || ambiguu || necitit)) {
+                tally.faraScriere++   // verificat, fără rând în manifest (Jakarinos r20, P2)
                 tally.erori.push(`${grup[0].nume} (${cod}): ${identic ? `conținut identic cu #${identic.id}` : necitit ? `Storage indisponibil (${necitit})` : 'LIPSĂ în platformă'} — cheia „${c}” e a altui document; nimic scris peste dovada lui`)
                 if (identic) { tally.identice++; potrivite.add(identic.id) } else if (!necitit) tally.lipsa++
               }
               else if (identic) {
                 randuri.push({ ...rand, document_id: identic.id, stare: 'deja_in_platforma', motiv: `conținut identic cu #${identic.id} — codul SEAP ${cod} nu are rând propriu (frate deduplicat)` })
+                luate.set(kc, identic.id)   // cheia codului e rezervată în rulare (nimeni nu mai scrie peste ea)
                 tally.identice++; potrivite.add(identic.id)
               } else if (necitit) tally.erori.push(`${grup[0].nume} (${cod}): Storage indisponibil (${necitit}) la verificarea fratelui — nimic scris`)
               else if (ambiguu) {
                 randuri.push({ ...rand, document_id: null, stare: 'eroare_urcare', motiv: `LIPSĂ în platformă (verificare R6): codul SEAP ${cod} nu e pe niciun document, iar numele are alt cod sau mai multe documente` })
+                luate.set(kc, 0)   // rezervată de rezultatul LIPSĂ al codului (0 = niciun document)
                 tally.lipsa++
               }
               else await compara(cheieNume(locale[0].nume), locale[0].nume, locale[0].buf)   // nume neambiguu, niciun identic: pe nume, ca înainte

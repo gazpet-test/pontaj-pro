@@ -605,4 +605,16 @@ Deno.test('manifest (PR-2, Jakarinos r19 #2): o dovadă „deja_in_platforma” 
   const { raport, scrieri } = await scenariu({ docsBd, dovezi, seapLista: [{ nume: 'N.pdf', cod: 'CN1/00001', text: 'alpha' }, { nume: 'N.pdf', cod: 'CN1/00002', text: 'omega' }] })
   eq(scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf'), [], 'dovada lui #23 neatinsă')
   eq(raport.lipsa_in_platforma, 1, '/2 lipsă raportat')
+  eq([raport.fisiere, raport.manifest_scrise], [2, 1], 'ambele verificate, unul singur scris (Jakarinos r20, P2)')
+})
+
+for (const ordine of ['/9,/2', '/2,/9']) Deno.test(`manifest (PR-2, Jakarinos r20): codul /2 fără rând nu scrie pe numele propriu al rândului #23 (cod /9, verificat în aceeași rulare) — ${ordine}`, async () => {
+  const docsBd = [{ id: 21, nume_original: 'N.pdf', fisier_path: '93/a', size_bytes: 5, seap_cod: 'CN1/00001' },
+    { id: 23, nume_original: 'N (CN1-00002).pdf', fisier_path: '93/c', size_bytes: 6, seap_cod: 'CN1/00009' }]
+  const d9 = { nume: 'Redenumit.pdf', cod: 'CN1/00009', text: 'ALTFEL' }, d2 = { nume: 'N.pdf', cod: 'CN1/00002', text: 'omega' }
+  const { raport, scrieri } = await scenariu({ docsBd, seapLista: ordine === '/2,/9' ? [d2, d9] : [d9, d2] })
+  const peCheie = scrieri.filter(x => x.arhiva_cheie === 'n (cn1-00002).pdf')
+  eq(peCheie.map(x => [x.document_id, x.stare]), [[23, 'deja_in_platforma']], 'doar dovada lui #23 pe cheia lui')
+  eq(raport.lipsa_in_platforma, 1, '/2 lipsă raportat')
+  assert(raport.erori.some((e: string) => /CN1\/00002.*e a altui document/.test(e)), JSON.stringify(raport.erori))
 })
