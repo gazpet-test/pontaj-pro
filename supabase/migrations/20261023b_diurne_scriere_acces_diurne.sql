@@ -66,7 +66,7 @@ BEGIN
       ('diurna_payment_details', 'diurna_payment_details_delete_owner', 'd')) AS x(tab, pol, cmd) LOOP
     SELECT pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid) INTO v_q, v_w
       FROM pg_policy p WHERE p.polrelid = ('public.' || r.tab)::regclass AND p.polname = r.pol AND p.polcmd = r.cmd::"char"
-        AND p.polpermissive AND p.polroles = ARRAY[0]::oid[];
+        AND p.polpermissive AND p.polroles = ARRAY['authenticated'::regrole::oid];
     IF NOT FOUND
        OR (r.cmd = 'a' AND (v_q IS NOT NULL OR v_w IS DISTINCT FROM c_sal))
        OR (r.cmd = 'w' AND (v_q IS DISTINCT FROM c_sal OR v_w IS DISTINCT FROM c_sal))
