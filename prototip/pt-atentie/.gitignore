@@ -1,0 +1,6 @@
+# Date reale ale clonei 103 (anonimizare euristică) și capturile făcute pe ele: NU se comit fără review uman explicit (Răzvan).
+# Testele și prototipul merg și fără ele (testele pe 103 se sar, ecranul spune că nu are date).
+fixtures/
+capturi/
+# cache-ul Vite al prototipului (separat de node_modules/.vite al aplicației)
+.cache-vite/
