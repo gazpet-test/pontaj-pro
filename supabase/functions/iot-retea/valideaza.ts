@@ -13,7 +13,11 @@ export type CitireRetea = {
   gpu_w: number | null;
   gpu_util: number | null;
   vram_pct: number | null;
-};
+  ai_gemini_ramas_pct: number | null;
+  ai_claude_ramas_pct: number | null;
+  ai_gemini_reset_s: number | null;
+  ai_claude_reset_s: number | null;
+} & { [K in typeof AI_PCT[number] | typeof AI_ISO[number] | typeof AI_TEXT[number]]: number | string | null };
 type Rezultat = { ok: true; citiri: CitireRetea[] } | { ok: false; error: string };
 
 const obiect = (x: unknown): x is Record<string, unknown> =>
@@ -21,8 +25,19 @@ const obiect = (x: unknown): x is Record<string, unknown> =>
 const numarIn = (x: unknown, min: number, max: number): x is number =>
   typeof x === 'number' && Number.isFinite(x) && x >= min && x <= max;
 
-const CHEI = ['extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
-  'gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct'];
+// Limite AI din colectorul serverului (10.10.2026): whitelist explicit, nu prefix ai_* liber.
+export const AI_PCT = ['ai_codex_ramas_pct', 'ai_anthropic_saptamana_ramas_pct', 'ai_anthropic_saptamana_fable_ramas_pct',
+  'ai_anthropic_sesiune_ramas_pct'] as const;
+export const AI_ISO = ['ai_codex_reset', 'ai_codex_masurat_la'] as const;   // ISO UTC
+export const AI_TEXT = ['ai_codex_plan', 'ai_anthropic_saptamana_reset', 'ai_anthropic_saptamana_fable_reset',
+  'ai_anthropic_sesiune_reset'] as const;                                      // text scurt, ex. „Oct 12, 7:59am”
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]00:00)$/;
+const TEXT_SCURT = /^[\p{L}\p{N} .,:+\-()\/]{1,40}$/u;
+export const AI_NOI = [...AI_PCT, ...AI_ISO, ...AI_TEXT];
+
+const CHEI = [...AI_NOI, 'extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
+  'gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct',
+  'ai_gemini_ramas_pct', 'ai_claude_ramas_pct', 'ai_gemini_reset_s', 'ai_claude_reset_s'];
 
 // Validare strictă a unui lot de citiri de rețea. Senzorii lipsă sunt acceptați (null);
 // funcția SQL decide ce înseamnă offline/tăcut. Expeditorul nu poate crea dispozitive.
@@ -59,7 +74,22 @@ export function valideazaCitiri(body: unknown): Rezultat {
     if ('gpu_w' in c && !numarIn(c.gpu_w, 0, 1000)) return { ok: false, error: 'gpu_w invalid' };
     if ('gpu_util' in c && !numarIn(c.gpu_util, 0, 100)) return { ok: false, error: 'gpu_util invalid' };
     if ('vram_pct' in c && !numarIn(c.vram_pct, 0, 100)) return { ok: false, error: 'vram_pct invalid' };
+    // Limite cont Antigravity (09.10.2026): procent rămas + reset ca epoch secunde, opționale
+    if ('ai_gemini_ramas_pct' in c && !numarIn(c.ai_gemini_ramas_pct, 0, 100)) return { ok: false, error: 'ai_gemini_ramas_pct invalid' };
+    if ('ai_claude_ramas_pct' in c && !numarIn(c.ai_claude_ramas_pct, 0, 100)) return { ok: false, error: 'ai_claude_ramas_pct invalid' };
+    if ('ai_gemini_reset_s' in c && !numarIn(c.ai_gemini_reset_s, 0, 4e9)) return { ok: false, error: 'ai_gemini_reset_s invalid' };
+    if ('ai_claude_reset_s' in c && !numarIn(c.ai_claude_reset_s, 0, 4e9)) return { ok: false, error: 'ai_claude_reset_s invalid' };
+    for (const k of AI_PCT) if (k in c && !numarIn(c[k], 0, 100)) return { ok: false, error: `${k} invalid` };
+    for (const k of AI_ISO) {
+      if (k in c && (typeof c[k] !== 'string' || !ISO_UTC.test(c[k] as string) || Number.isNaN(Date.parse(c[k] as string)))) {
+        return { ok: false, error: `${k} invalid` };
+      }
+    }
+    for (const k of AI_TEXT) {
+      if (k in c && (typeof c[k] !== 'string' || !TEXT_SCURT.test(c[k] as string))) return { ok: false, error: `${k} invalid` };
+    }
     out.push({
+      ...Object.fromEntries(AI_NOI.map(k => [k, (c[k] ?? null) as number | string | null])),
       extern_id: c.extern_id,
       online: c.online,
       latency_ms: (c.latency_ms ?? null) as number | null,
@@ -74,6 +104,10 @@ export function valideazaCitiri(body: unknown): Rezultat {
       gpu_w: (c.gpu_w ?? null) as number | null,
       gpu_util: (c.gpu_util ?? null) as number | null,
       vram_pct: (c.vram_pct ?? null) as number | null,
+      ai_gemini_ramas_pct: (c.ai_gemini_ramas_pct ?? null) as number | null,
+      ai_claude_ramas_pct: (c.ai_claude_ramas_pct ?? null) as number | null,
+      ai_gemini_reset_s: (c.ai_gemini_reset_s ?? null) as number | null,
+      ai_claude_reset_s: (c.ai_claude_reset_s ?? null) as number | null,
     });
   }
   return { ok: true, citiri: out };

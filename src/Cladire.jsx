@@ -65,6 +65,25 @@ function ServerGpu({ dispozitiv }) {
   </div>
 }
 
+// Limite cont Antigravity (task orar pe serverul AI → metrics.json → sonda Terra → iot-retea). Procent rămas + reset (epoch s).
+const AI_PROCENTE = ['ai_gemini_ramas_pct', 'ai_claude_ramas_pct', 'ai_codex_ramas_pct', 'ai_anthropic_saptamana_ramas_pct',
+  'ai_anthropic_saptamana_fable_ramas_pct', 'ai_anthropic_sesiune_ramas_pct']
+export const areLimiteAi = (x) => x?.meta?.tip === 'server' && AI_PROCENTE.some(k => Number.isFinite(x?.ultima_citire?.[k]))
+export const textReset = (sec, acum = Date.now()) => {
+  if (!Number.isFinite(sec)) return ''
+  const ore = (sec * 1000 - acum) / 3600e3
+  return ore <= 0 ? 'reset trecut' : ore < 24 ? `reset în ${Math.ceil(ore)} h` : `reset în ${Math.round(ore / 24)} z`
+}
+function LimiteAi({ r }) {
+  const cul = (p) => !Number.isFinite(p) ? G.dim : p < 15 ? G.red : p < 30 ? G.yellow : G.green
+  // reset: epoch secunde (Antigravity), ISO (Codex) sau text liber ora București (Anthropic) — textul se afișează ca atare
+  const rst = (v) => typeof v === 'number' ? textReset(v) : typeof v === 'string' && /^\d{4}-/.test(v) ? textReset(Date.parse(v) / 1000) : typeof v === 'string' ? `reset ${v}` : ''
+  const una = (k, rk, et) => Number.isFinite(r[k]) && <span key={k} style={{ marginLeft:8 }}>{et} <b style={{ color:cul(r[k]) }}>{nr(r[k], 0)}%</b>{rst(r[rk]) && <span style={{ color:G.dim }}> ({rst(r[rk])})</span>}</span>
+  return <div style={{ fontSize:11, color:G.dim, padding:'0 0 4px 12px' }}>🤖 Limite AI{una('ai_gemini_ramas_pct', 'ai_gemini_reset_s', 'Gemini')}{una('ai_claude_ramas_pct', 'ai_claude_reset_s', '· Claude/GPT')}
+    {una('ai_codex_ramas_pct', 'ai_codex_reset', '· Codex')}{una('ai_anthropic_saptamana_ramas_pct', 'ai_anthropic_saptamana_reset', '· Anthropic săpt.')}
+    {una('ai_anthropic_saptamana_fable_ramas_pct', 'ai_anthropic_saptamana_fable_reset', '· Fable săpt.')}{una('ai_anthropic_sesiune_ramas_pct', 'ai_anthropic_sesiune_reset', '· sesiune')}</div>
+}
+
 // Mini-grafic comun pentru centrală și Terra; fiecare serie ignoră valorile lipsă.
 function Spark({ pts, k, color, min, max, um }) {
   const vals = pts.map(x => x[k]).filter(Number.isFinite); if (vals.length < 2) return null
@@ -445,6 +464,7 @@ export default function Cladire() {
                   {stare}
                 </div>
                 {areGpu(x) && <ServerGpu dispozitiv={x} />}
+                {areLimiteAi(x) && <LimiteAi r={x.ultima_citire} />}
               </div>
             })}
           </div>
