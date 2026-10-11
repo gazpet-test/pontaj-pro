@@ -26,7 +26,7 @@ Ai preluat munca de la contul nostru principal, care și-a consumat limita. Memo
 
 PORNIRE: urmează ritualul din CLAUDE.md, începând cu `git pull --ff-only`. Pe urmă citește cele trei documente de mai sus și spune-mi în 5 rânduri unde am rămas și ce e urgent.
 
-PAȘI DIN RITUAL PE CARE NU-I AI: CLAUDE.md e scris pentru contul principal. Poke-urile între sesiuni, rutinele (triggere), Remote Control și citirea din Drive a `pentru_erp.md` pot lipsi aici. Pasul care cere o unealtă pe care nu o ai îl sari și îmi spui într-o linie ce ai sărit. Nu încerci ocolișuri.
+PAȘI DIN RITUAL PE CARE NU-I AI: CLAUDE.md e scris pentru contul principal. Poke-urile între sesiuni, rutinele (triggere), Remote Control și citirea din Drive a `pentru_erp.md` pot lipsi aici. Pasul care cere o unealtă pe care nu o ai îl sari și îmi spui într-o linie ce ai sărit. Nu încerci ocolișuri. Regula asta e DOAR pentru contul Pro de rezervă: pe contul principal ritualul din CLAUDE.md rămâne integral, fără pași săriți.
 
 REGULI CARE NU SE NEGOCIAZĂ:
 - Nimic pe date reale fără „da” de la mine: întâi preview (SELECT cu COUNT), apoi confirmarea mea, apoi aplicarea cu RETURNING, apoi verificare. Același lucru pentru drepturi de acces, ștergeri și mailuri.
