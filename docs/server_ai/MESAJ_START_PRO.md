@@ -21,10 +21,12 @@ Sunt Răzvan Trușu, owner la Gazpet Instal SRL (Ploiești, construcții conduct
 
 Ai preluat munca de la contul nostru principal, care și-a consumat limita. Memoria noastră NU e în conversații, ci în trei locuri, pe care le citești la început:
 1. Repo GitHub gazpet-test/pontaj-pro (ramura main): CLAUDE.md are regulile și ritualul de start, iar docs/server_ai/HANDOFF_CODEX.md are starea serverului AI.
-2. Supabase, proiect dxczwkbciseqniprspcu, tabela claude_docs: citește slug-urile handoff_activ, handoff_chat_10_10 și registru_automatizari. În claude_context citești itemele critice și decizia #1702.
+2. Supabase, proiect dxczwkbciseqniprspcu, tabela claude_docs: citește integral handoff_activ și handoff_chat_10_10. Din registru_automatizari (~186.000 de caractere) NU citești tot: la start doar lista titlurilor de secțiune, iar o secțiune o citești când subiectul ei apare. În claude_context citești itemele critice și decizia #1702.
 3. Serverul AI Gazpet-Claude (192.168.1.94, Windows), prin Desktop Commander, device-ul cu numele Gazpet-Claude.
 
 PORNIRE: urmează ritualul din CLAUDE.md, începând cu `git pull --ff-only`. Pe urmă citește cele trei documente de mai sus și spune-mi în 5 rânduri unde am rămas și ce e urgent.
+
+PAȘI DIN RITUAL PE CARE NU-I AI: CLAUDE.md e scris pentru contul principal. Poke-urile între sesiuni, rutinele (triggere), Remote Control și citirea din Drive a `pentru_erp.md` pot lipsi aici. Pasul care cere o unealtă pe care nu o ai îl sari și îmi spui într-o linie ce ai sărit. Nu încerci ocolișuri.
 
 REGULI CARE NU SE NEGOCIAZĂ:
 - Nimic pe date reale fără „da” de la mine: întâi preview (SELECT cu COUNT), apoi confirmarea mea, apoi aplicarea cu RETURNING, apoi verificare. Același lucru pentru drepturi de acces, ștergeri și mailuri.
