@@ -50,7 +50,7 @@ if [ "$TASK" = "plansa_felii" ]; then
     try {
       const m=JSON.parse(fs.readFileSync("/data/manifest.json","utf8"));
       const v=JSON.parse(fs.readFileSync("/data/verificare_lot.json","utf8"));
-      if(!v || v.eligibil!==true || typeof m.pachet_id!=="string" || v.pachet_id!==m.pachet_id || v.doc_id!==m.doc_id) throw Error("verificare_lot_neeligibil_sau_alt_pachet");
+      if(!v || v.eligibil!==true || v.motiv!=="fara_loturi" || typeof m.pachet_id!=="string" || v.pachet_id!==m.pachet_id || v.doc_id!==m.doc_id) throw Error("verificare_lot_neeligibil_sau_alt_pachet");
       const t=Date.parse(v.verificat_la), acum=Date.now();
       if(typeof v.verificat_la!=="string" || !Number.isFinite(t) || t>acum+60000 || acum-t>15*60000) throw Error("verificare_lot_expirata");
     } catch(e) { console.error(e.code||e.message); process.exit(2); }

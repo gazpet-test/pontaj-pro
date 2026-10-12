@@ -50,6 +50,6 @@ Deno.test('E0: poarta cade → fail-closed', async () => {
 
 Deno.test('E0: căutarea în documente dă eroare → fail-closed', async () => {
   const db = { rpc: () => Promise.resolve({ data: null, error: null }),
-    from: () => { const b: any = { select: () => b, eq: () => b, limit: () => Promise.resolve({ data: null, error: { message: 'x' } }) }; return b } }
+    from: () => { const b: any = { select: () => b, eq: () => b, order: () => b, range: () => Promise.resolve({ data: null, error: { message: 'x' } }) }; return b } }
   ok(/nu a răspuns/.test((await poartaE0(db, BUN))!))
 })

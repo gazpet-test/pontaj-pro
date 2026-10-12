@@ -87,7 +87,33 @@ export async function filtreazaDocumente(db: ClientRpc, ids: Array<number | null
   return { ok: true, eligibile, blocate }
 }
 
-// Participarea licitației: {ok, motiv, stare, participam[]}. ok doar pentru fara_loturi sau are_loturi cu ≥ 1 lot bifat
+// O cale din bucketul `ofertare` (E0, clarificări, RFQ…) poate fi și fisier_path al unor documente de atribuire: dacă
+// ORICARE e neeligibil, calea e blocată. Paginat complet (review Jakarinos r2 P2 #8: nu doar primele 50), fail-closed.
+// null = liber; altfel motivul.
+export async function caleBlocata(db: ClientRpc & ClientFrom, cale: string): Promise<string | null> {
+  try {
+    const ids: number[] = []
+    for (let off = 0; ; off += PAGINA) {
+      const { data, error } = await db.from('ofertare_documente_atribuire').select('id').eq('fisier_path', cale)
+        .order('id', { ascending: true }).range(off, off + PAGINA - 1)
+      if (error || !Array.isArray(data)) return 'eroare_poarta'
+      for (const r of data) {
+        const id = Number(r?.id)
+        if (!Number.isSafeInteger(id) || id <= 0) return 'eroare_poarta'
+        ids.push(id)
+      }
+      if (data.length < PAGINA) break
+    }
+    if (!ids.length) return null
+    const f = await filtreazaDocumente(db, ids)
+    if (!f.ok) return 'eroare_poarta'
+    return f.blocate.size ? (f.blocate.values().next().value as string) : null
+  } catch (_) {
+    return 'eroare_poarta'
+  }
+}
+
+// Participarea licitației:{ok, motiv, stare, participam[]}. ok doar pentru fara_loturi sau are_loturi cu ≥ 1 lot bifat
 // (aceleași motive ca fn_ofertare_eligibilitate). Zero participări ≠ „fără filtru” (review Jakarinos P1 #2): e blocat.
 type ClientFrom = { from: (t: string) => any }
 export type Participare = { ok: boolean; motiv: string; stare: string | null; participam: number[] }

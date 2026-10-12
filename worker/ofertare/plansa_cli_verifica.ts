@@ -13,9 +13,14 @@ export const FISIER_VERIFICARE = 'verificare_lot.json'
 export const VALABIL_MIN = 15 // același prag în launcher.sh (fragmentul lot_neverificat)
 
 // Fail-closed: documentEligibil întoarce eroare_poarta la orice cădere a RPC-ului.
+// PROVIZORIU (review Jakarinos r2 P1 #6, până la decizia lui Răzvan pe reverificarea la fiecare lansare pe Terra): calea CLI
+// primește DOAR licitații fără loturi (motiv 'fara_loturi'). Acolo un document nu devine neeligibil între atestare și lansare
+// decât dacă cineva schimbă starea licitației; pe are_loturi debifarea unui lot ar trece în fereastra de 15 minute →
+// planșele licitațiilor cu loturi merg pe calea API / coada NAS, care reverifică la fiecare rundă.
 export async function verificaLot(supa: any, docId: number): Promise<Eligibilitate> {
   const e = await documentEligibil(supa, docId)
   if (!e.eligibil) throw new Error(`${mesajLot(e.motiv)} (doc ${docId}, motiv ${e.motiv}); planșa nu se trimite la CLI`)
+  if (e.motiv !== 'fara_loturi') throw new Error(`Calea CLI e doar pentru licitații fără loturi (doc ${docId}, motiv ${e.motiv}); citește planșa din platformă sau pe NAS`)
   return e
 }
 

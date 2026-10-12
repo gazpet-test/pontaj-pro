@@ -61,8 +61,12 @@ function supaFals(tabele: Record<string, any[]>, erori: Record<string, string> =
   const selecturi: Record<string, string> = {}
   return {
     selecturi,
-    // poarta pe loturi: implicit nicio sursă-document (lista goală); testele de loturi o înlocuiesc cu cuPoartaLot
-    rpc: (n: string, _a?: any) => Promise.resolve(n === 'fn_ofertare_eligibilitate' ? { data: [], error: null } : { data: null, error: { message: 'rpc neașteptat' } }),
+    // poarta pe loturi: implicit toate documentele din fixture (documente + planșele din conflicte) sunt eligibile (fara_loturi);
+    // testele de loturi o înlocuiesc cu cuPoartaLot
+    rpc: (n: string, _a?: any) => Promise.resolve(n === 'fn_ofertare_eligibilitate'
+      ? { data: [...new Set([...(tabele.ofertare_documente_atribuire || []).map((d: any) => d.id), ...(tabele.v_ofertare_transfer_conflicte || []).map((c: any) => c.document_id)])]
+          .map((id) => ({ document_id: id, eligibil: true, motiv: 'fara_loturi' })), error: null }
+      : { data: null, error: { message: 'rpc neașteptat' } }),
     from(t: string) {
       let lim = Infinity, cuCount = false
       const b: any = {
@@ -222,4 +226,42 @@ Deno.test('loturi: fără participare / poarta picată / nimic eligibil => niciu
   assertEquals(gol.corpuri.length, 0)
   assert(gol.r.ok && /nu s-a chemat AI-ul/.test(gol.r.skip), JSON.stringify(gol.r))
   assertEquals(gol.r.excluse_lot.cerinte, 3)
+})
+
+// review Jakarinos r2 P1 #2: contextul secundar — răspunsul autorității din document blocat, conflictele pe planșe blocate și
+// raportul verificării precedente (pe licitație cu loturi) NU ajung în prompt
+Deno.test('loturi r2: răspuns din document blocat / conflict pe planșă blocată / raport vechi pe are_loturi => scoase din prompt', async () => {
+  const rulare = async (stare: string) => {
+    const supa: any = supaFals({ ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1', autoritate: 'X', obiect: 'gaze', stare_loturi: stare }],
+      ofertare_licitatie_loturi: [{ licitatie_id: 95, nr: 2, participam: true }],
+      ofertare_cerinte: [{ id: 1, tip: 'propunere', text_cerinta: 'Cerinta comuna', lot_domeniu: 'toate', sursa_document_id: 10 }],
+      ofertare_acoperire: [], ofertare_cantitati: [],
+      ofertare_verificari: [{ verdict: 'galben', raport: 'RAPORT_VECHI_LOT1', created_at: '2026-10-01T00:00:00Z' }],
+      ofertare_documente_atribuire: [{ id: 10, nume_original: 'CS.pdf' }],
+      ofertare_clarificari: [{ id: 1, nr: 1, intrebare: 'Intrebarea noastra', status: 'raspunsa', raspuns: 'RASPUNS_DIN_DOC_BLOCAT', raspuns_document_id: 999 },
+        { id: 2, nr: 2, intrebare: 'Alta', status: 'raspunsa', raspuns: 'RASPUNS_MANUAL', raspuns_document_id: null }],
+      v_ofertare_transfer_conflicte: [] })
+    const rpcVechi = supa.rpc
+    // planșa 777 din conflicte e blocată (lipsește din harta porții), documentul 10 e eligibil
+    supa.rpc = (n: string, a?: any) => n === 'fn_ofertare_eligibilitate'
+      ? Promise.resolve({ data: [{ document_id: 10, eligibil: true, motiv: stare === 'fara_loturi' ? 'fara_loturi' : 'comun' }], error: null }) : rpcVechi(n, a)
+    const fromVechi = supa.from.bind(supa)
+    supa.from = (t: string) => t === 'v_ofertare_transfer_conflicte'
+      ? { select: () => ({ eq: () => Promise.resolve({ data: [{ document_id: 777, nume_original: 'PL_BLOCATA.pdf', stare: 'conflicte', n: 1, deschis: true, restante: [{ tip: 'dn_nestandard', n: 1 }] }], error: null }) }) }
+      : fromVechi(t)
+    let corp = ''
+    const fetchVechi = globalThis.fetch
+    globalThis.fetch = ((_u: unknown, init?: RequestInit) => { corp = String(init?.body || ''); return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: '{"clarificari":[]}' }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 })) }) as typeof fetch
+    try { await propuneClarificari(supa, { licitatie_id: 95, dry_run: true }) } finally { globalThis.fetch = fetchVechi }
+    return corp ? JSON.parse(corp).messages[0].content as string : ''
+  }
+  const m = await rulare('are_loturi')
+  assert(m.length > 0, 'AI-ul trebuia chemat (cerința comună e eligibilă)')
+  // (fake-ul ignoră filtrele, deci aceleași rânduri apar și la „alte licitații” — se verifică doar secțiunea acestei licitații)
+  const ex = m.slice(m.indexOf('CLARIFICĂRI DEJA EXISTENTE'), m.indexOf('RĂSPUNSURI PRIMITE LA ALTE'))
+  assert(!ex.includes('RASPUNS_DIN_DOC_BLOCAT') && ex.includes('RASPUNS_MANUAL') && ex.includes('Intrebarea noastra'), 'răspunsul din document blocat scos, întrebarea rămâne')
+  assert(!m.includes('PL_BLOCATA'), 'conflictul pe planșa blocată scos')
+  assert(!m.includes('RAPORT_VECHI_LOT1') && m.includes('raportul verificării finale omis'), 'raportul vechi omis explicit pe are_loturi')
+  const f = await rulare('fara_loturi')
+  assert(f.includes('RAPORT_VECHI_LOT1'), 'pe fara_loturi raportul rămâne')
 })

@@ -128,7 +128,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status, lot_domeniu, lot_nr', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
-      supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie').eq('licitatie_id', licId).order('nr'),
+      supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie, raspuns_document_id').eq('licitatie_id', licId).order('nr'),
       // sarcina 2 (a): planșele cu conflicte de transfer (eroarea se păstrează, nu se înghite)
       Promise.resolve(supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, restante').eq('licitatie_id', licId))
         .then((r: any) => r, (e: any) => ({ data: null, error: e })),
@@ -147,6 +147,12 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const fd = await eligibilitateLicitatie(supabase, licId)
     if (!fd.ok) return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
     const docsElig = (docs || []).filter((d: any) => esteEligibil(fd.harta, d.id))
+    // contextul secundar (review Jakarinos r2 P1 #2): răspunsul autorității intră doar dacă documentul lui e eligibil (fără document =
+    // text introdus de om, trece), conflictele de planșe doar pe planșe eligibile, raportul verificării precedente doar pe
+    // fara_loturi (pe are_loturi nu i se poate verifica proveniența pe lot — se omite explicit)
+    const clarCtx = (clarLic || []).map((q: any) => (q.raspuns && q.raspuns_document_id != null && !esteEligibil(fd.harta, q.raspuns_document_id)) ? { ...q, raspuns: null, raspuns_blocat_lot: true } : q)
+    const conflElig = rConfl?.data ? { ...rConfl, data: rConfl.data.filter((c: any) => esteEligibil(fd.harta, c.document_id)) } : rConfl
+    const verifCtx = fc.participare.stare === 'fara_loturi' ? verif : null
     const cantElig = fq.pastrate
     const lotRap = { excluse_lot: { cerinte: fc.excluse.length, cantitati: fq.excluse.length, documente: (docs || []).length - docsElig.length },
       excluse_motive: motiveGrupate([...fc.excluse, ...fq.excluse]) }
@@ -174,10 +180,10 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const contextul = [
       `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · procedura ${lic.tip_procedura || '?'} · criteriu ${lic.criteriu || '?'}\nOBIECT: ${String(lic.obiect || '').slice(0, 1500)}\nValoare estimată: ${lic.valoare_estimata ?? '?'} ${lic.moneda || 'RON'} · termen depunere: ${termen || '?'} · garanție participare: ${lic.garantie_participare ?? '?'} · loturi: ${lic.loturi ?? '?'}`,
       `REGISTRUL DE CERINȚE (${registru.length}; cele cu GOL sunt neacoperite):\n${JSON.stringify(registru)}`,
-      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${cantElig.length}${randuriOmise(nCant == null ? nCant : nCant - fq.excluse.length, cantElig.length)}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify(cantElig.map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
-      sectiuneConflictePlanse(rConfl),
+      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${cantElig.length}${randuriOmise(nCant == null ? nCant : nCant - fq.excluse.length, cantElig.length)}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify(cantElig.map(randCantitatePentruAI))}${verifCtx?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verifCtx[0].created_at).slice(0, 10)}): ${verifCtx[0].verdict} — ${(typeof verifCtx[0].raport === 'string' ? verifCtx[0].raport : JSON.stringify(verifCtx[0].raport || {})).slice(0, 2000)}` : verif?.[0] ? '\n(raportul verificării finale omis: licitație pe loturi, proveniența lui nu se poate verifica pe lot)' : '\n(verificarea de cantități nu a rulat)'}`,
+      sectiuneConflictePlanse(conflElig),
       `INVENTARUL DOCUMENTELOR IMPORTATE (${docsElig.length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify(docsElig.map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
-      `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${(clarLic || []).length}) — NU le repeta:\n${JSON.stringify((clarLic || []).map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
+      `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${clarCtx.length}) — NU le repeta:\n${JSON.stringify(clarCtx.map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
       `RĂSPUNSURI PRIMITE LA ALTE LICITAȚII (${raspunsuri.length}; întâi de la aceeași autoritate) — DOAR ca model de formulare, nu suprimă întrebări (R3):\n${JSON.stringify(raspunsuri.map((r: any) => ({ licitatie: r.lic?.nr_anunt, autoritate: String(r.lic?.autoritate || '').slice(0, 60), intrebare: String(r.intrebare || '').slice(0, 250), raspuns: String(r.raspuns || '').slice(0, 350) })))}`,
     ].join('\n\n')
 

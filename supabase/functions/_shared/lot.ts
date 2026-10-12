@@ -95,16 +95,21 @@ export function lotRand(r: { lot_domeniu?: string | null; lot_nr?: unknown; lot?
 // Expresia ÎNTREAGĂ de după „lot” (review Jakarinos P2 #7: „loturile 1 si 2” dădea {1}): numerele legate prin - , ; / și
 // „si/și/and”, plus legăturile pe care parseLot NU le acceptă („+”, „&”, „sau”, „or”) — prinse aici ca expresia să ajungă
 // întreagă la parseLot și să devină „necunoscut”, nu o listă trunchiată.
-const RE_LOT_NUME = /(?<![a-z])lot(?:ul|urile|uri)?[\s_.:#-]*(\d{1,3}(?:(?:\s*[-,;/+&]\s*|\s+(?:si|și|and|sau|or)\s+)\d{1,3})*)(?![\d])/gi
+// r2 (review Jakarinos r2 P2 #7): numele se normalizează întâi („_” → spațiu, „–”/„—” → „-”), iar o expresie poate repeta
+// cuvântul „lot” între numere („Lot 1 sau Lot 2”, „Lot 1 si Lot 3”) — e UN fragment, deci o legătură refuzată oriunde în
+// el („sau”, „or”, „+”, „&”) face tot numele necunoscut; nu se mai păstrează un prefix valid.
+const LOT_CUV = 'lot(?:ul|urile|uri)?[\\s.:#-]*'
+const RE_LOT_NUME = new RegExp(`(?<![a-z])${LOT_CUV}\\d{1,3}(?:(?:\\s*[-,;/+&]\\s*|\\s+(?:si|și|and|sau|or)\\s+)(?:${LOT_CUV})?\\d{1,3})*(?![\\d])`, 'gi')
+const RE_LEGATURA_REFUZATA = /[+&]|\s(?:sau|or)\s/i
 export function lotDinNumeFisier(nume: string | null | undefined): Lot & { brut: string | null } {
-  const fr: string[] = [], nr: string[] = []
-  for (const m of String(nume || '').matchAll(RE_LOT_NUME)) { fr.push(m[0]); nr.push(m[1]) }
-  if (!nr.length) return { ...NECUNOSCUT(), brut: null }
+  const s = String(nume || '').replace(/_+/g, ' ').replace(/[–—]/g, '-')
+  const fr = [...s.matchAll(RE_LOT_NUME)].map((m) => m[0])
+  if (!fr.length) return { ...NECUNOSCUT(), brut: null }
   const brut = fr.join(', ').slice(0, 200)
-  // fiecare fragment trece separat prin parseLot: unul neînțeles („1+2”, „1 sau 2”) = necunoscut pe tot (fail-closed)
   const rez = new Set<number>()
-  for (const x of nr) {
-    const l = parseLot(x)
+  for (const f of fr) {
+    if (RE_LEGATURA_REFUZATA.test(f)) return { ...NECUNOSCUT(), brut }
+    const l = parseLot(f.replace(new RegExp(LOT_CUV, 'gi'), ' '))
     if (l.domeniu !== 'lista') return { ...NECUNOSCUT(), brut }
     l.loturi.forEach((n) => rez.add(n))
   }

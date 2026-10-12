@@ -43,7 +43,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { termenRO } from '../_shared/oraRO.ts'
 // 12.10.2026 (MVP loturi, 20261024b): cu loturi la care participăm, cerințele lot_domeniu='lista' fără intersecție nu intră
 // în generare (raportate în `cerinte_excluse_lot`); cele 'necunoscut' NU blochează în MVP, dar apar în `cerinte_lot_necunoscut`.
-import { filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'
+import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
@@ -87,7 +87,8 @@ Răspunzi EXCLUSIV cu textul capitolului. Fără preambul, fără explicații de
 // ── PACHETUL DE FAPTE (v2) — ce știe ERP-ul despre licitația asta, adunat pentru prompt. ──
 // Doar citire; fiecare sursă e opțională (o eroare pe una nu oprește generarea, dar se notează).
 const scurt = (v: unknown, n = 160) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
-async function pachetFapte(supabase: any, licId: number, capIdCurent: number): Promise<string> {
+// v2.4 (loturi, review Jakarinos r2 P1 #3): întoarce {text} sau {refuz} — refuzul porții OPREȘTE generarea, nu e o notă.
+async function pachetFapte(supabase: any, licId: number, capIdCurent: number): Promise<{ text: string; refuz?: string }> {
   const parti: string[] = []
   const note: string[] = []
   const [acop, graf, gar, part, decl, clar, caps, docF, afirm] = await Promise.all([
@@ -98,7 +99,7 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
     supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', licId).maybeSingle(),
     supabase.from('ofertare_pt_participanti').select('rol, nume, cota_procent, activitati, scop_declarat, partener:ofertare_parteneri(nume)').eq('licitatie_id', licId).limit(50),
     supabase.from('ofertare_pt_declaratii').select('forma, stare, citat').eq('licitatie_id', licId).limit(20),
-    supabase.from('ofertare_clarificari').select('nr, intrebare, raspuns, raspuns_la').eq('licitatie_id', licId).eq('status', 'raspunsa').order('nr').limit(20),
+    supabase.from('ofertare_clarificari').select('nr, intrebare, raspuns, raspuns_la, raspuns_document_id').eq('licitatie_id', licId).eq('status', 'raspunsa').order('nr').limit(20),
     supabase.from('ofertare_pt_capitole').select('id, nr, titlu, continut').eq('licitatie_id', licId).order('nr').limit(40),
     supabase.from('documente_firma').select('id, tip, denumire, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare').eq('activ', true).eq('utilizabil', true).in('categorie', ['iso', 'autorizatie']).order('id').limit(80),
     supabase.from('ofertare_pt_afirmatii').select('*').eq('licitatie_id', licId).limit(100),
@@ -111,8 +112,8 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
   // (document-sursă eligibil acum + lot la care participăm); poarta căzută = nicio acoperire în prompt.
   const acopRows = acop?.data || []
   const fa = await filtreazaDerivate(supabase, licId, acopRows.map((a: any) => ({ ...(a.cerinta || {}), _acop: a })))
-  if (!fa.ok) note.push(`acoperiri: ${mesajLot(fa.motiv)}`)
-  else if (fa.excluse.length) note.push(`acoperiri: ${fa.excluse.length} pe cerințe din afara loturilor / documente netriate, scoase`)
+  if (!fa.ok) return { text: '', refuz: fa.motiv }
+  if (fa.excluse.length) note.push(`acoperiri: ${fa.excluse.length} pe cerințe din afara loturilor / documente netriate, scoase`)
   const acopPermise = fa.ok ? fa.pastrate.map((c: any) => c._acop) : []
 
   // ECHIPA + EXPERIENȚĂ + PARTENERI + DOCUMENTE FIRMĂ — din acoperirile legate pe cerințe.
@@ -179,7 +180,12 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
   if (dc.length) parti.push(`DECLARAȚII DE PARTICIPARE: ${dc.map((d: any) => `${d.forma}: ${d.stare}${d.citat ? ' („' + scurt(d.citat, 100) + '")' : ''}`).join('; ')}`)
   if (!pt.length && !dc.length) parti.push('PARTICIPANȚI: niciun asociat, subcontractant sau terț susținător declarat în ERP → oferta se tratează ca OFERTANT UNIC; nu inventa subcontractanți.')
 
-  const cl = (clar?.data || []).filter((c: any) => String(c.raspuns || '').trim())
+  // răspunsul autorității „prevalează” — deci intră doar dacă documentul lui e eligibil acum (fără document = text de om)
+  const fr = await eligibilitateLicitatie(supabase, licId)
+  if (!fr.ok) return { text: '', refuz: 'eroare_poarta' }
+  const clBlocate = (clar?.data || []).filter((c: any) => c.raspuns_document_id != null && !esteEligibil(fr.harta, c.raspuns_document_id)).length
+  if (clBlocate) note.push(`clarificări: ${clBlocate} răspunsuri din documente blocate pe loturi, scoase`)
+  const cl = (clar?.data || []).filter((c: any) => String(c.raspuns || '').trim() && (c.raspuns_document_id == null || esteEligibil(fr.harta, c.raspuns_document_id)))
   if (cl.length) parti.push(`RĂSPUNSURILE AUTORITĂȚII LA CLARIFICĂRI (prevalează asupra cerințelor inițiale):\n${cl.map((c: any) => `- Clarificarea nr. ${c.nr}${c.raspuns_la ? ' (răspuns ' + c.raspuns_la + ')' : ''}: Î: ${scurt(c.intrebare, 200)} · R: ${scurt(c.raspuns, 1200)}`).join('\n')}`)
 
   const alte = (caps?.data || []).filter((k: any) => k.id !== capIdCurent)
@@ -189,7 +195,7 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
   if (af.length) parti.push(`AFIRMAȚII DEJA ÎNCĂRCATE ÎN PROPUNERE (ține-le consecvente): ${scurt(JSON.stringify(af.map((x: any) => ({ tip: x.tip, text: x.text || x.afirmatie || x.valoare }))), 1500)}`)
 
   if (note.length) parti.push(`(surse necitite din ERP: ${note.join('; ')} — nu inventa ce lipsește de acolo)`)
-  return parti.join('\n\n')
+  return { text: parti.join('\n\n') }
 }
 
 // POARTA DE ROL (18.09.2026) — a patra interdicție, și singura care privește CINE apelează.
@@ -302,7 +308,9 @@ Deno.serve(async (req: Request) => {
     const { data: obs } = await supabase.from('ofertare_pt_observatii')
       .select('text').eq('capitol_id', capId).eq('stare', 'deschisa').limit(20)
 
-    const pachet = await pachetFapte(supabase, cap.licitatie_id, capId)
+    const pf = await pachetFapte(supabase, cap.licitatie_id, capId)
+    if (pf.refuz) return fail(mesajLot(pf.refuz) + ' (pachetul de fapte) — nu s-a generat nimic', { motiv_lot: pf.refuz })
+    const pachet = pf.text
 
     // v2.1 (17.09 seara, Domnești cap. 2 — 92 cerințe): un singur apel lovea plafonul de 12.000
     // tokeni de ieșire (stop_reason=max_tokens) și funcția refuza corect textul tăiat — dar de două

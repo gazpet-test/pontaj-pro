@@ -19,7 +19,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // 12.10.2026 (MVP loturi, 20261024b): poarta pe document la creeaza_set (documentele neeligibile ies în `excluse`) și la
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
-import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'
+import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
+import { eligibilaPeLot, parseLot } from '../_shared/lot.ts'
 import { filtreazaRegistru, lotOperatie } from './loturi.ts'
 
 const CORS = {
@@ -345,10 +346,30 @@ Deno.serve(async (req: Request) => {
     // comparate (rămân pentru când documentul redevine eligibil). Poarta căzută = oprire.
     const fd = await filtreazaDocumente(db, deFacutToate.map((x: any) => x.doc_id))
     if (!fd.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a comparat nimic', blocat_lot: true })
-    const deFacut = deFacutToate.filter((x: any) => fd.eligibile.has(Number(x.doc_id)))
+    // + lotul PROPRIU al dispoziției (review Jakarinos r2 P1 #4): un document comun poate avea dispoziții doar pe alt lot.
+    // Fără loturi numite = dispoziție generală (decide documentul). Numite: trebuie să intersecteze loturile la care
+    // participăm (pe are_loturi) și lotul setului, dacă e declarat; neînțelese = neclare, excluse și raportate separat.
+    const part = await participareLicitatie(db, set.licitatie_id)
+    if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: part.motiv })
+    const lotSet = set.lot ? parseLot(String(set.lot)) : null
+    const lotDisp = (x: any): 'ok' | 'in_afara' | 'neclar' => {
+      const brut = (Array.isArray(x.loturi) ? x.loturi : []).map(String).filter((s: string) => s.trim())
+      if (!brut.length) return 'ok'
+      const l = parseLot(brut.join(','))
+      if (l.domeniu === 'toate') return 'ok'
+      if (l.domeniu !== 'lista') return 'neclar'
+      if (part.stare === 'are_loturi' && !eligibilaPeLot(l, part.participam)) return 'in_afara'
+      if (lotSet?.domeniu === 'lista' && !eligibilaPeLot(l, lotSet.loturi)) return 'in_afara'
+      return 'ok'
+    }
+    const peLotDisp = deFacutToate.filter((x: any) => fd.eligibile.has(Number(x.doc_id)))
+    const deFacut = peLotDisp.filter((x: any) => lotDisp(x) === 'ok')
+    const dispLotInAfara = peLotDisp.filter((x: any) => lotDisp(x) === 'in_afara').length
+    const dispLotNeclar = peLotDisp.filter((x: any) => lotDisp(x) === 'neclar').length
     const dispBlocate = deFacutToate.length - deFacut.length
     if (!deFacut.length) return json({ ok: false, blocat_lot: true, continua: false, dispozitii_blocate_lot: dispBlocate,
-      error: `${mesajLot(fd.blocate.values().next().value || 'de_triat')} — toate cele ${dispBlocate} dispoziții rămase vin din documente blocate` })
+      dispozitii_lot_in_afara: dispLotInAfara || undefined, dispozitii_lot_neclar: dispLotNeclar || undefined,
+      error: `Blocat pe loturi: toate cele ${dispBlocate} dispoziții rămase sunt din documente blocate (${dispBlocate - dispLotInAfara - dispLotNeclar}), pe loturi la care nu participăm (${dispLotInAfara}) sau cu lot neclar (${dispLotNeclar})` })
     const lot = deFacut.slice(0, 20)
 
     const { data: cerBD, error: eC } = await db.from('ofertare_cerinte')
@@ -531,7 +552,8 @@ Deno.serve(async (req: Request) => {
       // cerințele cu lot necunoscut intrate marcate (doar la set cu lot) + cele excluse pe lot
       cerinte_lot_necunoscut: lotNecunoscut.size ? [...lotNecunoscut] : undefined, cerinte_excluse_lot: filtru.excluse,
       // dispozițiile din documente blocate pe loturi rămân în `ramase` (setul nu e complet), dar nu țin bucla pornită
-      continua: raman - dispBlocate > 0, dispozitii_blocate_lot: dispBlocate || undefined, cost_usd: Number(cost.toFixed(4)),
+      continua: raman - dispBlocate > 0, dispozitii_blocate_lot: dispBlocate || undefined,
+      dispozitii_lot_in_afara: dispLotInAfara || undefined, dispozitii_lot_neclar: dispLotNeclar || undefined, cost_usd: Number(cost.toFixed(4)),
     })
   }
 

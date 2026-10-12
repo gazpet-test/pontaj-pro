@@ -3,6 +3,7 @@
 // citita_la / citita_rezumat pe ofertare_clarificari, ca să se vadă că platforma „a luat cunoștință”.
 // Auth: JWT de utilizator (functions.invoke). Erori de business → return {error}, nu throw.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 // Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
 // accepta si valoarea precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile deodata.
@@ -49,6 +50,8 @@ Deno.serve(async (req: Request) => {
   const { data: row } = await db.from('ofertare_clarificari').select('*').eq('id', id).maybeSingle()
   if (!row) return json({ error: 'clarificarea nu există' }, 404)
   if (!row.fisier_path) return json({ error: 'clarificarea nu are PDF atașat' }, 400)
+  // loturi (review Jakarinos r2 P1 #1): calea poate fi și a unui document de atribuire — dacă vreunul e blocat, nu se citește
+  { const m = await caleBlocata(db, String(row.fisier_path)); if (m) return json({ error: mesajLot(m), motiv_lot: m }) }
 
   const { data: blob, error: dlErr } = await db.storage.from('ofertare').download(row.fisier_path)
   if (dlErr || !blob) return json({ error: 'download PDF: ' + (dlErr?.message || 'lipsă') })

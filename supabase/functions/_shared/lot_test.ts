@@ -63,8 +63,8 @@ Deno.test('lotRand: coloanele noi au prioritate, rândurile vechi se parsează d
 Deno.test('lotDinNumeFisier: fragmentele „lot N” din numele fișierului', () => {
   eq(lotDinNumeFisier('Caiet de sarcini LOT 12.pdf'), { ...L(12), brut: 'LOT 12' })
   eq(lotDinNumeFisier('CS_Lot2_vol1.pdf'), { ...L(2), brut: 'Lot2' })
-  eq(lotDinNumeFisier('Lista cantitati lot_1-3.xlsx'), { ...L(1, 2, 3), brut: 'lot_1-3' })
-  eq(lotDinNumeFisier('Lot 1 si Lot 3 - clarificari.pdf'), { ...L(1, 3), brut: 'Lot 1, Lot 3' })
+  eq(lotDinNumeFisier('Lista cantitati lot_1-3.xlsx'), { ...L(1, 2, 3), brut: 'lot 1-3' })
+  eq(lotDinNumeFisier('Lot 1 si Lot 3 - clarificari.pdf'), { ...L(1, 3), brut: 'Lot 1 si Lot 3' })
   eq(lotDinNumeFisier('Lotul 2 - 2024.pdf').loturi, [2])
   eq(lotDinNumeFisier('Fisa de date.pdf'), { ...N, brut: null })
   eq(lotDinNumeFisier('Pilot2 plan.pdf'), { ...N, brut: null })
@@ -88,4 +88,14 @@ Deno.test('lotDinNumeFisier: expresia întreagă (review Jakarinos P2 #7), legă
   eq(lotDinNumeFisier('Lot 2 si Lot 1-3.pdf').loturi, [1, 2, 3])
   eq(lotDinNumeFisier('Lot 2 si Lot 0.pdf').domeniu, 'necunoscut')
   eq(lotDinNumeFisier('Lot 3 2024.pdf').loturi, [3])
+})
+
+Deno.test('lotDinNumeFisier r2 (review Jakarinos r2 P2 #7): underscore, liniuță lungă, „sau” între fragmente', () => {
+  eq(lotDinNumeFisier('Loturile_1_si_2.pdf').loturi, [1, 2])
+  eq(lotDinNumeFisier('Lot 1–3.pdf').loturi, [1, 2, 3])
+  eq(lotDinNumeFisier('Lot 1—2.pdf').loturi, [1, 2])
+  eq(lotDinNumeFisier('Lot 1 sau Lot 2.pdf'), { ...N, brut: 'Lot 1 sau Lot 2' })
+  eq(lotDinNumeFisier('Lot 1 & Lot 2.pdf').domeniu, 'necunoscut')
+  eq(lotDinNumeFisier('lot.2 si lot:3.pdf').loturi, [2, 3])
+  eq(lotDinNumeFisier('Lotul 2 - 2024.pdf').loturi, [2])
 })

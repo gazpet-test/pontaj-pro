@@ -4,7 +4,7 @@
 // Regex strict pe toată calea: fără slash în plus, fără căi absolute, backslash, %-encoding sau spații.
 // Plus: dacă aceeași cale apare ca fisier_path în ofertare_documente_atribuire, documentul trece prin poarta pe loturi
 // (fn_ofertare_document_eligibil). Fail-closed: eroare la căutare sau la poartă = refuz, nu se cheamă AI.
-import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'
+import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'
 
 export const CALE_E0 = /^e0\/\d{10,16}_[a-z0-9]{0,8}_[A-Za-z0-9._-]{1,80}$/
 
@@ -20,17 +20,7 @@ type Db = {
 // null = se poate citi; altfel mesajul de refuz (eroare de business, se întoarce ca {error}, nu throw).
 export async function poartaE0(db: Db, path: unknown): Promise<string | null> {
   if (!caleE0Valida(path)) return 'path invalid: se acceptă doar fișa încărcată din formularul E0'
-  try {
-    const { data, error } = await db.from('ofertare_documente_atribuire').select('id').eq('fisier_path', path).limit(50)
-    if (error || !Array.isArray(data)) return mesajLot('eroare_poarta')
-    for (const r of data) {
-      const id = Number(r?.id)
-      if (!Number.isSafeInteger(id) || id <= 0) return mesajLot('eroare_poarta')
-      const e = await documentEligibil(db, id)
-      if (!e.eligibil) return mesajLot(e.motiv)
-    }
-    return null
-  } catch (_) {
-    return mesajLot('eroare_poarta')
-  }
+  // toate referințele căii, paginat (review Jakarinos r2 P2 #8: nu doar primele 50)
+  const m = await caleBlocata(db, path)
+  return m ? mesajLot(m) : null
 }

@@ -26,7 +26,7 @@ function fixture(opt: { motive?: Record<number, string>; cade?: boolean } = {}) 
       download: async () => { n.storage++; return { data: new Blob([new Uint8Array([255, 216, 1, 255, 217])]), error: null } },
     }) },
   }
-  const p = cuPoartaLot(baza, [470], opt)
+  const p = cuPoartaLot(baza, [470], { ...opt, motive: opt.motive ?? { 470: 'fara_loturi' } })   // CLI: doar fara_loturi (r2 P1 #6)
   return { doc, n, apeluri: p.apeluri, d: { supa: p.supa, SERVICE: 'service-test', operatorDeclarat: OWNER } }
 }
 
@@ -56,7 +56,7 @@ Deno.test('P1 #5 pregătire: poarta cade → fail-closed, zero storage', async (
 Deno.test('P1 #5 pregătire: triajul se schimbă în timpul descărcării → nimic scris pe disc', async () => {
   const dir = await Deno.makeTempDir({ prefix: 'lot-p15-' })
   try {
-    const motive: Record<number, string> = { 470: 'comun' }
+    const motive: Record<number, string> = { 470: 'fara_loturi' }
     const f = fixture({ motive })
     const { list, download } = f.d.supa.storage.from('ofertare')
     f.d.supa.storage = { from: () => ({ list,
@@ -70,13 +70,13 @@ Deno.test('P1 #5 pregătire: triajul se schimbă în timpul descărcării → ni
 Deno.test('P1 #5 verificare: eligibil → atestare legată de pachet_id; apoi neeligibil → atestarea dispare, cod de eroare', async () => {
   const dir = await Deno.makeTempDir({ prefix: 'lot-p15-' })
   try {
-    const motive: Record<number, string> = { 470: 'lot_participam' }
+    const motive: Record<number, string> = { 470: 'fara_loturi' }
     const f = fixture({ motive })
     const m = await pregatestePlansa(470, `${dir}/pachet`, f.d)
     const v = await verificaPachet(`${dir}/pachet`, f.d, () => new Date('2026-10-12T10:00:00.000Z'))
     const scris = JSON.parse(await Deno.readTextFile(`${dir}/pachet/${FISIER_VERIFICARE}`))
     eq(scris, v)
-    eq(scris, { doc_id: 470, licitatie_id: 95, pachet_id: m.pachet_id, eligibil: true, motiv: 'lot_participam', verificat_la: '2026-10-12T10:00:00.000Z' })
+    eq(scris, { doc_id: 470, licitatie_id: 95, pachet_id: m.pachet_id, eligibil: true, motiv: 'fara_loturi', verificat_la: '2026-10-12T10:00:00.000Z' })
     motive[470] = 'de_triat'
     await rejects(() => verificaPachet(`${dir}/pachet`, f.d), /Blocat pe loturi/)
     await rejects(() => Deno.stat(`${dir}/pachet/${FISIER_VERIFICARE}`), Deno.errors.NotFound)
@@ -98,3 +98,16 @@ Deno.test('P1 #5 verificare: poarta cade / document retăiat → fără atestare
     eq(retaiat.apeluri.length, 0) // identitatea se verifică înaintea porții
   } finally { await Deno.remove(dir, { recursive: true }) }
 })
+
+// review Jakarinos r2 P1 #6 (provizoriu): pe licitațiile cu loturi calea CLI e închisă — debifarea unui lot în fereastra
+// atestării n-ar fi prinsă; acolo planșa se citește pe calea API / NAS (reverificare la fiecare rundă)
+for (const motiv of ['comun', 'lot_participam']) {
+  Deno.test(`r2 P1 #6: document eligibil pe licitație cu loturi (${motiv}) → CLI refuzat, zero storage`, async () => {
+    const dir = await Deno.makeTempDir({ prefix: 'lot-p16-' })
+    try {
+      const f = fixture({ motive: { 470: motiv } })
+      await rejects(() => pregatestePlansa(470, dir, f.d), /doar pentru licitații fără loturi/)
+      eq(f.n.storage, 0); ok(await goala(dir))
+    } finally { await Deno.remove(dir, { recursive: true }) }
+  })
+}

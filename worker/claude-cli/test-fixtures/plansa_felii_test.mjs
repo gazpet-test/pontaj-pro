@@ -16,7 +16,7 @@ const pachetId = m => sha(JSON.stringify({ doc_id: m.doc_id, taiat_la: m.taiat_l
   instructiuni_sha256: m.instructiuni_sha256, instructiuni_lipire_sha256: m.instructiuni_lipire_sha256 }))
 
 // Atestarea scrisă pe gazdă de worker/ofertare/plansa_cli_verifica.ts (poarta pe loturi, P1 #5).
-const atestare = (m, extra = {}) => ({ doc_id: m.doc_id, licitatie_id: 95, pachet_id: m.pachet_id, eligibil: true, motiv: 'comun',
+const atestare = (m, extra = {}) => ({ doc_id: m.doc_id, licitatie_id: 95, pachet_id: m.pachet_id, eligibil: true, motiv: 'fara_loturi',
   verificat_la: new Date().toISOString(), ...extra })
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -169,7 +169,7 @@ for (const defect of ['modificat', 'lipsa', 'extra']) {
 
 // P1 #5: atestarea pe loturi lipsă / veche / pentru alt pachet / neeligibilă → cod 2, CLI fals niciodată apelat.
 const ORA = 60 * 60000
-for (const defect of ['lipsa', 'expirata', 'din_viitor', 'alt_pachet', 'alt_doc', 'neeligibila', 'json_invalid']) {
+for (const defect of ['lipsa', 'expirata', 'din_viitor', 'alt_pachet', 'alt_doc', 'neeligibila', 'pe_loturi', 'json_invalid']) {
   test(`P1 #5 launcher: atestare loturi ${defect} → lot_neverificat, CLI neapelat`, () => sandbox((dir, run) => {
     const jpeg = Buffer.from([255, 216, 1, 255, 217])
     const m = { doc_id: 470, taiat_la: 'taiere', felii: [{ eticheta: 'z1_1', fisier: 'felii/z1_1.jpg', sha256: sha(jpeg) }],
@@ -187,6 +187,7 @@ for (const defect of ['lipsa', 'expirata', 'din_viitor', 'alt_pachet', 'alt_doc'
       alt_pachet: atestare(m, { pachet_id: sha('alt') }),
       alt_doc: atestare(m, { doc_id: 471 }),
       neeligibila: atestare(m, { eligibil: false, motiv: 'de_triat' }),
+      pe_loturi: atestare(m, { motiv: 'comun' }),   // r2 P1 #6: CLI doar fara_loturi
     }[defect]
     if (v) writeFileSync(join(dir, 'data/verificare_lot.json'), JSON.stringify(v))
     if (defect === 'json_invalid') writeFileSync(join(dir, 'data/verificare_lot.json'), '{')
