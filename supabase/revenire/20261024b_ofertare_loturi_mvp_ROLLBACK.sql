@@ -53,6 +53,9 @@ BEGIN
   DROP FUNCTION public.fn_ofertare_document_eligibil(bigint);
   DROP FUNCTION public.fn_ofertare_eligibilitate(bigint, bigint);
   DROP TRIGGER trg_ofertare_document_loturi_coerent ON public.ofertare_document_loturi;
+  DROP TRIGGER a01_ofertare_cerinte_lot_canonic ON public.ofertare_cerinte;
+  DROP TRIGGER a01_ofertare_cantitati_lot_canonic ON public.ofertare_cantitati;
+  DROP FUNCTION public.fn_trg_ofertare_lot_canonic();
   DROP FUNCTION public.fn_trg_ofertare_document_loturi_coerent();
   DROP TRIGGER a01_ofertare_doc_lot_garda ON public.ofertare_documente_atribuire;
   DROP TRIGGER a01_ofertare_licitatii_loturi_garda ON public.ofertare_licitatii;

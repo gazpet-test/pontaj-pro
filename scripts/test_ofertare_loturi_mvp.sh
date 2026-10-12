@@ -65,8 +65,10 @@ o="$(livreaza || true)"; grep -q "Precondiție 20261024b" <<<"$o" || esec "reapl
 asteapta "control 0e (0 funcții expuse cu set_config/execute/…)" "$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" 0
 
 # ── fail-closed implicit ───────────────────────────────────────────────────────────────────────────────
-asteapta "neinițializat: doar fișa de date trece" "$(elig 102)" \
-  "527:loturi_neinitializate 528:loturi_neinitializate 532:bootstrap_fisa_date 1247:loturi_neinitializate 1302:loturi_neinitializate"
+asteapta "neinițializat: TOTUL blocat, inclusiv fișa de date" "$(elig 102)" \
+  "527:loturi_neinitializate 528:loturi_neinitializate 532:loturi_neinitializate 1247:loturi_neinitializate 1302:loturi_neinitializate"
+ca authenticated "$EDIT" "UPDATE public.ofertare_documente_atribuire SET tip='fisa_date' WHERE id=1302" >/dev/null
+asteapta "tip schimbat în fisa_date NU ocolește poarta (Copilot r1)" "$(q "SELECT motiv FROM public.fn_ofertare_eligibilitate(102, 1302)")" loturi_neinitializate
 asteapta "document inexistent = neeligibil" "$(q "SELECT public.fn_ofertare_document_eligibil(999999)->>'motiv'")" document_inexistent
 
 # ── gărzi pe scriere directă ───────────────────────────────────────────────────────────────────────────
@@ -90,6 +92,8 @@ refuz "RPC triere: editor Ofertare nerespons." authenticated "$EDIT" "SELECT pub
 refuz "RPC loturi: are_loturi fără listă" authenticated "$RESP" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[]')" "cel puțin un lot"
 refuz "RPC loturi: lot dublat" authenticated "$RESP" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":2},{\"nr\":2}]')" "de două ori"
 refuz "RPC loturi: nr 0" authenticated "$RESP" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":0}]')" "invalid"
+refuz "RPC loturi: valoare nenumerică (Copilot r1)" authenticated "$RESP" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":2,\"valoare\":\"abc\"}]')" "valoare trebuie"
+refuz "RPC loturi: valoare negativă" authenticated "$RESP" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":2,\"valoare\":-5}]')" "negativă"
 refuz "RPC loturi: nr text" authenticated "$RESP" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":\"2\"}]')" "numeric"
 refuz "RPC triere: comun pe licitație neinițializată" authenticated "$RESP" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[1247]::bigint[], 'comun')" "are loturi"
 
@@ -100,17 +104,18 @@ asteapta "stare + audit pe licitație" "$(q "SELECT stare_loturi||'|'||stare_lot
 asteapta "loturi salvate" "$(q "SELECT string_agg(nr||':'||participam||':'||coalesce(valoare::text,'-'), ' ' ORDER BY nr) FROM public.ofertare_licitatie_loturi WHERE licitatie_id=102")" \
   "1:false:- 2:true:- 3:true:1000.5 4:false:-"
 asteapta "după loturi: tot netriatul e blocat (de_triat)" "$(elig 102)" \
-  "527:de_triat 528:de_triat 532:bootstrap_fisa_date 1247:de_triat 1302:de_triat 7002:de_triat"
+  "527:de_triat 528:de_triat 532:de_triat 1247:de_triat 1302:de_triat 7002:de_triat"
 
 # ── trierea ────────────────────────────────────────────────────────────────────────────────────────────
 asteapta "triere: 1247 + 1302 comune" "$(ca authenticated "$RESP" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[1247,1302]::bigint[], 'comun', '{}', 'PT FV comun tuturor')->>'documente'")" 2
 asteapta "triere: 528 → lot 2" "$(ca authenticated "$RESP" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[528]::bigint[], 'alocat', '{2}')->>'documente'")" 1
 asteapta "triere: 527 → lot 1" "$(ca authenticated "$RESP" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[527]::bigint[], 'alocat', '{1}')->>'documente'")" 1
 asteapta "poarta pe toate motivele" "$(elig 102)" \
-  "527:in_afara_loturilor 528:lot_participam 532:bootstrap_fisa_date 1247:comun 1302:comun 7002:de_triat"
+  "527:in_afara_loturilor 528:lot_participam 532:de_triat 1247:comun 1302:comun 7002:de_triat"
 asteapta "proveniență pe document" "$(q "SELECT lot_stare||'|'||lot_sursa||'|'||lot_setat_de||'|'||lot_nota FROM public.ofertare_documente_atribuire WHERE id=1247")" \
   "comun|manual|$RESP|PT FV comun tuturor"
-asteapta "view numărătoare" "$(q "SELECT documente||'/'||procesabile||'/'||in_afara_loturilor||'/'||de_triat||'/'||blocate_alt_motiv FROM public.v_ofertare_loturi_triere WHERE licitatie_id=102")" "6/4/1/1/0"
+asteapta "view numărătoare" "$(q "SELECT documente||'/'||procesabile||'/'||in_afara_loturilor||'/'||de_triat||'/'||blocate_alt_motiv FROM public.v_ofertare_loturi_triere WHERE licitatie_id=102")" "6/3/1/2/0"
+o="$(q "UPDATE public.ofertare_documente_atribuire SET licitatie_id=3 WHERE id=1247" 2>&1 || true)"; grep -q "e triat pe loturi" <<<"$o" || esec "mutare document triat: $o"; ok "refuz: document triat mutat în altă licitație (chiar și postgres, Copilot r1)"
 refuz "triere: lot inexistent 7" authenticated "$RESP" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[7002]::bigint[], 'alocat', '{7}')" "inexistente"
 refuz "triere: documente din licitații diferite" authenticated "$OWNER" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[7002,31]::bigint[], 'comun')" "aceeași licitație"
 refuz "triere: document inexistent" authenticated "$RESP" "SELECT public.fn_ofertare_documente_lot_seteaza(ARRAY[424242]::bigint[], 'comun')" "nu există"
@@ -128,7 +133,7 @@ asteapta "jurnal: 2 licitație + 5 document (1247, 1302, 528, 527, reset 527)" "
 asteapta "jurnal păstrează vechiul" "$(q "SELECT vechi->>'stare'||'>'||(nou->>'stare') FROM public.ofertare_loturi_jurnal WHERE document_id=527 ORDER BY id DESC LIMIT 1")" "alocat>necunoscut"
 asteapta "fără participare: totul blocat (nicio_participare)" \
   "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":1},{\"nr\":2},{\"nr\":3},{\"nr\":4}]')->>'ok'")" true
-asteapta "  … motive" "$(q "SELECT string_agg(DISTINCT motiv, ',') FROM public.fn_ofertare_eligibilitate(102) WHERE document_id <> 532")" nicio_participare
+asteapta "  … motive" "$(q "SELECT string_agg(DISTINCT motiv, ',') FROM public.fn_ofertare_eligibilitate(102)")" nicio_participare
 asteapta "licitație fără loturi (owner): totul trece" "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(3, 'fara_loturi')->>'stare'")" fara_loturi
 asteapta "  … poarta" "$(q "SELECT eligibil||':'||motiv FROM public.fn_ofertare_eligibilitate(3)")" "true:fara_loturi"
 asteapta "un document (jsonb, service_role)" "$(ca service_role - "SELECT public.fn_ofertare_document_eligibil(31)::text")" '{"motiv": "fara_loturi", "eligibil": true, "licitatie_id": 3}'
@@ -152,9 +157,21 @@ asteapta "parse: text liber"      "$(pl "'tronsonul Saveni'")" '{"loturi": [], "
 asteapta "parse: 3-1 (invers)"    "$(pl "'3-1'")"             '{"loturi": [], "domeniu": "necunoscut"}'
 asteapta "parse: 0"               "$(pl "'0'")"               '{"loturi": [], "domeniu": "necunoscut"}'
 asteapta "parse: 1-100 (prea mare)" "$(pl "'1-100'")"         '{"loturi": [], "domeniu": "necunoscut"}'
-o="$(q "UPDATE public.ofertare_cerinte SET lot_domeniu='lista', lot_nr='{}' WHERE id=1" 2>&1 || true)"; grep -q ofertare_cerinte_lot_nr_coerent <<<"$o" || esec "CHECK lot canonic: $o"; ok "refuz: CHECK lot canonic incoerent (lista goală)"
+asteapta "parse: 1-50 (limita)" "$(pl "'1-50'" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["domeniu"],len(d["loturi"]))')" "lista 50"
+asteapta "parse: 1-51 (peste limită)" "$(pl "'1-51'")" '{"loturi": [], "domeniu": "necunoscut"}'
+q "UPDATE public.ofertare_cerinte SET lot_domeniu='lista', lot_nr='{}' WHERE id=1" >/dev/null
+asteapta "lot canonic: listă goală → necunoscut explicit (trigger înaintea CHECK)" "$(q "SELECT lot_domeniu||'|'||lot_sursa FROM public.ofertare_cerinte WHERE id=1")" "necunoscut|invalidat_lot_inexistent"
 o="$(q "UPDATE public.ofertare_cantitati SET lot_domeniu='toate', lot_nr='{1}' WHERE id=1" 2>&1 || true)"; grep -q ofertare_cantitati_lot_nr_coerent <<<"$o" || esec "CHECK lot canonic cantități: $o"; ok "refuz: CHECK lot canonic incoerent (toate + listă)"
 q "UPDATE public.ofertare_cerinte SET lot_domeniu='lista', lot_nr='{2}', lot_sursa='test', lot_brut='2' WHERE id=2" >/dev/null; ok "lot canonic coerent pe cerință (postgres)"
+q "UPDATE public.ofertare_cerinte SET lot_domeniu='lista', lot_nr='{3,2,3}', lot_sursa='test' WHERE id=1" >/dev/null
+asteapta "lot canonic: listă normalizată (sortată, fără duplicate)" "$(q "SELECT lot_nr::text FROM public.ofertare_cerinte WHERE id=1")" "{2,3}"
+q "UPDATE public.ofertare_cantitati SET lot_domeniu='lista', lot_nr='{7}', lot_sursa='model', lot_brut='Lot 7' WHERE id=1" >/dev/null
+asteapta "lot canonic: lot inexistent → necunoscut explicit, brut păstrat" "$(q "SELECT lot_domeniu||'|'||coalesce(lot_nr::text,'-')||'|'||lot_sursa||'|'||lot_brut FROM public.ofertare_cantitati WHERE id=1")" "necunoscut|-|invalidat_lot_inexistent|Lot 7"
+q "UPDATE public.ofertare_cantitati SET lot_domeniu='lista', lot_nr='{2,NULL}' WHERE id=1" >/dev/null
+asteapta "lot canonic: element NULL → necunoscut" "$(q "SELECT lot_domeniu FROM public.ofertare_cantitati WHERE id=1")" necunoscut
+o="$(q "UPDATE public.ofertare_cantitati SET lot_domeniu=NULL, lot_nr='{1}' WHERE id=1" 2>&1 || true)"; grep -q ofertare_cantitati_lot_nr_coerent <<<"$o" || esec "CHECK NULL+listă: $o"; ok "refuz: lot_domeniu NULL cu listă (Copilot r1)"
+refuz "loturi: scoaterea loturilor 2/3 referite de cerințe (Copilot r1)" authenticated "$OWNER" \
+  "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":1},{\"nr\":4}]')" "referite de"
 
 # ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -d "$BAZA" -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată: $o"; ok "refuz: revenire nearmată"
@@ -163,7 +180,7 @@ o="$(revenire || true)"; grep -q "armare persistenta interzisa" <<<"$o" || esec 
 q "ALTER DATABASE $BAZA RESET gazpet.revenire_20261024b" >/dev/null
 revenire >/dev/null || { revenire; esec "revenire armată"; }
 asteapta "revenire: obiecte + coloane scoase" "$(q "SELECT (to_regclass('public.ofertare_licitatie_loturi') IS NULL)::text || (to_regprocedure('public.fn_ofertare_eligibilitate(bigint,bigint)') IS NULL)::text || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND (column_name LIKE 'lot\_%' OR column_name LIKE 'stare_loturi%'))")" truetrue0
-asteapta "revenire: arhiva păstrează trierea" "$(q "SELECT jsonb_array_length(continut->'loturi')||'/'||jsonb_array_length(continut->'documente')||'/'||jsonb_array_length(continut->'document_loturi')||'/'||jsonb_array_length(continut->'jurnal')||'/'||jsonb_array_length(continut->'cerinte_lot') FROM public.ofertare_loturi_arhiva_revenire")" "4/3/1/9/1"
+asteapta "revenire: arhiva păstrează trierea" "$(q "SELECT jsonb_array_length(continut->'loturi')||'/'||jsonb_array_length(continut->'documente')||'/'||jsonb_array_length(continut->'document_loturi')||'/'||jsonb_array_length(continut->'jurnal')||'/'||jsonb_array_length(continut->'cerinte_lot') FROM public.ofertare_loturi_arhiva_revenire")" "4/3/1/9/2"
 asteapta "revenire: arhiva fără drepturi API" "$(q "SELECT has_table_privilege('authenticated','public.ofertare_loturi_arhiva_revenire','SELECT')::text||has_table_privilege('service_role','public.ofertare_loturi_arhiva_revenire','SELECT')::text")" falsefalse
 asteapta "revenire: trigger a00 de pe licitații rămas" "$(q "SELECT count(*) FROM pg_trigger WHERE tgrelid='public.ofertare_licitatii'::regclass AND NOT tgisinternal")" 1
 livreaza >/dev/null || { livreaza; esec "dus-întors"; }; ok "dus-întors: re-livrare după revenire"

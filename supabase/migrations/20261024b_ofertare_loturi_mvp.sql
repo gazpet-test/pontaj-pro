@@ -12,10 +12,12 @@
 --   5. Scrierea stărilor DOAR prin RPC (fn_ofertare_licitatie_loturi_seteaza / fn_ofertare_documente_lot_seteaza), cu
 --      verificare de rol în funcție; triggerele de gardă refuză orice scriere directă (inclusiv service_role).
 --   6. Poarta unică: fn_ofertare_eligibilitate(licitație, doc?) — sursa ÎNTREGII logici; fn_ofertare_document_eligibil(doc)
---      e doar un filtru peste ea. Fail-closed: orice stare neprevăzută = neeligibil.
+--      e doar un filtru peste ea. Fail-closed: orice stare neprevăzută = neeligibil. Fără excepții (nici fișa de date).
 --   7. v_ofertare_loturi_triere (security_invoker): numărătoarea procesate / în afara loturilor / de triat pe licitație.
 --   8. Etapa 2 (doar coloane, fără backfill): lot_nr int[] + lot_domeniu + lot_sursa + lot_brut pe ofertare_cerinte și
---      ofertare_cantitati; fn_ofertare_parse_lot(text) = parsarea canonică („Lot 12” → {12}, necunoscut ≠ toate).
+--      ofertare_cantitati, validat de trigger față de loturile licitației; fn_ofertare_parse_lot(text) = parsarea canonică
+--      („Lot 12” → {12}, necunoscut ≠ toate). Review Copilot r1 (NO-GO, 12.10) integrat: fără bootstrap, CHECK strict,
+--      coerență lot canonic, valoare nenumerică refuzată, document triat nu se mută între licitații, interval max 50.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid), fără BEGIN/COMMIT.
 -- Revenire: supabase/revenire/20261024b_ofertare_loturi_mvp_ROLLBACK.sql (arhivează clasificarea + jurnalul în
 -- ofertare_loturi_arhiva_revenire înainte de drop, deci nimic din triere nu se pierde).
@@ -111,20 +113,20 @@ BEGIN
       CHECK (lot_domeniu IS NULL OR lot_domeniu IN ('toate', 'lista', 'necunoscut')),
     ADD COLUMN lot_sursa text,
     ADD COLUMN lot_brut text,
-    ADD CONSTRAINT ofertare_cerinte_lot_nr_coerent CHECK (
-      lot_domeniu IS NULL
-      OR (lot_domeniu = 'lista' AND cardinality(lot_nr) > 0)
-      OR (lot_domeniu IN ('toate', 'necunoscut') AND lot_nr IS NULL));
+    ADD CONSTRAINT ofertare_cerinte_lot_nr_coerent CHECK (CASE  -- CASE: mereu true/false, niciodată NULL (un CHECK NULL trece)
+      WHEN lot_domeniu IS NULL THEN lot_nr IS NULL
+      WHEN lot_domeniu = 'lista' THEN coalesce(cardinality(lot_nr), 0) > 0
+      ELSE lot_nr IS NULL END);
   ALTER TABLE public.ofertare_cantitati
     ADD COLUMN lot_nr integer[],
     ADD COLUMN lot_domeniu text CONSTRAINT ofertare_cantitati_lot_domeniu_check
       CHECK (lot_domeniu IS NULL OR lot_domeniu IN ('toate', 'lista', 'necunoscut')),
     ADD COLUMN lot_sursa text,
     ADD COLUMN lot_brut text,
-    ADD CONSTRAINT ofertare_cantitati_lot_nr_coerent CHECK (
-      lot_domeniu IS NULL
-      OR (lot_domeniu = 'lista' AND cardinality(lot_nr) > 0)
-      OR (lot_domeniu IN ('toate', 'necunoscut') AND lot_nr IS NULL));
+    ADD CONSTRAINT ofertare_cantitati_lot_nr_coerent CHECK (CASE  -- CASE: mereu true/false, niciodată NULL (un CHECK NULL trece)
+      WHEN lot_domeniu IS NULL THEN lot_nr IS NULL
+      WHEN lot_domeniu = 'lista' THEN coalesce(cardinality(lot_nr), 0) > 0
+      ELSE lot_nr IS NULL END);
 
   -- ── RLS + GRANT pe tabelele noi: citire = acces Ofertare; scriere directă = nimeni (doar RPC) ──────────
   ALTER TABLE public.ofertare_licitatie_loturi ENABLE ROW LEVEL SECURITY;
@@ -155,6 +157,14 @@ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_t
 DECLARE
   v_rpc boolean := current_setting('gazpet.ofertare_loturi_rpc', true) IS NOT DISTINCT FROM ('rpc:' || txid_current());
 BEGIN
+  -- Integritate (pentru toți, inclusiv postgres): un document triat nu se mută în altă licitație.
+  -- (IF-uri imbricate: PL/pgSQL nu garantează scurtcircuitarea lui AND, iar ofertare_licitatii nu are licitatie_id.)
+  IF TG_TABLE_NAME = 'ofertare_documente_atribuire' AND TG_OP = 'UPDATE' THEN
+    IF NEW.licitatie_id IS DISTINCT FROM OLD.licitatie_id
+       AND (OLD.lot_stare <> 'necunoscut' OR EXISTS (SELECT 1 FROM public.ofertare_document_loturi dl WHERE dl.document_id = OLD.id)) THEN
+      RAISE EXCEPTION 'Documentul % e triat pe loturi — întâi se resetează trierea, apoi se mută', OLD.id USING ERRCODE = '55000';
+    END IF;
+  END IF;
   IF v_rpc OR session_user = 'postgres' THEN
     RETURN NEW;
   END IF;
@@ -209,10 +219,43 @@ REVOKE ALL ON FUNCTION public.fn_trg_ofertare_document_loturi_coerent() FROM PUB
 CREATE TRIGGER trg_ofertare_document_loturi_coerent BEFORE INSERT OR UPDATE ON public.ofertare_document_loturi
   FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_document_loturi_coerent();
 
+-- Lotul canonic pe cerință / cantitate: lista se normalizează (sortată, fără duplicate) și se verifică față de loturile
+-- licitației. Un element inexistent / NULL / < 1 NU se acceptă ca listă: rândul devine „necunoscut” (fail-closed),
+-- cu lot_sursa = 'invalidat_lot_inexistent' și lot_brut păstrat — explicit, vizibil în UI, nu o conversie tăcută.
+-- (Review Copilot r1: preferă FK; aici lotul poate fi citit din text înainte să existe loturile, deci validarea
+-- se face la scriere, iar scoaterea unui lot referit e refuzată în fn_ofertare_licitatie_loturi_seteaza.)
+CREATE FUNCTION public.fn_trg_ofertare_lot_canonic()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  v_ok boolean;
+BEGIN
+  IF NEW.lot_domeniu IS DISTINCT FROM 'lista' THEN
+    RETURN NEW;
+  END IF;
+  SELECT coalesce(cardinality(NEW.lot_nr), 0) > 0
+     AND NOT EXISTS (SELECT 1 FROM unnest(NEW.lot_nr) x WHERE x IS NULL OR x < 1
+                       OR NOT EXISTS (SELECT 1 FROM public.ofertare_licitatie_loturi l WHERE l.licitatie_id = NEW.licitatie_id AND l.nr = x))
+    INTO v_ok;
+  IF v_ok THEN
+    NEW.lot_nr := ARRAY(SELECT DISTINCT x FROM unnest(NEW.lot_nr) x ORDER BY x);
+  ELSE
+    NEW.lot_domeniu := 'necunoscut';
+    NEW.lot_nr := NULL;
+    NEW.lot_sursa := 'invalidat_lot_inexistent';
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.fn_trg_ofertare_lot_canonic() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER a01_ofertare_cerinte_lot_canonic BEFORE INSERT OR UPDATE OF lot_domeniu, lot_nr, licitatie_id ON public.ofertare_cerinte
+  FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_lot_canonic();
+CREATE TRIGGER a01_ofertare_cantitati_lot_canonic BEFORE INSERT OR UPDATE OF lot_domeniu, lot_nr, licitatie_id ON public.ofertare_cantitati
+  FOR EACH ROW EXECUTE FUNCTION public.fn_trg_ofertare_lot_canonic();
+
 -- ── Poarta unică ─────────────────────────────────────────────────────────────────────────────────────────
--- Motive (stabile, folosite de cod și UI): bootstrap_fisa_date, fara_loturi, comun, lot_participam → eligibil;
+-- Motive (stabile, folosite de cod și UI): fara_loturi, comun, lot_participam → eligibil;
 -- loturi_neinitializate, nicio_participare, de_triat, in_afara_loturilor, stare_invalida → neeligibil.
--- Fișa de date e eligibilă mereu: din ea se identifică loturile (altfel poarta ar bloca chiar inițializarea).
+-- Fără excepții (review Copilot 12.10, NO-GO r1): nici fișa de date nu trece pe licitație neinițializată — `tip` e
+-- modificabil direct, deci o excepție pe tip ar fi o ocolire. Loturile se aleg manual (un click) înainte de orice cost.
 CREATE FUNCTION public.fn_ofertare_eligibilitate(p_licitatie_id bigint, p_document_id bigint DEFAULT NULL)
 RETURNS TABLE (document_id bigint, eligibil boolean, motiv text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -221,7 +264,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
            EXISTS (SELECT 1 FROM public.ofertare_licitatie_loturi x WHERE x.licitatie_id = li.id AND x.participam) AS are_participare
       FROM public.ofertare_licitatii li WHERE li.id = p_licitatie_id
   ), d AS (
-    SELECT doc.id, doc.tip, doc.lot_stare,
+    SELECT doc.id, doc.lot_stare,
            EXISTS (SELECT 1 FROM public.ofertare_document_loturi dl WHERE dl.document_id = doc.id) AS are_lot,
            EXISTS (SELECT 1 FROM public.ofertare_document_loturi dl
                      JOIN public.ofertare_licitatie_loturi x ON x.licitatie_id = dl.licitatie_id AND x.nr = dl.lot_nr
@@ -231,7 +274,6 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
   ), r AS (
     SELECT d.id,
            CASE
-             WHEN d.tip = 'fisa_date'                          THEN 'bootstrap_fisa_date'
              WHEN l.stare_loturi = 'neinitializat'             THEN 'loturi_neinitializate'
              WHEN l.stare_loturi = 'fara_loturi'               THEN 'fara_loturi'
              WHEN l.stare_loturi <> 'are_loturi'               THEN 'stare_invalida'
@@ -244,7 +286,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
            END AS motiv
       FROM d CROSS JOIN l
   )
-  SELECT r.id, r.motiv IN ('bootstrap_fisa_date', 'fara_loturi', 'comun', 'lot_participam'), r.motiv FROM r
+  SELECT r.id, r.motiv IN ('fara_loturi', 'comun', 'lot_participam'), r.motiv FROM r
 $$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_eligibilitate(bigint, bigint) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.fn_ofertare_eligibilitate(bigint, bigint) TO authenticated, service_role;
@@ -309,7 +351,7 @@ BEGIN
   END IF;
 
   FOR v_el IN SELECT * FROM jsonb_array_elements(p_loturi) LOOP
-    IF jsonb_typeof(v_el) <> 'object' OR jsonb_typeof(v_el->'nr') <> 'number' THEN
+    IF jsonb_typeof(v_el) <> 'object' OR jsonb_typeof(v_el->'nr') IS DISTINCT FROM 'number' THEN
       RAISE EXCEPTION 'Fiecare lot cere „nr” numeric: %', v_el USING ERRCODE = '22023';
     END IF;
     v_nr := (v_el->>'nr')::numeric::int;
@@ -319,11 +361,27 @@ BEGIN
     IF v_nr = ANY (v_nrs) THEN
       RAISE EXCEPTION 'Lotul % apare de două ori', v_nr USING ERRCODE = '22023';
     END IF;
+    IF v_el ? 'valoare' AND jsonb_typeof(v_el->'valoare') NOT IN ('number', 'null') THEN
+      RAISE EXCEPTION 'valoare trebuie să fie număr la lotul %', v_nr USING ERRCODE = '22023';
+    END IF;
+    IF v_el ? 'valoare' AND jsonb_typeof(v_el->'valoare') = 'number' AND (v_el->>'valoare')::numeric < 0 THEN
+      RAISE EXCEPTION 'valoare negativă la lotul %', v_nr USING ERRCODE = '22023';
+    END IF;
     IF v_el ? 'participam' AND jsonb_typeof(v_el->'participam') <> 'boolean' THEN
       RAISE EXCEPTION 'participam trebuie să fie true/false la lotul %', v_nr USING ERRCODE = '22023';
     END IF;
     v_nrs := v_nrs || v_nr;
   END LOOP;
+
+  -- Un lot scos din listă nu poate rămâne referit de cerințe / cantități (lot_nr canonic) — echivalentul FK RESTRICT.
+  SELECT count(*) INTO v_n FROM (
+    SELECT unnest(c.lot_nr) AS nr FROM public.ofertare_cerinte c WHERE c.licitatie_id = p_licitatie_id AND c.lot_nr IS NOT NULL
+    UNION ALL
+    SELECT unnest(q.lot_nr) FROM public.ofertare_cantitati q WHERE q.licitatie_id = p_licitatie_id AND q.lot_nr IS NOT NULL
+  ) r WHERE NOT (r.nr = ANY (v_nrs));
+  IF v_n > 0 THEN
+    RAISE EXCEPTION 'Loturile scoase sunt încă referite de % cerințe/cantități — întâi se reatribuie', v_n USING ERRCODE = '23503';
+  END IF;
 
   PERFORM public.fn_ofertare_loturi_rpc_marcaj(true);
 
@@ -436,7 +494,7 @@ GRANT EXECUTE ON FUNCTION public.fn_ofertare_documente_lot_seteaza(bigint[], tex
 
 -- ── Parsarea canonică a lotului (etapa 2) ───────────────────────────────────────────────────────────────
 -- {"domeniu":"toate"|"lista"|"necunoscut","loturi":[…]}. NULL/gol = necunoscut (NU toate). „toate” doar explicit.
--- Acceptă: „2”, „Lot 12”, „LOT2”, „1,2,3”, „Lot 1, Lot 2”, „loturile 1 și 2”, „1-3” (interval max 50).
+-- Acceptă: „2”, „Lot 12”, „LOT2”, „1,2,3”, „Lot 1, Lot 2”, „loturile 1 și 2”, „1-3” (interval de maximum 50 de loturi: 1-50 da, 1-51 nu).
 CREATE FUNCTION public.fn_ofertare_parse_lot(p text)
 RETURNS jsonb LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_temp AS $$
 DECLARE
@@ -467,7 +525,7 @@ BEGIN
     IF position('-' IN parte) > 0 THEN
       a := split_part(parte, '-', 1)::int;
       b := split_part(parte, '-', 2)::int;
-      IF a < 1 OR b < a OR b - a > 50 THEN
+      IF a < 1 OR b < a OR b - a >= 50 THEN
         RETURN jsonb_build_object('domeniu', 'necunoscut', 'loturi', '[]'::jsonb);
       END IF;
       rez := rez || ARRAY(SELECT generate_series(a, b));
