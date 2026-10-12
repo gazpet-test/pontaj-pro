@@ -12,13 +12,13 @@ Deno.test('decideModul: fără utilizator 401, owner trece, modul explicit trece
 })
 
 // client fals: getUser + profiles + user_module_access
-const fals = (o: { user?: string | null; owner?: boolean; module?: string[]; eroareAcc?: boolean; arunca?: boolean }) => ({
+const fals = (o: { user?: string | null; owner?: boolean; module?: string[]; eroareAcc?: boolean; eroareProf?: boolean; arunca?: boolean }) => ({
   auth: { getUser: async (jwt: string) => {
     if (o.arunca) throw new Error('retea')
     return jwt === 'bun' && o.user ? { data: { user: { id: o.user } }, error: null } : { data: { user: null }, error: { message: 'invalid' } }
   } },
   from: (t: string) => ({ select: () => ({ eq: () => ({
-    maybeSingle: async () => ({ data: t === 'profiles' ? { is_owner: !!o.owner } : null, error: null }),
+    maybeSingle: async () => (o.eroareProf ? { data: null, error: { message: 'x' } } : { data: t === 'profiles' ? { is_owner: !!o.owner } : null, error: null }),
     in: async (_c: string, cerute: string[]) => ({ data: o.eroareAcc ? null : (o.module || []).filter(m => cerute.includes(m)).map(module => ({ module })), error: o.eroareAcc ? { message: 'x' } : null }),
   }) }) }),
 })
@@ -36,4 +36,6 @@ Deno.test('poartaModul: cont fără modul → 403, cu modul → 200, owner → 2
 Deno.test('poartaModul: eroare la citire sau excepție → refuz', async () => {
   assert.equal(st(await poartaModul(cerere('Bearer bun'), fals({ user: 'u', module: ['financiar'], eroareAcc: true }), ['financiar'])), 403)
   assert.equal(st(await poartaModul(cerere('Bearer bun'), fals({ arunca: true }), ['financiar'])), 403)
+  // P1-1 (Copilot 12.10): eroare la citirea profiles → refuz, chiar dacă are modulul (owner nu se poate confirma)
+  assert.equal(st(await poartaModul(cerere('Bearer bun'), fals({ user: 'u', owner: true, module: ['financiar'], eroareProf: true }), ['financiar'])), 403)
 })
