@@ -67,3 +67,9 @@ Deno.test('surseDispozitie: doc_ids verificate integral; vechi fără doc_ids pe
   eq(surseDispozitie({ doc_id: 11 }, false), [11])                     // fara_loturi: ca înainte
   eq(surseDispozitie({}, false), null)
 })
+Deno.test('surseCoada r6 (Jakarinos r6 P1 #1): forma veche coada_doc_id pe are_loturi = neverificabilă; listă stricată = []', () => {
+  eq(surseCoada({ coada_doc_id: 7 }, true), [])
+  eq(surseCoada({ coada_doc_id: 7 }, false), [7])
+  eq(surseCoada({ coada_doc_ids: [7, 8] }, true), [7, 8])
+  eq(surseCoada({ coada_doc_ids: [7, 'x'] }, false), [])
+})

@@ -240,13 +240,18 @@ Deno.serve(async (req: Request) => {
     // proveniență (scrisă înainte de loturi) sau cu oricare document blocat = omisă, nu retransmisă. Poarta căzută = oprire.
     let coada = String(prop.coada_deschisa || ''), coadaOmisa: string | null = null
     let coadaSurse: number[] = []
+    // r6: coada în forma veche (doar coada_doc_id, fără lista completă) pe are_loturi = neverificabilă, omisă (Jakarinos r6 P1 #1);
+    // sursele se verifică pe harta licitației SETULUI — un document mutat în altă licitație e neeligibil (Copilot r2 P1 #2)
     if (coada) {
-      const sc = surseCoada(prop)
+      const pc = await participareLicitatie(db, set.licitatie_id)
+      if (pc.motiv === 'eroare_poarta') return json({ ok: false, blocat_lot: true, error: mesajLot('eroare_poarta') + ' — nu s-a citit nimic' })
+      const sc = surseCoada(prop, pc.stare === 'are_loturi')
       if (!sc.length) { coada = ''; coadaOmisa = 'fara_provenienta' }
       else {
-        const fcd = await filtreazaDocumente(db, sc)
-        if (!fcd.ok) return json({ ok: false, blocat_lot: true, error: mesajLot('eroare_poarta') + ' — nu s-a citit nimic' })
-        if (fcd.blocate.size) { coada = ''; coadaOmisa = fcd.blocate.values().next().value as string }
+        const hc = await eligibilitateLicitatie(db, set.licitatie_id)
+        if (!hc.ok) return json({ ok: false, blocat_lot: true, error: mesajLot('eroare_poarta') + ' — nu s-a citit nimic' })
+        const blocat = sc.find((id) => !esteEligibil(hc.harta, id))
+        if (blocat != null) { coada = ''; coadaOmisa = hc.harta.get(blocat)?.motiv || 'document_in_afara_licitatiei' }
         else coadaSurse = sc
       }
     }
@@ -369,9 +374,10 @@ Deno.serve(async (req: Request) => {
     // Proveniența (review Jakarinos r5 P1 #1): TOATE documentele din care provine dispoziția (inclusiv coada lipită din
     // documentul precedent) trebuie să fie eligibile. Dispoziție veche fără doc_ids pe are_loturi = neverificabilă, exclusă.
     const surseD = new Map<string, number[] | null>(deFacutToate.map((x: any) => [x.disp_id, surseDispozitie(x, part.stare === 'are_loturi')]))
-    const fd = await filtreazaDocumente(db, [...surseD.values()].flatMap((s) => s || []))
+    // harta licitației SETULUI (Copilot r2 P1 #2): un document-sursă mutat în altă licitație lipsește = neeligibil
+    const fd = await eligibilitateLicitatie(db, set.licitatie_id)
     if (!fd.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a comparat nimic', blocat_lot: true })
-    const surseEligibile = (x: any) => { const s = surseD.get(x.disp_id); return !!s && s.length > 0 && s.every((id) => fd.eligibile.has(id)) }
+    const surseEligibile = (x: any) => { const s = surseD.get(x.disp_id); return !!s && s.length > 0 && s.every((id) => esteEligibil(fd.harta, id)) }
     const dispFaraProvenienta = deFacutToate.filter((x: any) => surseD.get(x.disp_id) === null).length
     // Selecția EFECTIVĂ (review Jakarinos r3 P1 #3): o singură mulțime = loturile setului ∩ loturile la care participăm
     // (pe are_loturi; setul fără lot = toată participarea). Intersecția goală (set rămas pe un lot debifat) = oprire.

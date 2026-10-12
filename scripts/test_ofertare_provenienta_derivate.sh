@@ -21,7 +21,7 @@ MIGRARE_LOTURI="$RADACINA/supabase/migrations/$NUME_LOTURI.sql"
 SCHELET_LOTURI="$RADACINA/supabase/tests/ofertare_loturi_mvp_schelet.sql"
 SCHELET="$RADACINA/supabase/tests/ofertare_provenienta_schelet.sql"
 CONTROL_0E="$RADACINA/scripts/control_0e.sql"
-MD5_RPC=c00ba5566c7d231ef7eefe926a8ed56a; MD5_RPC_NOU=c85560253e98dad428ca19ff147ac4b1
+MD5_RPC=c00ba5566c7d231ef7eefe926a8ed56a; MD5_RPC_NOU=cdb15a2a246a590a5172ba4ed3ce9b30
 OPRESTE=0; [ "${1:-}" = --opreste ] && OPRESTE=1
 esec()  { echo "ESEC: $*" >&2; exit 1; }
 mediu() { echo "MEDIU: $*" >&2; exit 2; }
@@ -88,32 +88,44 @@ asteapta "RPC nou: corpul așteptat (md5 fără CR)" "$(md5rpc)" "$MD5_RPC_NOU"
 asteapta "drepturi RPC transfer neschimbate (auth/anon/service)" \
   "$(q "SELECT has_function_privilege('authenticated','public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)','EXECUTE')::text||has_function_privilege('anon','public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)','EXECUTE')::text||has_function_privilege('service_role','public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)','EXECUTE')::text")" falsefalsetrue
 
-# ── validarea la scriere: clarificări ─────────────────────────────────────────────────────────────────
-asteapta "editor: surse din aceeași licitație, normalizate (sortate, fără duplicate), cerințe nevăzute prin RLS" \
-  "$(ca authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cerinte_ids, surse_document_ids) VALUES (102, 'Q1', 'platforma', '{2,1,2}', '{528,527}') RETURNING surse_cerinte_ids::text||'|'||surse_document_ids::text")" "{1,2}|{527,528}"
-refuz "cerință din altă licitație" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cerinte_ids) VALUES (102, 'Q2', 'platforma', '{3}')" "nu există în licitația"
-refuz "document din altă licitație" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_document_ids) VALUES (102, 'Q3', 'platforma', '{31}')" "nu există în licitația"
-refuz "cantitate inexistentă" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cantitati_ids) VALUES (102, 'Q4', 'platforma', '{424242}')" "nu există în licitația"
-refuz "NULL în listă" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_document_ids) VALUES (102, 'Q5', 'platforma', '{527,NULL}')" "fără NULL"
-refuz "service_role: tot validat" service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cerinte_ids) VALUES (102, 'Q6', 'platforma', '{3}')" "nu există în licitația"
+# ── sursele sunt ale serverului (Copilot r2 P1 #1) ──────────────────────────────────────────────────────
+refuz "authenticated: INSERT cu surse" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cerinte_ids) VALUES (102, 'U1', 'platforma', '{1}')" "doar serverul"
+refuz "authenticated: INSERT clarificare automată" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine) VALUES (102, 'U2', 'automat')" "doar serverul"
+refuz "authenticated: cantitate cu surse" authenticated "$EDIT" "INSERT INTO public.ofertare_cantitati(licitatie_id, denumire, surse_document_ids) VALUES (102, 'u', '{1247}')" "doar serverul"
+
+# ── validarea la scriere: clarificări (scrise de server) ──────────────────────────────────────────────
+asteapta "server: surse din aceeași licitație, normalizate (sortate, fără duplicate)" \
+  "$(ca service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cerinte_ids, surse_document_ids) VALUES (102, 'Q1', 'platforma', '{2,1,2}', '{528,527}') RETURNING surse_cerinte_ids::text||'|'||surse_document_ids::text")" "{1,2}|{527,528}"
+refuz "authenticated: UPDATE surse (forjare)" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET surse_document_ids='{1247}' WHERE intrebare = 'Q1'" "doar serverul"
+asteapta "authenticated: textul se editează liber (surse neschimbate)" \
+  "$(ca authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET intrebare = 'Q1 editat' WHERE intrebare = 'Q1' RETURNING surse_document_ids::text")" "{527,528}"
+refuz "cerință din altă licitație" service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cerinte_ids) VALUES (102, 'Q2', 'platforma', '{3}')" "nu există în licitația"
+refuz "document din altă licitație" service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_document_ids) VALUES (102, 'Q3', 'platforma', '{31}')" "nu există în licitația"
+refuz "cantitate inexistentă" service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cantitati_ids) VALUES (102, 'Q4', 'platforma', '{424242}')" "nu există în licitația"
+refuz "NULL în listă" service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_document_ids) VALUES (102, 'Q5', 'platforma', '{527,NULL}')" "fără NULL"
 asteapta "listă goală → NULL (= fără proveniență)" \
   "$(ca service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_document_ids) VALUES (102, 'Q7', 'platforma', '{}') RETURNING coalesce(surse_document_ids::text, 'NULL')")" NULL
-refuz "mutarea clarificării cu surse în altă licitație" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET licitatie_id = 3 WHERE intrebare = 'Q1'" "nu există în licitația"
+refuz "mutarea clarificării cu surse în altă licitație (editor)" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET licitatie_id = 3 WHERE intrebare = 'Q1 editat'" "nu există în licitația"
 refuz "fără modul Ofertare: nimic (RLS)" authenticated "$FARA" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine) VALUES (102, 'Q8', 'platforma')" "row-level security"
 o="$(q "SELECT public.fn_ofertare_surse_valideaza()" 2>&1 || true)"; grep -q "trigger" <<<"$o" || esec "apel direct al funcției de trigger: $o"; ok "refuz: funcția de validare nu se poate chema direct"
 refuz "funcția de validare nu e expusă (authenticated)" authenticated "$OWNER" "SELECT public.fn_ofertare_surse_valideaza()" "permission denied"
 
-# ── clarificarea automată din planșe: sursele se derivă ─────────────────────────────────────────────────
+# ── clarificarea automată din planșe: sursele se derivă (server) ───────────────────────────────────────
 q "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, cheie, sursa, baza_generare) VALUES (102, 'AUTO', 'automat', 'auto_planse_x',
    'planse_auto:528,527,gen_0123456789ab,ev_0123456789ab', '{\"documente\":[{\"id\":1247},{\"id\":\"x\"}],\"randuri\":[{\"id\":1},{\"id\":99999}]}')" >/dev/null
 asteapta "automat: documente = planșe ∪ baza.documente; cantități = baza.randuri (ID dispărut păstrat, fără refuz)" \
   "$(q "SELECT surse_document_ids::text||'|'||surse_cantitati_ids::text FROM public.ofertare_clarificari WHERE cheie='auto_planse_x'")" "{527,528,1247}|{1,99999}"
-q "UPDATE public.ofertare_clarificari SET status='retrasa' WHERE cheie='auto_planse_x'" >/dev/null
-asteapta "automat: schimbarea stării nu rederivă" "$(q "SELECT surse_document_ids::text FROM public.ofertare_clarificari WHERE cheie='auto_planse_x'")" "{527,528,1247}"
+refuz "authenticated: schimbarea sursei unei clarificări automate" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET sursa='planse_auto:1302' WHERE cheie='auto_planse_x'" "doar serverul"
+refuz "authenticated: automat → manual (spălarea proveniența)" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET origine='manual' WHERE cheie='auto_planse_x'" "doar serverul"
+asteapta "authenticated: starea / textul clarificării automate se editează" \
+  "$(ca authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET status='retrasa', intrebare='AUTO editat' WHERE cheie='auto_planse_x' RETURNING surse_document_ids::text")" "{527,528,1247}"
 q "UPDATE public.ofertare_clarificari SET sursa='planse_auto:1302,gen_0123456789ab', baza_generare='{}' WHERE cheie='auto_planse_x'" >/dev/null
-asteapta "automat: sursa nouă → surse rederivate" "$(q "SELECT surse_document_ids::text||'|'||coalesce(surse_cantitati_ids::text,'NULL') FROM public.ofertare_clarificari WHERE cheie='auto_planse_x'")" "{1302}|NULL"
+asteapta "automat: sursa nouă → reuniune cu sursele vechi (textul păstrat poate cita planșa scoasă, Jakarinos r6 P1 #6)" \
+  "$(q "SELECT surse_document_ids::text||'|'||coalesce(surse_cantitati_ids::text,'NULL') FROM public.ofertare_clarificari WHERE cheie='auto_planse_x'")" "{527,528,1247,1302}|{1,99999}"
 o="$(q "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, cheie, sursa, baza_generare) VALUES (102, 'AUTO2', 'automat', 'auto_planse_y', 'planse_auto:528', '{\"documente\":[{\"id\":31}]}')" 2>&1 || true)"
 grep -q "nu există în licitația" <<<"$o" || esec "automat cu document din altă licitație: $o"; ok "refuz: automat — ID existent în ALTĂ licitație (Copilot r1 P1 #1), doar cel dispărut se păstrează"
+asteapta "automat pe fara_loturi cu 501 rânduri F3: fără refuz, fără trunchiere (Jakarinos r6 P2)" \
+  "$(q "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, cheie, sursa, baza_generare) SELECT 3, 'MARE', 'automat', 'auto_planse_mare', 'planse_auto:31', jsonb_build_object('randuri', jsonb_agg(jsonb_build_object('id', 900000 + g))) FROM generate_series(1, 501) g RETURNING cardinality(surse_cantitati_ids)")" 501
 asteapta "platformă: surse nederivate din text" \
   "$(q "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, sursa) VALUES (102, 'PF', 'platforma', 'planse_auto:527') RETURNING coalesce(surse_document_ids::text,'NULL')")" NULL
 
@@ -121,18 +133,17 @@ asteapta "platformă: surse nederivate din text" \
 refuz "cantitate: document din altă licitație (service_role)" service_role - "INSERT INTO public.ofertare_cantitati(licitatie_id, denumire, surse_document_ids) VALUES (102, 'x', '{31}')" "nu există în licitația"
 asteapta "cantitate extrasă: surse proprii" "$(ca service_role - "INSERT INTO public.ofertare_cantitati(licitatie_id, denumire, surse_document_ids) VALUES (102, 'teava PE 63', '{1247}') RETURNING surse_document_ids::text")" "{1247}"
 q "UPDATE public.ofertare_documente_atribuire SET analiza='{\"citire_ai\":{\"transfer\":{\"rulare\":\"r1\",\"stare\":\"in_curs\"}}}' WHERE id IN (528, 1302)" >/dev/null
-ID63=$(q "SELECT id FROM public.ofertare_cantitati WHERE denumire='teava PE 63'")   # secvența a avansat la inserarea refuzată
+ID63=$(q "SELECT id FROM public.ofertare_cantitati WHERE denumire='teava PE 63'")   # secvența a avansat la inserările refuzate
 OPS='[{"op":"update","id":1,"patch":{"cantitate_plansa":120,"diferenta_nota":"planșa 528"}},{"op":"update","id":'"$ID63"',"patch":{"cantitate_plansa":63}},{"op":"insert","row":{"denumire":"teava PE 90","um":"m","cantitate_plansa":90,"sursa":"Planșa 2"}}]'
 refuz "transfer: authenticated nu are drept" authenticated "$OWNER" "SELECT public.ofertare_transfer_plansa_cantitati(528, 'r1', '$OPS')" "permission denied"
 asteapta "transfer (service_role): 2 actualizate + 1 adăugată" "$(ca service_role - "SELECT (public.ofertare_transfer_plansa_cantitati(528, 'r1', '$OPS'))::text")" '{"ok": true, "adaugate": 1, "actualizate": 2, "sarite_existente": 0}'
-asteapta "transfer: update fără surse → {planșa}; update cu surse → surse ∪ planșa; insert → {planșa}" \
-  "$(q "SELECT string_agg(denumire||'='||surse_document_ids::text, ' ' ORDER BY id) FROM public.ofertare_cantitati")" "teava PE 110={528} teava PE 63={528,1247} teava PE 90={528}"
-OPS2='[{"op":"update","id":1,"patch":{"cantitate_plansa":121}}]'
+asteapta "transfer: update fără surse → rămâne NULL (Jakarinos r6 P1 #5); update cu surse → ∪ planșa; insert → {planșa}" \
+  "$(q "SELECT string_agg(denumire||'='||coalesce(surse_document_ids::text,'NULL'), ' ' ORDER BY id) FROM public.ofertare_cantitati")" "teava PE 110=NULL teava PE 63={528,1247} teava PE 90={528}"
+OPS2='[{"op":"update","id":'"$ID63"',"patch":{"cantitate_plansa":64}}]'
 ca service_role - "SELECT public.ofertare_transfer_plansa_cantitati(1302, 'r1', '$OPS2')" >/dev/null
-asteapta "transfer cu altă planșă: reuniune, fără duplicate" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=1")" "{528,1302}"
+asteapta "transfer cu altă planșă: reuniune, fără duplicate" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=$ID63")" "{528,1247,1302}"
 ca service_role - "SELECT public.ofertare_transfer_plansa_cantitati(1302, 'r1', '$OPS2')" >/dev/null
-asteapta "lease consumat: a doua rulare nu scrie" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=1")" "{528,1302}"
-
+asteapta "lease consumat: a doua rulare nu scrie" "$(q "SELECT cantitate_plansa::int FROM public.ofertare_cantitati WHERE id=$ID63")" 64
 # ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -v ON_ERROR_STOP=0 -d "$BAZA" -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată fără ON_ERROR_STOP: $o"
 asteapta "revenire nearmată, fără ON_ERROR_STOP / fără tranzacție: RPC neatins (Copilot r1 P1 #3)" "$(md5rpc)" "$MD5_RPC_NOU"
@@ -151,7 +162,7 @@ asteapta "revenire: coloane + funcție + triggere scoase" \
   "$(q "SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name LIKE 'surse\_%')||'|'||(to_regprocedure('public.fn_ofertare_surse_valideaza()') IS NULL)::text||'|'||(SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'a02_ofertare_%_surse')")" "0|true|0"
 asteapta "revenire: RPC-ul de transfer = corpul de dinainte (md5)" "$(md5rpc)" "$MD5_RPC"
 asteapta "revenire: drepturile RPC păstrate" "$(q "SELECT has_function_privilege('authenticated','public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)','EXECUTE')::text||has_function_privilege('service_role','public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)','EXECUTE')::text")" falsetrue
-asteapta "revenire: arhiva păstrează sursele" "$(q "SELECT jsonb_array_length(continut->'clarificari')||'/'||jsonb_array_length(continut->'cantitati') FROM public.ofertare_provenienta_arhiva_revenire")" "2/3"
+asteapta "revenire: arhiva păstrează sursele" "$(q "SELECT jsonb_array_length(continut->'clarificari')||'/'||jsonb_array_length(continut->'cantitati') FROM public.ofertare_provenienta_arhiva_revenire")" "3/2"
 asteapta "revenire: arhiva fără drepturi API" "$(q "SELECT has_table_privilege('authenticated','public.ofertare_provenienta_arhiva_revenire','SELECT')::text||has_table_privilege('service_role','public.ofertare_provenienta_arhiva_revenire','SELECT')::text")" falsefalse
 livreaza >/dev/null || { livreaza; esec "dus-întors"; }; ok "dus-întors: re-livrare după revenire"
 asteapta "dus-întors: control 0e" "$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" 0

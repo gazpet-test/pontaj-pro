@@ -43,3 +43,8 @@ Deno.test('exemple feedback: fără feedback = listă goală, fără citiri de c
   eq(await exempleFeedback(cuPoartaLot(supa, []).supa, CK, 3), { exemple: [], omise: 0 })
   eq(n.citiri.includes('ofertare_cerinte'), false)
 })
+Deno.test('exemple feedback r6 (Jakarinos r6 P1 #3): același ref_id din alt tabel NU trece pe identitatea cerinței', async () => {
+  const r = await exempleFeedback(db({}, { ai_feedback: [fb(1, 101), fb(8, 101, 'ofertare_clarificari')] }), CK, 3)
+  eq(r.exemple.map((x) => x.id), [1])
+  eq(r.omise, 1)
+})

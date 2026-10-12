@@ -50,9 +50,15 @@ export function lotOperatieSelectie(selEf: number[] | null, lotSet: string | nul
 // dispozițiile rezultate și coada care merge mai departe poartă TOATE documentele contributoare, nu doar documentul curent.
 const iduri = (xs: unknown[]) => [...new Set(xs.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))]
 
-// Documentele din care provine coada deschisă. `coada_doc_id` (r4, un singur id) se citește ca [id]; fără niciuna = [].
-export function surseCoada(prop: any): number[] {
-  if (Array.isArray(prop?.coada_doc_ids)) return iduri(prop.coada_doc_ids)
+// Documentele din care provine coada deschisă. `coada_doc_id` (r4, un singur id) putea fi deja o coadă lipită A→B cu doar B
+// reținut (Jakarinos r6 P1 #1): pe are_loturi forma veche = [] (neverificabilă, omisă); pe fara_loturi se citește ca [id].
+// O listă coada_doc_ids cu un element nevalid = [] (neverificabilă).
+export function surseCoada(prop: any, areLoturi = false): number[] {
+  if (Array.isArray(prop?.coada_doc_ids)) {
+    const valide = prop.coada_doc_ids.map(Number).filter((n: number) => Number.isSafeInteger(n) && n > 0)
+    return valide.length === prop.coada_doc_ids.length ? iduri(valide) : []
+  }
+  if (areLoturi) return []
   return prop?.coada_doc_id == null ? [] : iduri([prop.coada_doc_id])
 }
 

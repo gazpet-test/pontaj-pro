@@ -7,7 +7,7 @@
 //   - toate cantitățile din surse_cantitati_ids există și trec filtreazaDerivate (cu surse_document_ids, fără „fără provenință”);
 //   - pe are_loturi are măcar o sursă (altfel `fara_provenienta`).
 // Merge peste licitații (exemplele din alte licitații). Orice eroare de poartă / citire = ok:false (apelantul se oprește).
-import { filtreazaDerivate, filtreazaDocumente, participareLicitatie, surseDocumente, type MotivExclus, type Participare } from './eligibilLot.ts'
+import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, participareLicitatie, surseDocumente, type Eligibilitate, type MotivExclus, type Participare } from './eligibilLot.ts'
 
 type Db = Parameters<typeof filtreazaDerivate>[0]
 export type ClarSurse = {
@@ -28,16 +28,18 @@ export async function filtreazaClarificari<T extends ClarSurse>(db: Db, randuri:
       for (const x of lista(q.surse_cantitati_ids) || []) cantIds.add(x)
       for (const x of lista(q.surse_document_ids) || []) docIds.add(x)
     }
-    // documentele (oricare licitație)
-    const fd = await filtreazaDocumente(db, [...docIds])
-    if (!fd.ok) return esec
-    // participarea fiecărei licitații implicate
+    // participarea + harta documentelor eligibile, pe FIECARE licitație implicată: un document-sursă trebuie să fie eligibil
+    // în licitația clarificării (review Copilot r2 P1 #2) — un document mutat în altă licitație lipsește din hartă = neeligibil
     const lics = [...new Set(generate.map((q) => Number(q.licitatie_id)).filter((n) => Number.isSafeInteger(n) && n > 0))]
-    const part = new Map<number, Participare>()
+    const part = new Map<number, Participare>(), harti = new Map<number, Map<number, Eligibilitate>>()
     for (const l of lics) {
       const p = await participareLicitatie(db, l)
       if (p.motiv === 'eroare_poarta') return esec
       part.set(l, p)
+      if (!p.ok || !docIds.size) continue
+      const e = await eligibilitateLicitatie(db, l)
+      if (!e.ok) return esec
+      harti.set(l, e.harta)
     }
     // cerințele și cantitățile sursă → filtrul pe licitația lor
     const cerOk = new Set<number>(), cantOk = new Set<number>()
@@ -70,7 +72,8 @@ export async function filtreazaClarificari<T extends ClarSurse>(db: Db, randuri:
       const c = lista(q.surse_cerinte_ids), k = lista(q.surse_cantitati_ids), d = lista(q.surse_document_ids)
       if (c === null || k === null || d === null) { excluse.push({ ...q, motiv: 'surse_invalide' }); continue }
       if (p.stare === 'are_loturi' && !c.length && !k.length && !d.length) { excluse.push({ ...q, motiv: 'fara_provenienta' }); continue }
-      if (!d.every((x) => fd.eligibile.has(x))) { excluse.push({ ...q, motiv: 'document_blocat' }); continue }
+      const harta = harti.get(Number(q.licitatie_id))
+      if (d.length && (!harta || !d.every((x) => esteEligibil(harta, x)))) { excluse.push({ ...q, motiv: 'document_blocat' }); continue }
       if (!c.every((x) => cerOk.has(x))) { excluse.push({ ...q, motiv: 'cerinta_exclusa' }); continue }
       if (!k.every((x) => cantOk.has(x))) { excluse.push({ ...q, motiv: 'cantitate_exclusa' }); continue }
       pastrate.push(q)

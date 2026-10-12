@@ -2,7 +2,7 @@
 -- în ofertare_provenienta_arhiva_revenire (RLS activ, fără politici, fără drepturi API).
 -- Codul care scrie/citește surse_* (PR #677) trebuie scos ÎNAINTE (altfel scrierile pică pe coloane inexistente).
 -- RPC-ul ofertare_transfer_plansa_cantitati revine la corpul de dinainte (md5 c00ba556…) ÎN ACELAȘI bloc, după gardă și doar
--- dacă versiunea curentă e EXACT cea pusă de 20261025a (corp md5 c8556025… + atribute + ACL) — altfel refuz fără nicio
+-- dacă versiunea curentă e EXACT cea pusă de 20261025a (corp md5 cdb15a2a… + atribute + ACL) — altfel refuz fără nicio
 -- modificare, ca să nu calce o versiune mai nouă (review Copilot r1 P1 #3). Totul într-un singur DO: o gardă refuzată nu
 -- lasă nimic în urmă, indiferent de modul de rulare.
 -- Armare per tranzacție: SELECT set_config('gazpet.revenire_20261025a', 'OFERTARE_PROVENIENTA_REVENIRE:' || txid_current(), true);
@@ -18,11 +18,11 @@ BEGIN
   IF to_regprocedure('public.fn_ofertare_surse_valideaza()') IS NULL THEN RAISE EXCEPTION '20261025a: migrarea nu e aplicata'; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = 'c85560253e98dad428ca19ff147ac4b1'
+                    AND md5(replace(p.prosrc, chr(13), '')) = 'cdb15a2a246a590a5172ba4ed3ce9b30'
                     AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION '20261025a: RPC-ul de transfer nu mai e versiunea pusa de migrare (md5 c8556025… / atribute) — revenire oprita, nimic schimbat';
+    RAISE EXCEPTION '20261025a: RPC-ul de transfer nu mai e versiunea pusa de migrare (md5 cdb15a2a… / atribute) — revenire oprita, nimic schimbat';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
 

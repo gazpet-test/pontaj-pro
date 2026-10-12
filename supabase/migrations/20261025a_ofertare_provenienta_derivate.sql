@@ -72,6 +72,9 @@ $migrare$;
 -- ── 3. validarea la scriere ──────────────────────────────────────────────────────────────────────────────
 -- SECURITY DEFINER: verifică existența în tabele cu RLS indiferent cine scrie; nu e expusă (REVOKE mai jos), rulează doar
 -- ca trigger. Fără SQL dinamic: câte un bloc explicit pe fiecare coloană.
+-- Sursele sunt ale SERVERULUI (review Copilot r2 P1 #1): un apel cu JWT de utilizator (authenticated / anon) nu poate seta sau
+-- schimba surse_*, iar pe clarificările automate nici origine / sursa / baza_generare (din ele se derivă sursele). Edge-urile
+-- scriu cu service_role, RPC-urile automate rulează din edge-uri cu service_role, migrările ca postgres. UI-ul nu scrie aceste câmpuri.
 CREATE FUNCTION public.fn_ofertare_surse_valideaza()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -80,32 +83,70 @@ CREATE FUNCTION public.fn_ofertare_surse_valideaza()
 AS $fn$
 DECLARE
   v_lipsa bigint;
+  v_rol text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_utilizator boolean;
   -- sursele derivate de server (clarificarea automată): un ID DISPĂRUT (inexistent global) se păstrează — codul îl tratează ca
   -- neverificabil = exclus; un ID existent în ALTĂ licitație se refuză ca la orice scriere (review Copilot r1 P1 #1)
   v_derivat boolean := false;
+  v_max constant int := 20000;   -- fără trunchiere: baza F3 a clarificării automate poate avea sute de rânduri (Jakarinos r6 P2)
 BEGIN
+  v_utilizator := v_rol IN ('authenticated', 'anon');
+  IF v_utilizator THEN
+    IF TG_OP = 'INSERT' THEN
+      IF NEW.surse_document_ids IS NOT NULL THEN
+        RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
+      END IF;
+      IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
+        IF NEW.surse_cerinte_ids IS NOT NULL OR NEW.surse_cantitati_ids IS NOT NULL OR NEW.origine = 'automat' THEN
+          RAISE EXCEPTION 'Sursele (surse_*) și clarificările automate le scrie doar serverul' USING ERRCODE = '42501';
+        END IF;
+      END IF;
+    ELSE
+      IF NEW.surse_document_ids IS DISTINCT FROM OLD.surse_document_ids THEN
+        RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
+      END IF;
+      IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
+        IF NEW.surse_cerinte_ids IS DISTINCT FROM OLD.surse_cerinte_ids OR NEW.surse_cantitati_ids IS DISTINCT FROM OLD.surse_cantitati_ids THEN
+          RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
+        END IF;
+        IF (OLD.origine = 'automat' OR NEW.origine = 'automat')
+           AND (NEW.origine, NEW.sursa, NEW.baza_generare) IS DISTINCT FROM (OLD.origine, OLD.sursa, OLD.baza_generare) THEN
+          RAISE EXCEPTION 'Proveniența clarificării automate (origine / sursa / baza_generare) o scrie doar serverul' USING ERRCODE = '42501';
+        END IF;
+      END IF;
+    END IF;
+  END IF;
+
   IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
     -- Clarificarea AUTOMATĂ din planșe (ofertare_clarificare_planse_auto, scrisă doar de server): sursele se derivă din
     -- ce a folosit funcția — planșele din `sursa` („planse_auto:475,474,…”), documentele și rândurile de cantități din
-    -- baza_generare. Fără să rescriem RPC-ul de 12k; se recalculează la fiecare schimbare a sursei / bazei.
+    -- baza_generare. Fără să rescriem RPC-ul de 12k. La UPDATE sursele NU scad (reuniune cu cele vechi, Jakarinos r6 P1 #6):
+    -- o ciornă protejată își poate păstra textul despre o planșă scoasă din `sursa` — planșa rămâne în proveniență.
     IF NEW.origine = 'automat' AND (TG_OP = 'INSERT' OR NEW.sursa IS DISTINCT FROM OLD.sursa
-                                    OR NEW.baza_generare IS DISTINCT FROM OLD.baza_generare OR NEW.origine IS DISTINCT FROM OLD.origine) THEN
+                                    OR NEW.baza_generare IS DISTINCT FROM OLD.baza_generare OR NEW.origine IS DISTINCT FROM OLD.origine
+                                    OR NEW.surse_document_ids IS DISTINCT FROM OLD.surse_document_ids
+                                    OR NEW.surse_cantitati_ids IS DISTINCT FROM OLD.surse_cantitati_ids) THEN
       NEW.surse_document_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM (
           SELECT t::bigint AS x FROM unnest(string_to_array(replace(coalesce(NEW.sursa, ''), 'planse_auto:', ''), ',')) t
            WHERE coalesce(NEW.sursa, '') LIKE 'planse_auto:%' AND t ~ '^[0-9]{1,18}$'
           UNION
           SELECT (e->>'id')::bigint FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.baza_generare->'documente') = 'array'
                                                                    THEN NEW.baza_generare->'documente' ELSE '[]'::jsonb END) e
-           WHERE e->>'id' ~ '^[0-9]{1,18}$') s);
-      NEW.surse_cantitati_ids := (SELECT array_agg(DISTINCT (e->>'id')::bigint ORDER BY (e->>'id')::bigint)
-          FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.baza_generare->'randuri') = 'array'
-                                         THEN NEW.baza_generare->'randuri' ELSE '[]'::jsonb END) e
-         WHERE e->>'id' ~ '^[0-9]{1,18}$');
+           WHERE e->>'id' ~ '^[0-9]{1,18}$'
+          UNION
+          SELECT y FROM unnest(CASE WHEN TG_OP = 'UPDATE' THEN OLD.surse_document_ids END) y WHERE y IS NOT NULL) s);
+      NEW.surse_cantitati_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM (
+          SELECT (e->>'id')::bigint AS x
+            FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.baza_generare->'randuri') = 'array'
+                                           THEN NEW.baza_generare->'randuri' ELSE '[]'::jsonb END) e
+           WHERE e->>'id' ~ '^[0-9]{1,18}$'
+          UNION
+          SELECT y FROM unnest(CASE WHEN TG_OP = 'UPDATE' THEN OLD.surse_cantitati_ids END) y WHERE y IS NOT NULL) s);
       v_derivat := true;
     END IF;
     IF NEW.surse_cerinte_ids IS NOT NULL THEN
-      IF array_position(NEW.surse_cerinte_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_cerinte_ids) > 500 THEN
-        RAISE EXCEPTION 'surse_cerinte_ids: fără NULL, maxim 500' USING ERRCODE = '22023';
+      IF array_position(NEW.surse_cerinte_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_cerinte_ids) > v_max THEN
+        RAISE EXCEPTION 'surse_cerinte_ids: fără NULL, maxim %', v_max USING ERRCODE = '22023';
       END IF;
       NEW.surse_cerinte_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_cerinte_ids) x);
       SELECT x INTO v_lipsa FROM unnest(NEW.surse_cerinte_ids) x
@@ -113,8 +154,8 @@ BEGIN
       IF FOUND THEN RAISE EXCEPTION 'surse_cerinte_ids: cerința % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
     END IF;
     IF NEW.surse_cantitati_ids IS NOT NULL THEN
-      IF array_position(NEW.surse_cantitati_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_cantitati_ids) > 500 THEN
-        RAISE EXCEPTION 'surse_cantitati_ids: fără NULL, maxim 500' USING ERRCODE = '22023';
+      IF array_position(NEW.surse_cantitati_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_cantitati_ids) > v_max THEN
+        RAISE EXCEPTION 'surse_cantitati_ids: fără NULL, maxim %', v_max USING ERRCODE = '22023';
       END IF;
       NEW.surse_cantitati_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_cantitati_ids) x);
       SELECT x INTO v_lipsa FROM unnest(NEW.surse_cantitati_ids) x
@@ -125,8 +166,8 @@ BEGIN
   END IF;
   -- surse_document_ids: pe ambele tabele
   IF NEW.surse_document_ids IS NOT NULL THEN
-    IF array_position(NEW.surse_document_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_document_ids) > 500 THEN
-      RAISE EXCEPTION 'surse_document_ids: fără NULL, maxim 500' USING ERRCODE = '22023';
+    IF array_position(NEW.surse_document_ids, NULL) IS NOT NULL OR cardinality(NEW.surse_document_ids) > v_max THEN
+      RAISE EXCEPTION 'surse_document_ids: fără NULL, maxim %', v_max USING ERRCODE = '22023';
     END IF;
     NEW.surse_document_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_document_ids) x);
     SELECT x INTO v_lipsa FROM unnest(NEW.surse_document_ids) x
@@ -135,8 +176,7 @@ BEGIN
     IF FOUND THEN RAISE EXCEPTION 'surse_document_ids: documentul % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
   END IF;
   RETURN NEW;
-END
-$fn$;
+END$fn$;
 REVOKE ALL ON FUNCTION public.fn_ofertare_surse_valideaza() FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE TRIGGER a02_ofertare_clarificari_surse
@@ -148,7 +188,8 @@ CREATE TRIGGER a02_ofertare_cantitati_surse
   FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_surse_valideaza();
 
 -- ── 4. transferul planșă → cantități notează planșa în surse (singura modificare față de corpul live, citit 12.10.2026:
---      `surse_document_ids` pe UPDATE = sursele vechi ∪ planșa, pe INSERT = {planșa}). CREATE OR REPLACE păstrează drepturile.
+--      `surse_document_ids` pe UPDATE = sursele vechi ∪ planșa DOAR dacă erau cunoscute — NULL rămâne NULL: planșa nu justifică
+--      cantitatea existentă dintr-o sursă necunoscută (Jakarinos r6 P1 #5); pe INSERT = {planșa}). CREATE OR REPLACE păstrează drepturile.
 CREATE OR REPLACE FUNCTION public.ofertare_transfer_plansa_cantitati(p_doc_id bigint, p_rulare text, p_randuri jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -170,7 +211,7 @@ BEGIN
         cantitate_plansa = CASE WHEN v_patch ? 'cantitate_plansa' THEN (v_patch ->> 'cantitate_plansa')::numeric ELSE cantitate_plansa END,
         diferenta_nota   = CASE WHEN v_patch ? 'diferenta_nota' THEN v_patch ->> 'diferenta_nota' ELSE diferenta_nota END,
         status           = CASE WHEN v_patch ? 'status' THEN v_patch ->> 'status' ELSE status END,
-        surse_document_ids = array_append(coalesce(surse_document_ids, '{}'::bigint[]), p_doc_id),   -- 20261025a
+        surse_document_ids = CASE WHEN surse_document_ids IS NULL THEN NULL ELSE array_append(surse_document_ids, p_doc_id) END,   -- 20261025a
         updated_at       = now()
       WHERE id = (r ->> 'id')::bigint AND licitatie_id = v_doc.licitatie_id;
       GET DIAGNOSTICS v_n = ROW_COUNT; v_actualizate := v_actualizate + v_n;
@@ -223,11 +264,11 @@ BEGIN
   -- versiunea nouă a RPC-ului: corp + atribute exacte (aceeași identitate pe care o cere revenirea înainte să o înlocuiască)
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = 'c85560253e98dad428ca19ff147ac4b1'
+                    AND md5(replace(p.prosrc, chr(13), '')) = 'cdb15a2a246a590a5172ba4ed3ce9b30'
                     AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION 'Postcondiție 20261025a: RPC-ul de transfer nou nu are corpul / atributele așteptate (md5 c8556025…)';
+    RAISE EXCEPTION 'Postcondiție 20261025a: RPC-ul de transfer nou nu are corpul / atributele așteptate (md5 cdb15a2a…)';
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261025a_ofertare_provenienta_derivate:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261025a: garda de livrare (final) — tranzacție/runner invalid';

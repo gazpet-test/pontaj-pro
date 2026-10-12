@@ -41,9 +41,11 @@ export async function exempleFeedback(db: Db, contextCheie: string, n = 3): Prom
       }
       for (const c of f.pastrate) bune.add(Number(c.id))
     }
-    const exemple = fb.filter((x: any) => bune.has(Number(x.ref_id))).slice(0, n)
+    // selecția finală DOAR din cuRef (tabel + ID), nu din fb pe ID numeric (Jakarinos r6 P1 #3: alt tabel, același ref_id)
+    const alese = cuRef.filter((x: any) => bune.has(Number(x.ref_id)))
+    const exemple = alese.slice(0, n)
       .map((x: any) => ({ id: Number(x.id), ref_id: Number(x.ref_id), output_ai: x.output_ai, output_corectat: x.output_corectat }))
-    return { exemple, omise: Math.min(fb.length, CANDIDATI) - fb.filter((x: any) => bune.has(Number(x.ref_id))).length }
+    return { exemple, omise: fb.length - alese.length }
   } catch (_) {
     return gol
   }
