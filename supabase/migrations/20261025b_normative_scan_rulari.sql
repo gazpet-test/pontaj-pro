@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════════
--- 20261025a — normative-scan-lunar v10: scan în bucăți (decizia Răzvan B, 12.10.2026) — r3 după Copilot NO-GO r1/r2
+-- 20261025b — normative-scan-lunar v10: scan în bucăți (decizia Răzvan B, 12.10.2026) — r3 după Copilot NO-GO r1/r2
 -- r3: lease-urile (lot și final) au token de proprietar (uuid); salvarea/eliberarea/confirmarea cer tokenul curent.
 -- Problema: v9 rula toate loturile într-o singură invocare și era omorâtă la limita EdgeRuntime.waitUntil (~400s).
 -- Obiecte NOI (nu atinge date existente):
@@ -19,32 +19,32 @@
 --     aceleași criterii (Copilot P1-2). Altfel nu face niciun apel HTTP.
 --     Secretul x-norm-secret se citește din Vault (norm_scan_secret) la rulare, nu e în textul jobului.
 -- Jobul 39 (normative_scan_lunar, 1 ale lunii 05:00 UTC) NU se schimbă: rămâne punctul de start.
--- Revenire: supabase/revenire/20261025a_normative_scan_rulari_ROLLBACK.sql (șterge jobul, funcțiile, tabelul).
+-- Revenire: supabase/revenire/20261025b_normative_scan_rulari_ROLLBACK.sql (șterge jobul, funcțiile, tabelul).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid); fără BEGIN/COMMIT.
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $pre$
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true)
-       IS DISTINCT FROM '20261025a_normative_scan_rulari:' || txid_current() THEN
-    RAISE EXCEPTION '20261025a: garda start invalida';
+       IS DISTINCT FROM '20261025b_normative_scan_rulari:' || txid_current() THEN
+    RAISE EXCEPTION '20261025b: garda start invalida';
   END IF;
-  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261025a: necesita postgres'; END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261025b: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF to_regclass('public.normative_scan_rulari') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_norm\_scan\_%')
      OR EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'normative_scan_continua') THEN
-    RAISE EXCEPTION '20261025a: obiectele exista deja';
+    RAISE EXCEPTION '20261025b: obiectele exista deja';
   END IF;
   IF to_regclass('public.ofertare_normative') IS NULL
      OR NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ofertare_normative' AND column_name = 'id' AND data_type = 'bigint') THEN
-    RAISE EXCEPTION '20261025a: ofertare_normative.id (bigint) lipseste';
+    RAISE EXCEPTION '20261025b: ofertare_normative.id (bigint) lipseste';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'normative_scan_lunar') THEN
-    RAISE EXCEPTION '20261025a: jobul normative_scan_lunar lipseste';
+    RAISE EXCEPTION '20261025b: jobul normative_scan_lunar lipseste';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM vault.secrets WHERE name = 'norm_scan_secret') THEN
-    RAISE EXCEPTION '20261025a: secretul norm_scan_secret lipseste din Vault';
+    RAISE EXCEPTION '20261025b: secretul norm_scan_secret lipseste din Vault';
   END IF;
 END $pre$;
 
@@ -280,7 +280,7 @@ BEGIN
      OR has_any_column_privilege('service_role', 'public.normative_scan_rulari', 'UPDATE')
      OR has_sequence_privilege('anon', pg_get_serial_sequence('public.normative_scan_rulari', 'id'), 'USAGE')
      OR has_sequence_privilege('authenticated', pg_get_serial_sequence('public.normative_scan_rulari', 'id'), 'USAGE') THEN
-    RAISE EXCEPTION '20261025a: postconditie drepturi tabel';
+    RAISE EXCEPTION '20261025b: postconditie drepturi tabel';
   END IF;
   FOR f IN SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
             WHERE ns.nspname = 'public' AND p.proname LIKE 'fn\_norm\_scan\_%' LOOP
@@ -289,16 +289,16 @@ BEGIN
        OR NOT has_function_privilege('service_role', f, 'EXECUTE')
        OR NOT (SELECT prosecdef FROM pg_proc WHERE oid = f)
        OR NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid = f AND proconfig @> ARRAY['search_path=public, pg_temp']) THEN
-      RAISE EXCEPTION '20261025a: postconditie functie %', f;
+      RAISE EXCEPTION '20261025b: postconditie functie %', f;
     END IF;
   END LOOP;
-  IF n <> 8 THEN RAISE EXCEPTION '20261025a: asteptat 8 functii fn_norm_scan_*, sunt %', n; END IF;
+  IF n <> 8 THEN RAISE EXCEPTION '20261025b: asteptat 8 functii fn_norm_scan_*, sunt %', n; END IF;
   IF (SELECT count(*) FROM cron.job WHERE jobname = 'normative_scan_continua' AND schedule = '*/10 * * * *'
         AND command ILIKE '%decrypted_secrets%' AND command ILIKE '%fn_norm_scan_blocata()%') <> 1 THEN
-    RAISE EXCEPTION '20261025a: postconditie cron';
+    RAISE EXCEPTION '20261025b: postconditie cron';
   END IF;
   IF current_setting('gazpet.livrare_migrare', true)
-       IS DISTINCT FROM '20261025a_normative_scan_rulari:' || txid_current() THEN
-    RAISE EXCEPTION '20261025a: garda final invalida';
+       IS DISTINCT FROM '20261025b_normative_scan_rulari:' || txid_current() THEN
+    RAISE EXCEPTION '20261025b: garda final invalida';
   END IF;
 END $post$;

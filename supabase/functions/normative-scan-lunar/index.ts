@@ -8,7 +8,7 @@
 // iar functia se reapeleaza singura pentru lotul urmator (x-norm-secret). Plasa de siguranta:
 // cronul normative_scan_continua (la 10 min) o reporneste DOAR cat exista o rulare deschisa
 // blocata. Mail + note DOAR dupa ultimul lot.
-// Idempotenta (in baza, prin RPC-uri cu UPDATE conditionat — vezi migrarea 20261025a, r2 dupa Copilot):
+// Idempotenta (in baza, prin RPC-uri cu UPDATE conditionat — vezi migrarea 20261025b, r2 dupa Copilot):
 //  - o singura rulare deschisa per mod (test / real); pornirea dubla o reia pe cea existenta;
 //  - un lot se ia cu „lease” (6 min) + token de proprietar; salvarea/eliberarea cer tokenul curent si lot_curent neschimbat;
 //    esec trecator AI (timeout/429/5xx) → lease eliberat, lotul se reia (max. 3), abia apoi „necunoscut”;

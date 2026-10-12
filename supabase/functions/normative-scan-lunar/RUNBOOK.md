@@ -5,9 +5,9 @@ singură invocare. v10: **o invocare = un lot** (apelul AI tăiat la 240s), prog
 funcția se reapelează singură pentru lotul următor. Mail + note DOAR după ultimul lot.
 
 Ordinea livrării (fiecare pas cu „da” de la Răzvan):
-1. **Migrarea `20261025a_normative_scan_rulari`** prin `scripts/livrare_migrare.sh` (tabel + 4 funcții `fn_norm_scan_*`
+1. **Migrarea `20261025b_normative_scan_rulari`** prin `scripts/livrare_migrare.sh` (tabel + 4 funcții `fn_norm_scan_*`
    doar service_role + jobul `normative_scan_continua` la 10 min). Jobul 39 nu se schimbă.
-   Revenire: `supabase/revenire/20261025a_normative_scan_rulari_ROLLBACK.sql` + redeploy v9.
+   Revenire: `supabase/revenire/20261025b_normative_scan_rulari_ROLLBACK.sql` + redeploy v9.
 2. **Deploy** `normative-scan-lunar` (verify_jwt=false, ca înainte; poarta rămâne `x-norm-secret`).
    Ordinea contează: migrarea ÎNAINTE de deploy (v10 fără tabel = eroare în log, fără mail).
 3. **Test** (mod test: nu scrie în bibliotecă, mail cu [TEST]):
