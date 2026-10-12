@@ -56,7 +56,7 @@ Deno.test('valideazaCerere: doar contract_id întreg pozitiv', () => {
 Deno.test('caleSigura: accept cale relativă normală, refuz traversări și caractere dubioase', () => {
   assert.equal(caleSigura('contracte/2026/c-12.pdf'), 'contracte/2026/c-12.pdf')
   assert.equal(caleSigura('c-12.pdf'), 'c-12.pdf')
-  for (const rau of [null, undefined, 5, '', '/abs/c.pdf', '../c.pdf', 'a/../b.pdf', 'a//b.pdf', './c.pdf', 'a\\b.pdf', 'a\nb.pdf', 'x'.repeat(501), 'a/']) {
+  for (const rau of [null, undefined, 5, '', '/abs/c.pdf', '../c.pdf', 'a/../b.pdf', 'a//b.pdf', './c.pdf', 'a\\b.pdf', 'a\nb.pdf', 'x'.repeat(501), 'a/', '%2e%2e/c.pdf', 'a/%2E%2e/b.pdf', 'a%2fb.pdf', 'a%5Cb.pdf']) {
     assert.equal(caleSigura(rau), null, JSON.stringify(rau))
   }
 })

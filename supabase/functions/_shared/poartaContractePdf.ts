@@ -36,6 +36,7 @@ export function caleSigura(cale: unknown): string | null {
   if (typeof cale !== 'string') return null
   if (cale.length === 0 || cale.length > 500) return null
   if (cale.startsWith('/') || cale.includes('\\') || /[\u0000-\u001f]/.test(cale)) return null
+  if (/%2e|%2f|%5c/i.test(cale)) return null // hardening: puncte, slash sau backslash codificate procentual
   if (cale.split('/').some((p) => p === '..' || p === '.' || p === '')) return null
   return cale
 }
