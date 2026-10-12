@@ -12,6 +12,14 @@
 // extragere (tip 'formular', prompt propriu). (4) documentele 'partial' se acceptă.
 // v5: mod {doc_id} pe caiete/clarificări. v4: CORS. v3: ancore regex. Model: OPUS.
 // Insert cu confirmata_de NULL — poarta E2 = Razvan în UI.
+// v11 (12.10.2026, MVP loturi 20261024b): (1) poarta pe document — documentEligibil() ÎNAINTE de orice apel AI, în
+// ambele moduri (corpus = documentul cerut, fișă = fișa aleasă; fișa NU are excepție în cod); neeligibil = răspuns
+// de business {ok:false, blocat_lot:true}, fără throw, zero cost. (2) lotul din numele documentului = parseLot pe
+// fragmentele „lot N” (vechiul /LOT\s*(\d)/ dădea „Lot 12” → 1). (3) pe lângă `lot` (text, neschimbat pentru UI) se scriu
+// lot_brut (valoarea brută a modelului), lot_domeniu/lot_nr (parseLot pe ea) și lot_sursa ('model' / 'nume_fisier').
+
+import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'
+import { coloaneLot, lotDinNumeFisier, parseLot, type Lot } from '../_shared/lot.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // v9: modelul se poate cere din body. Implicit Opus (cum a fost dintotdeauna); Sonnet costa
@@ -179,26 +187,34 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
     let srcDocId: number
     let numeDoc = ''
     let lotDoc = ''
+    let lotNume: Lot = { domeniu: 'necunoscut', loturi: [] }
     let tipDoc = ''
+    // Poarta pe loturi: neeligibil = pas sărit (workerul NAS îl trece la jurnal ca `skip`, fără reîncercări), nimic plătit.
+    const blocat = (docId: number, motiv: string): Rezultat =>
+      ({ ok: false, blocat_lot: true, motiv, mesaj: mesajLot(motiv), skip: mesajLot(motiv), doc_id: docId, cerinte: 0, continua: false })
 
     if (modCorpus) {
       const { data: doc } = await supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, tip, text_extras, status_procesare, pagini_necitite').eq('id', Number(doc_id)).eq('licitatie_id', licId).single()
       if (!doc) return fail('document negasit')
       if (!['cs_volum', 'raspuns_clarificare', 'clarificare', 'alta', 'formular'].includes(doc.tip)) return fail('doc_id acceptă caiete de sarcini / clarificări / alta / formulare')
+      const el = await documentEligibil(supabase, Number(doc.id))
+      if (!el.eligibil) return blocat(doc.id, el.motiv)
       const t = (doc.text_extras || '')
       if (t.length < 300) return { ok: true, doc_id: doc.id, cerinte: 0, skip: 'text prea scurt', continua: false }
       text = t
       srcDocId = doc.id
       numeDoc = doc.nume_original || `doc ${doc.id}`
       tipDoc = doc.tip
-      const mLot = numeDoc.match(/LOT\s*(\d)/i)
-      lotDoc = mLot ? mLot[1] : ''
+      lotNume = lotDinNumeFisier(numeDoc)
+      lotDoc = lotNume.domeniu === 'lista' ? lotNume.loturi.join(',') : ''
     } else {
       const { data: fise } = await supabase.from('ofertare_documente_atribuire')
         .select('id, nume_original, text_extras').eq('licitatie_id', licId).eq('tip', 'fisa_date').in('status_procesare', ['procesat', 'partial'])
       const fisa = (fise || []).find((f: any) => (f.text_extras || '').length > 500)
       if (!fisa) return fail('Nicio fișă de date procesată — rulează întâi ingestia (🤖 Procesează) pe documentul tip „fișa de date”.')
+      const el = await documentEligibil(supabase, Number(fisa.id))
+      if (!el.eligibil) return blocat(fisa.id, el.motiv)
       const tot = fisa.text_extras as string
       srcDocId = fisa.id
 
@@ -290,6 +306,7 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
     // La exact 150 nu putem demonstra că modelul a epuizat toate cerințele.
     trunchiat = trunchiat || lista.length >= 150
     let verificate = 0
+    let lotConflictNume = 0   // modelul dă o listă diferită de cea din numele documentului (câștigă modelul; se numără)
     const pasaje_partiale: { index: number; pagina: number | null }[] = []
     const rows = lista
       .filter((c: any) => c && typeof c.text_cerinta === 'string' && c.text_cerinta.trim())
@@ -302,6 +319,15 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
         // pagina: din pasajul găsit (sigur); altfel a modelului, doar dacă e în intervalul bucății
         const pagModel = Number.isInteger(c.pagina) ? Number(c.pagina) : null
         const pagOk = pagModel !== null && pagini.de_la !== null && pagini.pana_la !== null && pagModel >= pagini.de_la && pagModel <= pagini.pana_la
+        // Lotul canonic: modelul decide când spune ceva interpretabil; necunoscut + lot în numele documentului → numele.
+        // Necunoscut rămâne necunoscut în coloanele noi (NU „toate”); coloana veche `lot` păstrează „toate” ca fallback
+        // de compatibilitate pentru UI — nu e o afirmație că cerința e comună.
+        const lotBrut = c.lot == null ? null : String(c.lot).trim() || null
+        const lotModel = parseLot(lotBrut)
+        if (lotModel.domeniu === 'lista' && lotNume.domeniu === 'lista' && lotModel.loturi.join(',') !== lotNume.loturi.join(',')) lotConflictNume++
+        const colLot = lotModel.domeniu === 'necunoscut' && lotNume.domeniu === 'lista'
+          ? coloaneLot(lotNume, 'nume_fisier', lotBrut)
+          : coloaneLot(lotModel, 'model', lotBrut)
         return {
           licitatie_id: licId,
           sursa_document_id: srcDocId,
@@ -312,6 +338,7 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
           text_cerinta: c.text_cerinta.trim().slice(0, 2000),
           tip: TIPURI.includes(c.tip) ? c.tip : 'propunere',
           lot: (typeof c.lot === 'string' && c.lot.trim()) ? c.lot.trim().slice(0, 30) : (lotDoc || 'toate'),
+          ...colLot,
           document_probant: (typeof c.document_probant === 'string' && c.document_probant.trim() && c.document_probant !== 'null') ? c.document_probant.trim().slice(0, 300) : null,
           cand_se_prezinta: CAND.includes(c.cand_se_prezinta) ? c.cand_se_prezinta : null,
           extras_de_ai: true,
@@ -325,7 +352,8 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
     const continua = nrBucata + 1 < toate.length
     return {
       ok: true, sectiune: modCorpus ? undefined : sectiune, doc_id: modCorpus ? srcDocId : undefined,
-      cerinte: rows.length, pasaje_verificate: verificate, pasaje_partiale, bucata: nrBucata + 1, bucati: toate.length, pagini,
+      cerinte: rows.length, pasaje_verificate: verificate, pasaje_partiale,
+      lot_necunoscut: rows.filter((r) => r.lot_domeniu === 'necunoscut').length, lot_conflict_nume: lotConflictNume, bucata: nrBucata + 1, bucati: toate.length, pagini,
       continua, bucata_urmatoare: continua ? nrBucata + 1 : null,
       trunchiat, model: MODEL, tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cost_usd: Number(((data.usage?.input_tokens || 0) * PRICE_IN + (data.usage?.output_tokens || 0) * PRICE_OUT).toFixed(4)),
