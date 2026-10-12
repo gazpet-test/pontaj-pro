@@ -138,3 +138,8 @@ ei (aplicare automată pe loturi cu proveniență completă) = decizie separată
 
 Ordinea de livrare: GO Copilot conv. 3 pe SQL → Jakarinos pe tot diff-ul → „da” Răzvan → apply prin `scripts/livrare_migrare.sh`
 → merge → deploy edge-urile atinse (select-urile cer coloana: deploy DOAR după apply) → `verifica-edge-functions`.
+
+Reviewuri: Jakarinos r1 NO-GO (4 P1: operație fără sursă, financiarul citit separat de text, arhivare înainte de lock la revenire,
+dus-întors fără restaurare) → reparate; r2 GO CU AJUSTĂRI (P2: restaurarea atomică) → reparat. După o revenire, re-livrarea e
+refuzată cât timp arhiva are surse nerestaurate; restaurarea = O SINGURĂ tranzacție (marcaj `restaurat_la` + re-livrare + surse din
+arhivă + verificare egalitate per cerință), cu preview și „da” Răzvan — modelul e în harness (`restaureaza`).

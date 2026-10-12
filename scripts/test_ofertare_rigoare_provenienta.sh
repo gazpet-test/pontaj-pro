@@ -277,12 +277,21 @@ asteapta "revenire: drepturile funcțiilor păstrate" \
   "$(q "SELECT has_function_privilege('authenticated','public.$SIG_APLICA','EXECUTE')::text||has_function_privilege('service_role','public.$SIG_APLICA','EXECUTE')::text||has_function_privilege('service_role','public.$SIG_PLANSE','EXECUTE')::text")" falsetruetrue
 o="$(livreaza || true)"; grep -q "nerestaurate" <<<"$o" || esec "re-livrare peste o arhivă nerestaurată: $o"
 asteapta "dus-întors: re-livrarea refuză cât timp sursele arhivate nu sunt restaurate (Jakarinos r1 P1 #4)" "$(md5f "$SIG_APLICA")" "$V_APLICA"
-# restaurarea controlată (în producție: preview + „da”): marchează arhiva, re-livrează, pune sursele înapoi
-q "UPDATE public.ofertare_rigoare_arhiva_revenire SET continut = continut || jsonb_build_object('restaurat_la', now())" >/dev/null
-livreaza >/dev/null || { livreaza; esec "dus-întors"; }; ok "dus-întors: re-livrare după restaurarea marcată"
-q "UPDATE public.ofertare_cerinte c SET surse_document_ids = ARRAY(SELECT jsonb_array_elements_text(e->'surse_document_ids')::bigint)
-     FROM public.ofertare_rigoare_arhiva_revenire a, jsonb_array_elements(a.continut->'cerinte') e WHERE c.id = (e->>'id')::bigint" >/dev/null
-asteapta "dus-întors: sursele restaurate = arhiva, cerință cu cerință" \
-  "$(q "SELECT (SELECT jsonb_agg(jsonb_build_object('id', id, 'surse_document_ids', surse_document_ids) ORDER BY id) FROM public.ofertare_cerinte WHERE surse_document_ids IS NOT NULL) = (SELECT jsonb_agg(e ORDER BY (e->>'id')::bigint) FROM public.ofertare_rigoare_arhiva_revenire a, jsonb_array_elements(a.continut->'cerinte') e)")" t
+# restaurarea controlată (în producție: preview + „da”) = O SINGURĂ tranzacție (Jakarinos r2 P2): marcajul arhivei, re-livrarea,
+# punerea surselor înapoi și verificarea egalității cerință cu cerință — orice eșec anulează tot (arhiva rămâne nemarcată)
+RESTAUREAZA="UPDATE public.ofertare_cerinte c SET surse_document_ids = ARRAY(SELECT jsonb_array_elements_text(e->'surse_document_ids')::bigint)
+     FROM public.ofertare_rigoare_arhiva_revenire a, jsonb_array_elements(a.continut->'cerinte') e WHERE c.id = (e->>'id')::bigint;"
+VERIFICA="DO \$v\$ BEGIN IF (SELECT jsonb_agg(jsonb_build_object('id', id, 'surse_document_ids', surse_document_ids) ORDER BY id) FROM public.ofertare_cerinte WHERE surse_document_ids IS NOT NULL)
+  IS DISTINCT FROM (SELECT jsonb_agg(e ORDER BY (e->>'id')::bigint) FROM public.ofertare_rigoare_arhiva_revenire a, jsonb_array_elements(a.continut->'cerinte') e)
+  THEN RAISE EXCEPTION 'restaurare: sursele diferă de arhivă'; END IF; END \$v\$;"
+restaureaza() { "${PSQL[@]}" -d "$BAZA" --single-transaction \
+  -c "UPDATE public.ofertare_rigoare_arhiva_revenire SET continut = continut || jsonb_build_object('restaurat_la', now());" \
+  -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" -c "$1" -c "$VERIFICA" 2>&1; }
+o="$(restaureaza "SELECT 1/0;" || true)"; grep -q "division by zero" <<<"$o" || esec "restaurare cu eșec: $o"
+asteapta "restaurare cu eșec înainte de surse: tranzacția anulată integral (arhivă nemarcată, coloană absentă, corpuri vechi)" \
+  "$(q "SELECT count(*) FROM public.ofertare_rigoare_arhiva_revenire WHERE continut ? 'restaurat_la'")/$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='ofertare_cerinte' AND column_name='surse_document_ids'")/$(md5f "$SIG_APLICA")" "0/0/$V_APLICA"
+restaureaza "$RESTAUREAZA" >/dev/null || { restaureaza "$RESTAUREAZA"; esec "restaurare"; }
+asteapta "dus-întors: restaurare atomică — arhivă marcată, sursele = arhiva cerință cu cerință (verificat în tranzacție)" \
+  "$(q "SELECT count(*) FROM public.ofertare_rigoare_arhiva_revenire WHERE NOT (continut ? 'restaurat_la')")/$(q "SELECT count(*) FROM public.ofertare_cerinte WHERE surse_document_ids IS NOT NULL")" "0/$((N_SURSE + 1))"
 asteapta "dus-întors: corpurile noi + control 0e" "$(trei)/$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" "$N_APLICA/$N_PLANSE/$N_VALID/0"
 echo PASS
