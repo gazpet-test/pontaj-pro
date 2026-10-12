@@ -173,6 +173,33 @@ o="$(q "UPDATE public.ofertare_cantitati SET lot_domeniu=NULL, lot_nr='{1}' WHER
 refuz "loturi: scoaterea loturilor 2/3 referite de cerințe (Copilot r1)" authenticated "$OWNER" \
   "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '[{\"nr\":1},{\"nr\":4}]')" "referite de"
 
+# ── concurență (Copilot r2): scoaterea unui lot vs. scrierea lot_nr canonic, în două tranzacții paralele ─────────
+# ca_bg: aceeași identitate ca `ca`, dar ține tranzacția deschisă N secunde după instrucțiune (rulează în fundal).
+ca_bg() {
+  local claims="{\"sub\":\"$2\",\"role\":\"$1\"}"
+  "${PSQL[@]}" -d "$BAZA" -At -c "SET SESSION AUTHORIZATION authenticator;" -c "BEGIN;" -c "SET LOCAL ROLE $1;" \
+    -c "SELECT set_config('request.jwt.claims', '$claims', true);" -c "$3" -c "SELECT pg_sleep($4);" -c "COMMIT;" >/tmp/loturi_bg.out 2>&1
+}
+asteapta "concurență: lic. 4 are loturile 1,2" "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(4, 'are_loturi', '[{\"nr\":1},{\"nr\":2}]')->>'loturi'")" 2
+# (1) setter-ul ia lock-ul primul și scoate lotul 2; scrierea {2} trebuie să aștepte și apoi să vadă lotul dispărut
+ca_bg authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(4, 'are_loturi', '[{\"nr\":1}]')" 3 & BG=$!
+sleep 1; T0=$(date +%s%N)
+q "UPDATE public.ofertare_cerinte SET lot_domeniu='lista', lot_nr='{2}', lot_sursa='model' WHERE id=3" >/dev/null
+T1=$(date +%s%N); wait $BG || { cat /tmp/loturi_bg.out; esec "setter în fundal"; }
+[ $(( (T1 - T0) / 1000000 )) -ge 1000 ] || esec "concurență (1): scrierea canonică NU a așteptat lock-ul setter-ului ($(( (T1 - T0) / 1000000 )) ms)"
+asteapta "concurență (1): setter întâi → scrierea așteaptă și vede lotul scos (necunoscut)" \
+  "$(q "SELECT lot_domeniu||'|'||coalesce(lot_nr::text,'-')||'|'||lot_sursa FROM public.ofertare_cerinte WHERE id=3")" "necunoscut|-|invalidat_lot_inexistent"
+asteapta "concurență: lic. 4 reface loturile 1,2" "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(4, 'are_loturi', '[{\"nr\":1},{\"nr\":2}]')->>'loturi'")" 2
+# (2) scrierea {2} ia lock-ul prima; setter-ul trebuie să aștepte și apoi să refuze (lot referit)
+"${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_cerinte SET lot_domeniu='lista', lot_nr='{2}', lot_sursa='model' WHERE id=3;" \
+  -c "SELECT pg_sleep(3);" -c "COMMIT;" >/tmp/loturi_bg2.out 2>&1 & BG=$!
+sleep 1
+o="$(CA_LINII=50 ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(4, 'are_loturi', '[{\"nr\":1}]')" || true)"
+wait $BG || { cat /tmp/loturi_bg2.out; esec "scrierea în fundal"; }
+grep -q "referite de" <<<"$o" || esec "concurență (2): setter-ul trebuia refuzat după commit-ul scrierii, primit: $o"; ok "concurență (2): scrierea întâi → setter-ul așteaptă și refuză (lot referit)"
+asteapta "concurență (2): lotul 2 există, cerința îl referă" \
+  "$(q "SELECT (SELECT count(*) FROM public.ofertare_licitatie_loturi WHERE licitatie_id=4 AND nr=2)||'|'||lot_nr::text FROM public.ofertare_cerinte WHERE id=3")" "1|{2}"
+
 # ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -d "$BAZA" -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată: $o"; ok "refuz: revenire nearmată"
 q "ALTER DATABASE $BAZA SET gazpet.revenire_20261024b = 'x'" >/dev/null
@@ -180,7 +207,7 @@ o="$(revenire || true)"; grep -q "armare persistenta interzisa" <<<"$o" || esec 
 q "ALTER DATABASE $BAZA RESET gazpet.revenire_20261024b" >/dev/null
 revenire >/dev/null || { revenire; esec "revenire armată"; }
 asteapta "revenire: obiecte + coloane scoase" "$(q "SELECT (to_regclass('public.ofertare_licitatie_loturi') IS NULL)::text || (to_regprocedure('public.fn_ofertare_eligibilitate(bigint,bigint)') IS NULL)::text || (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND (column_name LIKE 'lot\_%' OR column_name LIKE 'stare_loturi%'))")" truetrue0
-asteapta "revenire: arhiva păstrează trierea" "$(q "SELECT jsonb_array_length(continut->'loturi')||'/'||jsonb_array_length(continut->'documente')||'/'||jsonb_array_length(continut->'document_loturi')||'/'||jsonb_array_length(continut->'jurnal')||'/'||jsonb_array_length(continut->'cerinte_lot') FROM public.ofertare_loturi_arhiva_revenire")" "4/3/1/9/2"
+asteapta "revenire: arhiva păstrează trierea" "$(q "SELECT jsonb_array_length(continut->'loturi')||'/'||jsonb_array_length(continut->'documente')||'/'||jsonb_array_length(continut->'document_loturi')||'/'||jsonb_array_length(continut->'jurnal')||'/'||jsonb_array_length(continut->'cerinte_lot') FROM public.ofertare_loturi_arhiva_revenire")" "6/3/1/12/3"
 asteapta "revenire: arhiva fără drepturi API" "$(q "SELECT has_table_privilege('authenticated','public.ofertare_loturi_arhiva_revenire','SELECT')::text||has_table_privilege('service_role','public.ofertare_loturi_arhiva_revenire','SELECT')::text")" falsefalse
 asteapta "revenire: trigger a00 de pe licitații rămas" "$(q "SELECT count(*) FROM pg_trigger WHERE tgrelid='public.ofertare_licitatii'::regclass AND NOT tgisinternal")" 1
 livreaza >/dev/null || { livreaza; esec "dus-întors"; }; ok "dus-întors: re-livrare după revenire"

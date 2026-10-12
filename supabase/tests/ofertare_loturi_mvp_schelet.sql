@@ -149,7 +149,8 @@ INSERT INTO public.user_module_access(profile_id, module, access_level) VALUES
   ('00000000-0000-4000-8000-000000000008', 'ofertare', 'admin');
 INSERT INTO public.ofertare_licitatii(id, nr_anunt, responsabil_id) VALUES
   (102, 'CN1096645', '00000000-0000-4000-8000-000000000043'),
-  (3, 'X3', NULL);
+  (3, 'X3', NULL),
+  (4, 'X4 concurență', NULL);
 INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original, tip) VALUES
   (532, 102, 'Instructiuni_ofertanti_FisaDate.pdf', 'fisa_date'),
   (1247, 102, 'PT FV rev.8.pdf', 'alta'),
@@ -157,5 +158,5 @@ INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original,
   (528, 102, 'Formular propunere tehnica - LOT 2.docx', 'formular'),
   (1302, 102, 'Vizita amplasament.pdf', 'alta'),
   (31, 3, 'cs.pdf', 'cs_volum');
-INSERT INTO public.ofertare_cerinte VALUES (1, 102, 527, 'toate'), (2, 102, 528, '2');
+INSERT INTO public.ofertare_cerinte VALUES (1, 102, 527, 'toate'), (2, 102, 528, '2'), (3, 4, NULL, 'Lot 2');
 INSERT INTO public.ofertare_cantitati(licitatie_id, denumire) VALUES (102, 'teava PE 110');

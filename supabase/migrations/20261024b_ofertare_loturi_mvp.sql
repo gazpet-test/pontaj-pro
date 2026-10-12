@@ -18,6 +18,8 @@
 --      ofertare_cantitati, validat de trigger față de loturile licitației; fn_ofertare_parse_lot(text) = parsarea canonică
 --      („Lot 12” → {12}, necunoscut ≠ toate). Review Copilot r1 (NO-GO, 12.10) integrat: fără bootstrap, CHECK strict,
 --      coerență lot canonic, valoare nenumerică refuzată, document triat nu se mută între licitații, interval max 50.
+--      Review Copilot r2 (NO-GO, 12.10) integrat: lock FOR KEY SHARE pe licitație în triggerul lotului canonic (cursa
+--      setter vs. scriere lot_nr), regresie cu două tranzacții paralele în harness.
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid), fără BEGIN/COMMIT.
 -- Revenire: supabase/revenire/20261024b_ofertare_loturi_mvp_ROLLBACK.sql (arhivează clasificarea + jurnalul în
 -- ofertare_loturi_arhiva_revenire înainte de drop, deci nimic din triere nu se pierde).
@@ -232,6 +234,11 @@ BEGIN
   IF NEW.lot_domeniu IS DISTINCT FROM 'lista' THEN
     RETURN NEW;
   END IF;
+  -- Serializare cu fn_ofertare_licitatie_loturi_seteaza (review Copilot r2, cursă TOCTOU): setter-ul ia FOR UPDATE pe
+  -- licitație; aici FOR KEY SHARE (intră în conflict cu FOR UPDATE, nu blochează UPDATE-urile obișnuite pe licitație).
+  -- Setter întâi → scrierea așteaptă și vede lotul scos (necunoscut); scrierea întâi → setter-ul așteaptă și refuză.
+  -- Validarea de mai jos e instrucțiune separată, deci în READ COMMITTED vede starea de după lock.
+  PERFORM 1 FROM public.ofertare_licitatii WHERE id = NEW.licitatie_id FOR KEY SHARE;
   SELECT coalesce(cardinality(NEW.lot_nr), 0) > 0
      AND NOT EXISTS (SELECT 1 FROM unnest(NEW.lot_nr) x WHERE x IS NULL OR x < 1
                        OR NOT EXISTS (SELECT 1 FROM public.ofertare_licitatie_loturi l WHERE l.licitatie_id = NEW.licitatie_id AND l.nr = x))

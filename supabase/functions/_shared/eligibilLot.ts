@@ -2,7 +2,7 @@
 // cerințe, cantități, planșe, răspunsuri, generare) întreabă ÎNTÂI baza dacă documentul e eligibil.
 // Logica stă DOAR în SQL (fn_ofertare_eligibilitate); aici e doar apelul + fail-closed:
 // orice eroare / răspuns neașteptat = NEELIGIBIL (nu se cheltuie pe un document netriat).
-// Motive eligibile: bootstrap_fisa_date, fara_loturi, comun, lot_participam.
+// Motive eligibile: fara_loturi, comun, lot_participam. FĂRĂ excepții (nici fișa de date — review Copilot r1).
 // Motive neeligibile: loturi_neinitializate, nicio_participare, de_triat, in_afara_loturilor, stare_invalida,
 // document_inexistent, eroare_poarta (local, când RPC-ul pică).
 
