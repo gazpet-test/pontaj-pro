@@ -78,6 +78,17 @@ export function surseDispozitie(x: any, areLoturi: boolean): number[] | null {
   return x?.doc_id == null ? null : iduri([x.doc_id])
 }
 
+// Sursele unei OPERAȚII (Jakarinos r6 P1 #2): sursele dispoziției ∪ documentul cerinței-țintă (la modifica / anuleaza textul
+// rezultat pornește de la ea). null = dispoziție fără proveniență verificabilă.
+export function surseOperatie(surseDisp: number[] | null, docCerinta: number | null | undefined): number[] | null {
+  if (surseDisp === null) return null
+  return iduri([...surseDisp, ...(docCerinta == null ? [] : [docCerinta])]).sort((x, y) => x - y)
+}
+// RPC-ul de aplicare scrie UN singur sursa_document_id pe cerință: aplicabil (pe are_loturi) doar cu exact o sursă.
+export function provenientaUnica(surse: unknown): boolean {
+  return Array.isArray(surse) && surse.length === 1 && Number.isSafeInteger(Number(surse[0])) && Number(surse[0]) > 0
+}
+
 // Lotul unei operații: al setului, altfel al dispoziției-sursă (audit R03). `lot` (text, citit de RPC-ul de aplicare)
 // devine forma canonică „2” / „1,3” când se poate interpreta; altfel rămâne textul brut, ca înainte.
 export function lotOperatie(lotSet: string | null | undefined, loturiDispozitie: unknown):

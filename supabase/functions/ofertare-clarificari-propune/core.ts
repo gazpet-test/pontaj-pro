@@ -270,10 +270,15 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const eticheta: Record<string, string> = { eliminatorie: '🚫', importanta: '⚠️', utila: 'ℹ️' }
     // proveniența structurată (20261025a): cerințele citate + documentele lor-sursă (doar din registrul eligibil)
     const docCer = new Map<number, number | null>((cerinte || []).map((c: any) => [Number(c.id), c.sursa_document_id == null ? null : Number(c.sursa_document_id)]))
-    const docuriCerinte = (ids: number[]) => { const d = [...new Set(ids.map((id) => docCer.get(id)).filter((x): x is number => x != null))]; return d.length ? d : null }
+    // + TOATE cantitățile trimise în prompt și documentele lor (Jakarinos r6 P1 #4, varianta B conservatoare): modelul poate
+    // compara cifrele fără să le citeze, deci ID-urile citate nu dovedesc proveniența completă
+    const cantPrompt = cantElig.map((q: any) => Number(q.id)).filter((n: number) => Number.isSafeInteger(n) && n > 0)
+    const docCant = [...new Set(cantElig.flatMap((q: any) => Array.isArray(q.surse_document_ids) ? q.surse_document_ids.map(Number) : []))] as number[]
+    const docuriCerinte = (ids: number[]) => { const d = [...new Set([...ids.map((id) => docCer.get(id)).filter((x): x is number => x != null), ...docCant])]; return d.length ? d : null }
     const noi = acceptate.map(a => ({
       licitatie_id: licId, nr: ++nr, intrebare: a.intrebare, status: 'propunere', origine: 'platforma', cheie: a.cheie,
       surse_cerinte_ids: a.cerinte_ids.length ? a.cerinte_ids : null, surse_document_ids: docuriCerinte(a.cerinte_ids),
+      surse_cantitati_ids: cantPrompt.length ? cantPrompt : null,
       // `sursa` = eticheta pentru om (nu mai e cheie de idempotență): prioritate, subiect, cerințe, referință, fragment, risc, motiv
       sursa: `${eticheta[a.prioritate]}${a.sursa_tip === 'modificare' ? ' [SOLICITARE DE MODIFICARE]' : ''}${a.risc_divulgare ? ' [risc divulgare]' : ''} ${a.subiect}${a.cerinte_ids.length ? ` (cerințe #${a.cerinte_ids.join(', #')})` : ''}${a.referinta ? ` · ${a.referinta}` : ''} — „${a.fragment}” — ${a.motiv}`.slice(0, 1200),
     }))

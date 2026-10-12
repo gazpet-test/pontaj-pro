@@ -72,6 +72,9 @@ export async function filtreazaClarificari<T extends ClarSurse>(db: Db, randuri:
       const c = lista(q.surse_cerinte_ids), k = lista(q.surse_cantitati_ids), d = lista(q.surse_document_ids)
       if (c === null || k === null || d === null) { excluse.push({ ...q, motiv: 'surse_invalide' }); continue }
       if (p.stare === 'are_loturi' && !c.length && !k.length && !d.length) { excluse.push({ ...q, motiv: 'fara_provenienta' }); continue }
+      // clarificarea AUTOMATĂ din planșe pe are_loturi: sursele ei derivate nu urmăresc textul păstrat (Jakarinos r6 P1 #6,
+      // varianta B Răzvan) — exclusă până la PR-ul de rigoare completă (surse salvate odată cu textul în RPC)
+      if (p.stare === 'are_loturi' && q.origine === 'automat') { excluse.push({ ...q, motiv: 'automat_pe_loturi' }); continue }
       const harta = harti.get(Number(q.licitatie_id))
       if (d.length && (!harta || !d.every((x) => esteEligibil(harta, x)))) { excluse.push({ ...q, motiv: 'document_blocat' }); continue }
       if (!c.every((x) => cerOk.has(x))) { excluse.push({ ...q, motiv: 'cerinta_exclusa' }); continue }

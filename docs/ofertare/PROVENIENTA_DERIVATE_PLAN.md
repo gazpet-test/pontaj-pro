@@ -96,3 +96,22 @@ Cod:
 
 Ordinea față de 102: PR-ul ăsta înainte de trierea AI propusă pe 102 și înainte de orice extragere de cerințe/cantități
 pe loturi.
+
+## Stare 12.10.2026 seara — varianta B (Răzvan) pe Jakarinos r6 #2/#4
+
+Livrat în #677 (migrare 20261025a GO Copilot r4 pe 964865f, harness CI 155 PASS):
+- r5 P1 #1-#4 + Copilot r1-r3 + Jakarinos r6 locale (#1 #3 #5 #6 P2).
+- Jak r6 #2 (cerințe create din seturi de răspunsuri): pe are_loturi, operația cu mai multe surse (coadă A→B sau cerința-țintă
+  din alt document) ori fără dispoziție-sursă unică NU mai e aplicabilă — merge în `propunere.operatii_provenienta`, de tratat
+  de om ca cerință manuală. Operațiile vechi fără `surse_doc_ids` pe are_loturi la fel.
+- Jak r6 #4 (clarificări din cantități): clarificarea generată poartă TOATE cantitățile trimise în prompt
+  (`surse_cantitati_ids`) și documentele lor.
+- Clarificarea automată din planșe pe are_loturi = exclusă din prompturi (`automat_pe_loturi`).
+
+## BLOCANT — PR de rigoare completă, OBLIGATORIU înainte de prima generare pe 102
+
+1. Surse multiple pe cerință: `ofertare_cerinte.surse_document_ids` + `fn_ofertare_raspuns_set_aplica` scrie toate sursele
+   operației (inclusiv sursele cerinței precedente la modifica); filtreazaDerivate le verifică deja.
+2. Clarificarea automată din planșe: sursele salvate odată cu textul în `ofertare_clarificare_planse_auto` (nu derivate din
+   `sursa` / `baza_generare`), inclusiv documentele financiare citate.
+3. Proveniența întregului context de prompt pentru derivatele generate (snapshot), dacă review-ul o cere.

@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none supabase/functions/ofertare-raspuns-set/loturi_test.ts
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet, surseCoada, surseDispozitie, surseNoi } from './loturi.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const ids = (r: any) => (r.ok ? r.eligibile.map((c: any) => c.id) : r)
 
@@ -72,4 +72,12 @@ Deno.test('surseCoada r6 (Jakarinos r6 P1 #1): forma veche coada_doc_id pe are_l
   eq(surseCoada({ coada_doc_id: 7 }, false), [7])
   eq(surseCoada({ coada_doc_ids: [7, 8] }, true), [7, 8])
   eq(surseCoada({ coada_doc_ids: [7, 'x'] }, false), [])
+})
+Deno.test('operația (Jakarinos r6 P1 #2, varianta B): aplicabilă pe are_loturi doar cu O singură sursă', () => {
+  eq(surseOperatie([11], null), [11])                 // noua / cerință manuală: sursa dispoziției
+  eq(surseOperatie([11], 11), [11])                   // cerința-țintă din același document
+  eq(surseOperatie([11], 10), [10, 11])               // țintă din alt document → două surse
+  eq(surseOperatie([10, 11], null), [10, 11])         // coadă lipită A→B
+  eq(surseOperatie(null, 11), null)                   // dispoziție fără proveniență
+  eq([provenientaUnica([11]), provenientaUnica([10, 11]), provenientaUnica(null), provenientaUnica(undefined), provenientaUnica(['x'])], [true, false, false, false, false])
 })

@@ -21,7 +21,7 @@ import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
 import { eligibilaPeLot, parseLot } from '../_shared/lot.ts'
-import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet, surseCoada, surseDispozitie, surseNoi } from './loturi.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -459,7 +459,13 @@ Deno.serve(async (req: Request) => {
       : 'raspuns AI neinterpretabil', taiat, brut: txt.slice(0, 600), cost_usd: cost })
 
     const idsEligibile = new Set(eligibile.map((c: any) => c.id))
+    const docCerinta = new Map<number, number | null>(eligibile.map((c: any) => [Number(c.id), c.sursa_document_id == null ? null : Number(c.sursa_document_id)]))
     const opNoi: any[] = []
+    // Proveniența operației (Jakarinos r6 P1 #2, varianta B Răzvan 12.10): RPC-ul de aplicare scrie UN singur sursa_document_id
+    // pe cerința rezultată. Pe are_loturi, o operație cu mai multe surse (coadă lipită A→B, sau cerința-țintă din alt document
+    // decât dispoziția) ori fără dispoziție-sursă unică NU intră în `operatii` aplicabile: merge în operatii_provenienta (de
+    // tratat de om, ca cerință manuală). Rigoarea completă (surse multiple pe cerință + RPC) = PR ulterior, înainte de generare.
+    const opProvenienta: any[] = []
     // Ce arunca codul se NUMARA si se raporteaza. Un `continue` tacut arata pe ecran exact ca un
     // raspuns curat — e aceeasi capcana ca plafonul de 15 din functia veche, unde 8 modificari
     // dispareau fara ca cineva sa afle.
@@ -479,7 +485,8 @@ Deno.serve(async (req: Request) => {
       if (fel !== 'anuleaza' && !textOp) { arunca('operatie fara text'); continue }
       const lotOp = lotOperatieEf(sursa?.loturi)
       const peLotNeclar = cid !== null && lotNecunoscut.has(cid)
-      opNoi.push({
+      const surseOp = surseOperatie(sursa ? (surseD.get(sursa.disp_id) ?? null) : null, cid != null ? docCerinta.get(cid) : null)
+      const op = {
         // op_id il face SERVERUL, nu modelul: hash din set + dispozitia-sursa + fel + tinta.
         op_id: await hash12(`${setId}|${sursa?.disp_id || o.disp_nr}|${fel}|${cid ?? norm(o.citat)}`),
         fel, cerinta_id: cid,
@@ -506,9 +513,21 @@ Deno.serve(async (req: Request) => {
         necesita_revizuire: o.necesita_revizuire === true || !sursa || peLotNeclar,
         lot_de_verificat: peLotNeclar || undefined,
         disp_id: sursa?.disp_id || null,
-      })
+        surse_doc_ids: surseOp || undefined,
+      }
+      if (part.stare === 'are_loturi' && !provenientaUnica(surseOp)) {
+        opProvenienta.push({ ...op, motiv_provenienta: !sursa ? 'fara_dispozitie_sursa' : 'surse_multiple' })
+        continue
+      }
+      opNoi.push(op)
     }
-    const opVechi: any[] = prop.operatii || []
+    // operațiile deja propuse înainte de proveniență (fără surse_doc_ids) pe are_loturi = scoase din cele aplicabile, la fel
+    const opVechiToate: any[] = prop.operatii || []
+    const opVechi = part.stare === 'are_loturi' ? opVechiToate.filter((o: any) => provenientaUnica(o.surse_doc_ids)) : opVechiToate
+    const opVechiScoase = opVechiToate.filter((o: any) => !opVechi.includes(o)).map((o: any) => ({ ...o, motiv_provenienta: 'operatie_veche_fara_provenienta' }))
+    const provVechi: any[] = prop.operatii_provenienta || []
+    const provStiute = new Set(provVechi.map((x: any) => x.op_id))
+    const operatiiProvenienta = [...provVechi, ...[...opVechiScoase, ...opProvenienta].filter((o) => !provStiute.has(o.op_id))]
     const stiute = new Set(opVechi.map((x: any) => x.op_id))
     const adaugate = opNoi.filter(o => !stiute.has(o.op_id))
     const operatii = [...opVechi, ...adaugate]
@@ -541,6 +560,7 @@ Deno.serve(async (req: Request) => {
     // „complet" peste o gaura. Acum se numara exact CARE disp_id a primit un verdict si care nu.
     const cuRezultat = new Set<string>(([
       ...operatii.map((o: any) => o.disp_id),
+      ...operatiiProvenienta.map((o: any) => o.disp_id),
       ...neclareToate.map((n: any) => n.disp_id),
     ].filter(Boolean)) as string[])
     const faraRezultat = toate
@@ -548,6 +568,7 @@ Deno.serve(async (req: Request) => {
       .map((x: any) => ({ disp_id: x.disp_id, nr: x.nr, doc_nume: x.doc_nume, rezumat: x.rezumat }))
 
     const propNou = { ...prop, operatii, amprente, dispozitii_comparate: comparate,
+      operatii_provenienta: operatiiProvenienta.length ? operatiiProvenienta : undefined,
       neclare: neclareToate,
       // Se persista, ca sa se vada in ecran, nu doar in raspunsul HTTP al rundei.
       aruncate: { ...(prop.aruncate || {}), ...Object.fromEntries(
@@ -561,7 +582,7 @@ Deno.serve(async (req: Request) => {
       // dispozitii fara verdict sau cu propuneri respinse nu inseamna „nu schimba nimic",
       // inseamna „nu stim inca". Altfel starea din baza minte la fel ca ecranul.
       // Audit R02: și punctele NECLARE țin concluzia deschisă — „neclar" nu e „nu schimbă nimic".
-      stare: (operatii.length || raman || faraRezultat.length || neclareToate.length
+      stare: (operatii.length || operatiiProvenienta.length || raman || faraRezultat.length || neclareToate.length
         // R02 (Copilot 28.09): și dispozițiile cu efect asupra CANTITĂȚILOR (sau neclare din inventar) țin concluzia deschisă
         || toate.some((x: any) => x.tip === 'efect_cantitati' || x.tip === 'neclar')
         || Object.keys(propNou.aruncate || {}).length) ? 'analizat' : 'fara_efect',
@@ -577,6 +598,8 @@ Deno.serve(async (req: Request) => {
         anuleaza: operatii.filter(o => o.fel === 'anuleaza').length,
         noua: operatii.filter(o => o.fel === 'noua').length },
       necesita_revizuire: operatii.filter(o => o.necesita_revizuire).length,
+      // operațiile cu proveniență multi-document / fără sursă unică (are_loturi): NU sunt aplicabile, de tratat de om
+      operatii_provenienta: operatiiProvenienta.length || undefined, operatii_provenienta_noi: opProvenienta.length || undefined,
       aruncate: Object.keys(aruncate).length ? aruncate : undefined,
       // Nu „soldul e zero", ci „18 din 20 de dispozitii au primit verdict" — un contor trebuie sa
       // masoare exact promisiunea pe care omul o citeste in el, si fiecare restanta sa fie deschizabila.

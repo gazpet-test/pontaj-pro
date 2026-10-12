@@ -292,17 +292,20 @@ Deno.test('proveniență r5: clarificare GENERATĂ fără surse pe are_loturi = 
     { id: 3, nr: 3, licitatie_id: 95, intrebare: 'GEN_DIN_LOT_2', status: 'propunere', origine: 'platforma', surse_cerinte_ids: [2], surse_document_ids: [10] },
     { id: 4, nr: 4, licitatie_id: 95, intrebare: 'GEN_DOC_BLOCAT', status: 'propunere', origine: 'automat', surse_document_ids: [11] },
     { id: 5, nr: 5, licitatie_id: 95, intrebare: 'MANUALA_FARA_PDF', status: 'propunere', origine: 'manual' },
+    { id: 6, nr: 6, licitatie_id: 95, intrebare: 'AUTO_CU_SURSE', status: 'propunere', origine: 'automat', surse_document_ids: [10] },
   ] }, { motive: { 11: 'de_triat' } })
   const m = JSON.parse(corpuri[0]).messages[0].content as string
   const ex = m.slice(m.indexOf('CLARIFICĂRI DEJA EXISTENTE'), m.indexOf('RĂSPUNSURI PRIMITE LA ALTE'))
   assert(ex.includes('GEN_CU_SURSA_OK') && ex.includes('MANUALA_FARA_PDF'), ex)
-  for (const x of ['GEN_FARA_SURSE', 'GEN_DIN_LOT_2', 'GEN_DOC_BLOCAT']) assertFalse(m.includes(x), x + ' nu trebuia să ajungă în prompt')
+  // AUTO_CU_SURSE: clarificarea automată pe are_loturi = exclusă (varianta B Răzvan)
+  for (const x of ['GEN_FARA_SURSE', 'GEN_DIN_LOT_2', 'GEN_DOC_BLOCAT', 'AUTO_CU_SURSE']) assertFalse(m.includes(x), x + ' nu trebuia să ajungă în prompt')
 })
 
 Deno.test('proveniență r5: propunerea nouă se scrie cu surse_cerinte_ids + surse_document_ids', async () => {
   const baza = supaFals({ ofertare_licitatii: [{ id: 95, stare_loturi: 'fara_loturi' }],
-    ofertare_documente_atribuire: [{ id: 10, nume_original: 'CS.pdf' }],
-    ofertare_cerinte: [{ id: 1, text_cerinta: 'Cerință verificabilă', sursa_document_id: 10 }, { id: 2, text_cerinta: 'Alta', sursa_document_id: null }] })
+    ofertare_documente_atribuire: [{ id: 10, nume_original: 'CS.pdf' }, { id: 20, nume_original: 'PL1.pdf' }],
+    ofertare_cerinte: [{ id: 1, text_cerinta: 'Cerință verificabilă', sursa_document_id: 10 }, { id: 2, text_cerinta: 'Alta', sursa_document_id: null }],
+    ofertare_cantitati: [{ ...R1751, id: 7, surse_document_ids: [20] }] })
   const scrise: any[] = []
   const supa = { rpc: baza.rpc, from(t: string) {
     const b = baza.from(t)
@@ -317,6 +320,6 @@ Deno.test('proveniență r5: propunerea nouă se scrie cu surse_cerinte_ids + su
   }) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 }))) as typeof fetch
   try {
     await propuneClarificari(supa, { licitatie_id: 95 })
-    assertEquals([scrise[0].surse_cerinte_ids, scrise[0].surse_document_ids], [[1, 2], [10]])
+    assertEquals([scrise[0].surse_cerinte_ids, scrise[0].surse_document_ids, scrise[0].surse_cantitati_ids], [[1, 2], [10, 20], [7]])
   } finally { globalThis.fetch = vechi }
 })
