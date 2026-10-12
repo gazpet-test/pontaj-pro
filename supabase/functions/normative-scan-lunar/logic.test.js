@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ultimulScan, inventarLot, extrageJSON, clasifica, leagaLot, grupeaza, egalConstant,
   nrLoturi, idsLot, ordoneazaDupaIds, faraRand, lotSarit, urmatorulPas, areNotaScan, linieNota, costAprox, construiesteMail,
+  esteTranzitoriu,
 } from './logic.js';
 
 const lot = [
@@ -115,6 +116,10 @@ describe('v10 — scan in bucati', () => {
   });
   it('linieNota: forma incompleta are alt marcaj', () => {
     expect(linieNota({ verdict: 'forma_incompleta', detalii: 'gol' }, '2026-11-01')).toMatch(/^ℹ SCAN 2026-11-01: forma cunoscută incompletă/);
+  });
+  it('esteTranzitoriu: 429/5xx/529 se reincearca, 400/401 nu', () => {
+    for (const s of [408, 409, 429, 500, 503, 529]) expect(esteTranzitoriu(s)).toBe(true);
+    for (const s of [200, 400, 401, 403, 404, 413]) expect(esteTranzitoriu(s)).toBe(false);
   });
   it('costAprox', () => {
     expect(costAprox(1e6, 1e5, 10)).toBeCloseTo(5 + 2.5 + 0.1);

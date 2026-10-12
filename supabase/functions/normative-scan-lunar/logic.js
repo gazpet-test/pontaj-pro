@@ -112,6 +112,12 @@ export function lotSarit(lot, motiv) {
   return faraRand(leagaLot([], lot, null).map((v) => ({ ...v, detalii: motiv })));
 }
 
+// Eșec trecător al API-ului AI (se reîncearcă lotul, nu se salvează „necunoscut”): 408/409/429/5xx/529.
+// Orice alt 4xx (cerere greșită, cheie invalidă) nu se repară prin reîncercare.
+export function esteTranzitoriu(status) {
+  return status === 408 || status === 409 || status === 429 || (status >= 500 && status <= 599);
+}
+
 // Ce face o invocare cu rularea: 'lot' (mai sunt loturi), 'final' (toate loturile gata,
 // mailul inca netrimis) sau 'nimic'.
 export function urmatorulPas(r) {
