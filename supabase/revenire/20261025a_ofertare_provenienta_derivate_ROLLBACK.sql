@@ -43,6 +43,8 @@ BEGIN
     'cantitati', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', id, 'surse_document_ids', surse_document_ids) ORDER BY id), '[]'::jsonb)
                     FROM public.ofertare_cantitati WHERE surse_document_ids IS NOT NULL));
 
+  DROP TRIGGER a03_ofertare_raspuns_set_garda_loturi ON public.ofertare_raspuns_set;
+  DROP FUNCTION public.fn_ofertare_raspuns_set_garda_loturi();
   DROP TRIGGER a02_ofertare_clarificari_surse ON public.ofertare_clarificari;
   DROP TRIGGER a02_ofertare_cantitati_surse ON public.ofertare_cantitati;
   DROP FUNCTION public.fn_ofertare_surse_valideaza();

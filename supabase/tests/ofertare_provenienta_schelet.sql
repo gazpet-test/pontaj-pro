@@ -22,6 +22,9 @@ CREATE TABLE public.ofertare_clarificari(
 ALTER TABLE public.ofertare_clarificari ENABLE ROW LEVEL SECURITY;
 CREATE POLICY clar_acces ON public.ofertare_clarificari FOR ALL TO authenticated
   USING (public.fn_are_acces_ofertare()) WITH CHECK (public.fn_are_acces_ofertare());
+-- seturile de răspunsuri (redus la ce atinge garda de loturi din 20261025a)
+CREATE TABLE public.ofertare_raspuns_set(id bigserial PRIMARY KEY, licitatie_id bigint NOT NULL, stare text NOT NULL DEFAULT 'analizat',
+  aplicat_la timestamptz, updated_at timestamptz DEFAULT now());
 -- cerințele: RLS fără nicio politică pentru authenticated — validarea (SECURITY DEFINER) trebuie să le vadă oricum
 ALTER TABLE public.ofertare_cerinte ENABLE ROW LEVEL SECURITY;
 

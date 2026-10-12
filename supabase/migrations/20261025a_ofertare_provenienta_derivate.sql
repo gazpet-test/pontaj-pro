@@ -7,7 +7,11 @@
 --   2. ofertare_cantitati: surse_document_ids (bigint[]) — documentele din care vine cantitatea, cantitatea din planșă și
 --      diferența (azi: doar textul `sursa`).
 --   3. Validare la scriere (trigger, inclusiv service_role): fiecare ID există și e din ACEEAȘI licitație cu rândul; fără
---      NULL în listă, maxim 500; lista se normalizează (sortată, fără duplicate), lista goală devine NULL.
+--      NULL în listă, maxim 20000; lista se normalizează (sortată, fără duplicate), lista goală devine NULL; sursele le scrie
+--      doar serverul; originea clarificării e imuabilă pentru utilizator; sursele clarificării automate se derivă.
+--   4. ofertare_transfer_plansa_cantitati notează planșa în surse (gardă md5 + atribute pe corpul live).
+--   5. Aplicarea automată din seturile de răspunsuri e refuzată în SQL pe licitațiile care nu sunt fara_loturi (trigger pe
+--      ofertare_raspuns_set.aplicat_la, sub blocarea licitației) — varianta B Răzvan, până la PR-ul de rigoare.
 -- Cum se folosesc (codul din același PR): un derivat intră într-un prompt plătit doar dacă TOATE sursele lui sunt eligibile
 -- acum (fn_ofertare_document_eligibil); pe licitațiile are_loturi, derivatul generat automat fără surse = exclus
 -- (fara_provenienta). Pe fara_loturi nu se schimbă nimic. Impact live 12.10: pe are_loturi 0 clarificări de platformă,
@@ -46,6 +50,11 @@ BEGIN
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
     RAISE EXCEPTION 'Precondiție 20261025a: ofertare_transfer_plansa_cantitati diferă de versiunea citită (corp md5 c00ba556… sau atribute/ACL)';
+  END IF;
+  IF to_regclass('public.ofertare_raspuns_set') IS NULL OR NOT EXISTS (SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'ofertare_raspuns_set' AND column_name = 'aplicat_la')
+     OR to_regprocedure('public.fn_ofertare_raspuns_set_garda_loturi()') IS NOT NULL THEN
+    RAISE EXCEPTION 'Precondiție 20261025a: ofertare_raspuns_set.aplicat_la lipsește sau garda de loturi există deja';
   END IF;
   IF to_regprocedure('public.fn_ofertare_surse_valideaza()') IS NOT NULL THEN
     RAISE EXCEPTION 'Precondiție 20261025a: fn_ofertare_surse_valideaza există deja';
@@ -245,6 +254,35 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'adaugate', v_adaugate, 'actualizate', v_actualizate, 'sarite_existente', v_sarite);
 END; $function$;
 
+-- ── 5. aplicarea seturilor de răspunsuri pe licitațiile cu loturi: blocată în SQL (Jakarinos r13 P1) ─────────────────
+-- Decizia Răzvan (12.10, varianta B): pe are_loturi schimbările din seturile de răspunsuri se aplică manual până la PR-ul de
+-- rigoare. Edge-ul refuză deja, dar între verificarea lui și RPC licitația poate trece pe are_loturi. Orice aplicare a
+-- fn_ofertare_raspuns_set_aplica se încheie cu UPDATE … SET aplicat_la = now() pe set: triggerul de aici blochează licitația
+-- (FOR SHARE — se serializează cu setter-ul de loturi, care o ia FOR UPDATE) și refuză pe are_loturi, iar eroarea anulează
+-- TOATĂ tranzacția RPC-ului (nicio cerință scrisă). Fără rescrierea RPC-ului de 12k.
+CREATE FUNCTION public.fn_ofertare_raspuns_set_garda_loturi()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  v_stare text;
+BEGIN
+  SELECT l.stare_loturi INTO v_stare FROM public.ofertare_licitatii l WHERE l.id = NEW.licitatie_id FOR SHARE;
+  IF v_stare IS DISTINCT FROM 'fara_loturi' THEN
+    RAISE EXCEPTION 'Pe o licitație cu loturi (sau neinițializată: %), schimbările din seturile de răspunsuri se aplică manual — aplicarea automată e blocată', coalesce(v_stare, 'necunoscută')
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+REVOKE ALL ON FUNCTION public.fn_ofertare_raspuns_set_garda_loturi() FROM PUBLIC, anon, authenticated, service_role;
+CREATE TRIGGER a03_ofertare_raspuns_set_garda_loturi
+  BEFORE UPDATE OF aplicat_la ON public.ofertare_raspuns_set
+  FOR EACH ROW WHEN (NEW.aplicat_la IS DISTINCT FROM OLD.aplicat_la AND NEW.aplicat_la IS NOT NULL)
+  EXECUTE FUNCTION public.fn_ofertare_raspuns_set_garda_loturi();
+
 -- ── postcondiții + garda de livrare (final) ─────────────────────────────────────────────────────────────
 DO $post$
 BEGIN
@@ -263,6 +301,11 @@ BEGIN
   END IF;
   IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('a02_ofertare_clarificari_surse', 'a02_ofertare_cantitati_surse')) <> 2 THEN
     RAISE EXCEPTION 'Postcondiție 20261025a: triggerele de validare lipsesc';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgname = 'a03_ofertare_raspuns_set_garda_loturi'
+                   AND tgrelid = 'public.ofertare_raspuns_set'::regclass)
+     OR has_function_privilege('authenticated', 'public.fn_ofertare_raspuns_set_garda_loturi()', 'EXECUTE') THEN
+    RAISE EXCEPTION 'Postcondiție 20261025a: garda de loturi pe seturile de răspunsuri lipsește sau e expusă';
   END IF;
   IF has_function_privilege('authenticated', 'public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)', 'EXECUTE')

@@ -153,6 +153,28 @@ IDM=$(q "INSERT INTO public.ofertare_cantitati(licitatie_id, denumire, extras_de
 q "UPDATE public.ofertare_documente_atribuire SET analiza='{\"citire_ai\":{\"transfer\":{\"rulare\":\"r2\",\"stare\":\"in_curs\"}}}' WHERE id = 1247" >/dev/null
 ca service_role - "SELECT public.ofertare_transfer_plansa_cantitati(1247, 'r2', '[{\"op\":\"update\",\"id\":$IDM,\"patch\":{\"cantitate_plansa\":40,\"diferenta_nota\":\"din planșă\"}}]')" >/dev/null
 asteapta "transfer pe rând MANUAL fără surse → {planșa} (componenta automată urmăribilă, Jakarinos r7 P1 #2)" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=$IDM")" "{1247}"
+# ── seturile de răspunsuri: aplicarea automată blocată în SQL pe licitațiile cu loturi (Jakarinos r13 P1) ─────────────
+L='[{"nr":1},{"nr":2,"participam":true},{"nr":3,"participam":true},{"nr":4}]'
+asteapta "loturi: 102 are_loturi, 3 fara_loturi (setter 20261024b)" \
+  "$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(102, 'are_loturi', '$L')->>'ok'")/$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(3, 'fara_loturi')->>'stare'")" "true/fara_loturi"
+q "INSERT INTO public.ofertare_raspuns_set(id, licitatie_id) VALUES (1, 3), (2, 102), (3, 4)" >/dev/null
+asteapta "set pe fara_loturi: aplicarea (aplicat_la) trece" "$(ca service_role - "UPDATE public.ofertare_raspuns_set SET stare='aplicat', aplicat_la=now() WHERE id=1 RETURNING stare")" aplicat
+refuz "set pe are_loturi: aplicarea refuzată în SQL" service_role - "UPDATE public.ofertare_raspuns_set SET stare='aplicat', aplicat_la=now() WHERE id=2" "aplicarea automată e blocată"
+refuz "set pe licitație neinițializată: refuzată" service_role - "UPDATE public.ofertare_raspuns_set SET aplicat_la=now() WHERE id=3" "aplicarea automată e blocată"
+asteapta "set pe are_loturi: alte coloane se scriu (garda doar pe aplicat_la)" "$(ca service_role - "UPDATE public.ofertare_raspuns_set SET stare='analizat' WHERE id=2 RETURNING stare")" analizat
+o="$(q "SELECT public.fn_ofertare_raspuns_set_garda_loturi()" 2>&1 || true)"; grep -q "trigger" <<<"$o" || esec "apel direct al gărzii: $o"; ok "refuz: garda nu se poate chema direct"
+# concurență: setter-ul trece licitația 3 pe are_loturi și ține tranzacția; aplicarea așteaptă lock-ul și vede are_loturi
+q "INSERT INTO public.ofertare_raspuns_set(id, licitatie_id) VALUES (4, 3)" >/dev/null
+claims="{\"sub\":\"$OWNER\",\"role\":\"authenticated\"}"
+"${PSQL[@]}" -d "$BAZA" -At -c "SET SESSION AUTHORIZATION authenticator;" -c "BEGIN;" -c "SET LOCAL ROLE authenticated;" \
+  -c "SELECT set_config('request.jwt.claims', '$claims', true);" -c "SELECT public.fn_ofertare_licitatie_loturi_seteaza(3, 'are_loturi', '[{\"nr\":1,\"participam\":true}]');" \
+  -c "SELECT pg_sleep(3);" -c "COMMIT;" >/tmp/prov_bg.out 2>&1 & BG=$!
+sleep 1; T0=$(date +%s%N)
+o="$(CA_LINII=50 ca service_role - "UPDATE public.ofertare_raspuns_set SET aplicat_la=now() WHERE id=4" || true)"
+T1=$(date +%s%N); wait $BG || { cat /tmp/prov_bg.out; esec "setter în fundal"; }
+[ $(( (T1 - T0) / 1000000 )) -ge 1000 ] || esec "concurență: aplicarea NU a așteptat lock-ul setter-ului ($(( (T1 - T0) / 1000000 )) ms)"
+grep -q "aplicarea automată e blocată" <<<"$o" || esec "concurență: aplicarea trebuia refuzată după trecerea pe are_loturi, primit: $o"
+ok "concurență: setter-ul întâi → aplicarea așteaptă și e refuzată (are_loturi)"
 # ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -v ON_ERROR_STOP=0 -d "$BAZA" -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată fără ON_ERROR_STOP: $o"
 asteapta "revenire nearmată, fără ON_ERROR_STOP / fără tranzacție: RPC neatins (Copilot r1 P1 #3)" "$(md5rpc)" "$MD5_RPC_NOU"
@@ -167,6 +189,7 @@ q "ALTER DATABASE $BAZA SET gazpet.revenire_20261025a = 'x'" >/dev/null
 o="$(revenire || true)"; grep -q "armare persistenta interzisa" <<<"$o" || esec "armare persistentă: $o"; ok "refuz: armare persistentă"
 q "ALTER DATABASE $BAZA RESET gazpet.revenire_20261025a" >/dev/null
 revenire >/dev/null || { revenire; esec "revenire armată"; }
+asteapta "revenire: garda seturilor scoasă" "$(q "SELECT (to_regprocedure('public.fn_ofertare_raspuns_set_garda_loturi()') IS NULL)::text||(SELECT count(*) FROM pg_trigger WHERE tgname='a03_ofertare_raspuns_set_garda_loturi')")" true0
 asteapta "revenire: coloane + funcție + triggere scoase" \
   "$(q "SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name LIKE 'surse\_%')||'|'||(to_regprocedure('public.fn_ofertare_surse_valideaza()') IS NULL)::text||'|'||(SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'a02_ofertare_%_surse')")" "0|true|0"
 asteapta "revenire: RPC-ul de transfer = corpul de dinainte (md5)" "$(md5rpc)" "$MD5_RPC"
