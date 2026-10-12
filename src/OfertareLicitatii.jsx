@@ -1745,7 +1745,12 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                 {opProv.map(o => (
                   <div key={o.op_id} style={{ fontSize:12, color:G.text, marginTop:3 }}>
                     · <b>{o.fel}</b>{o.cerinta_id ? ` cerința #${o.cerinta_id}` : ''}: {String(o.text_nou || o.text_cerinta || o.sursa_pasaj || '').slice(0, 220)}
-                    <span style={{ color:G.dim }}> — {o.motiv_provenienta === 'surse_multiple' ? `documente ${(o.surse_doc_ids || []).join(', ')}` : o.motiv_provenienta === 'fara_dispozitie_sursa' ? 'fără dispoziție-sursă unică' : o.motiv_provenienta === 'provenienta_incompleta' ? 'proveniență incompletă (text moștenit dintr-un fragment vechi)' : o.motiv_provenienta === 'domeniu_partial' ? 'schimbarea e doar pentru o parte din loturile cerinței — se tratează separat pe lot' : 'propusă înainte de verificarea provenienței'}</span>
+                    <span style={{ color:G.dim }}> — {o.motiv_provenienta === 'surse_multiple' ? `documente ${(o.surse_doc_ids || []).join(', ')}` : o.motiv_provenienta === 'fara_dispozitie_sursa' ? 'fără dispoziție-sursă unică' : o.motiv_provenienta === 'provenienta_incompleta' ? 'proveniență incompletă (text moștenit dintr-un fragment vechi)' : o.motiv_provenienta === 'domeniu_partial' ? 'schimbarea e doar pentru o parte din loturile cerinței — se tratează separat pe lot' : ({
+                      operatie_veche_fara_provenienta: 'propusă înainte de verificarea provenienței', fara_provenienta_unica: 'fără sursă unică verificată',
+                      tinta_lipsa: 'cerința-țintă nu mai e eligibilă', tinta_sursa_schimbata: 'cerința-țintă provine acum din alt document',
+                      tinta_schimbata: 'cerința-țintă s-a schimbat de la analiză', domeniu_document: 'loturile schimbării depășesc loturile documentului',
+                      domeniu_document_necunoscut: 'documentul-sursă nu e triat', lot_in_afara_participarii: 'lot la care nu mai participăm',
+                    }[o.motiv_provenienta] || o.motiv_provenienta || 'de verificat')}</span>
                   </div>
                 ))}
               </div>

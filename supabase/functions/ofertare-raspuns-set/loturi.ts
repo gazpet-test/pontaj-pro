@@ -6,6 +6,7 @@
 //   - cerința „necunoscut” NU e eligibilă automat: intră în registru MARCATĂ, iar orice operație pe ea iese cu
 //     necesita_revizuire=true (UI-ul nu o bifează la „Selectează toate”) și e raportată în răspuns.
 import { eligibilaPeLot, lotRand, parseLot } from '../_shared/lot.ts'
+export { lotRand }
 
 export type RandLot = { id: number; lot?: string | null; lot_domeniu?: string | null; lot_nr?: unknown }
 
@@ -105,6 +106,45 @@ export function domeniuAcoperit(lotOp: { domeniu: string; loturi: number[] }, lo
   const tinta = lotTinta.domeniu === 'toate' ? participam : lotTinta.loturi
   const op = lotOp.domeniu === 'toate' ? participam : lotOp.loturi
   return tinta.length > 0 && tinta.every((n) => op.includes(n))
+}
+// Domeniul documentului-sursă (Jakarinos r11 P1 #1): document alocat pe loturi → lista lui; comun → null (fără restricție);
+// altă stare → [] (nimic). Operația generală dintr-un document alocat pe lotul 2 e doar pe lotul 2, nu pe toată participarea.
+export function restrangeLaDocument(lotOpLoturi: number[], domDoc: number[] | null): number[] {
+  return domDoc === null ? lotOpLoturi : lotOpLoturi.filter((n) => domDoc.includes(n))
+}
+
+// Reverificarea UNEI operații existente (compara pe toate ramurile + aplica) — Jakarinos r10/r11. null = aplicabilă, altfel motivul.
+//  - proveniență completă și exact o sursă;
+//  - ținta (modifica/anuleaza): există, sursa ei actuală e în proveniența operației, amprenta nu s-a schimbat de la analiză;
+//  - pe are_loturi: lotul operației ⊆ domeniul documentului-sursă, iar operația acoperă tot domeniul țintei.
+export type CtxOperatii = {
+  peLoturi: boolean; participam: number[]
+  cerinte: Map<number, any>                      // ținte, citite acum
+  domDoc: Map<number, number[] | null>          // domeniul documentelor-sursă, citit acum
+  amprenteOperatie?: Record<string, string>     // amprentele cu care a fost generată operația (dacă se pot compara)
+  amprenteAcum?: Record<string, string>
+}
+export function motivOperatie(o: any, ctx: CtxOperatii): string | null {
+  if (o?.surse_complete !== true || !provenientaUnica(o?.surse_doc_ids)) return 'fara_provenienta_unica'
+  const doc = Number(o.surse_doc_ids[0])
+  if (o.cerinta_id != null) {
+    const t = ctx.cerinte.get(Number(o.cerinta_id))
+    if (!t) return 'tinta_lipsa'
+    if (t.sursa_document_id != null && Number(t.sursa_document_id) !== doc) return 'tinta_sursa_schimbata'
+    const k = String(o.cerinta_id)
+    if (ctx.amprenteOperatie && ctx.amprenteAcum && ctx.amprenteOperatie[k] !== undefined
+        && ctx.amprenteOperatie[k] !== ctx.amprenteAcum[k]) return 'tinta_schimbata'
+  }
+  if (ctx.peLoturi) {
+    if (!ctx.domDoc.has(doc)) return 'domeniu_document_necunoscut'
+    const l = lotRand(o)
+    if (l.domeniu !== 'lista' || !l.loturi.length) return 'lot_' + l.domeniu
+    const dd = ctx.domDoc.get(doc) as number[] | null
+    if (dd !== null && !l.loturi.every((n) => dd.includes(n))) return 'domeniu_document'
+    if (!l.loturi.every((n) => ctx.participam.includes(n))) return 'lot_in_afara_participarii'
+    if (o.cerinta_id != null && !domeniuAcoperit(l, lotRand(ctx.cerinte.get(Number(o.cerinta_id))), ctx.participam)) return 'domeniu_partial'
+  }
+  return null
 }
 // RPC-ul de aplicare scrie UN singur sursa_document_id pe cerință: aplicabil (pe are_loturi) doar cu exact o sursă.
 export function provenientaUnica(surse: unknown): boolean {

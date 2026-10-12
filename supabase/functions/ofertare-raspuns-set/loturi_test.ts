@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none supabase/functions/ofertare-raspuns-set/loturi_test.ts
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { coadaIncompleta, domeniuAcoperit, filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaCompleta, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
+import { coadaIncompleta, domeniuAcoperit, filtreazaRegistru, motivOperatie, restrangeLaDocument, lotOperatie, lotOperatieSelectie, provenientaCompleta, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const ids = (r: any) => (r.ok ? r.eligibile.map((c: any) => c.id) : r)
 
@@ -104,4 +104,22 @@ Deno.test('domeniuAcoperit (Jakarinos r10 P1): operația pe lotul 2 nu atinge o 
   eq(domeniuAcoperit(L('lista', [2]), L('lista', [1, 2]), [1, 2]), false)
   eq(domeniuAcoperit(L('lista', [2]), L('necunoscut'), [1, 2]), false)
   eq(domeniuAcoperit(L('lista', [2, 3]), L('lista', [3]), [2, 3]), true)
+})
+Deno.test('motivOperatie (Jakarinos r11): o singură regulă pentru compara și aplica', () => {
+  const ctx = (o: any = {}) => ({ peLoturi: true, participam: [1, 2], cerinte: new Map<number, any>([[7, { id: 7, sursa_document_id: 11, lot_domeniu: 'lista', lot_nr: [2] }],
+    [8, { id: 8, sursa_document_id: 11, lot_domeniu: 'toate', lot_nr: null }]]), domDoc: new Map<number, number[] | null>([[11, [2]], [12, null]]), ...o })
+  const op = (o: any = {}) => ({ fel: 'modifica', cerinta_id: 7, surse_complete: true, surse_doc_ids: [11], document_id: 11, lot_domeniu: 'lista', lot_nr: [2], ...o })
+  eq(motivOperatie(op(), ctx()), null)
+  eq(motivOperatie(op({ surse_complete: false }), ctx()), 'fara_provenienta_unica')
+  eq(motivOperatie(op({ cerinta_id: 99 }), ctx()), 'tinta_lipsa')
+  eq(motivOperatie(op({ surse_doc_ids: [12], document_id: 12 }), ctx()), 'tinta_sursa_schimbata')       // r11 P1 #2
+  eq(motivOperatie(op(), ctx({ amprenteOperatie: { '7': 'a' }, amprenteAcum: { '7': 'b' } })), 'tinta_schimbata')
+  eq(motivOperatie(op({ fel: 'noua', cerinta_id: null, lot_nr: [1, 2] }), ctx()), 'domeniu_document')   // doc alocat {2} (r11 P1 #1)
+  eq(motivOperatie(op({ cerinta_id: 8 }), ctx()), 'domeniu_partial')                                  // țintă comună, op pe 2
+  eq(motivOperatie(op({ fel: 'noua', cerinta_id: null, lot_nr: [2] }), ctx({ participam: [1] })), 'lot_in_afara_participarii')
+  eq(motivOperatie(op({ fel: 'noua', cerinta_id: null, surse_doc_ids: [13], document_id: 13 }), ctx()), 'domeniu_document_necunoscut')
+  eq(motivOperatie(op({ cerinta_id: 8, lot_nr: [1, 2] }), ctx({ cerinte: new Map([[8, { id: 8, sursa_document_id: 12, lot_domeniu: 'toate' }]]) })), 'tinta_sursa_schimbata')
+  eq(motivOperatie(op(), ctx({ peLoturi: false })), null)
+  eq(restrangeLaDocument([1, 2], [2]), [2])
+  eq(restrangeLaDocument([1, 2], null), [1, 2])
 })
