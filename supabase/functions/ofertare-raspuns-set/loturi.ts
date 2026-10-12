@@ -96,6 +96,16 @@ export function provenientaCompleta(x: any): boolean {
 export function coadaIncompleta(prop: any): boolean {
   return prop?.coada_incompleta === true || (!!prop?.coada_deschisa && !Array.isArray(prop?.coada_doc_ids))
 }
+// Domeniul operației trebuie să acopere TOT domeniul cerinței-țintă (Jakarinos r10 P1): RPC-ul modifică / anulează cerința
+// întreagă (îi păstrează lotul) — o dispoziție pe lotul 2 aplicată unei cerințe comune („toate” = toată participarea) ar schimba
+// și lotul 1. Ținta „toate” se citește ca toată participarea; necunoscut = neacoperit. Acoperire parțială = la om.
+export function domeniuAcoperit(lotOp: { domeniu: string; loturi: number[] }, lotTinta: { domeniu: string; loturi: number[] },
+  participam: number[]): boolean {
+  if (lotTinta.domeniu === 'necunoscut' || lotOp.domeniu === 'necunoscut') return false
+  const tinta = lotTinta.domeniu === 'toate' ? participam : lotTinta.loturi
+  const op = lotOp.domeniu === 'toate' ? participam : lotOp.loturi
+  return tinta.length > 0 && tinta.every((n) => op.includes(n))
+}
 // RPC-ul de aplicare scrie UN singur sursa_document_id pe cerință: aplicabil (pe are_loturi) doar cu exact o sursă.
 export function provenientaUnica(surse: unknown): boolean {
   return Array.isArray(surse) && surse.length === 1 && Number.isSafeInteger(Number(surse[0])) && Number(surse[0]) > 0

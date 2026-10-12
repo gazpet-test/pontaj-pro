@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none supabase/functions/ofertare-raspuns-set/loturi_test.ts
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { coadaIncompleta, filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaCompleta, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
+import { coadaIncompleta, domeniuAcoperit, filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaCompleta, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const ids = (r: any) => (r.ok ? r.eligibile.map((c: any) => c.id) : r)
 
@@ -95,4 +95,13 @@ Deno.test('proveniență incompletă (Jakarinos r8 P1 #1): fallback-ul de pe far
 Deno.test('surseCoada r9 (Jakarinos r9 P1 #1): coada marcată incompletă nu intră la AI pe are_loturi', () => {
   eq(surseCoada({ coada_doc_ids: [11], coada_incompleta: true }, true), [])
   eq(surseCoada({ coada_doc_ids: [11], coada_incompleta: true }, false), [11])
+})
+Deno.test('domeniuAcoperit (Jakarinos r10 P1): operația pe lotul 2 nu atinge o cerință comună loturilor 1+2', () => {
+  const L = (domeniu: string, loturi: number[] = []) => ({ domeniu, loturi }) as any
+  eq(domeniuAcoperit(L('lista', [2]), L('toate'), [1, 2]), false)        // comună = toată participarea {1,2}
+  eq(domeniuAcoperit(L('lista', [1, 2]), L('toate'), [1, 2]), true)
+  eq(domeniuAcoperit(L('lista', [2]), L('lista', [2]), [1, 2]), true)
+  eq(domeniuAcoperit(L('lista', [2]), L('lista', [1, 2]), [1, 2]), false)
+  eq(domeniuAcoperit(L('lista', [2]), L('necunoscut'), [1, 2]), false)
+  eq(domeniuAcoperit(L('lista', [2, 3]), L('lista', [3]), [2, 3]), true)
 })

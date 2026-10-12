@@ -1392,10 +1392,16 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
       motiv = prompt('Licitația e DEPUSĂ. Confirmi actualizarea registrului după depunere și îți asumi reverificarea impactului asupra ofertei?\n\nScrie motivul (obligatoriu):')
       if (!motiv || !motiv.trim()) { setWarn('Aplicare anulată — pe o licitație depusă motivul e obligatoriu.'); return }
     }
+    // 20261025a (Jakarinos r10 P2): schimbările izolate pe proveniență nu se aplică automat; după aplicare setul se închide,
+    // deci omul confirmă explicit că le-a tratat manual
+    const nProv = (setRasp.propunere?.operatii_provenienta || []).length
+    if (nProv && !confirm(`Setul are ${nProv} ${nProv === 1 ? 'schimbare care NU se poate aplica automat' : 'schimbări care NU se pot aplica automat'} (proveniență din mai multe documente / parțială pe loturi).\n\nLe-ai tratat manual în registru? După aplicare setul se închide.`)) {
+      setWarn('Aplicare anulată — tratează întâi manual schimbările izolate.'); return
+    }
     setAplBusy(true); setWarn(null)
     try {
       const { data, error } = await supabase.functions.invoke('ofertare-raspuns-set', {
-        body: { actiune: 'aplica', set_id: setRasp.id, op_ids: [...opSel],
+        body: { actiune: 'aplica', set_id: setRasp.id, op_ids: [...opSel], provenienta_tratata: nProv > 0,
           dupa_depunere: dupaDepunere, motiv, idempotency_key: `${setRasp.id}-${[...opSel].sort().join('.')}` },
       })
       if (error || data?.error) { setWarn('Aplicare: ' + (data?.error || error.message)); return }
@@ -1739,7 +1745,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                 {opProv.map(o => (
                   <div key={o.op_id} style={{ fontSize:12, color:G.text, marginTop:3 }}>
                     · <b>{o.fel}</b>{o.cerinta_id ? ` cerința #${o.cerinta_id}` : ''}: {String(o.text_nou || o.text_cerinta || o.sursa_pasaj || '').slice(0, 220)}
-                    <span style={{ color:G.dim }}> — {o.motiv_provenienta === 'surse_multiple' ? `documente ${(o.surse_doc_ids || []).join(', ')}` : o.motiv_provenienta === 'fara_dispozitie_sursa' ? 'fără dispoziție-sursă unică' : o.motiv_provenienta === 'provenienta_incompleta' ? 'proveniență incompletă (text moștenit dintr-un fragment vechi)' : 'propusă înainte de verificarea provenienței'}</span>
+                    <span style={{ color:G.dim }}> — {o.motiv_provenienta === 'surse_multiple' ? `documente ${(o.surse_doc_ids || []).join(', ')}` : o.motiv_provenienta === 'fara_dispozitie_sursa' ? 'fără dispoziție-sursă unică' : o.motiv_provenienta === 'provenienta_incompleta' ? 'proveniență incompletă (text moștenit dintr-un fragment vechi)' : o.motiv_provenienta === 'domeniu_partial' ? 'schimbarea e doar pentru o parte din loturile cerinței — se tratează separat pe lot' : 'propusă înainte de verificarea provenienței'}</span>
                   </div>
                 ))}
               </div>
