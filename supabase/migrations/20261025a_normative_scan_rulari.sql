@@ -1,5 +1,6 @@
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════════
--- 20261025a — normative-scan-lunar v10: scan în bucăți (decizia Răzvan B, 12.10.2026) — r2 după Copilot NO-GO
+-- 20261025a — normative-scan-lunar v10: scan în bucăți (decizia Răzvan B, 12.10.2026) — r3 după Copilot NO-GO r1/r2
+-- r3: lease-urile (lot și final) au token de proprietar (uuid); salvarea/eliberarea/confirmarea cer tokenul curent.
 -- Problema: v9 rula toate loturile într-o singură invocare și era omorâtă la limita EdgeRuntime.waitUntil (~400s).
 -- Obiecte NOI (nu atinge date existente):
 --   * tabelul public.normative_scan_rulari — progresul unei rulări (lot curent, verdicte acumulate, erori, consum,
@@ -59,12 +60,14 @@ CREATE TABLE public.normative_scan_rulari (
   lot_curent       integer NOT NULL DEFAULT 0,
   incercari_lot    integer NOT NULL DEFAULT 0,
   lease_pana       timestamptz,
+  lease_token      uuid,                  -- proprietarul lease-ului de lot (Copilot P2-2)
   verdicte         jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(verdicte) = 'array'),
   erori            jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(erori) = 'array'),
   cautari          integer NOT NULL DEFAULT 0,
   tok_in           bigint NOT NULL DEFAULT 0,
   tok_out          bigint NOT NULL DEFAULT 0,
   final_lease_pana timestamptz,
+  final_token      uuid,                  -- proprietarul lease-ului final (Copilot P2-1)
   final_incercari  integer NOT NULL DEFAULT 0,
   note_la          timestamptz,           -- notele SCRISE (pas terminat)
   note_scrise      integer,
@@ -95,7 +98,7 @@ BEGIN
   IF p_test IS NULL OR p_azi IS NULL OR p_acte IS NULL OR cardinality(p_acte) > 100 OR p_marime IS NULL OR p_nr_loturi IS NULL THEN
     RAISE EXCEPTION 'fn_norm_scan_porneste: argumente invalide';
   END IF;
-  UPDATE public.normative_scan_rulari SET stare = 'abandonat', lease_pana = NULL, final_lease_pana = NULL, actualizat_la = now()
+  UPDATE public.normative_scan_rulari SET stare = 'abandonat', lease_pana = NULL, lease_token = NULL, final_lease_pana = NULL, final_token = NULL, actualizat_la = now()
    WHERE test = p_test AND stare = 'in_curs' AND creat_la < now() - interval '24 hours';
   SELECT to_jsonb(r) || jsonb_build_object('nou', false) INTO v FROM public.normative_scan_rulari r WHERE r.test = p_test AND r.stare = 'in_curs';
   IF v IS NOT NULL THEN RETURN v; END IF;
@@ -118,7 +121,7 @@ DECLARE v jsonb;
 BEGIN
   IF p_lease_sec IS NULL OR p_lease_sec NOT BETWEEN 60 AND 900 THEN RAISE EXCEPTION 'fn_norm_scan_ia_lot: lease invalid'; END IF;
   UPDATE public.normative_scan_rulari r
-     SET lease_pana = now() + make_interval(secs => p_lease_sec), incercari_lot = incercari_lot + 1, actualizat_la = now()
+     SET lease_pana = now() + make_interval(secs => p_lease_sec), lease_token = gen_random_uuid(), incercari_lot = incercari_lot + 1, actualizat_la = now()
    WHERE r.id = p_run AND r.stare = 'in_curs' AND r.lot_curent < r.nr_loturi
      AND (r.lease_pana IS NULL OR r.lease_pana < now())
   RETURNING to_jsonb(r) INTO v;
@@ -126,8 +129,10 @@ BEGIN
 END
 $f$;
 
--- Salvează lotul p_lot și avansează. Reușește O SINGURĂ DATĂ per lot (lot_curent = p_lot). NULL = deja salvat de altcineva.
-CREATE FUNCTION public.fn_norm_scan_salveaza_lot(p_run bigint, p_lot integer, p_verdicte jsonb, p_erori jsonb,
+-- Salvează lotul p_lot și avansează. Reușește O SINGURĂ DATĂ per lot (lot_curent = p_lot) și DOAR pentru proprietarul
+-- lease-ului curent (token). Un lease expirat dar nepreluat de altcineva are încă tokenul valid — salvarea e corectă;
+-- odată preluat de altă invocare, tokenul vechi nu mai trece. NULL = nu ești proprietarul / deja salvat.
+CREATE FUNCTION public.fn_norm_scan_salveaza_lot(p_run bigint, p_lot integer, p_token uuid, p_verdicte jsonb, p_erori jsonb,
                                                  p_cautari integer, p_tok_in bigint, p_tok_out bigint)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
@@ -142,8 +147,9 @@ BEGIN
      SET verdicte = r.verdicte || p_verdicte, erori = r.erori || p_erori,
          cautari = r.cautari + GREATEST(COALESCE(p_cautari, 0), 0),
          tok_in = r.tok_in + GREATEST(COALESCE(p_tok_in, 0), 0), tok_out = r.tok_out + GREATEST(COALESCE(p_tok_out, 0), 0),
-         lot_curent = r.lot_curent + 1, incercari_lot = 0, lease_pana = NULL, actualizat_la = now()
+         lot_curent = r.lot_curent + 1, incercari_lot = 0, lease_pana = NULL, lease_token = NULL, actualizat_la = now()
    WHERE r.id = p_run AND r.stare = 'in_curs' AND r.lot_curent = p_lot AND r.lot_curent < r.nr_loturi
+     AND p_token IS NOT NULL AND r.lease_token = p_token
   RETURNING to_jsonb(r) INTO v;
   RETURN v;
 END
@@ -151,16 +157,16 @@ $f$;
 
 -- Eșec trecător al AI (timeout / 5xx / 429 / rețea): eliberează lease-ul lotului FĂRĂ să avanseze — reîncercare.
 -- Consumul încercării ratate se adună totuși (costul a existat).
-CREATE FUNCTION public.fn_norm_scan_elibereaza_lot(p_run bigint, p_lot integer, p_cautari integer, p_tok_in bigint, p_tok_out bigint)
+CREATE FUNCTION public.fn_norm_scan_elibereaza_lot(p_run bigint, p_lot integer, p_token uuid, p_cautari integer, p_tok_in bigint, p_tok_out bigint)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE v jsonb;
 BEGIN
   UPDATE public.normative_scan_rulari r
-     SET lease_pana = NULL, actualizat_la = now(),
+     SET lease_pana = NULL, lease_token = NULL, actualizat_la = now(),
          cautari = r.cautari + GREATEST(COALESCE(p_cautari, 0), 0),
          tok_in = r.tok_in + GREATEST(COALESCE(p_tok_in, 0), 0), tok_out = r.tok_out + GREATEST(COALESCE(p_tok_out, 0), 0)
-   WHERE r.id = p_run AND r.stare = 'in_curs' AND r.lot_curent = p_lot AND r.lease_pana IS NOT NULL
+   WHERE r.id = p_run AND r.stare = 'in_curs' AND r.lot_curent = p_lot AND p_token IS NOT NULL AND r.lease_token = p_token
   RETURNING to_jsonb(r) INTO v;
   RETURN v;
 END
@@ -174,7 +180,7 @@ DECLARE v jsonb;
 BEGIN
   IF p_lease_sec IS NULL OR p_lease_sec NOT BETWEEN 60 AND 900 THEN RAISE EXCEPTION 'fn_norm_scan_ia_final: lease invalid'; END IF;
   UPDATE public.normative_scan_rulari r
-     SET final_lease_pana = now() + make_interval(secs => p_lease_sec), final_incercari = final_incercari + 1, actualizat_la = now()
+     SET final_lease_pana = now() + make_interval(secs => p_lease_sec), final_token = gen_random_uuid(), final_incercari = final_incercari + 1, actualizat_la = now()
    WHERE r.id = p_run AND r.stare = 'in_curs' AND r.lot_curent = r.nr_loturi AND r.mail_la IS NULL
      AND (r.final_lease_pana IS NULL OR r.final_lease_pana < now())
   RETURNING to_jsonb(r) INTO v;
@@ -182,38 +188,39 @@ BEGIN
 END
 $f$;
 
--- Notele au fost SCRISE (de deținătorul lease-ului final). Doar rularea reală, o singură dată.
-CREATE FUNCTION public.fn_norm_scan_note_gata(p_run bigint, p_note_scrise integer)
+-- Notele au fost SCRISE de PROPRIETARUL lease-ului final (token). Doar rularea reală, o singură dată.
+CREATE FUNCTION public.fn_norm_scan_note_gata(p_run bigint, p_token uuid, p_note_scrise integer)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE v jsonb;
 BEGIN
   UPDATE public.normative_scan_rulari r SET note_la = now(), note_scrise = GREATEST(COALESCE(p_note_scrise, 0), 0), actualizat_la = now()
    WHERE r.id = p_run AND r.stare = 'in_curs' AND NOT r.test AND r.lot_curent = r.nr_loturi AND r.note_la IS NULL
-     AND r.final_lease_pana IS NOT NULL
+     AND p_token IS NOT NULL AND r.final_token = p_token
   RETURNING to_jsonb(r) INTO v;
   RETURN v;
 END
 $f$;
 
--- Rezultatul trimiterii mailului: ok → mail_la + finalizat; eșec → eliberează lease-ul final (reîncercare) sau,
+-- Rezultatul trimiterii mailului, DOAR de la proprietarul lease-ului final (token; o invocare care și-a pierdut lease-ul
+-- nu poate nici confirma, nici elibera lease-ul alteia — Copilot P2-1): ok → mail_la + finalizat; eșec → eliberează lease-ul final (reîncercare) sau,
 -- după p_max încercări, stare mail_esuat (rularea nu stă deschisă la nesfârșit).
-CREATE FUNCTION public.fn_norm_scan_mail_rezultat(p_run bigint, p_ok boolean, p_max integer)
+CREATE FUNCTION public.fn_norm_scan_mail_rezultat(p_run bigint, p_token uuid, p_ok boolean, p_max integer)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE v jsonb;
 BEGIN
-  IF p_ok IS NULL OR p_max IS NULL OR p_max NOT BETWEEN 1 AND 10 THEN RAISE EXCEPTION 'fn_norm_scan_mail_rezultat: argumente invalide'; END IF;
+  IF p_token IS NULL OR p_ok IS NULL OR p_max IS NULL OR p_max NOT BETWEEN 1 AND 10 THEN RAISE EXCEPTION 'fn_norm_scan_mail_rezultat: argumente invalide'; END IF;
   IF p_ok THEN
-    UPDATE public.normative_scan_rulari r SET mail_la = now(), stare = 'finalizat', final_lease_pana = NULL, actualizat_la = now()
+    UPDATE public.normative_scan_rulari r SET mail_la = now(), stare = 'finalizat', final_lease_pana = NULL, final_token = NULL, actualizat_la = now()
      WHERE r.id = p_run AND r.stare = 'in_curs' AND r.lot_curent = r.nr_loturi AND r.mail_la IS NULL
-       AND r.final_lease_pana IS NOT NULL AND (r.test OR r.note_la IS NOT NULL)
+       AND r.final_token = p_token AND (r.test OR r.note_la IS NOT NULL)
     RETURNING to_jsonb(r) INTO v;
   ELSE
     UPDATE public.normative_scan_rulari r
-       SET final_lease_pana = NULL, actualizat_la = now(),
+       SET final_lease_pana = NULL, final_token = NULL, actualizat_la = now(),
            stare = CASE WHEN r.final_incercari >= p_max THEN 'mail_esuat' ELSE r.stare END
-     WHERE r.id = p_run AND r.stare = 'in_curs' AND r.mail_la IS NULL AND r.final_lease_pana IS NOT NULL
+     WHERE r.id = p_run AND r.stare = 'in_curs' AND r.mail_la IS NULL AND r.final_token = p_token
     RETURNING to_jsonb(r) INTO v;
   END IF;
   RETURN v;

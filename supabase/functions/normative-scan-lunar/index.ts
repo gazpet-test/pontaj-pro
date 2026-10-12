@@ -10,9 +10,10 @@
 // blocata. Mail + note DOAR dupa ultimul lot.
 // Idempotenta (in baza, prin RPC-uri cu UPDATE conditionat — vezi migrarea 20261025a, r2 dupa Copilot):
 //  - o singura rulare deschisa per mod (test / real); pornirea dubla o reia pe cea existenta;
-//  - un lot se ia cu „lease” (6 min); salvarea cere lot_curent neschimbat → fara dublu-append;
+//  - un lot se ia cu „lease” (6 min) + token de proprietar; salvarea/eliberarea cer tokenul curent si lot_curent neschimbat;
 //    esec trecator AI (timeout/429/5xx) → lease eliberat, lotul se reia (max. 3), abia apoi „necunoscut”;
-//  - finalul se ia cu lease separat: note scrise (garda SCAN <azi> per rand) → note_la → mail
+//  - finalul se ia cu lease separat + token (o invocare intarziata nu poate confirma/elibera lease-ul alteia):
+//    note scrise (garda SCAN <azi> per rand) → note_la → mail
 //    (Idempotency-Key per rulare la Resend) → mail_la + finalizat; esec mail → reincercare, max. 3.
 //
 // Cereri (toate cu x-norm-secret, POST):
@@ -134,6 +135,7 @@ async function inLant(runId: number) {
 async function finalizeaza(supa: Supa, runId: number) {
   let f = await rpc(supa, 'fn_norm_scan_ia_final', { p_run: runId, p_lease_sec: LEASE_FINAL_SEC });
   if (!f) return; // finalul e in lucru la alta invocare, sau rularea e deja inchisa
+  const token = f.final_token; // proprietarul lease-ului final: confirmarile cer exact acest token
   let mailOk = false;
   try {
     if (!f.test && !f.note_la) {
@@ -158,7 +160,7 @@ async function finalizeaza(supa: Supa, runId: number) {
         if (e2) throw new Error(`nota pe randul ${v.id}: ${e2.message}`); // reluam tot finalul (garda per rand)
         notate++;
       }
-      const n = await rpc(supa, 'fn_norm_scan_note_gata', { p_run: runId, p_note_scrise: notate });
+      const n = await rpc(supa, 'fn_norm_scan_note_gata', { p_run: runId, p_token: token, p_note_scrise: notate });
       if (!n) return; // lease pierdut intre timp: nu trimitem mail din aceasta invocare
       f = n;
     }
@@ -177,7 +179,7 @@ async function finalizeaza(supa: Supa, runId: number) {
   } catch (e) {
     console.error('normative-scan-lunar: final', String((e as Error)?.message || e));
   }
-  const m = await rpc(supa, 'fn_norm_scan_mail_rezultat', { p_run: runId, p_ok: mailOk, p_max: MAX_INCERCARI_MAIL });
+  const m = await rpc(supa, 'fn_norm_scan_mail_rezultat', { p_run: runId, p_token: token, p_ok: mailOk, p_max: MAX_INCERCARI_MAIL });
   if (m?.stare === 'mail_esuat') console.error(`normative-scan-lunar: rularea ${runId} inchisa mail_esuat dupa ${MAX_INCERCARI_MAIL} incercari`);
 }
 
@@ -203,16 +205,16 @@ async function avanseaza(supa: Supa, runId: number) {
   if (rez.tranzitoriu && r.incercari_lot < MAX_INCERCARI_LOT) {
     // Esec trecator: nu salvam „necunoscut”, eliberam lotul si il reluam (lant imediat; plasa daca lantul cade)
     console.error(`normative-scan-lunar: ${nume} incercarea ${r.incercari_lot} esuata, se reia:`, rez.erori.join(' | '));
-    const e = await rpc(supa, 'fn_norm_scan_elibereaza_lot', { p_run: runId, p_lot: k, p_cautari: rez.cautari, p_tok_in: rez.tokIn, p_tok_out: rez.tokOut });
+    const e = await rpc(supa, 'fn_norm_scan_elibereaza_lot', { p_run: runId, p_lot: k, p_token: r.lease_token, p_cautari: rez.cautari, p_tok_in: rez.tokIn, p_tok_out: rez.tokOut });
     if (e) await inLant(runId);
     return;
   }
   if (rez.tranzitoriu) rez.erori = rez.erori.map((x: string) => `${x} (după ${r.incercari_lot} încercări)`);
   const s = await rpc(supa, 'fn_norm_scan_salveaza_lot', {
-    p_run: runId, p_lot: k, p_verdicte: rez.verdicte, p_erori: rez.erori,
+    p_run: runId, p_lot: k, p_token: r.lease_token, p_verdicte: rez.verdicte, p_erori: rez.erori,
     p_cautari: rez.cautari, p_tok_in: rez.tokIn, p_tok_out: rez.tokOut,
   });
-  if (!s) return; // altcineva a salvat deja lotul (lease expirat in timpul apelului) — nu dublam
+  if (!s) return; // lease-ul a fost preluat de alta invocare (token schimbat) sau lotul e deja salvat — nu dublam
   if (urmatorulPas(s) === 'lot') await inLant(runId);
   else if (urmatorulPas(s) === 'final') await finalizeaza(supa, runId);
 }
