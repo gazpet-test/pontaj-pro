@@ -55,11 +55,13 @@ function pdfMinimal(n: number): Uint8Array {
   return new TextEncoder().encode(out)
 }
 
-type Opt = { garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; metaSize?: number; rezultatEsueaza?: boolean; marcajRespins?: boolean; respinge?: boolean; laIncearca?: () => void; aiArunca?: boolean }
+// elig (loturi 20261024b): răspunsul porții unice — implicit eligibil; 'eroare_rpc' = RPC căzut, 'arunca' = excepție
+type Elig = { eligibil: boolean; motiv: string; licitatie_id: number } | 'eroare_rpc' | 'arunca'
+type Opt = { elig?: Elig; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; metaSize?: number; rezultatEsueaza?: boolean; marcajRespins?: boolean; respinge?: boolean; laIncearca?: () => void; aiArunca?: boolean }
 function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
   const toate: string[] = []
   const tabele: Record<string, any[]> = { ofertare_documente_atribuire: [rand], ofertare_ingest_coada: [{ licitatie_id: rand.licitatie_id, cerut_de: 'u-worker' }], ai_usage_log: [] }
-  const g = { incercari: [] as any[], emise: new Set<string>(), rezultate: [] as any[], marcaje: [] as any[], descarcari: 0, scrieriDirecte: [] as any[] }
+  const g = { incercari: [] as any[], emise: new Set<string>(), rezultate: [] as any[], marcaje: [] as any[], descarcari: 0, scrieriDirecte: [] as any[], meta: 0, elig: [] as any[] }
   const from = (t: string) => {
     tabele[t] ||= []
     const filtre: ((r: any) => boolean)[] = []
@@ -84,6 +86,13 @@ function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
   }
   const rpc = (nume: string, a: any) => {
     if (nume === 'ofertare_doc_are_bucati') return Promise.resolve({ data: false, error: null })
+    if (nume === 'fn_ofertare_document_eligibil') {
+      g.elig.push(structuredClone(a))
+      const e = opt.elig ?? { eligibil: true, motiv: 'fara_loturi', licitatie_id: rand.licitatie_id }
+      if (e === 'arunca') return Promise.reject(new Error('rețea'))
+      if (e === 'eroare_rpc') return Promise.resolve({ data: null, error: { message: 'function does not exist' } })
+      return Promise.resolve({ data: e, error: null })
+    }
     if (nume === 'ofertare_ingest_garda_incearca') {
       g.incercari.push(structuredClone(a)); opt.laIncearca?.()
       if (opt.garda === 'eroare') return Promise.resolve({ data: null, error: { message: 'function does not exist' } })
@@ -104,7 +113,7 @@ function mediu(rand: any, fisier: Uint8Array | null, opt: Opt = {}) {
     return Promise.resolve({ data: null, error: { message: 'rpc necunoscut ' + nume } })
   }
   const storage = { from: () => ({
-    list: (_d: string, o: any) => Promise.resolve({ data: [{ name: o.search, metadata: { size: opt.metaSize ?? fisier?.length ?? 0, eTag: '"e1"' } }], error: null }),
+    list: (_d: string, o: any) => (g.meta++, Promise.resolve({ data: [{ name: o.search, metadata: { size: opt.metaSize ?? fisier?.length ?? 0, eTag: '"e1"' } }], error: null })),
     download: () => { g.descarcari++; return Promise.resolve(fisier ? { data: new Blob([fisier as BlobPart]), error: null } : { data: null, error: { message: 'Object not found' } }) },
   }) }
   _deps.createClient = () => ({ from, rpc, storage })
@@ -234,4 +243,70 @@ Deno.test({ ...Z, name: 'J2: marcajul in_lucru respins (lease pierdut) → nu ci
   const ai0 = ai.apeluri
   assertEquals([j.ok, j.garda], [false, 'token_pierdut'])
   assertEquals(m.rand().status_procesare, 'neprocesat'); assertEquals(m.g.scrieriDirecte.length, 0)
+} })
+
+// ── LOTURI (20261024b): poarta unică înaintea oricărui cost ──────────────────────────────────────────────────────────
+const zeroCost = (m: ReturnType<typeof mediu>, ai0: number, et: string) => {
+  assertEquals(ai.apeluri, ai0, et + ': apeluri AI'); assertEquals(m.g.descarcari, 0, et + ': descărcări'); assertEquals(m.g.meta, 0, et + ': Storage')
+  assertEquals(m.g.incercari.length, 0, et + ': gardă'); assertEquals(m.g.rezultate.length, 0, et + ': rezultate'); assertEquals(m.tabele.ai_usage_log.length, 0, et + ': cost')
+}
+
+Deno.test({ ...Z, name: 'loturi: neeligibil → blocat_lot (HTTP 200, fără throw), zero AI / Storage / gardă / cost; motivul în eroare, statusul neatins', fn: async () => {
+  ai.mod = 'ok'
+  for (const motiv of ['loturi_neinitializate', 'nicio_participare', 'de_triat', 'in_afara_loturilor', 'stare_invalida']) {
+    const m = mediu(doc(), pdfMinimal(2), { elig: { eligibil: false, motiv, licitatie_id: 9 } })
+    const ai0 = ai.apeluri
+    const r = await cere()
+    assertEquals(r.status, 200)
+    const j = await r.json()
+    assertEquals([j.ok, j.blocat_lot, j.motiv, j.continua], [false, true, motiv, false], motiv)
+    assertMatch(j.error, /^Blocat pe loturi: /)
+    zeroCost(m, ai0, motiv)
+    assertEquals(m.g.elig, [{ p_document_id: 55 }])
+    assertEquals(m.rand().status_procesare, 'neprocesat', motiv); assertMatch(m.rand().eroare, /^Blocat pe loturi: /)
+  }
+} })
+
+Deno.test({ ...Z, name: 'loturi: fișa de date pe licitație neinițializată → blocată ca orice document (fără excepție în cod)', fn: async () => {
+  const m = mediu(doc({ tip: 'fisa_date' }), pdfMinimal(2), { elig: { eligibil: false, motiv: 'loturi_neinitializate', licitatie_id: 9 } })
+  const ai0 = ai.apeluri
+  const j = await (await cere()).json()
+  assertEquals([j.ok, j.blocat_lot, j.motiv], [false, true, 'loturi_neinitializate']); zeroCost(m, ai0, 'fisa_date')
+} })
+
+Deno.test({ ...Z, name: 'loturi: eroare RPC / excepție / răspuns fără formă → blocat (fail-closed, eroare_poarta), zero cost', fn: async () => {
+  for (const e of ['eroare_rpc', 'arunca', { eligibil: 'da', motiv: 1 } as any] as Elig[]) {
+    const m = mediu(doc(), pdfMinimal(2), { elig: e })
+    const ai0 = ai.apeluri
+    const j = await (await cere()).json()
+    assertEquals([j.ok, j.blocat_lot, j.motiv], [false, true, 'eroare_poarta'], String(e)); zeroCost(m, ai0, String(e))
+    assertEquals(m.rand().eroare, 'Blocat pe loturi: verificarea pe loturi nu a răspuns')
+  }
+} })
+
+Deno.test({ ...Z, name: 'loturi: document rămas in_lucru (felii anterioare) devenit neeligibil → neprocesat, pagini_procesate păstrate', fn: async () => {
+  const m = mediu(doc({ status_procesare: 'in_lucru', pagini_procesate: 4, text_extras: '⟦PAGINA 1⟧ A' }), pdfMinimal(6), { elig: { eligibil: false, motiv: 'in_afara_loturilor', licitatie_id: 9 } })
+  const ai0 = ai.apeluri
+  const j = await (await cere()).json()
+  assertEquals(j.blocat_lot, true); zeroCost(m, ai0, 'in_lucru')
+  assertEquals([m.rand().status_procesare, m.rand().pagini_procesate, m.rand().text_extras], ['neprocesat', 4, '⟦PAGINA 1⟧ A'])
+} })
+
+Deno.test({ ...Z, name: 'loturi: neautorizat → 401/403 ÎNAINTE de poartă (nicio scriere pe document), procesat → skip fără poartă', fn: async () => {
+  const m = mediu(doc(), pdfMinimal(2), { elig: { eligibil: false, motiv: 'de_triat', licitatie_id: 9 } })
+  const r = await handler(new Request('http://x/', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ doc_id: 55 }) }))
+  assert(r.status === 401 || r.status === 403, String(r.status)); await r.body?.cancel()
+  assertEquals(m.g.elig.length, 0); assertEquals(m.g.scrieriDirecte.length, 0)
+  const m2 = mediu(doc({ status_procesare: 'procesat' }), pdfMinimal(2), { elig: { eligibil: false, motiv: 'de_triat', licitatie_id: 9 } })
+  const j = await (await cere()).json()
+  assertEquals(j.skip, 'deja procesat'); assertEquals(m2.g.scrieriDirecte.length, 0)
+} })
+
+Deno.test({ ...Z, name: 'loturi: eligibil (comun / lot_participam / fara_loturi) → citirea merge ca înainte', fn: async () => {
+  ai.mod = 'ok'
+  for (const motiv of ['comun', 'lot_participam', 'fara_loturi']) {
+    const m = mediu(doc(), pdfMinimal(2), { elig: { eligibil: true, motiv, licitatie_id: 9 } })
+    const j = await (await cere()).json()
+    assertEquals([j.ok, j.status], [true, 'procesat'], motiv); assert(m.exactOnce())
+  }
 } })
