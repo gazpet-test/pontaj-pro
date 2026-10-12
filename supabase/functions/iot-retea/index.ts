@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { timingSafeEqual } from 'node:crypto';
-import { valideazaCitiri } from './valideaza.ts';
+import { valideazaCitiri, AI_NOI } from './valideaza.ts';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
@@ -39,6 +39,9 @@ Deno.serve(async (req: Request) => {
         hdd_max: c.hdd_max, cpu_load: c.cpu_load, uptime_s: c.uptime_s,
         disk_pct: c.disk_pct, ram_pct: c.ram_pct, raid_ok: c.raid_ok,
         gpu_temp: c.gpu_temp, gpu_w: c.gpu_w, gpu_util: c.gpu_util, vram_pct: c.vram_pct,
+        ai_gemini_ramas_pct: c.ai_gemini_ramas_pct, ai_claude_ramas_pct: c.ai_claude_ramas_pct,
+        ai_gemini_reset_s: c.ai_gemini_reset_s, ai_claude_reset_s: c.ai_claude_reset_s,
+        ...Object.fromEntries(AI_NOI.map(k => [k, c[k]])),
       };
       // Filtre fixe pe (sursa='retea', extern_id): expeditorul nu poate alege/crea alt dispozitiv.
       const { data: disp, error: updateError } = await db.from('iot_dispozitive')

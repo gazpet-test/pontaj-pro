@@ -11,6 +11,10 @@ import { MeteoSantier } from './Meteo.jsx'
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681', green:'#3FB950', red:'#F85149', yellow:'#E3B341', blue:'#58A6FF', orange:'#F0883E' }
 const S = { card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10, padding:16 }, btnS: { padding:'7px 13px', background:G.surface, color:G.text, border:`1px solid ${G.border}`, borderRadius:7, cursor:'pointer', fontSize:12.5, textDecoration:'none' } }
 const fmtDT = (d) => d ? new Date(d).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'
+// IP-ul echipamentului din rețea (extern_id), mic și gri sub nume — doar dacă arată a IP și numele nu-l conține deja
+const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/
+const ipAfisat = (x) => x.sursa === 'retea' && IP_RE.test(x.extern_id || '') && !(x.nume || '').includes(x.extern_id) && !(x.nume || '').includes('.' + x.extern_id.split('.')[3] + ')') ? x.extern_id : null
+const IpSub = ({ x }) => { const ip = ipAfisat(x); return ip ? <span style={{ display:'block', fontSize:10.5, color:G.dim, lineHeight:1.2 }}>{ip}</span> : null }
 const nr = (v, dec = 1) => v == null ? '—' : Number(v).toLocaleString('ro-RO', { maximumFractionDigits: dec })
 
 // Aceleași praguri ca iot_verifica_terra; testul de paritate citește migrarea SQL.
@@ -63,6 +67,25 @@ function ServerGpu({ dispozitiv }) {
       <Spark pts={ist} k="v" color={G.muted} min={0} max={100} um="% VRAM" />
     </div>)}
   </div>
+}
+
+// Limite cont Antigravity (task orar pe serverul AI → metrics.json → sonda Terra → iot-retea). Procent rămas + reset (epoch s).
+const AI_PROCENTE = ['ai_gemini_ramas_pct', 'ai_claude_ramas_pct', 'ai_codex_ramas_pct', 'ai_anthropic_saptamana_ramas_pct',
+  'ai_anthropic_saptamana_fable_ramas_pct', 'ai_anthropic_sesiune_ramas_pct']
+export const areLimiteAi = (x) => x?.meta?.tip === 'server' && AI_PROCENTE.some(k => Number.isFinite(x?.ultima_citire?.[k]))
+export const textReset = (sec, acum = Date.now()) => {
+  if (!Number.isFinite(sec)) return ''
+  const ore = (sec * 1000 - acum) / 3600e3
+  return ore <= 0 ? 'reset trecut' : ore < 24 ? `reset în ${Math.ceil(ore)} h` : `reset în ${Math.round(ore / 24)} z`
+}
+function LimiteAi({ r }) {
+  const cul = (p) => !Number.isFinite(p) ? G.dim : p < 15 ? G.red : p < 30 ? G.yellow : G.green
+  // reset: epoch secunde (Antigravity), ISO (Codex) sau text liber ora București (Anthropic) — textul se afișează ca atare
+  const rst = (v) => typeof v === 'number' ? textReset(v) : typeof v === 'string' && /^\d{4}-/.test(v) ? textReset(Date.parse(v) / 1000) : typeof v === 'string' ? `reset ${v}` : ''
+  const una = (k, rk, et) => Number.isFinite(r[k]) && <span key={k} style={{ marginLeft:8 }}>{et} <b style={{ color:cul(r[k]) }}>{nr(r[k], 0)}%</b>{rst(r[rk]) && <span style={{ color:G.dim }}> ({rst(r[rk])})</span>}</span>
+  return <div style={{ fontSize:11, color:G.dim, padding:'0 0 4px 12px' }}>🤖 Limite AI{una('ai_gemini_ramas_pct', 'ai_gemini_reset_s', 'Gemini')}{una('ai_claude_ramas_pct', 'ai_claude_reset_s', '· Claude/GPT')}
+    {una('ai_codex_ramas_pct', 'ai_codex_reset', '· Codex')}{una('ai_anthropic_saptamana_ramas_pct', 'ai_anthropic_saptamana_reset', '· Anthropic săpt.')}
+    {una('ai_anthropic_saptamana_fable_ramas_pct', 'ai_anthropic_saptamana_fable_reset', '· Fable săpt.')}{una('ai_anthropic_sesiune_ramas_pct', 'ai_anthropic_sesiune_reset', '· sesiune')}</div>
 }
 
 // Mini-grafic comun pentru centrală și Terra; fiecare serie ignoră valorile lipsă.
@@ -441,10 +464,11 @@ export default function Cladire() {
               else stare = <b style={{ color:G.red }}>○ offline</b>
               return <div key={x.id} style={{ borderBottom:`1px solid ${G.border}33` }}>
                 <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'center', fontSize:13, padding:'4px 0' }}>
-                  <span style={{ color: on ? G.text : G.muted }}>{x.nume}<Edit x={x} />{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}{load}</span>
+                  <span style={{ color: on ? G.text : G.muted }}>{x.nume}<Edit x={x} />{temp('cpu_temp', 'sys')}{temp('hdd_max', 'disc')}{load}<IpSub x={x} /></span>
                   {stare}
                 </div>
                 {areGpu(x) && <ServerGpu dispozitiv={x} />}
+                {areLimiteAi(x) && <LimiteAi r={x.ultima_citire} />}
               </div>
             })}
           </div>
@@ -462,7 +486,7 @@ export default function Cladire() {
           <div style={S.card}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><div style={{ fontWeight:700 }}>📷 Camere & prize Tuya</div><span style={{ fontSize:11.5, color:G.dim }}>{camere.filter(c => c.ultima_citire?.online).length}/{camere.length} camere online</span></div>
             {camere.map(c => { const on = !!c.ultima_citire?.online, live = on && c.sursa === 'tuya'; return <div key={c.id} onClick={() => live && setCamLive(c)} title={live ? 'Vezi live' : (c.sursa === 'retea' ? 'doar în aplicația Mi Home' : '')} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33`, cursor: live ? 'pointer' : 'default' }}>
-              <span style={{ color: on ? G.text : G.muted }}>{c.nume}<Edit x={c} />{live && <span style={{ fontSize:11, color:G.blue, marginLeft:6 }}>▶ live</span>}{c.sursa === 'retea' && <span style={{ fontSize:10.5, color:G.dim, marginLeft:6 }}>Mi Home</span>}</span><b style={{ color: on ? G.green : G.red }}>{on ? '● online' : '○ offline'}</b></div> })}
+              <span style={{ color: on ? G.text : G.muted }}>{c.nume}<Edit x={c} />{live && <span style={{ fontSize:11, color:G.blue, marginLeft:6 }}>▶ live</span>}{c.sursa === 'retea' && <span style={{ fontSize:10.5, color:G.dim, marginLeft:6 }}>Mi Home</span>}<IpSub x={c} /></span><b style={{ color: on ? G.green : G.red }}>{on ? '● online' : '○ offline'}</b></div> })}
             {tuyaAlte.map(c => { const r = c.ultima_citire || {}; const val = r.putere_w != null ? `${nr(r.putere_w)} W` : r.temp != null ? `${nr(r.temp)}°` : r.pornit != null ? (r.pornit ? 'pornit' : 'oprit') : ''
               return <div key={c.id} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
                 <span style={{ color:G.muted }}>{c.nume} <span style={{ fontSize:10.5, color:G.dim }}>{c.meta?.model || ''}</span></span><b style={{ color: r.online ? G.text : G.dim }}>{r.online ? (val || 'online') : 'offline'}</b></div> })}
