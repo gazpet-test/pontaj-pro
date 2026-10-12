@@ -197,7 +197,7 @@ async function rulareLot(tabele: Record<string, any[]>, opt: { motive?: Record<n
 }
 
 Deno.test('loturi: doar cerințele eligibile pleacă la AI; excluse raportate cu motive grupate', async () => {
-  const { r, corpuri } = await rulareLot({ ofertare_cantitati: [{ ...R1751, id: 1, lot_domeniu: 'lista', lot_nr: [2] }, { ...R1751, id: 2, lot_domeniu: 'toate', lot_nr: null }] },
+  const { r, corpuri } = await rulareLot({ ofertare_cantitati: [{ ...R1751, id: 1, lot_domeniu: 'lista', lot_nr: [2] }, { ...R1751, id: 2, lot_domeniu: 'toate', lot_nr: null, surse_document_ids: [10] }] },
     { motive: { 11: 'de_triat' } })
   assert(r.ok, JSON.stringify(r))
   assertEquals(corpuri.length, 1)
@@ -238,8 +238,8 @@ Deno.test('loturi r2: răspuns din document blocat / conflict pe planșă blocat
       ofertare_acoperire: [], ofertare_cantitati: [],
       ofertare_verificari: [{ verdict: 'galben', raport: 'RAPORT_VECHI_LOT1', created_at: '2026-10-01T00:00:00Z' }],
       ofertare_documente_atribuire: [{ id: 10, nume_original: 'CS.pdf' }],
-      ofertare_clarificari: [{ id: 1, nr: 1, intrebare: 'Intrebarea noastra', status: 'raspunsa', raspuns: 'RASPUNS_DIN_DOC_BLOCAT', raspuns_document_id: 999 },
-        { id: 2, nr: 2, intrebare: 'Alta', status: 'raspunsa', raspuns: 'RASPUNS_MANUAL', raspuns_document_id: null }],
+      ofertare_clarificari: [{ id: 1, nr: 1, intrebare: 'Intrebarea noastra', status: 'raspunsa', raspuns: 'RASPUNS_DIN_DOC_BLOCAT', raspuns_document_id: 999, origine: 'manual' },
+        { id: 2, nr: 2, intrebare: 'Alta', status: 'raspunsa', raspuns: 'RASPUNS_MANUAL', raspuns_document_id: null, origine: 'manual' }],
       v_ofertare_transfer_conflicte: [] })
     const rpcVechi = supa.rpc
     // planșa 777 din conflicte e blocată (lipsește din harta porții), documentul 10 e eligibil
@@ -267,4 +267,56 @@ Deno.test('loturi r2: răspuns din document blocat / conflict pe planșă blocat
   assert(!m.includes('RAPORT_VECHI_LOT1') && m.includes('raportul verificării finale omis'), 'raportul vechi omis explicit pe are_loturi')
   const f = await rulare('fara_loturi')
   assert(f.includes('RAPORT_VECHI_LOT1'), 'pe fara_loturi raportul rămâne')
+})
+
+// 20261025a (review Jakarinos r5 P1 #2 + #4): proveniența DERIVATELOR. Pe are_loturi: cantitatea extrasă automat fără surse și
+// clarificarea generată fără surse NU intră în prompt; cu surse eligibile intră; cu o sursă blocată / cerință exclusă iese.
+Deno.test('proveniență r5: cantitate fără surse pe are_loturi = fara_provenienta; cu sursă blocată = document_*', async () => {
+  const { r, corpuri } = await rulareLot({ ofertare_cantitati: [
+    { ...R1751, id: 1, lot_domeniu: 'toate', lot_nr: null },                                  // fără surse → exclusă
+    { ...R1751, id: 2, lot_domeniu: 'toate', lot_nr: null, surse_document_ids: [10, 11] },    // 11 de triat → exclusă
+    { ...R1751, id: 3, lot_domeniu: 'toate', lot_nr: null, surse_document_ids: [10], denumire: 'CANT_OK' },
+    { ...R1751, id: 4, lot_domeniu: 'toate', lot_nr: null, extras_de_ai: false, denumire: 'CANT_MANUALA' },   // manuală: trece pe lot
+  ] }, { motive: { 11: 'de_triat' } })
+  assert(r.ok, JSON.stringify(r))
+  const m = JSON.parse(corpuri[0]).messages[0].content as string
+  assert(m.includes('CANT_OK') && m.includes('CANT_MANUALA'), 'cantitățile cu surse eligibile / manuale intră')
+  assertEquals(r.excluse_lot.cantitati, 2)
+  assertEquals(r.excluse_motive.fara_provenienta, 1)
+})
+
+Deno.test('proveniență r5: clarificare GENERATĂ fără surse pe are_loturi = omisă; cu cerință eligibilă rămâne; cu cerință exclusă = omisă', async () => {
+  const { corpuri } = await rulareLot({ ofertare_cerinte: CER_LOT.map((c) => ({ ...c, licitatie_id: 95 })), ofertare_clarificari: [
+    { id: 1, nr: 1, licitatie_id: 95, intrebare: 'GEN_FARA_SURSE', status: 'propunere', origine: 'platforma' },
+    { id: 2, nr: 2, licitatie_id: 95, intrebare: 'GEN_CU_SURSA_OK', status: 'propunere', origine: 'platforma', surse_cerinte_ids: [1], surse_document_ids: [10] },
+    { id: 3, nr: 3, licitatie_id: 95, intrebare: 'GEN_DIN_LOT_2', status: 'propunere', origine: 'platforma', surse_cerinte_ids: [2], surse_document_ids: [10] },
+    { id: 4, nr: 4, licitatie_id: 95, intrebare: 'GEN_DOC_BLOCAT', status: 'propunere', origine: 'automat', surse_document_ids: [11] },
+    { id: 5, nr: 5, licitatie_id: 95, intrebare: 'MANUALA_FARA_PDF', status: 'propunere', origine: 'manual' },
+  ] }, { motive: { 11: 'de_triat' } })
+  const m = JSON.parse(corpuri[0]).messages[0].content as string
+  const ex = m.slice(m.indexOf('CLARIFICĂRI DEJA EXISTENTE'), m.indexOf('RĂSPUNSURI PRIMITE LA ALTE'))
+  assert(ex.includes('GEN_CU_SURSA_OK') && ex.includes('MANUALA_FARA_PDF'), ex)
+  for (const x of ['GEN_FARA_SURSE', 'GEN_DIN_LOT_2', 'GEN_DOC_BLOCAT']) assertFalse(m.includes(x), x + ' nu trebuia să ajungă în prompt')
+})
+
+Deno.test('proveniență r5: propunerea nouă se scrie cu surse_cerinte_ids + surse_document_ids', async () => {
+  const baza = supaFals({ ofertare_licitatii: [{ id: 95, stare_loturi: 'fara_loturi' }],
+    ofertare_documente_atribuire: [{ id: 10, nume_original: 'CS.pdf' }],
+    ofertare_cerinte: [{ id: 1, text_cerinta: 'Cerință verificabilă', sursa_document_id: 10 }, { id: 2, text_cerinta: 'Alta', sursa_document_id: null }] })
+  const scrise: any[] = []
+  const supa = { rpc: baza.rpc, from(t: string) {
+    const b = baza.from(t)
+    if (t === 'ofertare_clarificari') b.upsert = (rows: any[]) => { scrise.push(...rows); return { select: () => Promise.resolve({ data: [{ id: 1 }], error: null }) } }
+    return b
+  } }
+  const vechi = globalThis.fetch
+  globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({
+    clarificari: [{ subiect: 'Termenul de execuție', cerinte_ids: [1, 2], referinta: 'Caiet, p. 2',
+      fragment: 'Durata de execuție diferă între cele două secțiuni ale documentației.',
+      intrebare: 'Vă rugăm să precizați durata de execuție aplicabilă în vederea pregătirii ofertei.', prioritate: 'importanta' }],
+  }) }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 }))) as typeof fetch
+  try {
+    await propuneClarificari(supa, { licitatie_id: 95 })
+    assertEquals([scrise[0].surse_cerinte_ids, scrise[0].surse_document_ids], [[1, 2], [10]])
+  } finally { globalThis.fetch = vechi }
 })

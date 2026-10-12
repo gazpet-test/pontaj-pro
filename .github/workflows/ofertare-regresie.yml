@@ -43,6 +43,14 @@ on:
       - 'supabase/tests/j04xj07/**'
       - 'scripts/test_j04xj07.sh'
       - 'scripts/test-r5-r9b.mjs'
+      - 'supabase/migrations/20261024b_ofertare_loturi_mvp*.sql'
+      - 'supabase/migrations/20261025a_ofertare_provenienta_derivate*.sql'
+      - 'supabase/revenire/20261024b_ofertare_loturi_mvp*.sql'
+      - 'supabase/revenire/20261025a_ofertare_provenienta_derivate*.sql'
+      - 'supabase/tests/ofertare_loturi_mvp_schelet.sql'
+      - 'supabase/tests/ofertare_provenienta_schelet.sql'
+      - 'scripts/test_ofertare_loturi_mvp.sh'
+      - 'scripts/test_ofertare_provenienta_derivate.sh'
       - '.github/workflows/ofertare-regresie.yml'
   push:
     branches: [main]
@@ -87,6 +95,14 @@ on:
       - 'supabase/tests/j04xj07/**'
       - 'scripts/test_j04xj07.sh'
       - 'scripts/test-r5-r9b.mjs'
+      - 'supabase/migrations/20261024b_ofertare_loturi_mvp*.sql'
+      - 'supabase/migrations/20261025a_ofertare_provenienta_derivate*.sql'
+      - 'supabase/revenire/20261024b_ofertare_loturi_mvp*.sql'
+      - 'supabase/revenire/20261025a_ofertare_provenienta_derivate*.sql'
+      - 'supabase/tests/ofertare_loturi_mvp_schelet.sql'
+      - 'supabase/tests/ofertare_provenienta_schelet.sql'
+      - 'scripts/test_ofertare_loturi_mvp.sh'
+      - 'scripts/test_ofertare_provenienta_derivate.sh'
       - '.github/workflows/ofertare-regresie.yml'
   workflow_dispatch:
 
@@ -94,6 +110,23 @@ permissions:
   contents: read
 
 jobs:
+  # Harness-urile SQL pe Postgres 16 efemer din runner (loturi 20261024b + proveniență 20261025a) — decizia B Răzvan 12.10.2026:
+  # nimic instalat pe serverul AI, fără secrete de producție (scheletele refuză orice altă bază decât ofertare_loturi_test pe 127.0.0.1).
+  loturi-provenienta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Postgres 16 local (binare, fără serviciu)
+        run: |
+          if [ ! -x /usr/lib/postgresql/16/bin/initdb ]; then sudo apt-get update && sudo apt-get install --yes postgresql-16; fi
+          sudo systemctl stop postgresql || true
+      - name: Harness loturi MVP (20261024b)
+        run: bash scripts/test_ofertare_loturi_mvp.sh --opreste
+      - name: Harness proveniență derivate (20261025a)
+        run: bash scripts/test_ofertare_provenienta_derivate.sh --opreste
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 15

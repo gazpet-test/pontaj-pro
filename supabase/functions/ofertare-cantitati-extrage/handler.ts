@@ -379,6 +379,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         um: curat(p[1], 20),
         cantitate: numar(p[2]),
         sursa: `${d.nume_original}${loc ? ' \u2014 ' + loc : ''}`.slice(0, 300),
+        surse_document_ids: [d.id],   // provenien\u021ba structurat\u0103 (20261025a, review Jakarinos r5 P1 #4)
         status: 'extras',
         extras_de_ai: true,
         ...colLot,

@@ -12,6 +12,7 @@
 // Auth: JWT user SAU x-radar-secret. Body {clarificare_id} → intoarce planul. Nu exista cale de scriere.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { caleBlocata, filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
+import { filtreazaClarificari } from '../_shared/provenientaClar.ts'   // proveniența derivatelor (20261025a)
 
 // Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
 // accepta si valoarea precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile deodata.
@@ -77,6 +78,11 @@ Deno.serve(async (req: Request) => {
     const m = await caleBlocata(db, String(cl.fisier_path))
     if (m) return json({ error: `${mesajLot(m)} (PDF-ul clarificării)`, motiv_lot: m })
   }
+  //  (4) proveniența întrebării GENERATE (20261025a, review Jakarinos r5 P1 #2): cerințele / cantitățile / documentele din care
+  //      a generat-o platforma trebuie să treacă poarta acum; fără proveniență pe are_loturi = refuz
+  const fpc = await filtreazaClarificari(db, [cl])
+  if (!fpc.ok) return json({ error: mesajLot('eroare_poarta'), motiv_lot: 'eroare_poarta' })
+  if (fpc.excluse.length) return json({ error: `${mesajLot(fpc.excluse[0].motiv)} (sursele întrebării generate)`, motiv_lot: fpc.excluse[0].motiv })
   const excluse_lot = fl.excluse.length
   const excluse_motive = fl.excluse.reduce((a: Record<string, number>, e: any) => { a[e.motiv] = (a[e.motiv] || 0) + 1; return a }, {})
   if (!fl.pastrate.length) return json({ error: `nicio cerință eligibilă pe loturi (${excluse_lot} excluse) — nu s-a chemat AI-ul`, excluse_lot, excluse_motive })
