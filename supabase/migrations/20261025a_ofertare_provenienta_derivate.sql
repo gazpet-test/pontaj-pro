@@ -37,10 +37,15 @@ BEGIN
   IF v_n <> 0 THEN
     RAISE EXCEPTION 'Precondiție 20261025a: % coloane surse_* există deja (reaplicare?)', v_n;
   END IF;
-  -- corpul RPC-ului de transfer trebuie să fie exact cel citit la 12.10.2026 (altfel CREATE OR REPLACE ar pierde o schimbare)
-  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)'))
-     IS DISTINCT FROM 'c00ba5566c7d231ef7eefe926a8ed56a' THEN
-    RAISE EXCEPTION 'Precondiție 20261025a: ofertare_transfer_plansa_cantitati diferă de versiunea citită (md5 c00ba556…)';
+  -- RPC-ul de transfer trebuie să fie EXACT versiunea citită la 12.10.2026 — corp (md5 fără CR) + atribute (owner, SECURITY
+  -- DEFINER, search_path, volatilitate, ACL); altfel CREATE OR REPLACE ar pierde / reseta o schimbare (review Copilot r1 P1 #2)
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p
+                  WHERE p.oid = to_regprocedure('public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)')
+                    AND md5(replace(p.prosrc, chr(13), '')) = 'c00ba5566c7d231ef7eefe926a8ed56a'
+                    AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
+                    AND p.proconfig::text = '{"search_path=public, pg_temp"}'
+                    AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
+    RAISE EXCEPTION 'Precondiție 20261025a: ofertare_transfer_plansa_cantitati diferă de versiunea citită (corp md5 c00ba556… sau atribute/ACL)';
   END IF;
   IF to_regprocedure('public.fn_ofertare_surse_valideaza()') IS NOT NULL THEN
     RAISE EXCEPTION 'Precondiție 20261025a: fn_ofertare_surse_valideaza există deja';
@@ -75,7 +80,9 @@ CREATE FUNCTION public.fn_ofertare_surse_valideaza()
 AS $fn$
 DECLARE
   v_lipsa bigint;
-  v_derivat boolean := false;   -- sursele derivate de server (clarificarea automată): fără refuz pe ID dispărut
+  -- sursele derivate de server (clarificarea automată): un ID DISPĂRUT (inexistent global) se păstrează — codul îl tratează ca
+  -- neverificabil = exclus; un ID existent în ALTĂ licitație se refuză ca la orice scriere (review Copilot r1 P1 #1)
+  v_derivat boolean := false;
 BEGIN
   IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
     -- Clarificarea AUTOMATĂ din planșe (ofertare_clarificare_planse_auto, scrisă doar de server): sursele se derivă din
@@ -111,8 +118,9 @@ BEGIN
       END IF;
       NEW.surse_cantitati_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_cantitati_ids) x);
       SELECT x INTO v_lipsa FROM unnest(NEW.surse_cantitati_ids) x
-       WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_cantitati q WHERE q.id = x AND q.licitatie_id = NEW.licitatie_id) LIMIT 1;
-      IF FOUND AND NOT v_derivat THEN RAISE EXCEPTION 'surse_cantitati_ids: cantitatea % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
+       WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_cantitati q WHERE q.id = x AND q.licitatie_id = NEW.licitatie_id)
+         AND (NOT v_derivat OR EXISTS (SELECT 1 FROM public.ofertare_cantitati q WHERE q.id = x)) LIMIT 1;
+      IF FOUND THEN RAISE EXCEPTION 'surse_cantitati_ids: cantitatea % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
     END IF;
   END IF;
   -- surse_document_ids: pe ambele tabele
@@ -122,8 +130,9 @@ BEGIN
     END IF;
     NEW.surse_document_ids := (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(NEW.surse_document_ids) x);
     SELECT x INTO v_lipsa FROM unnest(NEW.surse_document_ids) x
-     WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = NEW.licitatie_id) LIMIT 1;
-    IF FOUND AND NOT v_derivat THEN RAISE EXCEPTION 'surse_document_ids: documentul % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
+     WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = NEW.licitatie_id)
+       AND (NOT v_derivat OR EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x)) LIMIT 1;
+    IF FOUND THEN RAISE EXCEPTION 'surse_document_ids: documentul % nu există în licitația %', v_lipsa, NEW.licitatie_id USING ERRCODE = '23503'; END IF;
   END IF;
   RETURN NEW;
 END
@@ -210,6 +219,15 @@ BEGIN
      OR has_function_privilege('anon', 'public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)', 'EXECUTE') THEN
     RAISE EXCEPTION 'Postcondiție 20261025a: drepturile RPC-ului de transfer s-au schimbat';
+  END IF;
+  -- versiunea nouă a RPC-ului: corp + atribute exacte (aceeași identitate pe care o cere revenirea înainte să o înlocuiască)
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p
+                  WHERE p.oid = to_regprocedure('public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)')
+                    AND md5(replace(p.prosrc, chr(13), '')) = 'c85560253e98dad428ca19ff147ac4b1'
+                    AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
+                    AND p.proconfig::text = '{"search_path=public, pg_temp"}'
+                    AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
+    RAISE EXCEPTION 'Postcondiție 20261025a: RPC-ul de transfer nou nu are corpul / atributele așteptate (md5 c8556025…)';
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261025a_ofertare_provenienta_derivate:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261025a: garda de livrare (final) — tranzacție/runner invalid';
