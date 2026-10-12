@@ -21,7 +21,7 @@ MIGRARE_LOTURI="$RADACINA/supabase/migrations/$NUME_LOTURI.sql"
 SCHELET_LOTURI="$RADACINA/supabase/tests/ofertare_loturi_mvp_schelet.sql"
 SCHELET="$RADACINA/supabase/tests/ofertare_provenienta_schelet.sql"
 CONTROL_0E="$RADACINA/scripts/control_0e.sql"
-MD5_RPC=c00ba5566c7d231ef7eefe926a8ed56a; MD5_RPC_NOU=cdb15a2a246a590a5172ba4ed3ce9b30
+MD5_RPC=c00ba5566c7d231ef7eefe926a8ed56a; MD5_RPC_NOU=35a426299d7432f080f16939438638ca
 OPRESTE=0; [ "${1:-}" = --opreste ] && OPRESTE=1
 esec()  { echo "ESEC: $*" >&2; exit 1; }
 mediu() { echo "MEDIU: $*" >&2; exit 2; }
@@ -149,7 +149,10 @@ ca service_role - "SELECT public.ofertare_transfer_plansa_cantitati(1302, 'r1', 
 asteapta "transfer cu altă planșă: reuniune, fără duplicate" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=$ID63")" "{528,1247,1302}"
 ca service_role - "SELECT public.ofertare_transfer_plansa_cantitati(1302, 'r1', '$OPS2')" >/dev/null
 asteapta "lease consumat: a doua rulare nu scrie" "$(q "SELECT cantitate_plansa::int FROM public.ofertare_cantitati WHERE id=$ID63")" 64
-# ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
+IDM=$(q "INSERT INTO public.ofertare_cantitati(licitatie_id, denumire, extras_de_ai) VALUES (102, 'manual PE 40', false) RETURNING id")
+q "UPDATE public.ofertare_documente_atribuire SET analiza='{\"citire_ai\":{\"transfer\":{\"rulare\":\"r2\",\"stare\":\"in_curs\"}}}' WHERE id = 1247" >/dev/null
+ca service_role - "SELECT public.ofertare_transfer_plansa_cantitati(1247, 'r2', '[{\"op\":\"update\",\"id\":$IDM,\"patch\":{\"cantitate_plansa\":40,\"diferenta_nota\":\"din planșă\"}}]')" >/dev/null
+asteapta "transfer pe rând MANUAL fără surse → {planșa} (componenta automată urmăribilă, Jakarinos r7 P1 #2)" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=$IDM")" "{1247}"# ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -v ON_ERROR_STOP=0 -d "$BAZA" -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată fără ON_ERROR_STOP: $o"
 asteapta "revenire nearmată, fără ON_ERROR_STOP / fără tranzacție: RPC neatins (Copilot r1 P1 #3)" "$(md5rpc)" "$MD5_RPC_NOU"
 q "ALTER FUNCTION public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb) SECURITY INVOKER" >/dev/null
@@ -167,7 +170,7 @@ asteapta "revenire: coloane + funcție + triggere scoase" \
   "$(q "SELECT (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name LIKE 'surse\_%')||'|'||(to_regprocedure('public.fn_ofertare_surse_valideaza()') IS NULL)::text||'|'||(SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'a02_ofertare_%_surse')")" "0|true|0"
 asteapta "revenire: RPC-ul de transfer = corpul de dinainte (md5)" "$(md5rpc)" "$MD5_RPC"
 asteapta "revenire: drepturile RPC păstrate" "$(q "SELECT has_function_privilege('authenticated','public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)','EXECUTE')::text||has_function_privilege('service_role','public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)','EXECUTE')::text")" falsetrue
-asteapta "revenire: arhiva păstrează sursele" "$(q "SELECT jsonb_array_length(continut->'clarificari')||'/'||jsonb_array_length(continut->'cantitati') FROM public.ofertare_provenienta_arhiva_revenire")" "3/2"
+asteapta "revenire: arhiva păstrează sursele" "$(q "SELECT jsonb_array_length(continut->'clarificari')||'/'||jsonb_array_length(continut->'cantitati') FROM public.ofertare_provenienta_arhiva_revenire")" "3/3"
 asteapta "revenire: arhiva fără drepturi API" "$(q "SELECT has_table_privilege('authenticated','public.ofertare_provenienta_arhiva_revenire','SELECT')::text||has_table_privilege('service_role','public.ofertare_provenienta_arhiva_revenire','SELECT')::text")" falsefalse
 livreaza >/dev/null || { livreaza; esec "dus-întors"; }; ok "dus-întors: re-livrare după revenire"
 asteapta "dus-întors: control 0e" "$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" 0

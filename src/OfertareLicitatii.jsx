@@ -1676,6 +1676,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           operații, nu texte — serverul execută exact ce a generat el însuși. */}
       {setRasp && (() => {
         const ops = (setRasp.propunere?.operatii) || []
+        // operații NEaplicabile automat (licitație pe loturi, proveniență din mai multe documente / fără sursă unică) — de tratat de om
+        const opProv = (setRasp.propunere?.operatii_provenienta) || []
         const ac = setRasp.propunere?.acoperire || []
         const disp = setRasp.propunere?.dispozitii || []
         const efect = disp.filter(d => d.tip === 'efect_posibil').length
@@ -1694,6 +1696,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           || (setRasp.propunere?.neclare || []).length > 0
           // R02 (Copilot 28.09): efectele cantitative din inventar țin și ele concluzia deschisă
           || (setRasp.propunere?.dispozitii || []).some(x => x.tip === 'efect_cantitati' || x.tip === 'neclar')
+          // 20261025a (Jakarinos r7 P1 #3): operațiile izolate pe proveniență (multi-document / fără sursă unică) țin concluzia deschisă
+          || opProv.length > 0
         return (
           <div style={{ marginTop:14, padding:14, borderRadius:10, border:`1px solid ${G.purple}55`, background:G.purple + '0D' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:8 }}>
@@ -1725,6 +1729,18 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                 )}
                 {Object.entries(setRasp.propunere?.aruncate || {}).map(([m, n]) => (
                   <div key={m}>⚠ {n} {n === 1 ? 'propunere respinsă' : 'propuneri respinse'} de verificările platformei: {m}.</div>
+                ))}
+              </div>
+            )}
+
+            {opProv.length > 0 && (
+              <div style={{ fontSize:12.5, color:G.orange, marginBottom:10, padding:'8px 10px', borderRadius:7, background:G.orange + '14', border:`1px solid ${G.orange}55` }}>
+                <div style={{ fontWeight:700, marginBottom:4 }}>⚠ {opProv.length} {opProv.length === 1 ? 'schimbare propusă NU se poate aplica automat' : 'schimbări propuse NU se pot aplica automat'} — proveniența vine din mai multe documente (sau fără dispoziție-sursă unică), pe o licitație cu loturi. Verifică-le în documentele indicate și, dacă sunt corecte, adaugă / modifică cerința manual.</div>
+                {opProv.map(o => (
+                  <div key={o.op_id} style={{ fontSize:12, color:G.text, marginTop:3 }}>
+                    · <b>{o.fel}</b>{o.cerinta_id ? ` cerința #${o.cerinta_id}` : ''}: {String(o.text_nou || o.text_cerinta || o.sursa_pasaj || '').slice(0, 220)}
+                    <span style={{ color:G.dim }}> — {o.motiv_provenienta === 'surse_multiple' ? `documente ${(o.surse_doc_ids || []).join(', ')}` : o.motiv_provenienta === 'fara_dispozitie_sursa' ? 'fără dispoziție-sursă unică' : 'propusă înainte de verificarea proveniența'}</span>
+                  </div>
                 ))}
               </div>
             )}

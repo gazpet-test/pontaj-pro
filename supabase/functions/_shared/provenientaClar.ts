@@ -44,9 +44,8 @@ export async function filtreazaClarificari<T extends ClarSurse>(db: Db, randuri:
     // cerințele și cantitățile sursă → filtrul pe licitația lor
     const cerOk = new Set<number>(), cantOk = new Set<number>()
     if (cerIds.size) {
-      const { data, error } = await (db as any).from('ofertare_cerinte')
-        .select('id, licitatie_id, sursa_document_id, lot, lot_domeniu, lot_nr').in('id', [...cerIds])
-      if (error || !Array.isArray(data)) return esec
+      const data = await citesteInLoturi(db, 'ofertare_cerinte', 'id, licitatie_id, sursa_document_id, lot, lot_domeniu, lot_nr', [...cerIds])
+      if (!data) return esec
       for (const [l, rs] of grupeaza(data)) {
         const f = await filtreazaDerivate(db, l, rs)
         if (!f.ok) { if (f.motiv === 'eroare_poarta') return esec; continue }
@@ -54,9 +53,8 @@ export async function filtreazaClarificari<T extends ClarSurse>(db: Db, randuri:
       }
     }
     if (cantIds.size) {
-      const { data, error } = await (db as any).from('ofertare_cantitati')
-        .select('id, licitatie_id, lot_domeniu, lot_nr, surse_document_ids, extras_de_ai').in('id', [...cantIds])
-      if (error || !Array.isArray(data)) return esec
+      const data = await citesteInLoturi(db, 'ofertare_cantitati', 'id, licitatie_id, lot_domeniu, lot_nr, surse_document_ids, extras_de_ai', [...cantIds])
+      if (!data) return esec
       for (const [l, rs] of grupeaza(data)) {
         const f = await filtreazaDerivate(db, l, rs, { cereSurse: (r: any) => r.extras_de_ai !== false })
         if (!f.ok) { if (f.motiv === 'eroare_poarta') return esec; continue }
@@ -85,6 +83,20 @@ export async function filtreazaClarificari<T extends ClarSurse>(db: Db, randuri:
   } catch (_) {
     return esec
   }
+}
+
+// Citire completă după ID-uri (Jakarinos r7 P2): loturi de 500 ID-uri (sub plafonul PostgREST de 1000 rânduri), ordonat;
+// orice eroare = null (fail-closed la apelant); se păstrează doar rândurile cu ID-urile cerute.
+const LOT_ID = 500
+async function citesteInLoturi(db: Db, tabel: string, coloane: string, ids: number[]): Promise<any[] | null> {
+  const toate: any[] = []
+  for (let i = 0; i < ids.length; i += LOT_ID) {
+    const felie = ids.slice(i, i + LOT_ID), cerute = new Set(felie)
+    const { data, error } = await (db as any).from(tabel).select(coloane).in('id', felie).order('id', { ascending: true })
+    if (error || !Array.isArray(data)) return null
+    toate.push(...data.filter((r: any) => cerute.has(Number(r?.id))))
+  }
+  return toate
 }
 
 function grupeaza(rows: any[]): Map<number, any[]> {

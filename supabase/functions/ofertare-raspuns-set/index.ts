@@ -20,7 +20,7 @@ import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // 12.10.2026 (MVP loturi, 20261024b): poarta pe document la creeaza_set (documentele neeligibile ies în `excluse`) și la
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
-import { eligibilaPeLot, parseLot } from '../_shared/lot.ts'
+import { eligibilaPeLot, lotRand, parseLot } from '../_shared/lot.ts'
 import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const CORS = {
@@ -184,6 +184,33 @@ Deno.serve(async (req: Request) => {
     if (!setId) return json({ error: 'set_id lipsa' }, 400)
     if (!opIds.length) return json({ error: 'nicio operatie bifata' }, 400)
 
+    // Proveniența la APLICARE (Jakarinos r7 P1 #1): RPC-ul (doar service_role, deci doar prin edge-ul ăsta) scrie un singur
+    // sursa_document_id pe cerință. Pe are_loturi, fiecare operație bifată trebuie să fie în propunere.operatii (nu în
+    // operatii_provenienta), cu EXACT o sursă, sursa eligibilă ACUM în licitația setului și lotul în participare — altfel
+    // refuz pentru tot apelul (nimic aplicat). Acoperă și operațiile vechi / generate cât licitația era fara_loturi.
+    {
+      const { data: s, error: eS } = await db.from('ofertare_raspuns_set').select('licitatie_id, propunere').eq('id', setId).maybeSingle()
+      if (eS || !s) return json({ error: eS ? 'citire set: ' + eS.message : 'setul nu exista' })
+      const part = await participareLicitatie(db, s.licitatie_id)
+      if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a aplicat nimic', blocat_lot: true, motiv_lot: part.motiv })
+      if (part.stare === 'are_loturi') {
+        const hartaOp = new Map<string, any>(((s.propunere?.operatii || []) as any[]).map((o: any) => [String(o.op_id), o]))
+        const he = await eligibilitateLicitatie(db, s.licitatie_id)
+        if (!he.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a aplicat nimic', blocat_lot: true })
+        const refuzate: Array<{ op_id: string; motiv: string }> = []
+        for (const id of opIds) {
+          const o = hartaOp.get(id)
+          if (!o) { refuzate.push({ op_id: id, motiv: 'operatie_neaplicabila' }); continue }
+          if (!provenientaUnica(o.surse_doc_ids)) { refuzate.push({ op_id: id, motiv: 'fara_provenienta_unica' }); continue }
+          const doc = Number(o.surse_doc_ids[0])
+          if (!esteEligibil(he.harta, doc) || Number(o.document_id) !== doc) { refuzate.push({ op_id: id, motiv: 'document_' + (he.harta.get(doc)?.motiv || 'neeligibil') }); continue }
+          const l = lotRand(o)
+          if (l.domeniu === 'necunoscut' || !eligibilaPeLot(l, part.participam)) { refuzate.push({ op_id: id, motiv: 'lot_' + l.domeniu }); continue }
+        }
+        if (refuzate.length) return json({ ok: false, blocat_lot: true, operatii_refuzate: refuzate,
+          error: `Blocat pe proveniență / loturi: ${refuzate.length} din ${opIds.length} operații nu se pot aplica (${[...new Set(refuzate.map((r) => r.motiv))].join(', ')}) — nu s-a aplicat nimic; reia „compară” sau tratează-le manual` })
+      }
+    }
     // Aplicarea NU cheama AI: executa exact operatiile generate de server si bifate de om.
     const { data, error } = await db.rpc('fn_ofertare_raspuns_set_aplica', {
       p_set_id: setId,

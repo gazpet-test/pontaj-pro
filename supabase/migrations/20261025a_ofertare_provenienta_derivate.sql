@@ -193,8 +193,10 @@ CREATE TRIGGER a02_ofertare_cantitati_surse
   FOR EACH ROW EXECUTE FUNCTION public.fn_ofertare_surse_valideaza();
 
 -- ── 4. transferul planșă → cantități notează planșa în surse (singura modificare față de corpul live, citit 12.10.2026:
---      `surse_document_ids` pe UPDATE = sursele vechi ∪ planșa DOAR dacă erau cunoscute — NULL rămâne NULL: planșa nu justifică
---      cantitatea existentă dintr-o sursă necunoscută (Jakarinos r6 P1 #5); pe INSERT = {planșa}). CREATE OR REPLACE păstrează drepturile.
+--      `surse_document_ids` pe UPDATE = sursele vechi ∪ planșa dacă erau cunoscute; rând MANUAL (extras_de_ai = false) fără surse
+--      → {planșa} (partea omului nu are document, componenta completată automat vine din planșă — Jakarinos r7 P1 #2); rând extras
+--      automat cu surse NULL rămâne NULL: planșa nu justifică cantitatea dintr-o sursă necunoscută (Jakarinos r6 P1 #5);
+--      pe INSERT = {planșa}). CREATE OR REPLACE păstrează drepturile.
 CREATE OR REPLACE FUNCTION public.ofertare_transfer_plansa_cantitati(p_doc_id bigint, p_rulare text, p_randuri jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -216,7 +218,8 @@ BEGIN
         cantitate_plansa = CASE WHEN v_patch ? 'cantitate_plansa' THEN (v_patch ->> 'cantitate_plansa')::numeric ELSE cantitate_plansa END,
         diferenta_nota   = CASE WHEN v_patch ? 'diferenta_nota' THEN v_patch ->> 'diferenta_nota' ELSE diferenta_nota END,
         status           = CASE WHEN v_patch ? 'status' THEN v_patch ->> 'status' ELSE status END,
-        surse_document_ids = CASE WHEN surse_document_ids IS NULL THEN NULL ELSE array_append(surse_document_ids, p_doc_id) END,   -- 20261025a
+        surse_document_ids = CASE WHEN surse_document_ids IS NOT NULL THEN array_append(surse_document_ids, p_doc_id)
+                                  WHEN extras_de_ai IS FALSE THEN ARRAY[p_doc_id] ELSE NULL END,   -- 20261025a
         updated_at       = now()
       WHERE id = (r ->> 'id')::bigint AND licitatie_id = v_doc.licitatie_id;
       GET DIAGNOSTICS v_n = ROW_COUNT; v_actualizate := v_actualizate + v_n;
@@ -269,11 +272,11 @@ BEGIN
   -- versiunea nouă a RPC-ului: corp + atribute exacte (aceeași identitate pe care o cere revenirea înainte să o înlocuiască)
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = 'cdb15a2a246a590a5172ba4ed3ce9b30'
+                    AND md5(replace(p.prosrc, chr(13), '')) = '35a426299d7432f080f16939438638ca'
                     AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION 'Postcondiție 20261025a: RPC-ul de transfer nou nu are corpul / atributele așteptate (md5 cdb15a2a…)';
+    RAISE EXCEPTION 'Postcondiție 20261025a: RPC-ul de transfer nou nu are corpul / atributele așteptate (md5 35a42629…)';
   END IF;
   IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261025a_ofertare_provenienta_derivate:' || txid_current() THEN
     RAISE EXCEPTION 'Livrare 20261025a: garda de livrare (final) — tranzacție/runner invalid';
