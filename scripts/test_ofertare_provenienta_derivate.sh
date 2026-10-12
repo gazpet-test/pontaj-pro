@@ -92,6 +92,9 @@ asteapta "drepturi RPC transfer neschimbate (auth/anon/service)" \
 refuz "authenticated: INSERT cu surse" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_cerinte_ids) VALUES (102, 'U1', 'platforma', '{1}')" "doar serverul"
 refuz "authenticated: INSERT clarificare automată" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine) VALUES (102, 'U2', 'automat')" "doar serverul"
 refuz "authenticated: cantitate cu surse" authenticated "$EDIT" "INSERT INTO public.ofertare_cantitati(licitatie_id, denumire, surse_document_ids) VALUES (102, 'u', '{1247}')" "doar serverul"
+refuz "authenticated: INSERT cu origine platforma (rezervată serverului, Copilot r3)" authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine) VALUES (102, 'U3', 'platforma')" "doar serverul"
+asteapta "authenticated: INSERT manual / tipar permis" \
+  "$(ca authenticated "$EDIT" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine) VALUES (102, 'M1', 'manual'), (102, 'T1', 'tipar') RETURNING origine" | tr '\n' ' ')" "tipar "
 
 # ── validarea la scriere: clarificări (scrise de server) ──────────────────────────────────────────────
 asteapta "server: surse din aceeași licitație, normalizate (sortate, fără duplicate)" \
@@ -106,7 +109,9 @@ refuz "NULL în listă" service_role - "INSERT INTO public.ofertare_clarificari(
 asteapta "listă goală → NULL (= fără proveniență)" \
   "$(ca service_role - "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, surse_document_ids) VALUES (102, 'Q7', 'platforma', '{}') RETURNING coalesce(surse_document_ids::text, 'NULL')")" NULL
 refuz "mutarea clarificării cu surse în altă licitație (editor)" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET licitatie_id = 3 WHERE intrebare = 'Q1 editat'" "nu există în licitația"
-refuz "fără modul Ofertare: nimic (RLS)" authenticated "$FARA" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine) VALUES (102, 'Q8', 'platforma')" "row-level security"
+refuz "authenticated: platforma → manual (spălarea proveniența, Copilot r3)" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET origine = 'manual' WHERE intrebare = 'Q1 editat'" "nu se schimbă după creare"
+refuz "authenticated: tipar → manual" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET origine = 'manual' WHERE intrebare = 'T1'" "nu se schimbă după creare"
+refuz "fără modul Ofertare: nimic (RLS)" authenticated "$FARA" "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine) VALUES (102, 'Q8', 'manual')" "row-level security"
 o="$(q "SELECT public.fn_ofertare_surse_valideaza()" 2>&1 || true)"; grep -q "trigger" <<<"$o" || esec "apel direct al funcției de trigger: $o"; ok "refuz: funcția de validare nu se poate chema direct"
 refuz "funcția de validare nu e expusă (authenticated)" authenticated "$OWNER" "SELECT public.fn_ofertare_surse_valideaza()" "permission denied"
 
@@ -116,7 +121,7 @@ q "INSERT INTO public.ofertare_clarificari(licitatie_id, intrebare, origine, che
 asteapta "automat: documente = planșe ∪ baza.documente; cantități = baza.randuri (ID dispărut păstrat, fără refuz)" \
   "$(q "SELECT surse_document_ids::text||'|'||surse_cantitati_ids::text FROM public.ofertare_clarificari WHERE cheie='auto_planse_x'")" "{527,528,1247}|{1,99999}"
 refuz "authenticated: schimbarea sursei unei clarificări automate" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET sursa='planse_auto:1302' WHERE cheie='auto_planse_x'" "doar serverul"
-refuz "authenticated: automat → manual (spălarea proveniența)" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET origine='manual' WHERE cheie='auto_planse_x'" "doar serverul"
+refuz "authenticated: automat → manual (spălarea proveniența)" authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET origine='manual' WHERE cheie='auto_planse_x'" "nu se schimbă după creare"
 asteapta "authenticated: starea / textul clarificării automate se editează" \
   "$(ca authenticated "$EDIT" "UPDATE public.ofertare_clarificari SET status='retrasa', intrebare='AUTO editat' WHERE cheie='auto_planse_x' RETURNING surse_document_ids::text")" "{527,528,1247}"
 q "UPDATE public.ofertare_clarificari SET sursa='planse_auto:1302,gen_0123456789ab', baza_generare='{}' WHERE cheie='auto_planse_x'" >/dev/null

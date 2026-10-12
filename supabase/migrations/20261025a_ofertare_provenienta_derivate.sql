@@ -73,7 +73,8 @@ $migrare$;
 -- SECURITY DEFINER: verifică existența în tabele cu RLS indiferent cine scrie; nu e expusă (REVOKE mai jos), rulează doar
 -- ca trigger. Fără SQL dinamic: câte un bloc explicit pe fiecare coloană.
 -- Sursele sunt ale SERVERULUI (review Copilot r2 P1 #1): un apel cu JWT de utilizator (authenticated / anon) nu poate seta sau
--- schimba surse_*, iar pe clarificările automate nici origine / sursa / baza_generare (din ele se derivă sursele). Edge-urile
+-- schimba surse_*, nu inserează origini rezervate (automat, platforma), nu schimbă `origine` după creare, iar pe clarificările
+-- automate nici sursa / baza_generare (din ele se derivă sursele). Edge-urile
 -- scriu cu service_role, RPC-urile automate rulează din edge-uri cu service_role, migrările ca postgres. UI-ul nu scrie aceste câmpuri.
 CREATE FUNCTION public.fn_ofertare_surse_valideaza()
  RETURNS trigger
@@ -97,8 +98,9 @@ BEGIN
         RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
       END IF;
       IF TG_TABLE_NAME = 'ofertare_clarificari' THEN
-        IF NEW.surse_cerinte_ids IS NOT NULL OR NEW.surse_cantitati_ids IS NOT NULL OR NEW.origine = 'automat' THEN
-          RAISE EXCEPTION 'Sursele (surse_*) și clarificările automate le scrie doar serverul' USING ERRCODE = '42501';
+        -- originile rezervate serverului (automat, platforma) nu se inserează de utilizator (review Copilot r3 P1)
+        IF NEW.surse_cerinte_ids IS NOT NULL OR NEW.surse_cantitati_ids IS NOT NULL OR NEW.origine IN ('automat', 'platforma') THEN
+          RAISE EXCEPTION 'Sursele (surse_*) și clarificările generate (automat / platforma) le scrie doar serverul' USING ERRCODE = '42501';
         END IF;
       END IF;
     ELSE
@@ -109,8 +111,11 @@ BEGIN
         IF NEW.surse_cerinte_ids IS DISTINCT FROM OLD.surse_cerinte_ids OR NEW.surse_cantitati_ids IS DISTINCT FROM OLD.surse_cantitati_ids THEN
           RAISE EXCEPTION 'Sursele (surse_*) le scrie doar serverul' USING ERRCODE = '42501';
         END IF;
-        IF (OLD.origine = 'automat' OR NEW.origine = 'automat')
-           AND (NEW.origine, NEW.sursa, NEW.baza_generare) IS DISTINCT FROM (OLD.origine, OLD.sursa, OLD.baza_generare) THEN
+        -- originea e atribut de proveniență: imuabilă pentru utilizator după INSERT (fără spălare platforma -> manual, Copilot r3 P1)
+        IF NEW.origine IS DISTINCT FROM OLD.origine THEN
+          RAISE EXCEPTION 'Originea clarificării nu se schimbă după creare' USING ERRCODE = '42501';
+        END IF;
+        IF OLD.origine = 'automat' AND (NEW.sursa, NEW.baza_generare) IS DISTINCT FROM (OLD.sursa, OLD.baza_generare) THEN
           RAISE EXCEPTION 'Proveniența clarificării automate (origine / sursa / baza_generare) o scrie doar serverul' USING ERRCODE = '42501';
         END IF;
       END IF;

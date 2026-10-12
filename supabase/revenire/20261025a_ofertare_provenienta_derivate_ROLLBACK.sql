@@ -98,7 +98,9 @@ $cod$;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb)')
                     AND md5(replace(p.prosrc, chr(13), '')) = 'c00ba5566c7d231ef7eefe926a8ed56a'
-                    AND p.prosecdef AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
+                    AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
+                    AND p.proconfig::text = '{"search_path=public, pg_temp"}'
+                    AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
     RAISE EXCEPTION '20261025a: RPC-ul de transfer nu a revenit exact la versiunea veche (md5 c00ba556…)';
   END IF;
 

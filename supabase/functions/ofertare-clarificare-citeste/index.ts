@@ -75,7 +75,9 @@ Deno.serve(async (req: Request) => {
 
   const placeholder = /^\(clarificare depusă extern/i.test(row.intrebare || '') || !(row.intrebare || '').trim()
   const rezumat = [j.rezumat, j.nr_intrebari > 1 ? `Conține ${j.nr_intrebari} întrebări.` : null, Array.isArray(j.referinte) && j.referinte.length ? 'Referințe: ' + j.referinte.join(', ') + '.' : null].filter(Boolean).join(' ')
-  const upd: any = { citita_la: new Date().toISOString(), citita_rezumat: rezumat.slice(0, 2000), origine: 'manual' }
+  // originea e atribut de proveniență (20261025a, review Copilot r3 P1): PDF-ul depus de om face rândul „manual” doar dacă
+  // nu avea deja o origine — o clarificare generată de server (platforma / automat / tipar) nu devine „manual” prin citire
+  const upd: any = { citita_la: new Date().toISOString(), citita_rezumat: rezumat.slice(0, 2000), ...(row.origine == null ? { origine: 'manual' } : {}) }
   if (placeholder && j.intrebare) upd.intrebare = String(j.intrebare).slice(0, 4000)
   if (!row.sursa || row.sursa === 'extern') upd.sursa = 'extern — PDF depus în SEAP' + (j.data_document ? ` (${j.data_document})` : '')
   const { error: upErr } = await db.from('ofertare_clarificari').update(upd).eq('id', id)
