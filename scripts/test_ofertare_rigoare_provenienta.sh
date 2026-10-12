@@ -28,7 +28,7 @@ SCHELET="$RADACINA/supabase/tests/ofertare_rigoare_schelet.sql"
 CONTROL_0E="$RADACINA/scripts/control_0e.sql"
 # corpurile din producție (12.10.2026) și cele puse de 20261026a — md5(replace(prosrc, chr(13), ''))
 V_APLICA=2033717feec11bb1bdd2b7caf97ef807; V_PLANSE=2e0eaa89663d5f3f4d6d49aa8443fae2; V_VALID=a4e41e9e4e93d430386ae7f55c3be977
-N_APLICA=48af240261bebfc1985b7d12ee182c00; N_PLANSE=4dc464d871679ff9d0b596042fb5bf8a; N_VALID=03b3a62bf2b4bdce1378e75397179099
+N_APLICA=0026d0f6420b6e20e8ce331ac65964f7; N_PLANSE=4dc464d871679ff9d0b596042fb5bf8a; N_VALID=03b3a62bf2b4bdce1378e75397179099
 V_AMPRENTE=935951b073ece50e62c4a660357446a0
 OPRESTE=0; [ "${1:-}" = --opreste ] && OPRESTE=1
 esec()  { echo "ESEC: $*" >&2; exit 1; }
@@ -101,6 +101,13 @@ o="$(livreaza || true)"; grep -q "fn_ofertare_surse_valideaza diferă" <<<"$o" |
 q "DROP FUNCTION public.fn_ofertare_surse_valideaza()" >/dev/null
 q "ALTER FUNCTION public.fn_ofertare_surse_valideaza_orig() RENAME TO fn_ofertare_surse_valideaza" >/dev/null
 asteapta "funcțiile originale restaurate" "$(trei)" "$V_APLICA/$V_PLANSE/$V_VALID"
+# garda a03 verificată EXACT (Copilot r1 P1): dezactivată sau cu alt atribut → refuz
+q "ALTER TABLE public.ofertare_raspuns_set DISABLE TRIGGER a03_ofertare_raspuns_set_garda_loturi" >/dev/null
+o="$(livreaza || true)"; grep -q "garda a03 (20261025a) lipsește sau diferă" <<<"$o" || esec "a03 dezactivată: $o"; ok "refuz: livrare cu garda a03 dezactivată"
+q "ALTER TABLE public.ofertare_raspuns_set ENABLE TRIGGER a03_ofertare_raspuns_set_garda_loturi" >/dev/null
+q "GRANT EXECUTE ON FUNCTION public.fn_ofertare_raspuns_set_garda_loturi() TO service_role" >/dev/null
+o="$(livreaza || true)"; grep -q "garda a03 (20261025a) lipsește sau diferă" <<<"$o" || esec "a03 cu ACL lărgit: $o"; ok "refuz: livrare cu funcția gărzii a03 cu ACL lărgit"
+q "REVOKE EXECUTE ON FUNCTION public.fn_ofertare_raspuns_set_garda_loturi() FROM service_role" >/dev/null
 livreaza >/dev/null || { livreaza; esec "livrare"; }; ok "livrare cu gardă"
 o="$(livreaza || true)"; grep -q "Precondiție 20261026a" <<<"$o" || esec "reaplicare: $o"; ok "refuz: reaplicare"
 asteapta "control 0e (0 funcții expuse cu set_config/execute/…)" "$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" 0
@@ -149,6 +156,16 @@ asteapta "modifică: versiunea nouă = operație ∪ răspuns ∪ documentul ver
 asteapta "noua cu surse_doc_ids: sursele operației" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cerinte WHERE text_cerinta = 'N1'")" "{33}"
 asteapta "noua veche (fără surse_doc_ids): documentul de răspuns" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cerinte WHERE text_cerinta = 'N0 vechi'")" "{35}"
 asteapta "conflictele n-au scris nimic" "$(q "SELECT count(*) FROM public.ofertare_cerinte WHERE text_cerinta IN ('X1','X2','X3','X4')")" 0
+# peste limita validării (20000 surse): conflict în RPC, nu excepție din trigger care ar anula și operațiile valide (Copilot r1 P2)
+q "INSERT INTO public.ofertare_licitatii(id, nr_anunt) VALUES (7, 'X7 limita surse')" >/dev/null
+ca authenticated "$OWNER" "SELECT public.fn_ofertare_licitatie_loturi_seteaza(7, 'fara_loturi')->>'stare'" >/dev/null
+q "INSERT INTO public.ofertare_documente_atribuire(id, licitatie_id, nume_original) SELECT 100000 + g, 7, 'd' || g FROM generate_series(0, 20000) g" >/dev/null
+q "INSERT INTO public.ofertare_raspuns_set(id, licitatie_id, titlu, propunere) SELECT 16, 7, 'R7', jsonb_build_object('operatii', jsonb_build_array(
+     jsonb_build_object('op_id', 'ok', 'fel', 'noua', 'text_cerinta', 'N7 ok', 'document_id', 100000),
+     jsonb_build_object('op_id', 'mare', 'fel', 'noua', 'text_cerinta', 'N7 mare', 'surse_doc_ids', (SELECT jsonb_agg(100000 + g) FROM generate_series(0, 20000) g))))" >/dev/null
+R16=$(aplica 16 "'ok','mare'")
+asteapta "20001 surse: conflict pe operație, operația validă din același apel se aplică" \
+  "$(jq -r '"\(.noi)/\(.conflicte[0].op_id)/\(.conflicte[0].motiv)"' <<<"$R16")" "1/mare/prea multe surse (peste 20000)"
 # modifică / anulează FĂRĂ niciun document al operației (Jakarinos r1 P1 #1): nu moștenește doar sursele vechi — conflict
 CM=$(q "INSERT INTO public.ofertare_cerinte(licitatie_id, sursa_document_id, text_cerinta, tip, versiune, stare, nr_ordine) VALUES (3, 31, 'M1', 'propunere', 1, 'de_analizat', 7) RETURNING id")
 q "INSERT INTO public.ofertare_raspuns_set(id, licitatie_id, titlu, propunere) VALUES (15, 3, 'Raspuns 4', '{\"operatii\": [
@@ -251,6 +268,14 @@ refuz "planse_auto: authenticated nu are drept" authenticated "$OWNER" "SELECT p
 # ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -v ON_ERROR_STOP=0 -d "$BAZA" -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată fără ON_ERROR_STOP: $o"
 asteapta "revenire nearmată, fără ON_ERROR_STOP / fără tranzacție: nimic schimbat" "$(trei)" "$N_APLICA/$N_PLANSE/$N_VALID"
+# revenirea readuce RPC-ul vechi (fără garda internă): refuză dacă a03 nu e exact cea din 20261025a (Copilot r1 P1)
+q "ALTER FUNCTION public.fn_ofertare_raspuns_set_garda_loturi() SECURITY INVOKER" >/dev/null
+o="$(revenire || true)"; grep -q "garda a03 lipsește / e dezactivată / diferă" <<<"$o" || esec "revenire cu a03 modificată: $o"
+asteapta "revenire cu garda a03 modificată: refuz, nimic schimbat" "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='ofertare_cerinte' AND column_name='surse_document_ids'")/$(trei)" "1/$N_APLICA/$N_PLANSE/$N_VALID"
+q "ALTER FUNCTION public.fn_ofertare_raspuns_set_garda_loturi() SECURITY DEFINER" >/dev/null
+q "ALTER TABLE public.ofertare_raspuns_set DISABLE TRIGGER a03_ofertare_raspuns_set_garda_loturi" >/dev/null
+o="$(revenire || true)"; grep -q "garda a03 lipsește / e dezactivată / diferă" <<<"$o" || esec "revenire cu a03 dezactivată: $o"; ok "refuz: revenire cu garda a03 dezactivată"
+q "ALTER TABLE public.ofertare_raspuns_set ENABLE TRIGGER a03_ofertare_raspuns_set_garda_loturi" >/dev/null
 q "ALTER FUNCTION public.$SIG_PLANSE SECURITY INVOKER" >/dev/null
 o="$(revenire || true)"; grep -q "revenire oprită" <<<"$o" || esec "revenire peste o funcție modificată: $o"
 asteapta "revenire peste o funcție modificată ulterior: refuz, nimic schimbat" "$(q "SELECT count(*) FROM information_schema.columns WHERE table_name='ofertare_cerinte' AND column_name='surse_document_ids'")/$(md5f "$SIG_APLICA")" "1/$N_APLICA"

@@ -26,9 +26,19 @@ BEGIN
   PERFORM set_config('lock_timeout', '5s', true);
 
   -- ── precondiții ───────────────────────────────────────────────────────────────────────────────────────
-  IF to_regprocedure('public.fn_ofertare_raspuns_set_garda_loturi()') IS NULL
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgname = 'a03_ofertare_raspuns_set_garda_loturi') THEN
-    RAISE EXCEPTION 'Precondiție 20261026a: 20261025a (proveniență) nu e aplicată';
+  -- garda a03 (20261025a) EXACTĂ: corp + atribute + ACL + trigger activ pe tabelul și funcția așteptate (Copilot r1 P1) —
+  -- revenirea readuce RPC-ul vechi, fără garda internă, deci a03 trebuie să fie bariera reală
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+                                      WHERE NOT t.tgisinternal AND t.tgname = 'a03_ofertare_raspuns_set_garda_loturi'
+                                        AND t.tgrelid = 'public.ofertare_raspuns_set'::regclass AND t.tgenabled = 'O'
+                                        AND p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_garda_loturi()')
+                                        AND md5(replace(p.prosrc, chr(13), '')) = 'a6e46b085c5fed12d39e5f9b248251bc'
+                                        AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
+                                        AND p.proconfig::text = '{"search_path=public, pg_temp"}' AND p.proacl::text = '{postgres=X/postgres}'
+                                        AND replace(replace(pg_get_triggerdef(t.oid), 'EXECUTE FUNCTION public.', 'EXECUTE FUNCTION '),
+                                                    ' ON ofertare_raspuns_set ', ' ON public.ofertare_raspuns_set ')
+                                            = 'CREATE TRIGGER a03_ofertare_raspuns_set_garda_loturi BEFORE UPDATE OF aplicat_la ON public.ofertare_raspuns_set FOR EACH ROW WHEN (((new.aplicat_la IS DISTINCT FROM old.aplicat_la) AND (new.aplicat_la IS NOT NULL))) EXECUTE FUNCTION fn_ofertare_raspuns_set_garda_loturi()') THEN
+    RAISE EXCEPTION 'Precondiție 20261026a: garda a03 (20261025a) lipsește sau diferă de versiunea așteptată (corp a6e46b08… / atribute / trigger)';
   END IF;
   SELECT count(*) INTO v_n FROM information_schema.columns
    WHERE table_schema = 'public' AND table_name = 'ofertare_cerinte' AND column_name = 'surse_document_ids';
@@ -340,6 +350,8 @@ BEGIN
            WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = v_lic) LIMIT 1;
           IF v_sursa_rea IS NOT NULL THEN
             v_motiv_surse := 'sursa #' || v_sursa_rea || ' nu exista in aceasta licitatie (provenienta neverificabila)';
+          ELSIF cardinality(v_surse) > 20000 THEN   -- limita validării (Copilot r1 P2): conflict, nu excepție care anulează tot
+            v_motiv_surse := 'prea multe surse (peste 20000)';
           END IF;
         END IF;
       END IF;
@@ -439,6 +451,8 @@ BEGIN
            WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = v_lic) LIMIT 1;
           IF v_sursa_rea IS NOT NULL THEN
             v_motiv_surse := 'sursa #' || v_sursa_rea || ' nu exista in aceasta licitatie (provenienta neverificabila)';
+          ELSIF cardinality(v_surse) > 20000 THEN   -- limita validării (Copilot r1 P2): conflict, nu excepție care anulează tot
+            v_motiv_surse := 'prea multe surse (peste 20000)';
           END IF;
         END IF;
       END IF;
@@ -707,8 +721,17 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgname = 'a02_ofertare_cerinte_surse'
                    AND tgrelid = 'public.ofertare_cerinte'::regclass)
-     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgname = 'a03_ofertare_raspuns_set_garda_loturi') THEN
-    RAISE EXCEPTION 'Postcondiție 20261026a: triggerul de validare pe cerințe sau garda a03 lipsește';
+     OR NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+                                      WHERE NOT t.tgisinternal AND t.tgname = 'a03_ofertare_raspuns_set_garda_loturi'
+                                        AND t.tgrelid = 'public.ofertare_raspuns_set'::regclass AND t.tgenabled = 'O'
+                                        AND p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_garda_loturi()')
+                                        AND md5(replace(p.prosrc, chr(13), '')) = 'a6e46b085c5fed12d39e5f9b248251bc'
+                                        AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
+                                        AND p.proconfig::text = '{"search_path=public, pg_temp"}' AND p.proacl::text = '{postgres=X/postgres}'
+                                        AND replace(replace(pg_get_triggerdef(t.oid), 'EXECUTE FUNCTION public.', 'EXECUTE FUNCTION '),
+                                                    ' ON ofertare_raspuns_set ', ' ON public.ofertare_raspuns_set ')
+                                            = 'CREATE TRIGGER a03_ofertare_raspuns_set_garda_loturi BEFORE UPDATE OF aplicat_la ON public.ofertare_raspuns_set FOR EACH ROW WHEN (((new.aplicat_la IS DISTINCT FROM old.aplicat_la) AND (new.aplicat_la IS NOT NULL))) EXECUTE FUNCTION fn_ofertare_raspuns_set_garda_loturi()') THEN
+    RAISE EXCEPTION 'Postcondiție 20261026a: triggerul de validare pe cerințe sau garda a03 (exactă) lipsește';
   END IF;
   IF has_function_privilege('authenticated', 'public.fn_ofertare_raspuns_set_aplica(bigint,text[],uuid,boolean,text,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.fn_ofertare_raspuns_set_aplica(bigint,text[],uuid,boolean,text,text)', 'EXECUTE')
@@ -718,11 +741,11 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_aplica(bigint,text[],uuid,boolean,text,text)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = '48af240261bebfc1985b7d12ee182c00'
+                    AND md5(replace(p.prosrc, chr(13), '')) = '0026d0f6420b6e20e8ce331ac65964f7'
                     AND NOT p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION 'Postcondiție 20261026a: fn_ofertare_raspuns_set_aplica nou nu are corpul / atributele așteptate (md5 48af2402…)';
+    RAISE EXCEPTION 'Postcondiție 20261026a: fn_ofertare_raspuns_set_aplica nou nu are corpul / atributele așteptate (md5 0026d0f6…)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_clarificare_planse_auto(bigint)')

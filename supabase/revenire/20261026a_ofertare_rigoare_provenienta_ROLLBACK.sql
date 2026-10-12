@@ -4,7 +4,7 @@
 -- Codul care citește surse_document_ids pe cerințe (același PR) trebuie scos ÎNAINTE (altfel select-urile pică).
 -- Funcțiile revin DOAR dacă versiunea curentă e EXACT cea pusă de 20261026a (corp md5 + atribute + ACL) — altfel refuz fără
 -- nicio modificare (nu calcă o versiune mai nouă). Totul într-un singur DO: o gardă refuzată nu lasă nimic în urmă.
--- Garda a03 (20261025a) nu e atinsă: rămâne activă și după revenire.
+-- Garda a03 (20261025a) nu e atinsă, dar e VERIFICATĂ exact înainte și după: după revenire e singura barieră pe loturi.
 -- Armare per tranzacție: SELECT set_config('gazpet.revenire_20261026a', 'OFERTARE_RIGOARE_REVENIRE:' || txid_current(), true);
 DO $revenire$
 BEGIN
@@ -20,11 +20,11 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_aplica(bigint,text[],uuid,boolean,text,text)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = '48af240261bebfc1985b7d12ee182c00'
+                    AND md5(replace(p.prosrc, chr(13), '')) = '0026d0f6420b6e20e8ce331ac65964f7'
                     AND NOT p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION '20261026a: fn_ofertare_raspuns_set_aplica nu mai e versiunea pusă de migrare (md5 48af2402… / atribute) — revenire oprită, nimic schimbat';
+    RAISE EXCEPTION '20261026a: fn_ofertare_raspuns_set_aplica nu mai e versiunea pusă de migrare (md5 0026d0f6… / atribute) — revenire oprită, nimic schimbat';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_clarificare_planse_auto(bigint)')
@@ -41,6 +41,19 @@ BEGIN
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres}') THEN
     RAISE EXCEPTION '20261026a: fn_ofertare_surse_valideaza nu mai e versiunea pusă de migrare (md5 03b3a62b… / atribute) — revenire oprită, nimic schimbat';
+  END IF;
+  -- după revenire, singura barieră pe licitațiile cu loturi e a03: trebuie să fie EXACT cea din 20261025a (Copilot r1 P1)
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+                                      WHERE NOT t.tgisinternal AND t.tgname = 'a03_ofertare_raspuns_set_garda_loturi'
+                                        AND t.tgrelid = 'public.ofertare_raspuns_set'::regclass AND t.tgenabled = 'O'
+                                        AND p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_garda_loturi()')
+                                        AND md5(replace(p.prosrc, chr(13), '')) = 'a6e46b085c5fed12d39e5f9b248251bc'
+                                        AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
+                                        AND p.proconfig::text = '{"search_path=public, pg_temp"}' AND p.proacl::text = '{postgres=X/postgres}'
+                                        AND replace(replace(pg_get_triggerdef(t.oid), 'EXECUTE FUNCTION public.', 'EXECUTE FUNCTION '),
+                                                    ' ON ofertare_raspuns_set ', ' ON public.ofertare_raspuns_set ')
+                                            = 'CREATE TRIGGER a03_ofertare_raspuns_set_garda_loturi BEFORE UPDATE OF aplicat_la ON public.ofertare_raspuns_set FOR EACH ROW WHEN (((new.aplicat_la IS DISTINCT FROM old.aplicat_la) AND (new.aplicat_la IS NOT NULL))) EXECUTE FUNCTION fn_ofertare_raspuns_set_garda_loturi()') THEN
+    RAISE EXCEPTION '20261026a: garda a03 lipsește / e dezactivată / diferă (corp a6e46b08… / atribute / trigger) — revenire oprită, nimic schimbat';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   -- scrierile pe cerințe se blochează ÎNAINTEA capturii și până la final (Jakarinos r1 P1 #3): o scriere concurentă a
@@ -605,6 +618,18 @@ $cod$;
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres}') THEN
     RAISE EXCEPTION '20261026a: fn_ofertare_surse_valideaza nu a revenit exact la versiunea veche (md5 a4e41e9e…)';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
+                                      WHERE NOT t.tgisinternal AND t.tgname = 'a03_ofertare_raspuns_set_garda_loturi'
+                                        AND t.tgrelid = 'public.ofertare_raspuns_set'::regclass AND t.tgenabled = 'O'
+                                        AND p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_garda_loturi()')
+                                        AND md5(replace(p.prosrc, chr(13), '')) = 'a6e46b085c5fed12d39e5f9b248251bc'
+                                        AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
+                                        AND p.proconfig::text = '{"search_path=public, pg_temp"}' AND p.proacl::text = '{postgres=X/postgres}'
+                                        AND replace(replace(pg_get_triggerdef(t.oid), 'EXECUTE FUNCTION public.', 'EXECUTE FUNCTION '),
+                                                    ' ON ofertare_raspuns_set ', ' ON public.ofertare_raspuns_set ')
+                                            = 'CREATE TRIGGER a03_ofertare_raspuns_set_garda_loturi BEFORE UPDATE OF aplicat_la ON public.ofertare_raspuns_set FOR EACH ROW WHEN (((new.aplicat_la IS DISTINCT FROM old.aplicat_la) AND (new.aplicat_la IS NOT NULL))) EXECUTE FUNCTION fn_ofertare_raspuns_set_garda_loturi()') THEN
+    RAISE EXCEPTION '20261026a: garda a03 nu mai e intactă după revenire';
   END IF;
   IF current_setting('gazpet.revenire_20261026a', true) IS DISTINCT FROM 'OFERTARE_RIGOARE_REVENIRE:' || txid_current() THEN
     RAISE EXCEPTION '20261026a: garda final invalida';
