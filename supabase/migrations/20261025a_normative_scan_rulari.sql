@@ -193,7 +193,7 @@ GRANT EXECUTE ON FUNCTION public.fn_norm_scan_salveaza_lot(bigint,integer,jsonb,
 GRANT EXECUTE ON FUNCTION public.fn_norm_scan_ia_final(bigint,text,integer) TO service_role;
 
 -- Plasa de siguranță: la 10 minute, DOAR dacă o rulare deschisă stă fără progres de 8 minute (lanț rupt sau
--- invocare omorâtă). Fără rulare blocată, SELECT-ul nu întoarce rânduri și nu se face niciun apel HTTP.
+-- invocare omorâtă), cel mult 24h de la pornire. Fără rulare blocată, SELECT-ul nu întoarce rânduri și nu se face niciun apel HTTP.
 SELECT cron.schedule('normative_scan_continua', '*/10 * * * *', $cmd$
   SELECT net.http_post(
     url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/normative-scan-lunar',
@@ -206,7 +206,7 @@ SELECT cron.schedule('normative_scan_continua', '*/10 * * * *', $cmd$
   )
   WHERE EXISTS (
     SELECT 1 FROM public.normative_scan_rulari
-     WHERE stare = 'in_curs' AND actualizat_la < now() - interval '8 minutes'
+     WHERE stare = 'in_curs' AND creat_la > now() - interval '24 hours' AND actualizat_la < now() - interval '8 minutes'
        AND (lease_pana IS NULL OR lease_pana < now())
   );
 $cmd$);

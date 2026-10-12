@@ -192,7 +192,7 @@ async function proceseaza(cerere: { test: boolean; runId: number | null; continu
   try {
     let runId = cerere.runId;
     if (cerere.continua) {
-      const { data } = await supa.from('normative_scan_rulari').select('id').eq('stare', 'in_curs').order('id').limit(1).maybeSingle();
+      const { data } = await supa.from('normative_scan_rulari').select('id').eq('stare', 'in_curs').gt('creat_la', new Date(Date.now() - 24 * 3600_000).toISOString()).order('id').limit(1).maybeSingle();
       runId = data?.id ?? null;
     } else if (runId == null) {
       const r = await porneste(supa, cerere.test);
