@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none supabase/functions/ofertare-raspuns-set/loturi_test.ts
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet } from './loturi.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet, surseCoada, surseDispozitie, surseNoi } from './loturi.ts'
 
 const ids = (r: any) => (r.ok ? r.eligibile.map((c: any) => c.id) : r)
 
@@ -47,4 +47,23 @@ Deno.test('lotOperatieSelectie (review Jakarinos r4 P1 #1): dispoziția pe lotul
   eq(lotOperatieSelectie([2], '2', ['toate']).lot, '2')
   eq(lotOperatieSelectie(null, null, ['2']).lot, '2')              // fără selecție: regula veche
   eq(lotOperatieSelectie(null, '3', ['2']).lot, '3')
+})
+
+Deno.test('proveniența cozii (review Jakarinos r5 P1 #1): coada A→B→C poartă toate documentele', () => {
+  eq(surseCoada({}), [])
+  eq(surseCoada({ coada_doc_id: 7 }), [7])                         // forma r4, un singur id
+  eq(surseCoada({ coada_doc_ids: [7, 8], coada_doc_id: 9 }), [7, 8]) // forma nouă are prioritate
+  const dinA = surseNoi(10, [])                                       // fragmentul A lasă coadă
+  const dinB = surseNoi(11, surseCoada({ coada_doc_ids: dinA }))      // B lipește coada A și lasă coadă mai departe
+  eq(dinB, [10, 11])
+  eq(surseNoi(12, surseCoada({ coada_doc_ids: dinB })), [10, 11, 12])
+  eq(surseNoi(12, []), [12])                                          // coadă omisă = doar documentul curent
+})
+Deno.test('surseDispozitie: doc_ids verificate integral; vechi fără doc_ids pe are_loturi = neverificabil', () => {
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [10, 11] }, true), [10, 11])
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [10, 10, 11] }, true), [10, 11])
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [10, 'x'] }, true), null) // id stricat = fail-closed
+  eq(surseDispozitie({ doc_id: 11 }, true), null)                      // dispoziție veche pe are_loturi
+  eq(surseDispozitie({ doc_id: 11 }, false), [11])                     // fara_loturi: ca înainte
+  eq(surseDispozitie({}, false), null)
 })

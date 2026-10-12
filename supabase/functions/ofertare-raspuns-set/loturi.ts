@@ -46,6 +46,32 @@ export function lotOperatieSelectie(selEf: number[] | null, lotSet: string | nul
   return lotOperatie(selEf.join(','), null)
 }
 
+// Proveniența cozii și a dispozițiilor (review Jakarinos r5 P1 #1, PR #677): coada lipită A→B conține text din A, deci
+// dispozițiile rezultate și coada care merge mai departe poartă TOATE documentele contributoare, nu doar documentul curent.
+const iduri = (xs: unknown[]) => [...new Set(xs.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))]
+
+// Documentele din care provine coada deschisă. `coada_doc_id` (r4, un singur id) se citește ca [id]; fără niciuna = [].
+export function surseCoada(prop: any): number[] {
+  if (Array.isArray(prop?.coada_doc_ids)) return iduri(prop.coada_doc_ids)
+  return prop?.coada_doc_id == null ? [] : iduri([prop.coada_doc_id])
+}
+
+// Sursele unei dispoziții noi = documentul curent ∪ sursele cozii folosite în prompt (goală dacă coada a fost omisă).
+export function surseNoi(docId: number, coadaFolosita: number[]): number[] {
+  return iduri([...coadaFolosita, docId])
+}
+
+// Sursele de verificat la reutilizarea unei dispoziții: `doc_ids` dacă există. Dispoziție veche (fără doc_ids): pe
+// are_loturi = null (fără proveniență verificabilă — putea conține o coadă din alt document), altfel [doc_id] ca înainte.
+export function surseDispozitie(x: any, areLoturi: boolean): number[] | null {
+  if (Array.isArray(x?.doc_ids) && x.doc_ids.length) {
+    const valide = x.doc_ids.map(Number).filter((n: number) => Number.isSafeInteger(n) && n > 0)
+    return valide.length === x.doc_ids.length ? iduri(valide) : null   // un id stricat = proveniență neverificabilă
+  }
+  if (areLoturi) return null
+  return x?.doc_id == null ? null : iduri([x.doc_id])
+}
+
 // Lotul unei operații: al setului, altfel al dispoziției-sursă (audit R03). `lot` (text, citit de RPC-ul de aplicare)
 // devine forma canonică „2” / „1,3” când se poate interpreta; altfel rămâne textul brut, ca înainte.
 export function lotOperatie(lotSet: string | null | undefined, loturiDispozitie: unknown):
