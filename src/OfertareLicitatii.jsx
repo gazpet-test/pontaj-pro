@@ -1739,7 +1739,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                 {opProv.map(o => (
                   <div key={o.op_id} style={{ fontSize:12, color:G.text, marginTop:3 }}>
                     · <b>{o.fel}</b>{o.cerinta_id ? ` cerința #${o.cerinta_id}` : ''}: {String(o.text_nou || o.text_cerinta || o.sursa_pasaj || '').slice(0, 220)}
-                    <span style={{ color:G.dim }}> — {o.motiv_provenienta === 'surse_multiple' ? `documente ${(o.surse_doc_ids || []).join(', ')}` : o.motiv_provenienta === 'fara_dispozitie_sursa' ? 'fără dispoziție-sursă unică' : 'propusă înainte de verificarea proveniența'}</span>
+                    <span style={{ color:G.dim }}> — {o.motiv_provenienta === 'surse_multiple' ? `documente ${(o.surse_doc_ids || []).join(', ')}` : o.motiv_provenienta === 'fara_dispozitie_sursa' ? 'fără dispoziție-sursă unică' : o.motiv_provenienta === 'provenienta_incompleta' ? 'proveniență incompletă (text moștenit dintr-un fragment vechi)' : 'propusă înainte de verificarea provenienței'}</span>
                   </div>
                 ))}
               </div>

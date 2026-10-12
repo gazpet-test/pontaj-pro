@@ -398,20 +398,25 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       // cu altă cantitate era aruncată în tăcere și rămânea valoarea veche. Acum diferențele se
       // raportează explicit (conflicte_revizie), ca omul să decidă; nu suprascriem automat cifra aprobată.
       try {
-        const { data: exist } = await db.from('ofertare_cantitati').select('id, denumire, sursa, cantitate')
+        const { data: exist } = await db.from('ofertare_cantitati').select('id, denumire, sursa, cantitate, surse_document_ids, extras_de_ai')
           .eq('licitatie_id', licId).in('denumire', [...new Set(feliaAsta.map(x => x.denumire))])
         const peCheie = new Map((exist || []).map((e: any) => [`${e.denumire}\u0000${e.sursa}`, e]))
         for (const x of feliaAsta) {
           const e: any = peCheie.get(`${x.denumire}\u0000${x.sursa}`)
           if (e && x.cantitate !== null && e.cantitate !== null && Number(e.cantitate) !== Number(x.cantitate)) {
-            conflicteRevizie.push({ id: e.id, denumire: x.denumire, sursa: x.sursa, cantitate_bd: e.cantitate, cantitate_noua: x.cantitate })
+            conflicteRevizie.push({ id: e.id, denumire: x.denumire, sursa: x.sursa, cantitate_bd: e.cantitate, cantitate_noua: x.cantitate,
+              surse_bd: e.surse_document_ids ?? null, manual: e.extras_de_ai === false })
           }
         }
         // Propagare (Copilot 28.09): rândul cu cifra revizuită devine „diferenta” (de reverificat) — același
         // mecanism de invalidare pe care îl urmăresc poarta PT, graficul și prețul; cifra veche NU se suprascrie.
+        // Nota de revizie conține cifra din documentul CURENT (Jakarinos r8 P1 #3): documentul intră în surse, în aceeași scriere
+        // (surse cunoscute ∪ d.id; rând manual fără surse → {d.id}; rând extras automat cu surse NULL rămâne NULL = incomplet).
         for (const c of conflicteRevizie.filter(c => !c._marcat)) {
+          const surseNoi = Array.isArray(c.surse_bd) ? [...new Set([...c.surse_bd.map(Number), d.id])] : (c.manual ? [d.id] : null)
           await db.from('ofertare_cantitati').update({ status: 'diferenta',
-            diferenta_nota: `Revizie la re-extragere: sursa dă ${c.cantitate_noua}, în registru e ${c.cantitate_bd} — de reverificat (valoarea din registru nu s-a schimbat).` })
+            diferenta_nota: `Revizie la re-extragere: sursa dă ${c.cantitate_noua}, în registru e ${c.cantitate_bd} — de reverificat (valoarea din registru nu s-a schimbat).`,
+            surse_document_ids: surseNoi })
             .eq('id', c.id)
           c._marcat = true
         }

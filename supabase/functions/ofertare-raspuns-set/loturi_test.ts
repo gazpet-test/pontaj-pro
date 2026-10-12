@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none supabase/functions/ofertare-raspuns-set/loturi_test.ts
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
+import { coadaIncompleta, filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaCompleta, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const ids = (r: any) => (r.ok ? r.eligibile.map((c: any) => c.id) : r)
 
@@ -80,4 +80,15 @@ Deno.test('operația (Jakarinos r6 P1 #2, varianta B): aplicabilă pe are_loturi
   eq(surseOperatie([10, 11], null), [10, 11])         // coadă lipită A→B
   eq(surseOperatie(null, 11), null)                   // dispoziție fără proveniență
   eq([provenientaUnica([11]), provenientaUnica([10, 11]), provenientaUnica(null), provenientaUnica(undefined), provenientaUnica(['x'])], [true, false, false, false, false])
+})
+Deno.test('proveniență incompletă (Jakarinos r8 P1 #1): fallback-ul de pe fara_loturi nu certifică surse complete', () => {
+  eq(coadaIncompleta({ coada_deschisa: 'x', coada_doc_id: 7 }), true)        // formă veche
+  eq(coadaIncompleta({ coada_deschisa: 'x', coada_doc_ids: [7] }), false)
+  eq(coadaIncompleta({ coada_deschisa: 'x', coada_doc_ids: [7], coada_incompleta: true }), true)   // moștenit
+  eq(coadaIncompleta({}), false)
+  eq(provenientaCompleta({ doc_id: 11 }), false)                               // dispoziție veche
+  eq(provenientaCompleta({ doc_id: 11, doc_ids: [11] }), true)
+  eq(provenientaCompleta({ doc_id: 11, doc_ids: [10, 11], surse_incomplete: true }), false)
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [11], surse_incomplete: true }, true), null)
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [11], surse_incomplete: true }, false), [11])
 })

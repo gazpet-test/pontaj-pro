@@ -70,6 +70,7 @@ export function surseNoi(docId: number, coadaFolosita: number[]): number[] {
 // Sursele de verificat la reutilizarea unei dispoziții: `doc_ids` dacă există. Dispoziție veche (fără doc_ids): pe
 // are_loturi = null (fără proveniență verificabilă — putea conține o coadă din alt document), altfel [doc_id] ca înainte.
 export function surseDispozitie(x: any, areLoturi: boolean): number[] | null {
+  if (areLoturi && x?.surse_incomplete === true) return null   // coadă veche moștenită (Jakarinos r8 P1 #1)
   if (Array.isArray(x?.doc_ids) && x.doc_ids.length) {
     const valide = x.doc_ids.map(Number).filter((n: number) => Number.isSafeInteger(n) && n > 0)
     return valide.length === x.doc_ids.length ? iduri(valide) : null   // un id stricat = proveniență neverificabilă
@@ -83,6 +84,16 @@ export function surseDispozitie(x: any, areLoturi: boolean): number[] | null {
 export function surseOperatie(surseDisp: number[] | null, docCerinta: number | null | undefined): number[] | null {
   if (surseDisp === null) return null
   return iduri([...surseDisp, ...(docCerinta == null ? [] : [docCerinta])]).sort((x, y) => x - y)
+}
+// Proveniența COMPLETĂ a unei dispoziții (Jakarinos r8 P1 #1): listă doc_ids validă și nemarcată incompletă. Fallback-ul de
+// compatibilitate ([doc_id] pe fara_loturi) NU certifică surse complete: operațiile din el nu se aplică ulterior pe are_loturi.
+export function provenientaCompleta(x: any): boolean {
+  if (x?.surse_incomplete === true || !Array.isArray(x?.doc_ids) || !x.doc_ids.length) return false
+  return x.doc_ids.every((n: unknown) => Number.isSafeInteger(Number(n)) && Number(n) > 0)
+}
+// Coada e incompletă dacă vine în forma veche (doar coada_doc_id) sau a moștenit deja marcajul.
+export function coadaIncompleta(prop: any): boolean {
+  return prop?.coada_incompleta === true || (!!prop?.coada_deschisa && !Array.isArray(prop?.coada_doc_ids))
 }
 // RPC-ul de aplicare scrie UN singur sursa_document_id pe cerință: aplicabil (pe are_loturi) doar cu exact o sursă.
 export function provenientaUnica(surse: unknown): boolean {

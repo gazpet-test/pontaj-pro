@@ -21,7 +21,7 @@ import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
 import { eligibilaPeLot, lotRand, parseLot } from '../_shared/lot.ts'
-import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, coadaIncompleta, provenientaCompleta, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -201,11 +201,26 @@ Deno.serve(async (req: Request) => {
         for (const id of opIds) {
           const o = hartaOp.get(id)
           if (!o) { refuzate.push({ op_id: id, motiv: 'operatie_neaplicabila' }); continue }
-          if (!provenientaUnica(o.surse_doc_ids)) { refuzate.push({ op_id: id, motiv: 'fara_provenienta_unica' }); continue }
+          // surse_complete: calculat din proveniență completă (nu din fallback-ul de compatibilitate, Jakarinos r8 P1 #1)
+          if (o.surse_complete !== true || !provenientaUnica(o.surse_doc_ids)) { refuzate.push({ op_id: id, motiv: 'fara_provenienta_unica' }); continue }
           const doc = Number(o.surse_doc_ids[0])
           if (!esteEligibil(he.harta, doc) || Number(o.document_id) !== doc) { refuzate.push({ op_id: id, motiv: 'document_' + (he.harta.get(doc)?.motiv || 'neeligibil') }); continue }
           const l = lotRand(o)
           if (l.domeniu === 'necunoscut' || !eligibilaPeLot(l, part.participam)) { refuzate.push({ op_id: id, motiv: 'lot_' + l.domeniu }); continue }
+        }
+        // cerințele-ȚINTĂ ale operațiilor modifica / anuleaza: eligibile ACUM (document + lotul lor în participare) — o țintă
+        // exclusă refuză tot apelul (Jakarinos r8 P1 #2: lotul operației poate intersecta participarea, ținta nu)
+        const tinte = [...new Set(opIds.map((id: string) => hartaOp.get(id)).filter((o: any) => o && o.cerinta_id != null).map((o: any) => Number(o.cerinta_id)))]
+        if (tinte.length && !refuzate.length) {
+          const { data: cerT, error: eT } = await db.from('ofertare_cerinte').select('id, licitatie_id, sursa_document_id, lot, lot_domeniu, lot_nr').in('id', tinte)
+          if (eT || !Array.isArray(cerT)) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a aplicat nimic', blocat_lot: true })
+          const ft = await filtreazaDerivate(db, s.licitatie_id, cerT.filter((c: any) => Number(c.licitatie_id) === Number(s.licitatie_id)) as any[])
+          if (!ft.ok) return json({ error: mesajLot(ft.motiv) + ' — nu s-a aplicat nimic', blocat_lot: true, motiv_lot: ft.motiv })
+          const bune = new Set(ft.pastrate.map((c: any) => Number(c.id)))
+          for (const id of opIds) {
+            const o = hartaOp.get(id)
+            if (o?.cerinta_id != null && !bune.has(Number(o.cerinta_id))) refuzate.push({ op_id: id, motiv: 'cerinta_tinta_neeligibila' })
+          }
         }
         if (refuzate.length) return json({ ok: false, blocat_lot: true, operatii_refuzate: refuzate,
           error: `Blocat pe proveniență / loturi: ${refuzate.length} din ${opIds.length} operații nu se pot aplica (${[...new Set(refuzate.map((r) => r.motiv))].join(', ')}) — nu s-a aplicat nimic; reia „compară” sau tratează-le manual` })
@@ -283,6 +298,8 @@ Deno.serve(async (req: Request) => {
       }
     }
     const surse = surseNoi(doc.id, coadaSurse)
+    // coada folosită în forma veche (fallback pe fara_loturi) = proveniență INCOMPLETĂ, purtată mai departe (Jakarinos r8 P1 #1)
+    const incomplet = !!coada && coadaIncompleta(prop)
     const prompt = PROMPT_INVENTAR + '\n\n'
       + (coada ? 'COADA DESCHISA DE LA FRAGMENTUL PRECEDENT:\n' + coada + '\n\n' : '')
       + `DOCUMENT: ${numeScurt}\n<document_neincrezator>\n${doc.text_extras}\n</document_neincrezator>`
@@ -310,7 +327,7 @@ Deno.serve(async (req: Request) => {
         // Ancora e in sursa nemodificata (documentul + citatul), nu in textul generat si nici in
         // numarul rundei: asa acelasi id iese la fiecare reluare.
         disp_id: await hash12(doc.id + '|' + norm(x.citat)),
-        doc_id: doc.id, doc_ids: surse, doc_nume: numeScurt, nr: x.nr ?? null,
+        doc_id: doc.id, doc_ids: surse, ...(incomplet ? { surse_incomplete: true } : {}), doc_nume: numeScurt, nr: x.nr ?? null,
         tip: ['efect_posibil', 'confirmare', 'efect_cantitati', 'neclar', 'anexa'].includes(x.tip) ? x.tip : 'neclar',
         rezumat: String(x.rezumat || '').slice(0, 600),
         citat: String(x.citat).slice(0, 400),
@@ -329,6 +346,7 @@ Deno.serve(async (req: Request) => {
       coada_deschisa: j.coada_deschisa || null,
       // proveniența cozii (r4 P1 #2, r5 P1 #1): toate documentele contributoare, moștenite de la coada folosită
       coada_doc_ids: j.coada_deschisa ? surse : null, coada_doc_id: null,
+      coada_incompleta: j.coada_deschisa && incomplet ? true : undefined,
       acoperire: [...(prop.acoperire || []), {
         doc_id: doc.id, nume: numeScurt, caractere: (doc.text_extras || '').length,
         // Taiat la plafon = fragmentul NU a fost parcurs integral, orice ar zice modelul despre el.
@@ -541,16 +559,18 @@ Deno.serve(async (req: Request) => {
         lot_de_verificat: peLotNeclar || undefined,
         disp_id: sursa?.disp_id || null,
         surse_doc_ids: surseOp || undefined,
+        // certificat doar din proveniență COMPLETĂ (nu din fallback-ul [doc_id] de pe fara_loturi) — cerut la aplicare pe are_loturi
+        surse_complete: !!sursa && surseOp !== null && provenientaCompleta(sursa),
       }
-      if (part.stare === 'are_loturi' && !provenientaUnica(surseOp)) {
-        opProvenienta.push({ ...op, motiv_provenienta: !sursa ? 'fara_dispozitie_sursa' : 'surse_multiple' })
+      if (part.stare === 'are_loturi' && (!provenientaUnica(surseOp) || !op.surse_complete)) {
+        opProvenienta.push({ ...op, motiv_provenienta: !sursa ? 'fara_dispozitie_sursa' : !op.surse_complete ? 'provenienta_incompleta' : 'surse_multiple' })
         continue
       }
       opNoi.push(op)
     }
     // operațiile deja propuse înainte de proveniență (fără surse_doc_ids) pe are_loturi = scoase din cele aplicabile, la fel
     const opVechiToate: any[] = prop.operatii || []
-    const opVechi = part.stare === 'are_loturi' ? opVechiToate.filter((o: any) => provenientaUnica(o.surse_doc_ids)) : opVechiToate
+    const opVechi = part.stare === 'are_loturi' ? opVechiToate.filter((o: any) => o.surse_complete === true && provenientaUnica(o.surse_doc_ids)) : opVechiToate
     const opVechiScoase = opVechiToate.filter((o: any) => !opVechi.includes(o)).map((o: any) => ({ ...o, motiv_provenienta: 'operatie_veche_fara_provenienta' }))
     const provVechi: any[] = prop.operatii_provenienta || []
     const provStiute = new Set(provVechi.map((x: any) => x.op_id))
