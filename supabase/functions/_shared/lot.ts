@@ -103,9 +103,15 @@ const RE_LOT_NUME = new RegExp(`(?<![a-z])${LOT_CUV}\\d{1,3}(?:(?:\\s*[-,;/+&]\\
 const RE_LEGATURA_REFUZATA = /[+&]|\s(?:sau|or)\s/i
 export function lotDinNumeFisier(nume: string | null | undefined): Lot & { brut: string | null } {
   const s = String(nume || '').replace(/_+/g, ' ').replace(/[–—]/g, '-')
-  const fr = [...s.matchAll(RE_LOT_NUME)].map((m) => m[0])
+  const potr = [...s.matchAll(RE_LOT_NUME)]
+  const fr = potr.map((m) => m[0])
   if (!fr.length) return { ...NECUNOSCUT(), brut: null }
   const brut = fr.join(', ').slice(0, 200)
+  // r3 (review Jakarinos r3 P2 #4): și textul DINTRE fragmente („Lot 1 sau anexa Lot 2”) — o legătură refuzată acolo = necunoscut
+  for (let i = 1; i < potr.length; i++) {
+    const intre = ' ' + s.slice((potr[i - 1].index ?? 0) + potr[i - 1][0].length, potr[i].index ?? 0) + ' '
+    if (RE_LEGATURA_REFUZATA.test(intre)) return { ...NECUNOSCUT(), brut }
+  }
   const rez = new Set<number>()
   for (const f of fr) {
     if (RE_LEGATURA_REFUZATA.test(f)) return { ...NECUNOSCUT(), brut }

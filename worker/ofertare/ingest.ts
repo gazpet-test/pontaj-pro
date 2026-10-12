@@ -14,7 +14,7 @@ import { cuIncercare, cuTermen, gardaIncearca, incercareGarda, mesajEroare, meta
 import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md) — APLICARE DUPĂ FREEZE
 import { MAX_TEXT, MARCAJ_PREA_MARE, PRAG_MARE, citesteMare, compuneText, decizieCitireMare, esteMare, imparteText, mesajNecitite, trecereBlocata } from './citire_mare.ts'
 // LOTURI (20261024b): poarta unică — logica e DOAR în SQL; helper-ul e fail-closed (RPC căzut = nimic eligibil)
-import { eligibilitateLicitatie, esteEligibil } from '../../supabase/functions/_shared/eligibilLot.ts'
+import { documentEligibil, eligibilitateLicitatie, esteEligibil, mesajLot } from '../../supabase/functions/_shared/eligibilLot.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY'), ANTHROPIC_KEY = env('ANTHROPIC_API_KEY')
@@ -66,7 +66,13 @@ async function textLocal(caleaPdf: string, termen = Infinity): Promise<{ pagini:
   return { pagini: imparteText(r.out, nPag), nPag }
 }
 
-async function antetDinText(text: string): Promise<{ antet: any; tokIn: number; tokOut: number }> {
+async function antetDinText(text: string, poarta?: { supa: Supa; docId: number }): Promise<{ antet: any; tokIn: number; tokOut: number }> {
+  // loturi (review Jakarinos r3 P2 #6): reverificare IMEDIAT înaintea apelului Haiku — între selecție și antet (descărcare +
+  // extragere locală pe PDF mare) lotul se poate debifa. Neeligibil / poarta căzută = fără antet, fără apel AI.
+  if (poarta) {
+    const e = await documentEligibil(poarta.supa as any, poarta.docId)
+    if (!e.eligibil) { log(`#${poarta.docId} antet sărit: ${mesajLot(e.motiv)}`); return { antet: null, tokIn: 0, tokOut: 0 } }
+  }
   const prompt = `Primești începutul unui document dintr-o documentație de atribuire românească (licitație publică). Citește ANTETUL / pagina de gardă și răspunde EXCLUSIV cu JSON, fără altceva:
 {"obiectiv": "...", "beneficiar": "...", "proiectant": "...", "proiect_nr": "...", "revizie": "...", "data": "..."}
 Pune null unde nu apare. "revizie" = revizia/ediția documentului (ex. "Rev. 2", "R01"), nu data.
@@ -181,8 +187,8 @@ export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () 
 }
 
 // R6: drumul „PDF mare” (citire_mare.ts) cu dependențele de producție: antetul cu Haiku, ca pe drumul obișnuit
-const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void) => ({
-  cerutDe, esteOprire, stare, antet: antetDinText, modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
+const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void, supa?: Supa) => ({
+  cerutDe, esteOprire, stare, antet: (t: string, docId?: number) => antetDinText(t, supa && docId != null ? { supa, docId } : undefined), modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
 })
 
 export async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}): Promise<string> {
@@ -226,7 +232,7 @@ async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | nu
   })()
   try {
     return GESTIONAT + await cuIncercare(inc, async () => {
-      const rez = await _mare.citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare))
+      const rez = await _mare.citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare, supabase))
       if (pierdut) {   // lease pierdut: NU raportăm procesat/parțial, oricare ar fi rezultatul local
         await inc.inchide({ rezultat: 'predat', eroare: 'lease pierdut în timpul citirii pe felii' })
         return `garda: lease pierdut în timpul citirii pe felii — rezultat local ignorat (${rez.slice(0, 120)})`
@@ -279,7 +285,7 @@ async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: 
     const comp = compuneText(local.pagini, local.nPag, off, MAX_TEXT)
     const necitite = comp.necitite, text = comp.text
     let antet: any = null, tokIn = 0, tokOut = 0
-    try { const a = await antetDinText(local.pagini.slice(0, 2).join('\n\n')); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#${doc.id} antet:`, (e as Error).message) }
+    try { const a = await antetDinText(local.pagini.slice(0, 2).join('\n\n'), { supa: supabase, docId: doc.id }); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#${doc.id} antet:`, (e as Error).message) }
     try { await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: HAIKU.id, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * HAIKU.in + tokOut * HAIKU.out, ref_table: 'ofertare_documente_atribuire', ref_id: doc.id }) } catch (_) {}
     const upd: Record<string, unknown> = {
       text_extras: text.trim() || null, pagini: local.nPag, size_bytes: bytes.length, pagini_procesate: local.nPag, pagini_necitite: necitite,

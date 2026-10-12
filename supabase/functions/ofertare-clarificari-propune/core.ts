@@ -7,7 +7,7 @@
 // Rulează identic în edge function (index.ts) și pe workerul NAS (worker/ofertare/clarificari.ts).
 import { CATEGORII_RESTANTE, infoRestanta, NOTA_LUNGIMI, restantePeTip } from './restante.js'
 import { termenRO } from '../_shared/oraRO.ts'
-import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
+import { caleBlocata, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
 const MODEL_IMPLICIT = 'claude-sonnet-5'
@@ -128,7 +128,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status, lot_domeniu, lot_nr', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
-      supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie, raspuns_document_id').eq('licitatie_id', licId).order('nr'),
+      supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie, raspuns_document_id, fisier_path').eq('licitatie_id', licId).order('nr'),
       // sarcina 2 (a): planșele cu conflicte de transfer (eroarea se păstrează, nu se înghite)
       Promise.resolve(supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, restante').eq('licitatie_id', licId))
         .then((r: any) => r, (e: any) => ({ data: null, error: e })),
@@ -150,7 +150,18 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     // contextul secundar (review Jakarinos r2 P1 #2): răspunsul autorității intră doar dacă documentul lui e eligibil (fără document =
     // text introdus de om, trece), conflictele de planșe doar pe planșe eligibile, raportul verificării precedente doar pe
     // fara_loturi (pe are_loturi nu i se poate verifica proveniența pe lot — se omite explicit)
-    const clarCtx = (clarLic || []).map((q: any) => (q.raspuns && q.raspuns_document_id != null && !esteEligibil(fd.harta, q.raspuns_document_id)) ? { ...q, raspuns: null, raspuns_blocat_lot: true } : q)
+    // + proveniența ÎNTREBĂRII (review Jakarinos r3 P1 #2): textul ei poate fi citit din PDF-ul de la fisier_path; dacă aceeași
+    // cale e a unui document de atribuire blocat acum, întrebarea nu intră în prompt (rămâne doar pentru deduplicare)
+    const caiBlocate = new Set<string>()
+    for (const cale of [...new Set((clarLic || []).map((q: any) => q.fisier_path).filter(Boolean))] as string[]) {
+      const m = await caleBlocata(supabase, cale)
+      if (m === 'eroare_poarta') return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
+      if (m) caiBlocate.add(cale)
+    }
+    const clarCtx = (clarLic || []).map((q: any) => {
+      if (q.fisier_path && caiBlocate.has(q.fisier_path)) return { ...q, intrebare: '(clarificare din document blocat pe loturi — omisă)', raspuns: null }
+      return (q.raspuns && q.raspuns_document_id != null && !esteEligibil(fd.harta, q.raspuns_document_id)) ? { ...q, raspuns: null, raspuns_blocat_lot: true } : q
+    })
     const conflElig = rConfl?.data ? { ...rConfl, data: rConfl.data.filter((c: any) => esteEligibil(fd.harta, c.document_id)) } : rConfl
     const verifCtx = fc.participare.stare === 'fara_loturi' ? verif : null
     const cantElig = fq.pastrate
@@ -164,9 +175,23 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     // răspunsuri primite: întâi aceeași autoritate, apoi altele (limitat)
     const autor = String(lic.autoritate || '').replace(/^\d+\s*-\s*/, '').trim()
     const { data: rasp } = await supabase.from('ofertare_clarificari')
-      .select('intrebare, raspuns, licitatie_id, lic:ofertare_licitatii(nr_anunt, autoritate)')
+      .select('intrebare, raspuns, licitatie_id, raspuns_document_id, fisier_path, lic:ofertare_licitatii(nr_anunt, autoritate)')
       .eq('status', 'raspunsa').not('raspuns', 'is', null).neq('licitatie_id', licId).order('raspuns_la', { ascending: false }).limit(40)
-    const raspunsuri = (rasp || []).sort((a: any, b: any) => (norm(b.lic?.autoritate).includes(norm(autor)) ? 1 : 0) - (norm(a.lic?.autoritate).includes(norm(autor)) ? 1 : 0)).slice(0, 25)
+    // răspunsurile altor licitații (review Jakarinos r3 P1 #1): și ele vin din documente — documentul răspunsului și calea
+    // întrebării trebuie să fie eligibile acum; poarta căzută = oprire, nu „fără exemple”
+    const fx = await filtreazaDocumente(supabase, (rasp || []).map((r: any) => r.raspuns_document_id))
+    if (!fx.ok) return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
+    const raspOk: any[] = []
+    for (const r of (rasp || [])) {
+      if (r.raspuns_document_id != null && !fx.eligibile.has(Number(r.raspuns_document_id))) continue
+      if (r.fisier_path) {
+        const m = await caleBlocata(supabase, r.fisier_path)
+        if (m === 'eroare_poarta') return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
+        if (m) continue
+      }
+      raspOk.push(r)
+    }
+    const raspunsuri = raspOk.sort((a: any, b: any) => (norm(b.lic?.autoritate).includes(norm(autor)) ? 1 : 0) - (norm(a.lic?.autoritate).includes(norm(autor)) ? 1 : 0)).slice(0, 25)
 
     const termen = termenRO(lic.termen_depunere)
     const golMap = new Map<any, any>(goluri.map((g: any) => [g.cerinta_id, g]))

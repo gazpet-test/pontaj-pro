@@ -71,7 +71,7 @@ function supaFals(tabele: Record<string, any[]>, erori: Record<string, string> =
       let lim = Infinity, cuCount = false
       const b: any = {
         select: (s: string, o?: any) => { selecturi[t] = s; cuCount = !!o?.count; return b },
-        eq: () => b, neq: () => b, is: () => b, not: () => b, in: () => b, order: () => b, limit: (n: number) => { lim = n; return b },
+        eq: () => b, neq: () => b, is: () => b, not: () => b, in: () => b, order: () => b, range: () => b, limit: (n: number) => { lim = n; return b },
         single: () => Promise.resolve({ data: (tabele[t] || [])[0] ?? null, error: null }),
         maybeSingle: () => Promise.resolve({ data: (tabele[t] || [])[0] ?? null, error: null }),
         insert: () => Promise.resolve({ data: null, error: null }),
@@ -244,7 +244,10 @@ Deno.test('loturi r2: răspuns din document blocat / conflict pe planșă blocat
     const rpcVechi = supa.rpc
     // planșa 777 din conflicte e blocată (lipsește din harta porții), documentul 10 e eligibil
     supa.rpc = (n: string, a?: any) => n === 'fn_ofertare_eligibilitate'
-      ? Promise.resolve({ data: [{ document_id: 10, eligibil: true, motiv: stare === 'fara_loturi' ? 'fara_loturi' : 'comun' }], error: null }) : rpcVechi(n, a)
+      ? Promise.resolve({ data: [{ document_id: 10, eligibil: true, motiv: stare === 'fara_loturi' ? 'fara_loturi' : 'comun' }], error: null })
+      : n === 'fn_ofertare_document_eligibil'   // documentul 999 (răspunsul blocat) e de triat, restul eligibile
+        ? Promise.resolve({ data: Number(a?.p_document_id) === 999 ? { eligibil: false, motiv: 'de_triat', licitatie_id: 95 } : { eligibil: true, motiv: 'comun', licitatie_id: 95 }, error: null })
+        : rpcVechi(n, a)
     const fromVechi = supa.from.bind(supa)
     supa.from = (t: string) => t === 'v_ofertare_transfer_conflicte'
       ? { select: () => ({ eq: () => Promise.resolve({ data: [{ document_id: 777, nume_original: 'PL_BLOCATA.pdf', stare: 'conflicte', n: 1, deschis: true, restante: [{ tip: 'dn_nestandard', n: 1 }] }], error: null }) }) }

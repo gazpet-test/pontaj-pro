@@ -11,7 +11,7 @@
 // nu se mai poate apela. Ce ramane e un generator de propuneri, inofensiv.
 // Auth: JWT user SAU x-radar-secret. Body {clarificare_id} → intoarce planul. Nu exista cale de scriere.
 import { createClient } from 'npm:@supabase/supabase-js@2'
-import { filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
+import { caleBlocata, filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 // Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
 // accepta si valoarea precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile deodata.
@@ -70,6 +70,12 @@ Deno.serve(async (req: Request) => {
     const fd = await filtreazaDocumente(db, [cl.raspuns_document_id])
     const m = !fd.ok ? 'eroare_poarta' : (fd.eligibile.has(Number(cl.raspuns_document_id)) ? null : (fd.blocate.get(Number(cl.raspuns_document_id)) || 'eroare_poarta'))
     if (m) return json({ error: `${mesajLot(m)} (documentul răspunsului #${cl.raspuns_document_id})`, motiv_lot: m })
+  }
+  //  (3) proveniența ÎNTREBĂRII (review Jakarinos r3 P1 #2): intrebare / citita_rezumat pot fi citite din PDF-ul de la
+  //      fisier_path; dacă aceeași cale e a unui document de atribuire blocat acum, nu se trimit la AI (refuz explicit)
+  if (cl.fisier_path) {
+    const m = await caleBlocata(db, String(cl.fisier_path))
+    if (m) return json({ error: `${mesajLot(m)} (PDF-ul clarificării)`, motiv_lot: m })
   }
   const excluse_lot = fl.excluse.length
   const excluse_motive = fl.excluse.reduce((a: Record<string, number>, e: any) => { a[e.motiv] = (a[e.motiv] || 0) + 1; return a }, {})

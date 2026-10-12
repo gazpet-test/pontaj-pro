@@ -99,3 +99,12 @@ Deno.test('lotDinNumeFisier r2 (review Jakarinos r2 P2 #7): underscore, liniuț�
   eq(lotDinNumeFisier('lot.2 si lot:3.pdf').loturi, [2, 3])
   eq(lotDinNumeFisier('Lotul 2 - 2024.pdf').loturi, [2])
 })
+
+Deno.test('lotDinNumeFisier r3 (review Jakarinos r3 P2 #4): legătura refuzată dintre fragmente = necunoscut', () => {
+  eq(lotDinNumeFisier('Lot 1 sau anexa Lot 2.pdf').domeniu, 'necunoscut')
+  eq(lotDinNumeFisier('Lot 1 + anexa Lot 2.pdf').domeniu, 'necunoscut')
+  eq(lotDinNumeFisier('Lot 1 & anexa Lot 2.pdf').domeniu, 'necunoscut')
+  eq(lotDinNumeFisier('Lot 1 or annex Lot 2.pdf').domeniu, 'necunoscut')
+  eq(lotDinNumeFisier('Lot 1 anexa Lot 2.pdf').loturi, [1, 2])          // fără legătură refuzată: reuniune, ca înainte
+  eq(lotDinNumeFisier('Lot 1 - clarificari - Lot 3.pdf').loturi, [1, 3])
+})

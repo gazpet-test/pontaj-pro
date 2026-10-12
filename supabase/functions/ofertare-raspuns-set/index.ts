@@ -21,7 +21,7 @@ import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
 import { eligibilaPeLot, parseLot } from '../_shared/lot.ts'
-import { filtreazaRegistru, lotOperatie } from './loturi.ts'
+import { filtreazaRegistru, lotOperatie, selectieSet } from './loturi.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -351,15 +351,24 @@ Deno.serve(async (req: Request) => {
     // participăm (pe are_loturi) și lotul setului, dacă e declarat; neînțelese = neclare, excluse și raportate separat.
     const part = await participareLicitatie(db, set.licitatie_id)
     if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: part.motiv })
-    const lotSet = set.lot ? parseLot(String(set.lot)) : null
+    // Selecția EFECTIVĂ (review Jakarinos r3 P1 #3): o singură mulțime = loturile setului ∩ loturile la care participăm
+    // (pe are_loturi; setul fără lot = toată participarea). Intersecția goală (set rămas pe un lot debifat) = oprire.
+    // Aceeași selecție decide dispozițiile, registrul și lotul operațiilor — nu două intersecții separate.
+    const selSet = selectieSet(set.lot)
+    if (!selSet.ok) return json({ error: selSet.eroare })
+    const selEf: number[] | null = part.stare === 'are_loturi'
+      ? (selSet.selectie === null ? part.participam : selSet.selectie.filter((n) => part.participam.includes(n)))
+      : selSet.selectie
+    if (selEf !== null && !selEf.length) return json({ ok: false, blocat_lot: true, continua: false,
+      error: `Blocat pe loturi: lotul setului (${set.lot}) nu e printre loturile la care participăm (${part.participam.join(', ')}) — nu s-a comparat nimic` })
+    const lotEf = selEf === null ? null : selEf.join(',')
     const lotDisp = (x: any): 'ok' | 'in_afara' | 'neclar' => {
       const brut = (Array.isArray(x.loturi) ? x.loturi : []).map(String).filter((s: string) => s.trim())
       if (!brut.length) return 'ok'
       const l = parseLot(brut.join(','))
       if (l.domeniu === 'toate') return 'ok'
       if (l.domeniu !== 'lista') return 'neclar'
-      if (part.stare === 'are_loturi' && !eligibilaPeLot(l, part.participam)) return 'in_afara'
-      if (lotSet?.domeniu === 'lista' && !eligibilaPeLot(l, lotSet.loturi)) return 'in_afara'
+      if (selEf !== null && !eligibilaPeLot(l, selEf)) return 'in_afara'
       return 'ok'
     }
     const peLotDisp = deFacutToate.filter((x: any) => fd.eligibile.has(Number(x.doc_id)))
@@ -380,7 +389,7 @@ Deno.serve(async (req: Request) => {
     const fc = await filtreazaDerivate(db, set.licitatie_id, (cerBD || []) as any[])
     if (!fc.ok) return json({ error: mesajLot(fc.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: fc.motiv })
     const cer = fc.pastrate
-    const filtru = filtreazaRegistru((cer || []) as any[], set.lot)
+    const filtru = filtreazaRegistru((cer || []) as any[], lotEf)
     if (!filtru.ok) return json({ error: filtru.eroare })
     const eligibile = filtru.eligibile
     const lotNecunoscut = filtru.lotNecunoscut
@@ -396,7 +405,7 @@ Deno.serve(async (req: Request) => {
       `--- dispozitia ${x.disp_id}${x.nr ? ' (nr. ' + x.nr + ' în document)' : ''} (document ${x.doc_nume}) ---\nREZUMAT: ${x.rezumat}\nCITAT: ${x.citat}${x.loturi?.length ? '\nLOTURI: ' + x.loturi.join(', ') : ''}`).join('\n\n')
 
     const prompt = PROMPT_COMPARA
-      + `\n\nLOTUL SETULUI: ${set.lot || '(nedeclarat — tot registrul)'}`
+      + `\n\nLOTUL SETULUI: ${lotEf || '(nedeclarat — tot registrul)'}`
       + `\n\nDISPOZITII DE ANALIZAT:\n<document_neincrezator>\n${disp}\n</document_neincrezator>`
       + `\n\nREGISTRUL DE CERINTE ELIGIBILE (${eligibile.length} din ${(cer || []).length} active):\n${registru}`
       // Reamintirea sta DUPA blocul neincrezator: ultimul cuvant din prompt e al nostru, nu al PDF-ului.
@@ -435,7 +444,7 @@ Deno.serve(async (req: Request) => {
       // dupa ce omul a bifat-o degeaba.
       const textOp = String(o.text_nou || o.text_cerinta || '').trim()
       if (fel !== 'anuleaza' && !textOp) { arunca('operatie fara text'); continue }
-      const lotOp = lotOperatie(set.lot, sursa?.loturi)
+      const lotOp = lotOperatie(lotEf, sursa?.loturi)   // selecția efectivă (r3 P1 #3), nu lotul brut al setului
       const peLotNeclar = cid !== null && lotNecunoscut.has(cid)
       opNoi.push({
         // op_id il face SERVERUL, nu modelul: hash din set + dispozitia-sursa + fel + tinta.

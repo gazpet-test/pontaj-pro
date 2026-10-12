@@ -213,7 +213,7 @@ export type DepsMare = {
   esteOprire?: () => boolean
   stare?: (s: string) => void
   // antetul (obiectiv/beneficiar/…/revizie) din primele 2 pagini — Haiku în producție (ingest.ts), lipsă în teste
-  antet?: (text: string) => Promise<{ antet: any; tokIn: number; tokOut: number }>
+  antet?: (text: string, docId?: number) => Promise<{ antet: any; tokIn: number; tokOut: number }>
   modelAntet?: { id: string; in: number; out: number }
   pagini?: (cale: string, timeoutMs: number) => Promise<RezPagini>
   extractor?: (cale: string) => Extractor
@@ -333,7 +333,7 @@ export async function citesteMare(supa: any, docId: number, deps: DepsMare): Pro
     const inceput = ex.pagini.slice(0, 2).filter((p): p is string => typeof p === 'string').join('\n\n')
     if (deps.antet && inceput.replace(/\s/g, '').length >= 120) {
       let tokIn = 0, tokOut = 0
-      try { const a = await deps.antet(inceput); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#doc ${docId} antet:`, (e as Error)?.message ?? e) }
+      try { const a = await deps.antet(inceput, docId); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#doc ${docId} antet:`, (e as Error)?.message ?? e) }
       if (deps.modelAntet) {
         try { await supa.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: deps.modelAntet.id, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * deps.modelAntet.in + tokOut * deps.modelAntet.out, ref_table: T, ref_id: docId }) } catch (_) { /* nimic */ }
       }
