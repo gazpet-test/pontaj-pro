@@ -1735,7 +1735,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
 
             {opProv.length > 0 && (
               <div style={{ fontSize:12.5, color:G.orange, marginBottom:10, padding:'8px 10px', borderRadius:7, background:G.orange + '14', border:`1px solid ${G.orange}55` }}>
-                <div style={{ fontWeight:700, marginBottom:4 }}>⚠ {opProv.length} {opProv.length === 1 ? 'schimbare propusă NU se poate aplica automat' : 'schimbări propuse NU se pot aplica automat'} — proveniența vine din mai multe documente (sau fără dispoziție-sursă unică), pe o licitație cu loturi. Verifică-le în documentele indicate și, dacă sunt corecte, adaugă / modifică cerința manual.</div>
+                <div style={{ fontWeight:700, marginBottom:4 }}>⚠ {opProv.length} {opProv.length === 1 ? 'schimbare propusă NU se poate aplica automat' : 'schimbări propuse NU se pot aplica automat'} — proveniența vine din mai multe documente, e incompletă sau fără dispoziție-sursă unică (cerința rezultată ar avea un singur document-sursă). Verifică-le în documentele indicate și, dacă sunt corecte, adaugă / modifică cerința manual.</div>
                 {opProv.map(o => (
                   <div key={o.op_id} style={{ fontSize:12, color:G.text, marginTop:3 }}>
                     · <b>{o.fel}</b>{o.cerinta_id ? ` cerința #${o.cerinta_id}` : ''}: {String(o.text_nou || o.text_cerinta || o.sursa_pasaj || '').slice(0, 220)}

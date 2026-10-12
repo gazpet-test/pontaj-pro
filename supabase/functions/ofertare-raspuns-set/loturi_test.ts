@@ -92,3 +92,7 @@ Deno.test('proveniență incompletă (Jakarinos r8 P1 #1): fallback-ul de pe far
   eq(surseDispozitie({ doc_id: 11, doc_ids: [11], surse_incomplete: true }, true), null)
   eq(surseDispozitie({ doc_id: 11, doc_ids: [11], surse_incomplete: true }, false), [11])
 })
+Deno.test('surseCoada r9 (Jakarinos r9 P1 #1): coada marcată incompletă nu intră la AI pe are_loturi', () => {
+  eq(surseCoada({ coada_doc_ids: [11], coada_incompleta: true }, true), [])
+  eq(surseCoada({ coada_doc_ids: [11], coada_incompleta: true }, false), [11])
+})

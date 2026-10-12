@@ -54,6 +54,7 @@ const iduri = (xs: unknown[]) => [...new Set(xs.map(Number).filter((n) => Number
 // reținut (Jakarinos r6 P1 #1): pe are_loturi forma veche = [] (neverificabilă, omisă); pe fara_loturi se citește ca [id].
 // O listă coada_doc_ids cu un element nevalid = [] (neverificabilă).
 export function surseCoada(prop: any, areLoturi = false): number[] {
+  if (areLoturi && prop?.coada_incompleta === true) return []   // marcaj moștenit: nu intră la AI pe loturi (Jakarinos r9 P1 #1)
   if (Array.isArray(prop?.coada_doc_ids)) {
     const valide = prop.coada_doc_ids.map(Number).filter((n: number) => Number.isSafeInteger(n) && n > 0)
     return valide.length === prop.coada_doc_ids.length ? iduri(valide) : []
