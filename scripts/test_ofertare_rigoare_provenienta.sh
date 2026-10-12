@@ -155,9 +155,9 @@ q "INSERT INTO public.ofertare_raspuns_set(id, licitatie_id, titlu, propunere) V
    {\"op_id\": \"m\", \"fel\": \"modifica\", \"cerinta_id\": $CM, \"text_nou\": \"M1 nou\"},
    {\"op_id\": \"a\", \"fel\": \"anuleaza\", \"cerinta_id\": $CM, \"surse_doc_ids\": null}], \"amprente\": {}}')" >/dev/null
 amprenta 15 "$CM"
-R=$(aplica 15 "'m','a'")
+R15=$(aplica 15 "'m','a'")
 asteapta "modifică / anulează fără sursă proprie: 2 conflicte, cerința rămâne activă, fără fotografie de acoperire" \
-  "$(jq -r '"\(.modificate)/\(.anulate)/\(.conflicte|length)"' <<<"$R")/$(q "SELECT coalesce(inlocuita_de::text,'activa')||'/'||coalesce(acoperire_snapshot::text,'NULL') FROM public.ofertare_cerinte WHERE id = $CM")" "0/0/2/activa/NULL"
+  "$(jq -r '"\(.modificate)/\(.anulate)/\(.conflicte|length)"' <<<"$R15")/$(q "SELECT coalesce(inlocuita_de::text,'activa')||'/'||coalesce(acoperire_snapshot::text,'NULL') FROM public.ofertare_cerinte WHERE id = $CM")" "0/0/2/activa/NULL"
 asteapta "rezultatul poartă sursele" "$(jq -c '.aplicate[]|select(.op_id=="m1")|.surse_document_ids' <<<"$R")" "[31,33,34]"
 asteapta "setul: aplicat_partial (conflicte)" "$(q "SELECT stare FROM public.ofertare_raspuns_set WHERE id = 10")" aplicat_partial
 asteapta "acoperirea mutată pe versiunea nouă" "$(q "SELECT cerinta_id FROM public.ofertare_acoperire")" "$CB"
