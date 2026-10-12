@@ -21,7 +21,7 @@ import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
 import { eligibilaPeLot, parseLot } from '../_shared/lot.ts'
-import { filtreazaRegistru, lotOperatie, selectieSet } from './loturi.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet } from './loturi.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -235,7 +235,16 @@ Deno.serve(async (req: Request) => {
     if (!doc?.text_extras) return json({ error: `documentul ${urmator.document_id} nu are text extras` })
 
     const numeScurt = (doc.nume_original || '').split('/').pop()
-    const coada = String(prop.coada_deschisa || '')
+    // Coada deschisă (review Jakarinos r4 P1 #2) e text din documentul PRECEDENT: intră doar dacă documentul ei (coada_doc_id)
+    // e eligibil ACUM. Coadă fără proveniență (scrisă înainte de loturi) sau din document blocat = omisă, nu retransmisă.
+    let coada = String(prop.coada_deschisa || ''), coadaOmisa: string | null = null
+    if (coada) {
+      if (prop.coada_doc_id == null) { coada = ''; coadaOmisa = 'fara_provenienta' }
+      else {
+        const ec = await documentEligibil(db, Number(prop.coada_doc_id))
+        if (!ec.eligibil) { coada = ''; coadaOmisa = ec.motiv }
+      }
+    }
     const prompt = PROMPT_INVENTAR + '\n\n'
       + (coada ? 'COADA DESCHISA DE LA FRAGMENTUL PRECEDENT:\n' + coada + '\n\n' : '')
       + `DOCUMENT: ${numeScurt}\n<document_neincrezator>\n${doc.text_extras}\n</document_neincrezator>`
@@ -280,6 +289,7 @@ Deno.serve(async (req: Request) => {
       dispozitii: [...vechi, ...adaugate],
       documente_citite: [...citite, doc.id],
       coada_deschisa: j.coada_deschisa || null,
+      coada_doc_id: j.coada_deschisa ? doc.id : null,   // proveniența cozii (r4 P1 #2)
       acoperire: [...(prop.acoperire || []), {
         doc_id: doc.id, nume: numeScurt, caractere: (doc.text_extras || '').length,
         // Taiat la plafon = fragmentul NU a fost parcurs integral, orice ar zice modelul despre el.
@@ -302,7 +312,7 @@ Deno.serve(async (req: Request) => {
       // Taiat la plafon = fragmentul NU a fost parcurs integral, orice ar zice modelul despre el.
       acoperit_tot: j.acoperit_tot !== false && !taiat,
       partial: taiat || undefined,
-      coada_deschisa: !!propNou.coada_deschisa,
+      coada_deschisa: !!propNou.coada_deschisa, coada_omisa_lot: coadaOmisa || undefined,
       total: { dispozitii: t.length,
         efect_posibil: t.filter((x: any) => x.tip === 'efect_posibil').length,
         confirmari: t.filter((x: any) => x.tip === 'confirmare').length,
@@ -362,6 +372,10 @@ Deno.serve(async (req: Request) => {
     if (selEf !== null && !selEf.length) return json({ ok: false, blocat_lot: true, continua: false,
       error: `Blocat pe loturi: lotul setului (${set.lot}) nu e printre loturile la care participăm (${part.participam.join(', ')}) — nu s-a comparat nimic` })
     const lotEf = selEf === null ? null : selEf.join(',')
+    // Lotul operației (review Jakarinos r4 P1 #1): dispoziția cu loturi numite → DOAR loturile ei din selecția efectivă
+    // (nu toată selecția: participăm 1+2, dispoziția e pe 2 → operația e pe 2); dispoziția generală / „toate” → selecția
+    // efectivă; fără selecție (fara_loturi, set fără lot) → comportamentul vechi.
+    const lotOperatieEf = (loturiDisp: unknown) => lotOperatieSelectie(selEf, set.lot, loturiDisp)
     const lotDisp = (x: any): 'ok' | 'in_afara' | 'neclar' => {
       const brut = (Array.isArray(x.loturi) ? x.loturi : []).map(String).filter((s: string) => s.trim())
       if (!brut.length) return 'ok'
@@ -444,7 +458,7 @@ Deno.serve(async (req: Request) => {
       // dupa ce omul a bifat-o degeaba.
       const textOp = String(o.text_nou || o.text_cerinta || '').trim()
       if (fel !== 'anuleaza' && !textOp) { arunca('operatie fara text'); continue }
-      const lotOp = lotOperatie(lotEf, sursa?.loturi)   // selecția efectivă (r3 P1 #3), nu lotul brut al setului
+      const lotOp = lotOperatieEf(sursa?.loturi)
       const peLotNeclar = cid !== null && lotNecunoscut.has(cid)
       opNoi.push({
         // op_id il face SERVERUL, nu modelul: hash din set + dispozitia-sursa + fel + tinta.

@@ -32,6 +32,20 @@ export function filtreazaRegistru<T extends RandLot>(cer: T[], lotSet: string | 
   return { ok: true, eligibile, lotNecunoscut, excluse: cer.length - eligibile.length }
 }
 
+// Lotul operației pe selecția EFECTIVĂ (set ∩ participare, review Jakarinos r4 P1 #1): dispoziția cu loturi numite → doar
+// loturile ei din selecție (participăm 1+2, dispoziția e pe 2 → „2”, nu „1,2”); dispoziția generală / „toate” → toată
+// selecția; selecție null (fara_loturi, set fără lot) → regula veche (lotul setului, altfel al dispoziției).
+export function lotOperatieSelectie(selEf: number[] | null, lotSet: string | null | undefined, loturiDisp: unknown) {
+  if (selEf === null) return lotOperatie(lotSet, loturiDisp)
+  const brut = (Array.isArray(loturiDisp) ? loturiDisp : []).map(String).filter((s) => s.trim())
+  const l = brut.length ? parseLot(brut.join(',')) : null
+  if (l?.domeniu === 'lista') {
+    const x = l.loturi.filter((n) => selEf.includes(n))
+    if (x.length) return lotOperatie(x.join(','), null)
+  }
+  return lotOperatie(selEf.join(','), null)
+}
+
 // Lotul unei operații: al setului, altfel al dispoziției-sursă (audit R03). `lot` (text, citit de RPC-ul de aplicare)
 // devine forma canonică „2” / „1,3” când se poate interpreta; altfel rămâne textul brut, ca înainte.
 export function lotOperatie(lotSet: string | null | undefined, loturiDispozitie: unknown):

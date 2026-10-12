@@ -43,7 +43,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { termenRO } from '../_shared/oraRO.ts'
 // 12.10.2026 (MVP loturi, 20261024b): cu loturi la care participăm, cerințele lot_domeniu='lista' fără intersecție nu intră
 // în generare (raportate în `cerinte_excluse_lot`); cele 'necunoscut' NU blochează în MVP, dar apar în `cerinte_lot_necunoscut`.
-import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'
+import { caleBlocata, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
@@ -99,7 +99,7 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
     supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', licId).maybeSingle(),
     supabase.from('ofertare_pt_participanti').select('rol, nume, cota_procent, activitati, scop_declarat, partener:ofertare_parteneri(nume)').eq('licitatie_id', licId).limit(50),
     supabase.from('ofertare_pt_declaratii').select('forma, stare, citat').eq('licitatie_id', licId).limit(20),
-    supabase.from('ofertare_clarificari').select('nr, intrebare, raspuns, raspuns_la, raspuns_document_id').eq('licitatie_id', licId).eq('status', 'raspunsa').order('nr').limit(20),
+    supabase.from('ofertare_clarificari').select('nr, intrebare, raspuns, raspuns_la, raspuns_document_id, fisier_path').eq('licitatie_id', licId).eq('status', 'raspunsa').order('nr').limit(20),
     supabase.from('ofertare_pt_capitole').select('id, nr, titlu, continut').eq('licitatie_id', licId).order('nr').limit(40),
     supabase.from('documente_firma').select('id, tip, denumire, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare').eq('activ', true).eq('utilizabil', true).in('categorie', ['iso', 'autorizatie']).order('id').limit(80),
     supabase.from('ofertare_pt_afirmatii').select('*').eq('licitatie_id', licId).limit(100),
@@ -183,9 +183,18 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
   // răspunsul autorității „prevalează” — deci intră doar dacă documentul lui e eligibil acum (fără document = text de om)
   const fr = await eligibilitateLicitatie(supabase, licId)
   if (!fr.ok) return { text: '', refuz: 'eroare_poarta' }
-  const clBlocate = (clar?.data || []).filter((c: any) => c.raspuns_document_id != null && !esteEligibil(fr.harta, c.raspuns_document_id)).length
-  if (clBlocate) note.push(`clarificări: ${clBlocate} răspunsuri din documente blocate pe loturi, scoase`)
-  const cl = (clar?.data || []).filter((c: any) => String(c.raspuns || '').trim() && (c.raspuns_document_id == null || esteEligibil(fr.harta, c.raspuns_document_id)))
+  // + PDF-ul ÎNTREBĂRII (review Jakarinos r4 P1 #3): dacă fisier_path e calea unui document de atribuire blocat acum,
+  // clarificarea întreagă iese (întrebarea e text din el); poarta căzută = refuz
+  const caiBlocate = new Set<string>()
+  for (const cale of [...new Set((clar?.data || []).map((c: any) => c.fisier_path).filter(Boolean))] as string[]) {
+    const m = await caleBlocata(supabase, cale)
+    if (m === 'eroare_poarta') return { text: '', refuz: 'eroare_poarta' }
+    if (m) caiBlocate.add(cale)
+  }
+  const blocataCl = (c: any) => (c.raspuns_document_id != null && !esteEligibil(fr.harta, c.raspuns_document_id)) || (c.fisier_path && caiBlocate.has(c.fisier_path))
+  const clBlocate = (clar?.data || []).filter(blocataCl).length
+  if (clBlocate) note.push(`clarificări: ${clBlocate} din documente blocate pe loturi (întrebare sau răspuns), scoase`)
+  const cl = (clar?.data || []).filter((c: any) => String(c.raspuns || '').trim() && !blocataCl(c))
   if (cl.length) parti.push(`RĂSPUNSURILE AUTORITĂȚII LA CLARIFICĂRI (prevalează asupra cerințelor inițiale):\n${cl.map((c: any) => `- Clarificarea nr. ${c.nr}${c.raspuns_la ? ' (răspuns ' + c.raspuns_la + ')' : ''}: Î: ${scurt(c.intrebare, 200)} · R: ${scurt(c.raspuns, 1200)}`).join('\n')}`)
 
   const alte = (caps?.data || []).filter((k: any) => k.id !== capIdCurent)

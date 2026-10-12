@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none supabase/functions/ofertare-raspuns-set/loturi_test.ts
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { filtreazaRegistru, lotOperatie, selectieSet } from './loturi.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet } from './loturi.ts'
 
 const ids = (r: any) => (r.ok ? r.eligibile.map((c: any) => c.id) : r)
 
@@ -38,4 +38,13 @@ Deno.test('raspuns-set: lotul operației — canonic din set, altfel din dispozi
   eq(lotOperatie(null, []), { lot: null, lot_domeniu: null, lot_nr: null })
   eq(lotOperatie('', ['toate']), { lot: 'toate', lot_domeniu: 'toate', lot_nr: null })
   eq(lotOperatie(null, ['zona nord']), { lot: 'zona nord', lot_domeniu: 'necunoscut', lot_nr: null })
+})
+
+Deno.test('lotOperatieSelectie (review Jakarinos r4 P1 #1): dispoziția pe lotul ei din selecție, nu toată selecția', () => {
+  eq(lotOperatieSelectie([1, 2], null, ['2']).lot, '2')            // participăm 1+2, dispoziția e pe 2
+  eq(lotOperatieSelectie([1, 2], null, ['2', '3']).lot, '2')       // 3 nu e în selecție
+  eq(lotOperatieSelectie([1, 2], null, []).lot, '1,2')             // generală → toată selecția
+  eq(lotOperatieSelectie([2], '2', ['toate']).lot, '2')
+  eq(lotOperatieSelectie(null, null, ['2']).lot, '2')              // fără selecție: regula veche
+  eq(lotOperatieSelectie(null, '3', ['2']).lot, '3')
 })
