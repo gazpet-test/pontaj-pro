@@ -6,6 +6,7 @@ import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { FELIE, SUPRAPUNERE, felii, feliiDocument, sectiuniLista } from './sectiuni.ts'
 import { cerere, fakeSupa, getUser, LICITATII, OWNER, PROFILE } from '../_test/fake_supa.ts'
 import { handler } from './handler.ts'
+import { cuPoartaLot } from '../_test/poarta_lot.ts'
 
 // ── fixture ─────────────────────────────────────────────────────
 const pagina = (n: number, corp: string) => `⟦PAGINA ${n}⟧\n\n${corp}\n\n`
@@ -141,7 +142,8 @@ function fetchDupaFelie(n: { ai: number }): typeof fetch {
   }) as typeof fetch
 }
 function ruleaza(docs: Record<string, unknown>[], body: Record<string, unknown>) {
-  const { supa, n } = fakeSupa({ profiles: PROFILE, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: docs })
+  const { supa: s0, n } = fakeSupa({ profiles: PROFILE, ofertare_licitatii: LICITATII, ofertare_documente_atribuire: docs })
+  const { supa } = cuPoartaLot(s0, docs.map((d) => Number(d.id)))   // poarta pe loturi: toate eligibile aici
   const deps = { db: supa, getUser, fetch: fetchDupaFelie(n), chei: { A: 'a', G: 'g', O: 'o' } }
   return handler(cerere(OWNER, body), deps).then(async (r) => ({ status: r.status, j: await r.json(), n }))
 }

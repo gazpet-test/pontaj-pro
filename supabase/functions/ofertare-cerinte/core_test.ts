@@ -40,13 +40,25 @@ Deno.test('R15: lipsă potrivire sau normalizare goală nu verifică și nu inve
 })
 
 // Calea reală extrageCerinte, cu transport și BD simulate; nicio rețea/scriere reală.
-async function extrage(n: number, opt: { stop?: string; brut?: string; pasaj?: string } = {}) {
+// Poarta pe loturi (fn_ofertare_document_eligibil) simulată: implicit eligibil; `eligibil` = motivul de neeligibilitate,
+// `rpcEroare` = RPC-ul pică (fail-closed). `lot` = valoarea dată de model; `nume` = numele documentului.
+type Opt = { stop?: string; brut?: string; pasaj?: string; nume?: string; lot?: unknown; eligibil?: string; rpcEroare?: boolean;
+  corp?: Record<string, unknown> }
+async function extrage(n: number, opt: Opt = {}) {
   const scrise: any[] = []
-  const db = { from(tabel: string) {
+  const apeluri = { ai: 0, rpc: [] as unknown[] }
+  const db = { rpc(nume: string, args: Record<string, unknown>) {
+    apeluri.rpc.push({ nume, args })
+    if (opt.rpcEroare) return Promise.resolve({ data: null, error: { message: 'cădere' } })
+    return Promise.resolve({ data: opt.eligibil ? { eligibil: false, motiv: opt.eligibil, licitatie_id: 1 }
+      : { eligibil: true, motiv: 'comun', licitatie_id: 1 }, error: null })
+  }, from(tabel: string) {
+    const fisa = [{ id: 3, nume_original: 'Fisa de date.pdf', text_extras: 'Secțiunea II ' + document.repeat(3) }]
     const rezultat = { data: tabel === 'ofertare_licitatii' ? { id: 1, autoritate: 'Test', nr_anunt: 'Test' }
-      : tabel === 'ofertare_documente_atribuire' ? { id: 2, tip: 'cs_volum', text_extras: document, nume_original: 'Test' } : [], error: null }
+      : tabel === 'ofertare_documente_atribuire' ? (opt.corp && !opt.corp.doc_id ? fisa
+        : { id: 2, tip: 'cs_volum', text_extras: document, nume_original: opt.nume ?? 'Test' }) : [], error: null }
     const q: any = {
-      select: () => q, eq: () => q, order: () => q, limit: () => q,
+      select: () => q, eq: () => q, order: () => q, limit: () => q, in: () => q, is: () => q, delete: () => q,
       single: () => Promise.resolve(rezultat),
       then: (resolve: any) => Promise.resolve(rezultat).then(resolve),
       insert: (rows: any) => {
@@ -57,13 +69,14 @@ async function extrage(n: number, opt: { stop?: string; brut?: string; pasaj?: s
     return q
   } }
   const fetchVechi = globalThis.fetch
-  globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({
+  globalThis.fetch = (() => { apeluri.ai++; return Promise.resolve(new Response(JSON.stringify({
     stop_reason: opt.stop || 'end_turn', usage: {}, content: [{ type: 'text', text: opt.brut ?? JSON.stringify({
-      cerinte: Array.from({ length: n }, (_, i) => ({ text_cerinta: `Cerință ${i}`, pasaj: opt.pasaj ?? autentic, pagina: 2 })),
+      cerinte: Array.from({ length: n }, (_, i) => ({ text_cerinta: `Cerință ${i}`, pasaj: opt.pasaj ?? autentic, pagina: 2,
+        ...('lot' in opt ? { lot: opt.lot } : {}) })),
     }) }],
-  })))) as typeof fetch
+  }))) }) as typeof fetch
   try {
-    return { rezultat: await extrageCerinte(db, { licitatie_id: 1, doc_id: 2 }), scrise }
+    return { rezultat: await extrageCerinte(db, opt.corp ?? { licitatie_id: 1, doc_id: 2 }), scrise, apeluri }
   } finally { globalThis.fetch = fetchVechi }
 }
 
@@ -99,4 +112,53 @@ Deno.test('R15: INSERT păstrează neverificat + pagina găsită; rezultatul ide
   assertEquals('pasaj_partial' in scrise[0], false) // nu există această coloană
   assertEquals(rezultat.pasaje_verificate, 0)
   assertEquals(rezultat.pasaje_partiale, [{ index: 0, pagina: 7 }])
+})
+
+// ── loturi (20261024b) ──────────────────────────────────────────────────────────────────────────────
+const lotCol = (r: any) => [r.lot, r.lot_domeniu, r.lot_nr, r.lot_sursa, r.lot_brut]
+
+Deno.test('Loturi: „Lot 12” în numele documentului → [12] (nu 1), sursa nume_fisier când modelul nu spune nimic', async () => {
+  const { scrise } = await extrage(1, { nume: 'Caiet de sarcini LOT 12.pdf' })
+  assertEquals(lotCol(scrise[0]), ['12', 'lista', [12], 'nume_fisier', null])
+})
+Deno.test('Loturi: modelul dă „Lot 12” → [12] cu sursa model și lot_brut păstrat', async () => {
+  const { scrise } = await extrage(1, { lot: 'Lot 12' })
+  assertEquals(lotCol(scrise[0]), ['Lot 12', 'lista', [12], 'model', 'Lot 12'])
+})
+Deno.test('Loturi: conflict nume/model → câștigă modelul (text explicit), conflictul se numără', async () => {
+  const { rezultat, scrise } = await extrage(2, { nume: 'CS Lot 12.pdf', lot: 'lotul 3' })
+  assertEquals(lotCol(scrise[0]), ['lotul 3', 'lista', [3], 'model', 'lotul 3'])
+  assertEquals(rezultat.lot_conflict_nume, 2)
+})
+Deno.test('Loturi: model neinterpretabil + lot în nume → lista din nume, lot_brut = textul modelului', async () => {
+  const { scrise } = await extrage(1, { nume: 'CS_Lot2_vol1.pdf', lot: 'vezi anexa' })
+  assertEquals(lotCol(scrise[0]), ['vezi anexa', 'lista', [2], 'nume_fisier', 'vezi anexa'])
+})
+Deno.test('Loturi: necunoscut ≠ toate — coloanele noi rămân necunoscut, coloana veche „toate” (compatibilitate UI)', async () => {
+  const { rezultat, scrise } = await extrage(1, {})
+  assertEquals(lotCol(scrise[0]), ['toate', 'necunoscut', null, 'model', null])
+  assertEquals(rezultat.lot_necunoscut, 1)
+  const gol = await extrage(1, { lot: '' })
+  assertEquals(lotCol(gol.scrise[0]), ['toate', 'necunoscut', null, 'model', null])
+  const toate = await extrage(1, { lot: 'toate' })                    // „toate” doar explicit
+  assertEquals(lotCol(toate.scrise[0]), ['toate', 'toate', null, 'model', 'toate'])
+  const numar = await extrage(1, { lot: 2 })                          // număr JSON, nu text: coloana veche ca înainte
+  assertEquals(lotCol(numar.scrise[0]), ['toate', 'lista', [2], 'model', '2'])
+})
+Deno.test('Poarta loturi (corpus): document neeligibil → zero apeluri AI, zero scrieri, răspuns de business', async () => {
+  const { rezultat, scrise, apeluri } = await extrage(3, { eligibil: 'in_afara_loturilor' })
+  assertEquals([apeluri.ai, scrise.length], [0, 0])
+  assertEquals([rezultat.ok, rezultat.blocat_lot, rezultat.motiv, rezultat.continua, 'error' in rezultat], [false, true, 'in_afara_loturilor', false, false])
+  assertEquals(apeluri.rpc, [{ nume: 'fn_ofertare_document_eligibil', args: { p_document_id: 2 } }])
+})
+Deno.test('Poarta loturi: RPC căzut = neeligibil (fail-closed), zero AI', async () => {
+  const { rezultat, apeluri } = await extrage(3, { rpcEroare: true })
+  assertEquals([apeluri.ai, rezultat.blocat_lot, rezultat.motiv], [0, true, 'eroare_poarta'])
+})
+Deno.test('Poarta loturi (fișa de date): fără excepție în cod — fișa neeligibilă nu ajunge la AI', async () => {
+  const blocat = await extrage(3, { eligibil: 'loturi_neinitializate', corp: { licitatie_id: 1, sectiune: 'II' } })
+  assertEquals([blocat.apeluri.ai, blocat.scrise.length, blocat.rezultat.blocat_lot, blocat.rezultat.doc_id], [0, 0, true, 3])
+  assertEquals(blocat.apeluri.rpc, [{ nume: 'fn_ofertare_document_eligibil', args: { p_document_id: 3 } }])
+  const ok = await extrage(1, { corp: { licitatie_id: 1, sectiune: 'II' } })
+  assertEquals([ok.apeluri.ai, ok.scrise.length, ok.scrise[0].lot_domeniu], [1, 1, 'necunoscut'])
 })

@@ -41,6 +41,9 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { termenRO } from '../_shared/oraRO.ts'
+// 12.10.2026 (MVP loturi, 20261024b): cu loturi la care participăm, cerințele lot_domeniu='lista' fără intersecție nu intră
+// în generare (raportate în `cerinte_excluse_lot`); cele 'necunoscut' NU blochează în MVP, dar apar în `cerinte_lot_necunoscut`.
+import { filtruParticipare } from '../_shared/lot.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
@@ -260,11 +263,23 @@ Deno.serve(async (req: Request) => {
     const ids = (leg || []).map((l: any) => l.cerinta_id)
     if (!ids.length) return fail('Capitolul n-are nicio cerință atribuită. Atribuie-i cerințele întâi — altfel iese text generic.')
 
-    const { data: cerinte, error: eCer } = await supabase.from('ofertare_cerinte')
-      .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, document_probant, confirmata_de')
+    const { data: cerinteBD, error: eCer } = await supabase.from('ofertare_cerinte')
+      .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, document_probant, confirmata_de, lot_domeniu, lot_nr')
       .in('id', ids).is('inlocuita_de', null).order('id')
     if (eCer) return fail('cerintele nu s-au putut citi: ' + eCer.message)
-    if (!cerinte?.length) return fail('Cerintele atribuite nu mai exista (inlocuite?). Reatribuie capitolul.')
+    if (!cerinteBD?.length) return fail('Cerintele atribuite nu mai exista (inlocuite?). Reatribuie capitolul.')
+
+    // Loturile la care participăm: o cerință doar pe alte loturi nu se scrie în propunerea noastră. Citirea căzută = refuz.
+    const { data: lotPart, error: eLot } = await supabase.from('ofertare_licitatie_loturi')
+      .select('nr').eq('licitatie_id', cap.licitatie_id).eq('participam', true)
+    if (eLot) return fail('loturile licitației nu s-au putut citi: ' + eLot.message)
+    const peLot = filtruParticipare(cerinteBD, (lotPart || []).map((l: any) => Number(l.nr)))
+    const scurt = (c: any) => ({ id: c.id, nr: c.nr_ordine, loturi: c.lot_nr ?? null, text: String(c.text_cerinta || '').slice(0, 160) })
+    const cerinte_excluse_lot = peLot.excluse.map(scurt)
+    const cerinte_lot_necunoscut = peLot.necunoscut.map(scurt)
+    const cerinte = peLot.pastrate
+    if (!cerinte.length) return fail('Toate cerințele atribuite sunt pe loturi la care nu participăm — nu s-a generat nimic.',
+      { cerinte_excluse_lot, cerinte_lot_necunoscut })
 
     // INTERDICȚIA 5 — cerințe neconfirmate de om. Refuzul vine ÎNAINTE de orice apel plătit și de pachetul de fapte.
     const neconfirmate = cerinte.filter((c: any) => !c.confirmata_de)
@@ -427,6 +442,7 @@ Deno.serve(async (req: Request) => {
       tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
       cache_citit: data.usage?.cache_read_input_tokens || 0,
       pachet_caractere: pachet.length, parti: nParti,
+      cerinte_excluse_lot, cerinte_lot_necunoscut,
     }), { headers: CORS })
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))

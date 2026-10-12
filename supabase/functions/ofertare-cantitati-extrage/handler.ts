@@ -25,7 +25,13 @@
 // Răspunsul poartă previzualizare_platita:true. (Propunere, neimplementată: mod `preflight` fără AI —
 // doar numărul de felii/documente + cost estimat.)
 // Erorile de business se întorc în răspuns, nu se aruncă.
+// 12.10.2026 (MVP loturi, 20261024b): (1) poarta pe document — doar documentele eligibile pe loturi (fn_ofertare_eligibilitate,
+// prin _shared/eligibilLot.ts) ajung la AI; poarta căzută = nimic procesat (fail-closed); cele oprite se raportează în
+// `excluse_lot`. (2) fiecare rând scris primește lotul canonic din NUMELE documentului-sursă (lot_domeniu/lot_nr/lot_brut,
+// lot_sursa='nume_fisier'); numele fără lot = 'necunoscut' (NU „toate”). Promptul AI nu s-a schimbat.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligibilLot.ts'
+import { coloaneLot, lotDinNumeFisier } from '../_shared/lot.ts'
 import { poateCheltui } from './poarta.ts'
 import { feliiDocument, type TipLista } from './sectiuni.ts'
 
@@ -240,8 +246,20 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     .order('id')
   if (dErr) return json({ error: 'citire documente: ' + dErr.message })
 
-  const deLucru = (docs || []).filter((d: any) => (d.text_extras || '').length > 500)
-  if (!deLucru.length) return json({ error: 'niciun document cu text din care să ies cifre' }, 404)
+  const cuText = (docs || []).filter((d: any) => (d.text_extras || '').length > 500)
+  if (!cuText.length) return json({ error: 'niciun document cu text din care să ies cifre' }, 404)
+
+  // Poarta pe loturi, ÎNAINTE de orice apel plătit (și la dry_run, care tot plătește AI-ul). Fără excepții în cod.
+  // Atenție la reluare (de_la): indexul feliei e pe lista FILTRATĂ — dacă trierea se schimbă între rulări, se reia de la 0.
+  const elig = await eligibilitateLicitatie(db, licId)
+  if (!elig.ok) return json({ ok: false, blocat_lot: true, motiv: 'eroare_poarta', error: mesajLot('eroare_poarta') + ' — nu s-a procesat nimic' })
+  const excluseLot = cuText.filter((d: any) => !esteEligibil(elig.harta, d.id))
+    .map((d: any) => { const m = elig.harta.get(Number(d.id))?.motiv || 'document_inexistent'; return { id: d.id, nume: d.nume_original, motiv: m, mesaj: mesajLot(m) } })
+  const deLucru = cuText.filter((d: any) => esteEligibil(elig.harta, d.id))
+  if (!deLucru.length) {
+    return json({ ok: false, blocat_lot: true, motiv: excluseLot[0]?.motiv ?? 'document_inexistent',
+      error: `Niciun document eligibil pe loturi (${excluseLot.length} oprite) — nu s-a procesat nimic.`, excluse_lot: excluseLot })
+  }
 
   // munca, aplatizată în felii, ca reluarea să fie un simplu index.
   // 25.09.2026: o listă de cantități se taie întâi pe SECȚIUNI (antet F3 / C6 / C7–C9, sectiuni.ts), ca
@@ -275,6 +293,9 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     if (Date.now() - t0 > BUGET_MS) { continua = true; break }
     if (maxFelii && poz - deLa >= maxFelii) { continua = true; break }
     const { doc: d, bucata, nr, din, tipSursa, inceputSectiune } = munca[poz]
+    // lotul canonic al rândurilor = lotul din numele documentului-sursă (triggerul din BD poate invalida loturi inexistente)
+    const lotNume = lotDinNumeFisier(d.nume_original)
+    const colLot = coloaneLot(lotNume, 'nume_fisier', lotNume.brut)
     if (d.id !== docCurent) { docCurent = d.id; if (nr === 1) obiectCurent = '' }
     // C6/C7–C9 sunt pe investiție, nu pe obiectul F3 de dinainte: obiectul nu se moștenește peste secțiuni
     if (inceputSectiune) obiectCurent = ''
@@ -360,6 +381,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         sursa: `${d.nume_original}${loc ? ' \u2014 ' + loc : ''}`.slice(0, 300),
         status: 'extras',
         extras_de_ai: true,
+        ...colLot,
       })
       alePastrate++
     }
@@ -417,6 +439,8 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
     // R10: aceeași poziție citită cu altă cantitate decât cea din BD — NU s-a suprascris; de decis de om
     conflicte_revizie: conflicteRevizie,
+    // documentele oprite de poarta pe loturi (neprocesate, zero cost)
+    excluse_lot: excluseLot,
   }
   // dry_run: previzualizare AI — a consumat credit (cost_usd de mai sus, jurnalizat), NU a salvat nimic.
   if (dryRun) return json({ ...comun, dry_run: true, previzualizare_platita: true,
