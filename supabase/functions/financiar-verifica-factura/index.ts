@@ -8,7 +8,7 @@
 // ADUSĂ ÎN REPO la 10.10.2026 din producție (v10), cu o singură schimbare: poarta de modul.
 // Înainte se baza doar pe verify_jwt, iar cheia anon e un JWT valid (PR #318) — oricine avea cheia
 // publică pornea verificări Opus pe orice sl_id (cost API) și primea înapoi liniile facturii.
-// Acum: owner sau intrare explicită 'financiar' în user_module_access (butonul e în Financiar.jsx).
+// Acum: owner sau intrare explicită 'financiar' sau 'ofertare' în user_module_access (butonul e în Financiar.jsx; ofertarea face facturile — Răzvan 12.10).
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import * as XLSX from 'https://esm.sh/xlsx@0.18.5'
@@ -63,7 +63,7 @@ Deno.serve(async (req: Request) => {
   const fail = (msg: string) => new Response(JSON.stringify({ error: msg }), { status: 200, headers: CORS })
 
   // Poarta: înainte de orice citire din BD/storage și înainte de apelul plătit.
-  const poarta = await poartaModul(req, supabase, ['financiar'])
+  const poarta = await poartaModul(req, supabase, ['financiar', 'ofertare'])
   if (!poarta.ok) return new Response(JSON.stringify({ error: poarta.error }), { status: poarta.status, headers: CORS })
 
   try {

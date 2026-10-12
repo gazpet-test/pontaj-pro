@@ -6,7 +6,7 @@
 //     alerta de AA se declansa si pe retineri.
 // ADUSĂ ÎN REPO la 10.10.2026 din producție (v24), cu o singură schimbare: poarta de modul.
 // Înainte orice cont logat (getUser fără rol) putea porni citiri Sonnet plătite. Acum: owner sau
-// intrare explicită 'executie' în user_module_access (butonul e în Execuție → Situații de plată).
+// intrare explicită 'executie', 'ofertare' sau 'financiar' în user_module_access (butonul e în Execuție → Situații de plată; ofertarea face facturile — Răzvan 12.10).
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { poartaModul } from '../_shared/poartaModul.ts';
 
@@ -101,7 +101,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    const poarta = await poartaModul(req, supabase, ['executie']);
+    const poarta = await poartaModul(req, supabase, ['executie', 'ofertare', 'financiar']);
     if (!poarta.ok) return new Response(JSON.stringify({ error: poarta.error }), { status: poarta.status, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } });
 
     const body = await req.json();
