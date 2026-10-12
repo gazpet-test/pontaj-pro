@@ -114,4 +114,7 @@ Livrat în #677 (migrare 20261025a GO Copilot r4 pe 964865f, harness CI 155 PASS
    operației (inclusiv sursele cerinței precedente la modifica); filtreazaDerivate le verifică deja.
 2. Clarificarea automată din planșe: sursele salvate odată cu textul în `ofertare_clarificare_planse_auto` (nu derivate din
    `sursa` / `baza_generare`), inclusiv documentele financiare citate.
-3. Proveniența întregului context de prompt pentru derivatele generate (snapshot), dacă review-ul o cere.
+3. Proveniența întregului context de prompt pentru derivatele generate (snapshot), dacă review-ul o cere.4. (Jakarinos r14 P2) Harness cu RPC-ul REAL `fn_ofertare_raspuns_set_aplica`: setter-întâi → refuz și zero cerințe /
+   acoperiri persistate; RPC-întâi → setter-ul blocat până la commit; aplicare parțială → aceeași gardă; sincronizare
+   explicită între sesiuni (nu doar sleep). Odată cu verificarea `stare_loturi` mutată în RPC, garda din 20261025a
+   (`a03_ofertare_raspuns_set_garda_loturi`) poate fi relaxată pentru aplicarea pe loturi cu proveniență completă.
