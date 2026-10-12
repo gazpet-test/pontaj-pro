@@ -86,7 +86,7 @@ async function contextOperatii(db: any, licId: number, part: { stare: string | n
   const docIds = [...new Set(ops.flatMap((o) => Array.isArray(o?.surse_doc_ids) ? o.surse_doc_ids.map(Number) : []))]
   const cerinte = new Map<number, any>()
   if (cerIds.length) {
-    const { data, error } = await db.from('ofertare_cerinte').select('id, licitatie_id, sursa_document_id, lot, lot_domeniu, lot_nr').in('id', cerIds)
+    const { data, error } = await db.from('ofertare_cerinte').select('id, licitatie_id, sursa_document_id, surse_document_ids, lot, lot_domeniu, lot_nr').in('id', cerIds)
     if (error || !Array.isArray(data)) return null
     const f = await filtreazaDerivate(db, licId, data.filter((c: any) => Number(c.licitatie_id) === licId) as any[])
     if (!f.ok) return null
@@ -537,7 +537,7 @@ Deno.serve(async (req: Request) => {
       for (const a of (amp || [])) ampSnap[String(a.cerinta_id)] = a.amprenta
     }
     const { data: cerBD, error: eC } = await db.from('ofertare_cerinte')
-      .select('id, tip, lot, lot_domeniu, lot_nr, sursa_sectiune, sursa_document_id, text_cerinta, document_probant, cand_se_prezinta')
+      .select('id, tip, lot, lot_domeniu, lot_nr, sursa_sectiune, sursa_document_id, surse_document_ids, text_cerinta, document_probant, cand_se_prezinta')
       .eq('licitatie_id', set.licitatie_id).is('inlocuita_de', null).is('duplicat_al', null).order('id')
     if (eC) return json({ error: 'citire registru: ' + eC.message })
     // registrul din prompt: doar cerințe cu document-sursă eligibil acum și pe loturile la care participăm

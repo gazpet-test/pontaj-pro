@@ -44,7 +44,7 @@ export async function filtreazaClarificari<T extends ClarSurse>(db: Db, randuri:
     // cerințele și cantitățile sursă → filtrul pe licitația lor
     const cerOk = new Set<number>(), cantOk = new Set<number>()
     if (cerIds.size) {
-      const data = await citesteInLoturi(db, 'ofertare_cerinte', 'id, licitatie_id, sursa_document_id, lot, lot_domeniu, lot_nr', [...cerIds])
+      const data = await citesteInLoturi(db, 'ofertare_cerinte', 'id, licitatie_id, sursa_document_id, surse_document_ids, lot, lot_domeniu, lot_nr', [...cerIds])
       if (!data) return esec
       for (const [l, rs] of grupeaza(data)) {
         const f = await filtreazaDerivate(db, l, rs)

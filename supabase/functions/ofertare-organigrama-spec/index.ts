@@ -102,7 +102,7 @@ Deno.serve(async (req: Request) => {
 
   // (b1) cerințele active care vorbesc de echipă / organigramă
   const { data: cerAll, error: eC } = await db.from('ofertare_cerinte')
-    .select('id, tip, sursa_sectiune, text_cerinta, sursa_document_id, lot, lot_domeniu, lot_nr').eq('licitatie_id', licId).is('inlocuita_de', null).is('duplicat_al', null)
+    .select('id, tip, sursa_sectiune, text_cerinta, sursa_document_id, surse_document_ids, lot, lot_domeniu, lot_nr').eq('licitatie_id', licId).is('inlocuita_de', null).is('duplicat_al', null)
   if (eC) return json({ error: 'cerințe: ' + eC.message })
   // poarta pe loturi (20261024b, review Jakarinos P1 #1): cerințele din documente neeligibile / loturi la care nu
   // participăm nu intră în prompt; licitația fără participare = oprire înainte de cost

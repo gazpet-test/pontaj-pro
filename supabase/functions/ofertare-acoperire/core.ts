@@ -104,7 +104,7 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
     if (!lic) return fail('licitatie negasita')
 
     let q = supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, lot, document_probant, cand_se_prezinta, tip, sursa_document_id, lot_domeniu, lot_nr')
+      .select('id, sursa_sectiune, text_cerinta, lot, document_probant, cand_se_prezinta, tip, sursa_document_id, surse_document_ids, lot_domeniu, lot_nr')
       .eq('licitatie_id', licId).eq('tip', batch).is('inlocuita_de', null).order('id')
     if (idsFelie) q = q.in('id', idsFelie)
     const { data: cerToate } = await q

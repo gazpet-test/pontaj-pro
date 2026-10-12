@@ -114,7 +114,27 @@ Livrat în #677 (migrare 20261025a GO Copilot r4 pe 964865f, harness CI 155 PASS
    operației (inclusiv sursele cerinței precedente la modifica); filtreazaDerivate le verifică deja.
 2. Clarificarea automată din planșe: sursele salvate odată cu textul în `ofertare_clarificare_planse_auto` (nu derivate din
    `sursa` / `baza_generare`), inclusiv documentele financiare citate.
-3. Proveniența întregului context de prompt pentru derivatele generate (snapshot), dacă review-ul o cere.4. (Jakarinos r14 P2) Harness cu RPC-ul REAL `fn_ofertare_raspuns_set_aplica`: setter-întâi → refuz și zero cerințe /
+3. Proveniența întregului context de prompt pentru derivatele generate (snapshot), dacă review-ul o cere.
+4. (Jakarinos r14 P2) Harness cu RPC-ul REAL `fn_ofertare_raspuns_set_aplica`: setter-întâi → refuz și zero cerințe /
    acoperiri persistate; RPC-întâi → setter-ul blocat până la commit; aplicare parțială → aceeași gardă; sincronizare
    explicită între sesiuni (nu doar sleep). Odată cu verificarea `stare_loturi` mutată în RPC, garda din 20261025a
    (`a03_ofertare_raspuns_set_garda_loturi`) poate fi relaxată pentru aplicarea pe loturi cu proveniență completă.
+## PR de rigoare — migrarea 20261026a (draft, NEAPLICATĂ)
+
+Fișiere: `supabase/migrations/20261026a_ofertare_rigoare_provenienta.sql` + `supabase/revenire/…_ROLLBACK.sql`, harness
+`scripts/test_ofertare_rigoare_provenienta.sh` (CI, job loturi-provenienta) pe scheletul `supabase/tests/ofertare_rigoare_schelet.sql`
+cu RPC-urile REALE (corpurile live citite 12.10.2026, md5 verificat). Varianta A (propusă, de confirmat de Răzvan): garda a03 RĂMÂNE.
+
+| Punct BLOCANT | Rezolvare |
+|---|---|
+| 1. surse multiple pe cerință | `ofertare_cerinte.surse_document_ids` + triggerul a02 (aceeași validare: aceeași licitație, scrise doar de server). `fn_ofertare_raspuns_set_aplica` scrie sursele operației ∪ documentul de răspuns ∪ (modifică/anulează) sursele versiunii vechi; sursă nevalidă / inexistentă / din altă licitație = conflict ÎNAINTE de orice scriere. Edge-urile citesc `surse_document_ids` pe cerințe → `filtreazaDerivate` le verifică pe toate. |
+| 2. clarificarea automată din planșe | `ofertare_clarificare_planse_auto` scrie `surse_document_ids` / `surse_cantitati_ids` ODATĂ cu textul: planșele, documentele financiare citate (tip lista_cantitati, exact cele din punctul 2 al textului), documentele și cantitățile din baza F3. Triggerul face reuniunea cu ce scrie serverul (derivarea rămâne plasă). |
+| 3. snapshot context prompt | Nu e în PR (doar dacă review-ul o cere). |
+| 4. harness cu RPC-ul real | Setter-întâi → RPC-ul așteaptă lock-ul, e refuzat, zero cerințe / fotografii / set aplicat; RPC-întâi → setter-ul așteaptă commit-ul; aplicare parțială după trecerea pe loturi → refuz. Sincronizare pe `pg_stat_activity` (sesiunea din fundal a ajuns la `pg_sleep` = ține lock-ul), nu doar sleep. Garda din RPC testată și cu triggerul a03 DEZACTIVAT. |
+
+Garda de loturi e acum ÎN RPC (sub `FOR NO KEY UPDATE` pe licitație, înaintea oricărei scrieri); a03 rămâne a doua barieră. Relaxarea
+ei (aplicare automată pe loturi cu proveniență completă) = decizie separată a lui Răzvan (varianta B), cu verificarea eligibilității
+și a lotului mutată în SQL.
+
+Ordinea de livrare: GO Copilot conv. 3 pe SQL → Jakarinos pe tot diff-ul → „da” Răzvan → apply prin `scripts/livrare_migrare.sh`
+→ merge → deploy edge-urile atinse (select-urile cer coloana: deploy DOAR după apply) → `verifica-edge-functions`.

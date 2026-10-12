@@ -23,7 +23,7 @@ export async function exempleFeedback(db: Db, contextCheie: string, n = 3): Prom
     if (!ids.length) return { exemple: [], omise: fb.length }
 
     const { data: cer, error: eC } = await (db as any).from('ofertare_cerinte')
-      .select('id, licitatie_id, sursa_document_id, lot, lot_domeniu, lot_nr').in('id', ids)
+      .select('id, licitatie_id, sursa_document_id, surse_document_ids, lot, lot_domeniu, lot_nr').in('id', ids)
     if (eC || !Array.isArray(cer)) return gol
     // fără document-sursă nu există proveniență de verificat (filtreazaDerivate le-ar lăsa să treacă doar pe lot)
     const peLicitatie = new Map<number, any[]>()

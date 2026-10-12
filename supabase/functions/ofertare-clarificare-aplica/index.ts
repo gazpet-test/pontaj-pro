@@ -56,7 +56,7 @@ Deno.serve(async (req: Request) => {
   if (!cl) return json({ error: 'clarificarea nu există' }, 404)
   if (!(cl.raspuns || '').trim()) return json({ error: 'clarificarea nu are răspunsul autorității — completează-l întâi' }, 400)
 
-  const { data: cerToate } = await db.from('ofertare_cerinte').select('id, tip, sursa_sectiune, text_cerinta, document_probant, cand_se_prezinta, lot, versiune, sursa_document_id, stare, stare_motiv, stare_de, stare_la, lot_domeniu, lot_nr')
+  const { data: cerToate } = await db.from('ofertare_cerinte').select('id, tip, sursa_sectiune, text_cerinta, document_probant, cand_se_prezinta, lot, versiune, sursa_document_id, surse_document_ids, stare, stare_motiv, stare_de, stare_la, lot_domeniu, lot_nr')
     .eq('licitatie_id', cl.licitatie_id).is('inlocuita_de', null).order('id')
   if (!cerToate?.length) return json({ error: 'licitația nu are registru de cerințe' }, 400)
 
