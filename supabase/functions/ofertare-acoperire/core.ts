@@ -3,6 +3,7 @@
 // (worker/ofertare/acoperire.ts), unde nu există limita de 150 s a gateway-ului. Istoricul versiunilor: index.ts.
 import { turtesteCandidati, marcheazaSudoriNepotriviti, aplicaInsemexPrinPartener } from './candidati.ts'
 import { termenRO } from '../_shared/oraRO.ts'
+import { filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODEL = 'claude-opus-5'
@@ -103,11 +104,20 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
     if (!lic) return fail('licitatie negasita')
 
     let q = supabase.from('ofertare_cerinte')
-      .select('id, sursa_sectiune, text_cerinta, lot, document_probant, cand_se_prezinta, tip')
+      .select('id, sursa_sectiune, text_cerinta, lot, document_probant, cand_se_prezinta, tip, sursa_document_id, lot_domeniu, lot_nr')
       .eq('licitatie_id', licId).eq('tip', batch).is('inlocuita_de', null).order('id')
     if (idsFelie) q = q.in('id', idsFelie)
-    const { data: cerinte } = await q
-    if (!cerinte?.length) return { ok: true, batch, propuneri: 0, skip: 'nicio cerinta de tipul asta' }
+    const { data: cerToate } = await q
+    if (!cerToate?.length) return { ok: true, batch, propuneri: 0, skip: 'nicio cerinta de tipul asta' }
+    // poarta pe loturi (20261024b, review Jakarinos P1 #6), în core ca s-o prindă și workerul NAS: cerințele extrase
+    // înainte de blocarea documentelor nu mai pleacă la AI. Documentul-sursă se reverifică acum, lotul trebuie să fie
+    // unul la care participăm. Licitația fără participare / poarta picată = eroare de business, fără apel plătit.
+    // Cerințele excluse NU se ating (acoperirea veche rămâne) și NU apar ca „fără răspuns” (nu sunt în idsCerinte).
+    const fl = await filtreazaDerivate(supabase, licId, cerToate)
+    if (!fl.ok) return { ...fail(mesajLot(fl.motiv)), motiv_lot: fl.motiv }
+    const lotRap = { excluse_lot: fl.excluse.length, excluse_motive: fl.excluse.reduce((a: Record<string, number>, e: any) => { a[e.motiv] = (a[e.motiv] || 0) + 1; return a }, {}) }
+    if (!fl.pastrate.length) return { ok: true, batch, propuneri: 0, skip: `nicio cerință eligibilă pe loturi în felie (${fl.excluse.length} excluse) — nu s-a chemat AI-ul`, ...lotRap }
+    const cerinte: any[] = fl.pastrate
 
     const { data: auth, error: eAuth } = await supabase.from('hr_autorizatii')
       .select('id, numar_autorizatie, data_expirare, fara_expirare, domenii, procedeu_sudura, diametru_teava_mm, emitent, fisier_path, tip:hr_autorizatii_tipuri(denumire, cod), emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
@@ -257,7 +267,7 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
     const faraData = personal.filter((p: any) => !p.din).length
 
     const stabil = `NOMENCLATOR ISC RTE (${nomenclator.length} domenii, Procedura ISC 2016; codurile din domenii_isc trimit aici):\n${JSON.stringify(nomenclator)}\n\nPERSONAL PROPRIU — funcții și vechime (${personal.length}; „din" = data angajării, lipsă la ${faraData} persoane — vezi R14b pasul 3):\n${JSON.stringify(personal)}\n\nCATALOG AUTORIZAȚII PERSONAL (${catalog.length}):\n${JSON.stringify(catalog)}\n\nDOCUMENTE FIRMĂ — Gazpet Instal SRL (${catalogFirma.length}, id-uri cu prefix F):\n${JSON.stringify(catalogFirma)}\n\nPARTENERI ACTIVI (${parteneri.length}):\n${JSON.stringify(parteneri)}\n\nEXPERIENTA SIMILARA — lucrari Gazpet (${catalogExp.length}, id-uri cu prefix E):\n${JSON.stringify(catalogExp)}\n\nRECOMANDARI — experienta PERSOANELOR pe roluri (${catalogRec.length}, id-uri cu prefix R):\n${JSON.stringify(catalogRec)}\n\nSTUDII — diplome si calificari ale persoanelor (${catalogStudii.length}, id-uri cu prefix D):\n${JSON.stringify(catalogStudii)}\n\nVECHIME — dovezi de la angajatori anteriori (${catalogVechime.length}, id-uri cu prefix V):\n${JSON.stringify(catalogVechime)}`
-    const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${termenRO(lic.termen_depunere) || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte)}`
+    const variabil = `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · TERMEN DE DEPUNERE: ${termenRO(lic.termen_depunere) || 'necunoscut'}\nOBIECTUL CONTRACTULUI: ${lic.obiect || 'necunoscut'}\n\nCERINȚE (tip ${batch}):\n${JSON.stringify(cerinte.map((c: any) => ({ id: c.id, sursa_sectiune: c.sursa_sectiune, text_cerinta: c.text_cerinta, lot: c.lot, document_probant: c.document_probant, cand_se_prezinta: c.cand_se_prezinta, tip: c.tip })))}`
 
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -483,7 +493,7 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
         motiv_felie_goala: 'AI-ul n-a intors nicio acoperire valida — nu s-a sters si nu s-a scris nimic',
         stop_reason: data.stop_reason || null,
         fara_raspuns: idsCerinte.size, cerinte_fara_raspuns: Array.from(idsCerinte),
-        tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
+        tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens, ...lotRap,
       }
     }
     const PLAFON_RAPORT = 500
@@ -609,7 +619,7 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
       lista_fara_raspuns_taiata: fararaspuns.length > PLAFON_RAPORT,
       trunchiat, stop_reason: data.stop_reason || null,
       tokens_in: data.usage?.input_tokens, tokens_out: data.usage?.output_tokens,
-      cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0 }
+      cache_scris: data.usage?.cache_creation_input_tokens || 0, cache_citit: data.usage?.cache_read_input_tokens || 0, ...lotRap }
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
   }

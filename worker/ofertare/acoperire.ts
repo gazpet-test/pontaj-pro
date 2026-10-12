@@ -34,7 +34,7 @@ async function felie(supabase: any, licId: number, batch: string, ids: number[])
       }
     }
     // erorile de catalog / autorizare nu se repară prin reîncercare; cele de rețea/AI da
-    if (/catalog|obligatorii|negasita/.test(r.error) || inc === MAX_INCERCARI) return r
+    if (/catalog|obligatorii|negasita|Blocat pe loturi/.test(r.error) || inc === MAX_INCERCARI) return r   // loturi: refuz stabil
     log(`#${licId} ${batch}: încercarea ${inc} a picat (${r.error.slice(0, 120)}) — pauză ${20 * inc} s`)
     await sleep(20_000 * inc)
   }

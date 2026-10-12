@@ -2,7 +2,7 @@
 // parseLot = oglinda fn_ofertare_parse_lot (20261024b). CAZURI_SQL e exportat ca lista să poată fi comparată și direct
 // cu SQL-ul pe un PG local (rezultatele de mai jos au fost obținute din SQL, nu scrise de mână).
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { coloaneLot, eligibilaPeLot, filtruParticipare, lotDinNumeFisier, lotRand, parseLot, type Lot } from './lot.ts'
+import { coloaneLot, eligibilaPeLot, lotDinNumeFisier, lotRand, parseLot, type Lot } from './lot.ts'
 
 const L = (...n: number[]): Lot => ({ domeniu: 'lista', loturi: n })
 const T: Lot = { domeniu: 'toate', loturi: [] }
@@ -80,13 +80,12 @@ Deno.test('coloaneLot: coerent cu CHECK-ul (lista ⇒ lot_nr nevid; altfel NULL)
   eq(coloaneLot({ domeniu: 'lista', loturi: [] }, 'model', 'x').lot_domeniu, 'necunoscut')
 })
 
-Deno.test('filtruParticipare: lista fără intersecție iese, necunoscut rămâne dar se raportează, NULL/toate rămân', () => {
-  const cer = [{ id: 1, lot_domeniu: 'lista', lot_nr: [1, 2] }, { id: 2, lot_domeniu: 'lista', lot_nr: [12] },
-    { id: 3, lot_domeniu: 'necunoscut', lot_nr: null }, { id: 4, lot_domeniu: 'toate', lot_nr: null }, { id: 5, lot_domeniu: null }]
-  const r = filtruParticipare(cer, [1])
-  eq([r.pastrate.map((c) => c.id), r.excluse.map((c) => c.id), r.necunoscut.map((c) => c.id)], [[1, 3, 4, 5], [2], [3]])
-  const f = filtruParticipare(cer, [])
-  eq([f.pastrate.length, f.excluse.length, f.necunoscut.length], [5, 0, 0])
-  const g = filtruParticipare([{ id: 6, lot_domeniu: 'lista', lot_nr: [] }], [1])   // listă goală (CHECK-ul n-o lasă) = necunoscut
-  eq([g.pastrate.length, g.excluse.length, g.necunoscut.length], [1, 0, 1])
+Deno.test('lotDinNumeFisier: expresia întreagă (review Jakarinos P2 #7), legătură neînțeleasă = necunoscut', () => {
+  eq(lotDinNumeFisier('Cantitati loturile 1 si 2.xlsx'), { ...L(1, 2), brut: 'loturile 1 si 2' })
+  eq(lotDinNumeFisier('Lot 1, 2 și 4 - liste.pdf').loturi, [1, 2, 4])
+  eq(lotDinNumeFisier('Lot 1+2.pdf'), { ...N, brut: 'Lot 1+2' })
+  eq(lotDinNumeFisier('Lot 1 sau 2.pdf'), { ...N, brut: 'Lot 1 sau 2' })
+  eq(lotDinNumeFisier('Lot 2 si Lot 1-3.pdf').loturi, [1, 2, 3])
+  eq(lotDinNumeFisier('Lot 2 si Lot 0.pdf').domeniu, 'necunoscut')
+  eq(lotDinNumeFisier('Lot 3 2024.pdf').loturi, [3])
 })

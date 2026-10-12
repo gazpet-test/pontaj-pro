@@ -11,6 +11,7 @@
 // nu se mai poate apela. Ce ramane e un generator de propuneri, inofensiv.
 // Auth: JWT user SAU x-radar-secret. Body {clarificare_id} → intoarce planul. Nu exista cale de scriere.
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 // Secretul NU mai sta in sursa: repo-ul e public. Verificare prin RPC contra Vault; functia
 // accepta si valoarea precedenta cat tine fereastra de rotire, ca sa nu pice cron-urile deodata.
@@ -54,9 +55,26 @@ Deno.serve(async (req: Request) => {
   if (!cl) return json({ error: 'clarificarea nu există' }, 404)
   if (!(cl.raspuns || '').trim()) return json({ error: 'clarificarea nu are răspunsul autorității — completează-l întâi' }, 400)
 
-  const { data: cer } = await db.from('ofertare_cerinte').select('id, tip, sursa_sectiune, text_cerinta, document_probant, cand_se_prezinta, lot, versiune, sursa_document_id, stare, stare_motiv, stare_de, stare_la')
+  const { data: cerToate } = await db.from('ofertare_cerinte').select('id, tip, sursa_sectiune, text_cerinta, document_probant, cand_se_prezinta, lot, versiune, sursa_document_id, stare, stare_motiv, stare_de, stare_la, lot_domeniu, lot_nr')
     .eq('licitatie_id', cl.licitatie_id).is('inlocuita_de', null).order('id')
-  if (!cer?.length) return json({ error: 'licitația nu are registru de cerințe' }, 400)
+  if (!cerToate?.length) return json({ error: 'licitația nu are registru de cerințe' }, 400)
+
+  // Poarta pe loturi (20261024b, review Jakarinos P1 #6) — ÎNAINTE de apelul plătit. Funcția citește două lucruri:
+  //  (1) registrul de cerințe al licitației → filtreazaDerivate (document-sursă eligibil ACUM + lot la care participăm);
+  //  (2) răspunsul autorității: textul e în ofertare_clarificari.raspuns, dar dacă e legat de un document importat
+  //      (raspuns_document_id → ofertare_documente_atribuire), documentul ăla e sursa reală → trebuie să fie eligibil
+  //      (un răspuns netriat / doar pe loturi la care nu participăm nu se procesează). Răspuns fără document = text manual, trece.
+  const fl = await filtreazaDerivate(db, Number(cl.licitatie_id), cerToate)
+  if (!fl.ok) return json({ error: mesajLot(fl.motiv), motiv_lot: fl.motiv })
+  if (cl.raspuns_document_id != null) {
+    const fd = await filtreazaDocumente(db, [cl.raspuns_document_id])
+    const m = !fd.ok ? 'eroare_poarta' : (fd.eligibile.has(Number(cl.raspuns_document_id)) ? null : (fd.blocate.get(Number(cl.raspuns_document_id)) || 'eroare_poarta'))
+    if (m) return json({ error: `${mesajLot(m)} (documentul răspunsului #${cl.raspuns_document_id})`, motiv_lot: m })
+  }
+  const excluse_lot = fl.excluse.length
+  const excluse_motive = fl.excluse.reduce((a: Record<string, number>, e: any) => { a[e.motiv] = (a[e.motiv] || 0) + 1; return a }, {})
+  if (!fl.pastrate.length) return json({ error: `nicio cerință eligibilă pe loturi (${excluse_lot} excluse) — nu s-a chemat AI-ul`, excluse_lot, excluse_motive })
+  const cer: any[] = fl.pastrate
 
   const lista = cer.map(c => `#${c.id} [${c.tip}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}`).join('\n')
   const prompt = `Ești consultant de achiziții publice (România, L98/2016, L99/2016, HG 395/2016). O clarificare depusă de ofertantul GAZPET INSTAL a primit răspuns de la autoritatea contractantă. Trebuie să stabilești CE SE SCHIMBĂ în registrul de cerințe al licitației.
@@ -97,6 +115,7 @@ Reguli: modifică DOAR cerințele pe care răspunsul le schimbă efectiv (relaxa
   return json({
     ok: true, doar_propunere: true,
     propunere: { modificari, noi, fara_efect: !!j.fara_efect, rezumat: j.rezumat },
+    excluse_lot, excluse_motive,   // cerințele care nu au plecat la AI (lot / document neeligibil) — nu pot primi modificări de aici
     nota: 'Functia propune, nu aplica. Aplicarea in registru se face din ecranul Licitatii, prin setul de raspuns (selectie umana pe fiecare operatie).',
   })
 })

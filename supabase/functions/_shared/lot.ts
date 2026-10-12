@@ -92,12 +92,23 @@ export function lotRand(r: { lot_domeniu?: string | null; lot_nr?: unknown; lot?
 // ar da „necunoscut” (e text liber), așa că se caută întâi fragmentele „lot N” / „lot N-M” și abia ele trec prin parseLot.
 // Niciun fragment = necunoscut; un fragment invalid (lot 0, interval invers/prea lung) = necunoscut pe tot (fail-closed).
 // brut = fragmentele găsite, ca text (pentru lot_brut), null dacă nu s-a găsit nimic.
-const RE_LOT_NUME = /(?<![a-z])lot(?:ul|urile|uri)?[\s_.:#-]*(\d{1,3}(?:-\d{1,3})?)(?![\d])/gi
+// Expresia ÎNTREAGĂ de după „lot” (review Jakarinos P2 #7: „loturile 1 si 2” dădea {1}): numerele legate prin - , ; / și
+// „si/și/and”, plus legăturile pe care parseLot NU le acceptă („+”, „&”, „sau”, „or”) — prinse aici ca expresia să ajungă
+// întreagă la parseLot și să devină „necunoscut”, nu o listă trunchiată.
+const RE_LOT_NUME = /(?<![a-z])lot(?:ul|urile|uri)?[\s_.:#-]*(\d{1,3}(?:(?:\s*[-,;/+&]\s*|\s+(?:si|și|and|sau|or)\s+)\d{1,3})*)(?![\d])/gi
 export function lotDinNumeFisier(nume: string | null | undefined): Lot & { brut: string | null } {
   const fr: string[] = [], nr: string[] = []
   for (const m of String(nume || '').matchAll(RE_LOT_NUME)) { fr.push(m[0]); nr.push(m[1]) }
   if (!nr.length) return { ...NECUNOSCUT(), brut: null }
-  return { ...parseLot(nr.join(',')), brut: fr.join(', ').slice(0, 200) }
+  const brut = fr.join(', ').slice(0, 200)
+  // fiecare fragment trece separat prin parseLot: unul neînțeles („1+2”, „1 sau 2”) = necunoscut pe tot (fail-closed)
+  const rez = new Set<number>()
+  for (const x of nr) {
+    const l = parseLot(x)
+    if (l.domeniu !== 'lista') return { ...NECUNOSCUT(), brut }
+    l.loturi.forEach((n) => rez.add(n))
+  }
+  return { domeniu: 'lista', loturi: [...rez].sort((a, b) => a - b), brut }
 }
 
 // Coloanele canonice de scris (lot_domeniu / lot_nr / lot_sursa / lot_brut), coerente cu CHECK-ul din BD:
@@ -113,18 +124,4 @@ export function coloaneLot(l: Lot, sursa: string, brut: string | null) {
   }
 }
 
-// Generarea pe loturi (ofertare-genereaza-capitol): cu loturi la care participăm, cerințele lot_domeniu='lista' fără
-// intersecție ies (excluse, raportate); 'necunoscut' NU blochează în MVP, dar se raportează separat. Rândurile vechi
-// (lot_domeniu NULL) și 'toate' rămân. Fără loturi cu participare = nimic filtrat (comportamentul vechi).
-export function filtruParticipare<T extends { lot_domeniu?: string | null; lot_nr?: unknown }>(cer: T[], participam: number[]):
-  { pastrate: T[]; excluse: T[]; necunoscut: T[] } {
-  if (!participam.length) return { pastrate: [...cer], excluse: [], necunoscut: [] }
-  const pastrate: T[] = [], excluse: T[] = [], necunoscut: T[] = []
-  for (const c of cer) {
-    // doar coloanele noi decid (rândurile vechi, lot_domeniu NULL, rămân); o „listă” fără numere valide = necunoscut
-    const l = c.lot_domeniu === 'lista' || c.lot_domeniu === 'necunoscut' ? lotRand(c) : null
-    if (l?.domeniu === 'lista') { if (eligibilaPeLot(l, participam)) pastrate.push(c); else excluse.push(c) }
-    else { pastrate.push(c); if (l) necunoscut.push(c) }
-  }
-  return { pastrate, excluse, necunoscut }
-}
+// Generarea / derivatele pe loturi: vezi filtreazaDerivate în eligibilLot.ts (fail-closed, review Jakarinos P1 #2).

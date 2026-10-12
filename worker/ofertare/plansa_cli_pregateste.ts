@@ -1,9 +1,11 @@
 // deno run -A worker/ofertare/plansa_cli_pregateste.ts <doc_id> <dir_iesire>
 import { INSTRUCTIUNI, INSTRUCTIUNI_LIPIRE } from '../../supabase/functions/ofertare-plansa-citeste/handler.ts'
 import { calculeazaPachetId, shaText, citesteDoc, depsCliReale, descarca, listaFelii, perechiPosibile, sha256, verificaIdentitate, verificaManifest, verificaOwner, type DepsCli, type Manifest } from './plansa_cli_comun.ts'
+import { verificaLot } from './plansa_cli_verifica.ts'
 
 export async function pregatestePlansa(docId: number, dir: string, d: DepsCli): Promise<Manifest> {
   await verificaOwner(d) // înainte de document, storage și orice fișier local
+  await verificaLot(d.supa, docId) // poarta pe loturi (P1 #5): neeligibil = nimic descărcat, nimic exportat
   const doc = await citesteDoc(d.supa, docId), p = doc.analiza?.plansa
   if (!p?.cale_felii || !p?.taiat_la || p.citibila === false) throw new Error('Planșa trebuie tăiată și citibilă')
   const nume = await listaFelii(d.supa, p.cale_felii)
@@ -22,6 +24,7 @@ export async function pregatestePlansa(docId: number, dir: string, d: DepsCli): 
   m.pachet_id = await calculeazaPachetId(m, m.instructiuni_sha256, m.instructiuni_lipire_sha256)
   verificaManifest(m)
   verificaIdentitate(m, await citesteDoc(d.supa, docId))
+  await verificaLot(d.supa, docId) // triajul se poate schimba cât descărcăm feliile
   await Deno.mkdir(dir, { recursive: true })
   // Nu suprascriem un pachet anterior și nu lăsăm un manifest vechi lângă imagini noi.
   for await (const _ of Deno.readDir(dir)) throw new Error('Folderul de ieșire trebuie să fie gol')

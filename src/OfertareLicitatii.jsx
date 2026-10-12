@@ -1586,19 +1586,19 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                   )}
                   {d.tip === 'plansa' && poatePorniProcesarea(profile, licitatie) && d.analiza?.citire_ai && !peSigla(d) && !subPrag(d) && (
                     d.analiza.citire_ai.gata === false ? (
-                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
-                        title="Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."
+                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                        title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : "Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."}
                         onClick={() => { if (window.confirm('Continui citirea planșei cu AI — zonele necitite se plătesc (zonele deja citite nu). Continui?')) reiaPlansa(d, 'continua') }}>⏯ continuă citirea</button>
                     ) : (d.analiza.citire_ai.sumar?.erori > 0 ? (
-                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
-                        title={`Recitește DOAR zonele căzute: ${(d.analiza.citire_ai.sumar.zone_cazute || []).join(', ')}`}
+                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                        title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : `Recitește DOAR zonele căzute: ${(d.analiza.citire_ai.sumar.zone_cazute || []).join(', ')}`}
                         onClick={() => { if (window.confirm('Recitesc cu AI doar zonele căzute — se plătesc. Continui?')) reiaPlansa(d, 'reia_erori') }}>🔁 reia zonele căzute ({d.analiza.citire_ai.sumar.erori})</button>
                     ) : null)
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
                     plansaGoala(d) ? (<>
-                    {(!d.analiza?.citire_ai?.note_lipite || d.analiza?.citire_ai?.perechi_ramase !== 0) && !d.analiza?.citire_ai?.sumar?.lungime_declarata_m && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
-                      title="Refă rândurile de text tăiate la marginea zonelor (note, cartuș — ex. lungimea totală declarată). Recitește doar perechile de zone afectate, max. 6 apeluri."
+                    {(!d.analiza?.citire_ai?.note_lipite || d.analiza?.citire_ai?.perechi_ramase !== 0) && !d.analiza?.citire_ai?.sumar?.lungime_declarata_m && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                      title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : "Refă rândurile de text tăiate la marginea zonelor (note, cartuș — ex. lungimea totală declarată). Recitește doar perechile de zone afectate, max. 6 apeluri."}
                       onClick={async () => {
                         setPlansaBusy(`${d.nume_original}: refac notele tăiate...`)
                         try {
@@ -1631,8 +1631,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       {j && <span title={j.motiv_anulare || j.eroare || `cerut ${String(j.cerut_la).slice(0, 16).replace('T', ' ')} · ${Number(j.cost_usd || 0).toFixed(2)} USD`}
                         style={{ fontSize:11, color: j.stare === 'gata' ? G.green : ['eroare','anulat','oprit_plafon'].includes(j.stare) ? G.red : G.orange }}>{et[j.stare] || j.stare}</span>}
                       {coadaPlanse.workerViu && !activ && (
-                        <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
-                          title="Citirea rulează pe serverul NAS, nu în browser — poți închide tabul. Aceeași poartă pe cost (owner/responsabil)."
+                        <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                          title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : "Citirea rulează pe serverul NAS, nu în browser — poți închide tabul. Aceeași poartă pe cost (owner/responsabil)."}
                           onClick={() => plansaInCoadaNAS(d)}>🗂 pe NAS</button>
                       )}
                     </>

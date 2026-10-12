@@ -6,6 +6,7 @@
 // ADUSĂ ÎN REPO la 12.09.2026, fără nicio modificare de cod: rula neversionată,
 // ca 105 din cele 129 de funcții. Nu poți face code review pe ce nu vezi.
 import { poartaOfertare } from '../_shared/poartaOfertare.ts'
+import { poartaE0 } from './poarta_e0.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 
@@ -60,7 +61,9 @@ Deno.serve(async (req: Request) => {
 
   try {
     const { path, fisier_nume } = await req.json()
-    if (!path || typeof path !== 'string' || path.includes('..')) return fail('path lipsă sau invalid')
+    // Doar fișa încărcată din E0 (prefix e0/, formă strictă) + poarta pe loturi dacă e și document de atribuire (P1 #4).
+    const refuzE0 = await poartaE0(supabase, path)
+    if (refuzE0) return fail(refuzE0)
 
     const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(path)
     if (dlErr || !blob) return fail('Nu am găsit fișierul încărcat: ' + (dlErr?.message || path))

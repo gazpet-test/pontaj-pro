@@ -3,11 +3,12 @@
 // Fixture = rândul REAL 1751 al lic. 95 (SELECT pe ofertare_cantitati, 25.09.2026).
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import { propuneClarificari, randCantitatePentruAI, sectiuneConflictePlanse } from './core.ts'
+import { cuPoartaLot } from '../_test/poarta_lot.ts'
 
 Deno.test('F02: generatorul persistă propunere, fără aprobare implicită', async () => {
-  const baza = supaFals({ ofertare_licitatii: [{ id: 95 }], ofertare_cerinte: [{ id: 1, text_cerinta: 'Cerință verificabilă' }] });
+  const baza = supaFals({ ofertare_licitatii: [{ id: 95, stare_loturi: 'fara_loturi' }], ofertare_cerinte: [{ id: 1, text_cerinta: 'Cerință verificabilă' }] });
   const scrise: any[] = [];
-  const supa = { from(t: string) {
+  const supa = { rpc: baza.rpc, from(t: string) {
     const b = baza.from(t);
     if (t === 'ofertare_clarificari') b.upsert = (rows: any[]) => {
       scrise.push(...rows);
@@ -60,6 +61,8 @@ function supaFals(tabele: Record<string, any[]>, erori: Record<string, string> =
   const selecturi: Record<string, string> = {}
   return {
     selecturi,
+    // poarta pe loturi: implicit nicio sursă-document (lista goală); testele de loturi o înlocuiesc cu cuPoartaLot
+    rpc: (n: string, _a?: any) => Promise.resolve(n === 'fn_ofertare_eligibilitate' ? { data: [], error: null } : { data: null, error: { message: 'rpc neașteptat' } }),
     from(t: string) {
       let lim = Infinity, cuCount = false
       const b: any = {
@@ -79,7 +82,7 @@ function supaFals(tabele: Record<string, any[]>, erori: Record<string, string> =
 
 Deno.test('R5 capăt-la-capăt: select-ul citește status, iar promptul nu mai conține „lista":17785', async () => {
   const supa = supaFals({
-    ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze' }],
+    ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze', stare_loturi: 'fara_loturi' }],
     ofertare_cerinte: [{ id: 1, tip: 'propunere', text_cerinta: 'Lungimea rețelei conform planșelor' }],
     ofertare_acoperire: [], ofertare_cantitati: [R1751], ofertare_verificari: [], ofertare_documente_atribuire: [], ofertare_clarificari: [],
   })
@@ -109,7 +112,7 @@ Deno.test('R5 capăt-la-capăt: select-ul citește status, iar promptul nu mai c
 Deno.test('R5 condiția 2: 45 de rânduri cu diferențe => promptul spune „40 din 45 — LISTA E TRUNCHIATĂ”; sub limită, nimic în plus', async () => {
   const rulare = async (n: number) => {
     const supa = supaFals({
-      ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze' }],
+      ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze', stare_loturi: 'fara_loturi' }],
       ofertare_cerinte: [{ id: 1, tip: 'propunere', text_cerinta: 'Lungimea rețelei conform planșelor' }],
       ofertare_acoperire: [], ofertare_cantitati: Array.from({ length: n }, (_, i) => ({ ...R1751, id: 1751 + i })), ofertare_verificari: [], ofertare_documente_atribuire: [], ofertare_clarificari: [],
     })
@@ -131,7 +134,7 @@ Deno.test('R5 condiția 2: 45 de rânduri cu diferențe => promptul spune „40 
 // R5 sarcina 2 (a) + (c): conflictele transferului din planșe (fără rând) ajung la generator; citirea eșuată e spusă, nu înghițită
 Deno.test('sarcina 2: conflictele transferului fără rând intră în prompt; view-ul lipsă => „NU AU PUTUT FI CITITE”, nu „niciunul”', async () => {
   const rulare = async (tabele: Record<string, any[]>, erori: Record<string, string> = {}) => {
-    const supa = supaFals({ ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze' }],
+    const supa = supaFals({ ofertare_licitatii: [{ id: 95, nr_anunt: 'CN1096479', autoritate: 'Comuna Vâlcelele', obiect: 'rețea gaze', stare_loturi: 'fara_loturi' }],
       ofertare_cerinte: [{ id: 1, tip: 'propunere', text_cerinta: 'Lungimea rețelei conform planșelor' }], ofertare_acoperire: [], ofertare_cantitati: [],
       ofertare_verificari: [], ofertare_documente_atribuire: [], ofertare_clarificari: [], ...tabele }, erori)
     let corp = ''
@@ -164,4 +167,59 @@ Deno.test('sarcina 2: conflictele transferului fără rând intră în prompt; v
   // transfer amânat (eroare internă de procesare) — NU e prezentat ca problemă a documentației
   const am = sectiuneConflictePlanse({ data: [{ document_id: 1, nume_original: 'PL1.pdf', stare: 'neefectuat', n: 1, deschis: true, restante: [{ tip: 'transfer_amanat', n: 1 }] }], error: null })
   assert(am.includes('eroare internă de procesare — NU e o problemă a documentației: [{"restanta":"transfer amânat"') && am.includes('nu e o contradicție a documentației'), am)
+})
+
+// Poarta pe loturi (20261024b, review Jakarinos P1 #6): în CORE, deci și pe workerul NAS. Cerințele extrase înainte de
+// blocarea documentelor nu mai pleacă la AI; licitația fără participare / poarta picată = niciun apel plătit.
+const LIC_LOT = { id: 95, nr_anunt: 'CN1', autoritate: 'Comuna X', obiect: 'rețea gaze', stare_loturi: 'are_loturi' }
+const CER_LOT = [
+  { id: 1, tip: 'eliminatorie', text_cerinta: 'Cerința lotului 1', sursa_document_id: 10, lot_domeniu: 'lista', lot_nr: [1] },
+  { id: 2, tip: 'eliminatorie', text_cerinta: 'Cerința lotului 2', sursa_document_id: 10, lot_domeniu: 'lista', lot_nr: [2] },
+  { id: 3, tip: 'propunere', text_cerinta: 'Cerința din documentul netriat', sursa_document_id: 11, lot_domeniu: 'toate', lot_nr: null },
+  { id: 4, tip: 'propunere', text_cerinta: 'Cerința fără lot', sursa_document_id: null, lot_domeniu: null, lot_nr: null, lot: null },
+]
+async function rulareLot(tabele: Record<string, any[]>, opt: { motive?: Record<number, string>; cade?: boolean } = {}) {
+  const baza = supaFals({ ofertare_licitatii: [LIC_LOT], ofertare_licitatie_loturi: [{ nr: 1 }], ofertare_cerinte: CER_LOT,
+    ofertare_acoperire: [], ofertare_cantitati: [], ofertare_verificari: [], ofertare_documente_atribuire: [{ id: 10, nume_original: 'CS.pdf' }, { id: 11, nume_original: 'CS lot 2.pdf' }],
+    ofertare_clarificari: [], ...tabele })
+  const { supa, apeluri } = cuPoartaLot(baza, [10, 11], opt)
+  const corpuri: string[] = []
+  const fetchVechi = globalThis.fetch
+  globalThis.fetch = ((_u: unknown, init?: RequestInit) => {
+    corpuri.push(String(init?.body || ''))
+    return Promise.resolve(new Response(JSON.stringify({ content: [{ type: 'text', text: '{"clarificari":[]}' }], usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200 }))
+  }) as typeof fetch
+  try { return { r: await propuneClarificari(supa, { licitatie_id: 95, dry_run: true }), corpuri, apeluri } } finally { globalThis.fetch = fetchVechi }
+}
+
+Deno.test('loturi: doar cerințele eligibile pleacă la AI; excluse raportate cu motive grupate', async () => {
+  const { r, corpuri } = await rulareLot({ ofertare_cantitati: [{ ...R1751, id: 1, lot_domeniu: 'lista', lot_nr: [2] }, { ...R1751, id: 2, lot_domeniu: 'toate', lot_nr: null }] },
+    { motive: { 11: 'de_triat' } })
+  assert(r.ok, JSON.stringify(r))
+  assertEquals(corpuri.length, 1)
+  const m = JSON.parse(corpuri[0]).messages[0].content as string
+  const reg = JSON.parse(m.slice(m.indexOf('[', m.indexOf('REGISTRUL DE CERINȚE')), m.indexOf('\n\n', m.indexOf('REGISTRUL DE CERINȚE'))))
+  assertEquals(reg.map((c: any) => c.id), [1])
+  assertFalse(m.includes('Cerința lotului 2') || m.includes('documentul netriat') || m.includes('Cerința fără lot'))
+  assert(m.includes('DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (1;'), 'cantitatea de pe lotul 2 nu intră')
+  assertFalse(m.includes('CS lot 2.pdf'), 'documentul netriat nu apare nici în inventar')
+  assertEquals(r.excluse_lot, { cerinte: 3, cantitati: 1, documente: 1 })
+  assertEquals(r.excluse_motive, { lot_in_afara: 2, document_de_triat: 1, lot_necunoscut: 1 })
+})
+
+Deno.test('loturi: fără participare / poarta picată / nimic eligibil => niciun apel AI', async () => {
+  const nicio = await rulareLot({ ofertare_licitatie_loturi: [] })
+  assertEquals(nicio.corpuri.length, 0)
+  assertEquals(nicio.r.motiv_lot, 'nicio_participare')
+  assert(String(nicio.r.error).startsWith('Blocat pe loturi'), JSON.stringify(nicio.r))
+  const cade = await rulareLot({}, { cade: true })
+  assertEquals(cade.corpuri.length, 0)
+  assertEquals(cade.r.motiv_lot, 'eroare_poarta')
+  assert(cade.apeluri.length > 0, 'poarta a fost întrebată')
+  const neinit = await rulareLot({ ofertare_licitatii: [{ ...LIC_LOT, stare_loturi: 'neinitializat' }] })
+  assertEquals([neinit.corpuri.length, neinit.r.motiv_lot], [0, 'loturi_neinitializate'])
+  const gol = await rulareLot({ ofertare_cerinte: CER_LOT.slice(1) }, { motive: { 11: 'de_triat' } })
+  assertEquals(gol.corpuri.length, 0)
+  assert(gol.r.ok && /nu s-a chemat AI-ul/.test(gol.r.skip), JSON.stringify(gol.r))
+  assertEquals(gol.r.excluse_lot.cerinte, 3)
 })

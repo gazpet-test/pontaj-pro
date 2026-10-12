@@ -7,6 +7,7 @@
 // Rulează identic în edge function (index.ts) și pe workerul NAS (worker/ofertare/clarificari.ts).
 import { CATEGORII_RESTANTE, infoRestanta, NOTA_LUNGIMI, restantePeTip } from './restante.js'
 import { termenRO } from '../_shared/oraRO.ts'
+import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
 const MODEL_IMPLICIT = 'claude-sonnet-5'
@@ -108,6 +109,9 @@ export function sectiuneConflictePlanse(r: { data: any[] | null; error: any } | 
     `${CATEGORII_RESTANTE.verificare_plansa} (o clarificare DOAR dacă, după verificarea umană, documentația însăși rămâne lacunară sau contradictorie — nu pe baza acestei liste; ${NOTA_LUNGIMI}): ${JSON.stringify(cat('verificare_plansa'))}. ` +
     `Planșele: ${JSON.stringify(desc.slice(0, 10).map((c: any) => String(c.nume_original || '').split('/').pop()))}`
 }
+// motivele excluderii pe loturi, grupate ({lot_in_afara: 3, document_de_triat: 1}) — pentru răspuns / notă, nu pentru prompt
+export const motiveGrupate = (excluse: Array<{ motiv: string }>) =>
+  excluse.reduce((a: Record<string, number>, e) => { a[e.motiv] = (a[e.motiv] || 0) + 1; return a }, {})
 export async function propuneClarificari(supabase: any, body: any): Promise<any> {
   const fail = (msg: string) => ({ error: msg })
   try {
@@ -117,11 +121,11 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const { data: lic } = await supabase.from('ofertare_licitatii').select('id, nr_anunt, autoritate, obiect, termen_depunere, valoare_estimata, moneda, tip_procedura, criteriu, garantie_participare, loturi').eq('id', licId).single()
     if (!lic) return fail('licitatie negasita')
 
-    const [{ data: cerinte }, { data: acop }, { data: cant, count: nCant }, { data: verif }, { data: docs }, { data: clarLic }, rConfl] = await Promise.all([
-      supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
+    const [{ data: cerToate }, { data: acop }, { data: cant, count: nCant }, { data: verif }, { data: docs }, { data: clarLic }, rConfl] = await Promise.all([
+      supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare, sursa_document_id, lot_domeniu, lot_nr').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
       supabase.from('ofertare_acoperire').select('cerinta_id, status, motiv, mod').eq('status', 'gol').limit(5000),
       // R5 condiția 2 (26.09.2026): limita de 40 nu mai taie TACIT — count exact, iar promptul spune câte au rămas pe dinafară
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status, lot_domeniu, lot_nr', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
       supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie').eq('licitatie_id', licId).order('nr'),
@@ -129,7 +133,26 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       Promise.resolve(supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, restante').eq('licitatie_id', licId))
         .then((r: any) => r, (e: any) => ({ data: null, error: e })),
     ])
-    if (!cerinte?.length) return { ok: true, propuse: 0, scrise: 0, skip: 'registrul de cerințe e gol — extrage întâi cerințele' }
+    if (!cerToate?.length) return { ok: true, propuse: 0, scrise: 0, skip: 'registrul de cerințe e gol — extrage întâi cerințele' }
+    // poarta pe loturi (20261024b, review Jakarinos P1 #6): cerințele extrase ÎNAINTE ca documentele să fie blocate nu mai
+    // pleacă la AI — documentul-sursă se reverifică ACUM, iar lotul cerinței trebuie să fie unul la care participăm. Stă aici,
+    // în core, ca să prindă și workerul NAS (ocolește HTTP-ul). Licitația fără participare / poarta picată = oprire, fără apel.
+    const fc = await filtreazaDerivate(supabase, licId, cerToate)
+    if (!fc.ok) return { ...fail(mesajLot(fc.motiv)), motiv_lot: fc.motiv }
+    // cantitățile: lot canonic, fără document-sursă — aceeași regulă pe lot (pe fara_loturi trec toate)
+    const fq = await filtreazaDerivate(supabase, licId, cant || [])
+    if (!fq.ok) return { ...fail(mesajLot(fq.motiv)), motiv_lot: fq.motiv }
+    // inventarul are doar nume, dar tot doar documentele eligibile: un document blocat nu e documentație pentru oferta noastră
+    // (o citire pe toată licitația, nu un RPC per document; lipsă din hartă = neeligibil)
+    const fd = await eligibilitateLicitatie(supabase, licId)
+    if (!fd.ok) return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
+    const docsElig = (docs || []).filter((d: any) => esteEligibil(fd.harta, d.id))
+    const cantElig = fq.pastrate
+    const lotRap = { excluse_lot: { cerinte: fc.excluse.length, cantitati: fq.excluse.length, documente: (docs || []).length - docsElig.length },
+      excluse_motive: motiveGrupate([...fc.excluse, ...fq.excluse]) }
+    // după filtru nu rămâne nimic = nu se plătește nimic
+    if (!fc.pastrate.length) return { ok: true, propuse: 0, scrise: 0, skip: `nicio cerință eligibilă pe loturi (${fc.excluse.length} excluse) — nu s-a chemat AI-ul`, ...lotRap }
+    const cerinte = fc.pastrate
     const idsLic = new Set((cerinte || []).map((c: any) => c.id))
     const goluri = (acop || []).filter((a: any) => idsLic.has(a.cerinta_id))
     // răspunsuri primite: întâi aceeași autoritate, apoi altele (limitat)
@@ -151,9 +174,9 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     const contextul = [
       `LICITAȚIA: ${lic.nr_anunt} · ${lic.autoritate} · procedura ${lic.tip_procedura || '?'} · criteriu ${lic.criteriu || '?'}\nOBIECT: ${String(lic.obiect || '').slice(0, 1500)}\nValoare estimată: ${lic.valoare_estimata ?? '?'} ${lic.moneda || 'RON'} · termen depunere: ${termen || '?'} · garanție participare: ${lic.garantie_participare ?? '?'} · loturi: ${lic.loturi ?? '?'}`,
       `REGISTRUL DE CERINȚE (${registru.length}; cele cu GOL sunt neacoperite):\n${JSON.stringify(registru)}`,
-      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${(cant || []).length}${randuriOmise(nCant, (cant || []).length)}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify((cant || []).map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
+      `DIFERENȚE CANTITĂȚI / PLANȘE / DEVIZE (${cantElig.length}${randuriOmise(nCant == null ? nCant : nCant - fq.excluse.length, cantElig.length)}; status_validat:false = extras automat, neverificat; status_validat:true = marcat validat în platformă):\n${JSON.stringify(cantElig.map(randCantitatePentruAI))}${verif?.[0] ? `\nVERIFICAREA FINALĂ A OFERTEI (auditul intern, nu verificarea cantităților; ${String(verif[0].created_at).slice(0, 10)}): ${verif[0].verdict} — ${(typeof verif[0].raport === 'string' ? verif[0].raport : JSON.stringify(verif[0].raport || {})).slice(0, 2000)}` : '\n(verificarea de cantități nu a rulat)'}`,
       sectiuneConflictePlanse(rConfl),
-      `INVENTARUL DOCUMENTELOR IMPORTATE (${(docs || []).length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify((docs || []).map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
+      `INVENTARUL DOCUMENTELOR IMPORTATE (${docsElig.length}; un document lipsă de aici nu înseamnă că autoritatea nu l-a publicat):\n${JSON.stringify(docsElig.map((d: any) => ({ id: d.id, nume: String(d.nume_original || '').split('/').pop(), tip: d.tip, pagini: d.pagini, citit: d.status_procesare })))}`,
       `CLARIFICĂRI DEJA EXISTENTE LA ACEASTĂ LICITAȚIE (${(clarLic || []).length}) — NU le repeta:\n${JSON.stringify((clarLic || []).map((q: any) => ({ nr: q.nr, status: q.status, intrebare: String(q.intrebare || '').slice(0, 300), raspuns: q.raspuns ? String(q.raspuns).slice(0, 300) : undefined })))}`,
       `RĂSPUNSURI PRIMITE LA ALTE LICITAȚII (${raspunsuri.length}; întâi de la aceeași autoritate) — DOAR ca model de formulare, nu suprimă întrebări (R3):\n${JSON.stringify(raspunsuri.map((r: any) => ({ licitatie: r.lic?.nr_anunt, autoritate: String(r.lic?.autoritate || '').slice(0, 60), intrebare: String(r.intrebare || '').slice(0, 250), raspuns: String(r.raspuns || '').slice(0, 350) })))}`,
     ].join('\n\n')
@@ -211,10 +234,10 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       // inserare idempotentă: cheia e unică pe licitație (index parțial) — o reluare nu dublează, nu suprascrie textul editat de om
       const { data: ins, error: eIns } = await supabase.from('ofertare_clarificari').upsert(noi, { onConflict: 'licitatie_id,cheie', ignoreDuplicates: true }).select('id')
       // propunerile se întorc și la eroare de salvare: apelul e plătit, omul (sau o reluare) le poate scrie de mână
-      if (eIns) return { error: 'scriere clarificări: ' + eIns.message, salvare_esuata: true, clarificari: acceptate, sarite, cost_usd: Number(cost.toFixed(4)) }
+      if (eIns) return { error: 'scriere clarificări: ' + eIns.message, salvare_esuata: true, clarificari: acceptate, sarite, cost_usd: Number(cost.toFixed(4)), ...lotRap }
       scrise = (ins || []).length
     }
-    return { ok: true, propuse: parsed.clarificari.length, scrise, sarite, clarificari: acceptate, model: MODEL, ms: Date.now() - t0, tokens_in: u.input_tokens, tokens_out: u.output_tokens, cost_usd: Number(cost.toFixed(4)), trunchiat: data.stop_reason === 'max_tokens' }
+    return { ok: true, propuse: parsed.clarificari.length, scrise, sarite, clarificari: acceptate, model: MODEL, ms: Date.now() - t0, tokens_in: u.input_tokens, tokens_out: u.output_tokens, cost_usd: Number(cost.toFixed(4)), trunchiat: data.stop_reason === 'max_tokens', ...lotRap }
   } catch (e: any) {
     return fail('Eroare neasteptata: ' + String(e?.message || e))
   }

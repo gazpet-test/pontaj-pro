@@ -55,6 +55,8 @@ const MESAJ_MOTIV = {
   de_triat: 'documentul nu e triat pe lot (comun / lot)',
   in_afara_loturilor: 'documentul e doar pe loturi la care nu participăm',
   stare_invalida: 'stare de lot invalidă',
+  eroare_poarta: 'verificarea pe loturi nu a răspuns — reîncarcă pagina',
+  verificare_in_curs: 'se verifică loturile…',
 }
 export const mesajLot = motiv => '🧩 Blocat pe loturi: ' + (MESAJ_MOTIV[motiv] || motiv)
 
@@ -121,7 +123,10 @@ export function useEligibilitateLoturi(licitatieId) {
   }, [licitatieId, tick])
   const activ = st.incarcat && !st.lipsa && !st.eroare
   const blocat = useCallback(id => {
-    if (!activ) return null
+    // review Jakarinos P2 #9: nu „liber” cât poarta nu e citită / a căzut — motiv explicit; doar migrarea lipsă lasă serverul să decidă
+    if (st.lipsa) return null
+    if (st.eroare) return 'eroare_poarta'
+    if (!st.incarcat) return 'verificare_in_curs'
     const e = st.harta.get(Number(id))
     if (e) return e.eligibil ? null : e.motiv
     // document apărut după ultima citire a porții: nou = necunoscut, deci starea licitației decide

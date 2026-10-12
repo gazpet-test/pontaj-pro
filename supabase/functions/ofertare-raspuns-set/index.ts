@@ -19,7 +19,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // 12.10.2026 (MVP loturi, 20261024b): poarta pe document la creeaza_set (documentele neeligibile ies în `excluse`) și la
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
-import { documentEligibil, eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligibilLot.ts'
+import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'
 import { filtreazaRegistru, lotOperatie } from './loturi.ts'
 
 const CORS = {
@@ -335,17 +335,30 @@ Deno.serve(async (req: Request) => {
     }
 
     const facute = new Set<string>((prop.dispozitii_comparate || []) as string[])
-    const deFacut = toate.filter(x => x.tip === 'efect_posibil' && !facute.has(x.disp_id))
-    if (!deFacut.length) {
+    const deFacutToate = toate.filter(x => x.tip === 'efect_posibil' && !facute.has(x.disp_id))
+    if (!deFacutToate.length) {
       return json({ ok: true, continua: false, mesaj: 'toate dispozitiile cu efect posibil au fost comparate',
         operatii: (prop.operatii || []).length })
     }
+    // Loturi (20261024b, review Jakarinos P1 #3): la FIECARE reluare se reverifică documentele din care vin dispozițiile —
+    // trierea / bifele s-au putut schimba după inventar. Cele din documente blocate nu pleacă la AI și nu se marchează
+    // comparate (rămân pentru când documentul redevine eligibil). Poarta căzută = oprire.
+    const fd = await filtreazaDocumente(db, deFacutToate.map((x: any) => x.doc_id))
+    if (!fd.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a comparat nimic', blocat_lot: true })
+    const deFacut = deFacutToate.filter((x: any) => fd.eligibile.has(Number(x.doc_id)))
+    const dispBlocate = deFacutToate.length - deFacut.length
+    if (!deFacut.length) return json({ ok: false, blocat_lot: true, continua: false, dispozitii_blocate_lot: dispBlocate,
+      error: `${mesajLot(fd.blocate.values().next().value || 'de_triat')} — toate cele ${dispBlocate} dispoziții rămase vin din documente blocate` })
     const lot = deFacut.slice(0, 20)
 
-    const { data: cer, error: eC } = await db.from('ofertare_cerinte')
+    const { data: cerBD, error: eC } = await db.from('ofertare_cerinte')
       .select('id, tip, lot, lot_domeniu, lot_nr, sursa_sectiune, sursa_document_id, text_cerinta, document_probant, cand_se_prezinta')
       .eq('licitatie_id', set.licitatie_id).is('inlocuita_de', null).is('duplicat_al', null).order('id')
     if (eC) return json({ error: 'citire registru: ' + eC.message })
+    // registrul din prompt: doar cerințe cu document-sursă eligibil acum și pe loturile la care participăm
+    const fc = await filtreazaDerivate(db, set.licitatie_id, (cerBD || []) as any[])
+    if (!fc.ok) return json({ error: mesajLot(fc.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: fc.motiv })
+    const cer = fc.pastrate
     const filtru = filtreazaRegistru((cer || []) as any[], set.lot)
     if (!filtru.ok) return json({ error: filtru.eroare })
     const eligibile = filtru.eligibile
@@ -517,7 +530,8 @@ Deno.serve(async (req: Request) => {
       cerinte_eligibile: eligibile.length, cerinte_active: (cer || []).length,
       // cerințele cu lot necunoscut intrate marcate (doar la set cu lot) + cele excluse pe lot
       cerinte_lot_necunoscut: lotNecunoscut.size ? [...lotNecunoscut] : undefined, cerinte_excluse_lot: filtru.excluse,
-      continua: raman > 0, cost_usd: Number(cost.toFixed(4)),
+      // dispozițiile din documente blocate pe loturi rămân în `ramase` (setul nu e complet), dar nu țin bucla pornită
+      continua: raman - dispBlocate > 0, dispozitii_blocate_lot: dispBlocate || undefined, cost_usd: Number(cost.toFixed(4)),
     })
   }
 

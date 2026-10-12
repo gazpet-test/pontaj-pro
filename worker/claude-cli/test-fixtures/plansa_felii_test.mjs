@@ -15,6 +15,10 @@ const pachetId = m => sha(JSON.stringify({ doc_id: m.doc_id, taiat_la: m.taiat_l
   felii: m.felii.map(({ eticheta, sha256 }) => ({ eticheta, sha256 })), perechi_lipire: m.perechi_lipire,
   instructiuni_sha256: m.instructiuni_sha256, instructiuni_lipire_sha256: m.instructiuni_lipire_sha256 }))
 
+// Atestarea scrisă pe gazdă de worker/ofertare/plansa_cli_verifica.ts (poarta pe loturi, P1 #5).
+const atestare = (m, extra = {}) => ({ doc_id: m.doc_id, licitatie_id: 95, pachet_id: m.pachet_id, eligibil: true, motiv: 'comun',
+  verificat_la: new Date().toISOString(), ...extra })
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 function sandbox(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'jak-d4-launcher-'))
@@ -56,6 +60,7 @@ test('plansa_felii: JPEG fără OCR, Opus, ture în funcție de N, JSON extras d
   writeFileSync(join(dir, 'data/INSTRUCTIUNI_LIPIRE.md'), 'lipire test\n')
   const result = { doc_id: m.doc_id, taiat_la: m.taiat_la, felii: { z1_1: { sha256: hash, text: '{"tronsoane":[]}' } }, lipiri: {}, pachet_id: 'inventat de model', rulare: { model: 'inventat' } }
   writeFileSync(join(dir, 'data/manifest.json'), JSON.stringify(m))
+  writeFileSync(join(dir, 'data/verificare_lot.json'), JSON.stringify(atestare(m)))
   writeFileSync(join(dir, 'prompts/plansa_felii.md'), readFileSync(join(root, 'prompts/plansa_felii.md')))
   const envelope = { result: JSON.stringify(result), subtype: 'success', is_error: false, num_turns: 3, modelUsage: { 'claude-opus-5': { inputTokens: 100 } } }
   // Numai CLI fals. Dacă launcherul lasă cheile în mediu, testul pică înainte de rezultat.
@@ -159,6 +164,37 @@ for (const defect of ['modificat', 'lipsa', 'extra']) {
       modificat: 'sha256_felie_diferit:z1_1', lipsa: 'felii_lipsa', extra: 'felii_in_plus_sau_neregulate',
     }[defect]))
     assert.equal(readFileSync(join(dir, 'data/manifest.json'), 'utf8'), manifest)
+  }))
+}
+
+// P1 #5: atestarea pe loturi lipsă / veche / pentru alt pachet / neeligibilă → cod 2, CLI fals niciodată apelat.
+const ORA = 60 * 60000
+for (const defect of ['lipsa', 'expirata', 'din_viitor', 'alt_pachet', 'alt_doc', 'neeligibila', 'json_invalid']) {
+  test(`P1 #5 launcher: atestare loturi ${defect} → lot_neverificat, CLI neapelat`, () => sandbox((dir, run) => {
+    const jpeg = Buffer.from([255, 216, 1, 255, 217])
+    const m = { doc_id: 470, taiat_la: 'taiere', felii: [{ eticheta: 'z1_1', fisier: 'felii/z1_1.jpg', sha256: sha(jpeg) }],
+      perechi_lipire: [], instructiuni_sha256: sha('P'), instructiuni_lipire_sha256: sha('L') }
+    m.pachet_id = pachetId(m)
+    mkdirSync(join(dir, 'data/felii'))
+    writeFileSync(join(dir, 'data/manifest.json'), JSON.stringify(m))
+    writeFileSync(join(dir, 'data/INSTRUCTIUNI.md'), 'P\n')
+    writeFileSync(join(dir, 'data/INSTRUCTIUNI_LIPIRE.md'), 'L\n')
+    writeFileSync(join(dir, 'data/felii/z1_1.jpg'), jpeg)
+    writeFileSync(join(dir, 'prompts/plansa_felii.md'), 'Prompt test')
+    const v = {
+      expirata: atestare(m, { verificat_la: new Date(Date.now() - ORA).toISOString() }),
+      din_viitor: atestare(m, { verificat_la: new Date(Date.now() + ORA).toISOString() }),
+      alt_pachet: atestare(m, { pachet_id: sha('alt') }),
+      alt_doc: atestare(m, { doc_id: 471 }),
+      neeligibila: atestare(m, { eligibil: false, motiv: 'de_triat' }),
+    }[defect]
+    if (v) writeFileSync(join(dir, 'data/verificare_lot.json'), JSON.stringify(v))
+    if (defect === 'json_invalid') writeFileSync(join(dir, 'data/verificare_lot.json'), '{')
+    writeFileSync(join(dir, 'bin/claude'), '#!/bin/sh\necho apelat > "$D4_APELAT"\nexit 99\n', { mode: 0o755 })
+    const r = run({ PATH: join(dir, 'bin') + ':' + process.env.PATH, CLAUDE_CODE_OAUTH_TOKEN: 'fals', D4_APELAT: join(dir, 'apelat') })
+    assert.equal(r.status, 2, r.stderr)
+    assert.equal(existsSync(join(dir, 'apelat')), false)
+    assert.match(readFileSync(join(dir, 'out/jurnal.log'), 'utf8'), /cod=2 motiv=lot_neverificat/)
   }))
 }
 

@@ -43,7 +43,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { termenRO } from '../_shared/oraRO.ts'
 // 12.10.2026 (MVP loturi, 20261024b): cu loturi la care participăm, cerințele lot_domeniu='lista' fără intersecție nu intră
 // în generare (raportate în `cerinte_excluse_lot`); cele 'necunoscut' NU blochează în MVP, dar apar în `cerinte_lot_necunoscut`.
-import { filtruParticipare } from '../_shared/lot.ts'
+import { filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // 17.09 seara: Opus cu pachetul de fapte depășea limita de ~150 s a unui apel edge (EarlyDrop la
@@ -92,7 +92,7 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
   const note: string[] = []
   const [acop, graf, gar, part, decl, clar, caps, docF, afirm] = await Promise.all([
     supabase.from('ofertare_acoperire')
-      .select('id, status, mod, domeniu_rte, referinta_text, cerinta:ofertare_cerinte!inner(id, licitatie_id, tip, text_cerinta), autorizatie:hr_autorizatii(id, numar_autorizatie, emitent, data_emitere, data_expirare, fara_expirare, domenii, subcategorie, tip:hr_autorizatii_tipuri(cod, denumire), emp:employees(name, functie), ext:hr_personal_extern(nume, functie, firma)), recomandare:hr_recomandari(id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, nr_document, data_document, emp:employees(name), ext:hr_personal_extern(nume)), studii:hr_documente_personale(id, numar_document, emitent, data_emitere, observatii, tip:hr_documente_personale_tipuri(denumire), emp:employees(name)), partener:ofertare_parteneri(id, nume, cui, tip_relatie, observatii), doc_firma:documente_firma(id, tip, denumire, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare), experienta:ofertare_experienta(id, denumire, beneficiar, valoare_lei, valoare_executata_lei, asociere, data_pv, tip_pv, observatii)')
+      .select('id, status, mod, domeniu_rte, referinta_text, cerinta:ofertare_cerinte!inner(id, licitatie_id, tip, text_cerinta, sursa_document_id, lot, lot_domeniu, lot_nr), autorizatie:hr_autorizatii(id, numar_autorizatie, emitent, data_emitere, data_expirare, fara_expirare, domenii, subcategorie, tip:hr_autorizatii_tipuri(cod, denumire), emp:employees(name, functie), ext:hr_personal_extern(nume, functie, firma)), recomandare:hr_recomandari(id, rol, beneficiar, obiect_lucrare, perioada_start, perioada_end, nr_document, data_document, emp:employees(name), ext:hr_personal_extern(nume)), studii:hr_documente_personale(id, numar_document, emitent, data_emitere, observatii, tip:hr_documente_personale_tipuri(denumire), emp:employees(name)), partener:ofertare_parteneri(id, nume, cui, tip_relatie, observatii), doc_firma:documente_firma(id, tip, denumire, numar_document, autoritate_emitenta, data_valabilitate, fara_expirare), experienta:ofertare_experienta(id, denumire, beneficiar, valoare_lei, valoare_executata_lei, asociere, data_pv, tip_pv, observatii)')
       .eq('cerinta.licitatie_id', licId).in('status', ['acoperit', 'acoperit_partener', 'in_lucru']).order('id').limit(400),
     supabase.from('grafic_activitati').select('ordine, denumire, durata_zile, jalon, resurse').eq('licitatie_id', licId).order('ordine').limit(200),
     supabase.from('ofertare_pt_garantie').select('*').eq('licitatie_id', licId).maybeSingle(),
@@ -107,10 +107,18 @@ async function pachetFapte(supabase: any, licId: number, capIdCurent: number): P
     if (r?.error) note.push(`${nume}: ${r.error.message}`)
   }
 
+  // Loturi (20261024b, review Jakarinos P1 #2): acoperirile intră doar pe cerințe trecute prin poarta comună
+  // (document-sursă eligibil acum + lot la care participăm); poarta căzută = nicio acoperire în prompt.
+  const acopRows = acop?.data || []
+  const fa = await filtreazaDerivate(supabase, licId, acopRows.map((a: any) => ({ ...(a.cerinta || {}), _acop: a })))
+  if (!fa.ok) note.push(`acoperiri: ${mesajLot(fa.motiv)}`)
+  else if (fa.excluse.length) note.push(`acoperiri: ${fa.excluse.length} pe cerințe din afara loturilor / documente netriate, scoase`)
+  const acopPermise = fa.ok ? fa.pastrate.map((c: any) => c._acop) : []
+
   // ECHIPA + EXPERIENȚĂ + PARTENERI + DOCUMENTE FIRMĂ — din acoperirile legate pe cerințe.
   const persoane: string[] = [], exper: string[] = [], parten: string[] = [], docs: string[] = []
   const vazut = new Set<string>()
-  for (const a of (acop?.data || [])) {
+  for (const a of acopPermise) {
     const c = a.cerinta || {}
     const cer = `[cerința #${c.id}] ${scurt(c.text_cerinta, 110)}`
     const stare = a.status === 'in_lucru' ? ' (ÎN LUCRU — dovada nu e completă: ' + scurt(a.referinta_text, 160) + ')' : ''
@@ -264,21 +272,21 @@ Deno.serve(async (req: Request) => {
     if (!ids.length) return fail('Capitolul n-are nicio cerință atribuită. Atribuie-i cerințele întâi — altfel iese text generic.')
 
     const { data: cerinteBD, error: eCer } = await supabase.from('ofertare_cerinte')
-      .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, document_probant, confirmata_de, lot_domeniu, lot_nr')
+      .select('id, nr_ordine, text_cerinta, tip, sursa_sectiune, document_probant, confirmata_de, sursa_document_id, lot, lot_domeniu, lot_nr')
       .in('id', ids).is('inlocuita_de', null).order('id')
     if (eCer) return fail('cerintele nu s-au putut citi: ' + eCer.message)
     if (!cerinteBD?.length) return fail('Cerintele atribuite nu mai exista (inlocuite?). Reatribuie capitolul.')
 
-    // Loturile la care participăm: o cerință doar pe alte loturi nu se scrie în propunerea noastră. Citirea căzută = refuz.
-    const { data: lotPart, error: eLot } = await supabase.from('ofertare_licitatie_loturi')
-      .select('nr').eq('licitatie_id', cap.licitatie_id).eq('participam', true)
-    if (eLot) return fail('loturile licitației nu s-au putut citi: ' + eLot.message)
-    const peLot = filtruParticipare(cerinteBD, (lotPart || []).map((l: any) => Number(l.nr)))
-    const scurt = (c: any) => ({ id: c.id, nr: c.nr_ordine, loturi: c.lot_nr ?? null, text: String(c.text_cerinta || '').slice(0, 160) })
-    const cerinte_excluse_lot = peLot.excluse.map(scurt)
-    const cerinte_lot_necunoscut = peLot.necunoscut.map(scurt)
+    // Loturi (20261024b, review Jakarinos P1 #2): poarta comună — licitația neinițializată / fără niciun lot bifat = refuz
+    // (zero participări NU mai înseamnă „fără filtru”); documentul-sursă al cerinței reverificat acum; pe are_loturi
+    // cerința trebuie să fie „toate” sau pe un lot bifat — „necunoscut” (inclusiv rândurile vechi fără lot) NU intră.
+    const peLot = await filtreazaDerivate(supabase, cap.licitatie_id, cerinteBD)
+    if (!peLot.ok) return fail(mesajLot(peLot.motiv), { motiv_lot: peLot.motiv })
+    const scurt = (c: any) => ({ id: c.id, nr: c.nr_ordine, loturi: c.lot_nr ?? null, motiv: c.motiv, text: String(c.text_cerinta || '').slice(0, 160) })
+    const cerinte_excluse_lot = peLot.excluse.filter((c) => c.motiv !== 'lot_necunoscut').map(scurt)
+    const cerinte_lot_necunoscut = peLot.excluse.filter((c) => c.motiv === 'lot_necunoscut').map(scurt)
     const cerinte = peLot.pastrate
-    if (!cerinte.length) return fail('Toate cerințele atribuite sunt pe loturi la care nu participăm — nu s-a generat nimic.',
+    if (!cerinte.length) return fail('Nicio cerință atribuită nu trece de loturi (alt lot, lot necunoscut sau document netriat) — nu s-a generat nimic.',
       { cerinte_excluse_lot, cerinte_lot_necunoscut })
 
     // INTERDICȚIA 5 — cerințe neconfirmate de om. Refuzul vine ÎNAINTE de orice apel plătit și de pachetul de fapte.
