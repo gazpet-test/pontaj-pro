@@ -123,3 +123,11 @@ Deno.test('motivOperatie (Jakarinos r11): o singură regulă pentru compara și 
   eq(restrangeLaDocument([1, 2], [2]), [2])
   eq(restrangeLaDocument([1, 2], null), [1, 2])
 })
+Deno.test('motivOperatie r12: documentul-sursă neeligibil (orice stare) + țintă fără amprentă de la generare', () => {
+  const ctx = (o: any = {}) => ({ peLoturi: false, participam: [], cerinte: new Map<number, any>([[7, { id: 7, sursa_document_id: 11 }]]), domDoc: new Map(), ...o })
+  const op = { fel: 'modifica', cerinta_id: 7, surse_complete: true, surse_doc_ids: [11], document_id: 11 }
+  eq(motivOperatie(op, ctx({ docEligibil: (id: number) => id !== 11 })), 'document_neeligibil')   // fara_loturi: mutat / blocat
+  eq(motivOperatie(op, ctx({ docEligibil: () => true })), null)
+  eq(motivOperatie(op, ctx({ amprenteOperatie: {}, amprenteAcum: { '7': 'a' } })), 'tinta_fara_amprenta')
+  eq(motivOperatie({ ...op, document_id: 12 }, ctx()), 'document_diferit')
+})

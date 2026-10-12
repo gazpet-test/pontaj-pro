@@ -123,17 +123,23 @@ export type CtxOperatii = {
   domDoc: Map<number, number[] | null>          // domeniul documentelor-sursă, citit acum
   amprenteOperatie?: Record<string, string>     // amprentele cu care a fost generată operația (dacă se pot compara)
   amprenteAcum?: Record<string, string>
+  docEligibil?: (id: number) => boolean       // harta licitației setului (eligibilitateLicitatie)
 }
 export function motivOperatie(o: any, ctx: CtxOperatii): string | null {
   if (o?.surse_complete !== true || !provenientaUnica(o?.surse_doc_ids)) return 'fara_provenienta_unica'
   const doc = Number(o.surse_doc_ids[0])
+  // documentul-sursă: eligibil ACUM în licitația setului, pe orice stare (Jakarinos r12 P2: mutat în altă licitație = refuz)
+  if (ctx.docEligibil && !ctx.docEligibil(doc)) return 'document_neeligibil'
+  if (o.document_id != null && Number(o.document_id) !== doc) return 'document_diferit'
   if (o.cerinta_id != null) {
     const t = ctx.cerinte.get(Number(o.cerinta_id))
     if (!t) return 'tinta_lipsa'
     if (t.sursa_document_id != null && Number(t.sursa_document_id) !== doc) return 'tinta_sursa_schimbata'
     const k = String(o.cerinta_id)
-    if (ctx.amprenteOperatie && ctx.amprenteAcum && ctx.amprenteOperatie[k] !== undefined
-        && ctx.amprenteOperatie[k] !== ctx.amprenteAcum[k]) return 'tinta_schimbata'
+    if (ctx.amprenteOperatie && ctx.amprenteAcum) {
+      if (ctx.amprenteOperatie[k] === undefined) return 'tinta_fara_amprenta'   // fără amprenta de la generare = neverificabilă
+      if (ctx.amprenteOperatie[k] !== ctx.amprenteAcum[k]) return 'tinta_schimbata'
+    }
   }
   if (ctx.peLoturi) {
     if (!ctx.domDoc.has(doc)) return 'domeniu_document_necunoscut'

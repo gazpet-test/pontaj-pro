@@ -1750,6 +1750,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       tinta_lipsa: 'cerința-țintă nu mai e eligibilă', tinta_sursa_schimbata: 'cerința-țintă provine acum din alt document',
                       tinta_schimbata: 'cerința-țintă s-a schimbat de la analiză', domeniu_document: 'loturile schimbării depășesc loturile documentului',
                       domeniu_document_necunoscut: 'documentul-sursă nu e triat', lot_in_afara_participarii: 'lot la care nu mai participăm',
+                      loturi_aplicare_manuala: 'licitație pe loturi — se aplică manual (aplicarea automată e blocată până la verificarea completă a provenienței)',
+                      document_neeligibil: 'documentul-sursă nu mai e eligibil', document_diferit: 'documentul operației diferă de sursă', tinta_fara_amprenta: 'cerința-țintă fără amprentă de la analiză',
                     }[o.motiv_provenienta] || o.motiv_provenienta || 'de verificat')}</span>
                   </div>
                 ))}
