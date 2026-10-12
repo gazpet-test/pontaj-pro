@@ -21,6 +21,7 @@
 // nu 'procesat' — până acum o pagină sărită era numărată ca procesată (planșele
 // 130–132 la Mânăstirea aveau 39 de caractere și status verde).
 // v7: CORS complet cu x-client-info. v6: felia persistată. v5: 2 apeluri/invocare.
+import { taieLaPagina } from './taie_pagina.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
@@ -45,6 +46,7 @@ const TIPURI_CRITICE = ['fisa_date', 'clarificare', 'raspuns_clarificare', 'form
 const APELURI_PER_INVOCARE = 2
 const MAX_CHUNK_BYTES = 24_000_000
 const MAX_TEXT = 900_000
+const AVERT_REZERVA = 300   // loc pentru avertismentul „TRUNCHIAT” adăugat după tăiere
 const MAX_OUT = 8000
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-ingest-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
@@ -268,6 +270,8 @@ Deno.serve(async (req: Request) => {
     let antet: any = null
     let pareScanat: boolean | null = null
     let tokIn = 0, tokOut = 0
+    let plafon = false
+    let primaPlafon = Infinity   // prima pagină lăsată necitită din cauza plafonului
     // paginile necitite se acumulează peste invocări (documentul mare se citește în mai multe runde)
     const necitite = new Set<number>(reiaDeLaZero ? [] : ((row.pagini_necitite as number[] | null) || []))
 
@@ -332,10 +336,11 @@ Deno.serve(async (req: Request) => {
       }
       textNou += asiguraMarcaje(txt, sAbs, eAbs) + '\n'
       poz = e
-      if (((start === 0 ? '' : (row.text_extras || '')).length + textNou.length) > MAX_TEXT) {
-        // Plafonul de text atins: restul paginilor NU sunt citite — se spune explicit.
+      if (((start === 0 ? '' : (row.text_extras || '')) + '\n' + textNou).length > MAX_TEXT) {
+        // Plafonul de text atins: restul paginilor NU sunt citite — se spune explicit (avertismentul se adaugă DUPĂ tăiere, mai jos).
         for (let p = poz + 1; p <= nPag; p++) necitite.add(p + off)
-        textNou += `\n[TRUNCHIAT la 900k caractere — paginile ${poz + 1 + off}-${nPag + off} necitite]`
+        plafon = true
+        primaPlafon = poz + 1 + off
         poz = nPag
         break
       }
@@ -346,8 +351,14 @@ Deno.serve(async (req: Request) => {
     } catch (_) {}
 
     const gata = poz >= nPag
+    let textAcum = ((start === 0 ? '' : (row.text_extras || '')) + '\n' + textNou).trim()
+    if (plafon) {
+      // Tăiem la ultima pagină ÎNTREAGĂ (nu la caracter), cu loc rezervat pentru avertisment; paginile scoase devin necitite.
+      const t = taieLaPagina(textAcum, MAX_TEXT - AVERT_REZERVA, nPag + off)
+      for (const p of t.paginiScoase) necitite.add(p)
+      textAcum = t.text + `\n[TRUNCHIAT la 900k caractere — paginile ${Math.min(t.primaScoasa ?? Infinity, primaPlafon)}-${nPag + off} necitite]`
+    }
     const listaNecitite = [...necitite].sort((a, b) => a - b)
-    const textAcum = ((start === 0 ? '' : (row.text_extras || '')) + '\n' + textNou).trim().slice(0, MAX_TEXT)
     const upd: any = {
       text_extras: textAcum || null,
       pagini: nPag, size_bytes: bytes.length, pagini_procesate: poz,
