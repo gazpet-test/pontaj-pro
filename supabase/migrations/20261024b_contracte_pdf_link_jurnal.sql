@@ -9,6 +9,7 @@
 -- (Copilot P1-2: fără lockout care se auto-prelungește și fără creștere nelimitată a jurnalului sub abuz).
 -- 'rezervat' devine 'emis' / 'cale_invalida' / 'eroare_semnare' după ce edge-ul a încercat efectiv să semneze (Copilot P1-3).
 -- Secvența identity e închisă explicit pentru anon/authenticated (Copilot P1-4).
+-- r3: jurnalul e append-only și pentru service_role (fără UPDATE/DELETE/TRUNCATE direct), finalul doar prin RPC (Copilot P2-3).
 -- Jurnalul NU conține URL-uri semnate, secrete sau antete — doar contract_id, rezultat, moment.
 -- Secretul CONTRACTE_PDF_LINK_SECRET NU e creat aici: îl creează Răzvan în Vault (64 hex), îl pune pe serverul AI.
 -- Revenire: supabase/revenire/20261024b_contracte_pdf_link_jurnal_ROLLBACK.sql (șterge tabelul și funcțiile — jurnalul se pierde).
@@ -113,7 +114,9 @@ END
 $f$;
 REVOKE ALL ON FUNCTION public.fn_contracte_pdf_link_final(bigint, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.fn_contracte_pdf_link_final(bigint, text) TO service_role;
-GRANT UPDATE (rezultat) ON public.contracte_pdf_link_jurnal TO service_role;
+-- Copilot P2-3 (r3): jurnal append-only și pentru service_role (drepturile implicite Supabase îi dau ALL pe tabelele noi);
+-- rezultatul final se schimbă DOAR prin fn_contracte_pdf_link_final (SECURITY DEFINER, rulează ca owner).
+REVOKE UPDATE, DELETE, TRUNCATE ON public.contracte_pdf_link_jurnal FROM service_role;
 
 DO $post$
 BEGIN
@@ -121,6 +124,9 @@ BEGIN
      OR has_table_privilege('anon', 'public.contracte_pdf_link_jurnal', 'SELECT')
      OR has_table_privilege('authenticated', 'public.contracte_pdf_link_jurnal', 'SELECT')
      OR NOT has_table_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'INSERT')
+     OR has_table_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'UPDATE')
+     OR has_table_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'DELETE')
+     OR has_any_column_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'UPDATE')
      OR has_function_privilege('anon', 'public.fn_contracte_pdf_link_rezerva(bigint)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_contracte_pdf_link_rezerva(bigint)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.fn_contracte_pdf_link_rezerva(bigint)', 'EXECUTE')

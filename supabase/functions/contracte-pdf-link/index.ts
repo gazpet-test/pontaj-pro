@@ -52,8 +52,12 @@ Deno.serve(async (req: Request) => {
   if (r.rezultat !== 'permis' || typeof r.jurnal_id !== 'number') return raspuns(500, { error: 'Eroare internă' })
 
   // rezultatul final intră în jurnal DUPĂ încercarea de semnare ('rezervat' → emis / cale_invalida / eroare_semnare)
-  const final = async (rezultat: 'emis' | 'cale_invalida' | 'eroare_semnare') => {
-    try { await sb.rpc('fn_contracte_pdf_link_final', { p_jurnal_id: r.jurnal_id, p_rezultat: rezultat }) } catch (_) { /* jurnalul rămâne 'rezervat' */ }
+  // întoarce true doar dacă rândul a fost efectiv închis (rpc nu aruncă la eroare SQL: se verifică error + data === true)
+  const final = async (rezultat: 'emis' | 'cale_invalida' | 'eroare_semnare'): Promise<boolean> => {
+    try {
+      const { data: ok, error: e } = await sb.rpc('fn_contracte_pdf_link_final', { p_jurnal_id: r.jurnal_id, p_rezultat: rezultat })
+      return !e && ok === true
+    } catch (_) { return false }
   }
 
   const cale = caleSigura(r.pdf_path)
@@ -61,6 +65,8 @@ Deno.serve(async (req: Request) => {
   const { data: semnat, error: eroareSemnare } = await sb.storage.from(BUCKET).createSignedUrl(cale, VALABIL_SEC)
   if (eroareSemnare || !semnat?.signedUrl) { await final('eroare_semnare'); return raspuns(502, { error: 'Fișierul nu a putut fi semnat' }) }
 
-  await final('emis')
+  // P2-1 (Copilot r2): URL-ul pleacă DOAR dacă emiterea a intrat în jurnal; altfel nu se divulgă nimic.
+  // Pe ramurile de eroare de mai sus auditul final rămâne best-effort (nu se emite URL).
+  if (!(await final('emis'))) return raspuns(500, { error: 'Jurnalul nu a putut fi scris' })
   return raspuns(200, { url: semnat.signedUrl, expira_in_sec: VALABIL_SEC, contract_id: cerere.contractId })
 })
