@@ -5,6 +5,9 @@
 // și workerul cooperează fără plată dublă. Design: docs/R4_REZERVARE_ZONE_SI_COADA_NAS.md §3.
 // Până la aplicarea migrării (GO Răzvan), RPC-ul lipsește și modulul nu face nimic (fără eroare în buclă).
 
+// LOTURI (20261024b): poarta unică pe document — fail-closed (RPC căzut = neeligibil, motiv eroare_poarta)
+import { documentEligibil, mesajLot } from '../../supabase/functions/_shared/eligibilLot.ts'
+
 export const LEASE_MIN = 10
 export const PAUZA_ALT_TAB_MS = 60_000
 export const MAX_PAUZE_ALT_TAB = 10
@@ -166,6 +169,18 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
     cost = data.cost_usd
     return true
   }
+  // LOTURI: documentul neeligibil → jobul se anulează (cu notificare; după triere se reînscrie); poarta căzută → „asteapta” cu
+  // backoff, ca la furnizor (după max_incercari → eroare). Se cheamă ÎNAINTE de rezervarea bugetului, deci fără cost.
+  const opresteLaLot = async (motiv: string) => {
+    jurnal.push({ la: new Date().toISOString(), blocat_lot: motiv })
+    if (motiv !== 'eroare_poarta') { await incheie('anulat', { motiv_anulare: mesajLot(motiv) }); log(`job ${job.id} (doc ${job.doc_id}): anulat — ${mesajLot(motiv)}`); return true }
+    if (Number(job.incercari || 0) >= Number(job.max_incercari || 3)) { await incheie('eroare', { eroare: `${mesajLot(motiv)} (după ${job.incercari} încercări)` }); return true }
+    await incheie('asteapta', { urmatoarea_la: new Date(Date.now() + backoffMin(job.incercari) * 60_000).toISOString(),
+      luat_de: null, lease_pana: null, eroare: mesajLot(motiv) })
+    return true
+  }
+  const lotBlocat = async (): Promise<string | null> => { const e = await documentEligibil(supabase, Number(job.doc_id)); return e.eligibil ? null : e.motiv }
+
   const opresteLaBuget = async (motiv: string) => {
     if (motiv === 'lease') { log(`job ${job.id}: lease pierdut — mă opresc`); return true }
     await incheie('oprit_plafon', { eroare: motiv }); return true
@@ -194,6 +209,8 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       // Identitatea sursei se reverifică înaintea FIECĂRUI apel (inclusiv după pauza 409): retăiere / mutare = anulat, zero AI.
       const m = motivAnulare(job, doc, hashuri)
       if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
+      const ml = await lotBlocat()   // la fiecare rundă: o debifare de lot oprește jobul înainte de runda următoare
+      if (ml) return await opresteLaLot(ml)
       const mb = await bugetOk(REZERVA_RUNDA_USD)
       if (mb) return await opresteLaBuget(mb)
       doc = await verificaDupaRezervare()
@@ -222,6 +239,8 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       if (!(await regularizeaza(raspuns))) {
         await incheie('eroare', { eroare: 'regularizarea costului a eșuat — rezervarea rămâne în buget' }); return true
       }
+      // handler-ul a refuzat pe loturi (devenit neeligibil între verificare și apel) — fără AI, rezervarea deja regularizată
+      if (raspuns?.blocat_lot === true) return await opresteLaLot(String(raspuns.motiv ?? 'eroare_poarta'))
 
       if (cls === 'alt_tab') {
         pauzeAltTab++
@@ -274,6 +293,8 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
       doc = await citesteDoc()
       const m = motivAnulare(job, doc, hashuri)
       if (m) { await incheie('anulat', { motiv_anulare: m }); return true }
+      const ml = await lotBlocat()
+      if (ml) return await opresteLaLot(ml)
       const mb = await bugetOk(REZERVA_LIPIRE_USD)
       if (mb) return await opresteLaBuget(mb)
       doc = await verificaDupaRezervare()
@@ -295,6 +316,7 @@ export async function proceseazaPlansa(d: DepsPlansa): Promise<boolean> {
         cost_usd: cert ? r.cost_usd : REZERVA_LIPIRE_USD, cost_cert: cert,
         eroare: r?.error ? String(r.error).slice(0, 300) : undefined })
       if (!(await regularizeaza(r))) lipireOk = false
+      if (r?.blocat_lot === true) return await opresteLaLot(String(r.motiv ?? 'eroare_poarta'))
       if (clasifica(status, r) === 'anulat') {
         await incheie('anulat', { motiv_anulare: String(r?.error ?? 'conflict').slice(0, 500) }); return true
       }

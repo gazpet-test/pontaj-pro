@@ -16,6 +16,7 @@ import { proceseazaSourcePacks } from './source_pack.ts'
 import { proceseazaSeap } from './seap.ts'
 import { proceseazaPlansa, fetchCuTimeout } from './plansa.ts'
 import { handler as handlerPlansa } from '../../supabase/functions/ofertare-plansa-citeste/handler.ts'
+import { documentEligibil, mesajLot } from '../../supabase/functions/_shared/eligibilLot.ts'   // poarta pe loturi (20261024b)
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
@@ -89,7 +90,22 @@ async function proceseazaLicitatie(id: number) {
       inLucru.set(id, `${eticheta} · bucata ${c.bucata + 1} (pas ${c.poz + 1}/${pasi.length})`)
       const t0 = Date.now()
       let r: any
-      try { r = await extrageCerinte(supabase, body) } catch (e) { r = { error: 'excepție: ' + String((e as Error)?.message ?? e) } }
+      // LOTURI (20261024b): pasul pe document întreabă poarta ÎNAINTE de AI, la fiecare bucată (o debifare se respectă imediat).
+      // Neeligibil → pasul se sare (jurnal „blocat_lot”, fără eroare); poarta căzută → tratată ca eroare (reîncercări, apoi pas sărit
+      // cu eroare) — în niciun caz nu se cheamă AI. Pașii pe secțiune (text din mai multe documente) filtrează în core.
+      const el = pas.doc_id != null ? await documentEligibil(supabase, Number(pas.doc_id)) : null
+      if (el && !el.eligibil && el.motiv !== 'eroare_poarta') {
+        const acumL = new Date().toISOString()
+        await supabase.from('ofertare_extragere_coada').update({
+          poz: c.poz + 1, bucata: 0, incercari: 0, ultimul_tick: acumL,
+          jurnal: [...(c.jurnal ?? []), { poz: c.poz, bucata: c.bucata, cerinte: 0, skip: mesajLot(el.motiv), blocat_lot: el.motiv, worker: NUME, la: acumL }],
+        }).eq('licitatie_id', id)
+        log(`#${id}: ${eticheta} sărit — ${mesajLot(el.motiv)}`)
+        incercari = 0
+        continue
+      }
+      if (el && !el.eligibil) r = { error: mesajLot(el.motiv) }
+      else try { r = await extrageCerinte(supabase, body) } catch (e) { r = { error: 'excepție: ' + String((e as Error)?.message ?? e) } }
       const ms = Date.now() - t0, acum = new Date().toISOString()
       if (!r || r.error) {
         incercari++

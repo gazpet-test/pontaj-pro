@@ -8,6 +8,7 @@ import { poartaOfertare } from '../_shared/poartaOfertare.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
+import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 
 const GEMINI_KEY = Deno.env.get('GEMINI_API_KEY') || ''
 const OPENAI_KEY = Deno.env.get('OPENAI_API_KEY') || ''
@@ -70,6 +71,9 @@ Deno.serve(async (req: Request) => {
     const { data: row } = await supabase.from('ofertare_documente_atribuire')
       .select('id, licitatie_id, fisier_path, nume_original, pagini').eq('id', Number(doc_id)).single()
     if (!row) return fail('document negasit')
+    // LOTURI: înaintea descărcării și a apelului Gemini/OpenAI
+    const el = await documentEligibil(supabase, row.id)
+    if (!el.eligibil) return new Response(JSON.stringify({ ok: false, blocat_lot: true, motiv: el.motiv, error: mesajLot(el.motiv) }), { status: 200, headers: CORS })
     const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(row.fisier_path)
     if (dlErr || !blob) return fail('download: ' + (dlErr?.message || 'lipsa'))
     let bytes = new Uint8Array(await blob.arrayBuffer())

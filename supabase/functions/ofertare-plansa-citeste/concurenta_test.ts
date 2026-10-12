@@ -59,6 +59,8 @@ function db(tabele: Record<string, any[]>, opt: OptDb = {}) {
       n.scrieriDoc++;
       return { data: true, error: null };
     }
+    // loturi (20261024b): aici documentul e mereu eligibil — poarta e testată în poarta_test.ts
+    if (nume === 'fn_ofertare_document_eligibil') return { data: { eligibil: true, motiv: 'fara_loturi', licitatie_id: 95 }, error: null }
     if (nume !== 'ofertare_transfer_plansa_cantitati') return { data: null, error: null }
     if (opt.inainteDeRpc) await opt.inainteDeRpc()
     n.rpc++

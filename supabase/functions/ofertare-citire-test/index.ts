@@ -7,6 +7,7 @@ import { poartaOfertare } from '../_shared/poartaOfertare.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
+import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -49,6 +50,9 @@ Deno.serve(async (req: Request) => {
     const apeluriN = Math.max(1, Math.min(Number(apeluri) || 2, 3))
     const { data: row } = await supabase.from('ofertare_documente_atribuire').select('id, fisier_path, nume_original').eq('id', Number(doc_id)).single()
     if (!row) return fail('document negasit')
+    // LOTURI: înaintea descărcării și a AI; continua:false ca bucla apelantului să se oprească
+    const el = await documentEligibil(supabase, row.id)
+    if (!el.eligibil) return new Response(JSON.stringify({ ok: false, blocat_lot: true, motiv: el.motiv, error: mesajLot(el.motiv), continua: false }), { status: 200, headers: CORS })
     const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(row.fisier_path)
     if (dlErr || !blob) return fail('download: ' + (dlErr?.message || 'lipsa'))
     const bytes = new Uint8Array(await blob.arrayBuffer())

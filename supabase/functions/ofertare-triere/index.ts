@@ -33,6 +33,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 // varianta denonext a lui 2.117.0, pe care esm.sh nu o are publicată (auth-js dă 404), și
 // deployul a picat cu „Module not found". 2.116.0 are build denonext complet.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
+import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -444,6 +445,9 @@ Deno.serve(async (req: Request) => {
     const doc = docs?.[0]
     if (!doc) return fail('Licitația nu are încă o Fișă de date în documentație. Apasă „Adu din SEAP" (doar descarcă, nu citește) sau urcă fișa de date, apoi reia trierea.')
     if (!/\.pdf$/i.test(doc.nume_original || '')) return fail(`Fișa de date nu e PDF (${doc.nume_original}).`)
+    // LOTURI: și fișa de date trece prin poartă (fără excepție în cod — contractul e în SQL), înaintea descărcării și a AI
+    const el = await documentEligibil(supabase, doc.id)
+    if (!el.eligibil) return new Response(JSON.stringify({ ok: false, blocat_lot: true, motiv: el.motiv, error: mesajLot(el.motiv), doc_id: doc.id }), { status: 200, headers: CORS })
 
     const { data: blob, error: dlErr } = await supabase.storage.from(BUCKET).download(doc.fisier_path)
     if (dlErr || !blob) return fail('Nu am putut descărca fișa: ' + (dlErr?.message || doc.fisier_path))

@@ -26,6 +26,7 @@ import JSZip from 'npm:jszip@3.10.1'
 import WordExtractor from 'npm:word-extractor@1.0.4'
 import { gardaIncearca, incercareGarda } from '../_shared/gardaIngest.ts'   // #553 r3 (J4): garda citirii
 import { plasaExactOnce } from '../_shared/gardaIngestLogica.ts'
+import { documentEligibil, eligibilitateLicitatie, esteEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -121,6 +122,18 @@ Deno.serve(async (req: Request) => {
 
   const deLucru = randuri.filter(r => /\.(docx|doc)$/i.test(r.nume_original || ''))
   if (!deLucru.length) return json({ ok: true, nota: 'niciun fișier Word aici', verificate: randuri.length })
+  // LOTURI: poarta unică ÎNAINTE de gardă / descărcare. Un document (doc_id): neeligibil → 200 blocat_lot. Licitația întreagă:
+  // poarta căzută → nimic (blocat_lot, eroare_poarta); documentele neeligibile se sar cu stare 'blocat_lot' (neatinse în BD).
+  let eligibil: (id: number) => string | null
+  if (docId) {
+    const el = await documentEligibil(db, docId)
+    if (!el.eligibil) return json({ ok: false, blocat_lot: true, motiv: el.motiv, error: mesajLot(el.motiv) })
+    eligibil = () => null
+  } else {
+    const { ok, harta } = await eligibilitateLicitatie(db, licId!)
+    if (!ok) return json({ ok: false, blocat_lot: true, motiv: 'eroare_poarta', error: mesajLot('eroare_poarta') })
+    eligibil = (id) => esteEligibil(harta, id) ? null : (harta.get(Number(id))?.motiv ?? 'lipsa_din_poarta')
+  }
 
   const rezultate: any[] = []
   for (const r of deLucru) {
@@ -135,6 +148,8 @@ Deno.serve(async (req: Request) => {
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'sarit', nota: 'deja procesat — fără descărcare' })
       continue
     }
+    const motivLot = eligibil(r.id)
+    if (motivLot) { rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'blocat_lot', motiv: motivLot, nota: mesajLot(motivLot) }); continue }
     const garda = await gardaIncearca(db, r.id, null, 'edge:ofertare-word-text')
     if (garda.actiune !== 'continua') {
       rezultate.push({ id: r.id, fisier: r.nume_original, stare: 'garda', nota: `${garda.actiune}: ${garda.motiv}` })
@@ -188,7 +203,7 @@ Deno.serve(async (req: Request) => {
   const n = (s: string) => rezultate.filter(x => x.stare === s).length
   return json({
     ok: true, dry_run: dryRun, total: deLucru.length,
-    scrise: n('scris'), ar_scrie: n('ar_scrie'), nesuportate: n('nesuportat'), goale: n('gol'), erori: n('eroare'),
+    scrise: n('scris'), ar_scrie: n('ar_scrie'), nesuportate: n('nesuportat'), goale: n('gol'), erori: n('eroare'), blocate_lot: n('blocat_lot'),
     rezultate,
   })
 })

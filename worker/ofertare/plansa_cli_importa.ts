@@ -157,6 +157,7 @@ export async function importaPlansa(fisier: string, dir: string, d: DepsCli) {
       body: JSON.stringify({ doc_id: m.doc_id, asteptat, ...corp }) }), deps)
     const out = await res.json()
     if (!res.ok) throw new Error(`Import oprit (HTTP ${res.status}): ${out.error || 'eroare handler'}`)
+    if (out?.blocat_lot === true) throw new Error(`Import oprit: ${out.error || 'blocat pe loturi'}`)   // loturi 20261024b (200 fără continua)
     runde.push(out)
     return out
   }

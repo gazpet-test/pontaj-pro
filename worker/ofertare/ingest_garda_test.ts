@@ -51,14 +51,15 @@ const TEXT = pdfMinimal([1, 2].map(i => `Caiet de sarcini pagina ${i}: conducta 
 const SCAN = pdfMinimal(['a', 'b'])   // sub pragul de text pe pagină → „scan” → predat la edge
 
 // ---- BD simulată + garda simulată (tokenuri) ----
-type Opt = { cas?: boolean; laAgatare?: () => void; marcajAgataDupa?: number; preluatDupaAgatare?: boolean; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; marcajRespins?: boolean; respinge?: boolean; downloadAgata?: boolean }
+// elig (loturi 20261024b): poarta pe licitație — implicit totul eligibil; funcție = motiv pe document; 'eroare_rpc' = RPC căzut
+type Opt = { elig?: ((id: number) => { eligibil: boolean; motiv: string } | null) | 'eroare_rpc'; cas?: boolean; laAgatare?: () => void; marcajAgataDupa?: number; preluatDupaAgatare?: boolean; garda?: 'continua' | 'in_curs' | 'eroare' | 'fara_token'; rezultatEsueaza?: boolean; blobAruncă?: boolean; marcajRespins?: boolean; respinge?: boolean; downloadAgata?: boolean }
 // căi JSON (analiza->citire_mare->>rev) ca în PostgREST — folosite doar cu opt.cas (CAS-ul real din citire_mare.ts)
 const caleJson = (row: any, c: string) => { let v = row; for (const p of c.split(/->>?/)) v = v == null ? undefined : v[p]; return c.includes('->>') ? (v == null ? null : String(v)) : v }
 const likeRe = (p: string) => new RegExp('^' + p.split('%').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 's')
 function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number }>, opt: Opt = {}, garzi: any[] = []) {
   const tabele: Record<string, any[]> = { ofertare_documente_atribuire: docs, ai_usage_log: [], ofertare_ingest_garda: garzi, ofertare_ingest_lansari: [],
     ofertare_ingest_coada: [], notifications: [], ofertare_licitatii: [], ofertare_seap_manifest: [] }
-  const g = { incercari: [] as number[], surse: [] as string[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[], scrieriDirecte: [] as any[], marcaje: [] as any[], cas: [] as any[], inZbor: 0, maxInZbor: 0 }
+  const g = { poarta: 0, incercari: [] as number[], surse: [] as string[], emise: new Map<string, number>(), rezultate: [] as any[], descarcari: [] as string[], scrieriDirecte: [] as any[], marcaje: [] as any[], cas: [] as any[], inZbor: 0, maxInZbor: 0 }
   const from = (t: string) => {
     tabele[t] ||= []
     const filtre: ((r: any) => boolean)[] = []
@@ -88,6 +89,13 @@ function mediu(docs: any[], fisiere: Record<string, Uint8Array | { mare: number 
   }
   const rpc = (nume: string, a: any) => {
     if (nume === 'ofertare_doc_de_citit') return Promise.resolve({ data: true, error: null })
+    if (nume === 'fn_ofertare_eligibilitate') {
+      g.poarta++
+      if (opt.elig === 'eroare_rpc') return Promise.resolve({ data: null, error: { message: 'function does not exist' } })
+      const f = opt.elig ?? (() => ({ eligibil: true, motiv: 'fara_loturi' }))
+      return Promise.resolve({ data: tabele.ofertare_documente_atribuire.filter(r => String(r.licitatie_id) === String(a.p_licitatie_id))
+        .map(r => ({ document_id: r.id, ...f(r.id) })).filter(r => r.eligibil !== undefined), error: null })
+    }
     if (nume === 'ofertare_ingest_garda_incearca') {
       g.incercari.push(a.p_doc_id); g.surse.push(a.p_sursa)
       if (opt.garda === 'eroare') return Promise.resolve({ data: null, error: { message: 'function does not exist' } })
@@ -391,3 +399,64 @@ Deno.test('grep: după „continua” nu există NICIUN UPDATE direct pe ofertar
   // singurul UPDATE direct rămas în proceseazaIngest e pe drumul FĂRĂ token (trecereBlocata); rezultatele gestionate îl ocolesc
   const pi = corp('proceseazaIngest'); assert(pi.indexOf('rez.startsWith(GESTIONAT)') < pi.indexOf("update({ status_procesare: 'eroare'"))
 })
+
+// ── LOTURI (20261024b): coada NAS filtrează pe poarta unică ÎNAINTE de gardă / descărcare / AI ───────────────────────
+const coada = (m: ReturnType<typeof mediu>, lic = 7) => m.tabele.ofertare_ingest_coada.push({ licitatie_id: lic, activ: true, cerut_de: 'u-1', lansari: 0 })
+
+Deno.test({ ...Z, name: 'loturi: documentele neeligibile se SAR (fără gardă, descărcare, edge, AI) și NU se marchează; cele eligibile se citesc', fn: async () => {
+  const docs = [doc(71), doc(72), doc(73), doc(74, { tip: 'fisa_date' }), { id: 75, licitatie_id: 7, nume_original: 'F.docx', tip: 'formular', fisier_path: '7/atribuire/75.docx', status_procesare: 'ignorat', text_extras: null }]
+  const motive: Record<number, string> = { 71: 'comun', 72: 'in_afara_loturilor', 73: 'de_triat', 74: 'de_triat', 75: 'de_triat' }
+  const m = mediu(docs, { ...Object.fromEntries(docs.map(d => [d.fisier_path, TEXT])) }, { elig: (id) => ({ eligibil: motive[id] === 'comun', motiv: motive[id] }) })
+  coada(m)
+  const e0 = retea.edge, a0 = retea.anthropic
+  await proceseazaIngest(m.supa, 7, () => false, () => {})
+  assertEquals(m.g.incercari, [71]); assertEquals(m.g.descarcari, ['7/atribuire/71.pdf'])
+  assertEquals(retea.edge - e0, 0); assertEquals(retea.anthropic - a0, 1)   // doar antetul documentului eligibil (Haiku, simulat 500)
+  for (const id of [72, 73, 74]) {
+    const r = m.tabele.ofertare_documente_atribuire.find(x => x.id === id)!
+    assertEquals([r.status_procesare, r.eroare], ['neprocesat', null], String(id))   // neatinse
+  }
+  assertEquals(m.g.scrieriDirecte.length, 0)
+  const c = m.tabele.ofertare_ingest_coada[0]
+  assertEquals(c.activ, false); assertMatch(c.nota, /3 sărite — blocate pe loturi \(1 × in_afara_loturilor, 2 × de_triat\)/)
+} })
+
+Deno.test({ ...Z, name: 'loturi: poarta căzută (eroare RPC) → NIMIC din licitație în tura asta: zero gardă/descărcări/edge/AI, coada rămâne activă, fără notificare', fn: async () => {
+  // licitația 8: pauza după poarta căzută e ținută în memoria modulului, pe licitație — nu se amestecă cu celelalte teste (7)
+  const docs = [doc(81, { licitatie_id: 8 }), doc(82, { licitatie_id: 8, status_procesare: 'in_lucru', pagini_procesate: 3 }), { id: 83, licitatie_id: 8, nume_original: 'F.docx', tip: 'formular', fisier_path: '8/atribuire/83.docx', status_procesare: 'ignorat', text_extras: null }]
+  const m = mediu(docs, Object.fromEntries(docs.map(d => [d.fisier_path, TEXT])), { elig: 'eroare_rpc' })
+  coada(m, 8)
+  const e0 = retea.edge, a0 = retea.anthropic
+  await proceseazaIngest(m.supa, 8, () => false, () => {})
+  assertEquals([m.g.incercari.length, m.g.descarcari.length, retea.edge - e0, retea.anthropic - a0], [0, 0, 0, 0])
+  assertEquals(m.g.scrieriDirecte.length, 0); assertEquals(m.tabele.notifications.length, 0)
+  const c = m.tabele.ofertare_ingest_coada[0]
+  assertEquals(c.activ, true); assert(c.ultimul_tick, 'ultimul_tick avansat (main trece la altă licitație)')
+  // imediat după: pauza (PAUZE.poartaLoturiMs) — nici măcar poarta nu se mai întreabă
+  const p0 = m.g.poarta
+  await proceseazaIngest(m.supa, 8, () => false, () => {})
+  assertEquals(m.g.poarta, p0)
+} })
+
+Deno.test({ ...Z, name: 'loturi: poarta cade ÎN tură (după primul document) → se oprește la documentul următor, coada rămâne activă', fn: async () => {
+  const docs = [doc(91, { licitatie_id: 9 }), doc(92, { licitatie_id: 9 })]
+  let n = 0
+  const m = mediu(docs, Object.fromEntries(docs.map(d => [d.fisier_path, TEXT])))
+  const rpc0 = m.supa.rpc
+  // apelurile porții: 1 = pornire, 2 = Word (fără Word-uri → nu se cheamă), 2 = candidații pt. primul document, 3+ = căzută
+  m.supa.rpc = (nume: string, a: any) => nume === 'fn_ofertare_eligibilitate' && ++n > 2 ? Promise.resolve({ data: null, error: { message: 'timeout' } }) : rpc0(nume, a)
+  coada(m, 9)
+  await proceseazaIngest(m.supa, 9, () => false, () => {})
+  assertEquals(m.g.incercari, [91]); assertEquals(n, 3); assertEquals(m.tabele.ofertare_ingest_coada[0].activ, true)
+} })
+
+Deno.test({ ...Z, name: 'loturi: edge-ul răspunde blocat_lot (devenit neeligibil între filtru și apel) → sărit, fără „eroare” pe document, fără reîncercări', fn: async () => {
+  const d = doc(95)
+  const m = mediu([d], { '7/atribuire/95.pdf': SCAN })
+  coada(m)
+  const e0 = retea.edge
+  retea.edgeRasp = () => new Response(JSON.stringify({ ok: false, blocat_lot: true, motiv: 'in_afara_loturilor', error: 'Blocat pe loturi: …', continua: false }), { status: 200 })
+  try { await proceseazaIngest(m.supa, 7, () => false, () => {}) } finally { retea.edgeRasp = null }
+  assertEquals(retea.edge - e0, 1)
+  assertEquals(m.tabele.ofertare_documente_atribuire[0].status_procesare, 'neprocesat'); assertEquals(m.g.scrieriDirecte.length, 0)
+} })
