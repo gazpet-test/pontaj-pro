@@ -28,7 +28,7 @@ SCHELET="$RADACINA/supabase/tests/ofertare_rigoare_schelet.sql"
 CONTROL_0E="$RADACINA/scripts/control_0e.sql"
 # corpurile din producție (12.10.2026) și cele puse de 20261026a — md5(replace(prosrc, chr(13), ''))
 V_APLICA=2033717feec11bb1bdd2b7caf97ef807; V_PLANSE=2e0eaa89663d5f3f4d6d49aa8443fae2; V_VALID=a4e41e9e4e93d430386ae7f55c3be977
-N_APLICA=dbdb69615d0ddd277cba30e0278d477d; N_PLANSE=8016fbf6b5d47a049ab73d9200122fc1; N_VALID=03b3a62bf2b4bdce1378e75397179099
+N_APLICA=48af240261bebfc1985b7d12ee182c00; N_PLANSE=4dc464d871679ff9d0b596042fb5bf8a; N_VALID=03b3a62bf2b4bdce1378e75397179099
 V_AMPRENTE=935951b073ece50e62c4a660357446a0
 OPRESTE=0; [ "${1:-}" = --opreste ] && OPRESTE=1
 esec()  { echo "ESEC: $*" >&2; exit 1; }
@@ -137,17 +137,27 @@ q "INSERT INTO public.ofertare_raspuns_set(id, licitatie_id, titlu, propunere) V
    {\"op_id\": \"n0\", \"fel\": \"noua\", \"text_cerinta\": \"N0 vechi\", \"document_id\": 35},
    {\"op_id\": \"x1\", \"fel\": \"noua\", \"text_cerinta\": \"X1\", \"document_id\": 33, \"surse_doc_ids\": [1247]},
    {\"op_id\": \"x2\", \"fel\": \"noua\", \"text_cerinta\": \"X2\", \"surse_doc_ids\": [\"abc\"]},
-   {\"op_id\": \"x3\", \"fel\": \"noua\", \"text_cerinta\": \"X3\", \"document_id\": 424242}], \"amprente\": {}}')" >/dev/null
+   {\"op_id\": \"x3\", \"fel\": \"noua\", \"text_cerinta\": \"X3\", \"document_id\": 424242},
+   {\"op_id\": \"x4\", \"fel\": \"noua\", \"text_cerinta\": \"X4\", \"surse_doc_ids\": []}], \"amprente\": {}}')" >/dev/null
 amprenta 10 "$CA"
-R=$(aplica 10 "'m1','n1','n0','x1','x2','x3'")
-asteapta "aplica: 1 modificată + 2 noi + 3 conflicte (sursă din altă licitație, listă nevalidă, document inexistent)" \
-  "$(jq -r '"\(.modificate)/\(.noi)/\(.conflicte|length)/\(.conflicte|map(.op_id)|sort|join(","))"' <<<"$R")" "1/2/3/x1,x2,x3"
+R=$(aplica 10 "'m1','n1','n0','x1','x2','x3','x4'")
+asteapta "aplica: 1 modificată + 2 noi + 4 conflicte (altă licitație, listă nevalidă, document inexistent, fără nicio sursă)" \
+  "$(jq -r '"\(.modificate)/\(.noi)/\(.conflicte|length)/\(.conflicte|map(.op_id)|sort|join(","))"' <<<"$R")" "1/2/4/x1,x2,x3,x4"
 asteapta "conflictele spun de ce (proveniență)" "$(jq -r '[.conflicte[].motiv|test("provenienta neverificabila")]|all' <<<"$R")" true
 CB=$(jq -r '.aplicate[]|select(.op_id=="m1")|.cerinta_noua' <<<"$R")
 asteapta "modifică: versiunea nouă = operație ∪ răspuns ∪ documentul versiunii vechi" "$(q "SELECT surse_document_ids::text||'|'||sursa_document_id FROM public.ofertare_cerinte WHERE id = $CB")" "{31,33,34}|33"
 asteapta "noua cu surse_doc_ids: sursele operației" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cerinte WHERE text_cerinta = 'N1'")" "{33}"
 asteapta "noua veche (fără surse_doc_ids): documentul de răspuns" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cerinte WHERE text_cerinta = 'N0 vechi'")" "{35}"
-asteapta "conflictele n-au scris nimic" "$(q "SELECT count(*) FROM public.ofertare_cerinte WHERE text_cerinta IN ('X1','X2','X3')")" 0
+asteapta "conflictele n-au scris nimic" "$(q "SELECT count(*) FROM public.ofertare_cerinte WHERE text_cerinta IN ('X1','X2','X3','X4')")" 0
+# modifică / anulează FĂRĂ niciun document al operației (Jakarinos r1 P1 #1): nu moștenește doar sursele vechi — conflict
+CM=$(q "INSERT INTO public.ofertare_cerinte(licitatie_id, sursa_document_id, text_cerinta, tip, versiune, stare, nr_ordine) VALUES (3, 31, 'M1', 'propunere', 1, 'de_analizat', 7) RETURNING id")
+q "INSERT INTO public.ofertare_raspuns_set(id, licitatie_id, titlu, propunere) VALUES (15, 3, 'Raspuns 4', '{\"operatii\": [
+   {\"op_id\": \"m\", \"fel\": \"modifica\", \"cerinta_id\": $CM, \"text_nou\": \"M1 nou\"},
+   {\"op_id\": \"a\", \"fel\": \"anuleaza\", \"cerinta_id\": $CM, \"surse_doc_ids\": null}], \"amprente\": {}}')" >/dev/null
+amprenta 15 "$CM"
+R=$(aplica 15 "'m','a'")
+asteapta "modifică / anulează fără sursă proprie: 2 conflicte, cerința rămâne activă, fără fotografie de acoperire" \
+  "$(jq -r '"\(.modificate)/\(.anulate)/\(.conflicte|length)"' <<<"$R")/$(q "SELECT coalesce(inlocuita_de::text,'activa')||'/'||coalesce(acoperire_snapshot::text,'NULL') FROM public.ofertare_cerinte WHERE id = $CM")" "0/0/2/activa/NULL"
 asteapta "rezultatul poartă sursele" "$(jq -c '.aplicate[]|select(.op_id=="m1")|.surse_document_ids' <<<"$R")" "[31,33,34]"
 asteapta "setul: aplicat_partial (conflicte)" "$(q "SELECT stare FROM public.ofertare_raspuns_set WHERE id = 10")" aplicat_partial
 asteapta "acoperirea mutată pe versiunea nouă" "$(q "SELECT cerinta_id FROM public.ofertare_acoperire")" "$CB"
@@ -169,6 +179,7 @@ amprenta 14 "$CT"
 R=$(aplica 14 "'m3'")
 asteapta "sursă moștenită dispărută: conflict, cerința rămâne neînlocuită" \
   "$(jq -r '.conflicte[0].motiv' <<<"$R" | grep -c 'sursa #39')/$(q "SELECT coalesce(inlocuita_de::text, 'activa') FROM public.ofertare_cerinte WHERE id = $CT")" "1/activa"
+q "UPDATE public.ofertare_cerinte SET surse_document_ids = NULL WHERE id = $CT" >/dev/null   # (sursa dispărută nu se mai poate restaura după revenire)
 
 # ── garda de loturi ÎN RPC (înaintea oricărei scrieri), cu și fără triggerul a03 ─────────────────────────
 C102=$(q "INSERT INTO public.ofertare_cerinte(licitatie_id, sursa_document_id, text_cerinta, tip, versiune, stare, nr_ordine, lot_domeniu, lot_nr) VALUES (102, 528, 'C102', 'propunere', 1, 'de_analizat', 1, 'lista', '{2}') RETURNING id")
@@ -247,15 +258,31 @@ q "ALTER FUNCTION public.$SIG_PLANSE SECURITY DEFINER" >/dev/null
 q "ALTER DATABASE $BAZA SET gazpet.revenire_20261026a = 'x'" >/dev/null
 o="$(revenire || true)"; grep -q "armare persistenta interzisa" <<<"$o" || esec "armare persistentă: $o"; ok "refuz: armare persistentă"
 q "ALTER DATABASE $BAZA RESET gazpet.revenire_20261026a" >/dev/null
+SNAP=$(q "SELECT jsonb_agg(jsonb_build_object('id', id, 'surse_document_ids', surse_document_ids) ORDER BY id) FROM public.ofertare_cerinte WHERE surse_document_ids IS NOT NULL")
 N_SURSE=$(q "SELECT count(*) FROM public.ofertare_cerinte WHERE surse_document_ids IS NOT NULL")
-revenire >/dev/null || { revenire; esec "revenire armată"; }
+# o scriere de surse în curs (necomisă) când pornește revenirea: revenirea așteaptă, iar arhiva o conține (Jakarinos r1 P1 #3)
+PGAPPNAME=rig_rev "${PSQL[@]}" -d "$BAZA" -At -c "BEGIN;" -c "UPDATE public.ofertare_cerinte SET surse_document_ids = '{31,34}' WHERE id = $CM;" \
+  -c "SELECT pg_sleep(1.5);" -c "COMMIT;" >/tmp/rig_rev.out 2>&1 & BG=$!
+asteapta_sesiune rig_rev; T0=$(date +%s%N)
+revenire >/dev/null || { wait $BG; revenire; esec "revenire armată"; }
+T1=$(date +%s%N); wait $BG || { cat /tmp/rig_rev.out; esec "scrierea concurentă"; }
+[ $(( (T1 - T0) / 1000000 )) -ge 500 ] || esec "revenirea NU a așteptat scrierea concurentă ($(( (T1 - T0) / 1000000 )) ms)"
+asteapta "revenire concurentă: arhiva = sursele de dinainte (per cerință) + scrierea comisă între timp" \
+  "$(q "SELECT ((continut->'cerinte') @> '$SNAP'::jsonb)::text||'/'||((continut->'cerinte') @> '[{\"id\": $CM, \"surse_document_ids\": [31, 34]}]'::jsonb)::text||'/'||jsonb_array_length(continut->'cerinte') FROM public.ofertare_rigoare_arhiva_revenire")" "true/true/$((N_SURSE + 1))"
 asteapta "revenire: coloana + triggerul scoase, garda a03 rămâne" \
   "$(q "SELECT (SELECT count(*) FROM information_schema.columns WHERE table_name='ofertare_cerinte' AND column_name='surse_document_ids')||'|'||(SELECT count(*) FROM pg_trigger WHERE tgname='a02_ofertare_cerinte_surse')||'|'||(SELECT count(*) FROM pg_trigger WHERE tgname='a03_ofertare_raspuns_set_garda_loturi')")" "0|0|1"
 asteapta "revenire: corpurile = versiunile de dinainte (md5)" "$(trei)" "$V_APLICA/$V_PLANSE/$V_VALID"
-asteapta "revenire: arhiva păstrează sursele cerințelor" "$(q "SELECT jsonb_array_length(continut->'cerinte') FROM public.ofertare_rigoare_arhiva_revenire")" "$N_SURSE"
 asteapta "revenire: arhiva fără drepturi API" "$(q "SELECT has_table_privilege('authenticated','public.ofertare_rigoare_arhiva_revenire','SELECT')::text||has_table_privilege('service_role','public.ofertare_rigoare_arhiva_revenire','SELECT')::text")" falsefalse
 asteapta "revenire: drepturile funcțiilor păstrate" \
   "$(q "SELECT has_function_privilege('authenticated','public.$SIG_APLICA','EXECUTE')::text||has_function_privilege('service_role','public.$SIG_APLICA','EXECUTE')::text||has_function_privilege('service_role','public.$SIG_PLANSE','EXECUTE')::text")" falsetruetrue
-livreaza >/dev/null || { livreaza; esec "dus-întors"; }; ok "dus-întors: re-livrare după revenire"
+o="$(livreaza || true)"; grep -q "nerestaurate" <<<"$o" || esec "re-livrare peste o arhivă nerestaurată: $o"
+asteapta "dus-întors: re-livrarea refuză cât timp sursele arhivate nu sunt restaurate (Jakarinos r1 P1 #4)" "$(md5f "$SIG_APLICA")" "$V_APLICA"
+# restaurarea controlată (în producție: preview + „da”): marchează arhiva, re-livrează, pune sursele înapoi
+q "UPDATE public.ofertare_rigoare_arhiva_revenire SET continut = continut || jsonb_build_object('restaurat_la', now())" >/dev/null
+livreaza >/dev/null || { livreaza; esec "dus-întors"; }; ok "dus-întors: re-livrare după restaurarea marcată"
+q "UPDATE public.ofertare_cerinte c SET surse_document_ids = ARRAY(SELECT jsonb_array_elements_text(e->'surse_document_ids')::bigint)
+     FROM public.ofertare_rigoare_arhiva_revenire a, jsonb_array_elements(a.continut->'cerinte') e WHERE c.id = (e->>'id')::bigint" >/dev/null
+asteapta "dus-întors: sursele restaurate = arhiva, cerință cu cerință" \
+  "$(q "SELECT (SELECT jsonb_agg(jsonb_build_object('id', id, 'surse_document_ids', surse_document_ids) ORDER BY id) FROM public.ofertare_cerinte WHERE surse_document_ids IS NOT NULL) = (SELECT jsonb_agg(e ORDER BY (e->>'id')::bigint) FROM public.ofertare_rigoare_arhiva_revenire a, jsonb_array_elements(a.continut->'cerinte') e)")" t
 asteapta "dus-întors: corpurile noi + control 0e" "$(trei)/$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" "$N_APLICA/$N_PLANSE/$N_VALID/0"
 echo PASS

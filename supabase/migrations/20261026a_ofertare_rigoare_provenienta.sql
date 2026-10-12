@@ -35,6 +35,15 @@ BEGIN
   IF v_n <> 0 OR EXISTS (SELECT 1 FROM pg_trigger WHERE NOT tgisinternal AND tgname = 'a02_ofertare_cerinte_surse') THEN
     RAISE EXCEPTION 'Precondiție 20261026a: ofertare_cerinte.surse_document_ids / triggerul există deja (reaplicare?)';
   END IF;
+  -- o revenire anterioară a arhivat surse de cerințe: re-livrarea peste ele le-ar lăsa NULL (Jakarinos r1 P1 #4) — întâi
+  -- restaurarea controlată (preview + „da”), care marchează arhiva cu `restaurat_la`
+  IF to_regclass('public.ofertare_rigoare_arhiva_revenire') IS NOT NULL THEN
+    SELECT count(*) INTO v_n FROM public.ofertare_rigoare_arhiva_revenire
+     WHERE NOT (continut ? 'restaurat_la') AND jsonb_array_length(coalesce(continut -> 'cerinte', '[]'::jsonb)) > 0;
+    IF v_n > 0 THEN
+      RAISE EXCEPTION 'Precondiție 20261026a: % arhive de revenire cu surse de cerințe nerestaurate — restaurare controlată înainte de re-livrare', v_n;
+    END IF;
+  END IF;
   -- corpurile înlocuite trebuie să fie EXACT versiunile citite la 12.10.2026 (corp md5 fără CR + atribute + ACL)
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_aplica(bigint,text[],uuid,boolean,text,text)')
@@ -199,7 +208,7 @@ DECLARE
   v_aplicate jsonb := '[]'::jsonb; v_conflicte jsonb := '[]'::jsonb;
   v_nr_ordine int; v_snapshot jsonb; v_mutate int; v_dubla boolean;
   v_nr_mod int := 0; v_nr_anul int := 0; v_nr_noi int := 0; v_nr_acop int := 0;
-  v_stare_loturi text; v_surse bigint[]; v_sursa_rea bigint; v_surse_ok boolean;   -- 20261026a
+  v_stare_loturi text; v_surse bigint[]; v_sursa_rea bigint; v_motiv_surse text;   -- 20261026a
 BEGIN
   PERFORM set_config('lock_timeout', '3s', true);
   PERFORM set_config('statement_timeout', '30s', true);
@@ -308,28 +317,34 @@ BEGIN
 
       -- 20261026a: proveniența completă a cerinței scrise = sursele operației (surse_doc_ids) ∪ documentul de răspuns ∪ sursele versiunii
       -- vechi (textul nou pornește de la ea).
-      -- Verificată ÎNAINTE de orice scriere pentru operație: listă nevalidă, sursă inexistentă sau din altă licitație = conflict.
-      v_surse := NULL; v_sursa_rea := NULL;
-      v_surse_ok := coalesce(v_op ->> 'document_id', '') ~ '^([0-9]{1,18})?$'
-        AND (jsonb_typeof(v_op -> 'surse_doc_ids') IS NULL OR jsonb_typeof(v_op -> 'surse_doc_ids') = 'null'
-             OR (jsonb_typeof(v_op -> 'surse_doc_ids') = 'array' AND NOT EXISTS (
-                   SELECT 1 FROM jsonb_array_elements(v_op -> 'surse_doc_ids') e WHERE coalesce(e #>> '{}', '') !~ '^[0-9]{1,18}$')));
-      IF v_surse_ok THEN
+      -- Verificată ÎNAINTE de orice scriere pentru operație: listă nevalidă, operație fără niciun document-sursă (Jakarinos
+      -- r1 P1 #1), sursă inexistentă sau din altă licitație = conflict.
+      v_surse := NULL; v_sursa_rea := NULL; v_motiv_surse := NULL;
+      IF NOT (coalesce(v_op ->> 'document_id', '') ~ '^([0-9]{1,18})?$'
+              AND (jsonb_typeof(v_op -> 'surse_doc_ids') IS NULL OR jsonb_typeof(v_op -> 'surse_doc_ids') = 'null'
+                   OR (jsonb_typeof(v_op -> 'surse_doc_ids') = 'array' AND NOT EXISTS (
+                         SELECT 1 FROM jsonb_array_elements(v_op -> 'surse_doc_ids') e WHERE coalesce(e #>> '{}', '') !~ '^[0-9]{1,18}$')))) THEN
+        v_motiv_surse := 'sursele operatiei sunt invalide (provenienta neverificabila)';
+      ELSE
         SELECT array_agg(DISTINCT s.x ORDER BY s.x) INTO v_surse FROM (
           SELECT (e #>> '{}')::bigint AS x
             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v_op -> 'surse_doc_ids') = 'array' THEN v_op -> 'surse_doc_ids' ELSE '[]'::jsonb END) e
-          UNION SELECT nullif(v_op ->> 'document_id', '')::bigint
-          UNION SELECT unnest(v_c.surse_document_ids)
-          UNION SELECT v_c.sursa_document_id) s
+          UNION SELECT nullif(v_op ->> 'document_id', '')::bigint) s
          WHERE s.x IS NOT NULL;
-        SELECT x INTO v_sursa_rea FROM unnest(v_surse) x
-         WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = v_lic) LIMIT 1;
+        IF v_surse IS NULL THEN
+          v_motiv_surse := 'operatia nu are niciun document-sursa (provenienta neverificabila)';
+        ELSE
+          SELECT array_agg(DISTINCT x ORDER BY x) INTO v_surse
+            FROM unnest(v_surse || v_c.surse_document_ids || v_c.sursa_document_id) x WHERE x IS NOT NULL;
+          SELECT x INTO v_sursa_rea FROM unnest(v_surse) x
+           WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = v_lic) LIMIT 1;
+          IF v_sursa_rea IS NOT NULL THEN
+            v_motiv_surse := 'sursa #' || v_sursa_rea || ' nu exista in aceasta licitatie (provenienta neverificabila)';
+          END IF;
+        END IF;
       END IF;
-      IF NOT v_surse_ok OR v_sursa_rea IS NOT NULL THEN
-        v_conflicte := v_conflicte || jsonb_build_object('op_id', v_op ->> 'op_id',
-          'cerinta_id', v_c.id,
-          'motiv', CASE WHEN NOT v_surse_ok THEN 'sursele operatiei sunt invalide (provenienta neverificabila)'
-                        ELSE 'sursa #' || v_sursa_rea || ' nu exista in aceasta licitatie (provenienta neverificabila)' END);
+      IF v_motiv_surse IS NOT NULL THEN
+        v_conflicte := v_conflicte || jsonb_build_object('op_id', v_op ->> 'op_id', 'cerinta_id', v_c.id, 'motiv', v_motiv_surse);
         CONTINUE;
       END IF;
 
@@ -403,25 +418,32 @@ BEGIN
         CONTINUE;
       END IF;
       -- 20261026a: proveniența completă a cerinței scrise = sursele operației (surse_doc_ids) ∪ documentul de răspuns.
-      -- Verificată ÎNAINTE de orice scriere pentru operație: listă nevalidă, sursă inexistentă sau din altă licitație = conflict.
-      v_surse := NULL; v_sursa_rea := NULL;
-      v_surse_ok := coalesce(v_op ->> 'document_id', '') ~ '^([0-9]{1,18})?$'
-        AND (jsonb_typeof(v_op -> 'surse_doc_ids') IS NULL OR jsonb_typeof(v_op -> 'surse_doc_ids') = 'null'
-             OR (jsonb_typeof(v_op -> 'surse_doc_ids') = 'array' AND NOT EXISTS (
-                   SELECT 1 FROM jsonb_array_elements(v_op -> 'surse_doc_ids') e WHERE coalesce(e #>> '{}', '') !~ '^[0-9]{1,18}$')));
-      IF v_surse_ok THEN
+      -- Verificată ÎNAINTE de orice scriere pentru operație: listă nevalidă, operație fără niciun document-sursă (Jakarinos
+      -- r1 P1 #1), sursă inexistentă sau din altă licitație = conflict.
+      v_surse := NULL; v_sursa_rea := NULL; v_motiv_surse := NULL;
+      IF NOT (coalesce(v_op ->> 'document_id', '') ~ '^([0-9]{1,18})?$'
+              AND (jsonb_typeof(v_op -> 'surse_doc_ids') IS NULL OR jsonb_typeof(v_op -> 'surse_doc_ids') = 'null'
+                   OR (jsonb_typeof(v_op -> 'surse_doc_ids') = 'array' AND NOT EXISTS (
+                         SELECT 1 FROM jsonb_array_elements(v_op -> 'surse_doc_ids') e WHERE coalesce(e #>> '{}', '') !~ '^[0-9]{1,18}$')))) THEN
+        v_motiv_surse := 'sursele operatiei sunt invalide (provenienta neverificabila)';
+      ELSE
         SELECT array_agg(DISTINCT s.x ORDER BY s.x) INTO v_surse FROM (
           SELECT (e #>> '{}')::bigint AS x
             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v_op -> 'surse_doc_ids') = 'array' THEN v_op -> 'surse_doc_ids' ELSE '[]'::jsonb END) e
           UNION SELECT nullif(v_op ->> 'document_id', '')::bigint) s
          WHERE s.x IS NOT NULL;
-        SELECT x INTO v_sursa_rea FROM unnest(v_surse) x
-         WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = v_lic) LIMIT 1;
+        IF v_surse IS NULL THEN
+          v_motiv_surse := 'operatia nu are niciun document-sursa (provenienta neverificabila)';
+        ELSE
+          SELECT x INTO v_sursa_rea FROM unnest(v_surse) x
+           WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_documente_atribuire d WHERE d.id = x AND d.licitatie_id = v_lic) LIMIT 1;
+          IF v_sursa_rea IS NOT NULL THEN
+            v_motiv_surse := 'sursa #' || v_sursa_rea || ' nu exista in aceasta licitatie (provenienta neverificabila)';
+          END IF;
+        END IF;
       END IF;
-      IF NOT v_surse_ok OR v_sursa_rea IS NOT NULL THEN
-        v_conflicte := v_conflicte || jsonb_build_object('op_id', v_op ->> 'op_id',
-          'motiv', CASE WHEN NOT v_surse_ok THEN 'sursele operatiei sunt invalide (provenienta neverificabila)'
-                        ELSE 'sursa #' || v_sursa_rea || ' nu exista in aceasta licitatie (provenienta neverificabila)' END);
+      IF v_motiv_surse IS NOT NULL THEN
+        v_conflicte := v_conflicte || jsonb_build_object('op_id', v_op ->> 'op_id', 'motiv', v_motiv_surse);
         CONTINUE;
       END IF;
       v_nr_ordine := v_nr_ordine + 1;
@@ -518,7 +540,7 @@ DECLARE
   v_gen text; v_ev text; v_tok_gen text; v_tok_ev text; v_ids_sursa text; v_sursa_noua text;
   v_ev_fara constant text := left(md5('fara_planse_de_clarificat'), 12);
   v_baza jsonb; v_baza_gen jsonb; v_financiar text;
-  v_surse_doc bigint[]; v_surse_cant bigint[];   -- 20261026a
+  v_surse_doc bigint[]; v_surse_cant bigint[]; v_fin_ids bigint[];   -- 20261026a
 BEGIN
   SELECT count(*) INTO v_tc FROM public.v_ofertare_transfer_conflicte WHERE licitatie_id = p_licitatie_id AND deschis;
   SELECT array_agg(id ORDER BY nume_original),
@@ -564,14 +586,16 @@ BEGIN
   SELECT array_agg(i), array_agg(n), array_agg(m) INTO v_ids, v_nume, v_motive
   FROM unnest(v_ids, v_nume, v_motive) AS t(i, n, m) WHERE NOT (i = ANY(v_acoperite));
   IF v_ids IS NULL THEN RETURN jsonb_build_object('actiune','deja_trimise', 'transfer_conflicte_deschise', v_tc); END IF;
-  SELECT string_agg('documentul #' || d.id || ' „' || d.nume_original || '”', '; ' ORDER BY d.id) INTO v_financiar
+  -- 20261026a: ID-urile documentelor financiare citate, din ACEEAȘI interogare ca textul (Jakarinos r1 P1 #2)
+  SELECT string_agg('documentul #' || d.id || ' „' || d.nume_original || '”', '; ' ORDER BY d.id), array_agg(d.id ORDER BY d.id)
+    INTO v_financiar, v_fin_ids
     FROM public.ofertare_documente_atribuire d WHERE d.licitatie_id=p_licitatie_id AND d.tip='lista_cantitati';
   v_baza := public.ofertare_f3_baza(p_licitatie_id);
   -- 20261026a: proveniența textului, scrisă ODATĂ cu el (nu dedusă ulterior): planșele citate, documentele financiare citate
-  -- în punctul 2 (tip lista_cantitati — exact cele din v_financiar), documentele și rândurile de cantități din baza F3.
+  -- în punctul 2 (exact ID-urile citite odată cu v_financiar), documentele și rândurile de cantități din baza F3.
   SELECT array_agg(DISTINCT s.x ORDER BY s.x) INTO v_surse_doc FROM (
     SELECT unnest(v_ids) AS x
-    UNION SELECT d.id FROM public.ofertare_documente_atribuire d WHERE d.licitatie_id = p_licitatie_id AND d.tip = 'lista_cantitati'
+    UNION SELECT unnest(v_fin_ids)
     UNION SELECT (e->>'id')::bigint FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v_baza->'documente') = 'array'
                                                             THEN v_baza->'documente' ELSE '[]'::jsonb END) e
            WHERE e->>'id' ~ '^[0-9]{1,18}$') s WHERE s.x IS NOT NULL;
@@ -694,19 +718,19 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_aplica(bigint,text[],uuid,boolean,text,text)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = 'dbdb69615d0ddd277cba30e0278d477d'
+                    AND md5(replace(p.prosrc, chr(13), '')) = '48af240261bebfc1985b7d12ee182c00'
                     AND NOT p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION 'Postcondiție 20261026a: fn_ofertare_raspuns_set_aplica nou nu are corpul / atributele așteptate (md5 dbdb6961…)';
+    RAISE EXCEPTION 'Postcondiție 20261026a: fn_ofertare_raspuns_set_aplica nou nu are corpul / atributele așteptate (md5 48af2402…)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_clarificare_planse_auto(bigint)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = '8016fbf6b5d47a049ab73d9200122fc1'
+                    AND md5(replace(p.prosrc, chr(13), '')) = '4dc464d871679ff9d0b596042fb5bf8a'
                     AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION 'Postcondiție 20261026a: ofertare_clarificare_planse_auto nou nu are corpul / atributele așteptate (md5 8016fbf6…)';
+    RAISE EXCEPTION 'Postcondiție 20261026a: ofertare_clarificare_planse_auto nou nu are corpul / atributele așteptate (md5 4dc464d8…)';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.fn_ofertare_surse_valideaza()')

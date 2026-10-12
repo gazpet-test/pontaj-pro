@@ -20,19 +20,19 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.fn_ofertare_raspuns_set_aplica(bigint,text[],uuid,boolean,text,text)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = 'dbdb69615d0ddd277cba30e0278d477d'
+                    AND md5(replace(p.prosrc, chr(13), '')) = '48af240261bebfc1985b7d12ee182c00'
                     AND NOT p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION '20261026a: fn_ofertare_raspuns_set_aplica nu mai e versiunea pusă de migrare (md5 dbdb6961… / atribute) — revenire oprită, nimic schimbat';
+    RAISE EXCEPTION '20261026a: fn_ofertare_raspuns_set_aplica nu mai e versiunea pusă de migrare (md5 48af2402… / atribute) — revenire oprită, nimic schimbat';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.ofertare_clarificare_planse_auto(bigint)')
-                    AND md5(replace(p.prosrc, chr(13), '')) = '8016fbf6b5d47a049ab73d9200122fc1'
+                    AND md5(replace(p.prosrc, chr(13), '')) = '4dc464d871679ff9d0b596042fb5bf8a'
                     AND p.prosecdef AND p.provolatile = 'v' AND pg_get_userbyid(p.proowner) = 'postgres'
                     AND p.proconfig::text = '{"search_path=public, pg_temp"}'
                     AND p.proacl::text = '{postgres=X/postgres,service_role=X/postgres}') THEN
-    RAISE EXCEPTION '20261026a: ofertare_clarificare_planse_auto nu mai e versiunea pusă de migrare (md5 8016fbf6… / atribute) — revenire oprită, nimic schimbat';
+    RAISE EXCEPTION '20261026a: ofertare_clarificare_planse_auto nu mai e versiunea pusă de migrare (md5 4dc464d8… / atribute) — revenire oprită, nimic schimbat';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_proc p
                   WHERE p.oid = to_regprocedure('public.fn_ofertare_surse_valideaza()')
@@ -43,6 +43,9 @@ BEGIN
     RAISE EXCEPTION '20261026a: fn_ofertare_surse_valideaza nu mai e versiunea pusă de migrare (md5 03b3a62b… / atribute) — revenire oprită, nimic schimbat';
   END IF;
   PERFORM set_config('lock_timeout', '5s', true);
+  -- scrierile pe cerințe se blochează ÎNAINTEA capturii și până la final (Jakarinos r1 P1 #3): o scriere concurentă a
+  -- surselor fie se comite înainte (și intră în arhivă), fie așteaptă și pică pe coloana scoasă
+  LOCK TABLE public.ofertare_cerinte IN ACCESS EXCLUSIVE MODE;
 
   CREATE TABLE IF NOT EXISTS public.ofertare_rigoare_arhiva_revenire (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
