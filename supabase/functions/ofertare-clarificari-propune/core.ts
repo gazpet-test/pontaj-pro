@@ -8,6 +8,7 @@
 import { CATEGORII_RESTANTE, infoRestanta, NOTA_LUNGIMI, restantePeTip } from './restante.js'
 import { termenRO } from '../_shared/oraRO.ts'
 import { caleBlocata, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
+import { COLOANE_SURSE, filtreazaClarificari } from '../_shared/provenientaClar.ts'   // proveniența derivatelor (20261025a)
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const MODELE: Record<string, { in: number; out: number }> = { 'claude-sonnet-5': { in: 3 / 1e6, out: 15 / 1e6 }, 'claude-opus-5': { in: 5 / 1e6, out: 25 / 1e6 } }
 const MODEL_IMPLICIT = 'claude-sonnet-5'
@@ -125,10 +126,10 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare, sursa_document_id, lot_domeniu, lot_nr').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
       supabase.from('ofertare_acoperire').select('cerinta_id, status, motiv, mod').eq('status', 'gol').limit(5000),
       // R5 condiția 2 (26.09.2026): limita de 40 nu mai taie TACIT — count exact, iar promptul spune câte au rămas pe dinafară
-      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status, lot_domeniu, lot_nr', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
+      supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status, lot_domeniu, lot_nr, surse_document_ids, extras_de_ai', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),
       supabase.from('ofertare_verificari').select('verdict, raport, created_at').eq('licitatie_id', licId).order('created_at', { ascending: false }).limit(1),
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, status_procesare, pagini').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%').order('id'),
-      supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie, raspuns_document_id, fisier_path').eq('licitatie_id', licId).order('nr'),
+      supabase.from('ofertare_clarificari').select('id, nr, intrebare, sursa, status, raspuns, cheie, raspuns_document_id, fisier_path, ' + COLOANE_SURSE).eq('licitatie_id', licId).order('nr'),
       // sarcina 2 (a): planșele cu conflicte de transfer (eroarea se păstrează, nu se înghite)
       Promise.resolve(supabase.from('v_ofertare_transfer_conflicte').select('document_id, nume_original, stare, n, deschis, restante').eq('licitatie_id', licId))
         .then((r: any) => r, (e: any) => ({ data: null, error: e })),
@@ -139,8 +140,9 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     // în core, ca să prindă și workerul NAS (ocolește HTTP-ul). Licitația fără participare / poarta picată = oprire, fără apel.
     const fc = await filtreazaDerivate(supabase, licId, cerToate)
     if (!fc.ok) return { ...fail(mesajLot(fc.motiv)), motiv_lot: fc.motiv }
-    // cantitățile: lot canonic, fără document-sursă — aceeași regulă pe lot (pe fara_loturi trec toate)
-    const fq = await filtreazaDerivate(supabase, licId, cant || [])
+    // cantitățile: lot canonic + documentele-sursă (20261025a, r5 P1 #4): toate eligibile; pe are_loturi rândul extras automat
+    // fără nicio sursă = fara_provenienta (pe fara_loturi trec ca înainte)
+    const fq = await filtreazaDerivate(supabase, licId, cant || [], { cereSurse: (r: any) => r.extras_de_ai !== false })
     if (!fq.ok) return { ...fail(mesajLot(fq.motiv)), motiv_lot: fq.motiv }
     // inventarul are doar nume, dar tot doar documentele eligibile: un document blocat nu e documentație pentru oferta noastră
     // (o citire pe toată licitația, nu un RPC per document; lipsă din hartă = neeligibil)
@@ -158,7 +160,13 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
       if (m === 'eroare_poarta') return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
       if (m) caiBlocate.add(cale)
     }
+    // + proveniența clarificărilor GENERATE (r5 P1 #2): cerințele / cantitățile / documentele din care au fost generate trebuie
+    // să treacă poarta acum; lipsa PDF-ului nu mai înseamnă „manual”. Excluse = păstrate doar pentru deduplicare.
+    const fcl = await filtreazaClarificari(supabase, (clarLic || []) as any[])
+    if (!fcl.ok) return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
+    const clarExcluse = new Set(fcl.excluse.map((q: any) => q.id))
     const clarCtx = (clarLic || []).map((q: any) => {
+      if (clarExcluse.has(q.id)) return { ...q, intrebare: '(clarificare generată din surse blocate pe loturi — omisă)', raspuns: null }
       if (q.fisier_path && caiBlocate.has(q.fisier_path)) return { ...q, intrebare: '(clarificare din document blocat pe loturi — omisă)', raspuns: null }
       return (q.raspuns && q.raspuns_document_id != null && !esteEligibil(fd.harta, q.raspuns_document_id)) ? { ...q, raspuns: null, raspuns_blocat_lot: true } : q
     })
@@ -175,14 +183,19 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     // răspunsuri primite: întâi aceeași autoritate, apoi altele (limitat)
     const autor = String(lic.autoritate || '').replace(/^\d+\s*-\s*/, '').trim()
     const { data: rasp } = await supabase.from('ofertare_clarificari')
-      .select('intrebare, raspuns, licitatie_id, raspuns_document_id, fisier_path, lic:ofertare_licitatii(nr_anunt, autoritate)')
+      .select('id, intrebare, raspuns, raspuns_document_id, fisier_path, ' + COLOANE_SURSE + ', lic:ofertare_licitatii(nr_anunt, autoritate)')
       .eq('status', 'raspunsa').not('raspuns', 'is', null).neq('licitatie_id', licId).order('raspuns_la', { ascending: false }).limit(40)
     // răspunsurile altor licitații (review Jakarinos r3 P1 #1): și ele vin din documente — documentul răspunsului și calea
     // întrebării trebuie să fie eligibile acum; poarta căzută = oprire, nu „fără exemple”
     const fx = await filtreazaDocumente(supabase, (rasp || []).map((r: any) => r.raspuns_document_id))
     if (!fx.ok) return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
+    // proveniența întrebărilor generate din alte licitații (r5 P1 #2), pe licitația lor
+    const frc = await filtreazaClarificari(supabase, (rasp || []) as any[])
+    if (!frc.ok) return { ...fail(mesajLot('eroare_poarta')), motiv_lot: 'eroare_poarta' }
+    const raspExcluse = new Set(frc.excluse.map((q: any) => q.id))
     const raspOk: any[] = []
     for (const r of (rasp || [])) {
+      if (raspExcluse.has(r.id)) continue
       if (r.raspuns_document_id != null && !fx.eligibile.has(Number(r.raspuns_document_id))) continue
       if (r.fisier_path) {
         const m = await caleBlocata(supabase, r.fisier_path)
@@ -255,8 +268,17 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     acceptate.sort((a, b) => ordine[a.prioritate] - ordine[b.prioritate])
     let nr = Math.max(0, ...(clarLic || []).map((q: any) => Number(q.nr) || 0))
     const eticheta: Record<string, string> = { eliminatorie: '🚫', importanta: '⚠️', utila: 'ℹ️' }
+    // proveniența structurată (20261025a): cerințele citate + documentele lor-sursă (doar din registrul eligibil)
+    const docCer = new Map<number, number | null>((cerinte || []).map((c: any) => [Number(c.id), c.sursa_document_id == null ? null : Number(c.sursa_document_id)]))
+    // + TOATE cantitățile trimise în prompt și documentele lor (Jakarinos r6 P1 #4, varianta B conservatoare): modelul poate
+    // compara cifrele fără să le citeze, deci ID-urile citate nu dovedesc proveniența completă
+    const cantPrompt = cantElig.map((q: any) => Number(q.id)).filter((n: number) => Number.isSafeInteger(n) && n > 0)
+    const docCant = [...new Set(cantElig.flatMap((q: any) => Array.isArray(q.surse_document_ids) ? q.surse_document_ids.map(Number) : []))] as number[]
+    const docuriCerinte = (ids: number[]) => { const d = [...new Set([...ids.map((id) => docCer.get(id)).filter((x): x is number => x != null), ...docCant])]; return d.length ? d : null }
     const noi = acceptate.map(a => ({
       licitatie_id: licId, nr: ++nr, intrebare: a.intrebare, status: 'propunere', origine: 'platforma', cheie: a.cheie,
+      surse_cerinte_ids: a.cerinte_ids.length ? a.cerinte_ids : null, surse_document_ids: docuriCerinte(a.cerinte_ids),
+      surse_cantitati_ids: cantPrompt.length ? cantPrompt : null,
       // `sursa` = eticheta pentru om (nu mai e cheie de idempotență): prioritate, subiect, cerințe, referință, fragment, risc, motiv
       sursa: `${eticheta[a.prioritate]}${a.sursa_tip === 'modificare' ? ' [SOLICITARE DE MODIFICARE]' : ''}${a.risc_divulgare ? ' [risc divulgare]' : ''} ${a.subiect}${a.cerinte_ids.length ? ` (cerințe #${a.cerinte_ids.join(', #')})` : ''}${a.referinta ? ` · ${a.referinta}` : ''} — „${a.fragment}” — ${a.motiv}`.slice(0, 1200),
     }))

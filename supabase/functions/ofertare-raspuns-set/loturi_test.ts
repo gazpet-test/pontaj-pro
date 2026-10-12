@@ -1,6 +1,6 @@
 // deno test --node-modules-dir=none supabase/functions/ofertare-raspuns-set/loturi_test.ts
 import { deepStrictEqual as eq } from 'node:assert/strict'
-import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet } from './loturi.ts'
+import { coadaIncompleta, domeniuAcoperit, filtreazaRegistru, motivOperatie, restrangeLaDocument, lotOperatie, lotOperatieSelectie, provenientaCompleta, provenientaUnica, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const ids = (r: any) => (r.ok ? r.eligibile.map((c: any) => c.id) : r)
 
@@ -47,4 +47,87 @@ Deno.test('lotOperatieSelectie (review Jakarinos r4 P1 #1): dispoziția pe lotul
   eq(lotOperatieSelectie([2], '2', ['toate']).lot, '2')
   eq(lotOperatieSelectie(null, null, ['2']).lot, '2')              // fără selecție: regula veche
   eq(lotOperatieSelectie(null, '3', ['2']).lot, '3')
+})
+
+Deno.test('proveniența cozii (review Jakarinos r5 P1 #1): coada A→B→C poartă toate documentele', () => {
+  eq(surseCoada({}), [])
+  eq(surseCoada({ coada_doc_id: 7 }), [7])                         // forma r4, un singur id
+  eq(surseCoada({ coada_doc_ids: [7, 8], coada_doc_id: 9 }), [7, 8]) // forma nouă are prioritate
+  const dinA = surseNoi(10, [])                                       // fragmentul A lasă coadă
+  const dinB = surseNoi(11, surseCoada({ coada_doc_ids: dinA }))      // B lipește coada A și lasă coadă mai departe
+  eq(dinB, [10, 11])
+  eq(surseNoi(12, surseCoada({ coada_doc_ids: dinB })), [10, 11, 12])
+  eq(surseNoi(12, []), [12])                                          // coadă omisă = doar documentul curent
+})
+Deno.test('surseDispozitie: doc_ids verificate integral; vechi fără doc_ids pe are_loturi = neverificabil', () => {
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [10, 11] }, true), [10, 11])
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [10, 10, 11] }, true), [10, 11])
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [10, 'x'] }, true), null) // id stricat = fail-closed
+  eq(surseDispozitie({ doc_id: 11 }, true), null)                      // dispoziție veche pe are_loturi
+  eq(surseDispozitie({ doc_id: 11 }, false), [11])                     // fara_loturi: ca înainte
+  eq(surseDispozitie({}, false), null)
+})
+Deno.test('surseCoada r6 (Jakarinos r6 P1 #1): forma veche coada_doc_id pe are_loturi = neverificabilă; listă stricată = []', () => {
+  eq(surseCoada({ coada_doc_id: 7 }, true), [])
+  eq(surseCoada({ coada_doc_id: 7 }, false), [7])
+  eq(surseCoada({ coada_doc_ids: [7, 8] }, true), [7, 8])
+  eq(surseCoada({ coada_doc_ids: [7, 'x'] }, false), [])
+})
+Deno.test('operația (Jakarinos r6 P1 #2, varianta B): aplicabilă pe are_loturi doar cu O singură sursă', () => {
+  eq(surseOperatie([11], null), [11])                 // noua / cerință manuală: sursa dispoziției
+  eq(surseOperatie([11], 11), [11])                   // cerința-țintă din același document
+  eq(surseOperatie([11], 10), [10, 11])               // țintă din alt document → două surse
+  eq(surseOperatie([10, 11], null), [10, 11])         // coadă lipită A→B
+  eq(surseOperatie(null, 11), null)                   // dispoziție fără proveniență
+  eq([provenientaUnica([11]), provenientaUnica([10, 11]), provenientaUnica(null), provenientaUnica(undefined), provenientaUnica(['x'])], [true, false, false, false, false])
+})
+Deno.test('proveniență incompletă (Jakarinos r8 P1 #1): fallback-ul de pe fara_loturi nu certifică surse complete', () => {
+  eq(coadaIncompleta({ coada_deschisa: 'x', coada_doc_id: 7 }), true)        // formă veche
+  eq(coadaIncompleta({ coada_deschisa: 'x', coada_doc_ids: [7] }), false)
+  eq(coadaIncompleta({ coada_deschisa: 'x', coada_doc_ids: [7], coada_incompleta: true }), true)   // moștenit
+  eq(coadaIncompleta({}), false)
+  eq(provenientaCompleta({ doc_id: 11 }), false)                               // dispoziție veche
+  eq(provenientaCompleta({ doc_id: 11, doc_ids: [11] }), true)
+  eq(provenientaCompleta({ doc_id: 11, doc_ids: [10, 11], surse_incomplete: true }), false)
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [11], surse_incomplete: true }, true), null)
+  eq(surseDispozitie({ doc_id: 11, doc_ids: [11], surse_incomplete: true }, false), [11])
+})
+Deno.test('surseCoada r9 (Jakarinos r9 P1 #1): coada marcată incompletă nu intră la AI pe are_loturi', () => {
+  eq(surseCoada({ coada_doc_ids: [11], coada_incompleta: true }, true), [])
+  eq(surseCoada({ coada_doc_ids: [11], coada_incompleta: true }, false), [11])
+})
+Deno.test('domeniuAcoperit (Jakarinos r10 P1): operația pe lotul 2 nu atinge o cerință comună loturilor 1+2', () => {
+  const L = (domeniu: string, loturi: number[] = []) => ({ domeniu, loturi }) as any
+  eq(domeniuAcoperit(L('lista', [2]), L('toate'), [1, 2]), false)        // comună = toată participarea {1,2}
+  eq(domeniuAcoperit(L('lista', [1, 2]), L('toate'), [1, 2]), true)
+  eq(domeniuAcoperit(L('lista', [2]), L('lista', [2]), [1, 2]), true)
+  eq(domeniuAcoperit(L('lista', [2]), L('lista', [1, 2]), [1, 2]), false)
+  eq(domeniuAcoperit(L('lista', [2]), L('necunoscut'), [1, 2]), false)
+  eq(domeniuAcoperit(L('lista', [2, 3]), L('lista', [3]), [2, 3]), true)
+})
+Deno.test('motivOperatie (Jakarinos r11): o singură regulă pentru compara și aplica', () => {
+  const ctx = (o: any = {}) => ({ peLoturi: true, participam: [1, 2], cerinte: new Map<number, any>([[7, { id: 7, sursa_document_id: 11, lot_domeniu: 'lista', lot_nr: [2] }],
+    [8, { id: 8, sursa_document_id: 11, lot_domeniu: 'toate', lot_nr: null }]]), domDoc: new Map<number, number[] | null>([[11, [2]], [12, null]]), ...o })
+  const op = (o: any = {}) => ({ fel: 'modifica', cerinta_id: 7, surse_complete: true, surse_doc_ids: [11], document_id: 11, lot_domeniu: 'lista', lot_nr: [2], ...o })
+  eq(motivOperatie(op(), ctx()), null)
+  eq(motivOperatie(op({ surse_complete: false }), ctx()), 'fara_provenienta_unica')
+  eq(motivOperatie(op({ cerinta_id: 99 }), ctx()), 'tinta_lipsa')
+  eq(motivOperatie(op({ surse_doc_ids: [12], document_id: 12 }), ctx()), 'tinta_sursa_schimbata')       // r11 P1 #2
+  eq(motivOperatie(op(), ctx({ amprenteOperatie: { '7': 'a' }, amprenteAcum: { '7': 'b' } })), 'tinta_schimbata')
+  eq(motivOperatie(op({ fel: 'noua', cerinta_id: null, lot_nr: [1, 2] }), ctx()), 'domeniu_document')   // doc alocat {2} (r11 P1 #1)
+  eq(motivOperatie(op({ cerinta_id: 8 }), ctx()), 'domeniu_partial')                                  // țintă comună, op pe 2
+  eq(motivOperatie(op({ fel: 'noua', cerinta_id: null, lot_nr: [2] }), ctx({ participam: [1] })), 'lot_in_afara_participarii')
+  eq(motivOperatie(op({ fel: 'noua', cerinta_id: null, surse_doc_ids: [13], document_id: 13 }), ctx()), 'domeniu_document_necunoscut')
+  eq(motivOperatie(op({ cerinta_id: 8, lot_nr: [1, 2] }), ctx({ cerinte: new Map([[8, { id: 8, sursa_document_id: 12, lot_domeniu: 'toate' }]]) })), 'tinta_sursa_schimbata')
+  eq(motivOperatie(op(), ctx({ peLoturi: false })), null)
+  eq(restrangeLaDocument([1, 2], [2]), [2])
+  eq(restrangeLaDocument([1, 2], null), [1, 2])
+})
+Deno.test('motivOperatie r12: documentul-sursă neeligibil (orice stare) + țintă fără amprentă de la generare', () => {
+  const ctx = (o: any = {}) => ({ peLoturi: false, participam: [], cerinte: new Map<number, any>([[7, { id: 7, sursa_document_id: 11 }]]), domDoc: new Map(), ...o })
+  const op = { fel: 'modifica', cerinta_id: 7, surse_complete: true, surse_doc_ids: [11], document_id: 11 }
+  eq(motivOperatie(op, ctx({ docEligibil: (id: number) => id !== 11 })), 'document_neeligibil')   // fara_loturi: mutat / blocat
+  eq(motivOperatie(op, ctx({ docEligibil: () => true })), null)
+  eq(motivOperatie(op, ctx({ amprenteOperatie: {}, amprenteAcum: { '7': 'a' } })), 'tinta_fara_amprenta')
+  eq(motivOperatie({ ...op, document_id: 12 }, ctx()), 'document_diferit')
 })

@@ -579,12 +579,18 @@ export async function propuneAcoperiri(supabase: any, body: any): Promise<any> {
         const deja = new Set((exist || []).map((r: any) => r.sursa).filter(Boolean))
         let nr = Math.max(0, ...(exist || []).map((r: any) => Number(r.nr) || 0))
         const sursaVeche = (id: number) => `cerința #${id} — domeniu RTE neprecizat`   // cheia dinainte de v18 — nu dublăm
+        // proveniența structurată (20261025a, review Jakarinos r5 P1 #2): cerința + documentul ei-sursă
+        const docCer = new Map<number, number | null>(cerinte.map((c: any) => [Number(c.id), c.sursa_document_id == null ? null : Number(c.sursa_document_id)]))
         const noi = propuse
           .filter(c => !deja.has(sursaPt(c.cerinta_id)) && !deja.has(sursaVeche(c.cerinta_id)))
-          .map(c => ({
-            licitatie_id: licId, nr: ++nr, intrebare: c.intrebare,
-            sursa: sursaPt(c.cerinta_id), status: 'de_trimis', origine: 'platforma',
-          }))
+          .map(c => {
+            const doc = docCer.get(Number(c.cerinta_id))
+            return {
+              licitatie_id: licId, nr: ++nr, intrebare: c.intrebare,
+              sursa: sursaPt(c.cerinta_id), status: 'de_trimis', origine: 'platforma',
+              surse_cerinte_ids: [c.cerinta_id], surse_document_ids: doc != null ? [doc] : null,
+            }
+          })
         if (noi.length) {
           const { error: eClar } = await supabase.from('ofertare_clarificari').insert(noi)
           // O clarificare nescrisa NU invalideaza acoperirea (deja scrisa, tranzactional).

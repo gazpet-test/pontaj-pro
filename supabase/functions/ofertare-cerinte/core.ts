@@ -20,6 +20,7 @@
 
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'
 import { coloaneLot, lotDinNumeFisier, parseLot, type Lot } from '../_shared/lot.ts'
+import { exempleFeedback } from './exemple.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 // v9: modelul se poate cere din body. Implicit Opus (cum a fost dintotdeauna); Sonnet costa
@@ -247,8 +248,8 @@ export async function extrageCerinte(supabase: any, body: any): Promise<Rezultat
 
     const autorSlug = /romgaz/i.test(lic.autoritate) ? 'romgaz' : /transgaz/i.test(lic.autoritate) ? 'transgaz' : /conpet/i.test(lic.autoritate) ? 'conpet' : 'alta'
     const ck = modCorpus ? `ofertare-cerinte|cs|${autorSlug}` : `ofertare-cerinte|fisa_date|${autorSlug}`
-    const { data: fb } = await supabase.from('ai_feedback').select('output_ai, output_corectat')
-      .eq('context_cheie', ck).eq('verdict', 'corectat').order('corectat_la', { ascending: false }).limit(3)
+    // review Jakarinos r5 P1 #3: exemplele trec poarta pe proveniență (cerința-sursă + documentul ei + lotul), altfel ies
+    const { exemple: fb } = await exempleFeedback(supabase, ck, 3)
     const fewshot = (fb && fb.length)
       ? `\nEXEMPLE DE CORECȚII UMANE anterioare pe aceeași autoritate (învață forma din diferențe, NU copia conținutul):\n` +
         fb.map((x: any, i: number) => `Exemplul ${i + 1}: AI: ${JSON.stringify(x.output_ai)} → corectat: ${JSON.stringify(x.output_corectat)}`).join('\n') + '\n'

@@ -143,9 +143,12 @@ export async function participareLicitatie(db: ClientFrom, licitatieId: number):
 //   3. pe are_loturi: lotul rândului (canonic, sau textul vechi `lot`) trebuie să fie „toate” sau să intersecteze
 //      loturile bifate; „necunoscut” NU intră implicit (review Jakarinos P1 #2) — iese în `excluse` cu motivul lui.
 // Rândurile fără document-sursă (manuale) trec doar pe lot.
+// Proveniența cu mai multe surse (20261025a, review Jakarinos r5 P1 #4): `surse_document_ids` — TOATE trebuie eligibile.
+// `cereSurse(r)` (opțional): pe are_loturi, rândul pentru care întoarce true și n-are nicio sursă documentară
+// (nici sursa_document_id, nici surse_document_ids) iese cu `fara_provenienta` — ex. cantitățile extrase automat.
 export type MotivExclus = { motiv: string }
-export async function filtreazaDerivate<T extends { sursa_document_id?: number | null; lot_domeniu?: string | null; lot_nr?: unknown; lot?: string | null }>(
-  db: ClientRpc & ClientFrom, licitatieId: number, randuri: T[],
+export async function filtreazaDerivate<T extends { sursa_document_id?: number | null; surse_document_ids?: unknown; lot_domeniu?: string | null; lot_nr?: unknown; lot?: string | null }>(
+  db: ClientRpc & ClientFrom, licitatieId: number, randuri: T[], opt: { cereSurse?: (r: T) => boolean } = {},
 ): Promise<{ ok: boolean; motiv: string; participare: Participare; pastrate: T[]; excluse: Array<T & MotivExclus> }> {
   const participare = await participareLicitatie(db, licitatieId)
   if (!participare.ok) return { ok: false, motiv: participare.motiv, participare, pastrate: [], excluse: [] }
@@ -156,14 +159,28 @@ export async function filtreazaDerivate<T extends { sursa_document_id?: number |
   for (const r of randuri) {
     const doc = r.sursa_document_id == null ? null : Number(r.sursa_document_id)
     if (doc != null && !esteEligibil(f.harta, doc)) { excluse.push({ ...r, motiv: 'document_' + (f.harta.get(doc)?.motiv || 'neeligibil') }); continue }
+    const surse = surseDocumente(r.surse_document_ids)
+    if (surse === null) { excluse.push({ ...r, motiv: 'surse_invalide' }); continue }
+    const blocata = surse.find((s) => !esteEligibil(f.harta, s))
+    if (blocata != null) { excluse.push({ ...r, motiv: 'document_' + (f.harta.get(blocata)?.motiv || 'neeligibil') }); continue }
     if (participare.stare === 'are_loturi') {
       const l = lotRand(r)
       if (l.domeniu === 'necunoscut') { excluse.push({ ...r, motiv: 'lot_necunoscut' }); continue }
       if (!eligibilaPeLot(l, participare.participam)) { excluse.push({ ...r, motiv: 'lot_in_afara' }); continue }
+      // fără nicio sursă documentară — după lot (motivul de lot e mai informativ când se aplică ambele)
+      if (doc == null && !surse.length && opt.cereSurse?.(r)) { excluse.push({ ...r, motiv: 'fara_provenienta' }); continue }
     }
     pastrate.push(r)
   }
   return { ok: true, motiv: participare.motiv, participare, pastrate, excluse }
+}
+
+// surse_document_ids din BD: null/absent = [] (fără surse); listă cu un element nevalid = null (neverificabil → exclus)
+export function surseDocumente(v: unknown): number[] | null {
+  if (v == null) return []
+  if (!Array.isArray(v)) return null
+  const ids = v.map(Number)
+  return ids.every((n) => Number.isSafeInteger(n) && n > 0) ? [...new Set(ids)] : null
 }
 
 export function esteEligibil(harta: Map<number, Eligibilitate>, documentId: number): boolean {
