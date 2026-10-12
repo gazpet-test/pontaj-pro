@@ -152,7 +152,8 @@ asteapta "lease consumat: a doua rulare nu scrie" "$(q "SELECT cantitate_plansa:
 IDM=$(q "INSERT INTO public.ofertare_cantitati(licitatie_id, denumire, extras_de_ai) VALUES (102, 'manual PE 40', false) RETURNING id")
 q "UPDATE public.ofertare_documente_atribuire SET analiza='{\"citire_ai\":{\"transfer\":{\"rulare\":\"r2\",\"stare\":\"in_curs\"}}}' WHERE id = 1247" >/dev/null
 ca service_role - "SELECT public.ofertare_transfer_plansa_cantitati(1247, 'r2', '[{\"op\":\"update\",\"id\":$IDM,\"patch\":{\"cantitate_plansa\":40,\"diferenta_nota\":\"din planșă\"}}]')" >/dev/null
-asteapta "transfer pe rând MANUAL fără surse → {planșa} (componenta automată urmăribilă, Jakarinos r7 P1 #2)" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=$IDM")" "{1247}"# ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
+asteapta "transfer pe rând MANUAL fără surse → {planșa} (componenta automată urmăribilă, Jakarinos r7 P1 #2)" "$(q "SELECT surse_document_ids::text FROM public.ofertare_cantitati WHERE id=$IDM")" "{1247}"
+# ── revenire ───────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -v ON_ERROR_STOP=0 -d "$BAZA" -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată fără ON_ERROR_STOP: $o"
 asteapta "revenire nearmată, fără ON_ERROR_STOP / fără tranzacție: RPC neatins (Copilot r1 P1 #3)" "$(md5rpc)" "$MD5_RPC_NOU"
 q "ALTER FUNCTION public.ofertare_transfer_plansa_cantitati(bigint,text,jsonb) SECURITY INVOKER" >/dev/null
