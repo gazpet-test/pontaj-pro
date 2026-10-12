@@ -34,6 +34,7 @@ import { stareBazaCiorna } from './ofertareClarificariBaza.js'
 import CerinteAcoperirePerechi from './OfertareCerinte.jsx'
 import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
 import SourcePackSection from './OfertareSourcePack.jsx'
+import OfertareLoturi, { useEligibilitateLoturi, BannerLoturi, mesajLot } from './OfertareLoturi.jsx'   // MVP loturi (20261024b): poarta pe procesarea plătită
 import FormulareRegistruSection, { ClauzeContractSection } from './OfertareClauzeFormulare.jsx'
 import OfertareParteneri from './OfertareParteneri.jsx'
 import { raportTransferCantitati } from './ofertareTransferRaport.js'
@@ -713,8 +714,9 @@ function Lucru({ icon, text, pct, detaliu }) {
 
 // arhivele (zip/rar/7z, opțional semnate .p7s/.p7m) — aceeași regulă ca CTE-ul arh din v_ofertare_seap_completitudine (20261020a)
 const ARHIVA_UI = /\.(rar|zip|7z)(\.p7[sm])?\s*\d*$/i
-function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = null, onIntrareConsumata = null, showToast = null, onGoClarificari = null }) {
+function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = null, onIntrareConsumata = null, showToast = null, onGoClarificari = null, onGoLoturi = null }) {
   const [docs, setDocs] = useState(null)
+  const elig = useEligibilitateLoturi(licitatie?.id)   // loturi: documentele blocate nu intră la procesarea plătită (serverul refuză oricum)
   // 25.09.2026: ciorna de clarificare pregătită AUTOMAT de server pt planșe necitibile (nu se trimite singură)
   const [clarAuto, setClarAuto] = useState(null)
   useEffect(() => {
@@ -764,6 +766,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
   const [evidSeap, setEvidSeap] = useState(() => new Map())
   const [shaArhive, setShaArhive] = useState(() => new Map())
   const load = async () => {
+    if (elig.incarcat) elig.reincarca()
     supabase.from('ofertare_seap_fisiere').select('cheie, stare, sha256').eq('licitatie_id', licitatie.id)
       .then(r => setEvidSeap(new Map((r.data || []).map(x => [x.cheie, x]))), () => {})
     const [{ data, error }, { data: c }, rTc] = await Promise.all([
@@ -1078,6 +1081,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     E_PDF.test(d.nume_original || '') &&
     !JUNK_RE.test(d.nume_original || '') &&
     d.tip !== 'plansa' &&
+    !elig.blocat(d.id) &&
     !areBucati(d, ds))
 
   const proceseaza = async () => {
@@ -1287,7 +1291,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
     citita_fara_date_cantitative: ['fără date cantitative', G.orange, 'Nu au fost identificate date cantitative în lectura efectuată (lectură completă)'],
     ilizibil: ['ilizibil', G.red, 'Lectură completă fără niciun text recunoscut'], partial: ['parțial / de verificat', G.orange, 'Lectură incompletă sau acoperirea paginii nedemonstrată — vezi motivul'] }
   const plansaCitita = d => !peSigla(d) && !subPrag(d) && (['procesat', 'partial'].includes(d.status_procesare) || d.analiza?.citire_ai?.gata === true)
-  const planseNecitite = (docs || []).filter(d => d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && !plansaCitita(d))
+  const planseNecitite = (docs || []).filter(d => d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && !plansaCitita(d) && !elig.blocat(d.id))
   const citesteToatePlansele = async () => {
     const lista = planseNecitite
     if (!lista.length || !poatePorniProcesarea(profile, licitatie)) return
@@ -1466,6 +1470,7 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
           )}
         </div>
       </div>
+      <BannerLoturi elig={elig} onDeschide={onGoLoturi} />
       {seapBusy && <Lucru icon="⬇️" text={`SEAP: ${seapBusy}`} />}
       {upBusy && <Lucru icon="⬆️" text={`Se urcă… ${upBusy}`} />}
       {procBusy && (() => {
@@ -1581,19 +1586,19 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                   )}
                   {d.tip === 'plansa' && poatePorniProcesarea(profile, licitatie) && d.analiza?.citire_ai && !peSigla(d) && !subPrag(d) && (
                     d.analiza.citire_ai.gata === false ? (
-                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
-                        title="Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."
+                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                        title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : "Citirea s-a oprit la mijloc (ex. browser închis). Continuă cu zonele rămase — cele deja citite nu se plătesc din nou."}
                         onClick={() => { if (window.confirm('Continui citirea planșei cu AI — zonele necitite se plătesc (zonele deja citite nu). Continui?')) reiaPlansa(d, 'continua') }}>⏯ continuă citirea</button>
                     ) : (d.analiza.citire_ai.sumar?.erori > 0 ? (
-                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
-                        title={`Recitește DOAR zonele căzute: ${(d.analiza.citire_ai.sumar.zone_cazute || []).join(', ')}`}
+                      <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                        title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : `Recitește DOAR zonele căzute: ${(d.analiza.citire_ai.sumar.zone_cazute || []).join(', ')}`}
                         onClick={() => { if (window.confirm('Recitesc cu AI doar zonele căzute — se plătesc. Continui?')) reiaPlansa(d, 'reia_erori') }}>🔁 reia zonele căzute ({d.analiza.citire_ai.sumar.erori})</button>
                     ) : null)
                   )}
                   {d.tip === 'plansa' && !d.fisier_path?.includes('/neincarcat/') && poatePorniProcesarea(profile, licitatie) && (
                     plansaGoala(d) ? (<>
-                    {(!d.analiza?.citire_ai?.note_lipite || d.analiza?.citire_ai?.perechi_ramase !== 0) && !d.analiza?.citire_ai?.sumar?.lungime_declarata_m && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy}
-                      title="Refă rândurile de text tăiate la marginea zonelor (note, cartuș — ex. lungimea totală declarată). Recitește doar perechile de zone afectate, max. 6 apeluri."
+                    {(!d.analiza?.citire_ai?.note_lipite || d.analiza?.citire_ai?.perechi_ramase !== 0) && !d.analiza?.citire_ai?.sumar?.lungime_declarata_m && <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.blue, borderColor:G.blue + '66' }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                      title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : "Refă rândurile de text tăiate la marginea zonelor (note, cartuș — ex. lungimea totală declarată). Recitește doar perechile de zone afectate, max. 6 apeluri."}
                       onClick={async () => {
                         setPlansaBusy(`${d.nume_original}: refac notele tăiate...`)
                         try {
@@ -1604,14 +1609,14 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                             (r.necorelare_unitate ? ` · ⚠ NECORELARE: ${r.necorelare_unitate}` : '') : 'Nicio notă tăiată de refăcut.')
                         } finally { setPlansaBusy(null); await load(); onChanged?.() }
                       }}>🧩 note tăiate{d.analiza?.citire_ai?.perechi_ramase > 0 ? ` (+${d.analiza.citire_ai.perechi_ramase})` : ''}</button>}
-                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy}
-                      title="Recitire cu grilă deasă (zone de ~1000px din original, până la 80 de zone) — costă mai mult"
+                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11, color:G.orange, borderColor:G.orange + '66' }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                      title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : 'Recitire cu grilă deasă (zone de ~1000px din original, până la 80 de zone) — costă mai mult'}
                       onClick={() => { if (window.confirm('Recitire fină: planșa se taie în mai multe zone, fiecare citită cu AI (cost mai mare). Continui?')) citestePlansa(d, '', true) }}>
                       📐 recitește fin
                     </button></>
                     ) : (
-                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
-                      title={plansaCitita(d) ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
+                    <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                      title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : plansaCitita(d) ? 'Citește din nou planșa cu AI' : 'Taie planșa în zone și citește tabelele și adnotările'}
                       onClick={() => { if (window.confirm('Citesc planșa cu AI — se taie în zone și fiecare zonă se plătește. Continui?')) citestePlansa(d) }}>
                       {plansaCitita(d) ? '📐 recitește' : '📐 citește'}
                     </button>
@@ -1626,8 +1631,8 @@ function DocumenteSection({ licitatie, profile, onChanged, intrareDocument = nul
                       {j && <span title={j.motiv_anulare || j.eroare || `cerut ${String(j.cerut_la).slice(0, 16).replace('T', ' ')} · ${Number(j.cost_usd || 0).toFixed(2)} USD`}
                         style={{ fontSize:11, color: j.stare === 'gata' ? G.green : ['eroare','anulat','oprit_plafon'].includes(j.stare) ? G.red : G.orange }}>{et[j.stare] || j.stare}</span>}
                       {coadaPlanse.workerViu && !activ && (
-                        <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy}
-                          title="Citirea rulează pe serverul NAS, nu în browser — poți închide tabul. Aceeași poartă pe cost (owner/responsabil)."
+                        <button style={{ ...S.btnS, padding:'2px 8px', fontSize:11 }} disabled={!!plansaBusy || !!elig.blocat(d.id)}
+                          title={elig.blocat(d.id) ? mesajLot(elig.blocat(d.id)) : "Citirea rulează pe serverul NAS, nu în browser — poți închide tabul. Aceeași poartă pe cost (owner/responsabil)."}
                           onClick={() => plansaInCoadaNAS(d)}>🗂 pe NAS</button>
                       )}
                     </>
@@ -3416,6 +3421,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
   const vizibile = docs ? primiteVizibile(docs) : null   // fără fișierele extrase din arhive (rămâne arhiva, cu rezumat)
   const [toate, setToate] = useState([])      // toată Documentația licitației — ca să știm ce e deja citit
   const [busy, setBusy] = useState(null)      // id-ul documentului în curs de citire
+  const elig = useEligibilitateLoturi(l.id)   // loturi: citirea AI doar pe documente eligibile (serverul refuză oricum)
   const [progres, setProgres] = useState('')  // eticheta butonului în timpul citirii / rezumatului pe felii
   const [eroareCitire, setEroareCitire] = useState({}) // id → {t, poarta}; rămâne pe card (Răcari 06.10: toast-ul dispărea)
   const [msg, setMsg] = useState(null)        // mesaj inline când nu avem showToast
@@ -3521,6 +3527,7 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
           const extrase = ARHIVA_DOC_RE.test(d.nume_original || '') ? rezumatExtrase(d.id, toate) : null
           const c = d.analiza?.citire_noi
           const sc = stareCitire(d)
+          const lotB = elig.blocat(d.id)   // motivul blocării pe loturi sau null
           return (
             <div key={d.id} style={{ padding:'11px 13px', borderRadius:11, marginBottom:8, background:'#1C2430', borderLeft:`3px solid ${(TIP_NOU[c?.tip || d.tip] || TIP_NOU.altul)[1]}` }}>
               <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
@@ -3536,13 +3543,14 @@ function DocumenteNoiSection({ licitatie: l, showToast = null }) {
                   : <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5 }} onClick={() => deschide(d)}>📎 Deschide documentul original</button>}
                 {sc?.citit && <span style={{ fontSize:11.5, fontWeight:800, color:G.green, border:`1px solid ${G.green}55`, borderRadius:6, padding:'1px 7px' }}>✅ Deja citit în Documentație{sc.bucati ? ` (spart în ${sc.bucati} bucăți)` : ''}</span>}
                 {sc?.citit ? (
-                  <button style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5, color:G.dim }} disabled={ph || !!busy} onClick={() => citeste(d)}
-                    title="E deja citit în Documentație — recitește-l aici doar dacă vrei rezumatul de document nou">{busy === d.id ? (progres || '⏳ citesc…') : 'recitește'}</button>
+                  <button style={{ ...S.btnS, padding:'2px 8px', fontSize:10.5, color:G.dim }} disabled={ph || !!busy || !!lotB} onClick={() => citeste(d)}
+                    title={lotB ? mesajLot(lotB) : 'E deja citit în Documentație — recitește-l aici doar dacă vrei rezumatul de document nou'}>{busy === d.id ? (progres || '⏳ citesc…') : 'recitește'}</button>
                 ) :
                 <button style={{ ...S.btnS, padding:'3px 9px', fontSize:11.5, color: ph ? G.dim : G.ofertare, borderColor: ph ? G.border2 : G.ofertare + '66', opacity: ph ? .5 : 1, cursor: ph || busy ? 'default' : 'pointer' }}
-                  disabled={ph || ARHIVA_DOC_RE.test(d.nume_original || '') || !!busy} onClick={() => citeste(d)} title={ph ? 'Fișierul nu e în platformă — urcă-l întâi din Documente' : ARHIVA_DOC_RE.test(d.nume_original || '') ? MESAJ_ARHIVA : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): tip, rezumat, modificări, întrebări răspunse'}>
+                  disabled={ph || ARHIVA_DOC_RE.test(d.nume_original || '') || !!busy || !!lotB} onClick={() => citeste(d)} title={ph ? 'Fișierul nu e în platformă — urcă-l întâi din Documente' : lotB ? mesajLot(lotB) : ARHIVA_DOC_RE.test(d.nume_original || '') ? MESAJ_ARHIVA : c ? 'Recitește documentul cu AI (Sonnet)' : 'Citește documentul cu AI (Sonnet): tip, rezumat, modificări, întrebări răspunse'}>
                   {busy === d.id ? (progres || '⏳ citesc…') : c ? '🤖 recitește' : '🤖 Citește cu AI'}
                 </button>}
+                {lotB && !ph && <span style={{ fontSize:11, color:G.orange }}>{mesajLot(lotB)}</span>}
                 {c?.citit_la && <span style={{ fontSize:11, color:G.green }}>✓ citit {fmtDataScurt(c.citit_la)}</span>}
                 {c?.termen_nou && <span style={{ fontSize:11.5, fontWeight:800, color:G.red }}>⏰ termen nou: {fmtZi(c.termen_nou)}</span>}
               </div>
@@ -3688,6 +3696,7 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
     ['formulare', '🗂 Formulare de depus'],
     ...(accesPF.poateCiti || accesPF.eroareAcces ? [['pf', '💰 Propunere financiară']] : []),
     ['documente', `📥 Documentație (${l.nr_documente ?? 0})`],
+    ['loturi', '🧩 Loturi'],
     ['clarificari', `❓ Clarificări (${sx.clarificari || 0})`],
     ['garantie', `🛡 Garanție${indG.tab}`],
     ['detalii', '📝 Detalii & decizie'],
@@ -3758,7 +3767,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             {tab === 'pf' && <OfertarePF key={l.id} licitatieId={l.id} acces={accesPF} />}
             {tab === 'formulare' && <FormulareRegistruSection licitatie={l} profile={profile} showToast={showToast} />}
             {tab === 'documente' && <><OfertareTipareDeclansate licitatie={l} showToast={showToast} onCreat={() => setTab('clarificari')} /><DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
-              intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} /></>}
+              intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} onGoLoturi={() => setTab('loturi')} /></>}
+            {tab === 'loturi' && <OfertareLoturi licitatieId={l.id} onSchimbare={onChanged} />}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}

@@ -19,6 +19,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { normalizeazaSpecOrganigrama } from './core.ts'
 import { termenRO } from '../_shared/oraRO.ts'
+import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -101,17 +102,23 @@ Deno.serve(async (req: Request) => {
 
   // (b1) cerințele active care vorbesc de echipă / organigramă
   const { data: cerAll, error: eC } = await db.from('ofertare_cerinte')
-    .select('id, tip, sursa_sectiune, text_cerinta').eq('licitatie_id', licId).is('inlocuita_de', null).is('duplicat_al', null)
+    .select('id, tip, sursa_sectiune, text_cerinta, sursa_document_id, lot, lot_domeniu, lot_nr').eq('licitatie_id', licId).is('inlocuita_de', null).is('duplicat_al', null)
   if (eC) return json({ error: 'cerințe: ' + eC.message })
-  const cerinte = (cerAll || []).filter((c: any) => RE_CERINTE.test(faraDiac(c.text_cerinta)))
+  // poarta pe loturi (20261024b, review Jakarinos P1 #1): cerințele din documente neeligibile / loturi la care nu
+  // participăm nu intră în prompt; licitația fără participare = oprire înainte de cost
+  const fc = await filtreazaDerivate(db, licId, cerAll || [])
+  if (!fc.ok) return json({ error: mesajLot(fc.motiv), motiv_lot: fc.motiv })
+  const cerinte = fc.pastrate.filter((c: any) => RE_CERINTE.test(faraDiac(c.text_cerinta)))
     .map((c: any) => ({ id: c.id, tip: c.tip, sectiune: c.sursa_sectiune, text: String(c.text_cerinta || '').slice(0, 1500) }))
 
   // (b2) ferestre din textul integral al documentelor
   const { data: docs, error: eD } = await db.from('ofertare_documente_atribuire')
     .select('id, nume_original, text_extras').eq('licitatie_id', licId).not('text_extras', 'is', null)
   if (eD) return json({ error: 'documente: ' + eD.message })
+  const fd = await eligibilitateLicitatie(db, licId)
+  if (!fd.ok) return json({ error: mesajLot('eroare_poarta'), motiv_lot: 'eroare_poarta' })
   let ferestre: Fereastra[] = []
-  for (const d of docs || []) {
+  for (const d of (docs || []).filter((x: any) => esteEligibil(fd.harta, x.id))) {
     if (!d.text_extras || typeof d.text_extras !== 'string') continue
     ferestre.push(...ferestreDin(d.text_extras, d.nume_original || `doc ${d.id}`, d.id))
     if (ferestre.length >= MAX_FERESTRE) break

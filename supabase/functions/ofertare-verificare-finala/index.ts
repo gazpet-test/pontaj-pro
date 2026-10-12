@@ -18,6 +18,7 @@
 // "nimic in neregula in CE AM EXTRAS", nu "depunere sigura". De corectat separat.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { termenRO } from '../_shared/oraRO.ts'
+import { eligibilitateLicitatie, esteEligibil, filtreazaDerivate, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type, x-radar-secret' }
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } })
@@ -71,9 +72,19 @@ Deno.serve(async (req) => {
 
   // --- Trecerea A: constructor (determinist) ---
   const { data: cerinte } = await sb.from('ofertare_cerinte')
-    .select('id, tip, lot, text_cerinta, document_probant, cand_se_prezinta, confirmata_de, ofertare_acoperire(id, mod, status, doc_firma_id)')
+    .select('id, tip, lot, text_cerinta, document_probant, cand_se_prezinta, confirmata_de, sursa_document_id, lot_domeniu, lot_nr, ofertare_acoperire(id, mod, status, doc_firma_id)')
     .eq('licitatie_id', licId).is('inlocuita_de', null)
-  const toate = cerinte || []
+  // Poarta pe loturi (20261024b, review Jakarinos P1 #6) — ÎNAINTE de trecerile B și C (plătite): doar cerințele din
+  // documente eligibile ACUM și de pe loturi la care participăm intră în verificare. Fără participare / poarta picată = stop.
+  // Excluderile NU dispar: intră în raportul A (număr + motive), iar cele NECLARE (lot necunoscut, document netriat /
+  // neverificabil — nu „în afara loturilor") nu lasă verdictul verde (retrogradat la galben, determinist, ca la formulare).
+  const fl = await filtreazaDerivate(sb, licId, cerinte || [])
+  if (!fl.ok) return json({ ok: false, error: mesajLot(fl.motiv), motiv_lot: fl.motiv })
+  const motiveExcluse = fl.excluse.reduce((a: Record<string, number>, e: any) => { a[e.motiv] = (a[e.motiv] || 0) + 1; return a }, {})
+  if ((cerinte || []).length && !fl.pastrate.length)
+    return json({ ok: false, error: `nicio cerință eligibilă pe loturi (${fl.excluse.length} excluse) — nu s-a chemat AI-ul`, excluse_lot: fl.excluse.length, excluse_motive: motiveExcluse })
+  const neclare = fl.excluse.filter((e: any) => e.motiv !== 'lot_in_afara' && e.motiv !== 'document_in_afara_loturilor')
+  const toate: any[] = fl.pastrate
   const neconfirmate = toate.filter((c: any) => !c.confirmata_de)
   const neacoperite = toate.filter((c: any) => !(c.ofertare_acoperire || []).some((a: { status: string }) => a.status === 'acoperit' || a.status === 'acoperit_partener'))
   const docIds = [...new Set(toate.flatMap((c: any) => (c.ofertare_acoperire || []).map((a: { doc_firma_id: number | null }) => a.doc_firma_id)).filter(Boolean))]
@@ -83,9 +94,17 @@ Deno.serve(async (req) => {
     doveziRosii = dv || []
   }
   // E3 (25.09.2026): formularele aplicabile din registru care NU sunt semnate SAU nu sunt în pachet = BLOCANTE.
-  const { data: formulare } = await sb.from('ofertare_formulare_registru')
-    .select('cod, denumire, stare_pregatire, stare_depunere').eq('licitatie_id', licId).eq('aplicabil', true)
-  const formulareBlocante = (formulare || []).filter((f: any) => f.stare_pregatire !== 'semnat' || f.stare_depunere === 'nu')
+  const { data: formulareBD } = await sb.from('ofertare_formulare_registru')
+    .select('cod, denumire, stare_pregatire, stare_depunere, document_sursa_id').eq('licitatie_id', licId).eq('aplicabil', true)
+  // loturi (review Jakarinos r2 P1 #5): formularul extras dintr-un document blocat acum nu intră în A/C și nu retrogradează
+  // verdictul; „în afara loturilor” = exclus cert, orice alt motiv = neclar (ține verdele la galben, ca la cerințe)
+  const fF = await eligibilitateLicitatie(sb, licId)
+  if (!fF.ok) return json({ ok: false, error: mesajLot('eroare_poarta'), motiv_lot: 'eroare_poarta' })
+  const motivForm = (f: any) => f.document_sursa_id == null || esteEligibil(fF.harta, f.document_sursa_id) ? null : (fF.harta.get(Number(f.document_sursa_id))?.motiv || 'neeligibil')
+  const formulare = (formulareBD || []).filter((f: any) => !motivForm(f))
+  const formulareExcluse = (formulareBD || []).filter((f: any) => motivForm(f))
+  const formulareNeclare = formulareExcluse.filter((f: any) => motivForm(f) !== 'in_afara_loturilor')
+  const formulareBlocante = formulare.filter((f: any) => f.stare_pregatire !== 'semnat' || f.stare_depunere === 'nu')
   const termen = lic.termen_depunere ? new Date(lic.termen_depunere) : null
   const zileRamase = termen ? Math.floor((termen.getTime() - Date.now()) / 86400000) : null
   const trecereaA = {
@@ -95,6 +114,9 @@ Deno.serve(async (req) => {
     formulare_registru: (formulare || []).length,
     formulare_blocante: formulareBlocante.map((f: any) => `${f.cod ? f.cod + ' — ' : ''}${f.denumire} (${f.stare_pregatire} / ${f.stare_depunere})`),
     exemple_neacoperite: neacoperite.slice(0, 10).map((c: any) => String(c.text_cerinta || '').slice(0, 160)),
+    // fără textul lor (nu pleacă la AI), doar câte și de ce: „în afara loturilor” e normal, restul e de triat de om
+    cerinte_excluse_pe_loturi: fl.excluse.length, motive_excludere: motiveExcluse, excluse_neclare_de_triat: neclare.length,
+    formulare_excluse_pe_loturi: formulareExcluse.length, formulare_excluse_neclare: formulareNeclare.length,
   }
 
   const compact = toate.map((c: any) => ({
@@ -132,6 +154,11 @@ Deno.serve(async (req) => {
   if (verdict === 'verde' && formulareBlocante.length) {
     verdict = 'galben'
     ;(raport as any).blocaj_formulare = `Verde retrogradat la galben: ${formulareBlocante.length} formulare aplicabile nesemnate sau nepuse în pachet.`
+  }
+  // loturi: cerințele excluse pe motiv NECLAR n-au fost verificate deloc — verdele nu le poate acoperi
+  if (verdict === 'verde' && (neclare.length || formulareNeclare.length)) {
+    verdict = 'galben'
+    ;(raport as any).blocaj_loturi = `Verde retrogradat la galben: ${neclare.length} cerințe și ${formulareNeclare.length} formulare excluse din verificare pe loturi cu motiv neclar (${JSON.stringify(motiveExcluse)}) — triază documentele / lotul cerințelor și reia verificarea.`
   }
   const { data: rand, error: eIns } = await sb.from('ofertare_verificari').insert({
     licitatie_id: licId, verdict: ['verde','galben','rosu'].includes(verdict || '') ? verdict : null,

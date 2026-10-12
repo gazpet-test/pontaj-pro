@@ -17,6 +17,8 @@
 // intoarce continua=true; apelantul reia pana termina.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { poateCheltui } from './poarta.ts';
+// LOTURI (20261024b): poarta unică pe document (fail-closed) — aceeași pentru edge, worker NAS (plansa.ts) și importul CLI
+import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts';
 // R5 (Copilot 26.09.2026, condiția 1): CÂND o aprobare nu mai e valabilă — copie identică a src/ofertareCantitatiInvalidare.js
 import { aceeasiValoare, aplicaRegulaAprobare, citestePaginat, DE_REVERIFICAT_CITIRE, descrieDiferenta, fmtRo, pastreazaInvalidarea, referinteDinIstoric, schimbariRelevante } from './invalidare.js';
 // R5 sarcina 2 (Copilot, închiderea R4/R5, condiția 2a): conflictele transferului persistate pe document (analiza.transfer_cantitati)
@@ -2021,6 +2023,12 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       (prezent('taiat_la') && (asteptat.taiat_la ?? null) !== (plansa?.taiat_la ?? null)) ||
       (prezent('cale_felii') && (asteptat.cale_felii ?? null) !== (plansa?.cale_felii ?? null)))
     return json({ error: 'Documentul nu mai corespunde jobului — anulat', cost_usd: 0 }, 409);
+  // LOTURI: după poarta pe cheltuială și identitatea jobului, ÎNAINTE de Storage / rezervări / AI (citire și doar_lipire).
+  // Neeligibil sau RPC căzut → 200 {ok:false, blocat_lot} fără cost (eroare de business, nu throw; documentul nu se atinge).
+  {
+    const el = await documentEligibil(supa, docId);
+    if (!el.eligibil) return json({ ok: false, blocat_lot: true, motiv: el.motiv, error: mesajLot(el.motiv), cost_usd: 0 });
+  }
   if (!plansa?.cale_felii) return json({ error: 'plansa nu e taiata in felii — ruleaza intai /api/plansa-felii' }, 400);
   if (plansa.citibila === false) return json({ error: 'plansa a fost marcata drept necitibila', motiv: plansa.motiv }, 400);
 

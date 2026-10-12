@@ -10,7 +10,7 @@ export function fakeSupa(tabele: Tabele, opt: { radarSecret?: string } = {}) {
     let rows = [...(tabele[t] || [])]
     let scriere = false
     const b: any = {
-      select: () => b, order: () => b, limit: () => b, like: () => b, not: () => b,
+      select: () => b, order: () => b, limit: () => b, range: () => b, like: () => b, not: () => b,
       eq: (c: string, v: unknown) => { rows = rows.filter((r) => String(r[c]) === String(v)); return b },
       in: (c: string, vs: unknown[]) => { rows = rows.filter((r) => vs.includes(r[c])); return b },
       insert: () => { scriere = true; n.scrieri++; return b },

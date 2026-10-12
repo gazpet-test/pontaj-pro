@@ -17,6 +17,11 @@
 // partajat intre 14 functii, e exact greseala care s-ar face la prima eroare de cron.
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
+// 12.10.2026 (MVP loturi, 20261024b): poarta pe document la creeaza_set (documentele neeligibile ies în `excluse`) și la
+// inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
+import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
+import { eligibilaPeLot, parseLot } from '../_shared/lot.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet } from './loturi.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -53,19 +58,9 @@ async function hash12(s: string): Promise<string> {
 }
 const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase()
 
-// Loturile sunt text liber in baza: "1", "1,2", "1,2,3", "2", "3", "toate". Se compara ca MULTIMI de
-// tokeni exacti, niciodata prin substring — altfel lotul "1" ar prinde si "1,2,3" pe cale gresita.
-function loturi(s: string | null): Set<string> {
-  return new Set(String(s || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean))
-}
-function eligibilaPeLot(cerintaLot: string | null, setLot: string | null): boolean {
-  if (!setLot) return true                       // set fara lot declarat: tot registrul
-  const c = loturi(cerintaLot)
-  if (!c.size || c.has('toate')) return true     // cerinta comuna: intra oricum
-  const s = loturi(setLot)
-  for (const x of s) if (c.has(x)) return true
-  return false
-}
+// Loturile se compara ca MULTIMI de intregi (parseLot, _shared/lot.ts), niciodata prin substring — altfel lotul "1" ar
+// prinde si "12". Cerinta cu lot necunoscut NU mai e „comuna” implicit: intra marcata, operatiile pe ea merg la revizuire.
+// Logica e in loturi.ts (testata in loturi_test.ts).
 
 async function cheamaAI(key: string, prompt: string, maxTok: number) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
@@ -128,6 +123,10 @@ Deno.serve(async (req: Request) => {
       .select('id, licitatie_id, nume_original, tip, status_procesare, text_extras').in('id', ids)
     if (eDoc) return json({ error: 'citire documente: ' + eDoc.message })
 
+    // Poarta pe loturi: o singură interogare pentru toată licitația; căderea ei = nu se creează nimic (fail-closed).
+    const elig = await eligibilitateLicitatie(db, licId)
+    if (!elig.ok) return json({ error: mesajLot('eroare_poarta') + ' — setul nu s-a creat', blocat_lot: true })
+
     const bune: any[] = [], excluse: any[] = []
     for (const id of ids) {
       const d = (docs || []).find((x: any) => x.id === id)
@@ -135,6 +134,10 @@ Deno.serve(async (req: Request) => {
       // Apartenenta la licitatie se verifica aici, nu se presupune: altfel textul unui document din
       // alta licitatie ar ajunge in promptul acesteia.
       if (d.licitatie_id !== licId) { excluse.push({ id, nume: d.nume_original, motiv: 'document din alta licitatie' }); continue }
+      if (!esteEligibil(elig.harta, id)) {
+        const m = elig.harta.get(Number(id))?.motiv || 'document_inexistent'
+        excluse.push({ id, nume: d.nume_original, motiv: mesajLot(m), motiv_lot: m }); continue
+      }
       if (!['procesat', 'partial'].includes(d.status_procesare)) {
         excluse.push({ id, nume: d.nume_original, motiv: `neprocesat (${d.status_procesare})` }); continue
       }
@@ -222,12 +225,26 @@ Deno.serve(async (req: Request) => {
         dispozitii: (prop.dispozitii || []).length })
     }
 
+    // Poarta pe loturi ÎNAINTE de AI: trierea s-a putut schimba după crearea setului. Fără excepții în cod.
+    const el = await documentEligibil(db, Number(urmator.document_id))
+    if (!el.eligibil) return json({ ok: false, blocat_lot: true, motiv: el.motiv, document_id: urmator.document_id,
+      error: `${mesajLot(el.motiv)} (documentul ${urmator.document_id}) — nu s-a citit nimic` })
+
     const { data: doc } = await db.from('ofertare_documente_atribuire')
       .select('id, nume_original, text_extras').eq('id', urmator.document_id).maybeSingle()
     if (!doc?.text_extras) return json({ error: `documentul ${urmator.document_id} nu are text extras` })
 
     const numeScurt = (doc.nume_original || '').split('/').pop()
-    const coada = String(prop.coada_deschisa || '')
+    // Coada deschisă (review Jakarinos r4 P1 #2) e text din documentul PRECEDENT: intră doar dacă documentul ei (coada_doc_id)
+    // e eligibil ACUM. Coadă fără proveniență (scrisă înainte de loturi) sau din document blocat = omisă, nu retransmisă.
+    let coada = String(prop.coada_deschisa || ''), coadaOmisa: string | null = null
+    if (coada) {
+      if (prop.coada_doc_id == null) { coada = ''; coadaOmisa = 'fara_provenienta' }
+      else {
+        const ec = await documentEligibil(db, Number(prop.coada_doc_id))
+        if (!ec.eligibil) { coada = ''; coadaOmisa = ec.motiv }
+      }
+    }
     const prompt = PROMPT_INVENTAR + '\n\n'
       + (coada ? 'COADA DESCHISA DE LA FRAGMENTUL PRECEDENT:\n' + coada + '\n\n' : '')
       + `DOCUMENT: ${numeScurt}\n<document_neincrezator>\n${doc.text_extras}\n</document_neincrezator>`
@@ -272,6 +289,7 @@ Deno.serve(async (req: Request) => {
       dispozitii: [...vechi, ...adaugate],
       documente_citite: [...citite, doc.id],
       coada_deschisa: j.coada_deschisa || null,
+      coada_doc_id: j.coada_deschisa ? doc.id : null,   // proveniența cozii (r4 P1 #2)
       acoperire: [...(prop.acoperire || []), {
         doc_id: doc.id, nume: numeScurt, caractere: (doc.text_extras || '').length,
         // Taiat la plafon = fragmentul NU a fost parcurs integral, orice ar zice modelul despre el.
@@ -294,7 +312,7 @@ Deno.serve(async (req: Request) => {
       // Taiat la plafon = fragmentul NU a fost parcurs integral, orice ar zice modelul despre el.
       acoperit_tot: j.acoperit_tot !== false && !taiat,
       partial: taiat || undefined,
-      coada_deschisa: !!propNou.coada_deschisa,
+      coada_deschisa: !!propNou.coada_deschisa, coada_omisa_lot: coadaOmisa || undefined,
       total: { dispozitii: t.length,
         efect_posibil: t.filter((x: any) => x.tip === 'efect_posibil').length,
         confirmari: t.filter((x: any) => x.tip === 'confirmare').length,
@@ -328,18 +346,67 @@ Deno.serve(async (req: Request) => {
     }
 
     const facute = new Set<string>((prop.dispozitii_comparate || []) as string[])
-    const deFacut = toate.filter(x => x.tip === 'efect_posibil' && !facute.has(x.disp_id))
-    if (!deFacut.length) {
+    const deFacutToate = toate.filter(x => x.tip === 'efect_posibil' && !facute.has(x.disp_id))
+    if (!deFacutToate.length) {
       return json({ ok: true, continua: false, mesaj: 'toate dispozitiile cu efect posibil au fost comparate',
         operatii: (prop.operatii || []).length })
     }
+    // Loturi (20261024b, review Jakarinos P1 #3): la FIECARE reluare se reverifică documentele din care vin dispozițiile —
+    // trierea / bifele s-au putut schimba după inventar. Cele din documente blocate nu pleacă la AI și nu se marchează
+    // comparate (rămân pentru când documentul redevine eligibil). Poarta căzută = oprire.
+    const fd = await filtreazaDocumente(db, deFacutToate.map((x: any) => x.doc_id))
+    if (!fd.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a comparat nimic', blocat_lot: true })
+    // + lotul PROPRIU al dispoziției (review Jakarinos r2 P1 #4): un document comun poate avea dispoziții doar pe alt lot.
+    // Fără loturi numite = dispoziție generală (decide documentul). Numite: trebuie să intersecteze loturile la care
+    // participăm (pe are_loturi) și lotul setului, dacă e declarat; neînțelese = neclare, excluse și raportate separat.
+    const part = await participareLicitatie(db, set.licitatie_id)
+    if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: part.motiv })
+    // Selecția EFECTIVĂ (review Jakarinos r3 P1 #3): o singură mulțime = loturile setului ∩ loturile la care participăm
+    // (pe are_loturi; setul fără lot = toată participarea). Intersecția goală (set rămas pe un lot debifat) = oprire.
+    // Aceeași selecție decide dispozițiile, registrul și lotul operațiilor — nu două intersecții separate.
+    const selSet = selectieSet(set.lot)
+    if (!selSet.ok) return json({ error: selSet.eroare })
+    const selEf: number[] | null = part.stare === 'are_loturi'
+      ? (selSet.selectie === null ? part.participam : selSet.selectie.filter((n) => part.participam.includes(n)))
+      : selSet.selectie
+    if (selEf !== null && !selEf.length) return json({ ok: false, blocat_lot: true, continua: false,
+      error: `Blocat pe loturi: lotul setului (${set.lot}) nu e printre loturile la care participăm (${part.participam.join(', ')}) — nu s-a comparat nimic` })
+    const lotEf = selEf === null ? null : selEf.join(',')
+    // Lotul operației (review Jakarinos r4 P1 #1): dispoziția cu loturi numite → DOAR loturile ei din selecția efectivă
+    // (nu toată selecția: participăm 1+2, dispoziția e pe 2 → operația e pe 2); dispoziția generală / „toate” → selecția
+    // efectivă; fără selecție (fara_loturi, set fără lot) → comportamentul vechi.
+    const lotOperatieEf = (loturiDisp: unknown) => lotOperatieSelectie(selEf, set.lot, loturiDisp)
+    const lotDisp = (x: any): 'ok' | 'in_afara' | 'neclar' => {
+      const brut = (Array.isArray(x.loturi) ? x.loturi : []).map(String).filter((s: string) => s.trim())
+      if (!brut.length) return 'ok'
+      const l = parseLot(brut.join(','))
+      if (l.domeniu === 'toate') return 'ok'
+      if (l.domeniu !== 'lista') return 'neclar'
+      if (selEf !== null && !eligibilaPeLot(l, selEf)) return 'in_afara'
+      return 'ok'
+    }
+    const peLotDisp = deFacutToate.filter((x: any) => fd.eligibile.has(Number(x.doc_id)))
+    const deFacut = peLotDisp.filter((x: any) => lotDisp(x) === 'ok')
+    const dispLotInAfara = peLotDisp.filter((x: any) => lotDisp(x) === 'in_afara').length
+    const dispLotNeclar = peLotDisp.filter((x: any) => lotDisp(x) === 'neclar').length
+    const dispBlocate = deFacutToate.length - deFacut.length
+    if (!deFacut.length) return json({ ok: false, blocat_lot: true, continua: false, dispozitii_blocate_lot: dispBlocate,
+      dispozitii_lot_in_afara: dispLotInAfara || undefined, dispozitii_lot_neclar: dispLotNeclar || undefined,
+      error: `Blocat pe loturi: toate cele ${dispBlocate} dispoziții rămase sunt din documente blocate (${dispBlocate - dispLotInAfara - dispLotNeclar}), pe loturi la care nu participăm (${dispLotInAfara}) sau cu lot neclar (${dispLotNeclar})` })
     const lot = deFacut.slice(0, 20)
 
-    const { data: cer, error: eC } = await db.from('ofertare_cerinte')
-      .select('id, tip, lot, sursa_sectiune, sursa_document_id, text_cerinta, document_probant, cand_se_prezinta')
+    const { data: cerBD, error: eC } = await db.from('ofertare_cerinte')
+      .select('id, tip, lot, lot_domeniu, lot_nr, sursa_sectiune, sursa_document_id, text_cerinta, document_probant, cand_se_prezinta')
       .eq('licitatie_id', set.licitatie_id).is('inlocuita_de', null).is('duplicat_al', null).order('id')
     if (eC) return json({ error: 'citire registru: ' + eC.message })
-    const eligibile = (cer || []).filter((c: any) => eligibilaPeLot(c.lot, set.lot))
+    // registrul din prompt: doar cerințe cu document-sursă eligibil acum și pe loturile la care participăm
+    const fc = await filtreazaDerivate(db, set.licitatie_id, (cerBD || []) as any[])
+    if (!fc.ok) return json({ error: mesajLot(fc.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: fc.motiv })
+    const cer = fc.pastrate
+    const filtru = filtreazaRegistru((cer || []) as any[], lotEf)
+    if (!filtru.ok) return json({ error: filtru.eroare })
+    const eligibile = filtru.eligibile
+    const lotNecunoscut = filtru.lotNecunoscut
     if (!eligibile.length) return json({ error: 'registrul nu are cerinte eligibile pentru lotul setului' })
 
     // Cerintele extrase CHIAR din documentele acestui set se marcheaza cu ⟲: altfel modelul isi
@@ -347,12 +414,12 @@ Deno.serve(async (req: Request) => {
     const { data: docSet } = await db.from('ofertare_raspuns_set_doc').select('document_id').eq('set_id', setId)
     const dinSet = new Set((docSet || []).map((x: any) => x.document_id))
     const registru = eligibile.map((c: any) =>
-      `#${c.id} [${c.tip}${c.lot ? ' · lot ' + c.lot : ''}${dinSet.has(c.sursa_document_id) ? ' · ⟲ din acest raspuns' : ''}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}`).join('\n')
+      `#${c.id} [${c.tip}${c.lot ? ' · lot ' + c.lot : ''}${lotNecunoscut.has(c.id) ? ' · lot neclar — de verificat' : ''}${dinSet.has(c.sursa_document_id) ? ' · ⟲ din acest raspuns' : ''}${c.sursa_sectiune ? ' · ' + c.sursa_sectiune : ''}] ${c.text_cerinta}`).join('\n')
     const disp = lot.map((x: any) =>
       `--- dispozitia ${x.disp_id}${x.nr ? ' (nr. ' + x.nr + ' în document)' : ''} (document ${x.doc_nume}) ---\nREZUMAT: ${x.rezumat}\nCITAT: ${x.citat}${x.loturi?.length ? '\nLOTURI: ' + x.loturi.join(', ') : ''}`).join('\n\n')
 
     const prompt = PROMPT_COMPARA
-      + `\n\nLOTUL SETULUI: ${set.lot || '(nedeclarat — tot registrul)'}`
+      + `\n\nLOTUL SETULUI: ${lotEf || '(nedeclarat — tot registrul)'}`
       + `\n\nDISPOZITII DE ANALIZAT:\n<document_neincrezator>\n${disp}\n</document_neincrezator>`
       + `\n\nREGISTRUL DE CERINTE ELIGIBILE (${eligibile.length} din ${(cer || []).length} active):\n${registru}`
       // Reamintirea sta DUPA blocul neincrezator: ultimul cuvant din prompt e al nostru, nu al PDF-ului.
@@ -391,6 +458,8 @@ Deno.serve(async (req: Request) => {
       // dupa ce omul a bifat-o degeaba.
       const textOp = String(o.text_nou || o.text_cerinta || '').trim()
       if (fel !== 'anuleaza' && !textOp) { arunca('operatie fara text'); continue }
+      const lotOp = lotOperatieEf(sursa?.loturi)
+      const peLotNeclar = cid !== null && lotNecunoscut.has(cid)
       opNoi.push({
         // op_id il face SERVERUL, nu modelul: hash din set + dispozitia-sursa + fel + tinta.
         op_id: await hash12(`${setId}|${sursa?.disp_id || o.disp_nr}|${fel}|${cid ?? norm(o.citat)}`),
@@ -404,7 +473,8 @@ Deno.serve(async (req: Request) => {
         cand_se_prezinta: ['duae', 'depunere', 'primul_loc'].includes(o.cand_se_prezinta) ? o.cand_se_prezinta : null,
         // Audit R03: lotul operației vine din DISPOZIȚIA-sursă (analiza citește „pentru Lot 2"), nu doar din
         // set — UI-ul creează intenționat setul fără lot, deci set.lot era mereu null și lotul se pierdea.
-        lot: set.lot || (Array.isArray(sursa?.loturi) && sursa.loturi.length ? sursa.loturi.join(',') : null),
+        // 12.10: forma canonică („2”, „1,3”) prin parseLot; lot_domeniu/lot_nr = informativ (RPC-ul citește doar `lot`).
+        lot: lotOp.lot, lot_domeniu: lotOp.lot_domeniu, lot_nr: lotOp.lot_nr,
         // Sectiunea fina: „titlul setului · solicitarea 7". RPC-ul o foloseste daca exista, altfel
         // pune titlul setului — asa nu se mai pierde UNDE anume in raspuns scrie lucrul asta.
         sursa_sectiune: sursa?.nr ? `${set.titlu} · solicitarea ${sursa.nr}` : null,
@@ -413,7 +483,9 @@ Deno.serve(async (req: Request) => {
         motiv: String(o.motiv || '').slice(0, 300),
         incredere: ['ridicata', 'medie', 'scazuta'].includes(o.incredere) ? o.incredere : 'scazuta',
         // fără dispoziție-sursă identificată unic, proveniența nu e sigură → la om
-        necesita_revizuire: o.necesita_revizuire === true || !sursa,
+        // ... și operația pe o cerință cu lot necunoscut, la un set cu lot (fail-closed: nu se presupune „toate”)
+        necesita_revizuire: o.necesita_revizuire === true || !sursa || peLotNeclar,
+        lot_de_verificat: peLotNeclar || undefined,
         disp_id: sursa?.disp_id || null,
       })
     }
@@ -500,7 +572,11 @@ Deno.serve(async (req: Request) => {
         neclare_inventar: toate.filter(x => x.tip === 'neclar').length,
         anexe: toate.filter(x => x.tip === 'anexa').length },
       cerinte_eligibile: eligibile.length, cerinte_active: (cer || []).length,
-      continua: raman > 0, cost_usd: Number(cost.toFixed(4)),
+      // cerințele cu lot necunoscut intrate marcate (doar la set cu lot) + cele excluse pe lot
+      cerinte_lot_necunoscut: lotNecunoscut.size ? [...lotNecunoscut] : undefined, cerinte_excluse_lot: filtru.excluse,
+      // dispozițiile din documente blocate pe loturi rămân în `ramase` (setul nu e complet), dar nu țin bucla pornită
+      continua: raman - dispBlocate > 0, dispozitii_blocate_lot: dispBlocate || undefined,
+      dispozitii_lot_in_afara: dispLotInAfara || undefined, dispozitii_lot_neclar: dispLotNeclar || undefined, cost_usd: Number(cost.toFixed(4)),
     })
   }
 

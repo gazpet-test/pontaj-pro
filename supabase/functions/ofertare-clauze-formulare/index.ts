@@ -28,6 +28,7 @@
 // Erori de business → return json({error}), nu throw.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { documentEligibil, filtreazaDocumente, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -155,6 +156,12 @@ async function completare(db: any, licId: number, formId: number, KEY: string): 
   let docs: any[] = []
   if (f.document_sursa_id) { const { data } = await db.from('ofertare_documente_atribuire').select('id, nume_original, text_extras').eq('id', f.document_sursa_id); docs = data || [] }
   if (!docs.length) { const { data } = await db.from('ofertare_documente_atribuire').select('id, nume_original, text_extras').eq('licitatie_id', licId).eq('tip', 'formular'); docs = data || [] }
+  // poarta pe loturi (20261024b, review Jakarinos P1 #1): șablonul se ia DOAR din documente eligibile acum
+  const fe = await filtreazaDocumente(db, docs.map((d: any) => d.id))
+  if (!fe.ok) return json({ error: mesajLot('eroare_poarta') })
+  const blocate = docs.filter((d: any) => !fe.eligibile.has(Number(d.id)))
+  docs = docs.filter((d: any) => fe.eligibile.has(Number(d.id)))
+  if (!docs.length && blocate.length) return json({ error: mesajLot(fe.blocate.get(Number(blocate[0].id)) || 'de_triat') + ` („${blocate[0].nume_original}”)` })
   let sablon = '', sursa = ''
   for (const d of docs) {
     const t = typeof d.text_extras === 'string' ? d.text_extras : ''
@@ -218,7 +225,8 @@ Deno.serve(async (req: Request) => {
     .select('id, licitatie_id, nume_original, tip, text_extras').eq('id', docId).maybeSingle()
   if (eD) return json({ error: 'document: ' + eD.message })
   if (!doc || doc.licitatie_id !== licId) return json({ error: 'documentul nu aparține licitației' }, 404)
-  const text = typeof doc.text_extras === 'string' ? doc.text_extras : ''
+  { const el = await documentEligibil(db, docId); if (!el.eligibil) return json({ error: mesajLot(el.motiv), motiv_lot: el.motiv }) }   // loturi (20261024b)
+  const text =typeof doc.text_extras === 'string' ? doc.text_extras : ''
   if (text.trim().length < 200) return json({ error: `„${doc.nume_original}" nu are încă text extras — citește întâi documentul (Documentație).` })
 
   const { text: txtModel, ferestre } = textPentruModel(text)

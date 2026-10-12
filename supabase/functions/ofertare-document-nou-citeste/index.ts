@@ -25,6 +25,7 @@ import { combinaFelii, imparteCuGranite, parteDinAi, type Parte, rezultatFelii, 
 import { type Lucru, lucruPentru, scrieLucru, urmatoareaFelie } from './lucru.ts'
 import { alegeSursa, amprentaText, eTimeout, MESAJ_CITIT_INTRE_TIMP, MESAJ_FISIER_NEIDENTIFICAT, MESAJ_POARTA_PDF, MESAJ_SURSA_SCHIMBATA, mesajTimeout, notaSursa, plafoneazaRezultat, poateCitiPdf, provenanta, timpRamas } from './sursa.ts'
 import { aceeasiIdentitate, identitateObiect, shaOcteti, type IdentitateObiect } from './obiect.ts'
+import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-radar-secret', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Content-Type': 'application/json' }
 const MODEL = 'claude-sonnet-5'
@@ -132,6 +133,10 @@ Deno.serve(async (req: Request) => {
   if (!row) return json({ error: 'documentul nu există' }, 404)
   if (!row.fisier_path || String(row.fisier_path).includes('/neincarcat/'))
     return json({ error: 'Documentul nu a putut fi adus automat din SEAP — urcă-l din tab-ul Documente („Urcă fișiere”), apoi citește-l.' })
+  // LOTURI: înaintea poarții pe cheltuială, a descărcării și a AI (text sau PDF). Neeligibil / RPC căzut → 200 blocat_lot,
+  // documentul nu se atinge (citire_noi rămâne cum era).
+  { const el = await documentEligibil(db, id)
+    if (!el.eligibil) return json({ ok: false, blocat_lot: true, motiv: el.motiv, error: mesajLot(el.motiv) }) }
 
   // Răcari 06.10.2026: documentul citit deja pe felii („Procesează”) se citește din TEXT; altfel PDF, cu termen-limită (sursa.ts).
   const sursa = alegeSursa(row)

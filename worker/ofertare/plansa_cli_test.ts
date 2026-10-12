@@ -35,6 +35,8 @@ function fixture(nr = 2, owner = true) {
       return b
     },
     rpc: async (name: string, a: any) => {
+      // loturi (20261024b): poarta pe document — eligibil (nu se numără în n.rpc)
+      if (name === 'fn_ofertare_document_eligibil') return { data: { eligibil: true, motiv: 'fara_loturi', licitatie_id: doc.licitatie_id }, error: null }
       n.rpc.push(name)
       if (name === 'ofertare_plansa_analiza_cas') {
         if (JSON.stringify(doc.analiza) !== JSON.stringify(a.p_analiza_veche)) return { data: false, error: null }

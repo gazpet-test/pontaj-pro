@@ -9,6 +9,7 @@
 // cheia publică putea porni citiri plătite și strica prețurile. Aceeași gaură ca în PR #318.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
+import { caleBlocata, mesajLot } from '../_shared/eligibilLot.ts'   // loturi (20261024b)
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -64,6 +65,8 @@ Deno.serve(async (req: Request) => {
     // INTERDICȚIA 0: înaintea oricărui apel plătit și a oricărei scrieri.
     { const na = await autorizat(req, supabase, of.rfq_id); if (na) return fail(na) }
     if (!of.fisier_path) return fail('Oferta nu are PDF atașat.')
+    // loturi (review Jakarinos r2 P1 #1): o cale care e și a unui document de atribuire blocat nu se citește
+    { const m = await caleBlocata(supabase, String(of.fisier_path)); if (m) return fail(mesajLot(m)) }
 
     const { data: mats } = await supabase.from('ofertare_rfq_materiale').select('id, denumire, um, cantitate, specificatii').eq('rfq_id', of.rfq_id).order('ordine')
     if (!mats?.length) return fail('Cererea de ofertă nu are materiale definite.')

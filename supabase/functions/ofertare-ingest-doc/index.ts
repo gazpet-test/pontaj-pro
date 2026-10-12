@@ -1,3 +1,4 @@
+// v14 (12.10.2026, loturi MVP 20261024b): poarta unică pe loturi înainte de orice cost — neeligibil → {ok:false, blocat_lot}.
 // v13 (30.09.2026, DRAFT, nedeployat): GARDA — fără cale anonimă (secret de serviciu sau utilizator cu acces Ofertare),
 // contor persistent de încercări/descărcări cu blocare, scurtcircuit pe mărime+etag/sha256. Vezi docs/INGEST_GARDA.md.
 // v13 runda 2 (NO-GO Copilot r1): lease + token de încercare (o singură încercare pe document; „in_curs” = fără descărcare);
@@ -28,6 +29,7 @@ import { PDFDocument } from 'https://esm.sh/pdf-lib@1.17.1'
 import { GARDA, identificaApelant, dejaIngeratLaHash, sha256Hex, plasaExactOnce, type Incercare } from '../_shared/gardaIngestLogica.ts'
 import { metaObiect, gardaIncearca, incercareGarda } from '../_shared/gardaIngest.ts'
 import { descarcaCuJurnal } from '../_shared/egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md), fail-open — garda de mai sus rămâne fail-closed
+import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 
 // Punctul de injecție pentru testul handler-ului (garda_test.ts): producția folosește createClient-ul real.
 export const _deps = { createClient: createClient as (url: string, key: string, opt?: any) => any }
@@ -198,6 +200,19 @@ Deno.serve(async (req: Request) => {
     // 'in_lucru', iar coada îl relua la ~6 s la nesfârșit. 'ignorat' nu se mai reia; peste prag → 'ignorat' explicit.
     if (row.status_procesare === 'ignorat') {
       return new Response(JSON.stringify({ ok: true, skip: 'ignorat', continua: false }), { headers: CORS })
+    }
+    // LOTURI (20261024b): poarta unică, ÎNAINTE de Storage / gardă / descărcare / AI. Neeligibil (sau RPC căzut) → fără cost,
+    // fără throw: motivul în `eroare`, statusul rămâne (in_lucru → neprocesat, ca să nu pară că citește); NU 'eroare' (nu e un eșec
+    // al citirii, iar după triere documentul trebuie să poată fi luat din nou). Nu atinge contorul gărzii.
+    {
+      const el = await documentEligibil(supabase, docId)
+      if (!el.eligibil) {
+        const id = docId; docId = null   // fail() nu mai are ce marca
+        const upd: Record<string, unknown> = { eroare: mesajLot(el.motiv) }
+        if (row.status_procesare === 'in_lucru') upd.status_procesare = 'neprocesat'
+        try { await supabase.from('ofertare_documente_atribuire').update(upd).eq('id', id) } catch (_) {}
+        return new Response(JSON.stringify({ ok: false, blocat_lot: true, motiv: el.motiv, error: mesajLot(el.motiv), doc_id: id, continua: false }), { headers: CORS })
+      }
     }
     if (Number(row.size_bytes) > 60 * 1024 * 1024) {
       await supabase.from('ofertare_documente_atribuire').update({ status_procesare: 'ignorat',

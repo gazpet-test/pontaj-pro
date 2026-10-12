@@ -13,6 +13,8 @@ import { Buffer } from 'node:buffer'
 import { cuIncercare, cuTermen, gardaIncearca, incercareGarda, mesajEroare, metaObiect, opritDeGarda, sha256Hex, TERMEN_LOCAL_MS, type Incercare, type MetaObiect } from './garda.ts'   // GARDA (docs/INGEST_GARDA.md)
 import { descarcaCuJurnal } from './egress.ts'   // monitor egress (docs/MONITOR_EGRESS.md) — APLICARE DUPĂ FREEZE
 import { MAX_TEXT, MARCAJ_PREA_MARE, PRAG_MARE, citesteMare, compuneText, decizieCitireMare, esteMare, imparteText, mesajNecitite, trecereBlocata } from './citire_mare.ts'
+// LOTURI (20261024b): poarta unică — logica e DOAR în SQL; helper-ul e fail-closed (RPC căzut = nimic eligibil)
+import { documentEligibil, eligibilitateLicitatie, esteEligibil, mesajLot } from '../../supabase/functions/_shared/eligibilLot.ts'
 
 const env = (k: string, d = '') => Deno.env.get(k) ?? d
 const SUPABASE_URL = env('SUPABASE_URL'), SERVICE_KEY = env('SUPABASE_SERVICE_ROLE_KEY'), ANTHROPIC_KEY = env('ANTHROPIC_API_KEY')
@@ -27,7 +29,8 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 // pauzele dintre reîncercări (ms) — obiect exportat ca testele să le poată pune pe 0.
 // edgeNeclarMs (runda 3): după un răspuns NECLAR al edge-ului (vezi raspunsNeclar) — cel puțin limita de timp a unei
 // invocări edge (400 s pe planul Pro; 504 vine la 150 s, deci invocarea mai poate trăi ≤250 s după el)
-export const PAUZE = { edgeMs: 15_000, edgeNeclarMs: 400_000, reluareMareMs: 30_000, leaseReinnoireMs: 2 * 60_000, marcajTermenMs: 45_000 }
+// poartaLoturiMs: după ce poarta pe loturi n-a răspuns, licitația nu se mai încearcă atâta timp (fără zgomot la fiecare 15 s)
+export const PAUZE = { edgeMs: 15_000, edgeNeclarMs: 400_000, reluareMareMs: 30_000, leaseReinnoireMs: 2 * 60_000, marcajTermenMs: 45_000, poartaLoturiMs: 60_000 }
 // runda 4: punct de injecție pentru teste (citirea pe felii simulată); producția folosește citesteMare din citire_mare.ts
 export const _mare = { citesteMare }
 // runda 4 (Copilot 1): rezultatul unui drum după care ownership-ul documentului e la gardă / la altă încercare — apelantul
@@ -63,7 +66,13 @@ async function textLocal(caleaPdf: string, termen = Infinity): Promise<{ pagini:
   return { pagini: imparteText(r.out, nPag), nPag }
 }
 
-async function antetDinText(text: string): Promise<{ antet: any; tokIn: number; tokOut: number }> {
+async function antetDinText(text: string, poarta?: { supa: Supa; docId: number }): Promise<{ antet: any; tokIn: number; tokOut: number }> {
+  // loturi (review Jakarinos r3 P2 #6): reverificare IMEDIAT înaintea apelului Haiku — între selecție și antet (descărcare +
+  // extragere locală pe PDF mare) lotul se poate debifa. Neeligibil / poarta căzută = fără antet, fără apel AI.
+  if (poarta) {
+    const e = await documentEligibil(poarta.supa as any, poarta.docId)
+    if (!e.eligibil) { log(`#${poarta.docId} antet sărit: ${mesajLot(e.motiv)}`); return { antet: null, tokIn: 0, tokOut: 0 } }
+  }
   const prompt = `Primești începutul unui document dintr-o documentație de atribuire românească (licitație publică). Citește ANTETUL / pagina de gardă și răspunde EXCLUSIV cu JSON, fără altceva:
 {"obiectiv": "...", "beneficiar": "...", "proiectant": "...", "proiect_nr": "...", "revizie": "...", "data": "..."}
 Pune null unde nu apare. "revizie" = revizia/ediția documentului (ex. "Rev. 2", "R01"), nu data.
@@ -146,6 +155,8 @@ export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () 
     } catch (e) { data = { error: 'apel edge: ' + String((e as Error)?.message ?? e) } }
     // GARDA: blocat / backoff / deja citit — răspuns definitiv pentru tura asta, fără reîncercare
     if (data?.garda) return `garda: ${data.garda} — ${data.error ?? ''}`
+    // LOTURI: edge-ul a refuzat pe poartă (documentul a devenit neeligibil între filtrare și apel) — definitiv în tura asta, fără cost
+    if (data?.blocat_lot === true) return `blocat_lot: ${data.motiv ?? '?'} — ${data.error ?? ''}`
     const motiv = motivRaspunsEdge(data, http)
     if (motiv && raspunsNeclar(http)) {
       // NU reîncerc cât invocarea poate trăi: aștept peste limita ei, apoi văd în BD dacă și-a scris felia.
@@ -176,8 +187,8 @@ export async function citesteCuAI(supabase: Supa, docId: number, esteOprire: () 
 }
 
 // R6: drumul „PDF mare” (citire_mare.ts) cu dependențele de producție: antetul cu Haiku, ca pe drumul obișnuit
-const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void) => ({
-  cerutDe, esteOprire, stare, antet: antetDinText, modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
+const depsMare = (cerutDe: string | null, esteOprire: () => boolean, stare: (s: string) => void, supa?: Supa) => ({
+  cerutDe, esteOprire, stare, antet: (t: string, docId?: number) => antetDinText(t, supa && docId != null ? { supa, docId } : undefined), modelAntet: HAIKU, log, pauzaReluareMs: PAUZE.reluareMareMs,
 })
 
 export async function citesteDocument(supabase: Supa, doc: any, cerutDe: string | null, esteOprire: () => boolean = () => false, stare: (s: string) => void = () => {}): Promise<string> {
@@ -221,7 +232,7 @@ async function citesteMareCuGarda(supabase: Supa, doc: any, cerutDe: string | nu
   })()
   try {
     return GESTIONAT + await cuIncercare(inc, async () => {
-      const rez = await _mare.citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare))
+      const rez = await _mare.citesteMare(supabase, doc.id, depsMare(cerutDe, () => esteOprire() || pierdut, stare, supabase))
       if (pierdut) {   // lease pierdut: NU raportăm procesat/parțial, oricare ar fi rezultatul local
         await inc.inchide({ rezultat: 'predat', eroare: 'lease pierdut în timpul citirii pe felii' })
         return `garda: lease pierdut în timpul citirii pe felii — rezultat local ignorat (${rez.slice(0, 120)})`
@@ -274,7 +285,7 @@ async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: 
     const comp = compuneText(local.pagini, local.nPag, off, MAX_TEXT)
     const necitite = comp.necitite, text = comp.text
     let antet: any = null, tokIn = 0, tokOut = 0
-    try { const a = await antetDinText(local.pagini.slice(0, 2).join('\n\n')); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#${doc.id} antet:`, (e as Error).message) }
+    try { const a = await antetDinText(local.pagini.slice(0, 2).join('\n\n'), { supa: supabase, docId: doc.id }); antet = a.antet; tokIn = a.tokIn; tokOut = a.tokOut } catch (e) { log(`#${doc.id} antet:`, (e as Error).message) }
     try { await supabase.from('ai_usage_log').insert({ function_name: 'ofertare-ingest-doc', model: HAIKU.id, tokens_in: tokIn, tokens_out: tokOut, cost_usd: tokIn * HAIKU.in + tokOut * HAIKU.out, ref_table: 'ofertare_documente_atribuire', ref_id: doc.id }) } catch (_) {}
     const upd: Record<string, unknown> = {
       text_extras: text.trim() || null, pagini: local.nPag, size_bytes: bytes.length, pagini_procesate: local.nPag, pagini_necitite: necitite,
@@ -290,7 +301,23 @@ async function citesteDupaGarda(supabase: Supa, doc: any, inc: Incercare, meta: 
   } finally { try { await Deno.remove(cale) } catch (_) {} }
 }
 
-async function candidati(supabase: Supa, licId: number): Promise<any[]> {
+// LOTURI: împarte lista în eligibile / blocate (motive agregate). ok:false = poarta n-a răspuns → NIMIC eligibil (fail-closed).
+// Documentele blocate NU se ating (nici 'eroare', nici altă scriere): rămân cum sunt și intră singure după triere.
+export type FiltruLoturi = { ok: boolean; eligibile: any[]; blocate: Record<string, number> }
+export async function filtreazaLoturi(supabase: Supa, licId: number, docs: any[]): Promise<FiltruLoturi> {
+  if (!docs.length) return { ok: true, eligibile: [], blocate: {} }
+  const { ok, harta } = await eligibilitateLicitatie(supabase as any, licId)   // cast: tiparele supabase-js (erori vechi)
+  if (!ok) return { ok: false, eligibile: [], blocate: { eroare_poarta: docs.length } }
+  const eligibile: any[] = [], blocate: Record<string, number> = {}
+  for (const d of docs) {
+    if (esteEligibil(harta, d.id)) eligibile.push(d)
+    else { const m = harta.get(Number(d.id))?.motiv ?? 'lipsa_din_poarta'; blocate[m] = (blocate[m] ?? 0) + 1 }
+  }
+  return { ok: true, eligibile, blocate }
+}
+export const rezumatBlocate = (b: Record<string, number>) => Object.entries(b).map(([m, n]) => `${n} × ${m}`).join(', ')
+
+async function candidati(supabase: Supa, licId: number): Promise<{ lista: any[]; loturi: FiltruLoturi }> {
   const COL = 'id, licitatie_id, nume_original, tip, fisier_path, pagina_offset, revizie, status_procesare, pagini_procesate, size_bytes, eroare, citire_mare:analiza->citire_mare'
   const [{ data: docs }, { data: mari }] = await Promise.all([
     supabase.from('ofertare_documente_atribuire').select(COL)
@@ -301,7 +328,10 @@ async function candidati(supabase: Supa, licId: number): Promise<any[]> {
   ])
   // GARDA: documentele blocate (plafon atins), în backoff sau cu altă încercare în curs (lease neexpirat) nu sunt candidate —
   // reactivare doar din ERP (owner). Decizia finală rămâne la _incearca (atomic); filtrul doar evită apeluri inutile.
-  const toti = [...(docs ?? []), ...(mari ?? [])] as any[]
+  const toti0 = [...(docs ?? []), ...(mari ?? [])] as any[]
+  // LOTURI: înaintea oricărui alt filtru (și a gărzii) — un document neeligibil nu e candidat, oricare i-ar fi starea
+  const loturi = await filtreazaLoturi(supabase, licId, toti0)
+  const toti = loturi.eligibile
   const { data: garzi } = toti.length ? await supabase.from('ofertare_ingest_garda').select('doc_id, blocat, urmatoarea_dupa, incercare_token, in_curs_pana').in('doc_id', toti.map(d => d.id)) : { data: [] }
   const acum = new Date()
   const opriti = new Set(((garzi ?? []) as any[]).filter(g => opritDeGarda(g, acum)).map(g => g.doc_id))
@@ -321,7 +351,7 @@ async function candidati(supabase: Supa, licId: number): Promise<any[]> {
   // cantități), apoi restul în ordinea id — altfel un studiu geotehnic de 100 MB ținea „Volumul 2” în așteptare
   const ESENTIAL = ['fisa_date', 'cs_volum', 'lista_cantitati']
   const rang = (d: any) => (ESENTIAL.includes(d.tip) ? 0 : 1)
-  return out.sort((x, y) => rang(x) - rang(y) || x.id - y.id)
+  return { lista: out.sort((x, y) => rang(x) - rang(y) || x.id - y.id), loturi }
 }
 
 // 24.09: .docx-urile (formularul de propunere tehnică, acordul contractual…) rămâneau „ignorat" — edge-ul
@@ -359,7 +389,11 @@ async function citesteWordLicitatie(supabase: Supa, licId: number): Promise<numb
   // runda 3 (J4): și calea Word trece prin gardă — blocate / în backoff / cu lease activ nu se ating; fiecare document ia token
   // (descărcarea numărată, plafon 80), iar textul se scrie de server atomic cu tokenul. Un Word corupt sau „gol” = eșec:
   // după 5 → blocat + notificare owner (înainte rămânea eligibil la fiecare tură, fără plafon).
-  const lista = (docs ?? []) as any[]
+  // LOTURI: Word-urile neeligibile nu se descarcă; poarta căzută → niciun Word în tura asta
+  const fl = await filtreazaLoturi(supabase, licId, (docs ?? []) as any[])
+  if (!fl.ok) { log(`#${licId} word: poarta pe loturi n-a răspuns — niciun Word în tura asta`); return 0 }
+  if (Object.keys(fl.blocate).length) log(`#${licId} word: sar ${rezumatBlocate(fl.blocate)} (blocate pe loturi)`)
+  const lista = fl.eligibile
   const { data: garzi } = lista.length ? await supabase.from('ofertare_ingest_garda').select('doc_id, blocat, urmatoarea_dupa, incercare_token, in_curs_pana').in('doc_id', lista.map(d => d.id)) : { data: [] }
   const acum = new Date()
   const opriti = new Set(((garzi ?? []) as any[]).filter(g => opritDeGarda(g, acum)).map(g => g.doc_id))
@@ -401,15 +435,33 @@ async function coadaActiva(supabase: Supa, licId: number): Promise<boolean> {
   return (data as { activ?: boolean } | null)?.activ === true   // cast: tiparele supabase-js dau „never” (erori vechi)
 }
 
+// LOTURI: licitațiile la care poarta n-a răspuns — până când nu se mai încearcă (în memorie; repornirea o golește)
+const poartaCazuta = new Map<number, number>()
+
 export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire: () => boolean, stare: (s: string) => void) {
   const { data: c } = await supabase.from('ofertare_ingest_coada').select('*').eq('licitatie_id', licId).maybeSingle()
   if (!c?.activ) return
+  // LOTURI: poarta pe loturi n-a răspuns → NIMIC din licitația asta în tura asta (fail-closed). Coada rămâne activă (fără „GATA”
+  // și fără notificare); ultimul_tick avansează ca main să treacă la altă licitație; pauză scurtă ca să nu bată RPC-ul la 15 s.
+  const opritPana = poartaCazuta.get(licId) ?? 0
+  if (Date.now() < opritPana) return
+  const amanaPoarta = async (unde: string) => {
+    poartaCazuta.set(licId, Date.now() + PAUZE.poartaLoturiMs)
+    log(`#${licId} citire: poarta pe loturi n-a răspuns (${unde}) — nu procesez nimic din licitație în tura asta; reîncerc peste ${Math.round(PAUZE.poartaLoturiMs / 1000)} s`)
+    await (supabase as any).from('ofertare_ingest_coada').update({ ultimul_tick: new Date().toISOString() }).eq('licitatie_id', licId)
+  }
+  {
+    const p0 = await eligibilitateLicitatie(supabase as any, licId)
+    if (!p0.ok) return await amanaPoarta('la pornire')
+    poartaCazuta.delete(licId)
+  }
   try { await citesteWordLicitatie(supabase, licId) } catch (e) { log('word:', (e as Error)?.message ?? e) }
   const esuate = new Set<number>()
   // anti-buclă (770: același document „citit” de 5421 de ori într-o activare, pentru că după fiecare trecere rămânea
   // tot candidat): de câte ori a revenit fiecare document în tura asta; peste limită → eșuat, nu încă o trecere
   const treceri = new Map<number, number>()
   let citite = 0
+  let blocateLot: Record<string, number> = {}, ultimLogLot = ''
   const t0Tura = Date.now()
   while (!esteOprire()) {
     if (!await coadaActiva(supabase, licId)) { log(`#${licId} citire: coada a fost oprită între timp (activ=false) — mă opresc (${citite} citite în tura asta)`); return }
@@ -419,7 +471,14 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
       const { data: altele } = await supabase.from('ofertare_ingest_coada').select('licitatie_id').eq('activ', true).neq('licitatie_id', licId).limit(1)
       if (altele?.length) { log(`#${licId} citire: cedez rândul (${citite} citite în tura asta)`); return }
     }
-    const lista = (await candidati(supabase, licId)).filter(d => !esuate.has(d.id))
+    const cand = await candidati(supabase, licId)
+    // poarta re-întrebată la FIECARE document (o debifare de lot în timpul turei se respectă de la documentul următor)
+    if (!cand.loturi.ok) return await amanaPoarta('în tură')
+    blocateLot = cand.loturi.blocate
+    const rezLot = rezumatBlocate(blocateLot)
+    if (rezLot && rezLot !== ultimLogLot) log(`#${licId} citire: sar ${rezLot} (blocate pe loturi — nu se ating, intră după triere)`)
+    ultimLogLot = rezLot
+    const lista = cand.lista.filter(d => !esuate.has(d.id))
     if (!lista.length) break
     const d = lista[0]
     stare(`citesc ${String(d.nume_original || d.id).split('/').pop()} (${citite + 1}; ${lista.length} rămase)`)
@@ -435,7 +494,7 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
     if (rez.startsWith(GESTIONAT)) {
       // runda 4: după predare / pe calea pe felii, documentul NU se atinge de aici (fără fallback de 'eroare')
       const interior = rez.slice(GESTIONAT.length)
-      if (/^(eroare|garda)/.test(interior)) esuate.add(d.id)
+      if (/^(eroare|garda|blocat_lot)/.test(interior)) esuate.add(d.id)
       else if (!/^(reia|întrerupt)/.test(interior)) citite++
     } else if (rez.startsWith('garda') || rez.startsWith('eroare(salvat)')) {
       // garda ține starea / eroarea e deja scrisă atomic sub token (runda 3): nicio scriere nepăzită aici
@@ -452,7 +511,8 @@ export async function proceseazaIngest(supabase: Supa, licId: number, esteOprire
   if (esteOprire()) return
   const { data: toate } = await supabase.from('ofertare_documente_atribuire').select('status_procesare').eq('licitatie_id', licId).not('fisier_path', 'like', '%/neincarcat/%')
   const n = (s: string[]) => (toate ?? []).filter(d => s.includes(d.status_procesare)).length
-  const nota = `${n(['procesat'])} procesate, ${n(['partial'])} parțiale, ${n(['eroare', 'neprocesat', 'in_lucru'])} cu eroare/epuizate (worker NAS: ${citite} citite acum, ${esuate.size} eșuate)`
+  const nBlocLot = Object.values(blocateLot).reduce((a, b) => a + b, 0)
+  const nota = `${n(['procesat'])} procesate, ${n(['partial'])} parțiale, ${n(['eroare', 'neprocesat', 'in_lucru'])} cu eroare/epuizate${nBlocLot ? `; ${nBlocLot} sărite — blocate pe loturi (${rezumatBlocate(blocateLot)}), se citesc după triere cu încă un „Procesează”` : ''} (worker NAS: ${citite} citite acum, ${esuate.size} eșuate)`
   await supabase.from('ofertare_ingest_coada').update({ activ: false, terminat_la: new Date().toISOString(), nota, ultimul_tick: new Date().toISOString() }).eq('licitatie_id', licId)
   if (c.cerut_de) {
     const { data: li } = await supabase.from('ofertare_licitatii').select('nr_anunt').eq('id', licId).maybeSingle()

@@ -43,6 +43,21 @@ if [ "$TASK" = "plansa_felii" ]; then
     while IFS= read -r l; do J "plansa_felii: $l"; done < /work/plansa_verificare.log
     final 2 felii_invalide
   }
+  # Poarta pe loturi (P1 #5): containerul nu are BD/chei, deci citește atestarea scrisă pe gazdă de
+  # worker/ofertare/plansa_cli_verifica.ts. Lipsă / alt pachet / neeligibil / mai veche de 15 min → CLI nu pornește.
+  node -e '
+    const fs=require("fs");
+    try {
+      const m=JSON.parse(fs.readFileSync("/data/manifest.json","utf8"));
+      const v=JSON.parse(fs.readFileSync("/data/verificare_lot.json","utf8"));
+      if(!v || v.eligibil!==true || v.motiv!=="fara_loturi" || typeof m.pachet_id!=="string" || v.pachet_id!==m.pachet_id || v.doc_id!==m.doc_id) throw Error("verificare_lot_neeligibil_sau_alt_pachet");
+      const t=Date.parse(v.verificat_la), acum=Date.now();
+      if(typeof v.verificat_la!=="string" || !Number.isFinite(t) || t>acum+60000 || acum-t>15*60000) throw Error("verificare_lot_expirata");
+    } catch(e) { console.error(e.code||e.message); process.exit(2); }
+  ' 2> /work/plansa_lot.log || {
+    while IFS= read -r l; do J "plansa_felii: $l"; done < /work/plansa_lot.log
+    final 2 lot_neverificat
+  }
   TASK_MODEL=opus
   TURE_PLANSA=$(node -e 'const m=JSON.parse(require("fs").readFileSync("/data/manifest.json","utf8")); if(!Array.isArray(m.felii)||!m.felii.length||!Array.isArray(m.perechi_lipire))process.exit(2); console.log(12+4*m.felii.length+4*m.perechi_lipire.length)' 2>/dev/null) || final 2 manifest_invalid
   case "${TASK_MAX_TURNS:-}" in ''|*[!0-9]*) TASK_MAX_TURNS=$TURE_PLANSA ;; esac
