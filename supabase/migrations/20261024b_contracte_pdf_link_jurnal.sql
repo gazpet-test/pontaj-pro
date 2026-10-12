@@ -126,6 +126,7 @@ BEGIN
      OR NOT has_table_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'INSERT')
      OR has_table_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'UPDATE')
      OR has_table_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'DELETE')
+     OR has_table_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'TRUNCATE')
      OR has_any_column_privilege('service_role', 'public.contracte_pdf_link_jurnal', 'UPDATE')
      OR has_function_privilege('anon', 'public.fn_contracte_pdf_link_rezerva(bigint)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_contracte_pdf_link_rezerva(bigint)', 'EXECUTE')
