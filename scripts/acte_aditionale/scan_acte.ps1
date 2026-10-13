@@ -50,7 +50,7 @@ foreach ($r in (Import-Csv -LiteralPath $fProi -Delimiter $T -Encoding UTF8)) {
     $nume = $rel -replace '[\\/:*?"<>|]', '__'
     if ($nume.Length -gt 90) { $nume = $nume.Substring($nume.Length - 90) }  # sub MAX_PATH chiar cu foldere adanci
     # prefix unic din calea NAS completa: doua cai diferite nu mai pot ajunge in acelasi fisier local (Copilot r1 P1-1)
-    $h = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($f.FullName))).Replace('-', '').Substring(0, 10).ToLower()
+    $h = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($f.FullName))).Replace('-', '').Substring(0, 16).ToLower()
     $nume = $h + '_' + $nume
     $dest = Join-Path $d $nume
     $copiat = $true

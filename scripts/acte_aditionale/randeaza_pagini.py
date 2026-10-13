@@ -21,7 +21,11 @@ def main(folder):
             if not src.lower().endswith('.pdf') or not os.path.isfile(src):
                 continue
             # doar copii din folderul rularii (Copilot r1 P1-4): lista.tsv e citita ca date
-            if os.path.commonpath([radacina, os.path.realpath(src)]) != radacina:
+            try:
+                sub = os.path.commonpath([radacina, os.path.realpath(src)]) == radacina
+            except ValueError:  # alt drive
+                sub = False
+            if not sub:
                 index.append((r.get('id', '?'), src, 'IGNORAT in afara folderului', '-')); continue
             d = os.path.join(out, 'P' + r['id'])
             os.makedirs(d, exist_ok=True)
