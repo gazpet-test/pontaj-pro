@@ -1,4 +1,5 @@
 // V1: reguli locale, numai citire. Nu scrie drepturi, notificări sau statusuri.
+import { proiecteFaraEticheta } from './documenteDeRepartizatLogic.js'
 export const ADMIN_ALERTE_KEY = 'admin_alerte'
 export const SURSE_ADMIN = [
   { id: 'ofertare', label: 'Ofertare', module: 'ofertare', path: '/ofertare' },
@@ -10,6 +11,8 @@ export const SURSE_ADMIN = [
   { id: 'transport', label: 'Aprobări transport', module: 'logistica', path: '/logistica?tab=transporturi', approval: true },
   // 29.09.2026 (R1/R2): administrarea conturilor e doar a owner-ului — și în BD (poarta din fn_admin_conturi_alerte).
   { id: 'conturi', label: 'Conturi platformă', module: 'admin_alerte', ownerOnly: true, path: '/admin?tab=managers' },
+  // 13.10.2026: proiecte active fără etichetă Gmail → corespondența lor nu intră automat în ERP (scriptul Ingestie Corespondența)
+  { id: 'gmail', label: 'Proiecte fără etichetă Gmail', module: 'executie', ownerOnly: true, path: '/executie' },
 ]
 
 // Cheia transversală este explicită inclusiv pentru owner. Nu moștenește dreptul HR.
@@ -300,6 +303,20 @@ export const SELECT_ADMIN = {
   comenzi_furnizor_aprobari: 'id,comanda:comenzi_furnizor(id,numar_comanda,moneda,status,linii:comenzi_furnizor_linii(cantitate,pret_unitar))',
   logistica_comenzi_transport: 'id,numar_comanda,data_transport,status',
   v_admin_conturi_alerte: 'id,cod,profile_id,email,tip_cont,is_owner,employee_id,employee_name,employee_active,termination_date,banned_until,jurnal_id,inchis_la,candidati,alocari',
+  executie_proiecte: 'id,nume,cod_intern,eticheta_gmail,activ',
+}
+
+// Proiect activ fără etichetă Gmail: corespondența lui rămâne nesortată (sau ajunge în coada „de repartizat”).
+export function alerteGmail(proiecte) {
+  return proiecteFaraEticheta(proiecte).map(p => alerta('gmail', p.id, {
+    title: `Proiect activ fără etichetă Gmail: ${p.nume || p.cod_intern || '#' + p.id}`,
+    reference: [p.cod_intern, p.propusa ? `etichetă propusă: ${p.propusa}` : null].filter(Boolean).join(' · '),
+    priority: 'attention', owner: 'Owner · Execuție → proiect → Editează',
+    path: `/executie?proiect=${p.id}`,
+    impact: `Mailurile proiectului nu intră automat în ERP. Setează eticheta Gmail (propunere: ${p.propusa || '—'}) și, dacă e cazul, filtrul.`,
+    reason: 'Calculat din executie_proiecte (activ = true, eticheta_gmail goală). Nu se modifică nimic automat.',
+    locator: `executie_proiecte #${p.id}`,
+  }))
 }
 
 export async function incarcaSursaAdmin(client, source, profile, { signal, now = new Date() } = {}) {
@@ -311,6 +328,7 @@ export async function incarcaSursaAdmin(client, source, profile, { signal, now =
     if (source.id === 'ofertare') rows = alerteOfertare(await read('ofertare_licitatii', q => q.in('status', ['identificata', 'analiza', 'go', 'in_lucru'])), now)
     if (source.id === 'hr') rows = alerteHr(await read('v_hr_autorizatii_status'), today)
     if (source.id === 'conturi') rows = alerteConturi(await read('v_admin_conturi_alerte'), today)
+    if (source.id === 'gmail') rows = alerteGmail(await read('executie_proiecte', q => q.eq('activ', true)))
     if (source.id === 'firma') rows = alerteFirma(await read('documente_firma', q => q.eq('activ', true)), today)
     if (source.id === 'flota') {
       const [docs, assets, types] = await Promise.all([read('logistica_documente'), read('logistica_active'), read('logistica_tipuri_documente')])
