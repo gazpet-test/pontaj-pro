@@ -22,11 +22,13 @@ export const randNou = (tabel) => tabel === 'bransament'
 
 const gol = (v) => v == null || String(v).trim() === ''
 
-// Un rând contează doar dacă are ceva completat în afară de valorile implicite.
+// Un rând contează dacă are ceva completat sau schimbat față de valorile implicite (inclusiv descrierea / diametrul).
 export function randCompletat(r) {
   if (!r) return false
-  const camp = ['tronson', 'lungime_m', 'observatii', 'suduri_nr', 'se1', 'se2', 'se3']
-  return camp.some(k => !gol(r[k])) || !!r.unitate_id
+  const camp = ['tronson', 'lungime_m', 'observatii', 'suduri_nr', 'sudura_tip', 'se1', 'se2', 'se3']
+  if (camp.some(k => !gol(r[k])) || !!r.unitate_id) return true
+  const impl = randNou(r.tabel)
+  return String(r.descriere ?? '').trim() !== impl.descriere || String(r.diametru_mm ?? '') !== String(impl.diametru_mm ?? '')
 }
 
 const num = (v) => {

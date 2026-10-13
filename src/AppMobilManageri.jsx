@@ -381,15 +381,10 @@ function RaportZilnic({ profile, sites, onBack }) {
           if (rlErr) throw rlErr
         }
       }
-      // ── Raport lucrări executate (distribuție gaze): rescriem rândurile raportului ──
+      // ── Raport lucrări executate (distribuție gaze): înlocuim rândurile raportului ATOMIC (RPC, o tranzacție) ──
       if (rz?.id && distributie) {
-        const { error: dDelErr } = await supabase.from('raport_distributie_linii').delete().eq('raport_id', rz.id)
-        if (dDelErr) throw dDelErr
-        const dRows = pentruSalvare(dRanduri, rz.id)
-        if (dRows.length) {
-          const { error: dErr } = await supabase.from('raport_distributie_linii').insert(dRows)
-          if (dErr) throw dErr
-        }
+        const { error: dErr } = await supabase.rpc('fn_raport_distributie_salveaza', { p_raport_id: rz.id, p_linii: pentruSalvare(dRanduri, rz.id) })
+        if (dErr) throw dErr
       }
       // ── Utilaje defecte → Logistica + tichet la Mitrache (decizie Razvan 04.08.2026) ──
       // Eroarea aici NU blochează raportul (deja salvat) — doar anunță.
