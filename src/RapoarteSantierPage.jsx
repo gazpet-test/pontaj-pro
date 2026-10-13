@@ -13,6 +13,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { exportRapoarteExcel, exportRapoartePDF } from './rapoarteExport.js'
+import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 import { MeteoRaportChip, MeteoRaportText } from './Meteo.jsx'
 
 const G = {
@@ -339,8 +340,25 @@ function ModalDetaliu({ raport, siteName, onClose }) {
       const { data: rl } = await supabase.from('raport_lucrari')
         .select('cantitate, observatii, proiect_activitati(nume, um), proiect_unitati(cod, nume)').eq('raport_id', raport.id)
       setLucrariAct(rl || [])
+      // Raport lucrări executate — distribuție gaze (tabelul poate lipsi înainte de migrare → ignorăm eroarea)
+      const { data: dl, error: dlErr } = await supabase.from('raport_distributie_linii').select('*').eq('raport_id', raport.id).order('tabel').order('nr_crt')
+      const linii = dlErr ? [] : (dl || [])
+      setDistrLinii(linii)
+      const uids = [...new Set(linii.map(l => l.unitate_id).filter(Boolean))]
+      if (uids.length) {
+        const { data: un } = await supabase.from('proiect_unitati').select('id, cod, nume').in('id', uids)
+        setDistrUnitati(un || [])
+      } else setDistrUnitati([])
     })()
   }, [raport])
+  const [distrLinii, setDistrLinii] = useState([])
+  const [distrUnitati, setDistrUnitati] = useState([])
+  const [distrPdf, setDistrPdf] = useState(false)
+  const pdfDistributie = async () => {
+    setDistrPdf(true)
+    try { await exportRaportDistributiePDF({ antet: raport.distributie_antet, data: raport.data, linii: distrLinii, unitati: distrUnitati, lucrare: siteName(raport.site_id) }) }
+    finally { setDistrPdf(false) }
+  }
 
   const pers = raport.personal_snapshot || {}
   const utj = Array.isArray(raport.utilaje_snapshot) ? raport.utilaje_snapshot : []
@@ -385,6 +403,27 @@ function ModalDetaliu({ raport, siteName, onClose }) {
                   </span>
                 </div>
               )})}
+            </div>
+          </Bloc>
+        )}
+
+        {/* raport lucrări executate — distribuție gaze */}
+        {distrLinii.length > 0 && (
+          <Bloc titlu={`🧾 Raport lucrări executate${raport.distributie_antet ? ' · ' + raport.distributie_antet : ''}`}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              {['conducta', 'bransament'].map(t => {
+                const ls = distrLinii.filter(l => l.tabel === t)
+                if (!ls.length) return null
+                const m = ls.reduce((s, l) => s + (Number(l.lungime_m) || 0), 0)
+                return (
+                  <span key={t} style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 8, padding: '5px 10px', fontSize: 13, color: G.text }}>
+                    {t === 'conducta' ? 'Conducte' : 'Branșamente'}: <strong style={{ color: G.blue }}>{ls.length} rânduri · {m.toLocaleString('ro-RO', { maximumFractionDigits: 2 })} m</strong>
+                  </span>
+                )
+              })}
+              <button onClick={pdfDistributie} disabled={distrPdf} style={{ background: G.bg, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 8, padding: '6px 12px', fontSize: 13, fontWeight: 700, cursor: distrPdf ? 'wait' : 'pointer' }}>
+                {distrPdf ? 'Se generează…' : '📄 PDF raport lucrări'}
+              </button>
             </div>
           </Bloc>
         )}

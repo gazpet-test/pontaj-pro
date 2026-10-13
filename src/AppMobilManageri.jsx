@@ -14,6 +14,8 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { MeteoBadge } from './Meteo.jsx'
 import { combinaUtilaje } from './raportUtilaje.js'
+import { DIAMETRE_PE, TIPURI_SUDURA, randNou, valideaza, pentruSalvare, dinBd, antetImplicit } from './raportDistributie.js'
+import { exportRaportDistributiePDF } from './raportDistributiePdf.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -130,6 +132,10 @@ function RaportZilnic({ profile, sites, onBack }) {
   const [lucrariAct, setLucrariAct] = useState({})          // {activitate_id: cantitate azi}
   const [unitati, setUnitati] = useState([])                // proiect_unitati active (tronson/obiect/zonă)
   const [unitateId, setUnitateId] = useState(null)          // unde s-a lucrat azi
+  // Raport lucrări executate — distribuție gaze (13.10.2026): doar pe proiectele marcate raport_distributie
+  const [distributie, setDistributie] = useState(false)
+  const [dAntet, setDAntet] = useState('')                   // localitate / stradă (linia de sub titlu)
+  const [dRanduri, setDRanduri] = useState([])               // rânduri conducte + branșamente
   const [masini, setMasini] = useState('')
   const [probleme, setProbleme] = useState('')
   const [subcontractori, setSubcontractori] = useState('')
@@ -150,9 +156,18 @@ function RaportZilnic({ profile, sites, onBack }) {
     setLoadingData(true)
     setMsg(null)
     // ── Activitățile proiectului legat de lucrare (Faza 5 pas 3) ──
-    const { data: siteRow } = await supabase.from('sites').select('proiect_id').eq('id', sid).maybeSingle()
+    const { data: siteRow } = await supabase.from('sites').select('proiect_id, name, adresa').eq('id', sid).maybeSingle()
     const pid = siteRow?.proiect_id || null
     setProiectId(pid)
+    // Distribuție gaze: dacă proiectul nu e marcat (sau coloana nu există încă) → secțiunea nu apare.
+    let esteDistr = false
+    if (pid) {
+      const { data: pr, error: prErr } = await supabase.from('executie_proiecte').select('raport_distributie').eq('id', pid).maybeSingle()
+      esteDistr = !prErr && !!pr?.raport_distributie
+    }
+    setDistributie(esteDistr)
+    setDAntet(antetImplicit({ adresa: siteRow?.adresa, numeLucrare: siteRow?.name }))
+    setDRanduri(esteDistr ? [randNou('conducta'), randNou('bransament')] : [])
     let acts = []
     if (pid) {
       const [{ data: a }, { data: u }] = await Promise.all([
@@ -177,6 +192,14 @@ function RaportZilnic({ profile, sites, onBack }) {
         setLucrariAct(m)
         const uid = (rl || []).find(r => r.unitate_id)?.unitate_id
         if (uid) setUnitateId(uid)
+      }
+      if (esteDistr) {
+        const { data: dl } = await supabase.from('raport_distributie_linii').select('*').eq('raport_id', existing.id).order('tabel').order('nr_crt')
+        const r = dinBd(dl)
+        if (!r.some(x => x.tabel === 'conducta')) r.unshift(randNou('conducta'))
+        if (!r.some(x => x.tabel === 'bransament')) r.push(randNou('bransament'))
+        setDRanduri(r)
+        if (existing.distributie_antet) setDAntet(existing.distributie_antet)
       }
       setExistingId(existing.id)
       setLucrari(existing.lucrari_efectuate || '')
@@ -306,6 +329,10 @@ function RaportZilnic({ profile, sites, onBack }) {
 
   const trimite = async () => {
     if (!siteId) { setMsg({ ok: false, text: 'Alege lucrarea' }); return }
+    if (distributie) {
+      const erori = valideaza(dRanduri)
+      if (erori.length) { setMsg({ ok: false, text: 'Raport lucrări: ' + erori.slice(0, 3).join(' · ') + (erori.length > 3 ? ` (+${erori.length - 3})` : '') }); return }
+    }
     if (!pozeOk) { setMsg({ ok: false, text: `Raportul se trimite cu minim ${MIN_POZE} poze de pe șantier (ai ${nrPoze}). Pozele ajung pe pagina firmei — fă-le cu lucrarea executată corect.` }); return }
     setSaving(true); setMsg(null)
     try {
@@ -338,6 +365,7 @@ function RaportZilnic({ profile, sites, onBack }) {
         plan_maine: planMaine.trim() || null,
         poze: pozePaths,
         meteo: meteoSnap,
+        ...(distributie ? { distributie_antet: dAntet.trim() || null } : {}),
         created_by: user?.id || null,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'site_id,data' }).select('id').single()
@@ -351,6 +379,16 @@ function RaportZilnic({ profile, sites, onBack }) {
         if (rows.length) {
           const { error: rlErr } = await supabase.from('raport_lucrari').insert(rows)
           if (rlErr) throw rlErr
+        }
+      }
+      // ── Raport lucrări executate (distribuție gaze): rescriem rândurile raportului ──
+      if (rz?.id && distributie) {
+        const { error: dDelErr } = await supabase.from('raport_distributie_linii').delete().eq('raport_id', rz.id)
+        if (dDelErr) throw dDelErr
+        const dRows = pentruSalvare(dRanduri, rz.id)
+        if (dRows.length) {
+          const { error: dErr } = await supabase.from('raport_distributie_linii').insert(dRows)
+          if (dErr) throw dErr
         }
       }
       // ── Utilaje defecte → Logistica + tichet la Mitrache (decizie Razvan 04.08.2026) ──
@@ -633,6 +671,11 @@ function RaportZilnic({ profile, sites, onBack }) {
             </Section>
           )}
 
+          {distributie && (
+            <SectiuneDistributie antet={dAntet} setAntet={setDAntet} randuri={dRanduri} setRanduri={setDRanduri}
+              unitati={unitati.filter(u => (u.tip || 'tronson') === 'tronson')} data={dataRaport} lucrare={siteName} />
+          )}
+
           {/* Activități + text */}
           <Section title="🔧 Lucrări efectuate" hint={activitati.length ? 'detalii libere (opțional)' : 'scrie sau lipește din WhatsApp'}>
             <textarea value={lucrari} onChange={e => setLucrari(e.target.value)} rows={5} placeholder="Ce s-a lucrat azi…" style={{ ...inputStyle, resize: 'vertical', fontSize: 15 }} />
@@ -705,6 +748,83 @@ function RaportZilnic({ profile, sites, onBack }) {
         </>
       ))}
     </Shell>
+  )
+}
+
+// ── Raport lucrări executate — distribuție gaze (13.10.2026) ──
+// Două tabele ca pe formularul de hârtie: conducte și branșamente; rândurile se adaugă după nevoie.
+function SectiuneDistributie({ antet, setAntet, randuri, setRanduri, unitati, data, lucrare }) {
+  const [pdfBusy, setPdfBusy] = useState(false)
+  const set = (idx, patch) => setRanduri(list => list.map((r, i) => i === idx ? { ...r, ...patch } : r))
+  const adauga = (tabel) => setRanduri(list => [...list, randNou(tabel)])
+  const sterge = (idx) => setRanduri(list => list.filter((_, i) => i !== idx))
+  const mic = { ...inputStyle, padding: '8px 10px', fontSize: 15 }
+  const pdf = async () => {
+    setPdfBusy(true)
+    try { await exportRaportDistributiePDF({ antet, data, linii: pentruSalvare(randuri, null), unitati, lucrare }) }
+    finally { setPdfBusy(false) }
+  }
+  const card = (r, idx, nr) => {
+    const brans = r.tabel === 'bransament'
+    return (
+      <div key={idx} style={{ background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: brans ? G.purple : G.blue }}>{brans ? 'Branșament' : 'Conductă'} {nr}</span>
+          <button onClick={() => sterge(idx)} title="Șterge rândul" style={{ background: 'transparent', border: 'none', color: G.dim, fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          {unitati.length > 0 ? (
+            <select value={r.unitate_id || ''} onChange={e => set(idx, { unitate_id: Number(e.target.value) || null })} style={{ ...mic, appearance: 'none', gridColumn: '1 / -1' }}>
+              <option value="">Tronson — alege sau scrie mai jos</option>
+              {unitati.map(u => <option key={u.id} value={u.id}>{u.cod ? `${u.cod} · ` : ''}{u.nume}</option>)}
+            </select>
+          ) : null}
+          {!r.unitate_id && <input placeholder="Tronson (ex. str. Mihai Bravu)" value={r.tronson} onChange={e => set(idx, { tronson: e.target.value })} style={{ ...mic, gridColumn: '1 / -1' }} />}
+          <input placeholder="Descriere activitate" value={r.descriere} onChange={e => set(idx, { descriere: e.target.value })} style={{ ...mic, gridColumn: '1 / -1' }} />
+          <select value={r.diametru_mm ?? ''} onChange={e => set(idx, { diametru_mm: e.target.value === '' ? '' : Number(e.target.value) })} style={{ ...mic, appearance: 'none' }}>
+            <option value="">Diam. (mm)</option>
+            {DIAMETRE_PE.map(d => <option key={d} value={d}>Ø {d}</option>)}
+          </select>
+          <input type="number" min="0" step="any" inputMode="decimal" placeholder="Lungime (m)" value={r.lungime_m} onChange={e => set(idx, { lungime_m: e.target.value })} style={mic} />
+          {brans ? (
+            <>
+              <input placeholder="SE 1 (TEU)" value={r.se1} maxLength={40} onChange={e => set(idx, { se1: e.target.value })} style={mic} />
+              <input placeholder="SE 2 (MUFĂ)" value={r.se2} maxLength={40} onChange={e => set(idx, { se2: e.target.value })} style={mic} />
+              <input placeholder="SE 3 (MUFĂ)" value={r.se3} maxLength={40} onChange={e => set(idx, { se3: e.target.value })} style={{ ...mic, gridColumn: '1 / -1' }} />
+            </>
+          ) : (
+            <>
+              <input type="number" min="0" step="1" inputMode="numeric" placeholder="Nr. suduri" value={r.suduri_nr} onChange={e => set(idx, { suduri_nr: e.target.value })} style={mic} />
+              <select value={r.sudura_tip || ''} onChange={e => set(idx, { sudura_tip: e.target.value })} style={{ ...mic, appearance: 'none' }}>
+                <option value="">Tip sudură</option>
+                {TIPURI_SUDURA.map(t => <option key={t.cod} value={t.cod}>{t.label}</option>)}
+              </select>
+            </>
+          )}
+          <input placeholder="Observații" value={r.observatii} maxLength={500} onChange={e => set(idx, { observatii: e.target.value })} style={{ ...mic, gridColumn: '1 / -1' }} />
+        </div>
+      </div>
+    )
+  }
+  const grup = (tabel) => {
+    let nr = 0
+    return randuri.map((r, idx) => r.tabel === tabel ? card(r, idx, ++nr) : null)
+  }
+  const btnAdd = { background: 'transparent', border: `1px dashed ${G.border2}`, color: G.muted, borderRadius: 10, padding: '10px', width: '100%', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', marginBottom: 12 }
+  return (
+    <Section title="🧾 Raport lucrări executate" hint="distribuție gaze">
+      <label style={{ ...labelStyle, marginBottom: 4 }}>Localitate / stradă</label>
+      <input value={antet} maxLength={200} onChange={e => setAntet(e.target.value)} style={{ ...inputStyle, marginBottom: 12 }} />
+      <div style={{ fontSize: 12, fontWeight: 700, color: G.blue, margin: '4px 0 6px' }}>Conducte</div>
+      {grup('conducta')}
+      <button onClick={() => adauga('conducta')} style={btnAdd}>+ Rând conductă</button>
+      <div style={{ fontSize: 12, fontWeight: 700, color: G.purple, margin: '4px 0 6px' }}>Branșamente</div>
+      {grup('bransament')}
+      <button onClick={() => adauga('bransament')} style={btnAdd}>+ Rând branșament</button>
+      <button onClick={pdf} disabled={pdfBusy} style={{ background: G.surface2, border: `1px solid ${G.border2}`, color: G.text, borderRadius: 10, padding: '10px', width: '100%', fontSize: 14, fontWeight: 700, cursor: pdfBusy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+        {pdfBusy ? 'Se generează…' : '📄 PDF raport lucrări'}
+      </button>
+    </Section>
   )
 }
 

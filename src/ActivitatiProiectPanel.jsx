@@ -32,6 +32,19 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
   const [realizat, setRealizat] = useState({})   // {activitate_id: suma cantităților din rapoartele zilnice}
   const [loading, setLoading] = useState(true)
   const [noua, setNoua] = useState({ nume: '', um: '', coduri_deviz: '' })
+  // Proiect de distribuție gaze → raportul zilnic (/m) arată „Raport lucrări executate” (13.10.2026).
+  // null = coloana nu există încă (migrarea 20261027a neaplicată) → bifa nu se afișează.
+  const [distributie, setDistributie] = useState(null)
+  useEffect(() => {
+    supabase.from('executie_proiecte').select('raport_distributie').eq('id', proiectId).maybeSingle()
+      .then(({ data, error }) => setDistributie(error ? null : !!data?.raport_distributie))
+  }, [proiectId])
+  const comutaDistributie = async (v) => {
+    const { error } = await supabase.from('executie_proiecte').update({ raport_distributie: v }).eq('id', proiectId)
+    if (error) { showToast?.('Eroare: ' + error.message, 'error'); return }
+    setDistributie(v)
+    showToast?.(v ? '✓ Raportul zilnic arată acum tabelele de distribuție (conducte + branșamente)' : 'Tabelele de distribuție nu mai apar în raportul zilnic', 'success')
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -89,6 +102,12 @@ export default function ActivitatiProiectPanel({ proiectId, showToast }) {
 
   return (
     <div style={{ marginTop: 6 }}>
+      {distributie !== null && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: distributie ? G.green : G.muted, marginBottom: 10, cursor: 'pointer' }}>
+          <input type="checkbox" checked={distributie} onChange={e => comutaDistributie(e.target.checked)} />
+          Proiect de distribuție gaze — raportul zilnic are „Raport lucrări executate” (conducte + branșamente)
+        </label>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
         <div style={{ fontSize: 12, color: G.muted }}>{loading ? 'Se încarcă…' : `${acts.length} activități operaționale`}</div>
         <button onClick={sugereaza} style={{ background: G.yellow + '20', color: G.yellow, border: `1px solid ${G.yellow}44`, borderRadius: 7, padding: '6px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
