@@ -1,6 +1,7 @@
 -- REVENIRE 20261028c — NU reînvie secretul vechi (e public, compromis). Fail-safe: DEZACTIVEAZĂ cele 7 joburi
 -- (scorilos_patrol_0200…0315, chuck_norris_hr_zilnic_0700), șterge fn_bot_secret_ok și secretul BOT_SECRET din Vault.
--- Efect: boții nu mai rulează deloc până la o decizie nouă (edge-urile noi refuză orice apel fără funcție).
+-- Efect: calea CRON e închisă (joburi inactive, fără funcție → edge-urile refuză x-bot-secret). Calea UI a botului HR
+-- (JWT owner sau modul 'hr') rămâne; oprirea ei totală = redeploy chuck_norris_hr_bot cu moduleUi gol (Copilot r1 P1-2).
 -- DOAR la cererea explicită a lui Răzvan. Armare per tranzacție:
 --   SELECT set_config('gazpet.revenire_20261028c', 'BOT_SECRET_REVENIRE:' || txid_current(), true);
 DO $revenire$

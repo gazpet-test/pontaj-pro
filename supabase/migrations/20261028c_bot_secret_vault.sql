@@ -10,7 +10,9 @@
 --   * cele 7 joburi cron (scorilos_patrol_0200…0315, chuck_norris_hr_zilnic_0700): antetul x-bot-secret citit din
 --     vault.decrypted_secrets în loc de literal. Precondiție pe md5-ul exact al comenzilor de azi.
 -- NU atinge: import-evogps-gmail și productie-mail-facturi (alte secrete — PR-ul separat de Vault, etapa 2).
--- Ordinea livrării: migrarea → deploy imediat chuck_norris_hr_bot + nightly_patrol_bot (primul job: 02:00 UTC).
+-- Ordinea livrării (Copilot r1 P1-1): ÎNTÂI deploy chuck_norris_hr_bot + nightly_patrol_bot (codul nou nu mai are
+--   fallback → secretul compromis nu mai deschide nimic; până la migrare cron-ul pică fail-closed), APOI migrarea.
+-- Joburile 6–12 sunt oprite (active=false) din 13.10 la decizia lui Răzvan: migrarea schimbă DOAR comanda, nu active.
 -- Revenire: supabase/revenire/20261028c_bot_secret_vault_ROLLBACK.sql (dezactivează joburile, nu reînvie secretul vechi).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh; fără BEGIN/COMMIT.
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -73,7 +75,9 @@ BEGIN
   END IF;
   IF has_function_privilege('anon', 'public.fn_bot_secret_ok(text)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.fn_bot_secret_ok(text)', 'EXECUTE')
-     OR NOT has_function_privilege('service_role', 'public.fn_bot_secret_ok(text)', 'EXECUTE') THEN
+     OR NOT has_function_privilege('service_role', 'public.fn_bot_secret_ok(text)', 'EXECUTE')
+     OR NOT (SELECT prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'] FROM pg_proc
+              WHERE oid = 'public.fn_bot_secret_ok(text)'::regprocedure) THEN
     RAISE EXCEPTION '20261028c: postconditie drepturi';
   END IF;
   IF current_setting('gazpet.livrare_migrare', true)
