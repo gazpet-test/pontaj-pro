@@ -80,3 +80,97 @@ export function egalConstant(primit, secret) {
   for (let i = 0; i < b.length; i++) diff |= (a[i] ?? 0) ^ b[i];
   return diff === 0;
 }
+
+// ── v10 (12.10.2026): scan in bucati — o invocare = un lot, progresul in normative_scan_rulari ──
+
+// Numarul de loturi pentru n acte.
+export function nrLoturi(n, marime) {
+  if (!(marime > 0)) throw new Error('marime invalida');
+  return Math.ceil(Math.max(0, n | 0) / marime);
+}
+
+// ID-urile actelor din lotul k (0-based), in ordinea fixata la pornirea rularii.
+export function idsLot(acteIds, k, marime) {
+  return (acteIds || []).slice(k * marime, (k + 1) * marime).map(Number);
+}
+
+// Pastreaza ordinea din rulare chiar daca baza le intoarce altfel; randurile disparute se sar.
+export function ordoneazaDupaIds(randuri, ids) {
+  const m = new Map((randuri || []).map((r) => [Number(r.id), r]));
+  return ids.map((id) => m.get(Number(id))).filter(Boolean);
+}
+
+// Verdictele salvate in rulare nu poarta randul intreg (note etc.) — doar ce trebuie in mail.
+export function faraRand(verdicte) {
+  return (verdicte || []).map((v) => ({
+    id: v.id, identificator: v.identificator, verdict: v.verdict, tip: v.tip ?? null, data_act: v.data_act ?? null, detalii: v.detalii ?? '',
+  }));
+}
+
+// Lot sarit dupa prea multe incercari (invocari omorate la rand): toate actele → necunoscut.
+export function lotSarit(lot, motiv) {
+  return faraRand(leagaLot([], lot, null).map((v) => ({ ...v, detalii: motiv })));
+}
+
+// Eșec trecător al API-ului AI (se reîncearcă lotul, nu se salvează „necunoscut”): 408/409/429/5xx/529.
+// Orice alt 4xx (cerere greșită, cheie invalidă) nu se repară prin reîncercare.
+export function esteTranzitoriu(status) {
+  return status === 408 || status === 409 || status === 429 || (status >= 500 && status <= 599);
+}
+
+// Ce face o invocare cu rularea: 'lot' (mai sunt loturi), 'final' (toate loturile gata,
+// mailul inca netrimis) sau 'nimic'.
+export function urmatorulPas(r) {
+  if (!r || r.stare !== 'in_curs') return 'nimic';
+  if (r.lot_curent < r.nr_loturi) return 'lot';
+  return r.mail_la ? 'nimic' : 'final';
+}
+
+// Nota de azi exista deja pe rand → nu o mai adaugam (a doua garda, dupa cea din baza).
+export function areNotaScan(note, azi) {
+  return String(note || '').includes(`SCAN ${azi}`);
+}
+
+export function linieNota(v, azi) {
+  return v.verdict === 'schimbare_noua'
+    ? `⚠ SCAN ${azi}: ${v.tip || 'schimbare'}${v.data_act ? ' din ' + v.data_act : ''} — ${String(v.detalii || '').slice(0, 300)} (de validat pe M. Oficial)`
+    : `ℹ SCAN ${azi}: forma cunoscută incompletă${v.data_act ? ' (act din ' + v.data_act + ')' : ''} — ${String(v.detalii || '').slice(0, 300)}`;
+}
+
+// Cost aproximativ: Opus 5 $5/$25 per MTok + $10 / 1000 cautari
+export function costAprox(tokIn, tokOut, cautari) {
+  return (tokIn || 0) * 5e-6 + (tokOut || 0) * 25e-6 + (cautari || 0) * 0.01;
+}
+
+export const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Subiect + HTML pentru mailul final, din randul rularii (verdicte acumulate pe toate loturile).
+export function construiesteMail(r, notate) {
+  const g = grupeaza(r.verdicte || []);
+  const erori = r.erori || [];
+  const nActe = (r.acte_ids || []).length;
+  const nSemn = g.schimbare_noua.length;
+  const cost = costAprox(r.tok_in, r.tok_out, r.cautari);
+  const culoare = { schimbare_noua: '#a32a21', forma_incompleta: '#b5651d', necunoscut: '#8a6d1a', neschimbat: '#17703c' };
+  const tabel = (titlu, rows) => !rows.length ? '' :
+    `<h3 style="margin:16px 0 6px;color:${culoare[rows[0].verdict]}">${esc(titlu)} (${rows.length})</h3>` +
+    `<table style="border-collapse:collapse;font-size:13px">` + rows.map((v) =>
+      `<tr><td style="padding:3px 10px 3px 0"><b>${esc(v.identificator)}</b></td>` +
+      `<td style="padding:3px 10px 3px 0">${esc([v.tip, v.data_act].filter(Boolean).join(' · '))}</td>` +
+      `<td style="padding:3px 0">${esc(v.detalii)}</td></tr>`).join('') + `</table>`;
+  const subiect = `${r.test ? '[TEST] ' : ''}📜 Normative — ${nSemn ? nSemn + ' schimbări noi de verificat' : erori.length ? 'scan cu erori' : 'nicio schimbare nouă'} (${nActe} acte)`;
+  const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a232c;max-width:760px">` +
+    `<h2 style="margin:0 0 4px">Scan lunar normative — Ofertare</h2>` +
+    `<p style="margin:0 0 6px;color:#5a6975">${esc(r.azi)} · ${nActe} acte · ${r.nr_loturi} loturi · rularea #${esc(r.id)} · referință: ${esc(r.ref_scan || 'fără scan anterior')} · ` +
+    `schimbări noi: ${nSemn} · forme incomplete: ${g.forma_incompleta.length} · necunoscut: ${g.necunoscut.length} · neschimbat: ${g.neschimbat.length}` +
+    `${r.test ? ' · TEST: nimic scris în bibliotecă' : ' · note scrise: ' + (notate ?? '?')}</p>` +
+    `<p style="margin:0 0 10px;color:#5a6975;font-size:12px">${r.cautari || 0} căutări web · ~$${cost.toFixed(2)}. Scanul doar semnalează — validează pe M. Oficial înainte de a schimba citările.</p>` +
+    (nSemn ? tabel('🔴 Schimbări noi (după ultimul scan)', g.schimbare_noua) : `<p style="color:#17703c"><b>Nicio schimbare nouă după ${esc(r.ref_scan || 'ultima verificare')}.</b></p>`) +
+    tabel('🟠 Forma cunoscută incompletă (goluri vechi, nu noutăți)', g.forma_incompleta) +
+    tabel('🟡 Necunoscut', g.necunoscut) +
+    tabel('🟢 Neschimbat', g.neschimbat) +
+    (erori.length ? `<p style="color:#a32a21">Erori AI: ${esc(erori.join(' | '))}</p>` : '') +
+    `<p style="margin:14px 0 0"><a href="https://pontaj-pro-sooty.vercel.app/ofertare">Ofertare → Referințe → Normative</a></p>` +
+    `<p style="color:#c0392b;font-size:12px;margin-top:16px"><b>⚠️ Nu răspunde la acest email</b> — e trimis automat.</p></div>`;
+  return { subiect, html, nSemn };
+}

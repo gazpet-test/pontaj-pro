@@ -1,4 +1,42 @@
-# Runbook — normative-scan-lunar v9 (rotire secret + deploy)
+# Runbook — normative-scan-lunar v10 (scan în bucăți, 12.10.2026)
+
+v9 era omorâtă la limita `EdgeRuntime.waitUntil` (~400s): 37 acte = 7 loturi × (Opus + până la 8 căutări) într-o
+singură invocare. v10: **o invocare = un lot** (apelul AI tăiat la 240s), progresul în `public.normative_scan_rulari`,
+funcția se reapelează singură pentru lotul următor. Mail + note DOAR după ultimul lot.
+
+Ordinea livrării (fiecare pas cu „da” de la Răzvan):
+1. **Migrarea `20261025b_normative_scan_rulari`** prin `scripts/livrare_migrare.sh` (tabel + 4 funcții `fn_norm_scan_*`
+   doar service_role + jobul `normative_scan_continua` la 10 min). Jobul 39 nu se schimbă.
+   Revenire: `supabase/revenire/20261025b_normative_scan_rulari_ROLLBACK.sql` + redeploy v9.
+2. **Deploy** `normative-scan-lunar` (verify_jwt=false, ca înainte; poarta rămâne `x-norm-secret`).
+   Ordinea contează: migrarea ÎNAINTE de deploy (v10 fără tabel = eroare în log, fără mail).
+3. **Test** (mod test: nu scrie în bibliotecă, mail cu [TEST]):
+   ```sql
+   SELECT net.http_post(
+     url := 'https://dxczwkbciseqniprspcu.supabase.co/functions/v1/normative-scan-lunar?test=1',
+     headers := jsonb_build_object('Content-Type','application/json',
+       'x-norm-secret', (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'norm_scan_secret')),
+     body := '{}'::jsonb, timeout_milliseconds := 30000);
+   -- progres (un rând per rulare):
+   SELECT id, test, stare, lot_curent, nr_loturi, incercari_lot, lease_pana, jsonb_array_length(verdicte) AS verdicte,
+          erori, cautari, note_la, mail_la, creat_la, actualizat_la
+   FROM public.normative_scan_rulari ORDER BY id DESC LIMIT 3;
+   ```
+   Așteptat: `lot_curent` crește 0→7 în ~7–15 minute, apoi `stare = finalizat`, `mail_la` setat, un singur mail [TEST].
+
+Comportament:
+- Pornire dublă (cron + manual) → o singură rulare deschisă per mod (index unic parțial); a doua pornire o reia.
+- Invocare omorâtă în mijlocul lotului → lease-ul (6 min) expiră, cronul-plasă (sau următorul apel) reia ACELAȘI lot;
+  după 3 încercări întrerupte lotul iese „necunoscut” cu eroare în mail, ca rularea să nu stea blocată.
+- Salvarea unui lot reușește o singură dată (lot_curent neschimbat) → fără verdicte dublate.
+- Notele și mailul se iau o singură dată (`note_la` / `mail_la`): cel mult o notă, cel mult un mail per rulare.
+  Pe deasupra, o notă `SCAN <azi>` deja prezentă pe rând nu se mai adaugă.
+- Rulare deschisă mai veche de 24h → `abandonat` la următoarea pornire.
+- Cronul-plasă face apel HTTP DOAR dacă există o rulare deschisă fără progres de 8 minute.
+
+---
+
+# (istoric) Runbook — normative-scan-lunar v9 (rotire secret + deploy)
 
 Nimic din pașii de mai jos nu a fost aplicat. Îi execută Răzvan, în ordine. Valoarea secretului nu trece prin chat.
 
