@@ -289,10 +289,32 @@ Deno.test('r5 atestări: „&”, „cu … isc domeniul 8.4”, element structu
   const mixt: any = { atestari: 'ANRE ET', atestari_firma: [{ cerinta: 'ANRE ET și certificat de mediu', document_firma_id: 13 }] }
   const rm = valideazaAtestariFirma(mixt, valabile, null)
   assert.equal(mixt.atestari_firma[0].status, 'neconfirmata'); assert.equal(rm.neconfirmate.length, 1)
-  // formularea reală din fișa Botoșani (doc 532), cu „și” în interiorul formulării standard
+  // formularea reală din fișa Botoșani (doc 532): după r6 (fără excepția „continuare”), segmentul fără cod o face „de verificat de om”,
+  // cu documentul #13 arătat drept candidat — fail-closed, cost acceptat (plafon #1724)
   const bot = 'Autorizație ANRE tip ET pentru executarea sistemelor de transport și instalații utilizare gaze naturale în regim de înaltă presiune (Ordin ANRE 132/2021)'
   const p: any = { atestari: bot, atestari_firma: [{ cerinta: bot, document_firma_id: 13 }] }
   const rb = valideazaAtestariFirma(p, valabile, '2026-10-30')
-  assert.equal(p.atestari_firma[0].status, 'indeplinita')
-  assert.deepEqual([rb.neconfirmate.length, rb.neacoperite.length, rb.expira.length], [0, 0, 0])
+  assert.equal(p.atestari_firma[0].status, 'neconfirmata')
+  assert.match(p.atestari_firma[0].sursa, /candidat: documente_firma #13/)
+  assert.ok(rb.neconfirmate.length >= 1)
+  // formularea într-un singur segment rămâne verde
+  const simplu = 'Autorizație ANRE tip ET pentru executarea sistemelor de transport (Ordin ANRE 132/2021)'
+  const s: any = { atestari: simplu, atestari_firma: [{ cerinta: simplu, document_firma_id: 13 }] }
+  const rs = valideazaAtestariFirma(s, valabile, '2026-10-30')
+  assert.equal(s.atestari_firma[0].status, 'indeplinita')
+  assert.deepEqual([rs.neconfirmate.length, rs.neacoperite.length, rs.expira.length], [0, 0, 0])
+})
+
+// ── runda 6 (Jakarinos r6 + Copilot r5): segmentul fără cod nu mai e niciodată „continuare” acceptată automat ───────────────
+Deno.test('r6 atestări: „… și autorizație pentru proiectare / exploatare”, „… și tip …”, segment fără cod = de verificat', () => {
+  const { valabile } = liniiFirma([ET13], AZI)
+  const et = [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }]
+  for (const txt of ['ANRE ET și autorizație pentru proiectare sisteme gaze naturale', 'ANRE ET și autorizație pentru exploatare sisteme gaze naturale',
+    'ANRE ET și tip pentru proiectare gaze naturale', 'Autorizație ANRE pentru proiectare']) {
+    assert.ok(valideazaAtestariFirma({ atestari: txt, atestari_firma: et }, valabile, null).neconfirmate.length >= 1, txt)
+  }
+  const p: any = { atestari_firma: [{ cerinta: 'Autorizație ANRE tip ET pentru executare și autorizație pentru proiectare sisteme gaze naturale', document_firma_id: 13 }] }
+  valideazaAtestariFirma(p, valabile, null)
+  assert.equal(p.atestari_firma[0].status, 'neconfirmata')
+  assert.deepEqual(segmenteCerinte('Ordin ANRE 132/2021'), ['Ordin ANRE'])   // „/” din trimiterea la ordin nu mai rupe
 })
