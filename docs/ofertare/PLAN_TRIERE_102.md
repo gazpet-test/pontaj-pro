@@ -68,3 +68,23 @@ deploy → re-triere 102 → **2b** restul grupurilor (reguli) → **2c** avize 
 - **D3** Documentele de criterii: A = recunoaștere după nume (`criteri|detaliere|factor`, recomandat, fără schemă) / B = tip nou `criterii_atribuire` (schemă + reclasificare).
 - **D4** Lista exactă de echivalențe ANRE vechi → nou de pus în cod (o completează / confirmă Răzvan; până atunci nicio echivalență acceptată automat).
 - ~~D5~~ închis 13.10: ET e în `documente_firma` #13 (până 2027-07-27). a03 = varianta A (Răzvan 13.10).
+
+## D4 — propunere de echivalențe ANRE (din datele reale, 13.10) — DE APROBAT de Răzvan înainte de cod
+
+Catalogul `hr_autorizatii_tipuri` (persoane): toate legitimațiile valide ale oamenilor activi sunt pe **nomenclatura veche**
+(pre-Ord. ANRE 132/2021); din nomenclatura nouă există în catalog doar EGNL și EIH, cu 0 persoane.
+
+| Cod vechi (id tip) | Valabile, titular activ | Echivalent nou propus (cerința din fișă pe care o acoperă) |
+|---|---:|---|
+| EGT — Executant Gaze Transport (25) | 5 | cerința de **execuție transport** gaze naturale |
+| EGD — Executant Gaze Distribuție (24) | 7 | cerința de **execuție distribuție** gaze naturale |
+| EGIU — Executant Gaze Industrial Utilizator (26) | 6 | cerința de **execuție instalații de utilizare** |
+| PGT — Proiectant Gaze Transport (28) | 1 | cerința de **proiectare transport** |
+| PGD — Proiectant Gaze Distribuție (27) | 2 | cerința de **proiectare distribuție** |
+| PGIU — Proiectant Gaze Industrial Utilizator (29) | 2 | cerința de **proiectare instalații de utilizare** |
+
+Reguli propuse: echivalența e doar pe ACELAȘI domeniu (transport ↔ transport, distribuție ↔ distribuție, utilizare ↔ utilizare) și
+același fel (execuție ↔ execuție, proiectare ↔ proiectare); niciodată distribuție → transport sau proiectare → execuție. Codurile
+exacte din nomenclatura nouă (denumirile din fișe) se scriu în tabel DOAR din textul Ordinului ANRE confirmat de Răzvan — nu le
+completez din memorie. Autorizațiile de FIRMĂ (ET, EDIB, EDSB, EPI…) nu intră aici: sunt în `documente_firma` (#10–#13).
+RTE (8.4/8.5, ISC) nu sunt ANRE — rămân pe tipurile lor.
