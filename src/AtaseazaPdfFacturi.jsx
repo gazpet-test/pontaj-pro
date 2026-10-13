@@ -26,6 +26,7 @@ export default function AtaseazaPdfFacturi({ facturi, onClose }) {
   const [citire, setCitire]   = useState(false)
   const [lucru, setLucru]     = useState(false)
   const [rezultat, setRezultat] = useState(null) // [{id, nr_complet, pdf_path, nas_path, sha256, ok, eroare}]
+  const [dinNas, setDinNas]   = useState(false)  // nas_synced=true se bazează pe faptul că fișierele vin direct din folderul NAS
 
   const alege = async (e) => {
     const files = [...(e.target.files || [])]
@@ -35,11 +36,15 @@ export default function AtaseazaPdfFacturi({ facturi, onClose }) {
       const rez = potriveste(files, facturi)
       const out = []
       for (const r of rez) {
+        let { stare, motiv } = r
+        // mărimea se verifică ÎNAINTE de citire: fișierele mari nu se încarcă în memorie
+        if (r.fisier.size > MAX_BYTES || r.fisier.size === 0) {
+          out.push({ ...r, stare: stare === 'ok' ? 'invalid' : stare, motiv: stare === 'ok' ? `mărime ${kb(r.fisier.size)} (max 10 MB)` : motiv, sha: null, buf: null })
+          continue
+        }
         const buf = await r.fisier.arrayBuffer()
         const sha = await sha256Hex(buf)
-        let { stare, motiv } = r
         if (stare === 'ok' && !numeSigur(r.fisier.name)) { stare = 'invalid'; motiv = 'nume de fișier nepermis' }
-        else if (stare === 'ok' && (r.fisier.size > MAX_BYTES || r.fisier.size === 0)) { stare = 'invalid'; motiv = `mărime ${kb(r.fisier.size)} (max 10 MB)` }
         else if (stare === 'ok' && !/^%PDF-/.test(new TextDecoder().decode(new Uint8Array(buf.slice(0, 5))))) { stare = 'invalid'; motiv = 'conținutul nu e PDF' }
         out.push({ ...r, stare, motiv, sha, buf: stare === 'ok' ? buf : null })
       }
@@ -54,7 +59,7 @@ export default function AtaseazaPdfFacturi({ facturi, onClose }) {
   const deAtasat = useMemo(() => randuri.filter(r => r.stare === 'ok'), [randuri])
 
   const ataseaza = async () => {
-    if (!deAtasat.length || lucru) return
+    if (!deAtasat.length || lucru || !dinNas) return
     if (!window.confirm(`Atașez ${deAtasat.length} PDF-uri la facturile potrivite? Fișierele existente în Storage NU se suprascriu.`)) return
     setLucru(true)
     const jurnal = []
@@ -66,13 +71,19 @@ export default function AtaseazaPdfFacturi({ facturi, onClose }) {
       const { error: eUp } = await supabase.storage.from('facturi-emise')
         .upload(pdf_path, new Blob([r.buf], { type: 'application/pdf' }), { upsert: false, contentType: 'application/pdf' })
       if (eUp) { rand.eroare = `upload: ${eUp.message}`; jurnal.push(rand); continue }
-      const { data, error: eRpc } = await supabase.rpc('fn_factura_ataseaza_pdf', { p_id: f.id, p_pdf_path: pdf_path, p_nas_path: nas_path })
-      if (eRpc || !data?.ok) {
-        rand.eroare = `legare: ${eRpc?.message || data?.motiv || 'necunoscut'}`
-        // obiectul urcat de noi acum nu rămâne orfan
+      const args = { p_id: f.id, p_pdf_path: pdf_path, p_nas_path: nas_path }
+      let { data, error: eRpc } = await supabase.rpc('fn_factura_ataseaza_pdf', args)
+      if (eRpc) ({ data, error: eRpc } = await supabase.rpc('fn_factura_ataseaza_pdf', args))  // RPC idempotent: o reîncercare
+      if (data?.ok) rand.ok = true
+      else if (data && data.ok === false) {
+        // răspuns DEFINITIV de la server (factura are alt PDF): obiectul urcat acum nu rămâne orfan
+        rand.eroare = `legare: ${data.motiv || 'refuzat'}`
         const { error: eDel } = await supabase.storage.from('facturi-emise').remove([pdf_path])
         if (eDel) rand.eroare += ` · fișierul ${pdf_path} a rămas în Storage (${eDel.message})`
-      } else rand.ok = true
+      } else {
+        // stare neconfirmată (eroare / rețea): NU ștergem — poate legarea s-a făcut; fișierul rămâne, se verifică manual
+        rand.eroare = `legare neconfirmată: ${eRpc?.message || 'fără răspuns'} · fișierul ${pdf_path} NU a fost șters`
+      }
       jurnal.push(rand)
     }
     setRezultat(jurnal); setLucru(false)
@@ -114,7 +125,13 @@ export default function AtaseazaPdfFacturi({ facturi, onClose }) {
           )}
           <div style={{ flex:1 }} />
           {!rezultat && (
-            <button onClick={ataseaza} disabled={!deAtasat.length || lucru} style={{ ...btn(C.green), opacity: !deAtasat.length || lucru ? .5 : 1 }}>
+            <label style={{ fontSize:12, color: dinNas ? C.text : C.yellow, display:'flex', alignItems:'center', gap:6, cursor:'pointer' }}>
+              <input type="checkbox" checked={dinNas} onChange={e => setDinNas(e.target.checked)} disabled={lucru} />
+              Fișierele sunt alese direct din folderul NAS „Facturi &lt;an&gt;” (nu copii locale)
+            </label>
+          )}
+          {!rezultat && (
+            <button onClick={ataseaza} disabled={!deAtasat.length || lucru || !dinNas} style={{ ...btn(C.green), opacity: !deAtasat.length || lucru || !dinNas ? .5 : 1 }}>
               {lucru ? 'Se atașează…' : `Atașează ${deAtasat.length}`}
             </button>
           )}
@@ -144,7 +161,7 @@ export default function AtaseazaPdfFacturi({ facturi, onClose }) {
                     <tr key={i} style={{ borderBottom:`1px solid ${C.border}` }}>
                       <td style={{ padding:'6px 8px', maxWidth:340, wordBreak:'break-all' }}>{r.fisier.name}</td>
                       <td style={{ padding:'6px 8px', whiteSpace:'nowrap' }}>{kb(r.fisier.size)}</td>
-                      <td style={{ padding:'6px 8px', fontFamily:'monospace' }} title={r.sha}>{r.sha?.slice(0, 12)}…</td>
+                      <td style={{ padding:'6px 8px', fontFamily:'monospace' }} title={r.sha || ''}>{r.sha ? `${r.sha.slice(0, 12)}…` : '—'}</td>
                       <td style={{ padding:'6px 8px', whiteSpace:'nowrap' }}>{r.factura ? (r.factura.nr_complet || `GAZ-${r.factura.nr}`) : '—'}</td>
                       <td style={{ padding:'6px 8px' }}>{r.factura?.beneficiar_nume || '—'}</td>
                       <td style={{ padding:'6px 8px', whiteSpace:'nowrap' }}>{r.factura?.total != null ? Number(r.factura.total).toLocaleString('ro-RO', { minimumFractionDigits:2 }) : '—'}</td>

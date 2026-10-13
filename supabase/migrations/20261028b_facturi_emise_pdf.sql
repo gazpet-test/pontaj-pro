@@ -7,6 +7,8 @@
 --   * fn_factura_ataseaza_pdf(p_id, p_pdf_path, p_nas_path) — DOAR owner: leagă un PDF deja urcat în facturi-emise de
 --     o factură fără PDF. Un singur UPDATE: pdf_path + nas_synced = true + nas_path (calea EXISTENTĂ de pe NAS), doar
 --     WHERE pdf_path IS NULL → containerul facturi-sync (ia pdf_path NOT NULL AND nas_synced = false) nu le re-scrie.
+--     Idempotent: aceeași legare repetată (răspuns pierdut) întoarce ok + deja=true. nas_path = afirmația owner-ului
+--     (UI-ul cere confirmarea explicită că fișierele sunt alese direct din folderul NAS).
 -- Politici storage.objects „facturi_storage_*” (azi: orice authenticated, pentru toate 4 operațiile):
 --   select / insert / update → bucket facturi-emise AND fn_facturi_pdf_acces()   (upload-ul din Financiar folosește upsert)
 --   delete                   → bucket facturi-emise AND fn_is_app_owner(auth.uid())
@@ -78,10 +80,16 @@ BEGIN
      SET pdf_path = p_pdf_path, nas_synced = true, nas_path = p_nas_path
    WHERE id = p_id AND pdf_path IS NULL
   RETURNING nr_complet INTO v_nr;
-  IF v_nr IS NULL THEN
-    RETURN jsonb_build_object('ok', false, 'motiv', 'factura inexistenta sau are deja PDF');
+  IF v_nr IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', true, 'id', p_id, 'nr_complet', v_nr, 'deja', false);
   END IF;
-  RETURN jsonb_build_object('ok', true, 'id', p_id, 'nr_complet', v_nr);
+  -- idempotent: reîncercarea după un răspuns pierdut găsește exact aceeași legare
+  SELECT nr_complet INTO v_nr FROM public.facturi_emise
+   WHERE id = p_id AND pdf_path = p_pdf_path AND nas_path = p_nas_path AND nas_synced;
+  IF v_nr IS NOT NULL THEN
+    RETURN jsonb_build_object('ok', true, 'id', p_id, 'nr_complet', v_nr, 'deja', true);
+  END IF;
+  RETURN jsonb_build_object('ok', false, 'motiv', 'factura inexistenta sau are alt PDF');
 END
 $f$;
 REVOKE ALL ON FUNCTION public.fn_factura_ataseaza_pdf(bigint, text, text) FROM PUBLIC, anon;
@@ -116,7 +124,11 @@ BEGIN
   IF n <> 4
      OR has_function_privilege('anon', 'public.fn_factura_ataseaza_pdf(bigint,text,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.fn_facturi_pdf_acces()', 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', 'public.fn_is_app_owner(uuid)', 'EXECUTE') THEN
+     OR NOT has_function_privilege('authenticated', 'public.fn_is_app_owner(uuid)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.fn_facturi_pdf_acces()', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.fn_factura_ataseaza_pdf(bigint,text,text)', 'EXECUTE')
+     OR NOT (SELECT bool_and(prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp']) FROM pg_proc
+              WHERE oid IN ('public.fn_facturi_pdf_acces()'::regprocedure, 'public.fn_factura_ataseaza_pdf(bigint,text,text)'::regprocedure)) THEN
     RAISE EXCEPTION '20261028b: postconditie drepturi functii';
   END IF;
   IF current_setting('gazpet.livrare_migrare', true)
