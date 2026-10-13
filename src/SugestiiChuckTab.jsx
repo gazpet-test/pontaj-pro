@@ -93,18 +93,11 @@ export default function SugestiiChuckTab({ profile, employees, autorizatii, show
   const runChuckPatrol = async () => {
     setRunning(true)
     try {
-      const SUPABASE_URL = supabase.supabaseUrl
-      const r = await fetch(`${SUPABASE_URL}/functions/v1/chuck_norris_hr_bot`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-bot-secret': 'nenicu-patrol-2026',
-        },
-        body: JSON.stringify({ run_type: 'manual_chuck_ui' }),
-      })
-      const data = await r.json()
+      // 13.10.2026: fără secret în frontend — edge-ul verifică JWT-ul (owner sau modul 'hr')
+      const { data, error } = await supabase.functions.invoke('chuck_norris_hr_bot', { body: {} })
+      if (error) throw new Error(error.message)
       if (data.error) throw new Error(data.error)
-      showToast?.(`🥋 Chuck a vorbit! ${data.sugestii_create || 0} sugestii noi în ${data.output_text?.match(/\d+ms/)?.[0] || '?'}`, 'success')
+      showToast?.(`🥋 Chuck a vorbit! ${data.sugestii_create || 0} sugestii noi în ${data.durata_ms != null ? data.durata_ms + 'ms' : '?'}`, 'success')
       await loadSugestii()
       if (onReload) onReload()
     } catch (e) {
