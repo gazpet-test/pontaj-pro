@@ -1891,28 +1891,26 @@ function PontajPage() {
   // următoare, apoi doar prin tichet HR (Natalia → aprobat de Marilena). Runda 1 = verificare în UI;
   // importul Excel și scrierile directe le acoperă abia trigger-ul din runda 2.
   const lunaSt = stareLuna(date)
-  const tichetCorecturaRef = useRef(null)   // tichetul HR folosit la modificarea în curs (se notează în istoric)
+  // Poarta întoarce {ok, tichet} pentru operația CONCRETĂ — tichetul nu stă într-un ref comun,
+  // ca două salvări simultane să nu se noteze una pe tichetul alteia (Copilot P1-1).
   const requestPasswordIfExported = (empName) => new Promise((resolve) => {
-    tichetCorecturaRef.current = null
-    if (!isDateExported && !lunaSt.cereTichet) { resolve(true); return }
+    if (!isDateExported && !lunaSt.cereTichet) { resolve({ ok: true, tichet: null }); return }
     if (!canEditRetroactivePontaj) {
       showToast(lunaSt.cereTichet
         ? `🚫 Luna e închisă și termenul de corecturi (${fmtZiPontaj(lunaSt.termen)}) a trecut — corectura se face doar prin tichet HR deschis de Natalia și aprobat de Marilena.`
         : '🚫 Modificare retroactivă blocată — doar Trusu Razvan, Marilena și Natalia pot modifica zile exportate. Contactează unul dintre ei.', 'error')
-      resolve(false)
+      resolve({ ok: false, tichet: null })
       return
     }
     setPasswordPrompt({
       employeeName: empName,
       cereTichet: lunaSt.cereTichet,
-      onConfirm: (tichet) => { tichetCorecturaRef.current = tichet || null; resolve(true) },
-      onCancel: () => resolve(false),
+      onConfirm: (tichet) => resolve({ ok: true, tichet: tichet || null }),
+      onCancel: () => resolve({ ok: false, tichet: null }),
     })
   })
   // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi, ce câmpuri.
-  const noteazaCorectura = async (emp, campuri) => {
-    const t = tichetCorecturaRef.current
-    tichetCorecturaRef.current = null
+  const noteazaCorectura = async (emp, campuri, t) => {
     if (!t) return
     const uid = (await supabase.auth.getUser()).data.user?.id
     const { error } = await supabase.from('tichete_istoric').insert({
@@ -1953,7 +1951,7 @@ function PontajPage() {
 
   const saveRecord = async (emp, fields) => {
     // Gate parolă dacă data afișată e în perioadă deja exportată
-    const okAuth = await requestPasswordIfExported(emp.name)
+    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
     if (!okAuth) {
       showToast('Modificare anulată — parolă necesară pentru zi plătită', 'warn')
       return
@@ -1964,12 +1962,12 @@ function PontajPage() {
     if (!fields.norma && !recSiteId) { showToast('Șantierul este obligatoriu pentru ore!','error'); setSaving(null); return }
     const uid=(await supabase.auth.getUser()).data.user?.id
     const {data,error}=await supabase.from('pontaj_records').upsert({employee_id:emp.id,date,site_id:recSiteId,created_by:uid,updated_by:uid,updated_at:new Date().toISOString(),...fields},{onConflict:'employee_id,date'}).select().single()
-    if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`); await noteazaCorectura(emp, Object.keys(fields))} else { tichetCorecturaRef.current = null; showToast('Eroare la salvare','error') }
+    if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`); await noteazaCorectura(emp, Object.keys(fields), tichet)} else showToast('Eroare la salvare','error')
     setSaving(null)
   }
   const allocate = async (emp, siteId) => {
     // Gate parolă dacă data afișată e în perioadă deja exportată
-    const okAuth = await requestPasswordIfExported(emp.name)
+    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
     if (!okAuth) {
       showToast('Realocare anulată — parolă necesară pentru zi plătită', 'warn')
       return
@@ -1979,7 +1977,7 @@ function PontajPage() {
     const {data:rec}=await supabase.from('pontaj_records')
       .upsert({employee_id:emp.id,date,site_id:siteId||null,updated_by:uid,updated_at:new Date().toISOString()},{onConflict:'employee_id,date'})
       .select().single()
-    if(rec){ setRecs(prev=>({...prev,[emp.id]:rec})); await noteazaCorectura(emp, ['site_id']) } else tichetCorecturaRef.current = null
+    if(rec){ setRecs(prev=>({...prev,[emp.id]:rec})); await noteazaCorectura(emp, ['site_id'], tichet) }
     // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
     if(!emp.site_id&&siteId){
       await supabase.from('employees').update({site_id:siteId}).eq('id',emp.id)
@@ -2093,7 +2091,8 @@ function PontajPage() {
             </div>
             {passwordPrompt.cereTichet && <>
               <div style={{fontSize:12,color:G.red,marginBottom:8,lineHeight:1.5}}>
-                Luna e închisă și termenul de corecturi ({fmtZiPontaj(lunaSt.termen)}) a trecut. Corectura se face doar pe baza tichetului HR (Natalia → aprobat de Marilena); se notează în istoricul tichetului.
+                Luna e închisă și termenul de corecturi ({fmtZiPontaj(lunaSt.termen)}) a trecut. Corectura se face doar pe baza tichetului HR deschis de Natalia și aprobat de Marilena; se notează în istoricul tichetului.
+                <div style={{color:G.muted,marginTop:4}}>ERP-ul verifică doar că tichetul e de HR și nerespins — <strong>aprobarea Marilenei o confirmi tu în tichet</strong> înainte de corectură.</div>
               </div>
               <input value={tichetInput} onChange={e=>{setTichetInput(e.target.value); setPwdErr('')}} placeholder="Nr. tichet HR, ex. TKT-2026-0287" disabled={pwdVerifying}
                 style={{...S.input,width:'100%',padding:'10px 14px',fontSize:14,fontFamily:'monospace',marginBottom:10}} />

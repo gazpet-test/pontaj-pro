@@ -8,7 +8,8 @@ export const ZI_TERMEN_CORECTURI = 12
 
 const parse = (s) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ''))
-  return m ? { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) } : null
+  if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return null   // lună imposibilă → invalid (Copilot P1-3)
+  return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) }
 }
 const ziLocala = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
 
@@ -45,7 +46,8 @@ export function normalizeazaTichet(text) {
   return `TKT-${m[1]}-${m[2].padStart(4, '0')}`
 }
 
-// Tichet valabil pentru corectură: departament HR și nerespins.
+// Tichet valabil pentru corectură: departament HR și nerespins. Runda 1 NU verifică aprobarea Marilenei
+// (nu există încă câmp de aprobare pe tichet) — o confirmă omul în tichet; runda 2 o face tehnic.
 export function tichetValabil(t) {
   return !!t && t.departament === 'hr' && t.status !== 'respins'
 }

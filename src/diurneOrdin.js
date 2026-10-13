@@ -15,6 +15,7 @@ export const ZI_GENERARE_ORDINE = 16
 export function dataMinimaGenerareOrdin(periodFrom) {
   if (!/^\d{4}-\d{2}-\d{2}/.test(String(periodFrom || ''))) return null
   const [y, m] = periodFrom.slice(0, 7).split('-').map(Number)
+  if (m < 1 || m > 12) return null   // lună imposibilă (Copilot P1-3)
   return new Date(y, m, ZI_GENERARE_ORDINE)   // luna m (1-based) = luna următoare în Date (0-based)
 }
 

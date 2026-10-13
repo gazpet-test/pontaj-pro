@@ -22,6 +22,9 @@ describe('ordine de deplasare — de pe 16 a lunii următoare', () => {
   })
   it('perioadă invalidă → blocat', () => {
     expect(dataMinimaGenerareOrdin('')).toBeNull()
+    expect(dataMinimaGenerareOrdin('2026-99-01')).toBeNull()
+    expect(lunaInchisa('2026-13-01', zi('2027-06-01'))).toBe(false)
+    expect(termenCorecturi('2026-00-10')).toBeNull()
     expect(poateGeneraOrdin(null, zi('2030-01-01'))).toBe(false)
   })
   it('mesajul de blocare', () => {
