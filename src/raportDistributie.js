@@ -126,7 +126,7 @@ export function buildHtml({ antet, data, linii, unitati, lucrare }) {
   const rowsB = pad(br, RANDURI_PDF.bransament, 'bransament').map((l, i) => `<tr>
       <td style="${td};text-align:center">${i + 1}</td>
       <td style="${td}">${l.gol ? '' : esc(tronsonText(l, unitati))}</td>
-      <td style="${td};text-align:center">${l.gol ? 'Bransament' : esc(l.descriere || 'Branșament')}</td>
+      <td style="${td};text-align:center">${l.gol ? 'Branșament' : esc(l.descriere || 'Branșament')}</td>
       <td style="${td};text-align:center">${l.gol ? '32' : esc(l.diametru_mm ?? '')}</td>
       <td style="${td};text-align:center">${l.gol ? '' : esc(fmtNum(l.lungime_m))}</td>
       <td style="${td};text-align:center">${l.gol ? '' : esc(l.se1)}</td>
