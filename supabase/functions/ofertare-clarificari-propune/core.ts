@@ -123,7 +123,7 @@ export async function propuneClarificari(supabase: any, body: any): Promise<any>
     if (!lic) return fail('licitatie negasita')
 
     const [{ data: cerToate }, { data: acop }, { data: cant, count: nCant }, { data: verif }, { data: docs }, { data: clarLic }, rConfl] = await Promise.all([
-      supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare, sursa_document_id, lot_domeniu, lot_nr').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
+      supabase.from('ofertare_cerinte').select('id, tip, text_cerinta, sursa_sectiune, sursa_pagina, document_probant, cand_se_prezinta, lot, stare, sursa_document_id, surse_document_ids, lot_domeniu, lot_nr').eq('licitatie_id', licId).is('inlocuita_de', null).order('id'),
       supabase.from('ofertare_acoperire').select('cerinta_id, status, motiv, mod').eq('status', 'gol').limit(5000),
       // R5 condiția 2 (26.09.2026): limita de 40 nu mai taie TACIT — count exact, iar promptul spune câte au rămas pe dinafară
       supabase.from('ofertare_cantitati').select('id, obiect, categorie, denumire, um, cantitate, cantitate_plansa, diferenta_nota, sursa, tip_sursa, status, lot_domeniu, lot_nr, surse_document_ids, extras_de_ai', { count: 'exact' }).eq('licitatie_id', licId).not('diferenta_nota', 'is', null).order('id').limit(LIMITA_CANTITATI),

@@ -72,7 +72,7 @@ Deno.serve(async (req) => {
 
   // --- Trecerea A: constructor (determinist) ---
   const { data: cerinte } = await sb.from('ofertare_cerinte')
-    .select('id, tip, lot, text_cerinta, document_probant, cand_se_prezinta, confirmata_de, sursa_document_id, lot_domeniu, lot_nr, ofertare_acoperire(id, mod, status, doc_firma_id)')
+    .select('id, tip, lot, text_cerinta, document_probant, cand_se_prezinta, confirmata_de, sursa_document_id, surse_document_ids, lot_domeniu, lot_nr, ofertare_acoperire(id, mod, status, doc_firma_id)')
     .eq('licitatie_id', licId).is('inlocuita_de', null)
   // Poarta pe loturi (20261024b, review Jakarinos P1 #6) — ÎNAINTE de trecerile B și C (plătite): doar cerințele din
   // documente eligibile ACUM și de pe loturi la care participăm intră în verificare. Fără participare / poarta picată = stop.

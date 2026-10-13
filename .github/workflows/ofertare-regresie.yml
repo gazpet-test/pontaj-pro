@@ -51,6 +51,10 @@ on:
       - 'supabase/tests/ofertare_provenienta_schelet.sql'
       - 'scripts/test_ofertare_loturi_mvp.sh'
       - 'scripts/test_ofertare_provenienta_derivate.sh'
+      - 'supabase/migrations/20261026a_ofertare_rigoare_provenienta*.sql'
+      - 'supabase/revenire/20261026a_ofertare_rigoare_provenienta*.sql'
+      - 'supabase/tests/ofertare_rigoare_schelet.sql'
+      - 'scripts/test_ofertare_rigoare_provenienta.sh'
       - '.github/workflows/ofertare-regresie.yml'
   push:
     branches: [main]
@@ -103,6 +107,10 @@ on:
       - 'supabase/tests/ofertare_provenienta_schelet.sql'
       - 'scripts/test_ofertare_loturi_mvp.sh'
       - 'scripts/test_ofertare_provenienta_derivate.sh'
+      - 'supabase/migrations/20261026a_ofertare_rigoare_provenienta*.sql'
+      - 'supabase/revenire/20261026a_ofertare_rigoare_provenienta*.sql'
+      - 'supabase/tests/ofertare_rigoare_schelet.sql'
+      - 'scripts/test_ofertare_rigoare_provenienta.sh'
       - '.github/workflows/ofertare-regresie.yml'
   workflow_dispatch:
 
@@ -127,6 +135,8 @@ jobs:
         run: bash scripts/test_ofertare_loturi_mvp.sh --opreste
       - name: Harness proveniență derivate (20261025a)
         run: bash scripts/test_ofertare_provenienta_derivate.sh --opreste
+      - name: Harness rigoare proveniență (20261026a, RPC-urile reale)
+        run: bash scripts/test_ofertare_rigoare_provenienta.sh --opreste
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
