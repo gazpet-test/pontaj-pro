@@ -63,7 +63,7 @@ const RANDURI = [
   ['Cumul de funcții', r => r.cumul_functii_interzis == null ? null : (r.cumul_functii_interzis ? '⚠️ INTERZIS — o persoană nu poate îndeplini mai multe funcții' : 'permis / nespecificat')],
   ['Atestări / autorizații de firmă', r => r.atestari],
   // v1.9: verificate în cod față de documente_firma (id + valabilitate), nu pe cuvântul AI
-  ['Autorizații de firmă — acoperire', r => (r.atestari_firma || []).map(a => `${a.status === 'indeplinita' ? '✅' : '⛔'} ${a.cerinta} — ${a.sursa}`).join('\n') || null],
+  ['Autorizații de firmă — acoperire', r => (r.atestari_firma || []).map(a => `${a.status === 'indeplinita' ? '✅' : a.status === 'expira_inainte_de_termen' ? '⚠️' : '⛔'} ${a.cerinta} — ${a.sursa}`).join('\n') || null],
   ['Sursa de finanțare', r => r.sursa_finantare],
   ['Garanție de participare', r => r.garantie_participare],
   ['Garanție de bună execuție', r => r.garantie_buna_executie],
@@ -78,7 +78,10 @@ export function exportTriereXlsx(licitatie, rez) {
   for (const [k, f] of RANDURI) rows.push([k, f(rez) || '', ''])
   rows.push(['Personal minim / roluri solicitate', rez.cumul_functii_interzis ? 'O persoană nu poate îndeplini în mod cumulativ mai multe funcții' : '', ''])
   for (const r of rez.roluri || []) {
-    rows.push([r.rol || '', r.cerinte || '', (r.propunere || 'NIMENI') + (r.depinde_de_transport ? (r.risc_eliminare ? ' — RISC: cerința minimă depinde de acceptarea transportului' : ' — punctaj condiționat de acceptarea transportului') : '')])
+    rows.push([r.rol || '', r.cerinte || '', (r.propunere || 'NIMENI') + (r.depinde_de_transport ? (r.risc_eliminare ? ' — RISC: cerința minimă depinde de acceptarea transportului' : ' — punctaj condiționat de acceptarea transportului') : '') +
+      // v1.9: aceleași stări ca în UI (Jakarinos r1 P2)
+      (['echivalenta_nevalidata', 'neconfirmata', 'persoana_nerezolvata'].includes(r.validare_autorizatie) ? ` — ⛔ ${r.autorizatie_ceruta || 'autorizație'} neconfirmată` : '') +
+      (r.bonus ? (r.bonus.acordat ? ` — +${r.bonus.puncte} pct bonus` : ` — +${r.bonus.puncte} pct posibil: ${r.bonus.conditie || ''}`) : '')])
     if (r.documente) rows.push(['', r.documente, r.propunere ? '' : (r.motiv || '')])
   }
   const rc = rez.repartizare_calculata
@@ -86,6 +89,7 @@ export function exportTriereXlsx(licitatie, rez) {
   for (const a of rez.alte_cerinte || []) rows.push(['Altă cerință', a, ''])
   ;(rez.clarificari_propuse || []).forEach((c, i) => rows.push([`Solicitare de clarificare nr.${i + 1}`, c, '']))
   rows.push(['Verdict triere', `${(VERDICT[rez.verdict] || VERDICT.neclar).t} — ${rez.motiv_verdict || ''}`, ''])
+  for (const a of rez.avertismente_context || []) rows.push(['⚠️ Avertisment', a, ''])
   const ws = XLSX.utils.aoa_to_sheet(rows)
   ws['!cols'] = [{ wch: 42 }, { wch: 110 }, { wch: 26 }]
   const bold = { font: { bold: true } }
@@ -216,7 +220,7 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
                       </div>
                     )}
                     {r.cumul_cu && <div style={{ fontSize:11.5, fontWeight:700, color:G.orange, marginTop:2 }}>⚠️ cumul: aceeași persoană e repartizată pe „{r.cumul_cu}"</div>}
-                    {r.validare_autorizatie === 'echivalenta_nevalidata' && <div style={{ fontSize:11.5, fontWeight:700, color:G.red, marginTop:2 }}>⛔ {r.autorizatie_ceruta}: nu e în platformă (nici prin echivalență aprobată)</div>}
+                    {['echivalenta_nevalidata', 'neconfirmata', 'persoana_nerezolvata'].includes(r.validare_autorizatie) && <div style={{ fontSize:11.5, fontWeight:700, color:G.red, marginTop:2 }}>⛔ {r.autorizatie_ceruta || 'autorizație'}: neconfirmată ({r.validare_autorizatie === 'persoana_nerezolvata' ? 'persoană neidentificată unic' : r.validare_autorizatie === 'neconfirmata' ? 'cerință nestructurată' : 'nu e în platformă, nici prin echivalență aprobată'})</div>}
                     {r.bonus && <div style={{ fontSize:11.5, fontWeight:700, color: r.bonus.acordat ? G.green : G.orange, marginTop:2 }}>{r.bonus.acordat ? `+${r.bonus.puncte} pct bonus` : `+${r.bonus.puncte} pct posibil: ${r.bonus.conditie || 'document cerut'}`}</div>}
                     {r.motiv && <div style={{ color:G.muted, fontSize:11.5 }}>{r.motiv}</div>}
                   </td>
