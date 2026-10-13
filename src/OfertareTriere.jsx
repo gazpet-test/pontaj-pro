@@ -62,6 +62,8 @@ const RANDURI = [
   ['Lucrări similare acceptate', r => r.experienta_similara?.lucrari_acceptate],
   ['Cumul de funcții', r => r.cumul_functii_interzis == null ? null : (r.cumul_functii_interzis ? '⚠️ INTERZIS — o persoană nu poate îndeplini mai multe funcții' : 'permis / nespecificat')],
   ['Atestări / autorizații de firmă', r => r.atestari],
+  // v1.9: verificate în cod față de documente_firma (id + valabilitate), nu pe cuvântul AI
+  ['Autorizații de firmă — acoperire', r => (r.atestari_firma || []).map(a => `${a.status === 'indeplinita' ? '✅' : '⛔'} ${a.cerinta} — ${a.sursa}`).join('\n') || null],
   ['Sursa de finanțare', r => r.sursa_finantare],
   ['Garanție de participare', r => r.garantie_participare],
   ['Garanție de bună execuție', r => r.garantie_buna_executie],
@@ -173,6 +175,7 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
               <div style={{ fontSize:16, fontWeight:900, color:v.c }}>{v.t}</div>
               <div style={{ fontSize:11.5, color:G.muted }}>{v.d} · încredere {rez.confidence ?? '—'}% · din „{rez.sursa?.nume?.split('/').pop()}"{rez.sursa?.pagini ? `, ${rez.sursa.pagini} pag` : ''} · {tr.autor?.name || '—'}, {new Date(tr.updated_at).toLocaleString('ro-RO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' })}</div>
               {rez.motiv_verdict && <div style={{ fontSize:13, marginTop:6 }}>{rez.motiv_verdict}</div>}
+              {(rez.avertismente_context || []).map((a, i) => <div key={i} style={{ fontSize:12, marginTop:4, color:G.orange, fontWeight:700 }}>⚠️ {a}</div>)}
             </div>
             <div style={{ marginLeft:'auto', display:'flex', flexDirection:'column', gap:6, alignItems:'flex-end' }}>
               {onProceseaza && (gate
@@ -213,6 +216,8 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
                       </div>
                     )}
                     {r.cumul_cu && <div style={{ fontSize:11.5, fontWeight:700, color:G.orange, marginTop:2 }}>⚠️ cumul: aceeași persoană e repartizată pe „{r.cumul_cu}"</div>}
+                    {r.validare_autorizatie === 'echivalenta_nevalidata' && <div style={{ fontSize:11.5, fontWeight:700, color:G.red, marginTop:2 }}>⛔ {r.autorizatie_ceruta}: nu e în platformă (nici prin echivalență aprobată)</div>}
+                    {r.bonus && <div style={{ fontSize:11.5, fontWeight:700, color: r.bonus.acordat ? G.green : G.orange, marginTop:2 }}>{r.bonus.acordat ? `+${r.bonus.puncte} pct bonus` : `+${r.bonus.puncte} pct posibil: ${r.bonus.conditie || 'document cerut'}`}</div>}
                     {r.motiv && <div style={{ color:G.muted, fontSize:11.5 }}>{r.motiv}</div>}
                   </td>
                 </tr>))}

@@ -27,6 +27,11 @@
 //   modelul dă doar rol_canonic / natura_ceruta / exclude_transport pe rol; rândurile lui rămân rezervă pentru recomandările fără listă.
 // v1.5: o persoană = un rol, repartizare pe punctaj total, cu matricea persoană × rol scoasă în JSON înainte de alegere.
 // v1.6: la egalitate de punctaj total, câștigă repartizarea cu cea mai mare marjă peste prag.
+// v1.9 (13.10.2026, Botoșani 102, plan docs/ofertare/PLAN_TRIERE_102.md): DETALIEREA CRITERIILOR (document separat) intră în context
+//   prin poarta de loturi (blocată = avertisment vizibil, verdictul nu poate fi „mergem”); AUTORIZAȚIILE DE FIRMĂ din documente_firma
+//   intră în context și se verifică în cod (atestari_firma cu id); codul ANRE cerut pe rol se verifică în cod (literal sau echivalență
+//   APROBATĂ, _shared/echivalenteAnre.ts), cu preferința Răzvan pe EGT; baremul acceptă bonus (certificat); autorizațiile de persoană
+//   doar cu titular activ, lista prioritizată pe ANRE / RTE / manager. Logica pură: ./context.ts.
 import { poartaOfertare } from '../_shared/poartaOfertare.ts'
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 // Versiune FIXATĂ intenționat (22.09.2026): cu `@2` flotant, bundlerul Supabase a cerut
@@ -34,6 +39,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 // deployul a picat cu „Module not found". 2.116.0 are build denonext complet.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
+import { aplicaBonusBarem, coduriPePersoana, liniiFirma, MAX_CRITERII_CARACTERE, PREFERINTE_COD, selecteazaCriterii, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -59,6 +65,9 @@ REGULI:
   (7) LA EGALITATE, MARJA DECIDE (Răzvan, 22.09.2026). Dacă două repartizări dau același punctaj total, alegi pe cea în care fiecare persoană trece pragul cu cea mai mare marjă — concret, maximizezi cel mai MIC număr de proiecte peste prag din echipă. O dovadă care trece pragul „la limită" sau doar dacă o comisie acceptă o interpretare (ex. conducte colectoare la o cerință pe transport) e mai slabă decât una care îl depășește cu mai multe obiective clare. Spui în motiv că a fost egalitate și de ce a câștigat varianta aleasă. Exemplu: A are 15 pe rolul X și 14 pe Y; B are 9 pe X și 6 pe Y (din care 2 interpretabile); ambele repartizări dau 5+5 — alegi B pe X (9, marjă clară) și A pe Y (14), nu B pe Y (6, la limită).
   (8) RISC DE ELIMINARE (Jakarinos, 23.09.2026): dacă pentru un rol CERINȚA MINIMĂ obligatorie (ex. „minim 1 proiect similar") se îndeplinește DOAR prin proiecte condiționate (transport la cerință de distribuție), scrii în motivul rolului „RISC: cerința minimă depinde de acceptarea transportului — la refuz oferta poate fi respinsă, nu doar depunctată" și verdictul nu poate fi „mergem" (cel mult „cu_clarificari"). Codul adaugă singur clarificarea către autoritate pentru fiecare rol care are în matrice proiecte condiționate și marchează riscul citind cerința minimă din textul rolului — de aceea în "cerinte" copiezi EXACT din fișă cerința minimă („minim N proiecte/contracte/lucrări") și baremul (pragurile cu „pct"/„puncte"), în unitatea din fișă. Tu doar completezi matricea, "cerinte" și "barem" corect — "barem" e STRUCTURAT (minim + trepte cu "de_la" = numărul TOTAL de proiecte, nu cele suplimentare) și e sursa din care codul calculează punctajele; pentru un rol nepunctat, "barem": null.
   NU scrie niciodată „poate demonstra experiență" sau „se va documenta experiența" — dacă dovada nu e în listă, spui că lipsește. Nu invoca drept sprijin o autorizație pe alt domeniu decât cel al lucrării (ex. EGD/PGD = distribuție pe o lucrare de transport): dacă o menționezi, spui explicit că e pe alt domeniu.
+- AUTORIZAȚII DE FIRMĂ ≠ PERSONAL (v1.9, Răzvan 12.10.2026). Autorizațiile ANRE / ISC / ISO ale OPERATORULUI ECONOMIC (ex. ANRE ET, EDIB, EDSB, EPI — „autorizație … pentru executarea sistemelor de transport” etc.) NU sunt roluri de personal: nu le pui în "roluri" și nu le „acoperi” cu legitimația unei persoane (EGT ≠ ET). Le pui în "atestari_firma", câte una pe cerință, cu "document_firma_id" = numărul (#id) din lista AUTORIZAȚII FIRMĂ GAZPET dacă o autorizație VALABILĂ de acolo o acoperă literal, altfel null. Codul verifică id-ul.
+- FACTORII DE EVALUARE NU SUNT ROLURI. „Calificarea personalului cheie — factor 2 (15%)” e un factor; rolurile punctate (ex. Manager Proiect) și baremul lor le iei din DETALIERE CRITERII DE ATRIBUIRE (dacă e dată mai jos), citate exact. Un punctaj suplimentar condiționat (ex. „+2 puncte pentru certificat de curs Manager de proiect”) îl pui în "barem"."bonus" (puncte + condiție), NU ca treaptă. Dacă detalierea lipsește și fișa doar o referă, spui asta în "alte_cerinte" și propui clarificare.
+- CODURI ANRE DE PERSOANĂ: în "autorizatie_ceruta" pe rol scrii codul cerut LITERAL din fișă (ex. „EGT”), sau null. NU inventa echivalențe între nomenclaturi (vechi/noi) — codul le verifică pe cele aprobate; tu doar citezi.
 - cumul_functii_interzis = true DOAR dacă fișa spune explicit că o persoană nu poate îndeplini mai multe funcții/roluri.
 - clarificari_propuse: întrebări scurte pe care le-am trimite autorității când o cerință e ambiguă, contradictorie sau exagerată (ex. experiență similară definită prea îngust, RTE pe domeniu greșit, personal de proiectare într-un contract de execuție).
 - verdict: "mergem" (nimic eliminatoriu neacoperit), "cu_clarificari" (mergem dacă se lămuresc punctele), "nu_se_poate" (o cerință eliminatorie clar neacoperită: obiect străin de activitatea firmei, autorizație pe care nu o avem, experiență similară imposibilă), "neclar" (fișa e incompletă). motiv_verdict: 1–2 propoziții.
@@ -81,8 +90,9 @@ Răspunde EXCLUSIV JSON, fără markdown:
   "experienta_similara": { "cerinta": "<textul cerinței de experiență similară, cu valoare/număr contracte/ani>", "lucrari_acceptate": "<ce lucrări se acceptă ca similare>" },
   "cumul_functii_interzis": true|false,
   "matrice_experti": [ { "persoana": "<NUME>", "rol": "<rolul punctat din fișă>", "proiecte": <număr întreg — DOAR pe natura cerută, necondiționate>, "verificate": <câte din "proiecte" vin din recomandări verificate în HR>, "proiecte_conditionate": <număr întreg — pe TRANSPORT la o cerință de distribuție; 0 dacă nu e cazul>, "verificate_conditionate": <câte din "proiecte_conditionate" vin din recomandări verificate>, "surse": "<beneficiar + nr./dată document sau „fără nr.", câte una per recomandare; cele condiționate marcate „transport — condiționat"; cele excluse marcate „excluse: N (țiței/apă-canal)">" } ],
-  "roluri": [ { "rol": "<denumirea rolului>", "rol_canonic": "<manager_proiect|sef_santier|rte|cq|ssm|inginer|altul — rolul cerut, normalizat>", "natura_ceruta": "<distributie|transport|gaze_orice|alta — natura lucrării cerute la experiența rolului: distributie = rețele de distribuție / edilitare gaze / „rețele de gaze" fără precizare; transport = conducte de transport; gaze_orice = fișa acceptă explicit ambele; alta = nu e gaze>", "exclude_transport": <true dacă cerința exclude explicit transportul („exclusiv/numai distribuție"), altfel false>, "cerinte": "<studii/atestări/experiență cerute — cu baremul citat exact>", "barem": { "minim": <număr întreg — cerința minimă obligatorie de proiecte/contracte, sau null>, "unitate": "<proiecte|contracte|lucrari|obiective>", "trepte": [ { "de_la": <numărul TOTAL de proiecte de la care se acordă punctele — dacă fișa spune „2-3 proiecte suplimentare" peste minimul de 1, de_la = 3>, "puncte": <număr> } ] } | null, "documente": "<ce documente se depun>", "propunere": "<NUME din lista Gazpet sau null>", "motiv": "<de ce persoana asta / de ce nimeni>" } ],
+  "roluri": [ { "rol": "<denumirea rolului>", "rol_canonic": "<manager_proiect|sef_santier|rte|cq|ssm|inginer|altul — rolul cerut, normalizat>", "natura_ceruta": "<distributie|transport|gaze_orice|alta — natura lucrării cerute la experiența rolului: distributie = rețele de distribuție / edilitare gaze / „rețele de gaze" fără precizare; transport = conducte de transport; gaze_orice = fișa acceptă explicit ambele; alta = nu e gaze>", "exclude_transport": <true dacă cerința exclude explicit transportul („exclusiv/numai distribuție"), altfel false>, "cerinte": "<studii/atestări/experiență cerute — cu baremul citat exact>", "autorizatie_ceruta": "<cod ANRE de persoană cerut literal pe rol (ex. EGT), sau null>", "barem": { "minim": <număr întreg — cerința minimă obligatorie de proiecte/contracte, sau null>, "unitate": "<proiecte|contracte|lucrari|obiective>", "trepte": [ { "de_la": <numărul TOTAL de proiecte de la care se acordă punctele — dacă fișa spune „2-3 proiecte suplimentare" peste minimul de 1, de_la = 3>, "puncte": <număr> } ], "bonus": { "puncte": <număr>, "conditie": "<ex. certificat de curs Manager de proiect>" } | null } | null, "documente": "<ce documente se depun>", "propunere": "<NUME din lista Gazpet sau null>", "motiv": "<de ce persoana asta / de ce nimeni>" } ],
   "atestari": "<atestări/autorizații de firmă cerute (ANRE, ISC, ISO...), sau null>",
+  "atestari_firma": [ { "cerinta": "<autorizația de firmă cerută, citată scurt>", "document_firma_id": <#id din AUTORIZAȚII FIRMĂ GAZPET care o acoperă, sau null> } ],
   "sursa_finantare": "<sau null>",
   "garantie_participare": "<cuantum + formă, sau null>",
   "garantie_buna_executie": "<sau null>",
@@ -457,9 +467,9 @@ Deno.serve(async (req: Request) => {
     // PERSONAL GAZPET — aceeași sursă ca motorul de acoperire, dar compactă
     // TKT-2026-0270: a treia sursă — RECOMANDĂRILE. Fără ele, propunerea se făcea pe titulatură și
     // pe certificate de curs; la SCN1179907 a ieșit un om cu 0 recomandări în locul unuia cu 9.
-    const [{ data: auth, error: eAuth }, { data: emp, error: eEmp }, { data: rec, error: eRec }] = await Promise.all([
+    const [{ data: auth, error: eAuth }, { data: emp, error: eEmp }, { data: rec, error: eRec }, { data: firma, error: eFirma }, { data: candCrit, error: eCrit }, { data: lic, error: eLic }] = await Promise.all([
       supabase.from('hr_autorizatii')
-        .select('data_expirare, fara_expirare, domenii, tip:hr_autorizatii_tipuri(denumire), emp:employees(name, position), ext:hr_personal_extern(nume)')
+        .select('data_expirare, fara_expirare, domenii, tip:hr_autorizatii_tipuri(denumire), emp:employees(name, position, active), ext:hr_personal_extern(nume, activ)')
         .is('deleted_at', null).order('id'),
       supabase.from('employees').select('name, position, functie').eq('active', true)
         .or('position.ilike.%inginer%,position.ilike.%manager%,position.ilike.%sef%,position.ilike.%șef%,position.ilike.%responsabil%,position.ilike.%director%,position.ilike.%proiect%,position.ilike.%calitate%,position.ilike.%ssm%,position.ilike.%mediu%')
@@ -467,18 +477,54 @@ Deno.serve(async (req: Request) => {
       supabase.from('hr_recomandari')
         .select('id, rol, beneficiar, obiect_lucrare, obiective, domenii, verificat, nr_document, data_document, calificativ, emp:employees(name, active), ext:hr_personal_extern(nume, activ)')
         .eq('activ', true).order('id'),
+      // v1.9: autorizațiile de FIRMĂ (ET, EDIB…) — activ + utilizabil; valabilitatea o judecă codul (context.ts)
+      supabase.from('documente_firma').select('id, denumire, tip, categorie, data_valabilitate, fara_expirare')
+        .eq('activ', true).eq('utilizabil', true).order('id').limit(300),
+      // v1.9: documentele de criterii (D3: după nume, fără schemă) — puține, deci textul vine direct
+      supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, text_extras').eq('licitatie_id', lid)
+        .or('nume_original.ilike.%criteri%,nume_original.ilike.%detaliere%,nume_original.ilike.%factor%evaluare%').order('id').limit(10),
+      supabase.from('ofertare_licitatii').select('termen_depunere').eq('id', lid).maybeSingle(),
     ])
     // supabase-js nu aruncă la eșec: fără verificarea asta, un timeout ar deveni „nu avem pe nimeni".
     if (eAuth || eEmp || eRec) return fail('catalog personal indisponibil: ' + (eAuth?.message || eEmp?.message || eRec?.message))
+    // fail-closed: fără lista firmei sau fără căutarea criteriilor, trierea ar spune fals „lipsește” / „nu sunt criterii”
+    if (eFirma || eCrit || eLic) return fail('context triere indisponibil: ' + (eFirma?.message || eCrit?.message || eLic?.message))
     const azi = new Date().toISOString().slice(0, 10)
+    const avertismente: string[] = []
+    // ── DETALIEREA CRITERIILOR: fiecare document trece prin poarta de loturi; blocat = avertisment, nu tăcere ──
+    const candidati = ((candCrit || []) as any[]).map((d) => ({ ...d, are_text: String(d.text_extras || '').trim().length > 0 }))
+    const idsCrit = selecteazaCriterii(candidati, doc.id).slice(0, 3)
+    let criterii = '', criteriiFolosite: number[] = []
+    for (const id of idsCrit) {
+      const d = candidati.find((x) => Number(x.id) === id)!
+      const elC = await documentEligibil(supabase, id)
+      if (!elC.eligibil) { avertismente.push(`Detalierea criteriilor de atribuire NU a intrat în context: documentul #${id} „${d.nume_original}” e blocat pe loturi (${mesajLot(elC.motiv)}). Triază-l (comun) și reia trierea.`); continue }
+      const rest = MAX_CRITERII_CARACTERE - criterii.length
+      if (rest <= 0) { avertismente.push(`Detalierea criteriilor #${id} nu a mai încăput în context (plafon ${MAX_CRITERII_CARACTERE} caractere).`); continue }
+      const txt = String(d.text_extras)
+      criterii += `\n--- Document #${id} „${d.nume_original}” ---\n` + txt.slice(0, rest)
+      if (txt.length > rest) avertismente.push(`Detalierea criteriilor #${id} a fost tăiată la ${rest} caractere.`)
+      criteriiFolosite.push(id)
+    }
+    // ── AUTORIZAȚIILE DE FIRMĂ ──
+    const firmaCtx = liniiFirma((firma || []) as any[], azi)
+    // ── codurile ANRE ale persoanelor (doar titulari activi) pentru verificarea din cod ──
+    const activ = (a: any) => (a.emp ? a.emp.active !== false : a.ext ? a.ext.activ !== false : false)
+    const autPers: AutPers[] = ((auth || []) as any[]).filter(activ).map((a) => ({
+      cine: a.emp?.name || a.ext?.nume || '?', tip: a.tip?.denumire || '',
+      valabil: !!a.fara_expirare || (!!a.data_expirare && a.data_expirare >= azi),
+    }))
     // Doar ce contează la triere: roluri de conducere/atestări de persoană. Sudorii, legătorii,
     // stivuitoriștii etc. sunt sute de rânduri care umflă inputul (85k tokeni la primul test) fără
     // să răspundă vreunei cerințe din fișa de date. Dedup pe (persoană, tip, domenii).
     const RELEVANT = /rte|responsabil tehnic|anre|diriginte|manager|sef|șef|cq|calitate|ssm|securitate|mediu|proiectant|inginer|expert|verificator|coordonator|isc|electric|instalator autorizat|gaze/i
     const IRELEVANT = /sudor|sudur|legator|legător|stivuitor|macaragiu|fochist|conducator auto|conducător auto|prim ajutor|iscir/i
     const vaz = new Set<string>()
-    const linii: string[] = []
+    const linii: string[] = [], liniiPrio: string[] = []
+    // v1.9: întâi ANRE / RTE / manager — dacă lista se taie la plafon, se taie ce contează mai puțin, și se spune
+    const PRIO = /anre|nomenclatur|\b(eg|pg)[a-z]{1,3}\b|rte|responsabil tehnic|manager/i
     for (const a of (auth || []) as any[]) {
+      if (!activ(a)) continue   // v1.9: un om plecat nu poate fi propus (diagnostic 12.10 pct. 5)
       const tip = a.tip?.denumire || 'autorizație'
       if (IRELEVANT.test(tip) || !RELEVANT.test(tip)) continue
       const cine = a.emp?.name || a.ext?.nume || '?'
@@ -487,10 +533,12 @@ Deno.serve(async (req: Request) => {
       if (vaz.has(k)) continue
       vaz.add(k)
       const exp = a.fara_expirare ? '' : a.data_expirare ? (a.data_expirare < azi ? ` [EXPIRAT ${a.data_expirare}]` : ` (până ${a.data_expirare})`) : ''
-      linii.push(`- ${cine}${a.ext ? ' (extern)' : ''}: ${tip}${dom}${exp}`)
+      ;(PRIO.test(tip) ? liniiPrio : linii).push(`- ${cine}${a.ext ? ' (extern)' : ''}: ${tip}${dom}${exp}`)
     }
     for (const e of (emp || []) as any[]) linii.push(`- ${e.name}: ${e.functie || e.position}`)
-    const personal = linii.slice(0, 160).join('\n')
+    const toate = [...liniiPrio, ...linii]
+    if (toate.length > 160) avertismente.push(`Lista de personal a fost tăiată la 160 de rânduri din ${toate.length} (întâi ANRE / RTE / manager).`)
+    const personal = toate.slice(0, 160).join('\n')
 
     // Recomandările: titularul trebuie să fie activ (un om plecat nu poate fi propus), iar lucrarea
     // se dă întreagă — de acolo numără modelul obiectivele, nu din numărul de rânduri.
@@ -511,7 +559,10 @@ Deno.serve(async (req: Request) => {
       })
     const recomandari = recLinii.join('\n')
 
-    const text = `${PROMPT}\n\nNumele fișierului: "${String(doc.nume_original).slice(-120)}"\n\nPERSONAL GAZPET (autorizații + funcții; [EXPIRAT] = nu se poate folosi fără reînnoire):\n${personal || '(listă goală)'}\n\nRECOMANDĂRI — experiența DOVEDITĂ a persoanelor (${recLinii.length}; numeri obiectivele din „lucrare", nu rândurile):\n${recomandari || '(nicio recomandare în platformă)'}`
+    const text = `${PROMPT}\n\nNumele fișierului: "${String(doc.nume_original).slice(-120)}"\n\nPERSONAL GAZPET (autorizații + funcții; [EXPIRAT] = nu se poate folosi fără reînnoire):\n${personal || '(listă goală)'}\n\nRECOMANDĂRI — experiența DOVEDITĂ a persoanelor (${recLinii.length}; numeri obiectivele din „lucrare", nu rândurile):\n${recomandari || '(nicio recomandare în platformă)'}` +
+      `\n\nAUTORIZAȚII FIRMĂ GAZPET (documente_firma — autorizațiile OPERATORULUI ECONOMIC, nu ale persoanelor; în "atestari_firma" folosești #id doar pentru cele valabile):\n${firmaCtx.linii.join('\n') || '(nicio autorizație de firmă în platformă)'}` +
+      `\n\nPREFERINȚE OWNER pe coduri de persoană: ${Object.entries(PREFERINTE_COD).map(([c, p]) => `${c} → ${p.join(' sau ')}`).join('; ')} (codul le aplică; tu completezi "autorizatie_ceruta").` +
+      (criterii ? `\n\nDETALIERE CRITERII DE ATRIBUIRE (document separat de fișă — sursa rolurilor punctate și a baremurilor):${criterii}` : `\n\nDETALIERE CRITERII DE ATRIBUIRE: nu e disponibilă în platformă pentru această licitație.`)
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -567,7 +618,19 @@ Deno.serve(async (req: Request) => {
         (roluriRisc.length ? `; la ${roluriRisc.join(', ')} chiar cerința minimă depinde de asta — risc de respingere` : '') + '. ' + String(parsed.motiv_verdict || '')
     }
     parsed.alte_cerinte = Array.isArray(parsed.alte_cerinte) ? parsed.alte_cerinte.slice(0, 30) : []
-    parsed.sursa = { doc_id: doc.id, nume: doc.nume_original, pagini: doc.pagini }
+    // v1.9: verificările din cod — codul ANRE pe rol (literal / echivalență aprobată + preferința pe EGT), bonusul din barem,
+    // autorizațiile de firmă (id verificat față de documente_firma valabile)
+    verificaAutorizatiiRoluri(parsed, coduriPePersoana(autPers))
+    aplicaBonusBarem(parsed, autPers)
+    const termen = lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null
+    const neacoperite = valideazaAtestariFirma(parsed, firmaCtx.valabile, termen)
+    if (neacoperite.length) avertismente.push(`Autorizații de firmă cerute fără document valabil în platformă: ${neacoperite.map(c => `„${c.slice(0, 120)}”`).join('; ')}.`)
+    if (avertismente.length && parsed.verdict === 'mergem') {
+      parsed.verdict = 'cu_clarificari'
+      parsed.motiv_verdict = 'Context incomplet sau cerințe de firmă neacoperite (vezi avertismentele). ' + String(parsed.motiv_verdict || '')
+    }
+    parsed.avertismente_context = avertismente
+    parsed.sursa = { doc_id: doc.id, nume: doc.nume_original, pagini: doc.pagini, criterii_doc_ids: criteriiFolosite }
 
     const verdictFinal = parsed.verdict
     const { error: eUp } = await supabase.from('ofertare_triere').upsert({
