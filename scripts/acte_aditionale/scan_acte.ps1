@@ -48,15 +48,18 @@ foreach ($r in (Import-Csv -LiteralPath $fProi -Delimiter $T -Encoding UTF8)) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
     $rel = $f.FullName.Substring($root.Length + 1)
     $nume = $rel -replace '[\\/:*?"<>|]', '__'
-    if ($nume.Length -gt 100) { $nume = $nume.Substring($nume.Length - 100) }  # sub MAX_PATH chiar cu foldere adânci
+    if ($nume.Length -gt 90) { $nume = $nume.Substring($nume.Length - 90) }  # sub MAX_PATH chiar cu foldere adanci
+    # prefix unic din calea NAS completa: doua cai diferite nu mai pot ajunge in acelasi fisier local (Copilot r1 P1-1)
+    $h = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($f.FullName))).Replace('-', '').Substring(0, 10).ToLower()
+    $nume = $h + '_' + $nume
     $dest = Join-Path $d $nume
     $copiat = $true
-    if ($f.Length -gt 80MB) { $motiv = $motiv + '_PREA_MARE_NECOPIAT'; $dest = '-' }
+    if ($f.Length -gt 80MB) { $copiat = $false; $motiv = $motiv + '_PREA_MARE_NECOPIAT'; $dest = '-' }  # ramane de verificat de un om
     else {
       try { Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop }
       catch { $copiat = $false; $motiv = $motiv + '_COPIERE_ESUATA'; $dest = '-' }
     }
-    # 13.10.2026: un fisier necopiat NU intra in stare -> se reincearca saptamana viitoare (pe laptop se pierdea)
+    # 13.10.2026: un fisier necopiat (eroare sau prea mare) NU intra in stare -> reapare saptamana viitoare (pe laptop se pierdea)
     if ($copiat) { $stare[$f.FullName] = $val }
     $lista.Add((@($r.id, $r.cod, $dest, $f.FullName, [int]($f.Length / 1KB), $f.LastWriteTime.ToString('yyyy-MM-dd'), $motiv) -join $T))
     $n++

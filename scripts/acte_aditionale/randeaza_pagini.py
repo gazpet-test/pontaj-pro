@@ -11,6 +11,7 @@ def main(folder):
     lista = os.path.join(folder, 'lista.tsv')
     if not os.path.isfile(lista):
         print('LIPSESTE lista.tsv in', folder); return 3
+    radacina = os.path.realpath(folder)
     out = os.path.join(folder, 'png')
     os.makedirs(out, exist_ok=True)
     index = [('id', 'fisier_local', 'pagini', 'png')]
@@ -19,6 +20,9 @@ def main(folder):
             src = r.get('fisier_local') or ''
             if not src.lower().endswith('.pdf') or not os.path.isfile(src):
                 continue
+            # doar copii din folderul rularii (Copilot r1 P1-4): lista.tsv e citita ca date
+            if os.path.commonpath([radacina, os.path.realpath(src)]) != radacina:
+                index.append((r.get('id', '?'), src, 'IGNORAT in afara folderului', '-')); continue
             d = os.path.join(out, 'P' + r['id'])
             os.makedirs(d, exist_ok=True)
             baza = os.path.splitext(os.path.basename(src))[0][:100]
@@ -27,9 +31,13 @@ def main(folder):
             except Exception as e:
                 index.append((r['id'], src, 'EROARE ' + str(e)[:80], '-')); continue
             n = min(doc.page_count, MAX_PAGINI)
-            for i in range(n):
-                doc[i].get_pixmap(dpi=110).save(os.path.join(d, f'{baza}_p{i + 1}.png'))
-            index.append((r['id'], src, f'{n}/{doc.page_count}', d))
+            ok = 0
+            for i in range(n):  # o pagina sau un PDF stricat nu opreste restul (Copilot r1 P1-3)
+                try:
+                    doc[i].get_pixmap(dpi=110).save(os.path.join(d, f'{baza}_p{i + 1}.png')); ok += 1
+                except Exception as e:
+                    index.append((r['id'], src, f'EROARE pagina {i + 1}: ' + str(e)[:60], '-'))
+            index.append((r['id'], src, f'{ok}/{doc.page_count}', d))
     with open(os.path.join(out, 'index.tsv'), 'w', encoding='utf-8', newline='') as f:
         csv.writer(f, delimiter='\t').writerows(index)
     print('randate:', len(index) - 1, 'fisiere PDF ->', out)
