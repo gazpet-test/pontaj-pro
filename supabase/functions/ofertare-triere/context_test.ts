@@ -48,13 +48,16 @@ Deno.test('atestări de firmă: id verificat de cod, nu crezut pe cuvânt; expir
   assert.equal(neacoperite.length, 2)
 })
 
-Deno.test('echivalențe ANRE: doar literal sau aprobat; lista goală = nimic acceptat automat', () => {
+Deno.test('echivalențe ANRE (D4): literal, sau cod vechi cu aceeași clasă ca un cod NOU confirmat; altfel nu', () => {
   assert.equal(codTip('EGT - Executant Gaze Transport [nomenclatură veche, pre-Ordin 132/2021]'), 'EGT')
   assert.equal(codTip('Responsabil Tehnic cu Execuția (RTE)'), null)
   assert.deepEqual(acoperaCod(['EGT'], 'EGT'), { acoperit: true, prin: 'literal', cod: 'EGT' })
-  assert.equal(acoperaCod(['EGT'], 'XYZ').acoperit, false)                                        // fără aprobare = nu
-  assert.deepEqual(acoperaCod(['EGT'], 'XYZ', [{ vechi: 'EGT', nou: 'XYZ' }]), { acoperit: true, prin: 'echivalenta', cod: 'EGT' })
-  assert.equal(acoperaCod(['EGD'], 'XYZ', [{ vechi: 'EGT', nou: 'XYZ' }]).acoperit, false)       // alt domeniu = nu
+  assert.equal(acoperaCod(['EGT'], 'XYZ').acoperit, false)                                        // cod nou neconfirmat = nu
+  const noi = { XT: { fel: 'executie' as const, domeniu: 'transport' as const }, XPD: { fel: 'proiectare' as const, domeniu: 'distributie' as const } }
+  assert.deepEqual(acoperaCod(['EGT'], 'XT', noi), { acoperit: true, prin: 'echivalenta', cod: 'EGT' })
+  assert.equal(acoperaCod(['EGD'], 'XT', noi).acoperit, false)                                    // distribuție → transport = nu
+  assert.equal(acoperaCod(['PGT'], 'XT', noi).acoperit, false)                                    // proiectare → execuție = nu
+  assert.deepEqual(acoperaCod(['EGD', 'PGD'], 'XPD', noi), { acoperit: true, prin: 'echivalenta', cod: 'PGD' })
 })
 
 const aut: AutPers[] = [
