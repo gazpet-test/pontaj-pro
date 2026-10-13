@@ -149,10 +149,15 @@ BEGIN
     FROM public.documente_proiect d WHERE d.id = ANY(p_doc_ids);
   SELECT count(*) INTO v_ordine FROM public.executie_ordine_detectate o WHERE o.documente_proiect_id = ANY(p_doc_ids);
   IF NOT p_aplica THEN
-    RETURN jsonb_build_object('previzualizare', true, 'randuri', v_randuri, 'id_uri_negasite', cardinality(p_doc_ids) - v_randuri,
+    -- Previzualizarea e informativă (Copilot P1-1); numărul exact de ordine șterse îl dă aplicarea, numărat după lock.
+    RETURN jsonb_build_object('previzualizare', true, 'randuri', v_randuri,
+                              'id_uri_negasite', (SELECT count(DISTINCT x) FROM unnest(p_doc_ids) x) - v_randuri,
                               'mesaje_unice', v_mesaje, 'deja_pe_nas', v_nas, 'ordine_detectate_legate', v_ordine);
   END IF;
+  -- FOR UPDATE pe documente: o ordine detectată nouă (FK → KEY SHARE pe document) așteaptă până la sfârșitul tranzacției,
+  -- deci numărătoarea de mai jos e exact ce șterge CASCADE-ul.
   PERFORM 1 FROM public.documente_proiect WHERE id = ANY(p_doc_ids) FOR UPDATE;
+  SELECT count(*) INTO v_ordine FROM public.executie_ordine_detectate o WHERE o.documente_proiect_id = ANY(p_doc_ids);
   INSERT INTO public.documente_de_repartizat AS q
     (sursa, gmail_message_id, nume_fisier, mime_type, marime_bytes, expeditor, subiect, data_mail, candidati,
      storage_path, drive_file_id, hash_sha256)

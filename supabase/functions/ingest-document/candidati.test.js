@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseCandidati, esteDeRepartizat, egalConstant, storageKeySafe, caleStorage } from './candidati.js'
+import { parseCandidati, esteDeRepartizat, egalConstant, storageKeySafe, caleStorage, dataSigura } from './candidati.js'
 
 describe('candidați', () => {
   it('array sau text, fără prefix Automatizari/, deduplicat fără majuscule', () => {
@@ -20,6 +20,11 @@ describe('candidați', () => {
 })
 
 describe('secret și cale', () => {
+  it('dataSigura: invalid/lipsă → acum, valid → păstrat', () => {
+    expect(dataSigura('2026-10-13T08:00:00Z').toISOString()).toBe('2026-10-13T08:00:00.000Z')
+    expect(Number.isNaN(dataSigura('nu e data').getTime())).toBe(false)
+    expect(Number.isNaN(dataSigura(undefined).getTime())).toBe(false)
+  })
   it('egalConstant', () => {
     expect(egalConstant('abc', 'abc')).toBe(true)
     expect(egalConstant('abd', 'abc')).toBe(false)

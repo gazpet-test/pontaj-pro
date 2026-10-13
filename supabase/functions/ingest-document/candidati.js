@@ -37,6 +37,12 @@ export const storageKeySafe = (name) =>
     .replace(/^[_.]+|[_.]+$/g, '')
     .slice(0, 160) || 'fisier'
 
+// data_mail invalidă (sau lipsă) → acum, fără RangeError la toISOString (Copilot P1-3).
+export function dataSigura(v) {
+  const d = v ? new Date(v) : new Date()
+  return isNaN(d.getTime()) ? new Date() : d
+}
+
 export function caleStorage({ prefix, dataMail, messageId, numeFisier }) {
   const d = dataMail instanceof Date && !isNaN(dataMail) ? dataMail : new Date()
   const yyyy = d.getFullYear(), mm = String(d.getMonth() + 1).padStart(2, '0')

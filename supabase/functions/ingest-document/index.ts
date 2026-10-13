@@ -16,7 +16,7 @@
 //  (d) pornire: doar cu INGEST_SECRET (Apps Script); verify_jwt cere și cheia anon;
 //  (e) repartizarea din coadă cere om (owner / acces explicit executie) — nimic automat.
 import { createClient } from 'jsr:@supabase/supabase-js@2'
-import { esteDeRepartizat, parseCandidati, egalConstant, caleStorage, SLUG_DE_REPARTIZAT } from './candidati.js'
+import { esteDeRepartizat, parseCandidati, egalConstant, caleStorage, dataSigura, SLUG_DE_REPARTIZAT } from './candidati.js'
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -53,7 +53,7 @@ Deno.serve(async (req) => {
   }
 
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  const dataMail = p.data_mail ? new Date(p.data_mail) : new Date()
+  const dataMail = dataSigura(p.data_mail)
 
   // ── Coada „de repartizat” (2+ proiecte candidate neclare) ──
   if (esteDeRepartizat(eticheta)) {
