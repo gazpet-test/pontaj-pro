@@ -123,7 +123,7 @@ Livrat în #677 (migrare 20261025a GO Copilot r4 pe 964865f, harness CI 155 PASS
 
 Fișiere: `supabase/migrations/20261026a_ofertare_rigoare_provenienta.sql` + `supabase/revenire/…_ROLLBACK.sql`, harness
 `scripts/test_ofertare_rigoare_provenienta.sh` (CI, job loturi-provenienta) pe scheletul `supabase/tests/ofertare_rigoare_schelet.sql`
-cu RPC-urile REALE (corpurile live citite 12.10.2026, md5 verificat). Varianta A (propusă, de confirmat de Răzvan): garda a03 RĂMÂNE.
+cu RPC-urile REALE (corpurile live citite 12.10.2026, md5 verificat). Varianta A — DECISĂ de Răzvan 13.10.2026 (prin chat): garda a03 RĂMÂNE, aplicarea automată pe loturi rămâne manuală.
 
 | Punct BLOCANT | Rezolvare |
 |---|---|
