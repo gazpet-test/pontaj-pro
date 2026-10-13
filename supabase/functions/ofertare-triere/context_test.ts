@@ -160,7 +160,7 @@ Deno.test('r2 atestări: completitudinea față de textul „atestari” (Copilo
   const partial: any = { atestari: 'ANRE ET și ISO 9001', atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
   const r1 = valideazaAtestariFirma(partial, valabile, '2027-01-01')
   assert.equal(partial.atestari_firma[0].status, 'indeplinita')
-  assert.equal(r1.neconfirmate.length, 1); assert.match(r1.neconfirmate[0], /ISO9001.*lipsă din verificarea structurată/)
+  assert.equal(r1.neconfirmate.length, 1); assert.match(r1.neconfirmate[0], /ISO9001: în afara verificării automate/)
   const faraCod: any = { atestari: 'Certificat de management al calității obligatoriu', atestari_firma: [] }
   assert.equal(valideazaAtestariFirma(faraCod, valabile, null).neconfirmate.length, 1)
   const nimic: any = { atestari: 'null', atestari_firma: [] }
@@ -221,14 +221,14 @@ Deno.test('r3 atestări: coduri pe textul integral (Jak r3 P1 #1) + segmente fă
   const { valabile } = liniiFirma([ET13], AZI)
   const lung: any = { atestari_firma: [{ cerinta: 'Autorizație ANRE ET ' + 'x'.repeat(420) + ' și ISO 9001', document_firma_id: 13 }] }
   const r1 = valideazaAtestariFirma(lung, valabile, null)
-  assert.equal(lung.atestari_firma[0].status, 'neacoperita')   // ISO9001 după caracterul 400 se vede; #13 nu-l acoperă
-  assert.equal(r1.neacoperite.length, 1)
-  assert.deepEqual(segmenteCerinte('ANRE ET, ISO 9001 și autorizație ISC'), ['ANRE ET', 'ISO 9001', 'autorizație ISC'])
+  assert.equal(lung.atestari_firma[0].status, 'neconfirmata')   // ISO9001 după caracterul 400 se vede → de verificat de om
+  assert.equal(r1.neconfirmate.length, 1)
+  assert.deepEqual(segmenteCerinte('ANRE ET, ISO 9001 și autorizație ISC'), ['ANRE ET', 'ISO 9001', 'autorizatie ISC'])
   const mixt: any = { atestari: 'ANRE ET și certificat de mediu', atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
   const r2 = valideazaAtestariFirma(mixt, valabile, null)
   assert.equal(r2.neconfirmate.length, 1); assert.match(r2.neconfirmate[0], /certificat de mediu.*fără cod recunoscut/)
   const isc: any = { atestari: 'ANRE ET, autorizație ISC', atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
-  assert.match(valideazaAtestariFirma(isc, valabile, null).neconfirmate[0], /ISC.*lipsă din verificarea structurată/)
+  assert.match(valideazaAtestariFirma(isc, valabile, null).neconfirmate[0], /ISC: în afara verificării automate/)
 })
 
 Deno.test('r3 firmă: re-triere după termen — documentul valabil LA TERMEN se socotește (Jak r3 P2, Cop r2 P2)', () => {
@@ -261,4 +261,20 @@ Deno.test('r3 bonus: listă albă — orice cuvânt în plus = nerecunoscută (J
     barem: { bonus: { puncte: 2, conditie: 'certificat de curs Manager de proiect ' + 'de '.repeat(80) + 'și certificat BIM' } } }] }
   const probleme = adnoteazaBonus(p, aut)
   assert.equal(p.roluri[0].bonus.recunoscuta, false); assert.equal(p.roluri[0].bonus.acordat, false); assert.equal(probleme.length, 1)   // Jak r3 P2
+})
+
+// ── runda 4 (Jakarinos r4 + Copilot r3): plafon — confirmare automată doar pentru ANRE de firmă din lista închisă ─────────────
+Deno.test('r4 atestări: ISO prescurtat, ș cu sedilă, „+” lipit, ISC — toate „de verificat de om”, niciodată verde (plafon #1724)', () => {
+  const ISC = { id: 30, denumire: 'Autorizație ISC laborator încercări beton', tip: 'Autorizație ISC', data_valabilitate: '2028-01-01', fara_expirare: false }
+  const { valabile } = liniiFirma([ET13, ISO, ISC], AZI)
+  const caz = (atestari: string, lista: any[]) => valideazaAtestariFirma({ atestari, atestari_firma: lista }, valabile, null)
+  const et = [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }]
+  assert.ok(caz('ISO 9001/14001', [{ cerinta: 'ISO 9001', document_firma_id: 20 }]).neconfirmate.length >= 2)   // ambele segmente ISO (+ elementul ISO)
+  assert.equal(caz('ANRE ET şi certificat de mediu', et).neconfirmate.length, 1)                           // ş cu sedilă
+  assert.equal(caz('ANRE ET +certificat de mediu', et).neconfirmate.length, 1)
+  const p: any = { atestari_firma: [{ cerinta: 'Autorizație ISC laborator încercări suduri', document_firma_id: 30 }] }
+  valideazaAtestariFirma(p, valabile, null)
+  assert.equal(p.atestari_firma[0].status, 'neconfirmata')                                                       // ISC nu se confirmă automat
+  const curat = caz('Autorizație ANRE tip ET', et)
+  assert.deepEqual([curat.neconfirmate.length, curat.neacoperite.length, curat.expira.length], [0, 0, 0])        // cazul Botoșani rămâne verde
 })
