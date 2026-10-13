@@ -17,7 +17,7 @@ citiri read-only din live (12.10, ~00:30).
   sub 2 proiecte = **neconform** · 2 = 1 p · 3 = 5 p · 4 = 9 p · ≥5 = **13 p** · **+2 p** pentru certificat de curs „Manager de proiect”
   de la furnizor acreditat (maxim 15). *Corecție față de #1727: nu „>4 până la 15”, ci ≥5 = 13 + bonus 2.*
 - Trierea afișată azi e din 24.09 (doc 532, verdict `cu_clarificari`), deci fără 522.
-- `documente_firma` (105 rânduri): nicio autorizație ET; doar EDIB (până 2030-07-07). Coloane: `denumire, categorie, tip, data_valabilitate,
+- `documente_firma` (corectat 13.10): autorizațiile ANRE ale firmei EXISTĂ — #13 „Autorizație ET Gazpet (execuție tehnică)” până 2027-07-27, #10 EDIB 2030-07-07, #11 EDSB 2027-06-22, #12 EPI 2027-07-27 (toate activ + utilizabil); #14 „ET+EPI emisă 22.07.2022 (versiune veche)” e activ + utilizabil dar FĂRĂ dată de valabilitate. Problema reală: `ofertare-triere` nu citește `documente_firma` deloc. Coloane: `denumire, categorie, tip, data_valabilitate,
   fara_expirare, activ, utilizabil, pdf_path, …`.
 
 ## (1) Trierea personalului — PR de cod în `ofertare-triere` (fără schemă, varianta recomandată)
@@ -26,7 +26,7 @@ citiri read-only din live (12.10, ~00:30).
 |---|---|---|
 | 1.1 | **Documentele de criterii în context**: pe lângă fișa de date, documentele licitației cu nume ~ `criteri|detaliere|factor|evaluare` (sau tip dedicat, vezi decizia D3) intră ca text (`text_extras`, plafon ~40k), fiecare prin `documentEligibil` (poarta pe loturi). Dacă un astfel de document există dar e blocat/neeligibil → rezultatul marchează vizibil „criteriile de atribuire NU au intrat în context: doc #522 (de_triat)” și verdictul nu poate fi `mergem` (fail-closed, nu tăcut). | index.ts ~440-456, ~514 |
 | 1.2 | **Prompt: atestări de FIRMĂ ≠ roluri** — autorizațiile ANRE/ISC/ISO de operator economic (ET, EDIB etc.) merg DOAR în `atestari`; în `roluri` intră doar persoane nominalizate. Factorii de evaluare nu sunt roluri: rolurile se extrag din detalierea criteriilor. | PROMPT l.51-61 |
-| 1.3 | **AUTORIZAȚII FIRMĂ în context** din `documente_firma` (`activ`, `utilizabil`, `data_valabilitate`/`fara_expirare`); verdictul marchează lipsa unei autorizații de firmă cerute ca risc eliminatoriu (`cu_clarificari`/`nu_se_poate`). | context nou |
+| 1.3 | **AUTORIZAȚII FIRMĂ în context** din `documente_firma` (`activ`, `utilizabil`, `data_valabilitate`/`fara_expirare`); o cerință de firmă îndeplinită se marchează cu sursa (ex. „ET — îndeplinită prin documente_firma #13, valabilă până 2027-07-27”), cu avertisment dacă expiră înainte de termenul de depunere / execuție; lipsa = risc eliminatoriu (`cu_clarificari`/`nu_se_poate`). Un document fără dată de valabilitate și fără `fara_expirare` (ex. #14, versiune veche) NU îndeplinește cerința (valabilitate neverificabilă) — se afișează, nu se socotește. | context nou |
 | 1.4 | **Echivalențe ANRE ca mapare explicită aprobată** (decizia #1727 pct. 2), nu judecata AI: tabel constant în `_shared/echivalenteAnre.ts` (cod vechi de persoană → tipul nou acceptat), trimis în prompt; **post-validare în cod**: o `propunere` pe un rol care cere un tip ANRE e acceptată doar dacă persoana are tipul literal sau unul din echivalențele aprobate, altfel motiv „echivalență nevalidată” (nu verde). | `_shared/` nou + post-procesare |
 | 1.5 | **Preferință EGT** (decizia #1727 pct. 3): pe rolurile de persoană EGT se propune de principiu TRUȘU RĂZVAN sau STĂNESCU SILVIU — constantă în cod, trimisă ca preferință; codul nu propune pe altcineva dacă unul din cei doi are EGT valabil. | constantă + post-procesare |
 | 1.6 | **Barem cu bonus**: structura `barem` primește `bonus: {conditie, puncte}`; codul acordă bonusul doar dacă persoana are în `hr_autorizatii` un certificat „Manager de proiect” valabil (altfel îl afișează ca „+2 p posibil cu certificat”). Natura `transport` (nu distribuție): recomandările pe distribuție NU se numără la acest rol. | `baremRol`/`puncteBarem` ~159-180 |
@@ -36,8 +36,8 @@ citiri read-only din live (12.10, ~00:30).
 Livrare: branch + PR draft → Jakarinos (cod) → merge → **deploy ofertare-triere = „da” Răzvan** → re-triere pe 102 (cost AI, buton
 „Refă trierea” apăsat de owner/responsabil, după ce 532 + 522 sunt triate `comun`).
 
-**Date reale (doar cu „da” Răzvan, separat):** autorizația ET a firmei se adaugă în `documente_firma` **cu documentul** (Răzvan îl are /
-îl urcă). Fără ea, verdictul corect pe 102 rămâne „autorizație de firmă ET lipsă în platformă”.
+Autorizația ET a firmei e deja în platformă (#13) — nu e nevoie de date noi (D5 închis 13.10). Opțional, de decis separat: #14 (versiune
+veche 2022, fără valabilitate) marcat `utilizabil = false` ca să nu mai apară în liste — date reale, doar cu „da”.
 
 ## (2) Trierea pe loturi a lui 102 — propunere (preview → „da” → apply prin RPC, cu confirmare umană)
 
@@ -67,4 +67,4 @@ deploy → re-triere 102 → **2b** restul grupurilor (reguli) → **2c** avize 
 - **D2** Folderul `1_ Cosula-Saveni-Darabani` (Lot 1 + Lot 2, 164 doc.): A = `{1,2}` pe tot și lotul pe pagină la extragere (recomandat, rapid) / B = AI + om pe fiecare planșă înainte.
 - **D3** Documentele de criterii: A = recunoaștere după nume (`criteri|detaliere|factor`, recomandat, fără schemă) / B = tip nou `criterii_atribuire` (schemă + reclasificare).
 - **D4** Lista exactă de echivalențe ANRE vechi → nou de pus în cod (o completează / confirmă Răzvan; până atunci nicio echivalență acceptată automat).
-- **D5** Autorizația ET a firmei: documentul pentru `documente_firma` (de la Răzvan).
+- ~~D5~~ închis 13.10: ET e în `documente_firma` #13 (până 2027-07-27). a03 = varianta A (Răzvan 13.10).
