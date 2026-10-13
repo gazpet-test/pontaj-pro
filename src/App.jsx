@@ -4,7 +4,8 @@ import { supabase } from './lib/supabase.js'
 import { esteAbsentaPlanificata, numaraPlanificate } from './pontajPlanificat.js'
 import { TIPURI_CONT, formatDataRo, stareContProfil, ziBaza } from './conturiCicluViata.js'  // 29.09.2026 R1/R2
 import { alocaDiurneTransa, inceputLuna, sfarsitLuna, zileLucratoareLuna } from './diurneAlocare.js'
-import { zileOrdinDeplasare } from './diurneOrdin.js'
+import { zileOrdinDeplasare, poateGeneraOrdin, motivBlocareOrdin } from './diurneOrdin.js'
+import { stareLuna, normalizeazaTichet, tichetValabil, fmtZi as fmtZiPontaj } from './pontajLunaInchisa.js'
 import ModulNoutati from './ModulNoutati.jsx'
 import * as XLSX from 'xlsx-js-style'
 import LOGO_B64 from './logo.js'
@@ -1819,6 +1820,7 @@ function PontajPage() {
   const [exportPeriodInfo,setExportPeriodInfo]=useState(null) // {period_from, period_to, payment_date, total_amount}
   const [passwordPrompt,setPasswordPrompt]=useState(null) // {onConfirm, onCancel, employeeName}
   const [pwdInput,setPwdInput]=useState('')
+  const [tichetInput,setTichetInput]=useState('')   // nr. tichet HR pentru corecturi după termenul de 12
   const [pwdErr,setPwdErr]=useState('')
   const [pwdVerifying,setPwdVerifying]=useState(false)
   const isAdmin = profile?.is_owner === true || profile?.role === 'contabilitate' || profile?.can_access_pontaj_brut === true
@@ -1885,42 +1887,78 @@ function PontajPage() {
   // Helper: cere parolă pentru zile exportate (Razvan 22.05.2026 - parolă per modificare)
   // Gate de permisiune: doar Razvan + Marilena (is_owner) + Natalia Udrea (can_modify_employees)
   const canEditRetroactivePontaj = profile?.is_owner === true || profile?.can_modify_employees === true
+  // Regula Marilenei (13.10.2026): lună închisă = orice lună trecută; corecturile până pe 12 a lunii
+  // următoare, apoi doar prin tichet HR (Natalia → aprobat de Marilena). Runda 1 = verificare în UI;
+  // importul Excel și scrierile directe le acoperă abia trigger-ul din runda 2.
+  const lunaSt = stareLuna(date)
+  // Poarta întoarce {ok, tichet} pentru operația CONCRETĂ — tichetul nu stă într-un ref comun,
+  // ca două salvări simultane să nu se noteze una pe tichetul alteia (Copilot P1-1).
+  const promptActivRef = useRef(false)   // o singură poartă parolă/tichet activă (Copilot P2-1)
   const requestPasswordIfExported = (empName) => new Promise((resolve) => {
-    if (!isDateExported) { resolve(true); return }
-    if (!canEditRetroactivePontaj) {
-      showToast('🚫 Modificare retroactivă blocată — doar Trusu Razvan, Marilena și Natalia pot modifica zile exportate. Contactează unul dintre ei.', 'error')
-      resolve(false)
+    if (!isDateExported && !lunaSt.cereTichet) { resolve({ ok: true, tichet: null }); return }
+    if (promptActivRef.current) {
+      showToast('Termină întâi confirmarea deschisă (parolă / tichet), apoi reia modificarea.', 'warn')
+      resolve({ ok: false, tichet: null })
       return
     }
+    if (!canEditRetroactivePontaj) {
+      showToast(lunaSt.cereTichet
+        ? `🚫 Luna e închisă și termenul de corecturi (${fmtZiPontaj(lunaSt.termen)}) a trecut — corectura se face doar prin tichet HR deschis de Natalia și aprobat de Marilena.`
+        : '🚫 Modificare retroactivă blocată — doar Trusu Razvan, Marilena și Natalia pot modifica zile exportate. Contactează unul dintre ei.', 'error')
+      resolve({ ok: false, tichet: null })
+      return
+    }
+    promptActivRef.current = true
     setPasswordPrompt({
       employeeName: empName,
-      onConfirm: () => resolve(true),
-      onCancel: () => resolve(false),
+      cereTichet: lunaSt.cereTichet,
+      onConfirm: (tichet) => { promptActivRef.current = false; resolve({ ok: true, tichet: tichet || null }) },
+      onCancel: () => { promptActivRef.current = false; resolve({ ok: false, tichet: null }) },
     })
   })
+  // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi, ce câmpuri.
+  const noteazaCorectura = async (emp, campuri, t) => {
+    if (!t) return
+    const uid = (await supabase.auth.getUser()).data.user?.id
+    const { error } = await supabase.from('tichete_istoric').insert({
+      tichet_id: t.id, actiune: 'corectura_pontaj', autor: uid || null,
+      detalii: { employee_id: emp.id, angajat: emp.name, data: date, campuri, termen: fmtZiPontaj(lunaSt.termen) },
+    })
+    if (error) showToast(`Corectura e salvată, dar nu s-a putut nota în ${t.numar_tichet}: ${error.message}`, 'warn')
+  }
 
   const handlePwdConfirm = async () => {
     if (!profile?.email) { setPwdErr('Lipsește email contul'); return }
     if (!pwdInput) { setPwdErr('Introdu parola'); return }
     setPwdVerifying(true); setPwdErr('')
+    // După termenul de 12: tichet HR existent (verificat în BD) — înainte de parolă
+    let tichet = null
+    if (passwordPrompt?.cereTichet) {
+      const nr = normalizeazaTichet(tichetInput)
+      if (!nr) { setPwdErr('Introdu numărul tichetului HR (ex. TKT-2026-0287)'); setPwdVerifying(false); return }
+      const { data: t } = await supabase.from('tichete').select('id, numar_tichet, departament, status').eq('numar_tichet', nr).maybeSingle()
+      if (!t) { setPwdErr(`Tichetul ${nr} nu există`); setPwdVerifying(false); return }
+      if (!tichetValabil(t)) { setPwdErr(`${nr} nu e un tichet HR valabil (departament ${t.departament}, status ${t.status})`); setPwdVerifying(false); return }
+      tichet = t
+    }
     const { error } = await supabase.auth.signInWithPassword({ email: profile.email, password: pwdInput })
     if (error) {
       setPwdErr('Parolă greșită'); setPwdVerifying(false); return
     }
     setPwdVerifying(false)
-    setPwdInput(''); setPwdErr('')
-    if (passwordPrompt?.onConfirm) passwordPrompt.onConfirm()
+    setPwdInput(''); setPwdErr(''); setTichetInput('')
+    if (passwordPrompt?.onConfirm) passwordPrompt.onConfirm(tichet)
     setPasswordPrompt(null)
   }
   const handlePwdCancel = () => {
-    setPwdInput(''); setPwdErr(''); setPwdVerifying(false)
+    setPwdInput(''); setPwdErr(''); setPwdVerifying(false); setTichetInput('')
     if (passwordPrompt?.onCancel) passwordPrompt.onCancel()
     setPasswordPrompt(null)
   }
 
   const saveRecord = async (emp, fields) => {
     // Gate parolă dacă data afișată e în perioadă deja exportată
-    const okAuth = await requestPasswordIfExported(emp.name)
+    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
     if (!okAuth) {
       showToast('Modificare anulată — parolă necesară pentru zi plătită', 'warn')
       return
@@ -1931,12 +1969,12 @@ function PontajPage() {
     if (!fields.norma && !recSiteId) { showToast('Șantierul este obligatoriu pentru ore!','error'); setSaving(null); return }
     const uid=(await supabase.auth.getUser()).data.user?.id
     const {data,error}=await supabase.from('pontaj_records').upsert({employee_id:emp.id,date,site_id:recSiteId,created_by:uid,updated_by:uid,updated_at:new Date().toISOString(),...fields},{onConflict:'employee_id,date'}).select().single()
-    if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`)} else showToast('Eroare la salvare','error')
+    if(!error){setRecs(prev=>({...prev,[emp.id]:data}));showToast(`✓ Salvat: ${emp.name}`); await noteazaCorectura(emp, Object.keys(fields), tichet)} else showToast('Eroare la salvare','error')
     setSaving(null)
   }
   const allocate = async (emp, siteId) => {
     // Gate parolă dacă data afișată e în perioadă deja exportată
-    const okAuth = await requestPasswordIfExported(emp.name)
+    const { ok: okAuth, tichet } = await requestPasswordIfExported(emp.name)
     if (!okAuth) {
       showToast('Realocare anulată — parolă necesară pentru zi plătită', 'warn')
       return
@@ -1946,7 +1984,7 @@ function PontajPage() {
     const {data:rec}=await supabase.from('pontaj_records')
       .upsert({employee_id:emp.id,date,site_id:siteId||null,updated_by:uid,updated_at:new Date().toISOString()},{onConflict:'employee_id,date'})
       .select().single()
-    if(rec) setRecs(prev=>({...prev,[emp.id]:rec}))
+    if(rec){ setRecs(prev=>({...prev,[emp.id]:rec})); await noteazaCorectura(emp, ['site_id'], tichet) }
     // Daca angajatul nu are niciun santier default, setam si pe employee (scoate din "nealocati")
     if(!emp.site_id&&siteId){
       await supabase.from('employees').update({site_id:siteId}).eq('id',emp.id)
@@ -1991,6 +2029,13 @@ function PontajPage() {
       <div style={{background:'#1A2A3A',border:`1px solid ${G.blue}33`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:11,color:'#79C0FF'}}>
         ☕ Pauza masă 12–13 se scade automat &nbsp;·&nbsp; 💰 Diurnă {diurnaAmt} RON/zi &nbsp;·&nbsp; Șantierul obligatoriu la ore
       </div>
+      {lunaSt.inchisa && (
+        <div style={{background:(lunaSt.cereTichet?G.red:G.yellow)+'14',border:`1px solid ${(lunaSt.cereTichet?G.red:G.yellow)}66`,borderRadius:9,padding:'8px 14px',marginBottom:12,fontSize:12,color:G.text,lineHeight:1.5}}>
+          <strong style={{color:lunaSt.cereTichet?G.red:G.yellow}}>{lunaSt.cereTichet?'🔒 Lună închisă — termenul de corecturi a trecut':'📅 Lună închisă'}</strong>
+          {' · '}corecturile pe luna asta se fac până pe <strong>{fmtZiPontaj(lunaSt.termen)}</strong>; după, doar prin tichet HR deschis de Natalia Udrea și aprobat de Marilena Tudorache.
+          {lunaSt.cereTichet && <> Modificarea cere <strong>numărul tichetului HR</strong> și parola (doar Răzvan, Marilena, Natalia).</>}
+        </div>
+      )}
       {isDateExported && exportPeriodInfo && (
         <div style={{background:(canEditRetroactivePontaj?G.orange:G.red)+'14',border:`2px solid ${canEditRetroactivePontaj?G.orange:G.red}`,borderRadius:10,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
           <span style={{fontSize:20}}>{canEditRetroactivePontaj?'🔒':'🚫'}</span>
@@ -2039,7 +2084,7 @@ function PontajPage() {
               <span style={{fontSize:32}}>🔒</span>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:G.orange}}>Parolă necesară</div>
-                <div style={{fontSize:12,color:G.muted,marginTop:2}}>Modificare pontaj pe zi exportată</div>
+                <div style={{fontSize:12,color:G.muted,marginTop:2}}>{passwordPrompt.cereTichet ? 'Corectură pontaj pe lună închisă' : 'Modificare pontaj pe zi exportată'}</div>
               </div>
             </div>
             <div style={{background:G.bg,border:`1px solid ${G.border}`,borderRadius:8,padding:'10px 14px',marginBottom:14,fontSize:12,lineHeight:1.5}}>
@@ -2051,6 +2096,14 @@ function PontajPage() {
                 </div>
               )}
             </div>
+            {passwordPrompt.cereTichet && <>
+              <div style={{fontSize:12,color:G.red,marginBottom:8,lineHeight:1.5}}>
+                Luna e închisă și termenul de corecturi ({fmtZiPontaj(lunaSt.termen)}) a trecut. Corectura se face doar pe baza tichetului HR deschis de Natalia și aprobat de Marilena; se notează în istoricul tichetului.
+                <div style={{color:G.muted,marginTop:4}}>ERP-ul verifică doar că tichetul e de HR și nerespins — <strong>aprobarea Marilenei o confirmi tu în tichet</strong> înainte de corectură.</div>
+              </div>
+              <input value={tichetInput} onChange={e=>{setTichetInput(e.target.value); setPwdErr('')}} placeholder="Nr. tichet HR, ex. TKT-2026-0287" disabled={pwdVerifying}
+                style={{...S.input,width:'100%',padding:'10px 14px',fontSize:14,fontFamily:'monospace',marginBottom:10}} />
+            </>}
             <div style={{fontSize:12,color:G.muted,marginBottom:8}}>Confirmă parola contului <strong>{profile?.email}</strong>:</div>
             <input
               type="password"
@@ -3497,17 +3550,17 @@ function ReportsPage() {
     const luna = d.getMonth() + 1
     return `OD ${getInitialsOrdin(name)} ${luna}`
   }
-  const isInGenerationWindow = (periodFromStr) => {
-    const pf = new Date(periodFromStr + 'T12:00')
-    const Y = pf.getFullYear(); const M = pf.getMonth()
-    const lastDay = new Date(Y, M + 1, 0).getDate()
-    const today = new Date()
-    const Ty = today.getFullYear(); const Tm = today.getMonth(); const Td = today.getDate()
-    // Ultima zi a lunii M
-    if (Ty === Y && Tm === M && Td === lastDay) return true
-    // Primele 7 zile ale lunii M+1
-    const nextMonth = M === 11 ? { y: Y + 1, m: 0 } : { y: Y, m: M + 1 }
-    if (Ty === nextMonth.y && Tm === nextMonth.m && Td >= 1 && Td <= 7) return true
+  // Poarta de dată pentru ordine (PDF și XLSX). Regula Marilenei, decizie Răzvan 13.10.2026:
+  // ordinele unei luni se generează doar de pe 16 a lunii următoare (statul definitiv se face pe 15),
+  // fără termen de final. Doar owner-ul poate trece peste, cu confirmare explicită.
+  const poartaOrdine = () => {
+    if (!ordGenPayment) return false
+    if (poateGeneraOrdin(ordGenPayment.period_from)) return true
+    const motiv = motivBlocareOrdin(ordGenPayment.period_from)
+    if (profile?.is_owner) {
+      return window.confirm(`⚠ ${motiv}\n\nAzi: ${new Date().toLocaleDateString('ro-RO')}.\n\nDoar tu (owner) poți genera mai devreme. Continui?`)
+    }
+    showToast(`⛔ ${motiv} Pentru excepții contactează owner-ul.`, 'warn')
     return false
   }
 
@@ -3519,30 +3572,9 @@ function ReportsPage() {
     }
     if (!ordGenPayment) { showToast('Eroare: plată necunoscută', 'error'); return }
     
-    // ─── Validare fereastră generare (Etapa 7.5 Faza 3.1) ───
-    const inWindow = isInGenerationWindow(ordGenPayment.period_from)
-    if (!inWindow) {
-      const lastDay = getDataEmiteriiOrdin(ordGenPayment.period_from)
-      const lastDayFmt = lastDay.toLocaleDateString('ro-RO')
-      const todayFmt = new Date().toLocaleDateString('ro-RO')
-      if (profile?.is_owner) {
-        const ok = window.confirm(
-          `⚠ FEREASTRA RECOMANDATĂ pentru generarea ordinelor:\n\n` +
-          `  • Ultima zi a lunii: ${lastDayFmt}\n` +
-          `  • SAU primele 7 zile ale lunii următoare\n\n` +
-          `Azi: ${todayFmt} (în afara ferestrei)\n\n` +
-          `Doar tu (owner) poți face override. Continui?`
-        )
-        if (!ok) return
-      } else {
-        showToast(
-          `⛔ Ordinele de deplasare pot fi generate doar în ultima zi a lunii (${lastDayFmt}) sau în primele 7 zile ale lunii următoare. Pentru excepții contactează owner-ul.`,
-          'warn'
-        )
-        return
-      }
-    }
-    
+    // ─── Poarta de dată (regula Marilenei, 13.10.2026): de pe 16 a lunii următoare ───
+    if (!poartaOrdine()) return
+
     setOrdGenerating(true)
     setOrdGenProgress({ done: 0, total: selected.length })
     
@@ -3789,6 +3821,8 @@ function ReportsPage() {
       return
     }
     if (!ordGenPayment) { showToast('Eroare: plată necunoscută', 'error'); return }
+    // Aceeași poartă de dată ca la PDF (înainte XLSX-ul nu avea nicio verificare)
+    if (!poartaOrdine()) return
 
     setOrdGenerating(true)
     setOrdGenProgress({ done: 0, total: selected.length })
@@ -6200,6 +6234,8 @@ function ReportsPage() {
                           <div style={{height:'100%',width:`${ordGenProgress.total?(ordGenProgress.done/ordGenProgress.total)*100:0}%`,background:G.orange,transition:'width .2s'}}/>
                         </div>
                       </div>
+                    ) : ordGenPayment && !poateGeneraOrdin(ordGenPayment.period_from) ? (
+                      <span style={{color:G.yellow,fontWeight:700}}>⛔ {motivBlocareOrdin(ordGenPayment.period_from)}{profile?.is_owner ? ' (owner: poți genera mai devreme, cu confirmare)' : ''}</span>
                     ) : (
                       <span>💡 Distribuție cronologică pe zile · Template din Storage privat · Semnatari din Admin → Setări</span>
                     )}
@@ -6210,14 +6246,14 @@ function ReportsPage() {
                     style={{...S.btnS,fontSize:12}}
                   >Anulează</button>
                   <button 
-                    onClick={generateOrdine} 
-                    disabled={ordGenerating || ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0}
+                    onClick={generateOrdine}
+                    disabled={ordGenerating || ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0 || (!!ordGenPayment && !poateGeneraOrdin(ordGenPayment.period_from) && !profile?.is_owner)}
                     style={{...S.btnS,fontSize:12,background:G.orange+'22',color:G.orange,border:`1px solid ${G.orange}66`,opacity:(ordGenerating||ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0)?.5:1}}
                     title="Generează xlsx editabile (fără semnături)"
                   >{ordGenerating ? '⏳' : `📦 ZIP xlsx (${ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length})`}</button>
                   <button 
-                    onClick={generateOrdinePDF} 
-                    disabled={ordGenerating || ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0}
+                    onClick={generateOrdinePDF}
+                    disabled={ordGenerating || ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0 || (!!ordGenPayment && !poateGeneraOrdin(ordGenPayment.period_from) && !profile?.is_owner)}
                     style={{...S.btnP,background:G.orange,fontSize:12,opacity:(ordGenerating||ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length===0)?.5:1}}
                     title="Generează PDF-uri cu semnături inserate (gata de printat/semnat)"
                   >{ordGenerating ? '⏳ Generez...' : `📄 PDF cu semnături (${ordGenEmps.filter(e=>e.selected&&e.diurna_max>0).length})`}</button>
