@@ -40,7 +40,7 @@ export default function OfertareTipareDeclansate({ licitatie: l, showToast = nul
     const { data: ex } = await supabase.from('ofertare_clarificari').select('nr').eq('licitatie_id', l.id)
     const nr = ((ex || []).reduce((m, q) => Math.max(m, q.nr || 0), 0) || 0) + 1
     const { data: ins, error } = await supabase.from('ofertare_clarificari').insert({
-      licitatie_id: l.id, nr, intrebare: t.intrebare_propusa || '', status: 'de_trimis', origine: 'platforma', sursa: `tipar:${t.pattern_id}`, cheie: `tipar_${t.pattern_id}`,
+      licitatie_id: l.id, nr, intrebare: t.intrebare_propusa || '', status: 'de_trimis', origine: 'tipar', sursa: `tipar:${t.pattern_id}`, cheie: `tipar_${t.pattern_id}`,
     }).select('id').single()
     if (error) { setBusy(false); return anunta('Ciorna nu s-a creat: ' + error.message, 'err') }
     const { error: eTem } = await supabase.from('ofertare_clarificari_temeiuri').insert({ clarificare_id: ins.id, pattern_id: t.pattern_id, sursa: 'manual', confirmat: true })   // omul a apăsat explicit → confirmat

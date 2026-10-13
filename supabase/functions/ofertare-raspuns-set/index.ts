@@ -20,8 +20,8 @@ import { PROMPT_INVENTAR, PROMPT_COMPARA } from './prompturi.ts'
 // 12.10.2026 (MVP loturi, 20261024b): poarta pe document la creeaza_set (documentele neeligibile ies în `excluse`) și la
 // inventar (ÎNAINTE de AI); lotul pe mulțimi de întregi (parseLot) la compara — vezi loturi.ts.
 import { documentEligibil, eligibilitateLicitatie, esteEligibil, filtreazaDerivate, filtreazaDocumente, mesajLot, participareLicitatie } from '../_shared/eligibilLot.ts'
-import { eligibilaPeLot, parseLot } from '../_shared/lot.ts'
-import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, selectieSet } from './loturi.ts'
+import { eligibilaPeLot, lotRand, parseLot } from '../_shared/lot.ts'
+import { filtreazaRegistru, lotOperatie, lotOperatieSelectie, coadaIncompleta, type CtxOperatii, domeniuAcoperit, motivOperatie, provenientaCompleta, provenientaUnica, restrangeLaDocument, selectieSet, surseCoada, surseDispozitie, surseNoi, surseOperatie } from './loturi.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -76,6 +76,43 @@ async function cheamaAI(key: string, prompt: string, maxTok: number) {
 function extrageJson(txt: string): any {
   try { const m = txt.replace(/```json?|```/g, '').match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null }
   catch { return null }
+}
+
+// Contextul de reverificare a operațiilor (Jakarinos r10/r11), citit ACUM: țintele trecute prin poarta comună (document + lot;
+// lipsă = neeligibilă) și domeniul documentelor-sursă (alocat → loturile lui, comun → null, altfel []). null = eroare (oprire).
+async function contextOperatii(db: any, licId: number, part: { stare: string | null; participam: number[] }, ops: any[]):
+  Promise<CtxOperatii | null> {
+  const cerIds = [...new Set(ops.filter((o) => o?.cerinta_id != null).map((o) => Number(o.cerinta_id)))]
+  const docIds = [...new Set(ops.flatMap((o) => Array.isArray(o?.surse_doc_ids) ? o.surse_doc_ids.map(Number) : []))]
+  const cerinte = new Map<number, any>()
+  if (cerIds.length) {
+    const { data, error } = await db.from('ofertare_cerinte').select('id, licitatie_id, sursa_document_id, lot, lot_domeniu, lot_nr').in('id', cerIds)
+    if (error || !Array.isArray(data)) return null
+    const f = await filtreazaDerivate(db, licId, data.filter((c: any) => Number(c.licitatie_id) === licId) as any[])
+    if (!f.ok) return null
+    for (const c of f.pastrate) cerinte.set(Number((c as any).id), c)
+  }
+  const domDoc = new Map<number, number[] | null>()
+  if (docIds.length && part.stare === 'are_loturi') {
+    const [{ data: ds, error: e1 }, { data: dl, error: e2 }] = await Promise.all([
+      db.from('ofertare_documente_atribuire').select('id, licitatie_id, lot_stare').in('id', docIds),
+      db.from('ofertare_document_loturi').select('document_id, lot_nr').in('document_id', docIds),
+    ])
+    if (e1 || e2 || !Array.isArray(ds) || !Array.isArray(dl)) return null
+    for (const d of ds) {
+      if (Number(d.licitatie_id) !== licId) continue
+      domDoc.set(Number(d.id), d.lot_stare === 'comun' ? null
+        : d.lot_stare === 'alocat' ? dl.filter((x: any) => Number(x.document_id) === Number(d.id)).map((x: any) => Number(x.lot_nr)) : [])
+    }
+  }
+  // eligibilitatea documentelor-sursă pe harta licitației setului, pe orice stare (Jakarinos r12 P2)
+  let docEligibil: ((id: number) => boolean) | undefined
+  if (docIds.length) {
+    const he = await eligibilitateLicitatie(db, licId)
+    if (!he.ok) return null
+    docEligibil = (id: number) => esteEligibil(he.harta, id)
+  }
+  return { peLoturi: part.stare === 'are_loturi', participam: part.participam, cerinte, domDoc, docEligibil }
 }
 
 Deno.serve(async (req: Request) => {
@@ -184,7 +221,49 @@ Deno.serve(async (req: Request) => {
     if (!setId) return json({ error: 'set_id lipsa' }, 400)
     if (!opIds.length) return json({ error: 'nicio operatie bifata' }, 400)
 
-    // Aplicarea NU cheama AI: executa exact operatiile generate de server si bifate de om.
+    // Proveniența la APLICARE (Jakarinos r7 P1 #1): RPC-ul (doar service_role, deci doar prin edge-ul ăsta) scrie un singur
+    // sursa_document_id pe cerință. Pe are_loturi, fiecare operație bifată trebuie să fie în propunere.operatii (nu în
+    // operatii_provenienta), cu EXACT o sursă, sursa eligibilă ACUM în licitația setului și lotul în participare — altfel
+    // refuz pentru tot apelul (nimic aplicat). Acoperă și operațiile vechi / generate cât licitația era fara_loturi.
+    {
+      const { data: s, error: eS } = await db.from('ofertare_raspuns_set').select('licitatie_id, propunere').eq('id', setId).maybeSingle()
+      if (eS || !s) return json({ error: eS ? 'citire set: ' + eS.message : 'setul nu exista' })
+      const part = await participareLicitatie(db, s.licitatie_id)
+      if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a aplicat nimic', blocat_lot: true, motiv_lot: part.motiv })
+      // DECIZIA Răzvan 12.10 seara (varianta B pe Jakarinos r11): pe licitațiile cu loturi, aplicarea AUTOMATĂ din seturile de
+      // răspunsuri e blocată complet până la PR-ul de rigoare (surse multiple pe cerință + verificare în RPC). compara rămâne
+      // informativă; omul aplică manual în registru.
+      if (part.stare === 'are_loturi') return json({ ok: false, blocat_lot: true, aplicare_manuala: true,
+        error: 'Pe licitațiile cu loturi, schimbările din seturile de răspunsuri se aplică MANUAL în registru (aplicarea automată e blocată până la verificarea completă a provenienței) — nu s-a aplicat nimic' })
+      // RPC-ul marchează setul „aplicat” după operațiile bifate (Jakarinos r10 P2): cu operații izolate pe proveniență încă în set,
+      // închiderea cere confirmarea explicită a omului că le-a tratat manual (UI: confirmare înainte de aplicare)
+      const nProv = ((s.propunere?.operatii_provenienta || []) as any[]).length
+      if (nProv && body?.provenienta_tratata !== true) return json({ ok: false, necesita_confirmare_provenienta: nProv,
+        error: `Setul are ${nProv} ${nProv === 1 ? 'schimbare care NU se poate aplica automat' : 'schimbări care NU se pot aplica automat'} (proveniență). Confirmă că le-ai tratat manual — după aplicare setul se închide — nu s-a aplicat nimic` })
+      // r9 (Jakarinos r9 P1 #2): proveniența completă și unică se cere pe ORICE stare — o cerință aplicată pe fara_loturi din
+      // surse incomplete ar arăta completă după trecerea la are_loturi (RPC-ul scrie un singur sursa_document_id). Pe 12.10 nu
+      // există niciun set în BD, deci fără regresie practică; lotul se verifică doar pe are_loturi.
+      {
+        // o singură regulă pentru compara și aplica (Jakarinos r10/r11): motivOperatie pe contextul citit ACUM
+        const hartaOp = new Map<string, any>(((s.propunere?.operatii || []) as any[]).map((o: any) => [String(o.op_id), o]))
+        const he = await eligibilitateLicitatie(db, s.licitatie_id)
+        if (!he.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a aplicat nimic', blocat_lot: true })
+        const alese = opIds.map((id: string) => hartaOp.get(id)).filter(Boolean)
+        const ctx = await contextOperatii(db, Number(s.licitatie_id), part, alese)
+        if (!ctx) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a aplicat nimic', blocat_lot: true })
+        const refuzate: Array<{ op_id: string; motiv: string }> = []
+        for (const id of opIds) {
+          const o = hartaOp.get(id)
+          if (!o) { refuzate.push({ op_id: id, motiv: 'operatie_neaplicabila' }); continue }
+          const m = motivOperatie(o, ctx)
+          if (m) { refuzate.push({ op_id: id, motiv: m }); continue }
+          const doc = Number(o.surse_doc_ids[0])
+          if (!esteEligibil(he.harta, doc) || Number(o.document_id) !== doc) refuzate.push({ op_id: id, motiv: 'document_' + (he.harta.get(doc)?.motiv || 'neeligibil') })
+        }
+        if (refuzate.length) return json({ ok: false, blocat_lot: true, operatii_refuzate: refuzate,
+          error: `Blocat pe proveniență / loturi: ${refuzate.length} din ${opIds.length} operații nu se pot aplica (${[...new Set(refuzate.map((r) => r.motiv))].join(', ')}) — nu s-a aplicat nimic; reia „compară” sau tratează-le manual` })
+      }
+    }    // Aplicarea NU cheama AI: executa exact operatiile generate de server si bifate de om.
     const { data, error } = await db.rpc('fn_ofertare_raspuns_set_aplica', {
       p_set_id: setId,
       p_op_ids: opIds,
@@ -235,16 +314,29 @@ Deno.serve(async (req: Request) => {
     if (!doc?.text_extras) return json({ error: `documentul ${urmator.document_id} nu are text extras` })
 
     const numeScurt = (doc.nume_original || '').split('/').pop()
-    // Coada deschisă (review Jakarinos r4 P1 #2) e text din documentul PRECEDENT: intră doar dacă documentul ei (coada_doc_id)
-    // e eligibil ACUM. Coadă fără proveniență (scrisă înainte de loturi) sau din document blocat = omisă, nu retransmisă.
+    // Coada deschisă (review Jakarinos r4 P1 #2) e text din documentele PRECEDENTE: intră doar dacă TOATE documentele ei
+    // (coada_doc_ids — r5 P1 #1: o coadă lipită A→B rămasă deschisă poartă și A) sunt eligibile ACUM. Coadă fără
+    // proveniență (scrisă înainte de loturi) sau cu oricare document blocat = omisă, nu retransmisă. Poarta căzută = oprire.
     let coada = String(prop.coada_deschisa || ''), coadaOmisa: string | null = null
+    let coadaSurse: number[] = []
+    // r6: coada în forma veche (doar coada_doc_id, fără lista completă) pe are_loturi = neverificabilă, omisă (Jakarinos r6 P1 #1);
+    // sursele se verifică pe harta licitației SETULUI — un document mutat în altă licitație e neeligibil (Copilot r2 P1 #2)
     if (coada) {
-      if (prop.coada_doc_id == null) { coada = ''; coadaOmisa = 'fara_provenienta' }
+      const pc = await participareLicitatie(db, set.licitatie_id)
+      if (pc.motiv === 'eroare_poarta') return json({ ok: false, blocat_lot: true, error: mesajLot('eroare_poarta') + ' — nu s-a citit nimic' })
+      const sc = surseCoada(prop, pc.stare === 'are_loturi')
+      if (!sc.length) { coada = ''; coadaOmisa = 'fara_provenienta' }
       else {
-        const ec = await documentEligibil(db, Number(prop.coada_doc_id))
-        if (!ec.eligibil) { coada = ''; coadaOmisa = ec.motiv }
+        const hc = await eligibilitateLicitatie(db, set.licitatie_id)
+        if (!hc.ok) return json({ ok: false, blocat_lot: true, error: mesajLot('eroare_poarta') + ' — nu s-a citit nimic' })
+        const blocat = sc.find((id) => !esteEligibil(hc.harta, id))
+        if (blocat != null) { coada = ''; coadaOmisa = hc.harta.get(blocat)?.motiv || 'document_in_afara_licitatiei' }
+        else coadaSurse = sc
       }
     }
+    const surse = surseNoi(doc.id, coadaSurse)
+    // coada folosită în forma veche (fallback pe fara_loturi) = proveniență INCOMPLETĂ, purtată mai departe (Jakarinos r8 P1 #1)
+    const incomplet = !!coada && coadaIncompleta(prop)
     const prompt = PROMPT_INVENTAR + '\n\n'
       + (coada ? 'COADA DESCHISA DE LA FRAGMENTUL PRECEDENT:\n' + coada + '\n\n' : '')
       + `DOCUMENT: ${numeScurt}\n<document_neincrezator>\n${doc.text_extras}\n</document_neincrezator>`
@@ -272,7 +364,7 @@ Deno.serve(async (req: Request) => {
         // Ancora e in sursa nemodificata (documentul + citatul), nu in textul generat si nici in
         // numarul rundei: asa acelasi id iese la fiecare reluare.
         disp_id: await hash12(doc.id + '|' + norm(x.citat)),
-        doc_id: doc.id, doc_nume: numeScurt, nr: x.nr ?? null,
+        doc_id: doc.id, doc_ids: surse, ...(incomplet ? { surse_incomplete: true } : {}), doc_nume: numeScurt, nr: x.nr ?? null,
         tip: ['efect_posibil', 'confirmare', 'efect_cantitati', 'neclar', 'anexa'].includes(x.tip) ? x.tip : 'neclar',
         rezumat: String(x.rezumat || '').slice(0, 600),
         citat: String(x.citat).slice(0, 400),
@@ -289,7 +381,9 @@ Deno.serve(async (req: Request) => {
       dispozitii: [...vechi, ...adaugate],
       documente_citite: [...citite, doc.id],
       coada_deschisa: j.coada_deschisa || null,
-      coada_doc_id: j.coada_deschisa ? doc.id : null,   // proveniența cozii (r4 P1 #2)
+      // proveniența cozii (r4 P1 #2, r5 P1 #1): toate documentele contributoare, moștenite de la coada folosită
+      coada_doc_ids: j.coada_deschisa ? surse : null, coada_doc_id: null,
+      coada_incompleta: j.coada_deschisa && incomplet ? true : undefined,
       acoperire: [...(prop.acoperire || []), {
         doc_id: doc.id, nume: numeScurt, caractere: (doc.text_extras || '').length,
         // Taiat la plafon = fragmentul NU a fost parcurs integral, orice ar zice modelul despre el.
@@ -336,7 +430,7 @@ Deno.serve(async (req: Request) => {
     if (!set) return json({ error: 'setul nu exista' }, 404)
     if (set.stare === 'aplicat') return json({ error: 'setul a fost deja aplicat' })
 
-    const prop: any = set.propunere || {}
+    let prop: any = set.propunere || {}
     const toate: any[] = prop.dispozitii || []
     if (!toate.length) return json({ error: 'nu exista inventar — ruleaza intai actiunea "inventar"' })
     const { count: nrDocs } = await db.from('ofertare_raspuns_set_doc')
@@ -345,22 +439,56 @@ Deno.serve(async (req: Request) => {
       return json({ error: `inventarul nu e complet: ${(prop.documente_citite || []).length} din ${nrDocs} documente citite` })
     }
 
+    // Participarea + NORMALIZAREA operațiilor existente ÎNAINTEA oricărui retur (Jakarinos r10 P2, r11 P1 #2 / P2): fiecare
+    // operație deja propusă se reverifică pe contextul de ACUM (motivOperatie — aceeași regulă ca la aplicare), inclusiv
+    // amprenta țintei față de cea cu care a fost generată; cele care nu mai trec se mută la om și se persistă.
+    const part = await participareLicitatie(db, set.licitatie_id)
+    if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: part.motiv })
+    {
+      const opV: any[] = prop.operatii || []
+      if (opV.length) {
+        const ctxV = await contextOperatii(db, Number(set.licitatie_id), part, opV)
+        if (!ctxV) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a comparat nimic', blocat_lot: true })
+        const tinteV = [...new Set(opV.filter((o: any) => o.cerinta_id != null).map((o: any) => o.cerinta_id))]
+        const ampAcum: Record<string, string> = {}
+        if (tinteV.length) {
+          const { data: amp, error: eA } = await db.rpc('fn_ofertare_cerinte_amprente', { p_licitatie_id: set.licitatie_id, p_ids: tinteV })
+          if (eA) return json({ error: 'calcul amprente: ' + eA.message })
+          for (const a of (amp || [])) ampAcum[String(a.cerinta_id)] = a.amprenta
+        }
+        ctxV.amprenteOperatie = prop.amprente || {}
+        ctxV.amprenteAcum = ampAcum
+        const valide: any[] = [], scoase: any[] = []
+        // varianta B (Răzvan 12.10): pe are_loturi nicio operație nu rămâne aplicabilă automat — toate la om (informativ)
+        for (const o of opV) { const m = motivOperatie(o, ctxV) || (ctxV.peLoturi ? 'loturi_aplicare_manuala' : null); if (m) scoase.push({ ...o, motiv_provenienta: m }); else valide.push(o) }
+        if (scoase.length) {
+          const provV: any[] = prop.operatii_provenienta || [], st = new Set(provV.map((x: any) => x.op_id))
+          prop = { ...prop, operatii: valide, operatii_provenienta: [...provV, ...scoase.filter((o: any) => !st.has(o.op_id))] }
+          const { error: eN } = await db.from('ofertare_raspuns_set').update({ propunere: prop, updated_at: new Date().toISOString() }).eq('id', setId)
+          if (eN) return json({ error: 'salvare propunere: ' + eN.message })
+        }
+      }
+    }
     const facute = new Set<string>((prop.dispozitii_comparate || []) as string[])
     const deFacutToate = toate.filter(x => x.tip === 'efect_posibil' && !facute.has(x.disp_id))
     if (!deFacutToate.length) {
       return json({ ok: true, continua: false, mesaj: 'toate dispozitiile cu efect posibil au fost comparate',
-        operatii: (prop.operatii || []).length })
+        operatii: (prop.operatii || []).length, operatii_provenienta: (prop.operatii_provenienta || []).length || undefined })
     }
     // Loturi (20261024b, review Jakarinos P1 #3): la FIECARE reluare se reverifică documentele din care vin dispozițiile —
     // trierea / bifele s-au putut schimba după inventar. Cele din documente blocate nu pleacă la AI și nu se marchează
     // comparate (rămân pentru când documentul redevine eligibil). Poarta căzută = oprire.
-    const fd = await filtreazaDocumente(db, deFacutToate.map((x: any) => x.doc_id))
-    if (!fd.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a comparat nimic', blocat_lot: true })
     // + lotul PROPRIU al dispoziției (review Jakarinos r2 P1 #4): un document comun poate avea dispoziții doar pe alt lot.
     // Fără loturi numite = dispoziție generală (decide documentul). Numite: trebuie să intersecteze loturile la care
     // participăm (pe are_loturi) și lotul setului, dacă e declarat; neînțelese = neclare, excluse și raportate separat.
-    const part = await participareLicitatie(db, set.licitatie_id)
-    if (!part.ok) return json({ error: mesajLot(part.motiv) + ' — nu s-a comparat nimic', blocat_lot: true, motiv_lot: part.motiv })
+    // Proveniența (review Jakarinos r5 P1 #1): TOATE documentele din care provine dispoziția (inclusiv coada lipită din
+    // documentul precedent) trebuie să fie eligibile. Dispoziție veche fără doc_ids pe are_loturi = neverificabilă, exclusă.
+    const surseD = new Map<string, number[] | null>(deFacutToate.map((x: any) => [x.disp_id, surseDispozitie(x, part.stare === 'are_loturi')]))
+    // harta licitației SETULUI (Copilot r2 P1 #2): un document-sursă mutat în altă licitație lipsește = neeligibil
+    const fd = await eligibilitateLicitatie(db, set.licitatie_id)
+    if (!fd.ok) return json({ error: mesajLot('eroare_poarta') + ' — nu s-a comparat nimic', blocat_lot: true })
+    const surseEligibile = (x: any) => { const s = surseD.get(x.disp_id); return !!s && s.length > 0 && s.every((id) => esteEligibil(fd.harta, id)) }
+    const dispFaraProvenienta = deFacutToate.filter((x: any) => surseD.get(x.disp_id) === null).length
     // Selecția EFECTIVĂ (review Jakarinos r3 P1 #3): o singură mulțime = loturile setului ∩ loturile la care participăm
     // (pe are_loturi; setul fără lot = toată participarea). Intersecția goală (set rămas pe un lot debifat) = oprire.
     // Aceeași selecție decide dispozițiile, registrul și lotul operațiilor — nu două intersecții separate.
@@ -385,16 +513,29 @@ Deno.serve(async (req: Request) => {
       if (selEf !== null && !eligibilaPeLot(l, selEf)) return 'in_afara'
       return 'ok'
     }
-    const peLotDisp = deFacutToate.filter((x: any) => fd.eligibile.has(Number(x.doc_id)))
+    const peLotDisp = deFacutToate.filter(surseEligibile)
     const deFacut = peLotDisp.filter((x: any) => lotDisp(x) === 'ok')
     const dispLotInAfara = peLotDisp.filter((x: any) => lotDisp(x) === 'in_afara').length
     const dispLotNeclar = peLotDisp.filter((x: any) => lotDisp(x) === 'neclar').length
     const dispBlocate = deFacutToate.length - deFacut.length
     if (!deFacut.length) return json({ ok: false, blocat_lot: true, continua: false, dispozitii_blocate_lot: dispBlocate,
       dispozitii_lot_in_afara: dispLotInAfara || undefined, dispozitii_lot_neclar: dispLotNeclar || undefined,
+      dispozitii_fara_provenienta: dispFaraProvenienta || undefined,
       error: `Blocat pe loturi: toate cele ${dispBlocate} dispoziții rămase sunt din documente blocate (${dispBlocate - dispLotInAfara - dispLotNeclar}), pe loturi la care nu participăm (${dispLotInAfara}) sau cu lot neclar (${dispLotNeclar})` })
     const lot = deFacut.slice(0, 20)
 
+    // Amprentele registrului se citesc ÎNAINTEA textului trimis la AI (Jakarinos r12 P1): o editare făcută după (inclusiv în
+    // timpul apelului AI) face amprenta salvată să difere de cea curentă, iar RPC-ul de aplicare refuză — fail-closed. Nu se mai
+    // recitesc după AI (asta valida artificial operații calculate pe textul vechi).
+    const { data: idsReg, error: eIds } = await db.from('ofertare_cerinte').select('id')
+      .eq('licitatie_id', set.licitatie_id).is('inlocuita_de', null).is('duplicat_al', null).order('id')
+    if (eIds) return json({ error: 'citire registru: ' + eIds.message })
+    const ampSnap: Record<string, string> = {}
+    if ((idsReg || []).length) {
+      const { data: amp, error: eA } = await db.rpc('fn_ofertare_cerinte_amprente', { p_licitatie_id: set.licitatie_id, p_ids: (idsReg || []).map((x: any) => x.id) })
+      if (eA) return json({ error: 'calcul amprente: ' + eA.message })
+      for (const a of (amp || [])) ampSnap[String(a.cerinta_id)] = a.amprenta
+    }
     const { data: cerBD, error: eC } = await db.from('ofertare_cerinte')
       .select('id, tip, lot, lot_domeniu, lot_nr, sursa_sectiune, sursa_document_id, text_cerinta, document_probant, cand_se_prezinta')
       .eq('licitatie_id', set.licitatie_id).is('inlocuita_de', null).is('duplicat_al', null).order('id')
@@ -440,7 +581,14 @@ Deno.serve(async (req: Request) => {
       : 'raspuns AI neinterpretabil', taiat, brut: txt.slice(0, 600), cost_usd: cost })
 
     const idsEligibile = new Set(eligibile.map((c: any) => c.id))
+    const docCerinta = new Map<number, number | null>(eligibile.map((c: any) => [Number(c.id), c.sursa_document_id == null ? null : Number(c.sursa_document_id)]))
+    const cerTinta = new Map<number, any>(eligibile.map((c: any) => [Number(c.id), c]))
     const opNoi: any[] = []
+    // Proveniența operației (Jakarinos r6 P1 #2, varianta B Răzvan 12.10): RPC-ul de aplicare scrie UN singur sursa_document_id
+    // pe cerința rezultată. Pe are_loturi, o operație cu mai multe surse (coadă lipită A→B, sau cerința-țintă din alt document
+    // decât dispoziția) ori fără dispoziție-sursă unică NU intră în `operatii` aplicabile: merge în operatii_provenienta (de
+    // tratat de om, ca cerință manuală). Rigoarea completă (surse multiple pe cerință + RPC) = PR ulterior, înainte de generare.
+    const opProvenienta: any[] = [], opCandidate: any[] = []
     // Ce arunca codul se NUMARA si se raporteaza. Un `continue` tacut arata pe ecran exact ca un
     // raspuns curat — e aceeasi capcana ca plafonul de 15 din functia veche, unde 8 modificari
     // dispareau fara ca cineva sa afle.
@@ -460,7 +608,8 @@ Deno.serve(async (req: Request) => {
       if (fel !== 'anuleaza' && !textOp) { arunca('operatie fara text'); continue }
       const lotOp = lotOperatieEf(sursa?.loturi)
       const peLotNeclar = cid !== null && lotNecunoscut.has(cid)
-      opNoi.push({
+      const surseOp = surseOperatie(sursa ? (surseD.get(sursa.disp_id) ?? null) : null, cid != null ? docCerinta.get(cid) : null)
+      const op = {
         // op_id il face SERVERUL, nu modelul: hash din set + dispozitia-sursa + fel + tinta.
         op_id: await hash12(`${setId}|${sursa?.disp_id || o.disp_nr}|${fel}|${cid ?? norm(o.citat)}`),
         fel, cerinta_id: cid,
@@ -487,24 +636,61 @@ Deno.serve(async (req: Request) => {
         necesita_revizuire: o.necesita_revizuire === true || !sursa || peLotNeclar,
         lot_de_verificat: peLotNeclar || undefined,
         disp_id: sursa?.disp_id || null,
-      })
+        surse_doc_ids: surseOp || undefined,
+        // certificat doar din proveniență COMPLETĂ (nu din fallback-ul [doc_id] de pe fara_loturi) — cerut la aplicare pe are_loturi
+        surse_complete: !!sursa && surseOp !== null && provenientaCompleta(sursa),
+      }
+      // pe ORICE stare (r9): aplica cere oricum proveniență completă și unică — aici doar se mută din timp la om, vizibil în UI
+      if (!provenientaUnica(surseOp) || !op.surse_complete) {
+        opProvenienta.push({ ...op, motiv_provenienta: !sursa ? 'fara_dispozitie_sursa' : !op.surse_complete ? 'provenienta_incompleta' : 'surse_multiple' })
+        continue
+      }
+      opCandidate.push(op)
     }
-    const opVechi: any[] = prop.operatii || []
+    // Candidatele trec prin ACEEAȘI regulă ca la aplicare (motivOperatie), pe contextul de acum. Pe are_loturi, lotul unei
+    // operații dintr-un document ALOCAT se restrânge întâi la loturile documentului (Jakarinos r11 P1 #1: dispoziția generală
+    // dintr-un document al lotului 2 nu e „toată participarea”); restrângerea goală / domeniu parțial = la om.
+    if (opCandidate.length) {
+      const ctxN = await contextOperatii(db, Number(set.licitatie_id), part, opCandidate)
+      if (!ctxN) return json({ error: mesajLot('eroare_poarta') + ' — propunerile nu s-au salvat', blocat_lot: true, cost_usd: cost })
+      for (const op of opCandidate) {
+        let o = op
+        if (ctxN.peLoturi) {
+          const dd = ctxN.domDoc.get(Number(op.surse_doc_ids?.[0]))
+          const l = lotRand(op)
+          if (dd !== undefined && l.domeniu === 'lista') {
+            const r = restrangeLaDocument(l.loturi, dd)
+            if (r.length && r.length !== l.loturi.length) o = { ...op, ...lotOperatie(r.join(','), null) }
+          }
+        }
+        const m = motivOperatie(o, ctxN)
+        const mm = m || (ctxN.peLoturi ? 'loturi_aplicare_manuala' : null)   // varianta B: pe are_loturi = informativ, aplicare manuală
+        if (mm) opProvenienta.push({ ...o, motiv_provenienta: mm }); else opNoi.push(o)
+      }
+    }
+    // operațiile deja propuse înainte de proveniență (fără surse_doc_ids) pe are_loturi = scoase din cele aplicabile, la fel
+    const opVechiToate: any[] = prop.operatii || []
+    const opVechi = opVechiToate.filter((o: any) => o.surse_complete === true && provenientaUnica(o.surse_doc_ids))
+    const opVechiScoase = opVechiToate.filter((o: any) => !opVechi.includes(o)).map((o: any) => ({ ...o, motiv_provenienta: 'operatie_veche_fara_provenienta' }))
+    const provVechi: any[] = prop.operatii_provenienta || []
+    const provStiute = new Set(provVechi.map((x: any) => x.op_id))
     const stiute = new Set(opVechi.map((x: any) => x.op_id))
-    const adaugate = opNoi.filter(o => !stiute.has(o.op_id))
-    const operatii = [...opVechi, ...adaugate]
-
-    // Amprentele se calculeaza in SQL, de aceeasi functie pe care o foloseste si aplicarea.
-    const tinte = [...new Set(operatii.filter(o => o.cerinta_id).map(o => o.cerinta_id))]
-    let amprente = prop.amprente || {}
-    if (tinte.length) {
-      const { data: amp, error: eA } = await db.rpc('fn_ofertare_cerinte_amprente', {
-        p_licitatie_id: set.licitatie_id, p_ids: tinte,
-      })
-      if (eA) return json({ error: 'calcul amprente: ' + eA.message, cost_usd: cost })
-      amprente = {}
-      for (const a of (amp || [])) amprente[String(a.cerinta_id)] = a.amprenta
+    // Amprentele (calculate în SQL, de aceeași funcție ca aplicarea): operațiile vechi își păstrează amprenta cu care au fost
+    // generate; cele noi primesc amprenta citită ÎNAINTEA registrului trimis la AI (ampSnap). O operație nouă pe o țintă a unei
+    // operații vechi cu altă amprentă = la om (țintă schimbată între analize). Fără amprentă = la om.
+    const ampVechi: Record<string, string> = prop.amprente || {}
+    const amprente: Record<string, string> = {}
+    for (const o of opVechi) if (o.cerinta_id != null && ampVechi[String(o.cerinta_id)] !== undefined) amprente[String(o.cerinta_id)] = ampVechi[String(o.cerinta_id)]
+    const adaugate: any[] = []
+    for (const o of opNoi.filter(o => !stiute.has(o.op_id))) {
+      if (o.cerinta_id == null) { adaugate.push(o); continue }
+      const k = String(o.cerinta_id), a = ampSnap[k]
+      if (a === undefined || (amprente[k] !== undefined && amprente[k] !== a)) { opProvenienta.push({ ...o, motiv_provenienta: 'tinta_schimbata' }); continue }
+      amprente[k] = a
+      adaugate.push(o)
     }
+    const operatii = [...opVechi, ...adaugate]
+    const operatiiProvenienta = [...provVechi, ...[...opVechiScoase, ...opProvenienta].filter((o) => !provStiute.has(o.op_id))]
 
     const comparate = [...facute, ...lot.map((x: any) => x.disp_id)]
     const raman = toate.filter(x => x.tip === 'efect_posibil' && !comparate.includes(x.disp_id)).length
@@ -522,6 +708,7 @@ Deno.serve(async (req: Request) => {
     // „complet" peste o gaura. Acum se numara exact CARE disp_id a primit un verdict si care nu.
     const cuRezultat = new Set<string>(([
       ...operatii.map((o: any) => o.disp_id),
+      ...operatiiProvenienta.map((o: any) => o.disp_id),
       ...neclareToate.map((n: any) => n.disp_id),
     ].filter(Boolean)) as string[])
     const faraRezultat = toate
@@ -529,6 +716,7 @@ Deno.serve(async (req: Request) => {
       .map((x: any) => ({ disp_id: x.disp_id, nr: x.nr, doc_nume: x.doc_nume, rezumat: x.rezumat }))
 
     const propNou = { ...prop, operatii, amprente, dispozitii_comparate: comparate,
+      operatii_provenienta: operatiiProvenienta.length ? operatiiProvenienta : undefined,
       neclare: neclareToate,
       // Se persista, ca sa se vada in ecran, nu doar in raspunsul HTTP al rundei.
       aruncate: { ...(prop.aruncate || {}), ...Object.fromEntries(
@@ -542,7 +730,7 @@ Deno.serve(async (req: Request) => {
       // dispozitii fara verdict sau cu propuneri respinse nu inseamna „nu schimba nimic",
       // inseamna „nu stim inca". Altfel starea din baza minte la fel ca ecranul.
       // Audit R02: și punctele NECLARE țin concluzia deschisă — „neclar" nu e „nu schimbă nimic".
-      stare: (operatii.length || raman || faraRezultat.length || neclareToate.length
+      stare: (operatii.length || operatiiProvenienta.length || raman || faraRezultat.length || neclareToate.length
         // R02 (Copilot 28.09): și dispozițiile cu efect asupra CANTITĂȚILOR (sau neclare din inventar) țin concluzia deschisă
         || toate.some((x: any) => x.tip === 'efect_cantitati' || x.tip === 'neclar')
         || Object.keys(propNou.aruncate || {}).length) ? 'analizat' : 'fara_efect',
@@ -558,6 +746,8 @@ Deno.serve(async (req: Request) => {
         anuleaza: operatii.filter(o => o.fel === 'anuleaza').length,
         noua: operatii.filter(o => o.fel === 'noua').length },
       necesita_revizuire: operatii.filter(o => o.necesita_revizuire).length,
+      // operațiile cu proveniență multi-document / fără sursă unică (are_loturi): NU sunt aplicabile, de tratat de om
+      operatii_provenienta: operatiiProvenienta.length || undefined, operatii_provenienta_noi: opProvenienta.length || undefined,
       aruncate: Object.keys(aruncate).length ? aruncate : undefined,
       // Nu „soldul e zero", ci „18 din 20 de dispozitii au primit verdict" — un contor trebuie sa
       // masoare exact promisiunea pe care omul o citeste in el, si fiecare restanta sa fie deschizabila.
@@ -576,7 +766,8 @@ Deno.serve(async (req: Request) => {
       cerinte_lot_necunoscut: lotNecunoscut.size ? [...lotNecunoscut] : undefined, cerinte_excluse_lot: filtru.excluse,
       // dispozițiile din documente blocate pe loturi rămân în `ramase` (setul nu e complet), dar nu țin bucla pornită
       continua: raman - dispBlocate > 0, dispozitii_blocate_lot: dispBlocate || undefined,
-      dispozitii_lot_in_afara: dispLotInAfara || undefined, dispozitii_lot_neclar: dispLotNeclar || undefined, cost_usd: Number(cost.toFixed(4)),
+      dispozitii_lot_in_afara: dispLotInAfara || undefined, dispozitii_lot_neclar: dispLotNeclar || undefined,
+      dispozitii_fara_provenienta: dispFaraProvenienta || undefined, cost_usd: Number(cost.toFixed(4)),
     })
   }
 

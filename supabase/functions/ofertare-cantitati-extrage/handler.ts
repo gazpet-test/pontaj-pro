@@ -288,6 +288,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
   const raport: any[] = []
   const toate: any[] = []
   const conflicteRevizie: any[] = []   // R10: poziții citite cu altă cantitate decât cea din BD
+  const reviziiNescrise: number[] = []   // 20261025a: nota de revizie nescrisă (sursele s-au schimbat concurent de 3 ori)
 
   while (poz < munca.length) {
     if (Date.now() - t0 > BUGET_MS) { continua = true; break }
@@ -379,6 +380,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
         um: curat(p[1], 20),
         cantitate: numar(p[2]),
         sursa: `${d.nume_original}${loc ? ' \u2014 ' + loc : ''}`.slice(0, 300),
+        surse_document_ids: [d.id],   // provenien\u021ba structurat\u0103 (20261025a, review Jakarinos r5 P1 #4)
         status: 'extras',
         extras_de_ai: true,
         ...colLot,
@@ -397,21 +399,39 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
       // cu altă cantitate era aruncată în tăcere și rămânea valoarea veche. Acum diferențele se
       // raportează explicit (conflicte_revizie), ca omul să decidă; nu suprascriem automat cifra aprobată.
       try {
-        const { data: exist } = await db.from('ofertare_cantitati').select('id, denumire, sursa, cantitate')
+        const { data: exist } = await db.from('ofertare_cantitati').select('id, denumire, sursa, cantitate, surse_document_ids, extras_de_ai')
           .eq('licitatie_id', licId).in('denumire', [...new Set(feliaAsta.map(x => x.denumire))])
         const peCheie = new Map((exist || []).map((e: any) => [`${e.denumire}\u0000${e.sursa}`, e]))
         for (const x of feliaAsta) {
           const e: any = peCheie.get(`${x.denumire}\u0000${x.sursa}`)
           if (e && x.cantitate !== null && e.cantitate !== null && Number(e.cantitate) !== Number(x.cantitate)) {
-            conflicteRevizie.push({ id: e.id, denumire: x.denumire, sursa: x.sursa, cantitate_bd: e.cantitate, cantitate_noua: x.cantitate })
+            conflicteRevizie.push({ id: e.id, denumire: x.denumire, sursa: x.sursa, cantitate_bd: e.cantitate, cantitate_noua: x.cantitate,
+              surse_bd: e.surse_document_ids ?? null, manual: e.extras_de_ai === false })
           }
         }
         // Propagare (Copilot 28.09): rândul cu cifra revizuită devine „diferenta” (de reverificat) — același
         // mecanism de invalidare pe care îl urmăresc poarta PT, graficul și prețul; cifra veche NU se suprascrie.
+        // Nota de revizie conține cifra din documentul CURENT (Jakarinos r8 P1 #3): documentul intră în surse, în aceeași scriere
+        // (surse cunoscute ∪ d.id; rând manual fără surse → {d.id}; rând extras automat cu surse NULL rămâne NULL = incomplet).
+        // Scriere CONDIȚIONATĂ de sursele citite (Jakarinos r9 P1 #3): un transfer de planșă intercalat între citire și scriere
+        // (care adaugă planșa la surse) face UPDATE-ul să nu potrivească nimic → se recitește și se reia (max 3). Nescris după
+        // 3 încercări = raportat (revizii_nescrise), nimic suprascris.
         for (const c of conflicteRevizie.filter(c => !c._marcat)) {
-          await db.from('ofertare_cantitati').update({ status: 'diferenta',
-            diferenta_nota: `Revizie la re-extragere: sursa dă ${c.cantitate_noua}, în registru e ${c.cantitate_bd} — de reverificat (valoarea din registru nu s-a schimbat).` })
-            .eq('id', c.id)
+          let scris = false
+          for (let k = 0; k < 3 && !scris; k++) {
+            const { data: cur, error: eCur } = await db.from('ofertare_cantitati').select('surse_document_ids, extras_de_ai').eq('id', c.id).maybeSingle()
+            if (eCur || !cur) break
+            const vechi: number[] | null = Array.isArray(cur.surse_document_ids) ? cur.surse_document_ids.map(Number) : null
+            const surseNoi = vechi ? [...new Set([...vechi, d.id])] : (cur.extras_de_ai === false ? [d.id] : null)
+            let q: any = db.from('ofertare_cantitati').update({ status: 'diferenta',
+              diferenta_nota: `Revizie la re-extragere: sursa dă ${c.cantitate_noua}, în registru e ${c.cantitate_bd} — de reverificat (valoarea din registru nu s-a schimbat).`,
+              surse_document_ids: surseNoi }).eq('id', c.id)
+            q = vechi ? q.eq('surse_document_ids', `{${vechi.join(',')}}`) : q.is('surse_document_ids', null)
+            const { data: upd, error: eUpd } = await q.select('id')
+            if (eUpd) break
+            scris = Array.isArray(upd) && upd.length > 0
+          }
+          if (!scris) reviziiNescrise.push(c.id)
           c._marcat = true
         }
       } catch (_) { /* detecția nu blochează scrierea; lipsa ei se vede ca 0 conflicte */ }
@@ -439,6 +459,7 @@ export async function handler(req: Request, deps: Deps): Promise<Response> {
     tokens_in: tokIn, tokens_out: tokOut, cost_usd: Number(cost.toFixed(4)), raport,
     // R10: aceeași poziție citită cu altă cantitate decât cea din BD — NU s-a suprascris; de decis de om
     conflicte_revizie: conflicteRevizie,
+    revizii_nescrise: reviziiNescrise.length ? reviziiNescrise : undefined,
     // documentele oprite de poarta pe loturi (neprocesate, zero cost)
     excluse_lot: excluseLot,
   }
