@@ -11,9 +11,11 @@ import { acoperaCod, codTip } from '../_shared/echivalenteAnre.ts'
 
 // ── 1. documentele de criterii ─────────────────────────────────────────────────────────────────────────
 // Decizia D3 (Răzvan 13.10): recunoaștere după nume, fără schemă nouă. Același filtru în SQL (index.ts) și aici.
-export const RE_CRITERII = /criteri|detaliere|factor(i|ii|ilor)?\s+de\s+evaluare|algoritm\s+de\s+calcul/i
+// Copilot r1 P1: expresia JS e ACEEAȘI cu filtrul SQL (ilike cu %), ca nimic adus de SQL să nu dispară la clasificare.
+export const RE_CRITERII = /criteri|detaliere|factor.*evaluare|algoritm.*calcul/i
 export const SQL_CRITERII = 'nume_original.ilike.%criteri%,nume_original.ilike.%detaliere%,nume_original.ilike.%factor%evaluare%,nume_original.ilike.%algoritm%calcul%'
 export const MAX_CRITERII_DOC = 3
+export const LIMITA_CANDIDATI_CRITERII = 20   // SQL cere LIMITA+1: al 21-lea rând = trunchiere raportată
 export const MAX_CRITERII_CARACTERE = 40_000
 
 export type DocCriterii = { id: number; nume_original: string | null; tip?: string | null; are_text: boolean }
@@ -64,8 +66,10 @@ export function coduriAutorizatie(text: string): Set<string> {
 //   - valabil azi dar expiră înainte de termen = „expiră înainte de termen” (nu verde).
 export type RezAtestari = { neacoperite: string[]; neconfirmate: string[]; expira: string[] }
 export function valideazaAtestariFirma(parsed: any, valabile: Map<number, DocFirma>, termen?: string | null): RezAtestari {
-  const lista: any[] = Array.isArray(parsed.atestari_firma) ? parsed.atestari_firma.slice(0, 20) : []
+  const brut: any[] = Array.isArray(parsed.atestari_firma) ? parsed.atestari_firma : []
+  const lista = brut.slice(0, 20)
   const rez: RezAtestari = { neacoperite: [], neconfirmate: [], expira: [] }
+  if (brut.length > 20) rez.neconfirmate.push(`${brut.length - 20} cerințe de firmă peste plafonul de 20 — neverificate`)
   parsed.atestari_firma = lista.map((a) => {
     const cerinta = String(a?.cerinta || '').trim().slice(0, 400)
     const cer = coduriAutorizatie(cerinta)
@@ -89,35 +93,45 @@ export function valideazaAtestariFirma(parsed: any, valabile: Map<number, DocFir
     }
     return { cerinta, document_firma_id: d.id, status: 'indeplinita', sursa: `îndeplinită prin documente_firma #${d.id} „${d.denumire || d.tip}” (${pana})` }
   })
-  // „atestari” (textul) arată cerințe de firmă, dar lista structurată e goală = nimic verificat (Jakarinos r1 P1 #4)
+  // COMPLETITUDINEA (Jakarinos r1 P1 #4, r2 P1 #1, Copilot r1 P1 #2): textul „atestari” e sursa cerințelor de firmă; fiecare cod
+  // recunoscut în el trebuie să apară în lista structurată, iar un text fără niciun cod recunoscut nu se poate verifica — neconfirmat.
   const txt = String(parsed.atestari || '').trim()
-  if (!lista.length && txt && !/^(null|nu|niciuna|—|-)$/i.test(txt) && coduriAutorizatie(txt).size) rez.neconfirmate.push(txt.slice(0, 200))
+  if (txt && !/^(null|nu|niciuna|nu e cazul|—|-)\.?$/i.test(txt)) {
+    const dinText = coduriAutorizatie(txt)
+    const dinLista = new Set<string>(); for (const a of lista) for (const c of coduriAutorizatie(String(a?.cerinta || ''))) dinLista.add(c)
+    const lipsa = [...dinText].filter((c) => !dinLista.has(c))
+    if (!dinText.size) rez.neconfirmate.push(txt.slice(0, 200))
+    else if (lipsa.length) rez.neconfirmate.push(`${lipsa.join(', ')} (din „${txt.slice(0, 160)}”) — lipsă din verificarea structurată`)
+  }
   return rez
 }
 
 // ── 3. personalul: codurile ANRE ale fiecărei persoane + verificarea propunerii ─────────────────────────────
 // valabil = valabil la TERMENUL DE DEPUNERE (sau azi, dacă termenul lipsește) — calculat de apelant (Jakarinos r1 P1 #2)
-export type AutPers = { cine: string; tip: string; valabil: boolean }
+// titular = identitatea stabilă (e<employee_id> / x<extern_id>) — două persoane cu același nume NU se comasează (Copilot r1 P1 #4)
+export type AutPers = { cine: string; tip: string; valabil: boolean; titular?: string }
+export type Pers = { coduri: Set<string>; titulari: Set<string> }
 export const normNume = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
-export function coduriPePersoana(aut: AutPers[]): Map<string, Set<string>> {
-  const m = new Map<string, Set<string>>()
+export function coduriPePersoana(aut: AutPers[]): Map<string, Pers> {
+  const m = new Map<string, Pers>()
   for (const a of aut) {
     const k = normNume(a.cine)
-    if (!m.has(k)) m.set(k, new Set())   // persoana există chiar fără cod valabil (contează la ambiguitate)
+    if (!m.has(k)) m.set(k, { coduri: new Set(), titulari: new Set() })   // există chiar fără cod valabil (contează la ambiguitate)
+    m.get(k)!.titulari.add(a.titular || k)
     if (!a.valabil) continue
-    const c = codTip(a.tip); if (c) m.get(k)!.add(c)
+    const c = codTip(a.tip); if (c) m.get(k)!.coduri.add(c)
   }
   return m
 }
 const prefixCuvinte = (scurt: string, lung: string) => { const x = scurt.split(' '), y = lung.split(' '); return x.length <= y.length && x.every((w, i) => y[i] === w) }
 // Persoana din lista platformei: potrivire EXACTĂ întâi; un nume scurtat („TRUSU RAZVAN”) doar dacă există UN SINGUR candidat
 // (Jakarinos r1 P1 #5: „POPESCU ION” vs „POPESCU ION VASILE”). Ambiguu sau negăsit = null.
-export function rezolvaPersoana(nume: string, chei: Iterable<string>): string | null {
+export function rezolvaPersoana(nume: string, pers: Map<string, Pers>): string | null {
   const n = normNume(nume); if (!n) return null
-  const toate = [...chei]
-  if (toate.includes(n)) return n
-  const cand = toate.filter((k) => prefixCuvinte(n, k))
-  return cand.length === 1 ? cand[0] : null
+  const unic = (k: string) => (pers.get(k)?.titulari.size ?? 0) === 1   // omonimi = ambiguu
+  if (pers.has(n)) return unic(n) ? n : null
+  const cand = [...pers.keys()].filter((k) => prefixCuvinte(n, k))
+  return cand.length === 1 && unic(cand[0]) ? cand[0] : null
 }
 export function aceeasiPersoana(a: string, b: string): boolean {
   const x = normNume(a), y = normNume(b)
@@ -132,19 +146,18 @@ const RE_COD_PERS = /\b(EGT|EGD|EGIU|PGT|PGD|PGIU)\b/
 // Pe fiecare rol cu "autorizatie_ceruta" (cod ANRE literal), propunerea trebuie să aibă codul literal sau o echivalență APROBATĂ.
 // Rolurile repartizate din matrice nu se schimbă; preferința nu mută o persoană deja propusă pe ALT rol (r1 P1 #6 — cumul ascuns).
 // Întoarce rolurile cu probleme (pentru avertismente + verdict, r1 P1 #3).
-export function verificaAutorizatiiRoluri(parsed: any, coduri: Map<string, Set<string>>, preferinte = PREFERINTE_COD): string[] {
+export function verificaAutorizatiiRoluri(parsed: any, pers: Map<string, Pers>, preferinte = PREFERINTE_COD): string[] {
   const roluri: any[] = Array.isArray(parsed.roluri) ? parsed.roluri : []
   const probleme: string[] = []
-  const chei = [...coduri.keys()]
-  const coduriLui = (nume: string) => { const k = rezolvaPersoana(nume, chei); return k ? coduri.get(k)! : null }
+  const coduriLui = (nume: string) => { const k = rezolvaPersoana(nume, pers); return k ? pers.get(k)!.coduri : null }
   for (const r of roluri) {
     let cerut = String(r?.autorizatie_ceruta || '').trim().toUpperCase()
     if (cerut && !/^[A-Z]{2,6}$/.test(cerut)) cerut = ''
     if (!cerut) {
       // cerința rolului pomenește un cod de persoană, dar modelul n-a completat câmpul structurat → neconfirmat, nu sărit
       const m = RE_COD_PERS.exec(String(r?.cerinte || '').toUpperCase())
-      if (m && r?.propunere) { r.validare_autorizatie = 'neconfirmata'; r.autorizatie_ceruta = m[1]; probleme.push(`${r.rol}: ${m[1]} necompletat structurat`) }
       if (!m) continue
+      r.validare_autorizatie = 'neconfirmata'; r.autorizatie_ceruta = m[1]; probleme.push(`${r.rol}: ${m[1]} necompletat structurat`)
       cerut = m[1]
     }
     const dinMatrice = Number.isFinite(r.puncte_conditionat)
@@ -159,7 +172,11 @@ export function verificaAutorizatiiRoluri(parsed: any, coduri: Map<string, Set<s
         r.motiv = `[Preferință Răzvan pe ${cerut}] ${pref}${vechi ? ` în locul propunerii AI (${vechi})` : ''}. ` + String(r.motiv || '')
       }
     }
-    if (!r.propunere) continue
+    if (!r.propunere) {   // autorizație cerută, nimeni propus — verificabil determinist (Jakarinos r2 P1 #3, Copilot r1 P1 #3)
+      if (r.validare_autorizatie !== 'neconfirmata') r.validare_autorizatie = 'fara_persoana'
+      r.motiv = `ATENȚIE: rolul cere ${cerut} și nu e propus nimeni care să-l aibă în platformă. ` + String(r.motiv || '')
+      probleme.push(`${r.rol}: nimeni propus pentru ${cerut}`); continue
+    }
     const c = coduriLui(r.propunere)
     if (!c) {
       r.validare_autorizatie = 'persoana_nerezolvata'
@@ -182,12 +199,17 @@ export function verificaAutorizatiiRoluri(parsed: any, coduri: Map<string, Set<s
 // Condiția trebuie RECUNOSCUTĂ explicit în textul bonusului (r1 P1 #7 — rolul canonic nu o înlocuiește). Recunoscut azi: certificatul
 // de curs de manager de proiect. Bonusul intră în OPTIMIZAREA echipei (r1 P1 #8): index.ts trimite bonusPersoana în repartizare.
 export const RE_CERT_MANAGER = /manager\s*(de\s*)?proiect|project\s*manager/i
+// Recunoscută DOAR condiția simplă (Jakarinos r2 P1 #2): certificat/curs de manager de proiect, fără alt certificat (BIM, PMP, ISO…) și
+// fără condiții cumulative („… și …”, „+”, „;”) — orice în plus = nerecunoscută, bonus neacordat automat, de verificat de om.
+const RE_ALT_CERT = /\b(bim|pmp|prince\s*2?|ipma|iso|ssm|anre|auditor|evaluator|expert)\b/i
 export function conditieBonusRecunoscuta(conditie: string): 'cert_manager_proiect' | null {
-  return RE_CERT_MANAGER.test(String(conditie || '')) && /certificat|curs|atestat|diplom/i.test(String(conditie || '')) ? 'cert_manager_proiect' : null
+  const c = String(conditie || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  if (!RE_CERT_MANAGER.test(c) || !/certificat|curs|atestat|diplom/i.test(c)) return null
+  if (RE_ALT_CERT.test(c) || /\s(si|sau)\s|\+|;/i.test(c)) return null
+  return 'cert_manager_proiect'
 }
 export function areCertManager(aut: AutPers[], nume: string): boolean {
-  const chei = [...new Set(aut.map((a) => normNume(a.cine)))]
-  const k = rezolvaPersoana(nume, chei)
+  const k = rezolvaPersoana(nume, coduriPePersoana(aut))
   return !!k && aut.some((a) => a.valabil && normNume(a.cine) === k && RE_CERT_MANAGER.test(a.tip))
 }
 // bonusul (puncte) al unei persoane pe un rol — 0 dacă rolul n-are bonus recunoscut sau persoana n-are certificatul
@@ -196,18 +218,24 @@ export function bonusPersoana(r: any, persoana: string, aut: AutPers[]): number 
   if (!b || !Number.isFinite(puncte) || puncte <= 0) return 0
   return conditieBonusRecunoscuta(b.conditie) === 'cert_manager_proiect' && areCertManager(aut, persoana) ? puncte : 0
 }
-// Adnotarea pe rol, după repartizare (punctele sunt deja în totaluri dacă rolul a fost repartizat din matrice).
-export function adnoteazaBonus(parsed: any, aut: AutPers[]): void {
+// Adnotarea pe rol, după repartizare. „Acordat” = exact ce a intrat în totaluri: rol repartizat din matrice, cu punctaj pozitiv
+// (Jakarinos r2 P2). Întoarce problemele (condiție nerecunoscută) pentru avertismente (Copilot r1 P2).
+export function adnoteazaBonus(parsed: any, aut: AutPers[]): string[] {
+  const probleme: string[] = []
   for (const r of (Array.isArray(parsed.roluri) ? parsed.roluri : []) as any[]) {
     const b = r?.barem?.bonus, puncte = Number(b?.puncte)
     if (!b || !Number.isFinite(puncte) || puncte <= 0) continue
     const conditie = String(b.conditie || '').slice(0, 200)
     const recunoscuta = conditieBonusRecunoscuta(conditie)
-    const acordat = !!r.propunere && bonusPersoana(r, r.propunere, aut) > 0
+    const punctat = Number.isFinite(r.puncte_conditionat) && r.puncte_conditionat > 0
+    const acordat = !!r.propunere && punctat && bonusPersoana(r, r.propunere, aut) > 0
     r.bonus = { puncte, conditie, acordat, recunoscuta: !!recunoscuta }
+    if (!recunoscuta) probleme.push(`${r.rol}: bonus +${puncte} p pe condiția „${conditie}” nerecunoscută de cod`)
     if (!r.propunere) continue
-    r.motiv = String(r.motiv || '') + (acordat ? ` +${puncte} p bonus (${conditie} — găsit în platformă).`
+    r.motiv = String(r.motiv || '') + (acordat ? ` +${puncte} p bonus (${conditie} — găsit în platformă, inclus în punctaj).`
       : !recunoscuta ? ` +${puncte} p bonus pe condiția „${conditie}” — condiție nerecunoscută de cod, de verificat de om.`
+      : !punctat ? ` +${puncte} p bonus doar pe un punctaj pozitiv calculat din matrice — aici nu se aplică.`
       : ` +${puncte} p POSIBIL dacă ${r.propunere} prezintă ${conditie} — nu e în platformă.`)
   }
+  return probleme
 }

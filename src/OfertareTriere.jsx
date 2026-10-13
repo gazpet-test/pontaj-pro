@@ -80,7 +80,7 @@ export function exportTriereXlsx(licitatie, rez) {
   for (const r of rez.roluri || []) {
     rows.push([r.rol || '', r.cerinte || '', (r.propunere || 'NIMENI') + (r.depinde_de_transport ? (r.risc_eliminare ? ' — RISC: cerința minimă depinde de acceptarea transportului' : ' — punctaj condiționat de acceptarea transportului') : '') +
       // v1.9: aceleași stări ca în UI (Jakarinos r1 P2)
-      (['echivalenta_nevalidata', 'neconfirmata', 'persoana_nerezolvata'].includes(r.validare_autorizatie) ? ` — ⛔ ${r.autorizatie_ceruta || 'autorizație'} neconfirmată` : '') +
+      (['echivalenta_nevalidata', 'neconfirmata', 'persoana_nerezolvata', 'fara_persoana'].includes(r.validare_autorizatie) ? ` — ⛔ ${r.autorizatie_ceruta || 'autorizație'} neconfirmată` : '') +
       (r.bonus ? (r.bonus.acordat ? ` — +${r.bonus.puncte} pct bonus` : ` — +${r.bonus.puncte} pct posibil: ${r.bonus.conditie || ''}`) : '')])
     if (r.documente) rows.push(['', r.documente, r.propunere ? '' : (r.motiv || '')])
   }
@@ -220,7 +220,7 @@ export default function OfertareTriere({ licitatie, profile, showToast = null, o
                       </div>
                     )}
                     {r.cumul_cu && <div style={{ fontSize:11.5, fontWeight:700, color:G.orange, marginTop:2 }}>⚠️ cumul: aceeași persoană e repartizată pe „{r.cumul_cu}"</div>}
-                    {['echivalenta_nevalidata', 'neconfirmata', 'persoana_nerezolvata'].includes(r.validare_autorizatie) && <div style={{ fontSize:11.5, fontWeight:700, color:G.red, marginTop:2 }}>⛔ {r.autorizatie_ceruta || 'autorizație'}: neconfirmată ({r.validare_autorizatie === 'persoana_nerezolvata' ? 'persoană neidentificată unic' : r.validare_autorizatie === 'neconfirmata' ? 'cerință nestructurată' : 'nu e în platformă, nici prin echivalență aprobată'})</div>}
+                    {['echivalenta_nevalidata', 'neconfirmata', 'persoana_nerezolvata', 'fara_persoana'].includes(r.validare_autorizatie) && <div style={{ fontSize:11.5, fontWeight:700, color:G.red, marginTop:2 }}>⛔ {r.autorizatie_ceruta || 'autorizație'}: neconfirmată ({r.validare_autorizatie === 'persoana_nerezolvata' ? 'persoană neidentificată unic' : r.validare_autorizatie === 'fara_persoana' ? 'nimeni propus' : r.validare_autorizatie === 'neconfirmata' ? 'cerință nestructurată' : 'nu e în platformă, nici prin echivalență aprobată'})</div>}
                     {r.bonus && <div style={{ fontSize:11.5, fontWeight:700, color: r.bonus.acordat ? G.green : G.orange, marginTop:2 }}>{r.bonus.acordat ? `+${r.bonus.puncte} pct bonus` : `+${r.bonus.puncte} pct posibil: ${r.bonus.conditie || 'document cerut'}`}</div>}
                     {r.motiv && <div style={{ color:G.muted, fontSize:11.5 }}>{r.motiv}</div>}
                   </td>

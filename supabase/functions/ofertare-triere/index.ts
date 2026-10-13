@@ -40,7 +40,7 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.116.0'
 import { documentEligibil, mesajLot } from '../_shared/eligibilLot.ts'   // poarta pe loturi (20261024b), fail-closed
 import { marcheazaRiscTransport, matriceDinBD, repartizeazaDinMatrice } from './repartizare.ts'
-import { adnoteazaBonus, bonusPersoana, coduriPePersoana, liniiFirma, MAX_CRITERII_CARACTERE, PREFERINTE_COD, selecteazaCriterii, SQL_CRITERII, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
+import { adnoteazaBonus, bonusPersoana, coduriPePersoana, LIMITA_CANDIDATI_CRITERII, liniiFirma, MAX_CRITERII_CARACTERE, PREFERINTE_COD, selecteazaCriterii, SQL_CRITERII, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
 
 const ANTHROPIC_KEY = Deno.env.get('ANTHROPIC_API_KEY') || ''
 const BUCKET = 'ofertare'
@@ -151,7 +151,7 @@ Deno.serve(async (req: Request) => {
     // pe certificate de curs; la SCN1179907 a ieșit un om cu 0 recomandări în locul unuia cu 9.
     const [{ data: auth, error: eAuth }, { data: emp, error: eEmp }, { data: rec, error: eRec }, { data: firma, error: eFirma }, { data: candCrit, error: eCrit }, { data: lic, error: eLic }] = await Promise.all([
       supabase.from('hr_autorizatii')
-        .select('data_expirare, fara_expirare, domenii, tip:hr_autorizatii_tipuri(denumire), emp:employees(name, position, active), ext:hr_personal_extern(nume, activ)')
+        .select('employee_id, extern_id, data_expirare, fara_expirare, domenii, tip:hr_autorizatii_tipuri(denumire), emp:employees(name, position, active), ext:hr_personal_extern(nume, activ)')
         .is('deleted_at', null).order('id'),
       supabase.from('employees').select('name, position, functie').eq('active', true)
         .or('position.ilike.%inginer%,position.ilike.%manager%,position.ilike.%sef%,position.ilike.%șef%,position.ilike.%responsabil%,position.ilike.%director%,position.ilike.%proiect%,position.ilike.%calitate%,position.ilike.%ssm%,position.ilike.%mediu%')
@@ -164,7 +164,7 @@ Deno.serve(async (req: Request) => {
         .eq('activ', true).eq('utilizabil', true).order('id').limit(300),
       // v1.9: documentele de criterii (D3: după nume, fără schemă) — puține, deci textul vine direct
       supabase.from('ofertare_documente_atribuire').select('id, nume_original, tip, text_extras').eq('licitatie_id', lid)
-        .or(SQL_CRITERII).order('id').limit(20),
+        .or(SQL_CRITERII).order('id').limit(LIMITA_CANDIDATI_CRITERII + 1),
       supabase.from('ofertare_licitatii').select('termen_depunere').eq('id', lid).maybeSingle(),
     ])
     // supabase-js nu aruncă la eșec: fără verificarea asta, un timeout ar deveni „nu avem pe nimeni".
@@ -172,12 +172,13 @@ Deno.serve(async (req: Request) => {
     // fail-closed: fără lista firmei sau fără căutarea criteriilor, trierea ar spune fals „lipsește” / „nu sunt criterii”
     if (eFirma || eCrit || eLic) return fail('context triere indisponibil: ' + (eFirma?.message || eCrit?.message || eLic?.message))
     const azi = new Date().toISOString().slice(0, 10)
-    // valabilitățile se judecă la TERMENUL DE DEPUNERE (Jakarinos r1 P1 #2); fără termen, azi
+    // valabilitățile se judecă la TERMENUL DE DEPUNERE (Jakarinos r1 P1 #2; și la o re-triere după termen — Copilot r1 P2); fără termen, azi
     const termen = lic?.termen_depunere ? String(lic.termen_depunere).slice(0, 10) : null
-    const ref = termen && termen > azi ? termen : azi
+    const ref = termen ?? azi
     const avertismente: string[] = []
     // ── DETALIEREA CRITERIILOR: fiecare document trece prin poarta de loturi; blocat = avertisment, nu tăcere ──
-    const candidati = ((candCrit || []) as any[]).map((d) => ({ ...d, are_text: String(d.text_extras || '').trim().length > 0 }))
+    if ((candCrit || []).length > LIMITA_CANDIDATI_CRITERII) avertismente.push(`Peste ${LIMITA_CANDIDATI_CRITERII} documente cu nume de criterii — lista a fost trunchiată, unele NU au fost verificate.`)
+    const candidati = ((candCrit || []) as any[]).slice(0, LIMITA_CANDIDATI_CRITERII).map((d) => ({ ...d, are_text: String(d.text_extras || '').trim().length > 0 }))
     const selCrit = selecteazaCriterii(candidati, doc.id)
     const numeDoc = (id: number) => candidati.find((x) => Number(x.id) === id)?.nume_original || ''
     for (const id of selCrit.fara_text) avertismente.push(`Documentul de criterii #${id} „${numeDoc(id)}” nu are text extras — NU a intrat în context (de citit / verificat de om).`)
@@ -202,6 +203,7 @@ Deno.serve(async (req: Request) => {
     const activ = (a: any) => (a.emp ? a.emp.active !== false : a.ext ? a.ext.activ !== false : false)
     const autPers: AutPers[] = ((auth || []) as any[]).filter(activ).map((a) => ({
       cine: a.emp?.name || a.ext?.nume || '?', tip: a.tip?.denumire || '',
+      titular: a.employee_id != null ? 'e' + a.employee_id : a.extern_id != null ? 'x' + a.extern_id : undefined,
       valabil: !!a.fara_expirare || (!!a.data_expirare && a.data_expirare >= ref),   // valabil la termen
     }))
     // Doar ce contează la triere: roluri de conducere/atestări de persoană. Sudorii, legătorii,
@@ -312,7 +314,8 @@ Deno.serve(async (req: Request) => {
     // autorizațiile de firmă (id verificat față de documente_firma valabile)
     const probleme = verificaAutorizatiiRoluri(parsed, coduriPePersoana(autPers))
     if (probleme.length) avertismente.push(`Autorizații de persoană neconfirmate pe roluri: ${probleme.join('; ')}.`)
-    adnoteazaBonus(parsed, autPers)
+    const probBonus = adnoteazaBonus(parsed, autPers)
+    if (probBonus.length) avertismente.push(`Bonusuri de verificat de om: ${probBonus.join('; ')}.`)
     const at = valideazaAtestariFirma(parsed, firmaCtx.valabile, termen)
     const lst = (a: string[]) => a.map(c => `„${c.slice(0, 120)}”`).join('; ')
     if (at.neacoperite.length) avertismente.push(`Autorizații de firmă cerute fără document valabil care să le acopere: ${lst(at.neacoperite)}.`)

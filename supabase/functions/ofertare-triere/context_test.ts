@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { acoperaCod, codTip } from '../_shared/echivalenteAnre.ts'
-import { aceeasiPersoana, adnoteazaBonus, bonusPersoana, coduriAutorizatie, coduriPePersoana, liniiFirma, rezolvaPersoana, selecteazaCriterii, stareDocFirma, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
+import { aceeasiPersoana, adnoteazaBonus, bonusPersoana, conditieBonusRecunoscuta, coduriAutorizatie, coduriPePersoana, liniiFirma, rezolvaPersoana, selecteazaCriterii, stareDocFirma, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
 import { repartizeazaDinMatrice } from './repartizare.ts'
 
 const AZI = '2026-10-13'
@@ -78,7 +78,7 @@ const aut: AutPers[] = [
 ]
 
 Deno.test('nume: exact întâi, prefix doar cu un singur candidat (Jak r1 P1 #5)', () => {
-  const chei = [...coduriPePersoana(aut).keys()]
+  const chei = coduriPePersoana(aut)
   assert.equal(rezolvaPersoana('POPESCU ION', chei), 'popescu ion')                 // exact, nu „POPESCU ION VASILE”
   assert.equal(rezolvaPersoana('POPESCU ION VASILE', chei), 'popescu ion vasile')
   assert.equal(rezolvaPersoana('POPESCU', chei), null)                             // ambiguu
@@ -147,4 +147,71 @@ Deno.test('bonus în OPTIMIZARE: la punctaj egal pe barem, câștigă cel cu cer
   repartizeazaDinMatrice(fara)
   assert.equal(fara.roluri[0].propunere, 'TOMA LIVIU')
   assert.equal(fara.repartizare_calculata.total_puncte, 13)
+})
+
+// ── runda 2 (Jakarinos r2 NO-GO + Copilot r1 NO-GO) ─────────────────────────────────────────────────────
+Deno.test('r2 criterii: JS = SQL (ilike cu %) — „Factori evaluare”, „Algoritm calcul” nu mai dispar (Copilot r1 P1)', () => {
+  const r = selecteazaCriterii([{ id: 1, nume_original: 'Factori evaluare.pdf', are_text: true }, { id: 2, nume_original: 'Algoritm calcul punctaj.docx', are_text: true }], 99)
+  assert.deepEqual(r.cu_text, [1, 2])
+})
+
+Deno.test('r2 atestări: completitudinea față de textul „atestari” (Copilot r1 P1 #2, Jakarinos r2 P1 #1)', () => {
+  const { valabile } = liniiFirma([ET13, ISO], AZI)
+  const partial: any = { atestari: 'ANRE ET și ISO 9001', atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
+  const r1 = valideazaAtestariFirma(partial, valabile, '2027-01-01')
+  assert.equal(partial.atestari_firma[0].status, 'indeplinita')
+  assert.equal(r1.neconfirmate.length, 1); assert.match(r1.neconfirmate[0], /ISO9001.*lipsă din verificarea structurată/)
+  const faraCod: any = { atestari: 'Certificat de management al calității obligatoriu', atestari_firma: [] }
+  assert.equal(valideazaAtestariFirma(faraCod, valabile, null).neconfirmate.length, 1)
+  const nimic: any = { atestari: 'null', atestari_firma: [] }
+  assert.equal(valideazaAtestariFirma(nimic, valabile, null).neconfirmate.length, 0)
+  const multe: any = { atestari_firma: Array.from({ length: 22 }, () => ({ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 })) }
+  assert.match(valideazaAtestariFirma(multe, valabile, null).neconfirmate[0], /2 cerințe de firmă peste plafonul de 20/)
+})
+
+Deno.test('r2 roluri: autorizație cerută fără persoană = problemă (Jakarinos r2 P1 #3, Copilot r1 P1 #3)', () => {
+  const p: any = { roluri: [{ rol: 'Expert EGD', autorizatie_ceruta: 'EGD', propunere: null }] }
+  const probleme = verificaAutorizatiiRoluri(p, coduriPePersoana(aut), {})
+  assert.equal(p.roluri[0].validare_autorizatie, 'fara_persoana')
+  assert.deepEqual(probleme, ['Expert EGD: nimeni propus pentru EGD'])
+  // EGT doar în textul cerinței, propunere inițial nulă: preferința completează, dar rămâne neconfirmat structural
+  const q: any = { roluri: [{ rol: 'Responsabil', cerinte: 'legitimație ANRE EGT', propunere: null }] }
+  const pq = verificaAutorizatiiRoluri(q, coduriPePersoana(aut))
+  assert.ok(aceeasiPersoana(q.roluri[0].propunere, 'TRUSU RAZVAN'))
+  assert.equal(q.roluri[0].validare_autorizatie, 'neconfirmata')
+  assert.deepEqual(pq, ['Responsabil: EGT necompletat structurat'])
+})
+
+Deno.test('r2 omonimi: același nume, titulari diferiți = ambiguu, fără comasarea codurilor (Copilot r1 P1 #4)', () => {
+  const om: AutPers[] = [
+    { cine: 'ION POPESCU', tip: 'EGT - Executant Gaze Transport', valabil: true, titular: 'e1' },
+    { cine: 'ION POPESCU', tip: 'EGD - Executant Gaze Distribuție', valabil: true, titular: 'e2' },
+  ]
+  const pers = coduriPePersoana(om)
+  assert.equal(rezolvaPersoana('ION POPESCU', pers), null)
+  const p: any = { roluri: [{ rol: 'EGT', autorizatie_ceruta: 'EGT', propunere: 'ION POPESCU', puncte_conditionat: 1 }] }
+  const probleme = verificaAutorizatiiRoluri(p, pers, {})
+  assert.equal(p.roluri[0].validare_autorizatie, 'persoana_nerezolvata')
+  assert.equal(probleme.length, 1)
+})
+
+Deno.test('r2 bonus: condiția simplă recunoscută; alt certificat / cumulativă = nu (Jakarinos r2 P1 #2)', () => {
+  assert.equal(conditieBonusRecunoscuta('certificat eliberat de un furnizor de formare profesională acreditat care atestă că acesta a urmat cursuri de specializare pentru ocupația de Manager de proiect'), 'cert_manager_proiect')
+  assert.equal(conditieBonusRecunoscuta('certificat de curs Manager de proiect'), 'cert_manager_proiect')
+  assert.equal(conditieBonusRecunoscuta('certificat BIM pentru manager de proiect'), null)
+  assert.equal(conditieBonusRecunoscuta('certificat de curs Manager de proiect și certificat BIM'), null)
+  assert.equal(conditieBonusRecunoscuta('certificat PMP manager de proiect'), null)
+})
+
+Deno.test('r2 bonus: „acordat” doar dacă a intrat în punctaj; condiția nerecunoscută = problemă (Jakarinos r2 P2, Copilot r1 P2)', () => {
+  const bonus = { puncte: 2, conditie: 'certificat de curs Manager de proiect' }
+  const p: any = { roluri: [
+    { rol: 'Manager', propunere: 'DADULESCU COSMIN GRIGORAS', puncte_conditionat: 0, barem: { bonus } },
+    { rol: 'Manager 2', propunere: 'DADULESCU COSMIN GRIGORAS', barem: { bonus } },
+    { rol: 'Manager 3', propunere: 'DADULESCU COSMIN GRIGORAS', puncte_conditionat: 15, barem: { bonus } },
+    { rol: 'Manager BIM', propunere: 'DADULESCU COSMIN GRIGORAS', puncte_conditionat: 5, barem: { bonus: { puncte: 2, conditie: 'certificat BIM' } } },
+  ] }
+  const probleme = adnoteazaBonus(p, aut)
+  assert.deepEqual(p.roluri.map((r: any) => r.bonus.acordat), [false, false, true, false])
+  assert.equal(probleme.length, 1); assert.match(probleme[0], /Manager BIM.*nerecunoscută/)
 })
