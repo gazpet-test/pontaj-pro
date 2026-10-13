@@ -35,23 +35,27 @@ export function stareDocFirma(d: DocFirma, ref: string): StareFirma {
   if (!d.data_valabilitate) return 'valabilitate_necunoscuta'   // ex. #14 „ET+EPI 2022 (versiune veche)” — nu se socotește
   return d.data_valabilitate >= ref ? 'valabil' : 'expirat'
 }
-// Documentele valabile AZI intră în listă; cele care expiră înainte de termenul de depunere sunt marcate (Jakarinos r1 P1 #2).
-export function liniiFirma(docs: DocFirma[], azi: string, termen?: string | null): { linii: string[]; valabile: Map<number, DocFirma> } {
-  const linii: string[] = [], valabile = new Map<number, DocFirma>()
+// Valabilitatea se judecă la TERMENUL DE DEPUNERE (și la o re-triere după termen — Jakarinos r3 P2, Copilot r2 P2); fără termen, azi.
+// `valabile` = valabile la termen; `expiraInainte` = valabile azi dar NU la termen (cerința nu e îndeplinită, motivul e specific).
+export function liniiFirma(docs: DocFirma[], azi: string, termen?: string | null):
+  { linii: string[]; valabile: Map<number, DocFirma>; expiraInainte: Map<number, DocFirma> } {
+  const ref = termen ?? azi
+  const linii: string[] = [], valabile = new Map<number, DocFirma>(), expiraInainte = new Map<number, DocFirma>()
   for (const d of [...docs].sort((a, b) => a.id - b.id)) {
-    const st = stareDocFirma(d, azi)
+    const st = stareDocFirma(d, ref), stAzi = stareDocFirma(d, azi)
     const pana = d.fara_expirare ? 'fără expirare' : d.data_valabilitate ? `până ${d.data_valabilitate}` : ''
-    const expiraInainte = st === 'valabil' && !!termen && stareDocFirma(d, termen) !== 'valabil'
-    const marcaj = st === 'valabil' ? `(${pana})${expiraInainte ? ` [EXPIRĂ ÎNAINTE DE TERMENUL ${termen}]` : ''}`
-      : st === 'expirat' ? `[EXPIRAT ${d.data_valabilitate}] — nu se poate folosi` : '[VALABILITATE NECUNOSCUTĂ] — nu îndeplinește cerința'
+    const exp = st !== 'valabil' && stAzi === 'valabil'
+    const marcaj = st === 'valabil' ? `(${pana})` : exp ? `(${pana}) [EXPIRĂ ÎNAINTE DE TERMENUL ${ref}] — nu îndeplinește cerința la termen`
+      : st === 'expirat' ? `[EXPIRAT ${d.data_valabilitate}${termen ? ` — la termenul ${ref}` : ''}] — nu se poate folosi` : '[VALABILITATE NECUNOSCUTĂ] — nu îndeplinește cerința'
     linii.push(`- #${d.id} ${d.denumire || d.tip || 'document'}${d.tip && d.denumire && !String(d.denumire).includes(String(d.tip)) ? ' [' + d.tip + ']' : ''} ${marcaj}`)
     if (st === 'valabil') valabile.set(d.id, d)
+    else if (exp) expiraInainte.set(d.id, d)
   }
-  return { linii, valabile }
+  return { linii, valabile, expiraInainte }
 }
 
 // Codurile unei autorizații de firmă / cerințe: tokenuri ANRE (2-5 majuscule, fără cuvinte comune) + „ISO nnnn”.
-const NU_COD = new Set(['ANRE', 'SRL', 'SA', 'ISC', 'TIP', 'NR', 'SI', 'CU', 'DE', 'IN', 'LA', 'PE', 'AL', 'UE', 'RO', 'DN', 'PE', 'SDR', 'ID', 'CE'])
+const NU_COD = new Set(['ANRE', 'SRL', 'SA', 'TIP', 'NR', 'SI', 'CU', 'DE', 'IN', 'LA', 'PE', 'AL', 'UE', 'RO', 'DN', 'PE', 'SDR', 'ID', 'CE'])
 export function coduriAutorizatie(text: string): Set<string> {
   const t = String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
   const s = new Set<string>()
@@ -65,19 +69,32 @@ export function coduriAutorizatie(text: string): Set<string> {
 //   - cerință fără cod recunoscut = „neconfirmată” (nu „îndeplinită”);
 //   - valabil azi dar expiră înainte de termen = „expiră înainte de termen” (nu verde).
 export type RezAtestari = { neacoperite: string[]; neconfirmate: string[]; expira: string[] }
-export function valideazaAtestariFirma(parsed: any, valabile: Map<number, DocFirma>, termen?: string | null): RezAtestari {
+// segmentele unei enumerări de cerințe („ANRE ET, ISO 9001 și autorizație ISC”) — fiecare trebuie verificat separat (Copilot r2 P1 #2)
+export function segmenteCerinte(text: string): string[] {
+  return String(text || '').split(/[;,\n]|\s+(?:și|si|plus)\s+|\s\+\s/i).map((s) => s.trim()).filter((s) => s.length >= 2)
+}
+export function valideazaAtestariFirma(parsed: any, valabile: Map<number, DocFirma>, termen?: string | null,
+  expiraInainte: Map<number, DocFirma> = new Map()): RezAtestari {
   const brut: any[] = Array.isArray(parsed.atestari_firma) ? parsed.atestari_firma : []
   const lista = brut.slice(0, 20)
   const rez: RezAtestari = { neacoperite: [], neconfirmate: [], expira: [] }
   if (brut.length > 20) rez.neconfirmate.push(`${brut.length - 20} cerințe de firmă peste plafonul de 20 — neverificate`)
   parsed.atestari_firma = lista.map((a) => {
-    const cerinta = String(a?.cerinta || '').trim().slice(0, 400)
-    const cer = coduriAutorizatie(cerinta)
+    // codurile pe textul INTEGRAL; tăierea doar pentru afișare (Jakarinos r3 P1 #1)
+    const integral = String(a?.cerinta || '').trim()
+    const cerinta = integral.slice(0, 400)
+    const cer = coduriAutorizatie(integral)
     const id = Number(a?.document_firma_id)
     const d = Number.isSafeInteger(id) ? valabile.get(id) : undefined
+    const dExp = Number.isSafeInteger(id) ? expiraInainte.get(id) : undefined
     if (!cer.size) {
       rez.neconfirmate.push(cerinta)
       return { cerinta, document_firma_id: d?.id ?? null, status: 'neconfirmata', sursa: 'cerința nu are un cod de autorizație recunoscut — de verificat de om' }
+    }
+    if (!d && dExp && [...cer].every((c) => coduriAutorizatie(`${dExp.tip || ''} ${dExp.denumire || ''}`).has(c))) {
+      rez.expira.push(cerinta)
+      return { cerinta, document_firma_id: dExp.id, status: 'expira_inainte_de_termen',
+        sursa: `documente_firma #${dExp.id} „${dExp.denumire || dExp.tip}” (până ${dExp.data_valabilitate}) — EXPIRĂ ÎNAINTE DE TERMENUL DE DEPUNERE ${termen}: de reînnoit / verificat` }
     }
     const docCod = d ? coduriAutorizatie(`${d.tip || ''} ${d.denumire || ''}`) : new Set<string>()
     if (!d || ![...cer].every((c) => docCod.has(c))) {
@@ -97,11 +114,13 @@ export function valideazaAtestariFirma(parsed: any, valabile: Map<number, DocFir
   // recunoscut în el trebuie să apară în lista structurată, iar un text fără niciun cod recunoscut nu se poate verifica — neconfirmat.
   const txt = String(parsed.atestari || '').trim()
   if (txt && !/^(null|nu|niciuna|nu e cazul|—|-)\.?$/i.test(txt)) {
-    const dinText = coduriAutorizatie(txt)
     const dinLista = new Set<string>(); for (const a of lista) for (const c of coduriAutorizatie(String(a?.cerinta || ''))) dinLista.add(c)
-    const lipsa = [...dinText].filter((c) => !dinLista.has(c))
-    if (!dinText.size) rez.neconfirmate.push(txt.slice(0, 200))
-    else if (lipsa.length) rez.neconfirmate.push(`${lipsa.join(', ')} (din „${txt.slice(0, 160)}”) — lipsă din verificarea structurată`)
+    // fiecare SEGMENT al enumerării: fără cod recunoscut = neconfirmat; cu cod absent din lista structurată = neconfirmat
+    for (const seg of segmenteCerinte(txt)) {
+      const c = coduriAutorizatie(seg)
+      if (!c.size) rez.neconfirmate.push(`„${seg.slice(0, 160)}” — fără cod recunoscut, de verificat de om`)
+      else { const lipsa = [...c].filter((x) => !dinLista.has(x)); if (lipsa.length) rez.neconfirmate.push(`${lipsa.join(', ')} (din „${seg.slice(0, 160)}”) — lipsă din verificarea structurată`) }
+    }
   }
   return rez
 }
@@ -155,8 +174,17 @@ export function verificaAutorizatiiRoluri(parsed: any, pers: Map<string, Pers>, 
     if (cerut && !/^[A-Z]{2,6}$/.test(cerut)) cerut = ''
     if (!cerut) {
       // cerința rolului pomenește un cod de persoană, dar modelul n-a completat câmpul structurat → neconfirmat, nu sărit
-      const m = RE_COD_PERS.exec(String(r?.cerinte || '').toUpperCase())
-      if (!m) continue
+      const txtCer = String(r?.cerinte || '')
+      const m = RE_COD_PERS.exec(txtCer.toUpperCase())
+      if (!m) {
+        // cerință de autorizare de persoană fără cod recunoscut (ex. un cod NOU) — nu se sare în tăcere, nici nu se ghicește codul
+        if (/\banre\b|legitima[tț]i|autoriza[tț]i/i.test(txtCer)) {
+          r.validare_autorizatie = 'neconfirmata'
+          r.motiv = 'ATENȚIE: cerința rolului pomenește o autorizare ANRE de persoană fără cod structurat — de verificat de om. ' + String(r.motiv || '')
+          probleme.push(`${r.rol}: cerință ANRE de persoană nestructurată`)
+        }
+        continue
+      }
       r.validare_autorizatie = 'neconfirmata'; r.autorizatie_ceruta = m[1]; probleme.push(`${r.rol}: ${m[1]} necompletat structurat`)
       cerut = m[1]
     }
@@ -199,14 +227,17 @@ export function verificaAutorizatiiRoluri(parsed: any, pers: Map<string, Pers>, 
 // Condiția trebuie RECUNOSCUTĂ explicit în textul bonusului (r1 P1 #7 — rolul canonic nu o înlocuiește). Recunoscut azi: certificatul
 // de curs de manager de proiect. Bonusul intră în OPTIMIZAREA echipei (r1 P1 #8): index.ts trimite bonusPersoana în repartizare.
 export const RE_CERT_MANAGER = /manager\s*(de\s*)?proiect|project\s*manager/i
-// Recunoscută DOAR condiția simplă (Jakarinos r2 P1 #2): certificat/curs de manager de proiect, fără alt certificat (BIM, PMP, ISO…) și
-// fără condiții cumulative („… și …”, „+”, „;”) — orice în plus = nerecunoscută, bonus neacordat automat, de verificat de om.
-const RE_ALT_CERT = /\b(bim|pmp|prince\s*2?|ipma|iso|ssm|anre|auditor|evaluator|expert)\b/i
+// Recunoscută DOAR condiția simplă, pe LISTĂ ALBĂ (Jakarinos r2 P1 #2, r3 P1 #2): toate cuvintele condiției trebuie să fie din
+// vocabularul certificatului de curs de manager de proiect (formularea tipică din fișe, ex. Botoșani 522). Orice cuvânt în plus
+// (alt certificat — BIM, Scrum, PMP —, ani de experiență, „și”, cifre) = nerecunoscută: bonus neacordat automat, de verificat de om.
+const VOCABULAR_BONUS = new Set(('certificat certificatul certificate eliberat emis de un o catre furnizor furnizorul formare profesionala ' +
+  'acreditat acreditata autorizat care atesta ca acesta aceasta a urmat urmarea absolvirea absolvire cursuri cursul curs de specializare ' +
+  'pentru ocupatia ocupatiei manager managerul proiect proiecte al in domeniul privind cu').split(' '))
 export function conditieBonusRecunoscuta(conditie: string): 'cert_manager_proiect' | null {
-  const c = String(conditie || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-  if (!RE_CERT_MANAGER.test(c) || !/certificat|curs|atestat|diplom/i.test(c)) return null
-  if (RE_ALT_CERT.test(c) || /\s(si|sau)\s|\+|;/i.test(c)) return null
-  return 'cert_manager_proiect'
+  const c = String(conditie || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  if (!RE_CERT_MANAGER.test(c) || !/certificat|curs/.test(c)) return null
+  const cuvinte = c.split(/[^a-z0-9]+/).filter(Boolean)
+  return cuvinte.every((w) => VOCABULAR_BONUS.has(w)) ? 'cert_manager_proiect' : null
 }
 export function areCertManager(aut: AutPers[], nume: string): boolean {
   const k = rezolvaPersoana(nume, coduriPePersoana(aut))
@@ -225,8 +256,8 @@ export function adnoteazaBonus(parsed: any, aut: AutPers[]): string[] {
   for (const r of (Array.isArray(parsed.roluri) ? parsed.roluri : []) as any[]) {
     const b = r?.barem?.bonus, puncte = Number(b?.puncte)
     if (!b || !Number.isFinite(puncte) || puncte <= 0) continue
-    const conditie = String(b.conditie || '').slice(0, 200)
-    const recunoscuta = conditieBonusRecunoscuta(conditie)
+    const conditie = String(b.conditie || '').slice(0, 200)   // doar pentru afișare
+    const recunoscuta = conditieBonusRecunoscuta(String(b.conditie || ''))
     const punctat = Number.isFinite(r.puncte_conditionat) && r.puncte_conditionat > 0
     const acordat = !!r.propunere && punctat && bonusPersoana(r, r.propunere, aut) > 0
     r.bonus = { puncte, conditie, acordat, recunoscuta: !!recunoscuta }

@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { acoperaCod, codTip } from '../_shared/echivalenteAnre.ts'
-import { aceeasiPersoana, adnoteazaBonus, bonusPersoana, conditieBonusRecunoscuta, coduriAutorizatie, coduriPePersoana, liniiFirma, rezolvaPersoana, selecteazaCriterii, stareDocFirma, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
+import { aceeasiPersoana, adnoteazaBonus, bonusPersoana, conditieBonusRecunoscuta, segmenteCerinte, coduriAutorizatie, coduriPePersoana, liniiFirma, rezolvaPersoana, selecteazaCriterii, stareDocFirma, valideazaAtestariFirma, verificaAutorizatiiRoluri, type AutPers } from './context.ts'
 import { repartizeazaDinMatrice } from './repartizare.ts'
 
 const AZI = '2026-10-13'
@@ -24,8 +24,8 @@ Deno.test('firmă: stări + linia de context marchează expirarea înainte de te
   assert.equal(stareDocFirma(ET13, AZI), 'valabil')
   assert.equal(stareDocFirma({ ...ET13, id: 14, data_valabilitate: null }, AZI), 'valabilitate_necunoscuta')
   assert.equal(stareDocFirma({ ...ET13, data_valabilitate: '2025-01-01' }, AZI), 'expirat')
-  const { linii, valabile } = liniiFirma([ET13, { ...ET13, id: 14, data_valabilitate: null }], AZI, '2027-08-01')
-  assert.deepEqual([...valabile.keys()], [13])
+  const { linii, valabile, expiraInainte } = liniiFirma([ET13, { ...ET13, id: 14, data_valabilitate: null }], AZI, '2027-08-01')
+  assert.deepEqual([...valabile.keys()], []); assert.deepEqual([...expiraInainte.keys()], [13])   // judecat la termen
   assert.ok(linii[0].includes('EXPIRĂ ÎNAINTE DE TERMENUL 2027-08-01'))
   assert.ok(linii[1].includes('VALABILITATE NECUNOSCUTĂ'))
 })
@@ -214,4 +214,51 @@ Deno.test('r2 bonus: „acordat” doar dacă a intrat în punctaj; condiția ne
   const probleme = adnoteazaBonus(p, aut)
   assert.deepEqual(p.roluri.map((r: any) => r.bonus.acordat), [false, false, true, false])
   assert.equal(probleme.length, 1); assert.match(probleme[0], /Manager BIM.*nerecunoscută/)
+})
+
+// ── runda 3 (Jakarinos r3 NO-GO + Copilot r2 NO-GO): liste albe, fail-closed ─────────────────────────────
+Deno.test('r3 atestări: coduri pe textul integral (Jak r3 P1 #1) + segmente fără cod / ISC (Cop r2 P1 #2)', () => {
+  const { valabile } = liniiFirma([ET13], AZI)
+  const lung: any = { atestari_firma: [{ cerinta: 'Autorizație ANRE ET ' + 'x'.repeat(420) + ' și ISO 9001', document_firma_id: 13 }] }
+  const r1 = valideazaAtestariFirma(lung, valabile, null)
+  assert.equal(lung.atestari_firma[0].status, 'neacoperita')   // ISO9001 după caracterul 400 se vede; #13 nu-l acoperă
+  assert.equal(r1.neacoperite.length, 1)
+  assert.deepEqual(segmenteCerinte('ANRE ET, ISO 9001 și autorizație ISC'), ['ANRE ET', 'ISO 9001', 'autorizație ISC'])
+  const mixt: any = { atestari: 'ANRE ET și certificat de mediu', atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
+  const r2 = valideazaAtestariFirma(mixt, valabile, null)
+  assert.equal(r2.neconfirmate.length, 1); assert.match(r2.neconfirmate[0], /certificat de mediu.*fără cod recunoscut/)
+  const isc: any = { atestari: 'ANRE ET, autorizație ISC', atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
+  assert.match(valideazaAtestariFirma(isc, valabile, null).neconfirmate[0], /ISC.*lipsă din verificarea structurată/)
+})
+
+Deno.test('r3 firmă: re-triere după termen — documentul valabil LA TERMEN se socotește (Jak r3 P2, Cop r2 P2)', () => {
+  const doc = { ...ET13, data_valabilitate: '2026-10-05' }                      // expirat azi (13.10), valabil la termenul 01.10
+  const f = liniiFirma([doc], AZI, '2026-10-01')
+  assert.deepEqual([...f.valabile.keys()], [13])
+  const p: any = { atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
+  valideazaAtestariFirma(p, f.valabile, '2026-10-01', f.expiraInainte)
+  assert.equal(p.atestari_firma[0].status, 'indeplinita')
+  // valabil azi, expiră înainte de termen → stare dedicată
+  const g = liniiFirma([ET13], AZI, '2027-08-01')
+  const q: any = { atestari_firma: [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }] }
+  const rq = valideazaAtestariFirma(q, g.valabile, '2027-08-01', g.expiraInainte)
+  assert.equal(q.atestari_firma[0].status, 'expira_inainte_de_termen'); assert.equal(rq.expira.length, 1)
+})
+
+Deno.test('r3 roluri: autorizare ANRE de persoană cu cod necunoscut = neconfirmată, nu sărită (Cop r2 P1 #1)', () => {
+  const p: any = { roluri: [{ rol: 'Responsabil', cerinte: 'legitimație ANRE tip XYZ (Ord. 132/2021)', propunere: 'TOMA LIVIU' }] }
+  const probleme = verificaAutorizatiiRoluri(p, coduriPePersoana(aut), {})
+  assert.equal(p.roluri[0].validare_autorizatie, 'neconfirmata')
+  assert.deepEqual(probleme, ['Responsabil: cerință ANRE de persoană nestructurată'])
+  assert.equal(p.roluri[0].propunere, 'TOMA LIVIU')   // nu se ghicește nimic
+})
+
+Deno.test('r3 bonus: listă albă — orice cuvânt în plus = nerecunoscută (Jak r3 P1 #2)', () => {
+  assert.equal(conditieBonusRecunoscuta('certificat Scrum Master pentru manager de proiect'), null)
+  assert.equal(conditieBonusRecunoscuta('certificat de curs Manager de proiect, minimum 5 ani experiență'), null)
+  assert.equal(conditieBonusRecunoscuta('certificat de curs Manager de proiect ' + 'x'.repeat(250) + ' și certificat BIM'), null)
+  const p: any = { roluri: [{ rol: 'M', propunere: 'DADULESCU COSMIN GRIGORAS', puncte_conditionat: 5,
+    barem: { bonus: { puncte: 2, conditie: 'certificat de curs Manager de proiect ' + 'de '.repeat(80) + 'și certificat BIM' } } }] }
+  const probleme = adnoteazaBonus(p, aut)
+  assert.equal(p.roluri[0].bonus.recunoscuta, false); assert.equal(p.roluri[0].bonus.acordat, false); assert.equal(probleme.length, 1)   // Jak r3 P2
 })

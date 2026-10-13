@@ -316,7 +316,7 @@ Deno.serve(async (req: Request) => {
     if (probleme.length) avertismente.push(`Autorizații de persoană neconfirmate pe roluri: ${probleme.join('; ')}.`)
     const probBonus = adnoteazaBonus(parsed, autPers)
     if (probBonus.length) avertismente.push(`Bonusuri de verificat de om: ${probBonus.join('; ')}.`)
-    const at = valideazaAtestariFirma(parsed, firmaCtx.valabile, termen)
+    const at = valideazaAtestariFirma(parsed, firmaCtx.valabile, termen, firmaCtx.expiraInainte)
     const lst = (a: string[]) => a.map(c => `„${c.slice(0, 120)}”`).join('; ')
     if (at.neacoperite.length) avertismente.push(`Autorizații de firmă cerute fără document valabil care să le acopere: ${lst(at.neacoperite)}.`)
     if (at.expira.length) avertismente.push(`Autorizații de firmă care expiră înainte de termenul de depunere ${termen}: ${lst(at.expira)}.`)
