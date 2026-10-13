@@ -73,6 +73,19 @@ export function coduriAutorizatie(text: string): Set<string> {
 export const COD_ANRE_FIRMA = new Set(['ET', 'EDIB', 'EDSB', 'EPI'])
 const coduriAnreFirma = (text: string) => new Set([...coduriAutorizatie(text)].filter((c) => COD_ANRE_FIRMA.has(c)))
 const alteCoduri = (text: string) => [...coduriAutorizatie(text)].filter((c) => !COD_ANRE_FIRMA.has(c))
+// Jakarinos r5: absența unui cod NECUNOSCUT nu dovedește că textul cere doar ET („ANRE ET & certificat de mediu”). Un segment poate fi
+// confirmat automat DOAR dacă TOATE cuvintele lui sunt din formularea standard a autorizațiilor ANRE de firmă (vocabular închis) +
+// codurile din lista închisă + trimiterea la ordin. Orice cuvânt în plus = de verificat de om.
+const VOCABULAR_ANRE_FIRMA = new Set(('autorizatie autorizatia autorizatii autorizare anre tip tipul cod operator operatorul economic ' +
+  'firma ofertantului ofertant ofertantul detinerea detine detina valabila valabil emisa emis de catre conform pentru privind ' +
+  'executare executarea executie executia proiectare proiectarea exploatare exploatarea sistemelor sistemului sistem sisteme ' +
+  'de transport distributie distribuire instalatii instalatiilor utilizare utilizarea gaze gazelor naturale in regim regimul ' +
+  'inalta medie joasa presiune presiuni a al ale la ordin ordinul ordinului nr din si sau').split(' '))
+export function formulareAnreFirma(segment: string): boolean {
+  const t = faraDiacritice(segment).replace(/\b\d{1,4}\s*\/\s*\d{4}\b/g, ' ')   // „132/2021” (trimiterea la ordin)
+  const cuvinte = t.split(/[^A-Za-z0-9]+/).filter(Boolean)
+  return cuvinte.length > 0 && cuvinte.every((w) => VOCABULAR_ANRE_FIRMA.has(w.toLowerCase()) || COD_ANRE_FIRMA.has(w))
+}
 
 // Modelul întoarce "atestari_firma": [{cerinta, document_firma_id}]; codul verifică:
 //   - cerința are DOAR coduri ANRE de firmă din lista închisă (altfel „neconfirmată”, de verificat de om);
@@ -95,13 +108,16 @@ export function valideazaAtestariFirma(parsed: any, valabile: Map<number, DocFir
     const integral = String(a?.cerinta || '').trim()
     const cerinta = integral.slice(0, 400)
     const cer = coduriAnreFirma(integral), alte = alteCoduri(integral)
+    // fiecare segment al CERINȚEI STRUCTURATE trebuie să fie o formulare ANRE de firmă integral validată (Jakarinos r5 P1 #1)
+    const formulareOk = segmenteCerinte(integral).every(formulareAnreFirma)
     const id = Number(a?.document_firma_id)
     const d = Number.isSafeInteger(id) ? valabile.get(id) : undefined
     const dExp = Number.isSafeInteger(id) ? expiraInainte.get(id) : undefined
-    if (!cer.size || alte.length) {
+    if (!cer.size || alte.length || !formulareOk) {
       rez.neconfirmate.push(cerinta)
       return { cerinta, document_firma_id: d?.id ?? null, status: 'neconfirmata',
         sursa: alte.length ? `conține ${alte.join(', ')} — verificarea automată acoperă doar autorizațiile ANRE de firmă (${[...COD_ANRE_FIRMA].join(', ')}); de verificat de om`
+          : cer.size ? 'cerința conține și altceva decât formularea standard a autorizației ANRE de firmă — de verificat de om'
           : 'cerința nu are un cod de autorizație ANRE de firmă recunoscut — de verificat de om' }
     }
     const acopera = (doc: DocFirma) => { const dc = coduriAnreFirma(`${doc.tip || ''} ${doc.denumire || ''}`); return [...cer].every((c) => dc.has(c)) }
@@ -130,8 +146,11 @@ export function valideazaAtestariFirma(parsed: any, valabile: Map<number, DocFir
     const dinLista = new Set<string>(); for (const a of lista) for (const c of coduriAnreFirma(String(a?.cerinta || ''))) dinLista.add(c)
     for (const seg of segmenteCerinte(txt)) {
       const anre = coduriAnreFirma(seg), alte = alteCoduri(seg)
-      if (alte.length) rez.neconfirmate.push(`„${seg.slice(0, 160)}” — ${alte.join(', ')}: în afara verificării automate (doar ANRE de firmă), de verificat de om`)
-      else if (!anre.size) rez.neconfirmate.push(`„${seg.slice(0, 160)}” — fără cod recunoscut, de verificat de om`)
+      if (anre.size && !alte.length && !formulareAnreFirma(seg)) rez.neconfirmate.push(`„${seg.slice(0, 160)}” — conține și altceva decât formularea standard ANRE de firmă, de verificat de om`)
+      else if (alte.length) rez.neconfirmate.push(`„${seg.slice(0, 160)}” — ${alte.join(', ')}: în afara verificării automate (doar ANRE de firmă), de verificat de om`)
+      // fără cod: e continuarea formulării standard („… și instalații utilizare gaze naturale în regim de înaltă presiune”) doar dacă
+      // e făcut EXCLUSIV din vocabularul închis — atunci nu poate ascunde o cerință; altfel, de verificat de om
+      else if (!anre.size) { if (!formulareAnreFirma(seg)) rez.neconfirmate.push(`„${seg.slice(0, 160)}” — fără cod recunoscut, de verificat de om`) }
       else { const lipsa = [...anre].filter((x) => !dinLista.has(x)); if (lipsa.length) rez.neconfirmate.push(`${lipsa.join(', ')} (din „${seg.slice(0, 160)}”) — lipsă din verificarea structurată`) }
     }
   }

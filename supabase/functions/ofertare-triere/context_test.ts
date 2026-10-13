@@ -278,3 +278,21 @@ Deno.test('r4 atestări: ISO prescurtat, ș cu sedilă, „+” lipit, ISC — t
   const curat = caz('Autorizație ANRE tip ET', et)
   assert.deepEqual([curat.neconfirmate.length, curat.neacoperite.length, curat.expira.length], [0, 0, 0])        // cazul Botoșani rămâne verde
 })
+
+// ── runda 5 (Jakarinos r5): vocabular închis — confirmare doar pentru formulări integral validate ───────────────────────
+Deno.test('r5 atestări: „&”, „cu … isc domeniul 8.4”, element structurat mixt — de verificat; formularea Botoșani rămâne verde', () => {
+  const { valabile } = liniiFirma([ET13], AZI)
+  const et = [{ cerinta: 'Autorizație ANRE ET', document_firma_id: 13 }]
+  const caz = (atestari: string, lista: any[]) => valideazaAtestariFirma({ atestari, atestari_firma: lista }, valabile, null)
+  assert.equal(caz('ANRE ET & certificat de mediu', et).neconfirmate.length, 1)
+  assert.equal(caz('ANRE ET cu autorizație isc domeniul 8.4', et).neconfirmate.length, 1)
+  const mixt: any = { atestari: 'ANRE ET', atestari_firma: [{ cerinta: 'ANRE ET și certificat de mediu', document_firma_id: 13 }] }
+  const rm = valideazaAtestariFirma(mixt, valabile, null)
+  assert.equal(mixt.atestari_firma[0].status, 'neconfirmata'); assert.equal(rm.neconfirmate.length, 1)
+  // formularea reală din fișa Botoșani (doc 532), cu „și” în interiorul formulării standard
+  const bot = 'Autorizație ANRE tip ET pentru executarea sistemelor de transport și instalații utilizare gaze naturale în regim de înaltă presiune (Ordin ANRE 132/2021)'
+  const p: any = { atestari: bot, atestari_firma: [{ cerinta: bot, document_firma_id: 13 }] }
+  const rb = valideazaAtestariFirma(p, valabile, '2026-10-30')
+  assert.equal(p.atestari_firma[0].status, 'indeplinita')
+  assert.deepEqual([rb.neconfirmate.length, rb.neacoperite.length, rb.expira.length], [0, 0, 0])
+})
