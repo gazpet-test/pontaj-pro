@@ -1893,8 +1893,14 @@ function PontajPage() {
   const lunaSt = stareLuna(date)
   // Poarta întoarce {ok, tichet} pentru operația CONCRETĂ — tichetul nu stă într-un ref comun,
   // ca două salvări simultane să nu se noteze una pe tichetul alteia (Copilot P1-1).
+  const promptActivRef = useRef(false)   // o singură poartă parolă/tichet activă (Copilot P2-1)
   const requestPasswordIfExported = (empName) => new Promise((resolve) => {
     if (!isDateExported && !lunaSt.cereTichet) { resolve({ ok: true, tichet: null }); return }
+    if (promptActivRef.current) {
+      showToast('Termină întâi confirmarea deschisă (parolă / tichet), apoi reia modificarea.', 'warn')
+      resolve({ ok: false, tichet: null })
+      return
+    }
     if (!canEditRetroactivePontaj) {
       showToast(lunaSt.cereTichet
         ? `🚫 Luna e închisă și termenul de corecturi (${fmtZiPontaj(lunaSt.termen)}) a trecut — corectura se face doar prin tichet HR deschis de Natalia și aprobat de Marilena.`
@@ -1902,11 +1908,12 @@ function PontajPage() {
       resolve({ ok: false, tichet: null })
       return
     }
+    promptActivRef.current = true
     setPasswordPrompt({
       employeeName: empName,
       cereTichet: lunaSt.cereTichet,
-      onConfirm: (tichet) => resolve({ ok: true, tichet: tichet || null }),
-      onCancel: () => resolve({ ok: false, tichet: null }),
+      onConfirm: (tichet) => { promptActivRef.current = false; resolve({ ok: true, tichet: tichet || null }) },
+      onCancel: () => { promptActivRef.current = false; resolve({ ok: false, tichet: null }) },
     })
   })
   // După o corectură pe lună închisă (după termen): notăm în istoricul tichetului cine, ce angajat, ce zi, ce câmpuri.
