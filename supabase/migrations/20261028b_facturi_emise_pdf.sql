@@ -79,6 +79,7 @@ BEGIN
   UPDATE public.facturi_emise
      SET pdf_path = p_pdf_path, nas_synced = true, nas_path = p_nas_path
    WHERE id = p_id AND pdf_path IS NULL
+     AND split_part(p_pdf_path, '/', 1) = an::text AND p_nas_path LIKE '/data/facturi/Facturi ' || an || '/%'  -- anul facturii
   RETURNING nr_complet INTO v_nr;
   IF v_nr IS NOT NULL THEN
     RETURN jsonb_build_object('ok', true, 'id', p_id, 'nr_complet', v_nr, 'deja', false);

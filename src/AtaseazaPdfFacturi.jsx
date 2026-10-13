@@ -31,7 +31,7 @@ export default function AtaseazaPdfFacturi({ facturi, onClose }) {
   const alege = async (e) => {
     const files = [...(e.target.files || [])]
     e.target.value = ''
-    setRezultat(null); setCitire(true)
+    setRezultat(null); setDinNas(false); setCitire(true)  // selecție nouă = confirmare NAS nouă
     try {
       const rez = potriveste(files, facturi)
       const out = []
