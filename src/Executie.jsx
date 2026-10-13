@@ -24,6 +24,7 @@ import CereriInterneProiect from './CereriInterneProiect.jsx'
 import { norm } from './lib/diacritice.js'
 import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
+import DocumenteDeRepartizat from './DocumenteDeRepartizat.jsx'
 import CatalogDevizPanel from './CatalogDevizPanel.jsx'
 import ActivitatiProiectPanel from './ActivitatiProiectPanel.jsx'
 import MaterialeProiectPanel from './MaterialeProiectPanel.jsx'
@@ -213,7 +214,10 @@ export default function ExecutiePage() {
 
       {/* ─── CONTENT ─── */}
       {!proiectIdStr ? (
-        <DashboardProiectePage onSelectProiect={goToProiect} />
+        <>
+          {profile && <DocumenteDeRepartizat profile={profile} />}
+          <DashboardProiectePage onSelectProiect={goToProiect} />
+        </>
       ) : (
         <ProiectContextView
           proiectId={proiectIdStr}
