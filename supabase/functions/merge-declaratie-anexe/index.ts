@@ -27,7 +27,8 @@ Deno.serve(async (req) => {
     const m = RE_DECL.exec(decl_path)
     if (!m) return raspuns({ error: 'decl_path invalid' }, 400)
     const reAnexa = new RegExp(`^${m[1]}/supape/[A-Za-z0-9._-]+$`)
-    const anexe: string[] = Array.isArray(anexe_paths) ? anexe_paths.slice(0, 30) : []
+    const anexe: string[] = Array.isArray(anexe_paths) ? anexe_paths : []
+    if (anexe.length > 30) return raspuns({ error: 'prea multe anexe (max 30)' }, 400)  // nu tăiem tăcut un document oficial
     if (anexe.some(p => typeof p !== 'string' || !reAnexa.test(p))) return raspuns({ error: 'anexe_paths invalide' }, 400)
 
     // 1. Declarația (prima pagină/pagini)

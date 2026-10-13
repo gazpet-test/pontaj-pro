@@ -42,8 +42,10 @@ async function esteIntern(req: Request): Promise<boolean> {
   return !error && data === true
 }
 
+// DOAR utilizatori (JWT): owner sau can_access_personal_data. Apelul intern (x-radar-secret) NU trece pe aici —
+// el are voie doar la olx_get (Copilot r1 P1-1).
 async function userAutorizat(req: Request): Promise<boolean> {
-  if (req.headers.get('x-radar-secret')) return await esteIntern(req)
+  if (req.headers.get('x-radar-secret')) return false
   const sb = svc()
   const uid = await userUi(req, sb, [])   // owner
   if (uid) return true
@@ -83,11 +85,13 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'GET' && url.searchParams.get('code')) {
     // state aleator, o singura folosire, expira in STATE_MIN minute
     const sb = svc()
-    const { data: st } = await sb.from('app_secrets').select('value').eq('key', 'OLX_OAUTH_STATE').maybeSingle()
-    const [stVal, stExp] = String(st?.value || '').split('|')
     const primit = url.searchParams.get('state') || ''
-    if (!stVal || stVal !== primit || !(Number(stExp) > Date.now())) return html('<h3>Cerere de conectare OLX invalidă sau expirată.</h3><p>Pornește din nou din HR → Recrutare → „Conectează OLX”.</p>', 400)
-    await sb.from('app_secrets').delete().eq('key', 'OLX_OAUTH_STATE')
+    const invalid = () => html('<h3>Cerere de conectare OLX invalidă sau expirată.</h3><p>Pornește din nou din HR → Recrutare → „Conectează OLX”.</p>', 400)
+    if (!/^[0-9a-f]{48}$/.test(primit)) return invalid()
+    // consum ATOMIC: doar callback-ul care șterge efectiv rândul cu exact acest state continuă (Copilot r1 P1-4)
+    const { data: consumat, error: eSt } = await sb.from('app_secrets').delete().eq('key', 'OLX_OAUTH_STATE').like('value', `${primit}|%`).select('value')
+    if (eSt || !consumat || consumat.length !== 1) return invalid()
+    if (!(Number(String(consumat[0].value).split('|')[1]) > Date.now())) return invalid()
     const r = await fetch(`${OLX}/api/open/oauth/token`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ grant_type: 'authorization_code', client_id: await secret('OLX_CLIENT_ID'), client_secret: await secret('OLX_CLIENT_SECRET'), code: url.searchParams.get('code'), scope: 'v2 read write', redirect_uri: SELF }),
@@ -99,9 +103,12 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method !== 'POST') return json({ eroare: 'metoda invalida' }, 405)
-  if (!(await userAutorizat(req))) return json({ eroare: 'neautorizat' }, 401)
   const body = await req.json().catch(() => ({}))
   const act = body.actiune
+  if (req.headers.get('x-radar-secret')) {
+    // apel intern: DOAR olx_get (proxy read-only), nimic altceva
+    if (act !== 'olx_get' || !(await esteIntern(req))) return json({ eroare: 'neautorizat' }, 401)
+  } else if (!(await userAutorizat(req))) return json({ eroare: 'neautorizat' }, 401)
 
   if (act === 'status') {
     const tok = await tokenValid()
