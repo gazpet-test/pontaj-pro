@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from './lib/supabase.js'
 import { MeteoSantier } from './Meteo.jsx'
+import { textInregistrare } from './cameraInregistrare.js'
 
 const G = { bg:'#0D1117', surface:'#161B22', card:'#1C2128', border:'#30363D', text:'#E6EDF3', muted:'#8B949E', dim:'#6E7681', green:'#3FB950', red:'#F85149', yellow:'#E3B341', blue:'#58A6FF', orange:'#F0883E' }
 const S = { card: { background:G.card, border:`1px solid ${G.border}`, borderRadius:10, padding:16 }, btnS: { padding:'7px 13px', background:G.surface, color:G.text, border:`1px solid ${G.border}`, borderRadius:7, cursor:'pointer', fontSize:12.5, textDecoration:'none' } }
@@ -237,7 +238,7 @@ function CameraQnapItem({ dispozitiv, acum }) {
           : <span style={{ color:G.dim, fontSize:11.5, padding:8, textAlign:'center' }}>{eroare || 'Se încarcă…'}</span>}
       </div>
       <div style={{ display:'flex', justifyContent:'space-between', gap:8, padding:'6px 10px', fontSize:12 }}>
-        <span>{dispozitiv.nume}</span>
+        <span>{dispozitiv.nume}{textInregistrare(dispozitiv) && <span style={{ display:'block', fontSize:10.5, color:G.dim }}>{textInregistrare(dispozitiv)}</span>}</span>
         <span style={{ color: faraDate ? G.red : G.dim }}>{faraDate ? 'fără date' : `acum ${minute} min`}</span>
       </div>
     </div>
@@ -255,7 +256,7 @@ function CamereQnap() {
       if (inCurs) return
       inCurs = true
       try {
-        const { data, error } = await supabase.from('iot_dispozitive').select('id, extern_id, nume, citit_la')
+        const { data, error } = await supabase.from('iot_dispozitive').select('id, extern_id, nume, citit_la, sursa, meta')
           .eq('sursa', 'qnap_cam').eq('activ', true).order('extern_id')
         if (oprit) return
         if (error) { setEroare('Nu pot actualiza camerele.'); return }
@@ -486,7 +487,7 @@ export default function Cladire() {
           <div style={S.card}>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}><div style={{ fontWeight:700 }}>📷 Camere & prize Tuya</div><span style={{ fontSize:11.5, color:G.dim }}>{camere.filter(c => c.ultima_citire?.online).length}/{camere.length} camere online</span></div>
             {camere.map(c => { const on = !!c.ultima_citire?.online, live = on && c.sursa === 'tuya'; return <div key={c.id} onClick={() => live && setCamLive(c)} title={live ? 'Vezi live' : (c.sursa === 'retea' ? 'doar în aplicația Mi Home' : '')} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33`, cursor: live ? 'pointer' : 'default' }}>
-              <span style={{ color: on ? G.text : G.muted }}>{c.nume}<Edit x={c} />{live && <span style={{ fontSize:11, color:G.blue, marginLeft:6 }}>▶ live</span>}{c.sursa === 'retea' && <span style={{ fontSize:10.5, color:G.dim, marginLeft:6 }}>Mi Home</span>}<IpSub x={c} /></span><b style={{ color: on ? G.green : G.red }}>{on ? '● online' : '○ offline'}</b></div> })}
+              <span style={{ color: on ? G.text : G.muted }}>{c.nume}<Edit x={c} />{live && <span style={{ fontSize:11, color:G.blue, marginLeft:6 }}>▶ live</span>}{c.sursa === 'retea' && <span style={{ fontSize:10.5, color:G.dim, marginLeft:6 }}>Mi Home</span>}<IpSub x={c} />{textInregistrare(c) && <span style={{ display:'block', fontSize:10.5, color:G.dim }}>{textInregistrare(c)}</span>}</span><b style={{ color: on ? G.green : G.red }}>{on ? '● online' : '○ offline'}</b></div> })}
             {tuyaAlte.map(c => { const r = c.ultima_citire || {}; const val = r.putere_w != null ? `${nr(r.putere_w)} W` : r.temp != null ? `${nr(r.temp)}°` : r.pornit != null ? (r.pornit ? 'pornit' : 'oprit') : ''
               return <div key={c.id} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:13, padding:'4px 0', borderBottom:`1px solid ${G.border}33` }}>
                 <span style={{ color:G.muted }}>{c.nume} <span style={{ fontSize:10.5, color:G.dim }}>{c.meta?.model || ''}</span></span><b style={{ color: r.online ? G.text : G.dim }}>{r.online ? (val || 'online') : 'offline'}</b></div> })}
