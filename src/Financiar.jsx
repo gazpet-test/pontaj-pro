@@ -16,6 +16,7 @@ import ConsumuriBonuriTab from './ConsumuriBonuriTab.jsx'
 import CitesteOricePanel from './CitesteOricePanel.jsx'
 import { GbeTabel } from './GbeEvidenta.jsx'
 import GarantiiRegistru from './GarantiiRegistru.jsx'
+import AtaseazaPdfFacturi from './AtaseazaPdfFacturi.jsx'
 import { norm } from './lib/diacritice.js'
 import * as XLSX from 'xlsx-js-style'
 
@@ -1282,6 +1283,7 @@ export default function FinanciarPage() {
     if (t && ['emise','furnizori','consumuri','contab','gbe','garantii'].includes(t)) setTab(t)
   }, [])
   const [moduleAcces, setModuleAcces] = useState([])  // user_module_access (sub-modul 'financiar.garantii')
+  const [ataseazaOpen, setAtaseazaOpen] = useState(false)  // 13.10.2026: PDF-urile facturilor făcute în afara platformei (owner)
   const { show: showToast, Toast }  = useToast()
 
   const loadAll = useCallback(async () => {
@@ -1469,8 +1471,16 @@ export default function FinanciarPage() {
             <h2 style={{margin:0,fontSize:22,fontWeight:800}}>🧾 Facturi Emise</h2>
             <div style={{color:G.muted,fontSize:13,marginTop:4}}>Generator factură · PDF · Email · NAS sync</div>
           </div>
-          {canWrite && (
-            <button onClick={()=>setEditItem({})} style={S.btnP}>＋ Factură nouă</button>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {isOwner && (
+              <button onClick={()=>setAtaseazaOpen(true)} style={S.btnS} title="Leagă PDF-urile de pe NAS de facturile emise fără PDF">📎 Atașează PDF-uri existente</button>
+            )}
+            {canWrite && (
+              <button onClick={()=>setEditItem({})} style={S.btnP}>＋ Factură nouă</button>
+            )}
+          </div>
+          {ataseazaOpen && isOwner && (
+            <AtaseazaPdfFacturi facturi={facturi} onClose={()=>{ setAtaseazaOpen(false); loadAll() }} />
           )}
         </div>
 
