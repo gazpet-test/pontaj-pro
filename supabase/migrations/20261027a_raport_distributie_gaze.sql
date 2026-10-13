@@ -107,7 +107,9 @@ BEGIN
   IF p_raport_id IS NULL OR jsonb_typeof(p_linii) IS DISTINCT FROM 'array' OR jsonb_array_length(p_linii) > 500 THEN
     RAISE EXCEPTION 'fn_raport_distributie_salveaza: argumente invalide';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.rapoarte_zilnice WHERE id = p_raport_id) THEN
+  -- Copilot P2-1: blocăm rândul raportului → două salvări simultane se serializează (ultima câștigă, fără conflict UNIQUE)
+  PERFORM 1 FROM public.rapoarte_zilnice WHERE id = p_raport_id FOR UPDATE;
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'fn_raport_distributie_salveaza: raportul % nu există', p_raport_id;
   END IF;
   DELETE FROM public.raport_distributie_linii WHERE raport_id = p_raport_id;
@@ -122,7 +124,8 @@ BEGIN
 END
 $f$;
 REVOKE ALL ON FUNCTION public.fn_raport_distributie_salveaza(bigint, jsonb) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.fn_raport_distributie_salveaza(bigint, jsonb) TO authenticated, service_role;
+-- doar authenticated: funcția cere auth.uid(), deci service_role fără claims n-ar avea ce face (Copilot P2-2)
+GRANT EXECUTE ON FUNCTION public.fn_raport_distributie_salveaza(bigint, jsonb) TO authenticated;
 
 DO $post$
 BEGIN
