@@ -34,8 +34,16 @@ Deno.serve(async (req: Request) => {
     const salvate: string[] = [];
     const necunoscute: string[] = [];
     for (const c of valid.citiri) {
+      // 13.10.2026: dacă dispozitivul are meta.mac și sonda a văzut alt MAC pe IP-ul lui, NU e el care răspunde la ping
+      // (ex. Archer C80 mutat, IP-ul preluat de alt aparat) → online:false + motiv. Fără meta.mac sau fără mac văzut: ca înainte.
+      const { data: d0 } = await db.from('iot_dispozitive').select('meta')
+        .eq('sursa', 'retea').eq('extern_id', c.extern_id).maybeSingle();
+      const macAsteptat = typeof d0?.meta?.mac === 'string' ? d0.meta.mac.toLowerCase() : null;
+      const macDiferit = !!(c.online && c.mac && macAsteptat && c.mac !== macAsteptat);
       const valori = {
-        online: c.online, latency_ms: c.latency_ms, cpu_temp: c.cpu_temp,
+        online: macDiferit ? false : c.online,
+        ...(c.mac ? { mac_vazut: c.mac } : {}),
+        ...(macDiferit ? { motiv: 'mac_diferit', mac_asteptat: macAsteptat } : {}), latency_ms: c.latency_ms, cpu_temp: c.cpu_temp,
         hdd_max: c.hdd_max, cpu_load: c.cpu_load, uptime_s: c.uptime_s,
         disk_pct: c.disk_pct, ram_pct: c.ram_pct, raid_ok: c.raid_ok,
         gpu_temp: c.gpu_temp, gpu_w: c.gpu_w, gpu_util: c.gpu_util, vram_pct: c.vram_pct,

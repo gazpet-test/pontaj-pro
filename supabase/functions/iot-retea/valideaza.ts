@@ -17,6 +17,7 @@ export type CitireRetea = {
   ai_claude_ramas_pct: number | null;
   ai_gemini_reset_s: number | null;
   ai_claude_reset_s: number | null;
+  mac: string | null;
 } & { [K in typeof AI_PCT[number] | typeof AI_ISO[number] | typeof AI_TEXT[number]]: number | string | null };
 type Rezultat = { ok: true; citiri: CitireRetea[] } | { ok: false; error: string };
 
@@ -35,7 +36,9 @@ const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]00:00
 const TEXT_SCURT = /^[\p{L}\p{N} .,:+\-()\/]{1,40}$/u;
 export const AI_NOI = [...AI_PCT, ...AI_ISO, ...AI_TEXT];
 
-const CHEI = [...AI_NOI, 'extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
+// 13.10.2026: MAC-ul văzut în ARP de sondă (Terra), comparat în index.ts cu meta.mac al dispozitivului.
+const MAC = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
+const CHEI = ['mac', ...AI_NOI, 'extern_id', 'online', 'latency_ms', 'cpu_temp', 'hdd_max', 'cpu_load', 'uptime_s', 'disk_pct', 'ram_pct', 'raid_ok',
   'gpu_temp', 'gpu_w', 'gpu_util', 'vram_pct',
   'ai_gemini_ramas_pct', 'ai_claude_ramas_pct', 'ai_gemini_reset_s', 'ai_claude_reset_s'];
 
@@ -79,6 +82,7 @@ export function valideazaCitiri(body: unknown): Rezultat {
     if ('ai_claude_ramas_pct' in c && !numarIn(c.ai_claude_ramas_pct, 0, 100)) return { ok: false, error: 'ai_claude_ramas_pct invalid' };
     if ('ai_gemini_reset_s' in c && !numarIn(c.ai_gemini_reset_s, 0, 4e9)) return { ok: false, error: 'ai_gemini_reset_s invalid' };
     if ('ai_claude_reset_s' in c && !numarIn(c.ai_claude_reset_s, 0, 4e9)) return { ok: false, error: 'ai_claude_reset_s invalid' };
+    if ('mac' in c && (typeof c.mac !== 'string' || !MAC.test(c.mac))) return { ok: false, error: 'mac invalid' };
     for (const k of AI_PCT) if (k in c && !numarIn(c[k], 0, 100)) return { ok: false, error: `${k} invalid` };
     for (const k of AI_ISO) {
       if (k in c && (typeof c[k] !== 'string' || !ISO_UTC.test(c[k] as string) || Number.isNaN(Date.parse(c[k] as string)))) {
@@ -108,6 +112,7 @@ export function valideazaCitiri(body: unknown): Rezultat {
       ai_claude_ramas_pct: (c.ai_claude_ramas_pct ?? null) as number | null,
       ai_gemini_reset_s: (c.ai_gemini_reset_s ?? null) as number | null,
       ai_claude_reset_s: (c.ai_claude_reset_s ?? null) as number | null,
+      mac: typeof c.mac === 'string' ? c.mac.toLowerCase() : null,
     });
   }
   return { ok: true, citiri: out };

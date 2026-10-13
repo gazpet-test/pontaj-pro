@@ -124,3 +124,19 @@ Deno.test('respinge chei AI noi invalide', () => {
   rau({ ai_anthropic_saptamana_reset: null });
   rau({ ai_altceva_pct: 5 });
 });
+
+// 13.10.2026: MAC văzut de sondă (comparat în index.ts cu meta.mac)
+Deno.test('acceptă mac valid și îl normalizează', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: '192.168.1.92', online: true, mac: 'A8:2B:DD:2F:93:BA' }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].mac, 'a8:2b:dd:2f:93:ba');
+});
+Deno.test('mac lipsă → null', () => {
+  const r = valideazaCitiri({ citiri: [{ extern_id: 'a', online: true }] });
+  if (!r.ok) throw new Error(r.error);
+  assertEquals(r.citiri[0].mac, null);
+});
+Deno.test('respinge mac invalid', () => {
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, mac: 'zz:2b:dd:2f:93:ba' }] }).ok, false);
+  assertEquals(valideazaCitiri({ citiri: [{ extern_id: 'a', online: true, mac: '"x"' }] }).ok, false);
+});
