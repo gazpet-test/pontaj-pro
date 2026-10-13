@@ -50,6 +50,13 @@ while IFS=' ' read -r extern_id ip tip _rest; do
     online=true
     latency=$(printf '%s\n' "$rez" | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -1)
   fi
+  # 13.10.2026: MAC-ul care a raspuns pe IP (ARP, dupa ping). iot-retea il compara cu meta.mac din ERP:
+  # alt MAC = alt aparat pe IP-ul asta -> online:false + motiv mac_diferit. Doar MAC valid, altfel omis.
+  mac=""
+  if [ "$online" = true ]; then
+    mac=$(ip neigh show "$ip" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="lladdr"){print tolower($(i+1)); exit}}')
+    case "$mac" in [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;; *) mac="" ;; esac
+  fi
 
   extra=""
   if [ "$online" = true ] && [ "$tip" = qnap ] && [ -r "$NAS_PW_FILE" ]; then
@@ -95,8 +102,31 @@ while IFS=' ' read -r extern_id ip tip _rest; do
     [ -n "${mttemp:-}" ] && extra="${extra},\"cpu_temp\":${mttemp}"
   fi
 
+  # Server AI (Windows): metrici de la colectorul local, HTTP doar LAN (firewall: doar Terra). Doar chei cunoscute de iot-retea.
+  if [ "$online" = true ] && [ "$tip" = aiserver ]; then
+    m=$(curl -s -m 5 "http://$ip:9181/metrics.json" 2>/dev/null)
+    for k in cpu_load ram_pct disk_pct uptime_s gpu_temp gpu_w gpu_util vram_pct; do
+      v=$(printf '%s' "$m" | sed -n "s/.*\"$k\":\([0-9]\{1,10\}\(\.[0-9]\{1,3\}\)\{0,1\}\)[,}].*/\1/p")
+      [ -n "${v:-}" ] && extra="${extra},\"$k\":${v}"
+    done
+    # 10.10.2026: limite AI (whitelist iot-retea v9). Valorile lipsa/invalide se OMIT (null respinge tot lotul).
+    ai=$(printf '%s' "$m" | jq -c '. as $m
+      | ([ "ai_gemini_ramas_pct","ai_claude_ramas_pct","ai_codex_ramas_pct","ai_anthropic_saptamana_ramas_pct","ai_anthropic_saptamana_fable_ramas_pct","ai_anthropic_sesiune_ramas_pct" ][]
+          | select(($m[.]|type)=="number" and $m[.]>=0 and $m[.]<=100) | {(.): $m[.]})
+      , ([ "ai_gemini_reset_s","ai_claude_reset_s" ][]
+          | select(($m[.]|type)=="number" and $m[.]>=0 and $m[.]<=4000000000) | {(.): $m[.]})
+      , ([ "ai_codex_reset","ai_codex_masurat_la" ][]
+          | select(($m[.]|type)=="string" and ($m[.]|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|\\+00:00)$"))) | {(.): $m[.]})
+      , ([ "ai_codex_plan","ai_anthropic_saptamana_reset","ai_anthropic_saptamana_fable_reset","ai_anthropic_sesiune_reset" ][]
+          | select(($m[.]|type)=="string" and ($m[.]|test("^[A-Za-z0-9 .,:+()/-]{1,40}$"))) | {(.): $m[.]})
+      ' 2>/dev/null | jq -s -c 'add // {}' 2>/dev/null)
+    ai=${ai#\{}; ai=${ai%\}}
+    [ -n "${ai:-}" ] && extra="${extra},${ai}"
+  fi
+
   lat_json=""
   [ -n "${latency:-}" ] && lat_json=",\"latency_ms\":${latency}"
+  [ -n "${mac:-}" ] && lat_json="${lat_json},\"mac\":\"${mac}\""
   citiri="${citiri}${citiri:+,}{\"extern_id\":\"${extern_id}\",\"online\":${online}${lat_json}${extra}}"
 done < "$CONF_FILE"
 
@@ -115,3 +145,4 @@ status=$(curl --disable --silent --output /dev/null --write-out '%{http_code}' -
 rc=$?
 if [ "$rc" -ne 0 ]; then log_error "Trimitere eșuată: curl cod $rc."; exit 1; fi
 case "$status" in 2??) exit 0 ;; *) log_error "Trimitere eșuată: HTTP $status."; exit 1 ;; esac
+
