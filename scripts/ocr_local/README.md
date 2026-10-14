@@ -58,18 +58,18 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
   deja în starea cerută; o preluare întreruptă (`preia_in_curs.json`, cu instantaneul rulărilor active de dinainte) se recuperează doar
   ca rulare NOUĂ față de instantaneu (`preluata`, fără plan, fără director local; mai multe = decide omul). Intenții locale înaintea
   pașilor unici, fișiere de control scrise atomic + fsync (pe Windows: garanție la căderea procesului).
-- **Jurnalul apelurilor plătite** `apeluri.jsonl` (per document, append-only + fsync): `start` ÎNAINTEA fiecărui POST, `gata`
+- **Lacăt exclusiv** pe directorul rulării (`lacat.json`, O_EXCL) pentru toți pașii care scriu: două comenzi `erp` simultane pe aceeași rulare nu se suprapun (un lacăt rămas de la un proces mort se șterge manual). **Jurnalul apelurilor plătite** `apeluri.jsonl` (per document, append-only + fsync; fiecare încercare cu identificator unic `a`): `start` ÎNAINTEA fiecărui POST, `gata`
   (`decizie` / `refuz` / `pierdut`) după. Un `start` fără `gata` = rezultat NECUNOSCUT (cădere oricând după POST, transport, 409
   decontat, 500, 502): pe acel item nu se mai cere NICIODATĂ un arbitraj Claude, la reluare merge la `needs_human` fără AI (după
   `abandon`, dacă rezervarea e deschisă). Refuzul dinaintea plății (`refuz` = poartă, plafon, stare, amprentă, în zbor) închide apelul și
   oprește pasul (item-ul se poate arbitra la reluare). `409 arbitrat` (decizie în BD pierdută local) → `pierdute.jsonl` = `needs_human` la
-  reconciliere. `rezervare_id` apare în mesajul de eroare.
+  reconciliere. `rezervare_id` apare în mesajul de eroare. O ultimă linie neterminată dintr-un jurnal (scriere întreruptă) se mută în `<jurnal>.coada-<timp>` și se taie (fail-closed: `start`-ul rămâne necunoscut); o linie invalidă în interior = refuz.
 - **Oprire automată** (spec §8): gardă / citire incompletă / bandă lipsă (cititor oprit, inclusiv documentele neîncepute după oprire) pe
   > 20% din pagini (la `incarca-citiri`; un cititor încă neterminat = refuz, fără scriere); `needs_human` > 15% din arbitrajele Claude,
   după minim 20, cu necunoscutele + pierdutele Claude socotite PERMANENT `needs_human` (și după conversia la om) — verificat după
   reluare, înaintea FIECĂRUI apel plătit și înainte de `arbitrata` → `oprita` cu motiv.
 - Decizia arbitrului se scrie local imediat (`decizii.jsonl`, fsync), înaintea următorului apel.
-- **Teste**: `test_client.py` (32, CPU, edge simulat cu verificările BD relevante + căderi simulate) + cap-coadă pe funcțiile SQL REALE în harness
+- **Teste**: `test_client.py` (36, CPU, edge simulat cu verificările BD relevante + căderi simulate) + cap-coadă pe funcțiile SQL REALE în harness
   (`supabase/tests/ofertare_ocr_local_client_e2e.py`, rularea R8 din `scripts/test_ofertare_ocr_local.sh`, fără apel plătit).
   `plan.py` importă PIL doar în funcțiile care randează, ca `load_plan` / `compare` / `reconcile` / `client` să ruleze și fără PIL.
 
@@ -179,7 +179,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 32 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 36 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 

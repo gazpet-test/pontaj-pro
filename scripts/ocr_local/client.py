@@ -12,7 +12,7 @@ documentului: plan.json, benzile, citirile, dezacorduri.jsonl, decizii.jsonl, re
 Reguli: fara redirect, fara proxy, URL-ul semnat acceptat doar pe bucketul ofertare al proiectului; nicio reincercare automata a unui
 apel platit; orice refuz al BD opreste pasul (mesajul BD, fara secret). Oprire automata (spec §8): garda pe > 20% din pagini,
 needs_human > 15% din arbitrajele Claude (dupa minim 20)."""
-import base64, concurrent.futures, hashlib, json, os, pathlib, re, time, urllib.error, urllib.request
+import base64, concurrent.futures, functools, hashlib, json, os, pathlib, re, time, urllib.error, urllib.request, uuid
 
 BASE = 'https://dxczwkbciseqniprspcu.supabase.co'
 SEMNAT = BASE + '/storage/v1/object/sign/ofertare/'
@@ -132,6 +132,23 @@ def activa(rdir):
     o = pasi(rdir).get('oprita')
     if o: raise RuntimeError('Rularea e oprita (%s): niciun pas nou' % o['valoare'])
 
+def cu_lacat(fn):
+    """Lacat EXCLUSIV pe directorul rularii (lacat.json, creat atomic O_EXCL): doua comenzi `erp` simultane pe aceeasi rulare nu se pot
+    suprapune (review r3 Jakarinos P1). Un lacat ramas de la un proces mort se sterge manual, dupa verificare."""
+    @functools.wraps(fn)
+    def w(rdir, *a, **k):
+        p = pathlib.Path(rdir) / 'lacat.json'
+        try: fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise RuntimeError('Rularea e in lucru in alt proces (%s: %s). Daca niciun proces nu mai ruleaza, sterge manual lacatul'
+                               % (p, p.read_text(encoding='utf-8', errors='replace')[:200]))
+        with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump({'pid': os.getpid(), 'pas': fn.__name__, 'la': time.time()}, f)
+        try: return fn(rdir, *a, **k)
+        finally:
+            try: p.unlink()
+            except FileNotFoundError: pass
+    return w
+
 def paralel(fn, lista, n):
     """Ruleaza fn pe lista cu n fire; prima eroare se ridica dupa ce firele pornite se termina (scrierile sunt idempotente in BD)."""
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, n)) as ex: return list(ex.map(fn, lista))
@@ -168,6 +185,7 @@ def preia(work, edge):
     heartbeat(edge, True, 'preluata rularea %d' % r['id'])
     return {'rulare': r['id'], 'licitatie_id': r['licitatie_id'], 'dir': str(rdir), 'pagini': sum(len(x['pagini']) for x in r['documente'])}
 
+@cu_lacat
 def descarca(rdir, edge):
     rdir = pathlib.Path(rdir); r = rulare(rdir); (rdir / 'pdf').mkdir(exist_ok=True); out = []
     for doc, _ in documente(r):
@@ -182,6 +200,7 @@ def descarca(rdir, edge):
     heartbeat(edge, True, 'rularea %d: PDF-uri descarcate' % r['rulare_id'])
     return {'documente': out}
 
+@cu_lacat
 def foaie(rdir, per_foaie=96):
     """Foile de contact pentru orientare (fara AI, fara retea) + sablonul orientare/<doc>.DE_COMPLETAT.json (valori null): omul
     completeaza 0/90/180/270 si il salveaza ca orientare/<doc>.json. Nimic nu se presupune."""
@@ -194,6 +213,7 @@ def foaie(rdir, per_foaie=96):
         save(o / ('%d.DE_COMPLETAT.json' % doc), {str(p): None for p in pagini})
     return {'foi': out}
 
+@cu_lacat
 def plan_rulare(rdir, edge, kind=None):
     """Planul CPU per document (paginile inghetate, orientarea confirmata de om) + manifestul trimis O SINGURA DATA (fn_ofertare_ocr_plan)."""
     from .plan import plan, load_plan
@@ -235,6 +255,7 @@ def plan_rulare(rdir, edge, kind=None):
     heartbeat(edge, True, 'rularea %d: plan trimis' % r['rulare_id'])
     return {'pagini': len(manifest), 'benzi': sum(len(m.get('benzi') or []) for m in manifest), 'excluse': excl}
 
+@cu_lacat
 def citeste_rulare(rdir, reader):
     """Wrapper peste read.run_reader pe toate documentele rularii (serverul vLLM al cititorului pornit de om). Fara apel catre ERP."""
     from .read import run_reader
@@ -248,6 +269,7 @@ def model_rev(reader, res):
     from .read import protocol
     return ('%s|%s' % (protocol()['readers'][reader]['model'], res.get('weights_sha256')))[:200]
 
+@cu_lacat
 def incarca_citiri(rdir, edge, n=4):
     """Fiecare banda x cititor (citit / incomplet, cu segmentele compare.segmente) + randurile exclus ale planului; apoi preluata -> citita."""
     from .plan import load_plan
@@ -304,6 +326,7 @@ def manifest_sha(linii):
     """Amprenta din fn_ofertare_ocr_comparatie_gata: sha256 peste „document_id|pagina|item_id|item_sha256\\n”, sortate (COLLATE "C")."""
     return sha(''.join(sorted(linii)).encode('utf-8'))
 
+@cu_lacat
 def compara_rulare(rdir, edge, n=4):
     """compare.compare per document (CPU), apoi fiecare dezacord in BD (proveniența verificata acolo) si marcajul „comparatie incheiata”."""
     from .compare import compare
@@ -332,11 +355,27 @@ def compara_rulare(rdir, edge, n=4):
     return {'dezacorduri': total, 'sha256': h}
 
 def _jsonl(path):
-    return [json.loads(l) for l in path.read_text(encoding='utf-8').splitlines() if l.strip()] if path.exists() else []
+    """Jurnal JSONL append-only. O ultima linie FARA terminator (scriere intrerupta) se repara conservator: se muta in
+    <fisier>.coada-<timp> si se taie din jurnal (o decizie / un `gata` pierdut lasa `start`-ul necunoscut -> needs_human, fail-closed).
+    O linie invalida in INTERIORUL jurnalului = corupere -> refuz (review r3 Jakarinos P2)."""
+    if not path.exists(): return []
+    data = path.read_bytes()
+    if data and not data.endswith(b'\n'):
+        cut = data.rfind(b'\n') + 1
+        (path.parent / ('%s.coada-%d' % (path.name, int(time.time() * 1000)))).write_bytes(data[cut:])
+        with path.open('r+b') as f: f.truncate(cut); f.flush(); os.fsync(f.fileno())
+        data = data[:cut]
+    out = []
+    for i, l in enumerate(data.decode('utf-8').splitlines(), 1):
+        if not l.strip(): continue
+        try: out.append(json.loads(l))
+        except ValueError: raise RuntimeError('Jurnal corupt: %s linia %d (nu e ultima linie neterminata) - verificare manuala' % (path, i))
+    return out
 def _adauga(path, obj):
     with path.open('a', encoding='utf-8', newline='\n') as f:
         f.write(json.dumps(obj, ensure_ascii=False) + '\n'); f.flush(); os.fsync(f.fileno())
 
+@cu_lacat
 def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
     """Un dezacord pe rand: structura_tabele -> needs_human fara AI (op needs_human); restul -> ofertare-ocr-arbitreaza (PLATIT; rezervarea,
     plafonul si legarea de BD sunt in edge). Decizia se scrie local imediat (decizii.jsonl). Nicio reincercare: orice refuz / eroare
@@ -355,15 +394,14 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
         st = {'claude': 0, 'needs_human_claude': 0, 'om': 0, 'necunoscute': 0, 'pierdute_claude': 0, 'cost_usd': 0.0, 'per_doc': {}}
         for doc, _ in documente(r):
             d = rdir / ('d%d' % doc); ap = _jsonl(d / 'apeluri.jsonl'); dec = _jsonl(d / 'decizii.jsonl')
-            claude = {x['id'] for x in dec}; gata = {(x['id'], x['k']) for x in ap if x['faza'] == 'gata'}
-            necunoscute = {x['id'] for x in ap if x['faza'] == 'start' and (x['id'], x['k']) not in gata} - claude
+            claude = {x['id'] for x in dec}; gata = {x['a'] for x in ap if x['faza'] == 'gata'}
+            necunoscute = {x['id'] for x in ap if x['faza'] == 'start' and x['a'] not in gata} - claude
             pierdute_cl = {x['id'] for x in _jsonl(d / 'pierdute.jsonl') if x.get('sursa') == 'claude'} - claude - necunoscute
             om_ids = {x['id'] for x in _jsonl(d / 'decizii_om.jsonl')}; pierdute = {x['id'] for x in _jsonl(d / 'pierdute.jsonl')}
             st['claude'] += len(dec); st['needs_human_claude'] += sum(x['decizie'] == 'needs_human' for x in dec)
             st['necunoscute'] += len(necunoscute); st['pierdute_claude'] += len(pierdute_cl); st['om'] += len(om_ids)
             st['cost_usd'] += sum(float(x.get('cost_usd') or 0) for x in dec)
-            st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute,
-                                  'k': {i: sum(1 for x in ap if x['faza'] == 'start' and x['id'] == i) for i in {x['id'] for x in ap}}}
+            st['per_doc'][doc] = {'rezolvate': claude | om_ids | pierdute, 'necunoscute': necunoscute}
         return st
     def opreste_daca_peste_prag(st):
         # arbitraje Claude cu rezultat necunoscut / pierdut = needs_human (conservator); verificat dupa reluare, inaintea fiecarui apel
@@ -395,22 +433,22 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
             if sha(img) != it['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % it['band'])
             oprit = opreste_daca_peste_prag(st)
             if oprit: return oprit
-            k = st['per_doc'][doc]['k'].get(it['id'], 0) + 1
-            _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'k': k, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
+            a = uuid.uuid4().hex  # identificator UNIC al incercarii (review r3 Jakarinos P1: doua procese nu pot inchide aceeasi incercare)
+            _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
             status, j = edge.post('ofertare-ocr-arbitreaza', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it,
                                                              'imagine_b64': base64.b64encode(img).decode('ascii')}, timeout=240)
             if status == 409 and j.get('refuz') == 'arbitrat':
                 # decis deja in BD, decizia nu e locala: la reconciliere = needs_human (fail-closed); la prag = needs_human
                 _adauga(d / 'pierdute.jsonl', {'id': it['id'], 'sursa': 'claude', 'motiv': 'arbitrat in BD, decizie locala lipsa'})
-                _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'k': k, 'faza': 'gata', 'rezultat': 'pierdut'}); st = stare_locala(); continue
+                _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'pierdut'}); st = stare_locala(); continue
             if status != 200:
                 # refuz = respins INAINTEA apelului platit (poarta, plafon, stare, amprenta, in zbor): apelul se inchide; fara refuz (409
                 # decontat fara decizie, 500, 502, altceva) = posibil platit: ramane necunoscut (start fara gata)
-                if 'refuz' in j: _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'k': k, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': j['refuz']})
+                if 'refuz' in j: _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'refuz', 'refuz': j['refuz']})
                 raise EdgeError('ofertare-ocr-arbitreaza (%s)' % it['id'], status, j)
             dec = j['decizie']
             if dec.get('id') != it['id'] or dec.get('item_sha256') != it['item_sha256']: raise RuntimeError('Decizie pentru alt dezacord: %s' % it['id'])
-            _adauga(d / 'decizii.jsonl', dec); _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'k': k, 'faza': 'gata', 'rezultat': 'decizie'})
+            _adauga(d / 'decizii.jsonl', dec); _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'gata', 'rezultat': 'decizie'})
             st = stare_locala()
             if st['claude'] % 25 == 0: heartbeat(edge, True, 'rularea %d: %d arbitraje' % (r['rulare_id'], st['claude']))
     st = stare_locala(); oprit = opreste_daca_peste_prag(st)  # si inaintea finalizarii arbitrajului
@@ -419,6 +457,7 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
     heartbeat(edge, True, 'rularea %d: arbitrata' % r['rulare_id'])
     return dict({k: v for k, v in st.items() if k != 'per_doc'}, stare='arbitrata')
 
+@cu_lacat
 def reconciliaza_rulare(rdir, edge, n=4):
     """reconcile.reconcile per document (CPU) + textul reconciliat al fiecarei pagini in BD (reconciliat / needs_human), apoi finalizata."""
     from .reconcile import reconcile
@@ -445,6 +484,7 @@ def reconciliaza_rulare(rdir, edge, n=4):
     heartbeat(edge, True, 'rularea %d: finalizata' % r['rulare_id'])
     return {'pagini': len(rez), 'needs_human': nh, 'stare': 'finalizata'}
 
+@cu_lacat
 def oprire(rdir, edge, motiv):
     r = rulare(rdir); tranzitie(pathlib.Path(rdir), edge, r, 'oprita', motiv)
     return {'stare': 'oprita'}

@@ -285,6 +285,36 @@ class Client(unittest.TestCase):
         self.edge.arbitru = FakeEdge(b'').arbitru
         a = C.arbitreaza(rdir, self.edge, minim=3)  # 1 necunoscut (convertit la om) + 2 decizii bune = 1/3 > 15% -> oprita
         self.assertEqual((a['stare'], a['necunoscute'], self.edge.stare), ('oprita', 1, 'oprita'))
+    def _pana_la_arbitraj(self):
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        d = rdir / ('d%d' % DOC); return rdir, d, json.loads((d / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines()[0])['id']
+    def _apeluri_claude(self, item_id): return [c['item']['id'] for f, c in self.edge.calls if f == 'ofertare-ocr-arbitreaza'].count(item_id)
+    def test_lacat_exclusiv_pe_rulare(self):
+        # review r3 Jakarinos P1: o a doua comanda pe aceeasi rulare, cat prima ruleaza, e refuzata fara niciun apel
+        rdir, d, _ = self._pana_la_arbitraj(); (rdir / 'lacat.json').write_text('{"pid": 1}')
+        with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge)
+        self.assertFalse([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
+        (rdir / 'lacat.json').unlink(); self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata'); self.assertFalse((rdir / 'lacat.json').exists())
+    def test_doua_incercari_suprapuse_un_singur_gata_nu_le_inchide_pe_amandoua(self):
+        # review r3 Jakarinos P1: doua `start` pe acelasi item (procese suprapuse), un singur `gata` (refuz in_zbor) -> ramane necunoscut
+        rdir, d, i = self._pana_la_arbitraj()
+        for x in ({'id': i, 'a': 'a1', 'faza': 'start'}, {'id': i, 'a': 'a2', 'faza': 'start'}, {'id': i, 'a': 'a2', 'faza': 'gata', 'rezultat': 'refuz'}):
+            C._adauga(d / 'apeluri.jsonl', x)
+        a = C.arbitreaza(rdir, self.edge)
+        self.assertEqual((a['necunoscute'], self._apeluri_claude(i), len(self.edge.ops('needs_human'))), (1, 0, 1))
+    def test_coada_trunchiata_reparata_conservator(self):
+        # review r3 Jakarinos P2: `start` complet + ultima linie trunchiata (decizia / gata pierduta) -> needs_human, fara a doua plata
+        rdir, d, i = self._pana_la_arbitraj()
+        C._adauga(d / 'apeluri.jsonl', {'id': i, 'a': 'a1', 'faza': 'start'})
+        with (d / 'apeluri.jsonl').open('a', encoding='utf-8') as f: f.write('{"id": "%s", "a": "a1", "fa' % i)
+        a = C.arbitreaza(rdir, self.edge)
+        self.assertEqual((a['stare'], self._apeluri_claude(i), len(self.edge.ops('needs_human'))), ('arbitrata', 0, 1))
+        self.assertTrue(list(d.glob('apeluri.jsonl.coada-*')))
+    def test_jurnal_corupt_in_interior_refuzat(self):
+        rdir, d, i = self._pana_la_arbitraj()
+        (d / 'apeluri.jsonl').write_text('{"id": "x", "a": "a1", "fa\n{"id": "x", "a": "a1", "faza": "start"}\n', encoding='utf-8')
+        with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge)
+        self.assertFalse([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
     def test_preia_intrerupt_nu_adopta_rulare_orfana_mai_veche(self):
         # review r2 Copilot P1-1: o rulare preluata fara plan EXISTA deja (orfana); preluarea noua cade INAINTE de commit -> nu o adopta
         self.edge.stare = 'preluata'; C.save(self.work / 'preia_in_curs.json', {'la': 0, 'active_inainte': [7]})
