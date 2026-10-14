@@ -1,0 +1,149 @@
+[
+ {
+  "band": "p0326_b0",
+  "page": 326,
+  "kind": "quantity_table",
+  "image": "p0326_b0.png",
+  "image_sha256": "abababababababababababababababababababababababababababababababab",
+  "cititori": {
+   "lighton": {
+    "protocol": "lighton-mineru-v2",
+    "weights_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   },
+   "mineru": {
+    "protocol": "lighton-mineru-v2",
+    "weights_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   }
+  },
+  "raw_sha256": {
+   "lighton": "80847164a9b1671781d0815abee0424547507eaa29b259aad6f1a29079f0a13f",
+   "mineru": "c7f549e03cbc15db36a1882193cf7938c4cc94de398242f21024b32678a25264"
+  },
+  "id": "p0326_b0_t0",
+  "tip": "text",
+  "citire_lighton": "10.5",
+  "citire_mineru": "10,5",
+  "sursa": {
+   "lighton": {
+    "seg": [
+     0,
+     0
+    ],
+    "start": 10,
+    "end": 14
+   },
+   "mineru": {
+    "seg": [
+     0,
+     0
+    ],
+    "start": 10,
+    "end": 14
+   }
+  },
+  "context_inainte": "Cantitate",
+  "context_dupa": "m și 5 buc , x",
+  "pozitie": {
+   "lighton": [
+    1,
+    2
+   ],
+   "mineru": [
+    1,
+    2
+   ]
+  },
+  "diferenta_numerica": true,
+  "anomalie_separator": true,
+  "contine_tabel": false,
+  "e_cantitate": true,
+  "plan_input_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "item_sha256": "67e1d5653ce24cf9a047ee4e7cad7944b7d47c7e4253a971a26ffc55e87257f7"
+ },
+ {
+  "band": "p0326_b0",
+  "page": 326,
+  "kind": "quantity_table",
+  "image": "p0326_b0.png",
+  "image_sha256": "abababababababababababababababababababababababababababababababab",
+  "cititori": {
+   "lighton": {
+    "protocol": "lighton-mineru-v2",
+    "weights_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   },
+   "mineru": {
+    "protocol": "lighton-mineru-v2",
+    "weights_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   }
+  },
+  "raw_sha256": {
+   "lighton": "80847164a9b1671781d0815abee0424547507eaa29b259aad6f1a29079f0a13f",
+   "mineru": "c7f549e03cbc15db36a1882193cf7938c4cc94de398242f21024b32678a25264"
+  },
+  "id": "p0326_b0_r0",
+  "tip": "rand_tabel",
+  "citire_lighton": "Țeavă PEHD |  | m | 5",
+  "citire_mineru": "Țeavă PEHD |  | m | 6",
+  "celule_diferite": [
+   3
+  ],
+  "roluri": {
+   "cantitate": 3,
+   "um": 2,
+   "cod": 1
+  },
+  "celule_lighton": [
+   "Țeavă PEHD",
+   "",
+   "m",
+   "5"
+  ],
+  "celule_mineru": [
+   "Țeavă PEHD",
+   "",
+   "m",
+   "6"
+  ],
+  "ancora_lighton": null,
+  "ancora_sigura": false,
+  "triplet_diferit": true,
+  "rand_anterior": null,
+  "pozitie": {
+   "lighton": [
+    1,
+    0
+   ],
+   "mineru": [
+    1,
+    0
+   ]
+  },
+  "diferenta_numerica": true,
+  "anomalie_separator": false,
+  "e_cantitate": true,
+  "plan_input_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "item_sha256": "29b647f290493cc43b8e86bbc4cd78008d8fd398d18a1c4a9728488f85170568"
+ },
+ {
+  "id": "p0001_b0_t0",
+  "x": "a\u0001\u001f\n\t\"\\ ș    € 𝄞",
+  "n": [
+   1,
+   -2,
+   0,
+   null,
+   true,
+   false,
+   [],
+   {}
+  ],
+  "o": {
+   "z": 1,
+   "a": {
+    "b": "c"
+   },
+   "A": []
+  },
+  "item_sha256": "4f6df51c4ccc4cafe5b9fe055533810bff7c8aa8735ba769e8701958c8d4436b"
+ }
+]

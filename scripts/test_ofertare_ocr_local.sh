@@ -57,6 +57,10 @@ asteapta() { [ "$2" = "$3" ] || esec "$1: așteptat «$3», primit «$2»"; ok "
 refuz() { local o; o="$(CA_LINII=50 ca "$2" "$3" "$4" || true)"; grep -q "$5" <<<"$o" || esec "$1 trebuia refuzat ($5), primit: $o"; ok "refuz: $1"; }
 livreaza() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" 2>&1; }
 revenire() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261029b', 'OCR_LOCAL_REVENIRE:' || txid_current(), true);" -f "$ROLLBACK" 2>&1; }
+NUMEC=20261029c_ofertare_ocr_arbitraj_rezerva
+MIGC="$RADACINA/supabase/migrations/$NUMEC.sql"; ROLLC="$RADACINA/supabase/revenire/${NUMEC}_ROLLBACK.sql"
+livreaza_c() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUMEC:' || txid_current(), true);" -f "$MIGC" 2>&1; }
+revenire_c() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261029c', 'OCR_LOCAL_C_REVENIRE:' || txid_current(), true);" -f "$ROLLC" 2>&1; }
 sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 FX="$RADACINA/supabase/tests/ofertare_ocr_local_fixtures.py"
 fx() { python3 "$FX" "$@"; }                       # segmente / dezacorduri reale / granițe, din scripts/ocr_local/compare.py
@@ -343,6 +347,106 @@ ca service_role - "SELECT public.fn_ofertare_ocr_stare($R4, 'oprita', 'test plan
 # ── heartbeat ────────────────────────────────────────────────────────────────────────────────────────────
 asteapta "heartbeat" "$(ca service_role - "SELECT public.fn_ofertare_ocr_heartbeat(true, 'test')")" t
 asteapta "heartbeat scris" "$(q "SELECT ultim_ok||'|'||ultim_mesaj||'|'||activ FROM public.procese_heartbeat WHERE cheie='ocr_local_ofertare'")" "true|test|true"
+
+# ── 20261029c: rezervarea legată de dezacord (D3b, review Copilot r1 + Jakarinos r1) ─────────────────────
+python3 "$RADACINA/scripts/livrare_validator.py" "$MIGC" >/dev/null || esec "validatorul refuză 20261029c"; ok "validator livrare 20261029c"
+AMPB=$(q "SELECT public.fn_ofertare_ocr_amprenta()")
+o="$("${PSQL[@]}" -d "$BAZA" -f "$MIGC" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "c fără gardă: $o"; ok "refuz: 20261029c fără gardă"
+COMB=$(q "SELECT obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class')")
+q "COMMENT ON TABLE public.ofertare_ocr_rulari IS NULL" >/dev/null
+o="$(livreaza_c || true)"; grep -q "amprenta difera" <<<"$o" || esec "c fără comentariul amprentei trebuia refuzată: $o"
+[ "$(q "SELECT to_regprocedure('public.fn_ofertare_ocr_arbitraj_rezerva(bigint,bigint,text,text,numeric)') IS NULL")" = t ] || esec "c refuzată a lăsat urme"
+q "COMMENT ON TABLE public.ofertare_ocr_rulari IS '$COMB'" >/dev/null; ok "refuz: 20261029c fără comentariul amprentei (Jakarinos r2 P2)"
+q "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'preluata'" >/dev/null
+o="$(livreaza_c || true)"; grep -q "amprenta difera" <<<"$o" || esec "c peste drift trebuia refuzată: $o"
+q "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'ceruta'" >/dev/null; ok "refuz: 20261029c peste drift în 20261029b"
+livreaza_c >/dev/null || { livreaza_c; esec "livrare 20261029c"; }; ok "livrare 20261029c"
+o="$(livreaza_c || true)"; grep -q "obiectele exista deja" <<<"$o" || esec "reaplicare c: $o"; ok "refuz: reaplicare 20261029c"
+asteapta "control 0e după c" "$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" 0
+o="$(revenire || true)"; grep -q "amprenta difera\|alt numar de obiecte" <<<"$o" || esec "revenirea b peste c trebuia refuzată: $o"; ok "refuz: revenirea 20261029b cât 20261029c e aplicată"
+refuz "service_role: cost_rezerva fără dezacord nu mai e permis" service_role - "SELECT public.fn_ofertare_ocr_cost_rezerva(1, 0.1)" "permission denied"
+refuz "authenticated: arbitraj_rezerva" authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_arbitraj_rezerva(1, 1, 'x', 'y', 0.1)" "permission denied"
+refuz "authenticated: dezacord_arbitraj" authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_dezacord_arbitraj(1, 1, 'x', 'y')" "permission denied"
+refuz "authenticated: arbitraj_om" authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_arbitraj_om(1, 1, 'x', 'y')" "permission denied"
+R6=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'")
+ca service_role - "SELECT public.fn_ofertare_ocr_preia('lighton-mineru-v2')" >/dev/null; ca service_role - "$(PL "$R6" "$PLAN_STD")" >/dev/null
+ca service_role - "$(SP "$R6" 325 lighton "$T1" "$H1")" >/dev/null; ca service_role - "$(SP "$R6" 325 mineru "$T2" "$H2" MinerU2.5-Pro)" >/dev/null
+for c in lighton mineru; do
+  ca service_role - "$(SP "$R6" 326 $c "$T3" "$H3")" >/dev/null
+  ca service_role - "$(SP "$R6" 327 $c '' "$H0" x exclus NULL "$EXCL")" >/dev/null
+done
+ca service_role - "$(SP "$R6" 326 lighton "$T4" "$H4" m citit "$IB" '{}' 1)" >/dev/null; ca service_role - "$(SP "$R6" 326 mineru "$T4M" "$H4M" m citit "$IB" '{}' 1)" >/dev/null
+ca service_role - "SELECT public.fn_ofertare_ocr_stare($R6, 'citita')" >/dev/null
+SD6() { echo "SELECT public.fn_ofertare_ocr_scrie_dezacord($R6, '$(sq "$1")')"; }
+X1=$(ca service_role - "$(SD6 "$DZ325")->>'id'"); S1=$(q "SELECT item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE id=$X1")
+XS=$(ca service_role - "$(SD6 "$(it "$DZ326B" p0326_b1_structura)")->>'id'"); SS=$(q "SELECT item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE id=$XS")
+XT=$(ca service_role - "$(SD6 "$(it "$DZ326B" p0326_b1_t0)")->>'id'"); ST=$(q "SELECT item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE id=$XT")
+[ -n "$X1" ] && [ -n "$XS" ] && [ -n "$XT" ] || esec "dezacorduri R6"; ok "rularea R6 în citita cu 3 dezacorduri ($X1 text, $XS structură, $XT text pe banda 1)"
+DA() { echo "SELECT public.fn_ofertare_ocr_dezacord_arbitraj($R6, $1, '$2', '$3')"; }
+asteapta "citire: amprentă greșită" "$(ca service_role - "$(DA "$X1" "$(sha alt)" "$IA")->>'refuz'")" dezacord
+asteapta "citire: dezacord din altă rulare" "$(ca service_role - "SELECT public.fn_ofertare_ocr_dezacord_arbitraj($R, $X1, '$S1', '$IA')->>'refuz'")" stare
+asteapta "citire: imaginea altei benzi" "$(ca service_role - "$(DA "$X1" "$S1" "$IB")->>'refuz'")" imagine
+asteapta "citire: structura_tabele" "$(ca service_role - "$(DA "$XS" "$SS" "$IB")->>'refuz'")" tip
+asteapta "citire: citirile vin DIN BD" "$(ca service_role - "SELECT x->>'item_id'||'|'||(x->>'citire_lighton')||'|'||(x->>'citire_mineru') FROM $(DA "$X1" "$S1" "$IA" | sed 's/^SELECT //') x")" "p0325_b0_t0|0,056|0.056"
+AZ() { echo "SELECT public.fn_ofertare_ocr_arbitraj_rezerva($R6, $1, '$2', '$3', $4)"; }
+asteapta "rezervare: amprentă greșită" "$(ca service_role - "$(AZ "$X1" "$(sha alt)" "$IA" 0.05)->>'refuz'")" dezacord
+asteapta "rezervare: imaginea altei benzi" "$(ca service_role - "$(AZ "$X1" "$S1" "$IB" 0.05)->>'refuz'")" imagine
+asteapta "rezervare: peste plafon" "$(ca service_role - "$(AZ "$X1" "$S1" "$IA" 1.0001)->>'refuz'")" suma
+asteapta "rezervare de 0,99 sub plafonul 1: trece" "$(ca service_role - "$(AZ "$X1" "$S1" "$IA" 0.99)->>'refuz'")" ""
+q "UPDATE public.ofertare_ocr_rezervari SET creat_la = now() - interval '20 minutes' WHERE rulare_id=$R6 AND stare='deschisa'" >/dev/null
+ZA=$(q "SELECT id FROM public.ofertare_ocr_rezervari WHERE rulare_id=$R6 AND stare='deschisa'")
+asteapta "abandonul rezervării de 0,99" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rezervare_abandon($ZA)")" t
+asteapta "rezervare: plafonul rămas (1 − 0,99 abandonat) nu ajunge" "$(ca service_role - "$(AZ "$X1" "$S1" "$IA" 0.05)->>'refuz'")" plafon
+ca service_role - "SELECT public.fn_ofertare_ocr_stare($R6, 'oprita', 'test plafon c')" >/dev/null
+R7=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'")
+ca service_role - "SELECT public.fn_ofertare_ocr_preia('lighton-mineru-v2')" >/dev/null; ca service_role - "$(PL "$R7" "$PLAN_STD")" >/dev/null
+ca service_role - "$(SP "$R7" 325 lighton "$T1" "$H1")" >/dev/null; ca service_role - "$(SP "$R7" 325 mineru "$T2" "$H2" MinerU2.5-Pro)" >/dev/null
+for c in lighton mineru; do
+  ca service_role - "$(SP "$R7" 326 $c "$T3" "$H3")" >/dev/null
+  ca service_role - "$(SP "$R7" 327 $c '' "$H0" x exclus NULL "$EXCL")" >/dev/null
+done
+ca service_role - "$(SP "$R7" 326 lighton "$T4" "$H4" m citit "$IB" '{}' 1)" >/dev/null; ca service_role - "$(SP "$R7" 326 mineru "$T4M" "$H4M" m citit "$IB" '{}' 1)" >/dev/null
+ca service_role - "SELECT public.fn_ofertare_ocr_stare($R7, 'citita')" >/dev/null
+SD7() { echo "SELECT public.fn_ofertare_ocr_scrie_dezacord($R7, '$(sq "$1")')"; }
+Y1=$(ca service_role - "$(SD7 "$DZ325")->>'id'"); YS=$(ca service_role - "$(SD7 "$(it "$DZ326B" p0326_b1_structura)")->>'id'"); YT=$(ca service_role - "$(SD7 "$(it "$DZ326B" p0326_b1_t0)")->>'id'")
+AZ7() { echo "SELECT public.fn_ofertare_ocr_arbitraj_rezerva($R7, $1, '$2', '$3', $4)"; }
+ZB=$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'rezervare_id'"); [ -n "$ZB" ] || esec "rezervarea legată"; ok "rezervare legată de dezacordul $Y1 (id $ZB)"
+asteapta "a doua rezervare pe același dezacord: în zbor" "$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'refuz'")" in_zbor
+( ca service_role - "$(AZ7 "$YT" "$ST" "$IB" 0.05)->>'rezervare_id'" > /tmp/ocr_c1 & ca service_role - "$(AZ7 "$YT" "$ST" "$IB" 0.05)->>'rezervare_id'" > /tmp/ocr_c2 & wait )
+asteapta "două rezervări simultane pe același dezacord: exact una" "$(cat /tmp/ocr_c1 /tmp/ocr_c2 | grep -c '[0-9]')" 1
+ZT=$(cat /tmp/ocr_c1 /tmp/ocr_c2 | grep '[0-9]')
+asteapta "decontare cu decizia ALTUI dezacord: decontat, decizie respinsă" \
+  "$(ca service_role - "SELECT (x->>'decontat')||'|'||(x->>'arbitraj_inregistrat') FROM public.fn_ofertare_ocr_scrie_arbitraj($ZB, '$(AR "$YT" "$ST" ales_lighton "" 0.01)') x")" "true|false"
+ZB2=$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'rezervare_id'"); [ -n "$ZB2" ] || esec "re-rezervare după decizie respinsă"; ok "dezacord nearbitrat după decizia respinsă: rezervabil din nou (id $ZB2)"
+asteapta "decontare cu decizia dezacordului propriu" "$(ca service_role - "SELECT x->>'arbitraj_inregistrat' FROM public.fn_ofertare_ocr_scrie_arbitraj($ZB2, '$(AR "$Y1" "$S1" ales_mineru "" 0.012)') x")" true
+asteapta "rezervare pe dezacord deja arbitrat" "$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'refuz'")" arbitrat
+asteapta "citire pe dezacord deja arbitrat" "$(ca service_role - "SELECT public.fn_ofertare_ocr_dezacord_arbitraj($R7, $Y1, '$S1', '$IA')->>'refuz'")" arbitrat
+OM() { echo "SELECT public.fn_ofertare_ocr_arbitraj_om($R7, $1, '$2', '$3')"; }
+refuz "om: motiv gol" service_role - "$(OM "$YS" "$SS" '  ')" "Motiv obligatoriu"
+refuz "om: amprentă greșită" service_role - "$(OM "$YS" "$(sha alt)" 'structura')" "amprenta"
+refuz "om: dezacord cu apel în zbor" service_role - "$(OM "$YT" "$ST" 'test')" "în zbor"
+asteapta "om: structura_tabele → needs_human fără cost" "$(ca service_role - "$(OM "$YS" "$SS" 'structura diferita intre cititori')->>'ok'")" true
+asteapta "om: arbitrajul (needs_human, cost 0, om / fara-ai)" "$(q "SELECT decizie||'|'||cost_usd||'|'||arbitru_model||'|'||prompt_versiune||'|'||(text_ales IS NULL) FROM public.ofertare_ocr_arbitraje WHERE dezacord_id=$YS")" "needs_human|0.0000|om|fara-ai|true"
+refuz "om: a doua oară" service_role - "$(OM "$YS" "$SS" 'din nou')" "deja arbitrat"
+asteapta "costul rulării: doar apelurile plătite" "$(q "SELECT cost_usd||'|'||cost_rezervat FROM public.ofertare_ocr_rulari WHERE id=$R7")" "0.0220|0.0500"
+o="$(revenire_c || true)"; grep -q "rezervari deschise" <<<"$o" || esec "revenire c cu rezervare deschisă: $o"; ok "refuz: revenirea 20261029c cu rezervare deschisă"
+q "UPDATE public.ofertare_ocr_rezervari SET creat_la = now() - interval '20 minutes' WHERE id=$ZT" >/dev/null
+asteapta "abandonul rezervării în zbor" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rezervare_abandon($ZT)")" t
+# depășirea costului real: o singură tranzacție (Copilot r2 / Jakarinos r2 P1)
+ZD=$(ca service_role - "$(AZ7 "$YT" "$ST" "$IB" 0.05)->>'rezervare_id'"); [ -n "$ZD" ] || esec "rezervare pentru depășire"
+DP() { echo "SELECT public.fn_ofertare_ocr_arbitraj_depasire($1, $2, 400000, 1000, 'claude-sonnet-5')"; }
+refuz "depășire: cost sub rezervare nu e depășire" service_role - "$(DP "$ZD" 0.04)" "Nu e o depășire"
+refuz "authenticated: arbitraj_depasire" authenticated "$OWNER" "$(DP "$ZD" 0.07)" "permission denied"
+asteapta "depășire: înregistrată, rularea oprită, cheltuiala blocată" "$(ca service_role - "SELECT (x->>'ok')||'|'||(x->>'stare')||'|'||(x->>'cheltuiala_blocata') FROM $(DP "$ZD" 0.0712 | sed 's/^SELECT //') x")" "true|oprita|true"
+asteapta "depășire: rezervarea la toată suma, rularea oprită cu motiv, costul real în jurnal, needs_human"   "$(q "SELECT z.stare||'|'||z.cost_real||'|'||r.stare||'|'||(r.oprit_motiv LIKE 'cost real 0.0712 peste rezervarea 0.0500%')::text||'|'||r.cost_usd||'|'||r.cost_rezervat FROM public.ofertare_ocr_rezervari z JOIN public.ofertare_ocr_rulari r ON r.id=z.rulare_id WHERE z.id=$ZD")|$(q "SELECT cost_usd FROM public.ai_usage_log WHERE ref_table='ofertare_ocr_rezervari' AND ref_id=$ZD")|$(q "SELECT decizie||'/'||prompt_versiune FROM public.ofertare_ocr_arbitraje WHERE dezacord_id=$YT")"   "decontata|0.0500|oprita|true|0.0720|0.0000|0.0712|needs_human/depasire"
+refuz "depășire a doua oară pe aceeași rezervare" service_role - "$(DP "$ZD" 0.08)" "închisă"
+asteapta "după depășire: nicio rezervare nouă (rularea oprită)" "$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'refuz'")" stare
+o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLC" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire c nearmată: $o"; ok "refuz: revenire 20261029c nearmată"
+revenire_c >/dev/null || { revenire_c; esec "revenire 20261029c"; }; ok "revenire 20261029c"
+asteapta "după revenirea c: amprenta = cea a lui 20261029b, din nou ștampilată" \
+  "$(q "SELECT public.fn_ofertare_ocr_amprenta() = '$AMPB' AND obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class') LIKE '%amprenta=$AMPB'")" t
+asteapta "după revenirea c: cost_rezerva din nou pentru service_role, arbitrajele păstrate" "$(q "SELECT has_function_privilege('service_role', 'public.fn_ofertare_ocr_cost_rezerva(bigint,numeric)', 'EXECUTE')")|$(q "SELECT count(*) FROM public.ofertare_ocr_arbitraje WHERE dezacord_id IN ($Y1, $YS)")" "t|2"
+livreaza_c >/dev/null || esec "dus-întors c"; revenire_c >/dev/null || esec "dus-întors c (revenire)"; ok "dus-întors 20261029c"
 
 # ── revenire ─────────────────────────────────────────────────────────────────────────────────────────────
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire nearmată: $o"; ok "refuz: revenire nearmată"
