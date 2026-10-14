@@ -80,6 +80,11 @@ class GardaLinii(unittest.TestCase):
         a = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1, km 12'
         b = 'Traversare drum judetean DJ298 cu tub de protectie si grup anozi de zinc'
         self.assertIsNotNone(garda_flux('\n'.join(' ' * i + (a if i % 2 else b) for i in range(40)))[0])
+        # Jakarinos r2: acelasi rand intreg (celula lunga + celula scurta), indentare crescatoare
+        rows = ['<table>'] + [' ' * i + x for i in range(20) for x in ('<tr>', cel, '<td>17 – T200</td>', '</tr>')] + ['</table>']
+        self.assertEqual(garda_flux('\n'.join(rows)), ('bucla_previous_guard', 'Repeated table row (4 times)', garda_flux('\n'.join(rows))[2]))
+        # randuri goale identice (fara continut) nu sunt bucla pe aceasta regula
+        self.assertIsNone(repetition_reason('\n'.join(['<tr>', '<td></td>', '<td>-</td>', '</tr>'] * 6)))
     def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
         self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')
