@@ -7,6 +7,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 import CtcDeciziiProiect from './CtcDeciziiProiect.jsx'
+import CtcIzometriiProiect from './CtcIzometriiProiect.jsx'
 import { G, inputSt, btn, btnMic, Modal, Camp, STATUS_DOC_UI, STATUS_CARTE_UI, BaraProgres, fmtData, fmtMb, useToast } from './ctcUi.jsx'
 import {
   actualizeazaDoc, adaugaPozitie, stergePozitie, incarcaFisier, ataseazaDinArhiva, scoateFisier, urlSemnat,
@@ -378,6 +379,9 @@ function CtcCarteContinut({ carteId, profile, onBack }) {
 
       {carte.proiect_id != null && (
         <CtcDeciziiProiect key={carte.proiect_id} proiectId={carte.proiect_id} />
+      )}
+      {carte.proiect_id != null && (
+        <CtcIzometriiProiect key={'iz' + carte.proiect_id} proiectId={carte.proiect_id} />
       )}
 
       {!docs.length && (
