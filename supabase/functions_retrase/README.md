@@ -41,7 +41,34 @@ Două funcții acceptau antetul intern `x-internal-secret` comparat cu același 
 | rag-normative | v22 | false | retrasă (niciun consumator): stub 410 în `supabase/functions/rag-normative/`, publicat cu verify_jwt=true | `revenire_grupb/rag-normative.v22.ts` |
 
 Literalul NU e în repo: în ambele copii constanta e `crypto.randomUUID()` cu marcajul `<REDACTAT len 24>`. Restul codului e byte cu byte cel deployat (verificat programatic pe 14.10).
-Revenire: copiezi fișierul în `supabase/functions/<slug>/index.ts` (pentru `extract-talon-ai` ștergi și `acces.ts` / `handler.ts` / testele, iar pentru `rag-normative` adaugi slug-ul în `NO_JWT`), scoți pasul de gardă „extract-talon-ai și rag-normative fără secret intern” din `verifica-edge-functions.yml` și publici cu „Deploy edge function (manual)”.
+
+### Revenire grupa B — pași exacți (se poate reveni la una singură sau la amândouă)
+Revenirea NU redeschide ocolirea internă (literalul e redactat în copii), dar redeschide accesul oricărui cont logat. Se face pe un branch + PR, ca orice schimbare; deploy-ul abia după ce jobul `poarta` e verde (jobul `verifica` rămâne roșu până la deploy — e diferența repo/producție, normal).
+Pașii de mai jos au fost aplicați literal pe o copie a repo-ului pe 14.10, în toate trei variantele (A, B, amândouă): `deno check`, `deno test poarta`, ambele gărzi și `deno check` pe copiile restaurate — verzi.
+Toate fișierele de mai jos sunt în `.github/workflows/`; „pasul de gardă” = pasul `extract-talon-ai și rag-normative fără secret intern` din `verifica-edge-functions.yml`, jobul `poarta`.
+
+**A. `extract-talon-ai` → v16** (`NO_JWT` nu se atinge: v16 rula cu verify_jwt=true)
+1. `cp supabase/functions_retrase/revenire_grupb/extract-talon-ai.v16.ts supabase/functions/extract-talon-ai/index.ts`
+2. `git rm supabase/functions/extract-talon-ai/acces.ts supabase/functions/extract-talon-ai/acces_test.ts supabase/functions/extract-talon-ai/handler.ts supabase/functions/extract-talon-ai/handler_test.ts`
+3. `verifica-edge-functions.yml`, jobul `poarta`:
+   - pasul `deno check (entrypoint + handler)`: scoți DOAR `supabase/functions/extract-talon-ai/handler.ts`; `supabase/functions/extract-talon-ai/index.ts` rămâne (copia v16 trece `deno check` — verificat 14.10);
+   - pasul `deno test poarta`: scoți `supabase/functions/extract-talon-ai/acces_test.ts` și `supabase/functions/extract-talon-ai/handler_test.ts`;
+   - pasul de gardă: în grep-ul de la punctul `# 1)` înlocuiești `"$interzis" "$t" "$r"` cu `"$interzis" "$r"`, apoi ștergi tot punctul `# 2)`: rândurile de la comentariul `# 2)` până la rândul de dinaintea comentariului `# 3)`.
+4. Verificare înainte de PR: `deno check --node-modules-dir=none supabase/functions/extract-talon-ai/index.ts` trece; pe PR, jobul `poarta` verde.
+
+**B. `rag-normative` → v22** (v22 rula cu verify_jwt=false)
+1. Copia + o declarație de tip ca prim rând. Fără ea, `deno check` pică cu TS2304 „Cannot find name 'Supabase'”: v22 folosește globalul `Supabase.ai` al runtime-ului edge, pe care nici importul `edge-runtime.d.ts` nu-l declară (verificat 14.10). `declare` nu generează cod, deci nu are efect la rulare:
+   `{ echo "declare const Supabase: any // tipuri: globalul runtime-ului edge (Supabase.ai), fără efect la rulare"; cat supabase/functions_retrase/revenire_grupb/rag-normative.v22.ts; } > supabase/functions/rag-normative/index.ts`
+2. `deploy-edge-function.yml`: adaugi `rag-normative` în lista `NO_JWT` (cu spațiu de o parte și de alta).
+3. `verifica-edge-functions.yml`, jobul `poarta`:
+   - pasul `deno check (entrypoint + handler)`: `supabase/functions/rag-normative/index.ts` RĂMÂNE (cu declarația de la pasul 1, copia trece `deno check` — verificat 14.10);
+   - pasul `deno test poarta`: nimic (rag-normative nu are teste);
+   - pasul de gardă: în grep-ul de la punctul `# 1)` înlocuiești `"$interzis" "$t" "$r"` cu `"$interzis" "$t"`, apoi ștergi punctele `# 3)` și `# 4)` (stub-ul și verificarea `NO_JWT`): rândurile de la comentariul `# 3)` până la capătul pasului, inclusiv ultimul `echo "OK: …"`.
+4. Verificare înainte de PR: `deno check --node-modules-dir=none supabase/functions/rag-normative/index.ts` trece; pe PR, jobul `poarta` verde.
+
+**Amândouă**: pașii 1–2 de la A și de la B, la `deno check` / `deno test` modificările de la A (rag-normative rămâne în `deno check`), iar pasul de gardă se șterge întreg (de la comentariul `# Securitate etapa 2 grup B` de deasupra lui până la ultimul `echo "OK: …"`).
+
+**Deploy și verificare după revenire**: „Deploy edge function (manual)” cu slug-ul (câte unul); apoi versiunea nouă în `list_edge_functions` (verify_jwt=true pentru extract-talon-ai, false pentru rag-normative) și POST cu cheia anon și corp `{}` → 401 `{"error":"Token invalid"}` (răspunsul v16/v22), nu „Neautorizat” / 410.
 
 ## Verificarea dinainte de ștergere (14.10, doar citire)
 - 0 apelanți în: repo (fără docs), cron.job, funcțiile din BD, sursele celor 37 de edge deployate fără repo, serverul AI, Terra, laptop. Excepție: `ofertare-seap-diag` apare doar ca nume în metadatele unui pachet Codex vechi de pe laptop.
