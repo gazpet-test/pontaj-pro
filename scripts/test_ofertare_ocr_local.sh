@@ -231,6 +231,21 @@ n=0; while IFS= read -r j; do
   [ -n "$id" ] || esec "dezacord real respins: $(ca service_role - "$(SD "$j")")"; n=$((n + 1))
 done <<<"$(printf '%s\n%s\n' "$DZ326" "$DZ326B")"
 ok "toate dezacordurile reale ale paginii 326 acceptate ($n: <br> în celulă, celulă goală, colspan, <sup> separate, &times;, structură diferită)"
+# fragmente care încep / se termină la un TABEL (sursa cu poziție null la capătul-tabel) — review Jakarinos r7
+TB1='<table><tr><td>1.</td><td>A</td></tr></table>'; TB2='<table><tr><td>2</td></tr></table>'
+nl=0; for pereche in "Titlu${TB1}Final|Titlu${TB1}${TB2}Final" "${TB1}Titlu Final|Titlu ${TB1} Final" "Valoare 1e3.5 m|Valoare 1e3.6 m"; do
+  xa=${pereche%%|*}; xb=${pereche#*|}
+  while IFS= read -r j; do
+    [ -n "$j" ] || continue; [ "$(printf '%s' "$j" | fx get tip)" = text ] || continue
+    for c in lighton mineru; do
+      exp=$(printf '%s' "$j" | fx get "citire_$c"); [ -n "$exp" ] || continue
+      raw=$([ $c = lighton ] && printf '%s' "$xa" || printf '%s' "$xb")
+      got=$(q "SELECT coalesce(public.fn_ofertare_ocr_literal('$(sq "$(fx seg "$raw")")', '$(sq "$(printf '%s' "$j" | fx get "sursa.$c")")'), '<NULL>')")
+      [ "$got" = "$exp" ] || esec "literal($c) pentru «$raw»: așteptat «$exp», primit «$got»"; nl=$((nl + 1))
+    done
+  done <<<"$(fx dez 330 0 "$xa" "$xb")"
+done
+[ "$nl" -ge 4 ] || esec "prea puține fragmente verificate ($nl)"; ok "fragmente la marginea unui tabel / după exponent refăcute exact ($nl)"
 D1=$(ca service_role - "$(SD "$DZ325")->>'id'"); HS1=$(q "SELECT item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE id=$D1")
 [ -n "$D1" ] || esec "dezacord valid"; ok "dezacord valid 325 (id $D1)"
 asteapta "dezacord: idempotent" "$(ca service_role - "$(SD "$DZ325")->>'deja'")" true

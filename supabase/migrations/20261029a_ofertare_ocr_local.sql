@@ -764,58 +764,67 @@ BEGIN
 END $f$;
 
 
--- Granița de token la poziția i (0..length, între caracterul i și i+1), după tokenizarea din scripts/ocr_local/compare.py
--- (TOKEN = NUM | litere | orice alt caracter nespațiu; NUM = [-+±−]?[.,]?[0-9]+([.,][0-9]+)*([eE][-+]?[0-9]+)?[%‰]?). Fals DOAR
--- în interiorul unui token: între cifre, între litere, în interiorul unui număr (separator, semn, exponent, procent). Testată în
--- harness pe tabelul de adevăr generat din TOKEN-ul Python. EXECUTE pentru nimeni (internă).
+-- Granița de token la poziția i (0..length, între caracterul i și i+1): fals DOAR dacă i cade STRICT în interiorul unui token al
+-- tokenizării din scripts/ocr_local/compare.py (TOKEN = NUM | litere | orice alt caracter nespațiu, NUM pe [0-9]). Tokenizarea se
+-- face pe TOT prefixul (regexp_instr de la stânga la dreapta), nu din vecini: „1e3.5” = „1e3” + „.5” (review Jakarinos r7). În ARE
+-- alternanța e lacomă (cel mai lung la cea mai din stânga poziție) = prima alternativă din Python, fiindcă NUM / litere / un caracter
+-- încep cu clase disjuncte și NUM lacom e cel mai lung. Testată în harness pe tabelul de adevăr din TOKEN-ul Python. Internă.
 CREATE FUNCTION public.fn_ofertare_ocr_granita(p text, i integer)
 RETURNS boolean LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE p1 text; p2 text; n1 text; n2 text; n3 text;
+DECLARE v_pos int := 1; v_s int; v_e int;
+        c_tok constant text := '[-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?|[[:alpha:]]+|[^[:space:]]';
 BEGIN
   IF p IS NULL OR i IS NULL OR i < 0 OR i > length(p) THEN RETURN false; END IF;
   IF i = 0 OR i = length(p) THEN RETURN true; END IF;
-  p1 := substr(p, i, 1); p2 := CASE WHEN i >= 2 THEN substr(p, i - 1, 1) ELSE '' END;
-  n1 := substr(p, i + 1, 1); n2 := substr(p, i + 2, 1); n3 := substr(p, i + 3, 1);
-  RETURN NOT (
-       (p1 ~ '^[0-9]$' AND n1 ~ '^[0-9]$')                                                   -- 12
-    OR (p1 ~ '^[[:alpha:]]$' AND n1 ~ '^[[:alpha:]]$')                                       -- ab
-    OR (p1 ~ '^[0-9]$' AND n1 ~ '^[.,]$' AND n2 ~ '^[0-9]$')                                 -- 1|.5
-    OR (p1 ~ '^[.,]$' AND n1 ~ '^[0-9]$')                                                    -- .|5 (separatorul începe / continuă numărul)
-    OR (p1 ~ '^[0-9]$' AND n1 ~ '^[%‰]$')                                                    -- 5|%
-    OR (p1 ~ '^[-+±−]$' AND (n1 ~ '^[0-9]$' OR (n1 ~ '^[.,]$' AND n2 ~ '^[0-9]$')))          -- -|5, +|.5
-    OR (p1 ~ '^[0-9]$' AND n1 ~ '^[eE]$' AND (n2 ~ '^[0-9]$' OR (n2 ~ '^[-+]$' AND n3 ~ '^[0-9]$')))  -- 1|e3, 1|e-3
-    OR (p1 ~ '^[eE]$' AND p2 ~ '^[0-9]$' AND (n1 ~ '^[0-9]$' OR (n1 ~ '^[-+]$' AND n2 ~ '^[0-9]$'))));  -- 1e|3, 1e|-3
+  LOOP
+    v_s := regexp_instr(p, c_tok, v_pos);            -- începutul tokenului (1-based), 0 = nu mai sunt
+    IF v_s = 0 OR v_s - 1 >= i THEN RETURN true; END IF;
+    v_e := regexp_instr(p, c_tok, v_pos, 1, 1);      -- poziția de după token (1-based) ⇒ tokenul ocupă [v_s - 1, v_e - 1) 0-based
+    IF v_e - 1 > i THEN RETURN false; END IF;        -- v_s - 1 < i < v_e - 1: în interiorul tokenului
+    v_pos := v_e;
+  END LOOP;
 END $f$;
 
 -- Fragmentul refăcut din segmentele unei citiri după sursa declarată {seg:[i1,i2], start, end} — aceeași regulă ca compare.literal:
--- un segment → s[start:end]; mai multe → bucata de la start, segmentele întregi dintre ele (tabel → ⟦tabel⟧), bucata până la end,
--- unite cu „\n”. NULL dacă sursa e invalidă, cade pe spațiu sau taie un token. EXECUTE pentru nimeni (internă).
+-- un singur segment text → s[start:end]; altfel bucata de la start, segmentele dintre (tabel → ⟦tabel⟧), bucata până la end, unite
+-- cu „\n”. Un capăt pe un TABEL are poziția null (tokenul tabelului nu are offset, review Jakarinos r7); un capăt pe text are poziție
+-- numerică pe graniță de token, nu pe spațiu. NULL dacă sursa e invalidă. EXECUTE pentru nimeni (internă).
 CREATE FUNCTION public.fn_ofertare_ocr_literal(p_segs jsonb, p_s jsonb)
 RETURNS text LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE i1 int; i2 int; a int; b int; t1 text; t2 text; v text[] := '{}'; si int;
+DECLARE i1 int; i2 int; a int; b int; t1 text; t2 text; v text[] := '{}'; si int; k1 text; k2 text;
 BEGIN
-  IF jsonb_typeof(p_segs) IS DISTINCT FROM 'array' OR jsonb_typeof(p_s) IS DISTINCT FROM 'object' OR jsonb_typeof(p_s->'seg') IS DISTINCT FROM 'array'
-     OR jsonb_typeof(p_s->'start') IS DISTINCT FROM 'number' OR jsonb_typeof(p_s->'end') IS DISTINCT FROM 'number' THEN
+  IF jsonb_typeof(p_segs) IS DISTINCT FROM 'array' OR jsonb_typeof(p_s) IS DISTINCT FROM 'object' OR jsonb_typeof(p_s->'seg') IS DISTINCT FROM 'array' THEN
     RETURN NULL;
   END IF;
   IF jsonb_array_length(p_s->'seg') <> 2 THEN RETURN NULL; END IF;
-  IF jsonb_typeof(p_s->'seg'->0) <> 'number' OR jsonb_typeof(p_s->'seg'->1) <> 'number' OR (p_s->'seg'->>0) !~ '^[0-9]{1,5}$'
-     OR (p_s->'seg'->>1) !~ '^[0-9]{1,5}$' OR (p_s->>'start') !~ '^[0-9]{1,6}$' OR (p_s->>'end') !~ '^[0-9]{1,6}$' THEN
+  IF jsonb_typeof(p_s->'seg'->0) <> 'number' OR jsonb_typeof(p_s->'seg'->1) <> 'number'
+     OR (p_s->'seg'->>0) !~ '^[0-9]{1,5}$' OR (p_s->'seg'->>1) !~ '^[0-9]{1,5}$' THEN
     RETURN NULL;
   END IF;
-  i1 := (p_s->'seg'->>0)::int; i2 := (p_s->'seg'->>1)::int; a := (p_s->>'start')::int; b := (p_s->>'end')::int;
+  i1 := (p_s->'seg'->>0)::int; i2 := (p_s->'seg'->>1)::int;
   IF i1 > i2 OR i2 >= jsonb_array_length(p_segs) THEN RETURN NULL; END IF;
-  IF p_segs->i1->>0 IS DISTINCT FROM 'text' OR p_segs->i2->>0 IS DISTINCT FROM 'text' THEN RETURN NULL; END IF;
-  t1 := p_segs->i1->>1; t2 := p_segs->i2->>1;
-  IF t1 IS NULL OR t2 IS NULL OR a >= length(t1) OR b < 1 OR b > length(t2) OR (i1 = i2 AND a >= b) THEN RETURN NULL; END IF;
-  -- începutul / sfârșitul sunt începutul / sfârșitul unui token (nu spațiu, nu în interiorul unui număr sau cuvânt)
-  IF substr(t1, a + 1, 1) ~ '[[:space:]]' OR substr(t2, b, 1) ~ '[[:space:]]'
-     OR NOT public.fn_ofertare_ocr_granita(t1, a) OR NOT public.fn_ofertare_ocr_granita(t2, b) THEN
+  k1 := p_segs->i1->>0; k2 := p_segs->i2->>0;
+  IF k1 IS NULL OR k2 IS NULL OR k1 NOT IN ('text', 'table') OR k2 NOT IN ('text', 'table') THEN RETURN NULL; END IF;
+  -- capăt pe tabel ⇔ poziție null; capăt pe text ⇔ poziție numerică întreagă
+  IF (k1 = 'table') <> (coalesce(jsonb_typeof(p_s->'start'), 'null') = 'null') OR (k2 = 'table') <> (coalesce(jsonb_typeof(p_s->'end'), 'null') = 'null') THEN
     RETURN NULL;
   END IF;
-  IF i1 = i2 THEN RETURN substr(t1, a + 1, b - a); END IF;
+  IF k1 = 'text' THEN
+    IF jsonb_typeof(p_s->'start') <> 'number' OR (p_s->>'start') !~ '^[0-9]{1,6}$' THEN RETURN NULL; END IF;
+    a := (p_s->>'start')::int; t1 := p_segs->i1->>1;
+    IF t1 IS NULL OR a >= length(t1) OR substr(t1, a + 1, 1) ~ '[[:space:]]' OR NOT public.fn_ofertare_ocr_granita(t1, a) THEN RETURN NULL; END IF;
+  END IF;
+  IF k2 = 'text' THEN
+    IF jsonb_typeof(p_s->'end') <> 'number' OR (p_s->>'end') !~ '^[0-9]{1,6}$' THEN RETURN NULL; END IF;
+    b := (p_s->>'end')::int; t2 := p_segs->i2->>1;
+    IF t2 IS NULL OR b < 1 OR b > length(t2) OR substr(t2, b, 1) ~ '[[:space:]]' OR NOT public.fn_ofertare_ocr_granita(t2, b) THEN RETURN NULL; END IF;
+  END IF;
+  IF i1 = i2 AND k1 = 'text' THEN
+    IF a >= b THEN RETURN NULL; END IF;
+    RETURN substr(t1, a + 1, b - a);
+  END IF;
   FOR si IN i1..i2 LOOP
     v := v || CASE WHEN p_segs->si->>0 = 'text' THEN
                      CASE WHEN si = i1 THEN substr(p_segs->si->>1, a + 1) WHEN si = i2 THEN substr(p_segs->si->>1, 1, b) ELSE p_segs->si->>1 END

@@ -31,7 +31,8 @@ def setk(pairs):
 
 PROBE = ['Cantitate 10.5 m și 5 buc', '1e3 kg', '1e-3 / 1E+4', '5e', '5em', 'x-5', 'a.5', '5,.5', 'DN110', '10**2 + 3**2', '±0,5 ±.5',
          '−5', '5% 50‰ 5 %', 'abe3', '5.', '1,234.56', '+.5', 'e5', '5ee5', '--5', 'Țeavă PEHD', 'ăîâșț ĂÎÂȘȚ', 'x<5 si z>3', 'm^{2}',
-         'Dimensiune 10×2', '5-3', 'a_b', '1.2.3', '(5)', 'km/h', 'L=12,5m', 'e-5', '3e+', '0,056 mc', "it's 5'"]
+         'Dimensiune 10×2', '5-3', 'a_b', '1.2.3', '(5)', 'km/h', 'L=12,5m', 'e-5', '3e+', '0,056 mc', "it's 5'",
+         'Valoare 1e3.5 m', '1e3e5', '1e3,5%', '1.5e3.2', '1e3%5', '5%.5', '−1e-3.5e2', 'ab1e3cd', '2.5.e3']
 
 def granita():
     for s in PROBE:
@@ -44,5 +45,9 @@ if __name__ == '__main__':
     elif a[0] == 'dez': dez(int(a[1]), int(a[2]), a[3], a[4])
     elif a[0] == 'src': src(a[1], int(a[2]), a[3], int(a[4]), int(a[5]))
     elif a[0] == 'set': setk(a[1:])
+    elif a[0] == 'get':  # get CHEIE (JSON pe stdin): șirurile fără ghilimele, restul ca JSON
+        v = json.loads(sys.stdin.read())
+        for x in a[1].split('.'): v = v[x]
+        print(v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
     elif a[0] == 'granita': granita()
     else: sys.exit('comandă necunoscută')
