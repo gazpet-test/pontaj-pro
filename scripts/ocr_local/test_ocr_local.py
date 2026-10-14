@@ -281,6 +281,18 @@ class Comparare(unittest.TestCase):
         s, its = compare_band(BAND, tab('Tronson A'), OK, tab('Tronson B'), OK); self.assertGreaterEqual(len(its), 1)
         s, its = compare_band(BAND, 'x<b si z>3', OK, 'x 3', OK); self.assertGreaterEqual(len(its), 1)
         s, its = compare_band(BAND, 'x<sup>2+3</sup>', OK, 'x<sup>2</sup>+3', OK); self.assertGreaterEqual(len(its), 1)
+    def test_copilot_r5_colspan_invalid_si_img(self):
+        cell = lambda v: '<table><tr><td colspan="%s">Teava</td><td>5</td></tr></table>' % v
+        for x, y in (('2x', '2'), ('51', '200'), ('0', '1')):
+            s, its = compare_band(BAND, cell(x), OK, cell(y), OK); self.assertGreaterEqual(len(its), 1, (x, y))
+        s, its = compare_band(BAND, 'Conductă <img alt="DN100"/>', OK, 'Conductă <img alt="DN150"/>', OK); self.assertGreaterEqual(len(its), 1)
+    def test_jakarinos_r5_neinchise_barat_rowspan(self):
+        s, its = compare_band(BAND, '<table><tr><td>COD<td>5</table>', OK, '<table><tr><td>COD<td>7</table>', OK); self.assertGreaterEqual(len(its), 1)
+        for x, y in (('Cantitate <s>5</s> 7 m', 'Cantitate 5 7 m'), ('Cantitate ~~5~~ 7 m', 'Cantitate 5 7 m')):
+            s, its = compare_band(BAND, x, OK, y, OK); self.assertGreaterEqual(len(its), 1, (x, y))
+        cell = lambda k, v: '<table><tr><td %s="%s">Teava</td><td>5</td></tr></table>' % (k, v)
+        for k, x, y in (('rowspan', '0', '1'), ('colspan', '50', '51')):
+            s, its = compare_band(BAND, cell(k, x), OK, cell(k, y), OK); self.assertGreaterEqual(len(its), 1, (k, x, y))
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -403,6 +415,15 @@ class Reconciliere(unittest.TestCase):
     def test_structura_diferita_ales_lighton_pastreaza_tabelul(self):
         r, items, out = self._run('<table><tr><td>COD</td><td>mc</td><td>5</td></tr></table>', 'COD mc 5', [self.dec('ales_lighton')])
         self.assertFalse(r['pages'][0]['needs_human']); self.assertEqual(r['pages'][0]['text'], '| COD | mc | 5 |')
+    def test_structura_mixta_cu_valoare_diferita(self):
+        r, items, out = self._run('<table><tr><td>COD</td><td>mc</td><td>5</td></tr></table>', 'COD mc 7', [self.dec('ales_lighton'), self.dec('ales_mineru')])
+        self.assertTrue(r['pages'][0]['needs_human'])
+    def test_structura_ales_lighton_domina_restul(self):
+        r, items, out = self._run('<table><tr><td>COD</td><td>mc</td><td>5</td></tr></table>', 'COD m 5', [self.dec('ales_lighton'), self.dec('ales_mineru')])
+        self.assertEqual(len(items), 2); self.assertTrue(r['pages'][0]['needs_human'])
+        shutil.rmtree(out / 'reconciliere')
+        (out / 'dec.jsonl').write_text('\n'.join(json.dumps(dict({'id': it['id'], 'item_sha256': it['item_sha256']}, **self.dec('ales_lighton'))) for it in items), encoding='utf-8')
+        r = reconcile(out, out / 'dec.jsonl'); self.assertFalse(r['pages'][0]['needs_human']); self.assertEqual(r['pages'][0]['text'], '| COD | mc | 5 |')
     def test_validare_schema(self):
         v = lambda d: valid_decision(d, None, POLICY)
         self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))

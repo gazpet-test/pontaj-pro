@@ -16,12 +16,22 @@ BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu 
 SUPSUB = re.compile(r'<(sup|sub)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)  # exponent/indice = semantica: devin ^x / _x, nu dispar
 def supsub(s): return SUPSUB.sub(lambda m: ('^{' if m.group(1).lower() == 'sup' else '_{') + m.group(2) + '}', s)  # x^{2+3} != x^{2}+3
 # doar etichete HTML dintr-o lista inchisa, cu atribute bine formate: 'x<y si z>3' sau 'x < 5 si y > 3' raman text (review Jakarinos r3)
-TAG = re.compile(r'</?(?:p|br|hr|h[1-6]|div|span|b|strong|em|i|u|s|small|big|font|center|li|ul|ol|dl|dt|dd|thead|tbody|tfoot|tr|td|th|table|caption|colgroup|col|section|article|header|footer|blockquote|pre|code|a|img)'
+TAG = re.compile(r'</?(?:p|br|hr|h[1-6]|div|span|b|strong|em|i|u|small|big|font|center|li|ul|ol|dl|dt|dd|thead|tbody|tfoot|tr|td|th|table|caption|colgroup|col|section|article|header|footer|blockquote|pre|code|a)'
                  r'(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|\'[^\']*\'))*\s*/?>', re.I)
 TABLE_HTML = re.compile(r'<table\b.*?</table\s*>', re.I | re.S)
 ROW_HTML = re.compile(r'<tr\b.*?</tr\s*>', re.I | re.S)
 CELL_HTML = re.compile(r'<t[dh]\b([^>]*)>(.*?)</t[dh]\s*>', re.I | re.S)
-SPAN = re.compile(r'\b(colspan|rowspan)\s*=\s*["\']?(\d+)', re.I)
+SPAN = re.compile(r'\b(colspan|rowspan)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))', re.I)
+STRIKE = re.compile(r'<(s|del|strike)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)
+MD_STRIKE = re.compile(r'~~(?=\S)(.+?)(?<=\S)~~', re.S)
+def strike_marker(s):
+    # o valoare barata nu e text activ: devine marcaj comparat ⟦barat: ...⟧ (HTML <s>/<del>/<strike> si markdown ~~...~~)
+    return MD_STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(1), STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(2), s))
+IMG = re.compile(r'<img\b([^>]*)/?>', re.I)
+IMG_ATTR = re.compile(r'\b(alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.I)
+def img_marker(s):
+    # imaginea nu dispare: alt/title (substitutul textual) devin un marcaj comparat (review Copilot r5)
+    return IMG.sub(lambda m: ' ⟦img ' + ' '.join('%s=%s' % (k.lower(), a or b) for k, a, b in IMG_ATTR.findall(m.group(1))) + '⟧ ', s)
 CAPTION = re.compile(r'<caption\b[^>]*>(.*?)</caption\s*>', re.I | re.S)
 MD_SEP = re.compile(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$')
 CONTEXT = 6
@@ -31,7 +41,7 @@ TABLE_MARK = '⟦tabel⟧'
 def norm_word(t): return t.translate(CEDILLA)
 
 def clean_inline(s):
-    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = TAG.sub(' ', supsub(s)); s = BOLD.sub(r'\1', html.unescape(s))  # doar perechile **text** (bold markdown); un ** izolat ramane
+    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = TAG.sub(' ', img_marker(strike_marker(supsub(s)))); s = BOLD.sub(r'\1', html.unescape(s))  # doar perechile **text** (bold markdown); un ** izolat ramane
     return re.sub(r'\s+', ' ', s).strip()
 
 def html_rows(table):
@@ -41,10 +51,14 @@ def html_rows(table):
     for r in ROW_HTML.findall(table):
         row = []
         for attrs, body in CELL_HTML.findall(r):
-            spans = {k.lower(): int(v) for k, v in SPAN.findall(attrs)}
-            text = clean_inline(body)
+            text = clean_inline(body); spans = {}
+            for k, a, b, c in SPAN.findall(attrs):
+                v = (a or b or c).strip()
+                # doar intreg valid 1..50 se interpreteaza; orice altceva ('2x', '51', '0') ramane marcaj vizibil, nu se ghiceste
+                if re.fullmatch(r'\d+', v) and 1 <= int(v) <= 50: spans[k.lower()] = int(v)
+                else: text = (text + ' ⟦%s_invalid=%s⟧' % (k.lower(), v)).strip()
             if spans.get('rowspan', 1) > 1: text = (text + ' ⟦rowspan=%d⟧' % spans['rowspan']).strip()
-            row.append(text); row += [''] * (max(1, min(spans.get('colspan', 1), 50)) - 1)
+            row.append(text); row += [''] * (spans.get('colspan', 1) - 1)
         rows.append(row)
     return rows
 
@@ -61,7 +75,7 @@ def md_rows(lines):
 
 def plain(s):
     s = re.sub(r'<br\s*/?>|</p\s*>|</h\d\s*>|</li\s*>|</div\s*>', '\n', s, flags=re.I)
-    s = html.unescape(TAG.sub(' ', supsub(s)))
+    s = html.unescape(TAG.sub(' ', img_marker(strike_marker(supsub(s)))))
     s = BOLD.sub(r'\1', re.sub(r'^[ \t]*#{1,6}(?:[ \t]+|$)', '', s, flags=re.M))  # doar titlu markdown real ('# Titlu'); '#12', '##ABC' raman
     return re.sub(r'[ \t]+', ' ', s).strip()
 
@@ -71,7 +85,12 @@ def segments(raw):
     for m in TABLE_HTML.finditer(raw):
         out += _md_split(raw[pos:m.start()])
         for cap in CAPTION.findall(m.group(0)): out.append(('text', clean_inline(cap)))  # titlul tabelului (tronsonul) se compara
-        out.append(('table', html_rows(CAPTION.sub(' ', m.group(0))))); pos = m.end()
+        body = CAPTION.sub(' ', m.group(0)); rows = html_rows(body)
+        opens_td = len(re.findall(r'<t[dh]\b', body, re.I)); opens_tr = len(re.findall(r'<tr\b', body, re.I))
+        if opens_td != sum(len(CELL_HTML.findall(r)) for r in ROW_HTML.findall(body)) or opens_tr != len(ROW_HTML.findall(body)):
+            out.append(('text', '⟦tabel_neparsat⟧ ' + plain(re.sub(r'</?t[dhr]\b[^>]*>', ' | ', body, flags=re.I))))
+        else: out.append(('table', rows))
+        pos = m.end()
     out += _md_split(raw[pos:])
     return [s for s in out if (s[0] == 'table' and s[1]) or (s[0] == 'text' and s[1].strip())]
 

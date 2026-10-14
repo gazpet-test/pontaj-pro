@@ -105,6 +105,17 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 - `e_cantitate` = orice dezacord pe pagini `quantity_table`, inclusiv rândurile de tabel și cazul structură diferită.
 - Inserare după un tabel final → `needs_human` (fără excepție).
 
+## După review-ul Copilot r5 (14.10, fără P0)
+
+- Tabel vs text: decizia de structură domină — `ales_lighton` pe structură cere `ales_lighton` peste tot în bandă (rezultat =
+  citirea LightOn neschimbată), orice altă combinație = `needs_human`.
+- `colspan` / `rowspan`: doar întreg valid 1–50 se interpretează; orice altă valoare rămâne marcaj vizibil `⟦colspan_invalid=…⟧`.
+- `<img>` nu mai dispare: `alt` / `title` devin marcajul comparat `⟦img alt=…⟧`.
+- (Jakarinos r5) Tabel cu etichete neînchise → tot conținutul intră ca text marcat `⟦tabel_neparsat⟧` (comparat), nu se pierde;
+  text barat (`<s>`, `<del>`, `<strike>`, `~~…~~`) → marcaj `⟦barat: …⟧`, nu text activ; `rowspan="0"` / `colspan` > 50 = marcaj invalid.
+- **Recuperare:** dacă reconcilierea pică la mijloc rămâne `reconciliere.tmp/` și orice reluare e refuzată (intenționat). Omul
+  verifică ce e în el, îl șterge manual și rulează din nou `reconciliaza`.
+
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
 38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **84 de dezacorduri** (~2,2 pe bandă),
@@ -114,7 +125,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local -v` — 77 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local -v` — 81 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 
