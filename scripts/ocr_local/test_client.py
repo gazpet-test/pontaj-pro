@@ -51,7 +51,7 @@ class FakeEdge:
             self.stare = 'preluata'; return 200, {'ok': True, 'rezultat': {'rulare': {'id': 7, 'licitatie_id': 102, 'documente': self.documente, 'plafon_usd': 15}}}
         if op == 'plan':
             if self.plan is not None: return 409, {'error': 'Planul se pune o singură dată, în preluata'}
-            assert sorted((e['document_id'], e['pagina']) for e in a['plan']) == [(DOC, 1), (DOC, 2)]
+            assert sorted((e['document_id'], e['pagina']) for e in a['plan']) == sorted((x['document_id'], p) for x in self.documente for p in x['pagini'])
             self.plan = {(e['document_id'], e['pagina']): e for e in a['plan']}; return 200, {'ok': True, 'rezultat': {'ok': True}}
         if op == 'pagina':
             e = self.plan[(a['document_id'], a['pagina'])]
@@ -92,13 +92,13 @@ class FakeEdge:
             return 200, {'ok': True, 'rezultat': act}
         return 400, {'error': 'Operație necunoscută'}
 
-def scrie_citiri(rdir, text_a, text_b, ok_b=True):
+def scrie_citiri(rdir, text_a, text_b, ok_b=True, doc=DOC, mineru=True):
     from .plan import load_plan
-    d = rdir / ('d%d' % DOC); proto = RD.protocol()
-    for reader, ok in (('lighton', True), ('mineru', ok_b)):
+    d = rdir / ('d%d' % doc); proto = RD.protocol(); cititori = [('lighton', text_a, True)] + ([('mineru', text_b, ok_b)] if mineru else [])
+    for reader, _, ok in cititori:
         (d / ('read_%s.json' % reader)).write_text(json.dumps({'status': 'complete' if ok else 'stopped_no_retry'}))
     for b in load_plan(d)['bands']:
-        for reader, raw, ok in (('lighton', text_a, True), ('mineru', text_b, ok_b)):
+        for reader, raw, ok in cititori:
             o = d / ('page%04d' % b['page']) / b['id'] / reader; o.mkdir(parents=True, exist_ok=True)
             (o / 'raw.txt').write_bytes(raw.encode('utf-8'))
             (o / 'result.json').write_text(json.dumps({'ok': ok, 'reader': reader, 'protocol': proto['version'], 'weights_sha256': proto['readers'][reader]['weights_sha256'],
@@ -263,14 +263,47 @@ class Client(unittest.TestCase):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         self.edge.arbitru = lambda it: (402, {'error': 'Plafon atins', 'refuz': 'plafon'})
         with self.assertRaises(C.EdgeError): C.arbitreaza(rdir, self.edge)
-        self.assertFalse((rdir / ('d%d' % DOC) / 'blocate.jsonl').exists())
+        primul = self.edge.calls[-1][1]['item']['id']; self.edge.arbitru = FakeEdge(b'').arbitru
+        self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata')  # refuzul dinaintea platii NU blocheaza: item-ul se arbitreaza
+        self.assertEqual([c['item']['id'] for f, c in self.edge.calls if f == 'ofertare-ocr-arbitreaza'].count(primul), 2)
+        self.assertFalse(self.edge.ops('needs_human'))
+    def test_cadere_dupa_plata_inainte_de_marcaj_fara_a_doua_plata(self):
+        # review r2 Jakarinos P1-1: procesul cade dupa apelul platit, inainte de orice scriere locala -> jurnalul are „start” fara „gata”
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        def plata_apoi_cadere(it): raise ConnectionResetError('procesul moare dupa plata')
+        self.edge.arbitru = plata_apoi_cadere
+        with self.assertRaises(ConnectionResetError): C.arbitreaza(rdir, self.edge)
+        primul = self.edge.calls[-1][1]['item']['id']; self.edge.arbitru = FakeEdge(b'').arbitru
+        self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata')
+        self.assertEqual([c['item']['id'] for f, c in self.edge.calls if f == 'ofertare-ocr-arbitreaza'].count(primul), 1)
+        self.assertEqual(len(self.edge.ops('needs_human')), 1)
+    def test_necunoscutele_raman_in_prag_dupa_conversie_si_reluare(self):
+        # review r2 Copilot P1-2 / Jakarinos P1-2: un apel cu rezultat necunoscut, convertit la om, ramane needs_human la prag dupa reluare
+        rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
+        self.edge.arbitru = lambda it: (502, {'error': 'API indisponibil', 'rezervare_id': 9})
+        with self.assertRaises(C.EdgeError): C.arbitreaza(rdir, self.edge, minim=3)
+        self.edge.arbitru = FakeEdge(b'').arbitru
+        a = C.arbitreaza(rdir, self.edge, minim=3)  # 1 necunoscut (convertit la om) + 2 decizii bune = 1/3 > 15% -> oprita
+        self.assertEqual((a['stare'], a['necunoscute'], self.edge.stare), ('oprita', 1, 'oprita'))
+    def test_preia_intrerupt_nu_adopta_rulare_orfana_mai_veche(self):
+        # review r2 Copilot P1-1: o rulare preluata fara plan EXISTA deja (orfana); preluarea noua cade INAINTE de commit -> nu o adopta
+        self.edge.stare = 'preluata'; C.save(self.work / 'preia_in_curs.json', {'la': 0, 'active_inainte': [7]})
+        self.assertEqual(C.preia(self.work, self.edge)['rulare'], None); self.assertFalse((self.work / 'r7').exists())
+    def test_document_neinceput_dupa_oprirea_cititorului_intra_in_prag(self):
+        # review r2 Jakarinos P2: `erp citeste` se opreste la primul document neterminat -> documentul urmator n-are stare; nu e refuz
+        self.edge.documente = [{'document_id': DOC, 'pagini': [1, 2]}, {'document_id': 1248, 'pagini': [1]}]
+        r = C.preia(self.work, self.edge); rdir = pathlib.Path(r['dir']); C.descarca(rdir, self.edge); C.foaie(rdir)
+        for doc in (DOC, 1248): (rdir / 'orientare' / ('%d.json' % doc)).write_text('{"1": 0}', encoding='utf-8')
+        C.plan_rulare(rdir, self.edge)
+        scrie_citiri(rdir, 'a b', 'a b', ok_b=False); scrie_citiri(rdir, 'a b', '', doc=1248, mineru=False)
+        out = C.incarca_citiri(rdir, self.edge); self.assertEqual((out['stare'], self.edge.stare), ('oprita', 'oprita'))
     def test_rezervare_id_in_mesaj(self):
         self.assertIn('rezervare_id=5', str(C.EdgeError('x', 502, {'error': 'API indisponibil', 'rezervare_id': 5})))
     def test_needs_human_deja_in_bd_devine_pierdut(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, '<table><tr><td>1</td><td>A</td></tr></table>', '1 A')
         C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         self.edge.om = set(json.loads((rdir / ('d%d' % DOC) / 'dezacorduri_bd.json').read_text()).values())  # BD le are deja
-        a = C.arbitreaza(rdir, self.edge); self.assertGreaterEqual(a['pierdute'], 1); self.assertEqual(a['stare'], 'arbitrata')
+        a = C.arbitreaza(rdir, self.edge); self.assertTrue(any(x.get('sursa') == 'om' for x in C._jsonl(rdir / ('d%d' % DOC) / 'pierdute.jsonl'))); self.assertEqual(a['stare'], 'arbitrata')
     def test_garda_peste_prag_opreste(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'a b', 'a b', ok_b=False)
         r = C.incarca_citiri(rdir, self.edge); self.assertEqual(r['stare'], 'oprita'); self.assertEqual(self.edge.stare, 'oprita')
@@ -289,7 +322,7 @@ class Client(unittest.TestCase):
     def test_arbitrat_in_bd_fara_decizie_locala_devine_pierdut(self):
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)
         self.edge.arbitru = lambda it: (409, {'error': 'Dezacord deja arbitrat', 'refuz': 'arbitrat'})
-        a = C.arbitreaza(rdir, self.edge); self.assertEqual(a['pierdute'], a['claude'] + a['pierdute'])
+        a = C.arbitreaza(rdir, self.edge); self.assertEqual((a['claude'], a['pierdute_claude'] > 0), (0, True))
         f = C.reconciliaza_rulare(rdir, self.edge); self.assertEqual(f['needs_human'], 1)  # fail-closed: fara decizie locala = needs_human
     def test_structura_tabele_merge_la_om_fara_ai(self):
         rdir = self.pana_la_plan()
