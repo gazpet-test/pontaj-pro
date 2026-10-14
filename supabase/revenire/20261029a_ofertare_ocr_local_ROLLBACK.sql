@@ -60,7 +60,7 @@ BEGIN
   DROP FUNCTION public.fn_ofertare_ocr_stare(bigint, text, text);
   DROP FUNCTION public.fn_ofertare_ocr_pdf_rezerva(bigint, bigint);
   DROP FUNCTION public.fn_ofertare_ocr_pdf_final(bigint, text);
-  DROP FUNCTION public.fn_ofertare_ocr_scrie_pagina(bigint, bigint, integer, text, text, text, text, text, text, jsonb);
+  DROP FUNCTION public.fn_ofertare_ocr_scrie_pagina(bigint, bigint, integer, smallint, text, text, text, text, text, text, jsonb);
   DROP FUNCTION public.fn_ofertare_ocr_scrie_dezacord(bigint, jsonb);
   DROP FUNCTION public.fn_ofertare_ocr_cost_rezerva(bigint, numeric);
   DROP FUNCTION public.fn_ofertare_ocr_scrie_arbitraj(bigint, jsonb);

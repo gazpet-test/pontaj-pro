@@ -83,6 +83,8 @@ CREATE TABLE public.ofertare_ocr_pagini (
   rulare_id     bigint NOT NULL REFERENCES public.ofertare_ocr_rulari(id),
   document_id   bigint NOT NULL REFERENCES public.ofertare_documente_atribuire(id),
   pagina        integer NOT NULL CHECK (pagina BETWEEN 1 AND 9999),
+  -- banda din planul pipeline-ului (pNNNN_bK): citirile sunt pe bandă; textul reconciliat e pe pagină (banda NULL); exclus = banda 0
+  banda         smallint CHECK (banda IS NULL OR banda BETWEEN 0 AND 99),
   cititor       text NOT NULL CHECK (cititor IN ('lighton', 'mineru', 'reconciliat')),
   text          text NOT NULL CHECK (length(text) <= 200000),
   -- exclus = pagina rutată în afara citirii de plan (planșă, formular, orientare nerezolvată...): text gol, motivul în garda
@@ -93,13 +95,15 @@ CREATE TABLE public.ofertare_ocr_pagini (
   image_sha256  text CHECK (image_sha256 IS NULL OR image_sha256 ~ '^[0-9a-f]{64}$'),
   garda         jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(garda) = 'object'),
   creat_la      timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (rulare_id, document_id, pagina, cititor),
+  CHECK ((cititor = 'reconciliat') = (banda IS NULL)),
+  CHECK (stare <> 'exclus' OR banda = 0),
   -- coalesce: fără cheie, jsonb_typeof dă NULL și un CHECK NULL ar trece (fail-closed explicit)
   CHECK (stare <> 'exclus' OR (text = '' AND coalesce(jsonb_typeof(garda->'motiv_excludere') = 'string'
-                                AND btrim(garda->>'motiv_excludere') <> '' AND length(garda->>'motiv_excludere') <= 200, false))),
+                                AND garda->>'motiv_excludere' ~ '[^[:space:]]' AND length(garda->>'motiv_excludere') <= 200, false))),
   CHECK ((cititor = 'reconciliat' AND stare IN ('reconciliat', 'needs_human')) OR (cititor <> 'reconciliat' AND stare IN ('citit', 'incomplet', 'exclus'))),
   CHECK (cititor = 'reconciliat' OR stare = 'exclus' OR image_sha256 IS NOT NULL)
 );
+CREATE UNIQUE INDEX ofertare_ocr_pagini_cheie ON public.ofertare_ocr_pagini (rulare_id, document_id, pagina, cititor, (coalesce(banda, -1)));
 CREATE INDEX ofertare_ocr_pagini_doc_idx ON public.ofertare_ocr_pagini (document_id, pagina);
 
 CREATE TABLE public.ofertare_ocr_dezacorduri (
@@ -107,7 +111,8 @@ CREATE TABLE public.ofertare_ocr_dezacorduri (
   rulare_id           bigint NOT NULL REFERENCES public.ofertare_ocr_rulari(id),
   document_id         bigint NOT NULL REFERENCES public.ofertare_documente_atribuire(id),
   pagina              integer NOT NULL CHECK (pagina BETWEEN 1 AND 9999),
-  item_id             text NOT NULL CHECK (item_id ~ '^p[0-9]{4}_b[0-9]{1,3}_[a-z0-9_]{1,30}$'),
+  banda               smallint NOT NULL CHECK (banda BETWEEN 0 AND 99),
+  item_id             text NOT NULL CHECK (item_id ~ '^p[0-9]{4}_b[0-9]{1,2}_[a-z0-9_]{1,30}$'),
   item_sha256         text NOT NULL CHECK (item_sha256 ~ '^[0-9a-f]{64}$'),
   tip                 text NOT NULL CHECK (tip IN ('text', 'rand_tabel', 'rand_lipsa_lighton', 'rand_lipsa_mineru', 'banda_intreaga', 'structura_tabele')),
   citire_lighton      text NOT NULL CHECK (length(citire_lighton) <= 50000),
@@ -120,7 +125,8 @@ CREATE TABLE public.ofertare_ocr_dezacorduri (
   creat_la            timestamptz NOT NULL DEFAULT now(),
   UNIQUE (rulare_id, document_id, item_id),
   UNIQUE (rulare_id, document_id, item_sha256),
-  CHECK (substring(item_id FROM '^p([0-9]{4})_')::int = pagina)
+  CHECK (substring(item_id FROM '^p([0-9]{4})_')::int = pagina),
+  CHECK (substring(item_id FROM '^p[0-9]{4}_b([0-9]{1,2})_')::int = banda)
 );
 
 CREATE TABLE public.ofertare_ocr_rezervari (
@@ -328,13 +334,30 @@ BEGIN
   IF p_stare = 'citita' THEN
     SELECT count(*) INTO v_lipsa
       FROM jsonb_array_elements(r.documente) x CROSS JOIN LATERAL jsonb_array_elements_text(x->'pagini') pg
-     WHERE NOT EXISTS (
-       SELECT 1 FROM public.ofertare_ocr_pagini l JOIN public.ofertare_ocr_pagini m
-           ON m.rulare_id = l.rulare_id AND m.document_id = l.document_id AND m.pagina = l.pagina AND m.cititor = 'mineru'
-        WHERE l.rulare_id = r.id AND l.document_id = (x->>'document_id')::bigint AND l.pagina = pg::int AND l.cititor = 'lighton'
-          AND ((l.stare = 'exclus' AND m.stare = 'exclus' AND l.garda->>'motiv_excludere' = m.garda->>'motiv_excludere')
-               OR (l.stare <> 'exclus' AND m.stare <> 'exclus' AND l.image_sha256 IS NOT NULL AND l.image_sha256 = m.image_sha256)));
-    -- fiecare pagină: ambii excluși SAU ambii citiți din ACEEAȘI imagine (review Copilot r3 / Jakarinos r3)
+     WHERE NOT (
+       -- (a) pagina exclusă: exact un rând la fiecare cititor, banda 0, exclus, același motiv
+       ((SELECT count(*) FROM public.ofertare_ocr_pagini p WHERE p.rulare_id = r.id AND p.document_id = (x->>'document_id')::bigint
+           AND p.pagina = pg::int AND p.cititor = 'lighton') = 1
+        AND (SELECT count(*) FROM public.ofertare_ocr_pagini p WHERE p.rulare_id = r.id AND p.document_id = (x->>'document_id')::bigint
+           AND p.pagina = pg::int AND p.cititor = 'mineru') = 1
+        AND EXISTS (SELECT 1 FROM public.ofertare_ocr_pagini l JOIN public.ofertare_ocr_pagini m
+                       ON m.rulare_id = l.rulare_id AND m.document_id = l.document_id AND m.pagina = l.pagina AND m.cititor = 'mineru'
+                    WHERE l.rulare_id = r.id AND l.document_id = (x->>'document_id')::bigint AND l.pagina = pg::int AND l.cititor = 'lighton'
+                      AND l.stare = 'exclus' AND m.stare = 'exclus' AND l.garda->>'motiv_excludere' = m.garda->>'motiv_excludere'))
+       OR
+       -- (b) pagina citită: cel puțin o bandă, nicio excludere, aceleași benzi la ambii cititori, fiecare bandă pe ACEEAȘI imagine
+       (EXISTS (SELECT 1 FROM public.ofertare_ocr_pagini p WHERE p.rulare_id = r.id AND p.document_id = (x->>'document_id')::bigint
+                  AND p.pagina = pg::int AND p.cititor = 'lighton')
+        AND NOT EXISTS (SELECT 1 FROM public.ofertare_ocr_pagini p WHERE p.rulare_id = r.id AND p.document_id = (x->>'document_id')::bigint
+                  AND p.pagina = pg::int AND p.cititor IN ('lighton', 'mineru') AND p.stare = 'exclus')
+        AND NOT EXISTS (
+          SELECT 1 FROM public.ofertare_ocr_pagini l
+           WHERE l.rulare_id = r.id AND l.document_id = (x->>'document_id')::bigint AND l.pagina = pg::int AND l.cititor IN ('lighton', 'mineru')
+             AND NOT EXISTS (SELECT 1 FROM public.ofertare_ocr_pagini m
+                              WHERE m.rulare_id = l.rulare_id AND m.document_id = l.document_id AND m.pagina = l.pagina AND m.banda = l.banda
+                                AND m.cititor = CASE l.cititor WHEN 'lighton' THEN 'mineru' ELSE 'lighton' END
+                                AND l.image_sha256 IS NOT NULL AND m.image_sha256 = l.image_sha256))));
+    -- fiecare pagină: ambii excluși (același motiv) SAU aceleași benzi, fiecare din ACEEAȘI imagine (review Copilot r3-r5)
     IF v_lipsa > 0 THEN RAISE EXCEPTION '% pagini înghețate nu au o pereche comparabilă (ambele citiri, aceeași imagine, sau ambele excluse)', v_lipsa USING ERRCODE = '55000'; END IF;
   END IF;
   IF p_stare = 'arbitrata' THEN
@@ -354,7 +377,7 @@ BEGIN
     SELECT count(*) INTO v_lipsa
       FROM jsonb_array_elements(r.documente) x CROSS JOIN LATERAL jsonb_array_elements_text(x->'pagini') pg
      WHERE NOT EXISTS (SELECT 1 FROM public.ofertare_ocr_pagini p WHERE p.rulare_id = r.id AND p.document_id = (x->>'document_id')::bigint
-                          AND p.pagina = pg::int AND p.cititor = 'lighton' AND p.stare = 'exclus')
+                          AND p.pagina = pg::int AND p.cititor = 'lighton' AND p.stare = 'exclus' AND p.banda = 0)
        AND NOT EXISTS (SELECT 1 FROM public.ofertare_ocr_pagini p WHERE p.rulare_id = r.id AND p.document_id = (x->>'document_id')::bigint
                           AND p.pagina = pg::int AND p.cititor = 'reconciliat');
     IF v_lipsa > 0 THEN RAISE EXCEPTION '% pagini fără rezultat reconciliat' , v_lipsa USING ERRCODE = '55000'; END IF;
@@ -407,10 +430,10 @@ BEGIN
   RETURN v_n = 1;
 END $f$;
 
--- Pagina citită: doar în rularea potrivită, doar pagini înghețate, sha verificat, imaginea obligatorie pentru cititori (exclus = text
--- gol + motiv în garda). Idempotent și la reîncercare CONCURENTĂ (ON CONFLICT DO NOTHING + recitire); „deja” doar dacă TOATE
--- câmpurile imuabile coincid, altfel conflict append-only.
-CREATE FUNCTION public.fn_ofertare_ocr_scrie_pagina(p_rulare_id bigint, p_document_id bigint, p_pagina integer, p_cititor text,
+-- Citirea unei BENZI (lighton / mineru; exclus = banda 0, text gol + motiv) sau textul reconciliat al unei PAGINI (banda NULL):
+-- doar în rularea potrivită, doar pagini înghețate, sha verificat, imaginea obligatorie pentru citiri. Idempotent și la reîncercare
+-- CONCURENTĂ (ON CONFLICT DO NOTHING + recitire); „deja” doar dacă TOATE câmpurile imuabile coincid, altfel conflict append-only.
+CREATE FUNCTION public.fn_ofertare_ocr_scrie_pagina(p_rulare_id bigint, p_document_id bigint, p_pagina integer, p_banda smallint, p_cititor text,
                                                     p_text text, p_stare text, p_model_rev text, p_raw_sha256 text,
                                                     p_image_sha256 text, p_garda jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
@@ -422,7 +445,6 @@ BEGIN
   IF NOT ((p_cititor IN ('lighton', 'mineru') AND r.stare = 'preluata') OR (p_cititor = 'reconciliat' AND r.stare = 'arbitrata')) THEN
     RAISE EXCEPTION 'Citirile se scriu doar în preluata, textul reconciliat doar în arbitrata (acum: %)', r.stare USING ERRCODE = '55000';
   END IF;
-  IF (p_stare = 'exclus') AND p_cititor = 'reconciliat' THEN RAISE EXCEPTION 'Textul reconciliat nu poate fi exclus' USING ERRCODE = '22023'; END IF;
   IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r.documente) x
                   WHERE (x->>'document_id')::bigint = p_document_id AND (x->'pagini') @> to_jsonb(p_pagina)) THEN
     RAISE EXCEPTION 'Pagina % a documentului % nu e în rulare', p_pagina, p_document_id USING ERRCODE = '22023';
@@ -430,80 +452,86 @@ BEGIN
   IF p_text IS NULL OR p_raw_sha256 IS NULL OR encode(sha256(convert_to(p_text, 'UTF8')), 'hex') <> p_raw_sha256 THEN
     RAISE EXCEPTION 'raw_sha256 nu corespunde textului' USING ERRCODE = '22023';
   END IF;
-  INSERT INTO public.ofertare_ocr_pagini (rulare_id, document_id, pagina, cititor, text, stare, protocol, model_rev, raw_sha256, image_sha256, garda)
-  VALUES (p_rulare_id, p_document_id, p_pagina, p_cititor, p_text, p_stare, r.protocol, p_model_rev, p_raw_sha256, p_image_sha256, v_garda)
-  ON CONFLICT (rulare_id, document_id, pagina, cititor) DO NOTHING RETURNING id INTO v_id;
+  INSERT INTO public.ofertare_ocr_pagini (rulare_id, document_id, pagina, banda, cititor, text, stare, protocol, model_rev, raw_sha256, image_sha256, garda)
+  VALUES (p_rulare_id, p_document_id, p_pagina, p_banda, p_cititor, p_text, p_stare, r.protocol, p_model_rev, p_raw_sha256, p_image_sha256, v_garda)
+  ON CONFLICT (rulare_id, document_id, pagina, cititor, (coalesce(banda, -1))) DO NOTHING RETURNING id INTO v_id;
   IF v_id IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'deja', false, 'id', v_id); END IF;
   SELECT * INTO v_old FROM public.ofertare_ocr_pagini
-   WHERE rulare_id = p_rulare_id AND document_id = p_document_id AND pagina = p_pagina AND cititor = p_cititor;
+   WHERE rulare_id = p_rulare_id AND document_id = p_document_id AND pagina = p_pagina AND cititor = p_cititor
+     AND coalesce(banda, -1) = coalesce(p_banda, -1);
   IF v_old.text = p_text AND v_old.raw_sha256 = p_raw_sha256 AND v_old.stare = p_stare AND v_old.model_rev = p_model_rev
      AND v_old.image_sha256 IS NOT DISTINCT FROM p_image_sha256 AND v_old.garda = v_garda THEN
     RETURN jsonb_build_object('ok', true, 'deja', true, 'id', v_old.id);
   END IF;
-  RAISE EXCEPTION 'Pagina există deja cu alt conținut (append-only)' USING ERRCODE = '23505';
+  RAISE EXCEPTION 'Pagina / banda există deja cu alt conținut (append-only)' USING ERRCODE = '23505';
 END $f$;
 
--- Dezacordul canonic (din scripts/ocr_local compara): doar în citita, înainte de marcajul „comparație încheiată”, doar dacă paginile
--- AMBILOR cititori există, nu sunt excluse și provin din ACEEAȘI imagine (image_sha256 egal). Proveniența fragmentelor: fiecare
--- număr și fiecare cuvânt din citire_lighton / citire_mineru trebuie să existe în textul brut al cititorului respectiv (numerele
--- delimitate, ca „56” să nu treacă din „0.056”; marcajele pipeline-ului ⟦…⟧ nu se verifică). Idempotent pe conținut identic.
+-- Dezacordul canonic (din scripts/ocr_local compara), pe BANDA din item_id (pNNNN_bK): doar în citita, înainte de marcajul
+-- „comparație încheiată”, doar dacă banda există la AMBII cititori, ne-exclusă și din ACEEAȘI imagine. Proveniența, pe forma
+-- canonică a citirii BENZII: (1) fiecare bucată (rând de text / celulă) e subșir; (2) la rândurile de tabel, celulele nevide alcătuiesc
+-- EXACT un rând întreg al sursei (granițele de rând sunt păstrate de forma canonică); (3) fiecare număr (semn, separator, exponent,
+-- procent) apare delimitat. banda_intreaga = exact citirile brute ale benzii. Idempotent pe conținut identic.
 CREATE FUNCTION public.fn_ofertare_ocr_scrie_dezacord(p_rulare_id bigint, p_dezacord jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
-DECLARE r record; pl record; pm record; v_doc bigint; v_pag int; v_id bigint; v_old record; a jsonb := p_dezacord; v_tok text; v_frag text; v_raw text; v_row text; k int;
+DECLARE r record; pl record; pm record; v_doc bigint; v_pag int; v_banda int; v_id bigint; v_old record; a jsonb := p_dezacord;
+        v_tok text; v_frag text; v_frag0 text; v_raw text; v_row text; v_linii text[]; k int;
 BEGIN
   SELECT * INTO r FROM public.ofertare_ocr_rulari WHERE id = p_rulare_id FOR SHARE;
   IF NOT FOUND OR r.stare <> 'citita' OR r.comparatie_nr IS NOT NULL THEN
     RAISE EXCEPTION 'Dezacordurile se scriu doar în citita, înainte de încheierea comparației' USING ERRCODE = '55000';
   END IF;
   IF jsonb_typeof(a) <> 'object' OR jsonb_typeof(a->'e_cantitate') <> 'boolean' OR jsonb_typeof(a->'anomalie_separator') <> 'boolean'
-     OR jsonb_typeof(a->'citire_lighton') <> 'string' OR jsonb_typeof(a->'citire_mineru') <> 'string' THEN
+     OR jsonb_typeof(a->'citire_lighton') <> 'string' OR jsonb_typeof(a->'citire_mineru') <> 'string'
+     OR coalesce(a->>'item_id', '') !~ '^p[0-9]{4}_b[0-9]{1,2}_' THEN
     RAISE EXCEPTION 'Dezacord invalid' USING ERRCODE = '22023';
   END IF;
   v_doc := (a->>'document_id')::bigint; v_pag := (a->>'pagina')::int;
-  SELECT * INTO pl FROM public.ofertare_ocr_pagini WHERE rulare_id = p_rulare_id AND document_id = v_doc AND pagina = v_pag AND cititor = 'lighton';
-  SELECT * INTO pm FROM public.ofertare_ocr_pagini WHERE rulare_id = p_rulare_id AND document_id = v_doc AND pagina = v_pag AND cititor = 'mineru';
+  v_banda := substring(a->>'item_id' FROM '^p[0-9]{4}_b([0-9]{1,2})_')::int;
+  SELECT * INTO pl FROM public.ofertare_ocr_pagini WHERE rulare_id = p_rulare_id AND document_id = v_doc AND pagina = v_pag AND banda = v_banda AND cititor = 'lighton';
+  SELECT * INTO pm FROM public.ofertare_ocr_pagini WHERE rulare_id = p_rulare_id AND document_id = v_doc AND pagina = v_pag AND banda = v_banda AND cititor = 'mineru';
   IF pl.id IS NULL OR pm.id IS NULL OR pl.stare = 'exclus' OR pm.stare = 'exclus' THEN
-    RAISE EXCEPTION 'Lipsesc citirile ambilor cititori pentru pagina % a documentului %', v_pag, v_doc USING ERRCODE = '55000';
+    RAISE EXCEPTION 'Lipsesc citirile ambilor cititori pentru banda % a paginii % (document %)', v_banda, v_pag, v_doc USING ERRCODE = '55000';
   END IF;
   IF pl.image_sha256 IS NULL OR pl.image_sha256 IS DISTINCT FROM pm.image_sha256 THEN
     RAISE EXCEPTION 'Cele două citiri nu provin din aceeași imagine' USING ERRCODE = '55000';
   END IF;
-  -- Proveniență (review Copilot r3 + Jakarinos r3): pe forma canonică a citirii sursă,
-  --  (1) fiecare bucată a fragmentului (celulă la rânduri de tabel, rând la text) apare ca subșir — semnele și simbolurile nu se pot adăuga;
-  --  (2) fiecare număr (cu semn, separator inițial, procent) apare DELIMITAT — „56” nu vine din „0.056”, „.5” nu vine din „10.5”,
-  --      „-5” / „5%” nu vin din „5”. Marcajele pipeline-ului (tabel, img, rowspan…) se scot; „barat” își păstrează conținutul.
   IF a->>'tip' = 'banda_intreaga' AND (a->>'citire_lighton' IS DISTINCT FROM pl.text OR a->>'citire_mineru' IS DISTINCT FROM pm.text) THEN
-    RAISE EXCEPTION 'banda_intreaga trebuie să conțină exact citirile brute ale paginii' USING ERRCODE = '22023';
+    RAISE EXCEPTION 'banda_intreaga trebuie să conțină exact citirile brute ale benzii' USING ERRCODE = '22023';
   END IF;
   FOR k IN 1..(CASE WHEN a->>'tip' IN ('structura_tabele', 'banda_intreaga') THEN 0 ELSE 2 END) LOOP  -- descriere / citire brută verificată mai sus
     v_raw := public.fn_ofertare_ocr_canon(CASE k WHEN 1 THEN pl.text ELSE pm.text END);
-    v_frag := CASE k WHEN 1 THEN a->>'citire_lighton' ELSE a->>'citire_mineru' END;
-    v_frag := regexp_replace(v_frag, '⟦barat: ([^⟧]*)⟧', ' \1 ', 'g');
-    v_frag := regexp_replace(v_frag, '⟦[^⟧]*⟧', E'\n', 'g');
-    FOR v_tok IN SELECT btrim(regexp_replace(x, '\s+', ' ', 'g'))
+    v_frag0 := CASE k WHEN 1 THEN a->>'citire_lighton' ELSE a->>'citire_mineru' END;
+    v_frag0 := regexp_replace(v_frag0, '⟦barat: ([^⟧]*)⟧', ' \1 ', 'g');
+    v_frag := regexp_replace(v_frag0, '⟦[^⟧]*⟧', E'\n', 'g');
+    FOR v_tok IN SELECT btrim(regexp_replace(x, '[[:space:]]+', ' ', 'g'))
                    FROM regexp_split_to_table(CASE WHEN a->>'tip' LIKE 'rand%' THEN replace(v_frag, ' | ', E'\n') ELSE v_frag END, E'\n') x LOOP
       IF v_tok <> '' AND strpos(v_raw, replace(v_tok, '\|', '|')) = 0 THEN
-        RAISE EXCEPTION 'Fragmentul «%» nu apare în citirea % a paginii', left(v_tok, 60), CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Fragmentul «%» nu apare în citirea % a benzii', left(v_tok, 60), CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
       END IF;
     END LOOP;
-    -- rândurile de tabel: celulele trebuie să apară ÎMPREUNĂ, în ordine, ca un singur rând (nu celule din rânduri diferite)
+    -- rândurile de tabel: celulele nevide, în ordine, trebuie să fie EXACT un rând întreg al sursei (o linie a formei canonice,
+    -- cu „|” de markdown tratat ca separator) — nu celule din rânduri diferite, nici bucăți din rânduri vecine (review Copilot/Jakarinos r5)
     IF a->>'tip' IN ('rand_tabel', 'rand_lipsa_lighton', 'rand_lipsa_mineru') THEN
-      v_row := btrim(regexp_replace(regexp_replace(v_frag, E'\n', ' ', 'g'), '[[:space:]]+', ' ', 'g'));
-      IF v_row <> '' AND strpos(v_raw, replace(v_row, ' | ', ' ')) = 0 AND strpos(v_raw, v_row) = 0
-         AND strpos(regexp_replace(v_raw, '[[:space:]]*\|[[:space:]]*', ' | ', 'g'), v_row) = 0 THEN
-        RAISE EXCEPTION 'Rândul «%» nu apare întreg (celulele împreună) în citirea % a paginii', left(v_row, 60), CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
+      SELECT string_agg(c, ' ' ORDER BY n) INTO v_row
+        FROM (SELECT btrim(regexp_replace(regexp_replace(x, '⟦[^⟧]*⟧', ' ', 'g'), '[[:space:]]+', ' ', 'g')) AS c, n
+                FROM regexp_split_to_table(v_frag0, ' \| ') WITH ORDINALITY AS s(x, n)) q
+       WHERE c <> '';
+      SELECT array_agg(btrim(regexp_replace(regexp_replace(l, '\|', ' ', 'g'), '[[:space:]]+', ' ', 'g'))) INTO v_linii
+        FROM regexp_split_to_table(v_raw, E'\n') l;
+      IF coalesce(v_row, '') <> '' AND NOT (v_row = ANY (v_linii)) THEN
+        RAISE EXCEPTION 'Rândul «%» nu e un rând întreg al citirii % a benzii', left(v_row, 60), CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
       END IF;
     END IF;
     FOR v_tok IN SELECT m[1] FROM regexp_matches(v_frag, '([-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?)', 'g') AS m LOOP
       IF v_raw !~ ('(^|[^0-9.,+±−eE-])' || regexp_replace(v_tok, '([.+*?^$(){}|\[\]\\-])', '\\\1', 'g') || '(?![.,]?[0-9]|[%‰]|[eE][-+]?[0-9])') THEN
-        RAISE EXCEPTION 'Numărul % din dezacord nu apare delimitat în citirea % a paginii', v_tok, CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Numărul % din dezacord nu apare delimitat în citirea % a benzii', v_tok, CASE k WHEN 1 THEN 'lighton' ELSE 'mineru' END USING ERRCODE = '22023';
       END IF;
     END LOOP;
   END LOOP;
-  INSERT INTO public.ofertare_ocr_dezacorduri (rulare_id, document_id, pagina, item_id, item_sha256, tip, citire_lighton, citire_mineru,
+  INSERT INTO public.ofertare_ocr_dezacorduri (rulare_id, document_id, pagina, banda, item_id, item_sha256, tip, citire_lighton, citire_mineru,
                                                e_cantitate, anomalie_separator, pagina_lighton_id, pagina_mineru_id, image_sha256)
-  VALUES (p_rulare_id, v_doc, v_pag, a->>'item_id', a->>'item_sha256', a->>'tip', a->>'citire_lighton', a->>'citire_mineru',
+  VALUES (p_rulare_id, v_doc, v_pag, v_banda, a->>'item_id', a->>'item_sha256', a->>'tip', a->>'citire_lighton', a->>'citire_mineru',
           (a->>'e_cantitate')::boolean, (a->>'anomalie_separator')::boolean, pl.id, pm.id, pl.image_sha256)
   ON CONFLICT DO NOTHING RETURNING id INTO v_id;
   IF v_id IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'deja', false, 'id', v_id); END IF;
@@ -645,13 +673,15 @@ BEGIN
   -- ordinea și regulile din compare.py (supsub → barat → img → etichete din listă închisă → entități → titluri → bold pe perechi);
   -- în ARE-ul PostgreSQL \b e backspace, deci delimitările se scriu explicit (review Jakarinos r4); conținutul cu [^<]* / [^*]*, nu .*?,
   -- fiindcă în ARE lăcomia întregii expresii o dă primul cuantificator (un .*? după un cuantificator lacom ar deveni lacom)
+  s := regexp_replace(s, '>[[:space:]]+<', '><', 'g');  -- indentarea HTML dintre etichete (LightOn) nu e conținut
   s := regexp_replace(s, '<sup([[:space:]][^>]*)?>([^<]*)</sup[[:space:]]*>', '^{\2}', 'gi');
   s := regexp_replace(s, '<sub([[:space:]][^>]*)?>([^<]*)</sub[[:space:]]*>', '_{\2}', 'gi');
   s := regexp_replace(s, '<(span|font|div|p|td)([[:space:]][^>]*)?line-through[^>]*>([^<]*)</\1[[:space:]]*>', ' \3 ', 'gi');
   s := regexp_replace(s, '<(s|del|strike)([[:space:]][^>]*)?>([^<]*)</\1[[:space:]]*>', ' \3 ', 'gi');
   s := regexp_replace(s, '~~([^~[:space:]]([^~]*[^~[:space:]])?)~~', ' \1 ', 'g');
   s := regexp_replace(s, '<img([[:space:]](("[^"]*"|''[^'']*''|[^''">])*))?/?>', ' ', 'gi');
-  s := regexp_replace(s, '<br[[:space:]]*/?>', ' ', 'gi');
+  -- granițele de rând (tabel) și de paragraf devin linii noi și se PĂSTREAZĂ (un rând de tabel nu se lipește de următorul)
+  s := regexp_replace(s, '<br[[:space:]]*/?>|</(p|h[1-6]|li|div|tr)[[:space:]]*>|<tr([[:space:]][^>]*)?>', E'\n', 'gi');
   s := regexp_replace(s, '</?(p|br|hr|h[1-6]|div|span|b|strong|em|i|u|small|big|font|center|li|ul|ol|dl|dt|dd|thead|tbody|tfoot|tr|td|th|table|caption|colgroup|col|section|article|header|footer|blockquote|pre|code|a)'
                          '([[:space:]]+[A-Za-z_:][-A-Za-z0-9_:.]*[[:space:]]*=[[:space:]]*("[^"]*"|''[^'']*''))*[[:space:]]*/?>', ' ', 'gi');
   FOR m IN SELECT regexp_matches(s, '&#([0-9]{1,7});', 'g') LOOP
@@ -664,8 +694,11 @@ BEGIN
   s := replace(s, '&amp;', '&');
   s := regexp_replace(s, '(^|\n)[ \t]*#{1,6}([ \t]+|$)', '\1', 'g');
   -- bold doar ca pereche nelipită de cifre/litere/* (10**2 + 3**2 rămâne neschimbat, ca în compare.py BOLD)
-  s := regexp_replace(s, '(^|[^[:alnum:]_*])\*\*([^*[:space:]]([^*]*[^*[:space:]])?)\*\*($|[^[:alnum:]_*])', '\1\2\4', 'g');
-  RETURN btrim(regexp_replace(s, '[[:space:]]+', ' ', 'g'));
+  -- delimitările nu se consumă (lookbehind / lookahead), ca „**A** **B**” să devină „A B” ca în compare.py (review Jakarinos r5)
+  s := regexp_replace(s, '(?<![[:alnum:]_*])\*\*([^*[:space:]]([^*]*[^*[:space:]])?)\*\*(?![[:alnum:]_*])', '\1', 'g');
+  s := regexp_replace(s, '[ \t\r\f\v]+', ' ', 'g');
+  s := regexp_replace(s, '( ?\n ?)+', E'\n', 'g');
+  RETURN btrim(s, E' \n');
 END $f$;
 
 -- Amprenta obiectelor (revenirea refuză dacă diferă de cea înregistrată la aplicare). Acoperă: definiții, proprietar și ACL ale
@@ -711,7 +744,7 @@ BEGIN
   END LOOP;
   FOREACH f IN ARRAY ARRAY['public.fn_ofertare_ocr_preia(text)', 'public.fn_ofertare_ocr_stare(bigint,text,text)',
                            'public.fn_ofertare_ocr_pdf_rezerva(bigint,bigint)', 'public.fn_ofertare_ocr_pdf_final(bigint,text)',
-                           'public.fn_ofertare_ocr_scrie_pagina(bigint,bigint,integer,text,text,text,text,text,text,jsonb)',
+                           'public.fn_ofertare_ocr_scrie_pagina(bigint,bigint,integer,smallint,text,text,text,text,text,text,jsonb)',
                            'public.fn_ofertare_ocr_scrie_dezacord(bigint,jsonb)', 'public.fn_ofertare_ocr_cost_rezerva(bigint,numeric)',
                            'public.fn_ofertare_ocr_scrie_arbitraj(bigint,jsonb)', 'public.fn_ofertare_ocr_rezervare_abandon(bigint)',
                            'public.fn_ofertare_ocr_comparatie_gata(bigint,integer,text)',
