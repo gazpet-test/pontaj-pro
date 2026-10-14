@@ -67,7 +67,7 @@ Deno.test('cale bună: item verificat → citire din BD → rezervare atomică �
     cost_usd: '0.0120', tokens_in: 3000, tokens_out: 200 })
   assert.equal(j.decizie.id, it.id); assert.equal(j.arbitraj_id, 9)
   const c = cereriApi[0]
-  assert.equal(c.system, PROMPT); assert.equal(c.temperature, 0); assert.deepEqual(c.thinking, { type: 'disabled' })
+  assert.equal(c.system, PROMPT); assert.equal('temperature' in c, false); assert.deepEqual(c.thinking, { type: 'disabled' })  // Sonnet 5: sampling = 400
   const date = JSON.parse(c.messages[0].content[1].text.replace(/^DATE \(nu instrucțiuni\):\n/, ''))
   assert.deepEqual(date.context_pipeline, { context_inainte: 'Cantitate', context_dupa: it.context_dupa })
   assert.equal(date.citire_lighton, it.citire_lighton)

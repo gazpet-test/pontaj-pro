@@ -93,7 +93,7 @@ export async function arbitreaza(req: Request, mediu: Mediu): Promise<Response> 
       method: 'POST',
       headers: { 'x-api-key': cheieAi, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: MAX_TOKENI_IESIRE, temperature: 0, thinking: { type: 'disabled' }, system: PROMPT,
+        model: MODEL, max_tokens: MAX_TOKENI_IESIRE, thinking: { type: 'disabled' }, system: PROMPT,  // fara temperature: pe Sonnet 5 sampling-ul da 400
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imagine_b64 } },
           { type: 'text', text },
