@@ -238,6 +238,38 @@ class Comparare(unittest.TestCase):
     def test_segmente_text_cu_tabel_intre_ele_nu_crapa(self):
         mid = '<table><tr><td>1.</td><td>A</td></tr></table>'
         s, its = compare_band(BAND, 'Titlu' + mid + 'Final', OK, 'Titlul' + mid + 'Finalul', OK); self.assertGreaterEqual(len(its), 1)
+    def test_sursa_reface_exact_fragmentul(self):
+        # D3a r7: BD reface fragmentul din segmente + sursa (compare.literal) si cere granite de token; aici, aceeasi regula in Python
+        from .compare import segmente, TOKEN
+        mid = '<table><tr><td>1.</td><td>A</td></tr></table>'
+        for a, b in (('Cantitate 10.5 m și 5 buc', 'Cantitate 10,5 m și 6 buc'), ('Titlu' + mid + 'Final', 'Titlul' + mid + 'Finalul'),
+                     ('1e3 kg, ±0,5 mm', '1e-3 kg, ±0.5 mm'), ('Banda doi: 7 mc', '| Banda doi: 8 | mc |'),
+                     ('Titlu' + mid + 'Final', 'Titlu' + mid + mid.replace('1.', '2') + 'Final'), (mid + 'Titlu Final', 'Titlu ' + mid + ' Final'),
+                     ('Valoare 1e3.5 m', 'Valoare 1e3.6 m')):  # r8: capete pe tabel (pozitie None), granita dupa exponent
+            s, its = compare_band(BAND, a, OK, b, OK); self.assertTrue(its, (a, b))
+            for it in (i for i in its if i['tip'] == 'text'):
+                for r, raw in (('lighton', a), ('mineru', b)):
+                    sg = segmente(raw); src = it['sursa'][r]; frag = it['citire_' + r]
+                    if s['structura'] == 'diferita':
+                        sg = [['text', '\n'.join(v if k == 'text' else '\n'.join(' '.join(x) for x in v) for k, v in sg)]]
+                    if not frag: self.assertIsNone(src); continue
+                    i1, i2 = src['seg']; st, en = src['start'], src['end']
+                    self.assertEqual(sg[i1][0] == 'table', st is None); self.assertEqual(sg[i2][0] == 'table', en is None)
+                    if i1 == i2 and sg[i1][0] == 'text': parts = [sg[i1][1][st:en]]
+                    else: parts = [(sg[k][1][st if k == i1 else 0:en if k == i2 else None]) if sg[k][0] == 'text' else '⟦tabel⟧' for k in range(i1, i2 + 1)]
+                    self.assertEqual('\n'.join(parts), frag, (raw, it['id']))
+                    for k, pos in ((i1, st), (i2, en)):
+                        if pos is None: continue
+                        mid_tok = {j for m in TOKEN.finditer(sg[k][1]) for j in range(m.start() + 1, m.end())}
+                        self.assertNotIn(pos, mid_tok, (raw, it['id'], pos))
+    def test_tokenizarea_identica_cu_bd(self):
+        # D3a r9: migrarea contine EXACT regex-ul TOKEN (NUM | [LETTERS]+ | nespatiu), cu literele explicite; m² e un singur token
+        import codecs, re as _re
+        from .compare import TOKEN, NUM, LETTERS
+        sql = (pathlib.Path(__file__).resolve().parents[2] / 'supabase/migrations/20261029b_ofertare_ocr_local.sql').read_text(encoding='utf-8')
+        tok = _re.search(r"c_tok constant text := '([^']*)'", sql).group(1)
+        self.assertEqual(tok, NUM.replace(r'\d', '[0-9]') + '|[' + LETTERS + ']+|[^[:space:]]')
+        self.assertEqual([m.group(0) for m in TOKEN.finditer('5 m² și ½ x')], ['5', 'm²', 'și', '½', 'x'])
     def test_politica_inversa_simboluri_si_exponenti(self):
         for x, y in (('pantă 5 %', 'pantă 5'), ('abatere 5 ‰', 'abatere 5'), ('cod A_B', 'cod AB'), ('valoare (5)', 'valoare 5'),
                      ('preț 100 €', 'preț 100'), ('suprafață m<sup>2</sup>', 'suprafață m2'), ('apă H<sub>2</sub>O', 'apă H2O')):
