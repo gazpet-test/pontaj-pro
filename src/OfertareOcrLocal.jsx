@@ -75,10 +75,14 @@ export function selectieDupaIncarcare(sel, cand, initiala) {
 }
 // Egress din Supabase Storage: fiecare PDF se descarcă O SINGURĂ DATĂ pe serverul AI (cache local) — estimarea = suma mărimilor.
 export const fmtMB = b => (Number(b) / 1e6).toLocaleString('ro-RO', { maximumFractionDigits: 1 }) + ' MB'
-export const egressEstimat = docs => (docs || []).reduce((a, d) => a + (Number(d.size_bytes) || 0), 0)
-export const textConfirmare = (plafon, nrDoc, nrPag, octeti = 0) =>
+// Mărime lipsă / invalidă = NECUNOSCUTĂ, nu zero (review PR #702 r4): estimarea spune explicit ce nu știe.
+const marimeValida = v => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0
+export const egressEstimat = docs => (docs || []).reduce((a, d) => marimeValida(d.size_bytes) ? { ...a, octeti: a.octeti + Number(d.size_bytes) } : { ...a, necunoscute: a.necunoscute + 1 }, { octeti: 0, necunoscute: 0 })
+export const textEgress = e => !e.necunoscute ? `~${fmtMB(e.octeti)}`
+  : e.octeti > 0 ? `≥ ${fmtMB(e.octeti)} + ${e.necunoscute} document(e) cu mărime necunoscută` : 'estimare indisponibilă (mărime necunoscută)'
+export const textConfirmare = (plafon, nrDoc, nrPag, est = { octeti: 0, necunoscute: 0 }) =>
   `Pornești o procesare PLĂTITĂ: arbitraj Claude pe dezacordurile dintre cele două citiri locale, plafon ${plafon} USD.\n\n` +
-  `${nrDoc} document(e), ${nrPag} pagini necitite. Descărcare din Storage (egress): ~${fmtMB(octeti)}, o singură dată (cache pe server). ` +
+  `${nrDoc} document(e), ${nrPag} pagini necitite. Descărcare din Storage (egress): ${textEgress(est)}, o singură dată (cache pe server). ` +
   `Citirea pe serverul AI se face în fereastra GPU ${FEREASTRA_GPU}; ` +
   `nimic nu intră în ofertă fără audit.\n\nContinui?`
 
@@ -223,7 +227,7 @@ export default function OcrLocalSection({ licitatieId, profile, showToast, reloa
                 <input style={{ ...S.input, width:80, marginLeft:6 }} value={plafon} onChange={e => setPlafon(e.target.value)} inputMode="decimal" />
               </label>
               <button style={{ ...S.btnP, opacity: (busy || !alese.length || errPlafon || prea) ? 0.5 : 1 }} disabled={busy || !alese.length || !!errPlafon || prea} onClick={porneste}>
-                {busy ? 'Se trimite…' : `🖨️ Pornește OCR local (${alese.length} doc · ${nrPag} pag · ~${fmtMB(egress)})`}
+                {busy ? 'Se trimite…' : `🖨️ Pornește OCR local (${alese.length} doc · ${nrPag} pag · ${textEgress(egress)})`}
               </button>
               {errPlafon && <span style={{ fontSize:11.5, color:G.orange }}>{errPlafon}</span>}
               {prea && <span style={{ fontSize:11.5, color:G.orange }}>Cel mult {MAX_DOCUMENTE} documente într-o rulare (ai bifat {alese.length}) — debifează sau împarte în mai multe rulări.</span>}

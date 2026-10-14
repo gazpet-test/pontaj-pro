@@ -75,11 +75,16 @@ describe('OCR local — confirmarea și afișarea', () => {
   })
 })
 
-import { egressEstimat, fmtMB } from './OfertareOcrLocal.jsx'
+import { egressEstimat, fmtMB, textEgress } from './OfertareOcrLocal.jsx'
 describe('OCR local — estimarea de egress în preview (cerere Răzvan, Huedin)', () => {
   it('suma mărimilor documentelor alese, în MB, și apare în confirmare', () => {
-    const o = egressEstimat([{ size_bytes: 10196734 }, { size_bytes: 9375265 }, { size_bytes: null }])
-    expect(o).toBe(19571999); expect(fmtMB(o)).toBe('19,6 MB')
-    expect(textConfirmare('15.00', 2, 1447, o)).toContain('~19,6 MB, o singură dată')
+    const e = egressEstimat([{ size_bytes: 10196734 }, { size_bytes: 9375265 }])
+    expect(e).toEqual({ octeti: 19571999, necunoscute: 0 }); expect(fmtMB(e.octeti)).toBe('19,6 MB')
+    expect(textConfirmare('15.00', 2, 1447, e)).toContain('~19,6 MB, o singură dată')
+  })
+  it('mărimea lipsă e NECUNOSCUTĂ, nu zero (review r4 P2)', () => {
+    expect(textEgress(egressEstimat([{ size_bytes: null }]))).toBe('estimare indisponibilă (mărime necunoscută)')
+    expect(textEgress(egressEstimat([{ size_bytes: 1000000 }, { size_bytes: undefined }]))).toBe('≥ 1 MB + 1 document(e) cu mărime necunoscută')
+    expect(egressEstimat([{ size_bytes: 'abc' }, { size_bytes: -5 }, { size_bytes: 0 }])).toEqual({ octeti: 0, necunoscute: 2 })
   })
 })
