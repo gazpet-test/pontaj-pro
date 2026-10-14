@@ -7,10 +7,11 @@ from .plan import load_plan, save
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
 # Numerele pastreaza semnul, exponentul si procentul; semnele, comparatorii si operatorii sunt tokeni separati: -5 vs 5, 5% vs 5,
 # 1e-3 vs 1e3, 10**2 vs 102 raman dezacorduri (review Copilot r1). Restul punctuatiei nu se compara.
-NUM = r'[-+±−]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?[%‰]?'
+NUM = r'[-+±−]?[.,]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?[%‰]?'
 TOKEN = re.compile(NUM + r'|[^\W\d_]+|[-+±−<>≤≥≠~*^/=×]', re.U)  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
 NUMBER = re.compile('^' + NUM + '$')
-BOLD = re.compile(r'\*\*(?=\S)(.+?)(?<=\S)\*\*', re.S)
+BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu lipit de cifre/litere: 10**2 + 3**2 ramane
+TAG = re.compile(r'</?[A-Za-z][A-Za-z0-9]*(?:\s[^<>]*)?/?>')  # doar etichete HTML reale: 'x < 5 si y > 3' ramane text
 TABLE_HTML = re.compile(r'<table\b.*?</table\s*>', re.I | re.S)
 ROW_HTML = re.compile(r'<tr\b.*?</tr\s*>', re.I | re.S)
 CELL_HTML = re.compile(r'<t[dh]\b[^>]*>(.*?)</t[dh]\s*>', re.I | re.S)
@@ -20,7 +21,7 @@ CONTEXT = 6
 def norm_word(t): return t.translate(CEDILLA)
 
 def clean_inline(s):
-    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = re.sub(r'<[^>]+>', ' ', s); s = BOLD.sub(r'\1', html.unescape(s))  # doar perechile **text** (bold markdown); un ** izolat ramane
+    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = TAG.sub(' ', s); s = BOLD.sub(r'\1', html.unescape(s))  # doar perechile **text** (bold markdown); un ** izolat ramane
     return re.sub(r'\s+', ' ', s).strip()
 
 def html_rows(table):
@@ -38,7 +39,7 @@ def md_rows(lines):
 
 def plain(s):
     s = re.sub(r'<br\s*/?>|</p\s*>|</h\d\s*>|</li\s*>|</div\s*>', '\n', s, flags=re.I)
-    s = html.unescape(re.sub(r'<[^>]+>', ' ', s))
+    s = html.unescape(TAG.sub(' ', s))
     s = BOLD.sub(r'\1', re.sub(r'^\s*#{1,6}\s*', '', s, flags=re.M))
     return re.sub(r'[ \t]+', ' ', s).strip()
 
@@ -139,6 +140,7 @@ def compare_text(seg_a, seg_b, base):
         if tl[i1][1] == tl[i2 - 1][1]: return segs[tl[i1][1]][1][tl[i1][2]:tl[i2 - 1][3]]
         parts = []
         for si in range(tl[i1][1], tl[i2 - 1][1] + 1):
+            if segs[si][0] != 'text': continue  # un tabel intre doua segmente text nu intra in fragment
             s = tl[i1][2] if si == tl[i1][1] else 0; e = tl[i2 - 1][3] if si == tl[i2 - 1][1] else len(segs[si][1])
             parts.append(segs[si][1][s:e])
         return '\n'.join(parts)
@@ -171,36 +173,54 @@ def match_rows(ra, rb):
 def compare_tables(seg_a, seg_b, base):
     ra = table_rows(seg_a); rb = table_rows(seg_b); items = []
     rows_a = [r[2] for r in ra]
-    first_b = {}; last_a = {}
-    for si, ri, _ in rb: first_b.setdefault(si, ri)
-    for si, ri, _ in ra: last_a[si] = ri
-    anchor = None  # ultimul rand LightOn vazut in ordinea alinierii: ancora pentru un rand gasit doar de MinerU
-    for n, (i, j, same) in enumerate(match_rows(ra, rb)):
-        prev_anchor = anchor
-        if i is not None: anchor = [ra[i][0], ra[i][1]]
+    pairs = match_rows(ra, rb)
+    a2b = {i: j for i, j, _ in pairs if i is not None and j is not None}; b2a = {j: i for i, j in a2b.items()}
+    # granitele tabelelor: perechile potrivite trebuie sa lege fiecare tabel LightOn de UN SINGUR tabel MinerU si invers;
+    # altfel structura difera (un rand mutat intre tabele) -> dezacord de structura, iar niciun rand nou nu se insereaza automat
+    ta2b = {}; tb2a = {}
+    for x, y in a2b.items(): ta2b.setdefault(ra[x][0], set()).add(rb[y][0]); tb2a.setdefault(rb[y][0], set()).add(ra[x][0])
+    tables_ok = all(len(v) == 1 for v in ta2b.values()) and all(len(v) == 1 for v in tb2a.values())
+    if not tables_ok:
+        desc = lambda rows, tab: ' / '.join('%d randuri' % sum(1 for r in rows if r[0] == s) for s in sorted({r[0] for r in rows}))
+        items.append(dict(base, id='%s_structura' % base['band'], tip='structura_tabele', citire_lighton=desc(ra, 'a'), citire_mineru=desc(rb, 'b'),
+                          pozitie={'lighton': None, 'mineru': None}, diferenta_numerica=False, anomalie_separator=False, e_cantitate=True,
+                          motiv_pipeline='randurile potrivite leaga tabele diferite intre cititori'))
+    def safe_anchor(j):
+        # randul X exista doar la MinerU (rb[j]): vecinii lui din ACELASI tabel MinerU trebuie potriviti cu doua randuri consecutive
+        # din ACELASI tabel LightOn; atunci X se insereaza intre ele. Altfel (inceput/sfarsit de tabel, vecini nepotriviti) = om.
+        if not tables_ok or j == 0 or j + 1 >= len(rb): return None
+        pj, nj = j - 1, j + 1
+        while nj < len(rb) and nj not in b2a: nj += 1
+        if pj not in b2a or nj >= len(rb) or nj not in b2a: return None
+        if not (rb[pj][0] == rb[j][0] == rb[nj][0]): return None
+        ia, ib = b2a[pj], b2a[nj]
+        if ib != ia + 1 or ra[ia][0] != ra[ib][0]: return None
+        return [ra[ia][0], ra[ia][1]]
+    for n, (i, j, same) in enumerate(pairs):
         if same: continue
         a = ra[i] if i is not None else None; b = rb[j] if j is not None else None
         ca = a[2] if a else None; cb = b[2] if b else None
         header = find_header(rows_a, i) if i is not None else None
+        anchor = None
         if a and b:
             if same_content(ca, cb): continue
             tip = 'rand_tabel'
             cell = lambda r, k: norm_word(r[k]) if k < len(r) else None
             diff = [k for k in range(max(len(ca), len(cb))) if cell(ca, k) != cell(cb, k)]
             rl = roles(header, ca)
-            has_num = any(NUMBER.match(x.strip()) for x in ca + cb)
-            e_cant = (len(ca) != len(cb) and has_num) or rl.get('cantitate') in diff
+            has_digit = any(ch.isdigit() for x in ca + cb for ch in x)
+            e_cant = (len(ca) != len(cb) and has_digit) or rl.get('cantitate') in diff
             triplet = len(ca) != len(cb) or any(rl.get(x) in diff for x in ('cod', 'um', 'cantitate'))
         else:
             tip = 'rand_lipsa_lighton' if a is None else 'rand_lipsa_mineru'; diff = None
-            rl = roles(header, ca or cb); e_cant = 'cantitate' in rl; triplet = True
+            rl = roles(header, ca or cb); e_cant = 'cantitate' in rl or any(ch.isdigit() for x in (ca or cb) for ch in x); triplet = True
+            if a is None: anchor = safe_anchor(j)
         fa = ' | '.join(ca) if ca is not None else ''; fb = ' | '.join(cb) if cb is not None else ''
         prev = ra[i - 1][2] if i else None
         items.append(dict(base, id='%s_r%d' % (base['band'], n), tip=tip, citire_lighton=fa, citire_mineru=fb,
                           celule_diferite=diff, roluri=rl, celule_lighton=ca, celule_mineru=cb,
-                          ancora_lighton=prev_anchor if a is None else None,
-                          # ancora sigura doar in interiorul aceluiasi tabel: nici primul rand al tabelului MinerU, nici dupa ultimul rand al unui tabel LightOn
-                          ancora_sigura=bool(a is None and prev_anchor is not None and b[1] != first_b.get(b[0]) and prev_anchor[1] != last_a.get(prev_anchor[0])), triplet_diferit=bool(triplet), rand_anterior=' | '.join(prev) if prev else None,
+                          ancora_lighton=anchor, ancora_sigura=anchor is not None,
+                          triplet_diferit=bool(triplet), rand_anterior=' | '.join(prev) if prev else None,
                           pozitie={'lighton': [a[0], a[1]] if a else None, 'mineru': [b[0], b[1]] if b else None},
                           diferenta_numerica=numeric_diff(fa, fb), anomalie_separator=separator_anomaly(fa, fb), e_cantitate=bool(e_cant)))
     return items, len(ra)

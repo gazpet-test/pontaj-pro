@@ -181,7 +181,7 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                           protocol=proto['version'], weights_sha256=state['weights_sha256'], run_id=run_id, backend_idle_confirmed=False)
             save(out / 'result.json', result); state['done'] += 1
             if not result['ok']:
-                if result.get('signal') == 'deadline': holder['keep'] = True  # backend-ul poate lucra inca: GPU-ul nu se declara liber
+                holder['keep'] = True  # orice rezultat incomplet (termen, eroare de transport, garda): backend-ul nu e confirmat idle
                 state.update(status='stopped_no_retry', band=band['id'], result=result, gpu_lock_pastrat=holder['keep']); break
         else:
             state['status'] = 'complete'

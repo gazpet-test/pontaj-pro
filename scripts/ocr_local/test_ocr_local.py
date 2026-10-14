@@ -159,6 +159,21 @@ class Citire(unittest.TestCase):
             out = self._plan(d); doc = json.loads((out / 'plan.json').read_text(encoding='utf-8'))
             doc['bands'][0]['image'] = '../evil.png'; (out / 'plan.json').write_text(json.dumps(doc))
             with self.assertRaises(ValueError): load_plan(out)
+    def test_eroare_de_transport_pastreaza_gpu_lock(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); lock = pathlib.Path(d) / 'gpu.lock'
+            def fake(data, o, cfg, dl): (o / 'request_started.json').write_text('{}'); return '', {'ok': False, 'signal': None, 'error': 'ReadTimeout'}
+            with patch.dict(RD.FUNCS, {'mineru': fake}), patch('ocr_local.read.protocol', return_value=dict(RD.protocol(), gpu_lock=str(lock))):
+                st = RD.run_reader(out, 'mineru', run_id='t', check_weights=False, check_server=False)
+            self.assertTrue(st['gpu_lock_pastrat']); self.assertTrue(lock.exists())
+    def test_raw_multilinie_reluat_fara_blocare(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d)
+            def fake(data, o, cfg, dl): (o / 'request_started.json').write_text('{}'); return 'unu\ndoi', {'ok': True}
+            with patch.dict(RD.FUNCS, {'lighton': fake}):
+                RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False, lock=False)
+                st = RD.run_reader(out, 'lighton', run_id='t2', check_weights=False, check_server=False, lock=False)
+            self.assertEqual(st['status'], 'complete')
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []
@@ -179,10 +194,11 @@ class Comparare(unittest.TestCase):
     def test_cifra_diferita_in_text(self):
         s, its = compare_band(BAND, 'lungime 1.250 m pe traseu', OK, 'lungime 1.280 m pe traseu', OK)
         self.assertEqual(len(its), 1); self.assertTrue(its[0]['diferenta_numerica']); self.assertEqual(its[0]['citire_lighton'], '1.250')
-    def test_rand_lipsa_are_ancora(self):
+    def test_rand_lipsa_la_capat_de_tabel_fara_ancora(self):
         b = TABLE_A.replace('</table>', '<tr><td>3.</td><td>TSD01C1</td><td>Împrăștiat pământ</td><td>mc</td><td>0,80</td></tr></table>')
         s, its = compare_band(BAND, TABLE_A, OK, b, OK)
-        miss = [i for i in its if i['tip'] == 'rand_lipsa_lighton']; self.assertEqual(len(miss), 1); self.assertIsNotNone(miss[0]['ancora_lighton'])
+        miss = [i for i in its if i['tip'] == 'rand_lipsa_lighton']; self.assertEqual(len(miss), 1)
+        self.assertIsNone(miss[0]['ancora_lighton']); self.assertFalse(miss[0]['ancora_sigura'])  # la capatul tabelului = om, nu inserare automata
     def test_semn_exponent_procent_operator_raman_dezacorduri(self):
         for a, b in (('cantitate -5 mc', 'cantitate 5 mc'), ('abatere ±0,5', 'abatere 0,5'), ('1e-3 kg', '1e3 kg'), ('pantă 5%', 'pantă 5'), ('10**2 mc', '102 mc')):
             s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1, (a, b)); self.assertTrue(its[0]['diferenta_numerica'], (a, b))
@@ -203,6 +219,17 @@ class Comparare(unittest.TestCase):
         b = '<table><tr><td></td><td>1.</td><td>COD</td><td>Țeavă</td><td>mc</td><td>1 000,00</td></tr></table>'
         s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1)
         s, its = compare_band(BAND, '<table><tr><td></td><td>Titlu</td><td></td></tr></table>', OK, '<table><tr><td>Titlu</td></tr></table>', OK); self.assertEqual(its, [])
+    def test_acorduri_false_r2_jakarinos(self):
+        for a, b in (('10**2 + 3**2 mc', '102 + 32 mc'), ('cantitate .5 mc', 'cantitate 5 mc'), ('x < 5 si y > 3', 'x 3')):
+            s, its = compare_band(BAND, a, OK, b, OK); self.assertGreaterEqual(len(its), 1, (a, b))
+    def test_rand_mutat_intre_tabele_e_dezacord_de_structura(self):
+        row = lambda k: '<tr><td>%s</td><td>C%s</td><td>d</td><td>m</td><td>1,00</td></tr>' % (k, k)
+        tab = lambda ks: '<table>' + ''.join(row(k) for k in ks) + '</table>'
+        s, its = compare_band(BAND, tab('AHC') + '<p>x</p>' + tab('DE'), OK, tab('A') + '<p>x</p>' + tab('HXCDE'), OK)
+        self.assertIn('structura_tabele', [i['tip'] for i in its]); self.assertFalse(any(i.get('ancora_sigura') for i in its))
+    def test_segmente_text_cu_tabel_intre_ele_nu_crapa(self):
+        mid = '<table><tr><td>1.</td><td>A</td></tr></table>'
+        s, its = compare_band(BAND, 'Titlu' + mid + 'Final', OK, 'Titlul' + mid + 'Finalul', OK); self.assertGreaterEqual(len(its), 1)
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -272,7 +299,7 @@ class Reconciliere(unittest.TestCase):
     def test_celula_cu_bara_nu_se_sparge(self):
         a = '<table><tr><td>1.</td><td>X1</td><td>otel | PE</td><td>m</td><td>2,00</td></tr></table>'
         r, _, _ = self._run(a, a.replace('2,00', '3,00'), [self.dec('ales_mineru')])
-        self.assertIn('| otel | PE | m | 3,00 |', r['pages'][0]['text'])
+        self.assertIn('| otel \\| PE | m | 3,00 |', r['pages'][0]['text'])
     def test_rand_la_inceputul_altui_tabel_needs_human(self):
         t1 = '<table><tr><td>1.</td><td>A1</td><td>unu</td><td>m</td><td>1,00</td></tr></table>'
         t2a = '<p>Titlu</p><table><tr><td>1.</td><td>B1</td><td>doi</td><td>m</td><td>2,00</td></tr></table>'
@@ -307,6 +334,14 @@ class Reconciliere(unittest.TestCase):
         r, items, out = self._run('lungime 10 m', 'lungime 20 m', [])
         rp = out / 'page0001' / items[0]['band'] / 'mineru' / 'result.json'; res = json.loads(rp.read_text()); res['protocol'] = 'lighton-mineru-v1'; rp.write_text(json.dumps(res))
         with self.assertRaises(ValueError): compare(out)
+    def test_semn_separat_inlocuit_integral(self):
+        r, _, _ = self._run('Cantitate - 10 m', 'Cantitate 20 m', [self.dec('ales_mineru')]); self.assertEqual(r['pages'][0]['text'], 'Cantitate 20 m')
+    def test_rand_nou_in_acelasi_tabel_se_insereaza(self):
+        t1 = '<table><tr><td>1.</td><td>A1</td><td>unu</td><td>m</td><td>1,00</td></tr><tr><td>2.</td><td>A2</td><td>doi</td><td>m</td><td>2,00</td></tr></table>'
+        t2 = t1.replace('<tr><td>2.', '<tr><td>1b.</td><td>A1b</td><td>nou</td><td>m</td><td>5,00</td></tr><tr><td>2.')
+        r, items, _ = self._run(t1, t2, [self.dec('ales_mineru')])
+        self.assertTrue(items[0]['ancora_sigura']); self.assertFalse(r['pages'][0]['needs_human'])
+        self.assertIn('| 1. | A1 | unu | m | 1,00 |\n| 1b. | A1b | nou | m | 5,00 |\n| 2. |', r['pages'][0]['text'])
     def test_validare_schema(self):
         v = lambda d: valid_decision(d, None, POLICY)
         self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))

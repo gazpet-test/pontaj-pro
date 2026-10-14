@@ -36,12 +36,18 @@ def render(segs):
     out = []
     for kind, val in segs:
         if kind == 'text': out.append(val)
-        else: out.append('\n'.join('| ' + ' | '.join(r) + ' |' for r in val))
+        else: out.append('\n'.join('| ' + ' | '.join(c.replace('|', '\\|') for c in r) + ' |' for r in val))  # '|' din celula, escapat
     return '\n\n'.join(x for x in out if x.strip())
 
 def apply_band(raw_a, raw_b, items, decisions):
     """Returneaza (text_reconciliat, needs_human: bool). Baza = citirea LightOn (literal), segmentata ca la comparare."""
     sa = segments(raw_a); sb = segments(raw_b)
+    for it in items:
+        if it['tip'] == 'structura_tabele':
+            d = decisions.get(it['id'])
+            if d is None or d['decizie'] != 'ales_lighton': needs_struct = True; break
+    else: needs_struct = False
+    if needs_struct: return None, True
     if any(i['tip'] == 'banda_intreaga' for i in items):
         it = items[0]; d = decisions.get(it['id'])
         if d is None or d['decizie'] == 'needs_human': return None, True

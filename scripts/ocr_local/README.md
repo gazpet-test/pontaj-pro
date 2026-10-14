@@ -65,6 +65,17 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 - Cusătura pe rânduri întregi (nu pe tokeni); `raw.txt` scris ca octeți exacți (hash stabil pe Windows); `reconciliat.json` + `tripleti.jsonl`
   publicate împreună din fișiere temporare; `__pycache__` scos din git — rulați cu `python -B`.
 
+## După review-ul Jakarinos r2 (14.10)
+
+- `**` scos doar ca bold nelipit de cifre/litere (`10**2 + 3**2` rămâne); `.5` ≠ `5`; se șterg doar etichete HTML reale
+  (`x < 5 si y > 3` rămâne text).
+- Granițele tabelelor: dacă rândurile potrivite leagă un tabel de mai multe tabele ale celuilalt cititor → dezacord `structura_tabele`
+  (doar `ales_lighton` e acceptat automat, altfel `needs_human`); un rând găsit doar de MinerU se inserează automat DOAR între doi vecini
+  consecutivi din același tabel la ambii cititori (la început / sfârșit de tabel = om).
+- `|` din celule escapat la ieșire; orice rezultat incomplet (termen, eroare de transport, gardă) păstrează `gpu.lock`.
+- Cu regulile r2–r3, proba pe benchmark marchează 20 de dezacorduri ca posibilă cantitate (rânduri cu cifre și celule unite), dintre
+  care unul singur e o diferență reală de valoare (`0,056` / `0.056`) — preț acceptat pentru fail-closed (merg la audit).
+
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
 38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **78 de dezacorduri** (~2 pe bandă),
@@ -74,7 +85,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -m unittest ocr_local.test_ocr_local -v` — 56 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -m unittest ocr_local.test_ocr_local -v` — 63 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 
