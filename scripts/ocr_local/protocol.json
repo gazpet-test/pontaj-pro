@@ -1,0 +1,33 @@
+{
+  "version": "lighton-mineru-v1",
+  "nota": "Pilot OCR local Ofertare (docs/paw/PLAN_OCR_LOCAL_OFERTARE.md, D3c 14.10.2026). Doua cititoare independente pe aceeasi imagine preprocesata, setarile din benchmark-ul 14.10 (runs/17_lightonocr2_vllm, runs/21d_mineru25_pro_vllm). Orice schimbare aici = versiune noua.",
+  "deadline_seconds": 180,
+  "gpu_lock": "C:/Users/Public/paw-data/gpu.lock",
+  "readers": {
+    "lighton": {
+      "model": "lightonai/LightOnOCR-2-1B bf16",
+      "served_model_name": "LightOnOCR2",
+      "endpoint": "http://127.0.0.1:8017",
+      "weights": "C:/Users/Public/paw-data/models/LightOnOCR-2-1B/model.safetensors",
+      "weights_sha256": "cbe12d0831cca119facce91268fc7c5fb72babdf919a6e352e3131bda85c8fbb",
+      "prompt": null,
+      "request_settings": {"temperature": 0, "max_tokens": 8192},
+      "vllm_serve": "vllm serve /mnt/c/Users/Public/paw-data/models/LightOnOCR-2-1B --host 127.0.0.1 --port 8017 --tensor-parallel-size 1 --gpu-memory-utilization 0.85 --max-model-len 16384 --max-num-seqs 8 --served-model-name LightOnOCR2",
+      "guard": "streaming"
+    },
+    "mineru": {
+      "model": "opendatalab/MinerU2.5-Pro-2604-1.2B bf16 (revizia d3f5e08d073c21466bbabe21c71bb1e9c2e595da)",
+      "served_model_name": "MinerU",
+      "endpoint": "http://127.0.0.1:8018",
+      "weights": "C:/Users/Gazpet-Ai/Documents/Codex/2026-10-10/git/work/extra_model_mineru/model.safetensors",
+      "weights_sha256": "f2650d91aaa619534980445034f62cde27fc3fa0430aaf5c3302b91179cad0c5",
+      "client": "mineru_vl_utils 2.0.7 MinerUClient(backend=http-client, image_analysis=True, max_retries=0) two_step_extract + json2md",
+      "vllm_serve": "vllm serve /mnt/c/Users/Gazpet-Ai/Documents/Codex/2026-10-10/git/work/extra_model_mineru --host 127.0.0.1 --port 8018 --tensor-parallel-size 1 --gpu-memory-utilization 0.85 --max-model-len 8192 --max-num-seqs 8 --served-model-name MinerU --limit-mm-per-prompt {\"image\": 1}",
+      "guard": "post_hoc"
+    }
+  },
+  "guard_tokenizer": {
+    "path": "C:/Users/Gazpet-Ai/Documents/Codex/2026-10-10/git/work/model_dots_windows/tokenizer.json",
+    "sha256": "386545eb05f08c51352cde2fcc2c867f1592bb330f305efd1c6a57a93b1244cd"
+  }
+}

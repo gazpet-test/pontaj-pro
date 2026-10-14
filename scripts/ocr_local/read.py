@@ -1,0 +1,159 @@
+"""Pasul 2 (GPU, local): un cititor (lighton SAU mineru) peste toate benzile planului. Modelele se ruleaza pe rand, nu simultan.
+Reguli pastrate din pipeline-ul Codex: endpoint doar IP loopback literal, fara proxy, fara redirect, fara reincercare, termen 180 s,
+garda v3, raw-ul nu se repara. Noi: verificarea SHA-256 a greutatilor la pornire, gpu.lock luat de rulare si eliberat la final,
+reluare idempotenta (banda cu result.json se sare; banda inceputa si neterminata NU se reincearca automat)."""
+import base64, contextlib, hashlib, http.client, ipaddress, json, os, pathlib, socket, threading, time, urllib.parse
+from .guard import Guard
+from .plan import load_plan, save
+
+PACKAGE = pathlib.Path(__file__).parent
+READERS = ('lighton', 'mineru')
+
+def protocol(): return json.loads((PACKAGE / 'protocol.json').read_text(encoding='utf-8'))
+
+def endpoint_parts(url):
+    p = urllib.parse.urlsplit(url)
+    if p.scheme != 'http' or p.username or p.password or p.query or p.fragment or p.path not in ('', '/'):
+        raise ValueError('Doar http://IP-loopback:port, fara cale sau credentiale')
+    try: address = ipaddress.ip_address(p.hostname or '')
+    except ValueError: raise ValueError('Trebuie IP loopback literal, fara DNS')
+    if not address.is_loopback: raise ValueError('Endpoint in afara loopback interzis')
+    return str(address), p.port or 80
+
+def file_sha256(path, chunk=1 << 24):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for block in iter(lambda: f.read(chunk), b''): h.update(block)
+    return h.hexdigest()
+
+def verify_weights(cfg):
+    got = file_sha256(cfg['weights'])
+    if got.lower() != cfg['weights_sha256'].lower():
+        raise RuntimeError('Greutatile %s au SHA-256 %s, protocolul cere %s - refuz' % (cfg['weights'], got, cfg['weights_sha256']))
+    return got
+
+@contextlib.contextmanager
+def gpu_lock(path, run_id):
+    """Lock-ul e al rularii: creat exclusiv la inceput, sters la final doar daca e tot al ei. Lock-ul altcuiva = refuz."""
+    path = pathlib.Path(path)
+    try:
+        with path.open('x', encoding='utf-8') as f: json.dump({'owner': 'ocr_local_ofertare', 'run_id': run_id, 'pid': os.getpid(), 'since': time.time()}, f)
+    except FileExistsError:
+        raise RuntimeError('GPU ocupat: %s exista (%s)' % (path, path.read_text(encoding='utf-8', errors='replace')[:200]))
+    try: yield
+    finally:
+        try:
+            if json.loads(path.read_text(encoding='utf-8')).get('run_id') == run_id: path.unlink()
+        except (OSError, ValueError): pass
+
+def read_lighton(image_bytes, out_dir, cfg, deadline):
+    """O cerere, streaming, garda v3 in timpul generarii (ca la Codex/benchmark). Promptul: doar imaginea."""
+    host, port = endpoint_parts(cfg['endpoint'])
+    content = [{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(image_bytes).decode()}}]
+    if cfg.get('prompt'): content.append({'type': 'text', 'text': cfg['prompt']})
+    payload = {'model': cfg['served_model_name'], 'messages': [{'role': 'user', 'content': content}], **cfg['request_settings'],
+               'stream': True, 'stream_options': {'include_usage': True}}
+    encoded = json.dumps(payload).encode(); started = time.monotonic(); expired = threading.Event(); guard = Guard()
+    conn = http.client.HTTPConnection(host, port, timeout=deadline)
+    with (out_dir / 'request_started.json').open('x', encoding='utf-8') as f:
+        json.dump({'time': time.time(), 'input_sha256': hashlib.sha256(image_bytes).hexdigest(), 'request_sha256': hashlib.sha256(encoded).hexdigest()}, f)
+    sock_ref = [None]
+    def cancel():
+        expired.set()
+        try:
+            s = sock_ref[0] or conn.sock
+            if s: s.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
+    timer = threading.Timer(deadline, cancel); timer.daemon = True; timer.start()
+    raw = ''; finish = None; error = None; signal = None; usage = None
+    try:
+        conn.request('POST', '/v1/chat/completions', encoded, {'Content-Type': 'application/json'}); response = conn.getresponse()
+        sock_ref[0] = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
+        if response.status != 200: raise RuntimeError('HTTP_%d;redirect_neurmat' % response.status)
+        while True:
+            line = response.readline()
+            if expired.is_set(): signal = 'deadline'; break
+            if not line: break
+            if not line.startswith(b'data: '): continue
+            data = line[6:].strip()
+            if data == b'[DONE]': break
+            packet = json.loads(data)
+            if packet.get('usage'): usage = packet['usage']
+            for c in packet.get('choices', []):
+                raw += (c.get('delta') or {}).get('content') or ''; finish = c.get('finish_reason') or finish
+            signal = guard(raw)
+            if signal: break
+    except Exception as exc:
+        error = type(exc).__name__; signal = 'deadline' if expired.is_set() else signal
+    finally:
+        timer.cancel()
+        try:
+            s = sock_ref[0] or conn.sock
+            if s: s.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
+        conn.close()
+    ok = finish == 'stop' and not signal and not error and bool(raw.strip())
+    return raw, {'ok': ok, 'finish_reason': finish, 'signal': signal, 'guard_event': guard.event, 'error': error,
+                 'seconds': round(time.monotonic() - started, 2), 'usage': usage}
+
+_MINERU = {}
+def read_mineru(image_bytes, out_dir, cfg, deadline):
+    """Clientul oficial MinerU (two_step_extract + json2md), ca in benchmark (21d). Clientul nu e streaming:
+    garda v3 se aplica dupa, ca semnal; termenul se impune cu un fir."""
+    endpoint_parts(cfg['endpoint'])
+    from PIL import Image
+    import io
+    if 'client' not in _MINERU:
+        from mineru_vl_utils import MinerUClient
+        _MINERU['client'] = MinerUClient(backend='http-client', server_url=cfg['endpoint'], model_name=cfg['served_model_name'], image_analysis=True,
+                                         http_timeout=int(deadline), max_retries=0, use_tqdm=False)
+    from mineru_vl_utils.post_process import json2md
+    with (out_dir / 'request_started.json').open('x', encoding='utf-8') as f:
+        json.dump({'time': time.time(), 'input_sha256': hashlib.sha256(image_bytes).hexdigest()}, f)
+    img = Image.open(io.BytesIO(image_bytes)).convert('RGB'); box = {}
+    def work():
+        try: box['c'] = _MINERU['client'].two_step_extract(img)
+        except BaseException as e: box['e'] = e
+    started = time.monotonic(); th = threading.Thread(target=work, daemon=True); th.start(); th.join(float(deadline))
+    seconds = round(time.monotonic() - started, 2)
+    if th.is_alive(): return '', {'ok': False, 'signal': 'deadline', 'error': None, 'seconds': seconds}
+    if 'e' in box: return '', {'ok': False, 'signal': None, 'error': type(box['e']).__name__ + ':' + str(box['e'])[:200], 'seconds': seconds}
+    (out_dir / 'layout.json').write_text(json.dumps(box['c'], ensure_ascii=False, indent=1, default=str), encoding='utf-8')
+    md = json2md(box['c']); raw = md if isinstance(md, str) else str(md)
+    g = Guard(); signal = g(raw)
+    return raw, {'ok': not signal and bool(raw.strip()), 'signal': signal, 'guard_event': g.event, 'error': None, 'seconds': seconds,
+                 'blocks': len(box['c'])}
+
+FUNCS = {'lighton': read_lighton, 'mineru': read_mineru}
+
+def run_reader(plan_dir, reader, *, run_id, check_weights=True, lock=True):
+    """Citeste toate benzile planului cu un singur cititor. Se opreste la primul rezultat incomplet (fara reincercare).
+    Returneaza starea; scrie <banda>/<cititor>/raw.txt + result.json si <plan>/read_<cititor>.json."""
+    if reader not in READERS: raise ValueError('Cititor necunoscut')
+    plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); proto = protocol(); cfg = proto['readers'][reader]
+    endpoint_parts(cfg['endpoint'])
+    state = {'reader': reader, 'run_id': run_id, 'protocol': proto['version'], 'model': cfg['model'], 'started': time.time(),
+             'bands': len(doc['bands']), 'done': 0, 'skipped_existing': 0, 'status': 'starting'}
+    if check_weights: state['weights_sha256'] = verify_weights(cfg)
+    ctx = gpu_lock(proto['gpu_lock'], run_id) if lock else contextlib.nullcontext()
+    with ctx:
+        state['status'] = 'running'; save(plan_dir / ('read_%s.json' % reader), state)
+        for band in doc['bands']:
+            out = plan_dir / ('page%04d' % band['page']) / band['id'] / reader
+            out.mkdir(parents=True, exist_ok=True)
+            if (out / 'result.json').exists():
+                state['skipped_existing'] += 1; continue
+            if (out / 'request_started.json').exists():
+                state.update(status='interrupted_needs_review', band=band['id']); break
+            data = (plan_dir / band['image']).read_bytes()
+            raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])
+            (out / 'raw.txt').write_text(raw, encoding='utf-8')
+            result.update(band=band['id'], reader=reader, image_sha256=band['image_sha256'], raw_sha256=hashlib.sha256(raw.encode()).hexdigest(),
+                          protocol=proto['version'], run_id=run_id, backend_idle_confirmed=False)
+            save(out / 'result.json', result); state['done'] += 1
+            if not result['ok']:
+                state.update(status='stopped_no_retry', band=band['id'], result=result); break
+        else:
+            state['status'] = 'complete'
+        state['finished'] = time.time(); save(plan_dir / ('read_%s.json' % reader), state)
+    return state
