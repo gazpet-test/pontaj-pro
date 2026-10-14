@@ -1,9 +1,9 @@
 # Pilot OCR local pentru paginile necitite din Ofertare — plan de proiectare
 
-Status: PLAN (13.10.2026, sesiunea Ofertare). Nimic pornit, aplicat sau deployat. Pașii concreți așteaptă decizia lui Răzvan
-asupra **modelului / modelelor de citire** (14.10, după benchmarkul `paw-data\out\ocr_bench_20261014\`). Orice migrare, deploy
-sau pornire de proces = „da” scris de Răzvan direct în sesiunea Ofertare.
-Surse: `claude_context` #1726 (deskew obligatoriu), #1728 (audit 130/130, riscul e structura), #1731 (orientare, gardă v3,
+Status: PLAN (13.10.2026, actualizat 14.10). Nimic pornit, aplicat sau deployat. **Decizia lui Răzvan 14.10** (`claude_context`
+#1736, benchmark #1734): citire dublă **LightOnOCR-2 (vLLM) + MinerU2.5-Pro (vLLM)**, iar **Claude e arbitrul** pe dezacorduri (nu
+omul). Orice migrare, deploy sau pornire de proces = „da” scris de Răzvan direct în sesiunea Ofertare.
+Surse: `claude_context` #1736 (decizia 14.10), #1734 (benchmark), #1726 (deskew obligatoriu), #1728 (audit 130/130, riscul e structura), #1731 (orientare, gardă v3,
 prompt ignorat, cusătura benzilor); canalul `paw-data\dialog`; modelul de link semnat `supabase/functions/contracte-pdf-link`.
 
 ## 0. Ce avem de citit (live, 13.10.2026)
@@ -16,20 +16,24 @@ Ambele documente sunt `lot_stare = necunoscut` (de triat). Pilotul le proceseaz�
 ca tot ce intră apoi în prompturi să treacă de aceeași poartă (`fn_ofertare_document_eligibil`). OCR-ul local n-are cost cloud,
 dar textul lui alimentează procesări plătite — poarta rămâne una singură.
 
-## 1. Modelul (modelele) de citire — parametru, nu alegere fixă
+## 1. Citirea: două cititoare independente + Claude arbitru (decizia 14.10)
 
-Planul nu e legat de un model. Parametrii pilotului:
-
-| Parametru | Variante (decide Răzvan pe 14.10) |
+| Parametru | Valoare (decizia 14.10) |
 |---|---|
-| `citire.model` | `dots.mocr` (vLLM) · `LightOnOCR-2` (Ollama, ~3× mai rapid în benchmark, 156/157 pe tabele) |
-| `citire.mod` | **unic** (un model) · **dublă citire** (ambele modele; diferențele → pagina „de verificat”) |
-| `citire.protocol` | versiunea preprocesării: orientare + deskew (#1726) + benzi tăiate ÎNTRE rânduri (rezultatul experimentului S-20261013-pas5-text) |
-| `garda.versiune` | v3 (celule goale consecutive, #1731) — semnal, nu decizie de calitate |
+| `citire.cititori` | **LightOnOCR-2** (vLLM) și **MinerU2.5-Pro** (vLLM), independente, pe aceeași imagine preprocesată |
+| `citire.comparare` | pe **cuvânt**, pe **cifră** și pe **triplet de tabel** (cod / UM / cantitate); identic = acceptat local |
+| `citire.arbitru` | **Claude**, DOAR pe decupajele cu dezacord: primește imaginea decupajului (nu pagina întreagă, nu textul celor doi ca instrucțiune) și decide ce scrie pe imagine |
+| `citire.protocol` | orientare + deskew (#1726) + benzi tăiate ÎNTRE rânduri (S-20261013-pas5-text) — înaintea ambelor cititoare |
+| `garda.versiune` | v3 (celule goale consecutive, #1731) — semnal: o gardă declanșată la oricare cititor = decupajul merge la arbitru |
 
-Ce știm (independent de model): orientarea și deskew-ul se fac ÎNAINTE; prompturile libere sunt ignorate (doar layout nativ);
-fișele de foraj / grilele aproape goale și planșele nu se citesc corect → nu intră în pilot; riscul la tabele e STRUCTURA
-(UM + cantitate în aceeași celulă, coloană mutată), nu caracterele (#1728).
+Fiecare decupaj arbitrat se păstrează ca **triplet**: citirea LightOn / citirea MinerU / ce a ales Claude (+ motiv scurt). Pentru
+**cantități** (bani): rândul se marchează „arbitrat de Claude”, rămâne verificabil de om pe imagine și **nu se promovează automat**.
+Fișele de foraj / grilele aproape goale și planșele rămân EXCLUSE (nu se citesc corect, #1731). Prompturile libere sunt ignorate de
+cititoare (doar layout nativ); riscul la tabele e STRUCTURA, nu caracterele (#1728) — de aceea comparația pe triplet.
+
+**Arbitrajul în pilot** e manual-asistat: Claude în sesiunea Ofertare (abonament, nu API plătit), pe o coadă de decupaje cu dezacord.
+**Dacă arbitrajul devine automat în producție** = automatizare nouă: fișă a–e, poartă de rol, iar dacă folosește API plătit —
+plafon de cost + acord explicit al lui Răzvan (nu se presupune).
 
 ## 2. Selecția paginilor (automată, înainte de orice citire)
 
@@ -58,18 +62,23 @@ server AI ──(1) POST ofertare-pdf-link {document_id} + antet secret──►
 
 ## 4. Fallback pe cloud și promovarea textului
 
-- Garda declanșată (bucle de celule goale, ieșire tăiată, benzi incomplete), pagina de tip nesuportat, sau (în dublă citire)
-  modelele nu coincid pe structură → pagina rămâne „de verificat” și poate merge la citirea cloud existentă
-  (`ofertare-ingest-doc` / `citeste-orice`), **cu poarta pe cheltuială** (owner / responsabil pornesc).
+- Dezacord între cititoare (cuvânt / cifră / triplet) sau gardă declanșată → decupajul merge la **Claude arbitru** (§1), nu la cloud.
+- Pagina de tip nesuportat, sau decupaj pe care arbitrul nu-l poate decide de pe imagine (ilizibil) → „de verificat” și poate merge
+  la citirea cloud existentă (`ofertare-ingest-doc` / `citeste-orice`), **cu poarta pe cheltuială** (owner / responsabil pornesc).
 - **Promovarea** textului local în `text_extras` + scoaterea paginii din `pagini_necitite` nu e automată în pilot: un RPC cu
   rol (owner / responsabil), după validarea §6, cu `RETURNING` pentru revenire.
 
 ## 5. Schema minimă (PLAN — migrare doar cu „da”)
 
 `ofertare_ocr_pagini` (append-only): `id`, `document_id` (FK), `pagina`, `text`, `sursa` = `ocr_local`, `model`, `protocol`,
-`garda` (jsonb: versiune + semnale), `stare` (`citit` / `de_verificat` / `respins` / `promovat`), `creat_la`, `promovat_de/la`.
+`garda` (jsonb: versiune + semnale), `stare` (`citit` / `de_verificat` / `respins` / `promovat`), `creat_la`, `promovat_de/la` —
+câte un rând per cititor (LightOn, MinerU) și unul pentru textul reconciliat.
+`ofertare_ocr_arbitraje` (append-only): `id`, `pagina_id`, decupajul (bbox), `citire_lighton`, `citire_mineru`, `ales`, `motiv`,
+`arbitru` = `claude` (+ sesiune / versiune), `e_cantitate` (bool), `verificat_de/la` (om, opțional) — perechea „cine a citit ce și ce
+s-a ales” rămâne pentru audit.
 RLS: citire pentru accesul Ofertare, scriere DOAR prin edge-ul cu secret (RPC SECURITY DEFINER cu EXECUTE doar service_role).
-Unicitate pe (`document_id`, `pagina`, `model`, `protocol`) — o re-citire cu alt protocol e rând nou, nu suprascriere.
+Unicitate pe (`document_id`, `pagina`, `model`, `protocol`) — o re-citire cu alt protocol e rând nou, nu suprascriere. Schema
+finală (și legătura cu blocurile) = nota de proiectare; nicio migrare fără „da” direct.
 
 **Legătura cu stocarea pe blocuri (notă de proiectare, de discutat după teste):** Răzvan vrea documentele ca blocuri
 (paragraf / rând de tabel) cu identitate stabilă și versiuni append-only, ca o clarificare să schimbe doar blocurile atinse,
@@ -79,8 +88,10 @@ Proiectarea blocurilor = notă separată, mâine; nicio schemă fără „da” 
 
 ## 6. Validare (pilot)
 
-- **20 de pagini mostră** din #1247 / #772: 10 text scanat + 10 tabele, alese de om (nu de model), citite de modelul / modelele
-  locale ȘI de cloud.
+- **20 de pagini mostră** din #1247 / #772: 10 text scanat + 10 tabele, alese de om (nu de model), citite de ambele cititoare
+  (LightOn + MinerU), reconciliate (arbitraj Claude pe dezacorduri) ȘI citite de cloud, ca reper.
+- Pe mostră se măsoară separat: câte decupaje au dezacord (volumul arbitrajului) și, pe cele arbitrate, câte decizii ale lui Claude
+  confirmă omul pe imagine — în special la cantități.
 - Comparația o fac **vizual** Claude și Răzvan pe imaginea paginii (ca la auditul 130/130), rând cu rând la tabele.
   NU se raportează un procent de acuratețe din „JSON valid” sau din potrivirea textului cu referința nativă (care e ea însăși
   incompletă, #1728).
@@ -104,7 +115,9 @@ Proiectarea blocurilor = notă separată, mâine; nicio schemă fără „da” 
   cu EXECUTE restrâns — justificare ca la `contracte-pdf-link`.
 - **(d) Cine pornește:** doar cine deține secretul (Vault) — serverul AI prin lansatorul unic; pilotul îl pornește Răzvan.
 - **(e) Confirmare umană:** (a) și (b) se ating (citește conținut extern ȘI scrie) → poartă de rol pe promovare + validarea §6;
-  fără promovare automată în pilot.
+  fără promovare automată în pilot; cantitățile „arbitrate de Claude” rămân verificabile de om pe imagine. Arbitrul primește
+  imaginea decupajului; textele celor două cititoare sunt DATE de comparat, nu instrucțiuni (pct. 10). Arbitraj automat în
+  producție = automatizare nouă (fișă proprie, poartă de rol, plafon + acord dacă e API plătit).
 - La pornire: rând în `public.automatizari` (fișa a–e, `secrete_nume` = numele secretului, fără valoare) + secțiunea din
   `registru_automatizari`.
 
@@ -112,13 +125,14 @@ Proiectarea blocurilor = notă separată, mâine; nicio schemă fără „da” 
 
 - **Oprire pilot**: o pagină cu text promovat greșit (structură greșită care ajunge în cantități); garda declanșată pe > 20% din
   mostră; GPU-ul blochează Codex / Paw peste pragul stabilit; orice scriere în afara tabelului din §5.
-- **Cost**: zero cloud pentru paginile citite local. Timp GPU estimat: ~12 s/pagină cu dots.mocr pe text (campania 13.10), ~3× mai
-  puțin cu LightOnOCR-2 (benchmark); pentru 1.447 de pagini → ~4,8 h (dots) / ~1,6 h (LightOn), dublat în dubla citire.
+- **Cost**: zero cloud pentru paginile citite local. Timp GPU: două treceri (LightOn + MinerU) pe 1.447 de pagini — de măsurat pe
+  mostra din §6 înainte de estimarea finală (benchmarkul #1734 dă vitezele per model; LightOn ~3× mai rapid decât dots.mocr).
+  Arbitrajul: doar decupajele cu dezacord, de Claude în sesiune (abonament, fără API plătit în pilot).
   Comparație: citirea cloud a costat ~86 $ în 60 de zile (ingest-doc 60 $, planșe 22 $, citește-orice 4 $).
 
 ## Decizii pentru Răzvan
 
-- **D1** Modelul / modelele de citire (după benchmarkul din 14.10): dots.mocr, LightOnOCR-2, sau dublă citire.
+- ~~**D1** Modelul / modelele de citire~~ — DECIS 14.10 (#1736): LightOnOCR-2 + MinerU2.5-Pro, Claude arbitru pe dezacord.
 - **D2** Triajul pe loturi al lui #1247 și #772 (propunere: `comun`), înainte de pilot — prin preview → „da” → apply.
 - **D3** Schema din §5 (migrare cu „da”) și cele două edge-uri (deploy cu „da”).
 - **D4** Nota de proiectare pentru stocarea pe blocuri (după teste).
