@@ -2,7 +2,7 @@
 import re, html, hashlib
 from .guard_base import Guard as PriorGuard
 from .guard_legacy import repetition_reason
-VERSION='empty-cells-v3-consecutive600'
+VERSION='empty-cells-v4-consecutive-lines'
 POLICY={'last_cells_without_nonempty':600,'repeated_block_chars':200,'repeated_block_occurrences':4,'diversity_tokens_gt':3000,'diversity_chars_lt':100}
 CELL=re.compile(r'<td\b([^>]*)>(.*?)</td\s*>',re.I|re.S)
 MARK='\ue000'
