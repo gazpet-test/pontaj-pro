@@ -4,10 +4,13 @@
 // documente_de_repartizat. Aici un om alege proiectul: „Repartizează în X” (RPC
 // fn_doc_repartizeaza — atomic, fără dublură) sau „Ignoră” (fn_doc_ignora).
 // Apare pe dashboard-ul Execuție doar când există ceva în coadă (sau owner).
+// 14.10.2026: implicit ÎNCHIS (o linie), lista cu scroll intern; ce nu ține de execuție
+// (HR/CV, financiar, logistică, ofertare, mailuri pe 4+ proiecte) e ascuns — doar afișare,
+// rândurile din BD rămân neatinse; „arată tot” le aduce înapoi.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
-import { potrivesteCandidati, candidatiFaraProiect } from './documenteDeRepartizatLogic.js'
+import { potrivesteCandidati, candidatiFaraProiect, clasificaNonExecutie } from './documenteDeRepartizatLogic.js'
 
 const G = {
   bg: '#0D1117', surface: '#161B22', surface2: '#1C2230', border: '#21262D', border2: '#30363D',
@@ -22,7 +25,8 @@ export default function DocumenteDeRepartizat({ profile, onRepartizat }) {
   const [busy, setBusy] = useState(null)
   const [alt, setAlt] = useState({})            // {rand_id: proiect_id ales manual (owner)}
   const [eroare, setEroare] = useState('')
-  const [deschis, setDeschis] = useState(true)
+  const [deschis, setDeschis] = useState(false)
+  const [tot, setTot] = useState(false)          // true = arată și ce nu ține de execuție
   const owner = profile?.is_owner === true
 
   const load = useCallback(async () => {
@@ -37,9 +41,13 @@ export default function DocumenteDeRepartizat({ profile, onRepartizat }) {
   }, [])
   useEffect(() => { load() }, [load])
 
-  const grupe = useMemo(() => (rows || []).map(r => ({
+  const toate = useMemo(() => (rows || []).map(r => ({
     ...r, proiecteCandidate: potrivesteCandidati(r.candidati, proiecte), candidatiNegasiti: candidatiFaraProiect(r.candidati, proiecte),
+    nonExec: clasificaNonExecutie(r),
   })), [rows, proiecte])
+  const relevante = toate.filter(r => !r.nonExec)
+  const ascunse = toate.length - relevante.length
+  const grupe = tot ? toate : relevante
 
   const deschide = async (r) => {
     const { data } = await supabase.storage.from('documente-proiect').createSignedUrl(r.storage_path, 300)
@@ -65,22 +73,32 @@ export default function DocumenteDeRepartizat({ profile, onRepartizat }) {
     setRows(list => (list || []).filter(x => x.id !== r.id))
   }
 
-  if (rows === null || (!rows.length && !owner)) return null
+  if (rows === null || (!relevante.length && !owner)) return null   // non-owner: fără nimic de execuție, fără card
   return (
-    <div style={{ margin: '18px 28px 0', background: G.surface, border: `1px solid ${rows.length ? G.orange + '66' : G.border}`, borderRadius: 12, padding: '14px 16px' }}>
-      <div onClick={() => setDeschis(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-        <span style={{ fontSize: 15, fontWeight: 800, color: rows.length ? G.orange : G.muted }}>📥 Corespondență de repartizat ({rows.length})</span>
-        <span style={{ fontSize: 12, color: G.dim }}>mailuri cu 2+ proiecte posibile — alege proiectul corect</span>
-        <span style={{ marginLeft: 'auto', color: G.dim }}>{deschis ? '▾' : '▸'}</span>
+    <div style={{ margin: '14px 28px 0', background: G.surface, border: `1px solid ${relevante.length ? G.orange + '66' : G.border}`, borderRadius: 10, padding: deschis ? '12px 14px' : '8px 14px' }}>
+      <div onClick={() => setDeschis(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13.5, fontWeight: 800, color: relevante.length ? G.orange : G.muted }}>📥 {relevante.length} de repartizat</span>
+        {ascunse > 0 && <span style={{ fontSize: 12, color: G.dim }}>+ {ascunse} care nu țin de execuție (ascunse)</span>}
+        <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: G.blue }}>{deschis ? 'Închide ▾' : 'Deschide ▸'}</span>
       </div>
       {deschis && <>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: G.dim }}>mailuri cu 2+ proiecte posibile — alege proiectul corect</span>
+          {ascunse > 0 && (
+            <button onClick={() => setTot(v => !v)} style={{ ...btn(G.muted), marginLeft: 'auto' }}>
+              {tot ? 'Doar execuție' : `Arată tot (${toate.length})`}
+            </button>
+          )}
+        </div>
         {eroare && <div style={{ marginTop: 10, padding: '7px 10px', borderRadius: 8, background: G.red + '22', color: G.red, fontSize: 12.5 }}>{eroare}</div>}
-        {!rows.length && <div style={{ marginTop: 10, fontSize: 13, color: G.dim }}>Nimic de repartizat.</div>}
+        {!grupe.length && <div style={{ marginTop: 10, fontSize: 13, color: G.dim }}>Nimic de repartizat{ascunse ? ' pentru execuție.' : '.'}</div>}
+        <div style={{ maxHeight: 420, overflowY: 'auto', marginTop: 4, paddingRight: 4 }}>
         {grupe.map(r => (
           <div key={r.id} style={{ marginTop: 10, padding: '10px 12px', background: G.bg, border: `1px solid ${G.border2}`, borderRadius: 9, opacity: busy === r.id ? .5 : 1 }}>
             <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
               <button onClick={() => deschide(r)} style={{ background: 'none', border: 'none', color: G.blue, fontWeight: 700, fontSize: 13, cursor: 'pointer', padding: 0, textAlign: 'left' }}>📄 {r.nume_fisier}</button>
               <span style={{ fontSize: 11.5, color: G.dim }}>{fmt(r.data_mail)}</span>
+              {r.nonExec && <span title={`ascuns implicit: ${r.nonExec.motiv}`} style={{ fontSize: 10.5, fontWeight: 700, color: G.yellow, border: `1px solid ${G.yellow}55`, borderRadius: 5, padding: '1px 6px' }}>{r.nonExec.cat}</span>}
             </div>
             <div style={{ fontSize: 12, color: G.muted, marginTop: 3 }}>{[r.expeditor, r.subiect].filter(Boolean).join(' · ')}</div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
@@ -101,6 +119,7 @@ export default function DocumenteDeRepartizat({ profile, onRepartizat }) {
             </div>
           </div>
         ))}
+        </div>
       </>}
     </div>
   )

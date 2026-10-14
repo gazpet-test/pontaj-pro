@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { potrivesteCandidati, candidatiFaraProiect, etichetaPropusa, proiecteFaraEticheta } from './documenteDeRepartizatLogic.js'
+import { potrivesteCandidati, candidatiFaraProiect, etichetaPropusa, proiecteFaraEticheta, clasificaNonExecutie } from './documenteDeRepartizatLogic.js'
 import { alerteGmail, SURSE_ADMIN, areAccesSursa } from './adminAlerte.js'
 
 const proiecte = [
@@ -19,6 +19,27 @@ describe('coada de repartizat', () => {
   })
   it('candidații fără proiect activ sunt semnalați', () => {
     expect(candidatiFaraProiect(['Prunisor-Jupa-Lot1', 'Vechi-Inchis'], proiecte)).toEqual(['Vechi-Inchis'])
+  })
+})
+
+describe('filtru non-execuție (doar afișare)', () => {
+  const c = (subiect, nume_fisier, n = 2) => clasificaNonExecutie({ subiect, nume_fisier, candidati: Array.from({ length: n }, (_, i) => 'P' + i) })
+  it('cazurile reale din coadă (14.10.2026) sunt ascunse pe categoria corectă', () => {
+    expect(c('CV - inginer 28.07.2026', 'cv_ion.pdf').cat).toBe('HR')
+    expect(c('export  WinMentor (Analiza Descriptivă) — August', 'WINMENTOR EXPERT AUGUST 2026.xlsx').cat).toBe('Financiar')
+    expect(c('liste obiecte de inventar', 'stocuri cuprinse in liste inventariere.xlsx').cat).toBe('Financiar')
+    expect(c('Centralizator contracte in derulare la 17.07.2026', 'contracte in derulare Transgaz.pdf').cat).toBe('Financiar')
+    expect(c('BUNA ZIUA! OSCAR 08-08-2026', 'Dispenses_08-08-2026.pdf').cat).toBe('Logistică')
+    expect(c('RE: Documentatie licitatie distributie gaze', 'Manager Proiect.rar', 3).cat).toBe('Ofertare')
+  })
+  it('mail cu 4+ proiecte candidate = transversal', () => {
+    expect(c('Situatie lunara', 'x.xlsx', 4)).toEqual({ cat: 'Transversal', motiv: '4 proiecte candidate' })
+    expect(c('Situatie lunara', 'x.xlsx', 3)).toBeNull()
+  })
+  it('documentele de șantier rămân vizibile', () => {
+    expect(c('PV receptie partiala tronson 3', 'PV_receptie.pdf')).toBeNull()
+    expect(c('Expertiza tehnica pod', 'expertiza.pdf')).toBeNull()
+    expect(clasificaNonExecutie(null)).toBeNull()
   })
 })
 
