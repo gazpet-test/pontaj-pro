@@ -1,24 +1,25 @@
-import re
-# Liniile de celule de tabel (<td...>) nu intra in regula „linie lunga repetata”: intr-un tabel corect
-# aceeasi celula apare legitim in multe randuri (ex. d772 p0255_b0, „1C–T200–S1”). Buclele de randuri
-# intregi le prinde garda principala (bloc de 200 de caractere repetat de 4 ori, guard_base).
+import re, collections
+# Celulele de tabel (<td...>) au regula lor: intr-un tabel corect aceeasi celula apare legitim in multe randuri
+# (ex. d772 p0255_b0, „1C–T200–S1”), deci o celula lunga se socoteste bucla doar daca se repeta de 4 ori LA RAND.
+# Celelalte linii lungi raman pe regula veche (de 4 ori oriunde), ca sa prinda si buclele cu spatiere variabila
+# pe care blocul de 200 de caractere (guard_base) nu le vede.
 CELL_LINE = re.compile(r'<td\b', re.I)
-def repeated_consecutive_line(text, times=4, min_len=46):
-    """Aceeasi linie lunga (>45 caractere, fara celule <td>) de `times` ori LA RAND; liniile goale nu rup sirul."""
+def repeated_long_line(text, times=4, min_len=46):
+    lines = [s.strip() for s in text.splitlines() if s.strip()]
+    norm = [re.sub(r'\s+', ' ', s.lower()) for s in lines]
+    other = collections.Counter(n for s, n in zip(lines, norm) if len(s) >= min_len and not CELL_LINE.match(s))
+    if any(c >= times for c in other.values()): return 'Repeated long line (4 times)'
     prev, run = None, 0
-    for s in text.splitlines():
-        s = s.strip()
-        if not s: continue
-        line = re.sub(r'\s+', ' ', s.lower())
-        if len(s) < min_len or CELL_LINE.match(s): prev, run = None, 0; continue
-        run = run + 1 if line == prev else 1; prev = line
-        if run >= times: return True
-    return False
+    for s, n in zip(lines, norm):  # celule: doar la rand (liniile goale nu rup sirul)
+        if len(s) < min_len or not CELL_LINE.match(s): prev, run = None, 0; continue
+        run = run + 1 if n == prev else 1; prev = n
+        if run >= times: return 'Repeated table cell line (4 times in a row)'
+    return None
 def repetition_reason(text):
     if re.search(r'([a-zăâîșțşţ])\1{31,}', text, re.I):
         return 'Repeated letter run (32 characters)'
-    if repeated_consecutive_line(text):
-        return 'Repeated long line (4 times in a row)'
+    r = repeated_long_line(text)
+    if r: return r
     if re.search(r'(?:\[ILIZIBIL\]\s*[,;. ]*\s*){16,}', text, re.I):
         return 'Repeated unreadable markers (16 times)'
     if re.search(r'(?:alin\.\s*\d+\s*[,; ]+){16,}', text, re.I):

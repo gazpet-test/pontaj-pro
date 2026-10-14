@@ -39,6 +39,13 @@ class Geometrie(unittest.TestCase):
         g = Guard(); self.assertIsNone(g('text obisnuit')); self.assertEqual(g('<td></td>' * 600), 'celule_goale_fara_continut')
         g.reset(); self.assertIsNotNone(g(('0123456789' * 20) * 4))
 
+    @unittest.skipUnless((CODEX_OUT / 'pas6_text_20261013/pages.json').exists(), 'fixture Codex pas6 lipsa')
+    def test_geometria_salvata_pas6(self):
+        for p in json.loads((CODEX_OUT / 'pas6_text_20261013/pages.json').read_text(encoding='utf-8')):
+            with Image.open(p['image']) as im: bs, m = text_bands(im)
+            if p['bands']: self.assertEqual([b['box'] for b in bs], [b['crop_box'] for b in p['bands']])
+            else: self.assertEqual(m['mode'], 'whole_page_fallback')
+
 GARDA_FIX = pathlib.Path(__file__).parent / 'fixtures_garda'
 GARDA_SHA = {'d772_p0255_b0_lighton.txt': 'fa5ac788a7e422e1090fb6ac7b97b610697e1d886ac0050aebc648376bc66e15',
              'bucla_text_ovis_p85.txt': 'd80209522e0e79a941469f8f254e44444b5d497d308559acd467d54846251d3e',
@@ -55,34 +62,35 @@ def garda_flux(text, pas=16):
     return None, None, len(text)
 
 class GardaLinii(unittest.TestCase):
-    """Regula veche „linie lunga repetata”: doar linii identice LA RAND, fara celule <td> (alarma falsa d772 p0255_b0, r1)."""
+    """Regula veche „linie lunga repetata” (alarma falsa d772 p0255_b0, r1): celulele <td> lungi conteaza doar de 4 ori LA RAND;
+    celelalte linii lungi raman pe regula veche (de 4 ori oriunde)."""
     def test_tabel_real_d772_p0255_trece(self):
         # tabel corect: aceeasi celula <td>1C–T200–S1<br>...</td> de 4 ori, nu la rand -> fara oprire
         self.assertEqual(garda_flux(garda_fix('d772_p0255_b0_lighton.txt'))[0], None)
     def test_bucla_reala_text_ramane_oprita(self):
-        # bucla reala Ovis (antet de pagina + <think> repetat, perioada ~489 car.), prelungita cu inca 3 perioade:
-        # garda o opreste in continuare (bloc de 200 repetat), la cel mult o perioada dupa regula veche (5008 car.)
-        t = garda_fix('bucla_text_ovis_p85.txt'); i = [m.start() for m in re.finditer(r'D\.P\.C\. MEDIA', t)]
-        per = t[i[-2]:i[-1]]; r, _, n = garda_flux(t[:i[-1]] + per * 3)
-        self.assertIsNotNone(r); self.assertLessEqual(n, 5008 + len(per))
+        # bucla reala Ovis (antet de pagina + <think> repetat): originalul e oprit exact ca inainte (acelasi motiv, acelasi punct)
+        t = garda_fix('bucla_text_ovis_p85.txt'); r, d, n = garda_flux(t)
+        self.assertEqual((r, d, n), ('bucla_previous_guard', 'Repeated long line (4 times)', len(t)))  # identic cu regula veche
     def test_bucla_reala_tabel_ramane_oprita(self):
-        r, _, n = garda_flux(garda_fix('bucla_tabel_ovis_td31.txt')); self.assertIsNotNone(r)
-    def test_regula_linii_la_rand(self):
+        self.assertIsNotNone(garda_flux(garda_fix('bucla_tabel_ovis_td31.txt'))[0])
+    def test_bucle_cu_spatiere_variabila_oprite(self):
+        # cazurile Jakarinos r1: indentare crescatoare -> blocul de 200 nu se repeta identic; regula liniilor le prinde
+        cel = '<td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>'
+        self.assertIsNotNone(garda_flux('\n'.join(' ' * i + cel for i in range(20)))[0])
+        a = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1, km 12'
+        b = 'Traversare drum judetean DJ298 cu tub de protectie si grup anozi de zinc'
+        self.assertIsNotNone(garda_flux('\n'.join(' ' * i + (a if i % 2 else b) for i in range(40)))[0])
+    def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
-        self.assertEqual(repetition_reason('\n'.join([lin] * 4)), 'Repeated long line (4 times in a row)')
-        self.assertEqual(repetition_reason('\n\n'.join([lin] * 4)), 'Repeated long line (4 times in a row)')  # liniile goale nu rup sirul
+        self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')
         self.assertIsNone(repetition_reason('\n'.join([lin] * 3)))
-        self.assertIsNone(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])))
         rand = '<tr><td>1C–T200–S1</td><td>Traversare DE</td><td>12 + 465</td></tr>'
-        self.assertIsNotNone(repetition_reason('\n'.join([rand] * 4)))  # rand intreg pe o linie, la rand -> bucla
+        self.assertIsNotNone(repetition_reason('\n'.join([rand] * 4)))  # rand intreg pe o linie -> regula veche
         cel = '      <td>1C–T200–S1<br>2TP–T200–S1–LE3<br>3A–T200–S1–LE2</td>'
-        self.assertIsNone(repetition_reason('\n'.join([cel] * 6)))  # celulele <td> nu intra in regula
-    @unittest.skipUnless((CODEX_OUT / 'pas6_text_20261013/pages.json').exists(), 'fixture Codex pas6 lipsa')
-    def test_geometria_salvata_pas6(self):
-        for p in json.loads((CODEX_OUT / 'pas6_text_20261013/pages.json').read_text(encoding='utf-8')):
-            with Image.open(p['image']) as im: bs, m = text_bands(im)
-            if p['bands']: self.assertEqual([b['box'] for b in bs], [b['crop_box'] for b in p['bands']])
-            else: self.assertEqual(m['mode'], 'whole_page_fallback')
+        self.assertEqual(repetition_reason('\n\n'.join([cel] * 4)), 'Repeated table cell line (4 times in a row)')  # la rand, golurile nu rup
+        self.assertIsNone(repetition_reason('\n'.join([cel] * 3)))
+        self.assertIsNone(repetition_reason('\n'.join([cel, '<td>17 – T200</td>'] * 6)))  # celula repetata, dar nu la rand
+
 
 class Plan(unittest.TestCase):
     def test_text_confirmat_da_benzi_si_refuza_a_doua_rulare(self):

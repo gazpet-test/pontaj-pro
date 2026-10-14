@@ -4,10 +4,10 @@ Specificația: `docs/paw/PLAN_OCR_LOCAL_OFERTARE.md`. Adaptarea pipeline-ului Co
 de la un cititor (dots, prompt înghețat) la **două cititoare independente**: LightOnOCR-2-1B și MinerU2.5-Pro, ambele în vLLM pe loopback.
 Geometria (`geometry.py`), garda v3 (`guard*.py`) și regulile clientului (IP loopback literal, fără proxy / redirect / reîncercare, 180 s)
 sunt cele din Codex; garda primește tokenizer-ul din `protocol.json` (cale + SHA-256).
-Singura abatere de logică (14.10.2026, rularea r1, `guard_version` `empty-cells-v4-consecutive-lines`): regula veche „linie lungă repetată”
-numără doar liniile identice **la rând** și ignoră liniile de celule `<td>`. Motiv: alarmă falsă pe un tabel corect (d772 p0255_b0). Buclele
-reale rămân oprite, cu teste pe texte reale în `fixtures_garda/`. Pe tot corpusul Codex (5.964 de ieșiri) verdictul se schimbă doar la două:
-pagina d772 și bucla Ovis p85, pe care garda principală o oprește cu 48 de caractere mai târziu.
+Singura abatere de logică (14.10.2026, rularea r1, `guard_version` `empty-cells-v4-td-consecutive`): în regula veche „linie lungă repetată”,
+liniile de celule `<td>` se socotesc buclă doar de 4 ori **la rând**. Celelalte linii lungi rămân pe regula veche (de 4 ori oriunde), ca să
+prindă și buclele cu spațiere variabilă pe care blocul de 200 de caractere nu le vede. Motiv: alarmă falsă pe un tabel corect (d772 p0255_b0).
+Teste pe texte reale în `fixtures_garda/`. Pe tot corpusul Codex (5.964 de ieșiri) verdictul se schimbă doar la pagina d772.
 
 **Ce NU face pachetul:** nu pornește servere sau modele, nu cheamă cloud (arbitrajul Sonnet 5 e în edge-ul `ofertare-ocr-arbitreaza`, D3b),
 nu scrie în BD (scrierea e prin `ofertare-ocr-scrie`, D3b), nu promovează nimic.
