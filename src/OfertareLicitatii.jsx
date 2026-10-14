@@ -35,6 +35,7 @@ import CerinteAcoperirePerechi from './OfertareCerinte.jsx'
 import OfertareTriere, { poatePorniProcesarea, MOTIV_POARTA, CostAI } from './OfertareTriere.jsx'
 import SourcePackSection from './OfertareSourcePack.jsx'
 import OfertareLoturi, { useEligibilitateLoturi, BannerLoturi, mesajLot } from './OfertareLoturi.jsx'   // MVP loturi (20261024b): poarta pe procesarea plătită
+import OcrLocalSection from './OfertareOcrLocal.jsx'   // pilot OCR local (PR #700 + buton): „Pornește OCR local”
 import FormulareRegistruSection, { ClauzeContractSection } from './OfertareClauzeFormulare.jsx'
 import OfertareParteneri from './OfertareParteneri.jsx'
 import { raportTransferCantitati } from './ofertareTransferRaport.js'
@@ -3798,6 +3799,8 @@ function LicitatieDetailModal({ licitatie: l, profile, echipa = [], onChanged, o
             {tab === 'documente' && <><OfertareTipareDeclansate licitatie={l} showToast={showToast} onCreat={() => setTab('clarificari')} /><DocumenteSection licitatie={l} profile={profile} onChanged={onChanged}
               intrareDocument={intrareDocument} onIntrareConsumata={onIntrareConsumata} showToast={showToast} onGoClarificari={() => setTab('clarificari')} onGoLoturi={() => setTab('loturi')} /></>}
             {tab === 'loturi' && <OfertareLoturi licitatieId={l.id} onSchimbare={onChanged} />}
+            {/* Pilotul OCR local (14.10.2026): paginile necitite ale documentelor ELIGIBILE (poarta pe loturi de mai sus) */}
+            {tab === 'loturi' && <OcrLocalSection key={l.id} licitatieId={l.id} profile={profile} showToast={showToast} />}
             {tab === 'garantie' && <>
               <GarantieSection licitatie={l} profile={profile} onChanged={onChanged} />
               {/* GBE (garanția de bună execuție) — aceeași evidență ca în Administrativ → Contracte comerciale (09.09.2026) */}
