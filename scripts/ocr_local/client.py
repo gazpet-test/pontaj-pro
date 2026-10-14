@@ -71,26 +71,21 @@ class Edge:
         except urllib.error.HTTPError as e: status, body = e.code, e.read()
         try: return status, json.loads(body.decode('utf-8'))
         except ValueError: return status, {'error': 'raspuns ne-JSON'}
-    def get(self, url, dest, max_octeti=MAX_PDF, timeout=300, etag=None, la_antete=None):
-        """Descarca un URL semnat in dest (prin .part, rename doar la final). Cerere CONDITIONATA cu `etag` (If-None-Match): 304 = neschimbat,
-        fara corp, fara egress. Intoarce {'status': 200|304, 'sha256', 'octeti', 'etag'}. `la_antete(cl, etag)` e chemat cu antetele INAINTEA
+    def get(self, url, dest, max_octeti=MAX_PDF, timeout=300, la_antete=None):
+        """Descarca un URL semnat in dest (prin .part, rename doar la final). Intoarce {'sha256', 'octeti', 'etag'} (etag doar pentru audit).
+        `la_antete(cl, etag)` e chemat cu antetele INAINTEA
         citirii corpului (persistenta transferului in curs). Corpul: Content-Length > max_octeti = EgressDepasit inainte de citire; citirea e
         limitata la max_octeti + 1; lungime primita != Content-Length = TransferIncomplet; un PDF fara %PDF- / %%EOF = TransferIncomplet."""
         h = hashlib.sha256(); n = [0]; tmp = dest.with_suffix(dest.suffix + '.part')
-        try: return self._get(url, dest, tmp, h, n, max_octeti, timeout, etag, la_antete)
+        try: return self._get(url, dest, tmp, h, n, max_octeti, timeout, la_antete)
         except EgressDepasit as e: e.citit = n[0]; raise
         except TransferIncomplet as e: e.citit = n[0]; raise
         except Exception as e:  # orice alt esec in proces (retea, HTTP, antete): octetii cititi pana atunci sunt stiuti
             x = TransferIncomplet('%s: %s' % (type(e).__name__, str(e)[:200])); x.citit = n[0]; raise x from e
 
-    def _get(self, url, dest, tmp, h, n, max_octeti, timeout, etag, la_antete):
-        req = urllib.request.Request(url, method='GET', headers={'If-None-Match': etag} if etag else {})
-        try: r = self.op.open(req, timeout=timeout)
-        except urllib.error.HTTPError as e:
-            if e.code == 304: return {'status': 304, 'etag': etag}
-            raise
+    def _get(self, url, dest, tmp, h, n, max_octeti, timeout, la_antete):
+        r = self.op.open(urllib.request.Request(url, method='GET'), timeout=timeout)
         with r:
-            if getattr(r, 'status', 200) == 304: return {'status': 304, 'etag': etag}
             hd = getattr(r, 'headers', None) or {}
             cl = hd.get('Content-Length'); cl = int(cl) if cl and str(cl).isdigit() else None; et = hd.get('ETag')
             if cl is not None and cl > max_octeti: raise EgressDepasit('PDF de %d octeti peste limita ramasa %d' % (cl, max_octeti))
@@ -107,7 +102,7 @@ class Edge:
             if cl is not None and n[0] != cl: raise TransferIncomplet('primiti %d octeti din %d declarati' % (n[0], cl))
             if not pdf_complet(tmp): raise TransferIncomplet('fisierul nu e un PDF complet (%PDF- / %%EOF)')
         os.replace(tmp, dest)
-        return {'status': 200, 'sha256': h.hexdigest(), 'octeti': n[0], 'etag': et}
+        return {'sha256': h.hexdigest(), 'octeti': n[0], 'etag': et}
 
 class EgressDepasit(RuntimeError):
     pass
@@ -236,46 +231,54 @@ def jurnal_egress(rdir):
     p = pathlib.Path(rdir) / 'egress.json'
     return load(p) if p.exists() else {'octeti_total': 0, 'plafon_octeti': EGRESS_MAX_OCTETI, 'documente': {}}
 
-def _dir_cache(rdir):
-    c = pathlib.Path(rdir).resolve().parent / '_pdf_cache'; c.mkdir(exist_ok=True); return c
+def _dir_registru(rdir):
+    c = pathlib.Path(rdir).resolve().parent / '_pdf_registru'; c.mkdir(exist_ok=True); return c
 
-def _registru(cache):
-    p = cache / 'registru.json'
+def _registru(c):
+    p = pathlib.Path(c) / 'registru.json'
     return load(p) if p.exists() else {}
 
-def _salveaza_registru(cache, reg):
-    save(cache / 'registru.json', reg)
+def _salveaza_registru(c, reg):
+    save(pathlib.Path(c) / 'registru.json', reg)
 
 @cu_lacat
 def descarca(rdir, edge, acum=time.time):
-    """PDF-urile rularii, cu protectie la EGRESS din Storage (cerere Razvan 14.10, dupa Huedin). Sub lacatul rularii SI al cache-ului
-    comun (<work>/_pdf_cache, lacat O_EXCL). Ordinea pe document:
-      1) copia rularii valida -> nimic;
-      2) fisier complet ramas fara meta dupa o cadere (transfer in curs notat in registru, aceeasi lungime, PDF complet) -> adoptat;
-      3) ofertare-pdf-link (fara egress) + GET CONDITIONAT cu ETag-ul din registru: 304 = copia din cache (fara corp, fara egress);
-         200 = descarcare noua, doar daca: < MAX_INCERCARI_PDF incercari pe DOCUMENT (registrul comun tuturor rularilor), >= pauza de
-         la precedenta, si in plafonul rularii. Bugetul se REZERVA durabil inaintea cererii (cel ramas, sau marimea stiuta) si se
-         reconciliaza la succes: o cadere oricand dupa cerere lasa consumul socotit (conservator). Depasire = rularea oprita."""
+    """PDF-urile rularii, cu protectie la EGRESS din Storage (cerere Razvan 14.10, dupa Huedin). Fiecare document se descarca O SINGURA
+    DATA PE RULARE: copia rularii (pdf/<doc>.pdf, SHA-256 in meta) e singura sursa pentru orice reluare - nicio redescarcare, nicio
+    revalidare (versiunea documentului e INGHETATA la prima descarcare completa a rularii; o rulare noua, ceruta de om din ERP, descarca
+    din nou). Sub lacatul rularii SI al registrului comun al documentelor (<work>/_pdf_registru, lacat O_EXCL):
+      - registrul comun tuturor rularilor numara INCERCARILE ESUATE pe document: cel mult MAX_INCERCARI_PDF, la >= pauza una de alta;
+        incercarea se noteaza INAINTEA apelului, iar una ramasa fara rezultat (cadere) conteaza ca esuata la urmatoarea pornire;
+      - bugetul rularii se REZERVA durabil inaintea cererii (cel ramas, cel mult MAX_PDF), coboara la Content-Length la antete si se
+        reconciliaza la octetii reali la succes sau la un esec in proces; o cadere a procesului lasa rezervarea socotita. Depasire = oprita;
+      - un transfer trunchiat nu devine copia rularii (Edge.get); un fisier complet ramas fara meta se adopta DOAR daca e transferul in
+        curs al ACESTEI rulari (jurnalul ei), cu aceeasi lungime ca Content-Length."""
     rdir = pathlib.Path(rdir); r = rulare(rdir); (rdir / 'pdf').mkdir(exist_ok=True); out = []
     activa(rdir)
-    cache = _dir_cache(rdir)
-    with lacat_cache(cache):
-        reg = _registru(cache); eg = jurnal_egress(rdir)
+    rc = _dir_registru(rdir)
+    with lacat_cache(rc):
+        reg = _registru(rc); eg = jurnal_egress(rdir)
         for doc, _ in documente(r):
             dest = rdir / 'pdf' / ('%d.pdf' % doc); meta = rdir / 'pdf' / ('%d.json' % doc); k = str(doc)
-            rd = reg.setdefault(k, {'incercari': 0}); jd = eg['documente'].setdefault(k, {'incercari': 0, 'rezervat': 0, 'octeti': 0})
+            rd = reg.setdefault(k, {'esecuri': 0, 'in_zbor': {}}); jd = eg['documente'].setdefault(k, {'incercari': 0, 'rezervat': 0, 'octeti': 0})
             if dest.exists() and meta.exists() and sha(dest.read_bytes()) == load(meta)['sha256']: out.append({'document_id': doc, 'deja': True}); continue
-            ic = rd.get('in_curs')
-            if dest.exists() and not meta.exists() and ic and ic.get('cl') == dest.stat().st_size and pdf_complet(dest):
-                h = sha(dest.read_bytes()); _publica(cache, reg, rd, eg, jd, dest, meta, doc, h, dest.stat().st_size, ic.get('etag'), acum, 'adoptat')
-                save(rdir / 'egress.json', eg); _salveaza_registru(cache, reg); out.append({'document_id': doc, 'adoptat': True}); continue
+            ic = jd.get('in_curs')  # transferul in curs AL ACESTEI rulari
+            if dest.exists() and not meta.exists() and ic and ic.get('cl') is not None and ic['cl'] == dest.stat().st_size and pdf_complet(dest):
+                n = dest.stat().st_size; h = sha(dest.read_bytes())
+                eg['octeti_total'] += n - ic['rez']; jd['rezervat'] -= ic['rez']; jd['octeti'] += n; jd.pop('in_curs', None)  # doar rezervarea ACESTUI transfer
+                rd['in_zbor'].pop('%d:%s' % (r['rulare_id'], ic.get('a')), None)
+                save(meta, {'document_id': doc, 'sha256': h, 'octeti': n, 'etag': ic.get('etag'), 'sursa': 'adoptat', 'la': acum()})
+                save(rdir / 'egress.json', eg); _salveaza_registru(rc, reg); out.append({'document_id': doc, 'adoptat': True}); continue
             if dest.exists() and not meta.exists(): dest.unlink()  # rest necunoscut: nu se foloseste
-            cf = cache / ('%s.pdf' % rd['sha256']) if rd.get('sha256') else None
-            are_cache = bool(cf and cf.exists() and sha(cf.read_bytes()) == rd['sha256'] and rd.get('etag'))
-            if rd['incercari'] >= MAX_INCERCARI_PDF and not are_cache:
-                raise RuntimeError('Documentul %d: %d incercari de descarcare consumate (toate rularile), nicio alta descarcare din Storage - verificare manuala'
-                                   % (doc, rd['incercari']))
-            if rd['incercari'] and not are_cache and acum() - rd.get('ultima', 0) < PAUZA_INCERCARI_SEC:
+            # o incercare ramasa „in zbor” (proces mort) = esuata: se socoteste o singura data
+            for cheie in list(rd['in_zbor']):
+                rd['esecuri'] += 1; rd['in_zbor'].pop(cheie)
+            if rd['esecuri'] >= MAX_INCERCARI_PDF:
+                _salveaza_registru(rc, reg)
+                raise RuntimeError('Documentul %d: %d incercari de descarcare esuate (toate rularile), nicio alta descarcare din Storage - verificare manuala'
+                                   % (doc, rd['esecuri']))
+            if acum() - rd.get('ultima', 0) < PAUZA_INCERCARI_SEC and rd['esecuri']:
+                _salveaza_registru(rc, reg)
                 raise RuntimeError('Documentul %d: urmatoarea incercare abia dupa %d s de la precedenta' % (doc, PAUZA_INCERCARI_SEC))
             ramas = eg['plafon_octeti'] - eg['octeti_total']
             if ramas <= 0: return _opreste_egress(rdir, edge, r, eg, 'plafonul de egress al rularii (%d octeti) e consumat' % eg['plafon_octeti'])
@@ -283,52 +286,41 @@ def descarca(rdir, edge, acum=time.time):
             if status != 200: raise EdgeError('ofertare-pdf-link', status, j)
             url = j.get('url') or ''
             if not url.startswith(SEMNAT) or j.get('document_id') != doc: raise ValueError('URL semnat neasteptat pentru documentul %d' % doc)  # URL-ul nu se afiseaza
-            # REZERVAREA durabila, inaintea cererii: tot ce ar putea curge (plafonul ramas al rularii, cel mult MAX_PDF); o incercare
-            # in plus pe document; transferul in curs in registru. Totul pe disc INAINTE de GET.
-            rez = [min(ramas, MAX_PDF)]; a = uuid.uuid4().hex
-            eg['octeti_total'] += rez[0]; jd['rezervat'] += rez[0]; jd['incercari'] += 1
-            rd['incercari'] += 1; rd['ultima'] = acum(); rd['in_curs'] = {'a': a, 'cl': None, 'etag': None}
-            save(rdir / 'egress.json', eg); _salveaza_registru(cache, reg)
-            doar_304 = rd['incercari'] > MAX_INCERCARI_PDF  # incercarile erau epuizate: se accepta doar „neschimbat”
+            # REZERVAREA durabila, INAINTEA cererii: bugetul, incercarea in zbor (registrul comun), transferul in curs (jurnalul rularii)
+            rez = [min(ramas, MAX_PDF)]; a = uuid.uuid4().hex; zbor = '%d:%s' % (r['rulare_id'], a)
+            eg['octeti_total'] += rez[0]; jd['rezervat'] += rez[0]; jd['incercari'] += 1; jd['in_curs'] = {'a': a, 'cl': None, 'etag': None, 'rez': rez[0]}
+            rd['in_zbor'][zbor] = acum(); rd['ultima'] = acum()
+            save(rdir / 'egress.json', eg); _salveaza_registru(rc, reg)
             def antete(cl, et):
-                if doar_304: raise RuntimeError('Documentul %d s-a schimbat la server, dar incercarile de descarcare sunt epuizate - verificare manuala' % doc)
-                rd['in_curs'] = {'a': a, 'cl': cl, 'etag': et}; _salveaza_registru(cache, reg)
                 if cl is not None and cl < rez[0]:  # rezervarea coboara la marimea anuntata (tot ce poate curge), durabil
-                    eg['octeti_total'] -= rez[0] - cl; jd['rezervat'] -= rez[0] - cl; rez[0] = cl; save(rdir / 'egress.json', eg)
+                    eg['octeti_total'] -= rez[0] - cl; jd['rezervat'] -= rez[0] - cl; rez[0] = cl
+                jd['in_curs'] = {'a': a, 'cl': cl, 'etag': et, 'rez': rez[0]}
+                save(rdir / 'egress.json', eg)
             try:
-                res = edge.get(url, dest, max_octeti=rez[0], etag=rd.get('etag') if are_cache else None, la_antete=antete)
+                res = edge.get(url, dest, max_octeti=rez[0], la_antete=antete)
             except (EgressDepasit, TransferIncomplet) as e:
-                # esec IN PROCES: octetii cititi sunt stiuti exact -> rezervarea se reconciliaza la ei; incercarea ramane numarata
+                # esec IN PROCES: octetii cititi sunt stiuti exact -> rezervarea se reconciliaza la ei; esecul se numara in registru
                 cit = getattr(e, 'citit', None)
                 if isinstance(cit, int): eg['octeti_total'] += cit - rez[0]; jd['rezervat'] -= rez[0]; jd['octeti'] += cit
-                save(rdir / 'egress.json', eg); _salveaza_registru(cache, reg)
+                jd.pop('in_curs', None); rd['in_zbor'].pop(zbor, None); rd['esecuri'] += 1
+                save(rdir / 'egress.json', eg); _salveaza_registru(rc, reg)
                 if isinstance(e, EgressDepasit): return _opreste_egress(rdir, edge, r, eg, 'documentul %d: %s' % (doc, e))
                 heartbeat(edge, False, 'rularea %d: descarcarea documentului %d a esuat (%s), egress %.1f MB' % (r['rulare_id'], doc, str(e)[:120], eg['octeti_total'] / 1e6))
                 raise
-            # (o cadere a PROCESULUI aici lasa rezervarea pe disc, socotita: conservator)
-            if res['status'] == 304:  # neschimbat la server: copia din cache, fara corp; rezervarea si incercarea se elibereaza
-                eg['octeti_total'] -= rez[0]; jd['rezervat'] -= rez[0]; jd['incercari'] -= 1; rd['incercari'] -= 1; rd.pop('in_curs', None)
-                shutil.copyfile(cf, dest); save(meta, {'document_id': doc, 'sha256': rd['sha256'], 'octeti': rd['octeti'], 'sursa': 'cache_304', 'la': acum()})
-                jd['sursa'] = 'cache_304'; save(rdir / 'egress.json', eg); _salveaza_registru(cache, reg); out.append({'document_id': doc, 'cache': True}); continue
-            eg['octeti_total'] += res['octeti'] - rez[0]; jd['rezervat'] -= rez[0]; jd['octeti'] += res['octeti']  # reconcilierea in jos
-            _publica(cache, reg, rd, eg, jd, dest, meta, doc, res['sha256'], res['octeti'], res.get('etag'), acum, 'storage')
-            save(rdir / 'egress.json', eg); _salveaza_registru(cache, reg); out.append({'document_id': doc, 'octeti': res['octeti']})
+            # (o cadere a PROCESULUI aici lasa rezervarea si incercarea in zbor pe disc: socotite, conservator)
+            eg['octeti_total'] += res['octeti'] - rez[0]; jd['rezervat'] -= rez[0]; jd['octeti'] += res['octeti']; jd.pop('in_curs', None)
+            rd['in_zbor'].pop(zbor, None)
+            save(meta, {'document_id': doc, 'sha256': res['sha256'], 'octeti': res['octeti'], 'etag': res.get('etag'), 'sursa': 'storage', 'la': acum()})
+            save(rdir / 'egress.json', eg); _salveaza_registru(rc, reg); out.append({'document_id': doc, 'octeti': res['octeti']})
     heartbeat(edge, True, 'rularea %d: PDF-uri gata, egress %.1f MB' % (r['rulare_id'], eg['octeti_total'] / 1e6))
     return {'documente': out, 'egress_octeti': eg['octeti_total'], 'plafon_egress_octeti': eg['plafon_octeti']}
 
-def _publica(cache, reg, rd, eg, jd, dest, meta, doc, h, n, etag, acum, sursa):
-    cf = cache / ('%s.pdf' % h)
-    if not cf.exists(): shutil.copyfile(dest, cf)
-    rd.update({'sha256': h, 'octeti': n, 'etag': etag}); rd.pop('in_curs', None)
-    jd['sursa'] = sursa
-    save(meta, {'document_id': doc, 'sha256': h, 'octeti': n, 'sursa': sursa, 'la': acum()})
-
 class lacat_cache:
-    """Lacat O_EXCL pe cache-ul comun (registru + fisiere): doua rulari din acelasi director de lucru nu-l scriu simultan."""
-    def __init__(self, cache): self.p = pathlib.Path(cache) / 'lacat.json'
+    """Lacat O_EXCL pe registrul comun al documentelor: doua rulari din acelasi director de lucru nu-l scriu simultan."""
+    def __init__(self, c): self.p = pathlib.Path(c) / 'lacat.json'
     def __enter__(self):
         try: fd = os.open(str(self.p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError: raise RuntimeError('Cache-ul PDF e folosit de alt proces (%s). Daca niciun proces nu mai ruleaza, sterge manual lacatul' % self.p)
+        except FileExistsError: raise RuntimeError('Registrul PDF e folosit de alt proces (%s). Daca niciun proces nu mai ruleaza, sterge manual lacatul' % self.p)
         with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump({'pid': os.getpid(), 'la': time.time()}, f)
         return self
     def __exit__(self, *a):

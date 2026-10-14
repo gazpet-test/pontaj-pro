@@ -51,16 +51,16 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
 | 9 | `reconciliaza <dir>` | `reconcile.reconcile` per document → textul reconciliat (`reconciliat` / `needs_human`) → `finalizata` |
 | — | `oprire <dir> --motiv …` · `abandon --rezervare N` · `stare <dir>` | oprește rularea · abandonează o rezervare rămasă deschisă (după 15 min) · starea din BD (doar citire) + pașii locali |
 
-- **Egress din Supabase Storage** (cerere Răzvan 14.10, după Huedin — o eroare redescărca în buclă, ~600× plafonul), 
-  sub lacătul rulării ȘI al cache-ului comun: fiecare PDF se descarcă O SINGURĂ DATĂ, apoi stă în cache-ul serverului
-  `<work>/_pdf_cache/<sha256>.pdf` cu registrul `registru.json` (sha, ETag-ul serverului, încercări, transfer în curs). Reluarea și
-  orice altă rulare REVALIDEAZĂ la server cu GET condiționat (`If-None-Match`): 304 = copia din cache, fără corp, fără egress; 200 =
-  documentul s-a schimbat la server -> descărcare nouă (cache-ul nu servește o versiune veche). Limite: cel mult 2 încercări pe
-  DOCUMENT în toate rulările (a doua după 60 s; după ele doar revalidarea 304 e permisă, un 200 e oprit înaintea corpului); plafon de
-  egress pe rulare `OCR_EGRESS_MAX_MB` (implicit 2048 MB), REZERVAT pe disc înaintea cererii (coborât la `Content-Length` la antete,
-  reconciliat la octeții reali la succes sau la un eșec în proces; o cădere a procesului lasă rezervarea socotită) — depășire =
-  rularea `oprita`. Un transfer trunchiat (lungime != `Content-Length`, PDF fără `%PDF-` / `%%EOF`) nu intră niciodată în cache;
-  un fișier complet rămas fără meta după o cădere se adoptă, nu se redescarcă. Jurnal: `<dir_rulare>/egress.json`, heartbeat, `erp stare`.
+- **Egress din Supabase Storage** (cerere Răzvan 14.10, după Huedin — o eroare redescărca în buclă, ~600× plafonul), `erp descarca`
+  sub lacătul rulării ȘI al registrului comun al documentelor (`<work>/_pdf_registru`): fiecare PDF se descarcă O SINGURĂ DATĂ PE
+  RULARE; copia rulării (`pdf/<doc>.pdf`, SHA-256 + ETag în meta) e singura sursă pentru orice reluare — nicio redescărcare, nicio
+  revalidare (versiunea e înghețată la prima descărcare completă a rulării; o rulare nouă, cerută de om din ERP, descarcă din nou).
+  Registrul comun numără ÎNCERCĂRILE EȘUATE pe document, în toate rulările: cel mult 2, la ≥ 60 s una de alta; încercarea se notează
+  ÎNAINTEA apelului, iar una rămasă fără rezultat (cădere) contează ca eșuată. Plafon de egress pe rulare `OCR_EGRESS_MAX_MB`
+  (implicit 2048 MB), REZERVAT pe disc înaintea cererii (coborât la `Content-Length` la antete, reconciliat la octeții reali la succes
+  sau la un eșec în proces; o cădere a procesului lasă rezervarea socotită) — depășire = rularea `oprita`. Un transfer trunchiat
+  (lungime != `Content-Length`, PDF fără `%PDF-` / `%%EOF`) nu devine copia rulării; un fișier complet rămas fără meta se adoptă doar
+  dacă e transferul în curs al ACELEIAȘI rulări. Jurnal: `<dir_rulare>/egress.json`, heartbeat, `erp stare`.
 - **Reluare după cădere** (review r1, decizia B Răzvan): un pas unic (preia, planul, marcajul comparației, o tranziție) poate intra în
   BD și clientul să cadă înainte de marcajul local. La reluare clientul NU interpretează refuzul: citește starea din BD (op
   `stare_rulare` / `rulari_active`, doar citire, migrarea `20261029e`) — planul e confirmat doar dacă amprenta lui canonică din BD
