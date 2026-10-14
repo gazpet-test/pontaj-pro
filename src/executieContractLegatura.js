@@ -80,6 +80,32 @@ export function proiectLegatAltundeva(contractId, legaturi, proiectIdCurent) {
   return alt || null
 }
 
+// Indexul unic executie_proiecte_contract_id_unic (20261030b) respinge a doua legare a aceluiași contract cu 23505
+export const eContractOcupat = err => err?.code === '23505'
+export function mesajEroareLegare(err) {
+  if (eContractOcupat(err)) return 'Contractul tocmai a fost legat de alt proiect — lista s-a reîncărcat, alege altul.'
+  return 'Legătura a fost refuzată: ' + (err?.message || 'eroare necunoscută')
+}
+
+// ── Administrativ → editorul de contract: ce face salvarea cu legătura spre Execuție (Jakarinos r1 P2 pe #709) ──
+// Înainte, editorul găsea proiectul legat DOAR prin șantier; la un proiect fără șantier (legat manual din Execuție)
+// câmpul rămânea gol, iar salvarea dezlega proiectul. Acum:
+//  'leaga_prin_santier' — e ales un șantier: proiectul activ al șantierului (ca până acum)
+//  'pastreaza'          — niciun șantier, dar contractul e legat de un proiect FĂRĂ șantier: legătura rămâne
+//  'dezleaga'           — doar la cerere explicită: bifa „Dezleagă” sau golirea câmpului la un proiect care avea șantier
+//  'avertizare'         — nimic legat, niciun șantier: doar avertismentul (fără UPDATE pe executie_proiecte)
+//  'nimic'              — altă categorie decât execuție
+export function decizieLegaturaLaSalvare({ categorie, siteSelectat, proiectLegat, dezleagaCerut = false }) {
+  if (categorie !== 'executie') return 'nimic'
+  if (siteSelectat) return 'leaga_prin_santier'
+  if (!proiectLegat) return 'avertizare'
+  if (dezleagaCerut || proiectLegat.site_id != null) return 'dezleaga'
+  return 'pastreaza'
+}
+// Ghicirea șantierului după denumire nu are voie să înlocuiască o legătură existentă (ar muta contractul pe alt proiect)
+export const autoDetectieSantierPermisa = ({ categorie, denumire, proiectLegat }) =>
+  categorie === 'executie' && textCurat(denumire) !== '' && !proiectLegat
+
 // Ce se completează în Administrativ → Contracte cu terți → „+ Contract nou”
 export function instructiuniInregistrare(p) {
   const linii = [

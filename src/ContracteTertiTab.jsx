@@ -17,6 +17,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { norm } from './lib/diacritice.js'
 import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
+import { decizieLegaturaLaSalvare, autoDetectieSantierPermisa } from './executieContractLegatura.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -1055,6 +1056,10 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   const proiecteExec = siteLista
   const proiectExecId = siteIdSelectat   // ⚠️ acum e site_id, nu project_id
   const setProiectExecId = setSiteIdSelectat
+  // TKT-2026-0333 (Jakarinos r1 P2 pe #709): proiectul legat deja (după contract_id, cu sau fără șantier)
+  // și cererea explicită de dezlegare — fără ele, salvarea dezlega proiectele fără șantier
+  const [proiectLegat, setProiectLegat] = useState(null)
+  const [dezleagaCerut, setDezleagaCerut] = useState(false)
 
   // Încarcă SITES (nu executie_proiecte) + detectează linkul curent
   useEffect(() => {
@@ -1067,20 +1072,23 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         .order('name')
       setSiteLista(sites || [])
 
+      let legat = null
       if (!isNew && item.id) {
-        // Detectez șantierul prin proiectul legat de contract
+        // Proiectul legat se caută după contract_id (cu sau fără șantier); șantierul lui precompletează câmpul
         const { data: linked } = await supabase
           .from('executie_proiecte')
-          .select('site_id')
+          .select('id, cod_intern, nume, site_id')
           .eq('contract_id', item.id)
           .maybeSingle()
+        legat = linked || null
+        setProiectLegat(legat)
         if (linked?.site_id) {
           setSiteIdSelectat(String(linked.site_id))
         }
       }
 
-      // Smart auto-match: compară denumire contract cu numele șantierului
-      if (f.categorie === 'executie' && f.denumire && sites?.length) {
+      // Smart auto-match: compară denumire contract cu numele șantierului — doar dacă nu e legat deja de un proiect
+      if (autoDetectieSantierPermisa({ categorie: f.categorie, denumire: f.denumire, proiectLegat: legat }) && sites?.length) {
         const score = (den, s) => {
           const d = den.toLowerCase()
           // Cuvinte cheie din numele șantierului (>3 litere, fără "gazpet/transgaz/gaze")
@@ -1170,7 +1178,8 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     setSaving(false)
 
     // ─── Sincronizare Șantier → Proiect Execuție → Contract ─────────────────
-    if (f.categorie === 'executie' && proiectExecId) {
+    const decizie = decizieLegaturaLaSalvare({ categorie: f.categorie, siteSelectat: proiectExecId, proiectLegat, dezleagaCerut })
+    if (decizie === 'leaga_prin_santier') {
       // proiectExecId = site_id → găsim proiectul prin șantier
       const { data: proiectGasit } = await supabase
         .from('executie_proiecte')
@@ -1194,14 +1203,25 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
           valoare_eur:   payload.valoare_eur,
         }).eq('id', proiectGasit.id)
       }
-    } else if (f.categorie === 'executie' && !proiectExecId) {
-      if (!isNew) {
-        // Dacă a fost golit câmpul → dezleagă proiectul anterior
-        await supabase.from('executie_proiecte')
-          .update({ contract_id: null })
-          .eq('contract_id', contractId)
-      }
-      // ⚠️ Contract de execuție salvat fără șantier asociat
+    } else if (decizie === 'pastreaza') {
+      // Proiect fără șantier legat deja (manual din Execuție): legătura rămâne, datele se sincronizează ca mai sus
+      await supabase.from('executie_proiecte').update({
+        nr_contract:   f.numar_contract.trim() || null,
+        data_contract: f.data_semnare || null,
+        valoare_lei:   payload.valoare_lei,
+        valoare_eur:   payload.valoare_eur,
+      }).eq('id', proiectLegat.id).eq('contract_id', contractId)
+    } else if (decizie === 'dezleaga') {
+      // Doar la cerere explicită: bifa „Dezleagă” sau câmpul Șantier golit la un proiect care avea șantier
+      await supabase.from('executie_proiecte')
+        .update({ contract_id: null })
+        .eq('contract_id', contractId)
+      onError(`⚠️ Contractul a fost salvat și dezlegat de proiectul ${proiectLegat?.cod_intern || proiectLegat?.nume || ''} din Execuție. Pentru o legătură nouă alege șantierul și re-salvează.`)
+      setProiectLegat(null); setDezleagaCerut(false)
+      setSaving(false)
+      return
+    } else if (decizie === 'avertizare') {
+      // ⚠️ Contract de execuție salvat fără șantier asociat (nu se mai dezleagă nimic fără cerere explicită)
       onError('⚠️ Contractul a fost salvat, dar nu e legat la niciun Șantier! Selectează șantierul din câmpul de mai jos și re-salvează.')
       setSaving(false)
       return
@@ -1435,9 +1455,20 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
                   ) : null
                 })()}
               </div>
+            ) : proiectLegat && proiectLegat.site_id == null ? (
+              // TKT-2026-0333: proiect fără șantier legat deja (manual din Execuție) — legătura rămâne dacă nu se cere altfel
+              <div style={{fontSize:11, marginTop:6, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                <span style={{color: dezleagaCerut ? G.orange : G.teal, fontWeight:600}}>
+                  🔗 Legat de proiectul {proiectLegat.cod_intern || proiectLegat.nume || '#' + proiectLegat.id} (fără șantier) — {dezleagaCerut ? 'se dezleagă la salvare.' : 'legătura se păstrează la salvare.'}
+                </span>
+                <label style={{color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer'}}>
+                  <input type="checkbox" checked={dezleagaCerut} onChange={e => setDezleagaCerut(e.target.checked)} /> Dezleagă de proiect la salvare
+                </label>
+              </div>
             ) : (
               <div style={{fontSize:11, color:G.orange, marginTop:6, fontWeight:600}}>
                 ⚠️ Fără șantier — contractul de execuție nu va apărea în modulul Execuție.
+                {proiectLegat && ` La salvare se dezleagă proiectul ${proiectLegat.cod_intern || proiectLegat.nume || '#' + proiectLegat.id}.`}
               </div>
             )}
           </div>

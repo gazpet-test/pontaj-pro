@@ -4,7 +4,8 @@
 // Apare doar pe proiectele cu nr_contract completat și contract_id NULL (logica în
 // executieContractLegatura.js). Două ieșiri, fără formular nou și fără RPC:
 //  • 🔗 Leagă de un contract din Administrativ — caută în contracte_terti (fără arhivate) și
-//    face UPDATE executie_proiecte SET contract_id. RLS-ul existent decide; refuzul se afișează.
+//    face UPDATE executie_proiecte SET contract_id. RLS-ul existent decide; refuzul se afișează. Regula 1:1 o ține
+//    indexul unic 20261030b: a doua legare a aceluiași contract dă 23505 → mesaj + lista se reîncarcă.
 //  • 📃 Înregistrează în Administrativ ↗ — deschide Administrativ → Contracte cu terți într-un
 //    tab nou și arată ce trebuie completat (șantierul face legătura automată la salvare).
 // Butoanele apar doar pentru cine poate edita Execuția (owner / can_manage_contracts).
@@ -13,7 +14,7 @@ import { supabase } from './lib/supabase.js'
 import {
   eContractNelegat, ETICHETA_CONTRACT_NELEGAT, TOOLTIP_CONTRACT_NELEGAT, LINK_ADMIN_CONTRACTE,
   filtreazaContracte, proiectLegatAltundeva, partenerContract, instructiuniInregistrare,
-  textToastInregistrare, fmtZi, fmtLeiSimplu,
+  textToastInregistrare, fmtZi, fmtLeiSimplu, mesajEroareLegare, eContractOcupat,
 } from './executieContractLegatura.js'
 
 const G = {
@@ -91,9 +92,11 @@ function LegaContractModal({ proiect: p, onClose, onLegat, arataToast }) {
   const [cautare, setCautare] = useState('')
   const [doarIncasare, setDoarIncasare] = useState(true)
   const [salvez, setSalvez] = useState(null)
+  const [reincarc, setReincarc] = useState(0)   // după 23505 lista se citește din nou
 
   useEffect(() => {
     let live = true
+    setIncarc(true); setEroare(null)
     ;(async () => {
       const [ct, ben, leg] = await Promise.all([
         supabase.from('contracte_terti')
@@ -104,20 +107,22 @@ function LegaContractModal({ proiect: p, onClose, onLegat, arataToast }) {
         supabase.from('executie_proiecte').select('id, cod_intern, contract_id').not('contract_id', 'is', null),
       ])
       if (!live) return
+      // fără lista legăturilor nu știm ce contracte sunt ocupate → legarea se blochează (Jakarinos r1 P2)
       if (ct.error) setEroare('Nu am putut citi contractele din Administrativ: ' + ct.error.message)
+      else if (leg.error) setEroare('Nu am putut verifica ce contracte sunt deja legate de alte proiecte (' + leg.error.message + '). Legarea e blocată — închide și încearcă din nou.')
       setContracte(ct.data || [])
       setBenefMap(Object.fromEntries((ben.data || []).map(b => [b.id, b.nume])))
       setLegaturi(leg.data || [])
       setIncarc(false)
     })()
     return () => { live = false }
-  }, [])
+  }, [reincarc])
 
   const lista = useMemo(() => filtreazaContracte(contracte, { cautare, doarIncasare, proiect: p, benefMap }),
     [contracte, cautare, doarIncasare, p, benefMap])
 
   async function leaga(c) {
-    if (proiectLegatAltundeva(c.id, legaturi, p.id)) return
+    if (incarc || eroare || proiectLegatAltundeva(c.id, legaturi, p.id)) return
     const ok = window.confirm(
       `Legi proiectul ${p.cod_intern || p.nume} de contractul nr. ${c.numar_contract || '—'} (${partenerContract(c, benefMap)})?\n\n` +
       'Se salvează doar legătura. De acum Execuția arată valoarea și termenul din contractul din Administrativ (cu actele adiționale); ' +
@@ -129,7 +134,8 @@ function LegaContractModal({ proiect: p, onClose, onLegat, arataToast }) {
       .update({ contract_id: c.id, updated_at: new Date().toISOString() })
       .eq('id', p.id).is('contract_id', null).select('id')
     setSalvez(null)
-    if (error) { arataToast('Legătura a fost refuzată: ' + error.message, 'error', 9000); return }
+    // 23505 = indexul unic 20261030b: altcineva a legat între timp contractul de alt proiect → lista se reîncarcă
+    if (error) { arataToast(mesajEroareLegare(error), 'error', 9000); if (eContractOcupat(error)) setReincarc(k => k + 1); return }
     if (!data?.length) { arataToast('Legătura nu s-a salvat: fie nu ai drept de modificare pe proiect, fie proiectul a fost legat între timp. Reîncarcă pagina.', 'error', 9000); return }
     arataToast(`✔ Proiect legat de contractul nr. ${c.numar_contract || '#' + c.id} din Administrativ`, 'success')
     onLegat()

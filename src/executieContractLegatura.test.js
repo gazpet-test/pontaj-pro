@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   eContractNelegat, normNrContract, scorPotrivire, filtreazaContracte, proiectLegatAltundeva,
   instructiuniInregistrare, textToastInregistrare, partenerContract, fmtZi, fmtLeiSimplu, LINK_ADMIN_CONTRACTE,
+  eContractOcupat, mesajEroareLegare, decizieLegaturaLaSalvare, autoDetectieSantierPermisa,
 } from './executieContractLegatura.js'
 
 // Proiecte ca cele din TKT-2026-0333 (forma rândului din v_executie_dashboard)
@@ -116,6 +117,51 @@ describe('instrucțiuni de înregistrare în Administrativ', () => {
   })
   it('linkul duce direct la tab-ul Contracte cu terți', () => {
     expect(LINK_ADMIN_CONTRACTE).toBe('/administrativ?tab=contracte_terti')
+  })
+})
+
+describe('eroarea la legare (indexul unic 20261030b)', () => {
+  it('23505 = contract ocupat între timp → mesaj dedicat', () => {
+    const err = { code: '23505', message: 'duplicate key value violates unique constraint "executie_proiecte_contract_id_unic"' }
+    expect(eContractOcupat(err)).toBe(true)
+    expect(mesajEroareLegare(err)).toMatch(/tocmai a fost legat de alt proiect/)
+  })
+  it('alte erori → mesajul lor, fără „ocupat”', () => {
+    expect(eContractOcupat({ code: '42501', message: 'permission denied' })).toBe(false)
+    expect(mesajEroareLegare({ code: '42501', message: 'permission denied' })).toBe('Legătura a fost refuzată: permission denied')
+    expect(eContractOcupat(null)).toBe(false)
+    expect(mesajEroareLegare(undefined)).toMatch(/eroare necunoscută/)
+  })
+})
+
+// Administrativ → editorul de contract (Jakarinos r1 P2): contractele 108 / 110 sunt legate de proiectele 27 / 32, FĂRĂ șantier
+describe('decizieLegaturaLaSalvare (salvarea în Administrativ)', () => {
+  const faraSantier = { id: 27, cod_intern: 'FINTA_GHEBOAIA', site_id: null }
+  const cuSantier = { id: 7, cod_intern: 'TIFESTI_CFI', site_id: 10 }
+  it('proiect fără șantier legat deja: o simplă salvare PĂSTREAZĂ legătura (înainte o pierdea)', () => {
+    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: faraSantier })).toBe('pastreaza')
+  })
+  it('dezlegarea doar la cerere explicită', () => {
+    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: faraSantier, dezleagaCerut: true })).toBe('dezleaga')
+    // proiect cu șantier, iar câmpul Șantier a fost golit de utilizator = cerere explicită (comportamentul vechi)
+    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: cuSantier })).toBe('dezleaga')
+  })
+  it('șantier ales → legare prin șantier, ca până acum', () => {
+    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '10', proiectLegat: cuSantier })).toBe('leaga_prin_santier')
+    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '8', proiectLegat: null })).toBe('leaga_prin_santier')
+  })
+  it('nimic legat, niciun șantier → doar avertisment (fără UPDATE care ar putea dezlega o legătură făcută între timp)', () => {
+    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: null })).toBe('avertizare')
+    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: null, dezleagaCerut: true })).toBe('avertizare')
+  })
+  it('altă categorie → nu atinge Execuția', () => {
+    expect(decizieLegaturaLaSalvare({ categorie: 'prestari_servicii', siteSelectat: '', proiectLegat: faraSantier })).toBe('nimic')
+  })
+  it('ghicirea șantierului după denumire nu înlocuiește o legătură existentă', () => {
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: faraSantier })).toBe(false)
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: null })).toBe(true)
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: '  ', proiectLegat: null })).toBe(false)
+    expect(autoDetectieSantierPermisa({ categorie: 'altele', denumire: 'x', proiectLegat: null })).toBe(false)
   })
 })
 
