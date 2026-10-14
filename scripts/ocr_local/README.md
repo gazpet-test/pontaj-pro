@@ -113,6 +113,9 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 - `<img>` nu mai dispare: `alt` / `title` devin marcajul comparat `⟦img alt=…⟧`.
 - (Jakarinos r5) Tabel cu etichete neînchise → tot conținutul intră ca text marcat `⟦tabel_neparsat⟧` (comparat), nu se pierde;
   text barat (`<s>`, `<del>`, `<strike>`, `~~…~~`) → marcaj `⟦barat: …⟧`, nu text activ; `rowspan="0"` / `colspan` > 50 = marcaj invalid.
+- (Copilot r6) Bucăți de tabel HTML neconsumate (`<table>` fără `</table>`, `</table>` orfan) → text marcat `⟦tabel_neparsat⟧`.
+- (Jakarinos r6, P2) Text în tabel în afara rândurilor / celulelor → `⟦tabel_neparsat⟧`; `<img>` păstrează textual toate atributele
+  (inclusiv `>` în valori, valori neghilimelate, `src`); bararea prin CSS (`line-through`) → `⟦barat: …⟧`.
 - **Recuperare:** dacă reconcilierea pică la mijloc rămâne `reconciliere.tmp/` și orice reluare e refuzată (intenționat). Omul
   verifică ce e în el, îl șterge manual și rulează din nou `reconciliaza`.
 
@@ -125,12 +128,15 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local -v` — 81 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local -v` — 83 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 
 ## Limite cunoscute
 
+- Atributele HTML de pe alte elemente decât `<img>` (în afară de `colspan` / `rowspan` și `line-through`) nu se compară
+  (`data-*`, `aria-label`, `title` pe celule). Cititorii pilotului nu le produc (LightOn: tabele HTML tip pandas, MinerU: json2md); la generalizare pe HTML
+  arbitrar trebuie tratate (Copilot r6, P2 neblocant pentru pilot).
 - Decupajul trimis arbitrului = banda (text) sau pagina întreagă (tabel), nu bbox-ul rândului; contextul (rândul precedent, nr. crt.) ajută
   la localizare.
 - `m³` vs `m3`, `Ø` vs `∅` ajung la arbitru (nu normalizăm nimic pe UM / cantități) — ieftin, dar zgomot.

@@ -23,15 +23,18 @@ ROW_HTML = re.compile(r'<tr\b.*?</tr\s*>', re.I | re.S)
 CELL_HTML = re.compile(r'<t[dh]\b([^>]*)>(.*?)</t[dh]\s*>', re.I | re.S)
 SPAN = re.compile(r'\b(colspan|rowspan)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))', re.I)
 STRIKE = re.compile(r'<(s|del|strike)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)
+CSS_STRIKE = re.compile(r'<(span|font|div|p|td)\b[^>]*line-through[^>]*>(.*?)</\1\s*>', re.I | re.S)
 MD_STRIKE = re.compile(r'~~(?=\S)(.+?)(?<=\S)~~', re.S)
 def strike_marker(s):
     # o valoare barata nu e text activ: devine marcaj comparat ⟦barat: ...⟧ (HTML <s>/<del>/<strike> si markdown ~~...~~)
+    s = CSS_STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(2), s)
     return MD_STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(1), STRIKE.sub(lambda m: ' ⟦barat: %s⟧ ' % m.group(2), s))
-IMG = re.compile(r'<img\b([^>]*)/?>', re.I)
+IMG = re.compile(r'<img\b((?:"[^"]*"|\'[^\']*\'|[^\'">])*)>', re.I)
 IMG_ATTR = re.compile(r'\b(alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.I)
 def img_marker(s):
     # imaginea nu dispare: alt/title (substitutul textual) devin un marcaj comparat (review Copilot r5)
-    return IMG.sub(lambda m: ' ⟦img ' + ' '.join('%s=%s' % (k.lower(), a or b) for k, a, b in IMG_ATTR.findall(m.group(1))) + '⟧ ', s)
+    # toate atributele, textual (alt, title, src, ...): nicio diferenta din eticheta nu dispare (review Jakarinos r6, Copilot r6 P2)
+    return IMG.sub(lambda m: ' ⟦img ' + re.sub(r'\s+', ' ', m.group(1).rstrip('/').strip()) + '⟧ ', s)
 CAPTION = re.compile(r'<caption\b[^>]*>(.*?)</caption\s*>', re.I | re.S)
 MD_SEP = re.compile(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$')
 CONTEXT = 6
@@ -87,14 +90,23 @@ def segments(raw):
         for cap in CAPTION.findall(m.group(0)): out.append(('text', clean_inline(cap)))  # titlul tabelului (tronsonul) se compara
         body = CAPTION.sub(' ', m.group(0)); rows = html_rows(body)
         opens_td = len(re.findall(r'<t[dh]\b', body, re.I)); opens_tr = len(re.findall(r'<tr\b', body, re.I))
-        if opens_td != sum(len(CELL_HTML.findall(r)) for r in ROW_HTML.findall(body)) or opens_tr != len(ROW_HTML.findall(body)):
+        stray = plain(ROW_HTML.sub(' ', re.sub(r'</?(?:table|thead|tbody|tfoot|colgroup|col)\b[^>]*>', ' ', body, flags=re.I)))
+        stray_cells = any(plain(CELL_HTML.sub(' ', r)).strip() for r in ROW_HTML.findall(body))
+        if (opens_td != sum(len(CELL_HTML.findall(r)) for r in ROW_HTML.findall(body)) or opens_tr != len(ROW_HTML.findall(body))
+                or stray.strip() or stray_cells):  # text in afara randurilor / celulelor = neparsat, nu ignorat
             out.append(('text', '⟦tabel_neparsat⟧ ' + plain(re.sub(r'</?t[dhr]\b[^>]*>', ' | ', body, flags=re.I))))
         else: out.append(('table', rows))
         pos = m.end()
     out += _md_split(raw[pos:])
     return [s for s in out if (s[0] == 'table' and s[1]) or (s[0] == 'text' and s[1].strip())]
 
+TABLE_PIECE = re.compile(r'</?(?:table|tr|td|th|thead|tbody)\b', re.I)
+
 def _md_split(chunk):
+    # bucati de tabel HTML neconsumate de TABLE_HTML (ex. <table> fara </table>, </table> orfan): nu se sterg ca etichete -
+    # tot fragmentul intra ca text marcat ⟦tabel_neparsat⟧, cu celulele separate vizibil (review Copilot r6)
+    if TABLE_PIECE.search(chunk):
+        return [('text', '⟦tabel_neparsat⟧ ' + plain(re.sub(r'</?t[dhr]\b[^>]*>', ' | ', chunk, flags=re.I)))]
     out = []; buf = []; tab = []
     for ln in chunk.split('\n'):
         if ln.strip().startswith('|') and ln.strip().count('|') >= 2:

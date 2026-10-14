@@ -293,6 +293,18 @@ class Comparare(unittest.TestCase):
         cell = lambda k, v: '<table><tr><td %s="%s">Teava</td><td>5</td></tr></table>' % (k, v)
         for k, x, y in (('rowspan', '0', '1'), ('colspan', '50', '51')):
             s, its = compare_band(BAND, cell(k, x), OK, cell(k, y), OK); self.assertGreaterEqual(len(its), 1, (k, x, y))
+    def test_copilot_r6_tabel_fara_inchidere(self):
+        a, b = '<table><tr><td>COD</td><td>mc</td><td>5</td></tr>', 'COD mc 5'
+        for x, y in ((a, b), (b, a), ('COD mc 5</table>', b)):
+            s, its = compare_band(BAND, x, OK, y, OK); self.assertGreaterEqual(len(its), 1, (x, y))
+    def test_jakarinos_r6_p2(self):
+        x = '<table><tr><td>COD</td><td>5</td><td></td></tr></table>'; y = '<table><tr><td>COD</td><td></td><td>5</td></tr></table>'
+        s, its = compare_band(BAND, x.replace('</table>', ''), OK, y.replace('</table>', ''), OK); self.assertGreaterEqual(len(its), 1)
+        t1 = lambda v: '<table><tr><td>A</td></tr>Presiune %s bar<tr><td>B</td></tr></table>' % v
+        s, its = compare_band(BAND, t1('5'), OK, t1('7'), OK); self.assertGreaterEqual(len(its), 1)
+        for a, b in (('<img alt="DN100 > 0">', '<img alt="DN150 > 0">'), ('<img alt=DN100>', '<img alt=DN150>'), ('<img src="A.png">', '<img src="B.png">'),
+                     ('Cantitate <span style="text-decoration:line-through">5</span> 7', 'Cantitate 5 7')):
+            s, its = compare_band(BAND, 'x ' + a, OK, 'x ' + b, OK); self.assertGreaterEqual(len(its), 1, (a, b))
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
