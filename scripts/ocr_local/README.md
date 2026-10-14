@@ -15,13 +15,13 @@ tokenizers, mineru_vl_utils 2.0.7). `PYTHONPATH=scripts` din rădăcina repo-ulu
 
 | Pas | Comandă | Unde | Ce iese |
 |---|---|---|---|
-| 0 | `python -m ocr_local foaie-orientare <pdf> --output foaie.png --pagini 325-636` | CPU | miniaturi; omul scrie `orientari.json` `{"325": 0, …}` |
-| 1 | `python -m ocr_local plan <pdf> --output <dir> --pagini 325-636 --orientari orientari.json` | CPU | `plan.json`, `pageNNNN/*.png` |
-| 2 | `python -m ocr_local citeste <dir> --cititor lighton --rulare <id>` | GPU (serverul LightOn pornit de om, port 8017) | `<banda>/lighton/raw.txt + result.json` |
-| 3 | `python -m ocr_local citeste <dir> --cititor mineru --rulare <id>` | GPU (serverul MinerU pornit de om, port 8018) | `<banda>/mineru/…` |
-| 4 | `python -m ocr_local compara <dir>` | CPU | `comparatie.json`, `dezacorduri.jsonl` |
+| 0 | `python -B -m ocr_local foaie-orientare <pdf> --output foaie.png --pagini 325-636` | CPU | miniaturi; omul scrie `orientari.json` `{"325": 0, …}` |
+| 1 | `python -B -m ocr_local plan <pdf> --output <dir> --pagini 325-636 --orientari orientari.json` | CPU | `plan.json`, `pageNNNN/*.png` |
+| 2 | `python -B -m ocr_local citeste <dir> --cititor lighton --rulare <id>` | GPU (serverul LightOn pornit de om, port 8017) | `<banda>/lighton/raw.txt + result.json` |
+| 3 | `python -B -m ocr_local citeste <dir> --cititor mineru --rulare <id>` | GPU (serverul MinerU pornit de om, port 8018) | `<banda>/mineru/…` |
+| 4 | `python -B -m ocr_local compara <dir>` | CPU | `comparatie.json`, `dezacorduri.jsonl` |
 | 5 | arbitrajul (edge, D3b) → `decizii.jsonl` | cloud, plafon | o decizie pe dezacord |
-| 6 | `python -m ocr_local reconciliaza <dir> --decizii decizii.jsonl` | CPU | `reconciliat.json`, `tripleti.jsonl` |
+| 6 | `python -B -m ocr_local reconciliaza <dir> --decizii decizii.jsonl` | CPU | `reconciliere/reconciliat.json`, `reconciliere/tripleti.jsonl` |
 
 Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json` → `readers.*.vllm_serve`. Modelele se rulează pe rând.
 
@@ -76,16 +76,23 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 - Cu regulile r2–r3, proba pe benchmark marchează 20 de dezacorduri ca posibilă cantitate (rânduri cu cifre și celule unite), dintre
   care unul singur e o diferență reală de valoare (`0,056` / `0.056`) — preț acceptat pentru fail-closed (merg la audit).
 
+## După review-ul Copilot r3 (14.10)
+
+- Politica inversă la tokeni: orice caracter nespațiu care nu e număr sau literă e token (`5 %`, `‰`, `_`, `(5)`, `€` rămân dezacorduri);
+  `<sup>` / `<sub>` devin `^x` / `_x` (nu dispar: `m<sup>2</sup>` ≠ `m2`); niciun rând de tabel cu alt număr de celule sau alte
+  poziții nu mai e scutit (parserul nu păstrează `colspan`, deci echivalența nu se poate dovedi).
+- Reconcilierea publică `reconciliere/` (ambele artefacte) printr-un singur rename; pachetul nu scrie `__pycache__` (`python -B`).
+
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
-38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **78 de dezacorduri** (~2 pe bandă),
+38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **84 de dezacorduri** (~2,2 pe bandă),
 dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat și `anomalie_separator`. Restul: diacritice (`protecție` /
 `protectie`, `Ștefănești` / `Štefănești`), `m³` / `m3`, `Ø` / `∅`, LaTeX la MinerU (`\( 100m^{2} \)`). Volum estimat pentru arbitraj pe 102
 (~1.447 pagini): de ordinul a câteva sute de decupaje, în plafonul de 15 $ din spec §8.
 
 ## Teste
 
-`python -m unittest ocr_local.test_ocr_local -v` — 63 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local -v` — 65 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 

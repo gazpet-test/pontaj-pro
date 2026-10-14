@@ -8,9 +8,13 @@ CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
 # Numerele pastreaza semnul, exponentul si procentul; semnele, comparatorii si operatorii sunt tokeni separati: -5 vs 5, 5% vs 5,
 # 1e-3 vs 1e3, 10**2 vs 102 raman dezacorduri (review Copilot r1). Restul punctuatiei nu se compara.
 NUM = r'[-+±−]?[.,]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?[%‰]?'
-TOKEN = re.compile(NUM + r'|[^\W\d_]+|[-+±−<>≤≥≠~*^/=×]', re.U)  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
+# Politica inversa (review Copilot r3): ORICE caracter nespatiu care nu e numar sau litera e token separat (%, ‰, _, (, ), €, ...).
+# Singura normalizare la comparare ramane sedila/virgula pe ș/ț. Mai mult zgomot la arbitru, dar nicio diferenta nu se pierde.
+TOKEN = re.compile(NUM + r'|[^\W\d_]+|\S', re.U)  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
 NUMBER = re.compile('^' + NUM + '$')
 BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu lipit de cifre/litere: 10**2 + 3**2 ramane
+SUPSUB = re.compile(r'<(sup|sub)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)  # exponent/indice = semantica: devin ^x / _x, nu dispar
+def supsub(s): return SUPSUB.sub(lambda m: ('^' if m.group(1).lower() == 'sup' else '_') + m.group(2), s)
 TAG = re.compile(r'</?[A-Za-z][A-Za-z0-9]*(?:\s[^<>]*)?/?>')  # doar etichete HTML reale: 'x < 5 si y > 3' ramane text
 TABLE_HTML = re.compile(r'<table\b.*?</table\s*>', re.I | re.S)
 ROW_HTML = re.compile(r'<tr\b.*?</tr\s*>', re.I | re.S)
@@ -21,7 +25,7 @@ CONTEXT = 6
 def norm_word(t): return t.translate(CEDILLA)
 
 def clean_inline(s):
-    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = TAG.sub(' ', s); s = BOLD.sub(r'\1', html.unescape(s))  # doar perechile **text** (bold markdown); un ** izolat ramane
+    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = TAG.sub(' ', supsub(s)); s = BOLD.sub(r'\1', html.unescape(s))  # doar perechile **text** (bold markdown); un ** izolat ramane
     return re.sub(r'\s+', ' ', s).strip()
 
 def html_rows(table):
@@ -39,7 +43,7 @@ def md_rows(lines):
 
 def plain(s):
     s = re.sub(r'<br\s*/?>|</p\s*>|</h\d\s*>|</li\s*>|</div\s*>', '\n', s, flags=re.I)
-    s = html.unescape(TAG.sub(' ', s))
+    s = html.unescape(TAG.sub(' ', supsub(s)))
     s = BOLD.sub(r'\1', re.sub(r'^\s*#{1,6}\s*', '', s, flags=re.M))
     return re.sub(r'[ \t]+', ' ', s).strip()
 
@@ -97,10 +101,9 @@ def same_content(ca, cb):
     in alta coloana ar trece neobservata)."""
     ne = lambda r: [norm_word(c) for c in r if c.strip()]
     if ne(ca) != ne(cb): return False
-    if len(ca) == len(cb): return False  # acelasi numar de celule, alte pozitii = continut mutat de coloana -> arbitru
-    # numar diferit de celule: scutit de arbitraj DOAR daca randul nu are nicio cifra (altfel o cantitate mutata de coloana,
-    # oricum ar fi scrisa - '1 000,00', '~5' - ar trece neobservata; review Copilot r2)
-    return not any(ch.isdigit() for c in ca + cb for ch in c)
+    # Fara scutire (review Copilot r3): parserul nu pastreaza colspan, deci un numar diferit de celule sau alte pozitii nu se pot
+    # dovedi echivalente - merg la arbitru (pretul: randurile cu celule unite scrise diferit de cei doi cititori).
+    return False
 
 def roles(header, row):
     """Rolurile coloanelor (cod / um / cantitate): din antet cand exista, altfel cantitatea = ultima celula numerica,

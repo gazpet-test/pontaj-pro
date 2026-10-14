@@ -134,7 +134,7 @@ def reconcile(plan_dir, decisions_path):
     proto = protocol()
     if len({i['id'] for i in items}) != len(items): raise ValueError('ID-uri duplicate in dezacorduri.jsonl')
     by_id = {i['id']: i for i in items}; decisions = {}; invalid = []; policy = arbiter_policy()
-    if (plan_dir / 'tripleti.jsonl').exists() or (plan_dir / 'reconciliat.json').exists():
+    if (plan_dir / 'reconciliere').exists() or (plan_dir / 'reconciliere.tmp').exists():
         raise FileExistsError('Reconcilierea a rulat deja in acest director - o rulare noua = director nou')
     for line in pathlib.Path(decisions_path).read_text(encoding='utf-8').splitlines():
         if not line.strip(): continue
@@ -183,11 +183,10 @@ def reconcile(plan_dir, decisions_path):
     out = {'pages': sorted(pages.values(), key=lambda x: x['page']), 'invalid_decisions': invalid,
            'summary': {'pages': len(pages), 'needs_human_pages': sum(1 for p in pages.values() if p['needs_human']),
                        'decisions_valid': len(decisions), 'decisions_invalid': len(invalid), 'disagreements': len(items)}}
-    # ambele artefacte se scriu intai temporar si se publica impreuna; nicio pereche partiala daca scrierea pica la mijloc
-    tmp = {'tripleti.jsonl': ''.join(json.dumps(t, ensure_ascii=False) + '\n' for t in triplets),
-           'reconciliat.json': json.dumps(out, ensure_ascii=False, indent=2)}
-    for name, body in tmp.items():
-        with (plan_dir / (name + '.tmp')).open('x', encoding='utf-8', newline='\n') as f: f.write(body)
-    if any((plan_dir / n).exists() for n in tmp): raise FileExistsError('Reconcilierea a rulat deja in acest director')
-    for name in tmp: os.rename(plan_dir / (name + '.tmp'), plan_dir / name)
+    # ambele artefacte intr-un director temporar, publicat printr-un SINGUR rename (perechea apare intreaga sau deloc)
+    tmp = plan_dir / 'reconciliere.tmp'; tmp.mkdir()
+    with (tmp / 'tripleti.jsonl').open('x', encoding='utf-8', newline='\n') as f:
+        for t in triplets: f.write(json.dumps(t, ensure_ascii=False) + '\n')
+    with (tmp / 'reconciliat.json').open('x', encoding='utf-8', newline='\n') as f: json.dump(out, f, ensure_ascii=False, indent=2)
+    os.rename(tmp, plan_dir / 'reconciliere')
     return out

@@ -1,5 +1,5 @@
 """Teste CPU, fara endpoint real: python -m unittest ocr_local.test_ocr_local -v (PYTHONPATH=scripts)."""
-import hashlib, json, os, pathlib, tempfile, unittest
+import hashlib, json, os, pathlib, shutil, tempfile, unittest
 from unittest.mock import patch
 from PIL import Image, ImageDraw
 from .geometry import classify, orientation, text_bands
@@ -218,7 +218,7 @@ class Comparare(unittest.TestCase):
         a = '<table><tr><td>1.</td><td>COD</td><td>Țeavă</td><td>mc</td><td>1 000,00</td><td></td></tr></table>'
         b = '<table><tr><td></td><td>1.</td><td>COD</td><td>Țeavă</td><td>mc</td><td>1 000,00</td></tr></table>'
         s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1)
-        s, its = compare_band(BAND, '<table><tr><td></td><td>Titlu</td><td></td></tr></table>', OK, '<table><tr><td>Titlu</td></tr></table>', OK); self.assertEqual(its, [])
+        s, its = compare_band(BAND, '<table><tr><td></td><td>Titlu</td><td></td></tr></table>', OK, '<table><tr><td>Titlu</td></tr></table>', OK); self.assertEqual(len(its), 1)  # r3: fara scutire colspan
     def test_acorduri_false_r2_jakarinos(self):
         for a, b in (('10**2 + 3**2 mc', '102 + 32 mc'), ('cantitate .5 mc', 'cantitate 5 mc'), ('x < 5 si y > 3', 'x 3')):
             s, its = compare_band(BAND, a, OK, b, OK); self.assertGreaterEqual(len(its), 1, (a, b))
@@ -230,6 +230,14 @@ class Comparare(unittest.TestCase):
     def test_segmente_text_cu_tabel_intre_ele_nu_crapa(self):
         mid = '<table><tr><td>1.</td><td>A</td></tr></table>'
         s, its = compare_band(BAND, 'Titlu' + mid + 'Final', OK, 'Titlul' + mid + 'Finalul', OK); self.assertGreaterEqual(len(its), 1)
+    def test_politica_inversa_simboluri_si_exponenti(self):
+        for x, y in (('pantă 5 %', 'pantă 5'), ('abatere 5 ‰', 'abatere 5'), ('cod A_B', 'cod AB'), ('valoare (5)', 'valoare 5'),
+                     ('preț 100 €', 'preț 100'), ('suprafață m<sup>2</sup>', 'suprafață m2'), ('apă H<sub>2</sub>O', 'apă H2O')):
+            s, its = compare_band(BAND, x, OK, y, OK); self.assertGreaterEqual(len(its), 1, (x, y))
+    def test_celule_unite_fara_cifre_merg_la_arbitru(self):
+        s, its = compare_band(BAND, '<table><tr><td></td><td>CODX</td><td>mc</td><td>conform proiect</td></tr></table>', OK,
+                              '<table><tr><td>CODX</td><td>mc</td><td>conform proiect</td></tr></table>', OK)
+        self.assertEqual(len(its), 1)
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -272,7 +280,7 @@ class Reconciliere(unittest.TestCase):
     def test_ales_mineru_pe_cantitate(self):
         r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')])
         pg = r['pages'][0]; self.assertFalse(pg['needs_human']); self.assertIn('| 0.056 |', pg['text']); self.assertEqual(pg['arbitrat_de_claude_cantitati'], 1)
-        t = json.loads((out / 'tripleti.jsonl').read_text(encoding='utf-8').splitlines()[0])
+        t = json.loads((out / 'reconciliere' / 'tripleti.jsonl').read_text(encoding='utf-8').splitlines()[0])
         self.assertEqual((t['citire_lighton'].split(' | ')[-1], t['citire_mineru'].split(' | ')[-1], t['decizie']), ('0,056', '0.056', 'ales_mineru'))
     def test_fara_decizie_needs_human(self):
         r, items, out = self._run(TABLE_A, TABLE_B, [])
@@ -290,11 +298,11 @@ class Reconciliere(unittest.TestCase):
         d = tempfile.mkdtemp(); out = pathlib.Path(d) / 'out'
         r, items, out = self._run('lungime 10 m', 'lungime 20 m', [self.dec('ales_lighton')])
         o = out / 'page0001' / items[0]['band'] / 'lighton'; (o / 'raw.txt').write_text('lungime 999 m', encoding='utf-8')
-        (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        shutil.rmtree(out / 'reconciliere')
         with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
     def test_dezacorduri_golite_refuzate(self):
         r, items, out = self._run('lungime 10 m', 'lungime 20 m', [self.dec('ales_lighton')])
-        (out / 'dezacorduri.jsonl').write_text(''); (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        (out / 'dezacorduri.jsonl').write_text(''); shutil.rmtree(out / 'reconciliere')
         with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
     def test_celula_cu_bara_nu_se_sparge(self):
         a = '<table><tr><td>1.</td><td>X1</td><td>otel | PE</td><td>m</td><td>2,00</td></tr></table>'
@@ -308,11 +316,11 @@ class Reconciliere(unittest.TestCase):
         self.assertEqual(items[0]['tip'], 'rand_lipsa_lighton'); self.assertTrue(r['pages'][0]['needs_human'])
     def test_marcaj_cantitate_al_arbitrului_se_pastreaza(self):
         r, items, out = self._run('lungime 10 m', 'lungime 20 m', [self.dec('ales_lighton')])
-        t = json.loads((out / 'tripleti.jsonl').read_text(encoding='utf-8').splitlines()[0]); self.assertTrue(t['e_cantitate'])
+        t = json.loads((out / 'reconciliere' / 'tripleti.jsonl').read_text(encoding='utf-8').splitlines()[0]); self.assertTrue(t['e_cantitate'])
         self.assertEqual(r['pages'][0]['arbitrat_de_claude_cantitati'], 1)
     def test_linie_null_nu_crapa(self):
         r, items, out = self._run('lungime 10 m', 'lungime 20 m', [])
-        (out / 'dec.jsonl').write_text('null\n{"id": ["x"]}\n'); (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        (out / 'dec.jsonl').write_text('null\n{"id": ["x"]}\n'); shutil.rmtree(out / 'reconciliere')
         r = reconcile(out, out / 'dec.jsonl'); self.assertTrue(r['pages'][0]['needs_human']); self.assertEqual(r['summary']['decisions_invalid'], 2)
     def test_ancora_modificata_in_jsonl_refuzata(self):
         t1 = '<table><tr><td>1.</td><td>A1</td><td>unu</td><td>m</td><td>1,00</td></tr><tr><td>2.</td><td>A2</td><td>doi</td><td>m</td><td>2,00</td></tr></table>'
@@ -321,14 +329,14 @@ class Reconciliere(unittest.TestCase):
         its = [json.loads(l) for l in (out / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines()]
         its[0]['ancora_sigura'] = not its[0]['ancora_sigura']
         (out / 'dezacorduri.jsonl').write_text('\n'.join(json.dumps(i, ensure_ascii=False) for i in its), encoding='utf-8')
-        (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        shutil.rmtree(out / 'reconciliere')
         with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
     def test_id_duplicat_refuzat(self):
         r, items, out = self._run('x 1 a b c d e f 2 y', 'x 9 a b c d e f 8 y', [])
         its = [json.loads(l) for l in (out / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertGreaterEqual(len(its), 2); its[1]['id'] = its[0]['id']
         (out / 'dezacorduri.jsonl').write_text('\n'.join(json.dumps(i, ensure_ascii=False) for i in its), encoding='utf-8')
-        (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        shutil.rmtree(out / 'reconciliere')
         with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
     def test_comparare_refuza_rezultat_din_alt_protocol(self):
         r, items, out = self._run('lungime 10 m', 'lungime 20 m', [])
@@ -356,9 +364,9 @@ class Reconciliere(unittest.TestCase):
         patch.stopall()
         r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); self.assertTrue(r['pages'][0]['needs_human'])
     def test_reconciliere_a_doua_oara_refuzata_fara_scriere(self):
-        r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); before = (out / 'reconciliat.json').read_bytes()
+        r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); before = (out / 'reconciliere' / 'reconciliat.json').read_bytes()
         with self.assertRaises(FileExistsError): reconcile(out, out / 'dec.jsonl')
-        self.assertEqual((out / 'reconciliat.json').read_bytes(), before)
+        self.assertEqual((out / 'reconciliere' / 'reconciliat.json').read_bytes(), before)
     def test_cusatura_benzi(self):
         a = 'rand unu al benzii\nrand doi cu opt tokeni aici gata\nrand trei final aici'
         b = 'rand doi cu opt tokeni aici gata\nrand trei final aici\nrand patru nou'
