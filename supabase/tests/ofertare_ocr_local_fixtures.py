@@ -1,4 +1,4 @@
-"""Date de test pentru harness-ul 20261029a (scripts/test_ofertare_ocr_local.sh), produse de ACELAȘI cod ca pipeline-ul
+"""Date de test pentru harness-ul 20261029b (scripts/test_ofertare_ocr_local.sh), produse de ACELAȘI cod ca pipeline-ul
 (scripts/ocr_local/compare.py): segmentele unei citiri, dezacordurile reale dintre două citiri ale unei benzi și adevărul despre
 granițele de token (pentru fn_ofertare_ocr_granita). Doar biblioteca standard — rulează și în WSL fără PIL.
 Utilizare: python3 ofertare_ocr_local_fixtures.py seg TEXT | dez PAGINA BANDA TEXT_L TEXT_M | src TEXT SEG ACUL DELTA LUNGIME

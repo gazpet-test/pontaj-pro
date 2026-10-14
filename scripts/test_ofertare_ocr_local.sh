@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Harness SQL local — 20261029a_ofertare_ocr_local (pilot OCR local: rulări, pagini, arbitraje, verificări, jurnal PDF).
+# Harness SQL local — 20261029b_ofertare_ocr_local (pilot OCR local: rulări, pagini, arbitraje, verificări, jurnal PDF).
 # PostgreSQL 16 local dedicat (/tmp/pg_ocr, 127.0.0.1:5448). Nu atinge producția.
 # Bază: scheletul loturi (ofertare_loturi_mvp_schelet.sql) + migrarea 20261024b (poarta „document eligibil”) + completarea
 # ofertare_ocr_local_schelet_extra.sql. Acoperă: garda de livrare · drepturi (anon / authenticated / service_role pe tabele,
@@ -13,7 +13,7 @@ set -Eeuo pipefail
 RADACINA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_BIN="${PG_BIN:-/usr/lib/postgresql/16/bin}"
 DATE_DIR=/tmp/pg_ocr; PORT=5448; BAZA=ofertare_loturi_test  # scheletul loturi admite doar acest nume de bază (local)
-NUME=20261029a_ofertare_ocr_local
+NUME=20261029b_ofertare_ocr_local
 MIGRARE="$RADACINA/supabase/migrations/$NUME.sql"
 ROLLBACK="$RADACINA/supabase/revenire/${NUME}_ROLLBACK.sql"
 LOTURI="$RADACINA/supabase/migrations/20261024b_ofertare_loturi_mvp.sql"
@@ -56,7 +56,7 @@ ca() {
 asteapta() { [ "$2" = "$3" ] || esec "$1: așteptat «$3», primit «$2»"; ok "$1"; }
 refuz() { local o; o="$(CA_LINII=50 ca "$2" "$3" "$4" || true)"; grep -q "$5" <<<"$o" || esec "$1 trebuia refuzat ($5), primit: $o"; ok "refuz: $1"; }
 livreaza() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);" -f "$MIGRARE" 2>&1; }
-revenire() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261029a', 'OCR_LOCAL_REVENIRE:' || txid_current(), true);" -f "$ROLLBACK" 2>&1; }
+revenire() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261029b', 'OCR_LOCAL_REVENIRE:' || txid_current(), true);" -f "$ROLLBACK" 2>&1; }
 sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 FX="$RADACINA/supabase/tests/ofertare_ocr_local_fixtures.py"
 fx() { python3 "$FX" "$@"; }                       # segmente / dezacorduri reale / granițe, din scripts/ocr_local/compare.py

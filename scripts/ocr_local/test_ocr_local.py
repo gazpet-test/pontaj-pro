@@ -266,7 +266,7 @@ class Comparare(unittest.TestCase):
         # D3a r9: migrarea contine EXACT regex-ul TOKEN (NUM | [LETTERS]+ | nespatiu), cu literele explicite; m² e un singur token
         import codecs, re as _re
         from .compare import TOKEN, NUM, LETTERS
-        sql = (pathlib.Path(__file__).resolve().parents[2] / 'supabase/migrations/20261029a_ofertare_ocr_local.sql').read_text(encoding='utf-8')
+        sql = (pathlib.Path(__file__).resolve().parents[2] / 'supabase/migrations/20261029b_ofertare_ocr_local.sql').read_text(encoding='utf-8')
         tok = _re.search(r"c_tok constant text := '([^']*)'", sql).group(1)
         self.assertEqual(tok, NUM.replace(r'\d', '[0-9]') + '|[' + LETTERS + ']+|[^[:space:]]')
         self.assertEqual([m.group(0) for m in TOKEN.finditer('5 m² și ½ x')], ['5', 'm²', 'și', '½', 'x'])

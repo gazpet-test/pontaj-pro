@@ -1,27 +1,27 @@
--- REVENIRE 20261029a — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 19 funcții fn_ofertare_ocr_*.
+-- REVENIRE 20261029b — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 19 funcții fn_ofertare_ocr_*.
 -- DATELE OCR SE PIERD (rulări, pagini citite, dezacorduri, rezervări, arbitraje, verificări, jurnalul linkurilor). Nu atinge
 -- text_extras, cantități sau alte tabele existente. Rândul 'ocr_local_ofertare' din procese_heartbeat se DEZACTIVEAZĂ (activ = false),
 -- nu se șterge (fn_ofertare_ocr_heartbeat îl reactivează la o reaplicare).
--- Refuză dacă obiectele NU mai sunt exact cele aplicate de 20261029a: amprenta recalculată acum (definiții + ACL funcții, coloane +
+-- Refuză dacă obiectele NU mai sunt exact cele aplicate de 20261029b: amprenta recalculată acum (definiții + ACL funcții, coloane +
 -- ACL + constrângeri + politici tabele) trebuie să fie identică cu cea înregistrată la aplicare în comentariul ofertare_ocr_rulari.
 -- DOAR la cererea explicită a lui Răzvan. Armare per tranzacție:
---   SELECT set_config('gazpet.revenire_20261029a', 'OCR_LOCAL_REVENIRE:' || txid_current(), true);
+--   SELECT set_config('gazpet.revenire_20261029b', 'OCR_LOCAL_REVENIRE:' || txid_current(), true);
 DO $revenire$
 DECLARE v_fp text; v_comentariu text;
 BEGIN
-  IF current_setting('gazpet.revenire_20261029a', true)
+  IF current_setting('gazpet.revenire_20261029b', true)
        IS DISTINCT FROM 'OCR_LOCAL_REVENIRE:' || txid_current() THEN
-    RAISE EXCEPTION '20261029a: garda start invalida';
+    RAISE EXCEPTION '20261029b: garda start invalida';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261029a=%') THEN
-    RAISE EXCEPTION '20261029a: armare persistenta interzisa';
+  IF EXISTS (SELECT 1 FROM pg_db_role_setting s, unnest(s.setconfig) c WHERE lower(c) LIKE 'gazpet.revenire_20261029b=%') THEN
+    RAISE EXCEPTION '20261029b: armare persistenta interzisa';
   END IF;
-  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261029a: necesita postgres'; END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261029b: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
-  IF to_regclass('public.ofertare_ocr_rulari') IS NULL THEN RAISE EXCEPTION '20261029a: preconditie, migrarea nu e aplicata'; END IF;
+  IF to_regclass('public.ofertare_ocr_rulari') IS NULL THEN RAISE EXCEPTION '20261029b: preconditie, migrarea nu e aplicata'; END IF;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 19
      OR (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%') <> 7 THEN
-    RAISE EXCEPTION '20261029a: preconditie, alt numar de obiecte decat la aplicare';
+    RAISE EXCEPTION '20261029b: preconditie, alt numar de obiecte decat la aplicare';
   END IF;
   -- aceeași expresie ca fn_ofertare_ocr_amprenta() din migrare, copiată INLINE (o funcție modificată nu se poate autovalida)
   SELECT (SELECT md5(string_agg(x, '|' ORDER BY x)) FROM (
@@ -49,7 +49,7 @@ BEGIN
      WHERE n.nspname = 'public' AND c.relkind = 'S' AND c.relname LIKE 'ofertare\_ocr\_%') s) INTO v_fp;
   v_comentariu := obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class');
   IF v_comentariu IS NULL OR v_comentariu NOT LIKE '%amprenta=' || v_fp THEN
-    RAISE EXCEPTION '20261029a: preconditie, obiectele s-au schimbat dupa aplicare (amprenta difera) - revenire manuala, cu review';
+    RAISE EXCEPTION '20261029b: preconditie, obiectele s-au schimbat dupa aplicare (amprenta difera) - revenire manuala, cu review';
   END IF;
 
   DROP FUNCTION public.fn_ofertare_ocr_cerere(bigint, bigint[], numeric);
@@ -82,11 +82,11 @@ BEGIN
 
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname LIKE 'ofertare\_ocr\_%')
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') THEN
-    RAISE EXCEPTION '20261029a: postconditie revenire';
+    RAISE EXCEPTION '20261029b: postconditie revenire';
   END IF;
-  IF current_setting('gazpet.revenire_20261029a', true)
+  IF current_setting('gazpet.revenire_20261029b', true)
        IS DISTINCT FROM 'OCR_LOCAL_REVENIRE:' || txid_current() THEN
-    RAISE EXCEPTION '20261029a: garda final invalida';
+    RAISE EXCEPTION '20261029b: garda final invalida';
   END IF;
-  PERFORM set_config('gazpet.revenire_20261029a', '', true);
+  PERFORM set_config('gazpet.revenire_20261029b', '', true);
 END $revenire$;

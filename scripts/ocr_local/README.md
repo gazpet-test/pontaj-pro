@@ -7,7 +7,7 @@ sunt cele din Codex; garda primește tokenizer-ul din `protocol.json` (cale + SH
 
 **Ce NU face pachetul:** nu pornește servere sau modele, nu cheamă cloud (arbitrajul Sonnet 5 e în edge-ul `ofertare-ocr-arbitreaza`, D3b),
 nu scrie în BD (scrierea e prin `ofertare-ocr-scrie`, D3b), nu promovează nimic.
-Contractul cu BD (migrarea 20261029a, D3a): întâi manifestul planului (`fn_ofertare_ocr_plan`: benzile + `image_sha256` per pagină,
+Contractul cu BD (migrarea 20261029b, D3a): întâi manifestul planului (`fn_ofertare_ocr_plan`: benzile + `image_sha256` per pagină,
 excluderile cu motiv), apoi fiecare citire cu `compare.segmente(raw)`; dezacordurile se încarcă din `dezacorduri.jsonl` cu `id` →
 `item_id`, plus `document_id` / `pagina`. BD reface fiecare fragment `text` din `sursa` (segment + poziții, granițe de token) și
 fiecare rând din `pozitie` (toate celulele), deci `compare.py` și BD trebuie să rămână la aceeași tokenizare (`NUM` / `TOKEN`).

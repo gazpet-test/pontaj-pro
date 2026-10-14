@@ -1,4 +1,4 @@
--- Completare de schelet pentru harness-ul 20261029a (peste ofertare_loturi_mvp_schelet.sql + migrarea 20261024b aplicată).
+-- Completare de schelet pentru harness-ul 20261029b (peste ofertare_loturi_mvp_schelet.sql + migrarea 20261024b aplicată).
 -- Doar coloanele / tabelele de care depinde pilotul OCR local, cu tipurile din producție (verificate în information_schema 14.10).
 ALTER TABLE public.ofertare_documente_atribuire ADD COLUMN pagini_necitite integer[], ADD COLUMN fisier_path text;
 UPDATE public.ofertare_documente_atribuire SET pagini_necitite = ARRAY[325, 326, 327], fisier_path = '102/atribuire/pt_fv.pdf' WHERE id = 1247;

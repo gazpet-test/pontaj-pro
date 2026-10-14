@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
--- 20261029a — Ofertare: pilot OCR local (D3a, docs/paw/PLAN_OCR_LOCAL_OFERTARE.md §5–§8, decizia Răzvan 14.10.2026) — r2
+-- 20261029b — Ofertare: pilot OCR local (D3a, docs/paw/PLAN_OCR_LOCAL_OFERTARE.md §5–§8, decizia Răzvan 14.10.2026) — r2
 -- (după review r1: Copilot NO-GO 5 P1, Jakarinos NO-GO 3 P1 — rezervări per apel, dezacorduri canonice în BD, text ales derivat,
 --  eșantion înghețat, idempotență concurentă, amprentă pentru revenire)
 -- Obiecte NOI (nu atinge nicio tabelă / funcție existentă, nu scrie date):
@@ -21,32 +21,32 @@
 -- (decontat + rezervări deschise + abandonate) nu poate depăși plafonul (CHECK + UPDATE atomic). Un apel deja plătit se poate
 -- deconta și după oprirea rulării (cheltuiala nu dispare din evidență).
 -- Promovarea în text_extras / ofertare_cantitati NU e aici. Secretul OCR_LOCAL_SECRET NU e creat aici.
--- Revenire: supabase/revenire/20261029a_ofertare_ocr_local_ROLLBACK.sql (verifică amprenta obiectelor; datele OCR se pierd).
+-- Revenire: supabase/revenire/20261029b_ofertare_ocr_local_ROLLBACK.sql (verifică amprenta obiectelor; datele OCR se pierd).
 -- LIVRARE: doar prin scripts/livrare_migrare.sh (garda gazpet.livrare_migrare legată de txid); fără BEGIN/COMMIT.
 -- ════════════════════════════════════════════════════════════════════════════════════════════════════════
 DO $pre$
 BEGIN
   IF current_setting('gazpet.livrare_migrare', true)
-       IS DISTINCT FROM '20261029a_ofertare_ocr_local:' || txid_current() THEN
-    RAISE EXCEPTION '20261029a: garda start invalida';
+       IS DISTINCT FROM '20261029b_ofertare_ocr_local:' || txid_current() THEN
+    RAISE EXCEPTION '20261029b: garda start invalida';
   END IF;
-  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261029a: necesita postgres'; END IF;
+  IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261029b: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
               WHERE n.nspname = 'public' AND c.relname LIKE 'ofertare\_ocr\_%')
      OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                  WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') THEN
-    RAISE EXCEPTION '20261029a: obiectele exista deja';
+    RAISE EXCEPTION '20261029b: obiectele exista deja';
   END IF;
   IF to_regprocedure('public.fn_ofertare_source_pack_poate_decide(bigint)') IS NULL
      OR to_regprocedure('public.fn_ofertare_document_eligibil(bigint)') IS NULL
      OR to_regprocedure('public.fn_are_acces_ofertare()') IS NULL
      OR to_regclass('public.ai_usage_log') IS NULL OR to_regclass('public.procese_heartbeat') IS NULL THEN
-    RAISE EXCEPTION '20261029a: dependinte lipsa';
+    RAISE EXCEPTION '20261029b: dependinte lipsa';
   END IF;
   IF (SELECT udt_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ofertare_documente_atribuire'
         AND column_name = 'pagini_necitite') IS DISTINCT FROM '_int4' THEN
-    RAISE EXCEPTION '20261029a: ofertare_documente_atribuire.pagini_necitite nu e integer[]';
+    RAISE EXCEPTION '20261029b: ofertare_documente_atribuire.pagini_necitite nu e integer[]';
   END IF;
 END $pre$;
 
@@ -196,7 +196,7 @@ BEGIN
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC, anon, authenticated, service_role', t);
     EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, anon, authenticated, service_role', pg_get_serial_sequence('public.' || t, 'id'));
-    EXECUTE format('COMMENT ON TABLE public.%I IS %L', t, 'Pilot OCR local (20261029a). Scriere doar prin RPC fn_ofertare_ocr_*.');
+    EXECUTE format('COMMENT ON TABLE public.%I IS %L', t, 'Pilot OCR local (20261029b). Scriere doar prin RPC fn_ofertare_ocr_*.');
     IF t <> 'ofertare_ocr_pdf_jurnal' THEN
       EXECUTE format('GRANT SELECT ON public.%I TO authenticated', t);
       EXECUTE format('CREATE POLICY %I ON public.%I FOR SELECT TO authenticated USING ((SELECT public.fn_are_acces_ofertare()))', t || '_select', t);
@@ -758,7 +758,7 @@ RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pub
 AS $f$
 BEGIN
   INSERT INTO public.procese_heartbeat (cheie, descriere, gazda, ultimul_semn, ultim_ok, ultim_mesaj, prag_minute, activ)
-  VALUES ('ocr_local_ofertare', 'Pilot OCR local Ofertare (20261029a)', 'Gazpet-Claude', now(), coalesce(p_ok, false), left(coalesce(p_mesaj, ''), 300), 30, true)
+  VALUES ('ocr_local_ofertare', 'Pilot OCR local Ofertare (20261029b)', 'Gazpet-Claude', now(), coalesce(p_ok, false), left(coalesce(p_mesaj, ''), 300), 30, true)
   ON CONFLICT (cheie) DO UPDATE SET ultimul_semn = now(), ultim_ok = coalesce(p_ok, false), ultim_mesaj = left(coalesce(p_mesaj, ''), 300), activ = true;
   RETURN true;
 END $f$;
@@ -896,7 +896,7 @@ DECLARE t text; f text; rol text; v_fp text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['ofertare_ocr_rulari', 'ofertare_ocr_pagini', 'ofertare_ocr_dezacorduri', 'ofertare_ocr_rezervari',
                            'ofertare_ocr_arbitraje', 'ofertare_ocr_verificari', 'ofertare_ocr_pdf_jurnal'] LOOP
-    IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = ('public.' || t)::regclass) THEN RAISE EXCEPTION '20261029a: RLS oprit pe %', t; END IF;
+    IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = ('public.' || t)::regclass) THEN RAISE EXCEPTION '20261029b: RLS oprit pe %', t; END IF;
     FOREACH rol IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
       IF has_table_privilege(rol, 'public.' || t, 'INSERT') OR has_table_privilege(rol, 'public.' || t, 'UPDATE')
          OR has_table_privilege(rol, 'public.' || t, 'DELETE') OR has_table_privilege(rol, 'public.' || t, 'TRUNCATE')
@@ -907,7 +907,7 @@ BEGIN
          OR has_sequence_privilege(rol, pg_get_serial_sequence('public.' || t, 'id'), 'SELECT')
          OR (rol <> 'authenticated' AND has_table_privilege(rol, 'public.' || t, 'SELECT'))
          OR (rol = 'authenticated' AND (t = 'ofertare_ocr_pdf_jurnal') = has_table_privilege(rol, 'public.' || t, 'SELECT')) THEN
-        RAISE EXCEPTION '20261029a: postconditie drepturi % / %', t, rol;
+        RAISE EXCEPTION '20261029b: postconditie drepturi % / %', t, rol;
       END IF;
     END LOOP;
   END LOOP;
@@ -917,17 +917,17 @@ BEGIN
        OR (f ~ '_(cerere|anuleaza|esantion|verifica)\(' AND (NOT has_function_privilege('authenticated', f, 'EXECUTE') OR has_function_privilege('service_role', f, 'EXECUTE')))
        OR (f ~ '_(amprenta|granita|literal)\(' AND (has_function_privilege('authenticated', f, 'EXECUTE') OR has_function_privilege('service_role', f, 'EXECUTE')))
        OR (f !~ '_(cerere|anuleaza|esantion|verifica|amprenta|granita|literal)\(' AND (has_function_privilege('authenticated', f, 'EXECUTE') OR NOT has_function_privilege('service_role', f, 'EXECUTE'))) THEN
-      RAISE EXCEPTION '20261029a: postconditie executie %', f;
+      RAISE EXCEPTION '20261029b: postconditie executie %', f;
     END IF;
   END LOOP;
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 19 THEN
-    RAISE EXCEPTION '20261029a: numar functii neasteptat';
+    RAISE EXCEPTION '20261029b: numar functii neasteptat';
   END IF;
   -- amprenta: definițiile + ACL-urile funcțiilor și coloanele + ACL-urile + politicile + constrângerile tabelelor noi
   v_fp := public.fn_ofertare_ocr_amprenta();
-  EXECUTE format('COMMENT ON TABLE public.ofertare_ocr_rulari IS %L', 'Pilot OCR local (20261029a). Stare doar prin RPC. amprenta=' || v_fp);
+  EXECUTE format('COMMENT ON TABLE public.ofertare_ocr_rulari IS %L', 'Pilot OCR local (20261029b). Stare doar prin RPC. amprenta=' || v_fp);
   IF current_setting('gazpet.livrare_migrare', true)
-       IS DISTINCT FROM '20261029a_ofertare_ocr_local:' || txid_current() THEN
-    RAISE EXCEPTION '20261029a: garda final invalida';
+       IS DISTINCT FROM '20261029b_ofertare_ocr_local:' || txid_current() THEN
+    RAISE EXCEPTION '20261029b: garda final invalida';
   END IF;
 END $post$;
