@@ -376,7 +376,8 @@ class Client(unittest.TestCase):
         # review r1 Jakarinos P1-2: doua incercari esuate -> nici o alta rulare nu mai descarca documentul
         rdir = self._rulare(); self.edge.cade_dupa_octeti = 3000; t = [1000.0]
         with self.assertRaises(C.TransferIncomplet): C.descarca(rdir, self.edge, acum=lambda: t[0])
-        eg = C.jurnal_egress(rdir); self.assertEqual((eg['documente'][str(DOC)]['incercari'], eg['octeti_total']), (1, 3000))  # reconciliat la octetii cititi
+        # conexiunea cade IN TIMPUL corpului: consum necunoscut -> rezervarea (Content-Length) ramane socotita (review r3 Jakarinos P1)
+        eg = C.jurnal_egress(rdir); self.assertEqual((eg['documente'][str(DOC)]['incercari'], eg['octeti_total']), (1, len(self.edge.pdf)))
         t[0] += 10
         with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge, acum=lambda: t[0])  # pauza de 60 s
         r8 = self._alta_rulare(rdir, 8)
@@ -425,6 +426,51 @@ class Client(unittest.TestCase):
         r8 = self._alta_rulare(rdir, 8); (r8 / 'pdf').mkdir(); (r8 / 'pdf' / ('%d.pdf' % DOC)).write_bytes((rdir / 'pdf' / ('%d.pdf' % DOC)).read_bytes())
         self.edge.get = lambda url, dest, max_octeti=0, timeout=0, la_antete=None: orig(self.edge, url, dest, max_octeti=max_octeti, la_antete=la_antete)
         self.assertNotIn('adoptat', C.descarca(r8, self.edge)['documente'][0])
+    def test_egress_timeout_in_corp_rezervarea_ramane(self):
+        # review r3 Jakarinos P1: un read() care ridica fara sa intoarca octetii -> NU se elibereaza rezervarea (altfel retry-ul depaseste plafonul)
+        rdir = self._rulare(); self.edge.cl = None; self.edge.cade_dupa_octeti = 500
+        with patch.object(C, 'EGRESS_MAX_OCTETI', 2_000_000):
+            with self.assertRaises(C.TransferIncomplet): C.descarca(rdir, self.edge)
+        self.assertEqual(C.jurnal_egress(rdir)['octeti_total'], 2_000_000)  # tot ce putea curge ramane socotit
+    def test_egress_copia_inghetata_corupta_blocheaza_nu_redescarca(self):
+        # review r3 Jakarinos P1: aceeasi rulare nu trece V1 -> V2
+        rdir = self._rulare(); C.descarca(rdir, self.edge); (rdir / 'pdf' / ('%d.pdf' % DOC)).write_bytes(b'%PDF-alta versiune %%EOF')
+        with self.assertRaises(RuntimeError) as e: C.descarca(rdir, self.edge)
+        self.assertIn('inghetata', str(e.exception)); self.assertEqual((self.edge.descarcari, self._pdf_link()), (1, 1))
+        (rdir / 'pdf' / ('%d.pdf' % DOC)).unlink()
+        with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge)  # lipsa, cu meta = tot blocaj
+        self.assertEqual(self.edge.descarcari, 1)
+    def test_egress_adoptare_si_fara_content_length(self):
+        # review r3 Copilot P1 / Jakarinos P1: transfer complet fara Content-Length, cadere dupa rename -> adoptat, nu redescarcat
+        rdir = self._rulare(); self.edge.cl = None; orig = FakeEdge.get
+        def descarca_si_moare(url, dest, max_octeti=0, timeout=0, la_antete=None):
+            orig(self.edge, url, dest, max_octeti=max_octeti, la_antete=la_antete); raise SystemExit('kill -9 dupa rename')
+        self.edge.get = descarca_si_moare
+        with self.assertRaises(SystemExit): C.descarca(rdir, self.edge)
+        self.edge.get = lambda *a, **k: self.fail('nu trebuia redescarcat')
+        self.assertTrue(C.descarca(rdir, self.edge)['documente'][0]['adoptat'])
+        self.assertEqual(C.jurnal_egress(rdir)['octeti_total'], len(self.edge.pdf))
+    def test_egress_succes_intrerupt_dupa_meta_nu_devine_esec(self):
+        # review r3 Copilot P1 / Jakarinos P2: cadere dupa meta, inaintea jurnalului / registrului -> reluarea inchide; alta rulare nu numara esec
+        rdir = self._rulare(); orig_save = C.save; tinta = rdir / 'pdf' / ('%d.json' % DOC)
+        def save_moare(path, value):
+            orig_save(path, value)
+            if pathlib.Path(path) == tinta: raise SystemExit('kill -9 dupa meta')
+        with patch.object(C, 'save', save_moare):
+            with self.assertRaises(SystemExit): C.descarca(rdir, self.edge)
+        self.assertTrue(self._reg()[str(DOC)]['in_zbor'])  # registrul a ramas „in zbor”
+        r8 = self._alta_rulare(rdir, 8); C.descarca(r8, self.edge)  # alta rulare: succesul rularii 7 nu e numarat esec
+        self.assertEqual(self._reg()[str(DOC)]['esecuri'], 0)
+        self.assertTrue(C.descarca(rdir, self.edge)['documente'][0]['deja'])  # reluarea rularii 7: inchidere idempotenta
+        eg = C.jurnal_egress(rdir); self.assertEqual((eg['octeti_total'], eg['documente'][str(DOC)]['rezervat']), (len(self.edge.pdf), 0))
+        self.assertNotIn('in_curs', eg['documente'][str(DOC)])
+    def test_egress_pauza_de_la_ultimul_esec(self):
+        # review r3 Copilot P2: esec la t0, succes la t60, rulare noua la t70 -> nu e blocata (ultimul esec e la t0)
+        rdir = self._rulare(); self.edge.cade_dupa_octeti = 100; t = [1000.0]
+        with self.assertRaises(C.TransferIncomplet): C.descarca(rdir, self.edge, acum=lambda: t[0])
+        self.edge.cade_dupa_octeti = None; t[0] += 60; C.descarca(rdir, self.edge, acum=lambda: t[0])
+        t[0] += 10; C.descarca(self._alta_rulare(rdir, 8), self.edge, acum=lambda: t[0])
+        self.assertEqual((self.edge.descarcari, self._reg()[str(DOC)]['esecuri']), (2, 1))
     def test_egress_plafon_content_length_opreste_rularea_fara_octeti(self):
         rdir = self._rulare()
         with patch.object(C, 'EGRESS_MAX_OCTETI', 1000):
