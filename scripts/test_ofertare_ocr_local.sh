@@ -61,6 +61,10 @@ NUMEC=20261029c_ofertare_ocr_arbitraj_rezerva
 MIGC="$RADACINA/supabase/migrations/$NUMEC.sql"; ROLLC="$RADACINA/supabase/revenire/${NUMEC}_ROLLBACK.sql"
 livreaza_c() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUMEC:' || txid_current(), true);" -f "$MIGC" 2>&1; }
 revenire_c() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261029c', 'OCR_LOCAL_C_REVENIRE:' || txid_current(), true);" -f "$ROLLC" 2>&1; }
+NUMEE=20261029e_ofertare_ocr_stare_rulare
+MIGE="$RADACINA/supabase/migrations/$NUMEE.sql"; ROLLE="$RADACINA/supabase/revenire/${NUMEE}_ROLLBACK.sql"
+livreaza_e() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.livrare_migrare', '$NUMEE:' || txid_current(), true);" -f "$MIGE" 2>&1; }
+revenire_e() { "${PSQL[@]}" -d "$BAZA" --single-transaction -c "SELECT set_config('gazpet.revenire_20261029e', 'OCR_LOCAL_E_REVENIRE:' || txid_current(), true);" -f "$ROLLE" 2>&1; }
 sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 FX="$RADACINA/supabase/tests/ofertare_ocr_local_fixtures.py"
 fx() { python3 "$FX" "$@"; }                       # segmente / dezacorduri reale / granițe, din scripts/ocr_local/compare.py
@@ -441,6 +445,50 @@ asteapta "depășire: înregistrată, rularea oprită, cheltuiala blocată" "$(c
 asteapta "depășire: rezervarea la toată suma, rularea oprită cu motiv, costul real în jurnal, needs_human"   "$(q "SELECT z.stare||'|'||z.cost_real||'|'||r.stare||'|'||(r.oprit_motiv LIKE 'cost real 0.0712 peste rezervarea 0.0500%')::text||'|'||r.cost_usd||'|'||r.cost_rezervat FROM public.ofertare_ocr_rezervari z JOIN public.ofertare_ocr_rulari r ON r.id=z.rulare_id WHERE z.id=$ZD")|$(q "SELECT cost_usd FROM public.ai_usage_log WHERE ref_table='ofertare_ocr_rezervari' AND ref_id=$ZD")|$(q "SELECT decizie||'/'||prompt_versiune FROM public.ofertare_ocr_arbitraje WHERE dezacord_id=$YT")"   "decontata|0.0500|oprita|true|0.0720|0.0000|0.0712|needs_human/depasire"
 refuz "depășire a doua oară pe aceeași rezervare" service_role - "$(DP "$ZD" 0.08)" "închisă"
 asteapta "după depășire: nicio rezervare nouă (rularea oprită)" "$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'refuz'")" stare
+
+# ── 20261029e: starea rulării DOAR CITIRE (reluarea clientului după cădere, review r1 PR #700, decizia B) ─────────────────
+python3 "$RADACINA/scripts/livrare_validator.py" "$MIGE" >/dev/null || esec "validatorul refuză 20261029e"; ok "validator livrare 20261029e"
+o="$("${PSQL[@]}" -d "$BAZA" -f "$MIGE" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "e fără gardă: $o"; ok "refuz: 20261029e fără gardă"
+q "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'preluata'" >/dev/null
+o="$(livreaza_e || true)"; grep -q "amprenta difera" <<<"$o" || esec "e peste drift trebuia refuzată: $o"
+q "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'ceruta'" >/dev/null; ok "refuz: 20261029e peste drift în b/c"
+livreaza_e >/dev/null || { livreaza_e; esec "livrare 20261029e"; }; ok "livrare 20261029e"
+o="$(livreaza_e || true)"; grep -q "obiectele exista deja" <<<"$o" || esec "reaplicare e: $o"; ok "refuz: reaplicare 20261029e"
+asteapta "control 0e după e" "$(q "$(cat "$CONTROL_0E")" | wc -l | tr -d ' ')" 0
+refuz "authenticated: rulare_stare" authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_rulare_stare(1)" "permission denied"
+refuz "anon: rulari_active" anon - "SELECT public.fn_ofertare_ocr_rulari_active()" "permission denied"
+asteapta "rulare_stare: id necunoscut" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rulare_stare(999999)->>'exista'")" false
+asteapta "rulare_stare: R7 oprită, rezervări deschise listate, fără textul documentelor" \
+  "$(ca service_role - "SELECT (x->>'stare')||'|'||(x->'rezervari_deschise')::text||'|'||(x ? 'plan')||'|'||(x->>'dezacorduri') FROM public.fn_ofertare_ocr_rulare_stare($R7) x")" "oprita|[]|false|3"
+o="$(revenire_c || true)"; grep -q "amprenta difera\|postconditie revenire" <<<"$o" || esec "revenirea c peste e trebuia refuzată: $o"; ok "refuz: revenirea 20261029c cât 20261029e e aplicată"
+
+# ── clientul ERP (scripts/ocr_local/client.py) cap-coadă pe funcțiile REALE: preia → pdf-link → plan → citiri → dezacorduri →
+#    arbitraj (fără apel plătit, SqlEdge reface arbitreaza.ts) → reconciliat → finalizata ───────────────────────────────────
+R8=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'"); [ -n "$R8" ] || esec "cererea R8"
+CE=$(OCR_PSQL="$PG_BIN/psql" PGHOST=127.0.0.1 PGPORT=$PORT PGUSER=postgres PGDATABASE=$BAZA python3 -B "$RADACINA/supabase/tests/ofertare_ocr_local_client_e2e.py" 2>&1) \
+  || esec "client cap-coadă: $CE"
+ce() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.argv[2]))' "$CE" "$1"; }
+asteapta "client: preia rularea cerută, plan trimis o singură dată (reluarea = deja)" "$(ce "d['preia']['rulare'], d['plan']['pagini'], d['plan_reluat']['deja'], d['apeluri']['ofertare-pdf-link']")" "($R8, 3, True, 1)"
+asteapta "client: citirile (2 cititori × 3 benzi + 327 exclus la ambii) → citita (reluată după cădere, fără rescrieri)" \
+  "$(ce "d['incarca']")|$(q "SELECT count(*) FROM public.ofertare_ocr_pagini WHERE rulare_id=$R8 AND cititor IN ('lighton','mineru')")" "{'stare': 'citita', 'reluat': True}|8"
+ND=$(q "SELECT count(*) FROM public.ofertare_ocr_dezacorduri WHERE rulare_id=$R8")
+asteapta "client: dezacordurile compare.py acceptate de BD (proveniență), marcajul = numărul și amprenta" \
+  "$(ce "d['compara']['dezacorduri'], d['compara_reluat']['deja']")|$(q "SELECT comparatie_nr||'/'||(comparatie_sha256='$(ce "d['compara']['sha256']")') FROM public.ofertare_ocr_rulari WHERE id=$R8")" "($ND, True)|$ND/true"
+asteapta "client: fiecare dezacord arbitrat (structura_tabele la om, fără cost), costul = apelurile" \
+  "$(q "SELECT count(*) FILTER (WHERE a.prompt_versiune='arb-v1')||'|'||count(*) FILTER (WHERE a.prompt_versiune='fara-ai' AND d.tip='structura_tabele')||'|'||count(*) FROM public.ofertare_ocr_dezacorduri d JOIN public.ofertare_ocr_arbitraje a ON a.dezacord_id=d.id WHERE d.rulare_id=$R8")|$(q "SELECT cost_usd||'/'||cost_rezervat FROM public.ofertare_ocr_rulari WHERE id=$R8")" \
+  "$((ND - 1))|1|$ND|$(python3 -c "print('%.4f' % (($ND - 1) * 0.01))")/0.0000"
+asteapta "client: rularea finalizată, 325 reconciliat (0.056 ales), 326 needs_human (structură), 327 doar exclus" \
+  "$(q "SELECT stare FROM public.ofertare_ocr_rulari WHERE id=$R8")|$(q "SELECT string_agg(pagina||':'||stare||':'||(text LIKE '%0.056%'), ',' ORDER BY pagina) FROM public.ofertare_ocr_pagini WHERE rulare_id=$R8 AND cititor='reconciliat'")" \
+  "finalizata|325:reconciliat:true,326:needs_human:false"
+asteapta "client: tranziție reluată = confirmată din stare_rulare (BD reală); din altă stare (oprita după finalizata) = refuz" "$(ce "d['oprita_dupa_finalizata']")" "refuzat 409"
+asteapta "client: căderi DUPĂ commit (preia, plan, citita, comparatie_gata, finalizata) = reluate, confirmate din stare_rulare (amprenta planului SQL = Python)" \
+  "$(ce "d['preia']['recuperata'], d['caderi']")" "(True, ['preia', 'plan', 'citita', 'comparatie_gata', 'finalizata'])"
+asteapta "rulari_active: R8 finalizată nu mai apare" "$(ca service_role - "SELECT count(*) FROM jsonb_array_elements(public.fn_ofertare_ocr_rulari_active()) x WHERE (x->>'id')::bigint = $R8")" 0
+o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLE" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire e nearmată: $o"; ok "refuz: revenire 20261029e nearmată"
+revenire_e >/dev/null || { revenire_e; esec "revenire 20261029e"; }; ok "revenire 20261029e"
+asteapta "după revenirea e: amprenta b + c din nou ștampilată, 23 de funcții" \
+  "$(q "SELECT obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class') LIKE 'Pilot OCR local (20261029b + 20261029c).%amprenta=' || public.fn_ofertare_ocr_amprenta()")|$(q "SELECT count(*) FROM pg_proc WHERE proname LIKE 'fn\_ofertare\_ocr\_%'")" "t|23"
+livreaza_e >/dev/null || esec "dus-întors e"; revenire_e >/dev/null || esec "dus-întors e (revenire)"; ok "dus-întors 20261029e"
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLC" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire c nearmată: $o"; ok "refuz: revenire 20261029c nearmată"
 revenire_c >/dev/null || { revenire_c; esec "revenire 20261029c"; }; ok "revenire 20261029c"
 asteapta "după revenirea c: amprenta = cea a lui 20261029b, din nou ștampilată" \

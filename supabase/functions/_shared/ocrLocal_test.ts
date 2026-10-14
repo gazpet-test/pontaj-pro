@@ -42,7 +42,12 @@ Deno.test('poarta: secretul verificat în BD cu numele OCR_LOCAL_SECRET; doar da
 })
 
 Deno.test('ocr-scrie: doar operațiile din listă, exact cheile, null doar unde e permis', () => {
-  assert.deepEqual(Object.keys(OPERATII).sort(), ['comparatie_gata', 'dezacord', 'heartbeat', 'needs_human', 'pagina', 'plan', 'preia', 'rezervare_abandon', 'stare'])
+  assert.deepEqual(Object.keys(OPERATII).sort(), ['comparatie_gata', 'dezacord', 'heartbeat', 'needs_human', 'pagina', 'plan', 'preia', 'rezervare_abandon', 'rulari_active', 'stare', 'stare_rulare'])
+  assert.deepEqual(apelDinCorp({ op: 'stare_rulare', args: { rulare_id: 7 } }), { ok: true, fn: 'fn_ofertare_ocr_rulare_stare', args: { p_rulare_id: 7 } })
+  assert.deepEqual(apelDinCorp({ op: 'rulari_active', args: {} }), { ok: true, fn: 'fn_ofertare_ocr_rulari_active', args: {} })
+  for (const corp of [{ op: 'rulari_active', args: { x: 1 } }, { op: 'stare_rulare', args: {} }, { op: 'stare_rulare', args: { rulare_id: null } }]) {
+    assert.equal(apelDinCorp(corp).ok, false, JSON.stringify(corp))
+  }
   for (const fn of Object.values(OPERATII).map((o) => o.fn)) assert.ok(!/pdf|cost_rezerva|arbitraj_rezerva|scrie_arbitraj|dezacord_arbitraj|cerere|verifica|esantion|anuleaza/.test(fn), fn)
   assert.equal(OPERATII.needs_human.fn, 'fn_ofertare_ocr_arbitraj_om')
   const ok = apelDinCorp({ op: 'stare', args: { rulare_id: 5, stare: 'citita', motiv: null } })

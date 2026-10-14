@@ -2,9 +2,9 @@
 Adaptat din pipeline-ul Codex 0.1.0 (pipeline.process): aceeasi geometrie si aceleasi reguli de blocare, fara inferenta.
 Iese plan.json + PNG-urile benzilor, citite apoi de ambele cititoare (read.py)."""
 import hashlib, io, json, pathlib, re, time
-from PIL import Image
-from .geometry import classify, orientation, deskew, text_bands
 
+# PIL / numpy (geometry) se importa doar in functiile care randeaza: load_plan / save raman doar biblioteca standard, ca clientul ERP
+# (client.py) sa poata fi testat cap-coada pe functiile SQL reale si in WSL, fara PIL (scripts/test_ofertare_ocr_local.sh).
 PACKAGE = pathlib.Path(__file__).parent
 KINDS = ('continuous_text', 'quantity_table', 'grid_form', 'drawing', 'unknown')
 NATIVE_MIN_CHARS = 200  # doar SEMNAL: un strat de text nativ (poate fi OCR ascuns, gresit) NU scuteste pagina de dubla citire (review Copilot r1)
@@ -17,6 +17,7 @@ def native_chars(page):
 
 def pages_of(path, dpi, max_pixels, wanted):
     """Genereaza (numar_pagina, imagine | None, text_nativ_caractere). Numerotarea e 1-based, ca pagini_necitite."""
+    from PIL import Image
     if path.suffix.lower() == '.pdf':
         import fitz
         with fitz.open(path) as pdf:
@@ -36,6 +37,7 @@ def pages_of(path, dpi, max_pixels, wanted):
 def plan(source, output, *, pages=None, clockwise=None, orientations=None, kind=None, dpi=150, max_pages=2000, max_pixels=40000000):
     """clockwise/kind = suprascrieri explicite, confirmate local de om, aplicate tuturor paginilor selectate (se inregistreaza).
     orientations = {pagina: 0/90/180/270} confirmat de om pe foaia de contact (contact_sheet), are prioritate fata de clockwise."""
+    from .geometry import classify, orientation, deskew, text_bands
     orientations = {int(k): int(v) for k, v in (orientations or {}).items()}
     if kind not in (None,) + KINDS: raise ValueError('kind necunoscut')
     if not 36 <= dpi <= 600 or max_pixels < 1: raise ValueError('Limite invalide')
@@ -106,7 +108,7 @@ def contact_sheet(source, output_png, pages, *, dpi=40, per_row=8, cell=220):
     """Foaie de contact pentru confirmarea orientarii de catre om (fara AI): miniaturi cu numarul paginii.
     Rezultatul (orientari.json {pagina: grade_in_sens_orar}) se da inapoi la plan(orientations=...)."""
     import fitz
-    from PIL import ImageDraw
+    from PIL import Image, ImageDraw
     pages = sorted(set(int(p) for p in pages)); rows = (len(pages) + per_row - 1) // per_row
     sheet = Image.new('RGB', (per_row * cell, rows * (cell + 20)), 'white'); draw = ImageDraw.Draw(sheet)
     with fitz.open(pathlib.Path(source)) as pdf:

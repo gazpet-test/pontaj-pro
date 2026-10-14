@@ -75,6 +75,10 @@ export const OPERATII: Record<string, Op> = {
   // needs_human FĂRĂ apel plătit (structura_tabele sau orice dezacord trimis direct la om) — migrarea 20261029c
   needs_human: { fn: 'fn_ofertare_ocr_arbitraj_om', arg: { rulare_id: 'p_rulare_id', dezacord_id: 'p_dezacord_id', item_sha256: 'p_item_sha256', motiv: 'p_motiv' } },
   heartbeat: { fn: 'fn_ofertare_ocr_heartbeat', arg: { ok: 'p_ok', mesaj: 'p_mesaj' } },
+  // DOAR CITIRE (migrarea 20261029e, review r1 PR #700): starea confirmată din BD pentru reluarea clientului după o cădere
+  // (planul / comparația / tranzițiile deja făcute) și rulările active (recuperarea unei preluări întrerupte)
+  stare_rulare: { fn: 'fn_ofertare_ocr_rulare_stare', arg: { rulare_id: 'p_rulare_id' } },
+  rulari_active: { fn: 'fn_ofertare_ocr_rulari_active', arg: {} },
 }
 
 export type Apel = { ok: true; fn: string; args: Record<string, unknown> } | { ok: false; error: string }
