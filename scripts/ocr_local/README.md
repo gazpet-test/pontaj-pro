@@ -51,6 +51,16 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
 | 9 | `reconciliaza <dir>` | `reconcile.reconcile` per document → textul reconciliat (`reconciliat` / `needs_human`) → `finalizata` |
 | — | `oprire <dir> --motiv …` · `abandon --rezervare N` · `stare <dir>` | oprește rularea · abandonează o rezervare rămasă deschisă (după 15 min) · starea din BD (doar citire) + pașii locali |
 
+- **Egress din Supabase Storage** (cerere Răzvan 14.10, după Huedin — o eroare redescărca în buclă, ~600× plafonul), `erp descarca`
+  sub lacătul rulării ȘI al registrului comun al documentelor (`<work>/_pdf_registru`): fiecare PDF se descarcă O SINGURĂ DATĂ PE
+  RULARE; copia rulării (`pdf/<doc>.pdf`, SHA-256 + ETag în meta) e singura sursă pentru orice reluare — nicio redescărcare, nicio
+  revalidare (versiunea e înghețată la prima descărcare completă a rulării; o copie înghețată lipsă sau coruptă BLOCHEAZĂ reluarea, nu se descarcă altă versiune; o rulare nouă, cerută de om din ERP, descarcă din nou).
+  Registrul comun numără ÎNCERCĂRILE EȘUATE pe document, în toate rulările: cel mult 2, la ≥ 60 s una de alta; încercarea se notează
+  ÎNAINTEA apelului, iar una rămasă fără rezultat (cădere) contează ca eșuată — doar dacă rularea ei n-a persistat succesul (meta); pauza se măsoară de la ultimul eșec. Plafon de egress pe rulare `OCR_EGRESS_MAX_MB`
+  (implicit 2048 MB), REZERVAT pe disc înaintea cererii (coborât la `Content-Length` la antete, reconciliat la octeții reali la succes
+  sau la un eșec în proces cu octeți știuți; un eșec ÎN TIMPUL corpului (timeout, conexiune) sau o cădere a procesului lasă rezervarea socotită) — depășire = rularea `oprita`. Un transfer trunchiat
+  (lungime != `Content-Length`, PDF fără `%PDF-` / `%%EOF`) nu devine copia rulării; un fișier complet rămas fără meta se adoptă doar
+  dacă e transferul în curs al ACELEIAȘI rulări. Jurnal: `<dir_rulare>/egress.json`, heartbeat, `erp stare`.
 - **Reluare după cădere** (review r1, decizia B Răzvan): un pas unic (preia, planul, marcajul comparației, o tranziție) poate intra în
   BD și clientul să cadă înainte de marcajul local. La reluare clientul NU interpretează refuzul: citește starea din BD (op
   `stare_rulare` / `rulari_active`, doar citire, migrarea `20261029e`) — planul e confirmat doar dacă amprenta lui canonică din BD
@@ -69,7 +79,7 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
   după minim 20, cu necunoscutele + pierdutele Claude socotite PERMANENT `needs_human` (și după conversia la om) — verificat după
   reluare, înaintea FIECĂRUI apel plătit și înainte de `arbitrata` → `oprita` cu motiv.
 - Decizia arbitrului se scrie local imediat (`decizii.jsonl`, fsync), înaintea următorului apel.
-- **Teste**: `test_client.py` (38, CPU, edge simulat cu verificările BD relevante + căderi simulate) + cap-coadă pe funcțiile SQL REALE în harness
+- **Teste**: `test_client.py` (55, CPU, edge simulat cu verificările BD relevante + căderi simulate) + cap-coadă pe funcțiile SQL REALE în harness
   (`supabase/tests/ofertare_ocr_local_client_e2e.py`, rularea R8 din `scripts/test_ofertare_ocr_local.sh`, fără apel plătit).
   `plan.py` importă PIL doar în funcțiile care randează, ca `load_plan` / `compare` / `reconcile` / `client` să ruleze și fără PIL.
 
@@ -179,7 +189,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 38 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 55 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 
