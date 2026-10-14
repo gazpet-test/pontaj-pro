@@ -17,7 +17,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { norm } from './lib/diacritice.js'
 import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
-import { decizieLegaturaLaSalvare, autoDetectieSantierPermisa } from './executieContractLegatura.js'
+import { decizieLegaturaLaSalvare, stareLegaturaDinCitire, santierInitial, aplicaLegaturaLaSalvare } from './executieContractLegatura.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -1060,6 +1060,32 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   // și cererea explicită de dezlegare — fără ele, salvarea dezlega proiectele fără șantier
   const [proiectLegat, setProiectLegat] = useState(null)
   const [dezleagaCerut, setDezleagaCerut] = useState(false)
+  // Jakarinos r2 P2: „citire eșuată” ≠ „nicio legătură”. 'in_curs' | 'ok' | 'eroare' — cât nu e 'ok', salvarea
+  // nu atinge legătura, șantierul nu se ghicește și câmpul Șantier e blocat (până la o citire reușită)
+  const [stareLegatura, setStareLegatura] = useState(isNew ? 'ok' : 'in_curs')
+  const [eroareLegatura, setEroareLegatura] = useState(null)
+
+  // Proiectul legat se caută după contract_id (cu sau fără șantier); șantierul lui (sau cel ghicit după denumire,
+  // doar dacă nu e nimic legat) precompletează câmpul
+  const citesteLegatura = async (sites) => {
+    setStareLegatura('in_curs'); setEroareLegatura(null)
+    let citire = null
+    if (!isNew) {
+      try {
+        citire = await supabase
+          .from('executie_proiecte')
+          .select('id, cod_intern, nume, site_id')
+          .eq('contract_id', item.id)
+          .maybeSingle()
+      } catch (e) { citire = { data: null, error: { message: e?.message || String(e) } } }
+    }
+    const st = stareLegaturaDinCitire({ isNew, citire })
+    setProiectLegat(st.proiectLegat)
+    setEroareLegatura(st.eroare)
+    setStareLegatura(st.stare)
+    const site = santierInitial({ stare: st.stare, proiectLegat: st.proiectLegat, categorie: f.categorie, denumire: f.denumire, sites })
+    if (site) setSiteIdSelectat(site)
+  }
 
   // Încarcă SITES (nu executie_proiecte) + detectează linkul curent
   useEffect(() => {
@@ -1071,38 +1097,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         .not('name', 'ilike', '%sediu%')
         .order('name')
       setSiteLista(sites || [])
-
-      let legat = null
-      if (!isNew && item.id) {
-        // Proiectul legat se caută după contract_id (cu sau fără șantier); șantierul lui precompletează câmpul
-        const { data: linked } = await supabase
-          .from('executie_proiecte')
-          .select('id, cod_intern, nume, site_id')
-          .eq('contract_id', item.id)
-          .maybeSingle()
-        legat = linked || null
-        setProiectLegat(legat)
-        if (linked?.site_id) {
-          setSiteIdSelectat(String(linked.site_id))
-        }
-      }
-
-      // Smart auto-match: compară denumire contract cu numele șantierului — doar dacă nu e legat deja de un proiect
-      if (autoDetectieSantierPermisa({ categorie: f.categorie, denumire: f.denumire, proiectLegat: legat }) && sites?.length) {
-        const score = (den, s) => {
-          const d = den.toLowerCase()
-          // Cuvinte cheie din numele șantierului (>3 litere, fără "gazpet/transgaz/gaze")
-          const stopWords = new Set(['gazpet','transgaz','gaze','natural','naturale','conducta','cond','transport'])
-          const kws = s.name.toLowerCase().split(/[\s\-_\/]+/)
-            .filter(w => w.length > 3 && !stopWords.has(w))
-          return kws.length ? kws.filter(w => d.includes(w)).length / kws.length : 0
-        }
-        const best = (sites || []).reduce((b, s) => {
-          const sc = score(f.denumire, s)
-          return sc > (b._sc || 0) ? { ...s, _sc: sc } : b
-        }, {})
-        if ((best._sc || 0) >= 0.35) setSiteIdSelectat(String(best.id))
-      }
+      await citesteLegatura(sites || [])
     }
     loadSites()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1178,51 +1173,26 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     setSaving(false)
 
     // ─── Sincronizare Șantier → Proiect Execuție → Contract ─────────────────
-    const decizie = decizieLegaturaLaSalvare({ categorie: f.categorie, siteSelectat: proiectExecId, proiectLegat, dezleagaCerut })
-    if (decizie === 'leaga_prin_santier') {
-      // proiectExecId = site_id → găsim proiectul prin șantier
-      const { data: proiectGasit } = await supabase
-        .from('executie_proiecte')
-        .select('id')
-        .eq('site_id', Number(proiectExecId))
-        .eq('activ', true)
-        .maybeSingle()
-
-      if (proiectGasit) {
-        // Dezleagă eventualul proiect anterior (alt șantier)
-        await supabase.from('executie_proiecte')
-          .update({ contract_id: null })
-          .eq('contract_id', contractId)
-          .neq('id', proiectGasit.id)
-        // Leagă proiectul șantierului selectat + sync date
-        await supabase.from('executie_proiecte').update({
-          contract_id:   contractId,
+    // Decizia + UPDATE-urile stau în executieContractLegatura.js (testate cu client fals); fiecare pas își verifică
+    // eroarea, iar „dezlegat” apare doar la succes. Legătura necitită (eroare / în curs) = nu se atinge nimic.
+    const decizie = decizieLegaturaLaSalvare({ categorie: f.categorie, siteSelectat: proiectExecId, proiectLegat, dezleagaCerut, stareLegatura })
+    let rezLegatura
+    try {
+      rezLegatura = await aplicaLegaturaLaSalvare(supabase, {
+        decizie, contractId, siteSelectat: proiectExecId, proiectLegat,
+        dateSync: {
           nr_contract:   f.numar_contract.trim() || null,
           data_contract: f.data_semnare || null,
           valoare_lei:   payload.valoare_lei,
           valoare_eur:   payload.valoare_eur,
-        }).eq('id', proiectGasit.id)
-      }
-    } else if (decizie === 'pastreaza') {
-      // Proiect fără șantier legat deja (manual din Execuție): legătura rămâne, datele se sincronizează ca mai sus
-      await supabase.from('executie_proiecte').update({
-        nr_contract:   f.numar_contract.trim() || null,
-        data_contract: f.data_semnare || null,
-        valoare_lei:   payload.valoare_lei,
-        valoare_eur:   payload.valoare_eur,
-      }).eq('id', proiectLegat.id).eq('contract_id', contractId)
-    } else if (decizie === 'dezleaga') {
-      // Doar la cerere explicită: bifa „Dezleagă” sau câmpul Șantier golit la un proiect care avea șantier
-      await supabase.from('executie_proiecte')
-        .update({ contract_id: null })
-        .eq('contract_id', contractId)
-      onError(`⚠️ Contractul a fost salvat și dezlegat de proiectul ${proiectLegat?.cod_intern || proiectLegat?.nume || ''} din Execuție. Pentru o legătură nouă alege șantierul și re-salvează.`)
-      setProiectLegat(null); setDezleagaCerut(false)
-      setSaving(false)
-      return
-    } else if (decizie === 'avertizare') {
-      // ⚠️ Contract de execuție salvat fără șantier asociat (nu se mai dezleagă nimic fără cerere explicită)
-      onError('⚠️ Contractul a fost salvat, dar nu e legat la niciun Șantier! Selectează șantierul din câmpul de mai jos și re-salvează.')
+        },
+      })
+    } catch (e) {
+      rezLegatura = { ok: false, mesaj: `⚠️ Contractul a fost salvat, dar legătura cu Execuția nu s-a putut actualiza (${e?.message || e}). Verifică proiectul în Execuție.` }
+    }
+    if (rezLegatura.dezlegat) { setProiectLegat(null); setDezleagaCerut(false) }
+    if (rezLegatura.mesaj) {
+      onError(rezLegatura.mesaj)
       setSaving(false)
       return
     }
@@ -1431,14 +1401,25 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
             <select
               value={proiectExecId}
               onChange={e => setProiectExecId(e.target.value)}
-              style={S.input}
+              disabled={stareLegatura !== 'ok'}
+              style={{...S.input, opacity: stareLegatura !== 'ok' ? 0.5 : 1}}
             >
               <option value="">— Neselectat —</option>
               {proiecteExec.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-            {proiectExecId ? (
+            {stareLegatura === 'eroare' ? (
+              // Jakarinos r2 P2: fără citire reușită nu știm ce proiect e legat → nu se ghicește, nu se modifică nimic
+              <div style={{fontSize:11, marginTop:6, padding:'8px 10px', background:G.red+'18', border:`1px solid ${G.red}55`, borderRadius:6, color:G.red, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                <span style={{flex:1, minWidth:220, fontWeight:600}}>
+                  ⛔ Nu am putut citi proiectul din Execuție legat de acest contract ({eroareLegatura}). Până la o citire reușită, salvarea nu modifică legătura.
+                </span>
+                <button type="button" onClick={() => citesteLegatura(siteLista)} style={{...S.btnS, padding:'4px 10px', fontSize:11}}>↻ Reîncearcă citirea</button>
+              </div>
+            ) : stareLegatura === 'in_curs' ? (
+              <div style={{fontSize:11, marginTop:6, color:G.muted}}>⏳ Se citește legătura cu Execuția…</div>
+            ) : proiectExecId ? (
               <div style={{fontSize:11, marginTop:6, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
                 <span style={{color:G.teal}}>✓</span>
                 <span style={{color:G.teal}}>La salvare: nr. contract, valoare și data semnare se sincronizează automat în Execuție.</span>

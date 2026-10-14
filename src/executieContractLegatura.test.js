@@ -3,6 +3,7 @@ import {
   eContractNelegat, normNrContract, scorPotrivire, filtreazaContracte, proiectLegatAltundeva,
   instructiuniInregistrare, textToastInregistrare, partenerContract, fmtZi, fmtLeiSimplu, LINK_ADMIN_CONTRACTE,
   eContractOcupat, mesajEroareLegare, decizieLegaturaLaSalvare, autoDetectieSantierPermisa,
+  stareLegaturaDinCitire, ghicesteSantier, santierInitial, aplicaLegaturaLaSalvare,
 } from './executieContractLegatura.js'
 
 // Proiecte ca cele din TKT-2026-0333 (forma rândului din v_executie_dashboard)
@@ -138,30 +139,174 @@ describe('eroarea la legare (indexul unic 20261030b)', () => {
 describe('decizieLegaturaLaSalvare (salvarea în Administrativ)', () => {
   const faraSantier = { id: 27, cod_intern: 'FINTA_GHEBOAIA', site_id: null }
   const cuSantier = { id: 7, cod_intern: 'TIFESTI_CFI', site_id: 10 }
+  const d = o => decizieLegaturaLaSalvare({ categorie: 'executie', stareLegatura: 'ok', ...o })
   it('proiect fără șantier legat deja: o simplă salvare PĂSTREAZĂ legătura (înainte o pierdea)', () => {
-    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: faraSantier })).toBe('pastreaza')
+    expect(d({ siteSelectat: '', proiectLegat: faraSantier })).toBe('pastreaza')
   })
   it('dezlegarea doar la cerere explicită', () => {
-    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: faraSantier, dezleagaCerut: true })).toBe('dezleaga')
+    expect(d({ siteSelectat: '', proiectLegat: faraSantier, dezleagaCerut: true })).toBe('dezleaga')
     // proiect cu șantier, iar câmpul Șantier a fost golit de utilizator = cerere explicită (comportamentul vechi)
-    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: cuSantier })).toBe('dezleaga')
+    expect(d({ siteSelectat: '', proiectLegat: cuSantier })).toBe('dezleaga')
   })
   it('șantier ales → legare prin șantier, ca până acum', () => {
-    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '10', proiectLegat: cuSantier })).toBe('leaga_prin_santier')
-    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '8', proiectLegat: null })).toBe('leaga_prin_santier')
+    expect(d({ siteSelectat: '10', proiectLegat: cuSantier })).toBe('leaga_prin_santier')
+    expect(d({ siteSelectat: '8', proiectLegat: null })).toBe('leaga_prin_santier')
   })
   it('nimic legat, niciun șantier → doar avertisment (fără UPDATE care ar putea dezlega o legătură făcută între timp)', () => {
-    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: null })).toBe('avertizare')
-    expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: null, dezleagaCerut: true })).toBe('avertizare')
+    expect(d({ siteSelectat: '', proiectLegat: null })).toBe('avertizare')
+    expect(d({ siteSelectat: '', proiectLegat: null, dezleagaCerut: true })).toBe('avertizare')
   })
-  it('altă categorie → nu atinge Execuția', () => {
-    expect(decizieLegaturaLaSalvare({ categorie: 'prestari_servicii', siteSelectat: '', proiectLegat: faraSantier })).toBe('nimic')
+  it('altă categorie → nu atinge Execuția (chiar și cu citirea eșuată)', () => {
+    expect(decizieLegaturaLaSalvare({ categorie: 'prestari_servicii', siteSelectat: '', proiectLegat: faraSantier, stareLegatura: 'ok' })).toBe('nimic')
+    expect(decizieLegaturaLaSalvare({ categorie: 'prestari_servicii', stareLegatura: 'eroare' })).toBe('nimic')
   })
-  it('ghicirea șantierului după denumire nu înlocuiește o legătură existentă', () => {
-    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: faraSantier })).toBe(false)
-    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: null })).toBe(true)
-    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: '  ', proiectLegat: null })).toBe(false)
-    expect(autoDetectieSantierPermisa({ categorie: 'altele', denumire: 'x', proiectLegat: null })).toBe(false)
+  it('legătura necitită (eroare, în curs sau lipsă) → blocat, orice ar fi ales în câmpul Șantier', () => {
+    for (const stareLegatura of ['eroare', 'in_curs', undefined]) {
+      expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '', proiectLegat: null, stareLegatura })).toBe('blocat')
+      expect(decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: '15', proiectLegat: null, dezleagaCerut: true, stareLegatura })).toBe('blocat')
+    }
+  })
+  it('ghicirea șantierului: nu peste o legătură existentă și nu fără citire reușită', () => {
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: faraSantier, citireOk: true })).toBe(false)
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: null, citireOk: true })).toBe(true)
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: null, citireOk: false })).toBe(false)
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: 'Conductă Finta Gheboaia', proiectLegat: null })).toBe(false)
+    expect(autoDetectieSantierPermisa({ categorie: 'executie', denumire: '  ', proiectLegat: null, citireOk: true })).toBe(false)
+    expect(autoDetectieSantierPermisa({ categorie: 'altele', denumire: 'x', proiectLegat: null, citireOk: true })).toBe(false)
+  })
+})
+
+// Client Supabase fals: înregistrează fiecare cerere (tabel, operație, valori, filtre) și răspunde din `raspuns`
+function dbFals(raspuns = () => ({ data: null, error: null })) {
+  const cereri = []
+  const db = {
+    from(tabel) {
+      const q = { tabel, op: null, valori: null, filtre: [] }
+      const b = {
+        select(c) { q.op = q.op || 'select'; q.coloane = c; return b },
+        update(v) { q.op = 'update'; q.valori = v; return b },
+        eq(k, v) { q.filtre.push(['eq', k, v]); return b },
+        neq(k, v) { q.filtre.push(['neq', k, v]); return b },
+        maybeSingle() { cereri.push(q); return Promise.resolve(raspuns(q)) },
+        then(ok, ko) { cereri.push(q); return Promise.resolve(raspuns(q)).then(ok, ko) },
+      }
+      return b
+    },
+  }
+  return { db, cereri, updateuri: () => cereri.filter(c => c.op === 'update') }
+}
+
+// Jakarinos r2 P2 — reproducerea: 108 legat de 27 (fără șantier), SELECT-ul legăturii cade, denumirea seamănă cu alt șantier
+describe('editorul din Administrativ: citire eșuată ≠ nicio legătură', () => {
+  const sites = [{ id: 15, name: 'Finta Gheboaia' }, { id: 8, name: 'Europan' }]
+  const denumire = 'Execuție conductă Finta – Gheboaia'
+  const dateSync = { nr_contract: '3063', data_contract: '2025-05-06', valoare_lei: 12600000, valoare_eur: null }
+  const deschide = citire => {
+    const st = stareLegaturaDinCitire({ isNew: false, citire })
+    return { ...st, site: santierInitial({ stare: st.stare, proiectLegat: st.proiectLegat, categorie: 'executie', denumire, sites }) }
+  }
+
+  it('fără eroare și fără legătură, aceeași denumire ar ghici șantierul 15 (cazul care producea mutarea)', () => {
+    expect(ghicesteSantier(denumire, sites)?.id).toBe(15)
+    expect(deschide({ data: null, error: null })).toMatchObject({ stare: 'ok', site: '15' })
+  })
+
+  it('eroare la SELECT + denumire potrivită cu alt șantier → nimic ghicit, salvarea nu trimite niciun UPDATE', async () => {
+    const st = deschide({ data: null, error: { message: 'timeout' } })
+    expect(st).toMatchObject({ stare: 'eroare', proiectLegat: null, site: '', eroare: 'timeout' })
+    // nici dacă utilizatorul alege totuși un șantier (câmpul e blocat în UI, dar decizia e și ea fail-closed)
+    for (const siteSelectat of [st.site, '15']) {
+      const decizie = decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat, proiectLegat: st.proiectLegat, stareLegatura: st.stare })
+      expect(decizie).toBe('blocat')
+      const { db, cereri } = dbFals()
+      const rez = await aplicaLegaturaLaSalvare(db, { decizie, contractId: 108, siteSelectat, proiectLegat: st.proiectLegat, dateSync })
+      expect(cereri).toEqual([])                       // legătura 108 ↔ 27 rămâne neatinsă
+      expect(rez.ok).toBe(false)
+      expect(rez.mesaj).toMatch(/NU a fost atinsă/)    // mesaj vizibil
+    }
+  })
+
+  it('după o citire reușită: 108 ↔ 27 fără șantier → nimic ghicit, salvarea doar sincronizează datele pe 27', async () => {
+    const st = deschide({ data: { id: 27, cod_intern: 'FINTA_GHEBOAIA', site_id: null }, error: null })
+    expect(st).toMatchObject({ stare: 'ok', site: '' })
+    const decizie = decizieLegaturaLaSalvare({ categorie: 'executie', siteSelectat: st.site, proiectLegat: st.proiectLegat, stareLegatura: st.stare })
+    expect(decizie).toBe('pastreaza')
+    const { db, updateuri } = dbFals()
+    const rez = await aplicaLegaturaLaSalvare(db, { decizie, contractId: 108, siteSelectat: st.site, proiectLegat: st.proiectLegat, dateSync })
+    expect(rez).toEqual({ ok: true, mesaj: null })
+    expect(updateuri()).toEqual([{ tabel: 'executie_proiecte', op: 'update', valori: dateSync, filtre: [['eq', 'id', 27], ['eq', 'contract_id', 108]] }])
+  })
+
+  it('proiect legat cu șantier: șantierul lui precompletează câmpul, nu cel ghicit', () => {
+    expect(deschide({ data: { id: 6, site_id: 8 }, error: null })).toMatchObject({ stare: 'ok', site: '8' })
+  })
+
+  it('contract nou: nimic de citit, ghicirea e permisă', () => {
+    expect(stareLegaturaDinCitire({ isNew: true, citire: null })).toEqual({ stare: 'ok', proiectLegat: null, eroare: null })
+  })
+})
+
+describe('aplicaLegaturaLaSalvare: fiecare UPDATE își verifică eroarea', () => {
+  const p27 = { id: 27, cod_intern: 'FINTA_GHEBOAIA', site_id: null }
+  const dateSync = { nr_contract: '3063' }
+  it('dezlegare reușită → „dezlegat” + mesaj; dezlegare eșuată → fără „dezlegat”, legătura a rămas', async () => {
+    const ok = dbFals()
+    const r1 = await aplicaLegaturaLaSalvare(ok.db, { decizie: 'dezleaga', contractId: 108, proiectLegat: p27 })
+    expect(r1.dezlegat).toBe(true)
+    expect(r1.mesaj).toMatch(/dezlegat de proiectul FINTA_GHEBOAIA/)
+    expect(ok.updateuri()[0]).toMatchObject({ valori: { contract_id: null }, filtre: [['eq', 'contract_id', 108]] })
+
+    const ko = dbFals(() => ({ data: null, error: { code: '42501', message: 'permission denied' } }))
+    const r2 = await aplicaLegaturaLaSalvare(ko.db, { decizie: 'dezleaga', contractId: 108, proiectLegat: p27 })
+    expect(r2.dezlegat).toBeUndefined()
+    expect(r2.ok).toBe(false)
+    expect(r2.mesaj).toMatch(/dezlegarea de proiectul FINTA_GHEBOAIA a eșuat \(permission denied\); legătura a rămas/)
+  })
+  it('sincronizare eșuată pe proiectul păstrat → mesaj', async () => {
+    const ko = dbFals(() => ({ error: { message: 'boom' } }))
+    const r = await aplicaLegaturaLaSalvare(ko.db, { decizie: 'pastreaza', contractId: 108, proiectLegat: p27, dateSync })
+    expect(r).toMatchObject({ ok: false })
+    expect(r.mesaj).toMatch(/nu s-au sincronizat.*boom/)
+  })
+  it('legare prin șantier: găsește proiectul, dezleagă celelalte, leagă + sincronizează', async () => {
+    const f = dbFals(q => q.op === 'select' ? { data: { id: 40 }, error: null } : { data: null, error: null })
+    const r = await aplicaLegaturaLaSalvare(f.db, { decizie: 'leaga_prin_santier', contractId: 200, siteSelectat: '12', dateSync })
+    expect(r).toEqual({ ok: true, mesaj: null })
+    expect(f.cereri.map(c => c.op)).toEqual(['select', 'update', 'update'])
+    expect(f.cereri[0].filtre).toEqual([['eq', 'site_id', 12], ['eq', 'activ', true]])
+    expect(f.cereri[1]).toMatchObject({ valori: { contract_id: null }, filtre: [['eq', 'contract_id', 200], ['neq', 'id', 40]] })
+    expect(f.cereri[2]).toMatchObject({ valori: { contract_id: 200, nr_contract: '3063' }, filtre: [['eq', 'id', 40]] })
+  })
+  it('legare prin șantier: căutarea proiectului eșuează → niciun UPDATE', async () => {
+    const f = dbFals(q => q.op === 'select' ? { data: null, error: { message: 'retea' } } : { data: null, error: null })
+    const r = await aplicaLegaturaLaSalvare(f.db, { decizie: 'leaga_prin_santier', contractId: 200, siteSelectat: '12', dateSync })
+    expect(r.ok).toBe(false)
+    expect(r.mesaj).toMatch(/legătura nu s-a modificat/)
+    expect(f.updateuri()).toEqual([])
+  })
+  it('legare prin șantier: dezlegarea anterioară eșuează → nu mai încearcă legarea', async () => {
+    let n = 0
+    const f = dbFals(q => q.op === 'select' ? { data: { id: 40 }, error: null } : (n++ === 0 ? { error: { message: 'x' } } : { error: null }))
+    const r = await aplicaLegaturaLaSalvare(f.db, { decizie: 'leaga_prin_santier', contractId: 200, siteSelectat: '12', dateSync })
+    expect(r.mesaj).toMatch(/dezlegarea proiectului anterior a eșuat/)
+    expect(f.updateuri()).toHaveLength(1)
+  })
+  it('legare prin șantier: 23505 (indexul unic) → „deja legat de alt proiect”', async () => {
+    let n = 0
+    const f = dbFals(q => q.op === 'select' ? { data: { id: 40 }, error: null } : (n++ === 0 ? { error: null } : { error: { code: '23505', message: 'duplicate key' } }))
+    const r = await aplicaLegaturaLaSalvare(f.db, { decizie: 'leaga_prin_santier', contractId: 200, siteSelectat: '12', dateSync })
+    expect(r.mesaj).toMatch(/deja legat de alt proiect/)
+  })
+  it('șantier fără proiect activ → nimic de făcut, ca până acum', async () => {
+    const f = dbFals()
+    expect(await aplicaLegaturaLaSalvare(f.db, { decizie: 'leaga_prin_santier', contractId: 200, siteSelectat: '99', dateSync })).toEqual({ ok: true, mesaj: null })
+    expect(f.updateuri()).toEqual([])
+  })
+  it('nimic / avertizare: fără cereri', async () => {
+    const f = dbFals()
+    expect(await aplicaLegaturaLaSalvare(f.db, { decizie: 'nimic' })).toEqual({ ok: true, mesaj: null })
+    expect((await aplicaLegaturaLaSalvare(f.db, { decizie: 'avertizare' })).mesaj).toMatch(/nu e legat la niciun Șantier/)
+    expect(f.cereri).toEqual([])
   })
 })
 

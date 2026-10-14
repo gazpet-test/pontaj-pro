@@ -5,7 +5,8 @@
 // executie_proiecte, fără rând în contracte_terti și fără contract_id. Sincronizarea
 // există doar invers (Administrativ → Execuție, prin șantier). Aici stă logica pură:
 // cine e „nelegat”, ce contracte din Administrativ se potrivesc și ce trebuie completat
-// la înregistrare. Fără acces la BD — componenta UI face citirea și UPDATE-ul.
+// la înregistrare. Fără client Supabase importat: singura funcție cu I/O (aplicaLegaturaLaSalvare)
+// primește clientul ca parametru, ca să fie testată cu un client fals.
 import { norm } from './lib/diacritice.js'
 
 export const ETICHETA_CONTRACT_NELEGAT = '⚠ Contract neînregistrat în Administrativ'
@@ -87,24 +88,94 @@ export function mesajEroareLegare(err) {
   return 'Legătura a fost refuzată: ' + (err?.message || 'eroare necunoscută')
 }
 
-// ── Administrativ → editorul de contract: ce face salvarea cu legătura spre Execuție (Jakarinos r1 P2 pe #709) ──
+// ── Administrativ → editorul de contract: legătura spre Execuție (Jakarinos r1 + r2 P2 pe #709) ──
 // Înainte, editorul găsea proiectul legat DOAR prin șantier; la un proiect fără șantier (legat manual din Execuție)
-// câmpul rămânea gol, iar salvarea dezlega proiectul. Acum:
+// câmpul rămânea gol, iar salvarea dezlega proiectul. Iar o citire EȘUATĂ arăta ca „nicio legătură”: se ghicea un
+// șantier după denumire și salvarea muta contractul pe alt proiect. Acum „citire eșuată” ≠ „nicio legătură”.
+
+// Starea legăturii la deschiderea editorului, din rezultatul SELECT-ului după contract_id ({ data, error })
+//  'ok' — citire reușită (proiectLegat = rândul sau null) · 'eroare' — nu știm ce e legat, deci nu atingem nimic
+export function stareLegaturaDinCitire({ isNew, citire }) {
+  if (isNew) return { stare: 'ok', proiectLegat: null, eroare: null }
+  if (!citire || citire.error) return { stare: 'eroare', proiectLegat: null, eroare: citire?.error?.message || 'citire eșuată' }
+  return { stare: 'ok', proiectLegat: citire.data || null, eroare: null }
+}
+
+// Ghicirea șantierului după denumire (regula veche din editor, neschimbată): cel mai bun scor ≥ 0.35, altfel null
+const CUVINTE_IGNORATE = new Set(['gazpet', 'transgaz', 'gaze', 'natural', 'naturale', 'conducta', 'cond', 'transport'])
+export function ghicesteSantier(denumire, sites) {
+  const d = String(denumire || '').toLowerCase()
+  let best = null, bestSc = 0
+  for (const s of sites || []) {
+    const kws = String(s?.name || '').toLowerCase().split(/[\s\-_/]+/).filter(w => w.length > 3 && !CUVINTE_IGNORATE.has(w))
+    const sc = kws.length ? kws.filter(w => d.includes(w)).length / kws.length : 0
+    if (sc > bestSc) { best = s; bestSc = sc }
+  }
+  return bestSc >= 0.35 ? best : null
+}
+// Ghicirea nu are voie să înlocuiască o legătură existentă și nici să ruleze când n-am putut citi legătura
+export const autoDetectieSantierPermisa = ({ categorie, denumire, proiectLegat, citireOk }) =>
+  citireOk === true && categorie === 'executie' && textCurat(denumire) !== '' && !proiectLegat
+
+// Șantierul precompletat la deschidere: al proiectului legat; altfel ghicit — doar după o citire reușită
+export function santierInitial({ stare, proiectLegat, categorie, denumire, sites }) {
+  if (stare !== 'ok') return ''
+  if (proiectLegat?.site_id != null) return String(proiectLegat.site_id)
+  if (!autoDetectieSantierPermisa({ categorie, denumire, proiectLegat, citireOk: true })) return ''
+  const s = ghicesteSantier(denumire, sites)
+  return s?.id != null ? String(s.id) : ''
+}
+
+// Ce face salvarea cu legătura:
+//  'blocat'             — legătura nu s-a citit (eroare / încă în curs): NU se atinge executie_proiecte
 //  'leaga_prin_santier' — e ales un șantier: proiectul activ al șantierului (ca până acum)
 //  'pastreaza'          — niciun șantier, dar contractul e legat de un proiect FĂRĂ șantier: legătura rămâne
 //  'dezleaga'           — doar la cerere explicită: bifa „Dezleagă” sau golirea câmpului la un proiect care avea șantier
 //  'avertizare'         — nimic legat, niciun șantier: doar avertismentul (fără UPDATE pe executie_proiecte)
 //  'nimic'              — altă categorie decât execuție
-export function decizieLegaturaLaSalvare({ categorie, siteSelectat, proiectLegat, dezleagaCerut = false }) {
+// stareLegatura lipsă = 'blocat' (fail-closed)
+export function decizieLegaturaLaSalvare({ categorie, siteSelectat, proiectLegat, dezleagaCerut = false, stareLegatura }) {
   if (categorie !== 'executie') return 'nimic'
+  if (stareLegatura !== 'ok') return 'blocat'
   if (siteSelectat) return 'leaga_prin_santier'
   if (!proiectLegat) return 'avertizare'
   if (dezleagaCerut || proiectLegat.site_id != null) return 'dezleaga'
   return 'pastreaza'
 }
-// Ghicirea șantierului după denumire nu are voie să înlocuiască o legătură existentă (ar muta contractul pe alt proiect)
-export const autoDetectieSantierPermisa = ({ categorie, denumire, proiectLegat }) =>
-  categorie === 'executie' && textCurat(denumire) !== '' && !proiectLegat
+
+const numeProiect = p => p?.cod_intern || p?.nume || (p?.id != null ? '#' + p.id : '')
+// Execută decizia pe executie_proiecte; fiecare pas își verifică eroarea. Întoarce
+// { ok, mesaj, dezlegat } — mesaj = ce vede utilizatorul (null = nimic de semnalat); dezlegat doar la succes.
+export async function aplicaLegaturaLaSalvare(db, { decizie, contractId, siteSelectat, proiectLegat, dateSync }) {
+  const salvatDar = '⚠️ Contractul a fost salvat, dar '
+  if (decizie === 'nimic') return { ok: true, mesaj: null }
+  if (decizie === 'blocat') return { ok: false, mesaj: salvatDar + 'legătura cu Execuția NU a fost atinsă: nu am putut citi proiectul legat. Apasă „↻ Reîncearcă citirea” la Șantier asociat și salvează din nou.' }
+  if (decizie === 'avertizare') return { ok: false, mesaj: salvatDar + 'nu e legat la niciun Șantier! Selectează șantierul din câmpul de mai jos și re-salvează.' }
+  if (decizie === 'pastreaza') {
+    const { error } = await db.from('executie_proiecte').update(dateSync).eq('id', proiectLegat.id).eq('contract_id', contractId)
+    return error ? { ok: false, mesaj: salvatDar + `datele nu s-au sincronizat în proiectul ${numeProiect(proiectLegat)}: ${error.message}` } : { ok: true, mesaj: null }
+  }
+  if (decizie === 'dezleaga') {
+    const { error } = await db.from('executie_proiecte').update({ contract_id: null }).eq('contract_id', contractId)
+    if (error) return { ok: false, mesaj: salvatDar + `dezlegarea de proiectul ${numeProiect(proiectLegat)} a eșuat (${error.message}); legătura a rămas.` }
+    return { ok: true, dezlegat: true, mesaj: `⚠️ Contractul a fost salvat și dezlegat de proiectul ${numeProiect(proiectLegat)} din Execuție. Pentru o legătură nouă alege șantierul și re-salvează.` }
+  }
+  if (decizie === 'leaga_prin_santier') {
+    const { data: gasit, error: eGasit } = await db.from('executie_proiecte').select('id')
+      .eq('site_id', Number(siteSelectat)).eq('activ', true).maybeSingle()
+    if (eGasit) return { ok: false, mesaj: salvatDar + `nu am putut găsi proiectul activ al șantierului (${eGasit.message}); legătura nu s-a modificat.` }
+    if (!gasit) return { ok: true, mesaj: null }   // ca până acum: șantier fără proiect activ → nimic de legat
+    // dezleagă eventualul proiect anterior (alt șantier), apoi leagă proiectul șantierului + sincronizează datele
+    const { error: eDez } = await db.from('executie_proiecte').update({ contract_id: null }).eq('contract_id', contractId).neq('id', gasit.id)
+    if (eDez) return { ok: false, mesaj: salvatDar + `dezlegarea proiectului anterior a eșuat (${eDez.message}); legătura nu s-a modificat.` }
+    const { error: eLeg } = await db.from('executie_proiecte').update({ contract_id: contractId, ...dateSync }).eq('id', gasit.id)
+    if (eLeg) return { ok: false, mesaj: salvatDar + (eContractOcupat(eLeg)
+      ? 'contractul e deja legat de alt proiect; legătura nouă nu s-a făcut.'
+      : `legarea de proiectul șantierului a eșuat (${eLeg.message}). Verifică în Execuție dacă proiectul anterior a rămas dezlegat.`) }
+    return { ok: true, mesaj: null }
+  }
+  return { ok: false, mesaj: salvatDar + 'legătura cu Execuția nu s-a modificat (decizie necunoscută).' }
+}
 
 // Ce se completează în Administrativ → Contracte cu terți → „+ Contract nou”
 export function instructiuniInregistrare(p) {
