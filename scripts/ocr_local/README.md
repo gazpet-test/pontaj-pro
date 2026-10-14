@@ -49,15 +49,24 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
 | 7 | `compara <dir>` | `compare.compare` per document → dezacordurile în BD + marcajul (număr + amprentă) |
 | 8 | `arbitreaza <dir>` | **PLĂTIT**: `ofertare-ocr-arbitreaza` pe fiecare dezacord (rezervarea + plafonul în BD); `structura_tabele` → `needs_human` fără AI → `arbitrata` |
 | 9 | `reconciliaza <dir>` | `reconcile.reconcile` per document → textul reconciliat (`reconciliat` / `needs_human`) → `finalizata` |
-| — | `oprire <dir> --motiv …` · `abandon --rezervare N` | oprește rularea · abandonează o rezervare rămasă deschisă (după 15 min) |
+| — | `oprire <dir> --motiv …` · `abandon --rezervare N` · `stare <dir>` | oprește rularea · abandonează o rezervare rămasă deschisă (după 15 min) · starea din BD (doar citire) + pașii locali |
 
-- **Nicio reîncercare automată**: orice refuz al BD sau eroare a unui edge oprește pasul cu mesajul primit. La arbitraj: 402 (plafon /
-  stare), 502 (API — rezervarea rămâne deschisă, `abandon` după 15 min), 409 oprește; `409 arbitrat` (decizie în BD, dar pierdută local
-  printr-o întrerupere) → `pierdute.jsonl` = `needs_human` la reconciliere (fail-closed).
-- **Oprire automată** (spec §8): gardă / citire incompletă pe > 20% din pagini (la `incarca-citiri`); `needs_human` > 15% din
-  arbitrajele Claude, după minim 20 (la `arbitreaza`) → `oprita` cu motiv.
+- **Reluare după cădere** (review r1, decizia B Răzvan): un pas unic (preia, planul, marcajul comparației, o tranziție) poate intra în
+  BD și clientul să cadă înainte de marcajul local. La reluare clientul NU interpretează refuzul: citește starea din BD (op
+  `stare_rulare` / `rulari_active`, doar citire, migrarea `20261029e`) — planul e confirmat doar dacă amprenta lui canonică din BD
+  (`plan_sha`, aceeași formulă în SQL și Python) e a noastră, comparația doar cu același număr + amprentă, tranziția doar dacă rularea e
+  deja în starea cerută; o preluare întreruptă (`preia_in_curs.json`) se recuperează din rulările active (`preluata`, fără plan, fără
+  director local; mai multe = decide omul). Intenții locale înaintea pașilor unici, fișiere de control scrise atomic + fsync.
+- **Nicio reîncercare automată** a unui apel plătit: refuzul dinaintea plății (`refuz` = poartă, plafon, stare, amprentă, în zbor) oprește
+  pasul; orice apel care poate fi plătit fără decizie înregistrată (409 decontat, 500, 502, eroare de transport) → `blocate.jsonl`: pe
+  acel item nu se mai cere NICIODATĂ un arbitraj Claude, la reluare merge la `needs_human` fără AI (după `abandon`, dacă rezervarea e
+  deschisă); `409 arbitrat` (decizie în BD pierdută local) → `pierdute.jsonl` = `needs_human` la reconciliere. `rezervare_id` apare în
+  mesajul de eroare.
+- **Oprire automată** (spec §8): gardă / citire incompletă / bandă lipsă (cititor oprit) pe > 20% din pagini (la `incarca-citiri`; un
+  cititor încă neterminat = refuz, fără scriere); `needs_human` > 15% din arbitrajele Claude, după minim 20, cu pierdute + blocate
+  socotite `needs_human` — verificat după reluare, înaintea FIECĂRUI apel plătit și înainte de `arbitrata` → `oprita` cu motiv.
 - Decizia arbitrului se scrie local imediat (`decizii.jsonl`, fsync), înaintea următorului apel.
-- **Teste**: `test_client.py` (15, CPU, edge simulat cu verificările BD relevante) + cap-coadă pe funcțiile SQL REALE în harness
+- **Teste**: `test_client.py` (28, CPU, edge simulat cu verificările BD relevante + căderi simulate) + cap-coadă pe funcțiile SQL REALE în harness
   (`supabase/tests/ofertare_ocr_local_client_e2e.py`, rularea R8 din `scripts/test_ofertare_ocr_local.sh`, fără apel plătit).
   `plan.py` importă PIL doar în funcțiile care randează, ca `load_plan` / `compare` / `reconcile` / `client` să ruleze și fără PIL.
 
@@ -167,7 +176,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 15 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 28 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 

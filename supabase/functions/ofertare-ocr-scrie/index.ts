@@ -3,7 +3,8 @@
 // exact parametrii lui. DEPLOY cu verify_jwt = false: poarta e secretul din Vault.
 //
 // Cerere:  POST { "op": "preia" | "plan" | "pagina" | "dezacord" | "comparatie_gata" | "stare" | "rezervare_abandon" | "heartbeat"
-//                       | "needs_human" (fn_ofertare_ocr_arbitraj_om, migrarea 20261029c: decizia needs_human fără apel plătit),
+//                       | "needs_human" (fn_ofertare_ocr_arbitraj_om, migrarea 20261029c: decizia needs_human fără apel plătit)
+//                       | "stare_rulare" / "rulari_active" (DOAR CITIRE, migrarea 20261029e: reluarea clientului după o cădere),
 //                 "args": { …exact cheile operației, vezi _shared/ocrLocal.ts OPERATII… } } cu antetul x-ocr-local-secret.
 // Răspuns: 200 { ok: true, rezultat } · 400 corp / operație · 401 neautorizat · 403 / 404 / 409 / 422 refuzul RPC-ului (mesajul lui) ·
 //          413 corp prea mare · 500 configurare / eroare.
@@ -13,7 +14,8 @@
 //      scripts/ocr_local — trecute ca parametri, nu interpretate aici; RPC-urile validează forma, starea rulării și proveniența;
 //  (b) scrie DOAR prin RPC-urile din listă (inclusiv needs_human = arbitraj append-only fără cost): rulări (preluare, plan, stare, marcaj), pagini / dezacorduri append-only, abandonul unei
 //      rezervări de cost (după 15 min), heartbeat. Nu atinge ofertare_cantitati / text_extras, nu trimite mail, nu atinge drepturi;
-//      nu emite linkuri (ofertare-pdf-link) și nu cheltuie (ofertare-ocr-arbitreaza);
+//      nu emite linkuri (ofertare-pdf-link) și nu cheltuie (ofertare-ocr-arbitreaza); stare_rulare / rulari_active doar citesc
+//      (starea, amprentele, costurile rulărilor OCR — fără textul documentelor);
 //  (c) service_role: apelantul n-are cont Supabase; RPC-urile au EXECUTE doar service_role;
 //  (d) cine pornește: doar deținătorul OCR_LOCAL_SECRET (fn_verifica_secret, fail closed); preluarea ia doar rulări cerute de un
 //      utilizator autorizat (fn_ofertare_ocr_cerere);

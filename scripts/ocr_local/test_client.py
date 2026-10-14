@@ -26,11 +26,16 @@ class FakeEdge:
         self.arbitru = arbitru or (lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'ales_mineru', 'text': it['citire_mineru'],
                                                                  'motiv': 't', 'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5',
                                                                  'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}, 'arbitraj_id': 1}))
-        self.documente = [{'document_id': DOC, 'pagini': [1, 2]}]; self.om = set(); self.cade_dupa = None
+        self.documente = [{'document_id': DOC, 'pagini': [1, 2]}]; self.om = set(); self.cade_dupa = None; self.comp = None
     def ops(self, op): return [a for f, c in self.calls if f == 'ofertare-ocr-scrie' and c['op'] == op for a in [c['args']]]
     def get(self, url, dest, max_octeti=0, timeout=0):
         dest.write_bytes(self.pdf); return hashlib.sha256(self.pdf).hexdigest(), len(self.pdf)
     def post(self, fn, corp, timeout=60):
+        status, j = self._post(fn, corp, timeout)
+        if self.cade_dupa and status == 200 and fn == 'ofertare-ocr-scrie' and self.cade_dupa in (corp['op'], corp['args'].get('stare')):
+            self.cade_dupa = None; raise ConnectionResetError('cadere simulata dupa commit')  # BD a aplicat, raspunsul se pierde
+        return status, j
+    def _post(self, fn, corp, timeout=60):
         self.calls.append((fn, corp))
         if fn == 'ofertare-pdf-link': return 200, {'url': C.SEMNAT + 'licitatii/x.pdf?token=t', 'expira_in_sec': 300, 'document_id': corp['document_id']}
         if fn == 'ofertare-ocr-arbitreaza':
@@ -66,7 +71,8 @@ class FakeEdge:
         if op == 'comparatie_gata':
             linii = sorted('%d|%d|%s|%s\n' % (d['document_id'], d['pagina'], d['item_id'], d['item_sha256']) for _, d in self.dez.values())
             assert a['nr'] == len(self.dez) and a['sha256'] == hashlib.sha256(''.join(linii).encode()).hexdigest()
-            return 200, {'ok': True, 'rezultat': {'ok': True}}
+            if self.comp is not None or self.stare != 'citita': return 409, {'error': 'Marcajul se pune o singură dată, în citita'}
+            self.comp = {'nr': a['nr'], 'sha256': a['sha256']}; return 200, {'ok': True, 'rezultat': {'ok': True}}
         if op == 'needs_human':
             if a['dezacord_id'] in self.om: return 409, {'error': 'Dezacord deja arbitrat'}
             self.om.add(a['dezacord_id']); return 200, {'ok': True, 'rezultat': {'ok': True}}
@@ -74,9 +80,16 @@ class FakeEdge:
             ok = {('preluata', 'citita'), ('citita', 'arbitrata'), ('arbitrata', 'finalizata')}
             if (self.stare, a['stare']) not in ok and not (a['stare'] in ('oprita', 'esuata') and self.stare in ('preluata', 'citita', 'arbitrata')):
                 return 409, {'error': 'Tranziție nepermisă %s → %s' % (self.stare, a['stare'])}
-            self.stare = a['stare']
-            if self.cade_dupa == a['stare']: self.cade_dupa = None; raise ConnectionResetError('cadere simulata dupa commit')
-            return 200, {'ok': True, 'rezultat': {'ok': True}}
+            self.stare = a['stare']; return 200, {'ok': True, 'rezultat': {'ok': True}}
+        if op == 'stare_rulare':
+            if a['rulare_id'] != 7: return 200, {'ok': True, 'rezultat': {'exista': False}}
+            return 200, {'ok': True, 'rezultat': {'exista': True, 'id': 7, 'stare': self.stare, 'comparatie_nr': (self.comp or {}).get('nr'),
+                                                  'comparatie_sha256': (self.comp or {}).get('sha256'),
+                                                  'plan_sha256': C.plan_sha(list(self.plan.values())) if self.plan else None}}
+        if op == 'rulari_active':
+            act = [] if self.stare not in ('preluata', 'citita', 'arbitrata') else [{'id': 7, 'licitatie_id': 102, 'stare': self.stare, 'documente': self.documente,
+                                                                                       'plafon_usd': 15, 'protocol': RD.protocol()['version'], 'are_plan': self.plan is not None}]
+            return 200, {'ok': True, 'rezultat': act}
         return 400, {'error': 'Operație necunoscută'}
 
 def scrie_citiri(rdir, text_a, text_b, ok_b=True):
@@ -196,10 +209,38 @@ class Client(unittest.TestCase):
         self.edge.post = anulata
         with self.assertRaises(C.EdgeError): C.incarca_citiri(rdir, self.edge)
         self.assertFalse(C.pasi(rdir).get('citita'))
-    def test_preia_intrerupt_blocheaza_preluarea_urmatoare(self):
-        (self.work / 'preia_in_curs.json').write_text('{}')
-        with self.assertRaises(RuntimeError): C.preia(self.work, self.edge)
-        self.assertFalse(self.edge.ops('preia'))
+    def test_preia_intrerupt_se_recupereaza_din_bd(self):
+        # review r1 (Jakarinos P2-3): BD a trecut rularea in preluata, raspunsul s-a pierdut -> urmatorul preia o recupereaza (rulari_active)
+        self.edge.cade_dupa = 'preia'
+        with self.assertRaises(ConnectionResetError): C.preia(self.work, self.edge)
+        self.assertTrue((self.work / 'preia_in_curs.json').exists())
+        r = C.preia(self.work, self.edge); self.assertEqual((r['rulare'], r.get('recuperata')), (7, True))
+        self.assertEqual(len(self.edge.ops('preia')), 1); self.assertFalse((self.work / 'preia_in_curs.json').exists())
+        rdir = pathlib.Path(r['dir']); C.descarca(rdir, self.edge)  # rularea recuperata e folosibila
+    def test_preia_intrerupt_fara_rulare_in_bd_reia_normal(self):
+        (self.work / 'preia_in_curs.json').write_text('{}'); self.edge.stare = 'ceruta'
+        r = C.preia(self.work, self.edge); self.assertEqual((r['rulare'], r.get('recuperata')), (7, None))
+    def test_plan_si_comparatie_confirmate_din_bd_dupa_cadere(self):
+        r = C.preia(self.work, self.edge); rdir = pathlib.Path(r['dir']); C.descarca(rdir, self.edge); C.foaie(rdir)
+        (rdir / 'orientare' / ('%d.json' % DOC)).write_text('{"1": 0, "2": 0}', encoding='utf-8')
+        self.edge.cade_dupa = 'plan'
+        with self.assertRaises(ConnectionResetError): C.plan_rulare(rdir, self.edge)
+        self.assertEqual(C.plan_rulare(rdir, self.edge)['pagini'], 2); self.assertEqual(len(self.edge.ops('plan')), 2)  # al doilea = 409, confirmat
+        scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge)
+        self.edge.cade_dupa = 'comparatie_gata'
+        with self.assertRaises(ConnectionResetError): C.compara_rulare(rdir, self.edge)
+        n = len(self.edge.ops('dezacord')); c = C.compara_rulare(rdir, self.edge)
+        self.assertEqual(len(self.edge.ops('dezacord')), n); self.assertEqual(c['dezacorduri'], self.edge.comp['nr'])
+        self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata')
+    def test_plan_diferit_in_bd_nu_e_confirmat(self):
+        rdir = self.pana_la_plan(); C.marcheaza(rdir, 'plan', None)  # nu conteaza marcajul: BD are planul, iar clientul ar trimite altul
+        self.edge.plan[(DOC, 2)] = dict(self.edge.plan[(DOC, 2)], exclus='alt motiv'); p = C.pasi(rdir); del p['plan']; C.save(rdir / 'pasi.json', p)
+        with self.assertRaises(C.EdgeError): C.plan_rulare(rdir, self.edge)
+    def test_amprenta_planului_canonica(self):
+        m = [{'document_id': 1247, 'pagina': 326, 'exclus': None, 'benzi': [{'banda': 10, 'image_sha256': 'b'}, {'banda': 2, 'image_sha256': 'a'}]},
+             {'document_id': 1247, 'pagina': 327, 'exclus': 'plansa'}]
+        l1 = '1247|326|-|2:a,10:b\n'; l2 = '1247|327|%s|\n' % hashlib.sha256('plansa'.encode()).hexdigest()
+        self.assertEqual(C.plan_sha(m), hashlib.sha256((l1 + l2).encode()).hexdigest()); self.assertEqual(C.plan_sha(m[::-1]), C.plan_sha(m))
     def test_prag_verificat_inainte_de_orice_apel_platit(self):
         # review r1 (Copilot P1-3 / Jakarinos P1-1): deciziile deja scrise (reluare) depasesc pragul -> oprire FARA un nou apel platit
         rdir = self.pana_la_plan(); scrie_citiri(rdir, 'lungime 10 m', 'lungime 20 m'); C.incarca_citiri(rdir, self.edge); C.compara_rulare(rdir, self.edge)

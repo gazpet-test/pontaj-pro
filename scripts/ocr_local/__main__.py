@@ -34,7 +34,7 @@ def main(argv=None):
                          ('plan', 'CPU: planul per document + manifestul in BD (o singura data)'), ('incarca-citiri', 'citirile ambilor cititori in BD, apoi citita'),
                          ('compara', 'CPU: dezacordurile in BD + marcajul de comparatie'), ('arbitreaza', 'PLATIT: arbitrajul Claude pe dezacorduri, apoi arbitrata'),
                          ('reconciliaza', 'CPU: textul reconciliat in BD, apoi finalizata'), ('citeste', 'GPU: un cititor pe toate documentele (fara ERP)'),
-                         ('oprire', 'opreste rularea (motiv obligatoriu)')):
+                         ('oprire', 'opreste rularea (motiv obligatoriu)'), ('stare', 'starea rularii din BD (doar citire) + pasii locali')):
         s = es.add_parser(nume, help=ajutor); s.add_argument('rulare_dir')
         if nume == 'citeste': s.add_argument('--cititor', required=True, choices=['lighton', 'mineru'])
         if nume == 'oprire': s.add_argument('--motiv', required=True)
@@ -49,7 +49,8 @@ def main(argv=None):
             res = {'preia': lambda: C.preia(x.work, edge), 'descarca': lambda: C.descarca(x.rulare_dir, edge), 'plan': lambda: C.plan_rulare(x.rulare_dir, edge),
                    'incarca-citiri': lambda: C.incarca_citiri(x.rulare_dir, edge), 'compara': lambda: C.compara_rulare(x.rulare_dir, edge),
                    'arbitreaza': lambda: C.arbitreaza(x.rulare_dir, edge), 'reconciliaza': lambda: C.reconciliaza_rulare(x.rulare_dir, edge),
-                   'oprire': lambda: C.oprire(x.rulare_dir, edge, x.motiv), 'abandon': lambda: C.abandon(edge, x.rezervare)}[x.pas]()
+                   'oprire': lambda: C.oprire(x.rulare_dir, edge, x.motiv), 'abandon': lambda: C.abandon(edge, x.rezervare),
+                   'stare': lambda: C.stare(x.rulare_dir, edge)}[x.pas]()
     elif x.cmd == 'plan':
         from .plan import plan
         ori = json.loads(x.orientari.read_text(encoding='utf-8')) if x.orientari else None

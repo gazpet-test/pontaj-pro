@@ -94,18 +94,33 @@ def pasi(rdir):
 def marcheaza(rdir, pas, valoare=True):
     p = pasi(rdir); p[pas] = {'la': time.time(), 'valoare': valoare}; save(pathlib.Path(rdir) / 'pasi.json', p)
 ORDINE = ('preluata', 'citita', 'arbitrata', 'finalizata')
-STARE_REFUZ = re.compile(r'Tranzi\S* nepermis\S* ([a-z]+) →')
+
+def stare_server(edge, rulare_id):
+    """Starea CONFIRMATA din BD (op stare_rulare, doar citire, migrarea 20261029e): reluarea dupa o cadere nu interpreteaza un refuz."""
+    s = scrie(edge, 'stare_rulare', {'rulare_id': rulare_id})
+    if not isinstance(s, dict) or s.get('exista') is not True or s.get('id') != rulare_id: raise RuntimeError('Rularea %d nu exista in BD' % rulare_id)
+    return s
 
 def tranzitie(rdir, edge, r, stare, motiv=None):
-    """O tranzitie de stare, reluabila dupa o cadere intre commit-ul din BD si marcajul local: refuzul BD numeste starea CURENTA
-    („Tranzitie nepermisa <curenta> → <ceruta>”) - daca rularea e deja in starea ceruta (sau dupa ea pe drumul normal), pasul e facut.
-    Orice alta stare curenta (oprita, anulata, esuata, una anterioara) = eroare."""
+    """O tranzitie de stare, reluabila dupa o cadere intre commit-ul din BD si marcajul local: la refuz (409) se citeste starea din BD -
+    daca rularea e deja in starea ceruta (sau dupa ea pe drumul normal), pasul e facut; orice alta stare (oprita, anulata, esuata,
+    una anterioara) = eroarea originala."""
     try: scrie(edge, 'stare', {'rulare_id': r['rulare_id'], 'stare': stare, 'motiv': motiv})
     except EdgeError as e:
-        m = STARE_REFUZ.search(str(e.corp.get('error', '')))
-        cur = m.group(1) if m and e.status == 409 else None
+        if e.status != 409: raise
+        cur = stare_server(edge, r['rulare_id'])['stare']
         if not (cur == stare or (cur in ORDINE and stare in ORDINE and ORDINE.index(cur) > ORDINE.index(stare))): raise
     marcheaza(rdir, stare, motiv or True)
+
+def plan_sha(manifest):
+    """Amprenta canonica a planului, IDENTICA cu fn_ofertare_ocr_rulare_stare (20261029e): randuri
+    „document_id|pagina|<sha256(exclus) sau ->|banda:image_sha256,...\\n” (benzile in ordine numerica), sortate."""
+    linii = []
+    for e in manifest:
+        ex = sha(e['exclus'].encode('utf-8')) if isinstance(e.get('exclus'), str) else '-'
+        benzi = ','.join('%d:%s' % (b['banda'], b['image_sha256']) for b in sorted(e.get('benzi') or [], key=lambda b: b['banda']))
+        linii.append('%d|%d|%s|%s\n' % (e['document_id'], e['pagina'], ex, benzi))
+    return sha(''.join(sorted(linii)).encode('utf-8'))
 
 def activa(rdir):
     o = pasi(rdir).get('oprita')
@@ -118,9 +133,22 @@ def paralel(fn, lista, n):
 def preia(work, edge):
     from .read import protocol
     work = pathlib.Path(work); work.mkdir(parents=True, exist_ok=True); marcaj = work / 'preia_in_curs.json'
-    if marcaj.exists():  # o preluare anterioara s-a intrerupt: rularea poate fi preluata in BD fara director local
-        raise RuntimeError('preia_in_curs.json exista: o preluare anterioara s-a intrerupt. Verifica in ERP rularile „preluata” fara '
-                           'director r<id> aici, anuleaza-le din ERP, apoi sterge manual marcajul')
+    if marcaj.exists():
+        # o preluare anterioara s-a intrerupt: rularea poate fi „preluata” in BD fara director local. Se recupereaza din BD (op rulari_active,
+        # doar citire): rularile preluata FARA plan si fara rulare.json aici. Una = recuperata; niciuna = preia nu luase nimic; mai multe = om.
+        cand = [x for x in scrie(edge, 'rulari_active', {}) or []
+                if x['stare'] == 'preluata' and not x['are_plan'] and not (work / ('r%d' % x['id']) / 'rulare.json').exists()]
+        if len(cand) > 1: raise RuntimeError('Preluare intrerupta, %d rulari preluate fara director local (%s): decide omul' % (len(cand), [x['id'] for x in cand]))
+        if cand:
+            x = cand[0]
+            if x['protocol'] != protocol()['version']: raise RuntimeError('Rularea %d a fost preluata cu protocolul %s, nu %s' % (x['id'], x['protocol'], protocol()['version']))
+            rdir = work / ('r%d' % x['id']); rdir.mkdir(parents=True, exist_ok=True)
+            save(rdir / 'rulare.json', {'rulare_id': x['id'], 'licitatie_id': x['licitatie_id'], 'documente': x['documente'], 'plafon_usd': x['plafon_usd'],
+                                        'protocol': x['protocol'], 'preluata_la': time.time(), 'recuperata': True})
+            marcaj.unlink()
+            return {'rulare': x['id'], 'licitatie_id': x['licitatie_id'], 'dir': str(rdir), 'recuperata': True,
+                    'pagini': sum(len(d['pagini']) for d in x['documente'])}
+        marcaj.unlink()
     save(marcaj, {'la': time.time()})
     rez = scrie(edge, 'preia', {'protocol': protocol()['version']}); r = (rez or {}).get('rulare')
     if r is None: marcaj.unlink(); return {'rulare': None, 'nota': 'nicio rulare ceruta'}
@@ -179,7 +207,7 @@ def plan_rulare(rdir, edge, kind=None):
                 benzi = [{'banda': b['index'], 'image_sha256': b['image_sha256']} for b in doc_plan['bands'] if b['page'] == p['page']]
                 manifest.append({'document_id': doc, 'pagina': p['page'], 'exclus': None, 'benzi': benzi})
             else: manifest.append({'document_id': doc, 'pagina': p['page'], 'exclus': p['route']})
-    h = sha(json.dumps(manifest, sort_keys=True).encode())
+    h = plan_sha(manifest)
     gata = pasi(rdir).get('plan')
     if gata:
         if gata['valoare'] != h: raise RuntimeError('Manifestul refacut difera de cel trimis deja (BD il accepta o singura data)')
@@ -190,9 +218,8 @@ def plan_rulare(rdir, edge, kind=None):
     marcheaza(rdir, 'plan_intentie', h)
     try: scrie(edge, 'plan', {'rulare_id': r['rulare_id'], 'plan': manifest})
     except EdgeError as e:
-        if intentie and e.status == 409: raise RuntimeError('Planul a fost trimis inainte de intrerupere si BD il refuza acum: starea nu se poate confirma '
-                                                          'din client (verificare manuala a rularii %d)' % r['rulare_id']) from e
-        raise
+        # „o singura data”: planul din BD e confirmat ca ACESTA doar daca amprenta lui canonica (citita din BD) e egala cu a noastra
+        if e.status != 409 or stare_server(edge, r['rulare_id']).get('plan_sha256') != h: raise
     marcheaza(rdir, 'plan', h)
     excl = {}
     for m in manifest:
@@ -286,9 +313,9 @@ def compara_rulare(rdir, edge, n=4):
     marcheaza(rdir, 'comparatie_intentie', marcaj)
     try: scrie(edge, 'comparatie_gata', {'rulare_id': r['rulare_id'], 'nr': total, 'sha256': h})
     except EdgeError as e:
-        if intentie and e.status == 409: raise RuntimeError('Marcajul comparatiei a fost trimis inainte de intrerupere si BD il refuza acum: starea nu se '
-                                                          'poate confirma din client (verificare manuala a rularii %d)' % r['rulare_id']) from e
-        raise
+        # „o singura data”: confirmat doar daca marcajul din BD are ACELASI numar si aceeasi amprenta
+        s = stare_server(edge, r['rulare_id']) if e.status == 409 else {}
+        if (s.get('comparatie_nr'), s.get('comparatie_sha256')) != (total, h): raise
     marcheaza(rdir, 'comparatie', marcaj)
     heartbeat(edge, True, 'rularea %d: %d dezacorduri incarcate' % (r['rulare_id'], total))
     return {'dezacorduri': total, 'sha256': h}
@@ -404,6 +431,10 @@ def reconciliaza_rulare(rdir, edge, n=4):
 def oprire(rdir, edge, motiv):
     r = rulare(rdir); tranzitie(pathlib.Path(rdir), edge, r, 'oprita', motiv)
     return {'stare': 'oprita'}
+
+def stare(rdir, edge):
+    """Starea rularii citita din BD (doar citire) + pasii locali - pentru om, inainte de o reluare sau de `abandon`."""
+    r = rulare(rdir); return {'bd': stare_server(edge, r['rulare_id']), 'local': sorted(pasi(rdir))}
 
 def abandon(edge, rezervare_id):
     """Rezervare ramasa deschisa dupa o eroare API (502): doar dupa 15 minute (BD), suma ramane socotita in plafon."""

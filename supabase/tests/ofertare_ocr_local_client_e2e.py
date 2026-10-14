@@ -38,6 +38,8 @@ OPS = {
     'needs_human': ('fn_ofertare_ocr_arbitraj_om', [('rulare_id', 'p_rulare_id', 'bigint'), ('dezacord_id', 'p_dezacord_id', 'bigint'),
                                                     ('item_sha256', 'p_item_sha256', 'text'), ('motiv', 'p_motiv', 'text')]),
     'heartbeat': ('fn_ofertare_ocr_heartbeat', [('ok', 'p_ok', 'boolean'), ('mesaj', 'p_mesaj', 'text')]),
+    'stare_rulare': ('fn_ofertare_ocr_rulare_stare', [('rulare_id', 'p_rulare_id', 'bigint')]),
+    'rulari_active': ('fn_ofertare_ocr_rulari_active', []),
 }
 
 # codurile HTTP ale refuzurilor din arbitreaza.ts (REFUZ)
@@ -62,8 +64,14 @@ def ruleaza(q):
     return False, 'fara rezultat'
 
 class SqlEdge:
-    def __init__(self): self.apeluri = {}
+    def __init__(self): self.apeluri = {}; self.cade_dupa = None; self.caderi = []
     def post(self, fn, corp, timeout=60):
+        status, j = self._post(fn, corp, timeout)
+        # cadere simulata DUPA commit-ul din BD (raspunsul se pierde): clientul trebuie sa se reia confirmand starea din BD
+        if self.cade_dupa and status == 200 and fn == 'ofertare-ocr-scrie' and self.cade_dupa in (corp['op'], corp['args'].get('stare')):
+            self.caderi.append(self.cade_dupa); self.cade_dupa = None; raise ConnectionResetError('cadere simulata dupa commit')
+        return status, j
+    def _post(self, fn, corp, timeout=60):
         self.apeluri[fn] = self.apeluri.get(fn, 0) + 1
         if fn == 'ofertare-ocr-scrie':
             if set(corp) != {'op', 'args'} or corp['op'] not in OPS: return 400, {'error': 'Operație necunoscută'}
@@ -117,15 +125,24 @@ def construieste(rdir):
     for reader in ('lighton', 'mineru'): C.save(d / ('read_%s.json' % reader), {'status': 'complete'})
     C.save(d / 'plan.json', {'schema_version': '2.0.0', 'status': 'plan_complete', 'input_sha256': hashlib.sha256(PDF).hexdigest(), 'pages': pagini, 'bands': bands})
 
+def cade(edge, pas, fn, *a):
+    """Ruleaza pasul cu o cadere simulata dupa commit-ul `pas`, apoi il reia (fara cadere). Intoarce rezultatul reluarii."""
+    edge.cade_dupa = pas
+    try: fn(*a)
+    except ConnectionResetError: pass
+    else: raise AssertionError('caderea simulata dupa %s nu s-a produs' % pas)
+    return fn(*a)
+
 def main():
     edge = SqlEdge(); work = pathlib.Path(tempfile.mkdtemp(prefix='ocr_client_e2e_')); out = {}
-    out['preia'] = C.preia(work, edge); rdir = pathlib.Path(out['preia']['dir'])
+    out['preia'] = cade(edge, 'preia', C.preia, work, edge); rdir = pathlib.Path(out['preia']['dir'])
     out['descarca'] = C.descarca(rdir, edge); construieste(rdir)
-    out['plan'] = C.plan_rulare(rdir, edge); out['plan_reluat'] = C.plan_rulare(rdir, edge)
-    out['incarca'] = C.incarca_citiri(rdir, edge)
-    out['compara'] = C.compara_rulare(rdir, edge); out['compara_reluat'] = C.compara_rulare(rdir, edge)
+    out['plan'] = cade(edge, 'plan', C.plan_rulare, rdir, edge); out['plan_reluat'] = C.plan_rulare(rdir, edge)
+    out['incarca'] = cade(edge, 'citita', C.incarca_citiri, rdir, edge)
+    out['compara'] = cade(edge, 'comparatie_gata', C.compara_rulare, rdir, edge); out['compara_reluat'] = C.compara_rulare(rdir, edge)
     out['arbitreaza'] = C.arbitreaza(rdir, edge)
-    out['reconciliaza'] = C.reconciliaza_rulare(rdir, edge)
+    out['reconciliaza'] = cade(edge, 'finalizata', C.reconciliaza_rulare, rdir, edge)
+    out['caderi'] = edge.caderi
     # reluarea unei tranzitii dupa o cadere (commit in BD, marcaj local pierdut): refuzul REAL al BD numeste starea curenta
     r = C.rulare(rdir); C.tranzitie(rdir, edge, r, 'finalizata'); C.tranzitie(rdir, edge, r, 'citita')
     try: C.tranzitie(rdir, edge, r, 'oprita', 'test'); out['oprita_dupa_finalizata'] = 'acceptat (GRESIT)'
