@@ -38,10 +38,10 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
   (`interrupted_needs_review`) — nu se reîncearcă automat. Primul rezultat incomplet oprește cititorul (`stopped_no_retry`).
 - **Comparare** (spec §2): cuvinte cu ș/ş, ț/ţ unificate DOAR la comparare; cifrele literal (separatorul zecimal niciodată normalizat);
   tabele rând cu rând (aliniere ordonată), rolurile cod / UM / cantitate din antet sau euristic. Celulele unite (LightOn: celule goale,
-  MinerU: colspan) nu sunt dezacord dacă conținutul nevid e identic și cifrele stau la aceeași distanță de capătul rândului.
+  MinerU: colspan) nu sunt dezacord DOAR dacă rândul n-are nicio cifră și conținutul nevid e identic; altfel merge la arbitru.
   Citire incompletă / gardă pe oricare cititor → toată banda merge la arbitru (`banda_intreaga`).
 - **Reconciliere**: baza = citirea LightOn; deciziile se validează strict (schema spec §3); dezacord fără decizie validă = `needs_human`
-  (fail-closed); o pagină cu `needs_human` nu are text propus. Benzile suprapuse se cos tăind începutul identic (≥ 3 tokeni) — altfel semnal.
+  (fail-closed); o pagină cu `needs_human` nu are text propus. Benzile se cos doar pe 1–3 rânduri întregi identice (≥ 8 tokeni) — altfel pagina = `needs_human`.
   Fiecare dezacord → rând în `tripleti.jsonl` (LightOn / MinerU / ales + motiv + model + versiune prompt).
 
 ## După review-ul r1 (Copilot NO-GO, Jakarinos NO-GO, 14.10)
@@ -57,16 +57,24 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
   achiziție, PĂSTRAT la termen depășit (backend neconfirmat idle); atestare `/v1/models` (nume servit + rădăcina greutăților); MinerU
   fără proxy și fără jurnalul de cereri al bibliotecii; căile din `plan.json` validate.
 
+## După review-ul r2 (Copilot NO-GO fără P0, 14.10)
+
+- Semnele și comparatorii sunt tokeni și când stau separat (`± 0,5`, `- 5`, `≤ 50`, `> 100`); colspan scutit doar pe rânduri fără cifre.
+- `item_sha256` peste TOT obiectul dezacordului (id, ancore, marcaje, protocolul și greutățile cititorilor); reconcilierea cere egalitate
+  canonică completă cu comparația refăcută și refuză ID-uri duplicate; `compara` acceptă doar rezultate ale protocolului și greutăților curente.
+- Cusătura pe rânduri întregi (nu pe tokeni); `raw.txt` scris ca octeți exacți (hash stabil pe Windows); `reconciliat.json` + `tripleti.jsonl`
+  publicate împreună din fișiere temporare; `__pycache__` scos din git — rulați cu `python -B`.
+
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
-38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **58 de dezacorduri** (~1,5 pe bandă),
+38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **78 de dezacorduri** (~2 pe bandă),
 dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat și `anomalie_separator`. Restul: diacritice (`protecție` /
 `protectie`, `Ștefănești` / `Štefănești`), `m³` / `m3`, `Ø` / `∅`, LaTeX la MinerU (`\( 100m^{2} \)`). Volum estimat pentru arbitraj pe 102
 (~1.447 pagini): de ordinul a câteva sute de decupaje, în plafonul de 15 $ din spec §8.
 
 ## Teste
 
-`python -m unittest ocr_local.test_ocr_local -v` — 51 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -m unittest ocr_local.test_ocr_local -v` — 56 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 

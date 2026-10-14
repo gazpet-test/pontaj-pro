@@ -176,7 +176,7 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
                 state.update(status='interrupted_needs_review', band=band['id']); break
             data = (plan_dir / band['image']).read_bytes()
             raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])
-            (out / 'raw.txt').write_text(raw, encoding='utf-8')
+            (out / 'raw.txt').write_bytes(raw.encode('utf-8'))  # octeti exacti: hash-ul nu depinde de CRLF pe Windows
             result.update(band=band['id'], reader=reader, image_sha256=band['image_sha256'], raw_sha256=hashlib.sha256(raw.encode()).hexdigest(),
                           protocol=proto['version'], weights_sha256=state['weights_sha256'], run_id=run_id, backend_idle_confirmed=False)
             save(out / 'result.json', result); state['done'] += 1

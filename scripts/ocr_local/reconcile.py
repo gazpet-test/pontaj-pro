@@ -4,7 +4,8 @@ Fail-closed: dezacord fara decizie valida = needs_human; o pagina cu orice needs
 Pastreaza tripletul (citire LightOn / citire MinerU / ales) pentru fiecare dezacord - tripleti.jsonl, append-only la nivel de rulare."""
 import json, pathlib
 import hashlib
-from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash
+import os
+from .compare import segments, tokens, flat_text, table_rows, compare_band, item_hash, canonical, check_result
 from .plan import load_plan, save
 
 DECIZII = ('ales_lighton', 'ales_mineru', 'text_propus', 'needs_human')
@@ -102,24 +103,30 @@ def apply_band(raw_a, raw_b, items, decisions):
         segs[si][1] = new_rows
     return render([tuple(s) for s in segs]), needs
 
-def join_bands(texts, signals, min_n=8, max_n=200):
-    """Benzile pas6 se suprapun (doua randuri de cerneala complete). Se taie din banda urmatoare cel mai lung inceput identic
-    (tokeni, ș/ş unificate) cu sfarsitul benzii precedente, DOAR daca suprapunerea are >= 8 tokeni si acopera cel putin un rand
-    intreg si cel mult 3 randuri ale benzii urmatoare (geometria pas6: doua randuri de cerneala). Altfel cusatura e nesigura: None (pagina -> needs_human), nu se ghiceste."""
+def join_bands(texts, signals, min_tokens=8, max_lines=3):
+    """Benzile pas6 se suprapun cu 1-3 randuri intregi (doua randuri de cerneala). Se taie din banda urmatoare primele k randuri
+    (k = 1..3, cel mai mare) DOAR daca sunt identice (tokeni, ș/ş unificate) cu ultimele k randuri INTREGI ale benzii precedente si au
+    impreuna >= 8 tokeni. Comparatie pe randuri complete, nu pe tokeni oarecare. Altfel cusatura e nesigura: None (pagina -> needs_human)."""
     from .compare import TOKEN, norm_word
+    key = lambda line: [norm_word(t) for t in TOKEN.findall(line)]
     out = texts[0] if texts else ''
     for k, nxt in enumerate(texts[1:], 1):
-        ta = [norm_word(m.group(0)) for m in TOKEN.finditer(out)]; mb = list(TOKEN.finditer(nxt)); tb = [norm_word(m.group(0)) for m in mb]
-        n = next((n for n in range(min(max_n, len(ta), len(tb)), min_n - 1, -1) if ta[-n:] == tb[:n]), 0)
-        if n and 1 <= nxt[:mb[n - 1].end()].strip().count('\n') <= 3:  # suprapunerea pas6 = 1-3 randuri, nu o repetitie oarecare
-            out = out + '\n' + nxt[mb[n - 1].end():].lstrip(); signals.append({'type': 'cusatura_suprapunere_taiata', 'banda': k, 'tokeni': n})
+        la = [l for l in out.split('\n') if l.strip()]; lb = nxt.split('\n'); lbn = [i for i, l in enumerate(lb) if l.strip()]
+        best = 0
+        for n in range(min(max_lines, len(la), len(lbn)), 0, -1):
+            if [key(l) for l in la[-n:]] == [key(lb[i]) for i in lbn[:n]] and sum(len(key(l)) for l in la[-n:]) >= min_tokens: best = n; break
+        if best:
+            out = out + '\n' + '\n'.join(lb[lbn[best - 1] + 1:]).lstrip('\n'); signals.append({'type': 'cusatura_suprapunere_taiata', 'banda': k, 'randuri': best})
         else:
-            signals.append({'type': 'cusatura_nesigura', 'banda': k, 'tokeni_suprapusi': n}); return None
+            signals.append({'type': 'cusatura_nesigura', 'banda': k}); return None
     return out
 
 def reconcile(plan_dir, decisions_path):
     plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir)
     items = [json.loads(l) for l in (plan_dir / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines() if l.strip()]
+    from .read import protocol
+    proto = protocol()
+    if len({i['id'] for i in items}) != len(items): raise ValueError('ID-uri duplicate in dezacorduri.jsonl')
     by_id = {i['id']: i for i in items}; decisions = {}; invalid = []; policy = arbiter_policy()
     if (plan_dir / 'tripleti.jsonl').exists() or (plan_dir / 'reconciliat.json').exists():
         raise FileExistsError('Reconcilierea a rulat deja in acest director - o rulare noua = director nou')
@@ -136,16 +143,17 @@ def reconcile(plan_dir, decisions_path):
     pages = {}; triplets = []
     for band in doc['bands']:
         d = plan_dir / ('page%04d' % band['page']) / band['id']
-        raw_a = (d / 'lighton' / 'raw.txt').read_text(encoding='utf-8'); raw_b = (d / 'mineru' / 'raw.txt').read_text(encoding='utf-8')
+        raw_a = (d / 'lighton' / 'raw.txt').read_bytes().decode('utf-8'); raw_b = (d / 'mineru' / 'raw.txt').read_bytes().decode('utf-8')
         bi = [i for i in items if i['band'] == band['id']]
         # integritate: citirile de azi = cele din result.json si cele comparate; dezacordurile = exact ce produce comparatia acum
         res = {r: json.loads((d / r / 'result.json').read_text(encoding='utf-8')) for r in ('lighton', 'mineru')}
         for r, raw in (('lighton', raw_a), ('mineru', raw_b)):
-            if hashlib.sha256(raw.encode()).hexdigest() != res[r].get('raw_sha256') or res[r].get('image_sha256') != band['image_sha256']:
+            if hashlib.sha256(raw.encode()).hexdigest() != res[r].get('raw_sha256') or not check_result(res[r], r, band, proto):
                 raise ValueError('Citirea %s a benzii %s nu mai corespunde rezultatului' % (r, band['id']))
         _, fresh = compare_band(band, raw_a, res['lighton'], raw_b, res['mineru'])
         for x in fresh: x['plan_input_sha256'] = doc['input_sha256']
-        if sorted(item_hash(x) for x in fresh) != sorted(i.get('item_sha256') or '' for i in bi) or any(item_hash(i) != i.get('item_sha256') for i in bi):
+        # egalitate canonica COMPLETA (toate campurile, in ordine) intre dezacordurile salvate si comparatia refacuta acum
+        if [canonical(x) for x in fresh] != [canonical(i) for i in bi] or any(item_hash(i) != i.get('item_sha256') for i in bi):
             raise ValueError('dezacorduri.jsonl nu corespunde citirilor pentru banda %s - ruleaza din nou compara' % band['id'])
         text, needs = apply_band(raw_a, raw_b, bi, decisions)
         p = pages.setdefault(band['page'], {'page': band['page'], 'bands': [], 'needs_human': False, 'arbitrat_de_claude_cantitati': 0})
@@ -169,7 +177,11 @@ def reconcile(plan_dir, decisions_path):
     out = {'pages': sorted(pages.values(), key=lambda x: x['page']), 'invalid_decisions': invalid,
            'summary': {'pages': len(pages), 'needs_human_pages': sum(1 for p in pages.values() if p['needs_human']),
                        'decisions_valid': len(decisions), 'decisions_invalid': len(invalid), 'disagreements': len(items)}}
-    with (plan_dir / 'tripleti.jsonl').open('x', encoding='utf-8') as f:
-        for t in triplets: f.write(json.dumps(t, ensure_ascii=False) + '\n')
-    with (plan_dir / 'reconciliat.json').open('x', encoding='utf-8') as f: json.dump(out, f, ensure_ascii=False, indent=2)
+    # ambele artefacte se scriu intai temporar si se publica impreuna; nicio pereche partiala daca scrierea pica la mijloc
+    tmp = {'tripleti.jsonl': ''.join(json.dumps(t, ensure_ascii=False) + '\n' for t in triplets),
+           'reconciliat.json': json.dumps(out, ensure_ascii=False, indent=2)}
+    for name, body in tmp.items():
+        with (plan_dir / (name + '.tmp')).open('x', encoding='utf-8', newline='\n') as f: f.write(body)
+    if any((plan_dir / n).exists() for n in tmp): raise FileExistsError('Reconcilierea a rulat deja in acest director')
+    for name in tmp: os.rename(plan_dir / (name + '.tmp'), plan_dir / name)
     return out

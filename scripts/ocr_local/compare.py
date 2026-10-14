@@ -5,10 +5,10 @@ import difflib, hashlib, html, json, pathlib, re
 from .plan import load_plan, save
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
-# Numerele pastreaza semnul, exponentul si procentul; operatorii (* ^ / = x) sunt tokeni separati: -5 vs 5, 5% vs 5,
+# Numerele pastreaza semnul, exponentul si procentul; semnele, comparatorii si operatorii sunt tokeni separati: -5 vs 5, 5% vs 5,
 # 1e-3 vs 1e3, 10**2 vs 102 raman dezacorduri (review Copilot r1). Restul punctuatiei nu se compara.
 NUM = r'[-+±−]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?[%‰]?'
-TOKEN = re.compile(NUM + r'|[^\W\d_]+|[*^/=×]', re.U)
+TOKEN = re.compile(NUM + r'|[^\W\d_]+|[-+±−<>≤≥≠~*^/=×]', re.U)  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
 NUMBER = re.compile('^' + NUM + '$')
 BOLD = re.compile(r'\*\*(?=\S)(.+?)(?<=\S)\*\*', re.S)
 TABLE_HTML = re.compile(r'<table\b.*?</table\s*>', re.I | re.S)
@@ -96,8 +96,10 @@ def same_content(ca, cb):
     in alta coloana ar trece neobservata)."""
     ne = lambda r: [norm_word(c) for c in r if c.strip()]
     if ne(ca) != ne(cb): return False
-    pos = lambda r: [len(r) - 1 - i for i, c in enumerate(r) if NUMBER.match(c.strip())]
-    return pos(ca) == pos(cb)
+    if len(ca) == len(cb): return False  # acelasi numar de celule, alte pozitii = continut mutat de coloana -> arbitru
+    # numar diferit de celule: scutit de arbitraj DOAR daca randul nu are nicio cifra (altfel o cantitate mutata de coloana,
+    # oricum ar fi scrisa - '1 000,00', '~5' - ar trece neobservata; review Copilot r2)
+    return not any(ch.isdigit() for c in ca + cb for ch in c)
 
 def roles(header, row):
     """Rolurile coloanelor (cod / um / cantitate): din antet cand exista, altfel cantitatea = ultima celula numerica,
@@ -205,6 +207,7 @@ def compare_tables(seg_a, seg_b, base):
 
 def compare_band(band, raw_a, res_a, raw_b, res_b):
     base = {'band': band['id'], 'page': band['page'], 'kind': band['kind'], 'image': band['image'], 'image_sha256': band['image_sha256'],
+            'cititori': {r: {'protocol': x.get('protocol'), 'weights_sha256': x.get('weights_sha256')} for r, x in (('lighton', res_a), ('mineru', res_b))},
             'raw_sha256': {'lighton': hashlib.sha256(raw_a.encode()).hexdigest(), 'mineru': hashlib.sha256(raw_b.encode()).hexdigest()}}
     if not (res_a.get('ok') and res_b.get('ok')):
         motiv = [r for r, x in (('lighton', res_a), ('mineru', res_b)) if not x.get('ok')]
@@ -220,22 +223,31 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
         for it in ti: it['semnal'] = 'structura_diferita'; it['e_cantitate'] = it['diferenta_numerica']
     return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri)}, ti + ri
 
-ITEM_FIELDS = ('plan_input_sha256', 'band', 'image_sha256', 'raw_sha256', 'tip', 'pozitie', 'citire_lighton', 'citire_mineru', 'celule_lighton', 'celule_mineru')
+def canonical(it):
+    return json.dumps({k: v for k, v in it.items() if k != 'item_sha256'}, ensure_ascii=False, sort_keys=True)
 
 def item_hash(it):
-    """Amprenta dezacordului: decizia arbitrului trebuie sa o poarte identic (o decizie veche nu se poate lipi pe alt dezacord)."""
-    return hashlib.sha256(json.dumps({k: it.get(k) for k in ITEM_FIELDS}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    """Amprenta dezacordului peste TOT obiectul (id, ancore, marcaje, citiri, protocol si greutatile cititorilor): decizia arbitrului
+    trebuie sa o poarte identic, iar reconcilierea cere egalitate canonica completa cu comparatia refacuta."""
+    return hashlib.sha256(canonical(it).encode()).hexdigest()
+
+def check_result(res, reader, band, proto):
+    """Rezultatul unui cititor e acceptat la comparare doar daca e al protocolului si greutatilor curente (nu doar la reluare)."""
+    cfg = proto['readers'][reader]
+    return (res.get('reader') == reader and res.get('protocol') == proto['version'] and res.get('image_sha256') == band['image_sha256']
+            and (res.get('weights_sha256') or '').lower() == cfg['weights_sha256'].lower())
 
 def compare(plan_dir):
-    plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); summary = []; items = []
+    from .read import protocol
+    plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); summary = []; items = []; proto = protocol()
     for band in doc['bands']:
         d = plan_dir / ('page%04d' % band['page']) / band['id']; got = {}
         for reader in ('lighton', 'mineru'):
             rp = d / reader / 'result.json'
             if not rp.exists(): raise ValueError('Lipseste citirea %s pe banda %s - rularea nu e completa' % (reader, band['id']))
-            res = json.loads(rp.read_text(encoding='utf-8')); raw = (d / reader / 'raw.txt').read_text(encoding='utf-8')
-            if res.get('image_sha256') != band['image_sha256'] or hashlib.sha256(raw.encode()).hexdigest() != res.get('raw_sha256'):
-                raise ValueError('Legatura imagine/citire rupta pe %s/%s' % (band['id'], reader))
+            res = json.loads(rp.read_text(encoding='utf-8')); raw = (d / reader / 'raw.txt').read_bytes().decode('utf-8')
+            if not check_result(res, reader, band, proto) or hashlib.sha256(raw.encode()).hexdigest() != res.get('raw_sha256'):
+                raise ValueError('Citirea %s/%s nu e a protocolului / greutatilor / imaginii curente sau raw-ul s-a schimbat' % (band['id'], reader))
             got[reader] = (raw, res)
         s, its = compare_band(band, got['lighton'][0], got['lighton'][1], got['mineru'][0], got['mineru'][1])
         for it in its: it['plan_input_sha256'] = doc['input_sha256']; it['item_sha256'] = item_hash(it)

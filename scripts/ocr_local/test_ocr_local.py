@@ -195,6 +195,14 @@ class Comparare(unittest.TestCase):
     def test_fragment_literal_cu_cratima(self):
         s, its = compare_band(BAND, 'debit 10-20 m3', OK, 'debit 30-40 m3', OK)
         self.assertEqual((its[0]['citire_lighton'], its[0]['citire_mineru']), ('10-20', '30-40'))
+    def test_semne_separate_prin_spatiu_raman_dezacorduri(self):
+        for a, b in (('abatere ± 0,5', 'abatere 0,5'), ('cantitate - 5', 'cantitate 5'), ('diametru ≤ 50', 'diametru 50'), ('valoare > 100', 'valoare 100')):
+            s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1, (a, b))
+    def test_colspan_cu_cifre_merge_la_arbitru(self):
+        a = '<table><tr><td>1.</td><td>COD</td><td>Țeavă</td><td>mc</td><td>1 000,00</td><td></td></tr></table>'
+        b = '<table><tr><td></td><td>1.</td><td>COD</td><td>Țeavă</td><td>mc</td><td>1 000,00</td></tr></table>'
+        s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1)
+        s, its = compare_band(BAND, '<table><tr><td></td><td>Titlu</td><td></td></tr></table>', OK, '<table><tr><td>Titlu</td></tr></table>', OK); self.assertEqual(its, [])
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -224,8 +232,9 @@ class Reconciliere(unittest.TestCase):
         doc = plan(pathlib.Path(d) / 'i.png', out, clockwise=0, kind='quantity_table'); band = doc['bands'][0]
         for reader, raw in (('lighton', a), ('mineru', b)):
             o = out / 'page0001' / band['id'] / reader; o.mkdir(parents=True)
-            (o / 'raw.txt').write_text(raw, encoding='utf-8')
-            (o / 'result.json').write_text(json.dumps({'ok': True, 'image_sha256': band['image_sha256'], 'raw_sha256': hashlib.sha256(raw.encode()).hexdigest()}))
+            (o / 'raw.txt').write_bytes(raw.encode('utf-8')); proto = RD.protocol()
+            (o / 'result.json').write_text(json.dumps({'ok': True, 'reader': reader, 'protocol': proto['version'], 'weights_sha256': proto['readers'][reader]['weights_sha256'],
+                                                       'image_sha256': band['image_sha256'], 'raw_sha256': hashlib.sha256(raw.encode()).hexdigest()}))
         _, items = compare(out)
         (out / 'dec.jsonl').write_text('\n'.join(json.dumps(dict({'id': items[i]['id'], 'item_sha256': items[i]['item_sha256']}, **x)) for i, x in enumerate(decizii)), encoding='utf-8')
         return reconcile(out, out / 'dec.jsonl'), items, out
@@ -278,6 +287,26 @@ class Reconciliere(unittest.TestCase):
         r, items, out = self._run('lungime 10 m', 'lungime 20 m', [])
         (out / 'dec.jsonl').write_text('null\n{"id": ["x"]}\n'); (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
         r = reconcile(out, out / 'dec.jsonl'); self.assertTrue(r['pages'][0]['needs_human']); self.assertEqual(r['summary']['decisions_invalid'], 2)
+    def test_ancora_modificata_in_jsonl_refuzata(self):
+        t1 = '<table><tr><td>1.</td><td>A1</td><td>unu</td><td>m</td><td>1,00</td></tr><tr><td>2.</td><td>A2</td><td>doi</td><td>m</td><td>2,00</td></tr></table>'
+        t2 = t1.replace('<tr><td>2.', '<tr><td>1b.</td><td>A1b</td><td>nou</td><td>m</td><td>5,00</td></tr><tr><td>2.')
+        r, items, out = self._run(t1, t2, [])
+        its = [json.loads(l) for l in (out / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines()]
+        its[0]['ancora_sigura'] = not its[0]['ancora_sigura']
+        (out / 'dezacorduri.jsonl').write_text('\n'.join(json.dumps(i, ensure_ascii=False) for i in its), encoding='utf-8')
+        (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
+    def test_id_duplicat_refuzat(self):
+        r, items, out = self._run('x 1 a b c d e f 2 y', 'x 9 a b c d e f 8 y', [])
+        its = [json.loads(l) for l in (out / 'dezacorduri.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertGreaterEqual(len(its), 2); its[1]['id'] = its[0]['id']
+        (out / 'dezacorduri.jsonl').write_text('\n'.join(json.dumps(i, ensure_ascii=False) for i in its), encoding='utf-8')
+        (out / 'reconciliat.json').unlink(); (out / 'tripleti.jsonl').unlink()
+        with self.assertRaises(ValueError): reconcile(out, out / 'dec.jsonl')
+    def test_comparare_refuza_rezultat_din_alt_protocol(self):
+        r, items, out = self._run('lungime 10 m', 'lungime 20 m', [])
+        rp = out / 'page0001' / items[0]['band'] / 'mineru' / 'result.json'; res = json.loads(rp.read_text()); res['protocol'] = 'lighton-mineru-v1'; rp.write_text(json.dumps(res))
+        with self.assertRaises(ValueError): compare(out)
     def test_validare_schema(self):
         v = lambda d: valid_decision(d, None, POLICY)
         self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))
