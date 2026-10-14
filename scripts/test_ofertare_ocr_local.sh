@@ -459,6 +459,7 @@ asteapta "client: fiecare dezacord arbitrat (structura_tabele la om, fără cost
 asteapta "client: rularea finalizată, 325 reconciliat (0.056 ales), 326 needs_human (structură), 327 doar exclus" \
   "$(q "SELECT stare FROM public.ofertare_ocr_rulari WHERE id=$R8")|$(q "SELECT string_agg(pagina||':'||stare||':'||(text LIKE '%0.056%'), ',' ORDER BY pagina) FROM public.ofertare_ocr_pagini WHERE rulare_id=$R8 AND cititor='reconciliat'")" \
   "finalizata|325:reconciliat:true,326:needs_human:false"
+asteapta "client: tranziția reluată după cădere = confirmată din refuzul REAL al BD; din altă stare = refuz" "$(ce "d['oprita_dupa_finalizata']")" "refuzat 409"
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLC" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire c nearmată: $o"; ok "refuz: revenire 20261029c nearmată"
 revenire_c >/dev/null || { revenire_c; esec "revenire 20261029c"; }; ok "revenire 20261029c"
 asteapta "după revenirea c: amprenta = cea a lui 20261029b, din nou ștampilată" \

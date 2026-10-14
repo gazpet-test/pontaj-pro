@@ -40,6 +40,9 @@ OPS = {
     'heartbeat': ('fn_ofertare_ocr_heartbeat', [('ok', 'p_ok', 'boolean'), ('mesaj', 'p_mesaj', 'text')]),
 }
 
+# codurile HTTP ale refuzurilor din arbitreaza.ts (REFUZ)
+REFUZ = {'stare': 402, 'plafon': 402, 'suma': 413, 'dezacord': 422, 'imagine': 422, 'tip': 422, 'arbitrat': 409, 'in_zbor': 409}
+
 def sql(fn, params, args):
     """SELECT to_jsonb(fn(p => valoare, ...)) cu argumentele dintr-un literal jsonb dollar-quoted (eticheta aleatoare)."""
     tag = '$a%s$' % secrets.token_hex(6); lit = tag + json.dumps(args, ensure_ascii=False) + tag
@@ -79,11 +82,13 @@ class SqlEdge:
             if it.get('item_sha256') != h: return 422, {'error': 'Amprenta item-ului nu corespunde conținutului lui'}
             img = hashlib.sha256(base64.b64decode(corp['imagine_b64'])).hexdigest(); R, D = corp['rulare_id'], corp['dezacord_id']
             ok, dz = ruleaza("SELECT 'R:' || public.fn_ofertare_ocr_dezacord_arbitraj(%d, %d, '%s', '%s')::text" % (R, D, h, img))
-            if not ok or 'refuz' in dz: return 422, {'error': str(dz), 'refuz': (dz or {}).get('refuz') if ok else None}
+            if not ok: return 500, {'error': str(dz)}
+            if 'refuz' in dz: return REFUZ.get(dz['refuz'], 500), {'error': 'refuz', 'refuz': dz['refuz']}
             if (it['citire_lighton'], it['citire_mineru'], it['tip'], it['id'], it['image_sha256']) != (dz['citire_lighton'], dz['citire_mineru'], dz['tip'], dz['item_id'], img):
                 return 422, {'error': 'Item-ul nu descrie dezacordul din BD'}
             ok, rz = ruleaza("SELECT 'R:' || public.fn_ofertare_ocr_arbitraj_rezerva(%d, %d, '%s', '%s', 0.01)::text" % (R, D, h, img))
-            if not ok or 'refuz' in rz: return 402, {'error': str(rz), 'refuz': (rz or {}).get('refuz') if ok else None}
+            if not ok: return 500, {'error': str(rz)}
+            if 'refuz' in rz: return REFUZ.get(rz['refuz'], 500), {'error': 'refuz', 'refuz': rz['refuz']}
             dec = {'decizie': 'ales_mineru', 'text': dz['citire_mineru'], 'motiv': 'fixture', 'e_cantitate': dz['e_cantitate'], 'anomalie_separator': dz['anomalie_separator']}
             a = dict(dec, dezacord_id=D, item_sha256=h, arbitru_model='claude-sonnet-5', prompt_versiune='arb-v1', cost_usd='0.0100', tokens_in=1000, tokens_out=50)
             tag = '$a%s$' % secrets.token_hex(6)
@@ -109,6 +114,7 @@ def construieste(rdir):
             (o / 'raw.txt').write_bytes(raw.encode('utf-8'))
             C.save(o / 'result.json', {'ok': True, 'reader': reader, 'protocol': proto['version'], 'weights_sha256': proto['readers'][reader]['weights_sha256'],
                                        'image_sha256': band['image_sha256'], 'raw_sha256': hashlib.sha256(raw.encode('utf-8')).hexdigest(), 'signal': None})
+    for reader in ('lighton', 'mineru'): C.save(d / ('read_%s.json' % reader), {'status': 'complete'})
     C.save(d / 'plan.json', {'schema_version': '2.0.0', 'status': 'plan_complete', 'input_sha256': hashlib.sha256(PDF).hexdigest(), 'pages': pagini, 'bands': bands})
 
 def main():
@@ -120,6 +126,10 @@ def main():
     out['compara'] = C.compara_rulare(rdir, edge); out['compara_reluat'] = C.compara_rulare(rdir, edge)
     out['arbitreaza'] = C.arbitreaza(rdir, edge)
     out['reconciliaza'] = C.reconciliaza_rulare(rdir, edge)
+    # reluarea unei tranzitii dupa o cadere (commit in BD, marcaj local pierdut): refuzul REAL al BD numeste starea curenta
+    r = C.rulare(rdir); C.tranzitie(rdir, edge, r, 'finalizata'); C.tranzitie(rdir, edge, r, 'citita')
+    try: C.tranzitie(rdir, edge, r, 'oprita', 'test'); out['oprita_dupa_finalizata'] = 'acceptat (GRESIT)'
+    except C.EdgeError as e: out['oprita_dupa_finalizata'] = 'refuzat %d' % e.status
     out['apeluri'] = edge.apeluri
     print(json.dumps(out, ensure_ascii=False, default=str))
 
