@@ -1,8 +1,8 @@
 """012: immutable raw output, empty-cell-collapsed detection view only."""
 import re, html, hashlib
 from .guard_base import Guard as PriorGuard
-from .guard_legacy import repetition_reason
-VERSION='empty-cells-v4-td-consecutive-rows'
+from .guard_legacy import repetition_reason, repeated_table_row
+VERSION='empty-cells-v4-td-consecutive-rawrows'
 POLICY={'last_cells_without_nonempty':600,'repeated_block_chars':200,'repeated_block_occurrences':4,'diversity_tokens_gt':3000,'diversity_chars_lt':100}
 CELL=re.compile(r'<td\b([^>]*)>(.*?)</td\s*>',re.I|re.S)
 MARK='\ue000'
@@ -29,7 +29,7 @@ class Guard:
    if not filtered.startswith(self.previous):self.semantic.reset()
    self.previous=filtered;reason=self.semantic(filtered);event=self.semantic.event
    if not reason:
-    old=repetition_reason(filtered)
+    old=repetition_reason(filtered) or repeated_table_row(text)  # randurile: pe textul brut
     if old:reason='bucla_previous_guard';event={'reason':reason,'detail':old}
   if reason:
    self.event={**(event or {}),'reason':reason,'view_stats':self.stats,'view_sha256':hashlib.sha256(filtered.encode()).hexdigest(),'guard_version':VERSION}

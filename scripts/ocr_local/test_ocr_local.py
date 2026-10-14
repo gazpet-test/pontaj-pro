@@ -4,7 +4,7 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 from .geometry import classify, orientation, text_bands
 from .guard import Guard
-from .guard_legacy import repetition_reason
+from .guard_legacy import repetition_reason, repeated_table_row
 from . import read as RD
 from .plan import plan, load_plan
 from .compare import compare_band, compare, segments
@@ -82,9 +82,17 @@ class GardaLinii(unittest.TestCase):
         self.assertIsNotNone(garda_flux('\n'.join(' ' * i + (a if i % 2 else b) for i in range(40)))[0])
         # Jakarinos r2: acelasi rand intreg (celula lunga + celula scurta), indentare crescatoare
         rows = ['<table>'] + [' ' * i + x for i in range(20) for x in ('<tr>', cel, '<td>17 – T200</td>', '</tr>')] + ['</table>']
-        self.assertEqual(garda_flux('\n'.join(rows)), ('bucla_previous_guard', 'Repeated table row (4 times)', garda_flux('\n'.join(rows))[2]))
+        self.assertEqual(garda_flux('\n'.join(rows)), ('bucla_previous_guard', 'Repeated table row (4 times in a row)', garda_flux('\n'.join(rows))[2]))
+        # Jakarinos r3: (a) </tr> pe aceeasi linie cu ultima celula; (b) celule goale la capetele randului (vederea filtrata
+        # le comaseaza peste granitele de rand) -> regula randului lucreaza pe textul brut, cu delimitatori oriunde pe linie
+        a_ = ['<table>'] + [' ' * i + x for i in range(12) for x in ('<tr>', cel, '<td>17 – T200</td></tr>')] + ['</table>']
+        b_ = ['<table>'] + [' ' * i + x for i in range(12) for x in ('<tr>', '<td></td>', cel, '<td>17 – T200</td>', '<td></td>', '</tr>')] + ['</table>']
+        for t in (a_, b_):
+            for pas in (1, 7, 16, 64, 256):
+                self.assertEqual(garda_flux('\n'.join(t), pas)[:2], ('bucla_previous_guard', 'Repeated table row (4 times in a row)'))
         # randuri goale identice (fara continut) nu sunt bucla pe aceasta regula
-        self.assertIsNone(repetition_reason('\n'.join(['<tr>', '<td></td>', '<td>-</td>', '</tr>'] * 6)))
+        self.assertIsNone(repeated_table_row('\n'.join(['<tr>', '<td></td>', '<td>-</td>', '</tr>'] * 6)))
+        self.assertIsNone(repeated_table_row(garda_fix('d772_p0255_b0_lighton.txt')))
     def test_regula_linii(self):
         lin = 'Conducta de transport gaze naturale Dorohoi – Darabani, tronson 1'
         self.assertEqual(repetition_reason('\n'.join([lin, 'alt rand', lin, 'alt rand', lin, 'alt rand', lin])), 'Repeated long line (4 times)')
@@ -235,6 +243,62 @@ class Citire(unittest.TestCase):
                  patch('ocr_local.read.save', side_effect=lambda p, v: (_ for _ in ()).throw(OSError('disc plin')) if p.name == 'result.json' else real_save(p, v)):
                 with self.assertRaises(OSError): RD.run_reader(out, 'mineru', run_id='t', check_weights=False, check_server=False)
             self.assertTrue(lock.exists())
+    def _proto_local(self, port, lock):
+        p = RD.protocol(); rd = dict(p['readers']); rd['lighton'] = dict(rd['lighton'], endpoint='http://127.0.0.1:%d' % port)
+        return dict(p, readers=rd, gpu_lock=str(lock))
+    def test_bucla_reala_opreste_doar_banda_si_documentul_continua(self):
+        # Razvan 14.10: garda opreste DOAR banda. Server vLLM fals pe loopback: prima cerere = bucla reala Ovis td31 (streaming),
+        # restul = text normal; /metrics = 0 cereri in lucru. Garda reala opreste banda 1, celelalte se citesc, gpu.lock eliberat.
+        import http.server, threading
+        loop = garda_fix('bucla_tabel_ovis_td31.txt'); posts = []
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_GET(self):
+                b = b'vllm:num_requests_running{model_name="x"} 0.0\nvllm:num_requests_waiting{model_name="x"} 0.0\n'
+                self.send_response(200); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length'])); posts.append(1)
+                text = loop if len(posts) == 1 else 'text obisnuit pe banda %d' % len(posts)
+                self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+                try:
+                    for i in range(0, len(text), 40):
+                        self.wfile.write(b'data: ' + json.dumps({'choices': [{'delta': {'content': text[i:i + 40]}}]}).encode() + b'\n\n')
+                    self.wfile.write(b'data: ' + json.dumps({'choices': [{'delta': {}, 'finish_reason': 'stop'}]}).encode() + b'\n\ndata: [DONE]\n\n')
+                except OSError: pass  # clientul a inchis fluxul (garda)
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close); self.addCleanup(srv.shutdown)
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); lock = pathlib.Path(d) / 'gpu.lock'; bands = load_plan(out)['bands']; self.assertGreaterEqual(len(bands), 3)
+            with patch('ocr_local.read.protocol', return_value=self._proto_local(srv.server_address[1], lock)):
+                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False)
+                self.assertEqual(st['status'], 'complete'); self.assertEqual(len(posts), len(bands)); self.assertFalse(lock.exists())
+                self.assertEqual([g['band'] for g in st['benzi_garda']], [bands[0]['id']]); self.assertTrue(st['benzi_garda'][0]['signal'].startswith('bucla'))
+                r0 = json.loads((out / 'page0001' / bands[0]['id'] / 'lighton' / 'result.json').read_text(encoding='utf-8'))
+                self.assertEqual((r0['ok'], r0['backend_idle_confirmed']), (False, True)); self.assertTrue(r0['guard_event'])
+                for b in bands[1:]:
+                    self.assertTrue(json.loads((out / 'page0001' / b['id'] / 'lighton' / 'result.json').read_text(encoding='utf-8'))['ok'])
+                st = RD.run_reader(out, 'lighton', run_id='t2', check_weights=False, check_server=False)  # reluare: nimic nou, banda ramane marcata
+                self.assertEqual((st['status'], st['skipped_existing'], len(posts)), ('complete', len(bands), len(bands)))
+                self.assertEqual([g['band'] for g in st['benzi_garda']], [bands[0]['id']])
+    def test_garda_fara_vllm_confirmat_liber_opreste_tot(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); lock = pathlib.Path(d) / 'gpu.lock'; calls = []
+            def fake(data, o, cfg, dl):
+                calls.append(1); (o / 'request_started.json').write_text('{}'); return 'x', {'ok': False, 'signal': 'bucla_repeated200_ge4', 'error': None}
+            with patch.dict(RD.FUNCS, {'lighton': fake}), patch('ocr_local.read.backend_idle', return_value=False), \
+                 patch('ocr_local.read.protocol', return_value=dict(RD.protocol(), gpu_lock=str(lock))):
+                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False)
+            self.assertEqual((st['status'], len(calls)), ('stopped_no_retry', 1)); self.assertTrue(lock.exists())
+    def test_backend_idle_citeste_metrics(self):
+        cfg = RD.protocol()['readers']['lighton']
+        with patch('ocr_local.read.http.client.HTTPConnection') as C:
+            C.return_value.getresponse.return_value.status = 200
+            C.return_value.getresponse.return_value.read.return_value = b'# HELP x\nvllm:num_requests_running{m="a"} 1.0\nvllm:num_requests_waiting{m="a"} 0.0\n'
+            self.assertFalse(RD.backend_idle(cfg, timeout=0))
+            C.return_value.getresponse.return_value.read.return_value = b'vllm:num_requests_running{m="a"} 0.0\nvllm:num_requests_waiting{m="a"} 0.0\n'
+            self.assertTrue(RD.backend_idle(cfg, timeout=0))
+            C.return_value.getresponse.return_value.read.return_value = b'alt_metric 0\n'  # fara metricile vLLM = neconfirmat
+            self.assertFalse(RD.backend_idle(cfg, timeout=0))
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []
