@@ -102,9 +102,16 @@ promovare (separat): RPC cu rol, după auditul §4, cu RETURNING pentru revenire
   recomandare: edge, ca plafonul și jurnalul de cost să fie în BD.
 
 **Rularea locală** (după D3 + „da” de pornire):
-1. Precondiții: greutăți **LightOnOCR-2-1B** (există în `C:\Users\Public\paw-data\models`) și **MinerU2.5-Pro** (NU e încă descărcat);
-   pipeline-ul Codex adaptat la două cititoare (azi are un singur endpoint și promptul dots înghețat) — adaptarea = PR separat, testat
-   pe CPU (cele 22 de teste existente + teste noi pentru comparare și triplet); serverele vLLM pe loopback (ex. 8017 / 8018).
+1. Precondiții — greutățile EXISTĂ deja pe server (fără descărcare):
+   - **LightOnOCR-2-1B**: `C:\Users\Public\paw-data\models\LightOnOCR-2-1B`;
+   - **MinerU2.5-Pro-2604-1.2B** (bf16, 4,4 GB): `C:\Users\Gazpet-Ai\Documents\Codex\2026-10-10\git\work\extra_model_mineru`
+     (WSL `/mnt/c/Users/Gazpet-Ai/Documents/Codex/2026-10-10/git/work/extra_model_mineru`), servit în vLLM cu `--max-model-len 8192
+     --served-model-name MinerU` și clientul HTTP oficial (rularea de benchmark `paw-data\out\ocr_bench_20261014\runs\21d_mineru25_pro_vllm`).
+   - **Decizie: se referă calea existentă, nu se copiază** (fără încă 4,4 GB duplicați; pilotul rulează exact revizia din benchmark).
+     Fiecare cale de greutăți intră în `protocol.json` cu SHA-256 al `model.safetensors`; la pornire pipeline-ul refuză dacă hash-ul
+     diferă (o mutare / actualizare a folderului Codex nu schimbă tăcut modelul). Mutarea în `paw-data\models` = curățenie ulterioară.
+   - Pipeline-ul Codex adaptat la două cititoare (azi are un singur endpoint și promptul dots înghețat) — adaptarea = PR separat, testat
+     pe CPU (cele 22 de teste existente + teste noi pentru comparare și triplet); serverele vLLM pe loopback (ex. 8017 / 8018).
 2. **Fereastra GPU**: un singur GPU, partajat cu Codex / Paw; `C:\Users\Public\paw-data\gpu.lock` — rularea îl ia la început, îl
    eliberează la sfârșit; clientul refuză orice cerere cât lock-ul e al altcuiva. Modelele se încarcă pe rând (LightOn, apoi MinerU),
    nu simultan.
@@ -142,7 +149,7 @@ promovare (separat): RPC cu rol, după auditul §4, cu RETURNING pentru revenire
 | **D2** | Triere `comun` pentru #1247 și #772 pe licitația 102 (preview → apply prin `fn_ofertare_documente_lot_seteaza`) | `da D2: triere comun pentru documentele 1247 și 772 pe licitația 102, după preview` |
 | **D3a** | Migrarea schemei din §5 (tabele append-only + RPC-uri), prin `scripts/livrare_migrare.sh`, după GO Copilot + Jakarinos | `da D3a: apply migrarea OCR local <nume> cu SHA <sha256>` |
 | **D3b** | Deploy edge-uri: `ofertare-ocr-cerere`, `ofertare-pdf-link`, `ofertare-ocr-scrie`, `ofertare-ocr-arbitreaza` + secretul în Vault | `da D3b: deploy edge ofertare-ocr-cerere, ofertare-pdf-link, ofertare-ocr-scrie, ofertare-ocr-arbitreaza și secretul OCR_LOCAL_SECRET` |
-| **D3c** | Descărcarea MinerU2.5-Pro în `paw-data\models` + PR-ul de adaptare a pipeline-ului la două cititoare | `da D3c: descarcă MinerU2.5-Pro și adaptează pipeline-ul la LightOn + MinerU` |
+| **D3c** | PR-ul de adaptare a pipeline-ului la două cititoare (LightOn + MinerU); greutățile pe căile existente, fixate prin SHA-256 | `da D3c: adaptează pipeline-ul la LightOn + MinerU` |
 | **D4** | Nota de proiectare pentru stocarea pe blocuri (doar document) | `da D4: scrie nota de proiectare pentru blocuri` |
 | **Pornire** | Prima rulare pe 102, plafon 15 $, în fereastra GPU | `da pornire OCR local pe 102, plafon 15 USD, fereastră GPU <interval>` |
 | **Promovare** | Mutarea textului reconciliat (după audit) în `text_extras` / cantități, pe documentele auditate | `da promovare OCR local pe 102 pentru rularea <id>, după audit` |
