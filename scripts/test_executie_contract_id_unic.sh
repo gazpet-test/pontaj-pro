@@ -17,7 +17,10 @@ DATE_DIR="${PGDATA_TEST:-/tmp/pg_contract_unic}"
 PORT="${PGPORT_TEST:-5974}"
 BAZA=contract_unic_test
 NUME=20261030b_executie_contract_id_unic
-MIGRARE="$RADACINA/supabase/migrations/$NUME.sql"
+MIGRARE_SURSA="$RADACINA/supabase/migrations/$NUME.sql"
+# migrarea are garda de livrare: aici se armează ca runnerul (marcaj local, aceeași tranzacție)
+MIGRARE="$(mktemp)"
+{ echo "SELECT set_config('gazpet.livrare_migrare', '$NUME:' || txid_current(), true);"; cat "$MIGRARE_SURSA"; } > "$MIGRARE"
 ROLLBACK="$RADACINA/supabase/revenire/${NUME}_ROLLBACK.sql"
 SCHELET="$RADACINA/supabase/tests/executie_contract_id_unic_schelet.sql"
 TESTE="$RADACINA/supabase/tests/executie_contract_id_unic.test.sql"
@@ -34,7 +37,7 @@ rm -rf "$DATE_DIR"
 ca_postgres "$PG_BIN/initdb$EXE" -D "$DATE_DIR" -U postgres --auth=trust --encoding=UTF8 --no-locale >/dev/null || mediu initdb
 ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -l "$DATE_DIR.log" -w -t 30 start \
   -o "-p $PORT -c listen_addresses=127.0.0.1 ${SOCKET[*]}" >/dev/null || mediu "pg_ctl start"
-trap 'ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -m fast -w stop >/dev/null 2>&1; true' EXIT
+trap 'ca_postgres "$PG_BIN/pg_ctl$EXE" -D "$DATE_DIR" -m fast -w stop >/dev/null 2>&1; rm -f "$MIGRARE"; true' EXIT
 q() { "${PSQL[@]}" -d "$1" -Atc "$2"; }
 index_exista() { [ "$(q "$1" "SELECT to_regclass('public.executie_proiecte_contract_id_unic') IS NOT NULL")" = t ]; }
 OUT="$DATE_DIR.out"

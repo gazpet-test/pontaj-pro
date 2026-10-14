@@ -8,6 +8,13 @@
 -- listează; duplicatele se rezolvă întâi (decizie Răzvan), nu de aici.
 -- Revenire: supabase/revenire/20261030b_executie_contract_id_unic_ROLLBACK.sql. Test: scripts/test_executie_contract_id_unic.sh.
 
+DO $livrare_start$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261030b_executie_contract_id_unic:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261030b: garda de livrare (start) — rulează DOAR prin scripts/livrare_migrare.sh';
+  END IF;
+END $livrare_start$;
+
 DO $pre$
 DECLARE v_dubluri text;
 BEGIN
@@ -46,3 +53,10 @@ BEGIN
     RAISE EXCEPTION 'POSTCONDIȚIE 20261030b: indexul unic parțial pe executie_proiecte(contract_id) lipsește sau are altă definiție';
   END IF;
 END $post$;
+
+DO $livrare_final$
+BEGIN
+  IF current_setting('gazpet.livrare_migrare', true) IS DISTINCT FROM '20261030b_executie_contract_id_unic:' || txid_current() THEN
+    RAISE EXCEPTION 'Livrare 20261030b: garda de livrare (final) — marcajul s-a pierdut în timpul migrării; se anulează tot';
+  END IF;
+END $livrare_final$;
