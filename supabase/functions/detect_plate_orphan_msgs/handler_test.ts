@@ -37,8 +37,14 @@ function mediu(o: { orfane?: unknown[]; cuPoza?: boolean } = {}) {
 }
 // cheie: null = ANTHROPIC_API_KEY lipsă (un `undefined` explicit ar lua valoarea implicită 'k')
 async function ruleaza(headers: Record<string, string>, m = mediu(), cheie: string | null = 'k') {
-  const r = await handler(new Request('http://x/', { method: 'POST', headers }), { supa: m.supa, API_KEY: cheie ?? undefined, fetch: fakeFetch(m.n) })
+  const r = await handler(new Request('http://x/', { method: 'POST', headers }), () => ({ supa: m.supa, API_KEY: cheie ?? undefined, fetch: fakeFetch(m.n) }))
   return { status: r.status, corp: await r.json(), n: m.n }
+}
+// fabrică de dependențe care aruncă (ex. env lipsă la pornire) — numără de câte ori a fost chemată
+function fabricaCareArunca() {
+  const f = () => { f.chemari++; throw new Error('SUPABASE_URL lipsă') }
+  f.chemari = 0
+  return f
 }
 // refuz fără cost: nimic în afară de citirile porții (profiles, user_module_access), zero storage / AI / scrieri
 function zeroCost(n: { ai: number; storage: number; scrieri: number; citiri: string[] }) {
@@ -49,10 +55,22 @@ function zeroCost(n: { ai: number; storage: number; scrieri: number; citiri: str
 
 Deno.test('OPTIONS: 200, fără antetul de ocolire în CORS, zero citiri', async () => {
   const m = mediu()
-  const r = await handler(new Request('http://x/', { method: 'OPTIONS' }), { supa: m.supa, API_KEY: 'k', fetch: fakeFetch(m.n) })
+  const r = await handler(new Request('http://x/', { method: 'OPTIONS' }), () => ({ supa: m.supa, API_KEY: 'k', fetch: fakeFetch(m.n) }))
   assertEquals(r.status, 200)
   assert(!(r.headers.get('Access-Control-Allow-Headers') || '').toLowerCase().includes('bypass'))
   assertEquals(m.n.citiri, [])
+})
+
+Deno.test('fabrica de dependențe aruncă: OPTIONS tot 200 cu CORS (fabrica nechemată), POST → 500 JSON cu CORS', async () => {
+  const f1 = fabricaCareArunca()
+  const o = await handler(new Request('http://x/', { method: 'OPTIONS' }), f1)
+  assertEquals(o.status, 200); assertEquals(o.headers.get('Access-Control-Allow-Origin'), '*'); assertEquals(f1.chemari, 0)
+  const f2 = fabricaCareArunca()
+  const p = await handler(new Request('http://x/', { method: 'POST', headers: { Authorization: `Bearer ${OWNER}` } }), f2)
+  assertEquals(p.status, 500); assertEquals(f2.chemari, 1)
+  assertEquals(p.headers.get('Access-Control-Allow-Origin'), '*')
+  assert((p.headers.get('Content-Type') || '').includes('application/json'))
+  assertEquals((await p.json()).error, 'SUPABASE_URL lipsă')
 })
 
 Deno.test('fără Authorization → 401 „Neautorizat”, zero cost', async () => {

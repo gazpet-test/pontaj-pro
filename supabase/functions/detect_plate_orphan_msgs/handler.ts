@@ -115,10 +115,13 @@ export function depsReale(): Deps {
   return { supa: createClient(supabaseUrl, supabaseServiceKey), API_KEY: Deno.env.get('ANTHROPIC_API_KEY'), fetch }
 }
 
-export async function handler(req: Request, deps: Deps): Promise<Response> {
+// faDeps = fabrica de dependențe, chemată LENEȘ: după OPTIONS și în interiorul try. Dacă inițializarea aruncă
+// (env lipsă, client), OPTIONS rămâne 200, iar POST primește 500 JSON cu CORS (review Jakarinos r2, PR #707).
+export async function handler(req: Request, faDeps: () => Deps): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS })
 
   try {
+    const deps = faDeps()
     const supabaseService = deps.supa
 
     // Poarta înaintea oricărei alte lucrări (și înaintea mesajelor despre configurare).

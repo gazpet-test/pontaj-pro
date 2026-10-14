@@ -92,6 +92,15 @@ jobs:
           if grep -nEi 'x-internal-mcp-bypass|adminbypass|admin_bypass' "$d/index.ts" "$d/handler.ts" "$d/acces.ts"; then
             echo "::error::Ocolirea de autentificare a reapărut în $d (vezi PR #707)"; exit 1
           fi
-          grep -q 'handler(req, depsReale())' "$d/index.ts" || { echo "::error::$d/index.ts trebuie doar să delege la handler (poarta e în handler → poartaPlate)"; exit 1; }
-          if grep -nE 'Deno\.env|req\.headers' "$d/index.ts"; then echo "::error::$d/index.ts nu citește antete sau env — tot trece prin handler"; exit 1; fi
-          echo "OK: fără ocolire, index.ts doar deleagă"
+          # index.ts = EXACT entrypoint-ul așteptat (Jakarinos r2): comparație strictă pe conținutul normalizat — fără
+          # comentarii // și fără spații albe. Comentariile /* */ NU se elimină (ar putea ascunde cod), deci orice astfel de
+          # comentariu, orice ramură în plus (ex. un GET care răspunde fără handler) sau orice import nou pică garda.
+          asteptat="import'jsr:@supabase/functions-js/edge-runtime.d.ts'import{handler,depsReale}from'./handler.ts'Deno.serve((req:Request)=>handler(req,depsReale))"
+          gasit="$(sed -e 's://.*$::' "$d/index.ts" | tr -d '[:space:]')"
+          if [ "$gasit" != "$asteptat" ]; then
+            echo "::error::$d/index.ts nu are forma așteptată: doar Deno.serve((req: Request) => handler(req, depsReale)). Logica și orice cale de acces stau în handler.ts → poartaPlate."
+            echo "așteptat (normalizat): $asteptat"
+            echo "găsit    (normalizat): $gasit"
+            exit 1
+          fi
+          echo "OK: fără ocolire, index.ts are exact forma de entrypoint"
