@@ -80,7 +80,7 @@ describe('OCR local — estimarea de egress în preview (cerere Răzvan, Huedin)
   it('suma mărimilor documentelor alese, în MB, și apare în confirmare', () => {
     const e = egressEstimat([{ size_bytes: 10196734 }, { size_bytes: 9375265 }])
     expect(e).toEqual({ octeti: 19571999, necunoscute: 0 }); expect(fmtMB(e.octeti)).toBe('19,6 MB')
-    expect(textConfirmare('15.00', 2, 1447, e)).toContain('~19,6 MB, o singură dată pe rulare')
+    expect(textConfirmare('15.00', 2, 1447, e)).toContain('~19,6 MB — o singură copie completă pe rulare')
   })
   it('mărimea lipsă e NECUNOSCUTĂ, nu zero (review r4 P2)', () => {
     expect(textEgress(egressEstimat([{ size_bytes: null }]))).toBe('estimare indisponibilă (mărime necunoscută)')
