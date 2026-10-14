@@ -35,6 +35,7 @@ const VERDICTE = { potrivire_directa:'Potrivire directă', potential_mid:'Poten�
 const TIP_INTER = { mail_trimis:'✉️ Mail trimis', mail_primit:'📨 Mail primit', telefon:'📞 Telefon', interviu:'🗣 Interviu', oferta:'💼 Ofertă', raspuns_candidat:'💬 Răspuns candidat', nota:'📝 Notă' }
 
 const FORM_URL = 'https://pontaj-pro-sooty.vercel.app/aplica'   // 07.09.2026: pagina publică e pe Vercel (Supabase rescrie HTML-ul edge fn în text/plain)
+const CV_DRIVE_URL = 'https://drive.google.com/drive/folders/1wTH3R90ychLU62LZuCJd8Bwir99eeAq3'   // 14.10.2026: dosarul Drive cu CV-urile primite pe mail (acces prin contul Google al utilizatorului)
 const fmtD = d => d ? new Date(d).toLocaleDateString('ro-RO') : '—'
 
 // apel edge fn olx-api cu JWT-ul userului curent
@@ -118,6 +119,10 @@ export default function HrRecrutare({ profile, showToast }) {
             onClick={() => { navigator.clipboard?.writeText(FORM_URL); showToast?.('✓ Link formular public copiat — pune-l în anunțul OLX/eJobs') }}>
             🔗 Copiază link formular aplicare
           </button>
+          <a href={CV_DRIVE_URL} target="_blank" rel="noreferrer" title="Dosarul Google Drive cu CV-urile primite pe mail"
+            style={{ ...S.btnS, padding:'6px 12px', textDecoration:'none', display:'inline-block' }}>
+            📂 CV-uri primite ↗
+          </a>
           {/* Led stare OLX: verde = conectat (butonul nu mai face nimic), roșu = deconectat, gri = se verifică */}
           <span title={olx == null ? 'Se verifică conexiunea OLX...' : olx?.conectat ? `OLX conectat${olx?.cont?.email ? ' — ' + olx.cont.email : ''}` : 'OLX deconectat — apasă „Conectează OLX"'}
             style={{ width:12, height:12, borderRadius:'50%', flexShrink:0, background: olx == null ? G.dim : olx?.conectat ? G.green : G.red, boxShadow: olx?.conectat ? `0 0 6px ${G.green}` : olx ? `0 0 6px ${G.red}` : 'none' }} />
