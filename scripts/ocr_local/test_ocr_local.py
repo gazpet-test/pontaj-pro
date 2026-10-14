@@ -270,6 +270,19 @@ class Comparare(unittest.TestCase):
         tok = _re.search(r"c_tok constant text := '([^']*)'", sql).group(1)
         self.assertEqual(tok, NUM.replace(r'\d', '[0-9]') + '|[' + LETTERS + ']+|[^[:space:]]')
         self.assertEqual([m.group(0) for m in TOKEN.finditer('5 m² și ½ x')], ['5', 'm²', 'și', '½', 'x'])
+    def test_prompt_arbitru_admis(self):
+        # D3b: versiunea si modelul din edge-ul ofertare-ocr-arbitreaza = singurele admise la reconciliere
+        import re as _re
+        rad = pathlib.Path(__file__).resolve().parents[2]
+        ts = (rad / 'supabase/functions/ofertare-ocr-arbitreaza/prompt.ts').read_text(encoding='utf-8')
+        pol = json.loads((pathlib.Path(__file__).with_name('protocol.json')).read_text(encoding='utf-8'))['arbitru']
+        self.assertEqual(pol['prompt_versiuni_admise'], [_re.search(r"PROMPT_VERSIUNE = '([^']+)'", ts).group(1)])
+        self.assertEqual(pol['modele_admise'], [_re.search(r"MODEL = '([^']+)'", ts).group(1)])
+    def test_amprente_edge_identice(self):
+        # D3b: fisierul de paritate folosit de testul Deno (ofertare-ocr-arbitreaza recalculeaza amprenta in TS) e corect in Python
+        from .compare import item_hash
+        f = pathlib.Path(__file__).resolve().parents[2] / 'supabase/functions/_shared/ocrLocal_amprente.json'
+        for it in json.loads(f.read_text(encoding='utf-8')): self.assertEqual(item_hash(it), it['item_sha256'], it['id'])
     def test_politica_inversa_simboluri_si_exponenti(self):
         for x, y in (('pantă 5 %', 'pantă 5'), ('abatere 5 ‰', 'abatere 5'), ('cod A_B', 'cod AB'), ('valoare (5)', 'valoare 5'),
                      ('preț 100 €', 'preț 100'), ('suprafață m<sup>2</sup>', 'suprafață m2'), ('apă H<sub>2</sub>O', 'apă H2O')):

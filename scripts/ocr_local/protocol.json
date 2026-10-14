@@ -29,9 +29,9 @@
     }
   },
   "arbitru": {
-    "nota": "Deciziile acceptate la reconciliere: doar modelul si versiunile de prompt de aici. Lista de prompturi e GOALA pana cand edge-ul ofertare-ocr-arbitreaza (D3b) isi fixeaza promptul versionat - pana atunci orice decizie = needs_human (fail-closed).",
+    "nota": "Deciziile acceptate la reconciliere: doar modelul si versiunile de prompt de aici. arb-v1 = promptul din supabase/functions/ofertare-ocr-arbitreaza/prompt.ts (D3b); orice alta versiune = needs_human (fail-closed). Test: test_prompt_arbitru_admis.",
     "modele_admise": ["claude-sonnet-5"],
-    "prompt_versiuni_admise": []
+    "prompt_versiuni_admise": ["arb-v1"]
   },
   "guard_tokenizer": {
     "path": "C:/Users/Gazpet-Ai/Documents/Codex/2026-10-10/git/work/model_dots_windows/tokenizer.json",

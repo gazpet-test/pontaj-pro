@@ -173,6 +173,7 @@ jobs:
         run: >-
           deno test -A --node-modules-dir=none
           supabase/functions/_shared
+          supabase/functions/ofertare-ocr-arbitreaza
           supabase/functions/ofertare-plansa-citeste
           supabase/functions/ofertare-clarificari-propune
           supabase/functions/ofertare-triere
