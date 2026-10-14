@@ -111,42 +111,55 @@ asteapta "pdf: final repetat refuzat" "$(ca service_role - "SELECT public.fn_ofe
 
 # ── pagini ───────────────────────────────────────────────────────────────────────────────────────────────
 T1='Conductă DN 250 — 0,056'; H1=$(sha "$T1"); T2='Conductă DN 250 — 0.056'; H2=$(sha "$T2")
+T3='<p>Cantitate 10.5 m și 5 buc</p><table><tr><td>&#53;</td></tr></table>'; H3=$(sha "$T3")
 IA=$(sha imagineA); IB=$(sha imagineB); H0=$(sha '')
 # SP <rulare> <pagina> <cititor> <text> <sha> [model] [stare] [imagine|NULL] [garda]
 SP() { local img="'${8:-$IA}'" g="${9:-}"; [ "${8:-}" = NULL ] && img=NULL; [ -z "$g" ] && g='{}'
   echo "SELECT public.fn_ofertare_ocr_scrie_pagina($1, 1247, $2, '$3', '$4', '${7:-citit}', '${6:-LightOnOCR-2-1B}', '$5', $img, '$g')"; }
-umple() {  # citiri complete pentru rularea $1: 325 ambele (aceeași imagine), 326 ambele, 327 exclus la ambele
+EXCL='{"motiv_excludere":"plansa"}'
+umple() {  # citiri complete pentru rularea $1: 325 și 326 ambele pe aceeași imagine, 327 exclus la ambele
   for c in lighton mineru; do
     ca service_role - "$(SP "$1" 325 $c "$T1" "$H1")" >/dev/null
-    ca service_role - "$(SP "$1" 326 $c "$T1" "$H1")" >/dev/null
-    ca service_role - "$(SP "$1" 327 $c '' "$H0" x exclus NULL '{"motiv_excludere":"plansa"}')" >/dev/null
+    ca service_role - "$(SP "$1" 326 $c "$T3" "$H3")" >/dev/null
+    ca service_role - "$(SP "$1" 327 $c '' "$H0" x exclus NULL "$EXCL")" >/dev/null
   done; }
 refuz "pagină neînghețată" service_role - "$(SP $R 400 lighton "$T1" "$H1")" "nu e în rulare"
 refuz "sha greșit" service_role - "$(SP $R 325 lighton "$T1" "$(sha altceva)")" "raw_sha256"
 refuz "cititor fără imagine" service_role - "$(SP $R 325 lighton "$T1" "$H1" m citit NULL)" "check constraint"
 refuz "exclus fără motiv" service_role - "$(SP $R 327 lighton '' "$H0" m exclus NULL)" "check constraint"
+refuz "cititor cu stare «reconciliat»" service_role - "$(SP $R 325 lighton "$T1" "$H1" m reconciliat)" "check constraint"
 asteapta "pagină scrisă" "$(ca service_role - "$(SP $R 325 lighton "$T1" "$H1")->>'deja'")" false
 asteapta "aceeași pagină: idempotent" "$(ca service_role - "$(SP $R 325 lighton "$T1" "$H1")->>'deja'")" true
 refuz "aceeași cheie, alt text (append-only)" service_role - "$(SP $R 325 lighton "x" "$(sha x)")" "alt conținut"
 refuz "aceeași cheie, alt model_rev (nu e «deja»)" service_role - "$(SP $R 325 lighton "$T1" "$H1" alt-model)" "alt conținut"
-refuz "reconciliat în preluata" service_role - "$(SP $R 325 reconciliat "$T1" "$H1")" "reconciliat doar"
+refuz "reconciliat în preluata" service_role - "$(SP $R 325 reconciliat "$T1" "$H1" m reconciliat)" "reconciliat doar"
 asteapta "pagina MinerU 325 (aceeași imagine)" "$(ca service_role - "$(SP $R 325 mineru "$T2" "$H2" MinerU2.5-Pro)->>'deja'")" false
-ca service_role - "$(SP $R 326 lighton "$T1" "$H1")" >/dev/null
-refuz "preluata → citita cu pagini lipsă" service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'citita')" "nu au ambele citiri"
-ca service_role - "$(SP $R 326 mineru "$T1" "$H1" MinerU2.5-Pro citit "$IB")" >/dev/null   # 326: MinerU pe ALTĂ imagine
-for c in lighton mineru; do ca service_role - "$(SP $R 327 $c '' "$H0" x exclus NULL '{"motiv_excludere":"plansa"}')" >/dev/null; done
+ca service_role - "$(SP $R 326 lighton "$T3" "$H3")" >/dev/null
+refuz "preluata → citita cu pagini lipsă" service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'citita')" "pereche comparabilă"
+ca service_role - "$(SP $R 326 mineru "$T3" "$H3" MinerU2.5-Pro)" >/dev/null
+ca service_role - "$(SP $R 327 lighton '' "$H0" x exclus NULL "$EXCL")" >/dev/null
+refuz "327 exclus doar la un cititor" service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'citita')" "pereche comparabilă"
+ca service_role - "$(SP $R 327 mineru '' "$H0" x exclus NULL "$EXCL")" >/dev/null
 refuz "preluata → finalizata" service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'finalizata')" "nepermisă"
-DZ() { echo "{\"document_id\":1247,\"pagina\":$1,\"item_id\":\"$2\",\"item_sha256\":\"$3\",\"tip\":\"rand_tabel\",\"citire_lighton\":\"${4:-0,056}\",\"citire_mineru\":\"${5:-0.056}\",\"e_cantitate\":true,\"anomalie_separator\":true}"; }
+DZ() { echo "{\"document_id\":1247,\"pagina\":$1,\"item_id\":\"$2\",\"item_sha256\":\"$3\",\"tip\":\"${6:-rand_tabel}\",\"citire_lighton\":\"${4:-0,056}\",\"citire_mineru\":\"${5:-0.056}\",\"e_cantitate\":true,\"anomalie_separator\":true}"; }
 refuz "dezacord în preluata" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b0_r1 "$(sha i1)")')" "doar în citita"
-asteapta "preluata → citita (toate paginile au ambele citiri)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'citita')->>'stare'")" citita
+asteapta "preluata → citita (perechi comparabile)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'citita')->>'stare'")" citita
 refuz "pagină de cititor după citita" service_role - "$(SP $R 325 mineru "$T1" "$H1" z)" "doar în preluata"
 
-# ── dezacorduri: proveniență ─────────────────────────────────────────────────────────────────────────────
-refuz "dezacord pe imagini diferite" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 326 p0326_b0_r1 "$(sha i2)" "0,056" "0,056")')" "aceeași imagine"
+# ── dezacorduri: proveniență pe forma canonică ───────────────────────────────────────────────────────────
+DZT() { echo "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 326 "$1" "$(sha "$1")" "$2" "$3" text)')"; }
 refuz "dezacord pe pagină exclusă" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 327 p0327_b0_r1 "$(sha i5)")')" "ambilor cititori"
 refuz "dezacord: item_id de pe altă pagină" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0999_b0_r1 "$(sha i3)")')" "check constraint"
-refuz "dezacord: număr inventat (56 din 0.056)" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b0_r2 "$(sha i4)" "0,056" "56")')" "Numărul 56"
-refuz "dezacord: cuvânt inventat" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b0_r2 "$(sha i4)" "Țeavă 0,056" "0.056")')" "Cuvântul"
+refuz "proveniență: 56 din 0.056" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b0_r2 "$(sha i4)" "0,056" "56")')" "Numărul 56"
+refuz "proveniență: cuvânt inventat" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b0_r2 "$(sha i4)" "Țeavă 0,056" "0.056")')" "nu apare"
+refuz "proveniență: .5 din 10.5" service_role - "$(DZT p0326_b0_t1 ".5 m" ".5 m")" "nu apare\|Numărul"
+refuz "proveniență: -5 din 5" service_role - "$(DZT p0326_b0_t2 "-5 buc" "-5 buc")" "nu apare\|Numărul"
+refuz "proveniență: «- 5» din 5" service_role - "$(DZT p0326_b0_t3 "și - 5 buc" "și - 5 buc")" "nu apare"
+refuz "proveniență: 5% din 5" service_role - "$(DZT p0326_b0_t4 "5% buc" "5% buc")" "nu apare\|Numărul"
+D2=$(ca service_role - "$(DZT p0326_b0_t5 "10.5 m" "10.5")->>'id'")
+[ -n "$D2" ] || esec "proveniență: fragment legitim respins"; ok "proveniență: «10.5 m» / «10.5» acceptate (id $D2)"
+D3=$(ca service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 326 p0326_b1_r0 "$(sha i6)" "5" "5")')->>'id'")
+[ -n "$D3" ] || esec "proveniență: celula &#53; decodată respinsă"; ok "proveniență: celula &#53; decodată ca «5» (id $D3)"
 D1=$(ca service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b0_r1 "$(sha i1)")')->>'id'")
 [ -n "$D1" ] || esec "dezacord valid"; ok "dezacord valid (id $D1)"
 asteapta "dezacord: idempotent" "$(ca service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b0_r1 "$(sha i1)")')->>'deja'")" true
@@ -169,19 +182,26 @@ asteapta "textul ales = citirea MinerU (nu «56» trimis)" "$(q "SELECT text_ale
 refuz "rezervare decontată de două ori" service_role - "SELECT public.fn_ofertare_ocr_scrie_arbitraj($Z1, '$(AR "$D1" "$(sha i1)" ales_mineru "" 0.01)')" "deja închisă"
 Z4=$(ca service_role - "SELECT public.fn_ofertare_ocr_cost_rezerva($R, 0.1)")
 asteapta "al doilea apel pe același dezacord: costul rămâne, decizia nu" "$(ca service_role - "SELECT x->>'arbitraj_inregistrat' FROM public.fn_ofertare_ocr_scrie_arbitraj($Z4, '$(AR "$D1" "$(sha i1)" ales_lighton "" 0.01)') x")" false
-refuz "marcaj cu număr greșit" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 2, '$(sha lista)')" "Declarate 2"
-asteapta "marcaj comparație încheiată" "$(ca service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 1, '$(sha lista)')->>'nr'")" 1
-refuz "marcaj a doua oară" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 1, '$(sha lista)')" "o singură dată"
+for D in "$D2:p0326_b0_t5" "$D3:p0326_b1_r0"; do
+  Zx=$(ca service_role - "SELECT public.fn_ofertare_ocr_cost_rezerva($R, 0.05)")
+  id=${D%%:*}; it=${D#*:}; hs=$(q "SELECT item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE id=$id")
+  asteapta "arbitraj pe $it" "$(ca service_role - "SELECT public.fn_ofertare_ocr_scrie_arbitraj($Zx, '$(AR "$id" "$hs" ales_lighton "" 0.01)')->>'arbitraj_inregistrat'")" true
+done
+MAN=$(q "SELECT document_id||'|'||pagina||'|'||item_id||'|'||item_sha256 FROM public.ofertare_ocr_dezacorduri WHERE rulare_id=$R" | LC_ALL=C sort | awk '{printf "%s\n", $0}' | sha256sum | cut -d' ' -f1)
+refuz "marcaj cu număr greșit" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 2, '$MAN')" "Declarate 2"
+refuz "marcaj cu număr corect și amprentă greșită" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 3, '$(sha lista)')" "Amprenta manifestului"
+asteapta "marcaj comparație încheiată (amprenta calculată ca pipeline-ul)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 3, '$MAN')->>'nr'")" 3
+refuz "marcaj a doua oară" service_role - "SELECT public.fn_ofertare_ocr_comparatie_gata($R, 3, '$MAN')" "o singură dată"
 refuz "dezacord după marcaj" service_role - "SELECT public.fn_ofertare_ocr_scrie_dezacord($R, '$(DZ 325 p0325_b1_r1 "$(sha i9)")')" "încheierea comparației"
 Z5=$(ca service_role - "SELECT public.fn_ofertare_ocr_cost_rezerva($R, 0.05)")
 refuz "citita → arbitrata cu rezervare deschisă" service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'arbitrata')" "rezervări deschise"
 asteapta "abandon înainte de 15 min refuzat" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rezervare_abandon($Z5)")" f
 q "UPDATE public.ofertare_ocr_rezervari SET creat_la = now() - interval '20 minutes' WHERE id=$Z5" >/dev/null
 asteapta "abandon după 15 min" "$(ca service_role - "SELECT public.fn_ofertare_ocr_rezervare_abandon($Z5)")" t
-asteapta "cost / rezervat / abandonat" "$(q "SELECT cost_usd||'|'||cost_rezervat||'|'||cost_abandonat FROM public.ofertare_ocr_rulari WHERE id=$R")" "0.0450|0.0000|0.0500"
-asteapta "ai_usage_log: fiecare apel decontat" "$(q "SELECT count(*) FROM public.ai_usage_log WHERE function_name='ofertare-ocr-arbitreaza'")" 4
+asteapta "cost / rezervat / abandonat" "$(q "SELECT cost_usd||'|'||cost_rezervat||'|'||cost_abandonat FROM public.ofertare_ocr_rulari WHERE id=$R")" "0.0650|0.0000|0.0500"
+asteapta "ai_usage_log: fiecare apel decontat" "$(q "SELECT count(*) FROM public.ai_usage_log WHERE function_name='ofertare-ocr-arbitreaza'")" 6
 
-# ── eșantion (doar după înghețare) + verificare ──────────────────────────────────────────────────────────
+# ── eșantion (doar după înghețare) + verificare + reconciliere obligatorie ───────────────────────────────
 AID=$(q "SELECT id FROM public.ofertare_ocr_arbitraje WHERE dezacord_id=$D1")
 asteapta "eșantion gol cât rularea e în citita" "$(ca authenticated "$EDIT" "SELECT count(*) FROM public.fn_ofertare_ocr_esantion($R)")" 0
 refuz "verificare înainte de înghețare" authenticated "$RESP" "SELECT public.fn_ofertare_ocr_verifica($AID, 'corect')" "nu e în eșantionul"
@@ -191,8 +211,11 @@ refuz "verificare: editor" authenticated "$EDIT" "SELECT public.fn_ofertare_ocr_
 refuz "verificare: id inexistent = același mesaj" authenticated "$RESP" "SELECT public.fn_ofertare_ocr_verifica(999999, 'corect')" "fără drept"
 asteapta "verificare: responsabil" "$(ca authenticated "$RESP" "SELECT public.fn_ofertare_ocr_verifica($AID, 'corect', 'vazut pe imagine')->>'ok'")" true
 refuz "verificare: al doilea verdict" authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_verifica($AID, 'gresit')" "deja un verdict"
-asteapta "text reconciliat în arbitrata" "$(ca service_role - "$(SP $R 325 reconciliat "$T2" "$H2" reconciliere citit NULL)->>'deja'")" false
-asteapta "arbitrata → finalizata" "$(ca service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'finalizata')->>'stare'")" finalizata
+refuz "reconciliat cu stare de cititor" service_role - "$(SP $R 325 reconciliat "$T2" "$H2" reconciliere citit NULL)" "check constraint"
+asteapta "text reconciliat 325" "$(ca service_role - "$(SP $R 325 reconciliat "$T2" "$H2" reconciliere reconciliat NULL)->>'deja'")" false
+refuz "finalizata fără reconcilierea paginii 326" service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'finalizata')" "fără rezultat reconciliat"
+ca service_role - "$(SP $R 326 reconciliat "$T3" "$H3" reconciliere needs_human NULL)" >/dev/null
+asteapta "arbitrata → finalizata (327 exclusă nu cere reconciliere)" "$(ca service_role - "SELECT public.fn_ofertare_ocr_stare($R, 'finalizata')->>'stare'")" finalizata
 
 # ── apel plătit decontat după anulare ────────────────────────────────────────────────────────────────────
 R2=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 15)->>'rulare_id'")
@@ -216,6 +239,14 @@ asteapta "două rezervări simultane de 0,6 sub plafonul 1: exact una trece" "$(
 asteapta "plafonul respectat după cursă" "$(q "SELECT cost_rezervat FROM public.ofertare_ocr_rulari WHERE id=$R3")" 0.6000
 ca service_role - "SELECT public.fn_ofertare_ocr_stare($R3, 'oprita', 'test concurenta')" >/dev/null
 
+# ── imagini diferite la aceeași pagină: rularea nu poate trece la citita ─────────────────────────────────
+R4=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'")
+ca service_role - "SELECT public.fn_ofertare_ocr_preia('lighton-mineru-v2')" >/dev/null
+ca service_role - "$(SP "$R4" 325 lighton "$T1" "$H1")" >/dev/null; ca service_role - "$(SP "$R4" 325 mineru "$T2" "$H2" MinerU2.5-Pro citit "$IB")" >/dev/null
+for c in lighton mineru; do ca service_role - "$(SP "$R4" 326 $c "$T3" "$H3")" >/dev/null; ca service_role - "$(SP "$R4" 327 $c '' "$H0" x exclus NULL "$EXCL")" >/dev/null; done
+refuz "citita cu cititori pe imagini diferite" service_role - "SELECT public.fn_ofertare_ocr_stare($R4, 'citita')" "pereche comparabilă"
+ca service_role - "SELECT public.fn_ofertare_ocr_stare($R4, 'oprita', 'test imagini')" >/dev/null
+
 # ── heartbeat ────────────────────────────────────────────────────────────────────────────────────────────
 asteapta "heartbeat" "$(ca service_role - "SELECT public.fn_ofertare_ocr_heartbeat(true, 'test')")" t
 asteapta "heartbeat scris" "$(q "SELECT ultim_ok||'|'||ultim_mesaj||'|'||activ FROM public.procese_heartbeat WHERE cheie='ocr_local_ofertare'")" "true|test|true"
@@ -227,7 +258,6 @@ asteapta "după revenire: niciun obiect, heartbeat dezactivat" \
   "$(q "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'ofertare\_ocr\_%'")|$(q "SELECT activ FROM public.procese_heartbeat WHERE cheie='ocr_local_ofertare'")" "0|f"
 livreaza >/dev/null || esec "reaplicare după revenire"; ok "dus-întors: reaplicare după revenire"
 asteapta "heartbeat reactivat după reaplicare" "$(ca service_role - "SELECT public.fn_ofertare_ocr_heartbeat(true, 'din nou')")|$(q "SELECT activ FROM public.procese_heartbeat WHERE cheie='ocr_local_ofertare'")" "t|t"
-# drift după aplicare: revenirea trebuie să refuze fără să șteargă nimic (fiecare caz pe rând, apoi readus)
 drift() {  # drift <descriere> <sql care strică> <sql care repară>
   q "$2" >/dev/null
   o="$(revenire || true)"; grep -q "amprenta difera" <<<"$o" || esec "revenire peste drift ($1): $o"
@@ -239,6 +269,7 @@ drift "RLS dezactivat" "ALTER TABLE public.ofertare_ocr_rulari DISABLE ROW LEVEL
 drift "DEFAULT schimbat" "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'preluata'" "ALTER TABLE public.ofertare_ocr_rulari ALTER COLUMN stare SET DEFAULT 'ceruta'"
 drift "trigger adăugat" "CREATE TRIGGER t_x BEFORE INSERT ON public.ofertare_ocr_pagini FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()" "DROP TRIGGER t_x ON public.ofertare_ocr_pagini"
 drift "grant pe secvență" "GRANT USAGE ON SEQUENCE public.ofertare_ocr_rulari_id_seq TO authenticated" "REVOKE USAGE ON SEQUENCE public.ofertare_ocr_rulari_id_seq FROM authenticated"
+drift "pas de secvență schimbat" "ALTER SEQUENCE public.ofertare_ocr_rulari_id_seq INCREMENT BY 2" "ALTER SEQUENCE public.ofertare_ocr_rulari_id_seq INCREMENT BY 1"
 asteapta "după reparare: amprenta e iar cea aplicată" "$(q "SELECT obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class') LIKE '%amprenta=' || public.fn_ofertare_ocr_amprenta()")" t
 q "CREATE OR REPLACE FUNCTION public.fn_ofertare_ocr_heartbeat(p_ok boolean, p_mesaj text) RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp AS 'SELECT true'" >/dev/null
 o="$(revenire || true)"; grep -q "amprenta difera" <<<"$o" || esec "revenire peste funcție schimbată: $o"; ok "refuz: revenire după funcție schimbată"

@@ -1,4 +1,4 @@
--- REVENIRE 20261029a — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 16 funcții fn_ofertare_ocr_*.
+-- REVENIRE 20261029a — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 17 funcții fn_ofertare_ocr_*.
 -- DATELE OCR SE PIERD (rulări, pagini citite, dezacorduri, rezervări, arbitraje, verificări, jurnalul linkurilor). Nu atinge
 -- text_extras, cantități sau alte tabele existente. Rândul 'ocr_local_ofertare' din procese_heartbeat se DEZACTIVEAZĂ (activ = false),
 -- nu se șterge (fn_ofertare_ocr_heartbeat îl reactivează la o reaplicare).
@@ -19,7 +19,7 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261029a: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF to_regclass('public.ofertare_ocr_rulari') IS NULL THEN RAISE EXCEPTION '20261029a: preconditie, migrarea nu e aplicata'; END IF;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 16
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 17
      OR (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%') <> 7 THEN
     RAISE EXCEPTION '20261029a: preconditie, alt numar de obiecte decat la aplicare';
   END IF;
@@ -43,8 +43,10 @@ BEGIN
                                                  ',' ORDER BY po.polname) FROM pg_policy po WHERE po.polrelid = c.oid), '')
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%'
     UNION ALL
-    SELECT 's:' || c.relname || ':' || pg_get_userbyid(c.relowner) || ':' || coalesce(c.relacl::text, '')
-      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'S' AND c.relname LIKE 'ofertare\_ocr\_%') s) INTO v_fp;
+    SELECT 's:' || c.relname || ':' || pg_get_userbyid(c.relowner) || ':' || coalesce(c.relacl::text, '') || ':' || q.seqstart || ' ' || q.seqincrement
+           || ' ' || q.seqmin || ' ' || q.seqmax || ' ' || q.seqcache || ' ' || q.seqcycle::text || ' ' || format_type(q.seqtypid, NULL)
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_sequence q ON q.seqrelid = c.oid
+     WHERE n.nspname = 'public' AND c.relkind = 'S' AND c.relname LIKE 'ofertare\_ocr\_%') s) INTO v_fp;
   v_comentariu := obj_description('public.ofertare_ocr_rulari'::regclass, 'pg_class');
   IF v_comentariu IS NULL OR v_comentariu NOT LIKE '%amprenta=' || v_fp THEN
     RAISE EXCEPTION '20261029a: preconditie, obiectele s-au schimbat dupa aplicare (amprenta difera) - revenire manuala, cu review';
@@ -66,6 +68,7 @@ BEGIN
   DROP FUNCTION public.fn_ofertare_ocr_heartbeat(boolean, text);
   DROP FUNCTION public.fn_ofertare_ocr_comparatie_gata(bigint, integer, text);
   DROP FUNCTION public.fn_ofertare_ocr_amprenta();
+  DROP FUNCTION public.fn_ofertare_ocr_canon(text);
   DROP TABLE public.ofertare_ocr_verificari;
   DROP TABLE public.ofertare_ocr_arbitraje;
   DROP TABLE public.ofertare_ocr_rezervari;
