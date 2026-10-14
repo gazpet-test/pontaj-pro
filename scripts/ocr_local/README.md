@@ -116,6 +116,9 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 - (Copilot r6) Bucăți de tabel HTML neconsumate (`<table>` fără `</table>`, `</table>` orfan) → text marcat `⟦tabel_neparsat⟧`.
 - (Jakarinos r6, P2) Text în tabel în afara rândurilor / celulelor → `⟦tabel_neparsat⟧`; `<img>` păstrează textual toate atributele
   (inclusiv `>` în valori, valori neghilimelate, `src`); bararea prin CSS (`line-through`) → `⟦barat: …⟧`.
+- (Copilot r7) Dominanța structurii se aplică ORICĂRUI `structura_tabele` (și granițelor tabel↔tabel): toate deciziile benzii
+  `ales_lighton` → citirea LightOn neschimbată, altfel `needs_human`.
+- (Jakarinos r7, P2) Bararea CSS și pe `<p>` / `<div>` / `<td>`; slash-ul final al unei valori neghilimelate din `<img>` se păstrează.
 - **Recuperare:** dacă reconcilierea pică la mijloc rămâne `reconciliere.tmp/` și orice reluare e refuzată (intenționat). Omul
   verifică ce e în el, îl șterge manual și rulează din nou `reconciliaza`.
 
@@ -128,7 +131,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local -v` — 83 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local -v` — 85 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 

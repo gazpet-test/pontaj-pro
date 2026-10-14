@@ -305,6 +305,13 @@ class Comparare(unittest.TestCase):
         for a, b in (('<img alt="DN100 > 0">', '<img alt="DN150 > 0">'), ('<img alt=DN100>', '<img alt=DN150>'), ('<img src="A.png">', '<img src="B.png">'),
                      ('Cantitate <span style="text-decoration:line-through">5</span> 7', 'Cantitate 5 7')):
             s, its = compare_band(BAND, 'x ' + a, OK, 'x ' + b, OK); self.assertGreaterEqual(len(its), 1, (a, b))
+    def test_jakarinos_r7_barare_css_si_slash(self):
+        for tag in ('p', 'div'):
+            x = 'Cantitate <%s style="text-decoration:line-through">5</%s> 7' % (tag, tag)
+            s, its = compare_band(BAND, x, OK, 'Cantitate 5 7', OK); self.assertGreaterEqual(len(its), 1, tag)
+        s, its = compare_band(BAND, '<table><tr><td>A</td><td style="text-decoration:line-through">5</td></tr></table>', OK,
+                              '<table><tr><td>A</td><td>5</td></tr></table>', OK); self.assertGreaterEqual(len(its), 1)
+        s, its = compare_band(BAND, 'x <img alt=DN100/>', OK, 'x <img alt=DN100>', OK); self.assertGreaterEqual(len(its), 1)
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -436,6 +443,16 @@ class Reconciliere(unittest.TestCase):
         shutil.rmtree(out / 'reconciliere')
         (out / 'dec.jsonl').write_text('\n'.join(json.dumps(dict({'id': it['id'], 'item_sha256': it['item_sha256']}, **self.dec('ales_lighton'))) for it in items), encoding='utf-8')
         r = reconcile(out, out / 'dec.jsonl'); self.assertFalse(r['pages'][0]['needs_human']); self.assertEqual(r['pages'][0]['text'], '| COD | mc | 5 |')
+    def test_granite_de_tabel_structura_domina(self):
+        row = lambda k, v='1,00': '<tr><td>%s.</td><td>C%s</td><td>d</td><td>m</td><td>%s</td></tr>' % (k, k, v)
+        a = '<table>' + row(1) + row(2) + '</table><p>x</p><table>' + row(3) + '</table>'
+        b = '<table>' + row(1) + '</table><p>x</p><table>' + row(2, '9,00') + row(3) + '</table>'
+        r, items, out = self._run(a, b, [])
+        self.assertIn('structura_tabele', [i['tip'] for i in items])
+        shutil.rmtree(out / 'reconciliere')
+        decs = [dict(self.dec('ales_lighton' if i['tip'] == 'structura_tabele' else 'ales_mineru'), id=i['id'], item_sha256=i['item_sha256']) for i in items]
+        (out / 'dec.jsonl').write_text('\n'.join(json.dumps(d) for d in decs), encoding='utf-8')
+        r = reconcile(out, out / 'dec.jsonl'); self.assertTrue(r['pages'][0]['needs_human'])
     def test_validare_schema(self):
         v = lambda d: valid_decision(d, None, POLICY)
         self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))

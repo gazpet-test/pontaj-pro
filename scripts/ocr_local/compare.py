@@ -34,7 +34,7 @@ IMG_ATTR = re.compile(r'\b(alt|title)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.I)
 def img_marker(s):
     # imaginea nu dispare: alt/title (substitutul textual) devin un marcaj comparat (review Copilot r5)
     # toate atributele, textual (alt, title, src, ...): nicio diferenta din eticheta nu dispare (review Jakarinos r6, Copilot r6 P2)
-    return IMG.sub(lambda m: ' ⟦img ' + re.sub(r'\s+', ' ', m.group(1).rstrip('/').strip()) + '⟧ ', s)
+    return IMG.sub(lambda m: ' ⟦img ' + re.sub(r'\s+', ' ', re.sub(r'\s+/$', '', m.group(1)).strip()) + '⟧ ', s)
 CAPTION = re.compile(r'<caption\b[^>]*>(.*?)</caption\s*>', re.I | re.S)
 MD_SEP = re.compile(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$')
 CONTEXT = 6
@@ -55,6 +55,7 @@ def html_rows(table):
         row = []
         for attrs, body in CELL_HTML.findall(r):
             text = clean_inline(body); spans = {}
+            if re.search(r'line-through', attrs, re.I) and text: text = '⟦barat: %s⟧' % text  # bararea pusa pe celula insasi
             for k, a, b, c in SPAN.findall(attrs):
                 v = (a or b or c).strip()
                 # doar intreg valid 1..50 se interpreteaza; orice altceva ('2x', '51', '0') ramane marcaj vizibil, nu se ghiceste
@@ -77,6 +78,7 @@ def md_rows(lines):
     return rows
 
 def plain(s):
+    s = strike_marker(s)  # inainte de a transforma </p>, </div> in randuri noi (review Jakarinos r7)
     s = re.sub(r'<br\s*/?>|</p\s*>|</h\d\s*>|</li\s*>|</div\s*>', '\n', s, flags=re.I)
     s = html.unescape(TAG.sub(' ', img_marker(strike_marker(supsub(s)))))
     s = BOLD.sub(r'\1', re.sub(r'^[ \t]*#{1,6}(?:[ \t]+|$)', '', s, flags=re.M))  # doar titlu markdown real ('# Titlu'); '#12', '##ABC' raman

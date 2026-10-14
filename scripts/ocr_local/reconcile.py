@@ -53,10 +53,10 @@ def apply_band(raw_a, raw_b, items, decisions):
         if d is None or d['decizie'] == 'needs_human': return None, True
         return render(segments(chosen(it, d))), False
     original = sa
-    flat_case = any(i['tip'] == 'structura_tabele' and i['id'].endswith('_structura') and i.get('motiv_pipeline') == 'un cititor vede tabel, celalalt text' for i in items)
-    if flat_case:
-        # decizia de structura domina (review Copilot r5): ales_lighton pe structura => toate celelalte trebuie ales_lighton, iar
-        # rezultatul e citirea LightOn neschimbata; orice alta combinatie = om (nu se coase text aplatizat peste un tabel)
+    if any(i['tip'] == 'structura_tabele' for i in items):
+        # ORICE dezacord de structura (tabel vs text SAU granite de tabel diferite) domina banda (review Copilot r5 + r7):
+        # coordonatele randurilor nu mai sunt sigure, deci fie TOATE deciziile sunt ales_lighton (rezultat = citirea LightOn
+        # neschimbata), fie banda merge la om
         if all((decisions.get(i['id']) or {}).get('decizie') == 'ales_lighton' for i in items): return render(original), False
         return None, True
     if any(i.get('semnal') == 'structura_diferita' for i in items) or ((sum(s[0] == 'table' for s in sa) > 0) != (sum(s[0] == 'table' for s in sb) > 0)):
