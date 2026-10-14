@@ -64,6 +64,15 @@ export function documenteCandidate(docs, elig) {
     return { ...d, nrPagini: new Set(pag).size, eligibil: el?.eligibil === true, motiv: el?.motiv || (el ? null : 'eligibilitate necunoscută') }
   }).filter(d => d.nrPagini > 0)
 }
+// Selecția după o (re)încărcare. Implicit (toate eligibile, cel mult limita) DOAR la prima încărcare; apoi strict intersecția
+// selecției cu documentele încă eligibile — inclusiv rezultatul gol (review PR #702 r2 Jakarinos P2: o reîncărcare nu are voie să
+// bifeze singură documente pe care omul nu le-a ales pentru o procesare plătită).
+export function selectieDupaIncarcare(sel, cand, initiala) {
+  const elg = (cand || []).filter(x => x.eligibil).map(x => x.id)
+  if (initiala) return Object.fromEntries(elg.slice(0, MAX_DOCUMENTE).map(id => [id, true]))
+  const e = new Set(elg)
+  return Object.fromEntries(Object.entries(sel || {}).filter(([k, v]) => v && e.has(Number(k))).map(([k]) => [k, true]))
+}
 export const textConfirmare = (plafon, nrDoc, nrPag) =>
   `Pornești o procesare PLĂTITĂ: arbitraj Claude pe dezacordurile dintre cele două citiri locale, plafon ${plafon} USD.\n\n` +
   `${nrDoc} document(e), ${nrPag} pagini necitite. Citirea pe serverul AI se face în fereastra GPU ${FEREASTRA_GPU}; ` +
@@ -79,6 +88,7 @@ export default function OcrLocalSection({ licitatieId, profile, showToast, reloa
   const [busy, setBusy] = useState(false)
   const [eroare, setEroare] = useState(null)
   const gen = useRef(0)                              // doar ultima încărcare își aplică rezultatul (review PR #702 Copilot P2)
+  const selInit = useRef(false)                      // selecția implicită s-a pus o dată (prima încărcare reușită)
   const toast = (m, t) => (showToast ? showToast(m, t) : null)
 
   // Dreptul de decizie: încărcare / refuz / EROARE TEHNICĂ afișate distinct (review PR #702 P2); fail-closed: doar true deschide.
@@ -113,12 +123,9 @@ export default function OcrLocalSection({ licitatieId, profile, showToast, reloa
     if (g !== gen.current) return
     const cand = documenteCandidate(d.data, errElig ? [] : elig)
     setDocs(cand); setRulari(r.data || []); if (errElig) setEroare('Eligibilitate: ' + errElig)
-    // bifele: doar documentele încă eligibile; implicit toate eligibile (cel mult limita RPC-ului)
-    setSel(s => {
-      const elg = new Set(cand.filter(x => x.eligibil).map(x => x.id))
-      const pastrate = Object.fromEntries(Object.entries(s).filter(([k, v]) => v && elg.has(Number(k))))
-      return Object.keys(pastrate).length ? pastrate : Object.fromEntries([...elg].slice(0, MAX_DOCUMENTE).map(id => [id, true]))
-    })
+    // bifele: implicit doar la prima încărcare; apoi doar ce a ales omul și e încă eligibil (și gol)
+    const initiala = !selInit.current && !errElig; if (initiala) selInit.current = true
+    setSel(s => selectieDupaIncarcare(s, cand, initiala))
   }, [licitatieId])
   useEffect(() => { incarca() }, [incarca, reloadKey])
   // stare schimbată din alt tab (cerere / anulare / serverul AI): reîncărcare la revenirea în fereastră (review PR #702 Jakarinos P2)

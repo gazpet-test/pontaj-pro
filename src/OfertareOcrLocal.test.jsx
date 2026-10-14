@@ -3,7 +3,25 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./lib/supabase.js', () => ({ supabase: {} }))
-import OcrLocalSection, { eroarePlafon, documenteCandidate, textConfirmare, bugetRamas, FEREASTRA_GPU, PLAFON_MAX, MAX_DOCUMENTE, STARE_RULARE } from './OfertareOcrLocal.jsx'
+import OcrLocalSection, { eroarePlafon, documenteCandidate, textConfirmare, bugetRamas, selectieDupaIncarcare, FEREASTRA_GPU, PLAFON_MAX, MAX_DOCUMENTE, STARE_RULARE } from './OfertareOcrLocal.jsx'
+
+describe('OCR local — selecția după reîncărcare (review PR #702 r2 Jakarinos P2)', () => {
+  const cand = (...el) => el.map(([id, eligibil]) => ({ id, eligibil }))
+  it('prima încărcare: toate eligibile, cel mult 50', () => {
+    expect(selectieDupaIncarcare({}, cand([1, true], [2, false], [3, true]), true)).toEqual({ 1: true, 3: true })
+    expect(Object.keys(selectieDupaIncarcare({}, Array.from({ length: 60 }, (_, i) => ({ id: i + 1, eligibil: true })), true))).toHaveLength(50)
+  })
+  it('totul debifat + reîncărcare = rămâne gol (nu se rebifează singur)', () => {
+    expect(selectieDupaIncarcare({ 1: false, 3: false }, cand([1, true], [3, true]), false)).toEqual({})
+    expect(selectieDupaIncarcare({}, cand([1, true], [3, true]), false)).toEqual({})
+  })
+  it('A bifat, B debifat, A devine neeligibil → nimic bifat (B nu se bifează în locul lui A)', () => {
+    expect(selectieDupaIncarcare({ 1: true, 2: false }, cand([1, false], [2, true]), false)).toEqual({})
+  })
+  it('alegerea omului se păstrează cât documentele rămân eligibile', () => {
+    expect(selectieDupaIncarcare({ 1: true, 2: false, 3: true }, cand([1, true], [2, true], [3, true]), false)).toEqual({ 1: true, 3: true })
+  })
+})
 
 describe('OCR local — limitele RPC-ului și bugetul (review PR #702)', () => {
   it('cel mult 50 de documente într-o cerere, ca fn_ofertare_ocr_cerere', () => expect(MAX_DOCUMENTE).toBe(50))
