@@ -295,6 +295,21 @@ class Client(unittest.TestCase):
         with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge)
         self.assertFalse([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
         (rdir / 'lacat.json').unlink(); self.assertEqual(C.arbitreaza(rdir, self.edge)['stare'], 'arbitrata'); self.assertFalse((rdir / 'lacat.json').exists())
+    def test_oprire_merge_cat_arbitrajul_tine_lacatul(self):
+        # review r4 Jakarinos P2: `erp oprire` fara lacat; arbitrajul aflat in curs nu mai face niciun apel platit dupa cerere
+        rdir, d, _ = self._pana_la_arbitraj(); baza = self.edge.arbitru; n = []
+        def primul_apoi_oprire(it):
+            n.append(it['id'])
+            if len(n) == 1: self.assertEqual(C.oprire(rdir, self.edge, 'oprire manuala')['stare'], 'oprita')  # lacatul e tinut de arbitreaza
+            return baza(it)
+        self.edge.arbitru = primul_apoi_oprire
+        self.assertTrue((rdir / 'lacat.json').exists() is False)
+        with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge)
+        self.assertEqual((len(n), self.edge.stare), (1, 'oprita')); self.assertFalse((rdir / 'lacat.json').exists())
+    def test_preia_serializat_pe_directorul_de_lucru(self):
+        (self.work / 'lacat.json').write_text('{"pid": 1}')
+        with self.assertRaises(RuntimeError): C.preia(self.work, self.edge)
+        self.assertFalse(self.edge.ops('preia'))
     def test_doua_incercari_suprapuse_un_singur_gata_nu_le_inchide_pe_amandoua(self):
         # review r3 Jakarinos P1: doua `start` pe acelasi item (procese suprapuse), un singur `gata` (refuz in_zbor) -> ramane necunoscut
         rdir, d, i = self._pana_la_arbitraj()

@@ -131,13 +131,15 @@ def plan_sha(manifest):
 def activa(rdir):
     o = pasi(rdir).get('oprita')
     if o: raise RuntimeError('Rularea e oprita (%s): niciun pas nou' % o['valoare'])
+    c = pathlib.Path(rdir) / 'oprire_ceruta.json'  # `erp oprire` ruleaza FARA lacat (si cat ruleaza arbitrajul): marcajul lui e separat
+    if c.exists(): raise RuntimeError('Oprire ceruta de om (%s): niciun pas nou' % load(c).get('motiv'))
 
 def cu_lacat(fn):
     """Lacat EXCLUSIV pe directorul rularii (lacat.json, creat atomic O_EXCL): doua comenzi `erp` simultane pe aceeasi rulare nu se pot
     suprapune (review r3 Jakarinos P1). Un lacat ramas de la un proces mort se sterge manual, dupa verificare."""
     @functools.wraps(fn)
     def w(rdir, *a, **k):
-        p = pathlib.Path(rdir) / 'lacat.json'
+        p = pathlib.Path(rdir) / 'lacat.json'; p.parent.mkdir(parents=True, exist_ok=True)  # preia: lacatul e pe directorul de lucru
         try: fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             raise RuntimeError('Rularea e in lucru in alt proces (%s: %s). Daca niciun proces nu mai ruleaza, sterge manual lacatul'
@@ -153,6 +155,7 @@ def paralel(fn, lista, n):
     """Ruleaza fn pe lista cu n fire; prima eroare se ridica dupa ce firele pornite se termina (scrierile sunt idempotente in BD)."""
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, n)) as ex: return list(ex.map(fn, lista))
 
+@cu_lacat
 def preia(work, edge):
     from .read import protocol
     work = pathlib.Path(work); work.mkdir(parents=True, exist_ok=True); marcaj = work / 'preia_in_curs.json'
@@ -433,6 +436,7 @@ def arbitreaza(rdir, edge, prag=PRAG_NH, minim=MIN_NH):
             if sha(img) != it['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % it['band'])
             oprit = opreste_daca_peste_prag(st)
             if oprit: return oprit
+            activa(rdir)  # `erp oprire` (fara lacat) cerut intre timp -> niciun apel platit nou
             a = uuid.uuid4().hex  # identificator UNIC al incercarii (review r3 Jakarinos P1: doua procese nu pot inchide aceeasi incercare)
             _adauga(d / 'apeluri.jsonl', {'id': it['id'], 'a': a, 'faza': 'start', 'la': time.time()})  # INAINTEA apelului platit
             status, j = edge.post('ofertare-ocr-arbitreaza', {'rulare_id': r['rulare_id'], 'dezacord_id': ids[it['id']], 'item': it,
@@ -484,9 +488,15 @@ def reconciliaza_rulare(rdir, edge, n=4):
     heartbeat(edge, True, 'rularea %d: finalizata' % r['rulare_id'])
     return {'pagini': len(rez), 'needs_human': nh, 'stare': 'finalizata'}
 
-@cu_lacat
 def oprire(rdir, edge, motiv):
-    r = rulare(rdir); tranzitie(pathlib.Path(rdir), edge, r, 'oprita', motiv)
+    """FARA lacat (review r4 Jakarinos P2): merge si cat ruleaza `arbitreaza`. Intai marcajul local oprire_ceruta.json (verificat de
+    activa() inaintea fiecarui apel platit), apoi tranzitia in BD (dupa care orice rezervare noua e refuzata: 'stare'). Nu atinge
+    pasi.json (il scrie procesul care tine lacatul); starea confirmata din BD."""
+    rdir = pathlib.Path(rdir); r = rulare(rdir)
+    save(rdir / 'oprire_ceruta.json', {'motiv': motiv, 'la': time.time()})
+    try: scrie(edge, 'stare', {'rulare_id': r['rulare_id'], 'stare': 'oprita', 'motiv': motiv})
+    except EdgeError as e:
+        if e.status != 409 or stare_server(edge, r['rulare_id'])['stare'] != 'oprita': raise
     return {'stare': 'oprita'}
 
 def stare(rdir, edge):
