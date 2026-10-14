@@ -1,6 +1,7 @@
 # Funcții edge retrase (etapa 2c, 14.10.2026)
 
-Decizia lui Răzvan din 14.10.2026, scrisă direct în sesiunea Module: „da etapa 2c, B”. Funcțiile se șterg din producție cu workflow-ul `.github/workflows/sterge-edge-etapa2c.yml`, care are lista fixă și rulează doar manual.
+Decizia lui Răzvan din 14.10.2026, scrisă direct în sesiunea Module: „da etapa 2c, B”.
+Funcțiile au fost șterse din producție pe 14.10.2026 cu workflow-ul `sterge-edge-etapa2c.yml` (#701): dry-run în rularea 38574283758, ștergerea în rularea 38576053791 (33 șterse, rămân 115 funcții). Workflow-ul a fost apoi scos din repo.
 
 Folderul NU e în `supabase/functions/`, deci nu e publicat, verificat sau testat de niciun workflow. E doar o copie, ca să se poată reveni.
 
