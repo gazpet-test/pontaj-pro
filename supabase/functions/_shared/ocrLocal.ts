@@ -26,13 +26,23 @@ export function raspuns(status: number, corp: Record<string, unknown>): Response
 export const esteId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
 export const esteObiect = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
-// Corpul citit cu limită de octeți (un corp mai mare nu se citește întreg în memorie). null = prea mare / JSON invalid.
+// Corpul citit ÎN FLUX cu limită de octeți: se oprește la depășire (un corp mare fără Content-Length nu se citește întreg — review
+// Jakarinos r1 P2), apoi UTF-8 strict și JSON.
 export async function citesteCorp(req: Request, maxOcteti: number): Promise<{ ok: true; corp: unknown } | { ok: false; status: number; error: string }> {
   const lung = Number(req.headers.get('content-length') || '0')
-  if (lung > maxOcteti) return { ok: false, status: 413, error: 'Corp prea mare' }
-  const txt = await req.text()
-  if (new TextEncoder().encode(txt).length > maxOcteti) return { ok: false, status: 413, error: 'Corp prea mare' }
-  try { return { ok: true, corp: JSON.parse(txt) } } catch (_) { return { ok: false, status: 400, error: 'Corp JSON invalid' } }
+  if (!(lung >= 0) || lung > maxOcteti) return { ok: false, status: 413, error: 'Corp prea mare' }
+  if (!req.body) return { ok: false, status: 400, error: 'Corp lipsă' }
+  const cititor = req.body.getReader(); const bucati: Uint8Array[] = []; let n = 0
+  for (;;) {
+    const { done, value } = await cititor.read()
+    if (done) break
+    n += value.length
+    if (n > maxOcteti) { try { await cititor.cancel() } catch (_) { /* fluxul se închide oricum */ } return { ok: false, status: 413, error: 'Corp prea mare' } }
+    bucati.push(value)
+  }
+  const tot = new Uint8Array(n); let o = 0
+  for (const b of bucati) { tot.set(b, o); o += b.length }
+  try { return { ok: true, corp: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(tot)) } } catch (_) { return { ok: false, status: 400, error: 'Corp JSON invalid' } }
 }
 
 // Eroarea unui RPC (mesajele sunt ale noastre, RAISE din migrarea 20261029b) → cod HTTP. Fără detalii interne în afara mesajului.
@@ -62,6 +72,8 @@ export const OPERATII: Record<string, Op> = {
   comparatie_gata: { fn: 'fn_ofertare_ocr_comparatie_gata', arg: { rulare_id: 'p_rulare_id', nr: 'p_nr', sha256: 'p_sha256' } },
   stare: { fn: 'fn_ofertare_ocr_stare', arg: { rulare_id: 'p_rulare_id', stare: 'p_stare', motiv: 'p_motiv' }, nule: ['motiv'] },
   rezervare_abandon: { fn: 'fn_ofertare_ocr_rezervare_abandon', arg: { rezervare_id: 'p_rezervare_id' } },
+  // needs_human FĂRĂ apel plătit (structura_tabele sau orice dezacord trimis direct la om) — migrarea 20261029c
+  needs_human: { fn: 'fn_ofertare_ocr_arbitraj_om', arg: { rulare_id: 'p_rulare_id', dezacord_id: 'p_dezacord_id', item_sha256: 'p_item_sha256', motiv: 'p_motiv' } },
   heartbeat: { fn: 'fn_ofertare_ocr_heartbeat', arg: { ok: 'p_ok', mesaj: 'p_mesaj' } },
 }
 
@@ -83,39 +95,18 @@ export function apelDinCorp(corp: unknown): Apel {
   return { ok: true, fn: op.fn, args }
 }
 
-// ── amprenta unui dezacord, IDENTICĂ cu scripts/ocr_local/compare.py item_hash: sha256 peste
-// json.dumps({k: v pentru k ≠ item_sha256}, ensure_ascii=False, sort_keys=True) — separatori „, ” și „: ”, șirurile ca JSON.
-// Doar tipurile pe care le produce compare.py (șir, bool, null, întreg, listă, obiect); orice altceva → excepție (fail closed).
-export function canonic(v: unknown): string {
-  if (v === null) return 'null'
-  if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (typeof v === 'number') {
-    if (!Number.isSafeInteger(v)) throw new Error('număr neîntreg în dezacord')
-    return String(v)
-  }
-  if (typeof v === 'string') return JSON.stringify(v)
-  if (Array.isArray(v)) return '[' + v.map(canonic).join(', ') + ']'
-  if (esteObiect(v)) return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ': ' + canonic(v[k])).join(', ') + '}'
-  throw new Error('tip nepermis în dezacord')
-}
-
 export async function sha256Hex(date: Uint8Array | string): Promise<string> {
   const b = typeof date === 'string' ? new TextEncoder().encode(date) : date
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(b)))
   return Array.from(h, (x) => x.toString(16).padStart(2, '0')).join('')
 }
 
-export async function amprentaDezacord(item: Record<string, unknown>): Promise<string> {
-  const { item_sha256: _ignorat, ...rest } = item
-  return await sha256Hex(canonic(rest))
-}
-
-// Tipul imaginii după primii octeți (doar formatele acceptate de API); null = altceva.
-export function tipImagine(b: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | null {
-  if (b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png'
-  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg'
-  if (b.length > 12 && String.fromCharCode(...b.slice(0, 4)) === 'RIFF' && String.fromCharCode(...b.slice(8, 12)) === 'WEBP') return 'image/webp'
-  return null
+// Imaginea benzii e PNG (scripts/ocr_local/plan.py): lățimea și înălțimea din IHDR, pentru limita de cost. null = nu e PNG valid.
+export function dimensiuniPng(b: Uint8Array): { w: number; h: number } | null {
+  const sem = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  if (b.length < 33 || sem.some((x, i) => b[i] !== x) || String.fromCharCode(...b.slice(12, 16)) !== 'IHDR') return null
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength), w = v.getUint32(16), h = v.getUint32(20)
+  return w >= 1 && h >= 1 && w <= 20000 && h <= 20000 ? { w, h } : null
 }
 
 export function dinBase64(s: string): Uint8Array | null {
@@ -124,16 +115,20 @@ export function dinBase64(s: string): Uint8Array | null {
 }
 
 // ── arbitrajul: costul și ieșirea strictă (spec §3) ──
+// Limita de SUS a costului unui apel (review Copilot r1 / Jakarinos r1 P1): un token de text are cel puțin un octet UTF-8, deci
+// tokenii de text ≤ octeții promptului + ai datelor; imaginea: formula documentată (lățime × înălțime / 750, imaginile mari doar
+// se micșorează) dublată ca marjă; plus ambalajul mesajului; ieșirea ≤ max_tokens. Costul real nu poate depăși rezervarea decât dacă
+// prețul sau tokenizarea se schimbă — caz tratat separat (decontare la rezervare, needs_human, rularea oprită, excesul în jurnal).
 export const PRET_IN = 3 / 1e6, PRET_OUT = 15 / 1e6
 export const MAX_TOKENI_IESIRE = 1024
-export const TOKENI_IMAGINE_MAX = 5000  // margine sus pentru o bandă (API-ul redimensionează imaginile mari)
+export const AMBALAJ_TOKENI = 300
 export const rotunjesteSus = (x: number): number => Math.ceil(x * 1e4 - 1e-9) / 1e4
-
-// Rezervarea înaintea apelului: margine sus (≈ 2 caractere / token, imaginea la plafon, ieșirea la max_tokens).
-export function estimeazaRezervare(caractereText: number): number {
-  return rotunjesteSus((Math.ceil(caractereText / 2) + TOKENI_IMAGINE_MAX) * PRET_IN + MAX_TOKENI_IESIRE * PRET_OUT)
+export const tokeniImagineMax = (w: number, h: number): number => 2 * Math.ceil((w * h) / 750)
+export function limitaCost(octetiText: number, w: number, h: number): number {
+  return rotunjesteSus((octetiText + tokeniImagineMax(w, h) + AMBALAJ_TOKENI) * PRET_IN + MAX_TOKENI_IESIRE * PRET_OUT)
 }
 export const costReal = (tokIn: number, tokOut: number): number => rotunjesteSus(tokIn * PRET_IN + tokOut * PRET_OUT)
+export const octeti = (s: string): number => new TextEncoder().encode(s).length
 
 export type Decizie = { decizie: 'ales_lighton' | 'ales_mineru' | 'text_propus' | 'needs_human'; text: string; motiv: string; e_cantitate: boolean; anomalie_separator: boolean }
 const CHEI_IESIRE = ['anomalie_separator', 'decizie', 'e_cantitate', 'motiv', 'text']

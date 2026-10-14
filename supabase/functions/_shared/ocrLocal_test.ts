@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import {
-  ANTET_OCR, NUME_SECRET, OPERATII, amprentaDezacord, apelDinCorp, canonic, costReal, decizieDinIesire, dinBase64, esteApelOcrLocal,
-  estimeazaRezervare, MAX_TOKENI_IESIRE, sha256Hex, statusDinEroare, tipImagine,
+  ANTET_OCR, NUME_SECRET, OPERATII, apelDinCorp, citesteCorp, costReal, decizieDinIesire, dimensiuniPng, dinBase64, esteApelOcrLocal,
+  limitaCost, MAX_TOKENI_IESIRE, octeti, sha256Hex, statusDinEroare, tokeniImagineMax,
 } from './ocrLocal.ts'
 
 const BUN = 'a'.repeat(32) + '0123456789abcdef0123456789abcdef'
@@ -19,6 +19,11 @@ function client(rasp: { data?: unknown; error?: unknown; arunca?: boolean } = {}
 const cerere = (antet?: string) => new Request('https://local.invalid/functions/v1/ofertare-ocr-scrie', {
   method: 'POST', headers: antet === undefined ? {} : { [ANTET_OCR]: antet },
 })
+// PNG minim: semnătura + IHDR cu lățime / înălțime
+function png(w: number, h: number): Uint8Array {
+  const b = new Uint8Array(40); b.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82])
+  const v = new DataView(b.buffer); v.setUint32(16, w); v.setUint32(20, h); return b
+}
 
 Deno.test('poarta: fără antet / alt format → refuz fără apel în BD', async () => {
   for (const a of [undefined, '', 'abc', BUN.slice(1), BUN + '0', BUN.toUpperCase(), 'g'.repeat(64)]) {
@@ -37,14 +42,15 @@ Deno.test('poarta: secretul verificat în BD cu numele OCR_LOCAL_SECRET; doar da
 })
 
 Deno.test('ocr-scrie: doar operațiile din listă, exact cheile, null doar unde e permis', () => {
-  assert.deepEqual(Object.keys(OPERATII).sort(), ['comparatie_gata', 'dezacord', 'heartbeat', 'pagina', 'plan', 'preia', 'rezervare_abandon', 'stare'])
-  for (const fn of Object.values(OPERATII).map((o) => o.fn)) assert.ok(!/pdf|cost_rezerva|scrie_arbitraj|cerere|verifica|esantion|anuleaza/.test(fn), fn)
+  assert.deepEqual(Object.keys(OPERATII).sort(), ['comparatie_gata', 'dezacord', 'heartbeat', 'needs_human', 'pagina', 'plan', 'preia', 'rezervare_abandon', 'stare'])
+  for (const fn of Object.values(OPERATII).map((o) => o.fn)) assert.ok(!/pdf|cost_rezerva|arbitraj_rezerva|scrie_arbitraj|dezacord_arbitraj|cerere|verifica|esantion|anuleaza/.test(fn), fn)
+  assert.equal(OPERATII.needs_human.fn, 'fn_ofertare_ocr_arbitraj_om')
   const ok = apelDinCorp({ op: 'stare', args: { rulare_id: 5, stare: 'citita', motiv: null } })
   assert.deepEqual(ok, { ok: true, fn: 'fn_ofertare_ocr_stare', args: { p_rulare_id: 5, p_stare: 'citita', p_motiv: null } })
   for (const corp of [null, [], 'x', { op: 'stare' }, { op: 'stare', args: [] }, { op: 'cost_rezerva', args: {} }, { op: 'toString', args: {} },
     { op: '__proto__', args: {} }, { op: 'stare', args: { rulare_id: 5, stare: 'citita' } },
     { op: 'stare', args: { rulare_id: 5, stare: 'citita', motiv: null, extra: 1 } }, { op: 'stare', args: { rulare_id: null, stare: 'x', motiv: null } },
-    { op: 'stare', args: { rulare_id: 5, stare: 'citita', motiv: null }, alt: 1 }]) {
+    { op: 'stare', args: { rulare_id: 5, stare: 'citita', motiv: null }, alt: 1 }, { op: 'needs_human', args: { rulare_id: 1, dezacord_id: 2, item_sha256: 'h', motiv: null } }]) {
     assert.equal(apelDinCorp(corp).ok, false, JSON.stringify(corp))
   }
   const p = apelDinCorp({ op: 'pagina', args: { rulare_id: 1, document_id: 2, pagina: 3, banda: 0, cititor: 'lighton', text: 't', stare: 'citit',
@@ -58,34 +64,31 @@ Deno.test('erori RPC → coduri HTTP', () => {
   assert.equal(statusDinEroare({ code: 'XX000' }), 500); assert.equal(statusDinEroare(null), 500)
 })
 
-// Paritatea amprentei cu scripts/ocr_local/compare.py item_hash: fișierul e generat de Python (testul Python
-// test_amprente_edge_identice îl recalculează), aici se recalculează în TS.
-Deno.test('amprenta dezacordului = compare.item_hash (Python), inclusiv caractere speciale', async () => {
-  const fixt = JSON.parse(await Deno.readTextFile(new URL('./ocrLocal_amprente.json', import.meta.url)))
-  assert.ok(fixt.length >= 3)
-  for (const it of fixt) assert.equal(await amprentaDezacord(it), it.item_sha256, it.id)
-  const alt = { ...fixt[0], citire_lighton: fixt[0].citire_lighton + ' ' }
-  assert.notEqual(await amprentaDezacord(alt), fixt[0].item_sha256)
-})
-Deno.test('canonic: tipuri nepermise → excepție', () => {
-  assert.throws(() => canonic(1.5)); assert.throws(() => canonic({ a: undefined })); assert.throws(() => canonic(NaN))
-  assert.equal(canonic({ b: [1, true, null], a: '' }), '{"a": "", "b": [1, true, null]}')
+Deno.test('corp: citit în flux, oprit la limită și fără Content-Length (Jakarinos r1 P2)', async () => {
+  let trimis = 0
+  const flux = new ReadableStream<Uint8Array>({ pull(ctl) { trimis += 1000; ctl.enqueue(new Uint8Array(1000)); if (trimis >= 1_000_000) ctl.close() } })
+  const r = await citesteCorp(new Request('https://x.invalid', { method: 'POST', body: flux, duplex: 'half' } as RequestInit), 4096)
+  assert.deepEqual(r, { ok: false, status: 413, error: 'Corp prea mare' }); assert.ok(trimis < 20_000, String(trimis))
+  assert.deepEqual(await citesteCorp(new Request('https://x.invalid', { method: 'POST', body: '{"a":1}' }), 4096), { ok: true, corp: { a: 1 } })
+  assert.equal((await citesteCorp(new Request('https://x.invalid', { method: 'POST', body: '{"a":' }), 4096)).ok, false)
+  assert.equal((await citesteCorp(new Request('https://x.invalid', { method: 'POST', body: new Uint8Array([0x7b, 0xff, 0x7d]) }), 4096)).ok, false)
 })
 
-Deno.test('imagine: tip după octeți, base64 strict, sha', async () => {
-  assert.equal(tipImagine(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0])), 'image/png')
-  assert.equal(tipImagine(new Uint8Array([0xff, 0xd8, 0xff, 0xe0])), 'image/jpeg')
-  assert.equal(tipImagine(new TextEncoder().encode('%PDF-1.7 aaaa')), null)
+Deno.test('imagine: doar PNG cu dimensiuni din IHDR; base64 strict; sha', async () => {
+  assert.deepEqual(dimensiuniPng(png(1600, 400)), { w: 1600, h: 400 })
+  assert.equal(dimensiuniPng(png(0, 400)), null); assert.equal(dimensiuniPng(png(30000, 10)), null)
+  assert.equal(dimensiuniPng(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...new Array(40).fill(0)])), null)
   assert.equal(dinBase64('a b'), null); assert.equal(dinBase64('abc'), null); assert.deepEqual(dinBase64('YQ=='), new Uint8Array([97]))
   assert.equal(await sha256Hex(''), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
 })
 
-Deno.test('cost: rezervarea acoperă costul real maxim', () => {
-  const textCar = 9000, rez = estimeazaRezervare(textCar)
-  // cel mai rău caz real: 1 token / 2 caractere + imaginea la plafon + ieșirea la max_tokens
-  assert.ok(costReal(Math.ceil(textCar / 2) + 5000, MAX_TOKENI_IESIRE) <= rez)
-  assert.equal(costReal(3000, 300), 0.0135); assert.equal(costReal(3001, 300), 0.0136)  // rotunjire în sus, fără eroare de virgulă mobilă
-  assert.ok(rez < 0.1)
+Deno.test('cost: limita = octeți text + imaginea (formula × 2) + ambalaj + max ieșire; rotunjire în sus', () => {
+  assert.equal(tokeniImagineMax(1500, 750), 3000)
+  const lim = limitaCost(octeti('ăș€'), 1500, 750)  // 7 octeți
+  assert.equal(lim, Math.ceil(((7 + 3000 + 300) * 3e-6 + MAX_TOKENI_IESIRE * 15e-6) * 1e4 - 1e-9) / 1e4)
+  // orice consum real care respectă „un token ≥ un octet” și formula imaginii încape
+  assert.ok(costReal(7 + 1500 + 300, MAX_TOKENI_IESIRE) <= lim)
+  assert.equal(costReal(3000, 300), 0.0135); assert.equal(costReal(3001, 300), 0.0136)
 })
 
 Deno.test('ieșirea arbitrului: schema strictă, altfel needs_human', () => {
