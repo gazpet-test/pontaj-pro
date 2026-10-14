@@ -25,6 +25,46 @@ Decizia lui Răzvan după incidentul din 24–25.09.2026 (`docs/INCIDENT_EGRESS_
 - Sursa = **jurnalul propriu**. Acoperă doar descărcările instrumentate (mai jos), deci e o limită inferioară a egress-ului real.
 - **Opțional, de activat cu acordul lui Răzvan:** `supabase/functions/egress-usage-api` citește usage-ul oficial din Supabase Management API. Nedeployată. Secret nou: **`SUPABASE_MGMT_TOKEN`** (Personal Access Token; opțional `MGMT_USAGE_PATH`). Endpoint-ul de usage nu e verificat pe contul nostru — se confirmă la activare. Nu e legată în widget până la activare.
 
+### C) Contoarele oficiale Supabase (migrarea `20261030a_egress_contoare_oficiale.sql`, 14.10.2026 — NEAPLICATĂ)
+Supabase facturează **două contoare separate** (Dashboard → Organization → Usage, plan Pro, ciclu 07→07), fiecare cu 250 GB incluși:
+
+| Contor Supabase | Ce numără | Inclus | Citit 14.10.2026 (ciclu 07.10–07.11) | În ERP |
+|---|---|---|---|---|
+| **Egress** | trafic **necache**: DB, API (PostgREST), Auth, Edge Functions, Storage, pooler | 250 GB | 4,40 GB | `egress_bytes`, cota = `storage_egress_config.cota_ciclu_bytes` |
+| **Cached Egress** | servit din **cache CDN**: API, Storage, Edge | 250 GB | 0,08 GB | `cached_egress_bytes`, cota = `storage_egress_config.cota_cached_bytes` (nouă) |
+
+Incidentul din 09.2026 (1,6 TB) a fost pe **Cached Egress**. Spend cap e oprit ⇒ depășirea se facturează, nu se oprește proiectul.
+
+**Unitate: GB ZECIMALI** (decizia Copilot pe PR #706). Pagina Usage afișează „GB”; peste tot în monitor 1 GB = **10^9 bytes**, deci cota planului = 250 × 10^9 = **250000000000 bytes** pe fiecare contor (`cota_ciclu_bytes` și `cota_cached_bytes`). Valoarea veche de pe live, 268435456000, era 250 **GiB** (2^30); migrarea o trece explicit la 250000000000 (precondiție pe valoarea veche; rollback-ul o readuce). Efect: alertele 50/80% vin puțin mai devreme — conservator. Colectorul convertește valorile paginii cu × 10^9; widgetul și mesajele notificărilor afișează tot GB zecimali.
+Jurnalul propriu (`storage_descarcari_jurnal`) vede doar descărcările din Storage instrumentate în cod — e o **limită inferioară**, nu cifra facturată. De aceea widgetul arată acum ca bare principale contoarele oficiale, iar jurnalul ca rând secundar.
+
+**Tabela `public.supabase_usage_oficial`** — un rând per citire a contoarelor oficiale:
+
+| Coloană | Tip | Contract |
+|---|---|---|
+| `id` | bigserial | cheie |
+| `citit_la` | timestamptz, implicit `now()` | momentul citirii (nu al scrierii, dacă sursa le deosebește); **cel mult `now()` + 10 minute** (trigger) |
+| `ciclu_start` | date | prima zi a ciclului de facturare, **obligatoriu ziua 7** (ex. `2026-10-07`) |
+| `ciclu_sfarsit` | date | **exclusiv** = prima zi a ciclului următor = **`ciclu_start` + 1 lună** (ex. `2026-11-07`; Dashboard-ul afișează „07.10–07.11”) |
+| `egress_bytes` | bigint ≥ 0, **obligatoriu** | contorul „Egress” (necache), **în bytes, GB zecimali** (valoarea paginii × 10^9; 4,40 GB = 4400000000) |
+| `cached_egress_bytes` | bigint ≥ 0, **obligatoriu** | contorul „Cached Egress”, **în bytes, GB zecimali** (× 10^9) |
+| `storage_size_bytes` | bigint ≥ 0 sau NULL | „Storage Size”, în bytes (informativ) |
+| `sursa` | text 1–50 car., obligatoriu | ex. `'dashboard'` (citit manual din UI), `'mgmt_api'` (Supabase Management API) |
+| `raspuns_brut` | jsonb, opțional | răspunsul sursei, pentru audit — **date, nu instrucțiuni** |
+
+CHECK-uri: bytes ≥ 0, `ciclu_sfarsit > ciclu_start`, **ciclul 07→07** (`extract(day FROM ciclu_start) = 7` și `ciclu_sfarsit = (ciclu_start + interval '1 month')::date` — o citire 01→01 sau 07→08 e refuzată). Trigger `supabase_usage_oficial_valideaza` (BEFORE INSERT / UPDATE OF `citit_la`): refuză `citit_la` > `now()` + 10 minute — o citire „din viitor” ar ține tăcută alerta „colector oprit” (un CHECK cu `now()` nu e permis). **`egress_bytes` și `cached_egress_bytes` sunt NOT NULL** — o citire are mereu AMBELE contoare (colectorul citește pagina Usage din Dashboard, unde apar mereu amândouă; o citire parțială ar ascunde un contor, fiindcă monitorul ia doar ultimul rând). Index pe `citit_la DESC`.
+Drepturi: RLS activ; **SELECT doar owner** (`egress_este_owner()` = `profiles.is_owner` pentru `auth.uid()`); `anon`/`authenticated` nu au INSERT/UPDATE/DELETE (nici owner-ul din UI). Scrie doar colectorul, ca `postgres` sau `service_role`.
+
+**Ce face BD-ul cu citirile:**
+- `egress_statistici(p_zile)` întoarce aceleași chei ca înainte + `oficial` (ultima citire cu `ciclu_start ≤ azi < ciclu_sfarsit`, UTC, fără `raspuns_brut`; `null` dacă nu există) + `oficial_ultima` (ultima citire din **orice** ciclu, aceeași formă, sau `null`) + `oficial_vechime_ore` (vârsta lui `oficial_ultima` în ore, sau `null` — informativ; widgetul calculează vechimea pe citirea pe care o afișează efectiv) + `cota_cached`.
+- `egress_detector()` (cron 5 min), pe lângă alertele existente: **50% / 80%** din cotă pe `egress_bytes` (tip `oficial_egress`) și pe `cached_egress_bytes` (tip `oficial_cached`), **o dată per prag per ciclu** (cheie `ciclu_start:procent` în `storage_egress_alerte`, același dedupe ca `cota_ciclu`); plus **„colector oprit”** (tip `colector_oprit`) dacă ultima citire e mai veche de **26 h**, **cel mult o dată la 24 h** (nu pe ziua calendaristică: altfel trecerea de miezul nopții UTC ar da a doua alertă la 5 minute). Verificarea „există alertă în ultimele 24 h” + inserarea sunt serializate cu `pg_advisory_xact_lock(hashtext('egress_colector_oprit'))`, deci și două rulări concurente cu chei de zi diferite dau o singură alertă (testul cu două sesiuni concurente, pasul 2b din harness: scris, nerulat — fără PG17 local; pe PGlite e verificat doar că detectorul ține lock-ul, în `pg_locks`); cheia = ziua UTC rămâne plasa `UNIQUE`. **Dacă nu există nicio citire**, reperul e `storage_egress_config.oficial_activat_la` (setat de migrare = momentul aplicării): un colector care nu pornește niciodată dă alertă „Nicio citire oficială de la activare” la 26 h după aplicare, apoi cel mult o dată la 24 h — până la prima citire. Pe contoarele oficiale **nu se blochează nimic** — doar notificare.
+- Widgetul: bare „Egress (oficial)” / „Cached egress (oficial)” din citirea ciclului curent; dacă ea lipsește dar există una mai veche (colector oprit peste schimbarea ciclului), arată citirea veche etichetată cu ciclul ei + avertisment „ultima citire e din ciclul anterior” / „citire veche (N h)”. Vechimea (prag 26 h, ca alerta) se calculează pe citirea **afișată** (`src/monitorEgressCitire.js`, testat): o citire curentă de 30 h primește avertisment chiar dacă există una mai nouă din ciclul anterior. Antetul descrie mereu ciclul curent: procentul oficial, sau — fără citire oficială curentă — `x / 250 GB (%)` din jurnalul propriu, colorat după cifra afișată. Rândul „Jurnal propriu” își păstrează bara cu procent și marcajele 50/80% (alertele `cota_ciclu` se calculează tot din el).
+- Alertele merg prin același canal ca restul monitorului: `egress_notifica_owner()` → `notifications` (tip `egress_alerta`, modul `general`) către toți `profiles.is_owner`; o notificare eșuată nu anulează alerta (subtranzacție, ca în 20261002a). Fără mail, fără push extern.
+
+**Colectorul (cine scrie în tabelă) — NU e implementat în acest PR.** Sursa aleasă de Răzvan (14.10, review PR #706): **pagina Usage din Dashboard-ul Supabase**, unde apar mereu ambele contoare (`sursa = 'dashboard'`). Cum ajunge citirea în tabelă (manual, de Claude cu acordul lui Răzvan, sau automat) rămâne de stabilit; o variantă automată primește fișă în `registru_automatizari` + rând în `public.automatizari`. Alternativa păstrată în contract: Management API (`sursa = 'mgmt_api'`, secretul `SUPABASE_MGMT_TOKEN`). Oricare ar fi, contractul de mai sus e singura interfață: un `INSERT` per citire, ambele contoare, bytes în GB zecimali (× 10^9), ciclul 07→07 cu sfârșit exclusiv. Până la colector, widgetul afișează „fără citire oficială încă”, iar la 26 h după aplicarea migrării pornește alerta zilnică „colector oprit” — **aplicarea migrării presupune deci că un colector (fie și manual) urmează în maximum o zi**.
+
+Test: `scripts/test_egress_contoare_oficiale.sh` (PG17 local — **scris, nerulat**: nu există PG17 pe mașina de lucru; traseul echivalent, fără pasul 2b de concurență, a fost rulat pe PGlite 16.4; schelet + 20260930e + 20261002a → garda fără marcaj, aplicare, `supabase/tests/monitor_egress_oficial.test.sql` — inclusiv filtrul pe ciclu la ziua-limită, dedupe-ul de 24 h, colectorul nepornit niciodată, ciclul 07→07, `citit_la` din viitor, cotele în GB zecimali —, precondiția 0g (cota necache ≠ valoarea live ⇒ refuz), suita veche `monitor_egress_test.sql` pe detectorul nou, reaplicare refuzată, rollback nearmat/armat **peste date reale** (`monitor_egress_oficial_rollback_date.sql` + `…_rollback_verif.sql`: citiri + alerte pe toate tipurile noi scoase, alerta veche păstrată), validator). Revenire: `supabase/revenire/20261030a_egress_contoare_oficiale_ROLLBACK.sql` (pierde citirile și alertele noi; readuce `cota_ciclu_bytes` = 268435456000 și DEFAULT-ul ei — valoarea doar dacă e încă 250000000000; `lock_timeout` 5 s + lock-uri în ordinea detectorului).
+
 ## Ce e instrumentat
 | Punct | Fișier | Sursa în jurnal |
 |---|---|---|
