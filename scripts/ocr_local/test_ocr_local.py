@@ -20,6 +20,7 @@ TABLE_A = ('<table><tr><th>Nr. crt.</th><th>Simbol</th><th>Denumire</th><th>U.M.
            '<tr><td>1.</td><td>TSD04A1</td><td>Umplutură compactată</td><td>100mc</td><td>0,056</td></tr>'
            '<tr><td>2.</td><td>W2H04A1</td><td>Strat de nisip în şanț</td><td>mc</td><td>0,80</td></tr></table>')
 TABLE_B = TABLE_A.replace('0,056', '0.056').replace('şanț', 'șanț')
+POLICY = {'modele_admise': ['claude-sonnet-5'], 'prompt_versiuni_admise': ['t1']}
 BAND = {'id': 'p0001_b0', 'page': 1, 'kind': 'quantity_table', 'image': 'page0001/p0001_b0.png', 'image_sha256': '0' * 64}
 OK = {'ok': True}
 
@@ -73,7 +74,9 @@ class Plan(unittest.TestCase):
             pdf.new_page(); pdf.new_page(); pdf.save(p / 'a.pdf'); pdf.close()
             doc = plan(p / 'a.pdf', p / 'out', pages=[1, 3], clockwise=0)
             self.assertEqual([x['page'] for x in doc['pages']], [1, 3])
-            self.assertEqual(doc['pages'][0]['route'], 'text_nativ'); self.assertEqual(doc['pages'][1]['route'], 'exclus_neclasificat')
+            # textul nativ e doar semnal: pagina NU ocoleste dubla citire
+            self.assertIn('text_nativ_prezent', [s['type'] for s in doc['pages'][0]['signals']]); self.assertNotEqual(doc['pages'][0]['route'], 'text_nativ')
+            self.assertEqual(doc['pages'][1]['route'], 'exclus_neclasificat')
             with self.assertRaises(ValueError): plan(p / 'a.pdf', p / 'out2', pages=[9])
 
 class Citire(unittest.TestCase):
@@ -113,24 +116,53 @@ class Citire(unittest.TestCase):
             def fake(data, o, cfg, dl):
                 calls.append(o); (o / 'request_started.json').write_text('{}'); return 'text', {'ok': True}
             with patch.dict(RD.FUNCS, {'lighton': fake}):
-                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, lock=False)
+                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False, lock=False)
                 self.assertEqual(st['status'], 'complete'); n = len(calls)
-                st = RD.run_reader(out, 'lighton', run_id='t2', check_weights=False, lock=False)
+                st = RD.run_reader(out, 'lighton', run_id='t2', check_weights=False, check_server=False, lock=False)
                 self.assertEqual(st['skipped_existing'], n); self.assertEqual(len(calls), n)
     def test_banda_inceputa_neterminata_nu_se_reincearca(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); b = load_plan(out)['bands'][0]
             o = out / 'page0001' / b['id'] / 'mineru'; o.mkdir(parents=True); (o / 'request_started.json').write_text('{}')
             with patch.dict(RD.FUNCS, {'mineru': lambda *a: self.fail('nu trebuia apelat')}):
-                st = RD.run_reader(out, 'mineru', run_id='t', check_weights=False, lock=False)
+                st = RD.run_reader(out, 'mineru', run_id='t', check_weights=False, check_server=False, lock=False)
             self.assertEqual(st['status'], 'interrupted_needs_review')
+    def test_rezultat_existent_incompatibil_nu_se_refoloseste(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); b = load_plan(out)['bands'][0]
+            o = out / 'page0001' / b['id'] / 'lighton'; o.mkdir(parents=True); (o / 'raw.txt').write_text('x')
+            (o / 'result.json').write_text(json.dumps({'ok': True, 'reader': 'lighton', 'protocol': 'alt-protocol', 'weights_sha256': None,
+                                                       'image_sha256': b['image_sha256'], 'raw_sha256': hashlib.sha256(b'x').hexdigest()}))
+            with patch.dict(RD.FUNCS, {'lighton': lambda *a: self.fail('nu trebuia apelat')}):
+                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False, lock=False)
+            self.assertEqual(st['status'], 'interrupted_needs_review')
+    def test_termen_depasit_pastreaza_gpu_lock(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); lock = pathlib.Path(d) / 'gpu.lock'
+            def fake(data, o, cfg, dl): (o / 'request_started.json').write_text('{}'); return '', {'ok': False, 'signal': 'deadline'}
+            with patch.dict(RD.FUNCS, {'mineru': fake}), patch('ocr_local.read.protocol', return_value=dict(RD.protocol(), gpu_lock=str(lock))):
+                st = RD.run_reader(out, 'mineru', run_id='t', check_weights=False, check_server=False)
+            self.assertTrue(st['gpu_lock_pastrat']); self.assertTrue(lock.exists()); self.assertIn('pastrat', lock.read_text())
+    def test_server_cu_alt_model_refuzat(self):
+        cfg = RD.protocol()['readers']['lighton']
+        with patch('ocr_local.read.http.client.HTTPConnection') as C:
+            C.return_value.getresponse.return_value.status = 200
+            C.return_value.getresponse.return_value.read.return_value = json.dumps({'data': [{'id': 'LightOnOCR2', 'root': '/alt/folder'}]}).encode()
+            with self.assertRaises(RuntimeError): RD.verify_server(cfg)
+            C.return_value.getresponse.return_value.read.return_value = json.dumps({'data': [{'id': 'LightOnOCR2', 'root': cfg['served_root']}]}).encode()
+            self.assertTrue(RD.verify_server(cfg))
+    def test_plan_cu_cale_falsificata_refuzat(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); doc = json.loads((out / 'plan.json').read_text(encoding='utf-8'))
+            doc['bands'][0]['image'] = '../evil.png'; (out / 'plan.json').write_text(json.dumps(doc))
+            with self.assertRaises(ValueError): load_plan(out)
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []
             def fake(data, o, cfg, dl):
                 calls.append(1); (o / 'request_started.json').write_text('{}'); return '', {'ok': False, 'signal': 'deadline'}
             with patch.dict(RD.FUNCS, {'lighton': fake}):
-                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, lock=False)
+                st = RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False, lock=False)
             self.assertEqual(st['status'], 'stopped_no_retry'); self.assertEqual(len(calls), 1)
 
 class Comparare(unittest.TestCase):
@@ -148,6 +180,11 @@ class Comparare(unittest.TestCase):
         b = TABLE_A.replace('</table>', '<tr><td>3.</td><td>TSD01C1</td><td>Împrăștiat pământ</td><td>mc</td><td>0,80</td></tr></table>')
         s, its = compare_band(BAND, TABLE_A, OK, b, OK)
         miss = [i for i in its if i['tip'] == 'rand_lipsa_lighton']; self.assertEqual(len(miss), 1); self.assertIsNotNone(miss[0]['ancora_lighton'])
+    def test_semn_exponent_procent_operator_raman_dezacorduri(self):
+        for a, b in (('cantitate -5 mc', 'cantitate 5 mc'), ('abatere ±0,5', 'abatere 0,5'), ('1e-3 kg', '1e3 kg'), ('pantă 5%', 'pantă 5'), ('10**2 mc', '102 mc')):
+            s, its = compare_band(BAND, a, OK, b, OK); self.assertEqual(len(its), 1, (a, b)); self.assertTrue(its[0]['diferenta_numerica'], (a, b))
+    def test_bold_markdown_doar_pe_perechi(self):
+        s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
         s, its = compare_band(BAND, TABLE_A, OK, '1. TSD04A1 Umplutură compactată 100mc 0,056', OK); self.assertEqual(s['structura'], 'diferita')
     def test_citire_incompleta_trimite_banda_intreaga(self):
@@ -178,9 +215,12 @@ class Reconciliere(unittest.TestCase):
             (o / 'raw.txt').write_text(raw, encoding='utf-8')
             (o / 'result.json').write_text(json.dumps({'ok': True, 'image_sha256': band['image_sha256'], 'raw_sha256': hashlib.sha256(raw.encode()).hexdigest()}))
         _, items = compare(out)
-        (out / 'dec.jsonl').write_text('\n'.join(json.dumps(dict(x, id=items[i]['id']) if 'id' not in x else x) for i, x in enumerate(decizii)), encoding='utf-8')
+        (out / 'dec.jsonl').write_text('\n'.join(json.dumps(dict({'id': items[i]['id'], 'item_sha256': items[i]['item_sha256']}, **x)) for i, x in enumerate(decizii)), encoding='utf-8')
         return reconcile(out, out / 'dec.jsonl'), items, out
-    def dec(self, decizie, text=''): return {'decizie': decizie, 'text': text, 'motiv': 'test', 'e_cantitate': True, 'anomalie_separator': True}
+    def setUp(self):
+        p = patch('ocr_local.reconcile.arbiter_policy', return_value=POLICY); p.start(); self.addCleanup(p.stop)
+    def dec(self, decizie, text=''): return {'decizie': decizie, 'text': text, 'motiv': 'test', 'e_cantitate': True, 'anomalie_separator': True,
+                                             'arbitru_model': 'claude-sonnet-5', 'prompt_versiune': 't1'}
     def test_ales_mineru_pe_cantitate(self):
         r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')])
         pg = r['pages'][0]; self.assertFalse(pg['needs_human']); self.assertIn('| 0.056 |', pg['text']); self.assertEqual(pg['arbitrat_de_claude_cantitati'], 1)
@@ -196,12 +236,26 @@ class Reconciliere(unittest.TestCase):
         r, items, out = self._run('lungime 1.250 m pe traseu', 'lungime 1.280 m pe traseu', [self.dec('text_propus', '1.258')])
         self.assertEqual(r['pages'][0]['text'], 'lungime 1.258 m pe traseu')
     def test_validare_schema(self):
-        self.assertTrue(valid_decision(self.dec('needs_human'))); self.assertFalse(valid_decision(self.dec('needs_human', 'x')))
-        self.assertFalse(valid_decision(self.dec('text_propus', ' '))); self.assertFalse(valid_decision(dict(self.dec('ales_lighton'), extra=1)))
-        self.assertFalse(valid_decision(dict(self.dec('ales_lighton'), e_cantitate='da')))
+        v = lambda d: valid_decision(d, None, POLICY)
+        self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))
+        self.assertFalse(v(self.dec('text_propus', ' '))); self.assertFalse(v(dict(self.dec('ales_lighton'), extra=1)))
+        self.assertFalse(v(dict(self.dec('ales_lighton'), e_cantitate='da')))
+        self.assertFalse(v(dict(self.dec('ales_lighton'), arbitru_model='alt-model'))); self.assertFalse(v(dict(self.dec('ales_lighton'), prompt_versiune=None)))
+        self.assertFalse(valid_decision(dict(self.dec('ales_lighton'), item_sha256='a'), {'item_sha256': 'b'}, POLICY))
+    def test_decizie_pe_alt_dezacord_respinsa(self):
+        r, items, out = self._run(TABLE_A, TABLE_B, [dict(self.dec('ales_mineru'), item_sha256='0' * 64)])
+        self.assertTrue(r['pages'][0]['needs_human']); self.assertEqual(r['invalid_decisions'][0]['motiv'], 'schema')
+    def test_prompt_neadmis_in_protocol_needs_human(self):
+        patch.stopall()
+        r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); self.assertTrue(r['pages'][0]['needs_human'])
+    def test_reconciliere_a_doua_oara_refuzata_fara_scriere(self):
+        r, items, out = self._run(TABLE_A, TABLE_B, [self.dec('ales_mineru')]); before = (out / 'reconciliat.json').read_bytes()
+        with self.assertRaises(FileExistsError): reconcile(out, out / 'dec.jsonl')
+        self.assertEqual((out / 'reconciliat.json').read_bytes(), before)
     def test_cusatura_benzi(self):
-        sig = []; out = join_bands(['unu doi trei patru cinci', 'trei patru cinci sase sapte'], sig)
-        self.assertEqual(out, 'unu doi trei patru cinci\nsase sapte'); self.assertEqual(sig[0]['type'], 'cusatura_suprapunere_taiata')
-        sig = []; join_bands(['unu doi', 'trei patru'], sig); self.assertEqual(sig[0]['type'], 'cusatura_fara_suprapunere')
+        a = 'rand unu al benzii\nrand doi cu opt tokeni aici gata\nrand trei final aici'
+        b = 'rand doi cu opt tokeni aici gata\nrand trei final aici\nrand patru nou'
+        sig = []; self.assertEqual(join_bands([a, b], sig), a + '\nrand patru nou'); self.assertEqual(sig[0]['type'], 'cusatura_suprapunere_taiata')
+        sig = []; self.assertIsNone(join_bands(['unu doi trei', 'trei patru'], sig)); self.assertEqual(sig[0]['type'], 'cusatura_nesigura')
 
 if __name__ == '__main__': unittest.main()

@@ -5,8 +5,12 @@ import difflib, hashlib, html, json, pathlib, re
 from .plan import load_plan, save
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
-TOKEN = re.compile(r'\d+(?:[.,]\d+)*|[^\W\d_]+', re.U)
-NUMBER = re.compile(r'^\d+(?:[.,]\d+)*$')
+# Numerele pastreaza semnul, exponentul si procentul; operatorii (* ^ / = x) sunt tokeni separati: -5 vs 5, 5% vs 5,
+# 1e-3 vs 1e3, 10**2 vs 102 raman dezacorduri (review Copilot r1). Restul punctuatiei nu se compara.
+NUM = r'[-+±−]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?[%‰]?'
+TOKEN = re.compile(NUM + r'|[^\W\d_]+|[*^/=×]', re.U)
+NUMBER = re.compile('^' + NUM + '$')
+BOLD = re.compile(r'\*\*(?=\S)(.+?)(?<=\S)\*\*', re.S)
 TABLE_HTML = re.compile(r'<table\b.*?</table\s*>', re.I | re.S)
 ROW_HTML = re.compile(r'<tr\b.*?</tr\s*>', re.I | re.S)
 CELL_HTML = re.compile(r'<t[dh]\b[^>]*>(.*?)</t[dh]\s*>', re.I | re.S)
@@ -16,7 +20,7 @@ CONTEXT = 6
 def norm_word(t): return t.translate(CEDILLA)
 
 def clean_inline(s):
-    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = re.sub(r'<[^>]+>', ' ', s); s = html.unescape(s).replace('**', '')  # bold markdown = formatare, nu continut
+    s = re.sub(r'<br\s*/?>', ' ', s, flags=re.I); s = re.sub(r'<[^>]+>', ' ', s); s = BOLD.sub(r'\1', html.unescape(s))  # doar perechile **text** (bold markdown); un ** izolat ramane
     return re.sub(r'\s+', ' ', s).strip()
 
 def html_rows(table):
@@ -35,7 +39,7 @@ def md_rows(lines):
 def plain(s):
     s = re.sub(r'<br\s*/?>|</p\s*>|</h\d\s*>|</li\s*>|</div\s*>', '\n', s, flags=re.I)
     s = html.unescape(re.sub(r'<[^>]+>', ' ', s))
-    s = re.sub(r'^\s*#{1,6}\s*', '', s, flags=re.M).replace('**', '')
+    s = BOLD.sub(r'\1', re.sub(r'^\s*#{1,6}\s*', '', s, flags=re.M))
     return re.sub(r'[ \t]+', ' ', s).strip()
 
 def segments(raw):
@@ -200,6 +204,12 @@ def compare_band(band, raw_a, res_a, raw_b, res_b):
         for it in ti: it['semnal'] = 'structura_diferita'; it['e_cantitate'] = it['diferenta_numerica']
     return {'band': band['id'], 'structura': structura, 'tokens': nt, 'rows': nr, 'disagreements': len(ti) + len(ri)}, ti + ri
 
+ITEM_FIELDS = ('plan_input_sha256', 'band', 'image_sha256', 'raw_sha256', 'tip', 'pozitie', 'citire_lighton', 'citire_mineru')
+
+def item_hash(it):
+    """Amprenta dezacordului: decizia arbitrului trebuie sa o poarte identic (o decizie veche nu se poate lipi pe alt dezacord)."""
+    return hashlib.sha256(json.dumps({k: it.get(k) for k in ITEM_FIELDS}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
 def compare(plan_dir):
     plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); summary = []; items = []
     for band in doc['bands']:
@@ -212,6 +222,7 @@ def compare(plan_dir):
                 raise ValueError('Legatura imagine/citire rupta pe %s/%s' % (band['id'], reader))
             got[reader] = (raw, res)
         s, its = compare_band(band, got['lighton'][0], got['lighton'][1], got['mineru'][0], got['mineru'][1])
+        for it in its: it['plan_input_sha256'] = doc['input_sha256']; it['item_sha256'] = item_hash(it)
         summary.append(s); items += its
     out = {'bands': len(summary), 'bands_identical': sum(1 for s in summary if s.get('disagreements') == 0),
            'disagreements': len(items), 'e_cantitate': sum(1 for i in items if i['e_cantitate']),

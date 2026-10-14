@@ -34,17 +34,34 @@ def verify_weights(cfg):
 
 @contextlib.contextmanager
 def gpu_lock(path, run_id):
-    """Lock-ul e al rularii: creat exclusiv la inceput, sters la final doar daca e tot al ei. Lock-ul altcuiva = refuz."""
-    path = pathlib.Path(path)
+    """Lock-ul e al rularii: creat exclusiv la inceput, sters la final doar daca e tot al ei. Lock-ul altcuiva = refuz.
+    Daca rularea seteaza holder['keep'] (cerere expirata: backend-ul poate lucra inca), lock-ul RAMANE - il ridica omul."""
+    path = pathlib.Path(path); holder = {'keep': False}
     try:
         with path.open('x', encoding='utf-8') as f: json.dump({'owner': 'ocr_local_ofertare', 'run_id': run_id, 'pid': os.getpid(), 'since': time.time()}, f)
     except FileExistsError:
         raise RuntimeError('GPU ocupat: %s exista (%s)' % (path, path.read_text(encoding='utf-8', errors='replace')[:200]))
-    try: yield
+    try: yield holder
     finally:
         try:
-            if json.loads(path.read_text(encoding='utf-8')).get('run_id') == run_id: path.unlink()
+            if holder['keep']:
+                path.write_text(json.dumps({'owner': 'ocr_local_ofertare', 'run_id': run_id, 'pid': os.getpid(), 'since': time.time(),
+                                            'pastrat': 'cerere expirata, backend neconfirmat idle - verifica serverul vLLM, apoi sterge manual'}), encoding='utf-8')
+            elif json.loads(path.read_text(encoding='utf-8')).get('run_id') == run_id: path.unlink()
         except (OSError, ValueError): pass
+
+def verify_server(cfg):
+    """Atestare minima: pe portul cititorului raspunde vLLM cu numele servit asteptat SI cu radacina = folderul greutatilor verificate
+    (served_root). Nu dovedeste ca nimeni n-a inlocuit fisierele dupa pornire - de aceea si SHA-ul fisierului la pornirea rularii."""
+    host, port = endpoint_parts(cfg['endpoint']); conn = http.client.HTTPConnection(host, port, timeout=10)
+    try:
+        conn.request('GET', '/v1/models'); r = conn.getresponse()
+        if r.status != 200: raise RuntimeError('Serverul %s raspunde HTTP %d' % (cfg['endpoint'], r.status))
+        data = json.loads(r.read()).get('data') or []
+    finally: conn.close()
+    if [(m.get('id'), m.get('root')) for m in data] != [(cfg['served_model_name'], cfg['served_root'])]:
+        raise RuntimeError('Pe %s ruleaza altceva decat %s din %s: %s' % (cfg['endpoint'], cfg['served_model_name'], cfg['served_root'], [(m.get('id'), m.get('root')) for m in data]))
+    return True
 
 def read_lighton(image_bytes, out_dir, cfg, deadline):
     """O cerere, streaming, garda v3 in timpul generarii (ca la Codex/benchmark). Promptul: doar imaginea."""
@@ -101,6 +118,9 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
     """Clientul oficial MinerU (two_step_extract + json2md), ca in benchmark (21d). Clientul nu e streaming:
     garda v3 se aplica dupa, ca semnal; termenul se impune cu un fir."""
     endpoint_parts(cfg['endpoint'])
+    # transportul MinerU e httpx in biblioteca: fara proxy din mediu pentru loopback (imaginea nu pleaca de pe masina)
+    for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'): os.environ.pop(k, None)
+    os.environ['NO_PROXY'] = os.environ['no_proxy'] = '127.0.0.1,::1,localhost'
     from PIL import Image
     import io
     if 'client' not in _MINERU:
@@ -126,7 +146,7 @@ def read_mineru(image_bytes, out_dir, cfg, deadline):
 
 FUNCS = {'lighton': read_lighton, 'mineru': read_mineru}
 
-def run_reader(plan_dir, reader, *, run_id, check_weights=True, lock=True):
+def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=True, lock=True):
     """Citeste toate benzile planului cu un singur cititor. Se opreste la primul rezultat incomplet (fara reincercare).
     Returneaza starea; scrie <banda>/<cititor>/raw.txt + result.json si <plan>/read_<cititor>.json."""
     if reader not in READERS: raise ValueError('Cititor necunoscut')
@@ -134,25 +154,34 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, lock=True):
     endpoint_parts(cfg['endpoint'])
     state = {'reader': reader, 'run_id': run_id, 'protocol': proto['version'], 'model': cfg['model'], 'started': time.time(),
              'bands': len(doc['bands']), 'done': 0, 'skipped_existing': 0, 'status': 'starting'}
-    if check_weights: state['weights_sha256'] = verify_weights(cfg)
-    ctx = gpu_lock(proto['gpu_lock'], run_id) if lock else contextlib.nullcontext()
-    with ctx:
+    state['weights_sha256'] = verify_weights(cfg) if check_weights else None
+    if check_server: verify_server(cfg)
+    ctx = gpu_lock(proto['gpu_lock'], run_id) if lock else contextlib.nullcontext({'keep': False})
+    with ctx as holder:
         state['status'] = 'running'; save(plan_dir / ('read_%s.json' % reader), state)
         for band in doc['bands']:
             out = plan_dir / ('page%04d' % band['page']) / band['id'] / reader
             out.mkdir(parents=True, exist_ok=True)
             if (out / 'result.json').exists():
-                state['skipped_existing'] += 1; continue
+                # reluare: rezultatul vechi se refoloseste DOAR daca e complet si al aceluiasi cititor / protocol / greutati / imagine
+                old = json.loads((out / 'result.json').read_text(encoding='utf-8'))
+                raw_old = (out / 'raw.txt').read_bytes() if (out / 'raw.txt').exists() else None
+                if (old.get('ok') is True and old.get('reader') == reader and old.get('protocol') == proto['version']
+                        and old.get('weights_sha256') == state['weights_sha256'] and old.get('image_sha256') == band['image_sha256']
+                        and raw_old is not None and hashlib.sha256(raw_old).hexdigest() == old.get('raw_sha256')):
+                    state['skipped_existing'] += 1; continue
+                state.update(status='interrupted_needs_review', band=band['id'], motiv='rezultat existent incompatibil'); break
             if (out / 'request_started.json').exists():
                 state.update(status='interrupted_needs_review', band=band['id']); break
             data = (plan_dir / band['image']).read_bytes()
             raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])
             (out / 'raw.txt').write_text(raw, encoding='utf-8')
             result.update(band=band['id'], reader=reader, image_sha256=band['image_sha256'], raw_sha256=hashlib.sha256(raw.encode()).hexdigest(),
-                          protocol=proto['version'], run_id=run_id, backend_idle_confirmed=False)
+                          protocol=proto['version'], weights_sha256=state['weights_sha256'], run_id=run_id, backend_idle_confirmed=False)
             save(out / 'result.json', result); state['done'] += 1
             if not result['ok']:
-                state.update(status='stopped_no_retry', band=band['id'], result=result); break
+                if result.get('signal') == 'deadline': holder['keep'] = True  # backend-ul poate lucra inca: GPU-ul nu se declara liber
+                state.update(status='stopped_no_retry', band=band['id'], result=result, gpu_lock_pastrat=holder['keep']); break
         else:
             state['status'] = 'complete'
         state['finished'] = time.time(); save(plan_dir / ('read_%s.json' % reader), state)

@@ -1,13 +1,13 @@
 """Pasul 1 (CPU, fara retea): randare, selectia paginilor, rutare, orientare, deskew, benzi.
 Adaptat din pipeline-ul Codex 0.1.0 (pipeline.process): aceeasi geometrie si aceleasi reguli de blocare, fara inferenta.
 Iese plan.json + PNG-urile benzilor, citite apoi de ambele cititoare (read.py)."""
-import hashlib, io, json, pathlib, time
+import hashlib, io, json, pathlib, re, time
 from PIL import Image
 from .geometry import classify, orientation, deskew, text_bands
 
 PACKAGE = pathlib.Path(__file__).parent
 KINDS = ('continuous_text', 'quantity_table', 'grid_form', 'drawing', 'unknown')
-NATIVE_MIN_CHARS = 200  # pagina cu strat de text nativ suficient nu merge la OCR (spec §1.2)
+NATIVE_MIN_CHARS = 200  # doar SEMNAL: un strat de text nativ (poate fi OCR ascuns, gresit) NU scuteste pagina de dubla citire (review Copilot r1)
 
 def sha(data): return hashlib.sha256(data).hexdigest()
 def save(path, value): path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -23,7 +23,6 @@ def pages_of(path, dpi, max_pixels, wanted):
             for number in (wanted or range(1, len(pdf) + 1)):
                 if not 1 <= number <= len(pdf): raise ValueError('Pagina %d nu exista (PDF are %d)' % (number, len(pdf)))
                 page = pdf[number - 1]; nat = native_chars(page)
-                if nat >= NATIVE_MIN_CHARS: yield number, None, nat; continue
                 if page.rect.width * page.rect.height * (dpi / 72) ** 2 > max_pixels: raise ValueError('Randarea depaseste max_pixels')
                 pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72), alpha=False)
                 yield number, Image.frombytes('RGB', [pix.width, pix.height], pix.samples), nat
@@ -60,8 +59,7 @@ def plan(source, output, *, pages=None, clockwise=None, orientations=None, kind=
                       'Planse, fise, formulare, pagini albe = excluse din pilot (lista de rezolvat manual).']}
     for number, image, nat in pages_of(source, dpi, max_pixels, pages):
         p = {'page': number, 'native_chars': nat, 'signals': []}; doc['pages'].append(p)
-        if image is None:
-            p['route'] = 'text_nativ'; continue
+        if nat >= NATIVE_MIN_CHARS: p['signals'].append({'type': 'text_nativ_prezent', 'chars': nat, 'nota': 'pagina merge oricum la ambele cititoare'})
         p['classification'] = classify(image); category = kind or p['classification']['candidate']
         p['routing_category'] = category
         rotated, orient = orientation(image, orientations.get(number, clockwise)); p['orientation'] = orient
@@ -90,10 +88,17 @@ def plan(source, output, *, pages=None, clockwise=None, orientations=None, kind=
     save(output / 'plan.json', doc)
     return doc
 
+BAND_ID = re.compile(r'^p(\d{4})_b\d+$')
+
 def load_plan(plan_dir):
-    plan_dir = pathlib.Path(plan_dir); doc = json.loads((plan_dir / 'plan.json').read_text(encoding='utf-8'))
+    plan_dir = pathlib.Path(plan_dir).resolve(); doc = json.loads((plan_dir / 'plan.json').read_text(encoding='utf-8'))
     if doc.get('status') != 'plan_complete': raise ValueError('Planul nu e complet')
     for b in doc['bands']:
+        # plan.json nu e de incredere pentru cai: id generat, imagine relativa sub plan_dir, fara '..'
+        m = BAND_ID.match(str(b.get('id', '')))
+        if not m or int(m.group(1)) != b.get('page') or b.get('image') != 'page%04d/%s.png' % (b['page'], b['id']):
+            raise ValueError('Banda cu id/cale neasteptate in plan.json: %r' % b.get('id'))
+        if plan_dir not in (plan_dir / b['image']).resolve().parents: raise ValueError('Cale in afara planului')
         if sha((plan_dir / b['image']).read_bytes()) != b['image_sha256']: raise ValueError('Imaginea benzii %s s-a schimbat' % b['id'])
     return doc
 
