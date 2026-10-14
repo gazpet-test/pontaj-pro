@@ -158,10 +158,10 @@ def _garda(band, res):
 def backend_idle(cfg, timeout=30.0, poll=0.5):
     """vLLM confirmat liber: /metrics arata 0 cereri in lucru si 0 in asteptare (dupa ce clientul a inchis fluxul oprit de garda)."""
     host, port = endpoint_parts(cfg['endpoint']); end = time.monotonic() + timeout
-    while True:
+    def citeste(box):
+        # cererea intr-un fir; la termen un timer inchide socketul (curatenie). Termenul il garanteaza join-ul de mai jos:
+        # pe Windows shutdown-ul nu deblocheaza prompt un recv (review r6 Jakarinos P2)
         try:
-            # termen ABSOLUT pe orice citire (review r4/r5): la termen un timer inchide socketul, deci se intrerup si antetele,
-            # framing-ul chunked sau un raspuns care picura octeti; ca la read_lighton
             conn = http.client.HTTPConnection(host, port, timeout=max(0.1, min(5.0, end - time.monotonic())))
             conn.connect(); sock = conn.sock
             def taie():
@@ -176,17 +176,23 @@ def backend_idle(cfg, timeout=30.0, poll=0.5):
                     if not c: break
                     size += len(c); chunks.append(c)
                     if size > 4 << 20: raise ValueError('metrics prea mari')
-                body = b''.join(chunks).decode('utf-8', 'replace')
+                box['body'] = b''.join(chunks).decode('utf-8', 'replace')
             finally: timer.cancel(); conn.close()
-            if time.monotonic() > end: return False  # acceptat doar in termen
-            vals = {}
+        except BaseException as e: box['e'] = e
+    while True:
+        try:
+            box = {}; th = threading.Thread(target=citeste, args=(box,), daemon=True); th.start()
+            th.join(max(0.0, end - time.monotonic()))
+            if th.is_alive() or time.monotonic() > end: return False  # termen ABSOLUT: neconfirmat
+            if 'e' in box: raise box['e'] if isinstance(box['e'], (OSError, ValueError, http.client.HTTPException)) else OSError(str(box['e']))
+            body = box['body']; vals = {}
             for line in body.splitlines():
                 for k in ('vllm:num_requests_running', 'vllm:num_requests_waiting'):
                     if line.startswith(k + '{') or line.startswith(k + ' '): vals[k] = vals.get(k, 0.0) + float(line.rsplit(' ', 1)[1])
             if len(vals) == 2 and not any(vals.values()): return True
         except (OSError, ValueError, http.client.HTTPException): pass
         if time.monotonic() >= end: return False
-        time.sleep(poll)
+        time.sleep(max(0.0, min(poll, end - time.monotonic())))  # nici pauza nu trece de termen
 
 def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=True, lock=True):
     """Citeste toate benzile planului cu un singur cititor. Termen / eroare de transport / rezultat neconfirmat = oprire (fara reincercare).

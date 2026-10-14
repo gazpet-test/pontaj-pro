@@ -311,6 +311,10 @@ class Citire(unittest.TestCase):
                         self.send_response(200); self.end_headers()
                         for _ in range(40): self.wfile.write(b'#'); self.wfile.flush(); time.sleep(0.01)
                         time.sleep(4); return
+                    if mod == 'stall18':
+                        self.send_response(200); self.end_headers(); t = time.monotonic()
+                        while time.monotonic() - t < 1.8: self.wfile.write(b'#'); self.wfile.flush(); time.sleep(0.01)
+                        time.sleep(4); return
                 except OSError: return
                 self.send_response(200)
                 if drip:  # raspuns fara sfarsit: cate un octet, periodic (review r4 Jakarinos P2)
@@ -333,7 +337,10 @@ class Citire(unittest.TestCase):
         for cfg in (self._metrics_srv(b'', drip=True), self._metrics_srv(b'', mod='antet'), self._metrics_srv(b'', mod='chunk'),
                     self._metrics_srv(b'', mod='stall')):
             t0 = time.monotonic(); self.assertFalse(RD.backend_idle(cfg, timeout=0.5, poll=0.05))
-            self.assertLess(time.monotonic() - t0, 1.0)
+            self.assertLess(time.monotonic() - t0, 0.5 + 0.2)  # toleranta mica fata de buget (review r6)
+        # cazul Jakarinos r6: trafic pana aproape de termen (1,8 s din 2 s), apoi 4 s de tacere
+        t0 = time.monotonic(); self.assertFalse(RD.backend_idle(self._metrics_srv(b'', mod='stall18'), timeout=2.0, poll=0.05))
+        self.assertLess(time.monotonic() - t0, 2.0 + 0.2)
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []
