@@ -27,8 +27,8 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 
 ## Reguli
 
-- **Selecția paginilor** (spec §1): doar paginile cerute (`--pagini` = `pagini_necitite`); pagina cu ≥ 200 caractere de text nativ → `text_nativ`
-  (nu merge la OCR); planșe / formulare (`grid_form`, `drawing`) și pagini neclasificate → excluse; **orientarea nu se ghicește**: fără
+- **Selecția paginilor** (spec §1): doar paginile cerute (`--pagini` = `pagini_necitite`); un strat de text nativ (≥ 200 caractere) e doar
+  semnal (`text_nativ_prezent`) — pagina trece oricum prin ambele cititoare (poate fi un OCR ascuns, greșit); planșe / formulare (`grid_form`, `drawing`) și pagini neclasificate → excluse; **orientarea nu se ghicește**: fără
   confirmare (`--clockwise` sau `--orientari`) pagina rămâne `orientare_nerezolvata`.
 - **Greutățile**: la `citeste`, SHA-256 al `model.safetensors` se compară cu `protocol.json`; diferit → refuz (LightOn `cbe12d08…`,
   MinerU `f2650d91…`, calea existentă din folderul Codex — fără copie).
@@ -46,19 +46,16 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
 
 ## După review-ul r1 (Copilot NO-GO, Jakarinos NO-GO, 14.10)
 
-- Tokeni cu semn / exponent / procent și operatori (-5≠5, 5%≠5, 10**2≠102); ** scos doar ca pereche de bold; cheile de rând
-  literale (AB-12C≠AB12-C); fragmentele pentru arbitru = subșirul exact din citire (10-20, nu 10 -20).
-- Fiecare dezacord are item_sha256 (plan, bandă, imagine, citiri, poziții, celule); decizia trebuie să-l poarte identic, cu model și
-  versiune de prompt din protocol.json → rbitru (lista de prompturi e GOALĂ până la D3b ⇒ azi orice decizie = 
-eeds_human).
-- Reconcilierea reface comparația din citiri și refuză dacă aw.txt / esult.json / dezacorduri.jsonl nu mai corespund; nu rescrie o
-  reconciliere existentă; celulele se iau ca vectori; un rând nou doar în interiorul aceluiași tabel (altfel 
-eeds_human); marcajul de
-  cantitate al arbitrului se adaugă; cusătura benzilor acceptată doar pe ≥ 8 tokeni și 1–3 rânduri întregi, altfel pagina = 
-eeds_human.
-- Citirea: rezultat vechi refolosit doar dacă e compatibil (cititor, protocol, greutăți, imagine, raw); gpu.lock cu jeton unic de
-  achiziție, PĂSTRAT la termen depășit (backend neconfirmat idle); atestare /v1/models (nume servit + rădăcina greutăților); MinerU
-  fără proxy și fără jurnalul de cereri al bibliotecii; căile din plan.json validate.
+- Tokeni cu semn / exponent / procent și operatori (`-5` ≠ `5`, `5%` ≠ `5`, `10**2` ≠ `102`); `**` scos doar ca pereche de bold; cheile de
+  rând literale (`AB-12C` ≠ `AB12-C`); fragmentele pentru arbitru = subșirul exact din citire (`10-20`, nu tokeni lipiți).
+- Fiecare dezacord are `item_sha256` (plan, bandă, imagine, citiri, poziții, celule); decizia trebuie să-l poarte identic, cu model și
+  versiune de prompt din `protocol.json` → `arbitru` (lista de prompturi e GOALĂ până la D3b ⇒ azi orice decizie = `needs_human`).
+- Reconcilierea reface comparația din citiri și refuză dacă `raw.txt` / `result.json` / `dezacorduri.jsonl` nu mai corespund; nu rescrie o
+  reconciliere existentă; celulele se iau ca vectori; un rând nou doar în interiorul aceluiași tabel (altfel `needs_human`); marcajul de
+  cantitate al arbitrului se adaugă; cusătura benzilor acceptată doar pe ≥ 8 tokeni și 1–3 rânduri întregi, altfel pagina = `needs_human`.
+- Citirea: rezultat vechi refolosit doar dacă e compatibil (cititor, protocol, greutăți, imagine, raw); `gpu.lock` cu jeton unic de
+  achiziție, PĂSTRAT la termen depășit (backend neconfirmat idle); atestare `/v1/models` (nume servit + rădăcina greutăților); MinerU
+  fără proxy și fără jurnalul de cereri al bibliotecii; căile din `plan.json` validate.
 
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
@@ -69,8 +66,9 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -m unittest ocr_local.test_ocr_local -v` — 32 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
-redirect, reluare, oprire, lock, SHA greutăți; comparare; reconciliere; regresie pe a_098 din benchmark, sărit dacă lipsește).
+`python -m unittest ocr_local.test_ocr_local -v` — 51 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
+a_098 din benchmark, sărit dacă lipsește).
 
 ## Limite cunoscute
 
