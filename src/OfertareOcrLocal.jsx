@@ -73,9 +73,13 @@ export function selectieDupaIncarcare(sel, cand, initiala) {
   const e = new Set(elg)
   return Object.fromEntries(Object.entries(sel || {}).filter(([k, v]) => v && e.has(Number(k))).map(([k]) => [k, true]))
 }
-export const textConfirmare = (plafon, nrDoc, nrPag) =>
+// Egress din Supabase Storage: fiecare PDF se descarcă O SINGURĂ DATĂ pe serverul AI (cache local) — estimarea = suma mărimilor.
+export const fmtMB = b => (Number(b) / 1e6).toLocaleString('ro-RO', { maximumFractionDigits: 1 }) + ' MB'
+export const egressEstimat = docs => (docs || []).reduce((a, d) => a + (Number(d.size_bytes) || 0), 0)
+export const textConfirmare = (plafon, nrDoc, nrPag, octeti = 0) =>
   `Pornești o procesare PLĂTITĂ: arbitraj Claude pe dezacordurile dintre cele două citiri locale, plafon ${plafon} USD.\n\n` +
-  `${nrDoc} document(e), ${nrPag} pagini necitite. Citirea pe serverul AI se face în fereastra GPU ${FEREASTRA_GPU}; ` +
+  `${nrDoc} document(e), ${nrPag} pagini necitite. Descărcare din Storage (egress): ~${fmtMB(octeti)}, o singură dată (cache pe server). ` +
+  `Citirea pe serverul AI se face în fereastra GPU ${FEREASTRA_GPU}; ` +
   `nimic nu intră în ofertă fără audit.\n\nContinui?`
 
 export default function OcrLocalSection({ licitatieId, profile, showToast, reloadKey = 0 }) {
@@ -106,7 +110,7 @@ export default function OcrLocalSection({ licitatieId, profile, showToast, reloa
     const g = ++gen.current
     setEroare(null)
     const [d, r] = await Promise.all([
-      supabase.from('ofertare_documente_atribuire').select('id, nume_original, pagini, pagini_necitite, lot_stare')
+      supabase.from('ofertare_documente_atribuire').select('id, nume_original, pagini, pagini_necitite, lot_stare, size_bytes')
         .eq('licitatie_id', licitatieId).not('pagini_necitite', 'is', null).order('id'),
       supabase.from('ofertare_ocr_rulari').select('id, stare, plafon_usd, cost_usd, cost_rezervat, cost_abandonat, pornit_la, preluata_la, terminata_la, oprit_motiv, documente')
         .eq('licitatie_id', licitatieId).order('id', { ascending: false }).limit(5),
@@ -138,13 +142,14 @@ export default function OcrLocalSection({ licitatieId, profile, showToast, reloa
   const activa = rulari.find(x => ACTIVE.includes(x.stare))
   const alese = (docs || []).filter(d => d.eligibil && sel[d.id])
   const nrPag = alese.reduce((a, d) => a + d.nrPagini, 0)
+  const egress = egressEstimat(alese)
   const errPlafon = eroarePlafon(plafon)
   const prea = alese.length > MAX_DOCUMENTE
 
   const porneste = async () => {
     if (busy || !poateDecide || activa || !alese.length || errPlafon || prea) return
     const p = Number(String(plafon).trim().replace(',', '.'))
-    if (!window.confirm(textConfirmare(p.toFixed(2), alese.length, nrPag))) return
+    if (!window.confirm(textConfirmare(p.toFixed(2), alese.length, nrPag, egress))) return
     setBusy(true)
     const { data, error } = await supabase.rpc('fn_ofertare_ocr_cerere', { p_licitatie_id: licitatieId, p_document_ids: alese.map(d => d.id), p_plafon_usd: p })
     setBusy(false)
@@ -218,7 +223,7 @@ export default function OcrLocalSection({ licitatieId, profile, showToast, reloa
                 <input style={{ ...S.input, width:80, marginLeft:6 }} value={plafon} onChange={e => setPlafon(e.target.value)} inputMode="decimal" />
               </label>
               <button style={{ ...S.btnP, opacity: (busy || !alese.length || errPlafon || prea) ? 0.5 : 1 }} disabled={busy || !alese.length || !!errPlafon || prea} onClick={porneste}>
-                {busy ? 'Se trimite…' : `🖨️ Pornește OCR local (${alese.length} doc · ${nrPag} pag)`}
+                {busy ? 'Se trimite…' : `🖨️ Pornește OCR local (${alese.length} doc · ${nrPag} pag · ~${fmtMB(egress)})`}
               </button>
               {errPlafon && <span style={{ fontSize:11.5, color:G.orange }}>{errPlafon}</span>}
               {prea && <span style={{ fontSize:11.5, color:G.orange }}>Cel mult {MAX_DOCUMENTE} documente într-o rulare (ai bifat {alese.length}) — debifează sau împarte în mai multe rulări.</span>}

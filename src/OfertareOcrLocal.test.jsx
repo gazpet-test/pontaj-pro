@@ -74,3 +74,12 @@ describe('OCR local — confirmarea și afișarea', () => {
     expect(h).toContain('OCR local'); expect(h).toContain('Se încarcă'); expect(h).not.toContain('Pornește OCR local (')
   })
 })
+
+import { egressEstimat, fmtMB } from './OfertareOcrLocal.jsx'
+describe('OCR local — estimarea de egress în preview (cerere Răzvan, Huedin)', () => {
+  it('suma mărimilor documentelor alese, în MB, și apare în confirmare', () => {
+    const o = egressEstimat([{ size_bytes: 10196734 }, { size_bytes: 9375265 }, { size_bytes: null }])
+    expect(o).toBe(19571999); expect(fmtMB(o)).toBe('19,6 MB')
+    expect(textConfirmare('15.00', 2, 1447, o)).toContain('~19,6 MB, o singură dată')
+  })
+})
