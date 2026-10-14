@@ -192,3 +192,13 @@ Precondiții = exact starea patch-ului (tabela + funcțiile există, coloana lip
 
 ## 20261030b — un contract ↔ un proiect din Execuție (`20261030b_executie_contract_id_unic_ROLLBACK.sql`, NEAPLICAT)
 Scoate indexul unic parțial `executie_proiecte_contract_id_unic`. Nu atinge date și nu redeschide o gaură de securitate: regula 1:1 contract ↔ proiect rămâne doar în UI (Administrativ dezleagă înainte să lege; „Leagă” din Execuție ascunde contractele ocupate), deci revine cursa dintre două sesiuni care leagă același contract. Postcondiție = indexul nu mai există. Fără gardă de armare (nedistructiv); tot fără GO de execuție. Testat în `scripts/test_executie_contract_id_unic.sh` pasul 4 (schelet: `supabase/tests/executie_contract_id_unic_schelet.sql`).
+
+## 20261030c — BMW CarData append-only (`20261030c_bmw_cardata_ROLLBACK.sql`, NEAPLICAT)
+Scoate `v_bmw_cardata_vs_evogps`, `bmw_cardata_locatii`, `bmw_cardata_citiri` (cu triggerele și politicile lor) și cele 5 funcții `bmw_cardata_*`; nu atinge `logistica_*` (view-ul doar le citea). Citirile sunt date de audit, deci două niveluri de armare: `SCOATE_BMW_CARDATA` merge DOAR pe tabele goale; `SCOATE_BMW_CARDATA_CU_DATE` pierde citirile și locațiile (export înainte, decizie explicită). Fără GO de execuție.
+```sql
+BEGIN;
+SELECT set_config('gazpet.rollback_tehnic_20261030c', 'SCOATE_BMW_CARDATA:' || txid_current(), true);
+-- <conținutul exact al fișierului>
+COMMIT;
+```
+Precondiție = exact obiectele patch-ului (3 relații + 5 funcții, niciun alt view dependent); armare persistentă = refuz; DROP fără CASCADE; postcondiție = niciun obiect `bmw_cardata_*`; dezarmare la final. Testat în `scripts/test_bmw_cardata.sh` pasul 5 (nearmat → refuz; armat simplu peste date → refuz; CU_DATE → scos; reaplicare → suita; armat simplu pe tabele goale → scos).
