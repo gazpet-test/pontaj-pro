@@ -1,4 +1,4 @@
--- REVENIRE 20261029a — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 17 funcții fn_ofertare_ocr_*.
+-- REVENIRE 20261029a — pilot OCR local Ofertare: șterge cele 7 tabele noi și cele 19 funcții fn_ofertare_ocr_*.
 -- DATELE OCR SE PIERD (rulări, pagini citite, dezacorduri, rezervări, arbitraje, verificări, jurnalul linkurilor). Nu atinge
 -- text_extras, cantități sau alte tabele existente. Rândul 'ocr_local_ofertare' din procese_heartbeat se DEZACTIVEAZĂ (activ = false),
 -- nu se șterge (fn_ofertare_ocr_heartbeat îl reactivează la o reaplicare).
@@ -19,7 +19,7 @@ BEGIN
   IF current_user IS DISTINCT FROM 'postgres' THEN RAISE EXCEPTION '20261029a: necesita postgres'; END IF;
   PERFORM set_config('lock_timeout', '5s', true);
   IF to_regclass('public.ofertare_ocr_rulari') IS NULL THEN RAISE EXCEPTION '20261029a: preconditie, migrarea nu e aplicata'; END IF;
-  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 17
+  IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'fn\_ofertare\_ocr\_%') <> 19
      OR (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'ofertare\_ocr\_%') <> 7 THEN
     RAISE EXCEPTION '20261029a: preconditie, alt numar de obiecte decat la aplicare';
   END IF;
@@ -60,7 +60,8 @@ BEGIN
   DROP FUNCTION public.fn_ofertare_ocr_stare(bigint, text, text);
   DROP FUNCTION public.fn_ofertare_ocr_pdf_rezerva(bigint, bigint);
   DROP FUNCTION public.fn_ofertare_ocr_pdf_final(bigint, text);
-  DROP FUNCTION public.fn_ofertare_ocr_scrie_pagina(bigint, bigint, integer, smallint, text, text, text, text, text, text, jsonb);
+  DROP FUNCTION public.fn_ofertare_ocr_scrie_pagina(bigint, bigint, integer, smallint, text, text, text, text, text, text, jsonb, jsonb);
+  DROP FUNCTION public.fn_ofertare_ocr_plan(bigint, jsonb);
   DROP FUNCTION public.fn_ofertare_ocr_scrie_dezacord(bigint, jsonb);
   DROP FUNCTION public.fn_ofertare_ocr_cost_rezerva(bigint, numeric);
   DROP FUNCTION public.fn_ofertare_ocr_scrie_arbitraj(bigint, jsonb);
@@ -68,7 +69,8 @@ BEGIN
   DROP FUNCTION public.fn_ofertare_ocr_heartbeat(boolean, text);
   DROP FUNCTION public.fn_ofertare_ocr_comparatie_gata(bigint, integer, text);
   DROP FUNCTION public.fn_ofertare_ocr_amprenta();
-  DROP FUNCTION public.fn_ofertare_ocr_canon(text);
+  DROP FUNCTION public.fn_ofertare_ocr_granita(text, integer);
+  DROP FUNCTION public.fn_ofertare_ocr_literal(jsonb, jsonb);
   DROP TABLE public.ofertare_ocr_verificari;
   DROP TABLE public.ofertare_ocr_arbitraje;
   DROP TABLE public.ofertare_ocr_rezervari;

@@ -2,12 +2,12 @@
 Niveluri (spec §2): cuvant (ș/ş, ț/ţ unificate DOAR la comparare), cifra (separatorul zecimal NICIODATA normalizat),
 rand de tabel (celule, cu rolurile cod / UM / cantitate cand se pot deduce). Textul citit ramane literal; nimic nu se corecteaza aici."""
 import difflib, hashlib, html, json, pathlib, re
-from .plan import load_plan, save
 
 CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
 # Numerele pastreaza semnul, exponentul si procentul; semnele, comparatorii si operatorii sunt tokeni separati: -5 vs 5, 5% vs 5,
 # 1e-3 vs 1e3, 10**2 vs 102 raman dezacorduri (review Copilot r1). Restul punctuatiei nu se compara.
-NUM = r'[-+±−]?[.,]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?[%‰]?'
+# cifrele ASCII explicit ([0-9], nu \d Unicode): aceeasi definitie ca granita de token din BD (fn_ofertare_ocr_granita, D3a)
+NUM = r'[-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?'
 # Politica inversa (review Copilot r3): ORICE caracter nespatiu care nu e numar sau litera e token separat (%, ‰, _, (, ), €, ...).
 # Singura normalizare la comparare ramane sedila/virgula pe ș/ț. Mai mult zgomot la arbitru, dar nicio diferenta nu se pierde.
 TOKEN = re.compile(NUM + r'|[^\W\d_]+|\S', re.U)  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
@@ -201,10 +201,16 @@ def compare_text(seg_a, seg_b, base):
             s = tl[i1][2] if si == tl[i1][1] else 0; e = tl[i2 - 1][3] if si == tl[i2 - 1][1] else len(segs[si][1])
             parts.append(segs[si][1][s:e])
         return '\n'.join(parts)
+    def source(tl, i1, i2):
+        # unde e fragmentul in segmentele citirii (D3a r7): BD reface fragmentul EXACT din segmentele incarcate si verifica granitele
+        # de token, in loc sa reimplementeze normalizarea (review Jakarinos r6 / Copilot r6)
+        if i1 >= i2: return None
+        return {'seg': [tl[i1][1], tl[i2 - 1][1]], 'start': tl[i1][2], 'end': tl[i2 - 1][3]}
     is_num = lambda k: 0 <= k < len(ka) and bool(NUMBER.match(ka[k]))
     for n, g in enumerate(groups):
         fa = literal(ta, seg_a, g['a1'], g['a2']); fb = literal(tb, seg_b, g['b1'], g['b2'])
         items.append(dict(base, id='%s_t%d' % (base['band'], n), tip='text', citire_lighton=fa, citire_mineru=fb,
+                          sursa={'lighton': source(ta, g['a1'], g['a2']), 'mineru': source(tb, g['b1'], g['b2'])},
                           context_inainte=' '.join(t[0] for t in ta[max(0, g['a1'] - CONTEXT):g['a1']]),
                           context_dupa=' '.join(t[0] for t in ta[g['a2']:g['a2'] + CONTEXT]),
                           pozitie={'lighton': [g['a1'], g['a2']], 'mineru': [g['b1'], g['b2']]},
@@ -324,8 +330,13 @@ def check_result(res, reader, band, proto):
     return (res.get('reader') == reader and res.get('protocol') == proto['version'] and res.get('image_sha256') == band['image_sha256']
             and (res.get('weights_sha256') or '').lower() == cfg['weights_sha256'].lower())
 
+def segmente(raw):
+    """Segmentele unei citiri, cum le incarca pipeline-ul in BD (fn_ofertare_ocr_scrie_pagina, D3a): [["text", s] | ["table", [[celula]]]]."""
+    return [[k, v] for k, v in segments(raw)]
+
 def compare(plan_dir):
     from .read import protocol
+    from .plan import load_plan, save
     plan_dir = pathlib.Path(plan_dir); doc = load_plan(plan_dir); summary = []; items = []; proto = protocol()
     for band in doc['bands']:
         d = plan_dir / ('page%04d' % band['page']) / band['id']; got = {}
