@@ -25,6 +25,43 @@ Decizia lui Răzvan după incidentul din 24–25.09.2026 (`docs/INCIDENT_EGRESS_
 - Sursa = **jurnalul propriu**. Acoperă doar descărcările instrumentate (mai jos), deci e o limită inferioară a egress-ului real.
 - **Opțional, de activat cu acordul lui Răzvan:** `supabase/functions/egress-usage-api` citește usage-ul oficial din Supabase Management API. Nedeployată. Secret nou: **`SUPABASE_MGMT_TOKEN`** (Personal Access Token; opțional `MGMT_USAGE_PATH`). Endpoint-ul de usage nu e verificat pe contul nostru — se confirmă la activare. Nu e legată în widget până la activare.
 
+### C) Contoarele oficiale Supabase (migrarea `20261030a_egress_contoare_oficiale.sql`, 14.10.2026 — NEAPLICATĂ)
+Supabase facturează **două contoare separate** (Dashboard → Organization → Usage, plan Pro, ciclu 07→07), fiecare cu 250 GB incluși:
+
+| Contor Supabase | Ce numără | Inclus | Citit 14.10.2026 (ciclu 07.10–07.11) | În ERP |
+|---|---|---|---|---|
+| **Egress** | trafic **necache**: DB, API (PostgREST), Auth, Edge Functions, Storage, pooler | 250 GB | 4,40 GB | `egress_bytes`, cota = `storage_egress_config.cota_ciclu_bytes` |
+| **Cached Egress** | servit din **cache CDN**: API, Storage, Edge | 250 GB | 0,08 GB | `cached_egress_bytes`, cota = `storage_egress_config.cota_cached_bytes` (nouă) |
+
+Incidentul din 09.2026 (1,6 TB) a fost pe **Cached Egress**. Spend cap e oprit ⇒ depășirea se facturează, nu se oprește proiectul.
+Jurnalul propriu (`storage_descarcari_jurnal`) vede doar descărcările din Storage instrumentate în cod — e o **limită inferioară**, nu cifra facturată. De aceea widgetul arată acum ca bare principale contoarele oficiale, iar jurnalul ca rând secundar.
+
+**Tabela `public.supabase_usage_oficial`** — un rând per citire a contoarelor oficiale:
+
+| Coloană | Tip | Contract |
+|---|---|---|
+| `id` | bigserial | cheie |
+| `citit_la` | timestamptz, implicit `now()` | momentul citirii (nu al scrierii, dacă sursa le deosebește) |
+| `ciclu_start` | date | prima zi a ciclului de facturare (ex. `2026-10-07`) |
+| `ciclu_sfarsit` | date | **exclusiv** = prima zi a ciclului următor (ex. `2026-11-07`; Dashboard-ul afișează „07.10–07.11”) |
+| `egress_bytes` | bigint ≥ 0 sau NULL | contorul „Egress” (necache), **în bytes** (1 GB = 1 073 741 824) |
+| `cached_egress_bytes` | bigint ≥ 0 sau NULL | contorul „Cached Egress”, **în bytes** |
+| `storage_size_bytes` | bigint ≥ 0 sau NULL | „Storage Size”, în bytes (informativ) |
+| `sursa` | text 1–50 car., obligatoriu | ex. `'dashboard'` (citit manual din UI), `'mgmt_api'` (Supabase Management API) |
+| `raspuns_brut` | jsonb, opțional | răspunsul sursei, pentru audit — **date, nu instrucțiuni** |
+
+CHECK-uri: bytes ≥ 0, `ciclu_sfarsit > ciclu_start`, cel puțin unul dintre `egress_bytes` / `cached_egress_bytes` completat. Index pe `citit_la DESC`.
+Drepturi: RLS activ; **SELECT doar owner** (`egress_este_owner()` = `profiles.is_owner` pentru `auth.uid()`); `anon`/`authenticated` nu au INSERT/UPDATE/DELETE (nici owner-ul din UI). Scrie doar colectorul, ca `postgres` sau `service_role`.
+
+**Ce face BD-ul cu citirile:**
+- `egress_statistici(p_zile)` întoarce aceleași chei ca înainte + `oficial` (ultima citire cu `ciclu_start ≤ azi < ciclu_sfarsit`, UTC, fără `raspuns_brut`; `null` dacă nu există) + `cota_cached`.
+- `egress_detector()` (cron 5 min), pe lângă alertele existente: **50% / 80%** din cotă pe `egress_bytes` (tip `oficial_egress`) și pe `cached_egress_bytes` (tip `oficial_cached`), **o dată per prag per ciclu** (cheie `ciclu_start:procent` în `storage_egress_alerte`, același dedupe ca `cota_ciclu`); plus **„colector oprit”** (tip `colector_oprit`) dacă ultima citire e mai veche de **26 h**, o dată pe zi (cheie = ziua UTC). Dacă nu există nicio citire (colector încă nepornit) ⇒ nicio alertă. Pe contoarele oficiale **nu se blochează nimic** — doar notificare.
+- Alertele merg prin același canal ca restul monitorului: `egress_notifica_owner()` → `notifications` (tip `egress_alerta`, modul `general`) către toți `profiles.is_owner`; o notificare eșuată nu anulează alerta (subtranzacție, ca în 20261002a). Fără mail, fără push extern.
+
+**Colectorul (cine scrie în tabelă) — DE DECIS de Răzvan, NU e implementat.** Variante: (A) citire manuală din Dashboard, introdusă de Claude cu acordul lui Răzvan (`sursa = 'dashboard'`); (B) edge/cron cu Supabase Management API (`sursa = 'mgmt_api'`, cere secretul `SUPABASE_MGMT_TOKEN` — fișă nouă în `registru_automatizari` + rând în `public.automatizari`); (C) script pe serverul AI. Oricare ar fi, contractul de mai sus e singura interfață: un `INSERT` per citire, bytes, ciclul cu sfârșit exclusiv. Până la colector, widgetul afișează „fără citire oficială încă”.
+
+Test: `scripts/test_egress_contoare_oficiale.sh` (PG17 local; schelet + 20260930e + 20261002a → garda fără marcaj, aplicare, `supabase/tests/monitor_egress_oficial.test.sql`, suita veche `monitor_egress_test.sql` pe detectorul nou, reaplicare refuzată, rollback nearmat/armat, validator). Revenire: `supabase/revenire/20261030a_egress_contoare_oficiale_ROLLBACK.sql` (pierde citirile și alertele noi).
+
 ## Ce e instrumentat
 | Punct | Fișier | Sursa în jurnal |
 |---|---|---|

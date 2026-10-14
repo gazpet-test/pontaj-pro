@@ -1,5 +1,7 @@
 // Monitor egress Storage — widget pe home, DOAR owner (docs/MONITOR_EGRESS.md).
-// Sursa: jurnalul propriu (RPC egress_statistici, poartă is_owner în BD). Deblocare circuit breaker: egress_deblocheaza.
+// Sursa: RPC egress_statistici (poartă is_owner în BD). Bare principale = contoarele OFICIALE Supabase (Egress necache +
+// Cached egress, din supabase_usage_oficial, migrarea 20261030a); jurnalul propriu = rând secundar (limită inferioară).
+// Deblocare circuit breaker: egress_deblocheaza.
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from './lib/supabase.js'
 
@@ -13,6 +15,27 @@ const S = {
 const GB = 1073741824
 const fmt = b => b >= GB ? `${(b / GB).toFixed(1)} GB` : `${Math.round((b || 0) / 1048576)} MB`
 const scurt = o => { const p = String(o || '').split('/'); return p.length > 2 ? `${p[0]}/…/${p[p.length - 1]}` : o }
+const COTA_PLAN = 250 * GB  // plan Pro: 250 GB pe fiecare contor (fallback dacă BD nu trimite cota)
+const procent = (b, cota) => cota ? Math.round(100 * (b || 0) / cota) : 0
+const culoarePct = p => p >= 80 ? G.red : p >= 50 ? G.yellow : G.green
+
+// O bară de consum (x / cotă) cu marcajele de alertă 50/80%
+function Bara({ eticheta, bytes, cota, alerte, nota }) {
+  const p = procent(bytes, cota), col = bytes == null ? G.muted : culoarePct(p)
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ ...S.row, justifyContent: 'space-between' }}>
+        <span style={{ fontSize: 13 }}>{eticheta}</span>
+        <span style={{ color: col, fontWeight: 700, fontSize: 13 }}>{bytes == null ? '—' : `${fmt(bytes)} / ${fmt(cota)} (${p}%)`}</span>
+      </div>
+      <div style={{ height: 6, background: '#21262D', borderRadius: 3, marginTop: 4, position: 'relative' }}>
+        <div style={{ width: `${Math.min(100, p)}%`, height: '100%', background: col, borderRadius: 3 }} />
+        {(alerte || []).map(a => <div key={a} title={`alertă ${a}%`} style={{ position: 'absolute', left: `${a}%`, top: -2, width: 1, height: 10, background: G.muted }} />)}
+      </div>
+      {nota && <div style={{ ...S.small, marginTop: 3 }}>{nota}</div>}
+    </div>
+  )
+}
 
 export default function MonitorEgress({ profile }) {
   const [d, setD] = useState(null)
@@ -38,26 +61,40 @@ export default function MonitorEgress({ profile }) {
   if (err && !d) return <div style={S.card}><b>📡 Monitor egress</b> <span style={{ ...S.small, color: G.yellow }}>— indisponibil ({err}). Migrarea 20260930e nu e aplicată?</span></div>
   if (!d) return null
 
-  const c = d.ciclu || {}, pct = c.cota ? Math.round(100 * c.bytes / c.cota) : 0
-  const culoare = pct >= 80 ? G.red : pct >= 50 ? G.yellow : G.green
+  const c = d.ciclu || {}, pct = procent(c.bytes, c.cota)
+  const of = d.oficial || null  // ultima citire oficială din ciclul curent (null = colectorul n-a scris încă / migrarea 20261030a neaplicată)
+  const cotaEgress = c.cota || COTA_PLAN, cotaCached = d.cota_cached || COTA_PLAN
+  const pctMax = of ? Math.max(procent(of.egress_bytes, cotaEgress), procent(of.cached_egress_bytes, cotaCached)) : pct
   const zile = d.pe_zi || [], max = Math.max(1, ...zile.map(z => z.bytes))
   const blocate = d.blocate || []
+  const citit = of?.citit_la ? new Date(of.citit_la) : null
+  const vechimeOre = citit ? (Date.now() - citit.getTime()) / 3600000 : 0
 
   return (
     <div style={S.card}>
       <div style={{ ...S.row, justifyContent: 'space-between' }}>
         <div style={S.row}>
-          <b>📡 Monitor egress Storage</b>
-          <span style={{ color: culoare, fontWeight: 700 }}>{fmt(c.bytes)} / {fmt(c.cota)} ({pct}%)</span>
-          <span style={S.small}>ciclu din {c.start ? new Date(c.start).toLocaleDateString('ro-RO') : '—'} · jurnal propriu</span>
+          <b>📡 Monitor egress</b>
+          <span style={{ color: culoarePct(pctMax), fontWeight: 700 }}>{of ? `max ${pctMax}% din cotă` : 'fără citire oficială încă'}</span>
+          <span style={S.small}>ciclu din {of?.ciclu_start ? new Date(of.ciclu_start).toLocaleDateString('ro-RO') : c.start ? new Date(c.start).toLocaleDateString('ro-RO') : '—'}</span>
           {blocate.length > 0 && <span style={{ color: G.red, fontWeight: 700 }}>⛔ {blocate.length} obiect(e) blocate</span>}
         </div>
         <button style={S.btn} onClick={() => setDeschis(v => !v)}>{deschis ? 'Ascunde' : 'Detalii'}</button>
       </div>
-      <div style={{ height: 6, background: '#21262D', borderRadius: 3, marginTop: 10, position: 'relative' }}>
-        <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: culoare, borderRadius: 3 }} />
-        {(c.alerte_procent || []).map(p => <div key={p} title={`alertă ${p}%`} style={{ position: 'absolute', left: `${p}%`, top: -2, width: 1, height: 10, background: G.muted }} />)}
+
+      {of ? <>
+        <Bara eticheta="Egress (oficial)" bytes={of.egress_bytes} cota={cotaEgress} alerte={c.alerte_procent} />
+        <Bara eticheta="Cached egress (oficial)" bytes={of.cached_egress_bytes} cota={cotaCached} alerte={c.alerte_procent} />
+        <div style={{ ...S.small, marginTop: 6, color: vechimeOre > 26 ? G.yellow : G.muted }}>
+          Citit {citit ? citit.toLocaleString('ro-RO') : '—'} · sursa {of.sursa}{vechimeOre > 26 ? ` · ⚠️ citire veche (${Math.round(vechimeOre)} h) — colectorul e oprit?` : ''}
+        </div>
+      </> : <div style={{ ...S.small, marginTop: 10 }}>Egress / Cached egress (oficial): fără citire oficială încă. Cifrele facturate se văd în Dashboard Supabase → Usage.</div>}
+
+      <div style={{ ...S.row, justifyContent: 'space-between', marginTop: 10, paddingTop: 8, borderTop: `1px solid ${G.border}` }}>
+        <span style={S.small}>Jurnal propriu (descărcări fișiere)</span>
+        <span style={{ ...S.small, color: G.text }}>{fmt(c.bytes)} în ciclu</span>
       </div>
+      <div style={{ ...S.small, marginTop: 2 }}>Doar descărcările din Storage instrumentate în cod — limită inferioară, nu cifra facturată.</div>
       {err && <div style={{ ...S.small, color: G.red, marginTop: 6 }}>{err}</div>}
 
       {blocate.map(b => (
