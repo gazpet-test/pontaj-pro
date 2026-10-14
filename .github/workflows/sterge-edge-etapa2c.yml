@@ -1,0 +1,104 @@
+name: Șterge edge functions retrase (etapa 2c, listă fixă)
+
+# Ștergere unică a celor 33 de funcții edge retrase (29 de stub-uri 410 + 4 funcții de test). Decizia Răzvan 14.10.2026,
+# scrisă direct în sesiunea Module: „da etapa 2c ... workflow de ștergere cu lista fixă a celor 33 (B); ștergerea
+# rulează după review și merge”. Detalii și revenire: supabase/functions_retrase/README.md.
+# Pornire DOAR manuală. Implicit e dry_run (doar listează ce ar șterge). Ștergerea cere dry_run=false + fraza de confirmare.
+# Lista e FIXĂ în fișier: inputul nu poate adăuga slug-uri. Ce lipsește deja din producție e sărit (rulare idempotentă).
+# După rularea reușită, workflow-ul se scoate din repo (PR separat).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = doar listează (implicit); false = ȘTERGE'
+        required: true
+        default: true
+        type: boolean
+      confirmare:
+        description: 'Pentru ștergere scrie exact: STERG 33 ETAPA 2C'
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-edge-function
+  cancel-in-progress: false
+
+jobs:
+  sterge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Lista fixă + verificări
+        id: val
+        run: |
+          set -euo pipefail
+          LISTA="temp-creare-user temp-reset-parola temp-upload-taloane tmp-copy-paza tmp-db-ins tmp-dc-up tmp-dl tmp-export-inventar tmp-flota-up tmp-mai-probe tmp-ofertare-up tmp-ofertare-up2 tmp-ofertare-up3 tmp-runner-plansa tmp-sign-expert tmp-up3 tmp-upload-taloane-2 db-probe full-probe update-probe throw-probe img-probe pdf-probe claude-probe openai-probe test-mail-senders audi-connect capture-storage-rls-errors ofertare-seap-diag test_anthropic_key spike-ocr-claude openai-modele check-resend-domains"
+          n=$(echo $LISTA | wc -w)
+          [ "$n" -eq 33 ] || { echo "::error::Lista are $n slug-uri, nu 33"; exit 1; }
+          for s in $LISTA; do
+            # plasă de siguranță: nu șterge NICIODATĂ o funcție care are sursă activă în repo
+            if [ -e "supabase/functions/$s" ]; then echo "::error::$s are sursă în supabase/functions — refuz"; exit 1; fi
+          done
+          [ -f supabase/functions_retrase/_stub_410/index.ts ] || { echo "::error::lipsește stub-ul de revenire"; exit 1; }
+          for s in test_anthropic_key spike-ocr-claude openai-modele check-resend-domains; do
+            [ -f "supabase/functions_retrase/$s/index.ts" ] || { echo "::error::lipsește copia de revenire pentru $s"; exit 1; }
+          done
+          echo "lista=$LISTA" >> "$GITHUB_OUTPUT"
+
+      - name: Stare în producție
+        id: prod
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LISTA: ${{ steps.val.outputs.lista }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref dxczwkbciseqniprspcu -o json > /tmp/fn.json
+          # garda de format: lista trebuie să fie mare și să conțină o funcție activă cunoscută, altfel căutarea pe .slug ar da fals „lipsește”
+          total=$(jq '(if type=="object" then .functions else . end) | length' /tmp/fn.json)
+          [ "$total" -ge 100 ] || { echo "::error::Lista din producție are doar $total funcții — format neașteptat"; exit 1; }
+          jq -e '(if type=="object" then .functions else . end) | map(.slug) | index("olx-aplicari-sync")' /tmp/fn.json > /dev/null || { echo "::error::Nu găsesc olx-aplicari-sync după .slug — format neașteptat"; exit 1; }
+          prezente=""
+          for s in $LISTA; do
+            if jq -e --arg s "$s" '(if type=="object" then .functions else . end) | map(.slug) | index($s)' /tmp/fn.json > /dev/null; then prezente="$prezente $s"; else echo "lipsește deja: $s"; fi
+          done
+          echo "De șters ($(echo $prezente | wc -w)):$prezente"
+          echo "prezente=$prezente" >> "$GITHUB_OUTPUT"
+
+      - name: Șterge
+        if: ${{ inputs.dry_run == false }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PREZENTE: ${{ steps.prod.outputs.prezente }}
+          CONFIRMARE: ${{ inputs.confirmare }}
+        run: |
+          set -euo pipefail
+          [ "$CONFIRMARE" = "STERG 33 ETAPA 2C" ] || { echo "::error::Fraza de confirmare lipsește sau e greșită"; exit 1; }
+          for s in $PREZENTE; do
+            echo "::group::delete $s"
+            supabase functions delete "$s" --project-ref dxczwkbciseqniprspcu
+            echo "::endgroup::"
+          done
+
+      - name: Verificare după
+        if: ${{ inputs.dry_run == false }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LISTA: ${{ steps.val.outputs.lista }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref dxczwkbciseqniprspcu -o json > /tmp/fn2.json
+          jq -e '(if type=="object" then .functions else . end) | map(.slug) | index("olx-aplicari-sync")' /tmp/fn2.json > /dev/null || { echo "::error::Format neașteptat la verificare"; exit 1; }
+          ramase=""
+          for s in $LISTA; do
+            if jq -e --arg s "$s" '(if type=="object" then .functions else . end) | map(.slug) | index($s)' /tmp/fn2.json > /dev/null; then ramase="$ramase $s"; fi
+          done
+          [ -z "$ramase" ] || { echo "::error::Au rămas:$ramase"; exit 1; }
+          echo "Toate cele 33 au fost șterse. Total funcții în producție: $(jq '(if type=="object" then .functions else . end) | length' /tmp/fn2.json)"
