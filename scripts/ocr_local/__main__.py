@@ -1,5 +1,6 @@
 """python -m ocr_local <comanda> ... (PYTHONPATH=scripts, interpretorul env_mineru al lui Codex).
-Comenzi: plan | foaie-orientare | citeste | compara | reconciliaza. Nicio comanda nu porneste un server sau un model."""
+Comenzi: plan | foaie-orientare | citeste | compara | reconciliaza | erp <pas> (legatura cu ERP, client.py).
+Nicio comanda nu porneste un server sau un model."""
 import argparse, json, pathlib, sys, uuid
 
 def pagini(spec):
@@ -25,8 +26,31 @@ def main(argv=None):
     c.add_argument('plan_dir'); c.add_argument('--cititor', required=True, choices=['lighton', 'mineru']); c.add_argument('--rulare')
     k = sub.add_parser('compara', help='CPU: dezacorduri intre cele doua citiri'); k.add_argument('plan_dir')
     r = sub.add_parser('reconciliaza', help='CPU: aplica deciziile arbitrului (JSONL)'); r.add_argument('plan_dir'); r.add_argument('--decizii', required=True)
+    e = sub.add_parser('erp', help='legatura cu ERP prin edge-urile cu secret (client.py): o rulare ceruta din ERP, pas cu pas')
+    e.add_argument('--secret-file', help='implicit OCR_LOCAL_SECRET din mediu, apoi ' + 'C:/Users/Gazpet-Ai/.secrete/ocr_local_secret.txt')
+    es = e.add_subparsers(dest='pas', required=True)
+    es.add_parser('preia', help='ia prima rulare ceruta (stare ceruta -> preluata)').add_argument('--work', required=True)
+    for nume, ajutor in (('descarca', 'PDF-urile documentelor (link semnat 5 min)'), ('foaie', 'CPU: foile de contact pentru orientare (fara retea)'),
+                         ('plan', 'CPU: planul per document + manifestul in BD (o singura data)'), ('incarca-citiri', 'citirile ambilor cititori in BD, apoi citita'),
+                         ('compara', 'CPU: dezacordurile in BD + marcajul de comparatie'), ('arbitreaza', 'PLATIT: arbitrajul Claude pe dezacorduri, apoi arbitrata'),
+                         ('reconciliaza', 'CPU: textul reconciliat in BD, apoi finalizata'), ('citeste', 'GPU: un cititor pe toate documentele (fara ERP)'),
+                         ('oprire', 'opreste rularea (motiv obligatoriu)')):
+        s = es.add_parser(nume, help=ajutor); s.add_argument('rulare_dir')
+        if nume == 'citeste': s.add_argument('--cititor', required=True, choices=['lighton', 'mineru'])
+        if nume == 'oprire': s.add_argument('--motiv', required=True)
+    es.add_parser('abandon', help='abandoneaza o rezervare deschisa (dupa 15 min)').add_argument('--rezervare', type=int, required=True)
     x = p.parse_args(argv)
-    if x.cmd == 'plan':
+    if x.cmd == 'erp':
+        from . import client as C
+        if x.pas == 'foaie': res = C.foaie(x.rulare_dir)
+        elif x.pas == 'citeste': res = C.citeste_rulare(x.rulare_dir, x.cititor)
+        else:
+            edge = C.Edge(C.citeste_secret(x.secret_file))
+            res = {'preia': lambda: C.preia(x.work, edge), 'descarca': lambda: C.descarca(x.rulare_dir, edge), 'plan': lambda: C.plan_rulare(x.rulare_dir, edge),
+                   'incarca-citiri': lambda: C.incarca_citiri(x.rulare_dir, edge), 'compara': lambda: C.compara_rulare(x.rulare_dir, edge),
+                   'arbitreaza': lambda: C.arbitreaza(x.rulare_dir, edge), 'reconciliaza': lambda: C.reconciliaza_rulare(x.rulare_dir, edge),
+                   'oprire': lambda: C.oprire(x.rulare_dir, edge, x.motiv), 'abandon': lambda: C.abandon(edge, x.rezervare)}[x.pas]()
+    elif x.cmd == 'plan':
         from .plan import plan
         ori = json.loads(x.orientari.read_text(encoding='utf-8')) if x.orientari else None
         doc = plan(x.source, x.output, pages=pagini(x.pagini) if x.pagini else None, clockwise=x.clockwise, orientations=ori, kind=x.kind, dpi=x.dpi)

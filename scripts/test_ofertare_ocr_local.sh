@@ -441,6 +441,24 @@ asteapta "depășire: înregistrată, rularea oprită, cheltuiala blocată" "$(c
 asteapta "depășire: rezervarea la toată suma, rularea oprită cu motiv, costul real în jurnal, needs_human"   "$(q "SELECT z.stare||'|'||z.cost_real||'|'||r.stare||'|'||(r.oprit_motiv LIKE 'cost real 0.0712 peste rezervarea 0.0500%')::text||'|'||r.cost_usd||'|'||r.cost_rezervat FROM public.ofertare_ocr_rezervari z JOIN public.ofertare_ocr_rulari r ON r.id=z.rulare_id WHERE z.id=$ZD")|$(q "SELECT cost_usd FROM public.ai_usage_log WHERE ref_table='ofertare_ocr_rezervari' AND ref_id=$ZD")|$(q "SELECT decizie||'/'||prompt_versiune FROM public.ofertare_ocr_arbitraje WHERE dezacord_id=$YT")"   "decontata|0.0500|oprita|true|0.0720|0.0000|0.0712|needs_human/depasire"
 refuz "depășire a doua oară pe aceeași rezervare" service_role - "$(DP "$ZD" 0.08)" "închisă"
 asteapta "după depășire: nicio rezervare nouă (rularea oprită)" "$(ca service_role - "$(AZ7 "$Y1" "$S1" "$IA" 0.05)->>'refuz'")" stare
+
+# ── clientul ERP (scripts/ocr_local/client.py) cap-coadă pe funcțiile REALE: preia → pdf-link → plan → citiri → dezacorduri →
+#    arbitraj (fără apel plătit, SqlEdge reface arbitreaza.ts) → reconciliat → finalizata ───────────────────────────────────
+R8=$(ca authenticated "$OWNER" "SELECT public.fn_ofertare_ocr_cerere(102, ARRAY[1247]::bigint[], 1)->>'rulare_id'"); [ -n "$R8" ] || esec "cererea R8"
+CE=$(OCR_PSQL="$PG_BIN/psql" PGHOST=127.0.0.1 PGPORT=$PORT PGUSER=postgres PGDATABASE=$BAZA python3 -B "$RADACINA/supabase/tests/ofertare_ocr_local_client_e2e.py" 2>&1) \
+  || esec "client cap-coadă: $CE"
+ce() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.argv[2]))' "$CE" "$1"; }
+asteapta "client: preia rularea cerută, plan trimis o singură dată (reluarea = deja)" "$(ce "d['preia']['rulare'], d['plan']['pagini'], d['plan_reluat']['deja'], d['apeluri']['ofertare-pdf-link']")" "($R8, 3, True, 1)"
+asteapta "client: citirile (2 cititori × 3 benzi + 327 exclus la ambii) → citita" "$(ce "d['incarca']['scrise'], d['incarca']['stare']")" "(8, 'citita')"
+ND=$(q "SELECT count(*) FROM public.ofertare_ocr_dezacorduri WHERE rulare_id=$R8")
+asteapta "client: dezacordurile compare.py acceptate de BD (proveniență), marcajul = numărul și amprenta" \
+  "$(ce "d['compara']['dezacorduri'], d['compara_reluat']['deja']")|$(q "SELECT comparatie_nr||'/'||(comparatie_sha256='$(ce "d['compara']['sha256']")') FROM public.ofertare_ocr_rulari WHERE id=$R8")" "($ND, True)|$ND/true"
+asteapta "client: fiecare dezacord arbitrat (structura_tabele la om, fără cost), costul = apelurile" \
+  "$(q "SELECT count(*) FILTER (WHERE a.prompt_versiune='arb-v1')||'|'||count(*) FILTER (WHERE a.prompt_versiune='fara-ai' AND d.tip='structura_tabele')||'|'||count(*) FROM public.ofertare_ocr_dezacorduri d JOIN public.ofertare_ocr_arbitraje a ON a.dezacord_id=d.id WHERE d.rulare_id=$R8")|$(q "SELECT cost_usd||'/'||cost_rezervat FROM public.ofertare_ocr_rulari WHERE id=$R8")" \
+  "$((ND - 1))|1|$ND|$(python3 -c "print('%.4f' % (($ND - 1) * 0.01))")/0.0000"
+asteapta "client: rularea finalizată, 325 reconciliat (0.056 ales), 326 needs_human (structură), 327 doar exclus" \
+  "$(q "SELECT stare FROM public.ofertare_ocr_rulari WHERE id=$R8")|$(q "SELECT string_agg(pagina||':'||stare||':'||(text LIKE '%0.056%'), ',' ORDER BY pagina) FROM public.ofertare_ocr_pagini WHERE rulare_id=$R8 AND cititor='reconciliat'")" \
+  "finalizata|325:reconciliat:true,326:needs_human:false"
 o="$("${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLC" 2>&1 || true)"; grep -q "garda start invalida" <<<"$o" || esec "revenire c nearmată: $o"; ok "refuz: revenire 20261029c nearmată"
 revenire_c >/dev/null || { revenire_c; esec "revenire 20261029c"; }; ok "revenire 20261029c"
 asteapta "după revenirea c: amprenta = cea a lui 20261029b, din nou ștampilată" \

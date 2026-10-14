@@ -29,6 +29,38 @@ tokenizers, mineru_vl_utils 2.0.7). `PYTHONPATH=scripts` din rădăcina repo-ulu
 
 Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json` → `readers.*.vllm_serve`. Modelele se rulează pe rând.
 
+## Legătura cu ERP — `client.py` (pasul de după D3b)
+
+Singura cale a serverului AI spre ERP: cele 3 edge-uri D3b cu secretul `OCR_LOCAL_SECRET` (antet `x-ocr-local-secret`; din mediu sau
+din `C:\Users\Gazpet-Ai\.secrete\ocr_local_secret.txt`, niciodată afișat). Fără service_role, fără acces direct la BD; BD refuză orice
+abatere (stare, plan, imagine, proveniență). Rularea o cere un om din ERP (`fn_ofertare_ocr_cerere`, poarta pe cheltuială); clientul
+doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat se marchează în `<dir_rulare>/pasi.json`):
+
+| Pas | Comandă (`python -B -m ocr_local erp …`) | Ce face |
+|---|---|---|
+| 1 | `preia --work C:/Users/Public/paw-data/ocr_rulari` | ia prima rulare `ceruta` → `preluata`; creează `r<id>/rulare.json` (documente + pagini înghețate) |
+| 2 | `descarca <dir>` | `ofertare-pdf-link` → PDF-ul fiecărui document (URL acceptat DOAR pe bucketul `ofertare` al proiectului, fără redirect / proxy) |
+| 3 | `foaie <dir>` | foile de contact `orientare/<doc>_pNNNN-NNNN.png` + șablonul `orientare/<doc>.DE_COMPLETAT.json` (valori `null`) |
+| — | **om** | completează 0 / 90 / 180 / 270 și salvează `orientare/<doc>.json` (o pagină lipsă = `orientare_nerezolvata`, exclusă) |
+| 4 | `plan <dir>` | planul CPU per document + manifestul în BD (o singură dată; reluarea compară amprenta) |
+| — | **om** | pornește serverul vLLM al cititorului (`protocol.json` → `vllm_serve`), în fereastra GPU |
+| 5 | `citeste <dir> --cititor lighton`, apoi `mineru` | `read.run_reader` pe toate documentele (GPU, `gpu.lock`), fără ERP |
+| 6 | `incarca-citiri <dir>` | fiecare bandă × cititor (+ rândurile `exclus`) → `preluata → citita` |
+| 7 | `compara <dir>` | `compare.compare` per document → dezacordurile în BD + marcajul (număr + amprentă) |
+| 8 | `arbitreaza <dir>` | **PLĂTIT**: `ofertare-ocr-arbitreaza` pe fiecare dezacord (rezervarea + plafonul în BD); `structura_tabele` → `needs_human` fără AI → `arbitrata` |
+| 9 | `reconciliaza <dir>` | `reconcile.reconcile` per document → textul reconciliat (`reconciliat` / `needs_human`) → `finalizata` |
+| — | `oprire <dir> --motiv …` · `abandon --rezervare N` | oprește rularea · abandonează o rezervare rămasă deschisă (după 15 min) |
+
+- **Nicio reîncercare automată**: orice refuz al BD sau eroare a unui edge oprește pasul cu mesajul primit. La arbitraj: 402 (plafon /
+  stare), 502 (API — rezervarea rămâne deschisă, `abandon` după 15 min), 409 oprește; `409 arbitrat` (decizie în BD, dar pierdută local
+  printr-o întrerupere) → `pierdute.jsonl` = `needs_human` la reconciliere (fail-closed).
+- **Oprire automată** (spec §8): gardă / citire incompletă pe > 20% din pagini (la `incarca-citiri`); `needs_human` > 15% din
+  arbitrajele Claude, după minim 20 (la `arbitreaza`) → `oprita` cu motiv.
+- Decizia arbitrului se scrie local imediat (`decizii.jsonl`, fsync), înaintea următorului apel.
+- **Teste**: `test_client.py` (15, CPU, edge simulat cu verificările BD relevante) + cap-coadă pe funcțiile SQL REALE în harness
+  (`supabase/tests/ofertare_ocr_local_client_e2e.py`, rularea R8 din `scripts/test_ofertare_ocr_local.sh`, fără apel plătit).
+  `plan.py` importă PIL doar în funcțiile care randează, ca `load_plan` / `compare` / `reconcile` / `client` să ruleze și fără PIL.
+
 ## Reguli
 
 - **Selecția paginilor** (spec §1): doar paginile cerute (`--pagini` = `pagini_necitite`); un strat de text nativ (≥ 200 caractere) e doar
@@ -135,7 +167,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local -v` — 85 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 15 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 
