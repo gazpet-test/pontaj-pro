@@ -20,16 +20,31 @@ def pdf_bytes():
     pdf = fitz.open(); pg = pdf.new_page(); pg.insert_image(pg.rect, stream=lines_png()); pdf.new_page()  # p1 cu „text”, p2 alba (exclusa)
     b = pdf.tobytes(); pdf.close(); return b
 
+class RaspunsFals:
+    def __init__(self, data, cl, cade): self.data, self.i, self.cade = data, 0, cade; self.headers = {'Content-Length': str(len(data) if cl is True else cl)} if cl is not None else {}
+    def read(self, n):
+        if self.cade is not None and self.i >= self.cade: raise ConnectionResetError('transfer intrerupt')
+        b = self.data[self.i:self.i + min(n, 1000)]; self.i += len(b); return b
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+class OpenerFals:
+    def __init__(self, data, cl, cade): self.data, self.cl, self.cade = data, cl, cade
+    def open(self, req, timeout=0): return RaspunsFals(self.data, self.cl, self.cade)
+
 class FakeEdge:
     def __init__(self, pdf, arbitru=None):
         self.pdf, self.calls, self.stare, self.plan, self.pagini, self.dez = pdf, [], 'ceruta', None, {}, {}
         self.arbitru = arbitru or (lambda it: (200, {'decizie': {'id': it['id'], 'item_sha256': it['item_sha256'], 'decizie': 'ales_mineru', 'text': it['citire_mineru'],
                                                                  'motiv': 't', 'e_cantitate': False, 'anomalie_separator': False, 'arbitru_model': 'claude-sonnet-5',
                                                                  'prompt_versiune': 'arb-v1', 'cost_usd': 0.01}, 'arbitraj_id': 1}))
-        self.documente = [{'document_id': DOC, 'pagini': [1, 2]}]; self.om = set(); self.cade_dupa = None; self.comp = None
+        self.documente = [{'document_id': DOC, 'pagini': [1, 2]}]; self.om = set(); self.cade_dupa = None; self.comp = None; self.descarcari = 0; self.cl = True; self.cade_dupa_octeti = None
     def ops(self, op): return [a for f, c in self.calls if f == 'ofertare-ocr-scrie' and c['op'] == op for a in [c['args']]]
-    def get(self, url, dest, max_octeti=0, timeout=0):
-        dest.write_bytes(self.pdf); return hashlib.sha256(self.pdf).hexdigest(), len(self.pdf)
+    def get(self, url, dest, max_octeti=C.MAX_PDF, timeout=0, contor=None):
+        # descarcarea REALA (Edge.get: Content-Length, limita pe flux, contorul) peste un raspuns HTTP simulat
+        self.descarcari += 1
+        return C.Edge('0' * 64, op=OpenerFals(self.pdf, self.cl, self.cade_dupa_octeti)).get(url, dest, max_octeti=max_octeti, contor=contor)
+
     def post(self, fn, corp, timeout=60):
         status, j = self._post(fn, corp, timeout)
         if self.cade_dupa and status == 200 and fn == 'ofertare-ocr-scrie' and self.cade_dupa in (corp['op'], corp['args'].get('stare')):
@@ -330,6 +345,43 @@ class Client(unittest.TestCase):
         (d / 'apeluri.jsonl').write_text('{"id": "x", "a": "a1", "fa\n{"id": "x", "a": "a1", "faza": "start"}\n', encoding='utf-8')
         with self.assertRaises(RuntimeError): C.arbitreaza(rdir, self.edge)
         self.assertFalse([1 for f, _ in self.edge.calls if f == 'ofertare-ocr-arbitreaza'])
+    # ── egress din Storage (cerere Răzvan 14.10, după Huedin) ──
+    def _rulare(self):
+        r = C.preia(self.work, self.edge); return pathlib.Path(r['dir'])
+    def _pdf_link(self): return len([1 for f, _ in self.edge.calls if f == 'ofertare-pdf-link'])
+    def test_egress_o_singura_descarcare_reluarea_si_alta_rulare_folosesc_cache(self):
+        rdir = self._rulare(); d = C.descarca(rdir, self.edge)
+        self.assertEqual((self.edge.descarcari, self._pdf_link(), d['egress_octeti']), (1, 1, len(self.edge.pdf)))
+        (rdir / 'pdf' / ('%d.pdf' % DOC)).unlink()  # copia rularii pierduta: reluarea ia din cache, nu din Storage
+        self.assertTrue(C.descarca(rdir, self.edge)['documente'][0]['cache'])
+        r8 = self.work / 'r8'; r8.mkdir(); x = C.load(rdir / 'rulare.json'); x['rulare_id'] = 8; C.save(r8 / 'rulare.json', x)
+        self.assertTrue(C.descarca(r8, self.edge)['documente'][0]['cache'])  # alta rulare, acelasi document: tot din cache
+        self.assertEqual((self.edge.descarcari, self._pdf_link()), (1, 1))
+        self.assertEqual(C.jurnal_egress(r8)['octeti_total'], 0)
+    def test_egress_cel_mult_doua_incercari_cu_pauza_fara_bucla(self):
+        rdir = self._rulare(); self.edge.cade_dupa_octeti = 3000; t = [1000.0]
+        with self.assertRaises(ConnectionResetError): C.descarca(rdir, self.edge, acum=lambda: t[0])
+        eg = C.jurnal_egress(rdir); self.assertEqual((eg['documente'][str(DOC)]['incercari'], eg['octeti_total']), (1, 3000))  # octetii cititi numarati si la esec
+        t[0] += 10
+        with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge, acum=lambda: t[0])  # pauza: fara a doua incercare imediata
+        self.assertEqual(self.edge.descarcari, 1)
+        t[0] += 60
+        with self.assertRaises(ConnectionResetError): C.descarca(rdir, self.edge, acum=lambda: t[0])
+        t[0] += 600
+        with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge, acum=lambda: t[0])  # a treia: refuzata definitiv
+        self.assertEqual((self.edge.descarcari, C.jurnal_egress(rdir)['octeti_total']), (2, 6000))
+    def test_egress_plafon_content_length_opreste_rularea_fara_octeti(self):
+        rdir = self._rulare()
+        with patch.object(C, 'EGRESS_MAX_OCTETI', 1000):
+            r = C.descarca(rdir, self.edge)
+        self.assertEqual((r['stare'], self.edge.stare, r['egress_octeti']), ('oprita', 'oprita', 0)); self.assertIn('egress', r['motiv'])
+        with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge)  # rularea oprita: niciun pas nou
+    def test_egress_plafon_pe_flux_fara_content_length(self):
+        rdir = self._rulare(); self.edge.cl = None
+        with patch.object(C, 'EGRESS_MAX_OCTETI', 2500):
+            r = C.descarca(rdir, self.edge)
+        self.assertEqual((r['stare'], self.edge.stare), ('oprita', 'oprita')); self.assertLessEqual(r['egress_octeti'], 3000)
+        self.assertFalse((rdir / 'pdf' / ('%d.pdf' % DOC)).exists())
     def test_preia_intrerupt_nu_adopta_rulare_orfana_mai_veche(self):
         # review r2 Copilot P1-1: o rulare preluata fara plan EXISTA deja (orfana); preluarea noua cade INAINTE de commit -> nu o adopta
         self.edge.stare = 'preluata'; C.save(self.work / 'preia_in_curs.json', {'la': 0, 'active_inainte': [7]})

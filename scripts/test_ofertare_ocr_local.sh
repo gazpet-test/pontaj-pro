@@ -469,6 +469,7 @@ CE=$(OCR_PSQL="$PG_BIN/psql" PGHOST=127.0.0.1 PGPORT=$PORT PGUSER=postgres PGDAT
   || esec "client cap-coadă: $CE"
 ce() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(eval(sys.argv[2]))' "$CE" "$1"; }
 asteapta "client: preia rularea cerută, plan trimis o singură dată (reluarea = deja)" "$(ce "d['preia']['rulare'], d['plan']['pagini'], d['plan_reluat']['deja'], d['apeluri']['ofertare-pdf-link']")" "($R8, 3, True, 1)"
+asteapta "client: egress — o singură descărcare (pdf-link 1, reluarea fără cerere), octeții în jurnalul rulării" "$(ce "d['apeluri']['ofertare-pdf-link'], d['descarca']['egress_octeti'] > 0, d['descarca_reluat']['documente'][0].get('deja')")" "(1, True, True)"
 asteapta "client: citirile (2 cititori × 3 benzi + 327 exclus la ambii) → citita (reluată după cădere, fără rescrieri)" \
   "$(ce "d['incarca']")|$(q "SELECT count(*) FROM public.ofertare_ocr_pagini WHERE rulare_id=$R8 AND cititor IN ('lighton','mineru')")" "{'stare': 'citita', 'reluat': True}|8"
 ND=$(q "SELECT count(*) FROM public.ofertare_ocr_dezacorduri WHERE rulare_id=$R8")

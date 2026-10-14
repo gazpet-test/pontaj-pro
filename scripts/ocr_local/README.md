@@ -51,6 +51,12 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
 | 9 | `reconciliaza <dir>` | `reconcile.reconcile` per document → textul reconciliat (`reconciliat` / `needs_human`) → `finalizata` |
 | — | `oprire <dir> --motiv …` · `abandon --rezervare N` · `stare <dir>` | oprește rularea · abandonează o rezervare rămasă deschisă (după 15 min) · starea din BD (doar citire) + pașii locali |
 
+- **Egress din Supabase Storage** (cerere Răzvan 14.10, după Huedin — o eroare redescărca în buclă, ~600× plafonul): fiecare PDF
+  se descarcă O SINGURĂ DATĂ, apoi stă în cache-ul serverului `<work>/_pdf_cache/<sha256>.pdf` (+ `index.json` pe document);
+  reluarea și orice altă rulare iau copia locală, fără `ofertare-pdf-link` și fără egress. Din Storage: cel mult 2 încercări pe
+  document (încercarea se notează ÎNAINTEA apelului; a doua abia după 60 s; a treia refuzată definitiv), plafon de egress pe rulare
+  `OCR_EGRESS_MAX_MB` (implicit 2048 MB), verificat și din `Content-Length` înainte de citire și pe flux — depășire = rularea
+  `oprita` cu motiv. Octeții citiți (și la eșec) stau în `<dir_rulare>/egress.json`, apar în heartbeat și în `erp stare`.
 - **Reluare după cădere** (review r1, decizia B Răzvan): un pas unic (preia, planul, marcajul comparației, o tranziție) poate intra în
   BD și clientul să cadă înainte de marcajul local. La reluare clientul NU interpretează refuzul: citește starea din BD (op
   `stare_rulare` / `rulari_active`, doar citire, migrarea `20261029e`) — planul e confirmat doar dacă amprenta lui canonică din BD
@@ -69,7 +75,7 @@ doar o preia. Fiecare pas e o comandă separată, reluabilă (un pas încheiat s
   după minim 20, cu necunoscutele + pierdutele Claude socotite PERMANENT `needs_human` (și după conversia la om) — verificat după
   reluare, înaintea FIECĂRUI apel plătit și înainte de `arbitrata` → `oprita` cu motiv.
 - Decizia arbitrului se scrie local imediat (`decizii.jsonl`, fsync), înaintea următorului apel.
-- **Teste**: `test_client.py` (38, CPU, edge simulat cu verificările BD relevante + căderi simulate) + cap-coadă pe funcțiile SQL REALE în harness
+- **Teste**: `test_client.py` (42, CPU, edge simulat cu verificările BD relevante + căderi simulate) + cap-coadă pe funcțiile SQL REALE în harness
   (`supabase/tests/ofertare_ocr_local_client_e2e.py`, rularea R8 din `scripts/test_ofertare_ocr_local.sh`, fără apel plătit).
   `plan.py` importă PIL doar în funcțiile care randează, ca `load_plan` / `compare` / `reconcile` / `client` să ruleze și fără PIL.
 
@@ -179,7 +185,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 38 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local ocr_local.test_client -v` — 89 + 42 teste CPU (clientul ERP: vezi mai sus), fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 

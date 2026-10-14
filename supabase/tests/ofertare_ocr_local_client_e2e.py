@@ -104,7 +104,8 @@ class SqlEdge:
             if not ok or s.get('arbitraj_inregistrat') is not True: return 409, {'error': str(s)}
             return 200, {'arbitraj_id': s['id'], 'decizie': dict(dec, id=dz['item_id'], item_sha256=h, arbitru_model='claude-sonnet-5', prompt_versiune='arb-v1', cost_usd=0.01)}
         return 404, {'error': 'edge necunoscut'}
-    def get(self, url, dest, max_octeti=0, timeout=0):
+    def get(self, url, dest, max_octeti=0, timeout=0, contor=None):
+        if contor: contor(len(PDF))  # egress numarat ca in Edge.get
         dest.write_bytes(PDF); return hashlib.sha256(PDF).hexdigest(), len(PDF)
 
 def construieste(rdir):
@@ -137,6 +138,7 @@ def main():
     edge = SqlEdge(); work = pathlib.Path(tempfile.mkdtemp(prefix='ocr_client_e2e_')); out = {}
     out['preia'] = cade(edge, 'preia', C.preia, work, edge); rdir = pathlib.Path(out['preia']['dir'])
     out['descarca'] = C.descarca(rdir, edge); construieste(rdir)
+    out['descarca_reluat'] = C.descarca(rdir, edge)  # copia rularii valida: nicio cerere pdf-link noua
     out['plan'] = cade(edge, 'plan', C.plan_rulare, rdir, edge); out['plan_reluat'] = C.plan_rulare(rdir, edge)
     out['incarca'] = cade(edge, 'citita', C.incarca_citiri, rdir, edge)
     out['compara'] = cade(edge, 'comparatie_gata', C.compara_rulare, rdir, edge); out['compara_reluat'] = C.compara_rulare(rdir, edge)
