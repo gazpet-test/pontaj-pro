@@ -1,13 +1,17 @@
-// detect_plate_orphan_msgs v3 - 26.05.2026
-// v3: Bypass auth check when X-Internal-MCP-Bypass header is present
-// (allows MCP/admin script invocation via pg_net for emergency lansare)
+// detect_plate_orphan_msgs v4 - 14.10.2026 (securitate etapa 2 grup A)
+// v4: scos complet antetul X-Internal-MCP-Bypass (v3 îl compara cu un literal scris în cod, verify_jwt=false →
+//     oricine îl știa pornea procesare AI plătită + UPDATE logistica_alimentari). Niciun consumator intern găsit
+//     (cron, funcții/trigger-e BD, pg_net, alte edge, jurnale 48h). Poarta e acum în acces.ts: JWT-ul sesiunii +
+//     owner SAU (rol admin_logistica ȘI modulul 'logistica'). Restul codului e identic cu v24 (plus un tip `any`, vezi mai jos).
+//     Revenire: supabase/functions_retrase/revenire_grupa/detect_plate_orphan_msgs.v24.ts
 
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { poartaPlate } from './acces.ts'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-mcp-bypass',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
@@ -15,7 +19,6 @@ const MODEL = 'claude-haiku-4-5-20251001'
 const MODEL_PRICING = { input: 1.0, output: 5.0 }
 const MAX_BATCH = 30
 const WINDOW_HOURS = 96
-const ADMIN_BYPASS_SECRET = crypto.randomUUID() // <REDACTAT len 40> la copiere (14.10.2026): literalul din v24 nu intră în repo; valoarea aleatoare nu se potrivește niciodată
 
 const PLATE_PROMPT = `Esti un OCR expert pentru identificarea plăcuțelor auto din Romania.
 Analizeaza poza si extrage UNA SINGURA placuta auto vizibila (sau cod intern UT).
@@ -43,7 +46,9 @@ Returneaza STRICT JSON valid:
 }`
 
 async function downloadPozaAsBase64(
-  supabaseService: ReturnType<typeof createClient>, path: string,
+  // v4: `any` în loc de ReturnType<typeof createClient> — tiparea supabase-js nouă pica `deno check` (TS2345); fără efect la rulare
+  // deno-lint-ignore no-explicit-any
+  supabaseService: any, path: string,
 ): Promise<{ base64: string; contentType: string }> {
   const { data, error } = await supabaseService.storage
     .from('whatsapp-motorina-bonuri').download(path)
@@ -103,46 +108,23 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS })
 
   try {
-    const authHeader = req.headers.get('Authorization')
-    const adminBypass = req.headers.get('X-Internal-MCP-Bypass')
-    const isAdminBypass = adminBypass === ADMIN_BYPASS_SECRET
-
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseAnon = Deno.env.get('SUPABASE_ANON_KEY')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const supabaseService = createClient(supabaseUrl, supabaseServiceKey)
+
+    // Poarta înaintea oricărei alte lucrări (și înaintea mesajelor despre configurare).
+    const acces = await poartaPlate(req, supabaseService)
+    if (!acces.ok) {
+      return new Response(JSON.stringify({ error: acces.error }), {
+        status: acces.status, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+      })
+    }
+
     const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')
     if (!anthropicKey) {
       return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY missing' }), {
         status: 500, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
       })
-    }
-
-    const supabaseService = createClient(supabaseUrl, supabaseServiceKey)
-
-    if (!isAdminBypass) {
-      if (!authHeader) {
-        return new Response(JSON.stringify({ error: 'Missing Authorization' }), {
-          status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
-        })
-      }
-      const supabaseUser = createClient(supabaseUrl, supabaseAnon, {
-        global: { headers: { Authorization: authHeader } }
-      })
-      const { data: { user }, error: userErr } = await supabaseUser.auth.getUser(
-        authHeader.replace('Bearer ', '')
-      )
-      if (userErr || !user) {
-        return new Response(JSON.stringify({ error: 'Invalid auth' }), {
-          status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
-        })
-      }
-      const { data: profile } = await supabaseUser
-        .from('profiles').select('is_owner, role').eq('id', user.id).maybeSingle()
-      if (!profile?.is_owner && profile?.role !== 'admin_logistica') {
-        return new Response(JSON.stringify({ error: 'forbidden' }), {
-          status: 403, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
-        })
-      }
     }
 
     const { data: orphans, error: fetchErr } = await supabaseService
@@ -181,7 +163,7 @@ Deno.serve(async (req: Request) => {
     const results: ResultItem[] = []
     let totalTokensIn = 0, totalTokensOut = 0
 
-    console.log(`[plate-detect] START${isAdminBypass ? ' (admin-bypass)' : ''} | orphans=${orphans.length}`)
+    console.log(`[plate-detect] START user=${acces.userId} | orphans=${orphans.length}`)
 
     for (const msg of orphans) {
       const result: ResultItem = { msg_id: msg.id as number, placuta: null, confidence: 0 }
@@ -288,7 +270,7 @@ Deno.serve(async (req: Request) => {
       errors: results.filter(r => r.error).length,
     }
     const costUsd = (totalTokensIn * MODEL_PRICING.input + totalTokensOut * MODEL_PRICING.output) / 1_000_000
-    console.log(`[plate-detect] OK${isAdminBypass ? ' (admin)' : ''} | ${JSON.stringify(summary)} | $${costUsd.toFixed(5)}`)
+    console.log(`[plate-detect] OK user=${acces.userId} | ${JSON.stringify(summary)} | $${costUsd.toFixed(5)}`)
 
     return new Response(JSON.stringify({
       success: true, summary, results,

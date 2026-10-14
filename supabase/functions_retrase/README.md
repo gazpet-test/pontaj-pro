@@ -23,6 +23,16 @@ temp-creare-user, temp-reset-parola, temp-upload-taloane, tmp-copy-paza (vj=fals
 
 Pentru revenire se folosește `_stub_410/index.ts`.
 
+## Securitate etapa 2, grup A (14.10.2026): `revenire_grupa/`
+Două funcții acceptau antetul `X-Internal-MCP-Bypass` comparat cu un literal de 40 de caractere scris în cod (`verify_jwt=false`), care ocolea orice verificare.
+| slug | versiune copiată | ce s-a făcut | copie de revenire |
+|---|---|---|---|
+| detect_plate_orphan_msgs | v24 | antetul scos; poarta în `supabase/functions/detect_plate_orphan_msgs/acces.ts` | `revenire_grupa/detect_plate_orphan_msgs.v24.ts` |
+| extract_external_bon | v24 | retrasă (niciun consumator): stub 410 în `supabase/functions/extract_external_bon/` | `revenire_grupa/extract_external_bon.v24.ts` |
+
+Literalul NU e în repo: în ambele copii constanta e `crypto.randomUUID()` cu marcajul `<REDACTAT len 40>`, deci o copie republicată nu mai are o ocolire care să se potrivească. Restul codului e textual cel deployat (fără spațiile de la capăt de rând).
+Revenire: copiezi fișierul în `supabase/functions/<slug>/index.ts`, păstrezi slug-ul în `NO_JWT` (pentru `extract_external_bon` îl adaugi) și publici cu „Deploy edge function (manual)”.
+
 ## Verificarea dinainte de ștergere (14.10, doar citire)
 - 0 apelanți în: repo (fără docs), cron.job, funcțiile din BD, sursele celor 37 de edge deployate fără repo, serverul AI, Terra, laptop. Excepție: `ofertare-seap-diag` apare doar ca nume în metadatele unui pachet Codex vechi de pe laptop.
 - 0 apeluri în jurnalele edge din ultimele 48h (cât se poate citi).
