@@ -10,7 +10,12 @@ CEDILLA = str.maketrans({'ş': 'ș', 'ţ': 'ț', 'Ş': 'Ș', 'Ţ': 'Ț'})
 NUM = r'[-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?'
 # Politica inversa (review Copilot r3): ORICE caracter nespatiu care nu e numar sau litera e token separat (%, ‰, _, (, ), €, ...).
 # Singura normalizare la comparare ramane sedila/virgula pe ș/ț. Mai mult zgomot la arbitru, dar nicio diferenta nu se pierde.
-TOKEN = re.compile(NUM + r'|[^\W\d_]+|\S', re.U)  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
+# Literele = clasa EXPLICITA de mai jos (nu \w Unicode): aceeasi in BD (fn_ofertare_ocr_granita, D3a r9), independenta de locale.
+# Latin + diacritice (ș ț ă î â), greaca, chirilica, exponenti / indici (m² m³ ⁰-₟), fractii (½ ¼ ¾ ⅐-↉) si µ ª º; orice alt caracter
+# nespatiu e token de sine statator. Testul de paritate cere ca migrarea sa contina exact aceasta clasa (review Jakarinos r8).
+LETTERS = ('A-Za-z\u00aa\u00b2\u00b3\u00b5\u00b9\u00ba\u00bc-\u00be\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f'
+           '\u0370-\u03ff\u0400-\u04ff\u1e00-\u1eff\u2070-\u209f\u2150-\u2189')
+TOKEN = re.compile(NUM + '|[' + LETTERS + ']+|\\S')  # semnele si comparatorii sunt tokeni si cand stau separat (± 0,5, - 5, ≤ 50)
 NUMBER = re.compile('^' + NUM + '$')
 BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu lipit de cifre/litere: 10**2 + 3**2 ramane
 SUPSUB = re.compile(r'<(sup|sub)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)  # exponent/indice = semantica: devin ^x / _x, nu dispar

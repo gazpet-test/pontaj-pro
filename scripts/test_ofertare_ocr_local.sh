@@ -81,6 +81,7 @@ q "CREATE TABLE zz_granita (s text, i int, e boolean)" >/dev/null; "${PSQL[@]}" 
 asteapta "granița de token SQL = TOKEN-ul Python ($(q "SELECT count(*) FROM zz_granita") poziții)" \
   "$(q "SELECT coalesce(string_agg(s || '@' || i, ' '), '') FROM zz_granita WHERE public.fn_ofertare_ocr_granita(s, i) IS DISTINCT FROM e")" ""
 q "DROP TABLE zz_granita" >/dev/null
+asteapta "«m» tăiat din «m²» refuzat (review Jakarinos r8)" "$(q "SELECT public.fn_ofertare_ocr_literal('[[\"text\",\"m² ½\"]]', '{\"seg\":[0,0],\"start\":0,\"end\":1}') IS NULL")" t
 
 # ── drepturi directe ─────────────────────────────────────────────────────────────────────────────────────
 refuz "anon SELECT rulari" anon - "SELECT count(*) FROM public.ofertare_ocr_rulari" "permission denied"

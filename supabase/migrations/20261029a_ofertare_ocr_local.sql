@@ -765,7 +765,8 @@ END $f$;
 
 
 -- Granița de token la poziția i (0..length, între caracterul i și i+1): fals DOAR dacă i cade STRICT în interiorul unui token al
--- tokenizării din scripts/ocr_local/compare.py (TOKEN = NUM | litere | orice alt caracter nespațiu, NUM pe [0-9]). Tokenizarea se
+-- tokenizării din scripts/ocr_local/compare.py (TOKEN = NUM | litere | orice alt caracter nespațiu, NUM pe [0-9], literele = clasa
+-- EXPLICITĂ compare.LETTERS, aceeași aici, fără [[:alpha:]] dependent de locale — review Jakarinos r8). Tokenizarea se
 -- face pe TOT prefixul (regexp_instr de la stânga la dreapta), nu din vecini: „1e3.5” = „1e3” + „.5” (review Jakarinos r7). În ARE
 -- alternanța e lacomă (cel mai lung la cea mai din stânga poziție) = prima alternativă din Python, fiindcă NUM / litere / un caracter
 -- încep cu clase disjuncte și NUM lacom e cel mai lung. Testată în harness pe tabelul de adevăr din TOKEN-ul Python. Internă.
@@ -773,7 +774,7 @@ CREATE FUNCTION public.fn_ofertare_ocr_granita(p text, i integer)
 RETURNS boolean LANGUAGE plpgsql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $f$
 DECLARE v_pos int := 1; v_s int; v_e int;
-        c_tok constant text := '[-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?|[[:alpha:]]+|[^[:space:]]';
+        c_tok constant text := '[-+±−]?[.,]?[0-9]+(?:[.,][0-9]+)*(?:[eE][-+]?[0-9]+)?[%‰]?|[A-Za-zª²³µ¹º¼-¾À-ÖØ-öø-ɏͰ-ϿЀ-ӿḀ-ỿ⁰-₟⅐-↉]+|[^[:space:]]';
 BEGIN
   IF p IS NULL OR i IS NULL OR i < 0 OR i > length(p) THEN RETURN false; END IF;
   IF i = 0 OR i = length(p) THEN RETURN true; END IF;

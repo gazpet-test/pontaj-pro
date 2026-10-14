@@ -262,6 +262,14 @@ class Comparare(unittest.TestCase):
                         if pos is None: continue
                         mid_tok = {j for m in TOKEN.finditer(sg[k][1]) for j in range(m.start() + 1, m.end())}
                         self.assertNotIn(pos, mid_tok, (raw, it['id'], pos))
+    def test_tokenizarea_identica_cu_bd(self):
+        # D3a r9: migrarea contine EXACT regex-ul TOKEN (NUM | [LETTERS]+ | nespatiu), cu literele explicite; m² e un singur token
+        import codecs, re as _re
+        from .compare import TOKEN, NUM, LETTERS
+        sql = (pathlib.Path(__file__).resolve().parents[2] / 'supabase/migrations/20261029a_ofertare_ocr_local.sql').read_text(encoding='utf-8')
+        tok = _re.search(r"c_tok constant text := '([^']*)'", sql).group(1)
+        self.assertEqual(tok, NUM.replace(r'\d', '[0-9]') + '|[' + LETTERS + ']+|[^[:space:]]')
+        self.assertEqual([m.group(0) for m in TOKEN.finditer('5 m² și ½ x')], ['5', 'm²', 'și', '½', 'x'])
     def test_politica_inversa_simboluri_si_exponenti(self):
         for x, y in (('pantă 5 %', 'pantă 5'), ('abatere 5 ‰', 'abatere 5'), ('cod A_B', 'cod AB'), ('valoare (5)', 'valoare 5'),
                      ('preț 100 €', 'preț 100'), ('suprafață m<sup>2</sup>', 'suprafață m2'), ('apă H<sub>2</sub>O', 'apă H2O')):
