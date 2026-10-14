@@ -83,6 +83,18 @@ Comenzile `vllm serve` exacte (flagurile din benchmark) stau în `protocol.json`
   poziții nu mai e scutit (parserul nu păstrează `colspan`, deci echivalența nu se poate dovedi).
 - Reconcilierea publică `reconciliere/` (ambele artefacte) printr-un singur rename; pachetul nu scrie `__pycache__` (`python -B`).
 
+## După review-ul Jakarinos r3 (14.10)
+
+- Etichete HTML șterse doar dintr-o listă închisă, cu atribute bine formate (`x<y si z>3` rămâne text); `\|` în markdown = bară
+  în celulă, nu separator.
+- Tabelul e un marcaj `⟦tabel⟧` în fluxul de text: text mutat de o parte pe alta a unui tabel = dezacord (`contine_tabel`), aplicat
+  doar ca `ales_lighton`, altfel `needs_human`.
+- `e_cantitate`: orice dezacord pe pagini `quantity_table`; în text, cifră în fragment sau număr vecin; în tabele, orice celulă cu cifre
+  care diferă (inclusiv mutată de coloană fără antet).
+- `gpu.lock` marcat „de păstrat” din momentul cererii până la scrierea rezultatului complet (o eroare la scriere nu-l mai eliberează).
+- În proba de mai jos toate benzile sunt rulate ca `quantity_table` (și cele de text), deci contorul `e_cantitate` din probă (76/84)
+  e supraestimat față de o rulare reală.
+
 ## Probă pe benchmark-ul 14.10 (CPU, citirile reale redate din disc)
 
 38 de benzi (30 benzi de text din 10 pagini + 8 pagini de tabel, 5.767 tokeni, 179 rânduri de tabel): **84 de dezacorduri** (~2,2 pe bandă),
@@ -92,7 +104,7 @@ dintre care **1 pe cantitate** — `0,056` (LightOn) vs `0.056` (MinerU), marcat
 
 ## Teste
 
-`python -B -m unittest ocr_local.test_ocr_local -v` — 65 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
+`python -B -m unittest ocr_local.test_ocr_local -v` — 72 de teste CPU, fără endpoint (geometrie, gardă, plan, citire cu cititori falși:
 redirect, reluare, oprire, lock, SHA greutăți, atestare server; comparare; reconciliere; regresii pe cazurile din review-ul r1; regresie pe
 a_098 din benchmark, sărit dacă lipsește).
 

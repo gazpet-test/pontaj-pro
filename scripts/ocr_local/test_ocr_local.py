@@ -174,6 +174,14 @@ class Citire(unittest.TestCase):
                 RD.run_reader(out, 'lighton', run_id='t', check_weights=False, check_server=False, lock=False)
                 st = RD.run_reader(out, 'lighton', run_id='t2', check_weights=False, check_server=False, lock=False)
             self.assertEqual(st['status'], 'complete')
+    def test_lock_pastrat_daca_scrierea_rezultatului_pica(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = self._plan(d); lock = pathlib.Path(d) / 'gpu.lock'; real_save = RD.save
+            def fake(data, o, cfg, dl): (o / 'request_started.json').write_text('{}'); return '', {'ok': False, 'signal': 'deadline'}
+            with patch.dict(RD.FUNCS, {'mineru': fake}), patch('ocr_local.read.protocol', return_value=dict(RD.protocol(), gpu_lock=str(lock))), \
+                 patch('ocr_local.read.save', side_effect=lambda p, v: (_ for _ in ()).throw(OSError('disc plin')) if p.name == 'result.json' else real_save(p, v)):
+                with self.assertRaises(OSError): RD.run_reader(out, 'mineru', run_id='t', check_weights=False, check_server=False)
+            self.assertTrue(lock.exists())
     def test_rezultat_incomplet_opreste(self):
         with tempfile.TemporaryDirectory() as d:
             out = self._plan(d); calls = []
@@ -238,6 +246,24 @@ class Comparare(unittest.TestCase):
         s, its = compare_band(BAND, '<table><tr><td></td><td>CODX</td><td>mc</td><td>conform proiect</td></tr></table>', OK,
                               '<table><tr><td>CODX</td><td>mc</td><td>conform proiect</td></tr></table>', OK)
         self.assertEqual(len(its), 1)
+    def test_jakarinos_r3_operatori_si_etichete(self):
+        for x, y in (('x != 5', 'x = 5'), ('panta 5 %', 'panta 5'), ('x<y si z>3', 'x 3')):
+            s, its = compare_band(BAND, x, OK, y, OK); self.assertGreaterEqual(len(its), 1, (x, y))
+    def test_semn_pe_pagina_de_cantitati_e_marcat_cantitate(self):
+        s, its = compare_band(BAND, 'Cantitate - 5 m', OK, 'Cantitate 5 m', OK); self.assertTrue(its[0]['e_cantitate'])
+        band_text = dict(BAND, kind='continuous_text')
+        s, its = compare_band(band_text, 'Cantitate - 5 m', OK, 'Cantitate 5 m', OK); self.assertTrue(its[0]['e_cantitate'])
+    def test_celula_cu_cifra_mutata_fara_antet_e_cantitate(self):
+        s, its = compare_band(dict(BAND, kind='continuous_text'), '<table><tr><td>A</td><td>5 m</td><td></td></tr></table>', OK,
+                              '<table><tr><td>A</td><td></td><td>5 m</td></tr></table>', OK)
+        self.assertEqual(len(its), 1); self.assertTrue(its[0]['e_cantitate'])
+    def test_text_mutat_peste_tabel_e_dezacord(self):
+        tab = '<table><tr><td>1.</td><td>A</td></tr></table>'
+        s, its = compare_band(BAND, 'Titlu A' + tab + 'Titlu B', OK, 'Titlu A Titlu B' + tab, OK)
+        self.assertGreaterEqual(len(its), 1); self.assertTrue(any(i.get('contine_tabel') for i in its))
+    def test_bara_escapata_in_markdown(self):
+        md = '| A | otel \\| PE | m | 5 |'
+        self.assertEqual(segments(md)[0][1], [['A', 'otel | PE', 'm', '5']])
     def test_bold_markdown_doar_pe_perechi(self):
         s, its = compare_band(BAND, '**Transport Utilaje** 1,00', OK, 'Transport Utilaje 1,00', OK); self.assertEqual(its, [])
     def test_structura_diferita_aplatizeaza(self):
@@ -256,8 +282,8 @@ class Benchmark(unittest.TestCase):
     def test_a098_singurul_dezacord_pe_cantitate_e_separatorul(self):
         rd = lambda run: (BENCH / run / 'results/a_098_control300/raw.txt').read_text(encoding='utf-8')
         s, its = compare_band(BAND, rd('17_lightonocr2_vllm'), OK, rd('21d_mineru25_pro_vllm'), OK)
-        q = [i for i in its if i['e_cantitate']]
-        self.assertEqual(len(q), 1); self.assertTrue(q[0]['anomalie_separator'])
+        q = [i for i in its if i['anomalie_separator']]
+        self.assertEqual(len(q), 1); self.assertTrue(q[0]['e_cantitate']); self.assertEqual(q[0]['tip'], 'rand_tabel')
         self.assertEqual((q[0]['citire_lighton'].split(' | ')[-1], q[0]['citire_mineru'].split(' | ')[-1]), ('0,056', '0.056'))
 
 class Reconciliere(unittest.TestCase):
@@ -350,6 +376,10 @@ class Reconciliere(unittest.TestCase):
         r, items, _ = self._run(t1, t2, [self.dec('ales_mineru')])
         self.assertTrue(items[0]['ancora_sigura']); self.assertFalse(r['pages'][0]['needs_human'])
         self.assertIn('| 1. | A1 | unu | m | 1,00 |\n| 1b. | A1b | nou | m | 5,00 |\n| 2. |', r['pages'][0]['text'])
+    def test_text_mutat_peste_tabel_needs_human(self):
+        tab = '<table><tr><td>1.</td><td>A</td></tr></table>'
+        r, items, out = self._run('Titlu A' + tab + 'Titlu B', 'Titlu A Titlu B' + tab, [self.dec('ales_mineru')])
+        self.assertTrue(r['pages'][0]['needs_human'])
     def test_validare_schema(self):
         v = lambda d: valid_decision(d, None, POLICY)
         self.assertTrue(v(self.dec('needs_human'))); self.assertFalse(v(self.dec('needs_human', 'x')))

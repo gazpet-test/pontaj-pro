@@ -62,7 +62,9 @@ def apply_band(raw_a, raw_b, items, decisions):
         d = decisions.get(it['id'])
         if d is None or d['decizie'] == 'needs_human': needs = True; continue
         if d['decizie'] == 'ales_lighton': continue
+        if it.get('contine_tabel'): needs = True; continue  # textul mutat peste un tabel nu se coase automat
         a1, a2 = it['pozitie']['lighton']; new = chosen(it, d)
+        if any(ta[k][2] is None for k in range(a1, min(a2, len(ta)))) or (a1 < len(ta) and ta[a1][2] is None): needs = True; continue
         if a1 < a2: si, start = ta[a1][1], ta[a1][2]; end = ta[a2 - 1][3]
         elif a1 < len(ta): si, start = ta[a1][1], ta[a1][2]; end = start; new = new + ' '
         elif ta: si, start = ta[-1][1], ta[-1][3]; end = start; new = ' ' + new

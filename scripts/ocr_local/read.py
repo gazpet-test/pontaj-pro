@@ -175,11 +175,13 @@ def run_reader(plan_dir, reader, *, run_id, check_weights=True, check_server=Tru
             if (out / 'request_started.json').exists():
                 state.update(status='interrupted_needs_review', band=band['id']); break
             data = (plan_dir / band['image']).read_bytes()
+            holder['keep'] = True  # GPU-ul e 'ocupat' din momentul cererii pana cand rezultatul complet e scris pe disc
             raw, result = FUNCS[reader](data, out, cfg, proto['deadline_seconds'])
             (out / 'raw.txt').write_bytes(raw.encode('utf-8'))  # octeti exacti: hash-ul nu depinde de CRLF pe Windows
             result.update(band=band['id'], reader=reader, image_sha256=band['image_sha256'], raw_sha256=hashlib.sha256(raw.encode()).hexdigest(),
                           protocol=proto['version'], weights_sha256=state['weights_sha256'], run_id=run_id, backend_idle_confirmed=False)
             save(out / 'result.json', result); state['done'] += 1
+            if result['ok']: holder['keep'] = False
             if not result['ok']:
                 holder['keep'] = True  # orice rezultat incomplet (termen, eroare de transport, garda): backend-ul nu e confirmat idle
                 state.update(status='stopped_no_retry', band=band['id'], result=result, gpu_lock_pastrat=holder['keep']); break

@@ -15,12 +15,16 @@ NUMBER = re.compile('^' + NUM + '$')
 BOLD = re.compile(r'(?<![\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?![\w*])', re.S)  # nu lipit de cifre/litere: 10**2 + 3**2 ramane
 SUPSUB = re.compile(r'<(sup|sub)\b[^>]*>(.*?)</\1\s*>', re.I | re.S)  # exponent/indice = semantica: devin ^x / _x, nu dispar
 def supsub(s): return SUPSUB.sub(lambda m: ('^' if m.group(1).lower() == 'sup' else '_') + m.group(2), s)
-TAG = re.compile(r'</?[A-Za-z][A-Za-z0-9]*(?:\s[^<>]*)?/?>')  # doar etichete HTML reale: 'x < 5 si y > 3' ramane text
+# doar etichete HTML dintr-o lista inchisa, cu atribute bine formate: 'x<y si z>3' sau 'x < 5 si y > 3' raman text (review Jakarinos r3)
+TAG = re.compile(r'</?(?:p|br|hr|h[1-6]|div|span|b|strong|em|i|u|s|small|big|font|center|li|ul|ol|dl|dt|dd|thead|tbody|tfoot|tr|td|th|table|caption|colgroup|col|section|article|header|footer|blockquote|pre|code|a|img)'
+                 r'(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*(?:\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s"\'<>=`]+))?)*\s*/?>', re.I)
 TABLE_HTML = re.compile(r'<table\b.*?</table\s*>', re.I | re.S)
 ROW_HTML = re.compile(r'<tr\b.*?</tr\s*>', re.I | re.S)
 CELL_HTML = re.compile(r'<t[dh]\b[^>]*>(.*?)</t[dh]\s*>', re.I | re.S)
 MD_SEP = re.compile(r'^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$')
 CONTEXT = 6
+
+TABLE_MARK = '⟦tabel⟧'
 
 def norm_word(t): return t.translate(CEDILLA)
 
@@ -37,8 +41,9 @@ def md_rows(lines):
         if MD_SEP.match(ln.strip()): continue
         s = ln.strip()
         if s.startswith('|'): s = s[1:]
-        if s.endswith('|'): s = s[:-1]
-        rows.append([clean_inline(c) for c in s.split('|')])
+        if s.endswith('|') and not s.endswith('\\|'): s = s[:-1]
+        # separatorul = '|' neescapat; '\|' e bara din interiorul celulei (review Jakarinos r3)
+        rows.append([clean_inline(c.replace('\\|', '|')) for c in re.split(r'(?<!\\)\|', s)])
     return rows
 
 def plain(s):
@@ -72,7 +77,8 @@ def tokens(segs):
     """Tokenii segmentelor text, cu pozitia lor (segment, start, end) pentru reconciliere."""
     out = []
     for si, (kind, val) in enumerate(segs):
-        if kind != 'text': continue
+        # un tabel e un marcaj in fluxul de text: textul mutat de o parte pe alta a unui tabel devine dezacord (review Jakarinos r3)
+        if kind != 'text': out.append((TABLE_MARK, si, None, None)); continue
         for m in TOKEN.finditer(val): out.append((m.group(0), si, m.start(), m.end()))
     return out
 
@@ -140,13 +146,14 @@ def compare_text(seg_a, seg_b, base):
     def literal(tl, segs, i1, i2):
         # fragmentul exact din citire (cu tot ce e intre tokeni: cratime, semne, spatii), nu tokenii lipiti
         if i1 >= i2: return ''
-        if tl[i1][1] == tl[i2 - 1][1]: return segs[tl[i1][1]][1][tl[i1][2]:tl[i2 - 1][3]]
+        if tl[i1][1] == tl[i2 - 1][1] and segs[tl[i1][1]][0] == 'text': return segs[tl[i1][1]][1][tl[i1][2]:tl[i2 - 1][3]]
         parts = []
         for si in range(tl[i1][1], tl[i2 - 1][1] + 1):
-            if segs[si][0] != 'text': continue  # un tabel intre doua segmente text nu intra in fragment
+            if segs[si][0] != 'text': parts.append(TABLE_MARK); continue
             s = tl[i1][2] if si == tl[i1][1] else 0; e = tl[i2 - 1][3] if si == tl[i2 - 1][1] else len(segs[si][1])
             parts.append(segs[si][1][s:e])
         return '\n'.join(parts)
+    is_num = lambda k: 0 <= k < len(ka) and bool(NUMBER.match(ka[k]))
     for n, g in enumerate(groups):
         fa = literal(ta, seg_a, g['a1'], g['a2']); fb = literal(tb, seg_b, g['b1'], g['b2'])
         items.append(dict(base, id='%s_t%d' % (base['band'], n), tip='text', citire_lighton=fa, citire_mineru=fb,
@@ -154,7 +161,10 @@ def compare_text(seg_a, seg_b, base):
                           context_dupa=' '.join(t[0] for t in ta[g['a2']:g['a2'] + CONTEXT]),
                           pozitie={'lighton': [g['a1'], g['a2']], 'mineru': [g['b1'], g['b2']]},
                           diferenta_numerica=numeric_diff(fa, fb), anomalie_separator=separator_anomaly(fa, fb),
-                          e_cantitate=base['kind'] == 'quantity_table' and numeric_diff(fa, fb)))
+                          contine_tabel=TABLE_MARK in fa or TABLE_MARK in fb,
+                          # pe pagini de cantitati orice dezacord e posibila cantitate; in text: cifra in fragment sau numar vecin
+                          e_cantitate=bool(base['kind'] == 'quantity_table' or numeric_diff(fa, fb) or any(ch.isdigit() for ch in fa + fb)
+                                           or is_num(g['a1'] - 1) or is_num(g['a2']))))
     return items, len(ka)
 
 def match_rows(ra, rb):
@@ -212,7 +222,8 @@ def compare_tables(seg_a, seg_b, base):
             diff = [k for k in range(max(len(ca), len(cb))) if cell(ca, k) != cell(cb, k)]
             rl = roles(header, ca)
             has_digit = any(ch.isdigit() for x in ca + cb for ch in x)
-            e_cant = (len(ca) != len(cb) and has_digit) or rl.get('cantitate') in diff
+            e_cant = (len(ca) != len(cb) and has_digit) or rl.get('cantitate') in diff \
+                or any(ch.isdigit() for k in diff for x in (ca[k] if k < len(ca) else '', cb[k] if k < len(cb) else '') for ch in x)
             triplet = len(ca) != len(cb) or any(rl.get(x) in diff for x in ('cod', 'um', 'cantitate'))
         else:
             tip = 'rand_lipsa_lighton' if a is None else 'rand_lipsa_mineru'; diff = None
