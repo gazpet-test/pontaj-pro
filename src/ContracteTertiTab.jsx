@@ -17,6 +17,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { norm } from './lib/diacritice.js'
 import GeneratorContractMontaj from './GeneratorContractMontaj.jsx'
+import { stareLegaturaDinCitire, santierInitial, salveazaContractSiLegatura } from './executieContractLegatura.js'
 
 const G = {
   bg:'#0D1117', surface:'#161B22', border:'#21262D', border2:'#30363D',
@@ -1008,7 +1009,10 @@ function AnexaContractSection({ contractId, canWrite }) {
 // CONTRACT MODAL — cu categorie + sens + partener_text
 // ══════════════════════════════════════════════════════════
 function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSuccess }) {
-  const isNew = !item.id
+  // Jakarinos r3 P2 (#709): id-ul contractului stă în starea editorului. După un INSERT reușit se reține imediat,
+  // ca o salvare repetată (modal rămas deschis după o eroare la legare) să facă UPDATE, nu un al doilea INSERT.
+  const [idContract, setIdContract] = useState(item.id || null)
+  const isNew = !idContract
   const [f, setF] = useState({
     beneficiar_id: item.beneficiar_id || '',
     partener_text: item.partener_text || '',
@@ -1055,6 +1059,36 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   const proiecteExec = siteLista
   const proiectExecId = siteIdSelectat   // ⚠️ acum e site_id, nu project_id
   const setProiectExecId = setSiteIdSelectat
+  // TKT-2026-0333 (Jakarinos r1 P2 pe #709): proiectul legat deja (după contract_id, cu sau fără șantier)
+  // și cererea explicită de dezlegare — fără ele, salvarea dezlega proiectele fără șantier
+  const [proiectLegat, setProiectLegat] = useState(null)
+  const [dezleagaCerut, setDezleagaCerut] = useState(false)
+  // Jakarinos r2 P2: „citire eșuată” ≠ „nicio legătură”. 'in_curs' | 'ok' | 'eroare' — cât nu e 'ok', salvarea
+  // nu atinge legătura, șantierul nu se ghicește și câmpul Șantier e blocat (până la o citire reușită)
+  const [stareLegatura, setStareLegatura] = useState(isNew ? 'ok' : 'in_curs')
+  const [eroareLegatura, setEroareLegatura] = useState(null)
+
+  // Proiectul legat se caută după contract_id (cu sau fără șantier); șantierul lui (sau cel ghicit după denumire,
+  // doar dacă nu e nimic legat) precompletează câmpul
+  const citesteLegatura = async (sites) => {
+    setStareLegatura('in_curs'); setEroareLegatura(null)
+    let citire = null
+    if (!isNew) {
+      try {
+        citire = await supabase
+          .from('executie_proiecte')
+          .select('id, cod_intern, nume, site_id')
+          .eq('contract_id', idContract)
+          .maybeSingle()
+      } catch (e) { citire = { data: null, error: { message: e?.message || String(e) } } }
+    }
+    const st = stareLegaturaDinCitire({ isNew, citire })
+    setProiectLegat(st.proiectLegat)
+    setEroareLegatura(st.eroare)
+    setStareLegatura(st.stare)
+    const site = santierInitial({ stare: st.stare, proiectLegat: st.proiectLegat, categorie: f.categorie, denumire: f.denumire, sites })
+    if (site) setSiteIdSelectat(site)
+  }
 
   // Încarcă SITES (nu executie_proiecte) + detectează linkul curent
   useEffect(() => {
@@ -1066,35 +1100,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         .not('name', 'ilike', '%sediu%')
         .order('name')
       setSiteLista(sites || [])
-
-      if (!isNew && item.id) {
-        // Detectez șantierul prin proiectul legat de contract
-        const { data: linked } = await supabase
-          .from('executie_proiecte')
-          .select('site_id')
-          .eq('contract_id', item.id)
-          .maybeSingle()
-        if (linked?.site_id) {
-          setSiteIdSelectat(String(linked.site_id))
-        }
-      }
-
-      // Smart auto-match: compară denumire contract cu numele șantierului
-      if (f.categorie === 'executie' && f.denumire && sites?.length) {
-        const score = (den, s) => {
-          const d = den.toLowerCase()
-          // Cuvinte cheie din numele șantierului (>3 litere, fără "gazpet/transgaz/gaze")
-          const stopWords = new Set(['gazpet','transgaz','gaze','natural','naturale','conducta','cond','transport'])
-          const kws = s.name.toLowerCase().split(/[\s\-_\/]+/)
-            .filter(w => w.length > 3 && !stopWords.has(w))
-          return kws.length ? kws.filter(w => d.includes(w)).length / kws.length : 0
-        }
-        const best = (sites || []).reduce((b, s) => {
-          const sc = score(f.denumire, s)
-          return sc > (b._sc || 0) ? { ...s, _sc: sc } : b
-        }, {})
-        if ((best._sc || 0) >= 0.35) setSiteIdSelectat(String(best.id))
-      }
+      await citesteLegatura(sites || [])
     }
     loadSites()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1105,7 +1111,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
     if (file.type !== 'application/pdf') return onError('Doar fișiere PDF')
     setUploading(true)
     const ts = new Date().toISOString().replace(/[:.]/g, '-')
-    const path = `${item.id || 'new'}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+    const path = `${idContract || 'new'}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
     const { error } = await supabase.storage.from('contracte-terti').upload(path, file, { upsert: false })
     setUploading(false)
     if (error) return onError(`Upload eșuat: ${error.message}`)
@@ -1156,53 +1162,37 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
         ? { tip_contract:f.categorie }
         : item.tip_contract === 'comodat' ? { tip_contract:'prestari_servicii' } : {}),
     }
-    let contractId = item.id
-    if (isNew) {
-      const { data: { user } } = await supabase.auth.getUser()
-      payload.created_by = user?.id
-      const { data, error } = await supabase.from('contracte_terti').insert(payload).select('id').single()
-      if (error) { setSaving(false); return onError(error.message) }
-      contractId = data.id
-    } else {
-      const { error } = await supabase.from('contracte_terti').update(payload).eq('id', item.id)
-      if (error) { setSaving(false); return onError(error.message) }
+    // ─── Contract (INSERT o singură dată, apoi UPDATE pe același id) + Sincronizare Șantier → Proiect Execuție ───
+    // Logica stă în executieContractLegatura.js (testată cu client fals): id-ul nou se reține imediat după INSERT
+    // (setIdContract), fiecare pas de legare își verifică eroarea, „dezlegat” apare doar la succes, iar legătura
+    // necitită (eroare / în curs) nu se atinge. Butonul rămâne blocat (saving) până se termină și legarea.
+    let rez
+    try {
+      let creatDe = null
+      if (!idContract) { const { data: { user } } = await supabase.auth.getUser(); creatDe = user?.id ?? null }
+      rez = await salveazaContractSiLegatura(supabase, {
+        idCurent: idContract, payload, creatDe, laInserat: setIdContract,
+        legatura: {
+          categorie: f.categorie, siteSelectat: proiectExecId, proiectLegat, dezleagaCerut, stareLegatura,
+          dateSync: {
+            nr_contract:   f.numar_contract.trim() || null,
+            data_contract: f.data_semnare || null,
+            valoare_lei:   payload.valoare_lei,
+            valoare_eur:   payload.valoare_eur,
+          },
+        },
+      })
+    } catch (e) {
+      setSaving(false)
+      return onError(`Salvarea nu s-a încheiat (${e?.message || e}). Verifică lista de contracte înainte să salvezi din nou.`)
     }
     setSaving(false)
-
-    // ─── Sincronizare Șantier → Proiect Execuție → Contract ─────────────────
-    if (f.categorie === 'executie' && proiectExecId) {
-      // proiectExecId = site_id → găsim proiectul prin șantier
-      const { data: proiectGasit } = await supabase
-        .from('executie_proiecte')
-        .select('id')
-        .eq('site_id', Number(proiectExecId))
-        .eq('activ', true)
-        .maybeSingle()
-
-      if (proiectGasit) {
-        // Dezleagă eventualul proiect anterior (alt șantier)
-        await supabase.from('executie_proiecte')
-          .update({ contract_id: null })
-          .eq('contract_id', contractId)
-          .neq('id', proiectGasit.id)
-        // Leagă proiectul șantierului selectat + sync date
-        await supabase.from('executie_proiecte').update({
-          contract_id:   contractId,
-          nr_contract:   f.numar_contract.trim() || null,
-          data_contract: f.data_semnare || null,
-          valoare_lei:   payload.valoare_lei,
-          valoare_eur:   payload.valoare_eur,
-        }).eq('id', proiectGasit.id)
-      }
-    } else if (f.categorie === 'executie' && !proiectExecId) {
-      if (!isNew) {
-        // Dacă a fost golit câmpul → dezleagă proiectul anterior
-        await supabase.from('executie_proiecte')
-          .update({ contract_id: null })
-          .eq('contract_id', contractId)
-      }
-      // ⚠️ Contract de execuție salvat fără șantier asociat
-      onError('⚠️ Contractul a fost salvat, dar nu e legat la niciun Șantier! Selectează șantierul din câmpul de mai jos și re-salvează.')
+    if (rez.eroareContract) return onError(rez.eroareContract.message)
+    const contractId = rez.id
+    const rezLegatura = rez.legatura
+    if (rezLegatura.dezlegat) { setProiectLegat(null); setDezleagaCerut(false) }
+    if (rezLegatura.mesaj) {
+      onError(rezLegatura.mesaj)
       setSaving(false)
       return
     }
@@ -1228,7 +1218,7 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
   }
 
   return (
-    <ModalShell title={isNew ? '+ Contract nou' : `✏️ ${item.denumire}`} onClose={onClose} wide>
+    <ModalShell title={isNew ? '+ Contract nou' : `✏️ ${item.denumire || f.denumire}`} onClose={onClose} wide>
       <div style={{display:'flex', flexDirection:'column', gap:14}}>
         {/* Categorie + Sens */}
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
@@ -1411,14 +1401,25 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
             <select
               value={proiectExecId}
               onChange={e => setProiectExecId(e.target.value)}
-              style={S.input}
+              disabled={stareLegatura !== 'ok'}
+              style={{...S.input, opacity: stareLegatura !== 'ok' ? 0.5 : 1}}
             >
               <option value="">— Neselectat —</option>
               {proiecteExec.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-            {proiectExecId ? (
+            {stareLegatura === 'eroare' ? (
+              // Jakarinos r2 P2: fără citire reușită nu știm ce proiect e legat → nu se ghicește, nu se modifică nimic
+              <div style={{fontSize:11, marginTop:6, padding:'8px 10px', background:G.red+'18', border:`1px solid ${G.red}55`, borderRadius:6, color:G.red, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                <span style={{flex:1, minWidth:220, fontWeight:600}}>
+                  ⛔ Nu am putut citi proiectul din Execuție legat de acest contract ({eroareLegatura}). Până la o citire reușită, salvarea nu modifică legătura.
+                </span>
+                <button type="button" onClick={() => citesteLegatura(siteLista)} style={{...S.btnS, padding:'4px 10px', fontSize:11}}>↻ Reîncearcă citirea</button>
+              </div>
+            ) : stareLegatura === 'in_curs' ? (
+              <div style={{fontSize:11, marginTop:6, color:G.muted}}>⏳ Se citește legătura cu Execuția…</div>
+            ) : proiectExecId ? (
               <div style={{fontSize:11, marginTop:6, display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
                 <span style={{color:G.teal}}>✓</span>
                 <span style={{color:G.teal}}>La salvare: nr. contract, valoare și data semnare se sincronizează automat în Execuție.</span>
@@ -1435,9 +1436,20 @@ function ContractModal({ item, beneficiari, onClose, onSaved, onError, onAiSucce
                   ) : null
                 })()}
               </div>
+            ) : proiectLegat && proiectLegat.site_id == null ? (
+              // TKT-2026-0333: proiect fără șantier legat deja (manual din Execuție) — legătura rămâne dacă nu se cere altfel
+              <div style={{fontSize:11, marginTop:6, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+                <span style={{color: dezleagaCerut ? G.orange : G.teal, fontWeight:600}}>
+                  🔗 Legat de proiectul {proiectLegat.cod_intern || proiectLegat.nume || '#' + proiectLegat.id} (fără șantier) — {dezleagaCerut ? 'se dezleagă la salvare.' : 'legătura se păstrează la salvare.'}
+                </span>
+                <label style={{color:G.muted, display:'flex', alignItems:'center', gap:5, cursor:'pointer'}}>
+                  <input type="checkbox" checked={dezleagaCerut} onChange={e => setDezleagaCerut(e.target.checked)} /> Dezleagă de proiect la salvare
+                </label>
+              </div>
             ) : (
               <div style={{fontSize:11, color:G.orange, marginTop:6, fontWeight:600}}>
                 ⚠️ Fără șantier — contractul de execuție nu va apărea în modulul Execuție.
+                {proiectLegat && ` La salvare se dezleagă proiectul ${proiectLegat.cod_intern || proiectLegat.nume || '#' + proiectLegat.id}.`}
               </div>
             )}
           </div>

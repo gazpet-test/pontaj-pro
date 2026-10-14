@@ -189,3 +189,6 @@ Precondiții = exact starea patch-ului (tabela + funcțiile există, coloana lip
 
 ## 20260930h — CTC F1 cărți tehnice (`20260930h_ctc_carti_tehnice_f1_ROLLBACK.sql`, mutat din `supabase/migrations/` la 05.10.2026)
 Șterge cărțile, pozițiile și template-urile CTC + bucketul `ctc-documente` (după golirea lui din Storage). Migrarea F1 e aplicată pe live din 30.09.2026 (#548/#550). Fișierul nu are gardă de armare și e **distructiv**: stătea în `supabase/migrations/`, unde un `supabase db push` l-ar fi rulat ca migrare — de aceea a fost mutat aici (restanța task #6 din `handoff_ctc`). Fără GO de execuție; doar la cererea explicită a lui Răzvan, după preview pe datele CTC existente.
+
+## 20261030b — un contract ↔ un proiect din Execuție (`20261030b_executie_contract_id_unic_ROLLBACK.sql`, NEAPLICAT)
+Scoate indexul unic parțial `executie_proiecte_contract_id_unic`. Nu atinge date și nu redeschide o gaură de securitate: regula 1:1 contract ↔ proiect rămâne doar în UI (Administrativ dezleagă înainte să lege; „Leagă” din Execuție ascunde contractele ocupate), deci revine cursa dintre două sesiuni care leagă același contract. Postcondiție = indexul nu mai există. Fără gardă de armare (nedistructiv); tot fără GO de execuție. Testat în `scripts/test_executie_contract_id_unic.sh` pasul 4 (schelet: `supabase/tests/executie_contract_id_unic_schelet.sql`).
