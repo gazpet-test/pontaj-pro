@@ -13,5 +13,6 @@ DO $$ DECLARE v_n int; BEGIN
     RAISE EXCEPTION 'Date rollback: așteptat 5 alerte noi pe toate cele 3 tipuri (2 egress, 2 cached, 1 colector), sunt %', v_n;
   END IF;
   IF (SELECT count(*) FROM public.supabase_usage_oficial) <> 1 THEN RAISE EXCEPTION 'Date rollback: citirea lipsește'; END IF;
-  RAISE NOTICE 'DATE_ROLLBACK_OK: 1 citire, 5 alerte noi (3 tipuri), 1 alertă veche';
 END $$;
+-- markerul pentru harness = rezultat de SELECT (nu depinde de client_min_messages)
+SELECT 'DATE_ROLLBACK_OK: 1 citire, 5 alerte noi (3 tipuri), 1 alertă veche' AS rezultat;

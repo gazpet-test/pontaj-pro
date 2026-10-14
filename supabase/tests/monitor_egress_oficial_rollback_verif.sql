@@ -14,5 +14,6 @@ DO $$ BEGIN
   EXCEPTION WHEN check_violation THEN NULL; END;
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'storage_egress_config' AND column_name = 'cota_cached_bytes') THEN
     RAISE EXCEPTION 'Verif rollback: cota_cached_bytes încă există'; END IF;
-  RAISE NOTICE 'VERIF_ROLLBACK_OK: citiri + alerte noi scoase, alerta veche păstrată, CHECK vechi repus';
 END $$;
+-- markerul pentru harness = rezultat de SELECT (nu depinde de client_min_messages)
+SELECT 'VERIF_ROLLBACK_OK: citiri + alerte noi scoase, alerta veche păstrată, CHECK vechi repus' AS rezultat;

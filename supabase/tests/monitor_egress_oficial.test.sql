@@ -185,5 +185,6 @@ DO $$ BEGIN
   RAISE NOTICE 'O7 OK: cota egress necache neatinsă (250 GB)';
 END $$;
 
-DO $$ BEGIN RAISE NOTICE 'SUITA_OK monitor_egress_oficial'; END $$;
+-- markerul pentru harness iese ca rezultat de SELECT (client_min_messages = warning de mai sus ascunde NOTICE-urile)
+SELECT 'SUITA_OK monitor_egress_oficial' AS rezultat;
 ROLLBACK;
