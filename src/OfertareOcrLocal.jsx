@@ -82,7 +82,7 @@ export const textEgress = e => !e.necunoscute ? `~${fmtMB(e.octeti)}`
   : e.octeti > 0 ? `≥ ${fmtMB(e.octeti)} + ${e.necunoscute} document(e) cu mărime necunoscută` : 'estimare indisponibilă (mărime necunoscută)'
 export const textConfirmare = (plafon, nrDoc, nrPag, est = { octeti: 0, necunoscute: 0 }) =>
   `Pornești o procesare PLĂTITĂ: arbitraj Claude pe dezacordurile dintre cele două citiri locale, plafon ${plafon} USD.\n\n` +
-  `${nrDoc} document(e), ${nrPag} pagini necitite. Descărcare din Storage (egress): ${textEgress(est)}, o singură dată (cache pe server). ` +
+  `${nrDoc} document(e), ${nrPag} pagini necitite. Descărcare din Storage (egress): ${textEgress(est)}, o singură dată pe rulare (copie pe serverul AI; reluările nu descarcă din nou, o rulare nouă descarcă din nou). ` +
   `Citirea pe serverul AI se face în fereastra GPU ${FEREASTRA_GPU}; ` +
   `nimic nu intră în ofertă fără audit.\n\nContinui?`
 
