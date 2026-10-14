@@ -69,7 +69,9 @@ jobs:
           # (fără JWT); poarta e în cod: esteApelIntern SAU JWT verificat cu auth.getUser + profiles.is_owner (401/403).
           # 14.10.2026 (D3b, PR #698): + ofertare-pdf-link, ofertare-ocr-scrie, ofertare-ocr-arbitreaza — apelate de serverul AI fără cont
           # Supabase; poarta în cod: x-ocr-local-secret = Vault OCR_LOCAL_SECRET (fn_verifica_secret, fail closed).
-          NO_JWT=" api-consum-extern cleanup-recycle-bin detect-ordine dovezi-valabilitate-alerta hr-autorizatii-scan hr-digest-saptamanal hr-extrage-ci iot-retea iot-terra meta-publish meteo-sync nas-upload-url ofertare-alerte-mail ofertare-cantitati-extrage ofertare-document-nou-citeste ofertare-etapa1-mail ofertare-fisier-semnat ofertare-garantie-mail ofertare-ocr-arbitreaza ofertare-ocr-scrie ofertare-participari-import ofertare-pdf-link ofertare-radar-scan ofertare-rfq-inbox ofertare-seap-veghe ofertare-verificare-finala ofertare-word-text olx-aplicari-sync recrutare-aplica salus tmp-probe-url tuya vercel-relay vicare "
+          # 14.10.2026 (securitate etapa 2, grup C): + ocr-packing-list, parse-anexa-pdf, parse-contract-pdf, parse-pccvi-faze —
+          # rulau deja cu verify_jwt=false; poarta e în cod (JWT verificat cu auth.getUser + profil / modul), fără cale internă.
+          NO_JWT=" api-consum-extern cleanup-recycle-bin detect-ordine dovezi-valabilitate-alerta hr-autorizatii-scan hr-digest-saptamanal hr-extrage-ci iot-retea iot-terra meta-publish meteo-sync nas-upload-url ocr-packing-list parse-anexa-pdf parse-contract-pdf parse-pccvi-faze ofertare-alerte-mail ofertare-cantitati-extrage ofertare-document-nou-citeste ofertare-etapa1-mail ofertare-fisier-semnat ofertare-garantie-mail ofertare-ocr-arbitreaza ofertare-ocr-scrie ofertare-participari-import ofertare-pdf-link ofertare-radar-scan ofertare-rfq-inbox ofertare-seap-veghe ofertare-verificare-finala ofertare-word-text olx-aplicari-sync recrutare-aplica salus tmp-probe-url tuya vercel-relay vicare "
           for s in $LISTA; do
             extra=""
             if [[ "$NO_JWT" == *" $s "* ]]; then extra="--no-verify-jwt"; fi
