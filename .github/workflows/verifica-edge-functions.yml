@@ -80,9 +80,9 @@ jobs:
         with:
           deno-version: v2.x
       - name: deno check (entrypoint + handler)
-        run: deno check --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/index.ts supabase/functions/ofertare-plansa-citeste/handler.ts supabase/functions/ofertare-cantitati-extrage/index.ts supabase/functions/ofertare-cantitati-extrage/handler.ts supabase/functions/detect_plate_orphan_msgs/index.ts supabase/functions/detect_plate_orphan_msgs/handler.ts
+        run: deno check --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/index.ts supabase/functions/ofertare-plansa-citeste/handler.ts supabase/functions/ofertare-cantitati-extrage/index.ts supabase/functions/ofertare-cantitati-extrage/handler.ts supabase/functions/detect_plate_orphan_msgs/index.ts supabase/functions/detect_plate_orphan_msgs/handler.ts supabase/functions/extract-talon-ai/index.ts supabase/functions/extract-talon-ai/handler.ts supabase/functions/rag-normative/index.ts
       - name: deno test poarta
-        run: deno test --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts supabase/functions/detect_plate_orphan_msgs/acces_test.ts supabase/functions/detect_plate_orphan_msgs/handler_test.ts
+        run: deno test --node-modules-dir=none supabase/functions/ofertare-plansa-citeste/poarta_test.ts supabase/functions/ofertare-cantitati-extrage/poarta_test.ts supabase/functions/detect_plate_orphan_msgs/acces_test.ts supabase/functions/detect_plate_orphan_msgs/handler_test.ts supabase/functions/extract-talon-ai/acces_test.ts supabase/functions/extract-talon-ai/handler_test.ts
       # PR #707 (securitate etapa 2 grup A): ocolirea cu antet intern + literal nu are voie să revină, cu ORICE valoare
       # (testul de handler o prinde doar pentru valorile pe care le încearcă). index.ts rămâne doar entrypoint.
       - name: detect_plate_orphan_msgs fără ocolire
@@ -104,3 +104,44 @@ jobs:
             exit 1
           fi
           echo "OK: fără ocolire, index.ts are exact forma de entrypoint"
+      # Securitate etapa 2 grup B: antetul intern comparat cu un literal din cod nu are voie să revină, cu ORICE valoare, nici
+      # în extract-talon-ai (poartă de rol în acces.ts), nici în rag-normative (retrasă: stub 410, publicat cu verify_jwt=true).
+      - name: extract-talon-ai și rag-normative fără secret intern
+        run: |
+          set -euo pipefail
+          t=supabase/functions/extract-talon-ai
+          r=supabase/functions/rag-normative
+          # 1) cuvinte interzise în ORICE fișier de cod din cele două foldere (și în fișiere noi), mai puțin testele — inclusiv
+          #    în comentarii; plus orice comparație directă a unui antet (headers.get(...) === ...), forma ocolirii din v16/v22.
+          interzis='x-intern(al)?-secret|intern(al)?_?(trigger_?)?secret|isinternal|esteapelintern|bypass|headers\.get\([^)]*\)[[:space:]]*[!=]=='
+          if grep -rnEi --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude='*_test.ts' "$interzis" "$t" "$r"; then
+            echo "::error::Calea internă cu secret a reapărut în $t sau $r (vezi securitate etapa 2 grup B)"; exit 1
+          fi
+          # 2) extract-talon-ai/index.ts = EXACT entrypoint-ul (comparație strictă pe conținutul normalizat, ca la detect_plate_orphan_msgs):
+          #    fără comentarii // și fără spații albe; comentariile /* */ NU se elimină, deci pică și ele.
+          asteptat="import'jsr:@supabase/functions-js/edge-runtime.d.ts'import{handler,depsReale}from'./handler.ts'Deno.serve((req:Request)=>handler(req,depsReale))"
+          gasit="$(sed -e 's://.*$::' "$t/index.ts" | tr -d '[:space:]')"
+          if [ "$gasit" != "$asteptat" ]; then
+            echo "::error::$t/index.ts nu are forma așteptată: doar Deno.serve((req: Request) => handler(req, depsReale)). Logica și orice cale de acces stau în handler.ts → poartaTalon."
+            echo "așteptat (normalizat): $asteptat"
+            echo "găsit    (normalizat): $gasit"
+            exit 1
+          fi
+          # 3) rag-normative = DOAR stub-ul 410: un singur fișier, index.ts, cu exact forma stub-ului.
+          fisiere="$(find "$r" -type f | sort)"
+          if [ "$fisiere" != "$r/index.ts" ]; then
+            echo "::error::$r trebuie să conțină doar index.ts (stub 410). Găsit:"; echo "$fisiere"; exit 1
+          fi
+          stub="Deno.serve(()=>newResponse(JSON.stringify({error:'functieretrasa'}),{status:410,headers:{'Content-Type':'application/json'}}))"
+          gasit="$(sed -e 's://.*$::' "$r/index.ts" | tr -d '[:space:]')"
+          if [ "$gasit" != "$stub" ]; then
+            echo "::error::$r/index.ts nu mai e stub-ul 410. Revenirea se face doar cu decizie explicită (supabase/functions_retrase/README.md)."
+            echo "așteptat (normalizat): $stub"
+            echo "găsit    (normalizat): $gasit"
+            exit 1
+          fi
+          # 4) stub-ul NU intră în NO_JWT (se publică cu verify_jwt=true)
+          if grep -nE '^[[:space:]]*NO_JWT=' .github/workflows/deploy-edge-function.yml | grep -q ' rag-normative '; then
+            echo "::error::rag-normative e stub 410 și nu are voie în NO_JWT (deploy-edge-function.yml)"; exit 1
+          fi
+          echo "OK: fără secret intern; extract-talon-ai/index.ts are forma de entrypoint; rag-normative e stub 410 în afara NO_JWT"

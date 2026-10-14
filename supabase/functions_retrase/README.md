@@ -33,6 +33,16 @@ Două funcții acceptau antetul `X-Internal-MCP-Bypass` comparat cu un literal d
 Literalul NU e în repo: în ambele copii constanta e `crypto.randomUUID()` cu marcajul `<REDACTAT len 40>`, deci o copie republicată nu mai are o ocolire care să se potrivească. Restul codului e textual cel deployat (fără spațiile de la capăt de rând).
 Revenire: copiezi fișierul în `supabase/functions/<slug>/index.ts`, păstrezi slug-ul în `NO_JWT` (pentru `extract_external_bon` îl adaugi) și publici cu „Deploy edge function (manual)”.
 
+## Securitate etapa 2, grup B (14.10.2026): `revenire_grupb/`
+Două funcții acceptau antetul intern `x-internal-secret` comparat cu același literal de 24 de caractere scris în cod.
+| slug | versiune copiată | verify_jwt | ce s-a făcut | copie de revenire |
+|---|---|---|---|---|
+| extract-talon-ai | v16 | true | antetul scos; poarta în `supabase/functions/extract-talon-ai/acces.ts` (owner SAU admin_logistica cu modulul logistica); rămâne cu verify_jwt=true | `revenire_grupb/extract-talon-ai.v16.ts` |
+| rag-normative | v22 | false | retrasă (niciun consumator): stub 410 în `supabase/functions/rag-normative/`, publicat cu verify_jwt=true | `revenire_grupb/rag-normative.v22.ts` |
+
+Literalul NU e în repo: în ambele copii constanta e `crypto.randomUUID()` cu marcajul `<REDACTAT len 24>`. Restul codului e byte cu byte cel deployat (verificat programatic pe 14.10).
+Revenire: copiezi fișierul în `supabase/functions/<slug>/index.ts` (pentru `extract-talon-ai` ștergi și `acces.ts` / `handler.ts` / testele, iar pentru `rag-normative` adaugi slug-ul în `NO_JWT`), scoți pasul de gardă „extract-talon-ai și rag-normative fără secret intern” din `verifica-edge-functions.yml` și publici cu „Deploy edge function (manual)”.
+
 ## Verificarea dinainte de ștergere (14.10, doar citire)
 - 0 apelanți în: repo (fără docs), cron.job, funcțiile din BD, sursele celor 37 de edge deployate fără repo, serverul AI, Terra, laptop. Excepție: `ofertare-seap-diag` apare doar ca nume în metadatele unui pachet Codex vechi de pe laptop.
 - 0 apeluri în jurnalele edge din ultimele 48h (cât se poate citi).
