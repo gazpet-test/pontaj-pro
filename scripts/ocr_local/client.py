@@ -97,7 +97,9 @@ class Edge:
                 while True:
                     try: b = r.read(min(1 << 20, max_octeti + 1 - n[0]))
                     except http.client.IncompleteRead as e:
-                        n[0] += len(e.partial or b''); raise TransferIncomplet('transfer intrerupt dupa %d octeti' % n[0]) from e
+                        # partial NU dovedeste consumul real (chunked: conexiune inchisa in interiorul unui chunk -> partial=b'' desi au
+                        # sosit octeti): consum NECUNOSCUT, rezervarea ramane socotita (review r4 Jakarinos P1)
+                        x = TransferIncomplet('transfer intrerupt (IncompleteRead) dupa >= %d octeti' % (n[0] + len(e.partial or b''))); x.citit = None; raise x from e
                     if not b: break
                     n[0] += len(b)
                     if n[0] > max_octeti: raise EgressDepasit('PDF peste limita ramasa de %d octeti' % max_octeti)
@@ -288,7 +290,8 @@ def descarca(rdir, edge, acum=time.time):
             # incercarile ramase „in zbor” (proces mort): esuate - DOAR daca rularea lor n-a persistat succesul (meta valid)
             for z, t0 in list(rd['in_zbor'].items()):
                 mz = rdir.resolve().parent / ('r%s' % z.split(':', 1)[0]) / 'pdf' / ('%d.json' % doc)
-                if not mz.exists(): rd['esecuri'] += 1; rd['ultim_esec'] = max(rd.get('ultim_esec', 0), t0)
+                # momentul real al esecului e necunoscut (procesul a murit oricand dupa t0): conservator, momentul CONSTATARII (review r4 Jakarinos P2)
+                if not mz.exists(): rd['esecuri'] += 1; rd['ultim_esec'] = max(rd.get('ultim_esec', 0), t0, acum())
                 rd['in_zbor'].pop(z)
             if jd.get('in_curs'): jd.pop('in_curs')  # rezervarea lui ramane socotita (conservator)
             if rd['esecuri'] >= MAX_INCERCARI_PDF:

@@ -397,11 +397,23 @@ class Client(unittest.TestCase):
         rdir = self._rulare(); self.edge.pdf = self.edge.pdf.replace(b'%%EOF', b'%%XXX')
         with self.assertRaises(C.TransferIncomplet): C.descarca(rdir, self.edge)
         self.assertFalse((rdir / 'pdf' / ('%d.pdf' % DOC)).exists())
-    def test_egress_incompleteread_octetii_partiali_numarati(self):
-        # review r1 Jakarinos P2-5: IncompleteRead.partial intra in egress
-        rdir = self._rulare(); self.edge.cl = None; self.edge.cade_dupa_octeti = 2000; self.edge.incomplete = True
-        with self.assertRaises(C.TransferIncomplet): C.descarca(rdir, self.edge)
-        self.assertEqual(C.jurnal_egress(rdir)['octeti_total'], 2002)
+    def test_egress_incompleteread_parser_real_rezervarea_ramane(self):
+        # review r4 Jakarinos P1: cu parserul HTTP REAL (chunked, conexiune inchisa in interiorul unui chunk) IncompleteRead.partial poate
+        # fi gol desi au sosit octeti -> consum necunoscut, rezervarea ramane socotita
+        import io, http.client
+        corp = b'%PDF-1.4 ' + b'x' * 491
+        CRLF = bytes([13, 10])
+        brut = b'HTTP/1.1 200 OK' + CRLF + b'Transfer-Encoding: chunked' + CRLF + b'ETag: "v1"' + CRLF + CRLF + b'3e8' + CRLF + corp  # declarat 1000, sosesc 500, apoi EOF
+        class Sock:
+            def makefile(self, *a, **k): return io.BytesIO(brut)
+        class OpenerHttpReal:
+            def open(self, req, timeout=0):
+                r = http.client.HTTPResponse(Sock()); r.begin(); return r
+        rdir = self._rulare()
+        self.edge.get = lambda url, dest, max_octeti=0, timeout=0, la_antete=None: C.Edge('0' * 64, op=OpenerHttpReal()).get(url, dest, max_octeti=max_octeti, la_antete=la_antete)
+        with patch.object(C, 'EGRESS_MAX_OCTETI', 2_000_000):
+            with self.assertRaises(C.TransferIncomplet): C.descarca(rdir, self.edge)
+        self.assertEqual(C.jurnal_egress(rdir)['octeti_total'], 2_000_000)  # nicio eliberare: retry-ul nu poate depasi plafonul
     def test_egress_cadere_proces_rezervarea_socotita_si_incercarea_esuata(self):
         # review r1 Copilot P1-3 / Jakarinos P1-3: procesul moare in timpul GET-ului (fara finally): rezervarea ramane pe disc, iar
         # la pornirea urmatoare incercarea „in zbor” se socoteste esuata
@@ -411,8 +423,9 @@ class Client(unittest.TestCase):
         self.edge.get = moare
         with self.assertRaises(SystemExit): C.descarca(rdir, self.edge, acum=lambda: t[0])
         self.assertEqual(C.jurnal_egress(rdir)['octeti_total'], len(self.edge.pdf))  # rezervarea (Content-Length) socotita
-        with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge, acum=lambda: t[0] + 5)  # pauza
-        self.assertEqual(self._reg()[str(DOC)]['esecuri'], 1)
+        with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge, acum=lambda: t[0] + 300)  # constatat la t+300
+        self.assertEqual((self._reg()[str(DOC)]['esecuri'], self._reg()[str(DOC)]['ultim_esec']), (1, t[0] + 300))  # review r4 Jakarinos P2
+        with self.assertRaises(RuntimeError): C.descarca(rdir, self.edge, acum=lambda: t[0] + 301)  # pauza de la CONSTATARE, nu de la t0
     def test_egress_fisier_complet_fara_meta_adoptat_doar_din_transferul_rularii(self):
         rdir = self._rulare(); orig = FakeEdge.get
         def descarca_si_moare(url, dest, max_octeti=0, timeout=0, la_antete=None):
