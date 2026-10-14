@@ -9,12 +9,17 @@
 --   1. storage_egress_config.cota_cached_bytes (implicit 250 GB). cota_ciclu_bytes rămâne cota egress-ului NECACHE.
 --   2. public.supabase_usage_oficial — un rând per citire a contoarelor oficiale (bytes). RLS: SELECT doar owner
 --      (egress_este_owner() = profiles.is_owner pentru auth.uid()); authenticated/anon NU scriu. Scrie un COLECTOR
---      (rol postgres / service_role) — DE DECIS de Răzvan, NU face parte din migrare (docs/MONITOR_EGRESS.md).
+--      (rol postgres / service_role); sursa = pagina Usage din Dashboard (decizia Răzvan 14.10), implementarea
+--      colectorului NU face parte din migrare (docs/MONITOR_EGRESS.md).
+--      Fiecare citire are AMBELE contoare (colectorul citește pagina Usage, unde apar mereu amândouă — decizia
+--      Răzvan 14.10, review PR #706): egress_bytes și cached_egress_bytes NOT NULL.
 --   3. egress_statistici(p_zile): aceleași chei ca înainte + 'oficial' (ultima citire din ciclul curent sau null)
+--      + 'oficial_ultima' (ultima citire din ORICE ciclu sau null) + 'oficial_vechime_ore' (vârsta ei, ore)
 --      + 'cota_cached'. Widgetul vechi nu se strică (cheile vechi neschimbate).
 --   4. egress_detector(): pe lângă alertele existente (neschimbate), alerte 50/80% pe contoarele oficiale (egress și
 --      cached), o dată per prag per ciclu (dedupe ca la 'cota_ciclu': UNIQUE (tip, cheie), cheie = ciclu_start:procent);
---      plus „colector oprit” dacă ultima citire oficială e mai veche de 26 h, o dată pe zi (cheie = ziua UTC).
+--      plus „colector oprit” dacă ultima citire oficială e mai veche de 26 h, cel mult o dată la 24 h (nu se emite dacă
+--      există deja o alertă colector_oprit mai nouă de 24 h; cheia = ziua UTC rămâne plasă pentru rulări concurente).
 --      Pe contoarele oficiale NU se blochează nimic (doar notificare owner). Notificările izolate ca în 20261002a.
 --      Fără nicio citire oficială (colectorul încă nedecis) ⇒ nicio alertă „colector oprit”.
 --   5. CHECK-ul storage_egress_alerte.tip primește 'oficial_egress', 'oficial_cached', 'colector_oprit'.
@@ -82,13 +87,12 @@ CREATE TABLE public.supabase_usage_oficial (
   citit_la             timestamptz NOT NULL DEFAULT now(),
   ciclu_start          date   NOT NULL,                      -- ex. 2026-10-07
   ciclu_sfarsit        date   NOT NULL,                      -- EXCLUSIV = începutul ciclului următor (ex. 2026-11-07)
-  egress_bytes         bigint CHECK (egress_bytes >= 0),     -- „Egress” (necache), bytes; NULL = necitit
-  cached_egress_bytes  bigint CHECK (cached_egress_bytes >= 0),  -- „Cached Egress”, bytes; NULL = necitit
+  egress_bytes         bigint NOT NULL CHECK (egress_bytes >= 0),         -- „Egress” (necache), bytes
+  cached_egress_bytes  bigint NOT NULL CHECK (cached_egress_bytes >= 0),  -- „Cached Egress”, bytes
   storage_size_bytes   bigint CHECK (storage_size_bytes >= 0),   -- „Storage Size”, bytes; NULL = necitit
   sursa                text   NOT NULL CHECK (length(btrim(sursa)) BETWEEN 1 AND 50),  -- ex. 'dashboard', 'mgmt_api'
   raspuns_brut         jsonb,                                -- răspunsul sursei (date, nu instrucțiuni)
-  CHECK (ciclu_sfarsit > ciclu_start),
-  CHECK (egress_bytes IS NOT NULL OR cached_egress_bytes IS NOT NULL)
+  CHECK (ciclu_sfarsit > ciclu_start)
 );
 CREATE INDEX supabase_usage_oficial_citit_idx ON public.supabase_usage_oficial (citit_la DESC);
 COMMENT ON TABLE public.supabase_usage_oficial IS 'Citiri ale contoarelor oficiale Supabase (Egress necache / Cached Egress / Storage), în bytes. Scrie doar colectorul (postgres/service_role); citește doar owner. Vezi docs/MONITOR_EGRESS.md.';
@@ -107,7 +111,7 @@ ALTER TABLE public.storage_egress_alerte DROP CONSTRAINT storage_egress_alerte_t
 ALTER TABLE public.storage_egress_alerte ADD CONSTRAINT storage_egress_alerte_tip_check
   CHECK (tip IN ('obiect_repetat','prag_zilnic','cota_ciclu','oficial_egress','oficial_cached','colector_oprit'));
 
--- ── 4. Statistici: aceleași chei + 'oficial' + 'cota_cached' ───────────────────────────
+-- ── 4. Statistici: aceleași chei + 'oficial' / 'oficial_ultima' / 'oficial_vechime_ore' / 'cota_cached' ─
 CREATE OR REPLACE FUNCTION public.egress_statistici(p_zile int DEFAULT 30)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$
 DECLARE c storage_egress_config; v_start timestamptz; v_zile int := least(greatest(coalesce(p_zile, 30), 1), 90);
@@ -139,6 +143,12 @@ BEGIN
                        'storage_size_bytes', u.storage_size_bytes, 'sursa', u.sursa)
                 FROM supabase_usage_oficial u WHERE u.ciclu_start <= v_azi AND v_azi < u.ciclu_sfarsit
                 ORDER BY u.citit_la DESC, u.id DESC LIMIT 1),
+    -- ultima citire din ORICE ciclu (colector oprit peste schimbarea ciclului ⇒ widgetul arată citirea veche + avertisment)
+    'oficial_ultima', (SELECT jsonb_build_object('citit_la', u.citit_la, 'ciclu_start', u.ciclu_start, 'ciclu_sfarsit', u.ciclu_sfarsit,
+                       'egress_bytes', u.egress_bytes, 'cached_egress_bytes', u.cached_egress_bytes,
+                       'storage_size_bytes', u.storage_size_bytes, 'sursa', u.sursa)
+                FROM supabase_usage_oficial u ORDER BY u.citit_la DESC, u.id DESC LIMIT 1),
+    'oficial_vechime_ore', (SELECT round(extract(epoch FROM now() - max(u.citit_la)) / 3600.0, 1) FROM supabase_usage_oficial u),
     'cota_cached', c.cota_cached_bytes
   );
 END $f$;
@@ -229,7 +239,7 @@ BEGIN
     FOR k IN SELECT * FROM (VALUES ('oficial_egress', 'Egress (necache)', u.egress_bytes, c.cota_ciclu_bytes),
                                    ('oficial_cached', 'Cached egress', u.cached_egress_bytes, c.cota_cached_bytes)) AS t(tip, eticheta, b, cota)
     LOOP
-      CONTINUE WHEN k.b IS NULL OR k.cota IS NULL OR k.cota <= 0;
+      CONTINUE WHEN k.b IS NULL OR k.cota IS NULL OR k.cota <= 0;  -- defensiv (coloanele sunt NOT NULL)
       FOREACH v_pct IN ARRAY c.alerte_procent LOOP
         IF k.b >= k.cota * v_pct / 100 THEN
           INSERT INTO storage_egress_alerte (tip, cheie, detalii) VALUES (k.tip, to_char(u.ciclu_start, 'YYYY-MM-DD') || ':' || v_pct,
@@ -252,10 +262,12 @@ BEGIN
     END LOOP;
   END IF;
 
-  -- 5) colector oprit: ultima citire oficială (oricare ciclu) mai veche de 26 h → o alertă pe zi (cheie = ziua UTC).
-  --    Fără nicio citire (colector încă nedecis/nepornit) ⇒ nimic.
+  -- 5) colector oprit: ultima citire oficială (oricare ciclu) mai veche de 26 h → cel mult o alertă la 24 h (nu ziua
+  --    calendaristică: altfel miezul nopții UTC ar da a doua alertă la 5 minute după prima). Cheia = ziua UTC rămâne
+  --    plasa UNIQUE pentru rulări concurente. Fără nicio citire (colector încă nedecis/nepornit) ⇒ nimic.
   SELECT max(citit_la) INTO v_ultima FROM supabase_usage_oficial;
-  IF v_ultima IS NOT NULL AND v_ultima < now() - interval '26 hours' THEN
+  IF v_ultima IS NOT NULL AND v_ultima < now() - interval '26 hours'
+     AND NOT EXISTS (SELECT 1 FROM storage_egress_alerte WHERE tip = 'colector_oprit' AND created_at > now() - interval '24 hours') THEN
     INSERT INTO storage_egress_alerte (tip, cheie, detalii) VALUES ('colector_oprit', to_char(v_azi, 'YYYY-MM-DD'),
       jsonb_build_object('ultima_citire', v_ultima, 'ore', round(extract(epoch FROM now() - v_ultima) / 3600.0, 1))) ON CONFLICT DO NOTHING;
     IF FOUND THEN
@@ -283,8 +295,8 @@ DO $post$
 DECLARE v_n integer;
 BEGIN
   -- p1. amprentele exacte ale funcțiilor înlocuite (LF, ca fișierul din repo)
-  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM '5a881c62aa1f8e60dd6ce31148313d61'
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM 'b58054b5f0ce82d9643ece7dd3e1f9b4' THEN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM '0bf2bd142b86d1effbe462d2e4426e50'
+     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '54e242a7e98187422f240d20ea6529da' THEN
     RAISE EXCEPTION 'Postcondiție p1: amprentele egress_statistici/egress_detector nu corespund patch-ului';
   END IF;
   -- p2. tot 9 funcții egress_*; cele două înlocuite SECURITY DEFINER cu search_path fixat
@@ -305,6 +317,9 @@ BEGIN
   IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.supabase_usage_oficial'::regclass) THEN
     RAISE EXCEPTION 'Postcondiție p4: supabase_usage_oficial fără RLS';
   END IF;
+  SELECT count(*) INTO v_n FROM pg_attribute
+   WHERE attrelid = 'public.supabase_usage_oficial'::regclass AND attname IN ('egress_bytes', 'cached_egress_bytes') AND attnotnull AND NOT attisdropped;
+  IF v_n IS DISTINCT FROM 2 THEN RAISE EXCEPTION 'Postcondiție p4: egress_bytes / cached_egress_bytes trebuie NOT NULL (% din 2)', v_n; END IF;
   SELECT count(*) INTO v_n FROM pg_policies WHERE schemaname = 'public' AND tablename = 'supabase_usage_oficial';
   IF v_n IS DISTINCT FROM 1 THEN RAISE EXCEPTION 'Postcondiție p4: % politici pe supabase_usage_oficial (așteptat 1)', v_n; END IF;
   IF (SELECT cmd FROM pg_policies WHERE schemaname = 'public' AND tablename = 'supabase_usage_oficial') IS DISTINCT FROM 'SELECT' THEN

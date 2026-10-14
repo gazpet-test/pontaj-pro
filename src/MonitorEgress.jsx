@@ -61,40 +61,48 @@ export default function MonitorEgress({ profile }) {
   if (err && !d) return <div style={S.card}><b>📡 Monitor egress</b> <span style={{ ...S.small, color: G.yellow }}>— indisponibil ({err}). Migrarea 20260930e nu e aplicată?</span></div>
   if (!d) return null
 
-  const c = d.ciclu || {}, pct = procent(c.bytes, c.cota)
-  const of = d.oficial || null  // ultima citire oficială din ciclul curent (null = colectorul n-a scris încă / migrarea 20261030a neaplicată)
+  const c = d.ciclu || {}, cotaJurnal = c.cota || COTA_PLAN, pct = procent(c.bytes, cotaJurnal)
+  // citirea oficială a ciclului curent; dacă lipsește (colector oprit peste schimbarea ciclului), ultima din ORICE ciclu.
+  // Ambele null = colectorul n-a scris încă / migrarea 20261030a neaplicată.
+  const curent = d.oficial || null, of = curent || d.oficial_ultima || null, dinCicluTrecut = !curent && !!of
   const cotaEgress = c.cota || COTA_PLAN, cotaCached = d.cota_cached || COTA_PLAN
-  const pctMax = of ? Math.max(procent(of.egress_bytes, cotaEgress), procent(of.cached_egress_bytes, cotaCached)) : pct
+  const pctOficial = curent ? Math.max(procent(curent.egress_bytes, cotaEgress), procent(curent.cached_egress_bytes, cotaCached)) : 0
   const zile = d.pe_zi || [], max = Math.max(1, ...zile.map(z => z.bytes))
   const blocate = d.blocate || []
   const citit = of?.citit_la ? new Date(of.citit_la) : null
-  const vechimeOre = citit ? (Date.now() - citit.getTime()) / 3600000 : 0
+  const vechimeOre = typeof d.oficial_vechime_ore === 'number' ? d.oficial_vechime_ore : citit ? (Date.now() - citit.getTime()) / 3600000 : 0
+  const zi = x => x ? new Date(x).toLocaleDateString('ro-RO', { day: '2-digit', month: '2-digit' }) : '—'
+  const sufix = dinCicluTrecut ? `, ciclul ${zi(of.ciclu_start)}–${zi(of.ciclu_sfarsit)}` : ''
 
   return (
     <div style={S.card}>
       <div style={{ ...S.row, justifyContent: 'space-between' }}>
         <div style={S.row}>
           <b>📡 Monitor egress</b>
-          <span style={{ color: culoarePct(pctMax), fontWeight: 700 }}>{of ? `max ${pctMax}% din cotă` : 'fără citire oficială încă'}</span>
-          <span style={S.small}>ciclu din {of?.ciclu_start ? new Date(of.ciclu_start).toLocaleDateString('ro-RO') : c.start ? new Date(c.start).toLocaleDateString('ro-RO') : '—'}</span>
+          {/* antetul descrie ciclul curent; culoarea vine din cifra afișată lângă ea */}
+          {curent
+            ? <span style={{ color: culoarePct(pctOficial), fontWeight: 700 }}>max {pctOficial}% din cotă (oficial)</span>
+            : <span style={{ color: culoarePct(pct), fontWeight: 700 }}>{fmt(c.bytes)} / {fmt(cotaJurnal)} ({pct}%) · jurnal propriu</span>}
+          <span style={S.small}>ciclu din {curent?.ciclu_start ? new Date(curent.ciclu_start).toLocaleDateString('ro-RO') : c.start ? new Date(c.start).toLocaleDateString('ro-RO') : '—'}</span>
           {blocate.length > 0 && <span style={{ color: G.red, fontWeight: 700 }}>⛔ {blocate.length} obiect(e) blocate</span>}
         </div>
         <button style={S.btn} onClick={() => setDeschis(v => !v)}>{deschis ? 'Ascunde' : 'Detalii'}</button>
       </div>
 
       {of ? <>
-        <Bara eticheta="Egress (oficial)" bytes={of.egress_bytes} cota={cotaEgress} alerte={c.alerte_procent} />
-        <Bara eticheta="Cached egress (oficial)" bytes={of.cached_egress_bytes} cota={cotaCached} alerte={c.alerte_procent} />
-        <div style={{ ...S.small, marginTop: 6, color: vechimeOre > 26 ? G.yellow : G.muted }}>
-          Citit {citit ? citit.toLocaleString('ro-RO') : '—'} · sursa {of.sursa}{vechimeOre > 26 ? ` · ⚠️ citire veche (${Math.round(vechimeOre)} h) — colectorul e oprit?` : ''}
+        <Bara eticheta={`Egress (oficial${sufix})`} bytes={of.egress_bytes} cota={cotaEgress} alerte={c.alerte_procent} />
+        <Bara eticheta={`Cached egress (oficial${sufix})`} bytes={of.cached_egress_bytes} cota={cotaCached} alerte={c.alerte_procent} />
+        <div style={{ ...S.small, marginTop: 6, color: vechimeOre > 26 || dinCicluTrecut ? G.yellow : G.muted }}>
+          Citit {citit ? citit.toLocaleString('ro-RO') : '—'} · sursa {of.sursa}
+          {vechimeOre > 26 ? ` · ⚠️ citire veche (${Math.round(vechimeOre)} h) — colectorul e oprit?` : ''}
+          {dinCicluTrecut ? ' · ⚠️ ultima citire e din ciclul anterior — lipsește citirea ciclului curent' : ''}
         </div>
       </> : <div style={{ ...S.small, marginTop: 10 }}>Egress / Cached egress (oficial): fără citire oficială încă. Cifrele facturate se văd în Dashboard Supabase → Usage.</div>}
 
-      <div style={{ ...S.row, justifyContent: 'space-between', marginTop: 10, paddingTop: 8, borderTop: `1px solid ${G.border}` }}>
-        <span style={S.small}>Jurnal propriu (descărcări fișiere)</span>
-        <span style={{ ...S.small, color: G.text }}>{fmt(c.bytes)} în ciclu</span>
+      <div style={{ marginTop: 10, paddingTop: 2, borderTop: `1px solid ${G.border}` }}>
+        <Bara eticheta="Jurnal propriu (descărcări fișiere)" bytes={c.bytes || 0} cota={cotaJurnal} alerte={c.alerte_procent}
+          nota="Doar descărcările din Storage instrumentate în cod — limită inferioară, nu cifra facturată." />
       </div>
-      <div style={{ ...S.small, marginTop: 2 }}>Doar descărcările din Storage instrumentate în cod — limită inferioară, nu cifra facturată.</div>
       {err && <div style={{ ...S.small, color: G.red, marginTop: 6 }}>{err}</div>}
 
       {blocate.map(b => (

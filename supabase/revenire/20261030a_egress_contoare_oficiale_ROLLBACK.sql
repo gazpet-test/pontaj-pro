@@ -24,12 +24,17 @@ BEGIN
   IF current_setting('gazpet.rollback_tehnic_20261030a', true) IS DISTINCT FROM ('SCOATE_CONTOARE_OFICIALE:' || txid_current()::text) THEN
     RAISE EXCEPTION 'ROLLBACK TEHNIC 20261030a blocat: fără GO de execuție; armarea se face în aceeași tranzacție: SELECT set_config(''gazpet.rollback_tehnic_20261030a'', ''SCOATE_CONTOARE_OFICIALE:'' || txid_current(), true);' USING ERRCODE = '42501';
   END IF;
-  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM '5a881c62aa1f8e60dd6ce31148313d61'
-     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM 'b58054b5f0ce82d9643ece7dd3e1f9b4'
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_statistici(integer)')) IS DISTINCT FROM '0bf2bd142b86d1effbe462d2e4426e50'
+     OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.egress_detector()')) IS DISTINCT FROM '54e242a7e98187422f240d20ea6529da'
      OR to_regclass('public.supabase_usage_oficial') IS NULL THEN
     RAISE EXCEPTION 'Precondiție rollback 20261030a: starea curentă nu e patch-ul 20261030a — nu se revine tacit peste o versiune neanalizată' USING ERRCODE = '55000';
   END IF;
+  PERFORM set_config('lock_timeout', '5s', true);  -- ca în migrare: nu stă la coadă nelimitat (poarta de descărcare citește config-ul)
 END $rollback_pre$;
+
+-- Lock-uri luate o dată, în ordinea detectorului (config → alerte → citiri): fără deadlock cu egress_detector_5min și
+-- fără ca un detector concurent să insereze o alertă de tip nou între DELETE și repunerea CHECK-ului vechi.
+LOCK TABLE public.storage_egress_config, public.storage_egress_alerte, public.supabase_usage_oficial IN ACCESS EXCLUSIVE MODE;
 
 CREATE OR REPLACE FUNCTION public.egress_statistici(p_zile int DEFAULT 30)
 RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $f$

@@ -6,7 +6,8 @@
 #   1. fișierul fără marcaj de livrare → garda refuză
 #   2. aplicare cu marcaj (ca runnerul: --single-transaction) → suita oficial; suita veche monitor_egress_test.sql trece și ea
 #   3. reaplicare → refuz (precondiții: obiectele există / amprente schimbate)
-#   4. rollback tehnic: nearmat → refuz; armat → amprentele live; reaplicare → suita oficial
+#   4. rollback tehnic PESTE DATE (citiri + alerte pe toate tipurile noi + o alertă veche): nearmat → refuz; armat →
+#      amprentele live, alertele noi și citirile scoase, alerta veche păstrată; reaplicare → suita oficial
 #   5. validatorul runnerului acceptă migrarea
 # Ieșire: 0 = PASS · 1 = eșec · 2 = mediu
 # (Rulat în PR pe PGlite 16.4 cu același traseu — vezi descrierea PR-ului.)
@@ -70,11 +71,18 @@ if "${PSQL[@]}" -d "$BAZA" --single-transaction -c "$MARCAJ" -f "$MIGRARE" >/tmp
 grep -q 'Precondiție 0' /tmp/egress_oficial_apl.out || { cat /tmp/egress_oficial_apl.out; esec "3 refuz din alt motiv"; }
 ok "3 reaplicare → refuz (precondiții)"
 
-# 4. rollback
+# 4. rollback — CU DATE: citiri + alerte pe toate cele 3 tipuri noi + o alertă veche care trebuie să rămână
+"${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/monitor_egress_oficial_rollback_date.sql" >/tmp/egress_oficial_date.out 2>&1 \
+  && grep -q DATE_ROLLBACK_OK /tmp/egress_oficial_date.out || { cat /tmp/egress_oficial_date.out; esec "4 date pentru rollback"; }
+ok "4 date comise: 1 citire, 5 alerte noi (3 tipuri), 1 alertă veche"
 if "${PSQL[@]}" -d "$BAZA" --single-transaction -f "$ROLLBACK" >/tmp/egress_oficial_apl.out 2>&1; then esec "4 rollback nearmat a trecut"; fi
 ok "4 rollback nearmat → refuz"
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "$ARMARE" -f "$ROLLBACK" >/tmp/egress_oficial_apl.out 2>&1 || { cat /tmp/egress_oficial_apl.out; esec "4 rollback armat"; }
-[ "$(amprente)" = "$LIVE" ] || esec "4 rollback ≠ live"; ok "4 rollback armat → amprentele live"
+[ "$(amprente)" = "$LIVE" ] || esec "4 rollback ≠ live"; ok "4 rollback armat (peste date) → amprentele live"
+"${PSQL[@]}" -d "$BAZA" -f "$RADACINA/supabase/tests/monitor_egress_oficial_rollback_verif.sql" >/tmp/egress_oficial_verif.out 2>&1 \
+  && grep -q VERIF_ROLLBACK_OK /tmp/egress_oficial_verif.out || { cat /tmp/egress_oficial_verif.out; esec "4 verificare după rollback"; }
+ok "4 după rollback: citiri + alerte noi scoase, alerta veche păstrată, CHECK vechi repus"
+q "TRUNCATE storage_egress_alerte" >/dev/null
 "${PSQL[@]}" -d "$BAZA" --single-transaction -c "$MARCAJ" -f "$MIGRARE" >/tmp/egress_oficial_apl.out 2>&1 || esec "4 reaplicare după rollback"
 suita "reaplicat după rollback"
 
